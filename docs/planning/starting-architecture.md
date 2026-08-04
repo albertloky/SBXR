@@ -4,7 +4,7 @@
 
 My endpoint is a spec.
 The whole project should use deep modules. The TUI should be the Owner's main interactive menu. The Owner should normally type sbxr to open the TUI and adjust settings. The TUI should look like a GUI designed by Apple. The TUI should use light mode and arrow navigation. Pasted text containing Q must not exit the TUI.
-The implementation/tickets should be separated step by step, based on each deep modules, so that one modeules pass the test, and then build another module, the whole codebase should be easy AI navigation, take reference from codebase design skill from Matt Pocock installed. After each implementation, testing should be done by chatgpt ssh into vps 107.175.53.219 or by Albert. You should separate tickets based on who should test, for easier progress monitoring. 
+The implementation/tickets should be separated step by step, based on each deep modules, so that one modeules pass the test, and then build another module, the whole codebase should be easy AI navigation, take reference from codebase design skill from Matt Pocock installed. After each implementation, testing should be done by chatgpt ssh into vps 107.175.53.219 or by Albert. You should separate tickets based on who should test, for easier progress monitoring.
 
 Revised Single-Owner, Six-Profile Architecture
 1. Final scope
@@ -296,7 +296,7 @@ Rotate subscription URL by replacing only the subscription token; this stops fut
 Revoke all client access by atomically replacing the subscription token and all six Connection Profile credentials, regenerating every representation, applying the new core configurations, and rolling back the complete change if any step fails
 Export client configuration
 
-The Owner accepts that these displayed Client Access Values can remain in terminal scrollback, screenshots, screen recordings, or SSH session recordings. The dashboard must never display the Cloudflare tunnel credential, certificate private keys, ACME account material, recovery journals, or backup contents.
+The Owner accepts that these displayed Client Access Values can remain in terminal scrollback, screenshots, screen recordings, or SSH session recordings. The dashboard must never display the Cloudflare tunnel credential, certificate private keys, ACME account material, recovery journals, or Rollback Snapshot contents.
 12. Simple subscription endpoints
 The default displayed link is:
 https://<VPS-IP>:10443/s/<token>
@@ -346,7 +346,7 @@ The subscription service should be part of the sbxr codebase, not a separately m
 Subscription Publication owns token semantics, client-representation generation, validation, and atomic artifact publication. Subscription Serving owns only authenticated HTTPS delivery from the published artifact set. The exact Go package placement is deferred to [Define repository navigation and module placement](https://github.com/albertloky/SBXR/issues/17); renderer files must not become shallow public Modules.
 It reads generated, non-editable subscription artifacts from:
 /var/lib/sbxr/subscriptions/current/
-The network service must not read authoritative State directly.
+The network service must not read Desired State directly.
 The management application generates the subscription files, validates them, and atomically publishes them. The subscription service only serves the already-generated files after validating the token.
 16. Simplified TUI
 The main interface shall contain:
@@ -360,10 +360,9 @@ The main interface shall contain:
 8. Export client configurations
 9. Services and logs
 10. Project and core updates
-11. Backup and restore
-12. Diagnostics
-13. Security settings
-14. Uninstall
+11. Diagnostics
+12. Security settings
+13. Complete removal
 0. Exit
 
 Security invariants are not bypassable. When a check fails, the TUI must identify the cause and provide an exact corrective work plan. If SBXR can safely make the correction within its owned scope, it shall offer a separate reviewable Plan; external or manual corrections shall include detailed step-by-step instructions. It must never reduce the protection merely to continue.
@@ -406,7 +405,7 @@ Rotate credential
 Change port
 Run configuration test
 Run connectivity test
-Restore previous configuration
+Repair current configuration
 17. Cloudflare use after this revision
 SBXR shall store one dedicated, root-only Cloudflare API token with all permissions SBXR needs for the selected Cloudflare account and zone, including tunnel management and the required DNS changes. It shall not require the Owner to paste the token again for normal later changes. Immutable account and zone IDs bind the installation; changing either requires a separately reviewed migration.
 
@@ -465,7 +464,7 @@ Domain configuration
 IP certificate account
 Current port selection
 Firewall state
-Backups
+An active Rollback Snapshot or recovery journal
 After each project update, the updater must regenerate and validate all five subscription representations:
 Automatic
 Base64 URI
@@ -477,9 +476,9 @@ The Owner Console remains non-root. Running sbxr requests sudo once when require
 
 Xray, sing-box, cloudflared, and Subscription Serving run as separate non-root identities. Xray and sing-box receive only `CAP_NET_BIND_SERVICE` for port `443`. Root-only directories and files use `0700` and `0600`; root-owned service-readable directories and files use `0750` and `0640`. Each service reads only its own prepared configuration and credentials. Secrets never appear in command arguments or environment variables; cloudflared uses `--token-file`.
 
-The authenticated dashboard deliberately displays all Client Access Values by default. Infrastructure Secrets never appear on the dashboard. Cloudflare credentials may reveal only their first and last four characters; certificate private keys, REALITY private keys, ACME account material, recovery journals, and backup contents are never revealable. Redaction, verified releases, SSH preservation, safe REALITY targets, TLS verification, private origins, service isolation, and file permissions cannot be bypassed. Every refusal includes an exact corrective work plan, with a separate reviewable Plan for any correction SBXR can safely perform.
+The authenticated dashboard deliberately displays all Client Access Values by default. Infrastructure Secrets never appear on the dashboard. Cloudflare credentials may reveal only their first and last four characters; certificate private keys, REALITY private keys, ACME account material, recovery journals, and Rollback Snapshot contents are never revealable. Redaction, verified releases, SSH preservation, safe REALITY targets, TLS verification, private origins, service isolation, and file permissions cannot be bypassed. Every refusal includes an exact corrective work plan, with a separate reviewable Plan for any correction SBXR can safely perform.
 
-SBXR stores one scoped Cloudflare API token for one selected account and zone, keeps backups local and root-only, disables proxy access logs and core dumps, retains no traffic history, uses no third-party credential testing, and sends no telemetry or automatic diagnostic uploads. Uninstall defaults to keeping one recovery backup; complete removal requires extra confirmation.
+SBXR stores one scoped Cloudflare API token for one selected account and zone, keeps the active Rollback Snapshot and recovery journal root-only, disables proxy access logs and core dumps, retains no traffic history, uses no third-party credential testing, and sends no telemetry or automatic diagnostic uploads. SBXR v1 keeps no durable backup or historical restore; Complete removal requires separate two-step confirmation.
 
 See [Define security ownership and trust boundaries](https://github.com/albertloky/SBXR/issues/9#issuecomment-5175290085) and [ADR 0002](../adr/0002-distributed-security-ownership-and-trust-boundaries.md).
 
@@ -495,3 +494,12 @@ One terminal management application
 One central state model
 One GitHub Release updater
 One transactional rollback system
+
+22. SBXR v1 recovery boundary
+SBXR v1 protects only an unfinished Change Set and the current proven Desired State. System Changes owns one global mutation lock, one root-only Rollback Snapshot, the recovery journal, automatic rollback during an operation or after restart, rollback proof, and Recovery Required. The Rollback Snapshot contains only the prior Desired State, managed files, release material, settings, and evidence needed to reverse its Change Set; it is not Owner-selectable and is deleted after the durable Complete checkpoint.
+
+The installation statuses are exactly Not installed, Managed, Change in progress, and Recovery Required. Recovery Required means SBXR cannot prove either the current Desired State lineage or the safe resolution of an unfinished Change Set. If valid rollback material remains, the Owner may retry automatic rollback. Otherwise SBXR offers safe evidence, read-only diagnostics, and Complete removal; the Owner must rebuild from scratch.
+
+SBXR may prepare a new reviewed Change Set to repair drift toward the current valid Desired State. It cannot recover missing or corrupt Desired State, recreate lost secrets, restore an older revision, recover onto a replacement VPS, or reverse a completed Owner decision. There is no Create backup now action, backup retention setting, selectable Recovery Point, restore menu, old-secret restore, Uninstall and keep recovery action, Recovery retained status, long-term release parcel, offline-versus-online restore rule, or Backup and Recovery Module.
+
+Complete removal is the only forward-only exception. Before the durable Irreversible removal started checkpoint, failure or cancellation rolls back to Managed. After that checkpoint, restart resumes deletion and restore or cancellation is impossible. Success ends at Not installed with no SBXR recovery material retained.

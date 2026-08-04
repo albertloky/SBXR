@@ -1,0 +1,7 @@
+# Transaction-only recovery boundary
+
+SBXR v1 keeps mandatory transaction safety but no durable backup or historical restore: System Changes owns one global mutation lock, one temporary Rollback Snapshot, the recovery journal, automatic rollback during an operation or after restart, and **Recovery Required** when current Desired State lineage or safe transaction resolution cannot be proven. Durable **Complete** deletes rollback material; only forward repair of the current proven Desired State remains, while VPS loss, missing or corrupt Desired State, old Desired State revisions or secrets, and Owner regret require Complete removal and rebuilding from scratch. This removes the Backup and Recovery Module and leaves exactly eleven deep Modules because the security-sensitive complexity of durable recovery is not justified until recovery beyond an unfinished Change Set is a demonstrated need.
+
+Before mutation, SBXR reserves the calculated preparation, Rollback Snapshot, journal, rollback, and filesystem-overhead space, then requires the larger of `1 GiB` or `10%` of the SBXR filesystem to remain free. This gate is not Owner-configurable.
+
+SBXR retains the installed verified release, at most one newest verified unapplied candidate, and the previous release only inside an active update Rollback Snapshot. Successful **Complete** deletes the previous release; there is no release history or recovery parcel. The canonical decision is [Decide the SBXR v1 recovery boundary](https://github.com/albertloky/SBXR/issues/21#issuecomment-5180278181).
