@@ -1,0 +1,3 @@
+# Distributed security ownership and trust boundaries
+
+SBXR keeps the Owner Console and public services non-root, grants each service only its own files and narrow capabilities, and reserves root for short-lived validated operations. The authenticated dashboard deliberately exposes Client Access Values for convenience, while Infrastructure Secrets remain root-only, external authority is scoped, and redaction and network protections cannot be bypassed; this accepts visible client credentials without turning a public-service compromise into full VPS or Cloudflare-account control. The canonical decision is [Define security ownership and trust boundaries](https://github.com/albertloky/SBXR/issues/9#issuecomment-5175290085).

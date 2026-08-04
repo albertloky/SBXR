@@ -3,16 +3,16 @@
 > Planning input supplied by the Owner. This is the starting specification, not the final Wayfinder output.
 
 My endpoint is a spec.
-The whole project should use deep modules. TUI should be the main interactive menu for user. User 99% of the time should type sbxr to open the TUI to adjust settings. The tui should looks like a GUI designed by apple. The tui should be in light mode. The tui should be able to use arrows to navigate. The tui when pasting keys should not exit, when keys include Q, which stands for exit.
+The whole project should use deep modules. The TUI should be the Owner's main interactive menu. The Owner should normally type sbxr to open the TUI and adjust settings. The TUI should look like a GUI designed by Apple. The TUI should use light mode and arrow navigation. Pasted text containing Q must not exit the TUI.
 The implementation/tickets should be separated step by step, based on each deep modules, so that one modeules pass the test, and then build another module, the whole codebase should be easy AI navigation, take reference from codebase design skill from Matt Pocock installed. After each implementation, testing should be done by chatgpt ssh into vps 107.175.53.219 or by Albert. You should separate tickets based on who should test, for easier progress monitoring. 
 
-Revised Single-User, Six-Profile Architecture
+Revised Single-Owner, Six-Profile Architecture
 1. Final scope
 The project shall be optimized exclusively for:
 •	Ubuntu Server 24.04 LTS
 •	One VPS
-•	One administrator user
-•	One management command, that is sbxr, sbxr atuo run sudo sbxr
+•	One Owner
+•	One management command, sbxr, which requests sudo internally when required
 •	Xray and sing-box running concurrently
 •	One named Cloudflare Tunnel
 •	Six connection profiles
@@ -21,11 +21,11 @@ The project shall be optimized exclusively for:
 •	One IP-based HTTPS subscription system
 •	GitHub Release-based project updates
 •	Automatic rollback
-•	No multi-user database
-•	No quotas, billing, user groups, invitations, or account administration
+•	No database for multiple people
+•	No quotas, billing, groups, invitations, or account administration
 The installed management command shall be:
 sbxr
-Running sbxr opens the terminal interface. Closing the interface does not stop the proxy services.
+On an existing installation, running sbxr automatically requests sudo authentication once when the VPS requires it, then opens the terminal interface; the Owner never has to type sudo sbxr manually. A short-lived privileged reader supplies only the approved dashboard Client Access Values, while the TUI itself remains non-root and Infrastructure Secrets remain root-only. If authentication is denied, SBXR opens a limited read-only dashboard without Client Access Values. During fresh installation, download, verification, preflight, and review remain unprivileged; sudo is requested only after the Owner approves the installation Plan. Closing the interface does not stop the proxy services.
 2. Running services
 The normal installation contains:
 xray.service
@@ -64,7 +64,7 @@ Random short ID
 Chrome-compatible client fingerprint by default
 Carefully validated REALITY destination
 No insecure certificate option
-No anonymous users
+No anonymous access
 No fallback to an open proxy
 Xray profile 2 — VLESS XHTTP through Cloudflare Tunnel
 Purpose:
@@ -246,7 +246,7 @@ sbxr-ip-cert-renew.service
 sbxr-ip-cert-renew.timer
 The timer should run at least once per day with randomized delay.
 Renewal transaction:
-1. Acquire the sbxr certificate lock.
+1. Acquire the installation-wide SBXR mutation lock.
 2. Check certificate expiration.
 3. Skip renewal when safely outside the renewal window.
 4. Add the temporary nftables TCP port 80 rule.
@@ -260,17 +260,17 @@ Renewal transaction:
 12. Remove the temporary TCP port 80 rule.
 13. Roll back the previous certificate if the health check fails.
 Port 80 should normally remain closed and be opened only during issuance or renewal.
-11. Single-user credential model
+11. Single-Owner credential model
 Remove:
-Users table
+Multi-person identity table
 Device ownership model
-Per-user quotas
-Per-user expiration
-User invitations
-User roles
+Quotas
+Expiration
+Invitations
+Roles
 Usage accounting
-Multi-user subscription records
-Replace them with one owner state:
+Multi-person subscription records
+Conceptual Owner State shape, not the final file schema:
 {
   "owner": {
     "name": "owner",
@@ -287,14 +287,16 @@ Replace them with one owner state:
     }
   }
 }
-Although there is only one user, each connection profile should have independent credentials. Compromise of one configuration should not automatically compromise every profile.
+Although there is only one Owner, each Connection Profile should have independent credentials. Compromise of one configuration should not automatically compromise every profile.
 The TUI must support:
+Display all six Connection Profile credentials, share URIs, QR codes, and the subscription URL on the main dashboard by default
 Rotate one profile credential
 Rotate all profile credentials
-Rotate subscription token
-Reveal subscription URL
-Revoke and recreate subscription URL
+Rotate subscription URL by replacing only the subscription token; this stops future downloads but does not revoke previously downloaded Connection Profile credentials
+Revoke all client access by atomically replacing the subscription token and all six Connection Profile credentials, regenerating every representation, applying the new core configurations, and rolling back the complete change if any step fails
 Export client configuration
+
+The Owner accepts that these displayed Client Access Values can remain in terminal scrollback, screenshots, screen recordings, or SSH session recordings. The dashboard must never display the Cloudflare tunnel credential, certificate private keys, ACME account material, recovery journals, or backup contents.
 12. Simple subscription endpoints
 The default displayed link is:
 https://<VPS-IP>:10443/s/<token>
@@ -312,13 +314,13 @@ Karing              Auto, sing-box JSON or Mihomo YAML
 Mihomo/Clash Meta   Mihomo YAML
 sing-box clients    sing-box JSON
 Unknown clients     Base64 URI list
-The main TUI should display only:
+The subscription-links area should display only:
 Universal subscription link
 Shadowrocket/v2rayN link
 Karing link
 Mihomo link
 sing-box link
-No user-selection menu is needed.
+No separate format-selection menu is needed.
 14. Subscription service security
 sbxr-subscription.service shall:
 Listen publicly only on 10443/TCP
@@ -341,21 +343,10 @@ The service should not expose a web management panel.
 The TUI remains available only through SSH.
 15. Subscription service implementation
 The subscription service should be part of the sbxr codebase, not a separately managed third-party subscription converter.
-Suggested structure:
-src/sbxr/subscription/
-├── server.py
-├── tls.py
-├── token.py
-├── auto.py
-├── uri.py
-├── base64_renderer.py
-├── singbox_renderer.py
-├── mihomo_renderer.py
-├── compatibility.py
-└── validators.py
+Subscription Publication owns token semantics, client-representation generation, validation, and atomic artifact publication. Subscription Serving owns only authenticated HTTPS delivery from the published artifact set. The exact Go package placement is deferred to [Define repository navigation and module placement](https://github.com/albertloky/SBXR/issues/17); renderer files must not become shallow public Modules.
 It reads generated, non-editable subscription artifacts from:
 /var/lib/sbxr/subscriptions/current/
-The network service must not read /etc/sbxr/secrets.json directly.
+The network service must not read authoritative State directly.
 The management application generates the subscription files, validates them, and atomically publishes them. The subscription service only serves the already-generated files after validating the token.
 16. Simplified TUI
 The main interface shall contain:
@@ -374,6 +365,9 @@ The main interface shall contain:
 13. Security settings
 14. Uninstall
 0. Exit
+
+Security invariants are not bypassable. When a check fails, the TUI must identify the cause and provide an exact corrective work plan. If SBXR can safely make the correction within its owned scope, it shall offer a separate reviewable Plan; external or manual corrections shall include detailed step-by-step instructions. It must never reduce the protection merely to continue.
+
 Six-profile management screen
 Xray
 
@@ -406,15 +400,20 @@ sing-box
    Port: 9443/TCP
 Each profile supports:
 Enable or disable
-Show non-secret settings
-Reveal share URI
-Display QR code
+Show settings
+Display its share URI and QR code on the main dashboard by default
 Rotate credential
 Change port
 Run configuration test
 Run connectivity test
 Restore previous configuration
 17. Cloudflare use after this revision
+SBXR shall store one dedicated, root-only Cloudflare API token with all permissions SBXR needs for the selected Cloudflare account and zone, including tunnel management and the required DNS changes. It shall not require the Owner to paste the token again for normal later changes. Immutable account and zone IDs bind the installation; changing either requires a separately reviewed migration.
+
+For the Cloudflare management token, the TUI shall offer `Reveal`, `Replace`, and `Remove from SBXR`; for the tunnel run token, it shall offer `Reveal` and genuine `Rotate`. Reveal shows only the first and last four characters. Replace opens a dedicated masked-entry page with `Verify and Replace`, `Back`, and Esc, and leaves the old token untouched until verification and confirmation succeed.
+
+Initial setup shall give a first-time Cloudflare Owner a detailed, current walkthrough containing the exact Cloudflare website address, dashboard pages, buttons, fields, resource selections, and permissions needed to create the single token. Before storing it, SBXR shall verify that the token is active and can access the selected account and zone. The first approved Cloudflare transaction shall prove the required write permissions by completing and health-checking the actual tunnel and DNS changes; missing permission must stop safely with exact corrective guidance. A broad Global API Key is not required.
+
 The owned Cloudflare domain remains required for:
 VLESS XHTTP Cloudflare hostname
 VLESS WebSocket Cloudflare hostname
@@ -461,6 +460,7 @@ It must never overwrite:
 Owner credentials
 Subscription token
 Cloudflare tunnel token
+Cloudflare management API token
 Domain configuration
 IP certificate account
 Current port selection
@@ -472,7 +472,18 @@ Base64 URI
 Raw URI
 sing-box JSON
 Mihomo YAML
-20. Final product boundary
+20. Security ownership and trust boundaries
+The Owner Console remains non-root. Running sbxr requests sudo once when required; short-lived privileged processes may read approved Client Access Values or apply a validated, revision-bound Plan, but may not accept arbitrary commands or paths. Denied authentication yields a limited read-only dashboard.
+
+Xray, sing-box, cloudflared, and Subscription Serving run as separate non-root identities. Xray and sing-box receive only `CAP_NET_BIND_SERVICE` for port `443`. Root-only directories and files use `0700` and `0600`; root-owned service-readable directories and files use `0750` and `0640`. Each service reads only its own prepared configuration and credentials. Secrets never appear in command arguments or environment variables; cloudflared uses `--token-file`.
+
+The authenticated dashboard deliberately displays all Client Access Values by default. Infrastructure Secrets never appear on the dashboard. Cloudflare credentials may reveal only their first and last four characters; certificate private keys, REALITY private keys, ACME account material, recovery journals, and backup contents are never revealable. Redaction, verified releases, SSH preservation, safe REALITY targets, TLS verification, private origins, service isolation, and file permissions cannot be bypassed. Every refusal includes an exact corrective work plan, with a separate reviewable Plan for any correction SBXR can safely perform.
+
+SBXR stores one scoped Cloudflare API token for one selected account and zone, keeps backups local and root-only, disables proxy access logs and core dumps, retains no traffic history, uses no third-party credential testing, and sends no telemetry or automatic diagnostic uploads. Uninstall defaults to keeping one recovery backup; complete removal requires extra confirmation.
+
+See [Define security ownership and trust boundaries](https://github.com/albertloky/SBXR/issues/9#issuecomment-5175290085) and [ADR 0002](../adr/0002-distributed-security-ownership-and-trust-boundaries.md).
+
+21. Final product boundary
 The completed project shall provide exactly:
 Two proxy cores
 Six connection profiles
@@ -484,4 +495,3 @@ One terminal management application
 One central state model
 One GitHub Release updater
 One transactional rollback system
-
