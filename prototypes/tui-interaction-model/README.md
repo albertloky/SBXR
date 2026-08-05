@@ -4,7 +4,7 @@ Throwaway prototype for [Prototype the TUI interaction model](https://github.com
 
 Question: which information structure makes SBXR's safety rules easiest for one Owner to understand and operate?
 
-Three variants share the same fake state and scenarios. Switch with `?variant=A`, `?variant=B`, or `?variant=C` and the floating bottom bar.
+Albert selected Style A. The current prototype renders its persistent-navigation design as an exact `80×24` character grid using only terminal-achievable primitives. The browser dropdown is explicitly outside the TUI and switches dangerous product scenarios for review.
 
 Run:
 
