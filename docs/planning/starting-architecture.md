@@ -33,7 +33,7 @@ sing-box.service
 cloudflared.service
 sbxr-subscription.service
 Scheduled jobs:
-sbxr-ip-cert-renew.timer
+sbxr-cert-renew.timer
 sbxr-update-check.timer
 sbxr-health-check.timer
 The timers are not continuously running services.
@@ -194,7 +194,7 @@ Additional QUIC protocols
 No fourth UDP/QUIC protocol shall be added. Hysteria2 and TUIC provide sufficient UDP diversity.
 7. Default port registry
 22/TCP or detected SSH port     SSH
-80/TCP                         IP-certificate ACME validation only
+80/TCP                         ACME HTTP-01 validation only, for IP and domain certificates
 443/TCP                        Xray VLESS REALITY Vision
 443/UDP                        sing-box Hysteria2
 8443/UDP                       sing-box TUIC
@@ -242,12 +242,12 @@ certbot certonly \
   --preferred-profile shortlived \
   --ip-address <VPS-IP>
 The implementation must validate the actual installed Certbot syntax during development rather than blindly copying this conceptual command.
-10. IP-certificate renewal
-Because the certificate lasts only about six days, the manager shall install:
-sbxr-ip-cert-renew.service
-sbxr-ip-cert-renew.timer
-The timer should run at least once per day with randomized delay.
-Renewal transaction:
+10. Certificate renewal
+The manager shall install one scheduler for the IP and domain certificate lineages:
+sbxr-cert-renew.service
+sbxr-cert-renew.timer
+The timer runs at least twice per day with randomized delay and `Persistent=true`, evaluates the lineages serially, and uses the installation-wide SBXR mutation lock for each due Change Set.
+IP-certificate renewal transaction:
 1. Acquire the installation-wide SBXR mutation lock.
 2. Check certificate expiration.
 3. Skip renewal when safely outside the renewal window.
@@ -261,6 +261,7 @@ Renewal transaction:
 11. Test HTTPS using the VPS IP.
 12. Remove the temporary TCP port 80 rule.
 13. Roll back the previous certificate if the health check fails.
+Domain-certificate renewal follows the same temporary `80/TCP`, cleanup, health-gated activation, Desired State publication, and rollback boundary, with controlled sing-box activation instead of Subscription Serving reload. [Verify domain-certificate issuance and renewal](https://github.com/albertloky/SBXR/issues/22#issuecomment-5188264855) is canonical for that branch.
 Port 80 should normally remain closed and be opened only during issuance or renewal.
 11. Single-Owner credential model
 Remove:
@@ -409,7 +410,7 @@ Run configuration test
 Repair current configuration
 The dashboard shall offer one optional post-Managed `Run Live Profile Check` action. It uses the universal subscription once, displays one temporary test URL and QR code, automatically attributes successful outside traffic to each Connection Profile, never gates installation, and retains no test token, counter difference, client-IP history, destination history, access log, or persistent traffic history.
 17. Cloudflare use after this revision
-SBXR shall store one dedicated, root-only Cloudflare API token with all permissions SBXR needs for the selected Cloudflare account and zone, including tunnel management and the required DNS changes. The token remains memory-only until successful installation commits it; abandonment or rollback discards it. After success, SBXR reuses it automatically for approved DNS, Tunnel, certificate, repair, and update work, so the Owner need not paste it again for normal later changes. Immutable account and zone IDs bind the installation; changing either requires a separately reviewed migration.
+SBXR shall store one dedicated, root-only Cloudflare API token with all permissions SBXR needs for the selected Cloudflare account and zone, including tunnel management and the required DNS changes. The token remains memory-only until successful installation commits it; abandonment or rollback discards it. After success, Cloudflare Tunnel reuses it automatically for approved DNS, Tunnel, repair, and update work, so the Owner need not paste it again for normal later changes. Certificate Lifecycle and the ACME client receive only typed DNS and CAA facts, never the token. Immutable account and zone IDs bind the installation; changing either requires a separately reviewed migration.
 
 For the Cloudflare management token, the TUI shall show status, the first and last four characters, bound account and zone, last successful verification, expiry when present, and current uses. It shall offer `Check now`, `Replace token`, and `Remove from SBXR`; removal is a reviewed Change Set and cannot leave dependent resources falsely reported as Managed or Healthy. For the tunnel run token, it shall offer `Reveal` and genuine `Rotate`. Replacement uses a dedicated masked-entry page with `Verify replacement`, `Back`, and Esc, and leaves the old token untouched until verification and confirmation succeed.
 
@@ -439,7 +440,7 @@ Detected SSH port/TCP
 9443/TCP
 10443/TCP
 Temporary inbound rule:
-80/TCP during IP-certificate validation
+80/TCP during ACME HTTP-01 validation for IP and domain certificates
 No public exposure:
 11080/TCP
 11081/TCP
