@@ -15,10 +15,10 @@
     select, input { font: 14px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; padding: 7px 9px; border: 1px solid #8c97a6; border-radius: 5px; background: white; color: #18202b; }
     select { min-width: 360px; }
     main { padding: 28px 18px 80px; display: grid; justify-items: center; gap: 14px; }
-    .measure { width: min(100%, 80ch); display: flex; justify-content: space-between; color: #5d6878; font: 12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .measure { width: min(100%, var(--terminal-width, 80ch)); display: flex; justify-content: space-between; color: #5d6878; font: 12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
     .terminal-shell { background: #cdd3dc; padding: 7px; border: 1px solid #aeb7c3; }
     #terminal {
-      margin: 0; width: 80ch; height: 24em; overflow: hidden; white-space: pre;
+      margin: 0; width: var(--terminal-width, 80ch); height: var(--terminal-height, 24em); overflow: hidden; white-space: pre;
       background: #fbfbfa; color: #202733; font: 16px/1em ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       font-variant-ligatures: none; tab-size: 1; padding: 0;
     }
@@ -28,7 +28,7 @@
     #terminal .red { color: #b42318; font-weight: 700; }
     #terminal .dim { color: #6a7483; }
     #terminal .reverse { background: #1e63b6; color: white; }
-    .below { width: min(100%, 80ch); display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: end; }
+    .below { width: min(100%, var(--terminal-width, 80ch)); display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: end; }
     .below label { font-size: 12px; color: #4c5869; }
     .below input { display: block; width: 100%; margin-top: 5px; }
     .note { font-size: 12px; line-height: 1.45; color: #5c6674; max-width: 80ch; }
@@ -45,13 +45,21 @@
 <body>
   <header>
     <span><strong>PROTOTYPE VIEWER — NOT PART OF THE TUI</strong> · the grid below is exactly what a terminal can draw</span>
-    <label class="controls">Screen
-      <select id="screen"></select>
-    </label>
+    <div class="controls">
+      <label>Terminal size
+        <select id="size">
+          <option value="minimum">80×24 · minimum</option>
+          <option value="wide">120×36 · large/full-screen example</option>
+        </select>
+      </label>
+      <label>Screen
+        <select id="screen"></select>
+      </label>
+    </div>
   </header>
   <main>
-    <div class="measure"><span>Style A · persistent navigation</span><strong>80 columns × 24 rows</strong></div>
-    <div class="terminal-shell"><pre id="terminal" tabindex="0" aria-label="80 by 24 SBXR terminal prototype"></pre></div>
+    <div class="measure"><span>Style A · persistent navigation</span><strong id="dimensions">80 columns × 24 rows</strong></div>
+    <div class="terminal-shell"><pre id="terminal" tabindex="0" aria-label="SBXR terminal prototype"></pre></div>
     <div class="below">
       <label>Prototype keystroke feeder — use only on screens with an active text field
         <input id="typed" autocomplete="off" placeholder="Paste text containing Q here">
@@ -61,10 +69,11 @@
     <p class="note">Inside the terminal grid: character cells, box-drawing symbols, ANSI-style foreground/background colors, underline, and reverse video only. There are no rounded cards, shadows, gradients, proportional fonts, browser dropdowns, or native web controls.</p>
   </main>
   <script>
-    const WIDTH = 80;
-    const HEIGHT = 24;
     const LEFT = 21;
-    const RIGHT = WIDTH - LEFT - 1;
+    const sizes = {
+      minimum: { width: 80, height: 24 },
+      wide: { width: 120, height: 36 }
+    };
 
     const screens = [
       ['dashboard', 'Managed · dashboard'],
@@ -73,6 +82,8 @@
       ['install', 'Not installed · installation review'],
       ['cloudflare', 'Not installed · Cloudflare walkthrough'],
       ['correction', 'Correction Flow · occupied port'],
+      ['download', 'Download in progress · known size'],
+      ['verify', 'Connection check · unknown duration'],
       ['change', 'Change in progress'],
       ['cancel', 'Change in progress · cancellation requested'],
       ['recovery-valid', 'Recovery Required · rollback available'],
@@ -84,18 +95,24 @@
     ];
 
     const menu = [
-      'Overview', 'Connection Profiles', 'Cloudflare Tunnel', 'Certificates',
-      'Subscription', 'Network', 'Updates', 'Diagnostics', 'Security',
+      'Overview', 'Access', 'Connection Profiles', 'Cloudflare Tunnel',
+      'Certificates', 'Subscription', 'Network', 'Updates', 'Diagnostics', 'Security',
       'Complete removal', 'Exit SBXR'
     ];
 
-    const state = { screen: new URL(location.href).searchParams.get('screen') || 'dashboard', typed: '', cursor: 0 };
+    const params = new URL(location.href).searchParams;
+    const state = { screen: params.get('screen') || 'dashboard', size: params.get('size') || 'minimum', typed: '', cursor: 0, frame: 0 };
     if (!screens.some(([id]) => id === state.screen)) state.screen = 'dashboard';
+    if (!sizes[state.size]) state.size = 'minimum';
 
     const select = document.querySelector('#screen');
     screens.forEach(([value, label]) => select.add(new Option(label, value)));
     select.value = state.screen;
     select.addEventListener('change', () => { state.screen = select.value; state.cursor = 0; state.typed = ''; typed.value = ''; setUrl(); render(); });
+
+    const sizeSelect = document.querySelector('#size');
+    sizeSelect.value = state.size;
+    sizeSelect.addEventListener('change', () => { state.size = sizeSelect.value; setUrl(); render(); });
 
     const typed = document.querySelector('#typed');
     typed.addEventListener('input', () => {
@@ -109,39 +126,34 @@
     function setUrl() {
       const url = new URL(location.href);
       url.searchParams.set('screen', state.screen);
+      url.searchParams.set('size', state.size);
       history.replaceState({}, '', url);
     }
 
-    function fit(text, width = RIGHT) {
+    function fit(text, width) {
       const raw = String(text ?? '');
       return raw.length > width ? raw.slice(0, Math.max(0, width - 1)) + '…' : raw.padEnd(width, ' ');
     }
 
-    function wrap(text, width = RIGHT) {
-      const words = String(text).split(/\s+/);
-      const lines = [];
-      let line = '';
-      for (const word of words) {
-        if (!line) line = word;
-        else if ((line + ' ' + word).length <= width) line += ' ' + word;
-        else { lines.push(line); line = word; }
-      }
-      if (line) lines.push(line);
-      return lines;
+    function progressBar(percent, cells = 20) {
+      const filled = Math.round(percent / 100 * cells);
+      return `[${'█'.repeat(filled)}${'░'.repeat(cells - filled)}] ${String(percent).padStart(3)}%`;
     }
 
     function navSelection() {
-      if (state.screen === 'access') return 4;
-      if (state.screen === 'cloudflare') return 2;
-      if (state.screen === 'correction' || state.screen === 'small') return 5;
-      if (state.screen === 'update' || state.screen === 'change' || state.screen === 'cancel') return 6;
-      if (state.screen.startsWith('recovery')) return 7;
-      if (state.screen.startsWith('remove')) return 9;
+      if (state.screen === 'access') return 1;
+      if (state.screen === 'cloudflare') return 3;
+      if (state.screen === 'correction' || state.screen === 'small') return 6;
+      if (['update', 'download', 'verify', 'change', 'cancel'].includes(state.screen)) return 7;
+      if (state.screen.startsWith('recovery')) return 8;
+      if (state.screen.startsWith('remove')) return 10;
       return 0;
     }
 
     function view() {
       const fake = state.typed || '—';
+      const downloadProgress = 42 + state.frame % 56;
+      const stepProgress = 54 + state.frame % 20;
       return {
         dashboard: {
           status: 'Managed', tone: 'green', revision: '42', auth: 'authenticated', title: 'OVERVIEW',
@@ -155,12 +167,12 @@
             '✓ TUIC                       8443/UDP',
             '✓ AnyTLS                     9443/TCP', '',
             'CLIENT ACCESS',
-            '› View all Client Access Values and QR codes',
+            '› Open Access',
             '  Run Live Profile Check', '',
-            'Values may remain in scrollback and recordings.',
-            'Page 1/2 · PgDn Client Access Values'
+            'Access values have their own menu and privacy warning.'
           ],
-          actions: [11, 12]
+          actions: [11, 12],
+          aside: ['SYSTEM DETAILS', '', 'VPS        203.0.113.10', 'Uptime     18 days', 'Last check 2 minutes ago', '', 'RECENT ACTIVITY', '', '✓ Health check passed', '✓ Certificate renewed', '· No active Change Set']
         },
         access: {
           status: 'Managed', tone: 'green', revision: '42', auth: 'authenticated', title: 'CLIENT ACCESS VALUES',
@@ -177,9 +189,10 @@
             '› Select a value to copy',
             '  Export client configuration', '',
             'Clipboard history may retain copied values.',
-            'PgUp Overview · ↑↓ Select · Enter Copy'
+            'Esc Overview · ↑↓ Select · Enter Copy'
           ],
-          actions: [12, 13]
+          actions: [12, 13],
+          aside: ['PRIVACY', '', 'Values may remain in:', '· terminal scrollback', '· clipboard history', '· screen recordings', '', 'Press H to hide values.']
         },
         limited: {
           status: 'Managed', tone: 'amber', revision: '42', auth: 'limited', title: 'LIMITED DASHBOARD',
@@ -253,13 +266,39 @@
           ],
           actions: [11, 12, 13], input: true
         },
+        download: {
+          status: 'Change in progress', tone: 'blue', revision: '42', auth: 'authenticated', title: 'DOWNLOAD RELEASE v1.1.0',
+          lines: [
+            'The file size is known, so SBXR shows real progress.', '',
+            'Downloading  ' + progressBar(downloadProgress),
+            `${(62.9 * downloadProgress / 100).toFixed(1)} MiB of 62.9 MiB · 8.2 MiB/s`, '',
+            'The signature is verified after the download.', '',
+            '› Request cancellation',
+            '  Close TUI'
+          ],
+          actions: [7, 8],
+          aside: ['WHY A BAR?', '', 'Downloaded bytes and total', 'bytes are both known.', '', 'The percentage is measured,', 'not estimated.']
+        },
+        verify: {
+          status: 'Checking', tone: 'blue', revision: '42', auth: 'authenticated', title: 'CHECK CLOUDFLARE CONNECTION',
+          lines: [
+            'The provider decides how long this takes.', '',
+            'SPIN Verifying tunnel route…       00:18', '',
+            'No percentage is shown because SBXR cannot know it.', '',
+            '› Request cancellation',
+            '  Close TUI'
+          ],
+          actions: [6, 7],
+          aside: ['WHY A SPINNER?', '', 'SBXR knows the check is', 'alive, but not how much work', 'the provider has left.', '', 'Elapsed time stays visible.']
+        },
         change: {
           status: 'Change in progress', tone: 'blue', revision: '42', auth: 'authenticated', title: 'UPDATE TO v1.1.0 · 00:01:42',
           lines: [
             'The global mutation lock is held by Change Set 01J8…', '',
             '✓ Prepared',
             '✓ Release switched',
-            '› Validate prepared sing-box configuration',
+            'SPIN Validate prepared sing-box configuration',
+            '     ' + progressBar(stepProgress),
             '· Pre-publication health',
             '· Publish Desired State revision 43',
             '· Post-publication health',
@@ -270,14 +309,15 @@
             '  Close TUI',
             '  View safe evidence'
           ],
-          actions: [13, 14, 15]
+          actions: [14, 15, 16],
+          aside: ['CHANGE SET 01J8…', '', '2 of 7 steps complete', `Step 3 is measurable: ${stepProgress}%`, '', 'Current revision  42', 'Target revision   43', '', 'Safe cancellation checkpoint', 'after validation.']
         },
         cancel: {
           status: 'Change in progress', tone: 'amber', revision: '42', auth: 'authenticated', title: 'CANCELLATION REQUESTED · 00:01:51',
           lines: [
             'SBXR will not kill an unsafe step midway.', '',
             '✓ Cancellation requested · durable',
-            '› Finish configuration validation',
+            'SPIN Finish configuration validation',
             '· Record next safe checkpoint',
             '· Automatic rollback to revision 42',
             '· Prove rollback',
@@ -369,7 +409,7 @@
             'Restart continues deletion in this fixed order.', '',
             '✓ Public exposure removed and verified',
             '✓ Irreversible removal started · durable',
-            '› Delete Desired State and secrets',
+            'SPIN Delete Desired State and secrets',
             '· Delete certificates and releases',
             '· Delete services and identities',
             '· Delete SBXR nftables table',
@@ -397,26 +437,45 @@
 
     function render() {
       const d = view();
+      const { width, height } = sizes[state.size];
+      const right = width - LEFT - 1;
+      const bodyHeight = height - 5;
+      const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'][state.frame % 10];
       const selectedMenu = navSelection();
-      const content = [d.title, ''].concat(d.lines).slice(0, 19);
-      while (content.length < 19) content.push('');
+      const main = [d.title, ''].concat(d.lines).map(line => String(line).replaceAll('SPIN', spinner));
+      const aside = state.size === 'wide' ? (d.aside || ['DETAILS', '', 'The wider terminal keeps', 'supporting information visible', 'without changing screens.']) : [];
       const nav = menu.map((item, index) => index === selectedMenu ? '› ' + item : '  ' + item);
-      while (nav.length < 19) nav.push('');
+      while (nav.length < bodyHeight) nav.push('');
 
       const headerStatus = `${d.status} · rev ${d.revision} · ${d.auth}`;
       const rows = [];
-      rows.push(fit(` SBXR`, 18) + fit(headerStatus, WIDTH - 18));
-      rows.push('─'.repeat(LEFT) + '┼' + '─'.repeat(RIGHT));
-      for (let i = 0; i < 19; i++) rows.push(fit(nav[i], LEFT) + '│' + fit(content[i], RIGHT));
-      rows.push('─'.repeat(LEFT) + '┴' + '─'.repeat(RIGHT));
-      rows.push(fit(' ↑↓ Navigate  Tab Next  Enter Select  Esc Back  Ctrl+C Exit confirmation', WIDTH));
-      rows.push(fit(' Q is never Exit · pasted text is always input data · background refresh holds focus', WIDTH));
-      if (rows.length !== HEIGHT || rows.some(row => row.length !== WIDTH)) throw new Error('terminal grid invariant failed');
+      rows.push(fit(` SBXR`, 18) + fit(headerStatus, width - 18));
+      rows.push('─'.repeat(LEFT) + '┼' + '─'.repeat(right));
+      for (let i = 0; i < bodyHeight; i++) {
+        let content;
+        if (state.size === 'wide') {
+          const first = 48;
+          const second = right - first - 1;
+          content = fit(main[i], first) + '│' + fit(aside[i], second);
+        } else {
+          content = fit(main[i], right);
+        }
+        rows.push(fit(nav[i], LEFT) + '│' + content);
+      }
+      rows.push('─'.repeat(LEFT) + '┴' + '─'.repeat(right));
+      rows.push(fit(' ↑↓ Navigate  Tab Next  Enter Select  Esc Back  Ctrl+C Exit confirmation', width));
+      rows.push(fit(' Q is never Exit · pasted text is always input data · background refresh holds focus', width));
+      if (rows.length !== height || rows.some(row => row.length !== width)) throw new Error('terminal grid invariant failed');
 
       const escaped = rows.join('\n').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
       document.querySelector('#terminal').innerHTML = colorize(escaped, d);
       document.querySelector('#terminal').dataset.rows = rows.length;
-      document.querySelector('#terminal').dataset.columns = WIDTH;
+      document.querySelector('#terminal').dataset.columns = width;
+      document.querySelector('#terminal').style.setProperty('--terminal-width', `${width}ch`);
+      document.querySelector('#terminal').style.setProperty('--terminal-height', `${height}em`);
+      document.querySelector('main').style.setProperty('--terminal-width', `${width}ch`);
+      document.querySelector('main').style.setProperty('--terminal-height', `${height}em`);
+      document.querySelector('#dimensions').textContent = `${width} columns × ${height} rows`;
     }
 
     function colorize(text, d) {
@@ -441,6 +500,7 @@
 
     setUrl();
     render();
+    setInterval(() => { state.frame += 1; render(); }, 250);
   </script>
 </body>
 </html>
