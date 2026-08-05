@@ -192,7 +192,7 @@ XHTTP Direct
 XHTTP Direct is excluded because direct TCP is already covered by VLESS REALITY Vision. The selected XHTTP profile is specifically intended to provide path diversity through Cloudflare.
 Additional QUIC protocols
 No fourth UDP/QUIC protocol shall be added. Hysteria2 and TUIC provide sufficient UDP diversity.
-7. Final port registry
+7. Default port registry
 22/TCP or detected SSH port     SSH
 80/TCP                         IP-certificate ACME validation only
 443/TCP                        Xray VLESS REALITY Vision
@@ -206,6 +206,7 @@ The following ports must not be opened publicly:
 11080/TCP
 11081/TCP
 The port registry must distinguish TCP and UDP. It must allow TCP and UDP to use the same numerical port.
+The detected SSH port and TCP port 80 are fixed. If another configurable default is occupied during fresh installation, SBXR shall propose a random available replacement in the reviewed Plan. A committed selection persists in Desired State and never moves silently later.
 8. IP-based subscription URL
 The subscription system shall not use the owned domain.
 The primary subscription URL shall use the VPS public IP:
@@ -214,10 +215,11 @@ Example shape:
 https://203.0.113.10:10443/s/8M1...high-entropy-token...WcA
 For IPv6:
 https://[2001:db8::10]:10443/s/<subscription-token>
+The IPv4 and IPv6 examples are alternatives. SBXR shall qualify each address family independently, publish only approved addresses, and let the Owner choose the primary subscription address when both pass.
 Cloudflare Tunnel is not involved in subscription delivery. Public Cloudflare Tunnel applications use hostname-to-service mappings, so a bare-IP subscription endpoint must connect directly to the VPS.
 9. Subscription HTTPS certificate
 Plain HTTP must not be offered as the normal mode because it would expose the complete subscription response and credentials to anyone capable of observing or modifying that connection.
-The manager shall obtain a Let’s Encrypt certificate containing the VPS IP address as an IP Subject Alternative Name.
+The manager shall obtain a Let’s Encrypt certificate containing each approved VPS IP address as an IP Subject Alternative Name.
 Let’s Encrypt IP certificates are:
 Publicly trusted
 Available for IPv4 and IPv6
@@ -404,12 +406,12 @@ Display its share URI and QR code on the main dashboard by default
 Rotate credential
 Change port
 Run configuration test
-Run connectivity test
 Repair current configuration
+The dashboard shall offer one optional post-Managed `Run Live Profile Check` action. It uses the universal subscription once, displays one temporary test URL and QR code, automatically attributes successful outside traffic to each Connection Profile, never gates installation, and retains no test token, counter difference, client-IP history, destination history, access log, or persistent traffic history.
 17. Cloudflare use after this revision
-SBXR shall store one dedicated, root-only Cloudflare API token with all permissions SBXR needs for the selected Cloudflare account and zone, including tunnel management and the required DNS changes. It shall not require the Owner to paste the token again for normal later changes. Immutable account and zone IDs bind the installation; changing either requires a separately reviewed migration.
+SBXR shall store one dedicated, root-only Cloudflare API token with all permissions SBXR needs for the selected Cloudflare account and zone, including tunnel management and the required DNS changes. The token remains memory-only until successful installation commits it; abandonment or rollback discards it. After success, SBXR reuses it automatically for approved DNS, Tunnel, certificate, repair, and update work, so the Owner need not paste it again for normal later changes. Immutable account and zone IDs bind the installation; changing either requires a separately reviewed migration.
 
-For the Cloudflare management token, the TUI shall offer `Reveal`, `Replace`, and `Remove from SBXR`; for the tunnel run token, it shall offer `Reveal` and genuine `Rotate`. Reveal shows only the first and last four characters. Replace opens a dedicated masked-entry page with `Verify and Replace`, `Back`, and Esc, and leaves the old token untouched until verification and confirmation succeed.
+For the Cloudflare management token, the TUI shall show status, the first and last four characters, bound account and zone, last successful verification, expiry when present, and current uses. It shall offer `Check now`, `Replace token`, and `Remove from SBXR`; removal is a reviewed Change Set and cannot leave dependent resources falsely reported as Managed or Healthy. For the tunnel run token, it shall offer `Reveal` and genuine `Rotate`. Replacement uses a dedicated masked-entry page with `Verify replacement`, `Back`, and Esc, and leaves the old token untouched until verification and confirmation succeed.
 
 Initial setup shall give a first-time Cloudflare Owner a detailed, current walkthrough containing the exact Cloudflare website address, dashboard pages, buttons, fields, resource selections, and permissions needed to create the single token. Before storing it, SBXR shall verify that the token is active and can access the selected account and zone. The first approved Cloudflare transaction shall prove the required write permissions by completing and health-checking the actual tunnel and DNS changes; missing permission must stop safely with exact corrective guidance. A broad Global API Key is not required.
 
@@ -428,8 +430,8 @@ Direct AnyTLS server address
 Direct TLS profiles can connect to the VPS IP while sending and verifying:
 SNI = direct.<owned-domain>
 The client therefore uses the VPS IP as its connection address but validates the certificate using the configured domain name.
-18. Public firewall surface
-Normal public inbound rules:
+18. Default public firewall surface
+Normal default public inbound rules:
 Detected SSH port/TCP
 443/TCP
 443/UDP
@@ -447,6 +449,7 @@ subscription source directory
 sbxr state files
 sbxr secrets
 Cloudflare credentials
+Configurable occupied defaults receive only the random alternatives approved in the installation Plan. The detected SSH port and temporary TCP port 80 never move, and a later Network Policy change requires its own reviewed, revalidated Change Set.
 19. GitHub update model
 The updater must update:
 sbxr application
@@ -455,7 +458,7 @@ client compatibility definitions
 systemd templates
 configuration schema
 migration code
-It must never overwrite:
+It must never silently overwrite:
 Owner credentials
 Subscription token
 Cloudflare tunnel token
@@ -465,6 +468,7 @@ IP certificate account
 Current port selection
 Firewall state
 An active Rollback Snapshot or recovery journal
+Changing an allowed item in this list requires its own reviewed, revalidated Change Set and the owning Module's rollback and health gates.
 After each project update, the updater must regenerate and validate all five subscription representations:
 Automatic
 Base64 URI
@@ -474,13 +478,13 @@ Mihomo YAML
 20. Security ownership and trust boundaries
 The Owner Console remains non-root. Running sbxr requests sudo once when required; short-lived privileged processes may read approved Client Access Values or apply a validated, revision-bound Plan, but may not accept arbitrary commands or paths. Denied authentication yields a limited read-only dashboard.
 
-Xray, sing-box, cloudflared, and Subscription Serving run as separate non-root identities. Xray and sing-box receive only `CAP_NET_BIND_SERVICE` for port `443`. Root-only directories and files use `0700` and `0600`; root-owned service-readable directories and files use `0750` and `0640`. Each service reads only its own prepared configuration and credentials. Secrets never appear in command arguments or environment variables; cloudflared uses `--token-file`.
+Xray, sing-box, cloudflared, and Subscription Serving run as separate non-root identities. Xray and sing-box receive only `CAP_NET_BIND_SERVICE` when an approved selected port below 1024 requires it. Root-only directories and files use `0700` and `0600`; root-owned service-readable directories and files use `0750` and `0640`. Each service reads only its own prepared configuration and credentials. Secrets never appear in command arguments or environment variables; cloudflared uses `--token-file`.
 
 The authenticated dashboard deliberately displays all Client Access Values by default. Infrastructure Secrets never appear on the dashboard. Cloudflare credentials may reveal only their first and last four characters; certificate private keys, REALITY private keys, ACME account material, recovery journals, and Rollback Snapshot contents are never revealable. Redaction, verified releases, SSH preservation, safe REALITY targets, TLS verification, private origins, service isolation, and file permissions cannot be bypassed. Every refusal includes an exact corrective work plan, with a separate reviewable Plan for any correction SBXR can safely perform.
 
 SBXR stores one scoped Cloudflare API token for one selected account and zone, keeps the active Rollback Snapshot and recovery journal root-only, disables proxy access logs and core dumps, retains no traffic history, uses no third-party credential testing, and sends no telemetry or automatic diagnostic uploads. SBXR v1 keeps no durable backup or historical restore; Complete removal requires separate two-step confirmation.
 
-See [Define security ownership and trust boundaries](https://github.com/albertloky/SBXR/issues/9#issuecomment-5175290085) and [ADR 0002](../adr/0002-distributed-security-ownership-and-trust-boundaries.md).
+See [Define security ownership and trust boundaries](https://github.com/albertloky/SBXR/issues/9#issuecomment-5175290085), [Define installation preflight and SSH safety](https://github.com/albertloky/SBXR/issues/12#issuecomment-5187474911), [ADR 0002](../adr/0002-distributed-security-ownership-and-trust-boundaries.md), and [ADR 0006](../adr/0006-installation-preflight-and-ssh-safety.md).
 
 21. Final product boundary
 The completed project shall provide exactly:

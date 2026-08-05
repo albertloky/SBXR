@@ -12,6 +12,10 @@ _Avoid_: User, account, administrator
 One named connection choice that the Owner can configure, test, export, and use from a client device.
 _Avoid_: Protocol, mode, node
 
+**Clean VPS**:
+A Not installed Ubuntu host without prior SBXR resources or unrelated infrastructure occupying an SBXR-owned seam; ordinary non-conflicting software may be present.
+_Avoid_: Empty VPS, freshly imaged VPS
+
 **Client Access Value**:
 A credential-bearing value used by a client device, including a Connection Profile credential, share URI, QR code content, or subscription URL.
 _Avoid_: Infrastructure credential
@@ -47,3 +51,7 @@ _Avoid_: Backup, Recovery Point, restore point
 **Correction Flow**:
 The navigable Owner Console path that explains a blocked operation and offers an SBXR-owned correction, required Owner input, recheck, or safe return instead of a dead end.
 _Avoid_: Continue anyway, error page
+
+**Live Profile Check**:
+An optional Owner-started check after SBXR reaches Managed that automatically attributes outside client traffic to each Connection Profile without manual success reporting.
+_Avoid_: Installation health gate, manual connectivity report
