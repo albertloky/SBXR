@@ -16,6 +16,46 @@ _Avoid_: Protocol, mode, node
 A Not installed Ubuntu host without prior SBXR resources or unrelated infrastructure occupying an SBXR-owned seam; ordinary non-conflicting software may be present.
 _Avoid_: Empty VPS, freshly imaged VPS
 
+**Acceptance VPS**:
+A disposable VPS reserved for explicitly approved live acceptance, where destructive installation, change, rollback, recovery, and Complete removal checks may run without risking Owner data that must be preserved.
+_Avoid_: Production VPS, valued VPS
+
+**Acceptance Run**:
+One explicitly approved execution of a written acceptance checklist against an exact Acceptance VPS; approval covers every listed step but no unlisted target or action.
+_Avoid_: Standing permission, ad hoc live testing
+
+**Acceptance Client**:
+An explicitly approved disposable client environment outside the Acceptance VPS that Codex may use with temporary Client Access Values during an Acceptance Run; the values are removed or rotated afterward.
+_Avoid_: Owner's personal device, maintained-client acceptance
+
+**Owner Acceptance**:
+Albert's live acceptance on maintained client apps, physical devices, real networks, or Owner-operated workflows when the first release or an affected surface requires it; automated checks and Codex observations cannot satisfy it.
+_Avoid_: Inferred acceptance, Codex acceptance
+
+**Release Qualification**:
+Proof that one exact Release Identity has every required acceptance stage marked Passed or Not required with redacted evidence; only a qualified release may become stable or enter automatic-update discovery.
+_Avoid_: Tests passed, release candidate exists, acceptance pending
+
+**Release Identity**:
+The exact repository, immutable tag, commit SHA, and release-index SHA-256 that together identify the release artifacts being accepted.
+_Avoid_: Version number, tag name alone
+
+**Acceptance Record**:
+The single redacted, publishable record of acceptance status, runner, time, software versions, stable check code, secret-safe result, and evidence link or Not required reason; no secret-bearing acceptance archive exists.
+_Avoid_: Raw evidence bundle, hidden acceptance logs
+
+**Acceptance Ladder**:
+The ordered acceptance stages Module Verification, Seam Verification, Integrated Verification, Codex Live Acceptance, and risk-based Owner Acceptance; a required failed or pending stage blocks every later claim and Release Qualification.
+_Avoid_: Tests passed, fully tested
+
+**Module Acceptance**:
+Proof that one Module passed its required Module Verification, Seam Verification, and every live check available before integration; its ticket may close with integrated checks explicitly pending, but this is not Release Qualification.
+_Avoid_: Release accepted, fully qualified
+
+**Acceptance Baseline**:
+A proven Managed revision or proven Not installed state from which an Acceptance Run scenario may safely begin; uncertainty requires stopping and reimaging rather than reusing the VPS.
+_Avoid_: VPS is reachable, seems clean
+
 **Client Access Value**:
 A credential-bearing value used by a client device, including a Connection Profile credential, share URI, QR code content, or subscription URL.
 _Avoid_: Infrastructure credential
