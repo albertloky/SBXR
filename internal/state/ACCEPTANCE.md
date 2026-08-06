@@ -24,6 +24,16 @@ Pass when a fresh installation prepares revision `1`, every Managed revision `N`
 
 The same check must prove that prior Desired State bytes pass through opaquely for later rollback, all prepared bytes are byte-stable, protected values cannot be rendered, and setting, unchanged-state repair, credential rotation, software migration, and automatic certificate renewal all obey the same `N` to `N+1` rule. Preparation must perform no publication or mutation; System Changes owns when publication is invoked plus the global journal, Rollback Snapshot, and host rollback.
 
+## `STATE-MODULE-MIGRATION` — Module Verification — Codex
+
+Run:
+
+```sh
+go test -v ./internal/state ./internal/state/adapter/filesystem -run '^(TestLoadReportsDeterministicZeroEdgeMigrationReview|TestPrepareCommitReportsZeroEdgeReleaseCompatibility|TestFilesystemSeam)$'
+```
+
+Pass when the one actual persisted schema fixture, schema `1`, passes through the production storage Seam repeatedly with an exact zero-step path; Load and PrepareCommit report starting and target schema, ordered steps, meaning or representation changes, generated-service effects, interruption, required Owner input, and starting-release readability without exposing protected values. Schema `1` has no real predecessor, so migration failure and required-input scenarios are `Not required`; no fake schema is added for tests. Every other schema, unknown or deprecated field, and unsupported Release Identity must be refused without changing current State. The first real successor schema must add one explicit embedded `N` to `N+1` transformation, its persisted predecessor fixture, failure and required-input cases when applicable, and proof that no intermediate edge can be skipped. Downgrade has no reverse migration; Software Lifecycle must prove the target release can read current Desired State before it creates a Plan.
+
 ## `STATE-MODULE-PUBLISH` — Module Verification — Codex
 
 Run:
@@ -81,7 +91,7 @@ This is preparation proof only. Applying the owner and modes to live service pat
 
 ## `STATE-INTEGRATED-PUBLICATION` — Integrated Verification — Pending
 
-Through the complete `sbxr` executable, System Changes must preserve and verify the Rollback Snapshot and journal, run planned live steps and Required pre-publication gates while the old State remains current, invoke the one-use State publication, prove the returned candidate sections and manifests agree with active files, services, and fresh owning-Module Observed State, then durably write `Complete` and delete transaction material without creating history. Until that integration exists and runs against the exact release, this row remains `Pending`.
+Through the complete `sbxr` executable, System Changes must preserve and verify the Rollback Snapshot and journal, run planned live steps and Required pre-publication gates while the old State remains current, invoke the one-use State publication, prove the returned candidate sections and manifests agree with active files, services, and fresh owning-Module Observed State, then durably write `Complete` and delete transaction material without creating history. An integrated software update must additionally prove its exact migration review and release compatibility before mutation. Until that integration exists and runs against the exact release, this row remains `Pending`.
 
 ## `STATE-LIVE-STORAGE` — Codex Live Acceptance — Pending
 

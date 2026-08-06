@@ -13,6 +13,13 @@
 // Required. Load never adopts Observed State, changes files, interprets stored
 // secrets, or exposes rejected content.
 //
+// Schema 1 is the first and only persisted schema, so its deterministic
+// migration path currently contains zero steps. Load and PrepareCommit return
+// that exact path plus Release Identity compatibility facts for review. Every
+// other schema is refused; no fictional predecessor or reverse migration is
+// retained solely for testing. The first real successor must add one explicit
+// embedded transformation and its persisted predecessor fixture.
+//
 // PrepareCommit derives exactly revision N+1 from one exact Load result and
 // binds it to the candidate, reviewed Plan, managed-input checksums, Change Set,
 // and deterministic least-privilege service copies. The opaque prepared commit

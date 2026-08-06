@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -78,6 +79,27 @@ func TestLoadValidCurrentState(t *testing.T) {
 	result, err = state.New(memoryStorage{document: completeDocument}).Load(request)
 	if err != nil || result.Status != state.ChangeInProgress {
 		t.Fatalf("Load() = (%+v, %v), want Change in progress", result, err)
+	}
+}
+
+func TestLoadReportsDeterministicZeroEdgeMigrationReview(t *testing.T) {
+	want := &state.MigrationReview{
+		StartingSchema:                  1,
+		TargetSchema:                    1,
+		StartingRelease:                 release,
+		TargetRelease:                   release,
+		Steps:                           []state.MigrationStepReview{},
+		StartingReleaseCanReadCandidate: true,
+	}
+	loader := state.New(memoryStorage{document: completeDocument(t)})
+	for range 2 {
+		result, err := loader.Load(managedRequest())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Snapshot == nil || result.Snapshot.SchemaVersion != 1 || !reflect.DeepEqual(result.Migration, want) {
+			t.Fatalf("Load() migration review = %#v, want %#v", result.Migration, want)
+		}
 	}
 }
 

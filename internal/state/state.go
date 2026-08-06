@@ -14,7 +14,9 @@ import (
 	"sync/atomic"
 )
 
-const supportedSchema = 1
+type SchemaVersion uint64
+
+const supportedSchema SchemaVersion = 1
 
 // InstallationStatus is separate from every Module's Health Results.
 type InstallationStatus string
@@ -62,10 +64,33 @@ type LoadRequest struct {
 
 // Snapshot is the validated current Desired State and its lineage envelope.
 type Snapshot struct {
+	SchemaVersion          SchemaVersion
 	Revision               uint64
 	ReleaseIdentity        ReleaseIdentity
 	LastCompletedChangeSet ChangeSetIdentity
 	DesiredState           DesiredState
+}
+
+// MigrationStepReview is one explicit schema-to-schema transformation and its
+// secret-safe Owner review facts. Schema 1 has no predecessor, so v1 returns no steps.
+type MigrationStepReview struct {
+	FromSchema              SchemaVersion
+	ToSchema                SchemaVersion
+	MeaningChanges          []string
+	GeneratedServiceEffects []string
+	ServiceInterruption     bool
+	RequiredOwnerInput      bool
+}
+
+// MigrationReview states the exact schema path and release compatibility
+// established by Load or PrepareCommit without claiming an update succeeded.
+type MigrationReview struct {
+	StartingSchema                  SchemaVersion
+	TargetSchema                    SchemaVersion
+	StartingRelease                 ReleaseIdentity
+	TargetRelease                   ReleaseIdentity
+	Steps                           []MigrationStepReview
+	StartingReleaseCanReadCandidate bool
 }
 
 // CurrentOperation is the only mutation detail exposed during Change in progress.
@@ -78,6 +103,7 @@ type Result struct {
 	Status           InstallationStatus
 	Snapshot         *Snapshot
 	CurrentOperation *CurrentOperation
+	Migration        *MigrationReview
 	loaded           *loadedState
 }
 
@@ -101,6 +127,7 @@ type loadedState struct {
 	revision        uint64
 	payloadChecksum string
 	bytes           []byte
+	migration       MigrationReview
 	used            atomic.Bool
 }
 
@@ -187,16 +214,38 @@ func (i Interface) Load(request LoadRequest) (Result, error) {
 		status = ChangeInProgress
 		operation = &CurrentOperation{ChangeSet: request.Lineage.ActiveChangeSet}
 	}
+	migration := MigrationReview{
+		StartingSchema: document.SchemaVersion, TargetSchema: supportedSchema,
+		StartingRelease: document.ReleaseIdentity, TargetRelease: request.SupportedRelease,
+		Steps: []MigrationStepReview{}, StartingReleaseCanReadCandidate: document.ReleaseIdentity == request.SupportedRelease,
+	}
 	return Result{Status: status, Snapshot: &Snapshot{
+		SchemaVersion:          document.SchemaVersion,
 		Revision:               document.Revision,
 		ReleaseIdentity:        document.ReleaseIdentity,
 		LastCompletedChangeSet: document.LastCompletedChangeSet,
 		DesiredState:           document.desiredState,
-	}, CurrentOperation: operation, loaded: &loadedState{owner: i.implementation, status: status, revision: document.Revision, payloadChecksum: document.Checksum, bytes: append([]byte(nil), data...)}}, nil
+	}, CurrentOperation: operation, Migration: cloneMigrationReview(&migration), loaded: &loadedState{owner: i.implementation, status: status, revision: document.Revision, payloadChecksum: document.Checksum, bytes: append([]byte(nil), data...), migration: migration}}, nil
+}
+
+func cloneMigrationReview(review *MigrationReview) *MigrationReview {
+	if review == nil {
+		return nil
+	}
+	cloned := *review
+	cloned.Steps = append([]MigrationStepReview(nil), review.Steps...)
+	for index := range cloned.Steps {
+		cloned.Steps[index].MeaningChanges = append([]string(nil), review.Steps[index].MeaningChanges...)
+		cloned.Steps[index].GeneratedServiceEffects = append([]string(nil), review.Steps[index].GeneratedServiceEffects...)
+	}
+	if cloned.Steps == nil {
+		cloned.Steps = []MigrationStepReview{}
+	}
+	return &cloned
 }
 
 type persistedDocument struct {
-	SchemaVersion          uint64            `json:"schema_version"`
+	SchemaVersion          SchemaVersion     `json:"schema_version"`
 	Revision               uint64            `json:"revision"`
 	ReleaseIdentity        ReleaseIdentity   `json:"release_identity"`
 	LastCompletedChangeSet ChangeSetIdentity `json:"last_completed_change_set"`

@@ -67,8 +67,8 @@ func TestPrepareCommitDerivesRevisionFromExactLoad(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if prepared.Revision() != 1 {
-			t.Fatalf("prepared revision = %d, want 1", prepared.Revision())
+		if prepared.Revision() != 1 || prepared.MigrationReview() != nil {
+			t.Fatalf("fresh prepared commit = (revision %d, migration %#v), want revision 1 without a fictional predecessor", prepared.Revision(), prepared.MigrationReview())
 		}
 	})
 
@@ -88,6 +88,27 @@ func TestPrepareCommitDerivesRevisionFromExactLoad(t *testing.T) {
 			t.Fatalf("prepared revision = %d, want 8", prepared.Revision())
 		}
 	})
+}
+
+func TestPrepareCommitReportsZeroEdgeReleaseCompatibility(t *testing.T) {
+	candidate := completeDesiredState()
+	storage := &mutableStateStorage{document: documentFor(t, candidate)}
+	stateModule := New(storage)
+	loaded, err := stateModule.Load(intentManagedRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := preparedRequest(t, loaded, candidate, "change-0008")
+	request.CandidateReleaseIdentity.Tag = "v1.1.0"
+	request.CandidateReleaseIdentity.Commit = strings.Repeat("1", 40)
+	prepared, err := stateModule.PrepareCommit(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	review := prepared.MigrationReview()
+	if review == nil || review.StartingSchema != 1 || review.TargetSchema != 1 || len(review.Steps) != 0 || review.StartingRelease != testRelease || review.TargetRelease != request.CandidateReleaseIdentity || review.StartingReleaseCanReadCandidate {
+		t.Fatalf("PrepareCommit() migration review = %#v, want zero-edge schema path and incompatible starting release", review)
+	}
 }
 
 func TestPrepareCommitRequiresOneFreshExactLoad(t *testing.T) {

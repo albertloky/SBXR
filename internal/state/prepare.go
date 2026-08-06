@@ -337,6 +337,7 @@ type PreparedCommit struct {
 	manifestSHA256  string
 	preparedState   []byte
 	preparedSHA256  string
+	migration       MigrationReview
 	consumed        atomic.Bool
 }
 
@@ -345,6 +346,16 @@ func (commit *PreparedCommit) Revision() uint64 {
 		return 0
 	}
 	return commit.revision
+}
+
+func (commit *PreparedCommit) MigrationReview() *MigrationReview {
+	if commit == nil || commit.migration.StartingSchema == 0 {
+		return nil
+	}
+	review := commit.migration
+	review.TargetRelease = commit.releaseIdentity
+	review.StartingReleaseCanReadCandidate = review.StartingRelease == review.TargetRelease
+	return cloneMigrationReview(&review)
 }
 
 func (*PreparedCommit) MarshalJSON() ([]byte, error) { return nil, errProtectedValueRendering }
@@ -666,6 +677,7 @@ func (i Interface) PrepareCommit(request PrepareRequest) (*PreparedCommit, error
 		starting: loaded, storage: i.implementation.storage,
 		candidateSHA256: candidateChecksum, manifestSHA256: manifestChecksum,
 		preparedState: preparedState, preparedSHA256: hex.EncodeToString(preparedDigest[:]),
+		migration: loaded.migration,
 	}, nil
 }
 
