@@ -54,6 +54,7 @@ type Intent struct {
 	PublicIPv4                 string
 	PublicIPv6                 string
 	PrimarySubscriptionAddress string
+	CertificateHostname        string
 	SSHPort                    uint16
 	Profiles                   Profiles
 	SubscriptionPort           uint16
@@ -100,7 +101,15 @@ func (d DiskRequirement) Total() uint64 {
 type ObservationRequest struct {
 	Intent Intent
 	Stage  Stage
+	Scope  ObservationScope
 }
+
+type ObservationScope string
+
+const (
+	LocalObservations    ObservationScope = "local"
+	ExternalObservations ObservationScope = "external"
+)
 
 type Adapter interface {
 	Observe(ObservationRequest) (Observations, error)
@@ -121,6 +130,8 @@ type Observations struct {
 	Disk              DiskFacts
 	Time              TimeFacts
 	OwnerFacts        OwnerFacts
+	Certificate       CertificateFacts
+	LocalProofs       []LocalProof
 	Checksums         map[string]string
 	Ephemeral         PortRange
 	PortCandidates    []PortCandidate
@@ -191,13 +202,15 @@ type RouteFacts struct {
 }
 
 type OutboundFacts struct {
-	DNS             bool
-	GitHubHTTPS     bool
-	CloudflareHTTPS bool
-	ACMEHTTPS       bool
-	TimeService     bool
-	TunnelTCP7844   bool
-	TunnelUDP7844   bool
+	DNS                       bool
+	GitHubHTTPS               bool
+	GitHubAttestationHTTPS    bool
+	CloudflareHTTPS           bool
+	ACMEHTTPS                 bool
+	CertificateEndpointsHTTPS bool
+	TimeService               bool
+	TunnelTCP7844             bool
+	TunnelUDP7844             bool
 }
 
 type DiskFacts struct {
@@ -221,6 +234,7 @@ type CloudflareRoute struct {
 	OriginAddress string
 	OriginPort    uint16
 	Protocol      Protocol
+	Connected     bool
 }
 
 const UnprovedResource = "unproved"
@@ -230,7 +244,69 @@ type Request struct {
 	Stage             Stage
 	Managed           ManagedProof
 	OwnerFacts        OwnerFacts
+	Certificate       CertificateFacts
+	Outside           OutsideFacts
 	RelevantChecksums map[string]string
+}
+
+type ProofStatus string
+
+const (
+	ProofPassed  ProofStatus = "Passed"
+	ProofFailed  ProofStatus = "Failed"
+	ProofPending ProofStatus = "Pending"
+)
+
+type OutsideProof struct {
+	Purpose  string
+	Address  string
+	Port     uint16
+	Protocol Protocol
+	Status   ProofStatus
+}
+
+type LocalProof struct {
+	Purpose              string
+	Address              string
+	Port                 uint16
+	Protocol             Protocol
+	RouteMatches         bool
+	ConfigurationMatches bool
+}
+
+type OutsideFacts struct {
+	HTTP01 ProofStatus
+	Direct []OutsideProof
+}
+
+type DNSRecordType string
+
+const (
+	CNAME DNSRecordType = "CNAME"
+	NS    DNSRecordType = "NS"
+	TXT   DNSRecordType = "TXT"
+)
+
+type DNSRecord struct {
+	Name string
+	Type DNSRecordType
+}
+
+type DNSFacts struct {
+	Hostname         string
+	IPv4             []string
+	IPv6             []string
+	ChallengeRecords []DNSRecord
+}
+
+type CAAFacts struct {
+	Issuer        string
+	HTTP01Allowed bool
+}
+
+type CertificateFacts struct {
+	DNS DNSFacts
+	CAA CAAFacts
 }
 
 type ManagedProof struct {
@@ -248,24 +324,61 @@ type ListenerProof struct {
 }
 
 type Result struct {
-	Baseline         Baseline
-	Outcome          Outcome
-	Findings         []Finding
-	Policy           Policy
-	SystemChanges    SystemChangesRequirements
-	SSHSafety        SSHSafety
-	CompleteRemoval  CompleteRemoval
-	CertificateRetry *CertificateRetryHandoff
-	Binding          Binding
-	PreApplyGates    []Gate
-	PostApplyGates   []Gate
-	Bounds           CheckBounds
+	Baseline             Baseline
+	Outcome              Outcome
+	Findings             []Finding
+	Policy               Policy
+	SystemChanges        SystemChangesRequirements
+	SSHSafety            SSHSafety
+	CompleteRemoval      CompleteRemoval
+	Certificate          CertificatePolicy
+	CertificateRetry     *CertificateRetryHandoff
+	Reachability         []ReachabilityProof
+	ProviderGuidance     []ProviderGuidance
+	SameVPSProvesOutside bool
+	Renewal              RenewalFreshness
+	Binding              Binding
+	PreApplyGates        []Gate
+	PostApplyGates       []Gate
+	Bounds               CheckBounds
 }
 
 type CertificateRetryHandoff struct {
 	Owner                  string
 	KeepCurrentCertificate bool
 	Until                  string
+}
+
+type CertificatePolicy struct {
+	HTTP01ForIPAndDomain    bool
+	CreatesCAA              bool
+	IgnoredChallengeRecords int
+}
+
+type ReachabilityProof struct {
+	Purpose  string
+	Address  string
+	Port     uint16
+	Protocol Protocol
+	Local    ProofStatus
+	Outside  ProofStatus
+}
+
+type ProviderGuidance struct {
+	Address             string
+	Port                uint16
+	Protocol            Protocol
+	RequiredPorts       []Exposure
+	SSHWarning          string
+	ReconnectionWarning string
+	Guidance            string
+	Action              string
+	ProviderChanged     bool
+}
+
+type RenewalFreshness struct {
+	ReevaluateAfterGlobalLockWait bool
+	RebuildOneUsePlan             bool
 }
 
 type Finding struct {
@@ -298,6 +411,25 @@ type Policy struct {
 	CertificateAddress string
 	Exposures          []Exposure
 	Replacements       []PortReplacement
+	TemporaryHTTP      *TemporaryHTTPPolicy
+}
+
+type CleanupOutcome string
+
+const (
+	CleanupSuccess      CleanupOutcome = "success"
+	CleanupFailure      CleanupOutcome = "failure"
+	CleanupInterruption CleanupOutcome = "interruption"
+	CleanupCancellation CleanupOutcome = "cancellation"
+	CleanupRollback     CleanupOutcome = "rollback"
+)
+
+type TemporaryHTTPPolicy struct {
+	Identity            string
+	Purpose             string
+	Exposure            Exposure
+	RecordNativeHandles bool
+	RemoveAfter         [5]CleanupOutcome
 }
 
 type SystemChangesRequirements struct {
@@ -358,9 +490,13 @@ type Gate struct {
 }
 
 type CheckBounds struct {
+	DeterministicAttempts  int
 	TemporaryAttempts      int
 	TemporaryWindowSeconds int
 	LocalHealthSeconds     int
+	CloudflareOwner        string
+	ACMEOwner              string
+	InfiniteRetries        bool
 }
 
 type Binding struct {
@@ -373,7 +509,7 @@ type Interface struct{ adapter Adapter }
 func New(adapter Adapter) Interface { return Interface{adapter: adapter} }
 
 func (i Interface) Evaluate(request Request) Result {
-	result := Result{Baseline: request.Intent.Baseline, Outcome: Healthy, Bounds: CheckBounds{TemporaryAttempts: 3, TemporaryWindowSeconds: 60, LocalHealthSeconds: 60}}
+	result := Result{Baseline: request.Intent.Baseline, Outcome: Healthy, Bounds: CheckBounds{DeterministicAttempts: 1, TemporaryAttempts: 3, TemporaryWindowSeconds: 60, LocalHealthSeconds: 60, CloudflareOwner: "Cloudflare Tunnel", ACMEOwner: "Certificate Lifecycle"}, Renewal: RenewalFreshness{ReevaluateAfterGlobalLockWait: true, RebuildOneUsePlan: true}}
 	if !validRequest(request) {
 		result.add(requiredFailure("NETWORK-INTENT-INVALID", "Network Policy intent is incomplete or unsupported", "a missing or invalid typed intent value", "one exact revision, Clean or Managed baseline, approved ports, addresses, profiles, and evaluation stage", "SBXR cannot inspect or adopt ambiguous intent", ownerFix("Return to the previous review and complete the Network Policy inputs.")))
 		return result
@@ -382,7 +518,7 @@ func (i Interface) Evaluate(request Request) Result {
 		result.add(requiredFailure("NETWORK-ADAPTER-UNAVAILABLE", "Ubuntu observations are unavailable", "no Adapter", "one Ubuntu-host Adapter", "SBXR cannot prove the network baseline", Fix{OwnerChecklist: []string{"Restore the Ubuntu-host Adapter."}}))
 		return result
 	}
-	observed, err := i.adapter.Observe(ObservationRequest{Intent: request.Intent, Stage: request.Stage})
+	observed, err := i.adapter.Observe(ObservationRequest{Intent: request.Intent, Stage: request.Stage, Scope: LocalObservations})
 	if err != nil {
 		result.add(requiredFailure("NETWORK-OBSERVATION-FAILED", "Ubuntu observation failed", "typed observation unavailable", "fresh typed Ubuntu facts", "SBXR cannot prove the network baseline", Fix{OwnerChecklist: []string{"Correct the observation failure."}}))
 		return result
@@ -390,6 +526,10 @@ func (i Interface) Evaluate(request Request) Result {
 	if ownerFactsProvided(request.OwnerFacts) {
 		observed.OwnerFacts = request.OwnerFacts
 	}
+	if certificateFactsProvided(request.Certificate) {
+		observed.Certificate = request.Certificate
+	}
+	observed.Outbound = OutboundFacts{}
 	applyManagedProof(request.Managed, &observed)
 	result.Policy = candidatePolicy(request.Intent)
 	result.SystemChanges = SystemChangesRequirements{ValidateCompleteCandidate: true, AtomicTableApply: true, RootOwnedWatchdog: true, ProveCurrentSSHResponsive: true, ProveDetectedSSHAdmitted: true, CancelAfterGate: "NETWORK-SSH-RESPONSIVE", RestoreExactPreviousRules: true}
@@ -398,12 +538,23 @@ func (i Interface) Evaluate(request Request) Result {
 	evaluateSSH(&result, request.Intent, observed.SSH)
 	evaluateHost(&result, observed.Host)
 	evaluateAddresses(&result, request.Intent, observed)
+	evaluateCertificate(&result, request.Intent, observed.Certificate)
 	evaluatePrivilege(&result, request.Stage, observed.Firewall)
 	evaluateDisk(&result, request.Intent.Disk, observed.Disk)
 	evaluateTime(&result, request.Intent.Baseline, observed.Time)
-	evaluateOutbound(&result, observed.Outbound)
 	evaluateOwnership(&result, request.Intent, observed)
 	result.Policy.Nftables = renderNftables(result.Policy)
+	if result.Outcome == Failed {
+		return result
+	}
+	external, err := i.adapter.Observe(ObservationRequest{Intent: request.Intent, Stage: request.Stage, Scope: ExternalObservations})
+	if err != nil {
+		result.add(requiredFailure("NETWORK-OBSERVATION-FAILED", "External network observation failed", "typed external observation unavailable", "fresh configured-resolver and verified-protocol facts", "SBXR cannot prove required outbound dependencies", Fix{OwnerChecklist: []string{"Correct the external observation failure."}}))
+		return result
+	}
+	observed.Outbound = external.Outbound
+	evaluateOutbound(&result, observed.Outbound)
+	evaluateReachability(&result, request, observed)
 	result.Binding = bind(request, observed, result.Policy)
 	result.PreApplyGates = []Gate{
 		{Code: "NETWORK-PREFLIGHT-FRESH", Required: "all bound observations still match"},
@@ -471,6 +622,9 @@ func validRequest(request Request) bool {
 		if port == 0 {
 			return false
 		}
+	}
+	if (intent.Profiles.Hysteria2.Enabled || intent.Profiles.TUIC.Enabled || intent.Profiles.AnyTLS.Enabled) && intent.CertificateHostname == "" {
+		return false
 	}
 	return intent.Profiles.VLESSXHTTP.Address != "" && intent.Profiles.VLESSWebSocket.Address != ""
 }
@@ -750,10 +904,10 @@ func matchesPublicFamily(found, selected, wildcard string) bool {
 func expectedCloudflareRoutes(intent Intent) []CloudflareRoute {
 	var routes []CloudflareRoute
 	if intent.Profiles.VLESSXHTTP.Enabled {
-		routes = append(routes, CloudflareRoute{"VLESS XHTTP", intent.Profiles.VLESSXHTTP.Address, intent.Profiles.VLESSXHTTP.Port, TCP})
+		routes = append(routes, CloudflareRoute{"VLESS XHTTP", intent.Profiles.VLESSXHTTP.Address, intent.Profiles.VLESSXHTTP.Port, TCP, true})
 	}
 	if intent.Profiles.VLESSWebSocket.Enabled {
-		routes = append(routes, CloudflareRoute{"VLESS WebSocket", intent.Profiles.VLESSWebSocket.Address, intent.Profiles.VLESSWebSocket.Port, TCP})
+		routes = append(routes, CloudflareRoute{"VLESS WebSocket", intent.Profiles.VLESSWebSocket.Address, intent.Profiles.VLESSWebSocket.Port, TCP, true})
 	}
 	return routes
 }
@@ -885,9 +1039,11 @@ func evaluateOutbound(result *Result, facts OutboundFacts) {
 		name string
 	}{
 		{facts.DNS, "NETWORK-OUTBOUND-DNS", "Ubuntu configured DNS resolver"},
-		{facts.GitHubHTTPS, "NETWORK-OUTBOUND-GITHUB-HTTPS", "verified HTTPS to GitHub release and attestation services"},
+		{facts.GitHubHTTPS, "NETWORK-OUTBOUND-GITHUB-HTTPS", "verified HTTPS to GitHub release services"},
+		{facts.GitHubAttestationHTTPS, "NETWORK-OUTBOUND-GITHUB-ATTESTATION-HTTPS", "verified HTTPS to GitHub attestation services"},
 		{facts.CloudflareHTTPS, "NETWORK-OUTBOUND-CLOUDFLARE-HTTPS", "verified HTTPS to the Cloudflare API"},
 		{facts.ACMEHTTPS, "NETWORK-OUTBOUND-ACME-HTTPS", "verified HTTPS to the approved ACME issuer"},
+		{facts.CertificateEndpointsHTTPS, "NETWORK-OUTBOUND-CERTIFICATE-HTTPS", "verified HTTPS to required certificate chain or revocation endpoints"},
 		{facts.TimeService, "NETWORK-OUTBOUND-TIME", "the active time service"},
 		{facts.TunnelTCP7844, "NETWORK-OUTBOUND-TUNNEL-TCP", "Cloudflare Tunnel outbound TCP 7844"},
 		{facts.TunnelUDP7844, "NETWORK-OUTBOUND-TUNNEL-UDP", "Cloudflare Tunnel outbound UDP 7844"},
@@ -899,11 +1055,129 @@ func evaluateOutbound(result *Result, facts OutboundFacts) {
 	}
 }
 
+func evaluateCertificate(result *Result, intent Intent, facts CertificateFacts) {
+	if intent.CertificateHostname == "" {
+		return
+	}
+	result.Certificate = CertificatePolicy{HTTP01ForIPAndDomain: true, IgnoredChallengeRecords: len(facts.DNS.ChallengeRecords)}
+	ipv4Matches := result.Policy.PublicIPv4 == "" && len(facts.DNS.IPv4) == 0 || result.Policy.PublicIPv4 != "" && len(facts.DNS.IPv4) == 1 && facts.DNS.IPv4[0] == result.Policy.PublicIPv4
+	ipv6Matches := result.Policy.PublicIPv6 == "" && len(facts.DNS.IPv6) == 0 || result.Policy.PublicIPv6 != "" && len(facts.DNS.IPv6) == 1 && facts.DNS.IPv6[0] == result.Policy.PublicIPv6
+	if facts.DNS.Hostname != intent.CertificateHostname || !ipv4Matches || !ipv6Matches {
+		result.add(requiredFailure("NETWORK-CERTIFICATE-DNS", "Domain certificate DNS facts do not match qualified addresses", fmt.Sprintf("hostname match=%t; IPv4 match=%t; IPv6 match=%t", facts.DNS.Hostname == intent.CertificateHostname, ipv4Matches, ipv6Matches), fmt.Sprintf("%s on only the qualified selected addresses", safeFact(intent.CertificateHostname)), "Certificate Lifecycle needs exact typed DNS facts; unrelated _acme-challenge records are ignored for HTTP-01", ownerFix("Correct the ordinary DNS A or AAAA records through their owning Module, then check again.")))
+		return
+	}
+	if facts.CAA.Issuer != "letsencrypt.org" || !facts.CAA.HTTP01Allowed {
+		result.add(requiredFailure("NETWORK-CERTIFICATE-CAA", "Effective CAA does not permit the approved HTTP-01 issuer", fmt.Sprintf("approved issuer=%t; HTTP-01 allowed=%t", facts.CAA.Issuer == "letsencrypt.org", facts.CAA.HTTP01Allowed), "effective CAA permitting letsencrypt.org and HTTP-01", "SBXR validates effective CAA but never creates or edits CAA in v1", ownerFix("Correct effective CAA through the DNS owner, then check again.")))
+	}
+}
+
+func evaluateReachability(result *Result, request Request, observed Observations) {
+	policy := result.Policy
+	for _, definition := range profileDefinitions(request.Intent) {
+		if !definition.profile.Enabled || definition.address != "public" || definition.name == "Subscription HTTPS" {
+			continue
+		}
+		for _, address := range []string{policy.PublicIPv4, policy.PublicIPv6} {
+			if address == "" {
+				continue
+			}
+			exposure := Exposure{definition.name, "public", definition.profile.Port, definition.protocol}
+			local := ProofPending
+			if request.Intent.Baseline == Managed && observed.Firewall.SBXRTableState == "matches Desired State" && hasProvenLocalListener(observed.Listeners, exposure, policy) && hasExactLocalProof(observed.LocalProofs, definition.name, address, definition.profile.Port, definition.protocol) {
+				local = ProofPassed
+			}
+			outside := ProofPending
+			for _, proof := range request.Outside.Direct {
+				if proof.Purpose == definition.name && proof.Address == address && proof.Port == definition.profile.Port && proof.Protocol == definition.protocol {
+					if local == ProofPassed {
+						outside = proofStatus(proof.Status)
+					}
+					break
+				}
+			}
+			result.Reachability = append(result.Reachability, ReachabilityProof{definition.name, address, definition.profile.Port, definition.protocol, local, outside})
+			if outside == ProofFailed {
+				result.ProviderGuidance = append(result.ProviderGuidance, providerGuidance(request.Intent, policy, address, definition.profile.Port, definition.protocol))
+				finding := advisory("NETWORK-OUTSIDE-REACHABILITY", "A genuine outside client could not reach a direct profile", fmt.Sprintf("%s:%d/%s outside failure", address, definition.profile.Port, definition.protocol), fmt.Sprintf("%s:%d/%s reachable from a genuine outside client", address, definition.profile.Port, definition.protocol), "Local or same-VPS proof cannot prove provider-level reachability, and SBXR never edits provider networking", ownerFix("Review the typed provider guidance, preserve SSH, correct the provider-owned policy, then Run Live Profile Check again."))
+				result.add(finding)
+			}
+		}
+	}
+	for _, expected := range expectedCloudflareRoutes(request.Intent) {
+		proof := ReachabilityProof{Purpose: expected.Profile, Address: expected.OriginAddress, Port: expected.OriginPort, Protocol: expected.Protocol, Local: ProofPending, Outside: ProofPending}
+		for _, route := range observed.OwnerFacts.Routes {
+			if route.Profile != expected.Profile || route.OriginAddress != expected.OriginAddress || route.OriginPort != expected.OriginPort || route.Protocol != expected.Protocol {
+				continue
+			}
+			exposure := Exposure{Purpose: expected.Profile + " origin", Address: expected.OriginAddress, Port: expected.OriginPort, Protocol: expected.Protocol}
+			if request.Intent.Baseline == Managed && observed.Firewall.SBXRTableState == "matches Desired State" && observed.OwnerFacts.Tunnel == "matches Desired State" && hasProvenLocalListener(observed.Listeners, exposure, policy) && hasExactLocalProof(observed.LocalProofs, expected.Profile, expected.OriginAddress, expected.OriginPort, expected.Protocol) {
+				proof.Local = ProofPassed
+			}
+			if route.Connected {
+				proof.Outside = ProofPassed
+			}
+			break
+		}
+		result.Reachability = append(result.Reachability, proof)
+	}
+	if policy.TemporaryHTTP != nil {
+		outside := proofStatus(request.Outside.HTTP01)
+		result.Reachability = append(result.Reachability, ReachabilityProof{"ACME HTTP-01", policy.PrimaryAddress, 80, TCP, ProofPending, outside})
+		if outside == ProofFailed {
+			result.ProviderGuidance = append(result.ProviderGuidance, providerGuidance(request.Intent, policy, policy.PrimaryAddress, 80, TCP))
+			result.add(requiredFailure("NETWORK-OUTSIDE-HTTP01", "ACME could not reach the exact temporary HTTP-01 exposure", fmt.Sprintf("%s:80/TCP outside failure", policy.PrimaryAddress), fmt.Sprintf("%s:80/TCP reachable during the exact certificate interval", policy.PrimaryAddress), "Same-VPS proof cannot replace ACME outside proof, and SBXR never edits provider networking", ownerFix("Review the typed provider guidance, preserve SSH, correct DNS or provider-owned policy, then check again.")))
+		}
+	}
+}
+
+func hasProvenLocalListener(listeners []Listener, exposure Exposure, policy Policy) bool {
+	for _, listener := range listeners {
+		if listener.Ownership == SBXROwned && listener.Service != "" && listener.Port == exposure.Port && listener.Protocol == exposure.Protocol && addressMatches(listener.Address, exposure.Address, policy) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasExactLocalProof(proofs []LocalProof, purpose, address string, port uint16, protocol Protocol) bool {
+	for _, proof := range proofs {
+		if proof.Purpose == purpose && proof.Address == address && proof.Port == port && proof.Protocol == protocol && proof.RouteMatches && proof.ConfigurationMatches {
+			return true
+		}
+	}
+	return false
+}
+
+func proofStatus(status ProofStatus) ProofStatus {
+	if status == ProofPassed || status == ProofFailed {
+		return status
+	}
+	return ProofPending
+}
+
+func providerGuidance(intent Intent, policy Policy, address string, port uint16, protocol Protocol) ProviderGuidance {
+	var required []Exposure
+	for _, exposure := range policy.Exposures {
+		if exposure.Address == "public" {
+			required = append(required, exposure)
+		}
+	}
+	return ProviderGuidance{
+		Address: address, Port: port, Protocol: protocol, RequiredPorts: required,
+		SSHWarning:          fmt.Sprintf("Preserve detected SSH %d/TCP while correcting provider policy.", intent.SSHPort),
+		ReconnectionWarning: "One existing SSH session cannot prove a future outside reconnection; use the VPS provider console if SSH is blocked.",
+		Guidance:            "Review the VPS provider firewall, security group, and network ACL without giving SBXR provider credentials.",
+		Action:              "Run Live Profile Check again",
+	}
+}
+
 func candidatePolicy(intent Intent) Policy {
 	policy := Policy{Table: "inet sbxr", PublicIPv4: intent.PublicIPv4, PublicIPv6: intent.PublicIPv6, PrimaryAddress: intent.PrimarySubscriptionAddress, CertificateAddress: intent.PrimarySubscriptionAddress}
 	policy.Exposures = append(policy.Exposures, Exposure{"SSH preservation", "public", intent.SSHPort, TCP})
 	if intent.TemporaryHTTP {
-		policy.Exposures = append(policy.Exposures, Exposure{"ACME HTTP-01", "public", 80, TCP})
+		exposure := Exposure{"ACME HTTP-01", "public", 80, TCP}
+		policy.Exposures = append(policy.Exposures, exposure)
+		policy.TemporaryHTTP = &TemporaryHTTPPolicy{Identity: "sbxr:acme-http-01", Purpose: "ACME HTTP-01 validation for IP and domain certificates", Exposure: exposure, RecordNativeHandles: true, RemoveAfter: [5]CleanupOutcome{CleanupSuccess, CleanupFailure, CleanupInterruption, CleanupCancellation, CleanupRollback}}
 	}
 	for _, current := range profileDefinitions(intent) {
 		if current.profile.Enabled {
@@ -919,7 +1193,7 @@ func renderNftables(policy Policy) string {
 	}
 	ports := map[Protocol][]uint16{TCP: {}, UDP: {}}
 	for _, exposure := range policy.Exposures {
-		if exposure.Address == "public" {
+		if exposure.Address == "public" && exposure.Purpose != "ACME HTTP-01" {
 			ports[exposure.Protocol] = append(ports[exposure.Protocol], exposure.Port)
 		}
 	}
@@ -946,6 +1220,9 @@ func renderNftables(policy Policy) string {
 	}{{"ip", policy.PublicIPv4}, {"ip6", policy.PublicIPv6}} {
 		if address.value == "" {
 			continue
+		}
+		if policy.TemporaryHTTP != nil {
+			rules = append(rules, fmt.Sprintf("\t\t%s daddr %s tcp dport 80 accept comment %q", address.family, address.value, policy.TemporaryHTTP.Identity))
 		}
 		for _, protocol := range []Protocol{TCP, UDP} {
 			if len(ports[protocol]) == 0 {
@@ -986,6 +1263,9 @@ func bind(request Request, observed Observations, policy Policy) Binding {
 	if ownerFactsProvided(request.OwnerFacts) {
 		observed.OwnerFacts = request.OwnerFacts
 	}
+	if certificateFactsProvided(request.Certificate) {
+		observed.Certificate = request.Certificate
+	}
 	applyManagedProof(request.Managed, &observed)
 	data, _ := json.Marshal(struct {
 		Request  Request
@@ -1000,9 +1280,15 @@ func ownerFactsProvided(facts OwnerFacts) bool {
 	return facts.DNS != "" || facts.Tunnel != "" || len(facts.Routes) > 0
 }
 
+func certificateFactsProvided(facts CertificateFacts) bool {
+	return facts.DNS.Hostname != "" || len(facts.DNS.IPv4) > 0 || len(facts.DNS.IPv6) > 0 || len(facts.DNS.ChallengeRecords) > 0 || facts.CAA.Issuer != "" || facts.CAA.HTTP01Allowed
+}
+
 func (b Binding) Stale(request Request, observed Observations) bool {
 	return b.Digest == "" || b.Digest != bind(request, observed, b.policy).Digest
 }
+
+func (b Binding) StaleAfterGlobalLockWait() bool { return true }
 
 func (r *Result) add(finding Finding) {
 	r.Findings = append(r.Findings, finding)

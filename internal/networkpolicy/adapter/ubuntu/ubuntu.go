@@ -41,6 +41,12 @@ func New() Adapter { return Adapter{root: "/", external: true, privileged: os.Ge
 func NewAt(root string) Adapter { return Adapter{root: root} }
 
 func (a Adapter) Observe(request networkpolicy.ObservationRequest) (networkpolicy.Observations, error) {
+	if request.Scope == networkpolicy.ExternalObservations {
+		if !a.external {
+			return networkpolicy.Observations{}, nil
+		}
+		return networkpolicy.Observations{Outbound: outboundFacts(timeFacts().Synchronized)}, nil
+	}
 	version, err := a.ubuntuVersion()
 	if err != nil {
 		return networkpolicy.Observations{}, err
@@ -78,7 +84,9 @@ func (a Adapter) Observe(request networkpolicy.ObservationRequest) (networkpolic
 	}
 	if a.external {
 		observed.Time = timeFacts()
-		observed.Outbound = outboundFacts(observed.Time.Synchronized)
+		if request.Scope != networkpolicy.LocalObservations {
+			observed.Outbound = outboundFacts(observed.Time.Synchronized)
+		}
 		observed.Firewall.ActiveManager = activeFirewallManager()
 	}
 	if request.Stage == networkpolicy.PostApproval && a.privileged {
@@ -583,8 +591,10 @@ func outboundFacts(timeOK bool) networkpolicy.OutboundFacts {
 	checks := []check{
 		{"dns", func() bool { _, err := net.LookupHost("github.com"); return err == nil }},
 		{"github", func() bool { return httpsReachable("https://github.com") }},
+		{"github-attestations", func() bool { return httpsReachable("https://api.github.com/repos/albertloky/SBXR/attestations") }},
 		{"cloudflare", func() bool { return httpsReachable("https://api.cloudflare.com/client/v4/") }},
 		{"acme", func() bool { return httpsReachable("https://acme-v02.api.letsencrypt.org/directory") }},
+		{"certificate-endpoints", func() bool { return httpsReachable("https://letsencrypt.org/certs/isrgrootx1.der") }},
 		{"tunnel-tcp", func() bool { return dialReachable("tcp", "region1.v2.argotunnel.com:7844") }},
 		{"tunnel-udp", func() bool { return quicVersionResponse("region1.v2.argotunnel.com:7844") }},
 	}
@@ -602,11 +612,19 @@ func outboundFacts(timeOK bool) networkpolicy.OutboundFacts {
 		}()
 	}
 	group.Wait()
-	return networkpolicy.OutboundFacts{DNS: results["dns"], GitHubHTTPS: results["github"], CloudflareHTTPS: results["cloudflare"], ACMEHTTPS: results["acme"], TimeService: timeOK, TunnelTCP7844: results["tunnel-tcp"], TunnelUDP7844: results["tunnel-udp"]}
+	return networkpolicy.OutboundFacts{DNS: results["dns"], GitHubHTTPS: results["github"], GitHubAttestationHTTPS: results["github-attestations"], CloudflareHTTPS: results["cloudflare"], ACMEHTTPS: results["acme"], CertificateEndpointsHTTPS: results["certificate-endpoints"], TimeService: timeOK, TunnelTCP7844: results["tunnel-tcp"], TunnelUDP7844: results["tunnel-udp"]}
 }
 
 func httpsReachable(url string) bool {
-	client := &http.Client{Timeout: 3 * time.Second}
+	client := &http.Client{Timeout: 3 * time.Second, CheckRedirect: func(request *http.Request, via []*http.Request) error {
+		if request.URL.Scheme != "https" {
+			return fmt.Errorf("refusing non-HTTPS redirect")
+		}
+		if len(via) >= 10 {
+			return fmt.Errorf("too many redirects")
+		}
+		return nil
+	}}
 	request, _ := http.NewRequestWithContext(context.Background(), http.MethodHead, url, nil)
 	response, err := client.Do(request)
 	if err != nil {

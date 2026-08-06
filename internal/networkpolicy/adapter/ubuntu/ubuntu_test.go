@@ -216,6 +216,33 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestAdapterUsesRealDNSAndVerifiedHTTPSWithoutCredentials(t *testing.T) {
+	root := t.TempDir()
+	for name, data := range map[string]string{
+		"etc/os-release":      "ID=ubuntu\nVERSION_ID=\"24.04\"\n",
+		"var/lib/dpkg/status": "Package: ubuntu-server\nStatus: install ok installed\n\n",
+		"proc/meminfo":        "MemTotal:        1048576 kB\n",
+	} {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	adapter := NewAt(root)
+	adapter.external = true
+	adapter.addresses = func() ([]net.Addr, error) { return nil, nil }
+	observed, err := adapter.Observe(networkpolicy.ObservationRequest{Stage: networkpolicy.PreApproval})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !observed.Outbound.DNS || !observed.Outbound.GitHubHTTPS || !observed.Outbound.GitHubAttestationHTTPS || !observed.Outbound.CloudflareHTTPS || !observed.Outbound.ACMEHTTPS || !observed.Outbound.CertificateEndpointsHTTPS {
+		t.Fatalf("real DNS/verified HTTPS seam = %+v", observed.Outbound)
+	}
+}
+
 func cidr(t *testing.T, value string) net.Addr {
 	t.Helper()
 	ip, network, err := net.ParseCIDR(value)
@@ -283,13 +310,17 @@ func (candidateAdapter) Observe(networkpolicy.ObservationRequest) (networkpolicy
 		PublicIPv4: []string{"192.0.2.10"},
 		SSH:        networkpolicy.SSHFacts{DetectedPort: 2222, ServerAddress: "192.0.2.10", CurrentSessions: []string{"current"}},
 		Firewall:   networkpolicy.FirewallFacts{SBXRTableState: "absent", RootVerified: true},
-		Checksums:  map[string]string{},
+		Certificate: networkpolicy.CertificateFacts{
+			DNS: networkpolicy.DNSFacts{Hostname: "direct.example.com", IPv4: []string{"192.0.2.10"}},
+			CAA: networkpolicy.CAAFacts{Issuer: "letsencrypt.org", HTTP01Allowed: true},
+		},
+		Checksums: map[string]string{},
 	}, nil
 }
 
 func productionCandidateIntent() networkpolicy.Intent {
 	return networkpolicy.Intent{
-		Revision: 1, Baseline: networkpolicy.Clean, PublicIPv4: "192.0.2.10", PrimarySubscriptionAddress: "192.0.2.10", SSHPort: 2222, SubscriptionPort: 10443,
+		Revision: 1, Baseline: networkpolicy.Clean, PublicIPv4: "192.0.2.10", PrimarySubscriptionAddress: "192.0.2.10", CertificateHostname: "direct.example.com", SSHPort: 2222, SubscriptionPort: 10443,
 		Profiles: networkpolicy.Profiles{
 			VLESSRealityVision: networkpolicy.Profile{Enabled: true, Port: 443},
 			VLESSXHTTP:         networkpolicy.Profile{Enabled: true, Address: "127.0.0.1", Port: 11080},

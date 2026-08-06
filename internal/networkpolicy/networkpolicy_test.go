@@ -12,6 +12,20 @@ type staticAdapter struct {
 	observed networkpolicy.Observations
 }
 
+type stagedAdapter struct {
+	observed     networkpolicy.Observations
+	requests     []networkpolicy.ObservationRequest
+	failExternal bool
+}
+
+func (a *stagedAdapter) Observe(request networkpolicy.ObservationRequest) (networkpolicy.Observations, error) {
+	a.requests = append(a.requests, request)
+	if a.failExternal && request.Scope == networkpolicy.ExternalObservations {
+		return networkpolicy.Observations{}, fmt.Errorf("external observation should not run")
+	}
+	return a.observed, nil
+}
+
 func TestEvaluatePrivilegeStalenessDiskAndTime(t *testing.T) {
 	t.Run("candidate preserves the freshly detected SSH port", func(t *testing.T) {
 		observed := completeObservations()
@@ -125,6 +139,23 @@ func TestEvaluatePrivilegeStalenessDiskAndTime(t *testing.T) {
 	})
 }
 
+func TestEvaluateStopsBeforeExternalChecksOnDeterministicLocalFailure(t *testing.T) {
+	observed := completeObservations()
+	observed.Host.UbuntuVersion = "22.04.5"
+	adapter := &stagedAdapter{observed: observed, failExternal: true}
+	result := networkpolicy.New(adapter).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PostApproval})
+	assertFinding(t, result, networkpolicy.Failed, networkpolicy.Required, "NETWORK-HOST-UBUNTU")
+	if len(adapter.requests) != 1 || adapter.requests[0].Scope != networkpolicy.LocalObservations {
+		t.Fatalf("deterministic local failure observation stages = %+v", adapter.requests)
+	}
+
+	healthy := &stagedAdapter{observed: completeObservations()}
+	result = networkpolicy.New(healthy).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PostApproval})
+	if result.Outcome != networkpolicy.Healthy || len(healthy.requests) != 2 || healthy.requests[1].Scope != networkpolicy.ExternalObservations {
+		t.Fatalf("healthy observation stages = %+v result %+v", healthy.requests, result.Findings)
+	}
+}
+
 func assertFinding(t *testing.T, result networkpolicy.Result, outcome networkpolicy.Outcome, class networkpolicy.Classification, code string) {
 	t.Helper()
 	if result.Outcome != outcome || len(result.Findings) != 1 || result.Findings[0].Code != code || result.Findings[0].Classification != class {
@@ -231,7 +262,7 @@ func TestEvaluateNftablesIntervalsAndCompetingPolicy(t *testing.T) {
 		intent := completeIntent()
 		intent.TemporaryHTTP = true
 		result := networkpolicy.New(staticAdapter{observed: completeObservations()}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
-		if !strings.Contains(result.Policy.Nftables, "tcp dport { 80, 443, 2222, 9443, 10443 }") {
+		if !strings.Contains(result.Policy.Nftables, `tcp dport 80 accept comment "sbxr:acme-http-01"`) {
 			t.Fatalf("temporary candidate = %q", result.Policy.Nftables)
 		}
 	})
@@ -267,6 +298,164 @@ func TestEvaluateNftablesIntervalsAndCompetingPolicy(t *testing.T) {
 			t.Fatalf("unexpected policy finding = %q", result.Findings[0].Found)
 		}
 	})
+}
+
+func TestEvaluateExactTemporaryHTTP01Policy(t *testing.T) {
+	intent := completeIntent()
+	intent.TemporaryHTTP = true
+	result := networkpolicy.New(staticAdapter{observed: completeObservations()}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
+	want := &networkpolicy.TemporaryHTTPPolicy{
+		Identity:            "sbxr:acme-http-01",
+		Purpose:             "ACME HTTP-01 validation for IP and domain certificates",
+		Exposure:            networkpolicy.Exposure{Purpose: "ACME HTTP-01", Address: "public", Port: 80, Protocol: networkpolicy.TCP},
+		RecordNativeHandles: true,
+		RemoveAfter: [5]networkpolicy.CleanupOutcome{
+			networkpolicy.CleanupSuccess,
+			networkpolicy.CleanupFailure,
+			networkpolicy.CleanupInterruption,
+			networkpolicy.CleanupCancellation,
+			networkpolicy.CleanupRollback,
+		},
+	}
+	if result.Policy.TemporaryHTTP == nil || *result.Policy.TemporaryHTTP != *want {
+		t.Fatalf("temporary HTTP-01 policy = %+v, want %+v", result.Policy.TemporaryHTTP, want)
+	}
+	if strings.Count(result.Policy.Nftables, `comment "sbxr:acme-http-01"`) != 1 || strings.Contains(result.Policy.Nftables, "tcp dport { 80,") {
+		t.Fatalf("temporary rule is not exact and separately removable: %s", result.Policy.Nftables)
+	}
+}
+
+func TestEvaluateTypedDNSAndCAAForHTTP01(t *testing.T) {
+	intent := completeIntent()
+	intent.CertificateHostname = "direct.example.com"
+	request := networkpolicy.Request{
+		Intent: intent,
+		Stage:  networkpolicy.PostApproval,
+		Certificate: networkpolicy.CertificateFacts{
+			DNS: networkpolicy.DNSFacts{
+				Hostname: "direct.example.com",
+				IPv4:     []string{"192.0.2.10"},
+				ChallengeRecords: []networkpolicy.DNSRecord{
+					{Name: "_acme-challenge.direct.example.com", Type: networkpolicy.CNAME},
+					{Name: "_acme-challenge.direct.example.com", Type: networkpolicy.NS},
+					{Name: "_acme-challenge.direct.example.com", Type: networkpolicy.TXT},
+					{Name: "CLIENT-ACCESS-VALUE-MUST-NOT-RENDER", Type: networkpolicy.TXT},
+				},
+			},
+			CAA: networkpolicy.CAAFacts{Issuer: "letsencrypt.org", HTTP01Allowed: true},
+		},
+	}
+	result := networkpolicy.New(staticAdapter{observed: completeObservations()}).Evaluate(request)
+	if result.Outcome != networkpolicy.Healthy || len(result.Findings) != 0 {
+		t.Fatalf("unrelated challenge records blocked HTTP-01: %+v", result.Findings)
+	}
+	if result.Certificate != (networkpolicy.CertificatePolicy{HTTP01ForIPAndDomain: true, CreatesCAA: false, IgnoredChallengeRecords: 4}) {
+		t.Fatalf("certificate policy = %+v", result.Certificate)
+	}
+	if strings.Contains(fmt.Sprintf("%+v", result), "CLIENT-ACCESS-VALUE-MUST-NOT-RENDER") {
+		t.Fatal("typed certificate input leaked into the result")
+	}
+	changed := request
+	changed.Certificate.CAA.HTTP01Allowed = false
+	if !result.Binding.Stale(changed, completeObservations()) {
+		t.Fatal("changed effective CAA did not stale the reviewed result")
+	}
+	blocked := networkpolicy.New(staticAdapter{observed: completeObservations()}).Evaluate(changed)
+	assertFinding(t, blocked, networkpolicy.Failed, networkpolicy.Required, "NETWORK-CERTIFICATE-CAA")
+}
+
+func TestEvaluateKeepsLocalAndOutsideProofDistinct(t *testing.T) {
+	cleanRequest := networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PostApproval, Outside: networkpolicy.OutsideFacts{Direct: []networkpolicy.OutsideProof{{Purpose: "VLESS REALITY Vision", Address: "192.0.2.10", Port: 443, Protocol: networkpolicy.TCP, Status: networkpolicy.ProofPassed}}}}
+	clean := networkpolicy.New(staticAdapter{observed: completeObservations()}).Evaluate(cleanRequest)
+	assertReachability(t, clean, "VLESS REALITY Vision", networkpolicy.ProofPending, networkpolicy.ProofPending)
+	assertReachability(t, clean, "VLESS XHTTP", networkpolicy.ProofPending, networkpolicy.ProofPending)
+
+	intent, observed := managedBaseline()
+	request := networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval}
+	result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(request)
+	assertReachability(t, result, "VLESS REALITY Vision", networkpolicy.ProofPassed, networkpolicy.ProofPending)
+	assertReachability(t, result, "Hysteria2", networkpolicy.ProofPassed, networkpolicy.ProofPending)
+	assertReachability(t, result, "VLESS XHTTP", networkpolicy.ProofPassed, networkpolicy.ProofPassed)
+	assertReachability(t, result, "VLESS WebSocket", networkpolicy.ProofPassed, networkpolicy.ProofPassed)
+	if result.SameVPSProvesOutside {
+		t.Fatal("same-VPS proof was promoted to outside success")
+	}
+
+	for _, change := range []func(*networkpolicy.LocalProof){
+		func(proof *networkpolicy.LocalProof) { proof.RouteMatches = false },
+		func(proof *networkpolicy.LocalProof) { proof.ConfigurationMatches = false },
+	} {
+		changedIntent, changedObserved := managedBaseline()
+		change(&changedObserved.LocalProofs[0])
+		changed := networkpolicy.New(staticAdapter{observed: changedObserved}).Evaluate(networkpolicy.Request{Intent: changedIntent, Stage: networkpolicy.PostApproval})
+		assertReachability(t, changed, "VLESS REALITY Vision", networkpolicy.ProofPending, networkpolicy.ProofPending)
+	}
+
+	request.Outside.Direct = []networkpolicy.OutsideProof{{Purpose: "VLESS REALITY Vision", Address: "192.0.2.10", Port: 443, Protocol: networkpolicy.TCP, Status: networkpolicy.ProofFailed}}
+	result = networkpolicy.New(staticAdapter{observed: observed}).Evaluate(request)
+	assertFinding(t, result, networkpolicy.NeedsAttention, networkpolicy.Advisory, "NETWORK-OUTSIDE-REACHABILITY")
+	if len(result.ProviderGuidance) != 1 {
+		t.Fatalf("provider guidance = %+v", result.ProviderGuidance)
+	}
+	guidance := result.ProviderGuidance[0]
+	if guidance.Address != "192.0.2.10" || guidance.Port != 443 || guidance.Protocol != networkpolicy.TCP || guidance.Action != "Run Live Profile Check again" || len(guidance.RequiredPorts) != 6 || !strings.Contains(guidance.Guidance, "firewall") || !strings.Contains(guidance.Guidance, "security group") || !strings.Contains(guidance.Guidance, "network ACL") || !strings.Contains(guidance.SSHWarning, "2222/TCP") || !strings.Contains(strings.ToLower(guidance.ReconnectionWarning), "one existing ssh session") || guidance.ProviderChanged {
+		t.Fatalf("provider guidance = %+v", guidance)
+	}
+}
+
+func TestEvaluateBoundsOutboundAndRenewalFreshness(t *testing.T) {
+	result := networkpolicy.New(staticAdapter{observed: completeObservations()}).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PostApproval})
+	wantBounds := networkpolicy.CheckBounds{
+		DeterministicAttempts:  1,
+		TemporaryAttempts:      3,
+		TemporaryWindowSeconds: 60,
+		LocalHealthSeconds:     60,
+		CloudflareOwner:        "Cloudflare Tunnel",
+		ACMEOwner:              "Certificate Lifecycle",
+	}
+	if result.Bounds != wantBounds || result.Renewal != (networkpolicy.RenewalFreshness{ReevaluateAfterGlobalLockWait: true, RebuildOneUsePlan: true}) {
+		t.Fatalf("bounds/freshness = %+v %+v", result.Bounds, result.Renewal)
+	}
+	if !result.Binding.StaleAfterGlobalLockWait() {
+		t.Fatal("a delayed automatic renewal could reuse its pre-wait Plan")
+	}
+
+	for _, change := range []func(*networkpolicy.OutboundFacts){
+		func(facts *networkpolicy.OutboundFacts) { facts.GitHubAttestationHTTPS = false },
+		func(facts *networkpolicy.OutboundFacts) { facts.CertificateEndpointsHTTPS = false },
+	} {
+		observed := completeObservations()
+		change(&observed.Outbound)
+		failed := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PostApproval})
+		if failed.Outcome != networkpolicy.Failed || len(failed.Findings) != 1 || !strings.Contains(failed.Findings[0].CheckAgain, "complete preflight") {
+			t.Fatalf("bounded outbound failure = %+v", failed.Findings)
+		}
+	}
+}
+
+func TestEvaluateHTTP01OutsideFailureStaysExternal(t *testing.T) {
+	intent := completeIntent()
+	intent.TemporaryHTTP = true
+	request := networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval, Outside: networkpolicy.OutsideFacts{HTTP01: networkpolicy.ProofFailed}}
+	result := networkpolicy.New(staticAdapter{observed: completeObservations()}).Evaluate(request)
+	assertFinding(t, result, networkpolicy.Failed, networkpolicy.Required, "NETWORK-OUTSIDE-HTTP01")
+	assertReachability(t, result, "ACME HTTP-01", networkpolicy.ProofPending, networkpolicy.ProofFailed)
+	if len(result.ProviderGuidance) != 1 || result.ProviderGuidance[0].Address != "192.0.2.10" || result.ProviderGuidance[0].Port != 80 || len(result.ProviderGuidance[0].RequiredPorts) != 7 || result.ProviderGuidance[0].ProviderChanged {
+		t.Fatalf("HTTP-01 external failure guidance = %+v", result.ProviderGuidance)
+	}
+}
+
+func assertReachability(t *testing.T, result networkpolicy.Result, purpose string, local, outside networkpolicy.ProofStatus) {
+	t.Helper()
+	for _, proof := range result.Reachability {
+		if proof.Purpose == purpose {
+			if proof.Local != local || proof.Outside != outside {
+				t.Fatalf("%s proof = %+v, want local %s outside %s", purpose, proof, local, outside)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing %s proof: %+v", purpose, result.Reachability)
 }
 
 func hasGate(gates []networkpolicy.Gate, code string) bool {
@@ -310,6 +499,7 @@ func TestEvaluatePublicFamilyQualification(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			intent, observed := completeIntent(), completeObservations()
 			tt.change(&intent, &observed)
+			syncCertificateFacts(intent, &observed)
 			result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
 			if result.Outcome != tt.outcome || result.Policy.PublicIPv4 != tt.ipv4 || result.Policy.PublicIPv6 != tt.ipv6 || result.Policy.PrimaryAddress != tt.primary || result.Policy.CertificateAddress != tt.certificate {
 				t.Fatalf("Evaluate() = outcome %q policy %+v, want %q IPv4 %q IPv6 %q primary %q certificate %q", result.Outcome, result.Policy, tt.outcome, tt.ipv4, tt.ipv6, tt.primary, tt.certificate)
@@ -352,6 +542,7 @@ func TestEvaluateRefusesIncompleteIntent(t *testing.T) {
 			intent.PublicIPv4 = `192.0.2.10; flush ruleset`
 			intent.PrimarySubscriptionAddress = intent.PublicIPv4
 		},
+		func(intent *networkpolicy.Intent) { intent.CertificateHostname = "" },
 		func(intent *networkpolicy.Intent) { intent.Profiles.VLESSXHTTP.Address = "" },
 	} {
 		intent := completeIntent()
@@ -392,6 +583,7 @@ func TestEvaluateHostBaseline(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			intent, observed := completeIntent(), completeObservations()
 			tt.change(&intent, &observed)
+			syncCertificateFacts(intent, &observed)
 			result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
 			if result.Outcome != tt.outcome {
 				t.Fatalf("outcome = %q, want %q; findings %+v", result.Outcome, tt.outcome, result.Findings)
@@ -558,13 +750,17 @@ func TestEvaluateCleanAndManagedOwnership(t *testing.T) {
 func TestEvaluateManagedCloudflareRoutes(t *testing.T) {
 	intent, observed := managedBaseline()
 	observed.OwnerFacts.Routes = []networkpolicy.CloudflareRoute{
-		{Profile: "VLESS XHTTP", OriginAddress: "127.0.0.1", OriginPort: 11080, Protocol: networkpolicy.TCP},
-		{Profile: "VLESS WebSocket", OriginAddress: "127.0.0.1", OriginPort: 11081, Protocol: networkpolicy.TCP},
+		{Profile: "VLESS XHTTP", OriginAddress: "127.0.0.1", OriginPort: 11080, Protocol: networkpolicy.TCP, Connected: true},
+		{Profile: "VLESS WebSocket", OriginAddress: "127.0.0.1", OriginPort: 11081, Protocol: networkpolicy.TCP, Connected: true},
 	}
 	result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
 	if result.Outcome != networkpolicy.Healthy {
 		t.Fatalf("exact routes were unhealthy: %+v", result.Findings)
 	}
+	observed.OwnerFacts.Routes[0].Connected = false
+	result = networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
+	assertReachability(t, result, "VLESS XHTTP", networkpolicy.ProofPassed, networkpolicy.ProofPending)
+	observed.OwnerFacts.Routes[0].Connected = true
 
 	observed.OwnerFacts.Routes[0].OriginAddress = "0.0.0.0"
 	result = networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
@@ -585,6 +781,7 @@ func TestEvaluateManagedPublicListenersMatchQualifiedFamilies(t *testing.T) {
 		intent, observed := managedBaseline()
 		intent.PublicIPv6 = "2001:db8::10"
 		observed.PublicIPv6 = []string{"2001:db8::10"}
+		syncCertificateFacts(intent, &observed)
 		result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
 		assertFinding(t, result, networkpolicy.NeedsAttention, networkpolicy.Required, "NETWORK-MANAGED-DRIFT")
 	})
@@ -607,6 +804,7 @@ func TestEvaluateCorrectiveNetworkPolicy(t *testing.T) {
 		intent, observed := completeIntent(), completeObservations()
 		intent.PublicIPv6 = "2001:db8::10"
 		observed.PublicIPv6 = []string{"2001:db8::10"}
+		syncCertificateFacts(intent, &observed)
 		observed.Listeners = []networkpolicy.Listener{
 			{Address: "0.0.0.0", Port: 2222, Protocol: networkpolicy.TCP, Process: "sshd", Service: "ssh.service"},
 			{Address: "::", Port: 2222, Protocol: networkpolicy.TCP, Process: "nginx", Service: "nginx.service"},
@@ -851,13 +1049,21 @@ func managedBaseline() (networkpolicy.Intent, networkpolicy.Observations) {
 		{Address: "127.0.0.1", Port: 11080, Protocol: networkpolicy.TCP, Service: "xray.service", Ownership: networkpolicy.SBXROwned},
 		{Address: "127.0.0.1", Port: 11081, Protocol: networkpolicy.TCP, Service: "xray.service", Ownership: networkpolicy.SBXROwned},
 	}
+	observed.LocalProofs = []networkpolicy.LocalProof{
+		{Purpose: "VLESS REALITY Vision", Address: "192.0.2.10", Port: 443, Protocol: networkpolicy.TCP, RouteMatches: true, ConfigurationMatches: true},
+		{Purpose: "Hysteria2", Address: "192.0.2.10", Port: 443, Protocol: networkpolicy.UDP, RouteMatches: true, ConfigurationMatches: true},
+		{Purpose: "TUIC", Address: "192.0.2.10", Port: 8443, Protocol: networkpolicy.UDP, RouteMatches: true, ConfigurationMatches: true},
+		{Purpose: "AnyTLS", Address: "192.0.2.10", Port: 9443, Protocol: networkpolicy.TCP, RouteMatches: true, ConfigurationMatches: true},
+		{Purpose: "VLESS XHTTP", Address: "127.0.0.1", Port: 11080, Protocol: networkpolicy.TCP, RouteMatches: true, ConfigurationMatches: true},
+		{Purpose: "VLESS WebSocket", Address: "127.0.0.1", Port: 11081, Protocol: networkpolicy.TCP, RouteMatches: true, ConfigurationMatches: true},
+	}
 	return intent, observed
 }
 
 func cloudflareRoutes() []networkpolicy.CloudflareRoute {
 	return []networkpolicy.CloudflareRoute{
-		{Profile: "VLESS XHTTP", OriginAddress: "127.0.0.1", OriginPort: 11080, Protocol: networkpolicy.TCP},
-		{Profile: "VLESS WebSocket", OriginAddress: "127.0.0.1", OriginPort: 11081, Protocol: networkpolicy.TCP},
+		{Profile: "VLESS XHTTP", OriginAddress: "127.0.0.1", OriginPort: 11080, Protocol: networkpolicy.TCP, Connected: true},
+		{Profile: "VLESS WebSocket", OriginAddress: "127.0.0.1", OriginPort: 11081, Protocol: networkpolicy.TCP, Connected: true},
 	}
 }
 
@@ -867,6 +1073,7 @@ func completeIntent() networkpolicy.Intent {
 		Baseline:                   networkpolicy.Clean,
 		PublicIPv4:                 "192.0.2.10",
 		PrimarySubscriptionAddress: "192.0.2.10",
+		CertificateHostname:        "direct.example.com",
 		SSHPort:                    2222,
 		Profiles: networkpolicy.Profiles{
 			VLESSRealityVision: networkpolicy.Profile{Enabled: true, Port: 443},
@@ -902,10 +1109,29 @@ func completeObservations() networkpolicy.Observations {
 		SSH:        networkpolicy.SSHFacts{DetectedPort: 2222, ServerAddress: "192.0.2.10", CurrentSessions: []string{"session-1"}},
 		Firewall:   networkpolicy.FirewallFacts{SBXRTableState: "absent", RootVerified: true},
 		Routes:     networkpolicy.RouteFacts{IPv4: "default via 192.0.2.1"},
-		Outbound:   networkpolicy.OutboundFacts{DNS: true, GitHubHTTPS: true, CloudflareHTTPS: true, ACMEHTTPS: true, TimeService: true, TunnelTCP7844: true, TunnelUDP7844: true},
+		Outbound:   networkpolicy.OutboundFacts{DNS: true, GitHubHTTPS: true, GitHubAttestationHTTPS: true, CloudflareHTTPS: true, ACMEHTTPS: true, CertificateEndpointsHTTPS: true, TimeService: true, TunnelTCP7844: true, TunnelUDP7844: true},
 		Disk:       networkpolicy.DiskFacts{FilesystemBytes: 20 << 30, AvailableBytes: 3 << 30},
 		Time:       networkpolicy.TimeFacts{Synchronized: true, Owner: "systemd-timesyncd"},
 		OwnerFacts: networkpolicy.OwnerFacts{DNS: "fresh", Tunnel: "fresh"},
-		Checksums:  map[string]string{"sshd_config": "sha256:ssh", "nftables": "sha256:nft"},
+		Certificate: networkpolicy.CertificateFacts{
+			DNS: networkpolicy.DNSFacts{Hostname: "direct.example.com", IPv4: []string{"192.0.2.10"}},
+			CAA: networkpolicy.CAAFacts{Issuer: "letsencrypt.org", HTTP01Allowed: true},
+		},
+		Checksums: map[string]string{"sshd_config": "sha256:ssh", "nftables": "sha256:nft"},
+	}
+}
+
+func syncCertificateFacts(intent networkpolicy.Intent, observed *networkpolicy.Observations) {
+	observed.Certificate.DNS.IPv4 = nil
+	observed.Certificate.DNS.IPv6 = nil
+	for _, address := range observed.PublicIPv4 {
+		if address == intent.PublicIPv4 {
+			observed.Certificate.DNS.IPv4 = []string{address}
+		}
+	}
+	for _, address := range observed.PublicIPv6 {
+		if address == intent.PublicIPv6 {
+			observed.Certificate.DNS.IPv6 = []string{address}
+		}
 	}
 }
