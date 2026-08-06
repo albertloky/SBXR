@@ -52,6 +52,7 @@ func TestInspectReportsOnlyFourSecretSafeTransactionStates(t *testing.T) {
 		current    string
 		last       string
 		rollback   bool
+		cause      systemchanges.RecoveryCause
 		checkpoint systemchanges.Checkpoint
 		completed  int
 		total      int
@@ -60,14 +61,14 @@ func TestInspectReportsOnlyFourSecretSafeTransactionStates(t *testing.T) {
 		{status: systemchanges.NotInstalled, checkpoint: systemchanges.NoCheckpoint, actions: []systemchanges.Action{systemchanges.InspectAction, systemchanges.ApplyAction}},
 		{status: systemchanges.Managed, last: "change-0007", checkpoint: systemchanges.NoCheckpoint, actions: []systemchanges.Action{systemchanges.InspectAction, systemchanges.ApplyAction}},
 		{status: systemchanges.ChangeInProgress, current: "change-0008", last: "change-0007", rollback: true, checkpoint: systemchanges.PreparedCheckpoint, completed: 2, total: 5, actions: []systemchanges.Action{systemchanges.InspectAction}},
-		{status: systemchanges.RecoveryRequired, current: "change-0008", last: "change-0007", rollback: true, checkpoint: systemchanges.PreparedCheckpoint, completed: 2, total: 5, actions: []systemchanges.Action{systemchanges.InspectAction, systemchanges.RetryRollbackAction, systemchanges.CheckAgainAction, systemchanges.CompleteRemovalAction}},
+		{status: systemchanges.RecoveryRequired, current: "change-0008", last: "change-0007", rollback: true, cause: systemchanges.RollbackStepUnprovable, checkpoint: systemchanges.PreparedCheckpoint, completed: 2, total: 5, actions: []systemchanges.Action{systemchanges.InspectAction, systemchanges.DiagnosticsAction, systemchanges.RetryRollbackAction, systemchanges.CheckAgainAction, systemchanges.BackAction, systemchanges.CompleteRemovalAction}},
 	}
 	for _, test := range tests {
 		t.Run(string(test.status), func(t *testing.T) {
 			adapter := &memoryAdapter{observation: systemchanges.Observation{
 				Status: test.status, CurrentChangeSet: test.current, LastChangeSet: test.last,
 				Checkpoint: test.checkpoint, CompletedSteps: test.completed, TotalSteps: test.total,
-				Lock: systemchanges.LockHeld, RollbackAvailable: test.rollback,
+				Lock: systemchanges.LockHeld, RollbackAvailable: test.rollback, RecoveryCause: test.cause,
 			}}
 			result := systemchanges.New(adapter).Inspect()
 			if result.Status != test.status || result.CurrentChangeSet != test.current || result.LastChangeSet != test.last || result.Checkpoint != test.checkpoint || result.CompletedSteps != test.completed || result.TotalSteps != test.total || result.Lock != systemchanges.LockHeld || result.RollbackAvailable != test.rollback || fmt.Sprint(result.AllowedActions) != fmt.Sprint(test.actions) {
@@ -83,10 +84,133 @@ func TestInspectReportsOnlyFourSecretSafeTransactionStates(t *testing.T) {
 				t.Fatalf("activity policies = %+v", result.ActivityPolicies)
 			}
 			encoded, err := json.Marshal(result)
-			if err != nil || strings.Contains(string(encoded), "SECRET-MARKER") || strings.Contains(fmt.Sprintf("%+v", result), "SECRET-MARKER") {
+			if err != nil || strings.Contains(string(encoded), "SECRET-MARKER") || strings.Contains(fmt.Sprintf("%+v", result), "SECRET-MARKER") || test.status != systemchanges.RecoveryRequired && strings.Contains(string(encoded), `"correction"`) {
 				t.Fatalf("Inspect exposed protected material: %s %v", encoded, err)
 			}
 		})
+	}
+}
+
+func TestRecoveryRequiredExposesOnlyItsExactSafeActions(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		observation systemchanges.Observation
+		actions     []systemchanges.Action
+		option      systemchanges.Action
+		freshPlan   bool
+		external    bool
+	}{
+		{
+			name: "valid unfinished rollback", observation: systemchanges.Observation{
+				Status: systemchanges.RecoveryRequired, CurrentChangeSet: "change-0008", LastChangeSet: "change-0007", Checkpoint: systemchanges.PreparedCheckpoint,
+				TotalSteps: 1, Lock: systemchanges.LockReleased, RollbackAvailable: true, RecoveryCause: systemchanges.RollbackStepUnprovable,
+			},
+			actions: []systemchanges.Action{systemchanges.InspectAction, systemchanges.DiagnosticsAction, systemchanges.RetryRollbackAction, systemchanges.CheckAgainAction, systemchanges.BackAction, systemchanges.CompleteRemovalAction}, option: systemchanges.RetryRollbackAction,
+		},
+		{
+			name: "valid current State drift", observation: systemchanges.Observation{
+				Status: systemchanges.RecoveryRequired, LastChangeSet: "change-0007", Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased,
+				StateRevision: 7, StateSHA256: sha('1'), ForwardRepairAvailable: true, RecoveryCause: systemchanges.CurrentStateDrift,
+			},
+			actions: []systemchanges.Action{systemchanges.InspectAction, systemchanges.DiagnosticsAction, systemchanges.ForwardRepairAction, systemchanges.CheckAgainAction, systemchanges.BackAction, systemchanges.CompleteRemovalAction}, option: systemchanges.ForwardRepairAction, freshPlan: true,
+		},
+		{
+			name: "missing State", observation: systemchanges.Observation{
+				Status: systemchanges.RecoveryRequired, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, RecoveryCause: systemchanges.StateLineageUnprovable,
+			},
+			actions: []systemchanges.Action{systemchanges.InspectAction, systemchanges.DiagnosticsAction, systemchanges.CheckAgainAction, systemchanges.BackAction, systemchanges.CompleteRemovalAction}, external: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := systemchanges.New(&memoryAdapter{observation: test.observation}).Inspect()
+			wantSource := systemchanges.SBXROwnedCorrection
+			if test.external {
+				wantSource = systemchanges.ExternalCorrection
+			}
+			if result.Status != systemchanges.RecoveryRequired || fmt.Sprint(result.AllowedActions) != fmt.Sprint(test.actions) || result.Correction == nil || result.Correction.Source != wantSource || result.Correction.SBXROption != test.option || result.Correction.FreshPlanRequired != test.freshPlan || (len(result.Correction.OwnerWorkPlan) > 0) != test.external || result.Correction.CheckAgain == "" || result.Correction.Back == "" {
+				t.Fatalf("Recovery Required inspection = %+v", result)
+			}
+			for _, forbidden := range []systemchanges.Action{"Adopt discovered State", "Bypass journal", "Mark transaction complete", "Force service start", "Delete evidence", "Force unlock", "Select historical item", "Restore", "Reconstruct secret", "Repair missing Desired State"} {
+				if containsAction(result.AllowedActions, forbidden) {
+					t.Fatalf("unsafe action %q offered in %+v", forbidden, result.AllowedActions)
+				}
+			}
+			encoded, err := json.Marshal(result)
+			if err != nil || strings.Contains(string(encoded), "Continue anyway") || strings.Contains(string(encoded), "restore menu") || strings.Contains(string(encoded), "SECRET-MARKER") {
+				t.Fatalf("unsafe recovery inspection = %s, %v", encoded, err)
+			}
+		})
+	}
+	for _, cause := range []systemchanges.RecoveryCause{
+		systemchanges.StateLineageUnprovable, systemchanges.SnapshotUnprovable, systemchanges.JournalUnprovable,
+		systemchanges.ForwardCheckpointUnprovable, systemchanges.RollbackStepUnprovable, systemchanges.PriorAgreementUnprovable,
+		systemchanges.MissingSecrets, systemchanges.ReplacementVPS, systemchanges.OlderRevision, systemchanges.OwnerRegret,
+	} {
+		t.Run(string(cause), func(t *testing.T) {
+			adapter := &memoryAdapter{observation: systemchanges.Observation{Status: systemchanges.RecoveryRequired, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, RecoveryCause: cause}}
+			module := systemchanges.New(adapter)
+			result := module.CheckAgain()
+			want := []systemchanges.Action{systemchanges.InspectAction, systemchanges.DiagnosticsAction, systemchanges.CheckAgainAction, systemchanges.BackAction, systemchanges.CompleteRemovalAction}
+			if fmt.Sprint(result.AllowedActions) != fmt.Sprint(want) || result.Correction == nil || result.Correction.Source != systemchanges.ExternalCorrection || len(result.Correction.OwnerWorkPlan) != 3 || adapter.lockCloses.Load() != 0 {
+				t.Fatalf("%s correction = %+v", cause, result)
+			}
+		})
+	}
+}
+
+func TestRecoveryOptionsRequireExactEligibilityFacts(t *testing.T) {
+	for _, observation := range []systemchanges.Observation{
+		{Status: systemchanges.RecoveryRequired, CurrentChangeSet: "change-0008", Checkpoint: systemchanges.PreparedCheckpoint, TotalSteps: 1, Lock: systemchanges.LockReleased, RollbackAvailable: true, RecoveryCause: systemchanges.JournalUnprovable},
+		{Status: systemchanges.RecoveryRequired, CurrentChangeSet: "change-0008", Checkpoint: systemchanges.PreparedCheckpoint, TotalSteps: 1, Lock: systemchanges.LockReleased, ForwardRepairAvailable: true, RecoveryCause: systemchanges.CurrentStateDrift, StateRevision: 7, StateSHA256: sha('1')},
+	} {
+		result := systemchanges.New(&memoryAdapter{observation: observation}).Inspect()
+		if result.Status != systemchanges.RecoveryRequired || result.RollbackAvailable || result.ForwardRepairAvailable || containsAction(result.AllowedActions, systemchanges.RetryRollbackAction) || containsAction(result.AllowedActions, systemchanges.ForwardRepairAction) {
+			t.Fatalf("invalid recovery eligibility = %+v", result)
+		}
+	}
+}
+
+func containsAction(actions []systemchanges.Action, wanted systemchanges.Action) bool {
+	for _, action := range actions {
+		if action == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func TestRecoveryRequiredBlocksNormalMutationAndAdmitsOnlyValidForwardRepair(t *testing.T) {
+	unsafe := systemchanges.Observation{
+		Status: systemchanges.RecoveryRequired, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased,
+		RecoveryCause: systemchanges.StateLineageUnprovable, StateRevision: 7, StateSHA256: sha('1'), VolatileSHA256: sha('2'),
+		FilesystemBytes: 20 << 30, AvailableBytes: 5 << 30, WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service",
+	}
+	for _, mutation := range []systemchanges.MutationClass{
+		systemchanges.InstallationMutation, systemchanges.RepairMutation, systemchanges.SettingChangeMutation,
+		systemchanges.RotationMutation, systemchanges.UpdateMutation, systemchanges.CertificateRenewalMutation,
+	} {
+		blockedChange, err := systemchanges.NewChangeSet(completeSpec(t, mutation))
+		if err != nil {
+			t.Fatal(err)
+		}
+		result := systemchanges.New(&memoryAdapter{observation: unsafe}).Apply(blockedChange)
+		if result.Outcome != systemchanges.Refused || result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-RECOVERY-BLOCKED" || !result.NothingChanged {
+			t.Fatalf("normal Recovery Required %s = %+v", mutation, result)
+		}
+	}
+
+	repair := completeSpec(t, systemchanges.RepairMutation)
+	repairChange, err := systemchanges.NewChangeSet(repair)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drift := unsafe
+	drift.LastChangeSet = "change-0007"
+	drift.RecoveryCause = systemchanges.CurrentStateDrift
+	drift.ForwardRepairAvailable = true
+	result := systemchanges.New(&memoryAdapter{observation: drift}).Apply(repairChange)
+	if result.Outcome != systemchanges.Refused || result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-PREPARED-STATE" {
+		t.Fatalf("valid forward repair admission = %+v", result)
 	}
 }
 

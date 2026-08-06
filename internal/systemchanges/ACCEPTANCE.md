@@ -22,6 +22,10 @@ This record covers the System Changes Module only. It is not Release Qualificati
 - `SYSTEM-CHANGES-SERVICE-START`: `go test ./internal/state -run TestRecoveryKeepsAffectedServicesStoppedWithoutStartingStateAgreement`
 - `SYSTEM-CHANGES-ROLLBACK-RESUME`: `go test ./internal/state -run 'Test(FreshSystemChangesInstanceResumesInterruptedRollbackFromDurableEvidence|RollbackCanSurviveASecondProcessDeath|UbuntuRecoveryResumesProcessDeathDuringRollback|UbuntuRecoveryRefusesMissingRollbackEvidence)'`
 - `SYSTEM-CHANGES-COMPLETE-CLEANUP`: `go test ./internal/state -run 'Test(RestartAfterCompleteCleansUpWithoutRollback|UbuntuRecoveryAfterCompleteOnlyCleansResolvedMaterial|UbuntuRecoveryRefusesContradictoryCompleteEvidence)'`
+- `SYSTEM-CHANGES-RECOVERY-REQUIRED`: `go test ./internal/systemchanges -run TestRecoveryRequiredExposesOnlyItsExactSafeActions`
+- `SYSTEM-CHANGES-RECOVERY-RETRY`: `go test ./internal/state -run TestRetryAutomaticRollbackUsesOnlyTheAuthorizedRecoveryPath`
+- `SYSTEM-CHANGES-RECOVERY-REFUSAL`: `go test ./internal/systemchanges -run 'Test(RecoveryOptionsRequireExactEligibilityFacts|RecoveryRequiredBlocksNormalMutationAndAdmitsOnlyValidForwardRepair)'`
+- `SYSTEM-CHANGES-FORWARD-REPAIR`: `go test ./internal/state -run TestValidCurrentStateDriftCreatesOnlyAFreshForwardRepairChangeSet`
 - `SYSTEM-CHANGES-REPOSITORY`: `go test ./...`
 
 ## SC-01 procedure
@@ -64,14 +68,22 @@ This record covers the System Changes Module only. It is not Release Qualificati
 4. Restart after durable `Complete` with cleanup material still present. Confirm services start only from candidate-State agreement, cleanup removes the completed journal and Rollback Snapshot, State remains at the successful revision, and no reverse or prior-State restoration runs.
 5. Remove rollback evidence or append contradictory post-`Complete` journal evidence. Confirm recovery stops without reversing, starting unproven affected services, deleting the unresolved transaction, or guessing a resolution.
 
+## SC-06 procedure
+
+1. Make current State lineage, Rollback Snapshot integrity, journal integrity, a forward checkpoint, a rollback step, and final prior-State agreement unprovable in turn. Confirm each result is Recovery Required, ordinary mutation remains blocked, and secret-bearing Adapter errors never appear in inspection or recovery results.
+2. Supply exact valid unfinished transaction material. Confirm Retry automatic rollback appears and invokes the existing authorized rollback path. Remove or contradict that material and confirm Retry disappears without adoption, journal bypass, manual completion, forced service start, evidence deletion, force unlock, historical selection, restore menu, lost-secret reconstruction, or in-place repair of missing Desired State.
+3. With no valid rollback material, confirm the exact actions are secret-safe inspection, read-only diagnostics, Check again, Back, and separately confirmed Complete removal. Confirm every external or Owner-controlled blocker includes its exact Owner work plan and never offers Continue anyway or a dead end.
+4. Prove current State lineage and checksum while reporting only current-State drift. Confirm a Repair mutation may create one fresh reviewed forward-repair Change Set and never consumes an old snapshot or completed journal.
+5. Report missing or corrupt State, missing secrets, a replacement or dead VPS, an older revision, and Owner regret. Confirm the recovery plan is Complete removal and rebuild, not restore.
+
 ## Current status
 
 | Stage | Status | Evidence |
 |---|---|---|
-| Module Verification | Passed | SC-01 checks cover four-state inspection and safe admission. SC-02 checks cover durable success. `SYSTEM-CHANGES-ROLLBACK` covers SC-03 cancellation and failure. `SYSTEM-CHANGES-FORWARD-DEATH` and `SYSTEM-CHANGES-SERVICE-START` cover SC-04 restart rollback. SC-05 checks cover interrupted rollback continuation, a second death, exact service holdback, cleanup-only restart after `Complete`, and corrupt-evidence refusal. |
+| Module Verification | Passed | SC-01 checks cover four-state inspection and safe admission. SC-02 checks cover durable success. `SYSTEM-CHANGES-ROLLBACK` covers SC-03 cancellation and failure. `SYSTEM-CHANGES-FORWARD-DEATH` and `SYSTEM-CHANGES-SERVICE-START` cover SC-04 restart rollback. SC-05 checks cover interrupted rollback continuation, a second death, exact service holdback, cleanup-only restart after `Complete`, and corrupt-evidence refusal. SC-06 checks cover the Recovery Required action boundary, exact retry eligibility, refusal, secret safety, and fresh forward repair. |
 | Seam Verification — controlled kernel lock | Passed | `SYSTEM-CHANGES-LOCK` uses a real kernel file lock, proves held-lock refusal, process-exit release, exact protected lock-file identity, and read-only host observation. |
 | Seam Verification — controlled transaction filesystem | Passed | SC-02 filesystem checks cover protected durable success. SC-03 checks prove rollback and cleanup. `SYSTEM-CHANGES-RECOVERY-RUNNER` proves forward-death recovery. SC-05 kills rollback in a separate process, reopens the production Adapter's protected evidence, repeats the uncertain reverse, proves service holdback, and removes only durably resolved transaction material. |
 | Seam Verification — production Ubuntu | Pending | Run the same Adapter checks on the assigned controlled Ubuntu environment; this local run does not claim Ubuntu/systemd acceptance. |
-| Integrated Verification | Pending — integrated release | SC-06 through SC-09, all-Module wiring, real service units, watchdog work, and Complete removal do not exist yet. Controlled SC-04 and SC-05 recovery do not satisfy integrated verification. |
+| Integrated Verification | Pending — integrated release | SC-07 through SC-09, all-Module wiring, real service units, watchdog work, and Complete removal do not exist yet. Controlled SC-04 through SC-06 checks do not satisfy integrated verification. |
 | Codex Live Acceptance | Pending — approved Acceptance Run | No Acceptance VPS was used. |
 | Owner Acceptance | Pending — first v1 release | Albert's maintained workflow is outside this Module Verification. |

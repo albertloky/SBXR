@@ -21,29 +21,32 @@ import (
 )
 
 type systemChangesAdapter struct {
-	observation   systemchanges.Observation
-	closes        atomic.Int32
-	events        []string
-	artifacts     map[string][]byte
-	statuses      map[systemchanges.GatePhase]systemchanges.HealthStatus
-	beforeStep    func() error
-	prepareErr    error
-	closeErr      error
-	stepEvidence  *systemchanges.StepEvidence
-	lease         systemchanges.ExecutionLease
-	executeCount  int
-	failStep      int
-	failReverse   bool
-	agreementErr  error
-	serviceErr    error
-	holdErr       error
-	noRecovery    bool
-	recovery      *systemchanges.RecoveryTransaction
-	stateRecovery systemchanges.StateRecovery
-	stateBinding  []byte
-	crashBefore   systemchanges.DurableCheckpoint
-	crashAfter    systemchanges.DurableCheckpoint
-	crashed       bool
+	observation     systemchanges.Observation
+	closes          atomic.Int32
+	events          []string
+	artifacts       map[string][]byte
+	statuses        map[systemchanges.GatePhase]systemchanges.HealthStatus
+	beforeStep      func() error
+	prepareErr      error
+	closeErr        error
+	stepEvidence    *systemchanges.StepEvidence
+	lease           systemchanges.ExecutionLease
+	executeCount    int
+	failStep        int
+	failReverse     bool
+	agreementErr    error
+	serviceErr      error
+	holdErr         error
+	recoveryLoadErr error
+	inspectionErr   error
+	restoreErr      error
+	noRecovery      bool
+	recovery        *systemchanges.RecoveryTransaction
+	stateRecovery   systemchanges.StateRecovery
+	stateBinding    []byte
+	crashBefore     systemchanges.DurableCheckpoint
+	crashAfter      systemchanges.DurableCheckpoint
+	crashed         bool
 }
 
 func (a *systemChangesAdapter) Observe() (systemchanges.Observation, error) {
@@ -174,6 +177,9 @@ func (a *systemChangesAdapter) Cleanup(systemchanges.ExecutionLease, string) err
 }
 
 func (a *systemChangesAdapter) LoadRecovery(systemchanges.ExecutionLease) (systemchanges.RecoveryTransaction, error) {
+	if a.recoveryLoadErr != nil {
+		return systemchanges.RecoveryTransaction{}, a.recoveryLoadErr
+	}
 	if a.noRecovery {
 		return systemchanges.RecoveryTransaction{}, systemchanges.ErrNoRecoveryTransaction
 	}
@@ -195,11 +201,17 @@ func (a *systemChangesAdapter) AllowProvenServices(systemchanges.ExecutionLease,
 
 func (a *systemChangesAdapter) InspectStep(systemchanges.ExecutionLease, systemchanges.RecoveryTransaction, int, systemchanges.Step, time.Duration) (systemchanges.StepEffect, error) {
 	a.events = append(a.events, "inspect uncertain step")
+	if a.inspectionErr != nil {
+		return "", a.inspectionErr
+	}
 	return systemchanges.StepEffectPresent, nil
 }
 
 func (a *systemChangesAdapter) RestoreRecoveryState(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction) (systemchanges.RollbackAgreement, error) {
 	a.events = append(a.events, "restore durable State")
+	if a.restoreErr != nil {
+		return systemchanges.RollbackAgreement{}, a.restoreErr
+	}
 	if a.stateRecovery != nil {
 		agreementJSON, err := a.stateRecovery.SystemChangesRestoreDurable(lease, a.stateBinding, bytes.NewReader(a.artifacts["snapshot/prior-state.json"]), bytes.NewReader(a.artifacts["prepared/state.json"]))
 		var agreement systemchanges.RollbackAgreement
@@ -479,6 +491,22 @@ func TestEveryMutationClassUsesOneSystemChangesLockBeforeLiveWork(t *testing.T) 
 				t.Fatalf("%s lock boundary = %+v; closes=%d", mutation, result, adapter.closes.Load())
 			}
 		})
+	}
+}
+
+func TestValidCurrentStateDriftCreatesOnlyAFreshForwardRepairChangeSet(t *testing.T) {
+	stateModule, changeSet, _, observed := preparedSystemChangeForMutation(t, systemchanges.RepairMutation, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-PREFLIGHT"})
+	observed.Status = systemchanges.RecoveryRequired
+	observed.RecoveryCause = systemchanges.CurrentStateDrift
+	observed.ForwardRepairAvailable = true
+	adapter := &systemChangesAdapter{observation: observed}
+	result := systemchanges.New(adapter).Apply(changeSet)
+	if result.Outcome != systemchanges.Completed || adapter.recovery != nil || !strings.HasPrefix(strings.Join(adapter.events, ","), "Prepared,Step started 1") {
+		t.Fatalf("forward repair = %+v; events=%v recovery=%+v", result, adapter.events, adapter.recovery)
+	}
+	loaded, err := stateModule.Load(LoadRequest{Baseline: ManagedEvidence, SupportedRelease: testRelease, Lineage: &LineageProof{Revision: 8, LastCompletedChangeSet: "change-0008", ReleaseIdentity: testRelease}})
+	if err != nil || loaded.Snapshot == nil || loaded.Snapshot.Revision != 8 {
+		t.Fatalf("forward-repair State = (%+v, %v)", loaded, err)
 	}
 }
 
@@ -835,6 +863,84 @@ func TestFreshSystemChangesInstanceRollsBackInterruptedForwardStep(t *testing.T)
 	want := "hold public services and timers,allow proven unrelated services,inspect uncertain step,Rollback started,restore durable State,Rollback step started 1,reverse Restore prior configuration,Rollback step completed 1,rollback verified,starting services verified,Rollback verified,Rolled back,cleanup"
 	if got := strings.Join(adapter.events, ","); got != want {
 		t.Fatalf("recovery events = %s, want %s", got, want)
+	}
+}
+
+func TestRetryAutomaticRollbackUsesOnlyTheAuthorizedRecoveryPath(t *testing.T) {
+	step, err := systemchanges.NewStep(systemchanges.SubscriptionModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery := systemchanges.RecoveryTransaction{
+		ChangeSet: "change-0008", Starting: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: testSHA('7')},
+		StartingRelease: systemchanges.ReleaseBinding{Repository: testRelease.Repository, Tag: testRelease.Tag, Commit: testRelease.Commit, ReleaseIndexSHA256: testRelease.ReleaseIndexSHA256},
+		OutcomeOwner:    systemchanges.ConnectionProfilesModule, Steps: []systemchanges.Step{step}, AttemptedSteps: 1,
+		LastCheckpoint: systemchanges.StepStarted, Timeouts: systemchanges.Timeouts{Step: time.Second, Check: time.Second},
+	}
+	observation := systemchanges.Observation{
+		Status: systemchanges.RecoveryRequired, CurrentChangeSet: "change-0008", LastChangeSet: "change-0007", Checkpoint: systemchanges.PreparedCheckpoint,
+		TotalSteps: 1, Lock: systemchanges.LockReleased, RollbackAvailable: true, RecoveryCause: systemchanges.RollbackStepUnprovable,
+	}
+	adapter := &systemChangesAdapter{observation: observation, recovery: &recovery}
+	result := systemchanges.New(adapter).RetryAutomaticRollback()
+	if result.Outcome != systemchanges.RollbackSucceeded || adapter.recovery != nil || !strings.Contains(strings.Join(adapter.events, ","), "inspect uncertain step") {
+		t.Fatalf("retry rollback = %+v; events=%v", result, adapter.events)
+	}
+
+	observation.RollbackAvailable = false
+	observation.CurrentChangeSet = ""
+	observation.Checkpoint = systemchanges.NoCheckpoint
+	observation.TotalSteps = 0
+	observation.RecoveryCause = systemchanges.JournalUnprovable
+	adapter = &systemChangesAdapter{observation: observation, recovery: &recovery}
+	result = systemchanges.New(adapter).RetryAutomaticRollback()
+	if result.Outcome != systemchanges.Refused || result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-ROLLBACK-NOT-AVAILABLE" || len(adapter.events) != 0 {
+		t.Fatalf("invalid retry = %+v; events=%v", result, adapter.events)
+	}
+}
+
+func TestRecoveryRequiredCoversEveryIntegrityAndLineageFailure(t *testing.T) {
+	step, err := systemchanges.NewStep(systemchanges.SubscriptionModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := systemchanges.RecoveryTransaction{
+		ChangeSet: "change-0008", Starting: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: testSHA('7')},
+		StartingRelease: systemchanges.ReleaseBinding{Repository: testRelease.Repository, Tag: testRelease.Tag, Commit: testRelease.Commit, ReleaseIndexSHA256: testRelease.ReleaseIndexSHA256},
+		OutcomeOwner:    systemchanges.ConnectionProfilesModule, Steps: []systemchanges.Step{step}, AttemptedSteps: 1,
+		LastCheckpoint: systemchanges.StepStarted, Timeouts: systemchanges.Timeouts{Step: time.Second, Check: time.Second},
+	}
+	for _, test := range []struct {
+		name   string
+		change func(*systemchanges.RecoveryTransaction, *systemChangesAdapter)
+	}{
+		{name: "current State lineage", change: func(_ *systemchanges.RecoveryTransaction, adapter *systemChangesAdapter) {
+			adapter.recoveryLoadErr = errors.New("SECRET-MARKER-lineage")
+		}},
+		{name: "snapshot integrity", change: func(_ *systemchanges.RecoveryTransaction, adapter *systemChangesAdapter) {
+			adapter.inspectionErr = errors.New("SECRET-MARKER-snapshot")
+		}},
+		{name: "journal integrity", change: func(_ *systemchanges.RecoveryTransaction, adapter *systemChangesAdapter) {
+			adapter.recoveryLoadErr = errors.New("SECRET-MARKER-journal")
+		}},
+		{name: "forward checkpoint", change: func(recovery *systemchanges.RecoveryTransaction, _ *systemChangesAdapter) {
+			recovery.LastCheckpoint = systemchanges.CancellationRequested
+		}},
+		{name: "rollback step", change: func(_ *systemchanges.RecoveryTransaction, adapter *systemChangesAdapter) { adapter.failReverse = true }},
+		{name: "final prior-State agreement", change: func(_ *systemchanges.RecoveryTransaction, adapter *systemChangesAdapter) {
+			adapter.serviceErr = errors.New("SECRET-MARKER-agreement")
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			recovery := base
+			adapter := &systemChangesAdapter{recovery: &recovery}
+			test.change(&recovery, adapter)
+			result := systemchanges.New(adapter).Recover()
+			encoded, err := json.Marshal(result)
+			if result.Outcome != systemchanges.RecoveryRequiredOutcome || result.Finding == nil || result.Evidence != (systemchanges.EvidenceRules{SecretSafeOnly: true}) || strings.Contains(strings.Join(adapter.events, ","), "cleanup") || err != nil || strings.Contains(string(encoded), "SECRET-MARKER") {
+				t.Fatalf("%s recovery = %+v; events=%v encoded=%s err=%v", test.name, result, adapter.events, encoded, err)
+			}
+		})
 	}
 }
 

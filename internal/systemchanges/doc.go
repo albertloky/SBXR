@@ -11,5 +11,9 @@
 // inspects potentially applied steps, and rolls ordinary work back without
 // resuming it forward. A later restart continues rollback only from durable
 // reverse evidence; after durable Complete it removes transaction material
-// without restoring the prior revision.
+// without restoring the prior revision. When lineage or transaction safety is
+// unprovable, Recovery Required blocks ordinary mutation and offers only
+// secret-safe inspection, diagnostics, recheck, Back, separately confirmed
+// Complete removal, an eligible rollback retry, or a fresh forward repair of
+// valid current State drift.
 package systemchanges

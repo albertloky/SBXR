@@ -40,42 +40,82 @@ const (
 	InspectAction         Action = "Inspect"
 	ApplyAction           Action = "Apply"
 	RetryRollbackAction   Action = "Retry automatic rollback"
+	DiagnosticsAction     Action = "Read-only diagnostics"
+	ForwardRepairAction   Action = "Create forward-repair Plan"
 	CheckAgainAction      Action = "Check again"
+	BackAction            Action = "Back"
 	CompleteRemovalAction Action = "Complete removal"
 )
 
+type RecoveryCause string
+
+const (
+	StateLineageUnprovable      RecoveryCause = "Current State lineage unprovable"
+	SnapshotUnprovable          RecoveryCause = "Rollback Snapshot integrity unprovable"
+	JournalUnprovable           RecoveryCause = "Recovery journal integrity unprovable"
+	ForwardCheckpointUnprovable RecoveryCause = "Forward checkpoint unprovable"
+	RollbackStepUnprovable      RecoveryCause = "Rollback step unprovable"
+	PriorAgreementUnprovable    RecoveryCause = "Prior-State agreement unprovable"
+	CurrentStateDrift           RecoveryCause = "Valid current State has drift"
+	MissingSecrets              RecoveryCause = "Required secrets are missing"
+	ReplacementVPS              RecoveryCause = "VPS is replaced or unavailable"
+	OlderRevision               RecoveryCause = "An older completed revision was requested"
+	OwnerRegret                 RecoveryCause = "Owner requested a prior configuration"
+)
+
 type Observation struct {
-	Status               InstallationStatus
-	CurrentChangeSet     string
-	LastChangeSet        string
-	Checkpoint           Checkpoint
-	CompletedSteps       int
-	TotalSteps           int
-	Lock                 LockState
-	RollbackAvailable    bool
-	StateRevision        uint64
-	StateSHA256          string
-	VolatileSHA256       string
-	FilesystemBytes      uint64
-	AvailableBytes       uint64
-	WallTimeSynchronized bool
-	MonotonicClock       bool
-	TimeOwner            string
+	Status                 InstallationStatus
+	CurrentChangeSet       string
+	LastChangeSet          string
+	Checkpoint             Checkpoint
+	CompletedSteps         int
+	TotalSteps             int
+	Lock                   LockState
+	RollbackAvailable      bool
+	ForwardRepairAvailable bool
+	RecoveryCause          RecoveryCause
+	StateRevision          uint64
+	StateSHA256            string
+	VolatileSHA256         string
+	FilesystemBytes        uint64
+	AvailableBytes         uint64
+	WallTimeSynchronized   bool
+	MonotonicClock         bool
+	TimeOwner              string
 }
 
 type Inspection struct {
-	Status            InstallationStatus `json:"status"`
-	CurrentChangeSet  string             `json:"current_change_set,omitempty"`
-	LastChangeSet     string             `json:"last_change_set,omitempty"`
-	Checkpoint        Checkpoint         `json:"checkpoint"`
-	CompletedSteps    int                `json:"completed_steps"`
-	TotalSteps        int                `json:"total_steps"`
-	Lock              LockState          `json:"lock"`
-	RollbackAvailable bool               `json:"rollback_available"`
-	AllowedActions    []Action           `json:"allowed_actions"`
-	ActivityPolicies  []ActivityPolicy   `json:"activity_policies"`
-	Findings          []Finding          `json:"findings,omitempty"`
+	Status                 InstallationStatus `json:"status"`
+	CurrentChangeSet       string             `json:"current_change_set,omitempty"`
+	LastChangeSet          string             `json:"last_change_set,omitempty"`
+	Checkpoint             Checkpoint         `json:"checkpoint"`
+	CompletedSteps         int                `json:"completed_steps"`
+	TotalSteps             int                `json:"total_steps"`
+	Lock                   LockState          `json:"lock"`
+	RollbackAvailable      bool               `json:"rollback_available"`
+	ForwardRepairAvailable bool               `json:"forward_repair_available"`
+	RecoveryCause          RecoveryCause      `json:"recovery_cause,omitempty"`
+	AllowedActions         []Action           `json:"allowed_actions"`
+	Correction             *Correction        `json:"correction,omitempty"`
+	ActivityPolicies       []ActivityPolicy   `json:"activity_policies"`
+	Findings               []Finding          `json:"findings,omitempty"`
 }
+
+type Correction struct {
+	Source            CorrectionSource `json:"source"`
+	SBXROption        Action           `json:"sbxr_option,omitempty"`
+	FreshPlanRequired bool             `json:"fresh_plan_required"`
+	OwnerWorkPlan     []string         `json:"owner_work_plan,omitempty"`
+	CheckAgain        string           `json:"check_again"`
+	Back              string           `json:"back"`
+}
+
+type CorrectionSource string
+
+const (
+	SBXROwnedCorrection CorrectionSource = "SBXR-owned correction"
+	ExternalCorrection  CorrectionSource = "External or Owner-controlled fault"
+)
 
 type Activity string
 
@@ -145,12 +185,23 @@ func (i Interface) Inspect() Inspection {
 	return Inspection{
 		Status: observed.Status, CurrentChangeSet: observed.CurrentChangeSet, LastChangeSet: observed.LastChangeSet,
 		Checkpoint: observed.Checkpoint, CompletedSteps: observed.CompletedSteps, TotalSteps: observed.TotalSteps,
-		Lock: observed.Lock, RollbackAvailable: observed.RollbackAvailable, AllowedActions: allowedActions(observed), ActivityPolicies: activityPolicies(observed.Status, observed.Lock),
+		Lock: observed.Lock, RollbackAvailable: observed.RollbackAvailable, ForwardRepairAvailable: observed.ForwardRepairAvailable, RecoveryCause: observed.RecoveryCause,
+		AllowedActions: allowedActions(observed), Correction: recoveryCorrection(observed), ActivityPolicies: activityPolicies(observed.Status, observed.Lock),
 	}
 }
 
+func (i Interface) CheckAgain() Inspection { return i.Inspect() }
+
+func (i Interface) RetryAutomaticRollback() ApplyResult {
+	inspection := i.Inspect()
+	if inspection.Status != RecoveryRequired || !inspection.RollbackAvailable {
+		return refused("SYSTEM-CHANGES-ROLLBACK-NOT-AVAILABLE", "Automatic rollback is not available", string(inspection.RecoveryCause), "valid unfinished transaction material", "recovery never invents or selects rollback material", "Use a safe action offered by Inspect or go Back.", false)
+	}
+	return i.Recover()
+}
+
 func validObservation(observed Observation) bool {
-	if observed.Status != NotInstalled && observed.Status != Managed && observed.Status != ChangeInProgress && observed.Status != RecoveryRequired || observed.Lock != LockReleased && observed.Lock != LockHeld || observed.CompletedSteps < 0 || observed.TotalSteps < observed.CompletedSteps {
+	if observed.Status != NotInstalled && observed.Status != Managed && observed.Status != ChangeInProgress && observed.Status != RecoveryRequired || observed.Lock != LockReleased && observed.Lock != LockHeld || observed.CompletedSteps < 0 || observed.TotalSteps < observed.CompletedSteps || observed.RollbackAvailable && observed.ForwardRepairAvailable {
 		return false
 	}
 	if observed.CurrentChangeSet != "" && !safeIdentity(observed.CurrentChangeSet) || observed.LastChangeSet != "" && !safeIdentity(observed.LastChangeSet) || observed.Checkpoint != NoCheckpoint && observed.Checkpoint != PreparedCheckpoint {
@@ -162,7 +213,20 @@ func validObservation(observed Observation) bool {
 	if (observed.Status == NotInstalled || observed.Status == Managed) && (observed.Checkpoint != NoCheckpoint || observed.CompletedSteps != 0 || observed.TotalSteps != 0) || (observed.Status == ChangeInProgress || observed.Status == RecoveryRequired) && observed.CurrentChangeSet != "" && (observed.Checkpoint == NoCheckpoint || observed.TotalSteps == 0) {
 		return false
 	}
-	return true
+	if observed.Status != RecoveryRequired {
+		return observed.RecoveryCause == "" && !observed.ForwardRepairAvailable
+	}
+	if !validRecoveryCause(observed.RecoveryCause) || observed.RollbackAvailable && (!rollbackEligibleCause(observed.RecoveryCause) || observed.CurrentChangeSet == "" || observed.Checkpoint != PreparedCheckpoint || observed.TotalSteps == 0) {
+		return false
+	}
+	if observed.ForwardRepairAvailable {
+		return observed.RecoveryCause == CurrentStateDrift && observed.CurrentChangeSet == "" && observed.LastChangeSet != "" && observed.Checkpoint == NoCheckpoint && observed.TotalSteps == 0 && observed.StateRevision > 0 && validSHA256(observed.StateSHA256)
+	}
+	return observed.RecoveryCause != CurrentStateDrift
+}
+
+func rollbackEligibleCause(cause RecoveryCause) bool {
+	return cause == ForwardCheckpointUnprovable || cause == RollbackStepUnprovable || cause == PriorAgreementUnprovable
 }
 
 func allowedActions(observed Observation) []Action {
@@ -170,23 +234,74 @@ func allowedActions(observed Observation) []Action {
 	case NotInstalled, Managed:
 		return []Action{InspectAction, ApplyAction}
 	case RecoveryRequired:
-		actions := []Action{InspectAction}
+		actions := []Action{InspectAction, DiagnosticsAction}
 		if observed.RollbackAvailable {
 			actions = append(actions, RetryRollbackAction)
+		} else if observed.ForwardRepairAvailable {
+			actions = append(actions, ForwardRepairAction)
 		}
-		return append(actions, CheckAgainAction, CompleteRemovalAction)
+		return append(actions, CheckAgainAction, BackAction, CompleteRemovalAction)
 	default:
 		return []Action{InspectAction}
 	}
 }
 
 func recoveryInspection(finding Finding) Inspection {
-	return Inspection{Status: RecoveryRequired, Checkpoint: NoCheckpoint, Lock: LockReleased, AllowedActions: []Action{InspectAction, CheckAgainAction, CompleteRemovalAction}, ActivityPolicies: activityPolicies(RecoveryRequired, LockReleased), Findings: []Finding{finding}}
+	observed := Observation{Status: RecoveryRequired, Checkpoint: NoCheckpoint, Lock: LockReleased, RecoveryCause: StateLineageUnprovable}
+	return Inspection{Status: RecoveryRequired, Checkpoint: NoCheckpoint, Lock: LockReleased, RecoveryCause: observed.RecoveryCause, AllowedActions: allowedActions(observed), Correction: recoveryCorrection(observed), ActivityPolicies: activityPolicies(RecoveryRequired, LockReleased), Findings: []Finding{finding}}
+}
+
+func validRecoveryCause(cause RecoveryCause) bool {
+	switch cause {
+	case StateLineageUnprovable, SnapshotUnprovable, JournalUnprovable, ForwardCheckpointUnprovable, RollbackStepUnprovable, PriorAgreementUnprovable, CurrentStateDrift, MissingSecrets, ReplacementVPS, OlderRevision, OwnerRegret:
+		return true
+	}
+	return false
+}
+
+func recoveryCorrection(observed Observation) *Correction {
+	if observed.Status != RecoveryRequired {
+		return nil
+	}
+	correction := &Correction{CheckAgain: "Repeat read-only State and transaction inspection.", Back: "Return without changing State, services, or transaction evidence."}
+	if observed.RollbackAvailable {
+		correction.Source = SBXROwnedCorrection
+		correction.SBXROption = RetryRollbackAction
+		return correction
+	}
+	if observed.ForwardRepairAvailable {
+		correction.Source = SBXROwnedCorrection
+		correction.SBXROption = ForwardRepairAction
+		correction.FreshPlanRequired = true
+		return correction
+	}
+	correction.Source = ExternalCorrection
+	correction.OwnerWorkPlan = externalRecoveryPlan(observed.RecoveryCause)
+	return correction
+}
+
+func externalRecoveryPlan(cause RecoveryCause) []string {
+	first := "Preserve the secret-safe evidence and do not start unproven services."
+	switch cause {
+	case MissingSecrets:
+		first = "Supply new Owner-held secrets; SBXR cannot reconstruct lost secrets."
+	case ReplacementVPS:
+		first = "Prepare a Clean replacement VPS; transaction evidence does not transfer between servers."
+	case OlderRevision:
+		first = "Prepare current Owner-held inputs; SBXR does not restore an older revision."
+	case OwnerRegret:
+		first = "Choose the new intended configuration; SBXR does not turn transaction recovery into historical restore."
+	}
+	return []string{
+		first,
+		"Separately confirm Complete removal.",
+		"Rebuild from a Clean VPS with current Owner-held inputs.",
+	}
 }
 
 func activityPolicies(status InstallationStatus, lock LockState) []ActivityPolicy {
 	health, renewal := ActivityAllowed, ActivityAllowed
-	if status == ChangeInProgress || lock == LockHeld {
+	if status == ChangeInProgress || status == RecoveryRequired || lock == LockHeld {
 		health, renewal = ActivityDeferred, ActivityDeferredAndReplan
 	}
 	return []ActivityPolicy{
@@ -451,7 +566,13 @@ func (i Interface) apply(changeSet *ChangeSet, cancellation *Cancellation) Apply
 		return finish(lock, refused("SYSTEM-CHANGES-INSPECTION-UNPROVABLE", "Fresh pre-mutation inspection failed", "incomplete transaction facts", "one exact fresh inspection under the kernel lock", "SBXR never guesses current State or host facts", "Check again and create a fresh Plan.", true))
 	}
 	spec := changeSet.spec
-	if observed.Status != spec.StartingState.Status || observed.StateRevision != spec.StartingState.Revision || observed.StateSHA256 != spec.StartingState.SHA256 || observed.VolatileSHA256 != spec.Plan.VolatileSHA256 {
+	forwardRepair := observed.Status == RecoveryRequired && observed.ForwardRepairAvailable && spec.Mutation == RepairMutation && spec.StartingState.Status == Managed
+	completeRemoval := observed.Status == RecoveryRequired && spec.Mutation == CompleteRemovalMutation && spec.StartingState.Status == RecoveryRequired
+	if observed.Status == RecoveryRequired && !forwardRepair && !completeRemoval {
+		return finish(lock, refused("SYSTEM-CHANGES-RECOVERY-BLOCKED", "Normal mutation is blocked in Recovery Required", string(observed.RecoveryCause), "Retry automatic rollback, a fresh valid-current-State forward-repair Plan, or separately confirmed Complete removal", "Recovery Required never permits ordinary mutation or evidence bypass", "Use one action offered by Inspect or go Back.", true))
+	}
+	statusMatches := observed.Status == spec.StartingState.Status || forwardRepair
+	if !statusMatches || observed.StateRevision != spec.StartingState.Revision || observed.StateSHA256 != spec.StartingState.SHA256 || observed.VolatileSHA256 != spec.Plan.VolatileSHA256 {
 		return finish(lock, refused("SYSTEM-CHANGES-STALE", "The reviewed State lineage or volatile binding changed", fmt.Sprintf("status=%s revision=%d state_match=%t binding_match=%t", observed.Status, observed.StateRevision, observed.StateSHA256 == spec.StartingState.SHA256, observed.VolatileSHA256 == spec.Plan.VolatileSHA256), "the exact reviewed lineage and every volatile binding", "stale approval cannot authorize mutation", "Reload observations and create a fresh Plan.", true))
 	}
 	if spec.TargetStateSHA256 == spec.StartingState.SHA256 {
