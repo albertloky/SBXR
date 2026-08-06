@@ -146,6 +146,8 @@ func (f *Finding) Error() string {
 }
 
 // Storage is the State-owned Seam implemented by one production Adapter.
+// The root architecture test permits only adapter/filesystem to pass it to New;
+// other product Modules cannot construct a raw persistence path.
 type Storage interface {
 	Read() ([]byte, error)
 	Publish(expectedPrior, candidate []byte, candidateSHA256 string) ([]byte, error)
@@ -158,7 +160,8 @@ type implementation struct {
 	storage Storage
 }
 
-// New wires Load to its one storage boundary.
+// New wires Load to its one storage boundary. Production construction is
+// restricted to adapter/filesystem by the root architecture test.
 func New(storage Storage) Interface {
 	return Interface{implementation: &implementation{storage: storage}}
 }

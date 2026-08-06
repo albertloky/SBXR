@@ -65,7 +65,7 @@ Run:
 go test .
 ```
 
-Pass when the root registry contains exactly the eleven approved Modules; the repository contains only approved product-package shapes; dependencies are standard-library-first, acyclic, and downward; and production code cannot import tests, fixtures, evidence, acceptance tooling, generic dumping grounds, or unregistered Modules. This check owns repository placement.
+Pass when the root registry contains exactly the eleven approved Modules; the repository contains only approved product-package shapes; dependencies are standard-library-first, acyclic, and downward; production code cannot import tests, fixtures, evidence, acceptance tooling, generic dumping grounds, or unregistered Modules; and only State's production filesystem Adapter can construct the Interface from raw `Storage`. This check owns repository placement and rejects any second persistence path.
 
 ## `STATE-SEAM-STORAGE` — Seam Verification — Codex
 

@@ -3,10 +3,16 @@ package architecture_test
 import (
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -101,6 +107,95 @@ func TestArchitecturePolicyRejectsForbiddenShapes(t *testing.T) {
 				t.Fatalf("validatePackages() = %v, want %q rejection", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestStateStorageConstructionBoundary(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateStateConstruction(root); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("rejects a second production persistence path", func(t *testing.T) {
+		directory := t.TempDir()
+		mustWriteArchitectureFile(t, directory, "internal/systemchanges/unsafe.go", `package systemchanges
+import "github.com/albertloky/SBXR/internal/state"
+func unsafe(storage state.Storage) state.Interface { return state.New(storage) }
+`)
+		if err := validateStateConstruction(directory); err == nil || !strings.Contains(err.Error(), "only the State filesystem Adapter") {
+			t.Fatalf("validateStateConstruction() = %v, want second persistence path rejection", err)
+		}
+	})
+}
+
+func validateStateConstruction(root string) error {
+	return filepath.WalkDir(root, func(filePath string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			if entry.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(filePath) != ".go" || strings.HasSuffix(filePath, "_test.go") {
+			return nil
+		}
+		relative, err := filepath.Rel(root, filePath)
+		if err != nil {
+			return err
+		}
+		source, err := parser.ParseFile(token.NewFileSet(), filePath, nil, 0)
+		if err != nil {
+			return err
+		}
+		stateAlias := ""
+		for _, imported := range source.Imports {
+			importPath, err := strconv.Unquote(imported.Path.Value)
+			if err != nil || importPath != modulePath+"/internal/state" {
+				continue
+			}
+			stateAlias = "state"
+			if imported.Name != nil {
+				stateAlias = imported.Name.Name
+			}
+		}
+		if stateAlias == "" || stateAlias == "_" {
+			return nil
+		}
+		allowed := strings.HasPrefix(filepath.ToSlash(relative), "internal/state/adapter/filesystem/")
+		if stateAlias == "." && !allowed {
+			return fmt.Errorf("only the State filesystem Adapter may import State with constructor access: %s", relative)
+		}
+		var constructs bool
+		ast.Inspect(source, func(node ast.Node) bool {
+			selector, ok := node.(*ast.SelectorExpr)
+			if !ok || selector.Sel.Name != "New" {
+				return true
+			}
+			identifier, ok := selector.X.(*ast.Ident)
+			constructs = constructs || ok && identifier.Name == stateAlias
+			return true
+		})
+		if constructs && !allowed {
+			return fmt.Errorf("only the State filesystem Adapter may construct State from raw storage: %s", relative)
+		}
+		return nil
+	})
+}
+
+func mustWriteArchitectureFile(t *testing.T, root, name, content string) {
+	t.Helper()
+	filePath := filepath.Join(root, filepath.FromSlash(path.Clean(name)))
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filePath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 
