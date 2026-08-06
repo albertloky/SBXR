@@ -101,6 +101,7 @@ type ActivityPolicy struct {
 
 type Finding struct {
 	Code       string `json:"code"`
+	Owner      Module `json:"owner,omitempty"`
 	Problem    string `json:"problem"`
 	Found      string `json:"found"`
 	Required   string `json:"required"`
@@ -122,6 +123,16 @@ type Adapter interface {
 type Interface struct{ adapter Adapter }
 
 func New(adapter Adapter) Interface { return Interface{adapter: adapter} }
+
+type Cancellation struct{ requested atomic.Bool }
+
+func NewCancellation() *Cancellation { return &Cancellation{} }
+func (c *Cancellation) Request() {
+	if c != nil {
+		c.requested.Store(true)
+	}
+}
+func (c *Cancellation) Requested() bool { return c != nil && c.requested.Load() }
 
 func (i Interface) Inspect() Inspection {
 	if i.adapter == nil {
@@ -213,6 +224,10 @@ const (
 
 type OperationKind string
 
+type CancellationContract string
+
+const SafeCheckpointCancellation CancellationContract = "Wait for declared safe checkpoint"
+
 const (
 	ActivatePreparedConfiguration OperationKind = "Activate prepared configuration"
 	RestorePriorConfiguration     OperationKind = "Restore prior configuration"
@@ -224,13 +239,14 @@ type Step struct {
 	owner    Module
 	forward  OperationKind
 	rollback OperationKind
+	cancel   CancellationContract
 }
 
 func NewStep(owner Module, forward, rollback OperationKind) (Step, error) {
 	if !validModule(owner) || !validOperation(forward) || !validOperation(rollback) || forward == rollback {
 		return Step{}, &Finding{Code: "SYSTEM-CHANGES-STEP-INVALID", Problem: "A typed change or rollback instruction is invalid", Found: "an unsupported owner or operation", Required: "one owning Module plus distinct allowed forward and rollback operations", WhyStopped: "System Changes never accepts arbitrary commands, paths, services, or root operations", NextAction: "Rebuild the Change Set through the owning Module."}
 	}
-	return Step{owner: owner, forward: forward, rollback: rollback}, nil
+	return Step{owner: owner, forward: forward, rollback: rollback, cancel: SafeCheckpointCancellation}, nil
 }
 
 type Classification string
@@ -350,6 +366,11 @@ func NewChangeSet(spec ChangeSetSpec) (*ChangeSet, error) {
 	if !safeIdentity(spec.Identity) || !validMutation(spec.Mutation) || !validModule(spec.OutcomeOwner) || !validStartingState(spec.StartingState, spec.Mutation) || !validSHA256(spec.TargetStateSHA256) || !safeIdentity(spec.Plan.Identity) || !validSHA256(spec.Plan.SHA256) || !validSHA256(spec.Plan.VolatileSHA256) || spec.PreparedState == nil || len(spec.Steps) == 0 || len(spec.Checks) == 0 || spec.Timeouts.Step <= 0 || spec.Timeouts.Step > maxStepTimeout || spec.Timeouts.Check <= 0 || spec.Timeouts.Check > maxCheckTimeout || spec.Disk.PreparationBytes == 0 || spec.Disk.TemporaryBytes == 0 || spec.Disk.SnapshotBytes == 0 || spec.Disk.JournalBytes == 0 || spec.Disk.RollbackBytes == 0 || spec.Disk.OverheadBytes == 0 || !diskValid || reserved > ^uint64(0)-largestFloor {
 		return nil, &Finding{Code: "SYSTEM-CHANGES-CHANGE-SET-INVALID", Problem: "The Change Set is incomplete or untyped", Found: "a missing or invalid typed transaction input", Required: "one opaque prepared State commit, exact lineage and Plan checksums, typed steps and rollback, checks, disk reservation, and bounded timeouts", WhyStopped: "System Changes never accepts an arbitrary mutation surface", NextAction: "Rebuild and review the Change Set through its owning Module."}
 	}
+	for _, step := range spec.Steps {
+		if !validStep(step) {
+			return nil, &Finding{Code: "SYSTEM-CHANGES-STEP-INVALID", Problem: "A transaction step is untyped", Found: "a missing owner, reverse operation, or safe-cancellation contract", Required: "one exact Module-owned forward and reverse pair", WhyStopped: "automatic rollback cannot guess how to reverse work", NextAction: "Rebuild the Change Set through its owning Modules."}
+		}
+	}
 	var requiredPre, requiredPost bool
 	for _, check := range spec.Checks {
 		if !validCheck(check) {
@@ -370,29 +391,42 @@ func NewChangeSet(spec ChangeSetSpec) (*ChangeSet, error) {
 type ApplyOutcome string
 
 const (
-	Completed  ApplyOutcome = "Completed"
-	Incomplete ApplyOutcome = "Incomplete"
-	Refused    ApplyOutcome = "Refused"
-	Deferred   ApplyOutcome = "Deferred"
+	Completed               ApplyOutcome = "Completed"
+	RollbackSucceeded       ApplyOutcome = "Rollback succeeded"
+	RecoveryRequiredOutcome ApplyOutcome = "Recovery Required"
+	Refused                 ApplyOutcome = "Refused"
+	Deferred                ApplyOutcome = "Deferred"
 )
 
 type ApplyResult struct {
-	Outcome                ApplyOutcome  `json:"outcome"`
-	NothingChanged         bool          `json:"nothing_changed"`
-	PlanConsumed           bool          `json:"plan_consumed"`
-	UsesMonotonicDurations bool          `json:"uses_monotonic_durations"`
-	QueueCreated           bool          `json:"queue_created"`
-	RebuildPlan            bool          `json:"rebuild_plan"`
-	Evidence               EvidenceRules `json:"evidence_rules"`
-	Finding                *Finding      `json:"finding,omitempty"`
+	Outcome                ApplyOutcome       `json:"outcome"`
+	RestoredStatus         InstallationStatus `json:"restored_status,omitempty"`
+	NothingChanged         bool               `json:"nothing_changed"`
+	PlanConsumed           bool               `json:"plan_consumed"`
+	UsesMonotonicDurations bool               `json:"uses_monotonic_durations"`
+	QueueCreated           bool               `json:"queue_created"`
+	RebuildPlan            bool               `json:"rebuild_plan"`
+	Evidence               EvidenceRules      `json:"evidence_rules"`
+	Finding                *Finding           `json:"finding,omitempty"`
 }
 
 func (i Interface) Apply(changeSet *ChangeSet) ApplyResult {
+	return i.apply(changeSet, nil)
+}
+
+func (i Interface) ApplyWithCancellation(changeSet *ChangeSet, cancellation *Cancellation) ApplyResult {
+	return i.apply(changeSet, cancellation)
+}
+
+func (i Interface) apply(changeSet *ChangeSet, cancellation *Cancellation) ApplyResult {
 	if changeSet == nil {
 		return refused("SYSTEM-CHANGES-CHANGE-SET-REQUIRED", "Apply received no typed Change Set", "untyped or missing input", "one Change Set created by NewChangeSet", "direct mutation is forbidden", "Create and review a fresh Plan.", false)
 	}
 	if changeSet.used == nil || !changeSet.used.used.CompareAndSwap(false, true) {
 		return refused("SYSTEM-CHANGES-PLAN-USED", "The one-use Plan authority was already consumed", "a repeated Apply attempt", "one fresh reviewed Plan", "every outcome burns its authority", "Create and review a fresh Plan.", true)
+	}
+	if cancellation.Requested() {
+		return refused("SYSTEM-CHANGES-CANCELLED", "The Change Set was cancelled before Apply", "an explicit cancellation before approval entered live work", "no mutation", "cancellation before start changes nothing", "Create and review a fresh Plan.", true)
 	}
 	if i.adapter == nil {
 		return refused("SYSTEM-CHANGES-ADAPTER-UNAVAILABLE", "The Ubuntu host Adapter is unavailable", "no Adapter", "one production Adapter", "mutation safety cannot be proven", "Restore the Adapter and plan again.", true)
@@ -444,7 +478,7 @@ func (i Interface) Apply(changeSet *ChangeSet) ApplyResult {
 	if !validPreparedState(spec) {
 		return finish(lock, refused("SYSTEM-CHANGES-PREPARED-STATE", "The prepared State authority is invalid or unrelated", "a caller-made or mismatched authority", "one State-issued commit bound to this Change Set, candidate revision, and target checksum", "only State may prepare Desired State publication material", "Prepare State again and create a fresh Plan.", true))
 	}
-	return i.applyPrepared(lock, spec)
+	return i.applyPrepared(lock, spec, cancellation)
 }
 
 func validPreparedState(spec ChangeSetSpec) bool {
@@ -456,12 +490,21 @@ func validPreparedState(spec ChangeSetSpec) bool {
 	return valid && changeSet == spec.Identity && revision == spec.StartingState.Revision+1 && startingSHA256 == spec.StartingState.SHA256 && checksum == spec.TargetStateSHA256 && planIdentity == spec.Plan.Identity && planSHA256 == spec.Plan.SHA256
 }
 
-func finish(lock Lock, result ApplyResult) ApplyResult {
+func finish(lock Lock, result ApplyResult, owner ...Module) ApplyResult {
 	if err := lock.Close(); err != nil {
-		if result.NothingChanged {
-			return refused("SYSTEM-CHANGES-LOCK-RELEASE", "The installation-wide kernel lock release could not be proven", "the lock close returned an error", "one confirmed kernel-lock release", "transaction ownership is uncertain", "Inspect the transaction and use the Recovery Required flow.", true)
+		outcomeOwner := Module("")
+		if result.Finding != nil {
+			outcomeOwner = result.Finding.Owner
 		}
-		return ApplyResult{Outcome: Incomplete, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(), Finding: &Finding{Code: "SYSTEM-CHANGES-LOCK-RELEASE", Problem: "The installation-wide kernel lock release could not be proven", Found: "the lock close returned an error after transaction work", Required: "one confirmed kernel-lock release and durable resolution", WhyStopped: "changed work can never be reported as nothing changed", NextAction: "Inspect the transaction and use the Recovery Required flow."}}
+		if len(owner) > 0 {
+			outcomeOwner = owner[0]
+		}
+		if result.NothingChanged {
+			stopped := refused("SYSTEM-CHANGES-LOCK-RELEASE", "The installation-wide kernel lock release could not be proven", "the lock close returned an error", "one confirmed kernel-lock release", "transaction ownership is uncertain", "Inspect the transaction and use the Recovery Required flow.", true)
+			stopped.Finding.Owner = outcomeOwner
+			return stopped
+		}
+		return ApplyResult{Outcome: RecoveryRequiredOutcome, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(), Finding: &Finding{Code: "SYSTEM-CHANGES-LOCK-RELEASE", Owner: outcomeOwner, Problem: "The installation-wide kernel lock release could not be proven", Found: "the lock close returned an error after transaction work", Required: "one confirmed kernel-lock release and durable resolution", WhyStopped: "changed work can never be reported as nothing changed", NextAction: "Inspect the transaction and use the Recovery Required flow."}}
 	}
 	return result
 }
@@ -504,6 +547,10 @@ func validOperation(operation OperationKind) bool {
 		return true
 	}
 	return false
+}
+
+func validStep(step Step) bool {
+	return validModule(step.owner) && validOperation(step.forward) && validOperation(step.rollback) && step.forward != step.rollback && step.cancel == SafeCheckpointCancellation
 }
 
 func validCheck(check Check) bool {

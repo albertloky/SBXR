@@ -53,6 +53,19 @@ func (storage *mutableStateStorage) Publish(expectedPrior, candidate []byte, _ s
 	return append([]byte(nil), candidate...), nil
 }
 
+func (storage *mutableStateStorage) Restore(expectedCurrent, prior []byte) ([]byte, error) {
+	storage.mu.Lock()
+	defer storage.mu.Unlock()
+	if storage.err != nil || !bytes.Equal([]byte(storage.document), expectedCurrent) {
+		return nil, errors.New("rollback baseline changed")
+	}
+	storage.document = string(prior)
+	if len(prior) == 0 {
+		storage.err = fs.ErrNotExist
+	}
+	return append([]byte(nil), prior...), nil
+}
+
 func TestPrepareCommitDerivesRevisionFromExactLoad(t *testing.T) {
 	candidate := completeDesiredState()
 

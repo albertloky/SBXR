@@ -2,6 +2,7 @@ package ubuntu
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -24,9 +25,11 @@ const transactionDirectory = "var/lib/sbxr/transactions"
 // Host owns the typed native effects and observations; Adapter owns their durability.
 type Host interface {
 	CaptureRollback(systemchanges.Step, func(source io.Reader) error) error
-	Execute(systemchanges.Step, time.Duration) (systemchanges.StepEvidence, error)
+	Execute(systemchanges.Step, time.Duration, *systemchanges.Cancellation) (systemchanges.StepEvidence, error)
+	Reverse(systemchanges.Step, io.Reader, time.Duration) (systemchanges.StepEvidence, error)
 	Check(systemchanges.Check, systemchanges.GatePhase, time.Duration) (systemchanges.HealthStatus, error)
-	VerifyAgreement(systemchanges.Agreement) error
+	VerifyAgreement(systemchanges.Agreement, time.Duration) error
+	VerifyRollback(systemchanges.RollbackAgreement, time.Duration) error
 }
 
 type snapshotManifest struct {
@@ -37,9 +40,10 @@ type snapshotManifest struct {
 }
 
 type journalStep struct {
-	Owner    systemchanges.Module        `json:"owner"`
-	Forward  systemchanges.OperationKind `json:"forward"`
-	Rollback systemchanges.OperationKind `json:"rollback"`
+	Owner        systemchanges.Module               `json:"owner"`
+	Forward      systemchanges.OperationKind        `json:"forward"`
+	Rollback     systemchanges.OperationKind        `json:"rollback"`
+	Cancellation systemchanges.CancellationContract `json:"cancellation"`
 }
 
 type journalEntry struct {
@@ -123,7 +127,7 @@ func (a Adapter) Prepare(lease systemchanges.ExecutionLease, preparation systemc
 	}
 	steps := make([]journalStep, len(preparation.Steps))
 	for index, step := range preparation.Steps {
-		steps[index] = journalStep{Owner: step.Owner(), Forward: step.Forward(), Rollback: step.Rollback()}
+		steps[index] = journalStep{Owner: step.Owner(), Forward: step.Forward(), Rollback: step.Rollback(), Cancellation: step.CancellationContract()}
 	}
 	entry := journalEntry{Checkpoint: systemchanges.Prepared, ChangeSet: preparation.ChangeSet, Starting: preparation.Starting, PlanSHA256: preparation.PlanSHA256, State: &preparation.State, Steps: steps, Checks: preparation.Checks}
 	if _, err := writeProtected(root, path.Join(temporary, "journal.jsonl"), strings.NewReader(""), a.uid); err != nil {
@@ -168,11 +172,37 @@ func (a Adapter) Record(lease systemchanges.ExecutionLease, record systemchanges
 	return appendJournal(root, path.Join(target, "journal.jsonl"), journalEntry{Checkpoint: record.Checkpoint, Step: record.Step, Evidence: record.Evidence}, a.uid)
 }
 
-func (a Adapter) Execute(lease systemchanges.ExecutionLease, step systemchanges.Step, timeout time.Duration) (systemchanges.StepEvidence, error) {
+func (a Adapter) Execute(lease systemchanges.ExecutionLease, step systemchanges.Step, timeout time.Duration, cancellation *systemchanges.Cancellation) (systemchanges.StepEvidence, error) {
 	if !lease.Authorized() || a.host == nil {
 		return systemchanges.StepEvidence{}, errors.New("typed Ubuntu transaction host unavailable")
 	}
-	return a.host.Execute(step, timeout)
+	return a.host.Execute(step, timeout, cancellation)
+}
+
+func (a Adapter) Reverse(lease systemchanges.ExecutionLease, changeSet string, number int, step systemchanges.Step, timeout time.Duration) (systemchanges.StepEvidence, error) {
+	if !lease.Authorized() || a.host == nil || !safeName(changeSet) || number < 1 {
+		return systemchanges.StepEvidence{}, errors.New("typed Ubuntu transaction host unavailable")
+	}
+	root, err := os.OpenRoot(a.root)
+	if err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	defer root.Close()
+	directory := path.Join(transactionDirectory, changeSet)
+	manifest, err := verifyTransactionManifest(root, directory, a.uid)
+	if err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	name := fmt.Sprintf("snapshot/step-%03d.rollback", number)
+	content, err := root.ReadFile(path.Join(directory, name))
+	if err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	digest := sha256.Sum256(content)
+	if hex.EncodeToString(digest[:]) != manifest.Files[name] {
+		return systemchanges.StepEvidence{}, errors.New("rollback snapshot checksum mismatch")
+	}
+	return a.host.Reverse(step, bytes.NewReader(content), timeout)
 }
 
 func (a Adapter) Check(lease systemchanges.ExecutionLease, check systemchanges.Check, phase systemchanges.GatePhase, timeout time.Duration) (systemchanges.HealthStatus, error) {
@@ -182,11 +212,18 @@ func (a Adapter) Check(lease systemchanges.ExecutionLease, check systemchanges.C
 	return a.host.Check(check, phase, timeout)
 }
 
-func (a Adapter) VerifyAgreement(lease systemchanges.ExecutionLease, agreement systemchanges.Agreement) error {
+func (a Adapter) VerifyAgreement(lease systemchanges.ExecutionLease, agreement systemchanges.Agreement, timeout time.Duration) error {
 	if !lease.Authorized() || a.host == nil {
 		return errors.New("typed Ubuntu transaction host unavailable")
 	}
-	return a.host.VerifyAgreement(agreement)
+	return a.host.VerifyAgreement(agreement, timeout)
+}
+
+func (a Adapter) VerifyRollback(lease systemchanges.ExecutionLease, agreement systemchanges.RollbackAgreement, timeout time.Duration) error {
+	if !lease.Authorized() || a.host == nil {
+		return errors.New("typed Ubuntu transaction host unavailable")
+	}
+	return a.host.VerifyRollback(agreement, timeout)
 }
 
 func (a Adapter) Cleanup(lease systemchanges.ExecutionLease, changeSet string) error {
@@ -204,8 +241,8 @@ func (a Adapter) Cleanup(lease systemchanges.ExecutionLease, changeSet string) e
 		return err
 	}
 	entries, err := readJournal(root, path.Join(target, "journal.jsonl"))
-	if err != nil || len(entries) == 0 || entries[len(entries)-1].Checkpoint != systemchanges.Complete {
-		return errors.New("transaction is not durably Complete")
+	if err != nil || len(entries) == 0 || entries[len(entries)-1].Checkpoint != systemchanges.Complete && entries[len(entries)-1].Checkpoint != systemchanges.RolledBack {
+		return errors.New("transaction is not durably resolved")
 	}
 	names := make([]string, 0, len(manifest.Files))
 	for name := range manifest.Files {
@@ -330,24 +367,48 @@ func validNextCheckpoint(entries []journalEntry, next journalEntry) bool {
 	last, total := entries[len(entries)-1], len(entries[0].Steps)
 	switch last.Checkpoint {
 	case systemchanges.Prepared:
-		return next.Checkpoint == systemchanges.StepStarted && next.Step == 1
+		return next.Checkpoint == systemchanges.StepStarted && next.Step == 1 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == 0
 	case systemchanges.StepStarted:
-		return next.Checkpoint == systemchanges.StepCompleted && next.Step == last.Step && validEvidence(next.Evidence)
+		return next.Checkpoint == systemchanges.StepCompleted && next.Step == last.Step && validEvidence(next.Evidence) || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
 	case systemchanges.StepCompleted:
 		if last.Step < total {
-			return next.Checkpoint == systemchanges.StepStarted && next.Step == last.Step+1
+			return next.Checkpoint == systemchanges.StepStarted && next.Step == last.Step+1 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
 		}
-		return next.Checkpoint == systemchanges.PrePublicationHealthPassed && next.Step == 0
+		return next.Checkpoint == systemchanges.PrePublicationHealthPassed && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
 	case systemchanges.PrePublicationHealthPassed:
-		return next.Checkpoint == systemchanges.StatePublicationStarted && next.Step == 0
+		return next.Checkpoint == systemchanges.StatePublicationStarted && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total
 	case systemchanges.StatePublicationStarted:
-		return next.Checkpoint == systemchanges.StatePublished && next.Step == 0
+		return next.Checkpoint == systemchanges.StatePublished && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total
 	case systemchanges.StatePublished:
-		return next.Checkpoint == systemchanges.PostPublicationHealthPassed && next.Step == 0
+		return next.Checkpoint == systemchanges.PostPublicationHealthPassed && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total
 	case systemchanges.PostPublicationHealthPassed:
-		return next.Checkpoint == systemchanges.Complete && next.Step == 0
+		return next.Checkpoint == systemchanges.Complete && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total
+	case systemchanges.CancellationRequested:
+		return next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0
+	case systemchanges.RollbackStarted:
+		attempted := highestStartedStep(entries)
+		return attempted == 0 && next.Checkpoint == systemchanges.RollbackVerified && next.Step == 0 || attempted > 0 && next.Checkpoint == systemchanges.RollbackStepStarted && next.Step == attempted
+	case systemchanges.RollbackStepStarted:
+		return next.Checkpoint == systemchanges.RollbackStepCompleted && next.Step == last.Step && validEvidence(next.Evidence)
+	case systemchanges.RollbackStepCompleted:
+		if last.Step > 1 {
+			return next.Checkpoint == systemchanges.RollbackStepStarted && next.Step == last.Step-1
+		}
+		return next.Checkpoint == systemchanges.RollbackVerified && next.Step == 0
+	case systemchanges.RollbackVerified:
+		return next.Checkpoint == systemchanges.RolledBack && next.Step == 0
 	}
 	return false
+}
+
+func highestStartedStep(entries []journalEntry) int {
+	highest := 0
+	for _, entry := range entries {
+		if entry.Checkpoint == systemchanges.StepStarted && entry.Step > highest {
+			highest = entry.Step
+		}
+	}
+	return highest
 }
 
 func validEvidence(evidence *systemchanges.StepEvidence) bool {

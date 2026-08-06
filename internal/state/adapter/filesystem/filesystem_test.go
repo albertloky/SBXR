@@ -250,6 +250,57 @@ func TestAtomicPublicationSeam(t *testing.T) {
 	})
 }
 
+func TestAtomicRollbackRestoresManagedOrNotInstalledBaseline(t *testing.T) {
+	prior := []byte(completeDocument(t))
+	candidate := []byte(candidateDocument(t, 8, "change-0008"))
+
+	t.Run("Managed", func(t *testing.T) {
+		root := protectedBoundary(t)
+		storage := adapter{root: root, uid: os.Geteuid()}
+		candidateDigest := sha256.Sum256(candidate)
+		if _, err := storage.Publish(prior, candidate, hex.EncodeToString(candidateDigest[:])); err != nil {
+			t.Fatal(err)
+		}
+		readback, err := storage.Restore(candidate, prior)
+		if err != nil || !bytes.Equal(readback, prior) {
+			t.Fatalf("Restore() = (%q, %v), want exact Managed baseline", readback, err)
+		}
+	})
+
+	t.Run("Not installed", func(t *testing.T) {
+		root := t.TempDir()
+		must(t, os.Chmod(root, 0o700))
+		storage := adapter{root: root, uid: os.Geteuid()}
+		candidateDigest := sha256.Sum256(candidate)
+		if _, err := storage.Publish(nil, candidate, hex.EncodeToString(candidateDigest[:])); err != nil {
+			t.Fatal(err)
+		}
+		readback, err := storage.Restore(candidate, nil)
+		if err != nil || readback != nil {
+			t.Fatalf("Restore() = (%q, %v), want proven Not installed", readback, err)
+		}
+		if _, err := storage.Read(); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("removed State remained readable: %v", err)
+		}
+	})
+
+	t.Run("changed current State", func(t *testing.T) {
+		root := protectedBoundary(t)
+		storage := adapter{root: root, uid: os.Geteuid()}
+		candidateDigest := sha256.Sum256(candidate)
+		if _, err := storage.Publish(prior, candidate, hex.EncodeToString(candidateDigest[:])); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := storage.Restore(append([]byte("changed"), candidate...), prior); err == nil {
+			t.Fatal("Restore accepted an unproven current State")
+		}
+		current, err := storage.Read()
+		if err != nil || !bytes.Equal(current, candidate) {
+			t.Fatal("refused rollback changed current State")
+		}
+	})
+}
+
 func TestStaleCandidateCleanupInterruptionPoints(t *testing.T) {
 	prior := []byte(completeDocument(t))
 	candidate := []byte(candidateDocument(t, 8, "change-0008"))

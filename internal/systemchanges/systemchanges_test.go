@@ -240,6 +240,11 @@ func TestChangeSetRejectsUntypedMutationSurfaces(t *testing.T) {
 	if _, err := systemchanges.NewChangeSet(unphased); err == nil || !strings.Contains(err.Error(), "SYSTEM-CHANGES-CHECK-INVALID") {
 		t.Fatalf("missing post-publication gate error = %v", err)
 	}
+	unreversible := completeSpec(t, systemchanges.SettingChangeMutation)
+	unreversible.Steps[0] = systemchanges.Step{}
+	if _, err := systemchanges.NewChangeSet(unreversible); err == nil || !strings.Contains(err.Error(), "SYSTEM-CHANGES-STEP-INVALID") {
+		t.Fatalf("unproven reverse step error = %v", err)
+	}
 	for _, change := range []func(*systemchanges.ChangeSetSpec){
 		func(spec *systemchanges.ChangeSetSpec) { spec.Timeouts.Step = 24*time.Hour + time.Nanosecond },
 		func(spec *systemchanges.ChangeSetSpec) { spec.Timeouts.Check = time.Hour + time.Nanosecond },

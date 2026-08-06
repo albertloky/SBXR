@@ -159,6 +159,39 @@ func (a adapter) Publish(expectedPrior, candidate []byte, candidateSHA256 string
 	return readback, nil
 }
 
+func (a adapter) Restore(expectedCurrent, prior []byte) ([]byte, error) {
+	if len(prior) > 0 {
+		digest := sha256.Sum256(prior)
+		return a.Publish(expectedCurrent, prior, hex.EncodeToString(digest[:]))
+	}
+	root, err := openDirectory(a.root, 0o700, a.uid)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	stateDirectory, err := openRootDirectory(root, "state", 0o700, a.uid)
+	if err != nil {
+		return nil, err
+	}
+	defer stateDirectory.Close()
+	if err := verifyExpectedPrior(stateDirectory, expectedCurrent, a.uid); err != nil {
+		return nil, err
+	}
+	if err := a.removeStaleCandidate(stateDirectory, "state.json.next"); err != nil {
+		return nil, err
+	}
+	if err := stateDirectory.Remove("state.json"); err != nil {
+		return nil, err
+	}
+	if err := syncRoot(stateDirectory); err != nil {
+		return nil, err
+	}
+	if _, err := a.Read(); !errors.Is(err, fs.ErrNotExist) {
+		return nil, errors.New("removed Desired State remained readable")
+	}
+	return nil, nil
+}
+
 func (a adapter) removeStaleCandidate(stateDirectory *os.Root, name string) error {
 	info, err := stateDirectory.Lstat(name)
 	if errors.Is(err, fs.ErrNotExist) {

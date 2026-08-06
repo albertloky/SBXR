@@ -21,6 +21,12 @@ const (
 	StatePublished              DurableCheckpoint = "Desired State published"
 	PostPublicationHealthPassed DurableCheckpoint = "Post-publication health passed"
 	Complete                    DurableCheckpoint = "Complete"
+	CancellationRequested       DurableCheckpoint = "Cancellation requested"
+	RollbackStarted             DurableCheckpoint = "Rollback started"
+	RollbackStepStarted         DurableCheckpoint = "Rollback step started"
+	RollbackStepCompleted       DurableCheckpoint = "Rollback step completed"
+	RollbackVerified            DurableCheckpoint = "Rollback verified"
+	RolledBack                  DurableCheckpoint = "Rolled back"
 )
 
 type CheckpointRecord struct {
@@ -90,6 +96,13 @@ type Agreement struct {
 	Release                ReleaseBinding `json:"release_identity"`
 }
 
+type RollbackAgreement struct {
+	Status   InstallationStatus `json:"status"`
+	Revision uint64             `json:"revision"`
+	SHA256   string             `json:"sha256"`
+	Release  ReleaseBinding     `json:"release_identity"`
+}
+
 type StepEvidence struct {
 	Code   string `json:"code"`
 	SHA256 string `json:"sha256"`
@@ -126,9 +139,11 @@ func (lock leaseLock) Close() error {
 type TransactionAdapter interface {
 	Prepare(ExecutionLease, Preparation) error
 	Record(ExecutionLease, CheckpointRecord) error
-	Execute(ExecutionLease, Step, time.Duration) (StepEvidence, error)
+	Execute(ExecutionLease, Step, time.Duration, *Cancellation) (StepEvidence, error)
+	Reverse(ExecutionLease, string, int, Step, time.Duration) (StepEvidence, error)
 	Check(ExecutionLease, Check, GatePhase, time.Duration) (HealthStatus, error)
-	VerifyAgreement(ExecutionLease, Agreement) error
+	VerifyAgreement(ExecutionLease, Agreement, time.Duration) error
+	VerifyRollback(ExecutionLease, RollbackAgreement, time.Duration) error
 	Cleanup(lease ExecutionLease, changeSet string) error
 }
 
@@ -140,17 +155,19 @@ type stateTransaction interface {
 	SystemChangesBindings(lease any) ([]byte, error)
 	SystemChangesWriteArtifacts(lease any, write func(name string, mode uint32, source io.Reader) error) error
 	SystemChangesPublish(lease any) (any, error)
+	SystemChangesRestore(lease any) ([]byte, error)
 }
 
 type stateAgreement interface {
 	SystemChangesAgreement(lease any) ([]byte, error)
 }
 
-func (step Step) Owner() Module           { return step.owner }
-func (step Step) Forward() OperationKind  { return step.forward }
-func (step Step) Rollback() OperationKind { return step.rollback }
+func (step Step) Owner() Module                              { return step.owner }
+func (step Step) Forward() OperationKind                     { return step.forward }
+func (step Step) Rollback() OperationKind                    { return step.rollback }
+func (step Step) CancellationContract() CancellationContract { return step.cancel }
 
-func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec) ApplyResult {
+func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Cancellation) ApplyResult {
 	adapter, ok := i.adapter.(TransactionAdapter)
 	if !ok {
 		return finish(lock, refused("SYSTEM-CHANGES-TRANSACTION-ADAPTER", "Durable transaction execution is unavailable", "the Adapter has no transaction capability", "one protected durable transaction Adapter", "live work cannot start without recovery material", "Restore the Adapter and create a fresh Plan.", true))
@@ -184,57 +201,139 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec) ApplyResult {
 		},
 	}
 	if err := adapter.Prepare(lease, preparation); err != nil {
-		return finish(lock, executionStopped("SYSTEM-CHANGES-PREPARATION", Prepared, true))
+		return finish(lock, nothingChanged(spec, "SYSTEM-CHANGES-PREPARATION", Prepared))
 	}
 	for index, step := range spec.Steps {
+		if cancellation.Requested() {
+			return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, index))
+		}
 		number := index + 1
 		if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: StepStarted, Step: number}); err != nil {
-			return finish(lock, executionStopped("SYSTEM-CHANGES-JOURNAL", StepStarted, true))
+			return finish(lock, nothingChanged(spec, "SYSTEM-CHANGES-JOURNAL", StepStarted))
 		}
-		evidence, err := adapter.Execute(lease, step, spec.Timeouts.Step)
+		evidence, err := adapter.Execute(lease, step, spec.Timeouts.Step, cancellation)
 		if err != nil || !safeIdentity(evidence.Code) || !validSHA256(evidence.SHA256) {
-			return finish(lock, executionStopped("SYSTEM-CHANGES-STEP", StepStarted, false))
+			if cancellation.Requested() {
+				return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, number))
+			}
+			return finish(lock, rollbackChange(lease, adapter, transaction, spec, number, "SYSTEM-CHANGES-STEP", StepStarted))
 		}
 		if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: StepCompleted, Step: number, Evidence: &evidence}); err != nil {
-			return finish(lock, executionStopped("SYSTEM-CHANGES-JOURNAL", StepCompleted, false))
+			return finish(lock, rollbackChange(lease, adapter, transaction, spec, number, "SYSTEM-CHANGES-JOURNAL", StepStarted))
+		}
+		if cancellation.Requested() {
+			return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, number))
 		}
 	}
-	if result := runGate(lease, adapter, spec.Checks, PrePublication, spec.Timeouts.Check); result != nil {
-		return finish(lock, *result)
+	if cancellation.Requested() {
+		return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, len(spec.Steps)))
+	}
+	if !gatePassed(lease, adapter, spec.Checks, PrePublication, spec.Timeouts.Check) {
+		return finish(lock, rollbackChange(lease, adapter, transaction, spec, len(spec.Steps), "SYSTEM-CHANGES-HEALTH", DurableCheckpoint(PrePublication+" health")))
+	}
+	if cancellation.Requested() {
+		return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, len(spec.Steps)))
 	}
 	if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: PrePublicationHealthPassed}); err != nil {
-		return finish(lock, executionStopped("SYSTEM-CHANGES-JOURNAL", PrePublicationHealthPassed, false))
+		return finish(lock, rollbackChange(lease, adapter, transaction, spec, len(spec.Steps), "SYSTEM-CHANGES-JOURNAL", StepCompleted))
 	}
 	if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: StatePublicationStarted}); err != nil {
-		return finish(lock, executionStopped("SYSTEM-CHANGES-JOURNAL", StatePublicationStarted, false))
+		return finish(lock, rollbackChange(lease, adapter, transaction, spec, len(spec.Steps), "SYSTEM-CHANGES-JOURNAL", PrePublicationHealthPassed))
+	}
+	if cancellation.Requested() {
+		return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, len(spec.Steps)))
 	}
 	published, err := transaction.SystemChangesPublish(lease)
 	if err != nil {
-		return finish(lock, executionStopped("SYSTEM-CHANGES-PUBLICATION", StatePublicationStarted, false))
+		return finish(lock, rollbackChange(lease, adapter, transaction, spec, len(spec.Steps), "SYSTEM-CHANGES-PUBLICATION", StatePublicationStarted))
 	}
 	agreement, ok := validatedAgreement(lease, published, binding)
 	if !ok {
-		return finish(lock, executionStopped("SYSTEM-CHANGES-PUBLICATION", StatePublicationStarted, false))
+		return finish(lock, rollbackChange(lease, adapter, transaction, spec, len(spec.Steps), "SYSTEM-CHANGES-PUBLICATION", StatePublicationStarted))
 	}
 	if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: StatePublished}); err != nil {
-		return finish(lock, executionStopped("SYSTEM-CHANGES-JOURNAL", StatePublished, false))
+		return finish(lock, rollbackChange(lease, adapter, transaction, spec, len(spec.Steps), "SYSTEM-CHANGES-JOURNAL", StatePublicationStarted))
 	}
-	if result := runGate(lease, adapter, spec.Checks, PostPublication, spec.Timeouts.Check); result != nil {
-		return finish(lock, *result)
+	if cancellation.Requested() {
+		return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, len(spec.Steps)))
 	}
-	if err := adapter.VerifyAgreement(lease, agreement); err != nil {
-		return finish(lock, executionStopped("SYSTEM-CHANGES-AGREEMENT", StatePublished, false))
+	if !gatePassed(lease, adapter, spec.Checks, PostPublication, spec.Timeouts.Check) {
+		return finish(lock, rollbackChange(lease, adapter, transaction, spec, len(spec.Steps), "SYSTEM-CHANGES-HEALTH", DurableCheckpoint(PostPublication+" health")))
+	}
+	if cancellation.Requested() {
+		return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, len(spec.Steps)))
+	}
+	if err := adapter.VerifyAgreement(lease, agreement, spec.Timeouts.Check); err != nil {
+		return finish(lock, rollbackChange(lease, adapter, transaction, spec, len(spec.Steps), "SYSTEM-CHANGES-AGREEMENT", StatePublished))
 	}
 	if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: PostPublicationHealthPassed}); err != nil {
-		return finish(lock, executionStopped("SYSTEM-CHANGES-JOURNAL", PostPublicationHealthPassed, false))
+		return finish(lock, rollbackChange(lease, adapter, transaction, spec, len(spec.Steps), "SYSTEM-CHANGES-JOURNAL", StatePublished))
+	}
+	if cancellation.Requested() {
+		return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, len(spec.Steps)))
 	}
 	if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: Complete}); err != nil {
-		return finish(lock, executionStopped("SYSTEM-CHANGES-JOURNAL", Complete, false))
+		return finish(lock, rollbackChange(lease, adapter, transaction, spec, len(spec.Steps), "SYSTEM-CHANGES-JOURNAL", PostPublicationHealthPassed))
 	}
 	if err := adapter.Cleanup(lease, spec.Identity); err != nil {
-		return finish(lock, executionStopped("SYSTEM-CHANGES-CLEANUP", Complete, false))
+		return finish(lock, recoveryRequired(spec, "SYSTEM-CHANGES-CLEANUP", Complete))
 	}
-	return finish(lock, ApplyResult{Outcome: Completed, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence()})
+	return finish(lock, ApplyResult{Outcome: Completed, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence()}, spec.OutcomeOwner)
+}
+
+func cancelAndRollback(lease ExecutionLease, adapter TransactionAdapter, transaction stateTransaction, spec ChangeSetSpec, attempted int) ApplyResult {
+	if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: CancellationRequested, Step: attempted}); err != nil {
+		return recoveryRequired(spec, "SYSTEM-CHANGES-CANCELLATION", CancellationRequested)
+	}
+	return rollbackChange(lease, adapter, transaction, spec, attempted, "SYSTEM-CHANGES-CANCELLATION", CancellationRequested)
+}
+
+func rollbackChange(lease ExecutionLease, adapter TransactionAdapter, transaction stateTransaction, spec ChangeSetSpec, attempted int, cause string, checkpoint DurableCheckpoint) ApplyResult {
+	record := func(point DurableCheckpoint, step int, evidence *StepEvidence) bool {
+		return adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: point, Step: step, Evidence: evidence}) == nil
+	}
+	if !record(RollbackStarted, 0, nil) {
+		return recoveryRequired(spec, cause, checkpoint)
+	}
+	data, err := transaction.SystemChangesRestore(lease)
+	var agreement RollbackAgreement
+	if err != nil || json.Unmarshal(data, &agreement) != nil || !validRollbackAgreement(agreement, spec.StartingState) {
+		return recoveryRequired(spec, cause, RollbackStarted)
+	}
+	for index := attempted - 1; index >= 0; index-- {
+		number := index + 1
+		if !record(RollbackStepStarted, number, nil) {
+			return recoveryRequired(spec, cause, RollbackStepStarted)
+		}
+		evidence, reverseErr := adapter.Reverse(lease, spec.Identity, number, spec.Steps[index], spec.Timeouts.Step)
+		if reverseErr != nil || !safeIdentity(evidence.Code) || !validSHA256(evidence.SHA256) || !record(RollbackStepCompleted, number, &evidence) {
+			return recoveryRequired(spec, cause, RollbackStepStarted)
+		}
+	}
+	if err := adapter.VerifyRollback(lease, agreement, spec.Timeouts.Check); err != nil || !record(RollbackVerified, 0, nil) || !record(RolledBack, 0, nil) {
+		return recoveryRequired(spec, cause, RollbackVerified)
+	}
+	if err := adapter.Cleanup(lease, spec.Identity); err != nil {
+		return recoveryRequired(spec, cause, RolledBack)
+	}
+	return ApplyResult{
+		Outcome: RollbackSucceeded, RestoredStatus: spec.StartingState.Status, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(),
+		Finding: &Finding{Code: "SYSTEM-CHANGES-ROLLED-BACK", Owner: spec.OutcomeOwner, Problem: "The Change Set stopped and its exact baseline was restored", Found: string(checkpoint), Required: "the prior proven installation status", WhyStopped: cause, NextAction: "Inspect the restored baseline and create a fresh Plan."},
+	}
+}
+
+func validRollbackAgreement(agreement RollbackAgreement, starting StateLineage) bool {
+	if agreement.Status != starting.Status || agreement.Revision != starting.Revision || agreement.SHA256 != starting.SHA256 {
+		return false
+	}
+	return agreement.Status == NotInstalled && agreement.Release == (ReleaseBinding{}) || agreement.Status == Managed && agreement.Release != (ReleaseBinding{})
+}
+
+func recoveryRequired(spec ChangeSetSpec, cause string, checkpoint DurableCheckpoint) ApplyResult {
+	return ApplyResult{
+		Outcome: RecoveryRequiredOutcome, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(),
+		Finding: &Finding{Code: "SYSTEM-CHANGES-RECOVERY-REQUIRED", Owner: spec.OutcomeOwner, Problem: "Automatic rollback could not prove the prior baseline", Found: string(checkpoint), Required: "one complete verified reverse path", WhyStopped: cause, NextAction: "Use Inspect and the Recovery Required flow."},
+	}
 }
 
 func transactionBinding(lease ExecutionLease, transaction stateTransaction, spec ChangeSetSpec) (StateTransactionBinding, bool) {
@@ -260,23 +359,22 @@ func validatedAgreement(lease ExecutionLease, value any, binding StateTransactio
 	return agreement, agreement.Revision == binding.CandidateRevision && agreement.CandidateSHA256 == binding.CandidateSHA256 && agreement.PublishedStateSHA256 == binding.PreparedStateSHA256 && agreement.PreparedManifestSHA256 == binding.PreparedManifestSHA256 && agreement.ChangeSet == binding.ChangeSet && agreement.Release == binding.CandidateRelease
 }
 
-func runGate(lease ExecutionLease, adapter TransactionAdapter, checks []Check, phase GatePhase, timeout time.Duration) *ApplyResult {
+func gatePassed(lease ExecutionLease, adapter TransactionAdapter, checks []Check, phase GatePhase, timeout time.Duration) bool {
 	for _, check := range checks {
 		if check.Phase != phase {
 			continue
 		}
 		status, err := adapter.Check(lease, check, phase, timeout)
 		if err != nil || check.Classification == Required && status != Healthy || check.Classification == Advisory && (status == Failed || status == Unknown || status == NeedsAttention && !check.Disclosed) {
-			result := executionStopped("SYSTEM-CHANGES-HEALTH", DurableCheckpoint(phase+" health"), false)
-			return &result
+			return false
 		}
 	}
-	return nil
+	return true
 }
 
-func executionStopped(code string, checkpoint DurableCheckpoint, nothingChanged bool) ApplyResult {
+func nothingChanged(spec ChangeSetSpec, code string, checkpoint DurableCheckpoint) ApplyResult {
 	return ApplyResult{
-		Outcome: Incomplete, NothingChanged: nothingChanged, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(),
-		Finding: &Finding{Code: code, Problem: "The Change Set did not reach durable Complete", Found: string(checkpoint), Required: "automatic rollback or durable cleanup in the next System Changes slice", WhyStopped: "success is never claimed before Complete", NextAction: "Inspect the active Change Set."},
+		Outcome: Refused, NothingChanged: true, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(),
+		Finding: &Finding{Code: code, Owner: spec.OutcomeOwner, Problem: "The Change Set stopped before live work", Found: string(checkpoint), Required: "a valid durable transaction boundary", WhyStopped: "no live step started", NextAction: "Inspect incomplete transaction material and create a fresh Plan."},
 	}
 }

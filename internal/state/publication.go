@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"reflect"
 	"sync/atomic"
 )
@@ -30,6 +31,10 @@ type TransactionMaterial struct {
 }
 
 type publicationAuthority struct{ used atomic.Bool }
+
+type rollbackStorage interface {
+	Restore(expectedCurrent, prior []byte) ([]byte, error)
+}
 
 func (TransactionMaterial) MarshalJSON() ([]byte, error) { return nil, errProtectedValueRendering }
 func (TransactionMaterial) String() string               { return "[redacted transaction material]" }
@@ -109,6 +114,43 @@ func (transaction *TransactionMaterial) SystemChangesPublish(lease any) (any, er
 		return nil, finding("STATE-TRANSACTION-LEASE", "Desired State publication", "no authorized System Changes lease", "the one active Apply lease", "State cannot publish outside Apply", "use System Changes Apply")
 	}
 	return transaction.Publish()
+}
+
+type systemChangesRollbackAgreement struct {
+	Status   InstallationStatus `json:"status"`
+	Revision uint64             `json:"revision"`
+	SHA256   string             `json:"sha256"`
+	Release  ReleaseIdentity    `json:"release_identity"`
+}
+
+func (transaction *TransactionMaterial) SystemChangesRestore(lease any) ([]byte, error) {
+	if !validSystemChangesLease(lease) || transaction == nil || transaction.storage == nil {
+		return nil, finding("STATE-ROLLBACK-LEASE", "Desired State rollback", "no authorized transaction", "the one active System Changes lease", "State cannot restore outside automatic rollback", "use System Changes Apply")
+	}
+	current, err := transaction.storage.Read()
+	priorCurrent := len(transaction.priorState) == 0 && errors.Is(err, fs.ErrNotExist) || err == nil && bytes.Equal(current, transaction.priorState)
+	if !priorCurrent {
+		if err != nil || !bytes.Equal(current, transaction.preparedState) {
+			return nil, finding("STATE-ROLLBACK-LINEAGE", "Desired State rollback", "current State is neither the exact prior nor candidate bytes", "one exact transaction-bound State lineage", "automatic rollback cannot guess which State is current", "use the Recovery Required flow")
+		}
+		restorer, ok := transaction.storage.(rollbackStorage)
+		if !ok {
+			return nil, finding("STATE-ROLLBACK-STORAGE", "Desired State rollback", "storage has no rollback capability", "one exact atomic restore operation", "the prior State cannot be restored", "use the Recovery Required flow")
+		}
+		readback, restoreErr := restorer.Restore(transaction.preparedState, transaction.priorState)
+		if restoreErr != nil || !bytes.Equal(readback, transaction.priorState) {
+			return nil, finding("STATE-ROLLBACK-STORAGE", "Desired State rollback", "the prior bytes were not restored exactly", "the transaction-bound prior State", "rollback cannot be reported safe", "use the Recovery Required flow")
+		}
+	}
+	agreement := systemChangesRollbackAgreement{Status: statusForPrior(transaction.priorState), Release: transaction.startingRelease}
+	if len(transaction.priorState) > 0 {
+		document, problem := decode(transaction.priorState)
+		if problem != nil {
+			return nil, problem
+		}
+		agreement.Revision, agreement.SHA256 = document.Revision, document.Checksum
+	}
+	return json.Marshal(agreement)
 }
 
 // PreservePriorState streams the exact prior bytes to System Changes without

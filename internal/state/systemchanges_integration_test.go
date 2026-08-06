@@ -30,6 +30,10 @@ type systemChangesAdapter struct {
 	closeErr     error
 	stepEvidence *systemchanges.StepEvidence
 	lease        systemchanges.ExecutionLease
+	executeCount int
+	failStep     int
+	failReverse  bool
+	agreementErr error
 }
 
 func (a *systemChangesAdapter) Observe() (systemchanges.Observation, error) {
@@ -71,8 +75,12 @@ func (a *systemChangesAdapter) Record(_ systemchanges.ExecutionLease, record sys
 	return nil
 }
 
-func (a *systemChangesAdapter) Execute(_ systemchanges.ExecutionLease, step systemchanges.Step, _ time.Duration) (systemchanges.StepEvidence, error) {
+func (a *systemChangesAdapter) Execute(_ systemchanges.ExecutionLease, step systemchanges.Step, _ time.Duration, _ *systemchanges.Cancellation) (systemchanges.StepEvidence, error) {
+	a.executeCount++
 	a.events = append(a.events, "execute "+string(step.Forward()))
+	if a.executeCount == a.failStep {
+		return systemchanges.StepEvidence{}, errors.New("controlled deterministic step failure")
+	}
 	if a.beforeStep != nil {
 		if err := a.beforeStep(); err != nil {
 			return systemchanges.StepEvidence{}, err
@@ -84,6 +92,19 @@ func (a *systemChangesAdapter) Execute(_ systemchanges.ExecutionLease, step syst
 	return systemchanges.StepEvidence{Code: "step-ok", SHA256: testSHA('a')}, nil
 }
 
+func (a *systemChangesAdapter) Reverse(_ systemchanges.ExecutionLease, _ string, _ int, step systemchanges.Step, _ time.Duration) (systemchanges.StepEvidence, error) {
+	a.events = append(a.events, "reverse "+string(step.Rollback()))
+	if a.failReverse {
+		return systemchanges.StepEvidence{}, errors.New("controlled rollback failure")
+	}
+	return systemchanges.StepEvidence{Code: "rollback-ok", SHA256: testSHA('b')}, nil
+}
+
+func (a *systemChangesAdapter) VerifyRollback(_ systemchanges.ExecutionLease, _ systemchanges.RollbackAgreement, _ time.Duration) error {
+	a.events = append(a.events, "rollback verified")
+	return nil
+}
+
 func (a *systemChangesAdapter) Check(_ systemchanges.ExecutionLease, check systemchanges.Check, phase systemchanges.GatePhase, _ time.Duration) (systemchanges.HealthStatus, error) {
 	a.events = append(a.events, "check "+string(phase)+" "+check.Code)
 	if status := a.statuses[phase]; status != "" && check.Code == "NETWORK-GATE" {
@@ -92,9 +113,9 @@ func (a *systemChangesAdapter) Check(_ systemchanges.ExecutionLease, check syste
 	return check.Status, nil
 }
 
-func (a *systemChangesAdapter) VerifyAgreement(systemchanges.ExecutionLease, systemchanges.Agreement) error {
+func (a *systemChangesAdapter) VerifyAgreement(systemchanges.ExecutionLease, systemchanges.Agreement, time.Duration) error {
 	a.events = append(a.events, "agreement verified")
-	return nil
+	return a.agreementErr
 }
 
 func (a *systemChangesAdapter) Cleanup(systemchanges.ExecutionLease, string) error {
@@ -135,6 +156,119 @@ func TestPreparedCommitDurablyCompletesOneSystemChangesChangeSet(t *testing.T) {
 	}
 }
 
+func TestLiveStepFailureRestoresBaselineInSafeReverseOrder(t *testing.T) {
+	second, err := systemchanges.NewStep(systemchanges.NetworkPolicyModule, systemchanges.ApplyApprovedNetworkPolicy, systemchanges.RestorePriorNetworkPolicy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateModule, changeSet, _, observed := preparedSystemChangeForMutation(t, systemchanges.SettingChangeMutation, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-PREFLIGHT"}, second)
+	adapter := &systemChangesAdapter{observation: observed, failStep: 2}
+	result := systemchanges.New(adapter).Apply(changeSet)
+	if string(result.Outcome) != "Rollback succeeded" || result.RestoredStatus != systemchanges.Managed || result.NothingChanged || !result.PlanConsumed || adapter.closes.Load() != 1 {
+		t.Fatalf("failed Apply() = %+v; lock closes = %d", result, adapter.closes.Load())
+	}
+	wantEvents := "Prepared,Step started 1,execute Activate prepared configuration,Step completed 1,Step started 2,execute Apply approved Network Policy,Rollback started,Rollback step started 2,reverse Restore prior Network Policy,Rollback step completed 2,Rollback step started 1,reverse Restore prior configuration,Rollback step completed 1,rollback verified,Rollback verified,Rolled back,cleanup"
+	if got := strings.Join(adapter.events, ","); got != wantEvents {
+		t.Fatalf("rollback checkpoints = %s, want %s", got, wantEvents)
+	}
+	loaded, loadErr := stateModule.Load(intentManagedRequest())
+	if loadErr != nil || loaded.Snapshot == nil || loaded.Snapshot.Revision != 7 || loaded.Snapshot.LastCompletedChangeSet != "change-0007" {
+		t.Fatalf("restored baseline = (%+v, %v)", loaded, loadErr)
+	}
+}
+
+func TestExplicitCancellationWaitsForSafeCheckpointThenRollsBack(t *testing.T) {
+	cancellation := systemchanges.NewCancellation()
+	second, err := systemchanges.NewStep(systemchanges.NetworkPolicyModule, systemchanges.ApplyApprovedNetworkPolicy, systemchanges.RestorePriorNetworkPolicy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, changeSet, _, observed := preparedSystemChangeForMutation(t, systemchanges.SettingChangeMutation, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-PREFLIGHT"}, second)
+	adapter := &systemChangesAdapter{observation: observed, beforeStep: func() error {
+		cancellation.Request()
+		cancellation.Request()
+		return nil
+	}}
+	result := systemchanges.New(adapter).ApplyWithCancellation(changeSet, cancellation)
+	if result.Outcome != systemchanges.RollbackSucceeded || adapter.executeCount != 1 {
+		t.Fatalf("cancelled Apply() = %+v; executed=%d", result, adapter.executeCount)
+	}
+	want := "Prepared,Step started 1,execute Activate prepared configuration,Step completed 1,Cancellation requested 1,Rollback started,Rollback step started 1,reverse Restore prior configuration,Rollback step completed 1,rollback verified,Rollback verified,Rolled back,cleanup"
+	if got := strings.Join(adapter.events, ","); got != want {
+		t.Fatalf("cancellation checkpoints = %s, want %s", got, want)
+	}
+}
+
+func TestCancellationBeforeApplyChangesNothing(t *testing.T) {
+	_, changeSet, _, observed := preparedSystemChange(t)
+	cancellation := systemchanges.NewCancellation()
+	cancellation.Request()
+	adapter := &systemChangesAdapter{observation: observed}
+	result := systemchanges.New(adapter).ApplyWithCancellation(changeSet, cancellation)
+	if result.Outcome != systemchanges.Refused || !result.NothingChanged || !result.PlanConsumed || adapter.closes.Load() != 0 || len(adapter.events) != 0 {
+		t.Fatalf("pre-Apply cancellation = %+v; closes=%d events=%v", result, adapter.closes.Load(), adapter.events)
+	}
+	if duplicate := systemchanges.New(adapter).Apply(changeSet); duplicate.Finding == nil || duplicate.Finding.Code != "SYSTEM-CHANGES-PLAN-USED" {
+		t.Fatalf("cancelled Plan was reusable: %+v", duplicate)
+	}
+}
+
+func TestPostPublicationFailureRestoresPriorDesiredState(t *testing.T) {
+	stateModule, changeSet, _, observed := preparedSystemChange(t)
+	adapter := &systemChangesAdapter{observation: observed, agreementErr: errors.New("SECRET-MARKER controlled active agreement failure")}
+	result := systemchanges.New(adapter).Apply(changeSet)
+	if result.Outcome != systemchanges.RollbackSucceeded || result.Finding == nil || result.Finding.Owner != systemchanges.ConnectionProfilesModule || strings.Contains(fmt.Sprintf("%+v", result), "SECRET-MARKER") {
+		t.Fatalf("post-publication rollback = %+v", result)
+	}
+	loaded, err := stateModule.Load(intentManagedRequest())
+	if err != nil || loaded.Snapshot == nil || loaded.Snapshot.Revision != 7 || loaded.Snapshot.LastCompletedChangeSet != "change-0007" {
+		t.Fatalf("post-publication restored State = (%+v, %v)", loaded, err)
+	}
+}
+
+func TestPublicationFailureBeforeOrAfterReplacementRestoresPriorDesiredState(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		options systemChangeTestOptions
+	}{
+		{name: "before replacement", options: systemChangeTestOptions{stepTimeout: 30 * time.Second, publishBeforeError: true}},
+		{name: "after replacement", options: systemChangeTestOptions{stepTimeout: 30 * time.Second, publishAfterError: true}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stateModule, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.SettingChangeMutation, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-PREFLIGHT"}, test.options)
+			result := systemchanges.New(&systemChangesAdapter{observation: observed}).Apply(changeSet)
+			if result.Outcome != systemchanges.RollbackSucceeded || result.Finding == nil || result.Finding.WhyStopped != "SYSTEM-CHANGES-PUBLICATION" {
+				t.Fatalf("publication failure rollback = %+v", result)
+			}
+			loaded, err := stateModule.Load(intentManagedRequest())
+			if err != nil || loaded.Snapshot == nil || loaded.Snapshot.Revision != 7 {
+				t.Fatalf("publication failure restored State = (%+v, %v)", loaded, err)
+			}
+		})
+	}
+}
+
+func TestUnprovableReversePathEntersRecoveryRequired(t *testing.T) {
+	_, changeSet, _, observed := preparedSystemChange(t)
+	adapter := &systemChangesAdapter{observation: observed, failStep: 1, failReverse: true}
+	result := systemchanges.New(adapter).Apply(changeSet)
+	if result.Outcome != systemchanges.RecoveryRequiredOutcome || result.NothingChanged || result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-RECOVERY-REQUIRED" || result.Finding.Owner != systemchanges.ConnectionProfilesModule {
+		t.Fatalf("failed reverse path = %+v", result)
+	}
+}
+
+func TestFailedInstallationRestoresProvenNotInstalledBaseline(t *testing.T) {
+	stateModule, changeSet, _, observed := preparedSystemChangeForMutation(t, systemchanges.InstallationMutation, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-PREFLIGHT"})
+	result := systemchanges.New(&systemChangesAdapter{observation: observed, failStep: 1}).Apply(changeSet)
+	if result.Outcome != systemchanges.RollbackSucceeded {
+		t.Fatalf("installation rollback = %+v", result)
+	}
+	loaded, err := stateModule.Load(LoadRequest{Baseline: CleanVPS})
+	if err != nil || loaded.Status != NotInstalled || loaded.Snapshot != nil {
+		t.Fatalf("restored clean baseline = (%+v, %v)", loaded, err)
+	}
+}
+
 func preparedSystemChange(t *testing.T) (Interface, *systemchanges.ChangeSet, *systemchanges.ChangeSet, systemchanges.Observation) {
 	return preparedSystemChangeWithCheck(t, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-PREFLIGHT"})
 }
@@ -143,7 +277,18 @@ func preparedSystemChangeWithCheck(t *testing.T, check systemchanges.Check) (Int
 	return preparedSystemChangeForMutation(t, systemchanges.SettingChangeMutation, check)
 }
 
-func preparedSystemChangeForMutation(t *testing.T, mutation systemchanges.MutationClass, check systemchanges.Check) (Interface, *systemchanges.ChangeSet, *systemchanges.ChangeSet, systemchanges.Observation) {
+func preparedSystemChangeForMutation(t *testing.T, mutation systemchanges.MutationClass, check systemchanges.Check, extraSteps ...systemchanges.Step) (Interface, *systemchanges.ChangeSet, *systemchanges.ChangeSet, systemchanges.Observation) {
+	return preparedSystemChangeWithOptions(t, mutation, check, systemChangeTestOptions{extraSteps: extraSteps, stepTimeout: 30 * time.Second})
+}
+
+type systemChangeTestOptions struct {
+	extraSteps         []systemchanges.Step
+	stepTimeout        time.Duration
+	publishBeforeError bool
+	publishAfterError  bool
+}
+
+func preparedSystemChangeWithOptions(t *testing.T, mutation systemchanges.MutationClass, check systemchanges.Check, options systemChangeTestOptions) (Interface, *systemchanges.ChangeSet, *systemchanges.ChangeSet, systemchanges.Observation) {
 	t.Helper()
 	candidate := completeDesiredState()
 	candidate.Subscription.Token = NewClientAccessValue(testSHA('e'))
@@ -157,7 +302,13 @@ func preparedSystemChangeForMutation(t *testing.T, mutation systemchanges.Mutati
 		}
 		request = preparedRequest(t, loaded, candidate, "change-0001")
 	} else {
-		module, request, _ = managedPrepareRequest(t, candidate)
+		storage := &mutableStateStorage{document: documentFor(t, completeDesiredState()), publishBeforeError: options.publishBeforeError, publishAfterError: options.publishAfterError}
+		module = New(storage)
+		loaded, err := module.Load(intentManagedRequest())
+		if err != nil {
+			t.Fatal(err)
+		}
+		request = preparedRequest(t, loaded, candidate, "change-0008")
 	}
 	prepared, err := module.PrepareCommit(request)
 	if err != nil {
@@ -181,11 +332,12 @@ func preparedSystemChangeForMutation(t *testing.T, mutation systemchanges.Mutati
 	if err != nil {
 		t.Fatal(err)
 	}
+	steps := append([]systemchanges.Step{step}, options.extraSteps...)
 	spec := systemchanges.ChangeSetSpec{
 		Identity: identity, Mutation: mutation, OutcomeOwner: systemchanges.ConnectionProfilesModule,
 		StartingState: starting, TargetStateSHA256: target,
 		Plan:          systemchanges.PlanBinding{Identity: planIdentity, SHA256: planSHA256, VolatileSHA256: testSHA('2')},
-		PreparedState: prepared, Steps: []systemchanges.Step{step},
+		PreparedState: prepared, Steps: steps,
 		Checks: func() []systemchanges.Check {
 			pre, post := check, check
 			pre.Phase, post.Phase = systemchanges.PrePublication, systemchanges.PostPublication
@@ -198,7 +350,7 @@ func preparedSystemChangeForMutation(t *testing.T, mutation systemchanges.Mutati
 			}
 			return checks
 		}(),
-		Timeouts: systemchanges.Timeouts{Step: 30 * time.Second, Check: 60 * time.Second},
+		Timeouts: systemchanges.Timeouts{Step: options.stepTimeout, Check: 60 * time.Second},
 		Disk: systemchanges.DiskRequirement{
 			PreparationBytes: 100, TemporaryBytes: 100, SnapshotBytes: 100,
 			JournalBytes: 100, RollbackBytes: 100, OverheadBytes: 100,
@@ -225,7 +377,7 @@ func TestEveryMutationClassUsesOneSystemChangesLockBeforeLiveWork(t *testing.T) 
 			_, changeSet, _, observed := preparedSystemChangeForMutation(t, mutation, check)
 			adapter := &systemChangesAdapter{observation: observed, prepareErr: errors.New("controlled preparation stop")}
 			result := systemchanges.New(adapter).Apply(changeSet)
-			if result.Outcome != systemchanges.Incomplete || !result.NothingChanged || adapter.closes.Load() != 1 {
+			if result.Outcome != systemchanges.Refused || !result.NothingChanged || adapter.closes.Load() != 1 || result.Finding == nil || result.Finding.Owner != systemchanges.ConnectionProfilesModule {
 				t.Fatalf("%s lock boundary = %+v; closes=%d", mutation, result, adapter.closes.Load())
 			}
 		})
@@ -251,7 +403,7 @@ func TestSuccessfulChangeSetEnforcesFreshRequiredAndAdvisoryGates(t *testing.T) 
 			_, changeSet, _, observed := preparedSystemChangeWithCheck(t, test.check)
 			adapter := &systemChangesAdapter{observation: observed, statuses: map[systemchanges.GatePhase]systemchanges.HealthStatus{systemchanges.PrePublication: test.fresh, systemchanges.PostPublication: test.fresh}}
 			result := systemchanges.New(adapter).Apply(changeSet)
-			if test.wantCompleted && result.Outcome != systemchanges.Completed || !test.wantCompleted && (result.Outcome != systemchanges.Incomplete || result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-HEALTH") {
+			if test.wantCompleted && result.Outcome != systemchanges.Completed || !test.wantCompleted && (result.Outcome != systemchanges.RollbackSucceeded || result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-ROLLED-BACK") {
 				t.Fatalf("fresh gate result = %+v", result)
 			}
 		})
@@ -262,7 +414,7 @@ func TestChangedWorkIsNeverReportedAsNothingChangedWhenLockReleaseIsUncertain(t 
 	_, changeSet, _, observed := preparedSystemChange(t)
 	adapter := &systemChangesAdapter{observation: observed, closeErr: errors.New("unlock failed")}
 	result := systemchanges.New(adapter).Apply(changeSet)
-	if result.Outcome != systemchanges.Incomplete || result.NothingChanged || result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-LOCK-RELEASE" {
+	if result.Outcome != systemchanges.RecoveryRequiredOutcome || result.NothingChanged || result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-LOCK-RELEASE" || result.Finding.Owner != systemchanges.ConnectionProfilesModule {
 		t.Fatalf("post-change lock release = %+v", result)
 	}
 }
@@ -288,7 +440,7 @@ func TestStepCompletionRequiresDurableTypedEvidence(t *testing.T) {
 	_, changeSet, _, observed := preparedSystemChange(t)
 	adapter := &systemChangesAdapter{observation: observed, stepEvidence: &systemchanges.StepEvidence{Code: "step-ok", SHA256: "not-a-checksum"}}
 	result := systemchanges.New(adapter).Apply(changeSet)
-	if result.Outcome != systemchanges.Incomplete || result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-STEP" || strings.Contains(strings.Join(adapter.events, ","), string(systemchanges.StepCompleted)) {
+	if result.Outcome != systemchanges.RollbackSucceeded || result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-ROLLED-BACK" || strings.Contains(strings.Join(adapter.events, ","), string(systemchanges.StepCompleted)) {
 		t.Fatalf("invalid step evidence = %+v; events=%v", result, adapter.events)
 	}
 }
@@ -298,14 +450,59 @@ type controlledUbuntuHost struct {
 	executed   int
 	checks     int
 	agreements int
+	rollbacks  int
+	waitCancel bool
+	delay      time.Duration
+	started    chan struct{}
+	reversed   []systemchanges.OperationKind
 }
 
-func (host *controlledUbuntuHost) CaptureRollback(_ systemchanges.Step, write func(io.Reader) error) error {
-	return write(strings.NewReader(`{"credential":"SECRET-MARKER-rollback"}`))
+func (host *controlledUbuntuHost) CaptureRollback(step systemchanges.Step, write func(io.Reader) error) error {
+	active := filepath.Join(host.root, "run/sbxr/active-subscription.json")
+	prior, err := os.ReadFile(active)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if len(prior) == 0 {
+		prior = []byte(`{"status":"absent"}`)
+	}
+	return write(bytes.NewReader(prior))
 }
 
-func (host *controlledUbuntuHost) Execute(systemchanges.Step, time.Duration) (systemchanges.StepEvidence, error) {
+func (host *controlledUbuntuHost) Execute(_ systemchanges.Step, timeout time.Duration, cancellation *systemchanges.Cancellation) (systemchanges.StepEvidence, error) {
 	host.executed++
+	if host.started != nil {
+		select {
+		case <-host.started:
+		default:
+			close(host.started)
+		}
+	}
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	if host.waitCancel {
+		ticker := time.NewTicker(time.Millisecond)
+		defer ticker.Stop()
+		for {
+			if cancellation.Requested() {
+				return systemchanges.StepEvidence{}, errors.New("cancelled at declared safe checkpoint")
+			}
+			select {
+			case <-ticker.C:
+			case <-deadline.C:
+				return systemchanges.StepEvidence{}, errors.New("step timeout at declared safe checkpoint")
+			}
+		}
+	}
+	if host.delay > 0 {
+		delay := time.NewTimer(host.delay)
+		defer delay.Stop()
+		select {
+		case <-delay.C:
+		case <-deadline.C:
+			return systemchanges.StepEvidence{}, errors.New("step timeout at declared safe checkpoint")
+		}
+	}
 	transaction := filepath.Join(host.root, "var/lib/sbxr/transactions/change-0008")
 	if err := filepath.WalkDir(transaction, func(name string, entry os.DirEntry, err error) error {
 		if err != nil {
@@ -352,7 +549,7 @@ func (host *controlledUbuntuHost) Execute(systemchanges.Step, time.Duration) (sy
 		Checks     []systemchanges.Check                 `json:"health_gates"`
 	}
 	first, _, _ := bytes.Cut(journalBytes, []byte{'\n'})
-	if json.Unmarshal(first, &preparedEntry) != nil || preparedEntry.Checkpoint != "Prepared" || preparedEntry.ChangeSet != "change-0008" || len(preparedEntry.PlanSHA256) != 64 || preparedEntry.State.StartingRevision != 7 || preparedEntry.State.CandidateRevision != 8 || len(preparedEntry.Steps) != 1 || len(preparedEntry.Checks) != 2 || bytes.Contains(journalBytes, []byte("SECRET-MARKER")) || bytes.Contains(manifestBytes, []byte("SECRET-MARKER")) {
+	if json.Unmarshal(first, &preparedEntry) != nil || preparedEntry.Checkpoint != "Prepared" || preparedEntry.ChangeSet != "change-0008" || len(preparedEntry.PlanSHA256) != 64 || preparedEntry.State.StartingRevision != 7 || preparedEntry.State.CandidateRevision != 8 || len(preparedEntry.Steps) != 1 || preparedEntry.Steps[0]["cancellation"] != string(systemchanges.SafeCheckpointCancellation) || len(preparedEntry.Checks) != 2 || bytes.Contains(journalBytes, []byte("SECRET-MARKER")) || bytes.Contains(manifestBytes, []byte("SECRET-MARKER")) {
 		return systemchanges.StepEvidence{}, errors.New("Prepared journal binding is incomplete or unsafe")
 	}
 	preparedConfig, err := os.ReadFile(filepath.Join(transaction, "prepared/subscription.json"))
@@ -367,18 +564,76 @@ func (host *controlledUbuntuHost) Execute(systemchanges.Step, time.Duration) (sy
 	return systemchanges.StepEvidence{Code: "native-valid", SHA256: fmt.Sprintf("%x", digest)}, nil
 }
 
+func (host *controlledUbuntuHost) Reverse(step systemchanges.Step, snapshot io.Reader, _ time.Duration) (systemchanges.StepEvidence, error) {
+	host.reversed = append(host.reversed, step.Rollback())
+	active := filepath.Join(host.root, "run/sbxr/active-subscription.json")
+	prior, err := io.ReadAll(snapshot)
+	if err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	if string(prior) == `{"status":"absent"}` {
+		if err := os.Remove(active); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return systemchanges.StepEvidence{}, err
+		}
+	} else if err := os.WriteFile(active, prior, 0o600); err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	return systemchanges.StepEvidence{Code: "rollback-valid", SHA256: testSHA('b')}, nil
+}
+
+func TestModuleReverseRetryWithSameSnapshotIsIdempotent(t *testing.T) {
+	root := t.TempDir()
+	active := filepath.Join(root, "run/sbxr/active-subscription.json")
+	if err := os.MkdirAll(filepath.Dir(active), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(active, []byte(`{"candidate":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	host := &controlledUbuntuHost{root: root}
+	step, err := systemchanges.NewStep(systemchanges.SubscriptionModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if _, err := host.Reverse(step, strings.NewReader(`{"status":"absent"}`), time.Second); err != nil {
+			t.Fatalf("Reverse retry %d: %v", attempt+1, err)
+		}
+	}
+	if _, err := os.Stat(active); !errors.Is(err, os.ErrNotExist) || len(host.reversed) != 2 {
+		t.Fatalf("idempotent reverse left active=%v reversed=%v", err, host.reversed)
+	}
+}
+
 func (host *controlledUbuntuHost) Check(_ systemchanges.Check, _ systemchanges.GatePhase, _ time.Duration) (systemchanges.HealthStatus, error) {
 	host.checks++
 	return systemchanges.Healthy, nil
 }
 
-func (host *controlledUbuntuHost) VerifyAgreement(agreement systemchanges.Agreement) error {
+func (host *controlledUbuntuHost) VerifyAgreement(agreement systemchanges.Agreement, _ time.Duration) error {
 	host.agreements++
 	if agreement.Revision != 8 || agreement.ChangeSet != "change-0008" || agreement.CandidateSHA256 == "" || agreement.PublishedStateSHA256 == "" || agreement.PreparedManifestSHA256 == "" {
 		return errors.New("incomplete active agreement")
 	}
 	if active, err := os.ReadFile(filepath.Join(host.root, "run/sbxr/active-subscription.json")); err != nil || !json.Valid(active) {
 		return errors.New("active configuration agreement failed")
+	}
+	return nil
+}
+
+func (host *controlledUbuntuHost) VerifyRollback(agreement systemchanges.RollbackAgreement, _ time.Duration) error {
+	host.rollbacks++
+	wantRelease := systemchanges.ReleaseBinding{Repository: testRelease.Repository, Tag: testRelease.Tag, Commit: testRelease.Commit, ReleaseIndexSHA256: testRelease.ReleaseIndexSHA256}
+	if agreement.Status != systemchanges.Managed || agreement.Revision != 7 || agreement.SHA256 == "" || agreement.Release != wantRelease {
+		return errors.New("rollback State agreement failed")
+	}
+	active := filepath.Join(host.root, "run/sbxr/active-subscription.json")
+	if _, err := os.Stat(active); !errors.Is(err, os.ErrNotExist) {
+		return errors.New("rollback active-file agreement failed")
+	}
+	journal, err := os.ReadFile(filepath.Join(host.root, "var/lib/sbxr/transactions/change-0008/journal.jsonl"))
+	if err != nil || !bytes.Contains(journal, []byte(`"checkpoint":"Rollback started"`)) || !bytes.Contains(journal, []byte(`"checkpoint":"Rollback step completed"`)) || bytes.Contains(journal, []byte("SECRET-MARKER")) {
+		return errors.New("rollback journal agreement failed")
 	}
 	return nil
 }
@@ -399,7 +654,7 @@ func TestUbuntuAdapterDurablyProtectsAndCleansSuccessfulTransaction(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := adapter.Execute(systemchanges.ExecutionLease{}, unauthorizedStep, time.Second); err == nil || host.executed != 0 {
+	if _, err := adapter.Execute(systemchanges.ExecutionLease{}, unauthorizedStep, time.Second, nil); err == nil || host.executed != 0 {
 		t.Fatal("Ubuntu Adapter exposed a second mutation path outside Apply")
 	}
 	result := systemchanges.New(adapter).Apply(changeSet)
@@ -408,6 +663,83 @@ func TestUbuntuAdapterDurablyProtectsAndCleansSuccessfulTransaction(t *testing.T
 	}
 	if _, err := os.Stat(filepath.Join(root, "var/lib/sbxr/transactions/change-0008")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("completed transaction material still exists: %v", err)
+	}
+}
+
+func TestUbuntuAdapterKeepsSupervisedWorkAliveUntilExplicitCancellation(t *testing.T) {
+	_, changeSet, _, observed := preparedSystemChange(t)
+	root := t.TempDir()
+	lockPath := filepath.Join(root, "run/sbxr/system-changes.lock")
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lockPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	host := &controlledUbuntuHost{root: root, waitCancel: true, started: started}
+	source := func() (systemchanges.Observation, error) {
+		select {
+		case <-started:
+			active := observed
+			active.Status, active.CurrentChangeSet, active.LastChangeSet = systemchanges.ChangeInProgress, "change-0008", "change-0007"
+			active.Checkpoint, active.TotalSteps, active.Lock, active.RollbackAvailable = systemchanges.PreparedCheckpoint, 1, systemchanges.LockHeld, true
+			return active, nil
+		default:
+			return observed, nil
+		}
+	}
+	adapter := ubuntu.NewAt(root, source, host)
+	cancellation := systemchanges.NewCancellation()
+	result := make(chan systemchanges.ApplyResult, 1)
+	go func() { result <- systemchanges.New(adapter).ApplyWithCancellation(changeSet, cancellation) }()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("supervised step did not start")
+	}
+	inspection := systemchanges.New(adapter).Inspect()
+	if inspection.Status != systemchanges.ChangeInProgress || fmt.Sprint(inspection.AllowedActions) != fmt.Sprint([]systemchanges.Action{systemchanges.InspectAction}) || len(inspection.Findings) != 0 {
+		t.Fatalf("later-session Inspect() = %+v", inspection)
+	}
+	select {
+	case early := <-result:
+		t.Fatalf("presentation loss stopped supervised work: %+v", early)
+	default:
+	}
+	cancellation.Request()
+	select {
+	case cancelled := <-result:
+		if cancelled.Outcome != systemchanges.RollbackSucceeded || host.executed != 1 || host.rollbacks != 1 || fmt.Sprint(host.reversed) != fmt.Sprint([]systemchanges.OperationKind{systemchanges.RestorePriorConfiguration}) {
+			t.Fatalf("controlled cancellation = %+v; host=%+v", cancelled, host)
+		}
+		if _, err := os.Stat(filepath.Join(root, "var/lib/sbxr/transactions/change-0008")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("rolled-back transaction material still exists: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("explicit cancellation did not reach a safe checkpoint")
+	}
+}
+
+func TestUbuntuAdapterBoundsLiveStepAndRollsBackOnTimeout(t *testing.T) {
+	_, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.SettingChangeMutation, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-PREFLIGHT"}, systemChangeTestOptions{stepTimeout: 10 * time.Millisecond})
+	root := t.TempDir()
+	lockPath := filepath.Join(root, "run/sbxr/system-changes.lock")
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lockPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	host := &controlledUbuntuHost{root: root, delay: time.Second}
+	adapter := ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return observed, nil }, host)
+	started := time.Now()
+	result := systemchanges.New(adapter).Apply(changeSet)
+	if result.Outcome != systemchanges.RollbackSucceeded || time.Since(started) >= time.Second || host.rollbacks != 1 {
+		t.Fatalf("bounded timeout rollback = %+v after %s; rollbacks=%d", result, time.Since(started), host.rollbacks)
+	}
+	if _, err := os.Stat(filepath.Join(root, "var/lib/sbxr/transactions/change-0008")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("timed-out transaction material still exists: %v", err)
 	}
 }
 
@@ -441,7 +773,7 @@ func TestUbuntuAdapterRefusesUnsafeTransactionPathsBeforeLiveWork(t *testing.T) 
 			host := &controlledUbuntuHost{root: root}
 			adapter := ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return observed, nil }, host)
 			result := systemchanges.New(adapter).Apply(changeSet)
-			if result.Outcome != systemchanges.Incomplete || !result.NothingChanged || host.executed != 0 || result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-PREPARATION" {
+			if result.Outcome != systemchanges.Refused || !result.NothingChanged || host.executed != 0 || result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-PREPARATION" || result.Finding.Owner != systemchanges.ConnectionProfilesModule {
 				t.Fatalf("unsafe path result = %+v; executed=%d", result, host.executed)
 			}
 		})

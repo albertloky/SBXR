@@ -14,6 +14,9 @@ This record covers the System Changes Module only. It is not Release Qualificati
 - `SYSTEM-CHANGES-GATES`: `go test ./internal/state -run TestSuccessfulChangeSetEnforcesFreshRequiredAndAdvisoryGates`
 - `SYSTEM-CHANGES-SNAPSHOT-JOURNAL`: `go test ./internal/state -run TestUbuntuAdapterDurablyProtectsAndCleansSuccessfulTransaction`
 - `SYSTEM-CHANGES-TRANSACTION-PATH`: `go test ./internal/state -run TestUbuntuAdapterRefusesUnsafeTransactionPathsBeforeLiveWork`
+- `SYSTEM-CHANGES-ROLLBACK`: `go test ./internal/state -run 'Test(LiveStepFailureRestoresBaselineInSafeReverseOrder|ExplicitCancellationWaitsForSafeCheckpointThenRollsBack|PostPublicationFailureRestoresPriorDesiredState|PublicationFailureBeforeOrAfterReplacementRestoresPriorDesiredState|UnprovableReversePathEntersRecoveryRequired|FailedInstallationRestoresProvenNotInstalledBaseline)'`
+- `SYSTEM-CHANGES-SUPERVISION`: `go test ./internal/state -run 'TestUbuntuAdapter(KeepsSupervisedWorkAliveUntilExplicitCancellation|BoundsLiveStepAndRollsBackOnTimeout)'`
+- `SYSTEM-CHANGES-STATE-ROLLBACK`: `go test ./internal/state/adapter/filesystem -run TestAtomicRollbackRestoresManagedOrNotInstalledBaseline`
 - `SYSTEM-CHANGES-REPOSITORY`: `go test ./...`
 
 ## SC-01 procedure
@@ -32,14 +35,22 @@ This record covers the System Changes Module only. It is not Release Qualificati
 4. Confirm the journal reaches `Prepared`, each `Step started` and `Step completed` with typed durable evidence, `Pre-publication health passed`, `Desired State publication started`, `Desired State published`, `Post-publication health passed`, and `Complete` in that order. Required results other than Healthy and Advisory Failed or Unknown do not pass; reviewed Advisory Needs attention may pass. Only `Server-side` checks enter these gates; `Client device` results cannot hold or satisfy them.
 5. Confirm fresh post-publication agreement covers State readback, prepared manifests, active files, service effects, and owning-Module checks. Only after durable `Complete`, permanently delete the completed journal and Rollback Snapshot; no transaction history remains.
 
+## SC-03 procedure
+
+1. Fail each attempted live step and each pre-`Complete` health, publication, and agreement boundary. Confirm automatic rollback starts immediately, restores the exact prior Desired State, runs every attempted Module-supplied reverse operation in descending step order, and cannot be cancelled.
+2. Request explicit cancellation before Apply and confirm nothing changes. Request it during a live step and confirm the worker records `Cancellation requested` only after that step reaches its declared safe checkpoint, then records `Rollback started`, each `Rollback step started` and `Rollback step completed`, `Rollback verified`, and `Rolled back`.
+3. Drop the presentation session without requesting cancellation. Confirm supervised Apply remains active; a later `Inspect` shows only secret-safe progress and `Inspect` as the allowed action, without joining, duplicating, or mutating the worker.
+4. Force publication failure both before and after atomic replacement. Confirm State resolves the exact prior or candidate bytes without guessing, then restores Managed revision `N` or the proven Not installed baseline before host rollback is verified.
+5. Bound a controlled native step and force its timeout. Confirm deterministic stop, safe reverse work, permanent cleanup after `Rolled back`, and only the outcomes nothing changed, `Rollback succeeded`, or `Recovery Required`. Inject secret-bearing errors and confirm results expose only stable code, owner, safe checkpoint, cause, and next action.
+
 ## Current status
 
 | Stage | Status | Evidence |
 |---|---|---|
-| Module Verification | Passed | SC-01 checks cover four-state inspection and safe admission. `SYSTEM-CHANGES-SUCCESS` and `SYSTEM-CHANGES-GATES` cover SC-02's exact success checkpoints, old-State-before-publication rule, one publication, fresh Required and Advisory gates, active agreement, one-use authority, cleanup, and secret-safe result. |
+| Module Verification | Passed | SC-01 checks cover four-state inspection and safe admission. SC-02 checks cover durable success. `SYSTEM-CHANGES-ROLLBACK` covers SC-03 cancellation, deterministic failure, reverse order, publication ambiguity, Managed and Not installed restoration, typed outcomes, and secret-safe findings. |
 | Seam Verification — controlled kernel lock | Passed | `SYSTEM-CHANGES-LOCK` uses a real kernel file lock, proves held-lock refusal, process-exit release, exact protected lock-file identity, and read-only host observation. |
-| Seam Verification — controlled transaction filesystem | Passed | `SYSTEM-CHANGES-SNAPSHOT-JOURNAL` and `SYSTEM-CHANGES-TRANSACTION-PATH` use real protected files, flushes, readback, atomic rename, exact snapshot and journal bindings, native JSON validation, mode and link refusal, ordered checkpoints, durable `Complete`, and permanent transaction-only cleanup. |
+| Seam Verification — controlled transaction filesystem | Passed | SC-02 filesystem checks cover protected durable success. `SYSTEM-CHANGES-SUPERVISION` and `SYSTEM-CHANGES-STATE-ROLLBACK` use real timers and files to prove explicit cancellation, presentation-loss continuation, later-session inspection, timeout, reverse execution, atomic State restoration, `Rolled back`, and transaction-only cleanup. |
 | Seam Verification — production Ubuntu | Pending | Run the same Adapter checks on the assigned controlled Ubuntu environment; this local run does not claim Ubuntu/systemd acceptance. |
-| Integrated Verification | Pending — integrated release | SC-03 through SC-09, all-Module wiring, rollback, restart recovery, watchdog work, and Complete removal do not exist yet. SC-02's controlled success path does not satisfy integrated verification. |
+| Integrated Verification | Pending — integrated release | SC-04 through SC-09, all-Module wiring, restart recovery, watchdog work, and Complete removal do not exist yet. Controlled SC-03 rollback does not satisfy integrated verification. |
 | Codex Live Acceptance | Pending — approved Acceptance Run | No Acceptance VPS was used. |
 | Owner Acceptance | Pending — first v1 release | Albert's maintained workflow is outside this Module Verification. |
