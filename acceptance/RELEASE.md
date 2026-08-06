@@ -12,10 +12,10 @@ Until the integrated executable and those owning Modules exist, record `Pending 
 
 Through the complete `sbxr` executable, verify a reviewed Network Policy result binds the installation or repair Plan; changed observations make it stale; System Changes applies only the approved `inet sbxr` table; the SSH watchdog restores prior rules on failure; temporary TCP 80 is exact and removed on every outcome; disabled Connection Profiles lose exposure; and rollback restores the prior proven policy.
 
-Until System Changes and the integrated executable exist, record `Pending — integrated release`. Module and controlled Adapter checks in `internal/networkpolicy/ACCEPTANCE.md` cannot satisfy this row.
+System Changes and the controlled Adapter checks now exist, but until the complete executable exercises them with all owning Modules, record `Pending — integrated release`. Module and controlled Adapter checks in `internal/networkpolicy/ACCEPTANCE.md` cannot satisfy this row.
 
 ## `RELEASE-SYSTEM-CHANGES` — Integrated Verification — Codex
 
 Through the complete `sbxr` executable, verify every mutation enters one `Apply` path, holds one installation-wide kernel lock, durably prepares and resolves one Change Set, publishes Desired State only at its declared checkpoint, rolls back ordinary unfinished work, resumes only irreversible Complete removal, and leaves no transaction-scoped rollback material after durable `Complete`.
 
-Until SC-01 through SC-09 and the integrated executable exist, record `Pending — integrated release`. Module and controlled Adapter checks in `internal/systemchanges/ACCEPTANCE.md` cannot satisfy this row.
+SC-01 through SC-09 now exist at Module level, but until the complete executable exercises them with all owning Modules, record `Pending — integrated release`. Module and controlled Adapter checks in `internal/systemchanges/ACCEPTANCE.md` cannot satisfy this row.

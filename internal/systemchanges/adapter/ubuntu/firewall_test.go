@@ -1,6 +1,7 @@
 package ubuntu
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -177,7 +178,11 @@ func TestProductionFirewallSeam(t *testing.T) {
 	if err := firewall.CaptureRollback(step, func(source io.Reader) error { var readErr error; prior, readErr = io.ReadAll(source); return readErr }); err != nil {
 		t.Fatal(err)
 	}
-	rollbackPath := filepath.Join(t.TempDir(), "firewall.rollback")
+	rollbackDir, err := os.MkdirTemp("/var/tmp", "sbxr-firewall-seam-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rollbackPath := filepath.Join(rollbackDir, "firewall.rollback")
 	if err := os.WriteFile(rollbackPath, prior, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -189,6 +194,32 @@ func TestProductionFirewallSeam(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := firewall.Reverse(step, strings.NewReader(string(prior)), 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(rollbackDir); err != nil {
+		t.Fatal(err)
+	}
+
+	failureDir, err := os.MkdirTemp("/var/tmp", "sbxr-firewall-seam-failure-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	failurePath := filepath.Join(failureDir, "firewall.rollback")
+	if err := os.WriteFile(failurePath, prior, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cancellation := systemchanges.NewCancellation()
+	cancellation.Request()
+	if _, err := firewall.Execute(step, failurePath, 10*time.Second, cancellation); err == nil {
+		t.Fatal("controlled cancellation after firewall mutation succeeded")
+	}
+	if snapshot, err := os.ReadFile(failurePath); err != nil || !bytes.Equal(snapshot, prior) {
+		t.Fatalf("armed watchdog rollback snapshot unavailable after failure: %v", err)
+	}
+	if _, err := firewall.Reverse(step, strings.NewReader(string(prior)), 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(failureDir); err != nil {
 		t.Fatal(err)
 	}
 	if output, err := exec.Command("nft", "list", "table", "inet", "sbxr_test_unrelated").CombinedOutput(); err != nil {
