@@ -263,6 +263,7 @@ func TestProductionUbuntuSeam(t *testing.T) {
 	if _, err := exec.LookPath("nft"); err != nil {
 		t.Fatal("production Ubuntu seam requires nft")
 	}
+	t.Setenv("SSH_CONNECTION", "198.51.100.2 12345 192.0.2.10 2222")
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -285,12 +286,21 @@ func TestProductionUbuntuSeam(t *testing.T) {
 	foundSocket := false
 	for _, found := range observed.Listeners {
 		if found.Address == "127.0.0.1" && found.Port == port && found.Protocol == networkpolicy.TCP {
+			if found.Process == "" {
+				t.Fatal("temporary production socket omitted its process identity")
+			}
 			foundSocket = true
 			break
 		}
 	}
 	if !foundSocket {
 		t.Fatalf("temporary production socket 127.0.0.1:%d/TCP was not observed", port)
+	}
+	if observed.SSH.DetectedPort != 2222 || observed.SSH.ServerAddress != "192.0.2.10" || len(observed.SSH.CurrentSessions) == 0 {
+		t.Fatalf("controlled production SSH-session facts = %+v", observed.SSH)
+	}
+	if !observed.Outbound.DNS || !observed.Outbound.GitHubHTTPS || !observed.Outbound.GitHubAttestationHTTPS || !observed.Outbound.CloudflareHTTPS || !observed.Outbound.ACMEHTTPS || !observed.Outbound.CertificateEndpointsHTTPS {
+		t.Fatalf("production DNS/verified HTTPS facts = %+v", observed.Outbound)
 	}
 	result := networkpolicy.New(candidateAdapter{}).Evaluate(networkpolicy.Request{Intent: productionCandidateIntent(), Stage: networkpolicy.PostApproval})
 	if result.Policy.Nftables == "" {
