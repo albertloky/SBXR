@@ -17,10 +17,12 @@ Pass when the `Load` Interface proves clean absence, valid Managed and Change in
 Run:
 
 ```sh
-go test ./internal/state -run '^TestPrepareCommit'
+go test -v ./internal/state -run '^(TestPrepareCommit|TestPrepared|TestFirstApply|TestEveryApply|TestEveryApproved|TestPreparation|TestReviewedPlan)'
 ```
 
-Pass when the candidate-validation portion of `PrepareCommit` requires an exact Release Identity, invokes every owning Module's typed validator, and refuses incomplete candidates, missing or refusing validators, unrelated service values, and invalid manifests before mutation. The complete fixture must cover every typed section. Unique secret markers must prove that general serialization cannot render protected values, each enabled service receives only its required values, and a service with no enabled Connection Profile receives no runtime copy.
+Pass when a fresh installation prepares revision `1`, every Managed revision `N` prepares exactly `N+1`, and preparation binds the exact loaded bytes and checksum, candidate checksum, six managed-input checksums, approved Plan identity and checksum, prepared service manifests, and Change Set. The first Apply attempt must consume the opaque authority. A changed input, observation, checksum, starting State, repeated Plan, or second use must require a fresh Load, Plan, review, and preparation. Refusal, failure, cancellation, rollback, retry, and success must never advance State during preparation and must never permit replay. Change in progress must expose only the last committed revision and typed current operation and must refuse another preparation.
+
+The same check must prove that prior Desired State bytes pass through opaquely for later rollback, all prepared bytes are byte-stable, protected values cannot be rendered, and setting, unchanged-state repair, credential rotation, software migration, and automatic certificate renewal all obey the same `N` to `N+1` rule. Preparation must perform no publication or mutation; durable transaction publication, the global journal, Rollback Snapshot ownership, and host rollback belong to System Changes.
 
 The exact ownership contract is:
 
@@ -33,7 +35,7 @@ The exact ownership contract is:
 | Certificate policy, identities, and serving pointers | Certificate Lifecycle |
 | Network Policy inputs | Network Policy |
 
-State owns structural and cross-section validation, typed persistence, protected serialization, and secret-safe refusal. It invokes the owning validators but does not replace them, test or rotate credentials, expose values through general rendering, or adopt Observed State. During those calls only, Connection Profiles receives readers for its Client Access Values and Infrastructure Secrets, Subscription Publication receives a Client Access Value reader, and Cloudflare Tunnel receives an Infrastructure Secret reader; readers cannot be upgraded to another secret category and are revoked after return or panic. Modules without owned secrets receive no reader. `xray.service` and `sing-box.service` copies belong to Connection Profiles; `cloudflared.service` belongs to Cloudflare Tunnel; `sbxr-subscription.service` belongs to Subscription Serving. Each private manifest binds the owning Module, candidate revision, later Change Set, exact serialized bytes, owner `root`, service group, directory mode `0750`, file mode `0640`, and SHA-256. Prepared bytes and their full checksum-bearing manifests remain opaque and non-renderable until issue #65 introduces their one-use System Changes handoff.
+State owns structural and cross-section validation, typed persistence, protected serialization, and secret-safe refusal. It invokes the owning validators but does not replace them, test or rotate credentials, expose values through general rendering, or adopt Observed State. During those calls only, Connection Profiles receives readers for its Client Access Values and Infrastructure Secrets, Subscription Publication receives a Client Access Value reader, and Cloudflare Tunnel receives an Infrastructure Secret reader; readers cannot be upgraded to another secret category and are revoked after return or panic. Modules without owned secrets receive no reader. `xray.service` and `sing-box.service` copies belong to Connection Profiles; `cloudflared.service` belongs to Cloudflare Tunnel; `sbxr-subscription.service` belongs to Subscription Serving. Each private manifest binds the owning Module, candidate revision, Change Set, exact serialized bytes, owner `root`, service group, directory mode `0750`, file mode `0640`, and SHA-256. Prepared bytes and their full checksum-bearing manifests remain opaque and non-renderable through the one-use System Changes handoff.
 
 ## `STATE-ARCHITECTURE` — Module Verification — Codex
 

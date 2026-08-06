@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"reflect"
 	"strings"
+	"sync/atomic"
 )
 
 const supportedSchema = 1
@@ -67,10 +68,40 @@ type Snapshot struct {
 	DesiredState           DesiredState
 }
 
+// CurrentOperation is the only mutation detail exposed during Change in progress.
+type CurrentOperation struct {
+	ChangeSet ChangeSetIdentity
+}
+
 // Result is the safe caller-facing outcome of Load.
 type Result struct {
-	Status   InstallationStatus
-	Snapshot *Snapshot
+	Status           InstallationStatus
+	Snapshot         *Snapshot
+	CurrentOperation *CurrentOperation
+	loaded           *loadedState
+}
+
+func (result Result) String() string {
+	revision := uint64(0)
+	if result.Snapshot != nil {
+		revision = result.Snapshot.Revision
+	}
+	operation := ChangeSetIdentity("")
+	if result.CurrentOperation != nil {
+		operation = result.CurrentOperation.ChangeSet
+	}
+	return fmt.Sprintf("State result: status=%s revision=%d current_operation=%s", result.Status, revision, operation)
+}
+
+func (result Result) GoString() string { return result.String() }
+
+type loadedState struct {
+	owner           *implementation
+	status          InstallationStatus
+	revision        uint64
+	payloadChecksum string
+	bytes           []byte
+	used            atomic.Bool
 }
 
 // Finding is a typed, secret-safe refusal suitable for a Correction Flow.
@@ -95,7 +126,9 @@ type Storage interface {
 // Interface is the caller-facing State Module boundary.
 type Interface struct{ implementation *implementation }
 
-type implementation struct{ storage Storage }
+type implementation struct {
+	storage Storage
+}
 
 // New wires Load to its one storage boundary.
 func New(storage Storage) Interface {
@@ -112,7 +145,7 @@ func (i Interface) Load(request LoadRequest) (Result, error) {
 	data, err := i.implementation.storage.Read()
 	if errors.Is(err, fs.ErrNotExist) {
 		if request.Baseline == CleanVPS && request.Lineage == nil {
-			return Result{Status: NotInstalled}, nil
+			return Result{Status: NotInstalled, loaded: &loadedState{owner: i.implementation, status: NotInstalled}}, nil
 		}
 		return refuse("STATE-LINEAGE-MISSING", "Desired State lineage", "state.json is absent beside managed or claimed lineage", "absence only with a proven Clean VPS baseline", "SBXR cannot prove a Not installed or Managed baseline", "reimage to a Clean VPS or use the Recovery Required flow")
 	}
@@ -148,15 +181,17 @@ func (i Interface) Load(request LoadRequest) (Result, error) {
 	}
 
 	status := Managed
+	var operation *CurrentOperation
 	if request.Lineage.ActiveChangeSet != "" {
 		status = ChangeInProgress
+		operation = &CurrentOperation{ChangeSet: request.Lineage.ActiveChangeSet}
 	}
 	return Result{Status: status, Snapshot: &Snapshot{
 		Revision:               document.Revision,
 		ReleaseIdentity:        document.ReleaseIdentity,
 		LastCompletedChangeSet: document.LastCompletedChangeSet,
 		DesiredState:           document.desiredState,
-	}}, nil
+	}, CurrentOperation: operation, loaded: &loadedState{owner: i.implementation, status: status, revision: document.Revision, payloadChecksum: document.Checksum, bytes: append([]byte(nil), data...)}}, nil
 }
 
 type persistedDocument struct {

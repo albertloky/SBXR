@@ -13,19 +13,12 @@ import (
 
 func TestPrepareCommitValidatesCandidateAndSerializesLeastPrivilegeMaterial(t *testing.T) {
 	candidate := completeDesiredState()
-	validators := &validatingSeams{want: candidate, calls: map[string]int{}}
-	preparation, err := New(intentStorage{}).PrepareCommit(PrepareRequest{
-		CandidateRevision:        8,
-		CandidateReleaseIdentity: testRelease,
-		ChangeSet:                "change-0008",
-		Candidate:                candidate,
-		SemanticValidators:       validatorsFor(validators),
-		ServiceMaterials:         serviceMaterialsFor(candidate),
-	})
+	stateModule, request, validators := managedPrepareRequest(t, candidate)
+	preparation, err := stateModule.PrepareCommit(request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if preparation.ReleaseIdentity != testRelease || !reflect.DeepEqual(preparation.Candidate, candidate) {
+	if preparation.releaseIdentity != testRelease || !reflect.DeepEqual(preparation.candidate, candidate) {
 		t.Fatal("PrepareCommit did not preserve the complete candidate")
 	}
 	for _, module := range []string{"connectionprofiles", "subscriptionpublication", "cloudflaretunnel", "certificatelifecycle", "networkpolicy", "softwarelifecycle"} {
@@ -46,10 +39,10 @@ func TestPrepareCommitValidatesCandidateAndSerializesLeastPrivilegeMaterial(t *t
 		mustHave    []string
 		mustNotHave []string
 	}{
-		{copy: preparation.ServiceCopies.Xray, service: "xray.service", module: "connectionprofiles", group: "xray", want: serviceMaterialsFor(candidate).Xray, mustHave: []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}, mustNotHave: []string{"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "xhttp.example.com", "ws.example.com", "HYSTERIA2-SECRET-MARKER-00000001", "CLOUDFLARE-MANAGEMENT-SECRET-MARKER", "CLOUDFLARE-RUN-SECRET-MARKER-00001", "6666666666666666666666666666666666666666666666666666666666666666"}},
-		{copy: preparation.ServiceCopies.SingBox, service: "sing-box.service", module: "connectionprofiles", group: "sing-box", want: serviceMaterialsFor(candidate).SingBox, mustHave: []string{"HYSTERIA2-SECRET-MARKER-00000001", "TUIC-PASSWORD-SECRET-MARKER-00001", "ANYTLS-PASSWORD-SECRET-MARKER-01", "/var/lib/sbxr/certificates/domain/current"}, mustNotHave: []string{"domain-certificate", "11111111-1111-4111-8111-111111111111", "CLOUDFLARE-MANAGEMENT-SECRET-MARKER", "CLOUDFLARE-RUN-SECRET-MARKER-00001", "6666666666666666666666666666666666666666666666666666666666666666"}},
-		{copy: preparation.ServiceCopies.Cloudflared, service: "cloudflared.service", module: "cloudflaretunnel", group: "cloudflared", want: serviceMaterialsFor(candidate).Cloudflared, mustHave: []string{"CLOUDFLARE-RUN-SECRET-MARKER-00001"}, mustNotHave: []string{"CLOUDFLARE-MANAGEMENT-SECRET-MARKER", "11111111-1111-4111-8111-111111111111", "HYSTERIA2-SECRET-MARKER-00000001", "6666666666666666666666666666666666666666666666666666666666666666"}},
-		{copy: preparation.ServiceCopies.Subscription, service: "sbxr-subscription.service", module: "subscriptionserving", group: "sbxr-subscription", want: serviceMaterialsFor(candidate).Subscription, mustHave: []string{"6666666666666666666666666666666666666666666666666666666666666666", "/var/lib/sbxr/certificates/ip/current"}, mustNotHave: []string{"ip-certificate", "CLOUDFLARE-MANAGEMENT-SECRET-MARKER", "CLOUDFLARE-RUN-SECRET-MARKER-00001", "11111111-1111-4111-8111-111111111111", "HYSTERIA2-SECRET-MARKER-00000001"}},
+		{copy: preparation.serviceCopies.Xray, service: "xray.service", module: "connectionprofiles", group: "xray", want: serviceMaterialsFor(candidate).Xray, mustHave: []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}, mustNotHave: []string{"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "xhttp.example.com", "ws.example.com", "HYSTERIA2-SECRET-MARKER-00000001", "CLOUDFLARE-MANAGEMENT-SECRET-MARKER", "CLOUDFLARE-RUN-SECRET-MARKER-00001", "6666666666666666666666666666666666666666666666666666666666666666"}},
+		{copy: preparation.serviceCopies.SingBox, service: "sing-box.service", module: "connectionprofiles", group: "sing-box", want: serviceMaterialsFor(candidate).SingBox, mustHave: []string{"HYSTERIA2-SECRET-MARKER-00000001", "TUIC-PASSWORD-SECRET-MARKER-00001", "ANYTLS-PASSWORD-SECRET-MARKER-01", "/var/lib/sbxr/certificates/domain/current"}, mustNotHave: []string{"domain-certificate", "11111111-1111-4111-8111-111111111111", "CLOUDFLARE-MANAGEMENT-SECRET-MARKER", "CLOUDFLARE-RUN-SECRET-MARKER-00001", "6666666666666666666666666666666666666666666666666666666666666666"}},
+		{copy: preparation.serviceCopies.Cloudflared, service: "cloudflared.service", module: "cloudflaretunnel", group: "cloudflared", want: serviceMaterialsFor(candidate).Cloudflared, mustHave: []string{"CLOUDFLARE-RUN-SECRET-MARKER-00001"}, mustNotHave: []string{"CLOUDFLARE-MANAGEMENT-SECRET-MARKER", "11111111-1111-4111-8111-111111111111", "HYSTERIA2-SECRET-MARKER-00000001", "6666666666666666666666666666666666666666666666666666666666666666"}},
+		{copy: preparation.serviceCopies.Subscription, service: "sbxr-subscription.service", module: "subscriptionserving", group: "sbxr-subscription", want: serviceMaterialsFor(candidate).Subscription, mustHave: []string{"6666666666666666666666666666666666666666666666666666666666666666", "/var/lib/sbxr/certificates/ip/current"}, mustNotHave: []string{"ip-certificate", "CLOUDFLARE-MANAGEMENT-SECRET-MARKER", "CLOUDFLARE-RUN-SECRET-MARKER-00001", "11111111-1111-4111-8111-111111111111", "HYSTERIA2-SECRET-MARKER-00000001"}},
 	}
 
 	for _, check := range checks {
@@ -89,13 +82,12 @@ func TestPrepareCommitValidatesCandidateAndSerializesLeastPrivilegeMaterial(t *t
 
 func TestPreparedServiceCopiesCannotBeRendered(t *testing.T) {
 	candidate := completeDesiredState()
-	validator := &validatingSeams{want: candidate, calls: map[string]int{}}
-	request := PrepareRequest{CandidateRevision: 8, CandidateReleaseIdentity: testRelease, ChangeSet: "change-0008", Candidate: candidate, SemanticValidators: validatorsFor(validator), ServiceMaterials: serviceMaterialsFor(candidate)}
-	preparation, err := New(intentStorage{}).PrepareCommit(request)
+	stateModule, request, _ := managedPrepareRequest(t, candidate)
+	preparation, err := stateModule.PrepareCommit(request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, copy := range []*PreparedServiceCopy{preparation.ServiceCopies.Xray, preparation.ServiceCopies.SingBox, preparation.ServiceCopies.Cloudflared, preparation.ServiceCopies.Subscription} {
+	for _, copy := range []*PreparedServiceCopy{preparation.serviceCopies.Xray, preparation.serviceCopies.SingBox, preparation.serviceCopies.Cloudflared, preparation.serviceCopies.Subscription} {
 		if copy == nil {
 			t.Fatal("required service copy was omitted")
 		}
@@ -124,19 +116,18 @@ func TestPrepareCommitRefusesInvalidCandidateFactsAndMaterial(t *testing.T) {
 			r.ServiceMaterials.Xray.VLESSRealityVision.UUID = r.Candidate.ConnectionProfiles.Hysteria2.Password
 		}, code: "STATE-SERVICE-MATERIAL-UNRELATED"},
 		{name: "omitted service material", change: func(r *PrepareRequest) { r.ServiceMaterials.Cloudflared = nil }, code: "STATE-SERVICE-MATERIAL-UNRELATED"},
-		{name: "missing candidate revision", change: func(r *PrepareRequest) { r.CandidateRevision = 0 }, code: "STATE-SERVICE-MANIFEST"},
+		{name: "missing reviewed inputs", change: func(r *PrepareRequest) { r.ReviewedInputs = ReviewedInputs{} }, code: "STATE-REVIEW-BINDING"},
 		{name: "missing Release Identity", change: func(r *PrepareRequest) { r.CandidateReleaseIdentity = ReleaseIdentity{} }, code: "STATE-SERVICE-MANIFEST"},
 		{name: "invalid later Change Set", change: func(r *PrepareRequest) { r.ChangeSet = "invalid\nchange" }, code: "STATE-SERVICE-MANIFEST"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			validator := &validatingSeams{want: valid, calls: map[string]int{}}
-			request := PrepareRequest{CandidateRevision: 8, CandidateReleaseIdentity: testRelease, ChangeSet: "change-0008", Candidate: valid, SemanticValidators: validatorsFor(validator), ServiceMaterials: serviceMaterialsFor(valid)}
+			stateModule, request, _ := managedPrepareRequest(t, valid)
 			tt.change(&request)
-			preparation, err := New(intentStorage{}).PrepareCommit(request)
+			preparation, err := stateModule.PrepareCommit(request)
 			var finding *Finding
-			if !errors.As(err, &finding) || finding.Code != tt.code || !reflect.DeepEqual(preparation, Preparation{}) {
+			if !errors.As(err, &finding) || finding.Code != tt.code || preparation != nil {
 				t.Fatalf("PrepareCommit() = (%+v, %#v), want %s refusal", preparation, err, tt.code)
 			}
 			for _, marker := range []string{"CLOUDFLARE-MANAGEMENT-SECRET-MARKER", "HYSTERIA2-SECRET-MARKER-00000001", "6666666666666666666666666666666666666666666666666666666666666666"} {
@@ -170,8 +161,9 @@ func TestPrepareCommitRequiresOwningSemanticValidationForEverySection(t *testing
 			candidate := valid
 			tt.change(&candidate)
 			validator := &validatingSeams{want: valid, calls: map[string]int{}}
-			request := PrepareRequest{CandidateRevision: 8, CandidateReleaseIdentity: testRelease, ChangeSet: "change-0008", Candidate: candidate, SemanticValidators: validatorsFor(validator), ServiceMaterials: serviceMaterialsFor(candidate)}
-			_, err := New(intentStorage{}).PrepareCommit(request)
+			stateModule, request, _ := managedPrepareRequest(t, candidate)
+			request.SemanticValidators = validatorsFor(validator)
+			_, err := stateModule.PrepareCommit(request)
 			var finding *Finding
 			if !errors.As(err, &finding) || finding.Code != "STATE-CANDIDATE-SEMANTIC" {
 				t.Fatalf("PrepareCommit() error = %#v, want STATE-CANDIDATE-SEMANTIC", err)
@@ -183,8 +175,9 @@ func TestPrepareCommitRequiresOwningSemanticValidationForEverySection(t *testing
 func TestPrepareCommitRevokesSecretReaderAfterValidatorPanic(t *testing.T) {
 	candidate := completeDesiredState()
 	validator := &validatingSeams{want: candidate, panicModule: "subscriptionpublication", calls: map[string]int{}}
-	request := PrepareRequest{CandidateRevision: 8, CandidateReleaseIdentity: testRelease, ChangeSet: "change-0008", Candidate: candidate, SemanticValidators: validatorsFor(validator), ServiceMaterials: serviceMaterialsFor(candidate)}
-	_, err := New(intentStorage{}).PrepareCommit(request)
+	stateModule, request, _ := managedPrepareRequest(t, candidate)
+	request.SemanticValidators = validatorsFor(validator)
+	_, err := stateModule.PrepareCommit(request)
 	var finding *Finding
 	if !errors.As(err, &finding) || finding.Code != "STATE-CANDIDATE-SEMANTIC" {
 		t.Fatalf("PrepareCommit() error = %#v, want secret-safe semantic refusal", err)
@@ -197,13 +190,12 @@ func TestPrepareCommitRevokesSecretReaderAfterValidatorPanic(t *testing.T) {
 func TestPrepareCommitOmitsDisabledProfileCredentials(t *testing.T) {
 	candidate := completeDesiredState()
 	candidate.ConnectionProfiles.VLESSWebSocket.Enabled = false
-	validator := &validatingSeams{want: candidate, calls: map[string]int{}}
-	request := PrepareRequest{CandidateRevision: 8, CandidateReleaseIdentity: testRelease, ChangeSet: "change-0008", Candidate: candidate, SemanticValidators: validatorsFor(validator), ServiceMaterials: serviceMaterialsFor(candidate)}
-	preparation, err := New(intentStorage{}).PrepareCommit(request)
+	stateModule, request, _ := managedPrepareRequest(t, candidate)
+	preparation, err := stateModule.PrepareCommit(request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if preparation.ServiceCopies.Xray == nil || strings.Contains(string(preparation.ServiceCopies.Xray.bytes), "33333333-3333-4333-8333-333333333333") || strings.Contains(string(preparation.ServiceCopies.Xray.bytes), "4444444444444444444444444444444444444444444444444444444444444444") {
+	if preparation.serviceCopies.Xray == nil || strings.Contains(string(preparation.serviceCopies.Xray.bytes), "33333333-3333-4333-8333-333333333333") || strings.Contains(string(preparation.serviceCopies.Xray.bytes), "4444444444444444444444444444444444444444444444444444444444444444") {
 		t.Fatal("disabled Connection Profile credentials entered runtime service material")
 	}
 }
@@ -214,13 +206,12 @@ func TestPrepareCommitOmitsUnusedServices(t *testing.T) {
 	candidate.ConnectionProfiles.VLESSXHTTP.Enabled = false
 	candidate.ConnectionProfiles.VLESSWebSocket.Enabled = false
 	candidate.NetworkPolicy.SSHPort = 443
-	validator := &validatingSeams{want: candidate, calls: map[string]int{}}
-	request := PrepareRequest{CandidateRevision: 8, CandidateReleaseIdentity: testRelease, ChangeSet: "change-0008", Candidate: candidate, SemanticValidators: validatorsFor(validator), ServiceMaterials: serviceMaterialsFor(candidate)}
-	preparation, err := New(intentStorage{}).PrepareCommit(request)
+	stateModule, request, _ := managedPrepareRequest(t, candidate)
+	preparation, err := stateModule.PrepareCommit(request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if preparation.ServiceCopies.Xray != nil || preparation.ServiceCopies.Cloudflared != nil {
+	if preparation.serviceCopies.Xray != nil || preparation.serviceCopies.Cloudflared != nil {
 		t.Fatal("disabled Xray and Cloudflare-backed profiles produced unused service copies")
 	}
 }

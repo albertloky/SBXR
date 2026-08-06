@@ -1,10 +1,15 @@
 package state
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"reflect"
+	"sync"
 	"sync/atomic"
 )
 
@@ -217,15 +222,71 @@ type ServiceMaterials struct {
 	Subscription SubscriptionServiceMaterial `json:"-"`
 }
 
-// PrepareRequest is the candidate-validation portion of PrepareCommit. Issue
-// #65 adds loaded-lineage, Plan, checksum, and one-use authority binding.
+// PlanIdentity names one reviewed, one-use owning-Module Plan.
+type PlanIdentity string
+
+// ManagedInputChecksums bind the fresh observations used by every owning
+// Module without exposing their secret-derived values through rendering.
+type ManagedInputChecksums struct {
+	connectionProfiles string
+	subscription       string
+	cloudflare         string
+	certificates       string
+	networkPolicy      string
+	softwareLifecycle  string
+}
+
+func NewManagedInputChecksums(connectionProfiles, subscription, cloudflare, certificates, networkPolicy, softwareLifecycle string) (ManagedInputChecksums, error) {
+	checksums := ManagedInputChecksums{connectionProfiles, subscription, cloudflare, certificates, networkPolicy, softwareLifecycle}
+	if !validSHA256(connectionProfiles) || !validSHA256(subscription) || !validSHA256(cloudflare) || !validSHA256(certificates) || !validSHA256(networkPolicy) || !validSHA256(softwareLifecycle) {
+		return ManagedInputChecksums{}, finding("STATE-MANAGED-INPUTS", "managed input checksums", "a required checksum is invalid", "one SHA-256 for every owning Module input", "changed observations must invalidate prepared authority", "refresh the managed inputs and review again")
+	}
+	return checksums, nil
+}
+
+func (ManagedInputChecksums) MarshalJSON() ([]byte, error) { return nil, errProtectedValueRendering }
+func (ManagedInputChecksums) String() string               { return "[redacted managed input checksums]" }
+func (ManagedInputChecksums) GoString() string             { return "[redacted managed input checksums]" }
+
+// ReviewedInputs bind one approved Plan to the managed observations it reviewed.
+type ReviewedInputs struct {
+	planIdentity PlanIdentity
+	planSHA256   string
+	managed      ManagedInputChecksums
+	authority    *reviewedPlanAuthority
+}
+
+type reviewedPlanAuthority struct{ used atomic.Bool }
+
+// ponytail: process-lifetime interning keeps Plan identities one-use without
+// forbidden preparation writes; replace it when a Plan Module owns this token.
+var reviewedPlanAuthorities sync.Map
+
+func NewReviewedInputs(planIdentity PlanIdentity, planSHA256 string, managed ManagedInputChecksums) (ReviewedInputs, error) {
+	if !validPlanIdentity(planIdentity) || !validSHA256(planSHA256) || managed == (ManagedInputChecksums{}) {
+		return ReviewedInputs{}, finding("STATE-REVIEW-BINDING", "reviewed Plan", "the Plan identity, checksum, or managed inputs are invalid", "one complete reviewed Plan binding", "unbound approval cannot authorize mutation", "create and review a fresh Plan")
+	}
+	authority, _ := reviewedPlanAuthorities.LoadOrStore(planIdentity, &reviewedPlanAuthority{})
+	return ReviewedInputs{planIdentity: planIdentity, planSHA256: planSHA256, managed: managed, authority: authority.(*reviewedPlanAuthority)}, nil
+}
+
+func (ReviewedInputs) MarshalJSON() ([]byte, error) { return nil, errProtectedValueRendering }
+func (ReviewedInputs) String() string               { return "[redacted reviewed inputs]" }
+func (ReviewedInputs) GoString() string             { return "[redacted reviewed inputs]" }
+
+func validPlanIdentity(value PlanIdentity) bool {
+	return validChangeSetIdentity(ChangeSetIdentity(value))
+}
+
+// PrepareRequest binds one complete candidate to its loaded lineage and review.
 type PrepareRequest struct {
-	CandidateRevision        uint64
+	Loaded                   Result
 	CandidateReleaseIdentity ReleaseIdentity
 	ChangeSet                ChangeSetIdentity
 	Candidate                DesiredState
 	SemanticValidators       SemanticValidators
 	ServiceMaterials         ServiceMaterials
+	ReviewedInputs           ReviewedInputs
 }
 
 // ServiceManifest binds one prepared copy to its owner, bytes, narrow
@@ -244,7 +305,6 @@ type ServiceManifest struct {
 }
 
 // PreparedServiceCopy is opaque transaction input for later System Changes.
-// Issue #65 introduces the one-use handoff that can consume its private bytes.
 type PreparedServiceCopy struct {
 	manifest ServiceManifest
 	bytes    []byte
@@ -262,62 +322,231 @@ type PreparedServiceCopies struct {
 	Subscription *PreparedServiceCopy
 }
 
-// Preparation is a validated candidate and its byte-stable service material.
-// It is not yet the one-use opaque prepared commit introduced by issue #65.
-type Preparation struct {
-	ReleaseIdentity ReleaseIdentity
-	Candidate       DesiredState
-	ServiceCopies   PreparedServiceCopies
+// PreparedCommit is one validated candidate and its byte-stable service material.
+type PreparedCommit struct {
+	releaseIdentity ReleaseIdentity
+	candidate       DesiredState
+	serviceCopies   PreparedServiceCopies
+	revision        uint64
+	changeSet       ChangeSetIdentity
+	reviewed        ReviewedInputs
+	starting        *loadedState
+	storage         Storage
+	candidateSHA256 string
+	manifestSHA256  string
+	preparedState   []byte
+	preparedSHA256  string
+	consumed        atomic.Bool
+}
+
+func (commit *PreparedCommit) Revision() uint64 {
+	if commit == nil {
+		return 0
+	}
+	return commit.revision
+}
+
+func (*PreparedCommit) MarshalJSON() ([]byte, error) { return nil, errProtectedValueRendering }
+func (*PreparedCommit) String() string               { return "[redacted prepared commit]" }
+func (*PreparedCommit) GoString() string             { return "[redacted prepared commit]" }
+
+// TransactionMaterial is the opaque State-owned handoff for one System
+// Changes attempt. Publication remains issue #66.
+type TransactionMaterial struct {
+	startingRevision  uint64
+	candidateRevision uint64
+	startingChecksum  string
+	candidateChecksum string
+	manifestChecksum  string
+	preparedChecksum  string
+	changeSet         ChangeSetIdentity
+	reviewed          ReviewedInputs
+	priorState        []byte
+	preparedState     []byte
+	serviceCopies     PreparedServiceCopies
+}
+
+func (TransactionMaterial) MarshalJSON() ([]byte, error) { return nil, errProtectedValueRendering }
+func (TransactionMaterial) String() string               { return "[redacted transaction material]" }
+func (TransactionMaterial) GoString() string             { return "[redacted transaction material]" }
+
+// ConsumeForApply burns this authority on the first attempt, then verifies
+// the exact reviewed inputs and persisted starting State without mutation.
+func (commit *PreparedCommit) ConsumeForApply(current ReviewedInputs) (*TransactionMaterial, error) {
+	if commit == nil || commit.starting == nil || commit.storage == nil {
+		return nil, finding("STATE-PREPARED-UNAVAILABLE", "prepared commit authority", "no complete prepared commit", "one fresh opaque prepared commit", "missing authority cannot start mutation", "run Load, create and review a fresh Plan, then prepare again")
+	}
+	if !commit.consumed.CompareAndSwap(false, true) {
+		return nil, finding("STATE-PREPARED-USED", "prepared commit authority", "the authority was already consumed", "one use by the first Apply attempt", "no prior approval can be replayed", "run Load, create and review a fresh Plan, then prepare again")
+	}
+	if current != commit.reviewed {
+		return nil, finding("STATE-PREPARED-BINDING", "prepared commit authority", "the reviewed Plan or managed inputs changed", "the exact Plan and managed-input checksums bound during preparation", "changed observations require fresh review", "run Load with fresh observations, review a fresh Plan, and prepare again")
+	}
+	if !matchesLoadedState(commit.storage, commit.starting) {
+		return nil, finding("STATE-PREPARED-STALE", "prepared commit authority", "the persisted starting State changed", "the exact State bytes loaded before review", "a different starting lineage invalidates approval", "run Load with fresh observations, review a fresh Plan, and prepare again")
+	}
+	return &TransactionMaterial{
+		startingRevision:  commit.starting.revision,
+		candidateRevision: commit.revision,
+		startingChecksum:  commit.starting.payloadChecksum,
+		candidateChecksum: commit.candidateSHA256,
+		manifestChecksum:  commit.manifestSHA256,
+		preparedChecksum:  commit.preparedSHA256,
+		changeSet:         commit.changeSet,
+		reviewed:          commit.reviewed,
+		priorState:        append([]byte(nil), commit.starting.bytes...),
+		preparedState:     append([]byte(nil), commit.preparedState...),
+		serviceCopies:     commit.serviceCopies,
+	}, nil
 }
 
 // PrepareCommit validates one complete candidate and typed owning-Module
-// outputs without reading or mutating the storage Adapter.
-func (i Interface) PrepareCommit(request PrepareRequest) (Preparation, error) {
+// outputs against the exact loaded bytes without mutating storage.
+func (i Interface) PrepareCommit(request PrepareRequest) (*PreparedCommit, error) {
 	if i.implementation == nil || i.implementation.storage == nil {
-		return Preparation{}, finding("STATE-STORAGE-UNAVAILABLE", "Desired State storage", "no storage Adapter", "the production State storage Adapter", "State cannot prepare trusted transaction material", "restore the State Adapter and review again")
+		return nil, finding("STATE-STORAGE-UNAVAILABLE", "Desired State storage", "no storage Adapter", "the production State storage Adapter", "State cannot prepare trusted transaction material", "restore the State Adapter and review again")
+	}
+	if request.ReviewedInputs.authority == nil {
+		return nil, finding("STATE-REVIEW-BINDING", "reviewed Plan", "the reviewed binding is absent", "one complete fresh reviewed Plan", "unbound approval cannot authorize mutation", "create and review a fresh Plan")
+	}
+	if !request.ReviewedInputs.authority.used.CompareAndSwap(false, true) {
+		return nil, finding("STATE-PLAN-USED", "reviewed Plan authority", "the Plan identity was already used for preparation", "one fresh one-use reviewed Plan", "prior approval cannot be replayed after any outcome", "create and review a fresh Plan")
+	}
+	loaded, problem := i.claimLoaded(request.Loaded)
+	if problem != nil {
+		return nil, problem
 	}
 	if problem := validateDesiredState(request.Candidate); problem != nil {
-		return Preparation{}, problem
+		return nil, problem
 	}
-	if request.CandidateRevision == 0 || !validReleaseIdentity(request.CandidateReleaseIdentity) || !validChangeSetIdentity(request.ChangeSet) {
-		return Preparation{}, finding("STATE-SERVICE-MANIFEST", "prepared service manifest", "the candidate revision, Release Identity, or Change Set identity is invalid", "one positive candidate revision, exact Release Identity, and valid later Change Set", "prepared bytes must be bound before mutation", "correct the manifest inputs and review again")
+	revision := loaded.revision + 1
+	if revision == 0 || !validReleaseIdentity(request.CandidateReleaseIdentity) || !validChangeSetIdentity(request.ChangeSet) {
+		return nil, finding("STATE-SERVICE-MANIFEST", "prepared service manifest", "the candidate revision, Release Identity, Change Set, or reviewed inputs are invalid", "one exact loaded revision and complete reviewed binding", "prepared bytes must be bound before mutation", "correct the manifest inputs and review again")
 	}
 	if !validateSemantics(request.Candidate, request.SemanticValidators) {
-		return Preparation{}, finding("STATE-CANDIDATE-SEMANTIC", "Module-owned semantic validation", "an owning validator is missing or refused its typed section", "successful validation by every owning Module", "State cannot replace operational ownership or accept caller-made validation claims", "correct the candidate through the owning Module and review again")
+		return nil, finding("STATE-CANDIDATE-SEMANTIC", "Module-owned semantic validation", "an owning validator is missing or refused its typed section", "successful validation by every owning Module", "State cannot replace operational ownership or accept caller-made validation claims", "correct the candidate through the owning Module and review again")
 	}
 	if !reflect.DeepEqual(request.ServiceMaterials, expectedServiceMaterials(request.Candidate)) {
-		return Preparation{}, finding("STATE-SERVICE-MATERIAL-UNRELATED", "prepared service material", "material is missing, stale, or contains an unrelated value", "only each service's exact required candidate values", "runtime services must not receive complete Desired State or unrelated secrets", "regenerate the owning Module material and review again")
+		return nil, finding("STATE-SERVICE-MATERIAL-UNRELATED", "prepared service material", "material is missing, stale, or contains an unrelated value", "only each service's exact required candidate values", "runtime services must not receive complete Desired State or unrelated secrets", "regenerate the owning Module material and review again")
 	}
 
 	materials := request.ServiceMaterials
 	var copies PreparedServiceCopies
 	if materials.Xray != nil {
-		prepared, err := prepareServiceCopy("xray.service", "connectionprofiles", "xray", request.CandidateRevision, request.ChangeSet, materials.Xray)
+		prepared, err := prepareServiceCopy("xray.service", "connectionprofiles", "xray", revision, request.ChangeSet, materials.Xray)
 		if err != nil {
-			return Preparation{}, err
+			return nil, err
 		}
 		copies.Xray = &prepared
 	}
 	if materials.SingBox != nil {
-		prepared, err := prepareServiceCopy("sing-box.service", "connectionprofiles", "sing-box", request.CandidateRevision, request.ChangeSet, materials.SingBox)
+		prepared, err := prepareServiceCopy("sing-box.service", "connectionprofiles", "sing-box", revision, request.ChangeSet, materials.SingBox)
 		if err != nil {
-			return Preparation{}, err
+			return nil, err
 		}
 		copies.SingBox = &prepared
 	}
 	if materials.Cloudflared != nil {
-		prepared, err := prepareServiceCopy("cloudflared.service", "cloudflaretunnel", "cloudflared", request.CandidateRevision, request.ChangeSet, materials.Cloudflared)
+		prepared, err := prepareServiceCopy("cloudflared.service", "cloudflaretunnel", "cloudflared", revision, request.ChangeSet, materials.Cloudflared)
 		if err != nil {
-			return Preparation{}, err
+			return nil, err
 		}
 		copies.Cloudflared = &prepared
 	}
-	subscription, err := prepareServiceCopy("sbxr-subscription.service", "subscriptionserving", "sbxr-subscription", request.CandidateRevision, request.ChangeSet, materials.Subscription)
+	subscription, err := prepareServiceCopy("sbxr-subscription.service", "subscriptionserving", "sbxr-subscription", revision, request.ChangeSet, materials.Subscription)
 	if err != nil {
-		return Preparation{}, err
+		return nil, err
 	}
 	copies.Subscription = &subscription
-	return Preparation{ReleaseIdentity: request.CandidateReleaseIdentity, Candidate: request.Candidate, ServiceCopies: copies}, nil
+	preparedState, candidateChecksum, err := prepareStateDocument(revision, request.CandidateReleaseIdentity, request.ChangeSet, request.Candidate)
+	if err != nil {
+		return nil, finding("STATE-CANDIDATE-SERIALIZATION", "prepared Desired State", "typed serialization failed", "one byte-stable complete candidate", "candidate bytes must be bound before mutation", "correct the candidate and review again")
+	}
+	manifestChecksum, err := checksumServiceManifests(copies)
+	if err != nil {
+		return nil, finding("STATE-SERVICE-SERIALIZATION", "prepared service manifests", "typed serialization failed", "one byte-stable manifest set", "service bytes must be bound before mutation", "regenerate the service material and review again")
+	}
+	preparedDigest := sha256.Sum256(preparedState)
+	return &PreparedCommit{
+		releaseIdentity: request.CandidateReleaseIdentity,
+		candidate:       request.Candidate, serviceCopies: copies, revision: revision,
+		changeSet: request.ChangeSet, reviewed: request.ReviewedInputs,
+		starting: loaded, storage: i.implementation.storage,
+		candidateSHA256: candidateChecksum, manifestSHA256: manifestChecksum,
+		preparedState: preparedState, preparedSHA256: hex.EncodeToString(preparedDigest[:]),
+	}, nil
+}
+
+func (i Interface) claimLoaded(result Result) (*loadedState, *Finding) {
+	loaded := result.loaded
+	if loaded == nil || loaded.owner != i.implementation {
+		return nil, finding("STATE-LOAD-REQUIRED", "loaded State authority", "the result was absent or came from a different State Interface", "one exact fresh Load result", "preparation must bind the storage boundary that produced the lineage", "run Load again and create a fresh Plan")
+	}
+	if !loaded.used.CompareAndSwap(false, true) {
+		return nil, finding("STATE-LOAD-USED", "loaded State authority", "the Load result was already used", "one fresh Load per preparation attempt", "retry cannot replay prior lineage authority", "run Load again and create a fresh Plan")
+	}
+	if loaded.status == ChangeInProgress {
+		return nil, finding("STATE-CHANGE-IN-PROGRESS", "Desired State preparation", "a Change Set is already in progress", "read-only access to the last committed revision until the operation resolves", "the candidate cannot become current or authorize another mutation", "wait for transaction resolution and run Load again")
+	}
+	if loaded.status != Managed && loaded.status != NotInstalled {
+		return nil, finding("STATE-LOAD-REQUIRED", "loaded State authority", "the loaded status cannot prepare a mutation", "one proven Managed or Not installed baseline", "unproven lineage cannot authorize mutation", "resolve the State finding and run Load again")
+	}
+	if matchesLoadedState(i.implementation.storage, loaded) {
+		return loaded, nil
+	}
+	return nil, finding("STATE-LOAD-STALE", "loaded State authority", "the persisted starting State changed after Load", "the exact byte-stable loaded baseline", "stale lineage cannot authorize preparation", "run Load again with fresh observations and review a fresh Plan")
+}
+
+func matchesLoadedState(storage Storage, loaded *loadedState) bool {
+	current, err := storage.Read()
+	if loaded.status == NotInstalled {
+		return errors.Is(err, fs.ErrNotExist)
+	}
+	return err == nil && bytes.Equal(current, loaded.bytes)
+}
+
+func prepareStateDocument(revision uint64, release ReleaseIdentity, changeSet ChangeSetIdentity, candidate DesiredState) ([]byte, string, error) {
+	payload, err := marshalProtectedJSON(candidate)
+	if err != nil {
+		return nil, "", err
+	}
+	digest := sha256.Sum256(payload)
+	checksum := hex.EncodeToString(digest[:])
+	document, err := json.Marshal(persistedDocument{SchemaVersion: supportedSchema, Revision: revision, ReleaseIdentity: release, LastCompletedChangeSet: changeSet, Payload: payload, Checksum: checksum})
+	return document, checksum, err
+}
+
+type preparedManifestSet struct {
+	Xray         *ServiceManifest `json:"xray,omitempty"`
+	SingBox      *ServiceManifest `json:"sing_box,omitempty"`
+	Cloudflared  *ServiceManifest `json:"cloudflared,omitempty"`
+	Subscription *ServiceManifest `json:"subscription"`
+}
+
+func checksumServiceManifests(copies PreparedServiceCopies) (string, error) {
+	manifests := preparedManifestSet{}
+	if copies.Xray != nil {
+		manifest := copies.Xray.manifest
+		manifests.Xray = &manifest
+	}
+	if copies.SingBox != nil {
+		manifest := copies.SingBox.manifest
+		manifests.SingBox = &manifest
+	}
+	if copies.Cloudflared != nil {
+		manifest := copies.Cloudflared.manifest
+		manifests.Cloudflared = &manifest
+	}
+	if copies.Subscription != nil {
+		manifest := copies.Subscription.manifest
+		manifests.Subscription = &manifest
+	}
+	data, err := json.Marshal(manifests)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(data)
+	return hex.EncodeToString(digest[:]), nil
 }
 
 func validateSemantics(candidate DesiredState, validators SemanticValidators) bool {

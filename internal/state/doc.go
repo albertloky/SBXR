@@ -13,12 +13,11 @@
 // Required. Load never adopts Observed State, changes files, interprets stored
 // secrets, or exposes rejected content.
 //
-// PrepareCommit performs the candidate-validation portion of preparation. It
-// invokes every owning Module's typed semantic-validation Seam and emits only
-// the deterministic least-privilege service copies required by enabled
-// Connection Profiles, with byte checksums and fixed ownership/modes. General
-// serialization of protected values and prepared bytes remains blocked; only
-// an owning validator receives a narrow reader for its own secret category.
-// PrepareCommit does not publish those copies or grant one-use mutation
-// authority; those transaction bindings belong to the next State slice.
+// PrepareCommit derives exactly revision N+1 from one exact Load result and
+// binds it to the candidate, reviewed Plan, managed-input checksums, Change Set,
+// and deterministic least-privilege service copies. The opaque prepared commit
+// is consumed by the first Apply attempt and cannot be replayed. It preserves
+// the exact prior state bytes for a later rollback snapshot without exposing or
+// interpreting their protected values. Preparation never publishes or mutates
+// storage; durable transaction publication belongs to System Changes.
 package state
