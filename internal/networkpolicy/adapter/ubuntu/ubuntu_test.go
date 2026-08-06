@@ -1,6 +1,7 @@
 package ubuntu
 
 import (
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -16,12 +17,14 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 		"etc/os-release":                        "ID=ubuntu\nVERSION_ID=\"24.04\"\n",
 		"var/lib/dpkg/status":                   "Package: ubuntu-server\nStatus: install ok installed\n\n",
 		"proc/meminfo":                          "MemTotal:        1048576 kB\nSwapTotal:       8388608 kB\n",
-		"proc/net/tcp":                          "  sl  local_address rem_address   st\n   0: 00000000:01BB 00000000:0000 0A\n",
+		"proc/net/tcp":                          "  sl  local_address rem_address   st tx_queue tr tm->when retrnsmt uid timeout inode\n   0: 00000000:01BB 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 4242\n",
 		"proc/net/tcp6":                         "  sl  local_address rem_address   st\n   0: 00000000000000000000000001000000:2B48 00000000000000000000000000000000:0000 0A\n",
 		"proc/net/udp":                          "  sl  local_address rem_address   st\n",
 		"proc/net/udp6":                         "  sl  local_address rem_address   st\n",
 		"proc/net/route":                        "Iface Destination Gateway Flags RefCnt Use Metric Mask\neth0 00000000 010200C0 0003 0 0 0 00000000\n",
 		"proc/net/ipv6_route":                   "",
+		"proc/123/comm":                         "nginx\n",
+		"proc/123/cgroup":                       "0::/system.slice/nginx.service\n",
 		"proc/sys/net/ipv4/ip_local_port_range": "32768 60999\n",
 		"sys/class/dmi/id/product_name":         "Fixture Hypervisor\n",
 		"usr/local/bin/xray":                    "inactive proxy remnant\n",
@@ -35,19 +38,60 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if err := os.MkdirAll(filepath.Join(root, "proc/123/fd"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("socket:[4242]", filepath.Join(root, "proc/123/fd/4")); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(filepath.Join(root, "run/systemd/system"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
-	observed, err := NewAt(root).Observe(networkpolicy.ObservationRequest{Intent: networkpolicy.Intent{SSHPort: 2222}, Stage: networkpolicy.PreApproval})
+	candidateIntent := networkpolicy.Intent{
+		PublicIPv4:       "192.0.2.10",
+		PublicIPv6:       "2001:db8::10",
+		SSHPort:          2222,
+		SubscriptionPort: 10443,
+		Profiles: networkpolicy.Profiles{
+			TUIC:   networkpolicy.Profile{Enabled: true, Port: 8443},
+			AnyTLS: networkpolicy.Profile{Enabled: true, Port: 9443},
+		},
+	}
+	observed, err := NewAt(root).Observe(networkpolicy.ObservationRequest{Intent: candidateIntent, Stage: networkpolicy.PreApproval})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if observed.Host.UbuntuVersion != "24.04" || !observed.Host.Systemd || observed.Host.LogicalCPUs < 1 || observed.Host.PhysicalRAM != 1<<30 || observed.Host.Virtualization != "Fixture Hypervisor" {
 		t.Fatalf("host facts = %+v", observed.Host)
 	}
-	if len(observed.Listeners) != 2 || observed.Listeners[0].Port != 443 || observed.Listeners[0].Protocol != networkpolicy.TCP || observed.Listeners[1].Address != "::1" || observed.Listeners[1].Port != 11080 || observed.Ephemeral != (networkpolicy.PortRange{First: 32768, Last: 60999}) {
+	if len(observed.Listeners) != 2 || observed.Listeners[0].Port != 443 || observed.Listeners[0].Protocol != networkpolicy.TCP || observed.Listeners[0].Process != "nginx" || observed.Listeners[0].Service != "nginx.service" || observed.Listeners[1].Address != "::1" || observed.Listeners[1].Port != 11080 || observed.Ephemeral != (networkpolicy.PortRange{First: 32768, Last: 60999}) {
 		t.Fatalf("network facts = listeners %+v ephemeral %+v", observed.Listeners, observed.Ephemeral)
+	}
+	if len(observed.PortCandidates) == 0 {
+		t.Fatal("Adapter returned no real bind-proven candidates")
+	}
+	for _, candidate := range observed.PortCandidates {
+		if candidate.Port < 1024 || candidate.Port == 2222 || candidate.Port == 80 || candidate.Port == 443 || candidate.Port == 8443 || candidate.Port == 9443 || candidate.Port == 10443 || candidate.Port == 11080 || observed.Ephemeral.First <= candidate.Port && candidate.Port <= observed.Ephemeral.Last || !candidate.BindProven || !candidate.Cryptographic {
+			t.Fatalf("unsafe candidate = %+v", candidate)
+		}
+		address := candidate.Address
+		if address == "public" {
+			address = "0.0.0.0"
+		}
+		if candidate.Protocol == networkpolicy.UDP {
+			packet, bindErr := net.ListenPacket("udp", net.JoinHostPort(address, fmt.Sprint(candidate.Port)))
+			if bindErr != nil {
+				t.Fatalf("candidate no longer UDP bindable: %+v: %v", candidate, bindErr)
+			}
+			packet.Close()
+		} else {
+			listener, bindErr := net.Listen("tcp", net.JoinHostPort(address, fmt.Sprint(candidate.Port)))
+			if bindErr != nil {
+				t.Fatalf("candidate no longer TCP bindable: %+v: %v", candidate, bindErr)
+			}
+			listener.Close()
+		}
 	}
 	if len(observed.ResourcePaths) != 1 || observed.ResourcePaths[0] != "/usr/local/bin/xray" {
 		t.Fatalf("proxy remnants = %+v", observed.ResourcePaths)
@@ -60,6 +104,9 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 		if err != nil || string(got) != want {
 			t.Fatalf("adapter mutated %s", name)
 		}
+	}
+	if target, err := os.Readlink(filepath.Join(root, "proc/123/fd/4")); err != nil || target != "socket:[4242]" {
+		t.Fatalf("Adapter mutated socket ownership link: target %q error %v", target, err)
 	}
 	if err := os.Remove(filepath.Join(root, "proc/sys/net/ipv4/ip_local_port_range")); err != nil {
 		t.Fatal(err)

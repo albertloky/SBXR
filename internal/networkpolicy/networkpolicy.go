@@ -174,6 +174,7 @@ const (
 
 type SSHFacts struct {
 	DetectedPort    uint16
+	ServerAddress   string
 	CurrentSessions []string
 }
 
@@ -247,14 +248,21 @@ type ListenerProof struct {
 }
 
 type Result struct {
-	Baseline       Baseline
-	Outcome        Outcome
-	Findings       []Finding
-	Policy         Policy
-	Binding        Binding
-	PreApplyGates  []Gate
-	PostApplyGates []Gate
-	Bounds         CheckBounds
+	Baseline         Baseline
+	Outcome          Outcome
+	Findings         []Finding
+	Policy           Policy
+	CertificateRetry *CertificateRetryHandoff
+	Binding          Binding
+	PreApplyGates    []Gate
+	PostApplyGates   []Gate
+	Bounds           CheckBounds
+}
+
+type CertificateRetryHandoff struct {
+	Owner                  string
+	KeepCurrentCertificate bool
+	Until                  string
 }
 
 type Finding struct {
@@ -283,7 +291,29 @@ type Policy struct {
 	PrimaryAddress     string
 	CertificateAddress string
 	Exposures          []Exposure
+	Replacements       []PortReplacement
 }
+
+type PortReplacement struct {
+	Purpose          string
+	Address          string
+	Protocol         Protocol
+	PreviousPort     uint16
+	Port             uint16
+	RebuiltArtifacts [7]RebuiltArtifact
+}
+
+type RebuiltArtifact string
+
+const (
+	ServerConfiguration        RebuiltArtifact = "server configuration"
+	SubscriptionRepresentation RebuiltArtifact = "subscription representation"
+	ShareURI                   RebuiltArtifact = "share URI"
+	QRValue                    RebuiltArtifact = "QR value"
+	FirewallRule               RebuiltArtifact = "firewall rule"
+	CertificateInput           RebuiltArtifact = "certificate input"
+	ReviewPlan                 RebuiltArtifact = "Plan"
+)
 
 type Exposure struct {
 	Purpose  string
@@ -344,6 +374,9 @@ func (i Interface) Evaluate(request Request) Result {
 	result.PreApplyGates = []Gate{
 		{Code: "NETWORK-PREFLIGHT-FRESH", Required: "all bound observations still match"},
 		{Code: "NETWORK-SSH-PRESERVED", Required: "the detected SSH port and current session remain admitted"},
+	}
+	for _, replacement := range result.Policy.Replacements {
+		result.PreApplyGates = append(result.PreApplyGates, Gate{Code: "NETWORK-PORT-STILL-BINDABLE", Required: fmt.Sprintf("bind-prove %s:%d/%s immediately before the first mutation", replacement.Address, replacement.Port, replacement.Protocol)})
 	}
 	result.PostApplyGates = []Gate{
 		{Code: "NETWORK-POLICY-ACTIVE", Required: "only the approved SBXR nftables table and exposure are active"},
@@ -447,9 +480,19 @@ func evaluateOwnership(result *Result, intent Intent, observed Observations) {
 				return
 			}
 		}
+		for _, listener := range observed.Listeners {
+			if listener.Port == intent.SSHPort && listener.Protocol == TCP && addressMatches(listener.Address, "public", policy) && !currentSSHListener(listener, observed.Listeners, observed.SSH) {
+				if listener.Process == "" && listener.Service == "" && !observed.Firewall.RootVerified {
+					continue
+				}
+				result.add(requiredFailure("NETWORK-SSH-PORT-CONFLICT", "Detected SSH port has an unrelated holder", listenerFact(listener), fmt.Sprintf("only the detected SSH service on fixed %d/TCP", intent.SSHPort), "SBXR never moves SSH, edits sshd, or stops an unrelated process", ownerFix("Free the detected SSH port on the named address without closing the current SSH session, then check again.")))
+				return
+			}
+		}
 		if intent.TemporaryHTTP {
 			if listener, ok := conflictingListener(observed.Listeners, Exposure{"ACME HTTP-01", "public", 80, TCP}, policy); ok {
-				result.add(requiredFailure("NETWORK-FIXED-PORT-CONFLICT", "Fixed TCP 80 is occupied", listenerFact(listener), "TCP 80 free for one exact temporary HTTP-01 interval", "SBXR never moves TCP 80 or stops its current owner", ownerFix("Stop or reconfigure the named owner outside SBXR, then check again.")))
+				result.CertificateRetry = &CertificateRetryHandoff{Owner: "Certificate Lifecycle", KeepCurrentCertificate: true, Until: "fresh Network Policy evaluation passes"}
+				result.add(requiredFailure("NETWORK-FIXED-PORT-CONFLICT", "Fixed TCP 80 is occupied", listenerFact(listener), "TCP 80 free for one exact temporary HTTP-01 interval; keep the current certificate and let Certificate Lifecycle own bounded retry until a fresh evaluation passes", "SBXR never moves TCP 80, stops its current owner, or discards the current certificate", ownerFix("Stop or reconfigure the named owner outside SBXR, then check again.")))
 				return
 			}
 		}
@@ -461,16 +504,20 @@ func evaluateOwnership(result *Result, intent Intent, observed Observations) {
 			if !conflict {
 				continue
 			}
+			if !configurableDefault(intent, exposure) {
+				result.add(requiredFailure("NETWORK-PORT-CONFLICT", "A committed port is occupied", listenerFact(listener), fmt.Sprintf("committed %s port %d/%s free", exposure.Purpose, exposure.Port, exposure.Protocol), "a committed replacement remains stable until the Owner reviews another Change Set", ownerFix("Free the committed port or review a new Change Set, then check again.")))
+				return
+			}
 			candidate, ok := availableCandidate(observed, result.Policy, intent.SSHPort, exposure)
 			if !ok {
 				result.add(requiredFailure("NETWORK-PORT-CONFLICT", "A selected configurable port is occupied", listenerFact(listener), fmt.Sprintf("an available bind-proven replacement for %s", exposure.Purpose), "SBXR never kills an unrelated listener or silently continues", ownerFix("Free the selected port or correct the listener owner, then check again.")))
 				return
 			}
 			result.Policy.Exposures[index].Port = candidate.Port
-			finding := requiredFailure("NETWORK-PORT-ALTERNATIVE", "A configurable default port is occupied", listenerFact(listener), fmt.Sprintf("a reviewed bind-proven replacement outside the ephemeral range; candidate %d/%s", candidate.Port, candidate.Protocol), "every affected configuration and Plan must be rebuilt before Apply", Fix{SBXROption: fmt.Sprintf("Review rebuilt %s exposure on %d/%s.", exposure.Purpose, candidate.Port, candidate.Protocol)})
+			result.Policy.Replacements = append(result.Policy.Replacements, PortReplacement{Purpose: exposure.Purpose, Address: exposure.Address, Protocol: exposure.Protocol, PreviousPort: exposure.Port, Port: candidate.Port, RebuiltArtifacts: rebuiltArtifacts()})
+			finding := requiredFailure("NETWORK-PORT-ALTERNATIVE", "A configurable default port is occupied", listenerFact(listener), fmt.Sprintf("a fully rebuilt server configuration, subscription representation, share URI, QR value, firewall rule, certificate input, and Plan using bind-proven %d/%s", candidate.Port, candidate.Protocol), "the Owner must review every affected output before Apply", Fix{SBXROption: fmt.Sprintf("Review rebuilt %s exposure on %d/%s.", exposure.Purpose, candidate.Port, candidate.Protocol)})
 			finding.Outcome = NeedsAttention
 			result.add(finding)
-			return
 		}
 		return
 	}
@@ -485,7 +532,11 @@ func evaluateOwnership(result *Result, intent Intent, observed Observations) {
 			continue
 		}
 		if !hasOwnedListener(observed.Listeners, exposure, policy) {
-			drift = append(drift, exposure.Purpose+" listener missing or different")
+			if listener, conflict := conflictingListener(observed.Listeners, exposure, policy); conflict {
+				drift = append(drift, exposure.Purpose+" held by "+listenerFact(listener))
+			} else {
+				drift = append(drift, exposure.Purpose+" listener missing or different")
+			}
 		}
 	}
 	for _, listener := range observed.Listeners {
@@ -505,6 +556,51 @@ func evaluateOwnership(result *Result, intent Intent, observed Observations) {
 		finding.Outcome = NeedsAttention
 		result.add(finding)
 	}
+}
+
+func rebuiltArtifacts() [7]RebuiltArtifact {
+	return [7]RebuiltArtifact{ServerConfiguration, SubscriptionRepresentation, ShareURI, QRValue, FirewallRule, CertificateInput, ReviewPlan}
+}
+
+func currentSSHListener(listener Listener, listeners []Listener, facts SSHFacts) bool {
+	var current Listener
+	for _, candidate := range listeners {
+		if candidate.Port == facts.DetectedPort && candidate.Protocol == TCP && coversAddress(candidate.Address, facts.ServerAddress) {
+			current = candidate
+			break
+		}
+	}
+	if current == (Listener{}) {
+		return false
+	}
+	if listener == current {
+		return true
+	}
+	return current.Process != "" && listener.Process == current.Process || current.Service != "" && listener.Service == current.Service
+}
+
+func coversAddress(listenerAddress, serverAddress string) bool {
+	server := net.ParseIP(serverAddress)
+	if server == nil {
+		return false
+	}
+	if listenerAddress == "0.0.0.0" {
+		return server.To4() != nil
+	}
+	if listenerAddress == "::" {
+		return server.To4() == nil
+	}
+	listener := net.ParseIP(listenerAddress)
+	return listener != nil && listener.Equal(server)
+}
+
+func configurableDefault(intent Intent, exposure Exposure) bool {
+	for _, profile := range profileDefinitions(intent) {
+		if profile.name == exposure.Purpose {
+			return exposure.Port == profile.defaultPort
+		}
+	}
+	return false
 }
 
 func conflictingListener(listeners []Listener, exposure Exposure, policy Policy) (Listener, bool) {
@@ -556,7 +652,7 @@ func availableCandidate(observed Observations, policy Policy, sshPort uint16, ex
 }
 
 func listenerFact(listener Listener) string {
-	return fmt.Sprintf("%s on %s:%d/%s", safeFact(listener.Service, listener.Process), safeFact(listener.Address), listener.Port, listener.Protocol)
+	return fmt.Sprintf("process %s; service %s; %s:%d/%s", safeFact(listener.Process), safeFact(listener.Service), safeFact(listener.Address), listener.Port, listener.Protocol)
 }
 
 func hasOwnedListener(listeners []Listener, exposure Exposure, policy Policy) bool {
@@ -773,21 +869,22 @@ func candidatePolicy(intent Intent) Policy {
 }
 
 type profileDefinition struct {
-	name     string
-	profile  Profile
-	protocol Protocol
-	address  string
+	name        string
+	profile     Profile
+	protocol    Protocol
+	address     string
+	defaultPort uint16
 }
 
 func profileDefinitions(intent Intent) []profileDefinition {
 	return []profileDefinition{
-		{"VLESS REALITY Vision", intent.Profiles.VLESSRealityVision, TCP, "public"},
-		{"Hysteria2", intent.Profiles.Hysteria2, UDP, "public"},
-		{"TUIC", intent.Profiles.TUIC, UDP, "public"},
-		{"AnyTLS", intent.Profiles.AnyTLS, TCP, "public"},
-		{"Subscription HTTPS", Profile{Enabled: true, Port: intent.SubscriptionPort}, TCP, "public"},
-		{"VLESS XHTTP origin", intent.Profiles.VLESSXHTTP, TCP, intent.Profiles.VLESSXHTTP.Address},
-		{"VLESS WebSocket origin", intent.Profiles.VLESSWebSocket, TCP, intent.Profiles.VLESSWebSocket.Address},
+		{"VLESS REALITY Vision", intent.Profiles.VLESSRealityVision, TCP, "public", 443},
+		{"Hysteria2", intent.Profiles.Hysteria2, UDP, "public", 443},
+		{"TUIC", intent.Profiles.TUIC, UDP, "public", 8443},
+		{"AnyTLS", intent.Profiles.AnyTLS, TCP, "public", 9443},
+		{"Subscription HTTPS", Profile{Enabled: true, Port: intent.SubscriptionPort}, TCP, "public", 10443},
+		{"VLESS XHTTP origin", intent.Profiles.VLESSXHTTP, TCP, intent.Profiles.VLESSXHTTP.Address, 11080},
+		{"VLESS WebSocket origin", intent.Profiles.VLESSWebSocket, TCP, intent.Profiles.VLESSWebSocket.Address, 11081},
 	}
 }
 

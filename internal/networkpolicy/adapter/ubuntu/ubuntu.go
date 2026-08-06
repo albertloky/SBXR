@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"net/http"
@@ -281,11 +282,11 @@ func (a Adapter) listeners() []networkpolicy.Listener {
 			address, portText, _ := strings.Cut(fields[1], ":")
 			port, parseErr := strconv.ParseUint(portText, 16, 16)
 			if parseErr == nil {
-				process := ""
+				owner := socketOwner{}
 				if len(fields) > 9 {
-					process = owners[fields[9]]
+					owner = owners[fields[9]]
 				}
-				listeners = append(listeners, networkpolicy.Listener{Address: procAddress(address), Port: uint16(port), Protocol: source.protocol, Process: process, Ownership: networkpolicy.Unproved})
+				listeners = append(listeners, networkpolicy.Listener{Address: procAddress(address), Port: uint16(port), Protocol: source.protocol, Process: owner.process, Service: owner.service, Ownership: networkpolicy.Unproved})
 			}
 		}
 		file.Close()
@@ -293,19 +294,29 @@ func (a Adapter) listeners() []networkpolicy.Listener {
 	return listeners
 }
 
-func (a Adapter) socketOwners() map[string]string {
-	owners := map[string]string{}
+type socketOwner struct{ process, service string }
+
+func (a Adapter) socketOwners() map[string]socketOwner {
+	owners := map[string]socketOwner{}
 	processes, _ := os.ReadDir(a.path("/proc"))
 	for _, process := range processes {
 		if _, err := strconv.Atoi(process.Name()); err != nil {
 			continue
 		}
 		name := strings.TrimSpace(readOptional(a.path(filepath.Join("/proc", process.Name(), "comm"))))
+		service := ""
+		for _, line := range strings.Split(readOptional(a.path(filepath.Join("/proc", process.Name(), "cgroup"))), "\n") {
+			_, path, ok := strings.Cut(line, "::")
+			if candidate := filepath.Base(path); ok && strings.HasSuffix(candidate, ".service") {
+				service = candidate
+				break
+			}
+		}
 		files, _ := os.ReadDir(a.path(filepath.Join("/proc", process.Name(), "fd")))
 		for _, file := range files {
 			target, err := os.Readlink(a.path(filepath.Join("/proc", process.Name(), "fd", file.Name())))
 			if err == nil && strings.HasPrefix(target, "socket:[") && strings.HasSuffix(target, "]") {
-				owners[strings.TrimSuffix(strings.TrimPrefix(target, "socket:["), "]")] = name
+				owners[strings.TrimSuffix(strings.TrimPrefix(target, "socket:["), "]")] = socketOwner{name, service}
 			}
 		}
 	}
@@ -374,7 +385,7 @@ func availableCandidates(intent networkpolicy.Intent, observed networkpolicy.Obs
 				break
 			}
 			port := uint16(value.Int64() + 1024)
-			if used[port] || observed.Ephemeral.First <= port && port <= observed.Ephemeral.Last || !bindable(target.protocol, target.address, port) {
+			if used[port] || observed.Ephemeral.First <= port && port <= observed.Ephemeral.Last || !bindable(target.protocol, target.address, port, intent) {
 				continue
 			}
 			used[port] = true
@@ -385,22 +396,50 @@ func availableCandidates(intent networkpolicy.Intent, observed networkpolicy.Obs
 	return candidates
 }
 
-func bindable(protocol networkpolicy.Protocol, address string, port uint16) bool {
+func bindable(protocol networkpolicy.Protocol, address string, port uint16, intent networkpolicy.Intent) bool {
+	addresses := []string{address}
 	if address == "public" {
-		address = "0.0.0.0"
+		addresses = nil
+		if intent.PublicIPv4 != "" {
+			addresses = append(addresses, "0.0.0.0")
+		}
+		if intent.PublicIPv6 != "" {
+			addresses = append(addresses, "::")
+		}
+	}
+	if len(addresses) == 0 {
+		return false
+	}
+	var opened []io.Closer
+	defer func() {
+		for _, socket := range opened {
+			socket.Close()
+		}
+	}()
+	for _, current := range addresses {
+		socket, err := bindSocket(protocol, current, port)
+		if err != nil {
+			return false
+		}
+		opened = append(opened, socket)
+	}
+	return true
+}
+
+func bindSocket(protocol networkpolicy.Protocol, address string, port uint16) (io.Closer, error) {
+	network := "tcp4"
+	if strings.Contains(address, ":") {
+		network = "tcp6"
 	}
 	if protocol == networkpolicy.UDP {
-		packet, packetErr := net.ListenPacket("udp", net.JoinHostPort(address, strconv.Itoa(int(port))))
-		if packetErr == nil {
-			packet.Close()
+		network = strings.Replace(network, "tcp", "udp", 1)
+		packet, err := net.ListenPacket(network, net.JoinHostPort(address, strconv.Itoa(int(port))))
+		if err != nil {
+			return nil, err
 		}
-		return packetErr == nil
+		return packet, nil
 	}
-	listener, err := net.Listen("tcp", net.JoinHostPort(address, strconv.Itoa(int(port))))
-	if err == nil {
-		listener.Close()
-	}
-	return err == nil
+	return net.Listen(network, net.JoinHostPort(address, strconv.Itoa(int(port))))
 }
 
 func (a Adapter) publicAddresses() (ipv4, ipv6 []string) {
@@ -472,6 +511,7 @@ func sshFacts() networkpolicy.SSHFacts {
 		if port, err := strconv.ParseUint(fields[3], 10, 16); err == nil {
 			facts.DetectedPort = uint16(port)
 		}
+		facts.ServerAddress = fields[2]
 		facts.CurrentSessions = []string{checksum([]byte(os.Getenv("SSH_CONNECTION")))}
 	}
 	if sessions, err := exec.Command("who").Output(); err == nil {

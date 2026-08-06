@@ -484,7 +484,63 @@ func TestEvaluateManagedPublicListenersMatchQualifiedFamilies(t *testing.T) {
 	})
 }
 
+func TestEvaluateManagedCommittedPortConflictUsesCorrectionFlow(t *testing.T) {
+	intent, observed := managedBaseline()
+	intent.Profiles.VLESSRealityVision.Port = 20000
+	observed.Listeners[0] = networkpolicy.Listener{Address: "0.0.0.0", Port: 20000, Protocol: networkpolicy.TCP, Process: "nginx", Service: "nginx.service", Ownership: networkpolicy.Unproved}
+	observed.PortCandidates = []networkpolicy.PortCandidate{{Port: 21000, Protocol: networkpolicy.TCP, Address: "public", BindProven: true, Cryptographic: true}}
+	result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
+	assertFinding(t, result, networkpolicy.NeedsAttention, networkpolicy.Required, "NETWORK-MANAGED-DRIFT")
+	if len(result.Policy.Replacements) != 0 || !strings.Contains(result.Findings[0].Found, "process nginx") || !strings.Contains(result.Findings[0].Found, "service nginx.service") || !strings.Contains(result.Findings[0].Found, "0.0.0.0:20000/TCP") {
+		t.Fatalf("committed conflict moved or omitted Correction Flow facts: policy %+v finding %+v", result.Policy, result.Findings[0])
+	}
+}
+
 func TestEvaluateCorrectiveNetworkPolicy(t *testing.T) {
+	t.Run("detected SSH port never moves and identifies an unrelated family holder", func(t *testing.T) {
+		intent, observed := completeIntent(), completeObservations()
+		intent.PublicIPv6 = "2001:db8::10"
+		observed.PublicIPv6 = []string{"2001:db8::10"}
+		observed.Listeners = []networkpolicy.Listener{
+			{Address: "0.0.0.0", Port: 2222, Protocol: networkpolicy.TCP, Process: "sshd", Service: "ssh.service"},
+			{Address: "::", Port: 2222, Protocol: networkpolicy.TCP, Process: "nginx", Service: "nginx.service"},
+		}
+		observed.PortCandidates = []networkpolicy.PortCandidate{{Port: 20000, Protocol: networkpolicy.TCP, Address: "public", BindProven: true, Cryptographic: true}}
+		result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
+		assertFinding(t, result, networkpolicy.Failed, networkpolicy.Required, "NETWORK-SSH-PORT-CONFLICT")
+		if !strings.Contains(result.Findings[0].Found, "process nginx") || !strings.Contains(result.Findings[0].Found, "service nginx.service") || !strings.Contains(result.Findings[0].Found, ":::2222/TCP") || result.Policy.Exposures[0].Port != 2222 {
+			t.Fatalf("SSH conflict moved or omitted exact holder facts: policy %+v finding %+v", result.Policy, result.Findings[0])
+		}
+	})
+
+	t.Run("current custom or unobservable SSH daemon is not an unrelated holder", func(t *testing.T) {
+		for _, listener := range []networkpolicy.Listener{
+			{Address: "0.0.0.0", Port: 2222, Protocol: networkpolicy.TCP, Process: "dropbear", Service: "dropbear.service"},
+			{Address: "0.0.0.0", Port: 2222, Protocol: networkpolicy.TCP},
+		} {
+			observed := completeObservations()
+			observed.Listeners = []networkpolicy.Listener{listener}
+			result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PostApproval})
+			if result.Outcome != networkpolicy.Healthy {
+				t.Fatalf("current SSH daemon was blocked: listener %+v findings %+v", listener, result.Findings)
+			}
+		}
+	})
+
+	t.Run("committed replacement never moves automatically", func(t *testing.T) {
+		intent, observed := completeIntent(), completeObservations()
+		intent.Profiles.AnyTLS.Port = 20000
+		observed.Listeners = []networkpolicy.Listener{{Address: "0.0.0.0", Port: 20000, Protocol: networkpolicy.TCP, Process: "nginx", Service: "nginx.service"}}
+		observed.PortCandidates = []networkpolicy.PortCandidate{{Port: 21000, Protocol: networkpolicy.TCP, Address: "public", BindProven: true, Cryptographic: true}}
+		result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
+		assertFinding(t, result, networkpolicy.Failed, networkpolicy.Required, "NETWORK-PORT-CONFLICT")
+		for _, exposure := range result.Policy.Exposures {
+			if exposure.Purpose == "AnyTLS" && exposure.Port != 20000 {
+				t.Fatalf("committed AnyTLS port moved to %d", exposure.Port)
+			}
+		}
+	})
+
 	t.Run("private listener still conflicts with a public wildcard bind", func(t *testing.T) {
 		observed := completeObservations()
 		observed.Listeners = []networkpolicy.Listener{{Address: "10.0.0.1", Port: 443, Protocol: networkpolicy.TCP, Process: "nginx", Service: "nginx.service"}}
@@ -512,12 +568,22 @@ func TestEvaluateCorrectiveNetworkPolicy(t *testing.T) {
 
 	t.Run("TCP and UDP ownership are independent and configurable conflict gets safe alternative", func(t *testing.T) {
 		intent, observed := completeIntent(), completeObservations()
-		observed.Listeners = []networkpolicy.Listener{{Address: "0.0.0.0", Port: 443, Protocol: networkpolicy.TCP, Process: "nginx", Service: "nginx.service"}}
+		observed.Listeners = []networkpolicy.Listener{
+			{Address: "0.0.0.0", Port: 443, Protocol: networkpolicy.TCP, Process: "nginx", Service: "nginx.service"},
+			{Address: "127.0.0.1", Port: 20001, Protocol: networkpolicy.TCP, Process: "other", Service: "other.service"},
+		}
 		observed.Ephemeral = networkpolicy.PortRange{First: 32768, Last: 60999}
 		observed.PortCandidates = []networkpolicy.PortCandidate{
+			{Port: 1000, Protocol: networkpolicy.TCP, Address: "public", BindProven: true, Cryptographic: true},
 			{Port: 2222, Protocol: networkpolicy.TCP, Address: "public", BindProven: true, Cryptographic: true},
 			{Port: 80, Protocol: networkpolicy.TCP, Address: "public", BindProven: true, Cryptographic: true},
 			{Port: 40000, Protocol: networkpolicy.TCP, Address: "public", BindProven: true, Cryptographic: true},
+			{Port: 8443, Protocol: networkpolicy.TCP, Address: "public", BindProven: true, Cryptographic: true},
+			{Port: 20001, Protocol: networkpolicy.TCP, Address: "public", BindProven: true, Cryptographic: true},
+			{Port: 20002, Protocol: networkpolicy.UDP, Address: "public", BindProven: true, Cryptographic: true},
+			{Port: 20003, Protocol: networkpolicy.TCP, Address: "127.0.0.1", BindProven: true, Cryptographic: true},
+			{Port: 20004, Protocol: networkpolicy.TCP, Address: "public", Cryptographic: true},
+			{Port: 20005, Protocol: networkpolicy.TCP, Address: "public", BindProven: true},
 			{Port: 20000, Protocol: networkpolicy.TCP, Address: "public", BindProven: true, Cryptographic: true},
 		}
 		result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
@@ -534,6 +600,50 @@ func TestEvaluateCorrectiveNetworkPolicy(t *testing.T) {
 		if vless != 20000 || hysteria != 443 {
 			t.Fatalf("corrected TCP/UDP policy = %+v", result.Policy.Exposures)
 		}
+		wantReplacement := networkpolicy.PortReplacement{
+			Purpose: "VLESS REALITY Vision", Address: "public", Protocol: networkpolicy.TCP, PreviousPort: 443, Port: 20000,
+			RebuiltArtifacts: [7]networkpolicy.RebuiltArtifact{
+				networkpolicy.ServerConfiguration, networkpolicy.SubscriptionRepresentation, networkpolicy.ShareURI, networkpolicy.QRValue, networkpolicy.FirewallRule, networkpolicy.CertificateInput, networkpolicy.ReviewPlan,
+			},
+		}
+		if len(result.Policy.Replacements) != 1 || result.Policy.Replacements[0] != wantReplacement {
+			t.Fatalf("replacement = %+v, want %+v", result.Policy.Replacements, wantReplacement)
+		}
+		finding := result.Findings[0]
+		for _, required := range []string{"server configuration", "subscription", "share URI", "QR", "firewall", "certificate", "Plan"} {
+			if !strings.Contains(finding.Required, required) {
+				t.Fatalf("rebuilt review omitted %q: %+v", required, finding)
+			}
+		}
+		if !strings.Contains(finding.Found, "process nginx") || !strings.Contains(finding.Found, "service nginx.service") || !strings.Contains(finding.Found, "0.0.0.0:443/TCP") {
+			t.Fatalf("holder facts are incomplete: %q", finding.Found)
+		}
+		if finding.Fix.SBXROption == "" || finding.Back == "" {
+			t.Fatalf("replacement omitted review or Back: %+v", finding)
+		}
+		if len(result.PreApplyGates) != 3 || result.PreApplyGates[2].Code != "NETWORK-PORT-STILL-BINDABLE" || !strings.Contains(result.PreApplyGates[2].Required, "public:20000/TCP") {
+			t.Fatalf("replacement recheck gate = %+v", result.PreApplyGates)
+		}
+		observed.Listeners = append(observed.Listeners, networkpolicy.Listener{Address: "0.0.0.0", Port: 20000, Protocol: networkpolicy.TCP, Process: "late-holder", Service: "late.service"})
+		if !result.Binding.Stale(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval}, observed) {
+			t.Fatal("late candidate conflict did not make the reviewed result stale")
+		}
+	})
+
+	t.Run("all occupied defaults are rebuilt before review", func(t *testing.T) {
+		intent, observed := completeIntent(), completeObservations()
+		observed.Listeners = []networkpolicy.Listener{
+			{Address: "0.0.0.0", Port: 443, Protocol: networkpolicy.TCP, Process: "nginx", Service: "nginx.service"},
+			{Address: "0.0.0.0", Port: 8443, Protocol: networkpolicy.UDP, Process: "other", Service: "other.service"},
+		}
+		observed.PortCandidates = []networkpolicy.PortCandidate{
+			{Port: 20000, Protocol: networkpolicy.TCP, Address: "public", BindProven: true, Cryptographic: true},
+			{Port: 20001, Protocol: networkpolicy.UDP, Address: "public", BindProven: true, Cryptographic: true},
+		}
+		result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
+		if result.Outcome != networkpolicy.NeedsAttention || len(result.Findings) != 2 || len(result.Policy.Replacements) != 2 || result.Policy.Replacements[0].Purpose != "VLESS REALITY Vision" || result.Policy.Replacements[1].Purpose != "TUIC" || len(result.PreApplyGates) != 4 {
+			t.Fatalf("partially rebuilt result: %+v", result)
+		}
 	})
 
 	t.Run("temporary TCP 80 is exact and never moved", func(t *testing.T) {
@@ -544,6 +654,12 @@ func TestEvaluateCorrectiveNetworkPolicy(t *testing.T) {
 		assertFinding(t, result, networkpolicy.Failed, networkpolicy.Required, "NETWORK-FIXED-PORT-CONFLICT")
 		if result.Findings[0].Fix.SBXROption != "" {
 			t.Fatal("TCP 80 conflict offered an automatic service change")
+		}
+		if result.CertificateRetry == nil || result.CertificateRetry.Owner != "Certificate Lifecycle" || !result.CertificateRetry.KeepCurrentCertificate || result.CertificateRetry.Until != "fresh Network Policy evaluation passes" {
+			t.Fatalf("TCP 80 conflict omitted typed certificate retention and retry owner: %+v", result.CertificateRetry)
+		}
+		if !strings.Contains(result.Findings[0].Found, "process nginx") || !strings.Contains(result.Findings[0].Found, "service nginx.service") {
+			t.Fatalf("TCP 80 holder facts are incomplete: %q", result.Findings[0].Found)
 		}
 	})
 
@@ -578,6 +694,40 @@ func TestEvaluateCorrectiveNetworkPolicy(t *testing.T) {
 			t.Fatal("result rendered a supplied checksum value")
 		}
 	})
+}
+
+func TestEvaluateSelectsReplacementForEveryConfigurableDefault(t *testing.T) {
+	tests := []struct {
+		purpose  string
+		address  string
+		port     uint16
+		protocol networkpolicy.Protocol
+	}{
+		{"VLESS REALITY Vision", "public", 443, networkpolicy.TCP},
+		{"Hysteria2", "public", 443, networkpolicy.UDP},
+		{"TUIC", "public", 8443, networkpolicy.UDP},
+		{"AnyTLS", "public", 9443, networkpolicy.TCP},
+		{"Subscription HTTPS", "public", 10443, networkpolicy.TCP},
+		{"VLESS XHTTP origin", "127.0.0.1", 11080, networkpolicy.TCP},
+		{"VLESS WebSocket origin", "127.0.0.1", 11081, networkpolicy.TCP},
+	}
+	for index, tt := range tests {
+		t.Run(tt.purpose, func(t *testing.T) {
+			intent, observed := completeIntent(), completeObservations()
+			foundAddress := tt.address
+			if foundAddress == "public" {
+				foundAddress = "0.0.0.0"
+			}
+			observed.Listeners = []networkpolicy.Listener{{Address: foundAddress, Port: tt.port, Protocol: tt.protocol, Process: "holder", Service: "holder.service"}}
+			candidatePort := uint16(20000 + index)
+			observed.PortCandidates = []networkpolicy.PortCandidate{{Port: candidatePort, Protocol: tt.protocol, Address: tt.address, BindProven: true, Cryptographic: true}}
+			result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
+			assertFinding(t, result, networkpolicy.NeedsAttention, networkpolicy.Required, "NETWORK-PORT-ALTERNATIVE")
+			if len(result.Policy.Replacements) != 1 || result.Policy.Replacements[0].Purpose != tt.purpose || result.Policy.Replacements[0].PreviousPort != tt.port || result.Policy.Replacements[0].Port != candidatePort {
+				t.Fatalf("replacement = %+v", result.Policy.Replacements)
+			}
+		})
+	}
 }
 
 func managedBaseline() (networkpolicy.Intent, networkpolicy.Observations) {
@@ -643,7 +793,7 @@ func completeObservations() networkpolicy.Observations {
 			PhysicalRAM:   1024 << 20,
 		},
 		PublicIPv4: []string{"192.0.2.10"},
-		SSH:        networkpolicy.SSHFacts{DetectedPort: 2222, CurrentSessions: []string{"session-1"}},
+		SSH:        networkpolicy.SSHFacts{DetectedPort: 2222, ServerAddress: "192.0.2.10", CurrentSessions: []string{"session-1"}},
 		Firewall:   networkpolicy.FirewallFacts{SBXRTableState: "absent", RootVerified: true},
 		Routes:     networkpolicy.RouteFacts{IPv4: "default via 192.0.2.1"},
 		Outbound:   networkpolicy.OutboundFacts{DNS: true, GitHubHTTPS: true, CloudflareHTTPS: true, ACMEHTTPS: true, TimeService: true, TunnelTCP7844: true, TunnelUDP7844: true},
