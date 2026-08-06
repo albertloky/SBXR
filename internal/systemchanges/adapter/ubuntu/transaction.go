@@ -311,7 +311,7 @@ func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges
 		return systemchanges.RecoveryTransaction{}, errors.New("recovery journal is invalid")
 	}
 	prepared, last := journal[0], journal[len(journal)-1]
-	irreversible := prepared.Mutation == systemchanges.CompleteRemovalMutation && irreversibleRemovalCheckpoint(last.Checkpoint)
+	irreversible := prepared.Mutation == systemchanges.CompleteRemovalMutation && systemchanges.IsIrreversibleRemovalCheckpoint(last.Checkpoint)
 	if prepared.State == nil || prepared.ChangeSet != changeSet || !validRecoveryJournalBinding(prepared) {
 		return systemchanges.RecoveryTransaction{}, errors.New("recovery transaction lineage is invalid")
 	}
@@ -706,14 +706,6 @@ func (a Adapter) Cleanup(lease systemchanges.ExecutionLease, changeSet string) e
 	return syncDirectory(root, transactionDirectory)
 }
 
-func irreversibleRemovalCheckpoint(checkpoint systemchanges.DurableCheckpoint) bool {
-	switch checkpoint {
-	case systemchanges.IrreversibleRemovalStarted, systemchanges.TokenRevocationVerified, systemchanges.RemainingExternalDeleted, systemchanges.LocalStateDeleted, systemchanges.SecretsDeleted, systemchanges.CertificatesDeleted, systemchanges.ServicesDeleted, systemchanges.IdentitiesDeleted, systemchanges.ListenersDeleted, systemchanges.FirewallRulesDeleted, systemchanges.ReleasesDeleted, systemchanges.TransactionMaterialDeleted, systemchanges.FinalRemovalAbsenceVerified:
-		return true
-	}
-	return false
-}
-
 func writeProtected(root *os.Root, name string, source io.Reader, uid int) (string, error) {
 	file, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
@@ -831,32 +823,6 @@ func validNextCheckpoint(entries []journalEntry, next journalEntry) bool {
 		return next.Checkpoint == systemchanges.OwnedExternalDeletionVerified && next.Step == 0 || next.Checkpoint == systemchanges.StatePublicationStarted && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total
 	case systemchanges.OwnedExternalDeletionVerified:
 		return next.Checkpoint == systemchanges.IrreversibleRemovalStarted && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total
-	case systemchanges.IrreversibleRemovalStarted:
-		return next.Checkpoint == systemchanges.TokenRevocationVerified && next.Step == 0
-	case systemchanges.TokenRevocationVerified:
-		return next.Checkpoint == systemchanges.RemainingExternalDeleted && validEvidence(next.Evidence)
-	case systemchanges.RemainingExternalDeleted:
-		return next.Checkpoint == systemchanges.LocalStateDeleted && validEvidence(next.Evidence)
-	case systemchanges.LocalStateDeleted:
-		return next.Checkpoint == systemchanges.SecretsDeleted && validEvidence(next.Evidence)
-	case systemchanges.SecretsDeleted:
-		return next.Checkpoint == systemchanges.CertificatesDeleted && validEvidence(next.Evidence)
-	case systemchanges.CertificatesDeleted:
-		return next.Checkpoint == systemchanges.ServicesDeleted && validEvidence(next.Evidence)
-	case systemchanges.ServicesDeleted:
-		return next.Checkpoint == systemchanges.IdentitiesDeleted && validEvidence(next.Evidence)
-	case systemchanges.IdentitiesDeleted:
-		return next.Checkpoint == systemchanges.ListenersDeleted && validEvidence(next.Evidence)
-	case systemchanges.ListenersDeleted:
-		return next.Checkpoint == systemchanges.FirewallRulesDeleted && validEvidence(next.Evidence)
-	case systemchanges.FirewallRulesDeleted:
-		return next.Checkpoint == systemchanges.ReleasesDeleted && validEvidence(next.Evidence)
-	case systemchanges.ReleasesDeleted:
-		return next.Checkpoint == systemchanges.TransactionMaterialDeleted && validEvidence(next.Evidence)
-	case systemchanges.TransactionMaterialDeleted:
-		return next.Checkpoint == systemchanges.FinalRemovalAbsenceVerified && next.Evidence == nil
-	case systemchanges.FinalRemovalAbsenceVerified:
-		return false
 	case systemchanges.StatePublicationStarted:
 		return next.Checkpoint == systemchanges.StatePublished && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total
 	case systemchanges.StatePublished:
@@ -878,7 +844,14 @@ func validNextCheckpoint(entries []journalEntry, next journalEntry) bool {
 	case systemchanges.RollbackVerified:
 		return next.Checkpoint == systemchanges.RolledBack && next.Step == 0
 	}
-	return false
+	expected, irreversible := systemchanges.NextIrreversibleRemovalCheckpoint(last.Checkpoint)
+	if !irreversible || expected == "" || next.Checkpoint != expected || next.Step != 0 {
+		return false
+	}
+	if expected == systemchanges.TokenRevocationVerified || expected == systemchanges.FinalRemovalAbsenceVerified {
+		return next.Evidence == nil
+	}
+	return validEvidence(next.Evidence)
 }
 
 func highestStartedStep(entries []journalEntry) int {

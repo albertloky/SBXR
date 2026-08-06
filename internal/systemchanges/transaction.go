@@ -328,7 +328,7 @@ func (i Interface) Recover() ApplyResult {
 	}
 	recovery.Steps = append([]Step(nil), recovery.Steps...)
 	spec := ChangeSetSpec{Identity: recovery.ChangeSet, Mutation: recovery.Mutation, StartingState: recovery.Starting, OutcomeOwner: recovery.OutcomeOwner, Steps: recovery.Steps, Timeouts: recovery.Timeouts}
-	if recovery.Mutation == CompleteRemovalMutation && irreversibleRemovalCheckpoint(recovery.LastCheckpoint) {
+	if recovery.Mutation == CompleteRemovalMutation && IsIrreversibleRemovalCheckpoint(recovery.LastCheckpoint) {
 		removalAdapter, ok := i.adapter.(IrreversibleRemovalAdapter)
 		if !ok {
 			return finish(lock, forwardRemovalRequired(spec, "SYSTEM-CHANGES-REMOVAL-ADAPTER", recovery.LastCheckpoint))
@@ -381,13 +381,14 @@ func validRecoveryTransaction(recovery RecoveryTransaction) bool {
 	if recovery.Mutation == CompleteRemovalMutation != removal || removal && !validRemovalSteps(recovery.Steps) {
 		return false
 	}
+	if IsIrreversibleRemovalCheckpoint(recovery.LastCheckpoint) {
+		return recovery.Mutation == CompleteRemovalMutation && recovery.AttemptedSteps == len(recovery.Steps) && recovery.RollbackStep == 0
+	}
 	switch recovery.LastCheckpoint {
 	case Prepared:
 		return recovery.AttemptedSteps == 0
 	case StepStarted, StepCompleted, PrePublicationHealthPassed, OwnedExternalDeletionVerified, StatePublicationStarted, StatePublished, PostPublicationHealthPassed:
 		return recovery.AttemptedSteps > 0 && recovery.RollbackStep == 0
-	case IrreversibleRemovalStarted, TokenRevocationVerified, RemainingExternalDeleted, LocalStateDeleted, SecretsDeleted, CertificatesDeleted, ServicesDeleted, IdentitiesDeleted, ListenersDeleted, FirewallRulesDeleted, ReleasesDeleted, TransactionMaterialDeleted, FinalRemovalAbsenceVerified:
-		return recovery.Mutation == CompleteRemovalMutation && recovery.AttemptedSteps == len(recovery.Steps) && recovery.RollbackStep == 0
 	case RollbackStarted:
 		return recovery.RollbackStep == recovery.AttemptedSteps
 	case RollbackStepStarted:
@@ -402,12 +403,28 @@ func validRecoveryTransaction(recovery RecoveryTransaction) bool {
 	return false
 }
 
-func irreversibleRemovalCheckpoint(checkpoint DurableCheckpoint) bool {
-	switch checkpoint {
-	case IrreversibleRemovalStarted, TokenRevocationVerified, RemainingExternalDeleted, LocalStateDeleted, SecretsDeleted, CertificatesDeleted, ServicesDeleted, IdentitiesDeleted, ListenersDeleted, FirewallRulesDeleted, ReleasesDeleted, TransactionMaterialDeleted, FinalRemovalAbsenceVerified:
-		return true
+func NextIrreversibleRemovalCheckpoint(checkpoint DurableCheckpoint) (DurableCheckpoint, bool) {
+	if checkpoint == IrreversibleRemovalStarted {
+		return TokenRevocationVerified, true
 	}
-	return false
+	if checkpoint == TokenRevocationVerified {
+		return irreversibleRemovalPhases[0].checkpoint, true
+	}
+	for index, item := range irreversibleRemovalPhases {
+		if checkpoint != item.checkpoint {
+			continue
+		}
+		if index+1 < len(irreversibleRemovalPhases) {
+			return irreversibleRemovalPhases[index+1].checkpoint, true
+		}
+		return FinalRemovalAbsenceVerified, true
+	}
+	return "", checkpoint == FinalRemovalAbsenceVerified
+}
+
+func IsIrreversibleRemovalCheckpoint(checkpoint DurableCheckpoint) bool {
+	_, ok := NextIrreversibleRemovalCheckpoint(checkpoint)
+	return ok
 }
 
 func continueIrreversibleRemoval(lease ExecutionLease, adapter TransactionAdapter, removal IrreversibleRemovalAdapter, recovery RecoveryTransaction, spec ChangeSetSpec) ApplyResult {
