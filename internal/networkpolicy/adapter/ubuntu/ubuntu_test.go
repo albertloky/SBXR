@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/albertloky/SBXR/internal/networkpolicy"
@@ -136,7 +138,7 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !privileged.Firewall.RootVerified || privileged.Firewall.SBXRTableState != "present" || privileged.Firewall.UnexpectedRule == "" || privileged.Checksums["sbxr_nftables"] == "" {
+	if !privileged.Firewall.RootVerified || privileged.Firewall.SBXRTableState != "present" || privileged.Firewall.UnexpectedRule != `manager "nftables"; service "nftables"; table "filter"; chain "input"; rule "base chain hook input"` || privileged.Checksums["sbxr_nftables"] == "" {
 		t.Fatalf("typed nftables facts = %+v checksums %+v", privileged.Firewall, privileged.Checksums)
 	}
 	ownedOnly := `{"nftables":[{"table":{"family":"inet","name":"sbxr"}}]}`
@@ -145,7 +147,7 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 		case "nft":
 			return []byte(ownedOnly), nil
 		case "iptables-save":
-			return []byte("-A INPUT -j DROP\n"), nil
+			return []byte("-A INPUT -s 198.51.100.7 -p tcp --dport 22 -j DROP -m comment --comment private-note\n"), nil
 		case "ip6tables-save":
 			return []byte{}, nil
 		default:
@@ -156,8 +158,22 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if legacy.Firewall.UnexpectedRule != "unexpected legacy iptables rule" {
+	if legacy.Firewall.UnexpectedRule != `manager "legacy iptables"; service "iptables-save"; table "filter"; chain "INPUT"; rule "-A INPUT -p tcp --dport 22 -j DROP"` {
 		t.Fatalf("legacy firewall fact = %+v", legacy.Firewall)
+	}
+	foreignSameName := `{"nftables":[{"table":{"family":"ip","name":"sbxr"}},{"chain":{"family":"ip","table":"sbxr","name":"input","hook":"input"}}]}`
+	adapter.output = func(command string, _ ...string) ([]byte, error) {
+		if command == "nft" {
+			return []byte(foreignSameName), nil
+		}
+		return []byte{}, nil
+	}
+	foreign, err := adapter.Observe(networkpolicy.ObservationRequest{Intent: networkpolicy.Intent{SSHPort: 2222}, Stage: networkpolicy.PostApproval})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if foreign.Firewall.UnexpectedRule != `manager "nftables"; service "nftables"; table "sbxr"; chain "input"; rule "base chain hook input"` {
+		t.Fatalf("foreign same-name table was treated as SBXR-owned: %+v", foreign.Firewall)
 	}
 	adapter.output = func(command string, _ ...string) ([]byte, error) {
 		if command == "ip6tables-save" {
@@ -214,13 +230,19 @@ func TestProductionUbuntuSeam(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("controlled production Adapter Seam check requires Ubuntu")
 	}
+	if os.Geteuid() != 0 {
+		t.Skip("controlled production nftables inspection requires the Owner root seam")
+	}
+	if _, err := exec.LookPath("nft"); err != nil {
+		t.Fatal("production Ubuntu seam requires nft")
+	}
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer listener.Close()
 	port := uint16(listener.Addr().(*net.TCPAddr).Port)
-	observed, err := New().Observe(networkpolicy.ObservationRequest{Stage: networkpolicy.PreApproval})
+	observed, err := New().Observe(networkpolicy.ObservationRequest{Stage: networkpolicy.PostApproval})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,10 +252,51 @@ func TestProductionUbuntuSeam(t *testing.T) {
 	if observed.Routes.IPv4 == "" && observed.Routes.IPv6 == "" {
 		t.Fatal("production Ubuntu route observation is empty")
 	}
+	if !observed.Firewall.RootVerified {
+		t.Fatal("production Ubuntu nftables inspection was not root-verified")
+	}
+	foundSocket := false
 	for _, found := range observed.Listeners {
 		if found.Address == "127.0.0.1" && found.Port == port && found.Protocol == networkpolicy.TCP {
-			return
+			foundSocket = true
+			break
 		}
 	}
-	t.Fatalf("temporary production socket 127.0.0.1:%d/TCP was not observed", port)
+	if !foundSocket {
+		t.Fatalf("temporary production socket 127.0.0.1:%d/TCP was not observed", port)
+	}
+	result := networkpolicy.New(candidateAdapter{}).Evaluate(networkpolicy.Request{Intent: productionCandidateIntent(), Stage: networkpolicy.PostApproval})
+	if result.Policy.Nftables == "" {
+		t.Fatal("production native validation received an empty candidate")
+	}
+	command := exec.Command("nft", "--check", "--file", "-")
+	command.Stdin = strings.NewReader(result.Policy.Nftables)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("native candidate validation failed without Apply: %v: %s", err, output)
+	}
+}
+
+type candidateAdapter struct{}
+
+func (candidateAdapter) Observe(networkpolicy.ObservationRequest) (networkpolicy.Observations, error) {
+	return networkpolicy.Observations{
+		PublicIPv4: []string{"192.0.2.10"},
+		SSH:        networkpolicy.SSHFacts{DetectedPort: 2222, ServerAddress: "192.0.2.10", CurrentSessions: []string{"current"}},
+		Firewall:   networkpolicy.FirewallFacts{SBXRTableState: "absent", RootVerified: true},
+		Checksums:  map[string]string{},
+	}, nil
+}
+
+func productionCandidateIntent() networkpolicy.Intent {
+	return networkpolicy.Intent{
+		Revision: 1, Baseline: networkpolicy.Clean, PublicIPv4: "192.0.2.10", PrimarySubscriptionAddress: "192.0.2.10", SSHPort: 2222, SubscriptionPort: 10443,
+		Profiles: networkpolicy.Profiles{
+			VLESSRealityVision: networkpolicy.Profile{Enabled: true, Port: 443},
+			VLESSXHTTP:         networkpolicy.Profile{Enabled: true, Address: "127.0.0.1", Port: 11080},
+			VLESSWebSocket:     networkpolicy.Profile{Enabled: true, Address: "127.0.0.1", Port: 11081},
+			Hysteria2:          networkpolicy.Profile{Port: 443},
+			TUIC:               networkpolicy.Profile{Port: 8443},
+			AnyTLS:             networkpolicy.Profile{Port: 9443},
+		},
+	}
 }

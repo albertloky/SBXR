@@ -7,6 +7,9 @@ This record covers the Network Policy Module only. It is not Release Qualificati
 - `NETWORK-MODULE`: `go test ./internal/networkpolicy`
 - `NETWORK-FAMILY-EXPOSURE`: `go test ./internal/networkpolicy -run 'TestEvaluate(SupportedCleanBaseline|PublicFamilyQualification|CleanAndManagedOwnership|ManagedCloudflareRoutes|ManagedPublicListenersMatchQualifiedFamilies|CorrectiveNetworkPolicy)'`
 - `NETWORK-PORT-SELECTION`: `go test ./internal/networkpolicy -run 'TestEvaluate(ManagedCommittedPortConflictUsesCorrectionFlow|CorrectiveNetworkPolicy|SelectsReplacementForEveryConfigurableDefault)' && go test ./internal/networkpolicy/adapter/ubuntu -run TestAdapterCollectsTypedFactsWithoutMutation -v`
+- `NETWORK-NFTABLES-OWNERSHIP`: `go test ./internal/networkpolicy -run 'TestEvaluate(IsolatedNftablesCandidateAndSSHSafety|NftablesIntervalsAndCompetingPolicy)'`
+- `NETWORK-COMPETING-MANAGER`: `go test ./internal/networkpolicy -run TestEvaluateNftablesIntervalsAndCompetingPolicy && go test ./internal/networkpolicy/adapter/ubuntu -run TestAdapterCollectsTypedFactsWithoutMutation`
+- `NETWORK-SSH-PRESERVATION`: `go test ./internal/networkpolicy -run TestEvaluateIsolatedNftablesCandidateAndSSHSafety`
 - `NETWORK-UBUNTU-SEAM`: `go test ./internal/networkpolicy/adapter/ubuntu -run 'TestAdapterCollectsTypedFactsWithoutMutation|TestProductionUbuntuSeam' -v`
 - `NETWORK-REPOSITORY`: `go test ./...`
 
@@ -23,14 +26,16 @@ This record covers the Network Policy Module only. It is not Release Qualificati
 7. Verify at least one public family qualifies; the policy contains only qualified selected families; its certificate address is exactly the Owner-selected primary subscription IP; adding or removing a family makes the revision-bound result stale; every enabled Connection Profile has exactly its approved public listener or typed loopback Cloudflare route; every disabled Connection Profile has no exposure; subscription has only public `10443/TCP`; and temporary public `80/TCP` appears only for one requested HTTP-01 interval.
 8. Occupy each configurable default in turn and in combination; verify the rebuilt result records every cryptographically selected, bind-proven replacement outside the actual ephemeral range, detected SSH, TCP 80, current listeners, and other selections; identifies the typed downstream artifacts to rebuild; and adds an immediate pre-Apply bind gate for each replacement. Verify a committed replacement and detected SSH never move automatically, exact holder facts appear in their Correction Flows, and occupied TCP 80 returns a typed handoff that keeps the current certificate under Certificate Lifecycle retry ownership.
 9. Copy each result and confirm no supplied checksum, Client Access Value, Infrastructure Secret, arbitrary command, raw rule output, or provider credential appears.
+10. Confirm the native candidate owns only `inet sbxr`, has no whole-ruleset flush, admits only qualified public exposure, preserves established traffic and the detected SSH port, excludes loopback origins from public rules, and admits TCP 80 only for requested certificate work. Active competing managers and exact unexpected base-chain or legacy-rule identities must block without being disabled; inactive packages must not block.
+11. Confirm the typed System Changes handoff requires complete native validation, atomic table Apply, a root-owned rollback watchdog, exact previous-rule restoration, existing-session responsiveness, detected-port admission, and watchdog cancellation only after `NETWORK-SSH-RESPONSIVE`. Complete removal names only `inet sbxr`, and the SSH warning names the future outside-reconnection limit and VPS provider console recovery path.
 
 ## Current status
 
 | Stage | Status | Evidence |
 |---|---|---|
-| Module Verification | Passed | `NETWORK-MODULE` covers supported/unsupported host facts, address families, Clean/Managed classification, adoption refusal, protocol-aware exposure, stable port selection, stale binding, privilege staging, disk/time gates, Correction Flow material, typed outcomes, and secret safety. |
-| Seam Verification — controlled fixture | Passed | `NETWORK-UBUNTU-SEAM` proves the production Adapter parses Ubuntu, memory, systemd, listener ownership, route, virtualization, and ephemeral-port facts and releases real TCP/UDP bind probes without changing the fixture. |
-| Seam Verification — real Ubuntu | Pending | Run `TestProductionUbuntuSeam` on the assigned controlled Ubuntu 24.04 environment; this Mac skips it. |
-| Integrated Verification | Pending — integrated release | System Changes, nftables Apply/watchdog, temporary TCP 80 cleanup, and complete executable wiring do not exist yet. |
+| Module Verification | Passed | `NETWORK-MODULE` covers supported/unsupported host facts, address families, Clean/Managed classification, adoption refusal, protocol-aware exposure, stable port selection, isolated nftables ownership, competing-policy refusal, SSH preservation, the typed watchdog/rollback handoff, Complete-removal scope, stale binding, privilege staging, disk/time gates, Correction Flow material, typed outcomes, and secret safety. |
+| Seam Verification — controlled fixture | Passed | `NETWORK-UBUNTU-SEAM` proves the production Adapter parses Ubuntu, memory, systemd, listener ownership, route, virtualization, ephemeral-port, exact nftables base-chain, and legacy-iptables facts and releases real TCP/UDP bind probes without changing the fixture. |
+| Seam Verification — real Ubuntu | Pending | Run `TestProductionUbuntuSeam` as root on the assigned controlled Ubuntu 24.04 environment to inspect the real ruleset and run native `nft --check` candidate validation without Apply; this Mac skips it. |
+| Integrated Verification | Pending — integrated release | System Changes execution of nftables Apply/watchdog/rollback, temporary TCP 80 cleanup, and complete executable wiring do not exist yet. |
 | Codex Live Acceptance | Pending — approved Acceptance Run | No Acceptance VPS or Acceptance Client was used. |
 | Owner Acceptance | Pending — first v1 release | Provider-console, maintained-client, and maintained-network checks belong to Albert. |

@@ -85,13 +85,13 @@ func (a Adapter) Observe(request networkpolicy.ObservationRequest) (networkpolic
 		if rules, commandErr := a.privilegedOutput("nft", "-j", "list", "ruleset"); commandErr == nil {
 			state, unexpected, sbxrChecksum, parseErr := inspectNftables(rules)
 			if parseErr == nil {
-				legacy, legacyErr := a.legacyIPTablesRules()
+				legacy, legacyErr := a.legacyIPTablesRule()
 				if legacyErr == nil {
 					observed.Firewall.RootVerified = true
 					observed.Firewall.SBXRTableState = state
 					observed.Firewall.UnexpectedRule = unexpected
-					if observed.Firewall.UnexpectedRule == "" && legacy {
-						observed.Firewall.UnexpectedRule = "unexpected legacy iptables rule"
+					if observed.Firewall.UnexpectedRule == "" && legacy != "" {
+						observed.Firewall.UnexpectedRule = legacy
 					}
 					observed.Checksums["nftables"] = checksum(rules)
 					observed.Checksums["sbxr_nftables"] = sbxrChecksum
@@ -126,19 +126,45 @@ func (a Adapter) privilegedOutput(command string, arguments ...string) ([]byte, 
 	return nil, os.ErrNotExist
 }
 
-func (a Adapter) legacyIPTablesRules() (bool, error) {
+func (a Adapter) legacyIPTablesRule() (string, error) {
 	for _, command := range []string{"iptables-save", "ip6tables-save"} {
 		output, err := a.privilegedOutput(command)
 		if err != nil {
-			return false, err
+			return "", err
 		}
+		table := "filter"
 		for _, line := range strings.Split(string(output), "\n") {
-			if strings.HasPrefix(strings.TrimSpace(line), "-A ") {
-				return true, nil
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "*") {
+				table = strings.TrimPrefix(line, "*")
+			}
+			if strings.HasPrefix(line, "-A ") {
+				fields := strings.Fields(line)
+				chain := "unknown"
+				if len(fields) > 1 {
+					chain = fields[1]
+				}
+				return fmt.Sprintf("manager %q; service %q; table %q; chain %q; rule %q", "legacy iptables", command, table, chain, safeRule(line)), nil
 			}
 		}
 	}
-	return false, nil
+	return "", nil
+}
+
+func safeRule(rule string) string {
+	fields := strings.Fields(rule)
+	if len(fields) < 2 {
+		return "legacy append rule present"
+	}
+	safe := fields[:2]
+	for index := 2; index+1 < len(fields); index++ {
+		switch fields[index] {
+		case "-p", "--sport", "--dport", "--ctstate", "-j":
+			safe = append(safe, fields[index], fields[index+1])
+			index++
+		}
+	}
+	return strings.Join(safe, " ")
 }
 
 func inspectNftables(data []byte) (state, unexpected, sbxrChecksum string, err error) {
@@ -169,8 +195,10 @@ func inspectNftables(data []byte) (state, unexpected, sbxrChecksum string, err e
 				state = "present"
 				owned = append(owned, item)
 			}
-			if kind == "chain" && len(identity.Hook) > 0 && table != "sbxr" && unexpected == "" {
-				unexpected = fmt.Sprintf("unexpected base chain %s/%s", table, identity.Name)
+			if kind == "chain" && len(identity.Hook) > 0 && (identity.Family != "inet" || table != "sbxr") && unexpected == "" {
+				var hook string
+				_ = json.Unmarshal(identity.Hook, &hook)
+				unexpected = fmt.Sprintf("manager %q; service %q; table %q; chain %q; rule %q", "nftables", "nftables", table, identity.Name, "base chain hook "+hook)
 			}
 		}
 	}

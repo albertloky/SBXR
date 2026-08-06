@@ -179,6 +179,105 @@ func TestEvaluateSupportedCleanBaseline(t *testing.T) {
 	}
 }
 
+func TestEvaluateIsolatedNftablesCandidateAndSSHSafety(t *testing.T) {
+	result := networkpolicy.New(staticAdapter{observed: completeObservations()}).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PostApproval})
+	want := `table inet sbxr {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		ct state established,related accept
+		iifname "lo" accept
+		ip protocol icmp accept
+		meta l4proto ipv6-icmp accept
+		ip daddr 192.0.2.10 tcp dport { 443, 2222, 9443, 10443 } accept
+		ip daddr 192.0.2.10 udp dport { 443, 8443 } accept
+	}
+}`
+	if result.Policy.Nftables != want {
+		t.Fatalf("nftables candidate:\n%s\nwant:\n%s", result.Policy.Nftables, want)
+	}
+	if result.Policy.Table != "inet sbxr" || result.Policy.FlushRuleset {
+		t.Fatalf("candidate ownership = table %q flush=%t", result.Policy.Table, result.Policy.FlushRuleset)
+	}
+	if result.SystemChanges != (networkpolicy.SystemChangesRequirements{
+		ValidateCompleteCandidate: true,
+		AtomicTableApply:          true,
+		RootOwnedWatchdog:         true,
+		ProveCurrentSSHResponsive: true,
+		ProveDetectedSSHAdmitted:  true,
+		CancelAfterGate:           "NETWORK-SSH-RESPONSIVE",
+		RestoreExactPreviousRules: true,
+	}) {
+		t.Fatalf("System Changes requirements = %+v", result.SystemChanges)
+	}
+	if result.SSHSafety.SecondConnectionRequired || result.SSHSafety.EditsSSHConfiguration || !result.SSHSafety.FutureOutsideReconnectUnproved || result.SSHSafety.Warning != "One existing SSH session cannot prove a future outside reconnection." || result.SSHSafety.RecoveryPath != "VPS provider console" {
+		t.Fatalf("SSH safety = %+v", result.SSHSafety)
+	}
+	if result.CompleteRemoval != (networkpolicy.CompleteRemoval{Family: "inet", Table: "sbxr", PreserveUnrelatedPolicy: true}) {
+		t.Fatalf("Complete removal = %+v", result.CompleteRemoval)
+	}
+	if !hasGate(result.PreApplyGates, "NETWORK-WATCHDOG-READY") || !hasGate(result.PostApplyGates, "NETWORK-SSH-RESPONSIVE") {
+		t.Fatalf("watchdog gates = pre %+v post %+v", result.PreApplyGates, result.PostApplyGates)
+	}
+	observed := completeObservations()
+	observed.SSH.ServerAddress = "10.0.0.4"
+	management := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PostApproval})
+	if !strings.Contains(management.Policy.Nftables, "ip daddr 10.0.0.4 tcp dport 2222 accept") {
+		t.Fatalf("candidate omitted detected management-address SSH: %q", management.Policy.Nftables)
+	}
+}
+
+func TestEvaluateNftablesIntervalsAndCompetingPolicy(t *testing.T) {
+	t.Run("TCP 80 exists only during certificate work", func(t *testing.T) {
+		intent := completeIntent()
+		intent.TemporaryHTTP = true
+		result := networkpolicy.New(staticAdapter{observed: completeObservations()}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
+		if !strings.Contains(result.Policy.Nftables, "tcp dport { 80, 443, 2222, 9443, 10443 }") {
+			t.Fatalf("temporary candidate = %q", result.Policy.Nftables)
+		}
+	})
+
+	for _, manager := range []string{"", "ufw.service", "firewalld.service", "docker.service"} {
+		name := manager
+		if name == "" {
+			name = "installed but inactive managers"
+		}
+		t.Run(name, func(t *testing.T) {
+			observed := completeObservations()
+			observed.Firewall.ActiveManager = manager
+			result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PostApproval})
+			if manager == "" {
+				if result.Outcome != networkpolicy.Healthy {
+					t.Fatalf("inactive managers blocked: %+v", result.Findings)
+				}
+				return
+			}
+			assertFinding(t, result, networkpolicy.Failed, networkpolicy.Required, "NETWORK-FIREWALL-CONFLICT")
+			if !strings.Contains(result.Findings[0].Found, "manager") || !strings.Contains(result.Findings[0].Found, manager) || !strings.Contains(result.Findings[0].Found, "service") || !strings.Contains(result.Findings[0].Found, "table") || !strings.Contains(result.Findings[0].Found, "chain") || !strings.Contains(result.Findings[0].Found, "rule") {
+				t.Fatalf("competing manager finding = %q", result.Findings[0].Found)
+			}
+		})
+	}
+
+	t.Run("unexpected base chain keeps exact safe identity", func(t *testing.T) {
+		observed := completeObservations()
+		observed.Firewall.UnexpectedRule = `manager "nftables"; service "nftables"; table "filter"; chain "input"; rule "base chain hook input"`
+		result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PostApproval})
+		assertFinding(t, result, networkpolicy.Failed, networkpolicy.Required, "NETWORK-FIREWALL-CONFLICT")
+		if result.Findings[0].Found != observed.Firewall.UnexpectedRule {
+			t.Fatalf("unexpected policy finding = %q", result.Findings[0].Found)
+		}
+	})
+}
+
+func hasGate(gates []networkpolicy.Gate, code string) bool {
+	for _, gate := range gates {
+		if gate.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
 func TestEvaluatePublicFamilyQualification(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -218,6 +317,9 @@ func TestEvaluatePublicFamilyQualification(t *testing.T) {
 			if tt.name == "no qualified family" && len(result.Policy.Exposures) != 0 {
 				t.Fatalf("unqualified public policy retained exposures: %+v", result.Policy.Exposures)
 			}
+			if tt.ipv4 != "" && !strings.Contains(result.Policy.Nftables, "ip daddr "+tt.ipv4) || tt.ipv6 != "" && !strings.Contains(result.Policy.Nftables, "ip6 daddr "+tt.ipv6) {
+				t.Fatalf("candidate omitted qualified family: %q", result.Policy.Nftables)
+			}
 		})
 	}
 
@@ -246,6 +348,10 @@ func TestEvaluateRefusesIncompleteIntent(t *testing.T) {
 		func(intent *networkpolicy.Intent) { intent.Revision = 0 },
 		func(intent *networkpolicy.Intent) { intent.Baseline = "discovered" },
 		func(intent *networkpolicy.Intent) { intent.SSHPort = 0 },
+		func(intent *networkpolicy.Intent) {
+			intent.PublicIPv4 = `192.0.2.10; flush ruleset`
+			intent.PrimarySubscriptionAddress = intent.PublicIPv4
+		},
 		func(intent *networkpolicy.Intent) { intent.Profiles.VLESSXHTTP.Address = "" },
 	} {
 		intent := completeIntent()
@@ -621,7 +727,7 @@ func TestEvaluateCorrectiveNetworkPolicy(t *testing.T) {
 		if finding.Fix.SBXROption == "" || finding.Back == "" {
 			t.Fatalf("replacement omitted review or Back: %+v", finding)
 		}
-		if len(result.PreApplyGates) != 3 || result.PreApplyGates[2].Code != "NETWORK-PORT-STILL-BINDABLE" || !strings.Contains(result.PreApplyGates[2].Required, "public:20000/TCP") {
+		if len(result.PreApplyGates) != 5 || result.PreApplyGates[4].Code != "NETWORK-PORT-STILL-BINDABLE" || !strings.Contains(result.PreApplyGates[4].Required, "public:20000/TCP") {
 			t.Fatalf("replacement recheck gate = %+v", result.PreApplyGates)
 		}
 		observed.Listeners = append(observed.Listeners, networkpolicy.Listener{Address: "0.0.0.0", Port: 20000, Protocol: networkpolicy.TCP, Process: "late-holder", Service: "late.service"})
@@ -641,7 +747,7 @@ func TestEvaluateCorrectiveNetworkPolicy(t *testing.T) {
 			{Port: 20001, Protocol: networkpolicy.UDP, Address: "public", BindProven: true, Cryptographic: true},
 		}
 		result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
-		if result.Outcome != networkpolicy.NeedsAttention || len(result.Findings) != 2 || len(result.Policy.Replacements) != 2 || result.Policy.Replacements[0].Purpose != "VLESS REALITY Vision" || result.Policy.Replacements[1].Purpose != "TUIC" || len(result.PreApplyGates) != 4 {
+		if result.Outcome != networkpolicy.NeedsAttention || len(result.Findings) != 2 || len(result.Policy.Replacements) != 2 || result.Policy.Replacements[0].Purpose != "VLESS REALITY Vision" || result.Policy.Replacements[1].Purpose != "TUIC" || len(result.PreApplyGates) != 6 {
 			t.Fatalf("partially rebuilt result: %+v", result)
 		}
 	})

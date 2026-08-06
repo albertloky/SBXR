@@ -252,6 +252,9 @@ type Result struct {
 	Outcome          Outcome
 	Findings         []Finding
 	Policy           Policy
+	SystemChanges    SystemChangesRequirements
+	SSHSafety        SSHSafety
+	CompleteRemoval  CompleteRemoval
 	CertificateRetry *CertificateRetryHandoff
 	Binding          Binding
 	PreApplyGates    []Gate
@@ -286,12 +289,39 @@ type Fix struct {
 
 type Policy struct {
 	Table              string
+	Nftables           string
+	FlushRuleset       bool
+	SSHAddress         string
 	PublicIPv4         string
 	PublicIPv6         string
 	PrimaryAddress     string
 	CertificateAddress string
 	Exposures          []Exposure
 	Replacements       []PortReplacement
+}
+
+type SystemChangesRequirements struct {
+	ValidateCompleteCandidate bool
+	AtomicTableApply          bool
+	RootOwnedWatchdog         bool
+	ProveCurrentSSHResponsive bool
+	ProveDetectedSSHAdmitted  bool
+	CancelAfterGate           string
+	RestoreExactPreviousRules bool
+}
+
+type SSHSafety struct {
+	SecondConnectionRequired       bool
+	EditsSSHConfiguration          bool
+	FutureOutsideReconnectUnproved bool
+	Warning                        string
+	RecoveryPath                   string
+}
+
+type CompleteRemoval struct {
+	Family                  string
+	Table                   string
+	PreserveUnrelatedPolicy bool
 }
 
 type PortReplacement struct {
@@ -362,6 +392,9 @@ func (i Interface) Evaluate(request Request) Result {
 	}
 	applyManagedProof(request.Managed, &observed)
 	result.Policy = candidatePolicy(request.Intent)
+	result.SystemChanges = SystemChangesRequirements{ValidateCompleteCandidate: true, AtomicTableApply: true, RootOwnedWatchdog: true, ProveCurrentSSHResponsive: true, ProveDetectedSSHAdmitted: true, CancelAfterGate: "NETWORK-SSH-RESPONSIVE", RestoreExactPreviousRules: true}
+	result.SSHSafety = SSHSafety{FutureOutsideReconnectUnproved: true, Warning: "One existing SSH session cannot prove a future outside reconnection.", RecoveryPath: "VPS provider console"}
+	result.CompleteRemoval = CompleteRemoval{Family: "inet", Table: "sbxr", PreserveUnrelatedPolicy: true}
 	evaluateSSH(&result, request.Intent, observed.SSH)
 	evaluateHost(&result, observed.Host)
 	evaluateAddresses(&result, request.Intent, observed)
@@ -370,9 +403,12 @@ func (i Interface) Evaluate(request Request) Result {
 	evaluateTime(&result, request.Intent.Baseline, observed.Time)
 	evaluateOutbound(&result, observed.Outbound)
 	evaluateOwnership(&result, request.Intent, observed)
+	result.Policy.Nftables = renderNftables(result.Policy)
 	result.Binding = bind(request, observed, result.Policy)
 	result.PreApplyGates = []Gate{
 		{Code: "NETWORK-PREFLIGHT-FRESH", Required: "all bound observations still match"},
+		{Code: "NETWORK-CANDIDATE-VALID", Required: "the complete native nftables candidate validates without applying it"},
+		{Code: "NETWORK-WATCHDOG-READY", Required: "a root-owned watchdog can restore the exact previous rules on any failure"},
 		{Code: "NETWORK-SSH-PRESERVED", Required: "the detected SSH port and current session remain admitted"},
 	}
 	for _, replacement := range result.Policy.Replacements {
@@ -414,7 +450,10 @@ func evaluateSSH(result *Result, intent Intent, facts SSHFacts) {
 	if facts.DetectedPort != 0 && len(result.Policy.Exposures) > 0 {
 		result.Policy.Exposures[0].Port = facts.DetectedPort
 	}
-	if facts.DetectedPort == intent.SSHPort && len(facts.CurrentSessions) > 0 {
+	if address := net.ParseIP(facts.ServerAddress); address != nil {
+		result.Policy.SSHAddress = address.String()
+	}
+	if facts.DetectedPort == intent.SSHPort && result.Policy.SSHAddress != "" && len(facts.CurrentSessions) > 0 {
 		return
 	}
 	result.add(requiredFailure("NETWORK-SSH-DETECTION", "Fresh SSH preservation facts do not match reviewed intent", fmt.Sprintf("detected port %d with %d current sessions", facts.DetectedPort, len(facts.CurrentSessions)), fmt.Sprintf("detected SSH port %d with the current session present", intent.SSHPort), "the candidate policy must preserve the actual SSH port and established session", ownerFix("Reconnect through the intended SSH port or correct the reviewed port, then run the complete preflight again.")))
@@ -423,6 +462,9 @@ func evaluateSSH(result *Result, intent Intent, facts SSHFacts) {
 func validRequest(request Request) bool {
 	intent := request.Intent
 	if intent.Revision == 0 || request.Stage != PreApproval && request.Stage != PostApproval || intent.Baseline != Clean && intent.Baseline != Managed || intent.SSHPort == 0 || intent.SubscriptionPort == 0 || intent.PublicIPv4 == "" && intent.PublicIPv6 == "" || intent.PrimarySubscriptionAddress != intent.PublicIPv4 && intent.PrimarySubscriptionAddress != intent.PublicIPv6 {
+		return false
+	}
+	if intent.PublicIPv4 != "" && (net.ParseIP(intent.PublicIPv4) == nil || net.ParseIP(intent.PublicIPv4).To4() == nil) || intent.PublicIPv6 != "" && (net.ParseIP(intent.PublicIPv6) == nil || net.ParseIP(intent.PublicIPv6).To4() != nil) {
 		return false
 	}
 	for _, port := range intent.SelectedPorts() {
@@ -443,9 +485,12 @@ func evaluateOwnership(result *Result, intent Intent, observed Observations) {
 		return
 	}
 	if observed.Firewall.ActiveManager != "" || observed.Firewall.UnexpectedRule != "" {
-		found := observed.Firewall.ActiveManager
-		if found == "" {
-			found = observed.Firewall.UnexpectedRule
+		found := observed.Firewall.UnexpectedRule
+		if observed.Firewall.ActiveManager != "" {
+			found = fmt.Sprintf("manager %q; service %q; table %q; chain %q; rule %q", strings.TrimSuffix(observed.Firewall.ActiveManager, ".service"), observed.Firewall.ActiveManager, "not found", "not found", "active manager owns firewall behavior")
+			if observed.Firewall.UnexpectedRule != "" {
+				found += "; competing policy: " + observed.Firewall.UnexpectedRule
+			}
 		}
 		result.add(requiredFailure("NETWORK-FIREWALL-CONFLICT", "A competing firewall owner or unexpected rule is active", found, "no active competing firewall owner and no unexpected base-chain or legacy rule", "SBXR never disables another firewall owner or flushes the host ruleset", ownerFix("Review the named firewall owner and correct it outside SBXR, then check again.")))
 		return
@@ -866,6 +911,54 @@ func candidatePolicy(intent Intent) Policy {
 		}
 	}
 	return policy
+}
+
+func renderNftables(policy Policy) string {
+	if policy.Table != "inet sbxr" || len(policy.Exposures) == 0 {
+		return ""
+	}
+	ports := map[Protocol][]uint16{TCP: {}, UDP: {}}
+	for _, exposure := range policy.Exposures {
+		if exposure.Address == "public" {
+			ports[exposure.Protocol] = append(ports[exposure.Protocol], exposure.Port)
+		}
+	}
+	for protocol := range ports {
+		slices.Sort(ports[protocol])
+		ports[protocol] = slices.Compact(ports[protocol])
+	}
+	var rules []string
+	if policy.SSHAddress != policy.PublicIPv4 && policy.SSHAddress != policy.PublicIPv6 {
+		family := "ip6"
+		if net.ParseIP(policy.SSHAddress).To4() != nil {
+			family = "ip"
+		}
+		for _, exposure := range policy.Exposures {
+			if exposure.Purpose == "SSH preservation" {
+				rules = append(rules, fmt.Sprintf("\t\t%s daddr %s tcp dport %d accept", family, policy.SSHAddress, exposure.Port))
+				break
+			}
+		}
+	}
+	for _, address := range []struct {
+		family string
+		value  string
+	}{{"ip", policy.PublicIPv4}, {"ip6", policy.PublicIPv6}} {
+		if address.value == "" {
+			continue
+		}
+		for _, protocol := range []Protocol{TCP, UDP} {
+			if len(ports[protocol]) == 0 {
+				continue
+			}
+			values := make([]string, len(ports[protocol]))
+			for index, port := range ports[protocol] {
+				values[index] = fmt.Sprint(port)
+			}
+			rules = append(rules, fmt.Sprintf("\t\t%s daddr %s %s dport { %s } accept", address.family, address.value, strings.ToLower(string(protocol)), strings.Join(values, ", ")))
+		}
+	}
+	return "table inet sbxr {\n\tchain input {\n\t\ttype filter hook input priority filter; policy drop;\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n" + strings.Join(rules, "\n") + "\n\t}\n}"
 }
 
 type profileDefinition struct {
