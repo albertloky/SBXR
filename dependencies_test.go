@@ -1,0 +1,208 @@
+package architecture_test
+
+import (
+	"encoding/json"
+	"fmt"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"sort"
+	"strings"
+	"testing"
+)
+
+const modulePath = "github.com/albertloky/SBXR"
+
+var registeredModules = map[string]bool{
+	"ownerconsole":            true,
+	"connectionprofiles":      true,
+	"subscriptionpublication": true,
+	"subscriptionserving":     true,
+	"certificatelifecycle":    true,
+	"cloudflaretunnel":        true,
+	"softwarelifecycle":       true,
+	"healthdiagnostics":       true,
+	"networkpolicy":           true,
+	"state":                   true,
+	"systemchanges":           true,
+}
+
+// Exact cross-Module connections remain empty until an approved design ticket
+// registers one. Foundational Modules never gain upward entries here.
+var approvedModuleDependencies = map[string]map[string]bool{}
+
+var forbiddenStandardLibrary = map[string]bool{
+	"database/sql": true,
+	"plugin":       true,
+}
+
+type packageInfo struct {
+	ImportPath string
+	Imports    []string
+	Standard   bool
+}
+
+func TestRepositoryDependencies(t *testing.T) {
+	command := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), "list", "-deps", "-json", "./...")
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("go list: %v", err)
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(output)))
+	var packages []packageInfo
+	for decoder.More() {
+		var current packageInfo
+		if err := decoder.Decode(&current); err != nil {
+			t.Fatal(err)
+		}
+		if !current.Standard && current.ImportPath != modulePath && !strings.HasPrefix(current.ImportPath, modulePath+"/") {
+			t.Fatalf("unapproved production dependency %q; SBXR is standard-library-first", current.ImportPath)
+		}
+		if strings.HasPrefix(current.ImportPath, modulePath+"/") {
+			packages = append(packages, current)
+		}
+	}
+	if err := validatePackages(packages); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestModuleRegistry(t *testing.T) {
+	want := "certificatelifecycle,cloudflaretunnel,connectionprofiles,healthdiagnostics,networkpolicy,ownerconsole,softwarelifecycle,state,subscriptionpublication,subscriptionserving,systemchanges"
+	got := make([]string, 0, len(registeredModules))
+	for module := range registeredModules {
+		got = append(got, module)
+	}
+	sort.Strings(got)
+	if strings.Join(got, ",") != want {
+		t.Fatalf("Module registry = %s, want exactly %s", strings.Join(got, ","), want)
+	}
+}
+
+func TestArchitecturePolicyRejectsForbiddenShapes(t *testing.T) {
+	tests := []struct {
+		name     string
+		packages []packageInfo
+		want     string
+	}{
+		{name: "unregistered Module", packages: []packageInfo{{ImportPath: modulePath + "/internal/backup"}}, want: "unregistered product package"},
+		{name: "generic dumping ground", packages: []packageInfo{{ImportPath: modulePath + "/internal/utils"}}, want: "generic package"},
+		{name: "shallow types package", packages: []packageInfo{{ImportPath: modulePath + "/internal/state/types"}}, want: "shallow package"},
+		{name: "unapproved Module import", packages: []packageInfo{{ImportPath: modulePath + "/internal/state", Imports: []string{modulePath + "/internal/ownerconsole"}}, {ImportPath: modulePath + "/internal/ownerconsole"}}, want: "unapproved Module dependency"},
+		{name: "Subscription Serving reads State", packages: []packageInfo{{ImportPath: modulePath + "/internal/subscriptionserving", Imports: []string{modulePath + "/internal/state"}}, {ImportPath: modulePath + "/internal/state"}}, want: "unapproved Module dependency"},
+		{name: "production fixture import", packages: []packageInfo{{ImportPath: modulePath + "/internal/state", Imports: []string{modulePath + "/internal/state/fixtures"}}}, want: "production-only material"},
+		{name: "database", packages: []packageInfo{{ImportPath: modulePath + "/internal/state", Imports: []string{"database/sql"}}}, want: "forbidden standard-library capability"},
+		{name: "plugins", packages: []packageInfo{{ImportPath: modulePath + "/internal/state", Imports: []string{"plugin"}}}, want: "forbidden standard-library capability"},
+		{name: "cycle", packages: []packageInfo{{ImportPath: modulePath + "/internal/state", Imports: []string{modulePath + "/internal/state/adapter/filesystem"}}, {ImportPath: modulePath + "/internal/state/adapter/filesystem", Imports: []string{modulePath + "/internal/state"}}}, want: "cycle"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := validatePackages(tt.packages); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("validatePackages() = %v, want %q rejection", err, tt.want)
+			}
+		})
+	}
+}
+
+func validatePackages(packages []packageInfo) error {
+	byPath := make(map[string]packageInfo, len(packages))
+	for _, current := range packages {
+		byPath[current.ImportPath] = current
+		parts := strings.Split(strings.TrimPrefix(current.ImportPath, modulePath+"/"), "/")
+		if genericPart(parts) != "" {
+			return fmt.Errorf("generic package %q is forbidden", current.ImportPath)
+		}
+		if len(parts) == 0 || parts[0] != "internal" {
+			if current.ImportPath != modulePath+"/cmd/sbxr" {
+				return fmt.Errorf("unregistered product package %q", current.ImportPath)
+			}
+			continue
+		}
+		if len(parts) < 2 || !registeredModules[parts[1]] {
+			return fmt.Errorf("unregistered product package %q", current.ImportPath)
+		}
+		if len(parts) > 2 && (len(parts) != 4 || parts[2] != "adapter") {
+			return fmt.Errorf("shallow package %q; keep implementation with its Module", current.ImportPath)
+		}
+	}
+
+	for _, current := range packages {
+		from := owningModule(current.ImportPath)
+		for _, imported := range current.Imports {
+			if forbiddenStandardLibrary[imported] {
+				return fmt.Errorf("forbidden standard-library capability %s -> %s", current.ImportPath, imported)
+			}
+			if strings.Contains(imported, "/fixtures") || strings.Contains(imported, "/testdata") || strings.Contains(imported, "/evidence") || strings.Contains(imported, "/acceptance") {
+				return fmt.Errorf("production-only material cannot import tests, fixtures, evidence, or acceptance tooling: %s -> %s", current.ImportPath, imported)
+			}
+			to := owningModule(imported)
+			if from != "" && to != "" && from != to && (!permittedDirection(from, to) || !approvedModuleDependencies[from][to]) {
+				return fmt.Errorf("unapproved Module dependency %s -> %s", from, to)
+			}
+		}
+	}
+	return rejectCycles(byPath)
+}
+
+func permittedDirection(from, to string) bool {
+	if from == "networkpolicy" || from == "state" || from == "systemchanges" || from == "subscriptionserving" {
+		return false
+	}
+	return to != "ownerconsole"
+}
+
+func owningModule(path string) string {
+	parts := strings.Split(strings.TrimPrefix(path, modulePath+"/"), "/")
+	if len(parts) >= 2 && parts[0] == "internal" && registeredModules[parts[1]] {
+		return parts[1]
+	}
+	return ""
+}
+
+func genericPart(parts []string) string {
+	forbidden := map[string]bool{"common": true, "shared": true, "helpers": true, "utils": true, "services": true, "models": true, "platform": true}
+	for _, part := range parts {
+		if forbidden[part] {
+			return part
+		}
+	}
+	return ""
+}
+
+func rejectCycles(packages map[string]packageInfo) error {
+	visiting := map[string]bool{}
+	visited := map[string]bool{}
+	var visit func(string) error
+	visit = func(path string) error {
+		if visiting[path] {
+			return fmt.Errorf("production dependency cycle includes %s", path)
+		}
+		if visited[path] {
+			return nil
+		}
+		visiting[path] = true
+		imports := append([]string(nil), packages[path].Imports...)
+		sort.Strings(imports)
+		for _, imported := range imports {
+			if _, exists := packages[imported]; exists {
+				if err := visit(imported); err != nil {
+					return err
+				}
+			}
+		}
+		visiting[path] = false
+		visited[path] = true
+		return nil
+	}
+	paths := make([]string, 0, len(packages))
+	for path := range packages {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		if err := visit(path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
