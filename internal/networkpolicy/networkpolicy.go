@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"slices"
 	"strings"
 )
@@ -211,6 +212,14 @@ type TimeFacts struct {
 type OwnerFacts struct {
 	DNS    string
 	Tunnel string
+	Routes []CloudflareRoute
+}
+
+type CloudflareRoute struct {
+	Profile       string
+	OriginAddress string
+	OriginPort    uint16
+	Protocol      Protocol
 }
 
 const UnprovedResource = "unproved"
@@ -268,11 +277,12 @@ type Fix struct {
 }
 
 type Policy struct {
-	Table          string
-	PublicIPv4     string
-	PublicIPv6     string
-	PrimaryAddress string
-	Exposures      []Exposure
+	Table              string
+	PublicIPv4         string
+	PublicIPv6         string
+	PrimaryAddress     string
+	CertificateAddress string
+	Exposures          []Exposure
 }
 
 type Exposure struct {
@@ -317,7 +327,7 @@ func (i Interface) Evaluate(request Request) Result {
 		result.add(requiredFailure("NETWORK-OBSERVATION-FAILED", "Ubuntu observation failed", "typed observation unavailable", "fresh typed Ubuntu facts", "SBXR cannot prove the network baseline", Fix{OwnerChecklist: []string{"Correct the observation failure."}}))
 		return result
 	}
-	if request.OwnerFacts != (OwnerFacts{}) {
+	if ownerFactsProvided(request.OwnerFacts) {
 		observed.OwnerFacts = request.OwnerFacts
 	}
 	applyManagedProof(request.Managed, &observed)
@@ -413,8 +423,13 @@ func evaluateOwnership(result *Result, intent Intent, observed Observations) {
 			result.add(requiredFailure("NETWORK-CLEAN-ADOPTION-REFUSED", "A Clean VPS already has an unproved SBXR nftables table", observed.Firewall.SBXRTableState, "the SBXR nftables table absent before fresh installation", "SBXR never adopts or overwrites an unproved table", ownerFix("Remove the unproved table through its proven owner or reimage, then check again.")))
 			return
 		}
-		if observed.OwnerFacts.DNS == UnprovedResource || observed.OwnerFacts.Tunnel == UnprovedResource {
-			result.add(requiredFailure("NETWORK-CLEAN-ADOPTION-REFUSED", "A Clean VPS has an unproved DNS route or Tunnel", fmt.Sprintf("DNS %q; Tunnel %q", observed.OwnerFacts.DNS, observed.OwnerFacts.Tunnel), "no unproved DNS route or Tunnel on an SBXR seam", "SBXR never adopts or overwrites an external resource without immutable ownership proof", ownerFix("Remove or rename the conflicting resource through its owning system, then check again.")))
+		if observed.OwnerFacts.DNS == UnprovedResource || observed.OwnerFacts.Tunnel == UnprovedResource || len(observed.OwnerFacts.Routes) > 0 {
+			found := fmt.Sprintf("DNS %q; Tunnel %q", observed.OwnerFacts.DNS, observed.OwnerFacts.Tunnel)
+			if len(observed.OwnerFacts.Routes) > 0 {
+				route := observed.OwnerFacts.Routes[0]
+				found += fmt.Sprintf("; Route %q to %s:%d/%s", safeFact(route.Profile), safeFact(route.OriginAddress), route.OriginPort, route.Protocol)
+			}
+			result.add(requiredFailure("NETWORK-CLEAN-ADOPTION-REFUSED", "A Clean VPS has an unproved DNS route or Tunnel", found, "no unproved DNS route or Tunnel on an SBXR seam", "SBXR never adopts or overwrites an external resource without immutable ownership proof", ownerFix("Remove or rename the conflicting resource through its owning system, then check again.")))
 			return
 		}
 		if len(observed.ServiceIdentities) > 0 || len(observed.ResourcePaths) > 0 {
@@ -433,7 +448,7 @@ func evaluateOwnership(result *Result, intent Intent, observed Observations) {
 			}
 		}
 		if intent.TemporaryHTTP {
-			if listener, ok := conflictingListener(observed.Listeners, Exposure{"ACME HTTP-01", "public", 80, TCP}); ok {
+			if listener, ok := conflictingListener(observed.Listeners, Exposure{"ACME HTTP-01", "public", 80, TCP}, policy); ok {
 				result.add(requiredFailure("NETWORK-FIXED-PORT-CONFLICT", "Fixed TCP 80 is occupied", listenerFact(listener), "TCP 80 free for one exact temporary HTTP-01 interval", "SBXR never moves TCP 80 or stops its current owner", ownerFix("Stop or reconfigure the named owner outside SBXR, then check again.")))
 				return
 			}
@@ -442,7 +457,7 @@ func evaluateOwnership(result *Result, intent Intent, observed Observations) {
 			if exposure.Purpose == "SSH preservation" || exposure.Purpose == "ACME HTTP-01" {
 				continue
 			}
-			listener, conflict := conflictingListener(observed.Listeners, exposure)
+			listener, conflict := conflictingListener(observed.Listeners, exposure, policy)
 			if !conflict {
 				continue
 			}
@@ -469,14 +484,17 @@ func evaluateOwnership(result *Result, intent Intent, observed Observations) {
 		if exposure.Purpose == "SSH preservation" || exposure.Purpose == "ACME HTTP-01" {
 			continue
 		}
-		if !hasOwnedListener(observed.Listeners, exposure) {
+		if !hasOwnedListener(observed.Listeners, exposure, policy) {
 			drift = append(drift, exposure.Purpose+" listener missing or different")
 		}
 	}
 	for _, listener := range observed.Listeners {
-		if listener.Ownership == SBXROwned && !matchesAnyExposure(listener, policy.Exposures) {
+		if listener.Ownership == SBXROwned && !matchesAnyExposure(listener, policy) {
 			drift = append(drift, fmt.Sprintf("unexpected SBXR-owned %d/%s listener", listener.Port, listener.Protocol))
 		}
+	}
+	if !cloudflareRoutesMatch(observed.OwnerFacts.Routes, expectedCloudflareRoutes(intent)) {
+		drift = append(drift, "Cloudflare routes missing or different")
 	}
 	if len(drift) > 0 || observed.Firewall.SBXRTableState != "matches Desired State" || observed.OwnerFacts.DNS != "matches Desired State" || observed.OwnerFacts.Tunnel != "matches Desired State" {
 		found := strings.Join(drift, "; ")
@@ -489,13 +507,33 @@ func evaluateOwnership(result *Result, intent Intent, observed Observations) {
 	}
 }
 
-func conflictingListener(listeners []Listener, exposure Exposure) (Listener, bool) {
+func conflictingListener(listeners []Listener, exposure Exposure, policy Policy) (Listener, bool) {
 	for _, listener := range listeners {
-		if listener.Port == exposure.Port && listener.Protocol == exposure.Protocol && addressMatches(listener.Address, exposure.Address) {
+		if listener.Port == exposure.Port && listener.Protocol == exposure.Protocol && addressConflicts(listener.Address, exposure.Address, policy) {
 			return listener, true
 		}
 	}
 	return Listener{}, false
+}
+
+func addressConflicts(found, required string, policy Policy) bool {
+	if required != "public" {
+		if found == required || found == "::" {
+			return true
+		}
+		return found == "0.0.0.0" && net.ParseIP(required).To4() != nil
+	}
+	if found == "::" {
+		return policy.PublicIPv4 != "" || policy.PublicIPv6 != ""
+	}
+	ip := net.ParseIP(found)
+	if ip == nil {
+		return false
+	}
+	if ip.To4() != nil {
+		return policy.PublicIPv4 != ""
+	}
+	return policy.PublicIPv6 != ""
 }
 
 func availableCandidate(observed Observations, policy Policy, sshPort uint16, exposure Exposure) (PortCandidate, bool) {
@@ -521,29 +559,74 @@ func listenerFact(listener Listener) string {
 	return fmt.Sprintf("%s on %s:%d/%s", safeFact(listener.Service, listener.Process), safeFact(listener.Address), listener.Port, listener.Protocol)
 }
 
-func hasOwnedListener(listeners []Listener, exposure Exposure) bool {
+func hasOwnedListener(listeners []Listener, exposure Exposure, policy Policy) bool {
+	if exposure.Address == "public" {
+		ipv4, ipv6 := policy.PublicIPv4 == "", policy.PublicIPv6 == ""
+		for _, listener := range listeners {
+			if listener.Ownership != SBXROwned || listener.Port != exposure.Port || listener.Protocol != exposure.Protocol {
+				continue
+			}
+			ipv4 = ipv4 || matchesPublicFamily(listener.Address, policy.PublicIPv4, "0.0.0.0")
+			ipv6 = ipv6 || matchesPublicFamily(listener.Address, policy.PublicIPv6, "::")
+		}
+		return ipv4 && ipv6
+	}
 	for _, listener := range listeners {
-		if listener.Ownership == SBXROwned && listener.Port == exposure.Port && listener.Protocol == exposure.Protocol && addressMatches(listener.Address, exposure.Address) {
+		if listener.Ownership == SBXROwned && listener.Port == exposure.Port && listener.Protocol == exposure.Protocol && listener.Address == exposure.Address {
 			return true
 		}
 	}
 	return false
 }
 
-func matchesAnyExposure(listener Listener, exposures []Exposure) bool {
-	for _, exposure := range exposures {
-		if exposure.Purpose != "SSH preservation" && exposure.Purpose != "ACME HTTP-01" && listener.Port == exposure.Port && listener.Protocol == exposure.Protocol && addressMatches(listener.Address, exposure.Address) {
+func matchesAnyExposure(listener Listener, policy Policy) bool {
+	for _, exposure := range policy.Exposures {
+		if exposure.Purpose != "SSH preservation" && exposure.Purpose != "ACME HTTP-01" && listener.Port == exposure.Port && listener.Protocol == exposure.Protocol && addressMatches(listener.Address, exposure.Address, policy) {
 			return true
 		}
 	}
 	return false
 }
 
-func addressMatches(found, required string) bool {
+func addressMatches(found, required string, policy Policy) bool {
 	if required == "public" {
-		return found != "" && found != "127.0.0.1" && found != "::1"
+		return matchesPublicFamily(found, policy.PublicIPv4, "0.0.0.0") || matchesPublicFamily(found, policy.PublicIPv6, "::")
 	}
 	return found == required
+}
+
+func matchesPublicFamily(found, selected, wildcard string) bool {
+	if selected == "" {
+		return false
+	}
+	if found == wildcard {
+		return true
+	}
+	selectedIP, foundIP := net.ParseIP(selected), net.ParseIP(found)
+	return selectedIP != nil && foundIP != nil && selectedIP.Equal(foundIP)
+}
+
+func expectedCloudflareRoutes(intent Intent) []CloudflareRoute {
+	var routes []CloudflareRoute
+	if intent.Profiles.VLESSXHTTP.Enabled {
+		routes = append(routes, CloudflareRoute{"VLESS XHTTP", intent.Profiles.VLESSXHTTP.Address, intent.Profiles.VLESSXHTTP.Port, TCP})
+	}
+	if intent.Profiles.VLESSWebSocket.Enabled {
+		routes = append(routes, CloudflareRoute{"VLESS WebSocket", intent.Profiles.VLESSWebSocket.Address, intent.Profiles.VLESSWebSocket.Port, TCP})
+	}
+	return routes
+}
+
+func cloudflareRoutesMatch(found, required []CloudflareRoute) bool {
+	if len(found) != len(required) {
+		return false
+	}
+	for _, route := range required {
+		if !slices.Contains(found, route) {
+			return false
+		}
+	}
+	return true
 }
 
 func safeFact(values ...string) string {
@@ -626,22 +709,26 @@ func evaluateHost(result *Result, host HostFacts) {
 func evaluateAddresses(result *Result, intent Intent, observed Observations) {
 	ipv4 := intent.PublicIPv4 != "" && slices.Contains(observed.PublicIPv4, intent.PublicIPv4)
 	ipv6 := intent.PublicIPv6 != "" && slices.Contains(observed.PublicIPv6, intent.PublicIPv6)
+	if !ipv4 {
+		result.Policy.PublicIPv4 = ""
+	}
+	if !ipv6 {
+		result.Policy.PublicIPv6 = ""
+	}
 	if !ipv4 && !ipv6 {
+		result.Policy.PrimaryAddress = ""
+		result.Policy.CertificateAddress = ""
+		result.Policy.Exposures = nil
 		result.add(requiredFailure("NETWORK-PUBLIC-ADDRESS", "No selected public address family is usable", fmt.Sprintf("IPv4 %q; IPv6 %q", intent.PublicIPv4, intent.PublicIPv6), "at least one freshly observed selected public IPv4 or IPv6 address", "SBXR cannot build a reachable exposure policy", ownerFix("Correct the public address selection and check again.")))
 		return
 	}
 	if intent.PublicIPv4 != "" && !ipv4 || intent.PublicIPv6 != "" && !ipv6 {
-		if !ipv4 {
-			result.Policy.PublicIPv4 = ""
-		}
-		if !ipv6 {
-			result.Policy.PublicIPv6 = ""
-		}
 		if ipv4 {
 			result.Policy.PrimaryAddress = intent.PublicIPv4
 		} else {
 			result.Policy.PrimaryAddress = intent.PublicIPv6
 		}
+		result.Policy.CertificateAddress = result.Policy.PrimaryAddress
 		result.add(advisory("NETWORK-PUBLIC-FAMILY-EXCLUDED", "A selected optional public address family is no longer usable", fmt.Sprintf("IPv4 usable=%t; IPv6 usable=%t", ipv4, ipv6), "publish only freshly qualified address families and review a new single-family Plan", "the failed family cannot remain in certificates, firewall rules, subscriptions, or client output", ownerFix("Review the new single-family Plan or go Back and correct the missing family.")))
 		return
 	}
@@ -672,7 +759,7 @@ func evaluateOutbound(result *Result, facts OutboundFacts) {
 }
 
 func candidatePolicy(intent Intent) Policy {
-	policy := Policy{Table: "inet sbxr", PublicIPv4: intent.PublicIPv4, PublicIPv6: intent.PublicIPv6, PrimaryAddress: intent.PrimarySubscriptionAddress}
+	policy := Policy{Table: "inet sbxr", PublicIPv4: intent.PublicIPv4, PublicIPv6: intent.PublicIPv6, PrimaryAddress: intent.PrimarySubscriptionAddress, CertificateAddress: intent.PrimarySubscriptionAddress}
 	policy.Exposures = append(policy.Exposures, Exposure{"SSH preservation", "public", intent.SSHPort, TCP})
 	if intent.TemporaryHTTP {
 		policy.Exposures = append(policy.Exposures, Exposure{"ACME HTTP-01", "public", 80, TCP})
@@ -706,7 +793,7 @@ func profileDefinitions(intent Intent) []profileDefinition {
 
 func bind(request Request, observed Observations, policy Policy) Binding {
 	observed.PortCandidates = nil
-	if request.OwnerFacts != (OwnerFacts{}) {
+	if ownerFactsProvided(request.OwnerFacts) {
 		observed.OwnerFacts = request.OwnerFacts
 	}
 	applyManagedProof(request.Managed, &observed)
@@ -717,6 +804,10 @@ func bind(request Request, observed Observations, policy Policy) Binding {
 	}{request, observed, policy})
 	digest := sha256.Sum256(data)
 	return Binding{Digest: hex.EncodeToString(digest[:]), policy: policy}
+}
+
+func ownerFactsProvided(facts OwnerFacts) bool {
+	return facts.DNS != "" || facts.Tunnel != "" || len(facts.Routes) > 0
 }
 
 func (b Binding) Stale(request Request, observed Observations) bool {

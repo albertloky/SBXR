@@ -5,6 +5,7 @@ This record covers the Network Policy Module only. It is not Release Qualificati
 ## Stable checks
 
 - `NETWORK-MODULE`: `go test ./internal/networkpolicy`
+- `NETWORK-FAMILY-EXPOSURE`: `go test ./internal/networkpolicy -run 'TestEvaluate(SupportedCleanBaseline|PublicFamilyQualification|CleanAndManagedOwnership|ManagedCloudflareRoutes|ManagedPublicListenersMatchQualifiedFamilies|CorrectiveNetworkPolicy)'`
 - `NETWORK-UBUNTU-SEAM`: `go test ./internal/networkpolicy/adapter/ubuntu -run 'TestAdapterCollectsTypedFactsWithoutMutation|TestProductionUbuntuSeam' -v`
 - `NETWORK-REPOSITORY`: `go test ./...`
 
@@ -18,7 +19,7 @@ This record covers the Network Policy Module only. It is not Release Qualificati
 4. After approval and sudo authentication, collect root-only facts and invoke a fresh post-approval `Evaluate` before mutation.
 5. Change each bound address, listener, selected port, SSH session, route, firewall fact, owning-Module fact, outbound result, and checksum in turn. Each change must make `Binding.Stale` true; review time alone has no input and cannot expire it.
 6. For a Clean VPS, verify unproved SBXR/proxy ownership refuses adoption. For Managed, verify matching Desired State is Healthy, proven drift offers forward repair, and contradictory lineage returns `NETWORK-LINEAGE-RECOVERY`.
-7. Verify low disk findings state exact available and required bytes, unsynchronized time never replaces an existing owner, both Tunnel origins remain `127.0.0.1`, disabled profiles have no exposure, and TCP 80 appears only for one requested HTTP-01 interval.
+7. Verify at least one public family qualifies; the policy contains only qualified selected families; its certificate address is exactly the Owner-selected primary subscription IP; adding or removing a family makes the revision-bound result stale; every enabled Connection Profile has exactly its approved public listener or typed loopback Cloudflare route; every disabled Connection Profile has no exposure; subscription has only public `10443/TCP`; and temporary public `80/TCP` appears only for one requested HTTP-01 interval.
 8. Copy each result and confirm no supplied checksum, Client Access Value, Infrastructure Secret, arbitrary command, raw rule output, or provider credential appears.
 
 ## Current status

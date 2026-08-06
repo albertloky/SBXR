@@ -167,6 +167,12 @@ func TestProductionUbuntuSeam(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("controlled production Adapter Seam check requires Ubuntu")
 	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	port := uint16(listener.Addr().(*net.TCPAddr).Port)
 	observed, err := New().Observe(networkpolicy.ObservationRequest{Stage: networkpolicy.PreApproval})
 	if err != nil {
 		t.Fatal(err)
@@ -174,4 +180,13 @@ func TestProductionUbuntuSeam(t *testing.T) {
 	if observed.Host.UbuntuVersion == "" || observed.Host.Architecture == "" || observed.Host.LogicalCPUs < 1 || observed.Host.PhysicalRAM == 0 {
 		t.Fatalf("production Ubuntu facts incomplete: %+v", observed.Host)
 	}
+	if observed.Routes.IPv4 == "" && observed.Routes.IPv6 == "" {
+		t.Fatal("production Ubuntu route observation is empty")
+	}
+	for _, found := range observed.Listeners {
+		if found.Address == "127.0.0.1" && found.Port == port && found.Protocol == networkpolicy.TCP {
+			return
+		}
+	}
+	t.Fatalf("temporary production socket 127.0.0.1:%d/TCP was not observed", port)
 }

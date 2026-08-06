@@ -174,6 +174,71 @@ func TestEvaluateSupportedCleanBaseline(t *testing.T) {
 	if result.Binding.Digest == "" || len(result.PreApplyGates) == 0 || len(result.PostApplyGates) == 0 {
 		t.Fatal("healthy result omitted staleness binding or Apply gates")
 	}
+	if result.Policy.CertificateAddress != "192.0.2.10" {
+		t.Fatalf("certificate address = %q, want primary subscription address", result.Policy.CertificateAddress)
+	}
+}
+
+func TestEvaluatePublicFamilyQualification(t *testing.T) {
+	tests := []struct {
+		name        string
+		change      func(*networkpolicy.Intent, *networkpolicy.Observations)
+		outcome     networkpolicy.Outcome
+		ipv4        string
+		ipv6        string
+		primary     string
+		certificate string
+	}{
+		{name: "IPv4 only", change: func(*networkpolicy.Intent, *networkpolicy.Observations) {}, outcome: networkpolicy.Healthy, ipv4: "192.0.2.10", primary: "192.0.2.10", certificate: "192.0.2.10"},
+		{name: "IPv6 only", change: func(i *networkpolicy.Intent, o *networkpolicy.Observations) {
+			i.PublicIPv4, o.PublicIPv4 = "", nil
+			i.PublicIPv6, i.PrimarySubscriptionAddress = "2001:db8::10", "2001:db8::10"
+			o.PublicIPv6 = []string{"2001:db8::10"}
+		}, outcome: networkpolicy.Healthy, ipv6: "2001:db8::10", primary: "2001:db8::10", certificate: "2001:db8::10"},
+		{name: "dual family with Owner-selected IPv6 primary", change: func(i *networkpolicy.Intent, o *networkpolicy.Observations) {
+			i.PublicIPv6, i.PrimarySubscriptionAddress = "2001:db8::10", "2001:db8::10"
+			o.PublicIPv6 = []string{"2001:db8::10"}
+		}, outcome: networkpolicy.Healthy, ipv4: "192.0.2.10", ipv6: "2001:db8::10", primary: "2001:db8::10", certificate: "2001:db8::10"},
+		{name: "failed optional primary family", change: func(i *networkpolicy.Intent, _ *networkpolicy.Observations) {
+			i.PublicIPv6, i.PrimarySubscriptionAddress = "2001:db8::10", "2001:db8::10"
+		}, outcome: networkpolicy.NeedsAttention, ipv4: "192.0.2.10", primary: "192.0.2.10", certificate: "192.0.2.10"},
+		{name: "no qualified family", change: func(_ *networkpolicy.Intent, o *networkpolicy.Observations) {
+			o.PublicIPv4 = nil
+		}, outcome: networkpolicy.Failed},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			intent, observed := completeIntent(), completeObservations()
+			tt.change(&intent, &observed)
+			result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
+			if result.Outcome != tt.outcome || result.Policy.PublicIPv4 != tt.ipv4 || result.Policy.PublicIPv6 != tt.ipv6 || result.Policy.PrimaryAddress != tt.primary || result.Policy.CertificateAddress != tt.certificate {
+				t.Fatalf("Evaluate() = outcome %q policy %+v, want %q IPv4 %q IPv6 %q primary %q certificate %q", result.Outcome, result.Policy, tt.outcome, tt.ipv4, tt.ipv6, tt.primary, tt.certificate)
+			}
+			if tt.name == "no qualified family" && len(result.Policy.Exposures) != 0 {
+				t.Fatalf("unqualified public policy retained exposures: %+v", result.Policy.Exposures)
+			}
+		})
+	}
+
+	t.Run("later family addition or removal invalidates the reviewed Change Set", func(t *testing.T) {
+		intent, observed := completeIntent(), completeObservations()
+		request := networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval}
+		result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(request)
+		request.Intent.Revision++
+		request.Intent.PublicIPv6 = "2001:db8::10"
+		if !result.Binding.Stale(request, observed) {
+			t.Fatal("family addition did not require a new revision-bound Change Set")
+		}
+
+		observed.PublicIPv6 = []string{"2001:db8::10"}
+		result = networkpolicy.New(staticAdapter{observed: observed}).Evaluate(request)
+		request.Intent.Revision++
+		request.Intent.PublicIPv6 = ""
+		if !result.Binding.Stale(request, observed) {
+			t.Fatal("family removal did not require a new revision-bound Change Set")
+		}
+	})
 }
 
 func TestEvaluateRefusesIncompleteIntent(t *testing.T) {
@@ -283,7 +348,7 @@ func TestEvaluateCleanAndManagedOwnership(t *testing.T) {
 			Intent:     intent,
 			Stage:      networkpolicy.PostApproval,
 			Managed:    proof,
-			OwnerFacts: networkpolicy.OwnerFacts{DNS: "matches Desired State", Tunnel: "matches Desired State"},
+			OwnerFacts: networkpolicy.OwnerFacts{DNS: "matches Desired State", Tunnel: "matches Desired State", Routes: cloudflareRoutes()},
 		}
 		result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(request)
 		if result.Outcome != networkpolicy.Healthy || len(result.Findings) != 0 {
@@ -330,6 +395,16 @@ func TestEvaluateCleanAndManagedOwnership(t *testing.T) {
 		}
 	})
 
+	t.Run("Clean route conflict identifies the route", func(t *testing.T) {
+		observed := completeObservations()
+		observed.OwnerFacts.Routes = cloudflareRoutes()[:1]
+		result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PostApproval})
+		assertFinding(t, result, networkpolicy.Failed, networkpolicy.Required, "NETWORK-CLEAN-ADOPTION-REFUSED")
+		if !strings.Contains(result.Findings[0].Found, "VLESS XHTTP") || !strings.Contains(result.Findings[0].Found, "127.0.0.1:11080/TCP") {
+			t.Fatalf("route conflict omitted safe route identity: %q", result.Findings[0].Found)
+		}
+	})
+
 	t.Run("Clean refuses an existing unproved SBXR nftables table", func(t *testing.T) {
 		observed := completeObservations()
 		observed.Firewall.SBXRTableState = "present"
@@ -338,13 +413,31 @@ func TestEvaluateCleanAndManagedOwnership(t *testing.T) {
 	})
 
 	t.Run("disabled profile has no public exposure", func(t *testing.T) {
-		intent, observed := completeIntent(), completeObservations()
-		intent.Profiles.AnyTLS.Enabled = false
-		result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
-		for _, exposure := range result.Policy.Exposures {
-			if exposure.Purpose == "AnyTLS" {
-				t.Fatal("disabled AnyTLS remained exposed")
-			}
+		for _, tt := range []struct {
+			name    string
+			purpose string
+			disable func(*networkpolicy.Intent)
+		}{
+			{name: "VLESS REALITY Vision", purpose: "VLESS REALITY Vision", disable: func(i *networkpolicy.Intent) { i.Profiles.VLESSRealityVision.Enabled = false }},
+			{name: "VLESS XHTTP", purpose: "VLESS XHTTP origin", disable: func(i *networkpolicy.Intent) { i.Profiles.VLESSXHTTP.Enabled = false }},
+			{name: "VLESS WebSocket", purpose: "VLESS WebSocket origin", disable: func(i *networkpolicy.Intent) { i.Profiles.VLESSWebSocket.Enabled = false }},
+			{name: "Hysteria2", purpose: "Hysteria2", disable: func(i *networkpolicy.Intent) { i.Profiles.Hysteria2.Enabled = false }},
+			{name: "TUIC", purpose: "TUIC", disable: func(i *networkpolicy.Intent) { i.Profiles.TUIC.Enabled = false }},
+			{name: "AnyTLS", purpose: "AnyTLS", disable: func(i *networkpolicy.Intent) { i.Profiles.AnyTLS.Enabled = false }},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				intent := completeIntent()
+				tt.disable(&intent)
+				result := networkpolicy.New(staticAdapter{observed: completeObservations()}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
+				if result.Outcome != networkpolicy.Healthy {
+					t.Fatalf("disabled profile was unhealthy: %+v", result.Findings)
+				}
+				for _, exposure := range result.Policy.Exposures {
+					if exposure.Purpose == tt.purpose {
+						t.Fatalf("disabled %s remained exposed", tt.name)
+					}
+				}
+			})
 		}
 	})
 
@@ -356,7 +449,56 @@ func TestEvaluateCleanAndManagedOwnership(t *testing.T) {
 	})
 }
 
+func TestEvaluateManagedCloudflareRoutes(t *testing.T) {
+	intent, observed := managedBaseline()
+	observed.OwnerFacts.Routes = []networkpolicy.CloudflareRoute{
+		{Profile: "VLESS XHTTP", OriginAddress: "127.0.0.1", OriginPort: 11080, Protocol: networkpolicy.TCP},
+		{Profile: "VLESS WebSocket", OriginAddress: "127.0.0.1", OriginPort: 11081, Protocol: networkpolicy.TCP},
+	}
+	result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
+	if result.Outcome != networkpolicy.Healthy {
+		t.Fatalf("exact routes were unhealthy: %+v", result.Findings)
+	}
+
+	observed.OwnerFacts.Routes[0].OriginAddress = "0.0.0.0"
+	result = networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
+	assertFinding(t, result, networkpolicy.NeedsAttention, networkpolicy.Required, "NETWORK-MANAGED-DRIFT")
+}
+
+func TestEvaluateManagedPublicListenersMatchQualifiedFamilies(t *testing.T) {
+	for _, address := range []string{"10.0.0.1", "::"} {
+		t.Run(address, func(t *testing.T) {
+			intent, observed := managedBaseline()
+			observed.Listeners[0].Address = address
+			result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
+			assertFinding(t, result, networkpolicy.NeedsAttention, networkpolicy.Required, "NETWORK-MANAGED-DRIFT")
+		})
+	}
+
+	t.Run("dual family requires both listener families", func(t *testing.T) {
+		intent, observed := managedBaseline()
+		intent.PublicIPv6 = "2001:db8::10"
+		observed.PublicIPv6 = []string{"2001:db8::10"}
+		result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
+		assertFinding(t, result, networkpolicy.NeedsAttention, networkpolicy.Required, "NETWORK-MANAGED-DRIFT")
+	})
+}
+
 func TestEvaluateCorrectiveNetworkPolicy(t *testing.T) {
+	t.Run("private listener still conflicts with a public wildcard bind", func(t *testing.T) {
+		observed := completeObservations()
+		observed.Listeners = []networkpolicy.Listener{{Address: "10.0.0.1", Port: 443, Protocol: networkpolicy.TCP, Process: "nginx", Service: "nginx.service"}}
+		result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PostApproval})
+		assertFinding(t, result, networkpolicy.Failed, networkpolicy.Required, "NETWORK-PORT-CONFLICT")
+	})
+
+	t.Run("wildcard listener conflicts with a loopback origin bind", func(t *testing.T) {
+		observed := completeObservations()
+		observed.Listeners = []networkpolicy.Listener{{Address: "0.0.0.0", Port: 11080, Protocol: networkpolicy.TCP, Process: "nginx", Service: "nginx.service"}}
+		result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PostApproval})
+		assertFinding(t, result, networkpolicy.Failed, networkpolicy.Required, "NETWORK-PORT-CONFLICT")
+	})
+
 	t.Run("failed optional family produces a reviewed single-family policy", func(t *testing.T) {
 		intent, observed := completeIntent(), completeObservations()
 		intent.PublicIPv6 = "2001:db8::10"
@@ -405,6 +547,18 @@ func TestEvaluateCorrectiveNetworkPolicy(t *testing.T) {
 		}
 	})
 
+	t.Run("temporary TCP 80 appears only when requested", func(t *testing.T) {
+		intent := completeIntent()
+		intent.TemporaryHTTP = true
+		result := networkpolicy.New(staticAdapter{observed: completeObservations()}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
+		for _, exposure := range result.Policy.Exposures {
+			if exposure.Purpose == "ACME HTTP-01" && exposure.Address == "public" && exposure.Port == 80 && exposure.Protocol == networkpolicy.TCP {
+				return
+			}
+		}
+		t.Fatal("requested temporary public 80/TCP exposure missing")
+	})
+
 	t.Run("outbound failure is Required and bounded", func(t *testing.T) {
 		observed := completeObservations()
 		observed.Outbound.CloudflareHTTPS = false
@@ -431,7 +585,7 @@ func managedBaseline() (networkpolicy.Intent, networkpolicy.Observations) {
 	intent.Baseline = networkpolicy.Managed
 	observed.Lineage = networkpolicy.ProvenLineage
 	observed.Firewall.SBXRTableState = "matches Desired State"
-	observed.OwnerFacts = networkpolicy.OwnerFacts{DNS: "matches Desired State", Tunnel: "matches Desired State"}
+	observed.OwnerFacts = networkpolicy.OwnerFacts{DNS: "matches Desired State", Tunnel: "matches Desired State", Routes: cloudflareRoutes()}
 	observed.Listeners = []networkpolicy.Listener{
 		{Address: "0.0.0.0", Port: 443, Protocol: networkpolicy.TCP, Service: "xray.service", Ownership: networkpolicy.SBXROwned},
 		{Address: "0.0.0.0", Port: 443, Protocol: networkpolicy.UDP, Service: "sing-box.service", Ownership: networkpolicy.SBXROwned},
@@ -442,6 +596,13 @@ func managedBaseline() (networkpolicy.Intent, networkpolicy.Observations) {
 		{Address: "127.0.0.1", Port: 11081, Protocol: networkpolicy.TCP, Service: "xray.service", Ownership: networkpolicy.SBXROwned},
 	}
 	return intent, observed
+}
+
+func cloudflareRoutes() []networkpolicy.CloudflareRoute {
+	return []networkpolicy.CloudflareRoute{
+		{Profile: "VLESS XHTTP", OriginAddress: "127.0.0.1", OriginPort: 11080, Protocol: networkpolicy.TCP},
+		{Profile: "VLESS WebSocket", OriginAddress: "127.0.0.1", OriginPort: 11081, Protocol: networkpolicy.TCP},
+	}
 }
 
 func completeIntent() networkpolicy.Intent {
