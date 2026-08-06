@@ -218,7 +218,6 @@ const (
 	RestorePriorConfiguration     OperationKind = "Restore prior configuration"
 	ApplyApprovedNetworkPolicy    OperationKind = "Apply approved Network Policy"
 	RestorePriorNetworkPolicy     OperationKind = "Restore prior Network Policy"
-	PublishPreparedState          OperationKind = "Publish prepared State"
 )
 
 type Step struct {
@@ -250,18 +249,27 @@ const (
 	Unknown        HealthStatus = "Unknown"
 )
 
+type CheckScope string
+
+const (
+	ServerSideCheck   CheckScope = "Server-side"
+	ClientDeviceCheck CheckScope = "Client device"
+)
+
 type Check struct {
-	Owner          Module
-	Classification Classification
-	Status         HealthStatus
-	Code           string
-	Disclosed      bool
+	Owner          Module         `json:"owner"`
+	Scope          CheckScope     `json:"scope"`
+	Phase          GatePhase      `json:"phase"`
+	Classification Classification `json:"classification"`
+	Status         HealthStatus   `json:"status"`
+	Code           string         `json:"code"`
+	Disclosed      bool           `json:"disclosed"`
 }
 
 type StateLineage struct {
-	Status   InstallationStatus
-	Revision uint64
-	SHA256   string
+	Status   InstallationStatus `json:"status"`
+	Revision uint64             `json:"revision"`
+	SHA256   string             `json:"sha256"`
 }
 
 type PlanBinding struct {
@@ -271,7 +279,8 @@ type PlanBinding struct {
 }
 
 type PreparedStateCommit interface {
-	SystemChangesPreparedState() (changeSet string, revision uint64, candidateSHA256, planIdentity, planSHA256 string, valid bool)
+	SystemChangesPreparedState() (changeSet string, revision uint64, startingSHA256, candidateSHA256, planIdentity, planSHA256 string, valid bool)
+	SystemChangesConsume(lease any, planIdentity, planSHA256 string) (any, error)
 }
 
 type Timeouts struct {
@@ -341,10 +350,16 @@ func NewChangeSet(spec ChangeSetSpec) (*ChangeSet, error) {
 	if !safeIdentity(spec.Identity) || !validMutation(spec.Mutation) || !validModule(spec.OutcomeOwner) || !validStartingState(spec.StartingState, spec.Mutation) || !validSHA256(spec.TargetStateSHA256) || !safeIdentity(spec.Plan.Identity) || !validSHA256(spec.Plan.SHA256) || !validSHA256(spec.Plan.VolatileSHA256) || spec.PreparedState == nil || len(spec.Steps) == 0 || len(spec.Checks) == 0 || spec.Timeouts.Step <= 0 || spec.Timeouts.Step > maxStepTimeout || spec.Timeouts.Check <= 0 || spec.Timeouts.Check > maxCheckTimeout || spec.Disk.PreparationBytes == 0 || spec.Disk.TemporaryBytes == 0 || spec.Disk.SnapshotBytes == 0 || spec.Disk.JournalBytes == 0 || spec.Disk.RollbackBytes == 0 || spec.Disk.OverheadBytes == 0 || !diskValid || reserved > ^uint64(0)-largestFloor {
 		return nil, &Finding{Code: "SYSTEM-CHANGES-CHANGE-SET-INVALID", Problem: "The Change Set is incomplete or untyped", Found: "a missing or invalid typed transaction input", Required: "one opaque prepared State commit, exact lineage and Plan checksums, typed steps and rollback, checks, disk reservation, and bounded timeouts", WhyStopped: "System Changes never accepts an arbitrary mutation surface", NextAction: "Rebuild and review the Change Set through its owning Module."}
 	}
+	var requiredPre, requiredPost bool
 	for _, check := range spec.Checks {
 		if !validCheck(check) {
 			return nil, &Finding{Code: "SYSTEM-CHANGES-CHECK-INVALID", Problem: "A transaction check is untyped", Found: "an unsupported owner, classification, status, or code", Required: "one typed Required or Advisory check", WhyStopped: "System Changes cannot reinterpret a Module result", NextAction: "Rebuild the check through its owning Module."}
 		}
+		requiredPre = requiredPre || check.Classification == Required && check.Phase == PrePublication
+		requiredPost = requiredPost || check.Classification == Required && check.Phase == PostPublication
+	}
+	if !requiredPre || !requiredPost {
+		return nil, &Finding{Code: "SYSTEM-CHANGES-CHECK-INVALID", Problem: "The transaction health gates are incomplete", Found: "no Required check for both publication phases", Required: "at least one Required Server-side check before and after publication", WhyStopped: "State cannot publish or Complete without exact phase-specific health proof", NextAction: "Rebuild the checks through their owning Modules."}
 	}
 	spec.Steps = append([]Step(nil), spec.Steps...)
 	spec.Checks = append([]Check(nil), spec.Checks...)
@@ -355,9 +370,10 @@ func NewChangeSet(spec ChangeSetSpec) (*ChangeSet, error) {
 type ApplyOutcome string
 
 const (
-	Admitted ApplyOutcome = "Admitted for mutation"
-	Refused  ApplyOutcome = "Refused"
-	Deferred ApplyOutcome = "Deferred"
+	Completed  ApplyOutcome = "Completed"
+	Incomplete ApplyOutcome = "Incomplete"
+	Refused    ApplyOutcome = "Refused"
+	Deferred   ApplyOutcome = "Deferred"
 )
 
 type ApplyResult struct {
@@ -428,7 +444,7 @@ func (i Interface) Apply(changeSet *ChangeSet) ApplyResult {
 	if !validPreparedState(spec) {
 		return finish(lock, refused("SYSTEM-CHANGES-PREPARED-STATE", "The prepared State authority is invalid or unrelated", "a caller-made or mismatched authority", "one State-issued commit bound to this Change Set, candidate revision, and target checksum", "only State may prepare Desired State publication material", "Prepare State again and create a fresh Plan.", true))
 	}
-	return finish(lock, ApplyResult{Outcome: Admitted, NothingChanged: true, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence()})
+	return i.applyPrepared(lock, spec)
 }
 
 func validPreparedState(spec ChangeSetSpec) bool {
@@ -436,13 +452,16 @@ func validPreparedState(spec ChangeSetSpec) bool {
 	if typeOf == nil || typeOf.Kind() != reflect.Pointer || typeOf.Elem().PkgPath() != "github.com/albertloky/SBXR/internal/state" || typeOf.Elem().Name() != "PreparedCommit" {
 		return false
 	}
-	changeSet, revision, checksum, planIdentity, planSHA256, valid := spec.PreparedState.SystemChangesPreparedState()
-	return valid && changeSet == spec.Identity && revision == spec.StartingState.Revision+1 && checksum == spec.TargetStateSHA256 && planIdentity == spec.Plan.Identity && planSHA256 == spec.Plan.SHA256
+	changeSet, revision, startingSHA256, checksum, planIdentity, planSHA256, valid := spec.PreparedState.SystemChangesPreparedState()
+	return valid && changeSet == spec.Identity && revision == spec.StartingState.Revision+1 && startingSHA256 == spec.StartingState.SHA256 && checksum == spec.TargetStateSHA256 && planIdentity == spec.Plan.Identity && planSHA256 == spec.Plan.SHA256
 }
 
 func finish(lock Lock, result ApplyResult) ApplyResult {
 	if err := lock.Close(); err != nil {
-		return refused("SYSTEM-CHANGES-LOCK-RELEASE", "The installation-wide kernel lock release could not be proven", "the lock close returned an error", "one confirmed kernel-lock release", "no outcome is reported as admitted while lock ownership is uncertain", "Inspect the transaction and use the Recovery Required flow.", true)
+		if result.NothingChanged {
+			return refused("SYSTEM-CHANGES-LOCK-RELEASE", "The installation-wide kernel lock release could not be proven", "the lock close returned an error", "one confirmed kernel-lock release", "transaction ownership is uncertain", "Inspect the transaction and use the Recovery Required flow.", true)
+		}
+		return ApplyResult{Outcome: Incomplete, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(), Finding: &Finding{Code: "SYSTEM-CHANGES-LOCK-RELEASE", Problem: "The installation-wide kernel lock release could not be proven", Found: "the lock close returned an error after transaction work", Required: "one confirmed kernel-lock release and durable resolution", WhyStopped: "changed work can never be reported as nothing changed", NextAction: "Inspect the transaction and use the Recovery Required flow."}}
 	}
 	return result
 }
@@ -481,14 +500,14 @@ func validModule(module Module) bool {
 
 func validOperation(operation OperationKind) bool {
 	switch operation {
-	case ActivatePreparedConfiguration, RestorePriorConfiguration, ApplyApprovedNetworkPolicy, RestorePriorNetworkPolicy, PublishPreparedState:
+	case ActivatePreparedConfiguration, RestorePriorConfiguration, ApplyApprovedNetworkPolicy, RestorePriorNetworkPolicy:
 		return true
 	}
 	return false
 }
 
 func validCheck(check Check) bool {
-	return validModule(check.Owner) && (check.Classification == Required || check.Classification == Advisory) && (check.Status == Healthy || check.Status == NeedsAttention || check.Status == Failed || check.Status == Unknown) && safeIdentity(check.Code)
+	return validModule(check.Owner) && check.Scope == ServerSideCheck && (check.Phase == PrePublication || check.Phase == PostPublication) && (check.Classification == Required || check.Classification == Advisory) && (check.Status == Healthy || check.Status == NeedsAttention || check.Status == Failed || check.Status == Unknown) && safeIdentity(check.Code)
 }
 
 func safeIdentity(value string) bool {

@@ -2,8 +2,10 @@ package state
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
+	"reflect"
 	"sync/atomic"
 )
 
@@ -23,6 +25,8 @@ type TransactionMaterial struct {
 	serviceCopies     PreparedServiceCopies
 	storage           Storage
 	publication       *publicationAuthority
+	startingRelease   ReleaseIdentity
+	candidateRelease  ReleaseIdentity
 }
 
 type publicationAuthority struct{ used atomic.Bool }
@@ -30,6 +34,82 @@ type publicationAuthority struct{ used atomic.Bool }
 func (TransactionMaterial) MarshalJSON() ([]byte, error) { return nil, errProtectedValueRendering }
 func (TransactionMaterial) String() string               { return "[redacted transaction material]" }
 func (TransactionMaterial) GoString() string             { return "[redacted transaction material]" }
+
+// SystemChangesBindings returns only exact non-secret transaction lineage.
+type systemChangesTransactionBinding struct {
+	StartingRevision       uint64            `json:"starting_revision"`
+	CandidateRevision      uint64            `json:"candidate_revision"`
+	StartingSHA256         string            `json:"starting_sha256"`
+	CandidateSHA256        string            `json:"candidate_sha256"`
+	PreparedStateSHA256    string            `json:"prepared_state_sha256"`
+	PreparedManifestSHA256 string            `json:"prepared_manifest_sha256"`
+	ChangeSet              ChangeSetIdentity `json:"change_set"`
+	StartingRelease        ReleaseIdentity   `json:"starting_release"`
+	CandidateRelease       ReleaseIdentity   `json:"candidate_release"`
+}
+
+func (transaction *TransactionMaterial) SystemChangesBindings(lease any) ([]byte, error) {
+	if !validSystemChangesLease(lease) || transaction == nil || transaction.publication == nil {
+		return nil, finding("STATE-TRANSACTION-LEASE", "transaction material", "no authorized System Changes lease", "the one active Apply lease", "protected lineage cannot leave State", "use System Changes Apply")
+	}
+	return json.Marshal(systemChangesTransactionBinding{
+		StartingRevision: transaction.startingRevision, CandidateRevision: transaction.candidateRevision,
+		StartingSHA256: transaction.startingChecksum, CandidateSHA256: transaction.candidateChecksum,
+		PreparedStateSHA256: transaction.preparedChecksum, PreparedManifestSHA256: transaction.manifestChecksum,
+		ChangeSet: transaction.changeSet, StartingRelease: transaction.startingRelease, CandidateRelease: transaction.candidateRelease,
+	})
+}
+
+// SystemChangesWriteArtifacts streams protected bytes without interpreting them.
+func (transaction *TransactionMaterial) SystemChangesWriteArtifacts(lease any, write func(name string, mode uint32, source io.Reader) error) error {
+	if !validSystemChangesLease(lease) || transaction == nil || transaction.publication == nil || write == nil {
+		return finding("STATE-TRANSACTION-ARTIFACTS", "transaction artifacts", "no complete protected handoff", "one exact opaque artifact stream", "durable preparation cannot be proven", "prepare State again")
+	}
+	if len(transaction.priorState) > 0 {
+		if err := write("snapshot/prior-state.json", 0o600, bytes.NewReader(transaction.priorState)); err != nil {
+			return err
+		}
+	}
+	if err := write("prepared/state.json", 0o600, bytes.NewReader(transaction.preparedState)); err != nil {
+		return err
+	}
+	for _, artifact := range []struct {
+		name string
+		copy *PreparedServiceCopy
+	}{
+		{"prepared/xray.json", transaction.serviceCopies.Xray}, {"prepared/sing-box.json", transaction.serviceCopies.SingBox},
+		{"prepared/cloudflared.json", transaction.serviceCopies.Cloudflared}, {"prepared/subscription.json", transaction.serviceCopies.Subscription},
+	} {
+		if artifact.copy != nil {
+			if err := write(artifact.name, 0o600, bytes.NewReader(artifact.copy.bytes)); err != nil {
+				return err
+			}
+		}
+	}
+	manifests, err := json.Marshal(preparedManifestSet{
+		Xray: manifestPointer(transaction.serviceCopies.Xray), SingBox: manifestPointer(transaction.serviceCopies.SingBox),
+		Cloudflared: manifestPointer(transaction.serviceCopies.Cloudflared), Subscription: manifestPointer(transaction.serviceCopies.Subscription),
+	})
+	if err != nil {
+		return err
+	}
+	return write("prepared/manifests.json", 0o600, bytes.NewReader(manifests))
+}
+
+func manifestPointer(copy *PreparedServiceCopy) *ServiceManifest {
+	if copy == nil {
+		return nil
+	}
+	manifest := copy.manifest
+	return &manifest
+}
+
+func (transaction *TransactionMaterial) SystemChangesPublish(lease any) (any, error) {
+	if !validSystemChangesLease(lease) {
+		return nil, finding("STATE-TRANSACTION-LEASE", "Desired State publication", "no authorized System Changes lease", "the one active Apply lease", "State cannot publish outside Apply", "use System Changes Apply")
+	}
+	return transaction.Publish()
+}
 
 // PreservePriorState streams the exact prior bytes to System Changes without
 // interpreting them. A false result represents the proven Not installed baseline.
@@ -169,6 +249,22 @@ func (*PostPublicationAgreement) MarshalJSON() ([]byte, error) {
 func (*PostPublicationAgreement) String() string   { return "[redacted post-publication agreement]" }
 func (*PostPublicationAgreement) GoString() string { return "[redacted post-publication agreement]" }
 
+type systemChangesAgreement struct {
+	Revision               uint64            `json:"revision"`
+	CandidateSHA256        string            `json:"candidate_sha256"`
+	PublishedStateSHA256   string            `json:"published_state_sha256"`
+	PreparedManifestSHA256 string            `json:"prepared_manifest_sha256"`
+	ChangeSet              ChangeSetIdentity `json:"change_set"`
+	Release                ReleaseIdentity   `json:"release_identity"`
+}
+
+func (agreement *PostPublicationAgreement) SystemChangesAgreement(lease any) ([]byte, error) {
+	if !validSystemChangesLease(lease) || agreement == nil || agreement.changeSet == "" || agreement.publishedRevision == 0 {
+		return nil, finding("STATE-TRANSACTION-LEASE", "post-publication agreement", "no authorized complete handoff", "the one active Apply lease", "protected agreement cannot leave State", "use System Changes Apply")
+	}
+	return json.Marshal(systemChangesAgreement{Revision: agreement.publishedRevision, CandidateSHA256: agreement.publishedChecksum, PublishedStateSHA256: agreement.publishedDocument, PreparedManifestSHA256: agreement.manifestChecksum, ChangeSet: agreement.changeSet, Release: agreement.releaseIdentity})
+}
+
 // Publish performs the one State publication allowed by this transaction.
 // System Changes still owns post-publication agreement and durable Complete.
 func (transaction *TransactionMaterial) Publish() (*PostPublicationAgreement, error) {
@@ -245,5 +341,25 @@ func (commit *PreparedCommit) ConsumeForApply(current ReviewedInputs) (*Transact
 		serviceCopies:     commit.serviceCopies,
 		storage:           commit.storage,
 		publication:       &publicationAuthority{},
+		startingRelease:   commit.starting.migration.StartingRelease,
+		candidateRelease:  commit.releaseIdentity,
 	}, nil
+}
+
+// SystemChangesConsume burns the State authority while keeping managed-input
+// checks private to State.
+func (commit *PreparedCommit) SystemChangesConsume(lease any, planIdentity, planSHA256 string) (any, error) {
+	if !validSystemChangesLease(lease) || commit == nil {
+		return nil, finding("STATE-PREPARED-UNAVAILABLE", "prepared commit authority", "no prepared commit", "one fresh opaque prepared commit", "missing authority cannot start mutation", "prepare State again")
+	}
+	current := commit.reviewed
+	current.planIdentity = PlanIdentity(planIdentity)
+	current.planSHA256 = planSHA256
+	return commit.ConsumeForApply(current)
+}
+
+func validSystemChangesLease(value any) bool {
+	typeOf := reflect.TypeOf(value)
+	lease, ok := value.(interface{ Authorized() bool })
+	return ok && typeOf != nil && typeOf.PkgPath() == "github.com/albertloky/SBXR/internal/systemchanges" && typeOf.Name() == "ExecutionLease" && lease.Authorized()
 }

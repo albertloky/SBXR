@@ -14,7 +14,7 @@ import (
 
 func TestKernelLockIsReadOnlyToInspectAndReleasedByProcessExit(t *testing.T) {
 	if os.Getenv("SBXR_LOCK_HELPER") == "1" {
-		adapter := ubuntu.NewAt(os.Getenv("SBXR_LOCK_ROOT"), nil)
+		adapter := ubuntu.NewAt(os.Getenv("SBXR_LOCK_ROOT"), nil, nil)
 		lock, acquired, err := adapter.TryLock()
 		if err != nil || !acquired {
 			os.Exit(2)
@@ -38,7 +38,7 @@ func TestKernelLockIsReadOnlyToInspectAndReleasedByProcessExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	current := systemchanges.Observation{Status: systemchanges.Managed, LastChangeSet: "change-0007", WallTimeSynchronized: true}
-	adapter := ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return current, nil })
+	adapter := ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return current, nil }, nil)
 	observed, err := adapter.Observe()
 	current.StateRevision = 8
 	reloaded, reloadErr := adapter.Observe()
@@ -105,7 +105,7 @@ func TestKernelLockRejectsUnsafeIdentity(t *testing.T) {
 			if err := test.change(path); err != nil {
 				t.Fatal(err)
 			}
-			if lock, acquired, err := ubuntu.NewAt(root, nil).TryLock(); err == nil || acquired || lock != nil {
+			if lock, acquired, err := ubuntu.NewAt(root, nil, nil).TryLock(); err == nil || acquired || lock != nil {
 				t.Fatalf("unsafe lock = (%v, %t, %v)", lock, acquired, err)
 			}
 		})

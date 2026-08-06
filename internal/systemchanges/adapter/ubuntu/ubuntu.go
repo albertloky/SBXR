@@ -17,16 +17,19 @@ type Adapter struct {
 	root   string
 	uid    int
 	source ObservationSource
+	host   Host
 }
 
 // ObservationSource reloads coordinated State lineage and volatile bindings.
 type ObservationSource func() (systemchanges.Observation, error)
 
-func New(source ObservationSource) Adapter { return Adapter{root: "/", uid: 0, source: source} }
+func New(source ObservationSource, host Host) Adapter {
+	return Adapter{root: "/", uid: 0, source: source, host: host}
+}
 
 // NewAt provides the production lock and host-fact seam under a controlled root.
-func NewAt(root string, source ObservationSource) Adapter {
-	return Adapter{root: root, uid: os.Geteuid(), source: source}
+func NewAt(root string, source ObservationSource, host Host) Adapter {
+	return Adapter{root: root, uid: os.Geteuid(), source: source, host: host}
 }
 
 func (a Adapter) Observe() (systemchanges.Observation, error) {

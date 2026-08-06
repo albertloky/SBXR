@@ -363,11 +363,11 @@ func (*PreparedCommit) GoString() string             { return "[redacted prepare
 
 // SystemChangesPreparedState exposes only the non-secret binding needed to
 // prove this opaque authority came from State for the exact Change Set.
-func (commit *PreparedCommit) SystemChangesPreparedState() (changeSet string, revision uint64, candidateSHA256, planIdentity, planSHA256 string, valid bool) {
+func (commit *PreparedCommit) SystemChangesPreparedState() (changeSet string, revision uint64, startingSHA256, candidateSHA256, planIdentity, planSHA256 string, valid bool) {
 	if commit == nil || commit.changeSet == "" || commit.revision == 0 || commit.candidateSHA256 == "" {
-		return "", 0, "", "", "", false
+		return "", 0, "", "", "", "", false
 	}
-	return string(commit.changeSet), commit.revision, commit.candidateSHA256, string(commit.reviewed.planIdentity), commit.reviewed.planSHA256, true
+	return string(commit.changeSet), commit.revision, commit.starting.payloadChecksum, commit.candidateSHA256, string(commit.reviewed.planIdentity), commit.reviewed.planSHA256, true
 }
 
 // PrepareCommit validates one complete candidate and typed owning-Module

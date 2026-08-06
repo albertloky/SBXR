@@ -40,10 +40,11 @@ func (lock memoryLock) Close() error { lock.closes.Add(1); return lock.err }
 
 type preparedState struct{}
 
-func (preparedState) SystemChangesPreparedState() (string, uint64, string, string, string, bool) {
-	return "change-0008", 8, sha('3'), "caller-plan", sha('4'), true
+func (preparedState) SystemChangesPreparedState() (string, uint64, string, string, string, string, bool) {
+	return "change-0008", 8, sha('1'), sha('3'), "caller-plan", sha('4'), true
 }
-func (preparedState) String() string { return "SECRET-MARKER-prepared-state" }
+func (preparedState) SystemChangesConsume(any, string, string) (any, error) { return nil, nil }
+func (preparedState) String() string                                        { return "SECRET-MARKER-prepared-state" }
 
 func TestInspectReportsOnlyFourSecretSafeTransactionStates(t *testing.T) {
 	tests := []struct {
@@ -224,6 +225,21 @@ func TestChangeSetRejectsUntypedMutationSurfaces(t *testing.T) {
 	if _, err := systemchanges.NewStep(systemchanges.ConnectionProfilesModule, systemchanges.OperationKind("/bin/sh"), systemchanges.RestorePriorConfiguration); err == nil || !strings.Contains(err.Error(), "SYSTEM-CHANGES-STEP-INVALID") {
 		t.Fatalf("arbitrary operation error = %v", err)
 	}
+	if _, err := systemchanges.NewStep(systemchanges.StateModule, systemchanges.OperationKind("Publish prepared State"), systemchanges.RestorePriorConfiguration); err == nil || !strings.Contains(err.Error(), "SYSTEM-CHANGES-STEP-INVALID") {
+		t.Fatalf("ordinary State publication step error = %v", err)
+	}
+	clientCheck := completeSpec(t, systemchanges.SettingChangeMutation)
+	clientCheck.Checks[0].Scope = systemchanges.ClientDeviceCheck
+	if _, err := systemchanges.NewChangeSet(clientCheck); err == nil || !strings.Contains(err.Error(), "SYSTEM-CHANGES-CHECK-INVALID") {
+		t.Fatalf("client device gate error = %v", err)
+	}
+	unphased := completeSpec(t, systemchanges.SettingChangeMutation)
+	for index := range unphased.Checks {
+		unphased.Checks[index].Phase = systemchanges.PrePublication
+	}
+	if _, err := systemchanges.NewChangeSet(unphased); err == nil || !strings.Contains(err.Error(), "SYSTEM-CHANGES-CHECK-INVALID") {
+		t.Fatalf("missing post-publication gate error = %v", err)
+	}
 	for _, change := range []func(*systemchanges.ChangeSetSpec){
 		func(spec *systemchanges.ChangeSetSpec) { spec.Timeouts.Step = 24*time.Hour + time.Nanosecond },
 		func(spec *systemchanges.ChangeSetSpec) { spec.Timeouts.Check = time.Hour + time.Nanosecond },
@@ -272,8 +288,10 @@ func completeSpec(t *testing.T, mutation systemchanges.MutationClass) systemchan
 		Plan:              systemchanges.PlanBinding{Identity: fmt.Sprintf("plan-systemchanges-%d", planSequence.Add(1)), SHA256: sha('4'), VolatileSHA256: sha('2')},
 		PreparedState:     preparedState{}, Steps: []systemchanges.Step{step},
 		Checks: []systemchanges.Check{
-			{Owner: systemchanges.NetworkPolicyModule, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-PREFLIGHT"},
-			{Owner: systemchanges.HealthDiagnosticsModule, Classification: systemchanges.Advisory, Status: systemchanges.NeedsAttention, Code: "HEALTH-ADVISORY", Disclosed: true},
+			{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-PREFLIGHT"},
+			{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-REQUIRED"},
+			{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PostPublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-ACTIVE"},
+			{Owner: systemchanges.HealthDiagnosticsModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Advisory, Status: systemchanges.NeedsAttention, Code: "HEALTH-ADVISORY", Disclosed: true},
 		},
 		Timeouts: systemchanges.Timeouts{Step: 30 * time.Second, Check: 60 * time.Second},
 		Disk:     systemchanges.DiskRequirement{PreparationBytes: 100, TemporaryBytes: 100, SnapshotBytes: 100, JournalBytes: 100, RollbackBytes: 100, OverheadBytes: 100},
