@@ -30,8 +30,12 @@ func TestNativeFirewallUsesWatchdogAndExactHTTP01Handle(t *testing.T) {
 				return []byte(`{"nftables":[{"table":{"family":"inet","name":"unrelated"}},{"table":{"family":"inet","name":"sbxr"}}]}`), nil
 			}
 			return []byte(`{"nftables":[{"table":{"family":"inet","name":"unrelated"}}]}`), nil
-		case command == "nft --check --file -", strings.HasPrefix(command, "systemd-run "), command == "systemctl stop sbxr-firewall-watchdog.timer sbxr-firewall-watchdog.service":
+		case command == "nft --check --file -", strings.HasPrefix(command, "systemd-run "):
 			return nil, nil
+		case command == "systemctl stop sbxr-firewall-watchdog.timer sbxr-firewall-watchdog.service":
+			return nil, errors.New("controlled transient-unit stop status")
+		case command == "systemctl is-active sbxr-firewall-watchdog.timer sbxr-firewall-watchdog.service":
+			return []byte("inactive\ninactive\n"), errors.New("controlled inactive status")
 		case command == "nft --file -":
 			table = true
 			temporary = strings.Contains(string(input), "sbxr:acme-http-01")
@@ -83,7 +87,7 @@ func TestNativeFirewallUsesWatchdogAndExactHTTP01Handle(t *testing.T) {
 		t.Fatalf("HTTP-01 close = (%+v, %v), temporary=%t", evidence, err, temporary)
 	}
 	joined := strings.Join(commands, "\n")
-	for _, required := range []string{"nft --check --file -", "systemd-run --quiet --unit sbxr-firewall-watchdog", "ss -Htn state established", "nft delete rule inet sbxr input handle 41", "systemctl stop sbxr-firewall-watchdog.timer sbxr-firewall-watchdog.service"} {
+	for _, required := range []string{"nft --check --file -", "systemd-run --quiet --unit sbxr-firewall-watchdog", "ss -Htn state established", "nft delete rule inet sbxr input handle 41", "systemctl stop sbxr-firewall-watchdog.timer sbxr-firewall-watchdog.service", "systemctl is-active sbxr-firewall-watchdog.timer sbxr-firewall-watchdog.service"} {
 		if !strings.Contains(joined, required) {
 			t.Fatalf("commands omit %q:\n%s", required, joined)
 		}
@@ -101,6 +105,22 @@ func TestNativeFirewallErrorsNeverExposeCommandOutput(t *testing.T) {
 	_, err := firewall.Execute(step, "/protected/rollback", time.Second, systemchanges.NewCancellation())
 	if err == nil || strings.Contains(err.Error(), "SECRET-MARKER") {
 		t.Fatalf("secret-bearing native error = %v", err)
+	}
+}
+
+func TestNativeFirewallKeepsTheWatchdogWhenEitherUnitIsActive(t *testing.T) {
+	firewall := newNativeFirewall(func(_ context.Context, _ []byte, name string, args ...string) ([]byte, error) {
+		if name == "systemctl" && len(args) == 3 && args[0] == "stop" {
+			return nil, nil
+		}
+		if name == "systemctl" && len(args) == 3 && args[0] == "is-active" {
+			return []byte("inactive\nactive\n"), nil
+		}
+		return nil, errors.New("unexpected command")
+	})
+	step, _ := systemchanges.NewFirewallPolicyStep("table inet sbxr {\n chain input {\n  type filter hook input priority filter\n  policy drop\n  tcp dport 2222 accept\n }\n}", 2222)
+	if err := firewall.Commit(step, systemchanges.StepEvidence{Code: "network-policy-applied"}); err == nil {
+		t.Fatal("active watchdog unit was accepted as cancelled")
 	}
 }
 

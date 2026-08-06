@@ -215,8 +215,17 @@ func (firewall *NativeFirewall) armWatchdog(ctx context.Context, rollbackPath st
 }
 
 func (firewall *NativeFirewall) cancelWatchdog(ctx context.Context) error {
-	if _, err := firewall.run(ctx, nil, "systemctl", "stop", firewallWatchdogUnit+".timer", firewallWatchdogUnit+".service"); err != nil {
+	units := []string{firewallWatchdogUnit + ".timer", firewallWatchdogUnit + ".service"}
+	_, _ = firewall.run(ctx, nil, "systemctl", append([]string{"stop"}, units...)...)
+	states, _ := firewall.run(ctx, nil, "systemctl", append([]string{"is-active"}, units...)...)
+	fields := strings.Fields(string(states))
+	if len(fields) != len(units) {
 		return errors.New("firewall rollback watchdog cancellation failed")
+	}
+	for _, state := range fields {
+		if state != "inactive" && state != "failed" && state != "unknown" {
+			return errors.New("firewall rollback watchdog cancellation failed")
+		}
 	}
 	return nil
 }
