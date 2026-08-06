@@ -121,14 +121,17 @@ const (
 // RecoveryTransaction is the secret-safe durable authority for one interrupted
 // ordinary Change Set. Snapshot contents remain inside the Adapter.
 type RecoveryTransaction struct {
-	ChangeSet       string
-	Starting        StateLineage
-	StartingRelease ReleaseBinding
-	OutcomeOwner    Module
-	Steps           []Step
-	AttemptedSteps  int
-	LastCheckpoint  DurableCheckpoint
-	Timeouts        Timeouts
+	ChangeSet        string
+	Starting         StateLineage
+	StartingRelease  ReleaseBinding
+	Candidate        StateLineage
+	CandidateRelease ReleaseBinding
+	OutcomeOwner     Module
+	Steps            []Step
+	AttemptedSteps   int
+	RollbackStep     int
+	LastCheckpoint   DurableCheckpoint
+	Timeouts         Timeouts
 }
 
 type ExecutionLease struct{ authority *executionAuthority }
@@ -184,7 +187,7 @@ type TransactionAdapter interface {
 type RecoveryAdapter interface {
 	LoadRecovery(ExecutionLease) (RecoveryTransaction, error)
 	HoldServices(ExecutionLease) error
-	AllowUnrelated(ExecutionLease, RecoveryTransaction, time.Duration) error
+	AllowProvenServices(ExecutionLease, RecoveryTransaction, time.Duration) error
 	InspectStep(ExecutionLease, RecoveryTransaction, int, Step, time.Duration) (StepEffect, error)
 	RestoreRecoveryState(ExecutionLease, RecoveryTransaction) (RollbackAgreement, error)
 	VerifyStartingServices(ExecutionLease, RecoveryTransaction, time.Duration) error
@@ -255,10 +258,26 @@ func (i Interface) Recover() ApplyResult {
 	}
 	recovery.Steps = append([]Step(nil), recovery.Steps...)
 	spec := ChangeSetSpec{Identity: recovery.ChangeSet, StartingState: recovery.Starting, OutcomeOwner: recovery.OutcomeOwner, Steps: recovery.Steps, Timeouts: recovery.Timeouts}
-	if err := recoveryAdapter.AllowUnrelated(lease, recovery, recovery.Timeouts.Check); err != nil {
+	if err := recoveryAdapter.AllowProvenServices(lease, recovery, recovery.Timeouts.Check); err != nil {
 		return finish(lock, recoveryRequired(spec, "SYSTEM-CHANGES-SERVICE-HOLDBACK", recovery.LastCheckpoint))
 	}
-	for index := recovery.AttemptedSteps - 1; index >= 0; index-- {
+	if recovery.LastCheckpoint == Complete {
+		if adapter.Cleanup(lease, recovery.ChangeSet) != nil {
+			return finish(lock, recoveryRequired(spec, "SYSTEM-CHANGES-CLEANUP", Complete))
+		}
+		return finish(lock, ApplyResult{Outcome: Completed, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence()})
+	}
+	if recovery.LastCheckpoint == RolledBack {
+		if recoveryAdapter.VerifyStartingServices(lease, recovery, recovery.Timeouts.Check) != nil || adapter.Cleanup(lease, recovery.ChangeSet) != nil {
+			return finish(lock, recoveryRequired(spec, "SYSTEM-CHANGES-RESTART", RolledBack))
+		}
+		return finish(lock, recoveredRollbackResult(recovery))
+	}
+	nextRollbackStep := recovery.AttemptedSteps
+	if rollbackCheckpoint(recovery.LastCheckpoint) {
+		nextRollbackStep = recovery.RollbackStep
+	}
+	for index := nextRollbackStep - 1; index >= 0; index-- {
 		effect, err := recoveryAdapter.InspectStep(lease, recovery, index+1, recovery.Steps[index], recovery.Timeouts.Check)
 		if err != nil || effect != StepEffectAbsent && effect != StepEffectPresent {
 			return finish(lock, recoveryRequired(spec, "SYSTEM-CHANGES-RECOVERY-INSPECTION", recovery.LastCheckpoint))
@@ -284,7 +303,25 @@ func validRecoveryTransaction(recovery RecoveryTransaction) bool {
 	case Prepared:
 		return recovery.AttemptedSteps == 0
 	case StepStarted, StepCompleted, PrePublicationHealthPassed, StatePublicationStarted, StatePublished, PostPublicationHealthPassed:
-		return recovery.AttemptedSteps > 0
+		return recovery.AttemptedSteps > 0 && recovery.RollbackStep == 0
+	case RollbackStarted:
+		return recovery.RollbackStep == recovery.AttemptedSteps
+	case RollbackStepStarted:
+		return recovery.RollbackStep > 0 && recovery.RollbackStep <= recovery.AttemptedSteps
+	case RollbackStepCompleted:
+		return recovery.RollbackStep >= 0 && recovery.RollbackStep < recovery.AttemptedSteps
+	case RollbackVerified, RolledBack:
+		return recovery.RollbackStep == 0
+	case Complete:
+		return recovery.RollbackStep == 0 && recovery.Candidate.Status == Managed && recovery.Candidate.Revision == recovery.Starting.Revision+1 && validSHA256(recovery.Candidate.SHA256) && recovery.CandidateRelease != (ReleaseBinding{})
+	}
+	return false
+}
+
+func rollbackCheckpoint(checkpoint DurableCheckpoint) bool {
+	switch checkpoint {
+	case RollbackStarted, RollbackStepStarted, RollbackStepCompleted, RollbackVerified, RolledBack:
+		return true
 	}
 	return false
 }
@@ -293,29 +330,39 @@ func rollbackRecovered(lease ExecutionLease, adapter TransactionAdapter, recover
 	record := func(point DurableCheckpoint, step int, evidence *StepEvidence) bool {
 		return adapter.Record(lease, CheckpointRecord{ChangeSet: recovery.ChangeSet, Checkpoint: point, Step: step, Evidence: evidence}) == nil
 	}
-	if !record(RollbackStarted, 0, nil) {
+	if !rollbackCheckpoint(recovery.LastCheckpoint) && !record(RollbackStarted, 0, nil) {
 		return recoveryRequired(spec, "SYSTEM-CHANGES-RESTART", recovery.LastCheckpoint)
 	}
 	agreement, err := recoveryAdapter.RestoreRecoveryState(lease, recovery)
 	if err != nil || !validRollbackAgreement(agreement, recovery.Starting) || agreement.Release != recovery.StartingRelease {
 		return recoveryRequired(spec, "SYSTEM-CHANGES-RESTART", RollbackStarted)
 	}
-	for index := recovery.AttemptedSteps - 1; index >= 0; index-- {
+	nextRollbackStep := recovery.AttemptedSteps
+	if rollbackCheckpoint(recovery.LastCheckpoint) {
+		nextRollbackStep = recovery.RollbackStep
+	}
+	stepAlreadyStarted := recovery.LastCheckpoint == RollbackStepStarted
+	for index := nextRollbackStep - 1; index >= 0; index-- {
 		number := index + 1
-		if !record(RollbackStepStarted, number, nil) {
+		if !stepAlreadyStarted && !record(RollbackStepStarted, number, nil) {
 			return recoveryRequired(spec, "SYSTEM-CHANGES-RESTART", RollbackStepStarted)
 		}
 		evidence, reverseErr := adapter.Reverse(lease, recovery.ChangeSet, number, recovery.Steps[index], recovery.Timeouts.Step)
 		if reverseErr != nil || !safeIdentity(evidence.Code) || !validSHA256(evidence.SHA256) || !record(RollbackStepCompleted, number, &evidence) {
 			return recoveryRequired(spec, "SYSTEM-CHANGES-RESTART", RollbackStepStarted)
 		}
+		stepAlreadyStarted = false
 	}
-	if err := adapter.VerifyRollback(lease, agreement, recovery.Timeouts.Check); err != nil || recoveryAdapter.VerifyStartingServices(lease, recovery, recovery.Timeouts.Check) != nil || !record(RollbackVerified, 0, nil) || !record(RolledBack, 0, nil) {
+	if err := adapter.VerifyRollback(lease, agreement, recovery.Timeouts.Check); err != nil || recoveryAdapter.VerifyStartingServices(lease, recovery, recovery.Timeouts.Check) != nil || recovery.LastCheckpoint != RollbackVerified && !record(RollbackVerified, 0, nil) || !record(RolledBack, 0, nil) {
 		return recoveryRequired(spec, "SYSTEM-CHANGES-RESTART", RollbackVerified)
 	}
 	if err := adapter.Cleanup(lease, recovery.ChangeSet); err != nil {
 		return recoveryRequired(spec, "SYSTEM-CHANGES-RESTART", RolledBack)
 	}
+	return recoveredRollbackResult(recovery)
+}
+
+func recoveredRollbackResult(recovery RecoveryTransaction) ApplyResult {
 	return ApplyResult{Outcome: RollbackSucceeded, RestoredStatus: recovery.Starting.Status, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(), Finding: &Finding{Code: "SYSTEM-CHANGES-ROLLED-BACK-AFTER-RESTART", Owner: recovery.OutcomeOwner, Problem: "The interrupted Change Set was rolled back from durable evidence", Found: string(recovery.LastCheckpoint), Required: "the prior proven installation status", WhyStopped: "SYSTEM-CHANGES-RESTART", NextAction: "Start only services proven against the restored Desired State."}}
 }
 

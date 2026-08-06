@@ -29,8 +29,8 @@ type Host interface {
 	Reverse(systemchanges.Step, io.Reader, time.Duration) (systemchanges.StepEvidence, error)
 	// HoldServices is the systemd-ordering seam before public services and timers.
 	HoldServices() error
-	// AllowUnrelated may release only services proven against the starting State.
-	AllowUnrelated(systemchanges.RecoveryTransaction, time.Duration) error
+	// AllowProvenServices may release only services matching the resolved State.
+	AllowProvenServices(systemchanges.RecoveryTransaction, time.Duration) error
 	InspectStep(systemchanges.Step, io.Reader, time.Duration) (systemchanges.StepEffect, error)
 	VerifyStartingServices(systemchanges.RecoveryTransaction, time.Duration) error
 	Check(systemchanges.Check, systemchanges.GatePhase, time.Duration) (systemchanges.HealthStatus, error)
@@ -255,10 +255,29 @@ func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges
 	observed, err := a.source()
 	startingState := observed.StateRevision == prepared.State.StartingRevision && observed.StateSHA256 == prepared.State.StartingSHA256
 	candidateState := observed.StateRevision == prepared.State.CandidateRevision && observed.StateSHA256 == prepared.State.CandidateSHA256
-	if err != nil || observed.Status != systemchanges.ChangeInProgress || observed.CurrentChangeSet != changeSet || !startingState && !candidateState {
+	complete := last.Checkpoint == systemchanges.Complete && observed.Status == systemchanges.Managed && observed.LastChangeSet == changeSet && candidateState
+	unfinished := observed.Status == systemchanges.ChangeInProgress && observed.CurrentChangeSet == changeSet && (startingState || candidateState) && (last.Checkpoint != systemchanges.RolledBack || startingState)
+	if err != nil || !complete && !unfinished {
 		return systemchanges.RecoveryTransaction{}, errors.New("current State does not match the recovery transaction")
 	}
-	return systemchanges.RecoveryTransaction{ChangeSet: changeSet, Starting: prepared.Starting, StartingRelease: prepared.State.StartingRelease, OutcomeOwner: prepared.OutcomeOwner, Steps: steps, AttemptedSteps: highestStartedStep(journal), LastCheckpoint: last.Checkpoint, Timeouts: prepared.Timeouts}, nil
+	return systemchanges.RecoveryTransaction{
+		ChangeSet: changeSet, Starting: prepared.Starting, StartingRelease: prepared.State.StartingRelease,
+		Candidate: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: prepared.State.CandidateRevision, SHA256: prepared.State.CandidateSHA256}, CandidateRelease: prepared.State.CandidateRelease,
+		OutcomeOwner: prepared.OutcomeOwner, Steps: steps, AttemptedSteps: highestStartedStep(journal), RollbackStep: rollbackResumeStep(journal), LastCheckpoint: last.Checkpoint, Timeouts: prepared.Timeouts,
+	}, nil
+}
+
+func rollbackResumeStep(entries []journalEntry) int {
+	last := entries[len(entries)-1]
+	switch last.Checkpoint {
+	case systemchanges.RollbackStarted:
+		return highestStartedStep(entries)
+	case systemchanges.RollbackStepStarted:
+		return last.Step
+	case systemchanges.RollbackStepCompleted:
+		return last.Step - 1
+	}
+	return 0
 }
 
 func (a Adapter) HoldServices(lease systemchanges.ExecutionLease) error {
@@ -268,11 +287,11 @@ func (a Adapter) HoldServices(lease systemchanges.ExecutionLease) error {
 	return a.host.HoldServices()
 }
 
-func (a Adapter) AllowUnrelated(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction, timeout time.Duration) error {
+func (a Adapter) AllowProvenServices(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction, timeout time.Duration) error {
 	if !lease.Authorized() || a.host == nil {
 		return errors.New("typed Ubuntu recovery host unavailable")
 	}
-	return a.host.AllowUnrelated(recovery, timeout)
+	return a.host.AllowProvenServices(recovery, timeout)
 }
 
 func (a Adapter) InspectStep(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction, number int, step systemchanges.Step, timeout time.Duration) (systemchanges.StepEffect, error) {

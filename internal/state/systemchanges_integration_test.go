@@ -81,7 +81,11 @@ func (a *systemChangesAdapter) Prepare(lease systemchanges.ExecutionLease, prepa
 		panic("controlled worker death")
 	}
 	a.events = append(a.events, string(systemchanges.Prepared))
-	a.recovery = &systemchanges.RecoveryTransaction{ChangeSet: preparation.ChangeSet, Starting: preparation.Starting, StartingRelease: preparation.State.StartingRelease, OutcomeOwner: preparation.OutcomeOwner, Steps: append([]systemchanges.Step(nil), preparation.Steps...), LastCheckpoint: systemchanges.Prepared, Timeouts: preparation.Timeouts}
+	a.recovery = &systemchanges.RecoveryTransaction{
+		ChangeSet: preparation.ChangeSet, Starting: preparation.Starting, StartingRelease: preparation.State.StartingRelease,
+		Candidate: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: preparation.State.CandidateRevision, SHA256: preparation.State.CandidateSHA256}, CandidateRelease: preparation.State.CandidateRelease,
+		OutcomeOwner: preparation.OutcomeOwner, Steps: append([]systemchanges.Step(nil), preparation.Steps...), LastCheckpoint: systemchanges.Prepared, Timeouts: preparation.Timeouts,
+	}
 	a.stateBinding, _ = json.Marshal(preparation.State)
 	if a.crashAfter == systemchanges.Prepared && !a.crashed {
 		a.crashed = true
@@ -98,8 +102,19 @@ func (a *systemChangesAdapter) Record(_ systemchanges.ExecutionLease, record sys
 	a.events = append(a.events, record.String())
 	if a.recovery != nil {
 		a.recovery.LastCheckpoint = record.Checkpoint
-		if record.Checkpoint == systemchanges.StepStarted && record.Step > a.recovery.AttemptedSteps {
-			a.recovery.AttemptedSteps = record.Step
+		switch record.Checkpoint {
+		case systemchanges.StepStarted:
+			if record.Step > a.recovery.AttemptedSteps {
+				a.recovery.AttemptedSteps = record.Step
+			}
+		case systemchanges.RollbackStarted:
+			a.recovery.RollbackStep = a.recovery.AttemptedSteps
+		case systemchanges.RollbackStepStarted:
+			a.recovery.RollbackStep = record.Step
+		case systemchanges.RollbackStepCompleted:
+			a.recovery.RollbackStep = record.Step - 1
+		case systemchanges.RollbackVerified, systemchanges.RolledBack:
+			a.recovery.RollbackStep = 0
 		}
 	}
 	if a.crashAfter == record.Checkpoint && !a.crashed {
@@ -173,7 +188,7 @@ func (a *systemChangesAdapter) HoldServices(systemchanges.ExecutionLease) error 
 	return nil
 }
 
-func (a *systemChangesAdapter) AllowUnrelated(systemchanges.ExecutionLease, systemchanges.RecoveryTransaction, time.Duration) error {
+func (a *systemChangesAdapter) AllowProvenServices(systemchanges.ExecutionLease, systemchanges.RecoveryTransaction, time.Duration) error {
 	a.events = append(a.events, "allow proven unrelated services")
 	return a.holdErr
 }
@@ -550,9 +565,12 @@ type controlledUbuntuHost struct {
 	agreements     int
 	rollbacks      int
 	waitCancel     bool
+	failExecute    bool
+	waitReverse    bool
 	delay          time.Duration
 	started        chan struct{}
 	startedFile    string
+	reverseFile    string
 	recoveryEvents []string
 	reversed       []systemchanges.OperationKind
 	startingState  string
@@ -565,6 +583,12 @@ type controlledService struct {
 	known    bool
 	running  bool
 	affected bool
+}
+
+type cleanupFailingUbuntuAdapter struct{ ubuntu.Adapter }
+
+func (cleanupFailingUbuntuAdapter) Cleanup(systemchanges.ExecutionLease, string) error {
+	return errors.New("controlled cleanup interruption")
 }
 
 func (host *controlledUbuntuHost) CaptureRollback(step systemchanges.Step, write func(io.Reader) error) error {
@@ -675,11 +699,22 @@ func (host *controlledUbuntuHost) Execute(_ systemchanges.Step, timeout time.Dur
 	if err := os.WriteFile(active, preparedConfig, 0o600); err != nil {
 		return systemchanges.StepEvidence{}, err
 	}
+	if host.failExecute {
+		return systemchanges.StepEvidence{}, errors.New("controlled native step failure")
+	}
 	digest := sha256.Sum256(preparedConfig)
 	return systemchanges.StepEvidence{Code: "native-valid", SHA256: fmt.Sprintf("%x", digest)}, nil
 }
 
 func (host *controlledUbuntuHost) Reverse(step systemchanges.Step, snapshot io.Reader, _ time.Duration) (systemchanges.StepEvidence, error) {
+	if host.reverseFile != "" {
+		if err := os.WriteFile(host.reverseFile, []byte("started"), 0o600); err != nil {
+			return systemchanges.StepEvidence{}, err
+		}
+	}
+	for host.waitReverse {
+		time.Sleep(10 * time.Millisecond)
+	}
 	host.reversed = append(host.reversed, step.Rollback())
 	active := filepath.Join(host.root, "run/sbxr/active-subscription.json")
 	prior, err := io.ReadAll(snapshot)
@@ -709,16 +744,23 @@ func (host *controlledUbuntuHost) HoldServices() error {
 	return nil
 }
 
-func (host *controlledUbuntuHost) AllowUnrelated(recovery systemchanges.RecoveryTransaction, _ time.Duration) error {
-	host.recoveryEvents = append(host.recoveryEvents, "allow proven unrelated")
-	host.startingState = recovery.Starting.SHA256
-	for _, step := range recovery.Steps {
-		for _, service := range host.services {
-			service.affected = service.affected || service.owner == step.Owner()
+func (host *controlledUbuntuHost) AllowProvenServices(recovery systemchanges.RecoveryTransaction, _ time.Duration) error {
+	expected := recovery.Starting.SHA256
+	completed := recovery.LastCheckpoint == systemchanges.Complete
+	if completed {
+		expected = recovery.Candidate.SHA256
+		host.recoveryEvents = append(host.recoveryEvents, "allow proven completed")
+	} else {
+		host.recoveryEvents = append(host.recoveryEvents, "allow proven unrelated")
+		host.startingState = expected
+		for _, step := range recovery.Steps {
+			for _, service := range host.services {
+				service.affected = service.affected || service.owner == step.Owner()
+			}
 		}
 	}
 	for _, service := range host.services {
-		service.running = !service.affected && service.known && service.state == recovery.Starting.SHA256
+		service.running = (completed || !service.affected) && service.known && service.state == expected
 	}
 	return nil
 }
@@ -834,6 +876,91 @@ func TestFreshSystemChangesInstanceNeverResumesOrdinaryForwardWork(t *testing.T)
 				}
 			})
 		}
+	}
+}
+
+func TestFreshSystemChangesInstanceResumesInterruptedRollbackFromDurableEvidence(t *testing.T) {
+	for _, checkpoint := range []systemchanges.DurableCheckpoint{
+		systemchanges.RollbackStarted, systemchanges.RollbackStepStarted, systemchanges.RollbackStepCompleted,
+		systemchanges.RollbackVerified, systemchanges.RolledBack,
+	} {
+		for _, side := range []string{"before", "after"} {
+			t.Run(side+"_"+string(checkpoint), func(t *testing.T) {
+				stateModule, changeSet, _, observed := preparedSystemChange(t)
+				adapter := &systemChangesAdapter{observation: observed, stateRecovery: stateModule, failStep: 1}
+				if side == "before" {
+					adapter.crashBefore = checkpoint
+				} else {
+					adapter.crashAfter = checkpoint
+				}
+				func() {
+					defer func() { _ = recover() }()
+					_ = systemchanges.New(adapter).Apply(changeSet)
+				}()
+				if !adapter.crashed {
+					t.Fatalf("worker did not die %s %s", side, checkpoint)
+				}
+				reversedBefore := strings.Count(strings.Join(adapter.events, ","), "reverse Restore prior configuration")
+				result := systemchanges.New(adapter).Recover()
+				reversedAfter := strings.Count(strings.Join(adapter.events, ","), "reverse Restore prior configuration")
+				wantAdditionalReverse := 1
+				if checkpoint == systemchanges.RollbackStepCompleted && side == "after" || checkpoint == systemchanges.RollbackVerified || checkpoint == systemchanges.RolledBack {
+					wantAdditionalReverse = 0
+				}
+				if result.Outcome != systemchanges.RollbackSucceeded || reversedAfter-reversedBefore != wantAdditionalReverse || adapter.recovery != nil {
+					t.Fatalf("Recover(%s %s) = %+v; additional reverse=%d events=%v", side, checkpoint, result, reversedAfter-reversedBefore, adapter.events)
+				}
+				loaded, err := stateModule.Load(intentManagedRequest())
+				if err != nil || loaded.Snapshot == nil || loaded.Snapshot.Revision != 7 || loaded.loaded == nil || loaded.loaded.payloadChecksum != observed.StateSHA256 {
+					t.Fatalf("State after Recover(%s %s) = (%+v, %v)", side, checkpoint, loaded, err)
+				}
+			})
+		}
+	}
+}
+
+func TestRollbackCanSurviveASecondProcessDeath(t *testing.T) {
+	stateModule, changeSet, _, observed := preparedSystemChange(t)
+	adapter := &systemChangesAdapter{observation: observed, stateRecovery: stateModule, failStep: 1, crashAfter: systemchanges.RollbackStarted}
+	func() {
+		defer func() { _ = recover() }()
+		_ = systemchanges.New(adapter).Apply(changeSet)
+	}()
+	adapter.crashed = false
+	adapter.crashAfter = systemchanges.RollbackStepStarted
+	func() {
+		defer func() { _ = recover() }()
+		_ = systemchanges.New(adapter).Recover()
+	}()
+	if !adapter.crashed || adapter.recovery == nil || adapter.recovery.LastCheckpoint != systemchanges.RollbackStepStarted {
+		t.Fatalf("second process death was not durable: recovery=%+v events=%v", adapter.recovery, adapter.events)
+	}
+	adapter.crashed = false
+	adapter.crashAfter = ""
+	result := systemchanges.New(adapter).Recover()
+	if result.Outcome != systemchanges.RollbackSucceeded || adapter.recovery != nil || strings.Count(strings.Join(adapter.events, ","), "reverse Restore prior configuration") != 1 {
+		t.Fatalf("second restart = %+v; events=%v", result, adapter.events)
+	}
+}
+
+func TestRestartAfterCompleteCleansUpWithoutRollback(t *testing.T) {
+	stateModule, changeSet, _, observed := preparedSystemChange(t)
+	adapter := &systemChangesAdapter{observation: observed, stateRecovery: stateModule, crashAfter: systemchanges.Complete}
+	func() {
+		defer func() { _ = recover() }()
+		_ = systemchanges.New(adapter).Apply(changeSet)
+	}()
+	if !adapter.crashed || adapter.recovery == nil || adapter.recovery.LastCheckpoint != systemchanges.Complete {
+		t.Fatalf("durable Complete was not retained: recovery=%+v events=%v", adapter.recovery, adapter.events)
+	}
+	reversedBefore := strings.Count(strings.Join(adapter.events, ","), "reverse Restore prior configuration")
+	result := systemchanges.New(adapter).Recover()
+	if result.Outcome != systemchanges.Completed || adapter.recovery != nil || strings.Count(strings.Join(adapter.events, ","), "reverse Restore prior configuration") != reversedBefore || strings.Contains(strings.Join(adapter.events[len(adapter.events)-3:], ","), "restore durable State") {
+		t.Fatalf("post-Complete recovery = %+v; events=%v", result, adapter.events)
+	}
+	loaded, err := stateModule.Load(LoadRequest{Baseline: ManagedEvidence, SupportedRelease: testRelease, Lineage: &LineageProof{Revision: 8, LastCompletedChangeSet: "change-0008", ReleaseIdentity: testRelease}})
+	if err != nil || loaded.Snapshot == nil || loaded.Snapshot.Revision != 8 {
+		t.Fatalf("post-Complete State = (%+v, %v)", loaded, err)
 	}
 }
 
@@ -1041,10 +1168,155 @@ func TestSystemChangesRecoveryProcess(t *testing.T) {
 	if err := os.WriteFile(lockPath, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	host := &controlledUbuntuHost{root: root, waitCancel: true, startedFile: filepath.Join(root, "forward-step-started")}
+	host := &controlledUbuntuHost{root: root}
+	if os.Getenv("SBXR_RECOVERY_TEST_MODE") == "rollback" {
+		host.failExecute = true
+		host.waitReverse = true
+		host.reverseFile = filepath.Join(root, "rollback-step-started")
+	} else {
+		host.waitCancel = true
+		host.startedFile = filepath.Join(root, "forward-step-started")
+	}
 	adapter := ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return observed, nil }, host)
 	result := systemchanges.New(adapter).Apply(changeSet)
 	t.Fatalf("recovery subprocess returned without process death: %+v", result)
+}
+
+func rollbackDeathRoot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	command := exec.Command(os.Args[0], "-test.run=^TestSystemChangesRecoveryProcess$")
+	command.Env = append(os.Environ(), "SBXR_RECOVERY_TEST_ROOT="+root, "SBXR_RECOVERY_TEST_MODE=rollback")
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	started := filepath.Join(root, "rollback-step-started")
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			_ = command.Process.Kill()
+			_, _ = command.Process.Wait()
+			t.Fatal("subprocess did not reach the durable rollback checkpoint")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := command.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = command.Process.Wait()
+	return root
+}
+
+func TestUbuntuRecoveryResumesProcessDeathDuringRollback(t *testing.T) {
+	root := rollbackDeathRoot(t)
+	stateModule, _, _, observed := preparedSystemChange(t)
+	observed.Status, observed.CurrentChangeSet, observed.LastChangeSet = systemchanges.ChangeInProgress, "change-0008", "change-0007"
+	observed.Checkpoint, observed.TotalSteps, observed.RollbackAvailable = systemchanges.PreparedCheckpoint, 1, true
+	host := &controlledUbuntuHost{root: root, services: map[string]*controlledService{
+		"affected":         {owner: systemchanges.ConnectionProfilesModule, state: testSHA('8'), known: true, running: true},
+		"unrelated-proven": {owner: systemchanges.NetworkPolicyModule, state: observed.StateSHA256, known: true, running: true},
+	}}
+	adapter := ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return observed, nil }, host, stateModule)
+	result := systemchanges.New(adapter).Recover()
+	if result.Outcome != systemchanges.RollbackSucceeded || fmt.Sprint(host.reversed) != fmt.Sprint([]systemchanges.OperationKind{systemchanges.RestorePriorConfiguration}) || strings.Join(host.recoveryEvents, ",") != "hold services,allow proven unrelated,inspect uncertain,starting services proven" || !host.services["affected"].running || !host.services["unrelated-proven"].running {
+		t.Fatalf("rollback-death recovery = %+v; recovery=%v reversed=%v", result, host.recoveryEvents, host.reversed)
+	}
+	loaded, err := stateModule.Load(intentManagedRequest())
+	if err != nil || loaded.Snapshot == nil || loaded.Snapshot.Revision != 7 {
+		t.Fatalf("rollback-death State = (%+v, %v)", loaded, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "var/lib/sbxr/transactions/change-0008")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rollback-death material remains: %v", err)
+	}
+}
+
+func TestUbuntuRecoveryRefusesMissingRollbackEvidence(t *testing.T) {
+	root := rollbackDeathRoot(t)
+	if err := os.Remove(filepath.Join(root, "var/lib/sbxr/transactions/change-0008/snapshot/step-001.rollback")); err != nil {
+		t.Fatal(err)
+	}
+	stateModule, _, _, observed := preparedSystemChange(t)
+	observed.Status, observed.CurrentChangeSet, observed.LastChangeSet = systemchanges.ChangeInProgress, "change-0008", "change-0007"
+	observed.Checkpoint, observed.TotalSteps, observed.RollbackAvailable = systemchanges.PreparedCheckpoint, 1, true
+	host := &controlledUbuntuHost{root: root}
+	adapter := ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return observed, nil }, host, stateModule)
+	result := systemchanges.New(adapter).Recover()
+	if result.Outcome != systemchanges.RecoveryRequiredOutcome || len(host.reversed) != 0 {
+		t.Fatalf("missing rollback evidence = %+v; reversed=%v", result, host.reversed)
+	}
+	if _, err := os.Stat(filepath.Join(root, "var/lib/sbxr/transactions/change-0008")); err != nil {
+		t.Fatalf("unproven transaction was removed: %v", err)
+	}
+}
+
+func interruptedComplete(t *testing.T) (string, Interface, systemchanges.Observation) {
+	t.Helper()
+	stateModule, changeSet, _, observed := preparedSystemChange(t)
+	root := t.TempDir()
+	lockPath := filepath.Join(root, "run/sbxr/system-changes.lock")
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lockPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	host := &controlledUbuntuHost{root: root}
+	base := ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return observed, nil }, host, stateModule)
+	result := systemchanges.New(cleanupFailingUbuntuAdapter{Adapter: base}).Apply(changeSet)
+	if result.Outcome != systemchanges.RecoveryRequiredOutcome || result.Finding == nil || result.Finding.Found != string(systemchanges.Complete) {
+		t.Fatalf("interrupted cleanup = %+v", result)
+	}
+	loaded, err := stateModule.Load(LoadRequest{Baseline: ManagedEvidence, SupportedRelease: testRelease, Lineage: &LineageProof{Revision: 8, LastCompletedChangeSet: "change-0008", ReleaseIdentity: testRelease}})
+	if err != nil || loaded.Snapshot == nil || loaded.loaded == nil {
+		t.Fatalf("completed State = (%+v, %v)", loaded, err)
+	}
+	observed.Status, observed.CurrentChangeSet, observed.LastChangeSet = systemchanges.Managed, "", "change-0008"
+	observed.Checkpoint, observed.TotalSteps, observed.RollbackAvailable = systemchanges.NoCheckpoint, 0, false
+	observed.StateRevision, observed.StateSHA256 = 8, loaded.loaded.payloadChecksum
+	return root, stateModule, observed
+}
+
+func TestUbuntuRecoveryAfterCompleteOnlyCleansResolvedMaterial(t *testing.T) {
+	root, stateModule, observed := interruptedComplete(t)
+	host := &controlledUbuntuHost{root: root}
+	host.services = map[string]*controlledService{
+		"completed": {owner: systemchanges.ConnectionProfilesModule, state: observed.StateSHA256, known: true},
+	}
+	fresh := ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return observed, nil }, host, stateModule)
+	result := systemchanges.New(fresh).Recover()
+	if result.Outcome != systemchanges.Completed || len(host.reversed) != 0 || !host.services["completed"].running {
+		t.Fatalf("post-Complete cleanup = %+v; recovery=%v services=%+v", result, host.recoveryEvents, host.services)
+	}
+	if _, err := os.Stat(filepath.Join(root, "var/lib/sbxr/transactions/change-0008")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("completed transaction material remains: %v", err)
+	}
+}
+
+func TestUbuntuRecoveryRefusesContradictoryCompleteEvidence(t *testing.T) {
+	root, stateModule, observed := interruptedComplete(t)
+	journal := filepath.Join(root, "var/lib/sbxr/transactions/change-0008/journal.jsonl")
+	file, err := os.OpenFile(journal, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, writeErr := file.WriteString("{\"checkpoint\":\"Rolled back\"}\n")
+	syncErr := file.Sync()
+	closeErr := file.Close()
+	if writeErr != nil || syncErr != nil || closeErr != nil {
+		t.Fatalf("contradictory journal write = (%v, %v, %v)", writeErr, syncErr, closeErr)
+	}
+	host := &controlledUbuntuHost{root: root}
+	adapter := ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return observed, nil }, host, stateModule)
+	result := systemchanges.New(adapter).Recover()
+	if result.Outcome != systemchanges.RecoveryRequiredOutcome || len(host.reversed) != 0 {
+		t.Fatalf("contradictory Complete evidence = %+v; reversed=%v", result, host.reversed)
+	}
+	if _, err := os.Stat(filepath.Join(root, "var/lib/sbxr/transactions/change-0008")); err != nil {
+		t.Fatalf("contradictory transaction was removed: %v", err)
+	}
 }
 
 func TestUbuntuRecoveryAcquiresProcessReleasedLockBeforeServicesAndRollsBack(t *testing.T) {

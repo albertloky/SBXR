@@ -9,5 +9,7 @@
 // is not cancellation. The private startup recovery path acquires the released
 // lock before affected services, validates one durable unfinished transaction,
 // inspects potentially applied steps, and rolls ordinary work back without
-// resuming it forward.
+// resuming it forward. A later restart continues rollback only from durable
+// reverse evidence; after durable Complete it removes transaction material
+// without restoring the prior revision.
 package systemchanges
