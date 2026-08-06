@@ -121,6 +121,7 @@ func (f *Finding) Error() string {
 // Storage is the State-owned Seam implemented by one production Adapter.
 type Storage interface {
 	Read() ([]byte, error)
+	Publish(expectedPrior, candidate []byte, candidateSHA256 string) ([]byte, error)
 }
 
 // Interface is the caller-facing State Module boundary.

@@ -22,7 +22,17 @@ go test -v ./internal/state -run '^(TestPrepareCommit|TestPrepared|TestFirstAppl
 
 Pass when a fresh installation prepares revision `1`, every Managed revision `N` prepares exactly `N+1`, and preparation binds the exact loaded bytes and checksum, candidate checksum, six managed-input checksums, approved Plan identity and checksum, prepared service manifests, and Change Set. The first Apply attempt must consume the opaque authority. A changed input, observation, checksum, starting State, repeated Plan, or second use must require a fresh Load, Plan, review, and preparation. Refusal, failure, cancellation, rollback, retry, and success must never advance State during preparation and must never permit replay. Change in progress must expose only the last committed revision and typed current operation and must refuse another preparation.
 
-The same check must prove that prior Desired State bytes pass through opaquely for later rollback, all prepared bytes are byte-stable, protected values cannot be rendered, and setting, unchanged-state repair, credential rotation, software migration, and automatic certificate renewal all obey the same `N` to `N+1` rule. Preparation must perform no publication or mutation; durable transaction publication, the global journal, Rollback Snapshot ownership, and host rollback belong to System Changes.
+The same check must prove that prior Desired State bytes pass through opaquely for later rollback, all prepared bytes are byte-stable, protected values cannot be rendered, and setting, unchanged-state repair, credential rotation, software migration, and automatic certificate renewal all obey the same `N` to `N+1` rule. Preparation must perform no publication or mutation; System Changes owns when publication is invoked plus the global journal, Rollback Snapshot, and host rollback.
+
+## `STATE-MODULE-PUBLISH` — Module Verification — Codex
+
+Run:
+
+```sh
+go test -v ./internal/state -run '^(TestPreparedTransactionPublishes|TestFreshInstallationPublishes|TestPublication|TestTransactionAllows|TestPostPublication)'
+```
+
+Pass when the consumed opaque transaction preserves the exact prior State or proven Not installed baseline, publishes revision `1` or exactly `N+1` only on its single publication attempt, rejects a changed starting State, and returns exact readback plus typed candidate sections and prepared manifests for post-publication agreement. Simulated failure before replacement must leave the complete prior document current; failure after replacement must leave the complete candidate current and the exact prior bytes available for System Changes rollback. Wrong readback must be refused. The agreement must remain protected and must not claim durable `Complete`; the global journal, Required gates, rollback, `Complete`, and transaction cleanup remain System Changes responsibilities.
 
 The exact ownership contract is:
 
@@ -55,7 +65,7 @@ Run the controlled filesystem check as root on the supported Linux environment:
 go test -v ./internal/state/adapter/filesystem
 ```
 
-Pass only when `TestRootOwnershipSeam` runs rather than skips and the complete check proves fixed `state.json` placement, root ownership, exact `0700`/`0600` modes, stable durable reads, and refusal of symbolic links, hard links, path substitution, unexpected types, broader modes, wrong owners, and corruption. Redacted evidence records test names and status only.
+Pass only when `TestRootOwnershipSeam` runs rather than skips and the complete check proves fixed `state.json` placement, root ownership, exact `0700`/`0600` modes, stable durable reads, and refusal of symbolic links, hard links, path substitution, unexpected types, broader modes, wrong owners, and corruption. `TestAtomicPublicationSeam`, `TestAtomicPublicationInterruptionPoints`, `TestFreshPublicationDirectoryInterruptionPoints`, and `TestStaleCandidateCleanupInterruptionPoints` must additionally prove real candidate write and flush, checksum verification, atomic replacement, containing-directory flush, exact readback, fresh revision-`1` publication, no half-written current document at every checkpoint, durable cleanup, and safe restart recovery from a stale `state.json.next` without retaining history. Redacted evidence records test names and status only.
 
 ## `STATE-SEAM-SERVICE-MATERIAL` — Seam Verification — Codex
 
@@ -69,7 +79,11 @@ Pass when protected JSON serialization produces every required byte-stable servi
 
 This is preparation proof only. Applying the owner and modes to live service paths is part of the later System Changes seam. If that seam has not run, record it `Pending`; this check does not prove publication or live service behavior.
 
-## `STATE-LIVE-STORAGE` — Codex Live Acceptance — Codex
+## `STATE-INTEGRATED-PUBLICATION` — Integrated Verification — Pending
+
+Through the complete `sbxr` executable, System Changes must preserve and verify the Rollback Snapshot and journal, run planned live steps and Required pre-publication gates while the old State remains current, invoke the one-use State publication, prove the returned candidate sections and manifests agree with active files, services, and fresh owning-Module Observed State, then durably write `Complete` and delete transaction material without creating history. Until that integration exists and runs against the exact release, this row remains `Pending`.
+
+## `STATE-LIVE-STORAGE` — Codex Live Acceptance — Pending
 
 During one explicitly approved Acceptance Run, use the exact Release Identity and an Acceptance VPS with a proven Acceptance Baseline. Verify the real `/var/lib/sbxr/state/state.json` boundary, root ownership, exact `0700`/`0600` modes, corruption refusal, restart read, and absence of protected content in findings. The later Integrated Verification must also prove that prepared service material reaches each owning service without unrelated values. Destructive corruption must use only the transaction-scoped Acceptance Run procedure and restore or reimage the disposable VPS afterward.
 

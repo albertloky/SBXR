@@ -19,5 +19,9 @@
 // is consumed by the first Apply attempt and cannot be replayed. It preserves
 // the exact prior state bytes for a later rollback snapshot without exposing or
 // interpreting their protected values. Preparation never publishes or mutates
-// storage; durable transaction publication belongs to System Changes.
+// storage during preparation. After System Changes preserves its transaction
+// material and passes every pre-publication gate, the opaque transaction writes
+// the candidate beside current State, flushes and verifies it, atomically
+// replaces current State, flushes the directory, and returns an exact readback
+// agreement. State never marks the Change Set Complete or owns rollback.
 package state

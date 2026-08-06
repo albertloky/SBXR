@@ -20,6 +20,9 @@ var testRelease = ReleaseIdentity{
 type intentStorage struct{ document string }
 
 func (s intentStorage) Read() ([]byte, error) { return []byte(s.document), nil }
+func (s intentStorage) Publish([]byte, []byte, string) ([]byte, error) {
+	return nil, errors.New("publication is not used by intent tests")
+}
 
 func intentManagedRequest() LoadRequest {
 	return LoadRequest{Baseline: ManagedEvidence, SupportedRelease: testRelease, Lineage: &LineageProof{Revision: 7, LastCompletedChangeSet: "change-0007", ReleaseIdentity: testRelease}}

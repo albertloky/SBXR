@@ -14,9 +14,12 @@ import (
 )
 
 type mutableStateStorage struct {
-	mu       sync.Mutex
-	document string
-	err      error
+	mu                 sync.Mutex
+	document           string
+	err                error
+	publishBeforeError bool
+	publishAfterError  bool
+	readback           []byte
 }
 
 func (storage *mutableStateStorage) Read() ([]byte, error) {
@@ -30,6 +33,24 @@ func (storage *mutableStateStorage) set(document string, err error) {
 	defer storage.mu.Unlock()
 	storage.document = document
 	storage.err = err
+}
+
+func (storage *mutableStateStorage) Publish(expectedPrior, candidate []byte, _ string) ([]byte, error) {
+	storage.mu.Lock()
+	defer storage.mu.Unlock()
+	missing := errors.Is(storage.err, fs.ErrNotExist)
+	if storage.publishBeforeError || storage.err != nil && !missing || missing && len(expectedPrior) != 0 || !missing && !bytes.Equal([]byte(storage.document), expectedPrior) {
+		return nil, errors.New("publication baseline changed")
+	}
+	storage.document = string(candidate)
+	storage.err = nil
+	if storage.publishAfterError {
+		return nil, errors.New("interrupted after replacement")
+	}
+	if storage.readback != nil {
+		return append([]byte(nil), storage.readback...), nil
+	}
+	return append([]byte(nil), candidate...), nil
 }
 
 func TestPrepareCommitDerivesRevisionFromExactLoad(t *testing.T) {
@@ -332,6 +353,209 @@ func TestPreparedTransactionMaterialIsByteStableAndBindsChecksums(t *testing.T) 
 	}
 	if transaction.startingChecksum == "" || transaction.candidateChecksum == "" || transaction.manifestChecksum == "" || transaction.preparedChecksum == "" || transaction.changeSet != "change-0008" || !bytes.Equal(transaction.preparedState, first.preparedState) {
 		t.Fatal("transaction material omitted a required checksum or Change Set binding")
+	}
+}
+
+func TestPreparedTransactionPublishesExactlyOnceAndReturnsAgreementInputs(t *testing.T) {
+	candidate := completeDesiredState()
+	stateModule, request, _ := managedPrepareRequest(t, candidate)
+	prepared, err := stateModule.PrepareCommit(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, err := prepared.ConsumeForApply(request.ReviewedInputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prior bytes.Buffer
+	present, err := transaction.PreservePriorState(&prior)
+	if err != nil || !present || prior.String() != documentFor(t, completeDesiredState()) {
+		t.Fatalf("PreservePriorState() = (present %t, %v), want exact opaque revision 7", present, err)
+	}
+	copyOfTransaction := *transaction
+	agreement, err := transaction.Publish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agreement.PublishedRevision() != 8 || agreement.ChangeSet() != "change-0008" || agreement.PublishedChecksum() == "" || agreement.PublishedDocumentSHA256() == "" || agreement.PreparedManifestChecksum() == "" || agreement.ReleaseIdentity() != testRelease || agreement.ConnectionProfiles() != candidate.ConnectionProfiles || agreement.Subscription() != candidate.Subscription || agreement.Cloudflare() != candidate.Cloudflare || agreement.Certificates() != candidate.Certificates || agreement.NetworkPolicy() != candidate.NetworkPolicy || agreement.SoftwareLifecycle() != (SoftwareLifecycleIntent{Installation: candidate.Installation, Software: candidate.Software}) || len(agreement.ServiceManifests()) != 4 {
+		t.Fatal("publication agreement omitted the published State or prepared manifests")
+	}
+	loaded, err := stateModule.Load(LoadRequest{Baseline: ManagedEvidence, SupportedRelease: testRelease, Lineage: &LineageProof{Revision: 8, LastCompletedChangeSet: "change-0008", ReleaseIdentity: testRelease}})
+	if err != nil || loaded.Snapshot == nil || loaded.Snapshot.Revision != 8 {
+		t.Fatalf("Load() after publication = (%+v, %v), want exact revision 8", loaded, err)
+	}
+	_, err = copyOfTransaction.Publish()
+	assertFinding(t, err, "STATE-PUBLICATION-USED")
+}
+
+func TestFreshInstallationPublishesRevisionOneOnlyAtPublication(t *testing.T) {
+	candidate := completeDesiredState()
+	storage := &mutableStateStorage{err: fs.ErrNotExist}
+	stateModule := New(storage)
+	loaded, err := stateModule.Load(LoadRequest{Baseline: CleanVPS})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := preparedRequest(t, loaded, candidate, "change-0001")
+	prepared, err := stateModule.PrepareCommit(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, err := prepared.ConsumeForApply(request.ReviewedInputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result, loadErr := stateModule.Load(LoadRequest{Baseline: CleanVPS}); loadErr != nil || result.Status != NotInstalled {
+		t.Fatalf("State before Publish() = (%+v, %v), want Not installed", result, loadErr)
+	}
+	var prior bytes.Buffer
+	if present, preserveErr := transaction.PreservePriorState(&prior); preserveErr != nil || present || prior.Len() != 0 {
+		t.Fatalf("fresh prior handoff = (present %t, bytes %d, %v), want proven absence", present, prior.Len(), preserveErr)
+	}
+	agreement, err := transaction.Publish()
+	if err != nil || agreement.PublishedRevision() != 1 {
+		t.Fatalf("Publish() = (%+v, %v), want revision 1", agreement, err)
+	}
+}
+
+func TestPublicationInterruptionKeepsWholeStateAndOpaquePrior(t *testing.T) {
+	candidate := completeDesiredState()
+	prior := documentFor(t, candidate)
+	tests := []struct {
+		name      string
+		configure func(*mutableStateStorage)
+		code      string
+		wantPrior bool
+	}{
+		{name: "before replacement", configure: func(storage *mutableStateStorage) { storage.publishBeforeError = true }, code: "STATE-PUBLICATION-STORAGE", wantPrior: true},
+		{name: "after replacement", configure: func(storage *mutableStateStorage) { storage.publishAfterError = true }, code: "STATE-PUBLICATION-STORAGE"},
+		{name: "wrong readback", configure: func(storage *mutableStateStorage) { storage.readback = []byte(`{"partial":true}`) }, code: "STATE-PUBLICATION-READBACK"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			storage := &mutableStateStorage{document: prior}
+			tt.configure(storage)
+			stateModule := New(storage)
+			loaded, err := stateModule.Load(intentManagedRequest())
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := preparedRequest(t, loaded, candidate, "change-0008")
+			prepared, err := stateModule.PrepareCommit(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			transaction, err := prepared.ConsumeForApply(request.ReviewedInputs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = transaction.Publish()
+			assertFinding(t, err, tt.code)
+			var restored bytes.Buffer
+			present, preserveErr := transaction.PreservePriorState(&restored)
+			if preserveErr != nil || !present || restored.String() != prior {
+				t.Fatalf("prior handoff after interruption = (present %t, %v), want exact prior bytes", present, preserveErr)
+			}
+			current, readErr := storage.Read()
+			if readErr != nil || tt.wantPrior && !bytes.Equal(current, []byte(prior)) || !tt.wantPrior && !bytes.Equal(current, transaction.preparedState) {
+				t.Fatal("interruption left neither the whole prior State nor the whole prepared State")
+			}
+			_, err = transaction.Publish()
+			assertFinding(t, err, "STATE-PUBLICATION-USED")
+		})
+	}
+}
+
+func TestPublicationRefusesAChangedStartingStateAndBurnsAuthority(t *testing.T) {
+	candidate := completeDesiredState()
+	prior := documentFor(t, candidate)
+	storage := &mutableStateStorage{document: prior}
+	stateModule := New(storage)
+	loaded, err := stateModule.Load(intentManagedRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := preparedRequest(t, loaded, candidate, "change-0008")
+	prepared, err := stateModule.PrepareCommit(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, err := prepared.ConsumeForApply(request.ReviewedInputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storage.set("\n"+prior, nil)
+	_, err = transaction.Publish()
+	assertFinding(t, err, "STATE-PUBLICATION-STALE")
+	_, err = transaction.Publish()
+	assertFinding(t, err, "STATE-PUBLICATION-USED")
+	var restored bytes.Buffer
+	if present, preserveErr := transaction.PreservePriorState(&restored); preserveErr != nil || !present || restored.String() != prior {
+		t.Fatalf("stale publication lost exact prior handoff: present=%t err=%v", present, preserveErr)
+	}
+}
+
+func TestTransactionAllowsOnlyOneConcurrentPublication(t *testing.T) {
+	candidate := completeDesiredState()
+	stateModule, request, _ := managedPrepareRequest(t, candidate)
+	prepared, err := stateModule.PrepareCommit(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, err := prepared.ConsumeForApply(request.ReviewedInputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var successes atomic.Int32
+	var replays atomic.Int32
+	var wait sync.WaitGroup
+	for range 16 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			_, publishErr := transaction.Publish()
+			if publishErr == nil {
+				successes.Add(1)
+				return
+			}
+			var finding *Finding
+			if errors.As(publishErr, &finding) && finding.Code == "STATE-PUBLICATION-USED" {
+				replays.Add(1)
+			}
+		}()
+	}
+	wait.Wait()
+	if successes.Load() != 1 || replays.Load() != 15 {
+		t.Fatalf("concurrent publication = (%d success, %d replay), want (1, 15)", successes.Load(), replays.Load())
+	}
+}
+
+func TestPostPublicationAgreementIsProtectedAndCannotBecomeComplete(t *testing.T) {
+	candidate := completeDesiredState()
+	stateModule, request, _ := managedPrepareRequest(t, candidate)
+	prepared, err := stateModule.PrepareCommit(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, err := prepared.ConsumeForApply(request.ReviewedInputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agreement, err := transaction.Publish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := agreement.ServiceManifests()
+	manifest[0] = ServiceAgreement{}
+	if agreement.ServiceManifests()[0].Service() == "" {
+		t.Fatal("caller changed protected agreement inputs")
+	}
+	for name, protected := range map[string]any{"agreement": agreement, "service manifest": agreement.ServiceManifests()[0]} {
+		data, renderErr := json.Marshal(protected)
+		formatted := fmt.Sprintf("%+v %#v", protected, protected)
+		if renderErr == nil || strings.Contains(string(data), "SECRET-MARKER") || !strings.Contains(formatted, "redacted") || strings.Contains(strings.ToLower(formatted), "complete") {
+			t.Fatalf("%s was renderable or claimed Complete", name)
+		}
 	}
 }
 

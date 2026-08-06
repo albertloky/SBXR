@@ -38,6 +38,9 @@ type memoryStorage struct {
 }
 
 func (s memoryStorage) Read() ([]byte, error) { return []byte(s.document), s.err }
+func (s memoryStorage) Publish([]byte, []byte, string) ([]byte, error) {
+	return nil, errors.New("publication is not used by Load tests")
+}
 
 func managedRequest() state.LoadRequest {
 	return state.LoadRequest{
