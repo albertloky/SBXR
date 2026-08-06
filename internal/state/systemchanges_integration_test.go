@@ -17,6 +17,9 @@ import (
 	"time"
 
 	"github.com/albertloky/SBXR/internal/certificatelifecycle"
+	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
+	"github.com/albertloky/SBXR/internal/networkpolicy"
+	"github.com/albertloky/SBXR/internal/ownerconsole"
 	"github.com/albertloky/SBXR/internal/systemchanges"
 	"github.com/albertloky/SBXR/internal/systemchanges/adapter/ubuntu"
 )
@@ -28,6 +31,7 @@ type systemChangesAdapter struct {
 	artifacts       map[string][]byte
 	statuses        map[systemchanges.GatePhase]systemchanges.HealthStatus
 	beforeStep      func() error
+	beforeCheck     func()
 	prepareErr      error
 	closeErr        error
 	stepEvidence    *systemchanges.StepEvidence
@@ -49,6 +53,38 @@ type systemChangesAdapter struct {
 	crashAfter      systemchanges.DurableCheckpoint
 	crashed         bool
 	lockHeld        bool
+}
+
+type controlledRemovalObserver struct{}
+
+func (controlledRemovalObserver) ObserveRemovalResource(review, resource, immutableID string) (cloudflaretunnel.RemovalObservation, error) {
+	return cloudflaretunnel.RemovalObservation{ReviewID: review, Resource: resource, ImmutableID: immutableID, OwnedBySBXR: true, TokenActive: true, TokenAvailableLocally: true, Inventory: controlledCloudflareRemovalInventory()}, nil
+}
+
+type controlledPublicRemovalObserver struct{}
+
+func (controlledPublicRemovalObserver) ObserveRemovalResource(review, resource, immutableID string) (networkpolicy.RemovalObservation, error) {
+	return networkpolicy.RemovalObservation{ReviewID: review, Resource: resource, ImmutableID: immutableID, OwnedBySBXR: true, Inventory: controlledPublicRemovalInventory()}, nil
+}
+
+func controlledPublicRemovalInventory() map[string][]string {
+	return map[string][]string{"firewall-table": {"inet-sbxr"}, "public-listener": {"listener-xray"}, "public-service": {"service-xray"}}
+}
+
+func controlledCloudflareRemovalInventory() map[string][]string {
+	return map[string][]string{"cloudflare-dns-record": {"dns-xhttp", "dns-websocket", "dns-direct-ipv4"}, "cloudflare-route": {"route-xhttp"}, "cloudflare-tunnel": {"tunnel-xhttp"}}
+}
+
+type controlledOwnerRemovalObserver struct{}
+
+func (controlledOwnerRemovalObserver) ReviewedCategories(string) ([]string, error) {
+	return []string{"firewall-table", "public-listener", "public-service", "cloudflare-dns-record", "cloudflare-route", "cloudflare-tunnel"}, nil
+}
+func (controlledOwnerRemovalObserver) TypedPhrase(string) (string, bool, error) {
+	return "COMPLETE REMOVAL", true, nil
+}
+func (controlledOwnerRemovalObserver) PermanentRemovalSelected(string) (bool, error) {
+	return true, nil
 }
 
 func (a *systemChangesAdapter) Observe() (systemchanges.Observation, error) {
@@ -164,7 +200,10 @@ func (a *systemChangesAdapter) VerifyRollback(_ systemchanges.ExecutionLease, _ 
 
 func (a *systemChangesAdapter) Check(_ systemchanges.ExecutionLease, check systemchanges.Check, phase systemchanges.GatePhase, _ time.Duration) (systemchanges.HealthStatus, error) {
 	a.events = append(a.events, "check "+string(phase)+" "+check.Code)
-	if status := a.statuses[phase]; status != "" && check.Code == "NETWORK-GATE" {
+	if a.beforeCheck != nil {
+		a.beforeCheck()
+	}
+	if status := a.statuses[phase]; status != "" && (check.Code == "NETWORK-GATE" || check.Code == "REMOVAL-EXTERNAL-ABSENT") {
 		return status, nil
 	}
 	return check.Status, nil
@@ -398,6 +437,7 @@ type systemChangeTestOptions struct {
 	extraSteps         []systemchanges.Step
 	stepTimeout        time.Duration
 	identity           string
+	startingStatus     systemchanges.InstallationStatus
 	publishBeforeError bool
 	publishAfterError  bool
 }
@@ -445,17 +485,56 @@ func preparedSystemChangeWithOptions(t *testing.T, mutation systemchanges.Mutati
 	if mutation == systemchanges.InstallationMutation {
 		starting = systemchanges.StateLineage{Status: systemchanges.NotInstalled}
 		observed.Status, observed.LastChangeSet, observed.StateRevision, observed.StateSHA256 = systemchanges.NotInstalled, "", 0, ""
+	} else if mutation == systemchanges.CompleteRemovalMutation && options.startingStatus == systemchanges.RecoveryRequired {
+		starting.Status, observed.Status, observed.RecoveryCause = systemchanges.RecoveryRequired, systemchanges.RecoveryRequired, systemchanges.StateLineageUnprovable
 	}
 	step, err := systemchanges.NewStep(systemchanges.ConnectionProfilesModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
 	if err != nil {
 		t.Fatal(err)
 	}
 	steps := append([]systemchanges.Step{step}, options.extraSteps...)
+	var typedRemoval systemchanges.TypedRemovalConfirmation
+	var permanentRemoval systemchanges.PermanentRemovalSelection
+	if mutation == systemchanges.CompleteRemovalMutation {
+		console := ownerconsole.New(controlledOwnerRemovalObserver{})
+		review, reviewErr := console.StartRemovalReview("removal-review-0008")
+		typed, typedErr := console.RecordTypedPhrase(review)
+		selected, selectedErr := console.SelectPermanentRemoval(review)
+		if reviewErr != nil || typedErr != nil || selectedErr != nil {
+			t.Fatalf("complete removal review: %v, %v, %v", reviewErr, typedErr, selectedErr)
+		}
+		typedRemoval, permanentRemoval = typed, selected
+		steps = options.extraSteps
+		if len(steps) == 0 {
+			for _, resource := range []struct {
+				category systemchanges.RemovalResource
+				id       string
+			}{{systemchanges.FirewallTableResource, "inet-sbxr"}, {systemchanges.PublicListenerResource, "listener-xray"}, {systemchanges.PublicServiceResource, "service-xray"}} {
+				authority, authorityErr := networkpolicy.NewRemoval(controlledPublicRemovalObserver{}).ProveRemovalResource("removal-review-0008", string(resource.category), resource.id)
+				step, stepErr := systemchanges.NewPublicExposureRemovalStep(selected, authority)
+				if authorityErr != nil || stepErr != nil {
+					t.Fatalf("public removal step: %v, %v", authorityErr, stepErr)
+				}
+				steps = append(steps, step)
+			}
+			for _, resource := range []struct {
+				category systemchanges.RemovalResource
+				id       string
+			}{{systemchanges.CloudflareDNSRecordResource, "dns-xhttp"}, {systemchanges.CloudflareDNSRecordResource, "dns-websocket"}, {systemchanges.CloudflareDNSRecordResource, "dns-direct-ipv4"}, {systemchanges.CloudflareRouteResource, "route-xhttp"}, {systemchanges.CloudflareTunnelResource, "tunnel-xhttp"}} {
+				authority, authorityErr := cloudflaretunnel.New(controlledRemovalObserver{}).ProveRemovalResource("removal-review-0008", string(resource.category), resource.id)
+				step, stepErr := systemchanges.NewCloudflareRemovalStep(selected, authority)
+				if authorityErr != nil || stepErr != nil {
+					t.Fatalf("external removal step: %v, %v", authorityErr, stepErr)
+				}
+				steps = append(steps, step)
+			}
+		}
+	}
 	spec := systemchanges.ChangeSetSpec{
 		Identity: identity, Mutation: mutation, OutcomeOwner: systemchanges.ConnectionProfilesModule,
 		StartingState: starting, TargetStateSHA256: target,
 		Plan:          systemchanges.PlanBinding{Identity: planIdentity, SHA256: planSHA256, VolatileSHA256: testSHA('2')},
-		PreparedState: prepared, Steps: steps,
+		PreparedState: prepared, TypedRemovalConfirmation: typedRemoval, PermanentRemovalSelection: permanentRemoval, Steps: steps,
 		Checks: func() []systemchanges.Check {
 			pre, post := check, check
 			pre.Phase, post.Phase = systemchanges.PrePublication, systemchanges.PostPublication
@@ -499,6 +578,77 @@ func TestEveryMutationClassUsesOneSystemChangesLockBeforeLiveWork(t *testing.T) 
 				t.Fatalf("%s lock boundary = %+v; closes=%d", mutation, result, adapter.closes.Load())
 			}
 		})
+	}
+}
+
+func TestCompleteRemovalStopsAtTheReversibleExternalDeletionBoundary(t *testing.T) {
+	_, changeSet, _, observed := preparedSystemChangeForMutation(t, systemchanges.CompleteRemovalMutation, systemchanges.Check{Owner: systemchanges.CloudflareModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "REMOVAL-EXTERNAL-ABSENT"})
+	adapter := &systemChangesAdapter{observation: observed}
+	result := systemchanges.New(adapter).Apply(changeSet)
+	joined := strings.Join(adapter.events, ",")
+	if result.Outcome != systemchanges.ReadyForIrreversibleRemoval || result.RestoredStatus != "" || result.NothingChanged || result.Finding != nil || strings.Contains(joined, string(systemchanges.StatePublicationStarted)) || strings.Contains(joined, string(systemchanges.Complete)) || !strings.Contains(joined, string(systemchanges.OwnedExternalDeletionVerified)) || adapter.recovery == nil {
+		t.Fatalf("reversible Complete removal = %+v; events=%v", result, adapter.events)
+	}
+	wantLimits := []string{"Certificate Transparency entries cannot be erased", "DNS caches cannot be erased"}
+	if strings.Join(result.UnremovableTraces, ",") != strings.Join(wantLimits, ",") {
+		t.Fatalf("Complete removal limits = %v, want %v", result.UnremovableTraces, wantLimits)
+	}
+}
+
+func TestCompleteRemovalFailureOrCancellationRestoresItsProvenStartingStatus(t *testing.T) {
+	type stopCase struct {
+		name        string
+		failStep    int
+		cancelAfter int
+		cancelCheck bool
+		failCheck   bool
+	}
+	stops := []stopCase{{name: "pre-start cancellation"}}
+	for step := 1; step <= len(completeRemovalIDs); step++ {
+		stops = append(stops, stopCase{name: fmt.Sprintf("step %d failure", step), failStep: step}, stopCase{name: fmt.Sprintf("after step %d cancellation", step), cancelAfter: step})
+	}
+	stops = append(stops, stopCase{name: "verification cancellation", cancelCheck: true}, stopCase{name: "absence verification failure", failCheck: true})
+	for _, status := range []systemchanges.InstallationStatus{systemchanges.Managed, systemchanges.RecoveryRequired} {
+		for _, stop := range stops {
+			t.Run(string(status)+"/"+stop.name, func(t *testing.T) {
+				cancellation := systemchanges.NewCancellation()
+				_, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.CompleteRemovalMutation, systemchanges.Check{Owner: systemchanges.CloudflareModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "REMOVAL-EXTERNAL-ABSENT"}, systemChangeTestOptions{startingStatus: status, stepTimeout: time.Second})
+				adapter := &systemChangesAdapter{observation: observed}
+				if stop.name == "pre-start cancellation" {
+					cancellation.Request()
+				}
+				adapter.failStep = stop.failStep
+				if stop.cancelAfter > 0 {
+					adapter.beforeStep = func() error {
+						if adapter.executeCount == stop.cancelAfter {
+							cancellation.Request()
+						}
+						return nil
+					}
+				}
+				if stop.cancelCheck {
+					adapter.beforeCheck = cancellation.Request
+				}
+				if stop.failCheck {
+					adapter.statuses = map[systemchanges.GatePhase]systemchanges.HealthStatus{systemchanges.PrePublication: systemchanges.Failed}
+				}
+				result := systemchanges.New(adapter).ApplyWithCancellation(changeSet, cancellation)
+				joined := strings.Join(adapter.events, ",")
+				if stop.name == "pre-start cancellation" {
+					if result.Outcome != systemchanges.Refused || !result.NothingChanged || result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-CANCELLED" || len(adapter.events) != 0 {
+						t.Fatalf("%s from %s = %+v; events=%v", stop.name, status, result, adapter.events)
+					}
+					return
+				}
+				wantStatus := status
+				if status == systemchanges.RecoveryRequired {
+					wantStatus = systemchanges.Managed
+				}
+				if result.Outcome != systemchanges.RollbackSucceeded || result.RestoredStatus != wantStatus || !strings.Contains(joined, string(systemchanges.RollbackVerified)) || strings.Contains(joined, string(systemchanges.StatePublicationStarted)) {
+					t.Fatalf("%s from %s = %+v; events=%v", stop.name, status, result, adapter.events)
+				}
+			})
+		}
 	}
 }
 
@@ -595,22 +745,27 @@ func TestStepCompletionRequiresDurableTypedEvidence(t *testing.T) {
 }
 
 type controlledUbuntuHost struct {
-	root           string
-	executed       int
-	checks         int
-	agreements     int
-	rollbacks      int
-	waitCancel     bool
-	failExecute    bool
-	waitReverse    bool
-	delay          time.Duration
-	started        chan struct{}
-	startedFile    string
-	reverseFile    string
-	recoveryEvents []string
-	reversed       []systemchanges.OperationKind
-	startingState  string
-	services       map[string]*controlledService
+	root                  string
+	executed              int
+	checks                int
+	agreements            int
+	rollbacks             int
+	waitCancel            bool
+	failExecute           bool
+	waitReverse           bool
+	delay                 time.Duration
+	started               chan struct{}
+	startedFile           string
+	reverseFile           string
+	recoveryEvents        []string
+	reversed              []systemchanges.OperationKind
+	startingState         string
+	services              map[string]*controlledService
+	expectedMutation      systemchanges.MutationClass
+	removalTokenActive    bool
+	removalTokenAvailable bool
+	removedResources      map[string]bool
+	unrelatedExternal     string
 }
 
 type controlledService struct {
@@ -619,6 +774,17 @@ type controlledService struct {
 	known    bool
 	running  bool
 	affected bool
+}
+
+var completeRemovalIDs = []string{"inet-sbxr", "listener-xray", "service-xray", "dns-xhttp", "dns-websocket", "dns-direct-ipv4", "route-xhttp", "tunnel-xhttp"}
+
+func allRemovalResources(host *controlledUbuntuHost, removed bool) bool {
+	for _, identity := range completeRemovalIDs {
+		if host.removedResources[identity] != removed {
+			return false
+		}
+	}
+	return true
 }
 
 type controlledFirewall struct {
@@ -728,7 +894,7 @@ func (host *controlledUbuntuHost) CaptureRollback(step systemchanges.Step, write
 	return write(bytes.NewReader(prior))
 }
 
-func (host *controlledUbuntuHost) Execute(_ systemchanges.Step, timeout time.Duration, cancellation *systemchanges.Cancellation) (systemchanges.StepEvidence, error) {
+func (host *controlledUbuntuHost) Execute(step systemchanges.Step, timeout time.Duration, cancellation *systemchanges.Cancellation) (systemchanges.StepEvidence, error) {
 	host.executed++
 	if host.startedFile != "" {
 		if err := os.WriteFile(host.startedFile, []byte("started"), 0o600); err != nil {
@@ -797,7 +963,11 @@ func (host *controlledUbuntuHost) Execute(_ systemchanges.Step, timeout time.Dur
 		Files         map[string]string            `json:"sha256"`
 	}
 	wantRelease := systemchanges.ReleaseBinding{Repository: testRelease.Repository, Tag: testRelease.Tag, Commit: testRelease.Commit, ReleaseIndexSHA256: testRelease.ReleaseIndexSHA256}
-	if json.Unmarshal(manifestBytes, &manifest) != nil || manifest.SchemaVersion != 1 || manifest.Release != wantRelease || manifest.Reason != systemchanges.SettingChangeMutation || len(manifest.Files) < 3 {
+	wantMutation := host.expectedMutation
+	if wantMutation == "" {
+		wantMutation = systemchanges.SettingChangeMutation
+	}
+	if json.Unmarshal(manifestBytes, &manifest) != nil || manifest.SchemaVersion != 1 || manifest.Release != wantRelease || manifest.Reason != wantMutation || len(manifest.Files) < 3 {
 		return systemchanges.StepEvidence{}, errors.New("snapshot manifest binding is incomplete")
 	}
 	journalBytes, err := os.ReadFile(filepath.Join(transaction, "journal.jsonl"))
@@ -815,6 +985,17 @@ func (host *controlledUbuntuHost) Execute(_ systemchanges.Step, timeout time.Dur
 	first, _, _ := bytes.Cut(journalBytes, []byte{'\n'})
 	if json.Unmarshal(first, &preparedEntry) != nil || preparedEntry.Checkpoint != "Prepared" || preparedEntry.ChangeSet != "change-0008" || len(preparedEntry.PlanSHA256) != 64 || preparedEntry.State.StartingRevision != 7 || preparedEntry.State.CandidateRevision != 8 || len(preparedEntry.Steps) < 1 || preparedEntry.Steps[0]["cancellation"] != string(systemchanges.SafeCheckpointCancellation) || len(preparedEntry.Checks) != 2 || bytes.Contains(journalBytes, []byte("SECRET-MARKER")) || bytes.Contains(manifestBytes, []byte("SECRET-MARKER")) {
 		return systemchanges.StepEvidence{}, errors.New("Prepared journal binding is incomplete or unsafe")
+	}
+	if removal, ok := step.RemovalChange(); ok {
+		if removal.Action == systemchanges.CloudflareRemoval && (!host.removalTokenActive || !host.removalTokenAvailable) {
+			return systemchanges.StepEvidence{}, errors.New("controlled Cloudflare token proof unavailable")
+		}
+		if host.removedResources == nil {
+			host.removedResources = map[string]bool{}
+		}
+		host.removedResources[removal.ImmutableID] = true
+		digest := sha256.Sum256([]byte(removal.ImmutableID))
+		return systemchanges.StepEvidence{Code: "removal-verified-" + removal.ImmutableID, SHA256: fmt.Sprintf("%x", digest)}, nil
 	}
 	preparedConfig, err := os.ReadFile(filepath.Join(transaction, "prepared/subscription.json"))
 	if err != nil || !json.Valid(preparedConfig) {
@@ -841,6 +1022,16 @@ func (host *controlledUbuntuHost) Reverse(step systemchanges.Step, snapshot io.R
 		time.Sleep(10 * time.Millisecond)
 	}
 	host.reversed = append(host.reversed, step.Rollback())
+	if removal, ok := step.RemovalChange(); ok {
+		if _, err := io.ReadAll(snapshot); err != nil {
+			return systemchanges.StepEvidence{}, err
+		}
+		if removal.Action == systemchanges.CloudflareRemoval && (!host.removalTokenActive || !host.removalTokenAvailable) {
+			return systemchanges.StepEvidence{}, errors.New("controlled Cloudflare rollback token proof unavailable")
+		}
+		host.removedResources[removal.ImmutableID] = false
+		return systemchanges.StepEvidence{Code: "removal-restored-" + removal.ImmutableID, SHA256: testSHA('b')}, nil
+	}
 	active := filepath.Join(host.root, "run/sbxr/active-subscription.json")
 	prior, err := io.ReadAll(snapshot)
 	if err != nil {
@@ -894,6 +1085,12 @@ func (host *controlledUbuntuHost) InspectStep(step systemchanges.Step, snapshot 
 	host.recoveryEvents = append(host.recoveryEvents, "inspect uncertain")
 	if _, err := io.ReadAll(snapshot); err != nil {
 		return "", err
+	}
+	if removal, ok := step.RemovalChange(); ok {
+		if host.removedResources[removal.ImmutableID] {
+			return systemchanges.StepEffectPresent, nil
+		}
+		return systemchanges.StepEffectAbsent, nil
 	}
 	for name, service := range host.services {
 		shouldRun := !service.affected && service.known && service.state == host.startingState
@@ -1239,7 +1436,9 @@ func (host *controlledUbuntuHost) VerifyAgreement(agreement systemchanges.Agreem
 func (host *controlledUbuntuHost) VerifyRollback(agreement systemchanges.RollbackAgreement, _ time.Duration) error {
 	host.rollbacks++
 	wantRelease := systemchanges.ReleaseBinding{Repository: testRelease.Repository, Tag: testRelease.Tag, Commit: testRelease.Commit, ReleaseIndexSHA256: testRelease.ReleaseIndexSHA256}
-	if agreement.Status != systemchanges.Managed || agreement.Revision != 7 || agreement.SHA256 == "" || agreement.Release != wantRelease {
+	validManaged := agreement.Status == systemchanges.Managed && agreement.Release == wantRelease
+	validRecoveryRequired := agreement.Status == systemchanges.RecoveryRequired && agreement.Release == (systemchanges.ReleaseBinding{})
+	if (!validManaged && !validRecoveryRequired) || agreement.Revision != 7 || agreement.SHA256 == "" {
 		return errors.New("rollback State agreement failed")
 	}
 	active := filepath.Join(host.root, "run/sbxr/active-subscription.json")
@@ -1496,6 +1695,55 @@ func TestUbuntuAdapterRefusesFirewallStepWithoutNativeExecutor(t *testing.T) {
 	result := systemchanges.New(ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return observed, nil }, host)).Apply(changeSet)
 	if !result.NothingChanged || result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-PREPARATION" || host.executed != 0 {
 		t.Fatalf("missing native firewall executor = %+v; generic executions=%d", result, host.executed)
+	}
+}
+
+func TestUbuntuAdapterReversesOnlyTypedCompleteRemovalResourcesAfterRestart(t *testing.T) {
+	for _, status := range []systemchanges.InstallationStatus{systemchanges.Managed, systemchanges.RecoveryRequired} {
+		t.Run(string(status), func(t *testing.T) {
+			stateModule, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.CompleteRemovalMutation, systemchanges.Check{Owner: systemchanges.CloudflareModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "REMOVAL-EXTERNAL-ABSENT"}, systemChangeTestOptions{startingStatus: status, stepTimeout: time.Second})
+			root := t.TempDir()
+			prepareLock(t, root)
+			host := &controlledUbuntuHost{
+				root: root, expectedMutation: systemchanges.CompleteRemovalMutation,
+				removalTokenActive: true, removalTokenAvailable: true,
+				removedResources: map[string]bool{}, unrelatedExternal: "unrelated-cloudflare-resource-remains",
+			}
+			result := systemchanges.New(ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return observed, nil }, host, stateModule)).Apply(changeSet)
+			if result.Outcome != systemchanges.ReadyForIrreversibleRemoval || !allRemovalResources(host, true) || !host.removalTokenActive || !host.removalTokenAvailable || host.unrelatedExternal != "unrelated-cloudflare-resource-remains" {
+				t.Fatalf("controlled reversible removal = %+v; host=%+v", result, host)
+			}
+			journal, err := os.ReadFile(filepath.Join(root, "var/lib/sbxr/transactions/change-0008/journal.jsonl"))
+			if err != nil || bytes.Contains(journal, []byte("CLOUDFLARE-MANAGEMENT-SECRET-MARKER")) {
+				t.Fatalf("removal journal exposed credentials: %v", err)
+			}
+			observed.Status, observed.CurrentChangeSet, observed.RecoveryCause = systemchanges.ChangeInProgress, "change-0008", ""
+			observed.Checkpoint, observed.TotalSteps, observed.RollbackAvailable = systemchanges.PreparedCheckpoint, len(completeRemovalIDs), true
+			recovered := systemchanges.New(ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return observed, nil }, host, stateModule)).Recover()
+			wantStatus := status
+			if status == systemchanges.RecoveryRequired {
+				wantStatus = systemchanges.Managed
+			}
+			if recovered.Outcome != systemchanges.RollbackSucceeded || recovered.RestoredStatus != wantStatus || !allRemovalResources(host, false) || !host.removalTokenAvailable || host.unrelatedExternal != "unrelated-cloudflare-resource-remains" {
+				t.Fatalf("controlled removal restart rollback = %+v; host=%+v", recovered, host)
+			}
+		})
+	}
+}
+
+func TestUbuntuAdapterRefusesRemovalRollbackAfterScopedTokenDisappears(t *testing.T) {
+	stateModule, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.CompleteRemovalMutation, systemchanges.Check{Owner: systemchanges.CloudflareModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "REMOVAL-EXTERNAL-ABSENT"}, systemChangeTestOptions{startingStatus: systemchanges.Managed, stepTimeout: time.Second})
+	root := t.TempDir()
+	prepareLock(t, root)
+	host := &controlledUbuntuHost{root: root, expectedMutation: systemchanges.CompleteRemovalMutation, removalTokenActive: true, removalTokenAvailable: true, removedResources: map[string]bool{}}
+	if result := systemchanges.New(ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return observed, nil }, host, stateModule)).Apply(changeSet); result.Outcome != systemchanges.ReadyForIrreversibleRemoval {
+		t.Fatalf("controlled reversible removal = %+v", result)
+	}
+	host.removalTokenAvailable = false
+	observed.Status, observed.CurrentChangeSet, observed.Checkpoint, observed.TotalSteps, observed.RollbackAvailable = systemchanges.ChangeInProgress, "change-0008", systemchanges.PreparedCheckpoint, len(completeRemovalIDs), true
+	result := systemchanges.New(ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return observed, nil }, host, stateModule)).Recover()
+	if result.Outcome != systemchanges.RecoveryRequiredOutcome || !allRemovalResources(host, true) {
+		t.Fatalf("rollback without live scoped token = %+v; resources=%v", result, host.removedResources)
 	}
 }
 

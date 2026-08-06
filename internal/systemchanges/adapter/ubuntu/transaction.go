@@ -61,6 +61,7 @@ type journalStep struct {
 	Cancellation systemchanges.CancellationContract `json:"cancellation"`
 	Inspection   systemchanges.InspectionContract   `json:"inspection"`
 	Firewall     *systemchanges.FirewallChange      `json:"firewall,omitempty"`
+	Removal      *systemchanges.RemovalChange       `json:"removal,omitempty"`
 }
 
 type journalEntry struct {
@@ -158,6 +159,9 @@ func (a Adapter) Prepare(lease systemchanges.ExecutionLease, preparation systemc
 		steps[index] = journalStep{Owner: step.Owner(), Forward: step.Forward(), Rollback: step.Rollback(), Cancellation: step.CancellationContract(), Inspection: step.InspectionContract()}
 		if firewall, ok := step.FirewallChange(); ok {
 			steps[index].Firewall = &firewall
+		}
+		if removal, ok := step.RemovalChange(); ok {
+			steps[index].Removal = &removal
 		}
 	}
 	entry := journalEntry{Checkpoint: systemchanges.Prepared, ChangeSet: preparation.ChangeSet, Starting: preparation.Starting, OutcomeOwner: preparation.OutcomeOwner, PlanSHA256: preparation.PlanSHA256, State: &preparation.State, Steps: steps, Checks: preparation.Checks, Timeouts: preparation.Timeouts}
@@ -300,9 +304,9 @@ func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges
 	for index, persisted := range prepared.Steps {
 		var step systemchanges.Step
 		var err error
-		if persisted.Firewall == nil {
+		if persisted.Firewall == nil && persisted.Removal == nil {
 			step, err = systemchanges.NewStep(persisted.Owner, persisted.Forward, persisted.Rollback)
-		} else {
+		} else if persisted.Firewall != nil && persisted.Removal == nil {
 			if a.firewall == nil {
 				return systemchanges.RecoveryTransaction{}, errors.New("native firewall Adapter unavailable")
 			}
@@ -316,6 +320,10 @@ func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges
 			default:
 				err = errors.New("unknown firewall action")
 			}
+		} else if persisted.Firewall == nil && persisted.Removal != nil {
+			step, err = systemchanges.RestoreRemovalStep(lease, *persisted.Removal)
+		} else {
+			err = errors.New("ambiguous typed step")
 		}
 		if err != nil || step.Owner() != persisted.Owner || step.Forward() != persisted.Forward || step.Rollback() != persisted.Rollback || persisted.Cancellation != systemchanges.SafeCheckpointCancellation || persisted.Inspection != systemchanges.InspectBeforeIdempotentReverse {
 			return systemchanges.RecoveryTransaction{}, errors.New("recovery step contract is invalid")
@@ -387,7 +395,7 @@ func (a Adapter) RestoreRecoveryState(lease systemchanges.ExecutionLease, recove
 		return systemchanges.RollbackAgreement{}, err
 	}
 	var prior []byte
-	if recovery.Starting.Status == systemchanges.Managed {
+	if recovery.Starting.Status == systemchanges.Managed || recovery.Starting.Status == systemchanges.RecoveryRequired && recovery.Starting.Revision > 0 {
 		prior, err = a.recoveryArtifact(lease, recovery.ChangeSet, "snapshot/prior-state.json")
 		if err != nil {
 			return systemchanges.RollbackAgreement{}, err
@@ -469,7 +477,7 @@ func validRecoveryBinding(prepared journalEntry, manifest snapshotManifest) bool
 	if binding.ChangeSet != prepared.ChangeSet || binding.StartingRevision != prepared.Starting.Revision || binding.StartingSHA256 != prepared.Starting.SHA256 || binding.CandidateRevision != binding.StartingRevision+1 || binding.CandidateRelease == (systemchanges.ReleaseBinding{}) || !validDigest(prepared.PlanSHA256) || !validDigest(binding.CandidateSHA256) || !validDigest(binding.PreparedStateSHA256) || !validDigest(binding.PreparedManifestSHA256) || manifest.Release != recoveryRelease(binding) || manifest.Files["prepared/state.json"] != binding.PreparedStateSHA256 || manifest.Files["prepared/manifests.json"] != binding.PreparedManifestSHA256 {
 		return false
 	}
-	if prepared.Starting.Status == systemchanges.Managed {
+	if prepared.Starting.Status == systemchanges.Managed || prepared.Starting.Status == systemchanges.RecoveryRequired && binding.StartingRevision > 0 {
 		return binding.StartingRelease != (systemchanges.ReleaseBinding{}) && manifest.Files["snapshot/prior-state.json"] != ""
 	}
 	return prepared.Starting.Status == systemchanges.NotInstalled && binding.StartingRevision == 0 && binding.StartingSHA256 == "" && binding.StartingRelease == (systemchanges.ReleaseBinding{}) && manifest.Files["snapshot/prior-state.json"] == ""
@@ -663,7 +671,9 @@ func validNextCheckpoint(entries []journalEntry, next journalEntry) bool {
 		}
 		return next.Checkpoint == systemchanges.PrePublicationHealthPassed && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
 	case systemchanges.PrePublicationHealthPassed:
-		return next.Checkpoint == systemchanges.StatePublicationStarted && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total
+		return next.Checkpoint == systemchanges.OwnedExternalDeletionVerified && next.Step == 0 || next.Checkpoint == systemchanges.StatePublicationStarted && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total
+	case systemchanges.OwnedExternalDeletionVerified:
+		return next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total
 	case systemchanges.StatePublicationStarted:
 		return next.Checkpoint == systemchanges.StatePublished && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total
 	case systemchanges.StatePublished:

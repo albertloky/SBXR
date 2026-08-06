@@ -14,20 +14,21 @@ import (
 type DurableCheckpoint string
 
 const (
-	Prepared                    DurableCheckpoint = "Prepared"
-	StepStarted                 DurableCheckpoint = "Step started"
-	StepCompleted               DurableCheckpoint = "Step completed"
-	PrePublicationHealthPassed  DurableCheckpoint = "Pre-publication health passed"
-	StatePublicationStarted     DurableCheckpoint = "Desired State publication started"
-	StatePublished              DurableCheckpoint = "Desired State published"
-	PostPublicationHealthPassed DurableCheckpoint = "Post-publication health passed"
-	Complete                    DurableCheckpoint = "Complete"
-	CancellationRequested       DurableCheckpoint = "Cancellation requested"
-	RollbackStarted             DurableCheckpoint = "Rollback started"
-	RollbackStepStarted         DurableCheckpoint = "Rollback step started"
-	RollbackStepCompleted       DurableCheckpoint = "Rollback step completed"
-	RollbackVerified            DurableCheckpoint = "Rollback verified"
-	RolledBack                  DurableCheckpoint = "Rolled back"
+	Prepared                      DurableCheckpoint = "Prepared"
+	StepStarted                   DurableCheckpoint = "Step started"
+	StepCompleted                 DurableCheckpoint = "Step completed"
+	PrePublicationHealthPassed    DurableCheckpoint = "Pre-publication health passed"
+	OwnedExternalDeletionVerified DurableCheckpoint = "Owned external deletion verified"
+	StatePublicationStarted       DurableCheckpoint = "Desired State publication started"
+	StatePublished                DurableCheckpoint = "Desired State published"
+	PostPublicationHealthPassed   DurableCheckpoint = "Post-publication health passed"
+	Complete                      DurableCheckpoint = "Complete"
+	CancellationRequested         DurableCheckpoint = "Cancellation requested"
+	RollbackStarted               DurableCheckpoint = "Rollback started"
+	RollbackStepStarted           DurableCheckpoint = "Rollback step started"
+	RollbackStepCompleted         DurableCheckpoint = "Rollback step completed"
+	RollbackVerified              DurableCheckpoint = "Rollback verified"
+	RolledBack                    DurableCheckpoint = "Rolled back"
 )
 
 type CheckpointRecord struct {
@@ -223,6 +224,9 @@ func (step Step) InspectionContract() InspectionContract     { return step.inspe
 func (step Step) FirewallChange() (FirewallChange, bool) {
 	return step.firewall, step.firewall != (FirewallChange{})
 }
+func (step Step) RemovalChange() (RemovalChange, bool) {
+	return step.removal, step.removal != (RemovalChange{})
+}
 
 // Recover is the private startup path for unfinished ordinary forward work.
 // It never resumes the forward transaction.
@@ -275,7 +279,7 @@ func (i Interface) Recover() ApplyResult {
 		if recoveryAdapter.VerifyStartingServices(lease, recovery, recovery.Timeouts.Check) != nil || adapter.Cleanup(lease, recovery.ChangeSet) != nil {
 			return finish(lock, recoveryRequired(spec, "SYSTEM-CHANGES-RESTART", RolledBack))
 		}
-		return finish(lock, recoveredRollbackResult(recovery))
+		return finish(lock, recoveredRollbackResult(recovery, rollbackRestoredStatus(recovery.Starting)))
 	}
 	nextRollbackStep := recovery.AttemptedSteps
 	if rollbackCheckpoint(recovery.LastCheckpoint) {
@@ -295,18 +299,23 @@ func validRecoveryTransaction(recovery RecoveryTransaction) bool {
 	if !safeIdentity(recovery.ChangeSet) || !validModule(recovery.OutcomeOwner) || len(recovery.Steps) == 0 || recovery.AttemptedSteps < 0 || recovery.AttemptedSteps > len(recovery.Steps) || recovery.Timeouts.Step <= 0 || recovery.Timeouts.Step > maxStepTimeout || recovery.Timeouts.Check <= 0 || recovery.Timeouts.Check > maxCheckTimeout {
 		return false
 	}
-	if recovery.Starting.Status == Managed && (recovery.Starting.Revision == 0 || !validSHA256(recovery.Starting.SHA256) || recovery.StartingRelease == (ReleaseBinding{})) || recovery.Starting.Status == NotInstalled && (recovery.Starting.Revision != 0 || recovery.Starting.SHA256 != "" || recovery.StartingRelease != (ReleaseBinding{})) || recovery.Starting.Status != Managed && recovery.Starting.Status != NotInstalled {
+	if (recovery.Starting.Status == Managed || recovery.Starting.Status == RecoveryRequired) && (recovery.Starting.Revision == 0 || !validSHA256(recovery.Starting.SHA256) || recovery.StartingRelease == (ReleaseBinding{})) || recovery.Starting.Status == NotInstalled && (recovery.Starting.Revision != 0 || recovery.Starting.SHA256 != "" || recovery.StartingRelease != (ReleaseBinding{})) || recovery.Starting.Status != Managed && recovery.Starting.Status != RecoveryRequired && recovery.Starting.Status != NotInstalled {
 		return false
 	}
+	removal := false
 	for _, step := range recovery.Steps {
 		if !validStep(step) {
 			return false
 		}
+		removal = removal || step.removal != (RemovalChange{})
+	}
+	if removal && !validRemovalSteps(recovery.Steps) {
+		return false
 	}
 	switch recovery.LastCheckpoint {
 	case Prepared:
 		return recovery.AttemptedSteps == 0
-	case StepStarted, StepCompleted, PrePublicationHealthPassed, StatePublicationStarted, StatePublished, PostPublicationHealthPassed:
+	case StepStarted, StepCompleted, PrePublicationHealthPassed, OwnedExternalDeletionVerified, StatePublicationStarted, StatePublished, PostPublicationHealthPassed:
 		return recovery.AttemptedSteps > 0 && recovery.RollbackStep == 0
 	case RollbackStarted:
 		return recovery.RollbackStep == recovery.AttemptedSteps
@@ -338,7 +347,11 @@ func rollbackRecovered(lease ExecutionLease, adapter TransactionAdapter, recover
 		return recoveryRequired(spec, "SYSTEM-CHANGES-RESTART", recovery.LastCheckpoint)
 	}
 	agreement, err := recoveryAdapter.RestoreRecoveryState(lease, recovery)
-	if err != nil || !validRollbackAgreement(agreement, recovery.Starting) || agreement.Release != recovery.StartingRelease {
+	if err != nil || agreement.Release != recovery.StartingRelease {
+		return recoveryRequired(spec, "SYSTEM-CHANGES-RESTART", RollbackStarted)
+	}
+	restored, valid := rollbackResultStatus(agreement, recovery.Starting)
+	if !valid {
 		return recoveryRequired(spec, "SYSTEM-CHANGES-RESTART", RollbackStarted)
 	}
 	nextRollbackStep := recovery.AttemptedSteps
@@ -363,11 +376,11 @@ func rollbackRecovered(lease ExecutionLease, adapter TransactionAdapter, recover
 	if err := adapter.Cleanup(lease, recovery.ChangeSet); err != nil {
 		return recoveryRequired(spec, "SYSTEM-CHANGES-RESTART", RolledBack)
 	}
-	return recoveredRollbackResult(recovery)
+	return recoveredRollbackResult(recovery, restored)
 }
 
-func recoveredRollbackResult(recovery RecoveryTransaction) ApplyResult {
-	return ApplyResult{Outcome: RollbackSucceeded, RestoredStatus: recovery.Starting.Status, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(), Finding: &Finding{Code: "SYSTEM-CHANGES-ROLLED-BACK-AFTER-RESTART", Owner: recovery.OutcomeOwner, Problem: "The interrupted Change Set was rolled back from durable evidence", Found: string(recovery.LastCheckpoint), Required: "the prior proven installation status", WhyStopped: "SYSTEM-CHANGES-RESTART", NextAction: "Start only services proven against the restored Desired State."}}
+func recoveredRollbackResult(recovery RecoveryTransaction, restored InstallationStatus) ApplyResult {
+	return ApplyResult{Outcome: RollbackSucceeded, RestoredStatus: restored, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(), Finding: &Finding{Code: "SYSTEM-CHANGES-ROLLED-BACK-AFTER-RESTART", Owner: recovery.OutcomeOwner, Problem: "The interrupted Change Set was rolled back from durable evidence", Found: string(recovery.LastCheckpoint), Required: "the prior proven installation status", WhyStopped: "SYSTEM-CHANGES-RESTART", NextAction: "Start only services proven against the restored Desired State."}}
 }
 
 func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Cancellation) ApplyResult {
@@ -440,6 +453,15 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 	if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: PrePublicationHealthPassed}); err != nil {
 		return finish(lock, rollbackChange(lease, adapter, transaction, spec, len(spec.Steps), "SYSTEM-CHANGES-JOURNAL", StepCompleted))
 	}
+	if spec.Mutation == CompleteRemovalMutation {
+		if cancellation.Requested() {
+			return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, len(spec.Steps)))
+		}
+		if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: OwnedExternalDeletionVerified}); err != nil {
+			return finish(lock, rollbackChange(lease, adapter, transaction, spec, len(spec.Steps), "SYSTEM-CHANGES-JOURNAL", PrePublicationHealthPassed))
+		}
+		return finish(lock, ApplyResult{Outcome: ReadyForIrreversibleRemoval, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(), UnremovableTraces: []string{"Certificate Transparency entries cannot be erased", "DNS caches cannot be erased"}}, spec.OutcomeOwner)
+	}
 	if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: StatePublicationStarted}); err != nil {
 		return finish(lock, rollbackChange(lease, adapter, transaction, spec, len(spec.Steps), "SYSTEM-CHANGES-JOURNAL", PrePublicationHealthPassed))
 	}
@@ -498,9 +520,13 @@ func rollbackChange(lease ExecutionLease, adapter TransactionAdapter, transactio
 	if !record(RollbackStarted, 0, nil) {
 		return recoveryRequired(spec, cause, checkpoint)
 	}
-	data, err := transaction.SystemChangesRestore(lease)
 	var agreement RollbackAgreement
-	if err != nil || json.Unmarshal(data, &agreement) != nil || !validRollbackAgreement(agreement, spec.StartingState) {
+	data, err := transaction.SystemChangesRestore(lease)
+	if err != nil || json.Unmarshal(data, &agreement) != nil {
+		return recoveryRequired(spec, cause, RollbackStarted)
+	}
+	restored, valid := rollbackResultStatus(agreement, spec.StartingState)
+	if !valid {
 		return recoveryRequired(spec, cause, RollbackStarted)
 	}
 	for index := attempted - 1; index >= 0; index-- {
@@ -520,7 +546,7 @@ func rollbackChange(lease ExecutionLease, adapter TransactionAdapter, transactio
 		return recoveryRequired(spec, cause, RolledBack)
 	}
 	return ApplyResult{
-		Outcome: RollbackSucceeded, RestoredStatus: spec.StartingState.Status, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(),
+		Outcome: RollbackSucceeded, RestoredStatus: restored, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(),
 		Finding: &Finding{Code: "SYSTEM-CHANGES-ROLLED-BACK", Owner: spec.OutcomeOwner, Problem: "The Change Set stopped and its exact baseline was restored", Found: string(checkpoint), Required: "the prior proven installation status", WhyStopped: cause, NextAction: "Inspect the restored baseline and create a fresh Plan."},
 	}
 }
@@ -529,7 +555,22 @@ func validRollbackAgreement(agreement RollbackAgreement, starting StateLineage) 
 	if agreement.Status != starting.Status || agreement.Revision != starting.Revision || agreement.SHA256 != starting.SHA256 {
 		return false
 	}
-	return agreement.Status == NotInstalled && agreement.Release == (ReleaseBinding{}) || agreement.Status == Managed && agreement.Release != (ReleaseBinding{})
+	return agreement.Status == NotInstalled && agreement.Release == (ReleaseBinding{}) || agreement.Status == Managed && agreement.Release != (ReleaseBinding{}) || agreement.Status == RecoveryRequired && agreement.Release == (ReleaseBinding{})
+}
+
+func rollbackResultStatus(agreement RollbackAgreement, starting StateLineage) (InstallationStatus, bool) {
+	if validRollbackAgreement(agreement, starting) {
+		return starting.Status, true
+	}
+	provedEarlierManaged := starting.Status == RecoveryRequired && starting.Revision > 0 && agreement.Status == Managed && agreement.Revision == starting.Revision && agreement.SHA256 == starting.SHA256 && agreement.Release != (ReleaseBinding{})
+	return Managed, provedEarlierManaged
+}
+
+func rollbackRestoredStatus(starting StateLineage) InstallationStatus {
+	if starting.Status == RecoveryRequired && starting.Revision > 0 {
+		return Managed
+	}
+	return starting.Status
 }
 
 func recoveryRequired(spec ChangeSetSpec, cause string, checkpoint DurableCheckpoint) ApplyResult {

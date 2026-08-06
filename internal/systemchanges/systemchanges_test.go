@@ -9,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
+	"github.com/albertloky/SBXR/internal/networkpolicy"
+	"github.com/albertloky/SBXR/internal/ownerconsole"
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
 
@@ -424,6 +427,271 @@ func TestNetworkPolicyStepsAcceptOnlyTheExactFirewallContract(t *testing.T) {
 		if err := build(); err == nil {
 			t.Fatal("unsafe firewall contract was accepted")
 		}
+	}
+}
+
+func TestCompleteRemovalRequiresBothExactConfirmations(t *testing.T) {
+	typed, selected := removalConfirmation(t)
+	valid := completeSpec(t, systemchanges.CompleteRemovalMutation)
+	valid.TypedRemovalConfirmation, valid.PermanentRemovalSelection, valid.Steps = typed, selected, completeRemovalSteps(t, selected)
+	if _, err := systemchanges.NewChangeSet(valid); err != nil {
+		t.Fatalf("exact Complete removal confirmation was refused: %v", err)
+	}
+	for _, test := range []struct {
+		name, phrase string
+		typed        bool
+	}{{name: "missing typed phrase", typed: true}, {name: "partial typed phrase", phrase: "COMPLETE", typed: true}, {name: "pasted phrase", phrase: "COMPLETE REMOVAL"}} {
+		t.Run(test.name, func(t *testing.T) {
+			observer := ownerRemovalObserver{phrase: test.phrase, phraseSet: true, typed: &test.typed}
+			console := ownerconsole.New(observer)
+			review, err := console.StartRemovalReview("removal-review-0008")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := console.RecordTypedPhrase(review); err == nil {
+				t.Fatal("incomplete Complete removal confirmation was accepted")
+			}
+		})
+	}
+	missing := completeSpec(t, systemchanges.CompleteRemovalMutation)
+	missing.PermanentRemovalSelection, missing.Steps = selected, completeRemovalSteps(t, selected)
+	if _, err := systemchanges.NewChangeSet(missing); err == nil {
+		t.Fatal("Complete removal without both confirmations was accepted")
+	}
+	missingSelection := valid
+	missingSelection.PermanentRemovalSelection = nil
+	if _, err := systemchanges.NewChangeSet(missingSelection); err == nil {
+		t.Fatal("Complete removal without the separate permanent selection was accepted")
+	}
+	notSelected := false
+	console := ownerconsole.New(ownerRemovalObserver{selected: &notSelected})
+	review, err := console.StartRemovalReview("removal-review-0008")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := console.SelectPermanentRemoval(review); err == nil {
+		t.Fatal("an unselected permanent-removal action was accepted")
+	}
+	ordinary := completeSpec(t, systemchanges.SettingChangeMutation)
+	ordinary.TypedRemovalConfirmation, ordinary.PermanentRemovalSelection = typed, selected
+	if _, err := systemchanges.NewChangeSet(ordinary); err == nil {
+		t.Fatal("Complete removal confirmation escaped its mutation boundary")
+	}
+	missingCategory := removalCategories()
+	missingCategory = missingCategory[:len(missingCategory)-1]
+	if _, err := ownerconsole.New(ownerRemovalObserver{categories: missingCategory}).StartRemovalReview("removal-review-0008"); err == nil {
+		t.Fatal("a review that omitted a resource category was accepted")
+	}
+	lineageLess := valid
+	lineageLess.StartingState = systemchanges.StateLineage{Status: systemchanges.RecoveryRequired}
+	if _, err := systemchanges.NewChangeSet(lineageLess); err == nil {
+		t.Fatal("lineage-less Recovery Required was accepted without a durable Managed rollback baseline")
+	}
+}
+
+func removalCategories() []string {
+	return []string{"firewall-table", "public-listener", "public-service", "cloudflare-dns-record", "cloudflare-route", "cloudflare-tunnel"}
+}
+
+func removalReview(t *testing.T) ownerconsole.RemovalReview {
+	t.Helper()
+	review, err := ownerconsole.New(ownerRemovalObserver{}).StartRemovalReview("removal-review-0008")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return review
+}
+
+func removalConfirmation(t *testing.T) (ownerconsole.TypedRemovalConfirmation, ownerconsole.PermanentRemovalSelection) {
+	t.Helper()
+	console := ownerconsole.New(ownerRemovalObserver{})
+	review := removalReview(t)
+	typed, typedErr := console.RecordTypedPhrase(review)
+	selected, selectedErr := console.SelectPermanentRemoval(review)
+	if typedErr != nil || selectedErr != nil {
+		t.Fatalf("Complete removal confirmation: %v, %v", typedErr, selectedErr)
+	}
+	return typed, selected
+}
+
+type removalObserver struct{ active, available, owned bool }
+type publicRemovalObserver struct{ owned bool }
+
+type ownerRemovalObserver struct {
+	categories []string
+	phrase     string
+	phraseSet  bool
+	typed      *bool
+	selected   *bool
+}
+
+func (o ownerRemovalObserver) ReviewedCategories(string) ([]string, error) {
+	if o.categories != nil {
+		return o.categories, nil
+	}
+	return removalCategories(), nil
+}
+func (o ownerRemovalObserver) TypedPhrase(string) (string, bool, error) {
+	typed := true
+	if o.typed != nil {
+		typed = *o.typed
+	}
+	phrase := o.phrase
+	if !o.phraseSet {
+		phrase = "COMPLETE REMOVAL"
+	}
+	return phrase, typed, nil
+}
+func (o ownerRemovalObserver) PermanentRemovalSelected(string) (bool, error) {
+	if o.selected != nil {
+		return *o.selected, nil
+	}
+	return true, nil
+}
+
+type forgedTypedRemoval struct{}
+type forgedPermanentRemoval struct{}
+type forgedCloudflareRemoval struct{}
+type forgedPublicRemoval struct{}
+
+func (forgedTypedRemoval) SystemChangesTypedRemovalConfirmation() (string, string, bool) {
+	return "removal-review-0008", "COMPLETE REMOVAL", true
+}
+func (forgedPermanentRemoval) SystemChangesPermanentRemovalSelection() (string, []string, bool) {
+	return "removal-review-0008", removalCategories(), true
+}
+func (forgedCloudflareRemoval) SystemChangesCloudflareRemovalAuthority() (string, string, string, map[string][]string, bool, bool, bool) {
+	return "removal-review-0008", "cloudflare-dns-record", "dns-xhttp", cloudflareRemovalInventory(), true, true, true
+}
+func (forgedPublicRemoval) SystemChangesPublicRemovalAuthority() (string, string, string, map[string][]string, bool) {
+	return "removal-review-0008", "firewall-table", "unrelated-table", publicRemovalInventory(), true
+}
+
+func (o removalObserver) ObserveRemovalResource(review, resource, immutableID string) (cloudflaretunnel.RemovalObservation, error) {
+	return cloudflaretunnel.RemovalObservation{ReviewID: review, Resource: resource, ImmutableID: immutableID, OwnedBySBXR: o.owned, TokenActive: o.active, TokenAvailableLocally: o.available, Inventory: cloudflareRemovalInventory()}, nil
+}
+
+func (o publicRemovalObserver) ObserveRemovalResource(review, resource, immutableID string) (networkpolicy.RemovalObservation, error) {
+	return networkpolicy.RemovalObservation{ReviewID: review, Resource: resource, ImmutableID: immutableID, OwnedBySBXR: o.owned, Inventory: publicRemovalInventory()}, nil
+}
+
+func publicRemovalInventory() map[string][]string {
+	return map[string][]string{"firewall-table": {"inet-sbxr"}, "public-listener": {"listener-xray"}, "public-service": {"service-xray"}}
+}
+
+func cloudflareRemovalInventory() map[string][]string {
+	return map[string][]string{"cloudflare-dns-record": {"dns-xhttp", "dns-websocket", "dns-direct-ipv4"}, "cloudflare-route": {"route-xhttp"}, "cloudflare-tunnel": {"tunnel-xhttp"}}
+}
+
+func completeRemovalSteps(t *testing.T, selected ownerconsole.PermanentRemovalSelection) []systemchanges.Step {
+	t.Helper()
+	steps := make([]systemchanges.Step, 0, 6)
+	for _, resource := range []struct {
+		category systemchanges.RemovalResource
+		id       string
+	}{{systemchanges.FirewallTableResource, "inet-sbxr"}, {systemchanges.PublicListenerResource, "listener-xray"}, {systemchanges.PublicServiceResource, "service-xray"}} {
+		authority, err := networkpolicy.NewRemoval(publicRemovalObserver{true}).ProveRemovalResource("removal-review-0008", string(resource.category), resource.id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		step, err := systemchanges.NewPublicExposureRemovalStep(selected, authority)
+		if err != nil {
+			t.Fatal(err)
+		}
+		steps = append(steps, step)
+	}
+	for _, resource := range []struct {
+		category systemchanges.RemovalResource
+		id       string
+	}{{systemchanges.CloudflareDNSRecordResource, "dns-xhttp"}, {systemchanges.CloudflareDNSRecordResource, "dns-websocket"}, {systemchanges.CloudflareDNSRecordResource, "dns-direct-ipv4"}, {systemchanges.CloudflareRouteResource, "route-xhttp"}, {systemchanges.CloudflareTunnelResource, "tunnel-xhttp"}} {
+		authority, err := cloudflaretunnel.New(removalObserver{true, true, true}).ProveRemovalResource("removal-review-0008", string(resource.category), resource.id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		step, err := systemchanges.NewCloudflareRemovalStep(selected, authority)
+		if err != nil {
+			t.Fatal(err)
+		}
+		steps = append(steps, step)
+	}
+	return steps
+}
+
+func TestCompleteRemovalAcceptsOnlyOrderedTypedOwnedResources(t *testing.T) {
+	typed, selected := removalConfirmation(t)
+	steps := completeRemovalSteps(t, selected)
+	public, external := steps[0], steps[3]
+	valid := completeSpec(t, systemchanges.CompleteRemovalMutation)
+	valid.TypedRemovalConfirmation, valid.PermanentRemovalSelection, valid.Steps = typed, selected, steps
+	if _, err := systemchanges.NewChangeSet(valid); err != nil {
+		t.Fatalf("ordered typed Complete removal was refused: %v", err)
+	}
+	for _, test := range []struct {
+		name  string
+		steps []systemchanges.Step
+	}{
+		{name: "external before public", steps: []systemchanges.Step{external, public}},
+		{name: "missing public exposure", steps: []systemchanges.Step{external}},
+		{name: "missing external resource", steps: []systemchanges.Step{public}},
+		{name: "ordinary operation", steps: completeSpec(t, systemchanges.SettingChangeMutation).Steps},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			spec := completeSpec(t, systemchanges.CompleteRemovalMutation)
+			spec.TypedRemovalConfirmation, spec.PermanentRemovalSelection, spec.Steps = typed, selected, test.steps
+			if _, err := systemchanges.NewChangeSet(spec); err == nil {
+				t.Fatal("unsafe Complete removal resource order was accepted")
+			}
+		})
+	}
+	for omitted := range steps {
+		t.Run("omitted reviewed category "+fmt.Sprint(omitted+1), func(t *testing.T) {
+			spec := completeSpec(t, systemchanges.CompleteRemovalMutation)
+			spec.TypedRemovalConfirmation, spec.PermanentRemovalSelection = typed, selected
+			spec.Steps = append(append([]systemchanges.Step(nil), steps[:omitted]...), steps[omitted+1:]...)
+			if _, err := systemchanges.NewChangeSet(spec); err == nil {
+				t.Fatal("a Complete removal Plan omitted a reviewed category")
+			}
+		})
+	}
+	for _, build := range []func() error{
+		func() error {
+			authority, _ := networkpolicy.NewRemoval(publicRemovalObserver{true}).ProveRemovalResource("removal-review-0008", string(systemchanges.FirewallTableResource), "")
+			_, err := systemchanges.NewPublicExposureRemovalStep(selected, authority)
+			return err
+		},
+		func() error {
+			_, err := networkpolicy.NewRemoval(publicRemovalObserver{false}).ProveRemovalResource("removal-review-0008", string(systemchanges.FirewallTableResource), "unrelated-table")
+			return err
+		},
+		func() error {
+			_, err := systemchanges.NewPublicExposureRemovalStep(selected, forgedPublicRemoval{})
+			return err
+		},
+		func() error {
+			_, err := cloudflaretunnel.New(removalObserver{false, true, true}).ProveRemovalResource("removal-review-0008", string(systemchanges.CloudflareDNSRecordResource), "dns-xhttp")
+			return err
+		},
+		func() error {
+			_, err := cloudflaretunnel.New(removalObserver{true, false, true}).ProveRemovalResource("removal-review-0008", string(systemchanges.CloudflareDNSRecordResource), "dns-xhttp")
+			return err
+		},
+		func() error {
+			_, err := cloudflaretunnel.New(removalObserver{true, true, false}).ProveRemovalResource("removal-review-0008", string(systemchanges.CloudflareDNSRecordResource), "dns-xhttp")
+			return err
+		},
+		func() error {
+			_, err := systemchanges.NewCloudflareRemovalStep(selected, forgedCloudflareRemoval{})
+			return err
+		},
+	} {
+		if err := build(); err == nil {
+			t.Fatal("unproved Complete removal resource was accepted")
+		}
+	}
+	forged := completeSpec(t, systemchanges.CompleteRemovalMutation)
+	forged.TypedRemovalConfirmation, forged.PermanentRemovalSelection, forged.Steps = forgedTypedRemoval{}, forgedPermanentRemoval{}, steps
+	if _, err := systemchanges.NewChangeSet(forged); err == nil {
+		t.Fatal("caller-forged Owner confirmation authority was accepted")
 	}
 }
 

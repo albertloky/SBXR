@@ -2,10 +2,12 @@
 package systemchanges
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"math/bits"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -347,12 +349,16 @@ const SafeCheckpointCancellation CancellationContract = "Wait for declared safe 
 const InspectBeforeIdempotentReverse InspectionContract = "Inspect effect before idempotent reverse"
 
 const (
-	ActivatePreparedConfiguration OperationKind = "Activate prepared configuration"
-	RestorePriorConfiguration     OperationKind = "Restore prior configuration"
-	ApplyApprovedNetworkPolicy    OperationKind = "Apply approved Network Policy"
-	OpenApprovedHTTP01            OperationKind = "Open approved HTTP-01 rule"
-	CloseRecordedHTTP01           OperationKind = "Close recorded HTTP-01 rule"
-	RestorePriorNetworkPolicy     OperationKind = "Restore prior Network Policy"
+	ActivatePreparedConfiguration  OperationKind = "Activate prepared configuration"
+	RestorePriorConfiguration      OperationKind = "Restore prior configuration"
+	ApplyApprovedNetworkPolicy     OperationKind = "Apply approved Network Policy"
+	OpenApprovedHTTP01             OperationKind = "Open approved HTTP-01 rule"
+	CloseRecordedHTTP01            OperationKind = "Close recorded HTTP-01 rule"
+	RestorePriorNetworkPolicy      OperationKind = "Restore prior Network Policy"
+	RemoveOwnedPublicExposure      OperationKind = "Remove owned public exposure"
+	RestoreOwnedPublicExposure     OperationKind = "Restore owned public exposure"
+	DeleteOwnedCloudflareResource  OperationKind = "Delete owned Cloudflare resource"
+	RestoreOwnedCloudflareResource OperationKind = "Restore owned Cloudflare resource"
 )
 
 type FirewallAction string
@@ -372,6 +378,31 @@ type FirewallChange struct {
 	TemporaryRuleIdentity string         `json:"temporary_rule_identity,omitempty"`
 }
 
+type RemovalAction string
+type RemovalResource string
+
+const (
+	PublicExposureRemoval RemovalAction = "public-exposure"
+	CloudflareRemoval     RemovalAction = "cloudflare-resource"
+
+	FirewallTableResource       RemovalResource = "firewall-table"
+	PublicListenerResource      RemovalResource = "public-listener"
+	PublicServiceResource       RemovalResource = "public-service"
+	CloudflareDNSRecordResource RemovalResource = "cloudflare-dns-record"
+	CloudflareRouteResource     RemovalResource = "cloudflare-route"
+	CloudflareTunnelResource    RemovalResource = "cloudflare-tunnel"
+)
+
+type RemovalChange struct {
+	Action                   RemovalAction   `json:"action"`
+	Resource                 RemovalResource `json:"resource"`
+	ImmutableID              string          `json:"immutable_id"`
+	ReviewID                 string          `json:"review_id"`
+	CloudflareTokenActive    bool            `json:"cloudflare_token_active,omitempty"`
+	CloudflareTokenAvailable bool            `json:"cloudflare_token_available,omitempty"`
+	InventorySHA256          string          `json:"inventory_sha256"`
+}
+
 type Step struct {
 	owner    Module
 	forward  OperationKind
@@ -379,10 +410,11 @@ type Step struct {
 	cancel   CancellationContract
 	inspect  InspectionContract
 	firewall FirewallChange
+	removal  RemovalChange
 }
 
 func NewStep(owner Module, forward, rollback OperationKind) (Step, error) {
-	if !validModule(owner) || !validOperation(forward) || !validOperation(rollback) || forward == rollback || owner == NetworkPolicyModule || networkOperation(forward) || networkOperation(rollback) {
+	if !validModule(owner) || !validOperation(forward) || !validOperation(rollback) || forward == rollback || owner == NetworkPolicyModule || networkOperation(forward) || networkOperation(rollback) || removalOperation(forward) || removalOperation(rollback) {
 		return Step{}, &Finding{Code: "SYSTEM-CHANGES-STEP-INVALID", Problem: "A typed change or rollback instruction is invalid", Found: "an unsupported owner or operation", Required: "one owning Module plus distinct allowed forward and rollback operations", WhyStopped: "System Changes never accepts arbitrary commands, paths, services, or root operations", NextAction: "Rebuild the Change Set through the owning Module."}
 	}
 	return Step{owner: owner, forward: forward, rollback: rollback, cancel: SafeCheckpointCancellation, inspect: InspectBeforeIdempotentReverse}, nil
@@ -398,6 +430,55 @@ func NewHTTP01OpenStep(candidate string, sshPort uint16) (Step, error) {
 
 func NewHTTP01CloseStep() (Step, error) {
 	return newFirewallStep(CloseRecordedHTTP01, HTTP01CloseAction, "", 0)
+}
+
+func NewPublicExposureRemovalStep(selection PermanentRemovalSelection, authority PublicRemovalAuthority) (Step, error) {
+	review, categories, valid := validPermanentRemovalSelection(selection)
+	authorityReview, resource, immutableID, inventory, proved := validPublicRemovalAuthority(authority)
+	inventorySHA256, inventoryValid := removalInventoryDigest(inventory, publicRemovalCategories)
+	if !valid || !proved || authorityReview != review || !inventoryValid || !inventoryContains(inventory, resource, immutableID) || !slices.Contains(categories, resource) {
+		return Step{}, invalidRemovalStep()
+	}
+	return newRemovalStep(NetworkPolicyModule, RemoveOwnedPublicExposure, RestoreOwnedPublicExposure, RemovalChange{Action: PublicExposureRemoval, Resource: RemovalResource(resource), ImmutableID: immutableID, ReviewID: review, InventorySHA256: inventorySHA256})
+}
+
+func NewCloudflareRemovalStep(selection PermanentRemovalSelection, authority CloudflareRemovalAuthority) (Step, error) {
+	review, categories, selected := validPermanentRemovalSelection(selection)
+	authorityReview, resource, immutableID, inventory, tokenActive, tokenAvailable, proved := validCloudflareRemovalAuthority(authority)
+	inventorySHA256, inventoryValid := removalInventoryDigest(inventory, cloudflareRemovalCategories)
+	change := RemovalChange{Action: CloudflareRemoval, Resource: RemovalResource(resource), ImmutableID: immutableID, ReviewID: review, CloudflareTokenActive: tokenActive, CloudflareTokenAvailable: tokenAvailable, InventorySHA256: inventorySHA256}
+	if !selected || !proved || authorityReview != review || !inventoryValid || !inventoryContains(inventory, resource, immutableID) || !slices.Contains(categories, resource) {
+		return Step{}, invalidRemovalStep()
+	}
+	return newRemovalStep(CloudflareModule, DeleteOwnedCloudflareResource, RestoreOwnedCloudflareResource, change)
+}
+
+func invalidRemovalStep() error {
+	return &Finding{Code: "SYSTEM-CHANGES-REMOVAL-STEP", Problem: "A reversible Complete removal step is invalid", Found: "an unproved resource identity, owner, reviewed category, or live Cloudflare token authority", Required: "one owning-Module proof bound to the reviewed removal and immutable identity", WhyStopped: "Complete removal cannot guess ownership or discard rollback authority", NextAction: "Rebuild the removal Plan from fresh owning-Module observations."}
+}
+
+func newRemovalStep(owner Module, forward, rollback OperationKind, removal RemovalChange) (Step, error) {
+	step := Step{owner: owner, forward: forward, rollback: rollback, cancel: SafeCheckpointCancellation, inspect: InspectBeforeIdempotentReverse, removal: removal}
+	if !validStep(step) {
+		return Step{}, invalidRemovalStep()
+	}
+	return step, nil
+}
+
+// RestoreRemovalStep reconstructs only a previously journaled removal contract
+// while System Changes holds its private restart-recovery lease.
+func RestoreRemovalStep(lease ExecutionLease, removal RemovalChange) (Step, error) {
+	if !lease.RecoveryAuthorized() {
+		return Step{}, invalidRemovalStep()
+	}
+	switch removal.Action {
+	case PublicExposureRemoval:
+		return newRemovalStep(NetworkPolicyModule, RemoveOwnedPublicExposure, RestoreOwnedPublicExposure, removal)
+	case CloudflareRemoval:
+		return newRemovalStep(CloudflareModule, DeleteOwnedCloudflareResource, RestoreOwnedCloudflareResource, removal)
+	default:
+		return Step{}, invalidRemovalStep()
+	}
 }
 
 func newFirewallStep(forward OperationKind, action FirewallAction, candidate string, sshPort uint16) (Step, error) {
@@ -457,6 +538,114 @@ type PlanBinding struct {
 	VolatileSHA256 string
 }
 
+type TypedRemovalConfirmation interface {
+	SystemChangesTypedRemovalConfirmation() (review, phrase string, valid bool)
+}
+
+type PermanentRemovalSelection interface {
+	SystemChangesPermanentRemovalSelection() (review string, categories []string, valid bool)
+}
+
+type CloudflareRemovalAuthority interface {
+	SystemChangesCloudflareRemovalAuthority() (review, resource, immutableID string, inventory map[string][]string, tokenActive, tokenAvailable, valid bool)
+}
+
+type PublicRemovalAuthority interface {
+	SystemChangesPublicRemovalAuthority() (review, resource, immutableID string, inventory map[string][]string, valid bool)
+}
+
+var completeRemovalCategories = []string{
+	string(FirewallTableResource),
+	string(PublicListenerResource),
+	string(PublicServiceResource),
+	string(CloudflareDNSRecordResource),
+	string(CloudflareRouteResource),
+	string(CloudflareTunnelResource),
+}
+
+var publicRemovalCategories = []string{string(FirewallTableResource), string(PublicListenerResource), string(PublicServiceResource)}
+var cloudflareRemovalCategories = []string{string(CloudflareDNSRecordResource), string(CloudflareRouteResource), string(CloudflareTunnelResource)}
+
+func validTypedRemovalConfirmation(confirmation TypedRemovalConfirmation) (review, phrase string, valid bool) {
+	if !trustedAuthority(confirmation, "github.com/albertloky/SBXR/internal/ownerconsole", "TypedRemovalConfirmation") {
+		return "", "", false
+	}
+	review, phrase, valid = confirmation.SystemChangesTypedRemovalConfirmation()
+	return review, phrase, valid && safeIdentity(review) && phrase == "COMPLETE REMOVAL"
+}
+
+func validPermanentRemovalSelection(selection PermanentRemovalSelection) (review string, categories []string, valid bool) {
+	if !trustedAuthority(selection, "github.com/albertloky/SBXR/internal/ownerconsole", "PermanentRemovalSelection") {
+		return "", nil, false
+	}
+	review, categories, valid = selection.SystemChangesPermanentRemovalSelection()
+	got := append([]string(nil), categories...)
+	want := append([]string(nil), completeRemovalCategories...)
+	slices.Sort(got)
+	slices.Sort(want)
+	return review, categories, valid && safeIdentity(review) && slices.Equal(got, want)
+}
+
+func validCloudflareRemovalAuthority(authority CloudflareRemovalAuthority) (review, resource, immutableID string, inventory map[string][]string, tokenActive, tokenAvailable, valid bool) {
+	if !trustedAuthority(authority, "github.com/albertloky/SBXR/internal/cloudflaretunnel", "RemovalAuthority") {
+		return "", "", "", nil, false, false, false
+	}
+	review, resource, immutableID, inventory, tokenActive, tokenAvailable, valid = authority.SystemChangesCloudflareRemovalAuthority()
+	return review, resource, immutableID, inventory, tokenActive, tokenAvailable, valid && safeIdentity(review) && safeIdentity(immutableID) && tokenActive && tokenAvailable
+}
+
+func validPublicRemovalAuthority(authority PublicRemovalAuthority) (review, resource, immutableID string, inventory map[string][]string, valid bool) {
+	if !trustedAuthority(authority, "github.com/albertloky/SBXR/internal/networkpolicy", "RemovalAuthority") {
+		return "", "", "", nil, false
+	}
+	review, resource, immutableID, inventory, valid = authority.SystemChangesPublicRemovalAuthority()
+	return review, resource, immutableID, inventory, valid && safeIdentity(review) && safeIdentity(immutableID)
+}
+
+func inventoryContains(inventory map[string][]string, category, identity string) bool {
+	return slices.Contains(inventory[category], identity)
+}
+
+func removalInventoryDigest(inventory map[string][]string, allowed []string) (string, bool) {
+	if len(inventory) != len(allowed) {
+		return "", false
+	}
+	entries := make([]string, 0)
+	for _, category := range allowed {
+		identities, exists := inventory[category]
+		if !exists {
+			return "", false
+		}
+		identities = append([]string(nil), identities...)
+		slices.Sort(identities)
+		for index, identity := range identities {
+			if !safeIdentity(identity) || index > 0 && identity == identities[index-1] {
+				return "", false
+			}
+			entries = append(entries, category+"="+identity+"\n")
+		}
+	}
+	digest := sha256.Sum256([]byte(strings.Join(entries, "")))
+	return hex.EncodeToString(digest[:]), true
+}
+
+func trustedAuthority(value any, packagePath, name string) bool {
+	typeOf := reflect.TypeOf(value)
+	return typeOf != nil && typeOf.Kind() == reflect.Struct && typeOf.PkgPath() == packagePath && typeOf.Name() == name
+}
+
+func removalStepsMatchReview(steps []Step, review string) bool {
+	if !safeIdentity(review) {
+		return false
+	}
+	for _, step := range steps {
+		if step.removal.ReviewID != review {
+			return false
+		}
+	}
+	return true
+}
+
 type PreparedStateCommit interface {
 	SystemChangesPreparedState() (changeSet string, revision uint64, startingSHA256, candidateSHA256, planIdentity, planSHA256 string, valid bool)
 	SystemChangesConsume(lease any, planIdentity, planSHA256 string) (any, error)
@@ -494,17 +683,19 @@ const (
 )
 
 type ChangeSetSpec struct {
-	Identity          string
-	Mutation          MutationClass
-	OutcomeOwner      Module
-	StartingState     StateLineage
-	TargetStateSHA256 string
-	Plan              PlanBinding
-	PreparedState     PreparedStateCommit
-	Steps             []Step
-	Checks            []Check
-	Timeouts          Timeouts
-	Disk              DiskRequirement
+	Identity                  string
+	Mutation                  MutationClass
+	OutcomeOwner              Module
+	StartingState             StateLineage
+	TargetStateSHA256         string
+	Plan                      PlanBinding
+	PreparedState             PreparedStateCommit
+	TypedRemovalConfirmation  TypedRemovalConfirmation
+	PermanentRemovalSelection PermanentRemovalSelection
+	Steps                     []Step
+	Checks                    []Check
+	Timeouts                  Timeouts
+	Disk                      DiskRequirement
 }
 
 type ChangeSet struct {
@@ -533,7 +724,11 @@ type EvidenceRules struct {
 func NewChangeSet(spec ChangeSetSpec) (*ChangeSet, error) {
 	reserved, diskValid := spec.Disk.total()
 	const largestFloor = ^uint64(0) / 10
-	if !safeIdentity(spec.Identity) || !validMutation(spec.Mutation) || !validModule(spec.OutcomeOwner) || !validStartingState(spec.StartingState, spec.Mutation) || !validSHA256(spec.TargetStateSHA256) || !safeIdentity(spec.Plan.Identity) || !validSHA256(spec.Plan.SHA256) || !validSHA256(spec.Plan.VolatileSHA256) || spec.PreparedState == nil || len(spec.Steps) == 0 || len(spec.Checks) == 0 || spec.Timeouts.Step <= 0 || spec.Timeouts.Step > maxStepTimeout || spec.Timeouts.Check <= 0 || spec.Timeouts.Check > maxCheckTimeout || spec.Disk.PreparationBytes == 0 || spec.Disk.TemporaryBytes == 0 || spec.Disk.SnapshotBytes == 0 || spec.Disk.JournalBytes == 0 || spec.Disk.RollbackBytes == 0 || spec.Disk.OverheadBytes == 0 || !diskValid || reserved > ^uint64(0)-largestFloor {
+	confirmationReview, _, typed := validTypedRemovalConfirmation(spec.TypedRemovalConfirmation)
+	selectionReview, _, selected := validPermanentRemovalSelection(spec.PermanentRemovalSelection)
+	confirmedRemoval := spec.Mutation == CompleteRemovalMutation && typed && selected && confirmationReview == selectionReview
+	validRemoval := validRemovalSteps(spec.Steps)
+	if !safeIdentity(spec.Identity) || !validMutation(spec.Mutation) || !validModule(spec.OutcomeOwner) || !validStartingState(spec.StartingState, spec.Mutation) || !validSHA256(spec.TargetStateSHA256) || !safeIdentity(spec.Plan.Identity) || !validSHA256(spec.Plan.SHA256) || !validSHA256(spec.Plan.VolatileSHA256) || spec.PreparedState == nil || len(spec.Steps) == 0 || len(spec.Checks) == 0 || spec.Timeouts.Step <= 0 || spec.Timeouts.Step > maxStepTimeout || spec.Timeouts.Check <= 0 || spec.Timeouts.Check > maxCheckTimeout || spec.Disk.PreparationBytes == 0 || spec.Disk.TemporaryBytes == 0 || spec.Disk.SnapshotBytes == 0 || spec.Disk.JournalBytes == 0 || spec.Disk.RollbackBytes == 0 || spec.Disk.OverheadBytes == 0 || !diskValid || reserved > ^uint64(0)-largestFloor || spec.Mutation == CompleteRemovalMutation != confirmedRemoval || spec.Mutation == CompleteRemovalMutation != validRemoval || spec.Mutation == CompleteRemovalMutation && !removalStepsMatchReview(spec.Steps, selectionReview) || spec.Mutation != CompleteRemovalMutation && (spec.TypedRemovalConfirmation != nil || spec.PermanentRemovalSelection != nil) {
 		return nil, &Finding{Code: "SYSTEM-CHANGES-CHANGE-SET-INVALID", Problem: "The Change Set is incomplete or untyped", Found: "a missing or invalid typed transaction input", Required: "one opaque prepared State commit, exact lineage and Plan checksums, typed steps and rollback, checks, disk reservation, and bounded timeouts", WhyStopped: "System Changes never accepts an arbitrary mutation surface", NextAction: "Rebuild and review the Change Set through its owning Module."}
 	}
 	for _, step := range spec.Steps {
@@ -561,11 +756,12 @@ func NewChangeSet(spec ChangeSetSpec) (*ChangeSet, error) {
 type ApplyOutcome string
 
 const (
-	Completed               ApplyOutcome = "Completed"
-	RollbackSucceeded       ApplyOutcome = "Rollback succeeded"
-	RecoveryRequiredOutcome ApplyOutcome = "Recovery Required"
-	Refused                 ApplyOutcome = "Refused"
-	Deferred                ApplyOutcome = "Deferred"
+	Completed                   ApplyOutcome = "Completed"
+	RollbackSucceeded           ApplyOutcome = "Rollback succeeded"
+	RecoveryRequiredOutcome     ApplyOutcome = "Recovery Required"
+	Refused                     ApplyOutcome = "Refused"
+	Deferred                    ApplyOutcome = "Deferred"
+	ReadyForIrreversibleRemoval ApplyOutcome = "Ready for irreversible removal"
 )
 
 type ApplyResult struct {
@@ -578,6 +774,7 @@ type ApplyResult struct {
 	RebuildPlan            bool               `json:"rebuild_plan"`
 	Evidence               EvidenceRules      `json:"evidence_rules"`
 	Finding                *Finding           `json:"finding,omitempty"`
+	UnremovableTraces      []string           `json:"unremovable_traces,omitempty"`
 }
 
 func (i Interface) Apply(changeSet *ChangeSet) ApplyResult {
@@ -698,7 +895,7 @@ func validStartingState(lineage StateLineage, mutation MutationClass) bool {
 	if lineage.Status == Managed && lineage.Revision > 0 && validSHA256(lineage.SHA256) {
 		return mutation != InstallationMutation
 	}
-	return mutation == CompleteRemovalMutation && lineage.Status == RecoveryRequired && (lineage.Revision == 0 && lineage.SHA256 == "" || lineage.Revision > 0 && validSHA256(lineage.SHA256))
+	return mutation == CompleteRemovalMutation && lineage.Status == RecoveryRequired && lineage.Revision > 0 && validSHA256(lineage.SHA256)
 }
 
 func validMutation(mutation MutationClass) bool {
@@ -719,7 +916,7 @@ func validModule(module Module) bool {
 
 func validOperation(operation OperationKind) bool {
 	switch operation {
-	case ActivatePreparedConfiguration, RestorePriorConfiguration, ApplyApprovedNetworkPolicy, OpenApprovedHTTP01, CloseRecordedHTTP01, RestorePriorNetworkPolicy:
+	case ActivatePreparedConfiguration, RestorePriorConfiguration, ApplyApprovedNetworkPolicy, OpenApprovedHTTP01, CloseRecordedHTTP01, RestorePriorNetworkPolicy, RemoveOwnedPublicExposure, RestoreOwnedPublicExposure, DeleteOwnedCloudflareResource, RestoreOwnedCloudflareResource:
 		return true
 	}
 	return false
@@ -730,10 +927,68 @@ func validStep(step Step) bool {
 	if !base {
 		return false
 	}
+	if step.removal != (RemovalChange{}) || removalOperation(step.forward) || removalOperation(step.rollback) {
+		return step.firewall == (FirewallChange{}) && validRemovalContract(step)
+	}
 	if step.owner == NetworkPolicyModule || networkOperation(step.forward) || networkOperation(step.rollback) {
 		return step.owner == NetworkPolicyModule && step.rollback == RestorePriorNetworkPolicy && validFirewallContract(step.firewall, step.forward)
 	}
-	return step.firewall == (FirewallChange{})
+	return step.firewall == (FirewallChange{}) && step.removal == (RemovalChange{})
+}
+
+func removalOperation(operation OperationKind) bool {
+	return operation == RemoveOwnedPublicExposure || operation == RestoreOwnedPublicExposure || operation == DeleteOwnedCloudflareResource || operation == RestoreOwnedCloudflareResource
+}
+
+func validRemovalContract(step Step) bool {
+	change := step.removal
+	if !safeIdentity(change.ImmutableID) || !safeIdentity(change.ReviewID) || !validSHA256(change.InventorySHA256) {
+		return false
+	}
+	switch change.Action {
+	case PublicExposureRemoval:
+		validResource := change.Resource == FirewallTableResource || change.Resource == PublicListenerResource || change.Resource == PublicServiceResource
+		return validResource && step.owner == NetworkPolicyModule && step.forward == RemoveOwnedPublicExposure && step.rollback == RestoreOwnedPublicExposure && !change.CloudflareTokenActive && !change.CloudflareTokenAvailable
+	case CloudflareRemoval:
+		validResource := change.Resource == CloudflareDNSRecordResource || change.Resource == CloudflareRouteResource || change.Resource == CloudflareTunnelResource
+		return validResource && step.owner == CloudflareModule && step.forward == DeleteOwnedCloudflareResource && step.rollback == RestoreOwnedCloudflareResource && change.CloudflareTokenActive && change.CloudflareTokenAvailable
+	}
+	return false
+}
+
+func validRemovalSteps(steps []Step) bool {
+	publicInventory := map[string][]string{string(FirewallTableResource): {}, string(PublicListenerResource): {}, string(PublicServiceResource): {}}
+	cloudflareInventory := map[string][]string{string(CloudflareDNSRecordResource): {}, string(CloudflareRouteResource): {}, string(CloudflareTunnelResource): {}}
+	publicDigest, cloudflareDigest := "", ""
+	externalStarted := false
+	for _, step := range steps {
+		change, ok := step.RemovalChange()
+		if !ok {
+			return false
+		}
+		if change.Action == PublicExposureRemoval {
+			if externalStarted {
+				return false
+			}
+			if publicDigest != "" && publicDigest != change.InventorySHA256 {
+				return false
+			}
+			publicDigest = change.InventorySHA256
+			publicInventory[string(change.Resource)] = append(publicInventory[string(change.Resource)], change.ImmutableID)
+		} else if change.Action == CloudflareRemoval {
+			externalStarted = true
+			if cloudflareDigest != "" && cloudflareDigest != change.InventorySHA256 {
+				return false
+			}
+			cloudflareDigest = change.InventorySHA256
+			cloudflareInventory[string(change.Resource)] = append(cloudflareInventory[string(change.Resource)], change.ImmutableID)
+		} else {
+			return false
+		}
+	}
+	actualPublic, publicValid := removalInventoryDigest(publicInventory, publicRemovalCategories)
+	actualCloudflare, cloudflareValid := removalInventoryDigest(cloudflareInventory, cloudflareRemovalCategories)
+	return publicValid && cloudflareValid && publicDigest != "" && cloudflareDigest != "" && actualPublic == publicDigest && actualCloudflare == cloudflareDigest
 }
 
 func networkOperation(operation OperationKind) bool {

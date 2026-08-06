@@ -22,4 +22,11 @@
 // cancelling the watchdog, and records and removes only the approved temporary
 // HTTP-01 rule. Certificate Lifecycle owns its one serial randomized scheduler;
 // each due lineage still enters through the same one-use Apply and global lock.
+// Complete removal additionally requires both exact Owner confirmations. Its
+// reversible prefix removes only typed owned public exposure and immutable-ID
+// Cloudflare resources while the token remains available, then durably stops at
+// owned external deletion proof. Any failure, cancellation, or restart before
+// SC-09 refuses lineage-less Recovery Required before live work and otherwise
+// reverses to Managed only when exact transaction evidence proves that earlier
+// baseline.
 package systemchanges
