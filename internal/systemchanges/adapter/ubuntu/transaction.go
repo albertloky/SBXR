@@ -38,6 +38,13 @@ type Host interface {
 	VerifyRollback(systemchanges.RollbackAgreement, time.Duration) error
 }
 
+type IrreversibleRemovalHost interface {
+	VerifyCloudflareTokenRevoked(time.Duration) (bool, error)
+	DeleteIrreversibleRemovalPhase(systemchanges.IrreversibleRemovalPhase, time.Duration) (systemchanges.StepEvidence, error)
+	VerifyFinalRemovalAbsence(time.Duration) (bool, error)
+	FinalizeRemoval(time.Duration) error
+}
+
 // FirewallExecutor is the narrow native seam for approved inet sbxr changes.
 type FirewallExecutor interface {
 	CaptureRollback(systemchanges.Step, func(source io.Reader) error) error
@@ -68,6 +75,7 @@ type journalEntry struct {
 	Checkpoint   systemchanges.DurableCheckpoint        `json:"checkpoint"`
 	Step         int                                    `json:"step,omitempty"`
 	ChangeSet    string                                 `json:"change_set,omitempty"`
+	Mutation     systemchanges.MutationClass            `json:"mutation,omitempty"`
 	Starting     systemchanges.StateLineage             `json:"starting_state,omitempty"`
 	OutcomeOwner systemchanges.Module                   `json:"outcome_owner,omitempty"`
 	PlanSHA256   string                                 `json:"plan_sha256,omitempty"`
@@ -164,7 +172,7 @@ func (a Adapter) Prepare(lease systemchanges.ExecutionLease, preparation systemc
 			steps[index].Removal = &removal
 		}
 	}
-	entry := journalEntry{Checkpoint: systemchanges.Prepared, ChangeSet: preparation.ChangeSet, Starting: preparation.Starting, OutcomeOwner: preparation.OutcomeOwner, PlanSHA256: preparation.PlanSHA256, State: &preparation.State, Steps: steps, Checks: preparation.Checks, Timeouts: preparation.Timeouts}
+	entry := journalEntry{Checkpoint: systemchanges.Prepared, ChangeSet: preparation.ChangeSet, Mutation: preparation.Mutation, Starting: preparation.Starting, OutcomeOwner: preparation.OutcomeOwner, PlanSHA256: preparation.PlanSHA256, State: &preparation.State, Steps: steps, Checks: preparation.Checks, Timeouts: preparation.Timeouts}
 	if _, err := writeProtected(root, path.Join(temporary, "journal.jsonl"), strings.NewReader(""), a.uid); err != nil {
 		return err
 	}
@@ -201,7 +209,11 @@ func (a Adapter) Record(lease systemchanges.ExecutionLease, record systemchanges
 	}
 	defer root.Close()
 	target := path.Join(transactionDirectory, record.ChangeSet)
-	if err := verifyTransaction(root, target, a.uid); err != nil {
+	verify := verifyTransaction
+	if record.Checkpoint == systemchanges.TransactionMaterialDeleted || record.Checkpoint == systemchanges.FinalRemovalAbsenceVerified {
+		verify = verifyFinalizingTransaction
+	}
+	if err := verify(root, target, a.uid); err != nil {
 		return err
 	}
 	if err := appendJournal(root, path.Join(target, "journal.jsonl"), journalEntry{Checkpoint: record.Checkpoint, Step: record.Step, Evidence: record.Evidence}, a.uid); err != nil {
@@ -288,8 +300,10 @@ func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges
 	}
 	changeSet := entries[0].Name()
 	directory := path.Join(transactionDirectory, changeSet)
-	manifest, err := verifyTransactionManifest(root, directory, a.uid)
-	if err != nil {
+	if err := verifyDirectory(root, directory, a.uid); err != nil {
+		return systemchanges.RecoveryTransaction{}, err
+	}
+	if err := verifyFile(root, path.Join(directory, "journal.jsonl"), a.uid); err != nil {
 		return systemchanges.RecoveryTransaction{}, err
 	}
 	journal, err := readJournal(root, path.Join(directory, "journal.jsonl"))
@@ -297,8 +311,15 @@ func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges
 		return systemchanges.RecoveryTransaction{}, errors.New("recovery journal is invalid")
 	}
 	prepared, last := journal[0], journal[len(journal)-1]
-	if prepared.State == nil || prepared.ChangeSet != changeSet || !validRecoveryBinding(prepared, manifest) {
+	irreversible := prepared.Mutation == systemchanges.CompleteRemovalMutation && irreversibleRemovalCheckpoint(last.Checkpoint)
+	if prepared.State == nil || prepared.ChangeSet != changeSet || !validRecoveryJournalBinding(prepared) {
 		return systemchanges.RecoveryTransaction{}, errors.New("recovery transaction lineage is invalid")
+	}
+	if !irreversible {
+		manifest, err := verifyTransactionManifest(root, directory, a.uid)
+		if err != nil || manifest.Reason != prepared.Mutation || !validRecoveryBinding(prepared, manifest) {
+			return systemchanges.RecoveryTransaction{}, errors.New("recovery transaction lineage is invalid")
+		}
 	}
 	steps := make([]systemchanges.Step, len(prepared.Steps))
 	for index, persisted := range prepared.Steps {
@@ -335,11 +356,12 @@ func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges
 	candidateState := observed.StateRevision == prepared.State.CandidateRevision && observed.StateSHA256 == prepared.State.CandidateSHA256
 	complete := last.Checkpoint == systemchanges.Complete && observed.Status == systemchanges.Managed && observed.LastChangeSet == changeSet && candidateState
 	unfinished := observed.Status == systemchanges.ChangeInProgress && observed.CurrentChangeSet == changeSet && (startingState || candidateState) && (last.Checkpoint != systemchanges.RolledBack || startingState)
-	if err != nil || !complete && !unfinished {
+	irreversibleRemoval := irreversible && (observed.Status == systemchanges.ChangeInProgress && observed.CurrentChangeSet == changeSet || observed.Status == systemchanges.NotInstalled)
+	if err != nil || !complete && !unfinished && !irreversibleRemoval {
 		return systemchanges.RecoveryTransaction{}, errors.New("current State does not match the recovery transaction")
 	}
 	return systemchanges.RecoveryTransaction{
-		ChangeSet: changeSet, Starting: prepared.Starting, StartingRelease: prepared.State.StartingRelease,
+		ChangeSet: changeSet, Mutation: prepared.Mutation, Starting: prepared.Starting, StartingRelease: prepared.State.StartingRelease,
 		Candidate: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: prepared.State.CandidateRevision, SHA256: prepared.State.CandidateSHA256}, CandidateRelease: prepared.State.CandidateRelease,
 		OutcomeOwner: prepared.OutcomeOwner, Steps: steps, AttemptedSteps: highestStartedStep(journal), RollbackStep: rollbackResumeStep(journal), LastCheckpoint: last.Checkpoint, Timeouts: prepared.Timeouts,
 	}, nil
@@ -424,6 +446,125 @@ func (a Adapter) VerifyStartingServices(lease systemchanges.ExecutionLease, reco
 	return a.host.VerifyStartingServices(recovery, timeout)
 }
 
+func (a Adapter) VerifyCloudflareTokenRevoked(lease systemchanges.ExecutionLease, _ systemchanges.RecoveryTransaction, timeout time.Duration) (bool, error) {
+	host, ok := a.host.(IrreversibleRemovalHost)
+	if !lease.Authorized() || !ok {
+		return false, errors.New("irreversible removal host unavailable")
+	}
+	return host.VerifyCloudflareTokenRevoked(timeout)
+}
+
+func (a Adapter) DeleteIrreversibleRemovalPhase(lease systemchanges.ExecutionLease, _ systemchanges.RecoveryTransaction, phase systemchanges.IrreversibleRemovalPhase, timeout time.Duration) (systemchanges.StepEvidence, error) {
+	if phase == systemchanges.TransactionMaterialPhase {
+		return a.deleteTransactionMaterial(lease)
+	}
+	host, ok := a.host.(IrreversibleRemovalHost)
+	if !lease.Authorized() || !ok {
+		return systemchanges.StepEvidence{}, errors.New("irreversible removal host unavailable")
+	}
+	return host.DeleteIrreversibleRemovalPhase(phase, timeout)
+}
+
+func (a Adapter) VerifyFinalRemovalAbsence(lease systemchanges.ExecutionLease, _ systemchanges.RecoveryTransaction, timeout time.Duration) (systemchanges.Observation, error) {
+	host, ok := a.host.(IrreversibleRemovalHost)
+	if !lease.Authorized() || !ok || a.source == nil {
+		return systemchanges.Observation{}, errors.New("irreversible removal host unavailable")
+	}
+	absent, err := host.VerifyFinalRemovalAbsence(timeout)
+	if err != nil || !absent {
+		return systemchanges.Observation{}, errors.New("SBXR-owned resources remain")
+	}
+	return a.source()
+}
+
+func (a Adapter) FinalizeRemoval(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction, timeout time.Duration) error {
+	host, ok := a.host.(IrreversibleRemovalHost)
+	if !lease.Authorized() || !ok {
+		return errors.New("irreversible removal host unavailable")
+	}
+	root, err := os.OpenRoot(a.root)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	target := path.Join(transactionDirectory, recovery.ChangeSet)
+	journal := path.Join(target, "journal.jsonl")
+	entries, err := readJournal(root, journal)
+	if err != nil || !validJournal(entries) || entries[len(entries)-1].Checkpoint != systemchanges.FinalRemovalAbsenceVerified {
+		return errors.New("final removal journal is unresolved")
+	}
+	if err := root.Remove(journal); err != nil {
+		return err
+	}
+	if err := root.Remove(target); err != nil {
+		return err
+	}
+	if err := syncDirectory(root, transactionDirectory); err != nil {
+		return err
+	}
+	return host.FinalizeRemoval(timeout)
+}
+
+func (a Adapter) FinalizeOrphanedRemoval(lease systemchanges.ExecutionLease, observed systemchanges.Observation, timeout time.Duration) error {
+	host, ok := a.host.(IrreversibleRemovalHost)
+	if !lease.Authorized() || !ok || observed.Status != systemchanges.NotInstalled || observed.CurrentChangeSet != "" || observed.StateRevision != 0 || observed.StateSHA256 != "" || observed.RollbackAvailable {
+		return errors.New("orphaned removal runner cannot prove Not installed")
+	}
+	absent, err := host.VerifyFinalRemovalAbsence(timeout)
+	if err != nil || !absent {
+		return errors.New("orphaned removal runner found owned resources")
+	}
+	return host.FinalizeRemoval(timeout)
+}
+
+func (a Adapter) deleteTransactionMaterial(lease systemchanges.ExecutionLease) (systemchanges.StepEvidence, error) {
+	if !lease.Authorized() {
+		return systemchanges.StepEvidence{}, errors.New("invalid transaction authority")
+	}
+	root, err := os.OpenRoot(a.root)
+	if err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	defer root.Close()
+	entries, err := fs.ReadDir(root.FS(), transactionDirectory)
+	if err != nil || len(entries) != 1 || !entries[0].IsDir() || !safeName(entries[0].Name()) {
+		return systemchanges.StepEvidence{}, errors.New("one finalizing transaction was not proven")
+	}
+	target := path.Join(transactionDirectory, entries[0].Name())
+	journal, err := readJournal(root, path.Join(target, "journal.jsonl"))
+	if err != nil || !validJournal(journal) || journal[len(journal)-1].Checkpoint != systemchanges.ReleasesDeleted {
+		return systemchanges.StepEvidence{}, errors.New("transaction material deletion is out of order")
+	}
+	manifest, manifestErr := readSnapshotManifest(root, target, a.uid)
+	if manifestErr == nil {
+		names := make([]string, 0, len(manifest.Files))
+		for name := range manifest.Files {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			if err := root.Remove(path.Join(target, name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return systemchanges.StepEvidence{}, err
+			}
+		}
+		for _, name := range []string{"snapshot", "prepared"} {
+			if err := root.Remove(path.Join(target, name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return systemchanges.StepEvidence{}, err
+			}
+		}
+		if err := root.Remove(path.Join(target, "manifest.json")); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return systemchanges.StepEvidence{}, err
+		}
+	} else if err := verifyFinalizingTransaction(root, target, a.uid); err != nil {
+		return systemchanges.StepEvidence{}, manifestErr
+	}
+	if err := syncDirectory(root, target); err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	digest := sha256.Sum256([]byte(systemchanges.TransactionMaterialPhase))
+	return systemchanges.StepEvidence{Code: "transaction-material-absent", SHA256: hex.EncodeToString(digest[:])}, nil
+}
+
 func (a Adapter) recoveryArtifact(lease systemchanges.ExecutionLease, changeSet, name string) ([]byte, error) {
 	if !lease.Authorized() || !safeName(changeSet) || !safeArtifact(name) {
 		return nil, errors.New("invalid recovery artifact request")
@@ -474,13 +615,21 @@ func recoveryRelease(binding systemchanges.StateTransactionBinding) systemchange
 
 func validRecoveryBinding(prepared journalEntry, manifest snapshotManifest) bool {
 	binding := *prepared.State
-	if binding.ChangeSet != prepared.ChangeSet || binding.StartingRevision != prepared.Starting.Revision || binding.StartingSHA256 != prepared.Starting.SHA256 || binding.CandidateRevision != binding.StartingRevision+1 || binding.CandidateRelease == (systemchanges.ReleaseBinding{}) || !validDigest(prepared.PlanSHA256) || !validDigest(binding.CandidateSHA256) || !validDigest(binding.PreparedStateSHA256) || !validDigest(binding.PreparedManifestSHA256) || manifest.Release != recoveryRelease(binding) || manifest.Files["prepared/state.json"] != binding.PreparedStateSHA256 || manifest.Files["prepared/manifests.json"] != binding.PreparedManifestSHA256 {
+	if !validRecoveryJournalBinding(prepared) || manifest.Release != recoveryRelease(binding) || manifest.Files["prepared/state.json"] != binding.PreparedStateSHA256 || manifest.Files["prepared/manifests.json"] != binding.PreparedManifestSHA256 {
 		return false
 	}
 	if prepared.Starting.Status == systemchanges.Managed || prepared.Starting.Status == systemchanges.RecoveryRequired && binding.StartingRevision > 0 {
 		return binding.StartingRelease != (systemchanges.ReleaseBinding{}) && manifest.Files["snapshot/prior-state.json"] != ""
 	}
 	return prepared.Starting.Status == systemchanges.NotInstalled && binding.StartingRevision == 0 && binding.StartingSHA256 == "" && binding.StartingRelease == (systemchanges.ReleaseBinding{}) && manifest.Files["snapshot/prior-state.json"] == ""
+}
+
+func validRecoveryJournalBinding(prepared journalEntry) bool {
+	if prepared.State == nil || prepared.Mutation == "" {
+		return false
+	}
+	binding := *prepared.State
+	return binding.ChangeSet == prepared.ChangeSet && binding.StartingRevision == prepared.Starting.Revision && binding.StartingSHA256 == prepared.Starting.SHA256 && binding.CandidateRevision == binding.StartingRevision+1 && binding.CandidateRelease != (systemchanges.ReleaseBinding{}) && validDigest(prepared.PlanSHA256) && validDigest(binding.CandidateSHA256) && validDigest(binding.PreparedStateSHA256) && validDigest(binding.PreparedManifestSHA256)
 }
 
 func validDigest(value string) bool {
@@ -527,7 +676,7 @@ func (a Adapter) Cleanup(lease systemchanges.ExecutionLease, changeSet string) e
 		return err
 	}
 	entries, err := readJournal(root, path.Join(target, "journal.jsonl"))
-	if err != nil || len(entries) == 0 || entries[len(entries)-1].Checkpoint != systemchanges.Complete && entries[len(entries)-1].Checkpoint != systemchanges.RolledBack {
+	if err != nil || len(entries) == 0 || entries[len(entries)-1].Checkpoint != systemchanges.Complete && entries[len(entries)-1].Checkpoint != systemchanges.RolledBack && entries[len(entries)-1].Checkpoint != systemchanges.FinalRemovalAbsenceVerified {
 		return errors.New("transaction is not durably resolved")
 	}
 	names := make([]string, 0, len(manifest.Files))
@@ -555,6 +704,14 @@ func (a Adapter) Cleanup(lease systemchanges.ExecutionLease, changeSet string) e
 		}
 	}
 	return syncDirectory(root, transactionDirectory)
+}
+
+func irreversibleRemovalCheckpoint(checkpoint systemchanges.DurableCheckpoint) bool {
+	switch checkpoint {
+	case systemchanges.IrreversibleRemovalStarted, systemchanges.TokenRevocationVerified, systemchanges.RemainingExternalDeleted, systemchanges.LocalStateDeleted, systemchanges.SecretsDeleted, systemchanges.CertificatesDeleted, systemchanges.ServicesDeleted, systemchanges.IdentitiesDeleted, systemchanges.ListenersDeleted, systemchanges.FirewallRulesDeleted, systemchanges.ReleasesDeleted, systemchanges.TransactionMaterialDeleted, systemchanges.FinalRemovalAbsenceVerified:
+		return true
+	}
+	return false
 }
 
 func writeProtected(root *os.Root, name string, source io.Reader, uid int) (string, error) {
@@ -654,7 +811,7 @@ func validJournal(entries []journalEntry) bool {
 
 func validNextCheckpoint(entries []journalEntry, next journalEntry) bool {
 	if len(entries) == 0 {
-		return next.Checkpoint == systemchanges.Prepared && next.ChangeSet != "" && next.OutcomeOwner != "" && next.PlanSHA256 != "" && next.State != nil && len(next.Steps) > 0 && len(next.Checks) > 0 && next.Timeouts.Step > 0 && next.Timeouts.Check > 0
+		return next.Checkpoint == systemchanges.Prepared && next.ChangeSet != "" && next.Mutation != "" && next.OutcomeOwner != "" && next.PlanSHA256 != "" && next.State != nil && len(next.Steps) > 0 && len(next.Checks) > 0 && next.Timeouts.Step > 0 && next.Timeouts.Check > 0
 	}
 	if entries[0].Checkpoint != systemchanges.Prepared || len(entries[0].Steps) == 0 {
 		return false
@@ -673,7 +830,33 @@ func validNextCheckpoint(entries []journalEntry, next journalEntry) bool {
 	case systemchanges.PrePublicationHealthPassed:
 		return next.Checkpoint == systemchanges.OwnedExternalDeletionVerified && next.Step == 0 || next.Checkpoint == systemchanges.StatePublicationStarted && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total
 	case systemchanges.OwnedExternalDeletionVerified:
-		return next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total
+		return next.Checkpoint == systemchanges.IrreversibleRemovalStarted && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total
+	case systemchanges.IrreversibleRemovalStarted:
+		return next.Checkpoint == systemchanges.TokenRevocationVerified && next.Step == 0
+	case systemchanges.TokenRevocationVerified:
+		return next.Checkpoint == systemchanges.RemainingExternalDeleted && validEvidence(next.Evidence)
+	case systemchanges.RemainingExternalDeleted:
+		return next.Checkpoint == systemchanges.LocalStateDeleted && validEvidence(next.Evidence)
+	case systemchanges.LocalStateDeleted:
+		return next.Checkpoint == systemchanges.SecretsDeleted && validEvidence(next.Evidence)
+	case systemchanges.SecretsDeleted:
+		return next.Checkpoint == systemchanges.CertificatesDeleted && validEvidence(next.Evidence)
+	case systemchanges.CertificatesDeleted:
+		return next.Checkpoint == systemchanges.ServicesDeleted && validEvidence(next.Evidence)
+	case systemchanges.ServicesDeleted:
+		return next.Checkpoint == systemchanges.IdentitiesDeleted && validEvidence(next.Evidence)
+	case systemchanges.IdentitiesDeleted:
+		return next.Checkpoint == systemchanges.ListenersDeleted && validEvidence(next.Evidence)
+	case systemchanges.ListenersDeleted:
+		return next.Checkpoint == systemchanges.FirewallRulesDeleted && validEvidence(next.Evidence)
+	case systemchanges.FirewallRulesDeleted:
+		return next.Checkpoint == systemchanges.ReleasesDeleted && validEvidence(next.Evidence)
+	case systemchanges.ReleasesDeleted:
+		return next.Checkpoint == systemchanges.TransactionMaterialDeleted && validEvidence(next.Evidence)
+	case systemchanges.TransactionMaterialDeleted:
+		return next.Checkpoint == systemchanges.FinalRemovalAbsenceVerified && next.Evidence == nil
+	case systemchanges.FinalRemovalAbsenceVerified:
+		return false
 	case systemchanges.StatePublicationStarted:
 		return next.Checkpoint == systemchanges.StatePublished && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total
 	case systemchanges.StatePublished:
@@ -779,6 +962,37 @@ func verifyTransactionManifest(root *os.Root, directory string, uid int) (snapsh
 		return nil
 	})
 	return manifest, err
+}
+
+func readSnapshotManifest(root *os.Root, directory string, uid int) (snapshotManifest, error) {
+	if err := verifyFile(root, path.Join(directory, "manifest.json"), uid); err != nil {
+		return snapshotManifest{}, err
+	}
+	data, err := root.ReadFile(path.Join(directory, "manifest.json"))
+	var manifest snapshotManifest
+	if err != nil || json.Unmarshal(data, &manifest) != nil || manifest.SchemaVersion != 1 || manifest.Release == (systemchanges.ReleaseBinding{}) || manifest.Reason == "" {
+		return snapshotManifest{}, errors.New("invalid snapshot manifest")
+	}
+	for name, checksum := range manifest.Files {
+		if !safeArtifact(name) || !validDigest(checksum) {
+			return snapshotManifest{}, errors.New("invalid snapshot artifact binding")
+		}
+	}
+	return manifest, nil
+}
+
+func verifyFinalizingTransaction(root *os.Root, directory string, uid int) error {
+	if err := verifyDirectory(root, directory, uid); err != nil {
+		return err
+	}
+	if err := verifyFile(root, path.Join(directory, "journal.jsonl"), uid); err != nil {
+		return err
+	}
+	entries, err := fs.ReadDir(root.FS(), directory)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "journal.jsonl" || !entries[0].Type().IsRegular() {
+		return errors.New("finalizing transaction retained recovery material")
+	}
+	return nil
 }
 
 func verifyDirectory(root *os.Root, name string, uid int) error {

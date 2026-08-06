@@ -756,12 +756,12 @@ func NewChangeSet(spec ChangeSetSpec) (*ChangeSet, error) {
 type ApplyOutcome string
 
 const (
-	Completed                   ApplyOutcome = "Completed"
-	RollbackSucceeded           ApplyOutcome = "Rollback succeeded"
-	RecoveryRequiredOutcome     ApplyOutcome = "Recovery Required"
-	Refused                     ApplyOutcome = "Refused"
-	Deferred                    ApplyOutcome = "Deferred"
-	ReadyForIrreversibleRemoval ApplyOutcome = "Ready for irreversible removal"
+	Completed               ApplyOutcome = "Completed"
+	RollbackSucceeded       ApplyOutcome = "Rollback succeeded"
+	RecoveryRequiredOutcome ApplyOutcome = "Recovery Required"
+	Refused                 ApplyOutcome = "Refused"
+	Deferred                ApplyOutcome = "Deferred"
+	AwaitingTokenRevocation ApplyOutcome = "Awaiting Cloudflare token revocation"
 )
 
 type ApplyResult struct {

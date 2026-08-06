@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -41,6 +42,8 @@ type systemChangesAdapter struct {
 	failReverse     bool
 	agreementErr    error
 	serviceErr      error
+	tokenRevoked    bool
+	finalAbsent     bool
 	holdErr         error
 	recoveryLoadErr error
 	inspectionErr   error
@@ -126,7 +129,7 @@ func (a *systemChangesAdapter) Prepare(lease systemchanges.ExecutionLease, prepa
 	}
 	a.events = append(a.events, string(systemchanges.Prepared))
 	a.recovery = &systemchanges.RecoveryTransaction{
-		ChangeSet: preparation.ChangeSet, Starting: preparation.Starting, StartingRelease: preparation.State.StartingRelease,
+		ChangeSet: preparation.ChangeSet, Mutation: preparation.Mutation, Starting: preparation.Starting, StartingRelease: preparation.State.StartingRelease,
 		Candidate: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: preparation.State.CandidateRevision, SHA256: preparation.State.CandidateSHA256}, CandidateRelease: preparation.State.CandidateRelease,
 		OutcomeOwner: preparation.OutcomeOwner, Steps: append([]systemchanges.Step(nil), preparation.Steps...), LastCheckpoint: systemchanges.Prepared, Timeouts: preparation.Timeouts,
 	}
@@ -270,6 +273,30 @@ func (a *systemChangesAdapter) RestoreRecoveryState(lease systemchanges.Executio
 func (a *systemChangesAdapter) VerifyStartingServices(systemchanges.ExecutionLease, systemchanges.RecoveryTransaction, time.Duration) error {
 	a.events = append(a.events, "starting services verified")
 	return a.serviceErr
+}
+
+func (a *systemChangesAdapter) VerifyCloudflareTokenRevoked(systemchanges.ExecutionLease, systemchanges.RecoveryTransaction, time.Duration) (bool, error) {
+	a.events = append(a.events, "verify revoked Cloudflare token")
+	return a.tokenRevoked, nil
+}
+
+func (a *systemChangesAdapter) DeleteIrreversibleRemovalPhase(_ systemchanges.ExecutionLease, _ systemchanges.RecoveryTransaction, phase systemchanges.IrreversibleRemovalPhase, _ time.Duration) (systemchanges.StepEvidence, error) {
+	a.events = append(a.events, "delete "+string(phase))
+	return systemchanges.StepEvidence{Code: "removal-phase-absent", SHA256: testSHA('d')}, nil
+}
+
+func (a *systemChangesAdapter) VerifyFinalRemovalAbsence(systemchanges.ExecutionLease, systemchanges.RecoveryTransaction, time.Duration) (systemchanges.Observation, error) {
+	a.events = append(a.events, "verify final removal absence")
+	if !a.finalAbsent {
+		return systemchanges.Observation{}, errors.New("controlled final absence failure")
+	}
+	return systemchanges.Observation{Status: systemchanges.NotInstalled, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased}, nil
+}
+
+func (a *systemChangesAdapter) FinalizeRemoval(systemchanges.ExecutionLease, systemchanges.RecoveryTransaction, time.Duration) error {
+	a.events = append(a.events, "finalize removal journal and recovery runner")
+	a.recovery = nil
+	return nil
 }
 
 func TestPreparedCommitDurablyCompletesOneSystemChangesChangeSet(t *testing.T) {
@@ -581,17 +608,141 @@ func TestEveryMutationClassUsesOneSystemChangesLockBeforeLiveWork(t *testing.T) 
 	}
 }
 
-func TestCompleteRemovalStopsAtTheReversibleExternalDeletionBoundary(t *testing.T) {
+func TestCompleteRemovalDurablyCrossesIrreversibleBoundaryAfterExternalProof(t *testing.T) {
 	_, changeSet, _, observed := preparedSystemChangeForMutation(t, systemchanges.CompleteRemovalMutation, systemchanges.Check{Owner: systemchanges.CloudflareModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "REMOVAL-EXTERNAL-ABSENT"})
 	adapter := &systemChangesAdapter{observation: observed}
 	result := systemchanges.New(adapter).Apply(changeSet)
 	joined := strings.Join(adapter.events, ",")
-	if result.Outcome != systemchanges.ReadyForIrreversibleRemoval || result.RestoredStatus != "" || result.NothingChanged || result.Finding != nil || strings.Contains(joined, string(systemchanges.StatePublicationStarted)) || strings.Contains(joined, string(systemchanges.Complete)) || !strings.Contains(joined, string(systemchanges.OwnedExternalDeletionVerified)) || adapter.recovery == nil {
+	if result.Outcome != systemchanges.AwaitingTokenRevocation || result.RestoredStatus != "" || result.NothingChanged || result.Finding != nil || strings.Contains(joined, string(systemchanges.StatePublicationStarted)) || strings.Contains(joined, string(systemchanges.Complete)) || !strings.Contains(joined, string(systemchanges.OwnedExternalDeletionVerified)) || !strings.Contains(joined, string(systemchanges.IrreversibleRemovalStarted)) || adapter.recovery == nil {
 		t.Fatalf("reversible Complete removal = %+v; events=%v", result, adapter.events)
+	}
+	if strings.Index(joined, string(systemchanges.OwnedExternalDeletionVerified)) > strings.Index(joined, string(systemchanges.IrreversibleRemovalStarted)) {
+		t.Fatalf("irreversible checkpoint preceded owned-external proof: %v", adapter.events)
 	}
 	wantLimits := []string{"Certificate Transparency entries cannot be erased", "DNS caches cannot be erased"}
 	if strings.Join(result.UnremovableTraces, ",") != strings.Join(wantLimits, ",") {
 		t.Fatalf("Complete removal limits = %v, want %v", result.UnremovableTraces, wantLimits)
+	}
+}
+
+func TestCompleteRemovalContinuesForwardOnlyInItsFixedDeletionOrder(t *testing.T) {
+	_, changeSet, _, observed := preparedSystemChangeForMutation(t, systemchanges.CompleteRemovalMutation, systemchanges.Check{Owner: systemchanges.CloudflareModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "REMOVAL-EXTERNAL-ABSENT"})
+	adapter := &systemChangesAdapter{observation: observed}
+	cancellation := systemchanges.NewCancellation()
+	if result := systemchanges.New(adapter).ApplyWithCancellation(changeSet, cancellation); result.Outcome != systemchanges.AwaitingTokenRevocation {
+		t.Fatalf("Complete removal handoff = %+v", result)
+	}
+	cancellation.Request()
+	adapter.tokenRevoked, adapter.finalAbsent = true, true
+	result := systemchanges.New(adapter).Recover()
+	want := []string{
+		"verify revoked Cloudflare token",
+		"delete Remaining owned external resources",
+		"delete local State",
+		"delete Infrastructure Secrets",
+		"delete certificates",
+		"delete services",
+		"delete identities",
+		"delete listeners",
+		"delete firewall rules",
+		"delete releases",
+		"delete transaction material",
+		"verify final removal absence",
+		"finalize removal journal and recovery runner",
+	}
+	joined := strings.Join(adapter.events, ",")
+	for _, event := range want {
+		if !strings.Contains(joined, event) {
+			t.Fatalf("forward-only Complete removal omitted %q: result=%+v events=%v", event, result, adapter.events)
+		}
+	}
+	if result.Outcome != systemchanges.Completed || result.RestoredStatus != systemchanges.NotInstalled || strings.Contains(joined, "reverse") || strings.Contains(joined, "restore durable State") {
+		t.Fatalf("forward-only Complete removal = %+v; events=%v", result, adapter.events)
+	}
+}
+
+func TestIrreversibleCompleteRemovalRefusesAnAutomaticRollbackRequest(t *testing.T) {
+	_, changeSet, _, observed := preparedSystemChangeForMutation(t, systemchanges.CompleteRemovalMutation, systemchanges.Check{Owner: systemchanges.CloudflareModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "REMOVAL-EXTERNAL-ABSENT"})
+	adapter := &systemChangesAdapter{observation: observed}
+	if result := systemchanges.New(adapter).Apply(changeSet); result.Outcome != systemchanges.AwaitingTokenRevocation {
+		t.Fatalf("Complete removal handoff = %+v", result)
+	}
+	adapter.observation = systemchanges.Observation{
+		Status: systemchanges.RecoveryRequired, CurrentChangeSet: "change-0008", LastChangeSet: "change-0007", Checkpoint: systemchanges.PreparedCheckpoint,
+		TotalSteps: len(completeRemovalIDs), Lock: systemchanges.LockReleased, RollbackAvailable: true, RecoveryCause: systemchanges.ForwardCheckpointUnprovable,
+	}
+	result := systemchanges.New(adapter).RetryAutomaticRollback()
+	events := strings.Join(adapter.events, ",")
+	if result.Outcome != systemchanges.AwaitingTokenRevocation || strings.Contains(events, "reverse") || strings.Contains(events, "restore durable State") {
+		t.Fatalf("rollback request after irreversibility = %+v; events=%v", result, adapter.events)
+	}
+}
+
+func TestCompleteRemovalWaitsForVerifiedRevocationBeforeDeletingTheLocalToken(t *testing.T) {
+	_, changeSet, _, observed := preparedSystemChangeForMutation(t, systemchanges.CompleteRemovalMutation, systemchanges.Check{Owner: systemchanges.CloudflareModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "REMOVAL-EXTERNAL-ABSENT"})
+	adapter := &systemChangesAdapter{observation: observed}
+	if result := systemchanges.New(adapter).Apply(changeSet); result.Outcome != systemchanges.AwaitingTokenRevocation {
+		t.Fatalf("irreversible handoff = %+v", result)
+	}
+	result := systemchanges.New(adapter).Recover()
+	events := strings.Join(adapter.events, ",")
+	if result.Outcome != systemchanges.AwaitingTokenRevocation || strings.Contains(events, "delete ") || strings.Contains(events, "reverse") {
+		t.Fatalf("unrevoked-token continuation = %+v; events=%v", result, adapter.events)
+	}
+}
+
+func TestCompleteRemovalResumesForwardAfterEveryIrreversibleCheckpointDeath(t *testing.T) {
+	checkpoints := []systemchanges.DurableCheckpoint{
+		systemchanges.TokenRevocationVerified, systemchanges.RemainingExternalDeleted, systemchanges.LocalStateDeleted,
+		systemchanges.SecretsDeleted, systemchanges.CertificatesDeleted, systemchanges.ServicesDeleted,
+		systemchanges.IdentitiesDeleted, systemchanges.ListenersDeleted, systemchanges.FirewallRulesDeleted,
+		systemchanges.ReleasesDeleted, systemchanges.TransactionMaterialDeleted, systemchanges.FinalRemovalAbsenceVerified,
+	}
+	for _, checkpoint := range checkpoints {
+		for _, side := range []string{"before", "after"} {
+			t.Run(side+"_"+string(checkpoint), func(t *testing.T) {
+				_, changeSet, _, observed := preparedSystemChangeForMutation(t, systemchanges.CompleteRemovalMutation, systemchanges.Check{Owner: systemchanges.CloudflareModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "REMOVAL-EXTERNAL-ABSENT"})
+				adapter := &systemChangesAdapter{observation: observed, tokenRevoked: true, finalAbsent: true}
+				if result := systemchanges.New(adapter).Apply(changeSet); result.Outcome != systemchanges.AwaitingTokenRevocation {
+					t.Fatalf("irreversible handoff = %+v", result)
+				}
+				if side == "before" {
+					adapter.crashBefore = checkpoint
+				} else {
+					adapter.crashAfter = checkpoint
+				}
+				func() {
+					defer func() { _ = recover() }()
+					_ = systemchanges.New(adapter).Recover()
+				}()
+				if !adapter.crashed {
+					t.Fatalf("worker did not die %s %s", side, checkpoint)
+				}
+				adapter.crashBefore, adapter.crashAfter = "", ""
+				result := systemchanges.New(adapter).Recover()
+				events := strings.Join(adapter.events, ",")
+				if result.Outcome != systemchanges.Completed || result.RestoredStatus != systemchanges.NotInstalled || strings.Contains(events, "reverse") || strings.Contains(events, "restore durable State") {
+					t.Fatalf("forward recovery after %s %s = %+v; events=%v", side, checkpoint, result, adapter.events)
+				}
+			})
+		}
+	}
+}
+
+func TestCompleteRemovalResumesForwardAfterDeathAtTheIrreversibleBoundary(t *testing.T) {
+	_, changeSet, _, observed := preparedSystemChangeForMutation(t, systemchanges.CompleteRemovalMutation, systemchanges.Check{Owner: systemchanges.CloudflareModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "REMOVAL-EXTERNAL-ABSENT"})
+	adapter := &systemChangesAdapter{observation: observed, tokenRevoked: true, finalAbsent: true, crashAfter: systemchanges.IrreversibleRemovalStarted}
+	func() {
+		defer func() { _ = recover() }()
+		_ = systemchanges.New(adapter).Apply(changeSet)
+	}()
+	if !adapter.crashed || adapter.recovery == nil || adapter.recovery.LastCheckpoint != systemchanges.IrreversibleRemovalStarted {
+		t.Fatalf("irreversible boundary was not durable before death: %+v", adapter.recovery)
+	}
+	adapter.crashAfter = ""
+	result := systemchanges.New(adapter).Recover()
+	if result.Outcome != systemchanges.Completed || result.RestoredStatus != systemchanges.NotInstalled || strings.Contains(strings.Join(adapter.events, ","), "reverse") {
+		t.Fatalf("irreversible-boundary recovery = %+v; events=%v", result, adapter.events)
 	}
 }
 
@@ -766,6 +917,9 @@ type controlledUbuntuHost struct {
 	removalTokenAvailable bool
 	removedResources      map[string]bool
 	unrelatedExternal     string
+	irreversiblePhases    []systemchanges.IrreversibleRemovalPhase
+	removalFinalized      bool
+	failRemovalFinalize   int
 }
 
 type controlledService struct {
@@ -880,6 +1034,33 @@ type cleanupFailingUbuntuAdapter struct{ ubuntu.Adapter }
 
 func (cleanupFailingUbuntuAdapter) Cleanup(systemchanges.ExecutionLease, string) error {
 	return errors.New("controlled cleanup interruption")
+}
+
+type checkpointCrashingUbuntuAdapter struct {
+	ubuntu.Adapter
+	checkpoint systemchanges.DurableCheckpoint
+	after      bool
+	crashed    bool
+	lock       systemchanges.Lock
+}
+
+func (adapter *checkpointCrashingUbuntuAdapter) TryLock() (systemchanges.Lock, bool, error) {
+	lock, acquired, err := adapter.Adapter.TryLock()
+	adapter.lock = lock
+	return lock, acquired, err
+}
+
+func (adapter *checkpointCrashingUbuntuAdapter) Record(lease systemchanges.ExecutionLease, record systemchanges.CheckpointRecord) error {
+	if !adapter.crashed && record.Checkpoint == adapter.checkpoint && !adapter.after {
+		adapter.crashed = true
+		panic("controlled worker death")
+	}
+	err := adapter.Adapter.Record(lease, record)
+	if err == nil && !adapter.crashed && record.Checkpoint == adapter.checkpoint {
+		adapter.crashed = true
+		panic("controlled worker death")
+	}
+	return err
 }
 
 func (host *controlledUbuntuHost) CaptureRollback(step systemchanges.Step, write func(io.Reader) error) error {
@@ -1144,7 +1325,7 @@ func TestFreshSystemChangesInstanceRollsBackInterruptedForwardStep(t *testing.T)
 		t.Fatal(err)
 	}
 	recovery := systemchanges.RecoveryTransaction{
-		ChangeSet: "change-0008", Starting: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: testSHA('7')},
+		ChangeSet: "change-0008", Mutation: systemchanges.SettingChangeMutation, Starting: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: testSHA('7')},
 		StartingRelease: systemchanges.ReleaseBinding{Repository: testRelease.Repository, Tag: testRelease.Tag, Commit: testRelease.Commit, ReleaseIndexSHA256: testRelease.ReleaseIndexSHA256},
 		OutcomeOwner:    systemchanges.ConnectionProfilesModule, Steps: []systemchanges.Step{step}, AttemptedSteps: 1,
 		LastCheckpoint: systemchanges.StepStarted, Timeouts: systemchanges.Timeouts{Step: time.Second, Check: time.Second},
@@ -1160,13 +1341,32 @@ func TestFreshSystemChangesInstanceRollsBackInterruptedForwardStep(t *testing.T)
 	}
 }
 
+func TestRecoveryRejectsCompleteRemovalWithoutItsDurableRemovalInventory(t *testing.T) {
+	ordinary, err := systemchanges.NewStep(systemchanges.SubscriptionModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery := systemchanges.RecoveryTransaction{
+		ChangeSet: "change-0008", Mutation: systemchanges.CompleteRemovalMutation,
+		Starting:        systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: testSHA('7')},
+		StartingRelease: systemchanges.ReleaseBinding{Repository: testRelease.Repository, Tag: testRelease.Tag, Commit: testRelease.Commit, ReleaseIndexSHA256: testRelease.ReleaseIndexSHA256},
+		OutcomeOwner:    systemchanges.ConnectionProfilesModule, Steps: []systemchanges.Step{ordinary}, AttemptedSteps: 1,
+		LastCheckpoint: systemchanges.IrreversibleRemovalStarted, Timeouts: systemchanges.Timeouts{Step: time.Second, Check: time.Second},
+	}
+	adapter := &systemChangesAdapter{recovery: &recovery}
+	result := systemchanges.New(adapter).Recover()
+	if result.Outcome != systemchanges.RecoveryRequiredOutcome || strings.Contains(strings.Join(adapter.events, ","), "reverse") {
+		t.Fatalf("forged Complete-removal recovery = %+v; events=%v", result, adapter.events)
+	}
+}
+
 func TestRetryAutomaticRollbackUsesOnlyTheAuthorizedRecoveryPath(t *testing.T) {
 	step, err := systemchanges.NewStep(systemchanges.SubscriptionModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
 	if err != nil {
 		t.Fatal(err)
 	}
 	recovery := systemchanges.RecoveryTransaction{
-		ChangeSet: "change-0008", Starting: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: testSHA('7')},
+		ChangeSet: "change-0008", Mutation: systemchanges.SettingChangeMutation, Starting: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: testSHA('7')},
 		StartingRelease: systemchanges.ReleaseBinding{Repository: testRelease.Repository, Tag: testRelease.Tag, Commit: testRelease.Commit, ReleaseIndexSHA256: testRelease.ReleaseIndexSHA256},
 		OutcomeOwner:    systemchanges.ConnectionProfilesModule, Steps: []systemchanges.Step{step}, AttemptedSteps: 1,
 		LastCheckpoint: systemchanges.StepStarted, Timeouts: systemchanges.Timeouts{Step: time.Second, Check: time.Second},
@@ -1199,7 +1399,7 @@ func TestRecoveryRequiredCoversEveryIntegrityAndLineageFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := systemchanges.RecoveryTransaction{
-		ChangeSet: "change-0008", Starting: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: testSHA('7')},
+		ChangeSet: "change-0008", Mutation: systemchanges.SettingChangeMutation, Starting: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: testSHA('7')},
 		StartingRelease: systemchanges.ReleaseBinding{Repository: testRelease.Repository, Tag: testRelease.Tag, Commit: testRelease.Commit, ReleaseIndexSHA256: testRelease.ReleaseIndexSHA256},
 		OutcomeOwner:    systemchanges.ConnectionProfilesModule, Steps: []systemchanges.Step{step}, AttemptedSteps: 1,
 		LastCheckpoint: systemchanges.StepStarted, Timeouts: systemchanges.Timeouts{Step: time.Second, Check: time.Second},
@@ -1370,7 +1570,7 @@ func TestRecoveryKeepsAffectedServicesStoppedWithoutStartingStateAgreement(t *te
 		t.Fatal(err)
 	}
 	recovery := systemchanges.RecoveryTransaction{
-		ChangeSet: "change-0008", Starting: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: testSHA('7')},
+		ChangeSet: "change-0008", Mutation: systemchanges.SettingChangeMutation, Starting: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: testSHA('7')},
 		StartingRelease: systemchanges.ReleaseBinding{Repository: testRelease.Repository, Tag: testRelease.Tag, Commit: testRelease.Commit, ReleaseIndexSHA256: testRelease.ReleaseIndexSHA256},
 		OutcomeOwner:    systemchanges.ConnectionProfilesModule, Steps: []systemchanges.Step{step}, AttemptedSteps: 1,
 		LastCheckpoint: systemchanges.StepCompleted, Timeouts: systemchanges.Timeouts{Step: time.Second, Check: time.Second},
@@ -1389,7 +1589,7 @@ func TestRecoveryRefusesBeforeInspectionWhenUnrelatedServiceAgreementIsUnknown(t
 		t.Fatal(err)
 	}
 	recovery := systemchanges.RecoveryTransaction{
-		ChangeSet: "change-0008", Starting: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: testSHA('7')},
+		ChangeSet: "change-0008", Mutation: systemchanges.SettingChangeMutation, Starting: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: testSHA('7')},
 		StartingRelease: systemchanges.ReleaseBinding{Repository: testRelease.Repository, Tag: testRelease.Tag, Commit: testRelease.Commit, ReleaseIndexSHA256: testRelease.ReleaseIndexSHA256},
 		OutcomeOwner:    systemchanges.ConnectionProfilesModule, Steps: []systemchanges.Step{step}, AttemptedSteps: 1,
 		LastCheckpoint: systemchanges.StepStarted, Timeouts: systemchanges.Timeouts{Step: time.Second, Check: time.Second},
@@ -1449,6 +1649,43 @@ func (host *controlledUbuntuHost) VerifyRollback(agreement systemchanges.Rollbac
 	if err != nil || !bytes.Contains(journal, []byte(`"checkpoint":"Rollback started"`)) || !bytes.Contains(journal, []byte(`"checkpoint":"Rollback step completed"`)) || bytes.Contains(journal, []byte("SECRET-MARKER")) {
 		return errors.New("rollback journal agreement failed")
 	}
+	return nil
+}
+
+func (host *controlledUbuntuHost) VerifyCloudflareTokenRevoked(_ time.Duration) (bool, error) {
+	host.recoveryEvents = append(host.recoveryEvents, "verify revoked Cloudflare token")
+	if !host.removalTokenAvailable {
+		return false, errors.New("local scoped-token copy unavailable before revocation proof")
+	}
+	return !host.removalTokenActive && host.removalTokenAvailable, nil
+}
+
+func (host *controlledUbuntuHost) DeleteIrreversibleRemovalPhase(phase systemchanges.IrreversibleRemovalPhase, _ time.Duration) (systemchanges.StepEvidence, error) {
+	host.irreversiblePhases = append(host.irreversiblePhases, phase)
+	if phase == systemchanges.SecretsPhase {
+		host.removalTokenAvailable = false
+	}
+	digest := sha256.Sum256([]byte(phase))
+	return systemchanges.StepEvidence{Code: "removal-phase-absent", SHA256: fmt.Sprintf("%x", digest)}, nil
+}
+
+func (host *controlledUbuntuHost) VerifyFinalRemovalAbsence(_ time.Duration) (bool, error) {
+	host.recoveryEvents = append(host.recoveryEvents, "verify final removal absence")
+	want := []systemchanges.IrreversibleRemovalPhase{
+		systemchanges.RemainingExternalResourcesPhase, systemchanges.LocalStatePhase, systemchanges.SecretsPhase,
+		systemchanges.CertificatesPhase, systemchanges.ServicesPhase, systemchanges.IdentitiesPhase,
+		systemchanges.ListenersPhase, systemchanges.FirewallRulesPhase, systemchanges.ReleasesPhase,
+	}
+	return slices.Equal(host.irreversiblePhases, want) && allRemovalResources(host, true) && !host.removalTokenAvailable, nil
+}
+
+func (host *controlledUbuntuHost) FinalizeRemoval(_ time.Duration) error {
+	host.recoveryEvents = append(host.recoveryEvents, "finalize removal journal and recovery runner")
+	if host.failRemovalFinalize > 0 {
+		host.failRemovalFinalize--
+		return errors.New("controlled recovery-runner removal failure")
+	}
+	host.removalFinalized = true
 	return nil
 }
 
@@ -1709,9 +1946,17 @@ func TestUbuntuAdapterReversesOnlyTypedCompleteRemovalResourcesAfterRestart(t *t
 				removalTokenActive: true, removalTokenAvailable: true,
 				removedResources: map[string]bool{}, unrelatedExternal: "unrelated-cloudflare-resource-remains",
 			}
-			result := systemchanges.New(ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return observed, nil }, host, stateModule)).Apply(changeSet)
-			if result.Outcome != systemchanges.ReadyForIrreversibleRemoval || !allRemovalResources(host, true) || !host.removalTokenActive || !host.removalTokenAvailable || host.unrelatedExternal != "unrelated-cloudflare-resource-remains" {
-				t.Fatalf("controlled reversible removal = %+v; host=%+v", result, host)
+			baseAdapter := ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return observed, nil }, host, stateModule)
+			crashing := &checkpointCrashingUbuntuAdapter{Adapter: baseAdapter, checkpoint: systemchanges.IrreversibleRemovalStarted}
+			func() {
+				defer func() { _ = recover() }()
+				_ = systemchanges.New(crashing).Apply(changeSet)
+			}()
+			if crashing.lock != nil {
+				_ = crashing.lock.Close()
+			}
+			if !crashing.crashed || !allRemovalResources(host, true) || !host.removalTokenActive || !host.removalTokenAvailable || host.unrelatedExternal != "unrelated-cloudflare-resource-remains" {
+				t.Fatalf("controlled pre-checkpoint death = crashed=%t host=%+v", crashing.crashed, host)
 			}
 			journal, err := os.ReadFile(filepath.Join(root, "var/lib/sbxr/transactions/change-0008/journal.jsonl"))
 			if err != nil || bytes.Contains(journal, []byte("CLOUDFLARE-MANAGEMENT-SECRET-MARKER")) {
@@ -1736,7 +1981,7 @@ func TestUbuntuAdapterRefusesRemovalRollbackAfterScopedTokenDisappears(t *testin
 	root := t.TempDir()
 	prepareLock(t, root)
 	host := &controlledUbuntuHost{root: root, expectedMutation: systemchanges.CompleteRemovalMutation, removalTokenActive: true, removalTokenAvailable: true, removedResources: map[string]bool{}}
-	if result := systemchanges.New(ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return observed, nil }, host, stateModule)).Apply(changeSet); result.Outcome != systemchanges.ReadyForIrreversibleRemoval {
+	if result := systemchanges.New(ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return observed, nil }, host, stateModule)).Apply(changeSet); result.Outcome != systemchanges.AwaitingTokenRevocation {
 		t.Fatalf("controlled reversible removal = %+v", result)
 	}
 	host.removalTokenAvailable = false
@@ -1744,6 +1989,117 @@ func TestUbuntuAdapterRefusesRemovalRollbackAfterScopedTokenDisappears(t *testin
 	result := systemchanges.New(ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return observed, nil }, host, stateModule)).Recover()
 	if result.Outcome != systemchanges.RecoveryRequiredOutcome || !allRemovalResources(host, true) {
 		t.Fatalf("rollback without live scoped token = %+v; resources=%v", result, host.removedResources)
+	}
+}
+
+func TestUbuntuAdapterCompletesForwardOnlyRemovalAfterVerifiedTokenRevocation(t *testing.T) {
+	stateModule, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.CompleteRemovalMutation, systemchanges.Check{Owner: systemchanges.CloudflareModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "REMOVAL-EXTERNAL-ABSENT"}, systemChangeTestOptions{startingStatus: systemchanges.Managed, stepTimeout: time.Second})
+	root := t.TempDir()
+	prepareLock(t, root)
+	host := &controlledUbuntuHost{root: root, expectedMutation: systemchanges.CompleteRemovalMutation, removalTokenActive: true, removalTokenAvailable: true, removedResources: map[string]bool{}}
+	source := func() (systemchanges.Observation, error) {
+		current := observed
+		if slices.Contains(host.irreversiblePhases, systemchanges.LocalStatePhase) {
+			current = systemchanges.Observation{Status: systemchanges.NotInstalled, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, FilesystemBytes: observed.FilesystemBytes, AvailableBytes: observed.AvailableBytes, WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: observed.TimeOwner}
+		}
+		return current, nil
+	}
+	if result := systemchanges.New(ubuntu.NewAt(root, source, host, stateModule)).Apply(changeSet); result.Outcome != systemchanges.AwaitingTokenRevocation {
+		t.Fatalf("irreversible handoff = %+v", result)
+	}
+	host.removalTokenActive = false
+	observed.Status, observed.CurrentChangeSet, observed.Checkpoint, observed.TotalSteps, observed.RollbackAvailable = systemchanges.ChangeInProgress, "change-0008", systemchanges.PreparedCheckpoint, len(completeRemovalIDs), false
+	result := systemchanges.New(ubuntu.NewAt(root, source, host, stateModule)).Recover()
+	transaction := filepath.Join(root, "var/lib/sbxr/transactions/change-0008")
+	if result.Outcome != systemchanges.Completed || result.RestoredStatus != systemchanges.NotInstalled || !host.removalFinalized || host.removalTokenAvailable || !allRemovalResources(host, true) {
+		t.Fatalf("forward-only Ubuntu removal = %+v; host=%+v", result, host)
+	}
+	if _, err := os.Stat(transaction); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("final removal retained transaction material: %v", err)
+	}
+}
+
+func TestUbuntuAdapterResumesFinalDeletionAfterProcessDeath(t *testing.T) {
+	for _, checkpoint := range []systemchanges.DurableCheckpoint{systemchanges.TransactionMaterialDeleted, systemchanges.FinalRemovalAbsenceVerified} {
+		for _, after := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/after=%t", checkpoint, after), func(t *testing.T) {
+				stateModule, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.CompleteRemovalMutation, systemchanges.Check{Owner: systemchanges.CloudflareModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "REMOVAL-EXTERNAL-ABSENT"}, systemChangeTestOptions{startingStatus: systemchanges.Managed, stepTimeout: time.Second})
+				root := t.TempDir()
+				prepareLock(t, root)
+				host := &controlledUbuntuHost{root: root, expectedMutation: systemchanges.CompleteRemovalMutation, removalTokenActive: true, removalTokenAvailable: true, removedResources: map[string]bool{}}
+				source := func() (systemchanges.Observation, error) {
+					if slices.Contains(host.irreversiblePhases, systemchanges.LocalStatePhase) {
+						return systemchanges.Observation{Status: systemchanges.NotInstalled, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, FilesystemBytes: observed.FilesystemBytes, AvailableBytes: observed.AvailableBytes, WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: observed.TimeOwner}, nil
+					}
+					return observed, nil
+				}
+				base := ubuntu.NewAt(root, source, host, stateModule)
+				if result := systemchanges.New(base).Apply(changeSet); result.Outcome != systemchanges.AwaitingTokenRevocation {
+					t.Fatalf("irreversible handoff = %+v", result)
+				}
+				host.removalTokenActive = false
+				observed.Status, observed.CurrentChangeSet, observed.Checkpoint, observed.TotalSteps, observed.RollbackAvailable = systemchanges.ChangeInProgress, "change-0008", systemchanges.PreparedCheckpoint, len(completeRemovalIDs), false
+				crashing := &checkpointCrashingUbuntuAdapter{Adapter: base, checkpoint: checkpoint, after: after}
+				func() {
+					defer func() { _ = recover() }()
+					_ = systemchanges.New(crashing).Recover()
+				}()
+				if crashing.lock != nil {
+					_ = crashing.lock.Close()
+				}
+				if !crashing.crashed {
+					t.Fatal("controlled recovery worker did not die")
+				}
+				result := systemchanges.New(ubuntu.NewAt(root, source, host, stateModule)).Recover()
+				if result.Outcome != systemchanges.Completed || result.RestoredStatus != systemchanges.NotInstalled || !host.removalFinalized {
+					t.Fatalf("final deletion recovery = %+v; host=%+v", result, host)
+				}
+				if _, err := os.Stat(filepath.Join(root, "var/lib/sbxr/transactions/change-0008")); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("final deletion retained recovery material: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestUbuntuAdapterLeftoverRunnerSelfCleansAfterJournalDeletion(t *testing.T) {
+	stateModule, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.CompleteRemovalMutation, systemchanges.Check{Owner: systemchanges.CloudflareModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "REMOVAL-EXTERNAL-ABSENT"}, systemChangeTestOptions{startingStatus: systemchanges.Managed, stepTimeout: time.Second})
+	root := t.TempDir()
+	prepareLock(t, root)
+	host := &controlledUbuntuHost{root: root, expectedMutation: systemchanges.CompleteRemovalMutation, removalTokenActive: true, removalTokenAvailable: true, removedResources: map[string]bool{}, failRemovalFinalize: 1}
+	source := func() (systemchanges.Observation, error) {
+		if slices.Contains(host.irreversiblePhases, systemchanges.LocalStatePhase) {
+			return systemchanges.Observation{Status: systemchanges.NotInstalled, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, FilesystemBytes: observed.FilesystemBytes, AvailableBytes: observed.AvailableBytes, WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: observed.TimeOwner}, nil
+		}
+		return observed, nil
+	}
+	adapter := ubuntu.NewAt(root, source, host, stateModule)
+	if result := systemchanges.New(adapter).Apply(changeSet); result.Outcome != systemchanges.AwaitingTokenRevocation {
+		t.Fatalf("irreversible handoff = %+v", result)
+	}
+	host.removalTokenActive = false
+	observed.Status, observed.CurrentChangeSet, observed.Checkpoint, observed.TotalSteps, observed.RollbackAvailable = systemchanges.ChangeInProgress, "change-0008", systemchanges.PreparedCheckpoint, len(completeRemovalIDs), false
+	first := systemchanges.New(adapter).Recover()
+	if first.Outcome != systemchanges.RecoveryRequiredOutcome || host.removalFinalized {
+		t.Fatalf("controlled runner-removal failure = %+v; host=%+v", first, host)
+	}
+	if _, err := os.Stat(filepath.Join(root, "var/lib/sbxr/transactions/change-0008")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("journal was not durably removed before runner cleanup: %v", err)
+	}
+	second := systemchanges.New(ubuntu.NewAt(root, source, host, stateModule)).Recover()
+	if second.Outcome != systemchanges.Completed || second.RestoredStatus != systemchanges.NotInstalled || !host.removalFinalized {
+		t.Fatalf("leftover recovery runner self-clean = %+v; host=%+v", second, host)
+	}
+}
+
+func TestUbuntuAdapterKeepsOrphanRunnerWhileOwnedResourcesRemain(t *testing.T) {
+	root := t.TempDir()
+	prepareLock(t, root)
+	observed := systemchanges.Observation{Status: systemchanges.NotInstalled, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, FilesystemBytes: 1 << 30, AvailableBytes: 1 << 30, WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}
+	host := &controlledUbuntuHost{root: root, removedResources: map[string]bool{}, removalTokenAvailable: true}
+	result := systemchanges.New(ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return observed, nil }, host)).Recover()
+	if result.Outcome != systemchanges.RecoveryRequiredOutcome || host.removalFinalized {
+		t.Fatalf("orphan runner with residual owned resources = %+v; host=%+v", result, host)
 	}
 }
 

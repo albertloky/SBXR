@@ -19,6 +19,19 @@ const (
 	StepCompleted                 DurableCheckpoint = "Step completed"
 	PrePublicationHealthPassed    DurableCheckpoint = "Pre-publication health passed"
 	OwnedExternalDeletionVerified DurableCheckpoint = "Owned external deletion verified"
+	IrreversibleRemovalStarted    DurableCheckpoint = "Irreversible removal started"
+	TokenRevocationVerified       DurableCheckpoint = "Cloudflare token revocation verified"
+	RemainingExternalDeleted      DurableCheckpoint = "Remaining owned external resources deleted"
+	LocalStateDeleted             DurableCheckpoint = "Local State deleted"
+	SecretsDeleted                DurableCheckpoint = "Infrastructure Secrets deleted"
+	CertificatesDeleted           DurableCheckpoint = "Certificates deleted"
+	ServicesDeleted               DurableCheckpoint = "Services deleted"
+	IdentitiesDeleted             DurableCheckpoint = "Identities deleted"
+	ListenersDeleted              DurableCheckpoint = "Listeners deleted"
+	FirewallRulesDeleted          DurableCheckpoint = "Firewall rules deleted"
+	ReleasesDeleted               DurableCheckpoint = "Releases deleted"
+	TransactionMaterialDeleted    DurableCheckpoint = "Transaction material deleted"
+	FinalRemovalAbsenceVerified   DurableCheckpoint = "Final removal absence verified"
 	StatePublicationStarted       DurableCheckpoint = "Desired State publication started"
 	StatePublished                DurableCheckpoint = "Desired State published"
 	PostPublicationHealthPassed   DurableCheckpoint = "Post-publication health passed"
@@ -120,10 +133,42 @@ const (
 	StepEffectPresent StepEffect = "Present"
 )
 
+type IrreversibleRemovalPhase string
+
+const (
+	RemainingExternalResourcesPhase IrreversibleRemovalPhase = "Remaining owned external resources"
+	LocalStatePhase                 IrreversibleRemovalPhase = "local State"
+	SecretsPhase                    IrreversibleRemovalPhase = "Infrastructure Secrets"
+	CertificatesPhase               IrreversibleRemovalPhase = "certificates"
+	ServicesPhase                   IrreversibleRemovalPhase = "services"
+	IdentitiesPhase                 IrreversibleRemovalPhase = "identities"
+	ListenersPhase                  IrreversibleRemovalPhase = "listeners"
+	FirewallRulesPhase              IrreversibleRemovalPhase = "firewall rules"
+	ReleasesPhase                   IrreversibleRemovalPhase = "releases"
+	TransactionMaterialPhase        IrreversibleRemovalPhase = "transaction material"
+)
+
+var irreversibleRemovalPhases = []struct {
+	phase      IrreversibleRemovalPhase
+	checkpoint DurableCheckpoint
+}{
+	{RemainingExternalResourcesPhase, RemainingExternalDeleted},
+	{LocalStatePhase, LocalStateDeleted},
+	{SecretsPhase, SecretsDeleted},
+	{CertificatesPhase, CertificatesDeleted},
+	{ServicesPhase, ServicesDeleted},
+	{IdentitiesPhase, IdentitiesDeleted},
+	{ListenersPhase, ListenersDeleted},
+	{FirewallRulesPhase, FirewallRulesDeleted},
+	{ReleasesPhase, ReleasesDeleted},
+	{TransactionMaterialPhase, TransactionMaterialDeleted},
+}
+
 // RecoveryTransaction is the secret-safe durable authority for one interrupted
 // ordinary Change Set. Snapshot contents remain inside the Adapter.
 type RecoveryTransaction struct {
 	ChangeSet        string
+	Mutation         MutationClass
 	Starting         StateLineage
 	StartingRelease  ReleaseBinding
 	Candidate        StateLineage
@@ -195,6 +240,17 @@ type RecoveryAdapter interface {
 	VerifyStartingServices(ExecutionLease, RecoveryTransaction, time.Duration) error
 }
 
+type IrreversibleRemovalAdapter interface {
+	VerifyCloudflareTokenRevoked(ExecutionLease, RecoveryTransaction, time.Duration) (bool, error)
+	DeleteIrreversibleRemovalPhase(ExecutionLease, RecoveryTransaction, IrreversibleRemovalPhase, time.Duration) (StepEvidence, error)
+	VerifyFinalRemovalAbsence(ExecutionLease, RecoveryTransaction, time.Duration) (Observation, error)
+	FinalizeRemoval(ExecutionLease, RecoveryTransaction, time.Duration) error
+}
+
+type OrphanedRemovalAdapter interface {
+	FinalizeOrphanedRemoval(ExecutionLease, Observation, time.Duration) error
+}
+
 type StateRecovery interface {
 	SystemChangesRestoreDurable(lease any, binding []byte, prior, candidate io.Reader) ([]byte, error)
 }
@@ -257,6 +313,12 @@ func (i Interface) Recover() ApplyResult {
 		if observeErr != nil || !validObservation(observed) || observed.Status != Managed && observed.Status != NotInstalled {
 			return finish(lock, recoveryRequired(ChangeSetSpec{OutcomeOwner: StateModule}, "SYSTEM-CHANGES-RECOVERY-LINEAGE", Prepared))
 		}
+		if finalizer, ok := i.adapter.(OrphanedRemovalAdapter); ok && observed.Status == NotInstalled {
+			if err := finalizer.FinalizeOrphanedRemoval(lease, observed, time.Minute); err != nil {
+				return finish(lock, forwardRemovalRequired(ChangeSetSpec{OutcomeOwner: StateModule}, "SYSTEM-CHANGES-REMOVAL-RUNNER", FinalRemovalAbsenceVerified))
+			}
+			return finish(lock, ApplyResult{Outcome: Completed, RestoredStatus: NotInstalled, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence()})
+		}
 		result := refused("SYSTEM-CHANGES-RECOVERY-NOT-NEEDED", "No unfinished Change Set requires restart recovery", "no durable transaction", "the last proven Desired State", "ordinary work is never invented or resumed", "Start only services proven against the current Desired State.", true)
 		result.Finding.Owner = StateModule
 		return finish(lock, result)
@@ -265,7 +327,14 @@ func (i Interface) Recover() ApplyResult {
 		return finish(lock, recoveryRequired(ChangeSetSpec{OutcomeOwner: StateModule}, "SYSTEM-CHANGES-RECOVERY-LINEAGE", Prepared))
 	}
 	recovery.Steps = append([]Step(nil), recovery.Steps...)
-	spec := ChangeSetSpec{Identity: recovery.ChangeSet, StartingState: recovery.Starting, OutcomeOwner: recovery.OutcomeOwner, Steps: recovery.Steps, Timeouts: recovery.Timeouts}
+	spec := ChangeSetSpec{Identity: recovery.ChangeSet, Mutation: recovery.Mutation, StartingState: recovery.Starting, OutcomeOwner: recovery.OutcomeOwner, Steps: recovery.Steps, Timeouts: recovery.Timeouts}
+	if recovery.Mutation == CompleteRemovalMutation && irreversibleRemovalCheckpoint(recovery.LastCheckpoint) {
+		removalAdapter, ok := i.adapter.(IrreversibleRemovalAdapter)
+		if !ok {
+			return finish(lock, forwardRemovalRequired(spec, "SYSTEM-CHANGES-REMOVAL-ADAPTER", recovery.LastCheckpoint))
+		}
+		return finish(lock, continueIrreversibleRemoval(lease, adapter, removalAdapter, recovery, spec))
+	}
 	if err := recoveryAdapter.AllowProvenServices(lease, recovery, recovery.Timeouts.Check); err != nil {
 		return finish(lock, recoveryRequired(spec, "SYSTEM-CHANGES-SERVICE-HOLDBACK", recovery.LastCheckpoint))
 	}
@@ -296,7 +365,7 @@ func (i Interface) Recover() ApplyResult {
 }
 
 func validRecoveryTransaction(recovery RecoveryTransaction) bool {
-	if !safeIdentity(recovery.ChangeSet) || !validModule(recovery.OutcomeOwner) || len(recovery.Steps) == 0 || recovery.AttemptedSteps < 0 || recovery.AttemptedSteps > len(recovery.Steps) || recovery.Timeouts.Step <= 0 || recovery.Timeouts.Step > maxStepTimeout || recovery.Timeouts.Check <= 0 || recovery.Timeouts.Check > maxCheckTimeout {
+	if !safeIdentity(recovery.ChangeSet) || !validMutation(recovery.Mutation) || !validModule(recovery.OutcomeOwner) || len(recovery.Steps) == 0 || recovery.AttemptedSteps < 0 || recovery.AttemptedSteps > len(recovery.Steps) || recovery.Timeouts.Step <= 0 || recovery.Timeouts.Step > maxStepTimeout || recovery.Timeouts.Check <= 0 || recovery.Timeouts.Check > maxCheckTimeout {
 		return false
 	}
 	if (recovery.Starting.Status == Managed || recovery.Starting.Status == RecoveryRequired) && (recovery.Starting.Revision == 0 || !validSHA256(recovery.Starting.SHA256) || recovery.StartingRelease == (ReleaseBinding{})) || recovery.Starting.Status == NotInstalled && (recovery.Starting.Revision != 0 || recovery.Starting.SHA256 != "" || recovery.StartingRelease != (ReleaseBinding{})) || recovery.Starting.Status != Managed && recovery.Starting.Status != RecoveryRequired && recovery.Starting.Status != NotInstalled {
@@ -309,7 +378,7 @@ func validRecoveryTransaction(recovery RecoveryTransaction) bool {
 		}
 		removal = removal || step.removal != (RemovalChange{})
 	}
-	if removal && !validRemovalSteps(recovery.Steps) {
+	if recovery.Mutation == CompleteRemovalMutation != removal || removal && !validRemovalSteps(recovery.Steps) {
 		return false
 	}
 	switch recovery.LastCheckpoint {
@@ -317,6 +386,8 @@ func validRecoveryTransaction(recovery RecoveryTransaction) bool {
 		return recovery.AttemptedSteps == 0
 	case StepStarted, StepCompleted, PrePublicationHealthPassed, OwnedExternalDeletionVerified, StatePublicationStarted, StatePublished, PostPublicationHealthPassed:
 		return recovery.AttemptedSteps > 0 && recovery.RollbackStep == 0
+	case IrreversibleRemovalStarted, TokenRevocationVerified, RemainingExternalDeleted, LocalStateDeleted, SecretsDeleted, CertificatesDeleted, ServicesDeleted, IdentitiesDeleted, ListenersDeleted, FirewallRulesDeleted, ReleasesDeleted, TransactionMaterialDeleted, FinalRemovalAbsenceVerified:
+		return recovery.Mutation == CompleteRemovalMutation && recovery.AttemptedSteps == len(recovery.Steps) && recovery.RollbackStep == 0
 	case RollbackStarted:
 		return recovery.RollbackStep == recovery.AttemptedSteps
 	case RollbackStepStarted:
@@ -329,6 +400,60 @@ func validRecoveryTransaction(recovery RecoveryTransaction) bool {
 		return recovery.RollbackStep == 0 && recovery.Candidate.Status == Managed && recovery.Candidate.Revision == recovery.Starting.Revision+1 && validSHA256(recovery.Candidate.SHA256) && recovery.CandidateRelease != (ReleaseBinding{})
 	}
 	return false
+}
+
+func irreversibleRemovalCheckpoint(checkpoint DurableCheckpoint) bool {
+	switch checkpoint {
+	case IrreversibleRemovalStarted, TokenRevocationVerified, RemainingExternalDeleted, LocalStateDeleted, SecretsDeleted, CertificatesDeleted, ServicesDeleted, IdentitiesDeleted, ListenersDeleted, FirewallRulesDeleted, ReleasesDeleted, TransactionMaterialDeleted, FinalRemovalAbsenceVerified:
+		return true
+	}
+	return false
+}
+
+func continueIrreversibleRemoval(lease ExecutionLease, adapter TransactionAdapter, removal IrreversibleRemovalAdapter, recovery RecoveryTransaction, spec ChangeSetSpec) ApplyResult {
+	record := func(checkpoint DurableCheckpoint, evidence *StepEvidence) bool {
+		return adapter.Record(lease, CheckpointRecord{ChangeSet: recovery.ChangeSet, Checkpoint: checkpoint, Evidence: evidence}) == nil
+	}
+	if recovery.LastCheckpoint == IrreversibleRemovalStarted {
+		revoked, err := removal.VerifyCloudflareTokenRevoked(lease, recovery, recovery.Timeouts.Check)
+		if err != nil {
+			return forwardRemovalRequired(spec, "SYSTEM-CHANGES-TOKEN-REVOCATION", IrreversibleRemovalStarted)
+		}
+		if !revoked {
+			return ApplyResult{Outcome: AwaitingTokenRevocation, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(), UnremovableTraces: []string{"Certificate Transparency entries cannot be erased", "DNS caches cannot be erased"}}
+		}
+		if !record(TokenRevocationVerified, nil) {
+			return forwardRemovalRequired(spec, "SYSTEM-CHANGES-JOURNAL", IrreversibleRemovalStarted)
+		}
+		recovery.LastCheckpoint = TokenRevocationVerified
+	}
+	start := 0
+	for index, item := range irreversibleRemovalPhases {
+		if recovery.LastCheckpoint == item.checkpoint {
+			start = index + 1
+		}
+	}
+	if recovery.LastCheckpoint != FinalRemovalAbsenceVerified {
+		for _, item := range irreversibleRemovalPhases[start:] {
+			evidence, err := removal.DeleteIrreversibleRemovalPhase(lease, recovery, item.phase, recovery.Timeouts.Step)
+			if err != nil || !safeIdentity(evidence.Code) || !validSHA256(evidence.SHA256) || !record(item.checkpoint, &evidence) {
+				return forwardRemovalRequired(spec, "SYSTEM-CHANGES-REMOVAL-FORWARD", item.checkpoint)
+			}
+			recovery.LastCheckpoint = item.checkpoint
+		}
+		observed, err := removal.VerifyFinalRemovalAbsence(lease, recovery, recovery.Timeouts.Check)
+		if err != nil || !validObservation(observed) || observed.Status != NotInstalled || !record(FinalRemovalAbsenceVerified, nil) {
+			return forwardRemovalRequired(spec, "SYSTEM-CHANGES-REMOVAL-ABSENCE", FinalRemovalAbsenceVerified)
+		}
+	}
+	if err := removal.FinalizeRemoval(lease, recovery, recovery.Timeouts.Step); err != nil {
+		return forwardRemovalRequired(spec, "SYSTEM-CHANGES-REMOVAL-FINALIZE", FinalRemovalAbsenceVerified)
+	}
+	return ApplyResult{Outcome: Completed, RestoredStatus: NotInstalled, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(), UnremovableTraces: []string{"Certificate Transparency entries cannot be erased", "DNS caches cannot be erased"}}
+}
+
+func forwardRemovalRequired(spec ChangeSetSpec, cause string, checkpoint DurableCheckpoint) ApplyResult {
+	return ApplyResult{Outcome: RecoveryRequiredOutcome, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(), Finding: &Finding{Code: "SYSTEM-CHANGES-FORWARD-REMOVAL", Owner: spec.OutcomeOwner, Problem: "Irreversible Complete removal must continue forward", Found: string(checkpoint), Required: "retry the exact next durable deletion from protected evidence", WhyStopped: cause, NextAction: "Keep services stopped and retry the private recovery runner."}}
 }
 
 func rollbackCheckpoint(checkpoint DurableCheckpoint) bool {
@@ -460,7 +585,10 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 		if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: OwnedExternalDeletionVerified}); err != nil {
 			return finish(lock, rollbackChange(lease, adapter, transaction, spec, len(spec.Steps), "SYSTEM-CHANGES-JOURNAL", PrePublicationHealthPassed))
 		}
-		return finish(lock, ApplyResult{Outcome: ReadyForIrreversibleRemoval, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(), UnremovableTraces: []string{"Certificate Transparency entries cannot be erased", "DNS caches cannot be erased"}}, spec.OutcomeOwner)
+		if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: IrreversibleRemovalStarted}); err != nil {
+			return finish(lock, rollbackChange(lease, adapter, transaction, spec, len(spec.Steps), "SYSTEM-CHANGES-JOURNAL", OwnedExternalDeletionVerified))
+		}
+		return finish(lock, ApplyResult{Outcome: AwaitingTokenRevocation, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(), UnremovableTraces: []string{"Certificate Transparency entries cannot be erased", "DNS caches cannot be erased"}}, spec.OutcomeOwner)
 	}
 	if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: StatePublicationStarted}); err != nil {
 		return finish(lock, rollbackChange(lease, adapter, transaction, spec, len(spec.Steps), "SYSTEM-CHANGES-JOURNAL", PrePublicationHealthPassed))

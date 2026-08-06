@@ -25,8 +25,10 @@
 // Complete removal additionally requires both exact Owner confirmations. Its
 // reversible prefix removes only typed owned public exposure and immutable-ID
 // Cloudflare resources while the token remains available, then durably stops at
-// owned external deletion proof. Any failure, cancellation, or restart before
-// SC-09 refuses lineage-less Recovery Required before live work and otherwise
-// reverses to Managed only when exact transaction evidence proves that earlier
-// baseline.
+// owned external deletion proof. It then durably crosses its irreversible
+// checkpoint before asking for scoped-token revocation. Recovery verifies that
+// revocation before deleting the local token copy, refuses rollback and restore,
+// and continues only through the fixed deletion order until exact Not installed
+// and final recovery-material absence are proven. Before that checkpoint,
+// failure and restart still reverse to an exactly proven earlier baseline.
 package systemchanges
