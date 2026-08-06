@@ -2,6 +2,8 @@ package state
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -121,6 +123,54 @@ type systemChangesRollbackAgreement struct {
 	Revision uint64             `json:"revision"`
 	SHA256   string             `json:"sha256"`
 	Release  ReleaseIdentity    `json:"release_identity"`
+}
+
+const maxRecoveryStateArtifactBytes = 8 << 20
+
+// SystemChangesRestoreDurable is State's restart-only recovery seam. System
+// Changes transports the protected bytes, while State alone validates and
+// restores Desired State through its storage boundary.
+func (i Interface) SystemChangesRestoreDurable(lease any, bindingJSON []byte, priorSource, candidateSource io.Reader) ([]byte, error) {
+	if !validSystemChangesRecoveryLease(lease) || i.implementation == nil || i.implementation.storage == nil || priorSource == nil || candidateSource == nil {
+		return nil, finding("STATE-RECOVERY-LEASE", "restart Desired State rollback", "no authorized State recovery handoff", "the one active System Changes recovery lease", "Desired State cannot be restored outside restart recovery", "keep affected services stopped")
+	}
+	var binding systemChangesTransactionBinding
+	if json.Unmarshal(bindingJSON, &binding) != nil || binding.CandidateRevision != binding.StartingRevision+1 || !validSHA256(binding.CandidateSHA256) || !validSHA256(binding.PreparedStateSHA256) || !validReleaseIdentity(binding.CandidateRelease) {
+		return nil, finding("STATE-RECOVERY-BINDING", "restart Desired State rollback", "an invalid durable State binding", "the exact transaction-bound starting and candidate lineage", "State never guesses recovery lineage", "use the Recovery Required flow")
+	}
+	prior, err := readRecoveryStateArtifact(priorSource)
+	if err != nil {
+		return nil, err
+	}
+	candidate, err := readRecoveryStateArtifact(candidateSource)
+	if err != nil {
+		return nil, err
+	}
+	candidateDigest := sha256.Sum256(candidate)
+	candidateDocument, problem := decode(candidate)
+	if problem != nil || hex.EncodeToString(candidateDigest[:]) != binding.PreparedStateSHA256 || candidateDocument.Revision != binding.CandidateRevision || candidateDocument.Checksum != binding.CandidateSHA256 || candidateDocument.ReleaseIdentity != binding.CandidateRelease || candidateDocument.LastCompletedChangeSet != ChangeSetIdentity(binding.ChangeSet) {
+		return nil, finding("STATE-RECOVERY-CANDIDATE", "restart Desired State rollback", "candidate State disagrees with its durable binding", "the exact protected candidate State", "State cannot restore across ambiguous lineage", "use the Recovery Required flow")
+	}
+	if len(prior) == 0 {
+		if binding.StartingRevision != 0 || binding.StartingSHA256 != "" || binding.StartingRelease != (ReleaseIdentity{}) {
+			return nil, finding("STATE-RECOVERY-PRIOR", "restart Desired State rollback", "the absent prior State disagrees with its durable binding", "one proven Not installed baseline", "State cannot invent a prior document", "use the Recovery Required flow")
+		}
+	} else {
+		priorDocument, problem := decode(prior)
+		if problem != nil || priorDocument.Revision != binding.StartingRevision || priorDocument.Checksum != binding.StartingSHA256 || priorDocument.ReleaseIdentity != binding.StartingRelease {
+			return nil, finding("STATE-RECOVERY-PRIOR", "restart Desired State rollback", "prior State disagrees with its durable binding", "the exact protected prior State", "State cannot restore across ambiguous lineage", "use the Recovery Required flow")
+		}
+	}
+	transaction := &TransactionMaterial{storage: i.implementation.storage, priorState: prior, preparedState: candidate, startingRelease: binding.StartingRelease}
+	return transaction.SystemChangesRestore(lease)
+}
+
+func readRecoveryStateArtifact(source io.Reader) ([]byte, error) {
+	content, err := io.ReadAll(io.LimitReader(source, maxRecoveryStateArtifactBytes+1))
+	if err != nil || len(content) > maxRecoveryStateArtifactBytes {
+		return nil, finding("STATE-RECOVERY-SIZE", "restart Desired State rollback", "a State artifact is unreadable or too large", "one bounded protected State document", "unbounded or partial recovery input is unsafe", "use the Recovery Required flow")
+	}
+	return content, nil
 }
 
 func (transaction *TransactionMaterial) SystemChangesRestore(lease any) ([]byte, error) {
@@ -404,4 +454,10 @@ func validSystemChangesLease(value any) bool {
 	typeOf := reflect.TypeOf(value)
 	lease, ok := value.(interface{ Authorized() bool })
 	return ok && typeOf != nil && typeOf.PkgPath() == "github.com/albertloky/SBXR/internal/systemchanges" && typeOf.Name() == "ExecutionLease" && lease.Authorized()
+}
+
+func validSystemChangesRecoveryLease(value any) bool {
+	typeOf := reflect.TypeOf(value)
+	lease, ok := value.(interface{ RecoveryAuthorized() bool })
+	return ok && typeOf != nil && typeOf.PkgPath() == "github.com/albertloky/SBXR/internal/systemchanges" && typeOf.Name() == "ExecutionLease" && lease.RecoveryAuthorized()
 }

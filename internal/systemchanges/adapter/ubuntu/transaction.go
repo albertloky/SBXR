@@ -27,6 +27,12 @@ type Host interface {
 	CaptureRollback(systemchanges.Step, func(source io.Reader) error) error
 	Execute(systemchanges.Step, time.Duration, *systemchanges.Cancellation) (systemchanges.StepEvidence, error)
 	Reverse(systemchanges.Step, io.Reader, time.Duration) (systemchanges.StepEvidence, error)
+	// HoldServices is the systemd-ordering seam before public services and timers.
+	HoldServices() error
+	// AllowUnrelated may release only services proven against the starting State.
+	AllowUnrelated(systemchanges.RecoveryTransaction, time.Duration) error
+	InspectStep(systemchanges.Step, io.Reader, time.Duration) (systemchanges.StepEffect, error)
+	VerifyStartingServices(systemchanges.RecoveryTransaction, time.Duration) error
 	Check(systemchanges.Check, systemchanges.GatePhase, time.Duration) (systemchanges.HealthStatus, error)
 	VerifyAgreement(systemchanges.Agreement, time.Duration) error
 	VerifyRollback(systemchanges.RollbackAgreement, time.Duration) error
@@ -44,18 +50,21 @@ type journalStep struct {
 	Forward      systemchanges.OperationKind        `json:"forward"`
 	Rollback     systemchanges.OperationKind        `json:"rollback"`
 	Cancellation systemchanges.CancellationContract `json:"cancellation"`
+	Inspection   systemchanges.InspectionContract   `json:"inspection"`
 }
 
 type journalEntry struct {
-	Checkpoint systemchanges.DurableCheckpoint        `json:"checkpoint"`
-	Step       int                                    `json:"step,omitempty"`
-	ChangeSet  string                                 `json:"change_set,omitempty"`
-	Starting   systemchanges.StateLineage             `json:"starting_state,omitempty"`
-	PlanSHA256 string                                 `json:"plan_sha256,omitempty"`
-	State      *systemchanges.StateTransactionBinding `json:"state,omitempty"`
-	Steps      []journalStep                          `json:"steps,omitempty"`
-	Checks     []systemchanges.Check                  `json:"health_gates,omitempty"`
-	Evidence   *systemchanges.StepEvidence            `json:"evidence,omitempty"`
+	Checkpoint   systemchanges.DurableCheckpoint        `json:"checkpoint"`
+	Step         int                                    `json:"step,omitempty"`
+	ChangeSet    string                                 `json:"change_set,omitempty"`
+	Starting     systemchanges.StateLineage             `json:"starting_state,omitempty"`
+	OutcomeOwner systemchanges.Module                   `json:"outcome_owner,omitempty"`
+	PlanSHA256   string                                 `json:"plan_sha256,omitempty"`
+	State        *systemchanges.StateTransactionBinding `json:"state,omitempty"`
+	Steps        []journalStep                          `json:"steps,omitempty"`
+	Checks       []systemchanges.Check                  `json:"health_gates,omitempty"`
+	Timeouts     systemchanges.Timeouts                 `json:"timeouts,omitempty"`
+	Evidence     *systemchanges.StepEvidence            `json:"evidence,omitempty"`
 }
 
 func (a Adapter) Prepare(lease systemchanges.ExecutionLease, preparation systemchanges.Preparation) error {
@@ -127,9 +136,9 @@ func (a Adapter) Prepare(lease systemchanges.ExecutionLease, preparation systemc
 	}
 	steps := make([]journalStep, len(preparation.Steps))
 	for index, step := range preparation.Steps {
-		steps[index] = journalStep{Owner: step.Owner(), Forward: step.Forward(), Rollback: step.Rollback(), Cancellation: step.CancellationContract()}
+		steps[index] = journalStep{Owner: step.Owner(), Forward: step.Forward(), Rollback: step.Rollback(), Cancellation: step.CancellationContract(), Inspection: step.InspectionContract()}
 	}
-	entry := journalEntry{Checkpoint: systemchanges.Prepared, ChangeSet: preparation.ChangeSet, Starting: preparation.Starting, PlanSHA256: preparation.PlanSHA256, State: &preparation.State, Steps: steps, Checks: preparation.Checks}
+	entry := journalEntry{Checkpoint: systemchanges.Prepared, ChangeSet: preparation.ChangeSet, Starting: preparation.Starting, OutcomeOwner: preparation.OutcomeOwner, PlanSHA256: preparation.PlanSHA256, State: &preparation.State, Steps: steps, Checks: preparation.Checks, Timeouts: preparation.Timeouts}
 	if _, err := writeProtected(root, path.Join(temporary, "journal.jsonl"), strings.NewReader(""), a.uid); err != nil {
 		return err
 	}
@@ -203,6 +212,180 @@ func (a Adapter) Reverse(lease systemchanges.ExecutionLease, changeSet string, n
 		return systemchanges.StepEvidence{}, errors.New("rollback snapshot checksum mismatch")
 	}
 	return a.host.Reverse(step, bytes.NewReader(content), timeout)
+}
+
+func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges.RecoveryTransaction, error) {
+	if !lease.Authorized() || a.host == nil || a.source == nil {
+		return systemchanges.RecoveryTransaction{}, errors.New("typed Ubuntu recovery host unavailable")
+	}
+	root, err := os.OpenRoot(a.root)
+	if err != nil {
+		return systemchanges.RecoveryTransaction{}, err
+	}
+	defer root.Close()
+	entries, err := fs.ReadDir(root.FS(), transactionDirectory)
+	if errors.Is(err, fs.ErrNotExist) || err == nil && len(entries) == 0 {
+		return systemchanges.RecoveryTransaction{}, systemchanges.ErrNoRecoveryTransaction
+	}
+	if err != nil || len(entries) != 1 || !entries[0].IsDir() || !safeName(entries[0].Name()) {
+		return systemchanges.RecoveryTransaction{}, errors.New("one unfinished transaction was not proven")
+	}
+	changeSet := entries[0].Name()
+	directory := path.Join(transactionDirectory, changeSet)
+	manifest, err := verifyTransactionManifest(root, directory, a.uid)
+	if err != nil {
+		return systemchanges.RecoveryTransaction{}, err
+	}
+	journal, err := readJournal(root, path.Join(directory, "journal.jsonl"))
+	if err != nil || !validJournal(journal) {
+		return systemchanges.RecoveryTransaction{}, errors.New("recovery journal is invalid")
+	}
+	prepared, last := journal[0], journal[len(journal)-1]
+	if prepared.State == nil || prepared.ChangeSet != changeSet || !validRecoveryBinding(prepared, manifest) {
+		return systemchanges.RecoveryTransaction{}, errors.New("recovery transaction lineage is invalid")
+	}
+	steps := make([]systemchanges.Step, len(prepared.Steps))
+	for index, persisted := range prepared.Steps {
+		step, err := systemchanges.NewStep(persisted.Owner, persisted.Forward, persisted.Rollback)
+		if err != nil || persisted.Cancellation != systemchanges.SafeCheckpointCancellation || persisted.Inspection != systemchanges.InspectBeforeIdempotentReverse {
+			return systemchanges.RecoveryTransaction{}, errors.New("recovery step contract is invalid")
+		}
+		steps[index] = step
+	}
+	observed, err := a.source()
+	startingState := observed.StateRevision == prepared.State.StartingRevision && observed.StateSHA256 == prepared.State.StartingSHA256
+	candidateState := observed.StateRevision == prepared.State.CandidateRevision && observed.StateSHA256 == prepared.State.CandidateSHA256
+	if err != nil || observed.Status != systemchanges.ChangeInProgress || observed.CurrentChangeSet != changeSet || !startingState && !candidateState {
+		return systemchanges.RecoveryTransaction{}, errors.New("current State does not match the recovery transaction")
+	}
+	return systemchanges.RecoveryTransaction{ChangeSet: changeSet, Starting: prepared.Starting, StartingRelease: prepared.State.StartingRelease, OutcomeOwner: prepared.OutcomeOwner, Steps: steps, AttemptedSteps: highestStartedStep(journal), LastCheckpoint: last.Checkpoint, Timeouts: prepared.Timeouts}, nil
+}
+
+func (a Adapter) HoldServices(lease systemchanges.ExecutionLease) error {
+	if !lease.Authorized() || a.host == nil {
+		return errors.New("typed Ubuntu recovery host unavailable")
+	}
+	return a.host.HoldServices()
+}
+
+func (a Adapter) AllowUnrelated(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction, timeout time.Duration) error {
+	if !lease.Authorized() || a.host == nil {
+		return errors.New("typed Ubuntu recovery host unavailable")
+	}
+	return a.host.AllowUnrelated(recovery, timeout)
+}
+
+func (a Adapter) InspectStep(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction, number int, step systemchanges.Step, timeout time.Duration) (systemchanges.StepEffect, error) {
+	content, err := a.recoveryArtifact(lease, recovery.ChangeSet, fmt.Sprintf("snapshot/step-%03d.rollback", number))
+	if err != nil {
+		return "", err
+	}
+	return a.host.InspectStep(step, bytes.NewReader(content), timeout)
+}
+
+func (a Adapter) RestoreRecoveryState(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction) (systemchanges.RollbackAgreement, error) {
+	if !lease.Authorized() || a.state == nil {
+		return systemchanges.RollbackAgreement{}, errors.New("State recovery boundary unavailable")
+	}
+	candidate, err := a.recoveryArtifact(lease, recovery.ChangeSet, "prepared/state.json")
+	if err != nil {
+		return systemchanges.RollbackAgreement{}, err
+	}
+	var prior []byte
+	if recovery.Starting.Status == systemchanges.Managed {
+		prior, err = a.recoveryArtifact(lease, recovery.ChangeSet, "snapshot/prior-state.json")
+		if err != nil {
+			return systemchanges.RollbackAgreement{}, err
+		}
+	}
+	binding, err := a.recoveryBinding(lease, recovery.ChangeSet)
+	if err != nil {
+		return systemchanges.RollbackAgreement{}, err
+	}
+	bindingJSON, err := json.Marshal(binding)
+	if err != nil {
+		return systemchanges.RollbackAgreement{}, err
+	}
+	agreementJSON, err := a.state.SystemChangesRestoreDurable(lease, bindingJSON, bytes.NewReader(prior), bytes.NewReader(candidate))
+	var agreement systemchanges.RollbackAgreement
+	if err != nil || json.Unmarshal(agreementJSON, &agreement) != nil {
+		return systemchanges.RollbackAgreement{}, errors.New("State recovery agreement unavailable")
+	}
+	return agreement, nil
+}
+
+func (a Adapter) VerifyStartingServices(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction, timeout time.Duration) error {
+	if !lease.Authorized() || a.host == nil {
+		return errors.New("typed Ubuntu recovery host unavailable")
+	}
+	return a.host.VerifyStartingServices(recovery, timeout)
+}
+
+func (a Adapter) recoveryArtifact(lease systemchanges.ExecutionLease, changeSet, name string) ([]byte, error) {
+	if !lease.Authorized() || !safeName(changeSet) || !safeArtifact(name) {
+		return nil, errors.New("invalid recovery artifact request")
+	}
+	root, err := os.OpenRoot(a.root)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	directory := path.Join(transactionDirectory, changeSet)
+	manifest, err := verifyTransactionManifest(root, directory, a.uid)
+	if err != nil || manifest.Files[name] == "" {
+		return nil, errors.New("recovery artifact is not transaction-bound")
+	}
+	content, err := root.ReadFile(path.Join(directory, name))
+	if err != nil {
+		return nil, err
+	}
+	digest := sha256.Sum256(content)
+	if hex.EncodeToString(digest[:]) != manifest.Files[name] {
+		return nil, errors.New("recovery artifact checksum mismatch")
+	}
+	return content, nil
+}
+
+func (a Adapter) recoveryBinding(lease systemchanges.ExecutionLease, changeSet string) (systemchanges.StateTransactionBinding, error) {
+	if !lease.Authorized() || !safeName(changeSet) {
+		return systemchanges.StateTransactionBinding{}, errors.New("invalid recovery binding request")
+	}
+	root, err := os.OpenRoot(a.root)
+	if err != nil {
+		return systemchanges.StateTransactionBinding{}, err
+	}
+	defer root.Close()
+	journal, err := readJournal(root, path.Join(transactionDirectory, changeSet, "journal.jsonl"))
+	if err != nil || !validJournal(journal) || journal[0].State == nil {
+		return systemchanges.StateTransactionBinding{}, errors.New("recovery State binding is invalid")
+	}
+	return *journal[0].State, nil
+}
+
+func recoveryRelease(binding systemchanges.StateTransactionBinding) systemchanges.ReleaseBinding {
+	if binding.StartingRelease != (systemchanges.ReleaseBinding{}) {
+		return binding.StartingRelease
+	}
+	return binding.CandidateRelease
+}
+
+func validRecoveryBinding(prepared journalEntry, manifest snapshotManifest) bool {
+	binding := *prepared.State
+	if binding.ChangeSet != prepared.ChangeSet || binding.StartingRevision != prepared.Starting.Revision || binding.StartingSHA256 != prepared.Starting.SHA256 || binding.CandidateRevision != binding.StartingRevision+1 || binding.CandidateRelease == (systemchanges.ReleaseBinding{}) || !validDigest(prepared.PlanSHA256) || !validDigest(binding.CandidateSHA256) || !validDigest(binding.PreparedStateSHA256) || !validDigest(binding.PreparedManifestSHA256) || manifest.Release != recoveryRelease(binding) || manifest.Files["prepared/state.json"] != binding.PreparedStateSHA256 || manifest.Files["prepared/manifests.json"] != binding.PreparedManifestSHA256 {
+		return false
+	}
+	if prepared.Starting.Status == systemchanges.Managed {
+		return binding.StartingRelease != (systemchanges.ReleaseBinding{}) && manifest.Files["snapshot/prior-state.json"] != ""
+	}
+	return prepared.Starting.Status == systemchanges.NotInstalled && binding.StartingRevision == 0 && binding.StartingSHA256 == "" && binding.StartingRelease == (systemchanges.ReleaseBinding{}) && manifest.Files["snapshot/prior-state.json"] == ""
+}
+
+func validDigest(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 func (a Adapter) Check(lease systemchanges.ExecutionLease, check systemchanges.Check, phase systemchanges.GatePhase, timeout time.Duration) (systemchanges.HealthStatus, error) {
@@ -357,9 +540,18 @@ func readJournal(root *os.Root, name string) ([]journalEntry, error) {
 	return entries, nil
 }
 
+func validJournal(entries []journalEntry) bool {
+	for index, entry := range entries {
+		if !validNextCheckpoint(entries[:index], entry) {
+			return false
+		}
+	}
+	return len(entries) > 0
+}
+
 func validNextCheckpoint(entries []journalEntry, next journalEntry) bool {
 	if len(entries) == 0 {
-		return next.Checkpoint == systemchanges.Prepared && next.ChangeSet != "" && next.PlanSHA256 != "" && next.State != nil && len(next.Steps) > 0 && len(next.Checks) > 0
+		return next.Checkpoint == systemchanges.Prepared && next.ChangeSet != "" && next.OutcomeOwner != "" && next.PlanSHA256 != "" && next.State != nil && len(next.Steps) > 0 && len(next.Checks) > 0 && next.Timeouts.Step > 0 && next.Timeouts.Check > 0
 	}
 	if entries[0].Checkpoint != systemchanges.Prepared || len(entries[0].Steps) == 0 {
 		return false
@@ -367,7 +559,7 @@ func validNextCheckpoint(entries []journalEntry, next journalEntry) bool {
 	last, total := entries[len(entries)-1], len(entries[0].Steps)
 	switch last.Checkpoint {
 	case systemchanges.Prepared:
-		return next.Checkpoint == systemchanges.StepStarted && next.Step == 1 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == 0
+		return next.Checkpoint == systemchanges.StepStarted && next.Step == 1 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0
 	case systemchanges.StepStarted:
 		return next.Checkpoint == systemchanges.StepCompleted && next.Step == last.Step && validEvidence(next.Evidence) || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
 	case systemchanges.StepCompleted:

@@ -17,6 +17,9 @@ This record covers the System Changes Module only. It is not Release Qualificati
 - `SYSTEM-CHANGES-ROLLBACK`: `go test ./internal/state -run 'Test(LiveStepFailureRestoresBaselineInSafeReverseOrder|ExplicitCancellationWaitsForSafeCheckpointThenRollsBack|PostPublicationFailureRestoresPriorDesiredState|PublicationFailureBeforeOrAfterReplacementRestoresPriorDesiredState|UnprovableReversePathEntersRecoveryRequired|FailedInstallationRestoresProvenNotInstalledBaseline)'`
 - `SYSTEM-CHANGES-SUPERVISION`: `go test ./internal/state -run 'TestUbuntuAdapter(KeepsSupervisedWorkAliveUntilExplicitCancellation|BoundsLiveStepAndRollsBackOnTimeout)'`
 - `SYSTEM-CHANGES-STATE-ROLLBACK`: `go test ./internal/state/adapter/filesystem -run TestAtomicRollbackRestoresManagedOrNotInstalledBaseline`
+- `SYSTEM-CHANGES-FORWARD-DEATH`: `go test ./internal/state -run TestFreshSystemChangesInstanceNeverResumesOrdinaryForwardWork`
+- `SYSTEM-CHANGES-RECOVERY-RUNNER`: `go test ./internal/state -run TestUbuntuRecoveryAcquiresProcessReleasedLockBeforeServicesAndRollsBack`
+- `SYSTEM-CHANGES-SERVICE-START`: `go test ./internal/state -run TestRecoveryKeepsAffectedServicesStoppedWithoutStartingStateAgreement`
 - `SYSTEM-CHANGES-REPOSITORY`: `go test ./...`
 
 ## SC-01 procedure
@@ -43,14 +46,22 @@ This record covers the System Changes Module only. It is not Release Qualificati
 4. Force publication failure both before and after atomic replacement. Confirm State resolves the exact prior or candidate bytes without guessing, then restores Managed revision `N` or the proven Not installed baseline before host rollback is verified.
 5. Bound a controlled native step and force its timeout. Confirm deterministic stop, safe reverse work, permanent cleanup after `Rolled back`, and only the outcomes nothing changed, `Rollback succeeded`, or `Recovery Required`. Inject secret-bearing errors and confirm results expose only stable code, owner, safe checkpoint, cause, and next action.
 
+## SC-04 procedure
+
+1. End the forward worker immediately after each durable ordinary checkpoint from `Prepared` through `Post-publication health passed`. Construct a fresh System Changes instance over the same durable Adapter and confirm it never executes another forward step.
+2. Start the private recovery runner before affected public services and timers. Confirm it acquires only the kernel-released global lock, rejects PID and wall-time guesses, verifies exactly one protected journal and Rollback Snapshot, and accepts current State only when its revision/checksum pair matches the transaction's starting or candidate lineage.
+3. Treat every `Step started` without durable completion as potentially applied. Confirm the Adapter runs the step's declared inspection contract, then its idempotent reverse from the checksum-bound snapshot before the prior baseline can be reported restored.
+4. Hold affected services before step inspection or reversal. Confirm unrelated services may remain available only through a proven starting-State agreement; affected services remain stopped when that agreement is Unknown or fails.
+5. Kill a controlled worker process after its durable forward checkpoint. Confirm the kernel releases the real lock, a new recovery runner restores the State and host baseline from protected files, writes the normal rollback checkpoints, and removes the resolved transaction material.
+
 ## Current status
 
 | Stage | Status | Evidence |
 |---|---|---|
-| Module Verification | Passed | SC-01 checks cover four-state inspection and safe admission. SC-02 checks cover durable success. `SYSTEM-CHANGES-ROLLBACK` covers SC-03 cancellation, deterministic failure, reverse order, publication ambiguity, Managed and Not installed restoration, typed outcomes, and secret-safe findings. |
+| Module Verification | Passed | SC-01 checks cover four-state inspection and safe admission. SC-02 checks cover durable success. `SYSTEM-CHANGES-ROLLBACK` covers SC-03 cancellation and failure. `SYSTEM-CHANGES-FORWARD-DEATH` and `SYSTEM-CHANGES-SERVICE-START` cover SC-04 restart rollback, no forward resumption, uncertain-step inspection, and service holdback. |
 | Seam Verification — controlled kernel lock | Passed | `SYSTEM-CHANGES-LOCK` uses a real kernel file lock, proves held-lock refusal, process-exit release, exact protected lock-file identity, and read-only host observation. |
-| Seam Verification — controlled transaction filesystem | Passed | SC-02 filesystem checks cover protected durable success. `SYSTEM-CHANGES-SUPERVISION` and `SYSTEM-CHANGES-STATE-ROLLBACK` use real timers and files to prove explicit cancellation, presentation-loss continuation, later-session inspection, timeout, reverse execution, atomic State restoration, `Rolled back`, and transaction-only cleanup. |
+| Seam Verification — controlled transaction filesystem | Passed | SC-02 filesystem checks cover protected durable success. SC-03 checks prove rollback and cleanup. `SYSTEM-CHANGES-RECOVERY-RUNNER` kills a real worker process, proves kernel-lock release, reopens the production Adapter's protected journal/snapshot, holds affected services before inspection, restores from durable artifacts, and cleans the resolved transaction. |
 | Seam Verification — production Ubuntu | Pending | Run the same Adapter checks on the assigned controlled Ubuntu environment; this local run does not claim Ubuntu/systemd acceptance. |
-| Integrated Verification | Pending — integrated release | SC-04 through SC-09, all-Module wiring, restart recovery, watchdog work, and Complete removal do not exist yet. Controlled SC-03 rollback does not satisfy integrated verification. |
+| Integrated Verification | Pending — integrated release | SC-05 through SC-09, all-Module wiring, real service units, watchdog work, and Complete removal do not exist yet. Controlled SC-04 recovery does not satisfy integrated verification. |
 | Codex Live Acceptance | Pending — approved Acceptance Run | No Acceptance VPS was used. |
 | Owner Acceptance | Pending — first v1 release | Albert's maintained workflow is outside this Module Verification. |

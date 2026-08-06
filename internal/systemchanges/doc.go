@@ -6,5 +6,8 @@
 // transaction-only snapshot and journal. Before Complete, deterministic
 // failure or explicit cancellation at a declared safe checkpoint restores the
 // exact prior baseline through ordered automatic rollback; presentation loss
-// is not cancellation. Restart resolution is owned by later slices.
+// is not cancellation. The private startup recovery path acquires the released
+// lock before affected services, validates one durable unfinished transaction,
+// inspects potentially applied steps, and rolls ordinary work back without
+// resuming it forward.
 package systemchanges

@@ -2,6 +2,7 @@ package systemchanges
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -70,14 +71,16 @@ type StateTransactionBinding struct {
 }
 
 type Preparation struct {
-	ChangeSet  string
-	Mutation   MutationClass
-	Starting   StateLineage
-	PlanSHA256 string
-	State      StateTransactionBinding
-	Steps      []Step
-	Checks     []Check
-	writeState func(func(name string, mode uint32, source io.Reader) error) error
+	ChangeSet    string
+	Mutation     MutationClass
+	OutcomeOwner Module
+	Starting     StateLineage
+	PlanSHA256   string
+	State        StateTransactionBinding
+	Steps        []Step
+	Checks       []Check
+	Timeouts     Timeouts
+	writeState   func(func(name string, mode uint32, source io.Reader) error) error
 }
 
 func (preparation Preparation) WriteStateArtifacts(write func(name string, mode uint32, source io.Reader) error) error {
@@ -108,16 +111,47 @@ type StepEvidence struct {
 	SHA256 string `json:"sha256"`
 }
 
+type StepEffect string
+
+const (
+	StepEffectAbsent  StepEffect = "Absent"
+	StepEffectPresent StepEffect = "Present"
+)
+
+// RecoveryTransaction is the secret-safe durable authority for one interrupted
+// ordinary Change Set. Snapshot contents remain inside the Adapter.
+type RecoveryTransaction struct {
+	ChangeSet       string
+	Starting        StateLineage
+	StartingRelease ReleaseBinding
+	OutcomeOwner    Module
+	Steps           []Step
+	AttemptedSteps  int
+	LastCheckpoint  DurableCheckpoint
+	Timeouts        Timeouts
+}
+
 type ExecutionLease struct{ authority *executionAuthority }
-type executionAuthority struct{ active atomic.Bool }
+type executionAuthority struct {
+	active   atomic.Bool
+	recovery bool
+}
 
 func newExecutionLease() ExecutionLease {
 	authority := &executionAuthority{}
 	authority.active.Store(true)
 	return ExecutionLease{authority: authority}
 }
+func newRecoveryLease() ExecutionLease {
+	lease := newExecutionLease()
+	lease.authority.recovery = true
+	return lease
+}
 func (lease ExecutionLease) Authorized() bool {
 	return lease.authority != nil && lease.authority.active.Load()
+}
+func (lease ExecutionLease) RecoveryAuthorized() bool {
+	return lease.Authorized() && lease.authority.recovery
 }
 func (lease ExecutionLease) revoke() {
 	if lease.authority != nil {
@@ -147,6 +181,21 @@ type TransactionAdapter interface {
 	Cleanup(lease ExecutionLease, changeSet string) error
 }
 
+type RecoveryAdapter interface {
+	LoadRecovery(ExecutionLease) (RecoveryTransaction, error)
+	HoldServices(ExecutionLease) error
+	AllowUnrelated(ExecutionLease, RecoveryTransaction, time.Duration) error
+	InspectStep(ExecutionLease, RecoveryTransaction, int, Step, time.Duration) (StepEffect, error)
+	RestoreRecoveryState(ExecutionLease, RecoveryTransaction) (RollbackAgreement, error)
+	VerifyStartingServices(ExecutionLease, RecoveryTransaction, time.Duration) error
+}
+
+type StateRecovery interface {
+	SystemChangesRestoreDurable(lease any, binding []byte, prior, candidate io.Reader) ([]byte, error)
+}
+
+var ErrNoRecoveryTransaction = errors.New("no unfinished recovery transaction")
+
 type statePreparedAuthority interface {
 	SystemChangesConsume(lease any, planIdentity, planSHA256 string) (any, error)
 }
@@ -166,6 +215,109 @@ func (step Step) Owner() Module                              { return step.owner
 func (step Step) Forward() OperationKind                     { return step.forward }
 func (step Step) Rollback() OperationKind                    { return step.rollback }
 func (step Step) CancellationContract() CancellationContract { return step.cancel }
+func (step Step) InspectionContract() InspectionContract     { return step.inspect }
+
+// Recover is the private startup path for unfinished ordinary forward work.
+// It never resumes the forward transaction.
+func (i Interface) Recover() ApplyResult {
+	adapter, transactionOK := i.adapter.(TransactionAdapter)
+	recoveryAdapter, recoveryOK := i.adapter.(RecoveryAdapter)
+	if !transactionOK || !recoveryOK {
+		return ApplyResult{Outcome: RecoveryRequiredOutcome, UsesMonotonicDurations: true, Evidence: safeEvidence(), Finding: &Finding{Code: "SYSTEM-CHANGES-RECOVERY-ADAPTER", Owner: StateModule, Problem: "Restart recovery is unavailable", Found: "no complete durable recovery Adapter", Required: "one private recovery runner over the production Adapter", WhyStopped: "unfinished work cannot be guessed through", NextAction: "Keep affected services stopped and use Inspect."}}
+	}
+	lock, acquired, err := i.adapter.TryLock()
+	if err != nil || acquired && lock == nil {
+		return ApplyResult{Outcome: RecoveryRequiredOutcome, UsesMonotonicDurations: true, Evidence: safeEvidence(), Finding: &Finding{Code: "SYSTEM-CHANGES-RECOVERY-LOCK", Owner: StateModule, Problem: "Restart recovery could not acquire the kernel lock", Found: "the lock is held or unprovable", Required: "the released installation-wide kernel lock", WhyStopped: "PID or wall time never proves ownership", NextAction: "Keep affected services stopped and use Inspect."}}
+	}
+	if !acquired {
+		result := refused("SYSTEM-CHANGES-RECOVERY-BUSY", "Restart recovery found the kernel lock held", "one active mutation owner", "the kernel-released installation-wide lock", "PID or wall time never authorizes stealing the lock", "Keep affected services stopped and use Inspect.", true)
+		result.Finding.Owner = StateModule
+		return result
+	}
+	lease := newRecoveryLease()
+	defer lease.revoke()
+	lock = leaseLock{Lock: lock, lease: lease}
+	if err := recoveryAdapter.HoldServices(lease); err != nil {
+		return finish(lock, recoveryRequired(ChangeSetSpec{OutcomeOwner: StateModule}, "SYSTEM-CHANGES-SERVICE-HOLDBACK", Prepared))
+	}
+	recovery, err := recoveryAdapter.LoadRecovery(lease)
+	if errors.Is(err, ErrNoRecoveryTransaction) {
+		observed, observeErr := i.adapter.Observe()
+		if observeErr != nil || !validObservation(observed) || observed.Status != Managed && observed.Status != NotInstalled {
+			return finish(lock, recoveryRequired(ChangeSetSpec{OutcomeOwner: StateModule}, "SYSTEM-CHANGES-RECOVERY-LINEAGE", Prepared))
+		}
+		result := refused("SYSTEM-CHANGES-RECOVERY-NOT-NEEDED", "No unfinished Change Set requires restart recovery", "no durable transaction", "the last proven Desired State", "ordinary work is never invented or resumed", "Start only services proven against the current Desired State.", true)
+		result.Finding.Owner = StateModule
+		return finish(lock, result)
+	}
+	if err != nil || !validRecoveryTransaction(recovery) {
+		return finish(lock, recoveryRequired(ChangeSetSpec{OutcomeOwner: StateModule}, "SYSTEM-CHANGES-RECOVERY-LINEAGE", Prepared))
+	}
+	recovery.Steps = append([]Step(nil), recovery.Steps...)
+	spec := ChangeSetSpec{Identity: recovery.ChangeSet, StartingState: recovery.Starting, OutcomeOwner: recovery.OutcomeOwner, Steps: recovery.Steps, Timeouts: recovery.Timeouts}
+	if err := recoveryAdapter.AllowUnrelated(lease, recovery, recovery.Timeouts.Check); err != nil {
+		return finish(lock, recoveryRequired(spec, "SYSTEM-CHANGES-SERVICE-HOLDBACK", recovery.LastCheckpoint))
+	}
+	for index := recovery.AttemptedSteps - 1; index >= 0; index-- {
+		effect, err := recoveryAdapter.InspectStep(lease, recovery, index+1, recovery.Steps[index], recovery.Timeouts.Check)
+		if err != nil || effect != StepEffectAbsent && effect != StepEffectPresent {
+			return finish(lock, recoveryRequired(spec, "SYSTEM-CHANGES-RECOVERY-INSPECTION", recovery.LastCheckpoint))
+		}
+	}
+	result := rollbackRecovered(lease, adapter, recoveryAdapter, recovery, spec)
+	return finish(lock, result)
+}
+
+func validRecoveryTransaction(recovery RecoveryTransaction) bool {
+	if !safeIdentity(recovery.ChangeSet) || !validModule(recovery.OutcomeOwner) || len(recovery.Steps) == 0 || recovery.AttemptedSteps < 0 || recovery.AttemptedSteps > len(recovery.Steps) || recovery.Timeouts.Step <= 0 || recovery.Timeouts.Step > maxStepTimeout || recovery.Timeouts.Check <= 0 || recovery.Timeouts.Check > maxCheckTimeout {
+		return false
+	}
+	if recovery.Starting.Status == Managed && (recovery.Starting.Revision == 0 || !validSHA256(recovery.Starting.SHA256) || recovery.StartingRelease == (ReleaseBinding{})) || recovery.Starting.Status == NotInstalled && (recovery.Starting.Revision != 0 || recovery.Starting.SHA256 != "" || recovery.StartingRelease != (ReleaseBinding{})) || recovery.Starting.Status != Managed && recovery.Starting.Status != NotInstalled {
+		return false
+	}
+	for _, step := range recovery.Steps {
+		if !validStep(step) {
+			return false
+		}
+	}
+	switch recovery.LastCheckpoint {
+	case Prepared:
+		return recovery.AttemptedSteps == 0
+	case StepStarted, StepCompleted, PrePublicationHealthPassed, StatePublicationStarted, StatePublished, PostPublicationHealthPassed:
+		return recovery.AttemptedSteps > 0
+	}
+	return false
+}
+
+func rollbackRecovered(lease ExecutionLease, adapter TransactionAdapter, recoveryAdapter RecoveryAdapter, recovery RecoveryTransaction, spec ChangeSetSpec) ApplyResult {
+	record := func(point DurableCheckpoint, step int, evidence *StepEvidence) bool {
+		return adapter.Record(lease, CheckpointRecord{ChangeSet: recovery.ChangeSet, Checkpoint: point, Step: step, Evidence: evidence}) == nil
+	}
+	if !record(RollbackStarted, 0, nil) {
+		return recoveryRequired(spec, "SYSTEM-CHANGES-RESTART", recovery.LastCheckpoint)
+	}
+	agreement, err := recoveryAdapter.RestoreRecoveryState(lease, recovery)
+	if err != nil || !validRollbackAgreement(agreement, recovery.Starting) || agreement.Release != recovery.StartingRelease {
+		return recoveryRequired(spec, "SYSTEM-CHANGES-RESTART", RollbackStarted)
+	}
+	for index := recovery.AttemptedSteps - 1; index >= 0; index-- {
+		number := index + 1
+		if !record(RollbackStepStarted, number, nil) {
+			return recoveryRequired(spec, "SYSTEM-CHANGES-RESTART", RollbackStepStarted)
+		}
+		evidence, reverseErr := adapter.Reverse(lease, recovery.ChangeSet, number, recovery.Steps[index], recovery.Timeouts.Step)
+		if reverseErr != nil || !safeIdentity(evidence.Code) || !validSHA256(evidence.SHA256) || !record(RollbackStepCompleted, number, &evidence) {
+			return recoveryRequired(spec, "SYSTEM-CHANGES-RESTART", RollbackStepStarted)
+		}
+	}
+	if err := adapter.VerifyRollback(lease, agreement, recovery.Timeouts.Check); err != nil || recoveryAdapter.VerifyStartingServices(lease, recovery, recovery.Timeouts.Check) != nil || !record(RollbackVerified, 0, nil) || !record(RolledBack, 0, nil) {
+		return recoveryRequired(spec, "SYSTEM-CHANGES-RESTART", RollbackVerified)
+	}
+	if err := adapter.Cleanup(lease, recovery.ChangeSet); err != nil {
+		return recoveryRequired(spec, "SYSTEM-CHANGES-RESTART", RolledBack)
+	}
+	return ApplyResult{Outcome: RollbackSucceeded, RestoredStatus: recovery.Starting.Status, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(), Finding: &Finding{Code: "SYSTEM-CHANGES-ROLLED-BACK-AFTER-RESTART", Owner: recovery.OutcomeOwner, Problem: "The interrupted Change Set was rolled back from durable evidence", Found: string(recovery.LastCheckpoint), Required: "the prior proven installation status", WhyStopped: "SYSTEM-CHANGES-RESTART", NextAction: "Start only services proven against the restored Desired State."}}
+}
 
 func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Cancellation) ApplyResult {
 	adapter, ok := i.adapter.(TransactionAdapter)
@@ -193,9 +345,9 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 		return finish(lock, refused("SYSTEM-CHANGES-STATE-BINDING", "State transaction material does not match the Change Set", "a mismatched lineage, release, checksum, or identity", "the exact reviewed State transaction binding", "live work has not started", "Reload State and create a fresh Plan.", true))
 	}
 	preparation := Preparation{
-		ChangeSet: spec.Identity, Mutation: spec.Mutation, Starting: spec.StartingState,
+		ChangeSet: spec.Identity, Mutation: spec.Mutation, OutcomeOwner: spec.OutcomeOwner, Starting: spec.StartingState,
 		PlanSHA256: spec.Plan.SHA256, State: binding,
-		Steps: append([]Step(nil), spec.Steps...), Checks: append([]Check(nil), spec.Checks...),
+		Steps: append([]Step(nil), spec.Steps...), Checks: append([]Check(nil), spec.Checks...), Timeouts: spec.Timeouts,
 		writeState: func(write func(name string, mode uint32, source io.Reader) error) error {
 			return transaction.SystemChangesWriteArtifacts(lease, write)
 		},

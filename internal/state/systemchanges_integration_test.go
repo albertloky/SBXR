@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -20,20 +21,29 @@ import (
 )
 
 type systemChangesAdapter struct {
-	observation  systemchanges.Observation
-	closes       atomic.Int32
-	events       []string
-	artifacts    map[string][]byte
-	statuses     map[systemchanges.GatePhase]systemchanges.HealthStatus
-	beforeStep   func() error
-	prepareErr   error
-	closeErr     error
-	stepEvidence *systemchanges.StepEvidence
-	lease        systemchanges.ExecutionLease
-	executeCount int
-	failStep     int
-	failReverse  bool
-	agreementErr error
+	observation   systemchanges.Observation
+	closes        atomic.Int32
+	events        []string
+	artifacts     map[string][]byte
+	statuses      map[systemchanges.GatePhase]systemchanges.HealthStatus
+	beforeStep    func() error
+	prepareErr    error
+	closeErr      error
+	stepEvidence  *systemchanges.StepEvidence
+	lease         systemchanges.ExecutionLease
+	executeCount  int
+	failStep      int
+	failReverse   bool
+	agreementErr  error
+	serviceErr    error
+	holdErr       error
+	noRecovery    bool
+	recovery      *systemchanges.RecoveryTransaction
+	stateRecovery systemchanges.StateRecovery
+	stateBinding  []byte
+	crashBefore   systemchanges.DurableCheckpoint
+	crashAfter    systemchanges.DurableCheckpoint
+	crashed       bool
 }
 
 func (a *systemChangesAdapter) Observe() (systemchanges.Observation, error) {
@@ -66,12 +76,36 @@ func (a *systemChangesAdapter) Prepare(lease systemchanges.ExecutionLease, prepa
 	}); err != nil {
 		return err
 	}
+	if a.crashBefore == systemchanges.Prepared && !a.crashed {
+		a.crashed = true
+		panic("controlled worker death")
+	}
 	a.events = append(a.events, string(systemchanges.Prepared))
+	a.recovery = &systemchanges.RecoveryTransaction{ChangeSet: preparation.ChangeSet, Starting: preparation.Starting, StartingRelease: preparation.State.StartingRelease, OutcomeOwner: preparation.OutcomeOwner, Steps: append([]systemchanges.Step(nil), preparation.Steps...), LastCheckpoint: systemchanges.Prepared, Timeouts: preparation.Timeouts}
+	a.stateBinding, _ = json.Marshal(preparation.State)
+	if a.crashAfter == systemchanges.Prepared && !a.crashed {
+		a.crashed = true
+		panic("controlled worker death")
+	}
 	return nil
 }
 
 func (a *systemChangesAdapter) Record(_ systemchanges.ExecutionLease, record systemchanges.CheckpointRecord) error {
+	if a.crashBefore == record.Checkpoint && !a.crashed {
+		a.crashed = true
+		panic("controlled worker death")
+	}
 	a.events = append(a.events, record.String())
+	if a.recovery != nil {
+		a.recovery.LastCheckpoint = record.Checkpoint
+		if record.Checkpoint == systemchanges.StepStarted && record.Step > a.recovery.AttemptedSteps {
+			a.recovery.AttemptedSteps = record.Step
+		}
+	}
+	if a.crashAfter == record.Checkpoint && !a.crashed {
+		a.crashed = true
+		panic("controlled worker death")
+	}
 	return nil
 }
 
@@ -120,7 +154,51 @@ func (a *systemChangesAdapter) VerifyAgreement(systemchanges.ExecutionLease, sys
 
 func (a *systemChangesAdapter) Cleanup(systemchanges.ExecutionLease, string) error {
 	a.events = append(a.events, "cleanup")
+	a.recovery = nil
 	return nil
+}
+
+func (a *systemChangesAdapter) LoadRecovery(systemchanges.ExecutionLease) (systemchanges.RecoveryTransaction, error) {
+	if a.noRecovery {
+		return systemchanges.RecoveryTransaction{}, systemchanges.ErrNoRecoveryTransaction
+	}
+	if a.recovery == nil {
+		return systemchanges.RecoveryTransaction{}, errors.New("no durable recovery transaction")
+	}
+	return *a.recovery, nil
+}
+
+func (a *systemChangesAdapter) HoldServices(systemchanges.ExecutionLease) error {
+	a.events = append(a.events, "hold public services and timers")
+	return nil
+}
+
+func (a *systemChangesAdapter) AllowUnrelated(systemchanges.ExecutionLease, systemchanges.RecoveryTransaction, time.Duration) error {
+	a.events = append(a.events, "allow proven unrelated services")
+	return a.holdErr
+}
+
+func (a *systemChangesAdapter) InspectStep(systemchanges.ExecutionLease, systemchanges.RecoveryTransaction, int, systemchanges.Step, time.Duration) (systemchanges.StepEffect, error) {
+	a.events = append(a.events, "inspect uncertain step")
+	return systemchanges.StepEffectPresent, nil
+}
+
+func (a *systemChangesAdapter) RestoreRecoveryState(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction) (systemchanges.RollbackAgreement, error) {
+	a.events = append(a.events, "restore durable State")
+	if a.stateRecovery != nil {
+		agreementJSON, err := a.stateRecovery.SystemChangesRestoreDurable(lease, a.stateBinding, bytes.NewReader(a.artifacts["snapshot/prior-state.json"]), bytes.NewReader(a.artifacts["prepared/state.json"]))
+		var agreement systemchanges.RollbackAgreement
+		if err != nil || json.Unmarshal(agreementJSON, &agreement) != nil {
+			return systemchanges.RollbackAgreement{}, errors.New("State recovery agreement unavailable")
+		}
+		return agreement, nil
+	}
+	return systemchanges.RollbackAgreement{Status: recovery.Starting.Status, Revision: recovery.Starting.Revision, SHA256: recovery.Starting.SHA256, Release: recovery.StartingRelease}, nil
+}
+
+func (a *systemChangesAdapter) VerifyStartingServices(systemchanges.ExecutionLease, systemchanges.RecoveryTransaction, time.Duration) error {
+	a.events = append(a.events, "starting services verified")
+	return a.serviceErr
 }
 
 func TestPreparedCommitDurablyCompletesOneSystemChangesChangeSet(t *testing.T) {
@@ -284,6 +362,7 @@ func preparedSystemChangeForMutation(t *testing.T, mutation systemchanges.Mutati
 type systemChangeTestOptions struct {
 	extraSteps         []systemchanges.Step
 	stepTimeout        time.Duration
+	identity           string
 	publishBeforeError bool
 	publishAfterError  bool
 }
@@ -308,7 +387,11 @@ func preparedSystemChangeWithOptions(t *testing.T, mutation systemchanges.Mutati
 		if err != nil {
 			t.Fatal(err)
 		}
-		request = preparedRequest(t, loaded, candidate, "change-0008")
+		identity := options.identity
+		if identity == "" {
+			identity = "change-0008"
+		}
+		request = preparedRequest(t, loaded, candidate, ChangeSetIdentity(identity))
 	}
 	prepared, err := module.PrepareCommit(request)
 	if err != nil {
@@ -436,6 +519,21 @@ func TestStateTransactionBridgeRejectsCallerMadeLease(t *testing.T) {
 	}
 }
 
+func TestStateRecoveryBridgeRejectsActiveApplyLease(t *testing.T) {
+	stateModule, changeSet, _, observed := preparedSystemChange(t)
+	rejected := false
+	var adapter *systemChangesAdapter
+	adapter = &systemChangesAdapter{observation: observed, beforeStep: func() error {
+		_, err := stateModule.SystemChangesRestoreDurable(adapter.lease, adapter.stateBinding, bytes.NewReader(adapter.artifacts["snapshot/prior-state.json"]), bytes.NewReader(adapter.artifacts["prepared/state.json"]))
+		rejected = err != nil
+		return nil
+	}}
+	result := systemchanges.New(adapter).Apply(changeSet)
+	if result.Outcome != systemchanges.Completed || !rejected {
+		t.Fatalf("ordinary Apply recovery authority = %+v; rejected=%t", result, rejected)
+	}
+}
+
 func TestStepCompletionRequiresDurableTypedEvidence(t *testing.T) {
 	_, changeSet, _, observed := preparedSystemChange(t)
 	adapter := &systemChangesAdapter{observation: observed, stepEvidence: &systemchanges.StepEvidence{Code: "step-ok", SHA256: "not-a-checksum"}}
@@ -446,15 +544,27 @@ func TestStepCompletionRequiresDurableTypedEvidence(t *testing.T) {
 }
 
 type controlledUbuntuHost struct {
-	root       string
-	executed   int
-	checks     int
-	agreements int
-	rollbacks  int
-	waitCancel bool
-	delay      time.Duration
-	started    chan struct{}
-	reversed   []systemchanges.OperationKind
+	root           string
+	executed       int
+	checks         int
+	agreements     int
+	rollbacks      int
+	waitCancel     bool
+	delay          time.Duration
+	started        chan struct{}
+	startedFile    string
+	recoveryEvents []string
+	reversed       []systemchanges.OperationKind
+	startingState  string
+	services       map[string]*controlledService
+}
+
+type controlledService struct {
+	owner    systemchanges.Module
+	state    string
+	known    bool
+	running  bool
+	affected bool
 }
 
 func (host *controlledUbuntuHost) CaptureRollback(step systemchanges.Step, write func(io.Reader) error) error {
@@ -471,6 +581,11 @@ func (host *controlledUbuntuHost) CaptureRollback(step systemchanges.Step, write
 
 func (host *controlledUbuntuHost) Execute(_ systemchanges.Step, timeout time.Duration, cancellation *systemchanges.Cancellation) (systemchanges.StepEvidence, error) {
 	host.executed++
+	if host.startedFile != "" {
+		if err := os.WriteFile(host.startedFile, []byte("started"), 0o600); err != nil {
+			return systemchanges.StepEvidence{}, err
+		}
+	}
 	if host.started != nil {
 		select {
 		case <-host.started:
@@ -578,7 +693,61 @@ func (host *controlledUbuntuHost) Reverse(step systemchanges.Step, snapshot io.R
 	} else if err := os.WriteFile(active, prior, 0o600); err != nil {
 		return systemchanges.StepEvidence{}, err
 	}
+	for _, service := range host.services {
+		if service.owner == step.Owner() {
+			service.state = host.startingState
+		}
+	}
 	return systemchanges.StepEvidence{Code: "rollback-valid", SHA256: testSHA('b')}, nil
+}
+
+func (host *controlledUbuntuHost) HoldServices() error {
+	host.recoveryEvents = append(host.recoveryEvents, "hold services")
+	for _, service := range host.services {
+		service.running = false
+	}
+	return nil
+}
+
+func (host *controlledUbuntuHost) AllowUnrelated(recovery systemchanges.RecoveryTransaction, _ time.Duration) error {
+	host.recoveryEvents = append(host.recoveryEvents, "allow proven unrelated")
+	host.startingState = recovery.Starting.SHA256
+	for _, step := range recovery.Steps {
+		for _, service := range host.services {
+			service.affected = service.affected || service.owner == step.Owner()
+		}
+	}
+	for _, service := range host.services {
+		service.running = !service.affected && service.known && service.state == recovery.Starting.SHA256
+	}
+	return nil
+}
+
+func (host *controlledUbuntuHost) InspectStep(step systemchanges.Step, snapshot io.Reader, _ time.Duration) (systemchanges.StepEffect, error) {
+	host.recoveryEvents = append(host.recoveryEvents, "inspect uncertain")
+	if _, err := io.ReadAll(snapshot); err != nil {
+		return "", err
+	}
+	for name, service := range host.services {
+		shouldRun := !service.affected && service.known && service.state == host.startingState
+		if service.running != shouldRun || service.owner == step.Owner() && service.running {
+			return "", fmt.Errorf("service %s was released without last-State agreement", name)
+		}
+	}
+	return systemchanges.StepEffectPresent, nil
+}
+
+func (host *controlledUbuntuHost) VerifyStartingServices(recovery systemchanges.RecoveryTransaction, _ time.Duration) error {
+	host.recoveryEvents = append(host.recoveryEvents, "starting services proven")
+	for _, service := range host.services {
+		if service.affected {
+			if !service.known || service.state != recovery.Starting.SHA256 {
+				return errors.New("affected service does not match the last successful State")
+			}
+			service.running = true
+		}
+	}
+	return nil
 }
 
 func TestModuleReverseRetryWithSameSnapshotIsIdempotent(t *testing.T) {
@@ -602,6 +771,122 @@ func TestModuleReverseRetryWithSameSnapshotIsIdempotent(t *testing.T) {
 	}
 	if _, err := os.Stat(active); !errors.Is(err, os.ErrNotExist) || len(host.reversed) != 2 {
 		t.Fatalf("idempotent reverse left active=%v reversed=%v", err, host.reversed)
+	}
+}
+
+func TestFreshSystemChangesInstanceRollsBackInterruptedForwardStep(t *testing.T) {
+	step, err := systemchanges.NewStep(systemchanges.SubscriptionModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery := systemchanges.RecoveryTransaction{
+		ChangeSet: "change-0008", Starting: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: testSHA('7')},
+		StartingRelease: systemchanges.ReleaseBinding{Repository: testRelease.Repository, Tag: testRelease.Tag, Commit: testRelease.Commit, ReleaseIndexSHA256: testRelease.ReleaseIndexSHA256},
+		OutcomeOwner:    systemchanges.ConnectionProfilesModule, Steps: []systemchanges.Step{step}, AttemptedSteps: 1,
+		LastCheckpoint: systemchanges.StepStarted, Timeouts: systemchanges.Timeouts{Step: time.Second, Check: time.Second},
+	}
+	adapter := &systemChangesAdapter{recovery: &recovery}
+	result := systemchanges.New(adapter).Recover()
+	if result.Outcome != systemchanges.RollbackSucceeded || result.RestoredStatus != systemchanges.Managed || result.Finding == nil || result.Finding.Owner != systemchanges.ConnectionProfilesModule {
+		t.Fatalf("Recover() = %+v", result)
+	}
+	want := "hold public services and timers,allow proven unrelated services,inspect uncertain step,Rollback started,restore durable State,Rollback step started 1,reverse Restore prior configuration,Rollback step completed 1,rollback verified,starting services verified,Rollback verified,Rolled back,cleanup"
+	if got := strings.Join(adapter.events, ","); got != want {
+		t.Fatalf("recovery events = %s, want %s", got, want)
+	}
+}
+
+func TestFreshSystemChangesInstanceNeverResumesOrdinaryForwardWork(t *testing.T) {
+	for index, checkpoint := range []systemchanges.DurableCheckpoint{
+		systemchanges.Prepared, systemchanges.StepStarted, systemchanges.StepCompleted,
+		systemchanges.PrePublicationHealthPassed, systemchanges.StatePublicationStarted,
+		systemchanges.StatePublished, systemchanges.PostPublicationHealthPassed,
+	} {
+		for _, side := range []string{"before", "after"} {
+			t.Run(side+"_"+string(checkpoint), func(t *testing.T) {
+				identity := fmt.Sprintf("change-restart-%02d-%s", index+1, side)
+				stateModule, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.SettingChangeMutation, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-PREFLIGHT"}, systemChangeTestOptions{identity: identity, stepTimeout: time.Second})
+				adapter := &systemChangesAdapter{observation: observed, stateRecovery: stateModule}
+				if side == "before" {
+					adapter.crashBefore = checkpoint
+				} else {
+					adapter.crashAfter = checkpoint
+				}
+				func() {
+					defer func() { _ = recover() }()
+					_ = systemchanges.New(adapter).Apply(changeSet)
+				}()
+				if !adapter.crashed {
+					t.Fatalf("worker did not die %s %s", side, checkpoint)
+				}
+				executedBeforeRecovery := adapter.executeCount
+				result := systemchanges.New(adapter).Recover()
+				want := systemchanges.RollbackSucceeded
+				if side == "before" && checkpoint == systemchanges.Prepared {
+					want = systemchanges.RecoveryRequiredOutcome
+				}
+				if result.Outcome != want || adapter.executeCount != executedBeforeRecovery || !strings.Contains(strings.Join(adapter.events, ","), "hold public services and timers") {
+					t.Fatalf("Recover(%s %s) = %+v; execute before=%d after=%d events=%v", side, checkpoint, result, executedBeforeRecovery, adapter.executeCount, adapter.events)
+				}
+				loaded, err := stateModule.Load(intentManagedRequest())
+				if err != nil || loaded.Snapshot == nil || loaded.Snapshot.Revision != 7 || loaded.loaded == nil || loaded.loaded.payloadChecksum != observed.StateSHA256 {
+					t.Fatalf("State after Recover(%s %s) = (%+v, %v)", side, checkpoint, loaded, err)
+				}
+			})
+		}
+	}
+}
+
+func TestRecoveryKeepsAffectedServicesStoppedWithoutStartingStateAgreement(t *testing.T) {
+	step, err := systemchanges.NewStep(systemchanges.SubscriptionModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery := systemchanges.RecoveryTransaction{
+		ChangeSet: "change-0008", Starting: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: testSHA('7')},
+		StartingRelease: systemchanges.ReleaseBinding{Repository: testRelease.Repository, Tag: testRelease.Tag, Commit: testRelease.Commit, ReleaseIndexSHA256: testRelease.ReleaseIndexSHA256},
+		OutcomeOwner:    systemchanges.ConnectionProfilesModule, Steps: []systemchanges.Step{step}, AttemptedSteps: 1,
+		LastCheckpoint: systemchanges.StepCompleted, Timeouts: systemchanges.Timeouts{Step: time.Second, Check: time.Second},
+	}
+	adapter := &systemChangesAdapter{recovery: &recovery, serviceErr: errors.New("controlled service agreement failure")}
+	result := systemchanges.New(adapter).Recover()
+	events := strings.Join(adapter.events, ",")
+	if result.Outcome != systemchanges.RecoveryRequiredOutcome || result.Finding == nil || result.Finding.Owner != systemchanges.ConnectionProfilesModule || strings.Contains(events, string(systemchanges.RollbackVerified)) || strings.Contains(events, string(systemchanges.RolledBack)) || strings.Contains(events, "cleanup") {
+		t.Fatalf("unproven service recovery = %+v; events=%s", result, events)
+	}
+}
+
+func TestRecoveryRefusesBeforeInspectionWhenUnrelatedServiceAgreementIsUnknown(t *testing.T) {
+	step, err := systemchanges.NewStep(systemchanges.SubscriptionModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery := systemchanges.RecoveryTransaction{
+		ChangeSet: "change-0008", Starting: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: testSHA('7')},
+		StartingRelease: systemchanges.ReleaseBinding{Repository: testRelease.Repository, Tag: testRelease.Tag, Commit: testRelease.Commit, ReleaseIndexSHA256: testRelease.ReleaseIndexSHA256},
+		OutcomeOwner:    systemchanges.ConnectionProfilesModule, Steps: []systemchanges.Step{step}, AttemptedSteps: 1,
+		LastCheckpoint: systemchanges.StepStarted, Timeouts: systemchanges.Timeouts{Step: time.Second, Check: time.Second},
+	}
+	adapter := &systemChangesAdapter{recovery: &recovery, holdErr: errors.New("controlled unrelated service agreement failure")}
+	result := systemchanges.New(adapter).Recover()
+	if result.Outcome != systemchanges.RecoveryRequiredOutcome || result.Finding == nil || result.Finding.Owner != systemchanges.ConnectionProfilesModule || strings.Join(adapter.events, ",") != "hold public services and timers,allow proven unrelated services" {
+		t.Fatalf("unproven unrelated service recovery = %+v; events=%v", result, adapter.events)
+	}
+}
+
+func TestRecoveryRunnerChangesNothingWithoutAnUnfinishedJournal(t *testing.T) {
+	adapter := &systemChangesAdapter{noRecovery: true, observation: systemchanges.Observation{Status: systemchanges.Managed, LastChangeSet: "change-0007", Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockHeld}}
+	result := systemchanges.New(adapter).Recover()
+	if result.Outcome != systemchanges.Refused || !result.NothingChanged || result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-RECOVERY-NOT-NEEDED" || result.Finding.Owner != systemchanges.StateModule || adapter.closes.Load() != 1 || strings.Join(adapter.events, ",") != "hold public services and timers" {
+		t.Fatalf("no-op Recover() = %+v; closes=%d events=%v", result, adapter.closes.Load(), adapter.events)
+	}
+}
+
+func TestRecoveryHoldsServicesBeforeReadingAnUnprovableJournal(t *testing.T) {
+	adapter := &systemChangesAdapter{}
+	result := systemchanges.New(adapter).Recover()
+	if result.Outcome != systemchanges.RecoveryRequiredOutcome || result.Finding == nil || result.Finding.Owner != systemchanges.StateModule || strings.Join(adapter.events, ",") != "hold public services and timers" {
+		t.Fatalf("unprovable recovery = %+v; events=%v", result, adapter.events)
 	}
 }
 
@@ -740,6 +1025,75 @@ func TestUbuntuAdapterBoundsLiveStepAndRollsBackOnTimeout(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "var/lib/sbxr/transactions/change-0008")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("timed-out transaction material still exists: %v", err)
+	}
+}
+
+func TestSystemChangesRecoveryProcess(t *testing.T) {
+	root := os.Getenv("SBXR_RECOVERY_TEST_ROOT")
+	if root == "" {
+		t.Skip("recovery subprocess only")
+	}
+	_, changeSet, _, observed := preparedSystemChange(t)
+	lockPath := filepath.Join(root, "run/sbxr/system-changes.lock")
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lockPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	host := &controlledUbuntuHost{root: root, waitCancel: true, startedFile: filepath.Join(root, "forward-step-started")}
+	adapter := ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return observed, nil }, host)
+	result := systemchanges.New(adapter).Apply(changeSet)
+	t.Fatalf("recovery subprocess returned without process death: %+v", result)
+}
+
+func TestUbuntuRecoveryAcquiresProcessReleasedLockBeforeServicesAndRollsBack(t *testing.T) {
+	root := t.TempDir()
+	command := exec.Command(os.Args[0], "-test.run=^TestSystemChangesRecoveryProcess$")
+	command.Env = append(os.Environ(), "SBXR_RECOVERY_TEST_ROOT="+root)
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	started := filepath.Join(root, "forward-step-started")
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			_ = command.Process.Kill()
+			_, _ = command.Process.Wait()
+			t.Fatal("subprocess did not reach the durable forward checkpoint")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := command.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = command.Process.Wait()
+	stateModule, _, _, observed := preparedSystemChange(t)
+	observed.Status, observed.CurrentChangeSet, observed.LastChangeSet = systemchanges.ChangeInProgress, "change-0008", "change-0007"
+	observed.Checkpoint, observed.TotalSteps, observed.RollbackAvailable = systemchanges.PreparedCheckpoint, 1, true
+	host := &controlledUbuntuHost{root: root, services: map[string]*controlledService{
+		"affected":             {owner: systemchanges.ConnectionProfilesModule, state: testSHA('8'), known: true, running: true},
+		"unrelated-proven":     {owner: systemchanges.NetworkPolicyModule, state: observed.StateSHA256, known: true, running: true},
+		"unrelated-candidate":  {owner: systemchanges.HealthDiagnosticsModule, state: testSHA('8'), known: true, running: true},
+		"unrelated-unprovable": {owner: systemchanges.CertificateModule, state: observed.StateSHA256, running: true},
+	}}
+	adapter := ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return observed, nil }, host, stateModule)
+	result := systemchanges.New(adapter).Recover()
+	if result.Outcome != systemchanges.RollbackSucceeded || strings.Join(host.recoveryEvents, ",") != "hold services,allow proven unrelated,inspect uncertain,starting services proven" || host.executed != 0 || fmt.Sprint(host.reversed) != fmt.Sprint([]systemchanges.OperationKind{systemchanges.RestorePriorConfiguration}) {
+		t.Fatalf("process-death recovery = %+v; recovery=%v executed=%d reversed=%v", result, host.recoveryEvents, host.executed, host.reversed)
+	}
+	loaded, err := stateModule.Load(intentManagedRequest())
+	if err != nil || loaded.Snapshot == nil || loaded.Snapshot.Revision != 7 {
+		t.Fatalf("State-owned restart restoration = (%+v, %v)", loaded, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "var/lib/sbxr/transactions/change-0008")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("recovered transaction material remains: %v", err)
+	}
+	if !host.services["affected"].running || !host.services["unrelated-proven"].running || host.services["unrelated-candidate"].running || host.services["unrelated-unprovable"].running {
+		t.Fatalf("service holdback after recovery = %+v", host.services)
 	}
 }
 

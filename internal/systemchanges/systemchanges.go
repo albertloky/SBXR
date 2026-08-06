@@ -225,8 +225,10 @@ const (
 type OperationKind string
 
 type CancellationContract string
+type InspectionContract string
 
 const SafeCheckpointCancellation CancellationContract = "Wait for declared safe checkpoint"
+const InspectBeforeIdempotentReverse InspectionContract = "Inspect effect before idempotent reverse"
 
 const (
 	ActivatePreparedConfiguration OperationKind = "Activate prepared configuration"
@@ -240,13 +242,14 @@ type Step struct {
 	forward  OperationKind
 	rollback OperationKind
 	cancel   CancellationContract
+	inspect  InspectionContract
 }
 
 func NewStep(owner Module, forward, rollback OperationKind) (Step, error) {
 	if !validModule(owner) || !validOperation(forward) || !validOperation(rollback) || forward == rollback {
 		return Step{}, &Finding{Code: "SYSTEM-CHANGES-STEP-INVALID", Problem: "A typed change or rollback instruction is invalid", Found: "an unsupported owner or operation", Required: "one owning Module plus distinct allowed forward and rollback operations", WhyStopped: "System Changes never accepts arbitrary commands, paths, services, or root operations", NextAction: "Rebuild the Change Set through the owning Module."}
 	}
-	return Step{owner: owner, forward: forward, rollback: rollback, cancel: SafeCheckpointCancellation}, nil
+	return Step{owner: owner, forward: forward, rollback: rollback, cancel: SafeCheckpointCancellation, inspect: InspectBeforeIdempotentReverse}, nil
 }
 
 type Classification string
@@ -550,7 +553,7 @@ func validOperation(operation OperationKind) bool {
 }
 
 func validStep(step Step) bool {
-	return validModule(step.owner) && validOperation(step.forward) && validOperation(step.rollback) && step.forward != step.rollback && step.cancel == SafeCheckpointCancellation
+	return validModule(step.owner) && validOperation(step.forward) && validOperation(step.rollback) && step.forward != step.rollback && step.cancel == SafeCheckpointCancellation && step.inspect == InspectBeforeIdempotentReverse
 }
 
 func validCheck(check Check) bool {
