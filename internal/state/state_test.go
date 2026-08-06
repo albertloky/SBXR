@@ -3,6 +3,8 @@ package state_test
 import (
 	"errors"
 	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -57,7 +59,8 @@ func TestLoadCleanAbsence(t *testing.T) {
 }
 
 func TestLoadValidCurrentState(t *testing.T) {
-	result, err := state.New(memoryStorage{document: validDocument}).Load(managedRequest())
+	completeDocument := completeDocument(t)
+	result, err := state.New(memoryStorage{document: completeDocument}).Load(managedRequest())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,13 +70,9 @@ func TestLoadValidCurrentState(t *testing.T) {
 	if result.Snapshot.Revision != 7 || result.Snapshot.ReleaseIdentity != release || result.Snapshot.LastCompletedChangeSet != "change-0007" {
 		t.Fatalf("Load() snapshot = %+v, want the complete typed envelope", result.Snapshot)
 	}
-	if result.Snapshot.DesiredState != (state.DesiredState{}) {
-		t.Fatalf("Load() Desired State = %+v, want the complete typed schema-1 payload", result.Snapshot.DesiredState)
-	}
-
 	request := managedRequest()
 	request.Lineage.ActiveChangeSet = "change-0008"
-	result, err = state.New(memoryStorage{document: validDocument}).Load(request)
+	result, err = state.New(memoryStorage{document: completeDocument}).Load(request)
 	if err != nil || result.Status != state.ChangeInProgress {
 		t.Fatalf("Load() = (%+v, %v), want Change in progress", result, err)
 	}
@@ -81,6 +80,7 @@ func TestLoadValidCurrentState(t *testing.T) {
 
 func TestLoadRefusesUnsafeOrUnprovableState(t *testing.T) {
 	secret := "UNIQUE-INFRASTRUCTURE-SECRET-MARKER"
+	completeDocument := completeDocument(t)
 	storageRefusal := &state.Finding{Code: "STATE-STORAGE-MODE", Concept: "Desired State file", Found: "broader permissions", Required: "0600", Why: "the protected boundary is not proven", NextAction: "correct the mode and check again"}
 	tests := []struct {
 		name     string
@@ -105,16 +105,16 @@ func TestLoadRefusesUnsafeOrUnprovableState(t *testing.T) {
 		{name: "null payload", document: strings.Replace(validDocument, `"payload": {}`, `"payload": null`, 1), request: managedRequest(), code: "STATE-DOCUMENT-INVALID"},
 		{name: "invalid revision", document: strings.Replace(validDocument, `"revision": 7`, `"revision": 0`, 1), request: managedRequest(), code: "STATE-DOCUMENT-INVALID"},
 		{name: "invalid Release Identity", document: strings.Replace(validDocument, release.Commit, "not-a-commit", 1), request: managedRequest(), code: "STATE-DOCUMENT-INVALID"},
-		{name: "checksum failure", document: strings.Replace(validDocument, `44136fa3`, `54136fa3`, 1), request: managedRequest(), code: "STATE-CHECKSUM-MISMATCH"},
-		{name: "revision disagreement", document: validDocument, request: func() state.LoadRequest { r := managedRequest(); r.Lineage.Revision = 8; return r }(), code: "STATE-LINEAGE-REVISION"},
-		{name: "Release Identity disagreement", document: validDocument, request: func() state.LoadRequest { r := managedRequest(); r.Lineage.ReleaseIdentity.Tag = "v2.0.0"; return r }(), code: "STATE-LINEAGE-RELEASE"},
-		{name: "unsupported Release Identity", document: validDocument, request: func() state.LoadRequest { r := managedRequest(); r.SupportedRelease.Tag = "v2.0.0"; return r }(), code: "STATE-RELEASE-UNSUPPORTED"},
-		{name: "Change Set disagreement", document: validDocument, request: func() state.LoadRequest {
+		{name: "checksum failure", document: corruptChecksum(completeDocument), request: managedRequest(), code: "STATE-CHECKSUM-MISMATCH"},
+		{name: "revision disagreement", document: completeDocument, request: func() state.LoadRequest { r := managedRequest(); r.Lineage.Revision = 8; return r }(), code: "STATE-LINEAGE-REVISION"},
+		{name: "Release Identity disagreement", document: completeDocument, request: func() state.LoadRequest { r := managedRequest(); r.Lineage.ReleaseIdentity.Tag = "v2.0.0"; return r }(), code: "STATE-LINEAGE-RELEASE"},
+		{name: "unsupported Release Identity", document: completeDocument, request: func() state.LoadRequest { r := managedRequest(); r.SupportedRelease.Tag = "v2.0.0"; return r }(), code: "STATE-RELEASE-UNSUPPORTED"},
+		{name: "Change Set disagreement", document: completeDocument, request: func() state.LoadRequest {
 			r := managedRequest()
 			r.Lineage.LastCompletedChangeSet = "change-0006"
 			return r
 		}(), code: "STATE-LINEAGE-CHANGE-SET"},
-		{name: "invalid active Change Set", document: validDocument, request: func() state.LoadRequest {
+		{name: "invalid active Change Set", document: completeDocument, request: func() state.LoadRequest {
 			r := managedRequest()
 			r.Lineage.ActiveChangeSet = "invalid\nidentity"
 			return r
@@ -146,4 +146,22 @@ func TestLoadRefusesUnsafeOrUnprovableState(t *testing.T) {
 			t.Fatalf("Load() = (%+v, %v), want STATE-STORAGE-UNAVAILABLE", result, err)
 		}
 	})
+}
+
+func corruptChecksum(document string) string {
+	start := strings.Index(document, `"checksum":"`) + len(`"checksum":"`)
+	replacement := "0"
+	if document[start] == '0' {
+		replacement = "1"
+	}
+	return document[:start] + replacement + document[start+1:]
+}
+
+func completeDocument(t *testing.T) string {
+	t.Helper()
+	document, err := os.ReadFile(filepath.Join("testdata", "complete-state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(string(document))
 }

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"reflect"
 	"strings"
 )
 
@@ -57,10 +58,6 @@ type LoadRequest struct {
 	SupportedRelease ReleaseIdentity
 	Lineage          *LineageProof
 }
-
-// DesiredState is the typed schema-1 payload. The next State slice adds the
-// complete Module-owned intent to this type.
-type DesiredState struct{}
 
 // Snapshot is the validated current Desired State and its lineage envelope.
 type Snapshot struct {
@@ -199,10 +196,16 @@ func decode(data []byte) (persistedDocument, *Finding) {
 	if document.Revision == 0 || !validChangeSetIdentity(document.LastCompletedChangeSet) || !validReleaseIdentity(document.ReleaseIdentity) || !validSHA256(document.Checksum) {
 		return persistedDocument{}, finding("STATE-DOCUMENT-INVALID", "Desired State envelope", "a missing or invalid envelope value", "a positive revision, exact Release Identity, completed Change Set, and SHA-256 checksum", "the stored lineage is incomplete", "use the Recovery Required flow")
 	}
-	var payload struct{}
+	var payload DesiredState
 	trimmedPayload := bytes.TrimSpace(document.Payload)
 	if len(trimmedPayload) < 2 || trimmedPayload[0] != '{' || trimmedPayload[len(trimmedPayload)-1] != '}' {
 		return persistedDocument{}, finding("STATE-DOCUMENT-INVALID", "Desired State payload", "an invalid typed payload", "one complete supported typed payload", "the stored intent is incomplete", "use the Recovery Required flow")
+	}
+	if err := validateExactJSON(document.Payload, reflect.TypeOf(DesiredState{})); err != nil {
+		if errors.Is(err, errUnknownField) {
+			return persistedDocument{}, finding("STATE-DOCUMENT-UNSUPPORTED-FIELD", "Desired State payload", "an unsupported or case-changed field", "only exact fields defined by the supported schema", "silently accepting or dropping fields could change Owner intent", "use a compatible verified release and check again")
+		}
+		return persistedDocument{}, finding("STATE-DOCUMENT-INVALID", "Desired State payload", "a required field is absent", "one complete supported typed payload", "the stored intent is incomplete", "use the Recovery Required flow")
 	}
 	if err := strictDecode(document.Payload, &payload); err != nil {
 		if strings.Contains(err.Error(), "unknown field") {
@@ -214,6 +217,9 @@ func decode(data []byte) (persistedDocument, *Finding) {
 	checksum := sha256.Sum256(document.Payload)
 	if hex.EncodeToString(checksum[:]) != document.Checksum {
 		return persistedDocument{}, finding("STATE-CHECKSUM-MISMATCH", "Desired State integrity", "the payload integrity check failed", "the persisted payload checksum to match", "the document may have changed outside an approved Change Set", "use the Recovery Required flow")
+	}
+	if finding := validateDesiredState(payload); finding != nil {
+		return persistedDocument{}, finding
 	}
 	return document, nil
 }
@@ -238,34 +244,52 @@ var errUnknownField = errors.New("unknown JSON field")
 var errMissingField = errors.New("missing JSON field")
 
 func validateFieldNames(data []byte) error {
-	envelope, err := exactObject(data, "schema_version", "revision", "release_identity", "last_completed_change_set", "payload", "checksum")
-	if err != nil {
-		return err
-	}
-	_, err = exactObject(envelope["release_identity"], "repository", "tag", "commit", "release_index_sha256")
-	return err
+	return validateExactJSON(data, reflect.TypeOf(persistedDocument{}))
 }
 
-func exactObject(data []byte, fields ...string) (map[string]json.RawMessage, error) {
+var jsonUnmarshaler = reflect.TypeOf((*json.Unmarshaler)(nil)).Elem()
+
+func validateExactJSON(data []byte, valueType reflect.Type) error {
+	for valueType.Kind() == reflect.Pointer {
+		valueType = valueType.Elem()
+	}
+	if reflect.PointerTo(valueType).Implements(jsonUnmarshaler) || valueType.Kind() != reflect.Struct {
+		return nil
+	}
 	var object map[string]json.RawMessage
 	if err := json.Unmarshal(data, &object); err != nil || object == nil {
-		return nil, errMissingField
+		return errMissingField
 	}
-	allowed := make(map[string]bool, len(fields))
-	for _, field := range fields {
-		allowed[field] = true
+	fields := map[string]reflect.Type{}
+	for index := range valueType.NumField() {
+		field := valueType.Field(index)
+		if !field.IsExported() {
+			continue
+		}
+		name := strings.Split(field.Tag.Get("json"), ",")[0]
+		if name == "-" {
+			continue
+		}
+		if name == "" {
+			name = field.Name
+		}
+		fields[name] = field.Type
 	}
-	for field := range object {
-		if !allowed[field] {
-			return nil, errUnknownField
+	for name := range object {
+		if _, exists := fields[name]; !exists {
+			return errUnknownField
 		}
 	}
-	for _, field := range fields {
-		if _, exists := object[field]; !exists {
-			return nil, errMissingField
+	for name, fieldType := range fields {
+		raw, exists := object[name]
+		if !exists {
+			return errMissingField
+		}
+		if err := validateExactJSON(raw, fieldType); err != nil {
+			return err
 		}
 	}
-	return object, nil
+	return nil
 }
 
 func rejectDuplicateKeys(data []byte) error {

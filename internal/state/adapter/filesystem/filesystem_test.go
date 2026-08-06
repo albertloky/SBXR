@@ -9,8 +9,6 @@ import (
 	"github.com/albertloky/SBXR/internal/state"
 )
 
-const validDocument = `{"schema_version":1,"revision":7,"release_identity":{"repository":"https://github.com/albertloky/SBXR","tag":"v1.0.0","commit":"0123456789abcdef0123456789abcdef01234567","release_index_sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},"last_completed_change_set":"change-0007","payload":{},"checksum":"44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}`
-
 var release = state.ReleaseIdentity{
 	Repository:         "https://github.com/albertloky/SBXR",
 	Tag:                "v1.0.0",
@@ -66,7 +64,7 @@ func TestFilesystemSeam(t *testing.T) {
 		path := filepath.Join(root, "state", "state.json")
 		storage := adapter{root: root, uid: os.Geteuid(), beforeFileOpen: func() {
 			must(t, os.Rename(path, path+".replaced"))
-			must(t, os.WriteFile(path, []byte(validDocument), 0o600))
+			must(t, os.WriteFile(path, []byte(completeDocument(t)), 0o600))
 		}}
 		result, err := state.New(storage).Load(request)
 		if result.Status != state.RecoveryRequired || err == nil || !strings.Contains(err.Error(), "STATE-STORAGE-PATH") {
@@ -100,7 +98,7 @@ func TestFilesystemSeam(t *testing.T) {
 			must(t, os.Mkdir(filepath.Join(root, "state", "state.json"), 0o600))
 		}, code: "STATE-STORAGE-TYPE"},
 		{name: "corrupt document", edit: func(t *testing.T, root string) {
-			corrupt := strings.Replace(validDocument, "44136fa3", "54136fa3", 1)
+			corrupt := corruptChecksum(t, completeDocument(t))
 			must(t, os.WriteFile(filepath.Join(root, "state", "state.json"), []byte(corrupt), 0o600))
 		}, code: "STATE-CHECKSUM-MISMATCH"},
 	}
@@ -117,7 +115,7 @@ func TestFilesystemSeam(t *testing.T) {
 			if result.Status != state.RecoveryRequired || err == nil || !strings.Contains(err.Error(), tt.code) {
 				t.Fatalf("Load() = (%+v, %v), want %s", result, err, tt.code)
 			}
-			if strings.Contains(err.Error(), validDocument) {
+			if strings.Contains(err.Error(), completeDocument(t)) {
 				t.Fatal("storage finding exposed protected State")
 			}
 		})
@@ -129,8 +127,30 @@ func protectedBoundary(t *testing.T) string {
 	root := t.TempDir()
 	must(t, os.Chmod(root, 0o700))
 	must(t, os.Mkdir(filepath.Join(root, "state"), 0o700))
-	must(t, os.WriteFile(filepath.Join(root, "state", "state.json"), []byte(validDocument), 0o600))
+	must(t, os.WriteFile(filepath.Join(root, "state", "state.json"), []byte(completeDocument(t)), 0o600))
 	return root
+}
+
+func completeDocument(t *testing.T) string {
+	t.Helper()
+	document, err := os.ReadFile(filepath.Join("..", "..", "testdata", "complete-state.json"))
+	must(t, err)
+	return strings.TrimSpace(string(document))
+}
+
+func corruptChecksum(t *testing.T, document string) string {
+	t.Helper()
+	const prefix = `"checksum":"`
+	start := strings.Index(document, prefix)
+	if start < 0 {
+		t.Fatal("fixture has no checksum")
+	}
+	start += len(prefix)
+	replacement := "0"
+	if document[start] == '0' {
+		replacement = "1"
+	}
+	return document[:start] + replacement + document[start+1:]
 }
 
 func must(t *testing.T, err error) {
