@@ -14,23 +14,30 @@ import (
 const lockDirectory = "run/sbxr"
 
 type Adapter struct {
-	root   string
-	uid    int
-	source ObservationSource
-	host   Host
-	state  systemchanges.StateRecovery
+	root     string
+	uid      int
+	source   ObservationSource
+	host     Host
+	firewall FirewallExecutor
+	state    systemchanges.StateRecovery
 }
 
 // ObservationSource reloads coordinated State lineage and volatile bindings.
 type ObservationSource func() (systemchanges.Observation, error)
 
 func New(source ObservationSource, host Host, state ...systemchanges.StateRecovery) Adapter {
-	return Adapter{root: "/", uid: 0, source: source, host: host, state: firstStateRecovery(state)}
+	return Adapter{root: "/", uid: 0, source: source, host: host, firewall: NewNativeFirewall(), state: firstStateRecovery(state)}
 }
 
 // NewAt provides the production lock and host-fact seam under a controlled root.
 func NewAt(root string, source ObservationSource, host Host, state ...systemchanges.StateRecovery) Adapter {
 	return Adapter{root: root, uid: os.Geteuid(), source: source, host: host, state: firstStateRecovery(state)}
+}
+
+func NewAtWithFirewall(root string, source ObservationSource, host Host, firewall FirewallExecutor, state ...systemchanges.StateRecovery) Adapter {
+	adapter := NewAt(root, source, host, state...)
+	adapter.firewall = firewall
+	return adapter
 }
 
 func firstStateRecovery(states []systemchanges.StateRecovery) systemchanges.StateRecovery {

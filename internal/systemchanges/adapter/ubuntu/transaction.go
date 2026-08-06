@@ -38,6 +38,15 @@ type Host interface {
 	VerifyRollback(systemchanges.RollbackAgreement, time.Duration) error
 }
 
+// FirewallExecutor is the narrow native seam for approved inet sbxr changes.
+type FirewallExecutor interface {
+	CaptureRollback(systemchanges.Step, func(source io.Reader) error) error
+	Execute(systemchanges.Step, string, time.Duration, *systemchanges.Cancellation) (systemchanges.StepEvidence, error)
+	Commit(systemchanges.Step, systemchanges.StepEvidence) error
+	Reverse(systemchanges.Step, io.Reader, time.Duration) (systemchanges.StepEvidence, error)
+	Inspect(systemchanges.Step, io.Reader, time.Duration) (systemchanges.StepEffect, error)
+}
+
 type snapshotManifest struct {
 	SchemaVersion int                          `json:"schema_version"`
 	Release       systemchanges.ReleaseBinding `json:"release_identity"`
@@ -51,6 +60,7 @@ type journalStep struct {
 	Rollback     systemchanges.OperationKind        `json:"rollback"`
 	Cancellation systemchanges.CancellationContract `json:"cancellation"`
 	Inspection   systemchanges.InspectionContract   `json:"inspection"`
+	Firewall     *systemchanges.FirewallChange      `json:"firewall,omitempty"`
 }
 
 type journalEntry struct {
@@ -118,7 +128,16 @@ func (a Adapter) Prepare(lease systemchanges.ExecutionLease, preparation systemc
 			called = true
 			return write(fmt.Sprintf("snapshot/step-%03d.rollback", index+1), 0o600, source)
 		}
-		if err := a.host.CaptureRollback(step, captureRollback); err != nil || !called {
+		var captureErr error
+		if _, ok := step.FirewallChange(); ok {
+			if a.firewall == nil {
+				return errors.New("native firewall Adapter unavailable")
+			}
+			captureErr = a.firewall.CaptureRollback(step, captureRollback)
+		} else {
+			captureErr = a.host.CaptureRollback(step, captureRollback)
+		}
+		if captureErr != nil || !called {
 			return errors.New("rollback capture is incomplete")
 		}
 	}
@@ -137,6 +156,9 @@ func (a Adapter) Prepare(lease systemchanges.ExecutionLease, preparation systemc
 	steps := make([]journalStep, len(preparation.Steps))
 	for index, step := range preparation.Steps {
 		steps[index] = journalStep{Owner: step.Owner(), Forward: step.Forward(), Rollback: step.Rollback(), Cancellation: step.CancellationContract(), Inspection: step.InspectionContract()}
+		if firewall, ok := step.FirewallChange(); ok {
+			steps[index].Firewall = &firewall
+		}
 	}
 	entry := journalEntry{Checkpoint: systemchanges.Prepared, ChangeSet: preparation.ChangeSet, Starting: preparation.Starting, OutcomeOwner: preparation.OutcomeOwner, PlanSHA256: preparation.PlanSHA256, State: &preparation.State, Steps: steps, Checks: preparation.Checks, Timeouts: preparation.Timeouts}
 	if _, err := writeProtected(root, path.Join(temporary, "journal.jsonl"), strings.NewReader(""), a.uid); err != nil {
@@ -178,12 +200,36 @@ func (a Adapter) Record(lease systemchanges.ExecutionLease, record systemchanges
 	if err := verifyTransaction(root, target, a.uid); err != nil {
 		return err
 	}
-	return appendJournal(root, path.Join(target, "journal.jsonl"), journalEntry{Checkpoint: record.Checkpoint, Step: record.Step, Evidence: record.Evidence}, a.uid)
+	if err := appendJournal(root, path.Join(target, "journal.jsonl"), journalEntry{Checkpoint: record.Checkpoint, Step: record.Step, Evidence: record.Evidence}, a.uid); err != nil {
+		return err
+	}
+	if record.Checkpoint == systemchanges.StepCompleted && record.CompletedStep != nil {
+		if _, ok := record.CompletedStep.FirewallChange(); ok && a.firewall != nil {
+			if record.Evidence == nil {
+				return errors.New("durable firewall evidence unavailable")
+			}
+			return a.firewall.Commit(*record.CompletedStep, *record.Evidence)
+		}
+	}
+	return nil
 }
 
-func (a Adapter) Execute(lease systemchanges.ExecutionLease, step systemchanges.Step, timeout time.Duration, cancellation *systemchanges.Cancellation) (systemchanges.StepEvidence, error) {
+func (a Adapter) Execute(lease systemchanges.ExecutionLease, changeSet string, number int, step systemchanges.Step, timeout time.Duration, cancellation *systemchanges.Cancellation) (systemchanges.StepEvidence, error) {
 	if !lease.Authorized() || a.host == nil {
 		return systemchanges.StepEvidence{}, errors.New("typed Ubuntu transaction host unavailable")
+	}
+	if _, ok := step.FirewallChange(); ok {
+		if a.firewall == nil {
+			return systemchanges.StepEvidence{}, errors.New("native firewall Adapter unavailable")
+		}
+		if !safeName(changeSet) || number < 1 {
+			return systemchanges.StepEvidence{}, errors.New("invalid firewall transaction identity")
+		}
+		name := fmt.Sprintf("snapshot/step-%03d.rollback", number)
+		if _, err := a.recoveryArtifact(lease, changeSet, name); err != nil {
+			return systemchanges.StepEvidence{}, err
+		}
+		return a.firewall.Execute(step, path.Join(a.root, transactionDirectory, changeSet, name), timeout, cancellation)
 	}
 	return a.host.Execute(step, timeout, cancellation)
 }
@@ -210,6 +256,12 @@ func (a Adapter) Reverse(lease systemchanges.ExecutionLease, changeSet string, n
 	digest := sha256.Sum256(content)
 	if hex.EncodeToString(digest[:]) != manifest.Files[name] {
 		return systemchanges.StepEvidence{}, errors.New("rollback snapshot checksum mismatch")
+	}
+	if _, ok := step.FirewallChange(); ok {
+		if a.firewall == nil {
+			return systemchanges.StepEvidence{}, errors.New("native firewall Adapter unavailable")
+		}
+		return a.firewall.Reverse(step, bytes.NewReader(content), timeout)
 	}
 	return a.host.Reverse(step, bytes.NewReader(content), timeout)
 }
@@ -246,8 +298,26 @@ func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges
 	}
 	steps := make([]systemchanges.Step, len(prepared.Steps))
 	for index, persisted := range prepared.Steps {
-		step, err := systemchanges.NewStep(persisted.Owner, persisted.Forward, persisted.Rollback)
-		if err != nil || persisted.Cancellation != systemchanges.SafeCheckpointCancellation || persisted.Inspection != systemchanges.InspectBeforeIdempotentReverse {
+		var step systemchanges.Step
+		var err error
+		if persisted.Firewall == nil {
+			step, err = systemchanges.NewStep(persisted.Owner, persisted.Forward, persisted.Rollback)
+		} else {
+			if a.firewall == nil {
+				return systemchanges.RecoveryTransaction{}, errors.New("native firewall Adapter unavailable")
+			}
+			switch persisted.Firewall.Action {
+			case systemchanges.FirewallPolicyAction:
+				step, err = systemchanges.NewFirewallPolicyStep(persisted.Firewall.Candidate, persisted.Firewall.SSHPort)
+			case systemchanges.HTTP01OpenAction:
+				step, err = systemchanges.NewHTTP01OpenStep(persisted.Firewall.Candidate, persisted.Firewall.SSHPort)
+			case systemchanges.HTTP01CloseAction:
+				step, err = systemchanges.NewHTTP01CloseStep()
+			default:
+				err = errors.New("unknown firewall action")
+			}
+		}
+		if err != nil || step.Owner() != persisted.Owner || step.Forward() != persisted.Forward || step.Rollback() != persisted.Rollback || persisted.Cancellation != systemchanges.SafeCheckpointCancellation || persisted.Inspection != systemchanges.InspectBeforeIdempotentReverse {
 			return systemchanges.RecoveryTransaction{}, errors.New("recovery step contract is invalid")
 		}
 		steps[index] = step
@@ -298,6 +368,12 @@ func (a Adapter) InspectStep(lease systemchanges.ExecutionLease, recovery system
 	content, err := a.recoveryArtifact(lease, recovery.ChangeSet, fmt.Sprintf("snapshot/step-%03d.rollback", number))
 	if err != nil {
 		return "", err
+	}
+	if _, ok := step.FirewallChange(); ok {
+		if a.firewall == nil {
+			return "", errors.New("native firewall Adapter unavailable")
+		}
+		return a.firewall.Inspect(step, bytes.NewReader(content), timeout)
 	}
 	return a.host.InspectStep(step, bytes.NewReader(content), timeout)
 }

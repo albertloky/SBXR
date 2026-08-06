@@ -31,10 +31,11 @@ const (
 )
 
 type CheckpointRecord struct {
-	ChangeSet  string
-	Checkpoint DurableCheckpoint
-	Step       int
-	Evidence   *StepEvidence
+	ChangeSet     string
+	Checkpoint    DurableCheckpoint
+	Step          int
+	Evidence      *StepEvidence
+	CompletedStep *Step
 }
 
 func (record CheckpointRecord) String() string {
@@ -176,7 +177,7 @@ func (lock leaseLock) Close() error {
 type TransactionAdapter interface {
 	Prepare(ExecutionLease, Preparation) error
 	Record(ExecutionLease, CheckpointRecord) error
-	Execute(ExecutionLease, Step, time.Duration, *Cancellation) (StepEvidence, error)
+	Execute(ExecutionLease, string, int, Step, time.Duration, *Cancellation) (StepEvidence, error)
 	Reverse(ExecutionLease, string, int, Step, time.Duration) (StepEvidence, error)
 	Check(ExecutionLease, Check, GatePhase, time.Duration) (HealthStatus, error)
 	VerifyAgreement(ExecutionLease, Agreement, time.Duration) error
@@ -219,6 +220,9 @@ func (step Step) Forward() OperationKind                     { return step.forwa
 func (step Step) Rollback() OperationKind                    { return step.rollback }
 func (step Step) CancellationContract() CancellationContract { return step.cancel }
 func (step Step) InspectionContract() InspectionContract     { return step.inspect }
+func (step Step) FirewallChange() (FirewallChange, bool) {
+	return step.firewall, step.firewall != (FirewallChange{})
+}
 
 // Recover is the private startup path for unfinished ordinary forward work.
 // It never resumes the forward transaction.
@@ -410,14 +414,14 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 		if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: StepStarted, Step: number}); err != nil {
 			return finish(lock, nothingChanged(spec, "SYSTEM-CHANGES-JOURNAL", StepStarted))
 		}
-		evidence, err := adapter.Execute(lease, step, spec.Timeouts.Step, cancellation)
+		evidence, err := adapter.Execute(lease, spec.Identity, number, step, spec.Timeouts.Step, cancellation)
 		if err != nil || !safeIdentity(evidence.Code) || !validSHA256(evidence.SHA256) {
 			if cancellation.Requested() {
 				return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, number))
 			}
 			return finish(lock, rollbackChange(lease, adapter, transaction, spec, number, "SYSTEM-CHANGES-STEP", StepStarted))
 		}
-		if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: StepCompleted, Step: number, Evidence: &evidence}); err != nil {
+		if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: StepCompleted, Step: number, Evidence: &evidence, CompletedStep: &step}); err != nil {
 			return finish(lock, rollbackChange(lease, adapter, transaction, spec, number, "SYSTEM-CHANGES-JOURNAL", StepStarted))
 		}
 		if cancellation.Requested() {

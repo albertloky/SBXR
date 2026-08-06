@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/bits"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -349,8 +350,27 @@ const (
 	ActivatePreparedConfiguration OperationKind = "Activate prepared configuration"
 	RestorePriorConfiguration     OperationKind = "Restore prior configuration"
 	ApplyApprovedNetworkPolicy    OperationKind = "Apply approved Network Policy"
+	OpenApprovedHTTP01            OperationKind = "Open approved HTTP-01 rule"
+	CloseRecordedHTTP01           OperationKind = "Close recorded HTTP-01 rule"
 	RestorePriorNetworkPolicy     OperationKind = "Restore prior Network Policy"
 )
+
+type FirewallAction string
+
+const (
+	FirewallPolicyAction FirewallAction = "policy"
+	HTTP01OpenAction     FirewallAction = "http-01-open"
+	HTTP01CloseAction    FirewallAction = "http-01-close"
+)
+
+const http01Identity = "sbxr:acme-http-01"
+
+type FirewallChange struct {
+	Action                FirewallAction `json:"action"`
+	Candidate             string         `json:"candidate,omitempty"`
+	SSHPort               uint16         `json:"ssh_port,omitempty"`
+	TemporaryRuleIdentity string         `json:"temporary_rule_identity,omitempty"`
+}
 
 type Step struct {
 	owner    Module
@@ -358,13 +378,38 @@ type Step struct {
 	rollback OperationKind
 	cancel   CancellationContract
 	inspect  InspectionContract
+	firewall FirewallChange
 }
 
 func NewStep(owner Module, forward, rollback OperationKind) (Step, error) {
-	if !validModule(owner) || !validOperation(forward) || !validOperation(rollback) || forward == rollback {
+	if !validModule(owner) || !validOperation(forward) || !validOperation(rollback) || forward == rollback || owner == NetworkPolicyModule || networkOperation(forward) || networkOperation(rollback) {
 		return Step{}, &Finding{Code: "SYSTEM-CHANGES-STEP-INVALID", Problem: "A typed change or rollback instruction is invalid", Found: "an unsupported owner or operation", Required: "one owning Module plus distinct allowed forward and rollback operations", WhyStopped: "System Changes never accepts arbitrary commands, paths, services, or root operations", NextAction: "Rebuild the Change Set through the owning Module."}
 	}
 	return Step{owner: owner, forward: forward, rollback: rollback, cancel: SafeCheckpointCancellation, inspect: InspectBeforeIdempotentReverse}, nil
+}
+
+func NewFirewallPolicyStep(candidate string, sshPort uint16) (Step, error) {
+	return newFirewallStep(ApplyApprovedNetworkPolicy, FirewallPolicyAction, candidate, sshPort)
+}
+
+func NewHTTP01OpenStep(candidate string, sshPort uint16) (Step, error) {
+	return newFirewallStep(OpenApprovedHTTP01, HTTP01OpenAction, candidate, sshPort)
+}
+
+func NewHTTP01CloseStep() (Step, error) {
+	return newFirewallStep(CloseRecordedHTTP01, HTTP01CloseAction, "", 0)
+}
+
+func newFirewallStep(forward OperationKind, action FirewallAction, candidate string, sshPort uint16) (Step, error) {
+	contract := FirewallChange{Action: action, Candidate: candidate, SSHPort: sshPort}
+	if action == HTTP01OpenAction || action == HTTP01CloseAction {
+		contract.TemporaryRuleIdentity = http01Identity
+	}
+	step := Step{owner: NetworkPolicyModule, forward: forward, rollback: RestorePriorNetworkPolicy, cancel: SafeCheckpointCancellation, inspect: InspectBeforeIdempotentReverse, firewall: contract}
+	if !validStep(step) {
+		return Step{}, &Finding{Code: "SYSTEM-CHANGES-STEP-INVALID", Problem: "A Network Policy change is invalid", Found: "an incomplete or unsafe firewall contract", Required: "one exact inet sbxr candidate, detected SSH port, and typed temporary-rule action", WhyStopped: "System Changes never accepts arbitrary nftables work", NextAction: "Rebuild the Change Set through Network Policy."}
+	}
+	return step, nil
 }
 
 type Classification string
@@ -465,6 +510,13 @@ type ChangeSetSpec struct {
 type ChangeSet struct {
 	spec ChangeSetSpec
 	used *planAuthority
+}
+
+func (changeSet *ChangeSet) Identity() string {
+	if changeSet == nil {
+		return ""
+	}
+	return changeSet.spec.Identity
 }
 
 type planAuthority struct{ used atomic.Bool }
@@ -667,14 +719,58 @@ func validModule(module Module) bool {
 
 func validOperation(operation OperationKind) bool {
 	switch operation {
-	case ActivatePreparedConfiguration, RestorePriorConfiguration, ApplyApprovedNetworkPolicy, RestorePriorNetworkPolicy:
+	case ActivatePreparedConfiguration, RestorePriorConfiguration, ApplyApprovedNetworkPolicy, OpenApprovedHTTP01, CloseRecordedHTTP01, RestorePriorNetworkPolicy:
 		return true
 	}
 	return false
 }
 
 func validStep(step Step) bool {
-	return validModule(step.owner) && validOperation(step.forward) && validOperation(step.rollback) && step.forward != step.rollback && step.cancel == SafeCheckpointCancellation && step.inspect == InspectBeforeIdempotentReverse
+	base := validModule(step.owner) && validOperation(step.forward) && validOperation(step.rollback) && step.forward != step.rollback && step.cancel == SafeCheckpointCancellation && step.inspect == InspectBeforeIdempotentReverse
+	if !base {
+		return false
+	}
+	if step.owner == NetworkPolicyModule || networkOperation(step.forward) || networkOperation(step.rollback) {
+		return step.owner == NetworkPolicyModule && step.rollback == RestorePriorNetworkPolicy && validFirewallContract(step.firewall, step.forward)
+	}
+	return step.firewall == (FirewallChange{})
+}
+
+func networkOperation(operation OperationKind) bool {
+	return operation == ApplyApprovedNetworkPolicy || operation == OpenApprovedHTTP01 || operation == CloseRecordedHTTP01 || operation == RestorePriorNetworkPolicy
+}
+
+func validFirewallContract(contract FirewallChange, operation OperationKind) bool {
+	if contract.Action == HTTP01CloseAction {
+		return operation == CloseRecordedHTTP01 && contract.Candidate == "" && contract.SSHPort == 0 && contract.TemporaryRuleIdentity == http01Identity
+	}
+	if contract.SSHPort == 0 || operation == ApplyApprovedNetworkPolicy && contract.Action != FirewallPolicyAction || operation == OpenApprovedHTTP01 && contract.Action != HTTP01OpenAction || !safeFirewallCandidate(contract.Candidate, contract.SSHPort) {
+		return false
+	}
+	hasHTTP01 := strings.Count(contract.Candidate, `comment "`+http01Identity+`"`) == 1 && strings.Contains(contract.Candidate, `tcp dport 80 accept comment "`+http01Identity+`"`)
+	return contract.Action == HTTP01OpenAction && contract.TemporaryRuleIdentity == http01Identity && hasHTTP01 || contract.Action == FirewallPolicyAction && contract.TemporaryRuleIdentity == "" && !strings.Contains(contract.Candidate, http01Identity)
+}
+
+func safeFirewallCandidate(candidate string, sshPort uint16) bool {
+	if len(candidate) == 0 || len(candidate) > 64<<10 {
+		return false
+	}
+	tokens := strings.Fields(strings.ToLower(candidate))
+	if len(tokens) < 4 || tokens[0] != "table" || tokens[1] != "inet" || tokens[2] != "sbxr" || tokens[3] != "{" {
+		return false
+	}
+	tables := 0
+	for _, token := range tokens {
+		token = strings.Trim(token, ";")
+		if token == "table" {
+			tables++
+		}
+		switch token {
+		case "add", "insert", "replace", "delete", "destroy", "flush", "rename", "include", "define", "redefine":
+			return false
+		}
+	}
+	return tables == 1 && strings.Contains(strings.Join(tokens, " "), fmt.Sprintf("tcp dport %d", sshPort))
 }
 
 func validCheck(check Check) bool {

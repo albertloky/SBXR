@@ -26,6 +26,12 @@ This record covers the System Changes Module only. It is not Release Qualificati
 - `SYSTEM-CHANGES-RECOVERY-RETRY`: `go test ./internal/state -run TestRetryAutomaticRollbackUsesOnlyTheAuthorizedRecoveryPath`
 - `SYSTEM-CHANGES-RECOVERY-REFUSAL`: `go test ./internal/systemchanges -run 'Test(RecoveryOptionsRequireExactEligibilityFacts|RecoveryRequiredBlocksNormalMutationAndAdmitsOnlyValidForwardRepair)'`
 - `SYSTEM-CHANGES-FORWARD-REPAIR`: `go test ./internal/state -run TestValidCurrentStateDriftCreatesOnlyAFreshForwardRepairChangeSet`
+- `SYSTEM-CHANGES-FIREWALL-WATCHDOG`: `go test ./internal/state ./internal/systemchanges/adapter/ubuntu -run 'Test(UbuntuFirewallSeamPreservesSSHAndCleansOnlyExactHTTP01Rule|UbuntuFirewallRestartRepeatsOnlyItsRecordedReverse|NativeFirewallUsesWatchdogAndExactHTTP01Handle|ProductionFirewallSeam)' -v`
+- `SYSTEM-CHANGES-SSH-PROOF`: `go test ./internal/state -run TestUbuntuFirewallSeamPreservesSSHAndCleansOnlyExactHTTP01Rule/SSH -v`
+- `SYSTEM-CHANGES-HTTP01-RULE`: `go test ./internal/state ./internal/systemchanges/adapter/ubuntu -run 'Test(UbuntuFirewallSeamPreservesSSHAndCleansOnlyExactHTTP01Rule|NativeFirewallUsesWatchdogAndExactHTTP01Handle)' -v`
+- `SYSTEM-CHANGES-RENEWAL-SCHEDULER`: `go test ./internal/certificatelifecycle ./internal/state -run 'Test(SystemdUnitsOwnOnePersistentRandomizedTwiceDailyRenewal|CertificateRenewalSchedulerUsesRealOneUseSystemChangesLock)'`
+- `SYSTEM-CHANGES-RENEWAL-LINEAGE`: `go test ./internal/state -run TestCertificateRenewalSchedulerUsesRealOneUseSystemChangesLock`
+- `SYSTEM-CHANGES-SCHEDULED-LOCK`: `go test ./internal/systemchanges -run TestApplyNeverQueuesOrStealsHeldLock`
 - `SYSTEM-CHANGES-REPOSITORY`: `go test ./...`
 
 ## SC-01 procedure
@@ -76,14 +82,23 @@ This record covers the System Changes Module only. It is not Release Qualificati
 4. Prove current State lineage and checksum while reporting only current-State drift. Confirm a Repair mutation may create one fresh reviewed forward-repair Change Set and never consumes an old snapshot or completed journal.
 5. Report missing or corrupt State, missing secrets, a replacement or dead VPS, an older revision, and Owner regret. Confirm the recovery plan is Complete removal and rebuild, not restore.
 
+## SC-07 procedure
+
+1. Submit one typed Network Policy step with the complete approved `inet sbxr` candidate and detected non-default SSH port. Confirm arbitrary nftables text, another table, whole-ruleset flush, a missing SSH port, and an untyped Network Policy operation are refused before preparation.
+2. Capture the exact prior `inet sbxr` policy in the protected transaction snapshot, pass native `nft --check`, arm the root rollback watchdog, and atomically replace only `inet sbxr`. Confirm an existing SSH session remains established and the resulting policy admits the detected port before cancelling the watchdog. Fail or time out either proof and confirm automatic rollback restores only prior `inet sbxr` while unrelated tables remain unchanged.
+3. Open HTTP-01 with exactly one `sbxr:acme-http-01` 80/TCP rule. Confirm its native handle identity becomes durable step evidence before later work. On success close only that recorded handle and prove no 80/TCP exposure remains; on failure, explicit cancellation, interrupted reverse, and fresh restart recovery restore the transaction baseline without deleting unrelated rules.
+4. Confirm the Certificate Lifecycle-owned scheduling contract names exactly one persistent randomized service and one timer, evaluates IP then domain serially at least twice daily, creates a separate one-use Change Set for each due lineage, and sends every Apply through the global lock. Hold the lock and confirm the renewal is deferred without a queue, its Plan is burned, and the scheduler must rebuild observations and a fresh Plan within its own due and retry policy.
+5. On an explicitly approved isolated Ubuntu host, set `SBXR_CONTROLLED_FIREWALL_SEAM=1` and run the firewall-watchdog stable check. Confirm native validation, the real watchdog, non-default SSH proof, atomic application, exact rollback, and unrelated-table preservation. Do not run this mutation check on an Owner VPS.
+
 ## Current status
 
 | Stage | Status | Evidence |
 |---|---|---|
-| Module Verification | Passed | SC-01 checks cover four-state inspection and safe admission. SC-02 checks cover durable success. `SYSTEM-CHANGES-ROLLBACK` covers SC-03 cancellation and failure. `SYSTEM-CHANGES-FORWARD-DEATH` and `SYSTEM-CHANGES-SERVICE-START` cover SC-04 restart rollback. SC-05 checks cover interrupted rollback continuation, a second death, exact service holdback, cleanup-only restart after `Complete`, and corrupt-evidence refusal. SC-06 checks cover the Recovery Required action boundary, exact retry eligibility, refusal, secret safety, and fresh forward repair. |
+| Module Verification | Passed | SC-01 checks cover four-state inspection and safe admission. SC-02 checks cover durable success. `SYSTEM-CHANGES-ROLLBACK` covers SC-03 cancellation and failure. `SYSTEM-CHANGES-FORWARD-DEATH` and `SYSTEM-CHANGES-SERVICE-START` cover SC-04 restart rollback. SC-05 checks cover interrupted rollback continuation, a second death, exact service holdback, cleanup-only restart after `Complete`, and corrupt-evidence refusal. SC-06 checks cover the Recovery Required action boundary, exact retry eligibility, refusal, secret safety, and fresh forward repair. SC-07 checks cover typed firewall admission, watchdog ordering, non-default SSH proof, exact HTTP-01 identity and cleanup, interrupted reverse, restart recovery, unrelated-rule preservation, and renewal serialization ownership. |
 | Seam Verification — controlled kernel lock | Passed | `SYSTEM-CHANGES-LOCK` uses a real kernel file lock, proves held-lock refusal, process-exit release, exact protected lock-file identity, and read-only host observation. |
 | Seam Verification — controlled transaction filesystem | Passed | SC-02 filesystem checks cover protected durable success. SC-03 checks prove rollback and cleanup. `SYSTEM-CHANGES-RECOVERY-RUNNER` proves forward-death recovery. SC-05 kills rollback in a separate process, reopens the production Adapter's protected evidence, repeats the uncertain reverse, proves service holdback, and removes only durably resolved transaction material. |
+| Seam Verification — controlled native firewall | Passed | Deterministic production-Adapter command-boundary checks prove native validation, watchdog-before-Apply ordering, cancellation only after both SSH proofs, exact recorded-handle cleanup, generic-error redaction, and unrelated-rule preservation. |
 | Seam Verification — production Ubuntu | Pending | Run the same Adapter checks on the assigned controlled Ubuntu environment; this local run does not claim Ubuntu/systemd acceptance. |
-| Integrated Verification | Pending — integrated release | SC-07 through SC-09, all-Module wiring, real service units, watchdog work, and Complete removal do not exist yet. Controlled SC-04 through SC-06 checks do not satisfy integrated verification. |
+| Integrated Verification | Pending — integrated release | SC-08 through SC-09, all-Module wiring, Certificate Lifecycle unit installation/private-command wiring, and Complete removal do not exist yet. Controlled SC-04 through SC-07 checks do not satisfy integrated verification. |
 | Codex Live Acceptance | Pending — approved Acceptance Run | No Acceptance VPS was used. |
 | Owner Acceptance | Pending — first v1 release | Albert's maintained workflow is outside this Module Verification. |

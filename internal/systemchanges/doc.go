@@ -16,4 +16,10 @@
 // secret-safe inspection, diagnostics, recheck, Back, separately confirmed
 // Complete removal, an eligible rollback retry, or a fresh forward repair of
 // valid current State drift.
+// Network Policy steps additionally carry one exact inet sbxr candidate and
+// detected SSH port. The Ubuntu Adapter validates it natively, arms rollback
+// before atomic Apply, proves the current SSH session and admitted port before
+// cancelling the watchdog, and records and removes only the approved temporary
+// HTTP-01 rule. Certificate Lifecycle owns its one serial randomized scheduler;
+// each due lineage still enters through the same one-use Apply and global lock.
 package systemchanges

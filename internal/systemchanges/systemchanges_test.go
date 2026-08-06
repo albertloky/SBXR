@@ -386,6 +386,47 @@ func TestChangeSetRejectsUntypedMutationSurfaces(t *testing.T) {
 	}
 }
 
+func TestNetworkPolicyStepsAcceptOnlyTheExactFirewallContract(t *testing.T) {
+	base := `table inet sbxr {
+	chain input {
+		type filter hook input priority filter
+		policy drop
+		ct state established,related accept
+		tcp dport 2222 accept
+	}
+}`
+	for _, build := range []func() (systemchanges.Step, error){
+		func() (systemchanges.Step, error) { return systemchanges.NewFirewallPolicyStep(base, 2222) },
+		func() (systemchanges.Step, error) {
+			return systemchanges.NewHTTP01OpenStep(strings.Replace(base, "\t}", "\t\ttcp dport 80 accept comment \"sbxr:acme-http-01\"\n\t}", 1), 2222)
+		},
+		func() (systemchanges.Step, error) { return systemchanges.NewHTTP01CloseStep() },
+	} {
+		step, err := build()
+		if err != nil || step.Owner() != systemchanges.NetworkPolicyModule || step.Rollback() != systemchanges.RestorePriorNetworkPolicy || step.CancellationContract() != systemchanges.SafeCheckpointCancellation || step.InspectionContract() != systemchanges.InspectBeforeIdempotentReverse {
+			t.Fatalf("typed firewall step = (%+v, %v)", step, err)
+		}
+	}
+	for _, build := range []func() error{
+		func() error {
+			_, err := systemchanges.NewStep(systemchanges.NetworkPolicyModule, systemchanges.ApplyApprovedNetworkPolicy, systemchanges.RestorePriorNetworkPolicy)
+			return err
+		},
+		func() error { _, err := systemchanges.NewFirewallPolicyStep("flush ruleset", 2222); return err },
+		func() error {
+			_, err := systemchanges.NewFirewallPolicyStep(base+"\ntable\tinet unrelated { chain input {} }", 2222)
+			return err
+		},
+		func() error { _, err := systemchanges.NewFirewallPolicyStep(base+"\nflush\truleset", 2222); return err },
+		func() error { _, err := systemchanges.NewFirewallPolicyStep(base, 0); return err },
+		func() error { _, err := systemchanges.NewHTTP01OpenStep(base, 2222); return err },
+	} {
+		if err := build(); err == nil {
+			t.Fatal("unsafe firewall contract was accepted")
+		}
+	}
+}
+
 func completeObservation() systemchanges.Observation {
 	return systemchanges.Observation{
 		Status: systemchanges.Managed, LastChangeSet: "change-0007", Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased,

@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/albertloky/SBXR/internal/certificatelifecycle"
 	"github.com/albertloky/SBXR/internal/systemchanges"
 	"github.com/albertloky/SBXR/internal/systemchanges/adapter/ubuntu"
 )
@@ -47,6 +48,7 @@ type systemChangesAdapter struct {
 	crashBefore     systemchanges.DurableCheckpoint
 	crashAfter      systemchanges.DurableCheckpoint
 	crashed         bool
+	lockHeld        bool
 }
 
 func (a *systemChangesAdapter) Observe() (systemchanges.Observation, error) {
@@ -54,6 +56,9 @@ func (a *systemChangesAdapter) Observe() (systemchanges.Observation, error) {
 }
 
 func (a *systemChangesAdapter) TryLock() (systemchanges.Lock, bool, error) {
+	if a.lockHeld {
+		return nil, false, nil
+	}
 	return systemChangesLock{closes: &a.closes, err: a.closeErr}, true, nil
 }
 
@@ -127,7 +132,7 @@ func (a *systemChangesAdapter) Record(_ systemchanges.ExecutionLease, record sys
 	return nil
 }
 
-func (a *systemChangesAdapter) Execute(_ systemchanges.ExecutionLease, step systemchanges.Step, _ time.Duration, _ *systemchanges.Cancellation) (systemchanges.StepEvidence, error) {
+func (a *systemChangesAdapter) Execute(_ systemchanges.ExecutionLease, _ string, _ int, step systemchanges.Step, _ time.Duration, _ *systemchanges.Cancellation) (systemchanges.StepEvidence, error) {
 	a.executeCount++
 	a.events = append(a.events, "execute "+string(step.Forward()))
 	if a.executeCount == a.failStep {
@@ -262,10 +267,7 @@ func TestPreparedCommitDurablyCompletesOneSystemChangesChangeSet(t *testing.T) {
 }
 
 func TestLiveStepFailureRestoresBaselineInSafeReverseOrder(t *testing.T) {
-	second, err := systemchanges.NewStep(systemchanges.NetworkPolicyModule, systemchanges.ApplyApprovedNetworkPolicy, systemchanges.RestorePriorNetworkPolicy)
-	if err != nil {
-		t.Fatal(err)
-	}
+	second := testFirewallStep(t)
 	stateModule, changeSet, _, observed := preparedSystemChangeForMutation(t, systemchanges.SettingChangeMutation, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-PREFLIGHT"}, second)
 	adapter := &systemChangesAdapter{observation: observed, failStep: 2}
 	result := systemchanges.New(adapter).Apply(changeSet)
@@ -284,10 +286,7 @@ func TestLiveStepFailureRestoresBaselineInSafeReverseOrder(t *testing.T) {
 
 func TestExplicitCancellationWaitsForSafeCheckpointThenRollsBack(t *testing.T) {
 	cancellation := systemchanges.NewCancellation()
-	second, err := systemchanges.NewStep(systemchanges.NetworkPolicyModule, systemchanges.ApplyApprovedNetworkPolicy, systemchanges.RestorePriorNetworkPolicy)
-	if err != nil {
-		t.Fatal(err)
-	}
+	second := testFirewallStep(t)
 	_, changeSet, _, observed := preparedSystemChangeForMutation(t, systemchanges.SettingChangeMutation, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-PREFLIGHT"}, second)
 	adapter := &systemChangesAdapter{observation: observed, beforeStep: func() error {
 		cancellation.Request()
@@ -376,6 +375,15 @@ func TestFailedInstallationRestoresProvenNotInstalledBaseline(t *testing.T) {
 
 func preparedSystemChange(t *testing.T) (Interface, *systemchanges.ChangeSet, *systemchanges.ChangeSet, systemchanges.Observation) {
 	return preparedSystemChangeWithCheck(t, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-PREFLIGHT"})
+}
+
+func testFirewallStep(t *testing.T) systemchanges.Step {
+	t.Helper()
+	step, err := systemchanges.NewFirewallPolicyStep("table inet sbxr {\n chain input {\n  type filter hook input priority filter\n  policy drop\n  tcp dport 2222 accept\n }\n}", 2222)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return step
 }
 
 func preparedSystemChangeWithCheck(t *testing.T, check systemchanges.Check) (Interface, *systemchanges.ChangeSet, *systemchanges.ChangeSet, systemchanges.Observation) {
@@ -613,6 +621,95 @@ type controlledService struct {
 	affected bool
 }
 
+type controlledFirewall struct {
+	events        []string
+	failSSH       bool
+	requestCancel bool
+	failReverse   bool
+	failClose     bool
+	temporaryOpen bool
+	unrelated     string
+}
+
+func (firewall *controlledFirewall) CaptureRollback(_ systemchanges.Step, write func(io.Reader) error) error {
+	firewall.events = append(firewall.events, "capture inet sbxr")
+	return write(strings.NewReader("table inet sbxr { chain input { tcp dport 2222 accept } }"))
+}
+
+func (firewall *controlledFirewall) Execute(step systemchanges.Step, rollbackPath string, _ time.Duration, cancellation *systemchanges.Cancellation) (systemchanges.StepEvidence, error) {
+	change, ok := step.FirewallChange()
+	if !ok {
+		return systemchanges.StepEvidence{}, errors.New("missing typed firewall change")
+	}
+	if _, err := os.Stat(rollbackPath); err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	switch change.Action {
+	case systemchanges.FirewallPolicyAction:
+		firewall.events = append(firewall.events, "native validate", "arm root watchdog", "apply only inet sbxr", "existing SSH responsive", "detected SSH admitted")
+		if firewall.failSSH {
+			return systemchanges.StepEvidence{}, errors.New("controlled SSH gate failure")
+		}
+	case systemchanges.HTTP01OpenAction:
+		firewall.temporaryOpen = true
+		firewall.events = append(firewall.events, "native validate", "arm root watchdog", "apply only inet sbxr", "existing SSH responsive", "detected SSH admitted", "record sbxr:acme-http-01")
+	case systemchanges.HTTP01CloseAction:
+		if !firewall.temporaryOpen {
+			return systemchanges.StepEvidence{}, errors.New("temporary rule identity not present")
+		}
+		if firewall.failClose {
+			return systemchanges.StepEvidence{}, errors.New("controlled HTTP-01 cleanup failure")
+		}
+		journal, err := os.ReadFile(filepath.Join(filepath.Dir(filepath.Dir(rollbackPath)), "journal.jsonl"))
+		if err != nil || !bytes.Contains(journal, []byte(`"code":"network-http01-handle-41"`)) {
+			return systemchanges.StepEvidence{}, errors.New("temporary rule identity was not durable before cleanup")
+		}
+		firewall.temporaryOpen = false
+		firewall.events = append(firewall.events, "delete only sbxr:acme-http-01", "prove TCP 80 prior policy")
+	}
+	if firewall.requestCancel {
+		cancellation.Request()
+	}
+	if cancellation.Requested() {
+		return systemchanges.StepEvidence{}, errors.New("cancelled after safe firewall checkpoint")
+	}
+	code := "network-policy-safe"
+	if change.Action == systemchanges.HTTP01OpenAction {
+		code = "network-http01-handle-41"
+	} else if change.Action == systemchanges.HTTP01CloseAction {
+		code = "network-http01-removed-41"
+	}
+	digest := sha256.Sum256([]byte(change.Action + systemchanges.FirewallAction(firewall.unrelated)))
+	return systemchanges.StepEvidence{Code: code, SHA256: fmt.Sprintf("%x", digest)}, nil
+}
+
+func (firewall *controlledFirewall) Commit(_ systemchanges.Step, evidence systemchanges.StepEvidence) error {
+	if evidence.Code == "" {
+		return errors.New("durable firewall evidence unavailable")
+	}
+	firewall.events = append(firewall.events, "durable step evidence", "cancel watchdog")
+	return nil
+}
+
+func (firewall *controlledFirewall) Reverse(_ systemchanges.Step, snapshot io.Reader, _ time.Duration) (systemchanges.StepEvidence, error) {
+	if firewall.failReverse {
+		return systemchanges.StepEvidence{}, errors.New("controlled firewall reverse interruption")
+	}
+	prior, err := io.ReadAll(snapshot)
+	if err != nil || !strings.Contains(string(prior), "table inet sbxr") {
+		return systemchanges.StepEvidence{}, errors.New("prior inet sbxr policy unavailable")
+	}
+	firewall.temporaryOpen = false
+	firewall.events = append(firewall.events, "restore only prior inet sbxr", "cancel watchdog")
+	digest := sha256.Sum256(prior)
+	return systemchanges.StepEvidence{Code: "network-policy-restored", SHA256: fmt.Sprintf("%x", digest)}, nil
+}
+
+func (firewall *controlledFirewall) Inspect(_ systemchanges.Step, _ io.Reader, _ time.Duration) (systemchanges.StepEffect, error) {
+	firewall.events = append(firewall.events, "inspect exact inet sbxr effect")
+	return systemchanges.StepEffectPresent, nil
+}
+
 type cleanupFailingUbuntuAdapter struct{ ubuntu.Adapter }
 
 func (cleanupFailingUbuntuAdapter) Cleanup(systemchanges.ExecutionLease, string) error {
@@ -716,7 +813,7 @@ func (host *controlledUbuntuHost) Execute(_ systemchanges.Step, timeout time.Dur
 		Checks     []systemchanges.Check                 `json:"health_gates"`
 	}
 	first, _, _ := bytes.Cut(journalBytes, []byte{'\n'})
-	if json.Unmarshal(first, &preparedEntry) != nil || preparedEntry.Checkpoint != "Prepared" || preparedEntry.ChangeSet != "change-0008" || len(preparedEntry.PlanSHA256) != 64 || preparedEntry.State.StartingRevision != 7 || preparedEntry.State.CandidateRevision != 8 || len(preparedEntry.Steps) != 1 || preparedEntry.Steps[0]["cancellation"] != string(systemchanges.SafeCheckpointCancellation) || len(preparedEntry.Checks) != 2 || bytes.Contains(journalBytes, []byte("SECRET-MARKER")) || bytes.Contains(manifestBytes, []byte("SECRET-MARKER")) {
+	if json.Unmarshal(first, &preparedEntry) != nil || preparedEntry.Checkpoint != "Prepared" || preparedEntry.ChangeSet != "change-0008" || len(preparedEntry.PlanSHA256) != 64 || preparedEntry.State.StartingRevision != 7 || preparedEntry.State.CandidateRevision != 8 || len(preparedEntry.Steps) < 1 || preparedEntry.Steps[0]["cancellation"] != string(systemchanges.SafeCheckpointCancellation) || len(preparedEntry.Checks) != 2 || bytes.Contains(journalBytes, []byte("SECRET-MARKER")) || bytes.Contains(manifestBytes, []byte("SECRET-MARKER")) {
 		return systemchanges.StepEvidence{}, errors.New("Prepared journal binding is incomplete or unsafe")
 	}
 	preparedConfig, err := os.ReadFile(filepath.Join(transaction, "prepared/subscription.json"))
@@ -1172,7 +1269,7 @@ func TestUbuntuAdapterDurablyProtectsAndCleansSuccessfulTransaction(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := adapter.Execute(systemchanges.ExecutionLease{}, unauthorizedStep, time.Second, nil); err == nil || host.executed != 0 {
+	if _, err := adapter.Execute(systemchanges.ExecutionLease{}, "change-0008", 1, unauthorizedStep, time.Second, nil); err == nil || host.executed != 0 {
 		t.Fatal("Ubuntu Adapter exposed a second mutation path outside Apply")
 	}
 	result := systemchanges.New(adapter).Apply(changeSet)
@@ -1258,6 +1355,184 @@ func TestUbuntuAdapterBoundsLiveStepAndRollsBackOnTimeout(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "var/lib/sbxr/transactions/change-0008")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("timed-out transaction material still exists: %v", err)
+	}
+}
+
+type renewalDuePolicy struct{ events *[]string }
+
+func (policy renewalDuePolicy) Due(lineage certificatelifecycle.Lineage) bool {
+	*policy.events = append(*policy.events, "due "+string(lineage))
+	return true
+}
+
+func (policy renewalDuePolicy) WaitWithinRetryPolicy(lineage certificatelifecycle.Lineage) bool {
+	*policy.events = append(*policy.events, "wait "+string(lineage))
+	return lineage == certificatelifecycle.IPLineage
+}
+
+type renewalPlanner struct {
+	events  *[]string
+	changes map[certificatelifecycle.Lineage][]*systemchanges.ChangeSet
+}
+
+func (planner *renewalPlanner) BuildFresh(lineage certificatelifecycle.Lineage) (certificatelifecycle.ChangeSet, error) {
+	changes := planner.changes[lineage]
+	if len(changes) == 0 {
+		return nil, errors.New("no fresh controlled renewal Change Set")
+	}
+	changeSet := changes[0]
+	planner.changes[lineage] = changes[1:]
+	*planner.events = append(*planner.events, "build "+changeSet.Identity())
+	return changeSet, nil
+}
+
+type renewalSystemChanges struct{ changes systemchanges.Interface }
+
+func (adapter renewalSystemChanges) Apply(changeSet certificatelifecycle.ChangeSet) certificatelifecycle.ApplyResult {
+	change, ok := changeSet.(*systemchanges.ChangeSet)
+	if !ok {
+		return certificatelifecycle.ApplyResult{Outcome: certificatelifecycle.Refused, Code: "SYSTEM-CHANGES-CHANGE-SET-REQUIRED"}
+	}
+	result := adapter.changes.Apply(change)
+	code := ""
+	if result.Finding != nil {
+		code = result.Finding.Code
+	}
+	return certificatelifecycle.ApplyResult{
+		Outcome: certificatelifecycle.ApplyOutcome(result.Outcome), PlanConsumed: result.PlanConsumed,
+		QueueCreated: result.QueueCreated, RebuildPlan: result.RebuildPlan, Code: code,
+	}
+}
+
+func TestCertificateRenewalSchedulerUsesRealOneUseSystemChangesLock(t *testing.T) {
+	build := func(identity string) *systemchanges.ChangeSet {
+		t.Helper()
+		_, changeSet, _, _ := preparedSystemChangeWithOptions(t, systemchanges.CertificateRenewalMutation, systemchanges.Check{Owner: systemchanges.CertificateModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CERTIFICATE-RENEWAL"}, systemChangeTestOptions{identity: identity, stepTimeout: time.Second})
+		return changeSet
+	}
+	ipFirst, ipRetry, domain := build("change-8101"), build("change-8102"), build("change-8103")
+	var events []string
+	planner := &renewalPlanner{events: &events, changes: map[certificatelifecycle.Lineage][]*systemchanges.ChangeSet{
+		certificatelifecycle.IPLineage:     {ipFirst, ipRetry},
+		certificatelifecycle.DomainLineage: {domain},
+	}}
+	changes := systemchanges.New(&systemChangesAdapter{lockHeld: true})
+	results := certificatelifecycle.NewScheduler(renewalDuePolicy{events: &events}, planner, renewalSystemChanges{changes: changes}).Run()
+	if len(results) != 2 || results[0].Lineage != certificatelifecycle.IPLineage || results[0].ChangeSetID != ipRetry.Identity() || results[0].Apply.Outcome != certificatelifecycle.Deferred || !results[0].Apply.RebuildPlan || results[1].Lineage != certificatelifecycle.DomainLineage || results[1].ChangeSetID != domain.Identity() || results[1].Apply.Outcome != certificatelifecycle.Deferred || !results[1].Apply.RebuildPlan {
+		t.Fatalf("scheduled System Changes results = %+v", results)
+	}
+	want := []string{"due IP certificate", "build change-8101", "wait IP certificate", "build change-8102", "due Domain certificate", "build change-8103", "wait Domain certificate"}
+	if strings.Join(events, ",") != strings.Join(want, ",") {
+		t.Fatalf("serial renewal order = %v, want %v", events, want)
+	}
+	for _, changeSet := range []*systemchanges.ChangeSet{ipFirst, ipRetry, domain} {
+		reused := changes.Apply(changeSet)
+		if reused.Finding == nil || reused.Finding.Code != "SYSTEM-CHANGES-PLAN-USED" || reused.QueueCreated {
+			t.Fatalf("scheduled authority was reusable or queued: %+v", reused)
+		}
+	}
+}
+
+func TestUbuntuFirewallSeamPreservesSSHAndCleansOnlyExactHTTP01Rule(t *testing.T) {
+	base := "table inet sbxr {\n chain input {\n  type filter hook input priority filter\n  policy drop\n  ct state established,related accept\n  tcp dport 2222 accept\n }\n}"
+	temporary := "table inet sbxr {\n chain input {\n  type filter hook input priority filter\n  policy drop\n  ct state established,related accept\n  tcp dport 2222 accept\n  tcp dport 80 accept comment \"sbxr:acme-http-01\"\n }\n}"
+	policy, err := systemchanges.NewFirewallPolicyStep(base, 2222)
+	if err != nil {
+		t.Fatal(err)
+	}
+	open, err := systemchanges.NewHTTP01OpenStep(temporary, 2222)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeHTTP, err := systemchanges.NewHTTP01CloseStep()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, changeSet, _, observed := preparedSystemChangeForMutation(t, systemchanges.SettingChangeMutation, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-SSH-RESPONSIVE"}, policy, open, closeHTTP)
+	root := t.TempDir()
+	prepareLock(t, root)
+	host := &controlledUbuntuHost{root: root}
+	firewall := &controlledFirewall{unrelated: "table inet unrelated remains"}
+	result := systemchanges.New(ubuntu.NewAtWithFirewall(root, func() (systemchanges.Observation, error) { return observed, nil }, host, firewall)).Apply(changeSet)
+	events := strings.Join(firewall.events, ",")
+	for _, required := range []string{"native validate,arm root watchdog,apply only inet sbxr,existing SSH responsive,detected SSH admitted,durable step evidence,cancel watchdog", "record sbxr:acme-http-01,durable step evidence,cancel watchdog", "delete only sbxr:acme-http-01,prove TCP 80 prior policy"} {
+		if !strings.Contains(events, required) {
+			t.Fatalf("firewall result %+v events %q omit %q", result, events, required)
+		}
+	}
+	if result.Outcome != systemchanges.Completed || firewall.temporaryOpen || firewall.unrelated != "table inet unrelated remains" {
+		t.Fatalf("firewall success = %+v; firewall=%+v", result, firewall)
+	}
+
+	for _, test := range []struct {
+		name   string
+		steps  []systemchanges.Step
+		change func(*controlledFirewall)
+	}{
+		{name: "SSH failure", steps: []systemchanges.Step{policy}, change: func(firewall *controlledFirewall) { firewall.failSSH = true }},
+		{name: "explicit cancellation", steps: []systemchanges.Step{open}, change: func(firewall *controlledFirewall) { firewall.requestCancel = true }},
+		{name: "HTTP-01 cleanup failure", steps: []systemchanges.Step{open, closeHTTP}, change: func(firewall *controlledFirewall) { firewall.failClose = true }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, failedChange, _, failedObserved := preparedSystemChangeWithOptions(t, systemchanges.SettingChangeMutation, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-SSH-RESPONSIVE"}, systemChangeTestOptions{extraSteps: test.steps, stepTimeout: time.Second})
+			failedRoot := t.TempDir()
+			prepareLock(t, failedRoot)
+			failedFirewall := &controlledFirewall{unrelated: "table inet unrelated remains"}
+			test.change(failedFirewall)
+			failedResult := systemchanges.New(ubuntu.NewAtWithFirewall(failedRoot, func() (systemchanges.Observation, error) { return failedObserved, nil }, &controlledUbuntuHost{root: failedRoot}, failedFirewall)).ApplyWithCancellation(failedChange, systemchanges.NewCancellation())
+			if failedResult.Outcome != systemchanges.RollbackSucceeded || failedFirewall.temporaryOpen || !strings.Contains(strings.Join(failedFirewall.events, ","), "restore only prior inet sbxr") || failedFirewall.unrelated != "table inet unrelated remains" {
+				t.Fatalf("%s = %+v; firewall=%+v", test.name, failedResult, failedFirewall)
+			}
+		})
+	}
+}
+
+func TestUbuntuAdapterRefusesFirewallStepWithoutNativeExecutor(t *testing.T) {
+	policy := testFirewallStep(t)
+	_, changeSet, _, observed := preparedSystemChangeForMutation(t, systemchanges.SettingChangeMutation, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-SSH-RESPONSIVE"}, policy)
+	root := t.TempDir()
+	prepareLock(t, root)
+	host := &controlledUbuntuHost{root: root}
+	result := systemchanges.New(ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return observed, nil }, host)).Apply(changeSet)
+	if !result.NothingChanged || result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-PREPARATION" || host.executed != 0 {
+		t.Fatalf("missing native firewall executor = %+v; generic executions=%d", result, host.executed)
+	}
+}
+
+func TestUbuntuFirewallRestartRepeatsOnlyItsRecordedReverse(t *testing.T) {
+	policy, err := systemchanges.NewFirewallPolicyStep("table inet sbxr {\n chain input {\n  type filter hook input priority filter\n  policy drop\n  tcp dport 2200 accept\n }\n}", 2200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateModule, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.SettingChangeMutation, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-SSH-RESPONSIVE"}, systemChangeTestOptions{extraSteps: []systemchanges.Step{policy}, stepTimeout: time.Second})
+	root := t.TempDir()
+	prepareLock(t, root)
+	interrupted := &controlledFirewall{failSSH: true, failReverse: true, unrelated: "table inet unrelated remains"}
+	result := systemchanges.New(ubuntu.NewAtWithFirewall(root, func() (systemchanges.Observation, error) { return observed, nil }, &controlledUbuntuHost{root: root}, interrupted, stateModule)).Apply(changeSet)
+	if result.Outcome != systemchanges.RecoveryRequiredOutcome {
+		t.Fatalf("interrupted firewall rollback = %+v", result)
+	}
+	observed.Status, observed.CurrentChangeSet = systemchanges.ChangeInProgress, "change-0008"
+	observed.Checkpoint, observed.TotalSteps, observed.RollbackAvailable = systemchanges.PreparedCheckpoint, 2, true
+	freshFirewall := &controlledFirewall{unrelated: "table inet unrelated remains"}
+	host := &controlledUbuntuHost{root: root, services: map[string]*controlledService{
+		"network": {owner: systemchanges.NetworkPolicyModule, state: observed.StateSHA256, known: true},
+	}}
+	recovered := systemchanges.New(ubuntu.NewAtWithFirewall(root, func() (systemchanges.Observation, error) { return observed, nil }, host, freshFirewall, stateModule)).Recover()
+	joined := strings.Join(freshFirewall.events, ",")
+	if recovered.Outcome != systemchanges.RollbackSucceeded || !strings.Contains(joined, "inspect exact inet sbxr effect") || !strings.Contains(joined, "restore only prior inet sbxr") || freshFirewall.unrelated != "table inet unrelated remains" {
+		t.Fatalf("firewall restart recovery = %+v; firewall=%+v", recovered, freshFirewall)
+	}
+}
+
+func prepareLock(t *testing.T, root string) {
+	t.Helper()
+	lockPath := filepath.Join(root, "run/sbxr/system-changes.lock")
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lockPath, nil, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 
