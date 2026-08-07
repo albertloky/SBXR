@@ -173,7 +173,7 @@ func (plan *Plan) StateCloudflareRepair() (source any, bindingJSON []byte, templ
 	bindingJSON, err := json.Marshal(struct {
 		AccountID, ZoneID, ZoneName, TunnelName, XHTTPHostname, WebSocketHostname, DirectHostname string
 		PublicIPv4, PublicIPv6                                                                    string
-		Owned                                                                                     RunTokenRotation
+		Owned                                                                                     OwnedTunnelBinding
 	}{plan.request.Authority.AccountID, plan.request.Authority.ZoneID, plan.request.Authority.ZoneName, plan.request.TunnelName, plan.request.XHTTPHostname, plan.request.WebSocketHostname, plan.request.DirectHostname, plan.request.PublicIPv4, plan.request.PublicIPv6, plan.request.ManagedRepair})
 	return nil, bindingJSON, plan.request.DesiredStateSHA256, err == nil
 }

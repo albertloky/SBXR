@@ -560,8 +560,8 @@ func (forgedTypedRemoval) SystemChangesTypedRemovalConfirmation() (string, strin
 func (forgedPermanentRemoval) SystemChangesPermanentRemovalSelection() (string, []string, bool) {
 	return "removal-review-0008", removalCategories(), true
 }
-func (forgedCloudflareRemoval) SystemChangesCloudflareRemovalAuthority() (string, string, string, map[string][]string, bool, bool, bool) {
-	return "removal-review-0008", "cloudflare-dns-record", "dns-xhttp", cloudflareRemovalInventory(), true, true, true
+func (forgedCloudflareRemoval) SystemChangesCloudflareRemovalAuthority() systemchanges.CloudflareRemovalProof {
+	return systemchanges.CloudflareRemovalProof{ReviewID: "removal-review-0008", Resource: systemchanges.CloudflareDNSRecordResource, ImmutableID: "dns-xhttp", Inventory: cloudflareRemovalInventory(), TokenActive: true, TokenAvailable: true, Valid: true}
 }
 func (forgedPublicRemoval) SystemChangesPublicRemovalAuthority() (string, string, string, map[string][]string, bool) {
 	return "removal-review-0008", "firewall-table", "unrelated-table", publicRemovalInventory(), true

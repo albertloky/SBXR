@@ -614,8 +614,16 @@ type PermanentRemovalSelection interface {
 	SystemChangesPermanentRemovalSelection() (review string, categories []string, valid bool)
 }
 
+type CloudflareRemovalProof struct {
+	ReviewID, ImmutableID       string
+	Resource                    RemovalResource
+	Inventory                   map[string][]string
+	TokenActive, TokenAvailable bool
+	Valid                       bool
+}
+
 type CloudflareRemovalAuthority interface {
-	SystemChangesCloudflareRemovalAuthority() (review, resource, immutableID string, inventory map[string][]string, tokenActive, tokenAvailable, valid bool)
+	SystemChangesCloudflareRemovalAuthority() CloudflareRemovalProof
 }
 
 type PublicRemovalAuthority interface {
@@ -658,7 +666,8 @@ func validCloudflareRemovalAuthority(authority CloudflareRemovalAuthority) (revi
 	if !trustedAuthority(authority, "github.com/albertloky/SBXR/internal/cloudflaretunnel", "RemovalAuthority") {
 		return "", "", "", nil, false, false, false
 	}
-	review, resource, immutableID, inventory, tokenActive, tokenAvailable, valid = authority.SystemChangesCloudflareRemovalAuthority()
+	proof := authority.SystemChangesCloudflareRemovalAuthority()
+	review, resource, immutableID, inventory, tokenActive, tokenAvailable, valid = proof.ReviewID, string(proof.Resource), proof.ImmutableID, proof.Inventory, proof.TokenActive, proof.TokenAvailable, proof.Valid
 	return review, resource, immutableID, inventory, tokenActive, tokenAvailable, valid && safeIdentity(review) && safeIdentity(immutableID) && tokenActive && tokenAvailable
 }
 

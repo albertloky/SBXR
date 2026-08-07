@@ -10,15 +10,17 @@ import (
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
 
-// RunTokenRotation binds the committed provider resources that the new token
-// must continue to carry. It contains no credential value.
-type RunTokenRotation struct {
+// OwnedTunnelBinding names the committed provider resources used by repair and
+// run-token rotation. It contains no credential value.
+type OwnedTunnelBinding struct {
 	TunnelID             string
 	XHTTPDNSRecordID     string
 	WebSocketDNSRecordID string
 	DirectIPv4RecordID   string
 	DirectIPv6RecordID   string
 }
+
+type RunTokenRotation = OwnedTunnelBinding
 
 type wholeTunnelObserver interface {
 	ObserveWholeTunnel(context.Context, WholeTunnelRequest) (WholeTunnelObservation, error)

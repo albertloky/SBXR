@@ -116,7 +116,7 @@ type PlanRequest struct {
 	CloudflaredVersion  string
 	ManagementToken     ManagementTokenChange
 	RunTokenRotation    RunTokenRotation
-	ManagedRepair       RunTokenRotation
+	ManagedRepair       OwnedTunnelBinding
 }
 
 type ManagementTokenAction string

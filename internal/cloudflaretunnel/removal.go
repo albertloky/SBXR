@@ -1,7 +1,11 @@
 // Package cloudflaretunnel owns Cloudflare inventory and scoped-token observations.
 package cloudflaretunnel
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/albertloky/SBXR/internal/systemchanges"
+)
 
 type RemovalObservation struct {
 	ReviewID              string
@@ -38,9 +42,9 @@ func (i RemovalInterface) ProveRemovalResource(reviewID, resource, immutableID s
 	return RemovalAuthority{observation: observed}, nil
 }
 
-func (authority RemovalAuthority) SystemChangesCloudflareRemovalAuthority() (review, resource, immutableID string, inventory map[string][]string, tokenActive, tokenAvailable, valid bool) {
+func (authority RemovalAuthority) SystemChangesCloudflareRemovalAuthority() systemchanges.CloudflareRemovalProof {
 	o := authority.observation
-	return o.ReviewID, o.Resource, o.ImmutableID, copyInventory(o.Inventory), o.TokenActive, o.TokenAvailableLocally, o.OwnedBySBXR && o.ReviewID != "" && o.Resource != "" && o.ImmutableID != ""
+	return systemchanges.CloudflareRemovalProof{ReviewID: o.ReviewID, Resource: systemchanges.RemovalResource(o.Resource), ImmutableID: o.ImmutableID, Inventory: copyInventory(o.Inventory), TokenActive: o.TokenActive, TokenAvailable: o.TokenAvailableLocally, Valid: o.OwnedBySBXR && o.ReviewID != "" && o.Resource != "" && o.ImmutableID != ""}
 }
 
 func copyInventory(source map[string][]string) map[string][]string {
