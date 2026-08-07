@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -93,13 +94,15 @@ type rollbackRecord struct {
 // Executor is the Cloudflare Adapter used only by the System Changes Ubuntu
 // transaction host. Every call executes one typed provider mutation.
 type Executor struct {
-	api         MutationAPI
-	token       ManagementToken
-	runToken    TunnelRunToken
-	request     PlanRequest
-	observation string
-	tokenID     string
-	binding     cloudflareEvidenceBinding
+	api             MutationAPI
+	token           ManagementToken
+	runToken        TunnelRunToken
+	request         PlanRequest
+	observation     string
+	tokenID         string
+	binding         cloudflareEvidenceBinding
+	serviceIdentity func() (int, int, int, error)
+	command         func(context.Context, string, ...string) ([]byte, error)
 }
 
 func (plan *Plan) Executor(api MutationAPI) (Executor, error) {
@@ -110,7 +113,7 @@ func (plan *Plan) Executor(api MutationAPI) (Executor, error) {
 	if view.Health.Outcome != Healthy {
 		return Executor{}, errors.New("Cloudflare executor authority unavailable")
 	}
-	return Executor{api: api, token: plan.request.Authority.Token, runToken: plan.runToken, request: plan.request, observation: plan.observation, tokenID: view.Credential.ID, binding: plan.binding}, nil
+	return Executor{api: api, token: plan.request.Authority.Token, runToken: plan.runToken, request: plan.request, observation: plan.observation, tokenID: view.Credential.ID, binding: plan.binding, serviceIdentity: cloudflaredIdentity, command: runCommand}, nil
 }
 
 func (executor Executor) CaptureRollback(step systemchanges.Step, write func(io.Reader) error) error {
@@ -284,25 +287,49 @@ func (executor Executor) CheckWholeTunnel(evidence []systemchanges.StepEvidence,
 	}
 }
 
-func (Executor) ValidateInstalledService(root string) error {
-	account, err := user.Lookup("cloudflared")
+func (executor Executor) ValidateInstalledService(root string) error {
+	return executor.validateInstalledService(root)
+}
+
+func (executor Executor) validateInstalledService(root string) error {
+	identity := executor.serviceIdentity
+	if identity == nil {
+		identity = cloudflaredIdentity
+	}
+	rootUID, rootGID, cloudflaredGID, err := identity()
 	if err != nil {
 		return err
+	}
+	return ValidateInstalledService(root, rootUID, rootGID, cloudflaredGID)
+}
+
+func cloudflaredIdentity() (int, int, int, error) {
+	account, err := user.Lookup("cloudflared")
+	if err != nil {
+		return 0, 0, 0, err
 	}
 	gid, err := strconv.Atoi(account.Gid)
 	if err != nil {
-		return err
+		return 0, 0, 0, err
 	}
-	return ValidateInstalledService(root, os.Geteuid(), os.Getegid(), gid)
+	return os.Geteuid(), os.Getegid(), gid, nil
 }
 
-func (Executor) ValidateNativeConfiguration(timeout time.Duration) error {
+func (executor Executor) ValidateNativeConfiguration(root string, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	command := exec.CommandContext(ctx, "/usr/bin/cloudflared", "--config", "/etc/sbxr/cloudflared/config.yml", "tunnel", "ingress", "validate")
-	command.Env = []string{"PATH=/usr/bin:/bin"}
-	if err := command.Run(); err != nil {
+	command := executor.command
+	if command == nil {
+		command = runCommand
+	}
+	if _, err := command(ctx, "/usr/bin/cloudflared", "--config", filepath.Join(root, "etc/sbxr/cloudflared/config.yml"), "tunnel", "ingress", "validate"); err != nil {
 		return errors.New("cloudflared native configuration validation failed")
 	}
 	return nil
+}
+
+func runCommand(ctx context.Context, name string, arguments ...string) ([]byte, error) {
+	command := exec.CommandContext(ctx, name, arguments...)
+	command.Env = []string{"PATH=/usr/bin:/bin"}
+	return command.Output()
 }

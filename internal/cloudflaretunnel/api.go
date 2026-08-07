@@ -36,22 +36,27 @@ type OriginObserver interface {
 type localOriginObserver struct{}
 
 func (localOriginObserver) Reachable(ctx context.Context, address string) (bool, error) {
-	connection, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "tcp", address)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+address+"/", nil)
+	if err != nil {
+		return false, err
+	}
+	client := http.Client{Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	response, err := client.Do(request)
 	if err != nil {
 		if ctx.Err() != nil {
 			return false, ctx.Err()
 		}
 		return false, nil
 	}
-	_ = connection.Close()
-	return true, nil
+	_ = response.Body.Close()
+	return response.StatusCode >= 100 && response.StatusCode <= 599, nil
 }
 
 func newHTTPAPI(client *http.Client, baseURL string, resolver NameServerResolver) *httpAPI {
 	return &httpAPI{client: client, baseURL: strings.TrimRight(baseURL, "/"), resolver: resolver, origins: localOriginObserver{}}
 }
 
-func NewProductionAPI() API {
+func NewProductionAPI() MutationAPI {
 	return newHTTPAPI(&http.Client{Timeout: 15 * time.Second}, cloudflareAPIURL, net.DefaultResolver)
 }
 

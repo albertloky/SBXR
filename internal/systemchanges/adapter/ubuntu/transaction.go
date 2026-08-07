@@ -56,11 +56,14 @@ type FirewallExecutor interface {
 
 type CloudflareExecutor interface {
 	CaptureRollback(systemchanges.Step, func(io.Reader) error) error
+	CaptureServiceRollback(string, func(io.Reader) error) error
 	Execute(systemchanges.Step, string, time.Duration) (systemchanges.StepEvidence, error)
+	ActivateService(string, io.Reader, time.Duration) (systemchanges.StepEvidence, error)
 	Reverse(systemchanges.Step, systemchanges.StepEvidence, io.Reader, time.Duration) (systemchanges.StepEvidence, error)
+	ReverseService(string, io.Reader, time.Duration) (systemchanges.StepEvidence, error)
+	InspectService(string, io.Reader) (systemchanges.StepEffect, error)
 	CheckWholeTunnel([]systemchanges.StepEvidence, time.Duration) (systemchanges.HealthStatus, error)
 	ValidateInstalledService(string) error
-	ValidateNativeConfiguration(time.Duration) error
 }
 
 type snapshotManifest struct {
@@ -153,6 +156,11 @@ func (a Adapter) Prepare(lease systemchanges.ExecutionLease, preparation systemc
 				return errors.New("native firewall Adapter unavailable")
 			}
 			captureErr = a.firewall.CaptureRollback(step, captureRollback)
+		} else if cloudflaredActivation(step) {
+			if a.cloudflare == nil {
+				return errors.New("Cloudflare service executor unavailable")
+			}
+			captureErr = a.cloudflare.CaptureServiceRollback(a.root, captureRollback)
 		} else if _, ok := step.CloudflareChange(); ok {
 			if a.cloudflare == nil {
 				return errors.New("Cloudflare transaction executor unavailable")
@@ -345,12 +353,21 @@ func (a Adapter) Execute(lease systemchanges.ExecutionLease, changeSet string, n
 		}
 		return a.cloudflare.Execute(step, resolved, timeout)
 	}
-	evidence, err := a.host.Execute(step, timeout, cancellation)
-	if err == nil && step.Owner() == systemchanges.CloudflareModule && step.Forward() == systemchanges.ActivatePreparedConfiguration {
-		if a.cloudflare == nil || a.cloudflare.ValidateInstalledService(a.root) != nil || a.cloudflare.ValidateNativeConfiguration(timeout) != nil {
+	if cloudflaredActivation(step) {
+		if a.cloudflare == nil || !safeName(changeSet) || number < 1 {
+			return systemchanges.StepEvidence{}, errors.New("Cloudflare service executor unavailable")
+		}
+		material, err := a.recoveryArtifact(lease, changeSet, "prepared/cloudflared.json")
+		if err != nil {
+			return systemchanges.StepEvidence{}, err
+		}
+		evidence, err := a.cloudflare.ActivateService(a.root, bytes.NewReader(material), timeout)
+		if err != nil || a.cloudflare.ValidateInstalledService(a.root) != nil {
 			return systemchanges.StepEvidence{}, errors.New("installed cloudflared service is unproved")
 		}
+		return evidence, nil
 	}
+	evidence, err := a.host.Execute(step, timeout, cancellation)
 	return evidence, err
 }
 
@@ -392,6 +409,12 @@ func (a Adapter) Reverse(lease systemchanges.ExecutionLease, changeSet string, n
 			evidence = systemchanges.StepEvidence{}
 		}
 		return a.cloudflare.Reverse(step, evidence, bytes.NewReader(content), timeout)
+	}
+	if cloudflaredActivation(step) {
+		if a.cloudflare == nil {
+			return systemchanges.StepEvidence{}, errors.New("Cloudflare service executor unavailable")
+		}
+		return a.cloudflare.ReverseService(a.root, bytes.NewReader(content), timeout)
 	}
 	return a.host.Reverse(step, bytes.NewReader(content), timeout)
 }
@@ -548,7 +571,17 @@ func (a Adapter) InspectStep(lease systemchanges.ExecutionLease, recovery system
 		}
 		return a.firewall.Inspect(step, bytes.NewReader(content), timeout)
 	}
+	if cloudflaredActivation(step) {
+		if a.cloudflare == nil {
+			return "", errors.New("Cloudflare service executor unavailable")
+		}
+		return a.cloudflare.InspectService(a.root, bytes.NewReader(content))
+	}
 	return a.host.InspectStep(step, bytes.NewReader(content), timeout)
+}
+
+func cloudflaredActivation(step systemchanges.Step) bool {
+	return step.Owner() == systemchanges.CloudflareModule && step.Forward() == systemchanges.ActivatePreparedConfiguration && step.Rollback() == systemchanges.RestorePriorConfiguration
 }
 
 func (a Adapter) RestoreRecoveryState(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction) (systemchanges.RollbackAgreement, error) {

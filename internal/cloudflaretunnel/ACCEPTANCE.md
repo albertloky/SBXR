@@ -8,6 +8,7 @@ This record covers automated Cloudflare authority and installation checks. Manag
 - `CLOUDFLARE-AUTHORITY`: `go test ./internal/cloudflaretunnel -run 'TestView(VerifiesOneScopedCloudflareAuthority|FailsClosedWithoutLeakingAuthority)'`
 - `CLOUDFLARE-SEAM`: `go test ./internal/cloudflaretunnel -run 'TestHTTPAPI(ParsesOfficialShapesWithScopedAuthenticationAndPagination|RefusesMalformedAmbiguousAndUnsafeResponses)'`
 - `CLOUDFLARE-PLAN`: `go test ./internal/cloudflaretunnel -run 'Test(Plan|Executor|WholeTunnel|CloudflaredService|InstalledCloudflared|LocalOrigin)'`
+- `CLOUDFLARE-SERVICE-SEAM`: `go test ./internal/cloudflaretunnel -run 'TestExecutorInstallsAndRollsBackProtectedCloudflaredService|TestLocalOriginObserverRequiresHTTP'`
 - `CLOUDFLARE-DEFERRED-STATE`: `go test ./internal/state -run TestDeferredCloudflareFinalizationPublishesProviderValuesInRevisionOne`
 - `CLOUDFLARE-TRANSACTION`: `go test ./internal/systemchanges ./internal/systemchanges/adapter/ubuntu`
 - `CLOUDFLARE-NETWORK-PATH`: `go test ./internal/networkpolicy -run TestEvaluateBoundsOutboundAndRenewalFreshness`
@@ -28,14 +29,14 @@ This record covers automated Cloudflare authority and installation checks. Manag
 10. Build the installation Plan twice from the same fixture and confirm the identity and checksum are deterministic while all rendered values omit the management and run-token markers. Change the bound token ID, account, zone, hostname observation, Desired State checksum, or cloudflared baseline and confirm Apply refuses before mutation.
 11. Run the controlled deferred-finalization transaction. Confirm every returned Tunnel/DNS ID appears in a `Step completed` checkpoint before the next provider step, `Deferred State finalized` appears before `Activate prepared configuration`, and revision `1` contains each ID and the provider-issued run token exactly once. Confirm ordinary events and results contain no token marker.
 12. Check a connected two-route observation, every partial route/DNS combination, wrong and public origins, disconnected state, delayed convergence, and stopped loopback origins. Only the exact Tunnel, two independent routes, owned DNS, final 404, and both reachable loopback origins may be Healthy.
-13. Validate the installed unit, protected directories/files, native cloudflared ingress configuration, rollback targeting, and restart generation selection. Wrong owner, wider mode, link, missing journaled ID, stale Plan, or contradictory finalization evidence must stop safely.
+13. Stream the protected prepared Cloudflare service artifact through the Ubuntu transaction Adapter. Confirm native ingress validation occurs before `systemctl enable --now`, the complete token appears only in the `0640` token file, fresh-install rollback removes only the installed unit/config/token, and an arbitrary TCP listener cannot satisfy the HTTP-origin check. Wrong owner, wider mode, unsafe parent or link, missing journaled ID, stale Plan, or contradictory finalization evidence must stop safely.
 
 ## Current status
 
 | Stage | Owner | Status | Expected safe evidence |
 |---|---|---|---|
 | Module Verification | Codex | Passed for authority and installation | `CLOUDFLARE-MODULE`, `CLOUDFLARE-AUTHORITY`, `CLOUDFLARE-PLAN`, `CLOUDFLARE-NETWORK-PATH`, and `CLOUDFLARE-STATE-COMMIT` pass with marker-safe results. Token lifecycle, repair, and removal remain Pending. |
-| Seam Verification — controlled fixture | Codex | Passed for authority and installation | Official-shape HTTP, Plan freshness, provider steps, whole-Tunnel health, service isolation, deferred State finalization, and restart-generation checks pass without an Owner credential. |
+| Seam Verification — controlled fixture | Codex | Passed for authority and installation | Official-shape HTTP, Plan freshness, provider steps, protected service installation and rollback, HTTP-origin proof, whole-Tunnel health, deferred State finalization, and restart-generation checks pass without an Owner credential. |
 | Integrated Verification | Integrated release runner | Pending — integrated release | The complete executable still needs token lifecycle, repair, removal, and real service/provider coordination. |
 | Codex Live Acceptance | Codex, only during an approved Acceptance Run | Pending — approved Acceptance Run | No Acceptance VPS, real Cloudflare token, provider resource, or outside client was used. |
 | Owner Acceptance | Albert | Pending — first v1 release | Albert has not yet created a scoped token or accepted the onboarding walkthrough in the maintained Cloudflare dashboard. |
