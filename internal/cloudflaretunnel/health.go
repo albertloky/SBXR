@@ -24,6 +24,11 @@ type XHTTPRouteHealth struct {
 	Health           Health
 }
 
+type WebSocketRouteHealth struct {
+	Hostname, Origin string
+	Health           Health
+}
+
 func EvaluateXHTTPRouteHealth(observed WholeTunnelObservation, expected WholeTunnelExpected) XHTTPRouteHealth {
 	result := XHTTPRouteHealth{Origin: xhttpOrigin, Health: evaluateRouteHealth("XHTTP", "CLOUDFLARE-XHTTP", xhttpOrigin, observed.XHTTPOriginReachable, observed, expected)}
 	for _, route := range expected.Routes {
@@ -34,9 +39,19 @@ func EvaluateXHTTPRouteHealth(observed WholeTunnelObservation, expected WholeTun
 	return result
 }
 
+func EvaluateWebSocketRouteHealth(observed WholeTunnelObservation, expected WholeTunnelExpected) WebSocketRouteHealth {
+	result := WebSocketRouteHealth{Origin: webSocketOrigin, Health: evaluateRouteHealth("WebSocket", "CLOUDFLARE-WEBSOCKET", webSocketOrigin, observed.WebSocketOriginReachable, observed, expected)}
+	for _, route := range expected.Routes {
+		if route.Service == webSocketOrigin {
+			result.Hostname = route.Hostname
+		}
+	}
+	return result
+}
+
 func EvaluateTunnelHealth(observed WholeTunnelObservation, expected WholeTunnelExpected) TunnelHealth {
 	xhttp := EvaluateXHTTPRouteHealth(observed, expected).Health
-	websocket := evaluateRouteHealth("WebSocket", "CLOUDFLARE-WEBSOCKET", webSocketOrigin, observed.WebSocketOriginReachable, observed, expected)
+	websocket := EvaluateWebSocketRouteHealth(observed, expected).Health
 	return TunnelHealth{XHTTP: xhttp, WebSocket: websocket, Whole: evaluateWholeTunnel(observed, expected, xhttp, websocket)}
 }
 

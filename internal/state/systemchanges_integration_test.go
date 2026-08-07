@@ -1008,11 +1008,16 @@ type systemChangeTestOptions struct {
 	startingStatus     systemchanges.InstallationStatus
 	publishBeforeError bool
 	publishAfterError  bool
+	nativeXray         []byte
+	candidateEdit      func(*DesiredState)
 }
 
 func preparedSystemChangeWithOptions(t *testing.T, mutation systemchanges.MutationClass, check systemchanges.Check, options systemChangeTestOptions) (Interface, *systemchanges.ChangeSet, *systemchanges.ChangeSet, systemchanges.Observation) {
 	t.Helper()
 	candidate := completeDesiredState()
+	if options.candidateEdit != nil {
+		options.candidateEdit(&candidate)
+	}
 	candidate.Subscription.Token = NewClientAccessValue(testSHA('e'))
 	var module Interface
 	var request PrepareRequest
@@ -1035,6 +1040,14 @@ func preparedSystemChangeWithOptions(t *testing.T, mutation systemchanges.Mutati
 			identity = "change-0008"
 		}
 		request = preparedRequest(t, loaded, candidate, ChangeSetIdentity(identity))
+	}
+	if len(options.nativeXray) > 0 {
+		validator := request.SemanticValidators.ConnectionProfiles.(*validatingSeams)
+		singBox, err := marshalProtectedJSON(expectedServiceMaterials(candidate).SingBox)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.SemanticValidators.ConnectionProfiles = &nativeProfilesPreparer{validatingSeams: validator, xray: options.nativeXray, singBox: singBox}
 	}
 	prepared, err := module.PrepareCommit(request)
 	if err != nil {
@@ -1480,6 +1493,7 @@ type controlledUbuntuHost struct {
 	preparedConfiguration string
 	activeConfiguration   string
 	rollbackWant          []byte
+	preparedWant          []byte
 }
 
 type controlledService struct {
@@ -1739,7 +1753,7 @@ func (host *controlledUbuntuHost) Execute(step systemchanges.Step, timeout time.
 		return systemchanges.StepEvidence{Code: "removal-verified-" + removal.ImmutableID, SHA256: fmt.Sprintf("%x", digest)}, nil
 	}
 	preparedConfig, err := os.ReadFile(host.preparedConfigurationPath())
-	if err != nil || !json.Valid(preparedConfig) {
+	if err != nil || !json.Valid(preparedConfig) || len(host.preparedWant) > 0 && !bytes.Equal(preparedConfig, host.preparedWant) {
 		return systemchanges.StepEvidence{}, errors.New("prepared native configuration is invalid")
 	}
 	active := host.activeConfigurationPath()
@@ -2372,8 +2386,18 @@ func TestUbuntuAdapterBoundsLiveStepAndRollsBackOnTimeout(t *testing.T) {
 	}
 }
 
-func TestXHTTPPostMutationFailureRestoresPriorCompleteXrayConfiguration(t *testing.T) {
-	_, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.SettingChangeMutation, systemchanges.Check{Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CONNECTION-PROFILES-XHTTP-CONFIGURATION"}, systemChangeTestOptions{stepTimeout: time.Second})
+func TestWebSocketPostMutationFailureRestoresPriorCompleteXrayConfiguration(t *testing.T) {
+	candidate := []byte(`{"inbounds":[{"listen":"0.0.0.0","port":443,"protocol":"vless","settings":{"clients":[{"flow":"xtls-rprx-vision","id":"11111111-1111-4111-8111-111111111111"}],"decryption":"none"},"streamSettings":{"method":"raw","realitySettings":{"limitFallbackDownload":{"afterBytes":20971520,"burstBytesPerSec":10485760,"bytesPerSec":2097152},"limitFallbackUpload":{"afterBytes":10485760,"burstBytesPerSec":5242880,"bytesPerSec":1048576},"maxTimeDiff":0,"privateKey":"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc","serverNames":["edge.example.net"],"shortIds":["0123456789abcdef"],"show":false,"target":"edge.example.net:443","xver":0},"security":"reality"},"tag":"vless-reality-vision"},{"listen":"127.0.0.1","port":11080,"protocol":"vless","settings":{"clients":[{"id":"22222222-2222-4222-8222-222222222222"}],"decryption":"none"},"streamSettings":{"method":"xhttp","security":"none","xhttpSettings":{"mode":"packet-up","path":"/2222222222222222222222222222222222222222222222222222222222222222"}},"tag":"vless-xhttp"},{"listen":"127.0.0.1","port":11081,"protocol":"vless","settings":{"clients":[{"id":"33333333-3333-4333-8333-333333333333"}],"decryption":"none"},"streamSettings":{"method":"websocket","security":"none","wsSettings":{"host":"ws.example.com","path":"/4444444444444444444444444444444444444444444444444444444444444444"}},"tag":"vless-websocket"}],"log":{"access":"none","loglevel":"warning"},"outbounds":[{"protocol":"freedom","tag":"direct"},{"protocol":"blackhole","tag":"blocked"}]}`)
+	_, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.SettingChangeMutation, systemchanges.Check{Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CONNECTION-PROFILES-WEBSOCKET-CONFIGURATION"}, systemChangeTestOptions{
+		stepTimeout: time.Second, nativeXray: candidate,
+		candidateEdit: func(desired *DesiredState) {
+			desired.ConnectionProfiles.VLESSRealityVision.PrivateKey = NewInfrastructureSecret("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc")
+			desired.ConnectionProfiles.VLESSRealityVision.PublicKey = "E75P6uryBMf9M1j8nAByGIHRdCeBKCJ-xnTzf3_pe20"
+			desired.ConnectionProfiles.VLESSRealityVision.ShortID = NewClientAccessValue("0123456789abcdef")
+			desired.ConnectionProfiles.VLESSRealityVision.Target = "edge.example.net:443"
+			desired.ConnectionProfiles.VLESSRealityVision.ServerName = "edge.example.net"
+		},
+	})
 	root := t.TempDir()
 	prepareLock(t, root)
 	prior := []byte(`{"inbounds":[{"tag":"vless-reality-vision"}],"outbounds":[{"protocol":"freedom"}]}`)
@@ -2385,13 +2409,13 @@ func TestXHTTPPostMutationFailureRestoresPriorCompleteXrayConfiguration(t *testi
 		t.Fatal(err)
 	}
 	host := &controlledUbuntuHost{
-		root: root, failExecute: true, preparedConfiguration: "prepared/xray.json", activeConfiguration: "etc/sbxr/xray/config.json", rollbackWant: prior,
+		root: root, failExecute: true, preparedConfiguration: "prepared/xray.json", activeConfiguration: "etc/sbxr/xray/config.json", rollbackWant: prior, preparedWant: candidate,
 	}
 	adapter := ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return observed, nil }, host)
 	result := systemchanges.New(adapter).Apply(changeSet)
 	restored, err := os.ReadFile(active)
 	if result.Outcome != systemchanges.RollbackSucceeded || host.executed != 1 || host.rollbacks != 1 || err != nil || !bytes.Equal(restored, prior) {
-		t.Fatalf("XHTTP rollback = %+v; executed=%d rollbacks=%d restored=%s err=%v", result, host.executed, host.rollbacks, restored, err)
+		t.Fatalf("WebSocket rollback = %+v; executed=%d rollbacks=%d restored=%s err=%v", result, host.executed, host.rollbacks, restored, err)
 	}
 }
 

@@ -297,6 +297,7 @@ type Plan struct {
 	desiredStateSHA256               string
 	realityRequest                   ViewRequest
 	xhttpRequest                     *XHTTPViewRequest
+	webSocketRequest                 *WebSocketViewRequest
 	steps                            []systemchanges.Step
 	checks                           []systemchanges.Check
 	used                             *atomic.Bool
@@ -345,6 +346,57 @@ type PlanResult struct {
 	Health Health
 }
 
+type xrayPlanSpec struct {
+	identityPrefix, description, profile, codePrefix, postCheck, version string
+	revision                                                             uint64
+	changeSet, startingStateSHA256, desiredStateSHA256                   string
+	volatileSHA256                                                       string
+	configuration                                                        []byte
+	request                                                              any
+	reality                                                              ViewRequest
+	xhttp                                                                *XHTTPViewRequest
+	websocket                                                            *WebSocketViewRequest
+	checkedAt                                                            time.Time
+}
+
+func (module Interface) buildXrayPlan(ctx context.Context, spec xrayPlanSpec) (*Plan, *Health) {
+	fail := func(suffix, problem, found, required string) (*Plan, *Health) {
+		health := Health{Time: spec.checkedAt, Module: "Connection Profiles", Profile: spec.profile, Outcome: Failed, Code: spec.codePrefix + "-" + suffix, Problem: problem, Found: found, Required: required, WhyStopped: "Connection Profiles fails closed before unsafe proxy or host mutation", NextActions: []string{"Check again", "Back"}}
+		return nil, &health
+	}
+	if err := module.host.ValidateReality(ctx, spec.version, bytes.NewReader(spec.configuration)); err != nil {
+		return fail("NATIVE", "The pinned native Xray validator refused the complete prepared configuration", "native validation failed", "one complete configuration accepted by Xray v26.3.27")
+	}
+	preparedBinding, err := opaquePreparedBinding(spec.configuration)
+	if err != nil {
+		return fail("BINDING", "The protected prepared-configuration authority is unavailable", "an opaque binding could not be created", "one secret-safe binding to the exact validated configuration")
+	}
+	step, err := systemchanges.NewStep(systemchanges.ConnectionProfilesModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
+	if err != nil {
+		return fail("TRANSACTION", "The profile transaction contract is invalid", "the activation or rollback step was refused", "one reversible Connection Profiles step")
+	}
+	checks := []systemchanges.Check{
+		{Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: spec.codePrefix + "-CONFIGURATION"},
+		{Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: spec.codePrefix + "-LISTENER"},
+		{Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: spec.codePrefix + "-SERVICE"},
+		{Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PostPublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: spec.codePrefix + "-" + spec.postCheck},
+	}
+	binding := struct {
+		Request         any
+		VolatileSHA256  string
+		PreparedBinding string
+	}{spec.request, spec.volatileSHA256, preparedBinding}
+	encoded, _ := json.Marshal(binding)
+	digest := sha256.Sum256(encoded)
+	sha := hex.EncodeToString(digest[:])
+	return &Plan{
+		identity: spec.identityPrefix + sha[:12], sha256: sha, volatileSHA256: spec.volatileSHA256, description: spec.description,
+		preparedBinding: preparedBinding, configuration: append([]byte(nil), spec.configuration...), revision: spec.revision, changeSet: spec.changeSet,
+		startingStateSHA256: spec.startingStateSHA256, desiredStateSHA256: spec.desiredStateSHA256, realityRequest: spec.reality, xhttpRequest: spec.xhttp, webSocketRequest: spec.websocket,
+		steps: []systemchanges.Step{step}, checks: checks, used: &atomic.Bool{},
+	}, nil
+}
+
 func (module Interface) Plan(ctx context.Context, request PlanRequest) PlanResult {
 	view := module.View(ctx, request.View)
 	if view.Health.Outcome != Healthy {
@@ -357,44 +409,26 @@ func (module Interface) Plan(ctx context.Context, request PlanRequest) PlanResul
 	if err != nil {
 		return PlanResult{Health: blocked(view.Health.Time, Failed, "CONNECTION-PROFILES-REALITY-CONFIGURATION", "The complete Xray configuration could not be prepared", "the typed REALITY inputs are incomplete", "one complete protected Xray configuration")}
 	}
-	if err := module.host.ValidateReality(ctx, request.View.XrayVersion, bytes.NewReader(configuration)); err != nil {
-		return PlanResult{Health: blocked(view.Health.Time, Failed, "CONNECTION-PROFILES-REALITY-NATIVE", "The pinned native Xray validator refused the prepared configuration", "native validation failed", "one complete configuration accepted by Xray v26.3.27")}
-	}
-	preparedBinding, err := opaquePreparedBinding(configuration)
-	if err != nil {
-		return PlanResult{Health: blocked(view.Health.Time, Failed, "CONNECTION-PROFILES-REALITY-BINDING", "The protected prepared-configuration authority is unavailable", "an opaque one-use binding could not be created", "one secret-safe binding to the exact validated configuration")}
-	}
-	step, err := systemchanges.NewStep(systemchanges.ConnectionProfilesModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
-	if err != nil {
-		return PlanResult{Health: blocked(view.Health.Time, Failed, "CONNECTION-PROFILES-REALITY-TRANSACTION", "The profile transaction contract is invalid", "the activation or rollback step was refused", "one reversible Connection Profiles step")}
-	}
-	checks := []systemchanges.Check{
-		{Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CONNECTION-PROFILES-REALITY-CONFIGURATION"},
-		{Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CONNECTION-PROFILES-REALITY-LISTENER"},
-		{Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CONNECTION-PROFILES-REALITY-SERVICE"},
-		{Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PostPublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CONNECTION-PROFILES-REALITY-SECURITY"},
-	}
-	binding := struct {
-		Request         PlanRequest
-		VolatileSHA256  string
-		PreparedBinding string
-	}{request, view.VolatileSHA256, preparedBinding}
-	encoded, _ := json.Marshal(binding)
-	digest := sha256.Sum256(encoded)
-	sha := hex.EncodeToString(digest[:])
-	plan := &Plan{
-		identity: "profiles-reality-" + sha[:12], sha256: sha, volatileSHA256: view.VolatileSHA256,
-		description:     fmt.Sprintf("validate and activate VLESS REALITY Vision on %d/TCP through xray.service, then prove configuration, listener, service, and REALITY security; rollback restores the prior configuration", request.View.Port),
-		preparedBinding: preparedBinding, configuration: append([]byte(nil), configuration...), revision: request.View.Revision, changeSet: request.ChangeSet,
-		startingStateSHA256: request.StartingStateSHA256, desiredStateSHA256: request.DesiredStateSHA256, realityRequest: request.View,
-		steps: []systemchanges.Step{step}, checks: checks, used: &atomic.Bool{},
+	plan, failure := module.buildXrayPlan(ctx, xrayPlanSpec{
+		identityPrefix: "profiles-reality-", description: fmt.Sprintf("validate and activate VLESS REALITY Vision on %d/TCP through xray.service, then prove configuration, listener, service, and REALITY security; rollback restores the prior configuration", request.View.Port),
+		profile: view.Profile.Name, codePrefix: "CONNECTION-PROFILES-REALITY", postCheck: "SECURITY", version: request.View.XrayVersion,
+		revision: request.View.Revision, changeSet: request.ChangeSet, startingStateSHA256: request.StartingStateSHA256, desiredStateSHA256: request.DesiredStateSHA256,
+		volatileSHA256: view.VolatileSHA256, configuration: configuration, request: request, reality: request.View, checkedAt: view.Health.Time,
+	})
+	if failure != nil {
+		return PlanResult{Health: *failure}
 	}
 	return PlanResult{Plan: plan, Health: Health{Time: view.Health.Time, Module: "Connection Profiles", Profile: view.Profile.Name, Outcome: Healthy, Code: "CONNECTION-PROFILES-REALITY-PLAN-READY", NextActions: []string{"Review Plan", "Back"}}}
 }
 
 func (module Interface) ValidateConnectionProfiles(profiles state.ConnectionProfiles, secrets state.ConnectionProfileSecretReader) error {
+	_, _, _, err := xrayProfileInputs(profiles, secrets)
+	return err
+}
+
+func xrayProfileInputs(profiles state.ConnectionProfiles, secrets state.ConnectionProfileSecretReader) (ViewRequest, *XHTTPViewRequest, *WebSocketViewRequest, error) {
 	if secrets == nil {
-		return errors.New("Connection Profiles secret reader unavailable")
+		return ViewRequest{}, nil, nil, errors.New("Connection Profiles secret reader unavailable")
 	}
 	profile := profiles.VLESSRealityVision
 	credentials, err := NewRealityCredentials(
@@ -405,49 +439,55 @@ func (module Interface) ValidateConnectionProfiles(profiles state.ConnectionProf
 	)
 	host, port, targetErr := net.SplitHostPort(profile.Target)
 	if err != nil || targetErr != nil || port != "443" || host != profile.ServerName || !validHostname(host) || profile.Port != 443 || profile.Fingerprint != "chrome" || !credentials.valid() {
-		return errors.New("VLESS REALITY Vision intent is invalid")
+		return ViewRequest{}, nil, nil, errors.New("VLESS REALITY Vision intent is invalid")
 	}
-	xhttp := profiles.VLESSXHTTP
-	if xhttp.Enabled {
-		xhttpCredentials, xhttpErr := NewXHTTPCredentials(secrets.ReadClientAccessValue(xhttp.UUID), secrets.ReadClientAccessValue(xhttp.Path))
-		if xhttpErr != nil || xhttp.OriginAddress != "127.0.0.1" || xhttp.OriginPort != 11080 || xhttp.Mode != state.XHTTPPacketUp || !validHostname(xhttp.Hostname) || xhttpCredentials.uuid.value == credentials.uuid.value {
-			return errors.New("VLESS XHTTP intent is invalid")
-		}
+	reality := ViewRequest{Enabled: profile.Enabled, Port: profile.Port, Target: RealityTarget{Address: profile.Target, ServerName: profile.ServerName}, Fingerprint: profile.Fingerprint, XrayVersion: qualifiedXrayVersion, Credentials: credentials}
+	xhttpRequest, err := xhttpProfileInput(profiles.VLESSXHTTP, secrets, credentials.uuid.value)
+	if err != nil {
+		return ViewRequest{}, nil, nil, err
 	}
-	return nil
+	webSocketRequest, err := webSocketProfileInput(profiles.VLESSWebSocket, secrets, credentials.uuid.value, xhttpRequest)
+	if err != nil {
+		return ViewRequest{}, nil, nil, err
+	}
+	return reality, xhttpRequest, webSocketRequest, nil
+}
+
+func xhttpProfileInput(profile state.VLESSXHTTP, secrets state.ConnectionProfileSecretReader, realityUUID string) (*XHTTPViewRequest, error) {
+	if !profile.Enabled {
+		return nil, nil
+	}
+	credentials, err := NewXHTTPCredentials(secrets.ReadClientAccessValue(profile.UUID), secrets.ReadClientAccessValue(profile.Path))
+	if err != nil || profile.OriginAddress != "127.0.0.1" || profile.OriginPort != 11080 || profile.Mode != state.XHTTPPacketUp || !validHostname(profile.Hostname) || credentials.uuid.value == realityUUID {
+		return nil, errors.New("VLESS XHTTP intent is invalid")
+	}
+	return &XHTTPViewRequest{Enabled: true, Hostname: profile.Hostname, OriginAddress: profile.OriginAddress, OriginPort: profile.OriginPort, Mode: profile.Mode, XrayVersion: qualifiedXrayVersion, Credentials: credentials}, nil
+}
+
+func webSocketProfileInput(profile state.VLESSWebSocket, secrets state.ConnectionProfileSecretReader, realityUUID string, xhttp *XHTTPViewRequest) (*WebSocketViewRequest, error) {
+	if !profile.Enabled {
+		return nil, nil
+	}
+	credentials, err := NewWebSocketCredentials(secrets.ReadClientAccessValue(profile.UUID), secrets.ReadClientAccessValue(profile.Path))
+	sharedXHTTPFact := xhttp != nil && (credentials.uuid.value == xhttp.Credentials.uuid.value || credentials.path.value == xhttp.Credentials.path.value || profile.Hostname == xhttp.Hostname)
+	if err != nil || profile.OriginAddress != "127.0.0.1" || profile.OriginPort != 11081 || !validHostname(profile.Hostname) || credentials.uuid.value == realityUUID || sharedXHTTPFact {
+		return nil, errors.New("VLESS WebSocket intent is invalid")
+	}
+	return &WebSocketViewRequest{Enabled: true, Hostname: profile.Hostname, TLSName: profile.Hostname, HTTPHost: profile.Hostname, OriginAddress: profile.OriginAddress, OriginPort: profile.OriginPort, XrayVersion: qualifiedXrayVersion, Credentials: credentials}, nil
 }
 
 func (module Interface) PrepareConnectionProfiles(profiles state.ConnectionProfiles, secrets state.ConnectionProfileSecretReader) ([]byte, []byte, error) {
-	if err := module.ValidateConnectionProfiles(profiles, secrets); err != nil {
+	reality, xhttp, websocket, err := xrayProfileInputs(profiles, secrets)
+	if err != nil {
 		return nil, nil, err
 	}
-	if profiles.VLESSWebSocket.Enabled || profiles.Hysteria2.Enabled || profiles.TUIC.Enabled || profiles.AnyTLS.Enabled {
+	if profiles.Hysteria2.Enabled || profiles.TUIC.Enabled || profiles.AnyTLS.Enabled {
 		return nil, nil, errors.New("later Connection Profile slices are not prepared yet")
 	}
-	profile := profiles.VLESSRealityVision
-	if !profile.Enabled {
+	if !reality.Enabled {
 		return nil, nil, nil
 	}
-	credentials, err := NewRealityCredentials(
-		secrets.ReadClientAccessValue(profile.UUID),
-		secrets.ReadInfrastructureSecret(profile.PrivateKey),
-		profile.PublicKey,
-		secrets.ReadClientAccessValue(profile.ShortID),
-	)
-	if err != nil {
-		return nil, nil, errors.New("VLESS REALITY Vision credentials are invalid")
-	}
-	reality := ViewRequest{Enabled: true, Port: profile.Port, Target: RealityTarget{Address: profile.Target, ServerName: profile.ServerName}, Fingerprint: profile.Fingerprint, XrayVersion: qualifiedXrayVersion, Credentials: credentials}
-	var xhttp *XHTTPViewRequest
-	if profiles.VLESSXHTTP.Enabled {
-		xhttpProfile := profiles.VLESSXHTTP
-		xhttpCredentials, credentialErr := NewXHTTPCredentials(secrets.ReadClientAccessValue(xhttpProfile.UUID), secrets.ReadClientAccessValue(xhttpProfile.Path))
-		if credentialErr != nil {
-			return nil, nil, errors.New("VLESS XHTTP credentials are invalid")
-		}
-		xhttp = &XHTTPViewRequest{Enabled: true, Hostname: xhttpProfile.Hostname, OriginAddress: xhttpProfile.OriginAddress, OriginPort: xhttpProfile.OriginPort, Mode: xhttpProfile.Mode, XrayVersion: qualifiedXrayVersion, Credentials: xhttpCredentials}
-	}
-	xray, err := xrayConfiguration(&reality, xhttp)
+	xray, err := xrayConfiguration(&reality, xhttp, websocket)
 	return xray, nil, err
 }
 
@@ -460,22 +500,28 @@ func (plan *Plan) ValidateConnectionProfiles(profiles state.ConnectionProfiles, 
 	}
 	profile := profiles.VLESSRealityVision
 	realityRequest := plan.realityRequest
-	if profiles.VLESSWebSocket.Enabled || profiles.Hysteria2.Enabled || profiles.TUIC.Enabled || profiles.AnyTLS.Enabled || profile.Enabled != realityRequest.Enabled || profile.Port != realityRequest.Port || profile.Target != realityRequest.Target.Address || profile.ServerName != realityRequest.Target.ServerName || profile.Fingerprint != realityRequest.Fingerprint ||
+	if profiles.Hysteria2.Enabled || profiles.TUIC.Enabled || profiles.AnyTLS.Enabled || profile.Enabled != realityRequest.Enabled || profile.Port != realityRequest.Port || profile.Target != realityRequest.Target.Address || profile.ServerName != realityRequest.Target.ServerName || profile.Fingerprint != realityRequest.Fingerprint ||
 		secrets.ReadClientAccessValue(profile.UUID) != realityRequest.Credentials.uuid.value || secrets.ReadInfrastructureSecret(profile.PrivateKey) != realityRequest.Credentials.privateKey.value || profile.PublicKey != realityRequest.Credentials.publicKey.value || secrets.ReadClientAccessValue(profile.ShortID) != realityRequest.Credentials.shortID.value {
 		return errors.New("candidate Connection Profiles differ from the reviewed Plan")
 	}
-	if plan.xhttpRequest == nil {
-		if profiles.VLESSXHTTP.Enabled {
-			return errors.New("candidate Connection Profiles differ from the reviewed Plan")
-		}
-		return nil
-	}
-	xhttp := profiles.VLESSXHTTP
-	reviewed := *plan.xhttpRequest
-	if !xhttp.Enabled || xhttp.Hostname != reviewed.Hostname || xhttp.OriginAddress != reviewed.OriginAddress || xhttp.OriginPort != reviewed.OriginPort || xhttp.Mode != reviewed.Mode || secrets.ReadClientAccessValue(xhttp.UUID) != reviewed.Credentials.uuid.value || secrets.ReadClientAccessValue(xhttp.Path) != reviewed.Credentials.path.value {
+	if !reviewedXHTTPMatches(plan.xhttpRequest, profiles.VLESSXHTTP, secrets) || !reviewedWebSocketMatches(plan.webSocketRequest, profiles.VLESSWebSocket, secrets) {
 		return errors.New("candidate Connection Profiles differ from the reviewed Plan")
 	}
 	return nil
+}
+
+func reviewedXHTTPMatches(reviewed *XHTTPViewRequest, profile state.VLESSXHTTP, secrets state.ConnectionProfileSecretReader) bool {
+	if reviewed == nil {
+		return !profile.Enabled
+	}
+	return profile.Enabled && profile.Hostname == reviewed.Hostname && profile.OriginAddress == reviewed.OriginAddress && profile.OriginPort == reviewed.OriginPort && profile.Mode == reviewed.Mode && secrets.ReadClientAccessValue(profile.UUID) == reviewed.Credentials.uuid.value && secrets.ReadClientAccessValue(profile.Path) == reviewed.Credentials.path.value
+}
+
+func reviewedWebSocketMatches(reviewed *WebSocketViewRequest, profile state.VLESSWebSocket, secrets state.ConnectionProfileSecretReader) bool {
+	if reviewed == nil {
+		return !profile.Enabled
+	}
+	return profile.Enabled && profile.Hostname == reviewed.Hostname && profile.OriginAddress == reviewed.OriginAddress && profile.OriginPort == reviewed.OriginPort && secrets.ReadClientAccessValue(profile.UUID) == reviewed.Credentials.uuid.value && secrets.ReadClientAccessValue(profile.Path) == reviewed.Credentials.path.value
 }
 
 func (plan *Plan) PrepareConnectionProfiles(profiles state.ConnectionProfiles, secrets state.ConnectionProfileSecretReader) ([]byte, []byte, error) {
@@ -511,26 +557,27 @@ func realityConfiguration(request ViewRequest) ([]byte, error) {
 	if !request.Credentials.valid() {
 		return nil, errors.New("credentials invalid")
 	}
-	return xrayConfiguration(&request, nil)
+	return xrayConfiguration(&request, nil, nil)
 }
 
-func xrayConfiguration(reality *ViewRequest, xhttp *XHTTPViewRequest) ([]byte, error) {
-	var inbounds []any
-	if reality != nil {
-		if !reality.Credentials.valid() {
-			return nil, errors.New("REALITY credentials invalid")
-		}
-		inbounds = append(inbounds, realityInbound(*reality))
+func xrayConfiguration(reality *ViewRequest, xhttp *XHTTPViewRequest, websocket *WebSocketViewRequest) ([]byte, error) {
+	realityConfig, err := optionalRealityInbound(reality)
+	if err != nil {
+		return nil, err
 	}
-	if xhttp != nil {
-		if !xhttp.Credentials.valid() {
-			return nil, errors.New("XHTTP credentials invalid")
+	xhttpConfig, err := optionalXHTTPInbound(xhttp)
+	if err != nil {
+		return nil, err
+	}
+	webSocketConfig, err := optionalWebSocketInbound(websocket)
+	if err != nil {
+		return nil, err
+	}
+	var inbounds []any
+	for _, inbound := range []any{realityConfig, xhttpConfig, webSocketConfig} {
+		if inbound != nil {
+			inbounds = append(inbounds, inbound)
 		}
-		inbounds = append(inbounds, map[string]any{
-			"tag": "vless-xhttp", "listen": xhttp.OriginAddress, "port": xhttp.OriginPort, "protocol": "vless",
-			"settings":       map[string]any{"clients": []any{map[string]any{"id": xhttp.Credentials.uuid.value}}, "decryption": "none"},
-			"streamSettings": map[string]any{"method": "xhttp", "security": "none", "xhttpSettings": map[string]any{"mode": string(xhttp.Mode), "path": xhttp.Credentials.path.value}},
-		})
 	}
 	if len(inbounds) == 0 {
 		return nil, errors.New("no enabled Xray profile")
@@ -541,6 +588,44 @@ func xrayConfiguration(reality *ViewRequest, xhttp *XHTTPViewRequest) ([]byte, e
 		"outbounds": []any{map[string]any{"tag": "direct", "protocol": "freedom"}, map[string]any{"tag": "blocked", "protocol": "blackhole"}},
 	}
 	return json.Marshal(configuration)
+}
+
+func optionalRealityInbound(request *ViewRequest) (any, error) {
+	if request == nil {
+		return nil, nil
+	}
+	if !request.Credentials.valid() {
+		return nil, errors.New("REALITY credentials invalid")
+	}
+	return realityInbound(*request), nil
+}
+
+func optionalXHTTPInbound(request *XHTTPViewRequest) (any, error) {
+	if request == nil {
+		return nil, nil
+	}
+	if !request.Credentials.valid() {
+		return nil, errors.New("XHTTP credentials invalid")
+	}
+	return map[string]any{
+		"tag": "vless-xhttp", "listen": request.OriginAddress, "port": request.OriginPort, "protocol": "vless",
+		"settings":       map[string]any{"clients": []any{map[string]any{"id": request.Credentials.uuid.value}}, "decryption": "none"},
+		"streamSettings": map[string]any{"method": "xhttp", "security": "none", "xhttpSettings": map[string]any{"mode": string(request.Mode), "path": request.Credentials.path.value}},
+	}, nil
+}
+
+func optionalWebSocketInbound(request *WebSocketViewRequest) (any, error) {
+	if request == nil {
+		return nil, nil
+	}
+	if !request.Credentials.valid() || request.TLSName != request.Hostname || request.HTTPHost != request.Hostname {
+		return nil, errors.New("WebSocket inputs invalid")
+	}
+	return map[string]any{
+		"tag": "vless-websocket", "listen": request.OriginAddress, "port": request.OriginPort, "protocol": "vless",
+		"settings":       map[string]any{"clients": []any{map[string]any{"id": request.Credentials.uuid.value}}, "decryption": "none"},
+		"streamSettings": map[string]any{"method": "websocket", "security": "none", "wsSettings": map[string]any{"host": request.HTTPHost, "path": request.Credentials.path.value}},
+	}, nil
 }
 
 func realityInbound(request ViewRequest) map[string]any {

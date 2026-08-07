@@ -3,6 +3,7 @@ package ubuntu
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -85,6 +86,54 @@ func (host RealityHost) ObserveReality(ctx context.Context, target connectionpro
 }
 
 func (host RealityHost) ObserveXHTTP(ctx context.Context, listenerPort uint16) connectionprofiles.XHTTPObservation {
+	return host.observeLoopbackXray(ctx, listenerPort)
+}
+
+func (host RealityHost) ObserveWebSocket(ctx context.Context, listenerPort uint16, expectedHost, expectedPath string) connectionprofiles.WebSocketObservation {
+	loopback := host.observeLoopbackXray(ctx, listenerPort)
+	observation := connectionprofiles.WebSocketObservation{
+		CheckedAt: loopback.CheckedAt, ConfigurationSafe: loopback.ConfigurationSafe, ConfigurationValid: loopback.ConfigurationValid,
+		ServiceUnit: loopback.ServiceUnit, ServiceIdentity: loopback.ServiceIdentity, ServiceRunning: loopback.ServiceRunning, Listener: loopback.Listener,
+	}
+	if observation.ConfigurationSafe && observation.ConfigurationValid {
+		observation.HostMatches, observation.PathMatches = host.webSocketConfigurationAgreement(listenerPort, expectedHost, expectedPath)
+	}
+	return observation
+}
+
+func (host RealityHost) webSocketConfigurationAgreement(expectedPort uint16, expectedHost, expectedPath string) (bool, bool) {
+	content, err := os.ReadFile(filepath.Join(host.root, realityConfigurationPath))
+	if err != nil {
+		return false, false
+	}
+	var configuration struct {
+		Inbounds []struct {
+			Tag, Listen    string
+			Port           uint16
+			StreamSettings struct {
+				Method, Security string
+				WSSettings       struct{ Host, Path string }
+			}
+		}
+	}
+	if json.Unmarshal(content, &configuration) != nil {
+		return false, false
+	}
+	matches := 0
+	hostMatches, pathMatches := false, false
+	for _, inbound := range configuration.Inbounds {
+		if inbound.Tag != "vless-websocket" {
+			continue
+		}
+		matches++
+		structureMatches := inbound.Listen == "127.0.0.1" && inbound.Port == expectedPort && inbound.StreamSettings.Method == "websocket" && inbound.StreamSettings.Security == "none"
+		hostMatches = structureMatches && inbound.StreamSettings.WSSettings.Host == expectedHost
+		pathMatches = structureMatches && inbound.StreamSettings.WSSettings.Path == expectedPath
+	}
+	return matches == 1 && hostMatches, matches == 1 && pathMatches
+}
+
+func (host RealityHost) observeLoopbackXray(ctx context.Context, listenerPort uint16) connectionprofiles.XHTTPObservation {
 	service := host.observeXrayService(ctx, listenerPort)
 	observation := connectionprofiles.XHTTPObservation{
 		CheckedAt: service.checkedAt, ConfigurationSafe: service.configurationSafe, ServiceUnit: service.unit,

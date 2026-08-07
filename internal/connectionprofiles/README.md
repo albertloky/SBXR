@@ -1,6 +1,6 @@
 # Connection Profiles
 
-Connection Profiles owns the six server-side connection choices. Issues #100 and #101 deliver the first two vertical slices: VLESS REALITY Vision and VLESS XHTTP through `View`, `Plan`, and `Apply`. The remaining four profiles stay pending in #102–#105; the exact six-profile registry and coordinated lifecycle stay pending in #106–#107.
+Connection Profiles owns the six server-side connection choices. Issues #100–#102 deliver the first three vertical slices: VLESS REALITY Vision, VLESS XHTTP, and independent VLESS WebSocket through `View`, `Plan`, and `Apply`. The remaining three profiles stay pending in #103–#105; the exact six-profile registry and coordinated lifecycle stay pending in #106–#107.
 
 `View` fails closed unless the selected target is `443/TCP`, the accepted name agrees, `xray tls ping` and normal TLS name verification pass, and the target is neither Cloudflare-fronted nor Apple or iCloud. On an existing Managed installation it also requires the fixed `xray.service`, distinct `xray` identity, exact protocol-aware listener, protected `/etc/sbxr/xray/config.json`, and only the `CAP_NET_BIND_SERVICE` capability required by a selected port below `1024`.
 
@@ -11,5 +11,9 @@ The REALITY UUID, X25519 private key, public key, and short ID are checked as on
 VLESS XHTTP uses an independent UUID and independently generated 32-byte path. Its server behavior is fixed to `packet-up`; client `mode=auto`, `stream-up`, and `stream-one` are not server settings. Xray listens without local TLS only on `127.0.0.1:11080/TCP`. Cloudflare Tunnel owns edge publication and supplies a typed result binding the selected hostname to `http://127.0.0.1:11080`; Connection Profiles refuses a missing, unhealthy, or mismatched binding.
 
 An existing Managed installation is Healthy only when the protected complete Xray configuration passes the installed native validator, `xray.service` runs as the distinct `xray` identity, the listener is exactly loopback-only, and the typed Cloudflare XHTTP route agrees. The XHTTP Plan validates the complete REALITY-plus-XHTTP configuration with Xray `v26.3.27`, binds the exact UUID, path, route observation, State lineage, and prepared bytes, and contributes reversible activation plus Required configuration, listener, service, and route gates.
+
+VLESS WebSocket is an independent compatibility profile, not an XHTTP substitute. It has its own UUID, independently generated 32-byte path, public hostname, Cloudflare route, health row, and acceptance rows. Its destination hostname, edge TLS name, HTTP Host, protected active path, and typed route must agree. Xray listens without local TLS only on `127.0.0.1:11081/TCP`; the Ubuntu observer refuses multiple listeners and compares the protected active WebSocket Host and path without returning either value.
+
+The WebSocket Plan validates one complete REALITY-plus-XHTTP-plus-WebSocket configuration with Xray `v26.3.27`. It binds the exact independent credentials, paths, hostnames, typed route observations, State lineage, and prepared bytes, then contributes one reversible activation step and Required configuration, listener, service, and route gates. Cloudflare owns edge publication, and Subscription Publication owns client rendering and maintained-client compatibility.
 
 See [ACCEPTANCE.md](ACCEPTANCE.md) for automated, native, live, and Owner evidence boundaries.

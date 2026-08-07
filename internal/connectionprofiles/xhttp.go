@@ -1,7 +1,6 @@
 package connectionprofiles
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -11,15 +10,13 @@ import (
 	"fmt"
 	"io"
 	"regexp"
-	"sync/atomic"
 	"time"
 
 	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
 	"github.com/albertloky/SBXR/internal/state"
-	"github.com/albertloky/SBXR/internal/systemchanges"
 )
 
-var xhttpPath = regexp.MustCompile(`^/[0-9a-f]{64}$`)
+var highEntropyPath = regexp.MustCompile(`^/[0-9a-f]{64}$`)
 
 type XHTTPCredentials struct{ uuid, path secretText }
 
@@ -35,22 +32,37 @@ func NewXHTTPCredentials(uuid, path string) (XHTTPCredentials, error) {
 }
 
 func GenerateXHTTPCredentials() (XHTTPCredentials, error) {
-	uuidBytes := make([]byte, 16)
-	pathBytes := make([]byte, 32)
-	if _, err := io.ReadFull(rand.Reader, uuidBytes); err != nil {
+	uuid, err := generateUUID()
+	if err != nil {
 		return XHTTPCredentials{}, errors.New("XHTTP UUID generation failed")
 	}
-	if _, err := io.ReadFull(rand.Reader, pathBytes); err != nil {
+	path, err := generateHighEntropyPath()
+	if err != nil {
 		return XHTTPCredentials{}, errors.New("XHTTP path generation failed")
+	}
+	return NewXHTTPCredentials(uuid, path)
+}
+
+func generateUUID() (string, error) {
+	uuidBytes := make([]byte, 16)
+	if _, err := io.ReadFull(rand.Reader, uuidBytes); err != nil {
+		return "", err
 	}
 	uuidBytes[6] = uuidBytes[6]&0x0f | 0x40
 	uuidBytes[8] = uuidBytes[8]&0x3f | 0x80
-	uuid := fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", uuidBytes[:4], uuidBytes[4:6], uuidBytes[6:8], uuidBytes[8:10], uuidBytes[10:])
-	return NewXHTTPCredentials(uuid, "/"+hex.EncodeToString(pathBytes))
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", uuidBytes[:4], uuidBytes[4:6], uuidBytes[6:8], uuidBytes[8:10], uuidBytes[10:]), nil
+}
+
+func generateHighEntropyPath() (string, error) {
+	pathBytes := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, pathBytes); err != nil {
+		return "", err
+	}
+	return "/" + hex.EncodeToString(pathBytes), nil
 }
 
 func (credentials XHTTPCredentials) valid() bool {
-	return uuidV4.MatchString(credentials.uuid.value) && xhttpPath.MatchString(credentials.path.value)
+	return uuidV4.MatchString(credentials.uuid.value) && highEntropyPath.MatchString(credentials.path.value)
 }
 
 type XHTTPObservation struct {
@@ -171,43 +183,20 @@ func (module Interface) PlanXHTTP(ctx context.Context, request XHTTPPlanRequest)
 	if request.Reality.Revision != request.View.Revision || !planName.MatchString(request.ChangeSet) || !sha256Text.MatchString(request.StartingStateSHA256) || !sha256Text.MatchString(request.DesiredStateSHA256) || request.StartingStateSHA256 == request.DesiredStateSHA256 {
 		return PlanResult{Health: blockedXHTTP(view.Health.Time, Failed, "CONNECTION-PROFILES-XHTTP-PLAN-STATE", "The reviewed State binding is invalid", "a Change Set, revision, or State checksum is missing or malformed", "one exact current and candidate State binding")}
 	}
-	configuration, err := xrayConfiguration(&request.Reality, &request.View)
+	configuration, err := xrayConfiguration(&request.Reality, &request.View, nil)
 	if err != nil {
 		return PlanResult{Health: blockedXHTTP(view.Health.Time, Failed, "CONNECTION-PROFILES-XHTTP-CONFIGURATION", "The complete Xray configuration could not be prepared", "the typed REALITY or XHTTP inputs are incomplete", "one complete protected Xray configuration")}
 	}
-	if err := module.host.ValidateReality(ctx, request.View.XrayVersion, bytes.NewReader(configuration)); err != nil {
-		return PlanResult{Health: blockedXHTTP(view.Health.Time, Failed, "CONNECTION-PROFILES-XHTTP-NATIVE", "The pinned native Xray validator refused the complete prepared configuration", "native validation failed", "one complete configuration accepted by Xray v26.3.27")}
-	}
-	preparedBinding, err := opaquePreparedBinding(configuration)
-	if err != nil {
-		return PlanResult{Health: blockedXHTTP(view.Health.Time, Failed, "CONNECTION-PROFILES-XHTTP-BINDING", "The protected prepared-configuration authority is unavailable", "an opaque binding could not be created", "one secret-safe binding to the exact validated configuration")}
-	}
-	step, err := systemchanges.NewStep(systemchanges.ConnectionProfilesModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
-	if err != nil {
-		return PlanResult{Health: blockedXHTTP(view.Health.Time, Failed, "CONNECTION-PROFILES-XHTTP-TRANSACTION", "The profile transaction contract is invalid", "the activation or rollback step was refused", "one reversible Connection Profiles step")}
-	}
-	checks := []systemchanges.Check{
-		{Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CONNECTION-PROFILES-XHTTP-CONFIGURATION"},
-		{Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CONNECTION-PROFILES-XHTTP-LISTENER"},
-		{Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CONNECTION-PROFILES-XHTTP-SERVICE"},
-		{Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PostPublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CONNECTION-PROFILES-XHTTP-ROUTE"},
-	}
 	volatile := sha256.Sum256([]byte(reality.VolatileSHA256 + view.VolatileSHA256))
 	volatileSHA256 := hex.EncodeToString(volatile[:])
-	binding := struct {
-		Request         XHTTPPlanRequest
-		VolatileSHA256  string
-		PreparedBinding string
-	}{request, volatileSHA256, preparedBinding}
-	encoded, _ := json.Marshal(binding)
-	digest := sha256.Sum256(encoded)
-	sha := hex.EncodeToString(digest[:])
-	plan := &Plan{
-		identity: "profiles-xhttp-" + sha[:12], sha256: sha, volatileSHA256: volatileSHA256,
-		description:     "validate and activate VLESS XHTTP on 127.0.0.1:11080/TCP through xray.service and its typed Cloudflare route; rollback restores the prior configuration",
-		preparedBinding: preparedBinding, configuration: append([]byte(nil), configuration...), revision: request.View.Revision, changeSet: request.ChangeSet,
-		startingStateSHA256: request.StartingStateSHA256, desiredStateSHA256: request.DesiredStateSHA256, realityRequest: request.Reality, xhttpRequest: &request.View,
-		steps: []systemchanges.Step{step}, checks: checks, used: &atomic.Bool{},
+	plan, failure := module.buildXrayPlan(ctx, xrayPlanSpec{
+		identityPrefix: "profiles-xhttp-", description: "validate and activate VLESS XHTTP on 127.0.0.1:11080/TCP through xray.service and its typed Cloudflare route; rollback restores the prior configuration",
+		profile: view.Profile.Name, codePrefix: "CONNECTION-PROFILES-XHTTP", postCheck: "ROUTE", version: request.View.XrayVersion,
+		revision: request.View.Revision, changeSet: request.ChangeSet, startingStateSHA256: request.StartingStateSHA256, desiredStateSHA256: request.DesiredStateSHA256,
+		volatileSHA256: volatileSHA256, configuration: configuration, request: request, reality: request.Reality, xhttp: &request.View, checkedAt: view.Health.Time,
+	})
+	if failure != nil {
+		return PlanResult{Health: *failure}
 	}
 	return PlanResult{Plan: plan, Health: Health{Time: view.Health.Time, Module: "Connection Profiles", Profile: view.Profile.Name, Outcome: Healthy, Code: "CONNECTION-PROFILES-XHTTP-PLAN-READY", NextActions: []string{"Review Plan", "Back"}}}
 }

@@ -185,6 +185,46 @@ func TestRealityHostObservesExactXHTTPLoopbackListener(t *testing.T) {
 	}
 }
 
+func TestRealityHostObservesExactWebSocketLoopbackListener(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(root, "etc/sbxr/xray")
+	if err := os.MkdirAll(directory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "config.json"), []byte(`{"inbounds":[{"tag":"vless-websocket","listen":"127.0.0.1","port":11081,"streamSettings":{"method":"websocket","security":"none","wsSettings":{"host":"ws.example.com","path":"/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}}}]}`), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	listeners := "LISTEN 0 4096 127.0.0.1:11081 0.0.0.0:*\n"
+	host := RealityHost{root: root, now: func() time.Time { return time.Date(2026, time.August, 7, 12, 0, 0, 0, time.UTC) }, rootUID: uint32(os.Geteuid()), xrayGID: uint32(os.Getegid()), xrayGroup: true, xrayUser: true}
+	host.run = func(_ context.Context, _ io.Reader, name string, arguments ...string) (string, error) {
+		switch name + " " + strings.Join(arguments, " ") {
+		case "systemctl show --property=Id --value xray.service":
+			return "xray.service\n", nil
+		case "systemctl show --property=User --value xray.service", "systemctl show --property=Group --value xray.service":
+			return "xray\n", nil
+		case "systemctl is-active xray.service":
+			return "active\n", nil
+		case "ss -H -ltn sport = :11081":
+			return listeners, nil
+		case "xray run -test -config " + filepath.Join(root, realityConfigurationPath):
+			return "configuration OK\n", nil
+		default:
+			return "", fmt.Errorf("unexpected command")
+		}
+	}
+	observation := host.ObserveWebSocket(t.Context(), 11081, "ws.example.com", "/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	if !observation.ConfigurationSafe || !observation.ConfigurationValid || !observation.HostMatches || !observation.PathMatches || observation.ServiceUnit != "xray.service" || observation.ServiceIdentity != "xray" || !observation.ServiceRunning || observation.Listener != (connectionprofiles.Listener{Address: "127.0.0.1", Port: 11081, Protocol: "tcp"}) {
+		t.Fatalf("ObserveWebSocket() = %+v", observation)
+	}
+	if mismatch := host.ObserveWebSocket(t.Context(), 11081, "wrong.example.com", "/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"); mismatch.HostMatches || mismatch.PathMatches {
+		t.Fatalf("ObserveWebSocket() accepted a wrong Host or path: %+v", mismatch)
+	}
+	listeners += "LISTEN 0 4096 0.0.0.0:11081 0.0.0.0:*\n"
+	if unsafe := host.ObserveWebSocket(t.Context(), 11081, "ws.example.com", "/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"); unsafe.Listener != (connectionprofiles.Listener{}) {
+		t.Fatalf("ObserveWebSocket() hid an additional public listener: %+v", unsafe)
+	}
+}
+
 func TestRealityTargetClassHelpersFailClosed(t *testing.T) {
 	for _, hostname := range []string{"apple.com", "www.apple.com", "icloud.com", "private.me.com", "mail.mac.com"} {
 		if !appleOrICloud(hostname) {
