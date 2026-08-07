@@ -51,11 +51,52 @@ func TestExecutorWholeTunnelCheckUsesJournaledIdentifiers(t *testing.T) {
 	}
 }
 
+func TestWholeTunnelWaitsForReconnectWithoutLosingEitherRoute(t *testing.T) {
+	want := WholeTunnelExpected{TunnelID: testTunnelID, Routes: []Route{{Hostname: "xhttp.example.com", Service: xhttpOrigin}, {Hostname: "ws.example.com", Service: webSocketOrigin}, {Service: "http_status:404"}}, DNSRecords: []DNSExpected{{ID: "dns-x", Name: "xhttp.example.com", Type: "CNAME", Content: testTunnelID + ".cfargotunnel.com", Proxied: true}, {ID: "dns-w", Name: "ws.example.com", Type: "CNAME", Content: testTunnelID + ".cfargotunnel.com", Proxied: true}}}
+	healthy := WholeTunnelObservation{TunnelID: testTunnelID, Connected: true, Routes: append([]Route(nil), want.Routes...), DNSRecords: []DNSObservation{{ID: "dns-x", Name: "xhttp.example.com", Type: "CNAME", Content: testTunnelID + ".cfargotunnel.com", Proxied: true}, {ID: "dns-w", Name: "ws.example.com", Type: "CNAME", Content: testTunnelID + ".cfargotunnel.com", Proxied: true}}, XHTTPOriginReachable: true, WebSocketOriginReachable: true}
+	disconnected := healthy
+	disconnected.Connected = false
+	partial := healthy
+	partial.Routes = partial.Routes[:2]
+	api := &executorFixture{wholes: []WholeTunnelObservation{disconnected, partial, healthy}}
+	clock := &planClock{}
+	health := (Executor{api: api}).WaitForWholeTunnel(context.Background(), WholeTunnelRequest{}, want, clock)
+	if health.Outcome != Healthy || health.Code != "CLOUDFLARE-WHOLE-TUNNEL-HEALTHY" || health.Time != clock.Now().UTC() || api.wholeCalls != 3 || clock.elapsed != 20*time.Second {
+		t.Fatalf("reconnect health = %+v; calls=%d elapsed=%s", health, api.wholeCalls, clock.elapsed)
+	}
+}
+
+func TestWholeTunnelRetriesOnlyTemporaryProviderFailures(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		err   error
+		code  string
+		calls int
+	}{
+		{"contradictory", APIError{Kind: APIAmbiguous}, "CLOUDFLARE-OBSERVATION-CONTRADICTORY", 1},
+		{"malformed", APIError{Kind: APIMalformed}, "CLOUDFLARE-OBSERVATION-MALFORMED", 1},
+		{"permanent", APIError{Kind: APIPermanent}, "CLOUDFLARE-API-REFUSED", 1},
+		{"temporary", APIError{Kind: APITemporary}, "CLOUDFLARE-CONVERGENCE-TIMEOUT", 3},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			api := &executorFixture{wholeErr: test.err}
+			clock := &planClock{}
+			health := (Executor{api: api}).WaitForWholeTunnel(context.Background(), WholeTunnelRequest{}, WholeTunnelExpected{}, clock)
+			if health.Code != test.code || health.Problem == "" || health.Evidence == "" || api.wholeCalls != test.calls {
+				t.Fatalf("health = %+v; calls=%d", health, api.wholeCalls)
+			}
+		})
+	}
+}
+
 type executorFixture struct {
 	planningAPI
 	creates       int
 	deletedTunnel string
 	whole         WholeTunnelObservation
+	wholes        []WholeTunnelObservation
+	wholeCalls    int
+	wholeErr      error
 }
 
 func (api *executorFixture) CreateTunnel(context.Context, CreateTunnelRequest) (CreatedTunnel, error) {
@@ -68,7 +109,18 @@ func (*executorFixture) PutConfiguration(_ context.Context, request PutConfigura
 func (*executorFixture) CreateDNSRecord(_ context.Context, request CreateDNSRecordRequest) (OwnedResource, error) {
 	return OwnedResource{ID: testDNSID, Name: request.Name}, nil
 }
+
 func (api *executorFixture) ObserveWholeTunnel(context.Context, WholeTunnelRequest) (WholeTunnelObservation, error) {
+	if api.wholeErr != nil {
+		api.wholeCalls++
+		return WholeTunnelObservation{}, api.wholeErr
+	}
+	if api.wholeCalls < len(api.wholes) {
+		observed := api.wholes[api.wholeCalls]
+		api.wholeCalls++
+		return observed, nil
+	}
+	api.wholeCalls++
 	return api.whole, nil
 }
 func (*executorFixture) DeleteDNSRecord(context.Context, DeleteDNSRecordRequest) error { return nil }

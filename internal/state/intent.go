@@ -285,6 +285,9 @@ func validateDesiredState(desired DesiredState) *Finding {
 	if cloudflare.ZoneName != desired.Installation.Domain || profiles.VLESSXHTTP.Hostname != cloudflare.XHTTPHostname || profiles.VLESSWebSocket.Hostname != cloudflare.WebSocketHostname {
 		return crossSectionIntent("Cloudflare hostname bindings", "Connection Profiles and immutable Cloudflare bindings disagree")
 	}
+	if profiles.VLESSXHTTP.UUID.value == profiles.VLESSWebSocket.UUID.value || profiles.VLESSXHTTP.Hostname == profiles.VLESSWebSocket.Hostname {
+		return crossSectionIntent("Cloudflare Connection Profile independence", "XHTTP and WebSocket share a credential or hostname")
+	}
 	if profiles.Hysteria2.ServerName != cloudflare.DirectHostname || profiles.TUIC.ServerName != cloudflare.DirectHostname || profiles.AnyTLS.ServerName != cloudflare.DirectHostname || certificates.DomainHostname != cloudflare.DirectHostname {
 		return crossSectionIntent("direct TLS hostname", "profiles, certificate, and Cloudflare bindings disagree")
 	}

@@ -233,13 +233,28 @@ func (executor Executor) WaitForWholeTunnel(ctx context.Context, request WholeTu
 		if err == nil {
 			health := EvaluateWholeTunnel(observed, want)
 			if health.Outcome == Healthy || health.Outcome == Failed {
+				health.Time = clock.Now().UTC()
 				return health
 			}
-		} else {
+		} else if apiErrorIs(err, APITemporary) {
 			temporaryFailures++
+		} else {
+			health := safeAPIHealth(err)
+			health.Module = "Cloudflare Tunnel"
+			switch {
+			case apiErrorIs(err, APIAmbiguous):
+				health.Code, health.Explanation = "CLOUDFLARE-OBSERVATION-CONTRADICTORY", "Cloudflare returned a valid but contradictory immutable identifier."
+			case apiErrorIs(err, APIMalformed):
+				health.Code, health.Explanation = "CLOUDFLARE-OBSERVATION-MALFORMED", "Cloudflare returned an unsupported observation shape."
+			}
+			health = finishHealth(health)
+			health.Time = clock.Now().UTC()
+			return health
 		}
 		if temporaryFailures >= 3 || !clock.Now().Before(deadline) || clock.Sleep(ctx, 10*time.Second) != nil {
-			return Health{Module: "Cloudflare Tunnel", Outcome: Unknown, Code: "CLOUDFLARE-CONVERGENCE-TIMEOUT", Explanation: "Cloudflare did not converge within five minutes.", NextActions: []string{"Check again", "Back"}}
+			health := finishHealth(Health{Module: "Cloudflare Tunnel", Outcome: Unknown, Code: "CLOUDFLARE-CONVERGENCE-TIMEOUT", Explanation: "Cloudflare did not converge within five minutes.", NextActions: []string{"Check again", "Back"}})
+			health.Time = clock.Now().UTC()
+			return health
 		}
 	}
 }

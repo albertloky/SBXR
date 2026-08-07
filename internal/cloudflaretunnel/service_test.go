@@ -61,7 +61,7 @@ func TestExecutorInstallsAndRollsBackProtectedCloudflaredService(t *testing.T) {
 			return nil, nil
 		},
 	}
-	material := `{"tunnel_id":"11111111-1111-4111-8111-111111111111","tunnel_run_token":"RUN-TOKEN-MARKER","routes":[{"hostname":"xhttp.example.com","origin":"http://127.0.0.1:11080"}]}`
+	material := `{"tunnel_id":"11111111-1111-4111-8111-111111111111","tunnel_run_token":"RUN-TOKEN-MARKER","routes":[{"hostname":"xhttp.example.com","origin":"http://127.0.0.1:11080"},{"hostname":"ws.example.com","origin":"http://127.0.0.1:11081"}]}`
 	var rollback []byte
 	if err := executor.CaptureServiceRollback(root, func(source io.Reader) error {
 		var err error
@@ -81,7 +81,7 @@ func TestExecutorInstallsAndRollsBackProtectedCloudflaredService(t *testing.T) {
 		t.Fatalf("token file = %q, %v", token, err)
 	}
 	config, err := os.ReadFile(filepath.Join(root, "etc/sbxr/cloudflared/config.yml"))
-	if err != nil || !strings.Contains(string(config), xhttpOrigin) || !strings.Contains(string(config), "http_status:404") || strings.Contains(string(config), webSocketOrigin) || strings.Contains(string(config), "https://") {
+	if err != nil || !strings.Contains(string(config), xhttpOrigin) || !strings.Contains(string(config), webSocketOrigin) || !strings.Contains(string(config), "http_status:404") || strings.Contains(string(config), "https://") {
 		t.Fatalf("config = %q, %v", config, err)
 	}
 	if strings.Contains(strings.Join(commands, "\n"), "RUN-TOKEN-MARKER") {

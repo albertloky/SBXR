@@ -56,6 +56,11 @@ func TestLoadRefusesIncompleteOrUnsafeIntent(t *testing.T) {
 		{name: "Network Policy address", change: func(s *DesiredState) { s.NetworkPolicy.PublicIPv4 = "" }, code: "STATE-INTENT-INCOMPLETE"},
 		{name: "software versions", change: func(s *DesiredState) { s.Software.SingBoxVersion = "" }, code: "STATE-INTENT-INCOMPLETE"},
 		{name: "Cloudflare XHTTP binding", change: func(s *DesiredState) { s.ConnectionProfiles.VLESSXHTTP.Hostname = "other.example.com" }, code: "STATE-INTENT-CROSS-SECTION"},
+		{name: "aliased Cloudflare profile credential", change: func(s *DesiredState) { s.ConnectionProfiles.VLESSWebSocket.UUID = s.ConnectionProfiles.VLESSXHTTP.UUID }, code: "STATE-INTENT-CROSS-SECTION"},
+		{name: "aliased Cloudflare profile hostname", change: func(s *DesiredState) {
+			s.ConnectionProfiles.VLESSWebSocket.Hostname = s.ConnectionProfiles.VLESSXHTTP.Hostname
+			s.Cloudflare.WebSocketHostname = s.Cloudflare.XHTTPHostname
+		}, code: "STATE-INTENT-CROSS-SECTION"},
 		{name: "direct certificate binding", change: func(s *DesiredState) { s.Certificates.DomainHostname = "other.example.com" }, code: "STATE-INTENT-CROSS-SECTION"},
 		{name: "primary subscription address", change: func(s *DesiredState) { s.NetworkPolicy.PrimarySubscriptionAddress = "192.0.2.11" }, code: "STATE-INTENT-CROSS-SECTION"},
 		{name: "TCP port conflict", change: func(s *DesiredState) { s.NetworkPolicy.SSHPort = s.ConnectionProfiles.VLESSRealityVision.Port }, code: "STATE-INTENT-CROSS-SECTION"},
