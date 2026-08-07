@@ -61,6 +61,42 @@ func TestPlanBindsCompleteSecretSafeCloudflareInstallation(t *testing.T) {
 	}
 }
 
+func TestPlanNamesOwnerAssistedRunTokenRotationAndBindsOwnedIdentifiers(t *testing.T) {
+	module, request := plannedModule(t)
+	request.StartingRevision = 7
+	request.StartingStateSHA256 = strings.Repeat("c", 64)
+	request.ChangeSet = "cloudflare-run-token-rotation"
+	request.RunTokenRotation = RunTokenRotation{
+		TunnelID: testTunnelID, XHTTPDNSRecordID: testDNSID,
+		WebSocketDNSRecordID: "44444444444444444444444444444444",
+		DirectIPv4RecordID:   "55555555555555555555555555555555",
+		DirectIPv6RecordID:   "66666666666666666666666666666666",
+	}
+	api := module.api.(*planningAPI)
+	api.wholeTunnel = healthyWholeTunnel(request)
+	result := module.Plan(context.Background(), request)
+	if result.Plan == nil || result.Health.Outcome != Healthy || result.Health.Code != "CLOUDFLARE-RUN-TOKEN-ROTATION-READY" {
+		t.Fatalf("rotation Plan = %+v", result)
+	}
+	steps := result.Plan.Steps()
+	change, ok := steps[0].CloudflareChange()
+	if len(steps) != 1 || !ok || change.Action != systemchanges.CloudflareRunTokenActivate || change.TunnelID != testTunnelID {
+		t.Fatalf("rotation steps = %#v", steps)
+	}
+	preview := fmt.Sprintf("%+v %#v %s", result, result.Plan, result.Plan)
+	for _, required := range []string{"Owner selects Rotate token", "forward-only recovery", testTunnelID} {
+		if !strings.Contains(preview, required) {
+			t.Fatalf("rotation preview omitted %q: %s", required, preview)
+		}
+	}
+	if strings.Contains(preview, "PLAN-SECRET-MARKER") {
+		t.Fatalf("rotation Plan leaked management token: %s", preview)
+	}
+	if source, _, templateSHA, valid := result.Plan.StateRunTokenRotation(); source == nil || templateSHA != request.DesiredStateSHA256 || !valid {
+		t.Fatal("rotation Plan omitted its protected State handoff")
+	}
+}
+
 func TestPlanRefusesUnownedConflictAndUnqualifiedCloudflared(t *testing.T) {
 	module, request := plannedModule(t)
 	api := module.api.(*planningAPI)
@@ -257,6 +293,26 @@ type planningAPI struct {
 	mutation         MutationObservation
 	suffixFree       bool
 	conflictHostname string
+	wholeTunnel      WholeTunnelObservation
+}
+
+func (api *planningAPI) ObserveWholeTunnel(context.Context, WholeTunnelRequest) (WholeTunnelObservation, error) {
+	return api.wholeTunnel, nil
+}
+
+func healthyWholeTunnel(request PlanRequest) WholeTunnelObservation {
+	rotation := request.RunTokenRotation
+	return WholeTunnelObservation{
+		TunnelID: rotation.TunnelID, Connected: true,
+		Routes: []Route{{Hostname: request.XHTTPHostname, Service: xhttpOrigin}, {Hostname: request.WebSocketHostname, Service: webSocketOrigin}, {Service: "http_status:404"}},
+		DNSRecords: []DNSObservation{
+			{ID: rotation.XHTTPDNSRecordID, Name: request.XHTTPHostname, Type: "CNAME", Content: rotation.TunnelID + ".cfargotunnel.com", Proxied: true},
+			{ID: rotation.WebSocketDNSRecordID, Name: request.WebSocketHostname, Type: "CNAME", Content: rotation.TunnelID + ".cfargotunnel.com", Proxied: true},
+			{ID: rotation.DirectIPv4RecordID, Name: request.DirectHostname, Type: "A", Content: request.PublicIPv4},
+			{ID: rotation.DirectIPv6RecordID, Name: request.DirectHostname, Type: "AAAA", Content: request.PublicIPv6},
+		},
+		XHTTPOriginReachable: true, WebSocketOriginReachable: true,
+	}
 }
 
 func (api *planningAPI) Observe(context.Context, ObservationRequest) (Observation, error) {

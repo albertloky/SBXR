@@ -70,6 +70,43 @@ type DeleteTunnelRequest struct {
 	AccountID, ID string
 	Token         ManagementToken
 }
+type GetTunnelTokenRequest struct {
+	AccountID, TunnelID string
+	Token               ManagementToken
+}
+
+// TunnelTokenResult keeps the complete run token behind the same one-use
+// Infrastructure Secret handoff used by State.
+type TunnelTokenResult struct {
+	token  TunnelRunToken
+	sha256 string
+}
+
+type tunnelTokenAPI interface {
+	GetTunnelToken(context.Context, GetTunnelTokenRequest) (TunnelTokenResult, error)
+}
+
+// NewRunTokenRotationExecutor reconstructs the provider seam after process
+// restart from the current protected management authority.
+func NewRunTokenRotationExecutor(api MutationAPI, token ManagementToken) (Executor, error) {
+	if api == nil || token.value == "" {
+		return Executor{}, errors.New("Cloudflare run-token recovery executor unavailable")
+	}
+	if _, ok := api.(tunnelTokenAPI); !ok {
+		return Executor{}, errors.New("Cloudflare Tunnel token API unavailable")
+	}
+	return Executor{api: api, token: token, serviceIdentity: cloudflaredIdentity, command: runCommand}, nil
+}
+
+func (TunnelTokenResult) String() string   { return "Cloudflare Tunnel run token: redacted" }
+func (TunnelTokenResult) GoString() string { return "Cloudflare Tunnel run token: redacted" }
+func (result TunnelTokenResult) ChangedFrom(sha256 string) bool {
+	return sha256Text.MatchString(sha256) && result.sha256 != "" && result.sha256 != sha256
+}
+func (result TunnelTokenResult) ConsumeInfrastructureSecret() (string, bool) {
+	return result.token.consume()
+}
+
 type DNSRecordReference struct{ ID string }
 type WholeTunnelRequest struct {
 	AccountID, ZoneID, TunnelID string
@@ -199,6 +236,44 @@ func (executor Executor) Execute(step systemchanges.Step, resolvedTunnelID strin
 		return providerEvidence("cloudflared-activated", "", ""), nil
 	}
 	return systemchanges.StepEvidence{}, errors.New("unsupported Cloudflare step")
+}
+
+func (executor Executor) RetrieveRunToken(change systemchanges.CloudflareChange, priorSHA256 string, timeout time.Duration) (any, bool, error) {
+	provider, ok := executor.api.(tunnelTokenAPI)
+	if !ok || executor.token.value == "" || change.Action != systemchanges.CloudflareRunTokenActivate || !tunnelUUID.MatchString(change.TunnelID) || !sha256Text.MatchString(priorSHA256) {
+		return nil, false, errors.New("Cloudflare run-token retrieval unavailable")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	result, err := provider.GetTunnelToken(ctx, GetTunnelTokenRequest{AccountID: change.AccountID, TunnelID: change.TunnelID, Token: executor.token})
+	if err != nil {
+		return nil, false, err
+	}
+	if !result.ChangedFrom(priorSHA256) {
+		return nil, false, nil
+	}
+	return result, true, nil
+}
+
+func (executor Executor) CheckRunTokenRotation(change systemchanges.CloudflareChange, timeout time.Duration) (systemchanges.HealthStatus, error) {
+	if change.Action != systemchanges.CloudflareRunTokenActivate || executor.api == nil || executor.token.value == "" {
+		return systemchanges.Unknown, errors.New("Cloudflare rotation health unavailable")
+	}
+	request := PlanRequest{Authority: ViewRequest{AccountID: change.AccountID, ZoneID: change.ZoneID, Token: executor.token}, XHTTPHostname: change.Routes[0].Hostname, WebSocketHostname: change.Routes[1].Hostname, DirectHostname: change.DirectHostname, PublicIPv4: change.PublicIPv4, PublicIPv6: change.PublicIPv6, RunTokenRotation: RunTokenRotation{TunnelID: change.TunnelID, XHTTPDNSRecordID: change.XHTTPDNSRecordID, WebSocketDNSRecordID: change.WebSocketDNSRecordID, DirectIPv4RecordID: change.DirectIPv4RecordID, DirectIPv6RecordID: change.DirectIPv6RecordID}}
+	expected, providerRequest := rotationHealthRequest(request)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	health := executor.WaitForWholeTunnel(ctx, providerRequest, expected, SystemClock{})
+	switch health.Outcome {
+	case Healthy:
+		return systemchanges.Healthy, nil
+	case NeedsAttention:
+		return systemchanges.NeedsAttention, nil
+	case Failed:
+		return systemchanges.Failed, nil
+	default:
+		return systemchanges.Unknown, nil
+	}
 }
 
 func (executor Executor) planStillFresh(ctx context.Context) bool {

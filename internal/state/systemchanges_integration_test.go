@@ -33,6 +33,7 @@ type systemChangesAdapter struct {
 	artifacts       map[string][]byte
 	statuses        map[systemchanges.GatePhase]systemchanges.HealthStatus
 	beforeStep      func() error
+	afterPrepare    func()
 	beforeCheck     func()
 	prepareErr      error
 	closeErr        error
@@ -58,6 +59,19 @@ type systemChangesAdapter struct {
 	crashed         bool
 	lockHeld        bool
 	cloudflare      *cloudflaretunnel.Executor
+	rotationChanged bool
+}
+
+type controlledInfrastructureSecret struct {
+	value string
+	used  atomic.Bool
+}
+
+func (secret *controlledInfrastructureSecret) ConsumeInfrastructureSecret() (string, bool) {
+	if secret == nil || secret.value == "" || !secret.used.CompareAndSwap(false, true) {
+		return "", false
+	}
+	return secret.value, true
 }
 
 type controlledRemovalObserver struct{}
@@ -133,9 +147,12 @@ func (a *systemChangesAdapter) Prepare(lease systemchanges.ExecutionLease, prepa
 	a.recovery = &systemchanges.RecoveryTransaction{
 		ChangeSet: preparation.ChangeSet, Mutation: preparation.Mutation, Starting: preparation.Starting, StartingRelease: preparation.State.StartingRelease,
 		Candidate: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: preparation.State.CandidateRevision, SHA256: preparation.State.CandidateSHA256}, CandidateRelease: preparation.State.CandidateRelease,
-		OutcomeOwner: preparation.OutcomeOwner, Steps: append([]systemchanges.Step(nil), preparation.Steps...), LastCheckpoint: systemchanges.Prepared, Timeouts: preparation.Timeouts,
+		OutcomeOwner: preparation.OutcomeOwner, State: preparation.State, Steps: append([]systemchanges.Step(nil), preparation.Steps...), Checks: append([]systemchanges.Check(nil), preparation.Checks...), LastCheckpoint: systemchanges.Prepared, Timeouts: preparation.Timeouts,
 	}
 	a.stateBinding, _ = json.Marshal(preparation.State)
+	if a.afterPrepare != nil {
+		a.afterPrepare()
+	}
 	if a.crashAfter == systemchanges.Prepared && !a.crashed {
 		a.crashed = true
 		panic("controlled worker death")
@@ -165,12 +182,59 @@ func (a *systemChangesAdapter) Record(_ systemchanges.ExecutionLease, record sys
 		case systemchanges.RollbackVerified, systemchanges.RolledBack:
 			a.recovery.RollbackStep = 0
 		}
+		if record.State != nil {
+			a.recovery.State = *record.State
+			a.recovery.Candidate.SHA256 = record.State.CandidateSHA256
+		}
 	}
 	if a.crashAfter == record.Checkpoint && !a.crashed {
 		a.crashed = true
 		panic("controlled worker death")
 	}
 	return nil
+}
+
+func (a *systemChangesAdapter) StartRunTokenRotation(_ systemchanges.ExecutionLease, _ string) (bool, error) {
+	a.events = append(a.events, string(systemchanges.IrreversibleRunTokenRotationStarted))
+	if a.recovery == nil {
+		return false, errors.New("rotation recovery unavailable")
+	}
+	a.recovery.LastCheckpoint = systemchanges.IrreversibleRunTokenRotationStarted
+	a.recovery.PriorRunTokenSHA256 = testSHA('9')
+	delete(a.artifacts, "snapshot/prior-state.json")
+	return true, nil
+}
+
+func (a *systemChangesAdapter) FinalizeRunTokenRotation(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction, _ time.Duration) (any, systemchanges.StateTransactionBinding, bool, error) {
+	a.events = append(a.events, "retrieve changed Tunnel token")
+	if !a.rotationChanged {
+		return nil, systemchanges.StateTransactionBinding{}, false, nil
+	}
+	binding, _ := json.Marshal(recovery.State)
+	material, err := a.stateRecovery.SystemChangesFinalizeRunTokenRotation(lease, binding, bytes.NewReader(a.artifacts["prepared/state.json"]), &controlledInfrastructureSecret{value: "CLOUDFLARE-ROTATED-RUN-TOKEN-MARKER"})
+	stateMaterial, ok := material.(interface {
+		SystemChangesBindings(any) ([]byte, error)
+		SystemChangesWriteArtifacts(any, func(string, uint32, io.Reader) error) error
+	})
+	if err != nil || !ok {
+		return nil, systemchanges.StateTransactionBinding{}, false, err
+	}
+	finalJSON, err := stateMaterial.SystemChangesBindings(lease)
+	var final systemchanges.StateTransactionBinding
+	if err != nil || json.Unmarshal(finalJSON, &final) != nil {
+		return nil, systemchanges.StateTransactionBinding{}, false, errors.New("final binding unavailable")
+	}
+	if err := a.ReplaceStateArtifacts(lease, recovery.ChangeSet, final, func(write func(string, uint32, io.Reader) error) error {
+		return stateMaterial.SystemChangesWriteArtifacts(lease, write)
+	}); err != nil {
+		return nil, systemchanges.StateTransactionBinding{}, false, err
+	}
+	return material, final, true, nil
+}
+
+func (a *systemChangesAdapter) LoadRunTokenRotationState(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction) (any, error) {
+	binding, _ := json.Marshal(recovery.State)
+	return a.stateRecovery.SystemChangesLoadRunTokenRotation(lease, binding, bytes.NewReader(a.artifacts["prepared/state.json"]), bytes.NewReader(a.artifacts["prepared/manifests.json"]))
 }
 
 func (a *systemChangesAdapter) Execute(_ systemchanges.ExecutionLease, _ string, _ int, step systemchanges.Step, _ time.Duration, _ *systemchanges.Cancellation) (systemchanges.StepEvidence, error) {
@@ -237,7 +301,7 @@ func (a *systemChangesAdapter) Check(_ systemchanges.ExecutionLease, check syste
 	if a.beforeCheck != nil {
 		a.beforeCheck()
 	}
-	if status := a.statuses[phase]; status != "" && (check.Code == "NETWORK-GATE" || check.Code == "REMOVAL-EXTERNAL-ABSENT") {
+	if status := a.statuses[phase]; status != "" && (check.Code == "NETWORK-GATE" || check.Code == "REMOVAL-EXTERNAL-ABSENT" || check.Code == "CLOUDFLARE-WHOLE-TUNNEL") {
 		return status, nil
 	}
 	return check.Status, nil
@@ -414,6 +478,16 @@ func TestCancellationBeforeApplyChangesNothing(t *testing.T) {
 	}
 }
 
+func TestRunTokenRotationCancellationImmediatelyBeforeTheCheckpointRollsBack(t *testing.T) {
+	stateModule, changeSet, _, observed := preparedSystemChangeForMutation(t, systemchanges.RotationMutation, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-GATE"})
+	cancellation := systemchanges.NewCancellation()
+	adapter := &systemChangesAdapter{observation: observed, stateRecovery: stateModule, afterPrepare: cancellation.Request}
+	result := systemchanges.New(adapter).ApplyWithCancellation(changeSet, cancellation)
+	if result.Outcome != systemchanges.RollbackSucceeded || slices.Contains(adapter.events, string(systemchanges.IrreversibleRunTokenRotationStarted)) {
+		t.Fatalf("pre-checkpoint cancellation = %+v; events=%v", result, adapter.events)
+	}
+}
+
 func TestPostPublicationFailureRestoresPriorDesiredState(t *testing.T) {
 	stateModule, changeSet, _, observed := preparedSystemChange(t)
 	adapter := &systemChangesAdapter{observation: observed, agreementErr: errors.New("SECRET-MARKER controlled active agreement failure")}
@@ -547,6 +621,88 @@ func TestDeferredCloudflareFinalizationPublishesProviderValuesInRevisionOne(t *t
 	}
 	if strings.Contains(strings.Join(adapter.events, "\n")+fmt.Sprintf("%+v", result), "CLOUDFLARE-DEFERRED-RUN-TOKEN-MARKER") {
 		t.Fatal("run token escaped protected State artifacts")
+	}
+}
+
+func TestOwnerAssistedRunTokenRotationPausesThenRecoversForwardWithBothRoutes(t *testing.T) {
+	starting := completeDesiredState()
+	starting.Cloudflare.AccountID = strings.Repeat("1", 32)
+	starting.Cloudflare.ZoneID = strings.Repeat("2", 32)
+	starting.Cloudflare.TunnelID = "f70ff985-a4ef-4643-bbbc-4a0ed4fc8415"
+	starting.Cloudflare.XHTTPDNSRecordID = strings.Repeat("3", 32)
+	starting.Cloudflare.WebSocketDNSRecordID = strings.Repeat("4", 32)
+	starting.Cloudflare.DirectIPv4RecordID = strings.Repeat("5", 32)
+	starting.Software.CloudflaredVersion = "2026.7.3"
+	storage := &mutableStateStorage{document: documentFor(t, starting)}
+	stateModule := New(storage)
+	loaded, err := stateModule.Load(intentManagedRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	template, _ := marshalProtectedJSON(starting)
+	templateDigest := sha256.Sum256(template)
+	managementToken, _ := cloudflaretunnel.NewManagementToken("cfat_ROTATION-MANAGEMENT-TOKEN-MARKER-0000")
+	provider := &deferredCloudflareAPI{}
+	planResult := cloudflaretunnel.New(provider, cloudflaretunnel.SystemClock{}).Plan(t.Context(), cloudflaretunnel.PlanRequest{
+		Authority: cloudflaretunnel.ViewRequest{AccountID: starting.Cloudflare.AccountID, ZoneID: starting.Cloudflare.ZoneID, ZoneName: starting.Cloudflare.ZoneName, Token: managementToken, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
+		ChangeSet: "cloudflare-run-token-rotation-integration", StartingRevision: 7, StartingStateSHA256: loaded.loaded.payloadChecksum, DesiredStateSHA256: fmt.Sprintf("%x", templateDigest),
+		XHTTPHostname: starting.Cloudflare.XHTTPHostname, WebSocketHostname: starting.Cloudflare.WebSocketHostname, DirectHostname: starting.Cloudflare.DirectHostname, PublicIPv4: starting.NetworkPolicy.PublicIPv4, CloudflaredVersion: starting.Software.CloudflaredVersion,
+		RunTokenRotation: cloudflaretunnel.RunTokenRotation{TunnelID: starting.Cloudflare.TunnelID, XHTTPDNSRecordID: starting.Cloudflare.XHTTPDNSRecordID, WebSocketDNSRecordID: starting.Cloudflare.WebSocketDNSRecordID, DirectIPv4RecordID: starting.Cloudflare.DirectIPv4RecordID},
+	})
+	if planResult.Plan == nil {
+		t.Fatalf("rotation Plan = %+v", planResult.Health)
+	}
+	request := preparedRequest(t, loaded, starting, "cloudflare-run-token-rotation-integration")
+	request.ReviewedInputs, err = NewReviewedInputs(PlanIdentity(planResult.Plan.Identity()), planResult.Plan.SHA256(), request.ReviewedInputs.managed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := stateModule.PrepareRunTokenRotationCommit(request, planResult.Plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed := systemchanges.Observation{Status: systemchanges.Managed, LastChangeSet: "installed-state", StateRevision: 7, StateSHA256: loaded.loaded.payloadChecksum, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, VolatileSHA256: testSHA('2'), FilesystemBytes: 20 << 30, AvailableBytes: 5 << 30, WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}
+	adapter := &systemChangesAdapter{observation: observed, stateRecovery: stateModule}
+	result := planResult.Plan.Apply(systemchanges.New(adapter), prepared, systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: observed.StateSHA256}, observed.VolatileSHA256, tokenChangeDisk())
+	if result.Outcome != systemchanges.AwaitingRunTokenRotation || !slices.Contains(adapter.events, string(systemchanges.IrreversibleRunTokenRotationStarted)) || adapter.artifacts["snapshot/prior-state.json"] != nil {
+		t.Fatalf("initial rotation = %+v; events=%v artifacts=%v", result, adapter.events, adapter.artifacts)
+	}
+	if waiting := systemchanges.New(adapter).Recover(); waiting.Outcome != systemchanges.AwaitingRunTokenRotation {
+		t.Fatalf("unchanged provider token = %+v", waiting)
+	}
+	adapter.rotationChanged = true
+	adapter.failStep = 1
+	if failed := systemchanges.New(adapter).Recover(); failed.Outcome != systemchanges.RecoveryRequiredOutcome || slices.ContainsFunc(adapter.events, func(event string) bool { return strings.HasPrefix(event, "reverse ") }) {
+		t.Fatalf("failed reconnect was not forward-only = %+v; events=%v", failed, adapter.events)
+	}
+	checks := adapter.recovery.Checks
+	adapter.recovery.Checks = nil
+	if unproved := systemchanges.New(adapter).Recover(); unproved.Outcome != systemchanges.RecoveryRequiredOutcome {
+		t.Fatalf("missing recovery health gates = %+v", unproved)
+	}
+	adapter.recovery.Checks = checks
+	adapter.failStep = 0
+	adapter.statuses = map[systemchanges.GatePhase]systemchanges.HealthStatus{systemchanges.PrePublication: systemchanges.Failed}
+	if partial := systemchanges.New(adapter).Recover(); partial.Outcome != systemchanges.RecoveryRequiredOutcome || slices.ContainsFunc(adapter.events, func(event string) bool { return strings.HasPrefix(event, "reverse ") }) {
+		t.Fatalf("one-route failure was not forward-only = %+v; events=%v", partial, adapter.events)
+	}
+	adapter.statuses = nil
+	completed := systemchanges.New(adapter).Recover()
+	if completed.Outcome != systemchanges.Completed {
+		t.Fatalf("forward rotation recovery = %+v; events=%v", completed, adapter.events)
+	}
+	if adapter.artifacts["snapshot/prior-state.json"] != nil {
+		t.Fatal("forward recovery recreated the deleted old-token rollback snapshot")
+	}
+	document := string(storage.document)
+	if !strings.Contains(document, "CLOUDFLARE-ROTATED-RUN-TOKEN-MARKER") || strings.Contains(document, "CLOUDFLARE-RUN-SECRET-MARKER-00001") {
+		t.Fatalf("published rotation State = %s", document)
+	}
+	rendered := strings.Join(adapter.events, "\n") + fmt.Sprintf("%+v %+v", result, completed)
+	for _, secret := range []string{"CLOUDFLARE-ROTATED-RUN-TOKEN-MARKER", "CLOUDFLARE-RUN-SECRET-MARKER-00001"} {
+		if strings.Contains(rendered, secret) {
+			t.Fatalf("run token leaked through ordinary output: %s", rendered)
+		}
 	}
 }
 
@@ -707,8 +863,19 @@ func (api *deferredCloudflareAPI) CreateDNSRecord(_ context.Context, request clo
 	api.dns++
 	return cloudflaretunnel.OwnedResource{ID: strings.Repeat(string(rune('2'+api.dns)), 32), Name: request.Name}, nil
 }
-func (*deferredCloudflareAPI) ObserveWholeTunnel(context.Context, cloudflaretunnel.WholeTunnelRequest) (cloudflaretunnel.WholeTunnelObservation, error) {
-	return cloudflaretunnel.WholeTunnelObservation{}, nil
+func (*deferredCloudflareAPI) ObserveWholeTunnel(_ context.Context, request cloudflaretunnel.WholeTunnelRequest) (cloudflaretunnel.WholeTunnelObservation, error) {
+	dns := []cloudflaretunnel.DNSObservation{}
+	for index, record := range request.DNSRecords {
+		switch index {
+		case 0:
+			dns = append(dns, cloudflaretunnel.DNSObservation{ID: record.ID, Name: "xhttp.example.com", Type: "CNAME", Content: request.TunnelID + ".cfargotunnel.com", Proxied: true})
+		case 1:
+			dns = append(dns, cloudflaretunnel.DNSObservation{ID: record.ID, Name: "ws.example.com", Type: "CNAME", Content: request.TunnelID + ".cfargotunnel.com", Proxied: true})
+		case 2:
+			dns = append(dns, cloudflaretunnel.DNSObservation{ID: record.ID, Name: "direct.example.com", Type: "A", Content: "192.0.2.10"})
+		}
+	}
+	return cloudflaretunnel.WholeTunnelObservation{TunnelID: request.TunnelID, Connected: true, Routes: []cloudflaretunnel.Route{{Hostname: "xhttp.example.com", Service: "http://127.0.0.1:11080"}, {Hostname: "ws.example.com", Service: "http://127.0.0.1:11081"}, {Service: "http_status:404"}}, DNSRecords: dns, XHTTPOriginReachable: true, WebSocketOriginReachable: true}, nil
 }
 func (*deferredCloudflareAPI) ObserveCertificateDNS(context.Context, cloudflaretunnel.CertificateDNSRequest) (cloudflaretunnel.CertificateDNSFacts, error) {
 	return cloudflaretunnel.CertificateDNSFacts{}, nil

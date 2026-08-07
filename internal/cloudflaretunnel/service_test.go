@@ -130,6 +130,54 @@ func TestInspectServiceFindsDirectoriesCreatedBeforeFirstFile(t *testing.T) {
 	}
 }
 
+func TestExecutorRemovesTheOldTokenAtCheckpointAndRestartsOnlyWithTheNewToken(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"etc", "etc/systemd", "etc/systemd/system"} {
+		if err := os.MkdirAll(filepath.Join(root, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	serviceGID := testServiceGID(t)
+	var commands []string
+	executor := Executor{serviceIdentity: func() (int, int, int, error) { return os.Geteuid(), os.Getegid(), serviceGID, nil }, command: func(_ context.Context, name string, arguments ...string) ([]byte, error) {
+		commands = append(commands, name+" "+strings.Join(arguments, " "))
+		if len(arguments) == 1 && arguments[0] == "--version" {
+			return []byte("cloudflared version 2026.7.3 (built 2026-08-01)"), nil
+		}
+		return nil, nil
+	}}
+	oldMaterial := `{"tunnel_id":"11111111-1111-4111-8111-111111111111","tunnel_run_token":"OLD-RUN-TOKEN-MARKER","routes":[{"hostname":"xhttp.example.com","origin":"http://127.0.0.1:11080"},{"hostname":"ws.example.com","origin":"http://127.0.0.1:11081"}]}`
+	if _, err := executor.ActivateService(root, strings.NewReader(oldMaterial), time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	fingerprint, err := executor.RunTokenFingerprint(root)
+	if err != nil || len(fingerprint) != 64 {
+		t.Fatalf("fingerprint = %q, %v", fingerprint, err)
+	}
+	if err := executor.RemoveRunToken(root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "etc/sbxr/cloudflared/token")); !os.IsNotExist(err) {
+		t.Fatalf("old token file remains: %v", err)
+	}
+	commands = nil
+	newMaterial := strings.Replace(oldMaterial, "OLD-RUN-TOKEN-MARKER", "NEW-RUN-TOKEN-MARKER", 1)
+	evidence, err := executor.RotateService(root, strings.NewReader(newMaterial), time.Minute)
+	if err != nil || evidence.Code != "cloudflared-run-token-rotated" {
+		t.Fatalf("RotateService() = %+v, %v", evidence, err)
+	}
+	token, err := os.ReadFile(filepath.Join(root, "etc/sbxr/cloudflared/token"))
+	if err != nil || string(token) != "NEW-RUN-TOKEN-MARKER\n" {
+		t.Fatalf("new token file = %q, %v", token, err)
+	}
+	if strings.Contains(strings.Join(commands, "\n"), "RUN-TOKEN-MARKER") || commands[len(commands)-1] != "/usr/bin/systemctl restart cloudflared.service" {
+		t.Fatalf("rotation commands = %v", commands)
+	}
+	if _, err := executor.RotateService(root, strings.NewReader(oldMaterial), time.Minute); err == nil {
+		t.Fatal("old invalid token was accepted after the checkpoint")
+	}
+}
+
 func TestWriteServiceFileNeverReplacesExistingTarget(t *testing.T) {
 	rootPath := t.TempDir()
 	root, err := os.OpenRoot(rootPath)

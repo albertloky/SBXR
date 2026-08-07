@@ -8,7 +8,7 @@ func NewFixtureHTTPAPI(client *http.Client, baseURL string, resolver NameServerR
 }
 
 // NewFixtureMutationAPI exposes the provider and loopback seams only to Seam Verification.
-func NewFixtureMutationAPI(client *http.Client, baseURL string, resolver NameServerResolver, origins OriginObserver) MutationAPI {
+func NewFixtureMutationAPI(client *http.Client, baseURL string, resolver NameServerResolver, origins OriginObserver) *httpAPI {
 	api := newHTTPAPI(client, baseURL, resolver)
 	api.origins = origins
 	return api

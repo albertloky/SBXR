@@ -364,16 +364,18 @@ const (
 	ConfigureCloudflareTunnel       OperationKind = "Configure Cloudflare Tunnel"
 	RestoreCloudflareTunnel         OperationKind = "Restore Cloudflare Tunnel"
 	ActivateCloudflaredService      OperationKind = "Activate cloudflared service"
+	RotateCloudflaredRunToken       OperationKind = "Rotate cloudflared run token"
 	RestoreCloudflaredService       OperationKind = "Restore cloudflared service"
 )
 
 type CloudflareAction string
 
 const (
-	CloudflareTunnelCreate CloudflareAction = "tunnel-create"
-	CloudflareRoutesPut    CloudflareAction = "routes-put"
-	CloudflareDNSCreate    CloudflareAction = "dns-create"
-	CloudflaredActivate    CloudflareAction = "service-activate"
+	CloudflareTunnelCreate     CloudflareAction = "tunnel-create"
+	CloudflareRoutesPut        CloudflareAction = "routes-put"
+	CloudflareDNSCreate        CloudflareAction = "dns-create"
+	CloudflaredActivate        CloudflareAction = "service-activate"
+	CloudflareRunTokenActivate CloudflareAction = "run-token-activate"
 )
 
 type CloudflareRoute struct {
@@ -384,16 +386,23 @@ type CloudflareRoute struct {
 // CloudflareChange is a secret-free provider contract. Unknown provider IDs
 // refer to the earlier step whose evidence must already be durable.
 type CloudflareChange struct {
-	Action           CloudflareAction  `json:"action"`
-	AccountID        string            `json:"account_id"`
-	ZoneID           string            `json:"zone_id,omitempty"`
-	TunnelID         string            `json:"tunnel_id,omitempty"`
-	TunnelIDFromStep int               `json:"tunnel_id_from_step,omitempty"`
-	TunnelName       string            `json:"tunnel_name,omitempty"`
-	Hostname         string            `json:"hostname,omitempty"`
-	RecordType       string            `json:"record_type,omitempty"`
-	Content          string            `json:"content,omitempty"`
-	Routes           []CloudflareRoute `json:"routes,omitempty"`
+	Action               CloudflareAction  `json:"action"`
+	AccountID            string            `json:"account_id"`
+	ZoneID               string            `json:"zone_id,omitempty"`
+	TunnelID             string            `json:"tunnel_id,omitempty"`
+	TunnelIDFromStep     int               `json:"tunnel_id_from_step,omitempty"`
+	TunnelName           string            `json:"tunnel_name,omitempty"`
+	Hostname             string            `json:"hostname,omitempty"`
+	RecordType           string            `json:"record_type,omitempty"`
+	Content              string            `json:"content,omitempty"`
+	Routes               []CloudflareRoute `json:"routes,omitempty"`
+	XHTTPDNSRecordID     string            `json:"xhttp_dns_record_id,omitempty"`
+	WebSocketDNSRecordID string            `json:"websocket_dns_record_id,omitempty"`
+	DirectIPv4RecordID   string            `json:"direct_ipv4_record_id,omitempty"`
+	DirectIPv6RecordID   string            `json:"direct_ipv6_record_id,omitempty"`
+	DirectHostname       string            `json:"direct_hostname,omitempty"`
+	PublicIPv4           string            `json:"public_ipv4,omitempty"`
+	PublicIPv6           string            `json:"public_ipv6,omitempty"`
 }
 
 type FirewallAction string
@@ -456,6 +465,8 @@ func NewCloudflareStep(change CloudflareChange) (Step, error) {
 		forward, rollback = ConfigureCloudflareTunnel, RestoreCloudflareTunnel
 	case CloudflaredActivate:
 		forward, rollback = ActivateCloudflaredService, RestoreCloudflaredService
+	case CloudflareRunTokenActivate:
+		forward, rollback = RotateCloudflaredRunToken, RestoreCloudflaredService
 	}
 	step := Step{owner: CloudflareModule, forward: forward, rollback: rollback, cancel: SafeCheckpointCancellation, inspect: InspectBeforeIdempotentReverse, cloudflare: change}
 	if !validStep(step) {
@@ -807,12 +818,13 @@ func NewChangeSet(spec ChangeSetSpec) (*ChangeSet, error) {
 type ApplyOutcome string
 
 const (
-	Completed               ApplyOutcome = "Completed"
-	RollbackSucceeded       ApplyOutcome = "Rollback succeeded"
-	RecoveryRequiredOutcome ApplyOutcome = "Recovery Required"
-	Refused                 ApplyOutcome = "Refused"
-	Deferred                ApplyOutcome = "Deferred"
-	AwaitingTokenRevocation ApplyOutcome = "Awaiting Cloudflare token revocation"
+	Completed                ApplyOutcome = "Completed"
+	RollbackSucceeded        ApplyOutcome = "Rollback succeeded"
+	RecoveryRequiredOutcome  ApplyOutcome = "Recovery Required"
+	Refused                  ApplyOutcome = "Refused"
+	Deferred                 ApplyOutcome = "Deferred"
+	AwaitingTokenRevocation  ApplyOutcome = "Awaiting Cloudflare token revocation"
+	AwaitingRunTokenRotation ApplyOutcome = "Awaiting Owner Tunnel run-token rotation"
 )
 
 type ApplyResult struct {
@@ -875,7 +887,7 @@ func (i Interface) apply(changeSet *ChangeSet, cancellation *Cancellation) Apply
 	if !statusMatches || observed.StateRevision != spec.StartingState.Revision || observed.StateSHA256 != spec.StartingState.SHA256 || observed.VolatileSHA256 != spec.Plan.VolatileSHA256 {
 		return finish(lock, refused("SYSTEM-CHANGES-STALE", "The reviewed State lineage or volatile binding changed", fmt.Sprintf("status=%s revision=%d state_match=%t binding_match=%t", observed.Status, observed.StateRevision, observed.StateSHA256 == spec.StartingState.SHA256, observed.VolatileSHA256 == spec.Plan.VolatileSHA256), "the exact reviewed lineage and every volatile binding", "stale approval cannot authorize mutation", "Reload observations and create a fresh Plan.", true))
 	}
-	if spec.TargetStateSHA256 == spec.StartingState.SHA256 {
+	if spec.TargetStateSHA256 == spec.StartingState.SHA256 && spec.Mutation != RotationMutation {
 		return finish(lock, refused("SYSTEM-CHANGES-NO-OP", "The Change Set would not change Desired State", "the starting and target checksums are identical", "one actual reviewed change", "a no-op must not create transaction material", "Return without applying and plan only when intent changes.", true))
 	}
 	reserved, _ := spec.Disk.total()
@@ -967,7 +979,7 @@ func validModule(module Module) bool {
 
 func validOperation(operation OperationKind) bool {
 	switch operation {
-	case ActivatePreparedConfiguration, RestorePriorConfiguration, ApplyApprovedNetworkPolicy, OpenApprovedHTTP01, CloseRecordedHTTP01, RestorePriorNetworkPolicy, RemoveOwnedPublicExposure, RestoreOwnedPublicExposure, DeleteOwnedCloudflareResource, RestoreOwnedCloudflareResource, CreateCloudflareResource, DeleteCreatedCloudflareResource, ConfigureCloudflareTunnel, RestoreCloudflareTunnel, ActivateCloudflaredService, RestoreCloudflaredService:
+	case ActivatePreparedConfiguration, RestorePriorConfiguration, ApplyApprovedNetworkPolicy, OpenApprovedHTTP01, CloseRecordedHTTP01, RestorePriorNetworkPolicy, RemoveOwnedPublicExposure, RestoreOwnedPublicExposure, DeleteOwnedCloudflareResource, RestoreOwnedCloudflareResource, CreateCloudflareResource, DeleteCreatedCloudflareResource, ConfigureCloudflareTunnel, RestoreCloudflareTunnel, ActivateCloudflaredService, RotateCloudflaredRunToken, RestoreCloudflaredService:
 		return true
 	}
 	return false
@@ -991,7 +1003,7 @@ func validStep(step Step) bool {
 }
 
 func cloudflareOperation(operation OperationKind) bool {
-	return operation == CreateCloudflareResource || operation == DeleteCreatedCloudflareResource || operation == ConfigureCloudflareTunnel || operation == RestoreCloudflareTunnel || operation == ActivateCloudflaredService || operation == RestoreCloudflaredService
+	return operation == CreateCloudflareResource || operation == DeleteCreatedCloudflareResource || operation == ConfigureCloudflareTunnel || operation == RestoreCloudflareTunnel || operation == ActivateCloudflaredService || operation == RotateCloudflaredRunToken || operation == RestoreCloudflaredService
 }
 
 func validCloudflareContract(step Step) bool {
@@ -1021,6 +1033,11 @@ func validCloudflareContract(step Step) bool {
 		return step.forward == CreateCloudflareResource && step.rollback == DeleteCreatedCloudflareResource && safeIdentity(change.ZoneID) && change.Hostname != "" && validType && len(change.Routes) == 0
 	case CloudflaredActivate:
 		return step.forward == ActivateCloudflaredService && step.rollback == RestoreCloudflaredService && validTunnel && change.ZoneID == "" && change.Hostname == "" && len(change.Routes) == 0
+	case CloudflareRunTokenActivate:
+		if step.forward != RotateCloudflaredRunToken || step.rollback != RestoreCloudflaredService || !validTunnel || !safeIdentity(change.ZoneID) || !safeIdentity(change.XHTTPDNSRecordID) || !safeIdentity(change.WebSocketDNSRecordID) || change.DirectHostname == "" || len(change.Routes) != 3 || change.Routes[2] != (CloudflareRoute{Origin: "http_status:404"}) {
+			return false
+		}
+		return (change.DirectIPv4RecordID == "") == (change.PublicIPv4 == "") && (change.DirectIPv6RecordID == "") == (change.PublicIPv6 == "") && (change.DirectIPv4RecordID == "" || safeIdentity(change.DirectIPv4RecordID)) && (change.DirectIPv6RecordID == "" || safeIdentity(change.DirectIPv6RecordID))
 	}
 	return false
 }

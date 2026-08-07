@@ -357,12 +357,17 @@ type ManagementTokenChangeAuthority interface {
 	StateManagementTokenChange() (source any, bindingJSON []byte, templateSHA256 string, valid bool)
 }
 
+type RunTokenRotationAuthority interface {
+	StateRunTokenRotation() (source any, bindingJSON []byte, templateSHA256 string, valid bool)
+}
+
 type deferredCloudflare struct {
 	candidate  DesiredState
 	validators SemanticValidators
 	materials  ServiceMaterials
 	runToken   VerifiedInfrastructureSecret
 	binding    CloudflareEvidenceBinding
+	rotation   bool
 	used       atomic.Bool
 }
 
@@ -506,6 +511,42 @@ func (i Interface) PrepareDeferredCloudflareCommit(request PrepareRequest, autho
 	metadata := &deferredCloudflare{candidate: original, validators: request.SemanticValidators, materials: request.ServiceMaterials, runToken: runToken, binding: binding}
 	request.Candidate = staged
 	request.ServiceMaterials.Cloudflared = nil
+	commit, err := i.prepareCommit(request, metadata, nil)
+	if err == nil {
+		commit.candidateSHA256 = templateSHA256
+	}
+	return commit, err
+}
+
+// PrepareRunTokenRotationCommit keeps the current run token only in the
+// transaction's rollback snapshot. The candidate and cloudflared material stay
+// deferred until Cloudflare returns a token different from that snapshot.
+func (i Interface) PrepareRunTokenRotationCommit(request PrepareRequest, authority RunTokenRotationAuthority) (*PreparedCommit, error) {
+	typeOf := reflect.TypeOf(authority)
+	if typeOf == nil || typeOf.Kind() != reflect.Pointer || typeOf.Elem().PkgPath() != "github.com/albertloky/SBXR/internal/cloudflaretunnel" || typeOf.Elem().Name() != "Plan" {
+		return nil, finding("STATE-CLOUDFLARE-RUN-TOKEN-PLAN", "Tunnel run-token rotation", "the authority did not come from Cloudflare Tunnel", "one exact reviewed run-token rotation Plan", "caller-made secret handoffs cannot authorize State", "rebuild the rotation Plan")
+	}
+	source, bindingJSON, templateSHA256, valid := authority.StateRunTokenRotation()
+	runToken, sourceOK := source.(VerifiedInfrastructureSecret)
+	var planned struct {
+		AccountID, ZoneID, ZoneName, XHTTPHostname, WebSocketHostname, DirectHostname string
+		PublicIPv4, PublicIPv6                                                        string
+		TunnelID, XHTTPDNSRecordID, WebSocketDNSRecordID                              string
+		DirectIPv4RecordID, DirectIPv6RecordID                                        string
+	}
+	bindingErr := json.Unmarshal(bindingJSON, &planned)
+	template, templateErr := marshalProtectedJSON(request.Candidate)
+	templateDigest := sha256.Sum256(template)
+	candidate := request.Candidate
+	cloudflare := candidate.Cloudflare
+	fixedFactsMatch := planned.AccountID == cloudflare.AccountID && planned.ZoneID == cloudflare.ZoneID && planned.ZoneName == cloudflare.ZoneName && planned.TunnelID == cloudflare.TunnelID && planned.XHTTPHostname == cloudflare.XHTTPHostname && planned.WebSocketHostname == cloudflare.WebSocketHostname && planned.DirectHostname == cloudflare.DirectHostname && planned.XHTTPDNSRecordID == cloudflare.XHTTPDNSRecordID && planned.WebSocketDNSRecordID == cloudflare.WebSocketDNSRecordID && planned.DirectIPv4RecordID == cloudflare.DirectIPv4RecordID && planned.DirectIPv6RecordID == cloudflare.DirectIPv6RecordID && planned.PublicIPv4 == candidate.NetworkPolicy.PublicIPv4 && planned.PublicIPv6 == candidate.NetworkPolicy.PublicIPv6
+	if !valid || bindingErr != nil || !fixedFactsMatch || !sourceOK || runToken == nil || templateErr != nil || hex.EncodeToString(templateDigest[:]) != templateSHA256 || !cloudflare.TunnelRunToken.isSet() || !validateSemantics(request.Candidate, request.SemanticValidators) {
+		return nil, finding("STATE-CLOUDFLARE-RUN-TOKEN-PLAN", "Tunnel run-token rotation", "the protected handoff or committed ownership binding is incomplete", "one exact one-use rotation binding", "State never guesses provider ownership or credentials", "rebuild the rotation Plan")
+	}
+	original := request.Candidate
+	request.Candidate.Cloudflare.TunnelRunToken = NewInfrastructureSecret("deferred-cloudflare-run-token")
+	request.ServiceMaterials.Cloudflared = nil
+	metadata := &deferredCloudflare{candidate: original, validators: request.SemanticValidators, materials: request.ServiceMaterials, runToken: runToken, rotation: true}
 	commit, err := i.prepareCommit(request, metadata, nil)
 	if err == nil {
 		commit.candidateSHA256 = templateSHA256

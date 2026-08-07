@@ -87,6 +87,9 @@ type TunnelRunToken struct{ cell *runTokenCell }
 func (TunnelRunToken) String() string   { return "Cloudflare Tunnel run token: redacted" }
 func (TunnelRunToken) GoString() string { return "Cloudflare Tunnel run token: redacted" }
 func (token TunnelRunToken) ConsumeInfrastructureSecret() (string, bool) {
+	return token.consume()
+}
+func (token TunnelRunToken) consume() (string, bool) {
 	if token.cell == nil || !token.cell.used.CompareAndSwap(false, true) {
 		return "", false
 	}
@@ -109,6 +112,7 @@ type PlanRequest struct {
 	PublicIPv6          string
 	CloudflaredVersion  string
 	ManagementToken     ManagementTokenChange
+	RunTokenRotation    RunTokenRotation
 }
 
 type ManagementTokenAction string
@@ -189,6 +193,9 @@ func (plan *Plan) String() string {
 	case ManagementTokenRemove:
 		return fmt.Sprintf("Cloudflare Plan %s: stored management token becomes deliberately absent; provider health becomes Unknown; repair and update remain blocked", plan.identity)
 	default:
+		if plan.request.RunTokenRotation.TunnelID != "" {
+			return fmt.Sprintf("Cloudflare Plan %s: Owner selects Rotate token for Tunnel %s; SBXR retrieves the changed token, restarts cloudflared, proves both routes, and uses forward-only recovery", plan.identity, plan.request.RunTokenRotation.TunnelID)
+		}
 		return fmt.Sprintf("Cloudflare Plan %s: one Tunnel %s; XHTTP %s to %s; WebSocket %s to %s; DNS-only Direct TLS %s; cloudflared.service --token-file %s; HTTP 404 fallback", plan.identity, plan.request.TunnelName, plan.request.XHTTPHostname, xhttpOrigin, plan.request.WebSocketHostname, webSocketOrigin, plan.request.DirectHostname, cloudflaredTokenPath)
 	}
 }
@@ -210,6 +217,9 @@ type cloudflareEvidenceBinding struct {
 func (i Interface) Plan(ctx context.Context, request PlanRequest) PlanResult {
 	if request.ManagementToken.Action != "" {
 		return i.planManagementToken(ctx, request)
+	}
+	if request.RunTokenRotation.TunnelID != "" {
+		return i.planRunTokenRotation(ctx, request)
 	}
 	health := Health{Module: "Cloudflare Tunnel", Outcome: Failed, Code: "CLOUDFLARE-PLAN-REFUSED", NextActions: []string{"Check again", "Back"}}
 	planner, ok := i.api.(MutationPlanner)
@@ -460,12 +470,15 @@ func (plan *Plan) Apply(module systemchanges.Interface, prepared systemchanges.P
 	}
 	mutation := systemchanges.InstallationMutation
 	targetSHA256 := plan.request.DesiredStateSHA256
-	if plan.request.ManagementToken.Action != "" {
+	if plan.request.ManagementToken.Action != "" || plan.request.RunTokenRotation.TunnelID != "" {
 		changeSet, revision, startingSHA256, candidateSHA256, planIdentity, planSHA256, valid := prepared.SystemChangesPreparedState()
 		if !valid || starting.Status != systemchanges.Managed || starting.SHA256 != plan.request.StartingStateSHA256 || changeSet != plan.request.ChangeSet || revision != starting.Revision+1 || startingSHA256 != starting.SHA256 || planIdentity != plan.identity || planSHA256 != plan.sha256 || !sha256Text.MatchString(candidateSHA256) {
 			return module.Apply(nil)
 		}
 		mutation = systemchanges.SettingChangeMutation
+		if plan.request.RunTokenRotation.TunnelID != "" {
+			mutation = systemchanges.RotationMutation
+		}
 		targetSHA256 = candidateSHA256
 	}
 	changeSet, err := systemchanges.NewChangeSet(systemchanges.ChangeSetSpec{Identity: plan.request.ChangeSet, Mutation: mutation, OutcomeOwner: systemchanges.CloudflareModule, StartingState: starting, TargetStateSHA256: targetSHA256, Plan: systemchanges.PlanBinding{Identity: plan.identity, SHA256: plan.sha256, VolatileSHA256: volatileSHA256}, PreparedState: prepared, Steps: plan.steps, Checks: plan.checks, Timeouts: systemchanges.Timeouts{Step: 5 * time.Minute, Check: 5 * time.Minute}, Disk: disk})

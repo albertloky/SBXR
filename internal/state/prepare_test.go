@@ -161,6 +161,58 @@ func TestPrepareManagementTokenChangeAcceptsOnlyTheReviewedCloudflarePlan(t *tes
 	}
 }
 
+func TestPrepareRunTokenRotationKeepsTheOldTokenOnlyInRollbackMaterial(t *testing.T) {
+	starting := completeDesiredState()
+	starting.Cloudflare.AccountID = strings.Repeat("1", 32)
+	starting.Cloudflare.ZoneID = strings.Repeat("2", 32)
+	starting.Cloudflare.TunnelID = "f70ff985-a4ef-4643-bbbc-4a0ed4fc8415"
+	starting.Cloudflare.XHTTPDNSRecordID = strings.Repeat("3", 32)
+	starting.Cloudflare.WebSocketDNSRecordID = strings.Repeat("4", 32)
+	starting.Cloudflare.DirectIPv4RecordID = strings.Repeat("5", 32)
+	starting.Software.CloudflaredVersion = "2026.7.3"
+	storage := &mutableStateStorage{document: documentFor(t, starting)}
+	stateModule := New(storage)
+	loaded, err := stateModule.Load(intentManagedRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	template, err := marshalProtectedJSON(starting)
+	if err != nil {
+		t.Fatal(err)
+	}
+	templateDigest := sha256.Sum256(template)
+	managementToken, err := cloudflaretunnel.NewManagementToken("cfat_ROTATION-MANAGEMENT-TOKEN-MARKER-0000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := &deferredCloudflareAPI{}
+	planResult := cloudflaretunnel.New(provider, cloudflaretunnel.SystemClock{}).Plan(t.Context(), cloudflaretunnel.PlanRequest{
+		Authority: cloudflaretunnel.ViewRequest{AccountID: starting.Cloudflare.AccountID, ZoneID: starting.Cloudflare.ZoneID, ZoneName: starting.Cloudflare.ZoneName, Token: managementToken, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
+		ChangeSet: "cloudflare-run-token-rotation-prepare", StartingRevision: 7, StartingStateSHA256: loaded.loaded.payloadChecksum, DesiredStateSHA256: hex.EncodeToString(templateDigest[:]),
+		XHTTPHostname: starting.Cloudflare.XHTTPHostname, WebSocketHostname: starting.Cloudflare.WebSocketHostname, DirectHostname: starting.Cloudflare.DirectHostname,
+		PublicIPv4: starting.NetworkPolicy.PublicIPv4, CloudflaredVersion: starting.Software.CloudflaredVersion,
+		RunTokenRotation: cloudflaretunnel.RunTokenRotation{TunnelID: starting.Cloudflare.TunnelID, XHTTPDNSRecordID: starting.Cloudflare.XHTTPDNSRecordID, WebSocketDNSRecordID: starting.Cloudflare.WebSocketDNSRecordID, DirectIPv4RecordID: starting.Cloudflare.DirectIPv4RecordID},
+	})
+	if planResult.Plan == nil {
+		t.Fatalf("rotation Plan = %+v", planResult.Health)
+	}
+	request := preparedRequest(t, loaded, starting, "cloudflare-run-token-rotation-prepare")
+	request.ReviewedInputs, err = NewReviewedInputs(PlanIdentity(planResult.Plan.Identity()), planResult.Plan.SHA256(), request.ReviewedInputs.managed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := stateModule.PrepareRunTokenRotationCommit(request, planResult.Plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.SemanticValidators.Cloudflare.(*validatingSeams).calls["cloudflaretunnel"] == 0 {
+		t.Fatal("Cloudflare did not validate the complete current candidate before the token slot was deferred")
+	}
+	if prepared.deferred == nil || prepared.serviceCopies.Cloudflared != nil || strings.Contains(string(prepared.preparedState), "CLOUDFLARE-RUN-SECRET-MARKER-00001") || !strings.Contains(string(prepared.starting.bytes), "CLOUDFLARE-RUN-SECRET-MARKER-00001") {
+		t.Fatal("old run token was not confined to pre-checkpoint rollback material")
+	}
+}
+
 func TestManagementTokenDependencyBindingRequiresEveryExactOwner(t *testing.T) {
 	if !exactManagementTokenDependencies([]string{"Tunnel", "DNS", "certificate", "profile", "repair", "update"}) || exactManagementTokenDependencies([]string{"Tunnel", "DNS", "certificate", "profile", "repair", "other"}) {
 		t.Fatal("State did not independently enforce the exact dependency inventory")

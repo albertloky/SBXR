@@ -51,6 +51,12 @@ Removal is also one reviewed Change Set. State derives a protected inventory fro
 
 SBXR never requests `Account API Tokens Write`, revokes the old provider token, or claims the replacement preflight proved provider writes. Provider revocation, if wanted, remains an Owner action after the Change Set is complete.
 
+## Tunnel run-token rotation
+
+`Rotate Tunnel run token` is a separate reviewed action. System Changes first prepares the normal protected transaction, then records `Irreversible run-token rotation started`, removes the old service token and every rollback copy, and pauses. The Owner selects **Rotate token** in Cloudflare and resumes SBXR. SBXR reads the current token only through `GET /accounts/{account_id}/cfd_tunnel/{tunnel_id}/token`; unchanged means keep waiting, never guess success.
+
+State alone consumes the changed opaque token, rebuilds the candidate State and `cloudflared` service artifact, and recalculates their checksums. System Changes writes the new `0640` token file, validates the unchanged ingress and unit, restarts `cloudflared.service`, and requires the connected Tunnel plus both exact XHTTP and WebSocket routes before publication and again afterward. Before the irreversible checkpoint, cancellation or failure restores the starting State and service. After it, failure or restart is forward-only Recovery Required: recovery repeats only the next unproved phase and never restores or reconnects with the old token. Real Cloudflare rotation and forward recovery remain live Acceptance checks.
+
 ## Current onboarding labels
 
 The walkthrough was qualified on `2026-08-07` against these Cloudflare dashboard labels:

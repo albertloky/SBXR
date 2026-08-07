@@ -165,6 +165,27 @@ func (api *httpAPI) CreateTunnel(ctx context.Context, request CreateTunnelReques
 	return CreatedTunnel{ID: result.ID, Name: result.Name, runToken: result.Token}, nil
 }
 
+func (api *httpAPI) GetTunnelToken(ctx context.Context, request GetTunnelTokenRequest) (TunnelTokenResult, error) {
+	if api == nil || api.client == nil || !immutableID.MatchString(request.AccountID) || !tunnelUUID.MatchString(request.TunnelID) || request.Token.value == "" {
+		return TunnelTokenResult{}, APIError{Kind: APIMalformed}
+	}
+	var envelope struct {
+		Result string `json:"result"`
+	}
+	if err := api.get(ctx, "/accounts/"+request.AccountID+"/cfd_tunnel/"+request.TunnelID+"/token", nil, request.Token, &envelope); err != nil {
+		return TunnelTokenResult{}, err
+	}
+	if envelope.Result == "" || len(envelope.Result) > 16<<10 || strings.ContainsAny(envelope.Result, "\r\n\x00") {
+		return TunnelTokenResult{}, APIError{Kind: APIMalformed}
+	}
+	cell := &runTokenCell{}
+	if !cell.issue(envelope.Result) {
+		return TunnelTokenResult{}, APIError{Kind: APIMalformed}
+	}
+	digest := sha256.Sum256([]byte(envelope.Result))
+	return TunnelTokenResult{token: TunnelRunToken{cell: cell}, sha256: hex.EncodeToString(digest[:])}, nil
+}
+
 func (api *httpAPI) PutConfiguration(ctx context.Context, request PutConfigurationRequest) (Configuration, error) {
 	if api == nil || api.client == nil || !immutableID.MatchString(request.AccountID) || !tunnelUUID.MatchString(request.TunnelID) || request.Token.value == "" || !validPublishedRoutes(request.Routes) {
 		return Configuration{}, APIError{Kind: APIMalformed}

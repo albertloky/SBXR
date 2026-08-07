@@ -31,6 +31,7 @@ type TransactionMaterial struct {
 	startingRelease   ReleaseIdentity
 	candidateRelease  ReleaseIdentity
 	deferred          *deferredCloudflare
+	forwardRecovery   bool
 }
 
 type publicationAuthority struct{ used atomic.Bool }
@@ -183,7 +184,7 @@ func (transaction *TransactionMaterial) SystemChangesWriteArtifacts(lease any, w
 	if !validSystemChangesLease(lease) || transaction == nil || transaction.publication == nil || write == nil {
 		return finding("STATE-TRANSACTION-ARTIFACTS", "transaction artifacts", "no complete protected handoff", "one exact opaque artifact stream", "durable preparation cannot be proven", "prepare State again")
 	}
-	if len(transaction.priorState) > 0 {
+	if len(transaction.priorState) > 0 && !transaction.forwardRecovery {
 		if err := write("snapshot/prior-state.json", 0o600, bytes.NewReader(transaction.priorState)); err != nil {
 			return err
 		}
@@ -225,6 +226,15 @@ func manifestPointer(copy *PreparedServiceCopy) *ServiceManifest {
 func (transaction *TransactionMaterial) SystemChangesPublish(lease any) (any, error) {
 	if !validSystemChangesLease(lease) {
 		return nil, finding("STATE-TRANSACTION-LEASE", "Desired State publication", "no authorized System Changes lease", "the one active Apply lease", "State cannot publish outside Apply", "use System Changes Apply")
+	}
+	if transaction != nil && transaction.forwardRecovery {
+		current, err := transaction.storage.Read()
+		if err == nil && bytes.Equal(current, transaction.preparedState) {
+			if !transaction.publication.used.CompareAndSwap(false, true) {
+				return nil, finding("STATE-PUBLICATION-USED", "Desired State publication", "the publication authority was already consumed", "one recovery publication proof", "forward recovery cannot invent a second publication", "continue the active recovery runner")
+			}
+			return transaction.publicationAgreement()
+		}
 	}
 	return transaction.Publish()
 }
@@ -282,6 +292,120 @@ func readRecoveryStateArtifact(source io.Reader) ([]byte, error) {
 		return nil, finding("STATE-RECOVERY-SIZE", "restart Desired State rollback", "a State artifact is unreadable or too large", "one bounded protected State document", "unbounded or partial recovery input is unsafe", "use the Recovery Required flow")
 	}
 	return content, nil
+}
+
+// SystemChangesFinalizeRunTokenRotation replaces only the deferred run-token
+// slot in the protected candidate and rebuilds its exact service artifacts.
+func (i Interface) SystemChangesFinalizeRunTokenRotation(lease any, bindingJSON []byte, candidateSource io.Reader, source any) (any, error) {
+	if !validSystemChangesRecoveryLease(lease) || i.implementation == nil || i.implementation.storage == nil || candidateSource == nil {
+		return nil, finding("STATE-RUN-TOKEN-RECOVERY", "Tunnel run-token recovery", "no authorized protected handoff", "the active System Changes recovery lease", "State cannot accept a run token outside forward recovery", "keep cloudflared stopped")
+	}
+	secret, ok := source.(VerifiedInfrastructureSecret)
+	if !ok || secret == nil {
+		return nil, finding("STATE-RUN-TOKEN-RECOVERY", "Tunnel run-token recovery", "the Cloudflare token handoff is invalid", "one opaque one-use Infrastructure Secret", "callers cannot supply token text", "check Cloudflare again")
+	}
+	var binding systemChangesTransactionBinding
+	if json.Unmarshal(bindingJSON, &binding) != nil || binding.CandidateRevision != binding.StartingRevision+1 || !validSHA256(binding.PreparedStateSHA256) {
+		return nil, finding("STATE-RUN-TOKEN-BINDING", "Tunnel run-token recovery", "the durable State binding is invalid", "the exact active transaction lineage", "State never guesses recovery lineage", "use Recovery Required")
+	}
+	candidateBytes, err := readRecoveryStateArtifact(candidateSource)
+	if err != nil {
+		return nil, err
+	}
+	digest := sha256.Sum256(candidateBytes)
+	document, problem := decode(candidateBytes)
+	if problem != nil || hex.EncodeToString(digest[:]) != binding.PreparedStateSHA256 || document.Revision != binding.CandidateRevision || document.LastCompletedChangeSet != ChangeSetIdentity(binding.ChangeSet) || document.desiredState.Cloudflare.TunnelRunToken.value != "deferred-cloudflare-run-token" {
+		return nil, finding("STATE-RUN-TOKEN-CANDIDATE", "Tunnel run-token recovery", "the deferred candidate is invalid", "one transaction-bound deferred token slot", "the old token cannot be reused", "use Recovery Required")
+	}
+	newToken, consumed := NewInfrastructureSecretFrom(secret)
+	if !consumed {
+		return nil, finding("STATE-RUN-TOKEN-CANDIDATE", "Tunnel run-token recovery", "the new token was unavailable or already used", "one fresh Cloudflare token", "State accepts no replayed credential", "check Cloudflare again")
+	}
+	document.desiredState.Cloudflare.TunnelRunToken = newToken
+	if problem := validateDesiredState(document.desiredState); problem != nil {
+		return nil, problem
+	}
+	return i.forwardRunTokenMaterial(binding, document.desiredState)
+}
+
+func (i Interface) forwardRunTokenMaterial(binding systemChangesTransactionBinding, candidate DesiredState) (*TransactionMaterial, error) {
+	copies, err := prepareServiceCopies(binding.CandidateRevision, binding.ChangeSet, expectedServiceMaterials(candidate))
+	if err != nil {
+		return nil, err
+	}
+	preparedState, candidateChecksum, err := prepareStateDocument(binding.CandidateRevision, binding.CandidateRelease, binding.ChangeSet, candidate)
+	if err != nil {
+		return nil, err
+	}
+	manifestChecksum, err := checksumServiceManifests(copies)
+	if err != nil {
+		return nil, err
+	}
+	preparedDigest := sha256.Sum256(preparedState)
+	prior, readErr := i.implementation.storage.Read()
+	if readErr != nil {
+		return nil, finding("STATE-RUN-TOKEN-PRIOR", "Tunnel run-token recovery", "the current committed State is unavailable", "the exact starting revision", "forward recovery cannot guess its publication baseline", "use Recovery Required")
+	}
+	priorDocument, problem := decode(prior)
+	if problem != nil || priorDocument.Revision != binding.StartingRevision || priorDocument.Checksum != binding.StartingSHA256 || priorDocument.ReleaseIdentity != binding.StartingRelease {
+		return nil, finding("STATE-RUN-TOKEN-PRIOR", "Tunnel run-token recovery", "the current State disagrees with the rotation baseline", "the exact starting revision", "forward recovery cannot replace different State", "use Recovery Required")
+	}
+	return &TransactionMaterial{startingRevision: binding.StartingRevision, candidateRevision: binding.CandidateRevision, startingChecksum: binding.StartingSHA256, candidateChecksum: candidateChecksum, manifestChecksum: manifestChecksum, preparedChecksum: hex.EncodeToString(preparedDigest[:]), changeSet: binding.ChangeSet, priorState: prior, preparedState: preparedState, serviceCopies: copies, storage: i.implementation.storage, publication: &publicationAuthority{}, startingRelease: binding.StartingRelease, candidateRelease: binding.CandidateRelease, forwardRecovery: true}, nil
+}
+
+// SystemChangesLoadRunTokenRotation reconstructs only the State publication
+// authority required by a later forward-recovery phase.
+func (i Interface) SystemChangesLoadRunTokenRotation(lease any, bindingJSON []byte, candidateSource, manifestsSource io.Reader) (any, error) {
+	if !validSystemChangesRecoveryLease(lease) || i.implementation == nil || i.implementation.storage == nil || candidateSource == nil || manifestsSource == nil {
+		return nil, finding("STATE-RUN-TOKEN-RECOVERY", "Tunnel run-token recovery", "no complete durable handoff", "the active recovery lease and finalized artifacts", "State cannot reconstruct authority from partial evidence", "use Recovery Required")
+	}
+	var binding systemChangesTransactionBinding
+	if json.Unmarshal(bindingJSON, &binding) != nil {
+		return nil, finding("STATE-RUN-TOKEN-BINDING", "Tunnel run-token recovery", "the durable binding is invalid", "the exact finalized binding", "State never guesses recovery lineage", "use Recovery Required")
+	}
+	candidateBytes, err := readRecoveryStateArtifact(candidateSource)
+	if err != nil {
+		return nil, err
+	}
+	manifestBytes, err := readRecoveryStateArtifact(manifestsSource)
+	if err != nil {
+		return nil, err
+	}
+	digest := sha256.Sum256(candidateBytes)
+	document, problem := decode(candidateBytes)
+	var manifests preparedManifestSet
+	if problem != nil || json.Unmarshal(manifestBytes, &manifests) != nil || hex.EncodeToString(digest[:]) != binding.PreparedStateSHA256 || document.Revision != binding.CandidateRevision || document.Checksum != binding.CandidateSHA256 || document.ReleaseIdentity != binding.CandidateRelease || document.LastCompletedChangeSet != ChangeSetIdentity(binding.ChangeSet) {
+		return nil, finding("STATE-RUN-TOKEN-CANDIDATE", "Tunnel run-token recovery", "the finalized candidate disagrees with its binding", "the exact protected candidate and manifests", "forward recovery cannot publish ambiguous State", "use Recovery Required")
+	}
+	manifestDigest := sha256.Sum256(manifestBytes)
+	if hex.EncodeToString(manifestDigest[:]) != binding.PreparedManifestSHA256 {
+		return nil, finding("STATE-RUN-TOKEN-CANDIDATE", "Tunnel run-token recovery", "the finalized manifests disagree with their binding", "the exact protected service manifests", "forward recovery cannot publish ambiguous services", "use Recovery Required")
+	}
+	copies := copiesFromManifestSet(manifests)
+	current, readErr := i.implementation.storage.Read()
+	if readErr != nil {
+		return nil, readErr
+	}
+	prior := current
+	if bytes.Equal(current, candidateBytes) {
+		prior = nil
+	} else {
+		priorDocument, priorProblem := decode(current)
+		if priorProblem != nil || priorDocument.Revision != binding.StartingRevision || priorDocument.Checksum != binding.StartingSHA256 || priorDocument.ReleaseIdentity != binding.StartingRelease {
+			return nil, finding("STATE-RUN-TOKEN-PRIOR", "Tunnel run-token recovery", "current State is neither the starting nor candidate revision", "one exact transaction lineage", "forward recovery cannot overwrite unrelated State", "use Recovery Required")
+		}
+	}
+	return &TransactionMaterial{startingRevision: binding.StartingRevision, candidateRevision: binding.CandidateRevision, startingChecksum: binding.StartingSHA256, candidateChecksum: binding.CandidateSHA256, manifestChecksum: binding.PreparedManifestSHA256, preparedChecksum: binding.PreparedStateSHA256, changeSet: binding.ChangeSet, priorState: prior, preparedState: candidateBytes, serviceCopies: copies, storage: i.implementation.storage, publication: &publicationAuthority{}, startingRelease: binding.StartingRelease, candidateRelease: binding.CandidateRelease, forwardRecovery: true}, nil
+}
+
+func copiesFromManifestSet(manifests preparedManifestSet) PreparedServiceCopies {
+	copyOf := func(manifest *ServiceManifest) *PreparedServiceCopy {
+		if manifest == nil {
+			return nil
+		}
+		return &PreparedServiceCopy{manifest: *manifest}
+	}
+	return PreparedServiceCopies{Xray: copyOf(manifests.Xray), SingBox: copyOf(manifests.SingBox), Cloudflared: copyOf(manifests.Cloudflared), Subscription: copyOf(manifests.Subscription)}
 }
 
 func (transaction *TransactionMaterial) SystemChangesRestore(lease any) ([]byte, error) {
@@ -492,6 +616,14 @@ func (transaction *TransactionMaterial) Publish() (*PostPublicationAgreement, er
 		return nil, finding("STATE-PUBLICATION-READBACK", "Desired State readback", "stored bytes differ from the prepared candidate", "the exact published revision and checksum", "publication alone cannot establish agreement", "resolve the active Change Set through System Changes")
 	}
 	document, problem := decode(readback)
+	if problem != nil || document.Revision != transaction.candidateRevision || document.Checksum != transaction.candidateChecksum || document.LastCompletedChangeSet != transaction.changeSet {
+		return nil, finding("STATE-PUBLICATION-READBACK", "Desired State readback", "published lineage differs from the prepared candidate", "the exact published revision and checksum", "publication alone cannot establish agreement", "resolve the active Change Set through System Changes")
+	}
+	return transaction.publicationAgreement()
+}
+
+func (transaction *TransactionMaterial) publicationAgreement() (*PostPublicationAgreement, error) {
+	document, problem := decode(transaction.preparedState)
 	if problem != nil || document.Revision != transaction.candidateRevision || document.Checksum != transaction.candidateChecksum || document.LastCompletedChangeSet != transaction.changeSet {
 		return nil, finding("STATE-PUBLICATION-READBACK", "Desired State readback", "published lineage differs from the prepared candidate", "the exact published revision and checksum", "publication alone cannot establish agreement", "resolve the active Change Set through System Changes")
 	}

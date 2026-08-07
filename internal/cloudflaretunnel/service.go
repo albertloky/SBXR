@@ -3,6 +3,8 @@ package cloudflaretunnel
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -151,6 +153,44 @@ func (executor Executor) CaptureServiceRollback(rootPath string, write func(io.R
 	return write(bytes.NewReader(snapshot))
 }
 
+func (executor Executor) RunTokenFingerprint(rootPath string) (string, error) {
+	identity := executor.serviceIdentity
+	if identity == nil {
+		identity = cloudflaredIdentity
+	}
+	rootUID, rootGID, cloudflaredGID, err := identity()
+	if err != nil || ValidateInstalledService(rootPath, rootUID, rootGID, cloudflaredGID) != nil {
+		return "", errors.New("installed cloudflared run token is unproved")
+	}
+	content, err := os.ReadFile(filepath.Join(rootPath, "etc/sbxr/cloudflared/token"))
+	value := strings.TrimSuffix(string(content), "\n")
+	if err != nil || value == "" || value+"\n" != string(content) || len(value) > 16<<10 || strings.ContainsAny(value, "\r\n\x00") {
+		return "", errors.New("installed cloudflared run token is invalid")
+	}
+	digest := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(digest[:]), nil
+}
+
+func (executor Executor) RemoveRunToken(rootPath string) error {
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	if _, err := root.Lstat("etc/sbxr/cloudflared/token"); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	if _, err := executor.RunTokenFingerprint(rootPath); err != nil {
+		return err
+	}
+	if err := root.Remove("etc/sbxr/cloudflared/token"); err != nil {
+		return err
+	}
+	return syncServiceNamespace(root, "etc/sbxr/cloudflared", "etc/sbxr", "etc")
+}
+
 func (executor Executor) ActivateService(rootPath string, source io.Reader, timeout time.Duration) (systemchanges.StepEvidence, error) {
 	material, err := readServiceMaterial(source)
 	if err != nil {
@@ -230,6 +270,72 @@ func (executor Executor) ActivateService(rootPath string, source io.Reader, time
 		return systemchanges.StepEvidence{}, errors.New("cloudflared service activation failed")
 	}
 	return providerEvidence("cloudflared-service-activated", "", ""), nil
+}
+
+func (executor Executor) RotateService(rootPath string, source io.Reader, timeout time.Duration) (systemchanges.StepEvidence, error) {
+	material, err := readServiceMaterial(source)
+	if err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	identity := executor.serviceIdentity
+	if identity == nil {
+		identity = cloudflaredIdentity
+	}
+	rootUID, rootGID, cloudflaredGID, err := identity()
+	if err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	defer root.Close()
+	for _, directory := range []struct {
+		name string
+		mode fs.FileMode
+		gid  int
+	}{{"etc", 0o755, rootGID}, {"etc/sbxr", 0o755, rootGID}, {"etc/sbxr/cloudflared", 0o750, cloudflaredGID}, {"etc/systemd", 0o755, rootGID}, {"etc/systemd/system", 0o755, rootGID}} {
+		if validateServiceDirectory(root, directory.name, directory.mode, rootUID, directory.gid) != nil {
+			return systemchanges.StepEvidence{}, errors.New("cloudflared rotation baseline is unsafe")
+		}
+	}
+	unit, unitErr := root.ReadFile("etc/systemd/system/cloudflared.service")
+	config, configErr := root.ReadFile("etc/sbxr/cloudflared/config.yml")
+	routes := make([]Route, 0, len(material.Routes)+1)
+	for _, route := range material.Routes {
+		routes = append(routes, Route{Hostname: route.Hostname, Service: route.Origin})
+	}
+	routes = append(routes, Route{Service: "http_status:404"})
+	wantConfig, _ := json.Marshal(struct {
+		Ingress []Route `json:"ingress"`
+	}{Ingress: routes})
+	wantConfig = append(wantConfig, '\n')
+	if unitErr != nil || configErr != nil || !bytes.Equal(unit, []byte(cloudflaredServiceUnit)) || !bytes.Equal(config, wantConfig) {
+		return systemchanges.StepEvidence{}, errors.New("cloudflared rotation baseline changed")
+	}
+	newToken := []byte(material.TunnelRunToken + "\n")
+	if current, err := root.ReadFile("etc/sbxr/cloudflared/token"); err == nil {
+		if !bytes.Equal(current, newToken) {
+			return systemchanges.StepEvidence{}, errors.New("old run token cannot be restored or overwritten")
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return systemchanges.StepEvidence{}, err
+	} else if err := writeServiceFile(root, "etc/sbxr/cloudflared/token", newToken, 0o640, rootUID, cloudflaredGID); err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	if syncServiceNamespace(root, "etc/sbxr/cloudflared", "etc/sbxr", "etc") != nil || executor.validateInstalledService(rootPath) != nil || executor.ValidateNativeConfiguration(rootPath, timeout) != nil {
+		return systemchanges.StepEvidence{}, errors.New("rotated cloudflared service is unproved")
+	}
+	command := executor.command
+	if command == nil {
+		command = runCommand
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if _, err := command(ctx, "/usr/bin/systemctl", "restart", "cloudflared.service"); err != nil {
+		return systemchanges.StepEvidence{}, errors.New("cloudflared restart failed")
+	}
+	return providerEvidence("cloudflared-run-token-rotated", "", ""), nil
 }
 
 func (executor Executor) ReverseService(rootPath string, source io.Reader, timeout time.Duration) (systemchanges.StepEvidence, error) {

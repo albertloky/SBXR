@@ -194,3 +194,26 @@ func TestHTTPMutationAPIRefusesContradictoryWholeTunnelIdentifiers(t *testing.T)
 		})
 	}
 }
+
+func TestHTTPMutationAPIRetrievesTheCurrentTunnelTokenOnlyThroughTheDocumentedEndpoint(t *testing.T) {
+	managementToken, err := cloudflaretunnel.NewManagementToken(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runToken := "CLOUDFLARE-ROTATED-RUN-TOKEN-MARKER"
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet || request.URL.Path != "/accounts/"+accountID+"/cfd_tunnel/"+mutationTunnelID+"/token" || request.Header.Get("Authorization") != "Bearer "+token {
+			t.Fatalf("unexpected token request: %s %s", request.Method, request.URL.Path)
+		}
+		fmt.Fprintf(response, `{"success":true,"result":%q}`, runToken)
+	}))
+	defer server.Close()
+	api := cloudflaretunnel.NewFixtureMutationAPI(server.Client(), server.URL, staticResolver{}, &reachableOrigins{})
+	result, err := api.GetTunnelToken(context.Background(), cloudflaretunnel.GetTunnelTokenRequest{AccountID: accountID, TunnelID: mutationTunnelID, Token: managementToken})
+	if err != nil || !result.ChangedFrom(strings.Repeat("0", 64)) {
+		t.Fatalf("GetTunnelToken() = (%+v, %v)", result, err)
+	}
+	if rendered := fmt.Sprintf("%+v %#v %s", result, result, result); strings.Contains(rendered, runToken) {
+		t.Fatalf("run token escaped opaque result: %s", rendered)
+	}
+}

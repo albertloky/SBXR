@@ -14,35 +14,36 @@ import (
 type DurableCheckpoint string
 
 const (
-	Prepared                      DurableCheckpoint = "Prepared"
-	StepStarted                   DurableCheckpoint = "Step started"
-	StepCompleted                 DurableCheckpoint = "Step completed"
-	StateFinalized                DurableCheckpoint = "Deferred State finalized"
-	PrePublicationHealthPassed    DurableCheckpoint = "Pre-publication health passed"
-	OwnedExternalDeletionVerified DurableCheckpoint = "Owned external deletion verified"
-	IrreversibleRemovalStarted    DurableCheckpoint = "Irreversible removal started"
-	TokenRevocationVerified       DurableCheckpoint = "Cloudflare token revocation verified"
-	RemainingExternalDeleted      DurableCheckpoint = "Remaining owned external resources deleted"
-	LocalStateDeleted             DurableCheckpoint = "Local State deleted"
-	SecretsDeleted                DurableCheckpoint = "Infrastructure Secrets deleted"
-	CertificatesDeleted           DurableCheckpoint = "Certificates deleted"
-	ServicesDeleted               DurableCheckpoint = "Services deleted"
-	IdentitiesDeleted             DurableCheckpoint = "Identities deleted"
-	ListenersDeleted              DurableCheckpoint = "Listeners deleted"
-	FirewallRulesDeleted          DurableCheckpoint = "Firewall rules deleted"
-	ReleasesDeleted               DurableCheckpoint = "Releases deleted"
-	TransactionMaterialDeleted    DurableCheckpoint = "Transaction material deleted"
-	FinalRemovalAbsenceVerified   DurableCheckpoint = "Final removal absence verified"
-	StatePublicationStarted       DurableCheckpoint = "Desired State publication started"
-	StatePublished                DurableCheckpoint = "Desired State published"
-	PostPublicationHealthPassed   DurableCheckpoint = "Post-publication health passed"
-	Complete                      DurableCheckpoint = "Complete"
-	CancellationRequested         DurableCheckpoint = "Cancellation requested"
-	RollbackStarted               DurableCheckpoint = "Rollback started"
-	RollbackStepStarted           DurableCheckpoint = "Rollback step started"
-	RollbackStepCompleted         DurableCheckpoint = "Rollback step completed"
-	RollbackVerified              DurableCheckpoint = "Rollback verified"
-	RolledBack                    DurableCheckpoint = "Rolled back"
+	Prepared                            DurableCheckpoint = "Prepared"
+	StepStarted                         DurableCheckpoint = "Step started"
+	StepCompleted                       DurableCheckpoint = "Step completed"
+	StateFinalized                      DurableCheckpoint = "Deferred State finalized"
+	PrePublicationHealthPassed          DurableCheckpoint = "Pre-publication health passed"
+	OwnedExternalDeletionVerified       DurableCheckpoint = "Owned external deletion verified"
+	IrreversibleRemovalStarted          DurableCheckpoint = "Irreversible removal started"
+	IrreversibleRunTokenRotationStarted DurableCheckpoint = "Irreversible run-token rotation started"
+	TokenRevocationVerified             DurableCheckpoint = "Cloudflare token revocation verified"
+	RemainingExternalDeleted            DurableCheckpoint = "Remaining owned external resources deleted"
+	LocalStateDeleted                   DurableCheckpoint = "Local State deleted"
+	SecretsDeleted                      DurableCheckpoint = "Infrastructure Secrets deleted"
+	CertificatesDeleted                 DurableCheckpoint = "Certificates deleted"
+	ServicesDeleted                     DurableCheckpoint = "Services deleted"
+	IdentitiesDeleted                   DurableCheckpoint = "Identities deleted"
+	ListenersDeleted                    DurableCheckpoint = "Listeners deleted"
+	FirewallRulesDeleted                DurableCheckpoint = "Firewall rules deleted"
+	ReleasesDeleted                     DurableCheckpoint = "Releases deleted"
+	TransactionMaterialDeleted          DurableCheckpoint = "Transaction material deleted"
+	FinalRemovalAbsenceVerified         DurableCheckpoint = "Final removal absence verified"
+	StatePublicationStarted             DurableCheckpoint = "Desired State publication started"
+	StatePublished                      DurableCheckpoint = "Desired State published"
+	PostPublicationHealthPassed         DurableCheckpoint = "Post-publication health passed"
+	Complete                            DurableCheckpoint = "Complete"
+	CancellationRequested               DurableCheckpoint = "Cancellation requested"
+	RollbackStarted                     DurableCheckpoint = "Rollback started"
+	RollbackStepStarted                 DurableCheckpoint = "Rollback step started"
+	RollbackStepCompleted               DurableCheckpoint = "Rollback step completed"
+	RollbackVerified                    DurableCheckpoint = "Rollback verified"
+	RolledBack                          DurableCheckpoint = "Rolled back"
 )
 
 type CheckpointRecord struct {
@@ -171,18 +172,21 @@ var irreversibleRemovalPhases = []struct {
 // RecoveryTransaction is the secret-safe durable authority for one interrupted
 // ordinary Change Set. Snapshot contents remain inside the Adapter.
 type RecoveryTransaction struct {
-	ChangeSet        string
-	Mutation         MutationClass
-	Starting         StateLineage
-	StartingRelease  ReleaseBinding
-	Candidate        StateLineage
-	CandidateRelease ReleaseBinding
-	OutcomeOwner     Module
-	Steps            []Step
-	AttemptedSteps   int
-	RollbackStep     int
-	LastCheckpoint   DurableCheckpoint
-	Timeouts         Timeouts
+	ChangeSet           string
+	Mutation            MutationClass
+	Starting            StateLineage
+	StartingRelease     ReleaseBinding
+	Candidate           StateLineage
+	CandidateRelease    ReleaseBinding
+	State               StateTransactionBinding
+	OutcomeOwner        Module
+	Steps               []Step
+	Checks              []Check
+	AttemptedSteps      int
+	RollbackStep        int
+	LastCheckpoint      DurableCheckpoint
+	Timeouts            Timeouts
+	PriorRunTokenSHA256 string
 }
 
 type ExecutionLease struct{ authority *executionAuthority }
@@ -251,12 +255,22 @@ type IrreversibleRemovalAdapter interface {
 	FinalizeRemoval(ExecutionLease, RecoveryTransaction, time.Duration) error
 }
 
+// RunTokenRotationAdapter is the narrow durable seam for the one forward-only
+// Cloudflare credential transition. State material remains opaque.
+type RunTokenRotationAdapter interface {
+	StartRunTokenRotation(ExecutionLease, string) (checkpointCrossed bool, err error)
+	FinalizeRunTokenRotation(ExecutionLease, RecoveryTransaction, time.Duration) (material any, binding StateTransactionBinding, changed bool, err error)
+	LoadRunTokenRotationState(ExecutionLease, RecoveryTransaction) (any, error)
+}
+
 type OrphanedRemovalAdapter interface {
 	FinalizeOrphanedRemoval(ExecutionLease, Observation, time.Duration) error
 }
 
 type StateRecovery interface {
 	SystemChangesRestoreDurable(lease any, binding []byte, prior, candidate io.Reader) ([]byte, error)
+	SystemChangesFinalizeRunTokenRotation(lease any, binding []byte, candidate io.Reader, source any) (any, error)
+	SystemChangesLoadRunTokenRotation(lease any, binding []byte, candidate, manifests io.Reader) (any, error)
 }
 
 var ErrNoRecoveryTransaction = errors.New("no unfinished recovery transaction")
@@ -340,13 +354,20 @@ func (i Interface) Recover() ApplyResult {
 		return finish(lock, recoveryRequired(ChangeSetSpec{OutcomeOwner: StateModule}, "SYSTEM-CHANGES-RECOVERY-LINEAGE", Prepared))
 	}
 	recovery.Steps = append([]Step(nil), recovery.Steps...)
-	spec := ChangeSetSpec{Identity: recovery.ChangeSet, Mutation: recovery.Mutation, StartingState: recovery.Starting, OutcomeOwner: recovery.OutcomeOwner, Steps: recovery.Steps, Timeouts: recovery.Timeouts}
+	spec := ChangeSetSpec{Identity: recovery.ChangeSet, Mutation: recovery.Mutation, StartingState: recovery.Starting, OutcomeOwner: recovery.OutcomeOwner, Steps: recovery.Steps, Checks: recovery.Checks, Timeouts: recovery.Timeouts}
 	if recovery.Mutation == CompleteRemovalMutation && IsIrreversibleRemovalCheckpoint(recovery.LastCheckpoint) {
 		removalAdapter, ok := i.adapter.(IrreversibleRemovalAdapter)
 		if !ok {
 			return finish(lock, forwardRemovalRequired(spec, "SYSTEM-CHANGES-REMOVAL-ADAPTER", recovery.LastCheckpoint))
 		}
 		return finish(lock, continueIrreversibleRemoval(lease, adapter, removalAdapter, recovery, spec))
+	}
+	if recovery.Mutation == RotationMutation && runTokenRotationCheckpoint(recovery.LastCheckpoint) {
+		rotationAdapter, ok := i.adapter.(RunTokenRotationAdapter)
+		if !ok {
+			return finish(lock, forwardRunTokenRotationRequired(spec, "SYSTEM-CHANGES-RUN-TOKEN-ADAPTER", recovery.LastCheckpoint))
+		}
+		return finish(lock, continueRunTokenRotation(lease, adapter, rotationAdapter, recovery, spec))
 	}
 	if err := recoveryAdapter.AllowProvenServices(lease, recovery, recovery.Timeouts.Check); err != nil {
 		return finish(lock, recoveryRequired(spec, "SYSTEM-CHANGES-SERVICE-HOLDBACK", recovery.LastCheckpoint))
@@ -394,12 +415,19 @@ func validRecoveryTransaction(recovery RecoveryTransaction) bool {
 	if recovery.Mutation == CompleteRemovalMutation != removal || removal && !validRemovalSteps(recovery.Steps) {
 		return false
 	}
+	if recovery.Mutation == RotationMutation && runTokenRotationCheckpoint(recovery.LastCheckpoint) && !validRunTokenRecoveryChecks(recovery.Checks) {
+		return false
+	}
 	if IsIrreversibleRemovalCheckpoint(recovery.LastCheckpoint) {
 		return recovery.Mutation == CompleteRemovalMutation && recovery.AttemptedSteps == len(recovery.Steps) && recovery.RollbackStep == 0
 	}
 	switch recovery.LastCheckpoint {
 	case Prepared:
 		return recovery.AttemptedSteps == 0
+	case IrreversibleRunTokenRotationStarted:
+		return recovery.Mutation == RotationMutation && recovery.AttemptedSteps == 0 && validSHA256(recovery.PriorRunTokenSHA256)
+	case StateFinalized:
+		return recovery.Mutation == RotationMutation && recovery.AttemptedSteps == 0
 	case StepStarted, StepCompleted, PrePublicationHealthPassed, OwnedExternalDeletionVerified, StatePublicationStarted, StatePublished, PostPublicationHealthPassed:
 		return recovery.AttemptedSteps > 0 && recovery.RollbackStep == 0
 	case RollbackStarted:
@@ -414,6 +442,121 @@ func validRecoveryTransaction(recovery RecoveryTransaction) bool {
 		return recovery.RollbackStep == 0 && recovery.Candidate.Status == Managed && recovery.Candidate.Revision == recovery.Starting.Revision+1 && validSHA256(recovery.Candidate.SHA256) && recovery.CandidateRelease != (ReleaseBinding{})
 	}
 	return false
+}
+
+func validRunTokenRecoveryChecks(checks []Check) bool {
+	if len(checks) != 2 {
+		return false
+	}
+	for index, phase := range []GatePhase{PrePublication, PostPublication} {
+		check := checks[index]
+		if !validCheck(check) || check.Owner != CloudflareModule || check.Phase != phase || check.Classification != Required || check.Status != Healthy || check.Code != "CLOUDFLARE-WHOLE-TUNNEL" {
+			return false
+		}
+	}
+	return true
+}
+
+func runTokenRotationCheckpoint(checkpoint DurableCheckpoint) bool {
+	switch checkpoint {
+	case IrreversibleRunTokenRotationStarted, StateFinalized, StepStarted, StepCompleted, PrePublicationHealthPassed, StatePublicationStarted, StatePublished, PostPublicationHealthPassed, Complete:
+		return true
+	}
+	return false
+}
+
+func continueRunTokenRotation(lease ExecutionLease, adapter TransactionAdapter, rotation RunTokenRotationAdapter, recovery RecoveryTransaction, spec ChangeSetSpec) ApplyResult {
+	record := func(point DurableCheckpoint, step int, evidence *StepEvidence, binding *StateTransactionBinding) bool {
+		return adapter.Record(lease, CheckpointRecord{ChangeSet: recovery.ChangeSet, Checkpoint: point, Step: step, Evidence: evidence, State: binding}) == nil
+	}
+	var transaction stateTransaction
+	if recovery.LastCheckpoint == Complete {
+		if adapter.Cleanup(lease, recovery.ChangeSet) != nil {
+			return forwardRunTokenRotationRequired(spec, "SYSTEM-CHANGES-CLEANUP", Complete)
+		}
+		return ApplyResult{Outcome: Completed, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence()}
+	}
+	if recovery.LastCheckpoint == IrreversibleRunTokenRotationStarted {
+		material, binding, changed, err := rotation.FinalizeRunTokenRotation(lease, recovery, recovery.Timeouts.Step)
+		if err != nil {
+			return forwardRunTokenRotationRequired(spec, "SYSTEM-CHANGES-RUN-TOKEN-FETCH", recovery.LastCheckpoint)
+		}
+		if !changed {
+			return ApplyResult{Outcome: AwaitingRunTokenRotation, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence()}
+		}
+		var ok bool
+		transaction, ok = material.(stateTransaction)
+		if !ok || binding.ChangeSet != recovery.ChangeSet || binding.StartingRevision != recovery.Starting.Revision || binding.CandidateRevision != recovery.Candidate.Revision || !record(StateFinalized, 0, nil, &binding) {
+			return forwardRunTokenRotationRequired(spec, "SYSTEM-CHANGES-RUN-TOKEN-STATE", StateFinalized)
+		}
+		recovery.LastCheckpoint = StateFinalized
+		recovery.Candidate.SHA256 = binding.CandidateSHA256
+		recovery.State = binding
+	} else {
+		material, err := rotation.LoadRunTokenRotationState(lease, recovery)
+		var ok bool
+		transaction, ok = material.(stateTransaction)
+		if err != nil || !ok {
+			return forwardRunTokenRotationRequired(spec, "SYSTEM-CHANGES-RUN-TOKEN-STATE", recovery.LastCheckpoint)
+		}
+	}
+	step := recovery.Steps[0]
+	if recovery.LastCheckpoint == StateFinalized || recovery.LastCheckpoint == StepStarted {
+		if recovery.LastCheckpoint == StateFinalized && !record(StepStarted, 1, nil, nil) {
+			return forwardRunTokenRotationRequired(spec, "SYSTEM-CHANGES-JOURNAL", StepStarted)
+		}
+		evidence, err := adapter.Execute(lease, recovery.ChangeSet, 1, step, recovery.Timeouts.Step, nil)
+		if err != nil || !safeIdentity(evidence.Code) || !validSHA256(evidence.SHA256) || !record(StepCompleted, 1, &evidence, nil) {
+			return forwardRunTokenRotationRequired(spec, "SYSTEM-CHANGES-RUN-TOKEN-RESTART", StepStarted)
+		}
+		recovery.LastCheckpoint = StepCompleted
+	}
+	if recovery.LastCheckpoint == StepCompleted {
+		if !gatePassed(lease, adapter, spec.Checks, PrePublication, recovery.Timeouts.Check) || !record(PrePublicationHealthPassed, 0, nil, nil) {
+			return forwardRunTokenRotationRequired(spec, "SYSTEM-CHANGES-RUN-TOKEN-HEALTH", StepCompleted)
+		}
+		recovery.LastCheckpoint = PrePublicationHealthPassed
+	}
+	if recovery.LastCheckpoint == PrePublicationHealthPassed {
+		if !record(StatePublicationStarted, 0, nil, nil) {
+			return forwardRunTokenRotationRequired(spec, "SYSTEM-CHANGES-JOURNAL", PrePublicationHealthPassed)
+		}
+		recovery.LastCheckpoint = StatePublicationStarted
+	}
+	var agreement Agreement
+	if recovery.LastCheckpoint == StatePublicationStarted {
+		published, err := transaction.SystemChangesPublish(lease)
+		var ok bool
+		agreement, ok = validatedAgreement(lease, published, recovery.State)
+		if err != nil || !ok || !record(StatePublished, 0, nil, nil) {
+			return forwardRunTokenRotationRequired(spec, "SYSTEM-CHANGES-RUN-TOKEN-PUBLICATION", StatePublicationStarted)
+		}
+		recovery.LastCheckpoint = StatePublished
+	} else {
+		published, err := transaction.SystemChangesPublish(lease)
+		var ok bool
+		agreement, ok = validatedAgreement(lease, published, recovery.State)
+		if err != nil || !ok {
+			return forwardRunTokenRotationRequired(spec, "SYSTEM-CHANGES-RUN-TOKEN-PUBLICATION", recovery.LastCheckpoint)
+		}
+	}
+	if recovery.LastCheckpoint == StatePublished {
+		if !gatePassed(lease, adapter, spec.Checks, PostPublication, recovery.Timeouts.Check) || adapter.VerifyAgreement(lease, agreement, recovery.Timeouts.Check) != nil || !record(PostPublicationHealthPassed, 0, nil, nil) {
+			return forwardRunTokenRotationRequired(spec, "SYSTEM-CHANGES-RUN-TOKEN-AGREEMENT", StatePublished)
+		}
+		recovery.LastCheckpoint = PostPublicationHealthPassed
+	}
+	if recovery.LastCheckpoint == PostPublicationHealthPassed && !record(Complete, 0, nil, nil) {
+		return forwardRunTokenRotationRequired(spec, "SYSTEM-CHANGES-JOURNAL", PostPublicationHealthPassed)
+	}
+	if adapter.Cleanup(lease, recovery.ChangeSet) != nil {
+		return forwardRunTokenRotationRequired(spec, "SYSTEM-CHANGES-CLEANUP", Complete)
+	}
+	return ApplyResult{Outcome: Completed, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence()}
+}
+
+func forwardRunTokenRotationRequired(spec ChangeSetSpec, cause string, checkpoint DurableCheckpoint) ApplyResult {
+	return ApplyResult{Outcome: RecoveryRequiredOutcome, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(), Finding: &Finding{Code: "SYSTEM-CHANGES-FORWARD-RUN-TOKEN-ROTATION", Owner: spec.OutcomeOwner, Problem: "Tunnel run-token rotation must continue forward", Found: string(checkpoint), Required: "resume the exact next unproved phase with the new protected token", WhyStopped: cause, NextAction: "Keep cloudflared stopped if it cannot be proved and retry the private recovery runner."}}
 }
 
 func NextIrreversibleRemovalCheckpoint(checkpoint DurableCheckpoint) (DurableCheckpoint, bool) {
@@ -574,6 +717,23 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 	if err := adapter.Prepare(lease, preparation); err != nil {
 		return finish(lock, nothingChanged(spec, "SYSTEM-CHANGES-PREPARATION", Prepared))
 	}
+	if spec.Mutation == RotationMutation {
+		rotation, ok := adapter.(RunTokenRotationAdapter)
+		if !ok {
+			return finish(lock, rollbackChange(lease, adapter, transaction, spec, 0, "SYSTEM-CHANGES-RUN-TOKEN-ADAPTER", Prepared))
+		}
+		if cancellation.Requested() {
+			return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, 0))
+		}
+		crossed, err := rotation.StartRunTokenRotation(lease, spec.Identity)
+		if err != nil {
+			if crossed {
+				return finish(lock, forwardRunTokenRotationRequired(spec, "SYSTEM-CHANGES-RUN-TOKEN-CHECKPOINT", IrreversibleRunTokenRotationStarted))
+			}
+			return finish(lock, rollbackChange(lease, adapter, transaction, spec, 0, "SYSTEM-CHANGES-RUN-TOKEN-CHECKPOINT", Prepared))
+		}
+		return finish(lock, ApplyResult{Outcome: AwaitingRunTokenRotation, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence()}, spec.OutcomeOwner)
+	}
 	evidenceByStep := make([]StepEvidence, len(spec.Steps))
 	finalized := false
 	finalizeDeferredState := func(attempted int) *ApplyResult {
@@ -720,6 +880,8 @@ func validCloudflareEvidence(step Step, number int, evidence StepEvidence, prior
 	case CloudflareRoutesPut:
 		return evidence.ResourceType == string(CloudflareRouteResource) && safeIdentity(evidence.ResourceID)
 	case CloudflaredActivate:
+		return evidence.ResourceType == "" && evidence.ResourceID == ""
+	case CloudflareRunTokenActivate:
 		return evidence.ResourceType == "" && evidence.ResourceID == ""
 	}
 	return false

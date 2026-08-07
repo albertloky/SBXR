@@ -64,6 +64,11 @@ type CloudflareExecutor interface {
 	InspectService(string, io.Reader) (systemchanges.StepEffect, error)
 	CheckWholeTunnel([]systemchanges.StepEvidence, time.Duration) (systemchanges.HealthStatus, error)
 	ValidateInstalledService(string) error
+	RunTokenFingerprint(string) (string, error)
+	RemoveRunToken(string) error
+	RetrieveRunToken(systemchanges.CloudflareChange, string, time.Duration) (any, bool, error)
+	RotateService(string, io.Reader, time.Duration) (systemchanges.StepEvidence, error)
+	CheckRunTokenRotation(systemchanges.CloudflareChange, time.Duration) (systemchanges.HealthStatus, error)
 }
 
 type snapshotManifest struct {
@@ -156,6 +161,8 @@ func (a Adapter) Prepare(lease systemchanges.ExecutionLease, preparation systemc
 				return errors.New("native firewall Adapter unavailable")
 			}
 			captureErr = a.firewall.CaptureRollback(step, captureRollback)
+		} else if preparation.Mutation == systemchanges.RotationMutation && runTokenActivation(step) {
+			captureErr = captureRollback(strings.NewReader(`{"rotation_forward_only":true}`))
 		} else if cloudflaredActivation(step) {
 			if a.cloudflare == nil {
 				return errors.New("Cloudflare service executor unavailable")
@@ -263,6 +270,70 @@ func (a Adapter) Record(lease systemchanges.ExecutionLease, record systemchanges
 	return nil
 }
 
+func (a Adapter) StartRunTokenRotation(lease systemchanges.ExecutionLease, changeSet string) (bool, error) {
+	if !lease.Authorized() || a.cloudflare == nil || !safeName(changeSet) {
+		return false, errors.New("run-token rotation checkpoint unavailable")
+	}
+	root, err := os.OpenRoot(a.root)
+	if err != nil {
+		return false, err
+	}
+	defer root.Close()
+	target := path.Join(transactionDirectory, changeSet)
+	journalName := path.Join(target, "journal.jsonl")
+	journal, err := readJournal(root, journalName)
+	if err != nil || !validJournal(journal) || len(journal) != 1 || journal[0].Checkpoint != systemchanges.Prepared || journal[0].Mutation != systemchanges.RotationMutation || len(journal[0].Steps) != 1 || journal[0].Steps[0].Cloudflare == nil || journal[0].Steps[0].Cloudflare.Action != systemchanges.CloudflareRunTokenActivate {
+		return false, errors.New("run-token rotation preparation is unproved")
+	}
+	fingerprint, err := a.cloudflare.RunTokenFingerprint(a.root)
+	if err != nil || !validDigest(fingerprint) {
+		return false, errors.New("current run token is unproved")
+	}
+	evidence := &systemchanges.StepEvidence{Code: "old-run-token-fingerprint", SHA256: fingerprint}
+	if err := appendJournal(root, journalName, journalEntry{Checkpoint: systemchanges.IrreversibleRunTokenRotationStarted, Evidence: evidence}, a.uid); err != nil {
+		return false, err
+	}
+	if err := a.discardRunTokenRollback(root, target); err != nil {
+		return true, err
+	}
+	return true, verifyTransaction(root, target, a.uid)
+}
+
+func (a Adapter) discardRunTokenRollback(root *os.Root, target string) error {
+	if a.cloudflare == nil {
+		return errors.New("Cloudflare run-token cleanup unavailable")
+	}
+	if err := a.cloudflare.RemoveRunToken(a.root); err != nil {
+		return err
+	}
+	manifest, err := readSnapshotManifest(root, target, a.uid)
+	if err != nil {
+		return err
+	}
+	for name := range manifest.Files {
+		if !strings.HasPrefix(name, "snapshot/") {
+			continue
+		}
+		if err := root.Remove(path.Join(target, name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		delete(manifest.Files, name)
+	}
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		return err
+	}
+	temporary := path.Join(target, "manifest.rotation")
+	_ = root.Remove(temporary)
+	if _, err := writeProtected(root, temporary, bytes.NewReader(data), a.uid); err != nil {
+		return err
+	}
+	if err := root.Rename(temporary, path.Join(target, "manifest.json")); err != nil {
+		return err
+	}
+	return syncDirectory(root, target)
+}
+
 func (a Adapter) ReplaceStateArtifacts(lease systemchanges.ExecutionLease, changeSet string, binding systemchanges.StateTransactionBinding, stream func(func(name string, mode uint32, source io.Reader) error) error) error {
 	if !lease.Authorized() || !safeName(changeSet) || binding.ChangeSet != changeSet || stream == nil {
 		return errors.New("invalid deferred State finalization")
@@ -322,6 +393,68 @@ func (a Adapter) ReplaceStateArtifacts(lease systemchanges.ExecutionLease, chang
 	return verifyDeferredStateGeneration(root, target, binding, a.uid)
 }
 
+type runTokenStateMaterial interface {
+	SystemChangesBindings(any) ([]byte, error)
+	SystemChangesWriteArtifacts(any, func(string, uint32, io.Reader) error) error
+}
+
+func (a Adapter) FinalizeRunTokenRotation(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction, timeout time.Duration) (any, systemchanges.StateTransactionBinding, bool, error) {
+	if !lease.RecoveryAuthorized() || a.cloudflare == nil || a.state == nil || recovery.LastCheckpoint != systemchanges.IrreversibleRunTokenRotationStarted || len(recovery.Steps) != 1 || !validDigest(recovery.PriorRunTokenSHA256) {
+		return nil, systemchanges.StateTransactionBinding{}, false, errors.New("run-token State finalization unavailable")
+	}
+	change, ok := recovery.Steps[0].CloudflareChange()
+	if !ok || change.Action != systemchanges.CloudflareRunTokenActivate {
+		return nil, systemchanges.StateTransactionBinding{}, false, errors.New("run-token provider binding unavailable")
+	}
+	source, changed, err := a.cloudflare.RetrieveRunToken(change, recovery.PriorRunTokenSHA256, timeout)
+	if err != nil || !changed {
+		return nil, systemchanges.StateTransactionBinding{}, changed, err
+	}
+	candidate, err := a.recoveryArtifact(lease, recovery.ChangeSet, "prepared/state.json")
+	if err != nil {
+		return nil, systemchanges.StateTransactionBinding{}, false, err
+	}
+	bindingJSON, err := json.Marshal(recovery.State)
+	if err != nil {
+		return nil, systemchanges.StateTransactionBinding{}, false, err
+	}
+	material, err := a.state.SystemChangesFinalizeRunTokenRotation(lease, bindingJSON, bytes.NewReader(candidate), source)
+	stateMaterial, ok := material.(runTokenStateMaterial)
+	if err != nil || !ok {
+		return nil, systemchanges.StateTransactionBinding{}, false, errors.New("State refused the rotated run token")
+	}
+	finalBindingJSON, err := stateMaterial.SystemChangesBindings(lease)
+	var finalBinding systemchanges.StateTransactionBinding
+	if err != nil || json.Unmarshal(finalBindingJSON, &finalBinding) != nil {
+		return nil, systemchanges.StateTransactionBinding{}, false, errors.New("final run-token State binding unavailable")
+	}
+	if err := a.ReplaceStateArtifacts(lease, recovery.ChangeSet, finalBinding, func(write func(string, uint32, io.Reader) error) error {
+		return stateMaterial.SystemChangesWriteArtifacts(lease, write)
+	}); err != nil {
+		return nil, systemchanges.StateTransactionBinding{}, false, err
+	}
+	return material, finalBinding, true, nil
+}
+
+func (a Adapter) LoadRunTokenRotationState(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction) (any, error) {
+	if !lease.RecoveryAuthorized() || a.state == nil || recovery.LastCheckpoint == systemchanges.IrreversibleRunTokenRotationStarted {
+		return nil, errors.New("finalized run-token State unavailable")
+	}
+	candidate, err := a.recoveryArtifact(lease, recovery.ChangeSet, "prepared/state.json")
+	if err != nil {
+		return nil, err
+	}
+	manifests, err := a.recoveryArtifact(lease, recovery.ChangeSet, "prepared/manifests.json")
+	if err != nil {
+		return nil, err
+	}
+	bindingJSON, err := json.Marshal(recovery.State)
+	if err != nil {
+		return nil, err
+	}
+	return a.state.SystemChangesLoadRunTokenRotation(lease, bindingJSON, bytes.NewReader(candidate), bytes.NewReader(manifests))
+}
+
 func (a Adapter) Execute(lease systemchanges.ExecutionLease, changeSet string, number int, step systemchanges.Step, timeout time.Duration, cancellation *systemchanges.Cancellation) (systemchanges.StepEvidence, error) {
 	if !lease.Authorized() || a.host == nil {
 		return systemchanges.StepEvidence{}, errors.New("typed Ubuntu transaction host unavailable")
@@ -338,6 +471,16 @@ func (a Adapter) Execute(lease systemchanges.ExecutionLease, changeSet string, n
 			return systemchanges.StepEvidence{}, err
 		}
 		return a.firewall.Execute(step, path.Join(a.root, transactionDirectory, changeSet, name), timeout, cancellation)
+	}
+	if runTokenActivation(step) {
+		if a.cloudflare == nil || !safeName(changeSet) || number != 1 {
+			return systemchanges.StepEvidence{}, errors.New("Cloudflare run-token service executor unavailable")
+		}
+		material, err := a.recoveryArtifact(lease, changeSet, "prepared/cloudflared.json")
+		if err != nil {
+			return systemchanges.StepEvidence{}, err
+		}
+		return a.cloudflare.RotateService(a.root, bytes.NewReader(material), timeout)
 	}
 	if change, ok := step.CloudflareChange(); ok {
 		if a.cloudflare == nil || !safeName(changeSet) || number < 1 {
@@ -466,6 +609,11 @@ func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges
 	if err != nil || !validJournal(journal) {
 		return systemchanges.RecoveryTransaction{}, errors.New("recovery journal is invalid")
 	}
+	if journal[len(journal)-1].Checkpoint == systemchanges.IrreversibleRunTokenRotationStarted {
+		if err := a.discardRunTokenRollback(root, directory); err != nil {
+			return systemchanges.RecoveryTransaction{}, errors.New("run-token rollback cleanup is unprovable")
+		}
+	}
 	if err := reconcileDeferredReplacement(root, directory, journal); err != nil {
 		return systemchanges.RecoveryTransaction{}, errors.New("deferred State replacement is unprovable")
 	}
@@ -476,12 +624,13 @@ func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges
 		}
 	}
 	irreversible := prepared.Mutation == systemchanges.CompleteRemovalMutation && systemchanges.IsIrreversibleRemovalCheckpoint(last.Checkpoint)
+	irreversibleRotation := prepared.Mutation == systemchanges.RotationMutation && runTokenFingerprint(journal) != ""
 	if prepared.State == nil || prepared.ChangeSet != changeSet || !validRecoveryJournalBinding(prepared) {
 		return systemchanges.RecoveryTransaction{}, errors.New("recovery transaction lineage is invalid")
 	}
 	if !irreversible {
 		manifest, err := verifyTransactionManifest(root, directory, a.uid)
-		if err != nil || manifest.Reason != prepared.Mutation || !validRecoveryBinding(prepared, manifest) {
+		if err != nil || manifest.Reason != prepared.Mutation || !validRecoveryBinding(prepared, manifest, irreversibleRotation) {
 			return systemchanges.RecoveryTransaction{}, errors.New("recovery transaction lineage is invalid")
 		}
 	}
@@ -529,8 +678,17 @@ func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges
 	return systemchanges.RecoveryTransaction{
 		ChangeSet: changeSet, Mutation: prepared.Mutation, Starting: prepared.Starting, StartingRelease: prepared.State.StartingRelease,
 		Candidate: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: prepared.State.CandidateRevision, SHA256: prepared.State.CandidateSHA256}, CandidateRelease: prepared.State.CandidateRelease,
-		OutcomeOwner: prepared.OutcomeOwner, Steps: steps, AttemptedSteps: highestStartedStep(journal), RollbackStep: rollbackResumeStep(journal), LastCheckpoint: last.Checkpoint, Timeouts: prepared.Timeouts,
+		OutcomeOwner: prepared.OutcomeOwner, State: *prepared.State, Steps: steps, Checks: append([]systemchanges.Check(nil), prepared.Checks...), AttemptedSteps: highestStartedStep(journal), RollbackStep: rollbackResumeStep(journal), LastCheckpoint: last.Checkpoint, Timeouts: prepared.Timeouts, PriorRunTokenSHA256: runTokenFingerprint(journal),
 	}, nil
+}
+
+func runTokenFingerprint(entries []journalEntry) string {
+	for _, entry := range entries {
+		if entry.Checkpoint == systemchanges.IrreversibleRunTokenRotationStarted && entry.Evidence != nil {
+			return entry.Evidence.SHA256
+		}
+	}
+	return ""
 }
 
 func rollbackResumeStep(entries []journalEntry) int {
@@ -582,6 +740,11 @@ func (a Adapter) InspectStep(lease systemchanges.ExecutionLease, recovery system
 
 func cloudflaredActivation(step systemchanges.Step) bool {
 	return step.Owner() == systemchanges.CloudflareModule && step.Forward() == systemchanges.ActivatePreparedConfiguration && step.Rollback() == systemchanges.RestorePriorConfiguration
+}
+
+func runTokenActivation(step systemchanges.Step) bool {
+	change, ok := step.CloudflareChange()
+	return ok && change.Action == systemchanges.CloudflareRunTokenActivate && step.Forward() == systemchanges.RotateCloudflaredRunToken
 }
 
 func (a Adapter) RestoreRecoveryState(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction) (systemchanges.RollbackAgreement, error) {
@@ -789,13 +952,13 @@ func recoveryRelease(binding systemchanges.StateTransactionBinding) systemchange
 	return binding.CandidateRelease
 }
 
-func validRecoveryBinding(prepared journalEntry, manifest snapshotManifest) bool {
+func validRecoveryBinding(prepared journalEntry, manifest snapshotManifest, forwardRotation ...bool) bool {
 	binding := *prepared.State
 	if !validRecoveryJournalBinding(prepared) || manifest.Release != recoveryRelease(binding) || manifest.Files["prepared/state.json"] != binding.PreparedStateSHA256 || manifest.Files["prepared/manifests.json"] != binding.PreparedManifestSHA256 {
 		return false
 	}
 	if prepared.Starting.Status == systemchanges.Managed || prepared.Starting.Status == systemchanges.RecoveryRequired && binding.StartingRevision > 0 {
-		return binding.StartingRelease != (systemchanges.ReleaseBinding{}) && manifest.Files["snapshot/prior-state.json"] != ""
+		return binding.StartingRelease != (systemchanges.ReleaseBinding{}) && (len(forwardRotation) == 1 && forwardRotation[0] && manifest.Files["snapshot/prior-state.json"] == "" || manifest.Files["snapshot/prior-state.json"] != "")
 	}
 	return prepared.Starting.Status == systemchanges.NotInstalled && binding.StartingRevision == 0 && binding.StartingSHA256 == "" && binding.StartingRelease == (systemchanges.ReleaseBinding{}) && manifest.Files["snapshot/prior-state.json"] == ""
 }
@@ -824,6 +987,10 @@ func (a Adapter) Check(lease systemchanges.ExecutionLease, check systemchanges.C
 		if a.cloudflare == nil {
 			return systemchanges.Unknown, errors.New("Cloudflare health executor unavailable")
 		}
+		change, rotation, err := a.activeRunTokenRotation()
+		if err == nil && rotation {
+			return a.cloudflare.CheckRunTokenRotation(change, timeout)
+		}
 		evidence, err := a.activeStepEvidence()
 		if err != nil {
 			return systemchanges.Unknown, err
@@ -831,6 +998,24 @@ func (a Adapter) Check(lease systemchanges.ExecutionLease, check systemchanges.C
 		return a.cloudflare.CheckWholeTunnel(evidence, timeout)
 	}
 	return a.host.Check(check, phase, timeout)
+}
+
+func (a Adapter) activeRunTokenRotation() (systemchanges.CloudflareChange, bool, error) {
+	root, err := os.OpenRoot(a.root)
+	if err != nil {
+		return systemchanges.CloudflareChange{}, false, err
+	}
+	defer root.Close()
+	entries, err := fs.ReadDir(root.FS(), transactionDirectory)
+	if err != nil || len(entries) != 1 || !entries[0].IsDir() {
+		return systemchanges.CloudflareChange{}, false, errors.New("active transaction unavailable")
+	}
+	journal, err := readJournal(root, path.Join(transactionDirectory, entries[0].Name(), "journal.jsonl"))
+	if err != nil || len(journal) == 0 || len(journal[0].Steps) != 1 || journal[0].Steps[0].Cloudflare == nil {
+		return systemchanges.CloudflareChange{}, false, err
+	}
+	change := *journal[0].Steps[0].Cloudflare
+	return change, change.Action == systemchanges.CloudflareRunTokenActivate, nil
 }
 
 func (a Adapter) activeStepEvidence() ([]systemchanges.StepEvidence, error) {
@@ -1020,7 +1205,9 @@ func validNextCheckpoint(entries []journalEntry, next journalEntry) bool {
 	last, total := entries[len(entries)-1], len(entries[0].Steps)
 	switch last.Checkpoint {
 	case systemchanges.Prepared:
-		return next.Checkpoint == systemchanges.StepStarted && next.Step == 1 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0
+		return next.Checkpoint == systemchanges.StepStarted && next.Step == 1 || next.Checkpoint == systemchanges.IrreversibleRunTokenRotationStarted && next.Step == 0 && entries[0].Mutation == systemchanges.RotationMutation && validEvidence(next.Evidence) || next.Checkpoint == systemchanges.CancellationRequested && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0
+	case systemchanges.IrreversibleRunTokenRotationStarted:
+		return next.Checkpoint == systemchanges.StateFinalized && next.Step == 0 && next.State != nil
 	case systemchanges.StepStarted:
 		return next.Checkpoint == systemchanges.StepCompleted && next.Step == last.Step && validEvidence(next.Evidence) || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
 	case systemchanges.StepCompleted:
