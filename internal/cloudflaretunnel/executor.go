@@ -52,6 +52,10 @@ type PutConfigurationRequest struct {
 	Token               ManagementToken
 	Routes              []Route
 }
+type GetConfigurationRequest struct {
+	AccountID, TunnelID string
+	Token               ManagementToken
+}
 type Configuration struct {
 	TunnelID string
 	Version  int
@@ -61,6 +65,15 @@ type CreateDNSRecordRequest struct {
 	ZoneID, Type, Name, Content string
 	Proxied                     bool
 	Token                       ManagementToken
+}
+type GetDNSRecordRequest struct {
+	ZoneID, ID string
+	Token      ManagementToken
+}
+type PutDNSRecordRequest struct {
+	ZoneID, ID, Type, Name, Content string
+	Proxied                         bool
+	Token                           ManagementToken
 }
 type DeleteDNSRecordRequest struct {
 	ZoneID, ID string
@@ -153,7 +166,9 @@ type CertificateDNSFacts struct {
 }
 
 type rollbackRecord struct {
-	Token string `json:"management_token"`
+	Token         string          `json:"management_token"`
+	Configuration *Configuration  `json:"configuration,omitempty"`
+	DNS           *DNSObservation `json:"dns,omitempty"`
 }
 
 // Executor is the Cloudflare Adapter used only by the System Changes Ubuntu
@@ -168,24 +183,53 @@ type Executor struct {
 	binding         cloudflareEvidenceBinding
 	serviceIdentity func() (int, int, int, error)
 	command         func(context.Context, string, ...string) ([]byte, error)
+	clock           Clock
 }
 
 func (plan *Plan) Executor(api MutationAPI) (Executor, error) {
-	if plan == nil || api == nil || plan.runToken.cell == nil || plan.request.Authority.Token.value == "" {
+	if plan == nil || api == nil || plan.runToken.cell == nil && plan.request.ManagedRepair.TunnelID == "" || plan.request.Authority.Token.value == "" {
 		return Executor{}, errors.New("Cloudflare executor unavailable")
 	}
 	view := Interface{api: api, clock: SystemClock{}}.View(context.Background(), plan.request.Authority)
 	if view.Health.Outcome != Healthy {
 		return Executor{}, errors.New("Cloudflare executor authority unavailable")
 	}
-	return Executor{api: api, token: plan.request.Authority.Token, runToken: plan.runToken, request: plan.request, observation: plan.observation, tokenID: view.Credential.ID, binding: plan.binding, serviceIdentity: cloudflaredIdentity, command: runCommand}, nil
+	return Executor{api: api, token: plan.request.Authority.Token, runToken: plan.runToken, request: plan.request, observation: plan.observation, tokenID: view.Credential.ID, binding: plan.binding, serviceIdentity: cloudflaredIdentity, command: runCommand, clock: SystemClock{}}, nil
 }
 
 func (executor Executor) CaptureRollback(step systemchanges.Step, write func(io.Reader) error) error {
 	if _, ok := step.CloudflareChange(); !ok || write == nil || executor.token.value == "" {
 		return errors.New("Cloudflare rollback capture unavailable")
 	}
-	data, err := json.Marshal(rollbackRecord{Token: executor.token.value})
+	change, _ := step.CloudflareChange()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if (change.Action == systemchanges.CloudflareRoutesPut && change.TunnelID != "" || change.Action == systemchanges.CloudflareDNSRepair) && !executor.repairPlanStillFresh(ctx) {
+		return errors.New("Cloudflare repair Plan observation changed")
+	}
+	record := rollbackRecord{Token: executor.token.value}
+	var err error
+	if change.Action == systemchanges.CloudflareRoutesPut && change.TunnelID != "" {
+		var configuration Configuration
+		err = retryTemporary(ctx, executor.clock, func() error {
+			var getErr error
+			configuration, getErr = executor.api.GetConfiguration(ctx, GetConfigurationRequest{AccountID: change.AccountID, TunnelID: change.TunnelID, Token: executor.token})
+			return getErr
+		})
+		record.Configuration = &configuration
+	} else if change.Action == systemchanges.CloudflareDNSRepair {
+		var dns DNSObservation
+		err = retryTemporary(ctx, executor.clock, func() error {
+			var getErr error
+			dns, getErr = executor.api.GetDNSRecord(ctx, GetDNSRecordRequest{ZoneID: change.ZoneID, ID: change.DNSRecordID, Token: executor.token})
+			return getErr
+		})
+		record.DNS = &dns
+	}
+	if err != nil {
+		return err
+	}
+	data, err := json.Marshal(record)
 	if err != nil {
 		return err
 	}
@@ -210,11 +254,24 @@ func (executor Executor) Execute(step systemchanges.Step, resolvedTunnelID strin
 		}
 		return providerEvidence("cloudflare-tunnel-created", string(systemchanges.CloudflareTunnelResource), created.ID), nil
 	case systemchanges.CloudflareRoutesPut:
+		if change.TunnelID != "" {
+			resolvedTunnelID = change.TunnelID
+		}
 		routes := make([]Route, len(change.Routes))
 		for index, route := range change.Routes {
 			routes[index] = Route{Hostname: route.Hostname, Service: route.Origin}
 		}
-		configured, err := executor.api.PutConfiguration(ctx, PutConfigurationRequest{AccountID: change.AccountID, TunnelID: resolvedTunnelID, Token: executor.token, Routes: routes})
+		var configured Configuration
+		var err error
+		call := func() error {
+			configured, err = executor.api.PutConfiguration(ctx, PutConfigurationRequest{AccountID: change.AccountID, TunnelID: resolvedTunnelID, Token: executor.token, Routes: routes})
+			return err
+		}
+		if change.TunnelID != "" {
+			err = retryTemporary(ctx, executor.clock, call)
+		} else {
+			err = call()
+		}
 		if err != nil || configured.TunnelID != resolvedTunnelID || configured.Version < 1 || !sameRoutes(configured.Routes, routes) {
 			return systemchanges.StepEvidence{}, errors.New("Cloudflare routes unproved")
 		}
@@ -229,6 +286,18 @@ func (executor Executor) Execute(step systemchanges.Step, resolvedTunnelID strin
 			return systemchanges.StepEvidence{}, errors.New("Cloudflare DNS creation unproved")
 		}
 		return providerEvidence("cloudflare-dns-created", string(systemchanges.CloudflareDNSRecordResource), record.ID), nil
+	case systemchanges.CloudflareDNSRepair:
+		proxied := change.RecordType == "CNAME"
+		var record OwnedResource
+		err := retryTemporary(ctx, executor.clock, func() error {
+			var putErr error
+			record, putErr = executor.api.PutDNSRecord(ctx, PutDNSRecordRequest{ZoneID: change.ZoneID, ID: change.DNSRecordID, Type: change.RecordType, Name: change.Hostname, Content: change.Content, Proxied: proxied, Token: executor.token})
+			return putErr
+		})
+		if err != nil || record.ID != change.DNSRecordID || record.Name != change.Hostname {
+			return systemchanges.StepEvidence{}, errors.New("Cloudflare DNS repair unproved")
+		}
+		return providerEvidence("cloudflare-dns-repaired", string(systemchanges.CloudflareDNSRecordResource), record.ID), nil
 	case systemchanges.CloudflaredActivate:
 		if executor.runToken.cell == nil || resolvedTunnelID == "" {
 			return systemchanges.StepEvidence{}, errors.New("cloudflared activation unavailable")
@@ -292,6 +361,32 @@ func (executor Executor) planStillFresh(ctx context.Context) bool {
 	return strings.Join(digests, "\n") == executor.observation
 }
 
+func (executor Executor) repairPlanStillFresh(ctx context.Context) bool {
+	view := Interface{api: executor.api, clock: executor.clock}.View(ctx, executor.request.Authority)
+	if view.Health.Outcome != Healthy || view.Credential.ID != executor.tokenID {
+		return false
+	}
+	owned := executor.request.ManagedRepair
+	expected := map[string][]string{
+		executor.request.XHTTPHostname:     {owned.XHTTPDNSRecordID},
+		executor.request.WebSocketHostname: {owned.WebSocketDNSRecordID},
+		executor.request.DirectHostname:    compactIDs(owned.DirectIPv4RecordID, owned.DirectIPv6RecordID),
+	}
+	digests := make([]string, 0, 3)
+	for _, hostname := range []string{executor.request.XHTTPHostname, executor.request.WebSocketHostname, executor.request.DirectHostname} {
+		var observed MutationObservation
+		if retryTemporary(ctx, executor.clock, func() error {
+			var err error
+			observed, err = executor.api.ObserveMutation(ctx, MutationRequest{AccountID: executor.request.Authority.AccountID, ZoneID: executor.request.Authority.ZoneID, Tunnel: executor.request.TunnelName, Hostname: hostname, Token: executor.token})
+			return err
+		}) != nil || !sameOwnedResources(observed.Tunnels, []OwnedResource{{ID: owned.TunnelID, Name: executor.request.TunnelName}}) || !sameOwnedIDs(observed.DNSRecords, hostname, expected[hostname]) {
+			return false
+		}
+		digests = append(digests, observed.Digest)
+	}
+	return strings.Join(digests, "\n") == executor.observation
+}
+
 func (executor Executor) Reverse(step systemchanges.Step, evidence systemchanges.StepEvidence, snapshot io.Reader, timeout time.Duration) (systemchanges.StepEvidence, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -316,11 +411,80 @@ func (executor Executor) Reverse(step systemchanges.Step, evidence systemchanges
 			return systemchanges.StepEvidence{}, errors.New("journaled Cloudflare DNS identifier unavailable")
 		}
 		err = executor.api.DeleteDNSRecord(ctx, DeleteDNSRecordRequest{ZoneID: change.ZoneID, ID: evidence.ResourceID, Token: token})
+	case systemchanges.CloudflareRoutesPut:
+		if change.TunnelID == "" || rollback.Configuration == nil || rollback.Configuration.TunnelID != change.TunnelID {
+			return systemchanges.StepEvidence{}, errors.New("prior Cloudflare routes unavailable")
+		}
+		err = retryTemporary(ctx, executor.clock, func() error {
+			_, putErr := executor.api.PutConfiguration(ctx, PutConfigurationRequest{AccountID: change.AccountID, TunnelID: change.TunnelID, Routes: rollback.Configuration.Routes, Token: token})
+			return putErr
+		})
+	case systemchanges.CloudflareDNSRepair:
+		if rollback.DNS == nil || rollback.DNS.ID != change.DNSRecordID {
+			return systemchanges.StepEvidence{}, errors.New("prior Cloudflare DNS unavailable")
+		}
+		err = retryTemporary(ctx, executor.clock, func() error {
+			_, putErr := executor.api.PutDNSRecord(ctx, PutDNSRecordRequest{ZoneID: change.ZoneID, ID: rollback.DNS.ID, Type: rollback.DNS.Type, Name: rollback.DNS.Name, Content: rollback.DNS.Content, Proxied: rollback.DNS.Proxied, Token: token})
+			return putErr
+		})
 	}
 	if err != nil {
 		return systemchanges.StepEvidence{}, err
 	}
 	return providerEvidence("cloudflare-rollback-proved", "", ""), nil
+}
+
+func (executor Executor) InspectRepair(step systemchanges.Step, snapshot io.Reader, timeout time.Duration) (systemchanges.StepEffect, error) {
+	var rollback rollbackRecord
+	if json.NewDecoder(io.LimitReader(snapshot, 64<<10)).Decode(&rollback) != nil || rollback.Token == "" {
+		return "", errors.New("Cloudflare repair inspection pre-image unavailable")
+	}
+	change, ok := step.CloudflareChange()
+	if !ok {
+		return "", errors.New("Cloudflare repair inspection unavailable")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	token := ManagementToken{value: rollback.Token}
+	switch change.Action {
+	case systemchanges.CloudflareRoutesPut:
+		var current Configuration
+		err := retryTemporary(ctx, executor.clock, func() error {
+			var getErr error
+			current, getErr = executor.api.GetConfiguration(ctx, GetConfigurationRequest{AccountID: change.AccountID, TunnelID: change.TunnelID, Token: token})
+			return getErr
+		})
+		if err != nil || rollback.Configuration == nil {
+			return "", errors.New("Cloudflare route repair inspection failed")
+		}
+		if sameRoutes(current.Routes, rollback.Configuration.Routes) {
+			return systemchanges.StepEffectAbsent, nil
+		}
+		desired := make([]Route, len(change.Routes))
+		for index, route := range change.Routes {
+			desired[index] = Route{Hostname: route.Hostname, Service: route.Origin}
+		}
+		if sameRoutes(current.Routes, desired) {
+			return systemchanges.StepEffectPresent, nil
+		}
+	case systemchanges.CloudflareDNSRepair:
+		var current DNSObservation
+		err := retryTemporary(ctx, executor.clock, func() error {
+			var getErr error
+			current, getErr = executor.api.GetDNSRecord(ctx, GetDNSRecordRequest{ZoneID: change.ZoneID, ID: change.DNSRecordID, Token: token})
+			return getErr
+		})
+		if err != nil || rollback.DNS == nil {
+			return "", errors.New("Cloudflare DNS repair inspection failed")
+		}
+		if current == *rollback.DNS {
+			return systemchanges.StepEffectAbsent, nil
+		}
+		if current == (DNSObservation{ID: change.DNSRecordID, Name: change.Hostname, Type: change.RecordType, Content: change.Content, Proxied: change.RecordType == "CNAME"}) {
+			return systemchanges.StepEffectPresent, nil
+		}
+	}
+	return "", errors.New("Cloudflare repair effect is contradictory")
 }
 
 func providerEvidence(code, resourceType, resourceID string) systemchanges.StepEvidence {
@@ -363,6 +527,12 @@ func (executor Executor) WaitForWholeTunnel(ctx context.Context, request WholeTu
 }
 
 func (executor Executor) CheckWholeTunnel(evidence []systemchanges.StepEvidence, timeout time.Duration) (systemchanges.HealthStatus, error) {
+	if executor.request.ManagedRepair.TunnelID != "" {
+		expected, request := managedHealthRequest(executor.request)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		return systemHealth(executor.WaitForWholeTunnel(ctx, request, expected, SystemClock{})), nil
+	}
 	resource := func(step int, kind string) (string, bool) {
 		if step < 1 || step > len(evidence) || evidence[step-1].ResourceType != kind || evidence[step-1].ResourceID == "" {
 			return "", false
@@ -393,15 +563,19 @@ func (executor Executor) CheckWholeTunnel(evidence []systemchanges.StepEvidence,
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	health := executor.WaitForWholeTunnel(ctx, WholeTunnelRequest{AccountID: executor.request.Authority.AccountID, ZoneID: executor.request.Authority.ZoneID, TunnelID: tunnelID, DNSRecords: references, Token: executor.token}, expected, SystemClock{})
+	return systemHealth(health), nil
+}
+
+func systemHealth(health Health) systemchanges.HealthStatus {
 	switch health.Outcome {
 	case Healthy:
-		return systemchanges.Healthy, nil
+		return systemchanges.Healthy
 	case NeedsAttention:
-		return systemchanges.NeedsAttention, nil
+		return systemchanges.NeedsAttention
 	case Failed:
-		return systemchanges.Failed, nil
+		return systemchanges.Failed
 	default:
-		return systemchanges.Unknown, nil
+		return systemchanges.Unknown
 	}
 }
 

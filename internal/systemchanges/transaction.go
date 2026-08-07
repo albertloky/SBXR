@@ -875,7 +875,7 @@ func validCloudflareEvidence(step Step, number int, evidence StepEvidence, prior
 	switch change.Action {
 	case CloudflareTunnelCreate:
 		return evidence.ResourceType == string(CloudflareTunnelResource) && safeIdentity(evidence.ResourceID)
-	case CloudflareDNSCreate:
+	case CloudflareDNSCreate, CloudflareDNSRepair:
 		return evidence.ResourceType == string(CloudflareDNSRecordResource) && safeIdentity(evidence.ResourceID)
 	case CloudflareRoutesPut:
 		return evidence.ResourceType == string(CloudflareRouteResource) && safeIdentity(evidence.ResourceID)

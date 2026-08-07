@@ -212,6 +212,33 @@ func (api *httpAPI) PutConfiguration(ctx context.Context, request PutConfigurati
 	return Configuration{TunnelID: envelope.Result.TunnelID, Version: envelope.Result.Version, Routes: envelope.Result.Config.Ingress}, nil
 }
 
+func (api *httpAPI) GetConfiguration(ctx context.Context, request GetConfigurationRequest) (Configuration, error) {
+	if api == nil || api.client == nil || !immutableID.MatchString(request.AccountID) || !tunnelUUID.MatchString(request.TunnelID) || request.Token.value == "" {
+		return Configuration{}, APIError{Kind: APIMalformed}
+	}
+	var envelope struct {
+		Result struct {
+			TunnelID string `json:"tunnel_id"`
+			Version  int    `json:"version"`
+			Config   struct {
+				Ingress []Route `json:"ingress"`
+			} `json:"config"`
+		} `json:"result"`
+	}
+	if err := api.get(ctx, "/accounts/"+request.AccountID+"/cfd_tunnel/"+request.TunnelID+"/configurations", nil, request.Token, &envelope); err != nil {
+		return Configuration{}, err
+	}
+	if envelope.Result.TunnelID != request.TunnelID || !tunnelUUID.MatchString(envelope.Result.TunnelID) || envelope.Result.Version < 1 || len(envelope.Result.Config.Ingress) > 3 {
+		return Configuration{}, APIError{Kind: APIAmbiguous}
+	}
+	for _, route := range envelope.Result.Config.Ingress {
+		if !safeObservedRoute(route) {
+			return Configuration{}, APIError{Kind: APIMalformed}
+		}
+	}
+	return Configuration{TunnelID: envelope.Result.TunnelID, Version: envelope.Result.Version, Routes: envelope.Result.Config.Ingress}, nil
+}
+
 func (api *httpAPI) CreateDNSRecord(ctx context.Context, request CreateDNSRecordRequest) (OwnedResource, error) {
 	var envelope struct {
 		Result struct {
@@ -226,6 +253,47 @@ func (api *httpAPI) CreateDNSRecord(ctx context.Context, request CreateDNSRecord
 			return OwnedResource{}, err
 		}
 		return OwnedResource{}, APIError{Kind: APIMalformed}
+	}
+	return OwnedResource{ID: result.ID, Name: result.Name}, nil
+}
+
+func (api *httpAPI) GetDNSRecord(ctx context.Context, request GetDNSRecordRequest) (DNSObservation, error) {
+	if api == nil || api.client == nil || !immutableID.MatchString(request.ZoneID) || !immutableID.MatchString(request.ID) || request.Token.value == "" {
+		return DNSObservation{}, APIError{Kind: APIMalformed}
+	}
+	var envelope struct {
+		Result struct {
+			ID, Name, Type, Content string
+			Proxied                 bool
+		} `json:"result"`
+	}
+	if err := api.get(ctx, "/zones/"+request.ZoneID+"/dns_records/"+request.ID, nil, request.Token, &envelope); err != nil {
+		return DNSObservation{}, err
+	}
+	result := envelope.Result
+	if result.ID != request.ID || !immutableID.MatchString(result.ID) || !validZoneName(result.Name) || result.Type != "CNAME" && result.Type != "A" && result.Type != "AAAA" || !safeProviderValue(result.Content) {
+		return DNSObservation{}, APIError{Kind: APIAmbiguous}
+	}
+	return DNSObservation{ID: result.ID, Name: result.Name, Type: result.Type, Content: result.Content, Proxied: result.Proxied}, nil
+}
+
+func (api *httpAPI) PutDNSRecord(ctx context.Context, request PutDNSRecordRequest) (OwnedResource, error) {
+	if api == nil || api.client == nil || !immutableID.MatchString(request.ZoneID) || !immutableID.MatchString(request.ID) || !validZoneName(request.Name) || request.Type != "CNAME" && request.Type != "A" && request.Type != "AAAA" || !safeProviderValue(request.Content) || request.Token.value == "" {
+		return OwnedResource{}, APIError{Kind: APIMalformed}
+	}
+	var envelope struct {
+		Result struct {
+			ID, Name, Type, Content string
+			Proxied                 bool
+		} `json:"result"`
+	}
+	err := api.request(ctx, http.MethodPut, "/zones/"+request.ZoneID+"/dns_records/"+request.ID, nil, request.Token, map[string]any{"type": request.Type, "name": request.Name, "content": request.Content, "proxied": request.Proxied}, &envelope)
+	result := envelope.Result
+	if err != nil {
+		return OwnedResource{}, err
+	}
+	if result.ID != request.ID || result.Name != request.Name || result.Type != request.Type || result.Content != request.Content || result.Proxied != request.Proxied {
+		return OwnedResource{}, APIError{Kind: APIAmbiguous}
 	}
 	return OwnedResource{ID: result.ID, Name: result.Name}, nil
 }

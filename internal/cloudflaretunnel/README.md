@@ -51,6 +51,12 @@ Removal is also one reviewed Change Set. State derives a protected inventory fro
 
 SBXR never requests `Account API Tokens Write`, revokes the old provider token, or claims the replacement preflight proved provider writes. Provider revocation, if wanted, remains an Owner action after the Change Set is complete.
 
+## Managed repair
+
+Managed repair starts from one fresh reviewed Plan and may change only the Tunnel and DNS identifiers already committed in current State. SBXR proves that every hostname still names exactly that Tunnel and those DNS records before it captures any rollback material. A missing identifier, a same-named different identifier, a changed Plan observation, or an unreachable local XHTTP or WebSocket origin stops before provider mutation; repair never adopts, recreates, or deletes by name.
+
+The existing System Changes transaction captures the exact provider route and DNS pre-images, journals each typed repair step, restores those pre-images on failure, and restarts `cloudflared.service` only as part of rollback or when the committed service is disconnected. Temporary provider failures receive at most three attempts and two 30-second waits; deterministic failures stop immediately, and whole-Tunnel convergence remains bounded to five minutes. TUI closure or SSH loss leaves the same durable transaction for Recovery Required instead of creating another lock, journal, or repair store. Completion publishes a new State revision with the same Desired State intent and rechecks the committed Tunnel, DNS, both origins, and both external routes.
+
 ## Tunnel run-token rotation
 
 `Rotate Tunnel run token` is a separate reviewed action. System Changes first prepares the normal protected transaction, then records `Irreversible run-token rotation started`, removes the old service token and every rollback copy, and pauses. The Owner selects **Rotate token** in Cloudflare and resumes SBXR. SBXR reads the current token only through `GET /accounts/{account_id}/cfd_tunnel/{tunnel_id}/token`; unchanged means keep waiting, never guess success.

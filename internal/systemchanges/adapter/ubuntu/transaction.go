@@ -60,6 +60,7 @@ type CloudflareExecutor interface {
 	Execute(systemchanges.Step, string, time.Duration) (systemchanges.StepEvidence, error)
 	ActivateService(string, io.Reader, time.Duration) (systemchanges.StepEvidence, error)
 	Reverse(systemchanges.Step, systemchanges.StepEvidence, io.Reader, time.Duration) (systemchanges.StepEvidence, error)
+	InspectRepair(systemchanges.Step, io.Reader, time.Duration) (systemchanges.StepEffect, error)
 	ReverseService(string, io.Reader, time.Duration) (systemchanges.StepEvidence, error)
 	InspectService(string, io.Reader) (systemchanges.StepEffect, error)
 	CheckWholeTunnel([]systemchanges.StepEvidence, time.Duration) (systemchanges.HealthStatus, error)
@@ -735,6 +736,12 @@ func (a Adapter) InspectStep(lease systemchanges.ExecutionLease, recovery system
 		}
 		return a.cloudflare.InspectService(a.root, bytes.NewReader(content))
 	}
+	if cloudflareRepair(step) {
+		if a.cloudflare == nil {
+			return "", errors.New("Cloudflare repair executor unavailable")
+		}
+		return a.cloudflare.InspectRepair(step, bytes.NewReader(content), timeout)
+	}
 	return a.host.InspectStep(step, bytes.NewReader(content), timeout)
 }
 
@@ -745,6 +752,11 @@ func cloudflaredActivation(step systemchanges.Step) bool {
 func runTokenActivation(step systemchanges.Step) bool {
 	change, ok := step.CloudflareChange()
 	return ok && change.Action == systemchanges.CloudflareRunTokenActivate && step.Forward() == systemchanges.RotateCloudflaredRunToken
+}
+
+func cloudflareRepair(step systemchanges.Step) bool {
+	change, ok := step.CloudflareChange()
+	return ok && (change.Action == systemchanges.CloudflareRoutesPut && change.TunnelID != "" || change.Action == systemchanges.CloudflareDNSRepair)
 }
 
 func (a Adapter) RestoreRecoveryState(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction) (systemchanges.RollbackAgreement, error) {

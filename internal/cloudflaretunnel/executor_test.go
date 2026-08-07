@@ -1,7 +1,9 @@
 package cloudflaretunnel
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"net/netip"
 	"strings"
 	"testing"
@@ -9,6 +11,96 @@ import (
 
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
+
+func TestManagedRepairCapturesAndRestoresExactProviderPreImages(t *testing.T) {
+	module, request := managedRepairRequest(t)
+	planning := *module.api.(*planningAPI)
+	planning.wholeTunnel = healthyWholeTunnel(request)
+	planning.wholeTunnel.Routes = []Route{{Hostname: "old.example.com", Service: xhttpOrigin}, {Service: "http_status:404"}}
+	planning.wholeTunnel.DNSRecords[0].Content = "old.example.com"
+	api := &executorFixture{planningAPI: planning, priorConfiguration: Configuration{TunnelID: testTunnelID, Version: 4, Routes: append([]Route(nil), planning.wholeTunnel.Routes...)}, priorDNS: planning.wholeTunnel.DNSRecords[0]}
+	api.whole = planning.wholeTunnel
+	result := New(api, &planClock{}).Plan(t.Context(), request)
+	if result.Plan == nil || len(result.Plan.Steps()) != 2 {
+		t.Fatalf("repair Plan = %+v", result)
+	}
+	executor, err := result.Plan.Executor(api)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range result.Plan.Steps() {
+		var snapshot []byte
+		if err := executor.CaptureRollback(step, func(source io.Reader) error {
+			var readErr error
+			snapshot, readErr = io.ReadAll(source)
+			return readErr
+		}); err != nil {
+			t.Fatal(err)
+		}
+		evidence, err := executor.Execute(step, "", time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := executor.Reverse(step, evidence, bytes.NewReader(snapshot), time.Minute); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := api.configurationWrites[len(api.configurationWrites)-1]; !sameRoutes(got.Routes, api.priorConfiguration.Routes) {
+		t.Fatalf("restored routes = %#v", got.Routes)
+	}
+	if got := api.dnsWrites[len(api.dnsWrites)-1]; got != api.priorDNS {
+		t.Fatalf("restored DNS = %#v, want %#v", got, api.priorDNS)
+	}
+}
+
+func TestManagedRepairRefusesAStalePlanBeforeCapturingOrWriting(t *testing.T) {
+	module, request := managedRepairRequest(t)
+	planning := *module.api.(*planningAPI)
+	planning.wholeTunnel = healthyWholeTunnel(request)
+	planning.wholeTunnel.Routes = []Route{{Hostname: "old.example.com", Service: xhttpOrigin}, {Service: "http_status:404"}}
+	api := &executorFixture{planningAPI: planning, whole: planning.wholeTunnel}
+	module.api = api
+	plan := module.Plan(t.Context(), request).Plan
+	executor, err := plan.Executor(api)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api.mutations[request.XHTTPHostname] = MutationObservation{Digest: strings.Repeat("f", 64), Tunnels: []OwnedResource{{ID: testTunnelID, Name: request.TunnelName}}, DNSRecords: []OwnedResource{{ID: request.ManagedRepair.XHTTPDNSRecordID, Name: request.XHTTPHostname}}}
+	if err := executor.CaptureRollback(plan.Steps()[0], func(io.Reader) error { return nil }); err == nil {
+		t.Fatal("stale repair Plan reached rollback capture")
+	}
+}
+
+func TestManagedRepairBoundsProviderWriteRetries(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		err   error
+		calls int
+		wait  time.Duration
+	}{
+		{name: "deterministic", err: APIError{Kind: APIPermanent}, calls: 1},
+		{name: "temporary", err: APIError{Kind: APITemporary}, calls: 3, wait: time.Minute},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			module, request := managedRepairRequest(t)
+			planning := *module.api.(*planningAPI)
+			planning.wholeTunnel = healthyWholeTunnel(request)
+			planning.wholeTunnel.DNSRecords[0].Content = "old.example.com"
+			api := &executorFixture{planningAPI: planning, whole: planning.wholeTunnel, dnsPutErr: test.err}
+			module.api = api
+			plan := module.Plan(t.Context(), request).Plan
+			executor, err := plan.Executor(api)
+			if err != nil {
+				t.Fatal(err)
+			}
+			clock := &planClock{}
+			executor.clock = clock
+			if _, err := executor.Execute(plan.Steps()[0], "", time.Minute); err == nil || api.dnsPutCalls != test.calls || clock.elapsed != test.wait {
+				t.Fatalf("write error=%v calls=%d wait=%s", err, api.dnsPutCalls, clock.elapsed)
+			}
+		})
+	}
+}
 
 func TestExecutorRechecksPlanAndNeverDeletesWithoutJournaledID(t *testing.T) {
 	_, request := plannedModule(t)
@@ -113,25 +205,54 @@ func TestWholeTunnelRetriesOnlyTemporaryProviderFailures(t *testing.T) {
 
 type executorFixture struct {
 	planningAPI
-	creates            int
-	deletedTunnel      string
-	whole              WholeTunnelObservation
-	wholes             []WholeTunnelObservation
-	wholeCalls         int
-	wholeErr           error
-	certificateRequest CertificateDNSRequest
-	certificateFacts   CertificateDNSFacts
+	creates             int
+	deletedTunnel       string
+	whole               WholeTunnelObservation
+	wholes              []WholeTunnelObservation
+	wholeCalls          int
+	wholeErr            error
+	certificateRequest  CertificateDNSRequest
+	certificateFacts    CertificateDNSFacts
+	priorConfiguration  Configuration
+	configurationWrites []Configuration
+	priorDNS            DNSObservation
+	dnsWrites           []DNSObservation
+	dnsPutErr           error
+	dnsPutCalls         int
 }
 
 func (api *executorFixture) CreateTunnel(context.Context, CreateTunnelRequest) (CreatedTunnel, error) {
 	api.creates++
 	return NewCreatedTunnelResult(testTunnelID, "sbxr-main", "RUN-TOKEN-MARKER")
 }
-func (*executorFixture) PutConfiguration(_ context.Context, request PutConfigurationRequest) (Configuration, error) {
-	return Configuration{TunnelID: request.TunnelID, Version: 1, Routes: request.Routes}, nil
+func (api *executorFixture) PutConfiguration(_ context.Context, request PutConfigurationRequest) (Configuration, error) {
+	configured := Configuration{TunnelID: request.TunnelID, Version: len(api.configurationWrites) + 1, Routes: append([]Route(nil), request.Routes...)}
+	api.configurationWrites = append(api.configurationWrites, configured)
+	return configured, nil
+}
+func (api *executorFixture) GetConfiguration(_ context.Context, request GetConfigurationRequest) (Configuration, error) {
+	if api.priorConfiguration.TunnelID != "" {
+		return api.priorConfiguration, nil
+	}
+	return Configuration{TunnelID: request.TunnelID, Version: 1, Routes: []Route{{Hostname: "old.example.com", Service: xhttpOrigin}, {Service: "http_status:404"}}}, nil
 }
 func (*executorFixture) CreateDNSRecord(_ context.Context, request CreateDNSRecordRequest) (OwnedResource, error) {
 	return OwnedResource{ID: testDNSID, Name: request.Name}, nil
+}
+func (api *executorFixture) GetDNSRecord(_ context.Context, request GetDNSRecordRequest) (DNSObservation, error) {
+	if api.priorDNS.ID != "" {
+		return api.priorDNS, nil
+	}
+	return DNSObservation{ID: request.ID, Name: "xhttp.example.com", Type: "CNAME", Content: "old.example.com", Proxied: true}, nil
+}
+
+func (api *executorFixture) PutDNSRecord(_ context.Context, request PutDNSRecordRequest) (OwnedResource, error) {
+	api.dnsPutCalls++
+	if api.dnsPutErr != nil {
+		return OwnedResource{}, api.dnsPutErr
+	}
+	api.dnsWrites = append(api.dnsWrites, DNSObservation{ID: request.ID, Name: request.Name, Type: request.Type, Content: request.Content, Proxied: request.Proxied})
+	return OwnedResource{ID: request.ID, Name: request.Name}, nil
 }
 
 func (api *executorFixture) ObserveWholeTunnel(context.Context, WholeTunnelRequest) (WholeTunnelObservation, error) {

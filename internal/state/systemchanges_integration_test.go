@@ -706,6 +706,73 @@ func TestOwnerAssistedRunTokenRotationPausesThenRecoversForwardWithBothRoutes(t 
 	}
 }
 
+func TestManagedCloudflareRepairUsesOneReviewedTransactionAndPublishesTheUnchangedIntent(t *testing.T) {
+	starting := completeDesiredState()
+	starting.Cloudflare.AccountID = strings.Repeat("1", 32)
+	starting.Cloudflare.ZoneID = strings.Repeat("2", 32)
+	starting.Cloudflare.TunnelID = "f70ff985-a4ef-4643-bbbc-4a0ed4fc8415"
+	starting.Cloudflare.XHTTPDNSRecordID = strings.Repeat("3", 32)
+	starting.Cloudflare.WebSocketDNSRecordID = strings.Repeat("4", 32)
+	starting.Cloudflare.DirectIPv4RecordID = strings.Repeat("5", 32)
+	starting.Software.CloudflaredVersion = "2026.7.3"
+	storage := &mutableStateStorage{document: documentFor(t, starting)}
+	stateModule := New(storage)
+	loaded, err := stateModule.Load(intentManagedRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	template, _ := marshalProtectedJSON(starting)
+	digest := sha256.Sum256(template)
+	token, _ := cloudflaretunnel.NewManagementToken("cfat_REPAIR-MANAGEMENT-TOKEN-MARKER-000000")
+	provider := &deferredCloudflareAPI{repair: true, whole: cloudflaretunnel.WholeTunnelObservation{
+		TunnelID: starting.Cloudflare.TunnelID, Connected: false,
+		Routes: []cloudflaretunnel.Route{{Hostname: starting.Cloudflare.XHTTPHostname, Service: "https://wrong.example"}},
+		DNSRecords: []cloudflaretunnel.DNSObservation{
+			{ID: starting.Cloudflare.XHTTPDNSRecordID, Name: starting.Cloudflare.XHTTPHostname, Type: "CNAME", Content: "wrong.example", Proxied: true},
+			{ID: starting.Cloudflare.WebSocketDNSRecordID, Name: starting.Cloudflare.WebSocketHostname, Type: "CNAME", Content: starting.Cloudflare.TunnelID + ".cfargotunnel.com", Proxied: true},
+			{ID: starting.Cloudflare.DirectIPv4RecordID, Name: starting.Cloudflare.DirectHostname, Type: "A", Content: starting.NetworkPolicy.PublicIPv4},
+		}, XHTTPOriginReachable: true, WebSocketOriginReachable: true,
+	}}
+	request := cloudflaretunnel.PlanRequest{
+		Authority: cloudflaretunnel.ViewRequest{AccountID: starting.Cloudflare.AccountID, ZoneID: starting.Cloudflare.ZoneID, ZoneName: starting.Cloudflare.ZoneName, Token: token, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
+		ChangeSet: "cloudflare-managed-repair-integration", StartingRevision: 7, StartingStateSHA256: loaded.loaded.payloadChecksum, DesiredStateSHA256: fmt.Sprintf("%x", digest), TunnelName: starting.Cloudflare.TunnelName,
+		XHTTPHostname: starting.Cloudflare.XHTTPHostname, WebSocketHostname: starting.Cloudflare.WebSocketHostname, DirectHostname: starting.Cloudflare.DirectHostname, PublicIPv4: starting.NetworkPolicy.PublicIPv4, CloudflaredVersion: starting.Software.CloudflaredVersion,
+		ManagedRepair: cloudflaretunnel.RunTokenRotation{TunnelID: starting.Cloudflare.TunnelID, XHTTPDNSRecordID: starting.Cloudflare.XHTTPDNSRecordID, WebSocketDNSRecordID: starting.Cloudflare.WebSocketDNSRecordID, DirectIPv4RecordID: starting.Cloudflare.DirectIPv4RecordID},
+	}
+	planResult := cloudflaretunnel.New(provider, cloudflaretunnel.SystemClock{}).Plan(t.Context(), request)
+	if planResult.Plan == nil {
+		t.Fatalf("repair Plan = %+v", planResult.Health)
+	}
+	prepare := preparedRequest(t, loaded, starting, "cloudflare-managed-repair-integration")
+	prepare.ReviewedInputs, err = NewReviewedInputs(PlanIdentity(planResult.Plan.Identity()), planResult.Plan.SHA256(), prepare.ReviewedInputs.managed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := prepare
+	changed.Candidate.Cloudflare.TunnelID = "11111111-1111-4111-8111-111111111111"
+	if _, err := stateModule.PrepareCloudflareRepairCommit(changed, planResult.Plan); err == nil {
+		t.Fatal("State accepted a repair Plan for a changed Tunnel identifier")
+	}
+	prepared, err := stateModule.PrepareCloudflareRepairCommit(prepare, planResult.Plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor, err := planResult.Plan.Executor(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed := systemchanges.Observation{Status: systemchanges.Managed, LastChangeSet: "installed-state", StateRevision: 7, StateSHA256: loaded.loaded.payloadChecksum, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, VolatileSHA256: testSHA('2'), FilesystemBytes: 20 << 30, AvailableBytes: 5 << 30, WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}
+	adapter := &systemChangesAdapter{observation: observed, cloudflare: &executor}
+	result := planResult.Plan.Apply(systemchanges.New(adapter), prepared, systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: observed.StateSHA256}, observed.VolatileSHA256, tokenChangeDisk())
+	if result.Outcome != systemchanges.Completed {
+		t.Fatalf("repair Apply = %+v; events=%v", result, adapter.events)
+	}
+	loadedAfter, err := stateModule.Load(intentManagedRequestForRevision(8, "cloudflare-managed-repair-integration"))
+	if err != nil || loadedAfter.Snapshot == nil || loadedAfter.Snapshot.DesiredState.Cloudflare.TunnelID != starting.Cloudflare.TunnelID {
+		t.Fatalf("repaired State = (%+v, %v)", loadedAfter, err)
+	}
+}
+
 func TestManagementTokenChangePublishesOnceWithoutExposingEitherToken(t *testing.T) {
 	for _, action := range []cloudflaretunnel.ManagementTokenAction{cloudflaretunnel.ManagementTokenReplace, cloudflaretunnel.ManagementTokenRemove} {
 		t.Run(string(action), func(t *testing.T) {
@@ -845,12 +912,24 @@ func intentManagedRequestForRevision(revision uint64, changeSet ChangeSetIdentit
 	return LoadRequest{Baseline: ManagedEvidence, SupportedRelease: testRelease, Lineage: &LineageProof{Revision: revision, LastCompletedChangeSet: changeSet, ReleaseIdentity: testRelease}}
 }
 
-type deferredCloudflareAPI struct{ dns int }
+type deferredCloudflareAPI struct {
+	dns    int
+	repair bool
+	whole  cloudflaretunnel.WholeTunnelObservation
+}
 
 func (api *deferredCloudflareAPI) Observe(context.Context, cloudflaretunnel.ObservationRequest) (cloudflaretunnel.Observation, error) {
 	return cloudflaretunnel.Observation{Account: cloudflaretunnel.AccountObservation{ID: strings.Repeat("1", 32)}, Zone: cloudflaretunnel.ZoneObservation{ID: strings.Repeat("2", 32), AccountID: strings.Repeat("1", 32), Name: "example.com", Status: "active", AssignedNameServers: []string{"a.ns.cloudflare.com"}, ObservedNameServers: []string{"a.ns.cloudflare.com"}}, Token: cloudflaretunnel.TokenObservation{ID: strings.Repeat("6", 32), Status: "active"}, Policies: []cloudflaretunnel.TokenPolicy{{Effect: "allow", PermissionGroups: []string{"Account API Tokens Read", "Cloudflare Tunnel Edit"}, Resources: map[string]string{"com.cloudflare.api.account." + strings.Repeat("1", 32): "*"}}, {Effect: "allow", PermissionGroups: []string{"DNS Write"}, Resources: map[string]string{"com.cloudflare.api.account.zone." + strings.Repeat("2", 32): "*"}}}}, nil
 }
-func (api *deferredCloudflareAPI) ObserveMutation(context.Context, cloudflaretunnel.MutationRequest) (cloudflaretunnel.MutationObservation, error) {
+func (api *deferredCloudflareAPI) ObserveMutation(_ context.Context, request cloudflaretunnel.MutationRequest) (cloudflaretunnel.MutationObservation, error) {
+	if api.repair {
+		ids := map[string][]string{"xhttp.example.com": {strings.Repeat("3", 32)}, "ws.example.com": {strings.Repeat("4", 32)}, "direct.example.com": {strings.Repeat("5", 32)}}
+		dns := make([]cloudflaretunnel.OwnedResource, len(ids[request.Hostname]))
+		for index, id := range ids[request.Hostname] {
+			dns[index] = cloudflaretunnel.OwnedResource{ID: id, Name: request.Hostname}
+		}
+		return cloudflaretunnel.MutationObservation{Digest: testSHA('a'), Tunnels: []cloudflaretunnel.OwnedResource{{ID: "f70ff985-a4ef-4643-bbbc-4a0ed4fc8415", Name: request.Tunnel}}, DNSRecords: dns}, nil
+	}
 	return cloudflaretunnel.MutationObservation{Digest: testSHA('a')}, nil
 }
 func (api *deferredCloudflareAPI) CreateTunnel(context.Context, cloudflaretunnel.CreateTunnelRequest) (cloudflaretunnel.CreatedTunnel, error) {
@@ -859,11 +938,23 @@ func (api *deferredCloudflareAPI) CreateTunnel(context.Context, cloudflaretunnel
 func (api *deferredCloudflareAPI) PutConfiguration(_ context.Context, request cloudflaretunnel.PutConfigurationRequest) (cloudflaretunnel.Configuration, error) {
 	return cloudflaretunnel.Configuration{TunnelID: request.TunnelID, Version: 1, Routes: request.Routes}, nil
 }
+func (*deferredCloudflareAPI) GetConfiguration(_ context.Context, request cloudflaretunnel.GetConfigurationRequest) (cloudflaretunnel.Configuration, error) {
+	return cloudflaretunnel.Configuration{TunnelID: request.TunnelID, Version: 1}, nil
+}
 func (api *deferredCloudflareAPI) CreateDNSRecord(_ context.Context, request cloudflaretunnel.CreateDNSRecordRequest) (cloudflaretunnel.OwnedResource, error) {
 	api.dns++
 	return cloudflaretunnel.OwnedResource{ID: strings.Repeat(string(rune('2'+api.dns)), 32), Name: request.Name}, nil
 }
-func (*deferredCloudflareAPI) ObserveWholeTunnel(_ context.Context, request cloudflaretunnel.WholeTunnelRequest) (cloudflaretunnel.WholeTunnelObservation, error) {
+func (*deferredCloudflareAPI) GetDNSRecord(_ context.Context, request cloudflaretunnel.GetDNSRecordRequest) (cloudflaretunnel.DNSObservation, error) {
+	return cloudflaretunnel.DNSObservation{ID: request.ID, Name: "xhttp.example.com", Type: "CNAME", Content: "old.example.com", Proxied: true}, nil
+}
+func (*deferredCloudflareAPI) PutDNSRecord(_ context.Context, request cloudflaretunnel.PutDNSRecordRequest) (cloudflaretunnel.OwnedResource, error) {
+	return cloudflaretunnel.OwnedResource{ID: request.ID, Name: request.Name}, nil
+}
+func (api *deferredCloudflareAPI) ObserveWholeTunnel(_ context.Context, request cloudflaretunnel.WholeTunnelRequest) (cloudflaretunnel.WholeTunnelObservation, error) {
+	if api.whole.TunnelID != "" {
+		return api.whole, nil
+	}
 	dns := []cloudflaretunnel.DNSObservation{}
 	for index, record := range request.DNSRecords {
 		switch index {

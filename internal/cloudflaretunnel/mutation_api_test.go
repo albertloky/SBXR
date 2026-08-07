@@ -174,6 +174,41 @@ func TestHTTPMutationAPIConfiguresAndObservesBothIndependentRoutes(t *testing.T)
 	}
 }
 
+func TestHTTPMutationAPIRepairsOnlyExactCommittedProviderIDs(t *testing.T) {
+	managementToken, err := cloudflaretunnel.NewManagementToken(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dnsID := "33333333333333333333333333333333"
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		switch request.Method + " " + request.URL.Path {
+		case http.MethodGet + " /accounts/" + accountID + "/cfd_tunnel/" + mutationTunnelID + "/configurations":
+			fmt.Fprintf(response, `{"success":true,"result":{"tunnel_id":%q,"version":4,"config":{"ingress":[{"service":"http_status:404"}]}}}`, mutationTunnelID)
+		case http.MethodGet + " /zones/" + zoneID + "/dns_records/" + dnsID:
+			fmt.Fprintf(response, `{"success":true,"result":{"id":%q,"name":"xhttp.example.com","type":"CNAME","content":"old.example.com","proxied":true}}`, dnsID)
+		case http.MethodPut + " /zones/" + zoneID + "/dns_records/" + dnsID:
+			fmt.Fprintf(response, `{"success":true,"result":{"id":%q,"name":"xhttp.example.com","type":"CNAME","content":%q,"proxied":true}}`, dnsID, mutationTunnelID+".cfargotunnel.com")
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer server.Close()
+	api := cloudflaretunnel.NewFixtureMutationAPI(server.Client(), server.URL, staticResolver{}, &reachableOrigins{})
+	configuration, err := api.GetConfiguration(t.Context(), cloudflaretunnel.GetConfigurationRequest{AccountID: accountID, TunnelID: mutationTunnelID, Token: managementToken})
+	if err != nil || configuration.TunnelID != mutationTunnelID || len(configuration.Routes) != 1 {
+		t.Fatalf("GetConfiguration() = %+v, %v", configuration, err)
+	}
+	prior, err := api.GetDNSRecord(t.Context(), cloudflaretunnel.GetDNSRecordRequest{ZoneID: zoneID, ID: dnsID, Token: managementToken})
+	if err != nil || prior.ID != dnsID || prior.Content != "old.example.com" {
+		t.Fatalf("GetDNSRecord() = %+v, %v", prior, err)
+	}
+	repaired, err := api.PutDNSRecord(t.Context(), cloudflaretunnel.PutDNSRecordRequest{ZoneID: zoneID, ID: dnsID, Type: "CNAME", Name: "xhttp.example.com", Content: mutationTunnelID + ".cfargotunnel.com", Proxied: true, Token: managementToken})
+	if err != nil || repaired.ID != dnsID || repaired.Name != "xhttp.example.com" {
+		t.Fatalf("PutDNSRecord() = %+v, %v", repaired, err)
+	}
+}
+
 func TestHTTPMutationAPIRefusesContradictoryWholeTunnelIdentifiers(t *testing.T) {
 	managementToken, err := cloudflaretunnel.NewManagementToken(token)
 	if err != nil {

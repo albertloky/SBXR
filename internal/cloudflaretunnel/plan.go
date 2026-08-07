@@ -40,7 +40,10 @@ type MutationAPI interface {
 	MutationPlanner
 	CreateTunnel(context.Context, CreateTunnelRequest) (CreatedTunnel, error)
 	PutConfiguration(context.Context, PutConfigurationRequest) (Configuration, error)
+	GetConfiguration(context.Context, GetConfigurationRequest) (Configuration, error)
 	CreateDNSRecord(context.Context, CreateDNSRecordRequest) (OwnedResource, error)
+	GetDNSRecord(context.Context, GetDNSRecordRequest) (DNSObservation, error)
+	PutDNSRecord(context.Context, PutDNSRecordRequest) (OwnedResource, error)
 	ObserveWholeTunnel(context.Context, WholeTunnelRequest) (WholeTunnelObservation, error)
 	ObserveCertificateDNS(context.Context, CertificateDNSRequest) (CertificateDNSFacts, error)
 	DeleteDNSRecord(context.Context, DeleteDNSRecordRequest) error
@@ -113,6 +116,7 @@ type PlanRequest struct {
 	CloudflaredVersion  string
 	ManagementToken     ManagementTokenChange
 	RunTokenRotation    RunTokenRotation
+	ManagedRepair       RunTokenRotation
 }
 
 type ManagementTokenAction string
@@ -196,6 +200,9 @@ func (plan *Plan) String() string {
 		if plan.request.RunTokenRotation.TunnelID != "" {
 			return fmt.Sprintf("Cloudflare Plan %s: Owner selects Rotate token for Tunnel %s; SBXR retrieves the changed token, restarts cloudflared, proves both routes, and uses forward-only recovery", plan.identity, plan.request.RunTokenRotation.TunnelID)
 		}
+		if plan.request.ManagedRepair.TunnelID != "" {
+			return fmt.Sprintf("Cloudflare Plan %s: repair only committed Tunnel %s, routes, DNS, and cloudflared from exact rollback pre-images", plan.identity, plan.request.ManagedRepair.TunnelID)
+		}
 		return fmt.Sprintf("Cloudflare Plan %s: one Tunnel %s; XHTTP %s to %s; WebSocket %s to %s; DNS-only Direct TLS %s; cloudflared.service --token-file %s; HTTP 404 fallback", plan.identity, plan.request.TunnelName, plan.request.XHTTPHostname, xhttpOrigin, plan.request.WebSocketHostname, webSocketOrigin, plan.request.DirectHostname, cloudflaredTokenPath)
 	}
 }
@@ -220,6 +227,9 @@ func (i Interface) Plan(ctx context.Context, request PlanRequest) PlanResult {
 	}
 	if request.RunTokenRotation.TunnelID != "" {
 		return i.planRunTokenRotation(ctx, request)
+	}
+	if request.ManagedRepair.TunnelID != "" {
+		return i.planManagedRepair(ctx, request)
 	}
 	health := Health{Module: "Cloudflare Tunnel", Outcome: Failed, Code: "CLOUDFLARE-PLAN-REFUSED", NextActions: []string{"Check again", "Back"}}
 	planner, ok := i.api.(MutationPlanner)
@@ -470,7 +480,7 @@ func (plan *Plan) Apply(module systemchanges.Interface, prepared systemchanges.P
 	}
 	mutation := systemchanges.InstallationMutation
 	targetSHA256 := plan.request.DesiredStateSHA256
-	if plan.request.ManagementToken.Action != "" || plan.request.RunTokenRotation.TunnelID != "" {
+	if plan.request.ManagementToken.Action != "" || plan.request.RunTokenRotation.TunnelID != "" || plan.request.ManagedRepair.TunnelID != "" {
 		changeSet, revision, startingSHA256, candidateSHA256, planIdentity, planSHA256, valid := prepared.SystemChangesPreparedState()
 		if !valid || starting.Status != systemchanges.Managed || starting.SHA256 != plan.request.StartingStateSHA256 || changeSet != plan.request.ChangeSet || revision != starting.Revision+1 || startingSHA256 != starting.SHA256 || planIdentity != plan.identity || planSHA256 != plan.sha256 || !sha256Text.MatchString(candidateSHA256) {
 			return module.Apply(nil)
@@ -478,6 +488,8 @@ func (plan *Plan) Apply(module systemchanges.Interface, prepared systemchanges.P
 		mutation = systemchanges.SettingChangeMutation
 		if plan.request.RunTokenRotation.TunnelID != "" {
 			mutation = systemchanges.RotationMutation
+		} else if plan.request.ManagedRepair.TunnelID != "" {
+			mutation = systemchanges.RepairMutation
 		}
 		targetSHA256 = candidateSHA256
 	}

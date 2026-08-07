@@ -97,6 +97,75 @@ func TestPlanNamesOwnerAssistedRunTokenRotationAndBindsOwnedIdentifiers(t *testi
 	}
 }
 
+func TestManagedRepairPlansOnlyCommittedOwnedDriftAndBlocksConflicts(t *testing.T) {
+	module, request := managedRepairRequest(t)
+	api := module.api.(*planningAPI)
+	api.wholeTunnel = healthyWholeTunnel(request)
+	api.wholeTunnel.Connected = false
+	api.wholeTunnel.Routes = []Route{{Hostname: request.XHTTPHostname, Service: "https://wrong.example"}}
+	api.wholeTunnel.DNSRecords[0].Content = "wrong.example"
+	result := module.Plan(t.Context(), request)
+	if result.Plan == nil || result.Health.Code != "CLOUDFLARE-REPAIR-READY" {
+		t.Fatalf("repair Plan = %+v", result)
+	}
+	steps := result.Plan.Steps()
+	if len(steps) != 3 {
+		t.Fatalf("repair steps = %#v", steps)
+	}
+	routes, _ := steps[0].CloudflareChange()
+	dns, _ := steps[1].CloudflareChange()
+	if routes.Action != systemchanges.CloudflareRoutesPut || routes.TunnelID != testTunnelID || dns.Action != systemchanges.CloudflareDNSRepair || dns.DNSRecordID != testDNSID || steps[2].Forward() != systemchanges.ActivatePreparedConfiguration {
+		t.Fatalf("typed repair steps = %#v", steps)
+	}
+	if _, binding, templateSHA, valid := result.Plan.StateCloudflareRepair(); len(binding) == 0 || templateSHA != request.DesiredStateSHA256 || !valid {
+		t.Fatal("repair omitted its State ownership binding")
+	}
+	api.mutations[request.XHTTPHostname] = MutationObservation{Digest: strings.Repeat("d", 64), Tunnels: []OwnedResource{{ID: testTunnelID, Name: request.TunnelName}}, DNSRecords: []OwnedResource{{ID: strings.Repeat("9", 32), Name: request.XHTTPHostname}}}
+	blocked := module.Plan(t.Context(), request)
+	if blocked.Plan != nil || blocked.Health.Code != "CLOUDFLARE-REPAIR-OWNERSHIP" || blocked.Health.Problem == "" || blocked.Health.Found == "" || blocked.Health.Required == "" || blocked.Health.WhyStopped == "" || fmt.Sprint(blocked.Health.NextActions) != "[Check again Back]" {
+		t.Fatalf("unowned conflict = %+v", blocked)
+	}
+}
+
+func TestManagedRepairStopsDeterministicProviderFailureAndBoundsTemporaryRetries(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		err   error
+		calls int
+		wait  time.Duration
+	}{
+		{name: "deterministic", err: APIError{Kind: APIPermanent}, calls: 1},
+		{name: "temporary", err: APIError{Kind: APITemporary}, calls: 3, wait: time.Minute},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			module, request := managedRepairRequest(t)
+			api := module.api.(*planningAPI)
+			api.mutationErr = test.err
+			result := module.Plan(t.Context(), request)
+			if result.Plan != nil || result.Health.Problem == "" || result.Health.Evidence == "" || api.mutationCalls != test.calls || module.clock.(*planClock).elapsed != test.wait {
+				t.Fatalf("provider failure = %+v calls=%d wait=%s", result, api.mutationCalls, module.clock.(*planClock).elapsed)
+			}
+		})
+	}
+}
+
+func managedRepairRequest(t *testing.T) (Interface, PlanRequest) {
+	t.Helper()
+	module, request := plannedModule(t)
+	request.StartingRevision = 7
+	request.StartingStateSHA256 = strings.Repeat("c", 64)
+	request.ChangeSet = "cloudflare-managed-repair"
+	request.ManagedRepair = RunTokenRotation{TunnelID: testTunnelID, XHTTPDNSRecordID: testDNSID, WebSocketDNSRecordID: strings.Repeat("4", 32), DirectIPv4RecordID: strings.Repeat("5", 32), DirectIPv6RecordID: strings.Repeat("6", 32)}
+	api := module.api.(*planningAPI)
+	tunnel := []OwnedResource{{ID: testTunnelID, Name: request.TunnelName}}
+	api.mutations = map[string]MutationObservation{
+		request.XHTTPHostname:     {Digest: strings.Repeat("a", 64), Tunnels: tunnel, DNSRecords: []OwnedResource{{ID: testDNSID, Name: request.XHTTPHostname}}},
+		request.WebSocketHostname: {Digest: strings.Repeat("b", 64), Tunnels: tunnel, DNSRecords: []OwnedResource{{ID: strings.Repeat("4", 32), Name: request.WebSocketHostname}}},
+		request.DirectHostname:    {Digest: strings.Repeat("c", 64), Tunnels: tunnel, DNSRecords: []OwnedResource{{ID: strings.Repeat("5", 32), Name: request.DirectHostname}, {ID: strings.Repeat("6", 32), Name: request.DirectHostname}}},
+	}
+	return module, request
+}
+
 func TestPlanRefusesUnownedConflictAndUnqualifiedCloudflared(t *testing.T) {
 	module, request := plannedModule(t)
 	api := module.api.(*planningAPI)
@@ -294,6 +363,9 @@ type planningAPI struct {
 	suffixFree       bool
 	conflictHostname string
 	wholeTunnel      WholeTunnelObservation
+	mutations        map[string]MutationObservation
+	mutationErr      error
+	mutationCalls    int
 }
 
 func (api *planningAPI) ObserveWholeTunnel(context.Context, WholeTunnelRequest) (WholeTunnelObservation, error) {
@@ -302,6 +374,9 @@ func (api *planningAPI) ObserveWholeTunnel(context.Context, WholeTunnelRequest) 
 
 func healthyWholeTunnel(request PlanRequest) WholeTunnelObservation {
 	rotation := request.RunTokenRotation
+	if rotation.TunnelID == "" {
+		rotation = request.ManagedRepair
+	}
 	return WholeTunnelObservation{
 		TunnelID: rotation.TunnelID, Connected: true,
 		Routes: []Route{{Hostname: request.XHTTPHostname, Service: xhttpOrigin}, {Hostname: request.WebSocketHostname, Service: webSocketOrigin}, {Service: "http_status:404"}},
@@ -320,6 +395,13 @@ func (api *planningAPI) Observe(context.Context, ObservationRequest) (Observatio
 }
 
 func (api *planningAPI) ObserveMutation(_ context.Context, request MutationRequest) (MutationObservation, error) {
+	api.mutationCalls++
+	if api.mutationErr != nil {
+		return MutationObservation{}, api.mutationErr
+	}
+	if observed, ok := api.mutations[request.Hostname]; ok {
+		return observed, nil
+	}
 	if api.suffixFree && strings.Contains(strings.Split(request.Hostname, ".")[0], "-") {
 		return MutationObservation{Digest: strings.Repeat("c", 64)}, nil
 	}

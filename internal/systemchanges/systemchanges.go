@@ -363,6 +363,8 @@ const (
 	DeleteCreatedCloudflareResource OperationKind = "Delete created Cloudflare resource"
 	ConfigureCloudflareTunnel       OperationKind = "Configure Cloudflare Tunnel"
 	RestoreCloudflareTunnel         OperationKind = "Restore Cloudflare Tunnel"
+	ConfigureCloudflareDNS          OperationKind = "Configure owned Cloudflare DNS"
+	RestoreCloudflareDNS            OperationKind = "Restore owned Cloudflare DNS"
 	ActivateCloudflaredService      OperationKind = "Activate cloudflared service"
 	RotateCloudflaredRunToken       OperationKind = "Rotate cloudflared run token"
 	RestoreCloudflaredService       OperationKind = "Restore cloudflared service"
@@ -374,6 +376,7 @@ const (
 	CloudflareTunnelCreate     CloudflareAction = "tunnel-create"
 	CloudflareRoutesPut        CloudflareAction = "routes-put"
 	CloudflareDNSCreate        CloudflareAction = "dns-create"
+	CloudflareDNSRepair        CloudflareAction = "dns-repair"
 	CloudflaredActivate        CloudflareAction = "service-activate"
 	CloudflareRunTokenActivate CloudflareAction = "run-token-activate"
 )
@@ -393,6 +396,7 @@ type CloudflareChange struct {
 	TunnelIDFromStep     int               `json:"tunnel_id_from_step,omitempty"`
 	TunnelName           string            `json:"tunnel_name,omitempty"`
 	Hostname             string            `json:"hostname,omitempty"`
+	DNSRecordID          string            `json:"dns_record_id,omitempty"`
 	RecordType           string            `json:"record_type,omitempty"`
 	Content              string            `json:"content,omitempty"`
 	Routes               []CloudflareRoute `json:"routes,omitempty"`
@@ -463,6 +467,8 @@ func NewCloudflareStep(change CloudflareChange) (Step, error) {
 	switch change.Action {
 	case CloudflareRoutesPut:
 		forward, rollback = ConfigureCloudflareTunnel, RestoreCloudflareTunnel
+	case CloudflareDNSRepair:
+		forward, rollback = ConfigureCloudflareDNS, RestoreCloudflareDNS
 	case CloudflaredActivate:
 		forward, rollback = ActivateCloudflaredService, RestoreCloudflaredService
 	case CloudflareRunTokenActivate:
@@ -887,7 +893,7 @@ func (i Interface) apply(changeSet *ChangeSet, cancellation *Cancellation) Apply
 	if !statusMatches || observed.StateRevision != spec.StartingState.Revision || observed.StateSHA256 != spec.StartingState.SHA256 || observed.VolatileSHA256 != spec.Plan.VolatileSHA256 {
 		return finish(lock, refused("SYSTEM-CHANGES-STALE", "The reviewed State lineage or volatile binding changed", fmt.Sprintf("status=%s revision=%d state_match=%t binding_match=%t", observed.Status, observed.StateRevision, observed.StateSHA256 == spec.StartingState.SHA256, observed.VolatileSHA256 == spec.Plan.VolatileSHA256), "the exact reviewed lineage and every volatile binding", "stale approval cannot authorize mutation", "Reload observations and create a fresh Plan.", true))
 	}
-	if spec.TargetStateSHA256 == spec.StartingState.SHA256 && spec.Mutation != RotationMutation {
+	if spec.TargetStateSHA256 == spec.StartingState.SHA256 && spec.Mutation != RotationMutation && spec.Mutation != RepairMutation {
 		return finish(lock, refused("SYSTEM-CHANGES-NO-OP", "The Change Set would not change Desired State", "the starting and target checksums are identical", "one actual reviewed change", "a no-op must not create transaction material", "Return without applying and plan only when intent changes.", true))
 	}
 	reserved, _ := spec.Disk.total()
@@ -979,7 +985,7 @@ func validModule(module Module) bool {
 
 func validOperation(operation OperationKind) bool {
 	switch operation {
-	case ActivatePreparedConfiguration, RestorePriorConfiguration, ApplyApprovedNetworkPolicy, OpenApprovedHTTP01, CloseRecordedHTTP01, RestorePriorNetworkPolicy, RemoveOwnedPublicExposure, RestoreOwnedPublicExposure, DeleteOwnedCloudflareResource, RestoreOwnedCloudflareResource, CreateCloudflareResource, DeleteCreatedCloudflareResource, ConfigureCloudflareTunnel, RestoreCloudflareTunnel, ActivateCloudflaredService, RotateCloudflaredRunToken, RestoreCloudflaredService:
+	case ActivatePreparedConfiguration, RestorePriorConfiguration, ApplyApprovedNetworkPolicy, OpenApprovedHTTP01, CloseRecordedHTTP01, RestorePriorNetworkPolicy, RemoveOwnedPublicExposure, RestoreOwnedPublicExposure, DeleteOwnedCloudflareResource, RestoreOwnedCloudflareResource, CreateCloudflareResource, DeleteCreatedCloudflareResource, ConfigureCloudflareTunnel, RestoreCloudflareTunnel, ConfigureCloudflareDNS, RestoreCloudflareDNS, ActivateCloudflaredService, RotateCloudflaredRunToken, RestoreCloudflaredService:
 		return true
 	}
 	return false
@@ -1003,7 +1009,7 @@ func validStep(step Step) bool {
 }
 
 func cloudflareOperation(operation OperationKind) bool {
-	return operation == CreateCloudflareResource || operation == DeleteCreatedCloudflareResource || operation == ConfigureCloudflareTunnel || operation == RestoreCloudflareTunnel || operation == ActivateCloudflaredService || operation == RotateCloudflaredRunToken || operation == RestoreCloudflaredService
+	return operation == CreateCloudflareResource || operation == DeleteCreatedCloudflareResource || operation == ConfigureCloudflareTunnel || operation == RestoreCloudflareTunnel || operation == ConfigureCloudflareDNS || operation == RestoreCloudflareDNS || operation == ActivateCloudflaredService || operation == RotateCloudflaredRunToken || operation == RestoreCloudflaredService
 }
 
 func validCloudflareContract(step Step) bool {
@@ -1031,6 +1037,9 @@ func validCloudflareContract(step Step) bool {
 	case CloudflareDNSCreate:
 		validType := change.RecordType == "CNAME" && validTunnel || (change.RecordType == "A" || change.RecordType == "AAAA") && change.Content != ""
 		return step.forward == CreateCloudflareResource && step.rollback == DeleteCreatedCloudflareResource && safeIdentity(change.ZoneID) && change.Hostname != "" && validType && len(change.Routes) == 0
+	case CloudflareDNSRepair:
+		validType := change.RecordType == "CNAME" && change.Content != "" || (change.RecordType == "A" || change.RecordType == "AAAA") && change.Content != ""
+		return step.forward == ConfigureCloudflareDNS && step.rollback == RestoreCloudflareDNS && safeIdentity(change.ZoneID) && safeIdentity(change.DNSRecordID) && change.Hostname != "" && validType && len(change.Routes) == 0
 	case CloudflaredActivate:
 		return step.forward == ActivateCloudflaredService && step.rollback == RestoreCloudflaredService && validTunnel && change.ZoneID == "" && change.Hostname == "" && len(change.Routes) == 0
 	case CloudflareRunTokenActivate:

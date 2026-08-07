@@ -361,6 +361,10 @@ type RunTokenRotationAuthority interface {
 	StateRunTokenRotation() (source any, bindingJSON []byte, templateSHA256 string, valid bool)
 }
 
+type CloudflareRepairAuthority interface {
+	StateCloudflareRepair() (source any, bindingJSON []byte, templateSHA256 string, valid bool)
+}
+
 type deferredCloudflare struct {
 	candidate  DesiredState
 	validators SemanticValidators
@@ -552,6 +556,33 @@ func (i Interface) PrepareRunTokenRotationCommit(request PrepareRequest, authori
 		commit.candidateSHA256 = templateSHA256
 	}
 	return commit, err
+}
+
+// PrepareCloudflareRepairCommit admits an unchanged Desired State revision only
+// when Cloudflare bound every repair target to the currently loaded ownership.
+func (i Interface) PrepareCloudflareRepairCommit(request PrepareRequest, authority CloudflareRepairAuthority) (*PreparedCommit, error) {
+	typeOf := reflect.TypeOf(authority)
+	if typeOf == nil || typeOf.Kind() != reflect.Pointer || typeOf.Elem().PkgPath() != "github.com/albertloky/SBXR/internal/cloudflaretunnel" || typeOf.Elem().Name() != "Plan" {
+		return nil, finding("STATE-CLOUDFLARE-REPAIR-PLAN", "Cloudflare managed repair", "the authority did not come from Cloudflare Tunnel", "one exact reviewed repair Plan", "caller-made ownership cannot authorize repair", "rebuild the repair Plan")
+	}
+	_, bindingJSON, templateSHA256, valid := authority.StateCloudflareRepair()
+	var planned struct {
+		AccountID, ZoneID, ZoneName, TunnelName, XHTTPHostname, WebSocketHostname, DirectHostname string
+		PublicIPv4, PublicIPv6                                                                    string
+		Owned                                                                                     struct {
+			TunnelID, XHTTPDNSRecordID, WebSocketDNSRecordID, DirectIPv4RecordID, DirectIPv6RecordID string
+		}
+	}
+	bindingErr := json.Unmarshal(bindingJSON, &planned)
+	template, templateErr := marshalProtectedJSON(request.Candidate)
+	templateDigest := sha256.Sum256(template)
+	cloudflare := request.Candidate.Cloudflare
+	fixed := planned.AccountID == cloudflare.AccountID && planned.ZoneID == cloudflare.ZoneID && planned.ZoneName == cloudflare.ZoneName && planned.TunnelName == cloudflare.TunnelName && planned.XHTTPHostname == cloudflare.XHTTPHostname && planned.WebSocketHostname == cloudflare.WebSocketHostname && planned.DirectHostname == cloudflare.DirectHostname && planned.PublicIPv4 == request.Candidate.NetworkPolicy.PublicIPv4 && planned.PublicIPv6 == request.Candidate.NetworkPolicy.PublicIPv6
+	owned := planned.Owned.TunnelID == cloudflare.TunnelID && planned.Owned.XHTTPDNSRecordID == cloudflare.XHTTPDNSRecordID && planned.Owned.WebSocketDNSRecordID == cloudflare.WebSocketDNSRecordID && planned.Owned.DirectIPv4RecordID == cloudflare.DirectIPv4RecordID && planned.Owned.DirectIPv6RecordID == cloudflare.DirectIPv6RecordID
+	if !valid || bindingErr != nil || !fixed || !owned || templateErr != nil || hex.EncodeToString(templateDigest[:]) != templateSHA256 {
+		return nil, finding("STATE-CLOUDFLARE-REPAIR-PLAN", "Cloudflare managed repair", "the repair targets differ from current Desired State", "the exact loaded immutable ownership and unchanged candidate", "State never adopts provider identity", "reload State and rebuild the repair Plan")
+	}
+	return i.prepareCommit(request, nil, nil)
 }
 
 func (i Interface) prepareCommit(request PrepareRequest, deferred *deferredCloudflare, tokenChange *managementTokenChange) (*PreparedCommit, error) {
