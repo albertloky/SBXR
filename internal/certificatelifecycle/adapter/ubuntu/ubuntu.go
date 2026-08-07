@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
 	"net/mail"
 	"net/netip"
 	"os"
@@ -23,10 +24,13 @@ var certbotVersion = regexp.MustCompile(`^certbot ([0-9]+\.[0-9]+(?:\.[0-9]+)?)$
 var directHostname = regexp.MustCompile(`(?i)^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9]?))*$`)
 
 type Adapter struct {
-	lookPath func(string) (string, error)
-	readLink func(string) (string, error)
-	readFile func(string) ([]byte, error)
-	command  func(context.Context, string, ...string) ([]byte, error)
+	lookPath           func(string) (string, error)
+	readLink           func(string) (string, error)
+	readFile           func(string) ([]byte, error)
+	command            func(context.Context, string, ...string) ([]byte, error)
+	root, ariDirectory string
+	uid                int
+	httpClient         *http.Client
 }
 
 func New() Adapter { return Adapter{} }
@@ -67,6 +71,18 @@ func (adapter Adapter) Observe(ctx context.Context) (certificatelifecycle.Observ
 	} else if adapter.isVirtualEnvironment(path) {
 		distribution = "pip-venv"
 	}
+	ip, _, _, err := adapter.observeServingCertificate(certificatelifecycle.IPLineage)
+	if err != nil {
+		return certificatelifecycle.Observation{}, errors.New("active IP certificate check failed")
+	}
+	domain, domainCertificate, foundDomain, err := adapter.observeServingCertificate(certificatelifecycle.DomainLineage)
+	if err != nil {
+		return certificatelifecycle.Observation{}, errors.New("active domain certificate check failed")
+	}
+	domain.RenewalInformation = certificatelifecycle.RenewalInformation{Status: certificatelifecycle.RenewalInformationUnavailable}
+	if foundDomain {
+		domain.RenewalInformation = adapter.observeDomainRenewalInformation(ctx, domainCertificate)
+	}
 	scheduler, err := adapter.observeScheduler(ctx)
 	if err != nil {
 		return certificatelifecycle.Observation{}, errors.New("renewal scheduler check failed")
@@ -77,7 +93,7 @@ func (adapter Adapter) Observe(ctx context.Context) (certificatelifecycle.Observ
 		RequiredProfile:       flags["--required-profile"],
 		IPAddress:             flags["--ip-address"],
 		Staging:               flags["--staging"] && flags["--config-dir"] && flags["--work-dir"] && flags["--logs-dir"],
-	}, Scheduler: scheduler}, nil
+	}, IP: ip, Domain: domain, Scheduler: scheduler}, nil
 }
 
 func (adapter Adapter) observeScheduler(ctx context.Context) (certificatelifecycle.SchedulerObservation, error) {

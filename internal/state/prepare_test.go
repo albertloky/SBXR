@@ -415,6 +415,36 @@ func TestPrepareIPCertificateRenewalCommitAllowsOnlyStandingScope(t *testing.T) 
 	}
 }
 
+func TestPrepareDomainCertificateRenewalCommitAllowsOnlyStandingScope(t *testing.T) {
+	candidate := completeDesiredState()
+	candidate.Certificates.DomainCertificateID = "domain-certificate-renewed"
+	candidate.Certificates.DomainServingPointer = "domain-serving-renewed"
+	candidate.ConnectionProfiles.Hysteria2.CertificateID = candidate.Certificates.DomainCertificateID
+	candidate.ConnectionProfiles.TUIC.CertificateID = candidate.Certificates.DomainCertificateID
+	candidate.ConnectionProfiles.AnyTLS.CertificateID = candidate.Certificates.DomainCertificateID
+	stateModule, request, _ := managedPrepareRequest(t, candidate)
+	prepared, err := stateModule.PrepareDomainCertificateRenewalCommit(request)
+	if err != nil || prepared == nil || !prepared.SystemChangesDomainCertificateRenewal() || prepared.SystemChangesIPCertificateRenewal() {
+		t.Fatalf("narrow domain renewal preparation = (%+v, %v)", prepared, err)
+	}
+
+	for _, change := range []func(*DesiredState){
+		func(candidate *DesiredState) { candidate.NetworkPolicy.SSHPort++ },
+		func(candidate *DesiredState) { candidate.Certificates.IPCertificateID = "ip-certificate-renewed" },
+		func(candidate *DesiredState) { candidate.Certificates.RenewalPolicy = false },
+		func(candidate *DesiredState) { candidate.ConnectionProfiles.AnyTLS.CertificateID = "other-certificate" },
+	} {
+		changed := candidate
+		change(&changed)
+		stateModule, request, _ := managedPrepareRequest(t, changed)
+		prepared, err := stateModule.PrepareDomainCertificateRenewalCommit(request)
+		var finding *Finding
+		if prepared != nil || !errors.As(err, &finding) || finding.Code != "STATE-CERTIFICATE-RENEWAL-SCOPE" {
+			t.Fatalf("domain policy escape = (%+v, %v)", prepared, err)
+		}
+	}
+}
+
 func TestPrepareCommitRequiresOwningSemanticValidationForEverySection(t *testing.T) {
 	valid := completeDesiredState()
 	tests := []struct {

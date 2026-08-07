@@ -38,6 +38,9 @@ func (*preparedCertificateState) SystemChangesConsume(any, string, string) (any,
 func (state *preparedCertificateState) SystemChangesIPCertificateRenewal() bool {
 	return state.renewalLineage == string(certificatelifecycle.IPLineage) && state.renewalValid
 }
+func (state *preparedCertificateState) SystemChangesDomainCertificateRenewal() bool {
+	return state.renewalLineage == string(certificatelifecycle.DomainLineage) && state.renewalValid
+}
 
 type fixedClock struct{ now time.Time }
 
@@ -65,7 +68,7 @@ func TestViewAndPlanProveBothLineagesBeforeOrdering(t *testing.T) {
 		},
 		Domain: certificatelifecycle.CertificateObservation{
 			Identity: "direct.example.com", Profile: "tlsserver", NotBefore: now.Add(-24 * time.Hour),
-			NotAfter: now.Add(44 * 24 * time.Hour), ActiveServingID: "domain-serving-4",
+			NotAfter: now.Add(44 * 24 * time.Hour), ActiveServingID: "domain-serving-4", RenewalInformation: certificatelifecycle.RenewalInformation{Status: certificatelifecycle.RenewalInformationUnavailable},
 		},
 		Scheduler: certificatelifecycle.SchedulerObservation{Enabled: true, Persistent: true, Serial: true, ExactUnitPair: true, Randomized: true, NoCompetingScheduler: true, RunsPerDay: 2},
 	}
@@ -166,6 +169,49 @@ func TestViewAndPlanProveBothLineagesBeforeOrdering(t *testing.T) {
 		if domainChecks[index].Code != code || domainChecks[index].Classification != systemchanges.Required {
 			t.Fatalf("domain check %d = %#v", index, domainChecks[index])
 		}
+	}
+}
+
+func TestViewDomainDueFollowsARIAndExpiryIsExplicit(t *testing.T) {
+	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	observation := certificatelifecycle.Observation{
+		Issuer:    certificatelifecycle.IssuerObservation{Name: "Let's Encrypt", CertbotVersion: "5.4.0", Distribution: "snap", SupportedDistribution: true, RequiredProfile: true, IPAddress: true, Staging: true},
+		IP:        certificatelifecycle.CertificateObservation{Identity: "192.0.2.10", Profile: "shortlived", NotBefore: now.Add(-60 * time.Hour), NotAfter: now.Add(100 * time.Hour), ActiveServingID: "ip-serving-7"},
+		Domain:    certificatelifecycle.CertificateObservation{Identity: "direct.example.com", Profile: "tlsserver", NotBefore: now.Add(-15 * 24 * time.Hour), NotAfter: now.Add(30 * 24 * time.Hour), ActiveServingID: "domain-serving-4", RenewalInformation: certificatelifecycle.RenewalInformation{Status: certificatelifecycle.RenewalInformationAvailable, WindowStart: now.Add(time.Hour), WindowEnd: now.Add(2 * time.Hour)}},
+		Scheduler: certificatelifecycle.SchedulerObservation{Enabled: true, Persistent: true, Serial: true, ExactUnitPair: true, Randomized: true, NoCompetingScheduler: true, RunsPerDay: 2},
+	}
+	request := completeViewRequest()
+	view := certificatelifecycle.New(staticIssuer{observation: observation}, fixedClock{now: now}).View(t.Context(), request)
+	if view.Health.Outcome != certificatelifecycle.Healthy || view.Domain.Due {
+		t.Fatalf("future ARI window = %+v", view)
+	}
+	observation.Domain.RenewalInformation.WindowStart = now.Add(-time.Second)
+	view = certificatelifecycle.New(staticIssuer{observation: observation}, fixedClock{now: now}).View(t.Context(), request)
+	if view.Health.Outcome != certificatelifecycle.Healthy || !view.Domain.Due {
+		t.Fatalf("active ARI window = %+v", view)
+	}
+	observation.Domain.RenewalInformation.WindowEnd = now.Add(-time.Minute)
+	view = certificatelifecycle.New(staticIssuer{observation: observation}, fixedClock{now: now}).View(t.Context(), request)
+	if view.Health.Code != "CERTIFICATE-DOMAIN-ARI" {
+		t.Fatalf("malformed ARI = %+v", view.Health)
+	}
+	observation.Domain.RenewalInformation = certificatelifecycle.RenewalInformation{}
+	view = certificatelifecycle.New(staticIssuer{observation: observation}, fixedClock{now: now}).View(t.Context(), request)
+	if view.Health.Code != "CERTIFICATE-DOMAIN-ARI" {
+		t.Fatalf("missing ARI = %+v", view.Health)
+	}
+	observation.Domain.RenewalInformation = certificatelifecycle.RenewalInformation{Status: certificatelifecycle.RenewalInformationAvailable, WindowStart: now.Add(time.Hour), WindowEnd: now}
+	observation.Domain.NotAfter = now
+	view = certificatelifecycle.New(staticIssuer{observation: observation}, fixedClock{now: now}).View(t.Context(), request)
+	if view.Health.Outcome != certificatelifecycle.Failed || view.Health.Code != "CERTIFICATE-DOMAIN-EXPIRED" || !strings.Contains(view.Health.Found, "Hysteria2, TUIC, and AnyTLS") || strings.Contains(strings.ToLower(view.Health.Required), "insecure") {
+		t.Fatalf("expired domain = %+v", view.Health)
+	}
+	observation.Domain.NotAfter = now.Add(30 * 24 * time.Hour)
+	observation.Domain.RenewalInformation = certificatelifecycle.RenewalInformation{Status: certificatelifecycle.RenewalInformationAvailable, WindowStart: now.Add(time.Hour), WindowEnd: now.Add(2 * time.Hour)}
+	observation.IP.NotAfter = now
+	view = certificatelifecycle.New(staticIssuer{observation: observation}, fixedClock{now: now}).View(t.Context(), request)
+	if view.Health.Outcome != certificatelifecycle.Failed || view.Health.Code != "CERTIFICATE-IP-EXPIRED" || !strings.Contains(view.Health.Found, "Subscription Serving") {
+		t.Fatalf("expired IP = %+v", view.Health)
 	}
 }
 
@@ -330,6 +376,38 @@ func TestStandingIPRenewalRequiresApprovedDueNarrowState(t *testing.T) {
 	result := systemchanges.New(nil).Apply(changeSet)
 	if result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-ADAPTER-UNAVAILABLE" {
 		t.Fatalf("narrow renewal Apply = %+v", result)
+	}
+}
+
+func TestStandingDomainRenewalRequiresARIAndNarrowState(t *testing.T) {
+	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	observation := certificatelifecycle.Observation{
+		Issuer:    certificatelifecycle.IssuerObservation{Name: "Let's Encrypt", CertbotVersion: "5.4.0", Distribution: "snap", SupportedDistribution: true, RequiredProfile: true, IPAddress: true, Staging: true},
+		Domain:    certificatelifecycle.CertificateObservation{Identity: "direct.example.com", Profile: "tlsserver", NotBefore: now.Add(-15 * 24 * time.Hour), NotAfter: now.Add(30 * 24 * time.Hour), ActiveServingID: "domain-serving-4", RenewalInformation: certificatelifecycle.RenewalInformation{Status: certificatelifecycle.RenewalInformationAvailable, WindowStart: now.Add(-time.Minute), WindowEnd: now.Add(time.Hour)}},
+		Scheduler: certificatelifecycle.SchedulerObservation{Enabled: true, Persistent: true, Serial: true, ExactUnitPair: true, Randomized: true, NoCompetingScheduler: true, RunsPerDay: 2},
+	}
+	module := certificatelifecycle.New(staticIssuer{observation: observation}, fixedClock{now: now})
+	request := completePlanRequest()
+	request.Lineage = certificatelifecycle.DomainLineage
+	request.ChangeSet = "certificate-domain-renew-1"
+	request.DirectTLS = testDirectTLSContribution(1)
+	request.StandingRenewal = true
+	request.RenewalPolicyApproved = true
+	plan := module.Plan(t.Context(), request)
+	if plan.Plan == nil || plan.Health.Code != "CERTIFICATE-PLAN-READY" {
+		t.Fatalf("standing domain Plan = %+v", plan)
+	}
+	prepared := &preparedCertificateState{changeSet: request.ChangeSet, revision: 2, starting: request.StartingStateSHA256, candidate: request.DesiredStateSHA256, planID: plan.Plan.Identity(), planSHA: plan.Plan.SHA256(), renewalLineage: string(certificatelifecycle.DomainLineage), renewalValid: true}
+	changeSet, err := plan.Plan.RenewalChangeSet(prepared, systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 1, SHA256: request.StartingStateSHA256}, strings.Repeat("c", 64), systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1})
+	if err != nil || changeSet == nil {
+		t.Fatalf("narrow domain renewal Change Set = (%+v, %v)", changeSet, err)
+	}
+
+	observation.Domain.RenewalInformation.WindowStart = now.Add(time.Hour)
+	observation.Domain.RenewalInformation.WindowEnd = now.Add(2 * time.Hour)
+	outsideWindow := certificatelifecycle.New(staticIssuer{observation: observation}, fixedClock{now: now}).Plan(t.Context(), request)
+	if outsideWindow.Plan != nil || outsideWindow.Health.Code != "CERTIFICATE-RENEWAL-POLICY" {
+		t.Fatalf("domain Plan outside ARI window = %+v", outsideWindow)
 	}
 }
 

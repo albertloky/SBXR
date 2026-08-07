@@ -64,6 +64,7 @@ type IssuerObservation struct {
 type CertificateObservation struct {
 	Identity, Profile, ActiveServingID string
 	NotBefore, NotAfter                time.Time
+	RenewalInformation                 RenewalInformation
 }
 
 type SchedulerObservation struct {
@@ -242,9 +243,18 @@ func (module Interface) View(ctx context.Context, request ViewRequest) ViewResul
 	case !result.Scheduler.Qualified:
 		result.Health = health(now, Failed, "CERTIFICATE-RENEWAL-SCHEDULER", "The one renewal scheduler is not proved", fmt.Sprintf("enabled=%t persistent=%t serial=%t exact_units=%t randomized=%t no_competitor=%t runs_per_day=%d", result.Scheduler.Enabled, result.Scheduler.Persistent, result.Scheduler.Serial, result.Scheduler.ExactUnitPair, result.Scheduler.Randomized, result.Scheduler.NoCompetingScheduler, result.Scheduler.RunsPerDay), "one enabled persistent randomized serial scheduler evaluating at least twice daily with no competing owner")
 		result.Health.NextActions = []string{"Restore sbxr-cert-renew.timer and remove competing renewal timers", "Check again", "Back"}
+	case !observed.IP.NotAfter.IsZero() && !now.Before(observed.IP.NotAfter):
+		result.Health = health(now, Failed, "CERTIFICATE-IP-EXPIRED", "The Subscription Serving certificate is expired", "Subscription Serving cannot prove a current IP certificate", "a current publicly trusted IP certificate with normal HTTPS validation")
+		result.Health.NextActions = []string{"Renew sbxr-ip without weakening HTTPS", "Check again", "Back"}
 	case !validCertificate(observed.IP, request.SelectedIP, ipProfile, now, 150*time.Hour, 170*time.Hour):
 		result.Health = health(now, Failed, "CERTIFICATE-IP-LINEAGE", "The IP certificate lineage is implausible", "the typed IP identity, profile, validity, or serving identifier disagrees", "the exact selected IP with the shortlived profile and a roughly 160-hour lifetime")
 		result.Health.NextActions = []string{"Keep the current serving certificate and inspect sbxr-ip", "Check again", "Back"}
+	case !observed.Domain.NotAfter.IsZero() && !now.Before(observed.Domain.NotAfter):
+		result.Health = health(now, Failed, "CERTIFICATE-DOMAIN-EXPIRED", "The Direct TLS certificate is expired", "Hysteria2, TUIC, and AnyTLS cannot prove a current shared domain certificate", "a current publicly trusted domain certificate with normal name and chain validation")
+		result.Health.NextActions = []string{"Renew sbxr-domain without weakening TLS verification", "Check again", "Back"}
+	case !observed.Domain.NotAfter.IsZero() && !validDomainRenewalInformation(observed.Domain.RenewalInformation):
+		result.Health = health(now, Unknown, "CERTIFICATE-DOMAIN-ARI", "ACME Renewal Information is malformed or unavailable to prove", "the suggested domain renewal window is missing, contradictory, or incomplete", "one valid suggested window, or an explicit unavailable result for the 15-day fallback")
+		result.Health.NextActions = []string{"Check ACME Renewal Information again", "Back"}
 	case !validCertificate(observed.Domain, request.DirectHostname, domainProfile, now, 40*24*time.Hour, 50*24*time.Hour):
 		result.Health = health(now, Failed, "CERTIFICATE-DOMAIN-LINEAGE", "The domain certificate lineage is implausible", "the typed DNS identity, profile, validity, or serving identifier disagrees", "the exact Direct TLS Hostname with the tlsserver profile and an approximately 45-day lifetime")
 		result.Health.NextActions = []string{"Keep the current serving certificate and inspect sbxr-domain", "Check again", "Back"}
@@ -280,9 +290,27 @@ func lineageStatus(lineage Lineage, identity, profile string, observed Certifica
 	if lineage == IPLineage {
 		status.Due = ipRenewalDue(now, observed.NotAfter)
 	} else {
-		status.Due = observed.NotAfter.Sub(now) <= 15*24*time.Hour
+		information := observed.RenewalInformation
+		if validDomainRenewalInformation(information) {
+			if information.Status == RenewalInformationAvailable {
+				status.Due = !now.Before(information.WindowStart)
+			} else {
+				status.Due = observed.NotAfter.Sub(now) <= 15*24*time.Hour
+			}
+		}
 	}
 	return status
+}
+
+func validDomainRenewalInformation(information RenewalInformation) bool {
+	switch information.Status {
+	case RenewalInformationUnavailable:
+		return information.WindowStart.IsZero() && information.WindowEnd.IsZero()
+	case RenewalInformationAvailable:
+		return !information.WindowStart.IsZero() && !information.WindowEnd.IsZero() && information.WindowStart.Before(information.WindowEnd)
+	default:
+		return false
+	}
 }
 
 func validCertificate(observed CertificateObservation, identity, profile string, now time.Time, minimum, maximum time.Duration) bool {
@@ -568,8 +596,10 @@ func (module Interface) Plan(ctx context.Context, request PlanRequest) PlanResul
 	if lineage == "" {
 		lineage = IPLineage
 	}
-	if request.StandingRenewal && (!request.RenewalPolicyApproved || lineage != IPLineage || !view.IP.Due) {
-		finding := health(view.Health.Time, Failed, "CERTIFICATE-RENEWAL-POLICY", "The unattended renewal is outside the standing policy", "the policy is absent, the IP lineage is not due, or another lineage was requested", "one approved due sbxr-ip renewal branch")
+	request.Lineage = lineage
+	due := lineage == IPLineage && view.IP.Valid && view.IP.Due || lineage == DomainLineage && view.Domain.Valid && view.Domain.Due
+	if request.StandingRenewal && (!request.RenewalPolicyApproved || !due) {
+		finding := health(view.Health.Time, Failed, "CERTIFICATE-RENEWAL-POLICY", "The unattended renewal is outside the standing policy", "the policy is absent or the requested fixed lineage is not valid and due", "one approved due sbxr-ip or sbxr-domain renewal branch")
 		finding.NextActions = []string{"Create a fresh reviewed Plan", "Back"}
 		return PlanResult{Health: finding}
 	}
@@ -665,8 +695,12 @@ func (plan *Plan) buildChangeSet(prepared systemchanges.PreparedStateCommit, sta
 	mutation := systemchanges.SettingChangeMutation
 	if plan.request.StandingRenewal {
 		renewal, ok := prepared.(systemchanges.CertificateRenewalPreparedState)
-		if !ok || !renewal.SystemChangesIPCertificateRenewal() {
-			return nil, errors.New("standing IP renewal scope unavailable")
+		if !ok || renewal == nil {
+			return nil, errors.New("standing certificate renewal scope unavailable")
+		}
+		ip, domain := renewal.SystemChangesIPCertificateRenewal(), renewal.SystemChangesDomainCertificateRenewal()
+		if ip == domain || plan.request.Lineage == IPLineage && !ip || plan.request.Lineage == DomainLineage && !domain {
+			return nil, errors.New("standing certificate renewal scope unavailable")
 		}
 		mutation = systemchanges.CertificateRenewalMutation
 	} else if renewalOnly {

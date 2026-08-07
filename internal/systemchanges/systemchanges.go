@@ -823,6 +823,7 @@ type PreparedStateCommit interface {
 type CertificateRenewalPreparedState interface {
 	PreparedStateCommit
 	SystemChangesIPCertificateRenewal() bool
+	SystemChangesDomainCertificateRenewal() bool
 }
 
 type Timeouts struct {

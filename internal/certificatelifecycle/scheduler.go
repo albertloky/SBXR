@@ -47,6 +47,27 @@ type IPRenewalFacts struct {
 	LastOutcome            RenewalAttempt
 }
 
+type RenewalInformationStatus string
+
+const (
+	RenewalInformationAvailable   RenewalInformationStatus = "available"
+	RenewalInformationUnavailable RenewalInformationStatus = "unavailable"
+	RenewalInformationInvalid     RenewalInformationStatus = "invalid"
+)
+
+type RenewalInformation struct {
+	Status                 RenewalInformationStatus
+	WindowStart, WindowEnd time.Time
+}
+
+type DomainRenewalFacts struct {
+	StandingPolicyApproved bool
+	Now, NotAfter          time.Time
+	RenewalInformation     RenewalInformation
+	LastAttempt            time.Time
+	LastOutcome            RenewalAttempt
+}
+
 type RenewalDecision struct {
 	Due     bool
 	Outcome Outcome
@@ -54,57 +75,75 @@ type RenewalDecision struct {
 }
 
 type AttemptHistory interface {
-	LoadIPAttempt() (time.Time, RenewalAttempt, bool, error)
-	StoreIPAttempt(time.Time, RenewalAttempt) error
-	ClearIPAttempt() error
+	LoadAttempt(Lineage) (time.Time, RenewalAttempt, bool, error)
+	StoreAttempt(Lineage, time.Time, RenewalAttempt) error
+	ClearAttempt(Lineage) error
 }
 
-type StandingIPPolicy struct {
-	facts    IPRenewalFacts
+type StandingPolicy struct {
+	lineages map[Lineage]*standingLineagePolicy
 	history  AttemptHistory
+}
+
+type standingLineagePolicy struct {
+	now      time.Time
+	evaluate func(time.Time, RenewalAttempt, bool) RenewalDecision
 	decision RenewalDecision
 }
 
-func NewStandingIPPolicy(facts IPRenewalFacts, history AttemptHistory) *StandingIPPolicy {
-	return &StandingIPPolicy{facts: facts, history: history}
+func NewStandingPolicy(ip IPRenewalFacts, domain DomainRenewalFacts, history AttemptHistory) *StandingPolicy {
+	return &StandingPolicy{history: history, lineages: map[Lineage]*standingLineagePolicy{
+		IPLineage: {now: ip.Now, evaluate: func(last time.Time, outcome RenewalAttempt, found bool) RenewalDecision {
+			if found {
+				ip.LastAttempt, ip.LastOutcome = last, outcome
+			}
+			return EvaluateIPRenewal(ip)
+		}},
+		DomainLineage: {now: domain.Now, evaluate: func(last time.Time, outcome RenewalAttempt, found bool) RenewalDecision {
+			if found {
+				domain.LastAttempt, domain.LastOutcome = last, outcome
+			}
+			return EvaluateDomainRenewal(domain)
+		}},
+	}}
 }
 
-func (policy *StandingIPPolicy) Due(lineage Lineage) bool {
-	if policy == nil || lineage != IPLineage || policy.history == nil {
+func (policy *StandingPolicy) Due(lineage Lineage) bool {
+	if policy == nil || policy.history == nil {
 		return false
 	}
-	last, outcome, found, err := policy.history.LoadIPAttempt()
+	lineagePolicy := policy.lineages[lineage]
+	if lineagePolicy == nil {
+		return false
+	}
+	last, outcome, found, err := policy.history.LoadAttempt(lineage)
 	if err != nil {
-		policy.decision = RenewalDecision{Outcome: Unknown, Code: "CERTIFICATE-RENEWAL-HISTORY"}
+		lineagePolicy.decision = RenewalDecision{Outcome: Unknown, Code: "CERTIFICATE-RENEWAL-HISTORY"}
 		return false
 	}
-	facts := policy.facts
-	if found {
-		facts.LastAttempt, facts.LastOutcome = last, outcome
-	}
-	policy.decision = EvaluateIPRenewal(facts)
-	return policy.decision.Due
+	lineagePolicy.decision = lineagePolicy.evaluate(last, outcome, found)
+	return lineagePolicy.decision.Due
 }
 
-func (policy *StandingIPPolicy) Record(lineage Lineage, result ApplyResult) error {
-	if policy == nil || lineage != IPLineage || policy.history == nil {
-		return errors.New("IP renewal history unavailable")
+func (policy *StandingPolicy) Record(lineage Lineage, result ApplyResult) error {
+	if policy == nil || policy.history == nil || policy.lineages[lineage] == nil {
+		return errors.New("certificate renewal history unavailable")
 	}
 	if result.Outcome == Applied {
-		return policy.history.ClearIPAttempt()
+		return policy.history.ClearAttempt(lineage)
 	}
 	outcome := RenewalFailed
 	if result.Outcome == Deferred && result.Code == "SYSTEM-CHANGES-BUSY" {
 		outcome = RenewalBusy
 	}
-	return policy.history.StoreIPAttempt(policy.facts.Now, outcome)
+	return policy.history.StoreAttempt(lineage, policy.lineages[lineage].now, outcome)
 }
 
-func (policy *StandingIPPolicy) Decision() RenewalDecision {
-	if policy == nil {
+func (policy *StandingPolicy) Decision(lineage Lineage) RenewalDecision {
+	if policy == nil || policy.lineages[lineage] == nil {
 		return RenewalDecision{Outcome: Unknown, Code: "CERTIFICATE-RENEWAL-POLICY"}
 	}
-	return policy.decision
+	return policy.lineages[lineage].decision
 }
 
 func EvaluateIPRenewal(facts IPRenewalFacts) RenewalDecision {
@@ -124,23 +163,47 @@ func EvaluateIPRenewal(facts IPRenewalFacts) RenewalDecision {
 	if remaining < 24*time.Hour && facts.LastOutcome == "" {
 		return RenewalDecision{Due: true, Outcome: NeedsAttention, Code: "CERTIFICATE-IP-EXPIRY-WARNING"}
 	}
-	retry := time.Duration(0)
-	code := "CERTIFICATE-RENEWAL-RETRY"
-	switch facts.LastOutcome {
-	case RenewalFailed:
-		retry = 6 * time.Hour
-	case RenewalBusy:
-		if !facts.Now.After(facts.LastAttempt) {
-			return RenewalDecision{Outcome: NeedsAttention, Code: "CERTIFICATE-RENEWAL-BUSY"}
-		}
+	return renewalDueDecision(facts.Now, facts.LastAttempt, facts.LastOutcome)
+}
+
+func EvaluateDomainRenewal(facts DomainRenewalFacts) RenewalDecision {
+	if !facts.StandingPolicyApproved {
+		return RenewalDecision{Outcome: Failed, Code: "CERTIFICATE-RENEWAL-POLICY"}
 	}
-	if retry > 0 && !facts.LastAttempt.IsZero() {
-		if facts.Now.Sub(facts.LastAttempt) < retry {
-			return RenewalDecision{Outcome: NeedsAttention, Code: code}
+	if facts.Now.IsZero() || facts.NotAfter.IsZero() || facts.LastAttempt.After(facts.Now) || facts.LastAttempt.IsZero() != (facts.LastOutcome == "") || facts.LastOutcome != "" && facts.LastOutcome != RenewalFailed && facts.LastOutcome != RenewalBusy {
+		return RenewalDecision{Outcome: Unknown, Code: "CERTIFICATE-RENEWAL-TIME"}
+	}
+	if !facts.Now.Before(facts.NotAfter) {
+		return RenewalDecision{Due: true, Outcome: Failed, Code: "CERTIFICATE-DOMAIN-EXPIRED"}
+	}
+	due := false
+	switch facts.RenewalInformation.Status {
+	case RenewalInformationAvailable:
+		window := facts.RenewalInformation
+		if window.WindowStart.IsZero() || window.WindowEnd.IsZero() || !window.WindowStart.Before(window.WindowEnd) {
+			return RenewalDecision{Outcome: Unknown, Code: "CERTIFICATE-DOMAIN-ARI"}
 		}
+		due = !facts.Now.Before(window.WindowStart)
+	case RenewalInformationUnavailable:
+		due = facts.NotAfter.Sub(facts.Now) <= 15*24*time.Hour
+	default:
+		return RenewalDecision{Outcome: Unknown, Code: "CERTIFICATE-DOMAIN-ARI"}
+	}
+	if !due {
+		return RenewalDecision{Outcome: Healthy, Code: "CERTIFICATE-RENEWAL-NOT-DUE"}
+	}
+	return renewalDueDecision(facts.Now, facts.LastAttempt, facts.LastOutcome)
+}
+
+func renewalDueDecision(now, lastAttempt time.Time, lastOutcome RenewalAttempt) RenewalDecision {
+	if lastOutcome == RenewalFailed && now.Sub(lastAttempt) < 6*time.Hour {
+		return RenewalDecision{Outcome: NeedsAttention, Code: "CERTIFICATE-RENEWAL-RETRY"}
+	}
+	if lastOutcome == RenewalBusy && !now.After(lastAttempt) {
+		return RenewalDecision{Outcome: NeedsAttention, Code: "CERTIFICATE-RENEWAL-BUSY"}
 	}
 	outcome := Healthy
-	if facts.LastOutcome != "" {
+	if lastOutcome != "" {
 		outcome = NeedsAttention
 	}
 	return RenewalDecision{Due: true, Outcome: outcome, Code: "CERTIFICATE-RENEWAL-DUE"}
@@ -180,24 +243,28 @@ type LineageResult struct {
 	Error       error
 }
 
-// Run evaluates the IP lineage once. The one persistent timer calls Run again
-// when Certificate Lifecycle's retry policy permits another fresh attempt.
+// Run evaluates both fixed lineages serially. Each due lineage obtains the
+// System Changes lock separately and builds only after that lock is held.
 func (scheduler Scheduler) Run() []LineageResult {
 	if scheduler.due == nil || scheduler.planner == nil || scheduler.apply == nil {
 		return []LineageResult{{Error: errors.New("certificate renewal scheduler is incomplete")}}
 	}
-	if !scheduler.due.Due(IPLineage) {
-		return nil
-	}
-	changeSetID := ""
-	result := scheduler.apply.ApplyFresh(func() (ChangeSet, error) {
-		changeSet, err := scheduler.planner.BuildFresh(IPLineage)
-		if err != nil || changeSet == nil || changeSet.Identity() == "" {
-			return nil, errors.New("fresh renewal Plan unavailable")
+	var results []LineageResult
+	for _, lineage := range []Lineage{IPLineage, DomainLineage} {
+		if !scheduler.due.Due(lineage) {
+			continue
 		}
-		changeSetID = changeSet.Identity()
-		return changeSet, nil
-	})
-	recordErr := scheduler.due.Record(IPLineage, result)
-	return []LineageResult{{Lineage: IPLineage, ChangeSetID: changeSetID, Apply: result, Error: recordErr}}
+		changeSetID := ""
+		result := scheduler.apply.ApplyFresh(func() (ChangeSet, error) {
+			changeSet, err := scheduler.planner.BuildFresh(lineage)
+			if err != nil || changeSet == nil || changeSet.Identity() == "" {
+				return nil, errors.New("fresh renewal Plan unavailable")
+			}
+			changeSetID = changeSet.Identity()
+			return changeSet, nil
+		})
+		recordErr := scheduler.due.Record(lineage, result)
+		results = append(results, LineageResult{Lineage: lineage, ChangeSetID: changeSetID, Apply: result, Error: recordErr})
+	}
+	return results
 }

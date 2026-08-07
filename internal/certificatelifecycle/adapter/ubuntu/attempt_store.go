@@ -11,8 +11,6 @@ import (
 	"github.com/albertloky/SBXR/internal/certificatelifecycle"
 )
 
-const attemptFile = "ip-attempt.json"
-
 type RenewalAttemptStore struct {
 	root string
 	uid  int
@@ -32,7 +30,11 @@ type persistedAttempt struct {
 	Outcome       certificatelifecycle.RenewalAttempt `json:"outcome"`
 }
 
-func (store RenewalAttemptStore) LoadIPAttempt() (time.Time, certificatelifecycle.RenewalAttempt, bool, error) {
+func (store RenewalAttemptStore) LoadAttempt(lineage certificatelifecycle.Lineage) (time.Time, certificatelifecycle.RenewalAttempt, bool, error) {
+	attemptFile, err := attemptFile(lineage)
+	if err != nil {
+		return time.Time{}, "", false, err
+	}
 	directory, err := store.openAttemptRoot(false)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -61,9 +63,13 @@ func (store RenewalAttemptStore) LoadIPAttempt() (time.Time, certificatelifecycl
 	return record.Time, record.Outcome, true, nil
 }
 
-func (store RenewalAttemptStore) StoreIPAttempt(at time.Time, outcome certificatelifecycle.RenewalAttempt) error {
+func (store RenewalAttemptStore) StoreAttempt(lineage certificatelifecycle.Lineage, at time.Time, outcome certificatelifecycle.RenewalAttempt) error {
 	if at.IsZero() || outcome != certificatelifecycle.RenewalFailed && outcome != certificatelifecycle.RenewalBusy {
 		return errors.New("renewal attempt is invalid")
+	}
+	attemptFile, err := attemptFile(lineage)
+	if err != nil {
+		return err
 	}
 	directory, err := store.openAttemptRoot(true)
 	if err != nil {
@@ -100,7 +106,11 @@ func (store RenewalAttemptStore) StoreIPAttempt(at time.Time, outcome certificat
 	return syncRoot(directory)
 }
 
-func (store RenewalAttemptStore) ClearIPAttempt() error {
+func (store RenewalAttemptStore) ClearAttempt(lineage certificatelifecycle.Lineage) error {
+	attemptFile, err := attemptFile(lineage)
+	if err != nil {
+		return err
+	}
 	directory, err := store.openAttemptRoot(false)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -117,6 +127,17 @@ func (store RenewalAttemptStore) ClearIPAttempt() error {
 		return errors.New("renewal attempt cleanup failed")
 	}
 	return syncRoot(directory)
+}
+
+func attemptFile(lineage certificatelifecycle.Lineage) (string, error) {
+	switch lineage {
+	case certificatelifecycle.IPLineage:
+		return "ip-attempt.json", nil
+	case certificatelifecycle.DomainLineage:
+		return "domain-attempt.json", nil
+	default:
+		return "", errors.New("certificate renewal lineage is invalid")
+	}
 }
 
 func (store RenewalAttemptStore) openAttemptRoot(create bool) (*os.Root, error) {
