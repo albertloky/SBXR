@@ -36,7 +36,7 @@ var registeredModules = map[string]bool{
 // Exact cross-Module connections remain empty until an approved design ticket
 // registers one. Foundational Modules never gain upward entries here.
 var approvedModuleDependencies = map[string]map[string]bool{
-	"cloudflaretunnel": {"networkpolicy": true},
+	"cloudflaretunnel": {"networkpolicy": true, "systemchanges": true},
 }
 
 var forbiddenStandardLibrary = map[string]bool{

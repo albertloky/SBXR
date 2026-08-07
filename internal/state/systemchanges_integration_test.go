@@ -2,6 +2,7 @@ package state
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -56,6 +57,7 @@ type systemChangesAdapter struct {
 	crashAfter      systemchanges.DurableCheckpoint
 	crashed         bool
 	lockHeld        bool
+	cloudflare      *cloudflaretunnel.Executor
 }
 
 type controlledRemovalObserver struct{}
@@ -185,7 +187,36 @@ func (a *systemChangesAdapter) Execute(_ systemchanges.ExecutionLease, _ string,
 	if a.stepEvidence != nil {
 		return *a.stepEvidence, nil
 	}
+	if change, ok := step.CloudflareChange(); ok && a.cloudflare != nil {
+		resolved := ""
+		if change.TunnelIDFromStep > 0 {
+			resolved = "f70ff985-a4ef-4643-bbbc-4a0ed4fc8415"
+		}
+		return a.cloudflare.Execute(step, resolved, time.Minute)
+	}
 	return systemchanges.StepEvidence{Code: "step-ok", SHA256: testSHA('a')}, nil
+}
+
+func (a *systemChangesAdapter) ReplaceStateArtifacts(_ systemchanges.ExecutionLease, changeSet string, binding systemchanges.StateTransactionBinding, stream func(func(string, uint32, io.Reader) error) error) error {
+	if binding.ChangeSet != changeSet {
+		return errors.New("final State binding mismatch")
+	}
+	for name := range a.artifacts {
+		if strings.HasPrefix(name, "prepared/") {
+			delete(a.artifacts, name)
+		}
+	}
+	if err := stream(func(name string, _ uint32, source io.Reader) error {
+		content, err := io.ReadAll(source)
+		if err == nil {
+			a.artifacts[name] = content
+		}
+		return err
+	}); err != nil {
+		return err
+	}
+	a.stateBinding, _ = json.Marshal(binding)
+	return nil
 }
 
 func (a *systemChangesAdapter) Reverse(_ systemchanges.ExecutionLease, _ string, _ int, step systemchanges.Step, _ time.Duration) (systemchanges.StepEvidence, error) {
@@ -441,6 +472,110 @@ func TestFailedInstallationRestoresProvenNotInstalledBaseline(t *testing.T) {
 
 func preparedSystemChange(t *testing.T) (Interface, *systemchanges.ChangeSet, *systemchanges.ChangeSet, systemchanges.Observation) {
 	return preparedSystemChangeWithCheck(t, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-PREFLIGHT"})
+}
+
+func TestDeferredCloudflareFinalizationPublishesProviderValuesInRevisionOne(t *testing.T) {
+	candidate := completeDesiredState()
+	candidate.Cloudflare.AccountID = strings.Repeat("1", 32)
+	candidate.Cloudflare.ZoneID = strings.Repeat("2", 32)
+	candidate.Cloudflare.TunnelName = "sbxr-main"
+	candidate.Cloudflare.TunnelID = ""
+	candidate.Cloudflare.TunnelRunToken = InfrastructureSecret{}
+	candidate.Cloudflare.XHTTPDNSRecordID = ""
+	candidate.Cloudflare.WebSocketDNSRecordID = ""
+	candidate.Cloudflare.DirectIPv4RecordID = ""
+	candidate.Cloudflare.DirectIPv6RecordID = ""
+	candidate.Software.CloudflaredVersion = "2026.7.3"
+	template, err := marshalProtectedJSON(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(template)
+	templateSHA := fmt.Sprintf("%x", digest)
+	managementToken, err := cloudflaretunnel.NewManagementToken("cfat_" + strings.Repeat("a", 40))
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := &deferredCloudflareAPI{}
+	module := cloudflaretunnel.New(provider, cloudflaretunnel.SystemClock{})
+	planResult := module.Plan(t.Context(), cloudflaretunnel.PlanRequest{
+		Authority: cloudflaretunnel.ViewRequest{AccountID: candidate.Cloudflare.AccountID, ZoneID: candidate.Cloudflare.ZoneID, ZoneName: candidate.Cloudflare.ZoneName, Token: managementToken, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
+		ChangeSet: "cloudflare-change-0001", DesiredStateSHA256: templateSHA, TunnelName: candidate.Cloudflare.TunnelName,
+		XHTTPHostname: candidate.Cloudflare.XHTTPHostname, WebSocketHostname: candidate.Cloudflare.WebSocketHostname,
+		DirectHostname: candidate.Cloudflare.DirectHostname, PublicIPv4: candidate.NetworkPolicy.PublicIPv4,
+		CloudflaredVersion: candidate.Software.CloudflaredVersion,
+	})
+	if planResult.Plan == nil {
+		t.Fatalf("Cloudflare Plan: %+v", planResult.Health)
+	}
+	storage := &mutableStateStorage{err: fs.ErrNotExist}
+	stateModule := New(storage)
+	loaded, err := stateModule.Load(LoadRequest{Baseline: CleanVPS})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := preparedRequest(t, loaded, candidate, "cloudflare-change-0001")
+	validator := request.SemanticValidators.Cloudflare.(*validatingSeams)
+	validator.dynamicCloudflare = true
+	request.ReviewedInputs, err = NewReviewedInputs(PlanIdentity(planResult.Plan.Identity()), planResult.Plan.SHA256(), request.ReviewedInputs.managed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := stateModule.PrepareDeferredCloudflareCommit(request, planResult.Plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor, err := planResult.Plan.Executor(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed := systemchanges.Observation{Status: systemchanges.NotInstalled, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, VolatileSHA256: testSHA('2'), FilesystemBytes: 20 << 30, AvailableBytes: 5 << 30, WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}
+	adapter := &systemChangesAdapter{observation: observed, cloudflare: &executor}
+	result := planResult.Plan.Apply(systemchanges.New(adapter), prepared, systemchanges.StateLineage{Status: systemchanges.NotInstalled}, testSHA('2'), systemchanges.DiskRequirement{PreparationBytes: 100, TemporaryBytes: 100, SnapshotBytes: 100, JournalBytes: 100, RollbackBytes: 100, OverheadBytes: 100})
+	if result.Outcome != systemchanges.Completed {
+		t.Fatalf("Apply = %+v, events=%v", result, adapter.events)
+	}
+	document := string(storage.document)
+	for _, value := range []string{"f70ff985-a4ef-4643-bbbc-4a0ed4fc8415", "CLOUDFLARE-DEFERRED-RUN-TOKEN-MARKER", strings.Repeat("3", 32), strings.Repeat("4", 32), strings.Repeat("5", 32)} {
+		if !strings.Contains(document, value) {
+			t.Fatalf("published revision 1 omitted finalized value %q", value)
+		}
+	}
+	finalized := slices.ContainsFunc(adapter.events, func(event string) bool { return strings.HasPrefix(event, string(systemchanges.StateFinalized)) })
+	if strings.Count(document, "CLOUDFLARE-DEFERRED-RUN-TOKEN-MARKER") != 1 || !finalized {
+		t.Fatalf("deferred finalization was not one-use and durable: events=%v", adapter.events)
+	}
+	if strings.Contains(strings.Join(adapter.events, "\n")+fmt.Sprintf("%+v", result), "CLOUDFLARE-DEFERRED-RUN-TOKEN-MARKER") {
+		t.Fatal("run token escaped protected State artifacts")
+	}
+}
+
+type deferredCloudflareAPI struct{ dns int }
+
+func (api *deferredCloudflareAPI) Observe(context.Context, cloudflaretunnel.ObservationRequest) (cloudflaretunnel.Observation, error) {
+	return cloudflaretunnel.Observation{Account: cloudflaretunnel.AccountObservation{ID: strings.Repeat("1", 32)}, Zone: cloudflaretunnel.ZoneObservation{ID: strings.Repeat("2", 32), AccountID: strings.Repeat("1", 32), Name: "example.com", Status: "active", AssignedNameServers: []string{"a.ns.cloudflare.com"}, ObservedNameServers: []string{"a.ns.cloudflare.com"}}, Token: cloudflaretunnel.TokenObservation{ID: strings.Repeat("6", 32), Status: "active"}, Policies: []cloudflaretunnel.TokenPolicy{{Effect: "allow", PermissionGroups: []string{"Account API Tokens Read", "Cloudflare Tunnel Edit"}, Resources: map[string]string{"com.cloudflare.api.account." + strings.Repeat("1", 32): "*"}}, {Effect: "allow", PermissionGroups: []string{"DNS Write"}, Resources: map[string]string{"com.cloudflare.api.account.zone." + strings.Repeat("2", 32): "*"}}}}, nil
+}
+func (api *deferredCloudflareAPI) ObserveMutation(context.Context, cloudflaretunnel.MutationRequest) (cloudflaretunnel.MutationObservation, error) {
+	return cloudflaretunnel.MutationObservation{Digest: testSHA('a')}, nil
+}
+func (api *deferredCloudflareAPI) CreateTunnel(context.Context, cloudflaretunnel.CreateTunnelRequest) (cloudflaretunnel.CreatedTunnel, error) {
+	return cloudflaretunnel.NewCreatedTunnelResult("f70ff985-a4ef-4643-bbbc-4a0ed4fc8415", "sbxr-main", "CLOUDFLARE-DEFERRED-RUN-TOKEN-MARKER")
+}
+func (api *deferredCloudflareAPI) PutConfiguration(_ context.Context, request cloudflaretunnel.PutConfigurationRequest) (cloudflaretunnel.Configuration, error) {
+	return cloudflaretunnel.Configuration{TunnelID: request.TunnelID, Version: 1, Routes: request.Routes}, nil
+}
+func (api *deferredCloudflareAPI) CreateDNSRecord(_ context.Context, request cloudflaretunnel.CreateDNSRecordRequest) (cloudflaretunnel.OwnedResource, error) {
+	api.dns++
+	return cloudflaretunnel.OwnedResource{ID: strings.Repeat(string(rune('2'+api.dns)), 32), Name: request.Name}, nil
+}
+func (*deferredCloudflareAPI) ObserveWholeTunnel(context.Context, cloudflaretunnel.WholeTunnelRequest) (cloudflaretunnel.WholeTunnelObservation, error) {
+	return cloudflaretunnel.WholeTunnelObservation{}, nil
+}
+func (*deferredCloudflareAPI) DeleteDNSRecord(context.Context, cloudflaretunnel.DeleteDNSRecordRequest) error {
+	return nil
+}
+func (*deferredCloudflareAPI) DeleteTunnel(context.Context, cloudflaretunnel.DeleteTunnelRequest) error {
+	return nil
 }
 
 func testFirewallStep(t *testing.T) systemchanges.Step {

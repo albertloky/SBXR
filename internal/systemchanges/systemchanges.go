@@ -349,17 +349,52 @@ const SafeCheckpointCancellation CancellationContract = "Wait for declared safe 
 const InspectBeforeIdempotentReverse InspectionContract = "Inspect effect before idempotent reverse"
 
 const (
-	ActivatePreparedConfiguration  OperationKind = "Activate prepared configuration"
-	RestorePriorConfiguration      OperationKind = "Restore prior configuration"
-	ApplyApprovedNetworkPolicy     OperationKind = "Apply approved Network Policy"
-	OpenApprovedHTTP01             OperationKind = "Open approved HTTP-01 rule"
-	CloseRecordedHTTP01            OperationKind = "Close recorded HTTP-01 rule"
-	RestorePriorNetworkPolicy      OperationKind = "Restore prior Network Policy"
-	RemoveOwnedPublicExposure      OperationKind = "Remove owned public exposure"
-	RestoreOwnedPublicExposure     OperationKind = "Restore owned public exposure"
-	DeleteOwnedCloudflareResource  OperationKind = "Delete owned Cloudflare resource"
-	RestoreOwnedCloudflareResource OperationKind = "Restore owned Cloudflare resource"
+	ActivatePreparedConfiguration   OperationKind = "Activate prepared configuration"
+	RestorePriorConfiguration       OperationKind = "Restore prior configuration"
+	ApplyApprovedNetworkPolicy      OperationKind = "Apply approved Network Policy"
+	OpenApprovedHTTP01              OperationKind = "Open approved HTTP-01 rule"
+	CloseRecordedHTTP01             OperationKind = "Close recorded HTTP-01 rule"
+	RestorePriorNetworkPolicy       OperationKind = "Restore prior Network Policy"
+	RemoveOwnedPublicExposure       OperationKind = "Remove owned public exposure"
+	RestoreOwnedPublicExposure      OperationKind = "Restore owned public exposure"
+	DeleteOwnedCloudflareResource   OperationKind = "Delete owned Cloudflare resource"
+	RestoreOwnedCloudflareResource  OperationKind = "Restore owned Cloudflare resource"
+	CreateCloudflareResource        OperationKind = "Create Cloudflare resource"
+	DeleteCreatedCloudflareResource OperationKind = "Delete created Cloudflare resource"
+	ConfigureCloudflareTunnel       OperationKind = "Configure Cloudflare Tunnel"
+	RestoreCloudflareTunnel         OperationKind = "Restore Cloudflare Tunnel"
+	ActivateCloudflaredService      OperationKind = "Activate cloudflared service"
+	RestoreCloudflaredService       OperationKind = "Restore cloudflared service"
 )
+
+type CloudflareAction string
+
+const (
+	CloudflareTunnelCreate CloudflareAction = "tunnel-create"
+	CloudflareRoutesPut    CloudflareAction = "routes-put"
+	CloudflareDNSCreate    CloudflareAction = "dns-create"
+	CloudflaredActivate    CloudflareAction = "service-activate"
+)
+
+type CloudflareRoute struct {
+	Hostname string `json:"hostname,omitempty"`
+	Origin   string `json:"origin"`
+}
+
+// CloudflareChange is a secret-free provider contract. Unknown provider IDs
+// refer to the earlier step whose evidence must already be durable.
+type CloudflareChange struct {
+	Action           CloudflareAction  `json:"action"`
+	AccountID        string            `json:"account_id"`
+	ZoneID           string            `json:"zone_id,omitempty"`
+	TunnelID         string            `json:"tunnel_id,omitempty"`
+	TunnelIDFromStep int               `json:"tunnel_id_from_step,omitempty"`
+	TunnelName       string            `json:"tunnel_name,omitempty"`
+	Hostname         string            `json:"hostname,omitempty"`
+	RecordType       string            `json:"record_type,omitempty"`
+	Content          string            `json:"content,omitempty"`
+	Routes           []CloudflareRoute `json:"routes,omitempty"`
+}
 
 type FirewallAction string
 
@@ -404,17 +439,33 @@ type RemovalChange struct {
 }
 
 type Step struct {
-	owner    Module
-	forward  OperationKind
-	rollback OperationKind
-	cancel   CancellationContract
-	inspect  InspectionContract
-	firewall FirewallChange
-	removal  RemovalChange
+	owner      Module
+	forward    OperationKind
+	rollback   OperationKind
+	cancel     CancellationContract
+	inspect    InspectionContract
+	firewall   FirewallChange
+	removal    RemovalChange
+	cloudflare CloudflareChange
+}
+
+func NewCloudflareStep(change CloudflareChange) (Step, error) {
+	forward, rollback := CreateCloudflareResource, DeleteCreatedCloudflareResource
+	switch change.Action {
+	case CloudflareRoutesPut:
+		forward, rollback = ConfigureCloudflareTunnel, RestoreCloudflareTunnel
+	case CloudflaredActivate:
+		forward, rollback = ActivateCloudflaredService, RestoreCloudflaredService
+	}
+	step := Step{owner: CloudflareModule, forward: forward, rollback: rollback, cancel: SafeCheckpointCancellation, inspect: InspectBeforeIdempotentReverse, cloudflare: change}
+	if !validStep(step) {
+		return Step{}, &Finding{Code: "SYSTEM-CHANGES-CLOUDFLARE-STEP", Problem: "A Cloudflare transaction step is invalid", Found: "an incomplete or unsafe secret-free provider contract", Required: "one exact owned Tunnel, route, DNS, or cloudflared action", WhyStopped: "System Changes never accepts provider commands, secrets, or unbound identifiers", NextAction: "Rebuild the Change Set through Cloudflare Tunnel."}
+	}
+	return step, nil
 }
 
 func NewStep(owner Module, forward, rollback OperationKind) (Step, error) {
-	if !validModule(owner) || !validOperation(forward) || !validOperation(rollback) || forward == rollback || owner == NetworkPolicyModule || networkOperation(forward) || networkOperation(rollback) || removalOperation(forward) || removalOperation(rollback) {
+	if !validModule(owner) || !validOperation(forward) || !validOperation(rollback) || forward == rollback || owner == NetworkPolicyModule || networkOperation(forward) || networkOperation(rollback) || removalOperation(forward) || removalOperation(rollback) || cloudflareOperation(forward) || cloudflareOperation(rollback) {
 		return Step{}, &Finding{Code: "SYSTEM-CHANGES-STEP-INVALID", Problem: "A typed change or rollback instruction is invalid", Found: "an unsupported owner or operation", Required: "one owning Module plus distinct allowed forward and rollback operations", WhyStopped: "System Changes never accepts arbitrary commands, paths, services, or root operations", NextAction: "Rebuild the Change Set through the owning Module."}
 	}
 	return Step{owner: owner, forward: forward, rollback: rollback, cancel: SafeCheckpointCancellation, inspect: InspectBeforeIdempotentReverse}, nil
@@ -916,7 +967,7 @@ func validModule(module Module) bool {
 
 func validOperation(operation OperationKind) bool {
 	switch operation {
-	case ActivatePreparedConfiguration, RestorePriorConfiguration, ApplyApprovedNetworkPolicy, OpenApprovedHTTP01, CloseRecordedHTTP01, RestorePriorNetworkPolicy, RemoveOwnedPublicExposure, RestoreOwnedPublicExposure, DeleteOwnedCloudflareResource, RestoreOwnedCloudflareResource:
+	case ActivatePreparedConfiguration, RestorePriorConfiguration, ApplyApprovedNetworkPolicy, OpenApprovedHTTP01, CloseRecordedHTTP01, RestorePriorNetworkPolicy, RemoveOwnedPublicExposure, RestoreOwnedPublicExposure, DeleteOwnedCloudflareResource, RestoreOwnedCloudflareResource, CreateCloudflareResource, DeleteCreatedCloudflareResource, ConfigureCloudflareTunnel, RestoreCloudflareTunnel, ActivateCloudflaredService, RestoreCloudflaredService:
 		return true
 	}
 	return false
@@ -928,12 +979,50 @@ func validStep(step Step) bool {
 		return false
 	}
 	if step.removal != (RemovalChange{}) || removalOperation(step.forward) || removalOperation(step.rollback) {
-		return step.firewall == (FirewallChange{}) && validRemovalContract(step)
+		return step.firewall == (FirewallChange{}) && step.cloudflare.Action == "" && validRemovalContract(step)
+	}
+	if step.cloudflare.Action != "" || cloudflareOperation(step.forward) || cloudflareOperation(step.rollback) {
+		return step.firewall == (FirewallChange{}) && step.removal == (RemovalChange{}) && validCloudflareContract(step)
 	}
 	if step.owner == NetworkPolicyModule || networkOperation(step.forward) || networkOperation(step.rollback) {
 		return step.owner == NetworkPolicyModule && step.rollback == RestorePriorNetworkPolicy && validFirewallContract(step.firewall, step.forward)
 	}
-	return step.firewall == (FirewallChange{}) && step.removal == (RemovalChange{})
+	return step.firewall == (FirewallChange{}) && step.removal == (RemovalChange{}) && step.cloudflare.Action == ""
+}
+
+func cloudflareOperation(operation OperationKind) bool {
+	return operation == CreateCloudflareResource || operation == DeleteCreatedCloudflareResource || operation == ConfigureCloudflareTunnel || operation == RestoreCloudflareTunnel || operation == ActivateCloudflaredService || operation == RestoreCloudflaredService
+}
+
+func validCloudflareContract(step Step) bool {
+	change := step.cloudflare
+	if step.owner != CloudflareModule || !safeIdentity(change.AccountID) || change.TunnelID != "" && !safeIdentity(change.TunnelID) || change.TunnelIDFromStep < 0 || change.TunnelID != "" && change.TunnelIDFromStep != 0 {
+		return false
+	}
+	validTunnel := change.TunnelID != "" || change.TunnelIDFromStep > 0
+	switch change.Action {
+	case CloudflareTunnelCreate:
+		return step.forward == CreateCloudflareResource && step.rollback == DeleteCreatedCloudflareResource && change.ZoneID == "" && change.TunnelID == "" && change.TunnelIDFromStep == 0 && safeIdentity(change.TunnelName) && change.Hostname == "" && len(change.Routes) == 0
+	case CloudflareRoutesPut:
+		if step.forward != ConfigureCloudflareTunnel || step.rollback != RestoreCloudflareTunnel || !validTunnel || len(change.Routes) < 2 || change.Routes[len(change.Routes)-1] != (CloudflareRoute{Origin: "http_status:404"}) {
+			return false
+		}
+		for index, route := range change.Routes {
+			if index == len(change.Routes)-1 {
+				continue
+			}
+			if route.Hostname == "" || route.Origin != "http://127.0.0.1:11080" && route.Origin != "http://127.0.0.1:11081" {
+				return false
+			}
+		}
+		return true
+	case CloudflareDNSCreate:
+		validType := change.RecordType == "CNAME" && validTunnel || (change.RecordType == "A" || change.RecordType == "AAAA") && change.Content != ""
+		return step.forward == CreateCloudflareResource && step.rollback == DeleteCreatedCloudflareResource && safeIdentity(change.ZoneID) && change.Hostname != "" && validType && len(change.Routes) == 0
+	case CloudflaredActivate:
+		return step.forward == ActivateCloudflaredService && step.rollback == RestoreCloudflaredService && validTunnel && change.ZoneID == "" && change.Hostname == "" && len(change.Routes) == 0
+	}
+	return false
 }
 
 func removalOperation(operation OperationKind) bool {

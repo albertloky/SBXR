@@ -54,6 +54,15 @@ type FirewallExecutor interface {
 	Inspect(systemchanges.Step, io.Reader, time.Duration) (systemchanges.StepEffect, error)
 }
 
+type CloudflareExecutor interface {
+	CaptureRollback(systemchanges.Step, func(io.Reader) error) error
+	Execute(systemchanges.Step, string, time.Duration) (systemchanges.StepEvidence, error)
+	Reverse(systemchanges.Step, systemchanges.StepEvidence, io.Reader, time.Duration) (systemchanges.StepEvidence, error)
+	CheckWholeTunnel([]systemchanges.StepEvidence, time.Duration) (systemchanges.HealthStatus, error)
+	ValidateInstalledService(string) error
+	ValidateNativeConfiguration(time.Duration) error
+}
+
 type snapshotManifest struct {
 	SchemaVersion int                          `json:"schema_version"`
 	Release       systemchanges.ReleaseBinding `json:"release_identity"`
@@ -69,6 +78,7 @@ type journalStep struct {
 	Inspection   systemchanges.InspectionContract   `json:"inspection"`
 	Firewall     *systemchanges.FirewallChange      `json:"firewall,omitempty"`
 	Removal      *systemchanges.RemovalChange       `json:"removal,omitempty"`
+	Cloudflare   *systemchanges.CloudflareChange    `json:"cloudflare,omitempty"`
 }
 
 type journalEntry struct {
@@ -143,6 +153,11 @@ func (a Adapter) Prepare(lease systemchanges.ExecutionLease, preparation systemc
 				return errors.New("native firewall Adapter unavailable")
 			}
 			captureErr = a.firewall.CaptureRollback(step, captureRollback)
+		} else if _, ok := step.CloudflareChange(); ok {
+			if a.cloudflare == nil {
+				return errors.New("Cloudflare transaction executor unavailable")
+			}
+			captureErr = a.cloudflare.CaptureRollback(step, captureRollback)
 		} else {
 			captureErr = a.host.CaptureRollback(step, captureRollback)
 		}
@@ -170,6 +185,9 @@ func (a Adapter) Prepare(lease systemchanges.ExecutionLease, preparation systemc
 		}
 		if removal, ok := step.RemovalChange(); ok {
 			steps[index].Removal = &removal
+		}
+		if cloudflare, ok := step.CloudflareChange(); ok {
+			steps[index].Cloudflare = &cloudflare
 		}
 	}
 	entry := journalEntry{Checkpoint: systemchanges.Prepared, ChangeSet: preparation.ChangeSet, Mutation: preparation.Mutation, Starting: preparation.Starting, OutcomeOwner: preparation.OutcomeOwner, PlanSHA256: preparation.PlanSHA256, State: &preparation.State, Steps: steps, Checks: preparation.Checks, Timeouts: preparation.Timeouts}
@@ -213,11 +231,18 @@ func (a Adapter) Record(lease systemchanges.ExecutionLease, record systemchanges
 	if record.Checkpoint == systemchanges.TransactionMaterialDeleted || record.Checkpoint == systemchanges.FinalRemovalAbsenceVerified {
 		verify = verifyFinalizingTransaction
 	}
-	if err := verify(root, target, a.uid); err != nil {
+	if record.Checkpoint == systemchanges.StateFinalized && record.State != nil {
+		if err := verifyDeferredStateGeneration(root, target, *record.State, a.uid); err != nil {
+			return err
+		}
+	} else if err := verify(root, target, a.uid); err != nil {
 		return err
 	}
-	if err := appendJournal(root, path.Join(target, "journal.jsonl"), journalEntry{Checkpoint: record.Checkpoint, Step: record.Step, Evidence: record.Evidence}, a.uid); err != nil {
+	if err := appendJournal(root, path.Join(target, "journal.jsonl"), journalEntry{Checkpoint: record.Checkpoint, Step: record.Step, Evidence: record.Evidence, State: record.State}, a.uid); err != nil {
 		return err
+	}
+	if record.Checkpoint == systemchanges.StateFinalized {
+		return discardDeferredPrevious(root, target)
 	}
 	if record.Checkpoint == systemchanges.StepCompleted && record.CompletedStep != nil {
 		if _, ok := record.CompletedStep.FirewallChange(); ok && a.firewall != nil {
@@ -228,6 +253,65 @@ func (a Adapter) Record(lease systemchanges.ExecutionLease, record systemchanges
 		}
 	}
 	return nil
+}
+
+func (a Adapter) ReplaceStateArtifacts(lease systemchanges.ExecutionLease, changeSet string, binding systemchanges.StateTransactionBinding, stream func(func(name string, mode uint32, source io.Reader) error) error) error {
+	if !lease.Authorized() || !safeName(changeSet) || binding.ChangeSet != changeSet || stream == nil {
+		return errors.New("invalid deferred State finalization")
+	}
+	root, err := os.OpenRoot(a.root)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	target := path.Join(transactionDirectory, changeSet)
+	manifest, err := verifyTransactionManifest(root, target, a.uid)
+	if err != nil {
+		return err
+	}
+	temporary := path.Join(target, "prepared.finalizing")
+	previous := path.Join(target, "prepared.previous")
+	if err := root.Mkdir(temporary, 0o700); err != nil {
+		return err
+	}
+	checksums := map[string]string{}
+	write := func(name string, mode uint32, source io.Reader) error {
+		if mode != 0o600 || !strings.HasPrefix(name, "prepared/") || !safeArtifact(name) || checksums[name] != "" {
+			return errors.New("unsafe deferred State artifact")
+		}
+		checksum, err := writeProtected(root, path.Join(temporary, path.Base(name)), source, a.uid)
+		if err == nil {
+			checksums[name] = checksum
+		}
+		return err
+	}
+	if err := stream(write); err != nil || checksums["prepared/state.json"] != binding.PreparedStateSHA256 || checksums["prepared/manifests.json"] != binding.PreparedManifestSHA256 {
+		return errors.New("final State artifacts disagree with their binding")
+	}
+	for name := range manifest.Files {
+		if strings.HasPrefix(name, "prepared/") {
+			delete(manifest.Files, name)
+		}
+	}
+	for name, checksum := range checksums {
+		manifest.Files[name] = checksum
+	}
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		return err
+	}
+	nextManifest := path.Join(target, "manifest.finalizing")
+	oldManifest := path.Join(target, "manifest.previous")
+	if _, err := writeProtected(root, nextManifest, bytes.NewReader(manifestBytes), a.uid); err != nil {
+		return err
+	}
+	if err := syncDirectory(root, temporary); err != nil || root.Rename(path.Join(target, "prepared"), previous) != nil || root.Rename(temporary, path.Join(target, "prepared")) != nil || root.Rename(path.Join(target, "manifest.json"), oldManifest) != nil || root.Rename(nextManifest, path.Join(target, "manifest.json")) != nil {
+		return errors.New("deferred State artifact replacement was interrupted")
+	}
+	if err := syncDirectory(root, target); err != nil {
+		return err
+	}
+	return verifyDeferredStateGeneration(root, target, binding, a.uid)
 }
 
 func (a Adapter) Execute(lease systemchanges.ExecutionLease, changeSet string, number int, step systemchanges.Step, timeout time.Duration, cancellation *systemchanges.Cancellation) (systemchanges.StepEvidence, error) {
@@ -247,7 +331,27 @@ func (a Adapter) Execute(lease systemchanges.ExecutionLease, changeSet string, n
 		}
 		return a.firewall.Execute(step, path.Join(a.root, transactionDirectory, changeSet, name), timeout, cancellation)
 	}
-	return a.host.Execute(step, timeout, cancellation)
+	if change, ok := step.CloudflareChange(); ok {
+		if a.cloudflare == nil || !safeName(changeSet) || number < 1 {
+			return systemchanges.StepEvidence{}, errors.New("Cloudflare transaction executor unavailable")
+		}
+		resolved := change.TunnelID
+		if change.TunnelIDFromStep > 0 {
+			prior, err := a.completedStepEvidence(changeSet, change.TunnelIDFromStep)
+			if err != nil || prior.ResourceType != string(systemchanges.CloudflareTunnelResource) {
+				return systemchanges.StepEvidence{}, errors.New("journaled Tunnel identifier unavailable")
+			}
+			resolved = prior.ResourceID
+		}
+		return a.cloudflare.Execute(step, resolved, timeout)
+	}
+	evidence, err := a.host.Execute(step, timeout, cancellation)
+	if err == nil && step.Owner() == systemchanges.CloudflareModule && step.Forward() == systemchanges.ActivatePreparedConfiguration {
+		if a.cloudflare == nil || a.cloudflare.ValidateInstalledService(a.root) != nil || a.cloudflare.ValidateNativeConfiguration(timeout) != nil {
+			return systemchanges.StepEvidence{}, errors.New("installed cloudflared service is unproved")
+		}
+	}
+	return evidence, err
 }
 
 func (a Adapter) Reverse(lease systemchanges.ExecutionLease, changeSet string, number int, step systemchanges.Step, timeout time.Duration) (systemchanges.StepEvidence, error) {
@@ -279,7 +383,36 @@ func (a Adapter) Reverse(lease systemchanges.ExecutionLease, changeSet string, n
 		}
 		return a.firewall.Reverse(step, bytes.NewReader(content), timeout)
 	}
+	if _, ok := step.CloudflareChange(); ok {
+		if a.cloudflare == nil {
+			return systemchanges.StepEvidence{}, errors.New("Cloudflare rollback executor unavailable")
+		}
+		evidence, err := a.completedStepEvidence(changeSet, number)
+		if err != nil {
+			evidence = systemchanges.StepEvidence{}
+		}
+		return a.cloudflare.Reverse(step, evidence, bytes.NewReader(content), timeout)
+	}
 	return a.host.Reverse(step, bytes.NewReader(content), timeout)
+}
+
+func (a Adapter) completedStepEvidence(changeSet string, number int) (systemchanges.StepEvidence, error) {
+	root, err := os.OpenRoot(a.root)
+	if err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	defer root.Close()
+	entries, err := readJournal(root, path.Join(transactionDirectory, changeSet, "journal.jsonl"))
+	if err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	for index := len(entries) - 1; index >= 0; index-- {
+		entry := entries[index]
+		if entry.Checkpoint == systemchanges.StepCompleted && entry.Step == number && entry.Evidence != nil {
+			return *entry.Evidence, nil
+		}
+	}
+	return systemchanges.StepEvidence{}, errors.New("completed step evidence unavailable")
 }
 
 func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges.RecoveryTransaction, error) {
@@ -310,7 +443,15 @@ func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges
 	if err != nil || !validJournal(journal) {
 		return systemchanges.RecoveryTransaction{}, errors.New("recovery journal is invalid")
 	}
+	if err := reconcileDeferredReplacement(root, directory, journal); err != nil {
+		return systemchanges.RecoveryTransaction{}, errors.New("deferred State replacement is unprovable")
+	}
 	prepared, last := journal[0], journal[len(journal)-1]
+	for _, entry := range journal[1:] {
+		if entry.Checkpoint == systemchanges.StateFinalized && entry.State != nil {
+			prepared.State = entry.State
+		}
+	}
 	irreversible := prepared.Mutation == systemchanges.CompleteRemovalMutation && systemchanges.IsIrreversibleRemovalCheckpoint(last.Checkpoint)
 	if prepared.State == nil || prepared.ChangeSet != changeSet || !validRecoveryJournalBinding(prepared) {
 		return systemchanges.RecoveryTransaction{}, errors.New("recovery transaction lineage is invalid")
@@ -325,9 +466,9 @@ func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges
 	for index, persisted := range prepared.Steps {
 		var step systemchanges.Step
 		var err error
-		if persisted.Firewall == nil && persisted.Removal == nil {
+		if persisted.Firewall == nil && persisted.Removal == nil && persisted.Cloudflare == nil {
 			step, err = systemchanges.NewStep(persisted.Owner, persisted.Forward, persisted.Rollback)
-		} else if persisted.Firewall != nil && persisted.Removal == nil {
+		} else if persisted.Firewall != nil && persisted.Removal == nil && persisted.Cloudflare == nil {
 			if a.firewall == nil {
 				return systemchanges.RecoveryTransaction{}, errors.New("native firewall Adapter unavailable")
 			}
@@ -341,8 +482,10 @@ func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges
 			default:
 				err = errors.New("unknown firewall action")
 			}
-		} else if persisted.Firewall == nil && persisted.Removal != nil {
+		} else if persisted.Firewall == nil && persisted.Removal != nil && persisted.Cloudflare == nil {
 			step, err = systemchanges.RestoreRemovalStep(lease, *persisted.Removal)
+		} else if persisted.Firewall == nil && persisted.Removal == nil && persisted.Cloudflare != nil {
+			step, err = systemchanges.NewCloudflareStep(*persisted.Cloudflare)
 		} else {
 			err = errors.New("ambiguous typed step")
 		}
@@ -644,7 +787,40 @@ func (a Adapter) Check(lease systemchanges.ExecutionLease, check systemchanges.C
 	if !lease.Authorized() || a.host == nil {
 		return systemchanges.Unknown, errors.New("typed Ubuntu transaction host unavailable")
 	}
+	if check.Owner == systemchanges.CloudflareModule && check.Code == "CLOUDFLARE-WHOLE-TUNNEL" {
+		if a.cloudflare == nil {
+			return systemchanges.Unknown, errors.New("Cloudflare health executor unavailable")
+		}
+		evidence, err := a.activeStepEvidence()
+		if err != nil {
+			return systemchanges.Unknown, err
+		}
+		return a.cloudflare.CheckWholeTunnel(evidence, timeout)
+	}
 	return a.host.Check(check, phase, timeout)
+}
+
+func (a Adapter) activeStepEvidence() ([]systemchanges.StepEvidence, error) {
+	root, err := os.OpenRoot(a.root)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	entries, err := fs.ReadDir(root.FS(), transactionDirectory)
+	if err != nil || len(entries) != 1 || !entries[0].IsDir() {
+		return nil, errors.New("active Cloudflare transaction unavailable")
+	}
+	journal, err := readJournal(root, path.Join(transactionDirectory, entries[0].Name(), "journal.jsonl"))
+	if err != nil || !validJournal(journal) || len(journal) == 0 {
+		return nil, errors.New("Cloudflare health journal unavailable")
+	}
+	evidence := make([]systemchanges.StepEvidence, len(journal[0].Steps))
+	for _, entry := range journal {
+		if entry.Checkpoint == systemchanges.StepCompleted && entry.Step > 0 && entry.Step <= len(evidence) && entry.Evidence != nil {
+			evidence[entry.Step-1] = *entry.Evidence
+		}
+	}
+	return evidence, nil
 }
 
 func (a Adapter) VerifyAgreement(lease systemchanges.ExecutionLease, agreement systemchanges.Agreement, timeout time.Duration) error {
@@ -816,9 +992,11 @@ func validNextCheckpoint(entries []journalEntry, next journalEntry) bool {
 		return next.Checkpoint == systemchanges.StepCompleted && next.Step == last.Step && validEvidence(next.Evidence) || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
 	case systemchanges.StepCompleted:
 		if last.Step < total {
-			return next.Checkpoint == systemchanges.StepStarted && next.Step == last.Step+1 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
+			return next.Checkpoint == systemchanges.StateFinalized && next.Step == last.Step && next.State != nil || next.Checkpoint == systemchanges.StepStarted && next.Step == last.Step+1 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
 		}
-		return next.Checkpoint == systemchanges.PrePublicationHealthPassed && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
+		return next.Checkpoint == systemchanges.StateFinalized && next.Step == 0 && next.State != nil || next.Checkpoint == systemchanges.PrePublicationHealthPassed && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
+	case systemchanges.StateFinalized:
+		return next.Checkpoint == systemchanges.StepStarted && next.Step == last.Step+1 || next.Checkpoint == systemchanges.PrePublicationHealthPassed && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
 	case systemchanges.PrePublicationHealthPassed:
 		return next.Checkpoint == systemchanges.OwnedExternalDeletionVerified && next.Step == 0 || next.Checkpoint == systemchanges.StatePublicationStarted && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total
 	case systemchanges.OwnedExternalDeletionVerified:
@@ -868,6 +1046,9 @@ func validEvidence(evidence *systemchanges.StepEvidence) bool {
 	if evidence == nil || evidence.Code == "" || len(evidence.Code) > 128 || len(evidence.SHA256) != 64 {
 		return false
 	}
+	if (evidence.ResourceType == "") != (evidence.ResourceID == "") || evidence.ResourceType != "" && (!safeName(evidence.ResourceType) || !safeName(evidence.ResourceID)) {
+		return false
+	}
 	for _, character := range evidence.Code {
 		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '-' {
 			continue
@@ -881,6 +1062,112 @@ func validEvidence(evidence *systemchanges.StepEvidence) bool {
 func verifyTransaction(root *os.Root, directory string, uid int) error {
 	_, err := verifyTransactionManifest(root, directory, uid)
 	return err
+}
+
+func verifyDeferredStateGeneration(root *os.Root, directory string, binding systemchanges.StateTransactionBinding, uid int) error {
+	manifest, err := readSnapshotManifest(root, directory, uid)
+	if err != nil || manifest.Files["prepared/state.json"] != binding.PreparedStateSHA256 || manifest.Files["prepared/manifests.json"] != binding.PreparedManifestSHA256 {
+		return errors.New("finalized State generation is unbound")
+	}
+	for name, checksum := range manifest.Files {
+		if !safeArtifact(name) || verifyFile(root, path.Join(directory, name), uid) != nil {
+			return errors.New("finalized State artifact is unsafe")
+		}
+		content, readErr := root.ReadFile(path.Join(directory, name))
+		digest := sha256.Sum256(content)
+		if readErr != nil || hex.EncodeToString(digest[:]) != checksum {
+			return errors.New("finalized State artifact checksum mismatch")
+		}
+	}
+	return nil
+}
+
+func reconcileDeferredReplacement(root *os.Root, directory string, journal []journalEntry) error {
+	previous := path.Join(directory, "prepared.previous")
+	oldManifest := path.Join(directory, "manifest.previous")
+	hasPrevious := pathExists(root, previous) || pathExists(root, oldManifest)
+	if !hasPrevious && !pathExists(root, path.Join(directory, "prepared.finalizing")) && !pathExists(root, path.Join(directory, "manifest.finalizing")) {
+		return nil
+	}
+	finalized := false
+	for _, entry := range journal {
+		if entry.Checkpoint == systemchanges.StateFinalized && entry.State != nil {
+			finalized = true
+		}
+	}
+	if finalized {
+		return discardDeferredPrevious(root, directory)
+	}
+	if pathExists(root, previous) {
+		if pathExists(root, path.Join(directory, "prepared")) {
+			if err := removeFlatDirectory(root, path.Join(directory, "prepared")); err != nil {
+				return err
+			}
+		}
+		if err := root.Rename(previous, path.Join(directory, "prepared")); err != nil {
+			return err
+		}
+	}
+	if pathExists(root, oldManifest) {
+		_ = root.Remove(path.Join(directory, "manifest.json"))
+		if err := root.Rename(oldManifest, path.Join(directory, "manifest.json")); err != nil {
+			return err
+		}
+	}
+	for _, name := range []string{"prepared.finalizing", "manifest.finalizing"} {
+		candidate := path.Join(directory, name)
+		if pathExists(root, candidate) {
+			if strings.HasPrefix(name, "prepared") {
+				if err := removeFlatDirectory(root, candidate); err != nil {
+					return err
+				}
+			} else if err := root.Remove(candidate); err != nil {
+				return err
+			}
+		}
+	}
+	return syncDirectory(root, directory)
+}
+
+func discardDeferredPrevious(root *os.Root, directory string) error {
+	previous := path.Join(directory, "prepared.previous")
+	if pathExists(root, previous) {
+		if err := removeFlatDirectory(root, previous); err != nil {
+			return err
+		}
+	}
+	for _, name := range []string{"manifest.previous", "prepared.finalizing", "manifest.finalizing"} {
+		candidate := path.Join(directory, name)
+		if !pathExists(root, candidate) {
+			continue
+		}
+		if strings.HasPrefix(name, "prepared") {
+			if err := removeFlatDirectory(root, candidate); err != nil {
+				return err
+			}
+		} else if err := root.Remove(candidate); err != nil {
+			return err
+		}
+	}
+	return syncDirectory(root, directory)
+}
+
+func removeFlatDirectory(root *os.Root, directory string) error {
+	entries, err := fs.ReadDir(root.FS(), directory)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !safeName(entry.Name()) || root.Remove(path.Join(directory, entry.Name())) != nil {
+			return errors.New("deferred State generation could not be removed")
+		}
+	}
+	return root.Remove(directory)
+}
+
+func pathExists(root *os.Root, name string) bool {
+	_, err := root.Lstat(name)
+	return err == nil
 }
 
 func verifyTransactionManifest(root *os.Root, directory string, uid int) (snapshotManifest, error) {

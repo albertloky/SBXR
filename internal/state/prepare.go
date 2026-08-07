@@ -338,6 +338,28 @@ type PreparedCommit struct {
 	preparedSHA256  string
 	migration       MigrationReview
 	consumed        atomic.Bool
+	deferred        *deferredCloudflare
+}
+
+type CloudflareEvidenceBinding struct {
+	TunnelStep             int
+	XHTTPDNSRecordStep     int
+	WebSocketDNSRecordStep int
+	DirectIPv4RecordStep   int
+	DirectIPv6RecordStep   int
+}
+
+type DeferredCloudflareAuthority interface {
+	StateDeferredCloudflare() (source any, bindingJSON []byte, templateSHA256 string, valid bool)
+}
+
+type deferredCloudflare struct {
+	candidate  DesiredState
+	validators SemanticValidators
+	materials  ServiceMaterials
+	runToken   VerifiedInfrastructureSecret
+	binding    CloudflareEvidenceBinding
+	used       atomic.Bool
 }
 
 func (commit *PreparedCommit) Revision() uint64 {
@@ -373,6 +395,49 @@ func (commit *PreparedCommit) SystemChangesPreparedState() (changeSet string, re
 // PrepareCommit validates one complete candidate and typed owning-Module
 // outputs against the exact loaded bytes without mutating storage.
 func (i Interface) PrepareCommit(request PrepareRequest) (*PreparedCommit, error) {
+	return i.prepareCommit(request, nil)
+}
+
+// PrepareDeferredCloudflareCommit binds every reviewed value known before
+// mutation while reserving only provider-created IDs and the run token for
+// State-owned finalization inside the active System Changes transaction.
+func (i Interface) PrepareDeferredCloudflareCommit(request PrepareRequest, authority DeferredCloudflareAuthority) (*PreparedCommit, error) {
+	typeOf := reflect.TypeOf(authority)
+	if typeOf == nil || typeOf.Kind() != reflect.Pointer || typeOf.Elem().PkgPath() != "github.com/albertloky/SBXR/internal/cloudflaretunnel" || typeOf.Elem().Name() != "Plan" {
+		return nil, finding("STATE-CLOUDFLARE-DEFERRED", "deferred Cloudflare finalization", "the authority did not come from Cloudflare Tunnel", "one exact reviewed Cloudflare Plan", "caller-made provider bindings cannot authorize State", "rebuild the Cloudflare Plan")
+	}
+	source, bindingJSON, templateSHA256, valid := authority.StateDeferredCloudflare()
+	runToken, sourceOK := source.(VerifiedInfrastructureSecret)
+	var planned struct {
+		AccountID, ZoneID, TunnelName, XHTTPHostname, WebSocketHostname, DirectHostname string
+		PublicIPv4, PublicIPv6                                                          string
+		CloudflareEvidenceBinding
+	}
+	bindingErr := json.Unmarshal(bindingJSON, &planned)
+	binding := planned.CloudflareEvidenceBinding
+	template, templateErr := marshalProtectedJSON(request.Candidate)
+	templateDigest := sha256.Sum256(template)
+	candidate := request.Candidate
+	fixedFactsMatch := planned.AccountID == candidate.Cloudflare.AccountID && planned.ZoneID == candidate.Cloudflare.ZoneID && planned.TunnelName == candidate.Cloudflare.TunnelName && planned.XHTTPHostname == candidate.Cloudflare.XHTTPHostname && planned.WebSocketHostname == candidate.Cloudflare.WebSocketHostname && planned.DirectHostname == candidate.Cloudflare.DirectHostname && planned.PublicIPv4 == candidate.NetworkPolicy.PublicIPv4 && planned.PublicIPv6 == candidate.NetworkPolicy.PublicIPv6
+	if !valid || bindingErr != nil || !fixedFactsMatch || !sourceOK || runToken == nil || templateErr != nil || hex.EncodeToString(templateDigest[:]) != templateSHA256 || !validCloudflareEvidenceBinding(binding, request.Candidate.NetworkPolicy) {
+		return nil, finding("STATE-CLOUDFLARE-DEFERRED", "deferred Cloudflare finalization", "the run-token handoff or evidence binding is incomplete", "one exact one-use State finalization binding", "provider-created values cannot be guessed", "rebuild the Cloudflare Plan")
+	}
+	original := request.Candidate
+	staged, ok := stageDeferredCloudflare(original)
+	if !ok {
+		return nil, finding("STATE-CLOUDFLARE-DEFERRED", "deferred Cloudflare finalization", "the candidate already contains provider-created values or lacks reviewed fixed values", "only empty provider-created slots in one otherwise complete candidate", "preexisting identifiers cannot be adopted", "rebuild the Cloudflare Plan")
+	}
+	metadata := &deferredCloudflare{candidate: original, validators: request.SemanticValidators, materials: request.ServiceMaterials, runToken: runToken, binding: binding}
+	request.Candidate = staged
+	request.ServiceMaterials.Cloudflared = nil
+	commit, err := i.prepareCommit(request, metadata)
+	if err == nil {
+		commit.candidateSHA256 = templateSHA256
+	}
+	return commit, err
+}
+
+func (i Interface) prepareCommit(request PrepareRequest, deferred *deferredCloudflare) (*PreparedCommit, error) {
 	if i.implementation == nil || i.implementation.storage == nil {
 		return nil, finding("STATE-STORAGE-UNAVAILABLE", "Desired State storage", "no storage Adapter", "the production State storage Adapter", "State cannot prepare trusted transaction material", "restore the State Adapter and review again")
 	}
@@ -393,10 +458,18 @@ func (i Interface) PrepareCommit(request PrepareRequest) (*PreparedCommit, error
 	if revision == 0 || !validReleaseIdentity(request.CandidateReleaseIdentity) || !validChangeSetIdentity(request.ChangeSet) {
 		return nil, finding("STATE-SERVICE-MANIFEST", "prepared service manifest", "the candidate revision, Release Identity, Change Set, or reviewed inputs are invalid", "one exact loaded revision and complete reviewed binding", "prepared bytes must be bound before mutation", "correct the manifest inputs and review again")
 	}
-	if !validateSemantics(request.Candidate, request.SemanticValidators) {
+	semanticsValid := validateSemantics(request.Candidate, request.SemanticValidators)
+	if deferred != nil {
+		semanticsValid = validateSemanticsExceptCloudflare(request.Candidate, request.SemanticValidators)
+	}
+	if !semanticsValid {
 		return nil, finding("STATE-CANDIDATE-SEMANTIC", "Module-owned semantic validation", "an owning validator is missing or refused its typed section", "successful validation by every owning Module", "State cannot replace operational ownership or accept caller-made validation claims", "correct the candidate through the owning Module and review again")
 	}
-	if !reflect.DeepEqual(request.ServiceMaterials, expectedServiceMaterials(request.Candidate)) {
+	expectedMaterials := expectedServiceMaterials(request.Candidate)
+	if deferred != nil {
+		expectedMaterials.Cloudflared = nil
+	}
+	if !reflect.DeepEqual(request.ServiceMaterials, expectedMaterials) {
 		return nil, finding("STATE-SERVICE-MATERIAL-UNRELATED", "prepared service material", "material is missing, stale, or contains an unrelated value", "only each service's exact required candidate values", "runtime services must not receive complete Desired State or unrelated secrets", "regenerate the owning Module material and review again")
 	}
 
@@ -444,8 +517,60 @@ func (i Interface) PrepareCommit(request PrepareRequest) (*PreparedCommit, error
 		starting: loaded, storage: i.implementation.storage,
 		candidateSHA256: candidateChecksum, manifestSHA256: manifestChecksum,
 		preparedState: preparedState, preparedSHA256: hex.EncodeToString(preparedDigest[:]),
-		migration: loaded.migration,
+		migration: loaded.migration, deferred: deferred,
 	}, nil
+}
+
+func validateSemanticsExceptCloudflare(candidate DesiredState, validators SemanticValidators) bool {
+	software := SoftwareLifecycleIntent{Installation: candidate.Installation, Software: candidate.Software}
+	if missingValidator(validators.ConnectionProfiles) || missingValidator(validators.Subscription) || missingValidator(validators.Certificates) || missingValidator(validators.NetworkPolicy) || missingValidator(validators.SoftwareLifecycle) {
+		return false
+	}
+	return validateConnectionProfiles(validators.ConnectionProfiles, candidate.ConnectionProfiles) &&
+		validateSubscription(validators.Subscription, candidate.Subscription) &&
+		validatorAccepted(func() error { return validators.Certificates.ValidateCertificates(candidate.Certificates) }) &&
+		validatorAccepted(func() error { return validators.NetworkPolicy.ValidateNetworkPolicy(candidate.NetworkPolicy) }) &&
+		validatorAccepted(func() error { return validators.SoftwareLifecycle.ValidateSoftwareLifecycle(software) })
+}
+
+func stageDeferredCloudflare(candidate DesiredState) (DesiredState, bool) {
+	cloudflare := &candidate.Cloudflare
+	if empty(cloudflare.AccountID, cloudflare.ZoneID, cloudflare.ZoneName, cloudflare.TunnelName, cloudflare.XHTTPHostname, cloudflare.WebSocketHostname, cloudflare.DirectHostname) || !cloudflare.ManagementToken.isSet() || cloudflare.TunnelID != "" || cloudflare.TunnelRunToken.isSet() || cloudflare.XHTTPDNSRecordID != "" || cloudflare.WebSocketDNSRecordID != "" || cloudflare.DirectIPv4RecordID != "" || cloudflare.DirectIPv6RecordID != "" {
+		return DesiredState{}, false
+	}
+	cloudflare.TunnelID = "deferred-cloudflare-tunnel"
+	cloudflare.TunnelRunToken = NewInfrastructureSecret("deferred-cloudflare-run-token")
+	cloudflare.XHTTPDNSRecordID = "deferred-xhttp-dns"
+	cloudflare.WebSocketDNSRecordID = "deferred-websocket-dns"
+	if candidate.NetworkPolicy.PublicIPv4 != "" {
+		cloudflare.DirectIPv4RecordID = "deferred-direct-ipv4-dns"
+	}
+	if candidate.NetworkPolicy.PublicIPv6 != "" {
+		cloudflare.DirectIPv6RecordID = "deferred-direct-ipv6-dns"
+	}
+	return candidate, true
+}
+
+func validCloudflareEvidenceBinding(binding CloudflareEvidenceBinding, network NetworkPolicyInputs) bool {
+	required := []int{binding.TunnelStep, binding.XHTTPDNSRecordStep, binding.WebSocketDNSRecordStep}
+	if network.PublicIPv4 != "" {
+		required = append(required, binding.DirectIPv4RecordStep)
+	} else if binding.DirectIPv4RecordStep != 0 {
+		return false
+	}
+	if network.PublicIPv6 != "" {
+		required = append(required, binding.DirectIPv6RecordStep)
+	} else if binding.DirectIPv6RecordStep != 0 {
+		return false
+	}
+	seen := map[int]bool{}
+	for _, step := range required {
+		if step < 1 || seen[step] {
+			return false
+		}
+		seen[step] = true
+	}
+	return true
 }
 
 func (i Interface) claimLoaded(result Result) (*loadedState, *Finding) {

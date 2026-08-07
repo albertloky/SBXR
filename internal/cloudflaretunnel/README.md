@@ -1,6 +1,16 @@
 # Cloudflare Tunnel
 
-This Module owns Cloudflare meaning. `CFT-01` implements only the read-only `View` slice. Later tickets add `Plan` and `Apply`; this slice does not create a Tunnel, change DNS, or store a credential.
+This Module owns Cloudflare meaning. `View` verifies one least-authority account token and the selected account, zone, delegation, and Network Policy path. The installation `Plan` contributes typed, secret-free Tunnel, route, DNS, and protected-service steps to the one System Changes transaction; it owns no second lock, journal, rollback store, or State publisher.
+
+## Installation Plan and Apply
+
+The one-use Plan creates one remote-managed named Tunnel. It publishes only XHTTP to `http://127.0.0.1:11080` and WebSocket to `http://127.0.0.1:11081`, then terminates unmatched requests with `http_status:404`. It creates proxied CNAME records for those two hostnames and DNS-only `A` and/or `AAAA` records for the Direct TLS Hostname only when Network Policy committed that address family. A conflicting resource is never overwritten, adopted, or deleted by name; a DNS conflict gets a freshly rechecked high-entropy hostname proposal.
+
+Cloudflare creates the Tunnel ID, DNS record IDs, and run token during Apply. System Changes records each non-secret identifier before the next provider step. State alone consumes the opaque run token, fills only the Plan-bound empty fields, recalculates every candidate and service checksum, reruns all semantic validators, and durably records `Deferred State finalized`. Only then may the fixed `cloudflared.service` activate and State revision `1` publish.
+
+The service runs as `User=cloudflared` and `Group=cloudflared`. Its token is supplied only with `--token-file /etc/sbxr/cloudflared/token`; token-valued arguments and environment variables are forbidden. Activation checks the exact unit, root-only and group-readable ownership/modes, link safety, and `cloudflared tunnel ingress validate` before health gates run.
+
+Whole-Tunnel health requires the committed Tunnel ID, connected status, both independent hostname routes, matching immutable DNS records, the exact loopback origins, and the 404 terminator. A running process, DNS alone, or one healthy route is not Healthy. Convergence stops after five minutes; temporary observations stop after three failures.
 
 ## View
 

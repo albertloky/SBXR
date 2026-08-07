@@ -220,6 +220,7 @@ type validatingSeams struct {
 	want                DesiredState
 	reject              string
 	panicModule         string
+	dynamicCloudflare   bool
 	calls               map[string]int
 	connectionSecrets   ConnectionProfileSecretReader
 	subscriptionSecrets ClientAccessReader
@@ -269,6 +270,13 @@ func (v *validatingSeams) ValidateCloudflare(got CloudflareSettings, secrets Inf
 	}
 	if secrets.ReadInfrastructureSecret(got.ManagementToken) == "" || secrets.ReadInfrastructureSecret(got.TunnelRunToken) == "" {
 		return errors.New("protected Cloudflare value unavailable")
+	}
+	if v.dynamicCloudflare {
+		want := v.want.Cloudflare
+		if got.AccountID != want.AccountID || got.ZoneID != want.ZoneID || got.TunnelName != want.TunnelName || got.XHTTPHostname != want.XHTTPHostname || got.WebSocketHostname != want.WebSocketHostname || got.DirectHostname != want.DirectHostname || got.TunnelID == "" || got.XHTTPDNSRecordID == "" || got.WebSocketDNSRecordID == "" || got.DirectIPv4RecordID == "" {
+			return errors.New("finalized Cloudflare binding is incomplete")
+		}
+		return nil
 	}
 	return v.validate("cloudflaretunnel", got, v.want.Cloudflare)
 }

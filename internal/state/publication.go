@@ -30,6 +30,7 @@ type TransactionMaterial struct {
 	publication       *publicationAuthority
 	startingRelease   ReleaseIdentity
 	candidateRelease  ReleaseIdentity
+	deferred          *deferredCloudflare
 }
 
 type publicationAuthority struct{ used atomic.Bool }
@@ -65,6 +66,116 @@ func (transaction *TransactionMaterial) SystemChangesBindings(lease any) ([]byte
 		PreparedStateSHA256: transaction.preparedChecksum, PreparedManifestSHA256: transaction.manifestChecksum,
 		ChangeSet: transaction.changeSet, StartingRelease: transaction.startingRelease, CandidateRelease: transaction.candidateRelease,
 	})
+}
+
+func (transaction *TransactionMaterial) SystemChangesDeferred(lease any) bool {
+	return validSystemChangesLease(lease) && transaction != nil && transaction.deferred != nil
+}
+
+type deferredStepEvidence struct {
+	ResourceType string `json:"resource_type"`
+	ResourceID   string `json:"resource_id"`
+}
+
+// SystemChangesFinalizeCloudflare consumes the provider-issued run token only
+// after all referenced IDs are durable, then rebuilds and validates the exact
+// candidate and its protected service copies before publication.
+func (transaction *TransactionMaterial) SystemChangesFinalizeCloudflare(lease any, evidenceJSON []byte) ([]byte, error) {
+	if !validSystemChangesLease(lease) || transaction == nil || transaction.deferred == nil || !transaction.deferred.used.CompareAndSwap(false, true) {
+		return nil, finding("STATE-CLOUDFLARE-FINALIZATION", "deferred Cloudflare finalization", "no fresh authorized finalization", "one active System Changes lease and one-use deferred commit", "State cannot accept provider results outside the transaction", "roll back the active Change Set")
+	}
+	var evidence []deferredStepEvidence
+	if json.Unmarshal(evidenceJSON, &evidence) != nil {
+		return nil, finding("STATE-CLOUDFLARE-EVIDENCE", "Cloudflare provider evidence", "the durable evidence could not be decoded", "exact typed identifiers for every planned create", "State never guesses provider identities", "roll back the active Change Set")
+	}
+	resource := func(step int, kind string) (string, bool) {
+		if step < 1 || step > len(evidence) {
+			return "", false
+		}
+		item := evidence[step-1]
+		return item.ResourceID, item.ResourceType == kind && item.ResourceID != ""
+	}
+	deferred := transaction.deferred
+	candidate := deferred.candidate
+	var ok bool
+	if candidate.Cloudflare.TunnelID, ok = resource(deferred.binding.TunnelStep, "cloudflare-tunnel"); !ok {
+		return nil, deferredEvidenceFinding()
+	}
+	if candidate.Cloudflare.XHTTPDNSRecordID, ok = resource(deferred.binding.XHTTPDNSRecordStep, "cloudflare-dns-record"); !ok {
+		return nil, deferredEvidenceFinding()
+	}
+	if candidate.Cloudflare.WebSocketDNSRecordID, ok = resource(deferred.binding.WebSocketDNSRecordStep, "cloudflare-dns-record"); !ok {
+		return nil, deferredEvidenceFinding()
+	}
+	if deferred.binding.DirectIPv4RecordStep > 0 {
+		if candidate.Cloudflare.DirectIPv4RecordID, ok = resource(deferred.binding.DirectIPv4RecordStep, "cloudflare-dns-record"); !ok {
+			return nil, deferredEvidenceFinding()
+		}
+	}
+	if deferred.binding.DirectIPv6RecordStep > 0 {
+		if candidate.Cloudflare.DirectIPv6RecordID, ok = resource(deferred.binding.DirectIPv6RecordStep, "cloudflare-dns-record"); !ok {
+			return nil, deferredEvidenceFinding()
+		}
+	}
+	if candidate.Cloudflare.TunnelRunToken, ok = NewInfrastructureSecretFrom(deferred.runToken); !ok {
+		return nil, finding("STATE-CLOUDFLARE-RUN-TOKEN", "Tunnel run token", "the one-use protected token was unavailable", "the provider-issued token from the created Tunnel", "State alone may consume this Infrastructure Secret", "roll back the active Change Set")
+	}
+	if problem := validateDesiredState(candidate); problem != nil || !validateSemantics(candidate, deferred.validators) {
+		return nil, finding("STATE-CLOUDFLARE-CANDIDATE", "final Cloudflare candidate", "the completed candidate failed structural or owning-Module validation", "one complete internally consistent Desired State", "provider results cannot bypass State validation", "roll back the active Change Set")
+	}
+	materials := expectedServiceMaterials(candidate)
+	copies, err := prepareServiceCopies(transaction.candidateRevision, transaction.changeSet, materials)
+	if err != nil {
+		return nil, err
+	}
+	preparedState, candidateChecksum, err := prepareStateDocument(transaction.candidateRevision, transaction.candidateRelease, transaction.changeSet, candidate)
+	if err != nil {
+		return nil, finding("STATE-CLOUDFLARE-SERIALIZATION", "final Cloudflare candidate", "the final candidate could not be serialized", "one byte-stable complete candidate", "publication bytes must be exact", "roll back the active Change Set")
+	}
+	manifestChecksum, err := checksumServiceManifests(copies)
+	if err != nil {
+		return nil, err
+	}
+	preparedDigest := sha256.Sum256(preparedState)
+	transaction.candidateChecksum = candidateChecksum
+	transaction.manifestChecksum = manifestChecksum
+	transaction.preparedChecksum = hex.EncodeToString(preparedDigest[:])
+	transaction.preparedState = preparedState
+	transaction.serviceCopies = copies
+	transaction.deferred = nil
+	return transaction.SystemChangesBindings(lease)
+}
+
+func deferredEvidenceFinding() error {
+	return finding("STATE-CLOUDFLARE-EVIDENCE", "Cloudflare provider evidence", "a planned immutable identifier is missing or has the wrong type", "every returned identifier journaled before later work", "State never guesses or adopts provider resources", "roll back the active Change Set")
+}
+
+func prepareServiceCopies(revision uint64, changeSet ChangeSetIdentity, materials ServiceMaterials) (PreparedServiceCopies, error) {
+	var copies PreparedServiceCopies
+	for _, item := range []struct {
+		service, module, group string
+		material               any
+		target                 **PreparedServiceCopy
+	}{
+		{"xray.service", "connectionprofiles", "xray", materials.Xray, &copies.Xray},
+		{"sing-box.service", "connectionprofiles", "sing-box", materials.SingBox, &copies.SingBox},
+		{"cloudflared.service", "cloudflaretunnel", "cloudflared", materials.Cloudflared, &copies.Cloudflared},
+	} {
+		if item.material == nil || reflect.ValueOf(item.material).IsNil() {
+			continue
+		}
+		prepared, err := prepareServiceCopy(item.service, item.module, item.group, revision, changeSet, item.material)
+		if err != nil {
+			return PreparedServiceCopies{}, err
+		}
+		*item.target = &prepared
+	}
+	subscription, err := prepareServiceCopy("sbxr-subscription.service", "subscriptionserving", "sbxr-subscription", revision, changeSet, materials.Subscription)
+	if err != nil {
+		return PreparedServiceCopies{}, err
+	}
+	copies.Subscription = &subscription
+	return copies, nil
 }
 
 // SystemChangesWriteArtifacts streams protected bytes without interpreting them.
@@ -435,6 +546,7 @@ func (commit *PreparedCommit) ConsumeForApply(current ReviewedInputs) (*Transact
 		publication:       &publicationAuthority{},
 		startingRelease:   commit.starting.migration.StartingRelease,
 		candidateRelease:  commit.releaseIdentity,
+		deferred:          commit.deferred,
 	}, nil
 }
 

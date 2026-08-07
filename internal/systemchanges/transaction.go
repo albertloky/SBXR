@@ -17,6 +17,7 @@ const (
 	Prepared                      DurableCheckpoint = "Prepared"
 	StepStarted                   DurableCheckpoint = "Step started"
 	StepCompleted                 DurableCheckpoint = "Step completed"
+	StateFinalized                DurableCheckpoint = "Deferred State finalized"
 	PrePublicationHealthPassed    DurableCheckpoint = "Pre-publication health passed"
 	OwnedExternalDeletionVerified DurableCheckpoint = "Owned external deletion verified"
 	IrreversibleRemovalStarted    DurableCheckpoint = "Irreversible removal started"
@@ -50,6 +51,7 @@ type CheckpointRecord struct {
 	Step          int
 	Evidence      *StepEvidence
 	CompletedStep *Step
+	State         *StateTransactionBinding
 }
 
 func (record CheckpointRecord) String() string {
@@ -122,8 +124,10 @@ type RollbackAgreement struct {
 }
 
 type StepEvidence struct {
-	Code   string `json:"code"`
-	SHA256 string `json:"sha256"`
+	Code         string `json:"code"`
+	SHA256       string `json:"sha256"`
+	ResourceType string `json:"resource_type,omitempty"`
+	ResourceID   string `json:"resource_id,omitempty"`
 }
 
 type StepEffect string
@@ -266,6 +270,12 @@ type stateTransaction interface {
 	SystemChangesWriteArtifacts(lease any, write func(name string, mode uint32, source io.Reader) error) error
 	SystemChangesPublish(lease any) (any, error)
 	SystemChangesRestore(lease any) ([]byte, error)
+	SystemChangesDeferred(lease any) bool
+	SystemChangesFinalizeCloudflare(lease any, evidence []byte) ([]byte, error)
+}
+
+type DeferredStateAdapter interface {
+	ReplaceStateArtifacts(ExecutionLease, string, StateTransactionBinding, func(func(name string, mode uint32, source io.Reader) error) error) error
 }
 
 type stateAgreement interface {
@@ -282,6 +292,9 @@ func (step Step) FirewallChange() (FirewallChange, bool) {
 }
 func (step Step) RemovalChange() (RemovalChange, bool) {
 	return step.removal, step.removal != (RemovalChange{})
+}
+func (step Step) CloudflareChange() (CloudflareChange, bool) {
+	return step.cloudflare, step.cloudflare.Action != ""
 }
 
 // Recover is the private startup path for unfinished ordinary forward work.
@@ -561,16 +574,49 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 	if err := adapter.Prepare(lease, preparation); err != nil {
 		return finish(lock, nothingChanged(spec, "SYSTEM-CHANGES-PREPARATION", Prepared))
 	}
+	evidenceByStep := make([]StepEvidence, len(spec.Steps))
+	finalized := false
+	finalizeDeferredState := func(attempted int) *ApplyResult {
+		if finalized || !transaction.SystemChangesDeferred(lease) {
+			return nil
+		}
+		deferredAdapter, ok := adapter.(DeferredStateAdapter)
+		evidenceJSON, marshalErr := json.Marshal(evidenceByStep)
+		finalBindingJSON, finalizeErr := transaction.SystemChangesFinalizeCloudflare(lease, evidenceJSON)
+		var finalBinding StateTransactionBinding
+		if !ok || marshalErr != nil || finalizeErr != nil || json.Unmarshal(finalBindingJSON, &finalBinding) != nil || finalBinding.ChangeSet != binding.ChangeSet || finalBinding.StartingRevision != binding.StartingRevision || finalBinding.CandidateRevision != binding.CandidateRevision || finalBinding.StartingSHA256 != binding.StartingSHA256 {
+			result := finish(lock, rollbackChange(lease, adapter, transaction, spec, attempted, "SYSTEM-CHANGES-STATE-FINALIZATION", StepCompleted))
+			return &result
+		}
+		if err := deferredAdapter.ReplaceStateArtifacts(lease, spec.Identity, finalBinding, func(write func(name string, mode uint32, source io.Reader) error) error {
+			return transaction.SystemChangesWriteArtifacts(lease, write)
+		}); err != nil {
+			result := finish(lock, rollbackChange(lease, adapter, transaction, spec, attempted, "SYSTEM-CHANGES-STATE-FINALIZATION", StepCompleted))
+			return &result
+		}
+		binding = finalBinding
+		if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: StateFinalized, Step: attempted, State: &binding}); err != nil {
+			result := finish(lock, rollbackChange(lease, adapter, transaction, spec, attempted, "SYSTEM-CHANGES-JOURNAL", StateFinalized))
+			return &result
+		}
+		finalized = true
+		return nil
+	}
 	for index, step := range spec.Steps {
 		if cancellation.Requested() {
 			return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, index))
 		}
 		number := index + 1
+		if step.Owner() == CloudflareModule && step.Forward() == ActivatePreparedConfiguration {
+			if result := finalizeDeferredState(index); result != nil {
+				return *result
+			}
+		}
 		if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: StepStarted, Step: number}); err != nil {
 			return finish(lock, nothingChanged(spec, "SYSTEM-CHANGES-JOURNAL", StepStarted))
 		}
 		evidence, err := adapter.Execute(lease, spec.Identity, number, step, spec.Timeouts.Step, cancellation)
-		if err != nil || !safeIdentity(evidence.Code) || !validSHA256(evidence.SHA256) {
+		if err != nil || !safeIdentity(evidence.Code) || !validSHA256(evidence.SHA256) || !validCloudflareEvidence(step, number, evidence, evidenceByStep) {
 			if cancellation.Requested() {
 				return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, number))
 			}
@@ -579,12 +625,16 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 		if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: StepCompleted, Step: number, Evidence: &evidence, CompletedStep: &step}); err != nil {
 			return finish(lock, rollbackChange(lease, adapter, transaction, spec, number, "SYSTEM-CHANGES-JOURNAL", StepStarted))
 		}
+		evidenceByStep[index] = evidence
 		if cancellation.Requested() {
 			return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, number))
 		}
 	}
 	if cancellation.Requested() {
 		return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, len(spec.Steps)))
+	}
+	if result := finalizeDeferredState(len(spec.Steps)); result != nil {
+		return *result
 	}
 	if !gatePassed(lease, adapter, spec.Checks, PrePublication, spec.Timeouts.Check) {
 		return finish(lock, rollbackChange(lease, adapter, transaction, spec, len(spec.Steps), "SYSTEM-CHANGES-HEALTH", DurableCheckpoint(PrePublication+" health")))
@@ -649,6 +699,30 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 		return finish(lock, recoveryRequired(spec, "SYSTEM-CHANGES-CLEANUP", Complete))
 	}
 	return finish(lock, ApplyResult{Outcome: Completed, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence()}, spec.OutcomeOwner)
+}
+
+func validCloudflareEvidence(step Step, number int, evidence StepEvidence, prior []StepEvidence) bool {
+	change, cloudflare := step.CloudflareChange()
+	if !cloudflare {
+		return evidence.ResourceType == "" && evidence.ResourceID == ""
+	}
+	if change.TunnelIDFromStep > 0 {
+		index := change.TunnelIDFromStep - 1
+		if change.TunnelIDFromStep >= number || index >= len(prior) || prior[index].ResourceType != string(CloudflareTunnelResource) || !safeIdentity(prior[index].ResourceID) {
+			return false
+		}
+	}
+	switch change.Action {
+	case CloudflareTunnelCreate:
+		return evidence.ResourceType == string(CloudflareTunnelResource) && safeIdentity(evidence.ResourceID)
+	case CloudflareDNSCreate:
+		return evidence.ResourceType == string(CloudflareDNSRecordResource) && safeIdentity(evidence.ResourceID)
+	case CloudflareRoutesPut:
+		return evidence.ResourceType == string(CloudflareRouteResource) && safeIdentity(evidence.ResourceID)
+	case CloudflaredActivate:
+		return evidence.ResourceType == "" && evidence.ResourceID == ""
+	}
+	return false
 }
 
 func cancelAndRollback(lease ExecutionLease, adapter TransactionAdapter, transaction stateTransaction, spec ChangeSetSpec, attempted int) ApplyResult {
