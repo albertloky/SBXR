@@ -82,10 +82,12 @@ On the same explicitly approved Acceptance VPS and exact Release Identity:
 
 ## Current acceptance status
 
-| Stage | Status | Evidence |
-|---|---|---|
-| Module Verification | Passed | `go test ./...` passed on the committed implementation. |
-| Seam Verification | Passed | The same full-suite run passed the controlled official-shape Ubuntu Adapter checks. |
-| Integrated Verification | Pending | Later integrated release. |
-| Codex Live Acceptance | Pending | Requires an approved Acceptance Run and exact Release Identity. |
-| Owner Acceptance | Pending if later affected surface requires it | Automation cannot claim this for Albert. |
+| Stage | Owner | Status | Evidence |
+|---|---|---|---|
+| Module Verification | Codex | Passed for prerequisites, IP issuance and activation, domain issuance and activation, IP renewal, and serial IP-then-domain renewal | `CERTIFICATE-PREREQUISITES`, `CERTIFICATE-PLAN`, both candidate and transaction branches, both activation and rollback branches, renewal policy/history/State, and the one serial scheduler pass with marker-safe results. Real issuance and renewal remain Pending. |
+| Seam Verification — controlled Ubuntu fixtures | Codex | Passed | Official-shape Certbot capability and invocation, anchored public-certificate observation, bounded same-origin ACME Renewal Information, exact temporary HTTP-01 authority, filesystem ownership and modes, atomic pointers, fixed service activation, normal-verification IP HTTPS, and separate Hysteria2, TUIC, and AnyTLS checks pass without an Owner credential or public ACME order. |
+| Integrated Verification | Integrated release runner | Pending — integrated release | The complete executable still needs all-Module wiring, private-command and systemd installation, real service coordination, and one exact Release Identity. |
+| Codex Live Acceptance | Codex, only during an approved Acceptance Run | Pending — approved Acceptance Run | No Acceptance VPS, public ACME order, real certificate, real renewal, or outside Acceptance Client was used. |
+| Owner Acceptance | Albert | Pending if the first release or an affected maintained-client surface requires it | Automation cannot claim Albert's maintained client, device, network, or workflow acceptance. |
+
+Module accepted; Release Qualification pending. The fixed `sbxr-ip` and `sbxr-domain` lineages, qualified standalone HTTP-01 boundary, isolated staging, strict candidate checks, atomic serving pointers, checked rollback, narrow standing renewal policy, and one persistent randomized serial scheduler are verified locally. Real `sbxr-ip` staging, production, and renewal; real `sbxr-domain` staging, staging renewal, production, and production renewal; public reachability; outside-VPS normal-verification checks; Integrated Verification; Codex Live Acceptance; required Owner Acceptance; and Release Qualification remain Pending. Unperformed rows stay Pending.
