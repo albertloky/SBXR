@@ -1000,6 +1000,7 @@ func preparedSystemChangeForMutation(t *testing.T, mutation systemchanges.Mutati
 
 type systemChangeTestOptions struct {
 	extraSteps         []systemchanges.Step
+	steps              []systemchanges.Step
 	stepTimeout        time.Duration
 	identity           string
 	startingStatus     systemchanges.InstallationStatus
@@ -1058,6 +1059,9 @@ func preparedSystemChangeWithOptions(t *testing.T, mutation systemchanges.Mutati
 		t.Fatal(err)
 	}
 	steps := append([]systemchanges.Step{step}, options.extraSteps...)
+	if len(options.steps) > 0 {
+		steps = append([]systemchanges.Step(nil), options.steps...)
+	}
 	var typedRemoval systemchanges.TypedRemovalConfirmation
 	var permanentRemoval systemchanges.PermanentRemovalSelection
 	if mutation == systemchanges.CompleteRemovalMutation {
@@ -2352,9 +2356,8 @@ func (policy renewalDuePolicy) Due(lineage certificatelifecycle.Lineage) bool {
 	return true
 }
 
-func (policy renewalDuePolicy) WaitWithinRetryPolicy(lineage certificatelifecycle.Lineage) bool {
-	*policy.events = append(*policy.events, "wait "+string(lineage))
-	return lineage == certificatelifecycle.IPLineage
+func (renewalDuePolicy) Record(certificatelifecycle.Lineage, certificatelifecycle.ApplyResult) error {
+	return nil
 }
 
 type renewalPlanner struct {
@@ -2375,12 +2378,18 @@ func (planner *renewalPlanner) BuildFresh(lineage certificatelifecycle.Lineage) 
 
 type renewalSystemChanges struct{ changes systemchanges.Interface }
 
-func (adapter renewalSystemChanges) Apply(changeSet certificatelifecycle.ChangeSet) certificatelifecycle.ApplyResult {
-	change, ok := changeSet.(*systemchanges.ChangeSet)
-	if !ok {
-		return certificatelifecycle.ApplyResult{Outcome: certificatelifecycle.Refused, Code: "SYSTEM-CHANGES-CHANGE-SET-REQUIRED"}
-	}
-	result := adapter.changes.Apply(change)
+func (adapter renewalSystemChanges) ApplyFresh(build func() (certificatelifecycle.ChangeSet, error)) certificatelifecycle.ApplyResult {
+	result := adapter.changes.ApplyFreshCertificateRenewal(func() (*systemchanges.ChangeSet, error) {
+		changeSet, err := build()
+		if err != nil {
+			return nil, err
+		}
+		change, ok := changeSet.(*systemchanges.ChangeSet)
+		if !ok {
+			return nil, errors.New("controlled renewal Change Set unavailable")
+		}
+		return change, nil
+	})
 	code := ""
 	if result.Finding != nil {
 		code = result.Finding.Code
@@ -2391,28 +2400,57 @@ func (adapter renewalSystemChanges) Apply(changeSet certificatelifecycle.ChangeS
 	}
 }
 
-func TestCertificateRenewalSchedulerUsesRealOneUseSystemChangesLock(t *testing.T) {
-	build := func(identity string) *systemchanges.ChangeSet {
-		t.Helper()
-		_, changeSet, _, _ := preparedSystemChangeWithOptions(t, systemchanges.CertificateRenewalMutation, systemchanges.Check{Owner: systemchanges.CertificateModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CERTIFICATE-RENEWAL"}, systemChangeTestOptions{identity: identity, stepTimeout: time.Second})
-		return changeSet
+func controlledIPRenewalSteps(t *testing.T) []systemchanges.Step {
+	t.Helper()
+	candidate := "table inet sbxr {\n chain input {\n  type filter hook input priority filter\n  policy drop\n  ct state established,related accept\n  tcp dport 22 accept\n  ip daddr 192.0.2.10 tcp dport 80 accept comment \"sbxr:acme-http-01\"\n }\n}"
+	open, err := systemchanges.NewHTTP01OpenStep(candidate, 22)
+	if err != nil {
+		t.Fatal(err)
 	}
-	ipFirst, ipRetry, domain := build("change-8101"), build("change-8102"), build("change-8103")
+	close, err := systemchanges.NewHTTP01CloseStep()
+	if err != nil {
+		t.Fatal(err)
+	}
+	changes := []systemchanges.CertificateChange{
+		{Action: systemchanges.CertificateIPStage, Identity: "192.0.2.10", RequiredProfile: "shortlived", CertName: "sbxr-ip", OwnerEmail: "owner@example.com", ConfigDirectory: "/var/lib/sbxr/certbot/staging/sbxr-ip", Account: "disposable-staging-sbxr-ip"},
+		{Action: systemchanges.CertificateIPOrder, Identity: "192.0.2.10", RequiredProfile: "shortlived", CertName: "sbxr-ip", OwnerEmail: "owner@example.com", ConfigDirectory: "/var/lib/sbxr/certbot/production", Account: "production"},
+		{Action: systemchanges.CertificateIPActivate, Identity: "192.0.2.10", RequiredProfile: "shortlived", CertName: "sbxr-ip", SubscriptionUnit: "sbxr-subscription.service"},
+	}
+	steps := []systemchanges.Step{open}
+	for _, change := range changes {
+		step, err := systemchanges.NewCertificateStep(change)
+		if err != nil {
+			t.Fatal(err)
+		}
+		steps = append(steps, step)
+	}
+	return append(steps, close)
+}
+
+func TestCertificateRenewalSchedulerUsesRealOneUseSystemChangesLock(t *testing.T) {
+	_, ipFirst, _, observed := preparedSystemChangeWithOptions(t, systemchanges.CertificateRenewalMutation, systemchanges.Check{Owner: systemchanges.CertificateModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CERTIFICATE-RENEWAL"}, systemChangeTestOptions{identity: "change-8101", stepTimeout: time.Second, steps: controlledIPRenewalSteps(t)})
 	var events []string
 	planner := &renewalPlanner{events: &events, changes: map[certificatelifecycle.Lineage][]*systemchanges.ChangeSet{
-		certificatelifecycle.IPLineage:     {ipFirst, ipRetry},
-		certificatelifecycle.DomainLineage: {domain},
+		certificatelifecycle.IPLineage: {ipFirst},
 	}}
-	changes := systemchanges.New(&systemChangesAdapter{lockHeld: true})
-	results := certificatelifecycle.NewScheduler(renewalDuePolicy{events: &events}, planner, renewalSystemChanges{changes: changes}).Run()
-	if len(results) != 2 || results[0].Lineage != certificatelifecycle.IPLineage || results[0].ChangeSetID != ipRetry.Identity() || results[0].Apply.Outcome != certificatelifecycle.Deferred || !results[0].Apply.RebuildPlan || results[1].Lineage != certificatelifecycle.DomainLineage || results[1].ChangeSetID != domain.Identity() || results[1].Apply.Outcome != certificatelifecycle.Deferred || !results[1].Apply.RebuildPlan {
-		t.Fatalf("scheduled System Changes results = %+v", results)
+	host := &systemChangesAdapter{lockHeld: true, observation: observed}
+	changes := systemchanges.New(host)
+	scheduler := certificatelifecycle.NewScheduler(renewalDuePolicy{events: &events}, planner, renewalSystemChanges{changes: changes})
+	first := scheduler.Run()
+	host.lockHeld = false
+	retry := scheduler.Run()
+	if len(first) != 1 || first[0].Lineage != certificatelifecycle.IPLineage || first[0].ChangeSetID != "" || first[0].Apply.Outcome != certificatelifecycle.Deferred || first[0].Apply.PlanConsumed || !first[0].Apply.RebuildPlan || len(retry) != 1 || retry[0].ChangeSetID != ipFirst.Identity() || retry[0].Apply.Outcome != certificatelifecycle.Applied || !retry[0].Apply.PlanConsumed {
+		t.Fatalf("scheduled System Changes results = first %+v retry %+v", first, retry)
 	}
-	want := []string{"due IP certificate", "build change-8101", "wait IP certificate", "build change-8102", "due Domain certificate", "build change-8103", "wait Domain certificate"}
+	want := []string{"due IP certificate", "due IP certificate", "build change-8101"}
 	if strings.Join(events, ",") != strings.Join(want, ",") {
 		t.Fatalf("serial renewal order = %v, want %v", events, want)
 	}
-	for _, changeSet := range []*systemchanges.ChangeSet{ipFirst, ipRetry, domain} {
+	joined := strings.Join(host.events, ",")
+	if strings.Count(joined, string(systemchanges.StatePublicationStarted)) != 1 || !strings.Contains(joined, string(systemchanges.Complete)) || host.recovery != nil || host.executeCount != 5 {
+		t.Fatalf("renewal publication/cleanup = events %v recovery %+v steps %d", host.events, host.recovery, host.executeCount)
+	}
+	for _, changeSet := range []*systemchanges.ChangeSet{ipFirst} {
 		reused := changes.Apply(changeSet)
 		if reused.Finding == nil || reused.Finding.Code != "SYSTEM-CHANGES-PLAN-USED" || reused.QueueCreated {
 			t.Fatalf("scheduled authority was reusable or queued: %+v", reused)

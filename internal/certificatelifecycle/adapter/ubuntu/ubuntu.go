@@ -67,13 +67,120 @@ func (adapter Adapter) Observe(ctx context.Context) (certificatelifecycle.Observ
 	} else if adapter.isVirtualEnvironment(path) {
 		distribution = "pip-venv"
 	}
+	scheduler, err := adapter.observeScheduler(ctx)
+	if err != nil {
+		return certificatelifecycle.Observation{}, errors.New("renewal scheduler check failed")
+	}
 	return certificatelifecycle.Observation{Issuer: certificatelifecycle.IssuerObservation{
 		Name: "Let's Encrypt", CertbotVersion: match[1], Distribution: distribution,
 		SupportedDistribution: distribution == "snap" || distribution == "pip-venv",
 		RequiredProfile:       flags["--required-profile"],
 		IPAddress:             flags["--ip-address"],
 		Staging:               flags["--staging"] && flags["--config-dir"] && flags["--work-dir"] && flags["--logs-dir"],
-	}}, nil
+	}, Scheduler: scheduler}, nil
+}
+
+func (adapter Adapter) observeScheduler(ctx context.Context) (certificatelifecycle.SchedulerObservation, error) {
+	enabled, err := adapter.run(ctx, "systemctl", "is-enabled", "sbxr-cert-renew.timer")
+	if err != nil {
+		return certificatelifecycle.SchedulerObservation{}, err
+	}
+	service, err := adapter.run(ctx, "systemctl", "cat", "sbxr-cert-renew.service")
+	if err != nil {
+		return certificatelifecycle.SchedulerObservation{}, err
+	}
+	timer, err := adapter.run(ctx, "systemctl", "cat", "sbxr-cert-renew.timer")
+	if err != nil {
+		return certificatelifecycle.SchedulerObservation{}, err
+	}
+	timers, err := adapter.run(ctx, "systemctl", "list-unit-files", "--type=timer", "--state=enabled", "--no-legend", "--no-pager")
+	if err != nil {
+		return certificatelifecycle.SchedulerObservation{}, err
+	}
+	serviceUnit, timerUnit := parseSystemdUnit(service), parseSystemdUnit(timer)
+	execStart := serviceUnit["Service"]["ExecStart"]
+	onCalendar := timerUnit["Timer"]["OnCalendar"]
+	onInactive := timerUnit["Timer"]["OnUnitInactiveSec"]
+	randomized := timerUnit["Timer"]["RandomizedDelaySec"]
+	accuracy := timerUnit["Timer"]["AccuracySec"]
+	persistent := timerUnit["Timer"]["Persistent"]
+	target := timerUnit["Timer"]["Unit"]
+	observation := certificatelifecycle.SchedulerObservation{
+		Enabled:       strings.TrimSpace(string(enabled)) == "enabled",
+		Persistent:    len(persistent) == 1 && persistent[0] == "true",
+		Serial:        len(execStart) == 1 && execStart[0] == "/usr/local/bin/sbxr private certificate-renewal",
+		ExactUnitPair: len(onCalendar) == 1 && onCalendar[0] == "*-*-* 00,12:00:00" && len(onInactive) == 1 && onInactive[0] == "13m" && len(accuracy) == 1 && accuracy[0] == "1s" && len(target) == 1 && target[0] == "sbxr-cert-renew.service",
+		Randomized:    len(randomized) == 1 && randomized[0] == "1m",
+		RunsPerDay:    0,
+	}
+	if len(onCalendar) == 1 && onCalendar[0] == "*-*-* 00,12:00:00" {
+		observation.RunsPerDay = 2
+	}
+	seenOwner, competitor := false, false
+	for _, line := range strings.Split(string(timers), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		name := strings.ToLower(fields[0])
+		seenOwner = seenOwner || name == "sbxr-cert-renew.timer"
+		if name == "sbxr-cert-renew.timer" {
+			continue
+		}
+		content, contentErr := adapter.run(ctx, "systemctl", "cat", fields[0])
+		if contentErr != nil {
+			return certificatelifecycle.SchedulerObservation{}, contentErr
+		}
+		timerDefinition := parseSystemdUnit(content)
+		targets := timerDefinition["Timer"]["Unit"]
+		target := strings.TrimSuffix(fields[0], ".timer") + ".service"
+		if len(targets) == 1 {
+			target = targets[0]
+		} else if len(targets) > 1 {
+			competitor = true
+			continue
+		}
+		if !safeUnitName(target, ".service") {
+			competitor = true
+			continue
+		}
+		serviceContent, serviceErr := adapter.run(ctx, "systemctl", "cat", target)
+		if serviceErr != nil {
+			return certificatelifecycle.SchedulerObservation{}, serviceErr
+		}
+		lower := strings.ToLower(string(content) + "\n" + string(serviceContent))
+		competitor = competitor || strings.Contains(lower, "certbot") || strings.Contains(lower, "certificate-renewal") || strings.Contains(lower, "sbxr-cert-renew")
+	}
+	observation.NoCompetingScheduler = seenOwner && !competitor
+	return observation, nil
+}
+
+func safeUnitName(name, suffix string) bool {
+	return strings.HasSuffix(name, suffix) && !strings.ContainsAny(name, "/\\ \t\r\n") && name != suffix
+}
+
+func parseSystemdUnit(content []byte) map[string]map[string][]string {
+	parsed := map[string]map[string][]string{}
+	section := ""
+	for _, raw := range strings.Split(string(content), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			section = strings.TrimSuffix(strings.TrimPrefix(line, "["), "]")
+			if parsed[section] == nil {
+				parsed[section] = map[string][]string{}
+			}
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok || section == "" {
+			continue
+		}
+		parsed[section][strings.TrimSpace(key)] = append(parsed[section][strings.TrimSpace(key)], strings.TrimSpace(value))
+	}
+	return parsed
 }
 
 func (adapter Adapter) isVirtualEnvironment(path string) bool {
@@ -140,7 +247,7 @@ func (adapter Adapter) run(parent context.Context, path string, arguments ...str
 	if adapter.command != nil {
 		output, err := adapter.command(ctx, path, arguments...)
 		if len(output) > maximumOutput {
-			return nil, errors.New("Certbot output exceeded limit")
+			return nil, errors.New("command output exceeded limit")
 		}
 		return output, err
 	}
@@ -148,7 +255,7 @@ func (adapter Adapter) run(parent context.Context, path string, arguments ...str
 	command := exec.CommandContext(ctx, path, arguments...)
 	command.Stdout = output
 	if err := command.Run(); err != nil {
-		return nil, errors.New("Certbot command failed")
+		return nil, errors.New("command failed")
 	}
 	return output.data, nil
 }

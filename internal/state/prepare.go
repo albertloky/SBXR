@@ -324,21 +324,22 @@ type PreparedServiceCopies struct {
 
 // PreparedCommit is one validated candidate and its byte-stable service material.
 type PreparedCommit struct {
-	releaseIdentity ReleaseIdentity
-	candidate       DesiredState
-	serviceCopies   PreparedServiceCopies
-	revision        uint64
-	changeSet       ChangeSetIdentity
-	reviewed        ReviewedInputs
-	starting        *loadedState
-	storage         Storage
-	candidateSHA256 string
-	manifestSHA256  string
-	preparedState   []byte
-	preparedSHA256  string
-	migration       MigrationReview
-	consumed        atomic.Bool
-	deferred        *deferredCloudflare
+	releaseIdentity      ReleaseIdentity
+	candidate            DesiredState
+	serviceCopies        PreparedServiceCopies
+	revision             uint64
+	changeSet            ChangeSetIdentity
+	reviewed             ReviewedInputs
+	starting             *loadedState
+	storage              Storage
+	candidateSHA256      string
+	manifestSHA256       string
+	preparedState        []byte
+	preparedSHA256       string
+	migration            MigrationReview
+	consumed             atomic.Bool
+	deferred             *deferredCloudflare
+	ipCertificateRenewal bool
 }
 
 type CloudflareEvidenceBinding struct {
@@ -407,10 +408,48 @@ func (commit *PreparedCommit) SystemChangesPreparedState() (changeSet string, re
 	return string(commit.changeSet), commit.revision, commit.starting.payloadChecksum, commit.candidateSHA256, string(commit.reviewed.planIdentity), commit.reviewed.planSHA256, true
 }
 
+func (commit *PreparedCommit) SystemChangesIPCertificateRenewal() bool {
+	return commit != nil && commit.ipCertificateRenewal
+}
+
 // PrepareCommit validates one complete candidate and typed owning-Module
 // outputs against the exact loaded bytes without mutating storage.
 func (i Interface) PrepareCommit(request PrepareRequest) (*PreparedCommit, error) {
 	return i.prepareCommit(request, nil, nil)
+}
+
+// PrepareIPCertificateRenewalCommit admits only the three Desired State facts
+// changed by the Owner-approved IP renewal branch.
+func (i Interface) PrepareIPCertificateRenewalCommit(request PrepareRequest) (*PreparedCommit, error) {
+	if request.Loaded.loaded == nil || request.Loaded.loaded.owner != i.implementation {
+		return nil, certificateRenewalScopeFinding()
+	}
+	prior, problem := decode(request.Loaded.loaded.bytes)
+	if problem != nil || !validIPCertificateRenewal(prior.desiredState, request.Candidate) {
+		return nil, certificateRenewalScopeFinding()
+	}
+	commit, err := i.prepareCommit(request, nil, nil)
+	if err == nil {
+		commit.ipCertificateRenewal = true
+	}
+	return commit, err
+}
+
+func validIPCertificateRenewal(prior, candidate DesiredState) bool {
+	if !prior.Certificates.RenewalPolicy || !candidate.Certificates.RenewalPolicy ||
+		candidate.Certificates.IPCertificateID == prior.Certificates.IPCertificateID ||
+		candidate.Certificates.IPServingPointer == prior.Certificates.IPServingPointer ||
+		candidate.Subscription.CertificateID != candidate.Certificates.IPCertificateID {
+		return false
+	}
+	candidate.Certificates.IPCertificateID = prior.Certificates.IPCertificateID
+	candidate.Certificates.IPServingPointer = prior.Certificates.IPServingPointer
+	candidate.Subscription.CertificateID = prior.Subscription.CertificateID
+	return reflect.DeepEqual(candidate, prior)
+}
+
+func certificateRenewalScopeFinding() error {
+	return finding("STATE-CERTIFICATE-RENEWAL-SCOPE", "standing IP certificate renewal", "the candidate changes facts outside the approved IP certificate and Subscription Serving binding", "only a new IP certificate identifier, serving pointer, matching subscription certificate, and one revision", "unattended authority cannot expand into another setting or lineage", "create a fresh reviewed Plan")
 }
 
 // PrepareManagementTokenCommit lets only a reviewed Cloudflare Plan replace

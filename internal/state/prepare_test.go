@@ -382,6 +382,39 @@ func TestPrepareCommitRefusesInvalidCandidateFactsAndMaterial(t *testing.T) {
 	}
 }
 
+func TestPrepareIPCertificateRenewalCommitAllowsOnlyStandingScope(t *testing.T) {
+	candidate := completeDesiredState()
+	candidate.Certificates.IPCertificateID = "ip-certificate-renewed"
+	candidate.Certificates.IPServingPointer = "ip-serving-renewed"
+	candidate.Subscription.CertificateID = candidate.Certificates.IPCertificateID
+	stateModule, request, _ := managedPrepareRequest(t, candidate)
+	prepared, err := stateModule.PrepareIPCertificateRenewalCommit(request)
+	if err != nil || prepared == nil {
+		t.Fatalf("narrow renewal preparation = (%+v, %v)", prepared, err)
+	}
+	if !prepared.SystemChangesIPCertificateRenewal() {
+		t.Fatal("IP renewal scope was not preserved")
+	}
+
+	for _, change := range []func(*DesiredState){
+		func(candidate *DesiredState) { candidate.NetworkPolicy.SSHPort++ },
+		func(candidate *DesiredState) {
+			candidate.Certificates.DomainCertificateID = "domain-certificate-renewed"
+		},
+		func(candidate *DesiredState) { candidate.Certificates.RenewalPolicy = false },
+		func(candidate *DesiredState) { candidate.Subscription.CertificateID = "other-certificate" },
+	} {
+		changed := candidate
+		change(&changed)
+		stateModule, request, _ := managedPrepareRequest(t, changed)
+		prepared, err := stateModule.PrepareIPCertificateRenewalCommit(request)
+		var finding *Finding
+		if prepared != nil || !errors.As(err, &finding) || finding.Code != "STATE-CERTIFICATE-RENEWAL-SCOPE" {
+			t.Fatalf("policy escape = (%+v, %v)", prepared, err)
+		}
+	}
+}
+
 func TestPrepareCommitRequiresOwningSemanticValidationForEverySection(t *testing.T) {
 	valid := completeDesiredState()
 	tests := []struct {

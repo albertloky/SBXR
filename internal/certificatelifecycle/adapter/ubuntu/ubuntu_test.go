@@ -13,6 +13,9 @@ import (
 
 func TestAdapterQualifiesOfficialCertbotShapeAndRedactsFailures(t *testing.T) {
 	var calls []string
+	timerList := "sbxr-cert-renew.timer enabled enabled\n"
+	serviceUnit := "[Service]\nType=oneshot\nExecStart=/usr/local/bin/sbxr private certificate-renewal\n"
+	timerUnit := "[Timer]\nOnCalendar=*-*-* 00,12:00:00\nOnUnitInactiveSec=13m\nRandomizedDelaySec=1m\nAccuracySec=1s\nPersistent=true\nUnit=sbxr-cert-renew.service\n"
 	adapter := Adapter{
 		lookPath: func(string) (string, error) { return "/usr/local/bin/certbot", nil },
 		readLink: func(string) (string, error) { return "/snap/bin/certbot", nil },
@@ -27,17 +30,38 @@ func TestAdapterQualifiesOfficialCertbotShapeAndRedactsFailures(t *testing.T) {
 				return []byte("certbot 5.4.0\n"), nil
 			case "certonly --help all":
 				return []byte("--standalone --non-interactive --agree-tos --email --required-profile --ip-address --staging --config-dir --work-dir --logs-dir\n"), nil
+			case "is-enabled sbxr-cert-renew.timer":
+				return []byte("enabled\n"), nil
+			case "cat sbxr-cert-renew.service":
+				return []byte(serviceUnit), nil
+			case "cat sbxr-cert-renew.timer":
+				return []byte(timerUnit), nil
+			case "list-unit-files --type=timer --state=enabled --no-legend --no-pager":
+				return []byte(timerList), nil
+			case "cat daily-maintenance.timer":
+				return []byte("[Timer]\nUnit=daily-maintenance.service\n"), nil
+			case "cat daily-maintenance.service":
+				return []byte("[Service]\nExecStart=/snap/bin/certbot renew\n"), nil
 			default:
 				return nil, errors.New("unexpected invocation")
 			}
 		},
 	}
 	observed, err := adapter.Observe(context.Background())
-	if err != nil || observed.Issuer.CertbotVersion != "5.4.0" || observed.Issuer.Distribution != "snap" || !observed.Issuer.SupportedDistribution || !observed.Issuer.RequiredProfile || !observed.Issuer.IPAddress || !observed.Issuer.Staging {
+	if err != nil || observed.Issuer.CertbotVersion != "5.4.0" || observed.Issuer.Distribution != "snap" || !observed.Issuer.SupportedDistribution || !observed.Issuer.RequiredProfile || !observed.Issuer.IPAddress || !observed.Issuer.Staging || !observed.Scheduler.Enabled || !observed.Scheduler.Persistent || !observed.Scheduler.Serial || !observed.Scheduler.ExactUnitPair || !observed.Scheduler.Randomized || !observed.Scheduler.NoCompetingScheduler || observed.Scheduler.RunsPerDay != 2 {
 		t.Fatalf("official Certbot observation = %+v, %v", observed, err)
 	}
-	if fmt.Sprint(calls) != "[/usr/local/bin/certbot --version /usr/local/bin/certbot certonly --help all]" {
+	if fmt.Sprint(calls) != "[/usr/local/bin/certbot --version /usr/local/bin/certbot certonly --help all systemctl is-enabled sbxr-cert-renew.timer systemctl cat sbxr-cert-renew.service systemctl cat sbxr-cert-renew.timer systemctl list-unit-files --type=timer --state=enabled --no-legend --no-pager]" {
 		t.Fatalf("bounded read-only calls = %v", calls)
+	}
+	timerList += "daily-maintenance.timer enabled enabled\n"
+	if competing, err := adapter.Observe(t.Context()); err != nil || competing.Scheduler.NoCompetingScheduler {
+		t.Fatalf("competing Certbot scheduler was accepted: %+v, %v", competing.Scheduler, err)
+	}
+	timerList = "sbxr-cert-renew.timer enabled enabled\n"
+	serviceUnit += "ExecStart=/usr/local/bin/sbxr private certificate-renewal\n"
+	if duplicated, err := adapter.Observe(t.Context()); err != nil || duplicated.Scheduler.Serial {
+		t.Fatalf("duplicate renewal command was accepted: %+v, %v", duplicated.Scheduler, err)
 	}
 
 	adapter.command = func(context.Context, string, ...string) ([]byte, error) {

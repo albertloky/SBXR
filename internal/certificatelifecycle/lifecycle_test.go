@@ -25,6 +25,8 @@ type preparedCertificateState struct {
 	changeSet                            string
 	revision                             uint64
 	starting, candidate, planID, planSHA string
+	renewalLineage                       string
+	renewalValid                         bool
 }
 
 func (state *preparedCertificateState) SystemChangesPreparedState() (string, uint64, string, string, string, string, bool) {
@@ -32,6 +34,9 @@ func (state *preparedCertificateState) SystemChangesPreparedState() (string, uin
 }
 func (*preparedCertificateState) SystemChangesConsume(any, string, string) (any, error) {
 	return nil, errors.New("not reached without an Adapter")
+}
+func (state *preparedCertificateState) SystemChangesIPCertificateRenewal() bool {
+	return state.renewalLineage == string(certificatelifecycle.IPLineage) && state.renewalValid
 }
 
 type fixedClock struct{ now time.Time }
@@ -62,7 +67,7 @@ func TestViewAndPlanProveBothLineagesBeforeOrdering(t *testing.T) {
 			Identity: "direct.example.com", Profile: "tlsserver", NotBefore: now.Add(-24 * time.Hour),
 			NotAfter: now.Add(44 * 24 * time.Hour), ActiveServingID: "domain-serving-4",
 		},
-		Scheduler: certificatelifecycle.SchedulerObservation{Enabled: true, Persistent: true, Serial: true, RunsPerDay: 2},
+		Scheduler: certificatelifecycle.SchedulerObservation{Enabled: true, Persistent: true, Serial: true, ExactUnitPair: true, Randomized: true, NoCompetingScheduler: true, RunsPerDay: 2},
 	}
 	module := certificatelifecycle.New(staticIssuer{observation: observation}, fixedClock{now: now})
 	request := completeViewRequest()
@@ -169,7 +174,7 @@ func TestViewAndPlanFailClosedWithoutLeakingTypedOrToolFacts(t *testing.T) {
 	complete := func() certificatelifecycle.Observation {
 		return certificatelifecycle.Observation{
 			Issuer:    certificatelifecycle.IssuerObservation{Name: "Let's Encrypt", CertbotVersion: "5.4.0", Distribution: "snap", SupportedDistribution: true, RequiredProfile: true, IPAddress: true, Staging: true},
-			Scheduler: certificatelifecycle.SchedulerObservation{Enabled: true, Persistent: true, Serial: true, RunsPerDay: 2},
+			Scheduler: certificatelifecycle.SchedulerObservation{Enabled: true, Persistent: true, Serial: true, ExactUnitPair: true, Randomized: true, NoCompetingScheduler: true, RunsPerDay: 2},
 		}
 	}
 	tests := []struct {
@@ -181,6 +186,9 @@ func TestViewAndPlanFailClosedWithoutLeakingTypedOrToolFacts(t *testing.T) {
 		}},
 		{name: "preferred profile fallback", code: "CERTIFICATE-ISSUER-CAPABILITY", change: func(observation *certificatelifecycle.Observation, _ *certificatelifecycle.ViewRequest) {
 			observation.Issuer.RequiredProfile = false
+		}},
+		{name: "unqualified scheduler", code: "CERTIFICATE-RENEWAL-SCHEDULER", change: func(observation *certificatelifecycle.Observation, _ *certificatelifecycle.ViewRequest) {
+			observation.Scheduler.Persistent = false
 		}},
 		{name: "DNS SERVFAIL", code: "CERTIFICATE-DNS-SERVFAIL", change: func(_ *certificatelifecycle.Observation, request *certificatelifecycle.ViewRequest) {
 			request.DNS.Status = certificatelifecycle.DNSSERVFAIL
@@ -231,7 +239,8 @@ func TestViewAndPlanFailClosedWithoutLeakingTypedOrToolFacts(t *testing.T) {
 
 func TestPlanRequiresReviewedOwnerIdentityAndAgreement(t *testing.T) {
 	module := certificatelifecycle.New(staticIssuer{observation: certificatelifecycle.Observation{
-		Issuer: certificatelifecycle.IssuerObservation{Name: "Let's Encrypt", CertbotVersion: "5.4.0", Distribution: "snap", SupportedDistribution: true, RequiredProfile: true, IPAddress: true, Staging: true},
+		Issuer:    certificatelifecycle.IssuerObservation{Name: "Let's Encrypt", CertbotVersion: "5.4.0", Distribution: "snap", SupportedDistribution: true, RequiredProfile: true, IPAddress: true, Staging: true},
+		Scheduler: certificatelifecycle.SchedulerObservation{Enabled: true, Persistent: true, Serial: true, ExactUnitPair: true, Randomized: true, NoCompetingScheduler: true, RunsPerDay: 2},
 	}}, fixedClock{now: time.Date(2026, time.August, 7, 12, 0, 0, 0, time.UTC)})
 	request := completePlanRequest()
 	for _, test := range []struct {
@@ -265,7 +274,7 @@ func TestPlanRequiresReviewedOwnerIdentityAndAgreement(t *testing.T) {
 
 func TestIPPlanApplyBuildsOneRevisionBoundChangeSet(t *testing.T) {
 	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
-	module := certificatelifecycle.New(staticIssuer{observation: certificatelifecycle.Observation{Issuer: certificatelifecycle.IssuerObservation{Name: "Let's Encrypt", CertbotVersion: "5.4.0", Distribution: "snap", SupportedDistribution: true, RequiredProfile: true, IPAddress: true, Staging: true}, Scheduler: certificatelifecycle.SchedulerObservation{Enabled: true, Persistent: true, Serial: true, RunsPerDay: 2}}}, fixedClock{now: now})
+	module := certificatelifecycle.New(staticIssuer{observation: certificatelifecycle.Observation{Issuer: certificatelifecycle.IssuerObservation{Name: "Let's Encrypt", CertbotVersion: "5.4.0", Distribution: "snap", SupportedDistribution: true, RequiredProfile: true, IPAddress: true, Staging: true}, Scheduler: certificatelifecycle.SchedulerObservation{Enabled: true, Persistent: true, Serial: true, ExactUnitPair: true, Randomized: true, NoCompetingScheduler: true, RunsPerDay: 2}}}, fixedClock{now: now})
 	request := completePlanRequest()
 	plan := module.Plan(t.Context(), request).Plan
 	prepared := &preparedCertificateState{changeSet: request.ChangeSet, revision: 2, starting: request.StartingStateSHA256, candidate: request.DesiredStateSHA256, planID: plan.Identity(), planSHA: plan.SHA256()}
@@ -275,6 +284,52 @@ func TestIPPlanApplyBuildsOneRevisionBoundChangeSet(t *testing.T) {
 	}
 	if repeated := plan.Apply(systemchanges.New(nil), prepared, systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 1, SHA256: request.StartingStateSHA256}, strings.Repeat("c", 64), systemchanges.DiskRequirement{}); repeated.Finding == nil || repeated.Finding.Code != "SYSTEM-CHANGES-CHANGE-SET-REQUIRED" {
 		t.Fatalf("repeated Apply = %+v", repeated)
+	}
+}
+
+func TestStandingIPRenewalRequiresApprovedDueNarrowState(t *testing.T) {
+	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	observation := certificatelifecycle.Observation{
+		Issuer:    certificatelifecycle.IssuerObservation{Name: "Let's Encrypt", CertbotVersion: "5.4.0", Distribution: "snap", SupportedDistribution: true, RequiredProfile: true, IPAddress: true, Staging: true},
+		IP:        certificatelifecycle.CertificateObservation{Identity: "192.0.2.10", Profile: "shortlived", NotBefore: now.Add(-100 * time.Hour), NotAfter: now.Add(60 * time.Hour), ActiveServingID: "ip-serving-7"},
+		Scheduler: certificatelifecycle.SchedulerObservation{Enabled: true, Persistent: true, Serial: true, ExactUnitPair: true, Randomized: true, NoCompetingScheduler: true, RunsPerDay: 2},
+	}
+	module := certificatelifecycle.New(staticIssuer{observation: observation}, fixedClock{now: now})
+	request := completePlanRequest()
+	request.StandingRenewal = true
+	request.RenewalPolicyApproved = true
+	plan := module.Plan(t.Context(), request)
+	if plan.Plan == nil || plan.Health.Code != "CERTIFICATE-PLAN-READY" {
+		t.Fatalf("standing renewal Plan = %+v", plan)
+	}
+
+	for _, change := range []func(*certificatelifecycle.PlanRequest){
+		func(request *certificatelifecycle.PlanRequest) { request.RenewalPolicyApproved = false },
+		func(request *certificatelifecycle.PlanRequest) { request.Lineage = certificatelifecycle.DomainLineage },
+	} {
+		changed := request
+		change(&changed)
+		result := module.Plan(t.Context(), changed)
+		if result.Plan != nil || result.Health.Code != "CERTIFICATE-RENEWAL-POLICY" {
+			t.Fatalf("standing policy escape = %+v", result)
+		}
+	}
+
+	prepared := &preparedCertificateState{changeSet: request.ChangeSet, revision: 2, starting: request.StartingStateSHA256, candidate: request.DesiredStateSHA256, planID: plan.Plan.Identity(), planSHA: plan.Plan.SHA256()}
+	changeSet, err := plan.Plan.RenewalChangeSet(prepared, systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 1, SHA256: request.StartingStateSHA256}, strings.Repeat("c", 64), systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1})
+	if err == nil || changeSet != nil {
+		t.Fatalf("broad prepared State entered renewal Apply: (%+v, %v)", changeSet, err)
+	}
+
+	plan = module.Plan(t.Context(), request)
+	prepared = &preparedCertificateState{changeSet: request.ChangeSet, revision: 2, starting: request.StartingStateSHA256, candidate: request.DesiredStateSHA256, planID: plan.Plan.Identity(), planSHA: plan.Plan.SHA256(), renewalLineage: string(certificatelifecycle.IPLineage), renewalValid: true}
+	changeSet, err = plan.Plan.RenewalChangeSet(prepared, systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 1, SHA256: request.StartingStateSHA256}, strings.Repeat("c", 64), systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1})
+	if err != nil || changeSet == nil {
+		t.Fatalf("narrow renewal Change Set = (%+v, %v)", changeSet, err)
+	}
+	result := systemchanges.New(nil).Apply(changeSet)
+	if result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-ADAPTER-UNAVAILABLE" {
+		t.Fatalf("narrow renewal Apply = %+v", result)
 	}
 }
 

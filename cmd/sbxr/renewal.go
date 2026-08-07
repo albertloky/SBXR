@@ -1,18 +1,26 @@
 package main
 
 import (
+	"errors"
+
 	"github.com/albertloky/SBXR/internal/certificatelifecycle"
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
 
 type renewalSystemChanges struct{ changes systemchanges.Interface }
 
-func (adapter renewalSystemChanges) Apply(changeSet certificatelifecycle.ChangeSet) certificatelifecycle.ApplyResult {
-	change, ok := changeSet.(*systemchanges.ChangeSet)
-	if !ok {
-		return certificatelifecycle.ApplyResult{Outcome: certificatelifecycle.Refused, Code: "SYSTEM-CHANGES-CHANGE-SET-REQUIRED"}
-	}
-	result := adapter.changes.Apply(change)
+func (adapter renewalSystemChanges) ApplyFresh(build func() (certificatelifecycle.ChangeSet, error)) certificatelifecycle.ApplyResult {
+	result := adapter.changes.ApplyFreshCertificateRenewal(func() (*systemchanges.ChangeSet, error) {
+		changeSet, err := build()
+		if err != nil {
+			return nil, err
+		}
+		change, ok := changeSet.(*systemchanges.ChangeSet)
+		if !ok {
+			return nil, errors.New("Certificate Lifecycle Change Set unavailable")
+		}
+		return change, nil
+	})
 	code := ""
 	if result.Finding != nil {
 		code = result.Finding.Code

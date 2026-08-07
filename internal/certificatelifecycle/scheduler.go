@@ -3,6 +3,7 @@ package certificatelifecycle
 
 import (
 	"errors"
+	"time"
 )
 
 type Lineage string
@@ -32,9 +33,126 @@ type ApplyResult struct {
 	Code         string
 }
 
+type RenewalAttempt string
+
+const (
+	RenewalFailed RenewalAttempt = "failed"
+	RenewalBusy   RenewalAttempt = "busy"
+)
+
+type IPRenewalFacts struct {
+	StandingPolicyApproved bool
+	Now, NotAfter          time.Time
+	LastAttempt            time.Time
+	LastOutcome            RenewalAttempt
+}
+
+type RenewalDecision struct {
+	Due     bool
+	Outcome Outcome
+	Code    string
+}
+
+type AttemptHistory interface {
+	LoadIPAttempt() (time.Time, RenewalAttempt, bool, error)
+	StoreIPAttempt(time.Time, RenewalAttempt) error
+	ClearIPAttempt() error
+}
+
+type StandingIPPolicy struct {
+	facts    IPRenewalFacts
+	history  AttemptHistory
+	decision RenewalDecision
+}
+
+func NewStandingIPPolicy(facts IPRenewalFacts, history AttemptHistory) *StandingIPPolicy {
+	return &StandingIPPolicy{facts: facts, history: history}
+}
+
+func (policy *StandingIPPolicy) Due(lineage Lineage) bool {
+	if policy == nil || lineage != IPLineage || policy.history == nil {
+		return false
+	}
+	last, outcome, found, err := policy.history.LoadIPAttempt()
+	if err != nil {
+		policy.decision = RenewalDecision{Outcome: Unknown, Code: "CERTIFICATE-RENEWAL-HISTORY"}
+		return false
+	}
+	facts := policy.facts
+	if found {
+		facts.LastAttempt, facts.LastOutcome = last, outcome
+	}
+	policy.decision = EvaluateIPRenewal(facts)
+	return policy.decision.Due
+}
+
+func (policy *StandingIPPolicy) Record(lineage Lineage, result ApplyResult) error {
+	if policy == nil || lineage != IPLineage || policy.history == nil {
+		return errors.New("IP renewal history unavailable")
+	}
+	if result.Outcome == Applied {
+		return policy.history.ClearIPAttempt()
+	}
+	outcome := RenewalFailed
+	if result.Outcome == Deferred && result.Code == "SYSTEM-CHANGES-BUSY" {
+		outcome = RenewalBusy
+	}
+	return policy.history.StoreIPAttempt(policy.facts.Now, outcome)
+}
+
+func (policy *StandingIPPolicy) Decision() RenewalDecision {
+	if policy == nil {
+		return RenewalDecision{Outcome: Unknown, Code: "CERTIFICATE-RENEWAL-POLICY"}
+	}
+	return policy.decision
+}
+
+func EvaluateIPRenewal(facts IPRenewalFacts) RenewalDecision {
+	if !facts.StandingPolicyApproved {
+		return RenewalDecision{Outcome: Failed, Code: "CERTIFICATE-RENEWAL-POLICY"}
+	}
+	remaining := facts.NotAfter.Sub(facts.Now)
+	if facts.Now.IsZero() || facts.NotAfter.IsZero() || facts.LastAttempt.After(facts.Now) || facts.LastAttempt.IsZero() != (facts.LastOutcome == "") || facts.LastOutcome != "" && facts.LastOutcome != RenewalFailed && facts.LastOutcome != RenewalBusy {
+		return RenewalDecision{Outcome: Unknown, Code: "CERTIFICATE-RENEWAL-TIME"}
+	}
+	if remaining <= 0 {
+		return RenewalDecision{Due: true, Outcome: Failed, Code: "CERTIFICATE-IP-EXPIRED"}
+	}
+	if !ipRenewalDue(facts.Now, facts.NotAfter) {
+		return RenewalDecision{Outcome: Healthy, Code: "CERTIFICATE-RENEWAL-NOT-DUE"}
+	}
+	if remaining < 24*time.Hour && facts.LastOutcome == "" {
+		return RenewalDecision{Due: true, Outcome: NeedsAttention, Code: "CERTIFICATE-IP-EXPIRY-WARNING"}
+	}
+	retry := time.Duration(0)
+	code := "CERTIFICATE-RENEWAL-RETRY"
+	switch facts.LastOutcome {
+	case RenewalFailed:
+		retry = 6 * time.Hour
+	case RenewalBusy:
+		if !facts.Now.After(facts.LastAttempt) {
+			return RenewalDecision{Outcome: NeedsAttention, Code: "CERTIFICATE-RENEWAL-BUSY"}
+		}
+	}
+	if retry > 0 && !facts.LastAttempt.IsZero() {
+		if facts.Now.Sub(facts.LastAttempt) < retry {
+			return RenewalDecision{Outcome: NeedsAttention, Code: code}
+		}
+	}
+	outcome := Healthy
+	if facts.LastOutcome != "" {
+		outcome = NeedsAttention
+	}
+	return RenewalDecision{Due: true, Outcome: outcome, Code: "CERTIFICATE-RENEWAL-DUE"}
+}
+
+func ipRenewalDue(now, notAfter time.Time) bool {
+	return notAfter.Sub(now) <= 72*time.Hour
+}
+
 type DuePolicy interface {
 	Due(Lineage) bool
-	WaitWithinRetryPolicy(Lineage) bool
+	Record(Lineage, ApplyResult) error
 }
 
 type Planner interface {
@@ -42,7 +160,7 @@ type Planner interface {
 }
 
 type SystemChanges interface {
-	Apply(ChangeSet) ApplyResult
+	ApplyFresh(func() (ChangeSet, error)) ApplyResult
 }
 
 type Scheduler struct {
@@ -62,32 +180,24 @@ type LineageResult struct {
 	Error       error
 }
 
-// Run evaluates the two lineages serially. Waiting and retry permission remain
-// entirely inside Certificate Lifecycle; each Apply receives a newly built Change Set.
+// Run evaluates the IP lineage once. The one persistent timer calls Run again
+// when Certificate Lifecycle's retry policy permits another fresh attempt.
 func (scheduler Scheduler) Run() []LineageResult {
 	if scheduler.due == nil || scheduler.planner == nil || scheduler.apply == nil {
 		return []LineageResult{{Error: errors.New("certificate renewal scheduler is incomplete")}}
 	}
-	results := make([]LineageResult, 0, 2)
-	for _, lineage := range []Lineage{IPLineage, DomainLineage} {
-		if !scheduler.due.Due(lineage) {
-			continue
-		}
-		changeSet, err := scheduler.planner.BuildFresh(lineage)
-		if err != nil || changeSet == nil || changeSet.Identity() == "" {
-			results = append(results, LineageResult{Lineage: lineage, Error: errors.New("fresh renewal Plan unavailable")})
-			continue
-		}
-		result := scheduler.apply.Apply(changeSet)
-		if result.Outcome == Deferred && result.RebuildPlan && scheduler.due.WaitWithinRetryPolicy(lineage) {
-			rebuilt, rebuildErr := scheduler.planner.BuildFresh(lineage)
-			if rebuildErr != nil || rebuilt == nil || rebuilt.Identity() == "" || rebuilt.Identity() == changeSet.Identity() {
-				results = append(results, LineageResult{Lineage: lineage, ChangeSetID: changeSet.Identity(), Apply: result, Error: errors.New("contention did not produce a fresh Plan")})
-				continue
-			}
-			changeSet, result = rebuilt, scheduler.apply.Apply(rebuilt)
-		}
-		results = append(results, LineageResult{Lineage: lineage, ChangeSetID: changeSet.Identity(), Apply: result})
+	if !scheduler.due.Due(IPLineage) {
+		return nil
 	}
-	return results
+	changeSetID := ""
+	result := scheduler.apply.ApplyFresh(func() (ChangeSet, error) {
+		changeSet, err := scheduler.planner.BuildFresh(IPLineage)
+		if err != nil || changeSet == nil || changeSet.Identity() == "" {
+			return nil, errors.New("fresh renewal Plan unavailable")
+		}
+		changeSetID = changeSet.Identity()
+		return changeSet, nil
+	})
+	recordErr := scheduler.due.Record(IPLineage, result)
+	return []LineageResult{{Lineage: IPLineage, ChangeSetID: changeSetID, Apply: result, Error: recordErr}}
 }

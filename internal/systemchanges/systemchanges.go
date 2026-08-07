@@ -820,6 +820,11 @@ type PreparedStateCommit interface {
 	SystemChangesConsume(lease any, planIdentity, planSHA256 string) (any, error)
 }
 
+type CertificateRenewalPreparedState interface {
+	PreparedStateCommit
+	SystemChangesIPCertificateRenewal() bool
+}
+
 type Timeouts struct {
 	Step  time.Duration
 	Check time.Duration
@@ -955,15 +960,41 @@ func (i Interface) ApplyWithCancellation(changeSet *ChangeSet, cancellation *Can
 	return i.apply(changeSet, cancellation)
 }
 
+// ApplyFreshCertificateRenewal obtains the global lock before asking the
+// Certificate Lifecycle composition root for one fresh renewal Change Set.
+func (i Interface) ApplyFreshCertificateRenewal(build func() (*ChangeSet, error)) ApplyResult {
+	if i.adapter == nil {
+		return refused("SYSTEM-CHANGES-ADAPTER-UNAVAILABLE", "The Ubuntu host Adapter is unavailable", "no Adapter", "one production Adapter", "mutation safety cannot be proven", "Restore the Adapter and plan again.", false)
+	}
+	lock, acquired, err := i.adapter.TryLock()
+	if err != nil || acquired && lock == nil {
+		return refused("SYSTEM-CHANGES-LOCK-UNPROVABLE", "The installation-wide kernel lock could not be proven", "the lock Adapter returned an error or no lock handle", "one verified protected kernel lock", "unsafe lock infrastructure is not ordinary contention", "Repair the lock path and create a fresh Plan.", false)
+	}
+	if !acquired {
+		result := refused("SYSTEM-CHANGES-BUSY", "Another mutation owns the installation-wide kernel lock", "the kernel lock is held", "the one lock released by its owning worker", "System Changes never queues, steals, force-unlocks, or guesses from a PID or wall time", "Recheck the renewal retry policy after the lock clears.", false)
+		result.Outcome = Deferred
+		result.RebuildPlan = true
+		return result
+	}
+	if build == nil {
+		return finish(lock, refused("SYSTEM-CHANGES-RENEWAL-PLAN", "The renewal Plan builder is unavailable", "no Certificate Lifecycle planner", "one fresh revision-bound renewal Change Set", "unattended mutation needs fresh authority after lock acquisition", "Restore Certificate Lifecycle and try again.", false))
+	}
+	changeSet, err := build()
+	if err != nil || changeSet == nil {
+		return finish(lock, refused("SYSTEM-CHANGES-RENEWAL-PLAN", "A fresh renewal Plan could not be built", "the locked planning result was missing, invalid, or outside certificate renewal", "one fresh revision-bound certificate-renewal Change Set", "the global lock cannot authorize a caller-made or broader mutation", "Rebuild observations and try again.", false))
+	}
+	if result, stopped := consumeApplyAuthority(changeSet, nil); stopped {
+		return finish(lock, result)
+	}
+	if changeSet.spec.Mutation != CertificateRenewalMutation {
+		return finish(lock, refused("SYSTEM-CHANGES-RENEWAL-PLAN", "The fresh Plan is outside certificate renewal", "the locked planner returned another mutation class", "one fresh revision-bound certificate-renewal Change Set", "the global lock cannot expand standing authority", "Create a fresh reviewed Plan.", true))
+	}
+	return i.applyLocked(changeSet, nil, lock)
+}
+
 func (i Interface) apply(changeSet *ChangeSet, cancellation *Cancellation) ApplyResult {
-	if changeSet == nil {
-		return refused("SYSTEM-CHANGES-CHANGE-SET-REQUIRED", "Apply received no typed Change Set", "untyped or missing input", "one Change Set created by NewChangeSet", "direct mutation is forbidden", "Create and review a fresh Plan.", false)
-	}
-	if changeSet.used == nil || !changeSet.used.used.CompareAndSwap(false, true) {
-		return refused("SYSTEM-CHANGES-PLAN-USED", "The one-use Plan authority was already consumed", "a repeated Apply attempt", "one fresh reviewed Plan", "every outcome burns its authority", "Create and review a fresh Plan.", true)
-	}
-	if cancellation.Requested() {
-		return refused("SYSTEM-CHANGES-CANCELLED", "The Change Set was cancelled before Apply", "an explicit cancellation before approval entered live work", "no mutation", "cancellation before start changes nothing", "Create and review a fresh Plan.", true)
+	if result, stopped := consumeApplyAuthority(changeSet, cancellation); stopped {
+		return result
 	}
 	if i.adapter == nil {
 		return refused("SYSTEM-CHANGES-ADAPTER-UNAVAILABLE", "The Ubuntu host Adapter is unavailable", "no Adapter", "one production Adapter", "mutation safety cannot be proven", "Restore the Adapter and plan again.", true)
@@ -980,6 +1011,23 @@ func (i Interface) apply(changeSet *ChangeSet, cancellation *Cancellation) Apply
 		}
 		return result
 	}
+	return i.applyLocked(changeSet, cancellation, lock)
+}
+
+func consumeApplyAuthority(changeSet *ChangeSet, cancellation *Cancellation) (ApplyResult, bool) {
+	if changeSet == nil {
+		return refused("SYSTEM-CHANGES-CHANGE-SET-REQUIRED", "Apply received no typed Change Set", "untyped or missing input", "one Change Set created by NewChangeSet", "direct mutation is forbidden", "Create and review a fresh Plan.", false), true
+	}
+	if changeSet.used == nil || !changeSet.used.used.CompareAndSwap(false, true) {
+		return refused("SYSTEM-CHANGES-PLAN-USED", "The one-use Plan authority was already consumed", "a repeated Apply attempt", "one fresh reviewed Plan", "every outcome burns its authority", "Create and review a fresh Plan.", true), true
+	}
+	if cancellation.Requested() {
+		return refused("SYSTEM-CHANGES-CANCELLED", "The Change Set was cancelled before Apply", "an explicit cancellation before approval entered live work", "no mutation", "cancellation before start changes nothing", "Create and review a fresh Plan.", true), true
+	}
+	return ApplyResult{}, false
+}
+
+func (i Interface) applyLocked(changeSet *ChangeSet, cancellation *Cancellation, lock Lock) ApplyResult {
 	observed, err := i.adapter.Observe()
 	if err != nil || !validObservation(observed) {
 		return finish(lock, refused("SYSTEM-CHANGES-INSPECTION-UNPROVABLE", "Fresh pre-mutation inspection failed", "incomplete transaction facts", "one exact fresh inspection under the kernel lock", "SBXR never guesses current State or host facts", "Check again and create a fresh Plan.", true))

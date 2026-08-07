@@ -67,8 +67,8 @@ type CertificateObservation struct {
 }
 
 type SchedulerObservation struct {
-	Enabled, Persistent, Serial bool
-	RunsPerDay                  int
+	Enabled, Persistent, Serial, ExactUnitPair, Randomized, NoCompetingScheduler bool
+	RunsPerDay                                                                   int
 }
 
 type Observation struct {
@@ -154,9 +154,9 @@ type LineageStatus struct {
 }
 
 type SchedulerStatus struct {
-	Enabled, Persistent, Serial bool
-	RunsPerDay                  int
-	Qualified                   bool
+	Enabled, Persistent, Serial, ExactUnitPair, Randomized, NoCompetingScheduler bool
+	RunsPerDay                                                                   int
+	Qualified                                                                    bool
 }
 
 type PrerequisiteStatus struct {
@@ -222,8 +222,8 @@ func (module Interface) View(ctx context.Context, request ViewRequest) ViewResul
 	result.Issuer.Qualified = observed.Issuer.Name == "Let's Encrypt" && versionAtLeast(observed.Issuer.CertbotVersion, 5, 4) && observed.Issuer.SupportedDistribution && observed.Issuer.RequiredProfile && observed.Issuer.IPAddress && observed.Issuer.Staging
 	result.IP = lineageStatus(IPLineage, request.SelectedIP, ipProfile, observed.IP, now)
 	result.Domain = lineageStatus(DomainLineage, request.DirectHostname, domainProfile, observed.Domain, now)
-	result.Scheduler = SchedulerStatus{Enabled: observed.Scheduler.Enabled, Persistent: observed.Scheduler.Persistent, Serial: observed.Scheduler.Serial, RunsPerDay: observed.Scheduler.RunsPerDay}
-	result.Scheduler.Qualified = result.Scheduler.Enabled && result.Scheduler.Persistent && result.Scheduler.Serial && result.Scheduler.RunsPerDay >= 2
+	result.Scheduler = SchedulerStatus{Enabled: observed.Scheduler.Enabled, Persistent: observed.Scheduler.Persistent, Serial: observed.Scheduler.Serial, ExactUnitPair: observed.Scheduler.ExactUnitPair, Randomized: observed.Scheduler.Randomized, NoCompetingScheduler: observed.Scheduler.NoCompetingScheduler, RunsPerDay: observed.Scheduler.RunsPerDay}
+	result.Scheduler.Qualified = result.Scheduler.Enabled && result.Scheduler.Persistent && result.Scheduler.Serial && result.Scheduler.ExactUnitPair && result.Scheduler.Randomized && result.Scheduler.NoCompetingScheduler && result.Scheduler.RunsPerDay >= 2
 	dns := assessDNS(request)
 	caa := assessCAA(request.CAA)
 	result.Prerequisites = PrerequisiteStatus{SelectedIP: request.SelectedIP, DirectHostname: request.DirectHostname, HTTP01: request.HTTP01, DNS: dns.allowed, CAA: caa.allowed, IgnoredChallengeRecords: len(request.DNS.ChallengeRecords)}
@@ -239,6 +239,9 @@ func (module Interface) View(ctx context.Context, request ViewRequest) ViewResul
 		default:
 			result.Health.NextActions = []string{"Install a supported Certbot build with required profile, IP address, and staging flags", "Check again", "Back"}
 		}
+	case !result.Scheduler.Qualified:
+		result.Health = health(now, Failed, "CERTIFICATE-RENEWAL-SCHEDULER", "The one renewal scheduler is not proved", fmt.Sprintf("enabled=%t persistent=%t serial=%t exact_units=%t randomized=%t no_competitor=%t runs_per_day=%d", result.Scheduler.Enabled, result.Scheduler.Persistent, result.Scheduler.Serial, result.Scheduler.ExactUnitPair, result.Scheduler.Randomized, result.Scheduler.NoCompetingScheduler, result.Scheduler.RunsPerDay), "one enabled persistent randomized serial scheduler evaluating at least twice daily with no competing owner")
+		result.Health.NextActions = []string{"Restore sbxr-cert-renew.timer and remove competing renewal timers", "Check again", "Back"}
 	case !validCertificate(observed.IP, request.SelectedIP, ipProfile, now, 150*time.Hour, 170*time.Hour):
 		result.Health = health(now, Failed, "CERTIFICATE-IP-LINEAGE", "The IP certificate lineage is implausible", "the typed IP identity, profile, validity, or serving identifier disagrees", "the exact selected IP with the shortlived profile and a roughly 160-hour lifetime")
 		result.Health.NextActions = []string{"Keep the current serving certificate and inspect sbxr-ip", "Check again", "Back"}
@@ -275,7 +278,7 @@ func lineageStatus(lineage Lineage, identity, profile string, observed Certifica
 	}
 	status.Valid = !now.Before(observed.NotBefore) && now.Before(observed.NotAfter)
 	if lineage == IPLineage {
-		status.Due = observed.NotAfter.Sub(now) <= 72*time.Hour
+		status.Due = ipRenewalDue(now, observed.NotAfter)
 	} else {
 		status.Due = observed.NotAfter.Sub(now) <= 15*24*time.Hour
 	}
@@ -467,6 +470,8 @@ type PlanRequest struct {
 	DirectTLS                   systemchanges.DirectTLSAuthority
 	OwnerEmail                  string
 	SubscriberAgreementReviewed bool
+	StandingRenewal             bool
+	RenewalPolicyApproved       bool
 }
 
 type OrderContract struct {
@@ -559,6 +564,15 @@ func (module Interface) Plan(ctx context.Context, request PlanRequest) PlanResul
 		finding.NextActions = []string{"Reload current State and build a fresh Plan", "Back"}
 		return PlanResult{Health: finding}
 	}
+	lineage := request.Lineage
+	if lineage == "" {
+		lineage = IPLineage
+	}
+	if request.StandingRenewal && (!request.RenewalPolicyApproved || lineage != IPLineage || !view.IP.Due) {
+		finding := health(view.Health.Time, Failed, "CERTIFICATE-RENEWAL-POLICY", "The unattended renewal is outside the standing policy", "the policy is absent, the IP lineage is not due, or another lineage was requested", "one approved due sbxr-ip renewal branch")
+		finding.NextActions = []string{"Create a fresh reviewed Plan", "Back"}
+		return PlanResult{Health: finding}
+	}
 	open, close, selectedIP, http01Digest, networkRevision, http01Err := systemchanges.NewHTTP01Steps(request.HTTP01)
 	if http01Err != nil || selectedIP != request.View.SelectedIP || networkRevision != request.StartingRevision {
 		finding := health(view.Health.Time, Failed, "CERTIFICATE-PLAN-NETWORK-POLICY", "The HTTP-01 Network Policy contribution is invalid", "no exact fresh Network Policy authority for the selected IP", "one Network Policy-produced temporary port-80 contribution")
@@ -569,10 +583,6 @@ func (module Interface) Plan(ctx context.Context, request PlanRequest) PlanResul
 		{Lineage: IPLineage, RequiredProfile: ipProfile, Identity: request.View.SelectedIP, CertName: ipCertName, OwnerEmail: request.OwnerEmail, ConfigDirectory: "/var/lib/sbxr/certbot/production", Account: "production"},
 		stagingOrder(DomainLineage, domainProfile, request.View.DirectHostname, domainCertName, request.OwnerEmail),
 		{Lineage: DomainLineage, RequiredProfile: domainProfile, Identity: request.View.DirectHostname, CertName: domainCertName, OwnerEmail: request.OwnerEmail, ConfigDirectory: "/var/lib/sbxr/certbot/production", Account: "production"},
-	}
-	lineage := request.Lineage
-	if lineage == "" {
-		lineage = IPLineage
 	}
 	var steps []systemchanges.Step
 	var stepErr error
@@ -612,11 +622,13 @@ func (module Interface) Plan(ctx context.Context, request PlanRequest) PlanResul
 		Revision                                  uint64
 		StartingSHA256, DesiredSHA256, OwnerEmail string
 		Agreement                                 bool
+		StandingRenewal                           bool
+		RenewalPolicyApproved                     bool
 		HTTP01Digest                              string
 		DirectTLSDigest                           string
 		Observation                               Observation
 		Orders                                    []OrderContract
-	}{request.View, request.ChangeSet, request.StartingRevision, request.StartingStateSHA256, request.DesiredStateSHA256, request.OwnerEmail, request.SubscriberAgreementReviewed, http01Digest, directTLSDigest, view.observation, orders}
+	}{request.View, request.ChangeSet, request.StartingRevision, request.StartingStateSHA256, request.DesiredStateSHA256, request.OwnerEmail, request.SubscriberAgreementReviewed, request.StandingRenewal, request.RenewalPolicyApproved, http01Digest, directTLSDigest, view.observation, orders}
 	encoded, _ := json.Marshal(binding)
 	digest := sha256.Sum256(encoded)
 	sha := hex.EncodeToString(digest[:])
@@ -625,23 +637,51 @@ func (module Interface) Plan(ctx context.Context, request PlanRequest) PlanResul
 }
 
 func (plan *Plan) Apply(module systemchanges.Interface, prepared systemchanges.PreparedStateCommit, starting systemchanges.StateLineage, volatileSHA256 string, disk systemchanges.DiskRequirement) systemchanges.ApplyResult {
-	if plan == nil || plan.used == nil || !plan.used.CompareAndSwap(false, true) || prepared == nil || !stateSHA256.MatchString(volatileSHA256) || starting.Status != systemchanges.Managed || starting.Revision != plan.request.StartingRevision || starting.SHA256 != plan.request.StartingStateSHA256 {
+	if plan != nil && plan.request.StandingRenewal {
 		return module.Apply(nil)
+	}
+	change, err := plan.buildChangeSet(prepared, starting, volatileSHA256, disk, false)
+	if err != nil {
+		return module.Apply(nil)
+	}
+	return module.Apply(change)
+}
+
+// RenewalChangeSet consumes a standing renewal Plan and returns its exact
+// typed Change Set. Callers build the Plan and invoke this method only inside
+// System Changes' ApplyFreshCertificateRenewal callback after lock acquisition.
+func (plan *Plan) RenewalChangeSet(prepared systemchanges.PreparedStateCommit, starting systemchanges.StateLineage, volatileSHA256 string, disk systemchanges.DiskRequirement) (*systemchanges.ChangeSet, error) {
+	return plan.buildChangeSet(prepared, starting, volatileSHA256, disk, true)
+}
+
+func (plan *Plan) buildChangeSet(prepared systemchanges.PreparedStateCommit, starting systemchanges.StateLineage, volatileSHA256 string, disk systemchanges.DiskRequirement, renewalOnly bool) (*systemchanges.ChangeSet, error) {
+	if plan == nil || plan.used == nil || !plan.used.CompareAndSwap(false, true) || prepared == nil || !stateSHA256.MatchString(volatileSHA256) || starting.Status != systemchanges.Managed || starting.Revision != plan.request.StartingRevision || starting.SHA256 != plan.request.StartingStateSHA256 {
+		return nil, errors.New("certificate Plan authority invalid")
 	}
 	changeSet, revision, startingSHA256, candidateSHA256, planIdentity, planSHA256, valid := prepared.SystemChangesPreparedState()
 	if !valid || changeSet != plan.request.ChangeSet || revision != starting.Revision+1 || startingSHA256 != starting.SHA256 || candidateSHA256 != plan.request.DesiredStateSHA256 || planIdentity != plan.identity || planSHA256 != plan.sha256 {
-		return module.Apply(nil)
+		return nil, errors.New("prepared State does not match certificate Plan")
+	}
+	mutation := systemchanges.SettingChangeMutation
+	if plan.request.StandingRenewal {
+		renewal, ok := prepared.(systemchanges.CertificateRenewalPreparedState)
+		if !ok || !renewal.SystemChangesIPCertificateRenewal() {
+			return nil, errors.New("standing IP renewal scope unavailable")
+		}
+		mutation = systemchanges.CertificateRenewalMutation
+	} else if renewalOnly {
+		return nil, errors.New("standing renewal Plan required")
 	}
 	change, err := systemchanges.NewChangeSet(systemchanges.ChangeSetSpec{
-		Identity: plan.request.ChangeSet, Mutation: systemchanges.SettingChangeMutation, OutcomeOwner: systemchanges.CertificateModule,
+		Identity: plan.request.ChangeSet, Mutation: mutation, OutcomeOwner: systemchanges.CertificateModule,
 		StartingState: starting, TargetStateSHA256: candidateSHA256,
 		Plan: systemchanges.PlanBinding{Identity: plan.identity, SHA256: plan.sha256, VolatileSHA256: volatileSHA256}, PreparedState: prepared,
 		Steps: plan.steps, Checks: plan.checks, Timeouts: systemchanges.Timeouts{Step: 5 * time.Minute, Check: 5 * time.Minute}, Disk: disk,
 	})
 	if err != nil {
-		return module.Apply(nil)
+		return nil, errors.New("certificate Change Set invalid")
 	}
-	return module.Apply(change)
+	return change, nil
 }
 
 func certificateTransactionSteps(open, close systemchanges.Step, orders []OrderContract, destinationIP string, directTLSRevision uint64, directTLSDigest string) ([]systemchanges.Step, error) {

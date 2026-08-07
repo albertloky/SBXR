@@ -315,6 +315,25 @@ func TestApplyNeverQueuesOrStealsHeldLock(t *testing.T) {
 	}
 }
 
+func TestFreshCertificateRenewalBuildsOnlyAfterGlobalLock(t *testing.T) {
+	adapter := &memoryAdapter{observation: completeObservation(), lockHeld: true}
+	module := systemchanges.New(adapter)
+	builds := 0
+	build := func() (*systemchanges.ChangeSet, error) {
+		builds++
+		return completeChangeSet(t, systemchanges.CertificateRenewalMutation), nil
+	}
+	busy := module.ApplyFreshCertificateRenewal(build)
+	if busy.Outcome != systemchanges.Deferred || busy.PlanConsumed || !busy.RebuildPlan || builds != 0 {
+		t.Fatalf("busy fresh renewal = %+v; builds=%d", busy, builds)
+	}
+	adapter.lockHeld = false
+	result := module.ApplyFreshCertificateRenewal(build)
+	if result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-PREPARED-STATE" || !result.PlanConsumed || builds != 1 || adapter.lockCloses.Load() != 1 {
+		t.Fatalf("locked fresh renewal = %+v; builds=%d closes=%d", result, builds, adapter.lockCloses.Load())
+	}
+}
+
 func TestChangeInProgressDefersScheduledActivityAfterWorkerExit(t *testing.T) {
 	result := systemchanges.New(&memoryAdapter{observation: systemchanges.Observation{
 		Status: systemchanges.ChangeInProgress, CurrentChangeSet: "change-0008", LastChangeSet: "change-0007",

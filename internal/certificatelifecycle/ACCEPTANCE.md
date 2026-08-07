@@ -19,6 +19,10 @@ Stable checks:
 - `CERTIFICATE-DOMAIN-TRANSACTION`: separate revision-bound HTTP-01 open and close, isolated `sbxr-domain` staging, exact `tlsserver` production order, complete sing-box configuration validation before the pointer switch, fixed `sing-box.service` restart, and distinct Required Hysteria2, TUIC, and AnyTLS checks.
 - `CERTIFICATE-DOMAIN-CANDIDATE`: exact DNS SAN, key match, trusted complete chain, current 40-to-50-day lifetime, server usage, root-owned `0700`/`0600` candidate material, and marker-safe failures.
 - `CERTIFICATE-DOMAIN-ACTIVATION`: one `0750` sing-box-group serving set with `0640` chain and key, one shared atomic pointer, configuration and restart refusal, a root-only `0600` native sing-box probe configuration, separate normal-verification Hysteria2, TUIC, and AnyTLS connections to the selected VPS address, one-consumer failure, prior-pointer restart and three-consumer re-proof, no second order, unchanged Certbot lineage, and old private-key-set cleanup only after durable Complete.
+- `CERTIFICATE-IP-RENEWAL-POLICY`: `go test ./internal/certificatelifecycle -run 'Test(IPRenewalPolicyControlsDueAndRetryWindows|StandingIPPolicyPersistsFailureAcrossSchedulerProcesses|SchedulerRunsOnlyOneFreshIPAttemptPerEvaluation|StandingIPRenewalRequiresApprovedDueNarrowState)'` covers the 72-hour due point, 24-hour warning, cross-process 6-hour failure retry, 1-hour and 15-minute busy windows, one fresh IP attempt, and refusal outside the standing policy.
+- `CERTIFICATE-IP-RENEWAL-HISTORY`: `go test ./internal/certificatelifecycle/adapter/ubuntu -run TestRenewalAttemptStore` covers atomic root-only persistence, reload by a separate store instance, successful cleanup, and malformed or symlinked-history refusal.
+- `CERTIFICATE-IP-RENEWAL-STATE`: `go test ./internal/state -run 'Test(PrepareIPCertificateRenewalCommitAllowsOnlyStandingScope|CertificateRenewalSchedulerUsesRealOneUseSystemChangesLock)'` covers the exact Desired State delta, planning only after the real System Changes lock, one publication, durable Complete, cleanup, and the five typed IP renewal steps.
+- `CERTIFICATE-RENEWAL-SCHEDULER`: `go test ./internal/certificatelifecycle -run TestSystemdUnitsOwnOnePersistentRandomizedTwiceDailyRenewal` covers the one `sbxr-cert-renew` service/timer pair, persistent missed calendar runs, randomized delay, and the single bounded retry cadence without separate lineage or Certbot-owned units.
 
 The automated result may say only that the controlled Module and Ubuntu seam passed. It does not prove real ACME registration, real staging or production issuance, public reachability, live activation, real renewal, outside-VPS HTTPS, or Release Qualification.
 
@@ -37,6 +41,19 @@ On one explicitly approved Acceptance VPS and exact Release Identity:
 9. Keep real staging issuance, production issuance, real renewal, outside-VPS IP HTTPS, Integrated Verification, Codex Live Acceptance, and any required Owner Acceptance Pending until those checks actually run.
 
 The redacted Acceptance Record must exclude the Owner email, ACME account data, raw Certbot output, private keys, command environment, transaction material, complete certificate files, secret-derived data, Client Access Values, and any false issuance claim.
+
+## Live IP-renewal checks
+
+On one explicitly approved Acceptance VPS and exact Release Identity:
+
+1. Confirm only `sbxr-cert-renew.service` and `sbxr-cert-renew.timer` own certificate scheduling, the timer is enabled with `Persistent=true`, and no Certbot-owned or lineage-specific timer is active.
+2. With more than 72 hours remaining, run the service and prove it performs no mutation, creates no transaction, does not open port 80, and leaves the active certificate and Desired State revision unchanged.
+3. At 72 hours or less, prove one fresh IP renewal Change Set obtains the global lock, opens only the recorded HTTP-01 rule, passes staging and production ordering, activates Subscription Serving, publishes exactly one revision, proves post-publication agreement, records durable Complete, and removes transaction material.
+4. Hold the global lock and prove no Plan is built and no queue is created. Confirm the next eligible attempt is within 1 hour, or within 15 minutes below 24 hours, and builds new observations and a new Plan only after obtaining the lock.
+5. Force one ordinary order or activation failure while the prior certificate is valid. Confirm no retry before 6 hours, then confirm a fresh attempt is eligible; throughout, the prior pair remains active and the exact port-80 handle is absent.
+6. Restart the scheduler process between the failure and both retry checks. Confirm `/var/lib/sbxr/certificate-renewal/ip-attempt.json` is a root-owned regular `0600` file containing only schema, time, and typed outcome; successful renewal removes it. Malformed or symlinked history must stop without mutation.
+7. Interrupt before publication, after activation, and after publication. Prove restart resolution rolls back before publication, proves agreement after publication, never publishes twice, and enters Recovery Required only when the IP lineage or rollback cannot be proved.
+8. Keep real or safely forced renewal, public ACME traffic, outside-VPS HTTPS, Integrated Verification, Codex Live Acceptance, and Owner Acceptance Pending unless each check actually ran.
 
 ## Live domain-order checks
 
