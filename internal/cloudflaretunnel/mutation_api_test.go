@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"testing"
 
@@ -19,6 +20,110 @@ type reachableOrigins struct{ addresses []string }
 func (origins *reachableOrigins) Reachable(_ context.Context, address string) (bool, error) {
 	origins.addresses = append(origins.addresses, address)
 	return true, nil
+}
+
+func TestHTTPMutationAPIExposesSecretFreeAuthoritativeDNSAndEffectiveCAA(t *testing.T) {
+	managementToken, err := cloudflaretunnel.NewManagementToken(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		name, kind := request.URL.Query().Get("name"), request.URL.Query().Get("type")
+		switch name + "/" + kind {
+		case "direct.example.com/A":
+			fmt.Fprint(response, `{"success":true,"result":[{"id":"33333333333333333333333333333333","name":"direct.example.com","type":"A","content":"192.0.2.10","proxied":false}]}`)
+		case "direct.example.com/AAAA":
+			fmt.Fprint(response, `{"success":true,"result":[{"id":"44444444444444444444444444444444","name":"direct.example.com","type":"AAAA","content":"2001:db8::10","proxied":false}]}`)
+		case "direct.example.com/CAA":
+			fmt.Fprint(response, `{"success":true,"result":[]}`)
+		case "example.com/CAA":
+			fmt.Fprint(response, `{"success":true,"result":[{"id":"55555555555555555555555555555555","name":"example.com","type":"CAA","data":{"flags":0,"tag":"issue","value":"letsencrypt.org; validationmethods=http-01"}}]}`)
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer server.Close()
+	api := cloudflaretunnel.NewFixtureMutationAPI(server.Client(), server.URL, staticResolver{}, &reachableOrigins{})
+	request := cloudflaretunnel.CertificateDNSRequest{ZoneID: zoneID, ZoneName: "example.com", Hostname: "direct.example.com", PublicIPv4: "192.0.2.10", PublicIPv6: "2001:db8::10", IPv4RecordID: "33333333333333333333333333333333", IPv6RecordID: "44444444444444444444444444444444", Token: managementToken}
+	facts, err := api.ObserveCertificateDNS(context.Background(), request)
+	if err != nil || facts.Hostname != request.Hostname || facts.Addresses[0] != netip.MustParseAddr(request.PublicIPv4) || facts.Addresses[1] != netip.MustParseAddr(request.PublicIPv6) || facts.EffectiveCAA.Name != request.ZoneName || len(facts.EffectiveCAA.Records) != 1 || facts.EffectiveCAA.Records[0].Tag != "issue" {
+		t.Fatalf("ObserveCertificateDNS() = %+v, %v", facts, err)
+	}
+	rendered := fmt.Sprintf("%+v %#v %s", request, facts, request)
+	for _, forbidden := range []string{token, "33333333333333333333333333333333", "44444444444444444444444444444444", "55555555555555555555555555555555"} {
+		if strings.Contains(rendered, forbidden) {
+			t.Fatalf("certificate DNS handoff leaked %q: %s", forbidden, rendered)
+		}
+	}
+}
+
+func TestHTTPMutationAPIClassifiesDNSPropagationAndDrift(t *testing.T) {
+	managementToken, err := cloudflaretunnel.NewManagementToken(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name, result string
+		kind         cloudflaretunnel.APIErrorKind
+	}{
+		{name: "provider delay", result: `[]`, kind: cloudflaretunnel.APITemporary},
+		{name: "DNS drift", result: `[{"id":"33333333333333333333333333333333","name":"direct.example.com","type":"A","content":"192.0.2.99","proxied":false}]`, kind: cloudflaretunnel.APIAmbiguous},
+		{name: "changed ID", result: `[{"id":"77777777777777777777777777777777","name":"direct.example.com","type":"A","content":"192.0.2.10","proxied":false}]`, kind: cloudflaretunnel.APIAmbiguous},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				response.Header().Set("Content-Type", "application/json")
+				if request.URL.Query().Get("type") == "A" {
+					fmt.Fprint(response, `{"success":true,"result":`+test.result+`}`)
+					return
+				}
+				fmt.Fprint(response, `{"success":true,"result":[]}`)
+			}))
+			defer server.Close()
+			api := cloudflaretunnel.NewFixtureMutationAPI(server.Client(), server.URL, staticResolver{}, &reachableOrigins{})
+			_, gotErr := api.ObserveCertificateDNS(context.Background(), cloudflaretunnel.CertificateDNSRequest{ZoneID: zoneID, ZoneName: "example.com", Hostname: "direct.example.com", PublicIPv4: "192.0.2.10", IPv4RecordID: "33333333333333333333333333333333", Token: managementToken})
+			assertAPIError(t, gotErr, test.kind)
+		})
+	}
+}
+
+func TestHTTPMutationAPIConsumesEveryEffectiveCAAPage(t *testing.T) {
+	managementToken, err := cloudflaretunnel.NewManagementToken(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		name, kind := request.URL.Query().Get("name"), request.URL.Query().Get("type")
+		if kind == "A" {
+			fmt.Fprint(response, `{"success":true,"result":[{"id":"33333333333333333333333333333333","name":"direct.example.com","type":"A","content":"192.0.2.10","proxied":false}]}`)
+			return
+		}
+		if kind != "CAA" || name != "direct.example.com" {
+			fmt.Fprint(response, `{"success":true,"result":[]}`)
+			return
+		}
+		count := 100
+		if request.URL.Query().Get("page") == "2" {
+			count = 1
+		}
+		records := make([]map[string]any, count)
+		for index := range records {
+			number := index + 1
+			if request.URL.Query().Get("page") == "2" {
+				number = 101
+			}
+			records[index] = map[string]any{"id": fmt.Sprintf("%032x", number), "name": name, "type": kind, "data": map[string]any{"flags": 0, "tag": "issue", "value": fmt.Sprintf("issuer-%d.example", number)}}
+		}
+		_ = json.NewEncoder(response).Encode(map[string]any{"success": true, "result": records})
+	}))
+	defer server.Close()
+	api := cloudflaretunnel.NewFixtureMutationAPI(server.Client(), server.URL, staticResolver{}, &reachableOrigins{})
+	facts, err := api.ObserveCertificateDNS(context.Background(), cloudflaretunnel.CertificateDNSRequest{ZoneID: zoneID, ZoneName: "example.com", Hostname: "direct.example.com", PublicIPv4: "192.0.2.10", IPv4RecordID: "33333333333333333333333333333333", Token: managementToken})
+	if err != nil || len(facts.EffectiveCAA.Records) != 101 {
+		t.Fatalf("effective CAA count = %d, %v", len(facts.EffectiveCAA.Records), err)
+	}
 }
 
 func TestHTTPMutationAPIConfiguresAndObservesBothIndependentRoutes(t *testing.T) {

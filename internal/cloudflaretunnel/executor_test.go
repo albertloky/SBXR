@@ -2,6 +2,7 @@ package cloudflaretunnel
 
 import (
 	"context"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +29,27 @@ func TestExecutorRechecksPlanAndNeverDeletesWithoutJournaledID(t *testing.T) {
 	step := result.Plan.Steps()[0]
 	if _, err := executor.Reverse(step, systemchanges.StepEvidence{}, strings.NewReader(`{"management_token":"cfat_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`), time.Minute); err == nil || api.deletedTunnel != "" {
 		t.Fatal("rollback deleted by name without journaled ownership")
+	}
+}
+
+func TestExecutorExposesCertificateDNSFactsWithoutProviderAuthority(t *testing.T) {
+	_, request := plannedModule(t)
+	want := CertificateDNSFacts{Hostname: request.DirectHostname, Addresses: []netip.Addr{netip.MustParseAddr(request.PublicIPv4), netip.MustParseAddr(request.PublicIPv6)}, EffectiveCAA: EffectiveCAA{Name: request.Authority.ZoneName, Records: []CAARecord{{Tag: "issue", Value: "letsencrypt.org; validationmethods=http-01"}}}}
+	api := &executorFixture{planningAPI: planningAPI{observation: healthyAuthorityObservation(), mutation: MutationObservation{Digest: strings.Repeat("a", 64)}}, certificateFacts: want}
+	result := New(api, &planClock{}).Plan(context.Background(), request)
+	executor, err := result.Plan.Executor(api)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executor.CertificateDNSFacts(context.Background(), nil); err == nil {
+		t.Fatal("Certificate DNS handoff accepted no journaled Direct record IDs")
+	}
+	evidence := make([]systemchanges.StepEvidence, len(result.Plan.Steps()))
+	evidence[4] = systemchanges.StepEvidence{ResourceType: string(systemchanges.CloudflareDNSRecordResource), ResourceID: strings.Repeat("5", 32)}
+	evidence[5] = systemchanges.StepEvidence{ResourceType: string(systemchanges.CloudflareDNSRecordResource), ResourceID: strings.Repeat("6", 32)}
+	got, err := executor.CertificateDNSFacts(context.Background(), evidence)
+	if err != nil || got.Hostname != want.Hostname || len(got.Addresses) != 2 || api.certificateRequest.Hostname != request.DirectHostname || api.certificateRequest.IPv4RecordID != strings.Repeat("5", 32) || api.certificateRequest.IPv6RecordID != strings.Repeat("6", 32) || api.certificateRequest.Token.value == "" {
+		t.Fatalf("CertificateDNSFacts() = %+v, %v; request=%+v", got, err, api.certificateRequest)
 	}
 }
 
@@ -91,12 +113,14 @@ func TestWholeTunnelRetriesOnlyTemporaryProviderFailures(t *testing.T) {
 
 type executorFixture struct {
 	planningAPI
-	creates       int
-	deletedTunnel string
-	whole         WholeTunnelObservation
-	wholes        []WholeTunnelObservation
-	wholeCalls    int
-	wholeErr      error
+	creates            int
+	deletedTunnel      string
+	whole              WholeTunnelObservation
+	wholes             []WholeTunnelObservation
+	wholeCalls         int
+	wholeErr           error
+	certificateRequest CertificateDNSRequest
+	certificateFacts   CertificateDNSFacts
 }
 
 func (api *executorFixture) CreateTunnel(context.Context, CreateTunnelRequest) (CreatedTunnel, error) {
@@ -122,6 +146,10 @@ func (api *executorFixture) ObserveWholeTunnel(context.Context, WholeTunnelReque
 	}
 	api.wholeCalls++
 	return api.whole, nil
+}
+func (api *executorFixture) ObserveCertificateDNS(_ context.Context, request CertificateDNSRequest) (CertificateDNSFacts, error) {
+	api.certificateRequest = request
+	return api.certificateFacts, nil
 }
 func (*executorFixture) DeleteDNSRecord(context.Context, DeleteDNSRecordRequest) error { return nil }
 func (api *executorFixture) DeleteTunnel(_ context.Context, request DeleteTunnelRequest) error {

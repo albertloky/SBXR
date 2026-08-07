@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"os/exec"
 	"os/user"
@@ -85,6 +86,33 @@ type WholeTunnelObservation struct {
 	Routes                                         []Route
 	DNSRecords                                     []DNSObservation
 	XHTTPOriginReachable, WebSocketOriginReachable bool
+}
+
+type CertificateDNSRequest struct {
+	ZoneID, ZoneName, Hostname string
+	PublicIPv4, PublicIPv6     string
+	IPv4RecordID, IPv6RecordID string
+	Token                      ManagementToken
+}
+
+func (request CertificateDNSRequest) String() string {
+	return fmt.Sprintf("Certificate DNS observation: zone=%s hostname=%s IPv4=%s IPv6=%s token=masked", request.ZoneName, request.Hostname, request.PublicIPv4, request.PublicIPv6)
+}
+func (request CertificateDNSRequest) GoString() string { return request.String() }
+
+type CAARecord struct {
+	Flags uint8
+	Tag   string
+	Value string
+}
+type EffectiveCAA struct {
+	Name    string
+	Records []CAARecord
+}
+type CertificateDNSFacts struct {
+	Hostname     string
+	Addresses    []netip.Addr
+	EffectiveCAA EffectiveCAA
 }
 
 type rollbackRecord struct {
@@ -300,6 +328,54 @@ func (executor Executor) CheckWholeTunnel(evidence []systemchanges.StepEvidence,
 	default:
 		return systemchanges.Unknown, nil
 	}
+}
+
+func (executor Executor) CertificateDNSFacts(ctx context.Context, evidence []systemchanges.StepEvidence) (CertificateDNSFacts, error) {
+	if executor.api == nil || executor.token.value == "" {
+		return CertificateDNSFacts{}, errors.New("Certificate DNS observation unavailable")
+	}
+	recordID := func(step int) (string, bool) {
+		if step == 0 {
+			return "", true
+		}
+		if step > len(evidence) || evidence[step-1].ResourceType != string(systemchanges.CloudflareDNSRecordResource) || !immutableID.MatchString(evidence[step-1].ResourceID) {
+			return "", false
+		}
+		return evidence[step-1].ResourceID, true
+	}
+	ipv4ID, ipv4OK := recordID(executor.binding.directIPv4)
+	ipv6ID, ipv6OK := recordID(executor.binding.directIPv6)
+	if !ipv4OK || !ipv6OK {
+		return CertificateDNSFacts{}, errors.New("journaled Direct DNS identity unavailable")
+	}
+	facts, err := executor.api.ObserveCertificateDNS(ctx, CertificateDNSRequest{ZoneID: executor.request.Authority.ZoneID, ZoneName: executor.request.Authority.ZoneName, Hostname: executor.request.DirectHostname, PublicIPv4: executor.request.PublicIPv4, PublicIPv6: executor.request.PublicIPv6, IPv4RecordID: ipv4ID, IPv6RecordID: ipv6ID, Token: executor.token})
+	if err != nil {
+		return CertificateDNSFacts{}, err
+	}
+	if facts.Hostname != executor.request.DirectHostname || facts.EffectiveCAA.Name != "" && facts.EffectiveCAA.Name != facts.Hostname && facts.EffectiveCAA.Name != executor.request.Authority.ZoneName || facts.EffectiveCAA.Name == "" && len(facts.EffectiveCAA.Records) != 0 {
+		return CertificateDNSFacts{}, errors.New("Certificate DNS observation invalid")
+	}
+	want := map[netip.Addr]bool{}
+	for _, text := range []string{executor.request.PublicIPv4, executor.request.PublicIPv6} {
+		if text != "" {
+			want[netip.MustParseAddr(text)] = true
+		}
+	}
+	for _, address := range facts.Addresses {
+		if !want[address] {
+			return CertificateDNSFacts{}, errors.New("Certificate DNS observation invalid")
+		}
+		delete(want, address)
+	}
+	for _, record := range facts.EffectiveCAA.Records {
+		if record.Tag == "" || !safeProviderValue(record.Tag) || !safeProviderValue(record.Value) {
+			return CertificateDNSFacts{}, errors.New("Certificate DNS observation invalid")
+		}
+	}
+	if len(want) != 0 {
+		return CertificateDNSFacts{}, errors.New("Certificate DNS observation incomplete")
+	}
+	return facts, nil
 }
 
 func (executor Executor) ValidateInstalledService(root string) error {

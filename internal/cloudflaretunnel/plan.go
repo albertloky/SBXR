@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"regexp"
 	"strings"
 	"sync"
@@ -40,6 +41,7 @@ type MutationAPI interface {
 	PutConfiguration(context.Context, PutConfigurationRequest) (Configuration, error)
 	CreateDNSRecord(context.Context, CreateDNSRecordRequest) (OwnedResource, error)
 	ObserveWholeTunnel(context.Context, WholeTunnelRequest) (WholeTunnelObservation, error)
+	ObserveCertificateDNS(context.Context, CertificateDNSRequest) (CertificateDNSFacts, error)
 	DeleteDNSRecord(context.Context, DeleteDNSRecordRequest) error
 	DeleteTunnel(context.Context, DeleteTunnelRequest) error
 }
@@ -223,6 +225,11 @@ func suggestHostname(hostname, observation string) string {
 	if !ok {
 		return ""
 	}
+	if separator := strings.LastIndexByte(label, '-'); separator >= 0 && len(label)-separator-1 == 8 {
+		if _, err := hex.DecodeString(label[separator+1:]); err == nil {
+			label = label[:separator]
+		}
+	}
 	return label + "-" + hex.EncodeToString(digest[:4]) + "." + rest
 }
 
@@ -298,11 +305,26 @@ func wholeTunnelChecks() []systemchanges.Check {
 }
 
 func validPlanRequest(request PlanRequest) bool {
-	return request.StartingRevision == 0 && safePlanName.MatchString(request.ChangeSet) && sha256Text.MatchString(request.DesiredStateSHA256) && safePlanName.MatchString(request.TunnelName) && request.CloudflaredVersion == qualifiedCloudflaredVersion && validChildHostname(request.XHTTPHostname, request.Authority.ZoneName) && validChildHostname(request.WebSocketHostname, request.Authority.ZoneName) && validChildHostname(request.DirectHostname, request.Authority.ZoneName) && request.XHTTPHostname != request.WebSocketHostname && request.XHTTPHostname != request.DirectHostname && request.WebSocketHostname != request.DirectHostname && (request.PublicIPv4 != "" || request.PublicIPv6 != "")
+	return request.StartingRevision == 0 && safePlanName.MatchString(request.ChangeSet) && sha256Text.MatchString(request.DesiredStateSHA256) && safePlanName.MatchString(request.TunnelName) && request.CloudflaredVersion == qualifiedCloudflaredVersion && validOwnedHostname(request.XHTTPHostname, request.Authority.ZoneName, "xhttp") && validOwnedHostname(request.WebSocketHostname, request.Authority.ZoneName, "ws") && validOwnedHostname(request.DirectHostname, request.Authority.ZoneName, "direct") && request.XHTTPHostname != request.WebSocketHostname && request.XHTTPHostname != request.DirectHostname && request.WebSocketHostname != request.DirectHostname && validPublicAddresses(request.PublicIPv4, request.PublicIPv6)
 }
 
-func validChildHostname(hostname, zone string) bool {
-	return validZoneName(hostname) && strings.HasSuffix(hostname, "."+zone)
+func validOwnedHostname(hostname, zone, label string) bool {
+	if !validZoneName(hostname) || !strings.HasSuffix(hostname, "."+zone) {
+		return false
+	}
+	selected := strings.TrimSuffix(hostname, "."+zone)
+	if selected == label {
+		return true
+	}
+	suffix, ok := strings.CutPrefix(selected, label+"-")
+	_, err := hex.DecodeString(suffix)
+	return ok && len(suffix) == 8 && err == nil
+}
+
+func validPublicAddresses(ipv4, ipv6 string) bool {
+	v4, v4Err := netip.ParseAddr(ipv4)
+	v6, v6Err := netip.ParseAddr(ipv6)
+	return (ipv4 == "" || v4Err == nil && v4.Is4()) && (ipv6 == "" || v6Err == nil && v6.Is6()) && (ipv4 != "" || ipv6 != "")
 }
 
 func healthResult(i Interface, health Health) ViewResult {

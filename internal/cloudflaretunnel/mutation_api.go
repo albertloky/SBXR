@@ -4,10 +4,106 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"net/http"
+	"net/netip"
 	"net/url"
+	"sort"
 	"strings"
 )
+
+type certificateDNSRecord struct {
+	ID, Name, Type, Content string
+	Proxied                 bool
+	Data                    struct {
+		Flags int
+		Tag   string
+		Value string
+	}
+}
+
+func (api *httpAPI) ObserveCertificateDNS(ctx context.Context, request CertificateDNSRequest) (CertificateDNSFacts, error) {
+	validBinding := func(address, id string) bool {
+		return address == "" && id == "" || address != "" && immutableID.MatchString(id)
+	}
+	if api == nil || api.client == nil || !immutableID.MatchString(request.ZoneID) || !validZoneName(request.ZoneName) || !validOwnedHostname(request.Hostname, request.ZoneName, "direct") || request.Token.value == "" || !validPublicAddresses(request.PublicIPv4, request.PublicIPv6) || !validBinding(request.PublicIPv4, request.IPv4RecordID) || !validBinding(request.PublicIPv6, request.IPv6RecordID) {
+		return CertificateDNSFacts{}, APIError{Kind: APIMalformed}
+	}
+	facts := CertificateDNSFacts{Hostname: request.Hostname}
+	for _, expected := range []struct{ kind, content, id string }{{"A", request.PublicIPv4, request.IPv4RecordID}, {"AAAA", request.PublicIPv6, request.IPv6RecordID}} {
+		records, err := api.certificateDNSRecords(ctx, request, request.Hostname, expected.kind)
+		if err != nil {
+			return CertificateDNSFacts{}, err
+		}
+		if expected.content == "" {
+			if len(records) != 0 {
+				return CertificateDNSFacts{}, APIError{Kind: APIAmbiguous}
+			}
+			continue
+		}
+		if len(records) == 0 {
+			return CertificateDNSFacts{}, APIError{Kind: APITemporary}
+		}
+		if len(records) != 1 || records[0].ID != expected.id || records[0].Content != expected.content || records[0].Proxied {
+			return CertificateDNSFacts{}, APIError{Kind: APIAmbiguous}
+		}
+		address, err := netip.ParseAddr(records[0].Content)
+		if err != nil || expected.kind == "A" && !address.Is4() || expected.kind == "AAAA" && !address.Is6() {
+			return CertificateDNSFacts{}, APIError{Kind: APIMalformed}
+		}
+		facts.Addresses = append(facts.Addresses, address)
+	}
+	for _, name := range []string{request.Hostname, request.ZoneName} {
+		records, err := api.certificateDNSRecords(ctx, request, name, "CAA")
+		if err != nil {
+			return CertificateDNSFacts{}, err
+		}
+		if len(records) == 0 {
+			continue
+		}
+		facts.EffectiveCAA.Name = name
+		for _, record := range records {
+			if record.Data.Flags < 0 || record.Data.Flags > 255 || record.Data.Tag == "" || !safeProviderValue(record.Data.Tag) || !safeProviderValue(record.Data.Value) {
+				return CertificateDNSFacts{}, APIError{Kind: APIMalformed}
+			}
+			facts.EffectiveCAA.Records = append(facts.EffectiveCAA.Records, CAARecord{Flags: uint8(record.Data.Flags), Tag: strings.ToLower(record.Data.Tag), Value: record.Data.Value})
+		}
+		sort.Slice(facts.EffectiveCAA.Records, func(i, j int) bool {
+			left, right := facts.EffectiveCAA.Records[i], facts.EffectiveCAA.Records[j]
+			return left.Tag+"\x00"+left.Value+"\x00"+string(rune(left.Flags)) < right.Tag+"\x00"+right.Value+"\x00"+string(rune(right.Flags))
+		})
+		break
+	}
+	return facts, nil
+}
+
+func (api *httpAPI) certificateDNSRecords(ctx context.Context, request CertificateDNSRequest, name, kind string) ([]certificateDNSRecord, error) {
+	records := []certificateDNSRecord{}
+	seen := map[string]bool{}
+	for page := 1; page <= maxZonePages; page++ {
+		var envelope struct {
+			Result []certificateDNSRecord `json:"result"`
+		}
+		query := url.Values{"name": {name}, "type": {kind}, "page": {fmt.Sprint(page)}, "per_page": {"100"}}
+		if err := api.get(ctx, "/zones/"+request.ZoneID+"/dns_records", query, request.Token, &envelope); err != nil {
+			return nil, err
+		}
+		if len(envelope.Result) > 100 {
+			return nil, APIError{Kind: APIMalformed}
+		}
+		for _, record := range envelope.Result {
+			if !immutableID.MatchString(record.ID) || seen[record.ID] || record.Name != name || record.Type != kind {
+				return nil, APIError{Kind: APIMalformed}
+			}
+			seen[record.ID] = true
+			records = append(records, record)
+		}
+		if len(envelope.Result) < 100 {
+			return records, nil
+		}
+	}
+	return nil, APIError{Kind: APIMalformed}
+}
 
 func (api *httpAPI) ObserveMutation(ctx context.Context, request MutationRequest) (MutationObservation, error) {
 	if !immutableID.MatchString(request.AccountID) || !immutableID.MatchString(request.ZoneID) || !safePlanName.MatchString(request.Tunnel) || !validZoneName(request.Hostname) || request.Token.value == "" {

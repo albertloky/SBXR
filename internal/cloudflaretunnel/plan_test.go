@@ -65,6 +65,7 @@ func TestPlanRefusesUnownedConflictAndUnqualifiedCloudflared(t *testing.T) {
 	module, request := plannedModule(t)
 	api := module.api.(*planningAPI)
 	api.suffixFree = true
+	api.conflictHostname = request.XHTTPHostname
 	api.mutation = MutationObservation{Digest: strings.Repeat("a", 64), DNSRecords: []OwnedResource{{ID: testDNSID, Name: request.XHTTPHostname}}}
 	if result := module.Plan(context.Background(), request); result.Plan != nil || result.Health.Code != "CLOUDFLARE-UNOWNED-CONFLICT" || len(result.SuggestedHostnames) != 1 || result.SuggestedHostnames[0] == request.XHTTPHostname || !strings.HasSuffix(result.SuggestedHostnames[0], ".example.com") {
 		t.Fatalf("conflict Plan = %+v", result)
@@ -72,6 +73,80 @@ func TestPlanRefusesUnownedConflictAndUnqualifiedCloudflared(t *testing.T) {
 	request.CloudflaredVersion = "2026.7.2"
 	if result := module.Plan(context.Background(), request); result.Plan != nil {
 		t.Fatalf("unqualified cloudflared Plan = %+v", result)
+	}
+}
+
+func TestPlanRechecksEveryConflictingOwnedHostname(t *testing.T) {
+	for _, selectHostname := range []func(*PlanRequest) *string{
+		func(request *PlanRequest) *string { return &request.XHTTPHostname },
+		func(request *PlanRequest) *string { return &request.WebSocketHostname },
+		func(request *PlanRequest) *string { return &request.DirectHostname },
+	} {
+		module, request := plannedModule(t)
+		hostname := selectHostname(&request)
+		api := module.api.(*planningAPI)
+		api.suffixFree, api.conflictHostname = true, *hostname
+		api.mutation = MutationObservation{Digest: strings.Repeat("a", 64), DNSRecords: []OwnedResource{{ID: testDNSID, Name: *hostname}}}
+		conflict := module.Plan(context.Background(), request)
+		if conflict.Health.Code != "CLOUDFLARE-UNOWNED-CONFLICT" || len(conflict.SuggestedHostnames) != 1 {
+			t.Fatalf("conflict = %+v", conflict)
+		}
+		*hostname = conflict.SuggestedHostnames[0]
+		if approved := module.Plan(context.Background(), request); approved.Plan == nil || approved.Health.Outcome != Healthy {
+			t.Fatalf("approved suffix Plan = %+v", approved)
+		}
+	}
+}
+
+func TestHostnameSuggestionReplacesAnEarlierReviewedSuffix(t *testing.T) {
+	for _, label := range []string{"xhttp", "ws", "direct"} {
+		first := suggestHostname(label+".example.com", strings.Repeat("a", 64))
+		second := suggestHostname(first, strings.Repeat("b", 64))
+		if !validOwnedHostname(second, "example.com", label) || strings.Count(strings.Split(second, ".")[0], "-") != 1 {
+			t.Fatalf("second %s suggestion = %q", label, second)
+		}
+	}
+}
+
+func TestPlanPublishesDirectDNSOnlyForQualifiedAddressFamilies(t *testing.T) {
+	for _, test := range []struct {
+		name, ipv4, ipv6 string
+		wantType         string
+	}{
+		{name: "IPv4", ipv4: "192.0.2.10", wantType: "A"},
+		{name: "IPv6", ipv6: "2001:db8::10", wantType: "AAAA"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			module, request := plannedModule(t)
+			request.PublicIPv4, request.PublicIPv6 = test.ipv4, test.ipv6
+			result := module.Plan(context.Background(), request)
+			if result.Plan == nil || result.Health.Outcome != Healthy {
+				t.Fatalf("Plan = %+v", result)
+			}
+			steps := result.Plan.Steps()
+			if len(steps) != 6 {
+				t.Fatalf("steps = %d, want five provider changes and service activation", len(steps))
+			}
+			direct, ok := steps[4].CloudflareChange()
+			if !ok || direct.Hostname != request.DirectHostname || direct.RecordType != test.wantType || direct.Content != test.ipv4+test.ipv6 {
+				t.Fatalf("Direct DNS step = %#v", direct)
+			}
+		})
+	}
+}
+
+func TestPlanRefusesUnqualifiedAddressesAndHostnames(t *testing.T) {
+	for _, change := range []func(*PlanRequest){
+		func(request *PlanRequest) { request.PublicIPv4 = "2001:db8::10" },
+		func(request *PlanRequest) { request.PublicIPv6 = "192.0.2.10" },
+		func(request *PlanRequest) { request.XHTTPHostname = "other.example.com" },
+		func(request *PlanRequest) { request.DirectHostname = "direct.example.net" },
+	} {
+		module, request := plannedModule(t)
+		change(&request)
+		if result := module.Plan(context.Background(), request); result.Plan != nil || result.Health.Code != "CLOUDFLARE-PLAN-REFUSED" {
+			t.Fatalf("unqualified Plan = %+v", result)
+		}
 	}
 }
 
@@ -104,9 +179,10 @@ func plannedModule(t *testing.T) (Interface, PlanRequest) {
 }
 
 type planningAPI struct {
-	observation Observation
-	mutation    MutationObservation
-	suffixFree  bool
+	observation      Observation
+	mutation         MutationObservation
+	suffixFree       bool
+	conflictHostname string
 }
 
 func (api *planningAPI) Observe(context.Context, ObservationRequest) (Observation, error) {
@@ -116,6 +192,9 @@ func (api *planningAPI) Observe(context.Context, ObservationRequest) (Observatio
 func (api *planningAPI) ObserveMutation(_ context.Context, request MutationRequest) (MutationObservation, error) {
 	if api.suffixFree && strings.Contains(strings.Split(request.Hostname, ".")[0], "-") {
 		return MutationObservation{Digest: strings.Repeat("c", 64)}, nil
+	}
+	if api.conflictHostname != "" && request.Hostname != api.conflictHostname {
+		return MutationObservation{Digest: strings.Repeat("a", 64)}, nil
 	}
 	return api.mutation, nil
 }

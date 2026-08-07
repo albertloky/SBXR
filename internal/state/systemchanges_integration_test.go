@@ -571,6 +571,9 @@ func (api *deferredCloudflareAPI) CreateDNSRecord(_ context.Context, request clo
 func (*deferredCloudflareAPI) ObserveWholeTunnel(context.Context, cloudflaretunnel.WholeTunnelRequest) (cloudflaretunnel.WholeTunnelObservation, error) {
 	return cloudflaretunnel.WholeTunnelObservation{}, nil
 }
+func (*deferredCloudflareAPI) ObserveCertificateDNS(context.Context, cloudflaretunnel.CertificateDNSRequest) (cloudflaretunnel.CertificateDNSFacts, error) {
+	return cloudflaretunnel.CertificateDNSFacts{}, nil
+}
 func (*deferredCloudflareAPI) DeleteDNSRecord(context.Context, cloudflaretunnel.DeleteDNSRecordRequest) error {
 	return nil
 }
