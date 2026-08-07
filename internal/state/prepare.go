@@ -89,6 +89,17 @@ type ConnectionProfilesValidator interface {
 	ValidateConnectionProfiles(ConnectionProfiles, ConnectionProfileSecretReader) error
 }
 
+type ConnectionProfilesPreparer interface {
+	PrepareConnectionProfiles(ConnectionProfiles, ConnectionProfileSecretReader) (xray, singBox []byte, err error)
+}
+
+type ConnectionProfilesReviewedPreparer interface {
+	ConnectionProfilesValidator
+	ConnectionProfilesPreparer
+	Identity() string
+	SHA256() string
+}
+
 type SubscriptionValidator interface {
 	ValidateSubscription(SubscriptionSettings, ClientAccessReader) error
 }
@@ -707,9 +718,21 @@ func (i Interface) prepareCommit(request PrepareRequest, deferred *deferredCloud
 	}
 
 	materials := request.ServiceMaterials
+	connectionProfilesChanged := loaded.status == NotInstalled
+	if !connectionProfilesChanged {
+		current, problem := decode(loaded.bytes)
+		connectionProfilesChanged = problem != nil || !reflect.DeepEqual(current.desiredState.ConnectionProfiles, request.Candidate.ConnectionProfiles)
+	}
+	nativeXray, nativeSingBox, nativeErr := prepareConnectionProfileServices(request.SemanticValidators.ConnectionProfiles, request.Candidate.ConnectionProfiles, request.ReviewedInputs, connectionProfilesChanged)
+	if nativeErr != nil {
+		return nil, finding("STATE-SERVICE-SERIALIZATION", "prepared Connection Profiles configuration", "the owning Module refused native service bytes", "one complete deterministic Xray and sing-box configuration", "State cannot invent or repair proxy-core configuration", "regenerate the Connection Profiles Plan and review again")
+	}
 	var copies PreparedServiceCopies
 	if materials.Xray != nil {
 		prepared, err := prepareServiceCopy("xray.service", "connectionprofiles", "xray", revision, request.ChangeSet, materials.Xray)
+		if nativeXray != nil {
+			prepared, err = prepareServiceBytes("xray.service", "connectionprofiles", "xray", revision, request.ChangeSet, nativeXray)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -717,6 +740,9 @@ func (i Interface) prepareCommit(request PrepareRequest, deferred *deferredCloud
 	}
 	if materials.SingBox != nil {
 		prepared, err := prepareServiceCopy("sing-box.service", "connectionprofiles", "sing-box", revision, request.ChangeSet, materials.SingBox)
+		if nativeSingBox != nil {
+			prepared, err = prepareServiceBytes("sing-box.service", "connectionprofiles", "sing-box", revision, request.ChangeSet, nativeSingBox)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -1010,9 +1036,42 @@ func prepareServiceCopy(service, module, group string, revision uint64, changeSe
 	if err != nil {
 		return PreparedServiceCopy{}, finding("STATE-SERVICE-SERIALIZATION", "prepared service material", "typed serialization failed", "one complete deterministic JSON copy", "transaction material must be byte-stable before mutation", "correct the typed material and review again")
 	}
+	return prepareServiceBytes(service, module, group, revision, changeSet, data)
+}
+
+func prepareServiceBytes(service, module, group string, revision uint64, changeSet ChangeSetIdentity, data []byte) (PreparedServiceCopy, error) {
+	if len(data) == 0 || len(data) > 1<<20 || !json.Valid(data) {
+		return PreparedServiceCopy{}, finding("STATE-SERVICE-SERIALIZATION", "prepared service material", "owning-Module bytes are empty, oversized, or invalid JSON", "one complete deterministic native configuration", "transaction material must be byte-stable before mutation", "correct the owning Module configuration and review again")
+	}
 	digest := sha256.Sum256(data)
 	return PreparedServiceCopy{manifest: ServiceManifest{
 		Service: service, OwningModule: module, CandidateRevision: revision, ChangeSet: changeSet,
 		Owner: "root", Group: group, DirectoryMode: 0o750, FileMode: 0o640, SHA256: hex.EncodeToString(digest[:]),
 	}, bytes: data}, nil
+}
+
+func prepareConnectionProfileServices(validator ConnectionProfilesValidator, candidate ConnectionProfiles, reviewed ReviewedInputs, requireReviewedPlan bool) (xray, singBox []byte, err error) {
+	preparer, ok := validator.(ConnectionProfilesPreparer)
+	if !ok {
+		return nil, nil, errors.New("Connection Profiles native preparer unavailable")
+	}
+	if reviewedPreparer, reviewedOK := preparer.(ConnectionProfilesReviewedPreparer); requireReviewedPlan && (!reviewedOK || PlanIdentity(reviewedPreparer.Identity()) != reviewed.planIdentity || reviewedPreparer.SHA256() != reviewed.planSHA256) {
+		return nil, nil, errors.New("reviewed Connection Profiles Plan preparer unavailable")
+	}
+	lease := newSecretReaderLease()
+	defer func() {
+		lease.revoke()
+		if recover() != nil {
+			xray, singBox, err = nil, nil, errors.New("Connection Profiles preparation panicked")
+		}
+	}()
+	xray, singBox, err = preparer.PrepareConnectionProfiles(candidate, &connectionProfileSecretReader{lease: lease})
+	if err != nil {
+		return nil, nil, err
+	}
+	expected := expectedServiceMaterials(DesiredState{ConnectionProfiles: candidate})
+	if expected.Xray != nil && len(xray) == 0 || expected.Xray == nil && len(xray) != 0 || expected.SingBox != nil && len(singBox) == 0 || expected.SingBox == nil && len(singBox) != 0 {
+		return nil, nil, errors.New("Connection Profiles native service set is incomplete")
+	}
+	return xray, singBox, nil
 }

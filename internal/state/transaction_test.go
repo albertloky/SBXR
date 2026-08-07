@@ -700,7 +700,8 @@ func TestReviewedPlanIdentityCannotMintAnotherAuthority(t *testing.T) {
 
 func preparedRequest(t *testing.T, loaded Result, candidate DesiredState, changeSet ChangeSetIdentity) PrepareRequest {
 	t.Helper()
-	validator := &validatingSeams{want: candidate, calls: map[string]int{}}
+	reviewed := reviewedInputs(t, '1')
+	validator := &validatingSeams{want: candidate, calls: map[string]int{}, planIdentity: string(reviewed.planIdentity), planSHA256: reviewed.planSHA256}
 	return PrepareRequest{
 		Loaded:                   loaded,
 		CandidateReleaseIdentity: testRelease,
@@ -708,7 +709,7 @@ func preparedRequest(t *testing.T, loaded Result, candidate DesiredState, change
 		Candidate:                candidate,
 		SemanticValidators:       validatorsFor(validator),
 		ServiceMaterials:         serviceMaterialsFor(candidate),
-		ReviewedInputs:           reviewedInputs(t, '1'),
+		ReviewedInputs:           reviewed,
 	}
 }
 

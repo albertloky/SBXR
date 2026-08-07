@@ -38,6 +38,7 @@ var registeredModules = map[string]bool{
 var approvedModuleDependencies = map[string]map[string]bool{
 	"certificatelifecycle": {"systemchanges": true},
 	"cloudflaretunnel":     {"networkpolicy": true, "systemchanges": true},
+	"connectionprofiles":   {"state": true, "systemchanges": true},
 }
 
 var forbiddenStandardLibrary = map[string]bool{

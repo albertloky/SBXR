@@ -598,6 +598,8 @@ func TestDeferredCloudflareFinalizationPublishesProviderValuesInRevisionOne(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
+	validator.planIdentity = string(request.ReviewedInputs.planIdentity)
+	validator.planSHA256 = request.ReviewedInputs.planSHA256
 	prepared, err := stateModule.PrepareDeferredCloudflareCommit(request, planResult.Plan)
 	if err != nil {
 		t.Fatal(err)

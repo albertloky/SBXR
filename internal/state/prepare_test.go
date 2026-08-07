@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -351,6 +352,16 @@ func TestPrepareCommitRefusesInvalidCandidateFactsAndMaterial(t *testing.T) {
 	}{
 		{name: "partial candidate", change: func(r *PrepareRequest) { r.Candidate.Subscription.Token = ClientAccessValue{} }, code: "STATE-INTENT-INCOMPLETE"},
 		{name: "missing semantic validator", change: func(r *PrepareRequest) { r.SemanticValidators.NetworkPolicy = nil }, code: "STATE-CANDIDATE-SEMANTIC"},
+		{name: "missing native Connection Profiles preparer", change: func(r *PrepareRequest) {
+			base := r.SemanticValidators.ConnectionProfiles.(*validatingSeams)
+			r.SemanticValidators.ConnectionProfiles = connectionProfilesValidatorOnly{base}
+		}, code: "STATE-SERVICE-SERIALIZATION"},
+		{name: "changed Connection Profiles without their reviewed Plan", change: func(r *PrepareRequest) {
+			r.Candidate.ConnectionProfiles.VLESSRealityVision.UUID = NewClientAccessValue("replacement-reality-uuid")
+			r.ServiceMaterials = serviceMaterialsFor(r.Candidate)
+			validator := &validatingSeams{want: r.Candidate, calls: map[string]int{}}
+			r.SemanticValidators = validatorsFor(validator)
+		}, code: "STATE-SERVICE-SERIALIZATION"},
 		{name: "owning validator refusal", change: func(r *PrepareRequest) {
 			validator := &validatingSeams{want: valid, reject: "cloudflaretunnel", calls: map[string]int{}}
 			r.SemanticValidators = validatorsFor(validator)
@@ -380,6 +391,47 @@ func TestPrepareCommitRefusesInvalidCandidateFactsAndMaterial(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPrepareCommitUsesOwningConnectionProfilesNativeConfiguration(t *testing.T) {
+	candidate := completeDesiredState()
+	stateModule, request, _ := managedPrepareRequest(t, candidate)
+	validator := request.SemanticValidators.ConnectionProfiles.(*validatingSeams)
+	native := []byte(`{"inbounds":[{"protocol":"vless","streamSettings":{"method":"raw","security":"reality"}}]}`)
+	singBox, err := marshalProtectedJSON(expectedServiceMaterials(candidate).SingBox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preparer := &nativeProfilesPreparer{validatingSeams: validator, xray: native, singBox: singBox}
+	request.SemanticValidators.ConnectionProfiles = preparer
+	preparation, err := stateModule.PrepareCommit(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preparation.serviceCopies.Xray == nil || !bytes.Equal(preparation.serviceCopies.Xray.bytes, native) || preparation.serviceCopies.Xray.manifest.SHA256 != fmt.Sprintf("%x", sha256.Sum256(native)) {
+		t.Fatalf("prepared Xray service copy = %+v", preparation.serviceCopies.Xray)
+	}
+	if preparer.secrets == nil || preparer.secrets.ReadClientAccessValue(candidate.ConnectionProfiles.VLESSRealityVision.UUID) != "" || preparer.secrets.ReadInfrastructureSecret(candidate.ConnectionProfiles.VLESSRealityVision.PrivateKey) != "" {
+		t.Fatal("Connection Profiles preparation secret reader remained active")
+	}
+}
+
+type nativeProfilesPreparer struct {
+	*validatingSeams
+	xray    []byte
+	singBox []byte
+	secrets ConnectionProfileSecretReader
+}
+
+type connectionProfilesValidatorOnly struct{ base *validatingSeams }
+
+func (validator connectionProfilesValidatorOnly) ValidateConnectionProfiles(profiles ConnectionProfiles, secrets ConnectionProfileSecretReader) error {
+	return validator.base.ValidateConnectionProfiles(profiles, secrets)
+}
+
+func (preparer *nativeProfilesPreparer) PrepareConnectionProfiles(_ ConnectionProfiles, secrets ConnectionProfileSecretReader) ([]byte, []byte, error) {
+	preparer.secrets = secrets
+	return append([]byte(nil), preparer.xray...), append([]byte(nil), preparer.singBox...), nil
 }
 
 func TestPrepareIPCertificateRenewalCommitAllowsOnlyStandingScope(t *testing.T) {
@@ -531,7 +583,12 @@ type validatingSeams struct {
 	connectionSecrets   ConnectionProfileSecretReader
 	subscriptionSecrets ClientAccessReader
 	cloudflareSecrets   InfrastructureSecretReader
+	planIdentity        string
+	planSHA256          string
 }
+
+func (v *validatingSeams) Identity() string { return v.planIdentity }
+func (v *validatingSeams) SHA256() string   { return v.planSHA256 }
 
 func (v *validatingSeams) validate(module string, got, want any) error {
 	v.calls[module]++
@@ -550,6 +607,23 @@ func (v *validatingSeams) ValidateConnectionProfiles(got ConnectionProfiles, sec
 		return errors.New("protected Connection Profile value unavailable")
 	}
 	return v.validate("connectionprofiles", got, v.want.ConnectionProfiles)
+}
+
+func (v *validatingSeams) PrepareConnectionProfiles(_ ConnectionProfiles, secrets ConnectionProfileSecretReader) ([]byte, []byte, error) {
+	v.connectionSecrets = secrets
+	materials := expectedServiceMaterials(v.want)
+	var xray, singBox []byte
+	var err error
+	if materials.Xray != nil {
+		xray, err = marshalProtectedJSON(materials.Xray)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	if materials.SingBox != nil {
+		singBox, err = marshalProtectedJSON(materials.SingBox)
+	}
+	return xray, singBox, err
 }
 
 func (v *validatingSeams) ValidateSubscription(got SubscriptionSettings, secrets ClientAccessReader) error {
