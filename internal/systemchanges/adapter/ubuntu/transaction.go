@@ -624,7 +624,7 @@ func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges
 			prepared.State = entry.State
 		}
 	}
-	irreversible := prepared.Mutation == systemchanges.CompleteRemovalMutation && systemchanges.IsIrreversibleRemovalCheckpoint(last.Checkpoint)
+	irreversible := prepared.Mutation == systemchanges.CompleteRemovalMutation && journalHasCheckpoint(journal, systemchanges.IrreversibleRemovalStarted)
 	irreversibleRotation := prepared.Mutation == systemchanges.RotationMutation && runTokenFingerprint(journal) != ""
 	if prepared.State == nil || prepared.ChangeSet != changeSet || !validRecoveryJournalBinding(prepared) {
 		return systemchanges.RecoveryTransaction{}, errors.New("recovery transaction lineage is invalid")
@@ -679,7 +679,7 @@ func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges
 	return systemchanges.RecoveryTransaction{
 		ChangeSet: changeSet, Mutation: prepared.Mutation, Starting: prepared.Starting, StartingRelease: prepared.State.StartingRelease,
 		Candidate: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: prepared.State.CandidateRevision, SHA256: prepared.State.CandidateSHA256}, CandidateRelease: prepared.State.CandidateRelease,
-		OutcomeOwner: prepared.OutcomeOwner, State: *prepared.State, Steps: steps, Checks: append([]systemchanges.Check(nil), prepared.Checks...), AttemptedSteps: highestStartedStep(journal), RollbackStep: rollbackResumeStep(journal), LastCheckpoint: last.Checkpoint, Timeouts: prepared.Timeouts, PriorRunTokenSHA256: runTokenFingerprint(journal),
+		OutcomeOwner: prepared.OutcomeOwner, State: *prepared.State, Steps: steps, Checks: append([]systemchanges.Check(nil), prepared.Checks...), AttemptedSteps: highestStartedStep(journal), RollbackStep: rollbackResumeStep(journal), LastCheckpoint: last.Checkpoint, Timeouts: prepared.Timeouts, PriorRunTokenSHA256: runTokenFingerprint(journal), IrreversibleRemovalStarted: irreversible,
 	}, nil
 }
 
@@ -1215,24 +1215,45 @@ func validNextCheckpoint(entries []journalEntry, next journalEntry) bool {
 		return false
 	}
 	last, total := entries[len(entries)-1], len(entries[0].Steps)
+	irreversibleRemoval := entries[0].Mutation == systemchanges.CompleteRemovalMutation && journalHasCheckpoint(entries, systemchanges.IrreversibleRemovalStarted)
 	switch last.Checkpoint {
 	case systemchanges.Prepared:
 		return next.Checkpoint == systemchanges.StepStarted && next.Step == 1 || next.Checkpoint == systemchanges.IrreversibleRunTokenRotationStarted && next.Step == 0 && entries[0].Mutation == systemchanges.RotationMutation && validEvidence(next.Evidence) || next.Checkpoint == systemchanges.CancellationRequested && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0
 	case systemchanges.IrreversibleRunTokenRotationStarted:
 		return next.Checkpoint == systemchanges.StateFinalized && next.Step == 0 && next.State != nil
 	case systemchanges.StepStarted:
+		if irreversibleRemoval {
+			return next.Checkpoint == systemchanges.StepCompleted && next.Step == last.Step && validEvidence(next.Evidence)
+		}
 		return next.Checkpoint == systemchanges.StepCompleted && next.Step == last.Step && validEvidence(next.Evidence) || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
 	case systemchanges.StepCompleted:
 		if last.Step < total {
+			if entries[0].Mutation == systemchanges.CompleteRemovalMutation && !irreversibleRemoval && entries[0].Steps[last.Step].Removal != nil && entries[0].Steps[last.Step].Removal.Action == systemchanges.CloudflareRemoval {
+				return next.Checkpoint == systemchanges.IrreversibleRemovalStarted && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
+			}
+			if irreversibleRemoval {
+				return next.Checkpoint == systemchanges.StepStarted && next.Step == last.Step+1
+			}
 			return next.Checkpoint == systemchanges.StateFinalized && next.Step == last.Step && next.State != nil || next.Checkpoint == systemchanges.StepStarted && next.Step == last.Step+1 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
+		}
+		if irreversibleRemoval {
+			return next.Checkpoint == systemchanges.PrePublicationHealthPassed && next.Step == 0
 		}
 		return next.Checkpoint == systemchanges.StateFinalized && next.Step == 0 && next.State != nil || next.Checkpoint == systemchanges.PrePublicationHealthPassed && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
 	case systemchanges.StateFinalized:
 		return next.Checkpoint == systemchanges.StepStarted && next.Step == last.Step+1 || next.Checkpoint == systemchanges.PrePublicationHealthPassed && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
 	case systemchanges.PrePublicationHealthPassed:
+		if irreversibleRemoval {
+			return next.Checkpoint == systemchanges.OwnedExternalDeletionVerified && next.Step == 0
+		}
 		return next.Checkpoint == systemchanges.OwnedExternalDeletionVerified && next.Step == 0 || next.Checkpoint == systemchanges.StatePublicationStarted && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total
 	case systemchanges.OwnedExternalDeletionVerified:
-		return next.Checkpoint == systemchanges.IrreversibleRemovalStarted && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total
+		if irreversibleRemoval {
+			return next.Checkpoint == systemchanges.TokenRevocationVerified && next.Step == 0 && next.Evidence == nil
+		}
+		return false
+	case systemchanges.IrreversibleRemovalStarted:
+		return next.Checkpoint == systemchanges.StepStarted && next.Step == highestStartedStep(entries)+1 && next.Step <= total
 	case systemchanges.StatePublicationStarted:
 		return next.Checkpoint == systemchanges.StatePublished && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total
 	case systemchanges.StatePublished:
@@ -1272,6 +1293,15 @@ func highestStartedStep(entries []journalEntry) int {
 		}
 	}
 	return highest
+}
+
+func journalHasCheckpoint(entries []journalEntry, checkpoint systemchanges.DurableCheckpoint) bool {
+	for _, entry := range entries {
+		if entry.Checkpoint == checkpoint {
+			return true
+		}
+	}
+	return false
 }
 
 func validEvidence(evidence *systemchanges.StepEvidence) bool {

@@ -63,6 +63,14 @@ The existing System Changes transaction captures the exact provider route and DN
 
 State alone consumes the changed opaque token, rebuilds the candidate State and `cloudflared` service artifact, and recalculates their checksums. System Changes writes the new `0640` token file, validates the unchanged ingress and unit, restarts `cloudflared.service`, and requires the connected Tunnel plus both exact XHTTP and WebSocket routes before publication and again afterward. Before the irreversible checkpoint, cancellation or failure restores the starting State and service. After it, failure or restart is forward-only Recovery Required: recovery repeats only the next unproved phase and never restores or reconnects with the old token. Real Cloudflare rotation and forward recovery remain live Acceptance checks.
 
+## Complete removal
+
+The reviewed Complete-removal Plan names every committed Cloudflare DNS record ID, the committed Tunnel route identity, the committed Tunnel ID, the required absence gate, the rollback boundary, and the final `Not installed` outcome. It contains no token value. A missing ID, a same-named different ID, a changed inventory, or unavailable scoped authority stops before mutation; SBXR never deletes by name or adopts a replacement resource.
+
+Owned public exposure is removed while rollback is still possible. Immediately before the first permanent Cloudflare deletion, System Changes records `Irreversible removal started`. From that durable record onward, cancellation and rollback are unavailable: each exact Cloudflare deletion and its absence proof must continue forward from the journal after failure or restart. After `Owned external deletion verified`, SBXR asks the Owner to revoke the scoped token in Cloudflare, proves that the still-protected local token is rejected, then removes the local copy and continues the fixed cleanup to `Not installed`.
+
+The final result always says that Certificate Transparency entries and provider DNS caches cannot be erased. Controlled fixtures prove the boundary and restart rules; destructive deletion and token revocation against a real Cloudflare account remain Pending until an exact approved Acceptance Run.
+
 ## Current onboarding labels
 
 The walkthrough was qualified on `2026-08-07` against these Cloudflare dashboard labels:

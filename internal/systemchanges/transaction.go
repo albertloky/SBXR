@@ -172,21 +172,22 @@ var irreversibleRemovalPhases = []struct {
 // RecoveryTransaction is the secret-safe durable authority for one interrupted
 // ordinary Change Set. Snapshot contents remain inside the Adapter.
 type RecoveryTransaction struct {
-	ChangeSet           string
-	Mutation            MutationClass
-	Starting            StateLineage
-	StartingRelease     ReleaseBinding
-	Candidate           StateLineage
-	CandidateRelease    ReleaseBinding
-	State               StateTransactionBinding
-	OutcomeOwner        Module
-	Steps               []Step
-	Checks              []Check
-	AttemptedSteps      int
-	RollbackStep        int
-	LastCheckpoint      DurableCheckpoint
-	Timeouts            Timeouts
-	PriorRunTokenSHA256 string
+	ChangeSet                  string
+	Mutation                   MutationClass
+	Starting                   StateLineage
+	StartingRelease            ReleaseBinding
+	Candidate                  StateLineage
+	CandidateRelease           ReleaseBinding
+	State                      StateTransactionBinding
+	OutcomeOwner               Module
+	Steps                      []Step
+	Checks                     []Check
+	AttemptedSteps             int
+	RollbackStep               int
+	LastCheckpoint             DurableCheckpoint
+	Timeouts                   Timeouts
+	PriorRunTokenSHA256        string
+	IrreversibleRemovalStarted bool
 }
 
 type ExecutionLease struct{ authority *executionAuthority }
@@ -355,7 +356,7 @@ func (i Interface) Recover() ApplyResult {
 	}
 	recovery.Steps = append([]Step(nil), recovery.Steps...)
 	spec := ChangeSetSpec{Identity: recovery.ChangeSet, Mutation: recovery.Mutation, StartingState: recovery.Starting, OutcomeOwner: recovery.OutcomeOwner, Steps: recovery.Steps, Checks: recovery.Checks, Timeouts: recovery.Timeouts}
-	if recovery.Mutation == CompleteRemovalMutation && IsIrreversibleRemovalCheckpoint(recovery.LastCheckpoint) {
+	if recovery.Mutation == CompleteRemovalMutation && recovery.IrreversibleRemovalStarted {
 		removalAdapter, ok := i.adapter.(IrreversibleRemovalAdapter)
 		if !ok {
 			return finish(lock, forwardRemovalRequired(spec, "SYSTEM-CHANGES-REMOVAL-ADAPTER", recovery.LastCheckpoint))
@@ -418,8 +419,9 @@ func validRecoveryTransaction(recovery RecoveryTransaction) bool {
 	if recovery.Mutation == RotationMutation && runTokenRotationCheckpoint(recovery.LastCheckpoint) && !validRunTokenRecoveryChecks(recovery.Checks) {
 		return false
 	}
-	if IsIrreversibleRemovalCheckpoint(recovery.LastCheckpoint) {
-		return recovery.Mutation == CompleteRemovalMutation && recovery.AttemptedSteps == len(recovery.Steps) && recovery.RollbackStep == 0
+	if recovery.IrreversibleRemovalStarted {
+		first := firstCloudflareRemovalStep(recovery.Steps)
+		return recovery.Mutation == CompleteRemovalMutation && first >= 0 && recovery.AttemptedSteps >= first && recovery.AttemptedSteps <= len(recovery.Steps) && recovery.RollbackStep == 0
 	}
 	switch recovery.LastCheckpoint {
 	case Prepared:
@@ -560,7 +562,7 @@ func forwardRunTokenRotationRequired(spec ChangeSetSpec, cause string, checkpoin
 }
 
 func NextIrreversibleRemovalCheckpoint(checkpoint DurableCheckpoint) (DurableCheckpoint, bool) {
-	if checkpoint == IrreversibleRemovalStarted {
+	if checkpoint == OwnedExternalDeletionVerified {
 		return TokenRevocationVerified, true
 	}
 	if checkpoint == TokenRevocationVerified {
@@ -579,15 +581,54 @@ func NextIrreversibleRemovalCheckpoint(checkpoint DurableCheckpoint) (DurableChe
 }
 
 func IsIrreversibleRemovalCheckpoint(checkpoint DurableCheckpoint) bool {
+	if checkpoint == IrreversibleRemovalStarted {
+		return true
+	}
 	_, ok := NextIrreversibleRemovalCheckpoint(checkpoint)
 	return ok
 }
 
 func continueIrreversibleRemoval(lease ExecutionLease, adapter TransactionAdapter, removal IrreversibleRemovalAdapter, recovery RecoveryTransaction, spec ChangeSetSpec) ApplyResult {
-	record := func(checkpoint DurableCheckpoint, evidence *StepEvidence) bool {
-		return adapter.Record(lease, CheckpointRecord{ChangeSet: recovery.ChangeSet, Checkpoint: checkpoint, Evidence: evidence}) == nil
+	record := func(checkpoint DurableCheckpoint, step int, evidence *StepEvidence) bool {
+		return adapter.Record(lease, CheckpointRecord{ChangeSet: recovery.ChangeSet, Checkpoint: checkpoint, Step: step, Evidence: evidence}) == nil
 	}
-	if recovery.LastCheckpoint == IrreversibleRemovalStarted {
+	first := firstCloudflareRemovalStep(recovery.Steps)
+	if first < 0 {
+		return forwardRemovalRequired(spec, "SYSTEM-CHANGES-REMOVAL-STEPS", recovery.LastCheckpoint)
+	}
+	if recovery.LastCheckpoint == IrreversibleRemovalStarted || recovery.LastCheckpoint == StepStarted || recovery.LastCheckpoint == StepCompleted {
+		next := first
+		if recovery.LastCheckpoint == StepStarted {
+			next = recovery.AttemptedSteps - 1
+		} else if recovery.LastCheckpoint == StepCompleted {
+			next = recovery.AttemptedSteps
+		}
+		for index := next; index < len(recovery.Steps); index++ {
+			number := index + 1
+			if recovery.LastCheckpoint != StepStarted && !record(StepStarted, number, nil) {
+				return forwardRemovalRequired(spec, "SYSTEM-CHANGES-JOURNAL", StepStarted)
+			}
+			evidence, err := adapter.Execute(lease, recovery.ChangeSet, number, recovery.Steps[index], recovery.Timeouts.Step, nil)
+			if err != nil || !safeIdentity(evidence.Code) || !validSHA256(evidence.SHA256) || !record(StepCompleted, number, &evidence) {
+				return forwardRemovalRequired(spec, "SYSTEM-CHANGES-CLOUDFLARE-DELETION", StepStarted)
+			}
+			recovery.LastCheckpoint = StepCompleted
+			recovery.AttemptedSteps = number
+		}
+	}
+	if recovery.LastCheckpoint == StepCompleted {
+		if !gatePassed(lease, adapter, spec.Checks, PrePublication, recovery.Timeouts.Check) || !record(PrePublicationHealthPassed, 0, nil) {
+			return forwardRemovalRequired(spec, "SYSTEM-CHANGES-REMOVAL-HEALTH", StepCompleted)
+		}
+		recovery.LastCheckpoint = PrePublicationHealthPassed
+	}
+	if recovery.LastCheckpoint == PrePublicationHealthPassed {
+		if !record(OwnedExternalDeletionVerified, 0, nil) {
+			return forwardRemovalRequired(spec, "SYSTEM-CHANGES-JOURNAL", PrePublicationHealthPassed)
+		}
+		recovery.LastCheckpoint = OwnedExternalDeletionVerified
+	}
+	if recovery.LastCheckpoint == OwnedExternalDeletionVerified {
 		revoked, err := removal.VerifyCloudflareTokenRevoked(lease, recovery, recovery.Timeouts.Check)
 		if err != nil {
 			return forwardRemovalRequired(spec, "SYSTEM-CHANGES-TOKEN-REVOCATION", IrreversibleRemovalStarted)
@@ -595,8 +636,8 @@ func continueIrreversibleRemoval(lease ExecutionLease, adapter TransactionAdapte
 		if !revoked {
 			return ApplyResult{Outcome: AwaitingTokenRevocation, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(), UnremovableTraces: []string{"Certificate Transparency entries cannot be erased", "DNS caches cannot be erased"}}
 		}
-		if !record(TokenRevocationVerified, nil) {
-			return forwardRemovalRequired(spec, "SYSTEM-CHANGES-JOURNAL", IrreversibleRemovalStarted)
+		if !record(TokenRevocationVerified, 0, nil) {
+			return forwardRemovalRequired(spec, "SYSTEM-CHANGES-JOURNAL", OwnedExternalDeletionVerified)
 		}
 		recovery.LastCheckpoint = TokenRevocationVerified
 	}
@@ -609,13 +650,13 @@ func continueIrreversibleRemoval(lease ExecutionLease, adapter TransactionAdapte
 	if recovery.LastCheckpoint != FinalRemovalAbsenceVerified {
 		for _, item := range irreversibleRemovalPhases[start:] {
 			evidence, err := removal.DeleteIrreversibleRemovalPhase(lease, recovery, item.phase, recovery.Timeouts.Step)
-			if err != nil || !safeIdentity(evidence.Code) || !validSHA256(evidence.SHA256) || !record(item.checkpoint, &evidence) {
+			if err != nil || !safeIdentity(evidence.Code) || !validSHA256(evidence.SHA256) || !record(item.checkpoint, 0, &evidence) {
 				return forwardRemovalRequired(spec, "SYSTEM-CHANGES-REMOVAL-FORWARD", item.checkpoint)
 			}
 			recovery.LastCheckpoint = item.checkpoint
 		}
 		observed, err := removal.VerifyFinalRemovalAbsence(lease, recovery, recovery.Timeouts.Check)
-		if err != nil || !validObservation(observed) || observed.Status != NotInstalled || !record(FinalRemovalAbsenceVerified, nil) {
+		if err != nil || !validObservation(observed) || observed.Status != NotInstalled || !record(FinalRemovalAbsenceVerified, 0, nil) {
 			return forwardRemovalRequired(spec, "SYSTEM-CHANGES-REMOVAL-ABSENCE", FinalRemovalAbsenceVerified)
 		}
 	}
@@ -623,6 +664,16 @@ func continueIrreversibleRemoval(lease ExecutionLease, adapter TransactionAdapte
 		return forwardRemovalRequired(spec, "SYSTEM-CHANGES-REMOVAL-FINALIZE", FinalRemovalAbsenceVerified)
 	}
 	return ApplyResult{Outcome: Completed, RestoredStatus: NotInstalled, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(), UnremovableTraces: []string{"Certificate Transparency entries cannot be erased", "DNS caches cannot be erased"}}
+}
+
+func firstCloudflareRemovalStep(steps []Step) int {
+	for index, step := range steps {
+		change, ok := step.RemovalChange()
+		if ok && change.Action == CloudflareRemoval {
+			return index
+		}
+	}
+	return -1
 }
 
 func forwardRemovalRequired(spec ChangeSetSpec, cause string, checkpoint DurableCheckpoint) ApplyResult {
@@ -762,58 +813,74 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 		finalized = true
 		return nil
 	}
+	irreversibleRemoval := false
 	for index, step := range spec.Steps {
-		if cancellation.Requested() {
+		if cancellation.Requested() && !irreversibleRemoval {
 			return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, index))
 		}
 		number := index + 1
+		if removal, ok := step.RemovalChange(); spec.Mutation == CompleteRemovalMutation && ok && removal.Action == CloudflareRemoval && !irreversibleRemoval {
+			if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: IrreversibleRemovalStarted}); err != nil {
+				return finish(lock, rollbackChange(lease, adapter, transaction, spec, index, "SYSTEM-CHANGES-REMOVAL-CHECKPOINT", StepCompleted))
+			}
+			irreversibleRemoval = true
+		}
 		if step.Owner() == CloudflareModule && step.Forward() == ActivatePreparedConfiguration {
 			if result := finalizeDeferredState(index); result != nil {
 				return *result
 			}
 		}
 		if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: StepStarted, Step: number}); err != nil {
+			if irreversibleRemoval {
+				return finish(lock, forwardRemovalRequired(spec, "SYSTEM-CHANGES-JOURNAL", StepStarted))
+			}
 			return finish(lock, nothingChanged(spec, "SYSTEM-CHANGES-JOURNAL", StepStarted))
 		}
 		evidence, err := adapter.Execute(lease, spec.Identity, number, step, spec.Timeouts.Step, cancellation)
 		if err != nil || !safeIdentity(evidence.Code) || !validSHA256(evidence.SHA256) || !validCloudflareEvidence(step, number, evidence, evidenceByStep) {
+			if irreversibleRemoval {
+				return finish(lock, forwardRemovalRequired(spec, "SYSTEM-CHANGES-CLOUDFLARE-DELETION", StepStarted))
+			}
 			if cancellation.Requested() {
 				return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, number))
 			}
 			return finish(lock, rollbackChange(lease, adapter, transaction, spec, number, "SYSTEM-CHANGES-STEP", StepStarted))
 		}
 		if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: StepCompleted, Step: number, Evidence: &evidence, CompletedStep: &step}); err != nil {
+			if irreversibleRemoval {
+				return finish(lock, forwardRemovalRequired(spec, "SYSTEM-CHANGES-JOURNAL", StepCompleted))
+			}
 			return finish(lock, rollbackChange(lease, adapter, transaction, spec, number, "SYSTEM-CHANGES-JOURNAL", StepStarted))
 		}
 		evidenceByStep[index] = evidence
-		if cancellation.Requested() {
+		if cancellation.Requested() && !irreversibleRemoval {
 			return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, number))
 		}
 	}
-	if cancellation.Requested() {
+	if cancellation.Requested() && !irreversibleRemoval {
 		return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, len(spec.Steps)))
 	}
 	if result := finalizeDeferredState(len(spec.Steps)); result != nil {
 		return *result
 	}
 	if !gatePassed(lease, adapter, spec.Checks, PrePublication, spec.Timeouts.Check) {
+		if irreversibleRemoval {
+			return finish(lock, forwardRemovalRequired(spec, "SYSTEM-CHANGES-REMOVAL-HEALTH", StepCompleted))
+		}
 		return finish(lock, rollbackChange(lease, adapter, transaction, spec, len(spec.Steps), "SYSTEM-CHANGES-HEALTH", DurableCheckpoint(PrePublication+" health")))
 	}
-	if cancellation.Requested() {
+	if cancellation.Requested() && !irreversibleRemoval {
 		return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, len(spec.Steps)))
 	}
 	if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: PrePublicationHealthPassed}); err != nil {
+		if irreversibleRemoval {
+			return finish(lock, forwardRemovalRequired(spec, "SYSTEM-CHANGES-JOURNAL", PrePublicationHealthPassed))
+		}
 		return finish(lock, rollbackChange(lease, adapter, transaction, spec, len(spec.Steps), "SYSTEM-CHANGES-JOURNAL", StepCompleted))
 	}
 	if spec.Mutation == CompleteRemovalMutation {
-		if cancellation.Requested() {
-			return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, len(spec.Steps)))
-		}
 		if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: OwnedExternalDeletionVerified}); err != nil {
-			return finish(lock, rollbackChange(lease, adapter, transaction, spec, len(spec.Steps), "SYSTEM-CHANGES-JOURNAL", PrePublicationHealthPassed))
-		}
-		if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: IrreversibleRemovalStarted}); err != nil {
-			return finish(lock, rollbackChange(lease, adapter, transaction, spec, len(spec.Steps), "SYSTEM-CHANGES-JOURNAL", OwnedExternalDeletionVerified))
+			return finish(lock, forwardRemovalRequired(spec, "SYSTEM-CHANGES-JOURNAL", OwnedExternalDeletionVerified))
 		}
 		return finish(lock, ApplyResult{Outcome: AwaitingTokenRevocation, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(), UnremovableTraces: []string{"Certificate Transparency entries cannot be erased", "DNS caches cannot be erased"}}, spec.OutcomeOwner)
 	}
