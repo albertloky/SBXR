@@ -125,6 +125,7 @@ const XHTTPPacketUp XHTTPMode = "packet-up"
 type VLESSXHTTP struct {
 	Enabled       bool              `json:"enabled"`
 	UUID          ClientAccessValue `json:"uuid"`
+	Path          ClientAccessValue `json:"path"`
 	Hostname      string            `json:"hostname"`
 	OriginAddress string            `json:"origin_address"`
 	OriginPort    uint16            `json:"origin_port"`
@@ -253,7 +254,7 @@ func validateDesiredState(desired DesiredState) *Finding {
 	if !profiles.VLESSRealityVision.UUID.isSet() || !profiles.VLESSRealityVision.PrivateKey.isSet() || !profiles.VLESSRealityVision.ShortID.isSet() || profiles.VLESSRealityVision.Port == 0 || profiles.VLESSRealityVision.PublicKey == "" || profiles.VLESSRealityVision.Target == "" || profiles.VLESSRealityVision.ServerName == "" || profiles.VLESSRealityVision.Fingerprint == "" {
 		return intentFinding("STATE-INTENT-INCOMPLETE", "VLESS REALITY Vision", "a required profile value is absent", "complete settings and independent credentials", "partial Connection Profiles cannot become Desired State", "complete the profile and review again")
 	}
-	if !profiles.VLESSXHTTP.UUID.isSet() || profiles.VLESSXHTTP.Hostname == "" || profiles.VLESSXHTTP.OriginAddress == "" || profiles.VLESSXHTTP.OriginPort == 0 || profiles.VLESSXHTTP.Mode == "" {
+	if !profiles.VLESSXHTTP.UUID.isSet() || !profiles.VLESSXHTTP.Path.isSet() || profiles.VLESSXHTTP.Hostname == "" || profiles.VLESSXHTTP.OriginAddress == "" || profiles.VLESSXHTTP.OriginPort == 0 || profiles.VLESSXHTTP.Mode == "" {
 		return intentFinding("STATE-INTENT-INCOMPLETE", "VLESS XHTTP", "a required profile value is absent", "complete settings and an independent credential", "partial Connection Profiles cannot become Desired State", "complete the profile and review again")
 	}
 	if !profiles.VLESSWebSocket.UUID.isSet() || !profiles.VLESSWebSocket.Path.isSet() || profiles.VLESSWebSocket.Hostname == "" || profiles.VLESSWebSocket.OriginAddress == "" || profiles.VLESSWebSocket.OriginPort == 0 {
@@ -292,7 +293,7 @@ func validateDesiredState(desired DesiredState) *Finding {
 	if cloudflare.ZoneName != desired.Installation.Domain || profiles.VLESSXHTTP.Hostname != cloudflare.XHTTPHostname || profiles.VLESSWebSocket.Hostname != cloudflare.WebSocketHostname {
 		return crossSectionIntent("Cloudflare hostname bindings", "Connection Profiles and immutable Cloudflare bindings disagree")
 	}
-	if profiles.VLESSXHTTP.UUID.value == profiles.VLESSWebSocket.UUID.value || profiles.VLESSXHTTP.Hostname == profiles.VLESSWebSocket.Hostname {
+	if profiles.VLESSXHTTP.UUID.value == profiles.VLESSWebSocket.UUID.value || profiles.VLESSXHTTP.Path.value == profiles.VLESSWebSocket.Path.value || profiles.VLESSXHTTP.Hostname == profiles.VLESSWebSocket.Hostname {
 		return crossSectionIntent("Cloudflare Connection Profile independence", "XHTTP and WebSocket share a credential or hostname")
 	}
 	if profiles.Hysteria2.ServerName != cloudflare.DirectHostname || profiles.TUIC.ServerName != cloudflare.DirectHostname || profiles.AnyTLS.ServerName != cloudflare.DirectHostname || certificates.DomainHostname != cloudflare.DirectHostname {

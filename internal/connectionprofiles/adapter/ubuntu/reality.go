@@ -36,6 +36,17 @@ type RealityHost struct {
 	xrayUser  bool
 }
 
+type xrayServiceObservation struct {
+	checkedAt         time.Time
+	configurationSafe bool
+	installed         bool
+	unit              string
+	identity          string
+	running           bool
+	netBindService    bool
+	listeners         string
+}
+
 func NewRealityHost(root string) RealityHost {
 	group, _ := user.LookupGroup("xray")
 	account, _ := user.Lookup("xray")
@@ -59,39 +70,60 @@ func accountID(account *user.User) string {
 }
 
 func (host RealityHost) ObserveReality(ctx context.Context, target connectionprofiles.RealityTarget) connectionprofiles.RealityObservation {
+	if host.probe == nil {
+		host.probe = probeRealityTarget
+	}
+	observation := host.probe(ctx, target)
+	service := host.observeXrayService(ctx, target.ListenerPort)
+	observation.CheckedAt, observation.ConfigurationSafe = service.checkedAt, service.configurationSafe
+	observation.ServiceInstalled, observation.ServiceUnit, observation.ServiceIdentity = service.installed, service.unit, service.identity
+	observation.ServiceRunning, observation.NetBindService = service.running, service.netBindService
+	if listener, ok := exactListener(service.listeners, target.ListenerPort, func(address string) bool { return address == "0.0.0.0" || address == "::" || address == "*" }); ok {
+		observation.Listener = listener
+	}
+	return observation
+}
+
+func (host RealityHost) ObserveXHTTP(ctx context.Context, listenerPort uint16) connectionprofiles.XHTTPObservation {
+	service := host.observeXrayService(ctx, listenerPort)
+	observation := connectionprofiles.XHTTPObservation{
+		CheckedAt: service.checkedAt, ConfigurationSafe: service.configurationSafe, ServiceUnit: service.unit,
+		ServiceIdentity: service.identity, ServiceRunning: service.running,
+	}
+	if observation.ConfigurationSafe {
+		validation, cancel := context.WithTimeout(ctx, 60*time.Second)
+		_, validationErr := host.run(validation, nil, "xray", "run", "-test", "-config", filepath.Join(host.root, realityConfigurationPath))
+		cancel()
+		observation.ConfigurationValid = validationErr == nil
+	}
+	if listener, ok := exactListener(service.listeners, listenerPort, func(address string) bool { return address == "127.0.0.1" }); ok {
+		observation.Listener = listener
+	}
+	return observation
+}
+
+func (host RealityHost) observeXrayService(ctx context.Context, listenerPort uint16) xrayServiceObservation {
 	if host.now == nil {
 		host.now = time.Now
 	}
 	if host.run == nil {
 		host.run = runRealityCommand
 	}
-	if host.probe == nil {
-		host.probe = probeRealityTarget
-	}
-	observation := host.probe(ctx, target)
-	observation.CheckedAt = host.now().UTC()
-	observation.ConfigurationSafe = host.safeConfiguration()
 	unit, _ := host.run(ctx, nil, "systemctl", "show", "--property=Id", "--value", "xray.service")
 	identity, _ := host.run(ctx, nil, "systemctl", "show", "--property=User", "--value", "xray.service")
 	group, _ := host.run(ctx, nil, "systemctl", "show", "--property=Group", "--value", "xray.service")
 	active, activeErr := host.run(ctx, nil, "systemctl", "is-active", "xray.service")
 	capabilities, _ := host.run(ctx, nil, "systemctl", "show", "--property=CapabilityBoundingSet", "--value", "xray.service")
 	ambient, _ := host.run(ctx, nil, "systemctl", "show", "--property=AmbientCapabilities", "--value", "xray.service")
-	listenerPort := target.ListenerPort
-	listener, _ := host.run(ctx, nil, "ss", "-H", "-ltn", "sport", "=", ":"+strconv.Itoa(int(listenerPort)))
-	observation.ServiceInstalled = strings.TrimSpace(unit) == "xray.service"
-	observation.ServiceUnit = strings.TrimSpace(unit)
+	listeners, _ := host.run(ctx, nil, "ss", "-H", "-ltn", "sport", "=", ":"+strconv.Itoa(int(listenerPort)))
+	service := xrayServiceObservation{
+		checkedAt: host.now().UTC(), configurationSafe: host.safeConfiguration(), installed: strings.TrimSpace(unit) == "xray.service", unit: strings.TrimSpace(unit),
+		running: activeErr == nil && strings.TrimSpace(active) == "active", netBindService: strings.TrimSpace(capabilities) == "CAP_NET_BIND_SERVICE" && strings.TrimSpace(ambient) == "CAP_NET_BIND_SERVICE", listeners: listeners,
+	}
 	if host.xrayUser && strings.TrimSpace(identity) == "xray" && strings.TrimSpace(group) == "xray" {
-		observation.ServiceIdentity = "xray"
+		service.identity = "xray"
 	}
-	observation.ServiceRunning = activeErr == nil && strings.TrimSpace(active) == "active"
-	observation.NetBindService = strings.TrimSpace(capabilities) == "CAP_NET_BIND_SERVICE" && strings.TrimSpace(ambient) == "CAP_NET_BIND_SERVICE"
-	if fields := strings.Fields(listener); listenerPort > 0 && len(fields) >= 4 {
-		if address, port, ok := publicListenAddress(fields[3]); ok && port == listenerPort {
-			observation.Listener = connectionprofiles.Listener{Address: address, Port: listenerPort, Protocol: "tcp"}
-		}
-	}
-	return observation
+	return service
 }
 
 func (host RealityHost) ValidateReality(ctx context.Context, version string, configuration io.Reader) error {
@@ -131,13 +163,34 @@ func (host RealityHost) safeConfiguration() bool {
 	return directoryOK && fileOK && directoryStat.Uid == host.rootUID && directoryStat.Gid == host.xrayGID && fileStat.Uid == host.rootUID && fileStat.Gid == host.xrayGID && fileStat.Nlink == 1
 }
 
+func exactListener(output string, expectedPort uint16, allowed func(string) bool) (connectionprofiles.Listener, bool) {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if expectedPort == 0 || len(lines) != 1 {
+		return connectionprofiles.Listener{}, false
+	}
+	fields := strings.Fields(lines[0])
+	if len(fields) < 4 {
+		return connectionprofiles.Listener{}, false
+	}
+	address, port, ok := listenAddress(fields[3])
+	if !ok || port != expectedPort || !allowed(address) {
+		return connectionprofiles.Listener{}, false
+	}
+	return connectionprofiles.Listener{Address: address, Port: port, Protocol: "tcp"}, true
+}
+
 func publicListenAddress(value string) (string, uint16, bool) {
+	host, port, ok := listenAddress(value)
+	return host, port, ok && (host == "0.0.0.0" || host == "::" || host == "*")
+}
+
+func listenAddress(value string) (string, uint16, bool) {
 	host, portText, err := net.SplitHostPort(value)
 	if err != nil {
 		return "", 0, false
 	}
 	port, err := strconv.ParseUint(portText, 10, 16)
-	if err != nil || host != "0.0.0.0" && host != "::" && host != "*" {
+	if err != nil {
 		return "", 0, false
 	}
 	return host, uint16(port), true

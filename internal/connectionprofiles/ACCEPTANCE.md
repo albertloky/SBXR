@@ -1,6 +1,6 @@
 # Connection Profiles acceptance
 
-This procedure covers only issue #100, VLESS REALITY Vision. It does not accept the complete six-profile Module in #99.
+This procedure covers issues #100 and #101: VLESS REALITY Vision and VLESS XHTTP. It does not accept the complete six-profile Module in #99.
 
 ## Module Verification — automated
 
@@ -8,6 +8,7 @@ Run:
 
 ```sh
 go test ./internal/connectionprofiles/... -run 'TestReality'
+go test ./internal/connectionprofiles/... -run 'TestXHTTP|TestGenerateXHTTP'
 ```
 
 The focused checks cover:
@@ -16,6 +17,8 @@ The focused checks cover:
 - `CONNECTION-PROFILES-REALITY-NATIVE`: complete native-validator refusal without raw output;
 - `CONNECTION-PROFILES-REALITY-CONFIGURATION`, `-LISTENER`, `-SERVICE`, `-CAPABILITY`, `-SECURITY`: protected material, selected TCP listener, fixed non-root service, narrow capability, REALITY binding, and Required Change Set gates;
 - deterministic secret-safe Plan rendering without secret-derived configuration hashes, matching UUID/X25519/short-ID credentials, State's revoked-after-use secret-reader handoff into the protected native Xray artifact, changed-observation and stale/reused Apply rejection, exact activation and rollback step, and unique secret-marker exclusion.
+- `CONNECTION-PROFILES-XHTTP-ORIGIN`, `-CONFIGURATION`, `-LISTENER`, `-SERVICE`, and `-ROUTE`: exact `127.0.0.1:11080/TCP`, native validity, fixed non-root Xray service, loopback-only listener, and a typed Cloudflare hostname-to-origin binding;
+- independent generated UUID and 32-byte path, server `packet-up`, no local TLS, no client `auto`, no initial `stream-up` or `stream-one`, complete REALITY-plus-XHTTP native configuration, exact reviewed State handoff, stale/reused Plan rejection, rollback input, and secret-marker exclusion.
 
 Run the full repository suite once before committing:
 
@@ -29,9 +32,10 @@ Download and independently verify the official Xray-core `v26.3.27` asset for th
 
 ```sh
 SBXR_XRAY_BIN=/absolute/path/to/xray go test ./internal/connectionprofiles -run TestPinnedNativeXrayAcceptsPreparedRealityConfiguration -count=1
+SBXR_XRAY_BIN=/absolute/path/to/xray go test ./internal/connectionprofiles -run TestPinnedNativeXrayAcceptsCompleteXHTTPConfiguration -count=1
 ```
 
-The test sends the exact configuration produced through `Plan` to `xray run -test -config stdin:`. Passing proves parser acceptance for VLESS, RAW, REALITY, Vision, and fallback limits. It does not prove service activation or connectivity.
+The tests send the exact configurations produced through `Plan` to `xray run -test -config stdin:`. Passing proves parser acceptance for VLESS, RAW, REALITY, Vision, fallback limits, XHTTP `packet-up`, the loopback origin, and no local TLS. It does not prove service activation, Cloudflare edge behavior, connectivity, reconnect, idle, or sustained traffic.
 
 ## Codex Live Acceptance — Pending
 
@@ -42,6 +46,9 @@ On an explicitly approved Acceptance VPS and exact Release Identity:
 3. Activate the prepared configuration through one Change Set. Prove the selected public TCP listener, running service, REALITY security binding, and server-side authenticated function.
 4. Inject native validation, service, listener, and post-publication health failures separately. Prove complete rollback to the Acceptance Baseline with no credential or raw configuration in evidence.
 5. From an approved disposable Acceptance Client outside the VPS, prove authenticated uplink and downlink. Keep this row separate from native validation and local service proof.
+6. Prove XHTTP is bound only to `127.0.0.1:11080/TCP`, the selected Cloudflare hostname maps exactly to `http://127.0.0.1:11080`, edge TLS works, and no public route exposes the local listener.
+7. Through the real Cloudflare hostname, run separate idle, reconnect, sustained-upload, and sustained-download checks. A local origin check, native validator pass, or generated configuration cannot satisfy these rows.
+8. Keep client rendering separate: server `packet-up` remains fixed here; client `mode=auto`, import behavior, and maintained-client compatibility belong to Subscription Publication and Owner Acceptance.
 
 ## Owner Acceptance — Pending
 

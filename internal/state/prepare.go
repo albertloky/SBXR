@@ -144,6 +144,7 @@ type XrayRealityMaterial struct {
 // XrayXHTTPMaterial contains only values read by the loopback XHTTP listener.
 type XrayXHTTPMaterial struct {
 	UUID          ClientAccessValue `json:"uuid"`
+	Path          ClientAccessValue `json:"path"`
 	OriginAddress string            `json:"origin_address"`
 	OriginPort    uint16            `json:"origin_port"`
 	Mode          XHTTPMode         `json:"mode"`
@@ -980,7 +981,7 @@ func expectedServiceMaterials(candidate DesiredState) ServiceMaterials {
 	}
 	if p.VLESSXHTTP.Enabled {
 		profile := p.VLESSXHTTP
-		xray.VLESSXHTTP = &XrayXHTTPMaterial{UUID: profile.UUID, OriginAddress: profile.OriginAddress, OriginPort: profile.OriginPort, Mode: profile.Mode}
+		xray.VLESSXHTTP = &XrayXHTTPMaterial{UUID: profile.UUID, Path: profile.Path, OriginAddress: profile.OriginAddress, OriginPort: profile.OriginPort, Mode: profile.Mode}
 	}
 	if p.VLESSWebSocket.Enabled {
 		profile := p.VLESSWebSocket

@@ -1477,6 +1477,9 @@ type controlledUbuntuHost struct {
 	irreversiblePhases    []systemchanges.IrreversibleRemovalPhase
 	removalFinalized      bool
 	failRemovalFinalize   int
+	preparedConfiguration string
+	activeConfiguration   string
+	rollbackWant          []byte
 }
 
 type controlledService struct {
@@ -1621,7 +1624,7 @@ func (adapter *checkpointCrashingUbuntuAdapter) Record(lease systemchanges.Execu
 }
 
 func (host *controlledUbuntuHost) CaptureRollback(step systemchanges.Step, write func(io.Reader) error) error {
-	active := filepath.Join(host.root, "run/sbxr/active-subscription.json")
+	active := host.activeConfigurationPath()
 	prior, err := os.ReadFile(active)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -1735,11 +1738,11 @@ func (host *controlledUbuntuHost) Execute(step systemchanges.Step, timeout time.
 		digest := sha256.Sum256([]byte(removal.ImmutableID))
 		return systemchanges.StepEvidence{Code: "removal-verified-" + removal.ImmutableID, SHA256: fmt.Sprintf("%x", digest)}, nil
 	}
-	preparedConfig, err := os.ReadFile(filepath.Join(transaction, "prepared/subscription.json"))
+	preparedConfig, err := os.ReadFile(host.preparedConfigurationPath())
 	if err != nil || !json.Valid(preparedConfig) {
 		return systemchanges.StepEvidence{}, errors.New("prepared native configuration is invalid")
 	}
-	active := filepath.Join(host.root, "run/sbxr/active-subscription.json")
+	active := host.activeConfigurationPath()
 	if err := os.WriteFile(active, preparedConfig, 0o600); err != nil {
 		return systemchanges.StepEvidence{}, err
 	}
@@ -1770,7 +1773,7 @@ func (host *controlledUbuntuHost) Reverse(step systemchanges.Step, snapshot io.R
 		host.removedResources[removal.ImmutableID] = false
 		return systemchanges.StepEvidence{Code: "removal-restored-" + removal.ImmutableID, SHA256: testSHA('b')}, nil
 	}
-	active := filepath.Join(host.root, "run/sbxr/active-subscription.json")
+	active := host.activeConfigurationPath()
 	prior, err := io.ReadAll(snapshot)
 	if err != nil {
 		return systemchanges.StepEvidence{}, err
@@ -1788,6 +1791,20 @@ func (host *controlledUbuntuHost) Reverse(step systemchanges.Step, snapshot io.R
 		}
 	}
 	return systemchanges.StepEvidence{Code: "rollback-valid", SHA256: testSHA('b')}, nil
+}
+
+func (host *controlledUbuntuHost) preparedConfigurationPath() string {
+	if host.preparedConfiguration != "" {
+		return filepath.Join(host.root, "var/lib/sbxr/transactions/change-0008", host.preparedConfiguration)
+	}
+	return filepath.Join(host.root, "var/lib/sbxr/transactions/change-0008/prepared/subscription.json")
+}
+
+func (host *controlledUbuntuHost) activeConfigurationPath() string {
+	if host.activeConfiguration != "" {
+		return filepath.Join(host.root, host.activeConfiguration)
+	}
+	return filepath.Join(host.root, "run/sbxr/active-subscription.json")
 }
 
 func (host *controlledUbuntuHost) HoldServices() error {
@@ -2198,8 +2215,12 @@ func (host *controlledUbuntuHost) VerifyRollback(agreement systemchanges.Rollbac
 	if (!validManaged && !validRecoveryRequired) || agreement.Revision != 7 || agreement.SHA256 == "" {
 		return errors.New("rollback State agreement failed")
 	}
-	active := filepath.Join(host.root, "run/sbxr/active-subscription.json")
-	if _, err := os.Stat(active); !errors.Is(err, os.ErrNotExist) {
+	active := host.activeConfigurationPath()
+	if len(host.rollbackWant) > 0 {
+		if restored, err := os.ReadFile(active); err != nil || !bytes.Equal(restored, host.rollbackWant) {
+			return errors.New("rollback active-file agreement failed")
+		}
+	} else if _, err := os.Stat(active); !errors.Is(err, os.ErrNotExist) {
 		return errors.New("rollback active-file agreement failed")
 	}
 	journal, err := os.ReadFile(filepath.Join(host.root, "var/lib/sbxr/transactions/change-0008/journal.jsonl"))
@@ -2348,6 +2369,29 @@ func TestUbuntuAdapterBoundsLiveStepAndRollsBackOnTimeout(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "var/lib/sbxr/transactions/change-0008")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("timed-out transaction material still exists: %v", err)
+	}
+}
+
+func TestXHTTPPostMutationFailureRestoresPriorCompleteXrayConfiguration(t *testing.T) {
+	_, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.SettingChangeMutation, systemchanges.Check{Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CONNECTION-PROFILES-XHTTP-CONFIGURATION"}, systemChangeTestOptions{stepTimeout: time.Second})
+	root := t.TempDir()
+	prepareLock(t, root)
+	prior := []byte(`{"inbounds":[{"tag":"vless-reality-vision"}],"outbounds":[{"protocol":"freedom"}]}`)
+	active := filepath.Join(root, "etc/sbxr/xray/config.json")
+	if err := os.MkdirAll(filepath.Dir(active), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(active, prior, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	host := &controlledUbuntuHost{
+		root: root, failExecute: true, preparedConfiguration: "prepared/xray.json", activeConfiguration: "etc/sbxr/xray/config.json", rollbackWant: prior,
+	}
+	adapter := ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return observed, nil }, host)
+	result := systemchanges.New(adapter).Apply(changeSet)
+	restored, err := os.ReadFile(active)
+	if result.Outcome != systemchanges.RollbackSucceeded || host.executed != 1 || host.rollbacks != 1 || err != nil || !bytes.Equal(restored, prior) {
+		t.Fatalf("XHTTP rollback = %+v; executed=%d rollbacks=%d restored=%s err=%v", result, host.executed, host.rollbacks, restored, err)
 	}
 }
 

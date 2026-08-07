@@ -134,6 +134,57 @@ func TestRealityHostRunsOnlyPinnedNativeValidationWithConfigurationOnStdin(t *te
 	}
 }
 
+func TestRealityHostObservesExactXHTTPLoopbackListener(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(root, "etc/sbxr/xray")
+	if err := os.MkdirAll(directory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "config.json"), []byte(`{"inbounds":[]}`), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	host := RealityHost{root: root, now: func() time.Time { return time.Date(2026, time.August, 7, 12, 0, 0, 0, time.UTC) }, rootUID: uint32(os.Geteuid()), xrayGID: uint32(os.Getegid()), xrayGroup: true, xrayUser: true}
+	host.run = func(_ context.Context, _ io.Reader, name string, arguments ...string) (string, error) {
+		switch name + " " + strings.Join(arguments, " ") {
+		case "systemctl show --property=Id --value xray.service":
+			return "xray.service\n", nil
+		case "systemctl show --property=User --value xray.service", "systemctl show --property=Group --value xray.service":
+			return "xray\n", nil
+		case "systemctl is-active xray.service":
+			return "active\n", nil
+		case "ss -H -ltn sport = :11080":
+			return "LISTEN 0 4096 127.0.0.1:11080 0.0.0.0:*\n", nil
+		case "xray run -test -config " + filepath.Join(root, realityConfigurationPath):
+			return "configuration OK\n", nil
+		default:
+			return "", fmt.Errorf("unexpected command")
+		}
+	}
+	observation := host.ObserveXHTTP(t.Context(), 11080)
+	if !observation.ConfigurationSafe || !observation.ConfigurationValid || observation.ServiceUnit != "xray.service" || observation.ServiceIdentity != "xray" || !observation.ServiceRunning || observation.Listener != (connectionprofiles.Listener{Address: "127.0.0.1", Port: 11080, Protocol: "tcp"}) {
+		t.Fatalf("ObserveXHTTP() = %+v", observation)
+	}
+	host.run = func(_ context.Context, _ io.Reader, name string, arguments ...string) (string, error) {
+		switch name + " " + strings.Join(arguments, " ") {
+		case "systemctl show --property=Id --value xray.service":
+			return "xray.service\n", nil
+		case "systemctl show --property=User --value xray.service", "systemctl show --property=Group --value xray.service":
+			return "xray\n", nil
+		case "systemctl is-active xray.service":
+			return "active\n", nil
+		case "ss -H -ltn sport = :11080":
+			return "LISTEN 0 4096 127.0.0.1:11080 0.0.0.0:*\nLISTEN 0 4096 0.0.0.0:11080 0.0.0.0:*\n", nil
+		case "xray run -test -config " + filepath.Join(root, realityConfigurationPath):
+			return "configuration OK\n", nil
+		default:
+			return "", fmt.Errorf("unexpected command")
+		}
+	}
+	if unsafe := host.ObserveXHTTP(t.Context(), 11080); unsafe.Listener != (connectionprofiles.Listener{}) {
+		t.Fatalf("ObserveXHTTP() hid an additional public listener: %+v", unsafe)
+	}
+}
+
 func TestRealityTargetClassHelpersFailClosed(t *testing.T) {
 	for _, hostname := range []string{"apple.com", "www.apple.com", "icloud.com", "private.me.com", "mail.mac.com"} {
 		if !appleOrICloud(hostname) {

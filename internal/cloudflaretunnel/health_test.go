@@ -56,6 +56,10 @@ func TestTunnelHealthKeepsIndependentRouteRows(t *testing.T) {
 	if rows.XHTTP.Code != "CLOUDFLARE-XHTTP-ROUTE-HEALTHY" || rows.WebSocket.Code != "CLOUDFLARE-WEBSOCKET-ROUTE-HEALTHY" || rows.Whole.Code != "CLOUDFLARE-WHOLE-TUNNEL-HEALTHY" {
 		t.Fatalf("healthy rows = %+v", rows)
 	}
+	binding := EvaluateXHTTPRouteHealth(observed, want)
+	if binding.Hostname != "xhttp.example.com" || binding.Origin != xhttpOrigin || binding.Health.Code != "CLOUDFLARE-XHTTP-ROUTE-HEALTHY" {
+		t.Fatalf("typed XHTTP route binding = %+v", binding)
+	}
 	observed.XHTTPOriginReachable = false
 	rows = EvaluateTunnelHealth(observed, want)
 	if rows.XHTTP.Code != "CLOUDFLARE-XHTTP-ORIGIN-UNREACHABLE" || rows.WebSocket.Outcome != Healthy || rows.Whole.Outcome == Healthy {

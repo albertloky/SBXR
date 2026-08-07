@@ -76,6 +76,7 @@ func TestLoadRefusesIncompleteOrUnsafeIntent(t *testing.T) {
 	}{
 		{name: "installation identity", change: func(s *DesiredState) { s.Installation.ID = "" }, code: "STATE-INTENT-INCOMPLETE"},
 		{name: "REALITY profile", change: func(s *DesiredState) { s.ConnectionProfiles.VLESSRealityVision.UUID = ClientAccessValue{} }, code: "STATE-INTENT-INCOMPLETE"},
+		{name: "XHTTP path", change: func(s *DesiredState) { s.ConnectionProfiles.VLESSXHTTP.Path = ClientAccessValue{} }, code: "STATE-INTENT-INCOMPLETE"},
 		{name: "WebSocket path", change: func(s *DesiredState) { s.ConnectionProfiles.VLESSWebSocket.Path = ClientAccessValue{} }, code: "STATE-INTENT-INCOMPLETE"},
 		{name: "Hysteria2 credential", change: func(s *DesiredState) { s.ConnectionProfiles.Hysteria2.Password = ClientAccessValue{} }, code: "STATE-INTENT-INCOMPLETE"},
 		{name: "AnyTLS credential", change: func(s *DesiredState) { s.ConnectionProfiles.AnyTLS.Password = ClientAccessValue{} }, code: "STATE-INTENT-INCOMPLETE"},
@@ -85,6 +86,7 @@ func TestLoadRefusesIncompleteOrUnsafeIntent(t *testing.T) {
 		{name: "software versions", change: func(s *DesiredState) { s.Software.SingBoxVersion = "" }, code: "STATE-INTENT-INCOMPLETE"},
 		{name: "Cloudflare XHTTP binding", change: func(s *DesiredState) { s.ConnectionProfiles.VLESSXHTTP.Hostname = "other.example.com" }, code: "STATE-INTENT-CROSS-SECTION"},
 		{name: "aliased Cloudflare profile credential", change: func(s *DesiredState) { s.ConnectionProfiles.VLESSWebSocket.UUID = s.ConnectionProfiles.VLESSXHTTP.UUID }, code: "STATE-INTENT-CROSS-SECTION"},
+		{name: "aliased Cloudflare profile path", change: func(s *DesiredState) { s.ConnectionProfiles.VLESSWebSocket.Path = s.ConnectionProfiles.VLESSXHTTP.Path }, code: "STATE-INTENT-CROSS-SECTION"},
 		{name: "aliased Cloudflare profile hostname", change: func(s *DesiredState) {
 			s.ConnectionProfiles.VLESSWebSocket.Hostname = s.ConnectionProfiles.VLESSXHTTP.Hostname
 			s.Cloudflare.WebSocketHostname = s.Cloudflare.XHTTPHostname
@@ -178,6 +180,7 @@ func completeDesiredState() DesiredState {
 			VLESSXHTTP: VLESSXHTTP{
 				Enabled:       true,
 				UUID:          NewClientAccessValue("22222222-2222-4222-8222-222222222222"),
+				Path:          NewClientAccessValue("/2222222222222222222222222222222222222222222222222222222222222222"),
 				Hostname:      "xhttp.example.com",
 				OriginAddress: "127.0.0.1",
 				OriginPort:    11080,
