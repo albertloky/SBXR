@@ -215,7 +215,6 @@ type ZoneStatus struct {
 }
 
 type CredentialStatus struct {
-	ID        string
 	Status    string
 	FirstFour string
 	LastFour  string
@@ -280,7 +279,7 @@ func (i Interface) View(ctx context.Context, request ViewRequest) ViewResult {
 	}
 	result.Account = AccountStatus{ID: observed.Account.ID, Name: observed.Account.Name}
 	result.Zone = ZoneStatus{ID: observed.Zone.ID, Name: observed.Zone.Name, Active: observed.Zone.Status == "active", Delegated: sameNameservers(observed.Zone.AssignedNameServers, observed.Zone.ObservedNameServers), AssignedNameServers: append([]string(nil), observed.Zone.AssignedNameServers...), ObservedNameServers: append([]string(nil), observed.Zone.ObservedNameServers...), ActivationCheckWindow: 10 * time.Minute, RegistrarGuidance: "At the registrar, replace the current authoritative nameservers with exactly the assigned Cloudflare nameservers, wait for public delegation, then Check again."}
-	result.Credential = CredentialStatus{ID: observed.Token.ID, Status: observed.Token.Status, ExpiresOn: observed.Token.ExpiresOn, Uses: []string{"verify this account and zone", "manage the one Cloudflare Tunnel", "manage SBXR-owned DNS records"}}
+	result.Credential = CredentialStatus{Status: observed.Token.Status, ExpiresOn: observed.Token.ExpiresOn, Uses: []string{"verify this account and zone", "manage the one Cloudflare Tunnel", "manage SBXR-owned DNS records"}}
 	if request.CredentialDetail {
 		result.Credential.FirstFour = request.Token.value[:4]
 		result.Credential.LastFour = request.Token.value[len(request.Token.value)-4:]

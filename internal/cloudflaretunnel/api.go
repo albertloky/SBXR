@@ -186,28 +186,13 @@ func (api *httpAPI) selectedZone(ctx context.Context, request ObservationRequest
 }
 
 func (api *httpAPI) get(ctx context.Context, path string, query url.Values, token ManagementToken, target any) error {
-	return api.request(ctx, http.MethodGet, path, query, token, nil, target)
-}
-
-func (api *httpAPI) request(ctx context.Context, method, path string, query url.Values, token ManagementToken, source, target any) error {
-	var requestBody io.Reader
-	if source != nil {
-		encoded, err := json.Marshal(source)
-		if err != nil {
-			return APIError{Kind: APIMalformed}
-		}
-		requestBody = strings.NewReader(string(encoded))
-	}
-	request, err := http.NewRequestWithContext(ctx, method, api.baseURL+path, requestBody)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, api.baseURL+path, nil)
 	if err != nil {
 		return APIError{Kind: APIMalformed}
 	}
 	request.URL.RawQuery = query.Encode()
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Authorization", "Bearer "+token.value)
-	if source != nil {
-		request.Header.Set("Content-Type", "application/json")
-	}
 	response, err := api.client.Do(request)
 	if err != nil {
 		return APIError{Kind: APITemporary}
@@ -216,24 +201,24 @@ func (api *httpAPI) request(ctx context.Context, method, path string, query url.
 	if kind := statusErrorKind(response.StatusCode); kind != "" {
 		return APIError{Kind: kind}
 	}
-	responseBody, err := io.ReadAll(io.LimitReader(response.Body, maxCloudflareResponseSize+1))
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxCloudflareResponseSize+1))
 	if err != nil {
 		return APIError{Kind: APITemporary}
 	}
-	if len(responseBody) > maxCloudflareResponseSize {
+	if len(body) > maxCloudflareResponseSize {
 		return APIError{Kind: APIMalformed}
 	}
 	var status struct {
 		Success bool            `json:"success"`
 		Result  json.RawMessage `json:"result"`
 	}
-	if json.Unmarshal(responseBody, &status) != nil {
+	if json.Unmarshal(body, &status) != nil {
 		return APIError{Kind: APIMalformed}
 	}
 	if !status.Success {
 		return APIError{Kind: APIPermanent}
 	}
-	if len(status.Result) == 0 || string(status.Result) == "null" || target != nil && json.Unmarshal(responseBody, target) != nil {
+	if len(status.Result) == 0 || string(status.Result) == "null" || json.Unmarshal(body, target) != nil {
 		return APIError{Kind: APIMalformed}
 	}
 	return nil
