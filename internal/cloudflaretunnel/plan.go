@@ -248,7 +248,7 @@ func (plan *Plan) StateDeferredCloudflare() (source any, bindingJSON []byte, tem
 }
 
 func (plan *Plan) Apply(module systemchanges.Interface, prepared systemchanges.PreparedStateCommit, starting systemchanges.StateLineage, volatileSHA256 string, disk systemchanges.DiskRequirement) systemchanges.ApplyResult {
-	if plan == nil || prepared == nil || !sha256Text.MatchString(volatileSHA256) || starting.Revision != plan.request.StartingRevision {
+	if plan == nil || plan.used == nil || !plan.used.CompareAndSwap(false, true) || prepared == nil || !sha256Text.MatchString(volatileSHA256) || starting.Revision != plan.request.StartingRevision {
 		return module.Apply(nil)
 	}
 	changeSet, err := systemchanges.NewChangeSet(systemchanges.ChangeSetSpec{Identity: plan.request.ChangeSet, Mutation: systemchanges.InstallationMutation, OutcomeOwner: systemchanges.CloudflareModule, StartingState: starting, TargetStateSHA256: plan.request.DesiredStateSHA256, Plan: systemchanges.PlanBinding{Identity: plan.identity, SHA256: plan.sha256, VolatileSHA256: volatileSHA256}, PreparedState: prepared, Steps: plan.steps, Checks: plan.checks, Timeouts: systemchanges.Timeouts{Step: 5 * time.Minute, Check: 5 * time.Minute}, Disk: disk})

@@ -82,6 +82,14 @@ func TestPlanApplyRefusesDifferentStartingRevision(t *testing.T) {
 	if result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-CHANGE-SET-REQUIRED" {
 		t.Fatalf("changed revision Apply = %+v", result)
 	}
+	rebuilt := module.Plan(context.Background(), request).Plan
+	if rebuilt == nil || rebuilt.used == nil || !rebuilt.used.Load() {
+		t.Fatal("rebuilt identical Plan did not share consumed authority")
+	}
+	second := rebuilt.Apply(systemchanges.Interface{}, &fakePreparedState{}, systemchanges.StateLineage{Status: systemchanges.NotInstalled}, strings.Repeat("b", 64), systemchanges.DiskRequirement{})
+	if second.Finding == nil || second.Finding.Code != "SYSTEM-CHANGES-CHANGE-SET-REQUIRED" {
+		t.Fatalf("reused Plan Apply = %+v", second)
+	}
 }
 
 func plannedModule(t *testing.T) (Interface, PlanRequest) {
