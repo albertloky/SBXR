@@ -311,6 +311,9 @@ func (step Step) RemovalChange() (RemovalChange, bool) {
 func (step Step) CloudflareChange() (CloudflareChange, bool) {
 	return step.cloudflare, step.cloudflare.Action != ""
 }
+func (step Step) CertificateChange() (CertificateChange, bool) {
+	return step.certificate, step.certificate.Action != ""
+}
 
 // Recover is the private startup path for unfinished ordinary forward work.
 // It never resumes the forward transaction.

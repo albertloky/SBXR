@@ -79,8 +79,8 @@ func TestArgumentsBuildOnlyTheFourExactReviewedContracts(t *testing.T) {
 		}
 		commands = append(commands, arguments)
 	}
-	wantIP := []string{"certbot", "certonly", "--standalone", "--non-interactive", "--agree-tos", "--email", "owner@example.com", "--required-profile", "shortlived", "--ip-address", "192.0.2.10", "--cert-name", "sbxr-ip"}
-	wantDomain := []string{"certbot", "certonly", "--standalone", "--non-interactive", "--agree-tos", "--email", "owner@example.com", "--required-profile", "tlsserver", "--cert-name", "sbxr-domain", "-d", "direct.example.com"}
+	wantIP := []string{"certbot", "certonly", "--config-dir", "/var/lib/sbxr/certbot/production", "--work-dir", "/run/sbxr/certbot/production", "--logs-dir", "/var/log/sbxr/certbot/production", "--standalone", "--non-interactive", "--agree-tos", "--email", "owner@example.com", "--required-profile", "shortlived", "--ip-address", "192.0.2.10", "--cert-name", "sbxr-ip"}
+	wantDomain := []string{"certbot", "certonly", "--config-dir", "/var/lib/sbxr/certbot/production", "--work-dir", "/run/sbxr/certbot/production", "--logs-dir", "/var/log/sbxr/certbot/production", "--standalone", "--non-interactive", "--agree-tos", "--email", "owner@example.com", "--required-profile", "tlsserver", "--cert-name", "sbxr-domain", "-d", "direct.example.com"}
 	if fmt.Sprint(commands[1]) != fmt.Sprint(wantIP) || fmt.Sprint(commands[3]) != fmt.Sprint(wantDomain) {
 		t.Fatalf("production contracts = %#v", commands)
 	}

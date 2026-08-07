@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/albertloky/SBXR/internal/systemchanges"
 )
 
 const (
@@ -27,6 +29,7 @@ var (
 	stateSHA256 = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	hostname    = regexp.MustCompile(`(?i)^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9]?))*$`)
 	servingID   = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$`)
+	planName    = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9-]{0,62}$`)
 	versionText = regexp.MustCompile(`^v?([0-9]+)\.([0-9]+)(?:\.[0-9]+)?$`)
 )
 
@@ -454,8 +457,11 @@ func versionAtLeast(version string, major, minor int) bool {
 
 type PlanRequest struct {
 	View                        ViewRequest
+	ChangeSet                   string
 	StartingRevision            uint64
 	StartingStateSHA256         string
+	DesiredStateSHA256          string
+	HTTP01                      systemchanges.HTTP01Authority
 	OwnerEmail                  string
 	SubscriberAgreementReviewed bool
 }
@@ -473,7 +479,10 @@ type OrderContract struct {
 
 type Plan struct {
 	identity, sha256 string
+	request          PlanRequest
 	orders           []OrderContract
+	steps            []systemchanges.Step
+	checks           []systemchanges.Check
 	used             *atomic.Bool
 }
 
@@ -495,6 +504,18 @@ func (plan *Plan) Orders() []OrderContract {
 	}
 	return append([]OrderContract(nil), plan.orders...)
 }
+func (plan *Plan) Steps() []systemchanges.Step {
+	if plan == nil {
+		return nil
+	}
+	return append([]systemchanges.Step(nil), plan.steps...)
+}
+func (plan *Plan) Checks() []systemchanges.Check {
+	if plan == nil {
+		return nil
+	}
+	return append([]systemchanges.Check(nil), plan.checks...)
+}
 func (plan *Plan) Consume() bool {
 	return plan != nil && plan.used != nil && plan.used.CompareAndSwap(false, true)
 }
@@ -502,7 +523,7 @@ func (plan *Plan) String() string {
 	if plan == nil {
 		return "Certificate Lifecycle Plan: unavailable"
 	}
-	return fmt.Sprintf("Certificate Lifecycle Plan %s: review Owner email and subscriber agreement; prove isolated staging, then order fixed %s and %s lineages with required profiles", plan.identity, ipCertName, domainCertName)
+	return fmt.Sprintf("Certificate Lifecycle Plan %s: open one reviewed HTTP-01 rule, prove isolated staging, order and activate only %s for the selected IP, then close the recorded rule; %s remains planned separately", plan.identity, ipCertName, domainCertName)
 }
 func (plan *Plan) GoString() string { return plan.String() }
 
@@ -527,9 +548,14 @@ func (module Interface) Plan(ctx context.Context, request PlanRequest) PlanResul
 		finding.NextActions = []string{"Review and approve the subscriber agreement", "Back"}
 		return PlanResult{Health: finding}
 	}
-	if request.StartingRevision == 0 || !stateSHA256.MatchString(request.StartingStateSHA256) {
+	if !planName.MatchString(request.ChangeSet) || request.StartingRevision == 0 || !stateSHA256.MatchString(request.StartingStateSHA256) || !stateSHA256.MatchString(request.DesiredStateSHA256) {
 		finding := health(view.Health.Time, Failed, "CERTIFICATE-PLAN-STATE", "The starting State lineage is invalid", "the starting revision or State checksum is missing or malformed", "one exact current State revision and SHA-256")
 		finding.NextActions = []string{"Reload current State and build a fresh Plan", "Back"}
+		return PlanResult{Health: finding}
+	}
+	open, close, selectedIP, http01Digest, networkRevision, http01Err := systemchanges.NewHTTP01Steps(request.HTTP01)
+	if http01Err != nil || selectedIP != request.View.SelectedIP || networkRevision != request.StartingRevision {
+		finding := health(view.Health.Time, Failed, "CERTIFICATE-PLAN-NETWORK-POLICY", "The HTTP-01 Network Policy contribution is invalid", "no exact fresh Network Policy authority for the selected IP", "one Network Policy-produced temporary port-80 contribution")
 		return PlanResult{Health: finding}
 	}
 	orders := []OrderContract{
@@ -538,18 +564,70 @@ func (module Interface) Plan(ctx context.Context, request PlanRequest) PlanResul
 		stagingOrder(DomainLineage, domainProfile, request.View.DirectHostname, domainCertName, request.OwnerEmail),
 		{Lineage: DomainLineage, RequiredProfile: domainProfile, Identity: request.View.DirectHostname, CertName: domainCertName, OwnerEmail: request.OwnerEmail, ConfigDirectory: "/var/lib/sbxr/certbot/production", Account: "production"},
 	}
+	steps, stepErr := ipTransactionSteps(open, close, orders[:2])
+	if stepErr != nil {
+		finding := health(view.Health.Time, Failed, "CERTIFICATE-PLAN-TRANSACTION", "The selected-IP transaction is invalid", "the reviewed firewall or certificate step contract is incomplete", "one exact reversible HTTP-01 and sbxr-ip transaction")
+		return PlanResult{Health: finding}
+	}
+	checks := []systemchanges.Check{
+		{Owner: systemchanges.CertificateModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CERTIFICATE-IP-CANDIDATE"},
+		{Owner: systemchanges.CertificateModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PostPublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CERTIFICATE-IP-HTTPS"},
+	}
 	binding := struct {
-		View        ViewRequest
-		Revision    uint64
-		StateSHA256 string
-		Observation Observation
-		Orders      []OrderContract
-	}{request.View, request.StartingRevision, request.StartingStateSHA256, view.observation, orders}
+		View                                      ViewRequest
+		ChangeSet                                 string
+		Revision                                  uint64
+		StartingSHA256, DesiredSHA256, OwnerEmail string
+		Agreement                                 bool
+		HTTP01Digest                              string
+		Observation                               Observation
+		Orders                                    []OrderContract
+	}{request.View, request.ChangeSet, request.StartingRevision, request.StartingStateSHA256, request.DesiredStateSHA256, request.OwnerEmail, request.SubscriberAgreementReviewed, http01Digest, view.observation, orders}
 	encoded, _ := json.Marshal(binding)
 	digest := sha256.Sum256(encoded)
 	sha := hex.EncodeToString(digest[:])
-	plan := &Plan{identity: "certificate-prerequisites-" + sha[:12], sha256: sha, orders: orders, used: &atomic.Bool{}}
+	plan := &Plan{identity: "certificate-ip-" + sha[:12], sha256: sha, request: request, orders: orders, steps: steps, checks: checks, used: &atomic.Bool{}}
 	return PlanResult{Plan: plan, Health: Health{Time: view.Health.Time, Module: "Certificate Lifecycle", Outcome: Healthy, Code: "CERTIFICATE-PLAN-READY", NextActions: []string{"Review Plan", "Back"}}}
+}
+
+func (plan *Plan) Apply(module systemchanges.Interface, prepared systemchanges.PreparedStateCommit, starting systemchanges.StateLineage, volatileSHA256 string, disk systemchanges.DiskRequirement) systemchanges.ApplyResult {
+	if plan == nil || plan.used == nil || !plan.used.CompareAndSwap(false, true) || prepared == nil || !stateSHA256.MatchString(volatileSHA256) || starting.Status != systemchanges.Managed || starting.Revision != plan.request.StartingRevision || starting.SHA256 != plan.request.StartingStateSHA256 {
+		return module.Apply(nil)
+	}
+	changeSet, revision, startingSHA256, candidateSHA256, planIdentity, planSHA256, valid := prepared.SystemChangesPreparedState()
+	if !valid || changeSet != plan.request.ChangeSet || revision != starting.Revision+1 || startingSHA256 != starting.SHA256 || candidateSHA256 != plan.request.DesiredStateSHA256 || planIdentity != plan.identity || planSHA256 != plan.sha256 {
+		return module.Apply(nil)
+	}
+	change, err := systemchanges.NewChangeSet(systemchanges.ChangeSetSpec{
+		Identity: plan.request.ChangeSet, Mutation: systemchanges.SettingChangeMutation, OutcomeOwner: systemchanges.CertificateModule,
+		StartingState: starting, TargetStateSHA256: candidateSHA256,
+		Plan: systemchanges.PlanBinding{Identity: plan.identity, SHA256: plan.sha256, VolatileSHA256: volatileSHA256}, PreparedState: prepared,
+		Steps: plan.steps, Checks: plan.checks, Timeouts: systemchanges.Timeouts{Step: 5 * time.Minute, Check: 5 * time.Minute}, Disk: disk,
+	})
+	if err != nil {
+		return module.Apply(nil)
+	}
+	return module.Apply(change)
+}
+
+func ipTransactionSteps(open, close systemchanges.Step, orders []OrderContract) ([]systemchanges.Step, error) {
+	steps := []systemchanges.Step{open}
+	for index, order := range orders {
+		action := systemchanges.CertificateIPStage
+		if index == 1 {
+			action = systemchanges.CertificateIPOrder
+		}
+		step, err := systemchanges.NewCertificateStep(systemchanges.CertificateChange{Action: action, Identity: order.Identity, RequiredProfile: order.RequiredProfile, CertName: order.CertName, OwnerEmail: order.OwnerEmail, ConfigDirectory: order.ConfigDirectory, Account: order.Account})
+		if err != nil {
+			return nil, err
+		}
+		steps = append(steps, step)
+	}
+	activate, err := systemchanges.NewCertificateStep(systemchanges.CertificateChange{Action: systemchanges.CertificateIPActivate, Identity: orders[1].Identity, RequiredProfile: orders[1].RequiredProfile, CertName: orders[1].CertName, SubscriptionUnit: "sbxr-subscription.service"})
+	if err != nil {
+		return nil, err
+	}
+	return append(steps, activate, close), nil
 }
 
 func stagingOrder(lineage Lineage, profile, identity, certName, email string) OrderContract {

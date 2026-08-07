@@ -120,6 +120,8 @@ func Arguments(order certificatelifecycle.OrderContract) ([]string, error) {
 		base = append(base, "--staging", "--config-dir", order.ConfigDirectory, "--work-dir", "/run/sbxr/certbot/"+order.CertName, "--logs-dir", "/var/log/sbxr/certbot/"+order.CertName)
 	} else if order.ConfigDirectory != "/var/lib/sbxr/certbot/production" || order.Account != "production" {
 		return nil, errors.New("production isolation contract invalid")
+	} else {
+		base = append(base, "--config-dir", order.ConfigDirectory, "--work-dir", "/run/sbxr/certbot/production", "--logs-dir", "/var/log/sbxr/certbot/production")
 	}
 	base = append(base, "--standalone", "--non-interactive", "--agree-tos", "--email", order.OwnerEmail, "--required-profile", order.RequiredProfile)
 	switch {

@@ -325,6 +325,20 @@ func TestEvaluateExactTemporaryHTTP01Policy(t *testing.T) {
 	}
 }
 
+func TestEvaluateHTTP01ExposesOnlySelectedCertificateAddress(t *testing.T) {
+	intent := completeIntent()
+	intent.PublicIPv6 = "2001:db8::10"
+	intent.TemporaryHTTP = true
+	observed := completeObservations()
+	observed.PublicIPv6 = []string{"2001:db8::10"}
+	observed.Routes.IPv6 = "default via 2001:db8::1"
+	observed.Certificate.DNS.IPv6 = []string{"2001:db8::10"}
+	result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
+	if result.Outcome != networkpolicy.Healthy || strings.Count(result.Policy.Nftables, `comment "sbxr:acme-http-01"`) != 1 || strings.Contains(result.Policy.Nftables, `ip6 daddr 2001:db8::10 tcp dport 80`) {
+		t.Fatalf("selected-address HTTP-01 policy = %s findings=%+v", result.Policy.Nftables, result.Findings)
+	}
+}
+
 func TestEvaluateTypedDNSAndCAAForHTTP01(t *testing.T) {
 	intent := completeIntent()
 	intent.CertificateHostname = "direct.example.com"

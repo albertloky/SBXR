@@ -2,6 +2,7 @@ package certificatelifecycle_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -9,7 +10,28 @@ import (
 	"time"
 
 	"github.com/albertloky/SBXR/internal/certificatelifecycle"
+	"github.com/albertloky/SBXR/internal/networkpolicy"
+	"github.com/albertloky/SBXR/internal/systemchanges"
 )
+
+type certificateNetworkAdapter struct{ observed networkpolicy.Observations }
+
+func (adapter certificateNetworkAdapter) Observe(networkpolicy.ObservationRequest) (networkpolicy.Observations, error) {
+	return adapter.observed, nil
+}
+
+type preparedCertificateState struct {
+	changeSet                            string
+	revision                             uint64
+	starting, candidate, planID, planSHA string
+}
+
+func (state *preparedCertificateState) SystemChangesPreparedState() (string, uint64, string, string, string, string, bool) {
+	return state.changeSet, state.revision, state.starting, state.candidate, state.planID, state.planSHA, true
+}
+func (*preparedCertificateState) SystemChangesConsume(any, string, string) (any, error) {
+	return nil, errors.New("not reached without an Adapter")
+}
 
 type fixedClock struct{ now time.Time }
 
@@ -59,7 +81,8 @@ func TestViewAndPlanProveBothLineagesBeforeOrdering(t *testing.T) {
 	}
 
 	planRequest := certificatelifecycle.PlanRequest{
-		View: request, StartingRevision: 7, StartingStateSHA256: strings.Repeat("a", 64),
+		View: request, ChangeSet: "certificate-ip-7", StartingRevision: 7, StartingStateSHA256: strings.Repeat("a", 64), DesiredStateSHA256: strings.Repeat("b", 64),
+		HTTP01:     testHTTP01Contribution(7),
 		OwnerEmail: "owner@example.com", SubscriberAgreementReviewed: true,
 	}
 	first, second := module.Plan(context.Background(), planRequest), module.Plan(context.Background(), planRequest)
@@ -88,6 +111,26 @@ func TestViewAndPlanProveBothLineagesBeforeOrdering(t *testing.T) {
 	}
 	if rendered := fmt.Sprintf("%+v %#v %s", first, first.Plan, first.Plan); strings.Contains(rendered, "--preferred-profile") || strings.Contains(rendered, "PRIVATE-KEY-MARKER") {
 		t.Fatalf("unsafe Plan = %s", rendered)
+	}
+	steps := first.Plan.Steps()
+	if len(steps) != 5 {
+		t.Fatalf("IP transaction steps = %#v", steps)
+	}
+	if change, ok := steps[0].FirewallChange(); !ok || change.Action != systemchanges.HTTP01OpenAction || change.TemporaryRuleIdentity != "sbxr:acme-http-01" {
+		t.Fatalf("HTTP-01 open step = %#v", steps[0])
+	}
+	for index, action := range []systemchanges.CertificateAction{systemchanges.CertificateIPStage, systemchanges.CertificateIPOrder, systemchanges.CertificateIPActivate} {
+		change, ok := steps[index+1].CertificateChange()
+		if !ok || change.Action != action || change.Identity != "192.0.2.10" || change.CertName != "sbxr-ip" || change.RequiredProfile != "shortlived" {
+			t.Fatalf("certificate step %d = %#v", index+1, steps[index+1])
+		}
+	}
+	if change, ok := steps[4].FirewallChange(); !ok || change.Action != systemchanges.HTTP01CloseAction {
+		t.Fatalf("HTTP-01 close step = %#v", steps[4])
+	}
+	checks := first.Plan.Checks()
+	if len(checks) != 2 || checks[0].Phase != systemchanges.PrePublication || checks[1].Phase != systemchanges.PostPublication || checks[0].Classification != systemchanges.Required || checks[1].Classification != systemchanges.Required {
+		t.Fatalf("IP transaction checks = %#v", checks)
 	}
 }
 
@@ -160,7 +203,7 @@ func TestPlanRequiresReviewedOwnerIdentityAndAgreement(t *testing.T) {
 	module := certificatelifecycle.New(staticIssuer{observation: certificatelifecycle.Observation{
 		Issuer: certificatelifecycle.IssuerObservation{Name: "Let's Encrypt", CertbotVersion: "5.4.0", Distribution: "snap", SupportedDistribution: true, RequiredProfile: true, IPAddress: true, Staging: true},
 	}}, fixedClock{now: time.Date(2026, time.August, 7, 12, 0, 0, 0, time.UTC)})
-	request := certificatelifecycle.PlanRequest{View: completeViewRequest(), StartingRevision: 1, StartingStateSHA256: strings.Repeat("a", 64), OwnerEmail: "owner@example.com", SubscriberAgreementReviewed: true}
+	request := completePlanRequest()
 	for _, test := range []struct {
 		code   string
 		change func(*certificatelifecycle.PlanRequest)
@@ -168,6 +211,8 @@ func TestPlanRequiresReviewedOwnerIdentityAndAgreement(t *testing.T) {
 		{code: "CERTIFICATE-PLAN-OWNER-EMAIL", change: func(request *certificatelifecycle.PlanRequest) { request.OwnerEmail = "" }},
 		{code: "CERTIFICATE-PLAN-OWNER-EMAIL", change: func(request *certificatelifecycle.PlanRequest) { request.OwnerEmail = "Owner <owner@example.com>" }},
 		{code: "CERTIFICATE-PLAN-AGREEMENT", change: func(request *certificatelifecycle.PlanRequest) { request.SubscriberAgreementReviewed = false }},
+		{code: "CERTIFICATE-PLAN-NETWORK-POLICY", change: func(request *certificatelifecycle.PlanRequest) { request.HTTP01 = nil }},
+		{code: "CERTIFICATE-PLAN-NETWORK-POLICY", change: func(request *certificatelifecycle.PlanRequest) { request.HTTP01 = testHTTP01Contribution(2) }},
 	} {
 		changed := request
 		test.change(&changed)
@@ -176,6 +221,51 @@ func TestPlanRequiresReviewedOwnerIdentityAndAgreement(t *testing.T) {
 			t.Fatalf("unreviewed identity Plan = %+v", result)
 		}
 	}
+}
+
+func TestIPPlanApplyBuildsOneRevisionBoundChangeSet(t *testing.T) {
+	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	module := certificatelifecycle.New(staticIssuer{observation: certificatelifecycle.Observation{Issuer: certificatelifecycle.IssuerObservation{Name: "Let's Encrypt", CertbotVersion: "5.4.0", Distribution: "snap", SupportedDistribution: true, RequiredProfile: true, IPAddress: true, Staging: true}, Scheduler: certificatelifecycle.SchedulerObservation{Enabled: true, Persistent: true, Serial: true, RunsPerDay: 2}}}, fixedClock{now: now})
+	request := completePlanRequest()
+	plan := module.Plan(t.Context(), request).Plan
+	prepared := &preparedCertificateState{changeSet: request.ChangeSet, revision: 2, starting: request.StartingStateSHA256, candidate: request.DesiredStateSHA256, planID: plan.Identity(), planSHA: plan.SHA256()}
+	result := plan.Apply(systemchanges.New(nil), prepared, systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 1, SHA256: request.StartingStateSHA256}, strings.Repeat("c", 64), systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1})
+	if result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-ADAPTER-UNAVAILABLE" || !result.PlanConsumed {
+		t.Fatalf("valid typed Apply = %+v", result)
+	}
+	if repeated := plan.Apply(systemchanges.New(nil), prepared, systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 1, SHA256: request.StartingStateSHA256}, strings.Repeat("c", 64), systemchanges.DiskRequirement{}); repeated.Finding == nil || repeated.Finding.Code != "SYSTEM-CHANGES-CHANGE-SET-REQUIRED" {
+		t.Fatalf("repeated Apply = %+v", repeated)
+	}
+}
+
+func completePlanRequest() certificatelifecycle.PlanRequest {
+	return certificatelifecycle.PlanRequest{
+		View: completeViewRequest(), ChangeSet: "certificate-ip-1", StartingRevision: 1,
+		StartingStateSHA256: strings.Repeat("a", 64), DesiredStateSHA256: strings.Repeat("b", 64),
+		HTTP01:     testHTTP01Contribution(1),
+		OwnerEmail: "owner@example.com", SubscriberAgreementReviewed: true,
+	}
+}
+
+func testHTTP01Contribution(revision uint64) networkpolicy.HTTP01Contribution {
+	intent := networkpolicy.Intent{Revision: revision, Baseline: networkpolicy.Clean, PublicIPv4: "192.0.2.10", PrimarySubscriptionAddress: "192.0.2.10", CertificateHostname: "direct.example.com", SSHPort: 22, SubscriptionPort: 10443, TemporaryHTTP: true,
+		Profiles: networkpolicy.Profiles{VLESSRealityVision: networkpolicy.Profile{Port: 443}, VLESSXHTTP: networkpolicy.Profile{Address: "127.0.0.1", Port: 11080}, VLESSWebSocket: networkpolicy.Profile{Address: "127.0.0.1", Port: 11081}, Hysteria2: networkpolicy.Profile{Port: 443}, TUIC: networkpolicy.Profile{Port: 8443}, AnyTLS: networkpolicy.Profile{Port: 9443}},
+		Disk:     networkpolicy.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1},
+	}
+	observed := networkpolicy.Observations{
+		Host:       networkpolicy.HostFacts{UbuntuVersion: "24.04.3", UbuntuServer: true, Architecture: "amd64", Systemd: true, LogicalCPUs: 1, PhysicalRAM: 1024 << 20},
+		PublicIPv4: []string{"192.0.2.10"}, SSH: networkpolicy.SSHFacts{DetectedPort: 22, ServerAddress: "192.0.2.10", CurrentSessions: []string{"session-1"}},
+		Firewall: networkpolicy.FirewallFacts{SBXRTableState: "absent", RootVerified: true}, Routes: networkpolicy.RouteFacts{IPv4: "default via 192.0.2.1"},
+		Outbound: networkpolicy.OutboundFacts{DNS: true, GitHubHTTPS: true, GitHubAttestationHTTPS: true, CloudflareHTTPS: true, ACMEHTTPS: true, CertificateEndpointsHTTPS: true, TimeService: true, TunnelTCP7844: true, TunnelUDP7844: true},
+		Disk:     networkpolicy.DiskFacts{FilesystemBytes: 20 << 30, AvailableBytes: 3 << 30}, Time: networkpolicy.TimeFacts{Synchronized: true, Owner: "systemd-timesyncd"}, OwnerFacts: networkpolicy.OwnerFacts{DNS: "fresh", Tunnel: "fresh"},
+		Certificate: networkpolicy.CertificateFacts{DNS: networkpolicy.DNSFacts{Hostname: "direct.example.com", IPv4: []string{"192.0.2.10"}}, CAA: networkpolicy.CAAFacts{Issuer: "letsencrypt.org", HTTP01Allowed: true}}, Checksums: map[string]string{"sshd_config": "sha256:ssh", "nftables": "sha256:nft"},
+	}
+	result := networkpolicy.New(certificateNetworkAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
+	contribution, ok := result.HTTP01Contribution()
+	if !ok {
+		panic(fmt.Sprintf("test Network Policy HTTP-01 contribution unavailable: outcome=%s findings=%+v policy=%s", result.Outcome, result.Findings, result.Policy.Nftables))
+	}
+	return contribution
 }
 
 func completeViewRequest() certificatelifecycle.ViewRequest {

@@ -14,13 +14,14 @@ import (
 const lockDirectory = "run/sbxr"
 
 type Adapter struct {
-	root       string
-	uid        int
-	source     ObservationSource
-	host       Host
-	firewall   FirewallExecutor
-	cloudflare CloudflareExecutor
-	state      systemchanges.StateRecovery
+	root        string
+	uid         int
+	source      ObservationSource
+	host        Host
+	firewall    FirewallExecutor
+	cloudflare  CloudflareExecutor
+	certificate CertificateExecutor
+	state       systemchanges.StateRecovery
 }
 
 // ObservationSource reloads coordinated State lineage and volatile bindings.
@@ -44,6 +45,12 @@ func NewAtWithFirewall(root string, source ObservationSource, host Host, firewal
 func NewAtWithCloudflare(root string, source ObservationSource, host Host, cloudflare CloudflareExecutor, state ...systemchanges.StateRecovery) Adapter {
 	adapter := NewAt(root, source, host, state...)
 	adapter.cloudflare = cloudflare
+	return adapter
+}
+
+func NewAtWithCertificate(root string, source ObservationSource, host Host, firewall FirewallExecutor, certificate CertificateExecutor, state ...systemchanges.StateRecovery) Adapter {
+	adapter := NewAtWithFirewall(root, source, host, firewall, state...)
+	adapter.certificate = certificate
 	return adapter
 }
 

@@ -72,6 +72,15 @@ type CloudflareExecutor interface {
 	CheckRunTokenRotation(systemchanges.CloudflareChange, time.Duration) (systemchanges.HealthStatus, error)
 }
 
+type CertificateExecutor interface {
+	CaptureRollback(string, systemchanges.Step, func(io.Reader) error) error
+	Execute(string, systemchanges.Step, time.Duration, *systemchanges.Cancellation) (systemchanges.StepEvidence, error)
+	Reverse(string, systemchanges.Step, io.Reader, time.Duration) (systemchanges.StepEvidence, error)
+	Inspect(string, systemchanges.Step, io.Reader, time.Duration) (systemchanges.StepEffect, error)
+	Check(string, string, systemchanges.GatePhase, time.Duration) (systemchanges.HealthStatus, error)
+	Cleanup(string) error
+}
+
 type snapshotManifest struct {
 	SchemaVersion int                          `json:"schema_version"`
 	Release       systemchanges.ReleaseBinding `json:"release_identity"`
@@ -88,6 +97,7 @@ type journalStep struct {
 	Firewall     *systemchanges.FirewallChange      `json:"firewall,omitempty"`
 	Removal      *systemchanges.RemovalChange       `json:"removal,omitempty"`
 	Cloudflare   *systemchanges.CloudflareChange    `json:"cloudflare,omitempty"`
+	Certificate  *systemchanges.CertificateChange   `json:"certificate,omitempty"`
 }
 
 type journalEntry struct {
@@ -174,6 +184,11 @@ func (a Adapter) Prepare(lease systemchanges.ExecutionLease, preparation systemc
 				return errors.New("Cloudflare transaction executor unavailable")
 			}
 			captureErr = a.cloudflare.CaptureRollback(step, captureRollback)
+		} else if _, ok := step.CertificateChange(); ok {
+			if a.certificate == nil {
+				return errors.New("Certificate Lifecycle executor unavailable")
+			}
+			captureErr = a.certificate.CaptureRollback(a.root, step, captureRollback)
 		} else {
 			captureErr = a.host.CaptureRollback(step, captureRollback)
 		}
@@ -204,6 +219,9 @@ func (a Adapter) Prepare(lease systemchanges.ExecutionLease, preparation systemc
 		}
 		if cloudflare, ok := step.CloudflareChange(); ok {
 			steps[index].Cloudflare = &cloudflare
+		}
+		if certificate, ok := step.CertificateChange(); ok {
+			steps[index].Certificate = &certificate
 		}
 	}
 	entry := journalEntry{Checkpoint: systemchanges.Prepared, ChangeSet: preparation.ChangeSet, Mutation: preparation.Mutation, Starting: preparation.Starting, OutcomeOwner: preparation.OutcomeOwner, PlanSHA256: preparation.PlanSHA256, State: &preparation.State, Steps: steps, Checks: preparation.Checks, Timeouts: preparation.Timeouts}
@@ -497,6 +515,12 @@ func (a Adapter) Execute(lease systemchanges.ExecutionLease, changeSet string, n
 		}
 		return a.cloudflare.Execute(step, resolved, timeout)
 	}
+	if _, ok := step.CertificateChange(); ok {
+		if a.certificate == nil {
+			return systemchanges.StepEvidence{}, errors.New("Certificate Lifecycle executor unavailable")
+		}
+		return a.certificate.Execute(a.root, step, timeout, cancellation)
+	}
 	if cloudflaredActivation(step) {
 		if a.cloudflare == nil || !safeName(changeSet) || number < 1 {
 			return systemchanges.StepEvidence{}, errors.New("Cloudflare service executor unavailable")
@@ -553,6 +577,12 @@ func (a Adapter) Reverse(lease systemchanges.ExecutionLease, changeSet string, n
 			evidence = systemchanges.StepEvidence{}
 		}
 		return a.cloudflare.Reverse(step, evidence, bytes.NewReader(content), timeout)
+	}
+	if _, ok := step.CertificateChange(); ok {
+		if a.certificate == nil {
+			return systemchanges.StepEvidence{}, errors.New("Certificate Lifecycle rollback executor unavailable")
+		}
+		return a.certificate.Reverse(a.root, step, bytes.NewReader(content), timeout)
 	}
 	if cloudflaredActivation(step) {
 		if a.cloudflare == nil {
@@ -639,9 +669,9 @@ func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges
 	for index, persisted := range prepared.Steps {
 		var step systemchanges.Step
 		var err error
-		if persisted.Firewall == nil && persisted.Removal == nil && persisted.Cloudflare == nil {
+		if persisted.Firewall == nil && persisted.Removal == nil && persisted.Cloudflare == nil && persisted.Certificate == nil {
 			step, err = systemchanges.NewStep(persisted.Owner, persisted.Forward, persisted.Rollback)
-		} else if persisted.Firewall != nil && persisted.Removal == nil && persisted.Cloudflare == nil {
+		} else if persisted.Firewall != nil && persisted.Removal == nil && persisted.Cloudflare == nil && persisted.Certificate == nil {
 			if a.firewall == nil {
 				return systemchanges.RecoveryTransaction{}, errors.New("native firewall Adapter unavailable")
 			}
@@ -655,10 +685,12 @@ func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges
 			default:
 				err = errors.New("unknown firewall action")
 			}
-		} else if persisted.Firewall == nil && persisted.Removal != nil && persisted.Cloudflare == nil {
+		} else if persisted.Firewall == nil && persisted.Removal != nil && persisted.Cloudflare == nil && persisted.Certificate == nil {
 			step, err = systemchanges.RestoreRemovalStep(lease, *persisted.Removal)
-		} else if persisted.Firewall == nil && persisted.Removal == nil && persisted.Cloudflare != nil {
+		} else if persisted.Firewall == nil && persisted.Removal == nil && persisted.Cloudflare != nil && persisted.Certificate == nil {
 			step, err = systemchanges.NewCloudflareStep(*persisted.Cloudflare)
+		} else if persisted.Firewall == nil && persisted.Removal == nil && persisted.Cloudflare == nil && persisted.Certificate != nil {
+			step, err = systemchanges.NewCertificateStep(*persisted.Certificate)
 		} else {
 			err = errors.New("ambiguous typed step")
 		}
@@ -741,6 +773,12 @@ func (a Adapter) InspectStep(lease systemchanges.ExecutionLease, recovery system
 			return "", errors.New("Cloudflare repair executor unavailable")
 		}
 		return a.cloudflare.InspectRepair(step, bytes.NewReader(content), timeout)
+	}
+	if _, ok := step.CertificateChange(); ok {
+		if a.certificate == nil {
+			return "", errors.New("Certificate Lifecycle recovery executor unavailable")
+		}
+		return a.certificate.Inspect(a.root, step, bytes.NewReader(content), timeout)
 	}
 	return a.host.InspectStep(step, bytes.NewReader(content), timeout)
 }
@@ -1009,6 +1047,12 @@ func (a Adapter) Check(lease systemchanges.ExecutionLease, check systemchanges.C
 		}
 		return a.cloudflare.CheckWholeTunnel(evidence, timeout)
 	}
+	if check.Owner == systemchanges.CertificateModule && (check.Code == "CERTIFICATE-IP-CANDIDATE" || check.Code == "CERTIFICATE-IP-HTTPS") {
+		if a.certificate == nil {
+			return systemchanges.Unknown, errors.New("Certificate Lifecycle health executor unavailable")
+		}
+		return a.certificate.Check(a.root, check.Code, phase, timeout)
+	}
 	return a.host.Check(check, phase, timeout)
 }
 
@@ -1085,6 +1129,11 @@ func (a Adapter) Cleanup(lease systemchanges.ExecutionLease, changeSet string) e
 	if err != nil || len(entries) == 0 || entries[len(entries)-1].Checkpoint != systemchanges.Complete && entries[len(entries)-1].Checkpoint != systemchanges.RolledBack && entries[len(entries)-1].Checkpoint != systemchanges.FinalRemovalAbsenceVerified {
 		return errors.New("transaction is not durably resolved")
 	}
+	if entries[len(entries)-1].Checkpoint == systemchanges.Complete && journalHasCertificate(entries[0].Steps) {
+		if a.certificate == nil || a.certificate.Cleanup(a.root) != nil {
+			return errors.New("completed certificate rollback material cleanup failed")
+		}
+	}
 	names := make([]string, 0, len(manifest.Files))
 	for name := range manifest.Files {
 		names = append(names, name)
@@ -1110,6 +1159,15 @@ func (a Adapter) Cleanup(lease systemchanges.ExecutionLease, changeSet string) e
 		}
 	}
 	return syncDirectory(root, transactionDirectory)
+}
+
+func journalHasCertificate(steps []journalStep) bool {
+	for _, step := range steps {
+		if step.Certificate != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func writeProtected(root *os.Root, name string, source io.Reader, uid int) (string, error) {

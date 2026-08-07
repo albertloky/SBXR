@@ -4,8 +4,11 @@ package systemchanges
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/bits"
+	"net/mail"
+	"net/netip"
 	"reflect"
 	"slices"
 	"strings"
@@ -368,7 +371,34 @@ const (
 	ActivateCloudflaredService      OperationKind = "Activate cloudflared service"
 	RotateCloudflaredRunToken       OperationKind = "Rotate cloudflared run token"
 	RestoreCloudflaredService       OperationKind = "Restore cloudflared service"
+	StageCertificateCandidate       OperationKind = "Stage certificate candidate"
+	DiscardCertificateCandidate     OperationKind = "Discard certificate candidate"
+	OrderCertificateCandidate       OperationKind = "Order certificate candidate"
+	PreserveCertificateLineage      OperationKind = "Preserve certificate lineage"
+	ActivateCertificateServingPair  OperationKind = "Activate certificate serving pair"
+	RestoreCertificateServingPair   OperationKind = "Restore certificate serving pair"
 )
+
+type CertificateAction string
+
+const (
+	CertificateIPStage    CertificateAction = "ip-stage"
+	CertificateIPOrder    CertificateAction = "ip-order"
+	CertificateIPActivate CertificateAction = "ip-activate"
+)
+
+// CertificateChange is the fixed, command-free contract for the selected IP
+// lineage. Private key material never crosses this boundary.
+type CertificateChange struct {
+	Action           CertificateAction `json:"action"`
+	Identity         string            `json:"identity"`
+	RequiredProfile  string            `json:"required_profile"`
+	CertName         string            `json:"cert_name"`
+	OwnerEmail       string            `json:"owner_email,omitempty"`
+	ConfigDirectory  string            `json:"config_directory,omitempty"`
+	Account          string            `json:"account,omitempty"`
+	SubscriptionUnit string            `json:"subscription_unit,omitempty"`
+}
 
 type CloudflareAction string
 
@@ -426,6 +456,25 @@ type FirewallChange struct {
 	TemporaryRuleIdentity string         `json:"temporary_rule_identity,omitempty"`
 }
 
+type HTTP01Authority interface {
+	SystemChangesHTTP01() (candidate string, sshPort uint16, revision uint64, selectedIP, digest string, valid bool)
+}
+
+func NewHTTP01Steps(authority HTTP01Authority) (Step, Step, string, string, uint64, error) {
+	if !trustedAuthority(authority, "github.com/albertloky/SBXR/internal/networkpolicy", "HTTP01Contribution") {
+		return Step{}, Step{}, "", "", 0, errors.New("Network Policy HTTP-01 authority unavailable")
+	}
+	candidate, sshPort, revision, selectedIP, digest, valid := authority.SystemChangesHTTP01()
+	address, addressErr := netip.ParseAddr(selectedIP)
+	exactRule := fmt.Sprintf("daddr %s tcp dport 80 accept comment \"%s\"", selectedIP, http01Identity)
+	open, openErr := NewHTTP01OpenStep(candidate, sshPort)
+	close, closeErr := NewHTTP01CloseStep()
+	if !valid || revision == 0 || addressErr != nil || !address.IsGlobalUnicast() || !validSHA256(digest) || strings.Count(candidate, `comment "`+http01Identity+`"`) != 1 || !strings.Contains(candidate, exactRule) || openErr != nil || closeErr != nil {
+		return Step{}, Step{}, "", "", 0, errors.New("Network Policy HTTP-01 contribution invalid")
+	}
+	return open, close, selectedIP, digest, revision, nil
+}
+
 type RemovalAction string
 type RemovalResource string
 
@@ -452,14 +501,30 @@ type RemovalChange struct {
 }
 
 type Step struct {
-	owner      Module
-	forward    OperationKind
-	rollback   OperationKind
-	cancel     CancellationContract
-	inspect    InspectionContract
-	firewall   FirewallChange
-	removal    RemovalChange
-	cloudflare CloudflareChange
+	owner       Module
+	forward     OperationKind
+	rollback    OperationKind
+	cancel      CancellationContract
+	inspect     InspectionContract
+	firewall    FirewallChange
+	removal     RemovalChange
+	cloudflare  CloudflareChange
+	certificate CertificateChange
+}
+
+func NewCertificateStep(change CertificateChange) (Step, error) {
+	forward, rollback := StageCertificateCandidate, DiscardCertificateCandidate
+	switch change.Action {
+	case CertificateIPOrder:
+		forward, rollback = OrderCertificateCandidate, PreserveCertificateLineage
+	case CertificateIPActivate:
+		forward, rollback = ActivateCertificateServingPair, RestoreCertificateServingPair
+	}
+	step := Step{owner: CertificateModule, forward: forward, rollback: rollback, cancel: SafeCheckpointCancellation, inspect: InspectBeforeIdempotentReverse, certificate: change}
+	if !validStep(step) {
+		return Step{}, &Finding{Code: "SYSTEM-CHANGES-CERTIFICATE-STEP", Problem: "A certificate transaction step is invalid", Found: "an incomplete selected-IP contract", Required: "one exact sbxr-ip staging, production, or serving activation action", WhyStopped: "System Changes never accepts certificate commands, arbitrary identities, or private key material", NextAction: "Rebuild the Change Set through Certificate Lifecycle."}
+	}
+	return step, nil
 }
 
 func NewCloudflareStep(change CloudflareChange) (Step, error) {
@@ -482,7 +547,7 @@ func NewCloudflareStep(change CloudflareChange) (Step, error) {
 }
 
 func NewStep(owner Module, forward, rollback OperationKind) (Step, error) {
-	if !validModule(owner) || !validOperation(forward) || !validOperation(rollback) || forward == rollback || owner == NetworkPolicyModule || networkOperation(forward) || networkOperation(rollback) || removalOperation(forward) || removalOperation(rollback) || cloudflareOperation(forward) || cloudflareOperation(rollback) {
+	if !validModule(owner) || !validOperation(forward) || !validOperation(rollback) || forward == rollback || owner == NetworkPolicyModule || networkOperation(forward) || networkOperation(rollback) || removalOperation(forward) || removalOperation(rollback) || cloudflareOperation(forward) || cloudflareOperation(rollback) || certificateOperation(forward) || certificateOperation(rollback) {
 		return Step{}, &Finding{Code: "SYSTEM-CHANGES-STEP-INVALID", Problem: "A typed change or rollback instruction is invalid", Found: "an unsupported owner or operation", Required: "one owning Module plus distinct allowed forward and rollback operations", WhyStopped: "System Changes never accepts arbitrary commands, paths, services, or root operations", NextAction: "Rebuild the Change Set through the owning Module."}
 	}
 	return Step{owner: owner, forward: forward, rollback: rollback, cancel: SafeCheckpointCancellation, inspect: InspectBeforeIdempotentReverse}, nil
@@ -994,7 +1059,7 @@ func validModule(module Module) bool {
 
 func validOperation(operation OperationKind) bool {
 	switch operation {
-	case ActivatePreparedConfiguration, RestorePriorConfiguration, ApplyApprovedNetworkPolicy, OpenApprovedHTTP01, CloseRecordedHTTP01, RestorePriorNetworkPolicy, RemoveOwnedPublicExposure, RestoreOwnedPublicExposure, DeleteOwnedCloudflareResource, RestoreOwnedCloudflareResource, CreateCloudflareResource, DeleteCreatedCloudflareResource, ConfigureCloudflareTunnel, RestoreCloudflareTunnel, ConfigureCloudflareDNS, RestoreCloudflareDNS, ActivateCloudflaredService, RotateCloudflaredRunToken, RestoreCloudflaredService:
+	case ActivatePreparedConfiguration, RestorePriorConfiguration, ApplyApprovedNetworkPolicy, OpenApprovedHTTP01, CloseRecordedHTTP01, RestorePriorNetworkPolicy, RemoveOwnedPublicExposure, RestoreOwnedPublicExposure, DeleteOwnedCloudflareResource, RestoreOwnedCloudflareResource, CreateCloudflareResource, DeleteCreatedCloudflareResource, ConfigureCloudflareTunnel, RestoreCloudflareTunnel, ConfigureCloudflareDNS, RestoreCloudflareDNS, ActivateCloudflaredService, RotateCloudflaredRunToken, RestoreCloudflaredService, StageCertificateCandidate, DiscardCertificateCandidate, OrderCertificateCandidate, PreserveCertificateLineage, ActivateCertificateServingPair, RestoreCertificateServingPair:
 		return true
 	}
 	return false
@@ -1006,15 +1071,38 @@ func validStep(step Step) bool {
 		return false
 	}
 	if step.removal != (RemovalChange{}) || removalOperation(step.forward) || removalOperation(step.rollback) {
-		return step.firewall == (FirewallChange{}) && step.cloudflare.Action == "" && validRemovalContract(step)
+		return step.firewall == (FirewallChange{}) && step.cloudflare.Action == "" && step.certificate.Action == "" && validRemovalContract(step)
 	}
 	if step.cloudflare.Action != "" || cloudflareOperation(step.forward) || cloudflareOperation(step.rollback) {
-		return step.firewall == (FirewallChange{}) && step.removal == (RemovalChange{}) && validCloudflareContract(step)
+		return step.firewall == (FirewallChange{}) && step.removal == (RemovalChange{}) && step.certificate.Action == "" && validCloudflareContract(step)
+	}
+	if step.certificate.Action != "" || certificateOperation(step.forward) || certificateOperation(step.rollback) {
+		return step.firewall == (FirewallChange{}) && step.removal == (RemovalChange{}) && step.cloudflare.Action == "" && validCertificateContract(step)
 	}
 	if step.owner == NetworkPolicyModule || networkOperation(step.forward) || networkOperation(step.rollback) {
-		return step.owner == NetworkPolicyModule && step.rollback == RestorePriorNetworkPolicy && validFirewallContract(step.firewall, step.forward)
+		return step.owner == NetworkPolicyModule && step.rollback == RestorePriorNetworkPolicy && step.certificate.Action == "" && validFirewallContract(step.firewall, step.forward)
 	}
-	return step.firewall == (FirewallChange{}) && step.removal == (RemovalChange{}) && step.cloudflare.Action == ""
+	return step.firewall == (FirewallChange{}) && step.removal == (RemovalChange{}) && step.cloudflare.Action == "" && step.certificate.Action == ""
+}
+
+func certificateOperation(operation OperationKind) bool {
+	return operation == StageCertificateCandidate || operation == DiscardCertificateCandidate || operation == OrderCertificateCandidate || operation == PreserveCertificateLineage || operation == ActivateCertificateServingPair || operation == RestoreCertificateServingPair
+}
+
+func validCertificateContract(step Step) bool {
+	change := step.certificate
+	address, addressErr := netip.ParseAddr(change.Identity)
+	email, emailErr := mail.ParseAddress(change.OwnerEmail)
+	base := step.owner == CertificateModule && addressErr == nil && address.IsGlobalUnicast() && change.RequiredProfile == "shortlived" && change.CertName == "sbxr-ip"
+	switch change.Action {
+	case CertificateIPStage:
+		return base && step.forward == StageCertificateCandidate && step.rollback == DiscardCertificateCandidate && emailErr == nil && email.Address == change.OwnerEmail && email.Name == "" && change.ConfigDirectory == "/var/lib/sbxr/certbot/staging/sbxr-ip" && change.Account == "disposable-staging-sbxr-ip" && change.SubscriptionUnit == ""
+	case CertificateIPOrder:
+		return base && step.forward == OrderCertificateCandidate && step.rollback == PreserveCertificateLineage && emailErr == nil && email.Address == change.OwnerEmail && email.Name == "" && change.ConfigDirectory == "/var/lib/sbxr/certbot/production" && change.Account == "production" && change.SubscriptionUnit == ""
+	case CertificateIPActivate:
+		return base && step.forward == ActivateCertificateServingPair && step.rollback == RestoreCertificateServingPair && change.OwnerEmail == "" && change.ConfigDirectory == "" && change.Account == "" && change.SubscriptionUnit == "sbxr-subscription.service"
+	}
+	return false
 }
 
 func cloudflareOperation(operation OperationKind) bool {
@@ -1149,7 +1237,28 @@ func safeFirewallCandidate(candidate string, sshPort uint16) bool {
 			return false
 		}
 	}
-	return tables == 1 && strings.Contains(strings.Join(tokens, " "), fmt.Sprintf("tcp dport %d", sshPort))
+	return tables == 1 && containsTCPPort(tokens, sshPort)
+}
+
+func containsTCPPort(tokens []string, port uint16) bool {
+	want := fmt.Sprint(port)
+	for index := 0; index+2 < len(tokens); index++ {
+		if tokens[index] != "tcp" || tokens[index+1] != "dport" {
+			continue
+		}
+		if strings.Trim(tokens[index+2], "{},;") == want {
+			return true
+		}
+		if tokens[index+2] != "{" {
+			continue
+		}
+		for cursor := index + 3; cursor < len(tokens) && tokens[cursor] != "}"; cursor++ {
+			if strings.Trim(tokens[cursor], "{},;") == want {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func validCheck(check Check) bool {

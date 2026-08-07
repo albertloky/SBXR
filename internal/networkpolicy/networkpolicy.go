@@ -508,8 +508,37 @@ type CheckBounds struct {
 }
 
 type Binding struct {
-	Digest string
-	policy Policy
+	Digest   string
+	policy   Policy
+	revision uint64
+}
+
+type HTTP01Contribution struct {
+	candidate          string
+	sshPort            uint16
+	revision           uint64
+	selectedIP, digest string
+}
+
+func (result Result) HTTP01Contribution() (HTTP01Contribution, bool) {
+	policy := result.Binding.policy
+	if result.Outcome != Healthy || len(result.Binding.Digest) != 64 || policy.TemporaryHTTP == nil || policy.TemporaryHTTP.Identity != "sbxr:acme-http-01" || !policy.TemporaryHTTP.RecordNativeHandles || strings.Count(policy.Nftables, `comment "sbxr:acme-http-01"`) != 1 {
+		return HTTP01Contribution{}, false
+	}
+	var sshPort uint16
+	for _, exposure := range policy.Exposures {
+		if exposure.Purpose == "SSH preservation" && exposure.Protocol == TCP {
+			sshPort = exposure.Port
+		}
+	}
+	if sshPort == 0 || policy.CertificateAddress == "" {
+		return HTTP01Contribution{}, false
+	}
+	return HTTP01Contribution{candidate: policy.Nftables, sshPort: sshPort, revision: result.Binding.revision, selectedIP: policy.CertificateAddress, digest: result.Binding.Digest}, true
+}
+
+func (contribution HTTP01Contribution) SystemChangesHTTP01() (string, uint16, uint64, string, string, bool) {
+	return contribution.candidate, contribution.sshPort, contribution.revision, contribution.selectedIP, contribution.digest, contribution.digest != ""
 }
 
 type Interface struct{ adapter Adapter }
@@ -1237,7 +1266,7 @@ func renderNftables(policy Policy) string {
 		if address.value == "" {
 			continue
 		}
-		if policy.TemporaryHTTP != nil {
+		if policy.TemporaryHTTP != nil && address.value == policy.CertificateAddress {
 			rules = append(rules, fmt.Sprintf("\t\t%s daddr %s tcp dport 80 accept comment %q", address.family, address.value, policy.TemporaryHTTP.Identity))
 		}
 		for _, protocol := range []Protocol{TCP, UDP} {
@@ -1289,7 +1318,7 @@ func bind(request Request, observed Observations, policy Policy) Binding {
 		Policy   Policy
 	}{request, observed, policy})
 	digest := sha256.Sum256(data)
-	return Binding{Digest: hex.EncodeToString(digest[:]), policy: policy}
+	return Binding{Digest: hex.EncodeToString(digest[:]), policy: policy, revision: request.Intent.Revision}
 }
 
 func ownerFactsProvided(facts OwnerFacts) bool {
