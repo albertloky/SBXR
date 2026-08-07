@@ -1,6 +1,16 @@
 # Cloudflare Tunnel
 
-This Module owns Cloudflare meaning. `CFT-01` implements only the read-only `View` slice. Later tickets add `Plan` and `Apply`; this slice does not create a Tunnel, change DNS, or store a credential.
+This Module owns Cloudflare meaning. `CFT-01` provides the read-only authority `View`. `CFT-02` adds one deterministic Plan-to-Apply path for the initial named Tunnel and XHTTP publication. WebSocket, direct-hostname DNS, token lifecycle, repair, and removal remain in `#87`–`#92`.
+
+## XHTTP Plan and Apply
+
+`Plan` re-runs `View`, reads the exact selected Tunnel name and XHTTP hostname, rejects any existing matching Tunnel or DNS record instead of adopting it, and binds the account, zone, active token identity, fresh provider observation, starting revision, Desired State checksum, fixed origin, and qualified `cloudflared 2026.7.3` baseline. Its preview is deterministic and contains no token or secret-derived value.
+
+`Apply` burns the Plan on its first attempt and refuses a changed Desired State or provider observation. Through the one System Changes transaction handoff it creates exactly one remotely managed `cfd_tunnel`, durably records its returned UUID, publishes only `xhttp.<owned-domain>` to `http://127.0.0.1:11080` followed by `http_status:404`, creates the exact proxied CNAME and durably records its returned ID, then prepares `cloudflared.service`. A later provider step cannot run before the preceding new identifier is recorded.
+
+The service contract is fixed to the distinct `cloudflared` identity and `--token-file /etc/sbxr/cloudflared/token`. The complete run token is protected transaction material, never an argument, environment value, Plan field shown to the Owner, or event. Service-readable directories and files are `0750` and `0640`; the System Changes Adapter must also refuse symlinks, wrong ownership, writable parents, or wider modes before acknowledging preparation.
+
+Required health waits no longer than five minutes and proves one connected Tunnel, the exact route plus final 404, the exact proxied DNS record, and the loopback HTTP origin. Process state or DNS alone cannot pass. Failure reverses the DNS record then Tunnel by the immutable IDs created and recorded by that Change Set; failure to prove reversal is `Recovery Required`.
 
 ## View
 
@@ -16,7 +26,7 @@ The token must use Cloudflare's current `cfat_` account-token format. The exact 
 
 The current dashboard renders those as `Account > Account API Tokens > Read`, `Account > Cloudflare Tunnel > Edit`, and `Zone > DNS > Edit`.
 
-`Account API Tokens Read` lets SBXR read the presented token's policy and reject extra permissions or wildcard resources. SBXR does not request `Account API Tokens Write`, cannot create or revoke tokens, and accepts no unrelated permission. `Cloudflare Tunnel Edit` and `DNS Write` include the reads needed by `View`; their effective write behavior remains unproved until a later approved transaction performs and health-checks the real changes.
+`Account API Tokens Read` lets SBXR read the presented token's policy and reject extra permissions or wildcard resources. SBXR does not request `Account API Tokens Write`, cannot create or revoke tokens, and accepts no unrelated permission. `CFT-02` proves the effective `Cloudflare Tunnel Edit` and `DNS Write` behavior only when the approved Apply completes and required health passes.
 
 The production Adapter uses only Bearer authentication and the selected resource paths:
 
