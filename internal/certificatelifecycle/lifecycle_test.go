@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/albertloky/SBXR/internal/certificatelifecycle"
+	"github.com/albertloky/SBXR/internal/connectionprofiles"
 	"github.com/albertloky/SBXR/internal/networkpolicy"
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
@@ -132,6 +133,35 @@ func TestViewAndPlanProveBothLineagesBeforeOrdering(t *testing.T) {
 	if len(checks) != 2 || checks[0].Phase != systemchanges.PrePublication || checks[1].Phase != systemchanges.PostPublication || checks[0].Classification != systemchanges.Required || checks[1].Classification != systemchanges.Required {
 		t.Fatalf("IP transaction checks = %#v", checks)
 	}
+
+	domainRequest := planRequest
+	domainRequest.Lineage = certificatelifecycle.DomainLineage
+	domainRequest.ChangeSet = "certificate-domain-7"
+	domainRequest.DirectTLS = testDirectTLSContribution(7)
+	domain := module.Plan(t.Context(), domainRequest)
+	if domain.Plan == nil || domain.Health.Outcome != certificatelifecycle.Healthy || !strings.HasPrefix(domain.Plan.Identity(), "certificate-domain-") {
+		t.Fatalf("domain Plan = %+v", domain)
+	}
+	domainSteps := domain.Plan.Steps()
+	if len(domainSteps) != 5 {
+		t.Fatalf("domain transaction steps = %#v", domainSteps)
+	}
+	for index, action := range []systemchanges.CertificateAction{systemchanges.CertificateDomainStage, systemchanges.CertificateDomainOrder, systemchanges.CertificateDomainActivate} {
+		change, ok := domainSteps[index+1].CertificateChange()
+		if !ok || change.Action != action || change.Identity != "direct.example.com" || change.DestinationIP != "192.0.2.10" || change.CertName != "sbxr-domain" || change.RequiredProfile != "tlsserver" {
+			t.Fatalf("domain certificate step %d = %#v", index+1, domainSteps[index+1])
+		}
+	}
+	domainChecks := domain.Plan.Checks()
+	wantCodes := []string{"CERTIFICATE-DOMAIN-CANDIDATE", "CONNECTION-PROFILES-HYSTERIA2-DIRECT-TLS", "CONNECTION-PROFILES-TUIC-DIRECT-TLS", "CONNECTION-PROFILES-ANYTLS-DIRECT-TLS"}
+	if len(domainChecks) != len(wantCodes) {
+		t.Fatalf("domain transaction checks = %#v", domainChecks)
+	}
+	for index, code := range wantCodes {
+		if domainChecks[index].Code != code || domainChecks[index].Classification != systemchanges.Required {
+			t.Fatalf("domain check %d = %#v", index, domainChecks[index])
+		}
+	}
 }
 
 func TestViewAndPlanFailClosedWithoutLeakingTypedOrToolFacts(t *testing.T) {
@@ -221,6 +251,16 @@ func TestPlanRequiresReviewedOwnerIdentityAndAgreement(t *testing.T) {
 			t.Fatalf("unreviewed identity Plan = %+v", result)
 		}
 	}
+	for _, authority := range []systemchanges.DirectTLSAuthority{nil, testDirectTLSContribution(2)} {
+		domain := request
+		domain.Lineage = certificatelifecycle.DomainLineage
+		domain.ChangeSet = "certificate-domain-1"
+		domain.DirectTLS = authority
+		result := module.Plan(t.Context(), domain)
+		if result.Plan != nil || result.Health.Code != "CERTIFICATE-PLAN-TRANSACTION" {
+			t.Fatalf("untrusted Direct TLS Plan = %+v", result)
+		}
+	}
 }
 
 func TestIPPlanApplyBuildsOneRevisionBoundChangeSet(t *testing.T) {
@@ -266,6 +306,15 @@ func testHTTP01Contribution(revision uint64) networkpolicy.HTTP01Contribution {
 		panic(fmt.Sprintf("test Network Policy HTTP-01 contribution unavailable: outcome=%s findings=%+v policy=%s", result.Outcome, result.Findings, result.Policy.Nftables))
 	}
 	return contribution
+}
+
+func testDirectTLSContribution(revision uint64) connectionprofiles.DirectTLSContribution {
+	return connectionprofiles.NewDirectTLSContribution(connectionprofiles.DirectTLSRequest{
+		Revision: revision, DestinationIP: "192.0.2.10", Hostname: "direct.example.com",
+		Hysteria2: connectionprofiles.DirectTLSConsumer{Port: 443, CertificatePointer: "/var/lib/sbxr/certificates/domain/current"},
+		TUIC:      connectionprofiles.DirectTLSConsumer{Port: 8443, CertificatePointer: "/var/lib/sbxr/certificates/domain/current"},
+		AnyTLS:    connectionprofiles.DirectTLSConsumer{Port: 9443, CertificatePointer: "/var/lib/sbxr/certificates/domain/current"},
+	})
 }
 
 func completeViewRequest() certificatelifecycle.ViewRequest {

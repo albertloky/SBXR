@@ -5,7 +5,7 @@
 Run:
 
 ```sh
-go test ./internal/certificatelifecycle ./internal/certificatelifecycle/adapter/ubuntu
+go test ./internal/certificatelifecycle/... ./internal/connectionprofiles/...
 ```
 
 Stable checks:
@@ -16,6 +16,9 @@ Stable checks:
 - `CERTIFICATE-IP-TRANSACTION`: exact IPv4 and IPv6 selection, one temporary HTTP-01 open and close, staging-before-production ordering, fixed Subscription Serving activation, Required pre- and post-publication checks, and no Xray step.
 - `CERTIFICATE-IP-CANDIDATE`: exact IP SAN, key match, trusted complete chain, current 150-to-170-hour lifetime, server usage, root ownership, `0700`/`0600` regular non-symlink candidate material, and marker-safe failures.
 - `CERTIFICATE-IP-ACTIVATION`: bounded Certbot failure, isolated staging cleanup, `0750`/`0640` versioned serving material, atomic pointer switch, fixed `sbxr-subscription.service` reload or restart, normal-trust IP HTTPS proof, activation refusal, prior-pointer restore, and prior HTTPS re-proof.
+- `CERTIFICATE-DOMAIN-TRANSACTION`: separate revision-bound HTTP-01 open and close, isolated `sbxr-domain` staging, exact `tlsserver` production order, complete sing-box configuration validation before the pointer switch, fixed `sing-box.service` restart, and distinct Required Hysteria2, TUIC, and AnyTLS checks.
+- `CERTIFICATE-DOMAIN-CANDIDATE`: exact DNS SAN, key match, trusted complete chain, current 40-to-50-day lifetime, server usage, root-owned `0700`/`0600` candidate material, and marker-safe failures.
+- `CERTIFICATE-DOMAIN-ACTIVATION`: one `0750` sing-box-group serving set with `0640` chain and key, one shared atomic pointer, configuration and restart refusal, a root-only `0600` native sing-box probe configuration, separate normal-verification Hysteria2, TUIC, and AnyTLS connections to the selected VPS address, one-consumer failure, prior-pointer restart and three-consumer re-proof, no second order, unchanged Certbot lineage, and old private-key-set cleanup only after durable Complete.
 
 The automated result may say only that the controlled Module and Ubuntu seam passed. It does not prove real ACME registration, real staging or production issuance, public reachability, live activation, real renewal, outside-VPS HTTPS, or Release Qualification.
 
@@ -34,6 +37,18 @@ On one explicitly approved Acceptance VPS and exact Release Identity:
 9. Keep real staging issuance, production issuance, real renewal, outside-VPS IP HTTPS, Integrated Verification, Codex Live Acceptance, and any required Owner Acceptance Pending until those checks actually run.
 
 The redacted Acceptance Record must exclude the Owner email, ACME account data, raw Certbot output, private keys, command environment, transaction material, complete certificate files, secret-derived data, Client Access Values, and any false issuance claim.
+
+## Live domain-order checks
+
+On the same explicitly approved Acceptance VPS and exact Release Identity:
+
+1. Repeat the exact listener, route, time, DNS, CAA, selected-address, and temporary HTTP-01 handle checks independently for `sbxr-domain`; keep Xray and REALITY on `443/TCP` running.
+2. Run the isolated `sbxr-domain` staging order, then the exact production `--required-profile tlsserver --cert-name sbxr-domain -d <Direct-TLS-Hostname>` order. Prove staging cannot change production lineage or trust.
+3. Prove the candidate has exactly the committed DNS SAN, matching key, normal trust, server usage, current validity, a plausible 40-to-50-day lifetime, and safe root-only candidate files.
+4. Validate the complete sing-box configuration before activation. Prove the active domain directory is root-owned by the `sing-box` group at `0750`, its chain and key are `0640`, and only Hysteria2, TUIC, and AnyTLS reference its one shared pointer.
+5. From outside the VPS, check Hysteria2, TUIC, and AnyTLS separately using the selected VPS address as the destination and the exact Direct TLS Hostname as the normally verified name. Do not set `insecure` or weaken trust.
+6. Cause configuration refusal, restart failure, and one controlled consumer failure. Each must restore the prior pointer, restart sing-box, re-prove all three prior consumers, leave `sbxr-domain` unchanged, close the exact HTTP-01 handle, and perform no second order.
+7. Keep real staging issuance, production issuance, renewal, outside-VPS direct-profile checks, Integrated Verification, Codex Live Acceptance, and Owner Acceptance Pending unless each was actually performed.
 
 ## Current acceptance status
 

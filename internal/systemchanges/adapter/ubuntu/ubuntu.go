@@ -21,6 +21,7 @@ type Adapter struct {
 	firewall    FirewallExecutor
 	cloudflare  CloudflareExecutor
 	certificate CertificateExecutor
+	profiles    ConnectionProfilesExecutor
 	state       systemchanges.StateRecovery
 }
 
@@ -51,6 +52,12 @@ func NewAtWithCloudflare(root string, source ObservationSource, host Host, cloud
 func NewAtWithCertificate(root string, source ObservationSource, host Host, firewall FirewallExecutor, certificate CertificateExecutor, state ...systemchanges.StateRecovery) Adapter {
 	adapter := NewAtWithFirewall(root, source, host, firewall, state...)
 	adapter.certificate = certificate
+	return adapter
+}
+
+func NewAtWithCertificateAndConnectionProfiles(root string, source ObservationSource, host Host, firewall FirewallExecutor, certificate CertificateExecutor, profiles ConnectionProfilesExecutor, state ...systemchanges.StateRecovery) Adapter {
+	adapter := NewAtWithCertificate(root, source, host, firewall, certificate, state...)
+	adapter.profiles = profiles
 	return adapter
 }
 

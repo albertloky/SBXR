@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/mail"
 	"net/netip"
@@ -457,11 +458,13 @@ func versionAtLeast(version string, major, minor int) bool {
 
 type PlanRequest struct {
 	View                        ViewRequest
+	Lineage                     Lineage
 	ChangeSet                   string
 	StartingRevision            uint64
 	StartingStateSHA256         string
 	DesiredStateSHA256          string
 	HTTP01                      systemchanges.HTTP01Authority
+	DirectTLS                   systemchanges.DirectTLSAuthority
 	OwnerEmail                  string
 	SubscriberAgreementReviewed bool
 }
@@ -523,6 +526,9 @@ func (plan *Plan) String() string {
 	if plan == nil {
 		return "Certificate Lifecycle Plan: unavailable"
 	}
+	if plan.request.Lineage == DomainLineage {
+		return fmt.Sprintf("Certificate Lifecycle Plan %s: open one reviewed HTTP-01 rule, prove isolated staging, order and activate only %s for the Direct TLS Hostname, restart sing-box, prove Hysteria2, TUIC, and AnyTLS separately, then close the recorded rule", plan.identity, domainCertName)
+	}
 	return fmt.Sprintf("Certificate Lifecycle Plan %s: open one reviewed HTTP-01 rule, prove isolated staging, order and activate only %s for the selected IP, then close the recorded rule; %s remains planned separately", plan.identity, ipCertName, domainCertName)
 }
 func (plan *Plan) GoString() string { return plan.String() }
@@ -564,14 +570,41 @@ func (module Interface) Plan(ctx context.Context, request PlanRequest) PlanResul
 		stagingOrder(DomainLineage, domainProfile, request.View.DirectHostname, domainCertName, request.OwnerEmail),
 		{Lineage: DomainLineage, RequiredProfile: domainProfile, Identity: request.View.DirectHostname, CertName: domainCertName, OwnerEmail: request.OwnerEmail, ConfigDirectory: "/var/lib/sbxr/certbot/production", Account: "production"},
 	}
-	steps, stepErr := ipTransactionSteps(open, close, orders[:2])
-	if stepErr != nil {
-		finding := health(view.Health.Time, Failed, "CERTIFICATE-PLAN-TRANSACTION", "The selected-IP transaction is invalid", "the reviewed firewall or certificate step contract is incomplete", "one exact reversible HTTP-01 and sbxr-ip transaction")
-		return PlanResult{Health: finding}
+	lineage := request.Lineage
+	if lineage == "" {
+		lineage = IPLineage
 	}
+	var steps []systemchanges.Step
+	var stepErr error
+	directTLSDigest := ""
 	checks := []systemchanges.Check{
 		{Owner: systemchanges.CertificateModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CERTIFICATE-IP-CANDIDATE"},
 		{Owner: systemchanges.CertificateModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PostPublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CERTIFICATE-IP-HTTPS"},
+	}
+	identityPrefix := "certificate-ip-"
+	if lineage == IPLineage {
+		steps, stepErr = certificateTransactionSteps(open, close, orders[:2], request.View.SelectedIP, 0, "")
+	} else if lineage == DomainLineage {
+		var directTLSRevision uint64
+		var destinationIP, hostname string
+		var directTLSChecks []systemchanges.Check
+		directTLSRevision, destinationIP, hostname, directTLSDigest, directTLSChecks, stepErr = systemchanges.NewDirectTLSChecks(request.DirectTLS)
+		if stepErr == nil && (directTLSRevision != request.StartingRevision || destinationIP != request.View.SelectedIP || hostname != request.View.DirectHostname) {
+			stepErr = errors.New("stale Connection Profiles Direct TLS contribution")
+		}
+		if stepErr == nil {
+			steps, stepErr = certificateTransactionSteps(open, close, orders[2:], destinationIP, directTLSRevision, directTLSDigest)
+		}
+		identityPrefix = "certificate-domain-"
+		checks = append([]systemchanges.Check{
+			{Owner: systemchanges.CertificateModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CERTIFICATE-DOMAIN-CANDIDATE"},
+		}, directTLSChecks...)
+	} else {
+		stepErr = errors.New("unsupported certificate lineage")
+	}
+	if stepErr != nil {
+		finding := health(view.Health.Time, Failed, "CERTIFICATE-PLAN-TRANSACTION", "The certificate transaction is invalid", "the reviewed lineage, firewall, or certificate step contract is incomplete", "one exact reversible HTTP-01 fixed-lineage transaction")
+		return PlanResult{Health: finding}
 	}
 	binding := struct {
 		View                                      ViewRequest
@@ -580,13 +613,14 @@ func (module Interface) Plan(ctx context.Context, request PlanRequest) PlanResul
 		StartingSHA256, DesiredSHA256, OwnerEmail string
 		Agreement                                 bool
 		HTTP01Digest                              string
+		DirectTLSDigest                           string
 		Observation                               Observation
 		Orders                                    []OrderContract
-	}{request.View, request.ChangeSet, request.StartingRevision, request.StartingStateSHA256, request.DesiredStateSHA256, request.OwnerEmail, request.SubscriberAgreementReviewed, http01Digest, view.observation, orders}
+	}{request.View, request.ChangeSet, request.StartingRevision, request.StartingStateSHA256, request.DesiredStateSHA256, request.OwnerEmail, request.SubscriberAgreementReviewed, http01Digest, directTLSDigest, view.observation, orders}
 	encoded, _ := json.Marshal(binding)
 	digest := sha256.Sum256(encoded)
 	sha := hex.EncodeToString(digest[:])
-	plan := &Plan{identity: "certificate-ip-" + sha[:12], sha256: sha, request: request, orders: orders, steps: steps, checks: checks, used: &atomic.Bool{}}
+	plan := &Plan{identity: identityPrefix + sha[:12], sha256: sha, request: request, orders: orders, steps: steps, checks: checks, used: &atomic.Bool{}}
 	return PlanResult{Plan: plan, Health: Health{Time: view.Health.Time, Module: "Certificate Lifecycle", Outcome: Healthy, Code: "CERTIFICATE-PLAN-READY", NextActions: []string{"Review Plan", "Back"}}}
 }
 
@@ -610,20 +644,37 @@ func (plan *Plan) Apply(module systemchanges.Interface, prepared systemchanges.P
 	return module.Apply(change)
 }
 
-func ipTransactionSteps(open, close systemchanges.Step, orders []OrderContract) ([]systemchanges.Step, error) {
+func certificateTransactionSteps(open, close systemchanges.Step, orders []OrderContract, destinationIP string, directTLSRevision uint64, directTLSDigest string) ([]systemchanges.Step, error) {
 	steps := []systemchanges.Step{open}
 	for index, order := range orders {
 		action := systemchanges.CertificateIPStage
-		if index == 1 {
-			action = systemchanges.CertificateIPOrder
+		if order.Lineage == DomainLineage {
+			action = systemchanges.CertificateDomainStage
 		}
-		step, err := systemchanges.NewCertificateStep(systemchanges.CertificateChange{Action: action, Identity: order.Identity, RequiredProfile: order.RequiredProfile, CertName: order.CertName, OwnerEmail: order.OwnerEmail, ConfigDirectory: order.ConfigDirectory, Account: order.Account})
+		if index == 1 && order.Lineage == IPLineage {
+			action = systemchanges.CertificateIPOrder
+		} else if index == 1 {
+			action = systemchanges.CertificateDomainOrder
+		}
+		change := systemchanges.CertificateChange{Action: action, Identity: order.Identity, RequiredProfile: order.RequiredProfile, CertName: order.CertName, OwnerEmail: order.OwnerEmail, ConfigDirectory: order.ConfigDirectory, Account: order.Account}
+		if order.Lineage == DomainLineage {
+			change.DestinationIP = destinationIP
+		}
+		step, err := systemchanges.NewCertificateStep(change)
 		if err != nil {
 			return nil, err
 		}
 		steps = append(steps, step)
 	}
-	activate, err := systemchanges.NewCertificateStep(systemchanges.CertificateChange{Action: systemchanges.CertificateIPActivate, Identity: orders[1].Identity, RequiredProfile: orders[1].RequiredProfile, CertName: orders[1].CertName, SubscriptionUnit: "sbxr-subscription.service"})
+	activateChange := systemchanges.CertificateChange{Action: systemchanges.CertificateIPActivate, Identity: orders[1].Identity, RequiredProfile: orders[1].RequiredProfile, CertName: orders[1].CertName, SubscriptionUnit: "sbxr-subscription.service"}
+	if orders[1].Lineage == DomainLineage {
+		activateChange.Action = systemchanges.CertificateDomainActivate
+		activateChange.DestinationIP = destinationIP
+		activateChange.SubscriptionUnit = ""
+		activateChange.DirectTLSRevision = directTLSRevision
+		activateChange.DirectTLSSHA256 = directTLSDigest
+	}
+	activate, err := systemchanges.NewCertificateStep(activateChange)
 	if err != nil {
 		return nil, err
 	}

@@ -78,7 +78,14 @@ type CertificateExecutor interface {
 	Reverse(string, systemchanges.Step, io.Reader, time.Duration) (systemchanges.StepEvidence, error)
 	Inspect(string, systemchanges.Step, io.Reader, time.Duration) (systemchanges.StepEffect, error)
 	Check(string, string, systemchanges.GatePhase, time.Duration) (systemchanges.HealthStatus, error)
-	Cleanup(string) error
+	Cleanup(string, systemchanges.CertificateAction) error
+}
+
+type ConnectionProfilesExecutor interface {
+	ValidateConfiguration(root, destination, hostname string, timeout time.Duration) error
+	Activate(root, destination, hostname string, timeout time.Duration) error
+	Restore(root, destination, hostname string, timeout time.Duration) error
+	Check(root, destination, hostname, code string, timeout time.Duration) (bool, error)
 }
 
 type snapshotManifest struct {
@@ -519,6 +526,10 @@ func (a Adapter) Execute(lease systemchanges.ExecutionLease, changeSet string, n
 		if a.certificate == nil {
 			return systemchanges.StepEvidence{}, errors.New("Certificate Lifecycle executor unavailable")
 		}
+		change, _ := step.CertificateChange()
+		if change.Action == systemchanges.CertificateDomainActivate {
+			return executeDomainCertificateActivation(a.root, a.certificate, a.profiles, step, timeout, cancellation)
+		}
 		return a.certificate.Execute(a.root, step, timeout, cancellation)
 	}
 	if cloudflaredActivation(step) {
@@ -582,6 +593,10 @@ func (a Adapter) Reverse(lease systemchanges.ExecutionLease, changeSet string, n
 		if a.certificate == nil {
 			return systemchanges.StepEvidence{}, errors.New("Certificate Lifecycle rollback executor unavailable")
 		}
+		change, _ := step.CertificateChange()
+		if change.Action == systemchanges.CertificateDomainActivate {
+			return reverseDomainCertificateActivation(a.root, a.certificate, a.profiles, step, bytes.NewReader(content), timeout)
+		}
 		return a.certificate.Reverse(a.root, step, bytes.NewReader(content), timeout)
 	}
 	if cloudflaredActivation(step) {
@@ -591,6 +606,36 @@ func (a Adapter) Reverse(lease systemchanges.ExecutionLease, changeSet string, n
 		return a.cloudflare.ReverseService(a.root, bytes.NewReader(content), timeout)
 	}
 	return a.host.Reverse(step, bytes.NewReader(content), timeout)
+}
+
+func executeDomainCertificateActivation(root string, certificate CertificateExecutor, profiles ConnectionProfilesExecutor, step systemchanges.Step, timeout time.Duration, cancellation *systemchanges.Cancellation) (systemchanges.StepEvidence, error) {
+	change, ok := step.CertificateChange()
+	if !ok || change.Action != systemchanges.CertificateDomainActivate || certificate == nil || profiles == nil || profiles.ValidateConfiguration(root, change.DestinationIP, change.Identity, timeout) != nil {
+		return systemchanges.StepEvidence{}, errors.New("Connection Profiles configuration is unproved")
+	}
+	evidence, err := certificate.Execute(root, step, timeout, cancellation)
+	if err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	if profiles.Activate(root, change.DestinationIP, change.Identity, timeout) != nil {
+		return systemchanges.StepEvidence{}, errors.New("Direct TLS consumers are unproved")
+	}
+	return evidence, nil
+}
+
+func reverseDomainCertificateActivation(root string, certificate CertificateExecutor, profiles ConnectionProfilesExecutor, step systemchanges.Step, snapshot io.Reader, timeout time.Duration) (systemchanges.StepEvidence, error) {
+	change, ok := step.CertificateChange()
+	if !ok || change.Action != systemchanges.CertificateDomainActivate || certificate == nil || profiles == nil {
+		return systemchanges.StepEvidence{}, errors.New("Direct TLS rollback is unavailable")
+	}
+	evidence, err := certificate.Reverse(root, step, snapshot, timeout)
+	if err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	if profiles.Restore(root, change.DestinationIP, change.Identity, timeout) != nil {
+		return systemchanges.StepEvidence{}, errors.New("prior Direct TLS consumers are unproved")
+	}
+	return evidence, nil
 }
 
 func (a Adapter) completedStepEvidence(changeSet string, number int) (systemchanges.StepEvidence, error) {
@@ -1047,13 +1092,49 @@ func (a Adapter) Check(lease systemchanges.ExecutionLease, check systemchanges.C
 		}
 		return a.cloudflare.CheckWholeTunnel(evidence, timeout)
 	}
-	if check.Owner == systemchanges.CertificateModule && (check.Code == "CERTIFICATE-IP-CANDIDATE" || check.Code == "CERTIFICATE-IP-HTTPS") {
+	if check.Owner == systemchanges.CertificateModule && (check.Code == "CERTIFICATE-IP-CANDIDATE" || check.Code == "CERTIFICATE-IP-HTTPS" || check.Code == "CERTIFICATE-DOMAIN-CANDIDATE") {
 		if a.certificate == nil {
 			return systemchanges.Unknown, errors.New("Certificate Lifecycle health executor unavailable")
 		}
 		return a.certificate.Check(a.root, check.Code, phase, timeout)
 	}
+	if check.Owner == systemchanges.ConnectionProfilesModule && strings.HasPrefix(check.Code, "CONNECTION-PROFILES-") && strings.HasSuffix(check.Code, "-DIRECT-TLS") {
+		if a.profiles == nil {
+			return systemchanges.Unknown, errors.New("Connection Profiles health executor unavailable")
+		}
+		change, err := a.activeDomainCertificateChange()
+		if err != nil {
+			return systemchanges.Unknown, err
+		}
+		healthy, checkErr := a.profiles.Check(a.root, change.DestinationIP, change.Identity, check.Code, timeout)
+		if checkErr != nil || !healthy {
+			return systemchanges.Failed, checkErr
+		}
+		return systemchanges.Healthy, nil
+	}
 	return a.host.Check(check, phase, timeout)
+}
+
+func (a Adapter) activeDomainCertificateChange() (systemchanges.CertificateChange, error) {
+	root, err := os.OpenRoot(a.root)
+	if err != nil {
+		return systemchanges.CertificateChange{}, err
+	}
+	defer root.Close()
+	entries, err := fs.ReadDir(root.FS(), transactionDirectory)
+	if err != nil || len(entries) != 1 || !entries[0].IsDir() {
+		return systemchanges.CertificateChange{}, errors.New("active certificate transaction unavailable")
+	}
+	journal, err := readJournal(root, path.Join(transactionDirectory, entries[0].Name(), "journal.jsonl"))
+	if err != nil || len(journal) == 0 {
+		return systemchanges.CertificateChange{}, errors.New("active certificate journal unavailable")
+	}
+	for _, step := range journal[0].Steps {
+		if step.Certificate != nil && step.Certificate.Action == systemchanges.CertificateDomainActivate {
+			return *step.Certificate, nil
+		}
+	}
+	return systemchanges.CertificateChange{}, errors.New("active domain certificate activation unavailable")
 }
 
 func (a Adapter) activeRunTokenRotation() (systemchanges.CloudflareChange, bool, error) {
@@ -1130,7 +1211,8 @@ func (a Adapter) Cleanup(lease systemchanges.ExecutionLease, changeSet string) e
 		return errors.New("transaction is not durably resolved")
 	}
 	if entries[len(entries)-1].Checkpoint == systemchanges.Complete && journalHasCertificate(entries[0].Steps) {
-		if a.certificate == nil || a.certificate.Cleanup(a.root) != nil {
+		action, ok := certificateActivationAction(entries[0].Steps)
+		if a.certificate == nil || !ok || a.certificate.Cleanup(a.root, action) != nil {
 			return errors.New("completed certificate rollback material cleanup failed")
 		}
 	}
@@ -1159,6 +1241,15 @@ func (a Adapter) Cleanup(lease systemchanges.ExecutionLease, changeSet string) e
 		}
 	}
 	return syncDirectory(root, transactionDirectory)
+}
+
+func certificateActivationAction(steps []journalStep) (systemchanges.CertificateAction, bool) {
+	for _, step := range steps {
+		if step.Certificate != nil && (step.Certificate.Action == systemchanges.CertificateIPActivate || step.Certificate.Action == systemchanges.CertificateDomainActivate) {
+			return step.Certificate.Action, true
+		}
+	}
+	return "", false
 }
 
 func journalHasCertificate(steps []journalStep) bool {

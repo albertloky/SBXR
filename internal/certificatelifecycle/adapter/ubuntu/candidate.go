@@ -50,24 +50,65 @@ func validateIPCandidate(root string, change systemchanges.CertificateChange, no
 }
 
 func validateIPMaterial(chainPEM, keyPEM []byte, address netip.Addr, now time.Time, roots *x509.CertPool, trusted bool) error {
+	return validateMaterial(chainPEM, keyPEM, address.String(), now, roots, trusted, 150*time.Hour, 170*time.Hour, func(leaf *x509.Certificate) bool {
+		return len(leaf.IPAddresses) == 1 && len(leaf.DNSNames) == 0 && leaf.IPAddresses[0].Equal(address.AsSlice())
+	})
+}
+
+// ValidateDomainCandidate proves only certificate facts. It never returns key
+// or certificate bytes across the Adapter boundary.
+func ValidateDomainCandidate(root string, change systemchanges.CertificateChange, now time.Time, roots *x509.CertPool, uid int) error {
+	return validateDomainCandidate(root, change, now, roots, uid, true)
+}
+
+func validateDomainCandidate(root string, change systemchanges.CertificateChange, now time.Time, roots *x509.CertPool, uid int, trusted bool) error {
+	validLocation := change.Action == systemchanges.CertificateDomainOrder && change.ConfigDirectory == "/var/lib/sbxr/certbot/production" && change.Account == "production" || change.Action == systemchanges.CertificateDomainStage && change.ConfigDirectory == "/var/lib/sbxr/certbot/staging/sbxr-domain" && change.Account == "disposable-staging-sbxr-domain"
+	if !directHostname.MatchString(change.Identity) || change.RequiredProfile != "tlsserver" || change.CertName != "sbxr-domain" || !validLocation {
+		return errors.New("domain certificate identity is invalid")
+	}
+	config := filepath.Join(root, strings.TrimPrefix(change.ConfigDirectory, "/"))
+	directory := filepath.Join(config, "live", change.CertName)
+	for _, candidate := range []string{config, filepath.Join(config, "live"), directory} {
+		if err := safeDirectory(candidate, uid, 0o700); err != nil {
+			return errors.New("domain certificate directory is unsafe")
+		}
+	}
+	chainPEM, err := safeFile(filepath.Join(directory, "fullchain.pem"), uid, 0o600)
+	if err != nil {
+		return errors.New("domain certificate chain is unsafe")
+	}
+	keyPEM, err := safeFile(filepath.Join(directory, "privkey.pem"), uid, 0o600)
+	if err != nil {
+		return errors.New("domain certificate key is unsafe")
+	}
+	return validateDomainMaterial(chainPEM, keyPEM, change.Identity, now, roots, trusted)
+}
+
+func validateDomainMaterial(chainPEM, keyPEM []byte, hostname string, now time.Time, roots *x509.CertPool, trusted bool) error {
+	return validateMaterial(chainPEM, keyPEM, hostname, now, roots, trusted, 40*24*time.Hour, 50*24*time.Hour, func(leaf *x509.Certificate) bool {
+		return len(leaf.DNSNames) == 1 && leaf.DNSNames[0] == hostname && len(leaf.IPAddresses) == 0
+	})
+}
+
+func validateMaterial(chainPEM, keyPEM []byte, identity string, now time.Time, roots *x509.CertPool, trusted bool, minimumLifetime, maximumLifetime time.Duration, identityValid func(*x509.Certificate) bool) error {
 	certificates, err := parseCertificates(chainPEM)
 	if err != nil || len(certificates) < 2 {
-		return errors.New("IP certificate chain is incomplete")
+		return errors.New("certificate chain is incomplete")
 	}
 	leaf := certificates[0]
-	if len(leaf.IPAddresses) != 1 || len(leaf.DNSNames) != 0 || !leaf.IPAddresses[0].Equal(address.AsSlice()) || now.Before(leaf.NotBefore) || !now.Before(leaf.NotAfter) || leaf.NotAfter.Sub(leaf.NotBefore) < 150*time.Hour || leaf.NotAfter.Sub(leaf.NotBefore) > 170*time.Hour || !serverUsage(leaf.ExtKeyUsage) {
-		return errors.New("IP certificate facts are invalid")
+	if !identityValid(leaf) || now.Before(leaf.NotBefore) || !now.Before(leaf.NotAfter) || leaf.NotAfter.Sub(leaf.NotBefore) < minimumLifetime || leaf.NotAfter.Sub(leaf.NotBefore) > maximumLifetime || !serverUsage(leaf.ExtKeyUsage) {
+		return errors.New("certificate facts are invalid")
 	}
 	privateKey, err := parsePrivateKey(keyPEM)
 	if err != nil || !publicKeysEqual(leaf.PublicKey, privateKey.Public()) {
-		return errors.New("IP certificate key does not match")
+		return errors.New("certificate key does not match")
+	}
+	if !trusted {
+		return nil
 	}
 	intermediates := x509.NewCertPool()
 	for _, certificate := range certificates[1:] {
 		intermediates.AddCert(certificate)
-	}
-	if !trusted {
-		return nil
 	}
 	if roots == nil {
 		roots, err = x509.SystemCertPool()
@@ -75,8 +116,8 @@ func validateIPMaterial(chainPEM, keyPEM []byte, address netip.Addr, now time.Ti
 			return errors.New("trusted roots unavailable")
 		}
 	}
-	if _, err := leaf.Verify(x509.VerifyOptions{DNSName: address.String(), Roots: roots, Intermediates: intermediates, CurrentTime: now, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}); err != nil {
-		return errors.New("IP certificate chain is untrusted")
+	if _, err := leaf.Verify(x509.VerifyOptions{DNSName: identity, Roots: roots, Intermediates: intermediates, CurrentTime: now, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}); err != nil {
+		return errors.New("certificate chain is untrusted")
 	}
 	return nil
 }

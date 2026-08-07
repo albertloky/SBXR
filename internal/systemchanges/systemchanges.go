@@ -382,22 +382,28 @@ const (
 type CertificateAction string
 
 const (
-	CertificateIPStage    CertificateAction = "ip-stage"
-	CertificateIPOrder    CertificateAction = "ip-order"
-	CertificateIPActivate CertificateAction = "ip-activate"
+	CertificateIPStage        CertificateAction = "ip-stage"
+	CertificateIPOrder        CertificateAction = "ip-order"
+	CertificateIPActivate     CertificateAction = "ip-activate"
+	CertificateDomainStage    CertificateAction = "domain-stage"
+	CertificateDomainOrder    CertificateAction = "domain-order"
+	CertificateDomainActivate CertificateAction = "domain-activate"
 )
 
-// CertificateChange is the fixed, command-free contract for the selected IP
+// CertificateChange is the fixed, command-free contract for one certificate
 // lineage. Private key material never crosses this boundary.
 type CertificateChange struct {
-	Action           CertificateAction `json:"action"`
-	Identity         string            `json:"identity"`
-	RequiredProfile  string            `json:"required_profile"`
-	CertName         string            `json:"cert_name"`
-	OwnerEmail       string            `json:"owner_email,omitempty"`
-	ConfigDirectory  string            `json:"config_directory,omitempty"`
-	Account          string            `json:"account,omitempty"`
-	SubscriptionUnit string            `json:"subscription_unit,omitempty"`
+	Action            CertificateAction `json:"action"`
+	Identity          string            `json:"identity"`
+	RequiredProfile   string            `json:"required_profile"`
+	CertName          string            `json:"cert_name"`
+	OwnerEmail        string            `json:"owner_email,omitempty"`
+	ConfigDirectory   string            `json:"config_directory,omitempty"`
+	Account           string            `json:"account,omitempty"`
+	SubscriptionUnit  string            `json:"subscription_unit,omitempty"`
+	DestinationIP     string            `json:"destination_ip,omitempty"`
+	DirectTLSRevision uint64            `json:"direct_tls_revision,omitempty"`
+	DirectTLSSHA256   string            `json:"direct_tls_sha256,omitempty"`
 }
 
 type CloudflareAction string
@@ -460,6 +466,27 @@ type HTTP01Authority interface {
 	SystemChangesHTTP01() (candidate string, sshPort uint16, revision uint64, selectedIP, digest string, valid bool)
 }
 
+type DirectTLSAuthority interface {
+	SystemChangesDirectTLS() (revision uint64, destinationIP, hostname, digest string, valid bool)
+}
+
+func NewDirectTLSChecks(authority DirectTLSAuthority) (uint64, string, string, string, []Check, error) {
+	if !trustedAuthority(authority, "github.com/albertloky/SBXR/internal/connectionprofiles", "DirectTLSContribution") {
+		return 0, "", "", "", nil, errors.New("Connection Profiles Direct TLS authority unavailable")
+	}
+	revision, destinationIP, hostname, digest, valid := authority.SystemChangesDirectTLS()
+	address, addressErr := netip.ParseAddr(destinationIP)
+	if !valid || revision == 0 || addressErr != nil || !address.IsGlobalUnicast() || !validCertificateHostname(hostname) || !validSHA256(digest) {
+		return 0, "", "", "", nil, errors.New("Connection Profiles Direct TLS contribution invalid")
+	}
+	checks := []Check{
+		{Owner: ConnectionProfilesModule, Scope: ServerSideCheck, Phase: PostPublication, Classification: Required, Status: Healthy, Code: "CONNECTION-PROFILES-HYSTERIA2-DIRECT-TLS"},
+		{Owner: ConnectionProfilesModule, Scope: ServerSideCheck, Phase: PostPublication, Classification: Required, Status: Healthy, Code: "CONNECTION-PROFILES-TUIC-DIRECT-TLS"},
+		{Owner: ConnectionProfilesModule, Scope: ServerSideCheck, Phase: PostPublication, Classification: Required, Status: Healthy, Code: "CONNECTION-PROFILES-ANYTLS-DIRECT-TLS"},
+	}
+	return revision, destinationIP, hostname, digest, checks, nil
+}
+
 func NewHTTP01Steps(authority HTTP01Authority) (Step, Step, string, string, uint64, error) {
 	if !trustedAuthority(authority, "github.com/albertloky/SBXR/internal/networkpolicy", "HTTP01Contribution") {
 		return Step{}, Step{}, "", "", 0, errors.New("Network Policy HTTP-01 authority unavailable")
@@ -515,14 +542,14 @@ type Step struct {
 func NewCertificateStep(change CertificateChange) (Step, error) {
 	forward, rollback := StageCertificateCandidate, DiscardCertificateCandidate
 	switch change.Action {
-	case CertificateIPOrder:
+	case CertificateIPOrder, CertificateDomainOrder:
 		forward, rollback = OrderCertificateCandidate, PreserveCertificateLineage
-	case CertificateIPActivate:
+	case CertificateIPActivate, CertificateDomainActivate:
 		forward, rollback = ActivateCertificateServingPair, RestoreCertificateServingPair
 	}
 	step := Step{owner: CertificateModule, forward: forward, rollback: rollback, cancel: SafeCheckpointCancellation, inspect: InspectBeforeIdempotentReverse, certificate: change}
 	if !validStep(step) {
-		return Step{}, &Finding{Code: "SYSTEM-CHANGES-CERTIFICATE-STEP", Problem: "A certificate transaction step is invalid", Found: "an incomplete selected-IP contract", Required: "one exact sbxr-ip staging, production, or serving activation action", WhyStopped: "System Changes never accepts certificate commands, arbitrary identities, or private key material", NextAction: "Rebuild the Change Set through Certificate Lifecycle."}
+		return Step{}, &Finding{Code: "SYSTEM-CHANGES-CERTIFICATE-STEP", Problem: "A certificate transaction step is invalid", Found: "an incomplete certificate contract", Required: "one exact fixed-lineage staging, production, or serving activation action", WhyStopped: "System Changes never accepts certificate commands, arbitrary identities, or private key material", NextAction: "Rebuild the Change Set through Certificate Lifecycle."}
 	}
 	return step, nil
 }
@@ -1092,17 +1119,42 @@ func certificateOperation(operation OperationKind) bool {
 func validCertificateContract(step Step) bool {
 	change := step.certificate
 	address, addressErr := netip.ParseAddr(change.Identity)
+	destination, destinationErr := netip.ParseAddr(change.DestinationIP)
 	email, emailErr := mail.ParseAddress(change.OwnerEmail)
-	base := step.owner == CertificateModule && addressErr == nil && address.IsGlobalUnicast() && change.RequiredProfile == "shortlived" && change.CertName == "sbxr-ip"
+	ipBase := step.owner == CertificateModule && addressErr == nil && address.IsGlobalUnicast() && change.RequiredProfile == "shortlived" && change.CertName == "sbxr-ip" && change.DestinationIP == "" && change.DirectTLSRevision == 0 && change.DirectTLSSHA256 == ""
+	domainBase := step.owner == CertificateModule && validCertificateHostname(change.Identity) && destinationErr == nil && destination.IsGlobalUnicast() && change.RequiredProfile == "tlsserver" && change.CertName == "sbxr-domain" && change.SubscriptionUnit == ""
 	switch change.Action {
 	case CertificateIPStage:
-		return base && step.forward == StageCertificateCandidate && step.rollback == DiscardCertificateCandidate && emailErr == nil && email.Address == change.OwnerEmail && email.Name == "" && change.ConfigDirectory == "/var/lib/sbxr/certbot/staging/sbxr-ip" && change.Account == "disposable-staging-sbxr-ip" && change.SubscriptionUnit == ""
+		return ipBase && step.forward == StageCertificateCandidate && step.rollback == DiscardCertificateCandidate && emailErr == nil && email.Address == change.OwnerEmail && email.Name == "" && change.ConfigDirectory == "/var/lib/sbxr/certbot/staging/sbxr-ip" && change.Account == "disposable-staging-sbxr-ip" && change.SubscriptionUnit == ""
 	case CertificateIPOrder:
-		return base && step.forward == OrderCertificateCandidate && step.rollback == PreserveCertificateLineage && emailErr == nil && email.Address == change.OwnerEmail && email.Name == "" && change.ConfigDirectory == "/var/lib/sbxr/certbot/production" && change.Account == "production" && change.SubscriptionUnit == ""
+		return ipBase && step.forward == OrderCertificateCandidate && step.rollback == PreserveCertificateLineage && emailErr == nil && email.Address == change.OwnerEmail && email.Name == "" && change.ConfigDirectory == "/var/lib/sbxr/certbot/production" && change.Account == "production" && change.SubscriptionUnit == ""
 	case CertificateIPActivate:
-		return base && step.forward == ActivateCertificateServingPair && step.rollback == RestoreCertificateServingPair && change.OwnerEmail == "" && change.ConfigDirectory == "" && change.Account == "" && change.SubscriptionUnit == "sbxr-subscription.service"
+		return ipBase && step.forward == ActivateCertificateServingPair && step.rollback == RestoreCertificateServingPair && change.OwnerEmail == "" && change.ConfigDirectory == "" && change.Account == "" && change.SubscriptionUnit == "sbxr-subscription.service"
+	case CertificateDomainStage:
+		return domainBase && change.DirectTLSRevision == 0 && change.DirectTLSSHA256 == "" && step.forward == StageCertificateCandidate && step.rollback == DiscardCertificateCandidate && emailErr == nil && email.Address == change.OwnerEmail && email.Name == "" && change.ConfigDirectory == "/var/lib/sbxr/certbot/staging/sbxr-domain" && change.Account == "disposable-staging-sbxr-domain"
+	case CertificateDomainOrder:
+		return domainBase && change.DirectTLSRevision == 0 && change.DirectTLSSHA256 == "" && step.forward == OrderCertificateCandidate && step.rollback == PreserveCertificateLineage && emailErr == nil && email.Address == change.OwnerEmail && email.Name == "" && change.ConfigDirectory == "/var/lib/sbxr/certbot/production" && change.Account == "production"
+	case CertificateDomainActivate:
+		return domainBase && change.DirectTLSRevision > 0 && validSHA256(change.DirectTLSSHA256) && step.forward == ActivateCertificateServingPair && step.rollback == RestoreCertificateServingPair && change.OwnerEmail == "" && change.ConfigDirectory == "" && change.Account == ""
 	}
 	return false
+}
+
+func validCertificateHostname(hostname string) bool {
+	if len(hostname) == 0 || len(hostname) > 253 || strings.ToLower(hostname) != hostname {
+		return false
+	}
+	for _, label := range strings.Split(hostname, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, character := range label {
+			if character != '-' && (character < 'a' || character > 'z') && (character < '0' || character > '9') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func cloudflareOperation(operation OperationKind) bool {

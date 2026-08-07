@@ -35,3 +35,29 @@ func TestCertificateStepsAcceptOnlyTheFixedSelectedIPContract(t *testing.T) {
 		t.Fatal("unrelated service accepted")
 	}
 }
+
+func TestCertificateStepsAcceptOnlyTheFixedDomainContract(t *testing.T) {
+	changes := []systemchanges.CertificateChange{
+		{Action: systemchanges.CertificateDomainStage, Identity: "direct.example.com", DestinationIP: "192.0.2.10", RequiredProfile: "tlsserver", CertName: "sbxr-domain", OwnerEmail: "owner@example.com", ConfigDirectory: "/var/lib/sbxr/certbot/staging/sbxr-domain", Account: "disposable-staging-sbxr-domain"},
+		{Action: systemchanges.CertificateDomainOrder, Identity: "direct.example.com", DestinationIP: "192.0.2.10", RequiredProfile: "tlsserver", CertName: "sbxr-domain", OwnerEmail: "owner@example.com", ConfigDirectory: "/var/lib/sbxr/certbot/production", Account: "production"},
+		{Action: systemchanges.CertificateDomainActivate, Identity: "direct.example.com", DestinationIP: "192.0.2.10", RequiredProfile: "tlsserver", CertName: "sbxr-domain", DirectTLSRevision: 7, DirectTLSSHA256: strings.Repeat("a", 64)},
+	}
+	for _, change := range changes {
+		step, err := systemchanges.NewCertificateStep(change)
+		got, ok := step.CertificateChange()
+		if err != nil || !ok || got != change {
+			t.Fatalf("typed domain certificate step = %#v, %v", step, err)
+		}
+	}
+	for _, mutate := range []func(*systemchanges.CertificateChange){
+		func(change *systemchanges.CertificateChange) { change.Identity = "other.example.com/unsafe" },
+		func(change *systemchanges.CertificateChange) { change.DestinationIP = "127.0.0.1" },
+		func(change *systemchanges.CertificateChange) { change.DirectTLSSHA256 = "invalid" },
+	} {
+		invalid := changes[2]
+		mutate(&invalid)
+		if _, err := systemchanges.NewCertificateStep(invalid); err == nil {
+			t.Fatalf("invalid domain contract accepted: %#v", invalid)
+		}
+	}
+}
