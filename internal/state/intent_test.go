@@ -39,6 +39,34 @@ func TestLoadCompleteDesiredState(t *testing.T) {
 	}
 }
 
+func TestLoadDistinguishesRemovedManagementTokenFromMissingSecret(t *testing.T) {
+	removed := completeDesiredState()
+	removed.Cloudflare.ManagementToken = InfrastructureSecret{}
+	removed.Cloudflare.ManagementTokenRemoved = true
+	removed.Cloudflare.ManagementTokenState = CloudflareManagementUnmanaged
+	result, err := New(intentStorage{document: documentFor(t, removed)}).Load(intentManagedRequest())
+	if err != nil || result.Status != Managed || result.Snapshot == nil || !result.Snapshot.DesiredState.Cloudflare.ManagementTokenRemoved {
+		t.Fatalf("deliberately removed token Load() = (%+v, %v)", result, err)
+	}
+
+	inconsistent := completeDesiredState()
+	inconsistent.Cloudflare.ManagementTokenRemoved = true
+	inconsistent.Cloudflare.ManagementTokenState = CloudflareManagementUnmanaged
+	result, err = New(intentStorage{document: documentFor(t, inconsistent)}).Load(intentManagedRequest())
+	var finding *Finding
+	if result.Status != RecoveryRequired || !errors.As(err, &finding) || finding.Code != "STATE-INTENT-INCOMPLETE" {
+		t.Fatalf("removed flag with stored token Load() = (%+v, %v)", result, err)
+	}
+
+	missingOutcome := completeDesiredState()
+	missingOutcome.Cloudflare.ManagementToken = InfrastructureSecret{}
+	missingOutcome.Cloudflare.ManagementTokenRemoved = true
+	result, err = New(intentStorage{document: documentFor(t, missingOutcome)}).Load(intentManagedRequest())
+	if result.Status != RecoveryRequired || !errors.As(err, &finding) || finding.Code != "STATE-INTENT-INCOMPLETE" {
+		t.Fatalf("removed token without dependency outcome Load() = (%+v, %v)", result, err)
+	}
+}
+
 func TestLoadRefusesIncompleteOrUnsafeIntent(t *testing.T) {
 	secretMarker := "CLOUDFLARE-MANAGEMENT-SECRET-MARKER"
 	tests := []struct {

@@ -1,14 +1,19 @@
 package state
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
+	"github.com/albertloky/SBXR/internal/networkpolicy"
 )
 
 func TestPrepareCommitValidatesCandidateAndSerializesLeastPrivilegeMaterial(t *testing.T) {
@@ -78,6 +83,192 @@ func TestPrepareCommitValidatesCandidateAndSerializesLeastPrivilegeMaterial(t *t
 			}
 		})
 	}
+}
+
+func TestPrepareManagementTokenChangeAcceptsOnlyTheReviewedCloudflarePlan(t *testing.T) {
+	for _, action := range []cloudflaretunnel.ManagementTokenAction{cloudflaretunnel.ManagementTokenReplace, cloudflaretunnel.ManagementTokenRemove} {
+		t.Run(string(action), func(t *testing.T) {
+			starting := completeDesiredState()
+			starting.Cloudflare.AccountID = strings.Repeat("1", 32)
+			starting.Cloudflare.ZoneID = strings.Repeat("2", 32)
+			storage := &mutableStateStorage{document: documentFor(t, starting)}
+			stateModule := New(storage)
+			loaded, err := stateModule.Load(intentManagedRequest())
+			if err != nil {
+				t.Fatal(err)
+			}
+			template := starting
+			template.Cloudflare.ManagementToken = InfrastructureSecret{}
+			if action == cloudflaretunnel.ManagementTokenRemove {
+				template.Cloudflare.ManagementTokenRemoved = true
+				template.Cloudflare.ManagementTokenState = CloudflareManagementUnmanaged
+			}
+			templateJSON, err := marshalProtectedJSON(template)
+			if err != nil {
+				t.Fatal(err)
+			}
+			digest := sha256.Sum256(templateJSON)
+			templateSHA := hex.EncodeToString(digest[:])
+			token := cloudflaretunnel.ManagementToken{}
+			final := template
+			if action == cloudflaretunnel.ManagementTokenReplace {
+				token, err = cloudflaretunnel.NewManagementToken("cfat_REPLACEMENT-TOKEN-SECRET-MARKER-000000")
+				if err != nil {
+					t.Fatal(err)
+				}
+				final.Cloudflare.ManagementToken = NewInfrastructureSecret("cfat_REPLACEMENT-TOKEN-SECRET-MARKER-000000")
+			}
+			provider := &deferredCloudflareAPI{}
+			var inventory cloudflaretunnel.ManagementTokenInventoryAuthority
+			if action == cloudflaretunnel.ManagementTokenRemove {
+				inventory, err = stateModule.ManagementTokenInventory(loaded)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			planResult := cloudflaretunnel.New(provider, cloudflaretunnel.SystemClock{}).Plan(context.Background(), cloudflaretunnel.PlanRequest{
+				Authority: cloudflaretunnel.ViewRequest{AccountID: starting.Cloudflare.AccountID, ZoneID: starting.Cloudflare.ZoneID, ZoneName: starting.Cloudflare.ZoneName, Token: token, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
+				ChangeSet: "cloudflare-token-change", StartingRevision: 7, StartingStateSHA256: loaded.loaded.payloadChecksum, DesiredStateSHA256: templateSHA,
+				ManagementToken: stateTestManagementTokenChange(action, inventory),
+			})
+			if planResult.Plan == nil {
+				t.Fatalf("token Plan = %+v", planResult.Health)
+			}
+			request := preparedRequest(t, loaded, template, "cloudflare-token-change")
+			validator := request.SemanticValidators.Cloudflare.(*validatingSeams)
+			validator.want = final
+			request.ServiceMaterials = serviceMaterialsFor(final)
+			request.ReviewedInputs, err = NewReviewedInputs(PlanIdentity(planResult.Plan.Identity()), planResult.Plan.SHA256(), request.ReviewedInputs.managed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := stateModule.PrepareCommit(request); err == nil {
+				t.Fatal("ordinary PrepareCommit accepted a management-token change")
+			}
+			loaded, err = stateModule.Load(intentManagedRequest())
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Loaded = loaded
+			prepared, err := stateModule.PrepareManagementTokenCommit(request, planResult.Plan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if prepared.candidate.Cloudflare.ManagementTokenRemoved != (action == cloudflaretunnel.ManagementTokenRemove) || prepared.candidate.Cloudflare.ManagementTokenState != final.Cloudflare.ManagementTokenState || prepared.candidate.Cloudflare.ManagementToken.value != final.Cloudflare.ManagementToken.value || strings.Contains(fmt.Sprintf("%+v %#v", prepared, planResult), "REPLACEMENT-TOKEN-SECRET-MARKER") {
+				t.Fatal("State did not own the protected token change")
+			}
+		})
+	}
+}
+
+func TestManagementTokenDependencyBindingRequiresEveryExactOwner(t *testing.T) {
+	if !exactManagementTokenDependencies([]string{"Tunnel", "DNS", "certificate", "profile", "repair", "update"}) || exactManagementTokenDependencies([]string{"Tunnel", "DNS", "certificate", "profile", "repair", "other"}) {
+		t.Fatal("State did not independently enforce the exact dependency inventory")
+	}
+}
+
+func TestPrepareManagementTokenReplacementRejectsDifferentSelectedAuthority(t *testing.T) {
+	starting := completeDesiredState()
+	starting.Cloudflare.AccountID = strings.Repeat("1", 32)
+	starting.Cloudflare.ZoneID = strings.Repeat("2", 32)
+	stateModule := New(&mutableStateStorage{document: documentFor(t, starting)})
+	loaded, err := stateModule.Load(intentManagedRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := starting
+	candidate.Cloudflare.AccountID = strings.Repeat("9", 32)
+	candidate.Cloudflare.ManagementToken = InfrastructureSecret{}
+	template, err := marshalProtectedJSON(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(template)
+	token, err := cloudflaretunnel.NewManagementToken("cfat_MISMATCHED-AUTHORITY-SECRET-MARKER-000000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := cloudflaretunnel.New(&deferredCloudflareAPI{}, cloudflaretunnel.SystemClock{}).Plan(context.Background(), cloudflaretunnel.PlanRequest{
+		Authority: cloudflaretunnel.ViewRequest{AccountID: starting.Cloudflare.AccountID, ZoneID: starting.Cloudflare.ZoneID, ZoneName: starting.Cloudflare.ZoneName, Token: token, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
+		ChangeSet: "cloudflare-token-authority-mismatch", StartingRevision: 7, StartingStateSHA256: loaded.loaded.payloadChecksum, DesiredStateSHA256: hex.EncodeToString(digest[:]),
+		ManagementToken: cloudflaretunnel.ManagementTokenChange{Action: cloudflaretunnel.ManagementTokenReplace, CurrentTokenID: strings.Repeat("5", 32)},
+	})
+	if plan.Plan == nil {
+		t.Fatalf("mismatch regression Plan = %+v", plan.Health)
+	}
+	request := preparedRequest(t, loaded, candidate, "cloudflare-token-authority-mismatch")
+	request.SemanticValidators.Cloudflare.(*validatingSeams).want = candidate
+	request.ServiceMaterials = serviceMaterialsFor(candidate)
+	request.ReviewedInputs, err = NewReviewedInputs(PlanIdentity(plan.Plan.Identity()), plan.Plan.SHA256(), request.ReviewedInputs.managed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = stateModule.PrepareManagementTokenCommit(request, plan.Plan)
+	var problem *Finding
+	if !errors.As(err, &problem) || problem.Code != "STATE-CLOUDFLARE-TOKEN-PLAN" {
+		t.Fatalf("mismatched selected authority = %v", err)
+	}
+}
+
+func TestManagementTokenRemovalUsesTheCurrentStateInventory(t *testing.T) {
+	starting := completeDesiredState()
+	starting.Cloudflare.AccountID = strings.Repeat("1", 32)
+	starting.Cloudflare.ZoneID = strings.Repeat("2", 32)
+	stateModule := New(&mutableStateStorage{document: documentFor(t, starting)})
+	loaded, err := stateModule.Load(intentManagedRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	inventory, err := stateModule.ManagementTokenInventory(loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := cloudflaretunnel.PlanRequest{
+		Authority: cloudflaretunnel.ViewRequest{AccountID: starting.Cloudflare.AccountID, ZoneID: starting.Cloudflare.ZoneID, ZoneName: starting.Cloudflare.ZoneName},
+		ChangeSet: "cloudflare-token-inventory", StartingRevision: 7, StartingStateSHA256: loaded.loaded.payloadChecksum, DesiredStateSHA256: testSHA('8'),
+		ManagementToken: cloudflaretunnel.ManagementTokenChange{Action: cloudflaretunnel.ManagementTokenRemove, CurrentTokenID: strings.Repeat("5", 32), Inventory: inventory},
+	}
+	module := cloudflaretunnel.New(&deferredCloudflareAPI{}, cloudflaretunnel.SystemClock{})
+	request.ManagementToken.Inventory = fakeManagementTokenInventory{}
+	if fake := module.Plan(context.Background(), request); fake.Plan != nil || fake.Health.Code != "CLOUDFLARE-MANAGEMENT-TOKEN-REFUSED" {
+		t.Fatalf("caller-made inventory = %+v", fake)
+	}
+	request.ManagementToken.Inventory = inventory
+	unresolved := module.Plan(context.Background(), request)
+	wantDependencies := []cloudflaretunnel.ManagementTokenDependency{cloudflaretunnel.TunnelDependency, cloudflaretunnel.DNSDependency, cloudflaretunnel.CertificateDependency, cloudflaretunnel.ProfileDependency, cloudflaretunnel.RepairDependency, cloudflaretunnel.UpdateDependency}
+	if unresolved.Plan != nil || unresolved.Health.Code != "CLOUDFLARE-MANAGEMENT-TOKEN-DEPENDENCIES" || !slices.Equal(unresolved.Dependencies, wantDependencies) || !slices.Equal(unresolved.Health.NextActions, []string{"Check now", "Replace token", "Remove from SBXR"}) {
+		t.Fatalf("unresolved State inventory = %+v", unresolved)
+	}
+	request.ManagementToken.Resolution = cloudflaretunnel.MarkDependenciesUnmanaged
+	resolved := module.Plan(context.Background(), request)
+	if resolved.Plan == nil || !slices.Equal(resolved.Dependencies, wantDependencies) {
+		t.Fatalf("resolved State inventory = %+v", resolved)
+	}
+	preview := strings.Join(resolved.ResultingState, "\n")
+	for _, dependency := range wantDependencies {
+		if !strings.Contains(preview, string(dependency)+" becomes mark dependencies unmanaged") {
+			t.Fatalf("removal preview omitted %s: %s", dependency, preview)
+		}
+	}
+	request.ManagementToken.Inventory = &ManagementTokenInventory{revision: 7, stateSHA256: loaded.loaded.payloadChecksum, dependencies: []string{}}
+	request.ManagementToken.Resolution = ""
+	if empty := module.Plan(context.Background(), request); empty.Plan == nil || len(empty.Dependencies) != 0 {
+		t.Fatalf("empty State inventory = %+v", empty)
+	}
+}
+
+type fakeManagementTokenInventory struct{}
+
+func (fakeManagementTokenInventory) StateManagementTokenInventory() ([]byte, bool) {
+	return []byte(`{"Revision":7,"StateSHA256":"` + strings.Repeat("a", 64) + `","Dependencies":[]}`), true
+}
+
+func stateTestManagementTokenChange(action cloudflaretunnel.ManagementTokenAction, inventory cloudflaretunnel.ManagementTokenInventoryAuthority) cloudflaretunnel.ManagementTokenChange {
+	change := cloudflaretunnel.ManagementTokenChange{Action: action, CurrentTokenID: strings.Repeat("5", 32), Inventory: inventory}
+	if action == cloudflaretunnel.ManagementTokenRemove {
+		change.Resolution = cloudflaretunnel.MarkDependenciesUnmanaged
+	}
+	return change
 }
 
 func TestPreparedServiceCopiesCannotBeRendered(t *testing.T) {
@@ -268,7 +459,8 @@ func (v *validatingSeams) ValidateCloudflare(got CloudflareSettings, secrets Inf
 	if v.panicModule == "cloudflaretunnel" {
 		panic("validator panic")
 	}
-	if secrets.ReadInfrastructureSecret(got.ManagementToken) == "" || secrets.ReadInfrastructureSecret(got.TunnelRunToken) == "" {
+	managementTokenValid := got.ManagementTokenRemoved && secrets.ReadInfrastructureSecret(got.ManagementToken) == "" || !got.ManagementTokenRemoved && secrets.ReadInfrastructureSecret(got.ManagementToken) != ""
+	if !managementTokenValid || secrets.ReadInfrastructureSecret(got.TunnelRunToken) == "" {
 		return errors.New("protected Cloudflare value unavailable")
 	}
 	if v.dynamicCloudflare {

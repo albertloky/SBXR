@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/netip"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -95,18 +96,53 @@ func (token TunnelRunToken) ConsumeInfrastructureSecret() (string, bool) {
 }
 
 type PlanRequest struct {
-	Authority          ViewRequest
-	ChangeSet          string
-	StartingRevision   uint64
-	DesiredStateSHA256 string
-	TunnelName         string
-	XHTTPHostname      string
-	WebSocketHostname  string
-	DirectHostname     string
-	PublicIPv4         string
-	PublicIPv6         string
-	CloudflaredVersion string
+	Authority           ViewRequest
+	ChangeSet           string
+	StartingRevision    uint64
+	StartingStateSHA256 string
+	DesiredStateSHA256  string
+	TunnelName          string
+	XHTTPHostname       string
+	WebSocketHostname   string
+	DirectHostname      string
+	PublicIPv4          string
+	PublicIPv6          string
+	CloudflaredVersion  string
+	ManagementToken     ManagementTokenChange
 }
+
+type ManagementTokenAction string
+
+const (
+	ManagementTokenReplace ManagementTokenAction = "replace"
+	ManagementTokenRemove  ManagementTokenAction = "remove"
+)
+
+type ManagementTokenDependency string
+
+const (
+	TunnelDependency      ManagementTokenDependency = "Tunnel"
+	DNSDependency         ManagementTokenDependency = "DNS"
+	CertificateDependency ManagementTokenDependency = "certificate"
+	ProfileDependency     ManagementTokenDependency = "profile"
+	RepairDependency      ManagementTokenDependency = "repair"
+	UpdateDependency      ManagementTokenDependency = "update"
+)
+
+type ManagementTokenChange struct {
+	Action         ManagementTokenAction
+	CurrentTokenID string
+	Inventory      ManagementTokenInventoryAuthority
+	Resolution     ManagementTokenResolution
+}
+
+type ManagementTokenInventoryAuthority interface {
+	StateManagementTokenInventory() (bindingJSON []byte, valid bool)
+}
+
+type ManagementTokenResolution string
+
+const MarkDependenciesUnmanaged ManagementTokenResolution = "mark dependencies unmanaged"
 
 type Plan struct {
 	identity, sha256, observation string
@@ -115,6 +151,7 @@ type Plan struct {
 	checks                        []systemchanges.Check
 	binding                       cloudflareEvidenceBinding
 	runToken                      TunnelRunToken
+	managementToken               VerifiedManagementToken
 	used                          *atomic.Bool
 }
 
@@ -146,7 +183,14 @@ func (plan *Plan) String() string {
 	if plan == nil {
 		return "Cloudflare Plan: unavailable"
 	}
-	return fmt.Sprintf("Cloudflare Plan %s: one Tunnel %s; XHTTP %s to %s; WebSocket %s to %s; DNS-only Direct TLS %s; cloudflared.service --token-file %s; HTTP 404 fallback", plan.identity, plan.request.TunnelName, plan.request.XHTTPHostname, xhttpOrigin, plan.request.WebSocketHostname, webSocketOrigin, plan.request.DirectHostname, cloudflaredTokenPath)
+	switch plan.request.ManagementToken.Action {
+	case ManagementTokenReplace:
+		return fmt.Sprintf("Cloudflare Plan %s: stored management token changes only at State publication; old token remains active; resources remain unchanged", plan.identity)
+	case ManagementTokenRemove:
+		return fmt.Sprintf("Cloudflare Plan %s: stored management token becomes deliberately absent; provider health becomes Unknown; repair and update remain blocked", plan.identity)
+	default:
+		return fmt.Sprintf("Cloudflare Plan %s: one Tunnel %s; XHTTP %s to %s; WebSocket %s to %s; DNS-only Direct TLS %s; cloudflared.service --token-file %s; HTTP 404 fallback", plan.identity, plan.request.TunnelName, plan.request.XHTTPHostname, xhttpOrigin, plan.request.WebSocketHostname, webSocketOrigin, plan.request.DirectHostname, cloudflaredTokenPath)
+	}
 }
 func (plan *Plan) GoString() string { return plan.String() }
 
@@ -154,6 +198,9 @@ type PlanResult struct {
 	Plan               *Plan
 	Health             Health
 	SuggestedHostnames []string
+	Dependencies       []ManagementTokenDependency
+	ResultingState     []string
+	WritesProven       bool
 }
 
 type cloudflareEvidenceBinding struct {
@@ -161,6 +208,9 @@ type cloudflareEvidenceBinding struct {
 }
 
 func (i Interface) Plan(ctx context.Context, request PlanRequest) PlanResult {
+	if request.ManagementToken.Action != "" {
+		return i.planManagementToken(ctx, request)
+	}
 	health := Health{Module: "Cloudflare Tunnel", Outcome: Failed, Code: "CLOUDFLARE-PLAN-REFUSED", NextActions: []string{"Check again", "Back"}}
 	planner, ok := i.api.(MutationPlanner)
 	if !ok || !validPlanRequest(request) {
@@ -219,6 +269,156 @@ func (i Interface) Plan(ctx context.Context, request PlanRequest) PlanResult {
 	return PlanResult{Plan: plan, Health: finish(healthResult(i, health)).Health}
 }
 
+func (i Interface) planManagementToken(ctx context.Context, request PlanRequest) PlanResult {
+	failed := func(code, explanation string, dependencies []ManagementTokenDependency) PlanResult {
+		health := finish(healthResult(i, Health{Module: "Cloudflare Tunnel", Outcome: Failed, Code: code, Explanation: explanation, NextActions: []string{"Check now", "Replace token", "Remove from SBXR"}})).Health
+		return PlanResult{Health: health, Dependencies: append([]ManagementTokenDependency(nil), dependencies...)}
+	}
+	change := request.ManagementToken
+	if i.clock == nil || !safePlanName.MatchString(request.ChangeSet) || request.StartingRevision == 0 || !sha256Text.MatchString(request.StartingStateSHA256) || !sha256Text.MatchString(request.DesiredStateSHA256) || !immutableID.MatchString(change.CurrentTokenID) || !immutableID.MatchString(request.Authority.AccountID) || !immutableID.MatchString(request.Authority.ZoneID) || !validZoneName(request.Authority.ZoneName) {
+		return failed("CLOUDFLARE-MANAGEMENT-TOKEN-REFUSED", "The management-token change is incomplete or outside the fixed contract.", nil)
+	}
+	var replacement VerifiedManagementToken
+	var dependencies []ManagementTokenDependency
+	candidateTokenID := ""
+	resultingState := []string{}
+	switch change.Action {
+	case ManagementTokenReplace:
+		if change.Inventory != nil || change.Resolution != "" {
+			return failed("CLOUDFLARE-MANAGEMENT-TOKEN-REFUSED", "Replacement does not accept a removal dependency outcome.", nil)
+		}
+		view := i.View(ctx, request.Authority)
+		if view.Health.Outcome != Healthy {
+			return PlanResult{Health: view.Health}
+		}
+		if view.Credential.ID == change.CurrentTokenID {
+			return failed("CLOUDFLARE-MANAGEMENT-TOKEN-UNCHANGED", "The replacement is the currently stored Cloudflare token.", nil)
+		}
+		var ok bool
+		replacement, ok = view.VerifiedManagementToken()
+		if !ok {
+			return failed("CLOUDFLARE-MANAGEMENT-TOKEN-REFUSED", "The verified replacement handoff is unavailable.", nil)
+		}
+		candidateTokenID = view.Credential.ID
+		resultingState = []string{"stored management token changes only at State publication", "old token remains active", "resources remain unchanged"}
+	case ManagementTokenRemove:
+		var valid bool
+		dependencies, valid = stateManagementTokenInventory(change.Inventory, request.StartingRevision, request.StartingStateSHA256)
+		if !valid {
+			return failed("CLOUDFLARE-MANAGEMENT-TOKEN-REFUSED", "Removal requires the current State-owned dependency inventory.", nil)
+		}
+		if request.Authority.Token.value != "" || request.Authority.TokenRemoved {
+			return failed("CLOUDFLARE-MANAGEMENT-TOKEN-REFUSED", "Removal accepts no replacement credential.", dependencies)
+		}
+		if len(dependencies) != 0 && (change.Resolution != MarkDependenciesUnmanaged || len(dependencies) != 6) || len(dependencies) == 0 && change.Resolution != "" {
+			return failed("CLOUDFLARE-MANAGEMENT-TOKEN-DEPENDENCIES", "The stored token remains required by reviewed dependent behavior.", dependencies)
+		}
+		resultingState = []string{"stored management token becomes deliberately absent"}
+		for _, dependency := range dependencies {
+			resultingState = append(resultingState, string(dependency)+" becomes "+string(MarkDependenciesUnmanaged))
+		}
+		resultingState = append(resultingState, "provider health becomes Unknown", "repair and update remain blocked")
+	default:
+		return failed("CLOUDFLARE-MANAGEMENT-TOKEN-REFUSED", "The management-token action is unsupported.", dependencies)
+	}
+	steps, err := tokenLifecycleSteps()
+	if err != nil {
+		return failed("CLOUDFLARE-MANAGEMENT-TOKEN-REFUSED", "The management-token transaction could not be built.", dependencies)
+	}
+	bound := struct {
+		Request          PlanRequest
+		CandidateTokenID string
+		Dependencies     []ManagementTokenDependency
+	}{request, candidateTokenID, dependencies}
+	bound.Request.Authority.Token = ManagementToken{}
+	bound.Request.ManagementToken.Inventory = nil
+	encoded, _ := json.Marshal(bound)
+	digest := sha256.Sum256(encoded)
+	checksum := hex.EncodeToString(digest[:])
+	identity := request.ChangeSet + "-plan-" + checksum[:12]
+	use, _ := planUses.LoadOrStore(identity, &atomic.Bool{})
+	plan := &Plan{identity: identity, sha256: checksum, request: request, steps: steps, checks: tokenLifecycleChecks(change.Action), managementToken: replacement, used: use.(*atomic.Bool)}
+	health := finish(healthResult(i, Health{Module: "Cloudflare Tunnel", Outcome: Healthy, Code: "CLOUDFLARE-MANAGEMENT-TOKEN-READY", Explanation: "The reviewed management-token change is ready for the State and System Changes transaction."})).Health
+	return PlanResult{Plan: plan, Health: health, Dependencies: append([]ManagementTokenDependency(nil), dependencies...), ResultingState: resultingState}
+}
+
+func stateManagementTokenInventory(authority ManagementTokenInventoryAuthority, revision uint64, stateSHA256 string) ([]ManagementTokenDependency, bool) {
+	typeOf := reflect.TypeOf(authority)
+	if typeOf == nil || typeOf.Kind() != reflect.Pointer || typeOf.Elem().PkgPath() != "github.com/albertloky/SBXR/internal/state" || typeOf.Elem().Name() != "ManagementTokenInventory" {
+		return nil, false
+	}
+	bindingJSON, valid := authority.StateManagementTokenInventory()
+	var binding struct {
+		Revision     uint64
+		StateSHA256  string
+		Dependencies []ManagementTokenDependency
+	}
+	if json.Unmarshal(bindingJSON, &binding) != nil || !valid || binding.Revision != revision || binding.StateSHA256 != stateSHA256 || !validTokenDependencies(binding.Dependencies) {
+		return nil, false
+	}
+	return binding.Dependencies, true
+}
+
+func validTokenDependencies(dependencies []ManagementTokenDependency) bool {
+	seen := map[ManagementTokenDependency]bool{}
+	for _, dependency := range dependencies {
+		switch dependency {
+		case TunnelDependency, DNSDependency, CertificateDependency, ProfileDependency, RepairDependency, UpdateDependency:
+		default:
+			return false
+		}
+		if seen[dependency] {
+			return false
+		}
+		seen[dependency] = true
+	}
+	return true
+}
+
+func tokenLifecycleSteps() ([]systemchanges.Step, error) {
+	step, err := systemchanges.NewStep(systemchanges.CloudflareModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
+	if err != nil {
+		return nil, err
+	}
+	return []systemchanges.Step{step}, nil
+}
+
+func tokenLifecycleChecks(action ManagementTokenAction) []systemchanges.Check {
+	code := "CLOUDFLARE-MANAGEMENT-TOKEN-REPLACED"
+	if action == ManagementTokenRemove {
+		code = "CLOUDFLARE-MANAGEMENT-TOKEN-REMOVED"
+	}
+	return []systemchanges.Check{
+		{Owner: systemchanges.CloudflareModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: code},
+		{Owner: systemchanges.CloudflareModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PostPublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: code},
+	}
+}
+
+func (plan *Plan) StateManagementTokenChange() (source any, bindingJSON []byte, templateSHA256 string, valid bool) {
+	if plan == nil || plan.request.ManagementToken.Action == "" || plan.used == nil {
+		return nil, nil, "", false
+	}
+	change := plan.request.ManagementToken
+	bindingJSON, err := json.Marshal(struct {
+		Action         ManagementTokenAction
+		CurrentTokenID string
+		AccountID      string
+		ZoneID         string
+		ZoneName       string
+		Dependencies   []ManagementTokenDependency
+		Resolution     ManagementTokenResolution
+	}{change.Action, change.CurrentTokenID, plan.request.Authority.AccountID, plan.request.Authority.ZoneID, plan.request.Authority.ZoneName, planDependencies(plan), change.Resolution})
+	if change.Action == ManagementTokenReplace {
+		source = plan.managementToken
+	}
+	return source, bindingJSON, plan.request.DesiredStateSHA256, err == nil
+}
+
+func planDependencies(plan *Plan) []ManagementTokenDependency {
+	dependencies, _ := stateManagementTokenInventory(plan.request.ManagementToken.Inventory, plan.request.StartingRevision, plan.request.StartingStateSHA256)
+	return dependencies
+}
+
 func suggestHostname(hostname, observation string) string {
 	digest := sha256.Sum256([]byte(hostname + "\n" + observation))
 	label, rest, ok := strings.Cut(hostname, ".")
@@ -258,7 +458,17 @@ func (plan *Plan) Apply(module systemchanges.Interface, prepared systemchanges.P
 	if plan == nil || plan.used == nil || !plan.used.CompareAndSwap(false, true) || prepared == nil || !sha256Text.MatchString(volatileSHA256) || starting.Revision != plan.request.StartingRevision {
 		return module.Apply(nil)
 	}
-	changeSet, err := systemchanges.NewChangeSet(systemchanges.ChangeSetSpec{Identity: plan.request.ChangeSet, Mutation: systemchanges.InstallationMutation, OutcomeOwner: systemchanges.CloudflareModule, StartingState: starting, TargetStateSHA256: plan.request.DesiredStateSHA256, Plan: systemchanges.PlanBinding{Identity: plan.identity, SHA256: plan.sha256, VolatileSHA256: volatileSHA256}, PreparedState: prepared, Steps: plan.steps, Checks: plan.checks, Timeouts: systemchanges.Timeouts{Step: 5 * time.Minute, Check: 5 * time.Minute}, Disk: disk})
+	mutation := systemchanges.InstallationMutation
+	targetSHA256 := plan.request.DesiredStateSHA256
+	if plan.request.ManagementToken.Action != "" {
+		changeSet, revision, startingSHA256, candidateSHA256, planIdentity, planSHA256, valid := prepared.SystemChangesPreparedState()
+		if !valid || starting.Status != systemchanges.Managed || starting.SHA256 != plan.request.StartingStateSHA256 || changeSet != plan.request.ChangeSet || revision != starting.Revision+1 || startingSHA256 != starting.SHA256 || planIdentity != plan.identity || planSHA256 != plan.sha256 || !sha256Text.MatchString(candidateSHA256) {
+			return module.Apply(nil)
+		}
+		mutation = systemchanges.SettingChangeMutation
+		targetSHA256 = candidateSHA256
+	}
+	changeSet, err := systemchanges.NewChangeSet(systemchanges.ChangeSetSpec{Identity: plan.request.ChangeSet, Mutation: mutation, OutcomeOwner: systemchanges.CloudflareModule, StartingState: starting, TargetStateSHA256: targetSHA256, Plan: systemchanges.PlanBinding{Identity: plan.identity, SHA256: plan.sha256, VolatileSHA256: volatileSHA256}, PreparedState: prepared, Steps: plan.steps, Checks: plan.checks, Timeouts: systemchanges.Timeouts{Step: 5 * time.Minute, Check: 5 * time.Minute}, Disk: disk})
 	if err != nil {
 		return module.Apply(nil)
 	}

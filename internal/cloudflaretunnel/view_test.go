@@ -108,6 +108,23 @@ func TestViewVerifiesOneScopedCloudflareAuthority(t *testing.T) {
 	}
 }
 
+func TestViewReportsDeliberatelyRemovedManagementTokenWithoutFalseHealth(t *testing.T) {
+	result := cloudflaretunnel.New(nil, &controlledClock{now: time.Date(2026, time.August, 7, 12, 0, 0, 0, time.UTC)}).View(context.Background(), cloudflaretunnel.ViewRequest{
+		AccountID:    accountID,
+		ZoneID:       zoneID,
+		ZoneName:     "example.com",
+		TokenRemoved: true,
+		NetworkPath:  networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed},
+	})
+	wantActions := []string{"Check now", "Replace token", "Remove from SBXR"}
+	if result.Health.Outcome != cloudflaretunnel.Unknown || result.Health.Code != "CLOUDFLARE-MANAGEMENT-TOKEN-REMOVED" || !slices.Equal(result.Health.NextActions, wantActions) || result.Capability.ReadsVerified || result.Capability.WritesProven {
+		t.Fatalf("removed-token View = %+v", result)
+	}
+	if _, ok := result.VerifiedManagementToken(); ok {
+		t.Fatal("removed-token View returned stored authority")
+	}
+}
+
 func TestViewFailsClosedWithoutLeakingAuthority(t *testing.T) {
 	managementToken, err := cloudflaretunnel.NewManagementToken(token)
 	if err != nil {

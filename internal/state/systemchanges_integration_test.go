@@ -550,6 +550,145 @@ func TestDeferredCloudflareFinalizationPublishesProviderValuesInRevisionOne(t *t
 	}
 }
 
+func TestManagementTokenChangePublishesOnceWithoutExposingEitherToken(t *testing.T) {
+	for _, action := range []cloudflaretunnel.ManagementTokenAction{cloudflaretunnel.ManagementTokenReplace, cloudflaretunnel.ManagementTokenRemove} {
+		t.Run(string(action), func(t *testing.T) {
+			stateModule, plan, prepared, observed, storage := preparedManagementTokenChange(t, action, "success-"+string(action))
+			adapter := &systemChangesAdapter{observation: observed, beforeStep: func() error {
+				if !strings.Contains(storage.document, "CLOUDFLARE-MANAGEMENT-SECRET-MARKER") || strings.Contains(storage.document, "REPLACEMENT-TOKEN-SECRET-MARKER") {
+					return errors.New("stored token changed before State publication")
+				}
+				return nil
+			}}
+			result := plan.Apply(systemchanges.New(adapter), prepared, systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: observed.StateSHA256}, observed.VolatileSHA256, tokenChangeDisk())
+			if result.Outcome != systemchanges.Completed {
+				t.Fatalf("token change Apply = %+v; events=%v", result, adapter.events)
+			}
+			loaded, err := stateModule.Load(intentManagedRequestForRevision(8, ChangeSetIdentity("cloudflare-token-success-"+string(action))))
+			if err != nil || loaded.Snapshot == nil {
+				t.Fatalf("published token State = (%+v, %v)", loaded, err)
+			}
+			cloudflare := loaded.Snapshot.DesiredState.Cloudflare
+			if action == cloudflaretunnel.ManagementTokenReplace && (cloudflare.ManagementTokenRemoved || cloudflare.ManagementTokenState != "" || cloudflare.ManagementToken.value != "cfat_REPLACEMENT-TOKEN-SECRET-MARKER-000000") || action == cloudflaretunnel.ManagementTokenRemove && (!cloudflare.ManagementTokenRemoved || cloudflare.ManagementTokenState != CloudflareManagementUnmanaged || cloudflare.ManagementToken.isSet()) {
+				t.Fatalf("published token facts = %+v", cloudflare)
+			}
+			rendered := strings.Join(adapter.events, "\n") + fmt.Sprintf("%+v", result)
+			if strings.Contains(rendered, "MANAGEMENT-SECRET-MARKER") || strings.Contains(rendered, "REPLACEMENT-TOKEN-SECRET-MARKER") {
+				t.Fatal("token change escaped protected State artifacts")
+			}
+		})
+	}
+}
+
+func TestManagementTokenReplacementRollbackAndRestartRestoreTheOldToken(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		restart bool
+	}{
+		{name: "required failure"},
+		{name: "restart after publication", restart: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stateModule, plan, prepared, observed, _ := preparedManagementTokenChange(t, cloudflaretunnel.ManagementTokenReplace, strings.ReplaceAll(test.name, " ", "-"))
+			adapter := &systemChangesAdapter{observation: observed, stateRecovery: stateModule}
+			if test.restart {
+				adapter.crashAfter = systemchanges.StatePublished
+				func() {
+					defer func() { _ = recover() }()
+					_ = plan.Apply(systemchanges.New(adapter), prepared, systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: observed.StateSHA256}, observed.VolatileSHA256, tokenChangeDisk())
+				}()
+				if !adapter.crashed {
+					t.Fatal("controlled token-replacement worker did not stop")
+				}
+				if result := systemchanges.New(adapter).Recover(); result.Outcome != systemchanges.RollbackSucceeded {
+					t.Fatalf("replacement restart recovery = %+v; events=%v", result, adapter.events)
+				}
+			} else {
+				adapter.agreementErr = errors.New("controlled replacement agreement failure")
+				result := plan.Apply(systemchanges.New(adapter), prepared, systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: observed.StateSHA256}, observed.VolatileSHA256, tokenChangeDisk())
+				if result.Outcome != systemchanges.RollbackSucceeded {
+					t.Fatalf("replacement rollback = %+v; events=%v", result, adapter.events)
+				}
+			}
+			loaded, err := stateModule.Load(intentManagedRequest())
+			if err != nil || loaded.Snapshot == nil || loaded.Snapshot.DesiredState.Cloudflare.ManagementToken.value != "CLOUDFLARE-MANAGEMENT-SECRET-MARKER" || loaded.Snapshot.DesiredState.Cloudflare.ManagementTokenRemoved {
+				t.Fatalf("replacement rollback State = (%+v, %v)", loaded, err)
+			}
+		})
+	}
+}
+
+func preparedManagementTokenChange(t *testing.T, action cloudflaretunnel.ManagementTokenAction, suffix string) (Interface, *cloudflaretunnel.Plan, *PreparedCommit, systemchanges.Observation, *mutableStateStorage) {
+	t.Helper()
+	starting := completeDesiredState()
+	starting.Cloudflare.AccountID = strings.Repeat("1", 32)
+	starting.Cloudflare.ZoneID = strings.Repeat("2", 32)
+	storage := &mutableStateStorage{document: documentFor(t, starting)}
+	stateModule := New(storage)
+	loaded, err := stateModule.Load(intentManagedRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := starting
+	template.Cloudflare.ManagementToken = InfrastructureSecret{}
+	if action == cloudflaretunnel.ManagementTokenRemove {
+		template.Cloudflare.ManagementTokenRemoved = true
+		template.Cloudflare.ManagementTokenState = CloudflareManagementUnmanaged
+	}
+	templateJSON, err := marshalProtectedJSON(template)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(templateJSON)
+	changeSet := "cloudflare-token-" + suffix
+	managementToken := cloudflaretunnel.ManagementToken{}
+	final := template
+	if action == cloudflaretunnel.ManagementTokenReplace {
+		managementToken, err = cloudflaretunnel.NewManagementToken("cfat_REPLACEMENT-TOKEN-SECRET-MARKER-000000")
+		if err != nil {
+			t.Fatal(err)
+		}
+		final.Cloudflare.ManagementToken = NewInfrastructureSecret("cfat_REPLACEMENT-TOKEN-SECRET-MARKER-000000")
+	}
+	provider := &deferredCloudflareAPI{}
+	var inventory cloudflaretunnel.ManagementTokenInventoryAuthority
+	if action == cloudflaretunnel.ManagementTokenRemove {
+		inventory, err = stateModule.ManagementTokenInventory(loaded)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	planResult := cloudflaretunnel.New(provider, cloudflaretunnel.SystemClock{}).Plan(t.Context(), cloudflaretunnel.PlanRequest{
+		Authority: cloudflaretunnel.ViewRequest{AccountID: starting.Cloudflare.AccountID, ZoneID: starting.Cloudflare.ZoneID, ZoneName: starting.Cloudflare.ZoneName, Token: managementToken, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
+		ChangeSet: changeSet, StartingRevision: 7, StartingStateSHA256: loaded.loaded.payloadChecksum, DesiredStateSHA256: fmt.Sprintf("%x", digest), ManagementToken: stateTestManagementTokenChange(action, inventory),
+	})
+	if planResult.Plan == nil {
+		t.Fatalf("management-token Plan = %+v", planResult.Health)
+	}
+	request := preparedRequest(t, loaded, template, ChangeSetIdentity(changeSet))
+	validator := request.SemanticValidators.Cloudflare.(*validatingSeams)
+	validator.want = final
+	request.ServiceMaterials = serviceMaterialsFor(final)
+	request.ReviewedInputs, err = NewReviewedInputs(PlanIdentity(planResult.Plan.Identity()), planResult.Plan.SHA256(), request.ReviewedInputs.managed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := stateModule.PrepareManagementTokenCommit(request, planResult.Plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed := systemchanges.Observation{Status: systemchanges.Managed, LastChangeSet: "change-0007", StateRevision: 7, StateSHA256: loaded.loaded.payloadChecksum, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, VolatileSHA256: testSHA('2'), FilesystemBytes: 20 << 30, AvailableBytes: 5 << 30, WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}
+	return stateModule, planResult.Plan, prepared, observed, storage
+}
+
+func tokenChangeDisk() systemchanges.DiskRequirement {
+	return systemchanges.DiskRequirement{PreparationBytes: 100, TemporaryBytes: 100, SnapshotBytes: 100, JournalBytes: 100, RollbackBytes: 100, OverheadBytes: 100}
+}
+
+func intentManagedRequestForRevision(revision uint64, changeSet ChangeSetIdentity) LoadRequest {
+	return LoadRequest{Baseline: ManagedEvidence, SupportedRelease: testRelease, Lineage: &LineageProof{Revision: revision, LastCompletedChangeSet: changeSet, ReleaseIdentity: testRelease}}
+}
+
 type deferredCloudflareAPI struct{ dns int }
 
 func (api *deferredCloudflareAPI) Observe(context.Context, cloudflaretunnel.ObservationRequest) (cloudflaretunnel.Observation, error) {

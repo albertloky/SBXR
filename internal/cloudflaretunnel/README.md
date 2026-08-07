@@ -41,6 +41,16 @@ The production Adapter uses only Bearer authentication and the selected resource
 
 Provider response text and unknown fields do not cross the Module Interface. Malformed, ambiguous, unauthorized, forbidden, permanent, and temporary failures become stable typed Health results. Temporary checks stop after three attempts and two 30-second waits inside one 60-second bound.
 
+## Management token lifecycle
+
+The Owner-facing actions are exactly `Check now`, `Replace token`, and `Remove from SBXR`.
+
+Replacement verifies the proposed token against the selected account and zone and proves all required reads before a Change Set exists. This preflight does not prove writes. The old stored token remains active until the one State publication step commits the verified replacement; any earlier failure rolls back to the old token.
+
+Removal is also one reviewed Change Set. State derives a protected inventory from the exact loaded revision and checksum; callers cannot write or substitute that list. The Plan shows the resulting state for Tunnel, DNS, certificate, profile, repair, and update behavior and must either find no dependency or apply one consistent reviewed result to all six. An unresolved or partial inventory stops before mutation. State records both deliberate token absence and the shared `Unmanaged` outcome explicitly, so a missing secret cannot be mistaken for an approved removal. After publication, provider authority and every authority-dependent health fact are `Unknown`, while repair and update stay blocked; no dependent fact may remain falsely Managed or Healthy.
+
+SBXR never requests `Account API Tokens Write`, revokes the old provider token, or claims the replacement preflight proved provider writes. Provider revocation, if wanted, remains an Owner action after the Change Set is complete.
+
 ## Current onboarding labels
 
 The walkthrough was qualified on `2026-08-07` against these Cloudflare dashboard labels:
@@ -55,7 +65,7 @@ Every release containing onboarding changes must requalify these labels. The fix
 
 The complete token remains in the `ManagementToken` value supplied by the caller and is sent only in the HTTP `Authorization` header. Its ordinary string and Go formatting are masked. General `View` output contains no token marker; the dedicated credential detail may return only the first and last four characters.
 
-`View` has no persistence path. Before `Apply`, abandonment, TUI closure, SSH loss, failed preflight, or process exit therefore leaves no stored token. Only a Healthy result exposes an opaque `VerifiedManagementToken` handoff to State. The existing State/System Changes transaction stores that handoff only when fresh-install revision `1` publishes; rollback to the proven Not installed baseline removes it.
+`View` has no persistence path. Before `Apply`, abandonment, TUI closure, SSH loss, failed preflight, or process exit therefore leaves no stored token. Only a Healthy result exposes an opaque `VerifiedManagementToken` handoff to State. The existing State/System Changes transaction stores that handoff only when fresh-install revision `1` or a later replacement publishes; rollback restores the exact prior State. A deliberately removed token is rendered as removed with `Unknown` provider health and exposes no verified handoff.
 
 Cloudflare Tunnel consumes Network Policy's typed proof for verified Cloudflare HTTPS and outbound TCP and UDP `7844`. It cannot edit the resolver, outbound network, provider firewall, or Network Policy result.
 

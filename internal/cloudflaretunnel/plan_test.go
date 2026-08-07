@@ -167,6 +167,80 @@ func TestPlanApplyRefusesDifferentStartingRevision(t *testing.T) {
 	}
 }
 
+func TestPlanReviewsManagementTokenReplacementWithoutChangingProviderAuthority(t *testing.T) {
+	module, request := managedTokenPlanRequest(t, ManagementTokenReplace)
+	result := module.Plan(context.Background(), request)
+	if result.Plan == nil || result.Health.Outcome != Healthy || result.Health.Code != "CLOUDFLARE-MANAGEMENT-TOKEN-READY" || result.WritesProven {
+		t.Fatalf("replacement Plan = %+v", result)
+	}
+	if len(result.Plan.Steps()) != 1 || len(result.Plan.Checks()) != 2 || result.Plan.Steps()[0].Forward() != systemchanges.ActivatePreparedConfiguration {
+		t.Fatalf("replacement transaction = steps %#v checks %#v", result.Plan.Steps(), result.Plan.Checks())
+	}
+	preview := fmt.Sprintf("%+v %#v %s", result, result.Plan, result.Plan)
+	for _, required := range []string{"stored management token changes only at State publication", "old token remains active", "resources remain unchanged"} {
+		if !strings.Contains(preview, required) {
+			t.Fatalf("replacement preview omitted %q: %s", required, preview)
+		}
+	}
+	if strings.Contains(preview, "PLAN-SECRET-MARKER") {
+		t.Fatalf("replacement preview leaked token: %s", preview)
+	}
+	source, _, templateSHA, valid := result.Plan.StateManagementTokenChange()
+	if source == nil || templateSHA != request.DesiredStateSHA256 || !valid {
+		t.Fatal("replacement Plan omitted the one-use State handoff")
+	}
+	request.ManagementToken.CurrentTokenID = healthyAuthorityObservation().Token.ID
+	if same := module.Plan(context.Background(), request); same.Plan != nil || same.Health.Code != "CLOUDFLARE-MANAGEMENT-TOKEN-UNCHANGED" {
+		t.Fatalf("same-token replacement = %+v", same)
+	}
+}
+
+func TestManagementTokenPlanApplyBindsManagedLineageAndBurnsEveryOutcome(t *testing.T) {
+	module, request := managedTokenPlanRequest(t, ManagementTokenReplace)
+	plan := module.Plan(context.Background(), request).Plan
+	prepared := &tokenPreparedState{changeSet: request.ChangeSet, revision: 8, starting: request.StartingStateSHA256, candidate: strings.Repeat("d", 64), planIdentity: plan.Identity(), planSHA: plan.SHA256()}
+	disk := systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}
+	starting := systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: request.StartingStateSHA256}
+	result := plan.Apply(systemchanges.Interface{}, prepared, starting, strings.Repeat("e", 64), disk)
+	if result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-ADAPTER-UNAVAILABLE" || !result.PlanConsumed {
+		t.Fatalf("valid token Apply = %+v", result)
+	}
+	identical := module.Plan(context.Background(), request).Plan
+	if reused := identical.Apply(systemchanges.Interface{}, prepared, starting, strings.Repeat("e", 64), disk); reused.Finding == nil || reused.Finding.Code != "SYSTEM-CHANGES-CHANGE-SET-REQUIRED" {
+		t.Fatalf("reused token Apply = %+v", reused)
+	}
+	freshModule, freshRequest := managedTokenPlanRequest(t, ManagementTokenReplace)
+	freshRequest.ChangeSet = "cloudflare-token-change-2"
+	fresh := freshModule.Plan(context.Background(), freshRequest).Plan
+	prepared.changeSet, prepared.planIdentity, prepared.planSHA = freshRequest.ChangeSet, fresh.Identity(), fresh.SHA256()
+	if stale := fresh.Apply(systemchanges.Interface{}, prepared, systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: strings.Repeat("f", 64)}, strings.Repeat("e", 64), disk); stale.Finding == nil || stale.Finding.Code != "SYSTEM-CHANGES-CHANGE-SET-REQUIRED" {
+		t.Fatalf("stale token Apply = %+v", stale)
+	}
+}
+
+type tokenPreparedState struct {
+	changeSet, starting, candidate, planIdentity, planSHA string
+	revision                                              uint64
+}
+
+func (prepared *tokenPreparedState) SystemChangesPreparedState() (string, uint64, string, string, string, string, bool) {
+	return prepared.changeSet, prepared.revision, prepared.starting, prepared.candidate, prepared.planIdentity, prepared.planSHA, true
+}
+
+func (*tokenPreparedState) SystemChangesConsume(any, string, string) (any, error) { return nil, nil }
+
+func managedTokenPlanRequest(t *testing.T, action ManagementTokenAction) (Interface, PlanRequest) {
+	t.Helper()
+	module, request := plannedModule(t)
+	request.StartingRevision = 7
+	request.StartingStateSHA256 = strings.Repeat("c", 64)
+	request.ManagementToken = ManagementTokenChange{Action: action, CurrentTokenID: strings.Repeat("5", 32)}
+	if action == ManagementTokenRemove {
+		request.Authority.Token = ManagementToken{}
+	}
+	return module, request
+}
+
 func plannedModule(t *testing.T) (Interface, PlanRequest) {
 	t.Helper()
 	token, err := NewManagementToken("cfat_PLAN-SECRET-MARKER-000000000000000000000")

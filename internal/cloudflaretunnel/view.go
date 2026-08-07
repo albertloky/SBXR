@@ -164,6 +164,7 @@ type ViewRequest struct {
 	ZoneID           string
 	ZoneName         string
 	Token            ManagementToken
+	TokenRemoved     bool
 	NetworkPath      networkpolicy.CloudflareTunnelPath
 	CredentialDetail bool
 }
@@ -264,8 +265,16 @@ func (i Interface) View(ctx context.Context, request ViewRequest) ViewResult {
 	if i.clock != nil {
 		result.LastCheck = i.clock.Now().UTC()
 	}
-	if i.api == nil || i.clock == nil || !validViewRequest(request) {
+	if i.clock == nil || !validViewRequest(request) || !request.TokenRemoved && i.api == nil {
 		result.Health = Health{Outcome: Failed, Code: "CLOUDFLARE-VIEW-INVALID", Found: "an unavailable Adapter or clock, malformed immutable ID, invalid zone name, or missing token", Explanation: "The selected Cloudflare authority is incomplete.", NextActions: []string{"Back"}}
+		return finish(result)
+	}
+	if request.TokenRemoved {
+		result.Account = AccountStatus{ID: request.AccountID}
+		result.Zone = ZoneStatus{ID: request.ZoneID, Name: request.ZoneName}
+		result.Credential = CredentialStatus{Status: "removed"}
+		result.Capability = CapabilityStatus{RequiredPermissions: requiredPermissions(), AccountID: request.AccountID, ZoneID: request.ZoneID}
+		result.Health = Health{Outcome: Unknown, Code: "CLOUDFLARE-MANAGEMENT-TOKEN-REMOVED", Explanation: "The management token was deliberately removed, so provider authority and dependent provider health cannot be checked.", NextActions: []string{"Check now", "Replace token", "Remove from SBXR"}}
 		return finish(result)
 	}
 	if request.NetworkPath.HTTPS != networkpolicy.ProofPassed || request.NetworkPath.TCP7844 != networkpolicy.ProofPassed || request.NetworkPath.UDP7844 != networkpolicy.ProofPassed {
@@ -349,7 +358,8 @@ func (i Interface) observe(ctx context.Context, request ObservationRequest) (Obs
 }
 
 func validViewRequest(request ViewRequest) bool {
-	return immutableID.MatchString(request.AccountID) && immutableID.MatchString(request.ZoneID) && validZoneName(request.ZoneName) && request.Token.value != ""
+	tokenValid := request.TokenRemoved && request.Token.value == "" && !request.CredentialDetail || !request.TokenRemoved && request.Token.value != ""
+	return immutableID.MatchString(request.AccountID) && immutableID.MatchString(request.ZoneID) && validZoneName(request.ZoneName) && tokenValid
 }
 
 func validZoneName(name string) bool { return len(name) <= 253 && zoneName.MatchString(name) }

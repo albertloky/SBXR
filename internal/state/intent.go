@@ -192,21 +192,27 @@ type SubscriptionSettings struct {
 
 // CloudflareSettings contains only the scoped account, immutable resource
 // bindings, hostnames, and two Cloudflare Infrastructure Secrets.
+type CloudflareManagementState string
+
+const CloudflareManagementUnmanaged CloudflareManagementState = "Unmanaged"
+
 type CloudflareSettings struct {
-	AccountID            string               `json:"account_id"`
-	ZoneID               string               `json:"zone_id"`
-	ZoneName             string               `json:"zone_name"`
-	TunnelID             string               `json:"tunnel_id"`
-	TunnelName           string               `json:"tunnel_name"`
-	ManagementToken      InfrastructureSecret `json:"management_token"`
-	TunnelRunToken       InfrastructureSecret `json:"tunnel_run_token"`
-	XHTTPHostname        string               `json:"xhttp_hostname"`
-	WebSocketHostname    string               `json:"websocket_hostname"`
-	DirectHostname       string               `json:"direct_hostname"`
-	XHTTPDNSRecordID     string               `json:"xhttp_dns_record_id"`
-	WebSocketDNSRecordID string               `json:"websocket_dns_record_id"`
-	DirectIPv4RecordID   string               `json:"direct_ipv4_record_id"`
-	DirectIPv6RecordID   string               `json:"direct_ipv6_record_id"`
+	AccountID              string                    `json:"account_id"`
+	ZoneID                 string                    `json:"zone_id"`
+	ZoneName               string                    `json:"zone_name"`
+	TunnelID               string                    `json:"tunnel_id"`
+	TunnelName             string                    `json:"tunnel_name"`
+	ManagementToken        InfrastructureSecret      `json:"management_token"`
+	ManagementTokenRemoved bool                      `json:"management_token_removed,omitempty"`
+	ManagementTokenState   CloudflareManagementState `json:"management_token_state,omitempty"`
+	TunnelRunToken         InfrastructureSecret      `json:"tunnel_run_token"`
+	XHTTPHostname          string                    `json:"xhttp_hostname"`
+	WebSocketHostname      string                    `json:"websocket_hostname"`
+	DirectHostname         string                    `json:"direct_hostname"`
+	XHTTPDNSRecordID       string                    `json:"xhttp_dns_record_id"`
+	WebSocketDNSRecordID   string                    `json:"websocket_dns_record_id"`
+	DirectIPv4RecordID     string                    `json:"direct_ipv4_record_id"`
+	DirectIPv6RecordID     string                    `json:"direct_ipv6_record_id"`
 }
 
 // CertificateSettings identifies the two active certificate lineages and the
@@ -266,7 +272,8 @@ func validateDesiredState(desired DesiredState) *Finding {
 		return intentFinding("STATE-INTENT-INCOMPLETE", "subscription", "a required subscription value is absent", "one token, listener, and certificate binding", "partial subscription intent cannot be served safely", "complete the subscription settings and review again")
 	}
 	cloudflare := desired.Cloudflare
-	if empty(cloudflare.AccountID, cloudflare.ZoneID, cloudflare.ZoneName, cloudflare.TunnelID, cloudflare.TunnelName, cloudflare.XHTTPHostname, cloudflare.WebSocketHostname, cloudflare.DirectHostname, cloudflare.XHTTPDNSRecordID, cloudflare.WebSocketDNSRecordID) || !cloudflare.ManagementToken.isSet() || !cloudflare.TunnelRunToken.isSet() {
+	managementTokenValid := !cloudflare.ManagementTokenRemoved && cloudflare.ManagementToken.isSet() && cloudflare.ManagementTokenState == "" || cloudflare.ManagementTokenRemoved && !cloudflare.ManagementToken.isSet() && cloudflare.ManagementTokenState == CloudflareManagementUnmanaged
+	if empty(cloudflare.AccountID, cloudflare.ZoneID, cloudflare.ZoneName, cloudflare.TunnelID, cloudflare.TunnelName, cloudflare.XHTTPHostname, cloudflare.WebSocketHostname, cloudflare.DirectHostname, cloudflare.XHTTPDNSRecordID, cloudflare.WebSocketDNSRecordID) || !managementTokenValid || !cloudflare.TunnelRunToken.isSet() {
 		return intentFinding("STATE-INTENT-INCOMPLETE", "Cloudflare authority", "a required authority or immutable binding is absent", "scoped authority and every owned resource identity", "Cloudflare ownership cannot be proven", "complete the Cloudflare bindings and review again")
 	}
 	certificates := desired.Certificates

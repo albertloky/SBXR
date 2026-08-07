@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"reflect"
+	"slices"
 	"strings"
 	"sync/atomic"
 )
@@ -105,6 +106,45 @@ type Result struct {
 	CurrentOperation *CurrentOperation
 	Migration        *MigrationReview
 	loaded           *loadedState
+}
+
+// ManagementTokenInventory is State's secret-free proof of the current
+// behaviors that depend on Cloudflare management authority.
+type ManagementTokenInventory struct {
+	revision     uint64
+	stateSHA256  string
+	dependencies []string
+}
+
+func (*ManagementTokenInventory) String() string {
+	return "Cloudflare management-token inventory: protected"
+}
+func (*ManagementTokenInventory) GoString() string {
+	return "Cloudflare management-token inventory: protected"
+}
+func (inventory *ManagementTokenInventory) StateManagementTokenInventory() ([]byte, bool) {
+	if inventory == nil || inventory.revision == 0 || !validSHA256(inventory.stateSHA256) {
+		return nil, false
+	}
+	encoded, err := json.Marshal(struct {
+		Revision     uint64
+		StateSHA256  string
+		Dependencies []string
+	}{inventory.revision, inventory.stateSHA256, inventory.dependencies})
+	return encoded, err == nil
+}
+
+// ManagementTokenInventory derives the removal review from the exact loaded
+// State rather than accepting a caller-authored dependency list.
+func (i Interface) ManagementTokenInventory(result Result) (*ManagementTokenInventory, error) {
+	if i.implementation == nil || result.loaded == nil || result.loaded.owner != i.implementation || result.Status != Managed || result.Snapshot == nil || result.Snapshot.Revision != result.loaded.revision {
+		return nil, finding("STATE-CLOUDFLARE-TOKEN-INVENTORY", "Cloudflare management-token dependencies", "the current Managed State authority is unavailable", "one fresh exact State Load", "a caller cannot declare its own removal inventory", "load current State and review again")
+	}
+	return &ManagementTokenInventory{
+		revision:     result.loaded.revision,
+		stateSHA256:  result.loaded.payloadChecksum,
+		dependencies: []string{"Tunnel", "DNS", "certificate", "profile", "repair", "update"},
+	}, nil
 }
 
 func (result Result) String() string {
@@ -348,32 +388,40 @@ func validateExactJSON(data []byte, valueType reflect.Type) error {
 	if err := json.Unmarshal(data, &object); err != nil || object == nil {
 		return errMissingField
 	}
-	fields := map[string]reflect.Type{}
+	type exactField struct {
+		valueType reflect.Type
+		required  bool
+	}
+	fields := map[string]exactField{}
 	for index := range valueType.NumField() {
 		field := valueType.Field(index)
 		if !field.IsExported() {
 			continue
 		}
-		name := strings.Split(field.Tag.Get("json"), ",")[0]
+		tag := strings.Split(field.Tag.Get("json"), ",")
+		name := tag[0]
 		if name == "-" {
 			continue
 		}
 		if name == "" {
 			name = field.Name
 		}
-		fields[name] = field.Type
+		fields[name] = exactField{valueType: field.Type, required: !slices.Contains(tag[1:], "omitempty")}
 	}
 	for name := range object {
 		if _, exists := fields[name]; !exists {
 			return errUnknownField
 		}
 	}
-	for name, fieldType := range fields {
+	for name, field := range fields {
 		raw, exists := object[name]
 		if !exists {
-			return errMissingField
+			if field.required {
+				return errMissingField
+			}
+			continue
 		}
-		if err := validateExactJSON(raw, fieldType); err != nil {
+		if err := validateExactJSON(raw, field.valueType); err != nil {
 			return err
 		}
 	}

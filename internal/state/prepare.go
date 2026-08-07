@@ -353,6 +353,10 @@ type DeferredCloudflareAuthority interface {
 	StateDeferredCloudflare() (source any, bindingJSON []byte, templateSHA256 string, valid bool)
 }
 
+type ManagementTokenChangeAuthority interface {
+	StateManagementTokenChange() (source any, bindingJSON []byte, templateSHA256 string, valid bool)
+}
+
 type deferredCloudflare struct {
 	candidate  DesiredState
 	validators SemanticValidators
@@ -361,6 +365,8 @@ type deferredCloudflare struct {
 	binding    CloudflareEvidenceBinding
 	used       atomic.Bool
 }
+
+type managementTokenChange struct{}
 
 func (commit *PreparedCommit) Revision() uint64 {
 	if commit == nil {
@@ -395,7 +401,77 @@ func (commit *PreparedCommit) SystemChangesPreparedState() (changeSet string, re
 // PrepareCommit validates one complete candidate and typed owning-Module
 // outputs against the exact loaded bytes without mutating storage.
 func (i Interface) PrepareCommit(request PrepareRequest) (*PreparedCommit, error) {
-	return i.prepareCommit(request, nil)
+	return i.prepareCommit(request, nil, nil)
+}
+
+// PrepareManagementTokenCommit lets only a reviewed Cloudflare Plan replace
+// or deliberately remove the protected management token.
+func (i Interface) PrepareManagementTokenCommit(request PrepareRequest, authority ManagementTokenChangeAuthority) (*PreparedCommit, error) {
+	typeOf := reflect.TypeOf(authority)
+	if typeOf == nil || typeOf.Kind() != reflect.Pointer || typeOf.Elem().PkgPath() != "github.com/albertloky/SBXR/internal/cloudflaretunnel" || typeOf.Elem().Name() != "Plan" {
+		return nil, finding("STATE-CLOUDFLARE-TOKEN-PLAN", "Cloudflare management-token change", "the authority did not come from Cloudflare Tunnel", "one exact reviewed Cloudflare management-token Plan", "caller-made authority cannot change a stored Infrastructure Secret", "rebuild the management-token Plan")
+	}
+	source, bindingJSON, templateSHA256, valid := authority.StateManagementTokenChange()
+	var binding struct {
+		Action         string
+		CurrentTokenID string
+		AccountID      string
+		ZoneID         string
+		ZoneName       string
+		Dependencies   []string
+		Resolution     string
+	}
+	template, templateErr := marshalProtectedJSON(request.Candidate)
+	digest := sha256.Sum256(template)
+	bindingErr := json.Unmarshal(bindingJSON, &binding)
+	resolved := len(binding.Dependencies) == 0 && binding.Resolution == "" || exactManagementTokenDependencies(binding.Dependencies) && binding.Resolution == "mark dependencies unmanaged"
+	if binding.Action == "remove" && request.Loaded.Status == Managed && !exactManagementTokenDependencies(binding.Dependencies) {
+		resolved = false
+	}
+	selectedAuthority := binding.AccountID == request.Candidate.Cloudflare.AccountID && binding.ZoneID == request.Candidate.Cloudflare.ZoneID && binding.ZoneName == request.Candidate.Cloudflare.ZoneName
+	if request.Loaded.Snapshot != nil {
+		current := request.Loaded.Snapshot.DesiredState.Cloudflare
+		selectedAuthority = selectedAuthority && binding.AccountID == current.AccountID && binding.ZoneID == current.ZoneID && binding.ZoneName == current.ZoneName
+	}
+	if !valid || bindingErr != nil || templateErr != nil || hex.EncodeToString(digest[:]) != templateSHA256 || !selectedAuthority || binding.CurrentTokenID == "" || binding.Action == "replace" && (len(binding.Dependencies) != 0 || binding.Resolution != "") || binding.Action == "remove" && !resolved {
+		return nil, finding("STATE-CLOUDFLARE-TOKEN-PLAN", "Cloudflare management-token change", "the reviewed token binding or dependency outcome is incomplete", "one exact dependency-free replacement or removal Plan", "State cannot guess which authority or dependencies were reviewed", "rebuild the management-token Plan")
+	}
+	switch binding.Action {
+	case "replace":
+		verified, ok := source.(VerifiedInfrastructureSecret)
+		if !ok || request.Candidate.Cloudflare.ManagementToken.isSet() || request.Candidate.Cloudflare.ManagementTokenRemoved || request.Candidate.Cloudflare.ManagementTokenState != "" {
+			return nil, finding("STATE-CLOUDFLARE-TOKEN-PLAN", "Cloudflare management-token replacement", "the protected replacement slot is not empty", "one empty slot filled only from the verified Cloudflare handoff", "a caller-supplied token cannot become Desired State", "rebuild the replacement Plan")
+		}
+		request.Candidate.Cloudflare.ManagementToken, ok = NewInfrastructureSecretFrom(verified)
+		if !ok {
+			return nil, finding("STATE-CLOUDFLARE-TOKEN-PLAN", "Cloudflare management-token replacement", "the verified replacement is unavailable or already used", "one fresh one-use verified replacement", "the stored token cannot change without fresh authority", "rebuild the replacement Plan")
+		}
+	case "remove":
+		wantState := CloudflareManagementState("")
+		if len(binding.Dependencies) != 0 {
+			wantState = CloudflareManagementUnmanaged
+		}
+		if source != nil || request.Candidate.Cloudflare.ManagementToken.isSet() || !request.Candidate.Cloudflare.ManagementTokenRemoved || request.Candidate.Cloudflare.ManagementTokenState != wantState {
+			return nil, finding("STATE-CLOUDFLARE-TOKEN-PLAN", "Cloudflare management-token removal", "the candidate is not the reviewed deliberate-absence state", "an empty token plus the explicit removed fact", "missing and deliberately removed authority must never be confused", "rebuild the removal Plan")
+		}
+	default:
+		return nil, finding("STATE-CLOUDFLARE-TOKEN-PLAN", "Cloudflare management-token change", "the reviewed action is unsupported", "replace or remove", "State accepts no generic secret mutation", "rebuild the management-token Plan")
+	}
+	return i.prepareCommit(request, nil, &managementTokenChange{})
+}
+
+func exactManagementTokenDependencies(dependencies []string) bool {
+	want := map[string]bool{"Tunnel": true, "DNS": true, "certificate": true, "profile": true, "repair": true, "update": true}
+	if len(dependencies) != len(want) {
+		return false
+	}
+	for _, dependency := range dependencies {
+		if !want[dependency] {
+			return false
+		}
+		delete(want, dependency)
+	}
+	return len(want) == 0
 }
 
 // PrepareDeferredCloudflareCommit binds every reviewed value known before
@@ -430,16 +506,23 @@ func (i Interface) PrepareDeferredCloudflareCommit(request PrepareRequest, autho
 	metadata := &deferredCloudflare{candidate: original, validators: request.SemanticValidators, materials: request.ServiceMaterials, runToken: runToken, binding: binding}
 	request.Candidate = staged
 	request.ServiceMaterials.Cloudflared = nil
-	commit, err := i.prepareCommit(request, metadata)
+	commit, err := i.prepareCommit(request, metadata, nil)
 	if err == nil {
 		commit.candidateSHA256 = templateSHA256
 	}
 	return commit, err
 }
 
-func (i Interface) prepareCommit(request PrepareRequest, deferred *deferredCloudflare) (*PreparedCommit, error) {
+func (i Interface) prepareCommit(request PrepareRequest, deferred *deferredCloudflare, tokenChange *managementTokenChange) (*PreparedCommit, error) {
 	if i.implementation == nil || i.implementation.storage == nil {
 		return nil, finding("STATE-STORAGE-UNAVAILABLE", "Desired State storage", "no storage Adapter", "the production State storage Adapter", "State cannot prepare trusted transaction material", "restore the State Adapter and review again")
+	}
+	if request.Loaded.loaded != nil {
+		prior, problem := decode(request.Loaded.loaded.bytes)
+		changed := problem == nil && (prior.desiredState.Cloudflare.ManagementToken.value != request.Candidate.Cloudflare.ManagementToken.value || prior.desiredState.Cloudflare.ManagementTokenRemoved != request.Candidate.Cloudflare.ManagementTokenRemoved || prior.desiredState.Cloudflare.ManagementTokenState != request.Candidate.Cloudflare.ManagementTokenState)
+		if changed != (tokenChange != nil) {
+			return nil, finding("STATE-CLOUDFLARE-TOKEN-PLAN", "Cloudflare management-token change", "the candidate token state does not match its reviewed authority", "every replacement or removal to use one Cloudflare-owned Plan", "generic setting Plans cannot change Infrastructure Secrets", "rebuild the management-token Plan")
+		}
 	}
 	if request.ReviewedInputs.authority == nil {
 		return nil, finding("STATE-REVIEW-BINDING", "reviewed Plan", "the reviewed binding is absent", "one complete fresh reviewed Plan", "unbound approval cannot authorize mutation", "create and review a fresh Plan")
