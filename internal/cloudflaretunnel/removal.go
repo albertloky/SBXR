@@ -17,14 +17,16 @@ type RemovalObserver interface {
 	ObserveRemovalResource(reviewID, resource, immutableID string) (RemovalObservation, error)
 }
 
-type Interface struct{ observer RemovalObserver }
-
-func New(observer RemovalObserver) Interface { return Interface{observer: observer} }
+type RemovalInterface struct{ observer RemovalObserver }
 
 // RemovalAuthority is opaque proof produced from a fresh owning-Module observation.
 type RemovalAuthority struct{ observation RemovalObservation }
 
-func (i Interface) ProveRemovalResource(reviewID, resource, immutableID string) (RemovalAuthority, error) {
+func NewRemoval(observer RemovalObserver) RemovalInterface {
+	return RemovalInterface{observer: observer}
+}
+
+func (i RemovalInterface) ProveRemovalResource(reviewID, resource, immutableID string) (RemovalAuthority, error) {
 	if i.observer == nil {
 		return RemovalAuthority{}, errors.New("Cloudflare removal observer unavailable")
 	}

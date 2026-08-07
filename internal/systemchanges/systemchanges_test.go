@@ -604,7 +604,7 @@ func completeRemovalSteps(t *testing.T, selected ownerconsole.PermanentRemovalSe
 		category systemchanges.RemovalResource
 		id       string
 	}{{systemchanges.CloudflareDNSRecordResource, "dns-xhttp"}, {systemchanges.CloudflareDNSRecordResource, "dns-websocket"}, {systemchanges.CloudflareDNSRecordResource, "dns-direct-ipv4"}, {systemchanges.CloudflareRouteResource, "route-xhttp"}, {systemchanges.CloudflareTunnelResource, "tunnel-xhttp"}} {
-		authority, err := cloudflaretunnel.New(removalObserver{true, true, true}).ProveRemovalResource("removal-review-0008", string(resource.category), resource.id)
+		authority, err := cloudflaretunnel.NewRemoval(removalObserver{true, true, true}).ProveRemovalResource("removal-review-0008", string(resource.category), resource.id)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -668,15 +668,15 @@ func TestCompleteRemovalAcceptsOnlyOrderedTypedOwnedResources(t *testing.T) {
 			return err
 		},
 		func() error {
-			_, err := cloudflaretunnel.New(removalObserver{false, true, true}).ProveRemovalResource("removal-review-0008", string(systemchanges.CloudflareDNSRecordResource), "dns-xhttp")
+			_, err := cloudflaretunnel.NewRemoval(removalObserver{false, true, true}).ProveRemovalResource("removal-review-0008", string(systemchanges.CloudflareDNSRecordResource), "dns-xhttp")
 			return err
 		},
 		func() error {
-			_, err := cloudflaretunnel.New(removalObserver{true, false, true}).ProveRemovalResource("removal-review-0008", string(systemchanges.CloudflareDNSRecordResource), "dns-xhttp")
+			_, err := cloudflaretunnel.NewRemoval(removalObserver{true, false, true}).ProveRemovalResource("removal-review-0008", string(systemchanges.CloudflareDNSRecordResource), "dns-xhttp")
 			return err
 		},
 		func() error {
-			_, err := cloudflaretunnel.New(removalObserver{true, true, false}).ProveRemovalResource("removal-review-0008", string(systemchanges.CloudflareDNSRecordResource), "dns-xhttp")
+			_, err := cloudflaretunnel.NewRemoval(removalObserver{true, true, false}).ProveRemovalResource("removal-review-0008", string(systemchanges.CloudflareDNSRecordResource), "dns-xhttp")
 			return err
 		},
 		func() error {

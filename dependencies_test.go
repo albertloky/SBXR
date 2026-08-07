@@ -35,7 +35,9 @@ var registeredModules = map[string]bool{
 
 // Exact cross-Module connections remain empty until an approved design ticket
 // registers one. Foundational Modules never gain upward entries here.
-var approvedModuleDependencies = map[string]map[string]bool{}
+var approvedModuleDependencies = map[string]map[string]bool{
+	"cloudflaretunnel": {"networkpolicy": true},
+}
 
 var forbiddenStandardLibrary = map[string]bool{
 	"database/sql": true,
@@ -131,28 +133,49 @@ func unsafe(storage state.Storage) state.Interface { return state.New(storage) }
 	})
 }
 
+func TestInfrastructureSecretConsumptionBoundary(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateInfrastructureSecretConsumption(root); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("rejects direct secret consumption outside State", func(t *testing.T) {
+		directory := t.TempDir()
+		mustWriteArchitectureFile(t, directory, "internal/ownerconsole/unsafe.go", `package ownerconsole
+func unsafe(source interface{ ConsumeInfrastructureSecret() (string, bool) }) string {
+	value, _ := source.ConsumeInfrastructureSecret()
+	return value
+}
+`)
+		if err := validateInfrastructureSecretConsumption(directory); err == nil || !strings.Contains(err.Error(), "only State") {
+			t.Fatalf("validateInfrastructureSecretConsumption() = %v, want direct consumption rejection", err)
+		}
+	})
+}
+
+func validateInfrastructureSecretConsumption(root string) error {
+	return walkProductionGoFiles(root, func(relative string, source *ast.File) error {
+		if strings.HasPrefix(filepath.ToSlash(relative), "internal/state/") {
+			return nil
+		}
+		var consumes bool
+		ast.Inspect(source, func(node ast.Node) bool {
+			selector, ok := node.(*ast.SelectorExpr)
+			consumes = consumes || ok && selector.Sel.Name == "ConsumeInfrastructureSecret"
+			return true
+		})
+		if consumes {
+			return fmt.Errorf("only State may consume a verified Infrastructure Secret: %s", relative)
+		}
+		return nil
+	})
+}
+
 func validateStateConstruction(root string) error {
-	return filepath.WalkDir(root, func(filePath string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() {
-			if entry.Name() == ".git" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if filepath.Ext(filePath) != ".go" || strings.HasSuffix(filePath, "_test.go") {
-			return nil
-		}
-		relative, err := filepath.Rel(root, filePath)
-		if err != nil {
-			return err
-		}
-		source, err := parser.ParseFile(token.NewFileSet(), filePath, nil, 0)
-		if err != nil {
-			return err
-		}
+	return walkProductionGoFiles(root, func(relative string, source *ast.File) error {
 		stateAlias := ""
 		for _, imported := range source.Imports {
 			importPath, err := strconv.Unquote(imported.Path.Value)
@@ -185,6 +208,32 @@ func validateStateConstruction(root string) error {
 			return fmt.Errorf("only the State filesystem Adapter may construct State from raw storage: %s", relative)
 		}
 		return nil
+	})
+}
+
+func walkProductionGoFiles(root string, visit func(string, *ast.File) error) error {
+	return filepath.WalkDir(root, func(filePath string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			if entry.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(filePath) != ".go" || strings.HasSuffix(filePath, "_test.go") {
+			return nil
+		}
+		relative, err := filepath.Rel(root, filePath)
+		if err != nil {
+			return err
+		}
+		source, err := parser.ParseFile(token.NewFileSet(), filePath, nil, 0)
+		if err != nil {
+			return err
+		}
+		return visit(relative, source)
 	})
 }
 

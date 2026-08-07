@@ -341,6 +341,14 @@ type Result struct {
 	PreApplyGates        []Gate
 	PostApplyGates       []Gate
 	Bounds               CheckBounds
+	CloudflareTunnelPath CloudflareTunnelPath
+}
+
+// CloudflareTunnelPath is the typed outbound proof consumed by Cloudflare Tunnel.
+type CloudflareTunnelPath struct {
+	HTTPS   ProofStatus
+	TCP7844 ProofStatus
+	UDP7844 ProofStatus
 }
 
 type CertificateRetryHandoff struct {
@@ -1033,6 +1041,7 @@ func evaluateAddresses(result *Result, intent Intent, observed Observations) {
 }
 
 func evaluateOutbound(result *Result, facts OutboundFacts) {
+	result.CloudflareTunnelPath = CloudflareTunnelPath{HTTPS: boolProofStatus(facts.CloudflareHTTPS), TCP7844: boolProofStatus(facts.TunnelTCP7844), UDP7844: boolProofStatus(facts.TunnelUDP7844)}
 	checks := []struct {
 		ok   bool
 		code string
@@ -1053,6 +1062,13 @@ func evaluateOutbound(result *Result, facts OutboundFacts) {
 			result.add(requiredFailure(check.code, "A required outbound check failed", check.name+" unavailable", check.name+" reachable with its native verified protocol", "SBXR never disables TLS verification, substitutes HTTP, changes the resolver, installs a VPN, or edits provider networking", ownerFix("Correct the named outbound path and check again.")))
 		}
 	}
+}
+
+func boolProofStatus(passed bool) ProofStatus {
+	if passed {
+		return ProofPassed
+	}
+	return ProofFailed
 }
 
 func evaluateCertificate(result *Result, intent Intent, facts CertificateFacts) {

@@ -442,6 +442,9 @@ func TestFreshInstallationPublishesRevisionOneOnlyAtPublication(t *testing.T) {
 	if result, loadErr := stateModule.Load(LoadRequest{Baseline: CleanVPS}); loadErr != nil || result.Status != NotInstalled {
 		t.Fatalf("State before Publish() = (%+v, %v), want Not installed", result, loadErr)
 	}
+	if before, readErr := storage.Read(); !errors.Is(readErr, fs.ErrNotExist) || bytes.Contains(before, []byte("CLOUDFLARE-MANAGEMENT-SECRET-MARKER")) {
+		t.Fatal("fresh Cloudflare management token was stored before revision 1 publication")
+	}
 	var prior bytes.Buffer
 	if present, preserveErr := transaction.PreservePriorState(&prior); preserveErr != nil || present || prior.Len() != 0 {
 		t.Fatalf("fresh prior handoff = (present %t, bytes %d, %v), want proven absence", present, prior.Len(), preserveErr)
@@ -449,6 +452,9 @@ func TestFreshInstallationPublishesRevisionOneOnlyAtPublication(t *testing.T) {
 	agreement, err := transaction.Publish()
 	if err != nil || agreement.PublishedRevision() != 1 {
 		t.Fatalf("Publish() = (%+v, %v), want revision 1", agreement, err)
+	}
+	if published, readErr := storage.Read(); readErr != nil || !bytes.Contains(published, []byte("CLOUDFLARE-MANAGEMENT-SECRET-MARKER")) {
+		t.Fatal("revision 1 omitted the verified Cloudflare management token")
 	}
 }
 

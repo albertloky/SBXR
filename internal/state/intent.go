@@ -26,6 +26,22 @@ func NewInfrastructureSecret(value string) InfrastructureSecret {
 	return InfrastructureSecret{secretValue{value: value}}
 }
 
+type VerifiedInfrastructureSecret interface {
+	ConsumeInfrastructureSecret() (string, bool)
+}
+
+// NewInfrastructureSecretFrom consumes one verified owning-Module handoff.
+func NewInfrastructureSecretFrom(source VerifiedInfrastructureSecret) (InfrastructureSecret, bool) {
+	if source == nil {
+		return InfrastructureSecret{}, false
+	}
+	value, ok := source.ConsumeInfrastructureSecret()
+	if !ok || value == "" {
+		return InfrastructureSecret{}, false
+	}
+	return NewInfrastructureSecret(value), true
+}
+
 func (ClientAccessValue) MarshalJSON() ([]byte, error) {
 	return nil, errProtectedValueRendering
 }

@@ -405,6 +405,9 @@ func TestEvaluateKeepsLocalAndOutsideProofDistinct(t *testing.T) {
 
 func TestEvaluateBoundsOutboundAndRenewalFreshness(t *testing.T) {
 	result := networkpolicy.New(staticAdapter{observed: completeObservations()}).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PostApproval})
+	if result.CloudflareTunnelPath != (networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}) {
+		t.Fatalf("Cloudflare Tunnel path = %+v", result.CloudflareTunnelPath)
+	}
 	wantBounds := networkpolicy.CheckBounds{
 		DeterministicAttempts:  1,
 		TemporaryAttempts:      3,

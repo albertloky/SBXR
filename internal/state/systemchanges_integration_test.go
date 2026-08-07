@@ -548,7 +548,7 @@ func preparedSystemChangeWithOptions(t *testing.T, mutation systemchanges.Mutati
 				category systemchanges.RemovalResource
 				id       string
 			}{{systemchanges.CloudflareDNSRecordResource, "dns-xhttp"}, {systemchanges.CloudflareDNSRecordResource, "dns-websocket"}, {systemchanges.CloudflareDNSRecordResource, "dns-direct-ipv4"}, {systemchanges.CloudflareRouteResource, "route-xhttp"}, {systemchanges.CloudflareTunnelResource, "tunnel-xhttp"}} {
-				authority, authorityErr := cloudflaretunnel.New(controlledRemovalObserver{}).ProveRemovalResource("removal-review-0008", string(resource.category), resource.id)
+				authority, authorityErr := cloudflaretunnel.NewRemoval(controlledRemovalObserver{}).ProveRemovalResource("removal-review-0008", string(resource.category), resource.id)
 				step, stepErr := systemchanges.NewCloudflareRemovalStep(selected, authority)
 				if authorityErr != nil || stepErr != nil {
 					t.Fatalf("external removal step: %v, %v", authorityErr, stepErr)
