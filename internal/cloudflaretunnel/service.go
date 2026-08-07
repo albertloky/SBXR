@@ -97,12 +97,6 @@ type serviceMaterial struct {
 	} `json:"routes"`
 }
 
-var serviceFiles = []string{
-	"etc/sbxr/cloudflared/token",
-	"etc/sbxr/cloudflared/config.yml",
-	"etc/systemd/system/cloudflared.service",
-}
-
 var serviceArtifacts = []string{
 	"etc/sbxr/cloudflared/token",
 	"etc/sbxr/cloudflared/config.yml",
