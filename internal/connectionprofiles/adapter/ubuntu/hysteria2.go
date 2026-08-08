@@ -95,7 +95,7 @@ func (host *RealityHost) observeSingBox(ctx context.Context, port uint16, protoc
 		flag = "-ltn"
 	}
 	listeners, _ := host.run(ctx, nil, "ss", "-H", flag, "sport", "=", ":"+strconv.Itoa(int(port)))
-	observation := connectionprofiles.Hysteria2Observation{CheckedAt: host.now().UTC(), ConfigurationSafe: host.safeSingBoxConfiguration(), ServiceUnit: strings.TrimSpace(unit), ServiceRunning: activeErr == nil && strings.TrimSpace(active) == "active", NetBindService: strings.TrimSpace(capabilities) == "CAP_NET_BIND_SERVICE" && strings.TrimSpace(ambient) == "CAP_NET_BIND_SERVICE"}
+	observation := connectionprofiles.Hysteria2Observation{CheckedAt: host.now().UTC(), ConfigurationSafe: host.safeSingBoxConfiguration(), ServiceUnit: strings.TrimSpace(unit), ServiceRunning: activeErr == nil && strings.TrimSpace(active) == "active", NetBindService: strings.TrimSpace(capabilities) == "CAP_NET_BIND_SERVICE" && strings.TrimSpace(ambient) == "CAP_NET_BIND_SERVICE", NoCapabilities: strings.TrimSpace(capabilities) == "" && strings.TrimSpace(ambient) == ""}
 	if host.singBoxUser && strings.TrimSpace(identity) == "sing-box" && strings.TrimSpace(group) == "sing-box" {
 		observation.ServiceIdentity = "sing-box"
 	}

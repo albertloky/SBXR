@@ -39,6 +39,7 @@ type Outcome string
 
 const (
 	Healthy        Outcome = "Healthy"
+	Disabled       Outcome = "Disabled"
 	NeedsAttention Outcome = "Needs attention"
 	Failed         Outcome = "Failed"
 	Unknown        Outcome = "Unknown"
@@ -524,18 +525,18 @@ func xrayProfileInputs(profiles state.ConnectionProfiles, secrets state.Connecti
 }
 
 func xhttpProfileInput(profile state.VLESSXHTTP, secrets state.ConnectionProfileSecretReader, realityUUID string) (*XHTTPViewRequest, error) {
-	if !profile.Enabled {
+	if !profile.Enabled && profile == (state.VLESSXHTTP{}) {
 		return nil, nil
 	}
 	credentials, err := NewXHTTPCredentials(secrets.ReadClientAccessValue(profile.UUID), secrets.ReadClientAccessValue(profile.Path))
 	if err != nil || profile.OriginAddress != "127.0.0.1" || profile.OriginPort != 11080 || profile.Mode != state.XHTTPPacketUp || !validHostname(profile.Hostname) || credentials.uuid.value == realityUUID {
 		return nil, errors.New("VLESS XHTTP intent is invalid")
 	}
-	return &XHTTPViewRequest{Enabled: true, Hostname: profile.Hostname, OriginAddress: profile.OriginAddress, OriginPort: profile.OriginPort, Mode: profile.Mode, XrayVersion: qualifiedXrayVersion, Credentials: credentials}, nil
+	return &XHTTPViewRequest{Enabled: profile.Enabled, Hostname: profile.Hostname, OriginAddress: profile.OriginAddress, OriginPort: profile.OriginPort, Mode: profile.Mode, XrayVersion: qualifiedXrayVersion, Credentials: credentials}, nil
 }
 
 func webSocketProfileInput(profile state.VLESSWebSocket, secrets state.ConnectionProfileSecretReader, realityUUID string, xhttp *XHTTPViewRequest) (*WebSocketViewRequest, error) {
-	if !profile.Enabled {
+	if !profile.Enabled && profile == (state.VLESSWebSocket{}) {
 		return nil, nil
 	}
 	credentials, err := NewWebSocketCredentials(secrets.ReadClientAccessValue(profile.UUID), secrets.ReadClientAccessValue(profile.Path))
@@ -543,16 +544,13 @@ func webSocketProfileInput(profile state.VLESSWebSocket, secrets state.Connectio
 	if err != nil || profile.OriginAddress != "127.0.0.1" || profile.OriginPort != 11081 || !validHostname(profile.Hostname) || credentials.uuid.value == realityUUID || sharedXHTTPFact {
 		return nil, errors.New("VLESS WebSocket intent is invalid")
 	}
-	return &WebSocketViewRequest{Enabled: true, Hostname: profile.Hostname, TLSName: profile.Hostname, HTTPHost: profile.Hostname, OriginAddress: profile.OriginAddress, OriginPort: profile.OriginPort, XrayVersion: qualifiedXrayVersion, Credentials: credentials}, nil
+	return &WebSocketViewRequest{Enabled: profile.Enabled, Hostname: profile.Hostname, TLSName: profile.Hostname, HTTPHost: profile.Hostname, OriginAddress: profile.OriginAddress, OriginPort: profile.OriginPort, XrayVersion: qualifiedXrayVersion, Credentials: credentials}, nil
 }
 
 func (module Interface) PrepareConnectionProfiles(profiles state.ConnectionProfiles, secrets state.ConnectionProfileSecretReader) ([]byte, []byte, error) {
 	reality, xhttp, websocket, err := xrayProfileInputs(profiles, secrets)
 	if err != nil {
 		return nil, nil, err
-	}
-	if !reality.Enabled {
-		return nil, nil, nil
 	}
 	xray, err := xrayConfiguration(&reality, xhttp, websocket)
 	if err != nil {
@@ -628,14 +626,14 @@ func reviewedXHTTPMatches(reviewed *XHTTPViewRequest, profile state.VLESSXHTTP, 
 	if reviewed == nil {
 		return !profile.Enabled
 	}
-	return profile.Enabled && profile.Hostname == reviewed.Hostname && profile.OriginAddress == reviewed.OriginAddress && profile.OriginPort == reviewed.OriginPort && profile.Mode == reviewed.Mode && secrets.ReadClientAccessValue(profile.UUID) == reviewed.Credentials.uuid.value && secrets.ReadClientAccessValue(profile.Path) == reviewed.Credentials.path.value
+	return profile.Enabled == reviewed.Enabled && profile.Hostname == reviewed.Hostname && profile.OriginAddress == reviewed.OriginAddress && profile.OriginPort == reviewed.OriginPort && profile.Mode == reviewed.Mode && secrets.ReadClientAccessValue(profile.UUID) == reviewed.Credentials.uuid.value && secrets.ReadClientAccessValue(profile.Path) == reviewed.Credentials.path.value
 }
 
 func reviewedWebSocketMatches(reviewed *WebSocketViewRequest, profile state.VLESSWebSocket, secrets state.ConnectionProfileSecretReader) bool {
 	if reviewed == nil {
 		return !profile.Enabled
 	}
-	return profile.Enabled && profile.Hostname == reviewed.Hostname && profile.OriginAddress == reviewed.OriginAddress && profile.OriginPort == reviewed.OriginPort && secrets.ReadClientAccessValue(profile.UUID) == reviewed.Credentials.uuid.value && secrets.ReadClientAccessValue(profile.Path) == reviewed.Credentials.path.value
+	return profile.Enabled == reviewed.Enabled && profile.Hostname == reviewed.Hostname && profile.OriginAddress == reviewed.OriginAddress && profile.OriginPort == reviewed.OriginPort && secrets.ReadClientAccessValue(profile.UUID) == reviewed.Credentials.uuid.value && secrets.ReadClientAccessValue(profile.Path) == reviewed.Credentials.path.value
 }
 
 func (plan *Plan) PrepareConnectionProfiles(profiles state.ConnectionProfiles, secrets state.ConnectionProfileSecretReader) ([]byte, []byte, error) {
@@ -703,7 +701,7 @@ func xrayConfiguration(reality *ViewRequest, xhttp *XHTTPViewRequest, websocket 
 		}
 	}
 	if len(inbounds) == 0 {
-		return nil, errors.New("no enabled Xray profile")
+		inbounds = []any{}
 	}
 	configuration := map[string]any{
 		"log":       map[string]any{"loglevel": "warning", "access": "none"},
@@ -714,7 +712,7 @@ func xrayConfiguration(reality *ViewRequest, xhttp *XHTTPViewRequest, websocket 
 }
 
 func optionalRealityInbound(request *ViewRequest) (any, error) {
-	if request == nil {
+	if request == nil || !request.Enabled {
 		return nil, nil
 	}
 	if !request.Credentials.valid() {
@@ -724,7 +722,7 @@ func optionalRealityInbound(request *ViewRequest) (any, error) {
 }
 
 func optionalXHTTPInbound(request *XHTTPViewRequest) (any, error) {
-	if request == nil {
+	if request == nil || !request.Enabled {
 		return nil, nil
 	}
 	if !request.Credentials.valid() {
@@ -738,7 +736,7 @@ func optionalXHTTPInbound(request *XHTTPViewRequest) (any, error) {
 }
 
 func optionalWebSocketInbound(request *WebSocketViewRequest) (any, error) {
-	if request == nil {
+	if request == nil || !request.Enabled {
 		return nil, nil
 	}
 	if !request.Credentials.valid() || request.TLSName != request.Hostname || request.HTTPHost != request.Hostname {

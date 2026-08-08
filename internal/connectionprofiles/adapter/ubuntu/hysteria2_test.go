@@ -264,7 +264,7 @@ func hysteria2AdapterRequest(t *testing.T) connectionprofiles.Hysteria2ViewReque
 	if err != nil {
 		t.Fatal(err)
 	}
-	return connectionprofiles.Hysteria2ViewRequest{DestinationIP: "192.0.2.10", Port: 443, ServerName: "direct.example.com", CertificateID: "sbxr-domain", MasqueradeResponse: "Not Found\n", CertificatePointer: "/var/lib/sbxr/certificates/domain/current", SingBoxVersion: "1.13.16", Credentials: credentials}
+	return connectionprofiles.Hysteria2ViewRequest{Enabled: true, DestinationIP: "192.0.2.10", Port: 443, ServerName: "direct.example.com", CertificateID: "sbxr-domain", MasqueradeResponse: "Not Found\n", CertificatePointer: "/var/lib/sbxr/certificates/domain/current", SingBoxVersion: "1.13.16", Credentials: credentials}
 }
 
 func tuicAdapterRequest(t *testing.T) connectionprofiles.TUICViewRequest {
@@ -273,7 +273,7 @@ func tuicAdapterRequest(t *testing.T) connectionprofiles.TUICViewRequest {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return connectionprofiles.TUICViewRequest{DestinationIP: "192.0.2.10", Port: 8443, ServerName: "direct.example.com", CertificateID: "sbxr-domain", CertificatePointer: "/var/lib/sbxr/certificates/domain/current", SingBoxVersion: "1.13.16", CongestionControl: state.CongestionCubic, Credentials: credentials}
+	return connectionprofiles.TUICViewRequest{Enabled: true, DestinationIP: "192.0.2.10", Port: 8443, ServerName: "direct.example.com", CertificateID: "sbxr-domain", CertificatePointer: "/var/lib/sbxr/certificates/domain/current", SingBoxVersion: "1.13.16", CongestionControl: state.CongestionCubic, Credentials: credentials}
 }
 
 func anyTLSAdapterRequest(t *testing.T) connectionprofiles.AnyTLSViewRequest {
@@ -282,7 +282,7 @@ func anyTLSAdapterRequest(t *testing.T) connectionprofiles.AnyTLSViewRequest {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return connectionprofiles.AnyTLSViewRequest{DestinationIP: "192.0.2.10", Port: 9443, ServerName: "direct.example.com", CertificateID: "sbxr-domain", CertificatePointer: "/var/lib/sbxr/certificates/domain/current", MinimumSingBoxVersion: "1.12.0", SingBoxVersion: "1.13.16", UseCorePadding: true, Credentials: credentials}
+	return connectionprofiles.AnyTLSViewRequest{Enabled: true, DestinationIP: "192.0.2.10", Port: 9443, ServerName: "direct.example.com", CertificateID: "sbxr-domain", CertificatePointer: "/var/lib/sbxr/certificates/domain/current", MinimumSingBoxVersion: "1.12.0", SingBoxVersion: "1.13.16", UseCorePadding: true, Credentials: credentials}
 }
 
 func writeTUICConfiguration(t *testing.T, root string) {

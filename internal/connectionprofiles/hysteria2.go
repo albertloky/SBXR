@@ -61,6 +61,7 @@ type Hysteria2Observation struct {
 	ConfigurationMatches, CertificateMatches bool
 	ServiceUnit, ServiceIdentity             string
 	ServiceRunning, NetBindService           bool
+	NoCapabilities                           bool
 	Listener                                 Listener
 	ServerFunction                           ProbeStatus
 }
@@ -265,21 +266,21 @@ func (module Interface) PlanHysteria2(ctx context.Context, request Hysteria2Plan
 }
 
 func hysteria2ProfileInput(profile state.Hysteria2, secrets state.ConnectionProfileSecretReader) (*Hysteria2ViewRequest, error) {
-	if !profile.Enabled {
+	if !profile.Enabled && profile == (state.Hysteria2{}) {
 		return nil, nil
 	}
 	credentials, err := NewHysteria2Credentials(secrets.ReadClientAccessValue(profile.Password))
 	if err != nil || profile.Port != 443 || !validHostname(profile.ServerName) || profile.CertificateID == "" || profile.MasqueradeURL != "https://example.com/" || profile.Obfuscation || profile.ObfuscationSecret != (state.ClientAccessValue{}) {
 		return nil, errors.New("Hysteria2 intent is invalid")
 	}
-	return &Hysteria2ViewRequest{Enabled: true, Port: profile.Port, ServerName: profile.ServerName, CertificateID: profile.CertificateID, MasqueradeResponse: "Not Found\n", CertificatePointer: directCertificatePointer, SingBoxVersion: qualifiedSingBoxVersion, Credentials: credentials}, nil
+	return &Hysteria2ViewRequest{Enabled: profile.Enabled, Port: profile.Port, ServerName: profile.ServerName, CertificateID: profile.CertificateID, MasqueradeResponse: "Not Found\n", CertificatePointer: directCertificatePointer, SingBoxVersion: qualifiedSingBoxVersion, Credentials: credentials}, nil
 }
 
 func reviewedHysteria2Matches(reviewed *Hysteria2ViewRequest, profile state.Hysteria2, secrets state.ConnectionProfileSecretReader) bool {
 	if reviewed == nil {
 		return !profile.Enabled
 	}
-	return profile.Enabled && profile.Port == reviewed.Port && profile.ServerName == reviewed.ServerName && profile.CertificateID == reviewed.CertificateID && profile.MasqueradeURL == "https://example.com/" && reviewed.MasqueradeResponse == "Not Found\n" && !profile.Obfuscation && profile.ObfuscationSecret == (state.ClientAccessValue{}) && secrets.ReadClientAccessValue(profile.Password) == reviewed.Credentials.password.value
+	return profile.Enabled == reviewed.Enabled && profile.Port == reviewed.Port && profile.ServerName == reviewed.ServerName && profile.CertificateID == reviewed.CertificateID && profile.MasqueradeURL == "https://example.com/" && reviewed.MasqueradeResponse == "Not Found\n" && !profile.Obfuscation && profile.ObfuscationSecret == (state.ClientAccessValue{}) && secrets.ReadClientAccessValue(profile.Password) == reviewed.Credentials.password.value
 }
 
 func hysteria2Configuration(request Hysteria2ViewRequest) ([]byte, error) {

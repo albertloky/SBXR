@@ -139,6 +139,38 @@ func TestEvaluatePrivilegeStalenessDiskAndTime(t *testing.T) {
 	})
 }
 
+func TestListenerContributionUsesOnlyImmutableEvaluatedPolicy(t *testing.T) {
+	result := networkpolicy.New(staticAdapter{observed: completeObservations()}).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PostApproval})
+	result.Policy.Exposures = nil
+	result.Binding.Digest = strings.Repeat("f", 64)
+	contribution := networkpolicy.NewListenerContribution(result)
+	revision, digest, valid := contribution.ConnectionProfilesRegistryBinding()
+	address, port, protocol, present, exposureValid := contribution.ConnectionProfilesRealityExposure()
+	realityPort, realityProtocol, hysteria2Port, hysteria2Protocol, listenersValid := contribution.ConnectionProfilesListeners()
+	tuicPort, tuicProtocol, tuicValid := contribution.ConnectionProfilesTUICListener()
+	anyTLSPort, anyTLSProtocol, anyTLSValid := contribution.ConnectionProfilesAnyTLSListener()
+	if !valid || revision != 1 || digest == result.Binding.Digest || !exposureValid || !present || address != "public" || port != 443 || protocol != "TCP" || !listenersValid || realityPort != 443 || realityProtocol != "TCP" || hysteria2Port != 443 || hysteria2Protocol != "UDP" || !tuicValid || tuicPort != 8443 || tuicProtocol != "UDP" || !anyTLSValid || anyTLSPort != 9443 || anyTLSProtocol != "TCP" {
+		t.Fatalf("mutable Result changed bound contribution: revision=%d digest=%s exposure=%s/%d/%s present=%t valid=%t", revision, digest, address, port, protocol, present, valid)
+	}
+}
+
+func TestFailedEvaluationCannotBeUpgradedThroughPublicOutcome(t *testing.T) {
+	intent := completeIntent()
+	intent.TemporaryHTTP = true
+	result := networkpolicy.New(staticAdapter{observed: completeObservations()}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval, Outside: networkpolicy.OutsideFacts{HTTP01: networkpolicy.ProofFailed}})
+	if result.Outcome != networkpolicy.Failed {
+		t.Fatalf("failed fixture = %+v", result)
+	}
+	result.Outcome = networkpolicy.Healthy
+	contribution := networkpolicy.NewListenerContribution(result)
+	if _, _, valid := contribution.ConnectionProfilesRegistryBinding(); valid {
+		t.Fatal("public Outcome upgraded failed listener authority")
+	}
+	if _, valid := result.HTTP01Contribution(); valid {
+		t.Fatal("public Outcome upgraded failed HTTP-01 authority")
+	}
+}
+
 func TestEvaluateStopsBeforeExternalChecksOnDeterministicLocalFailure(t *testing.T) {
 	observed := completeObservations()
 	observed.Host.UbuntuVersion = "22.04.5"

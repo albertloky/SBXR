@@ -14,6 +14,23 @@ import (
 	"github.com/albertloky/SBXR/internal/connectionprofiles"
 )
 
+func TestObserveCoreCapabilitiesRequiresSuccessfulEmptyServiceSets(t *testing.T) {
+	host := RealityHost{now: func() time.Time { return time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC) }, run: func(context.Context, io.Reader, string, ...string) (string, error) { return "\n", nil }}
+	observation := host.ObserveCoreCapabilities(t.Context())
+	if !observation.XrayNone || !observation.SingBoxNone || observation.CheckedAt.IsZero() {
+		t.Fatalf("empty core capabilities = %+v", observation)
+	}
+	host.run = func(_ context.Context, _ io.Reader, _ string, command ...string) (string, error) {
+		if command[len(command)-1] == "sing-box.service" {
+			return "", fmt.Errorf("controlled observation failure")
+		}
+		return "\n", nil
+	}
+	if failed := host.ObserveCoreCapabilities(t.Context()); !failed.XrayNone || failed.SingBoxNone {
+		t.Fatalf("failed capability observation passed: %+v", failed)
+	}
+}
+
 func TestRealityHostReturnsOnlyTypedSafeUbuntuAndXrayFacts(t *testing.T) {
 	root := t.TempDir()
 	directory := filepath.Join(root, "etc/sbxr/xray")

@@ -119,7 +119,7 @@ func (module Interface) viewAnyTLS(ctx context.Context, hysteria2 Hysteria2ViewR
 			result.Health = blockedAnyTLS(observation.CheckedAt, Failed, "CONNECTION-PROFILES-ANYTLS-SERVICE", "The fixed sing-box service is not running safely", "sing-box.service or its non-root identity disagrees", "running sing-box.service as sing-box")
 		case !publicTCPListener(observation.Listener, request.Port):
 			result.Health = blockedAnyTLS(observation.CheckedAt, Failed, "CONNECTION-PROFILES-ANYTLS-LISTENER", "The AnyTLS listener disagrees", fmt.Sprintf("%s/%d/%s", observation.Listener.Address, observation.Listener.Port, observation.Listener.Protocol), "public 9443/TCP")
-		case !observation.NetBindService:
+		case hysteria2.Enabled && !observation.NetBindService || !hysteria2.Enabled && !observation.NoCapabilities:
 			result.Health = blockedAnyTLS(observation.CheckedAt, Failed, "CONNECTION-PROFILES-ANYTLS-CAPABILITY", "The shared sing-box service capability is wrong", "CAP_NET_BIND_SERVICE is absent or broader", "only CAP_NET_BIND_SERVICE for the shared privileged Hysteria2 listener")
 		case observation.ServerFunction != ProbePassed:
 			result.Health = blockedAnyTLS(observation.CheckedAt, Failed, "CONNECTION-PROFILES-ANYTLS-FUNCTION", "The bounded authenticated AnyTLS check did not pass", string(observation.ServerFunction), "one safe authenticated AnyTLS server-side function proof")
@@ -223,21 +223,21 @@ func (module Interface) PlanAnyTLS(ctx context.Context, request AnyTLSPlanReques
 }
 
 func anyTLSProfileInput(profile state.AnyTLS, secrets state.ConnectionProfileSecretReader) (*AnyTLSViewRequest, error) {
-	if !profile.Enabled {
+	if !profile.Enabled && profile == (state.AnyTLS{}) {
 		return nil, nil
 	}
 	credentials, err := NewAnyTLSCredentials(secrets.ReadClientAccessValue(profile.Password))
 	if err != nil || profile.Port != 9443 || !validHostname(profile.ServerName) || profile.CertificateID == "" || profile.PaddingScheme != "upstream-default" {
 		return nil, errors.New("AnyTLS intent is invalid")
 	}
-	return &AnyTLSViewRequest{Enabled: true, Port: profile.Port, ServerName: profile.ServerName, CertificateID: profile.CertificateID, CertificatePointer: directCertificatePointer, MinimumSingBoxVersion: anyTLSMinimumSingBoxVersion, SingBoxVersion: qualifiedSingBoxVersion, UseCorePadding: true, Credentials: credentials}, nil
+	return &AnyTLSViewRequest{Enabled: profile.Enabled, Port: profile.Port, ServerName: profile.ServerName, CertificateID: profile.CertificateID, CertificatePointer: directCertificatePointer, MinimumSingBoxVersion: anyTLSMinimumSingBoxVersion, SingBoxVersion: qualifiedSingBoxVersion, UseCorePadding: true, Credentials: credentials}, nil
 }
 
 func reviewedAnyTLSMatches(reviewed *AnyTLSViewRequest, profile state.AnyTLS, secrets state.ConnectionProfileSecretReader) bool {
 	if reviewed == nil {
 		return !profile.Enabled
 	}
-	return profile.Enabled && profile.Port == reviewed.Port && profile.ServerName == reviewed.ServerName && profile.CertificateID == reviewed.CertificateID && profile.PaddingScheme == "upstream-default" && reviewed.UseCorePadding && secrets.ReadClientAccessValue(profile.Password) == reviewed.Credentials.password.value
+	return profile.Enabled == reviewed.Enabled && profile.Port == reviewed.Port && profile.ServerName == reviewed.ServerName && profile.CertificateID == reviewed.CertificateID && profile.PaddingScheme == "upstream-default" && reviewed.UseCorePadding && secrets.ReadClientAccessValue(profile.Password) == reviewed.Credentials.password.value
 }
 
 func AnyTLSConfigurationAgreement(content []byte, hysteria2 Hysteria2ViewRequest) bool {

@@ -48,6 +48,7 @@ type xrayServiceObservation struct {
 	identity          string
 	running           bool
 	netBindService    bool
+	noCapabilities    bool
 	listeners         string
 }
 
@@ -108,12 +109,27 @@ func (host RealityHost) ObserveWebSocket(ctx context.Context, listenerPort uint1
 	loopback := host.observeLoopbackXray(ctx, listenerPort)
 	observation := connectionprofiles.WebSocketObservation{
 		CheckedAt: loopback.CheckedAt, ConfigurationSafe: loopback.ConfigurationSafe, ConfigurationValid: loopback.ConfigurationValid,
-		ServiceUnit: loopback.ServiceUnit, ServiceIdentity: loopback.ServiceIdentity, ServiceRunning: loopback.ServiceRunning, Listener: loopback.Listener,
+		ServiceUnit: loopback.ServiceUnit, ServiceIdentity: loopback.ServiceIdentity, ServiceRunning: loopback.ServiceRunning, NoCapabilities: loopback.NoCapabilities, Listener: loopback.Listener,
 	}
 	if observation.ConfigurationSafe && observation.ConfigurationValid {
 		observation.HostMatches, observation.PathMatches = host.webSocketConfigurationAgreement(listenerPort, expectedHost, expectedPath)
 	}
 	return observation
+}
+
+func (host RealityHost) ObserveCoreCapabilities(ctx context.Context) connectionprofiles.CoreCapabilityObservation {
+	if host.now == nil {
+		host.now = time.Now
+	}
+	if host.run == nil {
+		host.run = runRealityCommand
+	}
+	withoutCapabilities := func(service string) bool {
+		bounded, boundedErr := host.run(ctx, nil, "systemctl", "show", "--property=CapabilityBoundingSet", "--value", service)
+		ambient, ambientErr := host.run(ctx, nil, "systemctl", "show", "--property=AmbientCapabilities", "--value", service)
+		return boundedErr == nil && ambientErr == nil && strings.TrimSpace(bounded) == "" && strings.TrimSpace(ambient) == ""
+	}
+	return connectionprofiles.CoreCapabilityObservation{CheckedAt: host.now().UTC(), XrayNone: withoutCapabilities("xray.service"), SingBoxNone: withoutCapabilities("sing-box.service")}
 }
 
 func (host RealityHost) webSocketConfigurationAgreement(expectedPort uint16, expectedHost, expectedPath string) (bool, bool) {
@@ -152,7 +168,7 @@ func (host RealityHost) observeLoopbackXray(ctx context.Context, listenerPort ui
 	service := host.observeXrayService(ctx, listenerPort)
 	observation := connectionprofiles.XHTTPObservation{
 		CheckedAt: service.checkedAt, ConfigurationSafe: service.configurationSafe, ServiceUnit: service.unit,
-		ServiceIdentity: service.identity, ServiceRunning: service.running,
+		ServiceIdentity: service.identity, ServiceRunning: service.running, NoCapabilities: service.noCapabilities,
 	}
 	if observation.ConfigurationSafe {
 		validation, cancel := context.WithTimeout(ctx, 60*time.Second)
@@ -182,7 +198,7 @@ func (host RealityHost) observeXrayService(ctx context.Context, listenerPort uin
 	listeners, _ := host.run(ctx, nil, "ss", "-H", "-ltn", "sport", "=", ":"+strconv.Itoa(int(listenerPort)))
 	service := xrayServiceObservation{
 		checkedAt: host.now().UTC(), configurationSafe: host.safeConfiguration(), installed: strings.TrimSpace(unit) == "xray.service", unit: strings.TrimSpace(unit),
-		running: activeErr == nil && strings.TrimSpace(active) == "active", netBindService: strings.TrimSpace(capabilities) == "CAP_NET_BIND_SERVICE" && strings.TrimSpace(ambient) == "CAP_NET_BIND_SERVICE", listeners: listeners,
+		running: activeErr == nil && strings.TrimSpace(active) == "active", netBindService: strings.TrimSpace(capabilities) == "CAP_NET_BIND_SERVICE" && strings.TrimSpace(ambient) == "CAP_NET_BIND_SERVICE", noCapabilities: strings.TrimSpace(capabilities) == "" && strings.TrimSpace(ambient) == "", listeners: listeners,
 	}
 	if host.xrayUser && strings.TrimSpace(identity) == "xray" && strings.TrimSpace(group) == "xray" {
 		service.identity = "xray"

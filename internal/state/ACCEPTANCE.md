@@ -85,7 +85,7 @@ Run:
 go test -v ./internal/state -run '^TestPrepareCommit'
 ```
 
-Pass when protected JSON serialization produces every required byte-stable service copy and no copy for an unused service. Every produced manifest must carry the exact owning Module, owner, group, `0750` directory mode, `0640` file mode, candidate revision, later Change Set, and matching SHA-256. Marker checks must prove unrelated secrets, comments, provenance, complete Desired State, and disabled-profile credentials are absent.
+Pass when protected JSON serialization produces every required byte-stable service copy and no copy for an unconfigured service. A configured Xray or sing-box core whose three profiles are all disabled still receives the reviewed native-valid empty-inbound copy, so the last disable and later re-enable remain transactional. Every produced manifest must carry the exact owning Module, owner, group, `0750` directory mode, `0640` file mode, candidate revision, later Change Set, and matching SHA-256. Marker checks must prove unrelated secrets, comments, provenance, complete Desired State, and disabled-profile credentials are absent.
 
 This is preparation proof only. Applying the owner and modes to live service paths is part of the later System Changes seam. If that seam has not run, record it `Pending`; this check does not prove publication or live service behavior.
 

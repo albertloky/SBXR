@@ -48,6 +48,7 @@ type WebSocketObservation struct {
 	ServiceUnit        string
 	ServiceIdentity    string
 	ServiceRunning     bool
+	NoCapabilities     bool
 	Listener           Listener
 	HostMatches        bool
 	PathMatches        bool

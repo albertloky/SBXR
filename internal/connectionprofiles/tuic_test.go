@@ -137,8 +137,8 @@ func TestTUICPlanValidatesCompleteReplaySafeSingBoxConfiguration(t *testing.T) {
 	}
 	profiles, secrets = completeProfileStateForTUIC()
 	profiles.Hysteria2.Enabled = false
-	if _, _, err := connectionprofiles.New(host).PrepareConnectionProfiles(profiles, secrets); err == nil {
-		t.Fatal("TUIC without its required complete Hysteria2 configuration was accepted")
+	if _, singBox, err := connectionprofiles.New(host).PrepareConnectionProfiles(profiles, secrets); err != nil || bytes.Contains(singBox, []byte(`"tag":"hysteria2-in"`)) || !bytes.Contains(singBox, []byte(`"tag":"tuic-in"`)) {
+		t.Fatalf("independently enabled TUIC configuration = (%s, %v)", singBox, err)
 	}
 	failedHost := healthyTUICHost()
 	failedHost.validation = fmt.Errorf("TUIC-PASSWORD-SECRET-MARKER")
@@ -198,12 +198,7 @@ func validTUICRequest(t *testing.T) connectionprofiles.TUICViewRequest {
 		t.Fatal(err)
 	}
 	base := validHysteria2Request(t)
-	policy := networkpolicy.Result{Outcome: networkpolicy.Healthy, Policy: networkpolicy.Policy{Exposures: []networkpolicy.Exposure{
-		{Purpose: "VLESS REALITY Vision", Address: "public", Port: 443, Protocol: networkpolicy.TCP},
-		{Purpose: "Hysteria2", Address: "public", Port: 443, Protocol: networkpolicy.UDP},
-		{Purpose: "TUIC", Address: "public", Port: 8443, Protocol: networkpolicy.UDP},
-	}}}
-	return connectionprofiles.TUICViewRequest{Revision: 7, Enabled: true, DestinationIP: "192.0.2.10", Port: 8443, ServerName: "direct.example.com", CertificateID: "sbxr-domain", CertificatePointer: "/var/lib/sbxr/certificates/domain/current", SingBoxVersion: "1.13.16", CongestionControl: state.CongestionCubic, ZeroRTT: false, Credentials: credentials, DirectTLS: base.DirectTLS, Network: networkpolicy.NewListenerContribution(policy)}
+	return connectionprofiles.TUICViewRequest{Revision: 7, Enabled: true, DestinationIP: "192.0.2.10", Port: 8443, ServerName: "direct.example.com", CertificateID: "sbxr-domain", CertificatePointer: "/var/lib/sbxr/certificates/domain/current", SingBoxVersion: "1.13.16", CongestionControl: state.CongestionCubic, ZeroRTT: false, Credentials: credentials, DirectTLS: base.DirectTLS, Network: boundRegistryPolicy()}
 }
 
 func validTUICPlanRequest(t *testing.T, changeSet string) connectionprofiles.TUICPlanRequest {

@@ -546,31 +546,65 @@ func TestPrepareCommitRevokesSecretReaderAfterValidatorPanic(t *testing.T) {
 }
 
 func TestPrepareCommitOmitsDisabledProfileCredentials(t *testing.T) {
-	candidate := completeDesiredState()
-	candidate.ConnectionProfiles.VLESSWebSocket.Enabled = false
-	stateModule, request, _ := managedPrepareRequest(t, candidate)
-	preparation, err := stateModule.PrepareCommit(request)
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name, credential, route string
+		disable                 func(*ConnectionProfiles)
+		service                 func(PreparedServiceCopies) *PreparedServiceCopy
+	}{
+		{"VLESS REALITY Vision", "11111111-1111-4111-8111-111111111111", "", func(p *ConnectionProfiles) { p.VLESSRealityVision.Enabled = false }, func(c PreparedServiceCopies) *PreparedServiceCopy { return c.Xray }},
+		{"VLESS XHTTP", "22222222-2222-4222-8222-222222222222", "xhttp.example.com", func(p *ConnectionProfiles) { p.VLESSXHTTP.Enabled = false }, func(c PreparedServiceCopies) *PreparedServiceCopy { return c.Xray }},
+		{"VLESS WebSocket", "33333333-3333-4333-8333-333333333333", "ws.example.com", func(p *ConnectionProfiles) { p.VLESSWebSocket.Enabled = false }, func(c PreparedServiceCopies) *PreparedServiceCopy { return c.Xray }},
+		{"Hysteria2", "HYSTERIA2-SECRET-MARKER-00000001", "", func(p *ConnectionProfiles) { p.Hysteria2.Enabled = false }, func(c PreparedServiceCopies) *PreparedServiceCopy { return c.SingBox }},
+		{"TUIC", "TUIC-PASSWORD-SECRET-MARKER-00001", "", func(p *ConnectionProfiles) { p.TUIC.Enabled = false }, func(c PreparedServiceCopies) *PreparedServiceCopy { return c.SingBox }},
+		{"AnyTLS", "ANYTLS-PASSWORD-SECRET-MARKER-01", "", func(p *ConnectionProfiles) { p.AnyTLS.Enabled = false }, func(c PreparedServiceCopies) *PreparedServiceCopy { return c.SingBox }},
 	}
-	if preparation.serviceCopies.Xray == nil || strings.Contains(string(preparation.serviceCopies.Xray.bytes), "33333333-3333-4333-8333-333333333333") || strings.Contains(string(preparation.serviceCopies.Xray.bytes), "4444444444444444444444444444444444444444444444444444444444444444") {
-		t.Fatal("disabled Connection Profile credentials entered runtime service material")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := completeDesiredState()
+			test.disable(&candidate.ConnectionProfiles)
+			stateModule, request, _ := managedPrepareRequest(t, candidate)
+			preparation, err := stateModule.PrepareCommit(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			copy := test.service(preparation.serviceCopies)
+			if copy == nil || strings.Contains(string(copy.bytes), test.credential) || !strings.Contains(string(preparation.preparedState), test.credential) {
+				t.Fatal("disabled profile credential was lost from Desired State or entered runtime material")
+			}
+			if test.route != "" && (preparation.serviceCopies.Cloudflared == nil || strings.Contains(string(preparation.serviceCopies.Cloudflared.bytes), test.route)) {
+				t.Fatal("disabled Cloudflare profile remained in Tunnel service material")
+			}
+		})
 	}
 }
 
-func TestPrepareCommitOmitsUnusedServices(t *testing.T) {
-	candidate := completeDesiredState()
-	candidate.ConnectionProfiles.VLESSRealityVision.Enabled = false
-	candidate.ConnectionProfiles.VLESSXHTTP.Enabled = false
-	candidate.ConnectionProfiles.VLESSWebSocket.Enabled = false
-	candidate.NetworkPolicy.SSHPort = 443
-	stateModule, request, _ := managedPrepareRequest(t, candidate)
-	preparation, err := stateModule.PrepareCommit(request)
-	if err != nil {
-		t.Fatal(err)
+func TestPrepareCommitAcceptsPreparedCoreWithAllProfilesDisabled(t *testing.T) {
+	tests := []struct {
+		name    string
+		disable func(*ConnectionProfiles)
+		service func(PreparedServiceCopies) *PreparedServiceCopy
+	}{
+		{"Xray", func(p *ConnectionProfiles) {
+			p.VLESSRealityVision.Enabled, p.VLESSXHTTP.Enabled, p.VLESSWebSocket.Enabled = false, false, false
+		}, func(c PreparedServiceCopies) *PreparedServiceCopy { return c.Xray }},
+		{"sing-box", func(p *ConnectionProfiles) {
+			p.Hysteria2.Enabled, p.TUIC.Enabled, p.AnyTLS.Enabled = false, false, false
+		}, func(c PreparedServiceCopies) *PreparedServiceCopy { return c.SingBox }},
 	}
-	if preparation.serviceCopies.Xray != nil || preparation.serviceCopies.Cloudflared != nil {
-		t.Fatal("disabled Xray and Cloudflare-backed profiles produced unused service copies")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := completeDesiredState()
+			test.disable(&candidate.ConnectionProfiles)
+			stateModule, request, _ := managedPrepareRequest(t, candidate)
+			preparation, err := stateModule.PrepareCommit(request)
+			copy := test.service(preparation.serviceCopies)
+			if err != nil || copy == nil || len(copy.bytes) == 0 {
+				t.Fatalf("empty %s configuration = copy=%+v err=%v", test.name, copy, err)
+			}
+			if test.name == "Xray" && preparation.serviceCopies.Cloudflared != nil {
+				t.Fatal("disabled Cloudflare-backed profiles produced Tunnel service material")
+			}
+		})
 	}
 }
 

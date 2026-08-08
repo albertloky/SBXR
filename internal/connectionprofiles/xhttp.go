@@ -72,6 +72,7 @@ type XHTTPObservation struct {
 	ServiceUnit        string
 	ServiceIdentity    string
 	ServiceRunning     bool
+	NoCapabilities     bool
 	Listener           Listener
 }
 

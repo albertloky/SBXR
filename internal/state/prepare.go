@@ -1016,10 +1016,12 @@ func expectedServiceMaterials(candidate DesiredState) ServiceMaterials {
 			PrimaryAddress:     candidate.NetworkPolicy.PrimarySubscriptionAddress,
 		},
 	}
-	if xray != (XrayServiceMaterial{}) {
+	xrayConfigured := p.VLESSRealityVision != (VLESSRealityVision{}) || p.VLESSXHTTP != (VLESSXHTTP{}) || p.VLESSWebSocket != (VLESSWebSocket{})
+	if xrayConfigured {
 		materials.Xray = &xray
 	}
-	if singBox != (SingBoxServiceMaterial{}) {
+	singBoxConfigured := p.Hysteria2 != (Hysteria2{}) || p.TUIC != (TUIC{}) || p.AnyTLS != (AnyTLS{})
+	if singBoxConfigured {
 		materials.SingBox = &singBox
 	}
 	if len(routes) > 0 {

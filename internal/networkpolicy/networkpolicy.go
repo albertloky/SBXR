@@ -350,14 +350,18 @@ type ListenerContribution struct {
 	realityPort, hysteria2Port, tuicPort, anyTLSPort                 uint16
 	realityProtocol, hysteria2Protocol, tuicProtocol, anyTLSProtocol string
 	valid, tuicValid, anyTLSValid                                    bool
+	registryHealthy                                                  bool
+	exposures                                                        []Exposure
+	registryRevision                                                 uint64
+	registryDigest                                                   string
 }
 
 func NewListenerContribution(result Result) ListenerContribution {
-	contribution := ListenerContribution{}
-	if result.Outcome != Healthy {
+	contribution := ListenerContribution{registryHealthy: result.Binding.approved, exposures: append([]Exposure(nil), result.Binding.policy.Exposures...), registryRevision: result.Binding.revision, registryDigest: result.Binding.digest}
+	if !result.Binding.approved {
 		return contribution
 	}
-	for _, exposure := range result.Policy.Exposures {
+	for _, exposure := range result.Binding.policy.Exposures {
 		switch exposure {
 		case Exposure{Purpose: "VLESS REALITY Vision", Address: "public", Port: 443, Protocol: TCP}:
 			contribution.realityPort, contribution.realityProtocol = exposure.Port, string(exposure.Protocol)
@@ -373,6 +377,43 @@ func NewListenerContribution(result Result) ListenerContribution {
 	contribution.tuicValid = contribution.valid && contribution.tuicPort == 8443 && contribution.tuicProtocol == "UDP"
 	contribution.anyTLSValid = contribution.tuicValid && contribution.anyTLSPort == 9443 && contribution.anyTLSProtocol == "TCP"
 	return contribution
+}
+
+func (contribution ListenerContribution) ConnectionProfilesRegistryBinding() (uint64, string, bool) {
+	return contribution.registryRevision, contribution.registryDigest, contribution.registryHealthy && contribution.registryRevision > 0 && len(contribution.registryDigest) == 64
+}
+
+func (contribution ListenerContribution) registryExposure(purpose string) (string, uint16, string, bool, bool) {
+	for _, exposure := range contribution.exposures {
+		if exposure.Purpose == purpose {
+			return exposure.Address, exposure.Port, string(exposure.Protocol), true, contribution.registryHealthy
+		}
+	}
+	return "", 0, "", false, contribution.registryHealthy
+}
+
+func (contribution ListenerContribution) ConnectionProfilesRealityExposure() (string, uint16, string, bool, bool) {
+	return contribution.registryExposure("VLESS REALITY Vision")
+}
+
+func (contribution ListenerContribution) ConnectionProfilesXHTTPExposure() (string, uint16, string, bool, bool) {
+	return contribution.registryExposure("VLESS XHTTP origin")
+}
+
+func (contribution ListenerContribution) ConnectionProfilesWebSocketExposure() (string, uint16, string, bool, bool) {
+	return contribution.registryExposure("VLESS WebSocket origin")
+}
+
+func (contribution ListenerContribution) ConnectionProfilesHysteria2Exposure() (string, uint16, string, bool, bool) {
+	return contribution.registryExposure("Hysteria2")
+}
+
+func (contribution ListenerContribution) ConnectionProfilesTUICExposure() (string, uint16, string, bool, bool) {
+	return contribution.registryExposure("TUIC")
+}
+
+func (contribution ListenerContribution) ConnectionProfilesAnyTLSExposure() (string, uint16, string, bool, bool) {
+	return contribution.registryExposure("AnyTLS")
 }
 
 func (contribution ListenerContribution) ConnectionProfilesAnyTLSListener() (uint16, string, bool) {
@@ -554,6 +595,8 @@ type Binding struct {
 	Digest   string
 	policy   Policy
 	revision uint64
+	digest   string
+	approved bool
 }
 
 type HTTP01Contribution struct {
@@ -565,7 +608,7 @@ type HTTP01Contribution struct {
 
 func (result Result) HTTP01Contribution() (HTTP01Contribution, bool) {
 	policy := result.Binding.policy
-	if result.Outcome != Healthy || len(result.Binding.Digest) != 64 || policy.TemporaryHTTP == nil || policy.TemporaryHTTP.Identity != "sbxr:acme-http-01" || !policy.TemporaryHTTP.RecordNativeHandles || strings.Count(policy.Nftables, `comment "sbxr:acme-http-01"`) != 1 {
+	if !result.Binding.approved || len(result.Binding.digest) != 64 || policy.TemporaryHTTP == nil || policy.TemporaryHTTP.Identity != "sbxr:acme-http-01" || !policy.TemporaryHTTP.RecordNativeHandles || strings.Count(policy.Nftables, `comment "sbxr:acme-http-01"`) != 1 {
 		return HTTP01Contribution{}, false
 	}
 	var sshPort uint16
@@ -577,7 +620,7 @@ func (result Result) HTTP01Contribution() (HTTP01Contribution, bool) {
 	if sshPort == 0 || policy.CertificateAddress == "" {
 		return HTTP01Contribution{}, false
 	}
-	return HTTP01Contribution{candidate: policy.Nftables, sshPort: sshPort, revision: result.Binding.revision, selectedIP: policy.CertificateAddress, digest: result.Binding.Digest}, true
+	return HTTP01Contribution{candidate: policy.Nftables, sshPort: sshPort, revision: result.Binding.revision, selectedIP: policy.CertificateAddress, digest: result.Binding.digest}, true
 }
 
 func (contribution HTTP01Contribution) SystemChangesHTTP01() (string, uint16, uint64, string, string, bool) {
@@ -636,6 +679,7 @@ func (i Interface) Evaluate(request Request) Result {
 	evaluateOutbound(&result, observed.Outbound)
 	evaluateReachability(&result, request, observed)
 	result.Binding = bind(request, observed, result.Policy)
+	result.Binding.approved = result.Outcome == Healthy
 	result.PreApplyGates = []Gate{
 		{Code: "NETWORK-PREFLIGHT-FRESH", Required: "all bound observations still match"},
 		{Code: "NETWORK-CANDIDATE-VALID", Required: "the complete native nftables candidate validates without applying it"},
@@ -1361,7 +1405,8 @@ func bind(request Request, observed Observations, policy Policy) Binding {
 		Policy   Policy
 	}{request, observed, policy})
 	digest := sha256.Sum256(data)
-	return Binding{Digest: hex.EncodeToString(digest[:]), policy: policy, revision: request.Intent.Revision}
+	encodedDigest := hex.EncodeToString(digest[:])
+	return Binding{Digest: encodedDigest, policy: policy, revision: request.Intent.Revision, digest: encodedDigest}
 }
 
 func ownerFactsProvided(facts OwnerFacts) bool {
@@ -1373,7 +1418,7 @@ func certificateFactsProvided(facts CertificateFacts) bool {
 }
 
 func (b Binding) Stale(request Request, observed Observations) bool {
-	return b.Digest == "" || b.Digest != bind(request, observed, b.policy).Digest
+	return b.digest == "" || b.digest != bind(request, observed, b.policy).digest
 }
 
 func (b Binding) StaleAfterGlobalLockWait() bool { return true }

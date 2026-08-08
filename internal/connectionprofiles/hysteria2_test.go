@@ -200,8 +200,7 @@ func validHysteria2Request(t *testing.T) connectionprofiles.Hysteria2ViewRequest
 		t.Fatal(err)
 	}
 	directTLS := connectionprofiles.NewDirectTLSContribution(connectionprofiles.DirectTLSRequest{Revision: 7, DestinationIP: "192.0.2.10", Hostname: "direct.example.com", Hysteria2: connectionprofiles.DirectTLSConsumer{Port: 443, CertificatePointer: "/var/lib/sbxr/certificates/domain/current"}, TUIC: connectionprofiles.DirectTLSConsumer{Port: 8443, CertificatePointer: "/var/lib/sbxr/certificates/domain/current"}, AnyTLS: connectionprofiles.DirectTLSConsumer{Port: 9443, CertificatePointer: "/var/lib/sbxr/certificates/domain/current"}})
-	policy := networkpolicy.Result{Outcome: networkpolicy.Healthy, Policy: networkpolicy.Policy{Exposures: []networkpolicy.Exposure{{Purpose: "VLESS REALITY Vision", Address: "public", Port: 443, Protocol: networkpolicy.TCP}, {Purpose: "Hysteria2", Address: "public", Port: 443, Protocol: networkpolicy.UDP}}}}
-	return connectionprofiles.Hysteria2ViewRequest{Revision: 7, Enabled: true, DestinationIP: "192.0.2.10", Port: 443, ServerName: "direct.example.com", CertificateID: "sbxr-domain", MasqueradeResponse: "Not Found\n", CertificatePointer: "/var/lib/sbxr/certificates/domain/current", SingBoxVersion: "1.13.16", Credentials: credentials, DirectTLS: directTLS, Network: networkpolicy.NewListenerContribution(policy)}
+	return connectionprofiles.Hysteria2ViewRequest{Revision: 7, Enabled: true, DestinationIP: "192.0.2.10", Port: 443, ServerName: "direct.example.com", CertificateID: "sbxr-domain", MasqueradeResponse: "Not Found\n", CertificatePointer: "/var/lib/sbxr/certificates/domain/current", SingBoxVersion: "1.13.16", Credentials: credentials, DirectTLS: directTLS, Network: boundRegistryPolicy()}
 }
 
 func validHysteria2PlanRequest(t *testing.T, changeSet string) connectionprofiles.Hysteria2PlanRequest {

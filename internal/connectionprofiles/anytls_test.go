@@ -19,11 +19,16 @@ const anyTLSPasswordMarker = "cccccccccccccccccccccccccccccccccccccccccccccccccc
 
 type anyTLSHost struct {
 	*tuicHost
-	observation connectionprofiles.AnyTLSObservation
+	observation      connectionprofiles.AnyTLSObservation
+	coreCapabilities connectionprofiles.CoreCapabilityObservation
 }
 
 func (host *anyTLSHost) ObserveAnyTLS(context.Context, connectionprofiles.Hysteria2ViewRequest, connectionprofiles.TUICViewRequest, connectionprofiles.AnyTLSViewRequest) connectionprofiles.AnyTLSObservation {
 	return host.observation
+}
+
+func (host *anyTLSHost) ObserveCoreCapabilities(context.Context) connectionprofiles.CoreCapabilityObservation {
+	return host.coreCapabilities
 }
 
 func TestAnyTLSViewRequiresVersionFloorCorePaddingDirectTLSAndTCP(t *testing.T) {
@@ -153,13 +158,7 @@ func validAnyTLSRequest(t *testing.T) connectionprofiles.AnyTLSViewRequest {
 		t.Fatal(err)
 	}
 	base := validHysteria2Request(t)
-	policy := networkpolicy.Result{Outcome: networkpolicy.Healthy, Policy: networkpolicy.Policy{Exposures: []networkpolicy.Exposure{
-		{Purpose: "VLESS REALITY Vision", Address: "public", Port: 443, Protocol: networkpolicy.TCP},
-		{Purpose: "Hysteria2", Address: "public", Port: 443, Protocol: networkpolicy.UDP},
-		{Purpose: "TUIC", Address: "public", Port: 8443, Protocol: networkpolicy.UDP},
-		{Purpose: "AnyTLS", Address: "public", Port: 9443, Protocol: networkpolicy.TCP},
-	}}}
-	return connectionprofiles.AnyTLSViewRequest{Revision: 7, Enabled: true, DestinationIP: "192.0.2.10", Port: 9443, ServerName: "direct.example.com", CertificateID: "sbxr-domain", CertificatePointer: "/var/lib/sbxr/certificates/domain/current", MinimumSingBoxVersion: "1.12.0", SingBoxVersion: "1.13.16", UseCorePadding: true, Credentials: credentials, DirectTLS: base.DirectTLS, Network: networkpolicy.NewListenerContribution(policy)}
+	return connectionprofiles.AnyTLSViewRequest{Revision: 7, Enabled: true, DestinationIP: "192.0.2.10", Port: 9443, ServerName: "direct.example.com", CertificateID: "sbxr-domain", CertificatePointer: "/var/lib/sbxr/certificates/domain/current", MinimumSingBoxVersion: "1.12.0", SingBoxVersion: "1.13.16", UseCorePadding: true, Credentials: credentials, DirectTLS: base.DirectTLS, Network: boundRegistryPolicy()}
 }
 
 func validAnyTLSPlanRequest(t *testing.T, changeSet string) connectionprofiles.AnyTLSPlanRequest {
