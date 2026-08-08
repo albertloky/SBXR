@@ -67,9 +67,25 @@ type configuration struct {
 
 type servingState struct {
 	route       string
-	body        []byte
+	artifacts   map[string][]byte
 	address     netip.Addr
 	certificate tls.Certificate
+}
+
+type representation struct {
+	suffix, artifact, identity, contentType string
+	omitsXHTTP                              bool
+	hints                                   []string
+}
+
+var representations = []representation{
+	{suffix: "/base64", artifact: "base64", identity: "base64-uri-list", contentType: "text/plain; charset=utf-8"},
+	{suffix: "/raw", artifact: "raw", identity: "raw-uri-list", contentType: "text/plain; charset=utf-8"},
+	{suffix: "/v2rayn", artifact: "v2rayn", identity: "v2rayn-base64-uri-list", contentType: "text/plain; charset=utf-8", hints: []string{"v2rayn/"}},
+	{suffix: "/shadowrocket", artifact: "shadowrocket", identity: "shadowrocket-candidate", contentType: "text/plain; charset=utf-8"},
+	{suffix: "/karing", artifact: "karing", identity: "karing-sing-box-json", contentType: "application/json", omitsXHTTP: true},
+	{suffix: "/mihomo", artifact: "mihomo", identity: "mihomo-yaml", contentType: "application/yaml", hints: []string{"mihomo", "clashmeta", "clash meta"}},
+	{suffix: "/sing-box", artifact: "sing-box", identity: "sing-box-json", contentType: "application/json", omitsXHTTP: true, hints: []string{"sing-box"}},
 }
 
 // Run starts the fixed production listener. It has no HTTP or insecure fallback.
@@ -108,13 +124,21 @@ func (server Server) Serve(ctx context.Context, listener net.Listener) error {
 		return failed("SUBSCRIPTION-SERVING-LISTENER", "listener does not match the selected address family")
 	}
 	handler := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.Method != http.MethodGet || request.URL.RawPath != "" || request.URL.RawQuery != "" || subtle.ConstantTimeCompare([]byte(request.URL.Path), []byte(state.route)) != 1 {
+		selected, negotiated, ok := selectRepresentation(state.route, request.URL.Path, request.UserAgent())
+		if request.Method != http.MethodGet || request.URL.RawPath != "" || request.URL.RawQuery != "" || !ok {
 			refuse(response)
 			return
 		}
-		secure(response)
+		secure(response, selected.contentType)
+		response.Header().Set("X-SBXR-Representation", selected.identity)
+		if negotiated {
+			response.Header().Set("Vary", "User-Agent")
+		}
+		if selected.omitsXHTTP {
+			response.Header().Set("X-SBXR-Omitted-Profile", "vless-xhttp")
+		}
 		response.WriteHeader(http.StatusOK)
-		_, _ = response.Write(state.body)
+		_, _ = response.Write(state.artifacts[selected.artifact])
 	})
 	httpServer := &http.Server{
 		Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second,
@@ -161,13 +185,13 @@ func (listener *handshakeListener) Accept() (net.Conn, error) {
 }
 
 func refuse(response http.ResponseWriter) {
-	secure(response)
+	secure(response, "text/plain; charset=utf-8")
 	response.WriteHeader(http.StatusNotFound)
 	_, _ = io.WriteString(response, "not found\n")
 }
 
-func secure(response http.ResponseWriter) {
-	response.Header().Set("Content-Type", "text/plain; charset=utf-8")
+func secure(response http.ResponseWriter, contentType string) {
+	response.Header().Set("Content-Type", contentType)
 	response.Header().Set("Cache-Control", "private, no-store")
 	response.Header().Set("X-Content-Type-Options", "nosniff")
 	response.Header().Set("Referrer-Policy", "no-referrer")
@@ -192,7 +216,7 @@ func (server Server) load() (servingState, error) {
 	if addressErr != nil || !address.IsValid() || server.production && !address.IsGlobalUnicast() || config.ListenPort != 10443 || config.CertificatePointer != "/"+certificatePath || tokenErr != nil || len(token) != 32 || hex.EncodeToString(token) != config.Token {
 		return servingState{}, errors.New("Subscription Serving configuration is invalid")
 	}
-	body, err := server.loadArtifacts()
+	artifacts, err := server.loadArtifacts()
 	if err != nil {
 		return servingState{}, err
 	}
@@ -203,7 +227,7 @@ func (server Server) load() (servingState, error) {
 	if pointerErr != nil || chainErr != nil || keyErr != nil || pairErr != nil || !validCertificate(certificate, address, server.roots, server.now()) {
 		return servingState{}, errors.New("Subscription Serving certificate is invalid")
 	}
-	return servingState{route: "/s/" + config.Token, body: body, address: address, certificate: certificate}, nil
+	return servingState{route: "/s/" + config.Token, artifacts: artifacts, address: address, certificate: certificate}, nil
 }
 
 func (server Server) activeCertificateDirectory() (string, error) {
@@ -242,7 +266,7 @@ func safeCertificateTarget(target string) bool {
 	return true
 }
 
-func (server Server) loadArtifacts() ([]byte, error) {
+func (server Server) loadArtifacts() (map[string][]byte, error) {
 	entries, err := os.ReadDir(filepath.Join(server.root, artifactPath))
 	if err != nil || len(entries) != len(artifactNames) {
 		return nil, errors.New("active subscription artifact set is incomplete")
@@ -255,7 +279,7 @@ func (server Server) loadArtifacts() ([]byte, error) {
 	if !slices.Equal(names, artifactNames) {
 		return nil, errors.New("active subscription artifact set is invalid")
 	}
-	var body []byte
+	artifacts := make(map[string][]byte, len(names))
 	for _, name := range names {
 		contents, err := server.safeFile(artifactPath+"/"+name, 0o640, 4<<20)
 		if err != nil {
@@ -265,10 +289,36 @@ func (server Server) loadArtifacts() ([]byte, error) {
 			if _, err := base64.StdEncoding.DecodeString(string(contents)); err != nil {
 				return nil, errors.New("active base64 subscription artifact is invalid")
 			}
-			body = contents
+		}
+		artifacts[name] = contents
+	}
+	return artifacts, nil
+}
+
+func selectRepresentation(route, path, userAgent string) (representation, bool, bool) {
+	if subtle.ConstantTimeCompare([]byte(path), []byte(route)) == 1 {
+		selected, matches := representations[0], 0
+		userAgent = strings.ToLower(userAgent)
+		for _, candidate := range representations {
+			matched := false
+			for _, hint := range candidate.hints {
+				matched = matched || strings.Contains(userAgent, hint)
+			}
+			if matched {
+				selected, matches = candidate, matches+1
+			}
+		}
+		if matches != 1 {
+			selected = representations[0]
+		}
+		return selected, true, true
+	}
+	for _, candidate := range representations {
+		if subtle.ConstantTimeCompare([]byte(path), []byte(route+candidate.suffix)) == 1 {
+			return candidate, false, true
 		}
 	}
-	return body, nil
+	return representation{}, false, false
 }
 
 func validCertificate(pair tls.Certificate, address netip.Addr, roots *x509.CertPool, now time.Time) bool {

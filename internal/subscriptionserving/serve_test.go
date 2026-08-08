@@ -71,7 +71,7 @@ func TestServeRefusesEveryOtherBasicRouteAndTokenShape(t *testing.T) {
 		{http.MethodGet, "/s/" + token[:63]},
 		{http.MethodGet, "/s/" + token + "0"},
 		{http.MethodGet, "/s/" + strings.Repeat("0", 64)},
-		{http.MethodGet, "/s/" + token + "/base64"},
+		{http.MethodGet, "/s/" + token + "/Base64"},
 		{http.MethodGet, "/s/" + token + "?format=base64"},
 		{http.MethodPost, "/s/" + token},
 	}

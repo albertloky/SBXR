@@ -12,7 +12,7 @@ Run:
 go test ./internal/subscriptionserving -run '^TestServeReturnsTheExactBase64ArtifactOverTrustedTLS$' -count=1
 ```
 
-Require a normal trusted IP-identity TLS handshake, exact base64 bytes, and the fixed media and security headers.
+Require a normal trusted IP-identity TLS handshake, exact base64 bytes, the base64 representation disclosure, User-Agent negotiation metadata, and the fixed media and security headers.
 
 ### SS-SERVE-02 — Exact authenticated route
 
@@ -22,7 +22,7 @@ Run:
 go test ./internal/subscriptionserving -run '^TestServeRefusesEveryOtherBasicRouteAndTokenShape$' -count=1
 ```
 
-Require the exact `/s/<256-bit-subscription-token>` route. Near tokens, aliases, suffixes not yet implemented by this slice, queries, encoded paths, extra components, and disallowed methods must receive the same plain non-secret `404`.
+Require the exact `/s/<256-bit-subscription-token>` route family. Near tokens, aliases, unknown or case-changed suffixes, queries, encoded paths, extra components, and disallowed methods must receive the same plain non-secret `404`.
 
 ### SS-SERVE-03 — Storage and certificate refusal
 
@@ -74,6 +74,26 @@ go test ./internal/subscriptionpublication/adapter/filesystem ./internal/certifi
 
 Require the owning Modules to preserve root-only `0700`/`0600` candidates and only the active root-owned, `sbxr-subscription`-readable `0750`/`0640` artifact and certificate sets.
 
+### SS-SERVE-08 — Exact named representations
+
+Run:
+
+```sh
+go test ./internal/subscriptionserving -run '^TestServeReturnsEveryPublishedRepresentationExactly$' -count=1
+```
+
+Require all seven literal suffixes to override a conflicting User-Agent and return the byte-for-byte complete Subscription Publication fixture with its exact media type, representation identity, omission disclosure, and security headers. Require six enabled URI/base64/Mihomo profiles, five Karing/sing-box profiles with XHTTP omitted, the Shadowrocket candidate identity, deliberate disablement across every response, percent encoding, and bracketed IPv6 literals.
+
+### SS-SERVE-09 — Conservative User-Agent negotiation
+
+Run:
+
+```sh
+go test ./internal/subscriptionserving -run '^TestServeNegotiatesOnlyTheUnsuffixedRoute$' -count=1
+```
+
+Require reviewed case-insensitive v2rayN, Mihomo/Clash Meta, and sing-box format hints only on the unsuffixed route. Require unknown and conflicting hints to return base64 with `X-SBXR-Representation: base64-uri-list`. Require exactly the negotiated responses to send `Vary: User-Agent`.
+
 ## TLS Seam Verification
 
 Run all focused checks together:
@@ -90,7 +110,7 @@ Status must remain `Pending — integrated release` until installation through o
 
 ## Codex Live Acceptance
 
-Requires a separately approved Acceptance Run and proven Acceptance Baseline. From an approved Acceptance Client outside the Acceptance VPS, retrieve the literal selected-IP HTTPS base route with normal public trust and no insecure option. Verify the other family, HTTP absence, old-token refusal, and real client imports only when their owning slices are implemented. Remove or rotate temporary Client Access Values afterward.
+Requires a separately approved Acceptance Run and proven Acceptance Baseline. From an approved Acceptance Client outside the Acceptance VPS, retrieve the literal selected-IP HTTPS base route and every explicit representation with normal public trust and no insecure option. Verify the other family, HTTP absence, old-token refusal, and real client imports when their owning slices are implemented. Remove or rotate temporary Client Access Values afterward.
 
 ## Owner Acceptance
 
