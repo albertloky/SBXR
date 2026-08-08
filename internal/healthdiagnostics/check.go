@@ -84,8 +84,6 @@ type OperationID string
 type ChangeSetID string
 type MutationOutcome string
 
-// DiagnosticEvent is the Health-and-Diagnostics-owned event shape. Retention
-// and construction belong to the next implementation slice.
 type DiagnosticEvent struct {
 	time        time.Time
 	module      Module
@@ -195,6 +193,7 @@ type ModuleResult struct {
 type CheckResult struct {
 	Installation InstallationSummary
 	Modules      []ModuleResult
+	events       []DiagnosticEvent
 }
 
 type Interface struct{ now func() time.Time }
@@ -226,6 +225,10 @@ func (module Interface) Check(ctx context.Context, installation InstallationSumm
 		}
 		seen[inspection.Module] = len(result.Modules)
 		result.Modules = append(result.Modules, inspect(ctx, checkedAt, inspection))
+	}
+	result.events = make([]DiagnosticEvent, 0, len(result.Modules))
+	for _, module := range result.Modules {
+		result.events = append(result.events, checkEvent(module))
 	}
 	return result
 }

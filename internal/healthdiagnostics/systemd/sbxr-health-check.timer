@@ -1,0 +1,10 @@
+[Unit]
+Description=Run SBXR weekly health check
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+Unit=sbxr-health-check.service
+
+[Install]
+WantedBy=timers.target

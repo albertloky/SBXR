@@ -325,7 +325,7 @@ func validateSubscriptionServingMutation(root string) error {
 }
 
 func validateHealthDiagnosticsReadOnly(root string) error {
-	allowed := map[string]bool{"context": true, "strconv": true, "strings": true, "time": true, modulePath + "/internal/systemchanges": true}
+	allowed := map[string]bool{"context": true, "embed": true, "errors": true, "io/fs": true, "sort": true, "strconv": true, "strings": true, "time": true, modulePath + "/internal/systemchanges": true}
 	return walkProductionGoFiles(root, func(relative string, source *ast.File) error {
 		if filepath.ToSlash(filepath.Dir(relative)) != "internal/healthdiagnostics" {
 			return nil

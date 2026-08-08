@@ -1,6 +1,6 @@
 # Health and Diagnostics acceptance
 
-This file defines procedures for the typed `Check` slice only. Record run results, commit, runner, time, software versions, stable codes, and redacted evidence in the issue tracker. Never record raw external output, Client Access Values, Infrastructure Secrets, generated configurations, transaction evidence, client IPs, destinations, or traffic facts.
+This file defines procedures for typed checks and retained diagnostic events. Record run results, commit, runner, time, software versions, stable codes, and redacted evidence in the issue tracker. Never record raw external output, Client Access Values, Infrastructure Secrets, generated configurations, transaction evidence, client IPs, destinations, or traffic facts.
 
 ## Module Verification
 
@@ -63,6 +63,48 @@ go test . -run '^Test(RepositoryDependencies|HealthDiagnosticsReadOnlyBoundary)$
 ```
 
 Require the Module core to accept only typed inspections and clock input. Reject product-Module imports, arbitrary commands, direct file access, service control, and generic command, file, path, log, or service capabilities.
+
+### HD-EVENT-01 — Allowlisted construction and forbidden-marker refusal
+
+Run:
+
+```sh
+go test ./internal/healthdiagnostics -run '^TestEventHistoryRetainsOnlyAllowlistedCheckFacts$' -count=1
+```
+
+Require retained Check events to contain only time, Module, `Check` operation ID, severity, exact stable code, and fixed safe explanation. Change Set ID and mutation outcome must be absent for read-only checks. Persisted input containing either field must be rejected until System Changes supplies an opaque typed event proof. Inject unique markers representing every forbidden secret, traffic, Live Profile Check, raw output, environment, argument, journal, and Rollback Snapshot category through owning-inspection failures. Require all markers to be discarded. A caller-forged `CheckResult` must create no event.
+
+### HD-EVENT-02 — Exact bounded deterministic retention
+
+Run:
+
+```sh
+go test ./internal/healthdiagnostics -run '^TestEventHistoryAppliesExactAgeAndSizeLimitsOldestFirst$' -count=1
+```
+
+Use a controlled clock and storage size. Require an event exactly 30 days old to remain eligible until the 50 MiB boundary requires its removal; require an event older by one nanosecond to expire. Require rotation to remove the oldest eligible UTC event first and leave encoded storage at or below exactly 50 MiB.
+
+### HD-EVENT-03 — Reboot, storage refusal, and transaction-evidence separation
+
+Run:
+
+```sh
+go test ./internal/healthdiagnostics -run '^TestEventHistorySurvivesReconstructionAndFailsClosedOnStorageErrors$' -count=1
+go test ./internal/healthdiagnostics/adapter/filesystem -run '^TestEventStorage' -count=1
+```
+
+Require a new `EventHistory` instance over the same storage to read the retained event after reconstruction. Require unavailable, malformed, marker-bearing, broadly readable, wrongly owned, linked, or otherwise unsafe history to fail closed without replacement. Require production storage to be the exact root-only `/var/lib/sbxr/diagnostics/events.json` boundary and prove a planted active journal and Rollback Snapshot marker outside that boundary is unchanged by retention.
+
+### HD-EVENT-04 — One weekly scheduled Check path
+
+Run:
+
+```sh
+go test ./internal/healthdiagnostics -run '^Test(ScheduledCheckUsesTheSameCheckInterfaceAndClassification|ScheduledHealthUnitsUseOneWeeklyPersistentCheckEntry)$' -count=1
+go test ./cmd/sbxr -run '^TestPrivateScheduledHealthCommandCallsScheduledCheck$' -count=1
+```
+
+Require `ScheduledCheck` to return the same typed Module result and classification as `Check`, then retain the event produced by that call. Require `sbxr-health-check.timer` to contain exactly `OnCalendar=weekly`, `Persistent=true`, and `Unit=sbxr-health-check.service`. Require the service to invoke only `/usr/local/bin/sbxr private health-check`, and require that executable path to construct the production root-only history, invoke all currently available owning-Module inspections, represent unavailable owning Adapters as typed `Unknown`, pass all eleven named Modules to `ScheduledCheck`, and retain eleven safe events. No competing pre-command, post-command, classifier, repair, mutation, synthetic `Healthy`, or second timer trigger may exist.
 
 ## Seam Verification
 

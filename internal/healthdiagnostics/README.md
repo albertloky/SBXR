@@ -34,6 +34,14 @@ Every non-Healthy result contains Problem, exact Found, exact Required, why SBXR
 
 ## Scheduled checks
 
-The Owner Console and the future `sbxr-health-check.timer` must call this same `Check` Interface with the same owning-Module inspections. No second classifier and no unresolved schedule setting exists here.
+The Owner Console calls `Check` directly. `sbxr-health-check.timer` invokes `sbxr-health-check.service` weekly through systemd's exact `OnCalendar=weekly` schedule, with `Persistent=true` for a run missed while the VPS was off. The executable's private `health-check` command constructs the production root-only event history, invokes every currently available owning-Module read-only inspection, and passes all eleven named Module results to `ScheduledCheck`. Unavailable owning Adapters become typed `Unknown`; the command never substitutes a synthetic `Healthy` result. `ScheduledCheck` delegates classification to the same `Check` method and then records its opaque safe events. The units and executable dispatch contain no second classifier, repair, mutation, or additional timer trigger.
 
-This package already owns the `DiagnosticEvent` and `BundleResult` types required by the shared Interface. Diagnostic-event construction and retention belong to #122. Support-bundle construction and `BuildSupportBundle` belong to #123. Neither later slice may broaden `Check` into a generic command, file, path, log, or service reader.
+## Retained events
+
+`Check` privately constructs one event per returned Module result. A caller cannot turn a forged `CheckResult`, inspection error, raw output, Live Profile Check fact, token, counter, client address, destination, access event, environment value, command argument, journal, Rollback Snapshot, key, configuration, or credential into a retained event.
+
+The complete retained allowlist is time, Module, operation ID, Change Set ID, severity, stable code, fixed safe explanation, and mutation or rollback outcome. The implemented Check events use operation `Check`; Change Set ID and outcome are absent because a read-only check performs no mutation. Persisted input containing either field is rejected until System Changes supplies an opaque typed event proof; free-form strings cannot create fresh transaction evidence. Restored events must reproduce one exact Module, stable code, severity, and fixed explanation combination or the whole history is rejected without replacement.
+
+`EventHistory` keeps exactly 30 days or 50 MiB, whichever limit arrives first. It orders events by UTC time, Module, and stable code, removes expired events and then the oldest eligible events, and atomically replaces one JSON history. The production filesystem Adapter stores only `/var/lib/sbxr/diagnostics/events.json`, requires `/var/lib/sbxr` and `diagnostics` to be root-only `0700`, requires the history to be a root-owned single-link regular file with mode `0600`, and has no capability to open or remove System Changes journals, Rollback Snapshots, rollback proof, or other transaction evidence.
+
+This package also owns the `BundleResult` type required by the shared Interface. Support-bundle construction and `BuildSupportBundle` belong to #123. That later slice may not broaden `Check` into a generic command, file, path, log, or service reader.
