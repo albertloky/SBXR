@@ -301,9 +301,59 @@ type Plan struct {
 	xhttpRequest                     *XHTTPViewRequest
 	webSocketRequest                 *WebSocketViewRequest
 	hysteria2Request                 *Hysteria2ViewRequest
+	tuicRequest                      *TUICViewRequest
 	steps                            []systemchanges.Step
 	checks                           []systemchanges.Check
 	used                             *atomic.Bool
+}
+
+type singBoxPlanSpec struct {
+	profile, description, xrayVersion, singBoxVersion string
+	revision                                          uint64
+	changeSet, startingState, desiredState            string
+	xray, singBox                                     []byte
+	volatileInputs                                    string
+	binding                                           any
+	reality                                           ViewRequest
+	xhttp                                             *XHTTPViewRequest
+	websocket                                         *WebSocketViewRequest
+	hysteria2                                         *Hysteria2ViewRequest
+	tuic                                              *TUICViewRequest
+}
+
+func (module Interface) buildSingBoxPlan(ctx context.Context, spec singBoxPlanSpec) (*Plan, string) {
+	if err := module.host.ValidateReality(ctx, spec.xrayVersion, bytes.NewReader(spec.xray)); err != nil {
+		return nil, "NATIVE"
+	}
+	validator, ok := module.host.(SingBoxValidator)
+	if !ok || validator.ValidateSingBox(ctx, spec.singBoxVersion, bytes.NewReader(spec.singBox)) != nil {
+		return nil, "NATIVE"
+	}
+	preparedBinding, err := opaquePreparedBinding(spec.xray, spec.singBox)
+	if err != nil {
+		return nil, "BINDING"
+	}
+	step, err := systemchanges.NewStep(systemchanges.ConnectionProfilesModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
+	if err != nil {
+		return nil, "TRANSACTION"
+	}
+	checks := make([]systemchanges.Check, 0, 5)
+	for _, suffix := range []string{"CONFIGURATION", "LISTENER", "SERVICE", "CERTIFICATE", "FUNCTION"} {
+		phase := systemchanges.PrePublication
+		if suffix == "FUNCTION" {
+			phase = systemchanges.PostPublication
+		}
+		checks = append(checks, systemchanges.Check{Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Phase: phase, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CONNECTION-PROFILES-" + spec.profile + "-" + suffix})
+	}
+	volatile := sha256.Sum256([]byte(spec.volatileInputs))
+	volatileSHA := hex.EncodeToString(volatile[:])
+	binding, _ := json.Marshal(struct {
+		Request                         any
+		VolatileSHA256, PreparedBinding string
+	}{spec.binding, volatileSHA, preparedBinding})
+	digest := sha256.Sum256(binding)
+	sha := hex.EncodeToString(digest[:])
+	return &Plan{identity: "profiles-" + strings.ToLower(spec.profile) + "-" + sha[:12], sha256: sha, volatileSHA256: volatileSHA, description: spec.description, preparedBinding: preparedBinding, configuration: spec.xray, singBoxConfiguration: spec.singBox, revision: spec.revision, changeSet: spec.changeSet, startingStateSHA256: spec.startingState, desiredStateSHA256: spec.desiredState, realityRequest: spec.reality, xhttpRequest: spec.xhttp, webSocketRequest: spec.websocket, hysteria2Request: spec.hysteria2, tuicRequest: spec.tuic, steps: []systemchanges.Step{step}, checks: checks, used: &atomic.Bool{}}, ""
 }
 
 func (plan *Plan) Identity() string {
@@ -425,13 +475,19 @@ func (module Interface) Plan(ctx context.Context, request PlanRequest) PlanResul
 }
 
 func (module Interface) ValidateConnectionProfiles(profiles state.ConnectionProfiles, secrets state.ConnectionProfileSecretReader) error {
-	if _, _, _, err := xrayProfileInputs(profiles, secrets); err != nil {
+	reality, xhttp, websocket, err := xrayProfileInputs(profiles, secrets)
+	if err != nil {
 		return err
 	}
-	if _, err := hysteria2ProfileInput(profiles.Hysteria2, secrets); err != nil {
+	hysteria2, err := hysteria2ProfileInput(profiles.Hysteria2, secrets)
+	if err != nil {
 		return err
 	}
-	if profiles.TUIC.Enabled || profiles.AnyTLS.Enabled {
+	tuic, err := tuicProfileInput(profiles.TUIC, secrets)
+	if err != nil || !independentTUIC(tuic, hysteria2, reality, xhttp, websocket) {
+		return errors.New("TUIC intent is invalid")
+	}
+	if profiles.AnyTLS.Enabled {
 		return errors.New("later Connection Profile slices are not prepared yet")
 	}
 	return nil
@@ -492,7 +548,7 @@ func (module Interface) PrepareConnectionProfiles(profiles state.ConnectionProfi
 	if err != nil {
 		return nil, nil, err
 	}
-	if profiles.TUIC.Enabled || profiles.AnyTLS.Enabled {
+	if profiles.AnyTLS.Enabled {
 		return nil, nil, errors.New("later Connection Profile slices are not prepared yet")
 	}
 	if !reality.Enabled {
@@ -503,11 +559,28 @@ func (module Interface) PrepareConnectionProfiles(profiles state.ConnectionProfi
 		return nil, nil, err
 	}
 	hysteria2, err := hysteria2ProfileInput(profiles.Hysteria2, secrets)
-	if err != nil || hysteria2 == nil {
-		return xray, nil, err
+	if err != nil {
+		return nil, nil, err
 	}
-	singBox, err := hysteria2Configuration(*hysteria2)
+	tuic, err := tuicProfileInput(profiles.TUIC, secrets)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !independentTUIC(tuic, hysteria2, reality, xhttp, websocket) {
+		return nil, nil, errors.New("TUIC intent is invalid")
+	}
+	if hysteria2 == nil {
+		return xray, nil, nil
+	}
+	singBox, err := singBoxConfiguration(hysteria2, tuic)
 	return xray, singBox, err
+}
+
+func independentTUIC(tuic *TUICViewRequest, hysteria2 *Hysteria2ViewRequest, reality ViewRequest, xhttp *XHTTPViewRequest, websocket *WebSocketViewRequest) bool {
+	if tuic == nil {
+		return true
+	}
+	return hysteria2 != nil && tuic.Credentials.password.value != hysteria2.Credentials.password.value && tuic.Credentials.uuid.value != reality.Credentials.uuid.value && (xhttp == nil || tuic.Credentials.uuid.value != xhttp.Credentials.uuid.value) && (websocket == nil || tuic.Credentials.uuid.value != websocket.Credentials.uuid.value)
 }
 
 func (plan *Plan) ValidateConnectionProfiles(profiles state.ConnectionProfiles, secrets state.ConnectionProfileSecretReader) error {
@@ -519,7 +592,7 @@ func (plan *Plan) ValidateConnectionProfiles(profiles state.ConnectionProfiles, 
 	}
 	profile := profiles.VLESSRealityVision
 	realityRequest := plan.realityRequest
-	if profiles.TUIC.Enabled || profiles.AnyTLS.Enabled || profile.Enabled != realityRequest.Enabled || profile.Port != realityRequest.Port || profile.Target != realityRequest.Target.Address || profile.ServerName != realityRequest.Target.ServerName || profile.Fingerprint != realityRequest.Fingerprint ||
+	if profiles.AnyTLS.Enabled || profile.Enabled != realityRequest.Enabled || profile.Port != realityRequest.Port || profile.Target != realityRequest.Target.Address || profile.ServerName != realityRequest.Target.ServerName || profile.Fingerprint != realityRequest.Fingerprint ||
 		secrets.ReadClientAccessValue(profile.UUID) != realityRequest.Credentials.uuid.value || secrets.ReadInfrastructureSecret(profile.PrivateKey) != realityRequest.Credentials.privateKey.value || profile.PublicKey != realityRequest.Credentials.publicKey.value || secrets.ReadClientAccessValue(profile.ShortID) != realityRequest.Credentials.shortID.value {
 		return errors.New("candidate Connection Profiles differ from the reviewed Plan")
 	}
@@ -527,6 +600,9 @@ func (plan *Plan) ValidateConnectionProfiles(profiles state.ConnectionProfiles, 
 		return errors.New("candidate Connection Profiles differ from the reviewed Plan")
 	}
 	if !reviewedHysteria2Matches(plan.hysteria2Request, profiles.Hysteria2, secrets) {
+		return errors.New("candidate Connection Profiles differ from the reviewed Plan")
+	}
+	if !reviewedTUICMatches(plan.tuicRequest, profiles.TUIC, secrets) {
 		return errors.New("candidate Connection Profiles differ from the reviewed Plan")
 	}
 	return nil

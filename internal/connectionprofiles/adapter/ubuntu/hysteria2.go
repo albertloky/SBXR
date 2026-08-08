@@ -18,7 +18,45 @@ import (
 const singBoxConfigurationPath = "etc/sbxr/sing-box/config.json"
 
 func (host RealityHost) ObserveHysteria2(ctx context.Context, request connectionprofiles.Hysteria2ViewRequest) connectionprofiles.Hysteria2Observation {
-	destination, port, serverName, certificatePointer := request.DestinationIP, request.Port, request.ServerName, request.CertificatePointer
+	return host.observeSingBoxProfile(ctx, request.DestinationIP, request.Port, request.ServerName, request.CertificatePointer, "hysteria2", func(content []byte) bool {
+		return connectionprofiles.Hysteria2ConfigurationAgreement(content, request)
+	})
+}
+
+func (host RealityHost) ObserveTUIC(ctx context.Context, hysteria2 connectionprofiles.Hysteria2ViewRequest, request connectionprofiles.TUICViewRequest) connectionprofiles.TUICObservation {
+	return host.observeSingBoxProfile(ctx, request.DestinationIP, request.Port, request.ServerName, request.CertificatePointer, "tuic", func(content []byte) bool {
+		return connectionprofiles.TUICConfigurationAgreement(content, hysteria2, request)
+	})
+}
+
+func (host RealityHost) observeSingBoxProfile(ctx context.Context, destination string, port uint16, serverName, certificatePointer, profile string, agrees func([]byte) bool) connectionprofiles.Hysteria2Observation {
+	observation, content := host.observeSingBox(ctx, port)
+	if observation.ConfigurationSafe {
+		observation.ConfigurationMatches = agrees(content)
+		observation.CertificateMatches = observation.ConfigurationMatches && host.safeDomainServingPair(certificatePointer)
+		if observation.CertificateMatches {
+			certificate := filepath.Join(host.root, strings.TrimPrefix(certificatePointer, "/"), "fullchain.pem")
+			_, err := host.run(ctx, nil, "openssl", "x509", "-in", certificate, "-noout", "-checkhost", serverName)
+			observation.CertificateMatches = err == nil
+		}
+	}
+	probe := filepath.Join(host.root, probeConfiguration)
+	passed := observation.ConfigurationValid && observation.CertificateMatches && validateProbeConfiguration(host.root, destination, serverName) == nil
+	if passed {
+		for _, network := range []string{"tcp", "udp"} {
+			_, err := host.run(ctx, nil, "sing-box", "-c", probe, "tools", "-o", "sbxr-proof-"+profile, "connect", "-n", network, net.JoinHostPort(destination, strconv.Itoa(int(port))))
+			passed = passed && err == nil
+		}
+	}
+	if passed {
+		observation.ServerFunction = connectionprofiles.ProbePassed
+	} else {
+		observation.ServerFunction = connectionprofiles.ProbeFailed
+	}
+	return observation
+}
+
+func (host *RealityHost) observeSingBox(ctx context.Context, port uint16) (connectionprofiles.Hysteria2Observation, []byte) {
 	if host.now == nil {
 		host.now = time.Now
 	}
@@ -39,38 +77,19 @@ func (host RealityHost) ObserveHysteria2(ctx context.Context, request connection
 	if listener, ok := exactUDPListener(listeners, port); ok {
 		observation.Listener = listener
 	}
-	if observation.ConfigurationSafe {
-		configuration := filepath.Join(host.root, singBoxConfigurationPath)
-		validation, cancel := context.WithTimeout(ctx, 60*time.Second)
-		_, err := host.run(validation, nil, "sing-box", "check", "-c", configuration)
-		cancel()
-		observation.ConfigurationValid = err == nil
-		content, readErr := os.ReadFile(configuration)
-		observation.ConfigurationMatches = readErr == nil && connectionprofiles.Hysteria2ConfigurationAgreement(content, request)
-		observation.CertificateMatches = observation.ConfigurationMatches && host.safeDomainServingPair(certificatePointer)
-		if observation.CertificateMatches {
-			certificate := filepath.Join(host.root, strings.TrimPrefix(certificatePointer, "/"), "fullchain.pem")
-			_, err := host.run(ctx, nil, "openssl", "x509", "-in", certificate, "-noout", "-checkhost", serverName)
-			observation.CertificateMatches = err == nil
-		}
+	if !observation.ConfigurationSafe {
+		return observation, nil
 	}
-	probe := filepath.Join(host.root, probeConfiguration)
-	passed := observation.ConfigurationValid && observation.CertificateMatches && validateProbeConfiguration(host.root, destination, serverName) == nil
-	if passed {
-		for _, network := range []string{"tcp", "udp"} {
-			_, err := host.run(ctx, nil, "sing-box", "-c", probe, "tools", "-o", "sbxr-proof-hysteria2", "connect", "-n", network, net.JoinHostPort(destination, strconv.Itoa(int(port))))
-			passed = passed && err == nil
-		}
-	}
-	if passed {
-		observation.ServerFunction = connectionprofiles.ProbePassed
-	} else {
-		observation.ServerFunction = connectionprofiles.ProbeFailed
-	}
-	return observation
+	configuration := filepath.Join(host.root, singBoxConfigurationPath)
+	validation, cancel := context.WithTimeout(ctx, 60*time.Second)
+	_, err := host.run(validation, nil, "sing-box", "check", "-c", configuration)
+	cancel()
+	observation.ConfigurationValid = err == nil
+	content, _ := os.ReadFile(configuration)
+	return observation, content
 }
 
-func (host RealityHost) ValidateHysteria2(ctx context.Context, version string, configuration io.Reader) error {
+func (host RealityHost) ValidateSingBox(ctx context.Context, version string, configuration io.Reader) error {
 	if version != "1.13.16" || configuration == nil {
 		return errors.New("qualified sing-box validation unavailable")
 	}

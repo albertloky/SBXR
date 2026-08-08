@@ -32,7 +32,7 @@ func (host *hysteria2Host) ObserveHysteria2(context.Context, connectionprofiles.
 	return host.observation
 }
 
-func (host *hysteria2Host) ValidateHysteria2(_ context.Context, version string, configuration io.Reader) error {
+func (host *hysteria2Host) ValidateSingBox(_ context.Context, version string, configuration io.Reader) error {
 	if version != "1.13.16" {
 		return fmt.Errorf("wrong version")
 	}
@@ -248,7 +248,7 @@ type nativeHysteria2Host struct {
 	root   string
 }
 
-func (host *nativeHysteria2Host) ValidateHysteria2(ctx context.Context, version string, configuration io.Reader) error {
+func (host *nativeHysteria2Host) ValidateSingBox(ctx context.Context, version string, configuration io.Reader) error {
 	if version != "1.13.16" {
 		return fmt.Errorf("wrong version")
 	}

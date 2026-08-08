@@ -1,7 +1,6 @@
 package connectionprofiles
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -12,11 +11,9 @@ import (
 	"io"
 	"net/netip"
 	"reflect"
-	"sync/atomic"
 	"time"
 
 	"github.com/albertloky/SBXR/internal/state"
-	"github.com/albertloky/SBXR/internal/systemchanges"
 )
 
 const (
@@ -62,7 +59,11 @@ type Hysteria2Observation struct {
 
 type Hysteria2Host interface {
 	ObserveHysteria2(context.Context, Hysteria2ViewRequest) Hysteria2Observation
-	ValidateHysteria2(context.Context, string, io.Reader) error
+	SingBoxValidator
+}
+
+type SingBoxValidator interface {
+	ValidateSingBox(context.Context, string, io.Reader) error
 }
 
 type Hysteria2ViewRequest struct {
@@ -73,6 +74,7 @@ type Hysteria2ViewRequest struct {
 	CertificatePointer, SingBoxVersion string
 	CertificateID, MasqueradeResponse  string
 	Credentials                        Hysteria2Credentials
+	TUIC                               *TUICViewRequest
 	DirectTLS                          DirectTLSContribution
 	Network                            ListenerPolicyAuthority
 }
@@ -97,6 +99,10 @@ type Hysteria2ViewResult struct {
 }
 
 func (module Interface) ViewHysteria2(ctx context.Context, request Hysteria2ViewRequest) Hysteria2ViewResult {
+	return module.viewHysteria2(ctx, request, true)
+}
+
+func (module Interface) viewHysteria2(ctx context.Context, request Hysteria2ViewRequest, checkActive bool) Hysteria2ViewResult {
 	port := request.Port
 	profile := Hysteria2Profile{Name: "Hysteria2", DestinationIP: request.DestinationIP, ServerName: request.ServerName, SingBoxVersion: request.SingBoxVersion, Enabled: request.Enabled, Port: port, CredentialsReady: request.Credentials.valid()}
 	host, ok := module.host.(Hysteria2Host)
@@ -121,7 +127,7 @@ func (module Interface) ViewHysteria2(ctx context.Context, request Hysteria2View
 		result.Health = blockedHysteria2(observation.CheckedAt, Failed, "CONNECTION-PROFILES-HYSTERIA2-NETWORK", "The reviewed protocol-aware listener policy does not agree", "443/TCP REALITY and 443/UDP Hysteria2 were not both proved", "intentional coexistence on numeric port 443 using separate TCP and UDP listeners")
 		return result
 	}
-	if request.Revision > 0 {
+	if checkActive && request.Revision > 0 {
 		if observation.ConfigurationSafe && observation.ConfigurationValid && !observation.CertificateMatches {
 			result.Health = blockedHysteria2(observation.CheckedAt, Failed, "CONNECTION-PROFILES-HYSTERIA2-CERTIFICATE", "The active certificate binding does not agree", "the protected configuration, shared pointer, certificate protection, or certificate identity differs", request.ServerName+" through the shared active Direct TLS pair")
 			return result
@@ -233,39 +239,13 @@ func (module Interface) PlanHysteria2(ctx context.Context, request Hysteria2Plan
 	if err != nil {
 		return PlanResult{Health: blockedHysteria2(view.Health.Time, Failed, "CONNECTION-PROFILES-HYSTERIA2-CONFIGURATION", "The complete sing-box configuration could not be prepared", "the typed Hysteria2 inputs are incomplete", "one complete protected sing-box configuration")}
 	}
-	if err := module.host.ValidateReality(ctx, request.Reality.XrayVersion, bytes.NewReader(xray)); err != nil {
-		return PlanResult{Health: blockedHysteria2(view.Health.Time, Failed, "CONNECTION-PROFILES-HYSTERIA2-NATIVE", "The pinned native validator refused the complete prepared configuration", "native Xray validation failed", "complete configurations accepted by Xray and sing-box")}
+	plan, failure := module.buildSingBoxPlan(ctx, singBoxPlanSpec{profile: "HYSTERIA2", description: "validate and activate Hysteria2 on public 443/UDP through sing-box.service with the shared Direct TLS identity; rollback restores both prior configurations", xrayVersion: request.Reality.XrayVersion, singBoxVersion: request.View.SingBoxVersion, revision: request.View.Revision, changeSet: request.ChangeSet, startingState: request.StartingStateSHA256, desiredState: request.DesiredStateSHA256, xray: xray, singBox: singBox, volatileInputs: reality.VolatileSHA256 + xhttp.VolatileSHA256 + websocket.VolatileSHA256 + view.VolatileSHA256, binding: struct {
+		Request Hysteria2PlanRequest
+		Network listenerPolicyBinding
+	}{request, reviewedListenerPolicy(request.View.Network)}, reality: request.Reality, xhttp: &request.XHTTP, websocket: &request.WebSocket, hysteria2: &request.View})
+	if failure != "" {
+		return PlanResult{Health: blockedHysteria2(view.Health.Time, Failed, "CONNECTION-PROFILES-HYSTERIA2-"+failure, "The complete protected Plan could not be finalized", "native validation, binding, or transaction preparation failed", "one validated and reversible Hysteria2 Plan")}
 	}
-	host := module.host.(Hysteria2Host)
-	if err := host.ValidateHysteria2(ctx, request.View.SingBoxVersion, bytes.NewReader(singBox)); err != nil {
-		return PlanResult{Health: blockedHysteria2(view.Health.Time, Failed, "CONNECTION-PROFILES-HYSTERIA2-NATIVE", "The pinned native validator refused the complete prepared configuration", "native sing-box validation failed", "one complete configuration accepted by sing-box 1.13.16")}
-	}
-	preparedBinding, err := opaquePreparedBinding(xray, singBox)
-	if err != nil {
-		return PlanResult{Health: blockedHysteria2(view.Health.Time, Failed, "CONNECTION-PROFILES-HYSTERIA2-BINDING", "The protected prepared-configuration authority is unavailable", "an opaque binding could not be created", "one secret-safe binding to both exact validated configurations")}
-	}
-	step, err := systemchanges.NewStep(systemchanges.ConnectionProfilesModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
-	if err != nil {
-		return PlanResult{Health: blockedHysteria2(view.Health.Time, Failed, "CONNECTION-PROFILES-HYSTERIA2-TRANSACTION", "The profile transaction contract is invalid", "the activation or rollback step was refused", "one reversible Connection Profiles step")}
-	}
-	checks := []systemchanges.Check{}
-	for _, suffix := range []string{"CONFIGURATION", "LISTENER", "SERVICE", "CERTIFICATE", "FUNCTION"} {
-		phase := systemchanges.PrePublication
-		if suffix == "FUNCTION" {
-			phase = systemchanges.PostPublication
-		}
-		checks = append(checks, systemchanges.Check{Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Phase: phase, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CONNECTION-PROFILES-HYSTERIA2-" + suffix})
-	}
-	volatile := sha256.Sum256([]byte(reality.VolatileSHA256 + xhttp.VolatileSHA256 + websocket.VolatileSHA256 + view.VolatileSHA256))
-	volatileSHA := hex.EncodeToString(volatile[:])
-	binding, _ := json.Marshal(struct {
-		Request                         Hysteria2PlanRequest
-		Network                         listenerPolicyBinding
-		VolatileSHA256, PreparedBinding string
-	}{request, reviewedListenerPolicy(request.View.Network), volatileSHA, preparedBinding})
-	digest := sha256.Sum256(binding)
-	sha := hex.EncodeToString(digest[:])
-	plan := &Plan{identity: "profiles-hysteria2-" + sha[:12], sha256: sha, volatileSHA256: volatileSHA, description: "validate and activate Hysteria2 on public 443/UDP through sing-box.service with the shared Direct TLS identity; rollback restores both prior configurations", preparedBinding: preparedBinding, configuration: xray, singBoxConfiguration: singBox, revision: request.View.Revision, changeSet: request.ChangeSet, startingStateSHA256: request.StartingStateSHA256, desiredStateSHA256: request.DesiredStateSHA256, realityRequest: request.Reality, xhttpRequest: &request.XHTTP, webSocketRequest: &request.WebSocket, hysteria2Request: &request.View, steps: []systemchanges.Step{step}, checks: checks, used: &atomic.Bool{}}
 	return PlanResult{Plan: plan, Health: Health{Time: view.Health.Time, Module: "Connection Profiles", Profile: "Hysteria2", Outcome: Healthy, Code: "CONNECTION-PROFILES-HYSTERIA2-PLAN-READY", NextActions: []string{"Review Plan", "Back"}}}
 }
 
@@ -288,11 +268,7 @@ func reviewedHysteria2Matches(reviewed *Hysteria2ViewRequest, profile state.Hyst
 }
 
 func hysteria2Configuration(request Hysteria2ViewRequest) ([]byte, error) {
-	if request.Port != 443 || !request.Credentials.valid() || !validHostname(request.ServerName) || request.MasqueradeResponse != "Not Found\n" || request.CertificatePointer != directCertificatePointer {
-		return nil, errors.New("Hysteria2 inputs invalid")
-	}
-	inbound := map[string]any{"type": "hysteria2", "tag": "hysteria2-in", "listen": "0.0.0.0", "listen_port": 443, "users": []any{map[string]any{"password": request.Credentials.password.value}}, "tls": map[string]any{"enabled": true, "server_name": request.ServerName, "certificate_path": request.CertificatePointer + "/fullchain.pem", "key_path": request.CertificatePointer + "/privkey.pem"}, "masquerade": map[string]any{"type": "string", "status_code": 404, "headers": map[string][]string{"content-type": {"text/plain; charset=utf-8"}}, "content": request.MasqueradeResponse}}
-	return json.Marshal(map[string]any{"log": map[string]any{"level": "warn"}, "inbounds": []any{inbound}, "outbounds": []any{map[string]any{"type": "direct", "tag": "direct"}}, "route": map[string]any{"final": "direct"}})
+	return singBoxConfiguration(&request, request.TUIC)
 }
 
 // Hysteria2ConfigurationAgreement compares the complete active JSON to the

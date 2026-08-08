@@ -139,26 +139,27 @@ No 0-RTT setting exposed
 Optional obfuscation disabled by default
 Masquerade returns an ordinary HTTP/3 response
 Obfuscation can be an advanced setting rather than automatically enabled. It may help in some network environments but should not be treated as encryption; TLS remains the security layer.
-sing-box profile 2 — TUIC v5
+sing-box profile 2 — TUIC
 Purpose:
 Alternative QUIC implementation
 Secondary high-speed UDP option
 Fallback when Hysteria2 behaves poorly on a particular network
 Configuration:
 Core                  sing-box
-Protocol              TUIC v5
+Protocol              TUIC
 Transport             QUIC/UDP
 Security              TLS
 Public address        VPS IPv4 or IPv6
 Public port           8443/UDP
 TLS SNI               direct.<owned-domain>
-Congestion control    BBR or cubic
+Congestion control    cubic
 TUIC requires TLS. The sing-box documentation recommends disabling QUIC 0-RTT because it is vulnerable to replay attacks, so the project must set:
 "zero_rtt_handshake": false
 Credentials:
 Independent random UUID
 Independent random password
 TUIC must not reuse the Hysteria2 password.
+The product term is TUIC. A maintained client may render “TUIC v5” only when that client format requires the version label. BBR needs a later qualified decision before it can replace cubic.
 sing-box profile 3 — AnyTLS
 Purpose:
 Additional secure TCP option
@@ -393,7 +394,7 @@ sing-box
    Status: Running
    Port: 443/UDP
 
-5. TUIC v5
+5. TUIC
    Status: Running
    Port: 8443/UDP
 

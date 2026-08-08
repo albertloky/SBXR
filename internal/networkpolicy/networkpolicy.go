@@ -347,9 +347,9 @@ type Result struct {
 // ListenerContribution is the narrow protocol-aware listener fact consumed by
 // Connection Profiles without granting it a dependency on Network Policy.
 type ListenerContribution struct {
-	realityPort, hysteria2Port         uint16
-	realityProtocol, hysteria2Protocol string
-	valid                              bool
+	realityPort, hysteria2Port, tuicPort             uint16
+	realityProtocol, hysteria2Protocol, tuicProtocol string
+	valid, tuicValid                                 bool
 }
 
 func NewListenerContribution(result Result) ListenerContribution {
@@ -363,10 +363,17 @@ func NewListenerContribution(result Result) ListenerContribution {
 			contribution.realityPort, contribution.realityProtocol = exposure.Port, string(exposure.Protocol)
 		case Exposure{Purpose: "Hysteria2", Address: "public", Port: 443, Protocol: UDP}:
 			contribution.hysteria2Port, contribution.hysteria2Protocol = exposure.Port, string(exposure.Protocol)
+		case Exposure{Purpose: "TUIC", Address: "public", Port: 8443, Protocol: UDP}:
+			contribution.tuicPort, contribution.tuicProtocol = exposure.Port, string(exposure.Protocol)
 		}
 	}
 	contribution.valid = contribution.realityPort == 443 && contribution.realityProtocol == "TCP" && contribution.hysteria2Port == 443 && contribution.hysteria2Protocol == "UDP"
+	contribution.tuicValid = contribution.valid && contribution.tuicPort == 8443 && contribution.tuicProtocol == "UDP"
 	return contribution
+}
+
+func (contribution ListenerContribution) ConnectionProfilesTUICListener() (uint16, string, bool) {
+	return contribution.tuicPort, contribution.tuicProtocol, contribution.tuicValid
 }
 
 func (contribution ListenerContribution) ConnectionProfilesListeners() (uint16, string, uint16, string, bool) {

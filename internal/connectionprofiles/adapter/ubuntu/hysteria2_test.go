@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/albertloky/SBXR/internal/connectionprofiles"
+	"github.com/albertloky/SBXR/internal/state"
 )
 
 func TestObserveHysteria2ProvesProtectedConfigurationServiceUDPAndFunction(t *testing.T) {
@@ -81,6 +82,50 @@ func TestObserveHysteria2ProvesProtectedConfigurationServiceUDPAndFunction(t *te
 	}
 }
 
+func TestObserveTUICProvesCompleteConfigurationListenerTLSAndFunction(t *testing.T) {
+	root := t.TempDir()
+	writeTUICConfiguration(t, root)
+	writeProbeConfigurationAt(t, root)
+	writeDomainServingPair(t, root, 0o750, 0o640)
+	host := RealityHost{root: root, now: func() time.Time { return time.Unix(1, 0) }, rootUID: uint32(os.Geteuid()), singBoxGID: uint32(os.Getegid()), singBoxGroup: true, singBoxUser: true}
+	host.run = func(_ context.Context, _ io.Reader, name string, arguments ...string) (string, error) {
+		command := name + " " + strings.Join(arguments, " ")
+		switch {
+		case strings.Contains(command, "Id"):
+			return "sing-box.service", nil
+		case strings.Contains(command, "User"), strings.Contains(command, "Group"):
+			return "sing-box", nil
+		case strings.Contains(command, "is-active"):
+			return "active", nil
+		case strings.Contains(command, "CapabilityBoundingSet"), strings.Contains(command, "AmbientCapabilities"):
+			return "CAP_NET_BIND_SERVICE", nil
+		case strings.HasPrefix(command, "ss -H -lun"):
+			if strings.HasSuffix(command, ":443") {
+				return "UNCONN 0 0 0.0.0.0:443 0.0.0.0:*\n", nil
+			}
+			return "UNCONN 0 0 0.0.0.0:8443 0.0.0.0:*\n", nil
+		case strings.HasPrefix(command, "sing-box check"), strings.HasPrefix(command, "openssl x509"):
+			return "", nil
+		case strings.Contains(command, "tools -o sbxr-proof-tuic connect -n tcp 192.0.2.10:8443"), strings.Contains(command, "tools -o sbxr-proof-tuic connect -n udp 192.0.2.10:8443"):
+			return "", nil
+		case strings.Contains(command, "tools -o sbxr-proof-hysteria2 connect -n tcp 192.0.2.10:443"), strings.Contains(command, "tools -o sbxr-proof-hysteria2 connect -n udp 192.0.2.10:443"):
+			return "", nil
+		default:
+			t.Fatalf("unexpected command: %s", command)
+			return "", nil
+		}
+	}
+	hysteria2, tuic := hysteria2AdapterRequest(t), tuicAdapterRequest(t)
+	observation := host.ObserveTUIC(t.Context(), hysteria2, tuic)
+	if !observation.ConfigurationSafe || !observation.ConfigurationValid || !observation.ConfigurationMatches || !observation.CertificateMatches || !observation.ServiceRunning || observation.Listener.Port != 8443 || observation.Listener.Protocol != "udp" || observation.ServerFunction != connectionprofiles.ProbePassed {
+		t.Fatalf("ObserveTUIC() = %+v", observation)
+	}
+	hysteria2.TUIC = &tuic
+	if observation := host.ObserveHysteria2(t.Context(), hysteria2); !observation.ConfigurationMatches || observation.Listener.Port != 443 || observation.ServerFunction != connectionprofiles.ProbePassed {
+		t.Fatalf("combined Hysteria2 observation = %+v", observation)
+	}
+}
+
 func TestObserveHysteria2RefusesMultipleUDPListenersAndWrongCertificate(t *testing.T) {
 	root := t.TempDir()
 	writeHysteria2Configuration(t, root, 0o750, 0o640)
@@ -116,7 +161,7 @@ func TestObserveHysteria2RefusesMultipleUDPListenersAndWrongCertificate(t *testi
 	}
 }
 
-func TestValidateHysteria2UsesPinnedNativeSingBox(t *testing.T) {
+func TestValidateSingBoxUsesPinnedNativeRelease(t *testing.T) {
 	var command string
 	host := RealityHost{run: func(_ context.Context, input io.Reader, name string, arguments ...string) (string, error) {
 		command = name + " " + strings.Join(arguments, " ")
@@ -125,10 +170,10 @@ func TestValidateHysteria2UsesPinnedNativeSingBox(t *testing.T) {
 		}
 		return "", nil
 	}}
-	if err := host.ValidateHysteria2(t.Context(), "1.13.16", strings.NewReader(`{"inbounds":[]}`)); err != nil || command != "sing-box check -c /dev/stdin" {
-		t.Fatalf("ValidateHysteria2() = %v, command=%q", err, command)
+	if err := host.ValidateSingBox(t.Context(), "1.13.16", strings.NewReader(`{"inbounds":[]}`)); err != nil || command != "sing-box check -c /dev/stdin" {
+		t.Fatalf("ValidateSingBox() = %v, command=%q", err, command)
 	}
-	if err := host.ValidateHysteria2(t.Context(), "1.13.15", strings.NewReader(`{}`)); err == nil {
+	if err := host.ValidateSingBox(t.Context(), "1.13.15", strings.NewReader(`{}`)); err == nil {
 		t.Fatal("unqualified sing-box accepted")
 	}
 }
@@ -161,6 +206,29 @@ func hysteria2AdapterRequest(t *testing.T) connectionprofiles.Hysteria2ViewReque
 		t.Fatal(err)
 	}
 	return connectionprofiles.Hysteria2ViewRequest{DestinationIP: "192.0.2.10", Port: 443, ServerName: "direct.example.com", CertificateID: "sbxr-domain", MasqueradeResponse: "Not Found\n", CertificatePointer: "/var/lib/sbxr/certificates/domain/current", SingBoxVersion: "1.13.16", Credentials: credentials}
+}
+
+func tuicAdapterRequest(t *testing.T) connectionprofiles.TUICViewRequest {
+	t.Helper()
+	credentials, err := connectionprofiles.NewTUICCredentials("55555555-5555-4555-8555-555555555555", strings.Repeat("b", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return connectionprofiles.TUICViewRequest{DestinationIP: "192.0.2.10", Port: 8443, ServerName: "direct.example.com", CertificateID: "sbxr-domain", CertificatePointer: "/var/lib/sbxr/certificates/domain/current", SingBoxVersion: "1.13.16", CongestionControl: state.CongestionCubic, Credentials: credentials}
+}
+
+func writeTUICConfiguration(t *testing.T, root string) {
+	t.Helper()
+	writeHysteria2Configuration(t, root, 0o750, 0o640)
+	path := filepath.Join(root, singBoxConfigurationPath)
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content = []byte(strings.Replace(string(content), `}],"log"`, `},{"congestion_control":"cubic","listen":"0.0.0.0","listen_port":8443,"tag":"tuic-in","tls":{"certificate_path":"/var/lib/sbxr/certificates/domain/current/fullchain.pem","enabled":true,"key_path":"/var/lib/sbxr/certificates/domain/current/privkey.pem","server_name":"direct.example.com"},"type":"tuic","users":[{"password":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","uuid":"55555555-5555-4555-8555-555555555555"}],"zero_rtt_handshake":false}],"log"`, 1))
+	if err := os.WriteFile(path, content, 0o640); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func writeDomainServingPair(t *testing.T, root string, directoryMode, fileMode os.FileMode) {
