@@ -2,12 +2,22 @@
 package main
 
 import (
+	"context"
+	"os"
+
 	"github.com/albertloky/SBXR/internal/networkpolicy"
 	"github.com/albertloky/SBXR/internal/networkpolicy/adapter/ubuntu"
 	"github.com/albertloky/SBXR/internal/state/adapter/filesystem"
+	"github.com/albertloky/SBXR/internal/subscriptionserving"
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "__subscription-serve" {
+		if subscriptionserving.Run(context.Background()) != nil {
+			os.Exit(1)
+		}
+		return
+	}
 	_ = filesystem.New()
 	_ = networkpolicy.New(ubuntu.New())
 }
