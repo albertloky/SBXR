@@ -4,6 +4,7 @@ package subscriptionserving
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
@@ -17,18 +18,33 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
 
 const (
-	configurationPath = "etc/sbxr/subscription.json"
-	artifactPath      = "var/lib/sbxr/subscriptions/current"
-	certificatePath   = "var/lib/sbxr/certificates/ip/current"
+	configurationPath        = "etc/sbxr/subscription.json"
+	artifactPath             = "var/lib/sbxr/subscriptions/current"
+	certificatePath          = "var/lib/sbxr/certificates/ip/current"
+	maxResponseBytes         = 1 << 20
+	maxMetadataBytes         = 64 << 10
+	maxRequestBodyBytes      = 1 << 10
+	maxHeaderBytes           = 16 << 10
+	maxConcurrentConnections = 8
+	maxRequestsPerMinute     = 60
+	headerReadTimeout        = 5 * time.Second
+	requestReadTimeout       = 10 * time.Second
+	responseWriteTimeout     = 10 * time.Second
+	totalOperationTimeout    = 15 * time.Second
+	idleConnectionTimeout    = 30 * time.Second
+	tlsHandshakeTimeout      = 5 * time.Second
 )
 
 var artifactNames = []string{"base64", "karing", "metadata", "mihomo", "raw", "shadowrocket", "sing-box", "v2rayn"}
@@ -123,10 +139,23 @@ func (server Server) Serve(ctx context.Context, listener net.Listener) error {
 		_ = listener.Close()
 		return failed("SUBSCRIPTION-SERVING-LISTENER", "listener does not match the selected address family")
 	}
+	limiter := &requestRateLimiter{}
 	handler := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		allowed := limiter.allow(time.Now())
+		request.Body = http.MaxBytesReader(response, request.Body, maxRequestBodyBytes)
+		bodyPresent := request.ContentLength != 0 || len(request.TransferEncoding) != 0
+		if bodyPresent {
+			response.Header().Set("Connection", "close")
+			_, _ = io.Copy(io.Discard, request.Body)
+		}
 		selected, negotiated, ok := selectRepresentation(state.route, request.URL.Path, request.UserAgent())
-		if request.Method != http.MethodGet || request.URL.RawPath != "" || request.URL.RawQuery != "" || !ok {
-			refuse(response)
+		if request.Method != http.MethodGet || request.URL.IsAbs() || request.URL.RawPath != "" || request.URL.RawQuery != "" || bodyPresent || !ok {
+			request.Close = true
+			plain(response, http.StatusNotFound, "not found\n")
+			return
+		}
+		if !allowed {
+			plain(response, http.StatusTooManyRequests, "busy\n")
 			return
 		}
 		secure(response, selected.contentType)
@@ -140,11 +169,16 @@ func (server Server) Serve(ctx context.Context, listener net.Listener) error {
 		response.WriteHeader(http.StatusOK)
 		_, _ = response.Write(state.artifacts[selected.artifact])
 	})
+	timedHandler := operationBound(handler)
 	httpServer := &http.Server{
-		Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second,
-		WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10,
-		ErrorLog:  log.New(io.Discard, "", 0),
-		TLSConfig: &tls.Config{Certificates: []tls.Certificate{state.certificate}, MinVersion: tls.VersionTLS13},
+		Handler: http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+			secure(response, "text/plain; charset=utf-8")
+			timedHandler.ServeHTTP(response, request)
+		}), ReadHeaderTimeout: headerReadTimeout, ReadTimeout: requestReadTimeout,
+		WriteTimeout: responseWriteTimeout, IdleTimeout: idleConnectionTimeout, MaxHeaderBytes: maxHeaderBytes,
+		ErrorLog:                     log.New(io.Discard, "", 0),
+		DisableGeneralOptionsHandler: true,
+		TLSConfig:                    &tls.Config{Certificates: []tls.Certificate{state.certificate}, MinVersion: tls.VersionTLS13},
 	}
 	stopped := make(chan struct{})
 	go func() {
@@ -154,7 +188,8 @@ func (server Server) Serve(ctx context.Context, listener net.Listener) error {
 		case <-stopped:
 		}
 	}()
-	err = httpServer.Serve(&handshakeListener{Listener: listener, config: httpServer.TLSConfig})
+	bounded := &connectionLimitListener{Listener: listener, slots: make(chan struct{}, maxConcurrentConnections)}
+	err = httpServer.Serve(&handshakeListener{Listener: bounded, config: httpServer.TLSConfig})
 	close(stopped)
 	if errors.Is(err, http.ErrServerClosed) && ctx.Err() != nil {
 		return nil
@@ -162,9 +197,45 @@ func (server Server) Serve(ctx context.Context, listener net.Listener) error {
 	return failed("SUBSCRIPTION-SERVING-RUNTIME", "HTTPS runtime stopped unexpectedly")
 }
 
+func operationBound(handler http.Handler) http.Handler {
+	return http.TimeoutHandler(handler, totalOperationTimeout, "busy\n")
+}
+
 type handshakeListener struct {
 	net.Listener
 	config *tls.Config
+}
+
+type connectionLimitListener struct {
+	net.Listener
+	slots chan struct{}
+}
+
+func (listener *connectionLimitListener) Accept() (net.Conn, error) {
+	for {
+		connection, err := listener.Listener.Accept()
+		if err != nil {
+			return nil, err
+		}
+		select {
+		case listener.slots <- struct{}{}:
+			return &limitedConn{Conn: connection, release: func() { <-listener.slots }}, nil
+		default:
+			_ = connection.Close()
+		}
+	}
+}
+
+type limitedConn struct {
+	net.Conn
+	release func()
+	once    sync.Once
+}
+
+func (connection *limitedConn) Close() error {
+	err := connection.Conn.Close()
+	connection.once.Do(connection.release)
+	return err
 }
 
 func (listener *handshakeListener) Accept() (net.Conn, error) {
@@ -174,20 +245,142 @@ func (listener *handshakeListener) Accept() (net.Conn, error) {
 			return nil, err
 		}
 		secured := tls.Server(connection, listener.config)
-		_ = secured.SetDeadline(time.Now().Add(5 * time.Second))
+		_ = secured.SetDeadline(time.Now().Add(tlsHandshakeTimeout))
 		if err := secured.Handshake(); err != nil {
 			_ = secured.Close()
 			continue
 		}
 		_ = secured.SetDeadline(time.Time{})
-		return secured, nil
+		return &requestGuardConn{Conn: secured}, nil
 	}
 }
 
-func refuse(response http.ResponseWriter) {
+type requestGuardConn struct {
+	net.Conn
+	pending       []byte
+	deliver       int
+	guarded       bool
+	bodyPresent   bool
+	bodyRemaining int64
+}
+
+func (connection *requestGuardConn) Read(destination []byte) (int, error) {
+	if connection.guarded && connection.deliver == 0 {
+		if connection.bodyPresent && connection.bodyRemaining == 0 {
+			return 0, io.EOF
+		}
+		if connection.bodyRemaining > 0 && int64(len(destination)) > connection.bodyRemaining {
+			destination = destination[:connection.bodyRemaining]
+		}
+		if len(connection.pending) == 0 {
+			count, err := connection.Conn.Read(destination)
+			if connection.bodyRemaining > 0 {
+				connection.bodyRemaining -= int64(count)
+			}
+			return count, err
+		}
+		count := copy(destination, connection.pending)
+		connection.pending = connection.pending[count:]
+		if connection.bodyRemaining > 0 {
+			connection.bodyRemaining -= int64(count)
+		}
+		return count, nil
+	}
+	for connection.deliver == 0 {
+		remaining := maxHeaderBytes + 1 - len(connection.pending)
+		if remaining <= 0 {
+			connection.pending = []byte("GET /__oversized HTTP/1.1\r\nHost: invalid\r\nConnection: close\r\n\r\n")
+			connection.deliver = len(connection.pending)
+			connection.guarded = true
+			break
+		}
+		if remaining > 1024 {
+			remaining = 1024
+		}
+		buffer := make([]byte, remaining)
+		count, err := connection.Conn.Read(buffer)
+		connection.pending = append(connection.pending, buffer[:count]...)
+		if len(connection.pending) > maxHeaderBytes {
+			connection.pending = []byte("GET /__oversized HTTP/1.1\r\nHost: invalid\r\nConnection: close\r\n\r\n")
+			connection.deliver = len(connection.pending)
+			connection.guarded = true
+		}
+		if headerEnd := bytes.Index(connection.pending, []byte("\r\n\r\n")); connection.deliver == 0 && headerEnd >= 0 {
+			connection.deliver = headerEnd + 4
+			connection.guarded = true
+			connection.bodyPresent, connection.bodyRemaining = headerBody(connection.pending[:connection.deliver])
+			lineEnd := bytes.Index(connection.pending[:connection.deliver], []byte("\r\n"))
+			line := connection.pending[:lineEnd]
+			parts := bytes.SplitN(line, []byte(" "), 3)
+			if len(parts) == 3 {
+				if _, parseErr := url.ParseRequestURI(string(parts[1])); parseErr != nil {
+					replacement := bytes.Join([][]byte{parts[0], []byte("/__invalid"), parts[2]}, []byte(" "))
+					connection.pending = append(replacement, connection.pending[lineEnd:]...)
+					connection.deliver += len(replacement) - lineEnd
+				}
+			}
+		}
+		if err != nil && count == 0 {
+			return 0, err
+		}
+	}
+	count := len(destination)
+	if count > connection.deliver {
+		count = connection.deliver
+	}
+	copy(destination, connection.pending[:count])
+	connection.pending = connection.pending[count:]
+	connection.deliver -= count
+	if connection.deliver == 0 && !connection.bodyPresent {
+		connection.guarded = false
+	}
+	return count, nil
+}
+
+func headerBody(header []byte) (bool, int64) {
+	for _, line := range bytes.Split(bytes.ToLower(header), []byte("\r\n")) {
+		name, value, ok := bytes.Cut(line, []byte(":"))
+		if !ok {
+			continue
+		}
+		name, value = bytes.TrimSpace(name), bytes.TrimSpace(value)
+		if bytes.Equal(name, []byte("transfer-encoding")) {
+			return true, -1
+		}
+		if bytes.Equal(name, []byte("content-length")) {
+			length, err := strconv.ParseInt(string(value), 10, 64)
+			if err != nil || length < 0 {
+				return true, -1
+			}
+			return length != 0, length
+		}
+	}
+	return false, 0
+}
+
+func plain(response http.ResponseWriter, status int, body string) {
 	secure(response, "text/plain; charset=utf-8")
-	response.WriteHeader(http.StatusNotFound)
-	_, _ = io.WriteString(response, "not found\n")
+	response.WriteHeader(status)
+	_, _ = io.WriteString(response, body)
+}
+
+type requestRateLimiter struct {
+	mu          sync.Mutex
+	windowStart time.Time
+	requests    int
+}
+
+func (limiter *requestRateLimiter) allow(now time.Time) bool {
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	if limiter.windowStart.IsZero() || now.Sub(limiter.windowStart) >= time.Minute {
+		limiter.windowStart, limiter.requests = now, 0
+	}
+	if limiter.requests >= maxRequestsPerMinute {
+		return false
+	}
+	limiter.requests++
+	return true
 }
 
 func secure(response http.ResponseWriter, contentType string) {
@@ -201,7 +394,7 @@ func (server Server) load() (servingState, error) {
 	if err := server.safeParents(); err != nil {
 		return servingState{}, err
 	}
-	encoded, err := server.safeFile(configurationPath, 0o640, 64<<10)
+	encoded, err := server.safeFile(configurationPath, 0o640, 64<<10, false)
 	if err != nil {
 		return servingState{}, errors.New("Subscription Serving configuration is unsafe")
 	}
@@ -216,13 +409,13 @@ func (server Server) load() (servingState, error) {
 	if addressErr != nil || !address.IsValid() || server.production && !address.IsGlobalUnicast() || config.ListenPort != 10443 || config.CertificatePointer != "/"+certificatePath || tokenErr != nil || len(token) != 32 || hex.EncodeToString(token) != config.Token {
 		return servingState{}, errors.New("Subscription Serving configuration is invalid")
 	}
-	artifacts, err := server.loadArtifacts()
+	artifacts, err := server.loadArtifacts(address, server.production)
 	if err != nil {
 		return servingState{}, err
 	}
 	certificateDirectory, pointerErr := server.activeCertificateDirectory()
-	chain, chainErr := server.safeFile(certificateDirectory+"/fullchain.pem", 0o640, 1<<20)
-	key, keyErr := server.safeFile(certificateDirectory+"/privkey.pem", 0o640, 1<<20)
+	chain, chainErr := server.safeFile(certificateDirectory+"/fullchain.pem", 0o640, 1<<20, false)
+	key, keyErr := server.safeFile(certificateDirectory+"/privkey.pem", 0o640, 1<<20, false)
 	certificate, pairErr := tls.X509KeyPair(chain, key)
 	if pointerErr != nil || chainErr != nil || keyErr != nil || pairErr != nil || !validCertificate(certificate, address, server.roots, server.now()) {
 		return servingState{}, errors.New("Subscription Serving certificate is invalid")
@@ -266,7 +459,7 @@ func safeCertificateTarget(target string) bool {
 	return true
 }
 
-func (server Server) loadArtifacts() (map[string][]byte, error) {
+func (server Server) loadArtifacts(expectedAddress netip.Addr, requireAddressMatch bool) (map[string][]byte, error) {
 	entries, err := os.ReadDir(filepath.Join(server.root, artifactPath))
 	if err != nil || len(entries) != len(artifactNames) {
 		return nil, errors.New("active subscription artifact set is incomplete")
@@ -281,18 +474,111 @@ func (server Server) loadArtifacts() (map[string][]byte, error) {
 	}
 	artifacts := make(map[string][]byte, len(names))
 	for _, name := range names {
-		contents, err := server.safeFile(artifactPath+"/"+name, 0o640, 4<<20)
+		limit := int64(maxResponseBytes)
+		if name == "metadata" {
+			limit = maxMetadataBytes
+		}
+		contents, err := server.safeFile(artifactPath+"/"+name, 0o640, limit, true)
 		if err != nil {
 			return nil, errors.New("active subscription artifact is unsafe")
 		}
-		if name == "base64" {
-			if _, err := base64.StdEncoding.DecodeString(string(contents)); err != nil {
-				return nil, errors.New("active base64 subscription artifact is invalid")
-			}
-		}
 		artifacts[name] = contents
 	}
+	if !validArtifactSet(artifacts, expectedAddress, requireAddressMatch) {
+		return nil, errors.New("active subscription artifact set is invalid")
+	}
 	return artifacts, nil
+}
+
+type artifactMetadata struct {
+	Schema              string `json:"schema"`
+	ChangeSet           string `json:"change_set"`
+	SelectedAddress     string `json:"selected_address"`
+	DesiredStateSHA256  string `json:"desired_state_sha256"`
+	ManagedInputsSHA256 string `json:"managed_inputs_sha256"`
+	RelevantChecksums   struct {
+		ConnectionProfiles string `json:"connection_profiles"`
+		Subscription       string `json:"subscription"`
+	} `json:"relevant_checksums"`
+	Compatibility        string `json:"compatibility_definition"`
+	DesiredStateRevision uint64 `json:"desired_state_revision"`
+	ReleaseIdentity      struct {
+		Repository         string `json:"repository"`
+		Tag                string `json:"tag"`
+		Commit             string `json:"commit"`
+		ReleaseIndexSHA256 string `json:"release_index_sha256"`
+	} `json:"release_identity"`
+	ClientAccessAction string            `json:"client_access_action,omitempty"`
+	Representations    []string          `json:"representations"`
+	ArtifactSHA256     map[string]string `json:"artifact_sha256"`
+	ProfileCount       int               `json:"profile_count"`
+	Omissions          []struct {
+		ID string `json:"id"`
+	} `json:"omissions"`
+	ValidationComplete bool `json:"validation_complete"`
+}
+
+func validArtifactSet(artifacts map[string][]byte, expectedAddress netip.Addr, requireAddressMatch bool) bool {
+	decoded, err := base64.StdEncoding.DecodeString(string(artifacts["base64"]))
+	if err != nil || !bytes.Equal(decoded, artifacts["raw"]) || !bytes.Equal(artifacts["base64"], artifacts["v2rayn"]) || !bytes.Equal(artifacts["base64"], artifacts["shadowrocket"]) || !bytes.Equal(artifacts["karing"], artifacts["sing-box"]) || !json.Valid(artifacts["sing-box"]) || len(artifacts["mihomo"]) == 0 {
+		return false
+	}
+	var metadata artifactMetadata
+	decoder := json.NewDecoder(bytes.NewReader(artifacts["metadata"]))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&metadata) != nil {
+		return false
+	}
+	address, addressErr := netip.ParseAddr(metadata.SelectedAddress)
+	validAction := metadata.ClientAccessAction == "" || metadata.ClientAccessAction == "Rotate subscription token" || metadata.ClientAccessAction == "Revoke all client access"
+	if decoder.Decode(&struct{}{}) != io.EOF || metadata.Schema != "sbxr-subscription-artifact-set-v1" || !safeMetadataIdentity(metadata.ChangeSet) || addressErr != nil || !address.IsGlobalUnicast() || requireAddressMatch && address != expectedAddress || metadata.DesiredStateRevision == 0 || !validMetadataSHA(metadata.DesiredStateSHA256) || !validMetadataSHA(metadata.ManagedInputsSHA256) || !validMetadataSHA(metadata.RelevantChecksums.ConnectionProfiles) || !validMetadataSHA(metadata.RelevantChecksums.Subscription) || metadata.Compatibility != "sbxr-subscription-representations-v1" || !validMetadataRelease(metadata.ReleaseIdentity.Repository, metadata.ReleaseIdentity.Tag, metadata.ReleaseIdentity.Commit, metadata.ReleaseIdentity.ReleaseIndexSHA256) || !validAction || !metadata.ValidationComplete || !slices.Equal(metadata.Representations, []string{"base64", "raw", "v2rayn", "shadowrocket", "karing", "mihomo", "sing-box"}) {
+		return false
+	}
+	if len(metadata.ArtifactSHA256) != len(metadata.Representations) {
+		return false
+	}
+	for _, name := range metadata.Representations {
+		digest := sha256.Sum256(artifacts[name])
+		if metadata.ArtifactSHA256[name] != hex.EncodeToString(digest[:]) {
+			return false
+		}
+	}
+	profileCount := 0
+	if len(artifacts["raw"]) > 0 {
+		profileCount = strings.Count(string(artifacts["raw"]), "\n") + 1
+	}
+	validIDs := map[string]bool{"vless-reality-vision": true, "vless-xhttp": true, "vless-websocket": true, "hysteria2": true, "tuic": true, "anytls": true}
+	seen := map[string]bool{}
+	for _, omission := range metadata.Omissions {
+		if !validIDs[omission.ID] || seen[omission.ID] {
+			return false
+		}
+		seen[omission.ID] = true
+	}
+	return metadata.ProfileCount == profileCount && profileCount+len(metadata.Omissions) == 6
+}
+
+func safeMetadataIdentity(value string) bool {
+	if value == "" || len(value) > 128 {
+		return false
+	}
+	for _, character := range value {
+		if (character < 'a' || character > 'z') && (character < 'A' || character > 'Z') && (character < '0' || character > '9') && !strings.ContainsRune("_.:-", character) {
+			return false
+		}
+	}
+	return true
+}
+
+func validMetadataHex(value string) bool {
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func validMetadataSHA(value string) bool { return len(value) == 64 && validMetadataHex(value) }
+
+func validMetadataRelease(repository, tag, commit, index string) bool {
+	return repository != "" && tag != "" && (len(commit) == 40 || len(commit) == 64) && validMetadataHex(commit) && validMetadataSHA(index)
 }
 
 func selectRepresentation(route, path, userAgent string) (representation, bool, bool) {
@@ -374,11 +660,11 @@ func (server Server) safeDirectory(name string, mode fs.FileMode, gid int) bool 
 	return err == nil && ok && info.IsDir() && info.Mode()&os.ModeSymlink == 0 && info.Mode().Perm() == mode && uid == server.uid && (gid < 0 || actualGID == gid)
 }
 
-func (server Server) safeFile(name string, mode fs.FileMode, limit int64) ([]byte, error) {
+func (server Server) safeFile(name string, mode fs.FileMode, limit int64, allowEmpty bool) ([]byte, error) {
 	path := filepath.Join(server.root, name)
 	info, err := os.Lstat(path)
 	uid, gid, ok := identity(info)
-	if err != nil || !ok || !info.Mode().IsRegular() || info.Mode().Type() != 0 || info.Mode().Perm() != mode || info.Size() <= 0 || info.Size() > limit || uid != server.uid || gid != server.gid {
+	if err != nil || !ok || !info.Mode().IsRegular() || info.Mode().Type() != 0 || info.Mode().Perm() != mode || info.Size() < 0 || !allowEmpty && info.Size() == 0 || info.Size() > limit || uid != server.uid || gid != server.gid {
 		return nil, errors.New("unsafe file")
 	}
 	return os.ReadFile(path)

@@ -97,6 +97,12 @@ func TestPlanRefusesStaleIncompleteAndSecretBearingInputs(t *testing.T) {
 		func(request *subscriptionpublication.PlanRequest) {
 			request.ManagedInputsSHA256 = "SUBSCRIPTION-TOKEN-MARKER"
 		},
+		func(request *subscriptionpublication.PlanRequest) {
+			request.DesiredStateSHA256 = strings.Repeat("D", 64)
+		},
+		func(request *subscriptionpublication.PlanRequest) {
+			request.ReleaseIdentity.Commit = strings.Repeat("A", 40)
+		},
 		func(request *subscriptionpublication.PlanRequest) { request.Secrets = nil },
 	} {
 		request := base

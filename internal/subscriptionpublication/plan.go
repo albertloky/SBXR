@@ -149,13 +149,13 @@ func (module Interface) Plan(ctx context.Context, request PlanRequest) PlanResul
 }
 
 func validPlanSHA(value string) bool {
-	_, err := hex.DecodeString(value)
-	return len(value) == 64 && err == nil
+	decoded, err := hex.DecodeString(value)
+	return len(value) == 64 && err == nil && hex.EncodeToString(decoded) == value
 }
 
 func validRelease(value state.ReleaseIdentity) bool {
-	_, commitErr := hex.DecodeString(value.Commit)
-	return value.Repository != "" && value.Tag != "" && (len(value.Commit) == 40 || len(value.Commit) == 64) && commitErr == nil && validPlanSHA(value.ReleaseIndexSHA256)
+	commit, commitErr := hex.DecodeString(value.Commit)
+	return value.Repository != "" && value.Tag != "" && (len(value.Commit) == 40 || len(value.Commit) == 64) && commitErr == nil && hex.EncodeToString(commit) == value.Commit && validPlanSHA(value.ReleaseIndexSHA256)
 }
 
 func (plan *Plan) Identity() string {

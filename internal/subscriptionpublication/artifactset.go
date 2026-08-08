@@ -37,6 +37,7 @@ type Metadata struct {
 	ReleaseIdentity      state.ReleaseIdentity `json:"release_identity"`
 	ClientAccessAction   ClientAccessAction    `json:"client_access_action,omitempty"`
 	Representations      []string              `json:"representations"`
+	ArtifactSHA256       map[string]string     `json:"artifact_sha256"`
 	ProfileCount         int                   `json:"profile_count"`
 	Omissions            []Omission            `json:"omissions"`
 	ValidationComplete   bool                  `json:"validation_complete"`
@@ -71,12 +72,13 @@ func (PreparedArtifactSet) GoString() string {
 type artifactSetMetadata Metadata
 
 func NewPreparedArtifactSet(bodies map[string][]byte, metadata Metadata) (PreparedArtifactSet, error) {
+	bodies = cloneArtifacts(bodies)
+	metadata.ArtifactSHA256 = artifactSHA256(bodies)
 	internal := artifactSetMetadata(metadata)
 	encoded, err := json.Marshal(internal)
 	if err != nil {
 		return PreparedArtifactSet{}, err
 	}
-	bodies = cloneArtifacts(bodies)
 	bodies["metadata"] = append(encoded, '\n')
 	files := make([]ArtifactFile, len(artifactNames))
 	for index, name := range artifactNames {
@@ -129,7 +131,7 @@ func validatePreparedArtifactFiles(files []ArtifactFile) (PreparedArtifactSet, e
 	decodeErr := decoder.Decode(&metadata)
 	address, addressErr := netip.ParseAddr(metadata.SelectedAddress)
 	_, validAction := clientAccessEffect(metadata.ClientAccessAction)
-	if decodeErr != nil || decoder.Decode(&struct{}{}) != io.EOF || metadata.Schema != "sbxr-subscription-artifact-set-v1" || !safePlanIdentity(metadata.ChangeSet) || addressErr != nil || !address.IsGlobalUnicast() || metadata.DesiredStateRevision == 0 || !validPlanSHA(metadata.DesiredStateSHA256) || !validPlanSHA(metadata.ManagedInputsSHA256) || !validPlanSHA(metadata.RelevantChecksums.ConnectionProfiles) || !validPlanSHA(metadata.RelevantChecksums.Subscription) || metadata.Compatibility != string(CurrentCompatibilityDefinition) || metadata.ProfileCount < 0 || metadata.ProfileCount > 6 || strings.Join(metadata.Representations, ",") != strings.Join(artifactNames[:7], ",") || !validRelease(metadata.ReleaseIdentity) || !validAction || !metadata.ValidationComplete || !validArtifactOmissions(metadata.Omissions, metadata.ProfileCount) {
+	if decodeErr != nil || decoder.Decode(&struct{}{}) != io.EOF || metadata.Schema != "sbxr-subscription-artifact-set-v1" || !safePlanIdentity(metadata.ChangeSet) || addressErr != nil || !address.IsGlobalUnicast() || metadata.DesiredStateRevision == 0 || !validPlanSHA(metadata.DesiredStateSHA256) || !validPlanSHA(metadata.ManagedInputsSHA256) || !validPlanSHA(metadata.RelevantChecksums.ConnectionProfiles) || !validPlanSHA(metadata.RelevantChecksums.Subscription) || metadata.Compatibility != string(CurrentCompatibilityDefinition) || metadata.ProfileCount < 0 || metadata.ProfileCount > 6 || strings.Join(metadata.Representations, ",") != strings.Join(artifactNames[:7], ",") || !validRelease(metadata.ReleaseIdentity) || !validAction || !metadata.ValidationComplete || !validArtifactOmissions(metadata.Omissions, metadata.ProfileCount) || !validArtifactSHA256(metadata.ArtifactSHA256, bodies) {
 		return PreparedArtifactSet{}, errors.New("Subscription Publication artifact metadata is invalid")
 	}
 	decoded, err := base64.StdEncoding.DecodeString(string(bodies["base64"]))
@@ -199,6 +201,27 @@ func validArtifactOmissions(omissions []Omission, profileCount int) bool {
 		seen[omission.ID] = true
 	}
 	return len(omissions)+profileCount == 6
+}
+
+func artifactSHA256(bodies map[string][]byte) map[string]string {
+	digests := make(map[string]string, len(artifactNames)-1)
+	for _, name := range artifactNames[:7] {
+		digest := sha256.Sum256(bodies[name])
+		digests[name] = hex.EncodeToString(digest[:])
+	}
+	return digests
+}
+
+func validArtifactSHA256(want map[string]string, bodies map[string][]byte) bool {
+	if len(want) != len(artifactNames)-1 {
+		return false
+	}
+	for name, got := range artifactSHA256(bodies) {
+		if want[name] != got {
+			return false
+		}
+	}
+	return true
 }
 
 func safePlanIdentity(value string) bool { return identityPattern.MatchString(value) }

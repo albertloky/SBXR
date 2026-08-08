@@ -94,6 +94,46 @@ go test ./internal/subscriptionserving -run '^TestServeNegotiatesOnlyTheUnsuffix
 
 Require reviewed case-insensitive v2rayN, Mihomo/Clash Meta, and sing-box format hints only on the unsuffixed route. Require unknown and conflicting hints to return base64 with `X-SBXR-Representation: base64-uri-list`. Require exactly the negotiated responses to send `Vary: User-Agent`.
 
+### SS-SERVE-10 — Indistinguishable hostile-request refusal
+
+Run:
+
+```sh
+go test ./internal/subscriptionserving -run '^TestServeReturnsOneIndistinguishableRefusalForEveryHostileRequestShape$' -count=1
+```
+
+Require empty, short, long, prefixed, suffixed, aliased, repeated-slash, traversal, encoded-separator, malformed-escape, query, extra-component, missing-representation, unsupported-route, and disallowed-method requests to receive the same plain secret-safe `404` and fixed security headers. A `HEAD` response has the same status and headers but no body as required by HTTP.
+
+### SS-SERVE-11 — Fixed public resource bounds
+
+Run:
+
+```sh
+go test ./internal/subscriptionserving -run '^TestServeEnforcesFixed(ResourceBounds|ConnectionTimeouts)$' -count=1
+```
+
+Require exactly 60 parsed requests per one-minute window, including hostile requests while preserving their plain `404`, at most eight simultaneous TCP/TLS connections, at most 16 KiB of headers, no accepted request body with a 1 KiB defensive reader, at most 1 MiB per response, a five-second TLS handshake and header-read timeout, ten-second request-read and response-write timeouts, a 15-second total-operation timeout, and a 30-second idle timeout. These constants must remain fixed service rules rather than Owner configuration or client tracking.
+
+### SS-SERVE-12 — Complete immutable artifact refusal
+
+Run:
+
+```sh
+go test ./internal/subscriptionserving -run '^TestServeRejectsEveryUnsafeArtifactSet$' -count=1
+```
+
+Require unexpected, missing, non-regular, symbolic-link, permission-widened, changed, cross-representation-inconsistent, invalid-JSON, empty-required, invalid-metadata, and oversized artifact inputs to stop `Serve` with only `SUBSCRIPTION-SERVING-INPUT`.
+
+### SS-SERVE-13 — Secret-safe operational output
+
+Run:
+
+```sh
+go test ./internal/subscriptionserving -run '^TestServeNeverExposesSecretOrOperationalMarkers$' -count=1
+```
+
+Require token, complete-route, authorization, User-Agent, artifact, generated-configuration, profile-credential, selected-address, and injected external-error markers to remain absent from hostile responses and typed failures. The systemd checks in `SS-SERVE-06` separately require discarded output, no writable authority, hidden unrelated processes, and disabled core dumps.
+
 ## TLS Seam Verification
 
 Run all focused checks together:

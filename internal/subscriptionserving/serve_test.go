@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -265,7 +266,7 @@ func testServer(t *testing.T, address string) (Server, *x509.CertPool, string, s
 		tokenBytes[index] = byte(index + 1)
 	}
 	token := hex.EncodeToString(tokenBytes)
-	body := "dmxlc3M6Ly9leGFtcGxlCg=="
+	body := "dmxlc3M6Ly9leGFtcGxl"
 	mustDirectory(t, root, "etc", 0o755)
 	mustDirectory(t, root, "etc/sbxr", 0o750)
 	configuration, _ := json.Marshal(map[string]any{"token": token, "listen_port": 10443, "certificate_pointer": "/var/lib/sbxr/certificates/ip/current", "primary_address": address})
@@ -273,12 +274,24 @@ func testServer(t *testing.T, address string) (Server, *x509.CertPool, string, s
 	mustDirectory(t, root, "var/lib/sbxr", 0o755)
 	mustDirectory(t, root, "var/lib/sbxr/subscriptions", 0o750)
 	mustDirectory(t, root, "var/lib/sbxr/subscriptions/current", 0o750)
+	contents := map[string][]byte{
+		"base64": []byte(body), "raw": []byte("vless://example"), "v2rayn": []byte(body), "shadowrocket": []byte(body),
+		"karing": []byte("{}"), "mihomo": []byte("proxies: []\n"), "sing-box": []byte("{}"),
+	}
+	digests := map[string]string{}
+	for name, contents := range contents {
+		digest := sha256.Sum256(contents)
+		digests[name] = hex.EncodeToString(digest[:])
+	}
+	contents["metadata"], _ = json.Marshal(map[string]any{
+		"schema": "sbxr-subscription-artifact-set-v1", "change_set": "fixture-change", "selected_address": "198.51.100.10",
+		"desired_state_sha256": strings.Repeat("d", 64), "managed_inputs_sha256": strings.Repeat("e", 64), "relevant_checksums": map[string]string{"connection_profiles": strings.Repeat("f", 64), "subscription": strings.Repeat("1", 64)},
+		"compatibility_definition": "sbxr-subscription-representations-v1", "desired_state_revision": 2, "release_identity": map[string]string{"repository": "github.com/albertloky/SBXR", "tag": "v1.0.0", "commit": strings.Repeat("a", 40), "release_index_sha256": strings.Repeat("b", 64)},
+		"representations": []string{"base64", "raw", "v2rayn", "shadowrocket", "karing", "mihomo", "sing-box"}, "artifact_sha256": digests,
+		"profile_count": 1, "omissions": []map[string]string{{"id": "vless-xhttp"}, {"id": "vless-websocket"}, {"id": "hysteria2"}, {"id": "tuic"}, {"id": "anytls"}}, "validation_complete": true,
+	})
 	for _, name := range []string{"base64", "raw", "v2rayn", "shadowrocket", "karing", "mihomo", "sing-box", "metadata"} {
-		contents := []byte("fixture")
-		if name == "base64" {
-			contents = []byte(body)
-		}
-		mustFile(t, root, "var/lib/sbxr/subscriptions/current/"+name, contents, 0o640)
+		mustFile(t, root, "var/lib/sbxr/subscriptions/current/"+name, contents[name], 0o640)
 	}
 	roots := testCertificate(t, root, address)
 	return NewAt(root, uid, gid, roots, time.Now()), roots, token, body
