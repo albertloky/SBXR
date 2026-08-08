@@ -60,7 +60,7 @@ func TestRenderMihomoOmitsDisabledProfileAndPreservesIPv6(t *testing.T) {
 	module := subscriptionpublication.New(mihomoValidatorFunc(func(_ context.Context, document io.Reader) error {
 		validated, _ = io.ReadAll(document)
 		return nil
-	}))
+	}), singBoxValidatorFunc(func(context.Context, io.Reader) error { return nil }))
 
 	result, err := module.Render(t.Context(), source, reader)
 	if err != nil {
@@ -95,7 +95,7 @@ func TestRenderRefusesMihomoValidatorFailureWithoutLeakingSecrets(t *testing.T) 
 	source, reader := sixProfileSource(t, "198.51.100.10")
 	module := subscriptionpublication.New(mihomoValidatorFunc(func(context.Context, io.Reader) error {
 		return errors.New("hy:p@ss /雪")
-	}))
+	}), singBoxValidatorFunc(func(context.Context, io.Reader) error { return nil }))
 
 	result, err := module.Render(t.Context(), source, reader)
 	if err == nil || strings.Contains(err.Error(), "hy:p@ss /雪") || result.Mihomo != nil {
@@ -121,14 +121,14 @@ func TestPinnedMihomoAcceptsCompleteDocument(t *testing.T) {
 		return nil
 	})
 	source, reader := sixProfileSource(t, "198.51.100.10")
-	if result, err := subscriptionpublication.New(validator).Render(t.Context(), source, reader); err != nil || result.ProfileCount != 6 {
+	if result, err := subscriptionpublication.New(validator, singBoxValidatorFunc(func(context.Context, io.Reader) error { return nil })).Render(t.Context(), source, reader); err != nil || result.ProfileCount != 6 {
 		t.Fatalf("pinned Mihomo validation = count %d, error %v", result.ProfileCount, err)
 	}
 	disabled, err := connectionprofiles.NewPublicationSource(nil, allPublicationOmissions())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result, err := subscriptionpublication.New(validator).Render(t.Context(), disabled, reader); err != nil || result.ProfileCount != 0 {
+	if result, err := subscriptionpublication.New(validator, singBoxValidatorFunc(func(context.Context, io.Reader) error { return nil })).Render(t.Context(), disabled, reader); err != nil || result.ProfileCount != 0 {
 		t.Fatalf("pinned Mihomo all-disabled validation = count %d, error %v", result.ProfileCount, err)
 	}
 	if err := validator.ValidateMihomo(t.Context(), strings.NewReader("proxies:\n  - malformed")); err == nil {
@@ -148,7 +148,7 @@ func allPublicationOmissions() []connectionprofiles.PublicationOmission {
 }
 
 func newAcceptingTestModule() subscriptionpublication.Interface {
-	return subscriptionpublication.New(mihomoValidatorFunc(func(context.Context, io.Reader) error { return nil }))
+	return subscriptionpublication.New(mihomoValidatorFunc(func(context.Context, io.Reader) error { return nil }), singBoxValidatorFunc(func(context.Context, io.Reader) error { return nil }))
 }
 
 func TestRenderProducesValidatedSixProfileMihomoDocument(t *testing.T) {
@@ -236,7 +236,7 @@ rules:
 			return errors.New("unexpected Mihomo document")
 		}
 		return nil
-	}))
+	}), singBoxValidatorFunc(func(context.Context, io.Reader) error { return nil }))
 
 	first, err := module.Render(t.Context(), source, reader)
 	if err != nil {

@@ -19,26 +19,73 @@ import (
 
 var errInvalidSource = errors.New("Subscription Publication refused an invalid rendering source")
 
+const (
+	singBoxXHTTPReason = "VLESS XHTTP is unsupported by the sing-box transport contract"
+	karingXHTTPReason  = "VLESS XHTTP is unavailable in the Karing core"
+)
+
 // MihomoValidator is the pinned full-document client-validation Seam.
 type MihomoValidator interface {
 	ValidateMihomo(context.Context, io.Reader) error
 }
 
-type Interface struct{ mihomo MihomoValidator }
+// SingBoxValidator is the pinned full-document client-validation Seam.
+type SingBoxValidator interface {
+	ValidateSingBox(context.Context, io.Reader) error
+}
 
-// New returns a rendering Interface bound to one Mihomo validation Seam.
-func New(mihomo MihomoValidator) Interface { return Interface{mihomo: mihomo} }
+type Interface struct {
+	mihomo  MihomoValidator
+	singBox SingBoxValidator
+}
 
-// Artifacts contains the explicit secret-bearing URI and Mihomo outputs. Its
-// default formatting and JSON rendering stay redacted.
+// New returns a rendering Interface bound to the required client-validation Seams.
+func New(mihomo MihomoValidator, singBox SingBoxValidator) Interface {
+	return Interface{mihomo: mihomo, singBox: singBox}
+}
+
+type Availability string
+
+const (
+	NotOffered Availability = "Not offered"
+	Disabled   Availability = "Disabled"
+)
+
+type RepresentationOmission struct {
+	ID     connectionprofiles.ProfileID
+	Status Availability
+	Reason string
+}
+
+// Representation contains one explicit secret-bearing body and its honest metadata.
+type Representation struct {
+	Body         []byte
+	ProfileCount int
+	Omissions    []RepresentationOmission
+}
+
+func (representation Representation) String() string {
+	return "Subscription Publication representation: " + strconv.Itoa(representation.ProfileCount) + " Connection Profiles, body redacted"
+}
+
+func (representation Representation) GoString() string { return representation.String() }
+
+func (Representation) MarshalJSON() ([]byte, error) {
+	return nil, errors.New("Subscription Publication representation cannot be rendered")
+}
+
+// Artifacts contains the explicit secret-bearing raw, base64, v2rayN, Mihomo,
+// sing-box, and Karing outputs. Its default formatting and JSON rendering stay
+// redacted.
 type Artifacts struct {
 	Raw, Base64, V2RayN, Mihomo []byte
+	SingBox, Karing             Representation
 	ProfileCount                int
 	Omissions                   []connectionprofiles.PublicationOmission
 }
 
 func (artifacts Artifacts) String() string {
-	return "Subscription Publication artifacts: " + strconv.Itoa(artifacts.ProfileCount) + " profiles, bodies redacted"
+	return "Subscription Publication artifacts: " + strconv.Itoa(artifacts.ProfileCount) + " Connection Profiles, bodies redacted"
 }
 
 func (artifacts Artifacts) GoString() string { return artifacts.String() }
@@ -47,10 +94,11 @@ func (Artifacts) MarshalJSON() ([]byte, error) {
 	return nil, errors.New("Subscription Publication artifacts cannot be rendered")
 }
 
-// Render produces raw, standard-base64, v2rayN, and validated Mihomo bytes from
-// one complete typed Connection Profiles source.
+// Render produces all six client representations from one complete typed
+// Connection Profile source. Both structured documents must pass their pinned
+// validators before any artifact is returned.
 func (module Interface) Render(ctx context.Context, source connectionprofiles.PublicationSource, secrets state.ClientAccessReader) (Artifacts, error) {
-	if ctx == nil || secrets == nil || module.mihomo == nil {
+	if ctx == nil || secrets == nil || module.mihomo == nil || module.singBox == nil {
 		return Artifacts{}, errInvalidSource
 	}
 	profiles := source.Profiles()
@@ -72,7 +120,99 @@ func (module Interface) Render(ctx context.Context, source connectionprofiles.Pu
 	if !ok || module.mihomo.ValidateMihomo(ctx, bytes.NewReader(mihomo)) != nil {
 		return Artifacts{}, errInvalidSource
 	}
-	return Artifacts{Raw: raw, Base64: encoded, V2RayN: append([]byte(nil), encoded...), Mihomo: mihomo, ProfileCount: len(profiles), Omissions: source.Omissions()}, nil
+	singBox, count, ok := renderSingBox(profiles, secrets)
+	if !ok || module.singBox.ValidateSingBox(ctx, bytes.NewReader(singBox)) != nil {
+		return Artifacts{}, errInvalidSource
+	}
+	return Artifacts{
+		Raw: raw, Base64: encoded, V2RayN: append([]byte(nil), encoded...), Mihomo: mihomo,
+		SingBox:      representation(singBox, count, source.Omissions(), singBoxXHTTPReason),
+		Karing:       representation(singBox, count, source.Omissions(), karingXHTTPReason),
+		ProfileCount: len(profiles), Omissions: source.Omissions(),
+	}, nil
+}
+
+func representation(body []byte, count int, disabled []connectionprofiles.PublicationOmission, xhttpReason string) Representation {
+	omissions := []RepresentationOmission{{ID: connectionprofiles.VLESSXHTTPProfileID, Status: NotOffered, Reason: xhttpReason}}
+	for _, omission := range disabled {
+		if omission.ID != connectionprofiles.VLESSXHTTPProfileID {
+			omissions = append(omissions, RepresentationOmission{ID: omission.ID, Status: Disabled, Reason: "The Connection Profile is disabled"})
+		}
+	}
+	return Representation{Body: append([]byte(nil), body...), ProfileCount: count, Omissions: omissions}
+}
+
+func renderSingBox(profiles []connectionprofiles.PublicationProfile, secrets state.ClientAccessReader) ([]byte, int, bool) {
+	read := func(value state.ClientAccessValue) string { return secrets.ReadClientAccessValue(value) }
+	outbounds := make([]any, 0, len(profiles)+1)
+	tags := make([]string, 0, len(profiles))
+	for _, profile := range profiles {
+		outbound := map[string]any{"tag": profile.Name, "server": profile.Address, "server_port": profile.Port}
+		switch profile.ID {
+		case connectionprofiles.VLESSRealityVisionProfileID:
+			uuid, shortID := read(profile.UUID), read(profile.ShortID)
+			if uuid == "" || shortID == "" {
+				return nil, 0, false
+			}
+			tls := singBoxTLS(profile.ServerName)
+			tls["reality"] = map[string]any{"enabled": true, "public_key": profile.PublicKey, "short_id": shortID}
+			tls["utls"] = map[string]any{"enabled": true, "fingerprint": "chrome"}
+			outbound["type"], outbound["uuid"], outbound["flow"], outbound["tls"] = "vless", uuid, "xtls-rprx-vision", tls
+		case connectionprofiles.VLESSXHTTPProfileID:
+			continue
+		case connectionprofiles.VLESSWebSocketProfileID:
+			uuid, path := read(profile.UUID), read(profile.Path)
+			if uuid == "" || path == "" {
+				return nil, 0, false
+			}
+			outbound["type"], outbound["uuid"], outbound["tls"] = "vless", uuid, singBoxTLS(profile.TLSName)
+			outbound["transport"] = map[string]any{"type": "ws", "path": path, "headers": map[string]any{"Host": profile.HTTPHost}}
+		case connectionprofiles.Hysteria2ProfileID:
+			password := read(profile.Password)
+			if password == "" {
+				return nil, 0, false
+			}
+			outbound["type"], outbound["password"], outbound["tls"] = "hysteria2", password, singBoxTLS(profile.ServerName)
+		case connectionprofiles.TUICProfileID:
+			uuid, password := read(profile.UUID), read(profile.Password)
+			if uuid == "" || password == "" || !validCongestionControl(profile.CongestionControl) {
+				return nil, 0, false
+			}
+			outbound["type"], outbound["uuid"], outbound["password"] = "tuic", uuid, password
+			outbound["congestion_control"], outbound["zero_rtt_handshake"], outbound["tls"] = profile.CongestionControl, false, singBoxTLS(profile.ServerName)
+		case connectionprofiles.AnyTLSProfileID:
+			password := read(profile.Password)
+			if password == "" {
+				return nil, 0, false
+			}
+			outbound["type"], outbound["password"], outbound["tls"] = "anytls", password, singBoxTLS(profile.ServerName)
+		default:
+			return nil, 0, false
+		}
+		outbounds = append(outbounds, outbound)
+		tags = append(tags, profile.Name)
+	}
+	inbounds := []any{}
+	route := map[string]any{"default_domain_resolver": "local-dns"}
+	if len(tags) != 0 {
+		outbounds = append(outbounds, map[string]any{"type": "selector", "tag": "SBXR", "outbounds": tags, "default": tags[0]})
+		inbounds = append(inbounds, map[string]any{"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 2080})
+		route["final"] = "SBXR"
+	}
+	document, err := json.MarshalIndent(map[string]any{
+		"dns":       map[string]any{"servers": []any{map[string]any{"type": "local", "tag": "local-dns"}}},
+		"inbounds":  inbounds,
+		"outbounds": outbounds,
+		"route":     route,
+	}, "", "  ")
+	if err != nil {
+		return nil, 0, false
+	}
+	return append(document, '\n'), len(tags), true
+}
+
+func singBoxTLS(serverName string) map[string]any {
+	return map[string]any{"enabled": true, "server_name": serverName}
 }
 
 func renderMihomo(profiles []connectionprofiles.PublicationProfile, secrets state.ClientAccessReader) ([]byte, bool) {
