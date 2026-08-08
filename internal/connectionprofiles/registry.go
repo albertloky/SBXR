@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/netip"
 	"reflect"
+	"sync/atomic"
 	"time"
 
 	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
@@ -71,6 +72,101 @@ func GenerateRegistryCredentials() (RegistryCredentials, error) {
 		return RegistryCredentials{}, errors.New("six independent Connection Profile credentials could not be generated")
 	}
 	return credentials, nil
+}
+
+// RegistryRotation is a one-use, redacted handoff containing candidate
+// Connection Profiles, their publication source, and leased render access.
+type RegistryRotation struct {
+	profiles state.ConnectionProfiles
+	source   PublicationSource
+	secrets  registryCredentialReader
+	used     atomic.Bool
+}
+
+func (RegistryRotation) String() string   { return "Connection Profile registry rotation: protected" }
+func (RegistryRotation) GoString() string { return "Connection Profile registry rotation: protected" }
+func (RegistryRotation) MarshalJSON() ([]byte, error) {
+	return nil, errors.New("Connection Profile registry rotation cannot be rendered")
+}
+func (rotation *RegistryRotation) ConnectionProfiles() state.ConnectionProfiles {
+	if rotation == nil {
+		return state.ConnectionProfiles{}
+	}
+	return rotation.profiles
+}
+func (rotation *RegistryRotation) PublicationSource() PublicationSource {
+	if rotation == nil {
+		return PublicationSource{}
+	}
+	return rotation.source
+}
+
+// WithClientAccessReader leases generated values only for one immediate owning-
+// Module render. Retaining the reader after the callback yields no values.
+func (rotation *RegistryRotation) WithClientAccessReader(use func(state.ClientAccessReader) error) error {
+	if rotation == nil || use == nil || !rotation.used.CompareAndSwap(false, true) {
+		return errors.New("Connection Profile registry rotation render authority unavailable")
+	}
+	lease := &registryCredentialLease{values: rotation.secrets}
+	lease.active.Store(true)
+	defer lease.active.Store(false)
+	return use(lease)
+}
+
+// RotateRegistryCredentials replaces every client credential while preserving
+// Connection Profile settings, enablement, and non-credential publication facts.
+func RotateRegistryCredentials(profiles state.ConnectionProfiles, source PublicationSource) (*RegistryRotation, error) {
+	if !PublicationInputsMatch(source, profiles) {
+		return nil, errors.New("Connection Profile publication source does not match current settings")
+	}
+	credentials, err := GenerateRegistryCredentials()
+	if err != nil {
+		return nil, err
+	}
+	secrets := registryCredentialReader{}
+	protect := func(value string) state.ClientAccessValue {
+		protected := state.NewClientAccessValue(value)
+		secrets[protected] = value
+		return protected
+	}
+	profiles.VLESSRealityVision.UUID = protect(credentials.Reality.uuid.value)
+	profiles.VLESSRealityVision.PrivateKey = state.NewInfrastructureSecret(credentials.Reality.privateKey.value)
+	profiles.VLESSRealityVision.PublicKey = credentials.Reality.publicKey.value
+	profiles.VLESSRealityVision.ShortID = protect(credentials.Reality.shortID.value)
+	profiles.VLESSXHTTP.UUID = protect(credentials.XHTTP.uuid.value)
+	profiles.VLESSXHTTP.Path = protect(credentials.XHTTP.path.value)
+	profiles.VLESSWebSocket.UUID = protect(credentials.WebSocket.uuid.value)
+	profiles.VLESSWebSocket.Path = protect(credentials.WebSocket.path.value)
+	profiles.Hysteria2.Password = protect(credentials.Hysteria2.password.value)
+	if profiles.Hysteria2.Obfuscation || profiles.Hysteria2.ObfuscationSecret != (state.ClientAccessValue{}) {
+		obfuscationSecret, err := generateHexSecret()
+		if err != nil {
+			return nil, errors.New("Hysteria2 obfuscation secret generation failed")
+		}
+		profiles.Hysteria2.ObfuscationSecret = protect(obfuscationSecret)
+	}
+	profiles.TUIC.UUID = protect(credentials.TUIC.uuid.value)
+	profiles.TUIC.Password = protect(credentials.TUIC.password.value)
+	profiles.AnyTLS.Password = protect(credentials.AnyTLS.password.value)
+	candidateSource, err := publicationSourceWithCandidateCredentials(source, profiles)
+	if err != nil {
+		return nil, err
+	}
+	return &RegistryRotation{profiles: profiles, source: candidateSource, secrets: secrets}, nil
+}
+
+type registryCredentialReader map[state.ClientAccessValue]string
+
+type registryCredentialLease struct {
+	values registryCredentialReader
+	active atomic.Bool
+}
+
+func (reader *registryCredentialLease) ReadClientAccessValue(value state.ClientAccessValue) string {
+	if reader == nil || !reader.active.Load() {
+		return ""
+	}
+	return reader.values[value]
 }
 
 func (credentials RegistryCredentials) Ready() bool {
@@ -237,7 +333,9 @@ type PublicationProfile struct {
 	Name, Address, Hostname, ServerName, Transport, Security string
 	Port                                                     uint16
 	UUID, Password, Path, ShortID                            state.ClientAccessValue
+	ObfuscationSecret                                        state.ClientAccessValue
 	PublicKey, Fingerprint, Flow, HTTPHost, TLSName          string
+	Obfuscation                                              bool
 	CongestionControl                                        state.CongestionControl
 	XHTTPServerMode                                          state.XHTTPMode
 }
@@ -280,6 +378,76 @@ func (source PublicationSource) Profiles() []PublicationProfile {
 }
 func (source PublicationSource) Omissions() []PublicationOmission {
 	return append([]PublicationOmission(nil), source.omissions...)
+}
+
+// PublicationInputsMatch proves that one publication source carries every
+// rendered fact owned by candidate Connection Profiles.
+func PublicationInputsMatch(source PublicationSource, candidate state.ConnectionProfiles) bool {
+	profiles, omissions := source.Profiles(), source.Omissions()
+	profileByID := make(map[ProfileID]PublicationProfile, len(profiles))
+	omitted := make(map[ProfileID]bool, len(omissions))
+	for _, profile := range profiles {
+		profileByID[profile.ID] = profile
+	}
+	for _, omission := range omissions {
+		omitted[omission.ID] = true
+	}
+	checks := []struct {
+		id      ProfileID
+		enabled bool
+		match   func(PublicationProfile) bool
+	}{
+		{VLESSRealityVisionProfileID, candidate.VLESSRealityVision.Enabled, func(profile PublicationProfile) bool {
+			return profile.Port == candidate.VLESSRealityVision.Port && profile.UUID == candidate.VLESSRealityVision.UUID && profile.ShortID == candidate.VLESSRealityVision.ShortID && profile.PublicKey == candidate.VLESSRealityVision.PublicKey && profile.ServerName == candidate.VLESSRealityVision.ServerName && profile.Fingerprint == candidate.VLESSRealityVision.Fingerprint && profile.Transport == "RAW" && profile.Security == "REALITY" && profile.Flow == "xtls-rprx-vision"
+		}},
+		{VLESSXHTTPProfileID, candidate.VLESSXHTTP.Enabled, func(profile PublicationProfile) bool {
+			return profile.Port == 443 && profile.UUID == candidate.VLESSXHTTP.UUID && profile.Path == candidate.VLESSXHTTP.Path && profile.Address == candidate.VLESSXHTTP.Hostname && profile.Hostname == candidate.VLESSXHTTP.Hostname && profile.Transport == "XHTTP" && profile.Security == "TLS" && profile.XHTTPServerMode == candidate.VLESSXHTTP.Mode
+		}},
+		{VLESSWebSocketProfileID, candidate.VLESSWebSocket.Enabled, func(profile PublicationProfile) bool {
+			return profile.Port == 443 && profile.UUID == candidate.VLESSWebSocket.UUID && profile.Path == candidate.VLESSWebSocket.Path && profile.Address == candidate.VLESSWebSocket.Hostname && profile.Hostname == candidate.VLESSWebSocket.Hostname && profile.TLSName == candidate.VLESSWebSocket.Hostname && profile.HTTPHost != "" && profile.Transport == "WebSocket" && profile.Security == "TLS"
+		}},
+		{Hysteria2ProfileID, candidate.Hysteria2.Enabled, func(profile PublicationProfile) bool {
+			return profile.Port == candidate.Hysteria2.Port && profile.Password == candidate.Hysteria2.Password && profile.ServerName == candidate.Hysteria2.ServerName && profile.Transport == "QUIC" && profile.Security == "TLS" && profile.Obfuscation == candidate.Hysteria2.Obfuscation && profile.ObfuscationSecret == candidate.Hysteria2.ObfuscationSecret
+		}},
+		{TUICProfileID, candidate.TUIC.Enabled, func(profile PublicationProfile) bool {
+			return profile.Port == candidate.TUIC.Port && profile.UUID == candidate.TUIC.UUID && profile.Password == candidate.TUIC.Password && profile.ServerName == candidate.TUIC.ServerName && profile.Transport == "QUIC" && profile.Security == "TLS" && profile.CongestionControl == candidate.TUIC.CongestionControl
+		}},
+		{AnyTLSProfileID, candidate.AnyTLS.Enabled, func(profile PublicationProfile) bool {
+			return profile.Port == candidate.AnyTLS.Port && profile.Password == candidate.AnyTLS.Password && profile.ServerName == candidate.AnyTLS.ServerName && profile.Transport == "TCP" && profile.Security == "TLS"
+		}},
+	}
+	for _, check := range checks {
+		profile, present := profileByID[check.id]
+		if check.enabled != present || check.enabled && (!check.match(profile) || omitted[check.id]) || !check.enabled && !omitted[check.id] {
+			return false
+		}
+	}
+	return true
+}
+
+func PublicationSourceMatches(left, right PublicationSource) bool {
+	return reflect.DeepEqual(left, right)
+}
+
+func publicationSourceWithCandidateCredentials(source PublicationSource, candidate state.ConnectionProfiles) (PublicationSource, error) {
+	profiles := source.Profiles()
+	for index := range profiles {
+		switch profiles[index].ID {
+		case VLESSRealityVisionProfileID:
+			profiles[index].UUID, profiles[index].ShortID, profiles[index].PublicKey = candidate.VLESSRealityVision.UUID, candidate.VLESSRealityVision.ShortID, candidate.VLESSRealityVision.PublicKey
+		case VLESSXHTTPProfileID:
+			profiles[index].UUID, profiles[index].Path = candidate.VLESSXHTTP.UUID, candidate.VLESSXHTTP.Path
+		case VLESSWebSocketProfileID:
+			profiles[index].UUID, profiles[index].Path = candidate.VLESSWebSocket.UUID, candidate.VLESSWebSocket.Path
+		case Hysteria2ProfileID:
+			profiles[index].Password, profiles[index].ObfuscationSecret = candidate.Hysteria2.Password, candidate.Hysteria2.ObfuscationSecret
+		case TUICProfileID:
+			profiles[index].UUID, profiles[index].Password = candidate.TUIC.UUID, candidate.TUIC.Password
+		case AnyTLSProfileID:
+			profiles[index].Password = candidate.AnyTLS.Password
+		}
+	}
+	return NewPublicationSource(profiles, source.Omissions())
 }
 
 type RegistryViewResult struct {
@@ -964,7 +1132,7 @@ func registryPublication(request RegistryViewRequest) PublicationSource {
 		{request.Reality.Enabled, PublicationProfile{ID: VLESSRealityVisionProfileID, Name: registryDefinitions[0].name, Address: request.ClientAddress, Port: request.Reality.Port, ServerName: request.Reality.Target.ServerName, Transport: "RAW", Security: "REALITY", UUID: state.NewClientAccessValue(request.Reality.Credentials.uuid.value), ShortID: state.NewClientAccessValue(request.Reality.Credentials.shortID.value), PublicKey: request.Reality.Credentials.publicKey.value, Fingerprint: request.Reality.Fingerprint, Flow: "xtls-rprx-vision"}},
 		{request.XHTTP.Enabled, PublicationProfile{ID: VLESSXHTTPProfileID, Name: registryDefinitions[1].name, Address: request.XHTTP.Hostname, Port: 443, Hostname: request.XHTTP.Hostname, Transport: "XHTTP", Security: "TLS", UUID: state.NewClientAccessValue(request.XHTTP.Credentials.uuid.value), Path: state.NewClientAccessValue(request.XHTTP.Credentials.path.value), XHTTPServerMode: request.XHTTP.Mode}},
 		{request.WebSocket.Enabled, PublicationProfile{ID: VLESSWebSocketProfileID, Name: registryDefinitions[2].name, Address: request.WebSocket.Hostname, Port: 443, Hostname: request.WebSocket.Hostname, Transport: "WebSocket", Security: "TLS", UUID: state.NewClientAccessValue(request.WebSocket.Credentials.uuid.value), Path: state.NewClientAccessValue(request.WebSocket.Credentials.path.value), HTTPHost: request.WebSocket.HTTPHost, TLSName: request.WebSocket.TLSName}},
-		{request.Hysteria2.Enabled, PublicationProfile{ID: Hysteria2ProfileID, Name: registryDefinitions[3].name, Address: request.ClientAddress, Port: request.Hysteria2.Port, ServerName: request.Hysteria2.ServerName, Transport: "QUIC", Security: "TLS", Password: state.NewClientAccessValue(request.Hysteria2.Credentials.password.value)}},
+		{request.Hysteria2.Enabled, PublicationProfile{ID: Hysteria2ProfileID, Name: registryDefinitions[3].name, Address: request.ClientAddress, Port: request.Hysteria2.Port, ServerName: request.Hysteria2.ServerName, Transport: "QUIC", Security: "TLS", Password: state.NewClientAccessValue(request.Hysteria2.Credentials.password.value), Obfuscation: request.Hysteria2.Credentials.obfuscation, ObfuscationSecret: state.NewClientAccessValue(request.Hysteria2.Credentials.obfuscationSecret.value)}},
 		{request.TUIC.Enabled, PublicationProfile{ID: TUICProfileID, Name: registryDefinitions[4].name, Address: request.ClientAddress, Port: request.TUIC.Port, ServerName: request.TUIC.ServerName, Transport: "QUIC", Security: "TLS", UUID: state.NewClientAccessValue(request.TUIC.Credentials.uuid.value), Password: state.NewClientAccessValue(request.TUIC.Credentials.password.value), CongestionControl: request.TUIC.CongestionControl}},
 		{request.AnyTLS.Enabled, PublicationProfile{ID: AnyTLSProfileID, Name: registryDefinitions[5].name, Address: request.ClientAddress, Port: request.AnyTLS.Port, ServerName: request.AnyTLS.ServerName, Transport: "TCP", Security: "TLS", Password: state.NewClientAccessValue(request.AnyTLS.Credentials.password.value)}},
 	}

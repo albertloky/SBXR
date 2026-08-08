@@ -184,6 +184,13 @@ func renderSingBox(profiles []connectionprofiles.PublicationProfile, secrets sta
 				return nil, 0, false
 			}
 			outbound["type"], outbound["password"], outbound["tls"] = "hysteria2", password, singBoxTLS(profile.ServerName)
+			if profile.Obfuscation {
+				obfuscationSecret := read(profile.ObfuscationSecret)
+				if obfuscationSecret == "" {
+					return nil, 0, false
+				}
+				outbound["obfs"] = map[string]any{"type": "salamander", "password": obfuscationSecret}
+			}
 		case connectionprofiles.TUICProfileID:
 			uuid, password := read(profile.UUID), read(profile.Password)
 			if uuid == "" || password == "" || !validCongestionControl(profile.CongestionControl) {
@@ -285,6 +292,14 @@ func renderMihomo(profiles []connectionprofiles.PublicationProfile, secrets stat
 			if !writeMihomoDirectTLS(&document, profile, "hysteria2", password) {
 				return nil, false
 			}
+			if profile.Obfuscation {
+				obfuscationSecret := read(profile.ObfuscationSecret)
+				if obfuscationSecret == "" {
+					return nil, false
+				}
+				document.WriteString("    obfs: salamander\n")
+				writeMihomoString(&document, "    ", "obfs-password", obfuscationSecret)
+			}
 		case connectionprofiles.TUICProfileID:
 			uuid, password := read(profile.UUID), read(profile.Password)
 			if uuid == "" || password == "" || !validCongestionControl(profile.CongestionControl) {
@@ -380,6 +395,14 @@ func renderProfile(profile connectionprofiles.PublicationProfile, secrets state.
 		}
 		user = url.User(password)
 		query = url.Values{"sni": {profile.ServerName}, "insecure": {"0"}}
+		if profile.Obfuscation {
+			obfuscationSecret := read(profile.ObfuscationSecret)
+			if obfuscationSecret == "" {
+				return "", false
+			}
+			query.Set("obfs", "salamander")
+			query.Set("obfs-password", obfuscationSecret)
+		}
 	case connectionprofiles.TUICProfileID:
 		scheme = "tuic"
 		uuid, password := read(profile.UUID), read(profile.Password)

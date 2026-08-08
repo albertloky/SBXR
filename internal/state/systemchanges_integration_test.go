@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -646,6 +647,63 @@ func TestSubscriptionRollbackFailureEntersRecoveryRequired(t *testing.T) {
 	}
 }
 
+func TestAllClientAccessRevocationCommitsOrRollsBackAsOneTransaction(t *testing.T) {
+	check := systemchanges.Check{Owner: systemchanges.SubscriptionModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "SUBSCRIPTION-PUBLICATION-SERVING-AGREEMENT"}
+	for _, test := range []struct {
+		name      string
+		failCheck int
+		outcome   systemchanges.ApplyOutcome
+	}{
+		{"commit", 0, systemchanges.Completed},
+		{"post-publication rollback", 2, systemchanges.RollbackSucceeded},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stateModule, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.SettingChangeMutation, check, systemChangeTestOptions{subscription: true, stepTimeout: time.Second, candidateEdit: replaceAllClientAccessValues})
+			root := t.TempDir()
+			prepareLock(t, root)
+			executor := &transactionSubscriptionExecutor{failCheck: test.failCheck}
+			result := systemchanges.New(ubuntu.NewAtWithSubscriptionPublication(root, func() (systemchanges.Observation, error) { return observed, nil }, &controlledUbuntuHost{root: root}, executor, stateModule)).Apply(changeSet)
+			if result.Outcome != test.outcome {
+				t.Fatalf("all-client revocation = %+v", result)
+			}
+			lineage := intentManagedRequest()
+			want := completeDesiredState()
+			if test.outcome == systemchanges.Completed {
+				lineage = LoadRequest{Baseline: ManagedEvidence, SupportedRelease: testRelease, Lineage: &LineageProof{Revision: 8, LastCompletedChangeSet: "change-0008", ReleaseIdentity: testRelease}}
+				replaceAllClientAccessValues(&want)
+			}
+			loaded, err := stateModule.Load(lineage)
+			if err != nil || loaded.Snapshot == nil || !reflect.DeepEqual(loaded.Snapshot.DesiredState, want) {
+				t.Fatalf("published Desired State = (%+v, %v)", loaded, err)
+			}
+			encoded, _ := json.Marshal(result)
+			if bytes.Contains(encoded, []byte("CLIENT-ACCESS-REVOCATION-MARKER")) {
+				t.Fatal("transaction evidence exposed a Client Access Value")
+			}
+		})
+	}
+}
+
+func replaceAllClientAccessValues(candidate *DesiredState) {
+	access := func(name string) ClientAccessValue {
+		return NewClientAccessValue("CLIENT-ACCESS-REVOCATION-MARKER-" + name)
+	}
+	candidate.Subscription.Token = NewClientAccessValue(testSHA('9'))
+	candidate.ConnectionProfiles.VLESSRealityVision.UUID = access("reality-uuid")
+	candidate.ConnectionProfiles.VLESSRealityVision.PrivateKey = NewInfrastructureSecret("CLIENT-ACCESS-REVOCATION-MARKER-reality-private")
+	candidate.ConnectionProfiles.VLESSRealityVision.PublicKey = "CLIENT-ACCESS-REVOCATION-MARKER-reality-public"
+	candidate.ConnectionProfiles.VLESSRealityVision.ShortID = access("reality-short-id")
+	candidate.ConnectionProfiles.VLESSXHTTP.Enabled = false
+	candidate.ConnectionProfiles.VLESSXHTTP.UUID = access("xhttp-uuid")
+	candidate.ConnectionProfiles.VLESSXHTTP.Path = access("xhttp-path")
+	candidate.ConnectionProfiles.VLESSWebSocket.UUID = access("websocket-uuid")
+	candidate.ConnectionProfiles.VLESSWebSocket.Path = access("websocket-path")
+	candidate.ConnectionProfiles.Hysteria2.Password = access("hysteria2-password")
+	candidate.ConnectionProfiles.TUIC.UUID = access("tuic-uuid")
+	candidate.ConnectionProfiles.TUIC.Password = access("tuic-password")
+	candidate.ConnectionProfiles.AnyTLS.Password = access("anytls-password")
+}
+
 type transactionSubscriptionExecutor struct {
 	current    bool
 	prove      func() error
@@ -1168,10 +1226,10 @@ type systemChangeTestOptions struct {
 func preparedSystemChangeWithOptions(t *testing.T, mutation systemchanges.MutationClass, check systemchanges.Check, options systemChangeTestOptions) (Interface, *systemchanges.ChangeSet, *systemchanges.ChangeSet, systemchanges.Observation) {
 	t.Helper()
 	candidate := completeDesiredState()
+	candidate.Subscription.Token = NewClientAccessValue(testSHA('e'))
 	if options.candidateEdit != nil {
 		options.candidateEdit(&candidate)
 	}
-	candidate.Subscription.Token = NewClientAccessValue(testSHA('e'))
 	var module Interface
 	var request PrepareRequest
 	if mutation == systemchanges.InstallationMutation {

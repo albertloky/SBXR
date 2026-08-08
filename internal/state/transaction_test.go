@@ -114,6 +114,7 @@ func TestPrepareCommitReportsZeroEdgeReleaseCompatibility(t *testing.T) {
 	request := preparedRequest(t, loaded, candidate, "change-0008")
 	request.CandidateReleaseIdentity.Tag = "v1.1.0"
 	request.CandidateReleaseIdentity.Commit = strings.Repeat("1", 40)
+	request.SubscriptionPublication = request.SemanticValidators.Subscription.(*validatingSeams)
 	prepared, err := stateModule.PrepareCommit(request)
 	if err != nil {
 		t.Fatal(err)
@@ -702,7 +703,7 @@ func preparedRequest(t *testing.T, loaded Result, candidate DesiredState, change
 	t.Helper()
 	reviewed := reviewedInputs(t, '1')
 	validator := &validatingSeams{want: candidate, calls: map[string]int{}, planIdentity: string(reviewed.planIdentity), planSHA256: reviewed.planSHA256}
-	return PrepareRequest{
+	request := PrepareRequest{
 		Loaded:                   loaded,
 		CandidateReleaseIdentity: testRelease,
 		ChangeSet:                changeSet,
@@ -711,6 +712,10 @@ func preparedRequest(t *testing.T, loaded Result, candidate DesiredState, change
 		ServiceMaterials:         serviceMaterialsFor(candidate),
 		ReviewedInputs:           reviewed,
 	}
+	if subscriptionPublicationRequired(loaded.loaded, candidate, testRelease) {
+		request.SubscriptionPublication = validator
+	}
+	return request
 }
 
 func managedPrepareRequest(t *testing.T, candidate DesiredState) (Interface, PrepareRequest, *validatingSeams) {

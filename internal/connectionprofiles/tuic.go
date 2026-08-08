@@ -253,7 +253,11 @@ func singBoxConfiguration(hysteria2 *Hysteria2ViewRequest, profiles *SingBoxProf
 		if !selectedPort(hysteria2.Port, 443, hysteria2.reviewedAlternative) || !hysteria2.Credentials.valid() || !validHostname(hysteria2.ServerName) || hysteria2.MasqueradeResponse != "Not Found\n" || hysteria2.CertificatePointer != directCertificatePointer {
 			return nil, errors.New("Hysteria2 inputs invalid")
 		}
-		inbounds = append(inbounds, map[string]any{"type": "hysteria2", "tag": "hysteria2-in", "listen": "0.0.0.0", "listen_port": hysteria2.Port, "users": []any{map[string]any{"password": hysteria2.Credentials.password.value}}, "tls": map[string]any{"enabled": true, "server_name": hysteria2.ServerName, "certificate_path": hysteria2.CertificatePointer + "/fullchain.pem", "key_path": hysteria2.CertificatePointer + "/privkey.pem"}, "masquerade": map[string]any{"type": "string", "status_code": 404, "headers": map[string][]string{"content-type": {"text/plain; charset=utf-8"}}, "content": hysteria2.MasqueradeResponse}})
+		inbound := map[string]any{"type": "hysteria2", "tag": "hysteria2-in", "listen": "0.0.0.0", "listen_port": hysteria2.Port, "users": []any{map[string]any{"password": hysteria2.Credentials.password.value}}, "tls": map[string]any{"enabled": true, "server_name": hysteria2.ServerName, "certificate_path": hysteria2.CertificatePointer + "/fullchain.pem", "key_path": hysteria2.CertificatePointer + "/privkey.pem"}, "masquerade": map[string]any{"type": "string", "status_code": 404, "headers": map[string][]string{"content-type": {"text/plain; charset=utf-8"}}, "content": hysteria2.MasqueradeResponse}}
+		if hysteria2.Credentials.obfuscation {
+			inbound["obfs"] = map[string]any{"type": "salamander", "password": hysteria2.Credentials.obfuscationSecret.value}
+		}
+		inbounds = append(inbounds, inbound)
 	}
 	if tuic != nil && tuic.Enabled {
 		if !selectedPort(tuic.Port, 8443, tuic.reviewedAlternative) || !tuic.Credentials.valid() || !validHostname(tuic.ServerName) || tuic.CertificatePointer != directCertificatePointer || tuic.CongestionControl != state.CongestionCubic || tuic.ZeroRTT || hysteria2 == nil || tuic.Credentials.password.value == hysteria2.Credentials.password.value {

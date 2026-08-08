@@ -103,6 +103,53 @@ func TestPrepareCommitAcceptsOnlyTheReviewedCompleteSubscriptionArtifactSet(t *t
 	}
 }
 
+func TestSubscriptionPublicationIsRequiredForEveryAffectedInput(t *testing.T) {
+	current := completeDesiredState()
+	stateModule := New(&mutableStateStorage{document: documentFor(t, current)})
+	loaded, err := stateModule.Load(intentManagedRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name    string
+		change  func(*DesiredState)
+		release ReleaseIdentity
+	}{
+		{"credential", func(candidate *DesiredState) {
+			candidate.ConnectionProfiles.TUIC.Password = NewClientAccessValue("new-tuic-password")
+		}, testRelease},
+		{"port", func(candidate *DesiredState) { candidate.ConnectionProfiles.AnyTLS.Port++ }, testRelease},
+		{"address", func(candidate *DesiredState) {
+			candidate.NetworkPolicy.PrimarySubscriptionAddress = candidate.NetworkPolicy.PublicIPv6
+		}, testRelease},
+		{"certificate", func(candidate *DesiredState) { candidate.Certificates.IPCertificateID = "renewed-ip-certificate" }, testRelease},
+		{"enablement", func(candidate *DesiredState) { candidate.ConnectionProfiles.VLESSXHTTP.Enabled = false }, testRelease},
+		{"software version", func(candidate *DesiredState) { candidate.Software.XrayVersion = "new-version" }, testRelease},
+		{"compatibility release", func(*DesiredState) {}, ReleaseIdentity{Repository: testRelease.Repository, Tag: "v2.0.0", Commit: strings.Repeat("9", 40), ReleaseIndexSHA256: strings.Repeat("8", 64)}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := current
+			test.change(&candidate)
+			if !subscriptionPublicationRequired(loaded.loaded, candidate, test.release) {
+				t.Fatal("reviewed Subscription Publication Plan was not required")
+			}
+		})
+	}
+	if subscriptionPublicationRequired(loaded.loaded, current, testRelease) {
+		t.Fatal("unchanged publication inputs required regeneration")
+	}
+}
+
+func TestPrepareCommitRefusesAffectedInputWithoutPublicationPlan(t *testing.T) {
+	candidate := completeDesiredState()
+	candidate.ConnectionProfiles.TUIC.Password = NewClientAccessValue("new-tuic-password")
+	stateModule, request, _ := managedPrepareRequest(t, candidate)
+	request.SubscriptionPublication = nil
+	_, err := stateModule.PrepareCommit(request)
+	assertFinding(t, err, "STATE-SUBSCRIPTION-PUBLICATION")
+}
+
 func TestPrepareManagementTokenChangeAcceptsOnlyTheReviewedCloudflarePlan(t *testing.T) {
 	for _, action := range []cloudflaretunnel.ManagementTokenAction{cloudflaretunnel.ManagementTokenReplace, cloudflaretunnel.ManagementTokenRemove} {
 		t.Run(string(action), func(t *testing.T) {
@@ -378,7 +425,7 @@ func TestPrepareCommitRefusesInvalidCandidateFactsAndMaterial(t *testing.T) {
 			r.ServiceMaterials = serviceMaterialsFor(r.Candidate)
 			validator := &validatingSeams{want: r.Candidate, calls: map[string]int{}}
 			r.SemanticValidators = validatorsFor(validator)
-		}, code: "STATE-SERVICE-SERIALIZATION"},
+		}, code: "STATE-SUBSCRIPTION-PUBLICATION"},
 		{name: "owning validator refusal", change: func(r *PrepareRequest) {
 			validator := &validatingSeams{want: valid, reject: "cloudflaretunnel", calls: map[string]int{}}
 			r.SemanticValidators = validatorsFor(validator)

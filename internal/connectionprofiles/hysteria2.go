@@ -21,13 +21,24 @@ const (
 	directCertificatePointer = "/var/lib/sbxr/certificates/domain/current"
 )
 
-type Hysteria2Credentials struct{ password secretText }
+type Hysteria2Credentials struct {
+	password, obfuscationSecret secretText
+	obfuscation                 bool
+}
 
 func (Hysteria2Credentials) String() string   { return "Hysteria2 credentials: ready" }
 func (Hysteria2Credentials) GoString() string { return "Hysteria2 credentials: ready" }
 
 func NewHysteria2Credentials(password string) (Hysteria2Credentials, error) {
 	credentials := Hysteria2Credentials{password: secretText{value: password}}
+	if !credentials.valid() {
+		return Hysteria2Credentials{}, errors.New("Hysteria2 credentials are invalid")
+	}
+	return credentials, nil
+}
+
+func NewObfuscatedHysteria2Credentials(password, obfuscationSecret string) (Hysteria2Credentials, error) {
+	credentials := Hysteria2Credentials{password: secretText{value: password}, obfuscationSecret: secretText{value: obfuscationSecret}, obfuscation: true}
 	if !credentials.valid() {
 		return Hysteria2Credentials{}, errors.New("Hysteria2 credentials are invalid")
 	}
@@ -52,7 +63,8 @@ func generateHexSecret() (string, error) {
 
 func (credentials Hysteria2Credentials) valid() bool {
 	value, err := hex.DecodeString(credentials.password.value)
-	return err == nil && len(value) == 32
+	obfuscation, obfuscationErr := hex.DecodeString(credentials.obfuscationSecret.value)
+	return err == nil && len(value) == 32 && (!credentials.obfuscation && credentials.obfuscationSecret.value == "" || credentials.obfuscation && obfuscationErr == nil && len(obfuscation) == 32)
 }
 
 type Hysteria2Observation struct {
@@ -283,7 +295,10 @@ func hysteria2ProfileInput(profile state.Hysteria2, secrets state.ConnectionProf
 		return nil, nil
 	}
 	credentials, err := NewHysteria2Credentials(secrets.ReadClientAccessValue(profile.Password))
-	if err != nil || profile.Port == 0 || !validHostname(profile.ServerName) || profile.CertificateID == "" || profile.MasqueradeURL != "https://example.com/" || profile.Obfuscation || profile.ObfuscationSecret != (state.ClientAccessValue{}) {
+	if profile.Obfuscation {
+		credentials, err = NewObfuscatedHysteria2Credentials(secrets.ReadClientAccessValue(profile.Password), secrets.ReadClientAccessValue(profile.ObfuscationSecret))
+	}
+	if err != nil || profile.Port == 0 || !validHostname(profile.ServerName) || profile.CertificateID == "" || profile.MasqueradeURL != "https://example.com/" || !profile.Obfuscation && profile.ObfuscationSecret != (state.ClientAccessValue{}) {
 		return nil, errors.New("Hysteria2 intent is invalid")
 	}
 	return &Hysteria2ViewRequest{Enabled: profile.Enabled, Port: profile.Port, ServerName: profile.ServerName, CertificateID: profile.CertificateID, MasqueradeResponse: "Not Found\n", CertificatePointer: directCertificatePointer, SingBoxVersion: qualifiedSingBoxVersion, Credentials: credentials, reviewedAlternative: profile.Port != 443}, nil
@@ -293,7 +308,7 @@ func reviewedHysteria2Matches(reviewed *Hysteria2ViewRequest, profile state.Hyst
 	if reviewed == nil {
 		return !profile.Enabled
 	}
-	return profile.Enabled == reviewed.Enabled && profile.Port == reviewed.Port && profile.ServerName == reviewed.ServerName && profile.CertificateID == reviewed.CertificateID && profile.MasqueradeURL == "https://example.com/" && reviewed.MasqueradeResponse == "Not Found\n" && !profile.Obfuscation && profile.ObfuscationSecret == (state.ClientAccessValue{}) && secrets.ReadClientAccessValue(profile.Password) == reviewed.Credentials.password.value
+	return profile.Enabled == reviewed.Enabled && profile.Port == reviewed.Port && profile.ServerName == reviewed.ServerName && profile.CertificateID == reviewed.CertificateID && profile.MasqueradeURL == "https://example.com/" && reviewed.MasqueradeResponse == "Not Found\n" && profile.Obfuscation == reviewed.Credentials.obfuscation && secrets.ReadClientAccessValue(profile.Password) == reviewed.Credentials.password.value && (!profile.Obfuscation && profile.ObfuscationSecret == (state.ClientAccessValue{}) || profile.Obfuscation && secrets.ReadClientAccessValue(profile.ObfuscationSecret) == reviewed.Credentials.obfuscationSecret.value)
 }
 
 func hysteria2Configuration(request Hysteria2ViewRequest) ([]byte, error) {

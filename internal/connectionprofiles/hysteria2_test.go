@@ -162,6 +162,28 @@ func TestHysteria2ConfigurationAgreementRejectsCredentialAndExtraFieldDrift(t *t
 	}
 }
 
+func TestHysteria2ObfuscationIsPreparedForServerAndClientRegeneration(t *testing.T) {
+	const obfuscationMarker = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	host := healthyHysteria2Host()
+	request := validHysteria2PlanRequest(t, "profiles-hysteria2-obfuscation")
+	credentials, err := connectionprofiles.NewObfuscatedHysteria2Credentials(hysteria2PasswordMarker, obfuscationMarker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.View.Credentials = credentials
+	plan := connectionprofiles.New(host).PlanHysteria2(t.Context(), request).Plan
+	if plan == nil || !bytes.Contains(host.validated, []byte(`"obfs":{"password":"`+obfuscationMarker+`","type":"salamander"}`)) {
+		t.Fatal("obfuscated Hysteria2 Plan or native configuration unavailable")
+	}
+	profiles, secrets := completeProfileStateForHysteria2()
+	obfuscation := state.NewClientAccessValue(obfuscationMarker)
+	profiles.Hysteria2.Obfuscation, profiles.Hysteria2.ObfuscationSecret = true, obfuscation
+	secrets.clients[obfuscation] = obfuscationMarker
+	if _, singBox, err := plan.PrepareConnectionProfiles(profiles, secrets); err != nil || !bytes.Contains(singBox, []byte(obfuscationMarker)) {
+		t.Fatal("obfuscated Hysteria2 State preparation unavailable")
+	}
+}
+
 func TestHysteria2PlanBindsStateAndRejectsStaleApply(t *testing.T) {
 	host := healthyHysteria2Host()
 	request := validHysteria2PlanRequest(t, "profiles-hysteria2-state")

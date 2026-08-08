@@ -747,7 +747,7 @@ func (i Interface) prepareCommit(request PrepareRequest, deferred *deferredCloud
 	}
 
 	materials := request.ServiceMaterials
-	subscriptionBundle, err := prepareSubscriptionPublication(request.SubscriptionPublication, request.ReviewedInputs)
+	subscriptionBundle, err := prepareSubscriptionPublication(request.SubscriptionPublication, request.ReviewedInputs, subscriptionPublicationRequired(loaded, request.Candidate, request.CandidateReleaseIdentity))
 	if err != nil {
 		return nil, finding("STATE-SUBSCRIPTION-PUBLICATION", "prepared Subscription Publication artifact set", "the owning Module handoff is missing, stale, incomplete, or invalid", "one reviewed byte-stable eight-file artifact set", "State cannot invent client representations or accept caller-made bytes", "regenerate the Subscription Publication Plan and review again")
 	}
@@ -813,8 +813,11 @@ func (i Interface) prepareCommit(request PrepareRequest, deferred *deferredCloud
 	}, nil
 }
 
-func prepareSubscriptionPublication(preparer SubscriptionPublicationPreparer, reviewed ReviewedInputs) ([]byte, error) {
+func prepareSubscriptionPublication(preparer SubscriptionPublicationPreparer, reviewed ReviewedInputs, required bool) ([]byte, error) {
 	if preparer == nil {
+		if required {
+			return nil, errors.New("reviewed Subscription Publication Plan required")
+		}
 		return nil, nil
 	}
 	if PlanIdentity(preparer.Identity()) != reviewed.planIdentity || preparer.SHA256() != reviewed.planSHA256 {
@@ -825,6 +828,28 @@ func prepareSubscriptionPublication(preparer SubscriptionPublicationPreparer, re
 		return nil, errors.New("complete Subscription Publication artifact set unavailable")
 	}
 	return append([]byte(nil), bundle...), nil
+}
+
+func subscriptionPublicationRequired(loaded *loadedState, candidate DesiredState, release ReleaseIdentity) bool {
+	if loaded == nil || loaded.status == NotInstalled {
+		return true
+	}
+	current, problem := decode(loaded.bytes)
+	if problem != nil {
+		return true
+	}
+	prior := current.desiredState
+	return prior.ConnectionProfiles != candidate.ConnectionProfiles ||
+		prior.Subscription != candidate.Subscription ||
+		prior.NetworkPolicy.PublicIPv4 != candidate.NetworkPolicy.PublicIPv4 ||
+		prior.NetworkPolicy.PublicIPv6 != candidate.NetworkPolicy.PublicIPv6 ||
+		prior.NetworkPolicy.PrimarySubscriptionAddress != candidate.NetworkPolicy.PrimarySubscriptionAddress ||
+		prior.Certificates != candidate.Certificates ||
+		prior.Software.XrayVersion != candidate.Software.XrayVersion ||
+		prior.Software.SingBoxVersion != candidate.Software.SingBoxVersion ||
+		prior.Software.CloudflaredVersion != candidate.Software.CloudflaredVersion ||
+		prior.Software.CertbotVersion != candidate.Software.CertbotVersion ||
+		current.ReleaseIdentity != release
 }
 
 func validateSemanticsExceptCloudflare(candidate DesiredState, validators SemanticValidators) bool {

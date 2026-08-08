@@ -1,6 +1,6 @@
 # Subscription Publication acceptance
 
-This procedure covers issues #109–#113: deterministic representations and catalog metadata from one complete typed Connection Profile source, plus one reviewed, immutable, atomically activated artifact set.
+This procedure covers issues #109–#114: deterministic representations and catalog metadata from one complete typed Connection Profile source, one reviewed immutable artifact set, and coordinated Client Access Value rotation and revocation.
 
 ## Module Verification — automated — Codex
 
@@ -15,7 +15,7 @@ Pass only when these stable checks all pass:
 - `SUBSCRIPTION-PUBLICATION-RAW`: one URI per enabled Connection Profile, canonical order, UTF-8, LF separators, and no wrapper text.
 - `SUBSCRIPTION-PUBLICATION-BASE64`: standard padded base64 decodes to the exact raw bytes.
 - `SUBSCRIPTION-PUBLICATION-V2RAYN`: v2rayN bytes equal the complete base64 URI list.
-- `SUBSCRIPTION-PUBLICATION-URI-FIELDS`: every fixed scheme, user-info value, address, port, query key, fragment, TLS verification value, REALITY value, XHTTP `mode=auto`, and TUIC congestion value agrees with the typed source; forbidden obfuscation and zero-RTT fields are absent.
+- `SUBSCRIPTION-PUBLICATION-URI-FIELDS`: every fixed scheme, user-info value, address, port, query key, fragment, TLS verification value, REALITY value, XHTTP `mode=auto`, Hysteria2 obfuscation choice, and TUIC congestion value agrees with the typed source; disabled obfuscation and zero-RTT fields are absent.
 - `SUBSCRIPTION-PUBLICATION-ENCODING`: IPv4, bracketed IPv6, reserved characters, spaces, non-ASCII labels, paths, and passwords survive a URI parse without changing value.
 - `SUBSCRIPTION-PUBLICATION-DETERMINISM`: rendering the same source twice produces byte-identical raw, base64, and v2rayN output.
 - `SUBSCRIPTION-PUBLICATION-OMISSION`: a disabled Connection Profile's exact omission fact produces no URI and no substituted Connection Profile.
@@ -45,16 +45,24 @@ Pass only when these stable checks all pass:
 - `SUBSCRIPTION-PUBLICATION-ROLLBACK`: incomplete preparation, storage, directory activation, pre-publication, post-publication, and Subscription Serving health failures leave nothing activated or restore the exact prior artifact set and Desired State; an unprovable reverse remains `Recovery Required`.
 - `SUBSCRIPTION-PUBLICATION-RESTART`: inactive candidate directories and rollback retry resolve from durable inspection; unprovable lineage or rollback remains `Recovery Required`.
 - `SUBSCRIPTION-PUBLICATION-SERVING-BOUNDARY`: the real `current/` directory contains only the seven named bodies and metadata at `0640` under the sole group-traversable `0750` directory; `sets/` and inactive generations are root-only `0700`, parent and final symlinks are refused, and Subscription Serving receives no Desired State, renderer, typed source, validator, or arbitrary file path.
+- `SUBSCRIPTION-PUBLICATION-TOKEN-STRENGTH`: each subscription token contains 256 bits from operating-system cryptographic randomness, two rotations are independent, and no injectable randomness Adapter exists.
+- `SUBSCRIPTION-PUBLICATION-TOKEN-ONLY`: token-only rotation replaces only the subscription token and truthfully states that prior future downloads stop while already downloaded Connection Profile credentials remain valid.
+- `SUBSCRIPTION-PUBLICATION-REVOKE-ALL`: coordinated revocation replaces the subscription token and every credential across all six Connection Profiles, including REALITY key material and Hysteria2 obfuscation authority, in one candidate Desired State.
+- `SUBSCRIPTION-PUBLICATION-DISABLED-PRESERVED`: a disabled Connection Profile remains disabled and omitted while its settings and freshly revoked credential remain present in candidate Desired State.
+- `SUBSCRIPTION-PUBLICATION-REGENERATION`: credential, listener port, selected address, certificate, compatibility definition, enablement, and managed software-version changes all require complete regeneration; unchanged inputs do not.
+- `SUBSCRIPTION-PUBLICATION-ACCESS-ROUTE`: only `/s/<256-bit-subscription-token>` and its seven approved named suffixes are produced at HTTPS port `10443`; IPv6 is bracketed and no `/<token>` alias exists.
+- `SUBSCRIPTION-PUBLICATION-ACCESS-REDACTION`: ordinary formatting, JSON, Plans, findings, transaction results, and evidence expose no token, credential, complete URL, body, or unique secret marker.
+- `SUBSCRIPTION-PUBLICATION-ACCESS-TRANSACTION`: complete revocation publishes the candidate Desired State and artifact set once, or a post-publication failure restores the exact prior Desired State and artifact set without a partial revocation.
 
 ## Seam Verification — reviewed fixtures — Codex
 
 Run the atomic filesystem and coordinated transaction Seams:
 
 ```sh
-go test ./internal/subscriptionpublication/adapter/filesystem ./internal/state -run 'TestAtomicArtifactSet|TestActivationFailsClosed|TestActivationRejects|TestRestartInspection|TestStorageFailure|TestSubscriptionArtifactSet|TestSubscriptionServingFailure|TestSubscriptionRollbackFailure' -count=1
+go test ./internal/subscriptionpublication/... ./internal/connectionprofiles ./internal/state -run 'TestPrepareClientAccessMutation|TestPlanBindsTheTruthfulClientAccessEffect|TestHysteria2Obfuscation|TestSubscriptionPublicationIsRequired|TestPrepareCommitRefusesAffectedInput|TestAtomicArtifactSet|TestActivationFailsClosed|TestActivationRejects|TestRestartInspection|TestStorageFailure|TestSubscriptionArtifactSet|TestSubscriptionServingFailure|TestSubscriptionRollbackFailure|TestAllClientAccessRevocation' -count=1
 ```
 
-These tests cover complete-set validation, exact Plan and State agreement, hostile-symlink refusal, deterministic generation identity, current-only serving traversal modes, whole-directory activation, storage failure, exact rollback, one Desired State publication, post-publication agreement, reuse refusal, restart inspection, serving-health refusal, Subscription-owned Recovery Required on an unprovable reverse, and secret-safe evidence. They use controlled local files and a controlled health probe; they do not prove an installed release or real HTTPS retrieval.
+These tests cover token strength, token-only rotation, all-client revocation, disabled Connection Profile preservation, the complete regeneration trigger set, exact route shape, complete-set validation, exact Plan and State agreement, hostile-symlink refusal, deterministic generation identity, current-only serving traversal modes, whole-directory activation, storage failure, exact rollback, one Desired State publication, post-publication agreement, reuse refusal, restart inspection, serving-health refusal, Subscription-owned Recovery Required on an unprovable reverse, and secret-safe evidence. They use controlled local files and a controlled health probe; they do not prove an installed release, real HTTPS retrieval, prior-URL refusal by an installed Subscription Serving process, maintained-client import, or Connection Profile connectivity.
 
 `TestRenderProducesDeterministicRawBase64AndV2RayN` parses every complete URI with Go's maintained `net/url` parser and compares it with literal reviewed fixtures for all six contracts. This is `SUBSCRIPTION-PUBLICATION-PARSER` evidence. It proves URI syntax and field preservation, not import or connectivity in v2rayN or any other maintained client.
 
@@ -107,4 +115,4 @@ The exact Owner Acceptance rows remain separate:
 | Karing — AnyTLS | Albert | Pending — maintained-client import and connection not performed. |
 | Karing — maintained Access workflow | Albert | Pending — retrieval, import visibility, selection, and workflow acceptance not performed. |
 
-Passing this procedure is Module Acceptance for issues #109–#113. It is not Module Acceptance for parent issue #108 and not Release Qualification.
+Passing this procedure is Module Acceptance for issues #109–#114. It is not Module Acceptance for parent issue #108 and not Release Qualification.

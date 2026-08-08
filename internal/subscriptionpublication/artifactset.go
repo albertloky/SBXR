@@ -35,6 +35,7 @@ type Metadata struct {
 	Compatibility        string                `json:"compatibility_definition"`
 	DesiredStateRevision uint64                `json:"desired_state_revision"`
 	ReleaseIdentity      state.ReleaseIdentity `json:"release_identity"`
+	ClientAccessAction   ClientAccessAction    `json:"client_access_action,omitempty"`
 	Representations      []string              `json:"representations"`
 	ProfileCount         int                   `json:"profile_count"`
 	Omissions            []Omission            `json:"omissions"`
@@ -127,7 +128,8 @@ func validatePreparedArtifactFiles(files []ArtifactFile) (PreparedArtifactSet, e
 	decoder.DisallowUnknownFields()
 	decodeErr := decoder.Decode(&metadata)
 	address, addressErr := netip.ParseAddr(metadata.SelectedAddress)
-	if decodeErr != nil || decoder.Decode(&struct{}{}) != io.EOF || metadata.Schema != "sbxr-subscription-artifact-set-v1" || !safePlanIdentity(metadata.ChangeSet) || addressErr != nil || !address.IsGlobalUnicast() || metadata.DesiredStateRevision == 0 || !validPlanSHA(metadata.DesiredStateSHA256) || !validPlanSHA(metadata.ManagedInputsSHA256) || !validPlanSHA(metadata.RelevantChecksums.ConnectionProfiles) || !validPlanSHA(metadata.RelevantChecksums.Subscription) || metadata.Compatibility != string(CurrentCompatibilityDefinition) || metadata.ProfileCount < 0 || metadata.ProfileCount > 6 || strings.Join(metadata.Representations, ",") != strings.Join(artifactNames[:7], ",") || !validRelease(metadata.ReleaseIdentity) || !metadata.ValidationComplete || !validArtifactOmissions(metadata.Omissions, metadata.ProfileCount) {
+	_, validAction := clientAccessEffect(metadata.ClientAccessAction)
+	if decodeErr != nil || decoder.Decode(&struct{}{}) != io.EOF || metadata.Schema != "sbxr-subscription-artifact-set-v1" || !safePlanIdentity(metadata.ChangeSet) || addressErr != nil || !address.IsGlobalUnicast() || metadata.DesiredStateRevision == 0 || !validPlanSHA(metadata.DesiredStateSHA256) || !validPlanSHA(metadata.ManagedInputsSHA256) || !validPlanSHA(metadata.RelevantChecksums.ConnectionProfiles) || !validPlanSHA(metadata.RelevantChecksums.Subscription) || metadata.Compatibility != string(CurrentCompatibilityDefinition) || metadata.ProfileCount < 0 || metadata.ProfileCount > 6 || strings.Join(metadata.Representations, ",") != strings.Join(artifactNames[:7], ",") || !validRelease(metadata.ReleaseIdentity) || !validAction || !metadata.ValidationComplete || !validArtifactOmissions(metadata.Omissions, metadata.ProfileCount) {
 		return PreparedArtifactSet{}, errors.New("Subscription Publication artifact metadata is invalid")
 	}
 	decoded, err := base64.StdEncoding.DecodeString(string(bodies["base64"]))

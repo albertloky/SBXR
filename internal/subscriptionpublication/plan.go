@@ -35,6 +35,7 @@ type PlanRequest struct {
 	CompatibilityDefinition CompatibilityDefinition
 	SelectedAddress         string
 	ReleaseIdentity         state.ReleaseIdentity
+	ClientAccessMutation    *ClientAccessMutation
 }
 
 type PlanSummary struct {
@@ -48,6 +49,7 @@ type PlanSummary struct {
 	Omissions                                                    []connectionprofiles.PublicationOmission
 	ValidationComplete                                           bool
 	Replacement, Rollback                                        string
+	ClientAccessEffect                                           string
 }
 
 type Plan struct {
@@ -78,14 +80,37 @@ func (module Interface) Plan(ctx context.Context, request PlanRequest) PlanResul
 	refuse := func(code, found string) PlanResult {
 		return PlanResult{Finding: &systemchanges.Finding{Code: code, Owner: systemchanges.SubscriptionModule, Problem: "The Subscription Publication Plan is incomplete or stale", Found: found, Required: "one exact validated complete artifact set bound to revision N+1", WhyStopped: "publication cannot guess or expose protected inputs", NextAction: "Reload the typed source and create a fresh Plan."}}
 	}
-	if ctx == nil || request.Secrets == nil || !planIdentityPattern.MatchString(request.ChangeSet) || request.DesiredStateRevision != request.StartingState.Revision+1 || !validPlanSHA(request.DesiredStateSHA256) || !validPlanSHA(request.ManagedInputsSHA256) || !validPlanSHA(request.RelevantChecksums.ConnectionProfiles) || !validPlanSHA(request.RelevantChecksums.Subscription) || request.CompatibilityDefinition != CurrentCompatibilityDefinition || request.Subscription.ListenPort == 0 || request.Subscription.CertificateID == "" || request.Secrets.ReadClientAccessValue(request.Subscription.Token) == "" || !validRelease(request.ReleaseIdentity) {
+	action, effect := ClientAccessAction(""), ""
+	source := request.Source
+	secrets := request.Secrets
+	if request.ClientAccessMutation != nil {
+		action, effect = request.ClientAccessMutation.action, request.ClientAccessMutation.effect
+		if request.Subscription != request.ClientAccessMutation.subscription || request.SelectedAddress != request.ClientAccessMutation.address || !connectionprofiles.PublicationSourceMatches(request.Source, request.ClientAccessMutation.source) {
+			return refuse("SUBSCRIPTION-PUBLICATION-PLAN-INPUT", "the Client Access mutation does not match the typed candidate")
+		}
+		source = request.ClientAccessMutation.source
+		secrets = clientAccessPlanReader{mutation: request.ClientAccessMutation, fallback: request.Secrets}
+	}
+	_, validAction := clientAccessEffect(action)
+	if ctx == nil || request.Secrets == nil || secrets == nil || !planIdentityPattern.MatchString(request.ChangeSet) || request.DesiredStateRevision != request.StartingState.Revision+1 || !validPlanSHA(request.DesiredStateSHA256) || !validPlanSHA(request.ManagedInputsSHA256) || !validPlanSHA(request.RelevantChecksums.ConnectionProfiles) || !validPlanSHA(request.RelevantChecksums.Subscription) || request.CompatibilityDefinition != CurrentCompatibilityDefinition || request.Subscription.ListenPort == 0 || request.Subscription.CertificateID == "" || secrets.ReadClientAccessValue(request.Subscription.Token) == "" || !validRelease(request.ReleaseIdentity) || !validAction {
 		return refuse("SUBSCRIPTION-PUBLICATION-PLAN-INPUT", "a required typed binding is missing or invalid")
 	}
 	address, err := netip.ParseAddr(request.SelectedAddress)
 	if err != nil || !address.IsGlobalUnicast() || request.StartingState.Status != systemchanges.Managed && request.StartingState.Status != systemchanges.NotInstalled || request.StartingState.Status == systemchanges.Managed && !validPlanSHA(request.StartingState.SHA256) {
 		return refuse("SUBSCRIPTION-PUBLICATION-PLAN-LINEAGE", "the selected address or starting lineage is invalid")
 	}
-	rendered, err := module.Render(ctx, request.Source, request.Secrets)
+	if request.ClientAccessMutation != nil && !request.ClientAccessMutation.used.CompareAndSwap(false, true) {
+		return refuse("SUBSCRIPTION-PUBLICATION-PLAN-ONE-USE", "the Client Access mutation was already planned")
+	}
+	var rendered Artifacts
+	if request.ClientAccessMutation != nil && request.ClientAccessMutation.rotation != nil {
+		err = request.ClientAccessMutation.rotation.WithClientAccessReader(func(generated state.ClientAccessReader) error {
+			rendered, err = module.Render(ctx, source, clientAccessPlanReader{mutation: request.ClientAccessMutation, generated: generated, fallback: request.Secrets})
+			return err
+		})
+	} else {
+		rendered, err = module.Render(ctx, source, secrets)
+	}
 	if err != nil {
 		return refuse("SUBSCRIPTION-PUBLICATION-PLAN-VALIDATION", "the complete candidate failed rendering or full-document validation")
 	}
@@ -98,7 +123,7 @@ func (module Interface) Plan(ctx context.Context, request PlanRequest) PlanResul
 		omissions[index] = Omission{ID: string(omission.ID)}
 	}
 	names := Names()
-	metadata := Metadata{Schema: "sbxr-subscription-artifact-set-v1", ChangeSet: request.ChangeSet, SelectedAddress: request.SelectedAddress, DesiredStateSHA256: request.DesiredStateSHA256, ManagedInputsSHA256: request.ManagedInputsSHA256, RelevantChecksums: request.RelevantChecksums, Compatibility: string(request.CompatibilityDefinition), DesiredStateRevision: request.DesiredStateRevision, ReleaseIdentity: request.ReleaseIdentity, Representations: names[:7], ProfileCount: rendered.ProfileCount, Omissions: omissions, ValidationComplete: true}
+	metadata := Metadata{Schema: "sbxr-subscription-artifact-set-v1", ChangeSet: request.ChangeSet, SelectedAddress: request.SelectedAddress, DesiredStateSHA256: request.DesiredStateSHA256, ManagedInputsSHA256: request.ManagedInputsSHA256, RelevantChecksums: request.RelevantChecksums, Compatibility: string(request.CompatibilityDefinition), DesiredStateRevision: request.DesiredStateRevision, ReleaseIdentity: request.ReleaseIdentity, ClientAccessAction: action, Representations: names[:7], ProfileCount: rendered.ProfileCount, Omissions: omissions, ValidationComplete: true}
 	set, err := NewPreparedArtifactSet(artifacts, metadata)
 	if err != nil {
 		return refuse("SUBSCRIPTION-PUBLICATION-PLAN-METADATA", "candidate metadata could not be encoded")
@@ -118,7 +143,7 @@ func (module Interface) Plan(ctx context.Context, request PlanRequest) PlanResul
 		{Owner: systemchanges.SubscriptionModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PostPublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "SUBSCRIPTION-PUBLICATION-SERVING-AGREEMENT"},
 	}
 	identity := "subscriptions-" + sha[:12]
-	summary := PlanSummary{Identity: identity, ChangeSet: request.ChangeSet, DesiredStateSHA256: request.DesiredStateSHA256, ManagedInputsSHA256: request.ManagedInputsSHA256, SelectedAddress: request.SelectedAddress, CompatibilityDefinition: string(request.CompatibilityDefinition), RelevantChecksums: request.RelevantChecksums, DesiredStateRevision: request.DesiredStateRevision, ReleaseIdentity: request.ReleaseIdentity, Representations: append([]string(nil), names[:7]...), ProfileCount: rendered.ProfileCount, Omissions: request.Source.Omissions(), ValidationComplete: true, Replacement: "complete artifact set N to N+1", Rollback: "restore the exact prior complete artifact set"}
+	summary := PlanSummary{Identity: identity, ChangeSet: request.ChangeSet, DesiredStateSHA256: request.DesiredStateSHA256, ManagedInputsSHA256: request.ManagedInputsSHA256, SelectedAddress: request.SelectedAddress, CompatibilityDefinition: string(request.CompatibilityDefinition), RelevantChecksums: request.RelevantChecksums, DesiredStateRevision: request.DesiredStateRevision, ReleaseIdentity: request.ReleaseIdentity, Representations: append([]string(nil), names[:7]...), ProfileCount: rendered.ProfileCount, Omissions: source.Omissions(), ValidationComplete: true, Replacement: "complete artifact set N to N+1", Rollback: "restore the exact prior complete artifact set", ClientAccessEffect: effect}
 	binding := planBinding{Subscription: request.Subscription, ChangeSet: request.ChangeSet, StartingState: request.StartingState, DesiredStateRevision: request.DesiredStateRevision, DesiredStateSHA256: request.DesiredStateSHA256, ManagedInputsSHA256: request.ManagedInputsSHA256}
 	return PlanResult{Plan: &Plan{identity: identity, sha256: sha, binding: binding, summary: summary, bundle: append([]byte(nil), bundle...), steps: []systemchanges.Step{step}, checks: checks}}
 }
