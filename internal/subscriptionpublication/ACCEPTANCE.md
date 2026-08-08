@@ -92,8 +92,8 @@ The issue comment records only the command, Passed or Failed status, stable chec
 
 | Acceptance stage | Owner | Status for this slice |
 |---|---|---|
-| Module Verification | Codex | Passed only when the focused command above passes. |
-| Seam Verification | Codex | Passed only when the URI fixtures and both exact pinned Mihomo and sing-box commands above pass. |
+| Module Verification | Codex | Passed — the focused Module command covers all stable checks above. |
+| Seam Verification | Codex | Passed — reviewed URI fixtures, Mihomo `v1.19.29`, and sing-box `1.13.16` accepted the complete generated documents; malformed output was refused. |
 | Integrated Verification | Codex | Pending — integrated release. The local State, System Changes, and atomic filesystem transaction passes, but no installed release with real Subscription Serving was exercised. |
 | Codex Live Acceptance | Codex | Pending — no maintained client import or connection was run here. |
 | Owner Acceptance | Albert | Pending — every rendered Shadowrocket Connection Profile requires separate import and connection acceptance in the exact pinned maintained app; every offered Karing Connection Profile and workflow also remain Pending. No maintained Owner client or device was used here. |
@@ -115,4 +115,6 @@ The exact Owner Acceptance rows remain separate:
 | Karing — AnyTLS | Albert | Pending — maintained-client import and connection not performed. |
 | Karing — maintained Access workflow | Albert | Pending — retrieval, import visibility, selection, and workflow acceptance not performed. |
 
-Passing this procedure is Module Acceptance for issues #109–#114. It is not Module Acceptance for parent issue #108 and not Release Qualification.
+This record establishes Module Acceptance for parent issue #108 and its completed issues #109–#114. It is not Release Qualification.
+
+Module accepted; Release Qualification pending. Integrated Verification, Codex Live Acceptance, and Owner Acceptance remain Pending until each exact row is performed and recorded.
