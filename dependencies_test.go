@@ -2,10 +2,14 @@ package architecture_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go/ast"
+	"go/importer"
 	"go/parser"
 	"go/token"
+	"go/types"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path"
@@ -157,6 +161,133 @@ func unsafe(source interface{ ConsumeInfrastructureSecret() (string, bool) }) st
 			t.Fatalf("validateInfrastructureSecretConsumption() = %v, want direct consumption rejection", err)
 		}
 	})
+}
+
+func TestSubscriptionServingMutationBoundary(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateSubscriptionServingMutation(root); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		name, source string
+	}{
+		{"aliased file write", `package subscriptionserving
+import host "os"
+func unsafe() { _ = host.WriteFile("/tmp/unsafe", nil, 0o600) }
+`},
+		{"writable file", `package subscriptionserving
+import "os"
+func unsafe() { _, _ = os.OpenFile("/tmp/unsafe", os.O_WRONLY, 0o600) }
+`},
+		{"file write", `package subscriptionserving
+import "os"
+func unsafe() { file, _ := os.Open("/tmp/unsafe"); _, _ = file.Write(nil) }
+`},
+		{"root file write", `package subscriptionserving
+import "os"
+func unsafe() { root, _ := os.OpenRoot("/tmp"); file, _ := root.Open("unsafe"); _, _ = file.Write(nil) }
+`},
+		{"root writable file", `package subscriptionserving
+import "os"
+func unsafe() { root, _ := os.OpenRoot("/tmp"); _, _ = root.OpenFile("unsafe", os.O_WRONLY|os.O_CREATE, 0o600) }
+`},
+		{"root direct write", `package subscriptionserving
+import "os"
+func unsafe() { root, _ := os.OpenRoot("/tmp"); _ = root.WriteFile("unsafe", nil, 0o600) }
+`},
+		{"copied root write", `package subscriptionserving
+import "os"
+func unsafe(root *os.Root) { other := root; _ = other.WriteFile("unsafe", nil, 0o600) }
+`},
+		{"stored root write", `package subscriptionserving
+import "os"
+type holder struct { root *os.Root }
+func unsafe(value holder) { _ = value.root.WriteFile("unsafe", nil, 0o600) }
+`},
+		{"arbitrary command", `package subscriptionserving
+import "os/exec"
+func unsafe() { _ = exec.Command("unsafe") }
+`},
+		{"raw syscall", `package subscriptionserving
+import "syscall"
+func unsafe() { _ = syscall.Unlink("/tmp/unsafe") }
+`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			directory := t.TempDir()
+			mustWriteArchitectureFile(t, directory, "internal/subscriptionserving/unsafe.go", test.source)
+			if err := validateSubscriptionServingMutation(directory); err == nil || !strings.Contains(err.Error(), "read-only") {
+				t.Fatalf("validateSubscriptionServingMutation() = %v, want read-only rejection", err)
+			}
+		})
+	}
+}
+
+func validateSubscriptionServingMutation(root string) error {
+	allowed := map[string]map[string]bool{
+		"os": {
+			"FileInfo": true, "Getegid": true, "Geteuid": true, "Lstat": true, "ModeSymlink": true,
+			"OpenRoot": true, "ReadFile": true, "Readlink": true, "Root": true,
+		},
+		"syscall": {"Stat_t": true},
+	}
+	allowedRootMethods := map[string]bool{"Close": true, "FS": true, "Lstat": true, "ReadFile": true}
+	directory := filepath.Join(root, "internal/subscriptionserving")
+	fileSet := token.NewFileSet()
+	filesByPackage, err := parser.ParseDir(fileSet, directory, func(info fs.FileInfo) bool { return !strings.HasSuffix(info.Name(), "_test.go") }, 0)
+	if err != nil {
+		return err
+	}
+	parsed := filesByPackage["subscriptionserving"]
+	if parsed == nil {
+		return errors.New("Subscription Serving production package unavailable")
+	}
+	files := make([]*ast.File, 0, len(parsed.Files))
+	for _, file := range parsed.Files {
+		for _, imported := range file.Imports {
+			path, _ := strconv.Unquote(imported.Path.Value)
+			if imported.Name != nil && imported.Name.Name == "." && (path == "os" || path == "os/exec" || path == "syscall") {
+				return fmt.Errorf("Subscription Serving must remain read-only: dot import of %s", path)
+			}
+		}
+		files = append(files, file)
+	}
+	info := &types.Info{Uses: map[*ast.Ident]types.Object{}, Selections: map[*ast.SelectorExpr]*types.Selection{}}
+	configuration := types.Config{Importer: importer.Default()}
+	if _, err := configuration.Check(modulePath+"/internal/subscriptionserving", fileSet, files, info); err != nil {
+		return err
+	}
+	var violation error
+	for _, file := range files {
+		ast.Inspect(file, func(node ast.Node) bool {
+			selector, ok := node.(*ast.SelectorExpr)
+			if !ok || violation != nil {
+				return violation == nil
+			}
+			name := selector.Sel.Name
+			if selection := info.Selections[selector]; selection != nil {
+				receiver := types.TypeString(selection.Recv(), func(pkg *types.Package) string { return pkg.Path() })
+				if receiver == "*os.Root" && !allowedRootMethods[name] || receiver == "*os.File" {
+					violation = fmt.Errorf("Subscription Serving must remain read-only: %s.%s", receiver, name)
+				}
+				return violation == nil
+			}
+			object := info.Uses[selector.Sel]
+			if object == nil || object.Pkg() == nil {
+				return true
+			}
+			path := object.Pkg().Path()
+			if path == "os/exec" || allowed[path] != nil && !allowed[path][name] {
+				violation = fmt.Errorf("Subscription Serving must remain read-only: %s.%s", path, name)
+			}
+			return violation == nil
+		})
+	}
+	return violation
 }
 
 func validateInfrastructureSecretConsumption(root string) error {

@@ -158,6 +158,16 @@ go test ./internal/certificatelifecycle/adapter/ubuntu -run 'TestIP(ActivationFa
 
 Require the previous verified certificate to remain usable when a candidate pointer fails, expose the rejected candidate through the typed `Health` result, and require Certificate Lifecycle to restore and re-prove its one pointer. Require the real Publication activation, serving-agreement gate, and rollback to pass through a running `Serve` endpoint. Require Subscription Publication and State/System Changes to own the one-use Plan, Required gates, one Desired State publication, durable `Complete`, exact rollback, restart inspection, and Recovery Required decision. Serving must add no private transaction or recovery framework.
 
+### SS-SERVE-16 — Module architecture boundary
+
+Run:
+
+```sh
+go test . -run '^Test(RepositoryDependencies|SubscriptionServingMutationBoundary)$' -count=1
+```
+
+Require every production dependency to remain in the Go standard library and reject direct filesystem mutation or arbitrary-command APIs. Together with `SS-SERVE-06`, this keeps the public runtime independent of every product Module and unable to mutate artifacts, certificates, services, firewall, Desired State, or the VPS.
+
 ## TLS Seam Verification
 
 Run all focused checks together:
