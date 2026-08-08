@@ -43,6 +43,7 @@ var approvedModuleDependencies = map[string]map[string]bool{
 	"certificatelifecycle":    {"systemchanges": true},
 	"cloudflaretunnel":        {"networkpolicy": true, "systemchanges": true},
 	"connectionprofiles":      {"cloudflaretunnel": true, "state": true, "systemchanges": true},
+	"healthdiagnostics":       {"systemchanges": true},
 	"subscriptionpublication": {"connectionprofiles": true, "state": true, "systemchanges": true},
 }
 
@@ -227,6 +228,39 @@ func unsafe() { _ = syscall.Unlink("/tmp/unsafe") }
 	}
 }
 
+func TestHealthDiagnosticsReadOnlyBoundary(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateHealthDiagnosticsReadOnly(root); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct{ name, source string }{
+		{"arbitrary command", `package healthdiagnostics
+import "os/exec"
+func unsafe() { _ = exec.Command("unsafe") }
+`},
+		{"generic file reader", `package healthdiagnostics
+import "os"
+func Read(path string) { _, _ = os.ReadFile(path) }
+`},
+		{"service control", `package healthdiagnostics
+import "syscall"
+func Stop(pid int) { _ = syscall.Kill(pid, 0) }
+`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			directory := t.TempDir()
+			mustWriteArchitectureFile(t, directory, "internal/healthdiagnostics/unsafe.go", test.source)
+			if err := validateHealthDiagnosticsReadOnly(directory); err == nil || !strings.Contains(err.Error(), "typed read-only inspections") {
+				t.Fatalf("validateHealthDiagnosticsReadOnly() = %v", err)
+			}
+		})
+	}
+}
+
 func validateSubscriptionServingMutation(root string) error {
 	allowed := map[string]map[string]bool{
 		"os": {
@@ -288,6 +322,41 @@ func validateSubscriptionServingMutation(root string) error {
 		})
 	}
 	return violation
+}
+
+func validateHealthDiagnosticsReadOnly(root string) error {
+	allowed := map[string]bool{"context": true, "strconv": true, "strings": true, "time": true, modulePath + "/internal/systemchanges": true}
+	return walkProductionGoFiles(root, func(relative string, source *ast.File) error {
+		if filepath.ToSlash(filepath.Dir(relative)) != "internal/healthdiagnostics" {
+			return nil
+		}
+		for _, imported := range source.Imports {
+			importPath, err := strconv.Unquote(imported.Path.Value)
+			if err != nil || !allowed[importPath] {
+				return fmt.Errorf("Health and Diagnostics accepts only typed read-only inspections: %s imports %s", relative, importPath)
+			}
+		}
+		var genericReader string
+		ast.Inspect(source, func(node ast.Node) bool {
+			field, ok := node.(*ast.Field)
+			if !ok {
+				return true
+			}
+			for _, name := range field.Names {
+				lower := strings.ToLower(name.Name)
+				for _, capability := range []string{"command", "file", "path", "log", "service"} {
+					if strings.Contains(lower, capability) {
+						genericReader = name.Name
+					}
+				}
+			}
+			return genericReader == ""
+		})
+		if genericReader != "" {
+			return fmt.Errorf("Health and Diagnostics accepts only typed read-only inspections: generic capability %s", genericReader)
+		}
+		return nil
+	})
 }
 
 func validateInfrastructureSecretConsumption(root string) error {

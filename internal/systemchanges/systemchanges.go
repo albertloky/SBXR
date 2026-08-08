@@ -107,6 +107,35 @@ type Inspection struct {
 	Findings               []Finding          `json:"findings,omitempty"`
 }
 
+// InstallationHealthInspection is the unforgeable read-only lineage handoff
+// consumed by Health and Diagnostics.
+type InstallationHealthInspection struct {
+	inspection Inspection
+}
+
+type InstallationHealthFacts struct {
+	Status                 InstallationStatus
+	CurrentChangeSet       string
+	CompletedSteps         int
+	TotalSteps             int
+	RollbackAvailable      bool
+	ForwardRepairAvailable bool
+	RecoveryCause          RecoveryCause
+}
+
+// InstallationFacts returns a copy of facts already validated by Inspect.
+func (facts InstallationHealthInspection) InstallationFacts() (InstallationHealthFacts, bool) {
+	if facts.inspection.Status == "" {
+		return InstallationHealthFacts{}, false
+	}
+	return InstallationHealthFacts{
+		Status: facts.inspection.Status, CurrentChangeSet: facts.inspection.CurrentChangeSet,
+		CompletedSteps: facts.inspection.CompletedSteps, TotalSteps: facts.inspection.TotalSteps,
+		RollbackAvailable: facts.inspection.RollbackAvailable, ForwardRepairAvailable: facts.inspection.ForwardRepairAvailable,
+		RecoveryCause: facts.inspection.RecoveryCause,
+	}, true
+}
+
 // ManagedAuthority is a fresh, non-renderable proof that normal post-Managed
 // work may run against one exact Desired State revision.
 type ManagedAuthority struct {
@@ -268,6 +297,10 @@ func (i Interface) Inspect() Inspection {
 }
 
 func (i Interface) CheckAgain() Inspection { return i.Inspect() }
+
+func (i Interface) InstallationHealthInspection() InstallationHealthInspection {
+	return InstallationHealthInspection{inspection: i.Inspect()}
+}
 
 func (i Interface) ManagedAuthority() ManagedAuthority {
 	if i.adapter == nil {
