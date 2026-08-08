@@ -30,8 +30,9 @@ import (
 )
 
 const (
-	configurationPath        = "etc/sbxr/subscription.json"
 	artifactPath             = "var/lib/sbxr/subscriptions/current"
+	configurationName        = "serving.json"
+	configurationPath        = artifactPath + "/" + configurationName
 	certificatePath          = "var/lib/sbxr/certificates/ip/current"
 	maxResponseBytes         = 1 << 20
 	maxMetadataBytes         = 64 << 10
@@ -74,6 +75,12 @@ func NewAt(root string, uid, gid int, roots *x509.CertPool, now time.Time) Serve
 	return Server{root: root, uid: uid, gid: gid, serviceUID: os.Geteuid(), serviceGID: os.Getegid(), roots: roots, now: func() time.Time { return now }}
 }
 
+// Health validates the active serving state without changing it.
+func (server Server) Health() HealthResult {
+	_, err := server.load()
+	return Result(err)
+}
+
 type configuration struct {
 	Token              string `json:"token"`
 	ListenPort         uint16 `json:"listen_port"`
@@ -112,7 +119,7 @@ func Run(ctx context.Context) error {
 	}
 	state, err := server.load()
 	if err != nil {
-		return failed("SUBSCRIPTION-SERVING-INPUT", "runtime input is invalid or unsafe")
+		return err
 	}
 	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", net.JoinHostPort(state.address.String(), "10443"))
 	if err != nil {
@@ -133,14 +140,16 @@ func (server Server) Serve(ctx context.Context, listener net.Listener) error {
 	state, err := server.load()
 	if err != nil {
 		_ = listener.Close()
-		return failed("SUBSCRIPTION-SERVING-INPUT", "runtime input is invalid or unsafe")
+		return err
 	}
 	if tcp, ok := listener.Addr().(*net.TCPAddr); !ok || tcp.AddrPort().Addr().BitLen() != state.address.BitLen() || server.production && (tcp.AddrPort().Addr() != state.address || tcp.Port != 10443) {
 		_ = listener.Close()
 		return failed("SUBSCRIPTION-SERVING-LISTENER", "listener does not match the selected address family")
 	}
 	limiter := &requestRateLimiter{}
+	switcher := &stateSwitcher{server: server, current: state}
 	handler := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		state := switcher.refresh()
 		allowed := limiter.allow(time.Now())
 		request.Body = http.MaxBytesReader(response, request.Body, maxRequestBodyBytes)
 		bodyPresent := request.ContentLength != 0 || len(request.TransferEncoding) != 0
@@ -189,12 +198,27 @@ func (server Server) Serve(ctx context.Context, listener net.Listener) error {
 		}
 	}()
 	bounded := &connectionLimitListener{Listener: listener, slots: make(chan struct{}, maxConcurrentConnections)}
-	err = httpServer.Serve(&handshakeListener{Listener: bounded, config: httpServer.TLSConfig})
+	err = httpServer.Serve(&handshakeListener{Listener: bounded, config: httpServer.TLSConfig, switcher: switcher})
 	close(stopped)
 	if errors.Is(err, http.ErrServerClosed) && ctx.Err() != nil {
 		return nil
 	}
 	return failed("SUBSCRIPTION-SERVING-RUNTIME", "HTTPS runtime stopped unexpectedly")
+}
+
+type stateSwitcher struct {
+	mu      sync.Mutex
+	server  Server
+	current servingState
+}
+
+func (switcher *stateSwitcher) refresh() servingState {
+	switcher.mu.Lock()
+	defer switcher.mu.Unlock()
+	if candidate, err := switcher.server.load(); err == nil && candidate.address == switcher.current.address {
+		switcher.current = candidate
+	}
+	return switcher.current
 }
 
 func operationBound(handler http.Handler) http.Handler {
@@ -203,7 +227,8 @@ func operationBound(handler http.Handler) http.Handler {
 
 type handshakeListener struct {
 	net.Listener
-	config *tls.Config
+	config   *tls.Config
+	switcher *stateSwitcher
 }
 
 type connectionLimitListener struct {
@@ -244,7 +269,12 @@ func (listener *handshakeListener) Accept() (net.Conn, error) {
 		if err != nil {
 			return nil, err
 		}
-		secured := tls.Server(connection, listener.config)
+		config := listener.config.Clone()
+		if listener.switcher != nil {
+			state := listener.switcher.refresh()
+			config.Certificates = []tls.Certificate{state.certificate}
+		}
+		secured := tls.Server(connection, config)
 		_ = secured.SetDeadline(time.Now().Add(tlsHandshakeTimeout))
 		if err := secured.Handshake(); err != nil {
 			_ = secured.Close()
@@ -392,33 +422,38 @@ func secure(response http.ResponseWriter, contentType string) {
 
 func (server Server) load() (servingState, error) {
 	if err := server.safeParents(); err != nil {
-		return servingState{}, err
+		return servingState{}, failed("SUBSCRIPTION-SERVING-ARTIFACT", "active serving snapshot is invalid or unsafe")
 	}
-	encoded, err := server.safeFile(configurationPath, 0o640, 64<<10, false)
+	snapshot, err := os.OpenRoot(filepath.Join(server.root, artifactPath))
 	if err != nil {
-		return servingState{}, errors.New("Subscription Serving configuration is unsafe")
+		return servingState{}, failed("SUBSCRIPTION-SERVING-ARTIFACT", "active serving snapshot is invalid or unsafe")
+	}
+	defer snapshot.Close()
+	encoded, err := safeSnapshotFile(snapshot, configurationName, server.uid, server.gid, 64<<10, false)
+	if err != nil {
+		return servingState{}, failed("SUBSCRIPTION-SERVING-ARTIFACT", "active serving snapshot is invalid or unsafe")
 	}
 	var config configuration
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&config) != nil || decoder.Decode(&struct{}{}) != io.EOF {
-		return servingState{}, errors.New("Subscription Serving configuration is invalid")
+		return servingState{}, failed("SUBSCRIPTION-SERVING-ARTIFACT", "active serving snapshot is invalid or unsafe")
 	}
 	address, addressErr := netip.ParseAddr(config.PrimaryAddress)
 	token, tokenErr := hex.DecodeString(config.Token)
 	if addressErr != nil || !address.IsValid() || server.production && !address.IsGlobalUnicast() || config.ListenPort != 10443 || config.CertificatePointer != "/"+certificatePath || tokenErr != nil || len(token) != 32 || hex.EncodeToString(token) != config.Token {
-		return servingState{}, errors.New("Subscription Serving configuration is invalid")
+		return servingState{}, failed("SUBSCRIPTION-SERVING-ARTIFACT", "active serving snapshot is invalid or unsafe")
 	}
-	artifacts, err := server.loadArtifacts(address, server.production)
+	artifacts, err := server.loadArtifacts(snapshot, address, server.production)
 	if err != nil {
-		return servingState{}, err
+		return servingState{}, failed("SUBSCRIPTION-SERVING-ARTIFACT", "active serving snapshot is invalid or unsafe")
 	}
 	certificateDirectory, pointerErr := server.activeCertificateDirectory()
 	chain, chainErr := server.safeFile(certificateDirectory+"/fullchain.pem", 0o640, 1<<20, false)
 	key, keyErr := server.safeFile(certificateDirectory+"/privkey.pem", 0o640, 1<<20, false)
 	certificate, pairErr := tls.X509KeyPair(chain, key)
 	if pointerErr != nil || chainErr != nil || keyErr != nil || pairErr != nil || !validCertificate(certificate, address, server.roots, server.now()) {
-		return servingState{}, errors.New("Subscription Serving certificate is invalid")
+		return servingState{}, failed("SUBSCRIPTION-SERVING-CERTIFICATE", "active HTTPS certificate is invalid or unavailable")
 	}
 	return servingState{route: "/s/" + config.Token, artifacts: artifacts, address: address, certificate: certificate}, nil
 }
@@ -459,9 +494,9 @@ func safeCertificateTarget(target string) bool {
 	return true
 }
 
-func (server Server) loadArtifacts(expectedAddress netip.Addr, requireAddressMatch bool) (map[string][]byte, error) {
-	entries, err := os.ReadDir(filepath.Join(server.root, artifactPath))
-	if err != nil || len(entries) != len(artifactNames) {
+func (server Server) loadArtifacts(snapshot *os.Root, expectedAddress netip.Addr, requireAddressMatch bool) (map[string][]byte, error) {
+	entries, err := fs.ReadDir(snapshot.FS(), ".")
+	if err != nil || len(entries) != len(artifactNames)+1 {
 		return nil, errors.New("active subscription artifact set is incomplete")
 	}
 	names := make([]string, len(entries))
@@ -469,7 +504,9 @@ func (server Server) loadArtifacts(expectedAddress netip.Addr, requireAddressMat
 		names[index] = entry.Name()
 	}
 	slices.Sort(names)
-	if !slices.Equal(names, artifactNames) {
+	expectedNames := append(append([]string(nil), artifactNames...), configurationName)
+	slices.Sort(expectedNames)
+	if !slices.Equal(names, expectedNames) {
 		return nil, errors.New("active subscription artifact set is invalid")
 	}
 	artifacts := make(map[string][]byte, len(names))
@@ -478,7 +515,7 @@ func (server Server) loadArtifacts(expectedAddress netip.Addr, requireAddressMat
 		if name == "metadata" {
 			limit = maxMetadataBytes
 		}
-		contents, err := server.safeFile(artifactPath+"/"+name, 0o640, limit, true)
+		contents, err := safeSnapshotFile(snapshot, name, server.uid, server.gid, limit, true)
 		if err != nil {
 			return nil, errors.New("active subscription artifact is unsafe")
 		}
@@ -638,7 +675,7 @@ func (server Server) safeParents() error {
 		name string
 		mode fs.FileMode
 	}{
-		{"etc", 0o755}, {"etc/sbxr", 0o750}, {"var", 0o755}, {"var/lib", 0o755}, {"var/lib/sbxr", 0o755},
+		{"var", 0o755}, {"var/lib", 0o755}, {"var/lib/sbxr", 0o755},
 		{"var/lib/sbxr/subscriptions", 0o750}, {artifactPath, 0o750}, {"var/lib/sbxr/certificates", 0o755}, {"var/lib/sbxr/certificates/ip", 0o750},
 	} {
 		group := server.gid
@@ -663,11 +700,23 @@ func (server Server) safeDirectory(name string, mode fs.FileMode, gid int) bool 
 func (server Server) safeFile(name string, mode fs.FileMode, limit int64, allowEmpty bool) ([]byte, error) {
 	path := filepath.Join(server.root, name)
 	info, err := os.Lstat(path)
-	uid, gid, ok := identity(info)
-	if err != nil || !ok || !info.Mode().IsRegular() || info.Mode().Type() != 0 || info.Mode().Perm() != mode || info.Size() < 0 || !allowEmpty && info.Size() == 0 || info.Size() > limit || uid != server.uid || gid != server.gid {
+	if !safeFileInfo(info, err, server.uid, server.gid, mode, limit, allowEmpty) {
 		return nil, errors.New("unsafe file")
 	}
 	return os.ReadFile(path)
+}
+
+func safeSnapshotFile(snapshot *os.Root, name string, uid, gid int, limit int64, allowEmpty bool) ([]byte, error) {
+	info, err := snapshot.Lstat(name)
+	if !safeFileInfo(info, err, uid, gid, 0o640, limit, allowEmpty) {
+		return nil, errors.New("unsafe snapshot file")
+	}
+	return snapshot.ReadFile(name)
+}
+
+func safeFileInfo(info os.FileInfo, err error, uid, gid int, mode fs.FileMode, limit int64, allowEmpty bool) bool {
+	actualUID, actualGID, ok := identity(info)
+	return err == nil && ok && info.Mode().IsRegular() && info.Mode().Type() == 0 && info.Mode().Perm() == mode && info.Size() >= 0 && (allowEmpty || info.Size() > 0) && info.Size() <= limit && actualUID == uid && actualGID == gid
 }
 
 func identity(info os.FileInfo) (int, int, bool) {

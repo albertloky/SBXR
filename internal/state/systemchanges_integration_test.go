@@ -1,14 +1,27 @@
 package state
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"math/big"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,6 +36,7 @@ import (
 	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
 	"github.com/albertloky/SBXR/internal/networkpolicy"
 	"github.com/albertloky/SBXR/internal/ownerconsole"
+	"github.com/albertloky/SBXR/internal/subscriptionserving"
 	"github.com/albertloky/SBXR/internal/systemchanges"
 	"github.com/albertloky/SBXR/internal/systemchanges/adapter/ubuntu"
 )
@@ -588,12 +602,21 @@ func preparedSystemChange(t *testing.T) (Interface, *systemchanges.ChangeSet, *s
 
 func TestSubscriptionArtifactSetUsesOneSystemChangesTransaction(t *testing.T) {
 	check := systemchanges.Check{Owner: systemchanges.SubscriptionModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "SUBSCRIPTION-PUBLICATION-SERVING-AGREEMENT"}
-	stateModule, changeSet, reused, observed := preparedSystemChangeWithOptions(t, systemchanges.SettingChangeMutation, check, systemChangeTestOptions{subscription: true, stepTimeout: time.Second})
+	serving, stopServe := transactionServeProof(t)
+	defer stopServe()
+	stateModule, changeSet, reused, observed := preparedSystemChangeWithOptions(t, systemchanges.SettingChangeMutation, check, systemChangeTestOptions{subscription: true, subscriptionBundle: serving.bundle, stepTimeout: time.Second})
 	root := t.TempDir()
 	prepareLock(t, root)
 	host := &controlledUbuntuHost{root: root}
 	proofs := 0
-	executor := &transactionSubscriptionExecutor{prove: func() error { proofs++; return nil }}
+	executor := &transactionSubscriptionExecutor{activate: serving.activate, reverse: serving.reverse, prove: func() error {
+		proofs++
+		err := serving.prove()
+		if err != nil {
+			t.Logf("Serve proof: %v", err)
+		}
+		return err
+	}}
 	adapter := ubuntu.NewAtWithSubscriptionPublication(root, func() (systemchanges.Observation, error) { return observed, nil }, host, executor, stateModule)
 	result := systemchanges.New(adapter).Apply(changeSet)
 	if result.Outcome != systemchanges.Completed || !result.PlanConsumed || result.NothingChanged || proofs != 2 || host.agreements != 1 {
@@ -613,11 +636,17 @@ func TestSubscriptionArtifactSetUsesOneSystemChangesTransaction(t *testing.T) {
 
 func TestSubscriptionServingFailureRestoresStateAndPriorArtifactSet(t *testing.T) {
 	check := systemchanges.Check{Owner: systemchanges.SubscriptionModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "SUBSCRIPTION-PUBLICATION-SERVING-AGREEMENT"}
-	stateModule, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.SettingChangeMutation, check, systemChangeTestOptions{subscription: true, stepTimeout: time.Second})
+	serving, stopServe := transactionServeProof(t)
+	defer stopServe()
+	stateModule, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.SettingChangeMutation, check, systemChangeTestOptions{subscription: true, subscriptionBundle: serving.bundle, stepTimeout: time.Second})
 	root := t.TempDir()
 	prepareLock(t, root)
 	host := &controlledUbuntuHost{root: root}
-	executor := &transactionSubscriptionExecutor{failCheck: 2}
+	executor := &transactionSubscriptionExecutor{activate: serving.activate, reverse: serving.reverse, prove: serving.prove, beforeCheck: func(check int) {
+		if check == 2 {
+			serving.breakCandidate(t)
+		}
+	}}
 	adapter := ubuntu.NewAtWithSubscriptionPublication(root, func() (systemchanges.Observation, error) { return observed, nil }, host, executor, stateModule)
 	result := systemchanges.New(adapter).Apply(changeSet)
 	encoded, _ := json.Marshal(result)
@@ -627,6 +656,9 @@ func TestSubscriptionServingFailureRestoresStateAndPriorArtifactSet(t *testing.T
 	if executor.current {
 		t.Fatal("rollback left an active artifact set")
 	}
+	if err := serving.prove(); err != nil {
+		t.Fatalf("rolled-back Serve state = %v", err)
+	}
 	loaded, err := stateModule.Load(intentManagedRequest())
 	if err != nil || loaded.Snapshot == nil || loaded.Snapshot.Revision != 7 {
 		t.Fatalf("rolled-back State = (%+v, %v)", loaded, err)
@@ -635,15 +667,24 @@ func TestSubscriptionServingFailureRestoresStateAndPriorArtifactSet(t *testing.T
 
 func TestSubscriptionRollbackFailureEntersRecoveryRequired(t *testing.T) {
 	check := systemchanges.Check{Owner: systemchanges.SubscriptionModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "SUBSCRIPTION-PUBLICATION-SERVING-AGREEMENT"}
-	stateModule, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.SettingChangeMutation, check, systemChangeTestOptions{subscription: true, stepTimeout: time.Second})
+	serving, stopServe := transactionServeProof(t)
+	defer stopServe()
+	stateModule, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.SettingChangeMutation, check, systemChangeTestOptions{subscription: true, subscriptionBundle: serving.bundle, stepTimeout: time.Second})
 	root := t.TempDir()
 	prepareLock(t, root)
 	host := &controlledUbuntuHost{root: root}
-	executor := &transactionSubscriptionExecutor{failCheck: 2, reverseErr: true}
+	executor := &transactionSubscriptionExecutor{activate: serving.activate, prove: serving.prove, beforeCheck: func(check int) {
+		if check == 2 {
+			serving.breakCandidate(t)
+		}
+	}, reverseErr: true}
 	adapter := ubuntu.NewAtWithSubscriptionPublication(root, func() (systemchanges.Observation, error) { return observed, nil }, host, executor, stateModule)
 	result := systemchanges.New(adapter).Apply(changeSet)
 	if result.Outcome != systemchanges.RecoveryRequiredOutcome || result.Finding == nil || result.Finding.Owner != systemchanges.SubscriptionModule {
 		t.Fatalf("unprovable Subscription Publication rollback = %+v", result)
+	}
+	if err := serving.prove(); err == nil {
+		t.Fatal("Recovery Required left an invalid candidate reported healthy")
 	}
 }
 
@@ -705,11 +746,216 @@ func replaceAllClientAccessValues(candidate *DesiredState) {
 }
 
 type transactionSubscriptionExecutor struct {
-	current    bool
-	prove      func() error
-	checks     int
-	failCheck  int
-	reverseErr bool
+	current     bool
+	activate    func(string) error
+	reverse     func() error
+	prove       func() error
+	beforeCheck func(int)
+	checks      int
+	failCheck   int
+	reverseErr  bool
+}
+
+type transactionServingFixture struct {
+	server         subscriptionserving.Server
+	root           string
+	client         *http.Client
+	endpoint       string
+	activeToken    string
+	priorToken     string
+	candidateToken string
+	activeBody     []byte
+	priorBody      []byte
+	candidateBody  []byte
+	bundle         []byte
+}
+
+func transactionServeProof(t *testing.T) (*transactionServingFixture, context.CancelFunc) {
+	t.Helper()
+	root := t.TempDir()
+	uid, gid := os.Getuid(), os.Getgid()
+	for _, directory := range []struct {
+		name string
+		mode fs.FileMode
+	}{{"var", 0o755}, {"var/lib", 0o755}, {"var/lib/sbxr", 0o755}, {"var/lib/sbxr/subscriptions", 0o750}, {"var/lib/sbxr/subscriptions/current", 0o750}, {"var/lib/sbxr/certificates", 0o755}, {"var/lib/sbxr/certificates/ip", 0o750}, {"var/lib/sbxr/certificates/ip/sets", 0o750}, {"var/lib/sbxr/certificates/ip/sets/ip-transaction", 0o750}} {
+		if err := os.Mkdir(filepath.Join(root, directory.name), directory.mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	token := strings.Repeat("7", 64)
+	configuration, _ := json.Marshal(map[string]any{"token": token, "listen_port": 10443, "certificate_pointer": "/var/lib/sbxr/certificates/ip/current", "primary_address": "192.0.2.10"})
+	write := func(name string, body []byte) {
+		if err := os.WriteFile(filepath.Join(root, name), body, 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("var/lib/sbxr/subscriptions/current/serving.json", configuration)
+	artifactSet := func(raw []byte) map[string][]byte {
+		encoded := []byte(base64.StdEncoding.EncodeToString(raw))
+		bodies := map[string][]byte{"base64": encoded, "raw": raw, "v2rayn": encoded, "shadowrocket": encoded, "karing": []byte("{}"), "mihomo": []byte("proxies: []\n"), "sing-box": []byte("{}")}
+		digests := map[string]string{}
+		for name, body := range bodies {
+			digest := sha256.Sum256(body)
+			digests[name] = hex.EncodeToString(digest[:])
+		}
+		bodies["metadata"], _ = json.Marshal(map[string]any{
+			"schema": "sbxr-subscription-artifact-set-v1", "change_set": "transaction-proof", "selected_address": "192.0.2.10", "desired_state_sha256": strings.Repeat("d", 64), "managed_inputs_sha256": strings.Repeat("e", 64),
+			"relevant_checksums": map[string]string{"connection_profiles": strings.Repeat("f", 64), "subscription": strings.Repeat("1", 64)}, "compatibility_definition": "sbxr-subscription-representations-v1", "desired_state_revision": 8,
+			"release_identity": map[string]string{"repository": "github.com/albertloky/SBXR", "tag": "v1.0.0", "commit": strings.Repeat("a", 40), "release_index_sha256": strings.Repeat("b", 64)}, "representations": []string{"base64", "raw", "v2rayn", "shadowrocket", "karing", "mihomo", "sing-box"},
+			"artifact_sha256": digests, "profile_count": 1, "omissions": []map[string]string{{"id": "vless-xhttp"}, {"id": "vless-websocket"}, {"id": "hysteria2"}, {"id": "tuic"}, {"id": "anytls"}}, "validation_complete": true,
+		})
+		return bodies
+	}
+	prior := artifactSet([]byte("vless://transaction-prior"))
+	for name, body := range prior {
+		write("var/lib/sbxr/subscriptions/current/"+name, body)
+	}
+	candidate := artifactSet([]byte("vless://transaction-candidate"))
+	var bundle bytes.Buffer
+	writer := tar.NewWriter(&bundle)
+	for _, name := range []string{"base64", "raw", "v2rayn", "shadowrocket", "karing", "mihomo", "sing-box", "metadata"} {
+		body := candidate[name]
+		if err := writer.WriteHeader(&tar.Header{Name: name, Mode: 0o640, Size: int64(len(body)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := writer.Write(body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now()
+	rootKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	rootTemplate := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "transaction root"}, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+	rootDER, _ := x509.CreateCertificate(rand.Reader, rootTemplate, rootTemplate, &rootKey.PublicKey, rootKey)
+	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	leafTemplate := &x509.Certificate{SerialNumber: big.NewInt(2), NotBefore: now.Add(-time.Minute), NotAfter: now.Add(time.Hour), IPAddresses: []net.IP{net.ParseIP("192.0.2.10")}, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, KeyUsage: x509.KeyUsageDigitalSignature}
+	leafDER, _ := x509.CreateCertificate(rand.Reader, leafTemplate, rootTemplate, &leafKey.PublicKey, rootKey)
+	chain := append(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER}), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootDER})...)
+	keyDER, _ := x509.MarshalPKCS8PrivateKey(leafKey)
+	write("var/lib/sbxr/certificates/ip/sets/ip-transaction/fullchain.pem", chain)
+	write("var/lib/sbxr/certificates/ip/sets/ip-transaction/privkey.pem", pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}))
+	if err := os.Symlink("sets/ip-transaction", filepath.Join(root, "var/lib/sbxr/certificates/ip/current")); err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	rootCertificate, _ := x509.ParseCertificate(rootDER)
+	roots.AddCert(rootCertificate)
+	server := subscriptionserving.NewAt(root, uid, gid, roots, now)
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	go func() { _ = server.Serve(ctx, listener) }()
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, ServerName: "192.0.2.10", MinVersion: tls.VersionTLS13}, DisableKeepAlives: true}}
+	return &transactionServingFixture{server: server, root: root, client: client, endpoint: "https://" + listener.Addr().String() + "/s/", activeToken: token, priorToken: token, activeBody: prior["base64"], priorBody: prior["base64"], candidateBody: candidate["base64"], bundle: bundle.Bytes()}, cancel
+}
+
+func (fixture *transactionServingFixture) activate(prepared string) error {
+	configuration, err := os.ReadFile(filepath.Join(prepared, "subscription.json"))
+	var decoded struct {
+		Token string `json:"token"`
+	}
+	if err != nil || json.Unmarshal(configuration, &decoded) != nil || decoded.Token == "" {
+		return errors.New("prepared Subscription Serving configuration unavailable")
+	}
+	bundle, bundleErr := os.Open(filepath.Join(prepared, "subscriptions.bundle"))
+	if bundleErr != nil {
+		return errors.New("prepared Subscription Publication bundle unavailable")
+	}
+	defer bundle.Close()
+	current := filepath.Join(fixture.root, "var/lib/sbxr/subscriptions/current")
+	candidate := filepath.Join(fixture.root, "var/lib/sbxr/subscriptions/candidate")
+	if err := os.Mkdir(candidate, 0o750); err != nil {
+		return err
+	}
+	reader := tar.NewReader(bundle)
+	files := 0
+	for {
+		header, readErr := reader.Next()
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil || header.Typeflag != tar.TypeReg || filepath.Base(header.Name) != header.Name {
+			return errors.New("candidate serving bundle invalid")
+		}
+		body, readErr := io.ReadAll(reader)
+		if readErr != nil || os.WriteFile(filepath.Join(candidate, header.Name), body, 0o640) != nil {
+			return errors.New("candidate serving snapshot unavailable")
+		}
+		files++
+	}
+	if files != 8 || os.WriteFile(filepath.Join(candidate, "serving.json"), configuration, 0o640) != nil {
+		return errors.New("candidate serving snapshot incomplete")
+	}
+	prior := filepath.Join(fixture.root, "var/lib/sbxr/subscriptions/prior")
+	if os.Rename(current, prior) != nil || os.Rename(candidate, current) != nil {
+		return errors.New("candidate serving snapshot activation failed")
+	}
+	fixture.activeToken = decoded.Token
+	fixture.candidateToken = decoded.Token
+	fixture.activeBody = fixture.candidateBody
+	return nil
+}
+
+func (fixture *transactionServingFixture) reverse() error {
+	current := filepath.Join(fixture.root, "var/lib/sbxr/subscriptions/current")
+	prior := filepath.Join(fixture.root, "var/lib/sbxr/subscriptions/prior")
+	rejected := filepath.Join(fixture.root, "var/lib/sbxr/subscriptions/rejected")
+	if os.Rename(current, rejected) != nil || os.Rename(prior, current) != nil {
+		return errors.New("prior serving snapshot restore failed")
+	}
+	configuration, err := os.ReadFile(filepath.Join(current, "serving.json"))
+	var decoded struct {
+		Token string `json:"token"`
+	}
+	if err != nil || json.Unmarshal(configuration, &decoded) != nil {
+		return errors.New("restored serving authorization unavailable")
+	}
+	fixture.activeToken = decoded.Token
+	fixture.activeBody = fixture.priorBody
+	return nil
+}
+
+func (fixture *transactionServingFixture) breakCandidate(t *testing.T) {
+	t.Helper()
+	if err := os.Remove(filepath.Join(fixture.root, "var/lib/sbxr/subscriptions/current/metadata")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (fixture *transactionServingFixture) prove() error {
+	if health := fixture.server.Health(); health.Status != subscriptionserving.Healthy {
+		return errors.New(health.Code)
+	}
+	response, err := fixture.client.Get(fixture.endpoint + fixture.activeToken)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil || response.StatusCode != http.StatusOK || !bytes.Equal(body, fixture.activeBody) {
+		return errors.New("running Subscription Serving proof failed")
+	}
+	rejectedToken := fixture.priorToken
+	if fixture.activeToken == fixture.priorToken {
+		rejectedToken = fixture.candidateToken
+	}
+	if rejectedToken != "" && rejectedToken != fixture.activeToken {
+		rejected, requestErr := fixture.client.Get(fixture.endpoint + rejectedToken)
+		if requestErr != nil {
+			return requestErr
+		}
+		defer rejected.Body.Close()
+		_, readErr := io.Copy(io.Discard, rejected.Body)
+		if readErr != nil || rejected.StatusCode != http.StatusNotFound {
+			return errors.New("inactive Subscription Serving authorization remained usable")
+		}
+	}
+	return nil
 }
 
 func (executor *transactionSubscriptionExecutor) CaptureRollback(_ string, write func(io.Reader) error) error {
@@ -725,6 +971,11 @@ func (executor *transactionSubscriptionExecutor) Activate(root string, prepared 
 	if err := os.MkdirAll(filepath.Join(root, "run/sbxr"), 0o700); err != nil || os.WriteFile(filepath.Join(root, "run/sbxr/active-subscription.json"), []byte(`{"active":true}`), 0o600) != nil {
 		return systemchanges.StepEvidence{}, errors.New("active Subscription Publication fixture unavailable")
 	}
+	if executor.activate != nil {
+		if err := executor.activate(prepared); err != nil {
+			return systemchanges.StepEvidence{}, err
+		}
+	}
 	executor.current = true
 	return systemchanges.StepEvidence{Code: "subscription-artifacts-activated", SHA256: expectedSHA256}, nil
 }
@@ -732,6 +983,11 @@ func (executor *transactionSubscriptionExecutor) Activate(root string, prepared 
 func (executor *transactionSubscriptionExecutor) Reverse(root string, _ io.Reader, _ time.Duration) (systemchanges.StepEvidence, error) {
 	if executor.reverseErr {
 		return systemchanges.StepEvidence{}, errors.New("controlled Subscription Publication reverse failure")
+	}
+	if executor.reverse != nil {
+		if err := executor.reverse(); err != nil {
+			return systemchanges.StepEvidence{}, err
+		}
 	}
 	_ = os.Remove(filepath.Join(root, "run/sbxr/active-subscription.json"))
 	executor.current = false
@@ -747,6 +1003,9 @@ func (executor *transactionSubscriptionExecutor) Inspect(_ string, _ io.Reader, 
 
 func (executor *transactionSubscriptionExecutor) Check(_ string, _ string, _ systemchanges.StateTransactionBinding, _ string, _ time.Duration) (systemchanges.HealthStatus, error) {
 	executor.checks++
+	if executor.beforeCheck != nil {
+		executor.beforeCheck(executor.checks)
+	}
 	if executor.checks == executor.failCheck {
 		return systemchanges.Failed, errors.New("Subscription Serving health proof failed")
 	}
@@ -1221,6 +1480,7 @@ type systemChangeTestOptions struct {
 	nativeSingBox      []byte
 	candidateEdit      func(*DesiredState)
 	subscription       bool
+	subscriptionBundle []byte
 }
 
 func preparedSystemChangeWithOptions(t *testing.T, mutation systemchanges.MutationClass, check systemchanges.Check, options systemChangeTestOptions) (Interface, *systemchanges.ChangeSet, *systemchanges.ChangeSet, systemchanges.Observation) {
@@ -1266,6 +1526,7 @@ func preparedSystemChangeWithOptions(t *testing.T, mutation systemchanges.Mutati
 	}
 	if options.subscription {
 		validator := request.SemanticValidators.Subscription.(*validatingSeams)
+		validator.subscriptionBundle = append([]byte(nil), options.subscriptionBundle...)
 		bundle, bundleErr := validator.subscriptionPublicationBundle()
 		if bundleErr != nil {
 			t.Fatal(bundleErr)

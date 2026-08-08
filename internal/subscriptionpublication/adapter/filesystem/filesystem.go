@@ -23,13 +23,17 @@ import (
 )
 
 const subscriptionDirectory = "var/lib/sbxr/subscriptions"
+const servingConfigurationName = "serving.json"
 
 type Executor struct {
 	uid, gid int
 	prove    func(context.Context, string) error
 }
 
-func New() (Executor, error) {
+func New(prove func(context.Context, string) error) (Executor, error) {
+	if prove == nil {
+		return Executor{}, errors.New("Subscription Serving health proof unavailable")
+	}
 	group, err := user.LookupGroup("sbxr-subscription")
 	if err != nil {
 		return Executor{}, errors.New("sbxr-subscription group unavailable")
@@ -38,7 +42,7 @@ func New() (Executor, error) {
 	if err != nil {
 		return Executor{}, errors.New("sbxr-subscription group is invalid")
 	}
-	return Executor{uid: 0, gid: gid}, nil
+	return Executor{uid: 0, gid: gid, prove: prove}, nil
 }
 
 // NewAt supplies controlled ownership and health proof for Seam Verification.
@@ -88,6 +92,10 @@ func (executor Executor) Activate(root, prepared string, binding systemchanges.S
 	if err != nil || !set.AgreesWith(binding) || subscriptionpublication.BundleSHA256(bundle) != expectedSHA256 {
 		return systemchanges.StepEvidence{}, errors.New("prepared subscription artifact set does not agree with State")
 	}
+	configuration, err := readPreparedConfiguration(prepared, executor.uid)
+	if err != nil {
+		return systemchanges.StepEvidence{}, errors.New("prepared Subscription Serving configuration is unavailable")
+	}
 	storage, err := openStore(root, true, executor.uid, executor.gid)
 	if err != nil {
 		return systemchanges.StepEvidence{}, errors.New("subscription serving directory unavailable")
@@ -98,7 +106,7 @@ func (executor Executor) Activate(root, prepared string, binding systemchanges.S
 	if err != nil {
 		return systemchanges.StepEvidence{}, err
 	}
-	if err := storage.writeSet(target, set); err != nil {
+	if err := storage.writeSet(target, set, configuration); err != nil {
 		return systemchanges.StepEvidence{}, err
 	}
 	if prior == "" {
@@ -130,6 +138,20 @@ func (executor Executor) Activate(root, prepared string, binding systemchanges.S
 	}
 	digest := sha256.Sum256([]byte(target))
 	return systemchanges.StepEvidence{Code: "subscription-artifacts-activated", SHA256: hex.EncodeToString(digest[:])}, nil
+}
+
+func readPreparedConfiguration(prepared string, uid int) ([]byte, error) {
+	name := path.Join(prepared, "subscription.json")
+	info, err := os.Lstat(name)
+	stat, ok := fileStat(info)
+	if err != nil || !ok || !info.Mode().IsRegular() || info.Mode().Type() != 0 || info.Mode().Perm() != 0o600 || info.Size() <= 0 || info.Size() > 64<<10 || stat.Uid != uint32(uid) {
+		return nil, errors.New("unsafe prepared Subscription Serving configuration")
+	}
+	configuration, err := os.ReadFile(name)
+	if err != nil || !json.Valid(configuration) {
+		return nil, errors.New("invalid prepared Subscription Serving configuration")
+	}
+	return configuration, nil
 }
 
 func (executor Executor) Reverse(root string, source io.Reader, _ time.Duration) (systemchanges.StepEvidence, error) {
@@ -339,7 +361,7 @@ func (storage *store) readSet(target string, mode fs.FileMode) (subscriptionpubl
 		return subscriptionpublication.PreparedArtifactSet{}, errors.New("subscription generation directory is unsafe")
 	}
 	entries, err := fs.ReadDir(storage.root.FS(), target)
-	if err != nil || len(entries) != 8 {
+	if err != nil || len(entries) != 9 {
 		return subscriptionpublication.PreparedArtifactSet{}, errors.New("active subscription artifact set is incomplete")
 	}
 	files := make([]subscriptionpublication.ArtifactFile, 0, len(entries))
@@ -356,18 +378,36 @@ func (storage *store) readSet(target string, mode fs.FileMode) (subscriptionpubl
 		}
 		files = append(files, subscriptionpublication.ArtifactFile{Name: artifactName, Body: body})
 	}
+	if _, err := storage.readConfiguration(target); err != nil {
+		return subscriptionpublication.PreparedArtifactSet{}, err
+	}
 	return subscriptionpublication.DecodePreparedArtifactFiles(files)
 }
 
-func (storage *store) writeSet(target string, set subscriptionpublication.PreparedArtifactSet) error {
+func (storage *store) readConfiguration(target string) ([]byte, error) {
+	name := path.Join(target, servingConfigurationName)
+	info, err := storage.root.Lstat(name)
+	stat, ok := fileStat(info)
+	if err != nil || !ok || !info.Mode().IsRegular() || info.Mode().Type() != 0 || info.Mode().Perm() != 0o640 || info.Size() <= 0 || info.Size() > 64<<10 || stat.Uid != uint32(storage.uid) || stat.Gid != uint32(storage.gid) {
+		return nil, errors.New("Subscription Serving configuration is unsafe")
+	}
+	configuration, err := storage.root.ReadFile(name)
+	if err != nil || !json.Valid(configuration) {
+		return nil, errors.New("Subscription Serving configuration is unavailable")
+	}
+	return configuration, nil
+}
+
+func (storage *store) writeSet(target string, set subscriptionpublication.PreparedArtifactSet, configuration []byte) error {
 	if info, err := storage.root.Lstat(target); err == nil {
 		if !info.IsDir() {
 			return errors.New("subscription generation identity conflicts")
 		}
 		existing, readErr := storage.readSet(target, info.Mode().Perm())
 		existingBundle, existingErr := existing.Bundle()
+		existingConfiguration, configurationErr := storage.readConfiguration(target)
 		candidateBundle, candidateErr := set.Bundle()
-		if readErr != nil || existingErr != nil || candidateErr != nil || !bytes.Equal(existingBundle, candidateBundle) {
+		if readErr != nil || existingErr != nil || configurationErr != nil || candidateErr != nil || !bytes.Equal(existingBundle, candidateBundle) || !bytes.Equal(existingConfiguration, configuration) {
 			return errors.New("subscription generation identity conflicts")
 		}
 		return nil
@@ -394,6 +434,17 @@ func (storage *store) writeSet(target string, set subscriptionpublication.Prepar
 		if writeErr != nil || syncErr != nil || closeErr != nil || storage.root.Chown(name, storage.uid, storage.gid) != nil {
 			return errors.New("subscription artifact write failed")
 		}
+	}
+	configurationPath := path.Join(temporary, servingConfigurationName)
+	configurationFile, err := storage.root.OpenFile(configurationPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o640)
+	if err != nil {
+		return errors.New("Subscription Serving configuration write failed")
+	}
+	_, writeErr := configurationFile.Write(configuration)
+	syncErr := configurationFile.Sync()
+	closeErr := configurationFile.Close()
+	if writeErr != nil || syncErr != nil || closeErr != nil || storage.root.Chown(configurationPath, storage.uid, storage.gid) != nil {
+		return errors.New("Subscription Serving configuration write failed")
 	}
 	if err := syncRootDirectory(storage.root, temporary); err != nil || storage.root.Rename(temporary, target) != nil {
 		return errors.New("subscription generation activation failed")

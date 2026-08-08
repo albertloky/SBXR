@@ -422,7 +422,11 @@ func TestServeRejectsEveryUnsafeArtifactSet(t *testing.T) {
 			cancel()
 			err = server.Serve(ctx, listener)
 			var failure *Failure
-			if !errors.As(err, &failure) || failure.Code != "SUBSCRIPTION-SERVING-INPUT" || strings.Contains(err.Error(), "MARKER") {
+			wantCode := "SUBSCRIPTION-SERVING-ARTIFACT"
+			if check.name == "certificate symbolic link" {
+				wantCode = "SUBSCRIPTION-SERVING-CERTIFICATE"
+			}
+			if !errors.As(err, &failure) || failure.Code != wantCode || strings.Contains(err.Error(), "MARKER") {
 				t.Fatalf("Serve() = %v", err)
 			}
 		})

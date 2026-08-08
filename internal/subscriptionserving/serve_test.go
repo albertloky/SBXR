@@ -105,45 +105,46 @@ func TestServeRefusesEveryOtherBasicRouteAndTokenShape(t *testing.T) {
 func TestServeFailsClosedOnUnsafeInputs(t *testing.T) {
 	tests := []struct {
 		name   string
+		code   string
 		change func(t *testing.T, server *Server)
 	}{
-		{"short token", func(t *testing.T, server *Server) {
+		{"short token", "SUBSCRIPTION-SERVING-ARTIFACT", func(t *testing.T, server *Server) {
 			path := filepath.Join(server.root, configurationPath)
 			body, _ := os.ReadFile(path)
 			mustFile(t, server.root, configurationPath, []byte(strings.Replace(string(body), "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20", "01", 1)), 0o640)
 		}},
-		{"writable artifact", func(t *testing.T, server *Server) {
+		{"writable artifact", "SUBSCRIPTION-SERVING-ARTIFACT", func(t *testing.T, server *Server) {
 			if err := os.Chmod(filepath.Join(server.root, artifactPath, "base64"), 0o660); err != nil {
 				t.Fatal(err)
 			}
 		}},
-		{"writable parent", func(t *testing.T, server *Server) {
+		{"writable parent", "SUBSCRIPTION-SERVING-ARTIFACT", func(t *testing.T, server *Server) {
 			if err := os.Chmod(filepath.Join(server.root, "var/lib/sbxr/subscriptions"), 0o770); err != nil {
 				t.Fatal(err)
 			}
 		}},
-		{"wrong owner", func(_ *testing.T, server *Server) { server.uid++ }},
-		{"artifact symlink", func(t *testing.T, server *Server) {
+		{"wrong owner", "SUBSCRIPTION-SERVING-ARTIFACT", func(_ *testing.T, server *Server) { server.uid++ }},
+		{"artifact symlink", "SUBSCRIPTION-SERVING-ARTIFACT", func(t *testing.T, server *Server) {
 			path := filepath.Join(server.root, artifactPath, "base64")
 			if err := os.Remove(path); err != nil || os.Symlink("raw", path) != nil {
 				t.Fatal("replace artifact with symlink")
 			}
 		}},
-		{"mismatched certificate", func(t *testing.T, server *Server) {
+		{"mismatched certificate", "SUBSCRIPTION-SERVING-CERTIFICATE", func(t *testing.T, server *Server) {
 			path := filepath.Join(server.root, configurationPath)
 			body, _ := os.ReadFile(path)
 			mustFile(t, server.root, configurationPath, []byte(strings.Replace(string(body), "127.0.0.1", "127.0.0.2", 1)), 0o640)
 		}},
-		{"unavailable certificate", func(t *testing.T, server *Server) {
+		{"unavailable certificate", "SUBSCRIPTION-SERVING-CERTIFICATE", func(t *testing.T, server *Server) {
 			target, _ := os.Readlink(filepath.Join(server.root, certificatePath))
 			if err := os.Remove(filepath.Join(server.root, "var/lib/sbxr/certificates/ip", target, "privkey.pem")); err != nil {
 				t.Fatal(err)
 			}
 		}},
-		{"expired certificate", func(_ *testing.T, server *Server) {
+		{"expired certificate", "SUBSCRIPTION-SERVING-CERTIFICATE", func(_ *testing.T, server *Server) {
 			server.now = func() time.Time { return time.Now().Add(200 * time.Hour) }
 		}},
-		{"untrusted certificate", func(_ *testing.T, server *Server) { server.roots = x509.NewCertPool() }},
+		{"untrusted certificate", "SUBSCRIPTION-SERVING-CERTIFICATE", func(_ *testing.T, server *Server) { server.roots = x509.NewCertPool() }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -154,7 +155,7 @@ func TestServeFailsClosedOnUnsafeInputs(t *testing.T) {
 				t.Fatal(err)
 			}
 			var failure *Failure
-			if err := server.Serve(t.Context(), listener); err == nil || !errors.As(err, &failure) || Result(err).Status != Failed {
+			if err := server.Serve(t.Context(), listener); err == nil || !errors.As(err, &failure) || Result(err).Status != Failed || failure.Code != test.code {
 				t.Fatalf("Serve() = %v", err)
 			}
 		})
@@ -215,7 +216,7 @@ func TestServiceUnitHasOnlyReadOnlySubscriptionAuthority(t *testing.T) {
 		"User=sbxr-subscription", "Group=sbxr-subscription", "ExecStart=/usr/local/bin/sbxr __subscription-serve",
 		"StandardOutput=null", "StandardError=null",
 		"ProtectSystem=strict", "NoNewPrivileges=true", "PrivateTmp=true", "ProtectHome=true",
-		"TemporaryFileSystem=/:ro", "BindReadOnlyPaths=/usr/local/bin/sbxr", "BindReadOnlyPaths=/etc/sbxr/subscription.json",
+		"TemporaryFileSystem=/:ro", "BindReadOnlyPaths=/usr/local/bin/sbxr",
 		"BindReadOnlyPaths=/var/lib/sbxr/subscriptions/current", "BindReadOnlyPaths=/var/lib/sbxr/certificates/ip/current",
 		"BindReadOnlyPaths=/etc/ssl/certs/ca-certificates.crt", "RestrictAddressFamilies=AF_INET AF_INET6",
 		"PrivateDevices=true", "UMask=0027", "LimitCORE=0",
@@ -267,13 +268,11 @@ func testServer(t *testing.T, address string) (Server, *x509.CertPool, string, s
 	}
 	token := hex.EncodeToString(tokenBytes)
 	body := "dmxlc3M6Ly9leGFtcGxl"
-	mustDirectory(t, root, "etc", 0o755)
-	mustDirectory(t, root, "etc/sbxr", 0o750)
-	configuration, _ := json.Marshal(map[string]any{"token": token, "listen_port": 10443, "certificate_pointer": "/var/lib/sbxr/certificates/ip/current", "primary_address": address})
-	mustFile(t, root, "etc/sbxr/subscription.json", configuration, 0o640)
 	mustDirectory(t, root, "var/lib/sbxr", 0o755)
 	mustDirectory(t, root, "var/lib/sbxr/subscriptions", 0o750)
 	mustDirectory(t, root, "var/lib/sbxr/subscriptions/current", 0o750)
+	configuration, _ := json.Marshal(map[string]any{"token": token, "listen_port": 10443, "certificate_pointer": "/var/lib/sbxr/certificates/ip/current", "primary_address": address})
+	mustFile(t, root, configurationPath, configuration, 0o640)
 	contents := map[string][]byte{
 		"base64": []byte(body), "raw": []byte("vless://example"), "v2rayn": []byte(body), "shadowrocket": []byte(body),
 		"karing": []byte("{}"), "mihomo": []byte("proxies: []\n"), "sing-box": []byte("{}"),

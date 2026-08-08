@@ -683,6 +683,7 @@ type validatingSeams struct {
 	cloudflareSecrets   InfrastructureSecretReader
 	planIdentity        string
 	planSHA256          string
+	subscriptionBundle  []byte
 }
 
 func (v *validatingSeams) Identity() string { return v.planIdentity }
@@ -743,6 +744,9 @@ func (v *validatingSeams) PrepareSubscriptionPublication() ([]byte, error) {
 }
 
 func (v *validatingSeams) subscriptionPublicationBundle() ([]byte, error) {
+	if len(v.subscriptionBundle) > 0 {
+		return append([]byte(nil), v.subscriptionBundle...), nil
+	}
 	return []byte("opaque Subscription Publication artifact bundle"), nil
 }
 

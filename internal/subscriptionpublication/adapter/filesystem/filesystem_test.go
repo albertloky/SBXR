@@ -47,6 +47,9 @@ func TestAtomicArtifactSetActivationRollbackAndServingAgreement(t *testing.T) {
 			t.Fatalf("%s mode = %v, %v", name, info, err)
 		}
 	}
+	if configuration, err := os.ReadFile(filepath.Join(current, "serving.json")); err != nil || !bytes.Contains(configuration, []byte(`"listen_port":10443`)) {
+		t.Fatalf("active serving configuration = %q, %v", configuration, err)
+	}
 	for _, code := range []string{"SUBSCRIPTION-PUBLICATION-CANDIDATE", "SUBSCRIPTION-PUBLICATION-ACTIVATION", "SUBSCRIPTION-PUBLICATION-SERVING-AGREEMENT"} {
 		if health, err := executor.Check(root, code, binding(8, strings.Repeat("8", 64)), preparedSHA(t, prepared8), time.Second); health != systemchanges.Healthy || err != nil {
 			t.Fatalf("Check(%s) = %s, %v", code, health, err)
@@ -89,6 +92,12 @@ func TestAtomicArtifactSetActivationRollbackAndServingAgreement(t *testing.T) {
 	}
 }
 
+func TestProductionExecutorRequiresServingProof(t *testing.T) {
+	if _, err := filesystem.New(nil); err == nil {
+		t.Fatal("production executor accepted no Subscription Serving health proof")
+	}
+}
+
 func TestActivationFailsClosedAtCandidateAndServingBoundaries(t *testing.T) {
 	root := t.TempDir()
 	executor := filesystem.NewAt(os.Geteuid(), os.Getegid(), func(context.Context, string) error { return errors.New("controlled health failure") })
@@ -109,6 +118,20 @@ func TestActivationFailsClosedAtCandidateAndServingBoundaries(t *testing.T) {
 	}
 	if health, err := executor.Check(root, "SUBSCRIPTION-PUBLICATION-SERVING-AGREEMENT", binding(8, strings.Repeat("8", 64)), preparedSHA(t, prepared), time.Second); health != systemchanges.Failed || err == nil || strings.Contains(err.Error(), "SECRET-MARKER") {
 		t.Fatalf("serving refusal = %s, %v", health, err)
+	}
+}
+
+func TestActivationRejectsAnUnsafePreparedServingConfiguration(t *testing.T) {
+	root := t.TempDir()
+	prepared := preparedSet(t, root, 8, strings.Repeat("8", 64), "BODY-N8")
+	configuration := filepath.Join(prepared, "subscription.json")
+	outside := filepath.Join(root, "SECRET-CONFIGURATION-MARKER")
+	if os.WriteFile(outside, []byte(`{"token":"SECRET-CONFIGURATION-MARKER"}`), 0o600) != nil || os.Remove(configuration) != nil || os.Symlink(outside, configuration) != nil {
+		t.Fatal("prepare hostile serving configuration")
+	}
+	executor := filesystem.NewAt(os.Geteuid(), os.Getegid(), func(context.Context, string) error { return nil })
+	if _, err := executor.Activate(root, prepared, binding(8, strings.Repeat("8", 64)), preparedSHA(t, prepared), time.Second); err == nil || strings.Contains(err.Error(), "SECRET-CONFIGURATION-MARKER") {
+		t.Fatalf("unsafe serving configuration activation = %v", err)
 	}
 }
 
@@ -280,7 +303,8 @@ func preparedSet(t *testing.T, root string, revision uint64, digest, marker stri
 		t.Fatal(err)
 	}
 	bundle, err := set.Bundle()
-	if err != nil || os.WriteFile(filepath.Join(directory, "subscriptions.bundle"), bundle, 0o600) != nil {
+	configuration := []byte(`{"token":"` + strings.Repeat("6", 64) + `","listen_port":10443,"certificate_pointer":"/var/lib/sbxr/certificates/ip/current","primary_address":"198.51.100.10"}`)
+	if err != nil || os.WriteFile(filepath.Join(directory, "subscriptions.bundle"), bundle, 0o600) != nil || os.WriteFile(filepath.Join(directory, "subscription.json"), configuration, 0o600) != nil {
 		t.Fatal("write prepared artifact bundle")
 	}
 	return directory

@@ -32,7 +32,6 @@ MemoryDenyWriteExecute=true
 LimitCORE=0
 TemporaryFileSystem=/:ro
 BindReadOnlyPaths=/usr/local/bin/sbxr
-BindReadOnlyPaths=/etc/sbxr/subscription.json
 BindReadOnlyPaths=/var/lib/sbxr/subscriptions/current
 BindReadOnlyPaths=/var/lib/sbxr/certificates/ip/current
 BindReadOnlyPaths=/etc/ssl/certs/ca-certificates.crt

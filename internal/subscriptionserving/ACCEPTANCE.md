@@ -122,7 +122,7 @@ Run:
 go test ./internal/subscriptionserving -run '^TestServeRejectsEveryUnsafeArtifactSet$' -count=1
 ```
 
-Require unexpected, missing, non-regular, symbolic-link, permission-widened, changed, cross-representation-inconsistent, invalid-JSON, empty-required, invalid-metadata, and oversized artifact inputs to stop `Serve` with only `SUBSCRIPTION-SERVING-INPUT`.
+Require unexpected, missing, non-regular, symbolic-link, permission-widened, changed, cross-representation-inconsistent, invalid-JSON, empty-required, invalid-metadata, and oversized snapshot inputs to stop `Serve` with only `SUBSCRIPTION-SERVING-ARTIFACT`. Certificate failures use only `SUBSCRIPTION-SERVING-CERTIFICATE`.
 
 ### SS-SERVE-13 — Secret-safe operational output
 
@@ -133,6 +133,30 @@ go test ./internal/subscriptionserving -run '^TestServeNeverExposesSecretOrOpera
 ```
 
 Require token, complete-route, authorization, User-Agent, artifact, generated-configuration, profile-credential, selected-address, and injected external-error markers to remain absent from hostile responses and typed failures. The systemd checks in `SS-SERVE-06` separately require discarded output, no writable authority, hidden unrelated processes, and disabled core dumps.
+
+### SS-SERVE-14 — Atomic serving-state transition
+
+Run:
+
+```sh
+go test ./internal/subscriptionserving -run '^Test(ServeSwitchesAuthorizationAndCompleteBodiesTogether|ConcurrentRequestsObserveOnlyOneCompleteServingSnapshot|ServePreservesDeliberateProfileDisablementAcrossActivation|ServeRestartAndRollbackUseOnlyAProvenCompleteSnapshot)$' -count=1
+```
+
+Require concurrent full-TLS requests to observe only the complete old token/body snapshot or complete candidate token/body snapshot. Require the old token to receive the same plain `404` after candidate activation, deliberate profile disablement and re-enablement to preserve Publication's exact bodies and counts, restart to load only the active complete snapshot, and rollback to restore only the prior proven snapshot.
+
+### SS-SERVE-15 — Certificate failure and normal transaction ownership
+
+Run:
+
+```sh
+go test ./internal/subscriptionserving -run '^TestServeKeepsThePreviousProvenHTTPSStateWhenCertificateActivationFails$' -count=1
+go test ./internal/subscriptionserving -run '^TestPublicationGateAndRollbackPassThroughServe$' -count=1
+go test ./internal/subscriptionpublication/adapter/filesystem -run 'Test(ProductionExecutorRequiresServingProof|AtomicArtifactSetActivationRollbackAndServingAgreement|ActivationRejectsAnUnsafePreparedServingConfiguration|RestartInspection|RestartReconciles|RestartRestores)' -count=1
+go test ./internal/state -run 'TestSubscription(ArtifactSetUsesOneSystemChangesTransaction|ServingFailureRestoresStateAndPriorArtifactSet|RollbackFailureEntersRecoveryRequired)$' -count=1
+go test ./internal/certificatelifecycle/adapter/ubuntu -run 'TestIP(ActivationFailureRestoresPriorPointerAndReprovesService|ActivationRestartInspectionAndCompleteCleanup|RollbackAcceptsNoPriorPointer)$' -count=1
+```
+
+Require the previous verified certificate to remain usable when a candidate pointer fails, expose the rejected candidate through the typed `Health` result, and require Certificate Lifecycle to restore and re-prove its one pointer. Require the real Publication activation, serving-agreement gate, and rollback to pass through a running `Serve` endpoint. Require Subscription Publication and State/System Changes to own the one-use Plan, Required gates, one Desired State publication, durable `Complete`, exact rollback, restart inspection, and Recovery Required decision. Serving must add no private transaction or recovery framework.
 
 ## TLS Seam Verification
 
