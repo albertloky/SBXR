@@ -46,16 +46,54 @@ const (
 )
 
 type Health struct {
-	Time        time.Time
-	Module      string
-	Profile     string
-	Outcome     Outcome
-	Code        string
-	Problem     string
-	Found       string
-	Required    string
-	WhyStopped  string
-	NextActions []string
+	Time          time.Time
+	Module        string
+	Profile       string
+	Outcome       Outcome
+	Code          string
+	Problem       string
+	Found         string
+	Required      string
+	WhyStopped    string
+	NextActions   []string
+	BlockerOwner  BlockerOwner
+	BlockerAction string
+}
+
+type BlockerOwner string
+
+const (
+	SBXROwnedBlocker BlockerOwner = "SBXR"
+	ExternalBlocker  BlockerOwner = "External Owner"
+)
+
+type CorrectionFlow struct {
+	FixWithSBXR, OwnerWork, CheckAgain, Back, Evidence string
+}
+
+// CorrectionFlow turns every blocked Health into the same safe, copyable
+// owner handoff without adding credentials or raw native output.
+func (health Health) CorrectionFlow() CorrectionFlow {
+	if health.Outcome == Healthy || health.Outcome == Disabled {
+		return CorrectionFlow{}
+	}
+	flow := CorrectionFlow{CheckAgain: "Check again", Back: "Back", Evidence: fmt.Sprintf("%s: found %s; required %s", health.Code, health.Found, health.Required)}
+	if health.BlockerOwner == SBXROwnedBlocker {
+		flow.FixWithSBXR = health.BlockerAction
+	} else if health.BlockerOwner == ExternalBlocker {
+		flow.OwnerWork = health.BlockerAction
+	}
+	return flow
+}
+
+func blockedHealth(health Health) Health {
+	health.BlockerOwner, health.BlockerAction = SBXROwnedBlocker, "Fix with SBXR by rebuilding and applying one fresh reviewed Plan, then Check again."
+	return health
+}
+
+func externalBlockedHealth(health Health, action string) Health {
+	health.BlockerOwner, health.BlockerAction = ExternalBlocker, action
+	return health
 }
 
 type TargetClass string
@@ -160,13 +198,14 @@ func (credentials RealityCredentials) valid() bool {
 }
 
 type ViewRequest struct {
-	Revision    uint64
-	Enabled     bool
-	Port        uint16
-	Target      RealityTarget
-	Fingerprint string
-	XrayVersion string
-	Credentials RealityCredentials
+	Revision            uint64
+	Enabled             bool
+	Port                uint16
+	Target              RealityTarget
+	Fingerprint         string
+	XrayVersion         string
+	Credentials         RealityCredentials
+	reviewedAlternative bool
 }
 
 type Profile struct {
@@ -207,24 +246,28 @@ func (module Interface) View(ctx context.Context, request ViewRequest) ViewResul
 	result := ViewResult{Profile: profile, observation: observation}
 	result.VolatileSHA256 = realityObservationSHA256(request, observation)
 	host, port, err := net.SplitHostPort(request.Target.Address)
-	if err != nil || port != "443" || host != request.Target.ServerName || !validHostname(host) || request.Port != 443 || request.XrayVersion != qualifiedXrayVersion || request.Fingerprint != "chrome" || !request.Credentials.valid() || !request.Enabled {
-		result.Health = blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-TARGET", "The VLESS REALITY Vision inputs are invalid", "the target, selected listener, credential, fingerprint, enabled state, or qualified release is wrong", "one enabled profile using target 443/TCP, Chrome fingerprint, and Xray v26.3.27")
+	if err != nil || port != "443" || host != request.Target.ServerName || !validHostname(host) {
+		result.Health = externalBlockedHealth(blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-TARGET", "The VLESS REALITY Vision target is invalid", "the target address, port, or accepted name is wrong", "one ordinary external target using its accepted name on 443/TCP"), "Select an ordinary non-Cloudflare, non-Apple or iCloud target whose address and accepted name agree on 443/TCP, then Check again.")
+		return result
+	}
+	if !selectedPort(request.Port, 443, request.reviewedAlternative) || request.XrayVersion != qualifiedXrayVersion || request.Fingerprint != "chrome" || !request.Credentials.valid() || !request.Enabled {
+		result.Health = blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-TARGET", "The VLESS REALITY Vision SBXR inputs are invalid", "the selected listener, credential, fingerprint, enabled state, or qualified release is wrong", "one enabled profile using the reviewed listener, Chrome fingerprint, and Xray v26.3.27")
 		return result
 	}
 	if observation.Probe != ProbePassed {
-		result.Health = blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-PROBE", "The bounded REALITY target probe did not pass", string(observation.Probe), "one conclusive xray tls ping route and safety result")
+		result.Health = externalBlockedHealth(blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-PROBE", "The bounded REALITY target probe did not pass", string(observation.Probe), "one conclusive xray tls ping route and safety result"), "Correct or replace the external target until the bounded xray tls ping route and safety probe passes, then Check again.")
 		return result
 	}
 	if observation.Class == CloudflareTarget || observation.Class == AppleICloudTarget || observation.Class != OrdinaryTarget {
-		result.Health = blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-TARGET-CLASS", "The REALITY target belongs to a forbidden or unknown target class", string(observation.Class), "one suitable non-Cloudflare, non-Apple or iCloud target")
+		result.Health = externalBlockedHealth(blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-TARGET-CLASS", "The REALITY target belongs to a forbidden or unknown target class", string(observation.Class), "one suitable non-Cloudflare, non-Apple or iCloud target"), "Select a suitable external target that is neither Cloudflare nor Apple or iCloud, then Check again.")
 		return result
 	}
 	if !observation.RouteVerified {
-		result.Health = blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-ROUTE", "The REALITY route is unproved", "the target route could not be confirmed", "one conclusive target route")
+		result.Health = externalBlockedHealth(blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-ROUTE", "The REALITY route is unproved", "the target route could not be confirmed", "one conclusive target route"), "Correct the external target or VPS route until the exact route is conclusive, then Check again.")
 		return result
 	}
 	if !slices.Contains(observation.AcceptedNames, request.Target.ServerName) {
-		result.Health = blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-NAME", "The REALITY accepted name does not match", strings.Join(observation.AcceptedNames, ","), request.Target.ServerName)
+		result.Health = externalBlockedHealth(blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-NAME", "The REALITY accepted name does not match", strings.Join(observation.AcceptedNames, ","), request.Target.ServerName), "Select an external target whose accepted TLS name exactly matches the reviewed server name, then Check again.")
 		return result
 	}
 	if request.Revision > 0 {
@@ -253,6 +296,10 @@ func (module Interface) View(ctx context.Context, request ViewRequest) ViewResul
 	return result
 }
 
+func selectedPort(port, preferred uint16, reviewedAlternative bool) bool {
+	return port == preferred || reviewedAlternative && port > 0
+}
+
 func publicTCPListener(listener Listener, port uint16) bool {
 	return listener.Port == port && listener.Protocol == "tcp" && (listener.Address == "0.0.0.0" || listener.Address == "::" || listener.Address == "*")
 }
@@ -272,7 +319,7 @@ func realityObservationSHA256(request ViewRequest, observation RealityObservatio
 }
 
 func blocked(at time.Time, outcome Outcome, code, problem, found, required string) Health {
-	return Health{Time: at, Module: "Connection Profiles", Profile: "VLESS REALITY Vision", Outcome: outcome, Code: code, Problem: problem, Found: found, Required: required, WhyStopped: "Connection Profiles fails closed before unsafe proxy or host mutation", NextActions: []string{"Check again", "Back"}}
+	return blockedHealth(Health{Time: at, Module: "Connection Profiles", Profile: "VLESS REALITY Vision", Outcome: outcome, Code: code, Problem: problem, Found: found, Required: required, WhyStopped: "Connection Profiles fails closed before unsafe proxy or host mutation", NextActions: []string{"Check again", "Back"}})
 }
 
 type FallbackLimit struct {
@@ -306,6 +353,7 @@ type Plan struct {
 	anyTLSRequest                    *AnyTLSViewRequest
 	steps                            []systemchanges.Step
 	checks                           []systemchanges.Check
+	mutation                         systemchanges.MutationClass
 	used                             *atomic.Bool
 }
 
@@ -322,6 +370,7 @@ type singBoxPlanSpec struct {
 	hysteria2                                         *Hysteria2ViewRequest
 	tuic                                              *TUICViewRequest
 	anyTLS                                            *AnyTLSViewRequest
+	mutation                                          systemchanges.MutationClass
 }
 
 func (module Interface) buildSingBoxPlan(ctx context.Context, spec singBoxPlanSpec) (*Plan, string) {
@@ -350,13 +399,20 @@ func (module Interface) buildSingBoxPlan(ctx context.Context, spec singBoxPlanSp
 	}
 	volatile := sha256.Sum256([]byte(spec.volatileInputs))
 	volatileSHA := hex.EncodeToString(volatile[:])
-	binding, _ := json.Marshal(struct {
+	binding, err := json.Marshal(struct {
 		Request                         any
 		VolatileSHA256, PreparedBinding string
 	}{spec.binding, volatileSHA, preparedBinding})
+	if err != nil {
+		return nil, "BINDING"
+	}
 	digest := sha256.Sum256(binding)
 	sha := hex.EncodeToString(digest[:])
-	return &Plan{identity: "profiles-" + strings.ToLower(spec.profile) + "-" + sha[:12], sha256: sha, volatileSHA256: volatileSHA, description: spec.description, preparedBinding: preparedBinding, configuration: spec.xray, singBoxConfiguration: spec.singBox, revision: spec.revision, changeSet: spec.changeSet, startingStateSHA256: spec.startingState, desiredStateSHA256: spec.desiredState, realityRequest: spec.reality, xhttpRequest: spec.xhttp, webSocketRequest: spec.websocket, hysteria2Request: spec.hysteria2, tuicRequest: spec.tuic, anyTLSRequest: spec.anyTLS, steps: []systemchanges.Step{step}, checks: checks, used: &atomic.Bool{}}, ""
+	mutation := spec.mutation
+	if mutation == "" {
+		mutation = systemchanges.SettingChangeMutation
+	}
+	return &Plan{identity: "profiles-" + strings.ToLower(spec.profile) + "-" + sha[:12], sha256: sha, volatileSHA256: volatileSHA, description: spec.description, preparedBinding: preparedBinding, configuration: spec.xray, singBoxConfiguration: spec.singBox, revision: spec.revision, changeSet: spec.changeSet, startingStateSHA256: spec.startingState, desiredStateSHA256: spec.desiredState, realityRequest: spec.reality, xhttpRequest: spec.xhttp, webSocketRequest: spec.websocket, hysteria2Request: spec.hysteria2, tuicRequest: spec.tuic, anyTLSRequest: spec.anyTLS, steps: []systemchanges.Step{step}, checks: checks, mutation: mutation, used: &atomic.Bool{}}, ""
 }
 
 func (plan *Plan) Identity() string {
@@ -417,7 +473,7 @@ type xrayPlanSpec struct {
 
 func (module Interface) buildXrayPlan(ctx context.Context, spec xrayPlanSpec) (*Plan, *Health) {
 	fail := func(suffix, problem, found, required string) (*Plan, *Health) {
-		health := Health{Time: spec.checkedAt, Module: "Connection Profiles", Profile: spec.profile, Outcome: Failed, Code: spec.codePrefix + "-" + suffix, Problem: problem, Found: found, Required: required, WhyStopped: "Connection Profiles fails closed before unsafe proxy or host mutation", NextActions: []string{"Check again", "Back"}}
+		health := blockedHealth(Health{Time: spec.checkedAt, Module: "Connection Profiles", Profile: spec.profile, Outcome: Failed, Code: spec.codePrefix + "-" + suffix, Problem: problem, Found: found, Required: required, WhyStopped: "Connection Profiles fails closed before unsafe proxy or host mutation", NextActions: []string{"Check again", "Back"}})
 		return nil, &health
 	}
 	if err := module.host.ValidateReality(ctx, spec.version, bytes.NewReader(spec.configuration)); err != nil {
@@ -509,10 +565,10 @@ func xrayProfileInputs(profiles state.ConnectionProfiles, secrets state.Connecti
 		secrets.ReadClientAccessValue(profile.ShortID),
 	)
 	host, port, targetErr := net.SplitHostPort(profile.Target)
-	if err != nil || targetErr != nil || port != "443" || host != profile.ServerName || !validHostname(host) || profile.Port != 443 || profile.Fingerprint != "chrome" || !credentials.valid() {
+	if err != nil || targetErr != nil || port != "443" || host != profile.ServerName || !validHostname(host) || profile.Port == 0 || profile.Fingerprint != "chrome" || !credentials.valid() {
 		return ViewRequest{}, nil, nil, errors.New("VLESS REALITY Vision intent is invalid")
 	}
-	reality := ViewRequest{Enabled: profile.Enabled, Port: profile.Port, Target: RealityTarget{Address: profile.Target, ServerName: profile.ServerName}, Fingerprint: profile.Fingerprint, XrayVersion: qualifiedXrayVersion, Credentials: credentials}
+	reality := ViewRequest{Enabled: profile.Enabled, Port: profile.Port, Target: RealityTarget{Address: profile.Target, ServerName: profile.ServerName}, Fingerprint: profile.Fingerprint, XrayVersion: qualifiedXrayVersion, Credentials: credentials, reviewedAlternative: profile.Port != 443}
 	xhttpRequest, err := xhttpProfileInput(profiles.VLESSXHTTP, secrets, credentials.uuid.value)
 	if err != nil {
 		return ViewRequest{}, nil, nil, err
@@ -529,10 +585,10 @@ func xhttpProfileInput(profile state.VLESSXHTTP, secrets state.ConnectionProfile
 		return nil, nil
 	}
 	credentials, err := NewXHTTPCredentials(secrets.ReadClientAccessValue(profile.UUID), secrets.ReadClientAccessValue(profile.Path))
-	if err != nil || profile.OriginAddress != "127.0.0.1" || profile.OriginPort != 11080 || profile.Mode != state.XHTTPPacketUp || !validHostname(profile.Hostname) || credentials.uuid.value == realityUUID {
+	if err != nil || profile.OriginAddress != "127.0.0.1" || profile.OriginPort == 0 || profile.Mode != state.XHTTPPacketUp || !validHostname(profile.Hostname) || credentials.uuid.value == realityUUID {
 		return nil, errors.New("VLESS XHTTP intent is invalid")
 	}
-	return &XHTTPViewRequest{Enabled: profile.Enabled, Hostname: profile.Hostname, OriginAddress: profile.OriginAddress, OriginPort: profile.OriginPort, Mode: profile.Mode, XrayVersion: qualifiedXrayVersion, Credentials: credentials}, nil
+	return &XHTTPViewRequest{Enabled: profile.Enabled, Hostname: profile.Hostname, OriginAddress: profile.OriginAddress, OriginPort: profile.OriginPort, Mode: profile.Mode, XrayVersion: qualifiedXrayVersion, Credentials: credentials, reviewedAlternative: profile.OriginPort != 11080}, nil
 }
 
 func webSocketProfileInput(profile state.VLESSWebSocket, secrets state.ConnectionProfileSecretReader, realityUUID string, xhttp *XHTTPViewRequest) (*WebSocketViewRequest, error) {
@@ -541,10 +597,10 @@ func webSocketProfileInput(profile state.VLESSWebSocket, secrets state.Connectio
 	}
 	credentials, err := NewWebSocketCredentials(secrets.ReadClientAccessValue(profile.UUID), secrets.ReadClientAccessValue(profile.Path))
 	sharedXHTTPFact := xhttp != nil && (credentials.uuid.value == xhttp.Credentials.uuid.value || credentials.path.value == xhttp.Credentials.path.value || profile.Hostname == xhttp.Hostname)
-	if err != nil || profile.OriginAddress != "127.0.0.1" || profile.OriginPort != 11081 || !validHostname(profile.Hostname) || credentials.uuid.value == realityUUID || sharedXHTTPFact {
+	if err != nil || profile.OriginAddress != "127.0.0.1" || profile.OriginPort == 0 || !validHostname(profile.Hostname) || credentials.uuid.value == realityUUID || sharedXHTTPFact {
 		return nil, errors.New("VLESS WebSocket intent is invalid")
 	}
-	return &WebSocketViewRequest{Enabled: profile.Enabled, Hostname: profile.Hostname, TLSName: profile.Hostname, HTTPHost: profile.Hostname, OriginAddress: profile.OriginAddress, OriginPort: profile.OriginPort, XrayVersion: qualifiedXrayVersion, Credentials: credentials}, nil
+	return &WebSocketViewRequest{Enabled: profile.Enabled, Hostname: profile.Hostname, TLSName: profile.Hostname, HTTPHost: profile.Hostname, OriginAddress: profile.OriginAddress, OriginPort: profile.OriginPort, XrayVersion: qualifiedXrayVersion, Credentials: credentials, reviewedAlternative: profile.OriginPort != 11081}, nil
 }
 
 func (module Interface) PrepareConnectionProfiles(profiles state.ConnectionProfiles, secrets state.ConnectionProfileSecretReader) ([]byte, []byte, error) {
@@ -649,6 +705,13 @@ func (plan *Plan) PrepareConnectionProfiles(profiles state.ConnectionProfiles, s
 		return nil, nil, errors.New("prepared Connection Profiles configuration differs from the reviewed Plan")
 	}
 	return append([]byte(nil), plan.configuration...), append([]byte(nil), plan.singBoxConfiguration...), nil
+}
+
+func (plan *Plan) StateConnectionProfilesRepair() (uint64, string, bool) {
+	if plan == nil {
+		return 0, "", false
+	}
+	return plan.revision, plan.startingStateSHA256, plan.mutation == systemchanges.RepairMutation && plan.startingStateSHA256 == plan.desiredStateSHA256
 }
 
 // ponytail: one process-local HMAC key binds reviewed bytes without retaining or
@@ -765,14 +828,21 @@ func realityInbound(request ViewRequest) map[string]any {
 }
 
 func (plan *Plan) Apply(module systemchanges.Interface, prepared systemchanges.PreparedStateCommit, starting systemchanges.StateLineage, volatileSHA256 string, disk systemchanges.DiskRequirement) systemchanges.ApplyResult {
-	if plan == nil || plan.used == nil || !plan.used.CompareAndSwap(false, true) || prepared == nil || volatileSHA256 != plan.volatileSHA256 || starting.Revision != plan.revision || starting.SHA256 != plan.startingStateSHA256 {
+	expectedRevision := starting.Revision
+	if starting.Status == systemchanges.NotInstalled {
+		expectedRevision++
+	}
+	if plan == nil || plan.used == nil || !plan.used.CompareAndSwap(false, true) || prepared == nil || volatileSHA256 != plan.volatileSHA256 || expectedRevision != plan.revision || starting.SHA256 != plan.startingStateSHA256 {
 		return module.Apply(nil)
 	}
 	changeSet, revision, startingSHA256, candidateSHA256, planIdentity, planSHA256, valid := prepared.SystemChangesPreparedState()
 	if !valid || changeSet != plan.changeSet || revision != starting.Revision+1 || startingSHA256 != starting.SHA256 || candidateSHA256 != plan.desiredStateSHA256 || planIdentity != plan.identity || planSHA256 != plan.sha256 {
 		return module.Apply(nil)
 	}
-	mutation := systemchanges.SettingChangeMutation
+	mutation := plan.mutation
+	if mutation == "" {
+		mutation = systemchanges.SettingChangeMutation
+	}
 	if starting.Status == systemchanges.NotInstalled {
 		mutation = systemchanges.InstallationMutation
 	} else if starting.Status != systemchanges.Managed {

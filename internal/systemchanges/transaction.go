@@ -771,7 +771,7 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 	if err := adapter.Prepare(lease, preparation); err != nil {
 		return finish(lock, nothingChanged(spec, "SYSTEM-CHANGES-PREPARATION", Prepared))
 	}
-	if spec.Mutation == RotationMutation {
+	if runTokenRotationChange(spec) {
 		rotation, ok := adapter.(RunTokenRotationAdapter)
 		if !ok {
 			return finish(lock, rollbackChange(lease, adapter, transaction, spec, 0, "SYSTEM-CHANGES-RUN-TOKEN-ADAPTER", Prepared))
@@ -929,6 +929,10 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 		return finish(lock, recoveryRequired(spec, "SYSTEM-CHANGES-CLEANUP", Complete))
 	}
 	return finish(lock, ApplyResult{Outcome: Completed, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence()}, spec.OutcomeOwner)
+}
+
+func runTokenRotationChange(spec ChangeSetSpec) bool {
+	return spec.Mutation == RotationMutation && len(spec.Steps) == 1 && spec.Steps[0].forward == RotateCloudflaredRunToken
 }
 
 func validCloudflareEvidence(step Step, number int, evidence StepEvidence, prior []StepEvidence) bool {

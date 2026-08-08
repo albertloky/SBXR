@@ -328,10 +328,12 @@ func validRegistryRequest(t *testing.T) connectionprofiles.RegistryViewRequest {
 func healthyRegistryHost(request connectionprofiles.RegistryViewRequest) *anyTLSHost {
 	host := healthyAnyTLSHost()
 	host.coreCapabilities = connectionprofiles.CoreCapabilityObservation{XrayNone: !request.Reality.Enabled && !request.XHTTP.Enabled && !request.WebSocket.Enabled, SingBoxNone: !request.Hysteria2.Enabled && !request.TUIC.Enabled && !request.AnyTLS.Enabled}
-	noXrayCapabilities := !request.Reality.Enabled
+	noXrayCapabilities := !request.Reality.Enabled || request.Reality.Port >= 1024
+	host.webSocketHost.xhttpHost.realityHost.observation.NetBindService = !noXrayCapabilities
 	host.webSocketHost.xhttpHost.observation.NoCapabilities = noXrayCapabilities
 	host.webSocketHost.observation.NoCapabilities = noXrayCapabilities
-	noSingBoxCapabilities := !request.Hysteria2.Enabled
+	noSingBoxCapabilities := !(request.Hysteria2.Enabled && request.Hysteria2.Port < 1024 || request.TUIC.Enabled && request.TUIC.Port < 1024 || request.AnyTLS.Enabled && request.AnyTLS.Port < 1024)
+	host.tuicHost.hysteria2Host.observation.NetBindService = !noSingBoxCapabilities
 	host.tuicHost.observation.NetBindService = !noSingBoxCapabilities
 	host.tuicHost.observation.NoCapabilities = noSingBoxCapabilities
 	host.observation.NetBindService = !noSingBoxCapabilities
@@ -348,12 +350,12 @@ func (adapter registryPolicyAdapter) Observe(networkpolicy.ObservationRequest) (
 func boundRegistryPolicy() networkpolicy.ListenerContribution {
 	return registryPolicyContribution(connectionprofiles.RegistryViewRequest{
 		ClientAddress: "192.0.2.10",
-		Reality:       connectionprofiles.ViewRequest{Revision: 7, Enabled: true},
-		XHTTP:         connectionprofiles.XHTTPViewRequest{Revision: 7, Enabled: true},
-		WebSocket:     connectionprofiles.WebSocketViewRequest{Revision: 7, Enabled: true},
-		Hysteria2:     connectionprofiles.Hysteria2ViewRequest{Revision: 7, Enabled: true, ServerName: "direct.example.com"},
-		TUIC:          connectionprofiles.TUICViewRequest{Revision: 7, Enabled: true},
-		AnyTLS:        connectionprofiles.AnyTLSViewRequest{Revision: 7, Enabled: true},
+		Reality:       connectionprofiles.ViewRequest{Revision: 7, Enabled: true, Port: 443},
+		XHTTP:         connectionprofiles.XHTTPViewRequest{Revision: 7, Enabled: true, OriginAddress: "127.0.0.1", OriginPort: 11080},
+		WebSocket:     connectionprofiles.WebSocketViewRequest{Revision: 7, Enabled: true, OriginAddress: "127.0.0.1", OriginPort: 11081},
+		Hysteria2:     connectionprofiles.Hysteria2ViewRequest{Revision: 7, Enabled: true, Port: 443, ServerName: "direct.example.com"},
+		TUIC:          connectionprofiles.TUICViewRequest{Revision: 7, Enabled: true, Port: 8443},
+		AnyTLS:        connectionprofiles.AnyTLSViewRequest{Revision: 7, Enabled: true, Port: 9443},
 	})
 }
 
@@ -362,12 +364,12 @@ func registryPolicyContribution(request connectionprofiles.RegistryViewRequest) 
 		Revision: request.Reality.Revision, Baseline: networkpolicy.Clean, PublicIPv4: request.ClientAddress, PrimarySubscriptionAddress: request.ClientAddress,
 		CertificateHostname: request.Hysteria2.ServerName, SSHPort: 2222, SubscriptionPort: 10443,
 		Profiles: networkpolicy.Profiles{
-			VLESSRealityVision: networkpolicy.Profile{Enabled: request.Reality.Enabled, Port: 443},
-			VLESSXHTTP:         networkpolicy.Profile{Enabled: request.XHTTP.Enabled, Address: "127.0.0.1", Port: 11080},
-			VLESSWebSocket:     networkpolicy.Profile{Enabled: request.WebSocket.Enabled, Address: "127.0.0.1", Port: 11081},
-			Hysteria2:          networkpolicy.Profile{Enabled: request.Hysteria2.Enabled, Port: 443},
-			TUIC:               networkpolicy.Profile{Enabled: request.TUIC.Enabled, Port: 8443},
-			AnyTLS:             networkpolicy.Profile{Enabled: request.AnyTLS.Enabled, Port: 9443},
+			VLESSRealityVision: networkpolicy.Profile{Enabled: request.Reality.Enabled, Port: request.Reality.Port},
+			VLESSXHTTP:         networkpolicy.Profile{Enabled: request.XHTTP.Enabled, Address: request.XHTTP.OriginAddress, Port: request.XHTTP.OriginPort},
+			VLESSWebSocket:     networkpolicy.Profile{Enabled: request.WebSocket.Enabled, Address: request.WebSocket.OriginAddress, Port: request.WebSocket.OriginPort},
+			Hysteria2:          networkpolicy.Profile{Enabled: request.Hysteria2.Enabled, Port: request.Hysteria2.Port},
+			TUIC:               networkpolicy.Profile{Enabled: request.TUIC.Enabled, Port: request.TUIC.Port},
+			AnyTLS:             networkpolicy.Profile{Enabled: request.AnyTLS.Enabled, Port: request.AnyTLS.Port},
 		},
 		Disk: networkpolicy.DiskRequirement{PreparationBytes: 100, TemporaryBytes: 100, SnapshotBytes: 100, JournalBytes: 100, RollbackBytes: 100, OverheadBytes: 100},
 	}

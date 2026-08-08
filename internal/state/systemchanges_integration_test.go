@@ -504,6 +504,40 @@ func TestPostPublicationFailureRestoresPriorDesiredState(t *testing.T) {
 	}
 }
 
+func TestConnectionProfileLifecycleArtifactsUseStatePublicationAndRollback(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		mutation systemchanges.MutationClass
+	}{
+		{"reviewed alternatives", systemchanges.SettingChangeMutation},
+		{"credential rotation", systemchanges.RotationMutation},
+		{"proven-lineage repair", systemchanges.RepairMutation},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			xray := []byte(`{"inbounds":[{"tag":"PROFILE-LIFECYCLE-XRAY-MARKER"}]}`)
+			singBox := []byte(`{"inbounds":[{"tag":"PROFILE-LIFECYCLE-SING-BOX-MARKER"}]}`)
+			stateModule, changeSet, _, observed := preparedSystemChangeWithOptions(t, test.mutation, systemchanges.Check{Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CONNECTION-PROFILES-REGISTRY-CONFIGURATION"}, systemChangeTestOptions{nativeXray: xray, nativeSingBox: singBox, stepTimeout: 30 * time.Second})
+			if test.mutation == systemchanges.RepairMutation {
+				observed.Status, observed.RecoveryCause, observed.ForwardRepairAvailable = systemchanges.RecoveryRequired, systemchanges.CurrentStateDrift, true
+			}
+			adapter := &systemChangesAdapter{observation: observed, agreementErr: errors.New("controlled post-publication lifecycle failure")}
+			adapter.afterPrepare = func() {
+				if !bytes.Contains(adapter.artifacts["prepared/xray.json"], []byte("PROFILE-LIFECYCLE-XRAY-MARKER")) || !bytes.Contains(adapter.artifacts["prepared/sing-box.json"], []byte("PROFILE-LIFECYCLE-SING-BOX-MARKER")) {
+					t.Fatal("reviewed Connection Profiles artifacts did not enter protected State preparation")
+				}
+			}
+			result := systemchanges.New(adapter).Apply(changeSet)
+			if result.Outcome != systemchanges.RollbackSucceeded || !strings.Contains(strings.Join(adapter.events, ","), "Desired State published") {
+				t.Fatalf("lifecycle rollback = %+v events=%v", result, adapter.events)
+			}
+			loaded, err := stateModule.Load(intentManagedRequest())
+			if err != nil || loaded.Snapshot == nil || loaded.Snapshot.Revision != 7 {
+				t.Fatalf("lifecycle rollback restored State = (%+v, %v)", loaded, err)
+			}
+		})
+	}
+}
+
 func TestPublicationFailureBeforeOrAfterReplacementRestoresPriorDesiredState(t *testing.T) {
 	for _, test := range []struct {
 		name    string

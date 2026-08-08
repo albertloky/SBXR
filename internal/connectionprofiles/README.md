@@ -1,6 +1,12 @@
 # Connection Profiles
 
-Connection Profiles owns the six server-side connection choices. Issues #100–#106 deliver VLESS REALITY Vision, VLESS XHTTP, independent VLESS WebSocket, Hysteria2, TUIC, AnyTLS, and their exact truthful registry through `View`, `Plan`, and `Apply`. Coordinated port changes, rotation, repair, and Live Profile Check stay pending in #107.
+Connection Profiles owns the six server-side connection choices. Issues #100–#107 deliver VLESS REALITY Vision, VLESS XHTTP, independent VLESS WebSocket, Hysteria2, TUIC, AnyTLS, their exact truthful registry, and the coordinated lifecycle through `View`, `Plan`, and `Apply`.
+
+On a fresh conflict, Network Policy may supply one reviewed bind-proven alternative for each preferred port. The registry carries that exact selection through both native configurations, exposure, health, State service material, Cloudflare route health, and publication. A committed port is stable: a later conflict stops in Correction Flow and never silently selects another port.
+
+Credential replacement is either one selected profile or all six profiles in one `Rotation` Change Set. Repair is forward-only from a fresh System Changes proof for the exact current State lineage; caller-made or stale repair requests are refused. Candidate core updates must accept the complete six-profile configuration and then restart automated, live, and Owner acceptance at `Pending`; native validation never replaces known-good evidence.
+
+`Live Profile Check` runs only after a fresh `Managed` observation. It consumes one universal subscription URL once and returns only per-profile authenticated uplink/downlink booleans. It deliberately cannot render or retain the URL, client address, destination, counters, logs, or traffic history.
 
 `View` fails closed unless the selected target is `443/TCP`, the accepted name agrees, `xray tls ping` and normal TLS name verification pass, and the target is neither Cloudflare-fronted nor Apple or iCloud. On an existing Managed installation it also requires the fixed `xray.service`, distinct `xray` identity, exact protocol-aware listener, protected `/etc/sbxr/xray/config.json`, and only the `CAP_NET_BIND_SERVICE` capability required by a selected port below `1024`.
 

@@ -107,6 +107,77 @@ type Inspection struct {
 	Findings               []Finding          `json:"findings,omitempty"`
 }
 
+// ManagedAuthority is a fresh, non-renderable proof that normal post-Managed
+// work may run against one exact Desired State revision.
+type ManagedAuthority struct {
+	cell *statusAuthority
+}
+
+type ForwardRepairAuthority struct {
+	cell *statusAuthority
+}
+
+type FreshInstallationAuthority struct {
+	cell *statusAuthority
+}
+
+type statusAuthority struct {
+	adapter  Adapter
+	revision uint64
+	sha256   string
+	used     atomic.Bool
+}
+
+func (ForwardRepairAuthority) String() string   { return "Forward repair authority: redacted" }
+func (ForwardRepairAuthority) GoString() string { return "Forward repair authority: redacted" }
+func (ForwardRepairAuthority) MarshalJSON() ([]byte, error) {
+	return nil, errors.New("Forward repair authority cannot be rendered")
+}
+func (authority ForwardRepairAuthority) ConnectionProfilesForwardRepair() (uint64, string, bool) {
+	return authority.consume()
+}
+
+func (FreshInstallationAuthority) String() string   { return "Fresh installation authority: redacted" }
+func (FreshInstallationAuthority) GoString() string { return "Fresh installation authority: redacted" }
+func (FreshInstallationAuthority) MarshalJSON() ([]byte, error) {
+	return nil, errors.New("Fresh installation authority cannot be rendered")
+}
+func (authority FreshInstallationAuthority) ConnectionProfilesFreshInstallation() bool {
+	if authority.cell == nil || !authority.cell.used.CompareAndSwap(false, true) {
+		return false
+	}
+	observed, err := authority.cell.adapter.Observe()
+	return err == nil && validObservation(observed) && observed.Status == NotInstalled && observed.Lock == LockReleased
+}
+
+func (ManagedAuthority) String() string   { return "Managed authority: redacted" }
+func (ManagedAuthority) GoString() string { return "Managed authority: redacted" }
+func (ManagedAuthority) MarshalJSON() ([]byte, error) {
+	return nil, errors.New("Managed authority cannot be rendered")
+}
+
+func (authority ManagedAuthority) ConnectionProfilesManaged() (uint64, string, bool) {
+	return authority.consume()
+}
+
+func (authority ManagedAuthority) consume() (uint64, string, bool) {
+	if authority.cell == nil || !authority.cell.used.CompareAndSwap(false, true) {
+		return 0, "", false
+	}
+	observed, err := authority.cell.adapter.Observe()
+	valid := err == nil && validObservation(observed) && observed.Status == Managed && observed.Lock == LockReleased && observed.StateRevision == authority.cell.revision && observed.StateSHA256 == authority.cell.sha256
+	return authority.cell.revision, authority.cell.sha256, valid
+}
+
+func (authority ForwardRepairAuthority) consume() (uint64, string, bool) {
+	if authority.cell == nil || !authority.cell.used.CompareAndSwap(false, true) {
+		return 0, "", false
+	}
+	observed, err := authority.cell.adapter.Observe()
+	valid := err == nil && validObservation(observed) && observed.Status == RecoveryRequired && observed.Lock == LockReleased && observed.RecoveryCause == CurrentStateDrift && observed.ForwardRepairAvailable && observed.StateRevision == authority.cell.revision && observed.StateSHA256 == authority.cell.sha256
+	return authority.cell.revision, authority.cell.sha256, valid
+}
+
 type Correction struct {
 	Source            CorrectionSource `json:"source"`
 	SBXROption        Action           `json:"sbxr_option,omitempty"`
@@ -197,6 +268,39 @@ func (i Interface) Inspect() Inspection {
 }
 
 func (i Interface) CheckAgain() Inspection { return i.Inspect() }
+
+func (i Interface) ManagedAuthority() ManagedAuthority {
+	if i.adapter == nil {
+		return ManagedAuthority{}
+	}
+	observed, err := i.adapter.Observe()
+	if err != nil || !validObservation(observed) || observed.Status != Managed || observed.Lock != LockReleased || observed.StateRevision == 0 || !validSHA256(observed.StateSHA256) {
+		return ManagedAuthority{}
+	}
+	return ManagedAuthority{cell: &statusAuthority{adapter: i.adapter, revision: observed.StateRevision, sha256: observed.StateSHA256}}
+}
+
+func (i Interface) ForwardRepairAuthority() ForwardRepairAuthority {
+	if i.adapter == nil {
+		return ForwardRepairAuthority{}
+	}
+	observed, err := i.adapter.Observe()
+	if err != nil || !validObservation(observed) || observed.Status != RecoveryRequired || observed.RecoveryCause != CurrentStateDrift || !observed.ForwardRepairAvailable || observed.StateRevision == 0 || !validSHA256(observed.StateSHA256) {
+		return ForwardRepairAuthority{}
+	}
+	return ForwardRepairAuthority{cell: &statusAuthority{adapter: i.adapter, revision: observed.StateRevision, sha256: observed.StateSHA256}}
+}
+
+func (i Interface) FreshInstallationAuthority() FreshInstallationAuthority {
+	if i.adapter == nil {
+		return FreshInstallationAuthority{}
+	}
+	observed, err := i.adapter.Observe()
+	if err != nil || !validObservation(observed) || observed.Status != NotInstalled || observed.Lock != LockReleased {
+		return FreshInstallationAuthority{}
+	}
+	return FreshInstallationAuthority{cell: &statusAuthority{adapter: i.adapter}}
+}
 
 func (i Interface) RetryAutomaticRollback() ApplyResult {
 	inspection := i.Inspect()

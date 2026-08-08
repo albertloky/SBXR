@@ -22,6 +22,9 @@ func TestWholeTunnelHealthRequiresBothIndependentRoutesAndOrigins(t *testing.T) 
 		{"public origin", "CLOUDFLARE-ROUTE-ORIGIN", func(got *WholeTunnelObservation) {
 			got.Routes[0].Service = "http://203.0.113.1:11080/PROVIDER-OUTPUT-MARKER"
 		}},
+		{"loopback origin with query", "CLOUDFLARE-ROUTE-ORIGIN", func(got *WholeTunnelObservation) {
+			got.Routes[0].Service = "http://127.0.0.1:11080?PROVIDER-OUTPUT-MARKER"
+		}},
 		{"disconnected", "CLOUDFLARE-TUNNEL-DISCONNECTED", func(got *WholeTunnelObservation) { got.Connected = false }},
 		{"xhttp origin down", "CLOUDFLARE-XHTTP-ORIGIN-UNREACHABLE", func(got *WholeTunnelObservation) { got.XHTTPOriginReachable = false }},
 		{"websocket origin down", "CLOUDFLARE-WEBSOCKET-ORIGIN-UNREACHABLE", func(got *WholeTunnelObservation) { got.WebSocketOriginReachable = false }},

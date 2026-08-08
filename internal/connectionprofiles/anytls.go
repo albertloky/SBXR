@@ -58,6 +58,7 @@ type AnyTLSViewRequest struct {
 	Credentials                          AnyTLSCredentials
 	DirectTLS                            DirectTLSContribution
 	Network                              AnyTLSListenerPolicyAuthority
+	reviewedAlternative                  bool
 }
 
 type AnyTLSListenerPolicyAuthority interface {
@@ -96,7 +97,7 @@ func (module Interface) viewAnyTLS(ctx context.Context, hysteria2 Hysteria2ViewR
 	result := AnyTLSViewResult{Profile: profile, observation: observation}
 	result.VolatileSHA256 = anyTLSObservationSHA256(request, observation)
 	address, addressErr := netip.ParseAddr(request.DestinationIP)
-	if !request.Enabled || request.Port != 9443 || addressErr != nil || !address.IsGlobalUnicast() || !validHostname(request.ServerName) || request.CertificateID == "" || request.CertificatePointer != directCertificatePointer || request.MinimumSingBoxVersion != anyTLSMinimumSingBoxVersion || request.SingBoxVersion != qualifiedSingBoxVersion || !request.UseCorePadding || !request.Credentials.valid() || !hysteria2.Credentials.valid() || !tuic.Credentials.valid() || request.Credentials.password.value == hysteria2.Credentials.password.value || request.Credentials.password.value == tuic.Credentials.password.value {
+	if !request.Enabled || !selectedPort(request.Port, 9443, request.reviewedAlternative) || addressErr != nil || !address.IsGlobalUnicast() || !validHostname(request.ServerName) || request.CertificateID == "" || request.CertificatePointer != directCertificatePointer || request.MinimumSingBoxVersion != anyTLSMinimumSingBoxVersion || request.SingBoxVersion != qualifiedSingBoxVersion || !request.UseCorePadding || !request.Credentials.valid() || !hysteria2.Credentials.valid() || !tuic.Credentials.valid() || request.Credentials.password.value == hysteria2.Credentials.password.value || request.Credentials.password.value == tuic.Credentials.password.value {
 		result.Health = blockedAnyTLS(observation.CheckedAt, Failed, "CONNECTION-PROFILES-ANYTLS-INPUT", "The AnyTLS inputs are invalid", "the destination, listener, TLS name, credential, version floor, qualified release, or padding ownership is wrong", "one enabled AnyTLS profile on public 9443/TCP using sing-box 1.12.0 or newer, qualified at 1.13.16, with core-owned padding")
 		return result
 	}
@@ -105,7 +106,7 @@ func (module Interface) viewAnyTLS(ctx context.Context, hysteria2 Hysteria2ViewR
 		result.Health = blockedAnyTLS(observation.CheckedAt, Failed, "CONNECTION-PROFILES-ANYTLS-CERTIFICATE", "The reviewed Direct TLS identity does not agree", "the destination, hostname, revision, or shared certificate consumers differ", "one exact Direct TLS Hostname and shared active certificate pair with normal verification")
 		return result
 	}
-	if !protocolAwareAnyTLS(request.Network) {
+	if !protocolAwareAnyTLS(request.Network, request.Port) {
 		result.Health = blockedAnyTLS(observation.CheckedAt, Failed, "CONNECTION-PROFILES-ANYTLS-NETWORK", "The reviewed AnyTLS listener policy does not agree", "public 9443/TCP was not proved", "one public AnyTLS listener on 9443/TCP")
 		return result
 	}
@@ -119,7 +120,7 @@ func (module Interface) viewAnyTLS(ctx context.Context, hysteria2 Hysteria2ViewR
 			result.Health = blockedAnyTLS(observation.CheckedAt, Failed, "CONNECTION-PROFILES-ANYTLS-SERVICE", "The fixed sing-box service is not running safely", "sing-box.service or its non-root identity disagrees", "running sing-box.service as sing-box")
 		case !publicTCPListener(observation.Listener, request.Port):
 			result.Health = blockedAnyTLS(observation.CheckedAt, Failed, "CONNECTION-PROFILES-ANYTLS-LISTENER", "The AnyTLS listener disagrees", fmt.Sprintf("%s/%d/%s", observation.Listener.Address, observation.Listener.Port, observation.Listener.Protocol), "public 9443/TCP")
-		case hysteria2.Enabled && !observation.NetBindService || !hysteria2.Enabled && !observation.NoCapabilities:
+		case observation.NetBindService != singBoxNeedsCapability(hysteria2, tuic, request) || !singBoxNeedsCapability(hysteria2, tuic, request) && !observation.NoCapabilities:
 			result.Health = blockedAnyTLS(observation.CheckedAt, Failed, "CONNECTION-PROFILES-ANYTLS-CAPABILITY", "The shared sing-box service capability is wrong", "CAP_NET_BIND_SERVICE is absent or broader", "only CAP_NET_BIND_SERVICE for the shared privileged Hysteria2 listener")
 		case observation.ServerFunction != ProbePassed:
 			result.Health = blockedAnyTLS(observation.CheckedAt, Failed, "CONNECTION-PROFILES-ANYTLS-FUNCTION", "The bounded authenticated AnyTLS check did not pass", string(observation.ServerFunction), "one safe authenticated AnyTLS server-side function proof")
@@ -134,7 +135,7 @@ func (module Interface) viewAnyTLS(ctx context.Context, hysteria2 Hysteria2ViewR
 	return result
 }
 
-func protocolAwareAnyTLS(authority AnyTLSListenerPolicyAuthority) bool {
+func protocolAwareAnyTLS(authority AnyTLSListenerPolicyAuthority, selected uint16) bool {
 	if authority == nil {
 		return false
 	}
@@ -149,12 +150,12 @@ func protocolAwareAnyTLS(authority AnyTLSListenerPolicyAuthority) bool {
 		return false
 	}
 	port, protocol, valid := authority.ConnectionProfilesAnyTLSListener()
-	return valid && port == 9443 && protocol == "TCP"
+	return valid && port == selected && protocol == "TCP"
 }
 
 func anyTLSObservationSHA256(request AnyTLSViewRequest, observation AnyTLSObservation) string {
 	port, protocol, valid := uint16(0), "", false
-	if protocolAwareAnyTLS(request.Network) {
+	if protocolAwareAnyTLS(request.Network, request.Port) {
 		port, protocol, valid = request.Network.ConnectionProfilesAnyTLSListener()
 	}
 	encoded, _ := json.Marshal(struct {
@@ -169,7 +170,7 @@ func anyTLSObservationSHA256(request AnyTLSViewRequest, observation AnyTLSObserv
 }
 
 func blockedAnyTLS(at time.Time, outcome Outcome, code, problem, found, required string) Health {
-	return Health{Time: at, Module: "Connection Profiles", Profile: "AnyTLS", Outcome: outcome, Code: code, Problem: problem, Found: found, Required: required, WhyStopped: "Connection Profiles fails closed before unsafe proxy or host mutation", NextActions: []string{"Check again", "Back"}}
+	return blockedHealth(Health{Time: at, Module: "Connection Profiles", Profile: "AnyTLS", Outcome: outcome, Code: code, Problem: problem, Found: found, Required: required, WhyStopped: "Connection Profiles fails closed before unsafe proxy or host mutation", NextActions: []string{"Check again", "Back"}})
 }
 
 type AnyTLSPlanRequest struct {
@@ -227,10 +228,10 @@ func anyTLSProfileInput(profile state.AnyTLS, secrets state.ConnectionProfileSec
 		return nil, nil
 	}
 	credentials, err := NewAnyTLSCredentials(secrets.ReadClientAccessValue(profile.Password))
-	if err != nil || profile.Port != 9443 || !validHostname(profile.ServerName) || profile.CertificateID == "" || profile.PaddingScheme != "upstream-default" {
+	if err != nil || profile.Port == 0 || !validHostname(profile.ServerName) || profile.CertificateID == "" || profile.PaddingScheme != "upstream-default" {
 		return nil, errors.New("AnyTLS intent is invalid")
 	}
-	return &AnyTLSViewRequest{Enabled: profile.Enabled, Port: profile.Port, ServerName: profile.ServerName, CertificateID: profile.CertificateID, CertificatePointer: directCertificatePointer, MinimumSingBoxVersion: anyTLSMinimumSingBoxVersion, SingBoxVersion: qualifiedSingBoxVersion, UseCorePadding: true, Credentials: credentials}, nil
+	return &AnyTLSViewRequest{Enabled: profile.Enabled, Port: profile.Port, ServerName: profile.ServerName, CertificateID: profile.CertificateID, CertificatePointer: directCertificatePointer, MinimumSingBoxVersion: anyTLSMinimumSingBoxVersion, SingBoxVersion: qualifiedSingBoxVersion, UseCorePadding: true, Credentials: credentials, reviewedAlternative: profile.Port != 9443}, nil
 }
 
 func reviewedAnyTLSMatches(reviewed *AnyTLSViewRequest, profile state.AnyTLS, secrets state.ConnectionProfileSecretReader) bool {

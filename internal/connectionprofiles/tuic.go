@@ -62,6 +62,7 @@ type TUICViewRequest struct {
 	Credentials                        TUICCredentials
 	DirectTLS                          DirectTLSContribution
 	Network                            TUICListenerPolicyAuthority
+	reviewedAlternative                bool
 }
 
 type TUICListenerPolicyAuthority interface {
@@ -103,7 +104,7 @@ func (module Interface) viewTUIC(ctx context.Context, hysteria2 Hysteria2ViewReq
 	result := TUICViewResult{Profile: profile, observation: observation}
 	result.VolatileSHA256 = tuicObservationSHA256(request, observation)
 	address, addressErr := netip.ParseAddr(request.DestinationIP)
-	if !request.Enabled || request.Port != 8443 || addressErr != nil || !address.IsGlobalUnicast() || !validHostname(request.ServerName) || request.CertificateID == "" || request.CertificatePointer != directCertificatePointer || request.SingBoxVersion != qualifiedSingBoxVersion || request.CongestionControl != state.CongestionCubic || request.ZeroRTT || !request.Credentials.valid() || !hysteria2.Credentials.valid() || request.Credentials.password.value == hysteria2.Credentials.password.value {
+	if !request.Enabled || !selectedPort(request.Port, 8443, request.reviewedAlternative) || addressErr != nil || !address.IsGlobalUnicast() || !validHostname(request.ServerName) || request.CertificateID == "" || request.CertificatePointer != directCertificatePointer || request.SingBoxVersion != qualifiedSingBoxVersion || request.CongestionControl != state.CongestionCubic || request.ZeroRTT || !request.Credentials.valid() || !hysteria2.Credentials.valid() || request.Credentials.password.value == hysteria2.Credentials.password.value {
 		result.Health = blockedTUIC(observation.CheckedAt, Failed, "CONNECTION-PROFILES-TUIC-INPUT", "The TUIC inputs are invalid", "the destination, listener, TLS name, credential, replay, congestion, or release setting is wrong", "one enabled TUIC profile on public 8443/UDP using cubic and zero-RTT disabled")
 		return result
 	}
@@ -112,7 +113,7 @@ func (module Interface) viewTUIC(ctx context.Context, hysteria2 Hysteria2ViewReq
 		result.Health = blockedTUIC(observation.CheckedAt, Failed, "CONNECTION-PROFILES-TUIC-CERTIFICATE", "The reviewed Direct TLS identity does not agree", "the destination, hostname, revision, or shared certificate consumers differ", "one exact Direct TLS Hostname and shared active certificate pair with normal verification")
 		return result
 	}
-	if !protocolAwareTUIC(request.Network) {
+	if !protocolAwareTUIC(request.Network, request.Port) {
 		result.Health = blockedTUIC(observation.CheckedAt, Failed, "CONNECTION-PROFILES-TUIC-NETWORK", "The reviewed TUIC listener policy does not agree", "public 8443/UDP was not proved", "one public TUIC listener on 8443/UDP")
 		return result
 	}
@@ -126,7 +127,7 @@ func (module Interface) viewTUIC(ctx context.Context, hysteria2 Hysteria2ViewReq
 			result.Health = blockedTUIC(observation.CheckedAt, Failed, "CONNECTION-PROFILES-TUIC-SERVICE", "The fixed sing-box service is not running safely", "sing-box.service or its non-root identity disagrees", "running sing-box.service as sing-box")
 		case !publicUDPListener(observation.Listener, request.Port):
 			result.Health = blockedTUIC(observation.CheckedAt, Failed, "CONNECTION-PROFILES-TUIC-LISTENER", "The TUIC listener disagrees", fmt.Sprintf("%s/%d/%s", observation.Listener.Address, observation.Listener.Port, observation.Listener.Protocol), "public 8443/UDP")
-		case hysteria2.Enabled && !observation.NetBindService || !hysteria2.Enabled && !observation.NoCapabilities:
+		case observation.NetBindService != singBoxNeedsCapability(hysteria2, request, AnyTLSViewRequest{}) || !singBoxNeedsCapability(hysteria2, request, AnyTLSViewRequest{}) && !observation.NoCapabilities:
 			result.Health = blockedTUIC(observation.CheckedAt, Failed, "CONNECTION-PROFILES-TUIC-CAPABILITY", "The shared sing-box service capability is wrong", "CAP_NET_BIND_SERVICE is absent or broader", "only CAP_NET_BIND_SERVICE for the shared privileged Hysteria2 listener")
 		case observation.ServerFunction != ProbePassed:
 			result.Health = blockedTUIC(observation.CheckedAt, Failed, "CONNECTION-PROFILES-TUIC-FUNCTION", "The bounded authenticated TUIC check did not pass", string(observation.ServerFunction), "one safe authenticated TUIC server-side function proof")
@@ -141,7 +142,7 @@ func (module Interface) viewTUIC(ctx context.Context, hysteria2 Hysteria2ViewReq
 	return result
 }
 
-func protocolAwareTUIC(authority TUICListenerPolicyAuthority) bool {
+func protocolAwareTUIC(authority TUICListenerPolicyAuthority, selected uint16) bool {
 	if authority == nil {
 		return false
 	}
@@ -156,12 +157,12 @@ func protocolAwareTUIC(authority TUICListenerPolicyAuthority) bool {
 		return false
 	}
 	port, protocol, valid := authority.ConnectionProfilesTUICListener()
-	return valid && port == 8443 && protocol == "UDP"
+	return valid && port == selected && protocol == "UDP"
 }
 
 func tuicObservationSHA256(request TUICViewRequest, observation TUICObservation) string {
 	port, protocol, valid := uint16(0), "", false
-	if protocolAwareTUIC(request.Network) {
+	if protocolAwareTUIC(request.Network, request.Port) {
 		port, protocol, valid = request.Network.ConnectionProfilesTUICListener()
 	}
 	encoded, _ := json.Marshal(struct {
@@ -176,7 +177,7 @@ func tuicObservationSHA256(request TUICViewRequest, observation TUICObservation)
 }
 
 func blockedTUIC(at time.Time, outcome Outcome, code, problem, found, required string) Health {
-	return Health{Time: at, Module: "Connection Profiles", Profile: "TUIC", Outcome: outcome, Code: code, Problem: problem, Found: found, Required: required, WhyStopped: "Connection Profiles fails closed before unsafe proxy or host mutation", NextActions: []string{"Check again", "Back"}}
+	return blockedHealth(Health{Time: at, Module: "Connection Profiles", Profile: "TUIC", Outcome: outcome, Code: code, Problem: problem, Found: found, Required: required, WhyStopped: "Connection Profiles fails closed before unsafe proxy or host mutation", NextActions: []string{"Check again", "Back"}})
 }
 
 type TUICPlanRequest struct {
@@ -228,10 +229,10 @@ func tuicProfileInput(profile state.TUIC, secrets state.ConnectionProfileSecretR
 		return nil, nil
 	}
 	credentials, err := NewTUICCredentials(secrets.ReadClientAccessValue(profile.UUID), secrets.ReadClientAccessValue(profile.Password))
-	if err != nil || profile.Port != 8443 || !validHostname(profile.ServerName) || profile.CertificateID == "" || profile.CongestionControl != state.CongestionCubic || profile.ZeroRTT {
+	if err != nil || profile.Port == 0 || !validHostname(profile.ServerName) || profile.CertificateID == "" || profile.CongestionControl != state.CongestionCubic || profile.ZeroRTT {
 		return nil, errors.New("TUIC intent is invalid")
 	}
-	return &TUICViewRequest{Enabled: profile.Enabled, Port: profile.Port, ServerName: profile.ServerName, CertificateID: profile.CertificateID, CertificatePointer: directCertificatePointer, SingBoxVersion: qualifiedSingBoxVersion, CongestionControl: profile.CongestionControl, ZeroRTT: profile.ZeroRTT, Credentials: credentials}, nil
+	return &TUICViewRequest{Enabled: profile.Enabled, Port: profile.Port, ServerName: profile.ServerName, CertificateID: profile.CertificateID, CertificatePointer: directCertificatePointer, SingBoxVersion: qualifiedSingBoxVersion, CongestionControl: profile.CongestionControl, ZeroRTT: profile.ZeroRTT, Credentials: credentials, reviewedAlternative: profile.Port != 8443}, nil
 }
 
 func reviewedTUICMatches(reviewed *TUICViewRequest, profile state.TUIC, secrets state.ConnectionProfileSecretReader) bool {
@@ -249,22 +250,22 @@ func singBoxConfiguration(hysteria2 *Hysteria2ViewRequest, profiles *SingBoxProf
 		tuic, anyTLS = profiles.TUIC, profiles.AnyTLS
 	}
 	if hysteria2 != nil && hysteria2.Enabled {
-		if hysteria2.Port != 443 || !hysteria2.Credentials.valid() || !validHostname(hysteria2.ServerName) || hysteria2.MasqueradeResponse != "Not Found\n" || hysteria2.CertificatePointer != directCertificatePointer {
+		if !selectedPort(hysteria2.Port, 443, hysteria2.reviewedAlternative) || !hysteria2.Credentials.valid() || !validHostname(hysteria2.ServerName) || hysteria2.MasqueradeResponse != "Not Found\n" || hysteria2.CertificatePointer != directCertificatePointer {
 			return nil, errors.New("Hysteria2 inputs invalid")
 		}
-		inbounds = append(inbounds, map[string]any{"type": "hysteria2", "tag": "hysteria2-in", "listen": "0.0.0.0", "listen_port": 443, "users": []any{map[string]any{"password": hysteria2.Credentials.password.value}}, "tls": map[string]any{"enabled": true, "server_name": hysteria2.ServerName, "certificate_path": hysteria2.CertificatePointer + "/fullchain.pem", "key_path": hysteria2.CertificatePointer + "/privkey.pem"}, "masquerade": map[string]any{"type": "string", "status_code": 404, "headers": map[string][]string{"content-type": {"text/plain; charset=utf-8"}}, "content": hysteria2.MasqueradeResponse}})
+		inbounds = append(inbounds, map[string]any{"type": "hysteria2", "tag": "hysteria2-in", "listen": "0.0.0.0", "listen_port": hysteria2.Port, "users": []any{map[string]any{"password": hysteria2.Credentials.password.value}}, "tls": map[string]any{"enabled": true, "server_name": hysteria2.ServerName, "certificate_path": hysteria2.CertificatePointer + "/fullchain.pem", "key_path": hysteria2.CertificatePointer + "/privkey.pem"}, "masquerade": map[string]any{"type": "string", "status_code": 404, "headers": map[string][]string{"content-type": {"text/plain; charset=utf-8"}}, "content": hysteria2.MasqueradeResponse}})
 	}
 	if tuic != nil && tuic.Enabled {
-		if tuic.Port != 8443 || !tuic.Credentials.valid() || !validHostname(tuic.ServerName) || tuic.CertificatePointer != directCertificatePointer || tuic.CongestionControl != state.CongestionCubic || tuic.ZeroRTT || hysteria2 == nil || tuic.Credentials.password.value == hysteria2.Credentials.password.value {
+		if !selectedPort(tuic.Port, 8443, tuic.reviewedAlternative) || !tuic.Credentials.valid() || !validHostname(tuic.ServerName) || tuic.CertificatePointer != directCertificatePointer || tuic.CongestionControl != state.CongestionCubic || tuic.ZeroRTT || hysteria2 == nil || tuic.Credentials.password.value == hysteria2.Credentials.password.value {
 			return nil, errors.New("TUIC inputs invalid")
 		}
-		inbounds = append(inbounds, map[string]any{"type": "tuic", "tag": "tuic-in", "listen": "0.0.0.0", "listen_port": 8443, "users": []any{map[string]any{"uuid": tuic.Credentials.uuid.value, "password": tuic.Credentials.password.value}}, "congestion_control": "cubic", "zero_rtt_handshake": false, "tls": map[string]any{"enabled": true, "server_name": tuic.ServerName, "certificate_path": tuic.CertificatePointer + "/fullchain.pem", "key_path": tuic.CertificatePointer + "/privkey.pem"}})
+		inbounds = append(inbounds, map[string]any{"type": "tuic", "tag": "tuic-in", "listen": "0.0.0.0", "listen_port": tuic.Port, "users": []any{map[string]any{"uuid": tuic.Credentials.uuid.value, "password": tuic.Credentials.password.value}}, "congestion_control": "cubic", "zero_rtt_handshake": false, "tls": map[string]any{"enabled": true, "server_name": tuic.ServerName, "certificate_path": tuic.CertificatePointer + "/fullchain.pem", "key_path": tuic.CertificatePointer + "/privkey.pem"}})
 	}
 	if anyTLS != nil && anyTLS.Enabled {
-		if anyTLS.Port != 9443 || !anyTLS.Credentials.valid() || !validHostname(anyTLS.ServerName) || anyTLS.CertificatePointer != directCertificatePointer || anyTLS.MinimumSingBoxVersion != anyTLSMinimumSingBoxVersion || anyTLS.SingBoxVersion != qualifiedSingBoxVersion || !anyTLS.UseCorePadding || hysteria2 == nil || tuic == nil || anyTLS.Credentials.password.value == hysteria2.Credentials.password.value || anyTLS.Credentials.password.value == tuic.Credentials.password.value {
+		if !selectedPort(anyTLS.Port, 9443, anyTLS.reviewedAlternative) || !anyTLS.Credentials.valid() || !validHostname(anyTLS.ServerName) || anyTLS.CertificatePointer != directCertificatePointer || anyTLS.MinimumSingBoxVersion != anyTLSMinimumSingBoxVersion || anyTLS.SingBoxVersion != qualifiedSingBoxVersion || !anyTLS.UseCorePadding || hysteria2 == nil || tuic == nil || anyTLS.Credentials.password.value == hysteria2.Credentials.password.value || anyTLS.Credentials.password.value == tuic.Credentials.password.value {
 			return nil, errors.New("AnyTLS inputs invalid")
 		}
-		inbounds = append(inbounds, map[string]any{"type": "anytls", "tag": "anytls-in", "listen": "0.0.0.0", "listen_port": 9443, "users": []any{map[string]any{"password": anyTLS.Credentials.password.value}}, "tls": map[string]any{"enabled": true, "server_name": anyTLS.ServerName, "certificate_path": anyTLS.CertificatePointer + "/fullchain.pem", "key_path": anyTLS.CertificatePointer + "/privkey.pem"}})
+		inbounds = append(inbounds, map[string]any{"type": "anytls", "tag": "anytls-in", "listen": "0.0.0.0", "listen_port": anyTLS.Port, "users": []any{map[string]any{"password": anyTLS.Credentials.password.value}}, "tls": map[string]any{"enabled": true, "server_name": anyTLS.ServerName, "certificate_path": anyTLS.CertificatePointer + "/fullchain.pem", "key_path": anyTLS.CertificatePointer + "/privkey.pem"}})
 	}
 	if len(inbounds) == 0 {
 		inbounds = []any{}

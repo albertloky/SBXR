@@ -86,6 +86,7 @@ type Hysteria2ViewRequest struct {
 	Profiles                           *SingBoxProfileSet
 	DirectTLS                          DirectTLSContribution
 	Network                            ListenerPolicyAuthority
+	reviewedAlternative                bool
 }
 
 // SingBoxProfileSet is the one reviewed set of profiles sharing the active
@@ -130,7 +131,7 @@ func (module Interface) viewHysteria2(ctx context.Context, request Hysteria2View
 	result := Hysteria2ViewResult{Profile: profile, observation: observation}
 	result.VolatileSHA256 = hysteria2ObservationSHA256(request, observation)
 	address, addressErr := netip.ParseAddr(request.DestinationIP)
-	if !request.Enabled || request.Port != 443 || addressErr != nil || !address.IsGlobalUnicast() || !validHostname(request.ServerName) || request.CertificateID == "" || request.MasqueradeResponse != "Not Found\n" || request.CertificatePointer != directCertificatePointer || request.SingBoxVersion != qualifiedSingBoxVersion || !request.Credentials.valid() {
+	if !request.Enabled || !selectedPort(request.Port, 443, request.reviewedAlternative) || addressErr != nil || !address.IsGlobalUnicast() || !validHostname(request.ServerName) || request.CertificateID == "" || request.MasqueradeResponse != "Not Found\n" || request.CertificatePointer != directCertificatePointer || request.SingBoxVersion != qualifiedSingBoxVersion || !request.Credentials.valid() {
 		result.Health = blockedHysteria2(observation.CheckedAt, Failed, "CONNECTION-PROFILES-HYSTERIA2-INPUT", "The Hysteria2 inputs are invalid", "the destination, listener, TLS name, certificate pointer, credential, enabled state, or qualified release is wrong", "one enabled Hysteria2 profile on public 443/UDP using sing-box 1.13.16 and the shared Direct TLS pair")
 		return result
 	}
@@ -139,7 +140,7 @@ func (module Interface) viewHysteria2(ctx context.Context, request Hysteria2View
 		result.Health = blockedHysteria2(observation.CheckedAt, Failed, "CONNECTION-PROFILES-HYSTERIA2-CERTIFICATE", "The reviewed Direct TLS identity does not agree", "the destination, hostname, revision, or shared certificate consumers differ", "one exact Direct TLS Hostname and shared active certificate pair with normal verification")
 		return result
 	}
-	if !protocolAware443(request.Network) {
+	if !protocolAware443(request.Network, request.Port) {
 		result.Health = blockedHysteria2(observation.CheckedAt, Failed, "CONNECTION-PROFILES-HYSTERIA2-NETWORK", "The reviewed protocol-aware listener policy does not agree", "443/TCP REALITY and 443/UDP Hysteria2 were not both proved", "intentional coexistence on numeric port 443 using separate TCP and UDP listeners")
 		return result
 	}
@@ -160,7 +161,7 @@ func (module Interface) viewHysteria2(ctx context.Context, request Hysteria2View
 			result.Health = blockedHysteria2(observation.CheckedAt, Failed, "CONNECTION-PROFILES-HYSTERIA2-LISTENER", "The Hysteria2 listener disagrees", fmt.Sprintf("%s/%d/%s", observation.Listener.Address, observation.Listener.Port, observation.Listener.Protocol), "public 443/UDP")
 			return result
 		}
-		if !observation.NetBindService {
+		if observation.NetBindService != singBoxNeedsCapability(request, TUICViewRequest{}, AnyTLSViewRequest{}) {
 			result.Health = blockedHysteria2(observation.CheckedAt, Failed, "CONNECTION-PROFILES-HYSTERIA2-CAPABILITY", "The sing-box service capability is broader or narrower than required", "CAP_NET_BIND_SERVICE does not match the selected privileged port", "only CAP_NET_BIND_SERVICE for approved port 443/UDP")
 			return result
 		}
@@ -173,7 +174,7 @@ func (module Interface) viewHysteria2(ctx context.Context, request Hysteria2View
 	return result
 }
 
-func protocolAware443(authority ListenerPolicyAuthority) bool {
+func protocolAware443(authority ListenerPolicyAuthority, selected uint16) bool {
 	if authority == nil {
 		return false
 	}
@@ -188,7 +189,7 @@ func protocolAware443(authority ListenerPolicyAuthority) bool {
 		return false
 	}
 	realityPort, realityProtocol, hysteriaPort, hysteriaProtocol, valid := authority.ConnectionProfilesListeners()
-	return valid && realityPort == 443 && realityProtocol == "TCP" && hysteriaPort == 443 && hysteriaProtocol == "UDP"
+	return valid && realityPort > 0 && realityProtocol == "TCP" && hysteriaPort == selected && hysteriaProtocol == "UDP"
 }
 
 type listenerPolicyBinding struct {
@@ -198,7 +199,7 @@ type listenerPolicyBinding struct {
 }
 
 func reviewedListenerPolicy(authority ListenerPolicyAuthority) listenerPolicyBinding {
-	if !protocolAware443(authority) {
+	if authority == nil {
 		return listenerPolicyBinding{}
 	}
 	realityPort, realityProtocol, hysteriaPort, hysteriaProtocol, valid := authority.ConnectionProfilesListeners()
@@ -207,6 +208,18 @@ func reviewedListenerPolicy(authority ListenerPolicyAuthority) listenerPolicyBin
 
 func publicUDPListener(listener Listener, port uint16) bool {
 	return listener.Port == port && listener.Protocol == "udp" && (listener.Address == "0.0.0.0" || listener.Address == "::" || listener.Address == "*")
+}
+
+func singBoxNeedsCapability(hysteria2 Hysteria2ViewRequest, tuic TUICViewRequest, anyTLS AnyTLSViewRequest) bool {
+	if hysteria2.Profiles != nil {
+		if hysteria2.Profiles.TUIC != nil {
+			tuic = *hysteria2.Profiles.TUIC
+		}
+		if hysteria2.Profiles.AnyTLS != nil {
+			anyTLS = *hysteria2.Profiles.AnyTLS
+		}
+	}
+	return hysteria2.Enabled && hysteria2.Port < 1024 || tuic.Enabled && tuic.Port < 1024 || anyTLS.Enabled && anyTLS.Port < 1024
 }
 
 func hysteria2ObservationSHA256(request Hysteria2ViewRequest, observation Hysteria2Observation) string {
@@ -220,7 +233,7 @@ func hysteria2ObservationSHA256(request Hysteria2ViewRequest, observation Hyster
 }
 
 func blockedHysteria2(at time.Time, outcome Outcome, code, problem, found, required string) Health {
-	return Health{Time: at, Module: "Connection Profiles", Profile: "Hysteria2", Outcome: outcome, Code: code, Problem: problem, Found: found, Required: required, WhyStopped: "Connection Profiles fails closed before unsafe proxy or host mutation", NextActions: []string{"Check again", "Back"}}
+	return blockedHealth(Health{Time: at, Module: "Connection Profiles", Profile: "Hysteria2", Outcome: outcome, Code: code, Problem: problem, Found: found, Required: required, WhyStopped: "Connection Profiles fails closed before unsafe proxy or host mutation", NextActions: []string{"Check again", "Back"}})
 }
 
 type Hysteria2PlanRequest struct {
@@ -270,10 +283,10 @@ func hysteria2ProfileInput(profile state.Hysteria2, secrets state.ConnectionProf
 		return nil, nil
 	}
 	credentials, err := NewHysteria2Credentials(secrets.ReadClientAccessValue(profile.Password))
-	if err != nil || profile.Port != 443 || !validHostname(profile.ServerName) || profile.CertificateID == "" || profile.MasqueradeURL != "https://example.com/" || profile.Obfuscation || profile.ObfuscationSecret != (state.ClientAccessValue{}) {
+	if err != nil || profile.Port == 0 || !validHostname(profile.ServerName) || profile.CertificateID == "" || profile.MasqueradeURL != "https://example.com/" || profile.Obfuscation || profile.ObfuscationSecret != (state.ClientAccessValue{}) {
 		return nil, errors.New("Hysteria2 intent is invalid")
 	}
-	return &Hysteria2ViewRequest{Enabled: profile.Enabled, Port: profile.Port, ServerName: profile.ServerName, CertificateID: profile.CertificateID, MasqueradeResponse: "Not Found\n", CertificatePointer: directCertificatePointer, SingBoxVersion: qualifiedSingBoxVersion, Credentials: credentials}, nil
+	return &Hysteria2ViewRequest{Enabled: profile.Enabled, Port: profile.Port, ServerName: profile.ServerName, CertificateID: profile.CertificateID, MasqueradeResponse: "Not Found\n", CertificatePointer: directCertificatePointer, SingBoxVersion: qualifiedSingBoxVersion, Credentials: credentials, reviewedAlternative: profile.Port != 443}, nil
 }
 
 func reviewedHysteria2Matches(reviewed *Hysteria2ViewRequest, profile state.Hysteria2, secrets state.ConnectionProfileSecretReader) bool {

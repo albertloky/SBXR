@@ -379,6 +379,10 @@ type CloudflareRepairAuthority interface {
 	StateCloudflareRepair() (source any, bindingJSON []byte, templateSHA256 string, valid bool)
 }
 
+type ConnectionProfilesRepairAuthority interface {
+	StateConnectionProfilesRepair() (revision uint64, stateSHA256 string, valid bool)
+}
+
 type deferredCloudflare struct {
 	candidate  DesiredState
 	validators SemanticValidators
@@ -671,6 +675,19 @@ func (i Interface) PrepareCloudflareRepairCommit(request PrepareRequest, authori
 	owned := planned.Owned.TunnelID == cloudflare.TunnelID && planned.Owned.XHTTPDNSRecordID == cloudflare.XHTTPDNSRecordID && planned.Owned.WebSocketDNSRecordID == cloudflare.WebSocketDNSRecordID && planned.Owned.DirectIPv4RecordID == cloudflare.DirectIPv4RecordID && planned.Owned.DirectIPv6RecordID == cloudflare.DirectIPv6RecordID
 	if !valid || bindingErr != nil || !fixed || !owned || templateErr != nil || hex.EncodeToString(templateDigest[:]) != templateSHA256 {
 		return nil, finding("STATE-CLOUDFLARE-REPAIR-PLAN", "Cloudflare managed repair", "the repair targets differ from current Desired State", "the exact loaded immutable ownership and unchanged candidate", "State never adopts provider identity", "reload State and rebuild the repair Plan")
+	}
+	return i.prepareCommit(request, nil, nil)
+}
+
+func (i Interface) PrepareConnectionProfilesRepairCommit(request PrepareRequest, authority ConnectionProfilesRepairAuthority) (*PreparedCommit, error) {
+	typeOf := reflect.TypeOf(authority)
+	if typeOf == nil || typeOf.Kind() != reflect.Pointer || typeOf.Elem().PkgPath() != "github.com/albertloky/SBXR/internal/connectionprofiles" || typeOf.Elem().Name() != "Plan" {
+		return nil, finding("STATE-CONNECTION-PROFILES-REPAIR-PLAN", "Connection Profiles repair", "the authority did not come from Connection Profiles", "one exact reviewed repair Plan", "caller-made repair authority cannot replace proven configuration", "reload State and rebuild the repair Plan")
+	}
+	revision, stateSHA256, valid := authority.StateConnectionProfilesRepair()
+	loaded := request.Loaded.loaded
+	if !valid || loaded == nil || loaded.owner != i.implementation || loaded.revision != revision || loaded.payloadChecksum != stateSHA256 {
+		return nil, finding("STATE-CONNECTION-PROFILES-REPAIR-PLAN", "Connection Profiles repair", "the repair authority differs from current State", "the exact loaded revision and checksum", "repair is only forward repair of the current proven lineage", "reload State and rebuild the repair Plan")
 	}
 	return i.prepareCommit(request, nil, nil)
 }

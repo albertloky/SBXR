@@ -9,6 +9,7 @@ import (
 	"net"
 	"slices"
 	"strings"
+	"sync/atomic"
 )
 
 type Baseline string
@@ -324,24 +325,52 @@ type ListenerProof struct {
 }
 
 type Result struct {
-	Baseline             Baseline
-	Outcome              Outcome
-	Findings             []Finding
-	Policy               Policy
-	SystemChanges        SystemChangesRequirements
-	SSHSafety            SSHSafety
-	CompleteRemoval      CompleteRemoval
-	Certificate          CertificatePolicy
-	CertificateRetry     *CertificateRetryHandoff
-	Reachability         []ReachabilityProof
-	ProviderGuidance     []ProviderGuidance
-	SameVPSProvesOutside bool
-	Renewal              RenewalFreshness
-	Binding              Binding
-	PreApplyGates        []Gate
-	PostApplyGates       []Gate
-	Bounds               CheckBounds
-	CloudflareTunnelPath CloudflareTunnelPath
+	Baseline              Baseline
+	Outcome               Outcome
+	Findings              []Finding
+	Policy                Policy
+	SystemChanges         SystemChangesRequirements
+	SSHSafety             SSHSafety
+	CompleteRemoval       CompleteRemoval
+	Certificate           CertificatePolicy
+	CertificateRetry      *CertificateRetryHandoff
+	Reachability          []ReachabilityProof
+	ProviderGuidance      []ProviderGuidance
+	SameVPSProvesOutside  bool
+	Renewal               RenewalFreshness
+	Binding               Binding
+	PreApplyGates         []Gate
+	PostApplyGates        []Gate
+	Bounds                CheckBounds
+	CloudflareTunnelPath  CloudflareTunnelPath
+	portCorrection        *portCorrectionCell
+	portCorrectionBinding Binding
+}
+
+type PortCorrectionAuthority struct{ cell *portCorrectionCell }
+
+type portCorrectionCell struct {
+	purpose, protocol string
+	port, candidate   uint16
+	used              atomic.Bool
+}
+
+func (PortCorrectionAuthority) String() string   { return "Network Policy port correction: redacted" }
+func (PortCorrectionAuthority) GoString() string { return "Network Policy port correction: redacted" }
+func (PortCorrectionAuthority) MarshalJSON() ([]byte, error) {
+	return nil, fmt.Errorf("Network Policy port correction cannot be rendered")
+}
+func (result Result) PortCorrectionAuthority() PortCorrectionAuthority {
+	return PortCorrectionAuthority{cell: result.portCorrection}
+}
+func (authority PortCorrectionAuthority) ConnectionProfilesPortCorrection() (string, uint16, uint16, string, bool) {
+	if authority.cell == nil || !authority.cell.used.CompareAndSwap(false, true) {
+		return "", 0, 0, "", false
+	}
+	return authority.cell.purpose, authority.cell.port, authority.cell.candidate, authority.cell.protocol, true
+}
+func (result Result) PortCorrectionCandidate() ListenerContribution {
+	return listenerContribution(result.portCorrectionBinding)
 }
 
 // ListenerContribution is the narrow protocol-aware listener fact consumed by
@@ -354,29 +383,50 @@ type ListenerContribution struct {
 	exposures                                                        []Exposure
 	registryRevision                                                 uint64
 	registryDigest                                                   string
+	freshSelection                                                   bool
 }
 
 func NewListenerContribution(result Result) ListenerContribution {
-	contribution := ListenerContribution{registryHealthy: result.Binding.approved, exposures: append([]Exposure(nil), result.Binding.policy.Exposures...), registryRevision: result.Binding.revision, registryDigest: result.Binding.digest}
-	if !result.Binding.approved {
+	return listenerContribution(result.Binding)
+}
+
+func listenerContribution(binding Binding) ListenerContribution {
+	contribution := ListenerContribution{registryHealthy: binding.approved, exposures: append([]Exposure(nil), binding.policy.Exposures...), registryRevision: binding.revision, registryDigest: binding.digest, freshSelection: binding.baseline == Clean}
+	if !binding.approved {
 		return contribution
 	}
-	for _, exposure := range result.Binding.policy.Exposures {
-		switch exposure {
-		case Exposure{Purpose: "VLESS REALITY Vision", Address: "public", Port: 443, Protocol: TCP}:
-			contribution.realityPort, contribution.realityProtocol = exposure.Port, string(exposure.Protocol)
-		case Exposure{Purpose: "Hysteria2", Address: "public", Port: 443, Protocol: UDP}:
-			contribution.hysteria2Port, contribution.hysteria2Protocol = exposure.Port, string(exposure.Protocol)
-		case Exposure{Purpose: "TUIC", Address: "public", Port: 8443, Protocol: UDP}:
-			contribution.tuicPort, contribution.tuicProtocol = exposure.Port, string(exposure.Protocol)
-		case Exposure{Purpose: "AnyTLS", Address: "public", Port: 9443, Protocol: TCP}:
-			contribution.anyTLSPort, contribution.anyTLSProtocol = exposure.Port, string(exposure.Protocol)
+	for _, exposure := range binding.policy.Exposures {
+		switch exposure.Purpose {
+		case "VLESS REALITY Vision":
+			if exposure.Address == "public" {
+				contribution.realityPort, contribution.realityProtocol = exposure.Port, string(exposure.Protocol)
+			}
+		case "Hysteria2":
+			if exposure.Address == "public" {
+				contribution.hysteria2Port, contribution.hysteria2Protocol = exposure.Port, string(exposure.Protocol)
+			}
+		case "TUIC":
+			if exposure.Address == "public" {
+				contribution.tuicPort, contribution.tuicProtocol = exposure.Port, string(exposure.Protocol)
+			}
+		case "AnyTLS":
+			if exposure.Address == "public" {
+				contribution.anyTLSPort, contribution.anyTLSProtocol = exposure.Port, string(exposure.Protocol)
+			}
 		}
 	}
-	contribution.valid = contribution.realityPort == 443 && contribution.realityProtocol == "TCP" && contribution.hysteria2Port == 443 && contribution.hysteria2Protocol == "UDP"
-	contribution.tuicValid = contribution.valid && contribution.tuicPort == 8443 && contribution.tuicProtocol == "UDP"
-	contribution.anyTLSValid = contribution.tuicValid && contribution.anyTLSPort == 9443 && contribution.anyTLSProtocol == "TCP"
+	contribution.valid = contribution.realityPort > 0 && contribution.realityProtocol == "TCP" && contribution.hysteria2Port > 0 && contribution.hysteria2Protocol == "UDP"
+	contribution.tuicValid = contribution.valid && contribution.tuicPort > 0 && contribution.tuicProtocol == "UDP"
+	contribution.anyTLSValid = contribution.tuicValid && contribution.anyTLSPort > 0 && contribution.anyTLSProtocol == "TCP"
 	return contribution
+}
+
+func (contribution ListenerContribution) ConnectionProfilesFreshPortSelection() bool {
+	return contribution.registryHealthy && contribution.freshSelection
+}
+
+func (contribution ListenerContribution) ConnectionProfilesManagedPortSelection() bool {
+	return contribution.registryHealthy && !contribution.freshSelection
 }
 
 func (contribution ListenerContribution) ConnectionProfilesRegistryBinding() (uint64, string, bool) {
@@ -594,6 +644,7 @@ type CheckBounds struct {
 type Binding struct {
 	Digest   string
 	policy   Policy
+	baseline Baseline
 	revision uint64
 	digest   string
 	approved bool
@@ -680,6 +731,20 @@ func (i Interface) Evaluate(request Request) Result {
 	evaluateReachability(&result, request, observed)
 	result.Binding = bind(request, observed, result.Policy)
 	result.Binding.approved = result.Outcome == Healthy
+	if result.portCorrection != nil && len(result.Findings) == 1 && result.Findings[0].Code == "NETWORK-MANAGED-DRIFT" {
+		candidate := result.Policy
+		for index := range candidate.Exposures {
+			exposure := &candidate.Exposures[index]
+			if exposure.Purpose == result.portCorrection.purpose && exposure.Port == result.portCorrection.port && string(exposure.Protocol) == result.portCorrection.protocol {
+				exposure.Port = result.portCorrection.candidate
+				candidate.Replacements = append(candidate.Replacements, PortReplacement{Purpose: exposure.Purpose, Address: exposure.Address, Protocol: exposure.Protocol, PreviousPort: result.portCorrection.port, Port: result.portCorrection.candidate, RebuiltArtifacts: rebuiltArtifacts()})
+				candidate.Nftables = renderNftables(candidate)
+				result.portCorrectionBinding = bind(request, observed, candidate)
+				result.portCorrectionBinding.approved = true
+				break
+			}
+		}
+	}
 	result.PreApplyGates = []Gate{
 		{Code: "NETWORK-PREFLIGHT-FRESH", Required: "all bound observations still match"},
 		{Code: "NETWORK-CANDIDATE-VALID", Required: "the complete native nftables candidate validates without applying it"},
@@ -828,6 +893,7 @@ func evaluateOwnership(result *Result, intent Intent, observed Observations) {
 				continue
 			}
 			if !configurableDefault(intent, exposure) {
+				result.portCorrection = &portCorrectionCell{purpose: exposure.Purpose, port: exposure.Port, protocol: string(exposure.Protocol)}
 				result.add(requiredFailure("NETWORK-PORT-CONFLICT", "A committed port is occupied", listenerFact(listener), fmt.Sprintf("committed %s port %d/%s free", exposure.Purpose, exposure.Port, exposure.Protocol), "a committed replacement remains stable until the Owner reviews another Change Set", ownerFix("Free the committed port or review a new Change Set, then check again.")))
 				return
 			}
@@ -850,6 +916,8 @@ func evaluateOwnership(result *Result, intent Intent, observed Observations) {
 		return
 	}
 	var drift []string
+	var correction *portCorrectionCell
+	correctionConflicts := 0
 	for _, exposure := range policy.Exposures {
 		if exposure.Purpose == "SSH preservation" || exposure.Purpose == "ACME HTTP-01" {
 			continue
@@ -857,6 +925,10 @@ func evaluateOwnership(result *Result, intent Intent, observed Observations) {
 		if !hasOwnedListener(observed.Listeners, exposure, policy) {
 			if listener, conflict := conflictingListener(observed.Listeners, exposure, policy); conflict {
 				drift = append(drift, exposure.Purpose+" held by "+listenerFact(listener))
+				if candidate, ok := availableCandidate(observed, policy, intent.SSHPort, exposure); ok {
+					correction = &portCorrectionCell{purpose: exposure.Purpose, port: exposure.Port, candidate: candidate.Port, protocol: string(exposure.Protocol)}
+				}
+				correctionConflicts++
 			} else {
 				drift = append(drift, exposure.Purpose+" listener missing or different")
 			}
@@ -870,12 +942,21 @@ func evaluateOwnership(result *Result, intent Intent, observed Observations) {
 	if !cloudflareRoutesMatch(observed.OwnerFacts.Routes, expectedCloudflareRoutes(intent)) {
 		drift = append(drift, "Cloudflare routes missing or different")
 	}
-	if len(drift) > 0 || observed.Firewall.SBXRTableState != "matches Desired State" || observed.OwnerFacts.DNS != "matches Desired State" || observed.OwnerFacts.Tunnel != "matches Desired State" {
+	otherDrift := observed.Firewall.SBXRTableState != "matches Desired State" || observed.OwnerFacts.DNS != "matches Desired State" || observed.OwnerFacts.Tunnel != "matches Desired State"
+	if len(drift) > 0 || otherDrift {
+		exactCorrection := correctionConflicts == 1 && len(drift) == 1 && !otherDrift && correction != nil
+		if exactCorrection {
+			result.portCorrection = correction
+		}
 		found := strings.Join(drift, "; ")
 		if found == "" {
 			found = "an owned firewall, DNS, or Tunnel fact differs from Desired State"
 		}
-		finding := requiredFailure("NETWORK-MANAGED-DRIFT", "Managed network resources have proven drift", found, "every SBXR-owned listener, nftables rule, DNS route, and Tunnel fact matching Desired State", "the current proven revision needs forward repair before another change", Fix{SBXROption: "Review a forward-repair Plan for the current Desired State."})
+		fix := Fix{SBXROption: "Review a forward-repair Plan for the current Desired State."}
+		if exactCorrection {
+			fix = Fix{SBXROption: "Change the SBXR port", OwnerChecklist: []string{"Stop the other service"}}
+		}
+		finding := requiredFailure("NETWORK-MANAGED-DRIFT", "Managed network resources have proven drift", found, "every SBXR-owned listener, nftables rule, DNS route, and Tunnel fact matching Desired State", "the current proven revision needs forward repair before another change", fix)
 		finding.Outcome = NeedsAttention
 		result.add(finding)
 	}
@@ -1406,7 +1487,7 @@ func bind(request Request, observed Observations, policy Policy) Binding {
 	}{request, observed, policy})
 	digest := sha256.Sum256(data)
 	encodedDigest := hex.EncodeToString(digest[:])
-	return Binding{Digest: encodedDigest, policy: policy, revision: request.Intent.Revision, digest: encodedDigest}
+	return Binding{Digest: encodedDigest, policy: policy, baseline: request.Intent.Baseline, revision: request.Intent.Revision, digest: encodedDigest}
 }
 
 func ownerFactsProvided(facts OwnerFacts) bool {

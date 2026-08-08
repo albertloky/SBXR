@@ -2,6 +2,8 @@ package cloudflaretunnel
 
 import (
 	"fmt"
+	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -30,9 +32,10 @@ type WebSocketRouteHealth struct {
 }
 
 func EvaluateXHTTPRouteHealth(observed WholeTunnelObservation, expected WholeTunnelExpected) XHTTPRouteHealth {
-	result := XHTTPRouteHealth{Origin: xhttpOrigin, Health: evaluateRouteHealth("XHTTP", "CLOUDFLARE-XHTTP", xhttpOrigin, observed.XHTTPOriginReachable, observed, expected)}
+	origin := expectedProfileOrigin(expected, 0)
+	result := XHTTPRouteHealth{Origin: origin, Health: evaluateRouteHealth("XHTTP", "CLOUDFLARE-XHTTP", origin, observed.XHTTPOriginReachable, observed, expected)}
 	for _, route := range expected.Routes {
-		if route.Service == xhttpOrigin {
+		if route.Service == origin {
 			result.Hostname = route.Hostname
 		}
 	}
@@ -40,13 +43,34 @@ func EvaluateXHTTPRouteHealth(observed WholeTunnelObservation, expected WholeTun
 }
 
 func EvaluateWebSocketRouteHealth(observed WholeTunnelObservation, expected WholeTunnelExpected) WebSocketRouteHealth {
-	result := WebSocketRouteHealth{Origin: webSocketOrigin, Health: evaluateRouteHealth("WebSocket", "CLOUDFLARE-WEBSOCKET", webSocketOrigin, observed.WebSocketOriginReachable, observed, expected)}
+	index := 1
+	if len(expected.Routes) < 2 || expected.Routes[1].Hostname == "" {
+		index = 0
+	}
+	origin := expectedProfileOrigin(expected, index)
+	result := WebSocketRouteHealth{Origin: origin, Health: evaluateRouteHealth("WebSocket", "CLOUDFLARE-WEBSOCKET", origin, observed.WebSocketOriginReachable, observed, expected)}
 	for _, route := range expected.Routes {
-		if route.Service == webSocketOrigin {
+		if route.Service == origin {
 			result.Hostname = route.Hostname
 		}
 	}
 	return result
+}
+
+func expectedProfileOrigin(expected WholeTunnelExpected, index int) string {
+	if index >= 0 && index < len(expected.Routes) && expected.Routes[index].Hostname != "" && validLoopbackOrigin(expected.Routes[index].Service) {
+		return expected.Routes[index].Service
+	}
+	return ""
+}
+
+func validLoopbackOrigin(origin string) bool {
+	parsed, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	port, portErr := strconv.ParseUint(parsed.Port(), 10, 16)
+	return portErr == nil && port > 0 && parsed.Scheme == "http" && parsed.Hostname() == "127.0.0.1" && parsed.User == nil && parsed.Path == "" && parsed.RawQuery == "" && parsed.Fragment == ""
 }
 
 func EvaluateTunnelHealth(observed WholeTunnelObservation, expected WholeTunnelExpected) TunnelHealth {
@@ -144,7 +168,7 @@ func evaluateRouteHealth(profile, code, origin string, reachable bool, observed 
 
 func classifyRouteDifference(got, want []Route) (Outcome, string, string, string, string) {
 	for _, route := range got {
-		if route.Service != "http_status:404" && route.Service != xhttpOrigin && route.Service != webSocketOrigin {
+		if route.Service != "http_status:404" && !validLoopbackOrigin(route.Service) {
 			return Failed, "CLOUDFLARE-ROUTE-ORIGIN", "a route outside the approved loopback origins", "only http://127.0.0.1:11080, http://127.0.0.1:11081, and final http_status:404", "A route points at a wrong or public origin."
 		}
 	}

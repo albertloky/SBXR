@@ -18,7 +18,7 @@ func TestDirectTLSContributionRequiresThreeExactSharedConsumers(t *testing.T) {
 		t.Fatal("exact Direct TLS consumers were refused")
 	}
 	for _, change := range []func(*connectionprofiles.DirectTLSRequest){
-		func(request *connectionprofiles.DirectTLSRequest) { request.TUIC.Port = 443 },
+		func(request *connectionprofiles.DirectTLSRequest) { request.TUIC.Port = 0 },
 		func(request *connectionprofiles.DirectTLSRequest) {
 			request.AnyTLS.CertificatePointer = "/var/lib/sbxr/certificates/domain/other"
 		},

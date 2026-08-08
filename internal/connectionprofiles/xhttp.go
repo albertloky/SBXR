@@ -89,6 +89,7 @@ type XHTTPViewRequest struct {
 	XrayVersion             string
 	Credentials             XHTTPCredentials
 	RouteHealth             cloudflaretunnel.XHTTPRouteHealth
+	reviewedAlternative     bool
 }
 
 type XHTTPProfile struct {
@@ -118,13 +119,13 @@ func (module Interface) ViewXHTTP(ctx context.Context, request XHTTPViewRequest)
 	profile.Listener = observation.Listener
 	result := XHTTPViewResult{Profile: profile, observation: observation}
 	result.VolatileSHA256 = xhttpObservationSHA256(request, observation)
-	if !request.Enabled || request.OriginAddress != "127.0.0.1" || request.OriginPort != 11080 || request.Mode != state.XHTTPPacketUp || request.XrayVersion != qualifiedXrayVersion || !validHostname(request.Hostname) || !request.Credentials.valid() {
+	if !request.Enabled || request.OriginAddress != "127.0.0.1" || !selectedPort(request.OriginPort, 11080, request.reviewedAlternative) || request.Mode != state.XHTTPPacketUp || request.XrayVersion != qualifiedXrayVersion || !validHostname(request.Hostname) || !request.Credentials.valid() {
 		result.Health = blockedXHTTP(observation.CheckedAt, Failed, "CONNECTION-PROFILES-XHTTP-ORIGIN", "The VLESS XHTTP inputs are invalid", "the origin, hostname, credential, mode, enabled state, or qualified release is wrong", "one enabled packet-up profile on 127.0.0.1:11080/TCP")
 		return result
 	}
 	expectedOrigin := fmt.Sprintf("http://%s:%d", request.OriginAddress, request.OriginPort)
 	if request.RouteHealth.Hostname != request.Hostname || request.RouteHealth.Origin != expectedOrigin || request.RouteHealth.Health.Module != "Cloudflare Tunnel" || request.RouteHealth.Health.Outcome != cloudflaretunnel.Healthy || request.RouteHealth.Health.Code != "CLOUDFLARE-XHTTP-ROUTE-HEALTHY" {
-		result.Health = blockedXHTTP(observation.CheckedAt, Failed, "CONNECTION-PROFILES-XHTTP-ROUTE", "The typed Cloudflare XHTTP route is not healthy or does not match", request.RouteHealth.Health.Code, "the selected hostname mapped to http://127.0.0.1:11080 with CLOUDFLARE-XHTTP-ROUTE-HEALTHY")
+		result.Health = externalBlockedHealth(blockedXHTTP(observation.CheckedAt, Failed, "CONNECTION-PROFILES-XHTTP-ROUTE", "The typed Cloudflare XHTTP route is not healthy or does not match", request.RouteHealth.Health.Code, "the selected hostname mapped to the reviewed loopback XHTTP origin with CLOUDFLARE-XHTTP-ROUTE-HEALTHY"), "Use Cloudflare Tunnel repair to restore the selected XHTTP hostname to its exact reviewed loopback origin, then Check again.")
 		return result
 	}
 	if request.Revision > 0 {
@@ -136,7 +137,7 @@ func (module Interface) ViewXHTTP(ctx context.Context, request XHTTPViewRequest)
 			result.Health = blockedXHTTP(observation.CheckedAt, Failed, "CONNECTION-PROFILES-XHTTP-SERVICE", "The fixed Xray service is not running safely", "xray.service or its distinct non-root identity disagrees", "running xray.service as xray")
 			return result
 		}
-		if observation.Listener != (Listener{Address: "127.0.0.1", Port: 11080, Protocol: "tcp"}) {
+		if observation.Listener != (Listener{Address: "127.0.0.1", Port: request.OriginPort, Protocol: "tcp"}) {
 			result.Health = blockedXHTTP(observation.CheckedAt, Failed, "CONNECTION-PROFILES-XHTTP-LISTENER", "The XHTTP listener is not loopback-only", fmt.Sprintf("%s/%d/%s", observation.Listener.Address, observation.Listener.Port, observation.Listener.Protocol), "127.0.0.1/11080/tcp")
 			return result
 		}
@@ -161,7 +162,7 @@ func xhttpObservationSHA256(request XHTTPViewRequest, observation XHTTPObservati
 }
 
 func blockedXHTTP(at time.Time, outcome Outcome, code, problem, found, required string) Health {
-	return Health{Time: at, Module: "Connection Profiles", Profile: "VLESS XHTTP", Outcome: outcome, Code: code, Problem: problem, Found: found, Required: required, WhyStopped: "Connection Profiles fails closed before unsafe proxy or host mutation", NextActions: []string{"Check again", "Back"}}
+	return blockedHealth(Health{Time: at, Module: "Connection Profiles", Profile: "VLESS XHTTP", Outcome: outcome, Code: code, Problem: problem, Found: found, Required: required, WhyStopped: "Connection Profiles fails closed before unsafe proxy or host mutation", NextActions: []string{"Check again", "Back"}})
 }
 
 type XHTTPPlanRequest struct {

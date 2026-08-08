@@ -66,6 +66,7 @@ type WebSocketViewRequest struct {
 	XrayVersion                                string
 	Credentials                                WebSocketCredentials
 	RouteHealth                                cloudflaretunnel.WebSocketRouteHealth
+	reviewedAlternative                        bool
 }
 
 type WebSocketProfile struct {
@@ -93,7 +94,7 @@ func (module Interface) ViewWebSocket(ctx context.Context, request WebSocketView
 	profile.ServiceUnit, profile.ServiceRunning, profile.Listener = observation.ServiceUnit, observation.ServiceRunning, observation.Listener
 	result := WebSocketViewResult{Profile: profile, observation: observation}
 	result.VolatileSHA256 = webSocketObservationSHA256(request, observation)
-	if !request.Enabled || request.OriginAddress != "127.0.0.1" || request.OriginPort != 11081 || request.XrayVersion != qualifiedXrayVersion || !validHostname(request.Hostname) || !request.Credentials.valid() {
+	if !request.Enabled || request.OriginAddress != "127.0.0.1" || !selectedPort(request.OriginPort, 11081, request.reviewedAlternative) || request.XrayVersion != qualifiedXrayVersion || !validHostname(request.Hostname) || !request.Credentials.valid() {
 		result.Health = blockedWebSocket(observation.CheckedAt, Failed, "CONNECTION-PROFILES-WEBSOCKET-ORIGIN", "The VLESS WebSocket inputs are invalid", "the origin, hostname, credential, enabled state, or qualified release is wrong", "one enabled compatibility profile on 127.0.0.1:11081/TCP")
 		return result
 	}
@@ -103,7 +104,7 @@ func (module Interface) ViewWebSocket(ctx context.Context, request WebSocketView
 	}
 	expectedOrigin := fmt.Sprintf("http://%s:%d", request.OriginAddress, request.OriginPort)
 	if request.RouteHealth.Hostname != request.Hostname || request.RouteHealth.Origin != expectedOrigin || request.RouteHealth.Health.Module != "Cloudflare Tunnel" || request.RouteHealth.Health.Outcome != cloudflaretunnel.Healthy || request.RouteHealth.Health.Code != "CLOUDFLARE-WEBSOCKET-ROUTE-HEALTHY" {
-		result.Health = blockedWebSocket(observation.CheckedAt, Failed, "CONNECTION-PROFILES-WEBSOCKET-ROUTE", "The typed Cloudflare WebSocket route is not healthy or does not match", request.RouteHealth.Health.Code, "the selected hostname mapped to http://127.0.0.1:11081 with CLOUDFLARE-WEBSOCKET-ROUTE-HEALTHY")
+		result.Health = externalBlockedHealth(blockedWebSocket(observation.CheckedAt, Failed, "CONNECTION-PROFILES-WEBSOCKET-ROUTE", "The typed Cloudflare WebSocket route is not healthy or does not match", request.RouteHealth.Health.Code, "the selected hostname mapped to the reviewed loopback WebSocket origin with CLOUDFLARE-WEBSOCKET-ROUTE-HEALTHY"), "Use Cloudflare Tunnel repair to restore the selected WebSocket hostname to its exact reviewed loopback origin, then Check again.")
 		return result
 	}
 	if request.Revision > 0 {
@@ -123,7 +124,7 @@ func (module Interface) ViewWebSocket(ctx context.Context, request WebSocketView
 			result.Health = blockedWebSocket(observation.CheckedAt, Failed, "CONNECTION-PROFILES-WEBSOCKET-SERVICE", "The fixed Xray service is not running safely", "xray.service or its distinct non-root identity disagrees", "running xray.service as xray")
 			return result
 		}
-		if observation.Listener != (Listener{Address: "127.0.0.1", Port: 11081, Protocol: "tcp"}) {
+		if observation.Listener != (Listener{Address: "127.0.0.1", Port: request.OriginPort, Protocol: "tcp"}) {
 			result.Health = blockedWebSocket(observation.CheckedAt, Failed, "CONNECTION-PROFILES-WEBSOCKET-LISTENER", "The WebSocket listener is not loopback-only", fmt.Sprintf("%s/%d/%s", observation.Listener.Address, observation.Listener.Port, observation.Listener.Protocol), "127.0.0.1/11081/tcp")
 			return result
 		}
@@ -142,7 +143,7 @@ func webSocketObservationSHA256(request WebSocketViewRequest, observation WebSoc
 }
 
 func blockedWebSocket(at time.Time, outcome Outcome, code, problem, found, required string) Health {
-	return Health{Time: at, Module: "Connection Profiles", Profile: "VLESS WebSocket", Outcome: outcome, Code: code, Problem: problem, Found: found, Required: required, WhyStopped: "Connection Profiles fails closed before unsafe proxy or host mutation", NextActions: []string{"Check again", "Back"}}
+	return blockedHealth(Health{Time: at, Module: "Connection Profiles", Profile: "VLESS WebSocket", Outcome: outcome, Code: code, Problem: problem, Found: found, Required: required, WhyStopped: "Connection Profiles fails closed before unsafe proxy or host mutation", NextActions: []string{"Check again", "Back"}})
 }
 
 type WebSocketPlanRequest struct {

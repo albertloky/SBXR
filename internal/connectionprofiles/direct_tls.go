@@ -33,10 +33,10 @@ type DirectTLSContribution struct {
 
 func NewDirectTLSContribution(request DirectTLSRequest) DirectTLSContribution {
 	address, err := netip.ParseAddr(request.DestinationIP)
-	valid := request.Revision > 0 && err == nil && address.IsGlobalUnicast() && validHostname(request.Hostname) &&
-		request.Hysteria2 == (DirectTLSConsumer{Port: 443, CertificatePointer: domainCertificatePointer}) &&
-		request.TUIC == (DirectTLSConsumer{Port: 8443, CertificatePointer: domainCertificatePointer}) &&
-		request.AnyTLS == (DirectTLSConsumer{Port: 9443, CertificatePointer: domainCertificatePointer})
+	validConsumer := func(consumer DirectTLSConsumer) bool {
+		return consumer.Port > 0 && consumer.CertificatePointer == domainCertificatePointer && !consumer.Insecure
+	}
+	valid := request.Revision > 0 && err == nil && address.IsGlobalUnicast() && validHostname(request.Hostname) && validConsumer(request.Hysteria2) && validConsumer(request.TUIC) && validConsumer(request.AnyTLS)
 	encoded, _ := json.Marshal(request)
 	digest := sha256.Sum256(encoded)
 	return DirectTLSContribution{revision: request.Revision, destinationIP: request.DestinationIP, hostname: request.Hostname, digest: hex.EncodeToString(digest[:]), valid: valid}
