@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -291,6 +292,7 @@ type Plan struct {
 	description                      string
 	preparedBinding                  string
 	configuration                    []byte
+	singBoxConfiguration             []byte
 	revision                         uint64
 	changeSet                        string
 	startingStateSHA256              string
@@ -298,6 +300,7 @@ type Plan struct {
 	realityRequest                   ViewRequest
 	xhttpRequest                     *XHTTPViewRequest
 	webSocketRequest                 *WebSocketViewRequest
+	hysteria2Request                 *Hysteria2ViewRequest
 	steps                            []systemchanges.Step
 	checks                           []systemchanges.Check
 	used                             *atomic.Bool
@@ -422,8 +425,16 @@ func (module Interface) Plan(ctx context.Context, request PlanRequest) PlanResul
 }
 
 func (module Interface) ValidateConnectionProfiles(profiles state.ConnectionProfiles, secrets state.ConnectionProfileSecretReader) error {
-	_, _, _, err := xrayProfileInputs(profiles, secrets)
-	return err
+	if _, _, _, err := xrayProfileInputs(profiles, secrets); err != nil {
+		return err
+	}
+	if _, err := hysteria2ProfileInput(profiles.Hysteria2, secrets); err != nil {
+		return err
+	}
+	if profiles.TUIC.Enabled || profiles.AnyTLS.Enabled {
+		return errors.New("later Connection Profile slices are not prepared yet")
+	}
+	return nil
 }
 
 func xrayProfileInputs(profiles state.ConnectionProfiles, secrets state.ConnectionProfileSecretReader) (ViewRequest, *XHTTPViewRequest, *WebSocketViewRequest, error) {
@@ -481,14 +492,22 @@ func (module Interface) PrepareConnectionProfiles(profiles state.ConnectionProfi
 	if err != nil {
 		return nil, nil, err
 	}
-	if profiles.Hysteria2.Enabled || profiles.TUIC.Enabled || profiles.AnyTLS.Enabled {
+	if profiles.TUIC.Enabled || profiles.AnyTLS.Enabled {
 		return nil, nil, errors.New("later Connection Profile slices are not prepared yet")
 	}
 	if !reality.Enabled {
 		return nil, nil, nil
 	}
 	xray, err := xrayConfiguration(&reality, xhttp, websocket)
-	return xray, nil, err
+	if err != nil {
+		return nil, nil, err
+	}
+	hysteria2, err := hysteria2ProfileInput(profiles.Hysteria2, secrets)
+	if err != nil || hysteria2 == nil {
+		return xray, nil, err
+	}
+	singBox, err := hysteria2Configuration(*hysteria2)
+	return xray, singBox, err
 }
 
 func (plan *Plan) ValidateConnectionProfiles(profiles state.ConnectionProfiles, secrets state.ConnectionProfileSecretReader) error {
@@ -500,11 +519,14 @@ func (plan *Plan) ValidateConnectionProfiles(profiles state.ConnectionProfiles, 
 	}
 	profile := profiles.VLESSRealityVision
 	realityRequest := plan.realityRequest
-	if profiles.Hysteria2.Enabled || profiles.TUIC.Enabled || profiles.AnyTLS.Enabled || profile.Enabled != realityRequest.Enabled || profile.Port != realityRequest.Port || profile.Target != realityRequest.Target.Address || profile.ServerName != realityRequest.Target.ServerName || profile.Fingerprint != realityRequest.Fingerprint ||
+	if profiles.TUIC.Enabled || profiles.AnyTLS.Enabled || profile.Enabled != realityRequest.Enabled || profile.Port != realityRequest.Port || profile.Target != realityRequest.Target.Address || profile.ServerName != realityRequest.Target.ServerName || profile.Fingerprint != realityRequest.Fingerprint ||
 		secrets.ReadClientAccessValue(profile.UUID) != realityRequest.Credentials.uuid.value || secrets.ReadInfrastructureSecret(profile.PrivateKey) != realityRequest.Credentials.privateKey.value || profile.PublicKey != realityRequest.Credentials.publicKey.value || secrets.ReadClientAccessValue(profile.ShortID) != realityRequest.Credentials.shortID.value {
 		return errors.New("candidate Connection Profiles differ from the reviewed Plan")
 	}
 	if !reviewedXHTTPMatches(plan.xhttpRequest, profiles.VLESSXHTTP, secrets) || !reviewedWebSocketMatches(plan.webSocketRequest, profiles.VLESSWebSocket, secrets) {
+		return errors.New("candidate Connection Profiles differ from the reviewed Plan")
+	}
+	if !reviewedHysteria2Matches(plan.hysteria2Request, profiles.Hysteria2, secrets) {
 		return errors.New("candidate Connection Profiles differ from the reviewed Plan")
 	}
 	return nil
@@ -528,11 +550,15 @@ func (plan *Plan) PrepareConnectionProfiles(profiles state.ConnectionProfiles, s
 	if err := plan.ValidateConnectionProfiles(profiles, secrets); err != nil {
 		return nil, nil, err
 	}
-	binding, err := opaquePreparedBinding(plan.configuration)
-	if err != nil || binding != plan.preparedBinding {
-		return nil, nil, errors.New("prepared Xray configuration differs from the reviewed Plan")
+	configurations := [][]byte{plan.configuration}
+	if plan.singBoxConfiguration != nil {
+		configurations = append(configurations, plan.singBoxConfiguration)
 	}
-	return append([]byte(nil), plan.configuration...), nil, nil
+	binding, err := opaquePreparedBinding(configurations...)
+	if err != nil || binding != plan.preparedBinding {
+		return nil, nil, errors.New("prepared Connection Profiles configuration differs from the reviewed Plan")
+	}
+	return append([]byte(nil), plan.configuration...), append([]byte(nil), plan.singBoxConfiguration...), nil
 }
 
 // ponytail: one process-local HMAC key binds reviewed bytes without retaining or
@@ -541,7 +567,7 @@ var preparedBindingKey [32]byte
 var preparedBindingKeyOnce sync.Once
 var preparedBindingKeyErr error
 
-func opaquePreparedBinding(configuration []byte) (string, error) {
+func opaquePreparedBinding(configurations ...[]byte) (string, error) {
 	preparedBindingKeyOnce.Do(func() {
 		_, preparedBindingKeyErr = io.ReadFull(rand.Reader, preparedBindingKey[:])
 	})
@@ -549,7 +575,12 @@ func opaquePreparedBinding(configuration []byte) (string, error) {
 		return "", preparedBindingKeyErr
 	}
 	digest := hmac.New(sha256.New, preparedBindingKey[:])
-	_, _ = digest.Write(configuration)
+	var size [8]byte
+	for _, configuration := range configurations {
+		binary.BigEndian.PutUint64(size[:], uint64(len(configuration)))
+		_, _ = digest.Write(size[:])
+		_, _ = digest.Write(configuration)
+	}
 	return hex.EncodeToString(digest.Sum(nil)), nil
 }
 

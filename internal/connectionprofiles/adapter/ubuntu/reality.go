@@ -27,14 +27,17 @@ const realityConfigurationPath = "etc/sbxr/xray/config.json"
 type commandRunner func(context.Context, io.Reader, string, ...string) (string, error)
 
 type RealityHost struct {
-	root      string
-	run       commandRunner
-	probe     func(context.Context, connectionprofiles.RealityTarget) connectionprofiles.RealityObservation
-	now       func() time.Time
-	rootUID   uint32
-	xrayGID   uint32
-	xrayGroup bool
-	xrayUser  bool
+	root         string
+	run          commandRunner
+	probe        func(context.Context, connectionprofiles.RealityTarget) connectionprofiles.RealityObservation
+	now          func() time.Time
+	rootUID      uint32
+	xrayGID      uint32
+	xrayGroup    bool
+	xrayUser     bool
+	singBoxGID   uint32
+	singBoxGroup bool
+	singBoxUser  bool
 }
 
 type xrayServiceObservation struct {
@@ -51,6 +54,8 @@ type xrayServiceObservation struct {
 func NewRealityHost(root string) RealityHost {
 	group, _ := user.LookupGroup("xray")
 	account, _ := user.Lookup("xray")
+	singBoxGroup, _ := user.LookupGroup("sing-box")
+	singBoxAccount, _ := user.Lookup("sing-box")
 	gid := uint64(0)
 	groupValid := false
 	if group != nil {
@@ -60,7 +65,17 @@ func NewRealityHost(root string) RealityHost {
 	}
 	uid, uidErr := strconv.ParseUint(accountID(account), 10, 32)
 	userValid := uidErr == nil && uid != 0 && groupValid && account.Gid == group.Gid
-	return RealityHost{root: root, run: runRealityCommand, probe: probeRealityTarget, now: time.Now, rootUID: 0, xrayGID: uint32(gid), xrayGroup: groupValid, xrayUser: userValid}
+	singBoxGID, singBoxGIDErr := strconv.ParseUint(groupID(singBoxGroup), 10, 32)
+	singBoxUID, singBoxUIDErr := strconv.ParseUint(accountID(singBoxAccount), 10, 32)
+	singBoxValid := singBoxGIDErr == nil && singBoxUIDErr == nil && singBoxUID != 0 && singBoxAccount.Gid == singBoxGroup.Gid
+	return RealityHost{root: root, run: runRealityCommand, probe: probeRealityTarget, now: time.Now, rootUID: 0, xrayGID: uint32(gid), xrayGroup: groupValid, xrayUser: userValid, singBoxGID: uint32(singBoxGID), singBoxGroup: singBoxGIDErr == nil, singBoxUser: singBoxValid}
+}
+
+func groupID(group *user.Group) string {
+	if group == nil {
+		return ""
+	}
+	return group.Gid
 }
 
 func accountID(account *user.User) string {

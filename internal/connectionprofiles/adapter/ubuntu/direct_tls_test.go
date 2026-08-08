@@ -106,6 +106,12 @@ func TestDirectTLSExecutorRejectsWeakOrDisagreeingProbeConfiguration(t *testing.
 func writeProbeConfiguration(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
+	writeProbeConfigurationAt(t, root)
+	return root
+}
+
+func writeProbeConfigurationAt(t *testing.T, root string) {
+	t.Helper()
 	name := filepath.Join(root, probeConfiguration)
 	if err := os.MkdirAll(filepath.Dir(name), 0o700); err != nil {
 		t.Fatal(err)
@@ -114,5 +120,4 @@ func writeProbeConfiguration(t *testing.T) string {
 	if err := os.WriteFile(name, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return root
 }

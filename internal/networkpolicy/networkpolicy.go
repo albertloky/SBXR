@@ -344,6 +344,35 @@ type Result struct {
 	CloudflareTunnelPath CloudflareTunnelPath
 }
 
+// ListenerContribution is the narrow protocol-aware listener fact consumed by
+// Connection Profiles without granting it a dependency on Network Policy.
+type ListenerContribution struct {
+	realityPort, hysteria2Port         uint16
+	realityProtocol, hysteria2Protocol string
+	valid                              bool
+}
+
+func NewListenerContribution(result Result) ListenerContribution {
+	contribution := ListenerContribution{}
+	if result.Outcome != Healthy {
+		return contribution
+	}
+	for _, exposure := range result.Policy.Exposures {
+		switch exposure {
+		case Exposure{Purpose: "VLESS REALITY Vision", Address: "public", Port: 443, Protocol: TCP}:
+			contribution.realityPort, contribution.realityProtocol = exposure.Port, string(exposure.Protocol)
+		case Exposure{Purpose: "Hysteria2", Address: "public", Port: 443, Protocol: UDP}:
+			contribution.hysteria2Port, contribution.hysteria2Protocol = exposure.Port, string(exposure.Protocol)
+		}
+	}
+	contribution.valid = contribution.realityPort == 443 && contribution.realityProtocol == "TCP" && contribution.hysteria2Port == 443 && contribution.hysteria2Protocol == "UDP"
+	return contribution
+}
+
+func (contribution ListenerContribution) ConnectionProfilesListeners() (uint16, string, uint16, string, bool) {
+	return contribution.realityPort, contribution.realityProtocol, contribution.hysteria2Port, contribution.hysteria2Protocol, contribution.valid
+}
+
 // CloudflareTunnelPath is the typed outbound proof consumed by Cloudflare Tunnel.
 type CloudflareTunnelPath struct {
 	HTTPS   ProofStatus

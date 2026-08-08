@@ -1009,6 +1009,7 @@ type systemChangeTestOptions struct {
 	publishBeforeError bool
 	publishAfterError  bool
 	nativeXray         []byte
+	nativeSingBox      []byte
 	candidateEdit      func(*DesiredState)
 }
 
@@ -1043,9 +1044,13 @@ func preparedSystemChangeWithOptions(t *testing.T, mutation systemchanges.Mutati
 	}
 	if len(options.nativeXray) > 0 {
 		validator := request.SemanticValidators.ConnectionProfiles.(*validatingSeams)
-		singBox, err := marshalProtectedJSON(expectedServiceMaterials(candidate).SingBox)
-		if err != nil {
-			t.Fatal(err)
+		singBox := options.nativeSingBox
+		if len(singBox) == 0 {
+			var err error
+			singBox, err = marshalProtectedJSON(expectedServiceMaterials(candidate).SingBox)
+			if err != nil {
+				t.Fatal(err)
+			}
 		}
 		request.SemanticValidators.ConnectionProfiles = &nativeProfilesPreparer{validatingSeams: validator, xray: options.nativeXray, singBox: singBox}
 	}
@@ -2416,6 +2421,29 @@ func TestWebSocketPostMutationFailureRestoresPriorCompleteXrayConfiguration(t *t
 	restored, err := os.ReadFile(active)
 	if result.Outcome != systemchanges.RollbackSucceeded || host.executed != 1 || host.rollbacks != 1 || err != nil || !bytes.Equal(restored, prior) {
 		t.Fatalf("WebSocket rollback = %+v; executed=%d rollbacks=%d restored=%s err=%v", result, host.executed, host.rollbacks, restored, err)
+	}
+}
+
+func TestHysteria2PostMutationFailureRestoresPriorCompleteSingBoxConfiguration(t *testing.T) {
+	candidate := []byte(`{"inbounds":[{"listen":"0.0.0.0","listen_port":443,"masquerade":{"content":"Not Found\n","headers":{"content-type":["text/plain; charset=utf-8"]},"status_code":404,"type":"string"},"tag":"hysteria2-in","tls":{"certificate_path":"/var/lib/sbxr/certificates/domain/current/fullchain.pem","enabled":true,"key_path":"/var/lib/sbxr/certificates/domain/current/privkey.pem","server_name":"direct.example.com"},"type":"hysteria2","users":[{"password":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}],"log":{"level":"warn"},"outbounds":[{"tag":"direct","type":"direct"}],"route":{"final":"direct"}}`)
+	xray := []byte(`{"inbounds":[{"tag":"vless-reality-vision"}],"outbounds":[{"protocol":"freedom"}]}`)
+	_, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.SettingChangeMutation, systemchanges.Check{Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CONNECTION-PROFILES-HYSTERIA2-CONFIGURATION"}, systemChangeTestOptions{stepTimeout: time.Second, nativeXray: xray, nativeSingBox: candidate})
+	root := t.TempDir()
+	prepareLock(t, root)
+	prior := []byte(`{"inbounds":[{"tag":"prior-hysteria2"}],"outbounds":[{"tag":"direct","type":"direct"}]}`)
+	active := filepath.Join(root, "etc/sbxr/sing-box/config.json")
+	if err := os.MkdirAll(filepath.Dir(active), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(active, prior, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	host := &controlledUbuntuHost{root: root, failExecute: true, preparedConfiguration: "prepared/sing-box.json", activeConfiguration: "etc/sbxr/sing-box/config.json", rollbackWant: prior, preparedWant: candidate}
+	adapter := ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return observed, nil }, host)
+	result := systemchanges.New(adapter).Apply(changeSet)
+	restored, err := os.ReadFile(active)
+	if result.Outcome != systemchanges.RollbackSucceeded || host.executed != 1 || host.rollbacks != 1 || err != nil || !bytes.Equal(restored, prior) {
+		t.Fatalf("Hysteria2 rollback = %+v; executed=%d rollbacks=%d restored=%s err=%v", result, host.executed, host.rollbacks, restored, err)
 	}
 }
 
