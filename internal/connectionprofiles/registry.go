@@ -30,19 +30,17 @@ const (
 )
 
 type registryDefinition struct {
-	id       ProfileID
-	name     string
-	listener Listener
-	exposure Listener
+	id   ProfileID
+	name string
 }
 
 var registryDefinitions = [...]registryDefinition{
-	{VLESSRealityVisionProfileID, "VLESS REALITY Vision", Listener{"public", 443, "TCP"}, Listener{"public", 443, "TCP"}},
-	{VLESSXHTTPProfileID, "VLESS XHTTP", Listener{"loopback", 11080, "TCP"}, Listener{"127.0.0.1", 11080, "TCP"}},
-	{VLESSWebSocketProfileID, "VLESS WebSocket", Listener{"loopback", 11081, "TCP"}, Listener{"127.0.0.1", 11081, "TCP"}},
-	{Hysteria2ProfileID, "Hysteria2", Listener{"public", 443, "UDP"}, Listener{"public", 443, "UDP"}},
-	{TUICProfileID, "TUIC", Listener{"public", 8443, "UDP"}, Listener{"public", 8443, "UDP"}},
-	{AnyTLSProfileID, "AnyTLS", Listener{"public", 9443, "TCP"}, Listener{"public", 9443, "TCP"}},
+	{VLESSRealityVisionProfileID, "VLESS REALITY Vision"},
+	{VLESSXHTTPProfileID, "VLESS XHTTP"},
+	{VLESSWebSocketProfileID, "VLESS WebSocket"},
+	{Hysteria2ProfileID, "Hysteria2"},
+	{TUICProfileID, "TUIC"},
+	{AnyTLSProfileID, "AnyTLS"},
 }
 
 type RegistryCredentials struct {
