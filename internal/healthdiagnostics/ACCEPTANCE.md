@@ -1,6 +1,6 @@
 # Health and Diagnostics acceptance
 
-This file defines procedures for typed checks and retained diagnostic events. Record run results, commit, runner, time, software versions, stable codes, and redacted evidence in the issue tracker. Never record raw external output, Client Access Values, Infrastructure Secrets, generated configurations, transaction evidence, client IPs, destinations, or traffic facts.
+This file defines procedures for typed checks, retained diagnostic events, and support bundles. Record run results, commit, runner, time, software versions, stable codes, and redacted evidence in the issue tracker. Never record raw external output, Client Access Values, Infrastructure Secrets, generated configurations, transaction evidence, client IPs, destinations, or traffic facts.
 
 ## Module Verification
 
@@ -105,6 +105,55 @@ go test ./cmd/sbxr -run '^TestPrivateScheduledHealthCommandCallsScheduledCheck$'
 ```
 
 Require `ScheduledCheck` to return the same typed Module result and classification as `Check`, then retain the event produced by that call. Require `sbxr-health-check.timer` to contain exactly `OnCalendar=weekly`, `Persistent=true`, and `Unit=sbxr-health-check.service`. Require the service to invoke only `/usr/local/bin/sbxr private health-check`, and require that executable path to construct the production root-only history, invoke all currently available owning-Module inspections, represent unavailable owning Adapters as typed `Unknown`, pass all eleven named Modules to `ScheduledCheck`, and retain eleven safe events. No competing pre-command, post-command, classifier, repair, mutation, synthetic `Healthy`, or second timer trigger may exist.
+
+### HD-BUNDLE-01 — Exact allowlist and equivalent views
+
+Run:
+
+```sh
+go test ./internal/healthdiagnostics -run '^TestBuildSupportBundlePublishesOnlyAllowlistedTypedFacts$' -count=1
+```
+
+Require one completed archive containing exactly `manifest.json`, `report.txt`, and `facts.json`. Require the plain and structured views to carry the same typed finding, selected safe event, release, platform, unit, and external-copy warning facts. Inject a forbidden marker through discarded inspection error text and require it to remain absent.
+
+### HD-BUNDLE-02 — Fail-closed inputs, bounds, and publication
+
+Run:
+
+```sh
+go test ./internal/healthdiagnostics -run '^TestBuildSupportBundleFailsClosedOnHostileInputsBoundsAndPublication$' -count=1
+go test ./internal/healthdiagnostics -run '^TestBuildSupportBundleFailsClosedOnCompressionAndIndependentBounds$' -count=1
+go test ./internal/healthdiagnostics/adapter/filesystem -run '^TestBuildSupportBundleRejectsHostileManagedStorageAndLeavesNoPartialOutput$' -count=1
+go test ./internal/healthdiagnostics/adapter/filesystem -run '^TestBuildSupportBundleRejectsChangingFilesAndReadFailures$' -count=1
+go test ./internal/healthdiagnostics/adapter/filesystem -run '^TestBundleStorageRollsBackFinalDurabilityAndTransactionCleanupFailures$' -count=1
+go test ./internal/healthdiagnostics/adapter/filesystem -run '^TestBundleStorageRecoversCrashDuringLateRollback$' -count=1
+go test ./internal/healthdiagnostics/adapter/filesystem -run '^TestBundleStorageRejectsRollbackMaterialAndCommitPhaseFailures$' -count=1
+```
+
+Require forged Check results, unknown fields or files, malformed release or platform facts, traversal, links, non-regular files, broad modes, wrong ownership, changing or short reads, forbidden names or markers, item or total overflow, archive overflow, and publication failure to create no completed bundle and leave no staging artifact.
+
+### HD-BUNDLE-03 — Root-only publication and transaction-evidence separation
+
+Run:
+
+```sh
+go test ./internal/healthdiagnostics/adapter/filesystem -run '^TestBundleStoragePublishesRootOnlyArchiveAndPreservesTransactionEvidence$' -count=1
+```
+
+Require exact root-owned `0700` staging and bundle directories, a root-owned single-link `0600` completed archive, an empty staging directory, and unchanged active System Changes journal and Rollback Snapshot evidence outside the diagnostics boundary.
+
+### HD-BUNDLE-04 — Three-bundle retention and reviewed deletion
+
+Run:
+
+```sh
+go test ./internal/healthdiagnostics -run '^TestBuildSupportBundleRequiresReviewedDeletionBeforeFourthBundle$' -count=1
+go test ./internal/healthdiagnostics/adapter/filesystem -run '^TestBundleStorageKeepsThreeBundlesAndDeletesOnlyTheReviewedOne$' -count=1
+go test ./internal/healthdiagnostics/adapter/filesystem -run '^TestBundleStorageRecoversEveryReplacementCrashPhase$' -count=1
+go test ./internal/healthdiagnostics/adapter/filesystem -run '^TestBundleStorageSerializesConcurrentPublication$' -count=1
+```
+
+Require the fourth bundle to stop and return only the exact safe existing bundle names until the Owner selects one. Require successful replacement to delete only that reviewed bundle, retain exactly three completed bundles, leave an external copy unchanged, and return the fixed warning that copied or moved bundles are outside SBXR control.
 
 ## Seam Verification
 

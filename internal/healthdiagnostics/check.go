@@ -102,11 +102,13 @@ const (
 	BundleNotCreated BundleStatus = "Not created"
 )
 
-// BundleResult is the BuildSupportBundle-owned public result. Archive
-// construction and storage belong to the later bundle slice.
+// BundleResult is the BuildSupportBundle-owned public result.
 type BundleResult struct {
-	status BundleStatus
-	code   FindingCode
+	status                BundleStatus
+	code                  FindingCode
+	archive               string
+	warning               string
+	replacementCandidates []string
 }
 
 type CorrectionFlow struct {
@@ -194,22 +196,28 @@ type CheckResult struct {
 	Installation InstallationSummary
 	Modules      []ModuleResult
 	events       []DiagnosticEvent
+	bundleReady  bool
+	bundleStatus InstallationStatus
 }
 
-type Interface struct{ now func() time.Time }
+type Interface struct {
+	now      func() time.Time
+	compress func(map[string][]byte, time.Time) ([]byte, error)
+}
 
 func New(now func() time.Time) Interface {
 	if now == nil {
 		now = time.Now
 	}
-	return Interface{now: now}
+	return Interface{now: now, compress: compressBundle}
 }
 
 // Check calls only the named inspections supplied by owning Modules. It does
 // not cache observations, interpret protected data, or make mutation choices.
 func (module Interface) Check(ctx context.Context, installation InstallationSummary, inspections ...NamedInspection) CheckResult {
 	checkedAt := module.now().UTC()
-	result := CheckResult{Installation: normalizeInstallation(installation), Modules: make([]ModuleResult, 0, len(inspections))}
+	normalized := normalizeInstallation(installation)
+	result := CheckResult{Installation: normalized, Modules: make([]ModuleResult, 0, len(inspections)), bundleReady: true, bundleStatus: normalized.Status}
 	seen := make(map[Module]int, len(inspections))
 	for _, inspection := range inspections {
 		if !knownModule(inspection.Module) {
