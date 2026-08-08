@@ -1,5 +1,5 @@
 // Package subscriptionpublication owns deterministic client representation
-// rendering and later atomic publication.
+// rendering, planning, and atomic publication.
 //
 // Its Interface renders one complete typed Connection Profile source into
 // byte-stable raw, standard-base64, v2rayN, Shadowrocket candidate, Mihomo,
@@ -16,6 +16,26 @@
 // any required fact or Client Access Value is unavailable. Artifact bodies
 // require explicit field access; ordinary Go formatting and JSON rendering
 // remain redacted.
+//
+// Plan binds one complete validated eight-file candidate to the exact Desired
+// State revision, relevant managed-input checksums, compatibility definition,
+// selected address, typed Connection Profile source, and Release Identity. Its
+// one-use Apply contributes one reversible Subscription Publication step and
+// Required pre- and post-publication checks to System Changes. State carries
+// the protected bodies into that existing transaction; the filesystem Adapter
+// atomically exchanges one immutable generation into the current directory at
+// /var/lib/sbxr/subscriptions/current/. Desired State publishes exactly once
+// only after activation and pre-publication health, and Complete requires
+// post-publication serving agreement.
+//
+// Rendering, preparation, storage, activation, health, publication, or
+// agreement failure is secret-safe and fails closed. Before activation it
+// changes nothing; afterward System Changes restores the exact prior complete
+// set and Desired State, or reports Recovery Required when lineage or rollback
+// cannot be proven. Plans and prepared artifact authorities cannot be reused.
+// Subscription Serving receives only the immutable artifact files and its
+// separate State-prepared listener authorization facts; it receives no Desired
+// State, renderer, typed source, or arbitrary filesystem access.
 //
 // View returns only token-free publication status, the exact seven named
 // representation identities, actual counts and omissions, the selected

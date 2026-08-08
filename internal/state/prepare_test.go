@@ -86,6 +86,23 @@ func TestPrepareCommitValidatesCandidateAndSerializesLeastPrivilegeMaterial(t *t
 	}
 }
 
+func TestPrepareCommitAcceptsOnlyTheReviewedCompleteSubscriptionArtifactSet(t *testing.T) {
+	candidate := completeDesiredState()
+	stateModule, request, validator := managedPrepareRequest(t, candidate)
+	request.SubscriptionPublication = validator
+	prepared, err := stateModule.PrepareCommit(request)
+	if err != nil || len(prepared.subscriptionArtifactBundle) == 0 {
+		t.Fatalf("PrepareCommit subscription artifact bundle = %d bytes, %v", len(prepared.subscriptionArtifactBundle), err)
+	}
+	prepared.subscriptionArtifactBundle[0] = 'X'
+	secondModule, secondRequest, secondValidator := managedPrepareRequest(t, candidate)
+	secondRequest.SubscriptionPublication = secondValidator
+	secondValidator.planSHA256 = testSHA('9')
+	if _, err := secondModule.PrepareCommit(secondRequest); err == nil {
+		t.Fatal("PrepareCommit accepted a Subscription Publication Plan unrelated to the reviewed Plan")
+	}
+}
+
 func TestPrepareManagementTokenChangeAcceptsOnlyTheReviewedCloudflarePlan(t *testing.T) {
 	for _, action := range []cloudflaretunnel.ManagementTokenAction{cloudflaretunnel.ManagementTokenReplace, cloudflaretunnel.ManagementTokenRemove} {
 		t.Run(string(action), func(t *testing.T) {
@@ -672,6 +689,14 @@ func (v *validatingSeams) ValidateSubscription(got SubscriptionSettings, secrets
 		return errors.New("protected subscription value unavailable")
 	}
 	return v.validate("subscriptionpublication", got, v.want.Subscription)
+}
+
+func (v *validatingSeams) PrepareSubscriptionPublication() ([]byte, error) {
+	return v.subscriptionPublicationBundle()
+}
+
+func (v *validatingSeams) subscriptionPublicationBundle() ([]byte, error) {
+	return []byte("opaque Subscription Publication artifact bundle"), nil
 }
 
 func (v *validatingSeams) ValidateCloudflare(got CloudflareSettings, secrets InfrastructureSecretReader) error {

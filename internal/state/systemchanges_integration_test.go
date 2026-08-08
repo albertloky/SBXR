@@ -585,6 +585,123 @@ func preparedSystemChange(t *testing.T) (Interface, *systemchanges.ChangeSet, *s
 	return preparedSystemChangeWithCheck(t, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-PREFLIGHT"})
 }
 
+func TestSubscriptionArtifactSetUsesOneSystemChangesTransaction(t *testing.T) {
+	check := systemchanges.Check{Owner: systemchanges.SubscriptionModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "SUBSCRIPTION-PUBLICATION-SERVING-AGREEMENT"}
+	stateModule, changeSet, reused, observed := preparedSystemChangeWithOptions(t, systemchanges.SettingChangeMutation, check, systemChangeTestOptions{subscription: true, stepTimeout: time.Second})
+	root := t.TempDir()
+	prepareLock(t, root)
+	host := &controlledUbuntuHost{root: root}
+	proofs := 0
+	executor := &transactionSubscriptionExecutor{prove: func() error { proofs++; return nil }}
+	adapter := ubuntu.NewAtWithSubscriptionPublication(root, func() (systemchanges.Observation, error) { return observed, nil }, host, executor, stateModule)
+	result := systemchanges.New(adapter).Apply(changeSet)
+	if result.Outcome != systemchanges.Completed || !result.PlanConsumed || result.NothingChanged || proofs != 2 || host.agreements != 1 {
+		t.Fatalf("subscription Apply = %+v proofs=%d agreements=%d", result, proofs, host.agreements)
+	}
+	loaded, err := stateModule.Load(LoadRequest{Baseline: ManagedEvidence, SupportedRelease: testRelease, Lineage: &LineageProof{Revision: 8, LastCompletedChangeSet: "change-0008", ReleaseIdentity: testRelease}})
+	if err != nil || loaded.Snapshot == nil || loaded.Snapshot.Revision != 8 {
+		t.Fatalf("published State = (%+v, %v)", loaded, err)
+	}
+	if !executor.current {
+		t.Fatal("Subscription Publication candidate was not active at Complete")
+	}
+	if second := systemchanges.New(adapter).Apply(reused); second.Outcome != systemchanges.Refused || !second.NothingChanged {
+		t.Fatalf("reused subscription Plan = %+v", second)
+	}
+}
+
+func TestSubscriptionServingFailureRestoresStateAndPriorArtifactSet(t *testing.T) {
+	check := systemchanges.Check{Owner: systemchanges.SubscriptionModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "SUBSCRIPTION-PUBLICATION-SERVING-AGREEMENT"}
+	stateModule, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.SettingChangeMutation, check, systemChangeTestOptions{subscription: true, stepTimeout: time.Second})
+	root := t.TempDir()
+	prepareLock(t, root)
+	host := &controlledUbuntuHost{root: root}
+	executor := &transactionSubscriptionExecutor{failCheck: 2}
+	adapter := ubuntu.NewAtWithSubscriptionPublication(root, func() (systemchanges.Observation, error) { return observed, nil }, host, executor, stateModule)
+	result := systemchanges.New(adapter).Apply(changeSet)
+	encoded, _ := json.Marshal(result)
+	if result.Outcome != systemchanges.RollbackSucceeded || result.NothingChanged || bytes.Contains(encoded, []byte("SECRET-MARKER")) {
+		t.Fatalf("failed subscription Apply = %+v", result)
+	}
+	if executor.current {
+		t.Fatal("rollback left an active artifact set")
+	}
+	loaded, err := stateModule.Load(intentManagedRequest())
+	if err != nil || loaded.Snapshot == nil || loaded.Snapshot.Revision != 7 {
+		t.Fatalf("rolled-back State = (%+v, %v)", loaded, err)
+	}
+}
+
+func TestSubscriptionRollbackFailureEntersRecoveryRequired(t *testing.T) {
+	check := systemchanges.Check{Owner: systemchanges.SubscriptionModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "SUBSCRIPTION-PUBLICATION-SERVING-AGREEMENT"}
+	stateModule, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.SettingChangeMutation, check, systemChangeTestOptions{subscription: true, stepTimeout: time.Second})
+	root := t.TempDir()
+	prepareLock(t, root)
+	host := &controlledUbuntuHost{root: root}
+	executor := &transactionSubscriptionExecutor{failCheck: 2, reverseErr: true}
+	adapter := ubuntu.NewAtWithSubscriptionPublication(root, func() (systemchanges.Observation, error) { return observed, nil }, host, executor, stateModule)
+	result := systemchanges.New(adapter).Apply(changeSet)
+	if result.Outcome != systemchanges.RecoveryRequiredOutcome || result.Finding == nil || result.Finding.Owner != systemchanges.SubscriptionModule {
+		t.Fatalf("unprovable Subscription Publication rollback = %+v", result)
+	}
+}
+
+type transactionSubscriptionExecutor struct {
+	current    bool
+	prove      func() error
+	checks     int
+	failCheck  int
+	reverseErr bool
+}
+
+func (executor *transactionSubscriptionExecutor) CaptureRollback(_ string, write func(io.Reader) error) error {
+	return write(strings.NewReader(`{"target":""}`))
+}
+
+func (executor *transactionSubscriptionExecutor) Activate(root string, prepared string, _ systemchanges.StateTransactionBinding, expectedSHA256 string, _ time.Duration) (systemchanges.StepEvidence, error) {
+	bundle, err := os.ReadFile(filepath.Join(prepared, "subscriptions.bundle"))
+	digest := sha256.Sum256(bundle)
+	if err != nil || fmt.Sprintf("%x", digest) != expectedSHA256 {
+		return systemchanges.StepEvidence{}, errors.New("prepared Subscription Publication bundle mismatch")
+	}
+	if err := os.MkdirAll(filepath.Join(root, "run/sbxr"), 0o700); err != nil || os.WriteFile(filepath.Join(root, "run/sbxr/active-subscription.json"), []byte(`{"active":true}`), 0o600) != nil {
+		return systemchanges.StepEvidence{}, errors.New("active Subscription Publication fixture unavailable")
+	}
+	executor.current = true
+	return systemchanges.StepEvidence{Code: "subscription-artifacts-activated", SHA256: expectedSHA256}, nil
+}
+
+func (executor *transactionSubscriptionExecutor) Reverse(root string, _ io.Reader, _ time.Duration) (systemchanges.StepEvidence, error) {
+	if executor.reverseErr {
+		return systemchanges.StepEvidence{}, errors.New("controlled Subscription Publication reverse failure")
+	}
+	_ = os.Remove(filepath.Join(root, "run/sbxr/active-subscription.json"))
+	executor.current = false
+	return systemchanges.StepEvidence{Code: "subscription-artifacts-restored", SHA256: testSHA('0')}, nil
+}
+
+func (executor *transactionSubscriptionExecutor) Inspect(_ string, _ io.Reader, _ time.Duration) (systemchanges.StepEffect, error) {
+	if executor.current {
+		return systemchanges.StepEffectPresent, nil
+	}
+	return systemchanges.StepEffectAbsent, nil
+}
+
+func (executor *transactionSubscriptionExecutor) Check(_ string, _ string, _ systemchanges.StateTransactionBinding, _ string, _ time.Duration) (systemchanges.HealthStatus, error) {
+	executor.checks++
+	if executor.checks == executor.failCheck {
+		return systemchanges.Failed, errors.New("Subscription Serving health proof failed")
+	}
+	if executor.prove != nil {
+		if err := executor.prove(); err != nil {
+			return systemchanges.Failed, errors.New("Subscription Serving health proof failed")
+		}
+	}
+	return systemchanges.Healthy, nil
+}
+
+func (*transactionSubscriptionExecutor) Cleanup(string) error { return nil }
+
 func TestDeferredCloudflareFinalizationPublishesProviderValuesInRevisionOne(t *testing.T) {
 	candidate := completeDesiredState()
 	candidate.Cloudflare.AccountID = strings.Repeat("1", 32)
@@ -1045,6 +1162,7 @@ type systemChangeTestOptions struct {
 	nativeXray         []byte
 	nativeSingBox      []byte
 	candidateEdit      func(*DesiredState)
+	subscription       bool
 }
 
 func preparedSystemChangeWithOptions(t *testing.T, mutation systemchanges.MutationClass, check systemchanges.Check, options systemChangeTestOptions) (Interface, *systemchanges.ChangeSet, *systemchanges.ChangeSet, systemchanges.Observation) {
@@ -1088,6 +1206,21 @@ func preparedSystemChangeWithOptions(t *testing.T, mutation systemchanges.Mutati
 		}
 		request.SemanticValidators.ConnectionProfiles = &nativeProfilesPreparer{validatingSeams: validator, xray: options.nativeXray, singBox: singBox}
 	}
+	if options.subscription {
+		validator := request.SemanticValidators.Subscription.(*validatingSeams)
+		bundle, bundleErr := validator.subscriptionPublicationBundle()
+		if bundleErr != nil {
+			t.Fatal(bundleErr)
+		}
+		digest := sha256.Sum256(bundle)
+		validator.planSHA256 = fmt.Sprintf("%x", digest)
+		reviewed, reviewedErr := NewReviewedInputs(PlanIdentity(validator.planIdentity), validator.planSHA256, request.ReviewedInputs.managed)
+		if reviewedErr != nil {
+			t.Fatal(reviewedErr)
+		}
+		request.ReviewedInputs = reviewed
+		request.SubscriptionPublication = validator
+	}
 	prepared, err := module.PrepareCommit(request)
 	if err != nil {
 		t.Fatal(err)
@@ -1108,7 +1241,11 @@ func preparedSystemChangeWithOptions(t *testing.T, mutation systemchanges.Mutati
 	} else if mutation == systemchanges.CompleteRemovalMutation && options.startingStatus == systemchanges.RecoveryRequired {
 		starting.Status, observed.Status, observed.RecoveryCause = systemchanges.RecoveryRequired, systemchanges.RecoveryRequired, systemchanges.StateLineageUnprovable
 	}
-	step, err := systemchanges.NewStep(systemchanges.ConnectionProfilesModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
+	owner := systemchanges.ConnectionProfilesModule
+	if options.subscription {
+		owner = systemchanges.SubscriptionModule
+	}
+	step, err := systemchanges.NewStep(owner, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1154,7 +1291,7 @@ func preparedSystemChangeWithOptions(t *testing.T, mutation systemchanges.Mutati
 		}
 	}
 	spec := systemchanges.ChangeSetSpec{
-		Identity: identity, Mutation: mutation, OutcomeOwner: systemchanges.ConnectionProfilesModule,
+		Identity: identity, Mutation: mutation, OutcomeOwner: owner,
 		StartingState: starting, TargetStateSHA256: target,
 		Plan:          systemchanges.PlanBinding{Identity: planIdentity, SHA256: planSHA256, VolatileSHA256: testSHA('2')},
 		PreparedState: prepared, TypedRemovalConfirmation: typedRemoval, PermanentRemovalSelection: permanentRemoval, Steps: steps,
@@ -2254,7 +2391,7 @@ func (host *controlledUbuntuHost) VerifyAgreement(agreement systemchanges.Agreem
 	if agreement.Revision != 8 || agreement.ChangeSet != "change-0008" || agreement.CandidateSHA256 == "" || agreement.PublishedStateSHA256 == "" || agreement.PreparedManifestSHA256 == "" {
 		return errors.New("incomplete active agreement")
 	}
-	if active, err := os.ReadFile(filepath.Join(host.root, "run/sbxr/active-subscription.json")); err != nil || !json.Valid(active) {
+	if active, err := os.ReadFile(host.activeConfigurationPath()); err != nil || !json.Valid(active) {
 		return errors.New("active configuration agreement failed")
 	}
 	return nil

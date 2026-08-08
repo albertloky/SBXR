@@ -1,0 +1,499 @@
+// Package filesystem atomically activates Subscription Publication artifact sets.
+package filesystem
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"io/fs"
+	"os"
+	"os/user"
+	"path"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
+	subscriptionpublication "github.com/albertloky/SBXR/internal/subscriptionpublication"
+	"github.com/albertloky/SBXR/internal/systemchanges"
+)
+
+const subscriptionDirectory = "var/lib/sbxr/subscriptions"
+
+type Executor struct {
+	uid, gid int
+	prove    func(context.Context, string) error
+}
+
+func New() (Executor, error) {
+	group, err := user.LookupGroup("sbxr-subscription")
+	if err != nil {
+		return Executor{}, errors.New("sbxr-subscription group unavailable")
+	}
+	gid, err := strconv.Atoi(group.Gid)
+	if err != nil {
+		return Executor{}, errors.New("sbxr-subscription group is invalid")
+	}
+	return Executor{uid: 0, gid: gid}, nil
+}
+
+// NewAt supplies controlled ownership and health proof for Seam Verification.
+func NewAt(uid, gid int, prove func(context.Context, string) error) Executor {
+	return Executor{uid: uid, gid: gid, prove: prove}
+}
+
+type snapshot struct {
+	Target string `json:"target,omitempty"`
+}
+
+type store struct {
+	root     *os.Root
+	uid, gid int
+}
+
+func (executor Executor) CaptureRollback(root string, write func(io.Reader) error) error {
+	if write == nil {
+		return errors.New("subscription rollback capture unavailable")
+	}
+	storage, err := openStore(root, false, executor.uid, executor.gid)
+	if errors.Is(err, os.ErrNotExist) {
+		encoded, _ := json.Marshal(snapshot{})
+		return write(bytes.NewReader(encoded))
+	}
+	if err != nil {
+		return errors.New("active subscription pointer is unprovable")
+	}
+	defer storage.root.Close()
+	target, err := storage.current()
+	if err != nil {
+		return err
+	}
+	encoded, _ := json.Marshal(snapshot{Target: target})
+	return write(bytes.NewReader(encoded))
+}
+
+func (executor Executor) Activate(root, prepared string, binding systemchanges.StateTransactionBinding, expectedSHA256 string, timeout time.Duration) (systemchanges.StepEvidence, error) {
+	if timeout <= 0 {
+		return systemchanges.StepEvidence{}, errors.New("subscription activation timeout is invalid")
+	}
+	bundle, err := os.ReadFile(path.Join(prepared, "subscriptions.bundle"))
+	if err != nil {
+		return systemchanges.StepEvidence{}, errors.New("complete prepared subscription artifact set unavailable")
+	}
+	set, err := subscriptionpublication.DecodePreparedArtifactSet(bytes.NewReader(bundle))
+	if err != nil || !set.AgreesWith(binding) || subscriptionpublication.BundleSHA256(bundle) != expectedSHA256 {
+		return systemchanges.StepEvidence{}, errors.New("prepared subscription artifact set does not agree with State")
+	}
+	storage, err := openStore(root, true, executor.uid, executor.gid)
+	if err != nil {
+		return systemchanges.StepEvidence{}, errors.New("subscription serving directory unavailable")
+	}
+	defer storage.root.Close()
+	target := "sets/" + set.GenerationID()
+	prior, err := storage.current()
+	if err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	if err := storage.writeSet(target, set); err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	if prior == "" {
+		if err := storage.root.Chmod(target, 0o750); err != nil {
+			return systemchanges.StepEvidence{}, errors.New("subscription candidate permission failed")
+		}
+		if err := storage.root.Rename(target, "current"); err != nil {
+			_ = storage.root.Chmod(target, 0o700)
+			return systemchanges.StepEvidence{}, errors.New("subscription activation failed")
+		}
+	} else {
+		if _, err := storage.root.Lstat(prior); !errors.Is(err, os.ErrNotExist) || storage.root.Rename(target, prior) != nil {
+			return systemchanges.StepEvidence{}, errors.New("prior subscription staging path is unavailable")
+		}
+		if err := storage.root.Chmod(prior, 0o750); err != nil || exchangeDirectories(storage.root, "current", prior) != nil {
+			_ = storage.root.Chmod(prior, 0o700)
+			return systemchanges.StepEvidence{}, errors.New("subscription activation failed")
+		}
+		if err := storage.root.Chmod(prior, 0o700); err != nil {
+			return systemchanges.StepEvidence{}, errors.New("prior subscription generation could not be isolated")
+		}
+	}
+	syncNames := []string{"current", "sets", "."}
+	if prior != "" {
+		syncNames = append([]string{prior}, syncNames...)
+	}
+	if err := syncNamespace(storage.root, syncNames...); err != nil {
+		return systemchanges.StepEvidence{}, errors.New("subscription activation durability failed")
+	}
+	digest := sha256.Sum256([]byte(target))
+	return systemchanges.StepEvidence{Code: "subscription-artifacts-activated", SHA256: hex.EncodeToString(digest[:])}, nil
+}
+
+func (executor Executor) Reverse(root string, source io.Reader, _ time.Duration) (systemchanges.StepEvidence, error) {
+	prior, err := decodeSnapshot(source)
+	if err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	storage, err := openStore(root, false, executor.uid, executor.gid)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) && prior.Target == "" {
+			return systemchanges.StepEvidence{Code: "subscription-artifacts-restored", SHA256: emptyTargetSHA()}, nil
+		}
+		return systemchanges.StepEvidence{}, errors.New("subscription serving directory unavailable")
+	}
+	defer storage.root.Close()
+	current, err := storage.current()
+	if err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	if current == prior.Target {
+		if err := storage.removeOtherSets(""); err != nil {
+			return systemchanges.StepEvidence{}, errors.New("subscription candidate cleanup failed")
+		}
+		if current != "" {
+			if err := syncNamespace(storage.root, "current", "sets", "."); err != nil {
+				return systemchanges.StepEvidence{}, errors.New("subscription rollback durability failed")
+			}
+		} else if err := syncNamespace(storage.root, "sets", "."); err != nil {
+			return systemchanges.StepEvidence{}, errors.New("subscription rollback durability failed")
+		}
+		digest := sha256.Sum256([]byte(prior.Target))
+		return systemchanges.StepEvidence{Code: "subscription-artifacts-restored", SHA256: hex.EncodeToString(digest[:])}, nil
+	}
+	if prior.Target != "" {
+		if _, err := storage.readSet(prior.Target, 0o700); err != nil {
+			if _, transientErr := storage.readSet(prior.Target, 0o750); transientErr != nil {
+				return systemchanges.StepEvidence{}, errors.New("prior subscription artifact set is unprovable")
+			}
+		}
+	}
+	if prior.Target != "" {
+		if err := storage.root.Chmod(prior.Target, 0o750); err != nil {
+			return systemchanges.StepEvidence{}, errors.New("prior subscription generation could not be restored")
+		}
+		if err := exchangeDirectories(storage.root, "current", prior.Target); err != nil {
+			_ = storage.root.Chmod(prior.Target, 0o700)
+			return systemchanges.StepEvidence{}, errors.New("prior subscription restore failed")
+		}
+		if err := storage.root.Chmod(prior.Target, 0o700); err != nil {
+			return systemchanges.StepEvidence{}, errors.New("subscription candidate could not be isolated")
+		}
+	} else if current != "" {
+		if err := storage.root.Rename("current", current); err != nil || storage.root.Chmod(current, 0o700) != nil {
+			return systemchanges.StepEvidence{}, errors.New("fresh subscription activation could not be reversed")
+		}
+	}
+	if err := storage.removeOtherSets(""); err != nil {
+		return systemchanges.StepEvidence{}, errors.New("subscription candidate cleanup failed")
+	}
+	if err := syncNamespace(storage.root, ".", "sets"); err != nil {
+		return systemchanges.StepEvidence{}, errors.New("subscription rollback durability failed")
+	}
+	if prior.Target != "" {
+		if err := syncRootDirectory(storage.root, "current"); err != nil {
+			return systemchanges.StepEvidence{}, errors.New("subscription rollback durability failed")
+		}
+	}
+	digest := sha256.Sum256([]byte(prior.Target))
+	return systemchanges.StepEvidence{Code: "subscription-artifacts-restored", SHA256: hex.EncodeToString(digest[:])}, nil
+}
+
+func (executor Executor) Inspect(root string, source io.Reader, _ time.Duration) (systemchanges.StepEffect, error) {
+	prior, err := decodeSnapshot(source)
+	if err != nil {
+		return "", err
+	}
+	storage, err := openStore(root, false, executor.uid, executor.gid)
+	if errors.Is(err, os.ErrNotExist) && prior.Target == "" {
+		return systemchanges.StepEffectAbsent, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	defer storage.root.Close()
+	current, err := storage.current()
+	if err != nil {
+		return "", err
+	}
+	other, err := storage.hasOtherSet(prior.Target)
+	if err != nil {
+		return "", err
+	}
+	if current == prior.Target && !other {
+		return systemchanges.StepEffectAbsent, nil
+	}
+	return systemchanges.StepEffectPresent, nil
+}
+
+func (executor Executor) Check(root, code string, binding systemchanges.StateTransactionBinding, expectedSHA256 string, timeout time.Duration) (systemchanges.HealthStatus, error) {
+	storage, err := openStore(root, false, executor.uid, executor.gid)
+	if err != nil {
+		return systemchanges.Failed, errors.New("active subscription artifact set is unprovable")
+	}
+	defer storage.root.Close()
+	current, err := storage.current()
+	if err != nil || current == "" {
+		return systemchanges.Failed, errors.New("active subscription artifact set is unprovable")
+	}
+	set, err := storage.readSet("current", 0o750)
+	bundle, bundleErr := set.Bundle()
+	if err != nil || bundleErr != nil || !set.AgreesWith(binding) || subscriptionpublication.BundleSHA256(bundle) != expectedSHA256 {
+		return systemchanges.Failed, errors.New("active subscription artifact set does not agree with State")
+	}
+	if code == "SUBSCRIPTION-PUBLICATION-SERVING-AGREEMENT" {
+		if executor.prove == nil {
+			return systemchanges.Unknown, errors.New("Subscription Serving health proof unavailable")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		if err := executor.prove(ctx, set.SelectedAddress()); err != nil {
+			return systemchanges.Failed, errors.New("Subscription Serving health proof failed")
+		}
+	}
+	return systemchanges.Healthy, nil
+}
+
+func (executor Executor) Cleanup(root string) error {
+	storage, err := openStore(root, false, executor.uid, executor.gid)
+	if err != nil {
+		return err
+	}
+	defer storage.root.Close()
+	current, err := storage.current()
+	if err != nil || current == "" {
+		return errors.New("active subscription pointer is unprovable")
+	}
+	return storage.removeOtherSets(current)
+}
+
+func openStore(host string, create bool, uid, gid int) (*store, error) {
+	root, err := os.OpenRoot(host)
+	if err != nil {
+		return nil, err
+	}
+	fail := func(err error) (*store, error) { root.Close(); return nil, err }
+	for _, directory := range []string{"var", "var/lib", "var/lib/sbxr"} {
+		info, statErr := root.Lstat(directory)
+		if errors.Is(statErr, os.ErrNotExist) && !create {
+			return fail(os.ErrNotExist)
+		}
+		if errors.Is(statErr, os.ErrNotExist) && create {
+			if err := root.Mkdir(directory, 0o755); err != nil {
+				return fail(err)
+			}
+			info, statErr = root.Lstat(directory)
+		}
+		if statErr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return fail(errors.New("unsafe Subscription Publication parent directory"))
+		}
+	}
+	for _, wanted := range []struct {
+		name string
+		mode fs.FileMode
+	}{{subscriptionDirectory, 0o750}, {subscriptionDirectory + "/sets", 0o700}} {
+		info, statErr := root.Lstat(wanted.name)
+		if errors.Is(statErr, os.ErrNotExist) && create {
+			if err := root.Mkdir(wanted.name, wanted.mode); err != nil || root.Chown(wanted.name, uid, gid) != nil {
+				return fail(errors.New("subscription directory setup failed"))
+			}
+			info, statErr = root.Lstat(wanted.name)
+		}
+		stat, ok := fileStat(info)
+		if statErr != nil || !ok || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != wanted.mode || stat.Uid != uint32(uid) || stat.Gid != uint32(gid) {
+			return fail(os.ErrNotExist)
+		}
+	}
+	subscriptions, err := root.OpenRoot(subscriptionDirectory)
+	root.Close()
+	if err != nil {
+		return nil, err
+	}
+	return &store{root: subscriptions, uid: uid, gid: gid}, nil
+}
+
+func (storage *store) current() (string, error) {
+	_, err := storage.root.Lstat("current")
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", errors.New("active subscription pointer is unprovable")
+	}
+	set, err := storage.readSet("current", 0o750)
+	if err != nil {
+		return "", errors.New("active subscription artifact set is unprovable")
+	}
+	return "sets/" + set.GenerationID(), nil
+}
+
+func (storage *store) readSet(target string, mode fs.FileMode) (subscriptionpublication.PreparedArtifactSet, error) {
+	if target != "current" && !safeTarget(target) {
+		return subscriptionpublication.PreparedArtifactSet{}, errors.New("unsafe subscription generation")
+	}
+	info, err := storage.root.Lstat(target)
+	stat, ok := fileStat(info)
+	if err != nil || !ok || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != mode || stat.Uid != uint32(storage.uid) || stat.Gid != uint32(storage.gid) {
+		return subscriptionpublication.PreparedArtifactSet{}, errors.New("subscription generation directory is unsafe")
+	}
+	entries, err := fs.ReadDir(storage.root.FS(), target)
+	if err != nil || len(entries) != 8 {
+		return subscriptionpublication.PreparedArtifactSet{}, errors.New("active subscription artifact set is incomplete")
+	}
+	files := make([]subscriptionpublication.ArtifactFile, 0, len(entries))
+	for _, artifactName := range subscriptionpublication.Names() {
+		name := path.Join(target, artifactName)
+		info, err := storage.root.Lstat(name)
+		stat, ok := fileStat(info)
+		if err != nil || !ok || !info.Mode().IsRegular() || info.Mode().Type() != 0 || info.Mode().Perm() != 0o640 || info.Size() > 4<<20 || stat.Uid != uint32(storage.uid) || stat.Gid != uint32(storage.gid) {
+			return subscriptionpublication.PreparedArtifactSet{}, errors.New("subscription artifact is unsafe")
+		}
+		body, err := storage.root.ReadFile(name)
+		if err != nil {
+			return subscriptionpublication.PreparedArtifactSet{}, errors.New("subscription artifact is unavailable")
+		}
+		files = append(files, subscriptionpublication.ArtifactFile{Name: artifactName, Body: body})
+	}
+	return subscriptionpublication.DecodePreparedArtifactFiles(files)
+}
+
+func (storage *store) writeSet(target string, set subscriptionpublication.PreparedArtifactSet) error {
+	if info, err := storage.root.Lstat(target); err == nil {
+		if !info.IsDir() {
+			return errors.New("subscription generation identity conflicts")
+		}
+		existing, readErr := storage.readSet(target, info.Mode().Perm())
+		existingBundle, existingErr := existing.Bundle()
+		candidateBundle, candidateErr := set.Bundle()
+		if readErr != nil || existingErr != nil || candidateErr != nil || !bytes.Equal(existingBundle, candidateBundle) {
+			return errors.New("subscription generation identity conflicts")
+		}
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	temporary := target + ".preparing"
+	if _, err := storage.root.Lstat(temporary); !errors.Is(err, os.ErrNotExist) {
+		return errors.New("unresolved subscription generation preparation")
+	}
+	if err := storage.root.Mkdir(temporary, 0o700); err != nil || storage.root.Chown(temporary, storage.uid, storage.gid) != nil {
+		return errors.New("subscription generation preparation failed")
+	}
+	defer storage.root.RemoveAll(temporary)
+	for _, artifact := range set.Files() {
+		name := path.Join(temporary, artifact.Name)
+		file, err := storage.root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o640)
+		if err != nil {
+			return errors.New("subscription artifact write failed")
+		}
+		_, writeErr := file.Write(artifact.Body)
+		syncErr := file.Sync()
+		closeErr := file.Close()
+		if writeErr != nil || syncErr != nil || closeErr != nil || storage.root.Chown(name, storage.uid, storage.gid) != nil {
+			return errors.New("subscription artifact write failed")
+		}
+	}
+	if err := syncRootDirectory(storage.root, temporary); err != nil || storage.root.Rename(temporary, target) != nil {
+		return errors.New("subscription generation activation failed")
+	}
+	return syncRootDirectory(storage.root, "sets")
+}
+
+func (storage *store) hasOtherSet(keep string) (bool, error) {
+	entries, err := fs.ReadDir(storage.root.FS(), "sets")
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range entries {
+		target := "sets/" + entry.Name()
+		if target == keep {
+			set, readErr := storage.readSet(target, 0o700)
+			if readErr != nil || "sets/"+set.GenerationID() != keep {
+				return true, nil
+			}
+			continue
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+func (storage *store) removeOtherSets(keep string) error {
+	entries, err := fs.ReadDir(storage.root.FS(), "sets")
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		target := "sets/" + entry.Name()
+		baseTarget := strings.TrimSuffix(target, ".preparing")
+		if target == keep {
+			continue
+		}
+		if !safeTarget(baseTarget) || entry.Type()&os.ModeSymlink != 0 {
+			return errors.New("unsafe subscription generation")
+		}
+		if err := storage.root.RemoveAll(target); err != nil {
+			return err
+		}
+	}
+	return syncRootDirectory(storage.root, "sets")
+}
+
+func safeTarget(target string) bool {
+	suffix, ok := strings.CutPrefix(target, "sets/revision-")
+	if !ok || len(suffix) != 33 || suffix[20] != '-' {
+		return false
+	}
+	for _, character := range suffix {
+		if character == '-' || character >= '0' && character <= '9' || character >= 'a' && character <= 'f' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func decodeSnapshot(source io.Reader) (snapshot, error) {
+	var prior snapshot
+	if source == nil || json.NewDecoder(io.LimitReader(source, 4096)).Decode(&prior) != nil || prior.Target != "" && !safeTarget(prior.Target) {
+		return snapshot{}, errors.New("prior subscription pointer is invalid")
+	}
+	return prior, nil
+}
+
+func fileStat(info os.FileInfo) (*syscall.Stat_t, bool) {
+	if info == nil {
+		return nil, false
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	return stat, ok
+}
+
+func syncRootDirectory(root *os.Root, name string) error {
+	directory, err := root.Open(name)
+	if err != nil {
+		return err
+	}
+	err = directory.Sync()
+	closeErr := directory.Close()
+	if err != nil {
+		return err
+	}
+	return closeErr
+}
+
+func syncNamespace(root *os.Root, names ...string) error {
+	for _, name := range names {
+		if err := syncRootDirectory(root, name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func emptyTargetSHA() string {
+	digest := sha256.Sum256(nil)
+	return hex.EncodeToString(digest[:])
+}

@@ -88,6 +88,15 @@ type ConnectionProfilesExecutor interface {
 	Check(root, destination, hostname, code string, timeout time.Duration) (bool, error)
 }
 
+type SubscriptionPublicationExecutor interface {
+	CaptureRollback(string, func(io.Reader) error) error
+	Activate(string, string, systemchanges.StateTransactionBinding, string, time.Duration) (systemchanges.StepEvidence, error)
+	Reverse(string, io.Reader, time.Duration) (systemchanges.StepEvidence, error)
+	Inspect(string, io.Reader, time.Duration) (systemchanges.StepEffect, error)
+	Check(string, string, systemchanges.StateTransactionBinding, string, time.Duration) (systemchanges.HealthStatus, error)
+	Cleanup(string) error
+}
+
 type snapshotManifest struct {
 	SchemaVersion int                          `json:"schema_version"`
 	Release       systemchanges.ReleaseBinding `json:"release_identity"`
@@ -164,6 +173,14 @@ func (a Adapter) Prepare(lease systemchanges.ExecutionLease, preparation systemc
 	if err := preparation.WriteStateArtifacts(write); err != nil {
 		return err
 	}
+	for _, step := range preparation.Steps {
+		if !subscriptionActivation(step) {
+			continue
+		}
+		if checksums["prepared/subscriptions.bundle"] == "" {
+			return errors.New("complete Subscription Publication artifact set unavailable")
+		}
+	}
 	for index, step := range preparation.Steps {
 		called := false
 		captureRollback := func(source io.Reader) error {
@@ -181,6 +198,11 @@ func (a Adapter) Prepare(lease systemchanges.ExecutionLease, preparation systemc
 			captureErr = a.firewall.CaptureRollback(step, captureRollback)
 		} else if preparation.Mutation == systemchanges.RotationMutation && runTokenActivation(step) {
 			captureErr = captureRollback(strings.NewReader(`{"rotation_forward_only":true}`))
+		} else if subscriptionActivation(step) {
+			if a.subscription == nil {
+				return errors.New("Subscription Publication executor unavailable")
+			}
+			captureErr = a.subscription.CaptureRollback(a.root, captureRollback)
 		} else if cloudflaredActivation(step) {
 			if a.cloudflare == nil {
 				return errors.New("Cloudflare service executor unavailable")
@@ -532,6 +554,16 @@ func (a Adapter) Execute(lease systemchanges.ExecutionLease, changeSet string, n
 		}
 		return a.certificate.Execute(a.root, step, timeout, cancellation)
 	}
+	if subscriptionActivation(step) {
+		if a.subscription == nil || !safeName(changeSet) || number < 1 {
+			return systemchanges.StepEvidence{}, errors.New("Subscription Publication executor unavailable")
+		}
+		binding, planSHA256, err := a.recoveryPublicationBinding(lease, changeSet)
+		if err != nil {
+			return systemchanges.StepEvidence{}, err
+		}
+		return a.subscription.Activate(a.root, path.Join(a.root, transactionDirectory, changeSet, "prepared"), binding, planSHA256, timeout)
+	}
 	if cloudflaredActivation(step) {
 		if a.cloudflare == nil || !safeName(changeSet) || number < 1 {
 			return systemchanges.StepEvidence{}, errors.New("Cloudflare service executor unavailable")
@@ -598,6 +630,12 @@ func (a Adapter) Reverse(lease systemchanges.ExecutionLease, changeSet string, n
 			return reverseDomainCertificateActivation(a.root, a.certificate, a.profiles, step, bytes.NewReader(content), timeout)
 		}
 		return a.certificate.Reverse(a.root, step, bytes.NewReader(content), timeout)
+	}
+	if subscriptionActivation(step) {
+		if a.subscription == nil {
+			return systemchanges.StepEvidence{}, errors.New("Subscription Publication rollback executor unavailable")
+		}
+		return a.subscription.Reverse(a.root, bytes.NewReader(content), timeout)
 	}
 	if cloudflaredActivation(step) {
 		if a.cloudflare == nil {
@@ -825,11 +863,21 @@ func (a Adapter) InspectStep(lease systemchanges.ExecutionLease, recovery system
 		}
 		return a.certificate.Inspect(a.root, step, bytes.NewReader(content), timeout)
 	}
+	if subscriptionActivation(step) {
+		if a.subscription == nil {
+			return "", errors.New("Subscription Publication recovery executor unavailable")
+		}
+		return a.subscription.Inspect(a.root, bytes.NewReader(content), timeout)
+	}
 	return a.host.InspectStep(step, bytes.NewReader(content), timeout)
 }
 
 func cloudflaredActivation(step systemchanges.Step) bool {
 	return step.Owner() == systemchanges.CloudflareModule && step.Forward() == systemchanges.ActivatePreparedConfiguration && step.Rollback() == systemchanges.RestorePriorConfiguration
+}
+
+func subscriptionActivation(step systemchanges.Step) bool {
+	return step.Owner() == systemchanges.SubscriptionModule && step.Forward() == systemchanges.ActivatePreparedConfiguration && step.Rollback() == systemchanges.RestorePriorConfiguration
 }
 
 func runTokenActivation(step systemchanges.Step) bool {
@@ -1025,19 +1073,24 @@ func (a Adapter) recoveryArtifact(lease systemchanges.ExecutionLease, changeSet,
 }
 
 func (a Adapter) recoveryBinding(lease systemchanges.ExecutionLease, changeSet string) (systemchanges.StateTransactionBinding, error) {
+	binding, _, err := a.recoveryPublicationBinding(lease, changeSet)
+	return binding, err
+}
+
+func (a Adapter) recoveryPublicationBinding(lease systemchanges.ExecutionLease, changeSet string) (systemchanges.StateTransactionBinding, string, error) {
 	if !lease.Authorized() || !safeName(changeSet) {
-		return systemchanges.StateTransactionBinding{}, errors.New("invalid recovery binding request")
+		return systemchanges.StateTransactionBinding{}, "", errors.New("invalid recovery binding request")
 	}
 	root, err := os.OpenRoot(a.root)
 	if err != nil {
-		return systemchanges.StateTransactionBinding{}, err
+		return systemchanges.StateTransactionBinding{}, "", err
 	}
 	defer root.Close()
 	journal, err := readJournal(root, path.Join(transactionDirectory, changeSet, "journal.jsonl"))
 	if err != nil || !validJournal(journal) || journal[0].State == nil {
-		return systemchanges.StateTransactionBinding{}, errors.New("recovery State binding is invalid")
+		return systemchanges.StateTransactionBinding{}, "", errors.New("recovery State binding is invalid")
 	}
-	return *journal[0].State, nil
+	return *journal[0].State, journal[0].PlanSHA256, nil
 }
 
 func recoveryRelease(binding systemchanges.StateTransactionBinding) systemchanges.ReleaseBinding {
@@ -1098,6 +1151,16 @@ func (a Adapter) Check(lease systemchanges.ExecutionLease, check systemchanges.C
 		}
 		return a.certificate.Check(a.root, check.Code, phase, timeout)
 	}
+	if check.Owner == systemchanges.SubscriptionModule && strings.HasPrefix(check.Code, "SUBSCRIPTION-PUBLICATION-") {
+		if a.subscription == nil {
+			return systemchanges.Unknown, errors.New("Subscription Publication health executor unavailable")
+		}
+		binding, planSHA256, err := a.activeTransactionBinding()
+		if err != nil {
+			return systemchanges.Unknown, err
+		}
+		return a.subscription.Check(a.root, check.Code, binding, planSHA256, timeout)
+	}
 	if check.Owner == systemchanges.ConnectionProfilesModule && strings.HasPrefix(check.Code, "CONNECTION-PROFILES-") && strings.HasSuffix(check.Code, "-DIRECT-TLS") {
 		if a.profiles == nil {
 			return systemchanges.Unknown, errors.New("Connection Profiles health executor unavailable")
@@ -1113,6 +1176,23 @@ func (a Adapter) Check(lease systemchanges.ExecutionLease, check systemchanges.C
 		return systemchanges.Healthy, nil
 	}
 	return a.host.Check(check, phase, timeout)
+}
+
+func (a Adapter) activeTransactionBinding() (systemchanges.StateTransactionBinding, string, error) {
+	root, err := os.OpenRoot(a.root)
+	if err != nil {
+		return systemchanges.StateTransactionBinding{}, "", err
+	}
+	defer root.Close()
+	entries, err := fs.ReadDir(root.FS(), transactionDirectory)
+	if err != nil || len(entries) != 1 || !entries[0].IsDir() {
+		return systemchanges.StateTransactionBinding{}, "", errors.New("active State transaction unavailable")
+	}
+	journal, err := readJournal(root, path.Join(transactionDirectory, entries[0].Name(), "journal.jsonl"))
+	if err != nil || !validJournal(journal) || journal[0].State == nil {
+		return systemchanges.StateTransactionBinding{}, "", errors.New("active State transaction binding is invalid")
+	}
+	return *journal[0].State, journal[0].PlanSHA256, nil
 }
 
 func (a Adapter) activeDomainCertificateChange() (systemchanges.CertificateChange, error) {
@@ -1216,6 +1296,11 @@ func (a Adapter) Cleanup(lease systemchanges.ExecutionLease, changeSet string) e
 			return errors.New("completed certificate rollback material cleanup failed")
 		}
 	}
+	if entries[len(entries)-1].Checkpoint == systemchanges.Complete && journalHasSubscription(entries[0].Steps) {
+		if a.subscription == nil || a.subscription.Cleanup(a.root) != nil {
+			return errors.New("completed subscription artifact cleanup failed")
+		}
+	}
 	names := make([]string, 0, len(manifest.Files))
 	for name := range manifest.Files {
 		names = append(names, name)
@@ -1255,6 +1340,15 @@ func certificateActivationAction(steps []journalStep) (systemchanges.Certificate
 func journalHasCertificate(steps []journalStep) bool {
 	for _, step := range steps {
 		if step.Certificate != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func journalHasSubscription(steps []journalStep) bool {
+	for _, step := range steps {
+		if step.Owner == systemchanges.SubscriptionModule && step.Forward == systemchanges.ActivatePreparedConfiguration && step.Rollback == systemchanges.RestorePriorConfiguration {
 			return true
 		}
 	}

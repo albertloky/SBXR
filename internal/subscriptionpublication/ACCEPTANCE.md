@@ -1,13 +1,13 @@
 # Subscription Publication acceptance
 
-This procedure covers issues #109–#112: deterministic raw, base64, v2rayN, six-Connection-Profile Mihomo, honest five-Connection-Profile sing-box and Karing, the seven-entry representation catalog, and the six-URI Shadowrocket candidate from one complete typed Connection Profile source.
+This procedure covers issues #109–#113: deterministic representations and catalog metadata from one complete typed Connection Profile source, plus one reviewed, immutable, atomically activated artifact set.
 
 ## Module Verification — automated — Codex
 
 Run:
 
 ```sh
-go test ./internal/subscriptionpublication -run TestRender
+go test ./internal/subscriptionpublication/... -count=1
 ```
 
 Pass only when these stable checks all pass:
@@ -37,8 +37,24 @@ Pass only when these stable checks all pass:
 - `SUBSCRIPTION-PUBLICATION-FALLBACK`: an unknown or ambiguous client receives `/base64`; User-Agent is convenience only and never authentication, authorization, or compatibility proof.
 - `SUBSCRIPTION-PUBLICATION-SHADOWROCKET-CANDIDATE`: Shadowrocket bytes equal the complete six-URI base64 candidate, while every rendered Connection Profile remains pending exact pinned maintained-app Owner Acceptance.
 - `SUBSCRIPTION-PUBLICATION-NAMED-ACCESS`: catalog labels and suffixes support only the dedicated authenticated Access surface; no separate format-selection menu or ordinary-dashboard Client Access Value is introduced.
+- `SUBSCRIPTION-PUBLICATION-PLAN`: one deterministic secret-safe Plan binds revision `N+1`, starting lineage, relevant managed-input checksums, compatibility definition, selected address, exact typed source, Release Identity, seven representation identities, counts, omissions, full validation, complete replacement, and exact rollback intent.
+- `SUBSCRIPTION-PUBLICATION-PLAN-ONE-USE`: stale, changed, malformed, incomplete, or reused Plan and prepared-artifact authority is refused without exposing a body, token, Client Access Value, complete URL, credential, or secret marker.
+- `SUBSCRIPTION-PUBLICATION-CANDIDATE-SET`: State accepts only the owning Module's complete reviewed bundle; that bundle validates and enumerates the exact eight-file set, and System Changes durably binds its SHA-256 before live work.
+- `SUBSCRIPTION-PUBLICATION-ATOMIC-ACTIVATION`: the filesystem Adapter writes one root-only candidate generation and atomically exchanges it into the real `/var/lib/sbxr/subscriptions/current/` directory on supported Ubuntu targets; readers observe the complete prior or complete candidate set, never a mixture.
+- `SUBSCRIPTION-PUBLICATION-TRANSACTION`: one System Changes transaction activates the candidate, passes Required pre-publication health, publishes Desired State exactly once, proves post-publication agreement, records durable `Complete`, and refuses Plan reuse.
+- `SUBSCRIPTION-PUBLICATION-ROLLBACK`: incomplete preparation, storage, directory activation, pre-publication, post-publication, and Subscription Serving health failures leave nothing activated or restore the exact prior artifact set and Desired State; an unprovable reverse remains `Recovery Required`.
+- `SUBSCRIPTION-PUBLICATION-RESTART`: inactive candidate directories and rollback retry resolve from durable inspection; unprovable lineage or rollback remains `Recovery Required`.
+- `SUBSCRIPTION-PUBLICATION-SERVING-BOUNDARY`: the real `current/` directory contains only the seven named bodies and metadata at `0640` under the sole group-traversable `0750` directory; `sets/` and inactive generations are root-only `0700`, parent and final symlinks are refused, and Subscription Serving receives no Desired State, renderer, typed source, validator, or arbitrary file path.
 
 ## Seam Verification — reviewed fixtures — Codex
+
+Run the atomic filesystem and coordinated transaction Seams:
+
+```sh
+go test ./internal/subscriptionpublication/adapter/filesystem ./internal/state -run 'TestAtomicArtifactSet|TestActivationFailsClosed|TestActivationRejects|TestRestartInspection|TestStorageFailure|TestSubscriptionArtifactSet|TestSubscriptionServingFailure|TestSubscriptionRollbackFailure' -count=1
+```
+
+These tests cover complete-set validation, exact Plan and State agreement, hostile-symlink refusal, deterministic generation identity, current-only serving traversal modes, whole-directory activation, storage failure, exact rollback, one Desired State publication, post-publication agreement, reuse refusal, restart inspection, serving-health refusal, Subscription-owned Recovery Required on an unprovable reverse, and secret-safe evidence. They use controlled local files and a controlled health probe; they do not prove an installed release or real HTTPS retrieval.
 
 `TestRenderProducesDeterministicRawBase64AndV2RayN` parses every complete URI with Go's maintained `net/url` parser and compares it with literal reviewed fixtures for all six contracts. This is `SUBSCRIPTION-PUBLICATION-PARSER` evidence. It proves URI syntax and field preservation, not import or connectivity in v2rayN or any other maintained client.
 
@@ -70,7 +86,7 @@ The issue comment records only the command, Passed or Failed status, stable chec
 |---|---|---|
 | Module Verification | Codex | Passed only when the focused command above passes. |
 | Seam Verification | Codex | Passed only when the URI fixtures and both exact pinned Mihomo and sing-box commands above pass. |
-| Integrated Verification | Codex | Pending — complete artifact-set activation and Subscription Serving are later slices. |
+| Integrated Verification | Codex | Pending — integrated release. The local State, System Changes, and atomic filesystem transaction passes, but no installed release with real Subscription Serving was exercised. |
 | Codex Live Acceptance | Codex | Pending — no maintained client import or connection was run here. |
 | Owner Acceptance | Albert | Pending — every rendered Shadowrocket Connection Profile requires separate import and connection acceptance in the exact pinned maintained app; every offered Karing Connection Profile and workflow also remain Pending. No maintained Owner client or device was used here. |
 
@@ -91,4 +107,4 @@ The exact Owner Acceptance rows remain separate:
 | Karing — AnyTLS | Albert | Pending — maintained-client import and connection not performed. |
 | Karing — maintained Access workflow | Albert | Pending — retrieval, import visibility, selection, and workflow acceptance not performed. |
 
-Passing this procedure is Module evidence for issues #109–#112. It is not Module Acceptance for parent issue #108 and not Release Qualification.
+Passing this procedure is Module Acceptance for issues #109–#113. It is not Module Acceptance for parent issue #108 and not Release Qualification.

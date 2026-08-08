@@ -104,6 +104,15 @@ type SubscriptionValidator interface {
 	ValidateSubscription(SubscriptionSettings, ClientAccessReader) error
 }
 
+// SubscriptionPublicationPreparer is the reviewed owning-Module handoff for
+// one complete validated artifact set. The bytes are protected transaction input.
+type SubscriptionPublicationPreparer interface {
+	SubscriptionValidator
+	Identity() string
+	SHA256() string
+	PrepareSubscriptionPublication() ([]byte, error)
+}
+
 type CloudflareValidator interface {
 	ValidateCloudflare(CloudflareSettings, InfrastructureSecretReader) error
 }
@@ -298,6 +307,7 @@ type PrepareRequest struct {
 	Candidate                DesiredState
 	SemanticValidators       SemanticValidators
 	ServiceMaterials         ServiceMaterials
+	SubscriptionPublication  SubscriptionPublicationPreparer
 	ReviewedInputs           ReviewedInputs
 }
 
@@ -336,23 +346,24 @@ type PreparedServiceCopies struct {
 
 // PreparedCommit is one validated candidate and its byte-stable service material.
 type PreparedCommit struct {
-	releaseIdentity          ReleaseIdentity
-	candidate                DesiredState
-	serviceCopies            PreparedServiceCopies
-	revision                 uint64
-	changeSet                ChangeSetIdentity
-	reviewed                 ReviewedInputs
-	starting                 *loadedState
-	storage                  Storage
-	candidateSHA256          string
-	manifestSHA256           string
-	preparedState            []byte
-	preparedSHA256           string
-	migration                MigrationReview
-	consumed                 atomic.Bool
-	deferred                 *deferredCloudflare
-	ipCertificateRenewal     bool
-	domainCertificateRenewal bool
+	releaseIdentity            ReleaseIdentity
+	candidate                  DesiredState
+	serviceCopies              PreparedServiceCopies
+	subscriptionArtifactBundle []byte
+	revision                   uint64
+	changeSet                  ChangeSetIdentity
+	reviewed                   ReviewedInputs
+	starting                   *loadedState
+	storage                    Storage
+	candidateSHA256            string
+	manifestSHA256             string
+	preparedState              []byte
+	preparedSHA256             string
+	migration                  MigrationReview
+	consumed                   atomic.Bool
+	deferred                   *deferredCloudflare
+	ipCertificateRenewal       bool
+	domainCertificateRenewal   bool
 }
 
 type CloudflareEvidenceBinding struct {
@@ -736,6 +747,10 @@ func (i Interface) prepareCommit(request PrepareRequest, deferred *deferredCloud
 	}
 
 	materials := request.ServiceMaterials
+	subscriptionBundle, err := prepareSubscriptionPublication(request.SubscriptionPublication, request.ReviewedInputs)
+	if err != nil {
+		return nil, finding("STATE-SUBSCRIPTION-PUBLICATION", "prepared Subscription Publication artifact set", "the owning Module handoff is missing, stale, incomplete, or invalid", "one reviewed byte-stable eight-file artifact set", "State cannot invent client representations or accept caller-made bytes", "regenerate the Subscription Publication Plan and review again")
+	}
 	connectionProfilesChanged := loaded.status == NotInstalled
 	if !connectionProfilesChanged {
 		current, problem := decode(loaded.bytes)
@@ -789,13 +804,27 @@ func (i Interface) prepareCommit(request PrepareRequest, deferred *deferredCloud
 	preparedDigest := sha256.Sum256(preparedState)
 	return &PreparedCommit{
 		releaseIdentity: request.CandidateReleaseIdentity,
-		candidate:       request.Candidate, serviceCopies: copies, revision: revision,
+		candidate:       request.Candidate, serviceCopies: copies, subscriptionArtifactBundle: subscriptionBundle, revision: revision,
 		changeSet: request.ChangeSet, reviewed: request.ReviewedInputs,
 		starting: loaded, storage: i.implementation.storage,
 		candidateSHA256: candidateChecksum, manifestSHA256: manifestChecksum,
 		preparedState: preparedState, preparedSHA256: hex.EncodeToString(preparedDigest[:]),
 		migration: loaded.migration, deferred: deferred,
 	}, nil
+}
+
+func prepareSubscriptionPublication(preparer SubscriptionPublicationPreparer, reviewed ReviewedInputs) ([]byte, error) {
+	if preparer == nil {
+		return nil, nil
+	}
+	if PlanIdentity(preparer.Identity()) != reviewed.planIdentity || preparer.SHA256() != reviewed.planSHA256 {
+		return nil, errors.New("reviewed Subscription Publication Plan unavailable")
+	}
+	bundle, err := preparer.PrepareSubscriptionPublication()
+	if err != nil || len(bundle) == 0 || len(bundle) > 32<<20 {
+		return nil, errors.New("complete Subscription Publication artifact set unavailable")
+	}
+	return append([]byte(nil), bundle...), nil
 }
 
 func validateSemanticsExceptCloudflare(candidate DesiredState, validators SemanticValidators) bool {

@@ -15,23 +15,24 @@ import (
 // TransactionMaterial is the opaque State-owned handoff for one System
 // Changes attempt, prior-State preservation, and atomic State publication.
 type TransactionMaterial struct {
-	startingRevision  uint64
-	candidateRevision uint64
-	startingChecksum  string
-	candidateChecksum string
-	manifestChecksum  string
-	preparedChecksum  string
-	changeSet         ChangeSetIdentity
-	reviewed          ReviewedInputs
-	priorState        []byte
-	preparedState     []byte
-	serviceCopies     PreparedServiceCopies
-	storage           Storage
-	publication       *publicationAuthority
-	startingRelease   ReleaseIdentity
-	candidateRelease  ReleaseIdentity
-	deferred          *deferredCloudflare
-	forwardRecovery   bool
+	startingRevision           uint64
+	candidateRevision          uint64
+	startingChecksum           string
+	candidateChecksum          string
+	manifestChecksum           string
+	preparedChecksum           string
+	changeSet                  ChangeSetIdentity
+	reviewed                   ReviewedInputs
+	priorState                 []byte
+	preparedState              []byte
+	serviceCopies              PreparedServiceCopies
+	subscriptionArtifactBundle []byte
+	storage                    Storage
+	publication                *publicationAuthority
+	startingRelease            ReleaseIdentity
+	candidateRelease           ReleaseIdentity
+	deferred                   *deferredCloudflare
+	forwardRecovery            bool
 }
 
 type publicationAuthority struct{ used atomic.Bool }
@@ -203,6 +204,11 @@ func (transaction *TransactionMaterial) SystemChangesWriteArtifacts(lease any, w
 			if err := write(artifact.name, 0o600, bytes.NewReader(artifact.copy.bytes)); err != nil {
 				return err
 			}
+		}
+	}
+	if len(transaction.subscriptionArtifactBundle) > 0 {
+		if err := write("prepared/subscriptions.bundle", 0o600, bytes.NewReader(transaction.subscriptionArtifactBundle)); err != nil {
+			return err
 		}
 	}
 	manifests, err := json.Marshal(preparedManifestSet{
@@ -663,22 +669,23 @@ func (commit *PreparedCommit) ConsumeForApply(current ReviewedInputs) (*Transact
 		return nil, finding("STATE-PREPARED-STALE", "prepared commit authority", "the persisted starting State changed", "the exact State bytes loaded before review", "a different starting lineage invalidates approval", "run Load with fresh observations, review a fresh Plan, and prepare again")
 	}
 	return &TransactionMaterial{
-		startingRevision:  commit.starting.revision,
-		candidateRevision: commit.revision,
-		startingChecksum:  commit.starting.payloadChecksum,
-		candidateChecksum: commit.candidateSHA256,
-		manifestChecksum:  commit.manifestSHA256,
-		preparedChecksum:  commit.preparedSHA256,
-		changeSet:         commit.changeSet,
-		reviewed:          commit.reviewed,
-		priorState:        append([]byte(nil), commit.starting.bytes...),
-		preparedState:     append([]byte(nil), commit.preparedState...),
-		serviceCopies:     commit.serviceCopies,
-		storage:           commit.storage,
-		publication:       &publicationAuthority{},
-		startingRelease:   commit.starting.migration.StartingRelease,
-		candidateRelease:  commit.releaseIdentity,
-		deferred:          commit.deferred,
+		startingRevision:           commit.starting.revision,
+		candidateRevision:          commit.revision,
+		startingChecksum:           commit.starting.payloadChecksum,
+		candidateChecksum:          commit.candidateSHA256,
+		manifestChecksum:           commit.manifestSHA256,
+		preparedChecksum:           commit.preparedSHA256,
+		changeSet:                  commit.changeSet,
+		reviewed:                   commit.reviewed,
+		priorState:                 append([]byte(nil), commit.starting.bytes...),
+		preparedState:              append([]byte(nil), commit.preparedState...),
+		serviceCopies:              commit.serviceCopies,
+		subscriptionArtifactBundle: append([]byte(nil), commit.subscriptionArtifactBundle...),
+		storage:                    commit.storage,
+		publication:                &publicationAuthority{},
+		startingRelease:            commit.starting.migration.StartingRelease,
+		candidateRelease:           commit.releaseIdentity,
+		deferred:                   commit.deferred,
 	}, nil
 }
 
