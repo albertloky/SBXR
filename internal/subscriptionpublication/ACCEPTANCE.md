@@ -1,6 +1,6 @@
 # Subscription Publication acceptance
 
-This procedure covers issues #109–#111: deterministic raw, base64, v2rayN, six-Connection-Profile Mihomo, and honest five-Connection-Profile sing-box and Karing rendering from one complete typed Connection Profile source.
+This procedure covers issues #109–#112: deterministic raw, base64, v2rayN, six-Connection-Profile Mihomo, honest five-Connection-Profile sing-box and Karing, the seven-entry representation catalog, and the six-URI Shadowrocket candidate from one complete typed Connection Profile source.
 
 ## Module Verification — automated — Codex
 
@@ -28,9 +28,15 @@ Pass only when these stable checks all pass:
 - `SUBSCRIPTION-PUBLICATION-MIHOMO-OMISSION`: a disabled Connection Profile disappears from both `proxies` and group references without substitution; when all six are disabled, the valid document contains an empty `proxies` list and no group or rule.
 - `SUBSCRIPTION-PUBLICATION-SING-BOX-COUNT`: exactly five supported enabled Connection Profiles appear once in canonical order; VLESS XHTTP never appears as an outbound.
 - `SUBSCRIPTION-PUBLICATION-SING-BOX-FIELDS`: the local `mixed` inbound, local DNS, route, final `SBXR` selector, and every required VLESS REALITY Vision, VLESS WebSocket, Hysteria2, TUIC, AnyTLS, TLS, transport, congestion, and zero-RTT field agree with the typed source.
-- `SUBSCRIPTION-PUBLICATION-SING-BOX-OMISSION`: VLESS XHTTP is `Not offered` without substitution; a disabled supported Connection Profile is absent and reported as `Disabled`; the all-disabled document has no listener, outbound, selector, or final route.
+- `SUBSCRIPTION-PUBLICATION-SING-BOX-OMISSION`: enabled VLESS XHTTP is `Not offered` without substitution; deliberate disablement takes precedence for any Connection Profile, including XHTTP, which is then absent and reported as `Disabled`; the all-disabled document has no listener, outbound, selector, or final route.
 - `SUBSCRIPTION-PUBLICATION-SING-BOX-VALIDATION`: the complete document must pass the pinned full-document validator before `Render` returns any artifact; refusal and malformed JSON produce one secret-safe failure.
 - `SUBSCRIPTION-PUBLICATION-KARING`: Karing receives byte-identical validated sing-box JSON, reports five supported Connection Profiles, and says VLESS XHTTP is `Not offered` because it is unavailable in the Karing core.
+- `SUBSCRIPTION-PUBLICATION-CATALOG`: `View` returns exactly `/base64`, `/raw`, `/v2rayn`, `/shadowrocket`, `/karing`, `/mihomo`, and `/sing-box` in stable order, and each identity maps one-to-one to one validated artifact body.
+- `SUBSCRIPTION-PUBLICATION-CATALOG-COUNT`: v2rayN and Mihomo report every enabled Connection Profile; sing-box and Karing omit XHTTP and report the actual supported enabled count; every other disabled Connection Profile is deliberately `Disabled`, never `Failed` or substituted.
+- `SUBSCRIPTION-PUBLICATION-VIEW`: publication status, the token-free selected HTTPS subscription address, compatibility definition, and proven Desired State revision/SHA-256 determine agreement without returning a token or generated body; stale compatibility requires regeneration.
+- `SUBSCRIPTION-PUBLICATION-FALLBACK`: an unknown or ambiguous client receives `/base64`; User-Agent is convenience only and never authentication, authorization, or compatibility proof.
+- `SUBSCRIPTION-PUBLICATION-SHADOWROCKET-CANDIDATE`: Shadowrocket bytes equal the complete six-URI base64 candidate, while every rendered Connection Profile remains pending exact pinned maintained-app Owner Acceptance.
+- `SUBSCRIPTION-PUBLICATION-NAMED-ACCESS`: catalog labels and suffixes support only the dedicated authenticated Access surface; no separate format-selection menu or ordinary-dashboard Client Access Value is introduced.
 
 ## Seam Verification — reviewed fixtures — Codex
 
@@ -66,6 +72,23 @@ The issue comment records only the command, Passed or Failed status, stable chec
 | Seam Verification | Codex | Passed only when the URI fixtures and both exact pinned Mihomo and sing-box commands above pass. |
 | Integrated Verification | Codex | Pending — complete artifact-set activation and Subscription Serving are later slices. |
 | Codex Live Acceptance | Codex | Pending — no maintained client import or connection was run here. |
-| Owner Acceptance | Albert | Pending — no maintained Owner client or device was used here. |
+| Owner Acceptance | Albert | Pending — every rendered Shadowrocket Connection Profile requires separate import and connection acceptance in the exact pinned maintained app; every offered Karing Connection Profile and workflow also remain Pending. No maintained Owner client or device was used here. |
 
-Passing this procedure is Module evidence for issues #109–#111. It is not Module Acceptance for parent issue #108 and not Release Qualification.
+The exact Owner Acceptance rows remain separate:
+
+| Owner Acceptance check | Owner | Status |
+|---|---|---|
+| Shadowrocket — VLESS REALITY Vision | Albert | Pending — exact pinned maintained-app import and connection not performed. |
+| Shadowrocket — VLESS XHTTP | Albert | Pending — exact pinned maintained-app import and connection not performed. |
+| Shadowrocket — VLESS WebSocket | Albert | Pending — exact pinned maintained-app import and connection not performed. |
+| Shadowrocket — Hysteria2 | Albert | Pending — exact pinned maintained-app import and connection not performed. |
+| Shadowrocket — TUIC | Albert | Pending — exact pinned maintained-app import and connection not performed. |
+| Shadowrocket — AnyTLS | Albert | Pending — exact pinned maintained-app import and connection not performed. |
+| Karing — VLESS REALITY Vision | Albert | Pending — maintained-client import and connection not performed. |
+| Karing — VLESS WebSocket | Albert | Pending — maintained-client import and connection not performed. |
+| Karing — Hysteria2 | Albert | Pending — maintained-client import and connection not performed. |
+| Karing — TUIC | Albert | Pending — maintained-client import and connection not performed. |
+| Karing — AnyTLS | Albert | Pending — maintained-client import and connection not performed. |
+| Karing — maintained Access workflow | Albert | Pending — retrieval, import visibility, selection, and workflow acceptance not performed. |
+
+Passing this procedure is Module evidence for issues #109–#112. It is not Module Acceptance for parent issue #108 and not Release Qualification.

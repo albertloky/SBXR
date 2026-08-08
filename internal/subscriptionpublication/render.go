@@ -74,14 +74,14 @@ func (Representation) MarshalJSON() ([]byte, error) {
 	return nil, errors.New("Subscription Publication representation cannot be rendered")
 }
 
-// Artifacts contains the explicit secret-bearing raw, base64, v2rayN, Mihomo,
-// sing-box, and Karing outputs. Its default formatting and JSON rendering stay
-// redacted.
+// Artifacts contains the explicit secret-bearing raw, base64, v2rayN,
+// Shadowrocket, Mihomo, sing-box, and Karing outputs. Its default formatting
+// and JSON rendering stay redacted.
 type Artifacts struct {
-	Raw, Base64, V2RayN, Mihomo []byte
-	SingBox, Karing             Representation
-	ProfileCount                int
-	Omissions                   []connectionprofiles.PublicationOmission
+	Raw, Base64, V2RayN, Shadowrocket, Mihomo []byte
+	SingBox, Karing                           Representation
+	ProfileCount                              int
+	Omissions                                 []connectionprofiles.PublicationOmission
 }
 
 func (artifacts Artifacts) String() string {
@@ -94,7 +94,7 @@ func (Artifacts) MarshalJSON() ([]byte, error) {
 	return nil, errors.New("Subscription Publication artifacts cannot be rendered")
 }
 
-// Render produces all six client representations from one complete typed
+// Render produces all seven client representations from one complete typed
 // Connection Profile source. Both structured documents must pass their pinned
 // validators before any artifact is returned.
 func (module Interface) Render(ctx context.Context, source connectionprofiles.PublicationSource, secrets state.ClientAccessReader) (Artifacts, error) {
@@ -125,7 +125,7 @@ func (module Interface) Render(ctx context.Context, source connectionprofiles.Pu
 		return Artifacts{}, errInvalidSource
 	}
 	return Artifacts{
-		Raw: raw, Base64: encoded, V2RayN: append([]byte(nil), encoded...), Mihomo: mihomo,
+		Raw: raw, Base64: encoded, V2RayN: append([]byte(nil), encoded...), Shadowrocket: append([]byte(nil), encoded...), Mihomo: mihomo,
 		SingBox:      representation(singBox, count, source.Omissions(), singBoxXHTTPReason),
 		Karing:       representation(singBox, count, source.Omissions(), karingXHTTPReason),
 		ProfileCount: len(profiles), Omissions: source.Omissions(),
@@ -133,13 +133,24 @@ func (module Interface) Render(ctx context.Context, source connectionprofiles.Pu
 }
 
 func representation(body []byte, count int, disabled []connectionprofiles.PublicationOmission, xhttpReason string) Representation {
-	omissions := []RepresentationOmission{{ID: connectionprofiles.VLESSXHTTPProfileID, Status: NotOffered, Reason: xhttpReason}}
+	return Representation{Body: append([]byte(nil), body...), ProfileCount: count, Omissions: representationOmissions(disabled, xhttpReason)}
+}
+
+func representationOmissions(disabled []connectionprofiles.PublicationOmission, xhttpReason string) []RepresentationOmission {
+	xhttp := RepresentationOmission{ID: connectionprofiles.VLESSXHTTPProfileID, Status: NotOffered, Reason: xhttpReason}
 	for _, omission := range disabled {
-		if omission.ID != connectionprofiles.VLESSXHTTPProfileID {
-			omissions = append(omissions, RepresentationOmission{ID: omission.ID, Status: Disabled, Reason: "The Connection Profile is disabled"})
+		if omission.ID == connectionprofiles.VLESSXHTTPProfileID {
+			xhttp.Status, xhttp.Reason = Disabled, "The Connection Profile is deliberately disabled"
+			break
 		}
 	}
-	return Representation{Body: append([]byte(nil), body...), ProfileCount: count, Omissions: omissions}
+	omissions := []RepresentationOmission{xhttp}
+	for _, omission := range disabled {
+		if omission.ID != connectionprofiles.VLESSXHTTPProfileID {
+			omissions = append(omissions, RepresentationOmission{ID: omission.ID, Status: Disabled, Reason: "The Connection Profile is deliberately disabled"})
+		}
+	}
+	return omissions
 }
 
 func renderSingBox(profiles []connectionprofiles.PublicationProfile, secrets state.ClientAccessReader) ([]byte, int, bool) {
