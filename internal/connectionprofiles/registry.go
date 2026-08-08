@@ -233,12 +233,13 @@ type RegistryProfile struct {
 }
 
 type PublicationProfile struct {
-	ID                                                 ProfileID
-	Address, Hostname, ServerName, Transport, Security string
-	Port                                               uint16
-	UUID, Password, Path, ShortID                      state.ClientAccessValue
-	PublicKey, Fingerprint, Flow, HTTPHost, TLSName    string
-	XHTTPServerMode                                    state.XHTTPMode
+	ID                                                       ProfileID
+	Name, Address, Hostname, ServerName, Transport, Security string
+	Port                                                     uint16
+	UUID, Password, Path, ShortID                            state.ClientAccessValue
+	PublicKey, Fingerprint, Flow, HTTPHost, TLSName          string
+	CongestionControl                                        state.CongestionControl
+	XHTTPServerMode                                          state.XHTTPMode
 }
 
 type PublicationOmission struct{ ID ProfileID }
@@ -246,6 +247,27 @@ type PublicationOmission struct{ ID ProfileID }
 type PublicationSource struct {
 	profiles  []PublicationProfile
 	omissions []PublicationOmission
+}
+
+// NewPublicationSource preserves the six fixed profile identities while
+// allowing each identity to be either rendered or deliberately omitted.
+func NewPublicationSource(profiles []PublicationProfile, omissions []PublicationOmission) (PublicationSource, error) {
+	profileIndex, omissionIndex := 0, 0
+	for _, definition := range registryDefinitions {
+		if profileIndex < len(profiles) && profiles[profileIndex].ID == definition.id {
+			profileIndex++
+			continue
+		}
+		if omissionIndex < len(omissions) && omissions[omissionIndex].ID == definition.id {
+			omissionIndex++
+			continue
+		}
+		return PublicationSource{}, errors.New("Connection Profile publication source is incomplete or out of order")
+	}
+	if profileIndex != len(profiles) || omissionIndex != len(omissions) {
+		return PublicationSource{}, errors.New("Connection Profile publication source is incomplete or out of order")
+	}
+	return PublicationSource{profiles: append([]PublicationProfile(nil), profiles...), omissions: append([]PublicationOmission(nil), omissions...)}, nil
 }
 
 func (PublicationSource) String() string   { return "Connection Profile publication source: redacted" }
@@ -939,12 +961,12 @@ func registryPublication(request RegistryViewRequest) PublicationSource {
 		enabled bool
 		profile PublicationProfile
 	}{
-		{request.Reality.Enabled, PublicationProfile{ID: VLESSRealityVisionProfileID, Address: request.ClientAddress, Port: request.Reality.Port, ServerName: request.Reality.Target.ServerName, Transport: "RAW", Security: "REALITY", UUID: state.NewClientAccessValue(request.Reality.Credentials.uuid.value), ShortID: state.NewClientAccessValue(request.Reality.Credentials.shortID.value), PublicKey: request.Reality.Credentials.publicKey.value, Fingerprint: request.Reality.Fingerprint, Flow: "xtls-rprx-vision"}},
-		{request.XHTTP.Enabled, PublicationProfile{ID: VLESSXHTTPProfileID, Address: request.XHTTP.Hostname, Port: 443, Hostname: request.XHTTP.Hostname, Transport: "XHTTP", Security: "TLS", UUID: state.NewClientAccessValue(request.XHTTP.Credentials.uuid.value), Path: state.NewClientAccessValue(request.XHTTP.Credentials.path.value), XHTTPServerMode: request.XHTTP.Mode}},
-		{request.WebSocket.Enabled, PublicationProfile{ID: VLESSWebSocketProfileID, Address: request.WebSocket.Hostname, Port: 443, Hostname: request.WebSocket.Hostname, Transport: "WebSocket", Security: "TLS", UUID: state.NewClientAccessValue(request.WebSocket.Credentials.uuid.value), Path: state.NewClientAccessValue(request.WebSocket.Credentials.path.value), HTTPHost: request.WebSocket.HTTPHost, TLSName: request.WebSocket.TLSName}},
-		{request.Hysteria2.Enabled, PublicationProfile{ID: Hysteria2ProfileID, Address: request.ClientAddress, Port: request.Hysteria2.Port, ServerName: request.Hysteria2.ServerName, Transport: "QUIC", Security: "TLS", Password: state.NewClientAccessValue(request.Hysteria2.Credentials.password.value)}},
-		{request.TUIC.Enabled, PublicationProfile{ID: TUICProfileID, Address: request.ClientAddress, Port: request.TUIC.Port, ServerName: request.TUIC.ServerName, Transport: "QUIC", Security: "TLS", UUID: state.NewClientAccessValue(request.TUIC.Credentials.uuid.value), Password: state.NewClientAccessValue(request.TUIC.Credentials.password.value)}},
-		{request.AnyTLS.Enabled, PublicationProfile{ID: AnyTLSProfileID, Address: request.ClientAddress, Port: request.AnyTLS.Port, ServerName: request.AnyTLS.ServerName, Transport: "TCP", Security: "TLS", Password: state.NewClientAccessValue(request.AnyTLS.Credentials.password.value)}},
+		{request.Reality.Enabled, PublicationProfile{ID: VLESSRealityVisionProfileID, Name: registryDefinitions[0].name, Address: request.ClientAddress, Port: request.Reality.Port, ServerName: request.Reality.Target.ServerName, Transport: "RAW", Security: "REALITY", UUID: state.NewClientAccessValue(request.Reality.Credentials.uuid.value), ShortID: state.NewClientAccessValue(request.Reality.Credentials.shortID.value), PublicKey: request.Reality.Credentials.publicKey.value, Fingerprint: request.Reality.Fingerprint, Flow: "xtls-rprx-vision"}},
+		{request.XHTTP.Enabled, PublicationProfile{ID: VLESSXHTTPProfileID, Name: registryDefinitions[1].name, Address: request.XHTTP.Hostname, Port: 443, Hostname: request.XHTTP.Hostname, Transport: "XHTTP", Security: "TLS", UUID: state.NewClientAccessValue(request.XHTTP.Credentials.uuid.value), Path: state.NewClientAccessValue(request.XHTTP.Credentials.path.value), XHTTPServerMode: request.XHTTP.Mode}},
+		{request.WebSocket.Enabled, PublicationProfile{ID: VLESSWebSocketProfileID, Name: registryDefinitions[2].name, Address: request.WebSocket.Hostname, Port: 443, Hostname: request.WebSocket.Hostname, Transport: "WebSocket", Security: "TLS", UUID: state.NewClientAccessValue(request.WebSocket.Credentials.uuid.value), Path: state.NewClientAccessValue(request.WebSocket.Credentials.path.value), HTTPHost: request.WebSocket.HTTPHost, TLSName: request.WebSocket.TLSName}},
+		{request.Hysteria2.Enabled, PublicationProfile{ID: Hysteria2ProfileID, Name: registryDefinitions[3].name, Address: request.ClientAddress, Port: request.Hysteria2.Port, ServerName: request.Hysteria2.ServerName, Transport: "QUIC", Security: "TLS", Password: state.NewClientAccessValue(request.Hysteria2.Credentials.password.value)}},
+		{request.TUIC.Enabled, PublicationProfile{ID: TUICProfileID, Name: registryDefinitions[4].name, Address: request.ClientAddress, Port: request.TUIC.Port, ServerName: request.TUIC.ServerName, Transport: "QUIC", Security: "TLS", UUID: state.NewClientAccessValue(request.TUIC.Credentials.uuid.value), Password: state.NewClientAccessValue(request.TUIC.Credentials.password.value), CongestionControl: request.TUIC.CongestionControl}},
+		{request.AnyTLS.Enabled, PublicationProfile{ID: AnyTLSProfileID, Name: registryDefinitions[5].name, Address: request.ClientAddress, Port: request.AnyTLS.Port, ServerName: request.AnyTLS.ServerName, Transport: "TCP", Security: "TLS", Password: state.NewClientAccessValue(request.AnyTLS.Credentials.password.value)}},
 	}
 	var source PublicationSource
 	for _, item := range all {

@@ -47,6 +47,10 @@ func TestRegistryViewContainsExactlySixFreshEnabledIndependentProfiles(t *testin
 			t.Fatalf("registry profile %d = %+v", index, profile)
 		}
 	}
+	publication := result.Publication.Profiles()
+	if publication[0].Name != "VLESS REALITY Vision" || publication[1].Name != "VLESS XHTTP" || publication[2].Name != "VLESS WebSocket" || publication[3].Name != "Hysteria2" || publication[4].Name != "TUIC" || publication[4].CongestionControl != "cubic" || publication[5].Name != "AnyTLS" {
+		t.Fatalf("publication labels or TUIC congestion = %+v", publication)
+	}
 	if _, ok := result.Profile(connectionprofiles.ProfileID("vmess")); ok {
 		t.Fatal("seventh profile entered the fixed registry")
 	}
