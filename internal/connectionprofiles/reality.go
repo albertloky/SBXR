@@ -302,6 +302,7 @@ type Plan struct {
 	webSocketRequest                 *WebSocketViewRequest
 	hysteria2Request                 *Hysteria2ViewRequest
 	tuicRequest                      *TUICViewRequest
+	anyTLSRequest                    *AnyTLSViewRequest
 	steps                            []systemchanges.Step
 	checks                           []systemchanges.Check
 	used                             *atomic.Bool
@@ -319,6 +320,7 @@ type singBoxPlanSpec struct {
 	websocket                                         *WebSocketViewRequest
 	hysteria2                                         *Hysteria2ViewRequest
 	tuic                                              *TUICViewRequest
+	anyTLS                                            *AnyTLSViewRequest
 }
 
 func (module Interface) buildSingBoxPlan(ctx context.Context, spec singBoxPlanSpec) (*Plan, string) {
@@ -353,7 +355,7 @@ func (module Interface) buildSingBoxPlan(ctx context.Context, spec singBoxPlanSp
 	}{spec.binding, volatileSHA, preparedBinding})
 	digest := sha256.Sum256(binding)
 	sha := hex.EncodeToString(digest[:])
-	return &Plan{identity: "profiles-" + strings.ToLower(spec.profile) + "-" + sha[:12], sha256: sha, volatileSHA256: volatileSHA, description: spec.description, preparedBinding: preparedBinding, configuration: spec.xray, singBoxConfiguration: spec.singBox, revision: spec.revision, changeSet: spec.changeSet, startingStateSHA256: spec.startingState, desiredStateSHA256: spec.desiredState, realityRequest: spec.reality, xhttpRequest: spec.xhttp, webSocketRequest: spec.websocket, hysteria2Request: spec.hysteria2, tuicRequest: spec.tuic, steps: []systemchanges.Step{step}, checks: checks, used: &atomic.Bool{}}, ""
+	return &Plan{identity: "profiles-" + strings.ToLower(spec.profile) + "-" + sha[:12], sha256: sha, volatileSHA256: volatileSHA, description: spec.description, preparedBinding: preparedBinding, configuration: spec.xray, singBoxConfiguration: spec.singBox, revision: spec.revision, changeSet: spec.changeSet, startingStateSHA256: spec.startingState, desiredStateSHA256: spec.desiredState, realityRequest: spec.reality, xhttpRequest: spec.xhttp, webSocketRequest: spec.websocket, hysteria2Request: spec.hysteria2, tuicRequest: spec.tuic, anyTLSRequest: spec.anyTLS, steps: []systemchanges.Step{step}, checks: checks, used: &atomic.Bool{}}, ""
 }
 
 func (plan *Plan) Identity() string {
@@ -487,8 +489,9 @@ func (module Interface) ValidateConnectionProfiles(profiles state.ConnectionProf
 	if err != nil || !independentTUIC(tuic, hysteria2, reality, xhttp, websocket) {
 		return errors.New("TUIC intent is invalid")
 	}
-	if profiles.AnyTLS.Enabled {
-		return errors.New("later Connection Profile slices are not prepared yet")
+	anyTLS, err := anyTLSProfileInput(profiles.AnyTLS, secrets)
+	if err != nil || !independentAnyTLS(anyTLS, hysteria2, tuic) {
+		return errors.New("AnyTLS intent is invalid")
 	}
 	return nil
 }
@@ -548,9 +551,6 @@ func (module Interface) PrepareConnectionProfiles(profiles state.ConnectionProfi
 	if err != nil {
 		return nil, nil, err
 	}
-	if profiles.AnyTLS.Enabled {
-		return nil, nil, errors.New("later Connection Profile slices are not prepared yet")
-	}
 	if !reality.Enabled {
 		return nil, nil, nil
 	}
@@ -569,11 +569,24 @@ func (module Interface) PrepareConnectionProfiles(profiles state.ConnectionProfi
 	if !independentTUIC(tuic, hysteria2, reality, xhttp, websocket) {
 		return nil, nil, errors.New("TUIC intent is invalid")
 	}
+	anyTLS, err := anyTLSProfileInput(profiles.AnyTLS, secrets)
+	if err != nil || !independentAnyTLS(anyTLS, hysteria2, tuic) {
+		return nil, nil, errors.New("AnyTLS intent is invalid")
+	}
 	if hysteria2 == nil {
 		return xray, nil, nil
 	}
-	singBox, err := singBoxConfiguration(hysteria2, tuic)
+	profileSet := &SingBoxProfileSet{TUIC: tuic, AnyTLS: anyTLS}
+	hysteria2.Profiles = profileSet
+	singBox, err := singBoxConfiguration(hysteria2, profileSet)
 	return xray, singBox, err
+}
+
+func independentAnyTLS(anyTLS *AnyTLSViewRequest, hysteria2 *Hysteria2ViewRequest, tuic *TUICViewRequest) bool {
+	if anyTLS == nil {
+		return true
+	}
+	return hysteria2 != nil && tuic != nil && anyTLS.Credentials.password.value != hysteria2.Credentials.password.value && anyTLS.Credentials.password.value != tuic.Credentials.password.value
 }
 
 func independentTUIC(tuic *TUICViewRequest, hysteria2 *Hysteria2ViewRequest, reality ViewRequest, xhttp *XHTTPViewRequest, websocket *WebSocketViewRequest) bool {
@@ -592,7 +605,7 @@ func (plan *Plan) ValidateConnectionProfiles(profiles state.ConnectionProfiles, 
 	}
 	profile := profiles.VLESSRealityVision
 	realityRequest := plan.realityRequest
-	if profiles.AnyTLS.Enabled || profile.Enabled != realityRequest.Enabled || profile.Port != realityRequest.Port || profile.Target != realityRequest.Target.Address || profile.ServerName != realityRequest.Target.ServerName || profile.Fingerprint != realityRequest.Fingerprint ||
+	if profile.Enabled != realityRequest.Enabled || profile.Port != realityRequest.Port || profile.Target != realityRequest.Target.Address || profile.ServerName != realityRequest.Target.ServerName || profile.Fingerprint != realityRequest.Fingerprint ||
 		secrets.ReadClientAccessValue(profile.UUID) != realityRequest.Credentials.uuid.value || secrets.ReadInfrastructureSecret(profile.PrivateKey) != realityRequest.Credentials.privateKey.value || profile.PublicKey != realityRequest.Credentials.publicKey.value || secrets.ReadClientAccessValue(profile.ShortID) != realityRequest.Credentials.shortID.value {
 		return errors.New("candidate Connection Profiles differ from the reviewed Plan")
 	}
@@ -603,6 +616,9 @@ func (plan *Plan) ValidateConnectionProfiles(profiles state.ConnectionProfiles, 
 		return errors.New("candidate Connection Profiles differ from the reviewed Plan")
 	}
 	if !reviewedTUICMatches(plan.tuicRequest, profiles.TUIC, secrets) {
+		return errors.New("candidate Connection Profiles differ from the reviewed Plan")
+	}
+	if !reviewedAnyTLSMatches(plan.anyTLSRequest, profiles.AnyTLS, secrets) {
 		return errors.New("candidate Connection Profiles differ from the reviewed Plan")
 	}
 	return nil

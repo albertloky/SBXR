@@ -35,11 +35,19 @@ func NewHysteria2Credentials(password string) (Hysteria2Credentials, error) {
 }
 
 func GenerateHysteria2Credentials() (Hysteria2Credentials, error) {
-	value := make([]byte, 32)
-	if _, err := io.ReadFull(rand.Reader, value); err != nil {
+	password, err := generateHexSecret()
+	if err != nil {
 		return Hysteria2Credentials{}, errors.New("Hysteria2 password generation failed")
 	}
-	return NewHysteria2Credentials(hex.EncodeToString(value))
+	return NewHysteria2Credentials(password)
+}
+
+func generateHexSecret() (string, error) {
+	value := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, value); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(value), nil
 }
 
 func (credentials Hysteria2Credentials) valid() bool {
@@ -74,9 +82,16 @@ type Hysteria2ViewRequest struct {
 	CertificatePointer, SingBoxVersion string
 	CertificateID, MasqueradeResponse  string
 	Credentials                        Hysteria2Credentials
-	TUIC                               *TUICViewRequest
+	Profiles                           *SingBoxProfileSet
 	DirectTLS                          DirectTLSContribution
 	Network                            ListenerPolicyAuthority
+}
+
+// SingBoxProfileSet is the one reviewed set of profiles sharing the active
+// sing-box artifact. Hysteria2 is the owning base request.
+type SingBoxProfileSet struct {
+	TUIC   *TUICViewRequest
+	AnyTLS *AnyTLSViewRequest
 }
 
 type ListenerPolicyAuthority interface {
@@ -268,7 +283,7 @@ func reviewedHysteria2Matches(reviewed *Hysteria2ViewRequest, profile state.Hyst
 }
 
 func hysteria2Configuration(request Hysteria2ViewRequest) ([]byte, error) {
-	return singBoxConfiguration(&request, request.TUIC)
+	return singBoxConfiguration(&request, request.Profiles)
 }
 
 // Hysteria2ConfigurationAgreement compares the complete active JSON to the

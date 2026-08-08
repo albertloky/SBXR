@@ -17,34 +17,55 @@ import (
 
 const singBoxConfigurationPath = "etc/sbxr/sing-box/config.json"
 
+type singBoxListenerProtocol string
+
+const (
+	singBoxTCP singBoxListenerProtocol = "tcp"
+	singBoxUDP singBoxListenerProtocol = "udp"
+)
+
+type singBoxObservationSpec struct {
+	destination, serverName, certificatePointer, profile string
+	port                                                 uint16
+	listener                                             singBoxListenerProtocol
+	probeNetworks                                        []string
+	agrees                                               func([]byte) bool
+}
+
 func (host RealityHost) ObserveHysteria2(ctx context.Context, request connectionprofiles.Hysteria2ViewRequest) connectionprofiles.Hysteria2Observation {
-	return host.observeSingBoxProfile(ctx, request.DestinationIP, request.Port, request.ServerName, request.CertificatePointer, "hysteria2", func(content []byte) bool {
+	return host.observeSingBoxProfile(ctx, singBoxObservationSpec{destination: request.DestinationIP, port: request.Port, serverName: request.ServerName, certificatePointer: request.CertificatePointer, profile: "hysteria2", listener: singBoxUDP, probeNetworks: []string{"tcp", "udp"}, agrees: func(content []byte) bool {
 		return connectionprofiles.Hysteria2ConfigurationAgreement(content, request)
-	})
+	}})
 }
 
 func (host RealityHost) ObserveTUIC(ctx context.Context, hysteria2 connectionprofiles.Hysteria2ViewRequest, request connectionprofiles.TUICViewRequest) connectionprofiles.TUICObservation {
-	return host.observeSingBoxProfile(ctx, request.DestinationIP, request.Port, request.ServerName, request.CertificatePointer, "tuic", func(content []byte) bool {
-		return connectionprofiles.TUICConfigurationAgreement(content, hysteria2, request)
-	})
+	return host.observeSingBoxProfile(ctx, singBoxObservationSpec{destination: request.DestinationIP, port: request.Port, serverName: request.ServerName, certificatePointer: request.CertificatePointer, profile: "tuic", listener: singBoxUDP, probeNetworks: []string{"tcp", "udp"}, agrees: func(content []byte) bool {
+		return connectionprofiles.TUICConfigurationAgreement(content, hysteria2)
+	}})
 }
 
-func (host RealityHost) observeSingBoxProfile(ctx context.Context, destination string, port uint16, serverName, certificatePointer, profile string, agrees func([]byte) bool) connectionprofiles.Hysteria2Observation {
-	observation, content := host.observeSingBox(ctx, port)
+func (host RealityHost) ObserveAnyTLS(ctx context.Context, hysteria2 connectionprofiles.Hysteria2ViewRequest, tuic connectionprofiles.TUICViewRequest, request connectionprofiles.AnyTLSViewRequest) connectionprofiles.AnyTLSObservation {
+	return host.observeSingBoxProfile(ctx, singBoxObservationSpec{destination: request.DestinationIP, port: request.Port, serverName: request.ServerName, certificatePointer: request.CertificatePointer, profile: "anytls", listener: singBoxTCP, probeNetworks: []string{"tcp"}, agrees: func(content []byte) bool {
+		return connectionprofiles.AnyTLSConfigurationAgreement(content, hysteria2)
+	}})
+}
+
+func (host RealityHost) observeSingBoxProfile(ctx context.Context, spec singBoxObservationSpec) connectionprofiles.Hysteria2Observation {
+	observation, content := host.observeSingBox(ctx, spec.port, spec.listener)
 	if observation.ConfigurationSafe {
-		observation.ConfigurationMatches = agrees(content)
-		observation.CertificateMatches = observation.ConfigurationMatches && host.safeDomainServingPair(certificatePointer)
+		observation.ConfigurationMatches = spec.agrees(content)
+		observation.CertificateMatches = observation.ConfigurationMatches && host.safeDomainServingPair(spec.certificatePointer)
 		if observation.CertificateMatches {
-			certificate := filepath.Join(host.root, strings.TrimPrefix(certificatePointer, "/"), "fullchain.pem")
-			_, err := host.run(ctx, nil, "openssl", "x509", "-in", certificate, "-noout", "-checkhost", serverName)
+			certificate := filepath.Join(host.root, strings.TrimPrefix(spec.certificatePointer, "/"), "fullchain.pem")
+			_, err := host.run(ctx, nil, "openssl", "x509", "-in", certificate, "-noout", "-checkhost", spec.serverName)
 			observation.CertificateMatches = err == nil
 		}
 	}
 	probe := filepath.Join(host.root, probeConfiguration)
-	passed := observation.ConfigurationValid && observation.CertificateMatches && validateProbeConfiguration(host.root, destination, serverName) == nil
+	passed := observation.ConfigurationValid && observation.CertificateMatches && validateProbeConfiguration(host.root, spec.destination, spec.serverName) == nil
 	if passed {
-		for _, network := range []string{"tcp", "udp"} {
-			_, err := host.run(ctx, nil, "sing-box", "-c", probe, "tools", "-o", "sbxr-proof-"+profile, "connect", "-n", network, net.JoinHostPort(destination, strconv.Itoa(int(port))))
+		for _, network := range spec.probeNetworks {
+			_, err := host.run(ctx, nil, "sing-box", "-c", probe, "tools", "-o", "sbxr-proof-"+spec.profile, "connect", "-n", network, net.JoinHostPort(spec.destination, strconv.Itoa(int(spec.port))))
 			passed = passed && err == nil
 		}
 	}
@@ -56,7 +77,7 @@ func (host RealityHost) observeSingBoxProfile(ctx context.Context, destination s
 	return observation
 }
 
-func (host *RealityHost) observeSingBox(ctx context.Context, port uint16) (connectionprofiles.Hysteria2Observation, []byte) {
+func (host *RealityHost) observeSingBox(ctx context.Context, port uint16, protocol singBoxListenerProtocol) (connectionprofiles.Hysteria2Observation, []byte) {
 	if host.now == nil {
 		host.now = time.Now
 	}
@@ -69,12 +90,20 @@ func (host *RealityHost) observeSingBox(ctx context.Context, port uint16) (conne
 	active, activeErr := host.run(ctx, nil, "systemctl", "is-active", "sing-box.service")
 	capabilities, _ := host.run(ctx, nil, "systemctl", "show", "--property=CapabilityBoundingSet", "--value", "sing-box.service")
 	ambient, _ := host.run(ctx, nil, "systemctl", "show", "--property=AmbientCapabilities", "--value", "sing-box.service")
-	listeners, _ := host.run(ctx, nil, "ss", "-H", "-lun", "sport", "=", ":"+strconv.Itoa(int(port)))
+	flag := "-lun"
+	if protocol == singBoxTCP {
+		flag = "-ltn"
+	}
+	listeners, _ := host.run(ctx, nil, "ss", "-H", flag, "sport", "=", ":"+strconv.Itoa(int(port)))
 	observation := connectionprofiles.Hysteria2Observation{CheckedAt: host.now().UTC(), ConfigurationSafe: host.safeSingBoxConfiguration(), ServiceUnit: strings.TrimSpace(unit), ServiceRunning: activeErr == nil && strings.TrimSpace(active) == "active", NetBindService: strings.TrimSpace(capabilities) == "CAP_NET_BIND_SERVICE" && strings.TrimSpace(ambient) == "CAP_NET_BIND_SERVICE"}
 	if host.singBoxUser && strings.TrimSpace(identity) == "sing-box" && strings.TrimSpace(group) == "sing-box" {
 		observation.ServiceIdentity = "sing-box"
 	}
-	if listener, ok := exactUDPListener(listeners, port); ok {
+	if protocol == singBoxUDP {
+		if listener, ok := exactUDPListener(listeners, port); ok {
+			observation.Listener = listener
+		}
+	} else if listener, ok := exactListener(listeners, port, func(address string) bool { return address == "0.0.0.0" || address == "::" || address == "*" }); ok {
 		observation.Listener = listener
 	}
 	if !observation.ConfigurationSafe {

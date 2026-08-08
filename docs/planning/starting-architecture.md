@@ -173,12 +173,12 @@ Security          TLS
 Public address    VPS IPv4 or IPv6
 Public port       9443/TCP
 TLS SNI           direct.<owned-domain>
-AnyTLS uses password authentication, TLS and a configurable padding scheme. sing-box has supported AnyTLS inbound and outbound configurations since version 1.12.0.
+AnyTLS uses password authentication and TLS. sing-box has supported AnyTLS inbound and outbound configurations since version 1.12.0; SBXR initially qualifies version 1.13.16 and must revalidate the complete configuration before a later release is activated.
 Security defaults:
 Independent 32-byte random password
 Valid certificate
 Certificate verification enabled
-Standard maintained padding scheme
+Maintained padding defaults owned by the qualified sing-box core; SBXR does not copy `padding_scheme`
 No insecure mode
 6. Protocols deliberately excluded
 VMess

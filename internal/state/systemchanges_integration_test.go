@@ -2470,6 +2470,29 @@ func TestTUICPostMutationFailureRestoresPriorCompleteSingBoxConfiguration(t *tes
 	}
 }
 
+func TestAnyTLSPostMutationFailureRestoresPriorCompleteSingBoxConfiguration(t *testing.T) {
+	candidate := []byte(`{"inbounds":[{"listen":"0.0.0.0","listen_port":443,"masquerade":{"content":"Not Found\n","headers":{"content-type":["text/plain; charset=utf-8"]},"status_code":404,"type":"string"},"tag":"hysteria2-in","tls":{"certificate_path":"/var/lib/sbxr/certificates/domain/current/fullchain.pem","enabled":true,"key_path":"/var/lib/sbxr/certificates/domain/current/privkey.pem","server_name":"direct.example.com"},"type":"hysteria2","users":[{"password":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]},{"congestion_control":"cubic","listen":"0.0.0.0","listen_port":8443,"tag":"tuic-in","tls":{"certificate_path":"/var/lib/sbxr/certificates/domain/current/fullchain.pem","enabled":true,"key_path":"/var/lib/sbxr/certificates/domain/current/privkey.pem","server_name":"direct.example.com"},"type":"tuic","users":[{"password":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","uuid":"55555555-5555-4555-8555-555555555555"}],"zero_rtt_handshake":false},{"listen":"0.0.0.0","listen_port":9443,"tag":"anytls-in","tls":{"certificate_path":"/var/lib/sbxr/certificates/domain/current/fullchain.pem","enabled":true,"key_path":"/var/lib/sbxr/certificates/domain/current/privkey.pem","server_name":"direct.example.com"},"type":"anytls","users":[{"password":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}]}],"log":{"level":"warn"},"outbounds":[{"tag":"direct","type":"direct"}],"route":{"final":"direct"}}`)
+	xray := []byte(`{"inbounds":[{"tag":"vless-reality-vision"}],"outbounds":[{"protocol":"freedom"}]}`)
+	_, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.SettingChangeMutation, systemchanges.Check{Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CONNECTION-PROFILES-ANYTLS-CONFIGURATION"}, systemChangeTestOptions{stepTimeout: time.Second, nativeXray: xray, nativeSingBox: candidate})
+	root := t.TempDir()
+	prepareLock(t, root)
+	prior := []byte(`{"inbounds":[{"tag":"prior-tuic"}],"outbounds":[{"tag":"direct","type":"direct"}]}`)
+	active := filepath.Join(root, "etc/sbxr/sing-box/config.json")
+	if err := os.MkdirAll(filepath.Dir(active), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(active, prior, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	host := &controlledUbuntuHost{root: root, failExecute: true, preparedConfiguration: "prepared/sing-box.json", activeConfiguration: "etc/sbxr/sing-box/config.json", rollbackWant: prior, preparedWant: candidate}
+	adapter := ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return observed, nil }, host)
+	result := systemchanges.New(adapter).Apply(changeSet)
+	restored, err := os.ReadFile(active)
+	if result.Outcome != systemchanges.RollbackSucceeded || host.executed != 1 || host.rollbacks != 1 || err != nil || !bytes.Equal(restored, prior) {
+		t.Fatalf("AnyTLS rollback = %+v; executed=%d rollbacks=%d restored=%s err=%v", result, host.executed, host.rollbacks, restored, err)
+	}
+}
+
 type renewalDuePolicy struct{ events *[]string }
 
 func (policy renewalDuePolicy) Due(lineage certificatelifecycle.Lineage) bool {

@@ -116,13 +116,72 @@ func TestObserveTUICProvesCompleteConfigurationListenerTLSAndFunction(t *testing
 		}
 	}
 	hysteria2, tuic := hysteria2AdapterRequest(t), tuicAdapterRequest(t)
+	hysteria2.Profiles = &connectionprofiles.SingBoxProfileSet{TUIC: &tuic}
 	observation := host.ObserveTUIC(t.Context(), hysteria2, tuic)
 	if !observation.ConfigurationSafe || !observation.ConfigurationValid || !observation.ConfigurationMatches || !observation.CertificateMatches || !observation.ServiceRunning || observation.Listener.Port != 8443 || observation.Listener.Protocol != "udp" || observation.ServerFunction != connectionprofiles.ProbePassed {
 		t.Fatalf("ObserveTUIC() = %+v", observation)
 	}
-	hysteria2.TUIC = &tuic
 	if observation := host.ObserveHysteria2(t.Context(), hysteria2); !observation.ConfigurationMatches || observation.Listener.Port != 443 || observation.ServerFunction != connectionprofiles.ProbePassed {
 		t.Fatalf("combined Hysteria2 observation = %+v", observation)
+	}
+}
+
+func TestObserveAnyTLSProvesCombinedConfigurationTCPAndCorePadding(t *testing.T) {
+	root := t.TempDir()
+	writeAnyTLSConfiguration(t, root)
+	writeProbeConfigurationAt(t, root)
+	writeDomainServingPair(t, root, 0o750, 0o640)
+	host := RealityHost{root: root, now: func() time.Time { return time.Unix(1, 0) }, rootUID: uint32(os.Geteuid()), singBoxGID: uint32(os.Getegid()), singBoxGroup: true, singBoxUser: true}
+	host.run = func(_ context.Context, _ io.Reader, name string, arguments ...string) (string, error) {
+		command := name + " " + strings.Join(arguments, " ")
+		switch {
+		case strings.Contains(command, "Id"):
+			return "sing-box.service", nil
+		case strings.Contains(command, "User"), strings.Contains(command, "Group"):
+			return "sing-box", nil
+		case strings.Contains(command, "is-active"):
+			return "active", nil
+		case strings.Contains(command, "CapabilityBoundingSet"), strings.Contains(command, "AmbientCapabilities"):
+			return "CAP_NET_BIND_SERVICE", nil
+		case strings.HasPrefix(command, "ss -H -ltn"):
+			return "LISTEN 0 4096 0.0.0.0:9443 0.0.0.0:*\n", nil
+		case strings.HasPrefix(command, "ss -H -lun") && strings.HasSuffix(command, ":443"):
+			return "UNCONN 0 0 0.0.0.0:443 0.0.0.0:*\n", nil
+		case strings.HasPrefix(command, "ss -H -lun") && strings.HasSuffix(command, ":8443"):
+			return "UNCONN 0 0 0.0.0.0:8443 0.0.0.0:*\n", nil
+		case strings.HasPrefix(command, "sing-box check"), strings.HasPrefix(command, "openssl x509"):
+			return "", nil
+		case strings.Contains(command, "tools -o sbxr-proof-anytls connect -n tcp 192.0.2.10:9443"):
+			return "", nil
+		case strings.Contains(command, "tools -o sbxr-proof-hysteria2 connect -n tcp 192.0.2.10:443"), strings.Contains(command, "tools -o sbxr-proof-hysteria2 connect -n udp 192.0.2.10:443"):
+			return "", nil
+		case strings.Contains(command, "tools -o sbxr-proof-tuic connect -n tcp 192.0.2.10:8443"), strings.Contains(command, "tools -o sbxr-proof-tuic connect -n udp 192.0.2.10:8443"):
+			return "", nil
+		default:
+			t.Fatalf("unexpected command: %s", command)
+			return "", nil
+		}
+	}
+	hysteria2, tuic, anyTLS := hysteria2AdapterRequest(t), tuicAdapterRequest(t), anyTLSAdapterRequest(t)
+	hysteria2.Profiles = &connectionprofiles.SingBoxProfileSet{TUIC: &tuic, AnyTLS: &anyTLS}
+	observation := host.ObserveAnyTLS(t.Context(), hysteria2, tuic, anyTLS)
+	if !observation.ConfigurationSafe || !observation.ConfigurationValid || !observation.ConfigurationMatches || !observation.CertificateMatches || !observation.ServiceRunning || observation.Listener != (connectionprofiles.Listener{Address: "0.0.0.0", Port: 9443, Protocol: "tcp"}) || observation.ServerFunction != connectionprofiles.ProbePassed {
+		t.Fatalf("ObserveAnyTLS() = %+v", observation)
+	}
+	if previous := host.ObserveHysteria2(t.Context(), hysteria2); !previous.ConfigurationMatches || previous.Listener.Port != 443 || previous.ServerFunction != connectionprofiles.ProbePassed {
+		t.Fatalf("combined Hysteria2 observation = %+v", previous)
+	}
+	if previous := host.ObserveTUIC(t.Context(), hysteria2, tuic); !previous.ConfigurationMatches || previous.Listener.Port != 8443 || previous.ServerFunction != connectionprofiles.ProbePassed {
+		t.Fatalf("combined TUIC observation = %+v", previous)
+	}
+	path := filepath.Join(root, singBoxConfigurationPath)
+	content, _ := os.ReadFile(path)
+	content = []byte(strings.Replace(string(content), `"listen_port":9443`, `"listen_port":9443,"padding_scheme":["stop=8"]`, 1))
+	if err := os.WriteFile(path, content, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if drift := host.ObserveAnyTLS(t.Context(), hysteria2, tuic, anyTLS); drift.ConfigurationMatches {
+		t.Fatalf("copied AnyTLS padding agreed with core-owned defaults: %+v", drift)
 	}
 }
 
@@ -217,6 +276,15 @@ func tuicAdapterRequest(t *testing.T) connectionprofiles.TUICViewRequest {
 	return connectionprofiles.TUICViewRequest{DestinationIP: "192.0.2.10", Port: 8443, ServerName: "direct.example.com", CertificateID: "sbxr-domain", CertificatePointer: "/var/lib/sbxr/certificates/domain/current", SingBoxVersion: "1.13.16", CongestionControl: state.CongestionCubic, Credentials: credentials}
 }
 
+func anyTLSAdapterRequest(t *testing.T) connectionprofiles.AnyTLSViewRequest {
+	t.Helper()
+	credentials, err := connectionprofiles.NewAnyTLSCredentials(strings.Repeat("c", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return connectionprofiles.AnyTLSViewRequest{DestinationIP: "192.0.2.10", Port: 9443, ServerName: "direct.example.com", CertificateID: "sbxr-domain", CertificatePointer: "/var/lib/sbxr/certificates/domain/current", MinimumSingBoxVersion: "1.12.0", SingBoxVersion: "1.13.16", UseCorePadding: true, Credentials: credentials}
+}
+
 func writeTUICConfiguration(t *testing.T, root string) {
 	t.Helper()
 	writeHysteria2Configuration(t, root, 0o750, 0o640)
@@ -226,6 +294,20 @@ func writeTUICConfiguration(t *testing.T, root string) {
 		t.Fatal(err)
 	}
 	content = []byte(strings.Replace(string(content), `}],"log"`, `},{"congestion_control":"cubic","listen":"0.0.0.0","listen_port":8443,"tag":"tuic-in","tls":{"certificate_path":"/var/lib/sbxr/certificates/domain/current/fullchain.pem","enabled":true,"key_path":"/var/lib/sbxr/certificates/domain/current/privkey.pem","server_name":"direct.example.com"},"type":"tuic","users":[{"password":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","uuid":"55555555-5555-4555-8555-555555555555"}],"zero_rtt_handshake":false}],"log"`, 1))
+	if err := os.WriteFile(path, content, 0o640); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeAnyTLSConfiguration(t *testing.T, root string) {
+	t.Helper()
+	writeTUICConfiguration(t, root)
+	path := filepath.Join(root, singBoxConfigurationPath)
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content = []byte(strings.Replace(string(content), `}],"log"`, `},{"listen":"0.0.0.0","listen_port":9443,"tag":"anytls-in","tls":{"certificate_path":"/var/lib/sbxr/certificates/domain/current/fullchain.pem","enabled":true,"key_path":"/var/lib/sbxr/certificates/domain/current/privkey.pem","server_name":"direct.example.com"},"type":"anytls","users":[{"password":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}]}],"log"`, 1))
 	if err := os.WriteFile(path, content, 0o640); err != nil {
 		t.Fatal(err)
 	}

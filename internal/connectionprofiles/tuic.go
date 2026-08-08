@@ -2,13 +2,11 @@ package connectionprofiles
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/netip"
 	"reflect"
 	"time"
@@ -34,11 +32,11 @@ func GenerateTUICCredentials() (TUICCredentials, error) {
 	if err != nil {
 		return TUICCredentials{}, errors.New("TUIC UUID generation failed")
 	}
-	value := make([]byte, 32)
-	if _, err := io.ReadFull(rand.Reader, value); err != nil {
+	password, err := generateHexSecret()
+	if err != nil {
 		return TUICCredentials{}, errors.New("TUIC password generation failed")
 	}
-	return NewTUICCredentials(uuid, hex.EncodeToString(value))
+	return NewTUICCredentials(uuid, password)
 }
 
 func (credentials TUICCredentials) valid() bool {
@@ -90,6 +88,11 @@ func (module Interface) ViewTUIC(ctx context.Context, hysteria2 Hysteria2ViewReq
 }
 
 func (module Interface) viewTUIC(ctx context.Context, hysteria2 Hysteria2ViewRequest, request TUICViewRequest, checkActive bool) TUICViewResult {
+	profiles := SingBoxProfileSet{TUIC: &request}
+	if hysteria2.Profiles != nil {
+		profiles.AnyTLS = hysteria2.Profiles.AnyTLS
+	}
+	hysteria2.Profiles = &profiles
 	profile := TUICProfile{Name: "TUIC", DestinationIP: request.DestinationIP, ServerName: request.ServerName, SingBoxVersion: request.SingBoxVersion, Enabled: request.Enabled, Port: request.Port, CredentialsReady: request.Credentials.valid()}
 	host, ok := module.host.(TUICHost)
 	if !ok {
@@ -193,7 +196,7 @@ func (module Interface) PlanTUIC(ctx context.Context, request TUICPlanRequest) P
 		}
 	}
 	hysteria2Request := request.Hysteria2
-	hysteria2Request.TUIC = &request.View
+	hysteria2Request.Profiles = &SingBoxProfileSet{TUIC: &request.View}
 	hysteria2 := module.viewHysteria2(ctx, hysteria2Request, false)
 	if hysteria2.Health.Outcome != Healthy {
 		return PlanResult{Health: hysteria2.Health}
@@ -209,7 +212,7 @@ func (module Interface) PlanTUIC(ctx context.Context, request TUICPlanRequest) P
 	if err != nil {
 		return PlanResult{Health: blockedTUIC(view.Health.Time, Failed, "CONNECTION-PROFILES-TUIC-CONFIGURATION", "The complete Xray configuration could not be prepared", "the reviewed Xray profiles are incomplete", "one complete protected Xray configuration")}
 	}
-	singBox, err := singBoxConfiguration(&hysteria2Request, &request.View)
+	singBox, err := singBoxConfiguration(&hysteria2Request, hysteria2Request.Profiles)
 	if err != nil {
 		return PlanResult{Health: blockedTUIC(view.Health.Time, Failed, "CONNECTION-PROFILES-TUIC-CONFIGURATION", "The complete sing-box configuration could not be prepared", "the reviewed Hysteria2 or TUIC inputs are incomplete", "one complete protected sing-box configuration")}
 	}
@@ -238,8 +241,13 @@ func reviewedTUICMatches(reviewed *TUICViewRequest, profile state.TUIC, secrets 
 	return profile.Enabled && profile.Port == reviewed.Port && profile.ServerName == reviewed.ServerName && profile.CertificateID == reviewed.CertificateID && profile.CongestionControl == reviewed.CongestionControl && profile.ZeroRTT == reviewed.ZeroRTT && secrets.ReadClientAccessValue(profile.UUID) == reviewed.Credentials.uuid.value && secrets.ReadClientAccessValue(profile.Password) == reviewed.Credentials.password.value
 }
 
-func singBoxConfiguration(hysteria2 *Hysteria2ViewRequest, tuic *TUICViewRequest) ([]byte, error) {
-	inbounds := make([]any, 0, 2)
+func singBoxConfiguration(hysteria2 *Hysteria2ViewRequest, profiles *SingBoxProfileSet) ([]byte, error) {
+	inbounds := make([]any, 0, 3)
+	var tuic *TUICViewRequest
+	var anyTLS *AnyTLSViewRequest
+	if profiles != nil {
+		tuic, anyTLS = profiles.TUIC, profiles.AnyTLS
+	}
 	if hysteria2 != nil {
 		if hysteria2.Port != 443 || !hysteria2.Credentials.valid() || !validHostname(hysteria2.ServerName) || hysteria2.MasqueradeResponse != "Not Found\n" || hysteria2.CertificatePointer != directCertificatePointer {
 			return nil, errors.New("Hysteria2 inputs invalid")
@@ -252,14 +260,20 @@ func singBoxConfiguration(hysteria2 *Hysteria2ViewRequest, tuic *TUICViewRequest
 		}
 		inbounds = append(inbounds, map[string]any{"type": "tuic", "tag": "tuic-in", "listen": "0.0.0.0", "listen_port": 8443, "users": []any{map[string]any{"uuid": tuic.Credentials.uuid.value, "password": tuic.Credentials.password.value}}, "congestion_control": "cubic", "zero_rtt_handshake": false, "tls": map[string]any{"enabled": true, "server_name": tuic.ServerName, "certificate_path": tuic.CertificatePointer + "/fullchain.pem", "key_path": tuic.CertificatePointer + "/privkey.pem"}})
 	}
+	if anyTLS != nil {
+		if anyTLS.Port != 9443 || !anyTLS.Credentials.valid() || !validHostname(anyTLS.ServerName) || anyTLS.CertificatePointer != directCertificatePointer || anyTLS.MinimumSingBoxVersion != anyTLSMinimumSingBoxVersion || anyTLS.SingBoxVersion != qualifiedSingBoxVersion || !anyTLS.UseCorePadding || hysteria2 == nil || tuic == nil || anyTLS.Credentials.password.value == hysteria2.Credentials.password.value || anyTLS.Credentials.password.value == tuic.Credentials.password.value {
+			return nil, errors.New("AnyTLS inputs invalid")
+		}
+		inbounds = append(inbounds, map[string]any{"type": "anytls", "tag": "anytls-in", "listen": "0.0.0.0", "listen_port": 9443, "users": []any{map[string]any{"password": anyTLS.Credentials.password.value}}, "tls": map[string]any{"enabled": true, "server_name": anyTLS.ServerName, "certificate_path": anyTLS.CertificatePointer + "/fullchain.pem", "key_path": anyTLS.CertificatePointer + "/privkey.pem"}})
+	}
 	if len(inbounds) == 0 {
 		return nil, nil
 	}
 	return json.Marshal(map[string]any{"log": map[string]any{"level": "warn"}, "inbounds": inbounds, "outbounds": []any{map[string]any{"type": "direct", "tag": "direct"}}, "route": map[string]any{"final": "direct"}})
 }
 
-func TUICConfigurationAgreement(content []byte, hysteria2 Hysteria2ViewRequest, request TUICViewRequest) bool {
-	expected, err := singBoxConfiguration(&hysteria2, &request)
+func TUICConfigurationAgreement(content []byte, hysteria2 Hysteria2ViewRequest) bool {
+	expected, err := singBoxConfiguration(&hysteria2, hysteria2.Profiles)
 	if err != nil {
 		return false
 	}

@@ -116,7 +116,9 @@ func TestTUICPlanValidatesCompleteReplaySafeSingBoxConfiguration(t *testing.T) {
 	if rendered := fmt.Sprintf("%+v", result); strings.Contains(rendered, tuicUUIDMarker) || strings.Contains(rendered, tuicPasswordMarker) || strings.Contains(rendered, string(host.validated)) {
 		t.Fatalf("PlanTUIC() leaked protected material: %s", rendered)
 	}
-	if !connectionprofiles.TUICConfigurationAgreement(host.validated, request.Hysteria2, request.View) || connectionprofiles.TUICConfigurationAgreement(bytes.Replace(host.validated, []byte(`"zero_rtt_handshake":false`), []byte(`"zero_rtt_handshake":true`), 1), request.Hysteria2, request.View) {
+	hysteria2 := request.Hysteria2
+	hysteria2.Profiles = &connectionprofiles.SingBoxProfileSet{TUIC: &request.View}
+	if !connectionprofiles.TUICConfigurationAgreement(host.validated, hysteria2) || connectionprofiles.TUICConfigurationAgreement(bytes.Replace(host.validated, []byte(`"zero_rtt_handshake":false`), []byte(`"zero_rtt_handshake":true`), 1), hysteria2) {
 		t.Fatal("TUIC exact active configuration agreement accepted replay drift")
 	}
 	profiles, secrets := completeProfileStateForTUIC()
@@ -161,7 +163,7 @@ func TestTUICPlanAcceptsHysteria2OnlyCurrentStateAndCombinedReplay(t *testing.T)
 
 func TestHysteria2RemainsHealthyWithReviewedTUICArtifact(t *testing.T) {
 	hysteria2, tuic := validHysteria2Request(t), validTUICRequest(t)
-	hysteria2.TUIC = &tuic
+	hysteria2.Profiles = &connectionprofiles.SingBoxProfileSet{TUIC: &tuic}
 	if result := connectionprofiles.New(healthyTUICHost()).ViewHysteria2(t.Context(), hysteria2); result.Health.Outcome != connectionprofiles.Healthy {
 		t.Fatalf("combined Hysteria2 View = %+v", result)
 	}
