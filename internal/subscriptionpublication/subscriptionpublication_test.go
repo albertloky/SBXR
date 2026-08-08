@@ -12,7 +12,6 @@ import (
 
 	"github.com/albertloky/SBXR/internal/connectionprofiles"
 	"github.com/albertloky/SBXR/internal/state"
-	"github.com/albertloky/SBXR/internal/subscriptionpublication"
 )
 
 type clientAccessReader map[state.ClientAccessValue]string
@@ -31,7 +30,7 @@ func sixProfileSource(t *testing.T, address string) (connectionprofiles.Publicat
 	t.Helper()
 	reader := clientAccessReader{}
 	profiles := []connectionprofiles.PublicationProfile{
-		{ID: connectionprofiles.VLESSRealityVisionProfileID, Name: "VLESS REALITY Vision", Address: address, Port: 443, ServerName: "direct.example.com", Transport: "RAW", Security: "REALITY", UUID: access(reader, "11111111-1111-4111-8111-111111111111"), ShortID: access(reader, "0123456789abcdef"), PublicKey: "PUBLIC-KEY+MARKER/01=", Fingerprint: "chrome", Flow: "xtls-rprx-vision"},
+		{ID: connectionprofiles.VLESSRealityVisionProfileID, Name: "VLESS REALITY Vision", Address: address, Port: 443, ServerName: "direct.example.com", Transport: "RAW", Security: "REALITY", UUID: access(reader, "11111111-1111-4111-8111-111111111111"), ShortID: access(reader, "0123456789abcdef"), PublicKey: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", Fingerprint: "chrome", Flow: "xtls-rprx-vision"},
 		{ID: connectionprofiles.VLESSXHTTPProfileID, Name: "VLESS XHTTP 香港", Address: "xhttp.example.com", Hostname: "xhttp.example.com", Port: 443, Transport: "XHTTP", Security: "TLS", UUID: access(reader, "22222222-2222-4222-8222-222222222222"), Path: access(reader, "/xhttp path?雪"), XHTTPServerMode: state.XHTTPPacketUp},
 		{ID: connectionprofiles.VLESSWebSocketProfileID, Name: "VLESS WebSocket", Address: "ws.example.com", Hostname: "ws.example.com", Port: 443, Transport: "WebSocket", Security: "TLS", UUID: access(reader, "33333333-3333-4333-8333-333333333333"), Path: access(reader, "/ws path?獨立"), HTTPHost: "origin.example.com", TLSName: "ws.example.com"},
 		{ID: connectionprofiles.Hysteria2ProfileID, Name: "Hysteria2", Address: address, Port: 4443, ServerName: "direct.example.com", Transport: "QUIC", Security: "TLS", Password: access(reader, "hy:p@ss /雪")},
@@ -47,13 +46,13 @@ func sixProfileSource(t *testing.T, address string) (connectionprofiles.Publicat
 
 func TestRenderProducesDeterministicRawBase64AndV2RayN(t *testing.T) {
 	source, reader := sixProfileSource(t, "198.51.100.10")
-	module := subscriptionpublication.New()
+	module := newAcceptingTestModule()
 
-	first, err := module.Render(source, reader)
+	first, err := module.Render(t.Context(), source, reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := module.Render(source, reader)
+	second, err := module.Render(t.Context(), source, reader)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +80,7 @@ func TestRenderProducesDeterministicRawBase64AndV2RayN(t *testing.T) {
 		scheme, username, password, host, fragment string
 		query                                      url.Values
 	}{
-		{"vless", "11111111-1111-4111-8111-111111111111", "", "198.51.100.10:443", "VLESS REALITY Vision", url.Values{"encryption": {"none"}, "flow": {"xtls-rprx-vision"}, "security": {"reality"}, "sni": {"direct.example.com"}, "fp": {"chrome"}, "pbk": {"PUBLIC-KEY+MARKER/01="}, "sid": {"0123456789abcdef"}, "type": {"tcp"}}},
+		{"vless", "11111111-1111-4111-8111-111111111111", "", "198.51.100.10:443", "VLESS REALITY Vision", url.Values{"encryption": {"none"}, "flow": {"xtls-rprx-vision"}, "security": {"reality"}, "sni": {"direct.example.com"}, "fp": {"chrome"}, "pbk": {"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"}, "sid": {"0123456789abcdef"}, "type": {"tcp"}}},
 		{"vless", "22222222-2222-4222-8222-222222222222", "", "xhttp.example.com:443", "VLESS XHTTP 香港", url.Values{"encryption": {"none"}, "security": {"tls"}, "sni": {"xhttp.example.com"}, "type": {"xhttp"}, "host": {"xhttp.example.com"}, "path": {"/xhttp path?雪"}, "mode": {"auto"}}},
 		{"vless", "33333333-3333-4333-8333-333333333333", "", "ws.example.com:443", "VLESS WebSocket", url.Values{"encryption": {"none"}, "security": {"tls"}, "sni": {"ws.example.com"}, "type": {"ws"}, "host": {"origin.example.com"}, "path": {"/ws path?獨立"}}},
 		{"hysteria2", "hy:p@ss /雪", "", "198.51.100.10:4443", "Hysteria2", url.Values{"sni": {"direct.example.com"}, "insecure": {"0"}}},
@@ -114,7 +113,7 @@ func TestRenderBracketsIPv6AndOmitsDisabledProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := subscriptionpublication.New().Render(source, reader)
+	result, err := newAcceptingTestModule().Render(t.Context(), source, reader)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +131,7 @@ func TestRenderRefusesIncompleteSourceWithoutLeakingSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = subscriptionpublication.New().Render(source, reader)
+	_, err = newAcceptingTestModule().Render(t.Context(), source, reader)
 	if err == nil || strings.Contains(err.Error(), "hy:p@ss /雪") {
 		t.Fatalf("Render() error = %v", err)
 	}
