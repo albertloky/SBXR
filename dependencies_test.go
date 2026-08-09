@@ -521,7 +521,7 @@ func validatePackages(packages []packageInfo) error {
 			return fmt.Errorf("generic package %q is forbidden", current.ImportPath)
 		}
 		if len(parts) == 0 || parts[0] != "internal" {
-			if current.ImportPath != modulePath+"/cmd/sbxr" {
+			if current.ImportPath != modulePath+"/cmd/sbxr" && current.ImportPath != modulePath+"/cmd/sbxr-release" {
 				return fmt.Errorf("unregistered product package %q", current.ImportPath)
 			}
 			continue

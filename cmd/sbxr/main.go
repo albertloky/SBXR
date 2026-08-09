@@ -14,6 +14,18 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "version" {
+		if writeVersion(os.Stdout, false) != nil {
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) == 3 && os.Args[1] == "version" && os.Args[2] == "--json" {
+		if writeVersion(os.Stdout, true) != nil {
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) == 3 && os.Args[1] == "private" && os.Args[2] == "health-check" {
 		history := healthdiagnostics.NewEventHistory(healthfilesystem.NewEventStorage(), nil)
 		if runScheduledHealthCheck(context.Background(), history) != nil {

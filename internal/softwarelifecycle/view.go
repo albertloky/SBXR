@@ -78,6 +78,7 @@ type Refusal struct {
 
 type ViewRequest struct {
 	Tag                string
+	Architecture       Architecture
 	InstallationStatus InstallationStatus
 	Installed          *VerifiedRelease
 }
@@ -86,6 +87,7 @@ type ViewResult struct {
 	InstallationStatus InstallationStatus
 	Installed          *ReleaseIdentity
 	VerifiedCandidate  *VerifiedRelease
+	StagedCandidate    *StagedRelease
 	MigrationSummary   string
 	UpdateEligible     bool
 	AffectedComponents []Component
@@ -127,15 +129,20 @@ type VerifierQualification struct {
 
 type Interface struct {
 	source        ReleaseSource
+	stager        ReleaseStager
 	qualification VerifierQualification
 	now           func() time.Time
 }
 
-func New(source ReleaseSource, qualification VerifierQualification, now func() time.Time) Interface {
+func New(source ReleaseSource, qualification VerifierQualification, now func() time.Time, stager ...ReleaseStager) Interface {
 	if now == nil {
 		now = time.Now
 	}
-	return Interface{source: source, qualification: qualification, now: now}
+	var selected ReleaseStager
+	if len(stager) == 1 {
+		selected = stager[0]
+	}
+	return Interface{source: source, stager: selected, qualification: qualification, now: now}
 }
 
 func (module Interface) View(ctx context.Context, request ViewRequest) ViewResult {
@@ -151,11 +158,24 @@ func (module Interface) View(ctx context.Context, request ViewRequest) ViewResul
 	if err != nil {
 		return refuse(result)
 	}
-	candidate, err := verify(evidence, request.Tag, module.qualification, module.now().UTC())
+	candidate, archives, err := verify(evidence, request.Tag, module.qualification, module.now().UTC())
 	if err != nil {
 		return refuse(result)
 	}
 	result.VerifiedCandidate = &candidate
+	if request.Architecture != "" {
+		component := componentForArchitecture(request.Architecture)
+		asset, archive, ok := selectedArchive(candidate, archives, component)
+		if module.stager == nil || !ok {
+			return refuse(result)
+		}
+		stageRequest := newStageRequest(candidate, request.Architecture, asset, archive)
+		staged, err := module.stager.Stage(ctx, stageRequest)
+		if err != nil || !validStagedRelease(staged, stageRequest) {
+			return refuse(result)
+		}
+		result.StagedCandidate = &staged
+	}
 	result.MigrationSummary = migrationSummary(candidate)
 	result.AffectedComponents = []Component{ApplicationAMD64, ApplicationARM64}
 	switch request.InstallationStatus {
@@ -196,6 +216,7 @@ func validQualification(value VerifierQualification) bool {
 
 func refuse(result ViewResult) ViewResult {
 	result.VerifiedCandidate = nil
+	result.StagedCandidate = nil
 	result.MigrationSummary = ""
 	result.UpdateEligible = false
 	result.AffectedComponents = nil
@@ -234,66 +255,87 @@ var (
 
 func safeTag(value string) bool { return tagPattern.MatchString(value) }
 
-func verify(evidence ReleaseEvidence, requestedTag string, qualification VerifierQualification, at time.Time) (VerifiedRelease, error) {
+func verify(evidence ReleaseEvidence, requestedTag string, qualification VerifierQualification, at time.Time) (VerifiedRelease, map[string][]byte, error) {
 	if evidence.Repository != Repository || evidence.Tag != requestedTag || !commitPattern.MatchString(evidence.Commit) || len(evidence.Index) == 0 || len(evidence.Index) > MaxIndexBytes || at.IsZero() || at.Location() != time.UTC {
-		return VerifiedRelease{}, errors.New("release identity refused")
+		return VerifiedRelease{}, nil, errors.New("release identity refused")
 	}
 	if evidence.Verifier.Version != qualification.Version || evidence.Verifier.SigningFingerprint != qualification.SigningFingerprint || !evidence.Verifier.OfficialSignedDistribution || !evidence.Verifier.ReleaseVerified {
-		return VerifiedRelease{}, errors.New("verifier refused")
+		return VerifiedRelease{}, nil, errors.New("verifier refused")
 	}
 	if err := ValidateUniqueJSON(evidence.Index); err != nil {
-		return VerifiedRelease{}, err
+		return VerifiedRelease{}, nil, err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(evidence.Index))
 	decoder.DisallowUnknownFields()
 	var index releaseIndex
 	if decoder.Decode(&index) != nil || decoder.Decode(&struct{}{}) != io.EOF {
-		return VerifiedRelease{}, errors.New("index refused")
+		return VerifiedRelease{}, nil, errors.New("index refused")
 	}
 	if index.Schema != 1 || index.Product != "sbxr" || index.Repository != Repository || !versionPattern.MatchString(index.Version) || index.Sequence == 0 || index.Tag != requestedTag || index.Commit != evidence.Commit || index.StateSchema == 0 || index.MinimumUpdaterSchema == 0 || len(index.Assets) != 2 {
-		return VerifiedRelease{}, errors.New("index identity refused")
+		return VerifiedRelease{}, nil, errors.New("index identity refused")
 	}
 	downloads := make(map[string][]byte, len(evidence.Assets))
 	for _, asset := range evidence.Assets {
 		if _, duplicate := downloads[asset.Name]; duplicate || !safeName(asset.Name) || len(asset.Bytes) == 0 || len(asset.Bytes) > MaxAssetBytes {
-			return VerifiedRelease{}, errors.New("download refused")
+			return VerifiedRelease{}, nil, errors.New("download refused")
 		}
 		downloads[asset.Name] = asset.Bytes
 	}
 	attested := make(map[string]string, len(evidence.AttestedAssets))
 	for _, asset := range evidence.AttestedAssets {
 		if _, duplicate := attested[asset.Name]; duplicate || !safeName(asset.Name) || !hashPattern.MatchString(asset.SHA256) {
-			return VerifiedRelease{}, errors.New("attestation refused")
+			return VerifiedRelease{}, nil, errors.New("attestation refused")
 		}
 		attested[asset.Name] = asset.SHA256
 	}
 	indexDigest := sha256.Sum256(evidence.Index)
 	if attested["release-index.json"] != hex.EncodeToString(indexDigest[:]) || !exactNames(evidence.Verifier.VerifiedAssets, attested) || len(attested) != 3 || len(downloads) != 2 {
-		return VerifiedRelease{}, errors.New("asset set refused")
+		return VerifiedRelease{}, nil, errors.New("asset set refused")
 	}
 	seenRoles := map[Component]bool{}
 	proofs := make([]AssetProof, 0, 2)
 	for _, asset := range index.Assets {
 		if asset.Role != ApplicationAMD64 && asset.Role != ApplicationARM64 || seenRoles[asset.Role] || !safeName(asset.Name) || asset.Name == "release-index.json" || asset.Size <= 0 || asset.Size > MaxAssetBytes || !hashPattern.MatchString(asset.SHA256) {
-			return VerifiedRelease{}, errors.New("indexed asset refused")
+			return VerifiedRelease{}, nil, errors.New("indexed asset refused")
 		}
 		seenRoles[asset.Role] = true
 		body, ok := downloads[asset.Name]
 		digest := sha256.Sum256(body)
 		if !ok || !strings.HasSuffix(asset.Name, ".tar.gz") || int64(len(body)) != asset.Size || hex.EncodeToString(digest[:]) != asset.SHA256 || attested[asset.Name] != asset.SHA256 || !oneExecutableArchive(body) {
-			return VerifiedRelease{}, errors.New("asset disagreement")
+			return VerifiedRelease{}, nil, errors.New("asset disagreement")
 		}
 		proofs = append(proofs, AssetProof{Role: asset.Role, Name: asset.Name, Size: asset.Size, SHA256: asset.SHA256})
 	}
 	if !seenRoles[ApplicationAMD64] || !seenRoles[ApplicationARM64] {
-		return VerifiedRelease{}, errors.New("role refused")
+		return VerifiedRelease{}, nil, errors.New("role refused")
 	}
 	sort.Slice(proofs, func(i, j int) bool { return proofs[i].Role < proofs[j].Role })
 	return VerifiedRelease{
 		Identity: ReleaseIdentity{Repository: Repository, Tag: requestedTag, Commit: evidence.Commit, IndexSHA256: hex.EncodeToString(indexDigest[:])},
 		Version:  index.Version, Sequence: index.Sequence, StateSchema: index.StateSchema, MinimumUpdaterSchema: index.MinimumUpdaterSchema,
 		VerifiedAt: at, Assets: proofs,
-	}, nil
+	}, downloads, nil
+}
+
+func componentForArchitecture(architecture Architecture) Component {
+	switch architecture {
+	case AMD64:
+		return ApplicationAMD64
+	case ARM64:
+		return ApplicationARM64
+	default:
+		return ""
+	}
+}
+
+func selectedArchive(release VerifiedRelease, archives map[string][]byte, component Component) (AssetProof, []byte, bool) {
+	for _, asset := range release.Assets {
+		if asset.Role == component {
+			archive, ok := archives[asset.Name]
+			return asset, archive, ok
+		}
+	}
+	return AssetProof{}, nil, false
 }
 
 func oneExecutableArchive(body []byte) bool {

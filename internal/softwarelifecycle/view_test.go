@@ -54,6 +54,50 @@ func TestViewReportsOneExactVerifiedReleaseWithoutUsingIt(t *testing.T) {
 	}
 }
 
+func TestViewStagesOnlyTheSelectedVerifiedArchitecture(t *testing.T) {
+	evidence := validEvidence()
+	stager := &releaseStager{proof: softwarelifecycle.StagedRelease{
+		Identity:         releaseIdentity(evidence),
+		Build:            softwarelifecycle.EmbeddedBuildIdentity{Repository: softwarelifecycle.Repository, Tag: "v1.0.0", Commit: "0123456789abcdef0123456789abcdef01234567", PayloadSHA256: strings.Repeat("d", 64)},
+		Architecture:     softwarelifecycle.AMD64,
+		ExecutableSHA256: strings.Repeat("c", 64),
+		InstallPath:      softwarelifecycle.ReleaseInstallPath(releaseIdentity(evidence)),
+		StateSchema:      1,
+	}}
+	module := softwarelifecycle.New(&releaseSource{evidence: evidence}, qualification(), func() time.Time { return verifiedAt }, stager)
+
+	got := module.View(t.Context(), softwarelifecycle.ViewRequest{Tag: "v1.0.0", Architecture: softwarelifecycle.AMD64, InstallationStatus: softwarelifecycle.NotInstalled})
+
+	if got.Refusal != nil || got.StagedCandidate == nil || !reflect.DeepEqual(*got.StagedCandidate, stager.proof) {
+		t.Fatalf("View() = %#v, want selected staged candidate %#v", got, stager.proof)
+	}
+	if stager.calls != 1 || stager.request.Asset.Role != softwarelifecycle.ApplicationAMD64 || stager.request.Asset.Name != "sbxr-linux-amd64.tar.gz" || !bytes.Equal(stager.request.Archive, evidence.Assets[0].Bytes) {
+		t.Fatalf("Stage request = %#v", stager.request)
+	}
+}
+
+func TestViewRefusesWrongArchitectureOrInvalidStagingWithoutLeakingDetails(t *testing.T) {
+	const secretMarker = "PRIVATE-STAGING-MARKER-45EA"
+	for _, test := range []struct {
+		name         string
+		architecture softwarelifecycle.Architecture
+		stager       *releaseStager
+	}{
+		{name: "unsupported architecture", architecture: "riscv64", stager: &releaseStager{}},
+		{name: "missing stager", architecture: softwarelifecycle.AMD64},
+		{name: "stager failure", architecture: softwarelifecycle.AMD64, stager: &releaseStager{err: errors.New(secretMarker)}},
+		{name: "wrong proof architecture", architecture: softwarelifecycle.AMD64, stager: &releaseStager{proof: softwarelifecycle.StagedRelease{Architecture: softwarelifecycle.ARM64}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			module := softwarelifecycle.New(&releaseSource{evidence: validEvidence()}, qualification(), func() time.Time { return verifiedAt }, test.stager)
+			got := module.View(t.Context(), softwarelifecycle.ViewRequest{Tag: "v1.0.0", Architecture: test.architecture, InstallationStatus: softwarelifecycle.NotInstalled})
+			if got.Refusal == nil || got.VerifiedCandidate != nil || got.StagedCandidate != nil || got.PermittedActions != nil || strings.Contains(fmt.Sprintf("%#v", got), secretMarker) {
+				t.Fatalf("unsafe staging refusal = %#v", got)
+			}
+		})
+	}
+}
+
 func TestViewFailsClosedForEveryChangedReleaseFact(t *testing.T) {
 	const secretMarker = "PRIVATE-MARKER-4F7D9A"
 	tests := []struct {
@@ -346,6 +390,22 @@ type releaseSource struct {
 	extracted, executed, mutated int
 }
 
+type releaseStager struct {
+	request softwarelifecycle.StageRequest
+	proof   softwarelifecycle.StagedRelease
+	err     error
+	calls   int
+}
+
+func (stager *releaseStager) Stage(_ context.Context, request softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
+	if stager == nil {
+		return softwarelifecycle.StagedRelease{}, errors.New("missing stager")
+	}
+	stager.calls++
+	stager.request = request
+	return stager.proof, stager.err
+}
+
 func (source *releaseSource) Verify(context.Context, string) (softwarelifecycle.ReleaseEvidence, error) {
 	return source.evidence, source.err
 }
@@ -383,6 +443,11 @@ func validEvidence() softwarelifecycle.ReleaseEvidence {
 
 func qualification() softwarelifecycle.VerifierQualification {
 	return softwarelifecycle.VerifierQualification{Version: "2.97.0", SigningFingerprint: "0123456789ABCDEF0123456789ABCDEF01234567"}
+}
+
+func releaseIdentity(evidence softwarelifecycle.ReleaseEvidence) softwarelifecycle.ReleaseIdentity {
+	digest := sha256.Sum256(evidence.Index)
+	return softwarelifecycle.ReleaseIdentity{Repository: softwarelifecycle.Repository, Tag: evidence.Tag, Commit: evidence.Commit, IndexSHA256: hex.EncodeToString(digest[:])}
 }
 
 func replaceIndex(index []byte, old, replacement string) []byte {
