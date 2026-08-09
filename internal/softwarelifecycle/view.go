@@ -41,6 +41,7 @@ const (
 	ReviewUpdate           Action = "Review update"
 	ReviewDowngrade        Action = "Review downgrade"
 	ReviewRepair           Action = "Review repair"
+	ReviewCompleteRemoval  Action = "Review Complete removal"
 	RetryAutomaticRollback Action = "Retry automatic rollback"
 	CompleteRemoval        Action = "Complete removal"
 )

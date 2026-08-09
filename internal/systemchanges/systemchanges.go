@@ -146,8 +146,20 @@ type ForwardRepairAuthority struct {
 	cell *statusAuthority
 }
 
+type CompleteRemovalAuthority struct {
+	cell *completeRemovalAuthorityCell
+}
+
 type FreshInstallationAuthority struct {
 	cell *statusAuthority
+}
+
+type completeRemovalAuthorityCell struct {
+	adapter                Adapter
+	status                 InstallationStatus
+	revision               uint64
+	sha256, volatileSHA256 string
+	used                   atomic.Bool
 }
 
 type statusAuthority struct {
@@ -181,6 +193,26 @@ func (authority ForwardRepairAuthority) SoftwareLifecycleForwardRepair() (uint64
 	observed, err := authority.cell.adapter.Observe()
 	valid := err == nil && validObservation(observed) && observed.Status == RecoveryRequired && observed.Lock == LockReleased && observed.RecoveryCause == CurrentStateDrift && observed.ForwardRepairAvailable && observed.StateRevision == authority.cell.revision && observed.StateSHA256 == authority.cell.sha256 && observed.VolatileSHA256 == authority.cell.volatileSHA256 && validSHA256(observed.VolatileSHA256)
 	return authority.cell.revision, authority.cell.sha256, authority.cell.volatileSHA256, valid
+}
+
+func (CompleteRemovalAuthority) String() string   { return "Complete removal authority: redacted" }
+func (CompleteRemovalAuthority) GoString() string { return "Complete removal authority: redacted" }
+func (CompleteRemovalAuthority) MarshalJSON() ([]byte, error) {
+	return nil, errors.New("Complete removal authority cannot be rendered")
+}
+func (authority CompleteRemovalAuthority) SoftwareLifecycleCompleteRemovalReview() (InstallationStatus, uint64, string, string, bool) {
+	if authority.cell == nil || authority.cell.used.Load() || !completeRemovalLineage(authority.cell.status, authority.cell.revision, authority.cell.sha256) || !validSHA256(authority.cell.volatileSHA256) {
+		return "", 0, "", "", false
+	}
+	return authority.cell.status, authority.cell.revision, authority.cell.sha256, authority.cell.volatileSHA256, true
+}
+func (authority CompleteRemovalAuthority) SoftwareLifecycleCompleteRemoval() (InstallationStatus, uint64, string, string, bool) {
+	if authority.cell == nil || !authority.cell.used.CompareAndSwap(false, true) {
+		return "", 0, "", "", false
+	}
+	observed, err := authority.cell.adapter.Observe()
+	valid := err == nil && completeRemovalObservation(observed) && observed.Status == authority.cell.status && observed.StateRevision == authority.cell.revision && observed.StateSHA256 == authority.cell.sha256 && observed.VolatileSHA256 == authority.cell.volatileSHA256
+	return authority.cell.status, authority.cell.revision, authority.cell.sha256, authority.cell.volatileSHA256, valid
 }
 
 func (FreshInstallationAuthority) String() string   { return "Fresh installation authority: redacted" }
@@ -347,6 +379,32 @@ func (i Interface) ForwardRepairAuthority() ForwardRepairAuthority {
 		return ForwardRepairAuthority{}
 	}
 	return ForwardRepairAuthority{cell: &statusAuthority{adapter: i.adapter, revision: observed.StateRevision, sha256: observed.StateSHA256, volatileSHA256: observed.VolatileSHA256}}
+}
+
+func (i Interface) CompleteRemovalAuthority() CompleteRemovalAuthority {
+	if i.adapter == nil {
+		return CompleteRemovalAuthority{}
+	}
+	observed, err := i.adapter.Observe()
+	if err != nil || !completeRemovalObservation(observed) {
+		return CompleteRemovalAuthority{}
+	}
+	return CompleteRemovalAuthority{cell: &completeRemovalAuthorityCell{adapter: i.adapter, status: observed.Status, revision: observed.StateRevision, sha256: observed.StateSHA256, volatileSHA256: observed.VolatileSHA256}}
+}
+
+func completeRemovalObservation(observed Observation) bool {
+	return observed.Lock == LockReleased && completeRemovalBaseline(observed)
+}
+
+func completeRemovalBaseline(observed Observation) bool {
+	if !validObservation(observed) || !validSHA256(observed.VolatileSHA256) || !completeRemovalLineage(observed.Status, observed.StateRevision, observed.StateSHA256) {
+		return false
+	}
+	return observed.Status != RecoveryRequired || observed.CurrentChangeSet == "" && observed.Checkpoint == NoCheckpoint && observed.CompletedSteps == 0 && observed.TotalSteps == 0 && !observed.RollbackAvailable
+}
+
+func completeRemovalLineage(status InstallationStatus, revision uint64, sha256 string) bool {
+	return status == Managed && revision > 0 && validSHA256(sha256) || status == RecoveryRequired && (revision > 0 && validSHA256(sha256) || revision == 0 && sha256 == "")
 }
 
 func (i Interface) FreshInstallationAuthority() FreshInstallationAuthority {
@@ -755,21 +813,21 @@ func NewHTTP01CloseStep() (Step, error) {
 }
 
 func NewPublicExposureRemovalStep(selection PermanentRemovalSelection, authority PublicRemovalAuthority) (Step, error) {
-	review, categories, valid := validPermanentRemovalSelection(selection)
+	review, valid := validPermanentRemovalSelection(selection)
 	authorityReview, resource, immutableID, inventory, proved := validPublicRemovalAuthority(authority)
 	inventorySHA256, inventoryValid := removalInventoryDigest(inventory, publicRemovalCategories)
-	if !valid || !proved || authorityReview != review || !inventoryValid || !inventoryContains(inventory, resource, immutableID) || !slices.Contains(categories, resource) {
+	if !valid || !proved || authorityReview != review || !inventoryValid || !inventoryContains(inventory, resource, immutableID) {
 		return Step{}, invalidRemovalStep()
 	}
 	return newRemovalStep(NetworkPolicyModule, RemoveOwnedPublicExposure, RestoreOwnedPublicExposure, RemovalChange{Action: PublicExposureRemoval, Resource: RemovalResource(resource), ImmutableID: immutableID, ReviewID: review, InventorySHA256: inventorySHA256})
 }
 
 func NewCloudflareRemovalStep(selection PermanentRemovalSelection, authority CloudflareRemovalAuthority) (Step, error) {
-	review, categories, selected := validPermanentRemovalSelection(selection)
+	review, selected := validPermanentRemovalSelection(selection)
 	authorityReview, resource, immutableID, inventory, tokenActive, tokenAvailable, proved := validCloudflareRemovalAuthority(authority)
 	inventorySHA256, inventoryValid := removalInventoryDigest(inventory, cloudflareRemovalCategories)
 	change := RemovalChange{Action: CloudflareRemoval, Resource: RemovalResource(resource), ImmutableID: immutableID, ReviewID: review, CloudflareTokenActive: tokenActive, CloudflareTokenAvailable: tokenAvailable, InventorySHA256: inventorySHA256}
-	if !selected || !proved || authorityReview != review || !inventoryValid || !inventoryContains(inventory, resource, immutableID) || !slices.Contains(categories, resource) {
+	if !selected || !proved || authorityReview != review || !inventoryValid || !inventoryContains(inventory, resource, immutableID) {
 		return Step{}, invalidRemovalStep()
 	}
 	return newRemovalStep(CloudflareModule, DeleteOwnedCloudflareResource, RestoreOwnedCloudflareResource, change)
@@ -865,7 +923,7 @@ type TypedRemovalConfirmation interface {
 }
 
 type PermanentRemovalSelection interface {
-	SystemChangesPermanentRemovalSelection() (review string, categories []string, valid bool)
+	SystemChangesPermanentRemovalSelection() (review string, valid bool)
 }
 
 type CloudflareRemovalProof struct {
@@ -884,15 +942,6 @@ type PublicRemovalAuthority interface {
 	SystemChangesPublicRemovalAuthority() (review, resource, immutableID string, inventory map[string][]string, valid bool)
 }
 
-var completeRemovalCategories = []string{
-	string(FirewallTableResource),
-	string(PublicListenerResource),
-	string(PublicServiceResource),
-	string(CloudflareDNSRecordResource),
-	string(CloudflareRouteResource),
-	string(CloudflareTunnelResource),
-}
-
 var publicRemovalCategories = []string{string(FirewallTableResource), string(PublicListenerResource), string(PublicServiceResource)}
 var cloudflareRemovalCategories = []string{string(CloudflareDNSRecordResource), string(CloudflareRouteResource), string(CloudflareTunnelResource)}
 
@@ -904,16 +953,12 @@ func validTypedRemovalConfirmation(confirmation TypedRemovalConfirmation) (revie
 	return review, phrase, valid && safeIdentity(review) && phrase == "COMPLETE REMOVAL"
 }
 
-func validPermanentRemovalSelection(selection PermanentRemovalSelection) (review string, categories []string, valid bool) {
+func validPermanentRemovalSelection(selection PermanentRemovalSelection) (review string, valid bool) {
 	if !trustedAuthority(selection, "github.com/albertloky/SBXR/internal/ownerconsole", "PermanentRemovalSelection") {
-		return "", nil, false
+		return "", false
 	}
-	review, categories, valid = selection.SystemChangesPermanentRemovalSelection()
-	got := append([]string(nil), categories...)
-	want := append([]string(nil), completeRemovalCategories...)
-	slices.Sort(got)
-	slices.Sort(want)
-	return review, categories, valid && safeIdentity(review) && slices.Equal(got, want)
+	review, valid = selection.SystemChangesPermanentRemovalSelection()
+	return review, valid && safeIdentity(review)
 }
 
 func validCloudflareRemovalAuthority(authority CloudflareRemovalAuthority) (review, resource, immutableID string, inventory map[string][]string, tokenActive, tokenAvailable, valid bool) {
@@ -1062,10 +1107,10 @@ func NewChangeSet(spec ChangeSetSpec) (*ChangeSet, error) {
 	reserved, diskValid := spec.Disk.total()
 	const largestFloor = ^uint64(0) / 10
 	confirmationReview, _, typed := validTypedRemovalConfirmation(spec.TypedRemovalConfirmation)
-	selectionReview, _, selected := validPermanentRemovalSelection(spec.PermanentRemovalSelection)
+	selectionReview, selected := validPermanentRemovalSelection(spec.PermanentRemovalSelection)
 	confirmedRemoval := spec.Mutation == CompleteRemovalMutation && typed && selected && confirmationReview == selectionReview
 	validRemoval := validRemovalSteps(spec.Steps)
-	if !safeIdentity(spec.Identity) || !validMutation(spec.Mutation) || !validModule(spec.OutcomeOwner) || !validStartingState(spec.StartingState, spec.Mutation) || !validSHA256(spec.TargetStateSHA256) || !safeIdentity(spec.Plan.Identity) || !validSHA256(spec.Plan.SHA256) || !validSHA256(spec.Plan.VolatileSHA256) || spec.PreparedState == nil || len(spec.Steps) == 0 || len(spec.Checks) == 0 || spec.Timeouts.Step <= 0 || spec.Timeouts.Step > maxStepTimeout || spec.Timeouts.Check <= 0 || spec.Timeouts.Check > maxCheckTimeout || spec.Disk.PreparationBytes == 0 || spec.Disk.TemporaryBytes == 0 || spec.Disk.SnapshotBytes == 0 || spec.Disk.JournalBytes == 0 || spec.Disk.RollbackBytes == 0 || spec.Disk.OverheadBytes == 0 || !diskValid || reserved > ^uint64(0)-largestFloor || spec.Mutation == CompleteRemovalMutation != confirmedRemoval || spec.Mutation == CompleteRemovalMutation != validRemoval || spec.Mutation == CompleteRemovalMutation && !removalStepsMatchReview(spec.Steps, selectionReview) || spec.Mutation != CompleteRemovalMutation && (spec.TypedRemovalConfirmation != nil || spec.PermanentRemovalSelection != nil) {
+	if !safeIdentity(spec.Identity) || !validMutation(spec.Mutation) || !validModule(spec.OutcomeOwner) || !validStartingState(spec.StartingState, spec.Mutation) || !validTargetState(spec) || !safeIdentity(spec.Plan.Identity) || !validSHA256(spec.Plan.SHA256) || !validSHA256(spec.Plan.VolatileSHA256) || spec.PreparedState == nil || len(spec.Steps) == 0 || len(spec.Checks) == 0 || spec.Timeouts.Step <= 0 || spec.Timeouts.Step > maxStepTimeout || spec.Timeouts.Check <= 0 || spec.Timeouts.Check > maxCheckTimeout || spec.Disk.PreparationBytes == 0 || spec.Disk.TemporaryBytes == 0 || spec.Disk.SnapshotBytes == 0 || spec.Disk.JournalBytes == 0 || spec.Disk.RollbackBytes == 0 || spec.Disk.OverheadBytes == 0 || !diskValid || reserved > ^uint64(0)-largestFloor || spec.Mutation == CompleteRemovalMutation != confirmedRemoval || spec.Mutation == CompleteRemovalMutation != validRemoval || spec.Mutation == CompleteRemovalMutation && !removalStepsMatchReview(spec.Steps, selectionReview) || spec.Mutation != CompleteRemovalMutation && (spec.TypedRemovalConfirmation != nil || spec.PermanentRemovalSelection != nil) {
 		return nil, &Finding{Code: "SYSTEM-CHANGES-CHANGE-SET-INVALID", Problem: "The Change Set is incomplete or untyped", Found: "a missing or invalid typed transaction input", Required: "one opaque prepared State commit, exact lineage and Plan checksums, typed steps and rollback, checks, disk reservation, and bounded timeouts", WhyStopped: "System Changes never accepts an arbitrary mutation surface", NextAction: "Rebuild and review the Change Set through its owning Module."}
 	}
 	for _, step := range spec.Steps {
@@ -1197,7 +1242,7 @@ func (i Interface) applyLocked(changeSet *ChangeSet, cancellation *Cancellation,
 	}
 	spec := changeSet.spec
 	forwardRepair := observed.Status == RecoveryRequired && observed.ForwardRepairAvailable && spec.Mutation == RepairMutation && spec.StartingState.Status == Managed
-	completeRemoval := observed.Status == RecoveryRequired && spec.Mutation == CompleteRemovalMutation && spec.StartingState.Status == RecoveryRequired
+	completeRemoval := observed.Status == RecoveryRequired && spec.Mutation == CompleteRemovalMutation && spec.StartingState.Status == RecoveryRequired && completeRemovalBaseline(observed)
 	if observed.Status == RecoveryRequired && !forwardRepair && !completeRemoval {
 		return finish(lock, refused("SYSTEM-CHANGES-RECOVERY-BLOCKED", "Normal mutation is blocked in Recovery Required", string(observed.RecoveryCause), "Retry automatic rollback, a fresh valid-current-State forward-repair Plan, or separately confirmed Complete removal", "Recovery Required never permits ordinary mutation or evidence bypass", "Use one action offered by Inspect or go Back.", true))
 	}
@@ -1205,7 +1250,7 @@ func (i Interface) applyLocked(changeSet *ChangeSet, cancellation *Cancellation,
 	if !statusMatches || observed.StateRevision != spec.StartingState.Revision || observed.StateSHA256 != spec.StartingState.SHA256 || observed.VolatileSHA256 != spec.Plan.VolatileSHA256 {
 		return finish(lock, refused("SYSTEM-CHANGES-STALE", "The reviewed State lineage or volatile binding changed", fmt.Sprintf("status=%s revision=%d state_match=%t binding_match=%t", observed.Status, observed.StateRevision, observed.StateSHA256 == spec.StartingState.SHA256, observed.VolatileSHA256 == spec.Plan.VolatileSHA256), "the exact reviewed lineage and every volatile binding", "stale approval cannot authorize mutation", "Reload observations and create a fresh Plan.", true))
 	}
-	if spec.TargetStateSHA256 == spec.StartingState.SHA256 && spec.Mutation != RotationMutation && spec.Mutation != RepairMutation {
+	if spec.TargetStateSHA256 == spec.StartingState.SHA256 && spec.Mutation != RotationMutation && spec.Mutation != RepairMutation && spec.Mutation != CompleteRemovalMutation {
 		return finish(lock, refused("SYSTEM-CHANGES-NO-OP", "The Change Set would not change Desired State", "the starting and target checksums are identical", "one actual reviewed change", "a no-op must not create transaction material", "Return without applying and plan only when intent changes.", true))
 	}
 	reserved, _ := spec.Disk.total()
@@ -1241,6 +1286,10 @@ func validPreparedState(spec ChangeSetSpec) bool {
 		return false
 	}
 	changeSet, revision, startingSHA256, checksum, planIdentity, planSHA256, valid := spec.PreparedState.SystemChangesPreparedState()
+	if spec.Mutation == CompleteRemovalMutation && spec.StartingState.Status == RecoveryRequired && spec.StartingState.Revision == 0 && spec.StartingState.SHA256 == "" {
+		unproven, ok := spec.PreparedState.(interface{ SystemChangesRemovalLineageUnavailable() bool })
+		return ok && unproven.SystemChangesRemovalLineageUnavailable() && valid && changeSet == spec.Identity && revision == 0 && startingSHA256 == "" && checksum == "" && planIdentity == spec.Plan.Identity && planSHA256 == spec.Plan.SHA256
+	}
 	return valid && changeSet == spec.Identity && revision == spec.StartingState.Revision+1 && startingSHA256 == spec.StartingState.SHA256 && checksum == spec.TargetStateSHA256 && planIdentity == spec.Plan.Identity && planSHA256 == spec.Plan.SHA256
 }
 
@@ -1276,7 +1325,14 @@ func validStartingState(lineage StateLineage, mutation MutationClass) bool {
 	if lineage.Status == Managed && lineage.Revision > 0 && validSHA256(lineage.SHA256) {
 		return mutation != InstallationMutation
 	}
-	return mutation == CompleteRemovalMutation && lineage.Status == RecoveryRequired && lineage.Revision > 0 && validSHA256(lineage.SHA256)
+	return mutation == CompleteRemovalMutation && completeRemovalLineage(lineage.Status, lineage.Revision, lineage.SHA256)
+}
+
+func validTargetState(spec ChangeSetSpec) bool {
+	if spec.Mutation == CompleteRemovalMutation && spec.StartingState.Status == RecoveryRequired && spec.StartingState.Revision == 0 && spec.StartingState.SHA256 == "" {
+		return spec.TargetStateSHA256 == ""
+	}
+	return validSHA256(spec.TargetStateSHA256)
 }
 
 func validMutation(mutation MutationClass) bool {

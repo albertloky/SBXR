@@ -459,7 +459,15 @@ func TestCompleteRemovalRequiresBothExactConfirmations(t *testing.T) {
 	for _, test := range []struct {
 		name, phrase string
 		typed        bool
-	}{{name: "missing typed phrase", typed: true}, {name: "partial typed phrase", phrase: "COMPLETE", typed: true}, {name: "pasted phrase", phrase: "COMPLETE REMOVAL"}} {
+	}{
+		{name: "ordinary Enter", typed: true},
+		{name: "partial paste", phrase: "COMPLETE", typed: false},
+		{name: "wrong case", phrase: "Complete removal", typed: true},
+		{name: "leading whitespace", phrase: " COMPLETE REMOVAL", typed: true},
+		{name: "trailing whitespace", phrase: "COMPLETE REMOVAL ", typed: true},
+		{name: "command flag", phrase: "--complete-removal", typed: true},
+		{name: "pasted exact phrase", phrase: "COMPLETE REMOVAL", typed: false},
+	} {
 		t.Run(test.name, func(t *testing.T) {
 			observer := ownerRemovalObserver{phrase: test.phrase, phraseSet: true, typed: &test.typed}
 			console := ownerconsole.New(observer)
@@ -488,8 +496,34 @@ func TestCompleteRemovalRequiresBothExactConfirmations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := console.SelectPermanentRemoval(review); err == nil {
+	typedFirst, typedErr := console.RecordTypedPhrase(review)
+	if typedErr != nil {
+		t.Fatal(typedErr)
+	}
+	if _, err := console.SelectPermanentRemoval(review, typedFirst); err == nil {
 		t.Fatal("an unselected permanent-removal action was accepted")
+	}
+	orderedConsole := ownerconsole.New(ownerRemovalObserver{})
+	orderedReview := removalReview(t)
+	if _, err := orderedConsole.SelectPermanentRemoval(orderedReview, ownerconsole.TypedRemovalConfirmation{}); err == nil {
+		t.Fatal("permanent removal was selected before exact typing")
+	}
+	orderedTyped, err := orderedConsole.RecordTypedPhrase(orderedReview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherReview, err := orderedConsole.StartRemovalReview("removal-review-other-0008")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := orderedConsole.SelectPermanentRemoval(otherReview, orderedTyped); err == nil {
+		t.Fatal("typing from another review authorized permanent removal")
+	}
+	if _, err := orderedConsole.SelectPermanentRemoval(orderedReview, orderedTyped); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := orderedConsole.SelectPermanentRemoval(orderedReview, orderedTyped); err == nil {
+		t.Fatal("typed confirmation selected permanent removal twice")
 	}
 	ordinary := completeSpec(t, systemchanges.SettingChangeMutation)
 	ordinary.TypedRemovalConfirmation, ordinary.PermanentRemovalSelection = typed, selected
@@ -509,7 +543,7 @@ func TestCompleteRemovalRequiresBothExactConfirmations(t *testing.T) {
 }
 
 func removalCategories() []string {
-	return []string{"firewall-table", "public-listener", "public-service", "cloudflare-dns-record", "cloudflare-route", "cloudflare-tunnel"}
+	return []string{"desired-state", "client-access-values", "infrastructure-secrets", "certificates-and-acme", "transaction-journal", "rollback-snapshot", "installed-release", "verified-update-candidate", "services-and-timers", "service-identities", "prepared-artifacts", "subscription-artifacts", "firewall-table", "public-listener", "public-service", "cloudflare-dns-record", "cloudflare-route", "cloudflare-tunnel", "certificate-transparency-remnant", "dns-cache-remnant"}
 }
 
 func removalReview(t *testing.T) ownerconsole.RemovalReview {
@@ -526,7 +560,7 @@ func removalConfirmation(t *testing.T) (ownerconsole.TypedRemovalConfirmation, o
 	console := ownerconsole.New(ownerRemovalObserver{})
 	review := removalReview(t)
 	typed, typedErr := console.RecordTypedPhrase(review)
-	selected, selectedErr := console.SelectPermanentRemoval(review)
+	selected, selectedErr := console.SelectPermanentRemoval(review, typed)
 	if typedErr != nil || selectedErr != nil {
 		t.Fatalf("Complete removal confirmation: %v, %v", typedErr, selectedErr)
 	}
@@ -576,8 +610,8 @@ type forgedPublicRemoval struct{}
 func (forgedTypedRemoval) SystemChangesTypedRemovalConfirmation() (string, string, bool) {
 	return "removal-review-0008", "COMPLETE REMOVAL", true
 }
-func (forgedPermanentRemoval) SystemChangesPermanentRemovalSelection() (string, []string, bool) {
-	return "removal-review-0008", removalCategories(), true
+func (forgedPermanentRemoval) SystemChangesPermanentRemovalSelection() (string, bool) {
+	return "removal-review-0008", true
 }
 func (forgedCloudflareRemoval) SystemChangesCloudflareRemovalAuthority() systemchanges.CloudflareRemovalProof {
 	return systemchanges.CloudflareRemovalProof{ReviewID: "removal-review-0008", Resource: systemchanges.CloudflareDNSRecordResource, ImmutableID: "dns-xhttp", Inventory: cloudflareRemovalInventory(), TokenActive: true, TokenAvailable: true, Valid: true}

@@ -364,6 +364,7 @@ type PreparedCommit struct {
 	ipCertificateRenewal       bool
 	domainCertificateRenewal   bool
 	softwareUpdate             bool
+	unprovenRemoval            bool
 }
 
 type CloudflareEvidenceBinding struct {
@@ -396,6 +397,11 @@ type SoftwareUpdateAuthority interface {
 
 type SoftwareRepairAuthority interface {
 	StateSoftwareRepair() (revision uint64, stateSHA256 string, valid bool)
+}
+
+type CompleteRemovalAuthority interface {
+	StateCompleteRemoval() (revision uint64, stateSHA256 string, valid bool)
+	StateUnprovenCompleteRemoval() (changeSet, identity, sha256 string, valid bool)
 }
 
 type ConnectionProfilesRepairAuthority interface {
@@ -438,10 +444,17 @@ func (*PreparedCommit) GoString() string             { return "[redacted prepare
 // SystemChangesPreparedState exposes only the non-secret binding needed to
 // prove this opaque authority came from State for the exact Change Set.
 func (commit *PreparedCommit) SystemChangesPreparedState() (changeSet string, revision uint64, startingSHA256, candidateSHA256, planIdentity, planSHA256 string, valid bool) {
+	if commit != nil && commit.unprovenRemoval && commit.changeSet != "" && commit.reviewed.planIdentity != "" && validSHA256(commit.reviewed.planSHA256) {
+		return string(commit.changeSet), 0, "", "", string(commit.reviewed.planIdentity), commit.reviewed.planSHA256, true
+	}
 	if commit == nil || commit.changeSet == "" || commit.revision == 0 || commit.candidateSHA256 == "" {
 		return "", 0, "", "", "", "", false
 	}
 	return string(commit.changeSet), commit.revision, commit.starting.payloadChecksum, commit.candidateSHA256, string(commit.reviewed.planIdentity), commit.reviewed.planSHA256, true
+}
+
+func (commit *PreparedCommit) SystemChangesRemovalLineageUnavailable() bool {
+	return commit != nil && commit.unprovenRemoval
 }
 
 func (commit *PreparedCommit) SoftwareLifecyclePreparedRelease() (repository, tag, revision, releaseIndexSHA256 string, valid bool) {
@@ -512,6 +525,44 @@ func (i Interface) PrepareSoftwareRepairCommit(request PrepareRequest, authority
 		return nil, finding("STATE-SOFTWARE-REPAIR-PLAN", "current Desired State repair", "the release, revision, checksum, or Desired State meaning differs from review", "the exact current valid Desired State and installed Release Identity", "repair only moves Observed State toward current intent", "reload State and rebuild the repair Plan")
 	}
 	return i.prepareCommit(request, nil, nil)
+}
+
+func (i Interface) PrepareCompleteRemovalCommit(request PrepareRequest, authority CompleteRemovalAuthority) (*PreparedCommit, error) {
+	typeOf := reflect.TypeOf(authority)
+	if typeOf == nil || typeOf.Kind() != reflect.Pointer || typeOf.Elem().PkgPath() != "github.com/albertloky/SBXR/internal/softwarelifecycle" || typeOf.Elem().Name() != "CompleteRemovalPlan" || request.Loaded.loaded == nil || request.Loaded.loaded.owner != i.implementation {
+		return nil, finding("STATE-COMPLETE-REMOVAL-PLAN", "Complete removal rollback State", "the authority did not come from Software Lifecycle or current State", "one exact reviewed Complete removal Plan and fresh Managed Load", "removal cannot invent rollback lineage", "reload State and rebuild the Complete removal Plan")
+	}
+	revision, stateSHA256, valid := authority.StateCompleteRemoval()
+	current, problem := decode(request.Loaded.loaded.bytes)
+	if !valid || problem != nil || request.Loaded.Status != Managed || request.Loaded.loaded.revision != revision || request.Loaded.loaded.payloadChecksum != stateSHA256 || current.ReleaseIdentity != request.CandidateReleaseIdentity || !reflect.DeepEqual(current.desiredState, request.Candidate) {
+		return nil, finding("STATE-COMPLETE-REMOVAL-PLAN", "Complete removal rollback State", "the release, revision, checksum, or Desired State meaning differs from review", "the exact unchanged current Desired State and installed Release Identity", "pre-checkpoint rollback must restore the proven starting intent", "reload State and rebuild the Complete removal Plan")
+	}
+	return i.prepareCommit(request, nil, nil)
+}
+
+func (i Interface) PrepareUnprovenCompleteRemovalCommit(authority CompleteRemovalAuthority) (*PreparedCommit, error) {
+	typeOf := reflect.TypeOf(authority)
+	if typeOf == nil || typeOf.Kind() != reflect.Pointer || typeOf.Elem().PkgPath() != "github.com/albertloky/SBXR/internal/softwarelifecycle" || typeOf.Elem().Name() != "CompleteRemovalPlan" || i.implementation == nil || i.implementation.storage == nil {
+		return nil, finding("STATE-COMPLETE-REMOVAL-PLAN", "Complete removal rollback State", "the authority did not come from Software Lifecycle or State storage is unavailable", "one exact reviewed Complete removal Plan and State storage", "removal cannot invent missing lineage", "check again and rebuild the Complete removal Plan")
+	}
+	changeSet, planIdentity, planSHA256, valid := authority.StateUnprovenCompleteRemoval()
+	if !valid || !validChangeSetIdentity(ChangeSetIdentity(changeSet)) || !validPlanIdentity(PlanIdentity(planIdentity)) || !validSHA256(planSHA256) {
+		return nil, finding("STATE-COMPLETE-REMOVAL-PLAN", "Complete removal rollback State", "the unproven-lineage authority is invalid", "one exact Recovery Required Complete removal Plan", "missing lineage cannot be replaced by caller-authored facts", "check again and rebuild the Complete removal Plan")
+	}
+	prior, err := i.implementation.storage.Read()
+	present := err == nil
+	if errors.Is(err, fs.ErrNotExist) {
+		prior = nil
+	} else if err != nil {
+		return nil, finding("STATE-COMPLETE-REMOVAL-BASELINE", "Complete removal rollback State", "the raw State baseline could not be preserved", "exact current bytes or proven absence", "rollback cannot guess unreadable material", "correct State storage access and check again")
+	}
+	manifests, _ := json.Marshal(preparedManifestSet{})
+	manifestDigest, preparedDigest := sha256.Sum256(manifests), sha256.Sum256(prior)
+	return &PreparedCommit{
+		changeSet: ChangeSetIdentity(changeSet), reviewed: ReviewedInputs{planIdentity: PlanIdentity(planIdentity), planSHA256: planSHA256},
+		starting: &loadedState{owner: i.implementation, status: RecoveryRequired, bytes: append([]byte(nil), prior...), present: present}, storage: i.implementation.storage,
+		manifestSHA256: hex.EncodeToString(manifestDigest[:]), preparedState: append([]byte(nil), prior...), preparedSHA256: hex.EncodeToString(preparedDigest[:]), unprovenRemoval: true,
+	}, nil
 }
 
 // PrepareIPCertificateRenewalCommit admits only the three Desired State facts
@@ -990,7 +1041,7 @@ func (i Interface) claimLoaded(result Result) (*loadedState, *Finding) {
 
 func matchesLoadedState(storage Storage, loaded *loadedState) bool {
 	current, err := storage.Read()
-	if loaded.status == NotInstalled {
+	if loaded.status == NotInstalled || loaded.status == RecoveryRequired && !loaded.present {
 		return errors.Is(err, fs.ErrNotExist)
 	}
 	return err == nil && bytes.Equal(current, loaded.bytes)

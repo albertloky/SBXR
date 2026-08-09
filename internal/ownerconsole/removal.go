@@ -4,17 +4,32 @@ package ownerconsole
 import (
 	"errors"
 	"slices"
+	"sync/atomic"
 )
 
 const completeRemovalPhrase = "COMPLETE REMOVAL"
 
 var removalCategories = []string{
+	"desired-state",
+	"client-access-values",
+	"infrastructure-secrets",
+	"certificates-and-acme",
+	"transaction-journal",
+	"rollback-snapshot",
+	"installed-release",
+	"verified-update-candidate",
+	"services-and-timers",
+	"service-identities",
+	"prepared-artifacts",
+	"subscription-artifacts",
 	"firewall-table",
 	"public-listener",
 	"public-service",
 	"cloudflare-dns-record",
 	"cloudflare-route",
 	"cloudflare-tunnel",
+	"certificate-transparency-remnant",
+	"dns-cache-remnant",
 }
 
 type RemovalObserver interface {
@@ -28,10 +43,17 @@ type Interface struct{ observer RemovalObserver }
 func New(observer RemovalObserver) Interface { return Interface{observer: observer} }
 
 // RemovalReview is an opaque record that the Owner Console observed every category.
-type RemovalReview struct{ identity string }
+type RemovalReview struct {
+	identity   string
+	categories []string
+}
 
 // TypedRemovalConfirmation and PermanentRemovalSelection are separate opaque authorities.
-type TypedRemovalConfirmation struct{ review, phrase string }
+type typedRemovalConfirmationCell struct {
+	review, phrase string
+	selected       atomic.Bool
+}
+type TypedRemovalConfirmation struct{ cell *typedRemovalConfirmationCell }
 type PermanentRemovalSelection struct {
 	review     string
 	categories []string
@@ -49,7 +71,11 @@ func (i Interface) StartRemovalReview(identity string) (RemovalReview, error) {
 	if err != nil || identity == "" || !slices.Equal(got, want) {
 		return RemovalReview{}, errors.New("every Complete removal category must be reviewed")
 	}
-	return RemovalReview{identity: identity}, nil
+	return RemovalReview{identity: identity, categories: append([]string(nil), removalCategories...)}, nil
+}
+
+func (review RemovalReview) SoftwareLifecycleCompleteRemovalReview() (string, bool) {
+	return review.identity, review.identity != "" && len(review.categories) == len(removalCategories)
 }
 
 func (i Interface) RecordTypedPhrase(review RemovalReview) (TypedRemovalConfirmation, error) {
@@ -60,11 +86,11 @@ func (i Interface) RecordTypedPhrase(review RemovalReview) (TypedRemovalConfirma
 	if err != nil || review.identity == "" || phrase != completeRemovalPhrase || !typedInteractively {
 		return TypedRemovalConfirmation{}, errors.New("exact COMPLETE REMOVAL typing is required")
 	}
-	return TypedRemovalConfirmation{review: review.identity, phrase: phrase}, nil
+	return TypedRemovalConfirmation{cell: &typedRemovalConfirmationCell{review: review.identity, phrase: phrase}}, nil
 }
 
-func (i Interface) SelectPermanentRemoval(review RemovalReview) (PermanentRemovalSelection, error) {
-	if i.observer == nil {
+func (i Interface) SelectPermanentRemoval(review RemovalReview, confirmation TypedRemovalConfirmation) (PermanentRemovalSelection, error) {
+	if i.observer == nil || confirmation.cell == nil || confirmation.cell.review != review.identity || confirmation.cell.phrase != completeRemovalPhrase || !confirmation.cell.selected.CompareAndSwap(false, true) {
 		return PermanentRemovalSelection{}, errors.New("Owner Console removal observer unavailable")
 	}
 	selected, err := i.observer.PermanentRemovalSelected(review.identity)
@@ -75,9 +101,12 @@ func (i Interface) SelectPermanentRemoval(review RemovalReview) (PermanentRemova
 }
 
 func (confirmation TypedRemovalConfirmation) SystemChangesTypedRemovalConfirmation() (review, phrase string, valid bool) {
-	return confirmation.review, confirmation.phrase, confirmation.review != "" && confirmation.phrase == completeRemovalPhrase
+	if confirmation.cell == nil {
+		return "", "", false
+	}
+	return confirmation.cell.review, confirmation.cell.phrase, confirmation.cell.review != "" && confirmation.cell.phrase == completeRemovalPhrase && confirmation.cell.selected.Load()
 }
 
-func (selection PermanentRemovalSelection) SystemChangesPermanentRemovalSelection() (review string, categories []string, valid bool) {
-	return selection.review, append([]string(nil), selection.categories...), selection.review != "" && len(selection.categories) == len(removalCategories)
+func (selection PermanentRemovalSelection) SystemChangesPermanentRemovalSelection() (review string, valid bool) {
+	return selection.review, selection.review != "" && len(selection.categories) == len(removalCategories)
 }

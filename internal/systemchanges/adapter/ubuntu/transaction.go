@@ -1140,6 +1140,10 @@ func validRecoveryBinding(prepared journalEntry, manifest snapshotManifest, forw
 	if !validRecoveryJournalBinding(prepared) || manifest.Release != recoveryRelease(binding) || manifest.Files["prepared/state.json"] != binding.PreparedStateSHA256 || manifest.Files["prepared/manifests.json"] != binding.PreparedManifestSHA256 {
 		return false
 	}
+	if binding.LineageUnavailable {
+		prior := manifest.Files["snapshot/prior-state.json"]
+		return prior == "" || prior == binding.PreparedStateSHA256
+	}
 	if prepared.Starting.Status == systemchanges.Managed || prepared.Starting.Status == systemchanges.RecoveryRequired && binding.StartingRevision > 0 {
 		return binding.StartingRelease != (systemchanges.ReleaseBinding{}) && (len(forwardRotation) == 1 && forwardRotation[0] && manifest.Files["snapshot/prior-state.json"] == "" || manifest.Files["snapshot/prior-state.json"] != "")
 	}
@@ -1151,6 +1155,9 @@ func validRecoveryJournalBinding(prepared journalEntry) bool {
 		return false
 	}
 	binding := *prepared.State
+	if binding.LineageUnavailable {
+		return prepared.Mutation == systemchanges.CompleteRemovalMutation && prepared.Starting.Status == systemchanges.RecoveryRequired && prepared.Starting.Revision == 0 && prepared.Starting.SHA256 == "" && binding.ChangeSet == prepared.ChangeSet && binding.StartingRevision == 0 && binding.CandidateRevision == 0 && binding.StartingSHA256 == "" && binding.CandidateSHA256 == "" && binding.StartingRelease == (systemchanges.ReleaseBinding{}) && binding.CandidateRelease == (systemchanges.ReleaseBinding{}) && validDigest(prepared.PlanSHA256) && validDigest(binding.PreparedStateSHA256) && validDigest(binding.PreparedManifestSHA256)
+	}
 	return binding.ChangeSet == prepared.ChangeSet && binding.StartingRevision == prepared.Starting.Revision && binding.StartingSHA256 == prepared.Starting.SHA256 && binding.CandidateRevision == binding.StartingRevision+1 && binding.CandidateRelease != (systemchanges.ReleaseBinding{}) && validDigest(prepared.PlanSHA256) && validDigest(binding.CandidateSHA256) && validDigest(binding.PreparedStateSHA256) && validDigest(binding.PreparedManifestSHA256)
 }
 
@@ -1516,9 +1523,6 @@ func validNextCheckpoint(entries []journalEntry, next journalEntry) bool {
 		return next.Checkpoint == systemchanges.StepCompleted && next.Step == last.Step && validEvidence(next.Evidence) || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
 	case systemchanges.StepCompleted:
 		if last.Step < total {
-			if entries[0].Mutation == systemchanges.CompleteRemovalMutation && !irreversibleRemoval && entries[0].Steps[last.Step].Removal != nil && entries[0].Steps[last.Step].Removal.Action == systemchanges.CloudflareRemoval {
-				return next.Checkpoint == systemchanges.IrreversibleRemovalStarted && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
-			}
 			if irreversibleRemoval {
 				return next.Checkpoint == systemchanges.StepStarted && next.Step == last.Step+1
 			}
@@ -1536,12 +1540,9 @@ func validNextCheckpoint(entries []journalEntry, next journalEntry) bool {
 		}
 		return next.Checkpoint == systemchanges.OwnedExternalDeletionVerified && next.Step == 0 || next.Checkpoint == systemchanges.StatePublicationStarted && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total
 	case systemchanges.OwnedExternalDeletionVerified:
-		if irreversibleRemoval {
-			return next.Checkpoint == systemchanges.TokenRevocationVerified && next.Step == 0 && next.Evidence == nil
-		}
-		return false
+		return next.Checkpoint == systemchanges.IrreversibleRemovalStarted && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total
 	case systemchanges.IrreversibleRemovalStarted:
-		return next.Checkpoint == systemchanges.StepStarted && next.Step == highestStartedStep(entries)+1 && next.Step <= total
+		return next.Checkpoint == systemchanges.TokenRevocationVerified && next.Step == 0 && next.Evidence == nil
 	case systemchanges.StatePublicationStarted:
 		return next.Checkpoint == systemchanges.StatePublished && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total
 	case systemchanges.StatePublished:
@@ -1736,7 +1737,7 @@ func verifyTransactionManifest(root *os.Root, directory string, uid int) (snapsh
 		return snapshotManifest{}, err
 	}
 	var manifest snapshotManifest
-	if err := json.Unmarshal(data, &manifest); err != nil || manifest.SchemaVersion != 1 || manifest.Release == (systemchanges.ReleaseBinding{}) || manifest.Reason == "" {
+	if err := json.Unmarshal(data, &manifest); err != nil || manifest.SchemaVersion != 1 || manifest.Release == (systemchanges.ReleaseBinding{}) && manifest.Reason != systemchanges.CompleteRemovalMutation || manifest.Reason == "" {
 		return snapshotManifest{}, errors.New("invalid snapshot manifest")
 	}
 	want := map[string]bool{"manifest.json": true, "journal.jsonl": true, "snapshot": true, "prepared": true}
@@ -1780,7 +1781,7 @@ func readSnapshotManifest(root *os.Root, directory string, uid int) (snapshotMan
 	}
 	data, err := root.ReadFile(path.Join(directory, "manifest.json"))
 	var manifest snapshotManifest
-	if err != nil || json.Unmarshal(data, &manifest) != nil || manifest.SchemaVersion != 1 || manifest.Release == (systemchanges.ReleaseBinding{}) || manifest.Reason == "" {
+	if err != nil || json.Unmarshal(data, &manifest) != nil || manifest.SchemaVersion != 1 || manifest.Release == (systemchanges.ReleaseBinding{}) && manifest.Reason != systemchanges.CompleteRemovalMutation || manifest.Reason == "" {
 		return snapshotManifest{}, errors.New("invalid snapshot manifest")
 	}
 	for name, checksum := range manifest.Files {

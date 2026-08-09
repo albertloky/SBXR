@@ -77,6 +77,8 @@ type ReleaseBinding struct {
 }
 
 type StateTransactionBinding struct {
+	LineageUnavailable     bool           `json:"lineage_unavailable,omitempty"`
+	RawStatePresent        bool           `json:"raw_state_present,omitempty"`
 	StartingRevision       uint64         `json:"starting_revision"`
 	CandidateRevision      uint64         `json:"candidate_revision"`
 	StartingSHA256         string         `json:"starting_sha256"`
@@ -406,7 +408,11 @@ func validRecoveryTransaction(recovery RecoveryTransaction) bool {
 	if !safeIdentity(recovery.ChangeSet) || !validMutation(recovery.Mutation) || !validModule(recovery.OutcomeOwner) || len(recovery.Steps) == 0 || recovery.AttemptedSteps < 0 || recovery.AttemptedSteps > len(recovery.Steps) || recovery.Timeouts.Step <= 0 || recovery.Timeouts.Step > maxStepTimeout || recovery.Timeouts.Check <= 0 || recovery.Timeouts.Check > maxCheckTimeout {
 		return false
 	}
-	if (recovery.Starting.Status == Managed || recovery.Starting.Status == RecoveryRequired) && (recovery.Starting.Revision == 0 || !validSHA256(recovery.Starting.SHA256) || recovery.StartingRelease == (ReleaseBinding{})) || recovery.Starting.Status == NotInstalled && (recovery.Starting.Revision != 0 || recovery.Starting.SHA256 != "" || recovery.StartingRelease != (ReleaseBinding{})) || recovery.Starting.Status != Managed && recovery.Starting.Status != RecoveryRequired && recovery.Starting.Status != NotInstalled {
+	unprovenRemoval := recovery.State.LineageUnavailable
+	if !validRecoveryStateBinding(recovery) {
+		return false
+	}
+	if !unprovenRemoval && (recovery.Starting.Status == Managed || recovery.Starting.Status == RecoveryRequired) && (recovery.Starting.Revision == 0 || !validSHA256(recovery.Starting.SHA256) || recovery.StartingRelease == (ReleaseBinding{})) || recovery.Starting.Status == NotInstalled && (recovery.Starting.Revision != 0 || recovery.Starting.SHA256 != "" || recovery.StartingRelease != (ReleaseBinding{})) || recovery.Starting.Status != Managed && recovery.Starting.Status != RecoveryRequired && recovery.Starting.Status != NotInstalled {
 		return false
 	}
 	removal := false
@@ -447,6 +453,17 @@ func validRecoveryTransaction(recovery RecoveryTransaction) bool {
 		return recovery.RollbackStep == 0 && recovery.Candidate.Status == Managed && recovery.Candidate.Revision == recovery.Starting.Revision+1 && validSHA256(recovery.Candidate.SHA256) && recovery.CandidateRelease != (ReleaseBinding{})
 	}
 	return false
+}
+
+func validRecoveryStateBinding(recovery RecoveryTransaction) bool {
+	binding := recovery.State
+	if binding.ChangeSet != recovery.ChangeSet || !validSHA256(binding.PreparedStateSHA256) || !validSHA256(binding.PreparedManifestSHA256) {
+		return false
+	}
+	if binding.LineageUnavailable {
+		return recovery.Mutation == CompleteRemovalMutation && recovery.Starting.Status == RecoveryRequired && recovery.Starting.Revision == 0 && recovery.Starting.SHA256 == "" && recovery.StartingRelease == (ReleaseBinding{}) && binding.StartingRevision == 0 && binding.CandidateRevision == 0 && binding.StartingSHA256 == "" && binding.CandidateSHA256 == "" && binding.StartingRelease == (ReleaseBinding{}) && binding.CandidateRelease == (ReleaseBinding{})
+	}
+	return binding.StartingRevision == recovery.Starting.Revision && binding.StartingSHA256 == recovery.Starting.SHA256 && binding.StartingRelease == recovery.StartingRelease && binding.CandidateRevision == binding.StartingRevision+1 && validSHA256(binding.CandidateSHA256) && binding.CandidateRelease != (ReleaseBinding{}) && recovery.Candidate.Revision == binding.CandidateRevision && recovery.Candidate.SHA256 == binding.CandidateSHA256 && recovery.CandidateRelease == binding.CandidateRelease
 }
 
 func validRunTokenRecoveryChecks(checks []Check) bool {
@@ -565,7 +582,7 @@ func forwardRunTokenRotationRequired(spec ChangeSetSpec, cause string, checkpoin
 }
 
 func NextIrreversibleRemovalCheckpoint(checkpoint DurableCheckpoint) (DurableCheckpoint, bool) {
-	if checkpoint == OwnedExternalDeletionVerified {
+	if checkpoint == IrreversibleRemovalStarted {
 		return TokenRevocationVerified, true
 	}
 	if checkpoint == TokenRevocationVerified {
@@ -599,39 +616,7 @@ func continueIrreversibleRemoval(lease ExecutionLease, adapter TransactionAdapte
 	if first < 0 {
 		return forwardRemovalRequired(spec, "SYSTEM-CHANGES-REMOVAL-STEPS", recovery.LastCheckpoint)
 	}
-	if recovery.LastCheckpoint == IrreversibleRemovalStarted || recovery.LastCheckpoint == StepStarted || recovery.LastCheckpoint == StepCompleted {
-		next := first
-		if recovery.LastCheckpoint == StepStarted {
-			next = recovery.AttemptedSteps - 1
-		} else if recovery.LastCheckpoint == StepCompleted {
-			next = recovery.AttemptedSteps
-		}
-		for index := next; index < len(recovery.Steps); index++ {
-			number := index + 1
-			if recovery.LastCheckpoint != StepStarted && !record(StepStarted, number, nil) {
-				return forwardRemovalRequired(spec, "SYSTEM-CHANGES-JOURNAL", StepStarted)
-			}
-			evidence, err := adapter.Execute(lease, recovery.ChangeSet, number, recovery.Steps[index], recovery.Timeouts.Step, nil)
-			if err != nil || !safeIdentity(evidence.Code) || !validSHA256(evidence.SHA256) || !record(StepCompleted, number, &evidence) {
-				return forwardRemovalRequired(spec, "SYSTEM-CHANGES-CLOUDFLARE-DELETION", StepStarted)
-			}
-			recovery.LastCheckpoint = StepCompleted
-			recovery.AttemptedSteps = number
-		}
-	}
-	if recovery.LastCheckpoint == StepCompleted {
-		if !gatePassed(lease, adapter, spec.Checks, PrePublication, recovery.Timeouts.Check) || !record(PrePublicationHealthPassed, 0, nil) {
-			return forwardRemovalRequired(spec, "SYSTEM-CHANGES-REMOVAL-HEALTH", StepCompleted)
-		}
-		recovery.LastCheckpoint = PrePublicationHealthPassed
-	}
-	if recovery.LastCheckpoint == PrePublicationHealthPassed {
-		if !record(OwnedExternalDeletionVerified, 0, nil) {
-			return forwardRemovalRequired(spec, "SYSTEM-CHANGES-JOURNAL", PrePublicationHealthPassed)
-		}
-		recovery.LastCheckpoint = OwnedExternalDeletionVerified
-	}
-	if recovery.LastCheckpoint == OwnedExternalDeletionVerified {
+	if recovery.LastCheckpoint == IrreversibleRemovalStarted {
 		revoked, err := removal.VerifyCloudflareTokenRevoked(lease, recovery, recovery.Timeouts.Check)
 		if err != nil {
 			return forwardRemovalRequired(spec, "SYSTEM-CHANGES-TOKEN-REVOCATION", IrreversibleRemovalStarted)
@@ -640,7 +625,7 @@ func continueIrreversibleRemoval(lease ExecutionLease, adapter TransactionAdapte
 			return ApplyResult{Outcome: AwaitingTokenRevocation, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(), UnremovableTraces: []string{"Certificate Transparency entries cannot be erased", "DNS caches cannot be erased"}}
 		}
 		if !record(TokenRevocationVerified, 0, nil) {
-			return forwardRemovalRequired(spec, "SYSTEM-CHANGES-JOURNAL", OwnedExternalDeletionVerified)
+			return forwardRemovalRequired(spec, "SYSTEM-CHANGES-JOURNAL", IrreversibleRemovalStarted)
 		}
 		recovery.LastCheckpoint = TokenRevocationVerified
 	}
@@ -822,12 +807,6 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 			return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, index))
 		}
 		number := index + 1
-		if removal, ok := step.RemovalChange(); spec.Mutation == CompleteRemovalMutation && ok && removal.Action == CloudflareRemoval && !irreversibleRemoval {
-			if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: IrreversibleRemovalStarted}); err != nil {
-				return finish(lock, rollbackChange(lease, adapter, transaction, spec, index, "SYSTEM-CHANGES-REMOVAL-CHECKPOINT", StepCompleted))
-			}
-			irreversibleRemoval = true
-		}
 		if step.Owner() == CloudflareModule && step.Forward() == ActivatePreparedConfiguration {
 			if result := finalizeDeferredState(index); result != nil {
 				return *result
@@ -883,8 +862,15 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 	}
 	if spec.Mutation == CompleteRemovalMutation {
 		if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: OwnedExternalDeletionVerified}); err != nil {
-			return finish(lock, forwardRemovalRequired(spec, "SYSTEM-CHANGES-JOURNAL", OwnedExternalDeletionVerified))
+			return finish(lock, rollbackChange(lease, adapter, transaction, spec, len(spec.Steps), "SYSTEM-CHANGES-JOURNAL", PrePublicationHealthPassed))
 		}
+		if cancellation.Requested() {
+			return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, len(spec.Steps)))
+		}
+		if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: IrreversibleRemovalStarted}); err != nil {
+			return finish(lock, rollbackChange(lease, adapter, transaction, spec, len(spec.Steps), "SYSTEM-CHANGES-REMOVAL-CHECKPOINT", OwnedExternalDeletionVerified))
+		}
+		irreversibleRemoval = true
 		return finish(lock, ApplyResult{Outcome: AwaitingTokenRevocation, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(), UnremovableTraces: []string{"Certificate Transparency entries cannot be erased", "DNS caches cannot be erased"}}, spec.OutcomeOwner)
 	}
 	if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: StatePublicationStarted}); err != nil {
@@ -1041,7 +1027,11 @@ func transactionBinding(lease ExecutionLease, transaction stateTransaction, spec
 	if err != nil || json.Unmarshal(data, &binding) != nil {
 		return StateTransactionBinding{}, false
 	}
-	return binding, binding.ChangeSet == spec.Identity && binding.StartingRevision == spec.StartingState.Revision && binding.CandidateRevision == binding.StartingRevision+1 && binding.CandidateSHA256 == spec.TargetStateSHA256 && (binding.StartingSHA256 == spec.StartingState.SHA256 || spec.StartingState.Status == NotInstalled && binding.StartingSHA256 == "")
+	unproven := spec.Mutation == CompleteRemovalMutation && spec.StartingState.Status == RecoveryRequired && spec.StartingState.Revision == 0 && spec.StartingState.SHA256 == ""
+	if unproven {
+		return binding, binding.LineageUnavailable && binding.ChangeSet == spec.Identity && binding.StartingRevision == 0 && binding.CandidateRevision == 0 && binding.StartingSHA256 == "" && binding.CandidateSHA256 == "" && binding.StartingRelease == (ReleaseBinding{}) && binding.CandidateRelease == (ReleaseBinding{})
+	}
+	return binding, !binding.LineageUnavailable && binding.ChangeSet == spec.Identity && binding.StartingRevision == spec.StartingState.Revision && binding.CandidateRevision == binding.StartingRevision+1 && binding.CandidateSHA256 == spec.TargetStateSHA256 && (binding.StartingSHA256 == spec.StartingState.SHA256 || spec.StartingState.Status == NotInstalled && binding.StartingSHA256 == "")
 }
 
 func validatedAgreement(lease ExecutionLease, value any, binding StateTransactionBinding) (Agreement, bool) {

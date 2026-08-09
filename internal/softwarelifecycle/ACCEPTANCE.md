@@ -253,3 +253,17 @@ Require `ViewRepair` to expose one protected `Review repair` candidate only afte
 Require one deterministic `PlanRepair` to consume the fresh observation and exactly one typed owning-Module contribution. Bind the unchanged current Owner intent, exact reversible steps, required pre- and post-publication checks, disk, rollback, and affected Module without rendering protected material. Apply must consume the Plan once, recheck State, observation, and contribution after approval, accept only State's exact unchanged-intent revision `N → N+1`, and hand one `Repair` Change Set to System Changes. Required failure, cancellation, process death, or disagreement uses the normal transaction rollback and restart rules; unprovable resolution remains Recovery Required.
 
 No repair path may adopt Observed State, unowned resources, arbitrary files or commands; recreate State or secrets; select old revisions; transfer to another VPS; use retained history, backups, snapshots, or recovery parcels; force-unlock; bypass the journal; or manually complete an unfinished transaction. External Integrated Verification, Codex Live Acceptance, Owner Acceptance, and Release Qualification remain Pending on issue #127 and the inherited production prerequisites.
+
+### SL-REMOVAL-08 — Complete removal remains rollback-safe through owned external deletion
+
+Run:
+
+```sh
+go test ./internal/softwarelifecycle -run 'CompleteRemoval' -count=1
+go test ./internal/systemchanges -run 'CompleteRemoval' -count=1
+go test ./internal/state -run 'CompleteRemoval|Removal' -count=1
+```
+
+Require `ViewCompleteRemoval` to expose one protected `Review Complete removal` candidate only from a fresh Managed or Recovery Required observation with volatile facts, a released lock, and no unfinished Change Set or automatic rollback. Bind exact valid State lineage when available; for missing or corrupt lineage, State instead preserves and rechecks the exact raw bytes or absence without inventing a revision or checksum. Require one deterministic one-use Plan to authenticate the genuine Owner Console review, full local inventory, exact Network Policy public resources, exact Cloudflare DNS, route, and Tunnel identifiers, active locally available scoped token, disk, ordinary sudo, both irreversible remnants, cancellation boundary, rollback to the exact starting status, token-revocation responsibility, and final Not installed proof without rendering protected values. Refuse stale or reused observations, missing categories, caller-made reviews, changed identifiers, incomplete ownership, unavailable token authority, or a competing unfinished transaction.
+
+Apply must require the genuine exact interactively typed `COMPLETE REMOVAL` authority and the separate genuine `Permanently remove SBXR` selection, recheck every fact after approval, accept only State's exact rollback binding, and hand one Complete-removal Change Set to System Changes. Failure, cancellation, or restart through public and Cloudflare deletion restores Managed to Managed and Recovery Required to Recovery Required unless transaction-bound State genuinely proves the exact earlier Managed baseline. Record `Owned external deletion verified` only after the absence gate passes, then record `Irreversible removal started` immediately before Albert revokes the scoped token. Issue #133 owns every forward-only phase after that checkpoint. External Integrated Verification, Codex Live Acceptance, Owner Acceptance, and Release Qualification remain Pending on issue #127 and the inherited production prerequisites.

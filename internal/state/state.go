@@ -167,6 +167,7 @@ type loadedState struct {
 	revision        uint64
 	payloadChecksum string
 	bytes           []byte
+	present         bool
 	migration       MigrationReview
 	used            atomic.Bool
 }

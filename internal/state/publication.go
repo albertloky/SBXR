@@ -33,6 +33,8 @@ type TransactionMaterial struct {
 	candidateRelease           ReleaseIdentity
 	deferred                   *deferredCloudflare
 	forwardRecovery            bool
+	unprovenRemoval            bool
+	rawStatePresent            bool
 }
 
 type publicationAuthority struct{ used atomic.Bool }
@@ -47,6 +49,8 @@ func (TransactionMaterial) GoString() string             { return "[redacted tra
 
 // SystemChangesBindings returns only exact non-secret transaction lineage.
 type systemChangesTransactionBinding struct {
+	LineageUnavailable     bool              `json:"lineage_unavailable,omitempty"`
+	RawStatePresent        bool              `json:"raw_state_present,omitempty"`
 	StartingRevision       uint64            `json:"starting_revision"`
 	CandidateRevision      uint64            `json:"candidate_revision"`
 	StartingSHA256         string            `json:"starting_sha256"`
@@ -63,6 +67,7 @@ func (transaction *TransactionMaterial) SystemChangesBindings(lease any) ([]byte
 		return nil, finding("STATE-TRANSACTION-LEASE", "transaction material", "no authorized System Changes lease", "the one active Apply lease", "protected lineage cannot leave State", "use System Changes Apply")
 	}
 	return json.Marshal(systemChangesTransactionBinding{
+		LineageUnavailable: transaction.unprovenRemoval, RawStatePresent: transaction.rawStatePresent,
 		StartingRevision: transaction.startingRevision, CandidateRevision: transaction.candidateRevision,
 		StartingSHA256: transaction.startingChecksum, CandidateSHA256: transaction.candidateChecksum,
 		PreparedStateSHA256: transaction.preparedChecksum, PreparedManifestSHA256: transaction.manifestChecksum,
@@ -262,7 +267,7 @@ func (i Interface) SystemChangesRestoreDurable(lease any, bindingJSON []byte, pr
 		return nil, finding("STATE-RECOVERY-LEASE", "restart Desired State rollback", "no authorized State recovery handoff", "the one active System Changes recovery lease", "Desired State cannot be restored outside restart recovery", "keep affected services stopped")
 	}
 	var binding systemChangesTransactionBinding
-	if json.Unmarshal(bindingJSON, &binding) != nil || binding.CandidateRevision != binding.StartingRevision+1 || !validSHA256(binding.CandidateSHA256) || !validSHA256(binding.PreparedStateSHA256) || !validReleaseIdentity(binding.CandidateRelease) {
+	if json.Unmarshal(bindingJSON, &binding) != nil {
 		return nil, finding("STATE-RECOVERY-BINDING", "restart Desired State rollback", "an invalid durable State binding", "the exact transaction-bound starting and candidate lineage", "State never guesses recovery lineage", "use the Recovery Required flow")
 	}
 	prior, err := readRecoveryStateArtifact(priorSource)
@@ -274,6 +279,15 @@ func (i Interface) SystemChangesRestoreDurable(lease any, bindingJSON []byte, pr
 		return nil, err
 	}
 	candidateDigest := sha256.Sum256(candidate)
+	if binding.LineageUnavailable {
+		if binding.StartingRevision != 0 || binding.CandidateRevision != 0 || binding.StartingSHA256 != "" || binding.CandidateSHA256 != "" || binding.StartingRelease != (ReleaseIdentity{}) || binding.CandidateRelease != (ReleaseIdentity{}) || hex.EncodeToString(candidateDigest[:]) != binding.PreparedStateSHA256 {
+			return nil, finding("STATE-RECOVERY-BINDING", "restart Desired State rollback", "the unproven raw baseline disagrees with its durable binding", "the exact protected raw bytes or absence", "State never invents missing lineage", "use the Recovery Required flow")
+		}
+		return (&TransactionMaterial{storage: i.implementation.storage, priorState: candidate, preparedState: candidate, unprovenRemoval: true, rawStatePresent: binding.RawStatePresent}).SystemChangesRestore(lease)
+	}
+	if binding.CandidateRevision != binding.StartingRevision+1 || !validSHA256(binding.CandidateSHA256) || !validSHA256(binding.PreparedStateSHA256) || !validReleaseIdentity(binding.CandidateRelease) {
+		return nil, finding("STATE-RECOVERY-BINDING", "restart Desired State rollback", "an invalid durable State binding", "the exact transaction-bound starting and candidate lineage", "State never guesses recovery lineage", "use the Recovery Required flow")
+	}
 	candidateDocument, problem := decode(candidate)
 	if problem != nil || hex.EncodeToString(candidateDigest[:]) != binding.PreparedStateSHA256 || candidateDocument.Revision != binding.CandidateRevision || candidateDocument.Checksum != binding.CandidateSHA256 || candidateDocument.ReleaseIdentity != binding.CandidateRelease || candidateDocument.LastCompletedChangeSet != ChangeSetIdentity(binding.ChangeSet) {
 		return nil, finding("STATE-RECOVERY-CANDIDATE", "restart Desired State rollback", "candidate State disagrees with its durable binding", "the exact protected candidate State", "State cannot restore across ambiguous lineage", "use the Recovery Required flow")
@@ -419,6 +433,13 @@ func (transaction *TransactionMaterial) SystemChangesRestore(lease any) ([]byte,
 		return nil, finding("STATE-ROLLBACK-LEASE", "Desired State rollback", "no authorized transaction", "the one active System Changes lease", "State cannot restore outside automatic rollback", "use System Changes Apply")
 	}
 	current, err := transaction.storage.Read()
+	if transaction.unprovenRemoval {
+		priorCurrent := transaction.rawStatePresent && err == nil && bytes.Equal(current, transaction.priorState) || !transaction.rawStatePresent && errors.Is(err, fs.ErrNotExist)
+		if !priorCurrent {
+			return nil, finding("STATE-ROLLBACK-LINEAGE", "Desired State rollback", "the unproven raw State baseline changed", "the exact untouched bytes or absence captured before removal", "automatic rollback cannot invent or overwrite State", "use the Recovery Required flow")
+		}
+		return json.Marshal(systemChangesRollbackAgreement{Status: RecoveryRequired})
+	}
 	priorCurrent := len(transaction.priorState) == 0 && errors.Is(err, fs.ErrNotExist) || err == nil && bytes.Equal(current, transaction.priorState)
 	if !priorCurrent {
 		if err != nil || !bytes.Equal(current, transaction.preparedState) {
@@ -686,6 +707,8 @@ func (commit *PreparedCommit) ConsumeForApply(current ReviewedInputs) (*Transact
 		startingRelease:            commit.starting.migration.StartingRelease,
 		candidateRelease:           commit.releaseIdentity,
 		deferred:                   commit.deferred,
+		unprovenRemoval:            commit.unprovenRemoval,
+		rawStatePresent:            commit.starting.present,
 	}, nil
 }
 
