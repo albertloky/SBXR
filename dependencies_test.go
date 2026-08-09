@@ -53,6 +53,11 @@ var forbiddenStandardLibrary = map[string]bool{
 	"plugin":       true,
 }
 
+var approvedExternalImports = map[string]bool{
+	"charm.land/bubbletea/v2": true,
+	"charm.land/lipgloss/v2":  true,
+}
+
 type packageInfo struct {
 	ImportPath string
 	Imports    []string
@@ -71,9 +76,6 @@ func TestRepositoryDependencies(t *testing.T) {
 		var current packageInfo
 		if err := decoder.Decode(&current); err != nil {
 			t.Fatal(err)
-		}
-		if !current.Standard && current.ImportPath != modulePath && !strings.HasPrefix(current.ImportPath, modulePath+"/") {
-			t.Fatalf("unapproved production dependency %q; SBXR is standard-library-first", current.ImportPath)
 		}
 		if strings.HasPrefix(current.ImportPath, modulePath+"/") {
 			packages = append(packages, current)
@@ -110,6 +112,8 @@ func TestArchitecturePolicyRejectsForbiddenShapes(t *testing.T) {
 		{name: "production fixture import", packages: []packageInfo{{ImportPath: modulePath + "/internal/state", Imports: []string{modulePath + "/internal/state/fixtures"}}}, want: "production-only material"},
 		{name: "database", packages: []packageInfo{{ImportPath: modulePath + "/internal/state", Imports: []string{"database/sql"}}}, want: "forbidden standard-library capability"},
 		{name: "plugins", packages: []packageInfo{{ImportPath: modulePath + "/internal/state", Imports: []string{"plugin"}}}, want: "forbidden standard-library capability"},
+		{name: "unapproved external dependency", packages: []packageInfo{{ImportPath: modulePath + "/internal/ownerconsole", Imports: []string{"example.com/ui"}}}, want: "unapproved production dependency"},
+		{name: "UI dependency outside Owner Console", packages: []packageInfo{{ImportPath: modulePath + "/internal/state", Imports: []string{"charm.land/bubbletea/v2"}}}, want: "unapproved production dependency"},
 		{name: "cycle", packages: []packageInfo{{ImportPath: modulePath + "/internal/state", Imports: []string{modulePath + "/internal/state/adapter/filesystem"}}, {ImportPath: modulePath + "/internal/state/adapter/filesystem", Imports: []string{modulePath + "/internal/state"}}}, want: "cycle"},
 	}
 	for _, tt := range tests {
@@ -257,6 +261,38 @@ func Stop(pid int) { _ = syscall.Kill(pid, 0) }
 			mustWriteArchitectureFile(t, directory, "internal/healthdiagnostics/unsafe.go", test.source)
 			if err := validateHealthDiagnosticsReadOnly(directory); err == nil || !strings.Contains(err.Error(), "typed read-only inspections") {
 				t.Fatalf("validateHealthDiagnosticsReadOnly() = %v", err)
+			}
+		})
+	}
+}
+
+func TestOwnerConsolePresentationBoundary(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateOwnerConsolePresentation(root); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct{ name, source string }{
+		{"host mutation", `package ownerconsole
+import "os"
+func unsafe() { _ = os.WriteFile("/tmp/unsafe", nil, 0o600) }
+`},
+		{"arbitrary command", `package ownerconsole
+import "os/exec"
+func unsafe() { _ = exec.Command("unsafe") }
+`},
+		{"product logic", `package ownerconsole
+import "github.com/albertloky/SBXR/internal/state"
+func unsafe(value state.Interface) { _ = value }
+`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			directory := t.TempDir()
+			mustWriteArchitectureFile(t, directory, "internal/ownerconsole/unsafe.go", test.source)
+			if err := validateOwnerConsolePresentation(directory); err == nil || !strings.Contains(err.Error(), "terminal presentation only") {
+				t.Fatalf("validateOwnerConsolePresentation() = %v", err)
 			}
 		})
 	}
@@ -421,6 +457,41 @@ func validateHealthDiagnosticsReadOnly(root string) error {
 	})
 }
 
+func validateOwnerConsolePresentation(root string) error {
+	allowed := map[string]bool{
+		"context": true, "errors": true, "fmt": true, "io": true, "os": true,
+		"slices": true, "strings": true, "sync/atomic": true, "syscall": true,
+		"time": true, "unsafe": true,
+	}
+	return walkProductionGoFiles(root, func(relative string, source *ast.File) error {
+		if filepath.ToSlash(filepath.Dir(relative)) != "internal/ownerconsole" {
+			return nil
+		}
+		for _, imported := range source.Imports {
+			importPath, err := strconv.Unquote(imported.Path.Value)
+			if err != nil || !allowed[importPath] && !approvedExternalImports[importPath] {
+				return fmt.Errorf("Owner Console contains terminal presentation only: %s imports %s", relative, importPath)
+			}
+		}
+		var mutation string
+		ast.Inspect(source, func(node ast.Node) bool {
+			selector, ok := node.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			base, direct := selector.X.(*ast.Ident)
+			if direct && base.Name == "os" && selector.Sel.Name != "File" && selector.Sel.Name != "Environ" && selector.Sel.Name != "ModeCharDevice" {
+				mutation = "os." + selector.Sel.Name
+			}
+			return mutation == ""
+		})
+		if mutation != "" {
+			return fmt.Errorf("Owner Console contains terminal presentation only: %s uses %s", relative, mutation)
+		}
+		return nil
+	})
+}
+
 func validateInfrastructureSecretConsumption(root string) error {
 	return walkProductionGoFiles(root, func(relative string, source *ast.File) error {
 		if strings.HasPrefix(filepath.ToSlash(relative), "internal/state/") {
@@ -538,6 +609,9 @@ func validatePackages(packages []packageInfo) error {
 	for _, current := range packages {
 		from := owningModule(current.ImportPath)
 		for _, imported := range current.Imports {
+			if isExternalImport(imported) && (from != "ownerconsole" || !approvedExternalImports[imported]) {
+				return fmt.Errorf("unapproved production dependency %s -> %s", current.ImportPath, imported)
+			}
 			if forbiddenStandardLibrary[imported] {
 				return fmt.Errorf("forbidden standard-library capability %s -> %s", current.ImportPath, imported)
 			}
@@ -551,6 +625,11 @@ func validatePackages(packages []packageInfo) error {
 		}
 	}
 	return rejectCycles(byPath)
+}
+
+func isExternalImport(importPath string) bool {
+	first, _, _ := strings.Cut(importPath, "/")
+	return strings.Contains(first, ".") && importPath != modulePath && !strings.HasPrefix(importPath, modulePath+"/")
 }
 
 func permittedDirection(from, to string) bool {

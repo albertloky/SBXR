@@ -9,6 +9,7 @@ import (
 	healthfilesystem "github.com/albertloky/SBXR/internal/healthdiagnostics/adapter/filesystem"
 	"github.com/albertloky/SBXR/internal/networkpolicy"
 	"github.com/albertloky/SBXR/internal/networkpolicy/adapter/ubuntu"
+	"github.com/albertloky/SBXR/internal/ownerconsole"
 	"github.com/albertloky/SBXR/internal/state/adapter/filesystem"
 	"github.com/albertloky/SBXR/internal/subscriptionserving"
 )
@@ -41,4 +42,12 @@ func main() {
 	}
 	_ = filesystem.New()
 	_ = networkpolicy.New(ubuntu.New())
+	if runOwnerConsole(context.Background(), os.Stdin, os.Stdout, os.Environ()) != nil {
+		os.Exit(1)
+	}
+}
+
+func runOwnerConsole(ctx context.Context, input, output *os.File, environment []string) error {
+	capabilities := ownerconsole.DetectTerminal(input, output, environment)
+	return ownerconsole.Run(ctx, ownerconsole.Session{Input: input, Output: output, Environment: environment, Capabilities: &capabilities})
 }
