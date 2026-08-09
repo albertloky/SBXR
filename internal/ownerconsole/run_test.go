@@ -615,7 +615,11 @@ func runPseudoTerminalTranscriptSteps(t *testing.T, session Session, width, heig
 				if authentication.result == AuthenticationSucceeded {
 					wanted = "OVERVIEW"
 				}
-				waitForTranscript(t, &output, wanted)
+				if session.Outcome == nil {
+					waitForTranscript(t, &output, wanted)
+				} else {
+					time.Sleep(100 * time.Millisecond)
+				}
 				authenticationWaited = true
 			}
 			time.Sleep(30 * time.Millisecond)

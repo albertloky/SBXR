@@ -1,6 +1,6 @@
 # Owner Console acceptance
 
-This file defines stable checks for issues #135, #136, and #137. It contains no run results, Client Access Values, Infrastructure Secrets, raw terminal contents from an Owner session, or claim of Integrated, Live, Owner, or Release acceptance.
+This file defines stable checks for issues #135, #136, #137, and #138. It contains no run results, Client Access Values, Infrastructure Secrets, raw terminal contents from an Owner session, or claim of Integrated, Live, Owner, or Release acceptance.
 
 ## Module Verification
 
@@ -106,6 +106,26 @@ go test ./internal/ownerconsole -run '^TestRun(PresentsOnlyTypedTruthfulProgress
 ```
 
 Require measured bars only for real completed and total units. Require unknown work and an unmeasured current step to show a spinner plus monotonic elapsed time without a percentage. Require a mixed measured step to identify that step without inventing overall progress. Reject invalid, unsupported, or screen-incompatible typed progress with fixed secret-safe wording while retaining safe close and cancellation actions. At `120×36`, require the detail column to agree with the current typed facts.
+
+### OC-CHANGE-01 — Complete one-use Plan and Correction Flow
+
+Run:
+
+```sh
+go test ./internal/ownerconsole -run '^TestRun(ReviewsCompleteTypedPlanWithoutStartingWork|ReviewsEveryPlanSectionAtMinimumSizeBeforeApply|PresentsCompleteCorrectionFlowWithoutBypass|SubmitsCorrectionInputAndSelectionOnlyToASeparateFixPlan|RequiredCorrectionInputCannotBeSubmittedEmpty|FixPlanBackRestoresCorrectionEditingState|CheckAgainReturnsToTheOwningModule|PlanBackReturnsToSafeEditing|PagesLongValidReviewsAtLargeSize|CopiesCorrectionEvidenceThroughAnExplicitAction|RefusesUnsafeTypedPlanEvidence|RefusesIncompletePlanFacts|RefusesIncompleteCorrectionFlow|ReadOnlyChoiceCreatesNothingAndFreshInstallReviewsWithoutSudo)$' -count=1
+```
+
+Require read-only review and pre-approval disconnect to start no work. Require a complete typed Plan with revision, checksums, observations, verified external inputs, effects, Required and Advisory checks, interruption, cancellation, and rollback. Require Correction Flow Problem, Found, Required, stop reason, separate Fix Plan, current Owner steps, input or selection, Check again, Back, and redacted evidence. Require Back to restore an operable typed editing field and build a separate updated Plan. Keep every fact and action reachable without clipping at both `80×24` and `120×36`. Reject incomplete or unsafe presentation facts without rendering their marker.
+
+### OC-CHANGE-02 — Approval, durable Change Set result, and cancellation
+
+Run:
+
+```sh
+go test ./internal/ownerconsole -run '^TestRun(RejectsStaleApprovalAndRebuildsAPlan|ShowsChangeSetProgressAndRequestsSafeCancellation|RelaunchShowsOnlyTypedChangeSetResult|ApprovedWorkUsesAnOperationContextIndependentOfTheConsole|DisconnectCancelsPendingAuthenticationBeforeApply|MalformedOutcomeFactsNeverInventADomainResult)$' -count=1
+```
+
+Require Apply to receive only the exact reviewed Plan identity after authentication. Require stale or reused refusal to rebuild a fresh Plan. Require approved work to remain independent of Console exit, explicit cancellation to wait for a safe rollback checkpoint, and relaunch to show only typed active Change Set, success, rollback, or Recovery Required facts without inference from process exit or service reachability.
 
 ## Seam Verification
 

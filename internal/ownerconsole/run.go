@@ -83,6 +83,7 @@ type Session struct {
 	AuthenticationPolicy AuthenticationPolicy
 	Access               AccessPresentation
 	Clipboard            Clipboard
+	Outcome              OutcomeModule
 }
 
 func Run(ctx context.Context, session Session) error {
@@ -128,7 +129,7 @@ func Run(ctx context.Context, session Session) error {
 	fixture := scenarioFixture(session.Scenario)
 	accessEntries := session.Access.entries()
 	program := tea.NewProgram(
-		model{width: c.Width, height: c.Height, scenario: session.Scenario, selected: selectedNavigation(session.Scenario), unicode: c.Unicode, noColor: noColor, initialModes: initialModes, drawingModeProbeRequired: c.DrawingModeProbeRequired, inputFocused: fixture.acceptsInput, progressExpected: session.Updates != nil, authenticator: session.Authenticator, authenticationPolicy: session.AuthenticationPolicy, runContext: runContext, accessEntries: accessEntries, clipboard: session.Clipboard},
+		model{width: c.Width, height: c.Height, scenario: session.Scenario, selected: selectedNavigation(session.Scenario), unicode: c.Unicode, noColor: noColor, initialModes: initialModes, drawingModeProbeRequired: c.DrawingModeProbeRequired, inputFocused: fixture.acceptsInput, progressExpected: session.Updates != nil, authenticator: session.Authenticator, authenticationPolicy: session.AuthenticationPolicy, runContext: runContext, accessEntries: accessEntries, clipboard: session.Clipboard, outcome: session.Outcome},
 		tea.WithContext(runContext),
 		tea.WithInput(session.Input),
 		tea.WithOutput(session.Output),
@@ -248,6 +249,14 @@ type model struct {
 	accessSelection           int
 	clipboard                 Clipboard
 	copyFeedback              string
+	outcome                   OutcomeModule
+	changeReview              ChangeReview
+	changeSet                 DurableChangeSet
+	pendingPlanApply          bool
+	changeFeedback            string
+	correctionSelection       int
+	correctionAction          int
+	planPage                  int
 }
 
 type probeTimeoutMsg struct{}
@@ -260,6 +269,10 @@ type copyFinishedMsg struct {
 	name   string
 	result CopyResult
 }
+type changeReviewMsg struct{ review ChangeReview }
+type changeResultMsg struct{ result ChangeResult }
+type changeSetUpdateMsg struct{ change DurableChangeSet }
+type changeBackMsg struct{ review ChangeReview }
 
 type progressClock struct {
 	kind        ProgressKind
@@ -269,6 +282,13 @@ type progressClock struct {
 
 func (m model) Init() tea.Cmd {
 	commands := []tea.Cmd{tea.RequestBackgroundColor}
+	if m.outcome != nil {
+		if m.scenario == InstallationReview {
+			commands = append(commands, m.enterChangeCommand())
+		} else if m.scenario != PrivacyChoice {
+			commands = append(commands, m.inspectChangeCommand())
+		}
+	}
 	if m.drawingModeProbeRequired {
 		commands = append(commands, tea.Tick(time.Second, func(time.Time) tea.Msg { return probeTimeoutMsg{} }))
 	}
@@ -336,9 +356,16 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.pasteGuard = false
 	case authenticationFinishedMsg:
 		if message.result == AuthenticationSucceeded {
+			if m.pendingPlanApply {
+				m.pendingPlanApply = false
+				return m, m.applyChangeCommand()
+			}
 			m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
 			m.limitedMode = false
 			m.accessUnlocked = len(m.accessEntries) != 0
+			if m.outcome != nil {
+				return m, m.inspectChangeCommand()
+			}
 			return m, nil
 		}
 		m.scenario, m.selected = LimitedDashboard, selectedNavigation(LimitedDashboard)
@@ -352,6 +379,45 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.copyFeedback = "Copy request sent. If it is not in your clipboard, select the text manually."
 		default:
 			m.copyFeedback = "Copy failed. Select the text manually."
+		}
+	case changeReviewMsg:
+		m.changeReview = validatedChangeReview(message.review)
+		m.planPage, m.correctionAction, m.correctionSelection = 0, 0, 0
+		m.copyFeedback = ""
+		m.focusChangeInput()
+	case changeBackMsg:
+		m.changeReview = validatedChangeReview(message.review)
+		m.planPage, m.changeFeedback = 0, ""
+		m.focusChangeInput()
+	case changeSetUpdateMsg:
+		m.changeSet = validatedDurableChangeSet(message.change)
+		if m.changeSet.Kind != NoChangeSet {
+			m.scenario, m.selected = MultiStepChangeSet, selectedNavigation(MultiStepChangeSet)
+		}
+	case changeResultMsg:
+		message.result = validatedChangeResult(message.result)
+		switch message.result.Kind {
+		case ChangeStarted, ChangeCancellationRequested:
+			explanation := message.result.Explanation
+			if message.result.Kind == ChangeCancellationRequested && explanation == "" {
+				explanation = "Cancellation requested; waiting for a safe rollback checkpoint."
+			}
+			m.changeSet = DurableChangeSet{Kind: ChangeSetActive, OperationID: message.result.OperationID, Explanation: explanation}
+			m.scenario, m.selected = MultiStepChangeSet, selectedNavigation(MultiStepChangeSet)
+		case ChangePlanRejected:
+			m.scenario, m.selected = InstallationReview, selectedNavigation(InstallationReview)
+			m.changeReview = ChangeReview{}
+			m.changeFeedback = message.result.Explanation
+			if m.changeFeedback == "" {
+				m.changeFeedback = "The Plan was stale, changed, or already used. A fresh Plan was rebuilt for review."
+			}
+			return m, m.reviewChangeCommand()
+		case changeFactsUnavailable:
+			m.changeFeedback = message.result.Explanation
+			if m.changeReview.Plan != nil {
+				m.changeReview = ChangeReview{}
+				m.pendingPlanApply = false
+			}
 		}
 	case tea.PasteMsg:
 		if m.width >= minimumWidth && m.height >= minimumHeight && !m.exitConfirm && m.inputFocused {
@@ -399,6 +465,78 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.exitConfirm = true
 			return m, nil
 		}
+		if m.scenario == InstallationReview && m.outcome != nil {
+			if m.inputFocused {
+				if m.editFocusedInput(message) {
+					return m, m.backChangeCommand()
+				}
+				return m, nil
+			}
+			switch message.String() {
+			case "enter", "space":
+				if m.changeReview.Plan != nil {
+					if m.planPage+1 < m.planPageCount() {
+						m.planPage++
+						return m, nil
+					}
+					m.pendingPlanApply = true
+					return m, m.authenticationCommand()
+				}
+				if correction := m.changeReview.Correction; correction != nil {
+					if m.planPage+1 < m.correctionPageCount(correction) {
+						m.planPage++
+						return m, nil
+					}
+					switch m.correctionActionDefinition(correction) {
+					case correctionFix:
+						return m, m.fixChangeCommand()
+					case correctionCheck:
+						return m, m.checkChangeAgainCommand()
+					case correctionCopy:
+						return m, m.copyValue("redacted evidence", correction.Evidence)
+					case correctionBack:
+						return m, m.backChangeCommand()
+					}
+				}
+				if m.changeReview.Editing != nil {
+					return m, m.editChangeCommand()
+				}
+			case "up":
+				if correction := m.changeReview.Correction; correction != nil {
+					m.correctionAction = (m.correctionAction + m.correctionActionCount(correction) - 1) % m.correctionActionCount(correction)
+				}
+			case "down":
+				if correction := m.changeReview.Correction; correction != nil {
+					m.correctionAction = (m.correctionAction + 1) % m.correctionActionCount(correction)
+				}
+			case "left":
+				if correction := m.changeReview.Correction; correction != nil && len(correction.Selections) > 0 {
+					m.correctionSelection = (m.correctionSelection + len(correction.Selections) - 1) % len(correction.Selections)
+				}
+			case "right":
+				if correction := m.changeReview.Correction; correction != nil && len(correction.Selections) > 0 {
+					m.correctionSelection = (m.correctionSelection + 1) % len(correction.Selections)
+				}
+			case "r":
+				return m, m.checkChangeAgainCommand()
+			case "tab", "shift+tab":
+				if correction := m.changeReview.Correction; correction != nil && correction.InputLabel != "" {
+					m.inputFocused = true
+				} else if m.changeReview.Editing != nil {
+					m.inputFocused = true
+				}
+			case "esc":
+				if (m.changeReview.Plan != nil || m.changeReview.Correction != nil) && m.planPage > 0 {
+					m.planPage--
+					return m, nil
+				}
+				return m, m.backChangeCommand()
+			}
+			return m, nil
+		}
+		if m.scenario == MultiStepChangeSet && m.outcome != nil && message.String() == "c" && m.changeSet.Kind == ChangeSetActive {
+			return m, m.cancelChangeCommand()
+		}
 		if m.scenario == PrivacyChoice {
 			switch message.String() {
 			case "up", "shift+tab":
@@ -411,6 +549,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 					switch m.authenticationPolicy {
 					case DeferAuthenticationUntilApply:
 						m.scenario, m.selected = InstallationReview, selectedNavigation(InstallationReview)
+						if m.outcome != nil {
+							return m, m.enterChangeCommand()
+						}
 						return m, nil
 					case AuthenticateForAccess:
 						return m, m.authenticationCommand()
@@ -478,18 +619,8 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if scenarioFixture(m.scenario).acceptsInput {
 			if m.inputFocused {
-				switch message.String() {
-				case "tab", "shift+tab":
-					m.inputFocused = false
-				case "backspace":
-					runes := []rune(m.input)
-					if len(runes) > 0 {
-						m.input = string(runes[:len(runes)-1])
-					}
-				case "esc":
+				if m.editFocusedInput(message) {
 					m.scenario, m.selected, m.inputFocused = AuthenticatedOverview, 0, false
-				default:
-					m.appendInput(message.Key().Text)
 				}
 				return m, nil
 			}
@@ -540,11 +671,15 @@ func (m model) legalLimitedActions() []limitedActionDefinition {
 
 func (m model) copySelectedAccessValue() tea.Cmd {
 	entry := m.accessEntries[m.accessSelection]
+	return m.copyValue(entry.name, entry.value)
+}
+
+func (m model) copyValue(name, value string) tea.Cmd {
 	if m.clipboard == nil {
-		return tea.Sequence(tea.SetClipboard(entry.value), func() tea.Msg { return copyFinishedMsg{name: entry.name, result: CopyRequested} })
+		return tea.Sequence(tea.SetClipboard(value), func() tea.Msg { return copyFinishedMsg{name: name, result: CopyRequested} })
 	}
 	return func() tea.Msg {
-		return copyFinishedMsg{name: entry.name, result: m.clipboard.Copy(m.runContext, entry.value)}
+		return copyFinishedMsg{name: name, result: m.clipboard.Copy(m.runContext, value)}
 	}
 }
 
@@ -556,6 +691,87 @@ func (m model) authenticationCommand() tea.Cmd {
 	return tea.Exec(command, func(error) tea.Msg {
 		return authenticationFinishedMsg{result: command.result}
 	})
+}
+
+func (m model) reviewChangeCommand() tea.Cmd {
+	return func() tea.Msg { return changeReviewMsg{review: m.outcome.Review(m.runContext)} }
+}
+
+func (m model) enterChangeCommand() tea.Cmd {
+	return func() tea.Msg {
+		if current := validatedDurableChangeSet(m.outcome.Inspect(m.runContext)); current.Kind != NoChangeSet {
+			return changeSetUpdateMsg{change: current}
+		}
+		return changeReviewMsg{review: m.outcome.Review(m.runContext)}
+	}
+}
+
+func (m model) fixChangeCommand() tea.Cmd {
+	request := CorrectionInput{Text: m.input}
+	if correction := m.changeReview.Correction; correction != nil && correction.InputLabel != "" && request.Text == "" {
+		return func() tea.Msg {
+			return changeResultMsg{result: ChangeResult{Kind: changeFactsUnavailable, Explanation: "Required correction input is empty. Nothing was submitted."}}
+		}
+	}
+	if correction := m.changeReview.Correction; correction != nil && m.correctionSelection < len(correction.Selections) {
+		request.Selection = correction.Selections[m.correctionSelection].Identity
+	}
+	return func() tea.Msg { return changeReviewMsg{review: m.outcome.Fix(m.runContext, request)} }
+}
+
+func (m model) checkChangeAgainCommand() tea.Cmd {
+	return func() tea.Msg { return changeReviewMsg{review: m.outcome.CheckAgain(m.runContext)} }
+}
+
+func (m model) backChangeCommand() tea.Cmd {
+	return func() tea.Msg {
+		return changeBackMsg{review: m.outcome.Back(m.runContext)}
+	}
+}
+
+func (m model) editChangeCommand() tea.Cmd {
+	editing := m.changeReview.Editing
+	if editing == nil {
+		return nil
+	}
+	if editing.Field.Required && m.input == "" {
+		return func() tea.Msg {
+			return changeResultMsg{result: ChangeResult{Kind: changeFactsUnavailable, Explanation: "Required editing input is empty. Nothing was submitted."}}
+		}
+	}
+	request := EditingInput{Field: editing.Field.Identity, Text: m.input}
+	return func() tea.Msg { return changeReviewMsg{review: m.outcome.Edit(m.runContext, request)} }
+}
+
+func (m *model) focusChangeInput() {
+	m.inputFocused = false
+	if correction := m.changeReview.Correction; correction != nil && correction.InputLabel != "" {
+		m.inputFocused = true
+		return
+	}
+	if editing := m.changeReview.Editing; editing != nil {
+		m.input = editing.Field.Value
+		m.inputFocused = true
+	}
+}
+
+func (m model) inspectChangeCommand() tea.Cmd {
+	return func() tea.Msg { return changeSetUpdateMsg{change: m.outcome.Inspect(m.runContext)} }
+}
+
+func (m model) applyChangeCommand() tea.Cmd {
+	plan := m.changeReview.Plan
+	if plan == nil {
+		return nil
+	}
+	return func() tea.Msg { return changeResultMsg{result: m.outcome.Apply(context.Background(), plan.Identity)} }
+}
+
+func (m model) cancelChangeCommand() tea.Cmd {
+	operation := m.changeSet.OperationID
+	return func() tea.Msg {
+		return changeResultMsg{result: m.outcome.RequestCancellation(context.Background(), operation)}
+	}
 }
 
 func (m model) accessValueLines(entry accessEntry) []string {
@@ -674,6 +890,23 @@ func (m *model) appendInput(value string) {
 		m.inputTruncated = true
 	}
 	m.input += string(runes)
+}
+
+func (m *model) editFocusedInput(message tea.KeyPressMsg) bool {
+	switch message.String() {
+	case "tab", "shift+tab":
+		m.inputFocused = false
+	case "backspace":
+		runes := []rune(m.input)
+		if len(runes) > 0 {
+			m.input = string(runes[:len(runes)-1])
+		}
+	case "esc":
+		return true
+	default:
+		m.appendInput(message.Key().Text)
+	}
+	return false
 }
 
 func progressTick() tea.Cmd {
@@ -811,6 +1044,17 @@ func (m model) frame() string {
 }
 
 func (m model) scenarioDetails(current fixture) []string {
+	if m.scenario == InstallationReview && m.outcome != nil {
+		if correction := m.changeReview.Correction; correction != nil {
+			return []string{"REDACTED EVIDENCE", "", correction.Evidence, "", "No raw output or secrets."}
+		}
+		if plan := m.changeReview.Plan; plan != nil {
+			return append([]string{"PLAN BINDING", "", "Identity  " + string(plan.Identity), fmt.Sprintf("Revision  %d", plan.DesiredStateRevision), "Desired State SHA-256", plan.DesiredStateSHA256, ""}, plan.RelevantChecksums...)
+		}
+	}
+	if m.scenario == MultiStepChangeSet && m.outcome != nil && m.changeSet.Kind != NoChangeSet {
+		return changeSetDetails(m.changeSet)
+	}
 	if m.scenario == DedicatedAccess {
 		if !m.accessUnlocked || m.accessSelection >= len(m.accessEntries) {
 			return current.details
@@ -833,6 +1077,54 @@ func (m model) scenarioDetails(current fixture) []string {
 }
 
 func (m model) scenarioLines(current fixture) []string {
+	if m.scenario == InstallationReview && m.outcome != nil {
+		lines := changeReviewLines(m.changeReview, m.width, m.height, m.planPage)
+		if correction := m.changeReview.Correction; correction != nil {
+			for index, line := range lines {
+				if correction.InputLabel != "" && strings.HasPrefix(line, correction.InputLabel+":") {
+					value := "-"
+					if m.input != "" {
+						value = strconv.QuoteToGraphic(m.input)
+					}
+					lines[index] = correction.InputLabel + ": " + value
+				}
+				if m.correctionSelection < len(correction.Selections) && line == "Selection: "+correction.Selections[m.correctionSelection].Label {
+					lines[index] = "> " + line
+				}
+			}
+			if m.planPage+1 == m.correctionPageCount(correction) {
+				lines = append(lines, "")
+				for index, action := range m.correctionActions(correction) {
+					prefix := "  "
+					if index == m.correctionAction {
+						prefix = "> "
+					}
+					lines = append(lines, prefix+action.label)
+				}
+			}
+			if m.copyFeedback != "" {
+				lines = append(lines, "", m.copyFeedback)
+			}
+		}
+		if editing := m.changeReview.Editing; editing != nil {
+			value := "-"
+			if m.input != "" {
+				value = strconv.QuoteToGraphic(m.input)
+			}
+			for index, line := range lines {
+				if strings.HasPrefix(line, editing.Field.Label+":") {
+					lines[index] = editing.Field.Label + ": " + value
+				}
+			}
+		}
+		if m.changeFeedback != "" {
+			lines = append([]string{m.changeFeedback, ""}, lines...)
+		}
+		return lines
+	}
+	if m.scenario == MultiStepChangeSet && m.outcome != nil && m.changeSet.Kind != NoChangeSet {
+		return changeSetLines(m.changeSet)
+	}
 	if m.scenario == DedicatedAccess {
 		if !m.accessUnlocked || m.accessSelection >= len(m.accessEntries) {
 			return current.lines
@@ -892,6 +1184,42 @@ func (m model) scenarioLines(current fixture) []string {
 		lines[current.inputLine] = prefix + value
 	}
 	return lines
+}
+
+type correctionActionDefinition struct {
+	action correctionAction
+	label  string
+}
+
+func (m model) correctionActions(correction *CorrectionPresentation) []correctionActionDefinition {
+	actions := make([]correctionActionDefinition, 0, 4)
+	if correction.FixWithSBXR {
+		actions = append(actions, correctionActionDefinition{correctionFix, "Fix with SBXR - review a separate Plan"})
+	}
+	return append(actions,
+		correctionActionDefinition{correctionCheck, "Check again"},
+		correctionActionDefinition{correctionCopy, "Copy redacted evidence"},
+		correctionActionDefinition{correctionBack, "Back"},
+	)
+}
+
+func (m model) correctionActionCount(correction *CorrectionPresentation) int {
+	return len(m.correctionActions(correction))
+}
+
+func (m model) correctionActionDefinition(correction *CorrectionPresentation) correctionAction {
+	return m.correctionActions(correction)[m.correctionAction].action
+}
+
+func (m model) correctionPageCount(correction *CorrectionPresentation) int {
+	return len(minimumCorrectionPages(correction, m.width, m.height))
+}
+
+func (m model) planPageCount() int {
+	if m.changeReview.Plan == nil {
+		return 1
+	}
+	return len(minimumPlanPages(m.changeReview.Plan, m.width, m.height))
 }
 
 func accessMetadata(entry accessEntry) []string {
@@ -1014,6 +1342,24 @@ func (m model) shortcuts() [2]string {
 	}
 	if m.scenario == PrivacyChoice {
 		return [2]string{" Up/Down Choose  Enter/Space Continue", " Ctrl+C Exit confirmation  Q is never Exit"}
+	}
+	if m.scenario == InstallationReview && m.outcome != nil {
+		if correction := m.changeReview.Correction; correction != nil {
+			if m.planPage+1 < m.correctionPageCount(correction) {
+				return [2]string{" Enter/Space Next correction section  Esc Back", " Tab Input  Ctrl+C Exit confirmation"}
+			}
+			return [2]string{" Up/Down Action  Left/Right Choice  Enter/Space Select", " Tab Input  Esc Back  Ctrl+C Exit confirmation"}
+		}
+		if m.changeReview.Plan != nil && m.planPage+1 < m.planPageCount() {
+			return [2]string{" Enter/Space Next plan section  Esc Back", " Ctrl+C Exit confirmation  Q is never Exit"}
+		}
+		if m.changeReview.Plan != nil {
+			return [2]string{" Enter/Space Apply exact Plan  Esc Back", " Ctrl+C Exit confirmation  Q is never Exit"}
+		}
+		if m.changeReview.Editing != nil {
+			return [2]string{" Type or paste input  Tab Actions  Enter/Space Review", " Esc Back  Ctrl+C Exit confirmation"}
+		}
+		return [2]string{" R Check again  Esc Back", " No result inferred  Ctrl+C Exit confirmation"}
 	}
 	if m.scenario == DedicatedAccess && m.accessUnlocked && m.accessFocused {
 		return [2]string{" Up/Down Choose value  Enter/Space Copy  Tab Navigation", " Esc Overview  Ctrl+C Exit confirmation  Q is never Exit"}
