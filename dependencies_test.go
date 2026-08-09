@@ -261,6 +261,67 @@ func Stop(pid int) { _ = syscall.Kill(pid, 0) }
 	}
 }
 
+func TestSoftwareLifecycleVerificationBoundary(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateSoftwareLifecycleVerification(root); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct{ name, source string }{
+		{"executes candidate", `package softwarelifecycle
+import "os/exec"
+func unsafe() { _ = exec.Command("candidate") }
+`},
+		{"mutates host", `package softwarelifecycle
+import "os"
+func unsafe() { _ = os.WriteFile("/tmp/unsafe", nil, 0o600) }
+`},
+		{"calls another Module", `package softwarelifecycle
+import "github.com/albertloky/SBXR/internal/state"
+func unsafe(value state.Interface) { _ = value }
+`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			directory := t.TempDir()
+			mustWriteArchitectureFile(t, directory, "internal/softwarelifecycle/unsafe.go", test.source)
+			if err := validateSoftwareLifecycleVerification(directory); err == nil || !strings.Contains(err.Error(), "verification-only") {
+				t.Fatalf("validateSoftwareLifecycleVerification() = %v", err)
+			}
+		})
+	}
+}
+
+func validateSoftwareLifecycleVerification(root string) error {
+	directory := filepath.Join(root, "internal/softwarelifecycle")
+	files, err := os.ReadDir(directory)
+	if err != nil {
+		return err
+	}
+	fileSet := token.NewFileSet()
+	for _, file := range files {
+		if file.IsDir() || !strings.HasSuffix(file.Name(), ".go") || strings.HasSuffix(file.Name(), "_test.go") {
+			continue
+		}
+		parsed, err := parser.ParseFile(fileSet, filepath.Join(directory, file.Name()), nil, parser.ImportsOnly)
+		if err != nil {
+			return err
+		}
+		for _, spec := range parsed.Imports {
+			importPath, err := strconv.Unquote(spec.Path.Value)
+			if err != nil {
+				return err
+			}
+			if importPath == "os" || importPath == "os/exec" || importPath == "syscall" || importPath == "unsafe" || strings.HasPrefix(importPath, modulePath+"/internal/") {
+				return fmt.Errorf("Software Lifecycle core must remain verification-only before staging: %s imports %s", file.Name(), importPath)
+			}
+		}
+	}
+	return nil
+}
+
 func validateSubscriptionServingMutation(root string) error {
 	allowed := map[string]map[string]bool{
 		"os": {
