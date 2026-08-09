@@ -54,6 +54,25 @@ type navigationItem struct {
 	exit     bool
 }
 
+type limitedAction uint8
+
+const (
+	retryAuthentication limitedAction = iota
+	viewSafeDiagnostics
+	exitLimitedDashboard
+)
+
+type limitedActionDefinition struct {
+	label  string
+	action limitedAction
+}
+
+var limitedActions = [...]limitedActionDefinition{
+	{label: "Authenticate again", action: retryAuthentication},
+	{label: "View secret-safe diagnostics", action: viewSafeDiagnostics},
+	{label: "Exit SBXR", action: exitLimitedDashboard},
+}
+
 var navigation = []navigationItem{
 	{id: overviewNavigation, label: "Overview", scenario: AuthenticatedOverview},
 	{id: accessNavigation, label: "Access", scenario: DedicatedAccess},
@@ -92,12 +111,12 @@ var scenarioFixtures = map[Scenario]fixture{
 	},
 	DedicatedAccess: {
 		header: "Managed - rev 42 - authenticated", title: "CLIENT ACCESS VALUES", navigation: accessNavigation, allowsBack: true,
-		lines:   []string{"Visible after privacy warning + sudo authentication.", "", "1 REALITY    vless://FAKE-REALITY...        [QR]", "2 XHTTP      vless://FAKE-XHTTP...          [QR]", "3 WebSocket  vless://FAKE-WEBSOCKET...      [QR]", "4 Hysteria2  hysteria2://FAKE-HY2...        [QR]", "5 TUIC       tuic://FAKE-TUIC...             [QR]", "6 AnyTLS     anytls://FAKE-ANYTLS...         [QR]", "", "Subscription", "https://203.0.113.10:10443/s/FAKE-TOKEN", "", "> Select a value to copy", "  Export client configuration", "", "Clipboard history may retain copied values.", "Access never depends on PgDn."},
-		details: []string{"PRIVACY", "", "Values may remain in:", "- terminal scrollback", "- clipboard history", "- screen recordings"},
+		lines:   []string{"Client Access Values require this launch's privacy choice", "and successful system authentication.", "", "No value is available in a limited or unprivileged session.", "", "Access never depends on PgDn."},
+		details: []string{"PRIVACY", "", "Values may remain in:", "- terminal scrollback", "- clipboard history", "- synchronized clipboards", "- screen recordings"},
 	},
 	LimitedDashboard: {
 		header: "Managed - rev 42 - limited", title: "LIMITED DASHBOARD", navigation: overviewNavigation,
-		lines:   []string{"Sudo authentication was denied or cancelled.", "", "[HEALTHY] Installation lineage proven - revision 42", "[HEALTHY] 6 Modules Healthy - 0 Failed - 0 Unknown", "[HEALTHY] Last secret-safe inspection 2 minutes ago", "", "Client Access Values                 HIDDEN", "Privileged actions                  UNAVAILABLE", "", "Nothing failed and no Change Set began.", "", "> Authenticate again", "  View secret-safe diagnostics", "  Exit SBXR"},
+		lines:   []string{"Sudo authentication was denied or cancelled.", "", "[HEALTHY] Installation lineage proven - revision 42", "[HEALTHY] 6 Modules Healthy - 0 Failed - 0 Unknown", "[HEALTHY] Last secret-safe inspection 2 minutes ago", "", "Client Access Values                 HIDDEN", "Privileged actions                  UNAVAILABLE", "", "Nothing failed and no Change Set began.", ""},
 		details: []string{"DETAILS", "", "Safe read-only facts remain available.", "No Change Set began."},
 	},
 	InstallationReview: {

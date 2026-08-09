@@ -54,8 +54,9 @@ var forbiddenStandardLibrary = map[string]bool{
 }
 
 var approvedExternalImports = map[string]bool{
-	"charm.land/bubbletea/v2": true,
-	"charm.land/lipgloss/v2":  true,
+	"charm.land/bubbletea/v2":        true,
+	"charm.land/lipgloss/v2":         true,
+	"github.com/yeqown/go-qrcode/v2": true,
 }
 
 type packageInfo struct {
@@ -460,8 +461,8 @@ func validateHealthDiagnosticsReadOnly(root string) error {
 func validateOwnerConsolePresentation(root string) error {
 	allowed := map[string]bool{
 		"context": true, "errors": true, "fmt": true, "io": true, "os": true,
-		"slices": true, "strconv": true, "strings": true, "sync/atomic": true, "syscall": true,
-		"time": true, "unsafe": true,
+		"net/url": true, "slices": true, "strconv": true, "strings": true, "sync/atomic": true, "syscall": true,
+		"time": true, "unicode": true, "unsafe": true,
 	}
 	return walkProductionGoFiles(root, func(relative string, source *ast.File) error {
 		if filepath.ToSlash(filepath.Dir(relative)) != "internal/ownerconsole" {

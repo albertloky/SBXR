@@ -1,6 +1,6 @@
 # Owner Console acceptance
 
-This file defines stable checks for issues #135 and #136. It contains no run results, Client Access Values, Infrastructure Secrets, raw terminal contents from an Owner session, or claim of Integrated, Live, Owner, or Release acceptance.
+This file defines stable checks for issues #135, #136, and #137. It contains no run results, Client Access Values, Infrastructure Secrets, raw terminal contents from an Owner session, or claim of Integrated, Live, Owner, or Release acceptance.
 
 ## Module Verification
 
@@ -54,7 +54,28 @@ Run:
 go test . -run '^Test(RepositoryDependencies|OwnerConsolePresentationBoundary)$' -count=1
 ```
 
-Require only the approved Bubble Tea v2 and Lip Gloss v2 production UI stack. The pseudo-terminal package is test-only. Reject product-Module imports, host mutation, arbitrary commands, State persistence, provider logic, release verification, diagnostics collection, recovery algorithms, or privileged logic inside Owner Console.
+Require only the approved Bubble Tea v2, Lip Gloss v2, and reviewed QR production stack. The pseudo-terminal package is test-only. Reject product-Module imports, host mutation, arbitrary commands, State persistence, provider logic, release verification, diagnostics collection, recovery algorithms, or privileged logic inside Owner Console.
+
+### OC-ACCESS-01 — Privacy and ordinary system authentication
+
+Run:
+
+```sh
+go test ./internal/ownerconsole -run '^TestRunMakesThePerLaunchPrivacyAndAuthenticationDecisionBeforeAccess$' -count=1
+go test ./cmd/sbxr -run '^TestSystemAuthenticationReportsEveryOutcome$' -count=1
+```
+
+Require the warning on every launch before sudo or a Client Access Value. Require all three choices, one normal system authentication only after the authenticated choice on an existing installation, and no authentication before fresh-install Apply. Require successful authentication to enter authenticated Overview. Require denied, cancelled, failed, or expired authentication to enter explained limited mode without Client Access Values or privileged presentation.
+
+### OC-ACCESS-02 — Dedicated Access, copy, and QR
+
+Run:
+
+```sh
+go test ./internal/ownerconsole -run '^TestRun(RevealsOnlyAuthenticatedDedicatedAccessValues|RejectsInfrastructureSecretMarkerAtTheAccessBoundary|CopiesEveryApprovedAccessValueWithExactFeedback|ReportsUnconfirmedAndFailedCopyWithoutLosingManualSelection|MouseClickAndEnterUseTheSameExplicitCopyAction|ShowsQRFromTheSameValueOnlyWhenItFits)$' -count=1
+```
+
+Require all six typed profile share URIs and the universal, v2rayN, Shadowrocket, Karing, Mihomo, and sing-box links only in authenticated Access. Require actual counts, omissions, and candidate-only Shadowrocket Owner Acceptance facts. Require every value to remain visibly selectable with the exact copy label, exact named confirmed result, exact unconfirmed result, and manual failure fallback. Require mouse and keyboard activation to request the same value. Require QR output to use that exact value and disappear safely when it cannot fit.
 
 ### OC-ACTIVE-01 — Hostile paste remains input data
 
@@ -108,6 +129,16 @@ go test ./internal/ownerconsole -run '^TestRun(PausesAndResumesAfterResize|Allow
 
 Require resize below `80×24` to pause normal drawing and activation, show exact current and required sizes, preserve input, focus, navigation selection, Plan screen, operation screen, prompt, error, and result, and resume the same state. Require safe exit while undersized and no mutation approval or partial redraw.
 
+### OC-ACCESS-PTY-01 — Sudo and clipboard terminal handoff
+
+Run:
+
+```sh
+go test ./internal/ownerconsole -run '^TestRunHandsSudoAndClipboardRequestsThroughTheRealPseudoTerminal$' -count=1
+```
+
+Require the real pseudo-terminal to leave the alternate screen for the normal system password prompt without echoing its marker, re-enter only after success, keep Access values out of ordinary Overview, emit the Owner-requested clipboard transfer for the exact selected value, retain the exact unconfirmed fallback, and visibly underline the selected value.
+
 ### OC-ACTIVE-PTY-02 — Forced termination boundary
 
 Run:
@@ -122,4 +153,4 @@ Require a child Owner Console killed after entering the alternate screen not to 
 reset
 ```
 
-Clipboard-request, sudo-handoff, SSH-disconnect, and integrated product journeys that require later Owner Console slices remain separate acceptance work. Codex Live Acceptance and Owner Acceptance require an explicitly approved Acceptance Run and must not be inferred from these checks.
+SSH-disconnect and integrated product journeys remain separate acceptance work. Codex Live Acceptance and Owner Acceptance require an explicitly approved Acceptance Run and must not be inferred from these checks.

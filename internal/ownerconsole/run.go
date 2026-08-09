@@ -16,6 +16,7 @@ import (
 
 const minimumWidth, minimumHeight = 80, 24
 const maxInputRunes = 1024
+const navigationWidth = 21
 
 type ProgressKind uint8
 
@@ -37,6 +38,27 @@ type PresentationUpdate struct {
 	Progress Progress
 }
 
+type AuthenticationResult uint8
+
+const (
+	AuthenticationSucceeded AuthenticationResult = iota + 1
+	AuthenticationDenied
+	AuthenticationCancelled
+	AuthenticationFailed
+	AuthenticationExpired
+)
+
+type Authenticator interface {
+	Authenticate(context.Context, io.Reader, io.Writer) AuthenticationResult
+}
+
+type AuthenticationPolicy uint8
+
+const (
+	AuthenticateForAccess AuthenticationPolicy = iota
+	DeferAuthenticationUntilApply
+)
+
 type Capabilities struct {
 	InteractiveInput         bool
 	InteractiveOutput        bool
@@ -51,12 +73,16 @@ type Capabilities struct {
 }
 
 type Session struct {
-	Input        io.Reader
-	Output       io.Writer
-	Environment  []string
-	Capabilities *Capabilities
-	Scenario     Scenario
-	Updates      <-chan PresentationUpdate
+	Input                io.Reader
+	Output               io.Writer
+	Environment          []string
+	Capabilities         *Capabilities
+	Scenario             Scenario
+	Updates              <-chan PresentationUpdate
+	Authenticator        Authenticator
+	AuthenticationPolicy AuthenticationPolicy
+	Access               AccessPresentation
+	Clipboard            Clipboard
 }
 
 func Run(ctx context.Context, session Session) error {
@@ -100,8 +126,9 @@ func Run(ctx context.Context, session Session) error {
 	runContext, stop := context.WithCancel(ctx)
 	defer stop()
 	fixture := scenarioFixture(session.Scenario)
+	accessEntries := session.Access.entries()
 	program := tea.NewProgram(
-		model{width: c.Width, height: c.Height, scenario: session.Scenario, selected: selectedNavigation(session.Scenario), unicode: c.Unicode, noColor: noColor, initialModes: initialModes, drawingModeProbeRequired: c.DrawingModeProbeRequired, inputFocused: fixture.acceptsInput, progressExpected: session.Updates != nil},
+		model{width: c.Width, height: c.Height, scenario: session.Scenario, selected: selectedNavigation(session.Scenario), unicode: c.Unicode, noColor: noColor, initialModes: initialModes, drawingModeProbeRequired: c.DrawingModeProbeRequired, inputFocused: fixture.acceptsInput, progressExpected: session.Updates != nil, authenticator: session.Authenticator, authenticationPolicy: session.AuthenticationPolicy, runContext: runContext, accessEntries: accessEntries, clipboard: session.Clipboard},
 		tea.WithContext(runContext),
 		tea.WithInput(session.Input),
 		tea.WithOutput(session.Output),
@@ -208,11 +235,31 @@ type model struct {
 	progressElapsed           time.Duration
 	progressClock             progressClock
 	progressTicking           bool
+	privacySelection          int
+	limitedMode               bool
+	limitedSelection          int
+	authenticator             Authenticator
+	authenticationPolicy      AuthenticationPolicy
+	limitedReason             string
+	runContext                context.Context
+	accessEntries             []accessEntry
+	accessUnlocked            bool
+	accessFocused             bool
+	accessSelection           int
+	clipboard                 Clipboard
+	copyFeedback              string
 }
 
 type probeTimeoutMsg struct{}
 type progressTickMsg time.Time
 type pasteGuardExpiredMsg struct{}
+type authenticationFinishedMsg struct {
+	result AuthenticationResult
+}
+type copyFinishedMsg struct {
+	name   string
+	result CopyResult
+}
 
 type progressClock struct {
 	kind        ProgressKind
@@ -287,6 +334,25 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.progressTicking = false
 	case pasteGuardExpiredMsg:
 		m.pasteGuard = false
+	case authenticationFinishedMsg:
+		if message.result == AuthenticationSucceeded {
+			m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+			m.limitedMode = false
+			m.accessUnlocked = len(m.accessEntries) != 0
+			return m, nil
+		}
+		m.scenario, m.selected = LimitedDashboard, selectedNavigation(LimitedDashboard)
+		m.limitedMode, m.limitedSelection = true, 0
+		m.limitedReason = authenticationExplanation(message.result)
+	case copyFinishedMsg:
+		switch message.result {
+		case CopyConfirmed:
+			m.copyFeedback = "Copied " + message.name + "."
+		case CopyRequested:
+			m.copyFeedback = "Copy request sent. If it is not in your clipboard, select the text manually."
+		default:
+			m.copyFeedback = "Copy failed. Select the text manually."
+		}
 	case tea.PasteMsg:
 		if m.width >= minimumWidth && m.height >= minimumHeight && !m.exitConfirm && m.inputFocused {
 			m.appendInput(message.Content)
@@ -295,6 +361,11 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.PasteEndMsg:
 		m.pasteGuard = true
 		return m, tea.Tick(10*time.Millisecond, func(time.Time) tea.Msg { return pasteGuardExpiredMsg{} })
+	case tea.MouseClickMsg:
+		mouse := message.Mouse()
+		if m.scenario == DedicatedAccess && m.accessUnlocked && m.accessFocused && mouse.Button == tea.MouseLeft && m.accessValueHit(mouse.X, mouse.Y) {
+			return m, m.copySelectedAccessValue()
+		}
 	case tea.KeyPressMsg:
 		if m.pasteGuard {
 			if m.inputFocused {
@@ -326,6 +397,83 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if message.String() == "ctrl+c" {
 			m.exitConfirm = true
+			return m, nil
+		}
+		if m.scenario == PrivacyChoice {
+			switch message.String() {
+			case "up", "shift+tab":
+				m.privacySelection = (m.privacySelection + 2) % 3
+			case "down", "tab":
+				m.privacySelection = (m.privacySelection + 1) % 3
+			case "enter", "space":
+				switch m.privacySelection {
+				case 0:
+					switch m.authenticationPolicy {
+					case DeferAuthenticationUntilApply:
+						m.scenario, m.selected = InstallationReview, selectedNavigation(InstallationReview)
+						return m, nil
+					case AuthenticateForAccess:
+						return m, m.authenticationCommand()
+					default:
+						m.scenario, m.selected = LimitedDashboard, selectedNavigation(LimitedDashboard)
+						m.limitedMode, m.limitedSelection = true, 0
+						m.limitedReason = "Authentication policy is unavailable."
+						return m, nil
+					}
+				case 1:
+					m.scenario, m.selected = LimitedDashboard, selectedNavigation(LimitedDashboard)
+					m.limitedMode, m.limitedSelection = true, 0
+					m.limitedReason = "Owner selected the limited read-only dashboard."
+				case 2:
+					return m, tea.Quit
+				}
+			}
+			return m, nil
+		}
+		if m.limitedMode {
+			if m.scenario != LimitedDashboard {
+				if message.String() == "esc" {
+					m.scenario, m.selected = LimitedDashboard, selectedNavigation(LimitedDashboard)
+				}
+				return m, nil
+			}
+			actions := m.legalLimitedActions()
+			switch message.String() {
+			case "up", "shift+tab":
+				m.limitedSelection = (m.limitedSelection + len(actions) - 1) % len(actions)
+			case "down", "tab":
+				m.limitedSelection = (m.limitedSelection + 1) % len(actions)
+			case "enter", "space":
+				switch actions[m.limitedSelection].action {
+				case retryAuthentication:
+					return m, m.authenticationCommand()
+				case viewSafeDiagnostics:
+					m.scenario, m.selected = ServicesDiagnosticsScreen, selectedNavigation(ServicesDiagnosticsScreen)
+				case exitLimitedDashboard:
+					return m, tea.Quit
+				}
+			}
+			return m, nil
+		}
+		if m.scenario == DedicatedAccess && m.accessUnlocked && m.accessFocused {
+			switch message.String() {
+			case "up", "shift+tab":
+				m.accessSelection = (m.accessSelection + len(m.accessEntries) - 1) % len(m.accessEntries)
+				m.copyFeedback = ""
+			case "down":
+				m.accessSelection = (m.accessSelection + 1) % len(m.accessEntries)
+				m.copyFeedback = ""
+			case "tab":
+				m.accessFocused = false
+			case "enter", "space":
+				return m, m.copySelectedAccessValue()
+			case "esc":
+				m.scenario, m.selected, m.accessFocused = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview), false
+			}
+			return m, nil
+		}
+		if m.scenario == DedicatedAccess && m.accessUnlocked && !m.accessFocused && message.String() == "shift+tab" {
+			m.accessFocused = true
 			return m, nil
 		}
 		if scenarioFixture(m.scenario).acceptsInput {
@@ -365,6 +513,8 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.scenario = item.scenario
 				m.inputFocused = scenarioFixture(item.scenario).acceptsInput
+				m.accessFocused = item.scenario == DedicatedAccess && m.accessUnlocked
+				m.accessSelection, m.copyFeedback = 0, ""
 				m.progress, m.progressReceived = Progress{}, false
 				m.progressStartedAt, m.progressElapsed = time.Time{}, 0
 				m.progressClock = progressClock{}
@@ -379,6 +529,90 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m model) legalLimitedActions() []limitedActionDefinition {
+	if m.authenticationPolicy == AuthenticateForAccess {
+		return limitedActions[:]
+	}
+	return limitedActions[1:]
+}
+
+func (m model) copySelectedAccessValue() tea.Cmd {
+	entry := m.accessEntries[m.accessSelection]
+	if m.clipboard == nil {
+		return tea.Sequence(tea.SetClipboard(entry.value), func() tea.Msg { return copyFinishedMsg{name: entry.name, result: CopyRequested} })
+	}
+	return func() tea.Msg {
+		return copyFinishedMsg{name: entry.name, result: m.clipboard.Copy(m.runContext, entry.value)}
+	}
+}
+
+func (m model) authenticationCommand() tea.Cmd {
+	if m.authenticator == nil {
+		return func() tea.Msg { return authenticationFinishedMsg{result: AuthenticationFailed} }
+	}
+	command := &authenticationCommand{ctx: m.runContext, authenticator: m.authenticator}
+	return tea.Exec(command, func(error) tea.Msg {
+		return authenticationFinishedMsg{result: command.result}
+	})
+}
+
+func (m model) accessValueLines(entry accessEntry) []string {
+	width := m.width - navigationWidth - 1
+	if m.width >= 120 {
+		width = 48
+	}
+	return wrapLines([]string{entry.value}, width)
+}
+
+func (m model) accessValueHit(x, y int) bool {
+	if m.accessSelection >= len(m.accessEntries) {
+		return false
+	}
+	const frameRowsBeforeBody, accessRowsBeforeValue = 2, 5
+	lines := m.accessValueLines(m.accessEntries[m.accessSelection])
+	right := m.width
+	if m.width >= 120 {
+		right = navigationWidth + 1 + 48
+	}
+	return x > navigationWidth && x < right && y >= frameRowsBeforeBody+accessRowsBeforeValue && y < frameRowsBeforeBody+accessRowsBeforeValue+len(lines)
+}
+
+type authenticationCommand struct {
+	ctx           context.Context
+	authenticator Authenticator
+	input         io.Reader
+	output        io.Writer
+	result        AuthenticationResult
+}
+
+func (command *authenticationCommand) SetStdin(input io.Reader)   { command.input = input }
+func (command *authenticationCommand) SetStdout(output io.Writer) { command.output = output }
+func (command *authenticationCommand) SetStderr(output io.Writer) {
+	if command.output == nil {
+		command.output = output
+	}
+}
+func (command *authenticationCommand) Run() error {
+	command.result = command.authenticator.Authenticate(command.ctx, command.input, command.output)
+	if command.result < AuthenticationSucceeded || command.result > AuthenticationExpired {
+		command.result = AuthenticationFailed
+	}
+	return nil
+}
+
+func authenticationExplanation(result AuthenticationResult) string {
+	switch result {
+	case AuthenticationDenied:
+		return "System authentication was denied."
+	case AuthenticationCancelled:
+		return "System authentication was cancelled."
+	case AuthenticationExpired:
+		return "System authentication expired."
+	default:
+		return "System authentication failed."
+	}
 }
 
 func (m *model) dismissExitConfirmation() tea.Cmd {
@@ -462,6 +696,9 @@ func (m model) View() tea.View {
 	view := tea.NewView(m.frame())
 	view.AltScreen = true
 	view.MouseMode = tea.MouseModeNone
+	if m.scenario == DedicatedAccess && m.accessUnlocked {
+		view.MouseMode = tea.MouseModeCellMotion
+	}
 	return view
 }
 
@@ -475,19 +712,28 @@ func (m model) frame() string {
 		return content
 	}
 	currentFixture := scenarioFixture(m.scenario)
+	privacyChoices := []string{
+		"  Continue with authenticated Client Access Values",
+		"  Open the limited read-only dashboard",
+		"  Exit SBXR",
+	}
+	privacyChoices[m.privacySelection] = ">" + privacyChoices[m.privacySelection][1:]
 	main := []string{
 		"PRIVACY BEFORE ACCESS", "",
 		"Client Access Values may remain in terminal scrollback,",
 		"screenshots, screen recordings, SSH session logs, clipboard",
 		"history, and synchronized clipboards.", "",
 		"No Client Access Value or sudo prompt appears before your choice.", "",
-		"> Continue with authenticated Client Access Values",
-		"  Open the limited read-only dashboard",
-		"  Exit SBXR", "",
+		privacyChoices[0], privacyChoices[1], privacyChoices[2], "",
 		"Up/Down Select  Enter Continue  Ctrl+C Exit confirmation",
 	}
 	if m.scenario != PrivacyChoice {
 		main = append([]string{currentFixture.title, ""}, m.scenarioLines(currentFixture)...)
+	}
+	if m.scenario == LimitedDashboard {
+		if m.limitedReason != "" {
+			main[2] = m.limitedReason
+		}
 	}
 	if m.exitConfirm {
 		main = []string{
@@ -497,7 +743,7 @@ func (m model) frame() string {
 			"Enter Exit  Esc Stay",
 		}
 	}
-	leftWidth := 21
+	leftWidth := navigationWidth
 	bodyHeight := height - 5
 	rightWidth := width - leftWidth - 1
 	contentWidth := rightWidth
@@ -524,13 +770,15 @@ func (m model) frame() string {
 	rows = append(rows, strings.Repeat(horizontal, leftWidth)+crossing+strings.Repeat(horizontal, rightWidth))
 	details := m.scenarioDetails(currentFixture)
 	if width >= 120 {
-		details = wrapLines(details, rightWidth-49)
+		if m.scenario != DedicatedAccess || !m.accessUnlocked || m.accessSelection >= len(m.accessEntries) || !m.accessEntries[m.accessSelection].qr {
+			details = wrapLines(details, rightWidth-49)
+		}
 	}
 	for row := range bodyHeight {
 		left, right := "", ""
 		if row < len(navigation) {
 			prefix := "  "
-			if row == m.selected && !m.inputFocused {
+			if row == m.selected && !m.inputFocused && !m.accessFocused && m.scenario != PrivacyChoice && !m.limitedMode {
 				prefix = "> "
 			}
 			left = prefix + navigation[row].label
@@ -563,6 +811,18 @@ func (m model) frame() string {
 }
 
 func (m model) scenarioDetails(current fixture) []string {
+	if m.scenario == DedicatedAccess {
+		if !m.accessUnlocked || m.accessSelection >= len(m.accessEntries) {
+			return current.details
+		}
+		entry := m.accessEntries[m.accessSelection]
+		if entry.qr && m.width >= 120 {
+			if qr := qrLines(entry.value, 49, m.height-8); len(qr) != 0 {
+				return append([]string{"QR - same value as text", ""}, qr...)
+			}
+		}
+		return accessMetadata(entry)
+	}
 	if !m.progressExpected || current.progress == NoProgress {
 		return current.details
 	}
@@ -573,6 +833,40 @@ func (m model) scenarioDetails(current fixture) []string {
 }
 
 func (m model) scenarioLines(current fixture) []string {
+	if m.scenario == DedicatedAccess {
+		if !m.accessUnlocked || m.accessSelection >= len(m.accessEntries) {
+			return current.lines
+		}
+		entry := m.accessEntries[m.accessSelection]
+		valueLines := m.accessValueLines(entry)
+		for index := range valueLines {
+			valueLines[index] = "\x1b[4m" + valueLines[index] + "\x1b[24m"
+		}
+		lines := []string{fmt.Sprintf("Access value %d of %d", m.accessSelection+1, len(m.accessEntries)), entry.name, ""}
+		lines = append(lines, valueLines...)
+		lines = append(lines, "Click or press Enter to copy", "")
+		if m.width < 120 {
+			lines = append(lines, accessMetadata(entry)...)
+			if entry.qr {
+				lines = append(lines, "QR omitted at this size; exact text remains available.")
+			}
+		}
+		if m.copyFeedback != "" {
+			lines = append(lines, "", m.copyFeedback)
+		}
+		return append(lines, "", "Clipboard history may retain copied values.")
+	}
+	if m.scenario == LimitedDashboard {
+		lines := append([]string(nil), current.lines...)
+		for index, action := range m.legalLimitedActions() {
+			prefix := "  "
+			if index == m.limitedSelection {
+				prefix = "> "
+			}
+			lines = append(lines, prefix+action.label)
+		}
+		return lines
+	}
 	if m.progressExpected && current.progress != NoProgress {
 		if !m.progressReceived {
 			return []string{"Waiting for typed progress.", "", "No percentage or result is inferred while facts are absent."}
@@ -596,6 +890,27 @@ func (m model) scenarioLines(current fixture) []string {
 			value += " [input limit reached]"
 		}
 		lines[current.inputLine] = prefix + value
+	}
+	return lines
+}
+
+func accessMetadata(entry accessEntry) []string {
+	if entry.qr {
+		return []string{"Six approved Connection Profile values"}
+	}
+	lines := []string{fmt.Sprintf("%d Connection Profiles", entry.profileCount)}
+	if entry.candidate {
+		status := "Candidate"
+		if len(entry.ownerAcceptancePending) != 0 {
+			status += " - Owner Acceptance Pending"
+		}
+		lines = append(lines, status)
+		for _, profile := range entry.ownerAcceptancePending {
+			lines = append(lines, "Pending: "+profile)
+		}
+	}
+	for _, omission := range entry.omissions {
+		lines = append(lines, omission)
 	}
 	return lines
 }
@@ -696,6 +1011,12 @@ func (m model) shortcuts() [2]string {
 	}
 	if m.inputFocused {
 		return [2]string{" Type or paste input  Tab Navigation", " Q is input data  Ctrl+C Exit confirmation  Esc Back"}
+	}
+	if m.scenario == PrivacyChoice {
+		return [2]string{" Up/Down Choose  Enter/Space Continue", " Ctrl+C Exit confirmation  Q is never Exit"}
+	}
+	if m.scenario == DedicatedAccess && m.accessUnlocked && m.accessFocused {
+		return [2]string{" Up/Down Choose value  Enter/Space Copy  Tab Navigation", " Esc Overview  Ctrl+C Exit confirmation  Q is never Exit"}
 	}
 	second := " Ctrl+C Exit confirmation  Q is never Exit"
 	if scenarioFixture(m.scenario).allowsBack {

@@ -49,5 +49,5 @@ func main() {
 
 func runOwnerConsole(ctx context.Context, input, output *os.File, environment []string) error {
 	capabilities := ownerconsole.DetectTerminal(input, output, environment)
-	return ownerconsole.Run(ctx, ownerconsole.Session{Input: input, Output: output, Environment: environment, Capabilities: &capabilities})
+	return ownerconsole.Run(ctx, ownerconsole.Session{Input: input, Output: output, Environment: environment, Capabilities: &capabilities, Authenticator: systemAuthenticator{}})
 }
