@@ -1,6 +1,6 @@
 # Software Lifecycle acceptance
 
-This procedure defines stable checks for issues #125 and #126. It contains no run results, raw GitHub verifier output, Client Access Values, Infrastructure Secrets, or Owner-managed configuration.
+This procedure defines stable checks for issues #125, #126, and #127. It contains no run results, raw GitHub verifier output, Client Access Values, Infrastructure Secrets, or Owner-managed configuration.
 
 ## Module Verification
 
@@ -12,7 +12,7 @@ Run:
 go test ./internal/softwarelifecycle -run '^TestViewReportsOneExactVerifiedReleaseWithoutUsingIt$' -count=1
 ```
 
-Require one strict index, both architecture roles, exact downloaded and attested equality, one `sbxr` executable per archive, repository `albertloky/SBXR`, the selected immutable tag, the 40-character commit, index SHA-256, authenticated sequence, UTC verification time, both asset digests, safe migration summary, and only `Review install` from Not installed. Require zero extraction to the host, execution, or product mutation.
+Require one strict index, both application roles, both component roles, exact downloaded and attested equality, one `sbxr` executable per application archive, one strict complete offline component manifest per matching component archive, repository `albertloky/SBXR`, the selected immutable tag, the 40-character commit, index SHA-256, authenticated sequence, UTC verification time, all four asset digests, safe migration summary, and only `Review install` from Not installed. Require zero extraction to the host, execution, or product mutation.
 
 ### SL-VERIFY-02 — One-fact mutation and secret-safe refusal
 
@@ -95,7 +95,7 @@ go test ./cmd/sbxr-release -run '^Test(BuildArchiveProducesOneQualifiedExecutabl
 go test ./cmd/sbxr -run '^TestVersionReportsOnlyEmbeddedBuildFacts$' -count=1
 ```
 
-Require the production `cmd/sbxr-release` entry point to bind the requested commit to a clean tracked `HEAD`, export only that exact commit, and refuse mismatched or dirty source. Require pinned Go `1.26.5` and `CGO_ENABLED=0` to build exactly one stamped `sbxr` executable for each of `linux/amd64` and `linux/arm64`. Require each archive to contain only that executable, with no native library dependency or language runtime. Require `sbxr version` and `sbxr version --json` to report only authenticated embedded repository, tag, commit, architecture, payload digest, and State schema; the executable must not invent or accept an index digest.
+Require the production `cmd/sbxr-release` entry point to bind the requested commit to a clean tracked `HEAD`, export only that exact commit, and refuse mismatched or dirty source. Require pinned Go `1.26.5` and `CGO_ENABLED=0` to build exactly one stamped `sbxr` executable for each of `linux/amd64` and `linux/arm64`. Require each application archive to contain only that executable, with no native library dependency or language runtime. The matching production component-archive builder remains Pending until reviewed upstream distribution identities and pinned artifact provenance are canonical; an arbitrary local tree cannot satisfy this row. Require `sbxr version` and `sbxr version --json` to report only authenticated embedded repository, tag, commit, architecture, payload digest, and State schema; the executable must not invent or accept an index digest.
 
 ### SL-STAGE-04 — Exact native configuration and subscription validators
 
@@ -106,5 +106,55 @@ go test ./internal/softwarelifecycle/adapter/ubuntu -run '^TestNativeValidator' 
 ```
 
 Require release-build-time validators for Xray-core `v26.3.27`, sing-box `v1.13.16` with AnyTLS floor `v1.12.0`, cloudflared `2026.7.3`, Certbot `5.4` or newer from either the supported snap or a proved pip virtual environment, and Mihomo `v1.19.29`. Require native checks for both core configurations, cloudflared ingress, Mihomo, and sing-box subscription output before an archive can be written. Require raw, base64, v2rayN, Shadowrocket, Karing, Mihomo, and sing-box outputs to be the exact bytes generated together from one typed six-profile qualification fixture. Any changed baseline or representation fails the build or staging hash check and requires affected requalification. Clean VPS staging must not require these tools to be preinstalled.
+
+### SL-INSTALL-01 — Complete secret-safe review and exact recheck
+
+Run:
+
+```sh
+go test ./internal/softwarelifecycle -run '^Test(PlanInstall|ApplyInstall|NetworkInstallContribution)' -count=1
+```
+
+Require one exact staged Release Identity, revision `1`, owned files and ownership categories, ten units, six profiles, seven subscription representations, typed Cloudflare and certificate effects, ports, the complete `inet sbxr` candidate, all disk categories, checks, interruption, cancellation, and rollback to `Not installed` before approval. Require every Plan object to be one-use. After approval, require one root-verified Network Policy contribution whose reviewed stable digest is unchanged; independently derive the fresh volatile digest from every owning contribution. Any changed candidate, listener, port, firewall, address, resource, provider fact, component contribution, State binding, or checksum returns only a secret-safe stale-Plan refusal.
+
+### SL-INSTALL-02 — Ordinary sudo and non-secret draft boundary
+
+Run:
+
+```sh
+go test ./internal/softwarelifecycle/adapter/ubuntu -run '^Test(Approval|DraftStore)' -count=1
+```
+
+The draft portion currently requires the fixed Owner path, strict allowlisted fields, canonical JSON, an Owner-owned `0600` single-link regular file beneath an Owner-owned `0700` directory, atomic replacement, safe discard, and refusal of links, broad modes, unknown fields, malformed values, and outside-file replacement. Infrastructure Secrets and Client Access Values never enter the draft. The production approval portion remains Pending: it must replace `/usr/bin/sudo -v` with the approved inherited read-only executable descriptor, private Unix socket, verified peer/executable identity, bounded canonical typed envelope, independent Plan rebuild, and root recheck before Apply.
+
+### SL-INSTALL-03 — Exact software activation and partial rollback
+
+Run:
+
+```sh
+go test ./internal/softwarelifecycle/adapter/ubuntu -run '^TestInstaller' -count=1
+```
+
+Require the exact authenticated staged executable, exact manifest-bound component tree, exact ten embedded unit templates rendered only with the authenticated versioned destination, and fixed active symlink. Capture the complete addition list before mutation. Refuse every occupied target. Full and partially completed activation rollback removes only absent-or-byte-exact targets recorded by that attempt; any changed target refuses deletion. Final inspection must prove either the complete release present or every recorded file absent.
+
+### SL-INSTALL-04 — One global revision-1 transaction
+
+Run:
+
+```sh
+go test ./internal/state -run '^TestSoftwareLifecycleInstallPublishesRevisionOneOnlyAfterCompleteAgreement$' -count=1
+```
+
+Require the real Software Lifecycle Plan, State prepared commit, and System Changes transaction to start from the proven Clean VPS/`Not installed` baseline. Revision `1` becomes readable only after pre-publication health, State publication, post-publication health, agreement, and durable `Complete`, in that order. The completed transaction leaves no active Rollback Snapshot or completed journal.
+
+### SL-INSTALL-05 — Approved dependency boundary
+
+Run:
+
+```sh
+go test . -run '^Test(RepositoryDependencies|SoftwareLifecycleVerificationBoundary)$' -count=1
+```
+
+Require Software Lifecycle to depend only on the approved Network Policy and System Changes coordination seams. Every other owning Module contributes through the typed `systemchanges.InstallContribution`; no eleven-value positional handoff, product-module cycle, generic plugin framework, or caller-authored step bypass is accepted.
 
 External valid-release success, Integrated Verification, Codex Live Acceptance, Owner Acceptance, and Release Qualification remain Pending. These automated checks do not claim any of those later stages.

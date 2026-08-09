@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	lifecyclecontract "github.com/albertloky/SBXR/internal/softwarelifecycle/contract"
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
 
@@ -186,6 +187,14 @@ func (plan *Plan) Checks() []systemchanges.Check {
 		return nil
 	}
 	return append([]systemchanges.Check(nil), plan.checks...)
+}
+
+func (plan *Plan) SoftwareLifecycleInstallContribution() lifecyclecontract.InstallContribution {
+	if plan == nil || plan.request.StartingRevision != 0 || plan.request.ManagementToken.Action != "" || plan.request.RunTokenRotation.TunnelID != "" || plan.request.ManagedRepair.TunnelID != "" {
+		return lifecyclecontract.InstallContribution{}
+	}
+	digest := sha256.Sum256([]byte(plan.observation))
+	return lifecyclecontract.InstallContribution{Name: "Cloudflare Tunnel", Owner: systemchanges.CloudflareModule, Identity: plan.identity, SHA256: plan.sha256, StableSHA256: hex.EncodeToString(digest[:]), ChangeSet: plan.request.ChangeSet, DesiredStateSHA256: plan.request.DesiredStateSHA256, Steps: plan.Steps(), Checks: plan.Checks(), Details: []string{plan.String()}}
 }
 func (plan *Plan) String() string {
 	if plan == nil {

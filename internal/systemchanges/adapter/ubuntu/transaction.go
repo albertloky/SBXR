@@ -97,6 +97,14 @@ type SubscriptionPublicationExecutor interface {
 	Cleanup(string) error
 }
 
+type SoftwareLifecycleExecutor interface {
+	CaptureRollback(string, systemchanges.Step, func(io.Reader) error) error
+	Activate(string, systemchanges.Step, time.Duration) (systemchanges.StepEvidence, error)
+	Reverse(string, systemchanges.Step, io.Reader, time.Duration) (systemchanges.StepEvidence, error)
+	Inspect(string, systemchanges.Step, io.Reader, time.Duration) (systemchanges.StepEffect, error)
+	Check(string, systemchanges.Check, systemchanges.GatePhase, time.Duration) (systemchanges.HealthStatus, error)
+}
+
 type snapshotManifest struct {
 	SchemaVersion int                          `json:"schema_version"`
 	Release       systemchanges.ReleaseBinding `json:"release_identity"`
@@ -198,6 +206,11 @@ func (a Adapter) Prepare(lease systemchanges.ExecutionLease, preparation systemc
 			captureErr = a.firewall.CaptureRollback(step, captureRollback)
 		} else if preparation.Mutation == systemchanges.RotationMutation && runTokenActivation(step) {
 			captureErr = captureRollback(strings.NewReader(`{"rotation_forward_only":true}`))
+		} else if softwareInstallation(step) {
+			if a.software == nil {
+				return errors.New("Software Lifecycle executor unavailable")
+			}
+			captureErr = a.software.CaptureRollback(a.root, step, captureRollback)
 		} else if subscriptionActivation(step) {
 			if a.subscription == nil {
 				return errors.New("Subscription Publication executor unavailable")
@@ -520,6 +533,12 @@ func (a Adapter) Execute(lease systemchanges.ExecutionLease, changeSet string, n
 		}
 		return a.firewall.Execute(step, path.Join(a.root, transactionDirectory, changeSet, name), timeout, cancellation)
 	}
+	if softwareInstallation(step) {
+		if a.software == nil {
+			return systemchanges.StepEvidence{}, errors.New("Software Lifecycle executor unavailable")
+		}
+		return a.software.Activate(a.root, step, timeout)
+	}
 	if runTokenActivation(step) {
 		if a.cloudflare == nil || !safeName(changeSet) || number != 1 {
 			return systemchanges.StepEvidence{}, errors.New("Cloudflare run-token service executor unavailable")
@@ -610,6 +629,12 @@ func (a Adapter) Reverse(lease systemchanges.ExecutionLease, changeSet string, n
 			return systemchanges.StepEvidence{}, errors.New("native firewall Adapter unavailable")
 		}
 		return a.firewall.Reverse(step, bytes.NewReader(content), timeout)
+	}
+	if softwareInstallation(step) {
+		if a.software == nil {
+			return systemchanges.StepEvidence{}, errors.New("Software Lifecycle rollback executor unavailable")
+		}
+		return a.software.Reverse(a.root, step, bytes.NewReader(content), timeout)
 	}
 	if _, ok := step.CloudflareChange(); ok {
 		if a.cloudflare == nil {
@@ -845,6 +870,12 @@ func (a Adapter) InspectStep(lease systemchanges.ExecutionLease, recovery system
 		}
 		return a.firewall.Inspect(step, bytes.NewReader(content), timeout)
 	}
+	if softwareInstallation(step) {
+		if a.software == nil {
+			return "", errors.New("Software Lifecycle recovery executor unavailable")
+		}
+		return a.software.Inspect(a.root, step, bytes.NewReader(content), timeout)
+	}
 	if cloudflaredActivation(step) {
 		if a.cloudflare == nil {
 			return "", errors.New("Cloudflare service executor unavailable")
@@ -878,6 +909,10 @@ func cloudflaredActivation(step systemchanges.Step) bool {
 
 func subscriptionActivation(step systemchanges.Step) bool {
 	return step.Owner() == systemchanges.SubscriptionModule && step.Forward() == systemchanges.ActivatePreparedConfiguration && step.Rollback() == systemchanges.RestorePriorConfiguration
+}
+
+func softwareInstallation(step systemchanges.Step) bool {
+	return step.Owner() == systemchanges.SoftwareModule && step.Forward() == systemchanges.ActivatePreparedConfiguration && step.Rollback() == systemchanges.RestorePriorConfiguration
 }
 
 func runTokenActivation(step systemchanges.Step) bool {
@@ -1130,6 +1165,12 @@ func validDigest(value string) bool {
 func (a Adapter) Check(lease systemchanges.ExecutionLease, check systemchanges.Check, phase systemchanges.GatePhase, timeout time.Duration) (systemchanges.HealthStatus, error) {
 	if !lease.Authorized() || a.host == nil {
 		return systemchanges.Unknown, errors.New("typed Ubuntu transaction host unavailable")
+	}
+	if check.Owner == systemchanges.SoftwareModule && strings.HasPrefix(check.Code, "SOFTWARE-LIFECYCLE-INSTALL-") {
+		if a.software == nil {
+			return systemchanges.Unknown, errors.New("Software Lifecycle health executor unavailable")
+		}
+		return a.software.Check(a.root, check, phase, timeout)
 	}
 	if check.Owner == systemchanges.CloudflareModule && check.Code == "CLOUDFLARE-WHOLE-TUNNEL" {
 		if a.cloudflare == nil {

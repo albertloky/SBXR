@@ -28,11 +28,16 @@ type TransactionExecutor struct {
 	roots     *x509.CertPool
 	uid, gid  int
 	domainGID int
+	certbot   string
 	run       func(context.Context, string, ...string) error
 	prove     func(context.Context, string) error
 }
 
-func NewTransactionExecutor() (TransactionExecutor, error) {
+func NewTransactionExecutor(certbot string) (TransactionExecutor, error) {
+	clean := filepath.Clean(certbot)
+	if clean != certbot || !filepath.IsAbs(clean) || !strings.HasPrefix(clean, "/opt/sbxr/releases/") || !strings.HasSuffix(clean, "/certbot/bin/certbot") || strings.Count(strings.TrimPrefix(strings.TrimSuffix(clean, "/certbot/bin/certbot"), "/opt/sbxr/releases/"), "/") != 0 {
+		return TransactionExecutor{}, errors.New("versioned Certbot path unavailable")
+	}
 	group, err := user.LookupGroup("sbxr-subscription")
 	if err != nil {
 		return TransactionExecutor{}, errors.New("sbxr-subscription group unavailable")
@@ -49,7 +54,7 @@ func NewTransactionExecutor() (TransactionExecutor, error) {
 	if err != nil {
 		return TransactionExecutor{}, errors.New("sing-box group is invalid")
 	}
-	return TransactionExecutor{now: time.Now, uid: 0, gid: gid, domainGID: domainGID, run: runCertificateCommand, prove: proveSubscriptionHTTPS}, nil
+	return TransactionExecutor{now: time.Now, uid: 0, gid: gid, domainGID: domainGID, certbot: certbot, run: runCertificateCommand, prove: proveSubscriptionHTTPS}, nil
 }
 
 func (executor TransactionExecutor) CaptureRollback(root string, step systemchanges.Step, write func(io.Reader) error) error {
@@ -518,6 +523,9 @@ func (executor TransactionExecutor) clock() time.Time {
 	return time.Now().UTC()
 }
 func (executor TransactionExecutor) command(ctx context.Context, name string, arguments ...string) error {
+	if name == "certbot" && executor.certbot != "" {
+		name = executor.certbot
+	}
 	if executor.run != nil {
 		return executor.run(ctx, name, arguments...)
 	}

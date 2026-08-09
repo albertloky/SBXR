@@ -51,10 +51,10 @@ func TestSourceUsesExactGitHubReleaseAndPerAssetVerificationContracts(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Repository != softwarelifecycle.Repository || got.Tag != tag || got.Commit != "0123456789abcdef0123456789abcdef01234567" || len(got.Assets) != 2 || len(got.AttestedAssets) != 3 || !got.Verifier.ReleaseVerified || !got.Verifier.OfficialSignedDistribution || got.Verifier.SigningFingerprint != githubadapter.SigningFingerprint {
+	if got.Repository != softwarelifecycle.Repository || got.Tag != tag || got.Commit != "0123456789abcdef0123456789abcdef01234567" || len(got.Assets) != 4 || len(got.AttestedAssets) != 5 || !got.Verifier.ReleaseVerified || !got.Verifier.OfficialSignedDistribution || got.Verifier.SigningFingerprint != githubadapter.SigningFingerprint {
 		t.Fatalf("Verify() = %#v", got)
 	}
-	if len(commands) != 15 || !reflect.DeepEqual(commands[8], []string{"/usr/bin/gh", "release", "verify", tag, "--repo", softwarelifecycle.Repository, "--format", "json"}) {
+	if len(commands) != 19 || !reflect.DeepEqual(commands[8], []string{"/usr/bin/gh", "release", "verify", tag, "--repo", softwarelifecycle.Repository, "--format", "json"}) {
 		t.Fatalf("commands = %#v", commands)
 	}
 	verified := []string{}
@@ -71,7 +71,7 @@ func TestSourceUsesExactGitHubReleaseAndPerAssetVerificationContracts(t *testing
 		}
 	}
 	sort.Strings(verified)
-	if !reflect.DeepEqual(verified, []string{"release-index.json", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz"}) {
+	if !reflect.DeepEqual(verified, []string{"release-index.json", "sbxr-components-linux-amd64.tar.gz", "sbxr-components-linux-arm64.tar.gz", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz"}) {
 		t.Fatalf("bounded downloads = %v", verified)
 	}
 }
@@ -212,10 +212,25 @@ func fixtureRunner(t *testing.T, releaseOutput []byte, fail failure) githubadapt
 func releaseAssets() map[string][]byte {
 	amd64 := executableArchive("verified amd64 executable")
 	arm64 := executableArchive("verified arm64 executable")
+	amd64Components := githubComponentArchive(softwarelifecycle.AMD64)
+	arm64Components := githubComponentArchive(softwarelifecycle.ARM64)
 	amd64Digest := sha256.Sum256(amd64)
 	arm64Digest := sha256.Sum256(arm64)
-	index := []byte(fmt.Sprintf(`{"schema":1,"product":"sbxr","repository":"albertloky/SBXR","version":"1.0.0","sequence":1,"tag":"v1.0.0","commit":"0123456789abcdef0123456789abcdef01234567","state_schema":1,"minimum_updater_schema":1,"assets":[{"role":"application-linux-amd64","name":"sbxr-linux-amd64.tar.gz","size":%d,"sha256":"%s"},{"role":"application-linux-arm64","name":"sbxr-linux-arm64.tar.gz","size":%d,"sha256":"%s"}]}`, len(amd64), hex.EncodeToString(amd64Digest[:]), len(arm64), hex.EncodeToString(arm64Digest[:])))
-	return map[string][]byte{"release-index.json": index, "sbxr-linux-amd64.tar.gz": amd64, "sbxr-linux-arm64.tar.gz": arm64}
+	amd64ComponentsDigest := sha256.Sum256(amd64Components)
+	arm64ComponentsDigest := sha256.Sum256(arm64Components)
+	index := []byte(fmt.Sprintf(`{"schema":1,"product":"sbxr","repository":"albertloky/SBXR","version":"1.0.0","sequence":1,"tag":"v1.0.0","commit":"0123456789abcdef0123456789abcdef01234567","state_schema":1,"minimum_updater_schema":1,"assets":[{"role":"application-linux-amd64","name":"sbxr-linux-amd64.tar.gz","size":%d,"sha256":"%s"},{"role":"application-linux-arm64","name":"sbxr-linux-arm64.tar.gz","size":%d,"sha256":"%s"},{"role":"components-linux-amd64","name":"sbxr-components-linux-amd64.tar.gz","size":%d,"sha256":"%s"},{"role":"components-linux-arm64","name":"sbxr-components-linux-arm64.tar.gz","size":%d,"sha256":"%s"}]}`, len(amd64), hex.EncodeToString(amd64Digest[:]), len(arm64), hex.EncodeToString(arm64Digest[:]), len(amd64Components), hex.EncodeToString(amd64ComponentsDigest[:]), len(arm64Components), hex.EncodeToString(arm64ComponentsDigest[:])))
+	return map[string][]byte{"release-index.json": index, "sbxr-linux-amd64.tar.gz": amd64, "sbxr-linux-arm64.tar.gz": arm64, "sbxr-components-linux-amd64.tar.gz": amd64Components, "sbxr-components-linux-arm64.tar.gz": arm64Components}
+}
+
+func githubComponentArchive(architecture softwarelifecycle.Architecture) []byte {
+	files := map[string][]byte{
+		"xray": []byte("qualified xray"), "sing-box": []byte("qualified sing-box"), "cloudflared": []byte("qualified cloudflared"),
+		"certbot/bin/certbot": softwarelifecycle.ComponentCertbotLauncher(), "certbot/pyvenv.cfg": []byte("home = /usr/bin\nversion = 3.12\n"),
+		"certbot/lib/python3.12/site-packages/certbot/__init__.py": []byte("__version__ = '5.4.0'\n"),
+	}
+	manifest, _ := softwarelifecycle.NewComponentManifest(architecture, "5.4.0", files)
+	archive, _ := softwarelifecycle.BuildComponentArchive(manifest, files)
+	return archive
 }
 
 func releaseVerificationJSON(t *testing.T, tag string, assets map[string][]byte) []byte {

@@ -118,7 +118,7 @@ func qualificationMetadata(architecture softwarelifecycle.Architecture) software
 	definitions, _ := state.ReleaseDefinitions()
 	units := map[string][]byte{}
 	commands := map[string]string{
-		"cloudflared.service": "/usr/bin/cloudflared tunnel --no-autoupdate run --token-file /etc/sbxr/cloudflared/token", "sbxr-cert-renew.service": "/usr/local/bin/sbxr private certificate-renewal", "sbxr-health-check.service": "/usr/local/bin/sbxr private health-check", "sbxr-subscription.service": "/usr/local/bin/sbxr __subscription-serve", "sbxr-update-check.service": "/usr/local/bin/sbxr private update-check", "sing-box.service": "/usr/bin/sing-box run -c /etc/sbxr/sing-box/config.json", "xray.service": "/usr/bin/xray run -config /etc/sbxr/xray/config.json",
+		"cloudflared.service": "@SBXR_RELEASE_DIR@/cloudflared tunnel --no-autoupdate run --token-file /etc/sbxr/cloudflared/token", "sbxr-cert-renew.service": "/usr/local/bin/sbxr private certificate-renewal", "sbxr-health-check.service": "/usr/local/bin/sbxr private health-check", "sbxr-subscription.service": "/usr/local/bin/sbxr __subscription-serve", "sbxr-update-check.service": "/usr/local/bin/sbxr private update-check", "sing-box.service": "@SBXR_RELEASE_DIR@/sing-box run -c /etc/sbxr/sing-box/config.json", "xray.service": "@SBXR_RELEASE_DIR@/xray run -config /etc/sbxr/xray/config.json",
 	}
 	for _, name := range softwarelifecycle.ManagedUnitNames() {
 		if strings.HasSuffix(name, ".timer") {
@@ -135,9 +135,11 @@ func qualificationMetadata(architecture softwarelifecycle.Architecture) software
 func stageRequest(t *testing.T, architecture softwarelifecycle.Architecture, archive []byte) softwarelifecycle.StageRequest {
 	t.Helper()
 	digest := sha256.Sum256(archive)
-	index := []byte(fmt.Sprintf(`{"schema":1,"product":"sbxr","repository":"albertloky/SBXR","version":"1.0.0","sequence":1,"tag":"v1.0.0","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state_schema":1,"minimum_updater_schema":1,"assets":[{"role":"application-linux-amd64","name":"sbxr-linux-amd64.tar.gz","size":%d,"sha256":"%s"},{"role":"application-linux-arm64","name":"sbxr-linux-arm64.tar.gz","size":%d,"sha256":"%s"}]}`, len(archive), hex.EncodeToString(digest[:]), len(archive), hex.EncodeToString(digest[:])))
+	amd64Components, arm64Components := stagingComponents(softwarelifecycle.AMD64), stagingComponents(softwarelifecycle.ARM64)
+	amd64ComponentsDigest, arm64ComponentsDigest := sha256.Sum256(amd64Components), sha256.Sum256(arm64Components)
+	index := []byte(fmt.Sprintf(`{"schema":1,"product":"sbxr","repository":"albertloky/SBXR","version":"1.0.0","sequence":1,"tag":"v1.0.0","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state_schema":1,"minimum_updater_schema":1,"assets":[{"role":"application-linux-amd64","name":"sbxr-linux-amd64.tar.gz","size":%d,"sha256":"%s"},{"role":"application-linux-arm64","name":"sbxr-linux-arm64.tar.gz","size":%d,"sha256":"%s"},{"role":"components-linux-amd64","name":"sbxr-components-linux-amd64.tar.gz","size":%d,"sha256":"%s"},{"role":"components-linux-arm64","name":"sbxr-components-linux-arm64.tar.gz","size":%d,"sha256":"%s"}]}`, len(archive), hex.EncodeToString(digest[:]), len(archive), hex.EncodeToString(digest[:]), len(amd64Components), hex.EncodeToString(amd64ComponentsDigest[:]), len(arm64Components), hex.EncodeToString(arm64ComponentsDigest[:])))
 	indexDigest := sha256.Sum256(index)
-	evidence := softwarelifecycle.ReleaseEvidence{Repository: softwarelifecycle.Repository, Tag: "v1.0.0", Commit: strings.Repeat("a", 40), Index: index, Assets: []softwarelifecycle.DownloadedAsset{{Name: "sbxr-linux-amd64.tar.gz", Bytes: archive}, {Name: "sbxr-linux-arm64.tar.gz", Bytes: archive}}, AttestedAssets: []softwarelifecycle.AttestedAsset{{Name: "release-index.json", SHA256: hex.EncodeToString(indexDigest[:])}, {Name: "sbxr-linux-amd64.tar.gz", SHA256: hex.EncodeToString(digest[:])}, {Name: "sbxr-linux-arm64.tar.gz", SHA256: hex.EncodeToString(digest[:])}}, Verifier: softwarelifecycle.VerifierEvidence{Version: "2.97.0", SigningFingerprint: strings.Repeat("A", 40), OfficialSignedDistribution: true, ReleaseVerified: true, VerifiedAssets: []string{"release-index.json", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz"}}}
+	evidence := softwarelifecycle.ReleaseEvidence{Repository: softwarelifecycle.Repository, Tag: "v1.0.0", Commit: strings.Repeat("a", 40), Index: index, Assets: []softwarelifecycle.DownloadedAsset{{Name: "sbxr-linux-amd64.tar.gz", Bytes: archive}, {Name: "sbxr-linux-arm64.tar.gz", Bytes: archive}, {Name: "sbxr-components-linux-amd64.tar.gz", Bytes: amd64Components}, {Name: "sbxr-components-linux-arm64.tar.gz", Bytes: arm64Components}}, AttestedAssets: []softwarelifecycle.AttestedAsset{{Name: "release-index.json", SHA256: hex.EncodeToString(indexDigest[:])}, {Name: "sbxr-linux-amd64.tar.gz", SHA256: hex.EncodeToString(digest[:])}, {Name: "sbxr-linux-arm64.tar.gz", SHA256: hex.EncodeToString(digest[:])}, {Name: "sbxr-components-linux-amd64.tar.gz", SHA256: hex.EncodeToString(amd64ComponentsDigest[:])}, {Name: "sbxr-components-linux-arm64.tar.gz", SHA256: hex.EncodeToString(arm64ComponentsDigest[:])}}, Verifier: softwarelifecycle.VerifierEvidence{Version: "2.97.0", SigningFingerprint: strings.Repeat("A", 40), OfficialSignedDistribution: true, ReleaseVerified: true, VerifiedAssets: []string{"release-index.json", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz", "sbxr-components-linux-amd64.tar.gz", "sbxr-components-linux-arm64.tar.gz"}}}
 	recorder := &requestRecorder{}
 	module := softwarelifecycle.New(staticSource{evidence}, softwarelifecycle.VerifierQualification{Version: "2.97.0", SigningFingerprint: strings.Repeat("A", 40)}, func() time.Time { return time.Date(2026, 8, 9, 0, 0, 0, 0, time.UTC) }, recorder)
 	_ = module.View(t.Context(), softwarelifecycle.ViewRequest{Tag: "v1.0.0", Architecture: architecture, InstallationStatus: softwarelifecycle.NotInstalled})
@@ -145,6 +147,17 @@ func stageRequest(t *testing.T, architecture softwarelifecycle.Architecture, arc
 		t.Fatal("View did not authenticate staging")
 	}
 	return recorder.request
+}
+
+func stagingComponents(architecture softwarelifecycle.Architecture) []byte {
+	files := map[string][]byte{
+		"xray": []byte("qualified xray"), "sing-box": []byte("qualified sing-box"), "cloudflared": []byte("qualified cloudflared"),
+		"certbot/bin/certbot": softwarelifecycle.ComponentCertbotLauncher(), "certbot/pyvenv.cfg": []byte("home = /usr/bin\nversion = 3.12\n"),
+		"certbot/lib/python3.12/site-packages/certbot/__init__.py": []byte("__version__ = '5.4.0'\n"),
+	}
+	manifest, _ := softwarelifecycle.NewComponentManifest(architecture, "5.4.0", files)
+	archive, _ := softwarelifecycle.BuildComponentArchive(manifest, files)
+	return archive
 }
 
 type staticSource struct {

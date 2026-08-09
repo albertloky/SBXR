@@ -40,11 +40,12 @@ var registeredModules = map[string]bool{
 // Exact cross-Module connections are registered only by approved design tickets.
 // Foundational Modules never gain upward entries here.
 var approvedModuleDependencies = map[string]map[string]bool{
-	"certificatelifecycle":    {"systemchanges": true},
-	"cloudflaretunnel":        {"networkpolicy": true, "systemchanges": true},
-	"connectionprofiles":      {"cloudflaretunnel": true, "state": true, "systemchanges": true},
+	"certificatelifecycle":    {"softwarelifecycle": true, "systemchanges": true},
+	"cloudflaretunnel":        {"networkpolicy": true, "softwarelifecycle": true, "systemchanges": true},
+	"connectionprofiles":      {"cloudflaretunnel": true, "softwarelifecycle": true, "state": true, "systemchanges": true},
 	"healthdiagnostics":       {"systemchanges": true},
-	"subscriptionpublication": {"connectionprofiles": true, "state": true, "systemchanges": true},
+	"softwarelifecycle":       {"networkpolicy": true, "systemchanges": true},
+	"subscriptionpublication": {"connectionprofiles": true, "softwarelifecycle": true, "state": true, "systemchanges": true},
 }
 
 var forbiddenStandardLibrary = map[string]bool{
@@ -279,7 +280,7 @@ func unsafe() { _ = exec.Command("candidate") }
 import "os"
 func unsafe() { _ = os.WriteFile("/tmp/unsafe", nil, 0o600) }
 `},
-		{"calls another Module", `package softwarelifecycle
+		{"calls an unapproved Module", `package softwarelifecycle
 import "github.com/albertloky/SBXR/internal/state"
 func unsafe(value state.Interface) { _ = value }
 `},
@@ -314,7 +315,7 @@ func validateSoftwareLifecycleVerification(root string) error {
 			if err != nil {
 				return err
 			}
-			if importPath == "os" || importPath == "os/exec" || importPath == "syscall" || importPath == "unsafe" || strings.HasPrefix(importPath, modulePath+"/internal/") {
+			if importPath == "os" || importPath == "os/exec" || importPath == "syscall" || importPath == "unsafe" || strings.HasPrefix(importPath, modulePath+"/internal/") && importPath != modulePath+"/internal/systemchanges" && importPath != modulePath+"/internal/networkpolicy" && importPath != modulePath+"/internal/softwarelifecycle/contract" {
 				return fmt.Errorf("Software Lifecycle core must remain verification-only before staging: %s imports %s", file.Name(), importPath)
 			}
 		}
@@ -529,7 +530,7 @@ func validatePackages(packages []packageInfo) error {
 		if len(parts) < 2 || !registeredModules[parts[1]] {
 			return fmt.Errorf("unregistered product package %q", current.ImportPath)
 		}
-		if len(parts) > 2 && (len(parts) != 4 || parts[2] != "adapter") {
+		if len(parts) > 2 && current.ImportPath != modulePath+"/internal/softwarelifecycle/contract" && (len(parts) != 4 || parts[2] != "adapter") {
 			return fmt.Errorf("shallow package %q; keep implementation with its Module", current.ImportPath)
 		}
 	}

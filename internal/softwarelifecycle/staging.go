@@ -13,17 +13,19 @@ const (
 )
 
 type StageRequest struct {
-	Release       VerifiedRelease
-	Architecture  Architecture
-	Asset         AssetProof
-	Archive       []byte
-	authenticated bool
+	Release          VerifiedRelease
+	Architecture     Architecture
+	Asset            AssetProof
+	Archive          []byte
+	ComponentAsset   AssetProof
+	ComponentArchive []byte
+	authenticated    bool
 }
 
 func (request StageRequest) Authenticated() bool { return request.authenticated }
 
-func newStageRequest(release VerifiedRelease, architecture Architecture, asset AssetProof, archive []byte) StageRequest {
-	return StageRequest{Release: release, Architecture: architecture, Asset: asset, Archive: archive, authenticated: true}
+func newStageRequest(release VerifiedRelease, architecture Architecture, asset AssetProof, archive []byte, componentAsset AssetProof, componentArchive []byte) StageRequest {
+	return StageRequest{Release: release, Architecture: architecture, Asset: asset, Archive: archive, ComponentAsset: componentAsset, ComponentArchive: componentArchive, authenticated: true}
 }
 
 type StagedRelease struct {
@@ -31,6 +33,7 @@ type StagedRelease struct {
 	Build            EmbeddedBuildIdentity
 	Architecture     Architecture
 	ExecutableSHA256 string
+	ComponentsSHA256 string
 	InstallPath      string
 	StateSchema      uint64
 }
@@ -44,5 +47,5 @@ func ReleaseInstallPath(identity ReleaseIdentity) string {
 }
 
 func validStagedRelease(staged StagedRelease, request StageRequest) bool {
-	return staged.Identity == request.Release.Identity && staged.Build.Repository == request.Release.Identity.Repository && staged.Build.Tag == request.Release.Identity.Tag && staged.Build.Commit == request.Release.Identity.Commit && hashPattern.MatchString(staged.Build.PayloadSHA256) && staged.Architecture == request.Architecture && hashPattern.MatchString(staged.ExecutableSHA256) && staged.InstallPath == ReleaseInstallPath(request.Release.Identity) && staged.StateSchema == request.Release.StateSchema
+	return staged.Identity == request.Release.Identity && staged.Build.Repository == request.Release.Identity.Repository && staged.Build.Tag == request.Release.Identity.Tag && staged.Build.Commit == request.Release.Identity.Commit && hashPattern.MatchString(staged.Build.PayloadSHA256) && staged.Architecture == request.Architecture && hashPattern.MatchString(staged.ExecutableSHA256) && hashPattern.MatchString(staged.ComponentsSHA256) && staged.InstallPath == ReleaseInstallPath(request.Release.Identity) && staged.StateSchema == request.Release.StateSchema
 }

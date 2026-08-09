@@ -172,6 +172,14 @@ func (FreshInstallationAuthority) MarshalJSON() ([]byte, error) {
 	return nil, errors.New("Fresh installation authority cannot be rendered")
 }
 func (authority FreshInstallationAuthority) ConnectionProfilesFreshInstallation() bool {
+	return authority.consumeFreshInstallation()
+}
+
+func (authority FreshInstallationAuthority) CertificateLifecycleFreshInstallation() bool {
+	return authority.consumeFreshInstallation()
+}
+
+func (authority FreshInstallationAuthority) consumeFreshInstallation() bool {
 	if authority.cell == nil || !authority.cell.used.CompareAndSwap(false, true) {
 		return false
 	}

@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	lifecyclecontract "github.com/albertloky/SBXR/internal/softwarelifecycle/contract"
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
 
@@ -500,6 +501,7 @@ type PlanRequest struct {
 	SubscriberAgreementReviewed bool
 	StandingRenewal             bool
 	RenewalPolicyApproved       bool
+	FreshInstallation           systemchanges.FreshInstallationAuthority
 }
 
 type OrderContract struct {
@@ -552,6 +554,19 @@ func (plan *Plan) Checks() []systemchanges.Check {
 	}
 	return append([]systemchanges.Check(nil), plan.checks...)
 }
+
+func (plan *Plan) SoftwareLifecycleInstallContribution() lifecyclecontract.InstallContribution {
+	if plan == nil || plan.request.StartingRevision != 1 || plan.request.StartingStateSHA256 != "" || plan.request.StandingRenewal {
+		return lifecyclecontract.InstallContribution{}
+	}
+	name := "Certificate Lifecycle IP"
+	if plan.request.Lineage == DomainLineage {
+		name = "Certificate Lifecycle domain"
+	} else if plan.request.Lineage != IPLineage {
+		return lifecyclecontract.InstallContribution{}
+	}
+	return lifecyclecontract.InstallContribution{Name: name, Owner: systemchanges.CertificateModule, Identity: plan.identity, SHA256: plan.sha256, StableSHA256: plan.sha256, ChangeSet: plan.request.ChangeSet, DesiredStateSHA256: plan.request.DesiredStateSHA256, Steps: plan.Steps(), Checks: plan.Checks(), Details: []string{plan.String()}}
+}
 func (plan *Plan) Consume() bool {
 	return plan != nil && plan.used != nil && plan.used.CompareAndSwap(false, true)
 }
@@ -587,7 +602,9 @@ func (module Interface) Plan(ctx context.Context, request PlanRequest) PlanResul
 		finding.NextActions = []string{"Review and approve the subscriber agreement", "Back"}
 		return PlanResult{Health: finding}
 	}
-	if !planName.MatchString(request.ChangeSet) || request.StartingRevision == 0 || !stateSHA256.MatchString(request.StartingStateSHA256) || !stateSHA256.MatchString(request.DesiredStateSHA256) {
+	freshInstallation := request.FreshInstallation.CertificateLifecycleFreshInstallation()
+	validStartingState := freshInstallation && request.StartingRevision == 1 && request.StartingStateSHA256 == "" || !freshInstallation && request.StartingRevision > 0 && stateSHA256.MatchString(request.StartingStateSHA256)
+	if !planName.MatchString(request.ChangeSet) || !validStartingState || !stateSHA256.MatchString(request.DesiredStateSHA256) {
 		finding := health(view.Health.Time, Failed, "CERTIFICATE-PLAN-STATE", "The starting State lineage is invalid", "the starting revision or State checksum is missing or malformed", "one exact current State revision and SHA-256")
 		finding.NextActions = []string{"Reload current State and build a fresh Plan", "Back"}
 		return PlanResult{Health: finding}

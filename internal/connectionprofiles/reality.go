@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	lifecyclecontract "github.com/albertloky/SBXR/internal/softwarelifecycle/contract"
 	"github.com/albertloky/SBXR/internal/state"
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
@@ -444,6 +445,13 @@ func (plan *Plan) Checks() []systemchanges.Check {
 		return nil
 	}
 	return append([]systemchanges.Check(nil), plan.checks...)
+}
+
+func (plan *Plan) SoftwareLifecycleInstallContribution() lifecyclecontract.InstallContribution {
+	if plan == nil || plan.revision != 1 || plan.startingStateSHA256 != "" || plan.desiredStateSHA256 == "" {
+		return lifecyclecontract.InstallContribution{}
+	}
+	return lifecyclecontract.InstallContribution{Name: "Connection Profiles", Owner: systemchanges.ConnectionProfilesModule, Identity: plan.identity, SHA256: plan.sha256, StableSHA256: plan.volatileSHA256, ChangeSet: plan.changeSet, DesiredStateSHA256: plan.desiredStateSHA256, Steps: plan.Steps(), Checks: plan.Checks(), Details: []string{plan.String()}}
 }
 func (plan *Plan) String() string {
 	if plan == nil {

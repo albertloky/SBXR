@@ -43,10 +43,10 @@ func TestViewReportsOneExactVerifiedReleaseWithoutUsingIt(t *testing.T) {
 	if got.Refusal != nil || got.VerifiedCandidate == nil || got.VerifiedCandidate.Identity != wantIdentity {
 		t.Fatalf("View() = %#v, want exact verified candidate %#v", got, wantIdentity)
 	}
-	if got.InstallationStatus != softwarelifecycle.NotInstalled || got.UpdateEligible || got.MigrationSummary != "State schema 1; minimum updater schema 1" || !reflect.DeepEqual(got.AffectedComponents, []softwarelifecycle.Component{softwarelifecycle.ApplicationAMD64, softwarelifecycle.ApplicationARM64}) || !reflect.DeepEqual(got.PermittedActions, []softwarelifecycle.Action{softwarelifecycle.ReviewInstall}) {
+	if got.InstallationStatus != softwarelifecycle.NotInstalled || got.UpdateEligible || got.MigrationSummary != "State schema 1; minimum updater schema 1" || !reflect.DeepEqual(got.AffectedComponents, []softwarelifecycle.Component{softwarelifecycle.ApplicationAMD64, softwarelifecycle.ApplicationARM64, softwarelifecycle.ComponentsAMD64, softwarelifecycle.ComponentsARM64}) || !reflect.DeepEqual(got.PermittedActions, []softwarelifecycle.Action{softwarelifecycle.ReviewInstall}) {
 		t.Fatalf("unsafe or incomplete View = %#v", got)
 	}
-	if got.VerifiedCandidate.Sequence != 1 || got.VerifiedCandidate.VerifiedAt != verifiedAt || len(got.VerifiedCandidate.Assets) != 2 {
+	if got.VerifiedCandidate.Sequence != 1 || got.VerifiedCandidate.VerifiedAt != verifiedAt || len(got.VerifiedCandidate.Assets) != 4 {
 		t.Fatalf("proof = %#v", got.VerifiedCandidate)
 	}
 	if source.extracted != 0 || source.executed != 0 || source.mutated != 0 {
@@ -61,6 +61,7 @@ func TestViewStagesOnlyTheSelectedVerifiedArchitecture(t *testing.T) {
 		Build:            softwarelifecycle.EmbeddedBuildIdentity{Repository: softwarelifecycle.Repository, Tag: "v1.0.0", Commit: "0123456789abcdef0123456789abcdef01234567", PayloadSHA256: strings.Repeat("d", 64)},
 		Architecture:     softwarelifecycle.AMD64,
 		ExecutableSHA256: strings.Repeat("c", 64),
+		ComponentsSHA256: strings.Repeat("e", 64),
 		InstallPath:      softwarelifecycle.ReleaseInstallPath(releaseIdentity(evidence)),
 		StateSchema:      1,
 	}}
@@ -71,7 +72,10 @@ func TestViewStagesOnlyTheSelectedVerifiedArchitecture(t *testing.T) {
 	if got.Refusal != nil || got.StagedCandidate == nil || !reflect.DeepEqual(*got.StagedCandidate, stager.proof) {
 		t.Fatalf("View() = %#v, want selected staged candidate %#v", got, stager.proof)
 	}
-	if stager.calls != 1 || stager.request.Asset.Role != softwarelifecycle.ApplicationAMD64 || stager.request.Asset.Name != "sbxr-linux-amd64.tar.gz" || !bytes.Equal(stager.request.Archive, evidence.Assets[0].Bytes) {
+	if candidate := got.InstallCandidate(); candidate == (softwarelifecycle.InstallCandidate{}) || fmt.Sprintf("%v", candidate) != "verified install candidate: protected" {
+		t.Fatalf("InstallCandidate() = %#v", candidate)
+	}
+	if stager.calls != 1 || stager.request.Asset.Role != softwarelifecycle.ApplicationAMD64 || stager.request.Asset.Name != "sbxr-linux-amd64.tar.gz" || !bytes.Equal(stager.request.Archive, evidence.Assets[0].Bytes) || stager.request.ComponentAsset.Role != softwarelifecycle.ComponentsAMD64 || !bytes.Equal(stager.request.ComponentArchive, evidence.Assets[2].Bytes) {
 		t.Fatalf("Stage request = %#v", stager.request)
 	}
 }
@@ -413,9 +417,13 @@ func (source *releaseSource) Verify(context.Context, string) (softwarelifecycle.
 func validEvidence() softwarelifecycle.ReleaseEvidence {
 	amd64 := executableArchive("verified amd64 executable")
 	arm64 := executableArchive("verified arm64 executable")
+	amd64Components := componentArchive(softwarelifecycle.AMD64)
+	arm64Components := componentArchive(softwarelifecycle.ARM64)
 	amd64Digest := sha256.Sum256(amd64)
 	arm64Digest := sha256.Sum256(arm64)
-	index := []byte(fmt.Sprintf(`{"schema":1,"product":"sbxr","repository":"albertloky/SBXR","version":"1.0.0","sequence":1,"tag":"v1.0.0","commit":"0123456789abcdef0123456789abcdef01234567","state_schema":1,"minimum_updater_schema":1,"assets":[{"role":"application-linux-amd64","name":"sbxr-linux-amd64.tar.gz","size":%d,"sha256":"%s"},{"role":"application-linux-arm64","name":"sbxr-linux-arm64.tar.gz","size":%d,"sha256":"%s"}]}`, len(amd64), hex.EncodeToString(amd64Digest[:]), len(arm64), hex.EncodeToString(arm64Digest[:])))
+	amd64ComponentsDigest := sha256.Sum256(amd64Components)
+	arm64ComponentsDigest := sha256.Sum256(arm64Components)
+	index := []byte(fmt.Sprintf(`{"schema":1,"product":"sbxr","repository":"albertloky/SBXR","version":"1.0.0","sequence":1,"tag":"v1.0.0","commit":"0123456789abcdef0123456789abcdef01234567","state_schema":1,"minimum_updater_schema":1,"assets":[{"role":"application-linux-amd64","name":"sbxr-linux-amd64.tar.gz","size":%d,"sha256":"%s"},{"role":"application-linux-arm64","name":"sbxr-linux-arm64.tar.gz","size":%d,"sha256":"%s"},{"role":"components-linux-amd64","name":"sbxr-components-linux-amd64.tar.gz","size":%d,"sha256":"%s"},{"role":"components-linux-arm64","name":"sbxr-components-linux-arm64.tar.gz","size":%d,"sha256":"%s"}]}`, len(amd64), hex.EncodeToString(amd64Digest[:]), len(arm64), hex.EncodeToString(arm64Digest[:]), len(amd64Components), hex.EncodeToString(amd64ComponentsDigest[:]), len(arm64Components), hex.EncodeToString(arm64ComponentsDigest[:])))
 	indexDigest := sha256.Sum256(index)
 	return softwarelifecycle.ReleaseEvidence{
 		Repository: "albertloky/SBXR",
@@ -425,20 +433,41 @@ func validEvidence() softwarelifecycle.ReleaseEvidence {
 		Assets: []softwarelifecycle.DownloadedAsset{
 			{Name: "sbxr-linux-amd64.tar.gz", Bytes: amd64},
 			{Name: "sbxr-linux-arm64.tar.gz", Bytes: arm64},
+			{Name: "sbxr-components-linux-amd64.tar.gz", Bytes: amd64Components},
+			{Name: "sbxr-components-linux-arm64.tar.gz", Bytes: arm64Components},
 		},
 		AttestedAssets: []softwarelifecycle.AttestedAsset{
 			{Name: "release-index.json", SHA256: hex.EncodeToString(indexDigest[:])},
 			{Name: "sbxr-linux-amd64.tar.gz", SHA256: hex.EncodeToString(amd64Digest[:])},
 			{Name: "sbxr-linux-arm64.tar.gz", SHA256: hex.EncodeToString(arm64Digest[:])},
+			{Name: "sbxr-components-linux-amd64.tar.gz", SHA256: hex.EncodeToString(amd64ComponentsDigest[:])},
+			{Name: "sbxr-components-linux-arm64.tar.gz", SHA256: hex.EncodeToString(arm64ComponentsDigest[:])},
 		},
 		Verifier: softwarelifecycle.VerifierEvidence{
 			Version:                    "2.97.0",
 			SigningFingerprint:         "0123456789ABCDEF0123456789ABCDEF01234567",
 			OfficialSignedDistribution: true,
 			ReleaseVerified:            true,
-			VerifiedAssets:             []string{"release-index.json", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz"},
+			VerifiedAssets:             []string{"release-index.json", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz", "sbxr-components-linux-amd64.tar.gz", "sbxr-components-linux-arm64.tar.gz"},
 		},
 	}
+}
+
+func componentArchive(architecture softwarelifecycle.Architecture) []byte {
+	files := map[string][]byte{
+		"xray": []byte("qualified xray"), "sing-box": []byte("qualified sing-box"), "cloudflared": []byte("qualified cloudflared"),
+		"certbot/bin/certbot": softwarelifecycle.ComponentCertbotLauncher(), "certbot/pyvenv.cfg": []byte("home = /usr/bin\nversion = 3.12\n"),
+		"certbot/lib/python3.12/site-packages/certbot/__init__.py": []byte("__version__ = '5.4.0'\n"),
+	}
+	manifest, err := softwarelifecycle.NewComponentManifest(architecture, "5.4.0", files)
+	if err != nil {
+		panic(err)
+	}
+	archive, err := softwarelifecycle.BuildComponentArchive(manifest, files)
+	if err != nil {
+		panic(err)
+	}
+	return archive
 }
 
 func qualification() softwarelifecycle.VerifierQualification {

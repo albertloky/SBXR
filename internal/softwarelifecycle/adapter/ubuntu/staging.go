@@ -58,9 +58,10 @@ func (Stager) Stage(_ context.Context, request softwarelifecycle.StageRequest) (
 		return softwarelifecycle.StagedRelease{}, errors.New("staged executable unavailable")
 	}
 	digest := sha256.Sum256(executable)
+	componentsDigest := sha256.Sum256(request.ComponentArchive)
 	return softwarelifecycle.StagedRelease{
 		Identity: request.Release.Identity, Build: metadata.Build, Architecture: request.Architecture, ExecutableSHA256: hex.EncodeToString(digest[:]),
-		InstallPath: softwarelifecycle.ReleaseInstallPath(request.Release.Identity), StateSchema: metadata.StateSchema,
+		ComponentsSHA256: hex.EncodeToString(componentsDigest[:]), InstallPath: softwarelifecycle.ReleaseInstallPath(request.Release.Identity), StateSchema: metadata.StateSchema,
 	}, nil
 }
 
@@ -69,13 +70,15 @@ func validRequest(request softwarelifecycle.StageRequest) bool {
 		return false
 	}
 	digest := sha256.Sum256(request.Archive)
-	role := softwarelifecycle.ApplicationAMD64
+	componentsDigest := sha256.Sum256(request.ComponentArchive)
+	role, componentRole := softwarelifecycle.ApplicationAMD64, softwarelifecycle.ComponentsAMD64
 	if request.Architecture == softwarelifecycle.ARM64 {
-		role = softwarelifecycle.ApplicationARM64
+		role, componentRole = softwarelifecycle.ApplicationARM64, softwarelifecycle.ComponentsARM64
 	} else if request.Architecture != softwarelifecycle.AMD64 {
 		return false
 	}
-	return request.Release.Identity.Repository == softwarelifecycle.Repository && request.Asset.Role == role && request.Asset.Size == int64(len(request.Archive)) && request.Asset.Size > 0 && request.Asset.Size <= softwarelifecycle.MaxAssetBytes && request.Asset.SHA256 == hex.EncodeToString(digest[:])
+	_, componentErr := softwarelifecycle.ValidateComponentArchive(request.ComponentArchive, request.Architecture)
+	return request.Release.Identity.Repository == softwarelifecycle.Repository && request.Asset.Role == role && request.Asset.Size == int64(len(request.Archive)) && request.Asset.Size > 0 && request.Asset.Size <= softwarelifecycle.MaxAssetBytes && request.Asset.SHA256 == hex.EncodeToString(digest[:]) && request.ComponentAsset.Role == componentRole && request.ComponentAsset.Size == int64(len(request.ComponentArchive)) && request.ComponentAsset.SHA256 == hex.EncodeToString(componentsDigest[:]) && componentErr == nil
 }
 
 func extractExecutable(body []byte, destination string) error {

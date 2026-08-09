@@ -436,6 +436,14 @@ func (commit *PreparedCommit) SystemChangesPreparedState() (changeSet string, re
 	return string(commit.changeSet), commit.revision, commit.starting.payloadChecksum, commit.candidateSHA256, string(commit.reviewed.planIdentity), commit.reviewed.planSHA256, true
 }
 
+func (commit *PreparedCommit) SoftwareLifecyclePreparedRelease() (repository, tag, revision, releaseIndexSHA256 string, valid bool) {
+	if commit == nil {
+		return "", "", "", "", false
+	}
+	identity := commit.releaseIdentity
+	return identity.Repository, identity.Tag, identity.Commit, identity.ReleaseIndexSHA256, identity.Repository != "" && identity.Tag != "" && identity.Commit != "" && identity.ReleaseIndexSHA256 != ""
+}
+
 func (commit *PreparedCommit) SystemChangesIPCertificateRenewal() bool {
 	return commit != nil && commit.ipCertificateRenewal
 }

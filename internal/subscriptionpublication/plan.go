@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/albertloky/SBXR/internal/connectionprofiles"
+	lifecyclecontract "github.com/albertloky/SBXR/internal/softwarelifecycle/contract"
 	"github.com/albertloky/SBXR/internal/state"
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
@@ -187,6 +188,13 @@ func (plan *Plan) Checks() []systemchanges.Check {
 		return nil
 	}
 	return append([]systemchanges.Check(nil), plan.checks...)
+}
+
+func (plan *Plan) SoftwareLifecycleInstallContribution() lifecyclecontract.InstallContribution {
+	if plan == nil || plan.binding.StartingState.Status != systemchanges.NotInstalled || plan.binding.StartingState.Revision != 0 || plan.binding.StartingState.SHA256 != "" || plan.binding.DesiredStateRevision != 1 {
+		return lifecyclecontract.InstallContribution{}
+	}
+	return lifecyclecontract.InstallContribution{Name: "Subscription Publication", Owner: systemchanges.SubscriptionModule, Identity: plan.identity, SHA256: plan.sha256, StableSHA256: plan.binding.ManagedInputsSHA256, ChangeSet: plan.binding.ChangeSet, DesiredStateSHA256: plan.binding.DesiredStateSHA256, Steps: plan.Steps(), Checks: plan.Checks(), Details: []string{plan.String()}}
 }
 func (plan *Plan) Summary() PlanSummary {
 	if plan == nil {

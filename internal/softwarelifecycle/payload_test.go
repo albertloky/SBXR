@@ -23,6 +23,21 @@ func TestPayloadMetadataBindsTheUnmodifiedExecutableAndCompleteEmbeddedDocuments
 	}
 }
 
+func TestManagedUnitsBindOnlyToTheAuthenticatedVersionedRelease(t *testing.T) {
+	metadata := payloadMetadata()
+	metadata.Build.PayloadSHA256 = strings.Repeat("a", 64)
+	identity := softwarelifecycle.ReleaseIdentity{Repository: softwarelifecycle.Repository, Tag: metadata.Build.Tag, Commit: metadata.Build.Commit, IndexSHA256: strings.Repeat("b", 64)}
+	units, err := softwarelifecycle.RenderManagedUnits(metadata, identity)
+	directory := "/opt/sbxr/releases/" + identity.Tag + "-" + identity.Commit + "-" + identity.IndexSHA256
+	if err != nil || !bytes.Contains(units["xray.service"], []byte("ExecStart="+directory+"/xray ")) || bytes.Contains(units["xray.service"], []byte("/usr/bin/xray")) {
+		t.Fatalf("RenderManagedUnits() = %q, %v", units["xray.service"], err)
+	}
+	identity.IndexSHA256 = strings.Repeat("B", 64)
+	if _, err := softwarelifecycle.RenderManagedUnits(metadata, identity); err == nil {
+		t.Fatal("caller-selected release directory accepted")
+	}
+}
+
 func TestPayloadMetadataRejectsTamperingAmbiguityAndIncompleteReleaseMaterial(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -72,7 +87,7 @@ func payloadMetadata() softwarelifecycle.PayloadMetadata {
 	definitions, _ := state.ReleaseDefinitions()
 	units := map[string][]byte{}
 	commands := map[string]string{
-		"cloudflared.service": "/usr/bin/cloudflared tunnel --no-autoupdate run --token-file /etc/sbxr/cloudflared/token", "sbxr-cert-renew.service": "/usr/local/bin/sbxr private certificate-renewal", "sbxr-health-check.service": "/usr/local/bin/sbxr private health-check", "sbxr-subscription.service": "/usr/local/bin/sbxr __subscription-serve", "sbxr-update-check.service": "/usr/local/bin/sbxr private update-check", "sing-box.service": "/usr/bin/sing-box run -c /etc/sbxr/sing-box/config.json", "xray.service": "/usr/bin/xray run -config /etc/sbxr/xray/config.json",
+		"cloudflared.service": "@SBXR_RELEASE_DIR@/cloudflared tunnel --no-autoupdate run --token-file /etc/sbxr/cloudflared/token", "sbxr-cert-renew.service": "/usr/local/bin/sbxr private certificate-renewal", "sbxr-health-check.service": "/usr/local/bin/sbxr private health-check", "sbxr-subscription.service": "/usr/local/bin/sbxr __subscription-serve", "sbxr-update-check.service": "/usr/local/bin/sbxr private update-check", "sing-box.service": "@SBXR_RELEASE_DIR@/sing-box run -c /etc/sbxr/sing-box/config.json", "xray.service": "@SBXR_RELEASE_DIR@/xray run -config /etc/sbxr/xray/config.json",
 	}
 	for _, name := range softwarelifecycle.ManagedUnitNames() {
 		if strings.HasSuffix(name, ".timer") {

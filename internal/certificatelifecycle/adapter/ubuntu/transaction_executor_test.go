@@ -14,6 +14,15 @@ import (
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
 
+func TestTransactionExecutorUsesOnlyTheAuthenticatedVersionedCertbot(t *testing.T) {
+	want := "/opt/sbxr/releases/v1-commit-index/certbot/bin/certbot"
+	called := ""
+	executor := TransactionExecutor{certbot: want, run: func(_ context.Context, name string, _ ...string) error { called = name; return nil }}
+	if err := executor.command(t.Context(), "certbot", "--version"); err != nil || called != want {
+		t.Fatalf("versioned Certbot = %q, %v", called, err)
+	}
+}
+
 func TestIPOrderIsBoundedAndCleansIsolatedStaging(t *testing.T) {
 	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
 	root, roots := writeCandidate(t, now, "192.0.2.10", false)

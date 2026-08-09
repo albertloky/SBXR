@@ -45,6 +45,8 @@ type Component string
 const (
 	ApplicationAMD64 Component = "application-linux-amd64"
 	ApplicationARM64 Component = "application-linux-arm64"
+	ComponentsAMD64  Component = "components-linux-amd64"
+	ComponentsARM64  Component = "components-linux-arm64"
 )
 
 type RefusalCode string
@@ -93,7 +95,10 @@ type ViewResult struct {
 	AffectedComponents []Component
 	PermittedActions   []Action
 	Refusal            *Refusal
+	installCandidate   InstallCandidate
 }
+
+func (result ViewResult) InstallCandidate() InstallCandidate { return result.installCandidate }
 
 type DownloadedAsset struct {
 	Name  string
@@ -164,20 +169,22 @@ func (module Interface) View(ctx context.Context, request ViewRequest) ViewResul
 	}
 	result.VerifiedCandidate = &candidate
 	if request.Architecture != "" {
-		component := componentForArchitecture(request.Architecture)
-		asset, archive, ok := selectedArchive(candidate, archives, component)
-		if module.stager == nil || !ok {
+		applicationRole, componentsRole := componentsForArchitecture(request.Architecture)
+		asset, archive, ok := selectedArchive(candidate, archives, applicationRole)
+		componentAsset, componentArchive, componentOK := selectedArchive(candidate, archives, componentsRole)
+		if module.stager == nil || !ok || !componentOK {
 			return refuse(result)
 		}
-		stageRequest := newStageRequest(candidate, request.Architecture, asset, archive)
+		stageRequest := newStageRequest(candidate, request.Architecture, asset, archive, componentAsset, componentArchive)
 		staged, err := module.stager.Stage(ctx, stageRequest)
 		if err != nil || !validStagedRelease(staged, stageRequest) {
 			return refuse(result)
 		}
 		result.StagedCandidate = &staged
+		result.installCandidate = InstallCandidate{cell: &installCandidateCell{staged: staged, archive: append([]byte(nil), archive...), components: append([]byte(nil), componentArchive...)}}
 	}
 	result.MigrationSummary = migrationSummary(candidate)
-	result.AffectedComponents = []Component{ApplicationAMD64, ApplicationARM64}
+	result.AffectedComponents = []Component{ApplicationAMD64, ApplicationARM64, ComponentsAMD64, ComponentsARM64}
 	switch request.InstallationStatus {
 	case NotInstalled:
 		result.PermittedActions = []Action{ReviewInstall}
@@ -217,6 +224,7 @@ func validQualification(value VerifierQualification) bool {
 func refuse(result ViewResult) ViewResult {
 	result.VerifiedCandidate = nil
 	result.StagedCandidate = nil
+	result.installCandidate = InstallCandidate{}
 	result.MigrationSummary = ""
 	result.UpdateEligible = false
 	result.AffectedComponents = nil
@@ -271,7 +279,7 @@ func verify(evidence ReleaseEvidence, requestedTag string, qualification Verifie
 	if decoder.Decode(&index) != nil || decoder.Decode(&struct{}{}) != io.EOF {
 		return VerifiedRelease{}, nil, errors.New("index refused")
 	}
-	if index.Schema != 1 || index.Product != "sbxr" || index.Repository != Repository || !versionPattern.MatchString(index.Version) || index.Sequence == 0 || index.Tag != requestedTag || index.Commit != evidence.Commit || index.StateSchema == 0 || index.MinimumUpdaterSchema == 0 || len(index.Assets) != 2 {
+	if index.Schema != 1 || index.Product != "sbxr" || index.Repository != Repository || !versionPattern.MatchString(index.Version) || index.Sequence == 0 || index.Tag != requestedTag || index.Commit != evidence.Commit || index.StateSchema == 0 || index.MinimumUpdaterSchema == 0 || len(index.Assets) != 4 {
 		return VerifiedRelease{}, nil, errors.New("index identity refused")
 	}
 	downloads := make(map[string][]byte, len(evidence.Assets))
@@ -289,24 +297,32 @@ func verify(evidence ReleaseEvidence, requestedTag string, qualification Verifie
 		attested[asset.Name] = asset.SHA256
 	}
 	indexDigest := sha256.Sum256(evidence.Index)
-	if attested["release-index.json"] != hex.EncodeToString(indexDigest[:]) || !exactNames(evidence.Verifier.VerifiedAssets, attested) || len(attested) != 3 || len(downloads) != 2 {
+	if attested["release-index.json"] != hex.EncodeToString(indexDigest[:]) || !exactNames(evidence.Verifier.VerifiedAssets, attested) || len(attested) != 5 || len(downloads) != 4 {
 		return VerifiedRelease{}, nil, errors.New("asset set refused")
 	}
 	seenRoles := map[Component]bool{}
-	proofs := make([]AssetProof, 0, 2)
+	proofs := make([]AssetProof, 0, 4)
 	for _, asset := range index.Assets {
-		if asset.Role != ApplicationAMD64 && asset.Role != ApplicationARM64 || seenRoles[asset.Role] || !safeName(asset.Name) || asset.Name == "release-index.json" || asset.Size <= 0 || asset.Size > MaxAssetBytes || !hashPattern.MatchString(asset.SHA256) {
+		if asset.Role != ApplicationAMD64 && asset.Role != ApplicationARM64 && asset.Role != ComponentsAMD64 && asset.Role != ComponentsARM64 || seenRoles[asset.Role] || !safeName(asset.Name) || asset.Name == "release-index.json" || asset.Size <= 0 || asset.Size > MaxAssetBytes || !hashPattern.MatchString(asset.SHA256) {
 			return VerifiedRelease{}, nil, errors.New("indexed asset refused")
 		}
 		seenRoles[asset.Role] = true
 		body, ok := downloads[asset.Name]
 		digest := sha256.Sum256(body)
-		if !ok || !strings.HasSuffix(asset.Name, ".tar.gz") || int64(len(body)) != asset.Size || hex.EncodeToString(digest[:]) != asset.SHA256 || attested[asset.Name] != asset.SHA256 || !oneExecutableArchive(body) {
+		validArchive := oneExecutableArchive(body)
+		if asset.Role == ComponentsAMD64 {
+			_, validErr := ValidateComponentArchive(body, AMD64)
+			validArchive = validErr == nil
+		} else if asset.Role == ComponentsARM64 {
+			_, validErr := ValidateComponentArchive(body, ARM64)
+			validArchive = validErr == nil
+		}
+		if !ok || !strings.HasSuffix(asset.Name, ".tar.gz") || int64(len(body)) != asset.Size || hex.EncodeToString(digest[:]) != asset.SHA256 || attested[asset.Name] != asset.SHA256 || !validArchive {
 			return VerifiedRelease{}, nil, errors.New("asset disagreement")
 		}
 		proofs = append(proofs, AssetProof{Role: asset.Role, Name: asset.Name, Size: asset.Size, SHA256: asset.SHA256})
 	}
-	if !seenRoles[ApplicationAMD64] || !seenRoles[ApplicationARM64] {
+	if !seenRoles[ApplicationAMD64] || !seenRoles[ApplicationARM64] || !seenRoles[ComponentsAMD64] || !seenRoles[ComponentsARM64] {
 		return VerifiedRelease{}, nil, errors.New("role refused")
 	}
 	sort.Slice(proofs, func(i, j int) bool { return proofs[i].Role < proofs[j].Role })
@@ -317,14 +333,14 @@ func verify(evidence ReleaseEvidence, requestedTag string, qualification Verifie
 	}, downloads, nil
 }
 
-func componentForArchitecture(architecture Architecture) Component {
+func componentsForArchitecture(architecture Architecture) (Component, Component) {
 	switch architecture {
 	case AMD64:
-		return ApplicationAMD64
+		return ApplicationAMD64, ComponentsAMD64
 	case ARM64:
-		return ApplicationARM64
+		return ApplicationARM64, ComponentsARM64
 	default:
-		return ""
+		return "", ""
 	}
 }
 

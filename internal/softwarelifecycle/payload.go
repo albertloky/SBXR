@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"path"
 	"reflect"
 	"strings"
 )
@@ -70,6 +71,8 @@ type PayloadMaterial struct {
 	ArtifactSets     []map[string][]byte
 }
 
+const releaseDirectoryToken = "@SBXR_RELEASE_DIR@"
+
 // NewPayloadMetadata assembles the exact release-owned material supplied by
 // the composition root. The owning Module rejects missing or duplicate facts.
 func NewPayloadMetadata(identity EmbeddedBuildIdentity, architecture Architecture, material PayloadMaterial) (PayloadMetadata, error) {
@@ -79,7 +82,7 @@ func NewPayloadMetadata(identity EmbeddedBuildIdentity, architecture Architectur
 			if _, duplicate := units[name]; duplicate {
 				return PayloadMetadata{}, errors.New("duplicate managed unit")
 			}
-			units[name] = []byte(unit)
+			units[name] = []byte(bindUnitTemplate(unit))
 		}
 	}
 	artifacts := map[string][]byte{}
@@ -103,6 +106,30 @@ func NewPayloadMetadata(identity EmbeddedBuildIdentity, architecture Architectur
 	}
 	metadata.Build.PayloadSHA256 = ""
 	return metadata, nil
+}
+
+func bindUnitTemplate(unit string) string {
+	unit = strings.ReplaceAll(unit, "/usr/bin/xray", releaseDirectoryToken+"/xray")
+	unit = strings.ReplaceAll(unit, "/usr/bin/sing-box", releaseDirectoryToken+"/sing-box")
+	return strings.ReplaceAll(unit, "/usr/bin/cloudflared", releaseDirectoryToken+"/cloudflared")
+}
+
+// RenderManagedUnits binds the fixed embedded templates to the authenticated
+// release directory. No caller-selected path crosses this boundary.
+func RenderManagedUnits(metadata PayloadMetadata, identity ReleaseIdentity) (map[string][]byte, error) {
+	if !validPayloadMetadata(metadata) || identity.Repository != metadata.Build.Repository || identity.Tag != metadata.Build.Tag || identity.Commit != metadata.Build.Commit || !hashPattern.MatchString(identity.IndexSHA256) {
+		return nil, errors.New("managed unit release identity refused")
+	}
+	directory := path.Dir(ReleaseInstallPath(identity))
+	rendered := make(map[string][]byte, len(metadata.Units))
+	for name, template := range metadata.Units {
+		unit := bytes.ReplaceAll(template, []byte(releaseDirectoryToken), []byte(directory))
+		if bytes.Contains(unit, []byte(releaseDirectoryToken)) || bytes.Contains(unit, []byte("/usr/bin/xray")) || bytes.Contains(unit, []byte("/usr/bin/sing-box")) || bytes.Contains(unit, []byte("/usr/bin/cloudflared")) {
+			return nil, errors.New("managed unit path refused")
+		}
+		rendered[name] = unit
+	}
+	return rendered, nil
 }
 
 func ManagedUnitNames() []string {
@@ -227,13 +254,13 @@ func validPayloadMetadata(value PayloadMetadata) bool {
 }
 
 var managedServiceCommands = map[string]string{
-	"cloudflared.service":       "/usr/bin/cloudflared tunnel --no-autoupdate run --token-file /etc/sbxr/cloudflared/token",
+	"cloudflared.service":       releaseDirectoryToken + "/cloudflared tunnel --no-autoupdate run --token-file /etc/sbxr/cloudflared/token",
 	"sbxr-cert-renew.service":   "/usr/local/bin/sbxr private certificate-renewal",
 	"sbxr-health-check.service": "/usr/local/bin/sbxr private health-check",
 	"sbxr-subscription.service": "/usr/local/bin/sbxr __subscription-serve",
 	"sbxr-update-check.service": "/usr/local/bin/sbxr private update-check",
-	"sing-box.service":          "/usr/bin/sing-box run -c /etc/sbxr/sing-box/config.json",
-	"xray.service":              "/usr/bin/xray run -config /etc/sbxr/xray/config.json",
+	"sing-box.service":          releaseDirectoryToken + "/sing-box run -c /etc/sbxr/sing-box/config.json",
+	"xray.service":              releaseDirectoryToken + "/xray run -config /etc/sbxr/xray/config.json",
 }
 
 func validStateSchema(document []byte) bool {

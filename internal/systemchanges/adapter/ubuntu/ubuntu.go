@@ -23,6 +23,7 @@ type Adapter struct {
 	certificate  CertificateExecutor
 	profiles     ConnectionProfilesExecutor
 	subscription SubscriptionPublicationExecutor
+	software     SoftwareLifecycleExecutor
 	state        systemchanges.StateRecovery
 }
 
@@ -65,6 +66,12 @@ func NewAtWithCertificateAndConnectionProfiles(root string, source ObservationSo
 func NewAtWithSubscriptionPublication(root string, source ObservationSource, host Host, subscription SubscriptionPublicationExecutor, state ...systemchanges.StateRecovery) Adapter {
 	adapter := NewAt(root, source, host, state...)
 	adapter.subscription = subscription
+	return adapter
+}
+
+func NewAtWithSoftwareLifecycle(root string, source ObservationSource, host Host, software SoftwareLifecycleExecutor, state ...systemchanges.StateRecovery) Adapter {
+	adapter := NewAt(root, source, host, state...)
+	adapter.software = software
 	return adapter
 }
 

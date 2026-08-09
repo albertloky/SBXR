@@ -73,7 +73,7 @@ func (source Source) Verify(ctx context.Context, tag string) (softwarelifecycle.
 		return softwarelifecycle.ReleaseEvidence{}, errors.New("GitHub release verification failed")
 	}
 	repository, attestedTag, commit, attested, err := parseReleaseVerification(releaseOutput)
-	if err != nil || repository != softwarelifecycle.Repository || attestedTag != tag || len(attested) != 3 {
+	if err != nil || repository != softwarelifecycle.Repository || attestedTag != tag || len(attested) != 5 {
 		return softwarelifecycle.ReleaseEvidence{}, errors.New("GitHub release attestation refused")
 	}
 	sort.Slice(attested, func(i, j int) bool { return attested[i].Name < attested[j].Name })
@@ -86,8 +86,8 @@ func (source Source) Verify(ctx context.Context, tag string) (softwarelifecycle.
 		return softwarelifecycle.ReleaseEvidence{}, errors.New("release staging unavailable")
 	}
 	var index []byte
-	assets := make([]softwarelifecycle.DownloadedAsset, 0, 2)
-	verifiedNames := make([]string, 0, 3)
+	assets := make([]softwarelifecycle.DownloadedAsset, 0, 4)
+	verifiedNames := make([]string, 0, 5)
 	for _, asset := range attested {
 		if !safeAssetName(asset.Name) {
 			return softwarelifecycle.ReleaseEvidence{}, errors.New("attested release name refused")
