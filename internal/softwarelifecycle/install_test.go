@@ -179,14 +179,47 @@ func TestApplyInstallDeniesOrDiscardsApprovalWithoutLeakingSecrets(t *testing.T)
 	}
 }
 
+func TestInstallCandidateHandoffRebuildsOnlyTheExactReviewedBytes(t *testing.T) {
+	candidate := controlledInstallCandidate()
+	handoff, ok := candidate.InstallHandoff()
+	if !ok {
+		t.Fatal("verified candidate handoff unavailable")
+	}
+	stager := &handoffStager{staged: candidate.cell.staged}
+	rebuilt, err := RebuildInstallCandidate(t.Context(), handoff, stager)
+	if err != nil || !sameInstallCandidate(candidate, rebuilt) || stager.calls != 1 {
+		t.Fatalf("RebuildInstallCandidate() = (%+v, %v), calls=%d", rebuilt, err, stager.calls)
+	}
+	handoff.ApplicationArchive[0] ^= 1
+	if _, err := RebuildInstallCandidate(t.Context(), handoff, stager); err == nil {
+		t.Fatal("changed reviewed application bytes accepted")
+	}
+}
+
+type handoffStager struct {
+	staged StagedRelease
+	calls  int
+}
+
+func (stager *handoffStager) Stage(_ context.Context, request StageRequest) (StagedRelease, error) {
+	stager.calls++
+	if !request.Authenticated() {
+		return StagedRelease{}, errors.New("unauthenticated handoff")
+	}
+	return stager.staged, nil
+}
+
 func controlledInstallCandidate() InstallCandidate {
 	identity := ReleaseIdentity{Repository: Repository, Tag: "v1.0.0", Commit: "0123456789abcdef0123456789abcdef01234567", IndexSHA256: strings.Repeat("b", 64)}
 	files := componentFixtureFiles()
 	manifest, _ := NewComponentManifest(AMD64, "5.4.0", files)
 	components, _ := BuildComponentArchive(manifest, files)
 	componentDigest := sha256.Sum256(components)
+	application := []byte("authenticated archive")
+	applicationDigest := sha256.Sum256(application)
 	staged := StagedRelease{Identity: identity, Build: EmbeddedBuildIdentity{Repository: Repository, Tag: identity.Tag, Commit: identity.Commit, PayloadSHA256: strings.Repeat("c", 64)}, Architecture: AMD64, ExecutableSHA256: strings.Repeat("d", 64), ComponentsSHA256: hex.EncodeToString(componentDigest[:]), InstallPath: ReleaseInstallPath(identity), StateSchema: 2}
-	return InstallCandidate{cell: &installCandidateCell{staged: staged, archive: []byte("authenticated archive"), components: components}}
+	verified := VerifiedRelease{Identity: identity, Version: "1.0.0", Sequence: 1, StateSchema: 2, MinimumUpdaterSchema: 1, Assets: []AssetProof{{Role: ApplicationAMD64, Name: "sbxr-linux-amd64.tar.gz", Size: int64(len(application)), SHA256: hex.EncodeToString(applicationDigest[:])}, {Role: ComponentsAMD64, Name: "sbxr-components-linux-amd64.tar.gz", Size: int64(len(components)), SHA256: hex.EncodeToString(componentDigest[:])}}}
+	return InstallCandidate{cell: &installCandidateCell{verified: verified, staged: staged, archive: application, components: components}}
 }
 
 func controlledInstallContributions(t *testing.T, changeSet, desired string) []InstallContribution {

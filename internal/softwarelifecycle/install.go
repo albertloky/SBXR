@@ -268,8 +268,8 @@ type InstallRecheck struct {
 }
 
 type InstallApproval interface {
-	// AuthorizeAndRecheck uses the ordinary system sudo prompt and performs all
-	// privileged and volatile reads only after that approval.
+	// AuthorizeAndRecheck runs only inside the verified short-lived root child
+	// after the ordinary system sudo handoff.
 	AuthorizeAndRecheck(context.Context) (InstallRecheck, error)
 }
 
@@ -284,11 +284,11 @@ func (plan *InstallPlan) Apply(ctx context.Context, request InstallApplyRequest)
 		return installRefused("SOFTWARE-LIFECYCLE-INSTALL-PLAN-USED", "The reviewed install Plan was already consumed")
 	}
 	if request.Approval == nil || reflect.ValueOf(request.Approval).Kind() == reflect.Pointer && reflect.ValueOf(request.Approval).IsNil() {
-		return installRefused("SOFTWARE-LIFECYCLE-INSTALL-APPROVAL", "Ordinary system sudo approval is unavailable")
+		return installRefused("SOFTWARE-LIFECYCLE-INSTALL-APPROVAL", "The verified privileged install handoff is unavailable")
 	}
 	rechecked, err := request.Approval.AuthorizeAndRecheck(ctx)
 	if err != nil {
-		return installRefused("SOFTWARE-LIFECYCLE-INSTALL-APPROVAL", "Ordinary system sudo was denied, cancelled, or expired")
+		return installRefused("SOFTWARE-LIFECYCLE-INSTALL-APPROVAL", "The verified privileged install handoff was denied, cancelled, or expired")
 	}
 	freshSHA256, stableSHA256, contributionsMatch := sameInstallContributions(plan.proofs, rechecked.Contributions)
 	if !rechecked.PrivilegedNetworkHealthy || !sameInstallCandidate(plan.candidate, rechecked.Candidate) || !contributionsMatch || stableSHA256 != plan.volatileSHA256 {
@@ -317,7 +317,7 @@ func (plan *InstallPlan) Apply(ctx context.Context, request InstallApplyRequest)
 }
 
 func installRefused(code, problem string) systemchanges.ApplyResult {
-	return systemchanges.ApplyResult{Outcome: systemchanges.Refused, NothingChanged: true, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: systemchanges.EvidenceRules{SecretSafeOnly: true}, Finding: &systemchanges.Finding{Code: code, Owner: systemchanges.SoftwareModule, Problem: problem, Found: "the reviewed install authority is unavailable or changed", Required: "one fresh exact review followed by ordinary system sudo and a complete recheck", WhyStopped: "stale or incomplete approval cannot authorize host mutation", NextAction: "Return to review and create a fresh install Plan."}}
+	return systemchanges.ApplyResult{Outcome: systemchanges.Refused, NothingChanged: true, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: systemchanges.EvidenceRules{SecretSafeOnly: true}, Finding: &systemchanges.Finding{Code: code, Owner: systemchanges.SoftwareModule, Problem: problem, Found: "the reviewed install authority is unavailable or changed", Required: "one fresh exact review followed by the verified ordinary-sudo handoff and a complete root recheck", WhyStopped: "stale or incomplete approval cannot authorize host mutation", NextAction: "Return to review and create a fresh install Plan."}}
 }
 
 func sameInstallCandidate(left, right InstallCandidate) bool {

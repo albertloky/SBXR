@@ -91,11 +91,12 @@ Require a fresh private directory, exact archive size and digest, one safe root-
 Run:
 
 ```sh
-go test ./cmd/sbxr-release -run '^Test(BuildArchiveProducesOneQualifiedExecutableForBothArchitectures|VerifiedGitSourceBindsTheCleanExactCommit)$' -count=1
+go test ./cmd/sbxr-release -run '^Test(BuildCompleteReleaseWritesApplicationAndQualifiedComponentsTogether|BuildArchiveProducesOneQualifiedExecutableForBothArchitectures|VerifiedGitSourceBindsTheCleanExactCommit)$' -count=1
+go test ./internal/softwarelifecycle/adapter/ubuntu -run '^Test(RepositoryComponentSourceLockIsExact|AssembleReleaseComponentsUsesOnlyVerifiedSourceBytes)$' -count=1
 go test ./cmd/sbxr -run '^TestVersionReportsOnlyEmbeddedBuildFacts$' -count=1
 ```
 
-Require the production `cmd/sbxr-release` entry point to bind the requested commit to a clean tracked `HEAD`, export only that exact commit, and refuse mismatched or dirty source. Require pinned Go `1.26.5` and `CGO_ENABLED=0` to build exactly one stamped `sbxr` executable for each of `linux/amd64` and `linux/arm64`. Require each application archive to contain only that executable, with no native library dependency or language runtime. The matching production component-archive builder remains Pending until reviewed upstream distribution identities and pinned artifact provenance are canonical; an arbitrary local tree cannot satisfy this row. Require `sbxr version` and `sbxr version --json` to report only authenticated embedded repository, tag, commit, architecture, payload digest, and State schema; the executable must not invent or accept an index digest.
+Require the production `cmd/sbxr-release` entry point to bind the requested commit to a clean tracked `HEAD`, export only that exact commit, and refuse mismatched or dirty source. Require pinned Go `1.26.5` and `CGO_ENABLED=0` to build exactly one stamped `sbxr` executable for each of `linux/amd64` and `linux/arm64`. Require each application archive to contain only that executable, with no native library dependency or language runtime. Require the matching component archive to come only from the repository-owned reviewed source manifest, whose exact official source, version, architecture, filename, byte size, SHA-256, and URL facts fail closed on any change. Require the complete Certbot `5.4.0` Ubuntu 24.04 / CPython 3.12 wheel closure, safe extraction, exact native qualification, and transaction-like two-output publication. An arbitrary local component tree, URL, command, script, or package-manager resolution cannot satisfy this row. Require `sbxr version` and `sbxr version --json` to report only authenticated embedded repository, tag, commit, architecture, payload digest, and State schema; the executable must not invent or accept an index digest.
 
 ### SL-STAGE-04 — Exact native configuration and subscription validators
 
@@ -122,10 +123,10 @@ Require one exact staged Release Identity, revision `1`, owned files and ownersh
 Run:
 
 ```sh
-go test ./internal/softwarelifecycle/adapter/ubuntu -run '^Test(Approval|DraftStore)' -count=1
+go test ./internal/softwarelifecycle/adapter/ubuntu -run '^Test(Approval|DraftStore|InstallApply|InstallExecutable)' -count=1
 ```
 
-The draft portion currently requires the fixed Owner path, strict allowlisted fields, canonical JSON, an Owner-owned `0600` single-link regular file beneath an Owner-owned `0700` directory, atomic replacement, safe discard, and refusal of links, broad modes, unknown fields, malformed values, and outside-file replacement. Infrastructure Secrets and Client Access Values never enter the draft. The production approval portion remains Pending: it must replace `/usr/bin/sudo -v` with the approved inherited read-only executable descriptor, private Unix socket, verified peer/executable identity, bounded canonical typed envelope, independent Plan rebuild, and root recheck before Apply.
+Require the fixed Owner draft path, strict allowlisted fields, canonical JSON, an Owner-owned `0600` single-link regular file beneath an Owner-owned `0700` directory, atomic replacement, safe discard, and refusal of links, broad modes, unknown fields, malformed values, and outside-file replacement. Infrastructure Secrets and Client Access Values never enter the draft. Require the exact ordinary-sudo command `/usr/bin/sudo --preserve-fds=3 -- /proc/self/fd/3 private install-apply`, one already-open verified executable descriptor, one inherited Unix socket, root and peer/executable identity checks, one bounded strict typed JSON request, independent candidate restaging, prepare-before-`READY`, one final `APPLY`, and safe refusal of duplicate/unknown/malformed/oversized input, replay, EOF, wrong peer, changed executable or candidate, and parent death before mutation. Production composition of the complete owning-Module Plan and its command entry remains Pending; this row proves the private transport, not a completed Clean-VPS install.
 
 ### SL-INSTALL-03 — Exact software activation and partial rollback
 

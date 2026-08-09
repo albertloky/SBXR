@@ -18,6 +18,60 @@ import (
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 )
 
+func TestBuildCompleteReleaseWritesApplicationAndQualifiedComponentsTogether(t *testing.T) {
+	root := t.TempDir()
+	application := filepath.Join(root, "sbxr-linux-amd64.tar.gz")
+	components := filepath.Join(root, "sbxr-components-linux-amd64.tar.gz")
+	options := buildOptions{tag: "v1.0.0", commit: strings.Repeat("a", 40), architecture: softwarelifecycle.AMD64, output: application, componentOutput: components}
+	called := false
+	err := buildCompleteRelease(t.Context(), options, currentSource, func(_ context.Context, architecture softwarelifecycle.Architecture, metadata softwarelifecycle.PayloadMetadata) ([]byte, error) {
+		called = true
+		if architecture != softwarelifecycle.AMD64 || metadata.Build.Tag != "v1.0.0" {
+			return nil, io.ErrUnexpectedEOF
+		}
+		return []byte("qualified-components"), nil
+	})
+	if err != nil || !called {
+		t.Fatalf("buildCompleteRelease() = %v, called=%v", err, called)
+	}
+	if body, err := os.ReadFile(components); err != nil || string(body) != "qualified-components" {
+		t.Fatalf("component output = %q, %v", body, err)
+	}
+	if _, err := os.Stat(application); err != nil {
+		t.Fatal(err)
+	}
+
+	failedApplication := filepath.Join(root, "failed-application.tar.gz")
+	failedComponents := filepath.Join(root, "failed-components.tar.gz")
+	options.output, options.componentOutput = failedApplication, failedComponents
+	if err := buildCompleteRelease(t.Context(), options, currentSource, func(context.Context, softwarelifecycle.Architecture, softwarelifecycle.PayloadMetadata) ([]byte, error) {
+		return nil, io.ErrUnexpectedEOF
+	}); err == nil {
+		t.Fatal("component qualification failure accepted")
+	}
+	if _, err := os.Stat(failedApplication); !os.IsNotExist(err) {
+		t.Fatalf("partial application output remains: %v", err)
+	}
+
+	blockedApplication := filepath.Join(root, "blocked-application.tar.gz")
+	blockedComponents := filepath.Join(root, "blocked-components.tar.gz")
+	if err := os.WriteFile(blockedComponents, []byte("existing"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	options.output, options.componentOutput = blockedApplication, blockedComponents
+	if err := buildCompleteRelease(t.Context(), options, currentSource, func(context.Context, softwarelifecycle.Architecture, softwarelifecycle.PayloadMetadata) ([]byte, error) {
+		return []byte("qualified-components"), nil
+	}); err == nil {
+		t.Fatal("occupied component output accepted")
+	}
+	if _, err := os.Stat(blockedApplication); !os.IsNotExist(err) {
+		t.Fatalf("partial application output remains: %v", err)
+	}
+	if body, err := os.ReadFile(blockedComponents); err != nil || string(body) != "existing" {
+		t.Fatalf("existing component output changed: %q, %v", body, err)
+	}
+}
+
 type acceptingValidator struct{ calls int }
 
 func (validator *acceptingValidator) Validate(_ context.Context, metadata softwarelifecycle.PayloadMetadata) error {

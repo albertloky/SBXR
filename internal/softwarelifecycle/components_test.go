@@ -50,6 +50,22 @@ func TestComponentArchiveRefusesMalformedBaselineAndSource(t *testing.T) {
 	}
 }
 
+func TestComponentArchivePreservesZeroByteWheelMarkers(t *testing.T) {
+	files := componentFixtureFiles()
+	files["certbot/lib/python3.12/site-packages/certbot/py.typed"] = []byte{}
+	manifest, err := NewComponentManifest(AMD64, "5.4.0", files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive, err := BuildComponentArchive(manifest, files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ValidateComponentArchive(archive, AMD64); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func componentFixtureFiles() map[string][]byte {
 	return map[string][]byte{
 		"xray":                []byte("qualified xray"),

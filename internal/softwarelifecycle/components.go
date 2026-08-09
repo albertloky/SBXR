@@ -117,11 +117,11 @@ func validComponentManifest(manifest ComponentManifest, architecture Architectur
 			if file.Path != "certbot/bin/python3" || file.Target != "/usr/bin/python3" || file.Size != 0 || file.SHA256 != "" || file.Mode != 0o777 {
 				return false
 			}
-		} else if file.Type != "regular" || file.Target != "" || file.Size <= 0 || file.Size > MaxAssetBytes || !hashPattern.MatchString(file.SHA256) || file.Mode != 0o644 && file.Mode != 0o755 {
+		} else if file.Type != "regular" || file.Target != "" || file.Size < 0 || file.Size > MaxAssetBytes || !hashPattern.MatchString(file.SHA256) || file.Mode != 0o644 && file.Mode != 0o755 {
 			return false
 		}
 		if file.Path == "xray" || file.Path == "sing-box" || file.Path == "cloudflared" || file.Path == "certbot/bin/certbot" {
-			if file.Type != "regular" || file.Mode != 0o755 {
+			if file.Type != "regular" || file.Mode != 0o755 || file.Size == 0 {
 				return false
 			}
 		}

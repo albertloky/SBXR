@@ -32,75 +32,138 @@ type payloadValidator interface {
 }
 
 type sourceVerifier func(context.Context, string, string) (string, error)
+type componentBuilder func(context.Context, softwarelifecycle.Architecture, softwarelifecycle.PayloadMetadata) ([]byte, error)
 
 type buildOptions struct {
-	tag, commit, output string
-	architecture        softwarelifecycle.Architecture
+	tag, commit, output, componentOutput string
+	architecture                         softwarelifecycle.Architecture
 }
 
 func main() {
 	var options buildOptions
-	var certbot string
 	flag.StringVar(&options.tag, "tag", "", "immutable release tag")
 	flag.StringVar(&options.commit, "commit", "", "40-character commit SHA")
 	flag.StringVar(&options.output, "output", "", "output .tar.gz path")
-	flag.StringVar(&certbot, "certbot", "/snap/bin/certbot", "supported snap or proved pip-venv Certbot path")
+	flag.StringVar(&options.componentOutput, "component-output", "", "qualified component output .tar.gz path")
 	flag.Func("architecture", "amd64 or arm64", func(value string) error {
 		options.architecture = softwarelifecycle.Architecture(value)
 		return nil
 	})
 	flag.Parse()
-	validator, err := ubuntuadapter.NewNativeValidatorAt(nil, certbot)
-	if err != nil || buildArchive(context.Background(), options, validator, verifiedModuleSource) != nil {
+	if buildCompleteRelease(context.Background(), options, verifiedModuleSource, ubuntuadapter.BuildReleaseComponentArchive) != nil {
 		fmt.Fprintln(os.Stderr, "sbxr release build refused")
 		os.Exit(1)
 	}
 }
 
 func buildArchive(ctx context.Context, options buildOptions, validator payloadValidator, verifySource sourceVerifier) error {
-	if ctx == nil || validator == nil || verifySource == nil || runtime.Version() != "go1.26.5" || options.output == "" || options.architecture != softwarelifecycle.AMD64 && options.architecture != softwarelifecycle.ARM64 {
+	if validator == nil {
 		return errors.New("release build refused")
+	}
+	archive, metadata, err := buildApplicationArchive(ctx, options, verifySource)
+	if err != nil || validator.Validate(ctx, metadata) != nil {
+		return errors.New("release qualification refused")
+	}
+	return writeExclusive(options.output, archive)
+}
+
+func buildCompleteRelease(ctx context.Context, options buildOptions, verifySource sourceVerifier, buildComponents componentBuilder) error {
+	if options.componentOutput == "" || options.componentOutput == options.output || buildComponents == nil {
+		return errors.New("complete release build refused")
+	}
+	application, metadata, err := buildApplicationArchive(ctx, options, verifySource)
+	if err != nil {
+		return err
+	}
+	components, err := buildComponents(ctx, options.architecture, metadata)
+	if err != nil || len(components) == 0 || len(components) > softwarelifecycle.MaxAssetBytes {
+		return errors.New("component release qualification refused")
+	}
+	return writePairExclusive(options.output, application, options.componentOutput, components)
+}
+
+func buildApplicationArchive(ctx context.Context, options buildOptions, verifySource sourceVerifier) ([]byte, softwarelifecycle.PayloadMetadata, error) {
+	if ctx == nil || verifySource == nil || runtime.Version() != "go1.26.5" || options.output == "" || options.architecture != softwarelifecycle.AMD64 && options.architecture != softwarelifecycle.ARM64 {
+		return nil, softwarelifecycle.PayloadMetadata{}, errors.New("release build refused")
 	}
 	directory, err := os.MkdirTemp("", "sbxr-release-build-")
 	if err != nil {
-		return err
+		return nil, softwarelifecycle.PayloadMetadata{}, err
 	}
 	defer os.RemoveAll(directory)
 	executablePath := directory + "/sbxr"
 	sourceRoot, err := verifySource(ctx, options.commit, filepath.Join(directory, "source"))
 	if err != nil {
-		return errors.New("release source refused")
+		return nil, softwarelifecycle.PayloadMetadata{}, errors.New("release source refused")
 	}
 	command := exec.CommandContext(ctx, "go", "build", "-trimpath", "-o", executablePath, "./cmd/sbxr")
 	command.Dir = sourceRoot
 	command.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH="+string(options.architecture))
 	if output, err := command.CombinedOutput(); err != nil || len(output) != 0 {
-		return errors.New("release executable build refused")
+		return nil, softwarelifecycle.PayloadMetadata{}, errors.New("release executable build refused")
 	}
 	executable, err := os.ReadFile(executablePath)
 	if err != nil {
-		return err
+		return nil, softwarelifecycle.PayloadMetadata{}, err
 	}
 	metadata, err := releaseMetadata(softwarelifecycle.EmbeddedBuildIdentity{Repository: softwarelifecycle.Repository, Tag: options.tag, Commit: options.commit}, options.architecture)
-	if err != nil || validator.Validate(ctx, metadata) != nil {
-		return errors.New("release qualification refused")
+	if err != nil {
+		return nil, softwarelifecycle.PayloadMetadata{}, errors.New("release qualification refused")
 	}
 	stamped, err := softwarelifecycle.StampPayload(executable, metadata)
 	if err != nil {
-		return err
+		return nil, softwarelifecycle.PayloadMetadata{}, err
 	}
 	archive, err := oneFileArchive(stamped)
 	if err != nil || len(archive) > softwarelifecycle.MaxAssetBytes {
-		return errors.New("release archive refused")
+		return nil, softwarelifecycle.PayloadMetadata{}, errors.New("release archive refused")
 	}
-	output, err := os.OpenFile(options.output, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	return archive, metadata, nil
+}
+
+func writeExclusive(name string, body []byte) error {
+	output, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return errors.New("release output refused")
 	}
-	_, writeErr := output.Write(archive)
+	_, writeErr := output.Write(body)
 	closeErr := output.Close()
 	if writeErr != nil || closeErr != nil {
-		_ = os.Remove(options.output)
+		_ = os.Remove(name)
+		return errors.New("release output unavailable")
+	}
+	return nil
+}
+
+func writePairExclusive(firstName string, firstBody []byte, secondName string, secondBody []byte) error {
+	first, err := os.OpenFile(firstName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return errors.New("release output refused")
+	}
+	second, err := os.OpenFile(secondName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		_ = first.Close()
+		_ = os.Remove(firstName)
+		return errors.New("release output refused")
+	}
+	failed := false
+	for _, output := range []struct {
+		file *os.File
+		body []byte
+	}{{first, firstBody}, {second, secondBody}} {
+		written, writeErr := output.file.Write(output.body)
+		syncErr := output.file.Sync()
+		if writeErr != nil || written != len(output.body) || syncErr != nil {
+			failed = true
+		}
+	}
+	firstCloseErr, secondCloseErr := first.Close(), second.Close()
+	if firstCloseErr != nil || secondCloseErr != nil {
+		failed = true
+	}
+	if failed {
+		_ = os.Remove(firstName)
+		_ = os.Remove(secondName)
 		return errors.New("release output unavailable")
 	}
 	return nil

@@ -29,8 +29,9 @@ import (
 type NativeRunner func(context.Context, string, []string, int64) ([]byte, error)
 
 type NativeValidator struct {
-	run     NativeRunner
-	certbot string
+	run                        NativeRunner
+	xray, singBox, cloudflared string
+	certbot, mihomo            string
 }
 
 func NewNativeValidator(runner NativeRunner) NativeValidator {
@@ -45,7 +46,18 @@ func NewNativeValidatorAt(runner NativeRunner, certbot string) (NativeValidator,
 	if !supportedCertbotPath(certbot) {
 		return NativeValidator{}, errors.New("unsupported Certbot distribution")
 	}
-	return NativeValidator{run: runner, certbot: certbot}, nil
+	return NativeValidator{run: runner, xray: "/usr/bin/xray", singBox: "/usr/bin/sing-box", cloudflared: "/usr/bin/cloudflared", certbot: certbot, mihomo: "/usr/bin/mihomo"}, nil
+}
+
+func newNativeValidatorForComponents(runner NativeRunner, root string) NativeValidator {
+	if runner == nil {
+		runner = runNative
+	}
+	return NativeValidator{
+		run:  runner,
+		xray: filepath.Join(root, "xray"), singBox: filepath.Join(root, "sing-box"), cloudflared: filepath.Join(root, "cloudflared"),
+		certbot: filepath.Join(root, "certbot/bin/certbot"), mihomo: "/usr/bin/mihomo",
+	}
 }
 
 func (validator NativeValidator) Validate(ctx context.Context, metadata softwarelifecycle.PayloadMetadata) error {
@@ -86,19 +98,19 @@ func (validator NativeValidator) Validate(ctx context.Context, metadata software
 		args []string
 		ok   func(string) bool
 	}{
-		{"/usr/bin/xray", []string{"version"}, func(value string) bool { return versionFields(value, "Xray", "26.3.27") }},
-		{"/usr/bin/xray", []string{"run", "-test", "-config", paths["xray.json"]}, emptySuccess},
-		{"/usr/bin/sing-box", []string{"version"}, func(value string) bool { return versionFields(value, "sing-box", "version", "1.13.16") }},
-		{"/usr/bin/sing-box", []string{"check", "-c", paths["sing-box.json"]}, emptySuccess},
-		{"/usr/bin/sing-box", []string{"check", "-c", paths["subscription-sing-box.json"]}, emptySuccess},
-		{"/usr/bin/cloudflared", []string{"--version"}, func(value string) bool { return strings.HasPrefix(value, "cloudflared version 2026.7.3 ") }},
-		{"/usr/bin/cloudflared", []string{"--config", paths["cloudflared.yml"], "tunnel", "ingress", "validate"}, emptySuccess},
+		{validator.xray, []string{"version"}, func(value string) bool { return versionFields(value, "Xray", "26.3.27") }},
+		{validator.xray, []string{"run", "-test", "-config", paths["xray.json"]}, emptySuccess},
+		{validator.singBox, []string{"version"}, func(value string) bool { return versionFields(value, "sing-box", "version", "1.13.16") }},
+		{validator.singBox, []string{"check", "-c", paths["sing-box.json"]}, emptySuccess},
+		{validator.singBox, []string{"check", "-c", paths["subscription-sing-box.json"]}, emptySuccess},
+		{validator.cloudflared, []string{"--version"}, func(value string) bool { return strings.HasPrefix(value, "cloudflared version 2026.7.3 ") }},
+		{validator.cloudflared, []string{"--config", paths["cloudflared.yml"], "tunnel", "ingress", "validate"}, emptySuccess},
 		{validator.certbot, []string{"--version"}, certbotAtLeast54},
 		{validator.certbot, []string{"certonly", "--help", "all"}, func(value string) bool {
 			return strings.Contains(value, "--required-profile") && strings.Contains(value, "--ip-address") && strings.Contains(value, "--staging")
 		}},
-		{"/usr/bin/mihomo", []string{"-v"}, func(value string) bool { return versionFields(value, "Mihomo", "Meta", "v1.19.29") }},
-		{"/usr/bin/mihomo", []string{"-t", "-f", paths["subscription-mihomo.yaml"]}, emptySuccess},
+		{validator.mihomo, []string{"-v"}, func(value string) bool { return versionFields(value, "Mihomo", "Meta", "v1.19.29") }},
+		{validator.mihomo, []string{"-t", "-f", paths["subscription-mihomo.yaml"]}, emptySuccess},
 	}
 	for _, check := range checks {
 		output, err := validator.run(ctx, check.name, check.args, 1<<20)
