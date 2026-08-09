@@ -10,6 +10,7 @@ import (
 	"io"
 	"path"
 	"reflect"
+	"strconv"
 	"strings"
 )
 
@@ -215,10 +216,10 @@ func ReadPayloadMetadata(input io.ReaderAt, size int64) (PayloadMetadata, []byte
 }
 
 func validPayloadMetadata(value PayloadMetadata) bool {
-	if value.Schema != payloadMetadataSchema || value.Build.Repository != Repository || !safeTag(value.Build.Tag) || !commitPattern.MatchString(value.Build.Commit) || !hashPattern.MatchString(value.Build.PayloadSHA256) || value.Architecture != AMD64 && value.Architecture != ARM64 || value.StateSchema != 1 || value.MinimumUpdaterSchema != 1 || !reflect.DeepEqual(value.Baselines, QualifiedComponentBaselines()) || !reflect.DeepEqual(value.Paths, QualifiedPaths()) {
+	if value.Schema != payloadMetadataSchema || value.Build.Repository != Repository || !safeTag(value.Build.Tag) || !commitPattern.MatchString(value.Build.Commit) || !hashPattern.MatchString(value.Build.PayloadSHA256) || value.Architecture != AMD64 && value.Architecture != ARM64 || value.StateSchema == 0 || value.StateSchema > 64 || value.MinimumUpdaterSchema != 1 || !reflect.DeepEqual(value.Baselines, QualifiedComponentBaselines()) || !reflect.DeepEqual(value.Paths, QualifiedPaths()) {
 		return false
 	}
-	if len(value.Schemas) != 1 || !validStateSchema(value.Schemas["desired-state-v1.schema.json"]) || len(value.Migrations) != 0 {
+	if !validEmbeddedStateMaterial(value) {
 		return false
 	}
 	if !exactDocumentNames(value.Units, ManagedUnitNames()) || !exactDocumentNames(value.Artifacts, QualificationArtifactNames()) || !json.Valid(value.Artifacts["xray.json"]) || !json.Valid(value.Artifacts["sing-box.json"]) || !json.Valid(value.Artifacts["subscription-karing.json"]) || !json.Valid(value.Artifacts["subscription-sing-box.json"]) {
@@ -247,6 +248,41 @@ func validPayloadMetadata(value PayloadMetadata) bool {
 				return false
 			}
 		} else if strings.Count(unit, "ExecStart="+managedServiceCommands[name]) != 1 || strings.Count(unit, "ExecStart=") != 1 {
+			return false
+		}
+	}
+	return true
+}
+
+func validEmbeddedStateMaterial(value PayloadMetadata) bool {
+	if len(value.Schemas) != int(value.StateSchema) || len(value.Migrations) != int(value.StateSchema-1) {
+		return false
+	}
+	for schema := uint64(1); schema <= value.StateSchema; schema++ {
+		name := "desired-state-v" + strconv.FormatUint(schema, 10) + ".schema.json"
+		document := value.Schemas[name]
+		if len(document) == 0 || len(document) > MaxIndexBytes || ValidateUniqueJSON(document) != nil || !json.Valid(document) || schema == 1 && !validStateSchema(document) {
+			return false
+		}
+	}
+	for index, migration := range value.Migrations {
+		from := uint64(index + 1)
+		if migration.From != from || migration.To != from+1 || migration.NetworkAccess || !safeName(migration.Name) || len(migration.Document) == 0 || len(migration.Document) > MaxIndexBytes || ValidateUniqueJSON(migration.Document) != nil {
+			return false
+		}
+		var contract struct {
+			Schema     int               `json:"schema"`
+			From       uint64            `json:"from"`
+			To         uint64            `json:"to"`
+			Operations []json.RawMessage `json:"operations"`
+		}
+		decoder := json.NewDecoder(bytes.NewReader(migration.Document))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&contract) != nil || decoder.Decode(&struct{}{}) != io.EOF || contract.Schema != 1 || contract.From != migration.From || contract.To != migration.To || len(contract.Operations) == 0 {
+			return false
+		}
+		canonical, _ := json.Marshal(contract)
+		if !bytes.Equal(canonical, migration.Document) {
 			return false
 		}
 	}

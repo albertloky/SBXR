@@ -1,6 +1,6 @@
 # Software Lifecycle acceptance
 
-This procedure defines stable checks for issues #125, #126, and #127. It contains no run results, raw GitHub verifier output, Client Access Values, Infrastructure Secrets, or Owner-managed configuration.
+This procedure defines stable checks for issues #125, #126, #127, and #128. It contains no run results, raw GitHub verifier output, Client Access Values, Infrastructure Secrets, or Owner-managed configuration.
 
 ## Module Verification
 
@@ -156,5 +156,38 @@ go test . -run '^Test(RepositoryDependencies|SoftwareLifecycleVerificationBounda
 ```
 
 Require Software Lifecycle to depend only on the approved Network Policy and System Changes coordination seams. Every other owning Module contributes through the typed `systemchanges.InstallContribution`; no eleven-value positional handoff, product-module cycle, generic plugin framework, or caller-authored step bypass is accepted.
+
+### SL-UPDATE-01 — Stable channel and explicit alternate
+
+Run:
+
+```sh
+go test ./internal/softwarelifecycle -run '^TestViewDiscovery(HonorsStableAndReviewedAlternateChannels|RejectsSameOlderAndIncompatibleReleases|AcceptsACompleteForwardStateMigrationPath)$' -count=1
+go test ./internal/softwarelifecycle -run '^TestPayloadMetadataAcceptsOnlyCompleteSequentialNoNetworkMigrationMaterial$' -count=1
+go test ./internal/softwarelifecycle/adapter/github -run '^TestSourceDiscover' -count=1
+```
+
+Require the default GitHub request to select only the current stable release, ignore drafts and unintended prereleases before asset verification, and never cross to another tag. One explicitly reviewed alternate may select only that exact safe tag. Require duplicate keys, unknown fields, trailing documents, unsafe tags, and raw command failures to return no listing. Require same Release Identity, automatic downgrade, non-higher sequence, newer updater schema, and a changed State schema without the complete embedded forward path to expose no candidate or action. Require an authenticated higher sequence with the installed schema or a complete sequential deterministic no-network forward path embedded identically in both application archives to expose only `Review update`.
+
+### SL-UPDATE-02 — One newest verified unapplied candidate
+
+Run:
+
+```sh
+go test ./internal/softwarelifecycle -run '^TestView(DiscoversVerifiesAndRetainsOneHigherStableCandidate|DiscoveryReplacesOnlyWithNewerAndSurvivesRestart|ReportsTheOneDiskRetainedCandidateAfterRestart|RefusesTamperedRetainedEvidenceWithoutLeakingIt)$' -count=1
+go test ./internal/softwarelifecycle/adapter/ubuntu -run '^TestCandidateStore' -count=1
+```
+
+Require one higher compatible release to be reverified through `View`, retained once, and exposed only as `Review update`. A directory lock makes compare-and-replace monotonic across overlapping checks: a newer candidate atomically replaces the older candidate and an older discovery cannot replace it. Restart and temporary-write interruption retain only the current candidate. Require one root-owned `0600` regular single-link tar beneath a root-owned `0700` directory, a non-linked correctly owned non-writable parent chain, an exact whole-file bound and ending, strict bounded entries, safe names, canonical metadata, refusal of links/broad modes/trailing bytes/tampering, and no history files.
+
+### SL-UPDATE-03 — Timer remains review-only
+
+Run:
+
+```sh
+go test ./cmd/sbxr -run '^TestScheduledUpdateCheckInvokesOnlyStableSoftwareLifecycleView$' -count=1
+```
+
+Require the scheduled seam to call only `Software Lifecycle.View` with Managed installed proof and stable discovery. It must not request architecture staging, Apply, approval, State publication, migrations, binary replacement, service restart, configuration change, or any product mutation. Production `private update-check` wiring and a real Clean-VPS timer run remain Pending on issue #127's installed verified completion receipt and complete production four-asset release.
 
 External valid-release success, Integrated Verification, Codex Live Acceptance, Owner Acceptance, and Release Qualification remain Pending. These automated checks do not claim any of those later stages.

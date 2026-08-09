@@ -76,6 +76,47 @@ func TestSourceUsesExactGitHubReleaseAndPerAssetVerificationContracts(t *testing
 	}
 }
 
+func TestSourceDiscoversOnlyTheRequestedGitHubReleaseChannel(t *testing.T) {
+	tests := []struct {
+		name, reviewedTag string
+		wantArguments     []string
+		output            string
+		want              softwarelifecycle.ReleaseListing
+	}{
+		{name: "stable default", wantArguments: []string{"release", "view", "--repo", softwarelifecycle.Repository, "--json", "tagName,isDraft,isPrerelease"}, output: `{"tagName":"v1.1.0","isDraft":false,"isPrerelease":false}`, want: softwarelifecycle.ReleaseListing{Tag: "v1.1.0"}},
+		{name: "reviewed alternate", reviewedTag: "v1.2.0-rc.1", wantArguments: []string{"release", "view", "v1.2.0-rc.1", "--repo", softwarelifecycle.Repository, "--json", "tagName,isDraft,isPrerelease"}, output: `{"tagName":"v1.2.0-rc.1","isDraft":false,"isPrerelease":true}`, want: softwarelifecycle.ReleaseListing{Tag: "v1.2.0-rc.1", Prerelease: true}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var gotName string
+			var gotArguments []string
+			source := githubadapter.NewWithRunner(func(_ context.Context, name string, arguments []string, _ int64) ([]byte, error) {
+				gotName, gotArguments = name, append([]string(nil), arguments...)
+				return []byte(test.output), nil
+			})
+
+			got, err := source.Discover(t.Context(), test.reviewedTag)
+			if err != nil || !reflect.DeepEqual(got, test.want) || gotName != "/usr/bin/gh" || !reflect.DeepEqual(gotArguments, test.wantArguments) {
+				t.Fatalf("Discover() = %#v, %v; command=%s %v", got, err, gotName, gotArguments)
+			}
+		})
+	}
+}
+
+func TestSourceDiscoveryFailsClosedOnAmbiguousOrUnsafeOutput(t *testing.T) {
+	for _, output := range []string{
+		`{"tagName":"v1.1.0","tagName":"v1.2.0","isDraft":false,"isPrerelease":false}`,
+		`{"tagName":"../latest","isDraft":false,"isPrerelease":false}`,
+		`{"tagName":"v1.1.0","isDraft":false,"isPrerelease":false,"extra":true}`,
+		`{"tagName":"v1.1.0","isDraft":false,"isPrerelease":false} {}`,
+	} {
+		source := githubadapter.NewWithRunner(func(context.Context, string, []string, int64) ([]byte, error) { return []byte(output), nil })
+		if got, err := source.Discover(t.Context(), ""); err == nil || got.Tag != "" {
+			t.Fatalf("Discover(%q) = %#v, %v", output, got, err)
+		}
+	}
+}
+
 func TestSourceFailsClosedOnDistributionVerifierDownloadAssetOrAttestationFailure(t *testing.T) {
 	const secretMarker = "PRIVATE-MARKER-E5932C"
 	tests := []struct {

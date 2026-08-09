@@ -83,6 +83,34 @@ func TestPayloadMetadataRejectsTamperingAmbiguityAndIncompleteReleaseMaterial(t 
 	}
 }
 
+func TestPayloadMetadataAcceptsOnlyCompleteSequentialNoNetworkMigrationMaterial(t *testing.T) {
+	valid := payloadMetadata()
+	valid.StateSchema = 2
+	valid.Schemas["desired-state-v2.schema.json"] = []byte(`{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"SBXR Desired State v2","type":"object"}`)
+	valid.Migrations = []softwarelifecycle.EmbeddedMigration{{Name: "state-v1-to-v2.json", From: 1, To: 2, Document: []byte(`{"schema":1,"from":1,"to":2,"operations":[{"op":"replace","path":"/schema_version","value":2}]}`)}}
+	if _, err := softwarelifecycle.StampPayload([]byte("executable"), valid); err != nil {
+		t.Fatalf("complete forward migration refused: %v", err)
+	}
+	for _, change := range []func(*softwarelifecycle.PayloadMetadata){
+		func(value *softwarelifecycle.PayloadMetadata) { value.Migrations = nil },
+		func(value *softwarelifecycle.PayloadMetadata) { value.Migrations[0].From = 0 },
+		func(value *softwarelifecycle.PayloadMetadata) { value.Migrations[0].To = 3 },
+		func(value *softwarelifecycle.PayloadMetadata) { value.Migrations[0].NetworkAccess = true },
+		func(value *softwarelifecycle.PayloadMetadata) { value.Migrations[0].Document = []byte(`{}`) },
+	} {
+		candidate := valid
+		candidate.Schemas = map[string][]byte{}
+		for name, document := range valid.Schemas {
+			candidate.Schemas[name] = append([]byte(nil), document...)
+		}
+		candidate.Migrations = append([]softwarelifecycle.EmbeddedMigration(nil), valid.Migrations...)
+		change(&candidate)
+		if _, err := softwarelifecycle.StampPayload([]byte("executable"), candidate); err == nil {
+			t.Fatalf("invalid migration accepted: %#v", candidate.Migrations)
+		}
+	}
+}
+
 func payloadMetadata() softwarelifecycle.PayloadMetadata {
 	definitions, _ := state.ReleaseDefinitions()
 	units := map[string][]byte{}

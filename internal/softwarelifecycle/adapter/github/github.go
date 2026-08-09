@@ -2,6 +2,7 @@
 package github
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -59,6 +60,32 @@ func New() Source {
 // NewWithRunner replaces only the external command boundary for Seam Verification.
 func NewWithRunner(runner CommandRunner) Source {
 	return Source{run: runner}
+}
+
+func (source Source) Discover(ctx context.Context, reviewedTag string) (softwarelifecycle.ReleaseListing, error) {
+	if source.run == nil || reviewedTag != "" && !safeTag(reviewedTag) {
+		return softwarelifecycle.ReleaseListing{}, errors.New("GitHub release discovery unavailable")
+	}
+	arguments := []string{"release", "view"}
+	if reviewedTag != "" {
+		arguments = append(arguments, reviewedTag)
+	}
+	arguments = append(arguments, "--repo", softwarelifecycle.Repository, "--json", "tagName,isDraft,isPrerelease")
+	body, err := source.run(ctx, "/usr/bin/gh", arguments, 16<<10)
+	if err != nil || len(body) == 0 || len(body) > 16<<10 || softwarelifecycle.ValidateUniqueJSON(body) != nil {
+		return softwarelifecycle.ReleaseListing{}, errors.New("GitHub release discovery failed")
+	}
+	var output struct {
+		Tag        string `json:"tagName"`
+		Draft      bool   `json:"isDraft"`
+		Prerelease bool   `json:"isPrerelease"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&output) != nil || decoder.Decode(&struct{}{}) != io.EOF || !safeTag(output.Tag) {
+		return softwarelifecycle.ReleaseListing{}, errors.New("GitHub release discovery refused")
+	}
+	return softwarelifecycle.ReleaseListing{Tag: output.Tag, Draft: output.Draft, Prerelease: output.Prerelease}, nil
 }
 
 func (source Source) Verify(ctx context.Context, tag string) (softwarelifecycle.ReleaseEvidence, error) {

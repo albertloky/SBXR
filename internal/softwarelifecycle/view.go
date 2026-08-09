@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -71,6 +72,7 @@ type VerifiedRelease struct {
 	StateSchema, MinimumUpdaterSchema uint64
 	VerifiedAt                        time.Time
 	Assets                            []AssetProof
+	Migrations                        []EmbeddedMigration
 }
 
 type Refusal struct {
@@ -83,6 +85,7 @@ type ViewRequest struct {
 	Architecture       Architecture
 	InstallationStatus InstallationStatus
 	Installed          *VerifiedRelease
+	UpdateDiscovery    *UpdateDiscovery
 }
 
 type ViewResult struct {
@@ -134,9 +137,18 @@ type VerifierQualification struct {
 
 type Interface struct {
 	source        ReleaseSource
+	discovery     ReleaseDiscovery
+	candidates    CandidateStore
 	stager        ReleaseStager
 	qualification VerifierQualification
 	now           func() time.Time
+}
+
+func NewWithCandidateRetention(source ReleaseSource, qualification VerifierQualification, now func() time.Time, candidates CandidateStore, stager ...ReleaseStager) Interface {
+	module := New(source, qualification, now, stager...)
+	module.discovery, _ = source.(ReleaseDiscovery)
+	module.candidates = candidates
+	return module
 }
 
 func New(source ReleaseSource, qualification VerifierQualification, now func() time.Time, stager ...ReleaseStager) Interface {
@@ -158,6 +170,9 @@ func (module Interface) View(ctx context.Context, request ViewRequest) ViewResul
 	}
 	if module.source == nil || !validRequest(request) || !validQualification(module.qualification) {
 		return refuse(result)
+	}
+	if request.UpdateDiscovery != nil {
+		return module.discoverUpdate(ctx, request, result)
 	}
 	evidence, err := module.source.Verify(ctx, request.Tag)
 	if err != nil {
@@ -198,6 +213,9 @@ func (module Interface) View(ctx context.Context, request ViewRequest) ViewResul
 }
 
 func validRequest(request ViewRequest) bool {
+	if request.UpdateDiscovery != nil {
+		return request.Tag == "" && request.Architecture == "" && request.InstallationStatus == Managed && request.Installed != nil && validInstalled(*request.Installed) && request.Installed.StateSchema > 0 && request.UpdateDiscovery.valid()
+	}
 	if !safeTag(request.Tag) {
 		return false
 	}
@@ -302,6 +320,8 @@ func verify(evidence ReleaseEvidence, requestedTag string, qualification Verifie
 	}
 	seenRoles := map[Component]bool{}
 	proofs := make([]AssetProof, 0, 4)
+	var migrations []EmbeddedMigration
+	migrationProofs := 0
 	for _, asset := range index.Assets {
 		if asset.Role != ApplicationAMD64 && asset.Role != ApplicationARM64 && asset.Role != ComponentsAMD64 && asset.Role != ComponentsARM64 || seenRoles[asset.Role] || !safeName(asset.Name) || asset.Name == "release-index.json" || asset.Size <= 0 || asset.Size > MaxAssetBytes || !hashPattern.MatchString(asset.SHA256) {
 			return VerifiedRelease{}, nil, errors.New("indexed asset refused")
@@ -310,6 +330,23 @@ func verify(evidence ReleaseEvidence, requestedTag string, qualification Verifie
 		body, ok := downloads[asset.Name]
 		digest := sha256.Sum256(body)
 		validArchive := oneExecutableArchive(body)
+		if validArchive && index.StateSchema > 1 && (asset.Role == ApplicationAMD64 || asset.Role == ApplicationARM64) {
+			executable, ok := executableArchiveBytes(body)
+			metadata, _, metadataErr := ReadPayloadMetadata(bytes.NewReader(executable), int64(len(executable)))
+			architecture := AMD64
+			if asset.Role == ApplicationARM64 {
+				architecture = ARM64
+			}
+			validArchive = ok && metadataErr == nil && metadata.Build.Repository == Repository && metadata.Build.Tag == requestedTag && metadata.Build.Commit == evidence.Commit && metadata.Architecture == architecture && metadata.StateSchema == index.StateSchema && metadata.MinimumUpdaterSchema == index.MinimumUpdaterSchema
+			if validArchive {
+				if migrationProofs == 0 {
+					migrations = cloneMigrations(metadata.Migrations)
+				} else {
+					validArchive = reflect.DeepEqual(migrations, metadata.Migrations)
+				}
+				migrationProofs++
+			}
+		}
 		if asset.Role == ComponentsAMD64 {
 			_, validErr := ValidateComponentArchive(body, AMD64)
 			validArchive = validErr == nil
@@ -325,11 +362,14 @@ func verify(evidence ReleaseEvidence, requestedTag string, qualification Verifie
 	if !seenRoles[ApplicationAMD64] || !seenRoles[ApplicationARM64] || !seenRoles[ComponentsAMD64] || !seenRoles[ComponentsARM64] {
 		return VerifiedRelease{}, nil, errors.New("role refused")
 	}
+	if index.StateSchema > 1 && migrationProofs != 2 {
+		return VerifiedRelease{}, nil, errors.New("migration path refused")
+	}
 	sort.Slice(proofs, func(i, j int) bool { return proofs[i].Role < proofs[j].Role })
 	return VerifiedRelease{
 		Identity: ReleaseIdentity{Repository: Repository, Tag: requestedTag, Commit: evidence.Commit, IndexSHA256: hex.EncodeToString(indexDigest[:])},
 		Version:  index.Version, Sequence: index.Sequence, StateSchema: index.StateSchema, MinimumUpdaterSchema: index.MinimumUpdaterSchema,
-		VerifiedAt: at, Assets: proofs,
+		VerifiedAt: at, Assets: proofs, Migrations: migrations,
 	}, downloads, nil
 }
 
@@ -355,25 +395,34 @@ func selectedArchive(release VerifiedRelease, archives map[string][]byte, compon
 }
 
 func oneExecutableArchive(body []byte) bool {
+	_, ok := executableArchiveBytes(body)
+	return ok
+}
+
+func executableArchiveBytes(body []byte) ([]byte, bool) {
 	input := bytes.NewReader(body)
 	compressed, err := gzip.NewReader(input)
 	if err != nil {
-		return false
+		return nil, false
 	}
 	compressed.Multistream(false)
 	archive := tar.NewReader(io.LimitReader(compressed, MaxAssetBytes+1))
 	header, err := archive.Next()
 	if err != nil || header.Name != "sbxr" || header.Typeflag != tar.TypeReg || header.Size <= 0 || header.Size > MaxAssetBytes || header.Mode != 0o755 {
-		return false
+		return nil, false
 	}
-	if copied, err := io.Copy(io.Discard, archive); err != nil || copied != header.Size {
-		return false
+	executable, err := io.ReadAll(io.LimitReader(archive, header.Size+1))
+	if err != nil || int64(len(executable)) != header.Size {
+		return nil, false
 	}
 	if _, err := archive.Next(); err != io.EOF {
-		return false
+		return nil, false
 	}
 	remaining, err := io.Copy(io.Discard, compressed)
-	return err == nil && remaining == 0 && compressed.Close() == nil && input.Len() == 0
+	if err != nil || remaining != 0 || compressed.Close() != nil || input.Len() != 0 {
+		return nil, false
+	}
+	return executable, true
 }
 
 func safeName(value string) bool {
@@ -395,7 +444,11 @@ func exactNames(verified []string, attested map[string]string) bool {
 }
 
 func migrationSummary(release VerifiedRelease) string {
-	return "State schema " + strconv.FormatUint(release.StateSchema, 10) + "; minimum updater schema " + strconv.FormatUint(release.MinimumUpdaterSchema, 10)
+	summary := "State schema " + strconv.FormatUint(release.StateSchema, 10) + "; minimum updater schema " + strconv.FormatUint(release.MinimumUpdaterSchema, 10)
+	if len(release.Migrations) > 0 {
+		summary += "; complete migration path 1 -> " + strconv.FormatUint(release.StateSchema, 10)
+	}
+	return summary
 }
 
 // ValidateUniqueJSON rejects duplicate object keys at every nesting level.
