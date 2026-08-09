@@ -137,3 +137,58 @@ func TestUpdaterRefusesMalformedInstalledReleasePaths(t *testing.T) {
 		t.Fatal("path-bearing installed identity accepted")
 	}
 }
+
+func TestDowngraderRequiresAnOlderCompatibleRelease(t *testing.T) {
+	prior := installFixtureVersion(t, "v2.0.0", strings.Repeat("a", 40), "PRIOR-DOWNGRADE-MARKER")
+	candidate := installFixtureVersion(t, "v1.0.0", strings.Repeat("b", 40), "CANDIDATE-DOWNGRADE-MARKER")
+	installed := softwarelifecycle.VerifiedRelease{Identity: prior.staged.Identity, Sequence: 2, StateSchema: prior.staged.StateSchema, MinimumUpdaterSchema: 1}
+	if _, err := newDowngrader(candidate, prior, installed, 1); err != nil {
+		t.Fatalf("compatible downgrade refused: %v", err)
+	}
+	if _, err := newDowngrader(candidate, prior, installed, 2); err == nil {
+		t.Fatal("same-sequence downgrade accepted")
+	}
+	candidate.staged.StateSchema--
+	if _, err := newDowngrader(candidate, prior, installed, 1); err == nil {
+		t.Fatal("incompatible State schema accepted")
+	}
+}
+
+func TestDowngraderSwitchesRestartsAndRestoresThroughTheSharedExecutor(t *testing.T) {
+	prior := installFixtureVersion(t, "v2.0.0", strings.Repeat("a", 40), "PRIOR-DOWNGRADE-EXECUTABLE")
+	candidate := installFixtureVersion(t, "v1.0.0", strings.Repeat("b", 40), "CANDIDATE-DOWNGRADE-EXECUTABLE")
+	step, _ := systemchanges.NewStep(systemchanges.SoftwareModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
+	root := t.TempDir()
+	if _, err := prior.Activate(root, step, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	updater, err := newDowngrader(candidate, prior, softwarelifecycle.VerifiedRelease{Identity: prior.staged.Identity, Sequence: 2, StateSchema: prior.staged.StateSchema, MinimumUpdaterSchema: 1}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var commands []string
+	updater.command = func(_ context.Context, name string, arguments ...string) ([]byte, error) {
+		commands = append(commands, name+" "+strings.Join(arguments, " "))
+		return nil, nil
+	}
+	var rollback []byte
+	if err := updater.CaptureRollback(root, step, func(source io.Reader) error { rollback, _ = io.ReadAll(source); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := updater.Activate(root, step, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if effect, err := updater.Inspect(root, step, bytes.NewReader(rollback), time.Minute); err != nil || effect != systemchanges.StepEffectPresent {
+		t.Fatalf("Inspect(candidate) = (%s, %v)", effect, err)
+	}
+	if _, err := updater.Reverse(root, step, bytes.NewReader(rollback), time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if effect, err := updater.Inspect(root, step, bytes.NewReader(rollback), time.Minute); err != nil || effect != systemchanges.StepEffectAbsent {
+		t.Fatalf("Inspect(prior) = (%s, %v)", effect, err)
+	}
+	want := []string{"/usr/bin/systemctl daemon-reload", "/usr/bin/systemctl restart cloudflared.service sbxr-subscription.service sing-box.service xray.service"}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("rollback commands = %v", commands)
+	}
+}

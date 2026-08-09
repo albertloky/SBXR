@@ -112,6 +112,10 @@ func eligibleUpdate(installed, candidate VerifiedRelease) bool {
 	return validInstalled(installed) && validInstalled(candidate) && candidate.Identity != installed.Identity && candidate.Sequence > installed.Sequence && candidate.MinimumUpdaterSchema <= 1 && compatibleStateSchemas(installed.StateSchema, candidate)
 }
 
+func eligibleDowngrade(installed, candidate VerifiedRelease) bool {
+	return validInstalled(installed) && validInstalled(candidate) && candidate.Identity != installed.Identity && candidate.Sequence < installed.Sequence && candidate.MinimumUpdaterSchema <= 1 && candidate.StateSchema == 2 && candidate.StateSchema == installed.StateSchema
+}
+
 func compatibleStateSchemas(installed uint64, candidate VerifiedRelease) bool {
 	if candidate.StateSchema == installed {
 		return true

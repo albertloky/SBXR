@@ -37,8 +37,9 @@ const (
 type Action string
 
 const (
-	ReviewInstall Action = "Review install"
-	ReviewUpdate  Action = "Review update"
+	ReviewInstall   Action = "Review install"
+	ReviewUpdate    Action = "Review update"
+	ReviewDowngrade Action = "Review downgrade"
 )
 
 type Component string
@@ -89,16 +90,17 @@ type ViewRequest struct {
 }
 
 type ViewResult struct {
-	InstallationStatus InstallationStatus
-	Installed          *ReleaseIdentity
-	VerifiedCandidate  *VerifiedRelease
-	StagedCandidate    *StagedRelease
-	MigrationSummary   string
-	UpdateEligible     bool
-	AffectedComponents []Component
-	PermittedActions   []Action
-	Refusal            *Refusal
-	installCandidate   InstallCandidate
+	InstallationStatus  InstallationStatus
+	Installed           *ReleaseIdentity
+	VerifiedCandidate   *VerifiedRelease
+	StagedCandidate     *StagedRelease
+	MigrationSummary    string
+	UpdateEligible      bool
+	DowngradeCompatible bool
+	AffectedComponents  []Component
+	PermittedActions    []Action
+	Refusal             *Refusal
+	installCandidate    InstallCandidate
 }
 
 func (result ViewResult) InstallCandidate() InstallCandidate { return result.installCandidate }
@@ -205,9 +207,12 @@ func (module Interface) View(ctx context.Context, request ViewRequest) ViewResul
 	case NotInstalled:
 		result.PermittedActions = []Action{ReviewInstall}
 	case Managed:
-		if request.Installed != nil && candidate.Sequence > request.Installed.Sequence && candidate.Identity != request.Installed.Identity {
+		if request.Installed != nil && eligibleUpdate(*request.Installed, candidate) {
 			result.UpdateEligible = true
 			result.PermittedActions = []Action{ReviewUpdate}
+		} else if request.Installed != nil && eligibleDowngrade(*request.Installed, candidate) {
+			result.DowngradeCompatible = true
+			result.PermittedActions = []Action{ReviewDowngrade}
 		}
 	}
 	return result
@@ -246,6 +251,7 @@ func refuse(result ViewResult) ViewResult {
 	result.installCandidate = InstallCandidate{}
 	result.MigrationSummary = ""
 	result.UpdateEligible = false
+	result.DowngradeCompatible = false
 	result.AffectedComponents = nil
 	result.PermittedActions = nil
 	result.Refusal = &Refusal{Code: ReleaseVerificationRefused, NextAction: "Check the selected immutable release again"}

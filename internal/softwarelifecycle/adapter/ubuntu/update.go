@@ -32,9 +32,21 @@ type Updater struct {
 }
 
 func NewUpdater(candidate, installedCandidate softwarelifecycle.InstallCandidate) (Updater, error) {
+	return newReleaseChanger(candidate, installedCandidate, false)
+}
+
+func NewDowngrader(candidate, installedCandidate softwarelifecycle.InstallCandidate) (Updater, error) {
+	return newReleaseChanger(candidate, installedCandidate, true)
+}
+
+func newReleaseChanger(candidate, installedCandidate softwarelifecycle.InstallCandidate, downgrade bool) (Updater, error) {
 	verified, staged, archive, components, valid := candidate.SoftwareLifecyclePreparedUpdate()
 	installed, priorStaged, priorArchive, priorComponents, installedValid := installedCandidate.SoftwareLifecyclePreparedUpdate()
-	if !valid || !installedValid || verified.Identity == installed.Identity || verified.Sequence <= installed.Sequence || verified.StateSchema < installed.StateSchema || verified.MinimumUpdaterSchema > 1 {
+	validDirection := verified.Sequence > installed.Sequence && verified.StateSchema >= installed.StateSchema
+	if downgrade {
+		validDirection = verified.Sequence < installed.Sequence && verified.StateSchema == installed.StateSchema
+	}
+	if !valid || !installedValid || verified.Identity == installed.Identity || !validDirection || verified.MinimumUpdaterSchema > 1 {
 		return Updater{}, errors.New("verified update candidate unavailable")
 	}
 	installer, err := newInstaller(staged, archive, components)
@@ -45,9 +57,21 @@ func NewUpdater(candidate, installedCandidate softwarelifecycle.InstallCandidate
 	if err != nil {
 		return Updater{}, err
 	}
-	updater, err := newUpdater(installer, prior, installed)
+	var updater Updater
+	if downgrade {
+		updater, err = newDowngrader(installer, prior, installed, verified.Sequence)
+	} else {
+		updater, err = newUpdater(installer, prior, installed)
+	}
 	updater.command = runUpdateCommand
 	return updater, err
+}
+
+func newDowngrader(candidate, prior Installer, installed softwarelifecycle.VerifiedRelease, candidateSequence uint64) (Updater, error) {
+	if candidateSequence == 0 || candidateSequence >= installed.Sequence || candidate.staged.StateSchema != installed.StateSchema {
+		return Updater{}, errors.New("verified downgrade candidate unavailable")
+	}
+	return newUpdater(candidate, prior, installed)
 }
 
 func newUpdater(candidate, prior Installer, installed softwarelifecycle.VerifiedRelease) (Updater, error) {

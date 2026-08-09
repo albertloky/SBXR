@@ -61,6 +61,80 @@ func TestPlanUpdateDisclosesOneCompleteManagedToManagedTransaction(t *testing.T)
 	}
 }
 
+func TestPlanDowngradeDisclosesAndReusesTheManagedTransaction(t *testing.T) {
+	installed, candidate := controlledUpdateReleases()
+	installed.Sequence, installed.StateSchema = 2, 2
+	installed.Identity.Tag = "v2.0.0"
+	installedCandidate := controlledInstalledCandidate(installed)
+	candidate.cell.verified.Sequence = 1
+	candidate.cell.verified.StateSchema = 2
+	candidate.cell.verified.Migrations = nil
+	request := DowngradePlanRequest(UpdatePlanRequest{
+		Installed: installed, InstalledCandidate: installedCandidate, Candidate: candidate, StartingRevision: 7, StartingStateSHA256: strings.Repeat("a", 64),
+		ChangeSet: "downgrade-revision-8", DesiredStateSHA256: strings.Repeat("b", 64), Contributions: controlledUpdateContributions(t, "downgrade-revision-8", strings.Repeat("b", 64)), Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1},
+	})
+	plan, finding := PlanDowngrade(request)
+	if finding != nil || plan == nil {
+		t.Fatalf("PlanDowngrade() = (%+v, %+v)", plan, finding)
+	}
+	summary := plan.Summary()
+	if summary.Operation != ReviewDowngrade || summary.CurrentRelease != installed.Identity || summary.CandidateRelease != candidate.cell.staged.Identity || summary.Compatibility != "Current Desired State schema 2 is supported by the selected release" || len(summary.MigrationPath) != 0 || !summary.OneUse {
+		t.Fatalf("downgrade summary = %+v", summary)
+	}
+
+	same := request
+	same.Candidate = installedCandidate
+	if plan, finding := PlanDowngrade(same); plan != nil || finding == nil {
+		t.Fatalf("same-identity downgrade = (%+v, %+v)", plan, finding)
+	}
+	incompatible := request
+	incompatible.Candidate = candidate
+	incompatible.Candidate.cell.verified.StateSchema = 1
+	if plan, finding := PlanDowngrade(incompatible); plan != nil || finding == nil {
+		t.Fatalf("incompatible downgrade = (%+v, %+v)", plan, finding)
+	}
+}
+
+func TestApplyDowngradeHandsOneExactlyBoundChangeSetToSystemChanges(t *testing.T) {
+	installed, candidate := controlledUpdateReleases()
+	installed.Sequence, installed.StateSchema, installed.Identity.Tag = 2, 2, "v2.0.0"
+	installedCandidate := controlledInstalledCandidate(installed)
+	candidate.cell.verified.Sequence, candidate.cell.verified.StateSchema, candidate.cell.verified.Migrations = 1, 2, nil
+	starting, desired := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	request := DowngradePlanRequest(UpdatePlanRequest{Installed: installed, InstalledCandidate: installedCandidate, Candidate: candidate, StartingRevision: 7, StartingStateSHA256: starting, ChangeSet: "downgrade-revision-8-success", DesiredStateSHA256: desired, Contributions: controlledUpdateContributions(t, "downgrade-revision-8-success", desired), Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}})
+	plan, finding := PlanDowngrade(request)
+	if finding != nil {
+		t.Fatal(finding)
+	}
+	prepared := controlledUpdatePrepared{changeSet: request.ChangeSet, revision: 8, starting: starting, candidate: desired, planIdentity: plan.Identity(), planSHA256: plan.SHA256(), release: candidate.cell.staged.Identity, from: 2, to: 2}
+	approval := &controlledUpdateApproval{recheck: UpdateRecheck{Installed: installed, InstalledCandidate: installedCandidate, Candidate: candidate, StartingRevision: 7, StartingStateSHA256: starting, Contributions: controlledUpdateContributions(t, request.ChangeSet, desired)}}
+	result := plan.Apply(t.Context(), UpdateApplyRequest{Approval: approval, PreparedState: prepared, SystemChanges: systemchanges.New(nil)})
+	if result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-ADAPTER-UNAVAILABLE" || approval.calls != 1 {
+		t.Fatalf("Apply() = %+v; calls=%d", result, approval.calls)
+	}
+}
+
+func TestApplyDowngradeRejectsStaleFactsAndReuse(t *testing.T) {
+	installed, candidate := controlledUpdateReleases()
+	installed.Sequence, installed.StateSchema, installed.Identity.Tag = 2, 2, "v2.0.0"
+	installedCandidate := controlledInstalledCandidate(installed)
+	candidate.cell.verified.Sequence, candidate.cell.verified.StateSchema, candidate.cell.verified.Migrations = 1, 2, nil
+	desired := strings.Repeat("b", 64)
+	request := DowngradePlanRequest(UpdatePlanRequest{Installed: installed, InstalledCandidate: installedCandidate, Candidate: candidate, StartingRevision: 7, StartingStateSHA256: strings.Repeat("a", 64), ChangeSet: "downgrade-revision-8-stale", DesiredStateSHA256: desired, Contributions: controlledUpdateContributions(t, "downgrade-revision-8-stale", desired), Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}})
+	plan, finding := PlanDowngrade(request)
+	if finding != nil {
+		t.Fatal(finding)
+	}
+	approval := &controlledUpdateApproval{recheck: UpdateRecheck{Installed: installed, InstalledCandidate: installedCandidate, Candidate: candidate, StartingRevision: 8, StartingStateSHA256: request.StartingStateSHA256, Contributions: request.Contributions}}
+	result := plan.Apply(t.Context(), UpdateApplyRequest{Approval: approval})
+	if result.Finding == nil || result.Finding.Code != "SOFTWARE-LIFECYCLE-UPDATE-STALE" || !result.NothingChanged {
+		t.Fatalf("stale Apply() = %+v", result)
+	}
+	if repeated := plan.Apply(t.Context(), UpdateApplyRequest{Approval: approval}); repeated.Finding == nil || repeated.Finding.Code != "SOFTWARE-LIFECYCLE-UPDATE-PLAN-USED" || approval.calls != 1 {
+		t.Fatalf("reused Apply() = %+v; calls=%d", repeated, approval.calls)
+	}
+}
+
 func controlledUpdateReleases() (VerifiedRelease, InstallCandidate) {
 	installed := VerifiedRelease{Identity: ReleaseIdentity{Repository: Repository, Tag: "v1.0.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("a", 64)}, Sequence: 1, StateSchema: 1, MinimumUpdaterSchema: 1}
 	candidate := controlledInstallCandidate()

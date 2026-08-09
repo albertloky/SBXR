@@ -220,3 +220,17 @@ go test ./internal/state -run '^(TestPreparedCommitDurablyCompletesOneSystemChan
 Require the update executor to capture the authenticated prior release tree, exact ten units, and active executable link in the transaction snapshot before mutation. Require the candidate release, components, units, and active link to switch together; cloudflared, Xray, sing-box, and subscription serving are the only affected services in the update Plan. Require inspection to distinguish exact prior from exact candidate after restart, strict refusal of tampered or trailing snapshot bytes, rollback of a partial switch, and no prior release outside the active snapshot after activation. The update-specific handoff must form one `Update` Change Set; the shared System Changes transaction proof covers one lock, one State publication, pre- and post-publication failure rollback, a second process death during rollback, restart after durable `Complete`, and deletion of the snapshot and journal.
 
 External valid-release success, Integrated Verification, Codex Live Acceptance, Owner Acceptance, and Release Qualification remain Pending. These automated checks do not claim any of those later stages.
+
+### SL-DOWNGRADE-06 — Explicit compatible downgrade
+
+Run:
+
+```sh
+go test ./internal/softwarelifecycle -run '^Test(ViewOffersOnlyAFreshCompatibleExplicitDowngrade|PlanDowngrade|ApplyDowngrade)' -count=1
+go test ./internal/softwarelifecycle/adapter/ubuntu -run '^Test(Downgrader|Updater)' -count=1
+go test ./internal/state -run '^(TestPreparedCommitDurablyCompletesOneSystemChangesChangeSet|TestPostPublicationFailureRestoresPriorDesiredState|TestRollbackCanSurviveASecondProcessDeath|TestRestartAfterCompleteCleansUpWithoutRollback)$' -count=1
+```
+
+Require an explicitly selected older tag to pass the same fresh five-file release verification and architecture staging as any other selected release. Disclose the installed and selected Release Identities side by side and offer only `Review downgrade` when the identities differ, the authenticated sequence is lower, the updater schema is supported, and both installed and selected releases use the currently publishable State schema `2`. Refuse same identity, non-lower sequence, incompatible State, stale approval, changed contributions, or changed prepared State.
+
+Require `PlanDowngrade` to reuse the update Plan's one-use approval, exact recheck, three affected Module contributions, one `Update` Change Set, health and agreement gates, single `N → N+1` State publication, four-service restart, rollback, process-restart inspection, retention, and durable cleanup. Stable discovery and `PlanUpdate` must continue rejecting lower sequences. No reverse migration, automatic downgrade, local history selector, old State revision, old secret, retained snapshot, or recovery parcel is accepted. Evidence remains secret-safe. External valid-release success, Integrated Verification, Codex Live Acceptance, Owner Acceptance, and Release Qualification remain Pending on the inherited #127/#128 prerequisites.

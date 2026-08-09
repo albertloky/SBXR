@@ -364,7 +364,7 @@ func TestViewTreatsVersionAndTagAsSafeOpaqueStrings(t *testing.T) {
 }
 
 func TestViewReportsOnlyEligibleActionsForCurrentInstallationState(t *testing.T) {
-	installed := &softwarelifecycle.VerifiedRelease{Identity: softwarelifecycle.ReleaseIdentity{Repository: softwarelifecycle.Repository, Tag: "v0.9.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}, Sequence: 1}
+	installed := &softwarelifecycle.VerifiedRelease{Identity: softwarelifecycle.ReleaseIdentity{Repository: softwarelifecycle.Repository, Tag: "v0.9.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}, Sequence: 1, StateSchema: 1, MinimumUpdaterSchema: 1}
 	evidence := validEvidence()
 	evidence.Index = replaceIndex(evidence.Index, `"sequence":1`, `"sequence":2`)
 	indexDigest := sha256.Sum256(evidence.Index)
@@ -385,6 +385,23 @@ func TestViewReportsOnlyEligibleActionsForCurrentInstallationState(t *testing.T)
 		if got.Refusal != nil || got.UpdateEligible || got.PermittedActions != nil {
 			t.Fatalf("%s View = %#v", status, got)
 		}
+	}
+}
+
+func TestViewOffersOnlyAFreshCompatibleExplicitDowngrade(t *testing.T) {
+	installed := &softwarelifecycle.VerifiedRelease{Identity: softwarelifecycle.ReleaseIdentity{Repository: softwarelifecycle.Repository, Tag: "v2.0.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}, Sequence: 2, StateSchema: 2, MinimumUpdaterSchema: 1}
+	evidence := updateEvidenceWithMigration(1, "v1.0.0", strings.Repeat("c", 40))
+	module := softwarelifecycle.New(&releaseSource{evidence: evidence}, qualification(), func() time.Time { return verifiedAt })
+	got := module.View(t.Context(), softwarelifecycle.ViewRequest{Tag: "v1.0.0", InstallationStatus: softwarelifecycle.Managed, Installed: installed})
+	if got.Refusal != nil || got.VerifiedCandidate == nil || !got.DowngradeCompatible || !reflect.DeepEqual(got.PermittedActions, []softwarelifecycle.Action{softwarelifecycle.ReviewDowngrade}) || got.Installed == nil || got.Installed.Tag != "v2.0.0" || got.VerifiedCandidate.Identity.Tag != "v1.0.0" {
+		t.Fatalf("compatible downgrade View = %#v", got)
+	}
+
+	incompatible := *installed
+	incompatible.StateSchema = 1
+	got = module.View(t.Context(), softwarelifecycle.ViewRequest{Tag: "v1.0.0", InstallationStatus: softwarelifecycle.Managed, Installed: &incompatible})
+	if got.Refusal != nil || got.VerifiedCandidate == nil || got.DowngradeCompatible || got.PermittedActions != nil {
+		t.Fatalf("incompatible downgrade View = %#v", got)
 	}
 }
 

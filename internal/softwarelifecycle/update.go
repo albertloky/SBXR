@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 )
 
 const UpdatePlanRefused RefusalCode = "SOFTWARE-LIFECYCLE-UPDATE-PLAN-REFUSED"
+const DowngradePlanRefused RefusalCode = "SOFTWARE-LIFECYCLE-DOWNGRADE-PLAN-REFUSED"
 
 type UpdatePlanRequest struct {
 	Installed           VerifiedRelease
@@ -27,6 +29,8 @@ type UpdatePlanRequest struct {
 	Contributions       []UpdateContribution
 	Disk                systemchanges.DiskRequirement
 }
+
+type DowngradePlanRequest UpdatePlanRequest
 
 type UpdateRecheck struct {
 	Installed           VerifiedRelease
@@ -48,10 +52,12 @@ type UpdateApplyRequest struct {
 }
 
 type UpdateSummary struct {
+	Operation                                                            Action
 	CurrentRelease, CandidateRelease                                     ReleaseIdentity
 	CurrentRevision, CandidateRevision                                   uint64
 	MigrationPath, AffectedServices, SubscriptionRepresentations, Checks []string
 	Disk                                                                 systemchanges.DiskRequirement
+	Compatibility                                                        string
 	Interruption, Cancellation, Rollback                                 string
 	SudoAfterApproval, OneUse                                            bool
 }
@@ -71,10 +77,26 @@ type UpdateContribution interface {
 }
 
 func PlanUpdate(request UpdatePlanRequest) (*UpdatePlan, *InstallFinding) {
-	refuse := func() (*UpdatePlan, *InstallFinding) {
-		return nil, &InstallFinding{Code: UpdatePlanRefused, Problem: "The reviewed update Plan is incomplete or stale", NextAction: "Reload Managed State and build a fresh update Plan"}
+	return planReleaseChange(request, ReviewUpdate)
+}
+
+func PlanDowngrade(request DowngradePlanRequest) (*UpdatePlan, *InstallFinding) {
+	return planReleaseChange(UpdatePlanRequest(request), ReviewDowngrade)
+}
+
+func planReleaseChange(request UpdatePlanRequest, operation Action) (*UpdatePlan, *InstallFinding) {
+	code := UpdatePlanRefused
+	problem, next := "The reviewed update Plan is incomplete or stale", "Reload Managed State and build a fresh update Plan"
+	eligible := eligibleUpdate
+	if operation == ReviewDowngrade {
+		code = DowngradePlanRefused
+		problem, next = "The reviewed downgrade Plan is incomplete, stale, or incompatible", "Select and freshly verify a compatible older release"
+		eligible = eligibleDowngrade
 	}
-	if !validInstalled(request.Installed) || !validInstallCandidate(request.InstalledCandidate) || !reflect.DeepEqual(request.InstalledCandidate.cell.verified, request.Installed) || request.InstalledCandidate.cell.staged.Identity != request.Installed.Identity || !validInstallCandidate(request.Candidate) || !eligibleUpdate(request.Installed, request.Candidate.cell.verified) || request.StartingRevision == 0 || !hashPattern.MatchString(request.StartingStateSHA256) || !installIdentityPattern.MatchString(request.ChangeSet) || !hashPattern.MatchString(request.DesiredStateSHA256) || !validInstallDisk(request.Disk) {
+	refuse := func() (*UpdatePlan, *InstallFinding) {
+		return nil, &InstallFinding{Code: code, Problem: problem, NextAction: next}
+	}
+	if !validInstalled(request.Installed) || !validInstallCandidate(request.InstalledCandidate) || !reflect.DeepEqual(request.InstalledCandidate.cell.verified, request.Installed) || request.InstalledCandidate.cell.staged.Identity != request.Installed.Identity || !validInstallCandidate(request.Candidate) || !eligible(request.Installed, request.Candidate.cell.verified) || request.StartingRevision == 0 || !hashPattern.MatchString(request.StartingStateSHA256) || !installIdentityPattern.MatchString(request.ChangeSet) || !hashPattern.MatchString(request.DesiredStateSHA256) || !validInstallDisk(request.Disk) {
 		return refuse()
 	}
 	want := map[InstallContributionName]systemchanges.Module{ProfilesInstallContribution: systemchanges.ConnectionProfilesModule, CloudflareInstallContribution: systemchanges.CloudflareModule, SubscriptionInstallContribution: systemchanges.SubscriptionModule}
@@ -133,6 +155,7 @@ func PlanUpdate(request UpdatePlanRequest) (*UpdatePlan, *InstallFinding) {
 	}
 	sort.Strings(checkNames)
 	summary := UpdateSummary{
+		Operation:      operation,
 		CurrentRelease: request.Installed.Identity, CandidateRelease: request.Candidate.cell.staged.Identity,
 		CurrentRevision: request.StartingRevision, CandidateRevision: request.StartingRevision + 1,
 		MigrationPath:               updateMigrationPath(request.Installed.StateSchema, request.Candidate.cell.verified.StateSchema),
@@ -143,6 +166,9 @@ func PlanUpdate(request UpdatePlanRequest) (*UpdatePlan, *InstallFinding) {
 		Cancellation:      "Back before Apply changes nothing; cancellation after start waits for a safe checkpoint and restores the prior release and State",
 		Rollback:          "restore the exact prior release, service material, subscriptions, units, and Desired State from the one transaction snapshot",
 		SudoAfterApproval: true, OneUse: true,
+	}
+	if operation == ReviewDowngrade {
+		summary.Compatibility = fmt.Sprintf("Current Desired State schema %d is supported by the selected release", request.Installed.StateSchema)
 	}
 	checksum := hex.EncodeToString(digest[:])
 	return &UpdatePlan{identity: request.ChangeSet + "-plan-" + checksum[:12], sha256: checksum, volatileSHA256: hex.EncodeToString(volatile[:]), request: request, proofs: proofs, steps: steps, checks: checks, summary: summary, used: &atomic.Bool{}}, nil
@@ -266,7 +292,7 @@ func (plan *UpdatePlan) String() string {
 	if plan == nil {
 		return "Software Lifecycle update Plan: unavailable"
 	}
-	return fmt.Sprintf("Software Lifecycle update Plan %s: revision %d -> %d, %s -> %s, one atomic rollback snapshot", plan.identity, plan.summary.CurrentRevision, plan.summary.CandidateRevision, plan.summary.CurrentRelease.Tag, plan.summary.CandidateRelease.Tag)
+	return fmt.Sprintf("Software Lifecycle %s Plan %s: revision %d -> %d, %s -> %s, one atomic rollback snapshot", strings.ToLower(strings.TrimPrefix(string(plan.summary.Operation), "Review ")), plan.identity, plan.summary.CurrentRevision, plan.summary.CandidateRevision, plan.summary.CurrentRelease.Tag, plan.summary.CandidateRelease.Tag)
 }
 func (plan *UpdatePlan) GoString() string { return plan.String() }
 
