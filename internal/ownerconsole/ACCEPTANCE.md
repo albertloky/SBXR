@@ -157,6 +157,26 @@ go test ./internal/ownerconsole -run '^TestRun(LiveProfileCheckRequiresAuthentic
 
 Require Live Profile Check to remain unavailable before this launch's successful authentication and outside Managed state. Require one typed Module request to stream one temporary test URL while the check is active, same-source QR only when it fits, spinner and monotonic elapsed time, and automatic pending then authenticated uplink and downlink results for all six profiles. Require an explicit session-only and memory-only explanation, cancellation and erasure on Back, no manual success action, no effect on Managed state, and fail-safe refusal of Infrastructure Secret markers or malformed typed facts.
 
+### OC-PROVIDER-01 — Cloudflare walkthrough, credential, and correction journeys
+
+Run:
+
+```sh
+go test ./internal/ownerconsole -run '^TestRunCloudflare(WalkthroughMasksAndVerifiesOnlyTheNarrowToken|CredentialOffersOnlyTheFourExactActions|ReplacementKeepsTheOldTokenUntilCandidateReview|CheckNowRefreshesWithoutAcceptingALateResultOnAnotherVisit|ActionsShowWaitingStateAndQueueExitResult|RemovalRefusesWhileDependentsRemain|MissingPermissionAndPendingZoneHaveExactCorrectionActions)$' -count=1
+```
+
+Require the current `My Profile > API Tokens`, selected-zone `DNS > Records`, and Cloudflare One `Networks > Tunnels & Mesh` walkthrough at exact `80×24` and `120×36`, masked memory-only token entry, rejection of Global API Keys, broad authority, and `API Tokens Write`, and no full Reveal. Require the credential view to show only status, first and last four characters, binding, last verification, optional expiry, and current uses. Require exactly Check now, Replace token, Remove from SBXR, and genuine Tunnel run-token rotation. Require real checks, verification, and the 10-minute wait to show a spinner plus monotonic elapsed time, prevent duplicate activation, allow safe Back or Exit, and queue completion behind Exit confirmation. Require replacement to keep the old token active until candidate verification and exact Plan approval, removal to refuse while any Tunnel, DNS, certificate, or profile dependency would remain falsely Managed or Healthy, and missing-permission and pending-zone flows to expose their exact typed actions without hidden controls or late-result focus theft.
+
+### OC-PROVIDER-02 — Certificate lineages, scheduler, and safe outcomes
+
+Run:
+
+```sh
+go test ./internal/ownerconsole -run '^TestRun(CertificatesShowsBothLineagesAndReviewsIssuanceOrRenewal|CertificateCorrectionAndTypedRollbackRemainSecretSafe|ProviderPlansBackRestoreTheirOriginAndUnsafeFactsNeverRender)$' -count=1
+```
+
+Require the IP and Direct TLS Hostname lineages, `shortlived` and `tlsserver` profiles, truthful serving expiry, IP due at `72 hours` or less, ordinary retry every `6 hours`, busy-lock retry within `1 hour` or `15 minutes` below `24 hours`, domain ACME Renewal Information with `15 days` fallback, one serial persistent randomized scheduler running at least twice daily, and typed activation or rollback facts. Require issuance and renewal to stop at separate exact reviewed Plans, Back to restore the originating screen, and Certificate Correction Flows to retain Check again, Back, and copyable redacted evidence at the minimum size. Require no Cloudflare token, DNS-01 authority, CAA creation, private key, ACME account material, unsafe typed fact, contradictory expiry, or Infrastructure Secret marker to render.
+
 ## Seam Verification
 
 ### OC-ENTER-PTY-01 — Real pseudo-terminal lifecycle

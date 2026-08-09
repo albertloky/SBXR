@@ -126,7 +126,7 @@ var scenarioFixtures = map[Scenario]fixture{
 		details: []string{"PLAN", "", "Required checks passed.", "Rollback remains available until durable Complete."},
 	},
 	CloudflareWalkthrough: {
-		header: "Not installed - unprivileged", title: "CLOUDFLARE TOKEN - STEP 3 OF 5", navigation: cloudflareNavigation, allowsBack: true,
+		header: "Not installed - unprivileged", title: "CLOUDFLARE TOKEN - STEP 3 OF 5", navigation: cloudflareNavigation, allowsBack: true, acceptsInput: true,
 		lines:   []string{"dash.cloudflare.com/profile/api-tokens", "My Profile > API Tokens > Create Token", "> Create Custom Token", "", "Name       SBXR - selected account / selected zone", "Account    Cloudflare Tunnel                 Edit", "Zone       DNS                               Edit", "Resources  Include > Specific account > selected", "           Include > Specific zone > selected", "", "Continue to summary > Create Token > copy once", "", "Scoped token (masked, memory-only):", "> ********", "", "> Verify token", "  Back and continue later"},
 		details: []string{"MINIMUM AUTHORITY", "", "Specific account", "Specific zone", "No Global API Key", "Token remains memory-only"},
 	},

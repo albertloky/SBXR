@@ -86,6 +86,10 @@ type Session struct {
 	Outcome              OutcomeModule
 	Profiles             ProfilesModule
 	ProfileOutcomes      OutcomeModule
+	Cloudflare           CloudflareModule
+	CloudflareOutcomes   OutcomeModule
+	Certificates         CertificatesModule
+	CertificateOutcomes  OutcomeModule
 }
 
 func Run(ctx context.Context, session Session) error {
@@ -131,7 +135,7 @@ func Run(ctx context.Context, session Session) error {
 	fixture := scenarioFixture(session.Scenario)
 	accessCatalog := session.Access.catalog()
 	program := tea.NewProgram(
-		model{width: c.Width, height: c.Height, scenario: session.Scenario, selected: selectedNavigation(session.Scenario), unicode: c.Unicode, noColor: noColor, initialModes: initialModes, drawingModeProbeRequired: c.DrawingModeProbeRequired, inputFocused: fixture.acceptsInput, progressExpected: session.Updates != nil, authenticator: session.Authenticator, authenticationPolicy: session.AuthenticationPolicy, runContext: runContext, accessCatalog: accessCatalog, clipboard: session.Clipboard, outcome: session.Outcome, defaultOutcome: session.Outcome, profiles: session.Profiles, profileOutcomes: session.ProfileOutcomes, profileViewGeneration: 1},
+		model{width: c.Width, height: c.Height, scenario: session.Scenario, selected: selectedNavigation(session.Scenario), unicode: c.Unicode, noColor: noColor, initialModes: initialModes, drawingModeProbeRequired: c.DrawingModeProbeRequired, inputFocused: fixture.acceptsInput, progressExpected: session.Updates != nil, authenticator: session.Authenticator, authenticationPolicy: session.AuthenticationPolicy, runContext: runContext, accessCatalog: accessCatalog, clipboard: session.Clipboard, outcome: session.Outcome, defaultOutcome: session.Outcome, profiles: session.Profiles, profileOutcomes: session.ProfileOutcomes, profileViewGeneration: 1, cloudflare: session.Cloudflare, cloudflareOutcomes: session.CloudflareOutcomes, cloudflareGeneration: 1, certificates: session.Certificates, certificateOutcomes: session.CertificateOutcomes, certificateGeneration: 1},
 		tea.WithContext(runContext),
 		tea.WithInput(session.Input),
 		tea.WithOutput(session.Output),
@@ -262,15 +266,15 @@ type model struct {
 	planPage                   int
 	profiles                   ProfilesModule
 	profileOutcomes            OutcomeModule
-	profileChangeOrigin        Scenario
-	hasProfileChangeOrigin     bool
+	changeOrigin               Scenario
+	hasChangeOrigin            bool
 	profilesView               ProfilesPresentation
 	profilesAvailable          bool
 	profileSelection           int
 	profileAction              int
 	profileValidation          ProfileValidation
 	profileViewGeneration      uint64
-	profileActionGeneration    uint64
+	actionGeneration           uint64
 	subscriptionAction         int
 	liveProfileCheck           LiveProfileCheckPresentation
 	liveProfileCheckValid      bool
@@ -280,6 +284,21 @@ type model struct {
 	pendingLiveProfileCheck    *liveProfileCheckMsg
 	liveProfileCheckStartedAt  time.Time
 	liveProfileCheckElapsed    time.Duration
+	cloudflare                 CloudflareModule
+	cloudflareOutcomes         OutcomeModule
+	cloudflareView             CloudflarePresentation
+	cloudflareAvailable        bool
+	cloudflareAction           int
+	cloudflareGeneration       uint64
+	cloudflareReplacing        bool
+	cloudflareOperation        cloudflarePendingOperation
+	certificates               CertificatesModule
+	certificateOutcomes        OutcomeModule
+	certificatesView           CertificatesPresentation
+	certificatesAvailable      bool
+	certificateAction          int
+	certificateGeneration      uint64
+	providerPage               int
 }
 
 type probeTimeoutMsg struct{}
@@ -296,29 +315,29 @@ type changeReviewMsg struct{ review ChangeReview }
 type changeResultMsg struct{ result ChangeResult }
 type changeSetUpdateMsg struct{ change DurableChangeSet }
 type changeBackMsg struct{ review ChangeReview }
-type profileRequestIdentity struct {
+type asyncRequestIdentity struct {
 	generation uint64
 	origin     Scenario
 }
 
-func (identity profileRequestIdentity) matches(m model) bool {
-	return identity.generation == m.profileActionGeneration && identity.origin == m.scenario
+func (identity asyncRequestIdentity) matches(m model) bool {
+	return identity.generation == m.actionGeneration && identity.origin == m.scenario
 }
 
 type profilesViewMsg struct {
-	identity profileRequestIdentity
+	identity asyncRequestIdentity
 	view     ProfilesPresentation
 }
 type profileReviewMsg struct {
-	identity profileRequestIdentity
+	identity asyncRequestIdentity
 	review   ChangeReview
 }
 type profileValidationMsg struct {
-	identity   profileRequestIdentity
+	identity   asyncRequestIdentity
 	validation ProfileValidation
 }
 type openAccessMsg struct {
-	identity  profileRequestIdentity
+	identity  asyncRequestIdentity
 	selection int
 }
 type liveProfileCheckMsg struct {
@@ -329,6 +348,44 @@ type liveProfileCheckMsg struct {
 	ok         bool
 }
 type liveProfileCheckTickMsg time.Time
+type cloudflareViewMsg struct {
+	generation uint64
+	view       CloudflarePresentation
+}
+type cloudflareResponseMsg struct {
+	identity asyncRequestIdentity
+	response CloudflareResponse
+}
+type cloudflareTickMsg time.Time
+
+type cloudflarePendingOperation struct {
+	active  bool
+	label   string
+	started time.Time
+	elapsed time.Duration
+	cancel  context.CancelFunc
+	queued  *cloudflareResponseMsg
+}
+
+func (operation *cloudflarePendingOperation) start(label string, cancel context.CancelFunc) {
+	*operation = cloudflarePendingOperation{active: true, label: label, started: time.Now(), cancel: cancel}
+}
+
+func (operation *cloudflarePendingOperation) stop() {
+	if operation.cancel != nil {
+		operation.cancel()
+	}
+	*operation = cloudflarePendingOperation{}
+}
+
+type certificatesViewMsg struct {
+	generation uint64
+	view       CertificatesPresentation
+}
+type certificateReviewMsg struct {
+	identity asyncRequestIdentity
+	review   ChangeReview
+}
 
 type progressClock struct {
 	kind        ProgressKind
@@ -347,6 +404,12 @@ func (m model) Init() tea.Cmd {
 	}
 	if m.profiles != nil && (m.scenario == ConnectionProfilesScreen || m.scenario == SubscriptionScreen) {
 		commands = append(commands, m.viewProfilesCommand())
+	}
+	if m.cloudflare != nil && m.scenario == CloudflareWalkthrough {
+		commands = append(commands, m.viewCloudflareCommand())
+	}
+	if m.certificates != nil && m.scenario == CertificatesScreen {
+		commands = append(commands, m.viewCertificatesCommand())
 	}
 	if m.drawingModeProbeRequired {
 		commands = append(commands, tea.Tick(time.Second, func(time.Time) tea.Msg { return probeTimeoutMsg{} }))
@@ -416,6 +479,11 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.liveProfileCheckElapsed = time.Time(message).Sub(m.liveProfileCheckStartedAt)
 			return m, liveProfileCheckTick()
 		}
+	case cloudflareTickMsg:
+		if m.cloudflareOperation.active && !m.cloudflareOperation.started.IsZero() {
+			m.cloudflareOperation.elapsed = time.Time(message).Sub(m.cloudflareOperation.started)
+			return m, cloudflareTick()
+		}
 	case pasteGuardExpiredMsg:
 		m.pasteGuard = false
 	case authenticationFinishedMsg:
@@ -450,10 +518,10 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.copyFeedback = ""
 		m.focusChangeInput()
 	case changeBackMsg:
-		if m.hasProfileChangeOrigin && message.review == (ChangeReview{}) {
-			m.scenario, m.selected = m.profileChangeOrigin, selectedNavigation(m.profileChangeOrigin)
+		if m.hasChangeOrigin && message.review == (ChangeReview{}) {
+			m.scenario, m.selected = m.changeOrigin, selectedNavigation(m.changeOrigin)
 			m.changeReview, m.changeFeedback, m.outcome = ChangeReview{}, "", m.defaultOutcome
-			m.hasProfileChangeOrigin = false
+			m.hasChangeOrigin = false
 			m.inputFocused = false
 			return m, nil
 		}
@@ -496,14 +564,14 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.profilesView, m.profilesAvailable = validatedProfiles(message.view)
 		m.profilesAvailable = m.profilesAvailable && m.profileOutcomes != nil
-		m.profileActionGeneration++
+		m.actionGeneration++
 		m.profileSelection, m.profileAction, m.subscriptionAction = 0, 0, 0
 		m.profileValidation = ProfileValidation{}
 	case profileReviewMsg:
 		if m.profileOutcomes == nil || !message.identity.matches(m) {
 			return m, nil
 		}
-		m.profileChangeOrigin, m.hasProfileChangeOrigin = m.scenario, true
+		m.changeOrigin, m.hasChangeOrigin = m.scenario, true
 		m.outcome = m.profileOutcomes
 		m.changeReview = validatedChangeReview(message.review)
 		m.planPage, m.changeFeedback = 0, ""
@@ -530,6 +598,38 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.finishLiveProfileCheck(message)
+	case cloudflareViewMsg:
+		if message.generation != m.cloudflareGeneration || m.scenario != CloudflareWalkthrough {
+			return m, nil
+		}
+		m.cloudflareView, m.cloudflareAvailable = validatedCloudflarePresentation(message.view)
+		m.cloudflareAction, m.cloudflareReplacing, m.providerPage = 0, false, 0
+		m.inputFocused = m.cloudflareAvailable && m.cloudflareView.Kind == CloudflareWalkthroughPresentation && m.cloudflarePageCount() == 1
+	case cloudflareResponseMsg:
+		if !message.identity.matches(m) || m.cloudflare == nil {
+			return m, nil
+		}
+		if m.exitConfirm {
+			pending := message
+			m.cloudflareOperation.queued = &pending
+			return m, nil
+		}
+		return m, m.finishCloudflareResponse(message)
+	case certificatesViewMsg:
+		if message.generation != m.certificateGeneration || m.scenario != CertificatesScreen {
+			return m, nil
+		}
+		m.certificatesView, m.certificatesAvailable = validatedCertificates(message.view)
+		m.certificateAction, m.providerPage = 0, 0
+	case certificateReviewMsg:
+		if !message.identity.matches(m) || m.certificateOutcomes == nil {
+			return m, nil
+		}
+		m.changeOrigin, m.hasChangeOrigin = m.scenario, true
+		m.outcome = m.certificateOutcomes
+		m.changeReview = validatedChangeReview(message.review)
+		m.planPage, m.changeFeedback, m.inputFocused = 0, "", false
+		m.scenario, m.selected = InstallationReview, selectedNavigation(InstallationReview)
 	case tea.PasteMsg:
 		if m.width >= minimumWidth && m.height >= minimumHeight && !m.exitConfirm && m.inputFocused {
 			m.appendInput(message.Content)
@@ -738,25 +838,25 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			actions := profileActions(m.profilesView.Profiles[m.profileSelection].Enabled)
 			switch message.String() {
 			case "up", "shift+tab":
-				m.profileActionGeneration++
+				m.actionGeneration++
 				m.profileSelection = (m.profileSelection + len(m.profilesView.Profiles) - 1) % len(m.profilesView.Profiles)
 				m.profileAction = 0
 				m.profileValidation = ProfileValidation{}
 			case "down", "tab":
-				m.profileActionGeneration++
+				m.actionGeneration++
 				m.profileSelection = (m.profileSelection + 1) % len(m.profilesView.Profiles)
 				m.profileAction = 0
 				m.profileValidation = ProfileValidation{}
 			case "left":
-				m.profileActionGeneration++
+				m.actionGeneration++
 				m.profileAction = (m.profileAction + len(actions) - 1) % len(actions)
 			case "right":
-				m.profileActionGeneration++
+				m.actionGeneration++
 				m.profileAction = (m.profileAction + 1) % len(actions)
 			case "enter", "space":
 				return m, m.activateProfileAction()
 			case "esc":
-				m.profileActionGeneration++
+				m.actionGeneration++
 				m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
 			}
 			return m, nil
@@ -773,6 +873,109 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.scenario == CloudflareWalkthrough && m.cloudflare != nil {
+			if m.cloudflareOperation.active {
+				if message.String() == "esc" {
+					m.cancelCloudflareAction()
+					m.discardInput()
+					m.actionGeneration++
+					m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+				}
+				return m, nil
+			}
+			if !m.cloudflareAvailable {
+				if message.String() == "esc" {
+					m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+				}
+				return m, nil
+			}
+			if m.providerPage+1 < m.cloudflarePageCount() {
+				switch message.String() {
+				case "enter", "space":
+					m.providerPage++
+					m.inputFocused = m.cloudflareView.Kind == CloudflareWalkthroughPresentation && m.providerPage+1 == m.cloudflarePageCount()
+				case "esc":
+					if m.providerPage > 0 {
+						m.providerPage--
+					} else {
+						m.actionGeneration++
+						m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+					}
+				}
+				return m, nil
+			}
+			if m.inputFocused {
+				if m.editFocusedInput(message) {
+					m.discardInput()
+					if m.cloudflareReplacing {
+						m.cloudflareReplacing, m.cloudflareAction = false, 0
+					} else {
+						m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+					}
+				}
+				return m, nil
+			}
+			actions := cloudflareActions(m.cloudflareView.Kind, m.cloudflareReplacing)
+			switch message.String() {
+			case "up":
+				m.actionGeneration++
+				m.cloudflareAction = (m.cloudflareAction + len(actions) - 1) % len(actions)
+			case "down", "tab":
+				m.actionGeneration++
+				m.cloudflareAction = (m.cloudflareAction + 1) % len(actions)
+			case "shift+tab":
+				m.actionGeneration++
+				if m.cloudflareView.Kind == CloudflareWalkthroughPresentation || m.cloudflareReplacing || m.cloudflareView.Kind == CloudflareMissingPermissionPresentation {
+					m.inputFocused = true
+				} else {
+					m.cloudflareAction = (m.cloudflareAction + len(actions) - 1) % len(actions)
+				}
+			case "enter", "space":
+				return m, m.activateCloudflareAction()
+			case "esc":
+				m.cloudflareGeneration++
+				m.actionGeneration++
+				m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+			}
+			return m, nil
+		}
+		if m.scenario == CertificatesScreen && m.certificates != nil {
+			if !m.certificatesAvailable {
+				if message.String() == "esc" {
+					m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+				}
+				return m, nil
+			}
+			if m.providerPage+1 < m.certificatePageCount() {
+				switch message.String() {
+				case "enter", "space":
+					m.providerPage++
+				case "esc":
+					if m.providerPage > 0 {
+						m.providerPage--
+					} else {
+						m.actionGeneration++
+						m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+					}
+				}
+				return m, nil
+			}
+			actions := certificateActions(m.certificatesView)
+			switch message.String() {
+			case "up", "shift+tab":
+				m.actionGeneration++
+				m.certificateAction = (m.certificateAction + len(actions) - 1) % len(actions)
+			case "down", "tab":
+				m.actionGeneration++
+				m.certificateAction = (m.certificateAction + 1) % len(actions)
+			case "enter", "space":
+				return m, m.activateCertificateAction()
+			case "esc":
+				m.actionGeneration++
+				m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+			}
+			return m, nil
+		}
 		if m.scenario == SubscriptionScreen && m.profiles != nil {
 			if !m.profilesAvailable || !subscriptionFactsAgree(m.profilesView, m.accessCatalog.subscriptions) {
 				if message.String() == "esc" {
@@ -783,15 +986,15 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			actions := subscriptionActions()
 			switch message.String() {
 			case "up", "shift+tab":
-				m.profileActionGeneration++
+				m.actionGeneration++
 				m.subscriptionAction = (m.subscriptionAction + len(actions) - 1) % len(actions)
 			case "down", "tab":
-				m.profileActionGeneration++
+				m.actionGeneration++
 				m.subscriptionAction = (m.subscriptionAction + 1) % len(actions)
 			case "enter", "space":
 				return m, m.activateSubscriptionAction()
 			case "esc":
-				m.profileActionGeneration++
+				m.actionGeneration++
 				m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
 			}
 			return m, nil
@@ -831,6 +1034,15 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.progressTicking = false
 				if (item.scenario == ConnectionProfilesScreen || item.scenario == SubscriptionScreen) && m.profiles != nil {
 					return m, m.refreshProfilesCommand()
+				}
+				if item.scenario == CloudflareWalkthrough && m.cloudflare != nil {
+					m.discardInput()
+					m.providerPage = 0
+					return m, m.refreshCloudflareCommand()
+				}
+				if item.scenario == CertificatesScreen && m.certificates != nil {
+					m.providerPage = 0
+					return m, m.refreshCertificatesCommand()
 				}
 			}
 		case "esc":
@@ -912,7 +1124,7 @@ func (m model) backChangeCommand() tea.Cmd {
 }
 
 func (m model) viewProfilesCommand() tea.Cmd {
-	identity := profileRequestIdentity{generation: m.profileViewGeneration, origin: m.scenario}
+	identity := asyncRequestIdentity{generation: m.profileViewGeneration, origin: m.scenario}
 	return func() tea.Msg {
 		return profilesViewMsg{identity: identity, view: m.profiles.ViewProfiles(m.runContext)}
 	}
@@ -923,11 +1135,119 @@ func (m *model) refreshProfilesCommand() tea.Cmd {
 	return m.viewProfilesCommand()
 }
 
+func (m model) viewCloudflareCommand() tea.Cmd {
+	generation := m.cloudflareGeneration
+	return func() tea.Msg {
+		return cloudflareViewMsg{generation: generation, view: m.cloudflare.ViewCloudflare(m.runContext)}
+	}
+}
+
+func (m *model) refreshCloudflareCommand() tea.Cmd {
+	m.cloudflareGeneration++
+	return m.viewCloudflareCommand()
+}
+
+func (m *model) activateCloudflareAction() tea.Cmd {
+	actions := cloudflareActions(m.cloudflareView.Kind, m.cloudflareReplacing)
+	if m.cloudflareAction >= len(actions) {
+		return nil
+	}
+	action := actions[m.cloudflareAction]
+	switch action.kind {
+	case cloudflareBack:
+		if m.cloudflareReplacing {
+			m.cloudflareReplacing, m.cloudflareAction = false, 0
+			m.discardInput()
+			return nil
+		}
+		m.cloudflareGeneration++
+		m.actionGeneration++
+		m.discardInput()
+		m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+		return nil
+	case cloudflareBeginReplacement:
+		m.actionGeneration++
+		m.discardInput()
+		m.inputFocused, m.cloudflareReplacing = true, true
+		if m.cloudflareView.Kind == CloudflareMissingPermissionPresentation {
+			m.cloudflareAction = 2
+		} else {
+			m.cloudflareAction = 0
+		}
+		return nil
+	case cloudflareModuleAction:
+		if (action.request == VerifyInitialManagementToken || action.request == VerifyReplacementManagementToken) && m.input == "" {
+			return nil
+		}
+		request := CloudflareRequest{Action: action.request}
+		if action.request == VerifyInitialManagementToken || action.request == VerifyReplacementManagementToken {
+			request.Token = m.input
+		}
+		m.actionGeneration++
+		identity := asyncRequestIdentity{generation: m.actionGeneration, origin: m.scenario}
+		requestContext, cancel := context.WithCancel(m.runContext)
+		m.cloudflareOperation.start(action.label, cancel)
+		command := func() tea.Msg {
+			return cloudflareResponseMsg{identity: identity, response: m.cloudflare.ActOnCloudflare(requestContext, request)}
+		}
+		return tea.Batch(command, cloudflareTick())
+	}
+	return nil
+}
+
+func (m model) cloudflarePageCount() int {
+	if !m.cloudflareAvailable {
+		return 1
+	}
+	actions := cloudflareActions(m.cloudflareView.Kind, m.cloudflareReplacing)
+	lines := cloudflareLines(m.cloudflareView, m.cloudflareAvailable, m.input, m.cloudflareAction, m.cloudflareReplacing)
+	return providerPageCount(lines, len(actions), m.width, m.height)
+}
+
+func (m model) viewCertificatesCommand() tea.Cmd {
+	generation := m.certificateGeneration
+	return func() tea.Msg {
+		return certificatesViewMsg{generation: generation, view: m.certificates.ViewCertificates(m.runContext)}
+	}
+}
+
+func (m *model) refreshCertificatesCommand() tea.Cmd {
+	m.certificateGeneration++
+	return m.viewCertificatesCommand()
+}
+
+func (m *model) activateCertificateAction() tea.Cmd {
+	actions := certificateActions(m.certificatesView)
+	if m.certificateAction >= len(actions) {
+		return nil
+	}
+	action := actions[m.certificateAction]
+	if action.kind == certificateBack {
+		m.actionGeneration++
+		m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+		return nil
+	}
+	m.actionGeneration++
+	identity := asyncRequestIdentity{generation: m.actionGeneration, origin: m.scenario}
+	return func() tea.Msg {
+		return certificateReviewMsg{identity: identity, review: m.certificates.ReviewCertificateChange(m.runContext, action.change)}
+	}
+}
+
+func (m model) certificatePageCount() int {
+	if !m.certificatesAvailable {
+		return 1
+	}
+	actions := certificateActions(m.certificatesView)
+	lines := certificateLines(m.certificatesView, m.certificatesAvailable, m.certificateAction)
+	return providerPageCount(lines, len(actions), m.width, m.height)
+}
+
 func (m *model) activateProfileAction() tea.Cmd {
 	profile := m.profilesView.Profiles[m.profileSelection]
 	action := profileActions(profile.Enabled)[m.profileAction]
-	m.profileActionGeneration++
-	identity := profileRequestIdentity{generation: m.profileActionGeneration, origin: m.scenario}
+	m.actionGeneration++
+	identity := asyncRequestIdentity{generation: m.actionGeneration, origin: m.scenario}
 	switch action.kind {
 	case openAccessAction:
 		if selection, ok := m.accessCatalog.profileFocus(profile.ID); m.accessUnlocked && ok {
@@ -949,8 +1269,8 @@ func (m *model) activateProfileAction() tea.Cmd {
 
 func (m *model) activateSubscriptionAction() tea.Cmd {
 	action := subscriptionActions()[m.subscriptionAction]
-	m.profileActionGeneration++
-	identity := profileRequestIdentity{generation: m.profileActionGeneration, origin: m.scenario}
+	m.actionGeneration++
+	identity := asyncRequestIdentity{generation: m.actionGeneration, origin: m.scenario}
 	switch action.kind {
 	case openAccessAction:
 		if selection, ok := m.accessCatalog.subscriptionFocus(); m.accessUnlocked && ok {
@@ -1082,7 +1402,7 @@ func authenticationExplanation(result AuthenticationResult) string {
 
 func (m *model) dismissExitConfirmation() tea.Cmd {
 	m.exitConfirm = false
-	var liveCommand tea.Cmd
+	var liveCommand, cloudflareCommand tea.Cmd
 	if m.pendingLiveProfileCheck != nil {
 		message := *m.pendingLiveProfileCheck
 		m.pendingLiveProfileCheck = nil
@@ -1090,12 +1410,48 @@ func (m *model) dismissExitConfirmation() tea.Cmd {
 			liveCommand = m.finishLiveProfileCheck(message)
 		}
 	}
+	if m.cloudflareOperation.queued != nil {
+		message := *m.cloudflareOperation.queued
+		m.cloudflareOperation.queued = nil
+		if message.identity.matches(*m) {
+			cloudflareCommand = m.finishCloudflareResponse(message)
+		}
+	}
 	if m.pendingUpdate == nil {
-		return liveCommand
+		return tea.Batch(liveCommand, cloudflareCommand)
 	}
 	update := *m.pendingUpdate
 	m.pendingUpdate = nil
-	return tea.Batch(liveCommand, m.applyPresentationUpdate(update))
+	return tea.Batch(liveCommand, cloudflareCommand, m.applyPresentationUpdate(update))
+}
+
+func (m *model) finishCloudflareResponse(message cloudflareResponseMsg) tea.Cmd {
+	m.cancelCloudflareAction()
+	m.discardInput()
+	if message.response.Presentation != nil && message.response.Review == nil {
+		m.cloudflareView, m.cloudflareAvailable = validatedCloudflarePresentation(*message.response.Presentation)
+		m.cloudflareAction, m.cloudflareReplacing, m.providerPage = 0, false, 0
+		return nil
+	}
+	if message.response.Review != nil && message.response.Presentation == nil && m.cloudflareOutcomes != nil {
+		m.changeOrigin, m.hasChangeOrigin = m.scenario, true
+		m.outcome = m.cloudflareOutcomes
+		m.changeReview = validatedChangeReview(*message.response.Review)
+		m.planPage, m.changeFeedback = 0, ""
+		m.scenario, m.selected = InstallationReview, selectedNavigation(InstallationReview)
+		return nil
+	}
+	m.cloudflareView, m.cloudflareAvailable = CloudflarePresentation{}, false
+	return nil
+}
+
+func (m *model) cancelCloudflareAction() {
+	m.cloudflareOperation.stop()
+}
+
+func (m *model) discardInput() {
+	m.input, m.inputFocused = "", false
+	m.inputTruncated, m.pasteNeutralized, m.pasteGuard = false, false, false
 }
 
 func (m *model) finishLiveProfileCheck(message liveProfileCheckMsg) tea.Cmd {
@@ -1137,6 +1493,10 @@ func waitLiveProfileCheck(ctx context.Context, generation uint64, updates <-chan
 
 func liveProfileCheckTick() tea.Cmd {
 	return tea.Tick(time.Second, func(at time.Time) tea.Msg { return liveProfileCheckTickMsg(at) })
+}
+
+func cloudflareTick() tea.Cmd {
+	return tea.Tick(time.Second, func(at time.Time) tea.Msg { return cloudflareTickMsg(at) })
 }
 
 func (m *model) applyPresentationUpdate(update PresentationUpdate) tea.Cmd {
@@ -1381,6 +1741,31 @@ func (m model) scenarioDetails(current fixture) []string {
 }
 
 func (m model) scenarioLines(current fixture) []string {
+	if m.scenario == CloudflareWalkthrough && m.cloudflare != nil {
+		if m.cloudflareOperation.active {
+			return []string{
+				spinner(m.unicode, m.cloudflareOperation.elapsed) + " " + m.cloudflareOperation.label + " is running - " + elapsed(m.cloudflareOperation.elapsed),
+				"The provider decides how long this takes.",
+				"No percentage, completion time, or result is inferred.",
+				"",
+				"> Back",
+			}
+		}
+		lines := cloudflareLines(m.cloudflareView, m.cloudflareAvailable, m.input, m.cloudflareAction, m.cloudflareReplacing)
+		actionCount := 1
+		if m.cloudflareAvailable {
+			actionCount = len(cloudflareActions(m.cloudflareView.Kind, m.cloudflareReplacing))
+		}
+		return providerPage(lines, actionCount, m.width, m.height, m.providerPage)
+	}
+	if m.scenario == CertificatesScreen && m.certificates != nil {
+		lines := certificateLines(m.certificatesView, m.certificatesAvailable, m.certificateAction)
+		actionCount := 1
+		if m.certificatesAvailable {
+			actionCount = len(certificateActions(m.certificatesView))
+		}
+		return providerPage(lines, actionCount, m.width, m.height, m.providerPage)
+	}
 	if m.scenario == InstallationReview && m.outcome != nil {
 		lines := changeReviewLines(m.changeReview, m.width, m.height, m.planPage)
 		if correction := m.changeReview.Correction; correction != nil {
@@ -1698,6 +2083,24 @@ func (m model) shortcuts() [2]string {
 	}
 	if m.scenario == LiveProfileCheckScreen && m.profiles != nil {
 		return [2]string{" Esc Back", " Ctrl+C Exit confirmation  Q is never Exit"}
+	}
+	if m.scenario == CloudflareWalkthrough && m.cloudflare != nil {
+		if m.cloudflareOperation.active {
+			return [2]string{" Esc Back", " Ctrl+C Exit confirmation  Q is never Exit"}
+		}
+		if m.providerPage+1 < m.cloudflarePageCount() {
+			return [2]string{" Enter/Space Next section  Esc Back", " Ctrl+C Exit confirmation  Q is never Exit"}
+		}
+		if m.inputFocused {
+			return [2]string{" Type or paste masked token  Tab Actions", " Esc Back  Ctrl+C Exit confirmation"}
+		}
+		return [2]string{" Up/Down Action  Enter/Space Select", " Shift+Tab Token  Esc Back  Ctrl+C Exit confirmation"}
+	}
+	if m.scenario == CertificatesScreen && m.certificates != nil {
+		if m.providerPage+1 < m.certificatePageCount() {
+			return [2]string{" Enter/Space Next section  Esc Back", " Ctrl+C Exit confirmation  Q is never Exit"}
+		}
+		return [2]string{" Up/Down Action  Enter/Space Select", " Esc Back  Ctrl+C Exit confirmation  Q is never Exit"}
 	}
 	second := " Ctrl+C Exit confirmation  Q is never Exit"
 	if scenarioFixture(m.scenario).allowsBack {
