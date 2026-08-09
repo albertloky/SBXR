@@ -260,6 +260,9 @@ func TestRegistryPlansOnlyAuthorizedForwardRepairOfCurrentLineage(t *testing.T) 
 	if revision, sha, valid := result.Plan.StateConnectionProfilesRepair(); !valid || revision != 7 || sha != stateSHA {
 		t.Fatalf("State repair authority = revision %d sha %q valid %t", revision, sha, valid)
 	}
+	if contribution := result.Plan.SoftwareLifecycleRepairContribution(); contribution.Name != "Connection Profiles" || contribution.Owner != systemchanges.ConnectionProfilesModule || contribution.CurrentRevision != 7 || contribution.CurrentStateSHA256 != stateSHA || len(contribution.Steps) == 0 || len(contribution.Checks) == 0 {
+		t.Fatalf("Software Lifecycle repair contribution = %+v", contribution)
+	}
 	if replay := connectionprofiles.New(host).PlanRegistry(t.Context(), base); replay.Plan != nil || replay.Health.Outcome == connectionprofiles.Healthy {
 		t.Fatalf("replayed repair authority = %+v", replay)
 	}

@@ -103,7 +103,7 @@ func (i Interface) planManagedRepair(ctx context.Context, request PlanRequest) P
 	checksum := hex.EncodeToString(digest[:])
 	identity := request.ChangeSet + "-plan-" + checksum[:12]
 	use, _ := planUses.LoadOrStore(identity, &atomic.Bool{})
-	plan := &Plan{identity: identity, sha256: checksum, observation: strings.Join(digests, "\n"), request: request, steps: steps, checks: wholeTunnelChecks(), used: use.(*atomic.Bool)}
+	plan := &Plan{identity: identity, sha256: checksum, observation: strings.Join(digests, "\n"), request: request, steps: steps, checks: wholeTunnelChecks(), managedRepair: true, used: use.(*atomic.Bool)}
 	health := finish(healthResult(i, Health{Module: "Cloudflare Tunnel", Outcome: Healthy, Code: "CLOUDFLARE-REPAIR-READY", Explanation: "The exact owned Cloudflare repair is ready for review."})).Health
 	return PlanResult{Plan: plan, Health: health}
 }
@@ -167,7 +167,7 @@ func systemRoutes(routes []Route) []systemchanges.CloudflareRoute {
 }
 
 func (plan *Plan) StateCloudflareRepair() (source any, bindingJSON []byte, templateSHA256 string, valid bool) {
-	if plan == nil || plan.request.ManagedRepair.TunnelID == "" {
+	if plan == nil || !plan.managedRepair || plan.request.ManagedRepair.TunnelID == "" {
 		return nil, nil, "", false
 	}
 	bindingJSON, err := json.Marshal(struct {

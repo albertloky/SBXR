@@ -151,10 +151,11 @@ type FreshInstallationAuthority struct {
 }
 
 type statusAuthority struct {
-	adapter  Adapter
-	revision uint64
-	sha256   string
-	used     atomic.Bool
+	adapter        Adapter
+	revision       uint64
+	sha256         string
+	volatileSHA256 string
+	used           atomic.Bool
 }
 
 func (ForwardRepairAuthority) String() string   { return "Forward repair authority: redacted" }
@@ -164,6 +165,22 @@ func (ForwardRepairAuthority) MarshalJSON() ([]byte, error) {
 }
 func (authority ForwardRepairAuthority) ConnectionProfilesForwardRepair() (uint64, string, bool) {
 	return authority.consume()
+}
+
+func (authority ForwardRepairAuthority) SoftwareLifecycleRepairReview() (uint64, string, string, bool) {
+	if authority.cell == nil || authority.cell.used.Load() || authority.cell.revision == 0 || !validSHA256(authority.cell.sha256) || !validSHA256(authority.cell.volatileSHA256) {
+		return 0, "", "", false
+	}
+	return authority.cell.revision, authority.cell.sha256, authority.cell.volatileSHA256, true
+}
+
+func (authority ForwardRepairAuthority) SoftwareLifecycleForwardRepair() (uint64, string, string, bool) {
+	if authority.cell == nil || !authority.cell.used.CompareAndSwap(false, true) {
+		return 0, "", "", false
+	}
+	observed, err := authority.cell.adapter.Observe()
+	valid := err == nil && validObservation(observed) && observed.Status == RecoveryRequired && observed.Lock == LockReleased && observed.RecoveryCause == CurrentStateDrift && observed.ForwardRepairAvailable && observed.StateRevision == authority.cell.revision && observed.StateSHA256 == authority.cell.sha256 && observed.VolatileSHA256 == authority.cell.volatileSHA256 && validSHA256(observed.VolatileSHA256)
+	return authority.cell.revision, authority.cell.sha256, authority.cell.volatileSHA256, valid
 }
 
 func (FreshInstallationAuthority) String() string   { return "Fresh installation authority: redacted" }
@@ -326,10 +343,10 @@ func (i Interface) ForwardRepairAuthority() ForwardRepairAuthority {
 		return ForwardRepairAuthority{}
 	}
 	observed, err := i.adapter.Observe()
-	if err != nil || !validObservation(observed) || observed.Status != RecoveryRequired || observed.RecoveryCause != CurrentStateDrift || !observed.ForwardRepairAvailable || observed.StateRevision == 0 || !validSHA256(observed.StateSHA256) {
+	if err != nil || !validObservation(observed) || observed.Status != RecoveryRequired || observed.Lock != LockReleased || observed.RecoveryCause != CurrentStateDrift || !observed.ForwardRepairAvailable || observed.StateRevision == 0 || !validSHA256(observed.StateSHA256) {
 		return ForwardRepairAuthority{}
 	}
-	return ForwardRepairAuthority{cell: &statusAuthority{adapter: i.adapter, revision: observed.StateRevision, sha256: observed.StateSHA256}}
+	return ForwardRepairAuthority{cell: &statusAuthority{adapter: i.adapter, revision: observed.StateRevision, sha256: observed.StateSHA256, volatileSHA256: observed.VolatileSHA256}}
 }
 
 func (i Interface) FreshInstallationAuthority() FreshInstallationAuthority {

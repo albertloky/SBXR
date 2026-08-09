@@ -234,3 +234,22 @@ go test ./internal/state -run '^(TestPreparedCommitDurablyCompletesOneSystemChan
 Require an explicitly selected older tag to pass the same fresh five-file release verification and architecture staging as any other selected release. Disclose the installed and selected Release Identities side by side and offer only `Review downgrade` when the identities differ, the authenticated sequence is lower, the updater schema is supported, and both installed and selected releases use the currently publishable State schema `2`. Refuse same identity, non-lower sequence, incompatible State, stale approval, changed contributions, or changed prepared State.
 
 Require `PlanDowngrade` to reuse the update Plan's one-use approval, exact recheck, three affected Module contributions, one `Update` Change Set, health and agreement gates, single `N → N+1` State publication, four-service restart, rollback, process-restart inspection, retention, and durable cleanup. Stable discovery and `PlanUpdate` must continue rejecting lower sequences. No reverse migration, automatic downgrade, local history selector, old State revision, old secret, retained snapshot, or recovery parcel is accepted. Evidence remains secret-safe. External valid-release success, Integrated Verification, Codex Live Acceptance, Owner Acceptance, and Release Qualification remain Pending on the inherited #127/#128 prerequisites.
+
+### SL-REPAIR-07 — Repair only current Desired State drift
+
+Run:
+
+```sh
+go test ./internal/softwarelifecycle -run '^Test(ViewRepair|PlanRepair|ApplyRepair|SoftwareRepair)' -count=1
+go test ./internal/connectionprofiles -run '^TestRegistryPlansOnlyAuthorizedForwardRepairOfCurrentLineage$' -count=1
+go test ./internal/cloudflaretunnel -run '^TestManagedRepairPlansOnlyCommittedOwnedDriftAndBlocksConflicts$' -count=1
+go test ./internal/subscriptionpublication -run '^TestPlanContributesOnlyAnExplicitCurrentStateRepair$' -count=1
+go test ./internal/state -run '^Test(ValidCurrentStateDriftCreatesOnlyAFreshForwardRepairChangeSet|PostPublicationFailureRestoresPriorDesiredState|RollbackCanSurviveASecondProcessDeath|RestartAfterCompleteCleansUpWithoutRollback|RetryAutomaticRollbackUsesOnlyTheAuthorizedRecoveryPath|RecoveryRequiredCoversEveryIntegrityAndLineageFailure)$' -count=1
+go test ./internal/systemchanges -run '^TestRecoveryRequired(ExposesOnlyItsExactSafeActions|BlocksNormalMutationAndAdmitsOnlyValidForwardRepair)$' -count=1
+```
+
+Require `ViewRepair` to expose one protected `Review repair` candidate only after a fresh `Recovery Required` inspection proves valid current Desired State drift, exact revision and checksum, a released lock, no unfinished Change Set, and a complete Observed State digest. Require valid unfinished transaction material to expose `Retry automatic rollback` instead. Missing or corrupt Desired State, lost secrets, dead or replacement VPS, old completed revision, and Owner regret expose only secret-safe evidence, separately confirmed Complete removal, and Clean-VPS rebuild guidance.
+
+Require one deterministic `PlanRepair` to consume the fresh observation and exactly one typed owning-Module contribution. Bind the unchanged current Owner intent, exact reversible steps, required pre- and post-publication checks, disk, rollback, and affected Module without rendering protected material. Apply must consume the Plan once, recheck State, observation, and contribution after approval, accept only State's exact unchanged-intent revision `N → N+1`, and hand one `Repair` Change Set to System Changes. Required failure, cancellation, process death, or disagreement uses the normal transaction rollback and restart rules; unprovable resolution remains Recovery Required.
+
+No repair path may adopt Observed State, unowned resources, arbitrary files or commands; recreate State or secrets; select old revisions; transfer to another VPS; use retained history, backups, snapshots, or recovery parcels; force-unlock; bypass the journal; or manually complete an unfinished transaction. External Integrated Verification, Codex Live Acceptance, Owner Acceptance, and Release Qualification remain Pending on issue #127 and the inherited production prerequisites.

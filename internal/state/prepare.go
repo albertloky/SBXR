@@ -107,7 +107,6 @@ type SubscriptionValidator interface {
 // SubscriptionPublicationPreparer is the reviewed owning-Module handoff for
 // one complete validated artifact set. The bytes are protected transaction input.
 type SubscriptionPublicationPreparer interface {
-	SubscriptionValidator
 	Identity() string
 	SHA256() string
 	PrepareSubscriptionPublication() ([]byte, error)
@@ -395,6 +394,10 @@ type SoftwareUpdateAuthority interface {
 	StateSoftwareUpdate() ([]byte, bool)
 }
 
+type SoftwareRepairAuthority interface {
+	StateSoftwareRepair() (revision uint64, stateSHA256 string, valid bool)
+}
+
 type ConnectionProfilesRepairAuthority interface {
 	StateConnectionProfilesRepair() (revision uint64, stateSHA256 string, valid bool)
 }
@@ -496,6 +499,19 @@ func (i Interface) PrepareSoftwareUpdateCommit(request PrepareRequest, authority
 		commit.softwareUpdate = true
 	}
 	return commit, err
+}
+
+func (i Interface) PrepareSoftwareRepairCommit(request PrepareRequest, authority SoftwareRepairAuthority) (*PreparedCommit, error) {
+	typeOf := reflect.TypeOf(authority)
+	if typeOf == nil || typeOf.Kind() != reflect.Pointer || typeOf.Elem().PkgPath() != "github.com/albertloky/SBXR/internal/softwarelifecycle" || typeOf.Elem().Name() != "RepairPlan" || request.Loaded.loaded == nil || request.Loaded.loaded.owner != i.implementation {
+		return nil, finding("STATE-SOFTWARE-REPAIR-PLAN", "current Desired State repair", "the authority did not come from Software Lifecycle or current State", "one exact reviewed repair Plan and fresh Managed Load", "repair cannot adopt caller-made or Observed State", "reload State and rebuild the repair Plan")
+	}
+	revision, stateSHA256, valid := authority.StateSoftwareRepair()
+	current, problem := decode(request.Loaded.loaded.bytes)
+	if !valid || problem != nil || request.Loaded.Status != Managed || request.Loaded.loaded.revision != revision || request.Loaded.loaded.payloadChecksum != stateSHA256 || current.ReleaseIdentity != request.CandidateReleaseIdentity || !reflect.DeepEqual(current.desiredState, request.Candidate) {
+		return nil, finding("STATE-SOFTWARE-REPAIR-PLAN", "current Desired State repair", "the release, revision, checksum, or Desired State meaning differs from review", "the exact current valid Desired State and installed Release Identity", "repair only moves Observed State toward current intent", "reload State and rebuild the repair Plan")
+	}
+	return i.prepareCommit(request, nil, nil)
 }
 
 // PrepareIPCertificateRenewalCommit admits only the three Desired State facts

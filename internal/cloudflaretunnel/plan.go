@@ -164,6 +164,7 @@ type Plan struct {
 	runToken                      TunnelRunToken
 	managementToken               VerifiedManagementToken
 	releaseUpdate                 bool
+	managedRepair                 bool
 	used                          *atomic.Bool
 }
 
@@ -205,6 +206,13 @@ func (plan *Plan) SoftwareLifecycleUpdateContribution() lifecyclecontract.Update
 	}
 	digest := sha256.Sum256([]byte(plan.observation))
 	return lifecyclecontract.UpdateContribution{Name: "Cloudflare Tunnel", Owner: systemchanges.CloudflareModule, Identity: plan.identity, SHA256: plan.sha256, StableSHA256: hex.EncodeToString(digest[:]), ChangeSet: plan.request.ChangeSet, DesiredStateSHA256: plan.request.DesiredStateSHA256, Steps: plan.Steps(), Checks: plan.Checks(), Details: []string{plan.String()}}
+}
+func (plan *Plan) SoftwareLifecycleRepairContribution() lifecyclecontract.RepairContribution {
+	if plan == nil || !plan.managedRepair || plan.request.ManagedRepair.TunnelID == "" || plan.request.StartingRevision == 0 || plan.request.StartingStateSHA256 == "" {
+		return lifecyclecontract.RepairContribution{}
+	}
+	digest := sha256.Sum256([]byte(plan.observation))
+	return lifecyclecontract.RepairContribution{Name: "Cloudflare Tunnel", Owner: systemchanges.CloudflareModule, Identity: plan.identity, SHA256: plan.sha256, StableSHA256: hex.EncodeToString(digest[:]), ChangeSet: plan.request.ChangeSet, CurrentRevision: plan.request.StartingRevision, CurrentStateSHA256: plan.request.StartingStateSHA256, Steps: plan.Steps(), Checks: plan.Checks(), Details: []string{plan.String()}}
 }
 func (plan *Plan) String() string {
 	if plan == nil {

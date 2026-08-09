@@ -9,10 +9,18 @@ import (
 	"testing"
 
 	"github.com/albertloky/SBXR/internal/connectionprofiles"
+	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 	"github.com/albertloky/SBXR/internal/state"
 	"github.com/albertloky/SBXR/internal/subscriptionpublication"
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
+
+type repairStatusAdapter struct{ observation systemchanges.Observation }
+
+func (adapter repairStatusAdapter) Observe() (systemchanges.Observation, error) {
+	return adapter.observation, nil
+}
+func (repairStatusAdapter) TryLock() (systemchanges.Lock, bool, error) { return nil, false, nil }
 
 func TestPlanBindsOneCompleteValidatedArtifactSetWithoutRenderingSecrets(t *testing.T) {
 	source, reader := sixProfileSource(t, "198.51.100.10")
@@ -60,6 +68,44 @@ func TestPlanBindsOneCompleteValidatedArtifactSetWithoutRenderingSecrets(t *test
 	secondApply := result.Plan.Apply(systemchanges.New(nil), prepared, systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: strings.Repeat("c", 64)}, strings.Repeat("e", 64), disk)
 	if firstApply.Outcome != systemchanges.Refused || secondApply.Outcome != systemchanges.Refused || prepared.bindings != 1 {
 		t.Fatalf("one-use Plan.Apply = first %+v, second %+v, prepared bindings %d", firstApply, secondApply, prepared.bindings)
+	}
+}
+
+func TestPlanContributesOnlyAnExplicitCurrentStateRepair(t *testing.T) {
+	source, reader := sixProfileSource(t, "198.51.100.10")
+	request := subscriptionpublication.PlanRequest{
+		Source: source, Secrets: reader, Subscription: state.SubscriptionSettings{Token: access(reader, "SUBSCRIPTION-REPAIR-MARKER"), ListenPort: 10443, CertificateID: "ip-certificate"},
+		ChangeSet: "subscriptions-current-state-repair", StartingState: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: strings.Repeat("c", 64)},
+		DesiredStateRevision: 8, DesiredStateSHA256: strings.Repeat("d", 64), ManagedInputsSHA256: strings.Repeat("e", 64), Repair: true,
+		RelevantChecksums: subscriptionpublication.RelevantChecksums{ConnectionProfiles: strings.Repeat("f", 64), Subscription: strings.Repeat("1", 64)}, CompatibilityDefinition: subscriptionpublication.CurrentCompatibilityDefinition,
+		SelectedAddress: "198.51.100.10", ReleaseIdentity: state.ReleaseIdentity{Repository: "github.com/albertloky/SBXR", Tag: "v1.0.0", Commit: strings.Repeat("a", 40), ReleaseIndexSHA256: strings.Repeat("b", 64)},
+	}
+	result := newAcceptingTestModule().Plan(t.Context(), request)
+	if result.Plan == nil || result.Finding != nil {
+		t.Fatalf("repair Plan = %+v", result)
+	}
+	contribution := result.Plan.SoftwareLifecycleRepairContribution()
+	if contribution.Name != "Subscription Publication" || contribution.Owner != systemchanges.SubscriptionModule || contribution.CurrentRevision != 7 || contribution.CurrentStateSHA256 != request.StartingState.SHA256 || len(contribution.Steps) != 1 || len(contribution.Checks) != 3 {
+		t.Fatalf("Software Lifecycle repair contribution = %+v", contribution)
+	}
+	if update := result.Plan.SoftwareLifecycleUpdateContribution(); update.Name != "" {
+		t.Fatalf("repair Plan also exposed update authority = %+v", update)
+	}
+	observation := systemchanges.Observation{Status: systemchanges.RecoveryRequired, LastChangeSet: "change-0007", Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, ForwardRepairAvailable: true, RecoveryCause: systemchanges.CurrentStateDrift, StateRevision: 7, StateSHA256: request.StartingState.SHA256, VolatileSHA256: request.ManagedInputsSHA256}
+	view := (softwarelifecycle.Interface{}).ViewRepair(systemchanges.New(repairStatusAdapter{observation}))
+	repair, finding := softwarelifecycle.PlanRepair(softwarelifecycle.RepairPlanRequest{Candidate: view.RepairCandidate(), Contribution: result.Plan, ChangeSet: request.ChangeSet, Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}})
+	if finding != nil || repair == nil {
+		t.Fatalf("Software Lifecycle PlanRepair() = (%+v, %+v)", repair, finding)
+	}
+	bundle, err := repair.PrepareSubscriptionPublication()
+	set, decodeErr := subscriptionpublication.DecodePreparedArtifactSet(bytes.NewReader(bundle))
+	if err != nil || decodeErr != nil || len(set.Files()) != 8 {
+		t.Fatalf("repair prepared artifact set = %d bytes, %v, decode %v", len(bundle), err, decodeErr)
+	}
+	request.Repair = false
+	ordinary := newAcceptingTestModule().Plan(t.Context(), request)
+	if ordinary.Plan == nil || ordinary.Plan.SoftwareLifecycleRepairContribution().Name != "" {
+		t.Fatalf("ordinary publication became repair = %+v", ordinary)
 	}
 }
 

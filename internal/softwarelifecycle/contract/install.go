@@ -16,3 +16,14 @@ type InstallContribution struct {
 }
 
 type UpdateContribution = InstallContribution
+
+type RepairContribution struct {
+	Name, Identity, SHA256, StableSHA256 string
+	Owner                                systemchanges.Module
+	ChangeSet                            string
+	CurrentRevision                      uint64
+	CurrentStateSHA256                   string
+	Steps                                []systemchanges.Step
+	Checks                               []systemchanges.Check
+	Details                              []string
+}

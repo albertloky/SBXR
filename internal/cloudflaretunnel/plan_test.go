@@ -77,6 +77,9 @@ func TestPlanReleaseUpdateRestartsOnlyTheVerifiedOwnedCloudflaredService(t *test
 	if contribution.Name != "Cloudflare Tunnel" || contribution.Owner != systemchanges.CloudflareModule || len(contribution.Steps) != 1 || contribution.Steps[0].Forward() != systemchanges.ActivatePreparedConfiguration || len(contribution.Checks) != 2 {
 		t.Fatalf("update contribution = %+v", contribution)
 	}
+	if repair := result.Plan.SoftwareLifecycleRepairContribution(); repair.Name != "" {
+		t.Fatalf("release update also exposed repair authority = %+v", repair)
+	}
 }
 
 func TestPlanNamesOwnerAssistedRunTokenRotationAndBindsOwnedIdentifiers(t *testing.T) {
@@ -137,6 +140,9 @@ func TestManagedRepairPlansOnlyCommittedOwnedDriftAndBlocksConflicts(t *testing.
 	}
 	if _, binding, templateSHA, valid := result.Plan.StateCloudflareRepair(); len(binding) == 0 || templateSHA != request.DesiredStateSHA256 || !valid {
 		t.Fatal("repair omitted its State ownership binding")
+	}
+	if contribution := result.Plan.SoftwareLifecycleRepairContribution(); contribution.Name != "Cloudflare Tunnel" || contribution.Owner != systemchanges.CloudflareModule || contribution.CurrentRevision != 7 || contribution.CurrentStateSHA256 != request.StartingStateSHA256 || len(contribution.Steps) != 3 || len(contribution.Checks) == 0 {
+		t.Fatalf("Software Lifecycle repair contribution = %+v", contribution)
 	}
 	api.mutations[request.XHTTPHostname] = MutationObservation{Digest: strings.Repeat("d", 64), Tunnels: []OwnedResource{{ID: testTunnelID, Name: request.TunnelName}}, DNSRecords: []OwnedResource{{ID: strings.Repeat("9", 32), Name: request.XHTTPHostname}}}
 	blocked := module.Plan(t.Context(), request)

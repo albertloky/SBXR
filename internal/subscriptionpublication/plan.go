@@ -37,6 +37,7 @@ type PlanRequest struct {
 	SelectedAddress         string
 	ReleaseIdentity         state.ReleaseIdentity
 	ClientAccessMutation    *ClientAccessMutation
+	Repair                  bool
 }
 
 type PlanSummary struct {
@@ -61,6 +62,7 @@ type Plan struct {
 	steps            []systemchanges.Step
 	checks           []systemchanges.Check
 	prepared, used   atomic.Bool
+	repair           bool
 }
 
 type planBinding struct {
@@ -93,7 +95,7 @@ func (module Interface) Plan(ctx context.Context, request PlanRequest) PlanResul
 		secrets = clientAccessPlanReader{mutation: request.ClientAccessMutation, fallback: request.Secrets}
 	}
 	_, validAction := clientAccessEffect(action)
-	if ctx == nil || request.Secrets == nil || secrets == nil || !planIdentityPattern.MatchString(request.ChangeSet) || request.DesiredStateRevision != request.StartingState.Revision+1 || !validPlanSHA(request.DesiredStateSHA256) || !validPlanSHA(request.ManagedInputsSHA256) || !validPlanSHA(request.RelevantChecksums.ConnectionProfiles) || !validPlanSHA(request.RelevantChecksums.Subscription) || request.CompatibilityDefinition != CurrentCompatibilityDefinition || request.Subscription.ListenPort == 0 || request.Subscription.CertificateID == "" || secrets.ReadClientAccessValue(request.Subscription.Token) == "" || !validRelease(request.ReleaseIdentity) || !validAction {
+	if ctx == nil || request.Secrets == nil || secrets == nil || !planIdentityPattern.MatchString(request.ChangeSet) || request.DesiredStateRevision != request.StartingState.Revision+1 || !validPlanSHA(request.DesiredStateSHA256) || !validPlanSHA(request.ManagedInputsSHA256) || !validPlanSHA(request.RelevantChecksums.ConnectionProfiles) || !validPlanSHA(request.RelevantChecksums.Subscription) || request.CompatibilityDefinition != CurrentCompatibilityDefinition || request.Subscription.ListenPort == 0 || request.Subscription.CertificateID == "" || secrets.ReadClientAccessValue(request.Subscription.Token) == "" || !validRelease(request.ReleaseIdentity) || !validAction || request.Repair && request.ClientAccessMutation != nil {
 		return refuse("SUBSCRIPTION-PUBLICATION-PLAN-INPUT", "a required typed binding is missing or invalid")
 	}
 	address, err := netip.ParseAddr(request.SelectedAddress)
@@ -146,7 +148,7 @@ func (module Interface) Plan(ctx context.Context, request PlanRequest) PlanResul
 	identity := "subscriptions-" + sha[:12]
 	summary := PlanSummary{Identity: identity, ChangeSet: request.ChangeSet, DesiredStateSHA256: request.DesiredStateSHA256, ManagedInputsSHA256: request.ManagedInputsSHA256, SelectedAddress: request.SelectedAddress, CompatibilityDefinition: string(request.CompatibilityDefinition), RelevantChecksums: request.RelevantChecksums, DesiredStateRevision: request.DesiredStateRevision, ReleaseIdentity: request.ReleaseIdentity, Representations: append([]string(nil), names[:7]...), ProfileCount: rendered.ProfileCount, Omissions: source.Omissions(), ValidationComplete: true, Replacement: "complete artifact set N to N+1", Rollback: "restore the exact prior complete artifact set", ClientAccessEffect: effect}
 	binding := planBinding{Subscription: request.Subscription, ChangeSet: request.ChangeSet, StartingState: request.StartingState, DesiredStateRevision: request.DesiredStateRevision, DesiredStateSHA256: request.DesiredStateSHA256, ManagedInputsSHA256: request.ManagedInputsSHA256}
-	return PlanResult{Plan: &Plan{identity: identity, sha256: sha, binding: binding, summary: summary, bundle: append([]byte(nil), bundle...), steps: []systemchanges.Step{step}, checks: checks}}
+	return PlanResult{Plan: &Plan{identity: identity, sha256: sha, binding: binding, summary: summary, bundle: append([]byte(nil), bundle...), steps: []systemchanges.Step{step}, checks: checks, repair: request.Repair}}
 }
 
 func validPlanSHA(value string) bool {
@@ -197,10 +199,16 @@ func (plan *Plan) SoftwareLifecycleInstallContribution() lifecyclecontract.Insta
 	return lifecyclecontract.InstallContribution{Name: "Subscription Publication", Owner: systemchanges.SubscriptionModule, Identity: plan.identity, SHA256: plan.sha256, StableSHA256: plan.binding.ManagedInputsSHA256, ChangeSet: plan.binding.ChangeSet, DesiredStateSHA256: plan.binding.DesiredStateSHA256, Steps: plan.Steps(), Checks: plan.Checks(), Details: []string{plan.String()}}
 }
 func (plan *Plan) SoftwareLifecycleUpdateContribution() lifecyclecontract.UpdateContribution {
-	if plan == nil || plan.binding.StartingState.Status != systemchanges.Managed || plan.binding.StartingState.Revision == 0 || plan.binding.DesiredStateRevision != plan.binding.StartingState.Revision+1 {
+	if plan == nil || plan.repair || plan.binding.StartingState.Status != systemchanges.Managed || plan.binding.StartingState.Revision == 0 || plan.binding.DesiredStateRevision != plan.binding.StartingState.Revision+1 {
 		return lifecyclecontract.UpdateContribution{}
 	}
 	return lifecyclecontract.UpdateContribution{Name: "Subscription Publication", Owner: systemchanges.SubscriptionModule, Identity: plan.identity, SHA256: plan.sha256, StableSHA256: plan.binding.ManagedInputsSHA256, ChangeSet: plan.binding.ChangeSet, DesiredStateSHA256: plan.binding.DesiredStateSHA256, Steps: plan.Steps(), Checks: plan.Checks(), Details: []string{plan.String()}}
+}
+func (plan *Plan) SoftwareLifecycleRepairContribution() lifecyclecontract.RepairContribution {
+	if plan == nil || !plan.repair || plan.binding.StartingState.Status != systemchanges.Managed || plan.binding.StartingState.Revision == 0 || plan.binding.StartingState.SHA256 == "" || plan.binding.DesiredStateRevision != plan.binding.StartingState.Revision+1 {
+		return lifecyclecontract.RepairContribution{}
+	}
+	return lifecyclecontract.RepairContribution{Name: "Subscription Publication", Owner: systemchanges.SubscriptionModule, Identity: plan.identity, SHA256: plan.sha256, StableSHA256: plan.binding.ManagedInputsSHA256, ChangeSet: plan.binding.ChangeSet, CurrentRevision: plan.binding.StartingState.Revision, CurrentStateSHA256: plan.binding.StartingState.SHA256, Steps: plan.Steps(), Checks: plan.Checks(), Details: []string{plan.String()}}
 }
 func (plan *Plan) Summary() PlanSummary {
 	if plan == nil {
@@ -249,6 +257,8 @@ func (plan *Plan) Apply(module systemchanges.Interface, prepared systemchanges.P
 	mutation := systemchanges.SettingChangeMutation
 	if starting.Status == systemchanges.NotInstalled {
 		mutation = systemchanges.InstallationMutation
+	} else if plan.repair {
+		mutation = systemchanges.RepairMutation
 	}
 	change, err := systemchanges.NewChangeSet(systemchanges.ChangeSetSpec{Identity: plan.binding.ChangeSet, Mutation: mutation, OutcomeOwner: systemchanges.SubscriptionModule, StartingState: starting, TargetStateSHA256: candidateSHA256, Plan: systemchanges.PlanBinding{Identity: plan.identity, SHA256: plan.sha256, VolatileSHA256: managedInputsSHA256}, PreparedState: prepared, Steps: plan.steps, Checks: plan.checks, Timeouts: systemchanges.Timeouts{Step: time.Minute, Check: time.Minute}, Disk: disk})
 	if err != nil {

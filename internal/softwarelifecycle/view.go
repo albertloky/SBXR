@@ -37,9 +37,12 @@ const (
 type Action string
 
 const (
-	ReviewInstall   Action = "Review install"
-	ReviewUpdate    Action = "Review update"
-	ReviewDowngrade Action = "Review downgrade"
+	ReviewInstall          Action = "Review install"
+	ReviewUpdate           Action = "Review update"
+	ReviewDowngrade        Action = "Review downgrade"
+	ReviewRepair           Action = "Review repair"
+	RetryAutomaticRollback Action = "Retry automatic rollback"
+	CompleteRemoval        Action = "Complete removal"
 )
 
 type Component string

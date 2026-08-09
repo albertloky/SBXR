@@ -459,6 +459,12 @@ func (plan *Plan) SoftwareLifecycleUpdateContribution() lifecyclecontract.Update
 	}
 	return lifecyclecontract.UpdateContribution{Name: "Connection Profiles", Owner: systemchanges.ConnectionProfilesModule, Identity: plan.identity, SHA256: plan.sha256, StableSHA256: plan.volatileSHA256, ChangeSet: plan.changeSet, DesiredStateSHA256: plan.desiredStateSHA256, Steps: plan.Steps(), Checks: plan.Checks(), Details: []string{plan.String()}}
 }
+func (plan *Plan) SoftwareLifecycleRepairContribution() lifecyclecontract.RepairContribution {
+	if plan == nil || plan.mutation != systemchanges.RepairMutation || plan.revision == 0 || plan.startingStateSHA256 == "" || plan.startingStateSHA256 != plan.desiredStateSHA256 {
+		return lifecyclecontract.RepairContribution{}
+	}
+	return lifecyclecontract.RepairContribution{Name: "Connection Profiles", Owner: systemchanges.ConnectionProfilesModule, Identity: plan.identity, SHA256: plan.sha256, StableSHA256: plan.volatileSHA256, ChangeSet: plan.changeSet, CurrentRevision: plan.revision, CurrentStateSHA256: plan.startingStateSHA256, Steps: plan.Steps(), Checks: plan.Checks(), Details: []string{plan.String()}}
+}
 func (plan *Plan) String() string {
 	if plan == nil {
 		return "Connection Profiles Plan: unavailable"
