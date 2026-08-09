@@ -460,7 +460,7 @@ func validateHealthDiagnosticsReadOnly(root string) error {
 func validateOwnerConsolePresentation(root string) error {
 	allowed := map[string]bool{
 		"context": true, "errors": true, "fmt": true, "io": true, "os": true,
-		"slices": true, "strings": true, "sync/atomic": true, "syscall": true,
+		"slices": true, "strconv": true, "strings": true, "sync/atomic": true, "syscall": true,
 		"time": true, "unsafe": true,
 	}
 	return walkProductionGoFiles(root, func(relative string, source *ast.File) error {

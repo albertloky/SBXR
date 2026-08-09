@@ -6,6 +6,10 @@ The Style A frame keeps persistent navigation beside one main work area. `80×24
 
 Navigation uses arrows or `Tab` and `Shift+Tab`; `Enter` or `Space` selects; `Esc` goes back only when Back is legal; and `Ctrl+C` opens the visible Exit SBXR confirmation. `Q` and `q` have no exit binding. Bracketed paste is handled as paste data rather than application shortcuts. Every screen has a contextual two-line shortcut bar; forward-only removal never advertises Back or cancellation.
 
+An active input field treats ordinary typed characters and bracketed paste as data. Confirmation words and shortcut letters do not activate anything. Control and escape-like bytes are never written back to the terminal as controls; the field marks terminal controls as neutralized, and immediate bytes after a hostile paste terminator remain safe visible data. Resize below `80×24` pauses input and activation without clearing the field, focus, navigation selection, reviewed Plan screen, operation screen, prompt, error, or result. A typed background presentation update waits while a confirmation is open, then changes facts after explicit dismissal without moving those interaction choices.
+
+`Session.Updates` accepts only typed `PresentationUpdate` values. `OperationID` identifies continuing timed work so repeated updates preserve its elapsed clock. Measured progress requires completed and total units. Unknown-duration progress uses Owner Console's monotonic elapsed timer and no percentage. Mixed-step progress identifies `CurrentStep` out of `TotalSteps` and shows a bar only when that step has a real total. Missing, invalid, unsupported, or screen-incompatible progress is shown as unavailable; Owner Console does not infer a percentage, completion time, success, rollback, or service state.
+
 Admission checks interactive input, interactive output, alternate-screen support, full-screen cursor addressing, readable text, standard keyboard input, and the current terminal size. It asks the attached terminal to report the required drawing modes rather than accepting a list of terminal product names. Unicode terminals receive Unicode separators; other admitted terminals receive ASCII separators. Bubble Tea and Lip Gloss use a reliably reported existing background, degrade to monochrome, and honor `NO_COLOR`; text and selection markers carry every meaning without color.
 
 Before drawing, Owner Console records the terminal's reported screen, cursor, mouse, and paste modes, resets the modes it owns, and admits the full-screen frame only after the required drawing-mode replies arrive. A manageable exit restores the prior keyboard settings and every reported owned mode, including modes that were enabled before launch.
@@ -14,7 +18,7 @@ The sixteen approved Style A scenarios are typed presentation fixtures. They cov
 
 Client Access Values are not emitted during terminal refusal or before the launch privacy choice. Infrastructure Secrets, arbitrary command output, provider responses, generated configurations, journals, and Rollback Snapshots never belong in this Module.
 
-After a forced termination that prevented restoration, run the terminal's standard recovery command:
+A manageable exit restores the terminal. Forced termination such as `kill -9`, VPS power loss, or a broken SSH client can prevent that cleanup. After a forced termination that prevented restoration, run the terminal's standard recovery command:
 
 ```sh
 reset

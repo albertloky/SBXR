@@ -173,26 +173,188 @@ func terminalState(t *testing.T, terminal *os.File) string {
 	return string(output)
 }
 
-func TestRunPausesAndResumesAfterResize(t *testing.T) {
-	got := runResizePseudoTerminal(t, true)
-	if strings.Count(got, "CORRECTION FLOW") < 2 {
-		t.Fatalf("resize did not resume the same state\n%s", got)
+func TestRunCannotPromiseRestorationAfterForcedTermination(t *testing.T) {
+	master, slave, err := pty.Open()
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, want := range []string{"TERMINAL IS TOO SMALL", "Required   80 columns x 24 rows", "Current    72 columns x 20 rows"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("resize pause missing %q", want)
+	defer master.Close()
+	if err := pty.Setsize(master, &pty.Winsize{Cols: 80, Rows: 24}); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(os.Args[0], "-test.run=^TestOwnerConsoleForcedTerminationHelper$")
+	command.Env = append(os.Environ(), "SBXR_FORCED_TERMINATION_HELPER=1", "TERM=unknown-sbxr-terminal", "LANG=C.UTF-8")
+	command.Stdin, command.Stdout, command.Stderr = slave, slave, slave
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := slave.Close(); err != nil {
+		t.Fatal(err)
+	}
+	transcript := make(chan string, 1)
+	entered := make(chan struct{})
+	go func() {
+		var output bytes.Buffer
+		buffer := make([]byte, 4096)
+		responded, signaled := false, false
+		for {
+			n, err := master.Read(buffer)
+			if n > 0 {
+				_, _ = output.Write(buffer[:n])
+				if !responded && bytes.Contains(output.Bytes(), []byte("\x1b[?2004$p")) {
+					responded = true
+					_, _ = master.Write([]byte("\x1b[?1;2$y\x1b[?6;2$y\x1b[?25;1$y\x1b[?1000;2$y\x1b[?1002;2$y\x1b[?1003;2$y\x1b[?1006;2$y\x1b[?1049;2$y\x1b[?2004;2$y\x1b[1;1R"))
+				}
+				if !signaled && bytes.Contains(output.Bytes(), []byte("\x1b[?1049h")) {
+					signaled = true
+					close(entered)
+				}
+			}
+			if err != nil {
+				transcript <- output.String()
+				return
+			}
 		}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		_ = command.Process.Kill()
+		t.Fatal("Owner Console did not enter the alternate screen")
+	}
+	if err := command.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = command.Wait()
+	got := <-transcript
+	if strings.LastIndex(got, "\x1b[?1049h") < strings.LastIndex(got, "\x1b[?1049l") {
+		t.Fatal("forced termination test unexpectedly observed manageable restoration")
+	}
+}
+
+func TestOwnerConsoleForcedTerminationHelper(t *testing.T) {
+	if os.Getenv("SBXR_FORCED_TERMINATION_HELPER") != "1" {
+		return
+	}
+	environment := []string{"TERM=unknown-sbxr-terminal", "LANG=C.UTF-8"}
+	capabilities := DetectTerminal(os.Stdin, os.Stdout, environment)
+	_ = Run(context.Background(), Session{Input: os.Stdin, Output: os.Stdout, Environment: environment, Capabilities: &capabilities, Scenario: AuthenticatedOverview})
+}
+
+func TestForcedTerminationDocumentationNamesExactResetCommand(t *testing.T) {
+	documentation, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(documentation), "After a forced termination that prevented restoration, run the terminal's standard recovery command:\n\n```sh\nreset\n```") {
+		t.Fatal("forced-termination documentation must name the exact reset command")
+	}
+}
+
+func TestRunPausesAndResumesAfterResize(t *testing.T) {
+	for _, test := range []struct {
+		name, title string
+		scenario    Scenario
+	}{
+		{name: "input", scenario: CorrectionFlow, title: "CORRECTION FLOW"},
+		{name: "Plan", scenario: InstallationReview, title: "REVIEW INSTALLATION PLAN"},
+		{name: "operation", scenario: MultiStepChangeSet, title: "UPDATE TO v1.1.0"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := runResizePseudoTerminal(t, test.scenario, true)
+			if strings.Count(got, test.title) < 2 {
+				t.Fatalf("resize did not resume the same state\n%s", got)
+			}
+			for _, want := range []string{"TERMINAL IS TOO SMALL", "Required   80 columns x 24 rows", "Current    72 columns x 20 rows"} {
+				if !strings.Contains(got, want) {
+					t.Fatalf("resize pause missing %q", want)
+				}
+			}
+		})
 	}
 }
 
 func TestRunAllowsSafeExitWhileUndersized(t *testing.T) {
-	got := runResizePseudoTerminal(t, false)
+	got := runResizePseudoTerminal(t, CorrectionFlow, false)
 	if !strings.Contains(got, "TERMINAL IS TOO SMALL") || !strings.Contains(got, "Exit SBXR?") {
 		t.Fatal("undersized exit did not remain visible and explicit")
 	}
 }
 
-func runResizePseudoTerminal(t *testing.T, resume bool) string {
+func TestRunPreservesInteractionStateThroughResizeAndRefresh(t *testing.T) {
+	master, slave, err := pty.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	defer slave.Close()
+	if err := pty.Setsize(master, &pty.Winsize{Cols: 80, Rows: 24}); err != nil {
+		t.Fatal(err)
+	}
+	capabilities := capableTerminal(80, 24)
+	updates := make(chan PresentationUpdate)
+	transcript := make(chan string, 1)
+	go func() {
+		var output bytes.Buffer
+		_, _ = io.Copy(&output, master)
+		transcript <- output.String()
+	}()
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(context.Background(), Session{Input: slave, Output: slave, Capabilities: &capabilities, Scenario: CorrectionFlow, Updates: updates})
+	}()
+	time.Sleep(100 * time.Millisecond)
+	if _, err := master.Write([]byte("\x1b[200~Q\nCOMPLETE REMOVAL\x1b[201~")); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if _, err := master.Write([]byte("\t\x1b[B\x1b[Z")); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	updates <- PresentationUpdate{}
+	if err := pty.Setsize(master, &pty.Winsize{Cols: 72, Rows: 20}); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Kill(os.Getpid(), syscall.SIGWINCH); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if err := pty.Setsize(master, &pty.Winsize{Cols: 80, Rows: 24}); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Kill(os.Getpid(), syscall.SIGWINCH); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if _, err := master.Write([]byte("\t\r")); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if _, err := master.Write([]byte("\x03\r")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Owner Console did not exit after resize-resume")
+	}
+	close(updates)
+	if err := slave.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got := <-transcript
+	for _, want := range []string{"TERMINAL IS TOO SMALL", "Current    72 columns x 20 rows", `"Q\nCOMPLETE REMOVAL"`, "refreshed", "SERVICES AND DIAGNOSTICS", "No mutation has begun."} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("resized interaction lost %q\n%s", want, got)
+		}
+	}
+}
+
+func runResizePseudoTerminal(t *testing.T, scenario Scenario, resume bool) string {
 	t.Helper()
 	master, slave, err := pty.Open()
 	if err != nil {
@@ -212,7 +374,7 @@ func runResizePseudoTerminal(t *testing.T, resume bool) string {
 	}()
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(context.Background(), Session{Input: slave, Output: slave, Capabilities: &capabilities, Scenario: CorrectionFlow})
+		done <- Run(context.Background(), Session{Input: slave, Output: slave, Capabilities: &capabilities, Scenario: scenario})
 	}()
 	time.Sleep(100 * time.Millisecond)
 	if err := pty.Setsize(master, &pty.Winsize{Cols: 72, Rows: 20}); err != nil {

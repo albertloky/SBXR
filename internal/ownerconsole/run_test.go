@@ -172,7 +172,7 @@ func TestCanonicalFramesRemainExact(t *testing.T) {
 	for _, size := range [][2]int{{80, 24}, {120, 36}} {
 		for _, scenario := range scenarios {
 			fixture := scenarioFixture(scenario)
-			frame := (model{width: size[0], height: size[1], scenario: scenario, selected: selectedNavigation(scenario), unicode: true, noColor: true}).frame()
+			frame := (model{width: size[0], height: size[1], scenario: scenario, selected: selectedNavigation(scenario), unicode: true, noColor: true, inputFocused: fixture.acceptsInput}).frame()
 			rows := strings.Split(frame, "\n")
 			if len(rows) != size[1] {
 				t.Fatalf("%s at %dx%d has %d rows", fixture.title, size[0], size[1], len(rows))
@@ -201,7 +201,7 @@ func TestCanonicalFramesRemainExact(t *testing.T) {
 			fmt.Fprintf(&frames, "%d/%d/%d\n%s\n", scenario, size[0], size[1], frame)
 		}
 	}
-	want := "c8ebb058efcbe1e2d3d459898c2ad25c503eb65eef0c2838dd82d58116af6263"
+	want := "4e6247fb87c1679c8ff77fbda1b4d75cfdee76fde904c5fe7477b539f809cfae"
 	if got := fmt.Sprintf("%x", sha256.Sum256([]byte(frames.String()))); got != want {
 		t.Fatalf("canonical frame snapshot = %s, want %s", got, want)
 	}
@@ -235,18 +235,18 @@ func TestRunNavigationUsesSafeKeysAndNeverQ(t *testing.T) {
 	tests := []struct {
 		name     string
 		start    Scenario
-		keys     string
+		keys     []string
 		wantView string
 	}{
-		{name: "arrow and Enter", start: AuthenticatedOverview, keys: "q\x1b[200~Q\nCOMPLETE REMOVAL\x1b[201~\x1b[B\r", wantView: "CLIENT ACCESS VALUES"},
-		{name: "Tab and Space", start: AuthenticatedOverview, keys: "\t ", wantView: "CLIENT ACCESS VALUES"},
-		{name: "arrow up and Enter", start: DedicatedAccess, keys: "\x1b[A\r", wantView: "OVERVIEW"},
-		{name: "Shift-Tab and Space", start: DedicatedAccess, keys: "\x1b[Z ", wantView: "OVERVIEW"},
-		{name: "Esc goes back", start: DedicatedAccess, keys: "\x1b[27u", wantView: "OVERVIEW"},
+		{name: "arrow and Enter", start: AuthenticatedOverview, keys: []string{"q\x1b[200~Q\nCOMPLETE REMOVAL\x1b[201~", "\x1b[B\r"}, wantView: "CLIENT ACCESS VALUES"},
+		{name: "Tab and Space", start: AuthenticatedOverview, keys: []string{"\t "}, wantView: "CLIENT ACCESS VALUES"},
+		{name: "arrow up and Enter", start: DedicatedAccess, keys: []string{"\x1b[A\r"}, wantView: "OVERVIEW"},
+		{name: "Shift-Tab and Space", start: DedicatedAccess, keys: []string{"\x1b[Z "}, wantView: "OVERVIEW"},
+		{name: "Esc goes back", start: DedicatedAccess, keys: []string{"\x1b[27u"}, wantView: "OVERVIEW"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := runTranscriptSteps(t, Session{Scenario: tt.start}, 80, 24, tt.keys, "\x03\r")
+			got := runTranscriptSteps(t, Session{Scenario: tt.start}, 80, 24, append(tt.keys, "\x03\r")...)
 			if !strings.Contains(got, tt.wantView) {
 				t.Fatalf("safe navigation did not open %q\n%s", tt.wantView, got)
 			}
@@ -349,5 +349,203 @@ func TestRunWrapsSafetyTextAndShowsOnlyLegalShortcuts(t *testing.T) {
 		if !strings.Contains(transcript, "Q is never Exit") {
 			t.Fatal("contextual shortcut bar is missing")
 		}
+	}
+}
+
+func TestRunKeepsHostilePasteAsVisibleInputData(t *testing.T) {
+	tests := []struct {
+		name, pasted, visible string
+	}{
+		{name: "shortcut letters", pasted: "Qq", visible: `"Qq"`},
+		{name: "multiline confirmation", pasted: "COMPLETE REMOVAL\nAPPLY\nRESTORE", visible: `"COMPLETE REMOVAL\nAPPLY\nRESTORE"`},
+		{name: "escape-like bytes", pasted: "before\x1b[31mafter", visible: `"beforeafter" [terminal controls neutralized]`},
+		{name: "untrusted controls", pasted: "a\x00\x07\tb", visible: `"a\x00\a\tb"`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			paste := "\x1b[200~" + test.pasted + "\x1b[201~"
+			got := runTranscriptSteps(t, Session{Scenario: CorrectionFlow}, 80, 24, paste, "", "", "\x03\r")
+			if !strings.Contains(got, test.visible) {
+				t.Fatalf("pasted data missing safe visible form %q\n%s", test.visible, got)
+			}
+			if strings.Contains(got, test.pasted) && strings.ContainsAny(test.pasted, "\x00\x07\x1b") {
+				t.Fatal("untrusted control bytes were rendered verbatim")
+			}
+			if !strings.Contains(got, "CORRECTION FLOW") || !strings.Contains(got, "Exit SBXR?") {
+				t.Fatal("pasted shortcut or confirmation text changed the active screen")
+			}
+		})
+	}
+
+	got := runTranscriptSteps(t, Session{Scenario: CorrectionFlow}, 80, 24, "\x1b[200~safe\x1b[201~q\x03\r", "", "", "\x03\r")
+	if !strings.Contains(got, `"safeq`) || !strings.Contains(got, `ctrl+c><enter>"`) || !strings.Contains(got, "[terminal controls neutralized]") {
+		t.Fatalf("bytes after a hostile paste terminator became shortcuts instead of safe data\n%s", got)
+	}
+}
+
+func TestRunBackgroundRefreshKeepsConfirmationUntilExplicitDismissal(t *testing.T) {
+	for _, size := range [][2]int{{80, 24}, {120, 36}} {
+		t.Run(fmt.Sprintf("%dx%d", size[0], size[1]), func(t *testing.T) {
+			held := runRefreshConfirmation(t, size[0], size[1], false)
+			if !strings.Contains(held, "Exit SBXR?") || strings.Contains(held, "refreshed") || strings.Contains(held, "36%") {
+				t.Fatalf("refresh changed the visible confirmation\n%s", held)
+			}
+			dismissed := runRefreshConfirmation(t, size[0], size[1], true)
+			if !strings.Contains(dismissed, "Exit SBXR?") || !strings.Contains(dismissed, "refreshed") || !strings.Contains(dismissed, "36%") {
+				t.Fatalf("explicit dismissal did not reveal the pending refresh\n%s", dismissed)
+			}
+		})
+	}
+}
+
+func runRefreshConfirmation(t *testing.T, width, height int, dismiss bool) string {
+	t.Helper()
+	updates := make(chan PresentationUpdate)
+	go func() {
+		time.Sleep(45 * time.Millisecond)
+		updates <- PresentationUpdate{Progress: Progress{Kind: MeasuredProgress, Completed: 37, Total: 101}}
+		close(updates)
+	}()
+	steps := []string{"\x03", "\r"}
+	if dismiss {
+		steps = []string{"\x03", "\x1b[27u", "", "\x03\r"}
+	}
+	return runTranscriptSteps(t, Session{Scenario: MeasuredDownload, Updates: updates}, width, height, steps...)
+}
+
+func TestRunPresentsOnlyTypedTruthfulProgress(t *testing.T) {
+	tests := []struct {
+		name     string
+		scenario Scenario
+		progress Progress
+		wait     time.Duration
+		want     []string
+		reject   []string
+	}{
+		{name: "measured", scenario: MeasuredDownload, progress: Progress{Kind: MeasuredProgress, Completed: 37, Total: 101}, want: []string{"37 of 101 units", "36%", "Request cancellation", "Close TUI"}, reject: []string{"42%"}},
+		{name: "unknown duration", scenario: UnknownCloudflareVerification, progress: Progress{Kind: UnknownProgress, OperationID: 1}, wait: 1100 * time.Millisecond, want: []string{"Current task", "00:01", "Request cancellation", "Close TUI"}, reject: []string{"%"}},
+		{name: "mixed measured step", scenario: MultiStepChangeSet, progress: Progress{Kind: MixedStepProgress, CurrentStep: 4, TotalSteps: 7, Completed: 31, Total: 80}, want: []string{"Current step 4 of 7", "38%", "Request cancellation", "Close TUI"}, reject: []string{"success"}},
+		{name: "mixed unknown step", scenario: MultiStepChangeSet, progress: Progress{Kind: MixedStepProgress, OperationID: 1, CurrentStep: 2, TotalSteps: 7}, wait: 1100 * time.Millisecond, want: []string{"Current step 2 of 7", "00:01", "Request cancellation", "Close TUI"}, reject: []string{"%"}},
+		{name: "invalid measurement", scenario: MeasuredDownload, progress: Progress{Kind: MeasuredProgress, Completed: 1}, want: []string{"Progress unavailable: measured progress requires a real", "total.", "Request cancellation", "Close TUI"}, reject: []string{"%"}},
+		{name: "unknown kind", scenario: MeasuredDownload, progress: Progress{Kind: ProgressKind(99)}, want: []string{"Progress unavailable: unsupported typed progress kind.", "Request cancellation", "Close TUI"}, reject: []string{"%"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := runProgressTranscript(t, test.scenario, test.progress, test.wait)
+			for _, want := range test.want {
+				if !strings.Contains(got, want) {
+					t.Fatalf("progress missing %q\n%s", want, got)
+				}
+			}
+			for _, reject := range test.reject {
+				if strings.Contains(got, reject) {
+					t.Fatalf("progress invented %q\n%s", reject, got)
+				}
+			}
+		})
+	}
+}
+
+func TestRunContinuingUnknownProgressNeverRestartsElapsedTime(t *testing.T) {
+	tests := []struct {
+		name     string
+		scenario Scenario
+		progress Progress
+	}{
+		{name: "unknown work", scenario: UnknownCloudflareVerification, progress: Progress{Kind: UnknownProgress, OperationID: 41}},
+		{name: "mixed unmeasured step", scenario: MultiStepChangeSet, progress: Progress{Kind: MixedStepProgress, OperationID: 42, CurrentStep: 2, TotalSteps: 7}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := runContinuingProgressTranscript(t, test.scenario, test.progress)
+			firstSecond := strings.LastIndex(got, "00:01")
+			if firstSecond < 0 || !strings.Contains(got[firstSecond:], "00:02") {
+				t.Fatalf("elapsed time did not continue after a refresh\n%s", got)
+			}
+			if strings.Contains(got[firstSecond:], "00:00") {
+				t.Fatalf("elapsed time restarted after a refresh\n%s", got)
+			}
+		})
+	}
+}
+
+func runContinuingProgressTranscript(t *testing.T, scenario Scenario, progress Progress) string {
+	t.Helper()
+	updates := make(chan PresentationUpdate)
+	capabilities := capableTerminal(80, 24)
+	var output bytes.Buffer
+	input, writeInput := io.Pipe()
+	defer input.Close()
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		updates <- PresentationUpdate{Progress: progress}
+		time.Sleep(1100 * time.Millisecond)
+		updates <- PresentationUpdate{Progress: progress}
+		time.Sleep(1100 * time.Millisecond)
+		close(updates)
+		_, _ = writeInput.Write([]byte("\x03\r"))
+		_ = writeInput.Close()
+	}()
+	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Second)
+	defer cancel()
+	if err := Run(ctx, Session{Input: input, Output: &output, Capabilities: &capabilities, Scenario: scenario, Updates: updates}); err != nil {
+		t.Fatal(err)
+	}
+	return output.String()
+}
+
+func runProgressTranscript(t *testing.T, scenario Scenario, progress Progress, wait time.Duration) string {
+	return runProgressTranscriptAtWidth(t, scenario, progress, wait, 80)
+}
+
+func runProgressTranscriptAtWidth(t *testing.T, scenario Scenario, progress Progress, wait time.Duration, width int) string {
+	t.Helper()
+	updates := make(chan PresentationUpdate, 1)
+	updates <- PresentationUpdate{Progress: progress}
+	close(updates)
+	height := 24
+	if width == 120 {
+		height = 36
+	}
+	capabilities := capableTerminal(width, height)
+	var output bytes.Buffer
+	input, writeInput := io.Pipe()
+	defer input.Close()
+	go func() {
+		time.Sleep(50*time.Millisecond + wait)
+		_, _ = writeInput.Write([]byte("\x03\r"))
+		_ = writeInput.Close()
+	}()
+	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Second)
+	defer cancel()
+	if err := Run(ctx, Session{Input: input, Output: &output, Capabilities: &capabilities, Scenario: scenario, Updates: updates}); err != nil {
+		t.Fatal(err)
+	}
+	return output.String()
+}
+
+func TestRunTypedProgressNeverConflictsWithLargeDetails(t *testing.T) {
+	tests := []struct {
+		name     string
+		scenario Scenario
+		progress Progress
+		want     string
+		reject   []string
+	}{
+		{name: "measured", scenario: MeasuredDownload, progress: Progress{Kind: MeasuredProgress, Completed: 37, Total: 101}, want: "37 of 101 units", reject: []string{"42%", "26.4 MiB"}},
+		{name: "mixed", scenario: MultiStepChangeSet, progress: Progress{Kind: MixedStepProgress, CurrentStep: 4, TotalSteps: 7, Completed: 31, Total: 80}, want: "Current step 4 of 7", reject: []string{"Step 3", "54%"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := runProgressTranscriptAtWidth(t, test.scenario, test.progress, 0, 120)
+			if !strings.Contains(got, test.want) {
+				t.Fatalf("large progress missing %q", test.want)
+			}
+			for _, reject := range test.reject {
+				if strings.Contains(got, reject) {
+					t.Fatalf("large details retained stale progress %q\n%s", reject, got)
+				}
+			}
+		})
 	}
 }

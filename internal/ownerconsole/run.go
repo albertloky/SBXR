@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +15,27 @@ import (
 )
 
 const minimumWidth, minimumHeight = 80, 24
+const maxInputRunes = 1024
+
+type ProgressKind uint8
+
+const (
+	NoProgress ProgressKind = iota
+	MeasuredProgress
+	UnknownProgress
+	MixedStepProgress
+)
+
+type Progress struct {
+	Kind                    ProgressKind
+	OperationID             uint64
+	Completed, Total        uint64
+	CurrentStep, TotalSteps uint16
+}
+
+type PresentationUpdate struct {
+	Progress Progress
+}
 
 type Capabilities struct {
 	InteractiveInput         bool
@@ -34,6 +56,7 @@ type Session struct {
 	Environment  []string
 	Capabilities *Capabilities
 	Scenario     Scenario
+	Updates      <-chan PresentationUpdate
 }
 
 func Run(ctx context.Context, session Session) error {
@@ -74,15 +97,22 @@ func Run(ctx context.Context, session Session) error {
 	queryOwnedModes(session.Output)
 	resetOwnedModes(session.Output)
 	probeCursorAddressing(session.Output)
+	runContext, stop := context.WithCancel(ctx)
+	defer stop()
+	fixture := scenarioFixture(session.Scenario)
 	program := tea.NewProgram(
-		model{width: c.Width, height: c.Height, scenario: session.Scenario, selected: selectedNavigation(session.Scenario), unicode: c.Unicode, noColor: noColor, initialModes: initialModes, drawingModeProbeRequired: c.DrawingModeProbeRequired},
-		tea.WithContext(ctx),
+		model{width: c.Width, height: c.Height, scenario: session.Scenario, selected: selectedNavigation(session.Scenario), unicode: c.Unicode, noColor: noColor, initialModes: initialModes, drawingModeProbeRequired: c.DrawingModeProbeRequired, inputFocused: fixture.acceptsInput, progressExpected: session.Updates != nil},
+		tea.WithContext(runContext),
 		tea.WithInput(session.Input),
 		tea.WithOutput(session.Output),
 		tea.WithEnvironment(session.Environment),
 		tea.WithWindowSize(c.Width, c.Height),
 	)
+	if session.Updates != nil {
+		go forwardPresentationUpdates(runContext, program, session.Updates)
+	}
 	result, err := program.Run()
+	stop()
 	restoreOwnedModes(session.Output, initialModes)
 	if err == nil {
 		if final, ok := result.(model); ok && final.probeFailure != "" {
@@ -90,6 +120,22 @@ func Run(ctx context.Context, session Session) error {
 		}
 	}
 	return err
+}
+
+type presentationUpdateMsg struct{ PresentationUpdate }
+
+func forwardPresentationUpdates(ctx context.Context, program *tea.Program, updates <-chan PresentationUpdate) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case update, open := <-updates:
+			if !open {
+				return
+			}
+			program.Send(presentationUpdateMsg{update})
+		}
+	}
 }
 
 func probeCorrection(failure string) string {
@@ -148,9 +194,31 @@ type model struct {
 	probeDone                 bool
 	probeFailure              string
 	cursorAddressingConfirmed bool
+	input                     string
+	inputFocused              bool
+	inputTruncated            bool
+	pasteNeutralized          bool
+	pasteGuard                bool
+	refreshed                 bool
+	pendingUpdate             *PresentationUpdate
+	progress                  Progress
+	progressExpected          bool
+	progressReceived          bool
+	progressStartedAt         time.Time
+	progressElapsed           time.Duration
+	progressClock             progressClock
+	progressTicking           bool
 }
 
 type probeTimeoutMsg struct{}
+type progressTickMsg time.Time
+type pasteGuardExpiredMsg struct{}
+
+type progressClock struct {
+	kind        ProgressKind
+	operationID uint64
+	currentStep uint16
+}
 
 func (m model) Init() tea.Cmd {
 	commands := []tea.Cmd{tea.RequestBackgroundColor}
@@ -204,7 +272,36 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Quit
 		}
+	case presentationUpdateMsg:
+		if m.exitConfirm {
+			update := message.PresentationUpdate
+			m.pendingUpdate = &update
+			return m, nil
+		}
+		return m, m.applyPresentationUpdate(message.PresentationUpdate)
+	case progressTickMsg:
+		if !m.progressStartedAt.IsZero() {
+			m.progressElapsed = time.Time(message).Sub(m.progressStartedAt)
+			return m, progressTick()
+		}
+		m.progressTicking = false
+	case pasteGuardExpiredMsg:
+		m.pasteGuard = false
+	case tea.PasteMsg:
+		if m.width >= minimumWidth && m.height >= minimumHeight && !m.exitConfirm && m.inputFocused {
+			m.appendInput(message.Content)
+			m.pasteNeutralized = true
+		}
+	case tea.PasteEndMsg:
+		m.pasteGuard = true
+		return m, tea.Tick(10*time.Millisecond, func(time.Time) tea.Msg { return pasteGuardExpiredMsg{} })
 	case tea.KeyPressMsg:
+		if m.pasteGuard {
+			if m.inputFocused {
+				m.appendInput(safeKeyData(message))
+			}
+			return m, nil
+		}
 		if m.width < minimumWidth || m.height < minimumHeight {
 			switch message.String() {
 			case "ctrl+c":
@@ -214,13 +311,46 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 					return m, tea.Quit
 				}
 			case "esc":
-				m.exitConfirm = false
+				return m, m.dismissExitConfirmation()
 			}
 			return m, nil
 		}
-		switch message.String() {
-		case "ctrl+c":
+		if m.exitConfirm {
+			switch message.String() {
+			case "enter", "space":
+				return m, tea.Quit
+			case "esc":
+				return m, m.dismissExitConfirmation()
+			}
+			return m, nil
+		}
+		if message.String() == "ctrl+c" {
 			m.exitConfirm = true
+			return m, nil
+		}
+		if scenarioFixture(m.scenario).acceptsInput {
+			if m.inputFocused {
+				switch message.String() {
+				case "tab", "shift+tab":
+					m.inputFocused = false
+				case "backspace":
+					runes := []rune(m.input)
+					if len(runes) > 0 {
+						m.input = string(runes[:len(runes)-1])
+					}
+				case "esc":
+					m.scenario, m.selected, m.inputFocused = AuthenticatedOverview, 0, false
+				default:
+					m.appendInput(message.Key().Text)
+				}
+				return m, nil
+			}
+			if message.String() == "shift+tab" {
+				m.inputFocused = true
+				return m, nil
+			}
+		}
+		switch message.String() {
 		case "up", "shift+tab":
 			m.selected = (m.selected + len(navigation) - 1) % len(navigation)
 		case "down", "tab":
@@ -234,6 +364,11 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.exitConfirm = true
 			} else {
 				m.scenario = item.scenario
+				m.inputFocused = scenarioFixture(item.scenario).acceptsInput
+				m.progress, m.progressReceived = Progress{}, false
+				m.progressStartedAt, m.progressElapsed = time.Time{}, 0
+				m.progressClock = progressClock{}
+				m.progressTicking = false
 			}
 		case "esc":
 			if m.exitConfirm {
@@ -244,6 +379,71 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m *model) dismissExitConfirmation() tea.Cmd {
+	m.exitConfirm = false
+	if m.pendingUpdate == nil {
+		return nil
+	}
+	update := *m.pendingUpdate
+	m.pendingUpdate = nil
+	return m.applyPresentationUpdate(update)
+}
+
+func (m *model) applyPresentationUpdate(update PresentationUpdate) tea.Cmd {
+	m.refreshed = true
+	if update.Progress.Kind == NoProgress {
+		return nil
+	}
+	clock := progressClock{kind: update.Progress.Kind, operationID: update.Progress.OperationID, currentStep: update.Progress.CurrentStep}
+	timed := presentProgress(scenarioFixture(m.scenario).progress, update.Progress, 0, m.unicode).timed
+	continuing := timed && clock == m.progressClock && !m.progressStartedAt.IsZero()
+	m.progress = update.Progress
+	m.progressReceived = true
+	if !timed {
+		m.progressStartedAt, m.progressElapsed = time.Time{}, 0
+		m.progressClock = progressClock{}
+		m.progressTicking = false
+		return nil
+	}
+	if !continuing {
+		m.progressStartedAt, m.progressElapsed = time.Now(), 0
+		m.progressClock = clock
+	}
+	if m.progressTicking {
+		return nil
+	}
+	m.progressTicking = true
+	return progressTick()
+}
+
+func safeKeyData(message tea.KeyPressMsg) string {
+	if text := message.Key().Text; text != "" {
+		return text
+	}
+	return "<" + message.String() + ">"
+}
+
+func (m *model) appendInput(value string) {
+	if value == "" {
+		return
+	}
+	remaining := maxInputRunes - len([]rune(m.input))
+	if remaining <= 0 {
+		m.inputTruncated = true
+		return
+	}
+	runes := []rune(value)
+	if len(runes) > remaining {
+		runes = runes[:remaining]
+		m.inputTruncated = true
+	}
+	m.input += string(runes)
+}
+
+func progressTick() tea.Cmd {
+	return tea.Tick(time.Second, func(now time.Time) tea.Msg { return progressTickMsg(now) })
 }
 
 func (m model) drawingModesConfirmed() bool {
@@ -287,7 +487,7 @@ func (m model) frame() string {
 		"Up/Down Select  Enter Continue  Ctrl+C Exit confirmation",
 	}
 	if m.scenario != PrivacyChoice {
-		main = append([]string{currentFixture.title, ""}, currentFixture.lines...)
+		main = append([]string{currentFixture.title, ""}, m.scenarioLines(currentFixture)...)
 	}
 	if m.exitConfirm {
 		main = []string{
@@ -313,13 +513,16 @@ func (m model) frame() string {
 	if header == "" {
 		header = "Managed - Owner Console"
 	}
+	if m.refreshed {
+		header += " - refreshed"
+	}
 	rows = append(rows, fit(" SBXR", 18)+fit(header, width-18))
 	horizontal, vertical, crossing := "-", "|", "+"
 	if m.unicode {
 		horizontal, vertical, crossing = "─", "│", "┼"
 	}
 	rows = append(rows, strings.Repeat(horizontal, leftWidth)+crossing+strings.Repeat(horizontal, rightWidth))
-	details := currentFixture.details
+	details := m.scenarioDetails(currentFixture)
 	if width >= 120 {
 		details = wrapLines(details, rightWidth-49)
 	}
@@ -327,7 +530,7 @@ func (m model) frame() string {
 		left, right := "", ""
 		if row < len(navigation) {
 			prefix := "  "
-			if row == m.selected {
+			if row == m.selected && !m.inputFocused {
 				prefix = "> "
 			}
 			left = prefix + navigation[row].label
@@ -359,12 +562,140 @@ func (m model) frame() string {
 	return strings.Join(rows, "\n")
 }
 
+func (m model) scenarioDetails(current fixture) []string {
+	if !m.progressExpected || current.progress == NoProgress {
+		return current.details
+	}
+	if !m.progressReceived {
+		return []string{"WAITING FOR FACTS", "", "No progress is inferred."}
+	}
+	return presentProgress(current.progress, m.progress, m.progressElapsed, m.unicode).details
+}
+
+func (m model) scenarioLines(current fixture) []string {
+	if m.progressExpected && current.progress != NoProgress {
+		if !m.progressReceived {
+			return []string{"Waiting for typed progress.", "", "No percentage or result is inferred while facts are absent."}
+		}
+		return presentProgress(current.progress, m.progress, m.progressElapsed, m.unicode).lines
+	}
+	lines := append([]string(nil), current.lines...)
+	if current.acceptsInput {
+		prefix := "  "
+		if m.inputFocused {
+			prefix = "> "
+		}
+		value := "-"
+		if m.input != "" {
+			value = strconv.QuoteToGraphic(m.input)
+		}
+		if m.pasteNeutralized {
+			value += " [terminal controls neutralized]"
+		}
+		if m.inputTruncated {
+			value += " [input limit reached]"
+		}
+		lines[current.inputLine] = prefix + value
+	}
+	return lines
+}
+
+type progressPresentation struct {
+	lines, details []string
+	timed          bool
+}
+
+func presentProgress(expected ProgressKind, progress Progress, elapsedTime time.Duration, unicode bool) progressPresentation {
+	invalid := func(message string) progressPresentation {
+		return progressPresentation{
+			lines:   []string{message, "", "No percentage, completion time, success, rollback, or service state was inferred.", "", "> Request cancellation", "  Close TUI"},
+			details: []string{"INVALID PROGRESS", "", "Typed facts were rejected.", "No result was inferred."},
+		}
+	}
+	if progress.Kind < MeasuredProgress || progress.Kind > MixedStepProgress {
+		return invalid("Progress unavailable: unsupported typed progress kind.")
+	}
+	if progress.Kind != expected {
+		names := [...]string{"", "measured", "unknown-duration", "mixed-step"}
+		return invalid("Progress unavailable: " + names[progress.Kind] + " progress is not legal on this screen.")
+	}
+	switch progress.Kind {
+	case MeasuredProgress:
+		if progress.Total == 0 {
+			return invalid("Progress unavailable: measured progress requires a real total.")
+		}
+		if progress.Completed > progress.Total || progress.Total > 1<<50 {
+			return invalid("Progress unavailable: measurement is outside its real total.")
+		}
+		return progressPresentation{
+			lines:   []string{"The total is known, so SBXR shows real progress.", "", "Downloading  " + measuredBar(progress.Completed, progress.Total), fmt.Sprintf("%d of %d units", progress.Completed, progress.Total), "", "The percentage is measured from completed and total units.", "", "> Request cancellation", "  Close TUI"},
+			details: []string{"MEASURED PROGRESS", "", fmt.Sprintf("Completed  %d", progress.Completed), fmt.Sprintf("Total      %d", progress.Total), "", "Percentage uses these units."},
+		}
+	case UnknownProgress:
+		if progress.Completed != 0 || progress.Total != 0 {
+			return invalid("Progress unavailable: measurement is outside its real total.")
+		}
+		return progressPresentation{
+			lines:   []string{"The provider decides how long this takes.", "", fmt.Sprintf("%s Current task  %s", spinner(unicode, elapsedTime), elapsed(elapsedTime)), "", "No percentage or completion time is shown.", "", "> Request cancellation", "  Close TUI"},
+			details: []string{"UNKNOWN DURATION", "", "Elapsed time is monotonic.", "No percentage is available."},
+			timed:   true,
+		}
+	case MixedStepProgress:
+		if progress.TotalSteps == 0 || progress.CurrentStep == 0 || progress.CurrentStep > progress.TotalSteps {
+			return invalid("Progress unavailable: current step is outside the step list.")
+		}
+		if progress.Completed > progress.Total || progress.Total > 1<<50 {
+			return invalid("Progress unavailable: measurement is outside its real total.")
+		}
+		lines := []string{fmt.Sprintf("Current step %d of %d", progress.CurrentStep, progress.TotalSteps), "", "[NOW] Validate prepared sing-box configuration"}
+		timed := progress.Total == 0
+		if !timed {
+			lines = append(lines, measuredBar(progress.Completed, progress.Total), fmt.Sprintf("%d of %d current-step units", progress.Completed, progress.Total))
+		} else {
+			lines = append(lines, fmt.Sprintf("%s Current step  %s", spinner(unicode, elapsedTime), elapsed(elapsedTime)), "No percentage is shown for this step.")
+		}
+		units := "Step units    unknown"
+		if !timed {
+			units = fmt.Sprintf("Step units    %d of %d", progress.Completed, progress.Total)
+		}
+		return progressPresentation{
+			lines:   append(lines, "", "No overall percentage, completion time, or result is inferred.", "", "> Request cancellation", "  Close TUI", "  View safe evidence"),
+			details: []string{"MIXED-STEP PROGRESS", "", fmt.Sprintf("Current step  %d of %d", progress.CurrentStep, progress.TotalSteps), units, "", "No overall percentage."},
+			timed:   timed,
+		}
+	}
+	return invalid("Progress unavailable: unsupported typed progress kind.")
+}
+
+func measuredBar(completed, total uint64) string {
+	percent := completed * 100 / total
+	filled := int(percent) * 20 / 100
+	return fmt.Sprintf("[%s%s] %d%%", strings.Repeat("=", filled), strings.Repeat("-", 20-filled), percent)
+}
+
+func spinner(unicode bool, elapsedTime time.Duration) string {
+	frames := "|/-\\"
+	if unicode {
+		frames = "⠋⠙⠹⠸"
+	}
+	characters := []rune(frames)
+	return string(characters[int(elapsedTime/time.Second)%len(characters)])
+}
+
+func elapsed(duration time.Duration) string {
+	seconds := int(duration / time.Second)
+	return fmt.Sprintf("%02d:%02d", seconds/60, seconds%60)
+}
+
 func (m model) shortcuts() [2]string {
 	if m.exitConfirm {
 		return [2]string{" Enter Exit  Esc Stay", " Q is never Exit"}
 	}
 	if m.width < minimumWidth || m.height < minimumHeight || m.scenario == UndersizedPause {
 		return [2]string{" Ctrl+C Exit confirmation", " Q is never Exit"}
+	}
+	if m.inputFocused {
+		return [2]string{" Type or paste input  Tab Navigation", " Q is input data  Ctrl+C Exit confirmation  Esc Back"}
 	}
 	second := " Ctrl+C Exit confirmation  Q is never Exit"
 	if scenarioFixture(m.scenario).allowsBack {

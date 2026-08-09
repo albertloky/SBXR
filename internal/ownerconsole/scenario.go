@@ -70,12 +70,15 @@ var navigation = []navigationItem{
 }
 
 type fixture struct {
-	header     string
-	title      string
-	lines      []string
-	details    []string
-	navigation navigationID
-	allowsBack bool
+	header       string
+	title        string
+	lines        []string
+	details      []string
+	navigation   navigationID
+	allowsBack   bool
+	acceptsInput bool
+	inputLine    int
+	progress     ProgressKind
 }
 
 var scenarioFixtures = map[Scenario]fixture{
@@ -108,22 +111,22 @@ var scenarioFixtures = map[Scenario]fixture{
 		details: []string{"MINIMUM AUTHORITY", "", "Specific account", "Specific zone", "No Global API Key", "Token remains memory-only"},
 	},
 	CorrectionFlow: {
-		header: "Not installed - unprivileged", title: "CORRECTION FLOW - NET-PORT-004", navigation: networkNavigation, allowsBack: true,
+		header: "Not installed - unprivileged", title: "CORRECTION FLOW - NET-PORT-004", navigation: networkNavigation, allowsBack: true, acceptsInput: true, inputLine: 9,
 		lines:   []string{"PROBLEM   9443/TCP is already in use", "FOUND     caddy.service - 0.0.0.0:9443/TCP", "REQUIRED  available public TCP port for AnyTLS", "", "WHY SBXR STOPPED", "Overwriting an unrelated listener could break it.", "There is no Continue anyway.", "", "Optional preferred port (1024-65535):", "> -", "", "> Fix with SBXR - choose and prove a safe port", "  Check again", "  Back", "", "No mutation has begun."},
 		details: []string{"SAFE EVIDENCE", "", "NET-PORT-004", "No mutation has begun.", "Evidence is redacted."},
 	},
 	MeasuredDownload: {
-		header: "Change in progress - rev 42 - authenticated", title: "DOWNLOAD RELEASE v1.1.0", navigation: updatesNavigation,
+		header: "Change in progress - rev 42 - authenticated", title: "DOWNLOAD RELEASE v1.1.0", navigation: updatesNavigation, progress: MeasuredProgress,
 		lines:   []string{"The file size is known, so SBXR shows real progress.", "", "Downloading  [========------------]  42%", "26.4 MiB of 62.9 MiB - 8.2 MiB/s", "", "The signature is verified after the download.", "", "> Request cancellation", "  Close TUI"},
 		details: []string{"WHY A BAR?", "", "Downloaded bytes and total", "bytes are both known.", "", "The percentage is measured,", "not estimated."},
 	},
 	UnknownCloudflareVerification: {
-		header: "Checking - rev 42 - authenticated", title: "CHECK CLOUDFLARE CONNECTION", navigation: cloudflareNavigation,
+		header: "Checking - rev 42 - authenticated", title: "CHECK CLOUDFLARE CONNECTION", navigation: cloudflareNavigation, progress: UnknownProgress,
 		lines:   []string{"The provider decides how long this takes.", "", "* Verifying tunnel route...       00:18", "", "No percentage is shown because SBXR cannot know it.", "", "> Request cancellation", "  Close TUI"},
 		details: []string{"WHY A SPINNER?", "", "SBXR knows the check is", "alive, but not how much work", "the provider has left.", "", "Elapsed time stays visible."},
 	},
 	MultiStepChangeSet: {
-		header: "Change in progress - rev 42 - authenticated", title: "UPDATE TO v1.1.0 - 00:01:42", navigation: updatesNavigation,
+		header: "Change in progress - rev 42 - authenticated", title: "UPDATE TO v1.1.0 - 00:01:42", navigation: updatesNavigation, progress: MixedStepProgress,
 		lines:   []string{"The global mutation lock is held by Change Set 01J8...", "", "[DONE] Prepared", "[DONE] Release switched", "[NOW] Validate prepared sing-box configuration", "      [===========---------]  54%", "[NEXT] Pre-publication health", "[NEXT] Publish Desired State revision 43", "[NEXT] Post-publication health", "[NEXT] Complete", "", "Current Desired State remains revision 42.", "Closing the TUI or losing SSH does not stop work.", "", "> Request cancellation", "  Close TUI", "  View safe evidence"},
 		details: []string{"CHANGE SET 01J8...", "", "2 of 7 steps complete", "Step 3 is measurable: 54%", "", "Current revision  42", "Target revision   43", "", "Safe cancellation checkpoint", "after validation."},
 	},
