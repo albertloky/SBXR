@@ -1144,6 +1144,7 @@ const (
 	Refused                  ApplyOutcome = "Refused"
 	Deferred                 ApplyOutcome = "Deferred"
 	AwaitingTokenRevocation  ApplyOutcome = "Awaiting Cloudflare token revocation"
+	RemovalForwardOnly       ApplyOutcome = "Removal remains forward-only"
 	AwaitingRunTokenRotation ApplyOutcome = "Awaiting Owner Tunnel run-token rotation"
 )
 

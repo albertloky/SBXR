@@ -20,7 +20,10 @@ import (
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
 
-const transactionDirectory = "var/lib/sbxr/transactions"
+const (
+	transactionDirectory       = "var/lib/sbxr/transactions"
+	finalizingRemovalDirectory = "removal-finalizing"
+)
 
 // Host owns the typed native effects and observations; Adapter owns their durability.
 type Host interface {
@@ -39,6 +42,7 @@ type Host interface {
 }
 
 type IrreversibleRemovalHost interface {
+	VerifyIrreversibleRemovalReady(time.Duration) error
 	VerifyCloudflareTokenRevoked(time.Duration) (bool, error)
 	DeleteIrreversibleRemovalPhase(systemchanges.IrreversibleRemovalPhase, time.Duration) (systemchanges.StepEvidence, error)
 	VerifyFinalRemovalAbsence(time.Duration) (bool, error)
@@ -304,7 +308,7 @@ func (a Adapter) Record(lease systemchanges.ExecutionLease, record systemchanges
 	defer root.Close()
 	target := path.Join(transactionDirectory, record.ChangeSet)
 	verify := verifyTransaction
-	if record.Checkpoint == systemchanges.TransactionMaterialDeleted || record.Checkpoint == systemchanges.FinalRemovalAbsenceVerified {
+	if finalizingRemovalCheckpoint(record.Checkpoint) {
 		verify = verifyFinalizingTransaction
 	}
 	if record.Checkpoint == systemchanges.StateFinalized && record.State != nil {
@@ -733,6 +737,9 @@ func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges
 	if errors.Is(err, fs.ErrNotExist) || err == nil && len(entries) == 0 {
 		return systemchanges.RecoveryTransaction{}, systemchanges.ErrNoRecoveryTransaction
 	}
+	if err == nil && len(entries) == 1 && entries[0].IsDir() && entries[0].Name() == finalizingRemovalDirectory {
+		return systemchanges.RecoveryTransaction{}, systemchanges.ErrNoRecoveryTransaction
+	}
 	if err != nil || len(entries) != 1 || !entries[0].IsDir() || !safeName(entries[0].Name()) {
 		return systemchanges.RecoveryTransaction{}, errors.New("one unfinished transaction was not proven")
 	}
@@ -963,6 +970,14 @@ func (a Adapter) VerifyStartingServices(lease systemchanges.ExecutionLease, reco
 	return a.host.VerifyStartingServices(recovery, timeout)
 }
 
+func (a Adapter) VerifyIrreversibleRemovalReady(lease systemchanges.ExecutionLease, _ string, timeout time.Duration) error {
+	host, ok := a.host.(IrreversibleRemovalHost)
+	if !lease.Authorized() || !ok {
+		return errors.New("irreversible removal host unavailable")
+	}
+	return host.VerifyIrreversibleRemovalReady(timeout)
+}
+
 func (a Adapter) VerifyCloudflareTokenRevoked(lease systemchanges.ExecutionLease, _ systemchanges.RecoveryTransaction, timeout time.Duration) (bool, error) {
 	host, ok := a.host.(IrreversibleRemovalHost)
 	if !lease.Authorized() || !ok {
@@ -1005,18 +1020,22 @@ func (a Adapter) FinalizeRemoval(lease systemchanges.ExecutionLease, recovery sy
 	}
 	defer root.Close()
 	target := path.Join(transactionDirectory, recovery.ChangeSet)
+	finalizing := path.Join(transactionDirectory, finalizingRemovalDirectory)
 	journal := path.Join(target, "journal.jsonl")
 	entries, err := readJournal(root, journal)
 	if err != nil || !validJournal(entries) || entries[len(entries)-1].Checkpoint != systemchanges.FinalRemovalAbsenceVerified {
 		return errors.New("final removal journal is unresolved")
 	}
-	if err := root.Remove(journal); err != nil {
-		return err
+	if _, err := root.Lstat(finalizing); !errors.Is(err, fs.ErrNotExist) {
+		return errors.New("final removal directory already exists")
 	}
-	if err := root.Remove(target); err != nil {
+	if err := root.Rename(target, finalizing); err != nil {
 		return err
 	}
 	if err := syncDirectory(root, transactionDirectory); err != nil {
+		return err
+	}
+	if err := discardFinalizingRemoval(root, a.uid); err != nil {
 		return err
 	}
 	return host.FinalizeRemoval(timeout)
@@ -1031,7 +1050,42 @@ func (a Adapter) FinalizeOrphanedRemoval(lease systemchanges.ExecutionLease, obs
 	if err != nil || !absent {
 		return errors.New("orphaned removal runner found owned resources")
 	}
+	root, err := os.OpenRoot(a.root)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	if pathExists(root, path.Join(transactionDirectory, finalizingRemovalDirectory)) {
+		if err := discardFinalizingRemoval(root, a.uid); err != nil {
+			return err
+		}
+	}
 	return host.FinalizeRemoval(timeout)
+}
+
+func discardFinalizingRemoval(root *os.Root, uid int) error {
+	directory := path.Join(transactionDirectory, finalizingRemovalDirectory)
+	if err := verifyDirectory(root, directory, uid); err != nil {
+		return err
+	}
+	entries, err := fs.ReadDir(root.FS(), directory)
+	if err != nil || len(entries) > 1 || len(entries) == 1 && (entries[0].Name() != "journal.jsonl" || !entries[0].Type().IsRegular()) {
+		return errors.New("final removal directory is unproved")
+	}
+	if len(entries) == 1 {
+		journal := path.Join(directory, "journal.jsonl")
+		records, err := readJournal(root, journal)
+		if err != nil || !validJournal(records) || records[len(records)-1].Checkpoint != systemchanges.FinalRemovalAbsenceVerified {
+			return errors.New("final removal journal is unresolved")
+		}
+		if err := root.Remove(journal); err != nil {
+			return err
+		}
+	}
+	if err := root.Remove(directory); err != nil {
+		return err
+	}
+	return syncDirectory(root, transactionDirectory)
 }
 
 func (a Adapter) deleteTransactionMaterial(lease systemchanges.ExecutionLease) (systemchanges.StepEvidence, error) {
@@ -1049,7 +1103,7 @@ func (a Adapter) deleteTransactionMaterial(lease systemchanges.ExecutionLease) (
 	}
 	target := path.Join(transactionDirectory, entries[0].Name())
 	journal, err := readJournal(root, path.Join(target, "journal.jsonl"))
-	if err != nil || !validJournal(journal) || journal[len(journal)-1].Checkpoint != systemchanges.ReleasesDeleted {
+	if err != nil || !validJournal(journal) || journal[len(journal)-1].Checkpoint != systemchanges.CertificatesDeleted {
 		return systemchanges.StepEvidence{}, errors.New("transaction material deletion is out of order")
 	}
 	manifest, manifestErr := readSnapshotManifest(root, target, a.uid)
@@ -1080,6 +1134,16 @@ func (a Adapter) deleteTransactionMaterial(lease systemchanges.ExecutionLease) (
 	}
 	digest := sha256.Sum256([]byte(systemchanges.TransactionMaterialPhase))
 	return systemchanges.StepEvidence{Code: "transaction-material-absent", SHA256: hex.EncodeToString(digest[:])}, nil
+}
+
+func finalizingRemovalCheckpoint(checkpoint systemchanges.DurableCheckpoint) bool {
+	switch checkpoint {
+	case systemchanges.TransactionMaterialDeleted, systemchanges.ReleasesDeleted, systemchanges.UnitsDeleted,
+		systemchanges.IdentitiesDeleted, systemchanges.ListenersDeleted, systemchanges.PreparedArtifactsDeleted,
+		systemchanges.OwnedFirewallStateDeleted, systemchanges.FinalRemovalAbsenceVerified:
+		return true
+	}
+	return false
 }
 
 func (a Adapter) recoveryArtifact(lease systemchanges.ExecutionLease, changeSet, name string) ([]byte, error) {
