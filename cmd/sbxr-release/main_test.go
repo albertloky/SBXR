@@ -22,7 +22,7 @@ type acceptingValidator struct{ calls int }
 
 func (validator *acceptingValidator) Validate(_ context.Context, metadata softwarelifecycle.PayloadMetadata) error {
 	validator.calls++
-	if len(metadata.Schemas) != 1 || len(metadata.Migrations) != 0 || len(metadata.Units) != 10 || len(metadata.Artifacts) != 10 {
+	if len(metadata.Schemas) != 2 || len(metadata.Migrations) != 1 || len(metadata.Units) != 10 || len(metadata.Artifacts) != 10 {
 		return io.ErrUnexpectedEOF
 	}
 	return nil

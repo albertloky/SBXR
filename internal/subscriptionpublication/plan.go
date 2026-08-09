@@ -196,6 +196,12 @@ func (plan *Plan) SoftwareLifecycleInstallContribution() lifecyclecontract.Insta
 	}
 	return lifecyclecontract.InstallContribution{Name: "Subscription Publication", Owner: systemchanges.SubscriptionModule, Identity: plan.identity, SHA256: plan.sha256, StableSHA256: plan.binding.ManagedInputsSHA256, ChangeSet: plan.binding.ChangeSet, DesiredStateSHA256: plan.binding.DesiredStateSHA256, Steps: plan.Steps(), Checks: plan.Checks(), Details: []string{plan.String()}}
 }
+func (plan *Plan) SoftwareLifecycleUpdateContribution() lifecyclecontract.UpdateContribution {
+	if plan == nil || plan.binding.StartingState.Status != systemchanges.Managed || plan.binding.StartingState.Revision == 0 || plan.binding.DesiredStateRevision != plan.binding.StartingState.Revision+1 {
+		return lifecyclecontract.UpdateContribution{}
+	}
+	return lifecyclecontract.UpdateContribution{Name: "Subscription Publication", Owner: systemchanges.SubscriptionModule, Identity: plan.identity, SHA256: plan.sha256, StableSHA256: plan.binding.ManagedInputsSHA256, ChangeSet: plan.binding.ChangeSet, DesiredStateSHA256: plan.binding.DesiredStateSHA256, Steps: plan.Steps(), Checks: plan.Checks(), Details: []string{plan.String()}}
+}
 func (plan *Plan) Summary() PlanSummary {
 	if plan == nil {
 		return PlanSummary{}

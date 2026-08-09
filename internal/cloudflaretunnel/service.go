@@ -109,8 +109,12 @@ var serviceArtifacts = []string{
 }
 
 type serviceRollback struct {
-	Absent              bool `json:"absent"`
-	SBXRDirectoryAbsent bool `json:"sbxr_directory_absent"`
+	Absent              bool   `json:"absent"`
+	SBXRDirectoryAbsent bool   `json:"sbxr_directory_absent"`
+	Managed             bool   `json:"managed,omitempty"`
+	Token               []byte `json:"token,omitempty"`
+	Config              []byte `json:"config,omitempty"`
+	Unit                []byte `json:"unit,omitempty"`
 }
 
 func (executor Executor) CaptureServiceRollback(rootPath string, write func(io.Reader) error) error {
@@ -126,9 +130,18 @@ func (executor Executor) CaptureServiceRollback(rootPath string, write func(io.R
 	if identity == nil {
 		identity = cloudflaredIdentity
 	}
-	rootUID, rootGID, _, err := identity()
+	rootUID, rootGID, cloudflaredGID, err := identity()
 	if err != nil {
 		return err
+	}
+	if executor.releaseUpdate {
+		snapshot, readErr := readManagedService(rootPath, rootUID, rootGID, cloudflaredGID)
+		if readErr != nil {
+			return readErr
+		}
+		snapshot.Managed = true
+		encoded, _ := json.Marshal(snapshot)
+		return write(bytes.NewReader(encoded))
 	}
 	for _, directory := range []string{"etc", "etc/systemd", "etc/systemd/system"} {
 		if err := validateServiceDirectory(root, directory, 0o755, rootUID, rootGID); err != nil {
@@ -195,6 +208,9 @@ func (executor Executor) ActivateService(rootPath string, source io.Reader, time
 	material, err := readServiceMaterial(source)
 	if err != nil {
 		return systemchanges.StepEvidence{}, err
+	}
+	if executor.releaseUpdate {
+		return executor.activateManagedService(rootPath, material, timeout)
 	}
 	identity := executor.serviceIdentity
 	if identity == nil {
@@ -270,6 +286,46 @@ func (executor Executor) ActivateService(rootPath string, source io.Reader, time
 		return systemchanges.StepEvidence{}, errors.New("cloudflared service activation failed")
 	}
 	return providerEvidence("cloudflared-service-activated", "", ""), nil
+}
+
+func (executor Executor) activateManagedService(rootPath string, material serviceMaterial, timeout time.Duration) (systemchanges.StepEvidence, error) {
+	identity := executor.serviceIdentity
+	if identity == nil {
+		identity = cloudflaredIdentity
+	}
+	rootUID, rootGID, cloudflaredGID, err := identity()
+	if err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	installed, err := readManagedService(rootPath, rootUID, rootGID, cloudflaredGID)
+	if err != nil || !bytes.Equal(installed.Token, []byte(material.TunnelRunToken+"\n")) || !bytes.Equal(installed.Config, serviceConfiguration(material)) || !bytes.Equal(installed.Unit, []byte(executor.request.CandidateServiceUnit)) {
+		return systemchanges.StepEvidence{}, errors.New("managed cloudflared service changed before restart")
+	}
+	command := executor.command
+	if command == nil {
+		command = runCommand
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if _, err := command(ctx, "/usr/bin/systemctl", "daemon-reload"); err != nil {
+		return systemchanges.StepEvidence{}, errors.New("cloudflared service reload failed")
+	}
+	if _, err := command(ctx, "/usr/bin/systemctl", "restart", "cloudflared.service"); err != nil {
+		return systemchanges.StepEvidence{}, errors.New("cloudflared service restart failed")
+	}
+	return providerEvidence("cloudflared-service-updated", "", ""), nil
+}
+
+func serviceConfiguration(material serviceMaterial) []byte {
+	routes := make([]Route, 0, len(material.Routes)+1)
+	for _, route := range material.Routes {
+		routes = append(routes, Route{Hostname: route.Hostname, Service: route.Origin})
+	}
+	routes = append(routes, Route{Service: "http_status:404"})
+	config, _ := json.Marshal(struct {
+		Ingress []Route `json:"ingress"`
+	}{Ingress: routes})
+	return append(config, '\n')
 }
 
 func (executor Executor) RotateService(rootPath string, source io.Reader, timeout time.Duration) (systemchanges.StepEvidence, error) {
@@ -348,6 +404,9 @@ func (executor Executor) ReverseService(rootPath string, source io.Reader, timeo
 		return systemchanges.StepEvidence{}, err
 	}
 	defer root.Close()
+	if snapshot.Managed {
+		return executor.restoreManagedService(rootPath, root, snapshot, timeout)
+	}
 	for _, directory := range []string{"etc", "etc/systemd", "etc/systemd/system"} {
 		if err := requireSafeRollbackParent(root, directory); err != nil {
 			return systemchanges.StepEvidence{}, err
@@ -397,6 +456,45 @@ func (executor Executor) ReverseService(rootPath string, source io.Reader, timeo
 	return providerEvidence("cloudflared-service-removed", "", ""), nil
 }
 
+func (executor Executor) restoreManagedService(rootPath string, root *os.Root, snapshot serviceRollback, timeout time.Duration) (systemchanges.StepEvidence, error) {
+	identity := executor.serviceIdentity
+	if identity == nil {
+		identity = cloudflaredIdentity
+	}
+	rootUID, rootGID, cloudflaredGID, err := identity()
+	if err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	current, err := readManagedService(rootPath, rootUID, rootGID, cloudflaredGID)
+	effect, exact := managedServiceEffect(current, snapshot, executor.request.CandidateServiceUnit)
+	if err != nil || !exact {
+		return systemchanges.StepEvidence{}, errors.New("managed cloudflared service changed before rollback")
+	}
+	if effect == systemchanges.StepEffectAbsent {
+		return providerEvidence("cloudflared-service-restored", "", ""), nil
+	}
+	for _, file := range []struct {
+		name string
+		body []byte
+		mode fs.FileMode
+		gid  int
+	}{{"etc/sbxr/cloudflared/token", snapshot.Token, 0o640, cloudflaredGID}, {"etc/sbxr/cloudflared/config.yml", snapshot.Config, 0o640, cloudflaredGID}, {"etc/systemd/system/cloudflared.service", snapshot.Unit, 0o644, rootGID}} {
+		if err := replaceServiceFile(root, file.name, file.body, file.mode, rootUID, file.gid); err != nil {
+			return systemchanges.StepEvidence{}, err
+		}
+	}
+	command := executor.command
+	if command == nil {
+		command = runCommand
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if _, err := command(ctx, "/usr/bin/systemctl", "daemon-reload"); err != nil {
+		return systemchanges.StepEvidence{}, errors.New("cloudflared rollback reload failed")
+	}
+	return providerEvidence("cloudflared-service-restored", "", ""), nil
+}
+
 func (executor Executor) InspectService(rootPath string, source io.Reader) (systemchanges.StepEffect, error) {
 	snapshot, ok := readServiceSnapshot(source)
 	if !ok {
@@ -407,6 +505,22 @@ func (executor Executor) InspectService(rootPath string, source io.Reader) (syst
 		return "", err
 	}
 	defer root.Close()
+	if snapshot.Managed {
+		identity := executor.serviceIdentity
+		if identity == nil {
+			identity = cloudflaredIdentity
+		}
+		rootUID, rootGID, cloudflaredGID, identityErr := identity()
+		current, readErr := readManagedService(rootPath, rootUID, rootGID, cloudflaredGID)
+		if identityErr != nil || readErr != nil {
+			return "", errors.New("managed cloudflared service is unproved")
+		}
+		effect, exact := managedServiceEffect(current, snapshot, executor.request.CandidateServiceUnit)
+		if !exact {
+			return "", errors.New("managed cloudflared service state is unproved")
+		}
+		return effect, nil
+	}
 	for _, name := range serviceArtifacts {
 		if _, err := root.Lstat(name); err == nil {
 			return systemchanges.StepEffectPresent, nil
@@ -427,6 +541,18 @@ func (executor Executor) InspectService(rootPath string, source io.Reader) (syst
 		}
 	}
 	return systemchanges.StepEffectAbsent, nil
+}
+
+func managedServiceEffect(current, prior serviceRollback, candidateUnit string) (systemchanges.StepEffect, bool) {
+	if bytes.Equal(current.Token, prior.Token) && bytes.Equal(current.Config, prior.Config) {
+		switch {
+		case bytes.Equal(current.Unit, prior.Unit):
+			return systemchanges.StepEffectAbsent, true
+		case candidateUnit != "" && bytes.Equal(current.Unit, []byte(candidateUnit)):
+			return systemchanges.StepEffectPresent, true
+		}
+	}
+	return "", false
 }
 
 func readServiceMaterial(source io.Reader) (serviceMaterial, error) {
@@ -544,10 +670,55 @@ func syncServiceNamespace(root *os.Root, names ...string) error {
 
 func readServiceSnapshot(source io.Reader) (serviceRollback, bool) {
 	var snapshot serviceRollback
-	decoder := json.NewDecoder(io.LimitReader(source, 1024))
+	decoder := json.NewDecoder(io.LimitReader(source, 128<<10))
 	decoder.DisallowUnknownFields()
-	ok := decoder.Decode(&snapshot) == nil && snapshot.Absent && decoder.Decode(&struct{}{}) == io.EOF
+	ok := decoder.Decode(&snapshot) == nil && decoder.Decode(&struct{}{}) == io.EOF && (snapshot.Absent && !snapshot.Managed && len(snapshot.Token) == 0 && len(snapshot.Config) == 0 && len(snapshot.Unit) == 0 || snapshot.Managed && !snapshot.Absent && len(snapshot.Token) > 0 && len(snapshot.Token) <= 16<<10 && len(snapshot.Config) > 0 && len(snapshot.Config) <= 64<<10 && len(snapshot.Unit) > 0 && len(snapshot.Unit) <= 16<<10)
 	return snapshot, ok
+}
+
+func readManagedService(rootPath string, rootUID, rootGID, cloudflaredGID int) (serviceRollback, error) {
+	if err := ValidateServiceMaterial(rootPath, rootUID, rootGID, cloudflaredGID); err != nil {
+		return serviceRollback{}, err
+	}
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		return serviceRollback{}, err
+	}
+	defer root.Close()
+	result := serviceRollback{}
+	for _, file := range []struct {
+		name string
+		mode fs.FileMode
+		uid  int
+		gid  int
+		body *[]byte
+	}{{"etc/sbxr/cloudflared/token", 0o640, rootUID, cloudflaredGID, &result.Token}, {"etc/sbxr/cloudflared/config.yml", 0o640, rootUID, cloudflaredGID, &result.Config}, {"etc/systemd/system/cloudflared.service", 0o644, rootUID, rootGID, &result.Unit}} {
+		info, statErr := root.Lstat(file.name)
+		owner, owned := fileOwner(info)
+		body, readErr := root.ReadFile(file.name)
+		if statErr != nil || readErr != nil || !owned || !info.Mode().IsRegular() || info.Mode().Perm() != file.mode || info.Mode()&os.ModeSymlink != 0 || int(owner.Uid) != file.uid || int(owner.Gid) != file.gid || owner.Nlink != 1 {
+			return serviceRollback{}, fs.ErrPermission
+		}
+		*file.body = body
+	}
+	return result, nil
+}
+
+func replaceServiceFile(root *os.Root, name string, content []byte, mode fs.FileMode, uid, gid int) error {
+	temporary := name + ".restoring"
+	file, err := root.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil {
+		return err
+	}
+	defer root.Remove(temporary)
+	if file.Chown(uid, gid) != nil {
+		file.Close()
+		return fs.ErrPermission
+	}
+	if _, err := file.Write(content); err != nil || file.Sync() != nil || file.Close() != nil {
+		return errors.New("protected cloudflared service restore failed")
+	}
+	return root.Rename(temporary, name)
 }
 
 func fileOwner(info fs.FileInfo) (*syscall.Stat_t, bool) {

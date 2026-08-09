@@ -18,7 +18,7 @@ func TestPayloadMetadataBindsTheUnmodifiedExecutableAndCompleteEmbeddedDocuments
 		t.Fatal(err)
 	}
 	got, payloadBytes, err := softwarelifecycle.ReadPayloadMetadata(bytes.NewReader(stamped), int64(len(stamped)))
-	if err != nil || !bytes.Equal(payloadBytes, executable) || got.Build.Repository != softwarelifecycle.Repository || got.Build.Tag != "v1.0.0" || got.Build.PayloadSHA256 == "" || len(got.Schemas) != 1 || len(got.Migrations) != 0 || len(got.Units) != 10 || len(got.Artifacts) != 10 {
+	if err != nil || !bytes.Equal(payloadBytes, executable) || got.Build.Repository != softwarelifecycle.Repository || got.Build.Tag != "v1.0.0" || got.Build.PayloadSHA256 == "" || len(got.Schemas) != 2 || len(got.Migrations) != 1 || len(got.Units) != 10 || len(got.Artifacts) != 10 {
 		t.Fatalf("ReadPayloadMetadata() = %#v, payload=%q, err=%v", got, payloadBytes, err)
 	}
 }
@@ -97,6 +97,9 @@ func TestPayloadMetadataAcceptsOnlyCompleteSequentialNoNetworkMigrationMaterial(
 		func(value *softwarelifecycle.PayloadMetadata) { value.Migrations[0].To = 3 },
 		func(value *softwarelifecycle.PayloadMetadata) { value.Migrations[0].NetworkAccess = true },
 		func(value *softwarelifecycle.PayloadMetadata) { value.Migrations[0].Document = []byte(`{}`) },
+		func(value *softwarelifecycle.PayloadMetadata) {
+			value.Migrations[0].Document = []byte(`{"schema":1,"from":1,"to":2,"operations":[{"op":"replace","path":"/payload","value":2}]}`)
+		},
 	} {
 		candidate := valid
 		candidate.Schemas = map[string][]byte{}
@@ -128,8 +131,8 @@ func payloadMetadata() softwarelifecycle.PayloadMetadata {
 	artifacts["cloudflared.yml"] = cloudflaretunnel.QualificationConfiguration()
 	return softwarelifecycle.PayloadMetadata{
 		Schema: 1, Build: softwarelifecycle.EmbeddedBuildIdentity{Repository: softwarelifecycle.Repository, Tag: "v1.0.0", Commit: strings.Repeat("a", 40)}, Architecture: softwarelifecycle.AMD64,
-		StateSchema: 1, MinimumUpdaterSchema: 1, Schemas: definitions,
-		Migrations: []softwarelifecycle.EmbeddedMigration{},
+		StateSchema: 2, MinimumUpdaterSchema: 1, Schemas: definitions,
+		Migrations: []softwarelifecycle.EmbeddedMigration{{Name: "state-v1-to-v2.json", From: 1, To: 2, Document: state.ReleaseMigrations()["state-v1-to-v2.json"]}},
 		Units:      units, Artifacts: artifacts, Baselines: softwarelifecycle.QualifiedComponentBaselines(), Paths: softwarelifecycle.QualifiedPaths(),
 	}
 }

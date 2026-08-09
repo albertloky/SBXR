@@ -1,6 +1,7 @@
 package cloudflaretunnel
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -184,6 +185,7 @@ type Executor struct {
 	serviceIdentity func() (int, int, int, error)
 	command         func(context.Context, string, ...string) ([]byte, error)
 	clock           Clock
+	releaseUpdate   bool
 }
 
 func (plan *Plan) Executor(api MutationAPI) (Executor, error) {
@@ -194,7 +196,7 @@ func (plan *Plan) Executor(api MutationAPI) (Executor, error) {
 	if view.Health.Outcome != Healthy {
 		return Executor{}, errors.New("Cloudflare executor authority unavailable")
 	}
-	return Executor{api: api, token: plan.request.Authority.Token, runToken: plan.runToken, request: plan.request, observation: plan.observation, tokenID: view.Credential.ID, binding: plan.binding, serviceIdentity: cloudflaredIdentity, command: runCommand, clock: SystemClock{}}, nil
+	return Executor{api: api, token: plan.request.Authority.Token, runToken: plan.runToken, request: plan.request, observation: plan.observation, tokenID: view.Credential.ID, binding: plan.binding, serviceIdentity: cloudflaredIdentity, command: runCommand, clock: SystemClock{}, releaseUpdate: plan.releaseUpdate}, nil
 }
 
 func (executor Executor) CaptureRollback(step systemchanges.Step, write func(io.Reader) error) error {
@@ -639,6 +641,13 @@ func (executor Executor) validateInstalledService(root string) error {
 	rootUID, rootGID, cloudflaredGID, err := identity()
 	if err != nil {
 		return err
+	}
+	if executor.releaseUpdate {
+		installed, readErr := readManagedService(root, rootUID, rootGID, cloudflaredGID)
+		if readErr != nil || !bytes.Equal(installed.Unit, []byte(executor.request.CandidateServiceUnit)) {
+			return errors.New("candidate cloudflared service is unproved")
+		}
+		return nil
 	}
 	return ValidateInstalledService(root, rootUID, rootGID, cloudflaredGID)
 }

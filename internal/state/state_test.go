@@ -82,14 +82,19 @@ func TestLoadValidCurrentState(t *testing.T) {
 	}
 }
 
-func TestLoadReportsDeterministicZeroEdgeMigrationReview(t *testing.T) {
+func TestLoadReportsDeterministicSchemaOneToTwoMigrationReview(t *testing.T) {
 	want := &state.MigrationReview{
-		StartingSchema:                  1,
-		TargetSchema:                    1,
-		StartingRelease:                 release,
-		TargetRelease:                   release,
-		Steps:                           []state.MigrationStepReview{},
-		StartingReleaseCanReadCandidate: true,
+		StartingSchema:  1,
+		TargetSchema:    2,
+		StartingRelease: release,
+		TargetRelease:   release,
+		Steps: []state.MigrationStepReview{{
+			FromSchema: 1, ToSchema: 2,
+			MeaningChanges:          []string{"No Owner meaning changes; schema 2 preserves the complete schema 1 Desired State"},
+			GeneratedServiceEffects: []string{"Regenerate and validate all release-bound service and subscription material"},
+			ServiceInterruption:     true,
+		}},
+		StartingReleaseCanReadCandidate: false,
 	}
 	loader := state.New(memoryStorage{document: completeDocument(t)})
 	for range 2 {
@@ -121,7 +126,7 @@ func TestLoadRefusesUnsafeOrUnprovableState(t *testing.T) {
 		{name: "malformed JSON", document: `{`, request: managedRequest(), code: "STATE-DOCUMENT-MALFORMED"},
 		{name: "trailing JSON", document: validDocument + `{}`, request: managedRequest(), code: "STATE-DOCUMENT-MALFORMED"},
 		{name: "duplicate key", document: strings.Replace(validDocument, `"revision": 7,`, `"revision": 7, "revision": 7,`, 1), request: managedRequest(), code: "STATE-DOCUMENT-DUPLICATE-KEY"},
-		{name: "unknown schema", document: strings.Replace(validDocument, `"schema_version": 1`, `"schema_version": 2`, 1), request: managedRequest(), code: "STATE-SCHEMA-UNSUPPORTED"},
+		{name: "unknown schema", document: strings.Replace(validDocument, `"schema_version": 1`, `"schema_version": 3`, 1), request: managedRequest(), code: "STATE-SCHEMA-UNSUPPORTED"},
 		{name: "unknown envelope field", document: strings.Replace(validDocument, `"schema_version": 1,`, `"schema_version": 1, "mystery": true,`, 1), request: managedRequest(), code: "STATE-DOCUMENT-UNSUPPORTED-FIELD"},
 		{name: "case-changed envelope field", document: strings.Replace(validDocument, `"revision": 7`, `"Revision": 7`, 1), request: managedRequest(), code: "STATE-DOCUMENT-UNSUPPORTED-FIELD"},
 		{name: "unknown Release Identity field", document: strings.Replace(validDocument, `"repository":`, `"mystery": true, "repository":`, 1), request: managedRequest(), code: "STATE-DOCUMENT-UNSUPPORTED-FIELD"},

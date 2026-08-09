@@ -187,7 +187,7 @@ func releaseMetadata(identity softwarelifecycle.EmbeddedBuildIdentity, architect
 		}
 		unitSets = append(unitSets, set)
 	}
-	return softwarelifecycle.NewPayloadMetadata(identity, architecture, softwarelifecycle.PayloadMaterial{StateDefinitions: definitions, UnitSets: unitSets, ArtifactSets: []map[string][]byte{artifacts}})
+	return softwarelifecycle.NewPayloadMetadata(identity, architecture, softwarelifecycle.PayloadMaterial{StateDefinitions: definitions, StateMigrations: state.ReleaseMigrations(), UnitSets: unitSets, ArtifactSets: []map[string][]byte{artifacts}})
 }
 
 func oneFileArchive(body []byte) ([]byte, error) {

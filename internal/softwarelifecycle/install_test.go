@@ -37,6 +37,9 @@ type controlledInstallContribution struct{ proof InstallContributionProof }
 func (c controlledInstallContribution) SoftwareLifecycleInstallContribution() lifecyclecontract.InstallContribution {
 	return c.proof
 }
+func (c controlledInstallContribution) SoftwareLifecycleUpdateContribution() lifecyclecontract.UpdateContribution {
+	return c.proof
+}
 
 func TestPlanInstallDisclosesTheCompleteReviewedFreshInstallation(t *testing.T) {
 	candidate := controlledInstallCandidate()
@@ -182,7 +185,7 @@ func controlledInstallCandidate() InstallCandidate {
 	manifest, _ := NewComponentManifest(AMD64, "5.4.0", files)
 	components, _ := BuildComponentArchive(manifest, files)
 	componentDigest := sha256.Sum256(components)
-	staged := StagedRelease{Identity: identity, Build: EmbeddedBuildIdentity{Repository: Repository, Tag: identity.Tag, Commit: identity.Commit, PayloadSHA256: strings.Repeat("c", 64)}, Architecture: AMD64, ExecutableSHA256: strings.Repeat("d", 64), ComponentsSHA256: hex.EncodeToString(componentDigest[:]), InstallPath: ReleaseInstallPath(identity), StateSchema: 1}
+	staged := StagedRelease{Identity: identity, Build: EmbeddedBuildIdentity{Repository: Repository, Tag: identity.Tag, Commit: identity.Commit, PayloadSHA256: strings.Repeat("c", 64)}, Architecture: AMD64, ExecutableSHA256: strings.Repeat("d", 64), ComponentsSHA256: hex.EncodeToString(componentDigest[:]), InstallPath: ReleaseInstallPath(identity), StateSchema: 2}
 	return InstallCandidate{cell: &installCandidateCell{staged: staged, archive: []byte("authenticated archive"), components: components}}
 }
 

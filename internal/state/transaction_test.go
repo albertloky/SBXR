@@ -103,7 +103,7 @@ func TestPrepareCommitDerivesRevisionFromExactLoad(t *testing.T) {
 	})
 }
 
-func TestPrepareCommitReportsZeroEdgeReleaseCompatibility(t *testing.T) {
+func TestPrepareCommitReportsSchemaOneToTwoReleaseCompatibility(t *testing.T) {
 	candidate := completeDesiredState()
 	storage := &mutableStateStorage{document: documentFor(t, candidate)}
 	stateModule := New(storage)
@@ -120,8 +120,12 @@ func TestPrepareCommitReportsZeroEdgeReleaseCompatibility(t *testing.T) {
 		t.Fatal(err)
 	}
 	review := prepared.MigrationReview()
-	if review == nil || review.StartingSchema != 1 || review.TargetSchema != 1 || len(review.Steps) != 0 || review.StartingRelease != testRelease || review.TargetRelease != request.CandidateReleaseIdentity || review.StartingReleaseCanReadCandidate {
-		t.Fatalf("PrepareCommit() migration review = %#v, want zero-edge schema path and incompatible starting release", review)
+	if review == nil || review.StartingSchema != 1 || review.TargetSchema != 2 || len(review.Steps) != 1 || review.Steps[0].FromSchema != 1 || review.Steps[0].ToSchema != 2 || review.StartingRelease != testRelease || review.TargetRelease != request.CandidateReleaseIdentity || review.StartingReleaseCanReadCandidate {
+		t.Fatalf("PrepareCommit() migration review = %#v, want complete schema 1 to 2 path and incompatible starting release", review)
+	}
+	from, to, steps, networkFree := prepared.SoftwareLifecyclePreparedMigration()
+	if from != 0 || to != 0 || steps != 0 || networkFree {
+		t.Fatalf("generic SoftwareLifecyclePreparedMigration() = (%d, %d, %d, %t), want no update authority", from, to, steps, networkFree)
 	}
 }
 

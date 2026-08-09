@@ -58,7 +58,7 @@ func TestFilesystemSeam(t *testing.T) {
 		loader := state.New(newAt(root, os.Geteuid()))
 		for range 2 {
 			result, err := loader.Load(request)
-			if err != nil || result.Status != state.Managed || result.Snapshot.Revision != 7 || result.Migration == nil || result.Migration.StartingSchema != 1 || result.Migration.TargetSchema != 1 || len(result.Migration.Steps) != 0 {
+			if err != nil || result.Status != state.Managed || result.Snapshot.Revision != 7 || result.Migration == nil || result.Migration.StartingSchema != 1 || result.Migration.TargetSchema != 2 || len(result.Migration.Steps) != 1 {
 				t.Fatalf("Load() = (%+v, %v), want a durable Managed read", result, err)
 			}
 		}

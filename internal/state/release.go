@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 )
@@ -22,23 +23,33 @@ type releaseSchema struct {
 func ReleaseDefinitions() (map[string][]byte, error) {
 	one := uint64(1)
 	noExtras := false
-	schema := releaseSchema{
-		Draft: "https://json-schema.org/draft/2020-12/schema", Title: "SBXR Desired State v1", Type: "object", AdditionalProperties: &noExtras,
-		Properties: map[string]releaseSchema{
-			"schema_version":            {Type: "integer", Const: uint64(1)},
-			"revision":                  {Type: "integer", Minimum: &one},
-			"release_identity":          releaseSchemaFor(reflect.TypeOf(ReleaseIdentity{})),
-			"last_completed_change_set": {Type: "string", MinLength: &one},
-			"payload":                   releaseSchemaFor(reflect.TypeOf(DesiredState{})),
-			"checksum":                  {Type: "string", Pattern: "^[0-9a-f]{64}$"},
-		},
-		Required: []string{"schema_version", "revision", "release_identity", "last_completed_change_set", "payload", "checksum"},
+	schemaFor := func(version uint64) releaseSchema {
+		return releaseSchema{
+			Draft: "https://json-schema.org/draft/2020-12/schema", Title: "SBXR Desired State v" + fmt.Sprint(version), Type: "object", AdditionalProperties: &noExtras,
+			Properties: map[string]releaseSchema{
+				"schema_version":            {Type: "integer", Const: version},
+				"revision":                  {Type: "integer", Minimum: &one},
+				"release_identity":          releaseSchemaFor(reflect.TypeOf(ReleaseIdentity{})),
+				"last_completed_change_set": {Type: "string", MinLength: &one},
+				"payload":                   releaseSchemaFor(reflect.TypeOf(DesiredState{})),
+				"checksum":                  {Type: "string", Pattern: "^[0-9a-f]{64}$"},
+			},
+			Required: []string{"schema_version", "revision", "release_identity", "last_completed_change_set", "payload", "checksum"},
+		}
 	}
-	document, err := json.Marshal(schema)
+	v1, err := json.Marshal(schemaFor(1))
 	if err != nil {
 		return nil, err
 	}
-	return map[string][]byte{"desired-state-v1.schema.json": document}, nil
+	v2, err := json.Marshal(schemaFor(2))
+	if err != nil {
+		return nil, err
+	}
+	return map[string][]byte{"desired-state-v1.schema.json": v1, "desired-state-v2.schema.json": v2}, nil
+}
+
+func ReleaseMigrations() map[string][]byte {
+	return map[string][]byte{"state-v1-to-v2.json": []byte(`{"schema":1,"from":1,"to":2,"operations":[{"op":"replace","path":"/schema_version","value":2}]}`)}
 }
 
 func releaseSchemaFor(valueType reflect.Type) releaseSchema {

@@ -1,6 +1,7 @@
 package cloudflaretunnel
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/albertloky/SBXR/internal/systemchanges"
 )
 
 func TestCloudflaredServiceUsesProtectedTokenFileAndNonRootIdentity(t *testing.T) {
@@ -100,6 +103,80 @@ func TestExecutorInstallsAndRollsBackProtectedCloudflaredService(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(root, "etc/sbxr")); !os.IsNotExist(err) {
 		t.Fatalf("rollback did not restore absent /etc/sbxr: %v", err)
+	}
+}
+
+func TestExecutorSnapshotsRestartsAndRestoresManagedCloudflaredService(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"etc", "etc/systemd", "etc/systemd/system"} {
+		if err := os.MkdirAll(filepath.Join(root, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	serviceGID := testServiceGID(t)
+	var commands []string
+	executor := Executor{serviceIdentity: func() (int, int, int, error) { return os.Geteuid(), os.Getegid(), serviceGID, nil }, command: func(_ context.Context, name string, arguments ...string) ([]byte, error) {
+		commands = append(commands, name+" "+strings.Join(arguments, " "))
+		if len(arguments) == 1 && arguments[0] == "--version" {
+			return []byte("cloudflared version 2026.7.3 (built 2026-08-01)"), nil
+		}
+		return nil, nil
+	}}
+	material := `{"tunnel_id":"11111111-1111-4111-8111-111111111111","tunnel_run_token":"RUN-TOKEN-MARKER","routes":[{"hostname":"xhttp.example.com","origin":"http://127.0.0.1:11080"},{"hostname":"ws.example.com","origin":"http://127.0.0.1:11081"}]}`
+	if _, err := executor.ActivateService(root, strings.NewReader(material), time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	priorUnit, _ := os.ReadFile(filepath.Join(root, "etc/systemd/system/cloudflared.service"))
+	priorToken, _ := os.ReadFile(filepath.Join(root, "etc/sbxr/cloudflared/token"))
+	priorConfig, _ := os.ReadFile(filepath.Join(root, "etc/sbxr/cloudflared/config.yml"))
+	executor.releaseUpdate = true
+	var rollback []byte
+	if err := executor.CaptureServiceRollback(root, func(source io.Reader) error { rollback, _ = io.ReadAll(source); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	candidateUnit := bytes.Replace(priorUnit, []byte("/usr/bin/cloudflared"), []byte("/opt/sbxr/releases/candidate/cloudflared"), 1)
+	executor.request.CandidateServiceUnit = string(candidateUnit)
+	if err := os.WriteFile(filepath.Join(root, "etc/systemd/system/cloudflared.service"), candidateUnit, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	commands = nil
+	if evidence, err := executor.ActivateService(root, strings.NewReader(material), time.Minute); err != nil || evidence.Code != "cloudflared-service-updated" {
+		t.Fatalf("ActivateService(update) = (%+v, %v)", evidence, err)
+	}
+	if effect, err := executor.InspectService(root, bytes.NewReader(rollback)); err != nil || effect != systemchanges.StepEffectPresent {
+		t.Fatalf("InspectService(update) = (%s, %v)", effect, err)
+	}
+	for _, hostile := range []struct {
+		name, path string
+		candidate  []byte
+		mode       os.FileMode
+	}{{"token", "etc/sbxr/cloudflared/token", priorToken, 0o640}, {"config", "etc/sbxr/cloudflared/config.yml", priorConfig, 0o640}, {"unit", "etc/systemd/system/cloudflared.service", candidateUnit, 0o644}} {
+		t.Run("changed "+hostile.name, func(t *testing.T) {
+			name := filepath.Join(root, hostile.path)
+			changed := append(append([]byte(nil), hostile.candidate...), 'x')
+			if err := os.WriteFile(name, changed, hostile.mode); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := executor.ReverseService(root, bytes.NewReader(rollback), time.Minute); err == nil {
+				t.Fatal("changed managed service was overwritten")
+			}
+			if retained, _ := os.ReadFile(name); !bytes.Equal(retained, changed) {
+				t.Fatal("changed managed service was not retained for Recovery Required")
+			}
+			if err := os.WriteFile(name, hostile.candidate, hostile.mode); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	if evidence, err := executor.ReverseService(root, bytes.NewReader(rollback), time.Minute); err != nil || evidence.Code != "cloudflared-service-restored" {
+		t.Fatalf("ReverseService(update) = (%+v, %v)", evidence, err)
+	}
+	restored, _ := os.ReadFile(filepath.Join(root, "etc/systemd/system/cloudflared.service"))
+	if !bytes.Equal(restored, priorUnit) || len(commands) != 3 || commands[0] != "/usr/bin/systemctl daemon-reload" || commands[1] != "/usr/bin/systemctl restart cloudflared.service" || commands[2] != "/usr/bin/systemctl daemon-reload" {
+		t.Fatalf("managed restore = unit match %t, commands %v", bytes.Equal(restored, priorUnit), commands)
+	}
+	if effect, err := executor.InspectService(root, bytes.NewReader(rollback)); err != nil || effect != systemchanges.StepEffectAbsent {
+		t.Fatalf("InspectService(restored) = (%s, %v)", effect, err)
 	}
 }
 

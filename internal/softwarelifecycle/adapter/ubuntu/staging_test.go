@@ -25,14 +25,16 @@ import (
 
 func TestStagerValidatesEmbeddedDocumentsWithoutExecutingTheCandidate(t *testing.T) {
 	executable := stampedExecutable(t, "amd64")
+	armExecutable := stampedExecutable(t, "arm64")
 	archive := releaseArchive(tar.Header{Name: "sbxr", Mode: 0o755, Size: int64(len(executable)), Typeflag: tar.TypeReg}, executable)
-	request := stageRequest(t, softwarelifecycle.AMD64, archive)
+	armArchive := releaseArchive(tar.Header{Name: "sbxr", Mode: 0o755, Size: int64(len(armExecutable)), Typeflag: tar.TypeReg}, armExecutable)
+	request := stageRequest(t, softwarelifecycle.AMD64, archive, armArchive)
 	got, err := ubuntuadapter.NewStager().Stage(t.Context(), request)
 	if err != nil {
 		t.Fatal(err)
 	}
 	digest := sha256.Sum256(executable)
-	if got.Identity != request.Release.Identity || got.Build.PayloadSHA256 == "" || got.Architecture != softwarelifecycle.AMD64 || got.ExecutableSHA256 != hex.EncodeToString(digest[:]) || got.InstallPath != softwarelifecycle.ReleaseInstallPath(request.Release.Identity) || got.StateSchema != 1 {
+	if got.Identity != request.Release.Identity || got.Build.PayloadSHA256 == "" || got.Architecture != softwarelifecycle.AMD64 || got.ExecutableSHA256 != hex.EncodeToString(digest[:]) || got.InstallPath != softwarelifecycle.ReleaseInstallPath(request.Release.Identity) || got.StateSchema != 2 {
 		t.Fatalf("Stage() = %#v", got)
 	}
 }
@@ -41,6 +43,7 @@ func TestStagerRejectsCallerAuthoredHostileArchitectureRuntimeMetadataAndNativeF
 	amd64 := stampedExecutable(t, "amd64")
 	arm64 := stampedExecutable(t, "arm64")
 	valid := releaseArchive(tar.Header{Name: "sbxr", Mode: 0o755, Size: int64(len(amd64)), Typeflag: tar.TypeReg}, amd64)
+	validARM64 := releaseArchive(tar.Header{Name: "sbxr", Mode: 0o755, Size: int64(len(arm64)), Typeflag: tar.TypeReg}, arm64)
 	if got, err := ubuntuadapter.NewStager().Stage(t.Context(), softwarelifecycle.StageRequest{}); err == nil || got.Identity.Repository != "" {
 		t.Fatalf("caller-authored staging request accepted: %#v, %v", got, err)
 	}
@@ -82,7 +85,7 @@ func TestStagerRejectsCallerAuthoredHostileArchitectureRuntimeMetadataAndNativeF
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			request := stageRequest(t, softwarelifecycle.AMD64, valid)
+			request := stageRequest(t, softwarelifecycle.AMD64, valid, validARM64)
 			test.change(&request)
 			if got, err := ubuntuadapter.NewStager().Stage(t.Context(), request); err == nil || got.Identity.Repository != "" {
 				t.Fatalf("hostile payload accepted: %#v, %v", got, err)
@@ -129,17 +132,17 @@ func qualificationMetadata(architecture softwarelifecycle.Architecture) software
 	}
 	artifacts, _ := subscriptionpublication.QualificationArtifacts()
 	artifacts["cloudflared.yml"] = cloudflaretunnel.QualificationConfiguration()
-	return softwarelifecycle.PayloadMetadata{Schema: 1, Build: softwarelifecycle.EmbeddedBuildIdentity{Repository: softwarelifecycle.Repository, Tag: "v1.0.0", Commit: strings.Repeat("a", 40)}, Architecture: architecture, StateSchema: 1, MinimumUpdaterSchema: 1, Schemas: definitions, Migrations: []softwarelifecycle.EmbeddedMigration{}, Units: units, Artifacts: artifacts, Baselines: softwarelifecycle.QualifiedComponentBaselines(), Paths: softwarelifecycle.QualifiedPaths()}
+	return softwarelifecycle.PayloadMetadata{Schema: 1, Build: softwarelifecycle.EmbeddedBuildIdentity{Repository: softwarelifecycle.Repository, Tag: "v1.0.0", Commit: strings.Repeat("a", 40)}, Architecture: architecture, StateSchema: 2, MinimumUpdaterSchema: 1, Schemas: definitions, Migrations: []softwarelifecycle.EmbeddedMigration{{Name: "state-v1-to-v2.json", From: 1, To: 2, Document: state.ReleaseMigrations()["state-v1-to-v2.json"]}}, Units: units, Artifacts: artifacts, Baselines: softwarelifecycle.QualifiedComponentBaselines(), Paths: softwarelifecycle.QualifiedPaths()}
 }
 
-func stageRequest(t *testing.T, architecture softwarelifecycle.Architecture, archive []byte) softwarelifecycle.StageRequest {
+func stageRequest(t *testing.T, architecture softwarelifecycle.Architecture, amd64Archive, arm64Archive []byte) softwarelifecycle.StageRequest {
 	t.Helper()
-	digest := sha256.Sum256(archive)
+	amd64Digest, arm64Digest := sha256.Sum256(amd64Archive), sha256.Sum256(arm64Archive)
 	amd64Components, arm64Components := stagingComponents(softwarelifecycle.AMD64), stagingComponents(softwarelifecycle.ARM64)
 	amd64ComponentsDigest, arm64ComponentsDigest := sha256.Sum256(amd64Components), sha256.Sum256(arm64Components)
-	index := []byte(fmt.Sprintf(`{"schema":1,"product":"sbxr","repository":"albertloky/SBXR","version":"1.0.0","sequence":1,"tag":"v1.0.0","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state_schema":1,"minimum_updater_schema":1,"assets":[{"role":"application-linux-amd64","name":"sbxr-linux-amd64.tar.gz","size":%d,"sha256":"%s"},{"role":"application-linux-arm64","name":"sbxr-linux-arm64.tar.gz","size":%d,"sha256":"%s"},{"role":"components-linux-amd64","name":"sbxr-components-linux-amd64.tar.gz","size":%d,"sha256":"%s"},{"role":"components-linux-arm64","name":"sbxr-components-linux-arm64.tar.gz","size":%d,"sha256":"%s"}]}`, len(archive), hex.EncodeToString(digest[:]), len(archive), hex.EncodeToString(digest[:]), len(amd64Components), hex.EncodeToString(amd64ComponentsDigest[:]), len(arm64Components), hex.EncodeToString(arm64ComponentsDigest[:])))
+	index := []byte(fmt.Sprintf(`{"schema":1,"product":"sbxr","repository":"albertloky/SBXR","version":"1.0.0","sequence":1,"tag":"v1.0.0","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state_schema":2,"minimum_updater_schema":1,"assets":[{"role":"application-linux-amd64","name":"sbxr-linux-amd64.tar.gz","size":%d,"sha256":"%s"},{"role":"application-linux-arm64","name":"sbxr-linux-arm64.tar.gz","size":%d,"sha256":"%s"},{"role":"components-linux-amd64","name":"sbxr-components-linux-amd64.tar.gz","size":%d,"sha256":"%s"},{"role":"components-linux-arm64","name":"sbxr-components-linux-arm64.tar.gz","size":%d,"sha256":"%s"}]}`, len(amd64Archive), hex.EncodeToString(amd64Digest[:]), len(arm64Archive), hex.EncodeToString(arm64Digest[:]), len(amd64Components), hex.EncodeToString(amd64ComponentsDigest[:]), len(arm64Components), hex.EncodeToString(arm64ComponentsDigest[:])))
 	indexDigest := sha256.Sum256(index)
-	evidence := softwarelifecycle.ReleaseEvidence{Repository: softwarelifecycle.Repository, Tag: "v1.0.0", Commit: strings.Repeat("a", 40), Index: index, Assets: []softwarelifecycle.DownloadedAsset{{Name: "sbxr-linux-amd64.tar.gz", Bytes: archive}, {Name: "sbxr-linux-arm64.tar.gz", Bytes: archive}, {Name: "sbxr-components-linux-amd64.tar.gz", Bytes: amd64Components}, {Name: "sbxr-components-linux-arm64.tar.gz", Bytes: arm64Components}}, AttestedAssets: []softwarelifecycle.AttestedAsset{{Name: "release-index.json", SHA256: hex.EncodeToString(indexDigest[:])}, {Name: "sbxr-linux-amd64.tar.gz", SHA256: hex.EncodeToString(digest[:])}, {Name: "sbxr-linux-arm64.tar.gz", SHA256: hex.EncodeToString(digest[:])}, {Name: "sbxr-components-linux-amd64.tar.gz", SHA256: hex.EncodeToString(amd64ComponentsDigest[:])}, {Name: "sbxr-components-linux-arm64.tar.gz", SHA256: hex.EncodeToString(arm64ComponentsDigest[:])}}, Verifier: softwarelifecycle.VerifierEvidence{Version: "2.97.0", SigningFingerprint: strings.Repeat("A", 40), OfficialSignedDistribution: true, ReleaseVerified: true, VerifiedAssets: []string{"release-index.json", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz", "sbxr-components-linux-amd64.tar.gz", "sbxr-components-linux-arm64.tar.gz"}}}
+	evidence := softwarelifecycle.ReleaseEvidence{Repository: softwarelifecycle.Repository, Tag: "v1.0.0", Commit: strings.Repeat("a", 40), Index: index, Assets: []softwarelifecycle.DownloadedAsset{{Name: "sbxr-linux-amd64.tar.gz", Bytes: amd64Archive}, {Name: "sbxr-linux-arm64.tar.gz", Bytes: arm64Archive}, {Name: "sbxr-components-linux-amd64.tar.gz", Bytes: amd64Components}, {Name: "sbxr-components-linux-arm64.tar.gz", Bytes: arm64Components}}, AttestedAssets: []softwarelifecycle.AttestedAsset{{Name: "release-index.json", SHA256: hex.EncodeToString(indexDigest[:])}, {Name: "sbxr-linux-amd64.tar.gz", SHA256: hex.EncodeToString(amd64Digest[:])}, {Name: "sbxr-linux-arm64.tar.gz", SHA256: hex.EncodeToString(arm64Digest[:])}, {Name: "sbxr-components-linux-amd64.tar.gz", SHA256: hex.EncodeToString(amd64ComponentsDigest[:])}, {Name: "sbxr-components-linux-arm64.tar.gz", SHA256: hex.EncodeToString(arm64ComponentsDigest[:])}}, Verifier: softwarelifecycle.VerifierEvidence{Version: "2.97.0", SigningFingerprint: strings.Repeat("A", 40), OfficialSignedDistribution: true, ReleaseVerified: true, VerifiedAssets: []string{"release-index.json", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz", "sbxr-components-linux-amd64.tar.gz", "sbxr-components-linux-arm64.tar.gz"}}}
 	recorder := &requestRecorder{}
 	module := softwarelifecycle.New(staticSource{evidence}, softwarelifecycle.VerifierQualification{Version: "2.97.0", SigningFingerprint: strings.Repeat("A", 40)}, func() time.Time { return time.Date(2026, 8, 9, 0, 0, 0, 0, time.UTC) }, recorder)
 	_ = module.View(t.Context(), softwarelifecycle.ViewRequest{Tag: "v1.0.0", Architecture: architecture, InstallationStatus: softwarelifecycle.NotInstalled})

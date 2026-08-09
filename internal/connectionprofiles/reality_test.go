@@ -85,6 +85,9 @@ func TestRealityViewAndPlanProduceOneSafeNativeConfiguration(t *testing.T) {
 	if planResult.Health.Outcome != connectionprofiles.Healthy || planResult.Plan == nil || len(planResult.Plan.Steps()) != 1 || len(planResult.Plan.Checks()) != 4 {
 		t.Fatalf("Plan() = %+v", planResult)
 	}
+	if contribution := planResult.Plan.SoftwareLifecycleUpdateContribution(); contribution.Name != "Connection Profiles" || contribution.ChangeSet != "profiles-reality-0001" || contribution.Owner != systemchanges.ConnectionProfilesModule {
+		t.Fatalf("update contribution = %+v", contribution)
+	}
 	if rendered := fmt.Sprintf("%+v", planResult); strings.Contains(rendered, uuidMarker) || strings.Contains(rendered, privateKeyMarker) || strings.Contains(rendered, shortIDMarker) || strings.Contains(rendered, string(host.validated)) {
 		t.Fatalf("Plan() leaked protected material: %s", rendered)
 	}

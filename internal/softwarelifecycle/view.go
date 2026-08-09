@@ -102,6 +102,7 @@ type ViewResult struct {
 }
 
 func (result ViewResult) InstallCandidate() InstallCandidate { return result.installCandidate }
+func (result ViewResult) UpdateCandidate() InstallCandidate  { return result.installCandidate }
 
 type DownloadedAsset struct {
 	Name  string
@@ -196,7 +197,7 @@ func (module Interface) View(ctx context.Context, request ViewRequest) ViewResul
 			return refuse(result)
 		}
 		result.StagedCandidate = &staged
-		result.installCandidate = InstallCandidate{cell: &installCandidateCell{staged: staged, archive: append([]byte(nil), archive...), components: append([]byte(nil), componentArchive...)}}
+		result.installCandidate = InstallCandidate{cell: &installCandidateCell{verified: candidate, staged: staged, archive: append([]byte(nil), archive...), components: append([]byte(nil), componentArchive...)}}
 	}
 	result.MigrationSummary = migrationSummary(candidate)
 	result.AffectedComponents = []Component{ApplicationAMD64, ApplicationARM64, ComponentsAMD64, ComponentsARM64}

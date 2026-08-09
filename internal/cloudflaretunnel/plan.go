@@ -103,21 +103,23 @@ func (token TunnelRunToken) consume() (string, bool) {
 }
 
 type PlanRequest struct {
-	Authority           ViewRequest
-	ChangeSet           string
-	StartingRevision    uint64
-	StartingStateSHA256 string
-	DesiredStateSHA256  string
-	TunnelName          string
-	XHTTPHostname       string
-	WebSocketHostname   string
-	DirectHostname      string
-	PublicIPv4          string
-	PublicIPv6          string
-	CloudflaredVersion  string
-	ManagementToken     ManagementTokenChange
-	RunTokenRotation    RunTokenRotation
-	ManagedRepair       OwnedTunnelBinding
+	Authority            ViewRequest
+	ChangeSet            string
+	StartingRevision     uint64
+	StartingStateSHA256  string
+	DesiredStateSHA256   string
+	TunnelName           string
+	XHTTPHostname        string
+	WebSocketHostname    string
+	DirectHostname       string
+	PublicIPv4           string
+	PublicIPv6           string
+	CloudflaredVersion   string
+	ManagementToken      ManagementTokenChange
+	RunTokenRotation     RunTokenRotation
+	ManagedRepair        OwnedTunnelBinding
+	ReleaseUpdate        bool
+	CandidateServiceUnit string
 }
 
 type ManagementTokenAction string
@@ -161,6 +163,7 @@ type Plan struct {
 	binding                       cloudflareEvidenceBinding
 	runToken                      TunnelRunToken
 	managementToken               VerifiedManagementToken
+	releaseUpdate                 bool
 	used                          *atomic.Bool
 }
 
@@ -196,6 +199,13 @@ func (plan *Plan) SoftwareLifecycleInstallContribution() lifecyclecontract.Insta
 	digest := sha256.Sum256([]byte(plan.observation))
 	return lifecyclecontract.InstallContribution{Name: "Cloudflare Tunnel", Owner: systemchanges.CloudflareModule, Identity: plan.identity, SHA256: plan.sha256, StableSHA256: hex.EncodeToString(digest[:]), ChangeSet: plan.request.ChangeSet, DesiredStateSHA256: plan.request.DesiredStateSHA256, Steps: plan.Steps(), Checks: plan.Checks(), Details: []string{plan.String()}}
 }
+func (plan *Plan) SoftwareLifecycleUpdateContribution() lifecyclecontract.UpdateContribution {
+	if plan == nil || !plan.releaseUpdate || plan.request.StartingRevision == 0 {
+		return lifecyclecontract.UpdateContribution{}
+	}
+	digest := sha256.Sum256([]byte(plan.observation))
+	return lifecyclecontract.UpdateContribution{Name: "Cloudflare Tunnel", Owner: systemchanges.CloudflareModule, Identity: plan.identity, SHA256: plan.sha256, StableSHA256: hex.EncodeToString(digest[:]), ChangeSet: plan.request.ChangeSet, DesiredStateSHA256: plan.request.DesiredStateSHA256, Steps: plan.Steps(), Checks: plan.Checks(), Details: []string{plan.String()}}
+}
 func (plan *Plan) String() string {
 	if plan == nil {
 		return "Cloudflare Plan: unavailable"
@@ -206,6 +216,9 @@ func (plan *Plan) String() string {
 	case ManagementTokenRemove:
 		return fmt.Sprintf("Cloudflare Plan %s: stored management token becomes deliberately absent; provider health becomes Unknown; repair and update remain blocked", plan.identity)
 	default:
+		if plan.releaseUpdate {
+			return fmt.Sprintf("Cloudflare Plan %s: restart cloudflared.service with the candidate release and prove the exact owned Tunnel, routes, and DNS", plan.identity)
+		}
 		if plan.request.RunTokenRotation.TunnelID != "" {
 			return fmt.Sprintf("Cloudflare Plan %s: Owner selects Rotate token for Tunnel %s; SBXR retrieves the changed token, restarts cloudflared, proves both routes, and uses forward-only recovery", plan.identity, plan.request.RunTokenRotation.TunnelID)
 		}
@@ -231,6 +244,9 @@ type cloudflareEvidenceBinding struct {
 }
 
 func (i Interface) Plan(ctx context.Context, request PlanRequest) PlanResult {
+	if request.ReleaseUpdate {
+		return i.planReleaseUpdate(ctx, request)
+	}
 	if request.ManagementToken.Action != "" {
 		return i.planManagementToken(ctx, request)
 	}
@@ -296,6 +312,61 @@ func (i Interface) Plan(ctx context.Context, request PlanRequest) PlanResult {
 	plan := &Plan{identity: identity, sha256: checksum, observation: bound.Observation, request: request, steps: steps, checks: wholeTunnelChecks(), binding: binding, runToken: TunnelRunToken{cell: &runTokenCell{}}, used: use.(*atomic.Bool)}
 	health = Health{Module: "Cloudflare Tunnel", Outcome: Healthy, Code: "CLOUDFLARE-PLAN-READY", Explanation: "The complete owned Cloudflare change is ready for review."}
 	return PlanResult{Plan: plan, Health: finish(healthResult(i, health)).Health}
+}
+
+func (i Interface) planReleaseUpdate(ctx context.Context, request PlanRequest) PlanResult {
+	fail := func(explanation string) PlanResult {
+		return PlanResult{Health: finish(healthResult(i, Health{Module: "Cloudflare Tunnel", Outcome: Failed, Code: "CLOUDFLARE-RELEASE-UPDATE-REFUSED", Explanation: explanation, NextActions: []string{"Check again", "Back"}})).Health}
+	}
+	owned := request.ManagedRepair
+	validDirect := (request.PublicIPv4 == "") == (owned.DirectIPv4RecordID == "") && (request.PublicIPv6 == "") == (owned.DirectIPv6RecordID == "")
+	if i.clock == nil || request.ManagementToken.Action != "" || request.RunTokenRotation.TunnelID != "" || request.StartingRevision == 0 || !safePlanName.MatchString(request.ChangeSet) || !sha256Text.MatchString(request.StartingStateSHA256) || !sha256Text.MatchString(request.DesiredStateSHA256) || !tunnelUUID.MatchString(owned.TunnelID) || !immutableID.MatchString(owned.XHTTPDNSRecordID) || !immutableID.MatchString(owned.WebSocketDNSRecordID) || !validDirect || owned.DirectIPv4RecordID != "" && !immutableID.MatchString(owned.DirectIPv4RecordID) || owned.DirectIPv6RecordID != "" && !immutableID.MatchString(owned.DirectIPv6RecordID) || request.CloudflaredVersion != qualifiedCloudflaredVersion || !validReleaseUpdateServiceUnit(request.CandidateServiceUnit) || !validOwnedHostname(request.XHTTPHostname, request.Authority.ZoneName, "xhttp") || !validOwnedHostname(request.WebSocketHostname, request.Authority.ZoneName, "ws") || !validOwnedHostname(request.DirectHostname, request.Authority.ZoneName, "direct") || !validPublicAddresses(request.PublicIPv4, request.PublicIPv6) {
+		return fail("The release update is incomplete or outside the committed Cloudflare ownership boundary.")
+	}
+	authority := i.View(ctx, request.Authority)
+	observer, ok := i.api.(wholeTunnelObserver)
+	if authority.Health.Outcome != Healthy || !ok {
+		return PlanResult{Health: authority.Health}
+	}
+	expected, providerRequest := managedHealthRequest(request)
+	observed, err := observer.ObserveWholeTunnel(ctx, providerRequest)
+	if err != nil {
+		return PlanResult{Health: finish(healthResult(i, safeAPIHealth(err))).Health}
+	}
+	if health := EvaluateWholeTunnel(observed, expected); health.Outcome != Healthy {
+		return PlanResult{Health: health}
+	}
+	step, err := systemchanges.NewStep(systemchanges.CloudflareModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
+	if err != nil {
+		return fail("The cloudflared service update could not be built.")
+	}
+	bound := request
+	bound.Authority.Token = ManagementToken{}
+	encoded, _ := json.Marshal(struct {
+		Request     PlanRequest
+		Observation WholeTunnelObservation
+	}{bound, observed})
+	digest := sha256.Sum256(encoded)
+	checksum := hex.EncodeToString(digest[:])
+	identity := request.ChangeSet + "-plan-" + checksum[:12]
+	use, _ := planUses.LoadOrStore(identity, &atomic.Bool{})
+	plan := &Plan{identity: identity, sha256: checksum, observation: checksum, request: request, steps: []systemchanges.Step{step}, checks: wholeTunnelChecks(), releaseUpdate: true, used: use.(*atomic.Bool)}
+	return PlanResult{Plan: plan, Health: finish(healthResult(i, Health{Module: "Cloudflare Tunnel", Outcome: Healthy, Code: "CLOUDFLARE-RELEASE-UPDATE-READY", Explanation: "The owned Tunnel is healthy and cloudflared.service is ready to restart with the candidate release."})).Health}
+}
+
+func validReleaseUpdateServiceUnit(unit string) bool {
+	const marker = "ExecStart="
+	start := strings.Index(unit, marker)
+	if start < 0 {
+		return false
+	}
+	start += len(marker)
+	end := strings.IndexByte(unit[start:], ' ')
+	if end < 0 {
+		return false
+	}
+	program := unit[start : start+end]
+	return strings.HasPrefix(program, "/opt/sbxr/releases/") && strings.HasSuffix(program, "/cloudflared") && !strings.Contains(program, "..") && !strings.ContainsAny(program, "\r\n\x00") && unit == strings.Replace(cloudflaredServiceUnit, "/usr/bin/cloudflared", program, 1)
 }
 
 func (i Interface) planManagementToken(ctx context.Context, request PlanRequest) PlanResult {

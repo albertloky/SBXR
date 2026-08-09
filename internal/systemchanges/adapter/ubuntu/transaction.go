@@ -1166,7 +1166,7 @@ func (a Adapter) Check(lease systemchanges.ExecutionLease, check systemchanges.C
 	if !lease.Authorized() || a.host == nil {
 		return systemchanges.Unknown, errors.New("typed Ubuntu transaction host unavailable")
 	}
-	if check.Owner == systemchanges.SoftwareModule && strings.HasPrefix(check.Code, "SOFTWARE-LIFECYCLE-INSTALL-") {
+	if softwareLifecycleCheck(check) {
 		if a.software == nil {
 			return systemchanges.Unknown, errors.New("Software Lifecycle health executor unavailable")
 		}
@@ -1217,6 +1217,10 @@ func (a Adapter) Check(lease systemchanges.ExecutionLease, check systemchanges.C
 		return systemchanges.Healthy, nil
 	}
 	return a.host.Check(check, phase, timeout)
+}
+
+func softwareLifecycleCheck(check systemchanges.Check) bool {
+	return check.Owner == systemchanges.SoftwareModule && (strings.HasPrefix(check.Code, "SOFTWARE-LIFECYCLE-INSTALL-") || strings.HasPrefix(check.Code, "SOFTWARE-LIFECYCLE-UPDATE-"))
 }
 
 func (a Adapter) activeTransactionBinding() (systemchanges.StateTransactionBinding, string, error) {

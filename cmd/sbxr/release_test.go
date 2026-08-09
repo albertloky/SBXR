@@ -36,7 +36,7 @@ func TestVersionReportsOnlyEmbeddedBuildFacts(t *testing.T) {
 	}
 	plain, err := exec.Command(binary, "version").Output()
 	plainText := string(plain)
-	if err != nil || !strings.HasPrefix(plainText, "sbxr "+softwarelifecycle.Repository+" v1.0.0 ("+strings.Repeat("a", 40)+" linux/"+runtime.GOARCH+" payload ") || !strings.Contains(plainText, " state-schema 1)") {
+	if err != nil || !strings.HasPrefix(plainText, "sbxr "+softwarelifecycle.Repository+" v1.0.0 ("+strings.Repeat("a", 40)+" linux/"+runtime.GOARCH+" payload ") || !strings.Contains(plainText, " state-schema 2)") {
 		t.Fatalf("version = %q, %v", plain, err)
 	}
 	output, err := exec.Command(binary, "version", "--json").Output()
@@ -44,7 +44,7 @@ func TestVersionReportsOnlyEmbeddedBuildFacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	var report versionReport
-	if json.Unmarshal(output, &report) != nil || report.Build.Repository != softwarelifecycle.Repository || report.Build.PayloadSHA256 == "" || report.StateSchema != 1 {
+	if json.Unmarshal(output, &report) != nil || report.Build.Repository != softwarelifecycle.Repository || report.Build.PayloadSHA256 == "" || report.StateSchema != 2 {
 		t.Fatalf("version JSON = %s", output)
 	}
 }
@@ -78,5 +78,5 @@ func testReleaseMetadata(identity softwarelifecycle.EmbeddedBuildIdentity, archi
 		}
 		unitSets = append(unitSets, set)
 	}
-	return softwarelifecycle.NewPayloadMetadata(identity, architecture, softwarelifecycle.PayloadMaterial{StateDefinitions: definitions, UnitSets: unitSets, ArtifactSets: []map[string][]byte{artifacts}})
+	return softwarelifecycle.NewPayloadMetadata(identity, architecture, softwarelifecycle.PayloadMaterial{StateDefinitions: definitions, StateMigrations: state.ReleaseMigrations(), UnitSets: unitSets, ArtifactSets: []map[string][]byte{artifacts}})
 }

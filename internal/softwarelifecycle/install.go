@@ -34,6 +34,7 @@ const (
 var installIdentityPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
 
 type installCandidateCell struct {
+	verified   VerifiedRelease
 	staged     StagedRelease
 	archive    []byte
 	components []byte
@@ -52,6 +53,13 @@ func (candidate InstallCandidate) SoftwareLifecyclePreparedArchive() (StagedRele
 		return StagedRelease{}, nil, nil, false
 	}
 	return candidate.cell.staged, append([]byte(nil), candidate.cell.archive...), append([]byte(nil), candidate.cell.components...), true
+}
+
+func (candidate InstallCandidate) SoftwareLifecyclePreparedUpdate() (VerifiedRelease, StagedRelease, []byte, []byte, bool) {
+	if !validInstallCandidate(candidate) || !validInstalled(candidate.cell.verified) || candidate.cell.verified.Identity != candidate.cell.staged.Identity {
+		return VerifiedRelease{}, StagedRelease{}, nil, nil, false
+	}
+	return candidate.cell.verified, candidate.cell.staged, append([]byte(nil), candidate.cell.archive...), append([]byte(nil), candidate.cell.components...), true
 }
 
 type InstallContributionProof = lifecyclecontract.InstallContribution
@@ -313,7 +321,7 @@ func installRefused(code, problem string) systemchanges.ApplyResult {
 }
 
 func sameInstallCandidate(left, right InstallCandidate) bool {
-	return validInstallCandidate(left) && validInstallCandidate(right) && left.cell.staged == right.cell.staged && bytes.Equal(left.cell.archive, right.cell.archive) && bytes.Equal(left.cell.components, right.cell.components)
+	return validInstallCandidate(left) && validInstallCandidate(right) && reflect.DeepEqual(left.cell.verified, right.cell.verified) && left.cell.staged == right.cell.staged && bytes.Equal(left.cell.archive, right.cell.archive) && bytes.Equal(left.cell.components, right.cell.components)
 }
 
 func sameInstallContributions(want []InstallContributionProof, got []InstallContribution) (string, string, bool) {
@@ -403,7 +411,7 @@ func validInstallCandidate(candidate InstallCandidate) bool {
 		return false
 	}
 	staged := candidate.cell.staged
-	return staged.Identity.Repository == Repository && safeTag(staged.Identity.Tag) && commitPattern.MatchString(staged.Identity.Commit) && hashPattern.MatchString(staged.Identity.IndexSHA256) && staged.Build.Repository == staged.Identity.Repository && staged.Build.Tag == staged.Identity.Tag && staged.Build.Commit == staged.Identity.Commit && hashPattern.MatchString(staged.Build.PayloadSHA256) && (staged.Architecture == AMD64 || staged.Architecture == ARM64) && hashPattern.MatchString(staged.ExecutableSHA256) && hashPattern.MatchString(staged.ComponentsSHA256) && staged.InstallPath == ReleaseInstallPath(staged.Identity) && staged.StateSchema == 1
+	return staged.Identity.Repository == Repository && safeTag(staged.Identity.Tag) && commitPattern.MatchString(staged.Identity.Commit) && hashPattern.MatchString(staged.Identity.IndexSHA256) && staged.Build.Repository == staged.Identity.Repository && staged.Build.Tag == staged.Identity.Tag && staged.Build.Commit == staged.Identity.Commit && hashPattern.MatchString(staged.Build.PayloadSHA256) && (staged.Architecture == AMD64 || staged.Architecture == ARM64) && hashPattern.MatchString(staged.ExecutableSHA256) && hashPattern.MatchString(staged.ComponentsSHA256) && staged.InstallPath == ReleaseInstallPath(staged.Identity) && staged.StateSchema > 0 && staged.StateSchema <= 64
 }
 
 func validInstallProof(proof InstallContributionProof) bool {

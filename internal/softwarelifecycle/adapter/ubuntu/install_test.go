@@ -135,6 +135,10 @@ func TestInstallerRollsBackAValidatedPartialActivation(t *testing.T) {
 }
 
 func installFixture(t *testing.T) Installer {
+	return installFixtureVersion(t, "v1.0.0", "0123456789abcdef0123456789abcdef01234567", "qualified-static-linux-elf-fixture")
+}
+
+func installFixtureVersion(t *testing.T, tag, commit, marker string) Installer {
 	t.Helper()
 	artifacts, err := subscriptionpublication.QualificationArtifacts()
 	if err != nil {
@@ -153,12 +157,12 @@ func installFixture(t *testing.T) Installer {
 		}
 		units = append(units, set)
 	}
-	identity := softwarelifecycle.EmbeddedBuildIdentity{Repository: softwarelifecycle.Repository, Tag: "v1.0.0", Commit: "0123456789abcdef0123456789abcdef01234567"}
-	metadata, err := softwarelifecycle.NewPayloadMetadata(identity, softwarelifecycle.AMD64, softwarelifecycle.PayloadMaterial{StateDefinitions: definitions, UnitSets: units, ArtifactSets: []map[string][]byte{artifacts}})
+	identity := softwarelifecycle.EmbeddedBuildIdentity{Repository: softwarelifecycle.Repository, Tag: tag, Commit: commit}
+	metadata, err := softwarelifecycle.NewPayloadMetadata(identity, softwarelifecycle.AMD64, softwarelifecycle.PayloadMaterial{StateDefinitions: definitions, StateMigrations: state.ReleaseMigrations(), UnitSets: units, ArtifactSets: []map[string][]byte{artifacts}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw := []byte("qualified-static-linux-elf-fixture")
+	raw := []byte(marker)
 	stamped, err := softwarelifecycle.StampPayload(raw, metadata)
 	if err != nil {
 		t.Fatal(err)
@@ -190,7 +194,7 @@ func installFixture(t *testing.T) Installer {
 	componentDigest := sha256.Sum256(components)
 	release := softwarelifecycle.ReleaseIdentity{Repository: softwarelifecycle.Repository, Tag: identity.Tag, Commit: identity.Commit, IndexSHA256: strings.Repeat("b", 64)}
 	rawDigest := sha256.Sum256(raw)
-	staged := softwarelifecycle.StagedRelease{Identity: release, Build: softwarelifecycle.EmbeddedBuildIdentity{Repository: identity.Repository, Tag: identity.Tag, Commit: identity.Commit, PayloadSHA256: hex.EncodeToString(rawDigest[:])}, Architecture: softwarelifecycle.AMD64, ExecutableSHA256: hex.EncodeToString(digest[:]), ComponentsSHA256: hex.EncodeToString(componentDigest[:]), InstallPath: softwarelifecycle.ReleaseInstallPath(release), StateSchema: 1}
+	staged := softwarelifecycle.StagedRelease{Identity: release, Build: softwarelifecycle.EmbeddedBuildIdentity{Repository: identity.Repository, Tag: identity.Tag, Commit: identity.Commit, PayloadSHA256: hex.EncodeToString(rawDigest[:])}, Architecture: softwarelifecycle.AMD64, ExecutableSHA256: hex.EncodeToString(digest[:]), ComponentsSHA256: hex.EncodeToString(componentDigest[:]), InstallPath: softwarelifecycle.ReleaseInstallPath(release), StateSchema: 2}
 	installer, err := newInstaller(staged, archive.Bytes(), components)
 	if err != nil {
 		t.Fatal(err)

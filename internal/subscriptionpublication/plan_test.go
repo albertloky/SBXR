@@ -31,6 +31,9 @@ func TestPlanBindsOneCompleteValidatedArtifactSetWithoutRenderingSecrets(t *test
 	if result.Plan.Identity() == "" || len(result.Plan.SHA256()) != 64 || len(result.Plan.Steps()) != 1 || len(result.Plan.Checks()) != 3 {
 		t.Fatalf("Plan bindings are incomplete: %s %s steps=%d checks=%d", result.Plan.Identity(), result.Plan.SHA256(), len(result.Plan.Steps()), len(result.Plan.Checks()))
 	}
+	if contribution := result.Plan.SoftwareLifecycleUpdateContribution(); contribution.Name != "Subscription Publication" || contribution.ChangeSet != "change-0008" || contribution.Owner != systemchanges.SubscriptionModule {
+		t.Fatalf("update contribution = %+v", contribution)
+	}
 	summary := result.Plan.Summary()
 	if summary.ProfileCount != 6 || len(summary.Representations) != 7 || summary.ChangeSet != "change-0008" || summary.DesiredStateRevision != 8 || summary.ReleaseIdentity != release || summary.SelectedAddress != "198.51.100.10" || summary.CompatibilityDefinition != string(subscriptionpublication.CurrentCompatibilityDefinition) || !validSummaryChecksums(summary.RelevantChecksums) || !summary.ValidationComplete || summary.Replacement != "complete artifact set N to N+1" || summary.Rollback != "restore the exact prior complete artifact set" {
 		t.Fatalf("Plan summary = %+v", summary)

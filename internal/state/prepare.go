@@ -364,6 +364,7 @@ type PreparedCommit struct {
 	deferred                   *deferredCloudflare
 	ipCertificateRenewal       bool
 	domainCertificateRenewal   bool
+	softwareUpdate             bool
 }
 
 type CloudflareEvidenceBinding struct {
@@ -388,6 +389,10 @@ type RunTokenRotationAuthority interface {
 
 type CloudflareRepairAuthority interface {
 	StateCloudflareRepair() (source any, bindingJSON []byte, templateSHA256 string, valid bool)
+}
+
+type SoftwareUpdateAuthority interface {
+	StateSoftwareUpdate() ([]byte, bool)
 }
 
 type ConnectionProfilesRepairAuthority interface {
@@ -444,6 +449,13 @@ func (commit *PreparedCommit) SoftwareLifecyclePreparedRelease() (repository, ta
 	return identity.Repository, identity.Tag, identity.Commit, identity.ReleaseIndexSHA256, identity.Repository != "" && identity.Tag != "" && identity.Commit != "" && identity.ReleaseIndexSHA256 != ""
 }
 
+func (commit *PreparedCommit) SoftwareLifecyclePreparedMigration() (from, to uint64, steps int, networkFree bool) {
+	if commit == nil || !commit.softwareUpdate || commit.migration.StartingSchema == 0 || commit.migration.TargetSchema < commit.migration.StartingSchema {
+		return 0, 0, 0, false
+	}
+	return uint64(commit.migration.StartingSchema), uint64(commit.migration.TargetSchema), len(commit.migration.Steps), true
+}
+
 func (commit *PreparedCommit) SystemChangesIPCertificateRenewal() bool {
 	return commit != nil && commit.ipCertificateRenewal
 }
@@ -456,6 +468,34 @@ func (commit *PreparedCommit) SystemChangesDomainCertificateRenewal() bool {
 // outputs against the exact loaded bytes without mutating storage.
 func (i Interface) PrepareCommit(request PrepareRequest) (*PreparedCommit, error) {
 	return i.prepareCommit(request, nil, nil)
+}
+
+func (i Interface) PrepareSoftwareUpdateCommit(request PrepareRequest, authority SoftwareUpdateAuthority) (*PreparedCommit, error) {
+	typeOf := reflect.TypeOf(authority)
+	if typeOf == nil || typeOf.Kind() != reflect.Pointer || typeOf.Elem().PkgPath() != "github.com/albertloky/SBXR/internal/softwarelifecycle" || typeOf.Elem().Name() != "UpdatePlan" || request.Loaded.loaded == nil || request.Loaded.loaded.owner != i.implementation {
+		return nil, finding("STATE-SOFTWARE-UPDATE-PLAN", "Software Lifecycle update", "the authority did not come from Software Lifecycle or current State", "one exact reviewed update Plan and fresh Managed Load", "an update cannot carry caller-made State changes", "reload State and rebuild the update Plan")
+	}
+	bindingJSON, valid := authority.StateSoftwareUpdate()
+	var binding struct {
+		StartingRevision                   uint64
+		StartingStateSHA256, DesiredSHA256 string
+		Current, Candidate                 struct{ Repository, Tag, Commit, IndexSHA256 string }
+		FromSchema, ToSchema               uint64
+	}
+	current, problem := decode(request.Loaded.loaded.bytes)
+	candidateBytes, candidateErr := marshalProtectedJSON(request.Candidate)
+	candidateDigest := sha256.Sum256(candidateBytes)
+	bindingErr := json.Unmarshal(bindingJSON, &binding)
+	currentIdentity := binding.Current.Repository == current.ReleaseIdentity.Repository && binding.Current.Tag == current.ReleaseIdentity.Tag && binding.Current.Commit == current.ReleaseIdentity.Commit && binding.Current.IndexSHA256 == current.ReleaseIdentity.ReleaseIndexSHA256
+	candidateIdentity := binding.Candidate.Repository == request.CandidateReleaseIdentity.Repository && binding.Candidate.Tag == request.CandidateReleaseIdentity.Tag && binding.Candidate.Commit == request.CandidateReleaseIdentity.Commit && binding.Candidate.IndexSHA256 == request.CandidateReleaseIdentity.ReleaseIndexSHA256
+	if !valid || bindingErr != nil || problem != nil || candidateErr != nil || request.Loaded.Status != Managed || binding.StartingRevision != request.Loaded.loaded.revision || binding.StartingStateSHA256 != request.Loaded.loaded.payloadChecksum || binding.DesiredSHA256 != hex.EncodeToString(candidateDigest[:]) || !currentIdentity || !candidateIdentity || binding.FromSchema != uint64(current.SchemaVersion) || binding.ToSchema != uint64(supportedSchema) || !reflect.DeepEqual(current.desiredState, request.Candidate) {
+		return nil, finding("STATE-SOFTWARE-UPDATE-PLAN", "Software Lifecycle update", "the release, migration, revision, or Desired State meaning differs from review", "the exact current Desired State with only its reviewed release/schema successor", "updates preserve all Owner values and secrets", "reload State and rebuild the update Plan")
+	}
+	commit, err := i.prepareCommit(request, nil, nil)
+	if err == nil {
+		commit.softwareUpdate = true
+	}
+	return commit, err
 }
 
 // PrepareIPCertificateRenewalCommit admits only the three Desired State facts
@@ -762,7 +802,7 @@ func (i Interface) prepareCommit(request PrepareRequest, deferred *deferredCloud
 	connectionProfilesChanged := loaded.status == NotInstalled
 	if !connectionProfilesChanged {
 		current, problem := decode(loaded.bytes)
-		connectionProfilesChanged = problem != nil || !reflect.DeepEqual(current.desiredState.ConnectionProfiles, request.Candidate.ConnectionProfiles)
+		connectionProfilesChanged = problem != nil || current.ReleaseIdentity != request.CandidateReleaseIdentity || !reflect.DeepEqual(current.desiredState.ConnectionProfiles, request.Candidate.ConnectionProfiles)
 	}
 	nativeXray, nativeSingBox, nativeErr := prepareConnectionProfileServices(request.SemanticValidators.ConnectionProfiles, request.Candidate.ConnectionProfiles, request.ReviewedInputs, connectionProfilesChanged)
 	if nativeErr != nil {

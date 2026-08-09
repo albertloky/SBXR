@@ -17,7 +17,7 @@ import (
 
 type SchemaVersion uint64
 
-const supportedSchema SchemaVersion = 1
+const supportedSchema SchemaVersion = 2
 
 // InstallationStatus is separate from every Module's Health Results.
 type InstallationStatus string
@@ -260,7 +260,7 @@ func (i Interface) Load(request LoadRequest) (Result, error) {
 	migration := MigrationReview{
 		StartingSchema: document.SchemaVersion, TargetSchema: supportedSchema,
 		StartingRelease: document.ReleaseIdentity, TargetRelease: request.SupportedRelease,
-		Steps: []MigrationStepReview{}, StartingReleaseCanReadCandidate: document.ReleaseIdentity == request.SupportedRelease,
+		Steps: migrationSteps(document.SchemaVersion), StartingReleaseCanReadCandidate: document.SchemaVersion == supportedSchema && document.ReleaseIdentity == request.SupportedRelease,
 	}
 	return Result{Status: status, Snapshot: &Snapshot{
 		SchemaVersion:          document.SchemaVersion,
@@ -318,8 +318,8 @@ func decode(data []byte) (persistedDocument, *Finding) {
 		}
 		return persistedDocument{}, finding("STATE-DOCUMENT-INVALID", "Desired State envelope", "an invalid typed value", "all required values in their exact supported types", "the stored intent is not a valid typed document", "use the Recovery Required flow")
 	}
-	if document.SchemaVersion != supportedSchema {
-		return persistedDocument{}, finding("STATE-SCHEMA-UNSUPPORTED", "Desired State schema", fmt.Sprintf("schema %d", document.SchemaVersion), fmt.Sprintf("schema %d", supportedSchema), "this slice supports no migration path", "use a compatible verified release and check again")
+	if document.SchemaVersion != 1 && document.SchemaVersion != supportedSchema {
+		return persistedDocument{}, finding("STATE-SCHEMA-UNSUPPORTED", "Desired State schema", fmt.Sprintf("schema %d", document.SchemaVersion), "schema 1 or 2", "no complete sequential migration path exists", "use a compatible verified release and check again")
 	}
 	if document.Revision == 0 || !validChangeSetIdentity(document.LastCompletedChangeSet) || !validReleaseIdentity(document.ReleaseIdentity) || !validSHA256(document.Checksum) {
 		return persistedDocument{}, finding("STATE-DOCUMENT-INVALID", "Desired State envelope", "a missing or invalid envelope value", "a positive revision, exact Release Identity, completed Change Set, and SHA-256 checksum", "the stored lineage is incomplete", "use the Recovery Required flow")
@@ -350,6 +350,18 @@ func decode(data []byte) (persistedDocument, *Finding) {
 		return persistedDocument{}, finding
 	}
 	return document, nil
+}
+
+func migrationSteps(start SchemaVersion) []MigrationStepReview {
+	if start != 1 {
+		return []MigrationStepReview{}
+	}
+	return []MigrationStepReview{{
+		FromSchema: 1, ToSchema: 2,
+		MeaningChanges:          []string{"No Owner meaning changes; schema 2 preserves the complete schema 1 Desired State"},
+		GeneratedServiceEffects: []string{"Regenerate and validate all release-bound service and subscription material"},
+		ServiceInterruption:     true,
+	}}
 }
 
 func strictDecode(data []byte, destination any) error {

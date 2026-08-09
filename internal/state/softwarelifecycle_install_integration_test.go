@@ -146,6 +146,10 @@ func lifecycleContributions(t *testing.T, changeSet, desired string) []softwarel
 }
 
 func lifecycleRelease(t *testing.T) (softwarelifecycle.ReleaseEvidence, softwarelifecycle.StagedRelease) {
+	return lifecycleReleaseVersion(t, "v1.0.0", "1.0.0", 1, "0123456789abcdef0123456789abcdef01234567")
+}
+
+func lifecycleReleaseVersion(t *testing.T, tag, version string, sequence int, commit string) (softwarelifecycle.ReleaseEvidence, softwarelifecycle.StagedRelease) {
 	t.Helper()
 	archive := &bytes.Buffer{}
 	compressed := gzip.NewWriter(archive)
@@ -157,7 +161,8 @@ func lifecycleRelease(t *testing.T) (softwarelifecycle.ReleaseEvidence, software
 	if writer.Close() != nil || compressed.Close() != nil {
 		t.Fatal("archive close")
 	}
-	assetDigest := sha256.Sum256(archive.Bytes())
+	amd64Archive, arm64Archive := archive.Bytes(), archive.Bytes()
+	amd64Digest, arm64Digest := sha256.Sum256(amd64Archive), sha256.Sum256(arm64Archive)
 	componentFiles := map[string][]byte{
 		"xray": []byte("qualified xray"), "sing-box": []byte("qualified sing-box"), "cloudflared": []byte("qualified cloudflared"),
 		"certbot/bin/certbot": softwarelifecycle.ComponentCertbotLauncher(), "certbot/pyvenv.cfg": []byte("home = /usr/bin\nversion = 3.12\n"),
@@ -198,13 +203,13 @@ func lifecycleRelease(t *testing.T) (softwarelifecycle.ReleaseEvidence, software
 		StateSchema          int     `json:"state_schema"`
 		MinimumUpdaterSchema int     `json:"minimum_updater_schema"`
 		Assets               []asset `json:"assets"`
-	}{Schema: 1, Product: "sbxr", Repository: softwarelifecycle.Repository, Version: "1.0.0", Sequence: 1, Tag: "v1.0.0", Commit: "0123456789abcdef0123456789abcdef01234567", StateSchema: 1, MinimumUpdaterSchema: 1}
-	index.Assets = []asset{{"application-linux-amd64", "sbxr-linux-amd64.tar.gz", archive.Len(), hex.EncodeToString(assetDigest[:])}, {"application-linux-arm64", "sbxr-linux-arm64.tar.gz", archive.Len(), hex.EncodeToString(assetDigest[:])}, {"components-linux-amd64", "sbxr-components-linux-amd64.tar.gz", len(components), hex.EncodeToString(componentDigest[:])}, {"components-linux-arm64", "sbxr-components-linux-arm64.tar.gz", len(armComponents), hex.EncodeToString(armComponentDigest[:])}}
+	}{Schema: 1, Product: "sbxr", Repository: softwarelifecycle.Repository, Version: version, Sequence: sequence, Tag: tag, Commit: commit, StateSchema: 1, MinimumUpdaterSchema: 1}
+	index.Assets = []asset{{"application-linux-amd64", "sbxr-linux-amd64.tar.gz", len(amd64Archive), hex.EncodeToString(amd64Digest[:])}, {"application-linux-arm64", "sbxr-linux-arm64.tar.gz", len(arm64Archive), hex.EncodeToString(arm64Digest[:])}, {"components-linux-amd64", "sbxr-components-linux-amd64.tar.gz", len(components), hex.EncodeToString(componentDigest[:])}, {"components-linux-arm64", "sbxr-components-linux-arm64.tar.gz", len(armComponents), hex.EncodeToString(armComponentDigest[:])}}
 	indexBytes, _ := json.Marshal(index)
 	indexDigest := sha256.Sum256(indexBytes)
 	identity := softwarelifecycle.ReleaseIdentity{Repository: softwarelifecycle.Repository, Tag: index.Tag, Commit: index.Commit, IndexSHA256: hex.EncodeToString(indexDigest[:])}
-	assets := []softwarelifecycle.DownloadedAsset{{Name: "sbxr-linux-amd64.tar.gz", Bytes: append([]byte(nil), archive.Bytes()...)}, {Name: "sbxr-linux-arm64.tar.gz", Bytes: append([]byte(nil), archive.Bytes()...)}, {Name: "sbxr-components-linux-amd64.tar.gz", Bytes: append([]byte(nil), components...)}, {Name: "sbxr-components-linux-arm64.tar.gz", Bytes: append([]byte(nil), armComponents...)}}
-	attested := []softwarelifecycle.AttestedAsset{{Name: "release-index.json", SHA256: identity.IndexSHA256}, {Name: assets[0].Name, SHA256: hex.EncodeToString(assetDigest[:])}, {Name: assets[1].Name, SHA256: hex.EncodeToString(assetDigest[:])}, {Name: assets[2].Name, SHA256: hex.EncodeToString(componentDigest[:])}, {Name: assets[3].Name, SHA256: hex.EncodeToString(armComponentDigest[:])}}
+	assets := []softwarelifecycle.DownloadedAsset{{Name: "sbxr-linux-amd64.tar.gz", Bytes: amd64Archive}, {Name: "sbxr-linux-arm64.tar.gz", Bytes: arm64Archive}, {Name: "sbxr-components-linux-amd64.tar.gz", Bytes: append([]byte(nil), components...)}, {Name: "sbxr-components-linux-arm64.tar.gz", Bytes: append([]byte(nil), armComponents...)}}
+	attested := []softwarelifecycle.AttestedAsset{{Name: "release-index.json", SHA256: identity.IndexSHA256}, {Name: assets[0].Name, SHA256: hex.EncodeToString(amd64Digest[:])}, {Name: assets[1].Name, SHA256: hex.EncodeToString(arm64Digest[:])}, {Name: assets[2].Name, SHA256: hex.EncodeToString(componentDigest[:])}, {Name: assets[3].Name, SHA256: hex.EncodeToString(armComponentDigest[:])}}
 	evidence := softwarelifecycle.ReleaseEvidence{Repository: softwarelifecycle.Repository, Tag: identity.Tag, Commit: identity.Commit, Index: indexBytes, Assets: assets, AttestedAssets: attested, Verifier: softwarelifecycle.VerifierEvidence{Version: "2.97.0", SigningFingerprint: "0123456789ABCDEF0123456789ABCDEF01234567", OfficialSignedDistribution: true, ReleaseVerified: true, VerifiedAssets: []string{"release-index.json", assets[0].Name, assets[1].Name, assets[2].Name, assets[3].Name}}}
 	staged := softwarelifecycle.StagedRelease{Identity: identity, Build: softwarelifecycle.EmbeddedBuildIdentity{Repository: identity.Repository, Tag: identity.Tag, Commit: identity.Commit, PayloadSHA256: strings.Repeat("c", 64)}, Architecture: softwarelifecycle.AMD64, ExecutableSHA256: strings.Repeat("d", 64), ComponentsSHA256: hex.EncodeToString(componentDigest[:]), InstallPath: softwarelifecycle.ReleaseInstallPath(identity), StateSchema: 1}
 	return evidence, staged

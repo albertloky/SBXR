@@ -61,6 +61,24 @@ func TestPlanBindsCompleteSecretSafeCloudflareInstallation(t *testing.T) {
 	}
 }
 
+func TestPlanReleaseUpdateRestartsOnlyTheVerifiedOwnedCloudflaredService(t *testing.T) {
+	module, request := plannedModule(t)
+	request.StartingRevision = 7
+	request.StartingStateSHA256 = strings.Repeat("c", 64)
+	request.ReleaseUpdate = true
+	request.CandidateServiceUnit = strings.Replace(CloudflaredServiceUnit(), "/usr/bin/cloudflared", "/opt/sbxr/releases/v1.1.0-candidate/cloudflared", 1)
+	request.ManagedRepair = OwnedTunnelBinding{TunnelID: testTunnelID, XHTTPDNSRecordID: testDNSID, WebSocketDNSRecordID: strings.Repeat("5", 32), DirectIPv4RecordID: strings.Repeat("6", 32), DirectIPv6RecordID: strings.Repeat("7", 32)}
+	module.api.(*planningAPI).wholeTunnel = healthyWholeTunnel(request)
+	result := module.Plan(t.Context(), request)
+	if result.Plan == nil || result.Health.Outcome != Healthy {
+		t.Fatalf("Plan(release update) = %+v", result)
+	}
+	contribution := result.Plan.SoftwareLifecycleUpdateContribution()
+	if contribution.Name != "Cloudflare Tunnel" || contribution.Owner != systemchanges.CloudflareModule || len(contribution.Steps) != 1 || contribution.Steps[0].Forward() != systemchanges.ActivatePreparedConfiguration || len(contribution.Checks) != 2 {
+		t.Fatalf("update contribution = %+v", contribution)
+	}
+}
+
 func TestPlanNamesOwnerAssistedRunTokenRotationAndBindsOwnedIdentifiers(t *testing.T) {
 	module, request := plannedModule(t)
 	request.StartingRevision = 7

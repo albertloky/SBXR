@@ -14,3 +14,5 @@ type InstallContribution struct {
 	Firewall                             string
 	Privileged                           bool
 }
+
+type UpdateContribution = InstallContribution

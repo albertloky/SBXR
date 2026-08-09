@@ -190,4 +190,33 @@ go test ./cmd/sbxr -run '^TestScheduledUpdateCheckInvokesOnlyStableSoftwareLifec
 
 Require the scheduled seam to call only `Software Lifecycle.View` with Managed installed proof and stable discovery. It must not request architecture staging, Apply, approval, State publication, migrations, binary replacement, service restart, configuration change, or any product mutation. Production `private update-check` wiring and a real Clean-VPS timer run remain Pending on issue #127's installed verified completion receipt and complete production four-asset release.
 
+### SL-UPDATE-04 — One-use reviewed update and exact schema migration
+
+Run:
+
+```sh
+go test ./internal/softwarelifecycle -run '^Test(PlanUpdate|ApplyUpdate)' -count=1
+go test ./internal/connectionprofiles -run '^TestRealityViewAndPlanProduceOneSafeNativeConfiguration$' -count=1
+go test ./internal/cloudflaretunnel -run '^TestPlanReleaseUpdateRestartsOnlyTheVerifiedOwnedCloudflaredService$' -count=1
+go test ./internal/subscriptionpublication -run '^TestPlanBindsOneCompleteValidatedArtifactSetWithoutRenderingSecrets$' -count=1
+go test ./internal/state -run '^Test(LoadReportsDeterministicSchemaOneToTwoMigrationReview|PrepareCommitReportsSchemaOneToTwoReleaseCompatibility|ReleaseMigrationsExposeOnly)' -count=1
+go test ./internal/softwarelifecycle -run '^TestPayloadMetadataAcceptsOnlyCompleteSequentialNoNetworkMigrationMaterial$' -count=1
+```
+
+Require one Plan to bind the current Release Identity, revision and State checksum, the higher candidate, exact `1 → 2` migration, and real managed-update contributions from Connection Profiles, Cloudflare Tunnel, and Subscription Publication, plus disk, interruption, cancellation, and rollback. Require one use, an exact post-approval recheck, one prepared revision `N → N+1`, and exact State/release/migration/Plan checksums before System Changes receives an `Update` Change Set. The only accepted migration replaces `/schema_version` with `2`, performs no network access, preserves every typed Owner value and secret, and forces release-bound core configuration and all subscription representations to regenerate and validate.
+
+### SL-UPDATE-05 — Atomic release switch, restart inspection, and rollback
+
+Run:
+
+```sh
+go test ./internal/softwarelifecycle/adapter/ubuntu -run '^TestUpdater' -count=1
+go test ./internal/cloudflaretunnel -run '^TestExecutorSnapshotsRestartsAndRestoresManagedCloudflaredService$' -count=1
+go test ./internal/systemchanges/adapter/ubuntu -run '^TestSoftwareLifecycleUpdateChecksUseTheAuthenticatedExecutor$' -count=1
+go test ./internal/softwarelifecycle -run '^TestApplyUpdateHandsOneExactlyBoundChangeSetToSystemChanges$' -count=1
+go test ./internal/state -run '^(TestPreparedCommitDurablyCompletesOneSystemChangesChangeSet|TestPostPublicationFailureRestoresPriorDesiredState|TestRollbackCanSurviveASecondProcessDeath|TestRestartAfterCompleteCleansUpWithoutRollback)$' -count=1
+```
+
+Require the update executor to capture the authenticated prior release tree, exact ten units, and active executable link in the transaction snapshot before mutation. Require the candidate release, components, units, and active link to switch together; cloudflared, Xray, sing-box, and subscription serving are the only affected services in the update Plan. Require inspection to distinguish exact prior from exact candidate after restart, strict refusal of tampered or trailing snapshot bytes, rollback of a partial switch, and no prior release outside the active snapshot after activation. The update-specific handoff must form one `Update` Change Set; the shared System Changes transaction proof covers one lock, one State publication, pre- and post-publication failure rollback, a second process death during rollback, restart after durable `Complete`, and deletion of the snapshot and journal.
+
 External valid-release success, Integrated Verification, Codex Live Acceptance, Owner Acceptance, and Release Qualification remain Pending. These automated checks do not claim any of those later stages.

@@ -6,10 +6,10 @@ import (
 	"testing"
 )
 
-func TestReleaseDefinitionsExposeTheCompleteDeterministicSchemaOneAndNoInventedMigration(t *testing.T) {
+func TestReleaseDefinitionsExposeTheCompleteDeterministicSchemasOneAndTwo(t *testing.T) {
 	first, err := ReleaseDefinitions()
 	second, secondErr := ReleaseDefinitions()
-	if err != nil || secondErr != nil || len(first) != 1 || !bytes.Equal(first["desired-state-v1.schema.json"], second["desired-state-v1.schema.json"]) {
+	if err != nil || secondErr != nil || len(first) != 2 || !bytes.Equal(first["desired-state-v1.schema.json"], second["desired-state-v1.schema.json"]) || !bytes.Equal(first["desired-state-v2.schema.json"], second["desired-state-v2.schema.json"]) {
 		t.Fatalf("release definitions = %v, %v, %v", first, err, secondErr)
 	}
 	var schema releaseSchema
@@ -25,5 +25,16 @@ func TestReleaseDefinitionsExposeTheCompleteDeterministicSchemaOneAndNoInventedM
 		if property.Type != "object" || property.AdditionalProperties == nil || *property.AdditionalProperties || len(property.Properties) == 0 {
 			t.Fatalf("incomplete %s schema = %#v", name, property)
 		}
+	}
+	if json.Unmarshal(first["desired-state-v2.schema.json"], &schema) != nil || schema.Properties["schema_version"].Const != float64(2) {
+		t.Fatalf("v2 schema envelope = %#v", schema)
+	}
+}
+
+func TestReleaseMigrationsExposeOnlyTheNetworkFreeSchemaOneToTwoTransformation(t *testing.T) {
+	got := ReleaseMigrations()
+	want := []byte(`{"schema":1,"from":1,"to":2,"operations":[{"op":"replace","path":"/schema_version","value":2}]}`)
+	if len(got) != 1 || !bytes.Equal(got["state-v1-to-v2.json"], want) {
+		t.Fatalf("ReleaseMigrations() = %q", got)
 	}
 }

@@ -68,6 +68,7 @@ type PayloadMetadata struct {
 
 type PayloadMaterial struct {
 	StateDefinitions map[string][]byte
+	StateMigrations  map[string][]byte
 	UnitSets         []map[string]string
 	ArtifactSets     []map[string][]byte
 }
@@ -96,9 +97,12 @@ func NewPayloadMetadata(identity EmbeddedBuildIdentity, architecture Architectur
 		}
 	}
 	metadata := PayloadMetadata{
-		Schema: 1, Build: identity, Architecture: architecture, StateSchema: 1, MinimumUpdaterSchema: 1,
-		Schemas:    map[string][]byte{"desired-state-v1.schema.json": append([]byte(nil), material.StateDefinitions["desired-state-v1.schema.json"]...)},
-		Migrations: []EmbeddedMigration{},
+		Schema: 1, Build: identity, Architecture: architecture, StateSchema: 2, MinimumUpdaterSchema: 1,
+		Schemas: map[string][]byte{
+			"desired-state-v1.schema.json": append([]byte(nil), material.StateDefinitions["desired-state-v1.schema.json"]...),
+			"desired-state-v2.schema.json": append([]byte(nil), material.StateDefinitions["desired-state-v2.schema.json"]...),
+		},
+		Migrations: []EmbeddedMigration{{Name: "state-v1-to-v2.json", From: 1, To: 2, Document: append([]byte(nil), material.StateMigrations["state-v1-to-v2.json"]...)}},
 		Units:      units, Artifacts: artifacts, Baselines: QualifiedComponentBaselines(), Paths: QualifiedPaths(),
 	}
 	metadata.Build.PayloadSHA256 = strings.Repeat("0", 64)
@@ -216,7 +220,7 @@ func ReadPayloadMetadata(input io.ReaderAt, size int64) (PayloadMetadata, []byte
 }
 
 func validPayloadMetadata(value PayloadMetadata) bool {
-	if value.Schema != payloadMetadataSchema || value.Build.Repository != Repository || !safeTag(value.Build.Tag) || !commitPattern.MatchString(value.Build.Commit) || !hashPattern.MatchString(value.Build.PayloadSHA256) || value.Architecture != AMD64 && value.Architecture != ARM64 || value.StateSchema == 0 || value.StateSchema > 64 || value.MinimumUpdaterSchema != 1 || !reflect.DeepEqual(value.Baselines, QualifiedComponentBaselines()) || !reflect.DeepEqual(value.Paths, QualifiedPaths()) {
+	if value.Schema != payloadMetadataSchema || value.Build.Repository != Repository || !safeTag(value.Build.Tag) || !commitPattern.MatchString(value.Build.Commit) || !hashPattern.MatchString(value.Build.PayloadSHA256) || value.Architecture != AMD64 && value.Architecture != ARM64 || value.StateSchema == 0 || value.StateSchema > 2 || value.MinimumUpdaterSchema != 1 || !reflect.DeepEqual(value.Baselines, QualifiedComponentBaselines()) || !reflect.DeepEqual(value.Paths, QualifiedPaths()) {
 		return false
 	}
 	if !validEmbeddedStateMaterial(value) {
@@ -267,7 +271,8 @@ func validEmbeddedStateMaterial(value PayloadMetadata) bool {
 	}
 	for index, migration := range value.Migrations {
 		from := uint64(index + 1)
-		if migration.From != from || migration.To != from+1 || migration.NetworkAccess || !safeName(migration.Name) || len(migration.Document) == 0 || len(migration.Document) > MaxIndexBytes || ValidateUniqueJSON(migration.Document) != nil {
+		digest := sha256.Sum256(migration.Document)
+		if migration.From != from || migration.To != from+1 || migration.NetworkAccess || migration.Name != "state-v1-to-v2.json" || hex.EncodeToString(digest[:]) != qualifiedMigrationSHA256 || len(migration.Document) > MaxIndexBytes || ValidateUniqueJSON(migration.Document) != nil {
 			return false
 		}
 		var contract struct {
@@ -305,6 +310,7 @@ func validStateSchema(document []byte) bool {
 }
 
 const qualifiedStateSchemaSHA256 = "3e1488c7c2a999883a878aa03091db89f6abe9ae32bf0739d9ebf604f3ff2edf"
+const qualifiedMigrationSHA256 = "1655761d084966b81cde678bd3509ca4bd927086028fce944911900bcc48cac7"
 
 var qualifiedArtifactSHA256 = map[string]string{
 	"cloudflared.yml":               "f777beda7b02af53ae71a3b235a26c76ddaab447be0ba4acab5d6189669460ed",
