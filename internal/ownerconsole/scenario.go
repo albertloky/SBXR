@@ -28,6 +28,7 @@ const (
 	NetworkScreen
 	ServicesDiagnosticsScreen
 	SecurityScreen
+	LiveProfileCheckScreen
 )
 
 type navigationID uint8
@@ -213,6 +214,11 @@ var scenarioFixtures = map[Scenario]fixture{
 		title: "SECURITY", navigation: securityNavigation, allowsBack: true,
 		lines:   []string{"Owner Console runs non-root.", "Infrastructure Secrets never render or copy.", "", "> Review privacy and access boundaries"},
 		details: []string{"One Owner", "Short-lived validated privilege", "No telemetry or automatic uploads"},
+	},
+	LiveProfileCheckScreen: {
+		title: "LIVE PROFILE CHECK", navigation: subscriptionNavigation, allowsBack: true,
+		lines:   []string{"Session-only Live Profile Check is waiting for typed facts.", "", "> Back"},
+		details: []string{"MEMORY ONLY", "", "No traffic history is retained."},
 	},
 }
 

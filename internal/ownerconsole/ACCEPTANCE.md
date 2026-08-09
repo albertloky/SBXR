@@ -1,6 +1,6 @@
 # Owner Console acceptance
 
-This file defines stable checks for issues #135, #136, #137, and #138. It contains no run results, Client Access Values, Infrastructure Secrets, raw terminal contents from an Owner session, or claim of Integrated, Live, Owner, or Release acceptance.
+This file defines stable checks for issues #135, #136, #137, #138, and #139. It contains no run results, Client Access Values, Infrastructure Secrets, raw terminal contents from an Owner session, or claim of Integrated, Live, Owner, or Release acceptance.
 
 ## Module Verification
 
@@ -126,6 +126,36 @@ go test ./internal/ownerconsole -run '^TestRun(RejectsStaleApprovalAndRebuildsAP
 ```
 
 Require Apply to receive only the exact reviewed Plan identity after authentication. Require stale or reused refusal to rebuild a fresh Plan. Require approved work to remain independent of Console exit, explicit cancellation to wait for a safe rollback checkpoint, and relaunch to show only typed active Change Set, success, rollback, or Recovery Required facts without inference from process exit or service reachability.
+
+### OC-PROFILES-01 — Six profile states and actions
+
+Run:
+
+```sh
+go test ./internal/ownerconsole -run '^TestRun(ShowsAllSixTypedConnectionProfilesAndDisabledStateTruthfully|ReviewsEachProfileChangeWithoutStartingIt|ShowsOnlyTheTypedNativeValidationResult|OpensOnlyTheSelectedProfileInAuthenticatedAccess|ProfileAndSubscriptionPlanBackRestoreTheirSelection)$' -count=1
+```
+
+Require each named profile to show only typed enabled state, service and listener health, public address or hostname, port and transport, settings, exposure, and publication facts. Require disabled state to retain settings and credential, close exposure, omit publication, and remain distinct from failure. Require Open in Access to focus only the selected profile after authentication. Require rotate one credential, reviewed port change, native validation, repair, enable, and disable to return through the Profiles Module without starting work before exact Plan approval.
+
+### OC-PROFILES-02 — Subscription and distinct Client Access changes
+
+Run:
+
+```sh
+go test ./internal/ownerconsole -run '^TestRun(ShowsNamedSubscriptionCountsAndOmissionsWithoutValues|ReviewsDistinctRotateAllTokenOnlyAndRevokeAllChangeSets|UnavailableSubscriptionHasNoHiddenActions)$' -count=1
+```
+
+Require the universal, v2rayN, Shadowrocket, Karing, Mihomo, and sing-box representations to show their actual named counts and exact omissions without rendering their values. Require rotate all six profile credentials, rotate only the subscription token, and Revoke all client access to produce separate review identities and exact effects. Revoke all must replace the subscription token, all six profile credentials, and every representation with no dual-credential grace.
+
+### OC-PROFILES-03 — Optional session-only Live Profile Check
+
+Run:
+
+```sh
+go test ./internal/ownerconsole -run '^TestRun(LiveProfileCheckRequiresAuthenticationAndShowsAutomaticPerProfileTraffic|LiveProfileCheckShowsURLAndAutomaticProgressWhileRunning|LongLiveProfileCheckURLKeepsEveryResultAndBackAtMinimumSize|BackCancelsAndErasesSessionOnlyLiveProfileCheck|CompletedLiveProfileCheckWaitsBehindExitConfirmation|LateProfileResultsNeverMoveOrRelabelTheCurrentScreen|CancelledLiveProfileCheckCannotOverwriteANewerRun|RefusesUnsafeProfileAndLiveCheckFacts|RefusesInvalidLiveProfileCheckStreams|NilLiveStreamFailsSafeAndBackCancelsANonClosingStream)$' -count=1
+```
+
+Require Live Profile Check to remain unavailable before this launch's successful authentication and outside Managed state. Require one typed Module request to stream one temporary test URL while the check is active, same-source QR only when it fits, spinner and monotonic elapsed time, and automatic pending then authenticated uplink and downlink results for all six profiles. Require an explicit session-only and memory-only explanation, cancellation and erasure on Back, no manual success action, no effect on Managed state, and fail-safe refusal of Infrastructure Secret markers or malformed typed facts.
 
 ## Seam Verification
 

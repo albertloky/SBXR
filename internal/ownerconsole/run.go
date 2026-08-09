@@ -84,6 +84,8 @@ type Session struct {
 	Access               AccessPresentation
 	Clipboard            Clipboard
 	Outcome              OutcomeModule
+	Profiles             ProfilesModule
+	ProfileOutcomes      OutcomeModule
 }
 
 func Run(ctx context.Context, session Session) error {
@@ -127,9 +129,9 @@ func Run(ctx context.Context, session Session) error {
 	runContext, stop := context.WithCancel(ctx)
 	defer stop()
 	fixture := scenarioFixture(session.Scenario)
-	accessEntries := session.Access.entries()
+	accessCatalog := session.Access.catalog()
 	program := tea.NewProgram(
-		model{width: c.Width, height: c.Height, scenario: session.Scenario, selected: selectedNavigation(session.Scenario), unicode: c.Unicode, noColor: noColor, initialModes: initialModes, drawingModeProbeRequired: c.DrawingModeProbeRequired, inputFocused: fixture.acceptsInput, progressExpected: session.Updates != nil, authenticator: session.Authenticator, authenticationPolicy: session.AuthenticationPolicy, runContext: runContext, accessEntries: accessEntries, clipboard: session.Clipboard, outcome: session.Outcome},
+		model{width: c.Width, height: c.Height, scenario: session.Scenario, selected: selectedNavigation(session.Scenario), unicode: c.Unicode, noColor: noColor, initialModes: initialModes, drawingModeProbeRequired: c.DrawingModeProbeRequired, inputFocused: fixture.acceptsInput, progressExpected: session.Updates != nil, authenticator: session.Authenticator, authenticationPolicy: session.AuthenticationPolicy, runContext: runContext, accessCatalog: accessCatalog, clipboard: session.Clipboard, outcome: session.Outcome, defaultOutcome: session.Outcome, profiles: session.Profiles, profileOutcomes: session.ProfileOutcomes, profileViewGeneration: 1},
 		tea.WithContext(runContext),
 		tea.WithInput(session.Input),
 		tea.WithOutput(session.Output),
@@ -209,54 +211,75 @@ func restoreOwnedModes(output io.Writer, modes map[int]bool) {
 }
 
 type model struct {
-	width, height             int
-	exitConfirm               bool
-	scenario                  Scenario
-	selected                  int
-	unicode                   bool
-	noColor                   bool
-	dark                      bool
-	appearanceKnown           bool
-	initialModes              map[int]bool
-	drawingModeProbeRequired  bool
-	probeDone                 bool
-	probeFailure              string
-	cursorAddressingConfirmed bool
-	input                     string
-	inputFocused              bool
-	inputTruncated            bool
-	pasteNeutralized          bool
-	pasteGuard                bool
-	refreshed                 bool
-	pendingUpdate             *PresentationUpdate
-	progress                  Progress
-	progressExpected          bool
-	progressReceived          bool
-	progressStartedAt         time.Time
-	progressElapsed           time.Duration
-	progressClock             progressClock
-	progressTicking           bool
-	privacySelection          int
-	limitedMode               bool
-	limitedSelection          int
-	authenticator             Authenticator
-	authenticationPolicy      AuthenticationPolicy
-	limitedReason             string
-	runContext                context.Context
-	accessEntries             []accessEntry
-	accessUnlocked            bool
-	accessFocused             bool
-	accessSelection           int
-	clipboard                 Clipboard
-	copyFeedback              string
-	outcome                   OutcomeModule
-	changeReview              ChangeReview
-	changeSet                 DurableChangeSet
-	pendingPlanApply          bool
-	changeFeedback            string
-	correctionSelection       int
-	correctionAction          int
-	planPage                  int
+	width, height              int
+	exitConfirm                bool
+	scenario                   Scenario
+	selected                   int
+	unicode                    bool
+	noColor                    bool
+	dark                       bool
+	appearanceKnown            bool
+	initialModes               map[int]bool
+	drawingModeProbeRequired   bool
+	probeDone                  bool
+	probeFailure               string
+	cursorAddressingConfirmed  bool
+	input                      string
+	inputFocused               bool
+	inputTruncated             bool
+	pasteNeutralized           bool
+	pasteGuard                 bool
+	refreshed                  bool
+	pendingUpdate              *PresentationUpdate
+	progress                   Progress
+	progressExpected           bool
+	progressReceived           bool
+	progressStartedAt          time.Time
+	progressElapsed            time.Duration
+	progressClock              progressClock
+	progressTicking            bool
+	privacySelection           int
+	limitedMode                bool
+	limitedSelection           int
+	authenticator              Authenticator
+	authenticationPolicy       AuthenticationPolicy
+	limitedReason              string
+	runContext                 context.Context
+	accessCatalog              accessCatalog
+	accessUnlocked             bool
+	accessFocused              bool
+	accessSelection            int
+	clipboard                  Clipboard
+	copyFeedback               string
+	outcome                    OutcomeModule
+	defaultOutcome             OutcomeModule
+	changeReview               ChangeReview
+	changeSet                  DurableChangeSet
+	pendingPlanApply           bool
+	changeFeedback             string
+	correctionSelection        int
+	correctionAction           int
+	planPage                   int
+	profiles                   ProfilesModule
+	profileOutcomes            OutcomeModule
+	profileChangeOrigin        Scenario
+	hasProfileChangeOrigin     bool
+	profilesView               ProfilesPresentation
+	profilesAvailable          bool
+	profileSelection           int
+	profileAction              int
+	profileValidation          ProfileValidation
+	profileViewGeneration      uint64
+	profileActionGeneration    uint64
+	subscriptionAction         int
+	liveProfileCheck           LiveProfileCheckPresentation
+	liveProfileCheckValid      bool
+	liveProfileCheckPending    bool
+	liveProfileCheckCancel     context.CancelFunc
+	liveProfileCheckGeneration uint64
+	pendingLiveProfileCheck    *liveProfileCheckMsg
+	liveProfileCheckStartedAt  time.Time
+	liveProfileCheckElapsed    time.Duration
 }
 
 type probeTimeoutMsg struct{}
@@ -273,6 +296,39 @@ type changeReviewMsg struct{ review ChangeReview }
 type changeResultMsg struct{ result ChangeResult }
 type changeSetUpdateMsg struct{ change DurableChangeSet }
 type changeBackMsg struct{ review ChangeReview }
+type profileRequestIdentity struct {
+	generation uint64
+	origin     Scenario
+}
+
+func (identity profileRequestIdentity) matches(m model) bool {
+	return identity.generation == m.profileActionGeneration && identity.origin == m.scenario
+}
+
+type profilesViewMsg struct {
+	identity profileRequestIdentity
+	view     ProfilesPresentation
+}
+type profileReviewMsg struct {
+	identity profileRequestIdentity
+	review   ChangeReview
+}
+type profileValidationMsg struct {
+	identity   profileRequestIdentity
+	validation ProfileValidation
+}
+type openAccessMsg struct {
+	identity  profileRequestIdentity
+	selection int
+}
+type liveProfileCheckMsg struct {
+	generation uint64
+	ctx        context.Context
+	check      LiveProfileCheckPresentation
+	updates    <-chan LiveProfileCheckPresentation
+	ok         bool
+}
+type liveProfileCheckTickMsg time.Time
 
 type progressClock struct {
 	kind        ProgressKind
@@ -288,6 +344,9 @@ func (m model) Init() tea.Cmd {
 		} else if m.scenario != PrivacyChoice {
 			commands = append(commands, m.inspectChangeCommand())
 		}
+	}
+	if m.profiles != nil && (m.scenario == ConnectionProfilesScreen || m.scenario == SubscriptionScreen) {
+		commands = append(commands, m.viewProfilesCommand())
 	}
 	if m.drawingModeProbeRequired {
 		commands = append(commands, tea.Tick(time.Second, func(time.Time) tea.Msg { return probeTimeoutMsg{} }))
@@ -352,6 +411,11 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, progressTick()
 		}
 		m.progressTicking = false
+	case liveProfileCheckTickMsg:
+		if m.liveProfileCheckPending && !m.liveProfileCheckStartedAt.IsZero() {
+			m.liveProfileCheckElapsed = time.Time(message).Sub(m.liveProfileCheckStartedAt)
+			return m, liveProfileCheckTick()
+		}
 	case pasteGuardExpiredMsg:
 		m.pasteGuard = false
 	case authenticationFinishedMsg:
@@ -362,7 +426,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
 			m.limitedMode = false
-			m.accessUnlocked = len(m.accessEntries) != 0
+			m.accessUnlocked = len(m.accessCatalog.all) != 0
 			if m.outcome != nil {
 				return m, m.inspectChangeCommand()
 			}
@@ -386,6 +450,13 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.copyFeedback = ""
 		m.focusChangeInput()
 	case changeBackMsg:
+		if m.hasProfileChangeOrigin && message.review == (ChangeReview{}) {
+			m.scenario, m.selected = m.profileChangeOrigin, selectedNavigation(m.profileChangeOrigin)
+			m.changeReview, m.changeFeedback, m.outcome = ChangeReview{}, "", m.defaultOutcome
+			m.hasProfileChangeOrigin = false
+			m.inputFocused = false
+			return m, nil
+		}
 		m.changeReview = validatedChangeReview(message.review)
 		m.planPage, m.changeFeedback = 0, ""
 		m.focusChangeInput()
@@ -419,6 +490,46 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.pendingPlanApply = false
 			}
 		}
+	case profilesViewMsg:
+		if message.identity.generation != m.profileViewGeneration || message.identity.origin != m.scenario {
+			return m, nil
+		}
+		m.profilesView, m.profilesAvailable = validatedProfiles(message.view)
+		m.profilesAvailable = m.profilesAvailable && m.profileOutcomes != nil
+		m.profileActionGeneration++
+		m.profileSelection, m.profileAction, m.subscriptionAction = 0, 0, 0
+		m.profileValidation = ProfileValidation{}
+	case profileReviewMsg:
+		if m.profileOutcomes == nil || !message.identity.matches(m) {
+			return m, nil
+		}
+		m.profileChangeOrigin, m.hasProfileChangeOrigin = m.scenario, true
+		m.outcome = m.profileOutcomes
+		m.changeReview = validatedChangeReview(message.review)
+		m.planPage, m.changeFeedback = 0, ""
+		m.focusChangeInput()
+		m.scenario, m.selected = InstallationReview, selectedNavigation(InstallationReview)
+	case profileValidationMsg:
+		if !message.identity.matches(m) {
+			return m, nil
+		}
+		m.profileValidation = validatedProfileValidation(message.validation, m.profilesView.Profiles[m.profileSelection].ID)
+	case openAccessMsg:
+		if !message.identity.matches(m) {
+			return m, nil
+		}
+		m.scenario, m.selected, m.accessFocused = DedicatedAccess, selectedNavigation(DedicatedAccess), true
+		m.accessSelection, m.copyFeedback = message.selection, ""
+	case liveProfileCheckMsg:
+		if message.generation != m.liveProfileCheckGeneration || m.scenario != LiveProfileCheckScreen {
+			return m, nil
+		}
+		if m.exitConfirm {
+			pending := message
+			m.pendingLiveProfileCheck = &pending
+			return m, nil
+		}
+		return m, m.finishLiveProfileCheck(message)
 	case tea.PasteMsg:
 		if m.width >= minimumWidth && m.height >= minimumHeight && !m.exitConfirm && m.inputFocused {
 			m.appendInput(message.Content)
@@ -599,10 +710,10 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if m.scenario == DedicatedAccess && m.accessUnlocked && m.accessFocused {
 			switch message.String() {
 			case "up", "shift+tab":
-				m.accessSelection = (m.accessSelection + len(m.accessEntries) - 1) % len(m.accessEntries)
+				m.accessSelection = (m.accessSelection + len(m.accessCatalog.all) - 1) % len(m.accessCatalog.all)
 				m.copyFeedback = ""
 			case "down":
-				m.accessSelection = (m.accessSelection + 1) % len(m.accessEntries)
+				m.accessSelection = (m.accessSelection + 1) % len(m.accessCatalog.all)
 				m.copyFeedback = ""
 			case "tab":
 				m.accessFocused = false
@@ -615,6 +726,74 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.scenario == DedicatedAccess && m.accessUnlocked && !m.accessFocused && message.String() == "shift+tab" {
 			m.accessFocused = true
+			return m, nil
+		}
+		if m.scenario == ConnectionProfilesScreen && m.profiles != nil {
+			if !m.profilesAvailable {
+				if message.String() == "esc" {
+					m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+				}
+				return m, nil
+			}
+			actions := profileActions(m.profilesView.Profiles[m.profileSelection].Enabled)
+			switch message.String() {
+			case "up", "shift+tab":
+				m.profileActionGeneration++
+				m.profileSelection = (m.profileSelection + len(m.profilesView.Profiles) - 1) % len(m.profilesView.Profiles)
+				m.profileAction = 0
+				m.profileValidation = ProfileValidation{}
+			case "down", "tab":
+				m.profileActionGeneration++
+				m.profileSelection = (m.profileSelection + 1) % len(m.profilesView.Profiles)
+				m.profileAction = 0
+				m.profileValidation = ProfileValidation{}
+			case "left":
+				m.profileActionGeneration++
+				m.profileAction = (m.profileAction + len(actions) - 1) % len(actions)
+			case "right":
+				m.profileActionGeneration++
+				m.profileAction = (m.profileAction + 1) % len(actions)
+			case "enter", "space":
+				return m, m.activateProfileAction()
+			case "esc":
+				m.profileActionGeneration++
+				m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+			}
+			return m, nil
+		}
+		if m.scenario == LiveProfileCheckScreen && m.profiles != nil {
+			if message.String() == "esc" {
+				m.cancelLiveProfileCheck()
+				m.liveProfileCheckGeneration++
+				m.pendingLiveProfileCheck = nil
+				m.liveProfileCheck, m.liveProfileCheckValid, m.liveProfileCheckPending = LiveProfileCheckPresentation{}, false, false
+				m.liveProfileCheckStartedAt, m.liveProfileCheckElapsed = time.Time{}, 0
+				m.scenario, m.selected = SubscriptionScreen, selectedNavigation(SubscriptionScreen)
+				return m, m.refreshProfilesCommand()
+			}
+			return m, nil
+		}
+		if m.scenario == SubscriptionScreen && m.profiles != nil {
+			if !m.profilesAvailable || !subscriptionFactsAgree(m.profilesView, m.accessCatalog.subscriptions) {
+				if message.String() == "esc" {
+					m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+				}
+				return m, nil
+			}
+			actions := subscriptionActions()
+			switch message.String() {
+			case "up", "shift+tab":
+				m.profileActionGeneration++
+				m.subscriptionAction = (m.subscriptionAction + len(actions) - 1) % len(actions)
+			case "down", "tab":
+				m.profileActionGeneration++
+				m.subscriptionAction = (m.subscriptionAction + 1) % len(actions)
+			case "enter", "space":
+				return m, m.activateSubscriptionAction()
+			case "esc":
+				m.profileActionGeneration++
+				m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+			}
 			return m, nil
 		}
 		if scenarioFixture(m.scenario).acceptsInput {
@@ -650,6 +829,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.progressStartedAt, m.progressElapsed = time.Time{}, 0
 				m.progressClock = progressClock{}
 				m.progressTicking = false
+				if (item.scenario == ConnectionProfilesScreen || item.scenario == SubscriptionScreen) && m.profiles != nil {
+					return m, m.refreshProfilesCommand()
+				}
 			}
 		case "esc":
 			if m.exitConfirm {
@@ -670,7 +852,7 @@ func (m model) legalLimitedActions() []limitedActionDefinition {
 }
 
 func (m model) copySelectedAccessValue() tea.Cmd {
-	entry := m.accessEntries[m.accessSelection]
+	entry := m.accessCatalog.all[m.accessSelection]
 	return m.copyValue(entry.name, entry.value)
 }
 
@@ -729,6 +911,73 @@ func (m model) backChangeCommand() tea.Cmd {
 	}
 }
 
+func (m model) viewProfilesCommand() tea.Cmd {
+	identity := profileRequestIdentity{generation: m.profileViewGeneration, origin: m.scenario}
+	return func() tea.Msg {
+		return profilesViewMsg{identity: identity, view: m.profiles.ViewProfiles(m.runContext)}
+	}
+}
+
+func (m *model) refreshProfilesCommand() tea.Cmd {
+	m.profileViewGeneration++
+	return m.viewProfilesCommand()
+}
+
+func (m *model) activateProfileAction() tea.Cmd {
+	profile := m.profilesView.Profiles[m.profileSelection]
+	action := profileActions(profile.Enabled)[m.profileAction]
+	m.profileActionGeneration++
+	identity := profileRequestIdentity{generation: m.profileActionGeneration, origin: m.scenario}
+	switch action.kind {
+	case openAccessAction:
+		if selection, ok := m.accessCatalog.profileFocus(profile.ID); m.accessUnlocked && ok {
+			return func() tea.Msg { return openAccessMsg{identity: identity, selection: selection} }
+		}
+		return nil
+	case validateProfileAction:
+		return func() tea.Msg {
+			return profileValidationMsg{identity: identity, validation: m.profiles.ValidateProfile(m.runContext, profile.ID)}
+		}
+	case reviewProfileChangeAction:
+		request := ProfileChangeRequest{Profile: profile.ID, Change: action.change}
+		return func() tea.Msg {
+			return profileReviewMsg{identity: identity, review: m.profiles.ReviewProfileChange(m.runContext, request)}
+		}
+	}
+	return nil
+}
+
+func (m *model) activateSubscriptionAction() tea.Cmd {
+	action := subscriptionActions()[m.subscriptionAction]
+	m.profileActionGeneration++
+	identity := profileRequestIdentity{generation: m.profileActionGeneration, origin: m.scenario}
+	switch action.kind {
+	case openAccessAction:
+		if selection, ok := m.accessCatalog.subscriptionFocus(); m.accessUnlocked && ok {
+			return func() tea.Msg { return openAccessMsg{identity: identity, selection: selection} }
+		}
+		return nil
+	case runLiveProfileCheckAction:
+		if !m.accessUnlocked || !m.profilesView.Managed {
+			return nil
+		}
+		checkContext, cancel := context.WithCancel(m.runContext)
+		m.liveProfileCheckGeneration++
+		liveGeneration := m.liveProfileCheckGeneration
+		m.liveProfileCheck, m.liveProfileCheckValid, m.liveProfileCheckPending, m.liveProfileCheckCancel = LiveProfileCheckPresentation{}, false, true, cancel
+		m.liveProfileCheckStartedAt, m.liveProfileCheckElapsed = time.Now(), 0
+		m.pendingLiveProfileCheck = nil
+		m.scenario, m.selected = LiveProfileCheckScreen, selectedNavigation(SubscriptionScreen)
+		updates := m.profiles.RunLiveProfileCheck(checkContext)
+		return tea.Batch(waitLiveProfileCheck(checkContext, liveGeneration, updates), liveProfileCheckTick())
+	case reviewClientAccessChangeAction:
+		return func() tea.Msg {
+			return profileReviewMsg{identity: identity, review: m.profiles.ReviewClientAccessChange(m.runContext, action.change)}
+		}
+	}
+	return nil
+}
+
 func (m model) editChangeCommand() tea.Cmd {
 	editing := m.changeReview.Editing
 	if editing == nil {
@@ -783,11 +1032,11 @@ func (m model) accessValueLines(entry accessEntry) []string {
 }
 
 func (m model) accessValueHit(x, y int) bool {
-	if m.accessSelection >= len(m.accessEntries) {
+	if m.accessSelection >= len(m.accessCatalog.all) {
 		return false
 	}
 	const frameRowsBeforeBody, accessRowsBeforeValue = 2, 5
-	lines := m.accessValueLines(m.accessEntries[m.accessSelection])
+	lines := m.accessValueLines(m.accessCatalog.all[m.accessSelection])
 	right := m.width
 	if m.width >= 120 {
 		right = navigationWidth + 1 + 48
@@ -833,12 +1082,61 @@ func authenticationExplanation(result AuthenticationResult) string {
 
 func (m *model) dismissExitConfirmation() tea.Cmd {
 	m.exitConfirm = false
+	var liveCommand tea.Cmd
+	if m.pendingLiveProfileCheck != nil {
+		message := *m.pendingLiveProfileCheck
+		m.pendingLiveProfileCheck = nil
+		if message.generation == m.liveProfileCheckGeneration && m.scenario == LiveProfileCheckScreen {
+			liveCommand = m.finishLiveProfileCheck(message)
+		}
+	}
 	if m.pendingUpdate == nil {
-		return nil
+		return liveCommand
 	}
 	update := *m.pendingUpdate
 	m.pendingUpdate = nil
-	return m.applyPresentationUpdate(update)
+	return tea.Batch(liveCommand, m.applyPresentationUpdate(update))
+}
+
+func (m *model) finishLiveProfileCheck(message liveProfileCheckMsg) tea.Cmd {
+	check, valid := validatedLiveProfileCheck(message.check, m.liveProfileCheck)
+	if !message.ok || !valid {
+		m.liveProfileCheck, m.liveProfileCheckValid, m.liveProfileCheckPending = LiveProfileCheckPresentation{}, false, false
+		m.cancelLiveProfileCheck()
+		return nil
+	}
+	m.liveProfileCheck, m.liveProfileCheckValid = check, true
+	if check.Complete {
+		m.liveProfileCheckPending = false
+		m.cancelLiveProfileCheck()
+		return nil
+	}
+	return waitLiveProfileCheck(message.ctx, message.generation, message.updates)
+}
+
+func (m *model) cancelLiveProfileCheck() {
+	if m.liveProfileCheckCancel != nil {
+		m.liveProfileCheckCancel()
+		m.liveProfileCheckCancel = nil
+	}
+}
+
+func waitLiveProfileCheck(ctx context.Context, generation uint64, updates <-chan LiveProfileCheckPresentation) tea.Cmd {
+	return func() tea.Msg {
+		if updates == nil {
+			return liveProfileCheckMsg{generation: generation, ctx: ctx}
+		}
+		select {
+		case <-ctx.Done():
+			return liveProfileCheckMsg{generation: generation, ctx: ctx}
+		case check, ok := <-updates:
+			return liveProfileCheckMsg{generation: generation, ctx: ctx, check: check, updates: updates, ok: ok}
+		}
+	}
+}
+
+func liveProfileCheckTick() tea.Cmd {
+	return tea.Tick(time.Second, func(at time.Time) tea.Msg { return liveProfileCheckTickMsg(at) })
 }
 
 func (m *model) applyPresentationUpdate(update PresentationUpdate) tea.Cmd {
@@ -1003,7 +1301,7 @@ func (m model) frame() string {
 	rows = append(rows, strings.Repeat(horizontal, leftWidth)+crossing+strings.Repeat(horizontal, rightWidth))
 	details := m.scenarioDetails(currentFixture)
 	if width >= 120 {
-		if m.scenario != DedicatedAccess || !m.accessUnlocked || m.accessSelection >= len(m.accessEntries) || !m.accessEntries[m.accessSelection].qr {
+		if m.scenario != DedicatedAccess || !m.accessUnlocked || m.accessSelection >= len(m.accessCatalog.all) || !m.accessCatalog.all[m.accessSelection].qr {
 			details = wrapLines(details, rightWidth-49)
 		}
 	}
@@ -1044,6 +1342,12 @@ func (m model) frame() string {
 }
 
 func (m model) scenarioDetails(current fixture) []string {
+	if m.scenario == LiveProfileCheckScreen && m.liveProfileCheckValid {
+		if qr := qrLines(m.liveProfileCheck.TemporaryURL, 49, m.height-8); len(qr) != 0 {
+			return append([]string{"QR - same temporary test URL", ""}, qr...)
+		}
+		return []string{"QR omitted; exact temporary test URL remains visible."}
+	}
 	if m.scenario == InstallationReview && m.outcome != nil {
 		if correction := m.changeReview.Correction; correction != nil {
 			return []string{"REDACTED EVIDENCE", "", correction.Evidence, "", "No raw output or secrets."}
@@ -1056,10 +1360,10 @@ func (m model) scenarioDetails(current fixture) []string {
 		return changeSetDetails(m.changeSet)
 	}
 	if m.scenario == DedicatedAccess {
-		if !m.accessUnlocked || m.accessSelection >= len(m.accessEntries) {
+		if !m.accessUnlocked || m.accessSelection >= len(m.accessCatalog.all) {
 			return current.details
 		}
-		entry := m.accessEntries[m.accessSelection]
+		entry := m.accessCatalog.all[m.accessSelection]
 		if entry.qr && m.width >= 120 {
 			if qr := qrLines(entry.value, 49, m.height-8); len(qr) != 0 {
 				return append([]string{"QR - same value as text", ""}, qr...)
@@ -1125,16 +1429,38 @@ func (m model) scenarioLines(current fixture) []string {
 	if m.scenario == MultiStepChangeSet && m.outcome != nil && m.changeSet.Kind != NoChangeSet {
 		return changeSetLines(m.changeSet)
 	}
+	if m.scenario == ConnectionProfilesScreen && m.profiles != nil {
+		if !m.profilesAvailable {
+			return []string{"Connection Profile facts are unavailable.", "", "No health, exposure, publication, or action was inferred.", "", "> Back"}
+		}
+		lines := profileLines(m.profilesView.Profiles[m.profileSelection], m.profileAction)
+		if m.profileValidation.Health != 0 {
+			lines = append(lines, "", "Native validation "+m.profileValidation.Health.String()+" - "+m.profileValidation.Code)
+		}
+		return lines
+	}
+	if m.scenario == SubscriptionScreen && m.profiles != nil {
+		if !m.profilesAvailable || !subscriptionFactsAgree(m.profilesView, m.accessCatalog.subscriptions) {
+			return []string{"Subscription facts are unavailable.", "", "No representation count, omission, or action was inferred.", "", "> Back"}
+		}
+		return subscriptionLines(m.accessCatalog.subscriptions, m.subscriptionAction)
+	}
+	if m.scenario == LiveProfileCheckScreen && m.profiles != nil {
+		if m.liveProfileCheckPending && !m.liveProfileCheckValid {
+			return []string{spinner(m.unicode, m.liveProfileCheckElapsed) + " Live Profile Check is starting - " + elapsed(m.liveProfileCheckElapsed), "Session-only and memory-only", "", "> Back"}
+		}
+		return liveProfileCheckLines(m.liveProfileCheck, m.liveProfileCheckValid, m.width, m.unicode, m.liveProfileCheckElapsed)
+	}
 	if m.scenario == DedicatedAccess {
-		if !m.accessUnlocked || m.accessSelection >= len(m.accessEntries) {
+		if !m.accessUnlocked || m.accessSelection >= len(m.accessCatalog.all) {
 			return current.lines
 		}
-		entry := m.accessEntries[m.accessSelection]
+		entry := m.accessCatalog.all[m.accessSelection]
 		valueLines := m.accessValueLines(entry)
 		for index := range valueLines {
 			valueLines[index] = "\x1b[4m" + valueLines[index] + "\x1b[24m"
 		}
-		lines := []string{fmt.Sprintf("Access value %d of %d", m.accessSelection+1, len(m.accessEntries)), entry.name, ""}
+		lines := []string{fmt.Sprintf("Access value %d of %d", m.accessSelection+1, len(m.accessCatalog.all)), entry.name, ""}
 		lines = append(lines, valueLines...)
 		lines = append(lines, "Click or press Enter to copy", "")
 		if m.width < 120 {
@@ -1363,6 +1689,15 @@ func (m model) shortcuts() [2]string {
 	}
 	if m.scenario == DedicatedAccess && m.accessUnlocked && m.accessFocused {
 		return [2]string{" Up/Down Choose value  Enter/Space Copy  Tab Navigation", " Esc Overview  Ctrl+C Exit confirmation  Q is never Exit"}
+	}
+	if m.scenario == ConnectionProfilesScreen && m.profiles != nil {
+		return [2]string{" Up/Down Profile  Left/Right Action  Enter/Space Select", " Esc Back  Ctrl+C Exit confirmation"}
+	}
+	if m.scenario == SubscriptionScreen && m.profiles != nil {
+		return [2]string{" Up/Down Action  Enter/Space Select", " Esc Back  Ctrl+C Exit confirmation"}
+	}
+	if m.scenario == LiveProfileCheckScreen && m.profiles != nil {
+		return [2]string{" Esc Back", " Ctrl+C Exit confirmation  Q is never Exit"}
 	}
 	second := " Ctrl+C Exit confirmation  Q is never Exit"
 	if scenarioFixture(m.scenario).allowsBack {

@@ -85,6 +85,13 @@ type accessEntry struct {
 	qr                     bool
 }
 
+type accessCatalog struct {
+	all           []accessEntry
+	profiles      [6]int
+	subscriptions []accessEntry
+	subscription  int
+}
+
 var accessProfileSchemes = [...]string{"vless", "vless", "vless", "hysteria2", "tuic", "anytls"}
 var accessLinkNames = [...]string{"subscription URL", "v2rayN", "Shadowrocket", "Karing", "Mihomo", "sing-box"}
 
@@ -106,6 +113,30 @@ func (access AccessPresentation) entries() []accessEntry {
 		entries = append(entries, accessEntry{name: accessLinkNames[index], value: link.URL, profileCount: link.ProfileCount, omissions: omissions, candidate: candidate, ownerAcceptancePending: pending})
 	}
 	return entries
+}
+
+func (access AccessPresentation) catalog() accessCatalog {
+	entries := access.entries()
+	if len(entries) != len(access.Profiles)+len(access.Links) {
+		return accessCatalog{}
+	}
+	catalog := accessCatalog{all: entries, subscriptions: entries[len(access.Profiles):], subscription: len(access.Profiles)}
+	for index := range catalog.profiles {
+		catalog.profiles[index] = index
+	}
+	return catalog
+}
+
+func (catalog accessCatalog) profileFocus(profile AccessProfileID) (int, bool) {
+	index := int(profile) - 1
+	if index < 0 || index >= len(catalog.profiles) || len(catalog.all) == 0 {
+		return 0, false
+	}
+	return catalog.profiles[index], true
+}
+
+func (catalog accessCatalog) subscriptionFocus() (int, bool) {
+	return catalog.subscription, len(catalog.subscriptions) != 0
 }
 
 func safeURI(value, scheme string) bool {

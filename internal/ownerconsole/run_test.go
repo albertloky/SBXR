@@ -656,6 +656,12 @@ func (buffer *synchronizedBuffer) Write(value []byte) (int, error) {
 	return buffer.Buffer.Write(value)
 }
 
+func (buffer *synchronizedBuffer) ReadFrom(reader io.Reader) (int64, error) {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	return buffer.Buffer.ReadFrom(reader)
+}
+
 func (buffer *synchronizedBuffer) String() string {
 	buffer.mu.RLock()
 	defer buffer.mu.RUnlock()
