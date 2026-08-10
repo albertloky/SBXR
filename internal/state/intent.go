@@ -2,6 +2,8 @@ package state
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 )
 
@@ -85,6 +87,26 @@ type DesiredState struct {
 	Certificates       CertificateSettings  `json:"certificates"`
 	NetworkPolicy      NetworkPolicyInputs  `json:"network_policy"`
 	Software           SoftwareSettings     `json:"software"`
+}
+
+// CandidateSHA256 returns the exact protected serialization checksum State
+// will bind to a complete candidate. It never returns or renders the bytes.
+func CandidateSHA256(candidate DesiredState) (string, error) {
+	if finding := validateDesiredState(candidate); finding != nil {
+		staged, ok := stageDeferredCloudflare(candidate)
+		if !ok {
+			return "", finding
+		}
+		if stagedFinding := validateDesiredState(staged); stagedFinding != nil {
+			return "", stagedFinding
+		}
+	}
+	document, err := marshalProtectedJSON(candidate)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(document)
+	return hex.EncodeToString(digest[:]), nil
 }
 
 // InstallationIdentity distinguishes this one managed SBXR installation.

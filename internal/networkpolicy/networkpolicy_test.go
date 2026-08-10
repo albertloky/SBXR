@@ -2,10 +2,14 @@ package networkpolicy_test
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/albertloky/SBXR/internal/networkpolicy"
+	"github.com/albertloky/SBXR/internal/systemchanges"
+	systemubuntu "github.com/albertloky/SBXR/internal/systemchanges/adapter/ubuntu"
 )
 
 type staticAdapter struct {
@@ -16,6 +20,93 @@ type stagedAdapter struct {
 	observed     networkpolicy.Observations
 	requests     []networkpolicy.ObservationRequest
 	failExternal bool
+}
+
+func TestCleanVPSAuthorityRechecksTheExactNetworkPolicyBaseline(t *testing.T) {
+	adapter := &stagedAdapter{observed: completeObservations()}
+	request := networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PostApproval}
+	result := networkpolicy.New(adapter).Evaluate(request)
+	authority := systemchanges.NewFreshInstallationAuthority(result.FreshInstallationProof())
+	if !authority.ConnectionProfilesFreshInstallation() {
+		t.Fatal("unchanged Clean VPS proof was refused")
+	}
+	if authority.ConnectionProfilesFreshInstallation() {
+		t.Fatal("Clean VPS authority was reusable")
+	}
+	if second := systemchanges.NewFreshInstallationAuthority(result.FreshInstallationProof()); !second.CertificateLifecycleFreshInstallation() {
+		t.Fatal("a second owning Module could not perform its own exact Clean VPS recheck")
+	}
+
+	result = networkpolicy.New(adapter).Evaluate(request)
+	authority = systemchanges.NewFreshInstallationAuthority(result.FreshInstallationProof())
+	adapter.observed.Listeners = append(adapter.observed.Listeners, networkpolicy.Listener{Address: "0.0.0.0", Port: 443, Protocol: networkpolicy.TCP, Process: "unrelated"})
+	if authority.CertificateLifecycleFreshInstallation() {
+		t.Fatal("changed Clean VPS facts retained installation authority")
+	}
+}
+
+func TestCleanVPSAuthorityBootstrapsTheKernelLockOnlyWhenApplyStarts(t *testing.T) {
+	result := networkpolicy.New(&stagedAdapter{observed: completeObservations()}).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PostApproval})
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "run"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	current := systemchanges.Observation{Status: systemchanges.NotInstalled}
+	adapter := systemubuntu.NewAtForFreshInstallation(root, func() (systemchanges.Observation, error) { return current, nil }, nil, systemchanges.NewFreshInstallationAuthority(result.FreshInstallationProof()))
+	path := filepath.Join(root, "run/sbxr/system-changes.lock")
+	if observed, err := adapter.Observe(); err != nil || observed.Lock != systemchanges.LockReleased {
+		t.Fatalf("pre-Apply Observe() = (%+v, %v)", observed, err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("pre-Apply lock path exists: %v", err)
+	}
+	lock, acquired, err := adapter.TryLock()
+	if err != nil || !acquired || lock == nil {
+		t.Fatalf("TryLock() = (%v, %v, %v)", lock, acquired, err)
+	}
+	current.Status = systemchanges.Managed
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("managed lock = (%v, %v)", info, err)
+	}
+
+	rollbackRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(rollbackRoot, "run"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rollback := systemubuntu.NewAtForFreshInstallation(rollbackRoot, func() (systemchanges.Observation, error) {
+		return systemchanges.Observation{Status: systemchanges.NotInstalled}, nil
+	}, nil, systemchanges.NewFreshInstallationAuthority(result.FreshInstallationProof()))
+	rollbackLock, acquired, err := rollback.TryLock()
+	if err != nil || !acquired || rollbackLock == nil {
+		t.Fatalf("rollback TryLock() = (%v, %v, %v)", rollbackLock, acquired, err)
+	}
+	if err := rollbackLock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(rollbackRoot, "run/sbxr")); !os.IsNotExist(err) {
+		t.Fatalf("rolled-back lock resources remain: %v", err)
+	}
+}
+
+func TestCleanVPSAllowsOnlyAbsentDirectDNSForTheReviewedCloudflareInstall(t *testing.T) {
+	intent, observed := completeIntent(), completeObservations()
+	intent.TemporaryHTTP = true
+	observed.Certificate.DNS = networkpolicy.DNSFacts{Hostname: intent.CertificateHostname}
+	result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PreApproval})
+	if result.Outcome != networkpolicy.NeedsAttention {
+		t.Fatalf("absent fresh DNS outcome = %s; findings=%+v", result.Outcome, result.Findings)
+	}
+	assertFinding(t, result, networkpolicy.NeedsAttention, networkpolicy.Advisory, "NETWORK-CERTIFICATE-DNS-PENDING")
+	if _, ok := result.HTTP01Contribution(); !ok || result.FreshInstallationProof() == (networkpolicy.FreshInstallationProof{}) {
+		t.Fatal("installation-only pending DNS removed the exact HTTP-01 or Clean VPS authority")
+	}
+
+	observed.Certificate.DNS.IPv4 = []string{"198.51.100.20"}
+	conflicting := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PreApproval})
+	assertFinding(t, conflicting, networkpolicy.Failed, networkpolicy.Required, "NETWORK-CERTIFICATE-DNS")
 }
 
 func (a *stagedAdapter) Observe(request networkpolicy.ObservationRequest) (networkpolicy.Observations, error) {

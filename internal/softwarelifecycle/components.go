@@ -101,6 +101,40 @@ func ValidateComponentArchive(body []byte, architecture Architecture) (Component
 	return manifest, nil
 }
 
+func qualifiedComponent(body []byte, architecture Architecture, name string) ([]byte, string, bool) {
+	if name != "xray" && name != "sing-box" {
+		return nil, "", false
+	}
+	manifest, err := ValidateComponentArchive(body, architecture)
+	if err != nil {
+		return nil, "", false
+	}
+	compressed, err := gzip.NewReader(bytes.NewReader(body))
+	if err != nil {
+		return nil, "", false
+	}
+	defer compressed.Close()
+	archive := tar.NewReader(compressed)
+	for {
+		header, err := archive.Next()
+		if err != nil {
+			return nil, "", false
+		}
+		if header.Name != name {
+			continue
+		}
+		content, err := io.ReadAll(io.LimitReader(archive, header.Size+1))
+		if err != nil || int64(len(content)) != header.Size {
+			return nil, "", false
+		}
+		version := manifest.Xray
+		if name == "sing-box" {
+			version = strings.TrimPrefix(manifest.SingBox, "v")
+		}
+		return content, version, true
+	}
+}
+
 func validComponentManifest(manifest ComponentManifest, architecture Architecture) bool {
 	if manifest.Schema != 1 || manifest.Architecture != architecture || manifest.Xray != "v26.3.27" || manifest.SingBox != "v1.13.16" || manifest.Cloudflared != "2026.7.3" || manifest.Python != "3.12" || !certbotAtLeast54(manifest.Certbot) || len(manifest.Files) < 7 {
 		return false

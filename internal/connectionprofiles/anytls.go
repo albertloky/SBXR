@@ -2,11 +2,13 @@ package connectionprofiles
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/netip"
 	"reflect"
 	"time"
@@ -30,7 +32,11 @@ func NewAnyTLSCredentials(password string) (AnyTLSCredentials, error) {
 }
 
 func GenerateAnyTLSCredentials() (AnyTLSCredentials, error) {
-	password, err := generateHexSecret()
+	return generateAnyTLSCredentials(rand.Reader)
+}
+
+func generateAnyTLSCredentials(random io.Reader) (AnyTLSCredentials, error) {
+	password, err := generateHexSecretFrom(random)
 	if err != nil {
 		return AnyTLSCredentials{}, errors.New("AnyTLS password generation failed")
 	}

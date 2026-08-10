@@ -55,6 +55,34 @@ func (candidate InstallCandidate) SoftwareLifecyclePreparedArchive() (StagedRele
 	return candidate.cell.staged, append([]byte(nil), candidate.cell.archive...), append([]byte(nil), candidate.cell.components...), true
 }
 
+// CertificateLifecycleQualification exposes only the Certbot capability
+// already authenticated by candidate staging, never candidate bytes or paths.
+func (candidate InstallCandidate) CertificateLifecycleQualification() (string, bool) {
+	if !validInstallCandidate(candidate) {
+		return "", false
+	}
+	manifest, err := ValidateComponentArchive(candidate.cell.components, candidate.cell.staged.Architecture)
+	return manifest.Certbot, err == nil
+}
+
+func (candidate InstallCandidate) ManagedComponentVersions() (xray, singBox, cloudflared, certbot string, valid bool) {
+	if !validInstallCandidate(candidate) {
+		return "", "", "", "", false
+	}
+	manifest, err := ValidateComponentArchive(candidate.cell.components, candidate.cell.staged.Architecture)
+	if err != nil {
+		return "", "", "", "", false
+	}
+	return manifest.Xray, manifest.SingBox, manifest.Cloudflared, manifest.Certbot, true
+}
+
+func (candidate InstallCandidate) QualifiedComponent(name string) ([]byte, string, bool) {
+	if !validInstallCandidate(candidate) {
+		return nil, "", false
+	}
+	return qualifiedComponent(candidate.cell.components, candidate.cell.staged.Architecture, name)
+}
+
 func (candidate InstallCandidate) SoftwareLifecyclePreparedUpdate() (VerifiedRelease, StagedRelease, []byte, []byte, bool) {
 	if !validInstallCandidate(candidate) || !validInstalled(candidate.cell.verified) || candidate.cell.verified.Identity != candidate.cell.staged.Identity {
 		return VerifiedRelease{}, StagedRelease{}, nil, nil, false
@@ -277,6 +305,7 @@ type InstallApplyRequest struct {
 	Approval      InstallApproval
 	PreparedState systemchanges.PreparedStateCommit
 	SystemChanges systemchanges.Interface
+	Cancellation  *systemchanges.Cancellation
 }
 
 func (plan *InstallPlan) Apply(ctx context.Context, request InstallApplyRequest) systemchanges.ApplyResult {
@@ -312,6 +341,9 @@ func (plan *InstallPlan) Apply(ctx context.Context, request InstallApplyRequest)
 	})
 	if err != nil {
 		return installRefused("SOFTWARE-LIFECYCLE-INSTALL-PREPARED", "The prepared revision 1 State does not match the reviewed install Plan")
+	}
+	if request.Cancellation != nil {
+		return request.SystemChanges.ApplyWithCancellation(changeSet, request.Cancellation)
 	}
 	return request.SystemChanges.Apply(changeSet)
 }
@@ -397,6 +429,14 @@ func (plan *InstallPlan) Summary() InstallSummary {
 	result.Cloudflare = append([]string(nil), result.Cloudflare...)
 	result.Certificates = append([]string(nil), result.Certificates...)
 	return result
+}
+
+func (plan *InstallPlan) MatchesDesiredState(xray, singBox, cloudflared, certbot string) bool {
+	if plan == nil {
+		return false
+	}
+	wXray, wSingBox, wCloudflared, wCertbot, valid := plan.candidate.ManagedComponentVersions()
+	return valid && xray == wXray && singBox == wSingBox && cloudflared == wCloudflared && certbot == wCertbot
 }
 func (plan *InstallPlan) String() string {
 	if plan == nil {

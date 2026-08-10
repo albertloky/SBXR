@@ -29,7 +29,7 @@ func (executor DirectTLSExecutor) ValidateConfiguration(root, destination, hostn
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	for _, configuration := range []string{filepath.Join(root, "etc/sing-box/config.json"), filepath.Join(root, probeConfiguration)} {
+	for _, configuration := range []string{filepath.Join(root, "etc/sbxr/sing-box/config.json"), filepath.Join(root, probeConfiguration)} {
 		if executor.command(ctx, "sing-box", "check", "-c", configuration) != nil {
 			return errors.New("complete sing-box configuration validation failed")
 		}

@@ -2,6 +2,7 @@ package connectionprofiles
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -61,12 +62,19 @@ func (RegistryCredentials) GoString() string {
 }
 
 func GenerateRegistryCredentials() (RegistryCredentials, error) {
-	reality, realityErr := GenerateRealityCredentials()
-	xhttp, xhttpErr := GenerateXHTTPCredentials()
-	websocket, websocketErr := GenerateWebSocketCredentials()
-	hysteria2, hysteria2Err := GenerateHysteria2Credentials()
-	tuic, tuicErr := GenerateTUICCredentials()
-	anyTLS, anyTLSErr := GenerateAnyTLSCredentials()
+	return GenerateRegistryCredentialsFrom(rand.Reader)
+}
+
+func GenerateRegistryCredentialsFrom(random io.Reader) (RegistryCredentials, error) {
+	if random == nil {
+		return RegistryCredentials{}, errors.New("credential entropy unavailable")
+	}
+	reality, realityErr := generateRealityCredentials(random)
+	xhttp, xhttpErr := generateXHTTPCredentials(random)
+	websocket, websocketErr := generateWebSocketCredentials(random)
+	hysteria2, hysteria2Err := generateHysteria2Credentials(random)
+	tuic, tuicErr := generateTUICCredentials(random)
+	anyTLS, anyTLSErr := generateAnyTLSCredentials(random)
 	credentials := RegistryCredentials{reality, xhttp, websocket, hysteria2, tuic, anyTLS}
 	if errors.Join(realityErr, xhttpErr, websocketErr, hysteria2Err, tuicErr, anyTLSErr) != nil || !credentials.Independent() {
 		return RegistryCredentials{}, errors.New("six independent Connection Profile credentials could not be generated")
@@ -81,6 +89,62 @@ type RegistryRotation struct {
 	source   PublicationSource
 	secrets  registryCredentialReader
 	used     atomic.Bool
+}
+
+type FreshRegistryInputs struct {
+	profiles state.ConnectionProfiles
+	source   PublicationSource
+	secrets  registryCredentialReader
+	used     atomic.Bool
+}
+
+func (FreshRegistryInputs) String() string   { return "Fresh registry inputs: redacted" }
+func (FreshRegistryInputs) GoString() string { return "Fresh registry inputs: redacted" }
+func (FreshRegistryInputs) MarshalJSON() ([]byte, error) {
+	return []byte(`"Fresh registry inputs: redacted"`), nil
+}
+
+func NewFreshRegistryInputs(request RegistryViewRequest) (*FreshRegistryInputs, error) {
+	profiles, valid := DesiredProfiles(request)
+	if !valid {
+		return nil, errors.New("fresh registry inputs are invalid")
+	}
+	values := registryCredentialReader{
+		profiles.VLESSRealityVision.UUID: request.Reality.Credentials.uuid.value, profiles.VLESSRealityVision.ShortID: request.Reality.Credentials.shortID.value,
+		profiles.VLESSXHTTP.UUID: request.XHTTP.Credentials.uuid.value, profiles.VLESSXHTTP.Path: request.XHTTP.Credentials.path.value,
+		profiles.VLESSWebSocket.UUID: request.WebSocket.Credentials.uuid.value, profiles.VLESSWebSocket.Path: request.WebSocket.Credentials.path.value,
+		profiles.Hysteria2.Password: request.Hysteria2.Credentials.password.value,
+		profiles.TUIC.UUID:          request.TUIC.Credentials.uuid.value, profiles.TUIC.Password: request.TUIC.Credentials.password.value,
+		profiles.AnyTLS.Password: request.AnyTLS.Credentials.password.value,
+	}
+	if profiles.Hysteria2.Obfuscation {
+		values[profiles.Hysteria2.ObfuscationSecret] = request.Hysteria2.Credentials.obfuscationSecret.value
+	}
+	return &FreshRegistryInputs{profiles: profiles, source: registryPublication(request), secrets: values}, nil
+}
+
+func (inputs *FreshRegistryInputs) Profiles() state.ConnectionProfiles {
+	if inputs == nil {
+		return state.ConnectionProfiles{}
+	}
+	return inputs.profiles
+}
+
+func (inputs *FreshRegistryInputs) PublicationSource() PublicationSource {
+	if inputs == nil {
+		return PublicationSource{}
+	}
+	return inputs.source
+}
+
+func (inputs *FreshRegistryInputs) WithClientAccessReader(use func(state.ClientAccessReader) error) error {
+	if inputs == nil || use == nil || !inputs.used.CompareAndSwap(false, true) {
+		return errors.New("fresh registry render authority unavailable")
+	}
+	lease := &registryCredentialLease{values: inputs.secrets}
+	lease.active.Store(true)
+	defer lease.active.Store(false)
+	return use(lease)
 }
 
 func (RegistryRotation) String() string   { return "Connection Profile registry rotation: protected" }
@@ -197,6 +261,22 @@ func NewFreshRegistry(request RegistryViewRequest, credentials RegistryCredentia
 	request.Reality.Enabled, request.XHTTP.Enabled, request.WebSocket.Enabled = true, true, true
 	request.Hysteria2.Enabled, request.TUIC.Enabled, request.AnyTLS.Enabled = true, true, true
 	return request, nil
+}
+
+// DesiredProfiles protects the exact reviewed registry credentials for State.
+func DesiredProfiles(request RegistryViewRequest) (state.ConnectionProfiles, bool) {
+	if validateRegistryCandidate(request) != nil {
+		return state.ConnectionProfiles{}, false
+	}
+	protect := state.NewClientAccessValue
+	return state.ConnectionProfiles{
+		VLESSRealityVision: state.VLESSRealityVision{Enabled: request.Reality.Enabled, Port: request.Reality.Port, UUID: protect(request.Reality.Credentials.uuid.value), PrivateKey: state.NewInfrastructureSecret(request.Reality.Credentials.privateKey.value), PublicKey: request.Reality.Credentials.publicKey.value, ShortID: protect(request.Reality.Credentials.shortID.value), Target: request.Reality.Target.Address, ServerName: request.Reality.Target.ServerName, Fingerprint: request.Reality.Fingerprint},
+		VLESSXHTTP:         state.VLESSXHTTP{Enabled: request.XHTTP.Enabled, UUID: protect(request.XHTTP.Credentials.uuid.value), Path: protect(request.XHTTP.Credentials.path.value), Hostname: request.XHTTP.Hostname, OriginAddress: request.XHTTP.OriginAddress, OriginPort: request.XHTTP.OriginPort, Mode: request.XHTTP.Mode},
+		VLESSWebSocket:     state.VLESSWebSocket{Enabled: request.WebSocket.Enabled, UUID: protect(request.WebSocket.Credentials.uuid.value), Hostname: request.WebSocket.Hostname, OriginAddress: request.WebSocket.OriginAddress, OriginPort: request.WebSocket.OriginPort, Path: protect(request.WebSocket.Credentials.path.value)},
+		Hysteria2:          state.Hysteria2{Enabled: request.Hysteria2.Enabled, Port: request.Hysteria2.Port, Password: protect(request.Hysteria2.Credentials.password.value), ServerName: request.Hysteria2.ServerName, CertificateID: request.Hysteria2.CertificateID, MasqueradeURL: "https://example.com/", Obfuscation: request.Hysteria2.Credentials.obfuscation, ObfuscationSecret: protect(request.Hysteria2.Credentials.obfuscationSecret.value)},
+		TUIC:               state.TUIC{Enabled: request.TUIC.Enabled, Port: request.TUIC.Port, UUID: protect(request.TUIC.Credentials.uuid.value), Password: protect(request.TUIC.Credentials.password.value), ServerName: request.TUIC.ServerName, CertificateID: request.TUIC.CertificateID, CongestionControl: request.TUIC.CongestionControl, ZeroRTT: request.TUIC.ZeroRTT},
+		AnyTLS:             state.AnyTLS{Enabled: request.AnyTLS.Enabled, Port: request.AnyTLS.Port, Password: protect(request.AnyTLS.Credentials.password.value), ServerName: request.AnyTLS.ServerName, CertificateID: request.AnyTLS.CertificateID, PaddingScheme: "upstream-default"},
+	}, true
 }
 
 type RegistryExposureAuthority interface {

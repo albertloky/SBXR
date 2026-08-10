@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/mail"
 	"net/netip"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -56,6 +57,91 @@ type Interface struct {
 }
 
 func New(adapter Adapter, clock Clock) Interface { return Interface{adapter: adapter, clock: clock} }
+
+type CandidateQualification interface {
+	CertificateLifecycleQualification() (certbotVersion string, valid bool)
+}
+
+type freshDNSPrerequisites interface {
+	CertificateLifecycleFreshDNSPrerequisites() (hostname string, addresses []string, valid bool)
+}
+
+type freshDNSPlan interface {
+	CertificateLifecycleFreshDNSPlan() (hostname, ipv4, ipv6, desiredStateSHA256 string, valid bool)
+}
+
+type freshDNSCell struct {
+	hostname, ipv4, ipv6, desiredStateSHA256 string
+}
+
+// FreshDNSAuthority binds Network Policy's exact absent-DNS observation to the
+// reviewed Cloudflare records that will be created before certificate steps.
+type FreshDNSAuthority struct{ cell *freshDNSCell }
+
+func (FreshDNSAuthority) String() string   { return "fresh certificate DNS Plan: redacted" }
+func (FreshDNSAuthority) GoString() string { return "fresh certificate DNS Plan: redacted" }
+func (FreshDNSAuthority) MarshalJSON() ([]byte, error) {
+	return nil, errors.New("fresh certificate DNS Plan cannot be rendered")
+}
+
+func NewFreshDNSAuthority(network freshDNSPrerequisites, cloudflare freshDNSPlan) FreshDNSAuthority {
+	networkType, cloudflareType := reflect.TypeOf(network), reflect.TypeOf(cloudflare)
+	if networkType == nil || networkType.Kind() != reflect.Struct || networkType.PkgPath() != "github.com/albertloky/SBXR/internal/networkpolicy" || networkType.Name() != "Result" || cloudflareType == nil || cloudflareType.Kind() != reflect.Pointer || cloudflareType.Elem().PkgPath() != "github.com/albertloky/SBXR/internal/cloudflaretunnel" || cloudflareType.Elem().Name() != "Plan" {
+		return FreshDNSAuthority{}
+	}
+	hostname, addresses, networkValid := network.CertificateLifecycleFreshDNSPrerequisites()
+	plannedHostname, ipv4, ipv6, desired, planValid := cloudflare.CertificateLifecycleFreshDNSPlan()
+	want := make([]string, 0, 2)
+	if ipv4 != "" {
+		want = append(want, ipv4)
+	}
+	if ipv6 != "" {
+		want = append(want, ipv6)
+	}
+	if !networkValid || !planValid || hostname != plannedHostname || !slices.Equal(addresses, want) {
+		return FreshDNSAuthority{}
+	}
+	return FreshDNSAuthority{cell: &freshDNSCell{hostname: hostname, ipv4: ipv4, ipv6: ipv6, desiredStateSHA256: desired}}
+}
+
+func (authority FreshDNSAuthority) apply(desiredStateSHA256 string, request ViewRequest) (ViewRequest, bool) {
+	if authority.cell == nil || authority.cell.desiredStateSHA256 != desiredStateSHA256 || request.DirectHostname != authority.cell.hostname {
+		return ViewRequest{}, false
+	}
+	request.DNS = DNSFacts{Status: DNSAvailable, Hostname: authority.cell.hostname, DNSOnly: true}
+	if authority.cell.ipv4 != "" {
+		request.DNS.Addresses = append(request.DNS.Addresses, authority.cell.ipv4)
+	}
+	if authority.cell.ipv6 != "" {
+		request.DNS.Addresses = append(request.DNS.Addresses, authority.cell.ipv6)
+	}
+	request.CAA = CAAFacts{Status: CAAAvailable}
+	return request, true
+}
+
+type candidateAdapter struct{ certbotVersion string }
+
+// NewForFreshInstallation uses only the capability proof carried by an exact
+// staged Software Lifecycle candidate. Issuance and activation still happen
+// later through Certificate Lifecycle's normal Change Set steps.
+func NewForFreshInstallation(candidate CandidateQualification, clock Clock) Interface {
+	typeOf := reflect.TypeOf(candidate)
+	if typeOf == nil || typeOf.Kind() != reflect.Struct || typeOf.PkgPath() != "github.com/albertloky/SBXR/internal/softwarelifecycle" || typeOf.Name() != "InstallCandidate" {
+		return Interface{clock: clock}
+	}
+	version, valid := candidate.CertificateLifecycleQualification()
+	if !valid || !versionAtLeast(version, 5, 4) {
+		return Interface{clock: clock}
+	}
+	return New(candidateAdapter{certbotVersion: version}, clock)
+}
+
+func (adapter candidateAdapter) Observe(context.Context) (Observation, error) {
+	return Observation{
+		Issuer:    IssuerObservation{Name: "Let's Encrypt", CertbotVersion: adapter.certbotVersion, Distribution: "pip-venv", SupportedDistribution: true, RequiredProfile: true, IPAddress: true, Staging: true},
+		Scheduler: SchedulerObservation{Enabled: true, Persistent: true, Serial: true, ExactUnitPair: true, Randomized: true, NoCompetingScheduler: true, RunsPerDay: 2},
+	}, nil
+}
 
 type IssuerObservation struct {
 	Name, CertbotVersion, Distribution                         string
@@ -502,6 +588,7 @@ type PlanRequest struct {
 	StandingRenewal             bool
 	RenewalPolicyApproved       bool
 	FreshInstallation           systemchanges.FreshInstallationAuthority
+	FreshDNS                    FreshDNSAuthority
 }
 
 type OrderContract struct {
@@ -555,6 +642,13 @@ func (plan *Plan) Checks() []systemchanges.Check {
 	return append([]systemchanges.Check(nil), plan.checks...)
 }
 
+func (plan *Plan) MatchesDesiredState(renewalPolicy bool, acmeAccountID, ipCertificateID, ipServingPointer, domainCertificateID, domainServingPointer, domainHostname string) bool {
+	if plan == nil || plan.request.StartingRevision != 1 || plan.request.StartingStateSHA256 != "" {
+		return false
+	}
+	return renewalPolicy && acmeAccountID == "letsencrypt" && ipCertificateID == ipCertName && ipServingPointer == "/var/lib/sbxr/certificates/ip/current" && domainCertificateID == domainCertName && domainServingPointer == "/var/lib/sbxr/certificates/domain/current" && domainHostname == plan.request.View.DirectHostname
+}
+
 func (plan *Plan) SoftwareLifecycleInstallContribution() lifecyclecontract.InstallContribution {
 	if plan == nil || plan.request.StartingRevision != 1 || plan.request.StartingStateSHA256 != "" || plan.request.StandingRenewal {
 		return lifecyclecontract.InstallContribution{}
@@ -587,6 +681,13 @@ type PlanResult struct {
 }
 
 func (module Interface) Plan(ctx context.Context, request PlanRequest) PlanResult {
+	if request.FreshDNS.cell != nil {
+		view, valid := request.FreshDNS.apply(request.DesiredStateSHA256, request.View)
+		if !valid {
+			return PlanResult{Health: health(time.Time{}, Failed, "CERTIFICATE-PLAN-FRESH-DNS", "The fresh Direct DNS Plan is stale", "Network Policy and Cloudflare Tunnel do not agree", "one exact reviewed fresh-install DNS authority")}
+		}
+		request.View = view
+	}
 	view := module.View(ctx, request.View)
 	if view.Health.Outcome != Healthy {
 		return PlanResult{Health: view.Health}

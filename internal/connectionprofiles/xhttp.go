@@ -32,11 +32,15 @@ func NewXHTTPCredentials(uuid, path string) (XHTTPCredentials, error) {
 }
 
 func GenerateXHTTPCredentials() (XHTTPCredentials, error) {
-	uuid, err := generateUUID()
+	return generateXHTTPCredentials(rand.Reader)
+}
+
+func generateXHTTPCredentials(random io.Reader) (XHTTPCredentials, error) {
+	uuid, err := generateUUIDFrom(random)
 	if err != nil {
 		return XHTTPCredentials{}, errors.New("XHTTP UUID generation failed")
 	}
-	path, err := generateHighEntropyPath()
+	path, err := generateHighEntropyPathFrom(random)
 	if err != nil {
 		return XHTTPCredentials{}, errors.New("XHTTP path generation failed")
 	}
@@ -44,8 +48,12 @@ func GenerateXHTTPCredentials() (XHTTPCredentials, error) {
 }
 
 func generateUUID() (string, error) {
+	return generateUUIDFrom(rand.Reader)
+}
+
+func generateUUIDFrom(random io.Reader) (string, error) {
 	uuidBytes := make([]byte, 16)
-	if _, err := io.ReadFull(rand.Reader, uuidBytes); err != nil {
+	if _, err := io.ReadFull(random, uuidBytes); err != nil {
 		return "", err
 	}
 	uuidBytes[6] = uuidBytes[6]&0x0f | 0x40
@@ -54,8 +62,12 @@ func generateUUID() (string, error) {
 }
 
 func generateHighEntropyPath() (string, error) {
+	return generateHighEntropyPathFrom(rand.Reader)
+}
+
+func generateHighEntropyPathFrom(random io.Reader) (string, error) {
 	pathBytes := make([]byte, 32)
-	if _, err := io.ReadFull(rand.Reader, pathBytes); err != nil {
+	if _, err := io.ReadFull(random, pathBytes); err != nil {
 		return "", err
 	}
 	return "/" + hex.EncodeToString(pathBytes), nil

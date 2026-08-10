@@ -1,6 +1,6 @@
 # Subscription Serving
 
-Subscription Serving is the isolated public HTTPS runtime for the active immutable subscription artifacts. Its production entry point is the private `sbxr __subscription-serve` mode used only by `sbxr-subscription.service`.
+Subscription Serving is the isolated public HTTPS runtime for the active immutable subscription artifacts. Its production entry point is the private `sbxr private subscription-serve` mode used only by `sbxr-subscription.service`.
 
 The exact `/base64`, `/raw`, `/v2rayn`, `/shadowrocket`, `/karing`, `/mihomo`, and `/sing-box` suffixes return the corresponding active published bytes. Explicit suffixes always win over `User-Agent`. The unsuffixed route recognizes conservative case-insensitive v2rayN, Mihomo/Clash Meta, and sing-box format hints; unknown or conflicting hints return base64. Only the unsuffixed route sends `Vary: User-Agent`. Every success names the selected format in `X-SBXR-Representation`; Karing and sing-box also disclose `X-SBXR-Omitted-Profile: vless-xhttp`. Shadowrocket remains labeled as a candidate rather than Owner-accepted.
 

@@ -86,6 +86,24 @@ func TestPrepareCommitValidatesCandidateAndSerializesLeastPrivilegeMaterial(t *t
 	}
 }
 
+func TestCandidateSHA256MatchesPreparedRevisionOneState(t *testing.T) {
+	candidate := completeDesiredState()
+	want, err := marshalProtectedJSON(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(want)
+	got, err := CandidateSHA256(candidate)
+	if err != nil || got != hex.EncodeToString(digest[:]) {
+		t.Fatalf("CandidateSHA256() = (%q, %v)", got, err)
+	}
+
+	candidate.Installation.ID = ""
+	if _, err := CandidateSHA256(candidate); err == nil {
+		t.Fatal("incomplete candidate received a checksum")
+	}
+}
+
 func TestPrepareCommitAcceptsOnlyTheReviewedCompleteSubscriptionArtifactSet(t *testing.T) {
 	candidate := completeDesiredState()
 	stateModule, request, validator := managedPrepareRequest(t, candidate)

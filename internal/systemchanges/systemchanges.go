@@ -151,7 +151,13 @@ type CompleteRemovalAuthority struct {
 }
 
 type FreshInstallationAuthority struct {
-	cell *statusAuthority
+	cell  *statusAuthority
+	proof FreshInstallationProof
+	used  *atomic.Bool
+}
+
+type FreshInstallationProof interface {
+	SystemChangesFreshInstallation() bool
 }
 
 type completeRemovalAuthorityCell struct {
@@ -228,12 +234,29 @@ func (authority FreshInstallationAuthority) CertificateLifecycleFreshInstallatio
 	return authority.consumeFreshInstallation()
 }
 
+func (authority FreshInstallationAuthority) SystemChangesFreshInstallation() bool {
+	return authority.consumeFreshInstallation()
+}
+
 func (authority FreshInstallationAuthority) consumeFreshInstallation() bool {
+	if authority.proof != nil {
+		return authority.used != nil && authority.used.CompareAndSwap(false, true) && authority.proof.SystemChangesFreshInstallation()
+	}
 	if authority.cell == nil || !authority.cell.used.CompareAndSwap(false, true) {
 		return false
 	}
 	observed, err := authority.cell.adapter.Observe()
 	return err == nil && validObservation(observed) && observed.Status == NotInstalled && observed.Lock == LockReleased
+}
+
+// NewFreshInstallationAuthority accepts only Network Policy's one-use Clean
+// VPS proof. No host path is created until an approved Change Set starts.
+func NewFreshInstallationAuthority(proof FreshInstallationProof) FreshInstallationAuthority {
+	typeOf := reflect.TypeOf(proof)
+	if typeOf == nil || typeOf.Kind() != reflect.Struct || typeOf.PkgPath() != "github.com/albertloky/SBXR/internal/networkpolicy" || typeOf.Name() != "FreshInstallationProof" {
+		return FreshInstallationAuthority{}
+	}
+	return FreshInstallationAuthority{proof: proof, used: &atomic.Bool{}}
 }
 
 func (ManagedAuthority) String() string   { return "Managed authority: redacted" }

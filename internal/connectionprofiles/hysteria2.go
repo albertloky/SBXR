@@ -46,7 +46,11 @@ func NewObfuscatedHysteria2Credentials(password, obfuscationSecret string) (Hyst
 }
 
 func GenerateHysteria2Credentials() (Hysteria2Credentials, error) {
-	password, err := generateHexSecret()
+	return generateHysteria2Credentials(rand.Reader)
+}
+
+func generateHysteria2Credentials(random io.Reader) (Hysteria2Credentials, error) {
+	password, err := generateHexSecretFrom(random)
 	if err != nil {
 		return Hysteria2Credentials{}, errors.New("Hysteria2 password generation failed")
 	}
@@ -54,8 +58,12 @@ func GenerateHysteria2Credentials() (Hysteria2Credentials, error) {
 }
 
 func generateHexSecret() (string, error) {
+	return generateHexSecretFrom(rand.Reader)
+}
+
+func generateHexSecretFrom(random io.Reader) (string, error) {
 	value := make([]byte, 32)
-	if _, err := io.ReadFull(rand.Reader, value); err != nil {
+	if _, err := io.ReadFull(random, value); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(value), nil

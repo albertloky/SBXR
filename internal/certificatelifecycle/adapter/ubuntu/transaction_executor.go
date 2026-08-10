@@ -57,6 +57,34 @@ func NewTransactionExecutor(certbot string) (TransactionExecutor, error) {
 	return TransactionExecutor{now: time.Now, uid: 0, gid: gid, domainGID: domainGID, certbot: certbot, run: runCertificateCommand, prove: proveSubscriptionHTTPS}, nil
 }
 
+func NewFreshTransactionExecutor(certbot string) (TransactionExecutor, error) {
+	clean := filepath.Clean(certbot)
+	if clean != certbot || !filepath.IsAbs(clean) || !strings.HasPrefix(clean, "/opt/sbxr/releases/") || !strings.HasSuffix(clean, "/certbot/bin/certbot") || strings.Count(strings.TrimPrefix(strings.TrimSuffix(clean, "/certbot/bin/certbot"), "/opt/sbxr/releases/"), "/") != 0 {
+		return TransactionExecutor{}, errors.New("versioned Certbot path unavailable")
+	}
+	return TransactionExecutor{now: time.Now, uid: 0, gid: -1, domainGID: -1, certbot: certbot, run: runCertificateCommand, prove: proveSubscriptionHTTPS}, nil
+}
+
+func (executor TransactionExecutor) resolved() (TransactionExecutor, error) {
+	if executor.gid >= 0 && executor.domainGID >= 0 {
+		return executor, nil
+	}
+	group, err := user.LookupGroup("sbxr-subscription")
+	if err != nil {
+		return TransactionExecutor{}, errors.New("sbxr-subscription group unavailable")
+	}
+	executor.gid, err = strconv.Atoi(group.Gid)
+	if err != nil {
+		return TransactionExecutor{}, errors.New("sbxr-subscription group is invalid")
+	}
+	domainGroup, err := user.LookupGroup("sing-box")
+	if err != nil {
+		return TransactionExecutor{}, errors.New("sing-box group unavailable")
+	}
+	executor.domainGID, err = strconv.Atoi(domainGroup.Gid)
+	return executor, err
+}
+
 func (executor TransactionExecutor) CaptureRollback(root string, step systemchanges.Step, write func(io.Reader) error) error {
 	change, ok := step.CertificateChange()
 	if !ok {
@@ -82,6 +110,11 @@ func (executor TransactionExecutor) CaptureRollback(root string, step systemchan
 }
 
 func (executor TransactionExecutor) Execute(root string, step systemchanges.Step, timeout time.Duration, cancellation *systemchanges.Cancellation) (systemchanges.StepEvidence, error) {
+	var resolveErr error
+	executor, resolveErr = executor.resolved()
+	if resolveErr != nil {
+		return systemchanges.StepEvidence{}, resolveErr
+	}
 	change, ok := step.CertificateChange()
 	if !ok || cancellation.Requested() {
 		return systemchanges.StepEvidence{}, errors.New("certificate action cancelled or invalid")
@@ -151,6 +184,11 @@ func (executor TransactionExecutor) Execute(root string, step systemchanges.Step
 }
 
 func (executor TransactionExecutor) Reverse(root string, step systemchanges.Step, snapshot io.Reader, timeout time.Duration) (systemchanges.StepEvidence, error) {
+	var resolveErr error
+	executor, resolveErr = executor.resolved()
+	if resolveErr != nil {
+		return systemchanges.StepEvidence{}, resolveErr
+	}
 	change, ok := step.CertificateChange()
 	if !ok {
 		return systemchanges.StepEvidence{}, errors.New("certificate rollback unavailable")
@@ -199,6 +237,11 @@ func (executor TransactionExecutor) Reverse(root string, step systemchanges.Step
 }
 
 func (executor TransactionExecutor) Inspect(root string, step systemchanges.Step, snapshot io.Reader, _ time.Duration) (systemchanges.StepEffect, error) {
+	var resolveErr error
+	executor, resolveErr = executor.resolved()
+	if resolveErr != nil {
+		return "", resolveErr
+	}
 	change, ok := step.CertificateChange()
 	if !ok {
 		return "", errors.New("certificate inspection unavailable")
@@ -236,6 +279,11 @@ func (executor TransactionExecutor) Inspect(root string, step systemchanges.Step
 }
 
 func (executor TransactionExecutor) Check(root, code string, _ systemchanges.GatePhase, timeout time.Duration) (systemchanges.HealthStatus, error) {
+	var resolveErr error
+	executor, resolveErr = executor.resolved()
+	if resolveErr != nil {
+		return systemchanges.Unknown, resolveErr
+	}
 	if code == "CERTIFICATE-DOMAIN-CANDIDATE" {
 		if _, err := servingDomainIdentity(root, executor.roots, executor.clock(), executor.uid, executor.servingGID(systemchanges.CertificateDomainActivate)); err != nil {
 			return systemchanges.Failed, err
@@ -262,6 +310,11 @@ func (executor TransactionExecutor) Check(root, code string, _ systemchanges.Gat
 }
 
 func (executor TransactionExecutor) Cleanup(root string, action systemchanges.CertificateAction) error {
+	var resolveErr error
+	executor, resolveErr = executor.resolved()
+	if resolveErr != nil {
+		return resolveErr
+	}
 	base, prefix := certificateServingBase(root, action)
 	if action != systemchanges.CertificateIPActivate && action != systemchanges.CertificateDomainActivate {
 		return errors.New("certificate cleanup lineage unavailable")

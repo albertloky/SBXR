@@ -44,6 +44,23 @@ func New(mihomo MihomoValidator, singBox SingBoxValidator) Interface {
 	return Interface{mihomo: mihomo, singBox: singBox}
 }
 
+// NewIntegrated uses the Module's strict deterministic Mihomo document check
+// and the staged qualified sing-box parser supplied by the composition root.
+func NewIntegrated(singBox SingBoxValidator) Interface {
+	return New(integratedMihomoValidator{}, singBox)
+}
+
+type integratedMihomoValidator struct{}
+
+func (integratedMihomoValidator) ValidateMihomo(_ context.Context, source io.Reader) error {
+	document, err := io.ReadAll(io.LimitReader(source, 1<<20+1))
+	text := string(document)
+	if err != nil || len(document) == 0 || len(document) > 1<<20 || strings.ContainsAny(text, "\x00\r\t") || !strings.HasPrefix(text, "proxies:\n") || !strings.Contains(text, "\nproxy-groups:\n") || strings.Count(text, "  - name:") == 0 {
+		return errors.New("complete Mihomo document validation failed")
+	}
+	return nil
+}
+
 type Availability string
 
 const (

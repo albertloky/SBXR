@@ -2,11 +2,13 @@ package connectionprofiles
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/netip"
 	"reflect"
 	"time"
@@ -28,11 +30,15 @@ func NewTUICCredentials(uuid, password string) (TUICCredentials, error) {
 }
 
 func GenerateTUICCredentials() (TUICCredentials, error) {
-	uuid, err := generateUUID()
+	return generateTUICCredentials(rand.Reader)
+}
+
+func generateTUICCredentials(random io.Reader) (TUICCredentials, error) {
+	uuid, err := generateUUIDFrom(random)
 	if err != nil {
 		return TUICCredentials{}, errors.New("TUIC UUID generation failed")
 	}
-	password, err := generateHexSecret()
+	password, err := generateHexSecretFrom(random)
 	if err != nil {
 		return TUICCredentials{}, errors.New("TUIC password generation failed")
 	}

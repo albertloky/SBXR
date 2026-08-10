@@ -168,16 +168,24 @@ func NewRealityCredentials(uuid, privateKey, publicKey, short string) (RealityCr
 }
 
 func GenerateRealityCredentials() (RealityCredentials, error) {
-	private, err := ecdh.X25519().GenerateKey(rand.Reader)
+	return generateRealityCredentials(rand.Reader)
+}
+
+func generateRealityCredentials(random io.Reader) (RealityCredentials, error) {
+	privateBytes := make([]byte, 32)
+	if _, err := io.ReadFull(random, privateBytes); err != nil {
+		return RealityCredentials{}, errors.New("REALITY key generation failed")
+	}
+	private, err := ecdh.X25519().NewPrivateKey(privateBytes)
 	if err != nil {
 		return RealityCredentials{}, errors.New("REALITY key generation failed")
 	}
 	uuidBytes := make([]byte, 16)
 	shortBytes := make([]byte, 8)
-	if _, err := io.ReadFull(rand.Reader, uuidBytes); err != nil {
+	if _, err := io.ReadFull(random, uuidBytes); err != nil {
 		return RealityCredentials{}, errors.New("REALITY UUID generation failed")
 	}
-	if _, err := io.ReadFull(rand.Reader, shortBytes); err != nil {
+	if _, err := io.ReadFull(random, shortBytes); err != nil {
 		return RealityCredentials{}, errors.New("REALITY short ID generation failed")
 	}
 	uuidBytes[6] = uuidBytes[6]&0x0f | 0x40

@@ -7,9 +7,49 @@ import (
 	"testing"
 	"time"
 
+	"github.com/albertloky/SBXR/internal/certificatelifecycle"
 	"github.com/albertloky/SBXR/internal/networkpolicy"
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
+
+type freshDNSNetworkAdapter struct{ observed networkpolicy.Observations }
+
+func (adapter freshDNSNetworkAdapter) Observe(networkpolicy.ObservationRequest) (networkpolicy.Observations, error) {
+	return adapter.observed, nil
+}
+
+type freshDNSCertificateAdapter struct{}
+
+func (freshDNSCertificateAdapter) Observe(context.Context) (certificatelifecycle.Observation, error) {
+	return certificatelifecycle.Observation{Issuer: certificatelifecycle.IssuerObservation{Name: "Let's Encrypt", CertbotVersion: "5.4.0", Distribution: "pip-venv", SupportedDistribution: true, RequiredProfile: true, IPAddress: true, Staging: true}, Scheduler: certificatelifecycle.SchedulerObservation{Enabled: true, Persistent: true, Serial: true, ExactUnitPair: true, Randomized: true, NoCompetingScheduler: true, RunsPerDay: 2}}, nil
+}
+
+type freshDNSClock struct{}
+
+func (freshDNSClock) Now() time.Time { return time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC) }
+
+func TestFreshCloudflarePlanSuppliesOnlyTheExactPendingCertificateDNS(t *testing.T) {
+	intent := networkpolicy.Intent{Revision: 1, Baseline: networkpolicy.Clean, PublicIPv4: "192.0.2.10", PrimarySubscriptionAddress: "192.0.2.10", CertificateHostname: "direct.example.com", SSHPort: 2222, SubscriptionPort: 10443, TemporaryHTTP: true, Profiles: networkpolicy.Profiles{VLESSRealityVision: networkpolicy.Profile{Enabled: true, Port: 443}, VLESSXHTTP: networkpolicy.Profile{Enabled: true, Address: "127.0.0.1", Port: 11080}, VLESSWebSocket: networkpolicy.Profile{Enabled: true, Address: "127.0.0.1", Port: 11081}, Hysteria2: networkpolicy.Profile{Enabled: true, Port: 443}, TUIC: networkpolicy.Profile{Enabled: true, Port: 8443}, AnyTLS: networkpolicy.Profile{Enabled: true, Port: 9443}}, Disk: networkpolicy.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}}
+	observed := networkpolicy.Observations{Host: networkpolicy.HostFacts{UbuntuVersion: "24.04.3", UbuntuServer: true, Architecture: "amd64", Systemd: true, LogicalCPUs: 1, PhysicalRAM: 1024 << 20}, PublicIPv4: []string{"192.0.2.10"}, SSH: networkpolicy.SSHFacts{DetectedPort: 2222, ServerAddress: "192.0.2.10", CurrentSessions: []string{"session-1"}}, Firewall: networkpolicy.FirewallFacts{SBXRTableState: "absent", RootVerified: true}, Routes: networkpolicy.RouteFacts{IPv4: "default via 192.0.2.1"}, Outbound: networkpolicy.OutboundFacts{DNS: true, GitHubHTTPS: true, GitHubAttestationHTTPS: true, CloudflareHTTPS: true, ACMEHTTPS: true, CertificateEndpointsHTTPS: true, TimeService: true, TunnelTCP7844: true, TunnelUDP7844: true}, Disk: networkpolicy.DiskFacts{FilesystemBytes: 20 << 30, AvailableBytes: 3 << 30}, Time: networkpolicy.TimeFacts{Synchronized: true, Owner: "systemd-timesyncd"}, OwnerFacts: networkpolicy.OwnerFacts{DNS: "fresh", Tunnel: "fresh"}, Certificate: networkpolicy.CertificateFacts{DNS: networkpolicy.DNSFacts{Hostname: intent.CertificateHostname}, CAA: networkpolicy.CAAFacts{Issuer: "letsencrypt.org", HTTP01Allowed: true}}, Checksums: map[string]string{"sshd_config": "sha256:ssh", "nftables": "sha256:nft"}}
+	network := networkpolicy.New(freshDNSNetworkAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PreApproval})
+	cloudflare := &Plan{identity: "fresh-cloudflare-plan", sha256: strings.Repeat("a", 64), request: PlanRequest{Authority: ViewRequest{ZoneName: "example.com"}, ChangeSet: "fresh-cloudflare", DesiredStateSHA256: strings.Repeat("b", 64), TunnelName: "sbxr-main", XHTTPHostname: "xhttp.example.com", WebSocketHostname: "ws.example.com", DirectHostname: intent.CertificateHostname, PublicIPv4: intent.PublicIPv4, CloudflaredVersion: qualifiedCloudflaredVersion}}
+	authority := certificatelifecycle.NewFreshDNSAuthority(network, cloudflare)
+	http01, ok := network.HTTP01Contribution()
+	if !ok {
+		t.Fatal("pending DNS Network Policy omitted HTTP-01 authority")
+	}
+	module := certificatelifecycle.New(freshDNSCertificateAdapter{}, freshDNSClock{})
+	result := module.Plan(t.Context(), certificatelifecycle.PlanRequest{View: certificatelifecycle.ViewRequest{SelectedIP: intent.PrimarySubscriptionAddress, DirectHostname: intent.CertificateHostname, QualifiedAddresses: []string{intent.PublicIPv4}, HTTP01: certificatelifecycle.HTTP01Prerequisites{AddressQualified: true, RouteReachable: true, Port80Available: true, TimeSynchronized: true, FirewallOwned: true}}, Lineage: certificatelifecycle.IPLineage, ChangeSet: "fresh-certificate-ip", StartingRevision: 1, DesiredStateSHA256: strings.Repeat("b", 64), HTTP01: http01, OwnerEmail: "owner@example.com", SubscriberAgreementReviewed: true, FreshInstallation: systemchanges.NewFreshInstallationAuthority(network.FreshInstallationProof()), FreshDNS: authority})
+	if result.Plan == nil || result.Health.Outcome != certificatelifecycle.Healthy {
+		t.Fatalf("fresh certificate Plan = %+v", result)
+	}
+
+	cloudflare.request.DirectHostname = "other.example.com"
+	stale := certificatelifecycle.NewFreshDNSAuthority(network, cloudflare)
+	if rendered := fmt.Sprintf("%+v", stale); !strings.Contains(rendered, "redacted") {
+		t.Fatalf("stale fresh DNS authority rendered unexpectedly: %s", rendered)
+	}
+}
 
 const (
 	testAccountID = "11111111111111111111111111111111"

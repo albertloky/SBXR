@@ -22,6 +22,7 @@ import (
 	"github.com/albertloky/SBXR/internal/state"
 	"github.com/albertloky/SBXR/internal/subscriptionpublication"
 	"github.com/albertloky/SBXR/internal/subscriptionserving"
+	"github.com/albertloky/SBXR/internal/systemchanges"
 )
 
 func TestInstallApplyHandoffIsOneBoundedStrictRequestAndOneUseApproval(t *testing.T) {
@@ -35,12 +36,12 @@ func TestInstallApplyHandoffIsOneBoundedStrictRequestAndOneUseApproval(t *testin
 	prepared, applied := false, false
 	done := make(chan error, 1)
 	go func() {
-		done <- serveInstallApply(t.Context(), child, executable, func(*os.File, *os.File) error { return nil }, func(_ context.Context, got InstallHandoffRequest) (func() error, error) {
+		done <- serveInstallApply(t.Context(), child, executable, func(*os.File, *os.File) error { return nil }, func(_ context.Context, got InstallHandoffRequest) (func() InstallApplyOutcome, error) {
 			if !reflect.DeepEqual(got, request) {
 				return nil, errors.New("request changed")
 			}
 			prepared = true
-			return func() error { applied = true; return nil }, nil
+			return func() InstallApplyOutcome { applied = true; return InstallCompleted }, nil
 		})
 	}()
 	if err := writeInstallHandoffRequest(parent, request); err != nil {
@@ -53,11 +54,14 @@ func TestInstallApplyHandoffIsOneBoundedStrictRequestAndOneUseApproval(t *testin
 	if !prepared || applied {
 		t.Fatalf("prepared=%v applied=%v before final approval", prepared, applied)
 	}
-	if _, err := parent.Write([]byte(installApply)); err != nil {
+	if _, err := parent.Write([]byte(installApply + installDone)); err != nil {
 		t.Fatal(err)
 	}
 	if err := syscall.Shutdown(int(parent.Fd()), syscall.SHUT_WR); err != nil {
 		t.Fatal(err)
+	}
+	if terminal, err := reader.ReadString('\n'); err != nil || terminal != installCompleted {
+		t.Fatalf("terminal = %q, %v", terminal, err)
 	}
 	if err := <-done; err != nil || !applied {
 		t.Fatalf("serveInstallApply() = %v, applied=%v", err, applied)
@@ -89,8 +93,8 @@ func TestInstallApplyHandoffRefusesMalformedOversizeEOFAndParentDeath(t *testing
 	executable := reviewedInstallExecutable(t, &request)
 	done := make(chan error, 1)
 	go func() {
-		done <- serveInstallApply(t.Context(), child, executable, func(*os.File, *os.File) error { return nil }, func(context.Context, InstallHandoffRequest) (func() error, error) {
-			return func() error { t.Error("Apply ran after parent death"); return nil }, nil
+		done <- serveInstallApply(t.Context(), child, executable, func(*os.File, *os.File) error { return nil }, func(context.Context, InstallHandoffRequest) (func() InstallApplyOutcome, error) {
+			return func() InstallApplyOutcome { t.Error("Apply ran after parent death"); return InstallRecoveryRequired }, nil
 		})
 	}()
 	if err := writeInstallHandoffRequest(parent, request); err != nil {
@@ -111,8 +115,8 @@ func TestInstallApplyHandoffRefusesMalformedOversizeEOFAndParentDeath(t *testing
 	executable = reviewedInstallExecutable(t, &request)
 	done = make(chan error, 1)
 	go func() {
-		done <- serveInstallApply(t.Context(), child, executable, func(*os.File, *os.File) error { return nil }, func(context.Context, InstallHandoffRequest) (func() error, error) {
-			return func() error { t.Error("Apply ran after replay"); return nil }, nil
+		done <- serveInstallApply(t.Context(), child, executable, func(*os.File, *os.File) error { return nil }, func(context.Context, InstallHandoffRequest) (func() InstallApplyOutcome, error) {
+			return func() InstallApplyOutcome { t.Error("Apply ran after replay"); return InstallRecoveryRequired }, nil
 		})
 	}()
 	if err := writeInstallHandoffRequest(parent, request); err != nil {
@@ -133,6 +137,74 @@ func TestInstallApplyHandoffRefusesMalformedOversizeEOFAndParentDeath(t *testing
 	parent.Close()
 	child.Close()
 	executable.Close()
+}
+
+func TestInstallApplyCancellationReachesTheActivePreparedApply(t *testing.T) {
+	parent, child := socketPair(t)
+	defer parent.Close()
+	defer child.Close()
+	request := installHandoffFixture()
+	executable := reviewedInstallExecutable(t, &request)
+	defer executable.Close()
+	done := make(chan error, 1)
+	go func() {
+		done <- serveInstallApply(t.Context(), child, executable, func(*os.File, *os.File) error { return nil }, func(ctx context.Context, _ InstallHandoffRequest) (func() InstallApplyOutcome, error) {
+			return func() InstallApplyOutcome {
+				<-ctx.Done()
+				return InstallRolledBack
+			}, nil
+		})
+	}()
+	if err := writeInstallHandoffRequest(parent, request); err != nil {
+		t.Fatal(err)
+	}
+	if ready, err := bufio.NewReader(parent).ReadString('\n'); err != nil || ready != installReady {
+		t.Fatalf("ready = %q, %v", ready, err)
+	}
+	if _, err := parent.Write([]byte(installApply + installKeep + installCancel)); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Shutdown(int(parent.Fd()), syscall.SHUT_WR); err != nil {
+		t.Fatal(err)
+	}
+	if terminal, err := bufio.NewReader(parent).ReadString('\n'); err != nil || terminal != installRolledBack {
+		t.Fatalf("cancellation terminal = %q, %v", terminal, err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInstallApplyReportsRecoveryRequiredAsAnExactSecretSafeTerminal(t *testing.T) {
+	parent, child := socketPair(t)
+	defer parent.Close()
+	defer child.Close()
+	request := installHandoffFixture()
+	executable := reviewedInstallExecutable(t, &request)
+	defer executable.Close()
+	done := make(chan error, 1)
+	go func() {
+		done <- serveInstallApply(t.Context(), child, executable, func(*os.File, *os.File) error { return nil }, func(context.Context, InstallHandoffRequest) (func() InstallApplyOutcome, error) {
+			return func() InstallApplyOutcome { return InstallRecoveryRequired }, nil
+		})
+	}()
+	if err := writeInstallHandoffRequest(parent, request); err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(parent)
+	if ready, err := reader.ReadString('\n'); err != nil || ready != installReady {
+		t.Fatalf("ready = %q, %v", ready, err)
+	}
+	if _, err := parent.Write([]byte(installApply + installDone)); err != nil {
+		t.Fatal(err)
+	}
+	_ = syscall.Shutdown(int(parent.Fd()), syscall.SHUT_WR)
+	if terminal, err := reader.ReadString('\n'); err != nil || terminal != installRecovery {
+		t.Fatalf("recovery terminal = %q, %v", terminal, err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestInstallApplyUsesOnlyTheApprovedSudoCommandAndInheritedDescriptors(t *testing.T) {
@@ -214,7 +286,7 @@ func installHandoffMetadata(t *testing.T, identity softwarelifecycle.EmbeddedBui
 		t.Fatal(err)
 	}
 	artifacts["cloudflared.yml"] = cloudflaretunnel.QualificationConfiguration()
-	units := []map[string]string{{"cloudflared.service": cloudflaretunnel.CloudflaredServiceUnit()}, {"sbxr-subscription.service": subscriptionserving.ServiceUnit()}, connectionprofiles.SystemdUnits(), softwarelifecycle.SystemdUnits()}
+	units := []map[string]string{{"cloudflared.service": cloudflaretunnel.CloudflaredServiceUnit()}, {"sbxr-subscription.service": subscriptionserving.ServiceUnit()}, connectionprofiles.SystemdUnits(), softwarelifecycle.SystemdUnits(), systemchanges.SystemdUnits()}
 	for _, read := range []func() (map[string]string, error){certificatelifecycle.SystemdUnits, healthdiagnostics.SystemdUnits} {
 		set, err := read()
 		if err != nil {
@@ -249,6 +321,7 @@ func installHandoffFixture() InstallHandoffRequest {
 		Schema: 1, Session: strings.Repeat("a", 64), Tag: "v1.0.0", Architecture: softwarelifecycle.AMD64,
 		Draft:               softwarelifecycle.InstallationDraft{Domain: "example.com", OwnerEmail: "owner@example.com", PublicIPv4: "192.0.2.10", PrimaryAddress: "192.0.2.10", SSHPort: 22, RealityPort: 443, Hysteria2Port: 443, TUICPort: 8443, AnyTLSPort: 9443, SubscriptionPort: 10443},
 		CloudflareAccountID: strings.Repeat("b", 32), CloudflareZoneID: strings.Repeat("c", 32), CloudflareToken: "cfat_" + strings.Repeat("d", 40),
+		Entropy:       bytes.Repeat([]byte{0x42}, 32),
 		RealityTarget: "www.example.net:443", RealityServerName: "www.example.net", ReviewedPlanSHA256: strings.Repeat("e", 64),
 		Candidate: softwarelifecycle.InstallCandidateHandoff{Verified: verified, Staged: staged, ApplicationAsset: applicationAsset, ComponentAsset: componentAsset, ApplicationArchive: application, ComponentArchive: components},
 	}

@@ -138,7 +138,7 @@ func RenderManagedUnits(metadata PayloadMetadata, identity ReleaseIdentity) (map
 }
 
 func ManagedUnitNames() []string {
-	return []string{"cloudflared.service", "sbxr-cert-renew.service", "sbxr-cert-renew.timer", "sbxr-health-check.service", "sbxr-health-check.timer", "sbxr-subscription.service", "sbxr-update-check.service", "sbxr-update-check.timer", "sing-box.service", "xray.service"}
+	return []string{"cloudflared.service", "sbxr-cert-renew.service", "sbxr-cert-renew.timer", "sbxr-health-check.service", "sbxr-health-check.timer", "sbxr-recovery.service", "sbxr-subscription.service", "sbxr-update-check.service", "sbxr-update-check.timer", "sing-box.service", "xray.service"}
 }
 
 func QualificationArtifactNames() []string {
@@ -298,7 +298,7 @@ var managedServiceCommands = map[string]string{
 	"cloudflared.service":       releaseDirectoryToken + "/cloudflared tunnel --no-autoupdate run --token-file /etc/sbxr/cloudflared/token",
 	"sbxr-cert-renew.service":   "/usr/local/bin/sbxr private certificate-renewal",
 	"sbxr-health-check.service": "/usr/local/bin/sbxr private health-check",
-	"sbxr-subscription.service": "/usr/local/bin/sbxr __subscription-serve",
+	"sbxr-subscription.service": "/usr/local/bin/sbxr private subscription-serve",
 	"sbxr-update-check.service": "/usr/local/bin/sbxr private update-check",
 	"sing-box.service":          releaseDirectoryToken + "/sing-box run -c /etc/sbxr/sing-box/config.json",
 	"xray.service":              releaseDirectoryToken + "/xray run -config /etc/sbxr/xray/config.json",

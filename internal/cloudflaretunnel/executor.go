@@ -112,6 +112,13 @@ func NewRunTokenRotationExecutor(api MutationAPI, token ManagementToken) (Execut
 	return Executor{api: api, token: token, serviceIdentity: cloudflaredIdentity, command: runCommand}, nil
 }
 
+func NewRecoveryExecutor(api MutationAPI) (Executor, error) {
+	if api == nil {
+		return Executor{}, errors.New("Cloudflare recovery executor unavailable")
+	}
+	return Executor{api: api, command: runCommand, clock: SystemClock{}}, nil
+}
+
 func (TunnelTokenResult) String() string   { return "Cloudflare Tunnel run token: redacted" }
 func (TunnelTokenResult) GoString() string { return "Cloudflare Tunnel run token: redacted" }
 func (result TunnelTokenResult) ChangedFrom(sha256 string) bool {

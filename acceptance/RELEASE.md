@@ -19,3 +19,26 @@ System Changes and the controlled Adapter checks now exist, but until the comple
 Through the complete `sbxr` executable, verify every mutation enters one `Apply` path, holds one installation-wide kernel lock, durably prepares and resolves one Change Set, publishes Desired State only at its declared checkpoint, rolls back ordinary unfinished work, resumes only irreversible Complete removal, and leaves no transaction-scoped rollback material after durable `Complete`.
 
 SC-01 through SC-09 now exist at Module level, but until the complete executable exercises them with all owning Modules, record `Pending — integrated release`. Module and controlled Adapter checks in `internal/systemchanges/ACCEPTANCE.md` cannot satisfy this row.
+
+## `RELEASE-INSTALL-REVISION-1` — Integrated Verification — Codex
+
+This procedure has no result in this file. Record results only against one exact Release Identity in its redacted Acceptance Record.
+
+1. Build the exact release executable and start the default `sbxr` Owner Console on a proven Clean VPS. Enter only the reviewed release tag, installation draft, scoped Cloudflare account/zone token, and REALITY target. Confirm the Console shows one revision-1 Plan and no Client Access Value or Infrastructure Secret.
+2. Apply through the ordinary command `/usr/bin/sudo --preserve-fds=3 -- /proc/self/fd/3 private install-apply`. Require the root child to rebuild the exact candidate and generated installation inputs, prepare before `READY`, accept one `APPLY`, and reject replay, malformed input, changed executable/candidate, parent death, or changed Plan.
+3. Require `NETWORK-CERTIFICATE-DNS-PENDING` only when Direct DNS is absent on the Clean VPS and effective CAA already permits `letsencrypt.org` HTTP-01. Require the reviewed Cloudflare Plan to create and verify the exact Direct A/AAAA records before either production certificate order. Any conflicting or changed DNS must stop and roll back.
+4. Require exactly one Desired State publication from `Not installed` to revision `1` `Managed`, finalized Cloudflare Tunnel/DNS IDs and run token, both certificate lineages, six profiles, all subscription representations, HTTPS Serving, four public services, three timers, exact ownership/modes, required health gates, and durable post-publication agreement.
+5. Inject one failure before publication and one after publication. Request cancellation while a step is active. Kill the worker once during forward work and once during rollback, then restart the exact executable. Each reversible case must restore proven `Not installed`; an unprovable retry must report `Recovery Required`. After `Complete`, require the transaction directory and rollback material to be absent and require restart to keep revision 1 without republishing.
+6. Run the focused automated evidence:
+
+   ```sh
+   go test ./internal/softwarelifecycle/adapter/ubuntu -run '^(TestInstallApplyHandoffIsOneBoundedStrictRequestAndOneUseApproval|TestInstallApplyHandoffRefusesMalformedOversizeEOFAndParentDeath|TestInstallApplyCancellationReachesTheActivePreparedApply|TestInstallApplyReportsRecoveryRequiredAsAnExactSecretSafeTerminal|TestInstallExecutableMustMatchTheReviewedCandidate|TestInstallerCreatesAndRollsBackOnlyItsFreshServiceIdentities)$' -count=1
+   go test ./internal/systemchanges -run '^TestRecoveryUnitRunsThePrivateRollbackBeforeManagedServices$' -count=1
+   go test ./internal/state -run '^(TestSoftwareLifecycleInstallPublishesRevisionOneOnlyAfterCompleteAgreement|TestDeferredCloudflareFinalizationPublishesProviderValuesInRevisionOne|TestExplicitCancellationWaitsForSafeCheckpointThenRollsBack|TestPostPublicationFailureRestoresPriorDesiredState|TestPublicationFailureBeforeOrAfterReplacementRestoresPriorDesiredState|TestFailedInstallationRestoresProvenNotInstalledBaseline|TestFreshSystemChangesInstanceResumesInterruptedRollbackFromDurableEvidence|TestRollbackCanSurviveASecondProcessDeath|TestRestartAfterCompleteCleansUpWithoutRollback)$' -count=1
+   go test ./internal/networkpolicy ./internal/certificatelifecycle ./internal/cloudflaretunnel ./internal/connectionprofiles/... ./internal/subscriptionpublication ./internal/subscriptionserving ./internal/systemchanges/... ./internal/softwarelifecycle/... ./internal/state ./cmd/sbxr -count=1
+   go test ./... -count=1
+   ```
+
+7. Scan the built executable test transcript, transaction journal, prepared manifests, State refusal/result rendering, Owner Console transcript, and redacted Acceptance Record for every generated test Client Access Value, Infrastructure Secret, Cloudflare run token, installation entropy seed, private key, complete subscription URL, and injected external-error marker. Any match outside its owning protected State/service artifact fails `RELEASE-INSTALL-SECRET-SCAN`.
+
+Stable evidence codes for this procedure are `RELEASE-INSTALL-REVISION-1`, `RELEASE-INSTALL-STALE-PLAN`, `RELEASE-INSTALL-PRE-PUBLICATION-ROLLBACK`, `RELEASE-INSTALL-POST-PUBLICATION-ROLLBACK`, `RELEASE-INSTALL-CANCELLATION`, `RELEASE-INSTALL-RESTART`, `RELEASE-INSTALL-CLEANUP`, and `RELEASE-INSTALL-SECRET-SCAN`.

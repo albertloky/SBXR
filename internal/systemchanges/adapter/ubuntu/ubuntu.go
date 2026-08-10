@@ -25,6 +25,8 @@ type Adapter struct {
 	subscription SubscriptionPublicationExecutor
 	software     SoftwareLifecycleExecutor
 	state        systemchanges.StateRecovery
+	fresh        *systemchanges.FreshInstallationAuthority
+	freshLock    bool
 }
 
 // ObservationSource reloads coordinated State lineage and volatile bindings.
@@ -37,6 +39,15 @@ func New(source ObservationSource, host Host, state ...systemchanges.StateRecove
 // NewAt provides the production lock and host-fact seam under a controlled root.
 func NewAt(root string, source ObservationSource, host Host, state ...systemchanges.StateRecovery) Adapter {
 	return Adapter{root: root, uid: os.Geteuid(), source: source, host: host, state: firstStateRecovery(state)}
+}
+
+// NewAtForFreshInstallation permits only the exact reviewed Clean VPS proof
+// to bootstrap the installation lock after Apply starts.
+func NewAtForFreshInstallation(root string, source ObservationSource, host Host, authority systemchanges.FreshInstallationAuthority, state ...systemchanges.StateRecovery) Adapter {
+	adapter := NewAt(root, source, host, state...)
+	adapter.fresh = &authority
+	adapter.freshLock = true
+	return adapter
 }
 
 func NewAtWithFirewall(root string, source ObservationSource, host Host, firewall FirewallExecutor, state ...systemchanges.StateRecovery) Adapter {
@@ -75,6 +86,23 @@ func NewAtWithSoftwareLifecycle(root string, source ObservationSource, host Host
 	return adapter
 }
 
+// NewAtForInstall wires the complete fixed executor set for the revision-1
+// installation transaction.
+func NewAtForInstall(root string, source ObservationSource, host Host, authority systemchanges.FreshInstallationAuthority, firewall FirewallExecutor, cloudflare CloudflareExecutor, certificate CertificateExecutor, profiles ConnectionProfilesExecutor, subscription SubscriptionPublicationExecutor, software SoftwareLifecycleExecutor, state systemchanges.StateRecovery) Adapter {
+	adapter := NewAtForFreshInstallation(root, source, host, authority, state)
+	adapter.firewall, adapter.cloudflare, adapter.certificate = firewall, cloudflare, certificate
+	adapter.profiles, adapter.subscription, adapter.software = profiles, subscription, software
+	return adapter
+}
+
+func NewAtForInstallRecovery(root string, source ObservationSource, host Host, firewall FirewallExecutor, cloudflare CloudflareExecutor, certificate CertificateExecutor, profiles ConnectionProfilesExecutor, subscription SubscriptionPublicationExecutor, software SoftwareLifecycleExecutor, state systemchanges.StateRecovery) Adapter {
+	adapter := NewAt(root, source, host, state)
+	adapter.freshLock = true
+	adapter.firewall, adapter.cloudflare, adapter.certificate = firewall, cloudflare, certificate
+	adapter.profiles, adapter.subscription, adapter.software = profiles, subscription, software
+	return adapter
+}
+
 func firstStateRecovery(states []systemchanges.StateRecovery) systemchanges.StateRecovery {
 	if len(states) == 1 {
 		return states[0]
@@ -107,6 +135,11 @@ func (a Adapter) Observe() (systemchanges.Observation, error) {
 
 func (a Adapter) TryLock() (systemchanges.Lock, bool, error) {
 	file, err := a.openLock()
+	created := false
+	if errors.Is(err, fs.ErrNotExist) && a.fresh != nil && a.fresh.SystemChangesFreshInstallation() {
+		file, err = a.createFreshLock()
+		created = err == nil
+	}
 	if err != nil {
 		return nil, false, err
 	}
@@ -117,11 +150,14 @@ func (a Adapter) TryLock() (systemchanges.Lock, bool, error) {
 		}
 		return nil, false, err
 	}
-	return &kernelLock{file: file}, true, nil
+	return &kernelLock{file: file, cleanup: a.freshLockCleanup(created)}, true, nil
 }
 
 func (a Adapter) inspectLock() (systemchanges.LockState, error) {
 	file, err := a.openLock()
+	if errors.Is(err, fs.ErrNotExist) && a.fresh != nil {
+		return systemchanges.LockReleased, nil
+	}
 	if err != nil {
 		return systemchanges.LockReleased, err
 	}
@@ -136,6 +172,47 @@ func (a Adapter) inspectLock() (systemchanges.LockState, error) {
 		return systemchanges.LockReleased, err
 	}
 	return systemchanges.LockReleased, nil
+}
+
+func (a Adapter) createFreshLock() (*os.File, error) {
+	directoryPath := filepath.Join(a.root, filepath.FromSlash(lockDirectory))
+	if err := os.Mkdir(directoryPath, 0o700); err != nil {
+		return nil, err
+	}
+	path := filepath.Join(directoryPath, "system-changes.lock")
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		_ = os.Remove(directoryPath)
+		return nil, err
+	}
+	if closeErr := file.Close(); closeErr != nil {
+		_ = os.Remove(path)
+		_ = os.Remove(directoryPath)
+		return nil, closeErr
+	}
+	file, err = a.openLock()
+	if err != nil {
+		_ = os.Remove(path)
+		_ = os.Remove(directoryPath)
+	}
+	return file, err
+}
+
+func (a Adapter) freshLockCleanup(created bool) func() error {
+	if !created && !a.freshLock {
+		return nil
+	}
+	return func() error {
+		observed, err := a.source()
+		if err != nil || observed.Status != systemchanges.NotInstalled {
+			return err
+		}
+		path := filepath.Join(a.root, filepath.FromSlash(lockDirectory), "system-changes.lock")
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		return os.Remove(filepath.Dir(path))
+	}
 }
 
 func (a Adapter) openLock() (*os.File, error) {
@@ -182,7 +259,10 @@ func exactMode(actual, wanted os.FileMode) bool {
 	return actual.Perm() == wanted && actual&special == 0
 }
 
-type kernelLock struct{ file *os.File }
+type kernelLock struct {
+	file    *os.File
+	cleanup func() error
+}
 
 func (lock *kernelLock) Close() error {
 	if lock == nil || lock.file == nil {
@@ -194,5 +274,11 @@ func (lock *kernelLock) Close() error {
 	if err != nil {
 		return err
 	}
-	return closeErr
+	if closeErr != nil {
+		return closeErr
+	}
+	if lock.cleanup != nil {
+		return lock.cleanup()
+	}
+	return nil
 }

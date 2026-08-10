@@ -25,6 +25,7 @@ import (
 	"github.com/albertloky/SBXR/internal/state"
 	"github.com/albertloky/SBXR/internal/subscriptionpublication"
 	"github.com/albertloky/SBXR/internal/subscriptionserving"
+	"github.com/albertloky/SBXR/internal/systemchanges"
 )
 
 type payloadValidator interface {
@@ -242,7 +243,7 @@ func releaseMetadata(identity softwarelifecycle.EmbeddedBuildIdentity, architect
 	if err != nil {
 		return softwarelifecycle.PayloadMetadata{}, err
 	}
-	unitSets := []map[string]string{{"cloudflared.service": cloudflaretunnel.CloudflaredServiceUnit()}, {"sbxr-subscription.service": subscriptionserving.ServiceUnit()}, connectionprofiles.SystemdUnits(), softwarelifecycle.SystemdUnits()}
+	unitSets := []map[string]string{{"cloudflared.service": cloudflaretunnel.CloudflaredServiceUnit()}, {"sbxr-subscription.service": subscriptionserving.ServiceUnit()}, connectionprofiles.SystemdUnits(), softwarelifecycle.SystemdUnits(), systemchanges.SystemdUnits()}
 	for _, read := range []func() (map[string]string, error){certificatelifecycle.SystemdUnits, healthdiagnostics.SystemdUnits} {
 		set, err := read()
 		if err != nil {

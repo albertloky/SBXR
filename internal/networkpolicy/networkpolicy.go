@@ -345,6 +345,68 @@ type Result struct {
 	CloudflareTunnelPath  CloudflareTunnelPath
 	portCorrection        *portCorrectionCell
 	portCorrectionBinding Binding
+	freshInstallation     *freshInstallationProofCell
+	freshDNSHostname      string
+}
+
+// FreshInstallationProof is a one-use, non-renderable Clean VPS proof for
+// System Changes. It re-runs the exact Network Policy request when consumed.
+type FreshInstallationProof struct{ cell *freshInstallationProofCell }
+
+type freshInstallationProofCell struct {
+	evaluate func() Result
+	digest   string
+	used     atomic.Bool
+}
+
+func (FreshInstallationProof) String() string   { return "Network Policy Clean VPS proof: redacted" }
+func (FreshInstallationProof) GoString() string { return "Network Policy Clean VPS proof: redacted" }
+func (FreshInstallationProof) MarshalJSON() ([]byte, error) {
+	return nil, fmt.Errorf("Network Policy Clean VPS proof cannot be rendered")
+}
+
+func (result Result) FreshInstallationProof() FreshInstallationProof {
+	if result.freshInstallation == nil {
+		return FreshInstallationProof{}
+	}
+	return FreshInstallationProof{cell: &freshInstallationProofCell{evaluate: result.freshInstallation.evaluate, digest: result.freshInstallation.digest}}
+}
+
+// CertificateLifecycleFreshDNSPrerequisites exposes only the exact Clean VPS
+// hostname, addresses, and already-approved CAA method awaiting Cloudflare.
+func (result Result) CertificateLifecycleFreshDNSPrerequisites() (string, []string, bool) {
+	if result.freshDNSHostname == "" || !cleanVPSAuthorityEligible(result) {
+		return "", nil, false
+	}
+	addresses := make([]string, 0, 2)
+	if result.Policy.PublicIPv4 != "" {
+		addresses = append(addresses, result.Policy.PublicIPv4)
+	}
+	if result.Policy.PublicIPv6 != "" {
+		addresses = append(addresses, result.Policy.PublicIPv6)
+	}
+	return result.freshDNSHostname, addresses, len(addresses) > 0
+}
+
+func (result Result) MatchesDesiredState(sshPort uint16, publicIPv4, publicIPv6, primaryAddress string) bool {
+	if result.Binding.Digest == "" || result.Outcome == Failed {
+		return false
+	}
+	var observedSSH uint16
+	for _, exposure := range result.Policy.Exposures {
+		if exposure.Purpose == "SSH preservation" && exposure.Protocol == TCP {
+			observedSSH = exposure.Port
+		}
+	}
+	return observedSSH == sshPort && result.Policy.PublicIPv4 == publicIPv4 && result.Policy.PublicIPv6 == publicIPv6 && result.Policy.PrimaryAddress == primaryAddress
+}
+
+func (proof FreshInstallationProof) SystemChangesFreshInstallation() bool {
+	if proof.cell == nil || proof.cell.evaluate == nil || !proof.cell.used.CompareAndSwap(false, true) {
+		return false
+	}
+	result := proof.cell.evaluate()
+	return cleanVPSAuthorityEligible(result) && result.Binding.Digest == proof.cell.digest
 }
 
 type PortCorrectionAuthority struct{ cell *portCorrectionCell }
@@ -730,7 +792,7 @@ func (i Interface) Evaluate(request Request) Result {
 	evaluateOutbound(&result, observed.Outbound)
 	evaluateReachability(&result, request, observed)
 	result.Binding = bind(request, observed, result.Policy)
-	result.Binding.approved = result.Outcome == Healthy
+	result.Binding.approved = result.Outcome == Healthy || cleanVPSAuthorityEligible(result)
 	if result.portCorrection != nil && len(result.Findings) == 1 && result.Findings[0].Code == "NETWORK-MANAGED-DRIFT" {
 		candidate := result.Policy
 		for index := range candidate.Exposures {
@@ -758,7 +820,23 @@ func (i Interface) Evaluate(request Request) Result {
 		{Code: "NETWORK-POLICY-ACTIVE", Required: "only the approved SBXR nftables table and exposure are active"},
 		{Code: "NETWORK-SSH-RESPONSIVE", Required: "the current SSH session remains responsive before watchdog cancellation"},
 	}
+	if cleanVPSAuthorityEligible(result) {
+		result.freshInstallation = &freshInstallationProofCell{evaluate: func() Result { return i.Evaluate(request) }, digest: result.Binding.Digest}
+	}
 	return result
+}
+
+func cleanVPSAuthorityEligible(result Result) bool {
+	if result.Baseline != Clean || result.Binding.Digest == "" || result.Outcome == Failed {
+		return false
+	}
+	for _, finding := range result.Findings {
+		if finding.Classification == Advisory && finding.Outcome == NeedsAttention || finding.Code == "NETWORK-PRIVILEGED-PENDING" && finding.Outcome == Unknown {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func applyManagedProof(proof ManagedProof, observed *Observations) {
@@ -1273,6 +1351,13 @@ func evaluateCertificate(result *Result, intent Intent, facts CertificateFacts) 
 		return
 	}
 	result.Certificate = CertificatePolicy{HTTP01ForIPAndDomain: true, IgnoredChallengeRecords: len(facts.DNS.ChallengeRecords)}
+	if intent.Baseline == Clean && facts.DNS.Hostname == intent.CertificateHostname && len(facts.DNS.IPv4) == 0 && len(facts.DNS.IPv6) == 0 && facts.CAA.Issuer == "letsencrypt.org" && facts.CAA.HTTP01Allowed {
+		if result.Policy.PrimaryAddress != "" {
+			result.freshDNSHostname = intent.CertificateHostname
+			result.add(advisory("NETWORK-CERTIFICATE-DNS-PENDING", "Direct TLS DNS will be created by the reviewed Cloudflare install", "no existing Direct TLS DNS record", fmt.Sprintf("the Cloudflare Plan creates %s on only the qualified selected addresses", safeFact(intent.CertificateHostname)), "a Clean VPS has no SBXR-owned DNS to observe before the first Change Set", ownerFix("Continue only with the exact reviewed Cloudflare Plan or go Back.")))
+		}
+		return
+	}
 	ipv4Matches := result.Policy.PublicIPv4 == "" && len(facts.DNS.IPv4) == 0 || result.Policy.PublicIPv4 != "" && len(facts.DNS.IPv4) == 1 && facts.DNS.IPv4[0] == result.Policy.PublicIPv4
 	ipv6Matches := result.Policy.PublicIPv6 == "" && len(facts.DNS.IPv6) == 0 || result.Policy.PublicIPv6 != "" && len(facts.DNS.IPv6) == 1 && facts.DNS.IPv6[0] == result.Policy.PublicIPv6
 	if facts.DNS.Hostname != intent.CertificateHostname || !ipv4Matches || !ipv6Matches {

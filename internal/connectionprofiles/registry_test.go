@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -15,6 +17,20 @@ import (
 	"github.com/albertloky/SBXR/internal/state"
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
+
+func TestRegistryCredentialsCanBeRebuiltFromTheSameProtectedEntropy(t *testing.T) {
+	first, err := connectionprofiles.GenerateRegistryCredentialsFrom(rand.New(rand.NewSource(144)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := connectionprofiles.GenerateRegistryCredentialsFrom(rand.New(rand.NewSource(144)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(first, second) || !first.Ready() || !first.Independent() {
+		t.Fatal("same protected entropy did not rebuild the same six independent credentials")
+	}
+}
 
 func TestRegistryViewContainsExactlySixFreshEnabledIndependentProfiles(t *testing.T) {
 	request := validRegistryRequest(t)
@@ -56,6 +72,40 @@ func TestRegistryViewContainsExactlySixFreshEnabledIndependentProfiles(t *testin
 	}
 	if rendered := fmt.Sprintf("%+v", result); strings.Contains(rendered, uuidMarker) || strings.Contains(rendered, xhttpPathMarker) || strings.Contains(rendered, anyTLSPasswordMarker) {
 		t.Fatalf("registry View leaked protected values: %s", rendered)
+	}
+}
+
+func TestFreshRegistrySuppliesTheExactProtectedDesiredProfiles(t *testing.T) {
+	request := validRegistryRequest(t)
+	credentials, err := connectionprofiles.GenerateRegistryCredentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err = connectionprofiles.NewFreshRegistry(request, credentials)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profiles, ok := connectionprofiles.DesiredProfiles(request)
+	if !ok || !profiles.VLESSRealityVision.Enabled || !profiles.VLESSXHTTP.Enabled || !profiles.VLESSWebSocket.Enabled || !profiles.Hysteria2.Enabled || !profiles.TUIC.Enabled || !profiles.AnyTLS.Enabled {
+		t.Fatalf("DesiredProfiles() = (%+v, %v)", profiles, ok)
+	}
+	if rendered := fmt.Sprintf("%+v", profiles); strings.Contains(rendered, uuidMarker) || strings.Contains(rendered, anyTLSPasswordMarker) {
+		t.Fatalf("protected profiles rendered a credential: %s", rendered)
+	}
+	inputs, err := connectionprofiles.NewFreshRegistryInputs(request)
+	if err != nil || inputs.Profiles() != profiles || !connectionprofiles.PublicationInputsMatch(inputs.PublicationSource(), profiles) {
+		t.Fatalf("NewFreshRegistryInputs() = (%+v, %v)", inputs, err)
+	}
+	if err := inputs.WithClientAccessReader(func(reader state.ClientAccessReader) error {
+		if reader.ReadClientAccessValue(profiles.VLESSRealityVision.UUID) == "" || reader.ReadClientAccessValue(profiles.AnyTLS.Password) == "" {
+			return fmt.Errorf("fresh registry values unavailable")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := inputs.WithClientAccessReader(func(state.ClientAccessReader) error { return nil }); err == nil {
+		t.Fatal("fresh registry render authority was reusable")
 	}
 }
 

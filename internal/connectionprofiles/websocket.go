@@ -2,11 +2,13 @@ package connectionprofiles
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
@@ -26,11 +28,15 @@ func NewWebSocketCredentials(uuid, path string) (WebSocketCredentials, error) {
 }
 
 func GenerateWebSocketCredentials() (WebSocketCredentials, error) {
-	uuid, err := generateUUID()
+	return generateWebSocketCredentials(rand.Reader)
+}
+
+func generateWebSocketCredentials(random io.Reader) (WebSocketCredentials, error) {
+	uuid, err := generateUUIDFrom(random)
 	if err != nil {
 		return WebSocketCredentials{}, errors.New("WebSocket UUID generation failed")
 	}
-	path, err := generateHighEntropyPath()
+	path, err := generateHighEntropyPathFrom(random)
 	if err != nil {
 		return WebSocketCredentials{}, errors.New("WebSocket path generation failed")
 	}

@@ -29,7 +29,7 @@ func TestDirectTLSExecutorValidatesRestartsAndProvesEachConsumer(t *testing.T) {
 	if err := executor.Activate(root, "192.0.2.10", "direct.example.com", time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	if commands[0] != "sing-box check -c "+filepath.Join(root, "etc/sing-box/config.json") || commands[1] != "sing-box check -c "+filepath.Join(root, probeConfiguration) || commands[2] != "systemctl restart sing-box.service" {
+	if commands[0] != "sing-box check -c "+filepath.Join(root, "etc/sbxr/sing-box/config.json") || commands[1] != "sing-box check -c "+filepath.Join(root, probeConfiguration) || commands[2] != "systemctl restart sing-box.service" {
 		t.Fatalf("commands = %#v", commands)
 	}
 	want := []string{"hysteria2 192.0.2.10 direct.example.com", "tuic 192.0.2.10 direct.example.com", "anytls 192.0.2.10 direct.example.com"}

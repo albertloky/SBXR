@@ -50,6 +50,25 @@ func NewAt(uid, gid int, prove func(context.Context, string) error) Executor {
 	return Executor{uid: uid, gid: gid, prove: prove}
 }
 
+func NewForFreshInstallation(prove func(context.Context, string) error) (Executor, error) {
+	if prove == nil {
+		return Executor{}, errors.New("Subscription Serving health proof unavailable")
+	}
+	return Executor{uid: 0, gid: -1, prove: prove}, nil
+}
+
+func (executor Executor) resolved() (Executor, error) {
+	if executor.gid >= 0 {
+		return executor, nil
+	}
+	group, err := user.LookupGroup("sbxr-subscription")
+	if err != nil {
+		return Executor{}, errors.New("sbxr-subscription group unavailable")
+	}
+	executor.gid, err = strconv.Atoi(group.Gid)
+	return executor, err
+}
+
 type snapshot struct {
 	Target string `json:"target,omitempty"`
 }
@@ -81,6 +100,11 @@ func (executor Executor) CaptureRollback(root string, write func(io.Reader) erro
 }
 
 func (executor Executor) Activate(root, prepared string, binding systemchanges.StateTransactionBinding, expectedSHA256 string, timeout time.Duration) (systemchanges.StepEvidence, error) {
+	var resolveErr error
+	executor, resolveErr = executor.resolved()
+	if resolveErr != nil {
+		return systemchanges.StepEvidence{}, resolveErr
+	}
 	if timeout <= 0 {
 		return systemchanges.StepEvidence{}, errors.New("subscription activation timeout is invalid")
 	}
@@ -155,6 +179,11 @@ func readPreparedConfiguration(prepared string, uid int) ([]byte, error) {
 }
 
 func (executor Executor) Reverse(root string, source io.Reader, _ time.Duration) (systemchanges.StepEvidence, error) {
+	var resolveErr error
+	executor, resolveErr = executor.resolved()
+	if resolveErr != nil {
+		return systemchanges.StepEvidence{}, resolveErr
+	}
 	prior, err := decodeSnapshot(source)
 	if err != nil {
 		return systemchanges.StepEvidence{}, err
@@ -224,6 +253,11 @@ func (executor Executor) Reverse(root string, source io.Reader, _ time.Duration)
 }
 
 func (executor Executor) Inspect(root string, source io.Reader, _ time.Duration) (systemchanges.StepEffect, error) {
+	var resolveErr error
+	executor, resolveErr = executor.resolved()
+	if resolveErr != nil {
+		return "", resolveErr
+	}
 	prior, err := decodeSnapshot(source)
 	if err != nil {
 		return "", err
@@ -251,6 +285,11 @@ func (executor Executor) Inspect(root string, source io.Reader, _ time.Duration)
 }
 
 func (executor Executor) Check(root, code string, binding systemchanges.StateTransactionBinding, expectedSHA256 string, timeout time.Duration) (systemchanges.HealthStatus, error) {
+	var resolveErr error
+	executor, resolveErr = executor.resolved()
+	if resolveErr != nil {
+		return systemchanges.Unknown, resolveErr
+	}
 	storage, err := openStore(root, false, executor.uid, executor.gid)
 	if err != nil {
 		return systemchanges.Failed, errors.New("active subscription artifact set is unprovable")
@@ -279,6 +318,11 @@ func (executor Executor) Check(root, code string, binding systemchanges.StateTra
 }
 
 func (executor Executor) Cleanup(root string) error {
+	var resolveErr error
+	executor, resolveErr = executor.resolved()
+	if resolveErr != nil {
+		return resolveErr
+	}
 	storage, err := openStore(root, false, executor.uid, executor.gid)
 	if err != nil {
 		return err

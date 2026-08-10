@@ -213,7 +213,7 @@ func TestServeSupportsTheSelectedIPv6Family(t *testing.T) {
 func TestServiceUnitHasOnlyReadOnlySubscriptionAuthority(t *testing.T) {
 	unit := ServiceUnit()
 	for _, required := range []string{
-		"User=sbxr-subscription", "Group=sbxr-subscription", "ExecStart=/usr/local/bin/sbxr __subscription-serve",
+		"User=sbxr-subscription", "Group=sbxr-subscription", "ExecStart=/usr/local/bin/sbxr private subscription-serve",
 		"StandardOutput=null", "StandardError=null",
 		"ProtectSystem=strict", "NoNewPrivileges=true", "PrivateTmp=true", "ProtectHome=true",
 		"TemporaryFileSystem=/:ro", "BindReadOnlyPaths=/usr/local/bin/sbxr",

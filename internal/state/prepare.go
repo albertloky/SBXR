@@ -242,6 +242,12 @@ type ServiceMaterials struct {
 	Subscription SubscriptionServiceMaterial `json:"-"`
 }
 
+// ServiceMaterialsFor derives the exact typed service inputs State expects
+// from one complete Desired State candidate.
+func ServiceMaterialsFor(candidate DesiredState) ServiceMaterials {
+	return expectedServiceMaterials(candidate)
+}
+
 // PlanIdentity names one reviewed, one-use owning-Module Plan.
 type PlanIdentity string
 

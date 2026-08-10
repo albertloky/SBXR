@@ -193,6 +193,25 @@ func (plan *Plan) Checks() []systemchanges.Check {
 	return append([]systemchanges.Check(nil), plan.checks...)
 }
 
+// CertificateLifecycleFreshDNSPlan exposes only the exact Direct DNS records
+// contained in a reviewed fresh-install Plan.
+func (plan *Plan) CertificateLifecycleFreshDNSPlan() (hostname, ipv4, ipv6, desiredStateSHA256 string, valid bool) {
+	if plan == nil || plan.request.StartingRevision != 0 || !validPlanRequest(plan.request) || plan.identity == "" || plan.sha256 == "" {
+		return "", "", "", "", false
+	}
+	return plan.request.DirectHostname, plan.request.PublicIPv4, plan.request.PublicIPv6, plan.request.DesiredStateSHA256, true
+}
+
+// MatchesDesiredState keeps Cloudflare's secret and fixed-fact comparison in
+// the owning Module while State supplies the protected value through its lease.
+func (plan *Plan) MatchesDesiredState(accountID, zoneID, zoneName, tunnelName, xhttpHostname, webSocketHostname, directHostname, publicIPv4, publicIPv6, managementToken string) bool {
+	if plan == nil || plan.request.StartingRevision != 0 || !validPlanRequest(plan.request) {
+		return false
+	}
+	r := plan.request
+	return accountID == r.Authority.AccountID && zoneID == r.Authority.ZoneID && zoneName == r.Authority.ZoneName && tunnelName == r.TunnelName && xhttpHostname == r.XHTTPHostname && webSocketHostname == r.WebSocketHostname && directHostname == r.DirectHostname && publicIPv4 == r.PublicIPv4 && publicIPv6 == r.PublicIPv6 && managementToken == r.Authority.Token.value
+}
+
 func (plan *Plan) SoftwareLifecycleInstallContribution() lifecyclecontract.InstallContribution {
 	if plan == nil || plan.request.StartingRevision != 0 || plan.request.ManagementToken.Action != "" || plan.request.RunTokenRotation.TunnelID != "" || plan.request.ManagedRepair.TunnelID != "" {
 		return lifecyclecontract.InstallContribution{}

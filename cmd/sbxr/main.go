@@ -10,6 +10,7 @@ import (
 	"github.com/albertloky/SBXR/internal/networkpolicy"
 	"github.com/albertloky/SBXR/internal/networkpolicy/adapter/ubuntu"
 	"github.com/albertloky/SBXR/internal/ownerconsole"
+	softwareubuntu "github.com/albertloky/SBXR/internal/softwarelifecycle/adapter/ubuntu"
 	"github.com/albertloky/SBXR/internal/state/adapter/filesystem"
 	"github.com/albertloky/SBXR/internal/subscriptionserving"
 )
@@ -34,7 +35,19 @@ func main() {
 		}
 		return
 	}
-	if len(os.Args) == 2 && os.Args[1] == "__subscription-serve" {
+	if len(os.Args) == 3 && os.Args[1] == "private" && os.Args[2] == "install-apply" {
+		if softwareubuntu.ServeInstallApply(context.Background(), prepareInstallApply) != nil {
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) == 3 && os.Args[1] == "private" && os.Args[2] == "recover" {
+		if runInstallRecovery(recoveryCertbotPath) != nil {
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) == 3 && os.Args[1] == "private" && os.Args[2] == "subscription-serve" {
 		if subscriptionserving.Run(context.Background()) != nil {
 			os.Exit(1)
 		}
@@ -49,5 +62,5 @@ func main() {
 
 func runOwnerConsole(ctx context.Context, input, output *os.File, environment []string) error {
 	capabilities := ownerconsole.DetectTerminal(input, output, environment)
-	return ownerconsole.Run(ctx, ownerconsole.Session{Input: input, Output: output, Environment: environment, Capabilities: &capabilities, Authenticator: systemAuthenticator{}})
+	return ownerconsole.Run(ctx, ownerconsole.Session{Input: input, Output: output, Environment: environment, Capabilities: &capabilities, Authenticator: systemAuthenticator{}, AuthenticationPolicy: ownerconsole.DeferAuthenticationUntilApply, Outcome: newInstallOutcome()})
 }

@@ -9,11 +9,47 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/albertloky/SBXR/internal/certificatelifecycle"
 	"github.com/albertloky/SBXR/internal/networkpolicy"
 	lifecyclecontract "github.com/albertloky/SBXR/internal/softwarelifecycle/contract"
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
+
+type installCandidateClock struct{ now time.Time }
+
+func (clock installCandidateClock) Now() time.Time { return clock.now }
+
+func TestInstallCandidateSuppliesOnlyQualifiedFreshCertificateCapability(t *testing.T) {
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	module := certificatelifecycle.NewForFreshInstallation(controlledInstallCandidate(), installCandidateClock{now})
+	view := module.View(t.Context(), certificatelifecycle.ViewRequest{
+		SelectedIP: "192.0.2.10", DirectHostname: "direct.example.com", QualifiedAddresses: []string{"192.0.2.10"},
+		HTTP01: certificatelifecycle.HTTP01Prerequisites{AddressQualified: true, RouteReachable: true, Port80Available: true, TimeSynchronized: true, FirewallOwned: true},
+		DNS:    certificatelifecycle.DNSFacts{Status: certificatelifecycle.DNSAvailable, Hostname: "direct.example.com", Addresses: []string{"192.0.2.10"}, DNSOnly: true},
+		CAA:    certificatelifecycle.CAAFacts{Status: certificatelifecycle.CAAAvailable},
+	})
+	if view.Health.Outcome != certificatelifecycle.Healthy || !view.Issuer.Qualified || !view.Scheduler.Qualified || view.IP.Valid || view.Domain.Valid || !view.IP.Due || !view.Domain.Due {
+		t.Fatalf("fresh candidate certificate View = %+v", view)
+	}
+	if unavailable := certificatelifecycle.NewForFreshInstallation(InstallCandidate{}, installCandidateClock{now}).View(t.Context(), certificatelifecycle.ViewRequest{SelectedIP: "192.0.2.10", DirectHostname: "direct.example.com"}); unavailable.Health.Outcome == certificatelifecycle.Healthy {
+		t.Fatal("invalid candidate supplied certificate capability")
+	}
+}
+
+func TestInstallCandidateSuppliesOnlyQualifiedProxyCoreExecutables(t *testing.T) {
+	request := InstallPlanRequest{Candidate: controlledInstallCandidate()}
+	for _, name := range []string{"xray", "sing-box"} {
+		body, version, ok := request.Candidate.QualifiedComponent(name)
+		if !ok || len(body) == 0 || version == "" {
+			t.Fatalf("QualifiedComponent(%q) = (%d bytes, %q, %v)", name, len(body), version, ok)
+		}
+	}
+	if body, version, ok := request.Candidate.QualifiedComponent("cloudflared"); ok || len(body) != 0 || version != "" {
+		t.Fatalf("unapproved component escaped: %d bytes, %q, %v", len(body), version, ok)
+	}
+}
 
 type installNetworkAdapter struct{ observed networkpolicy.Observations }
 
@@ -58,7 +94,7 @@ func TestPlanInstallDisclosesTheCompleteReviewedFreshInstallation(t *testing.T) 
 	if !reflect.DeepEqual(summary.Files, []string{"/opt/sbxr/releases/v1.0.0-0123456789abcdef0123456789abcdef01234567-" + strings.Repeat("b", 64) + "/sbxr", "/usr/local/bin/sbxr", "/var/lib/sbxr", "/etc/sbxr", "/etc/systemd/system"}) {
 		t.Fatalf("files = %#v", summary.Files)
 	}
-	if len(summary.Units) != 10 || len(summary.Profiles) != 6 || len(summary.SubscriptionRepresentations) != 7 || len(summary.Ports) == 0 || len(summary.Checks) == 0 || len(summary.Ownership) != 4 || len(summary.Cloudflare) != 1 || len(summary.Certificates) != 2 || summary.Interruption == "" || summary.Cancellation == "" || summary.Rollback == "" {
+	if len(summary.Units) != 11 || len(summary.Profiles) != 6 || len(summary.SubscriptionRepresentations) != 7 || len(summary.Ports) == 0 || len(summary.Checks) == 0 || len(summary.Ownership) != 4 || len(summary.Cloudflare) != 1 || len(summary.Certificates) != 2 || summary.Interruption == "" || summary.Cancellation == "" || summary.Rollback == "" {
 		t.Fatalf("incomplete review = %+v", summary)
 	}
 	rendered := fmt.Sprintf("%s %+v %#v", plan, plan, summary)

@@ -22,6 +22,12 @@ const (
 	maxInstallHandoffBytes = int64((softwarelifecycle.MaxAssetBytes*2*4)/3 + softwarelifecycle.MaxIndexBytes)
 	installReady           = "READY\n"
 	installApply           = "APPLY\n"
+	installDone            = "DONE\n"
+	installKeep            = "KEEP\n"
+	installCancel          = "CANCEL\n"
+	installCompleted       = "C\n"
+	installRolledBack      = "R\n"
+	installRecovery        = "X\n"
 )
 
 var (
@@ -45,6 +51,7 @@ type InstallHandoffRequest struct {
 	RealityTarget       string                                    `json:"reality_target"`
 	RealityServerName   string                                    `json:"reality_server_name"`
 	ReviewedPlanSHA256  string                                    `json:"reviewed_plan_sha256"`
+	Entropy             []byte                                    `json:"entropy"`
 	Candidate           softwarelifecycle.InstallCandidateHandoff `json:"candidate"`
 }
 
@@ -55,7 +62,15 @@ func (InstallHandoffRequest) GoString() string {
 	return "Software Lifecycle install handoff: protected"
 }
 
-type InstallApplyPreparer func(context.Context, InstallHandoffRequest) (func() error, error)
+type InstallApplyOutcome uint8
+
+const (
+	InstallCompleted InstallApplyOutcome = iota + 1
+	InstallRolledBack
+	InstallRecoveryRequired
+)
+
+type InstallApplyPreparer func(context.Context, InstallHandoffRequest) (func() InstallApplyOutcome, error)
 type installProcessVerifier func(*os.File, *os.File) error
 type installProcessStarter func(context.Context, *os.File, *os.File) (func() error, error)
 
@@ -65,6 +80,7 @@ func validInstallHandoffRequest(request InstallHandoffRequest) bool {
 		(request.Architecture == softwarelifecycle.AMD64 || request.Architecture == softwarelifecycle.ARM64) && request.Draft.Valid() &&
 		handoffCloudflare.MatchString(request.CloudflareAccountID) && handoffCloudflare.MatchString(request.CloudflareZoneID) && handoffToken.MatchString(request.CloudflareToken) &&
 		err == nil && port == "443" && host == request.RealityServerName && handoffHostname.MatchString(host) && validLowerHex(request.ReviewedPlanSHA256, 64) &&
+		len(request.Entropy) == 32 && !bytes.Equal(request.Entropy, make([]byte, 32)) &&
 		request.Candidate.Valid() && request.Candidate.Staged.Architecture == request.Architecture && request.Candidate.Staged.Identity.Tag == request.Tag
 }
 
@@ -124,21 +140,39 @@ func serveInstallApply(ctx context.Context, socket, executable *os.File, verify 
 	if err := verifyInstallExecutableCandidate(executable, request.Candidate.Staged); err != nil {
 		return err
 	}
-	apply, err := prepare(ctx, request)
+	applyContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	apply, err := prepare(applyContext, request)
 	if err != nil || apply == nil {
 		return errors.New("privileged install preparation refused")
 	}
 	if written, err := socket.Write([]byte(installReady)); err != nil || written != len(installReady) {
 		return errors.New("install handoff unavailable")
 	}
-	approval, err := io.ReadAll(io.LimitReader(socket, int64(len(installApply)+1)))
-	if err != nil || string(approval) != installApply {
+	approval := make([]byte, len(installApply)+len(installDone))
+	if _, err := io.ReadFull(socket, approval); err != nil || string(approval[:len(installApply)]) != installApply || string(approval[len(installApply):]) != installDone && string(approval[len(installApply):]) != installKeep {
 		return errors.New("final install approval unavailable")
 	}
-	if ctx.Err() != nil {
-		return ctx.Err()
+	if string(approval[len(installApply):]) == installKeep {
+		go func() {
+			message, err := io.ReadAll(io.LimitReader(socket, int64(len(installCancel)+1)))
+			if err == nil && string(message) == installCancel {
+				cancel()
+			}
+		}()
 	}
-	return apply()
+	if applyContext.Err() != nil {
+		return applyContext.Err()
+	}
+	outcome := apply()
+	terminal := map[InstallApplyOutcome]string{InstallCompleted: installCompleted, InstallRolledBack: installRolledBack, InstallRecoveryRequired: installRecovery}[outcome]
+	if terminal == "" {
+		return errors.New("privileged install result unavailable")
+	}
+	if written, err := socket.Write([]byte(terminal)); err != nil || written != len(terminal) {
+		return errors.New("install handoff unavailable")
+	}
+	return nil
 }
 
 func readInstallHandoffRequest(reader io.Reader) (InstallHandoffRequest, error) {
@@ -169,13 +203,22 @@ func ServeInstallApply(ctx context.Context, prepare InstallApplyPreparer) error 
 
 // LaunchInstallApply performs the only supported privilege transition after
 // the Owner has reviewed the exact Plan represented by request.
-func LaunchInstallApply(ctx context.Context, request InstallHandoffRequest) error {
+func LaunchInstallApply(ctx context.Context, request InstallHandoffRequest) (InstallApplyOutcome, error) {
 	executable, err := openVerifiedInstallExecutable(request.Candidate.Staged)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer executable.Close()
-	return launchInstallApply(ctx, request, executable, startInstallApplyProcess)
+	return launchInstallApplyWithCancellation(ctx, request, executable, startInstallApplyProcess, nil)
+}
+
+func LaunchInstallApplyWithCancellation(ctx context.Context, request InstallHandoffRequest, cancellation <-chan struct{}) (InstallApplyOutcome, error) {
+	executable, err := openVerifiedInstallExecutable(request.Candidate.Staged)
+	if err != nil {
+		return 0, err
+	}
+	defer executable.Close()
+	return launchInstallApplyWithCancellation(ctx, request, executable, startInstallApplyProcess, cancellation)
 }
 
 func verifyInstallExecutableCandidate(executable *os.File, staged softwarelifecycle.StagedRelease) error {
@@ -195,13 +238,17 @@ func verifyInstallExecutableCandidate(executable *os.File, staged softwarelifecy
 	return nil
 }
 
-func launchInstallApply(ctx context.Context, request InstallHandoffRequest, executable *os.File, start installProcessStarter) error {
+func launchInstallApply(ctx context.Context, request InstallHandoffRequest, executable *os.File, start installProcessStarter) (InstallApplyOutcome, error) {
+	return launchInstallApplyWithCancellation(ctx, request, executable, start, nil)
+}
+
+func launchInstallApplyWithCancellation(ctx context.Context, request InstallHandoffRequest, executable *os.File, start installProcessStarter, cancellation <-chan struct{}) (InstallApplyOutcome, error) {
 	if ctx == nil || executable == nil || start == nil || !validInstallHandoffRequest(request) {
-		return errors.New("privileged install launch refused")
+		return 0, errors.New("privileged install launch refused")
 	}
 	descriptors, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
 	if err != nil {
-		return errors.New("private install socket unavailable")
+		return 0, errors.New("private install socket unavailable")
 	}
 	parent := os.NewFile(uintptr(descriptors[0]), "sbxr-install-parent")
 	child := os.NewFile(uintptr(descriptors[1]), "sbxr-install-child")
@@ -209,25 +256,79 @@ func launchInstallApply(ctx context.Context, request InstallHandoffRequest, exec
 	wait, err := start(ctx, child, executable)
 	child.Close()
 	if err != nil {
-		return errors.New("ordinary system sudo failed")
+		return 0, errors.New("ordinary system sudo failed")
 	}
 	if err := writeInstallHandoffRequest(parent, request); err != nil {
-		return err
+		return 0, err
 	}
 	ready := make([]byte, len(installReady))
 	if _, err := io.ReadFull(parent, ready); err != nil || string(ready) != installReady {
-		return errors.New("privileged install recheck failed")
+		return 0, errors.New("privileged install recheck failed")
 	}
-	if written, err := parent.Write([]byte(installApply)); err != nil || written != len(installApply) {
-		return errors.New("final install approval unavailable")
+	mode := installDone
+	if cancellation != nil {
+		mode = installKeep
 	}
-	if err := syscall.Shutdown(int(parent.Fd()), syscall.SHUT_WR); err != nil {
-		return errors.New("final install approval unavailable")
+	approval := installApply + mode
+	if written, err := parent.Write([]byte(approval)); err != nil || written != len(approval) {
+		return 0, errors.New("final install approval unavailable")
 	}
-	if err := wait(); err != nil {
-		return errors.New("privileged install failed")
+	readOutcome := func() (InstallApplyOutcome, error) {
+		terminal := make([]byte, len(installCompleted))
+		if _, err := io.ReadFull(parent, terminal); err != nil {
+			return 0, errors.New("privileged install result unavailable")
+		}
+		switch string(terminal) {
+		case installCompleted:
+			return InstallCompleted, nil
+		case installRolledBack:
+			return InstallRolledBack, nil
+		case installRecovery:
+			return InstallRecoveryRequired, nil
+		default:
+			return 0, errors.New("privileged install result unavailable")
+		}
 	}
-	return nil
+	if cancellation == nil {
+		if err := syscall.Shutdown(int(parent.Fd()), syscall.SHUT_WR); err != nil {
+			return 0, errors.New("final install approval unavailable")
+		}
+		outcome, outcomeErr := readOutcome()
+		if err := wait(); err != nil {
+			return 0, errors.New("privileged install failed")
+		}
+		return outcome, outcomeErr
+	}
+	done := make(chan struct {
+		outcome InstallApplyOutcome
+		err     error
+	}, 1)
+	go func() {
+		outcome, outcomeErr := readOutcome()
+		waitErr := wait()
+		if waitErr != nil {
+			outcome, outcomeErr = 0, errors.New("privileged install failed")
+		}
+		done <- struct {
+			outcome InstallApplyOutcome
+			err     error
+		}{outcome, outcomeErr}
+	}()
+	select {
+	case result := <-done:
+		return result.outcome, result.err
+	case <-cancellation:
+		if written, err := parent.Write([]byte(installCancel)); err != nil || written != len(installCancel) {
+			return 0, errors.New("install cancellation request unavailable")
+		}
+		if err := syscall.Shutdown(int(parent.Fd()), syscall.SHUT_WR); err != nil {
+			return 0, errors.New("install cancellation request unavailable")
+		}
+		result := <-done
+		return result.outcome, result.err
+	case <-ctx.Done():
+		return 0, errors.New("final install approval unavailable")
+	}
 }
 
 func startInstallApplyProcess(ctx context.Context, socket, executable *os.File) (func() error, error) {
