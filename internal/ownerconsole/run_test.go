@@ -657,9 +657,13 @@ func (buffer *synchronizedBuffer) Write(value []byte) (int, error) {
 }
 
 func (buffer *synchronizedBuffer) ReadFrom(reader io.Reader) (int64, error) {
-	buffer.mu.Lock()
-	defer buffer.mu.Unlock()
-	return buffer.Buffer.ReadFrom(reader)
+	return io.Copy(synchronizedBufferWriter{buffer}, reader)
+}
+
+type synchronizedBufferWriter struct{ buffer *synchronizedBuffer }
+
+func (writer synchronizedBufferWriter) Write(value []byte) (int, error) {
+	return writer.buffer.Write(value)
 }
 
 func (buffer *synchronizedBuffer) String() string {

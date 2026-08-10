@@ -117,7 +117,7 @@ func controlledCloudflareRemovalInventory() map[string][]string {
 type controlledOwnerRemovalObserver struct{}
 
 func (controlledOwnerRemovalObserver) ReviewedCategories(string) ([]string, error) {
-	return []string{"desired-state", "client-access-values", "infrastructure-secrets", "certificates-and-acme", "transaction-journal", "rollback-snapshot", "installed-release", "verified-update-candidate", "services-and-timers", "service-identities", "prepared-artifacts", "subscription-artifacts", "firewall-table", "public-listener", "public-service", "cloudflare-dns-record", "cloudflare-route", "cloudflare-tunnel", "certificate-transparency-remnant", "dns-cache-remnant"}, nil
+	return []string{"desired-state", "client-access-values", "infrastructure-secrets", "certificates-and-acme", "transaction-journal", "rollback-snapshot", "installed-release", "verified-update-candidate", "services-and-timers", "service-identities", "prepared-artifacts", "subscription-artifacts", "firewall-table", "public-listener", "public-service", "removal-journal", "recovery-runner", "cloudflare-dns-record", "cloudflare-route", "cloudflare-tunnel", "certificate-transparency-remnant", "dns-cache-remnant"}, nil
 }
 func (controlledOwnerRemovalObserver) TypedPhrase(string) (string, bool, error) {
 	return "COMPLETE REMOVAL", true, nil

@@ -151,7 +151,7 @@ func PlanCompleteRemoval(request CompleteRemovalPlanRequest) (*CompleteRemovalPl
 	}
 	summary := CompleteRemovalSummary{
 		StartingStatus: InstallationStatus(status), StateRevision: revision,
-		OwnedLocalCategories:          []string{"Desired State", "Client Access Values", "Infrastructure Secrets", "certificates and ACME material", "transaction journal", "Rollback Snapshot", "installed release", "verified update candidate", "services and timers", "service identities", "prepared artifacts", "Subscription Publication artifacts", "SBXR-owned firewall table", "public listeners", "public services"},
+		OwnedLocalCategories:          []string{"Desired State", "Client Access Values", "Infrastructure Secrets", "certificates and ACME material", "transaction journal", "Rollback Snapshot", "installed release", "verified update candidate", "services and timers", "service identities", "prepared artifacts", "Subscription Publication artifacts", "SBXR-owned firewall table", "public listeners", "public services", "removal journal", "recovery runner"},
 		CloudflareCategories:          []string{"DNS records", "Tunnel routes", "Tunnel"},
 		IrreversibleRemnants:          []string{"Certificate Transparency entries cannot be erased", "DNS caches cannot be erased"},
 		CancellationBoundary:          "Back or cancel restores the exact proven starting status until Irreversible removal started is durable; cancellation is impossible afterward",

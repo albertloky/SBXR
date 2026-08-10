@@ -1,6 +1,6 @@
 # Owner Console acceptance
 
-This file defines stable checks for issues #135, #136, #137, #138, and #139. It contains no run results, Client Access Values, Infrastructure Secrets, raw terminal contents from an Owner session, or claim of Integrated, Live, Owner, or Release acceptance.
+This file defines stable checks for issues #135 through #142. It contains no run results, Client Access Values, Infrastructure Secrets, raw terminal contents from an Owner session, or claim of Integrated, Live, Owner, or Release acceptance.
 
 ## Module Verification
 
@@ -186,6 +186,16 @@ go test ./internal/ownerconsole -run '^(TestValidatedSupportBundleBindsTheExactR
 ```
 
 Require exact installation status separately from Module and service health, stable findings and next actions, `30 days` or `50 MiB` event retention, three completed bundles, explicit fourth-bundle replacement, and the external-copy warning. Require update and downgrade discovery to show both freshly verified Release Identities, authenticated sequence, migrations, regenerated representations, affected services, checks, interruption, cancellation, and rollback, and to stop at a separate exact Plan review. Require Recovery Required to offer rollback only with valid unfinished material, current-State repair only from current proven State, and otherwise safe evidence, read-only diagnostics, Check again, Complete removal, and rebuild. Refuse unsafe typed facts and every historical restore, old-secret restore, Recovery Point, adoption, force-start, force-unlock, manual completion, and parcel path.
+
+### OC-REMOVAL-01 — Two acts, checkpoint truth, and proven completion
+
+Run:
+
+```sh
+go test ./internal/ownerconsole -run '^TestRunCompleteRemoval' -count=1
+```
+
+Require the complete owned local and Cloudflare inventory, irreversible Certificate Transparency and DNS-cache remnants, Albert's scoped-token revocation responsibility, pre-checkpoint rollback, and post-checkpoint forward-only behavior at exact `80×24` and `120×36`. Require exact `COMPLETE REMOVAL` input followed by a separately selected `Permanently remove SBXR` action; refuse case or whitespace changes, partial and hostile paste, ordinary Enter, one act, unrelated approval, and unsafe markers. Before durable `Irreversible removal started`, require Back and Cancel and preserve the exact Managed or Recovery Required starting status. After it, remove Back and Cancel, show the exact Cloudflare dashboard revocation step, token-rejection verification, local-token deletion, restart continuation, and durable progress. Require success to be proven Not installed with no SBXR recovery material and no retained-recovery uninstall, backup, Recovery Point, or post-Complete restore path.
 
 ## Seam Verification
 

@@ -112,7 +112,7 @@ func TestViewAndPlanCompleteRemovalDiscloseTheWholeRollbackSafeJourney(t *testin
 		t.Fatalf("PlanCompleteRemoval() = (%+v, %+v)", plan, finding)
 	}
 	summary := plan.Summary()
-	if summary.StartingStatus != softwarelifecycle.Managed || summary.StateRevision != 7 || summary.Disk != disk || !summary.OneUse || !summary.SudoAfterApproval || len(summary.OwnedLocalCategories) != 15 || !reflect.DeepEqual(summary.CloudflareCategories, []string{"DNS records", "Tunnel routes", "Tunnel"}) || !reflect.DeepEqual(summary.IrreversibleRemnants, []string{"Certificate Transparency entries cannot be erased", "DNS caches cannot be erased"}) || summary.CancellationBoundary == "" || summary.TokenRevocationResponsibility == "" || summary.Rollback == "" || summary.FinalProof != "Not installed with no retained SBXR recovery material" {
+	if summary.StartingStatus != softwarelifecycle.Managed || summary.StateRevision != 7 || summary.Disk != disk || !summary.OneUse || !summary.SudoAfterApproval || len(summary.OwnedLocalCategories) != 17 || !reflect.DeepEqual(summary.CloudflareCategories, []string{"DNS records", "Tunnel routes", "Tunnel"}) || !reflect.DeepEqual(summary.IrreversibleRemnants, []string{"Certificate Transparency entries cannot be erased", "DNS caches cannot be erased"}) || summary.CancellationBoundary == "" || summary.TokenRevocationResponsibility == "" || summary.Rollback == "" || summary.FinalProof != "Not installed with no retained SBXR recovery material" {
 		t.Fatalf("Complete removal summary = %+v", summary)
 	}
 	if strings.Contains(plan.String(), "REMOVAL-SECRET-MARKER") {
@@ -340,5 +340,5 @@ func completeRemovalAuthorities(t *testing.T, review string) ([]systemchanges.Pu
 }
 
 func completeRemovalReviewCategories() []string {
-	return []string{"desired-state", "client-access-values", "infrastructure-secrets", "certificates-and-acme", "transaction-journal", "rollback-snapshot", "installed-release", "verified-update-candidate", "services-and-timers", "service-identities", "prepared-artifacts", "subscription-artifacts", "firewall-table", "public-listener", "public-service", "cloudflare-dns-record", "cloudflare-route", "cloudflare-tunnel", "certificate-transparency-remnant", "dns-cache-remnant"}
+	return []string{"desired-state", "client-access-values", "infrastructure-secrets", "certificates-and-acme", "transaction-journal", "rollback-snapshot", "installed-release", "verified-update-candidate", "services-and-timers", "service-identities", "prepared-artifacts", "subscription-artifacts", "firewall-table", "public-listener", "public-service", "removal-journal", "recovery-runner", "cloudflare-dns-record", "cloudflare-route", "cloudflare-tunnel", "certificate-transparency-remnant", "dns-cache-remnant"}
 }

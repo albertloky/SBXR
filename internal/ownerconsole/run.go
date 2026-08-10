@@ -73,28 +73,30 @@ type Capabilities struct {
 }
 
 type Session struct {
-	Input                io.Reader
-	Output               io.Writer
-	Environment          []string
-	Capabilities         *Capabilities
-	Scenario             Scenario
-	Updates              <-chan PresentationUpdate
-	Authenticator        Authenticator
-	AuthenticationPolicy AuthenticationPolicy
-	Access               AccessPresentation
-	Clipboard            Clipboard
-	Outcome              OutcomeModule
-	Profiles             ProfilesModule
-	ProfileOutcomes      OutcomeModule
-	Cloudflare           CloudflareModule
-	CloudflareOutcomes   OutcomeModule
-	Certificates         CertificatesModule
-	CertificateOutcomes  OutcomeModule
-	Diagnostics          DiagnosticsModule
-	Lifecycle            LifecycleModule
-	LifecycleOutcomes    OutcomeModule
-	Recovery             RecoveryModule
-	RecoveryOutcomes     OutcomeModule
+	Input                   io.Reader
+	Output                  io.Writer
+	Environment             []string
+	Capabilities            *Capabilities
+	Scenario                Scenario
+	Updates                 <-chan PresentationUpdate
+	Authenticator           Authenticator
+	AuthenticationPolicy    AuthenticationPolicy
+	Access                  AccessPresentation
+	Clipboard               Clipboard
+	Outcome                 OutcomeModule
+	Profiles                ProfilesModule
+	ProfileOutcomes         OutcomeModule
+	Cloudflare              CloudflareModule
+	CloudflareOutcomes      OutcomeModule
+	Certificates            CertificatesModule
+	CertificateOutcomes     OutcomeModule
+	Diagnostics             DiagnosticsModule
+	Lifecycle               LifecycleModule
+	LifecycleOutcomes       OutcomeModule
+	Recovery                RecoveryModule
+	RecoveryOutcomes        OutcomeModule
+	CompleteRemoval         CompleteRemovalModule
+	CompleteRemovalOutcomes OutcomeModule
 }
 
 func Run(ctx context.Context, session Session) error {
@@ -140,7 +142,7 @@ func Run(ctx context.Context, session Session) error {
 	fixture := scenarioFixture(session.Scenario)
 	accessCatalog := session.Access.catalog()
 	program := tea.NewProgram(
-		model{width: c.Width, height: c.Height, scenario: session.Scenario, selected: selectedNavigation(session.Scenario), unicode: c.Unicode, noColor: noColor, initialModes: initialModes, drawingModeProbeRequired: c.DrawingModeProbeRequired, inputFocused: fixture.acceptsInput, progressExpected: session.Updates != nil, authenticator: session.Authenticator, authenticationPolicy: session.AuthenticationPolicy, runContext: runContext, accessCatalog: accessCatalog, clipboard: session.Clipboard, outcome: session.Outcome, defaultOutcome: session.Outcome, profiles: session.Profiles, profileOutcomes: session.ProfileOutcomes, profileViewGeneration: 1, cloudflare: session.Cloudflare, cloudflareOutcomes: session.CloudflareOutcomes, cloudflareGeneration: 1, certificates: session.Certificates, certificateOutcomes: session.CertificateOutcomes, certificateGeneration: 1, diagnostics: session.Diagnostics, diagnosticsScreen: diagnosticsScreenState{generation: 1}, lifecycle: session.Lifecycle, lifecycleOutcomes: session.LifecycleOutcomes, lifecycleScreen: lifecycleScreenState{generation: 1}, recovery: session.Recovery, recoveryOutcomes: session.RecoveryOutcomes, recoveryScreen: recoveryScreenState{generation: 1}},
+		model{width: c.Width, height: c.Height, scenario: session.Scenario, selected: selectedNavigation(session.Scenario), unicode: c.Unicode, noColor: noColor, initialModes: initialModes, drawingModeProbeRequired: c.DrawingModeProbeRequired, inputFocused: fixture.acceptsInput, progressExpected: session.Updates != nil, authenticator: session.Authenticator, authenticationPolicy: session.AuthenticationPolicy, runContext: runContext, accessCatalog: accessCatalog, clipboard: session.Clipboard, outcome: session.Outcome, defaultOutcome: session.Outcome, profiles: session.Profiles, profileOutcomes: session.ProfileOutcomes, profileViewGeneration: 1, cloudflare: session.Cloudflare, cloudflareOutcomes: session.CloudflareOutcomes, cloudflareGeneration: 1, certificates: session.Certificates, certificateOutcomes: session.CertificateOutcomes, certificateGeneration: 1, diagnostics: session.Diagnostics, diagnosticsScreen: diagnosticsScreenState{generation: 1}, lifecycle: session.Lifecycle, lifecycleOutcomes: session.LifecycleOutcomes, lifecycleScreen: lifecycleScreenState{generation: 1}, recovery: session.Recovery, recoveryOutcomes: session.RecoveryOutcomes, recoveryScreen: recoveryScreenState{generation: 1}, completeRemoval: session.CompleteRemoval, completeRemovalOutcomes: session.CompleteRemovalOutcomes, completeRemovalScreen: completeRemovalScreenState{generation: 1, action: 1, forwardOnly: session.Scenario == ForwardOnlyRemoval}},
 		tea.WithContext(runContext),
 		tea.WithInput(session.Input),
 		tea.WithOutput(session.Output),
@@ -313,6 +315,9 @@ type model struct {
 	recovery                   RecoveryModule
 	recoveryOutcomes           OutcomeModule
 	recoveryScreen             recoveryScreenState
+	completeRemoval            CompleteRemovalModule
+	completeRemovalOutcomes    OutcomeModule
+	completeRemovalScreen      completeRemovalScreenState
 }
 
 type operationPendingState struct {
@@ -355,6 +360,15 @@ type recoveryScreenState struct {
 	action, page int
 	available    bool
 	pending      bool
+}
+
+type completeRemovalScreenState struct {
+	view               CompleteRemovalPresentation
+	generation         uint64
+	action, page       int
+	available, pending bool
+	pendingAction      completeRemovalAction
+	forwardOnly        bool
 }
 
 type probeTimeoutMsg struct{}
@@ -471,6 +485,25 @@ type recoveryReviewMsg struct {
 	identity asyncRequestIdentity
 	review   ChangeReview
 }
+type completeRemovalViewMsg struct {
+	generation uint64
+	view       CompleteRemovalPresentation
+	updates    <-chan CompleteRemovalPresentation
+}
+type completeRemovalUpdateMsg struct {
+	generation uint64
+	view       CompleteRemovalPresentation
+	updates    <-chan CompleteRemovalPresentation
+	closed     bool
+}
+type completeRemovalReviewMsg struct {
+	identity asyncRequestIdentity
+	review   ChangeReview
+}
+type completeRemovalCancelMsg struct {
+	identity asyncRequestIdentity
+	view     CompleteRemovalPresentation
+}
 
 type progressClock struct {
 	kind        ProgressKind
@@ -504,6 +537,9 @@ func (m model) Init() tea.Cmd {
 	}
 	if m.recovery != nil && isRecoveryScenario(m.scenario) {
 		commands = append(commands, m.viewRecoveryCommand())
+	}
+	if m.completeRemoval != nil && (m.scenario == CompleteRemovalConfirmation || m.scenario == ForwardOnlyRemoval) {
+		commands = append(commands, m.viewCompleteRemovalCommand())
 	}
 	if m.drawingModeProbeRequired {
 		commands = append(commands, tea.Tick(time.Second, func(time.Time) tea.Msg { return probeTimeoutMsg{} }))
@@ -636,6 +672,10 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		message.result = validatedChangeResult(message.result)
 		switch message.result.Kind {
 		case ChangeStarted, ChangeCancellationRequested:
+			if m.hasChangeOrigin && m.changeOrigin == CompleteRemovalConfirmation && m.completeRemoval != nil {
+				m.scenario, m.selected, m.outcome = CompleteRemovalConfirmation, selectedNavigation(CompleteRemovalConfirmation), m.defaultOutcome
+				return m, m.refreshCompleteRemovalCommand()
+			}
 			explanation := message.result.Explanation
 			if message.result.Kind == ChangeCancellationRequested && explanation == "" {
 				explanation = "Cancellation requested; waiting for a safe rollback checkpoint."
@@ -828,6 +868,98 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.changeReview = validatedChangeReview(message.review)
 		m.planPage, m.changeFeedback, m.inputFocused = 0, "", false
 		m.scenario, m.selected = InstallationReview, selectedNavigation(InstallationReview)
+	case completeRemovalViewMsg:
+		if message.generation != m.completeRemovalScreen.generation || m.scenario != CompleteRemovalConfirmation && m.scenario != ForwardOnlyRemoval {
+			return m, nil
+		}
+		if m.exitConfirm {
+			m.operationState.queue(message)
+			return m, nil
+		}
+		forwardOnly := m.completeRemovalScreen.forwardOnly || m.scenario == ForwardOnlyRemoval
+		m.completeRemovalScreen.view, m.completeRemovalScreen.available = validatedCompleteRemoval(message.view)
+		definition, defined := completeRemovalDefinitionFor(m.completeRemovalScreen.view.Kind)
+		if defined && definition.watchesUpdates {
+			m.completeRemovalScreen.available = m.completeRemovalScreen.available && message.updates != nil
+		}
+		if defined && definition.acceptsInput {
+			m.completeRemovalScreen.available = m.completeRemovalScreen.available && m.completeRemovalOutcomes != nil
+		}
+		if m.completeRemovalScreen.available && defined && definition.scenario == ForwardOnlyRemoval {
+			forwardOnly = true
+		}
+		if forwardOnly && m.completeRemovalScreen.available && defined && definition.scenario != ForwardOnlyRemoval {
+			m.completeRemovalScreen.available = false
+		}
+		m.completeRemovalScreen.forwardOnly = forwardOnly
+		m.completeRemovalScreen.action, m.completeRemovalScreen.page = 0, 0
+		if defined && definition.acceptsInput {
+			m.completeRemovalScreen.action = 1
+		}
+		m.scenario = completeRemovalScenario(m.completeRemovalScreen.view.Kind)
+		if m.completeRemovalScreen.forwardOnly {
+			m.scenario = ForwardOnlyRemoval
+		}
+		m.selected = selectedNavigation(m.scenario)
+		m.inputFocused = false
+		if m.completeRemovalScreen.available && defined && definition.watchesUpdates {
+			return m, waitCompleteRemovalUpdate(m.runContext, message.generation, message.updates)
+		}
+	case completeRemovalUpdateMsg:
+		if message.generation != m.completeRemovalScreen.generation || m.scenario != ForwardOnlyRemoval {
+			return m, nil
+		}
+		if m.exitConfirm {
+			m.operationState.queue(message)
+			return m, nil
+		}
+		if message.closed {
+			m.completeRemovalScreen.available = false
+			return m, nil
+		}
+		prior := m.completeRemovalScreen.view
+		next, valid := validatedCompleteRemoval(message.view)
+		if !valid || !validCompleteRemovalTransition(prior, next) {
+			m.completeRemovalScreen.available = false
+			return m, nil
+		}
+		m.completeRemovalScreen.view = next
+		m.scenario, m.selected = completeRemovalScenario(next.Kind), selectedNavigation(completeRemovalScenario(next.Kind))
+		if definition, defined := completeRemovalDefinitionFor(next.Kind); defined && definition.watchesUpdates {
+			return m, waitCompleteRemovalUpdate(m.runContext, message.generation, message.updates)
+		}
+	case completeRemovalReviewMsg:
+		if !message.identity.matches(m) || m.completeRemovalOutcomes == nil {
+			return m, nil
+		}
+		if m.exitConfirm {
+			m.operationState.queue(message)
+			return m, nil
+		}
+		m.completeRemovalScreen.pending = false
+		m.completeRemovalScreen.pendingAction = 0
+		m.operationState.stop()
+		m.discardInput()
+		m.changeOrigin, m.hasChangeOrigin, m.outcome = CompleteRemovalConfirmation, true, m.completeRemovalOutcomes
+		m.changeReview = validatedChangeReview(message.review)
+		m.planPage, m.changeFeedback = 0, ""
+		m.scenario, m.selected = InstallationReview, selectedNavigation(InstallationReview)
+	case completeRemovalCancelMsg:
+		if !message.identity.matches(m) {
+			return m, nil
+		}
+		if m.exitConfirm {
+			m.operationState.queue(message)
+			return m, nil
+		}
+		m.completeRemovalScreen.pending = false
+		m.completeRemovalScreen.pendingAction = 0
+		m.operationState.stop()
+		prior := m.completeRemovalScreen.view
+		m.completeRemovalScreen.view, m.completeRemovalScreen.available = validatedCompleteRemoval(message.view)
+		m.completeRemovalScreen.available = m.completeRemovalScreen.available && validCompleteRemovalCancellation(prior, m.completeRemovalScreen.view)
+		m.completeRemovalScreen.action, m.completeRemovalScreen.page = 0, 0
+		m.scenario, m.selected = CompleteRemovalConfirmation, selectedNavigation(CompleteRemovalConfirmation)
 	case tea.PasteMsg:
 		if m.width >= minimumWidth && m.height >= minimumHeight && !m.exitConfirm && m.inputFocused {
 			m.appendInput(message.Content)
@@ -1183,6 +1315,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if isRecoveryScenario(m.scenario) && m.recovery != nil {
 			return m.updateRecoveryKey(message)
 		}
+		if (m.scenario == CompleteRemovalConfirmation || m.scenario == ForwardOnlyRemoval) && m.completeRemoval != nil {
+			return m.updateCompleteRemovalKey(message)
+		}
 		if m.scenario == SubscriptionScreen && m.profiles != nil {
 			if !m.profilesAvailable || !subscriptionFactsAgree(m.profilesView, m.accessCatalog.subscriptions) {
 				if message.String() == "esc" {
@@ -1259,6 +1394,12 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 					m.lifecycleScreen.page = 0
 					return m, m.refreshLifecycleCommand()
 				}
+				if item.scenario == CompleteRemovalConfirmation && m.completeRemoval != nil {
+					m.discardInput()
+					m.completeRemovalScreen.page = 0
+					m.completeRemovalScreen.forwardOnly = false
+					return m, m.refreshCompleteRemovalCommand()
+				}
 			}
 		case "esc":
 			if m.exitConfirm {
@@ -1289,7 +1430,7 @@ func (m *model) updateSectionPage(key string, page *int, count int) bool {
 }
 
 func (m model) operationsPending() bool {
-	return m.diagnosticsScreen.pending || m.lifecycleScreen.pending || m.recoveryScreen.pending
+	return m.diagnosticsScreen.pending || m.lifecycleScreen.pending || m.recoveryScreen.pending || m.completeRemovalScreen.pending
 }
 func operationTick() tea.Cmd {
 	return tea.Tick(time.Second, func(now time.Time) tea.Msg { return operationTickMsg(now) })
@@ -1450,11 +1591,97 @@ func (m model) updateRecoveryKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case recoveryCheckAgain:
 			return m, m.refreshRecoveryCommand()
 		case recoveryRemoval:
-			m.scenario, m.selected, m.inputFocused = CompleteRemovalConfirmation, selectedNavigation(CompleteRemovalConfirmation), true
+			m.scenario, m.selected, m.inputFocused = CompleteRemovalConfirmation, selectedNavigation(CompleteRemovalConfirmation), false
+			m.completeRemovalScreen.forwardOnly = false
+			if m.completeRemoval != nil {
+				return m, m.refreshCompleteRemovalCommand()
+			}
 		case recoveryBack:
 			m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
 		}
 	case "esc":
+		m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+	}
+	return m, nil
+}
+
+func (m model) updateCompleteRemovalKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	key := message.String()
+	if m.completeRemovalScreen.pending {
+		if key == "esc" {
+			m.actionGeneration++
+			m.completeRemovalScreen.pending = false
+			m.completeRemovalScreen.pendingAction = 0
+			m.operationState.stop()
+			m.discardInput()
+			m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+		}
+		return m, nil
+	}
+	if !m.completeRemovalScreen.available {
+		if m.completeRemovalScreen.forwardOnly {
+			return m, nil
+		}
+		if key == "esc" || key == "enter" || key == "space" {
+			m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+		}
+		return m, nil
+	}
+	view := m.completeRemovalScreen.view
+	definition, _ := completeRemovalDefinitionFor(view.Kind)
+	actions := completeRemovalActions(view, m.input)
+	if len(actions) == 0 {
+		return m, nil
+	}
+	if m.inputFocused {
+		if m.editFocusedInput(message) {
+			m.discardInput()
+			m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+		}
+		return m, nil
+	}
+	if m.updateSectionPage(key, &m.completeRemovalScreen.page, m.completeRemovalPageCount()) {
+		return m, nil
+	}
+	switch key {
+	case "up", "shift+tab":
+		m.completeRemovalScreen.action = (m.completeRemovalScreen.action + len(actions) - 1) % len(actions)
+	case "down":
+		m.completeRemovalScreen.action = (m.completeRemovalScreen.action + 1) % len(actions)
+	case "tab":
+		if definition.acceptsInput {
+			m.inputFocused = true
+		} else {
+			m.completeRemovalScreen.action = (m.completeRemovalScreen.action + 1) % len(actions)
+		}
+	case "enter", "space":
+		switch actions[m.completeRemovalScreen.action].action {
+		case completeRemovalLocked:
+			return m, nil
+		case completeRemovalReview:
+			m.actionGeneration++
+			m.completeRemovalScreen.pending = true
+			m.completeRemovalScreen.pendingAction = completeRemovalReview
+			m.operationState.start()
+			identity := asyncRequestIdentity{generation: m.actionGeneration, origin: m.scenario}
+			return m, tea.Batch(func() tea.Msg {
+				return completeRemovalReviewMsg{identity: identity, review: m.completeRemoval.ReviewCompleteRemoval(m.runContext, CompleteRemovalApproval{approved: true})}
+			}, operationTick())
+		case completeRemovalCancel:
+			m.actionGeneration++
+			m.completeRemovalScreen.pending = true
+			m.completeRemovalScreen.pendingAction = completeRemovalCancel
+			m.operationState.start()
+			identity, operation := asyncRequestIdentity{generation: m.actionGeneration, origin: m.scenario}, view.Progress.OperationID
+			return m, tea.Batch(func() tea.Msg {
+				return completeRemovalCancelMsg{identity: identity, view: m.completeRemoval.CancelCompleteRemoval(context.Background(), operation)}
+			}, operationTick())
+		case completeRemovalBack:
+			m.discardInput()
+			m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+		}
+	case "esc":
+		m.discardInput()
 		m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
 	}
 	return m, nil
@@ -1704,6 +1931,37 @@ func (m model) recoveryPageCount() int {
 	}
 	lines := recoveryLines(m.recoveryScreen.view, true, m.recoveryScreen.action, m.diagnostics != nil)
 	return providerPageCount(lines, len(recoveryActions(m.recoveryScreen.view, m.diagnostics != nil)), m.width, m.height)
+}
+
+func (m model) viewCompleteRemovalCommand() tea.Cmd {
+	generation := m.completeRemovalScreen.generation
+	return func() tea.Msg {
+		return completeRemovalViewMsg{generation: generation, view: m.completeRemoval.ViewCompleteRemoval(m.runContext), updates: m.completeRemoval.WatchCompleteRemoval(m.runContext)}
+	}
+}
+
+func waitCompleteRemovalUpdate(ctx context.Context, generation uint64, updates <-chan CompleteRemovalPresentation) tea.Cmd {
+	return func() tea.Msg {
+		select {
+		case <-ctx.Done():
+			return nil
+		case update, open := <-updates:
+			return completeRemovalUpdateMsg{generation: generation, view: update, updates: updates, closed: !open}
+		}
+	}
+}
+
+func (m *model) refreshCompleteRemovalCommand() tea.Cmd {
+	m.completeRemovalScreen.generation++
+	return m.viewCompleteRemovalCommand()
+}
+
+func (m model) completeRemovalPageCount() int {
+	if !m.completeRemovalScreen.available {
+		return 1
+	}
+	lines := completeRemovalLines(m.completeRemovalScreen.view, true, m.input, m.completeRemovalScreen.action)
+	return providerPageCount(lines, len(completeRemovalActions(m.completeRemovalScreen.view, m.input)), m.width, m.height)
 }
 
 func (m *model) activateProfileAction() tea.Cmd {
@@ -2171,6 +2429,18 @@ func (m model) frame() string {
 }
 
 func (m model) frameIdentity(current fixture) (string, string) {
+	if m.scenario == InstallationReview && m.hasChangeOrigin && m.changeOrigin == CompleteRemovalConfirmation {
+		status := m.completeRemovalScreen.view.StartingStatus.String()
+		if status == "" {
+			status = "Status unavailable"
+		}
+		return status + " - authenticated", "REVIEW COMPLETE REMOVAL PLAN"
+	}
+	if m.completeRemoval != nil && m.completeRemovalScreen.available && (m.scenario == CompleteRemovalConfirmation || m.scenario == ForwardOnlyRemoval) {
+		if definition, valid := completeRemovalDefinitionFor(m.completeRemovalScreen.view.Kind); valid {
+			return definition.header(m.completeRemovalScreen.view), definition.title
+		}
+	}
 	if m.scenario != MultiStepChangeSet || m.outcome != nil || m.changeSet.Kind == NoChangeSet {
 		return current.header, current.title
 	}
@@ -2231,6 +2501,27 @@ func (m model) scenarioDetails(current fixture) []string {
 }
 
 func (m model) scenarioLines(current fixture) []string {
+	if (m.scenario == CompleteRemovalConfirmation || m.scenario == ForwardOnlyRemoval) && m.completeRemoval != nil {
+		if m.completeRemovalScreen.pending {
+			label, explanation := "Building exact Complete removal Plan", "No mutation, percentage, or result is inferred."
+			if m.completeRemovalScreen.pendingAction == completeRemovalCancel {
+				label, explanation = "Requesting safe Complete removal cancellation", "No restored status, rollback, percentage, or result is inferred."
+			}
+			return []string{spinner(m.unicode, m.operationState.elapsed) + " " + label + " - " + elapsed(m.operationState.elapsed), "The Software Lifecycle Module decides how long this takes.", explanation, "", "> Back"}
+		}
+		if !m.completeRemovalScreen.available && m.completeRemovalScreen.forwardOnly {
+			return []string{"FORWARD-ONLY COMPLETE REMOVAL", "Irreversible removal started remains durable.", "Current progress facts are unavailable or unsafe.", "No completion, rollback, or restored status was inferred.", "Restart continues from protected transaction evidence.", "Back and Cancel remain unavailable.", "", "Use Ctrl+C for Exit SBXR confirmation."}
+		}
+		lines := completeRemovalLines(m.completeRemovalScreen.view, m.completeRemovalScreen.available, m.input, m.completeRemovalScreen.action)
+		actionCount := 1
+		if m.completeRemovalScreen.available {
+			actionCount = len(completeRemovalActions(m.completeRemovalScreen.view, m.input))
+		}
+		if actionCount == 0 {
+			return lines
+		}
+		return providerPage(lines, actionCount, m.width, m.height, m.completeRemovalScreen.page)
+	}
 	if m.scenario == CloudflareWalkthrough && m.cloudflare != nil {
 		if m.cloudflareOperation.active {
 			return []string{
@@ -2611,6 +2902,18 @@ func (m model) shortcuts() [2]string {
 	if m.scenario == LiveProfileCheckScreen && m.profiles != nil {
 		return [2]string{" Esc Back", " Ctrl+C Exit confirmation  Q is never Exit"}
 	}
+	if (m.scenario == CompleteRemovalConfirmation || m.scenario == ForwardOnlyRemoval) && m.completeRemoval != nil {
+		if m.completeRemovalScreen.pending {
+			return [2]string{" Esc Back", " Ctrl+C Exit confirmation  Q is never Exit"}
+		}
+		if m.completeRemovalScreen.forwardOnly {
+			return [2]string{" No Back, Cancel, or restore", " Ctrl+C Exit confirmation  Q is never Exit"}
+		}
+		if m.completeRemovalScreen.page+1 < m.completeRemovalPageCount() {
+			return [2]string{" Enter/Space Next section  Esc Back", " Ctrl+C Exit confirmation  Q is never Exit"}
+		}
+		return [2]string{" Up/Down Action  Tab Exact text  Enter/Space Select", " Esc Back  Ctrl+C Exit confirmation"}
+	}
 	if m.scenario == CloudflareWalkthrough && m.cloudflare != nil {
 		if m.cloudflareOperation.active {
 			return [2]string{" Esc Back", " Ctrl+C Exit confirmation  Q is never Exit"}
@@ -2694,6 +2997,13 @@ func recoveryScenario(kind RecoveryKind) Scenario {
 	default:
 		return RecoveryWithoutRecovery
 	}
+}
+
+func completeRemovalScenario(kind CompleteRemovalKind) Scenario {
+	if definition, valid := completeRemovalDefinitionFor(kind); valid {
+		return definition.scenario
+	}
+	return CompleteRemovalConfirmation
 }
 
 func fit(value string, width int) string {
