@@ -43,3 +43,32 @@ func TestClientAccessHandoffAcceptsOnlyExactTypedRequests(t *testing.T) {
 		t.Fatal("request rendering exposed privileged facts")
 	}
 }
+
+func TestManagedProviderHandoffAcceptsOnlyExactReviewedActions(t *testing.T) {
+	requests := []clientAccessHandoffRequest{
+		{Schema: 1, Mode: "provider", ProviderAction: managedCloudflareReplace, ChangeSet: "provider-0001", Token: "cfat_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		{Schema: 1, Mode: "provider", ProviderAction: managedCloudflareRemove, ChangeSet: "provider-0002"},
+		{Schema: 1, Mode: "provider", ProviderAction: managedCloudflareRotate, ChangeSet: "provider-0003"},
+		{Schema: 1, Mode: "provider", ProviderAction: managedCertificateIP, ChangeSet: "provider-0004", OwnerEmail: "owner@example.com", Agreement: true},
+		{Schema: 1, Mode: "provider", ProviderAction: managedCertificateDomain, ChangeSet: "provider-0005", OwnerEmail: "owner@example.com", Agreement: true},
+	}
+	for _, request := range requests {
+		if !validClientAccessHandoff(request) {
+			t.Fatalf("exact managed provider request was refused: %+v", request)
+		}
+		request.Action = clientAccessRotateAllProfiles
+		if validClientAccessHandoff(request) {
+			t.Fatalf("mixed Client Access/provider authority was accepted: %+v", request)
+		}
+	}
+	for _, request := range []clientAccessHandoffRequest{
+		{Schema: 1, Mode: "provider", ProviderAction: managedCloudflareReplace, ChangeSet: "provider-0001", Token: "short"},
+		{Schema: 1, Mode: "provider", ProviderAction: managedCloudflareRemove, ChangeSet: "provider-0002", Token: "cfat_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		{Schema: 1, Mode: "provider", ProviderAction: managedCertificateIP, ChangeSet: "provider-0004", OwnerEmail: "owner@example.com"},
+		{Schema: 1, Mode: "provider", ProviderAction: "shell", ChangeSet: "provider-0006"},
+	} {
+		if validClientAccessHandoff(request) {
+			t.Fatalf("unsafe managed provider request was accepted: %+v", request)
+		}
+	}
+}

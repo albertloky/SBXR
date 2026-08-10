@@ -111,6 +111,14 @@ func NewAtForClientAccess(root string, source ObservationSource, host Host, fire
 	return adapter
 }
 
+// NewAtForManagedProvider wires the fixed provider and certificate executors
+// used by Managed Cloudflare and Certificate Lifecycle Change Sets.
+func NewAtForManagedProvider(root string, source ObservationSource, host Host, firewall FirewallExecutor, cloudflare CloudflareExecutor, certificate CertificateExecutor, profiles ConnectionProfilesExecutor, subscription SubscriptionPublicationExecutor, state systemchanges.StateRecovery) Adapter {
+	adapter := NewAtForClientAccess(root, source, host, firewall, cloudflare, profiles, subscription, state)
+	adapter.certificate = certificate
+	return adapter
+}
+
 func firstStateRecovery(states []systemchanges.StateRecovery) systemchanges.StateRecovery {
 	if len(states) == 1 {
 		return states[0]

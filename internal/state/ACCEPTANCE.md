@@ -29,10 +29,10 @@ The same check must prove that prior Desired State bytes pass through opaquely f
 Run:
 
 ```sh
-go test -v ./internal/state ./internal/state/adapter/filesystem -run '^(TestLoadReportsDeterministicZeroEdgeMigrationReview|TestPrepareCommitReportsZeroEdgeReleaseCompatibility|TestFilesystemSeam)$'
+go test -v ./internal/state ./internal/state/adapter/filesystem -run '^(TestLoadReportsDeterministicSchemaOneToTwoMigrationReview|TestPrepareCommitReportsSchemaOneToTwoReleaseCompatibility|TestPrepareCommitRequiresRenewalEmailForSchemaOneToTwoMigration|TestFilesystemSeam)$'
 ```
 
-Pass when the one actual persisted schema fixture, schema `1`, passes through the production storage Seam repeatedly with an exact zero-step path; Load and PrepareCommit report starting and target schema, ordered steps, meaning or representation changes, generated-service effects, interruption, required Owner input, and starting-release readability without exposing protected values. Schema `1` has no real predecessor, so migration failure and required-input scenarios are `Not required`; no fake schema is added for tests. Every other schema, unknown or deprecated field, and unsupported Release Identity must be refused without changing current State. The first real successor schema must add one explicit embedded `N` to `N+1` transformation, its persisted predecessor fixture, failure and required-input cases when applicable, and proof that no intermediate edge can be skipped. Downgrade has no reverse migration; Software Lifecycle must prove the target release can read current Desired State before it creates a Plan.
+Pass when the persisted schema `1` predecessor reports one explicit schema `1` to `2` path and refuses publication until the Owner supplies the Certificate Lifecycle renewal email. Load and PrepareCommit report the ordered step, meaning change, generated-service effects, interruption, required Owner input, and starting-release readability without exposing protected values. Exact unchanged schema-1 repair and Complete removal rollback remain schema 1 and available; they do not claim or perform migration. Every other schema, unknown or deprecated field, and unsupported Release Identity must be refused without changing current State. Downgrade has no reverse migration; Software Lifecycle must prove the target release can read current Desired State before it creates a Plan.
 
 ## `STATE-MODULE-PUBLISH` — Module Verification — Codex
 

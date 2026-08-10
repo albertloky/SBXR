@@ -1671,7 +1671,7 @@ func TestEveryMutationClassUsesOneSystemChangesLockBeforeLiveWork(t *testing.T) 
 	check := systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-GATE"}
 	for _, mutation := range []systemchanges.MutationClass{
 		systemchanges.InstallationMutation, systemchanges.RepairMutation, systemchanges.SettingChangeMutation,
-		systemchanges.RotationMutation, systemchanges.UpdateMutation, systemchanges.CertificateRenewalMutation, systemchanges.CompleteRemovalMutation,
+		systemchanges.RotationMutation, systemchanges.CertificateChangeMutation, systemchanges.UpdateMutation, systemchanges.CertificateRenewalMutation, systemchanges.CompleteRemovalMutation,
 	} {
 		t.Run(string(mutation), func(t *testing.T) {
 			_, changeSet, _, observed := preparedSystemChangeForMutation(t, mutation, check)

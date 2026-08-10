@@ -568,6 +568,7 @@ const (
 	RepairMutation             MutationClass = "Repair"
 	SettingChangeMutation      MutationClass = "Setting change"
 	RotationMutation           MutationClass = "Rotation"
+	CertificateChangeMutation  MutationClass = "Certificate issuance or renewal"
 	UpdateMutation             MutationClass = "Update"
 	CertificateRenewalMutation MutationClass = "Automatic certificate renewal"
 	CompleteRemovalMutation    MutationClass = "Complete removal"
@@ -597,6 +598,8 @@ const InspectBeforeIdempotentReverse InspectionContract = "Inspect effect before
 const (
 	ActivatePreparedConfiguration   OperationKind = "Activate prepared configuration"
 	RestorePriorConfiguration       OperationKind = "Restore prior configuration"
+	RecordManagementTokenChange     OperationKind = "Record management token change"
+	RestoreManagementTokenRecord    OperationKind = "Restore management token record"
 	ApplyApprovedNetworkPolicy      OperationKind = "Apply approved Network Policy"
 	OpenApprovedHTTP01              OperationKind = "Open approved HTTP-01 rule"
 	CloseRecordedHTTP01             OperationKind = "Close recorded HTTP-01 rule"
@@ -1274,7 +1277,7 @@ func (i Interface) applyLocked(changeSet *ChangeSet, cancellation *Cancellation,
 	if !statusMatches || observed.StateRevision != spec.StartingState.Revision || observed.StateSHA256 != spec.StartingState.SHA256 || observed.VolatileSHA256 != spec.Plan.VolatileSHA256 {
 		return finish(lock, refused("SYSTEM-CHANGES-STALE", "The reviewed State lineage or volatile binding changed", fmt.Sprintf("status=%s revision=%d state_match=%t binding_match=%t", observed.Status, observed.StateRevision, observed.StateSHA256 == spec.StartingState.SHA256, observed.VolatileSHA256 == spec.Plan.VolatileSHA256), "the exact reviewed lineage and every volatile binding", "stale approval cannot authorize mutation", "Reload observations and create a fresh Plan.", true))
 	}
-	if spec.TargetStateSHA256 == spec.StartingState.SHA256 && spec.Mutation != RotationMutation && spec.Mutation != RepairMutation && spec.Mutation != CompleteRemovalMutation {
+	if spec.TargetStateSHA256 == spec.StartingState.SHA256 && spec.Mutation != RotationMutation && spec.Mutation != RepairMutation && spec.Mutation != CertificateChangeMutation && spec.Mutation != CertificateRenewalMutation && spec.Mutation != CompleteRemovalMutation {
 		return finish(lock, refused("SYSTEM-CHANGES-NO-OP", "The Change Set would not change Desired State", "the starting and target checksums are identical", "one actual reviewed change", "a no-op must not create transaction material", "Return without applying and plan only when intent changes.", true))
 	}
 	reserved, _ := spec.Disk.total()
@@ -1361,7 +1364,7 @@ func validTargetState(spec ChangeSetSpec) bool {
 
 func validMutation(mutation MutationClass) bool {
 	switch mutation {
-	case InstallationMutation, RepairMutation, SettingChangeMutation, RotationMutation, UpdateMutation, CertificateRenewalMutation, CompleteRemovalMutation:
+	case InstallationMutation, RepairMutation, SettingChangeMutation, RotationMutation, CertificateChangeMutation, UpdateMutation, CertificateRenewalMutation, CompleteRemovalMutation:
 		return true
 	}
 	return false
@@ -1377,7 +1380,7 @@ func validModule(module Module) bool {
 
 func validOperation(operation OperationKind) bool {
 	switch operation {
-	case ActivatePreparedConfiguration, RestorePriorConfiguration, ApplyApprovedNetworkPolicy, OpenApprovedHTTP01, CloseRecordedHTTP01, RestorePriorNetworkPolicy, RemoveOwnedPublicExposure, RestoreOwnedPublicExposure, DeleteOwnedCloudflareResource, RestoreOwnedCloudflareResource, CreateCloudflareResource, DeleteCreatedCloudflareResource, ConfigureCloudflareTunnel, RestoreCloudflareTunnel, ConfigureCloudflareDNS, RestoreCloudflareDNS, ActivateCloudflaredService, RotateCloudflaredRunToken, RestoreCloudflaredService, StageCertificateCandidate, DiscardCertificateCandidate, OrderCertificateCandidate, PreserveCertificateLineage, ActivateCertificateServingPair, RestoreCertificateServingPair:
+	case ActivatePreparedConfiguration, RestorePriorConfiguration, RecordManagementTokenChange, RestoreManagementTokenRecord, ApplyApprovedNetworkPolicy, OpenApprovedHTTP01, CloseRecordedHTTP01, RestorePriorNetworkPolicy, RemoveOwnedPublicExposure, RestoreOwnedPublicExposure, DeleteOwnedCloudflareResource, RestoreOwnedCloudflareResource, CreateCloudflareResource, DeleteCreatedCloudflareResource, ConfigureCloudflareTunnel, RestoreCloudflareTunnel, ConfigureCloudflareDNS, RestoreCloudflareDNS, ActivateCloudflaredService, RotateCloudflaredRunToken, RestoreCloudflaredService, StageCertificateCandidate, DiscardCertificateCandidate, OrderCertificateCandidate, PreserveCertificateLineage, ActivateCertificateServingPair, RestoreCertificateServingPair:
 		return true
 	}
 	return false

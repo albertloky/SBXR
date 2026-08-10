@@ -20,6 +20,11 @@ func observeManagedClientAccess(ctx context.Context, snapshot state.Snapshot, cl
 	if err != nil {
 		return networkpolicy.Result{}, cloudflaretunnel.XHTTPRouteHealth{}, cloudflaretunnel.WebSocketRouteHealth{}, errors.New("Cloudflare observation authority unavailable")
 	}
+	return observeManagedClientAccessWithToken(ctx, snapshot, token, disk)
+}
+
+func observeManagedClientAccessWithToken(ctx context.Context, snapshot state.Snapshot, token cloudflaretunnel.ManagementToken, disk systemchanges.DiskRequirement) (networkpolicy.Result, cloudflaretunnel.XHTTPRouteHealth, cloudflaretunnel.WebSocketRouteHealth, error) {
+	desired := snapshot.DesiredState
 	api := cloudflaretunnel.NewProductionAPI()
 	dnsReferences := []cloudflaretunnel.DNSRecordReference{{ID: desired.Cloudflare.XHTTPDNSRecordID}, {ID: desired.Cloudflare.WebSocketDNSRecordID}}
 	if desired.Cloudflare.DirectIPv4RecordID != "" {

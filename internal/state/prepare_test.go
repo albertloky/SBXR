@@ -169,11 +169,21 @@ func TestPrepareCommitRefusesAffectedInputWithoutPublicationPlan(t *testing.T) {
 }
 
 func TestPrepareManagementTokenChangeAcceptsOnlyTheReviewedCloudflarePlan(t *testing.T) {
-	for _, action := range []cloudflaretunnel.ManagementTokenAction{cloudflaretunnel.ManagementTokenReplace, cloudflaretunnel.ManagementTokenRemove} {
-		t.Run(string(action), func(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		action  cloudflaretunnel.ManagementTokenAction
+		removed bool
+	}{{"replace", cloudflaretunnel.ManagementTokenReplace, false}, {"replace removed", cloudflaretunnel.ManagementTokenReplace, true}, {"remove", cloudflaretunnel.ManagementTokenRemove, false}} {
+		t.Run(test.name, func(t *testing.T) {
+			action := test.action
 			starting := completeDesiredState()
 			starting.Cloudflare.AccountID = strings.Repeat("1", 32)
 			starting.Cloudflare.ZoneID = strings.Repeat("2", 32)
+			if test.removed {
+				starting.Cloudflare.ManagementToken = InfrastructureSecret{}
+				starting.Cloudflare.ManagementTokenRemoved = true
+				starting.Cloudflare.ManagementTokenState = CloudflareManagementUnmanaged
+			}
 			storage := &mutableStateStorage{document: documentFor(t, starting)}
 			stateModule := New(storage)
 			loaded, err := stateModule.Load(intentManagedRequest())
@@ -182,6 +192,10 @@ func TestPrepareManagementTokenChangeAcceptsOnlyTheReviewedCloudflarePlan(t *tes
 			}
 			template := starting
 			template.Cloudflare.ManagementToken = InfrastructureSecret{}
+			if action == cloudflaretunnel.ManagementTokenReplace {
+				template.Cloudflare.ManagementTokenRemoved = false
+				template.Cloudflare.ManagementTokenState = ""
+			}
 			if action == cloudflaretunnel.ManagementTokenRemove {
 				template.Cloudflare.ManagementTokenRemoved = true
 				template.Cloudflare.ManagementTokenState = CloudflareManagementUnmanaged
@@ -212,7 +226,7 @@ func TestPrepareManagementTokenChangeAcceptsOnlyTheReviewedCloudflarePlan(t *tes
 			planResult := cloudflaretunnel.New(provider, cloudflaretunnel.SystemClock{}).Plan(context.Background(), cloudflaretunnel.PlanRequest{
 				Authority: cloudflaretunnel.ViewRequest{AccountID: starting.Cloudflare.AccountID, ZoneID: starting.Cloudflare.ZoneID, ZoneName: starting.Cloudflare.ZoneName, Token: token, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
 				ChangeSet: "cloudflare-token-change", StartingRevision: 7, StartingStateSHA256: loaded.loaded.payloadChecksum, DesiredStateSHA256: templateSHA,
-				ManagementToken: stateTestManagementTokenChange(action, inventory),
+				ManagementToken: stateTestManagementTokenChange(action, inventory, test.removed),
 			})
 			if planResult.Plan == nil {
 				t.Fatalf("token Plan = %+v", planResult.Health)
@@ -398,8 +412,11 @@ func (fakeManagementTokenInventory) StateManagementTokenInventory() ([]byte, boo
 	return []byte(`{"Revision":7,"StateSHA256":"` + strings.Repeat("a", 64) + `","Dependencies":[]}`), true
 }
 
-func stateTestManagementTokenChange(action cloudflaretunnel.ManagementTokenAction, inventory cloudflaretunnel.ManagementTokenInventoryAuthority) cloudflaretunnel.ManagementTokenChange {
+func stateTestManagementTokenChange(action cloudflaretunnel.ManagementTokenAction, inventory cloudflaretunnel.ManagementTokenInventoryAuthority, removed ...bool) cloudflaretunnel.ManagementTokenChange {
 	change := cloudflaretunnel.ManagementTokenChange{Action: action, CurrentTokenID: strings.Repeat("5", 32), Inventory: inventory}
+	if len(removed) == 1 && removed[0] {
+		change.CurrentTokenID, change.StartingTokenRemoved = "", true
+	}
 	if action == cloudflaretunnel.ManagementTokenRemove {
 		change.Resolution = cloudflaretunnel.MarkDependenciesUnmanaged
 	}
@@ -518,9 +535,6 @@ func (preparer *nativeProfilesPreparer) PrepareConnectionProfiles(_ ConnectionPr
 
 func TestPrepareIPCertificateRenewalCommitAllowsOnlyStandingScope(t *testing.T) {
 	candidate := completeDesiredState()
-	candidate.Certificates.IPCertificateID = "ip-certificate-renewed"
-	candidate.Certificates.IPServingPointer = "ip-serving-renewed"
-	candidate.Subscription.CertificateID = candidate.Certificates.IPCertificateID
 	stateModule, request, _ := managedPrepareRequest(t, candidate)
 	prepared, err := stateModule.PrepareIPCertificateRenewalCommit(request)
 	if err != nil || prepared == nil {
@@ -532,9 +546,8 @@ func TestPrepareIPCertificateRenewalCommitAllowsOnlyStandingScope(t *testing.T) 
 
 	for _, change := range []func(*DesiredState){
 		func(candidate *DesiredState) { candidate.NetworkPolicy.SSHPort++ },
-		func(candidate *DesiredState) {
-			candidate.Certificates.DomainCertificateID = "domain-certificate-renewed"
-		},
+		func(candidate *DesiredState) { candidate.Certificates.IPCertificateID = "ip-certificate-renewed" },
+		func(candidate *DesiredState) { candidate.Certificates.IPServingPointer = "ip-serving-renewed" },
 		func(candidate *DesiredState) { candidate.Certificates.RenewalPolicy = false },
 		func(candidate *DesiredState) { candidate.Subscription.CertificateID = "other-certificate" },
 	} {
@@ -551,11 +564,6 @@ func TestPrepareIPCertificateRenewalCommitAllowsOnlyStandingScope(t *testing.T) 
 
 func TestPrepareDomainCertificateRenewalCommitAllowsOnlyStandingScope(t *testing.T) {
 	candidate := completeDesiredState()
-	candidate.Certificates.DomainCertificateID = "domain-certificate-renewed"
-	candidate.Certificates.DomainServingPointer = "domain-serving-renewed"
-	candidate.ConnectionProfiles.Hysteria2.CertificateID = candidate.Certificates.DomainCertificateID
-	candidate.ConnectionProfiles.TUIC.CertificateID = candidate.Certificates.DomainCertificateID
-	candidate.ConnectionProfiles.AnyTLS.CertificateID = candidate.Certificates.DomainCertificateID
 	stateModule, request, _ := managedPrepareRequest(t, candidate)
 	prepared, err := stateModule.PrepareDomainCertificateRenewalCommit(request)
 	if err != nil || prepared == nil || !prepared.SystemChangesDomainCertificateRenewal() || prepared.SystemChangesIPCertificateRenewal() {
@@ -564,7 +572,10 @@ func TestPrepareDomainCertificateRenewalCommitAllowsOnlyStandingScope(t *testing
 
 	for _, change := range []func(*DesiredState){
 		func(candidate *DesiredState) { candidate.NetworkPolicy.SSHPort++ },
-		func(candidate *DesiredState) { candidate.Certificates.IPCertificateID = "ip-certificate-renewed" },
+		func(candidate *DesiredState) {
+			candidate.Certificates.DomainCertificateID = "domain-certificate-renewed"
+		},
+		func(candidate *DesiredState) { candidate.Certificates.DomainServingPointer = "domain-serving-renewed" },
 		func(candidate *DesiredState) { candidate.Certificates.RenewalPolicy = false },
 		func(candidate *DesiredState) { candidate.ConnectionProfiles.AnyTLS.CertificateID = "other-certificate" },
 	} {

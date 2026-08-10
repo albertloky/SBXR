@@ -109,6 +109,20 @@ func CandidateSHA256(candidate DesiredState) (string, error) {
 	return hex.EncodeToString(digest[:]), nil
 }
 
+// ManagementTokenTemplateSHA256 binds the deliberately empty token slot used
+// only by Cloudflare Tunnel's reviewed replacement or removal Plan.
+func ManagementTokenTemplateSHA256(candidate DesiredState) (string, error) {
+	if candidate.Cloudflare.ManagementToken.isSet() || candidate.Cloudflare.ManagementTokenRemoved && candidate.Cloudflare.ManagementTokenState != CloudflareManagementUnmanaged || !candidate.Cloudflare.ManagementTokenRemoved && candidate.Cloudflare.ManagementTokenState != "" {
+		return "", errProtectedValueRendering
+	}
+	document, err := marshalProtectedJSON(candidate)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(document)
+	return hex.EncodeToString(digest[:]), nil
+}
+
 // InstallationIdentity distinguishes this one managed SBXR installation.
 type InstallationIdentity struct {
 	ID     string `json:"id"`
@@ -242,6 +256,7 @@ type CloudflareSettings struct {
 // standing renewal policy without storing certificate private keys here.
 type CertificateSettings struct {
 	RenewalPolicy        bool   `json:"renewal_policy"`
+	OwnerEmail           string `json:"owner_email,omitempty"`
 	ACMEAccountID        string `json:"acme_account_id"`
 	IPCertificateID      string `json:"ip_certificate_id"`
 	IPServingPointer     string `json:"ip_serving_pointer"`

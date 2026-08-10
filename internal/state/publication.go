@@ -135,7 +135,7 @@ func (transaction *TransactionMaterial) SystemChangesFinalizeCloudflare(lease an
 	if err != nil {
 		return nil, err
 	}
-	preparedState, candidateChecksum, err := prepareStateDocument(transaction.candidateRevision, transaction.candidateRelease, transaction.changeSet, candidate)
+	preparedState, candidateChecksum, err := prepareStateDocument(supportedSchema, transaction.candidateRevision, transaction.candidateRelease, transaction.changeSet, candidate)
 	if err != nil {
 		return nil, finding("STATE-CLOUDFLARE-SERIALIZATION", "final Cloudflare candidate", "the final candidate could not be serialized", "one byte-stable complete candidate", "publication bytes must be exact", "roll back the active Change Set")
 	}
@@ -353,7 +353,7 @@ func (i Interface) forwardRunTokenMaterial(binding systemChangesTransactionBindi
 	if err != nil {
 		return nil, err
 	}
-	preparedState, candidateChecksum, err := prepareStateDocument(binding.CandidateRevision, binding.CandidateRelease, binding.ChangeSet, candidate)
+	preparedState, candidateChecksum, err := prepareStateDocument(supportedSchema, binding.CandidateRevision, binding.CandidateRelease, binding.ChangeSet, candidate)
 	if err != nil {
 		return nil, err
 	}

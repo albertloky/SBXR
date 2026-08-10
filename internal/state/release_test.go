@@ -21,6 +21,9 @@ func TestReleaseDefinitionsExposeTheCompleteDeterministicSchemasOneAndTwo(t *tes
 	if len(payload.Properties) != 7 || len(payload.Required) != 7 || len(profiles.Properties) != 6 || len(profiles.Required) != 6 {
 		t.Fatalf("schema payload = %#v", payload)
 	}
+	if _, exists := payload.Properties["certificates"].Properties["owner_email"]; exists {
+		t.Fatal("schema v1 unexpectedly contains owner_email")
+	}
 	for name, property := range payload.Properties {
 		if property.Type != "object" || property.AdditionalProperties == nil || *property.AdditionalProperties || len(property.Properties) == 0 {
 			t.Fatalf("incomplete %s schema = %#v", name, property)
@@ -28,6 +31,9 @@ func TestReleaseDefinitionsExposeTheCompleteDeterministicSchemasOneAndTwo(t *tes
 	}
 	if json.Unmarshal(first["desired-state-v2.schema.json"], &schema) != nil || schema.Properties["schema_version"].Const != float64(2) {
 		t.Fatalf("v2 schema envelope = %#v", schema)
+	}
+	if _, exists := schema.Properties["payload"].Properties["certificates"].Properties["owner_email"]; !exists {
+		t.Fatal("schema v2 does not contain owner_email")
 	}
 }
 

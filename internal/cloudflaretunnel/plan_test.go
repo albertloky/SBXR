@@ -156,6 +156,9 @@ func TestPlanNamesOwnerAssistedRunTokenRotationAndBindsOwnedIdentifiers(t *testi
 	if source, _, templateSHA, valid := result.Plan.StateRunTokenRotation(); source == nil || templateSHA != request.DesiredStateSHA256 || !valid {
 		t.Fatal("rotation Plan omitted its protected State handoff")
 	}
+	if !result.Plan.MatchesDesiredState(request.Authority.AccountID, request.Authority.ZoneID, request.Authority.ZoneName, request.TunnelName, request.XHTTPHostname, request.WebSocketHostname, request.DirectHostname, request.PublicIPv4, request.PublicIPv6, request.Authority.Token.value) {
+		t.Fatal("managed rotation Plan did not match its Desired State authority")
+	}
 }
 
 func TestManagedRepairPlansOnlyCommittedOwnedDriftAndBlocksConflicts(t *testing.T) {
@@ -342,7 +345,7 @@ func TestPlanReviewsManagementTokenReplacementWithoutChangingProviderAuthority(t
 	if result.Plan == nil || result.Health.Outcome != Healthy || result.Health.Code != "CLOUDFLARE-MANAGEMENT-TOKEN-READY" || result.WritesProven {
 		t.Fatalf("replacement Plan = %+v", result)
 	}
-	if len(result.Plan.Steps()) != 1 || len(result.Plan.Checks()) != 2 || result.Plan.Steps()[0].Forward() != systemchanges.ActivatePreparedConfiguration {
+	if len(result.Plan.Steps()) != 1 || len(result.Plan.Checks()) != 2 || result.Plan.Steps()[0].Forward() != systemchanges.RecordManagementTokenChange {
 		t.Fatalf("replacement transaction = steps %#v checks %#v", result.Plan.Steps(), result.Plan.Checks())
 	}
 	preview := fmt.Sprintf("%+v %#v %s", result, result.Plan, result.Plan)
@@ -358,9 +361,22 @@ func TestPlanReviewsManagementTokenReplacementWithoutChangingProviderAuthority(t
 	if source == nil || templateSHA != request.DesiredStateSHA256 || !valid {
 		t.Fatal("replacement Plan omitted the one-use State handoff")
 	}
+	if !result.Plan.MatchesDesiredState(request.Authority.AccountID, request.Authority.ZoneID, request.Authority.ZoneName, request.TunnelName, request.XHTTPHostname, request.WebSocketHostname, request.DirectHostname, request.PublicIPv4, request.PublicIPv6, request.Authority.Token.value) {
+		t.Fatal("managed replacement Plan did not match its Desired State authority")
+	}
 	request.ManagementToken.CurrentTokenID = healthyAuthorityObservation().Token.ID
 	if same := module.Plan(context.Background(), request); same.Plan != nil || same.Health.Code != "CLOUDFLARE-MANAGEMENT-TOKEN-UNCHANGED" {
 		t.Fatalf("same-token replacement = %+v", same)
+	}
+}
+
+func TestPlanReplacesADeliberatelyRemovedManagementToken(t *testing.T) {
+	module, request := managedTokenPlanRequest(t, ManagementTokenReplace)
+	request.ManagementToken.CurrentTokenID = ""
+	request.ManagementToken.StartingTokenRemoved = true
+	result := module.Plan(t.Context(), request)
+	if result.Plan == nil || result.Health.Code != "CLOUDFLARE-MANAGEMENT-TOKEN-READY" {
+		t.Fatalf("removed-token replacement Plan = %+v", result)
 	}
 }
 

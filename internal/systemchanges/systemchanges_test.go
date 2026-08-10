@@ -49,6 +49,12 @@ func (preparedState) SystemChangesPreparedState() (string, uint64, string, strin
 func (preparedState) SystemChangesConsume(any, string, string) (any, error) { return nil, nil }
 func (preparedState) String() string                                        { return "SECRET-MARKER-prepared-state" }
 
+type unchangedRenewalPreparedState struct{ preparedState }
+
+func (unchangedRenewalPreparedState) SystemChangesPreparedState() (string, uint64, string, string, string, string, bool) {
+	return "change-0008", 8, sha('1'), sha('1'), "caller-plan", sha('4'), true
+}
+
 func TestInspectReportsOnlyFourSecretSafeTransactionStates(t *testing.T) {
 	tests := []struct {
 		status     systemchanges.InstallationStatus
@@ -190,7 +196,7 @@ func TestRecoveryRequiredBlocksNormalMutationAndAdmitsOnlyValidForwardRepair(t *
 	}
 	for _, mutation := range []systemchanges.MutationClass{
 		systemchanges.InstallationMutation, systemchanges.RepairMutation, systemchanges.SettingChangeMutation,
-		systemchanges.RotationMutation, systemchanges.UpdateMutation, systemchanges.CertificateRenewalMutation,
+		systemchanges.RotationMutation, systemchanges.CertificateChangeMutation, systemchanges.UpdateMutation, systemchanges.CertificateRenewalMutation,
 	} {
 		blockedChange, err := systemchanges.NewChangeSet(completeSpec(t, mutation))
 		if err != nil {
@@ -331,6 +337,34 @@ func TestFreshCertificateRenewalBuildsOnlyAfterGlobalLock(t *testing.T) {
 	result := module.ApplyFreshCertificateRenewal(build)
 	if result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-PREPARED-STATE" || !result.PlanConsumed || builds != 1 || adapter.lockCloses.Load() != 1 {
 		t.Fatalf("locked fresh renewal = %+v; builds=%d closes=%d", result, builds, adapter.lockCloses.Load())
+	}
+}
+
+func TestCertificateRenewalMayPublishARevisionWithUnchangedLogicalIntent(t *testing.T) {
+	spec := completeSpec(t, systemchanges.CertificateRenewalMutation)
+	spec.TargetStateSHA256 = spec.StartingState.SHA256
+	spec.Plan.Identity = "caller-plan"
+	spec.PreparedState = unchangedRenewalPreparedState{}
+	changeSet, err := systemchanges.NewChangeSet(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := systemchanges.New(&memoryAdapter{observation: completeObservation()}).Apply(changeSet)
+	if result.Finding != nil && result.Finding.Code == "SYSTEM-CHANGES-NO-OP" {
+		t.Fatalf("logical certificate renewal was refused as a no-op: %+v", result)
+	}
+}
+
+func TestReviewedCertificateChangeMayKeepLogicalIntent(t *testing.T) {
+	spec := completeSpec(t, systemchanges.CertificateChangeMutation)
+	spec.TargetStateSHA256 = spec.StartingState.SHA256
+	changeSet, err := systemchanges.NewChangeSet(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := systemchanges.New(&memoryAdapter{observation: completeObservation()}).Apply(changeSet)
+	if result.Finding != nil && result.Finding.Code == "SYSTEM-CHANGES-NO-OP" {
+		t.Fatalf("reviewed certificate change was refused as a no-op: %+v", result)
 	}
 }
 

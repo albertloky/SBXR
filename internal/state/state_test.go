@@ -90,9 +90,10 @@ func TestLoadReportsDeterministicSchemaOneToTwoMigrationReview(t *testing.T) {
 		TargetRelease:   release,
 		Steps: []state.MigrationStepReview{{
 			FromSchema: 1, ToSchema: 2,
-			MeaningChanges:          []string{"No Owner meaning changes; schema 2 preserves the complete schema 1 Desired State"},
+			MeaningChanges:          []string{"Schema 2 adds the Owner-approved certificate renewal email"},
 			GeneratedServiceEffects: []string{"Regenerate and validate all release-bound service and subscription material"},
 			ServiceInterruption:     true,
+			RequiredOwnerInput:      true,
 		}},
 		StartingReleaseCanReadCandidate: false,
 	}

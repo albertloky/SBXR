@@ -37,7 +37,10 @@ func ReleaseDefinitions() (map[string][]byte, error) {
 			Required: []string{"schema_version", "revision", "release_identity", "last_completed_change_set", "payload", "checksum"},
 		}
 	}
-	v1, err := json.Marshal(schemaFor(1))
+	v1Schema := schemaFor(1)
+	certificates := v1Schema.Properties["payload"].Properties["certificates"]
+	delete(certificates.Properties, "owner_email")
+	v1, err := json.Marshal(v1Schema)
 	if err != nil {
 		return nil, err
 	}

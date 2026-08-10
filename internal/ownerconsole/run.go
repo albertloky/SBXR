@@ -3021,7 +3021,7 @@ func isRecoveryScenario(scenario Scenario) bool {
 
 func recoveryScenario(kind RecoveryKind) Scenario {
 	switch kind {
-	case RecoveryRollbackAvailable:
+	case RecoveryRollbackAvailable, RecoveryForwardOnly:
 		return RecoveryWithRollback
 	case RecoveryCurrentStateRepairAvailable:
 		return ManagedStateRepair

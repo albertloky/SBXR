@@ -55,6 +55,7 @@ func TestRunRecoveryRequiredOffersOnlyActionsProvenByCurrentMaterial(t *testing.
 		wantRepair int
 	}{
 		{kind: RecoveryRollbackAvailable, want: []string{"Retry automatic rollback", "unfinished-change-set", "checksum-proven", "rollback material", "CHANGE IN PROGRESS", "rollback-operation", "automatic rollback continues"}, activate: "\r", wantRetry: 1},
+		{kind: RecoveryForwardOnly, want: []string{"Continue forward-only recovery", "unfinished-change-set", "forward-only material"}, forbidden: []string{"Retry automatic rollback"}, activate: "\r", wantRetry: 1},
 		{kind: RecoveryCurrentStateRepairAvailable, want: []string{"Review current-State repair", "Current-State repair"}, activate: "\r", wantRepair: 1},
 		{kind: RecoveryRebuildRequired, want: []string{"Complete removal", "Rebuild from scratch", "intentionally", "absent."}, forbidden: []string{"> Retry automatic rollback", "Review current-State repair"}},
 	}
@@ -64,6 +65,8 @@ func TestRunRecoveryRequiredOffersOnlyActionsProvenByCurrentMaterial(t *testing.
 			switch test.kind {
 			case RecoveryRollbackAvailable:
 				presentation.Proof, presentation.ChangeSet, presentation.Material = ProvenUnfinishedRollback, "unfinished-change-set", "valid checksum-proven rollback material"
+			case RecoveryForwardOnly:
+				presentation.Proof, presentation.ChangeSet, presentation.Material = ProvenForwardOnlyRecovery, "unfinished-change-set", "forward-only material"
 			case RecoveryCurrentStateRepairAvailable:
 				presentation.Proof = ProvenCurrentState
 			case RecoveryRebuildRequired:
@@ -117,12 +120,13 @@ func TestRecoveryViewMapsEachKindToItsExactStatusScreen(t *testing.T) {
 		scenario Scenario
 	}{
 		{RecoveryRollbackAvailable, ProvenUnfinishedRollback, RecoveryWithRollback},
+		{RecoveryForwardOnly, ProvenForwardOnlyRecovery, RecoveryWithRollback},
 		{RecoveryCurrentStateRepairAvailable, ProvenCurrentState, ManagedStateRepair},
 		{RecoveryRebuildRequired, ProvenRebuildRequired, RecoveryWithoutRecovery},
 	}
 	for _, test := range tests {
 		view := RecoveryPresentation{Kind: test.kind, Proof: test.proof, CauseCode: "SYS-LINEAGE-CHECK", Explanation: "Typed inspection.", Evidence: "REDACTED-EVIDENCE", Guidance: "Follow the exact legal action."}
-		if test.kind == RecoveryRollbackAvailable {
+		if test.kind == RecoveryRollbackAvailable || test.kind == RecoveryForwardOnly {
 			view.ChangeSet, view.Material = "unfinished-change-set", "checksum-proven material"
 		}
 		m := model{scenario: RecoveryWithRollback, recoveryScreen: recoveryScreenState{generation: 1}, recoveryOutcomes: &outcomeStub{}}

@@ -489,7 +489,7 @@ func (commit *PreparedCommit) SystemChangesDomainCertificateRenewal() bool {
 // PrepareCommit validates one complete candidate and typed owning-Module
 // outputs against the exact loaded bytes without mutating storage.
 func (i Interface) PrepareCommit(request PrepareRequest) (*PreparedCommit, error) {
-	return i.prepareCommit(request, nil, nil)
+	return i.prepareCommit(request, nil, nil, false)
 }
 
 func (i Interface) PrepareSoftwareUpdateCommit(request PrepareRequest, authority SoftwareUpdateAuthority) (*PreparedCommit, error) {
@@ -513,7 +513,7 @@ func (i Interface) PrepareSoftwareUpdateCommit(request PrepareRequest, authority
 	if !valid || bindingErr != nil || problem != nil || candidateErr != nil || request.Loaded.Status != Managed || binding.StartingRevision != request.Loaded.loaded.revision || binding.StartingStateSHA256 != request.Loaded.loaded.payloadChecksum || binding.DesiredSHA256 != hex.EncodeToString(candidateDigest[:]) || !currentIdentity || !candidateIdentity || binding.FromSchema != uint64(current.SchemaVersion) || binding.ToSchema != uint64(supportedSchema) || !reflect.DeepEqual(current.desiredState, request.Candidate) {
 		return nil, finding("STATE-SOFTWARE-UPDATE-PLAN", "Software Lifecycle update", "the release, migration, revision, or Desired State meaning differs from review", "the exact current Desired State with only its reviewed release/schema successor", "updates preserve all Owner values and secrets", "reload State and rebuild the update Plan")
 	}
-	commit, err := i.prepareCommit(request, nil, nil)
+	commit, err := i.prepareCommit(request, nil, nil, false)
 	if err == nil {
 		commit.softwareUpdate = true
 	}
@@ -530,7 +530,7 @@ func (i Interface) PrepareSoftwareRepairCommit(request PrepareRequest, authority
 	if !valid || problem != nil || request.Loaded.Status != Managed || request.Loaded.loaded.revision != revision || request.Loaded.loaded.payloadChecksum != stateSHA256 || current.ReleaseIdentity != request.CandidateReleaseIdentity || !reflect.DeepEqual(current.desiredState, request.Candidate) {
 		return nil, finding("STATE-SOFTWARE-REPAIR-PLAN", "current Desired State repair", "the release, revision, checksum, or Desired State meaning differs from review", "the exact current valid Desired State and installed Release Identity", "repair only moves Observed State toward current intent", "reload State and rebuild the repair Plan")
 	}
-	return i.prepareCommit(request, nil, nil)
+	return i.prepareCommit(request, nil, nil, true)
 }
 
 func (i Interface) PrepareCompleteRemovalCommit(request PrepareRequest, authority CompleteRemovalAuthority) (*PreparedCommit, error) {
@@ -543,7 +543,7 @@ func (i Interface) PrepareCompleteRemovalCommit(request PrepareRequest, authorit
 	if !valid || problem != nil || request.Loaded.Status != Managed || request.Loaded.loaded.revision != revision || request.Loaded.loaded.payloadChecksum != stateSHA256 || current.ReleaseIdentity != request.CandidateReleaseIdentity || !reflect.DeepEqual(current.desiredState, request.Candidate) {
 		return nil, finding("STATE-COMPLETE-REMOVAL-PLAN", "Complete removal rollback State", "the release, revision, checksum, or Desired State meaning differs from review", "the exact unchanged current Desired State and installed Release Identity", "pre-checkpoint rollback must restore the proven starting intent", "reload State and rebuild the Complete removal Plan")
 	}
-	return i.prepareCommit(request, nil, nil)
+	return i.prepareCommit(request, nil, nil, true)
 }
 
 func (i Interface) PrepareUnprovenCompleteRemovalCommit(authority CompleteRemovalAuthority) (*PreparedCommit, error) {
@@ -571,8 +571,8 @@ func (i Interface) PrepareUnprovenCompleteRemovalCommit(authority CompleteRemova
 	}, nil
 }
 
-// PrepareIPCertificateRenewalCommit admits only the three Desired State facts
-// changed by the Owner-approved IP renewal branch.
+// PrepareIPCertificateRenewalCommit admits a new revision of the unchanged
+// logical IP lineage while the transaction replaces the protected serving set.
 func (i Interface) PrepareIPCertificateRenewalCommit(request PrepareRequest) (*PreparedCommit, error) {
 	if request.Loaded.loaded == nil || request.Loaded.loaded.owner != i.implementation {
 		return nil, certificateRenewalScopeFinding()
@@ -581,7 +581,7 @@ func (i Interface) PrepareIPCertificateRenewalCommit(request PrepareRequest) (*P
 	if problem != nil || !validIPCertificateRenewal(prior.desiredState, request.Candidate) {
 		return nil, certificateRenewalScopeFinding()
 	}
-	commit, err := i.prepareCommit(request, nil, nil)
+	commit, err := i.prepareCommit(request, nil, nil, false)
 	if err == nil {
 		commit.ipCertificateRenewal = true
 	}
@@ -589,20 +589,11 @@ func (i Interface) PrepareIPCertificateRenewalCommit(request PrepareRequest) (*P
 }
 
 func validIPCertificateRenewal(prior, candidate DesiredState) bool {
-	if !prior.Certificates.RenewalPolicy || !candidate.Certificates.RenewalPolicy ||
-		candidate.Certificates.IPCertificateID == prior.Certificates.IPCertificateID ||
-		candidate.Certificates.IPServingPointer == prior.Certificates.IPServingPointer ||
-		candidate.Subscription.CertificateID != candidate.Certificates.IPCertificateID {
-		return false
-	}
-	candidate.Certificates.IPCertificateID = prior.Certificates.IPCertificateID
-	candidate.Certificates.IPServingPointer = prior.Certificates.IPServingPointer
-	candidate.Subscription.CertificateID = prior.Subscription.CertificateID
-	return reflect.DeepEqual(candidate, prior)
+	return prior.Certificates.RenewalPolicy && reflect.DeepEqual(candidate, prior)
 }
 
-// PrepareDomainCertificateRenewalCommit admits only the shared domain
-// certificate facts changed by the Owner-approved domain renewal branch.
+// PrepareDomainCertificateRenewalCommit admits a new revision of the unchanged
+// logical domain lineage while the transaction replaces its shared serving set.
 func (i Interface) PrepareDomainCertificateRenewalCommit(request PrepareRequest) (*PreparedCommit, error) {
 	if request.Loaded.loaded == nil || request.Loaded.loaded.owner != i.implementation {
 		return nil, certificateRenewalScopeFinding()
@@ -611,7 +602,7 @@ func (i Interface) PrepareDomainCertificateRenewalCommit(request PrepareRequest)
 	if problem != nil || !validDomainCertificateRenewal(prior.desiredState, request.Candidate) {
 		return nil, certificateRenewalScopeFinding()
 	}
-	commit, err := i.prepareCommit(request, nil, nil)
+	commit, err := i.prepareCommit(request, nil, nil, false)
 	if err == nil {
 		commit.domainCertificateRenewal = true
 	}
@@ -619,24 +610,11 @@ func (i Interface) PrepareDomainCertificateRenewalCommit(request PrepareRequest)
 }
 
 func validDomainCertificateRenewal(prior, candidate DesiredState) bool {
-	if !prior.Certificates.RenewalPolicy || !candidate.Certificates.RenewalPolicy ||
-		candidate.Certificates.DomainCertificateID == prior.Certificates.DomainCertificateID ||
-		candidate.Certificates.DomainServingPointer == prior.Certificates.DomainServingPointer ||
-		candidate.ConnectionProfiles.Hysteria2.CertificateID != candidate.Certificates.DomainCertificateID ||
-		candidate.ConnectionProfiles.TUIC.CertificateID != candidate.Certificates.DomainCertificateID ||
-		candidate.ConnectionProfiles.AnyTLS.CertificateID != candidate.Certificates.DomainCertificateID {
-		return false
-	}
-	candidate.Certificates.DomainCertificateID = prior.Certificates.DomainCertificateID
-	candidate.Certificates.DomainServingPointer = prior.Certificates.DomainServingPointer
-	candidate.ConnectionProfiles.Hysteria2.CertificateID = prior.ConnectionProfiles.Hysteria2.CertificateID
-	candidate.ConnectionProfiles.TUIC.CertificateID = prior.ConnectionProfiles.TUIC.CertificateID
-	candidate.ConnectionProfiles.AnyTLS.CertificateID = prior.ConnectionProfiles.AnyTLS.CertificateID
-	return reflect.DeepEqual(candidate, prior)
+	return prior.Certificates.RenewalPolicy && reflect.DeepEqual(candidate, prior)
 }
 
 func certificateRenewalScopeFinding() error {
-	return finding("STATE-CERTIFICATE-RENEWAL-SCOPE", "standing certificate renewal", "the candidate changes facts outside one approved certificate lineage and its consumers", "only one certificate identifier, serving pointer, matching consumer bindings, and one revision", "unattended authority cannot expand into another setting or lineage", "create a fresh reviewed Plan")
+	return finding("STATE-CERTIFICATE-RENEWAL-SCOPE", "standing certificate renewal", "the candidate changes logical Desired State while renewing protected certificate material", "the exact unchanged logical lineage and one new revision", "unattended authority cannot expand into another setting or lineage", "create a fresh reviewed Plan")
 }
 
 // PrepareManagementTokenCommit lets only a reviewed Cloudflare Plan replace
@@ -648,13 +626,14 @@ func (i Interface) PrepareManagementTokenCommit(request PrepareRequest, authorit
 	}
 	source, bindingJSON, templateSHA256, valid := authority.StateManagementTokenChange()
 	var binding struct {
-		Action         string
-		CurrentTokenID string
-		AccountID      string
-		ZoneID         string
-		ZoneName       string
-		Dependencies   []string
-		Resolution     string
+		Action               string
+		CurrentTokenID       string
+		StartingTokenRemoved bool
+		AccountID            string
+		ZoneID               string
+		ZoneName             string
+		Dependencies         []string
+		Resolution           string
 	}
 	template, templateErr := marshalProtectedJSON(request.Candidate)
 	digest := sha256.Sum256(template)
@@ -668,7 +647,9 @@ func (i Interface) PrepareManagementTokenCommit(request PrepareRequest, authorit
 		current := request.Loaded.Snapshot.DesiredState.Cloudflare
 		selectedAuthority = selectedAuthority && binding.AccountID == current.AccountID && binding.ZoneID == current.ZoneID && binding.ZoneName == current.ZoneName
 	}
-	if !valid || bindingErr != nil || templateErr != nil || hex.EncodeToString(digest[:]) != templateSHA256 || !selectedAuthority || binding.CurrentTokenID == "" || binding.Action == "replace" && (len(binding.Dependencies) != 0 || binding.Resolution != "") || binding.Action == "remove" && !resolved {
+	removedBaseline := request.Loaded.Snapshot != nil && request.Loaded.Snapshot.DesiredState.Cloudflare.ManagementTokenRemoved
+	validCurrent := binding.CurrentTokenID != "" && !binding.StartingTokenRemoved && !removedBaseline || binding.CurrentTokenID == "" && binding.StartingTokenRemoved && removedBaseline && binding.Action == "replace"
+	if !valid || bindingErr != nil || templateErr != nil || hex.EncodeToString(digest[:]) != templateSHA256 || !selectedAuthority || !validCurrent || binding.Action == "replace" && (len(binding.Dependencies) != 0 || binding.Resolution != "") || binding.Action == "remove" && !resolved {
 		return nil, finding("STATE-CLOUDFLARE-TOKEN-PLAN", "Cloudflare management-token change", "the reviewed token binding or dependency outcome is incomplete", "one exact dependency-free replacement or removal Plan", "State cannot guess which authority or dependencies were reviewed", "rebuild the management-token Plan")
 	}
 	switch binding.Action {
@@ -692,7 +673,7 @@ func (i Interface) PrepareManagementTokenCommit(request PrepareRequest, authorit
 	default:
 		return nil, finding("STATE-CLOUDFLARE-TOKEN-PLAN", "Cloudflare management-token change", "the reviewed action is unsupported", "replace or remove", "State accepts no generic secret mutation", "rebuild the management-token Plan")
 	}
-	return i.prepareCommit(request, nil, &managementTokenChange{})
+	return i.prepareCommit(request, nil, &managementTokenChange{}, false)
 }
 
 func exactManagementTokenDependencies(dependencies []string) bool {
@@ -741,7 +722,7 @@ func (i Interface) PrepareDeferredCloudflareCommit(request PrepareRequest, autho
 	metadata := &deferredCloudflare{candidate: original, validators: request.SemanticValidators, materials: request.ServiceMaterials, runToken: runToken, binding: binding}
 	request.Candidate = staged
 	request.ServiceMaterials.Cloudflared = nil
-	commit, err := i.prepareCommit(request, metadata, nil)
+	commit, err := i.prepareCommit(request, metadata, nil, false)
 	if err == nil {
 		commit.candidateSHA256 = templateSHA256
 	}
@@ -777,7 +758,7 @@ func (i Interface) PrepareRunTokenRotationCommit(request PrepareRequest, authori
 	request.Candidate.Cloudflare.TunnelRunToken = NewInfrastructureSecret("deferred-cloudflare-run-token")
 	request.ServiceMaterials.Cloudflared = nil
 	metadata := &deferredCloudflare{candidate: original, validators: request.SemanticValidators, materials: request.ServiceMaterials, runToken: runToken, rotation: true}
-	commit, err := i.prepareCommit(request, metadata, nil)
+	commit, err := i.prepareCommit(request, metadata, nil, false)
 	if err == nil {
 		commit.candidateSHA256 = templateSHA256
 	}
@@ -808,7 +789,7 @@ func (i Interface) PrepareCloudflareRepairCommit(request PrepareRequest, authori
 	if !valid || bindingErr != nil || !fixed || !owned || templateErr != nil || hex.EncodeToString(templateDigest[:]) != templateSHA256 {
 		return nil, finding("STATE-CLOUDFLARE-REPAIR-PLAN", "Cloudflare managed repair", "the repair targets differ from current Desired State", "the exact loaded immutable ownership and unchanged candidate", "State never adopts provider identity", "reload State and rebuild the repair Plan")
 	}
-	return i.prepareCommit(request, nil, nil)
+	return i.prepareCommit(request, nil, nil, true)
 }
 
 func (i Interface) PrepareConnectionProfilesRepairCommit(request PrepareRequest, authority ConnectionProfilesRepairAuthority) (*PreparedCommit, error) {
@@ -821,10 +802,10 @@ func (i Interface) PrepareConnectionProfilesRepairCommit(request PrepareRequest,
 	if !valid || loaded == nil || loaded.owner != i.implementation || loaded.revision != revision || loaded.payloadChecksum != stateSHA256 {
 		return nil, finding("STATE-CONNECTION-PROFILES-REPAIR-PLAN", "Connection Profiles repair", "the repair authority differs from current State", "the exact loaded revision and checksum", "repair is only forward repair of the current proven lineage", "reload State and rebuild the repair Plan")
 	}
-	return i.prepareCommit(request, nil, nil)
+	return i.prepareCommit(request, nil, nil, true)
 }
 
-func (i Interface) prepareCommit(request PrepareRequest, deferred *deferredCloudflare, tokenChange *managementTokenChange) (*PreparedCommit, error) {
+func (i Interface) prepareCommit(request PrepareRequest, deferred *deferredCloudflare, tokenChange *managementTokenChange, preserveSchema bool) (*PreparedCommit, error) {
 	if i.implementation == nil || i.implementation.storage == nil {
 		return nil, finding("STATE-STORAGE-UNAVAILABLE", "Desired State storage", "no storage Adapter", "the production State storage Adapter", "State cannot prepare trusted transaction material", "restore the State Adapter and review again")
 	}
@@ -844,6 +825,9 @@ func (i Interface) prepareCommit(request PrepareRequest, deferred *deferredCloud
 	loaded, problem := i.claimLoaded(request.Loaded)
 	if problem != nil {
 		return nil, problem
+	}
+	if !preserveSchema && loaded.migration.StartingSchema == 1 && request.Candidate.Certificates.OwnerEmail == "" {
+		return nil, finding("STATE-MIGRATION-OWNER-INPUT", "schema 1 to 2 migration", "the certificate renewal email has not been reviewed", "one Owner-approved renewal email through the Certificate Lifecycle review", "schema 2 cannot promise standing renewal without its required Owner input", "review certificate issuance with the renewal email")
 	}
 	if problem := validateDesiredState(request.Candidate); problem != nil {
 		return nil, problem
@@ -914,7 +898,11 @@ func (i Interface) prepareCommit(request PrepareRequest, deferred *deferredCloud
 		return nil, err
 	}
 	copies.Subscription = &subscription
-	preparedState, candidateChecksum, err := prepareStateDocument(revision, request.CandidateReleaseIdentity, request.ChangeSet, request.Candidate)
+	targetSchema := supportedSchema
+	if preserveSchema {
+		targetSchema = loaded.migration.StartingSchema
+	}
+	preparedState, candidateChecksum, err := prepareStateDocument(targetSchema, revision, request.CandidateReleaseIdentity, request.ChangeSet, request.Candidate)
 	if err != nil {
 		return nil, finding("STATE-CANDIDATE-SERIALIZATION", "prepared Desired State", "typed serialization failed", "one byte-stable complete candidate", "candidate bytes must be bound before mutation", "correct the candidate and review again")
 	}
@@ -923,6 +911,10 @@ func (i Interface) prepareCommit(request PrepareRequest, deferred *deferredCloud
 		return nil, finding("STATE-SERVICE-SERIALIZATION", "prepared service manifests", "typed serialization failed", "one byte-stable manifest set", "service bytes must be bound before mutation", "regenerate the service material and review again")
 	}
 	preparedDigest := sha256.Sum256(preparedState)
+	migration := loaded.migration
+	if preserveSchema {
+		migration = MigrationReview{}
+	}
 	return &PreparedCommit{
 		releaseIdentity: request.CandidateReleaseIdentity,
 		candidate:       request.Candidate, serviceCopies: copies, subscriptionArtifactBundle: subscriptionBundle, revision: revision,
@@ -930,7 +922,7 @@ func (i Interface) prepareCommit(request PrepareRequest, deferred *deferredCloud
 		starting: loaded, storage: i.implementation.storage,
 		candidateSHA256: candidateChecksum, manifestSHA256: manifestChecksum,
 		preparedState: preparedState, preparedSHA256: hex.EncodeToString(preparedDigest[:]),
-		migration: loaded.migration, deferred: deferred,
+		migration: migration, deferred: deferred,
 	}, nil
 }
 
@@ -1053,14 +1045,14 @@ func matchesLoadedState(storage Storage, loaded *loadedState) bool {
 	return err == nil && bytes.Equal(current, loaded.bytes)
 }
 
-func prepareStateDocument(revision uint64, release ReleaseIdentity, changeSet ChangeSetIdentity, candidate DesiredState) ([]byte, string, error) {
+func prepareStateDocument(schema SchemaVersion, revision uint64, release ReleaseIdentity, changeSet ChangeSetIdentity, candidate DesiredState) ([]byte, string, error) {
 	payload, err := marshalProtectedJSON(candidate)
 	if err != nil {
 		return nil, "", err
 	}
 	digest := sha256.Sum256(payload)
 	checksum := hex.EncodeToString(digest[:])
-	document, err := json.Marshal(persistedDocument{SchemaVersion: supportedSchema, Revision: revision, ReleaseIdentity: release, LastCompletedChangeSet: changeSet, Payload: payload, Checksum: checksum})
+	document, err := json.Marshal(persistedDocument{SchemaVersion: schema, Revision: revision, ReleaseIdentity: release, LastCompletedChangeSet: changeSet, Payload: payload, Checksum: checksum})
 	return document, checksum, err
 }
 

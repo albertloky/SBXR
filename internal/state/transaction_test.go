@@ -105,6 +105,7 @@ func TestPrepareCommitDerivesRevisionFromExactLoad(t *testing.T) {
 
 func TestPrepareCommitReportsSchemaOneToTwoReleaseCompatibility(t *testing.T) {
 	candidate := completeDesiredState()
+	candidate.Certificates.OwnerEmail = "owner@example.com"
 	storage := &mutableStateStorage{document: documentFor(t, candidate)}
 	stateModule := New(storage)
 	loaded, err := stateModule.Load(intentManagedRequest())
@@ -127,6 +128,18 @@ func TestPrepareCommitReportsSchemaOneToTwoReleaseCompatibility(t *testing.T) {
 	if from != 0 || to != 0 || steps != 0 || networkFree {
 		t.Fatalf("generic SoftwareLifecyclePreparedMigration() = (%d, %d, %d, %t), want no update authority", from, to, steps, networkFree)
 	}
+}
+
+func TestPrepareCommitRequiresRenewalEmailForSchemaOneToTwoMigration(t *testing.T) {
+	candidate := completeDesiredState()
+	candidate.Certificates.OwnerEmail = ""
+	stateModule := New(&mutableStateStorage{document: documentFor(t, candidate)})
+	loaded, err := stateModule.Load(intentManagedRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = stateModule.PrepareCommit(preparedRequest(t, loaded, candidate, "change-0008"))
+	assertFinding(t, err, "STATE-MIGRATION-OWNER-INPUT")
 }
 
 func TestPrepareCommitRequiresOneFreshExactLoad(t *testing.T) {

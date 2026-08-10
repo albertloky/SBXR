@@ -7,9 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/mail"
 	"os"
+	"strings"
 	"sync"
 
+	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
 	"github.com/albertloky/SBXR/internal/connectionprofiles"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 	"github.com/albertloky/SBXR/internal/systemchanges"
@@ -19,11 +22,15 @@ import (
 const maxClientAccessHandoffBytes = 16 << 10
 
 type clientAccessHandoffRequest struct {
-	Schema    int                `json:"schema"`
-	Mode      string             `json:"mode"`
-	Action    clientAccessAction `json:"action"`
-	Profile   string             `json:"profile,omitempty"`
-	ChangeSet string             `json:"change_set"`
+	Schema         int                   `json:"schema"`
+	Mode           string                `json:"mode"`
+	Action         clientAccessAction    `json:"action,omitempty"`
+	ProviderAction managedProviderAction `json:"provider_action,omitempty"`
+	Profile        string                `json:"profile,omitempty"`
+	ChangeSet      string                `json:"change_set"`
+	Token          string                `json:"token,omitempty"`
+	OwnerEmail     string                `json:"owner_email,omitempty"`
+	Agreement      bool                  `json:"agreement,omitempty"`
 }
 
 func (clientAccessHandoffRequest) String() string { return "Client Access handoff request: protected" }
@@ -50,7 +57,7 @@ type clientAccessHandoffSession struct {
 }
 
 func validClientAccessHandoff(request clientAccessHandoffRequest) bool {
-	if request.Schema != 1 || request.Mode != "change" && request.Mode != "view" && request.Mode != "recover" {
+	if request.Schema != 1 || request.Mode != "change" && request.Mode != "provider" && request.Mode != "view" && request.Mode != "recover" {
 		return false
 	}
 	if request.Mode == "view" {
@@ -60,7 +67,22 @@ func validClientAccessHandoff(request clientAccessHandoffRequest) bool {
 		return false
 	}
 	if request.Mode == "recover" {
-		return request.Action == "" && request.Profile == ""
+		return request.Action == "" && request.ProviderAction == "" && request.Profile == "" && request.Token == "" && request.OwnerEmail == "" && !request.Agreement
+	}
+	if request.Mode == "provider" {
+		if request.Action != "" || request.Profile != "" || !validManagedProviderAction(request.ProviderAction) {
+			return false
+		}
+		switch request.ProviderAction {
+		case managedCloudflareReplace:
+			_, err := cloudflaretunnel.NewManagementToken(request.Token)
+			return err == nil && request.OwnerEmail == "" && !request.Agreement
+		case managedCloudflareRemove, managedCloudflareRotate:
+			return request.Token == "" && request.OwnerEmail == "" && !request.Agreement
+		case managedCertificateIP, managedCertificateDomain:
+			address, err := mail.ParseAddress(request.OwnerEmail)
+			return request.Token == "" && request.Agreement && err == nil && address.Address == request.OwnerEmail && address.Name == "" && !strings.ContainsAny(request.OwnerEmail, "\r\n\x00")
+		}
 	}
 	if !validClientAccessAction(request.Action) {
 		return false
@@ -139,12 +161,42 @@ func serveClientAccess(ctx context.Context, socket, executable *os.File, verify 
 		}
 		return writeClientAccessMessage(socket, presentation)
 	}
+	if request.Mode == "provider" {
+		disk := systemchanges.DiskRequirement{PreparationBytes: 8 << 20, TemporaryBytes: 8 << 20, SnapshotBytes: 32 << 20, JournalBytes: 8 << 20, RollbackBytes: 8 << 20, OverheadBytes: 256 << 20}
+		built, module, err := prepareManagedProvider(ctx, managedProviderBuildRequest{Action: request.ProviderAction, ChangeSet: request.ChangeSet, Token: request.Token, OwnerEmail: request.OwnerEmail, Agreement: request.Agreement, Disk: disk})
+		if err != nil {
+			return err
+		}
+		_, _, _, targetSHA, _, _, valid := built.prepared.SystemChangesPreparedState()
+		if !valid {
+			return errors.New("managed provider prepared State unavailable")
+		}
+		review := clientAccessHandoffReview{Identity: built.plan.Identity(), SHA256: built.plan.SHA256(), DesiredStateSHA256: targetSHA, VolatileSHA256: built.volatileSHA, StartingRevision: built.starting.Revision, CandidateRevision: built.starting.Revision + 1, TotalSteps: uint16(built.totalSteps)}
+		if writeClientAccessMessage(socket, review) != nil {
+			return errors.New("managed provider review unavailable")
+		}
+		approval := make([]byte, 6)
+		if _, err := io.ReadFull(socket, approval); err != nil || string(approval) != "APPLY\n" {
+			return errors.New("managed provider approval unavailable")
+		}
+		result := applyManagedProvider(ctx, built, module)
+		terminal := byte('X')
+		if result.Outcome == systemchanges.Completed {
+			terminal = 'C'
+		} else if result.Outcome == systemchanges.RollbackSucceeded {
+			terminal = 'R'
+		} else if result.Outcome == systemchanges.AwaitingRunTokenRotation {
+			terminal = 'A'
+		}
+		_, err = socket.Write([]byte{terminal})
+		return err
+	}
 	if request.Mode == "recover" {
 		entries, err := os.ReadDir(installTransactions)
 		if err != nil || len(entries) != 1 || entries[0].Name() != request.ChangeSet {
 			return errors.New("Client Access recovery request refused")
 		}
-		if _, err := systemubuntu.RecoveryStartingStatus("/"); err != nil || runInstallRecovery(recoveryCertbotPath) != nil {
+		if _, err := systemubuntu.RecoveryStartingStatus("/"); err != nil || runInstallRecovery() != nil {
 			return errors.New("Client Access recovery failed")
 		}
 		observed, err := installRecoveryObservation()
@@ -290,7 +342,7 @@ func (session *clientAccessHandoffSession) apply() (byte, error) {
 	terminal := []byte{0}
 	_, readErr := io.ReadFull(session.socket, terminal)
 	waitErr := session.wait()
-	if readErr != nil || waitErr != nil || terminal[0] != 'C' && terminal[0] != 'R' && terminal[0] != 'X' {
+	if readErr != nil || waitErr != nil || terminal[0] != 'A' && terminal[0] != 'C' && terminal[0] != 'R' && terminal[0] != 'X' {
 		return 0, errors.New("privileged Client Access result unavailable")
 	}
 	return terminal[0], nil

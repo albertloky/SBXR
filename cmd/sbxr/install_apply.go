@@ -29,7 +29,7 @@ func prepareInstallApply(ctx context.Context, request softwareubuntu.InstallHand
 	if pending, err := pendingInstallRecovery(); err != nil {
 		return nil, err
 	} else if pending {
-		if err := runInstallRecovery(recoveryCertbotPath); err != nil {
+		if err := runInstallRecovery(); err != nil {
 			return nil, err
 		}
 		return nil, errors.New("prior installation recovered; build a fresh Plan")

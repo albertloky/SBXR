@@ -141,10 +141,11 @@ const (
 )
 
 type ManagementTokenChange struct {
-	Action         ManagementTokenAction
-	CurrentTokenID string
-	Inventory      ManagementTokenInventoryAuthority
-	Resolution     ManagementTokenResolution
+	Action               ManagementTokenAction
+	CurrentTokenID       string
+	StartingTokenRemoved bool
+	Inventory            ManagementTokenInventoryAuthority
+	Resolution           ManagementTokenResolution
 }
 
 type ManagementTokenInventoryAuthority interface {
@@ -205,7 +206,7 @@ func (plan *Plan) CertificateLifecycleFreshDNSPlan() (hostname, ipv4, ipv6, desi
 // MatchesDesiredState keeps Cloudflare's secret and fixed-fact comparison in
 // the owning Module while State supplies the protected value through its lease.
 func (plan *Plan) MatchesDesiredState(accountID, zoneID, zoneName, tunnelName, xhttpHostname, webSocketHostname, directHostname, publicIPv4, publicIPv6, managementToken string) bool {
-	if plan == nil || plan.request.StartingRevision != 0 || !validPlanRequest(plan.request) {
+	if plan == nil || plan.identity == "" || plan.sha256 == "" {
 		return false
 	}
 	r := plan.request
@@ -402,7 +403,8 @@ func (i Interface) planManagementToken(ctx context.Context, request PlanRequest)
 		return PlanResult{Health: health, Dependencies: append([]ManagementTokenDependency(nil), dependencies...)}
 	}
 	change := request.ManagementToken
-	if i.clock == nil || !safePlanName.MatchString(request.ChangeSet) || request.StartingRevision == 0 || !sha256Text.MatchString(request.StartingStateSHA256) || !sha256Text.MatchString(request.DesiredStateSHA256) || !immutableID.MatchString(change.CurrentTokenID) || !immutableID.MatchString(request.Authority.AccountID) || !immutableID.MatchString(request.Authority.ZoneID) || !validZoneName(request.Authority.ZoneName) {
+	validCurrent := !change.StartingTokenRemoved && immutableID.MatchString(change.CurrentTokenID) || change.StartingTokenRemoved && change.CurrentTokenID == "" && change.Action == ManagementTokenReplace
+	if i.clock == nil || !safePlanName.MatchString(request.ChangeSet) || request.StartingRevision == 0 || !sha256Text.MatchString(request.StartingStateSHA256) || !sha256Text.MatchString(request.DesiredStateSHA256) || !validCurrent || !immutableID.MatchString(request.Authority.AccountID) || !immutableID.MatchString(request.Authority.ZoneID) || !validZoneName(request.Authority.ZoneName) {
 		return failed("CLOUDFLARE-MANAGEMENT-TOKEN-REFUSED", "The management-token change is incomplete or outside the fixed contract.", nil)
 	}
 	var replacement VerifiedManagementToken
@@ -418,7 +420,7 @@ func (i Interface) planManagementToken(ctx context.Context, request PlanRequest)
 		if view.Health.Outcome != Healthy {
 			return PlanResult{Health: view.Health}
 		}
-		if view.Credential.ID == change.CurrentTokenID {
+		if !change.StartingTokenRemoved && view.Credential.ID == change.CurrentTokenID {
 			return failed("CLOUDFLARE-MANAGEMENT-TOKEN-UNCHANGED", "The replacement is the currently stored Cloudflare token.", nil)
 		}
 		var ok bool
@@ -503,7 +505,7 @@ func validTokenDependencies(dependencies []ManagementTokenDependency) bool {
 }
 
 func tokenLifecycleSteps() ([]systemchanges.Step, error) {
-	step, err := systemchanges.NewStep(systemchanges.CloudflareModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
+	step, err := systemchanges.NewStep(systemchanges.CloudflareModule, systemchanges.RecordManagementTokenChange, systemchanges.RestoreManagementTokenRecord)
 	if err != nil {
 		return nil, err
 	}
@@ -527,14 +529,15 @@ func (plan *Plan) StateManagementTokenChange() (source any, bindingJSON []byte, 
 	}
 	change := plan.request.ManagementToken
 	bindingJSON, err := json.Marshal(struct {
-		Action         ManagementTokenAction
-		CurrentTokenID string
-		AccountID      string
-		ZoneID         string
-		ZoneName       string
-		Dependencies   []ManagementTokenDependency
-		Resolution     ManagementTokenResolution
-	}{change.Action, change.CurrentTokenID, plan.request.Authority.AccountID, plan.request.Authority.ZoneID, plan.request.Authority.ZoneName, planDependencies(plan), change.Resolution})
+		Action               ManagementTokenAction
+		CurrentTokenID       string
+		StartingTokenRemoved bool
+		AccountID            string
+		ZoneID               string
+		ZoneName             string
+		Dependencies         []ManagementTokenDependency
+		Resolution           ManagementTokenResolution
+	}{change.Action, change.CurrentTokenID, change.StartingTokenRemoved, plan.request.Authority.AccountID, plan.request.Authority.ZoneID, plan.request.Authority.ZoneName, planDependencies(plan), change.Resolution})
 	if change.Action == ManagementTokenReplace {
 		source = plan.managementToken
 	}

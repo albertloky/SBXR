@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"syscall"
 
 	certificateubuntu "github.com/albertloky/SBXR/internal/certificatelifecycle/adapter/ubuntu"
@@ -21,10 +22,7 @@ import (
 	systemubuntu "github.com/albertloky/SBXR/internal/systemchanges/adapter/ubuntu"
 )
 
-const (
-	installTransactions = "/var/lib/sbxr/transactions"
-	recoveryCertbotPath = "/opt/sbxr/releases/recovery/certbot/bin/certbot"
-)
+const installTransactions = "/var/lib/sbxr/transactions"
 
 func pendingInstallRecovery() (bool, error) {
 	info, statErr := os.Lstat(installTransactions)
@@ -45,16 +43,40 @@ func pendingInstallRecovery() (bool, error) {
 	return len(entries) == 1, nil
 }
 
-func runInstallRecovery(certbot string) error {
+func runInstallRecovery() error {
 	pending, err := pendingInstallRecovery()
 	if err != nil || !pending {
 		return err
 	}
-	cloudflareExecutor, err := cloudflaretunnel.NewRecoveryExecutor(cloudflaretunnel.NewProductionAPI())
+	starting, release, forwardOnly, _, err := systemubuntu.RecoveryStartingRelease("/")
 	if err != nil {
 		return err
 	}
-	certificateExecutor, err := certificateubuntu.NewFreshTransactionExecutor(certbot)
+	stateModule := statefilesystem.New()
+	api := cloudflaretunnel.NewProductionAPI()
+	cloudflareExecutor, err := cloudflaretunnel.NewRecoveryExecutor(api)
+	if forwardOnly {
+		observed, currentRelease, loadErr := managedLoadEvidence()
+		if loadErr != nil {
+			return loadErr
+		}
+		loaded, loadErr := stateModule.Load(state.LoadRequest{Baseline: state.ManagedEvidence, SupportedRelease: currentRelease, Lineage: &state.LineageProof{Revision: observed.StateRevision, LastCompletedChangeSet: state.ChangeSetIdentity(observed.LastChangeSet), ReleaseIdentity: currentRelease}})
+		if loadErr != nil {
+			return loadErr
+		}
+		err = stateModule.WithManagedCloudflareSecrets(loaded, func(snapshot state.Snapshot, secrets state.InfrastructureSecretReader) error {
+			token, tokenErr := cloudflaretunnel.NewManagementToken(secrets.ReadInfrastructureSecret(snapshot.DesiredState.Cloudflare.ManagementToken))
+			if tokenErr != nil {
+				return tokenErr
+			}
+			cloudflareExecutor, tokenErr = cloudflaretunnel.NewRunTokenRotationExecutor(api, token)
+			return tokenErr
+		})
+	}
+	if err != nil {
+		return err
+	}
+	certificateExecutor, err := certificateubuntu.NewFreshTransactionExecutor(filepath.Join("/opt/sbxr/releases", release.Tag, "certbot/bin/certbot"))
 	if err != nil {
 		return err
 	}
@@ -68,10 +90,6 @@ func runInstallRecovery(certbot string) error {
 	servingProof := func(ctx context.Context, address string) error {
 		return proveInstalledSubscription(ctx, address, port)
 	}
-	starting, startingErr := systemubuntu.RecoveryStartingStatus("/")
-	if startingErr != nil {
-		return startingErr
-	}
 	managed := starting == systemchanges.Managed
 	var subscriptionExecutor subscriptionfilesystem.Executor
 	if managed {
@@ -82,7 +100,6 @@ func runInstallRecovery(certbot string) error {
 	if err != nil {
 		return err
 	}
-	stateModule := statefilesystem.New()
 	var host systemubuntu.InstallHost
 	if managed {
 		host, err = systemubuntu.NewInstallHost("/", softwarelifecycle.ManagedUnitNames())

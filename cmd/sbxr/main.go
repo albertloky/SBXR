@@ -48,13 +48,19 @@ func main() {
 		return
 	}
 	if len(os.Args) == 3 && os.Args[1] == "private" && os.Args[2] == "recover" {
-		if runInstallRecovery(recoveryCertbotPath) != nil {
+		if runInstallRecovery() != nil {
 			os.Exit(1)
 		}
 		return
 	}
 	if len(os.Args) == 3 && os.Args[1] == "private" && os.Args[2] == "subscription-serve" {
 		if subscriptionserving.Run(context.Background()) != nil {
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) == 3 && os.Args[1] == "private" && os.Args[2] == "certificate-renewal" {
+		if runCertificateRenewal(context.Background()) != nil {
 			os.Exit(1)
 		}
 		return
@@ -70,7 +76,7 @@ func runOwnerConsole(ctx context.Context, input, output *os.File, environment []
 	capabilities := ownerconsole.DetectTerminal(input, output, environment)
 	if installedClientAccessMarker() {
 		managed := &clientAccessOutcome{}
-		return ownerconsole.Run(ctx, ownerconsole.Session{Input: input, Output: output, Environment: environment, Capabilities: &capabilities, Authenticator: systemAuthenticator{}, AuthenticationPolicy: ownerconsole.AuthenticateForAccess, Profiles: managed, ProfileOutcomes: managed, StartupProvider: managed.Startup, Recovery: managed})
+		return ownerconsole.Run(ctx, ownerconsole.Session{Input: input, Output: output, Environment: environment, Capabilities: &capabilities, Authenticator: systemAuthenticator{}, AuthenticationPolicy: ownerconsole.AuthenticateForAccess, Profiles: managed, ProfileOutcomes: managed, Cloudflare: managed, CloudflareOutcomes: managed, Certificates: managed, CertificateOutcomes: managed, StartupProvider: managed.Startup, Recovery: managed})
 	}
 	return ownerconsole.Run(ctx, ownerconsole.Session{Input: input, Output: output, Environment: environment, Capabilities: &capabilities, Authenticator: systemAuthenticator{}, AuthenticationPolicy: ownerconsole.DeferAuthenticationUntilApply, Outcome: newInstallOutcome()})
 }

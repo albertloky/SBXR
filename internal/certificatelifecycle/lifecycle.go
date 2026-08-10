@@ -642,11 +642,11 @@ func (plan *Plan) Checks() []systemchanges.Check {
 	return append([]systemchanges.Check(nil), plan.checks...)
 }
 
-func (plan *Plan) MatchesDesiredState(renewalPolicy bool, acmeAccountID, ipCertificateID, ipServingPointer, domainCertificateID, domainServingPointer, domainHostname string) bool {
-	if plan == nil || plan.request.StartingRevision != 1 || plan.request.StartingStateSHA256 != "" {
+func (plan *Plan) MatchesDesiredState(renewalPolicy bool, ownerEmail, acmeAccountID, ipCertificateID, ipServingPointer, domainCertificateID, domainServingPointer, domainHostname string) bool {
+	if plan == nil {
 		return false
 	}
-	return renewalPolicy && acmeAccountID == "letsencrypt" && ipCertificateID == ipCertName && ipServingPointer == "/var/lib/sbxr/certificates/ip/current" && domainCertificateID == domainCertName && domainServingPointer == "/var/lib/sbxr/certificates/domain/current" && domainHostname == plan.request.View.DirectHostname
+	return renewalPolicy && ownerEmail == plan.request.OwnerEmail && acmeAccountID == "letsencrypt" && ipCertificateID == ipCertName && ipServingPointer == "/var/lib/sbxr/certificates/ip/current" && domainCertificateID == domainCertName && domainServingPointer == "/var/lib/sbxr/certificates/domain/current" && domainHostname == plan.request.View.DirectHostname
 }
 
 func (plan *Plan) SoftwareLifecycleInstallContribution() lifecyclecontract.InstallContribution {
@@ -810,7 +810,7 @@ func (plan *Plan) buildChangeSet(prepared systemchanges.PreparedStateCommit, sta
 	if !valid || changeSet != plan.request.ChangeSet || revision != starting.Revision+1 || startingSHA256 != starting.SHA256 || candidateSHA256 != plan.request.DesiredStateSHA256 || planIdentity != plan.identity || planSHA256 != plan.sha256 {
 		return nil, errors.New("prepared State does not match certificate Plan")
 	}
-	mutation := systemchanges.SettingChangeMutation
+	mutation := systemchanges.CertificateChangeMutation
 	if plan.request.StandingRenewal {
 		renewal, ok := prepared.(systemchanges.CertificateRenewalPreparedState)
 		if !ok || renewal == nil {

@@ -333,6 +333,19 @@ func TestIPPlanApplyBuildsOneRevisionBoundChangeSet(t *testing.T) {
 	}
 }
 
+func TestManagedCertificatePlanKeepsTheFixedLogicalLineages(t *testing.T) {
+	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	module := certificatelifecycle.New(staticIssuer{observation: certificatelifecycle.Observation{Issuer: certificatelifecycle.IssuerObservation{Name: "Let's Encrypt", CertbotVersion: "5.4.0", Distribution: "snap", SupportedDistribution: true, RequiredProfile: true, IPAddress: true, Staging: true}, Scheduler: certificatelifecycle.SchedulerObservation{Enabled: true, Persistent: true, Serial: true, ExactUnitPair: true, Randomized: true, NoCompetingScheduler: true, RunsPerDay: 2}}}, fixedClock{now: now})
+	request := completePlanRequest()
+	request.StartingRevision = 7
+	request.StartingStateSHA256 = strings.Repeat("a", 64)
+	request.HTTP01 = testHTTP01Contribution(7)
+	result := module.Plan(context.Background(), request)
+	if result.Plan == nil || !result.Plan.MatchesDesiredState(true, "owner@example.com", "letsencrypt", "sbxr-ip", "/var/lib/sbxr/certificates/ip/current", "sbxr-domain", "/var/lib/sbxr/certificates/domain/current", request.View.DirectHostname) {
+		t.Fatalf("managed logical lineage match = %+v", result)
+	}
+}
+
 func TestStandingIPRenewalRequiresApprovedDueNarrowState(t *testing.T) {
 	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
 	observation := certificatelifecycle.Observation{

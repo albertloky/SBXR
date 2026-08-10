@@ -24,16 +24,18 @@ type clientAccessPresentation struct {
 	Installation ownerconsole.InstallationStatus
 	Profiles     ownerconsole.ProfilesPresentation
 	Access       ownerconsole.AccessPresentation
+	Cloudflare   ownerconsole.CloudflarePresentation
+	Certificates ownerconsole.CertificatesPresentation
 	Recovery     ownerconsole.RecoveryPresentation
 }
 
 func managedClientAccessPresentation(ctx context.Context) (clientAccessPresentation, error) {
 	pending, pendingErr := pendingInstallRecovery()
 	if pendingErr == nil && pending {
-		if _, err := systemubuntu.RecoveryStartingStatus("/"); err == nil {
+		if _, _, forwardOnly, checkpoint, err := systemubuntu.RecoveryStartingRelease("/"); err == nil {
 			entries, readErr := os.ReadDir(installTransactions)
 			if readErr == nil && len(entries) == 1 {
-				recovery := ownerRecovery{changeSet: entries[0].Name()}
+				recovery := ownerRecovery{changeSet: entries[0].Name(), forwardOnly: forwardOnly, needsRunTokenRotation: checkpoint == systemchanges.IrreversibleRunTokenRotationStarted}
 				return clientAccessPresentation{Installation: ownerconsole.InstallationRecoveryRequired, Recovery: recovery.ViewRecovery(ctx)}, nil
 			}
 		}
@@ -52,6 +54,10 @@ func managedClientAccessPresentation(ctx context.Context) (clientAccessPresentat
 	err = module.WithManagedConnectionProfileSecrets(loaded, func(snapshot state.Snapshot, secrets state.ConnectionProfileSecretReader) error {
 		return module.WithManagedSubscriptionSecrets(loaded, func(_ state.Snapshot, publicationSecrets state.ClientAccessReader) error {
 			return module.WithManagedCloudflareSecrets(loaded, func(_ state.Snapshot, cloudflareSecrets state.InfrastructureSecretReader) error {
+				if snapshot.DesiredState.Cloudflare.ManagementTokenRemoved {
+					presentation.Cloudflare, presentation.Certificates = managedProviderPresentations(ctx, snapshot, cloudflareSecrets, networkpolicy.Result{})
+					return nil
+				}
 				disk := systemchanges.DiskRequirement{PreparationBytes: 8 << 20, TemporaryBytes: 8 << 20, SnapshotBytes: 32 << 20, JournalBytes: 8 << 20, RollbackBytes: 8 << 20, OverheadBytes: 256 << 20}
 				network, xhttp, websocket, err := observeManagedClientAccess(ctx, snapshot, cloudflareSecrets, disk)
 				if err != nil {
@@ -88,6 +94,7 @@ func managedClientAccessPresentation(ctx context.Context) (clientAccessPresentat
 				}
 				presentation.Profiles = ownerProfilesPresentation(snapshot.DesiredState, registry.Profiles)
 				presentation.Access = ownerAccessPresentation(snapshot.DesiredState, source, artifacts, fullSource, fullArtifacts, publicationSecrets)
+				presentation.Cloudflare, presentation.Certificates = managedProviderPresentations(ctx, snapshot, cloudflareSecrets, network)
 				return nil
 			})
 		})

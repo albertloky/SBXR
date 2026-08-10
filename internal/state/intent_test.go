@@ -67,6 +67,25 @@ func TestLoadDistinguishesRemovedManagementTokenFromMissingSecret(t *testing.T) 
 	}
 }
 
+func TestManagementTokenTemplateSHA256AcceptsOnlyTheReviewedEmptySlot(t *testing.T) {
+	candidate := completeDesiredState()
+	candidate.Cloudflare.ManagementToken = InfrastructureSecret{}
+	replacement, err := ManagementTokenTemplateSHA256(candidate)
+	if err != nil || len(replacement) != 64 {
+		t.Fatalf("replacement template = (%q, %v)", replacement, err)
+	}
+	candidate.Cloudflare.ManagementTokenRemoved = true
+	candidate.Cloudflare.ManagementTokenState = CloudflareManagementUnmanaged
+	removal, err := ManagementTokenTemplateSHA256(candidate)
+	if err != nil || len(removal) != 64 || removal == replacement {
+		t.Fatalf("removal template = (%q, %v)", removal, err)
+	}
+	candidate.Cloudflare.ManagementToken = NewInfrastructureSecret("cfat_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if _, err := ManagementTokenTemplateSHA256(candidate); err == nil {
+		t.Fatal("caller-supplied management token was accepted as an empty template")
+	}
+}
+
 func TestLoadRefusesIncompleteOrUnsafeIntent(t *testing.T) {
 	secretMarker := "CLOUDFLARE-MANAGEMENT-SECRET-MARKER"
 	tests := []struct {
@@ -245,6 +264,7 @@ func completeDesiredState() DesiredState {
 		},
 		Certificates: CertificateSettings{
 			RenewalPolicy:        true,
+			OwnerEmail:           "owner@example.com",
 			ACMEAccountID:        "acme-account",
 			IPCertificateID:      "ip-certificate",
 			IPServingPointer:     "/var/lib/sbxr/certificates/ip/current",

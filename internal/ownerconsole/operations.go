@@ -339,12 +339,13 @@ type RecoveryKind uint8
 
 const (
 	RecoveryRollbackAvailable RecoveryKind = iota + 1
+	RecoveryForwardOnly
 	RecoveryCurrentStateRepairAvailable
 	RecoveryRebuildRequired
 )
 
 func (kind RecoveryKind) String() string {
-	names := [...]string{"", "Rollback available", "Current-State repair available", "Rebuild required"}
+	names := [...]string{"", "Rollback available", "Forward-only recovery", "Current-State repair available", "Rebuild required"}
 	if int(kind) >= len(names) {
 		return ""
 	}
@@ -361,6 +362,7 @@ type RecoveryProof uint8
 
 const (
 	ProvenUnfinishedRollback RecoveryProof = iota + 1
+	ProvenForwardOnlyRecovery
 	ProvenCurrentState
 	ProvenRebuildRequired
 )
@@ -370,6 +372,7 @@ func validatedRecovery(p RecoveryPresentation) (RecoveryPresentation, bool) {
 		return RecoveryPresentation{}, false
 	}
 	validVariant := p.Kind == RecoveryRollbackAvailable && p.Proof == ProvenUnfinishedRollback && p.ChangeSet != "" && p.Material != "" ||
+		p.Kind == RecoveryForwardOnly && p.Proof == ProvenForwardOnlyRecovery && p.ChangeSet != "" && p.Material != "" ||
 		p.Kind == RecoveryCurrentStateRepairAvailable && p.Proof == ProvenCurrentState && p.ChangeSet == "" && p.Material == "" ||
 		p.Kind == RecoveryRebuildRequired && p.Proof == ProvenRebuildRequired && p.ChangeSet == "" && p.Material == ""
 	if !validVariant {
@@ -399,6 +402,9 @@ func recoveryActions(p RecoveryPresentation, diagnostics bool) []recoveryActionD
 	actions := []recoveryActionDefinition{}
 	if p.Kind == RecoveryRollbackAvailable {
 		actions = append(actions, recoveryActionDefinition{"Retry automatic rollback", recoveryRetry})
+	}
+	if p.Kind == RecoveryForwardOnly {
+		actions = append(actions, recoveryActionDefinition{"Continue forward-only recovery", recoveryRetry})
 	}
 	if p.Kind == RecoveryCurrentStateRepairAvailable {
 		actions = append(actions, recoveryActionDefinition{"Review current-State repair", recoveryRepair})

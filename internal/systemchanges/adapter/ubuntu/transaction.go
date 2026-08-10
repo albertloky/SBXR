@@ -208,6 +208,8 @@ func (a Adapter) Prepare(lease systemchanges.ExecutionLease, preparation systemc
 				return errors.New("native firewall Adapter unavailable")
 			}
 			captureErr = a.firewall.CaptureRollback(step, captureRollback)
+		} else if managementTokenStateChange(step) {
+			captureErr = captureRollback(strings.NewReader(`{"management_token_state_only":true}`))
 		} else if preparation.Mutation == systemchanges.RotationMutation && runTokenActivation(step) {
 			captureErr = captureRollback(strings.NewReader(`{"rotation_forward_only":true}`))
 		} else if softwareInstallation(step) {
@@ -524,6 +526,9 @@ func (a Adapter) Execute(lease systemchanges.ExecutionLease, changeSet string, n
 	if !lease.Authorized() || a.host == nil {
 		return systemchanges.StepEvidence{}, errors.New("typed Ubuntu transaction host unavailable")
 	}
+	if managementTokenStateChange(step) {
+		return managementTokenStateEvidence(), nil
+	}
 	if _, ok := step.FirewallChange(); ok {
 		if a.firewall == nil {
 			return systemchanges.StepEvidence{}, errors.New("native firewall Adapter unavailable")
@@ -627,6 +632,9 @@ func (a Adapter) Reverse(lease systemchanges.ExecutionLease, changeSet string, n
 	digest := sha256.Sum256(content)
 	if hex.EncodeToString(digest[:]) != manifest.Files[name] {
 		return systemchanges.StepEvidence{}, errors.New("rollback snapshot checksum mismatch")
+	}
+	if managementTokenStateChange(step) {
+		return managementTokenStateEvidence(), nil
 	}
 	if _, ok := step.FirewallChange(); ok {
 		if a.firewall == nil {
@@ -871,6 +879,9 @@ func (a Adapter) InspectStep(lease systemchanges.ExecutionLease, recovery system
 	if err != nil {
 		return "", err
 	}
+	if managementTokenStateChange(step) {
+		return systemchanges.StepEffectPresent, nil
+	}
 	if _, ok := step.FirewallChange(); ok {
 		if a.firewall == nil {
 			return "", errors.New("native firewall Adapter unavailable")
@@ -912,6 +923,15 @@ func (a Adapter) InspectStep(lease systemchanges.ExecutionLease, recovery system
 
 func cloudflaredActivation(step systemchanges.Step) bool {
 	return step.Owner() == systemchanges.CloudflareModule && step.Forward() == systemchanges.ActivatePreparedConfiguration && step.Rollback() == systemchanges.RestorePriorConfiguration
+}
+
+func managementTokenStateChange(step systemchanges.Step) bool {
+	return step.Owner() == systemchanges.CloudflareModule && step.Forward() == systemchanges.RecordManagementTokenChange && step.Rollback() == systemchanges.RestoreManagementTokenRecord
+}
+
+func managementTokenStateEvidence() systemchanges.StepEvidence {
+	digest := sha256.Sum256([]byte("management-token-state-only"))
+	return systemchanges.StepEvidence{Code: "CLOUDFLARE-MANAGEMENT-TOKEN-STATE", SHA256: hex.EncodeToString(digest[:])}
 }
 
 func subscriptionActivation(step systemchanges.Step) bool {
@@ -1218,29 +1238,37 @@ func validRecoveryBinding(prepared journalEntry, manifest snapshotManifest, forw
 // mutating them so startup can construct executors for the transaction's true
 // starting baseline rather than whichever State file is currently published.
 func RecoveryStartingStatus(rootPath string) (systemchanges.InstallationStatus, error) {
+	status, _, _, _, err := RecoveryStartingRelease(rootPath)
+	return status, err
+}
+
+// RecoveryStartingRelease returns only the release already authenticated by
+// the protected journal and manifest so recovery can reconstruct fixed tools.
+func RecoveryStartingRelease(rootPath string) (systemchanges.InstallationStatus, systemchanges.ReleaseBinding, bool, systemchanges.DurableCheckpoint, error) {
 	root, err := os.OpenRoot(rootPath)
 	if err != nil {
-		return "", err
+		return "", systemchanges.ReleaseBinding{}, false, "", err
 	}
 	defer root.Close()
 	entries, err := fs.ReadDir(root.FS(), transactionDirectory)
 	if err != nil || len(entries) != 1 || !entries[0].IsDir() || !safeName(entries[0].Name()) {
-		return "", errors.New("one unfinished transaction was not proven")
+		return "", systemchanges.ReleaseBinding{}, false, "", errors.New("one unfinished transaction was not proven")
 	}
 	directory := path.Join(transactionDirectory, entries[0].Name())
 	uid := os.Geteuid()
 	if verifyDirectory(root, directory, uid) != nil || verifyFile(root, path.Join(directory, "journal.jsonl"), uid) != nil {
-		return "", errors.New("recovery transaction identity is invalid")
+		return "", systemchanges.ReleaseBinding{}, false, "", errors.New("recovery transaction identity is invalid")
 	}
 	journal, err := readJournal(root, path.Join(directory, "journal.jsonl"))
 	manifest, manifestErr := verifyTransactionManifest(root, directory, uid)
 	if err != nil || manifestErr != nil || !validJournal(journal) || len(journal) == 0 || journal[0].State == nil || manifest.Reason != journal[0].Mutation || !validRecoveryBinding(journal[0], manifest, journal[0].Mutation == systemchanges.RotationMutation && runTokenFingerprint(journal) != "") {
-		return "", errors.New("recovery transaction lineage is invalid")
+		return "", systemchanges.ReleaseBinding{}, false, "", errors.New("recovery transaction lineage is invalid")
 	}
 	if journal[0].Starting.Status != systemchanges.Managed && journal[0].Starting.Status != systemchanges.NotInstalled {
-		return "", errors.New("recovery starting baseline is unsupported")
+		return "", systemchanges.ReleaseBinding{}, false, "", errors.New("recovery starting baseline is unsupported")
 	}
-	return journal[0].Starting.Status, nil
+	forwardOnly := journal[0].Mutation == systemchanges.RotationMutation && runTokenFingerprint(journal) != ""
+	return journal[0].Starting.Status, recoveryRelease(*journal[0].State), forwardOnly, journal[len(journal)-1].Checkpoint, nil
 }
 
 func validRecoveryJournalBinding(prepared journalEntry) bool {
@@ -1271,6 +1299,12 @@ func (a Adapter) Check(lease systemchanges.ExecutionLease, check systemchanges.C
 			return systemchanges.Unknown, errors.New("Software Lifecycle health executor unavailable")
 		}
 		return a.software.Check(a.root, check, phase, timeout)
+	}
+	if check.Owner == systemchanges.CloudflareModule && (check.Code == "CLOUDFLARE-MANAGEMENT-TOKEN-REPLACED" || check.Code == "CLOUDFLARE-MANAGEMENT-TOKEN-REMOVED") {
+		if err := a.activeManagementTokenStateChange(); err != nil {
+			return systemchanges.Unknown, err
+		}
+		return systemchanges.Healthy, nil
 	}
 	if check.Owner == systemchanges.CloudflareModule && check.Code == "CLOUDFLARE-WHOLE-TUNNEL" {
 		if a.cloudflare == nil {
@@ -1355,6 +1389,27 @@ func (a Adapter) activeFirewallPolicyStep() (systemchanges.Step, error) {
 		}
 	}
 	return systemchanges.Step{}, errors.New("active firewall candidate unavailable")
+}
+
+func (a Adapter) activeManagementTokenStateChange() error {
+	root, err := os.OpenRoot(a.root)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	entries, err := fs.ReadDir(root.FS(), transactionDirectory)
+	if err != nil || len(entries) != 1 || !entries[0].IsDir() {
+		return errors.New("active management-token transaction unavailable")
+	}
+	journal, err := readJournal(root, path.Join(transactionDirectory, entries[0].Name(), "journal.jsonl"))
+	if err != nil || !validJournal(journal) || len(journal[0].Steps) != 1 {
+		return errors.New("active management-token journal unavailable")
+	}
+	step := journal[0].Steps[0]
+	if step.Owner != systemchanges.CloudflareModule || step.Forward != systemchanges.RecordManagementTokenChange || step.Rollback != systemchanges.RestoreManagementTokenRecord {
+		return errors.New("active management-token change unavailable")
+	}
+	return nil
 }
 
 func softwareLifecycleCheck(check systemchanges.Check) bool {

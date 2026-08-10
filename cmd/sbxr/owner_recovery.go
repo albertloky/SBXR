@@ -7,10 +7,21 @@ import (
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
 
-type ownerRecovery struct{ changeSet string }
+type ownerRecovery struct {
+	changeSet             string
+	forwardOnly           bool
+	needsRunTokenRotation bool
+}
 
 func (recovery ownerRecovery) ViewRecovery(context.Context) ownerconsole.RecoveryPresentation {
 	if recovery.changeSet != "" {
+		if recovery.forwardOnly {
+			guidance := "Continue the exact forward-only recovery; do not rotate the token again."
+			if recovery.needsRunTokenRotation {
+				guidance = "Select Rotate token in Cloudflare, then continue the exact forward-only recovery."
+			}
+			return ownerconsole.RecoveryPresentation{Kind: ownerconsole.RecoveryForwardOnly, Proof: ownerconsole.ProvenForwardOnlyRecovery, CauseCode: "SYSTEM-CHANGES-RUN-TOKEN-FORWARD", Explanation: "The old Tunnel run token was removed at the irreversible checkpoint.", ChangeSet: recovery.changeSet, Material: "checksum-protected forward recovery material", Evidence: "IRREVERSIBLE-RUN-TOKEN-ROTATION-STARTED", Guidance: guidance}
+		}
 		return ownerconsole.RecoveryPresentation{Kind: ownerconsole.RecoveryRollbackAvailable, Proof: ownerconsole.ProvenUnfinishedRollback, CauseCode: "SYSTEM-CHANGES-UNFINISHED", Explanation: "A validated unfinished Change Set requires automatic recovery.", ChangeSet: recovery.changeSet, Material: "checksum-protected rollback material", Evidence: "DURABLE-TRANSACTION-PRESENT", Guidance: "Retry the exact automatic rollback before any new change."}
 	}
 	return ownerconsole.RecoveryPresentation{Kind: ownerconsole.RecoveryRebuildRequired, Proof: ownerconsole.ProvenRebuildRequired, CauseCode: "STATE-LINEAGE-UNPROVABLE", Explanation: "The installed State lineage could not be validated.", Evidence: "MANAGED-STATE-REFUSED", Guidance: "Use read-only diagnostics, complete removal, or rebuild from a fresh review."}
@@ -29,7 +40,11 @@ func (recovery ownerRecovery) RetryAutomaticRollback(ctx context.Context) ownerc
 	if status == systemchanges.NotInstalled {
 		checkpoint, explanation = "Not installed", "Automatic recovery proved restored Not installed State."
 	}
-	return ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetRolledBack, OperationID: operation, Checkpoint: checkpoint, Explanation: explanation}
+	kind := ownerconsole.ChangeSetRolledBack
+	if recovery.forwardOnly {
+		kind, checkpoint, explanation = ownerconsole.ChangeSetSucceeded, "Complete", "Forward-only Tunnel run-token recovery proved Managed State and both routes."
+	}
+	return ownerconsole.DurableChangeSet{Kind: kind, OperationID: operation, Checkpoint: checkpoint, Explanation: explanation}
 }
 
 func (ownerRecovery) ReviewCurrentStateRepair(context.Context) ownerconsole.ChangeReview {

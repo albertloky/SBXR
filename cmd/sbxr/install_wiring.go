@@ -63,7 +63,7 @@ func (w *installWiring) ValidateCloudflare(settings state.CloudflareSettings, se
 }
 
 func (w *installWiring) ValidateCertificates(settings state.CertificateSettings) error {
-	if w == nil || w.ip == nil || w.domain == nil || !w.ip.MatchesDesiredState(settings.RenewalPolicy, settings.ACMEAccountID, settings.IPCertificateID, settings.IPServingPointer, settings.DomainCertificateID, settings.DomainServingPointer, settings.DomainHostname) || !w.domain.MatchesDesiredState(settings.RenewalPolicy, settings.ACMEAccountID, settings.IPCertificateID, settings.IPServingPointer, settings.DomainCertificateID, settings.DomainServingPointer, settings.DomainHostname) {
+	if w == nil || w.ip == nil || w.domain == nil || !w.ip.MatchesDesiredState(settings.RenewalPolicy, settings.OwnerEmail, settings.ACMEAccountID, settings.IPCertificateID, settings.IPServingPointer, settings.DomainCertificateID, settings.DomainServingPointer, settings.DomainHostname) || !w.domain.MatchesDesiredState(settings.RenewalPolicy, settings.OwnerEmail, settings.ACMEAccountID, settings.IPCertificateID, settings.IPServingPointer, settings.DomainCertificateID, settings.DomainServingPointer, settings.DomainHostname) {
 		return errors.New("Certificate Lifecycle install Plans do not match Desired State")
 	}
 	return nil

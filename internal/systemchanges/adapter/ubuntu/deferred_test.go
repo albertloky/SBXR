@@ -8,6 +8,14 @@ import (
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
 
+func TestManagementTokenStateChangeUsesNoServiceExecutor(t *testing.T) {
+	step, err := systemchanges.NewStep(systemchanges.CloudflareModule, systemchanges.RecordManagementTokenChange, systemchanges.RestoreManagementTokenRecord)
+	evidence := managementTokenStateEvidence()
+	if err != nil || !managementTokenStateChange(step) || !validEvidence(&evidence) {
+		t.Fatalf("management-token state step = %+v, %v", step, err)
+	}
+}
+
 func TestDeferredReplacementRecoveryChoosesJournaledGeneration(t *testing.T) {
 	for _, test := range []struct {
 		name      string

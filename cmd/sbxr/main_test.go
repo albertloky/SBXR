@@ -12,6 +12,9 @@ import (
 	"github.com/albertloky/SBXR/internal/ownerconsole"
 )
 
+var _ ownerconsole.CloudflareModule = (*clientAccessOutcome)(nil)
+var _ ownerconsole.CertificatesModule = (*clientAccessOutcome)(nil)
+
 func TestDefaultRunRefusesRedirectedTerminal(t *testing.T) {
 	input, writeInput, err := os.Pipe()
 	if err != nil {
@@ -56,5 +59,19 @@ func TestSystemAuthenticationReportsEveryOutcome(t *testing.T) {
 	}
 	if got := systemAuthenticationResult(context.DeadlineExceeded, context.DeadlineExceeded); got != ownerconsole.AuthenticationExpired {
 		t.Fatalf("expired authentication = %v", got)
+	}
+}
+
+func TestOwnerRecoveryPresentsRunTokenRotationAsForwardOnly(t *testing.T) {
+	view := (ownerRecovery{changeSet: "provider-run-token", forwardOnly: true, needsRunTokenRotation: true}).ViewRecovery(t.Context())
+	if view.Kind != ownerconsole.RecoveryForwardOnly || view.Proof != ownerconsole.ProvenForwardOnlyRecovery || !strings.Contains(view.Guidance, "Rotate token") || strings.Contains(view.Guidance, "rollback") {
+		t.Fatalf("forward-only recovery = %+v", view)
+	}
+}
+
+func TestOwnerRecoveryDoesNotAskForASecondRunTokenRotation(t *testing.T) {
+	view := (ownerRecovery{changeSet: "provider-run-token", forwardOnly: true}).ViewRecovery(t.Context())
+	if strings.Contains(view.Guidance, "Select Rotate token") || !strings.Contains(view.Guidance, "do not rotate") {
+		t.Fatalf("post-rotation recovery guidance = %+v", view)
 	}
 }
