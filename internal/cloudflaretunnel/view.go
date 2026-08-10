@@ -92,6 +92,7 @@ const (
 	APITemporary    APIErrorKind = "temporary"
 	APIUnauthorized APIErrorKind = "unauthorized"
 	APIForbidden    APIErrorKind = "forbidden"
+	APINotFound     APIErrorKind = "not-found"
 	APIMalformed    APIErrorKind = "malformed"
 	APIAmbiguous    APIErrorKind = "ambiguous"
 	APIPermanent    APIErrorKind = "permanent"
@@ -112,6 +113,22 @@ type Interface struct {
 func New(api API, clock Clock) Interface { return Interface{api: api, clock: clock} }
 
 func NewProduction() Interface { return New(NewProductionAPI(), SystemClock{}) }
+
+// VerifyManagementTokenRevoked accepts only Cloudflare's explicit
+// unauthorized response. Outages and changed permissions remain unproved.
+func (i Interface) VerifyManagementTokenRevoked(ctx context.Context, request ObservationRequest) (bool, error) {
+	if i.api == nil {
+		return false, errors.New("Cloudflare token observer unavailable")
+	}
+	_, err := i.api.Observe(ctx, request)
+	if apiErrorIs(err, APIUnauthorized) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return false, nil
+}
 
 type ObservationRequest struct {
 	AccountID string
@@ -508,3 +525,6 @@ func apiErrorIs(err error, kind APIErrorKind) bool {
 	var apiError APIError
 	return errors.As(err, &apiError) && apiError.Kind == kind
 }
+
+// IsNotFound reports the one provider response that proves an immutable ID is absent.
+func IsNotFound(err error) bool { return apiErrorIs(err, APINotFound) }

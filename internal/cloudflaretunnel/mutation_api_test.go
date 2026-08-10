@@ -22,6 +22,25 @@ func (origins *reachableOrigins) Reachable(_ context.Context, address string) (b
 	return true, nil
 }
 
+func TestRemovalDeletesAreRestartIdempotentOnlyForNotFound(t *testing.T) {
+	managementToken, err := cloudflaretunnel.NewManagementToken(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []int{http.StatusNotFound, http.StatusForbidden} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) { response.WriteHeader(status) }))
+			defer server.Close()
+			api := cloudflaretunnel.NewFixtureMutationAPI(server.Client(), server.URL, staticResolver{}, &reachableOrigins{})
+			dnsErr := api.DeleteDNSRecord(context.Background(), cloudflaretunnel.DeleteDNSRecordRequest{ZoneID: zoneID, ID: strings.Repeat("3", 32), Token: managementToken})
+			tunnelErr := api.DeleteTunnel(context.Background(), cloudflaretunnel.DeleteTunnelRequest{AccountID: accountID, ID: mutationTunnelID, Token: managementToken})
+			if (dnsErr != nil) != (status != http.StatusNotFound) || (tunnelErr != nil) != (status != http.StatusNotFound) {
+				t.Fatalf("delete errors = (%v, %v)", dnsErr, tunnelErr)
+			}
+		})
+	}
+}
+
 func TestHTTPMutationAPIExposesSecretFreeAuthoritativeDNSAndEffectiveCAA(t *testing.T) {
 	managementToken, err := cloudflaretunnel.NewManagementToken(token)
 	if err != nil {

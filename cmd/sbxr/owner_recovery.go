@@ -11,6 +11,7 @@ type ownerRecovery struct {
 	changeSet             string
 	forwardOnly           bool
 	needsRunTokenRotation bool
+	completeRemoval       bool
 	currentStateRepair    bool
 }
 
@@ -20,6 +21,9 @@ func (recovery ownerRecovery) ViewRecovery(context.Context) ownerconsole.Recover
 	}
 	if recovery.changeSet != "" {
 		if recovery.forwardOnly {
+			if recovery.completeRemoval {
+				return ownerconsole.RecoveryPresentation{Kind: ownerconsole.RecoveryForwardOnly, Proof: ownerconsole.ProvenForwardOnlyRecovery, CauseCode: "SYSTEM-CHANGES-COMPLETE-REMOVAL-FORWARD", Explanation: "Irreversible Complete removal has started.", ChangeSet: recovery.changeSet, Material: "checksum-protected forward removal material", Evidence: "IRREVERSIBLE-REMOVAL-STARTED", Guidance: "Revoke the scoped Cloudflare token when requested, then continue the exact forward-only removal. Back, Cancel, and rollback are unavailable."}
+			}
 			guidance := "Continue the exact forward-only recovery; do not rotate the token again."
 			if recovery.needsRunTokenRotation {
 				guidance = "Select Rotate token in Cloudflare, then continue the exact forward-only recovery."
@@ -37,8 +41,16 @@ func (recovery ownerRecovery) RetryAutomaticRollback(ctx context.Context) ownerc
 		return ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetRecoveryRequired, OperationID: operation, Checkpoint: "Recovery Required", Explanation: "Automatic recovery did not prove a safe terminal state."}
 	}
 	status, err := retryClientAccessRecovery(ctx, recovery.changeSet)
+	return ownerRecoveryResult(recovery, status, err)
+}
+
+func ownerRecoveryResult(recovery ownerRecovery, status systemchanges.InstallationStatus, err error) ownerconsole.DurableChangeSet {
+	operation := ownerconsole.OperationIdentity("automatic-recovery")
 	if err != nil {
 		return ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetRecoveryRequired, OperationID: operation, Checkpoint: "Recovery Required", Explanation: "Automatic recovery did not prove a safe terminal state."}
+	}
+	if status == "" {
+		return ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetRecoveryRequired, OperationID: operation, Checkpoint: "Awaiting Owner token revocation", Explanation: "Provider deletion is complete. Revoke the scoped Cloudflare token, then continue the same forward-only removal."}
 	}
 	checkpoint, explanation := "Managed", "Automatic recovery proved restored Managed State."
 	if status == systemchanges.NotInstalled {
@@ -47,6 +59,9 @@ func (recovery ownerRecovery) RetryAutomaticRollback(ctx context.Context) ownerc
 	kind := ownerconsole.ChangeSetRolledBack
 	if recovery.forwardOnly {
 		kind, checkpoint, explanation = ownerconsole.ChangeSetSucceeded, "Complete", "Forward-only Tunnel run-token recovery proved Managed State and both routes."
+		if recovery.completeRemoval {
+			checkpoint, explanation = "Not installed", "Forward-only Complete removal proved Not installed with no retained recovery material."
+		}
 	}
 	return ownerconsole.DurableChangeSet{Kind: kind, OperationID: operation, Checkpoint: checkpoint, Explanation: explanation}
 }

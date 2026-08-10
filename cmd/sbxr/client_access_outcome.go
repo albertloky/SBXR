@@ -5,11 +5,14 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"strconv"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/albertloky/SBXR/internal/connectionprofiles"
 	"github.com/albertloky/SBXR/internal/ownerconsole"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
+	"github.com/albertloky/SBXR/internal/systemchanges"
 )
 
 type clientAccessOutcome struct {
@@ -27,7 +30,10 @@ type clientAccessOutcome struct {
 	lifecycleInstalled, lifecycleCandidate softwarelifecycle.VerifiedRelease
 	softwareReview                         *deferredSoftwareReview
 	repairReview                           *deferredRepairReview
+	removalReview                          *deferredRemovalReview
 	softwareLaunch                         func(context.Context, clientAccessHandoffRequest) (*clientAccessHandoffSession, error)
+	recoveryRetry                          func(context.Context, string) (systemchanges.InstallationStatus, error)
+	removalPoll                            time.Duration
 }
 
 type deferredSoftwareReview struct {
@@ -35,6 +41,151 @@ type deferredSoftwareReview struct {
 	view     ownerconsole.LifecyclePresentation
 }
 type deferredRepairReview struct{ identity ownerconsole.PlanIdentity }
+type deferredRemovalReview struct{ identity ownerconsole.PlanIdentity }
+
+func (outcome *clientAccessOutcome) ViewCompleteRemoval(ctx context.Context) ownerconsole.CompleteRemovalPresentation {
+	if outcome == nil {
+		return ownerconsole.CompleteRemovalPresentation{}
+	}
+	outcome.mu.Lock()
+	change := outcome.change
+	mode := outcome.request.Mode
+	outcome.mu.Unlock()
+	facts := outcome.load(ctx)
+	if facts.Removal.Kind != 0 && change.Kind == ownerconsole.NoChangeSet {
+		return facts.Removal
+	}
+	start := facts.Installation
+	startingRevision := facts.StateRevision
+	if facts.Removal.Kind != 0 {
+		start, startingRevision = facts.Removal.StartingStatus, facts.Removal.StartingRevision
+	}
+	if start != ownerconsole.InstallationManaged && start != ownerconsole.InstallationRecoveryRequired {
+		return ownerconsole.CompleteRemovalPresentation{}
+	}
+	presentation := ownerconsole.CompleteRemovalPresentation{Kind: ownerconsole.CompleteRemovalReviewAvailable, StartingStatus: start, StartingRevision: startingRevision, Checkpoint: ownerconsole.RemovalBeforeIrreversibleCheckpoint, TokenPhase: ownerconsole.RemovalTokenAvailable}
+	if change.Kind == ownerconsole.ChangeSetActive && mode == "removal-apply" {
+		presentation.Kind = ownerconsole.CompleteRemovalRollbackCapable
+		presentation.Progress = ownerconsole.CompleteRemovalProgress{OperationID: change.OperationID, CompletedSteps: change.CompletedSteps, TotalSteps: change.TotalSteps}
+	} else if change.Kind == ownerconsole.ChangeSetRecoveryRequired && mode == "removal-apply" {
+		presentation.Kind = ownerconsole.CompleteRemovalRollbackCapable
+		presentation.Progress = ownerconsole.CompleteRemovalProgress{OperationID: change.OperationID, CompletedSteps: change.CompletedSteps, TotalSteps: change.TotalSteps}
+		if change.Checkpoint == "Provider deletion in progress" || change.Checkpoint == "Awaiting Owner token revocation" {
+			presentation.Kind, presentation.Checkpoint, presentation.TokenPhase = ownerconsole.CompleteRemovalForwardOnly, ownerconsole.RemovalIrreversibleStarted, ownerconsole.RemovalProviderDeletionInProgress
+			presentation.Progress.CompletedSteps = 4
+		}
+		if change.Checkpoint == "Awaiting Owner token revocation" {
+			presentation.TokenPhase = ownerconsole.RemovalTokenAwaitingOwnerRevocation
+			presentation.Progress.CompletedSteps = 7
+		}
+	} else if change.Kind == ownerconsole.ChangeSetRolledBack && mode == "removal-apply" {
+		presentation.Kind, presentation.RestoredStatus, presentation.RestoredRevision, presentation.CancellationProof = ownerconsole.CompleteRemovalCancelled, start, startingRevision, ownerconsole.RemovalRestoredExactStart
+	} else if change.Kind == ownerconsole.ChangeSetSucceeded && mode == "removal-apply" {
+		presentation.Kind, presentation.FinalStatus, presentation.Checkpoint, presentation.TokenPhase, presentation.NoRecoveryMaterial = ownerconsole.CompleteRemovalSucceeded, ownerconsole.InstallationNotInstalled, ownerconsole.RemovalProvenComplete, ownerconsole.RemovalLocalTokenDeleted, true
+		presentation.Progress = ownerconsole.CompleteRemovalProgress{OperationID: change.OperationID, CompletedSteps: change.TotalSteps, TotalSteps: change.TotalSteps}
+	}
+	return presentation
+}
+
+func (outcome *clientAccessOutcome) WatchCompleteRemoval(ctx context.Context) <-chan ownerconsole.CompleteRemovalPresentation {
+	updates := make(chan ownerconsole.CompleteRemovalPresentation, 1)
+	go func() {
+		defer close(updates)
+		for {
+			presentation := outcome.ViewCompleteRemoval(ctx)
+			select {
+			case updates <- presentation:
+			case <-ctx.Done():
+				return
+			}
+			if presentation.Kind != ownerconsole.CompleteRemovalRollbackCapable && presentation.Kind != ownerconsole.CompleteRemovalForwardOnly {
+				return
+			}
+			delay := 250 * time.Millisecond
+			if presentation.Kind == ownerconsole.CompleteRemovalForwardOnly {
+				delay = outcome.removalPoll
+				if delay <= 0 {
+					delay = 10 * time.Second
+				}
+			}
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return
+			}
+			if presentation.Kind == ownerconsole.CompleteRemovalRollbackCapable || presentation.Kind == ownerconsole.CompleteRemovalForwardOnly {
+				retry := outcome.recoveryRetry
+				if retry == nil {
+					retry = retryClientAccessRecovery
+				}
+				status, err := retry(ctx, string(presentation.Progress.OperationID))
+				if err == nil && status == systemchanges.NotInstalled {
+					outcome.mu.Lock()
+					outcome.request.Mode = "removal-apply"
+					outcome.change = ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetSucceeded, OperationID: presentation.Progress.OperationID, CompletedSteps: presentation.Progress.TotalSteps, TotalSteps: presentation.Progress.TotalSteps, Checkpoint: "Not installed", Explanation: "Complete removal proved Not installed with no retained recovery material."}
+					outcome.mu.Unlock()
+				} else if err == nil && status == systemchanges.Managed {
+					outcome.mu.Lock()
+					outcome.change = ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetRolledBack, OperationID: presentation.Progress.OperationID, Checkpoint: "Rolled back", Explanation: "Automatic recovery restored the exact Managed starting revision."}
+					outcome.mu.Unlock()
+				} else if err == nil && status == "" {
+					outcome.mu.Lock()
+					outcome.request.Mode = "removal-apply"
+					outcome.change = ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetRecoveryRequired, OperationID: presentation.Progress.OperationID, CompletedSteps: 7, TotalSteps: presentation.Progress.TotalSteps, Checkpoint: "Awaiting Owner token revocation", Explanation: "Cloudflare resources are deleted. Revoke the scoped token, then continue the exact forward-only Complete removal."}
+					outcome.mu.Unlock()
+				}
+			}
+		}
+	}()
+	return updates
+}
+
+func (outcome *clientAccessOutcome) ReviewCompleteRemoval(ctx context.Context, approval ownerconsole.CompleteRemovalApproval) ownerconsole.ChangeReview {
+	if !approval.OwnerConsoleCompleteRemovalApproval() {
+		return clientAccessCorrection("Both Complete removal confirmations are required")
+	}
+	identity := make([]byte, 12)
+	if _, err := rand.Read(identity); err != nil {
+		return clientAccessCorrection("Change Set identity generation failed")
+	}
+	facts := outcome.load(ctx)
+	request := clientAccessHandoffRequest{Schema: 1, Mode: "removal-review", ChangeSet: "complete-removal-" + hex.EncodeToString(identity)}
+	launch := outcome.softwareLaunch
+	if launch == nil {
+		launch = launchClientAccessReview
+	}
+	session, err := launch(ctx, request)
+	if err != nil || session.review.StartingRevision != facts.StateRevision {
+		session.discard()
+		if facts.Installation == ownerconsole.InstallationRecoveryRequired {
+			return ownerconsole.ChangeReview{Correction: &ownerconsole.CorrectionPresentation{
+				Problem:    "Complete removal cannot prove the Cloudflare resources owned by this installation",
+				Found:      "Desired State lineage or scoped Cloudflare authority is unavailable",
+				Required:   "Exact immutable Tunnel and DNS record IDs plus the active scoped token",
+				WhyStopped: "SBXR will not treat corrupt raw State or same-named provider resources as ownership proof",
+				OwnerSteps: []string{"Use Diagnostics to preserve safe evidence", "Remove only independently verified provider resources", "Rebuild SBXR on a clean VPS"},
+				Selections: []ownerconsole.CorrectionSelection{{Identity: "back", Label: "Back"}},
+				Evidence:   "SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-OWNERSHIP-UNPROVED",
+			}}
+		}
+		return clientAccessCorrection("The privileged Complete removal Plan did not match the reviewed installation")
+	}
+	request.Mode = "removal-apply"
+	request.ReviewedPlanIdentity, request.ReviewedPlanSHA256 = session.review.Identity, session.review.SHA256
+	reviewIdentity := ownerconsole.PlanIdentity(session.review.Identity)
+	outcome.mu.Lock()
+	prior := outcome.session
+	outcome.session, outcome.request, outcome.removalReview = nil, request, &deferredRemovalReview{identity: reviewIdentity}
+	outcome.softwareReview, outcome.repairReview = nil, nil
+	outcome.mu.Unlock()
+	prior.discard()
+	return ownerconsole.ChangeReview{Plan: &session.review.Plan}
+}
+
+func (outcome *clientAccessOutcome) CancelCompleteRemoval(ctx context.Context, operation ownerconsole.OperationIdentity) ownerconsole.CompleteRemovalPresentation {
+	_ = outcome.RequestCancellation(ctx, operation)
+	return outcome.ViewCompleteRemoval(ctx)
+}
 
 func (outcome *clientAccessOutcome) ViewLifecycle(ctx context.Context) ownerconsole.LifecyclePresentation {
 	if outcome == nil {
@@ -106,7 +257,12 @@ func (outcome *clientAccessOutcome) ViewRecovery(ctx context.Context) ownerconso
 }
 
 func (outcome *clientAccessOutcome) RetryAutomaticRollback(ctx context.Context) ownerconsole.DurableChangeSet {
-	return ownerRecovery{changeSet: outcome.load(ctx).Recovery.ChangeSet}.RetryAutomaticRollback(ctx)
+	presentation := outcome.load(ctx).Recovery
+	return ownerRecovery{
+		changeSet: presentation.ChangeSet, forwardOnly: presentation.Kind == ownerconsole.RecoveryForwardOnly,
+		completeRemoval:       presentation.CauseCode == "SYSTEM-CHANGES-COMPLETE-REMOVAL-FORWARD",
+		needsRunTokenRotation: presentation.Evidence == "IRREVERSIBLE-RUN-TOKEN-ROTATION-STARTED" && strings.Contains(presentation.Guidance, "Select Rotate token"),
+	}.RetryAutomaticRollback(ctx)
 }
 
 func (outcome *clientAccessOutcome) ReviewCurrentStateRepair(ctx context.Context) ownerconsole.ChangeReview {
@@ -134,6 +290,7 @@ func (outcome *clientAccessOutcome) ReviewCurrentStateRepair(ctx context.Context
 	prior := outcome.session
 	outcome.session, outcome.request = nil, request
 	outcome.softwareReview, outcome.repairReview = nil, &deferredRepairReview{identity: reviewIdentity}
+	outcome.removalReview = nil
 	outcome.mu.Unlock()
 	prior.discard()
 	return ownerconsole.ChangeReview{Plan: &session.review.Plan}
@@ -238,6 +395,7 @@ func (outcome *clientAccessOutcome) reviewSoftwareChange(ctx context.Context, ac
 	outcome.session, outcome.request = nil, request
 	outcome.softwareReview = &deferredSoftwareReview{identity: reviewIdentity, view: view}
 	outcome.repairReview = nil
+	outcome.removalReview = nil
 	outcome.mu.Unlock()
 	prior.discard()
 	return ownerconsole.ChangeReview{Plan: &session.review.Plan}
@@ -297,6 +455,7 @@ func (outcome *clientAccessOutcome) reviewAction(ctx context.Context, action cli
 	outcome.session, outcome.request = session, request
 	outcome.softwareReview = nil
 	outcome.repairReview = nil
+	outcome.removalReview = nil
 	outcome.mu.Unlock()
 	prior.discard()
 	effects := clientAccessEffects(action, profile)
@@ -324,6 +483,7 @@ func (outcome *clientAccessOutcome) reviewProviderAction(ctx context.Context, ac
 	outcome.session, outcome.request = session, request
 	outcome.softwareReview = nil
 	outcome.repairReview = nil
+	outcome.removalReview = nil
 	outcome.mu.Unlock()
 	prior.discard()
 	return ownerconsole.ChangeReview{Plan: &ownerconsole.PlanPresentation{
@@ -442,7 +602,28 @@ func (outcome *clientAccessOutcome) Apply(ctx context.Context, identity ownercon
 		}
 		outcome.session = session
 	}
-	validIdentity := outcome.softwareReview != nil && identity == outcome.softwareReview.identity || outcome.repairReview != nil && identity == outcome.repairReview.identity || outcome.softwareReview == nil && outcome.repairReview == nil && outcome.session != nil && identity == ownerconsole.PlanIdentity(outcome.session.review.Identity)
+	if outcome.session == nil && outcome.removalReview != nil && identity == outcome.removalReview.identity {
+		request, facts := outcome.request, outcome.presentation
+		launch := outcome.softwareLaunch
+		if launch == nil {
+			launch = launchClientAccessReview
+		}
+		outcome.mu.Unlock()
+		session, err := launch(ctx, request)
+		if err != nil || session.review.Identity != request.ReviewedPlanIdentity || session.review.SHA256 != request.ReviewedPlanSHA256 || session.review.StartingRevision != facts.StateRevision {
+			session.discard()
+			return ownerconsole.ChangeResult{Kind: ownerconsole.ChangePlanRejected, Explanation: "The approved Complete removal Plan changed during privileged recheck."}
+		}
+		outcome.mu.Lock()
+		if outcome.session != nil || outcome.removalReview == nil || outcome.removalReview.identity != identity || outcome.change.Kind == ownerconsole.ChangeSetActive {
+			outcome.mu.Unlock()
+			session.discard()
+			return ownerconsole.ChangeResult{Kind: ownerconsole.ChangePlanRejected, Explanation: "The exact reviewed Complete removal Plan is unavailable."}
+		}
+		outcome.session = session
+		outcome.session.removalApproved = true
+	}
+	validIdentity := outcome.softwareReview != nil && identity == outcome.softwareReview.identity || outcome.repairReview != nil && identity == outcome.repairReview.identity || outcome.removalReview != nil && identity == outcome.removalReview.identity || outcome.softwareReview == nil && outcome.repairReview == nil && outcome.removalReview == nil && outcome.session != nil && identity == ownerconsole.PlanIdentity(outcome.session.review.Identity)
 	if outcome.session == nil || !validIdentity {
 		outcome.mu.Unlock()
 		return ownerconsole.ChangeResult{Kind: ownerconsole.ChangePlanRejected, Explanation: "The exact reviewed Client Access Plan is unavailable."}
@@ -450,6 +631,7 @@ func (outcome *clientAccessOutcome) Apply(ctx context.Context, identity ownercon
 	session := outcome.session
 	operation := ownerconsole.OperationIdentity(outcome.request.ChangeSet)
 	total := session.review.TotalSteps
+	removal := outcome.request.Mode == "removal-apply"
 	outcome.request.Token, outcome.request.OwnerEmail = "", ""
 	outcome.change = ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetActive, OperationID: operation, TotalSteps: total, Checkpoint: "Privileged Change Set running", Explanation: "The exact reviewed Client Access change is running."}
 	outcome.mu.Unlock()
@@ -460,14 +642,21 @@ func (outcome *clientAccessOutcome) Apply(ctx context.Context, identity ownercon
 		switch {
 		case err == nil && terminal == 'C':
 			outcome.change = ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetSucceeded, OperationID: operation, CompletedSteps: total, TotalSteps: total, Checkpoint: "Complete", Explanation: "The new Managed revision and every required agreement check passed."}
-			outcome.loaded = false
+			if !removal {
+				outcome.loaded = false
+			}
 		case err == nil && terminal == 'R':
 			outcome.change = ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetRolledBack, OperationID: operation, TotalSteps: total, Checkpoint: "Rolled back", Explanation: "The complete prior Managed revision was restored."}
 		case err == nil && terminal == 'A':
 			outcome.change = ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetRecoveryRequired, OperationID: operation, TotalSteps: total, Checkpoint: "Awaiting Owner Rotate token", Explanation: "Select Rotate token for the committed Tunnel in Cloudflare, then continue the exact forward-only recovery. Rollback is no longer available."}
 			outcome.loaded = false
+		case err == nil && terminal == 'D':
+			outcome.change = ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetRecoveryRequired, OperationID: operation, TotalSteps: total, Checkpoint: "Awaiting Owner token revocation", Explanation: "Cloudflare resources are deleted. Revoke the scoped token, then continue the exact forward-only Complete removal. Back and Cancel are unavailable."}
+		case err == nil && terminal == 'P':
+			outcome.change = ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetRecoveryRequired, OperationID: operation, TotalSteps: total, Checkpoint: "Provider deletion in progress", Explanation: "Complete removal is forward-only. Keep the scoped token active while SBXR retries the exact next Cloudflare deletion."}
 		default:
-			outcome.change = ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetRecoveryRequired, OperationID: operation, TotalSteps: total, Checkpoint: "Recovery Required", Explanation: "The privileged process could not prove Complete or full rollback."}
+			outcome.loaded = false
+			outcome.change = ownerconsole.DurableChangeSet{}
 		}
 	}()
 	return ownerconsole.ChangeResult{Kind: ownerconsole.ChangeStarted, OperationID: operation, Explanation: "The exact reviewed Client Access Change Set started."}
@@ -518,7 +707,7 @@ func (outcome *clientAccessOutcome) Edit(ctx context.Context, input ownerconsole
 }
 func (outcome *clientAccessOutcome) RequestCancellation(_ context.Context, operation ownerconsole.OperationIdentity) ownerconsole.ChangeResult {
 	outcome.mu.Lock()
-	software := outcome.request.Mode == "software-apply" && outcome.change.Kind == ownerconsole.ChangeSetActive && outcome.change.OperationID == operation
+	software := (outcome.request.Mode == "software-apply" || outcome.request.Mode == "removal-apply") && outcome.change.Kind == ownerconsole.ChangeSetActive && outcome.change.OperationID == operation
 	session := outcome.session
 	outcome.mu.Unlock()
 	if !software || session.cancel() != nil {

@@ -150,3 +150,29 @@ This procedure has no live or Owner result in this file. Record results only aga
 8. Scan the private request, exact Plan review, retained candidate, prepared release and Module artifacts, journal, rollback snapshot, State result, publication, service output, Owner Console transcript, diagnostics, and redacted Acceptance Record for unique Client Access Values, Infrastructure Secrets, release-signing test markers, archive payload markers, private keys, complete subscription URLs, authorization values, raw external errors, and injected `SECRET-MARKER` values. Any marker outside its owning protected artifact fails.
 
 Stable evidence codes are `RELEASE-SOFTWARE-CHANGE-N-TO-N+1`, `RELEASE-SOFTWARE-DISCOVERY-NO-APPLY`, `RELEASE-SOFTWARE-CANDIDATE-RETENTION`, `RELEASE-SOFTWARE-UPDATE`, `RELEASE-SOFTWARE-DOWNGRADE`, `RELEASE-SOFTWARE-REPAIR`, `RELEASE-SOFTWARE-INCOMPATIBLE-REFUSED`, `RELEASE-SOFTWARE-PRE-PUBLICATION-ROLLBACK`, `RELEASE-SOFTWARE-POST-PUBLICATION-ROLLBACK`, `RELEASE-SOFTWARE-CANCELLATION`, `RELEASE-SOFTWARE-RESTART`, `RELEASE-SOFTWARE-RECOVERY-REQUIRED`, `RELEASE-SOFTWARE-CLEANUP`, and `RELEASE-SOFTWARE-SECRET-SCAN`.
+
+## `RELEASE-COMPLETE-REMOVAL` — Integrated Verification — Codex
+
+This procedure has no live or Owner result in this file. Record results only against one exact Release Identity in its redacted Acceptance Record. No real VPS destruction, Cloudflare deletion, token revocation, reboot, client, or Owner-console acceptance was authorized by issue #149; every such unperformed check remains Pending.
+
+1. From proven `Managed` and from `Recovery Required` with no valid unfinished transaction, require authenticated Owner Console to show safe evidence, diagnostics, rebuild guidance, and the separately confirmed Complete removal path. With one valid unfinished reversible transaction, offer only its exact automatic rollback first. Refuse corrupt, linked, broadly readable, duplicate, contradictory, or multiple transaction evidence.
+2. Require the exact typed `COMPLETE REMOVAL` field and the separate `Permanently remove SBXR` selection. Run one read-only `removal-review` privileged helper that returns the complete secret-safe Plan and exits. Apply only through a separate `removal-apply` helper that freshly rebuilds and matches the exact Plan identity and SHA-256 before accepting the two exact post-review Owner acts followed by `APPLY`.
+3. Before `Irreversible removal started`, remove only SBXR-owned public exposure and exact Tunnel routes. Keep the exact immutable-ID DNS records, Tunnel, management token, State, local material, journal, and Rollback Snapshot. Fail, cancel, or kill the worker before and after every safe checkpoint; require a fresh `private recover` to restore the exact proven Managed baseline or preserve the exact raw Recovery Required baseline.
+4. Prove the fixed local cleanup is ready, then durably record `Irreversible removal started`. Only afterward delete the exact immutable-ID DNS records and Tunnel, recording `Owned Cloudflare DNS records deleted`, `Owned Cloudflare Tunnel deleted`, and `Owned external deletion verified`. Preserve unrelated Cloudflare and local resources. Back, Cancel, automatic rollback, and restore are unavailable from this point.
+5. Require Albert to revoke the scoped Cloudflare token only after provider deletion is durable. Accept only an explicit unauthorized response as revocation proof; forbidden, timeout, malformed, ambiguous, or other errors remain forward-only at the last durable checkpoint. Then delete local State, Infrastructure Secrets, and certificates; durably record `Transaction material deletion authorized` before deleting checksummed transaction material except the journal; then delete releases, units, identities, listeners, prepared artifacts, and owned firewall state in the fixed recorded order.
+6. Kill the worker immediately before and after every irreversible checkpoint and reboot. Each fresh `private recover` must replay an uncertain provider deletion idempotently, skip only durably recorded work, never run reverse, never restart affected services, and delete the removal journal and recovery runner last. Success requires exact `Not installed`, no local token, no owned resources, and no retained SBXR recovery material.
+7. Run the focused automated evidence:
+
+   ```sh
+   go test ./cmd/sbxr -run 'Test(CompleteRemoval|ClientAccessHandoff)' -count=1
+   go test ./internal/ownerconsole -run 'CompleteRemoval' -count=1
+   go test ./internal/cloudflaretunnel -run 'Test(RevocationProof|RemovalDeletes|RemovalAuthority)' -count=1
+   go test ./internal/softwarelifecycle -run 'CompleteRemoval' -count=1
+   go test ./internal/systemchanges/... -run 'CompleteRemoval|Removal' -count=1
+   go test ./internal/state -run 'CompleteRemoval|Removal' -count=1
+   go test ./... -count=1
+   ```
+
+8. Scan the private requests, exact Plan, Owner Console transcript, State and raw-baseline binding, provider observations, journal, snapshot, step evidence, recovery result, native errors, command line, environment, and redacted Acceptance Record for Client Access Values, Infrastructure Secrets, complete URLs, authorization values, private keys, raw provider output, and injected `SECRET-MARKER` values. Any marker outside its owning protected artifact fails.
+
+Stable evidence codes are `RELEASE-COMPLETE-REMOVAL`, `RELEASE-REMOVAL-TWO-STEP-CONFIRMATION`, `RELEASE-REMOVAL-PLAN-BINDING`, `RELEASE-REMOVAL-PRE-CHECKPOINT-ROLLBACK`, `RELEASE-REMOVAL-IRREVERSIBLE-STARTED`, `RELEASE-REMOVAL-DNS-DELETED`, `RELEASE-REMOVAL-TUNNEL-DELETED`, `RELEASE-REMOVAL-TOKEN-REVOKED`, `RELEASE-REMOVAL-FORWARD-RESTART`, `RELEASE-REMOVAL-NOT-INSTALLED`, `RELEASE-REMOVAL-RUNNER-LAST`, and `RELEASE-REMOVAL-SECRET-SCAN`.

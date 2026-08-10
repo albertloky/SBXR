@@ -69,6 +69,7 @@ type PlanPresentation struct {
 	Identity                             PlanIdentity
 	DesiredStateRevision                 uint64
 	DesiredStateSHA256                   string
+	LineageUnavailable                   bool
 	RelevantChecksums                    []string
 	ObservedState                        string
 	VerifiedExternalInputs               []string
@@ -131,7 +132,8 @@ func validatedChangeReview(review ChangeReview) ChangeReview {
 		return invalidChangeReview()
 	}
 	if plan := review.Plan; plan != nil {
-		if !safeIdentifier(string(plan.Identity)) || !safeSHA256(plan.DesiredStateSHA256) || !completeStrings(plan.RelevantChecksums, 32) || !safeLine(plan.ObservedState) || !completeStrings(plan.VerifiedExternalInputs, 32) || !completeStrings(plan.Effects, 64) || !completeStrings(plan.RequiredChecks, 64) || !completeStrings(plan.AdvisoryChecks, 64) || !safeLine(plan.Interruption) || !safeLine(plan.Cancellation) || !safeLine(plan.Rollback) {
+		lineage := safeSHA256(plan.DesiredStateSHA256) || plan.LineageUnavailable && plan.DesiredStateRevision == 0 && plan.DesiredStateSHA256 == ""
+		if !safeIdentifier(string(plan.Identity)) || !lineage || !completeStrings(plan.RelevantChecksums, 32) || !safeLine(plan.ObservedState) || !completeStrings(plan.VerifiedExternalInputs, 32) || !completeStrings(plan.Effects, 64) || !completeStrings(plan.RequiredChecks, 64) || !completeStrings(plan.AdvisoryChecks, 64) || !safeLine(plan.Interruption) || !safeLine(plan.Cancellation) || !safeLine(plan.Rollback) {
 			return invalidChangeReview()
 		}
 		copy := *plan
@@ -324,7 +326,13 @@ func minimumPages(facts []string, width, factsPerPage int) [][]string {
 }
 
 func planFactLines(plan *PlanPresentation) []string {
-	lines := []string{"Plan " + string(plan.Identity), fmt.Sprintf("Desired State revision %d", plan.DesiredStateRevision), "Desired State SHA-256", plan.DesiredStateSHA256, "Relevant checksums"}
+	lines := []string{"Plan " + string(plan.Identity)}
+	if plan.LineageUnavailable {
+		lines = append(lines, "Desired State lineage unavailable - exact raw baseline preserved")
+	} else {
+		lines = append(lines, fmt.Sprintf("Desired State revision %d", plan.DesiredStateRevision), "Desired State SHA-256", plan.DesiredStateSHA256)
+	}
+	lines = append(lines, "Relevant checksums")
 	lines = append(lines, plan.RelevantChecksums...)
 	lines = append(lines, "Observed State: "+plan.ObservedState, "Verified external inputs")
 	for _, value := range plan.VerifiedExternalInputs {

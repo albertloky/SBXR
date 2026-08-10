@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"io"
 	"os"
@@ -121,6 +122,22 @@ func TestSoftwareLifecycleHandoffAcceptsOnlyExactTypedActions(t *testing.T) {
 	}
 }
 
+func TestCompleteRemovalHandoffRequiresSeparateBoundReviewAndApprovedApply(t *testing.T) {
+	review := clientAccessHandoffRequest{Schema: 1, Mode: "removal-review", ChangeSet: "complete-removal-0001"}
+	apply := clientAccessHandoffRequest{Schema: 1, Mode: "removal-apply", ChangeSet: review.ChangeSet, ReviewedPlanIdentity: "complete-removal-0001-plan-abcdef123456", ReviewedPlanSHA256: strings.Repeat("a", 64)}
+	if !validClientAccessHandoff(review) || !validClientAccessHandoff(apply) {
+		t.Fatal("exact Complete removal review/apply requests were refused")
+	}
+	for _, request := range []clientAccessHandoffRequest{
+		{Schema: 1, Mode: "removal-apply", ChangeSet: review.ChangeSet},
+		{Schema: 1, Mode: "removal-apply", ChangeSet: review.ChangeSet, ReviewedPlanIdentity: apply.ReviewedPlanIdentity, ReviewedPlanSHA256: apply.ReviewedPlanSHA256, SoftwareAction: "repair"},
+	} {
+		if validClientAccessHandoff(request) {
+			t.Fatalf("unsafe Complete removal request was accepted: %+v", request)
+		}
+	}
+}
+
 func TestSoftwareLifecycleHandoffCarriesOneBoundedCancellationRequest(t *testing.T) {
 	descriptors, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
 	if err != nil {
@@ -149,5 +166,61 @@ func TestSoftwareLifecycleHandoffCarriesOneBoundedCancellationRequest(t *testing
 	}
 	if err := session.cancel(); err == nil {
 		t.Fatal("second cancellation request was accepted")
+	}
+}
+
+func TestCompleteRemovalApplyCarriesBothPostReviewOwnerActs(t *testing.T) {
+	descriptors, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, child := os.NewFile(uintptr(descriptors[0]), "parent"), os.NewFile(uintptr(descriptors[1]), "child")
+	defer child.Close()
+	message := "COMPLETE REMOVAL\nPERMANENTLY REMOVE SBXR\nAPPLY\n"
+	seen := make(chan string, 1)
+	go func() {
+		body := make([]byte, len(message))
+		_, _ = io.ReadFull(child, body)
+		seen <- string(body)
+		_, _ = child.Write([]byte{'R'})
+	}()
+	session := &clientAccessHandoffSession{socket: parent, wait: func() error { return nil }, removalApproved: true}
+	if terminal, err := session.apply(); err != nil || terminal != 'R' {
+		t.Fatalf("terminal = %q, err = %v", terminal, err)
+	}
+	if got := <-seen; got != message {
+		t.Fatalf("approval protocol = %q", got)
+	}
+}
+
+func TestCompleteRemovalOutcomeWiresBothOwnerActsToApplyHandoff(t *testing.T) {
+	descriptors, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, child := os.NewFile(uintptr(descriptors[0]), "parent"), os.NewFile(uintptr(descriptors[1]), "child")
+	defer child.Close()
+	message := "COMPLETE REMOVAL\nPERMANENTLY REMOVE SBXR\nAPPLY\n"
+	seen := make(chan string, 1)
+	go func() {
+		body := make([]byte, len(message))
+		_, _ = io.ReadFull(child, body)
+		seen <- string(body)
+		_, _ = child.Write([]byte{'R'})
+	}()
+	identity := ownerconsole.PlanIdentity("complete-removal-0001-plan-abcdef123456")
+	request := clientAccessHandoffRequest{Schema: 1, Mode: "removal-apply", ChangeSet: "complete-removal-0001", ReviewedPlanIdentity: string(identity), ReviewedPlanSHA256: strings.Repeat("a", 64)}
+	outcome := &clientAccessOutcome{
+		loaded: true, request: request, removalReview: &deferredRemovalReview{identity: identity},
+		presentation: clientAccessPresentation{Installation: ownerconsole.InstallationManaged, StateRevision: 7},
+		softwareLaunch: func(context.Context, clientAccessHandoffRequest) (*clientAccessHandoffSession, error) {
+			return &clientAccessHandoffSession{socket: parent, wait: func() error { return nil }, review: clientAccessHandoffReview{Identity: string(identity), SHA256: request.ReviewedPlanSHA256, StartingRevision: 7, TotalSteps: completeRemovalTotalSteps}}, nil
+		},
+	}
+	if result := outcome.Apply(t.Context(), identity); result.Kind != ownerconsole.ChangeStarted {
+		t.Fatalf("apply result = %+v", result)
+	}
+	if got := <-seen; got != message {
+		t.Fatalf("approval protocol = %q", got)
 	}
 }

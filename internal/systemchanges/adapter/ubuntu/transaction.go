@@ -23,6 +23,7 @@ import (
 const (
 	transactionDirectory       = "var/lib/sbxr/transactions"
 	finalizingRemovalDirectory = "removal-finalizing"
+	FinalizingRemovalChangeSet = finalizingRemovalDirectory
 )
 
 // Host owns the typed native effects and observations; Adapter owns their durability.
@@ -46,7 +47,12 @@ type IrreversibleRemovalHost interface {
 	VerifyCloudflareTokenRevoked(time.Duration) (bool, error)
 	DeleteIrreversibleRemovalPhase(systemchanges.IrreversibleRemovalPhase, time.Duration) (systemchanges.StepEvidence, error)
 	VerifyFinalRemovalAbsence(time.Duration) (bool, error)
+	PrepareRemovalFinalization(time.Duration) error
 	FinalizeRemoval(time.Duration) error
+}
+
+type removalRecoveryHost interface {
+	LoadRemovalRecovery(io.Reader) error
 }
 
 // FirewallExecutor is the narrow native seam for approved inet sbxr changes.
@@ -212,6 +218,8 @@ func (a Adapter) Prepare(lease systemchanges.ExecutionLease, preparation systemc
 			captureErr = captureRollback(strings.NewReader(`{"management_token_state_only":true}`))
 		} else if preparation.Mutation == systemchanges.RotationMutation && runTokenActivation(step) {
 			captureErr = captureRollback(strings.NewReader(`{"rotation_forward_only":true}`))
+		} else if irreversibleRemoteRemoval(step) {
+			captureErr = captureRollback(strings.NewReader(`{"irreversible_after_checkpoint":true}`))
 		} else if softwareInstallation(step) {
 			if a.software == nil {
 				return errors.New("Software Lifecycle executor unavailable")
@@ -778,11 +786,12 @@ func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges
 		}
 	}
 	irreversible := prepared.Mutation == systemchanges.CompleteRemovalMutation && journalHasCheckpoint(journal, systemchanges.IrreversibleRemovalStarted)
+	removalSnapshotDeleted := prepared.Mutation == systemchanges.CompleteRemovalMutation && journalHasCheckpoint(journal, systemchanges.TransactionMaterialDeletionAuthorized)
 	irreversibleRotation := prepared.Mutation == systemchanges.RotationMutation && runTokenFingerprint(journal) != ""
 	if prepared.State == nil || prepared.ChangeSet != changeSet || !validRecoveryJournalBinding(prepared) {
 		return systemchanges.RecoveryTransaction{}, errors.New("recovery transaction lineage is invalid")
 	}
-	if !irreversible {
+	if !removalSnapshotDeleted {
 		manifest, err := verifyTransactionManifest(root, directory, a.uid)
 		if err != nil || manifest.Reason != prepared.Mutation || !validRecoveryBinding(prepared, manifest, irreversibleRotation) {
 			return systemchanges.RecoveryTransaction{}, errors.New("recovery transaction lineage is invalid")
@@ -998,23 +1007,76 @@ func (a Adapter) VerifyIrreversibleRemovalReady(lease systemchanges.ExecutionLea
 	return host.VerifyIrreversibleRemovalReady(timeout)
 }
 
-func (a Adapter) VerifyCloudflareTokenRevoked(lease systemchanges.ExecutionLease, _ systemchanges.RecoveryTransaction, timeout time.Duration) (bool, error) {
+func (a Adapter) VerifyCloudflareTokenRevoked(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction, timeout time.Duration) (bool, error) {
 	host, ok := a.host.(IrreversibleRemovalHost)
 	if !lease.Authorized() || !ok {
 		return false, errors.New("irreversible removal host unavailable")
 	}
+	if err := a.loadRemovalRecovery(lease, recovery); err != nil {
+		return false, err
+	}
 	return host.VerifyCloudflareTokenRevoked(timeout)
 }
 
-func (a Adapter) DeleteIrreversibleRemovalPhase(lease systemchanges.ExecutionLease, _ systemchanges.RecoveryTransaction, phase systemchanges.IrreversibleRemovalPhase, timeout time.Duration) (systemchanges.StepEvidence, error) {
+func (a Adapter) DeleteIrreversibleRemovalPhase(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction, phase systemchanges.IrreversibleRemovalPhase, timeout time.Duration) (systemchanges.StepEvidence, error) {
 	if phase == systemchanges.TransactionMaterialPhase {
 		return a.deleteTransactionMaterial(lease)
+	}
+	if phase == systemchanges.CloudflareDNSRecordsPhase || phase == systemchanges.CloudflareTunnelPhase {
+		if !lease.Authorized() || a.host == nil {
+			return systemchanges.StepEvidence{}, errors.New("irreversible removal host unavailable")
+		}
+		if err := a.loadRemovalRecovery(lease, recovery); err != nil {
+			return systemchanges.StepEvidence{}, err
+		}
+		digest := sha256.New()
+		removed := 0
+		for _, step := range recovery.Steps {
+			change, ok := step.RemovalChange()
+			if !ok || change.Action != systemchanges.CloudflareRemoval || phase == systemchanges.CloudflareDNSRecordsPhase && change.Resource != systemchanges.CloudflareDNSRecordResource || phase == systemchanges.CloudflareTunnelPhase && change.Resource != systemchanges.CloudflareTunnelResource {
+				continue
+			}
+			evidence, err := a.host.Execute(step, timeout, systemchanges.NewCancellation())
+			if err != nil || !validDigest(evidence.SHA256) {
+				return systemchanges.StepEvidence{}, errors.New("owned Cloudflare resource deletion failed")
+			}
+			_, _ = digest.Write([]byte(evidence.Code + evidence.SHA256))
+			removed++
+		}
+		if removed == 0 {
+			return systemchanges.StepEvidence{}, errors.New("owned Cloudflare removal inventory unavailable")
+		}
+		return systemchanges.StepEvidence{Code: "owned-cloudflare-removal-verified", SHA256: hex.EncodeToString(digest.Sum(nil))}, nil
 	}
 	host, ok := a.host.(IrreversibleRemovalHost)
 	if !lease.Authorized() || !ok {
 		return systemchanges.StepEvidence{}, errors.New("irreversible removal host unavailable")
 	}
 	return host.DeleteIrreversibleRemovalPhase(phase, timeout)
+}
+
+func (a Adapter) loadRemovalRecovery(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction) error {
+	host, ok := a.host.(removalRecoveryHost)
+	if !lease.Authorized() || !ok {
+		return errors.New("Complete removal recovery authority unavailable")
+	}
+	for index, step := range recovery.Steps {
+		change, valid := step.RemovalChange()
+		if !valid || change.Resource != systemchanges.CloudflareRouteResource {
+			continue
+		}
+		content, err := a.recoveryArtifact(lease, recovery.ChangeSet, fmt.Sprintf("snapshot/step-%03d.rollback", index+1))
+		if err != nil {
+			return err
+		}
+		return host.LoadRemovalRecovery(bytes.NewReader(content))
+	}
+	return errors.New("Complete removal recovery authority unavailable")
+}
+
+func irreversibleRemoteRemoval(step systemchanges.Step) bool {
+	change, ok := step.RemovalChange()
+	return ok && change.Action == systemchanges.CloudflareRemoval && (change.Resource == systemchanges.CloudflareDNSRecordResource || change.Resource == systemchanges.CloudflareTunnelResource)
 }
 
 func (a Adapter) VerifyFinalRemovalAbsence(lease systemchanges.ExecutionLease, _ systemchanges.RecoveryTransaction, timeout time.Duration) (systemchanges.Observation, error) {
@@ -1058,6 +1120,9 @@ func (a Adapter) FinalizeRemoval(lease systemchanges.ExecutionLease, recovery sy
 	if err := discardFinalizingRemoval(root, a.uid); err != nil {
 		return err
 	}
+	if err := host.PrepareRemovalFinalization(timeout); err != nil {
+		return err
+	}
 	return host.FinalizeRemoval(timeout)
 }
 
@@ -1079,6 +1144,9 @@ func (a Adapter) FinalizeOrphanedRemoval(lease systemchanges.ExecutionLease, obs
 		if err := discardFinalizingRemoval(root, a.uid); err != nil {
 			return err
 		}
+	}
+	if err := host.PrepareRemovalFinalization(timeout); err != nil {
+		return err
 	}
 	return host.FinalizeRemoval(timeout)
 }
@@ -1123,7 +1191,7 @@ func (a Adapter) deleteTransactionMaterial(lease systemchanges.ExecutionLease) (
 	}
 	target := path.Join(transactionDirectory, entries[0].Name())
 	journal, err := readJournal(root, path.Join(target, "journal.jsonl"))
-	if err != nil || !validJournal(journal) || journal[len(journal)-1].Checkpoint != systemchanges.CertificatesDeleted {
+	if err != nil || !validJournal(journal) || journal[len(journal)-1].Checkpoint != systemchanges.TransactionMaterialDeletionAuthorized {
 		return systemchanges.StepEvidence{}, errors.New("transaction material deletion is out of order")
 	}
 	manifest, manifestErr := readSnapshotManifest(root, target, a.uid)
@@ -1243,11 +1311,14 @@ func RecoveryStartingStatus(rootPath string) (systemchanges.InstallationStatus, 
 }
 
 type RecoveryTransactionIdentity struct {
+	ChangeSet                         string
 	StartingStatus                    systemchanges.InstallationStatus
+	StartingRevision                  uint64
 	Mutation                          systemchanges.MutationClass
 	StartingRelease, CandidateRelease systemchanges.ReleaseBinding
 	ForwardOnly                       bool
 	Checkpoint                        systemchanges.DurableCheckpoint
+	CompletedSteps, TotalSteps        int
 }
 
 // RecoveryStartingRelease returns only the release already authenticated by
@@ -1280,15 +1351,22 @@ func RecoveryTransaction(rootPath string) (RecoveryTransactionIdentity, error) {
 		return RecoveryTransactionIdentity{}, errors.New("recovery transaction identity is invalid")
 	}
 	journal, err := readJournal(root, path.Join(directory, "journal.jsonl"))
-	manifest, manifestErr := verifyTransactionManifest(root, directory, uid)
-	if err != nil || manifestErr != nil || !validJournal(journal) || len(journal) == 0 || journal[0].State == nil || manifest.Reason != journal[0].Mutation || !validRecoveryBinding(journal[0], manifest, journal[0].Mutation == systemchanges.RotationMutation && runTokenFingerprint(journal) != "") {
+	if err != nil || !validJournal(journal) || len(journal) == 0 || journal[0].State == nil {
 		return RecoveryTransactionIdentity{}, errors.New("recovery transaction lineage is invalid")
 	}
-	if journal[0].Starting.Status != systemchanges.Managed && journal[0].Starting.Status != systemchanges.NotInstalled {
+	irreversibleRemoval := journal[0].Mutation == systemchanges.CompleteRemovalMutation && journalHasCheckpoint(journal, systemchanges.IrreversibleRemovalStarted)
+	removalSnapshotDeleted := journal[0].Mutation == systemchanges.CompleteRemovalMutation && journalHasCheckpoint(journal, systemchanges.TransactionMaterialDeletionAuthorized)
+	if !removalSnapshotDeleted {
+		manifest, manifestErr := verifyTransactionManifest(root, directory, uid)
+		if manifestErr != nil || manifest.Reason != journal[0].Mutation || !validRecoveryBinding(journal[0], manifest, journal[0].Mutation == systemchanges.RotationMutation && runTokenFingerprint(journal) != "") {
+			return RecoveryTransactionIdentity{}, errors.New("recovery transaction lineage is invalid")
+		}
+	}
+	if journal[0].Starting.Status != systemchanges.Managed && journal[0].Starting.Status != systemchanges.NotInstalled && (journal[0].Starting.Status != systemchanges.RecoveryRequired || journal[0].Mutation != systemchanges.CompleteRemovalMutation) {
 		return RecoveryTransactionIdentity{}, errors.New("recovery starting baseline is unsupported")
 	}
-	forwardOnly := journal[0].Mutation == systemchanges.RotationMutation && runTokenFingerprint(journal) != ""
-	return RecoveryTransactionIdentity{StartingStatus: journal[0].Starting.Status, Mutation: journal[0].Mutation, StartingRelease: journal[0].State.StartingRelease, CandidateRelease: journal[0].State.CandidateRelease, ForwardOnly: forwardOnly, Checkpoint: journal[len(journal)-1].Checkpoint}, nil
+	forwardOnly := journal[0].Mutation == systemchanges.RotationMutation && runTokenFingerprint(journal) != "" || irreversibleRemoval
+	return RecoveryTransactionIdentity{ChangeSet: journal[0].ChangeSet, StartingStatus: journal[0].Starting.Status, StartingRevision: journal[0].Starting.Revision, Mutation: journal[0].Mutation, StartingRelease: journal[0].State.StartingRelease, CandidateRelease: journal[0].State.CandidateRelease, ForwardOnly: forwardOnly, Checkpoint: journal[len(journal)-1].Checkpoint, CompletedSteps: highestCompletedStep(journal), TotalSteps: len(journal[0].Steps)}, nil
 }
 
 // RecoveryHealthObservation overlays one validated unfinished transaction on
@@ -1337,11 +1415,12 @@ func RecoveryHealthObservation(rootPath string, source ObservationSource) (syste
 		}
 	}
 	irreversibleRemoval := prepared.Mutation == systemchanges.CompleteRemovalMutation && journalHasCheckpoint(journal, systemchanges.IrreversibleRemovalStarted)
+	removalSnapshotDeleted := prepared.Mutation == systemchanges.CompleteRemovalMutation && journalHasCheckpoint(journal, systemchanges.TransactionMaterialDeletionAuthorized)
 	irreversibleRotation := prepared.Mutation == systemchanges.RotationMutation && runTokenFingerprint(journal) != ""
 	if prepared.ChangeSet != changeSet || !validRecoveryJournalBinding(prepared) {
 		return healthRecoveryRequired(systemchanges.JournalUnprovable), nil
 	}
-	if !irreversibleRemoval {
+	if !removalSnapshotDeleted {
 		manifest, manifestErr := verifyTransactionManifest(root, directory, uid)
 		if manifestErr != nil || manifest.Reason != prepared.Mutation || !validRecoveryBinding(prepared, manifest, irreversibleRotation) {
 			return healthRecoveryRequired(systemchanges.SnapshotUnprovable), nil
@@ -1810,6 +1889,13 @@ func validNextCheckpoint(entries []journalEntry, next journalEntry) bool {
 		return false
 	}
 	last, total := entries[len(entries)-1], len(entries[0].Steps)
+	rollbackCapable := total
+	if entries[0].Mutation == systemchanges.CompleteRemovalMutation {
+		rollbackCapable = firstIrreversibleJournalStep(entries[0].Steps)
+		if rollbackCapable < 1 {
+			return false
+		}
+	}
 	irreversibleRemoval := entries[0].Mutation == systemchanges.CompleteRemovalMutation && journalHasCheckpoint(entries, systemchanges.IrreversibleRemovalStarted)
 	switch last.Checkpoint {
 	case systemchanges.Prepared:
@@ -1822,7 +1908,7 @@ func validNextCheckpoint(entries []journalEntry, next journalEntry) bool {
 		}
 		return next.Checkpoint == systemchanges.StepCompleted && next.Step == last.Step && validEvidence(next.Evidence) || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
 	case systemchanges.StepCompleted:
-		if last.Step < total {
+		if last.Step < rollbackCapable {
 			if irreversibleRemoval {
 				return next.Checkpoint == systemchanges.StepStarted && next.Step == last.Step+1
 			}
@@ -1835,14 +1921,18 @@ func validNextCheckpoint(entries []journalEntry, next journalEntry) bool {
 	case systemchanges.StateFinalized:
 		return next.Checkpoint == systemchanges.StepStarted && next.Step == last.Step+1 || next.Checkpoint == systemchanges.PrePublicationHealthPassed && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
 	case systemchanges.PrePublicationHealthPassed:
-		if irreversibleRemoval {
-			return next.Checkpoint == systemchanges.OwnedExternalDeletionVerified && next.Step == 0
+		if entries[0].Mutation == systemchanges.CompleteRemovalMutation {
+			return next.Checkpoint == systemchanges.IrreversibleRemovalStarted && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == rollbackCapable
 		}
-		return next.Checkpoint == systemchanges.OwnedExternalDeletionVerified && next.Step == 0 || next.Checkpoint == systemchanges.StatePublicationStarted && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total
+		return next.Checkpoint == systemchanges.StatePublicationStarted && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total
 	case systemchanges.OwnedExternalDeletionVerified:
-		return next.Checkpoint == systemchanges.IrreversibleRemovalStarted && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total
-	case systemchanges.IrreversibleRemovalStarted:
 		return next.Checkpoint == systemchanges.TokenRevocationVerified && next.Step == 0 && next.Evidence == nil
+	case systemchanges.IrreversibleRemovalStarted:
+		return next.Checkpoint == systemchanges.OwnedDNSRecordsDeleted && next.Step == 0 && validEvidence(next.Evidence)
+	case systemchanges.OwnedDNSRecordsDeleted:
+		return next.Checkpoint == systemchanges.OwnedTunnelDeleted && next.Step == 0 && validEvidence(next.Evidence)
+	case systemchanges.OwnedTunnelDeleted:
+		return next.Checkpoint == systemchanges.OwnedExternalDeletionVerified && next.Step == 0 && next.Evidence == nil
 	case systemchanges.StatePublicationStarted:
 		return next.Checkpoint == systemchanges.StatePublished && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total
 	case systemchanges.StatePublished:
@@ -1872,6 +1962,15 @@ func validNextCheckpoint(entries []journalEntry, next journalEntry) bool {
 		return next.Evidence == nil
 	}
 	return validEvidence(next.Evidence)
+}
+
+func firstIrreversibleJournalStep(steps []journalStep) int {
+	for index, step := range steps {
+		if step.Removal != nil && step.Removal.Action == systemchanges.CloudflareRemoval && (step.Removal.Resource == systemchanges.CloudflareDNSRecordResource || step.Removal.Resource == systemchanges.CloudflareTunnelResource) {
+			return index
+		}
+	}
+	return -1
 }
 
 func highestStartedStep(entries []journalEntry) int {

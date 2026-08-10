@@ -84,3 +84,10 @@ func TestOwnerRecoveryDoesNotAskForASecondRunTokenRotation(t *testing.T) {
 		t.Fatalf("post-rotation recovery guidance = %+v", view)
 	}
 }
+
+func TestOwnerRecoveryDoesNotReportManagedWhileRemovalAwaitsTokenRevocation(t *testing.T) {
+	result := ownerRecoveryResult(ownerRecovery{changeSet: "complete-removal-0001", forwardOnly: true, completeRemoval: true}, "", nil)
+	if result.Kind != ownerconsole.ChangeSetRecoveryRequired || result.Checkpoint != "Awaiting Owner token revocation" {
+		t.Fatalf("nonterminal removal recovery = %+v", result)
+	}
+}

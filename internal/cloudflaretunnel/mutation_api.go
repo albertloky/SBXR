@@ -427,8 +427,16 @@ func validTunnelStatus(status string) bool {
 }
 
 func (api *httpAPI) DeleteDNSRecord(ctx context.Context, request DeleteDNSRecordRequest) error {
-	return api.request(ctx, http.MethodDelete, "/zones/"+request.ZoneID+"/dns_records/"+request.ID, nil, request.Token, nil, nil)
+	err := api.request(ctx, http.MethodDelete, "/zones/"+request.ZoneID+"/dns_records/"+request.ID, nil, request.Token, nil, nil)
+	if apiErrorIs(err, APINotFound) {
+		return nil
+	}
+	return err
 }
 func (api *httpAPI) DeleteTunnel(ctx context.Context, request DeleteTunnelRequest) error {
-	return api.request(ctx, http.MethodDelete, "/accounts/"+request.AccountID+"/cfd_tunnel/"+request.ID, nil, request.Token, nil, nil)
+	err := api.request(ctx, http.MethodDelete, "/accounts/"+request.AccountID+"/cfd_tunnel/"+request.ID, nil, request.Token, nil, nil)
+	if apiErrorIs(err, APINotFound) {
+		return nil
+	}
+	return err
 }

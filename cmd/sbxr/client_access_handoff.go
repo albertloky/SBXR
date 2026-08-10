@@ -61,16 +61,26 @@ type clientAccessRecoveryResult struct {
 }
 
 type clientAccessHandoffSession struct {
-	mu                          sync.Mutex
-	socket                      *os.File
-	wait                        func() error
-	used, applying, cancellable bool
-	review                      clientAccessHandoffReview
+	mu                                           sync.Mutex
+	socket                                       *os.File
+	wait                                         func() error
+	used, applying, cancellable, removalApproved bool
+	review                                       clientAccessHandoffReview
 }
 
 func validClientAccessHandoff(request clientAccessHandoffRequest) bool {
-	if request.Schema != 1 || request.Mode != "change" && request.Mode != "provider" && request.Mode != "view" && request.Mode != "recover" && request.Mode != "diagnostics" && request.Mode != "software-review" && request.Mode != "software-apply" {
+	if request.Schema != 1 || request.Mode != "change" && request.Mode != "provider" && request.Mode != "view" && request.Mode != "recover" && request.Mode != "diagnostics" && request.Mode != "software-review" && request.Mode != "software-apply" && request.Mode != "removal-review" && request.Mode != "removal-apply" {
 		return false
+	}
+	removal := request.Mode == "removal-review" || request.Mode == "removal-apply"
+	if removal {
+		if request.Action != "" || request.ProviderAction != "" || request.Profile != "" || request.Token != "" || request.OwnerEmail != "" || request.Agreement || request.DiagnosticsAction != "" || request.SoftwareAction != "" || request.ReleaseTag != "" || request.BundleReplacement.Archive != "" || !validClientAccessChangeSet(request.ChangeSet) {
+			return false
+		}
+		if request.Mode == "removal-review" {
+			return request.ReviewedPlanIdentity == "" && request.ReviewedPlanSHA256 == ""
+		}
+		return validClientAccessChangeSet(request.ReviewedPlanIdentity) && clientAccessSHA256.MatchString(request.ReviewedPlanSHA256)
 	}
 	software := request.Mode == "software-review" || request.Mode == "software-apply"
 	if !software && (request.SoftwareAction != "" || request.ReleaseTag != "" || request.ReviewedPlanIdentity != "" || request.ReviewedPlanSHA256 != "") {
@@ -200,13 +210,33 @@ func softwareRepairPlanPresentation(built *builtSoftwareRepair) ownerconsole.Pla
 	}
 }
 
+func completeRemovalPlanPresentation(built *builtCompleteRemoval) ownerconsole.PlanPresentation {
+	summary := built.plan.Summary()
+	revision := summary.StateRevision + 1
+	lineageUnavailable := summary.StartingStatus == softwarelifecycle.RecoveryRequired && summary.StateRevision == 0
+	if lineageUnavailable {
+		revision = 0
+	}
+	effects := append([]string{}, summary.OwnedLocalCategories...)
+	effects = append(effects, summary.CloudflareCategories...)
+	effects = append(effects, diskPresentation(summary.Disk))
+	return ownerconsole.PlanPresentation{
+		Identity: ownerconsole.PlanIdentity(built.plan.Identity()), DesiredStateRevision: revision, DesiredStateSHA256: built.starting.StateSHA256, LineageUnavailable: lineageUnavailable,
+		RelevantChecksums: []string{"Complete removal Plan SHA-256 " + built.plan.SHA256(), "Reviewed volatile state SHA-256 " + built.starting.VolatileSHA256},
+		ObservedState:     "Proven " + string(summary.StartingStatus) + " starting status", VerifiedExternalInputs: append([]string{}, summary.IrreversibleRemnants...), Effects: effects,
+		RequiredChecks: []string{"Exact owned external resources absent", "Final Not installed with no recovery material"}, AdvisoryChecks: []string{"Copied client configurations and provider caches may remain"},
+		Interruption: "Restart continues from the exact durable checkpoint.", Cancellation: summary.CancellationBoundary, Rollback: summary.Rollback,
+	}
+}
+
 func diskPresentation(disk systemchanges.DiskRequirement) string {
 	return fmt.Sprintf("Disk bytes: preparation=%d temporary=%d snapshot=%d journal=%d rollback=%d overhead=%d", disk.PreparationBytes, disk.TemporaryBytes, disk.SnapshotBytes, disk.JournalBytes, disk.RollbackBytes, disk.OverheadBytes)
 }
 
 func validSoftwarePlanPresentation(review clientAccessHandoffReview) bool {
 	plan := review.Plan
-	return string(plan.Identity) == review.Identity && plan.DesiredStateRevision == review.CandidateRevision && plan.DesiredStateSHA256 == review.DesiredStateSHA256 && len(plan.RelevantChecksums) >= 2 && plan.ObservedState != "" && len(plan.VerifiedExternalInputs) > 0 && len(plan.Effects) > 0 && len(plan.RequiredChecks) > 0 && plan.Interruption != "" && plan.Cancellation != "" && plan.Rollback != ""
+	lineage := plan.DesiredStateSHA256 == review.DesiredStateSHA256 && plan.DesiredStateRevision == review.CandidateRevision || plan.LineageUnavailable && plan.DesiredStateSHA256 == "" && review.DesiredStateSHA256 == "" && plan.DesiredStateRevision == 0 && review.CandidateRevision == 0
+	return string(plan.Identity) == review.Identity && lineage && len(plan.RelevantChecksums) >= 2 && plan.ObservedState != "" && len(plan.VerifiedExternalInputs) > 0 && len(plan.Effects) > 0 && len(plan.RequiredChecks) > 0 && plan.Interruption != "" && plan.Cancellation != "" && plan.Rollback != ""
 }
 
 func writeClientAccessMessage(writer io.Writer, value any) error {
@@ -267,6 +297,10 @@ func serveSoftwareApply(socket *os.File, apply func(*systemchanges.Cancellation)
 		terminal = 'C'
 	} else if result.Outcome == systemchanges.RollbackSucceeded {
 		terminal = 'R'
+	} else if result.Outcome == systemchanges.AwaitingTokenRevocation {
+		terminal = 'D'
+	} else if result.Outcome == systemchanges.RemovalForwardOnly {
+		terminal = 'P'
 	}
 	_, err := socket.Write([]byte{terminal})
 	return err
@@ -289,6 +323,44 @@ func serveClientAccess(ctx context.Context, socket, executable *os.File, verify 
 			return writeClientAccessMessage(socket, presentation)
 		}
 		return writeClientAccessMessage(socket, productionSupportBundle(ctx, request.BundleReplacement))
+	}
+	if request.Mode == "removal-review" || request.Mode == "removal-apply" {
+		apply := request.Mode == "removal-apply"
+		built, err := buildCompleteRemoval(ctx, request.ChangeSet, apply)
+		if err != nil {
+			return err
+		}
+		if apply && (built.plan.Identity() != request.ReviewedPlanIdentity || built.plan.SHA256() != request.ReviewedPlanSHA256) {
+			return errors.New("approved Complete removal Plan changed")
+		}
+		candidateRevision := built.starting.StateRevision + 1
+		if built.starting.Status == systemchanges.RecoveryRequired && built.starting.StateRevision == 0 {
+			candidateRevision = 0
+		}
+		review := clientAccessHandoffReview{Identity: built.plan.Identity(), SHA256: built.plan.SHA256(), DesiredStateSHA256: built.starting.StateSHA256, VolatileSHA256: built.starting.VolatileSHA256, StartingRevision: built.starting.StateRevision, CandidateRevision: candidateRevision, TotalSteps: completeRemovalTotalSteps, Plan: completeRemovalPlanPresentation(built)}
+		if writeClientAccessMessage(socket, review) != nil {
+			return errors.New("Complete removal review unavailable")
+		}
+		if !apply {
+			return nil
+		}
+		typed := make([]byte, len("COMPLETE REMOVAL\n"))
+		permanent := make([]byte, len("PERMANENTLY REMOVE SBXR\n"))
+		applyMessage := make([]byte, len("APPLY\n"))
+		if _, err := io.ReadFull(socket, typed); err != nil || string(typed) != "COMPLETE REMOVAL\n" {
+			return errors.New("Complete removal typed confirmation unavailable")
+		}
+		built.typedConfirmed = true
+		if _, err := io.ReadFull(socket, permanent); err != nil || string(permanent) != "PERMANENTLY REMOVE SBXR\n" {
+			return errors.New("Complete removal permanent selection unavailable")
+		}
+		built.permanentSelected = true
+		if _, err := io.ReadFull(socket, applyMessage); err != nil || string(applyMessage) != "APPLY\n" {
+			return errors.New("Complete removal approval unavailable")
+		}
+		return serveSoftwareApply(socket, func(cancellation *systemchanges.Cancellation) systemchanges.ApplyResult {
+			return applyCompleteRemoval(ctx, built, cancellation)
+		})
 	}
 	if request.Mode == "software-review" || request.Mode == "software-apply" {
 		apply := request.Mode == "software-apply"
@@ -389,11 +461,17 @@ func serveClientAccess(ctx context.Context, socket, executable *os.File, verify 
 		return err
 	}
 	if request.Mode == "recover" {
-		entries, err := os.ReadDir(installTransactions)
-		if err != nil || len(entries) != 1 || entries[0].Name() != request.ChangeSet {
-			return errors.New("Client Access recovery request refused")
+		orphan := request.ChangeSet == systemubuntu.FinalizingRemovalChangeSet && orphanedCompleteRemovalDirectory()
+		if !orphan {
+			entries, err := os.ReadDir(installTransactions)
+			if err != nil || len(entries) != 1 || entries[0].Name() != request.ChangeSet {
+				return errors.New("Client Access recovery request refused")
+			}
+			if _, err := systemubuntu.RecoveryStartingStatus("/"); err != nil {
+				return errors.New("Client Access recovery failed")
+			}
 		}
-		if _, err := systemubuntu.RecoveryStartingStatus("/"); err != nil || runInstallRecovery() != nil {
+		if runInstallRecovery() != nil {
 			return errors.New("Client Access recovery failed")
 		}
 		observed, err := installRecoveryObservation()
@@ -426,6 +504,11 @@ func serveClientAccess(ctx context.Context, socket, executable *os.File, verify 
 	}
 	_, err = socket.Write([]byte{terminal})
 	return err
+}
+
+func orphanedCompleteRemovalDirectory() bool {
+	pending, err := pendingInstallRecovery()
+	return err == nil && orphanedCompleteRemoval(pending)
 }
 
 func loadDiagnosticsPresentation(ctx context.Context) ownerconsole.DiagnosticsPresentation {
@@ -486,7 +569,7 @@ func retryClientAccessRecovery(ctx context.Context, changeSet string) (systemcha
 		return "", errors.New("Client Access recovery unavailable")
 	}
 	var result clientAccessRecoveryResult
-	if readClientAccessMessage(parent, &result) != nil || result.Status != systemchanges.Managed && result.Status != systemchanges.NotInstalled {
+	if readClientAccessMessage(parent, &result) != nil || result.Status != "" && result.Status != systemchanges.Managed && result.Status != systemchanges.NotInstalled {
 		return "", errors.New("Client Access recovery did not prove a terminal installation status")
 	}
 	return result.Status, nil
@@ -511,19 +594,20 @@ func launchClientAccessReview(ctx context.Context, request clientAccessHandoffRe
 		return nil, err
 	}
 	var review clientAccessHandoffReview
-	if err := readClientAccessMessage(parent, &review); err != nil || review.Identity == "" || len(review.SHA256) != 64 || len(review.DesiredStateSHA256) != 64 || len(review.VolatileSHA256) != 64 || review.CandidateRevision != review.StartingRevision+1 || review.TotalSteps == 0 || (request.Mode == "software-review" || request.Mode == "software-apply") && !validSoftwarePlanPresentation(review) {
+	unprovenRemoval := (request.Mode == "removal-review" || request.Mode == "removal-apply") && review.StartingRevision == 0 && review.CandidateRevision == 0 && review.DesiredStateSHA256 == "" && review.Plan.LineageUnavailable
+	if err := readClientAccessMessage(parent, &review); err != nil || review.Identity == "" || len(review.SHA256) != 64 || len(review.VolatileSHA256) != 64 || !unprovenRemoval && (len(review.DesiredStateSHA256) != 64 || review.CandidateRevision != review.StartingRevision+1) || review.TotalSteps == 0 || (request.Mode == "software-review" || request.Mode == "software-apply" || request.Mode == "removal-review" || request.Mode == "removal-apply") && !validSoftwarePlanPresentation(review) {
 		parent.Close()
 		_ = wait()
 		return nil, errors.New("privileged Client Access review unavailable")
 	}
-	if request.Mode == "software-review" {
+	if request.Mode == "software-review" || request.Mode == "removal-review" {
 		parent.Close()
 		if wait() != nil {
 			return nil, errors.New("privileged Software Lifecycle planning failed")
 		}
 		return &clientAccessHandoffSession{used: true, review: review}, nil
 	}
-	return &clientAccessHandoffSession{socket: parent, wait: wait, review: review, cancellable: request.Mode == "software-apply"}, nil
+	return &clientAccessHandoffSession{socket: parent, wait: wait, review: review, cancellable: request.Mode == "software-apply" || request.Mode == "removal-apply"}, nil
 }
 
 func loadClientAccessPresentation(ctx context.Context) clientAccessPresentation {
@@ -578,7 +662,11 @@ func (session *clientAccessHandoffSession) apply() (byte, error) {
 	}
 	session.used = true
 	socket, wait := session.socket, session.wait
-	if _, err := socket.Write([]byte("APPLY\n")); err != nil {
+	approval := "APPLY\n"
+	if session.removalApproved {
+		approval = "COMPLETE REMOVAL\nPERMANENTLY REMOVE SBXR\nAPPLY\n"
+	}
+	if _, err := socket.Write([]byte(approval)); err != nil {
 		session.mu.Unlock()
 		return 0, err
 	}
@@ -591,7 +679,7 @@ func (session *clientAccessHandoffSession) apply() (byte, error) {
 	session.mu.Lock()
 	session.applying = false
 	session.mu.Unlock()
-	if readErr != nil || waitErr != nil || terminal[0] != 'A' && terminal[0] != 'C' && terminal[0] != 'R' && terminal[0] != 'X' {
+	if readErr != nil || waitErr != nil || terminal[0] != 'A' && terminal[0] != 'C' && terminal[0] != 'D' && terminal[0] != 'P' && terminal[0] != 'R' && terminal[0] != 'X' {
 		return 0, errors.New("privileged Client Access result unavailable")
 	}
 	return terminal[0], nil

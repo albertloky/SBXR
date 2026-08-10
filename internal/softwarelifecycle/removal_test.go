@@ -112,7 +112,7 @@ func TestViewAndPlanCompleteRemovalDiscloseTheWholeRollbackSafeJourney(t *testin
 		t.Fatalf("PlanCompleteRemoval() = (%+v, %+v)", plan, finding)
 	}
 	summary := plan.Summary()
-	if summary.StartingStatus != softwarelifecycle.Managed || summary.StateRevision != 7 || summary.Disk != disk || !summary.OneUse || !summary.SudoAfterApproval || len(summary.OwnedLocalCategories) != 17 || !reflect.DeepEqual(summary.CloudflareCategories, []string{"DNS records", "Tunnel routes", "Tunnel"}) || !reflect.DeepEqual(summary.IrreversibleRemnants, []string{"Certificate Transparency entries cannot be erased", "DNS caches cannot be erased"}) || summary.CancellationBoundary == "" || summary.TokenRevocationResponsibility == "" || summary.Rollback == "" || summary.FinalProof != "Not installed with no retained SBXR recovery material" {
+	if summary.StartingStatus != softwarelifecycle.Managed || summary.StateRevision != 7 || summary.Disk != disk || !summary.OneUse || !summary.SudoAfterApproval || len(summary.OwnedLocalCategories) != 17 || !reflect.DeepEqual(summary.CloudflareCategories, []string{"Tunnel routes before the checkpoint", "DNS records and Tunnel after the checkpoint"}) || !reflect.DeepEqual(summary.IrreversibleRemnants, []string{"Certificate Transparency entries cannot be erased", "DNS caches cannot be erased"}) || summary.CancellationBoundary == "" || summary.TokenRevocationResponsibility == "" || summary.Rollback == "" || summary.FinalProof != "Not installed with no retained SBXR recovery material" {
 		t.Fatalf("Complete removal summary = %+v", summary)
 	}
 	if strings.Contains(plan.String(), "REMOVAL-SECRET-MARKER") {

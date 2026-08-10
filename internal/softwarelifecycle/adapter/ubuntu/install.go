@@ -79,7 +79,7 @@ type installRollback struct {
 	Components []byte                          `json:"components"`
 }
 
-var installIdentities = []string{"cloudflared", "sbxr-subscription", "sing-box", "xray"}
+var installIdentities = softwarelifecycle.ManagedIdentityNames()
 
 func (installer Installer) CaptureRollback(rootPath string, step systemchanges.Step, write func(io.Reader) error) error {
 	if !softwareStep(step) || write == nil {

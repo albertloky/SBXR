@@ -141,6 +141,10 @@ func ManagedUnitNames() []string {
 	return []string{"cloudflared.service", "sbxr-cert-renew.service", "sbxr-cert-renew.timer", "sbxr-health-check.service", "sbxr-health-check.timer", "sbxr-recovery.service", "sbxr-subscription.service", "sbxr-update-check.service", "sbxr-update-check.timer", "sing-box.service", "xray.service"}
 }
 
+func ManagedIdentityNames() []string {
+	return []string{"cloudflared", "sbxr-subscription", "sing-box", "xray"}
+}
+
 func QualificationArtifactNames() []string {
 	return []string{"cloudflared.yml", "sing-box.json", "subscription-base64.txt", "subscription-karing.json", "subscription-mihomo.yaml", "subscription-raw.txt", "subscription-shadowrocket.txt", "subscription-sing-box.json", "subscription-v2rayn.txt", "xray.json"}
 }

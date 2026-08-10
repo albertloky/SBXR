@@ -543,7 +543,31 @@ func (i Interface) PrepareCompleteRemovalCommit(request PrepareRequest, authorit
 	if !valid || problem != nil || request.Loaded.Status != Managed || request.Loaded.loaded.revision != revision || request.Loaded.loaded.payloadChecksum != stateSHA256 || current.ReleaseIdentity != request.CandidateReleaseIdentity || !reflect.DeepEqual(current.desiredState, request.Candidate) {
 		return nil, finding("STATE-COMPLETE-REMOVAL-PLAN", "Complete removal rollback State", "the release, revision, checksum, or Desired State meaning differs from review", "the exact unchanged current Desired State and installed Release Identity", "pre-checkpoint rollback must restore the proven starting intent", "reload State and rebuild the Complete removal Plan")
 	}
-	return i.prepareCommit(request, nil, nil, true)
+	plan, ok := authority.(interface {
+		Identity() string
+		SHA256() string
+	})
+	if !ok {
+		return nil, finding("STATE-COMPLETE-REMOVAL-PLAN", "Complete removal rollback State", "the Plan binding is unavailable", "the exact Complete removal Plan identity and checksum", "removal approval cannot be caller-authored", "reload State and rebuild the Complete removal Plan")
+	}
+	managed, err := NewManagedInputChecksums(plan.SHA256(), plan.SHA256(), plan.SHA256(), plan.SHA256(), plan.SHA256(), plan.SHA256())
+	if err != nil {
+		return nil, err
+	}
+	reviewed, err := NewReviewedInputs(PlanIdentity(plan.Identity()), plan.SHA256(), managed)
+	if err != nil {
+		return nil, err
+	}
+	manifestBytes, err := json.Marshal(preparedManifestSet{})
+	if err != nil {
+		return nil, err
+	}
+	manifest, prepared := sha256.Sum256(manifestBytes), sha256.Sum256(request.Loaded.loaded.bytes)
+	return &PreparedCommit{
+		releaseIdentity: request.CandidateReleaseIdentity, candidate: request.Candidate, revision: request.Loaded.loaded.revision + 1,
+		changeSet: request.ChangeSet, reviewed: reviewed, starting: request.Loaded.loaded, storage: request.Loaded.loaded.owner.storage,
+		candidateSHA256: stateSHA256, manifestSHA256: hex.EncodeToString(manifest[:]), preparedState: append([]byte(nil), request.Loaded.loaded.bytes...), preparedSHA256: hex.EncodeToString(prepared[:]),
+	}, nil
 }
 
 func (i Interface) PrepareUnprovenCompleteRemovalCommit(authority CompleteRemovalAuthority) (*PreparedCommit, error) {

@@ -86,6 +86,18 @@ func (stub *outcomeStub) Apply(ctx context.Context, plan PlanIdentity) ChangeRes
 	return result
 }
 
+func TestOwnershipRefusalWithBackSelectionRemainsNavigable(t *testing.T) {
+	review := validatedChangeReview(ChangeReview{Correction: &CorrectionPresentation{
+		Problem: "Complete removal cannot prove owned Cloudflare resources", Found: "Desired State lineage is unavailable",
+		Required: "Exact immutable IDs and active scoped authority", WhyStopped: "Raw State is not ownership proof",
+		OwnerSteps: []string{"Use Diagnostics", "Clean up only independently verified resources", "Rebuild on a clean VPS"},
+		Selections: []CorrectionSelection{{Identity: "back", Label: "Back"}}, Evidence: "SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-OWNERSHIP-UNPROVED",
+	}})
+	if review.Correction == nil || review.Correction.Evidence != "SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-OWNERSHIP-UNPROVED" {
+		t.Fatalf("ownership refusal was replaced: %+v", review)
+	}
+}
+
 func (stub *outcomeStub) Inspect(context.Context) DurableChangeSet { return stub.currentChangeSet }
 
 func (stub *outcomeStub) RequestCancellation(_ context.Context, operation OperationIdentity) ChangeResult {

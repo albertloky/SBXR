@@ -45,11 +45,20 @@ func pendingInstallRecovery() (bool, error) {
 
 func runInstallRecovery() error {
 	pending, err := pendingInstallRecovery()
-	if err != nil || !pending {
+	if err != nil {
 		return err
+	}
+	if !pending {
+		if orphanedCompleteRemoval(false) {
+			return runOrphanedCompleteRemovalRecovery()
+		}
+		return nil
 	}
 	transaction, err := systemubuntu.RecoveryTransaction("/")
 	if err != nil {
+		if orphanedCompleteRemoval(true) {
+			return runOrphanedCompleteRemovalRecovery()
+		}
 		return err
 	}
 	starting, release, forwardOnly := transaction.StartingStatus, transaction.StartingRelease, transaction.ForwardOnly
@@ -58,6 +67,23 @@ func runInstallRecovery() error {
 	}
 	stateModule := statefilesystem.New()
 	api := cloudflaretunnel.NewProductionAPI()
+	if transaction.Mutation == systemchanges.CompleteRemovalMutation {
+		var base systemubuntu.InstallHost
+		if forwardOnly {
+			base, err = systemubuntu.NewFreshInstallHost("/", softwarelifecycle.ManagedUnitNames())
+		} else {
+			base, err = systemubuntu.NewInstallHost("/", softwarelifecycle.ManagedUnitNames())
+		}
+		if err != nil {
+			return err
+		}
+		host := newCompleteRemovalHost(base, state.DesiredState{}, api, cloudflaretunnel.ManagementToken{})
+		result := systemchanges.New(systemubuntu.NewAt("/", installRecoveryObservation, host, stateModule)).Recover()
+		if result.Outcome != systemchanges.Completed && result.Outcome != systemchanges.RollbackSucceeded && result.Outcome != systemchanges.AwaitingTokenRevocation {
+			return errors.New("Complete removal restart recovery requires inspection")
+		}
+		return nil
+	}
 	cloudflareExecutor, err := cloudflaretunnel.NewRecoveryExecutor(api)
 	if forwardOnly {
 		observed, currentRelease, loadErr := managedLoadEvidence()
@@ -124,6 +150,39 @@ func runInstallRecovery() error {
 	result := systemchanges.New(adapter).Recover()
 	if result.Outcome != systemchanges.Completed && result.Outcome != systemchanges.RollbackSucceeded {
 		return errors.New("install restart recovery requires inspection")
+	}
+	return nil
+}
+
+func orphanedCompleteRemoval(pending bool) bool {
+	observed, err := installRecoveryObservation()
+	if err != nil {
+		return false
+	}
+	var entries []string
+	if pending {
+		directories, err := os.ReadDir(installTransactions)
+		if err != nil || len(directories) != 1 || !directories[0].IsDir() {
+			return false
+		}
+		entries = []string{directories[0].Name()}
+	}
+	return validOrphanedCompleteRemoval(observed.Status, installedClientAccessMarker(), pending, entries)
+}
+
+func validOrphanedCompleteRemoval(status systemchanges.InstallationStatus, installed, pending bool, entries []string) bool {
+	return status == systemchanges.NotInstalled && installed && (!pending || len(entries) == 1 && entries[0] == systemubuntu.FinalizingRemovalChangeSet)
+}
+
+func runOrphanedCompleteRemovalRecovery() error {
+	base, err := systemubuntu.NewFreshInstallHost("/", softwarelifecycle.ManagedUnitNames())
+	if err != nil {
+		return err
+	}
+	host := newCompleteRemovalHost(base, state.DesiredState{}, cloudflaretunnel.NewProductionAPI(), cloudflaretunnel.ManagementToken{})
+	result := systemchanges.New(systemubuntu.NewAt("/", installRecoveryObservation, host, statefilesystem.New())).Recover()
+	if result.Outcome != systemchanges.Completed || result.RestoredStatus != systemchanges.NotInstalled {
+		return errors.New("orphaned Complete removal recovery requires inspection")
 	}
 	return nil
 }

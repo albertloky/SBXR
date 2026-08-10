@@ -269,6 +269,8 @@ func statusErrorKind(status int) APIErrorKind {
 		return APIUnauthorized
 	case status == http.StatusForbidden:
 		return APIForbidden
+	case status == http.StatusNotFound:
+		return APINotFound
 	case status == http.StatusTooManyRequests || status >= 500:
 		return APITemporary
 	case status < 200 || status >= 300:

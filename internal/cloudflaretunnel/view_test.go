@@ -49,6 +49,27 @@ func (clock *controlledClock) Sleep(_ context.Context, duration time.Duration) e
 	return nil
 }
 
+func TestRevocationProofAcceptsOnlyExplicitUnauthorized(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		err     error
+		revoked bool
+		wantErr bool
+	}{
+		{"unauthorized", cloudflaretunnel.APIError{Kind: cloudflaretunnel.APIUnauthorized}, true, false},
+		{"forbidden", cloudflaretunnel.APIError{Kind: cloudflaretunnel.APIForbidden}, false, true},
+		{"temporary", cloudflaretunnel.APIError{Kind: cloudflaretunnel.APITemporary}, false, true},
+		{"still active", nil, false, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := cloudflaretunnel.New(&staticAPI{err: test.err}, &controlledClock{}).VerifyManagementTokenRevoked(context.Background(), cloudflaretunnel.ObservationRequest{})
+			if got != test.revoked || (err != nil) != test.wantErr {
+				t.Fatalf("VerifyManagementTokenRevoked() = (%t, %v)", got, err)
+			}
+		})
+	}
+}
+
 func TestViewVerifiesOneScopedCloudflareAuthority(t *testing.T) {
 	managementToken, err := cloudflaretunnel.NewManagementToken(token)
 	if err != nil {

@@ -40,6 +40,7 @@ type CompleteRemovalTokenPhase uint8
 
 const (
 	RemovalTokenAvailable CompleteRemovalTokenPhase = iota + 1
+	RemovalProviderDeletionInProgress
 	RemovalTokenAwaitingOwnerRevocation
 	RemovalTokenRevocationVerified
 	RemovalLocalTokenDeleted
@@ -135,7 +136,9 @@ var completeRemovalDefinitions = [...]completeRemovalDefinition{
 				"SBXR then verifies revocation before deleting its local token copy.",
 				"",
 				"Before Irreversible removal started: Back or Cancel restores the exact proven starting status.",
+				"Before that checkpoint, SBXR removes public exposure and Tunnel routes but retains DNS records and the Tunnel.",
 				"After Irreversible removal started: removal is forward-only and restoration becomes impossible.",
+				"Only after that checkpoint does SBXR permanently delete the exact DNS records and Tunnel.",
 				"Back and Cancel are unavailable after that durable checkpoint.",
 				"",
 				"Type exactly: COMPLETE REMOVAL",
@@ -204,7 +207,7 @@ var completeRemovalDefinitions = [...]completeRemovalDefinition{
 		watchesUpdates: true,
 		header:         func(CompleteRemovalPresentation) string { return "Change in progress - forward-only - authenticated" },
 		valid: func(p CompleteRemovalPresentation) bool {
-			return validRemovalStart(p) && validRemovalProgress(p.Progress) && p.FinalStatus == 0 && p.RestoredStatus == 0 && p.RestoredRevision == 0 && p.CancellationProof == 0 && p.Checkpoint == RemovalIrreversibleStarted && p.TokenPhase >= RemovalTokenAwaitingOwnerRevocation && p.TokenPhase <= RemovalLocalTokenDeleted && !p.NoRecoveryMaterial
+			return validRemovalStart(p) && validRemovalProgress(p.Progress) && p.FinalStatus == 0 && p.RestoredStatus == 0 && p.RestoredRevision == 0 && p.CancellationProof == 0 && p.Checkpoint == RemovalIrreversibleStarted && p.TokenPhase >= RemovalProviderDeletionInProgress && p.TokenPhase <= RemovalLocalTokenDeleted && !p.NoRecoveryMaterial
 		},
 		lines: func(p CompleteRemovalPresentation, _ string) []string {
 			lines := []string{
@@ -215,7 +218,12 @@ var completeRemovalDefinitions = [...]completeRemovalDefinition{
 				"Back, Cancel, rollback, and restore are unavailable.",
 				"",
 			}
-			if p.TokenPhase == RemovalTokenAwaitingOwnerRevocation {
+			if p.TokenPhase == RemovalProviderDeletionInProgress {
+				lines = append(lines,
+					"SBXR is deleting and verifying the exact owned DNS records and Tunnel.",
+					"Do not revoke the scoped Cloudflare token yet.",
+				)
+			} else if p.TokenPhase == RemovalTokenAwaitingOwnerRevocation {
 				lines = append(lines,
 					"ALBERT'S EXACT REVOCATION STEP",
 					"Open dash.cloudflare.com/profile/api-tokens and revoke the scoped SBXR token.",
@@ -355,6 +363,10 @@ var removalCategories = []string{
 	"cloudflare-tunnel",
 	"certificate-transparency-remnant",
 	"dns-cache-remnant",
+}
+
+func CompleteRemovalCategories() []string {
+	return append([]string(nil), removalCategories...)
 }
 
 type RemovalObserver interface {

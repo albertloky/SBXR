@@ -2,10 +2,64 @@
 package cloudflaretunnel
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"io"
 
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
+
+type RemovalRecoveryAuthority struct {
+	AccountID, ZoneID, ZoneName, TunnelID string
+	DNSRecordIDs                          []string
+	Routes                                []Route
+}
+
+type removalRecoveryRecord struct {
+	Authority RemovalRecoveryAuthority `json:"authority"`
+	Token     string                   `json:"token"`
+}
+
+// WriteRemovalRecovery keeps the scoped token inside the protected transaction snapshot.
+func WriteRemovalRecovery(token ManagementToken, authority RemovalRecoveryAuthority, write func(io.Reader) error) error {
+	if write == nil || token.value == "" || !validRemovalRecoveryAuthority(authority) {
+		return errors.New("Cloudflare removal recovery authority unavailable")
+	}
+	body, err := json.Marshal(removalRecoveryRecord{Authority: authority, Token: token.value})
+	if err != nil {
+		return err
+	}
+	return write(bytes.NewReader(body))
+}
+
+// ReadRemovalRecovery opens only the typed root-only snapshot record.
+func ReadRemovalRecovery(source io.Reader) (RemovalRecoveryAuthority, ManagementToken, error) {
+	var record removalRecoveryRecord
+	decoder := json.NewDecoder(io.LimitReader(source, 1<<20))
+	if decoder.Decode(&record) != nil || decoder.Decode(&struct{}{}) != io.EOF || !validRemovalRecoveryAuthority(record.Authority) {
+		return RemovalRecoveryAuthority{}, ManagementToken{}, errors.New("Cloudflare removal recovery authority unavailable")
+	}
+	token, err := NewManagementToken(record.Token)
+	return record.Authority, token, err
+}
+
+func validRemovalRecoveryAuthority(authority RemovalRecoveryAuthority) bool {
+	if !immutableID.MatchString(authority.AccountID) || !immutableID.MatchString(authority.ZoneID) || !validZoneName(authority.ZoneName) || !tunnelUUID.MatchString(authority.TunnelID) || len(authority.DNSRecordIDs) < 2 || len(authority.DNSRecordIDs) > 4 || len(authority.Routes) == 0 {
+		return false
+	}
+	for _, id := range authority.DNSRecordIDs {
+		if !immutableID.MatchString(id) {
+			return false
+		}
+	}
+	for _, route := range authority.Routes {
+		if !safeObservedRoute(route) {
+			return false
+		}
+	}
+	return true
+}
 
 type RemovalObservation struct {
 	ReviewID              string

@@ -114,6 +114,7 @@ type CompleteRemovalApplyRequest struct {
 	Approval      CompleteRemovalApproval
 	PreparedState systemchanges.PreparedStateCommit
 	SystemChanges systemchanges.Interface
+	Cancellation  *systemchanges.Cancellation
 }
 
 func PlanCompleteRemoval(request CompleteRemovalPlanRequest) (*CompleteRemovalPlan, *InstallFinding) {
@@ -152,11 +153,11 @@ func PlanCompleteRemoval(request CompleteRemovalPlanRequest) (*CompleteRemovalPl
 	summary := CompleteRemovalSummary{
 		StartingStatus: InstallationStatus(status), StateRevision: revision,
 		OwnedLocalCategories:          []string{"Desired State", "Client Access Values", "Infrastructure Secrets", "certificates and ACME material", "transaction journal", "Rollback Snapshot", "installed release", "verified update candidate", "services and timers", "service identities", "prepared artifacts", "Subscription Publication artifacts", "SBXR-owned firewall table", "public listeners", "public services", "removal journal", "recovery runner"},
-		CloudflareCategories:          []string{"DNS records", "Tunnel routes", "Tunnel"},
+		CloudflareCategories:          []string{"Tunnel routes before the checkpoint", "DNS records and Tunnel after the checkpoint"},
 		IrreversibleRemnants:          []string{"Certificate Transparency entries cannot be erased", "DNS caches cannot be erased"},
 		CancellationBoundary:          "Back or cancel restores the exact proven starting status until Irreversible removal started is durable; cancellation is impossible afterward",
 		TokenRevocationResponsibility: "Albert revokes the scoped Cloudflare token only after owned remote cleanup is verified; SBXR verifies revocation before deleting the local copy",
-		Rollback:                      "restore every removed exposure and owned Cloudflare resource from the one transaction Rollback Snapshot before the checkpoint to " + rollbackStatus,
+		Rollback:                      "restore every changed exposure and Tunnel route from the one transaction Rollback Snapshot before the checkpoint to " + rollbackStatus,
 		FinalProof:                    "Not installed with no retained SBXR recovery material", Disk: request.Disk, SudoAfterApproval: true, OneUse: true,
 	}
 	return &CompleteRemovalPlan{identity: request.ChangeSet + "-plan-" + checksum[:12], sha256: checksum, changeSet: request.ChangeSet, stateSHA256: stateSHA256, volatileSHA256: volatileSHA256, revision: revision, status: status, proof: proof, disk: request.Disk, summary: summary}, nil
@@ -354,6 +355,9 @@ func (plan *CompleteRemovalPlan) Apply(ctx context.Context, request CompleteRemo
 	if err != nil {
 		return completeRemovalRefused("SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-AUTHORIZATION", "The confirmed removal could not form one exact Change Set")
 	}
+	if request.Cancellation != nil {
+		return request.SystemChanges.ApplyWithCancellation(change, request.Cancellation)
+	}
 	return request.SystemChanges.Apply(change)
 }
 
@@ -372,7 +376,7 @@ func completeRemovalSteps(selection systemchanges.PermanentRemovalSelection, pub
 		proof := value.SystemChangesCloudflareRemovalAuthority()
 		ordered = append(ordered, authority{resource: string(proof.Resource), identity: proof.ImmutableID, cloudflare: value})
 	}
-	order := map[string]int{"firewall-table": 0, "public-listener": 1, "public-service": 2, "cloudflare-dns-record": 3, "cloudflare-route": 4, "cloudflare-tunnel": 5}
+	order := map[string]int{"firewall-table": 0, "public-listener": 1, "public-service": 2, "cloudflare-route": 3, "cloudflare-dns-record": 4, "cloudflare-tunnel": 5}
 	sort.Slice(ordered, func(i, j int) bool {
 		return order[ordered[i].resource] < order[ordered[j].resource] || order[ordered[i].resource] == order[ordered[j].resource] && ordered[i].identity < ordered[j].identity
 	})
