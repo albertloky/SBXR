@@ -32,6 +32,20 @@ func TestRegistryCredentialsCanBeRebuiltFromTheSameProtectedEntropy(t *testing.T
 	}
 }
 
+func TestRegistryPlanRegeneratesBothCompleteConfigurationsForAReleaseUpdate(t *testing.T) {
+	current := validRegistryRequest(t)
+	result := connectionprofiles.New(healthyRegistryHost(current)).PlanRegistry(t.Context(), connectionprofiles.RegistryPlanRequest{
+		Current: current, Candidate: current, ChangeSet: "profiles-release-update-0001", StartingStateSHA256: strings.Repeat("a", 64), DesiredStateSHA256: strings.Repeat("a", 64), ReleaseUpdate: true,
+	})
+	if result.Plan == nil || result.Health.Outcome != connectionprofiles.Healthy {
+		t.Fatalf("release update Plan = %+v", result)
+	}
+	proof := result.Plan.SoftwareLifecycleUpdateContribution()
+	if proof.Name != "Connection Profiles" || proof.Owner != systemchanges.ConnectionProfilesModule || len(proof.Steps) != 1 || len(proof.Checks) == 0 {
+		t.Fatalf("release update contribution = %+v", proof)
+	}
+}
+
 func TestRegistryViewContainsExactlySixFreshEnabledIndependentProfiles(t *testing.T) {
 	request := validRegistryRequest(t)
 	credentials, err := connectionprofiles.GenerateRegistryCredentials()
@@ -348,7 +362,7 @@ func TestRegistryViewReportsEveryDisabledProfileTruthfullyAndOmitsPublication(t 
 			request.Exposure = registryPolicyContribution(request)
 			result := connectionprofiles.New(healthyRegistryHost(request)).ViewRegistry(t.Context(), request)
 			profile, ok := result.Profile(test.id)
-			if result.Health.Outcome != connectionprofiles.Healthy || !ok || profile.Health.Outcome != connectionprofiles.Disabled || profile.Health.Code != "CONNECTION-PROFILES-REGISTRY-DISABLED" || len(result.Profiles) != 6 || len(result.Publication.Profiles()) != 5 || len(result.Publication.Omissions()) != 1 || result.Publication.Omissions()[0].ID != test.id {
+			if result.Health.Outcome != connectionprofiles.Healthy || result.Repairable || !ok || profile.Health.Outcome != connectionprofiles.Disabled || profile.Health.Code != "CONNECTION-PROFILES-REGISTRY-DISABLED" || len(result.Profiles) != 6 || len(result.Publication.Profiles()) != 5 || len(result.Publication.Omissions()) != 1 || result.Publication.Omissions()[0].ID != test.id {
 				t.Fatalf("disabled registry View = %+v", result)
 			}
 			if _, err := json.Marshal(result.Publication); err == nil {
@@ -357,7 +371,7 @@ func TestRegistryViewReportsEveryDisabledProfileTruthfullyAndOmitsPublication(t 
 
 			request.Exposure = validRegistryRequest(t).Exposure
 			drift := connectionprofiles.New(healthyRegistryHost(request)).ViewRegistry(t.Context(), request)
-			if drift.Health.Outcome != connectionprofiles.Failed || drift.Health.Code != "CONNECTION-PROFILES-REGISTRY-EXPOSURE" {
+			if drift.Health.Outcome != connectionprofiles.Failed || drift.Health.Code != "CONNECTION-PROFILES-REGISTRY-EXPOSURE" || !drift.Repairable {
 				t.Fatalf("disabled profile retained exposure: %+v", drift)
 			}
 		})

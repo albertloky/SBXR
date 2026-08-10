@@ -90,6 +90,16 @@ type Observation struct {
 	TimeOwner              string
 }
 
+// CurrentStateDriftObservation is the only constructor for forward-repair
+// inspection facts. It admits one proven owning Module and no transaction.
+func CurrentStateDriftObservation(starting StateLineage, lastChangeSet, volatileSHA256 string, owningModules int) (Observation, error) {
+	observation := Observation{Status: RecoveryRequired, LastChangeSet: lastChangeSet, Checkpoint: NoCheckpoint, Lock: LockReleased, ForwardRepairAvailable: true, RecoveryCause: CurrentStateDrift, StateRevision: starting.Revision, StateSHA256: starting.SHA256, VolatileSHA256: volatileSHA256, WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}
+	if starting.Status != Managed || owningModules != 1 || !validObservation(observation) || !validSHA256(volatileSHA256) {
+		return Observation{}, errors.New("exact current-State drift inspection unavailable")
+	}
+	return observation, nil
+}
+
 type Inspection struct {
 	Status                 InstallationStatus `json:"status"`
 	CurrentChangeSet       string             `json:"current_change_set,omitempty"`
@@ -1314,7 +1324,7 @@ func (i Interface) applyLocked(changeSet *ChangeSet, cancellation *Cancellation,
 	if !statusMatches || observed.StateRevision != spec.StartingState.Revision || observed.StateSHA256 != spec.StartingState.SHA256 || observed.VolatileSHA256 != spec.Plan.VolatileSHA256 {
 		return finish(lock, refused("SYSTEM-CHANGES-STALE", "The reviewed State lineage or volatile binding changed", fmt.Sprintf("status=%s revision=%d state_match=%t binding_match=%t", observed.Status, observed.StateRevision, observed.StateSHA256 == spec.StartingState.SHA256, observed.VolatileSHA256 == spec.Plan.VolatileSHA256), "the exact reviewed lineage and every volatile binding", "stale approval cannot authorize mutation", "Reload observations and create a fresh Plan.", true))
 	}
-	if spec.TargetStateSHA256 == spec.StartingState.SHA256 && spec.Mutation != RotationMutation && spec.Mutation != RepairMutation && spec.Mutation != CertificateChangeMutation && spec.Mutation != CertificateRenewalMutation && spec.Mutation != CompleteRemovalMutation {
+	if spec.TargetStateSHA256 == spec.StartingState.SHA256 && spec.Mutation != RotationMutation && spec.Mutation != RepairMutation && spec.Mutation != CertificateChangeMutation && spec.Mutation != CertificateRenewalMutation && spec.Mutation != UpdateMutation && spec.Mutation != CompleteRemovalMutation {
 		return finish(lock, refused("SYSTEM-CHANGES-NO-OP", "The Change Set would not change Desired State", "the starting and target checksums are identical", "one actual reviewed change", "a no-op must not create transaction material", "Return without applying and plan only when intent changes.", true))
 	}
 	reserved, _ := spec.Disk.total()

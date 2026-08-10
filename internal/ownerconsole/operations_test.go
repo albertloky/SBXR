@@ -3,6 +3,7 @@ package ownerconsole
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -232,6 +233,20 @@ func TestRunReviewsExactUpdateAndCompatibleDowngradeBeforeApply(t *testing.T) {
 		}
 		if len(stub.requests) != 1 || stub.requests[0] != change || len(outcomes.applyPlans) != 0 {
 			t.Fatalf("%s did not stop at exact review: requests=%#v applies=%#v", change, stub.requests, outcomes.applyPlans)
+		}
+	}
+}
+
+func TestLifecycleKeepsExplicitDowngradeSelectionWhenNoUpdateExists(t *testing.T) {
+	presentation := LifecyclePresentation{Installed: completeLifecycle(ReviewUpdate).Installed, DiscoveryCannotApply: true, DowngradeSelectionAvailable: true}
+	validated, ok := validatedLifecycle(presentation)
+	if !ok || !reflect.DeepEqual(lifecycleActions(validated), []string{"Select compatible downgrade", "Back"}) {
+		t.Fatalf("latest-release lifecycle = (%+v, %v, %#v)", validated, ok, lifecycleActions(validated))
+	}
+	lines := strings.Join(lifecycleLines(validated, true, 0), "\n")
+	for _, want := range []string{"No newer verified stable release", "Select compatible downgrade", "exact Owner-selected immutable release tag"} {
+		if !strings.Contains(lines, want) {
+			t.Fatalf("latest-release lifecycle omitted %q\n%s", want, lines)
 		}
 	}
 }

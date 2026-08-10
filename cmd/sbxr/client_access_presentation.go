@@ -25,13 +25,18 @@ import (
 )
 
 type clientAccessPresentation struct {
-	Installation ownerconsole.InstallationStatus
-	Profiles     ownerconsole.ProfilesPresentation
-	Access       ownerconsole.AccessPresentation
-	Cloudflare   ownerconsole.CloudflarePresentation
-	Certificates ownerconsole.CertificatesPresentation
-	Recovery     ownerconsole.RecoveryPresentation
-	health       map[healthdiagnostics.Module]healthdiagnostics.HealthStatus
+	Installation  ownerconsole.InstallationStatus
+	Release       state.ReleaseIdentity
+	StateRevision uint64
+	StateSHA256   string
+	Repair        systemchanges.Observation
+	Profiles      ownerconsole.ProfilesPresentation
+	Access        ownerconsole.AccessPresentation
+	Cloudflare    ownerconsole.CloudflarePresentation
+	Certificates  ownerconsole.CertificatesPresentation
+	Lifecycle     ownerconsole.LifecyclePresentation
+	Recovery      ownerconsole.RecoveryPresentation
+	health        map[healthdiagnostics.Module]healthdiagnostics.HealthStatus
 }
 
 func managedClientAccessPresentation(ctx context.Context) (clientAccessPresentation, error) {
@@ -55,7 +60,7 @@ func managedClientAccessPresentation(ctx context.Context) (clientAccessPresentat
 	if err != nil {
 		return clientAccessPresentation{}, err
 	}
-	presentation := clientAccessPresentation{Installation: ownerconsole.InstallationManaged, health: map[healthdiagnostics.Module]healthdiagnostics.HealthStatus{healthdiagnostics.StateModule: healthdiagnostics.Healthy}}
+	presentation := clientAccessPresentation{Installation: ownerconsole.InstallationManaged, Release: release, StateRevision: observed.StateRevision, StateSHA256: observed.StateSHA256, health: map[healthdiagnostics.Module]healthdiagnostics.HealthStatus{healthdiagnostics.StateModule: healthdiagnostics.Healthy}}
 	err = module.WithManagedConnectionProfileSecrets(loaded, func(snapshot state.Snapshot, secrets state.ConnectionProfileSecretReader) error {
 		return module.WithManagedSubscriptionSecrets(loaded, func(_ state.Snapshot, publicationSecrets state.ClientAccessReader) error {
 			return module.WithManagedCloudflareSecrets(loaded, func(_ state.Snapshot, cloudflareSecrets state.InfrastructureSecretReader) error {
@@ -122,6 +127,15 @@ func managedClientAccessPresentation(ctx context.Context) (clientAccessPresentat
 	})
 	if err == nil && loaded.Snapshot != nil {
 		presentation.health[healthdiagnostics.SubscriptionServingModule] = healthdiagnostics.HealthStatus(subscriptionserving.Inspect().Status)
+		if repair, repairErr := inspectSoftwareRepair(ctx); repairErr == nil && repair.ForwardRepairAvailable {
+			presentation.Recovery = (ownerRecovery{currentStateRepair: true}).ViewRecovery(ctx)
+			presentation.Repair = repair
+		}
+	}
+	if err == nil {
+		if lifecycle, _, _, lifecycleErr := managedSoftwareLifecyclePresentation(ctx, release); lifecycleErr == nil {
+			presentation.Lifecycle = lifecycle
+		}
 	}
 	return presentation, err
 }

@@ -360,10 +360,20 @@ func (executor Executor) ObserveCurrent(root string, timeout time.Duration) (Pub
 		return PublishedFacts{}, errors.New("Subscription Publication observation unavailable")
 	}
 	storage, err := openStore(root, false, executor.uid, executor.gid)
+	if errors.Is(err, os.ErrNotExist) {
+		return PublishedFacts{Serving: systemchanges.Unknown}, nil
+	}
 	if err != nil {
 		return PublishedFacts{}, errors.New("active subscription artifact set is unprovable")
 	}
 	defer storage.root.Close()
+	current, err := storage.current()
+	if err != nil {
+		return PublishedFacts{}, errors.New("active subscription artifact set is unprovable")
+	}
+	if current == "" {
+		return PublishedFacts{Serving: systemchanges.Unknown}, nil
+	}
 	set, err := storage.readSet("current", 0o750)
 	if err != nil {
 		return PublishedFacts{}, errors.New("active subscription artifact set is unprovable")
@@ -478,9 +488,12 @@ func openStore(host string, create bool, uid, gid int) (*store, error) {
 			}
 			info, statErr = root.Lstat(wanted.name)
 		}
+		if errors.Is(statErr, os.ErrNotExist) && !create {
+			return fail(os.ErrNotExist)
+		}
 		stat, ok := fileStat(info)
 		if statErr != nil || !ok || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != wanted.mode || stat.Uid != uint32(uid) || stat.Gid != uint32(gid) {
-			return fail(os.ErrNotExist)
+			return fail(errors.New("unsafe Subscription Publication directory"))
 		}
 	}
 	subscriptions, err := root.OpenRoot(subscriptionDirectory)

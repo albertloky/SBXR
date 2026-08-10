@@ -266,20 +266,21 @@ type ReleaseIdentityPresentation struct {
 }
 
 type LifecyclePresentation struct {
-	Change                     LifecycleChange
-	Installed, Candidate       ReleaseIdentityPresentation
-	FreshlyVerified            bool
-	CompatibleWithDesiredState bool
-	AuthenticatedSequence      string
-	Migrations                 []string
-	RegeneratedRepresentations []string
-	AffectedServices           []string
-	RequiredChecks             []string
-	AdvisoryChecks             []string
-	Interruption               string
-	Cancellation               string
-	Rollback                   string
-	DiscoveryCannotApply       bool
+	Change                      LifecycleChange
+	Installed, Candidate        ReleaseIdentityPresentation
+	FreshlyVerified             bool
+	CompatibleWithDesiredState  bool
+	AuthenticatedSequence       string
+	Migrations                  []string
+	RegeneratedRepresentations  []string
+	AffectedServices            []string
+	RequiredChecks              []string
+	AdvisoryChecks              []string
+	Interruption                string
+	Cancellation                string
+	Rollback                    string
+	DiscoveryCannotApply        bool
+	DowngradeSelectionAvailable bool
 }
 
 func validReleaseIdentity(identity ReleaseIdentityPresentation) bool {
@@ -299,6 +300,9 @@ func safeHex(value string, length int) bool {
 }
 
 func validatedLifecycle(p LifecyclePresentation) (LifecyclePresentation, bool) {
+	if p.DowngradeSelectionAvailable && p.Change == 0 && validReleaseIdentity(p.Installed) && p.Candidate == (ReleaseIdentityPresentation{}) && !p.FreshlyVerified && !p.CompatibleWithDesiredState && p.DiscoveryCannotApply && p.AuthenticatedSequence == "" && len(p.Migrations) == 0 && len(p.RegeneratedRepresentations) == 0 && len(p.AffectedServices) == 0 && len(p.RequiredChecks) == 0 && len(p.AdvisoryChecks) == 0 && p.Interruption == "" && p.Cancellation == "" && p.Rollback == "" {
+		return p, true
+	}
 	validDirection := p.Change == ReviewUpdate && p.Candidate.Sequence > p.Installed.Sequence || p.Change == ReviewDowngrade && p.Candidate.Sequence < p.Installed.Sequence && p.CompatibleWithDesiredState
 	if !validDirection || !validReleaseIdentity(p.Installed) || !validReleaseIdentity(p.Candidate) || !p.FreshlyVerified || !p.CompatibleWithDesiredState || !p.DiscoveryCannotApply || !safeProviderLines([]string{p.AuthenticatedSequence, p.Interruption, p.Cancellation, p.Rollback}, 4) || !completeStrings(p.Migrations, 32) || !completeStrings(p.RegeneratedRepresentations, 32) || !completeStrings(p.AffectedServices, 32) || !completeStrings(p.RequiredChecks, 32) || !completeStrings(p.AdvisoryChecks, 32) {
 		return LifecyclePresentation{}, false
@@ -312,12 +316,23 @@ func validatedLifecycle(p LifecyclePresentation) (LifecyclePresentation, bool) {
 }
 
 func lifecycleActions(p LifecyclePresentation) []string {
-	return []string{"Review " + p.Change.String(), "Back"}
+	if p.Change == 0 {
+		return []string{"Select compatible downgrade", "Back"}
+	}
+	actions := []string{"Review " + p.Change.String()}
+	if p.Change != ReviewDowngrade {
+		actions = append(actions, "Select compatible downgrade")
+	}
+	return append(actions, "Back")
 }
 
 func lifecycleLines(p LifecyclePresentation, valid bool, selected int) []string {
 	if !valid {
 		return []string{"Release facts are unavailable.", "", "No update, downgrade, or Apply action was inferred.", "", "> Back"}
+	}
+	if p.Change == 0 {
+		lines := []string{"Software release review", "Installed Release Identity - " + p.Installed.Repository + " " + p.Installed.Tag, "Installed commit - " + p.Installed.Commit, "Installed index SHA-256 - " + p.Installed.IndexSHA256, fmt.Sprintf("Installed sequence - %d", p.Installed.Sequence), "", "No newer verified stable release is currently retained.", "Update discovery cannot Apply.", "A downgrade requires an exact Owner-selected immutable release tag and a fresh compatibility check.", ""}
+		return append(lines, selectedLines(lifecycleActions(p), selected)...)
 	}
 	lines := []string{
 		p.Change.String() + " review", "Installed Release Identity - " + p.Installed.Repository + " " + p.Installed.Tag, "Installed commit - " + p.Installed.Commit, "Installed index SHA-256 - " + p.Installed.IndexSHA256, fmt.Sprintf("Installed sequence - %d", p.Installed.Sequence),

@@ -179,6 +179,19 @@ func TestRecoveryOptionsRequireExactEligibilityFacts(t *testing.T) {
 	}
 }
 
+func TestCurrentStateDriftInspectionRequiresExactlyOneOwnerAndManagedLineage(t *testing.T) {
+	lineage := systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: strings.Repeat("a", 64)}
+	got, err := systemchanges.CurrentStateDriftObservation(lineage, "change-0006", strings.Repeat("b", 64), 1)
+	if err != nil || got.Status != systemchanges.RecoveryRequired || got.RecoveryCause != systemchanges.CurrentStateDrift || !got.ForwardRepairAvailable {
+		t.Fatalf("inspection = (%+v, %v)", got, err)
+	}
+	for _, owners := range []int{0, 2} {
+		if _, err := systemchanges.CurrentStateDriftObservation(lineage, "change-0006", strings.Repeat("b", 64), owners); err == nil {
+			t.Fatalf("%d owning Modules accepted", owners)
+		}
+	}
+}
+
 func containsAction(actions []systemchanges.Action, wanted systemchanges.Action) bool {
 	for _, action := range actions {
 		if action == wanted {
@@ -352,6 +365,19 @@ func TestCertificateRenewalMayPublishARevisionWithUnchangedLogicalIntent(t *test
 	result := systemchanges.New(&memoryAdapter{observation: completeObservation()}).Apply(changeSet)
 	if result.Finding != nil && result.Finding.Code == "SYSTEM-CHANGES-NO-OP" {
 		t.Fatalf("logical certificate renewal was refused as a no-op: %+v", result)
+	}
+}
+
+func TestSoftwareUpdateMayPublishANewReleaseWithUnchangedLogicalIntent(t *testing.T) {
+	spec := completeSpec(t, systemchanges.UpdateMutation)
+	spec.TargetStateSHA256 = spec.StartingState.SHA256
+	changeSet, err := systemchanges.NewChangeSet(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := systemchanges.New(&memoryAdapter{observation: completeObservation()}).Apply(changeSet)
+	if result.Finding != nil && result.Finding.Code == "SYSTEM-CHANGES-NO-OP" {
+		t.Fatalf("reviewed software update was refused as a no-op: %+v", result)
 	}
 }
 

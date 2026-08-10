@@ -1242,33 +1242,53 @@ func RecoveryStartingStatus(rootPath string) (systemchanges.InstallationStatus, 
 	return status, err
 }
 
+type RecoveryTransactionIdentity struct {
+	StartingStatus                    systemchanges.InstallationStatus
+	Mutation                          systemchanges.MutationClass
+	StartingRelease, CandidateRelease systemchanges.ReleaseBinding
+	ForwardOnly                       bool
+	Checkpoint                        systemchanges.DurableCheckpoint
+}
+
 // RecoveryStartingRelease returns only the release already authenticated by
 // the protected journal and manifest so recovery can reconstruct fixed tools.
 func RecoveryStartingRelease(rootPath string) (systemchanges.InstallationStatus, systemchanges.ReleaseBinding, bool, systemchanges.DurableCheckpoint, error) {
-	root, err := os.OpenRoot(rootPath)
+	identity, err := RecoveryTransaction(rootPath)
 	if err != nil {
 		return "", systemchanges.ReleaseBinding{}, false, "", err
+	}
+	release := identity.StartingRelease
+	if release == (systemchanges.ReleaseBinding{}) {
+		release = identity.CandidateRelease
+	}
+	return identity.StartingStatus, release, identity.ForwardOnly, identity.Checkpoint, nil
+}
+
+func RecoveryTransaction(rootPath string) (RecoveryTransactionIdentity, error) {
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		return RecoveryTransactionIdentity{}, err
 	}
 	defer root.Close()
 	entries, err := fs.ReadDir(root.FS(), transactionDirectory)
 	if err != nil || len(entries) != 1 || !entries[0].IsDir() || !safeName(entries[0].Name()) {
-		return "", systemchanges.ReleaseBinding{}, false, "", errors.New("one unfinished transaction was not proven")
+		return RecoveryTransactionIdentity{}, errors.New("one unfinished transaction was not proven")
 	}
 	directory := path.Join(transactionDirectory, entries[0].Name())
 	uid := os.Geteuid()
 	if verifyDirectory(root, directory, uid) != nil || verifyFile(root, path.Join(directory, "journal.jsonl"), uid) != nil {
-		return "", systemchanges.ReleaseBinding{}, false, "", errors.New("recovery transaction identity is invalid")
+		return RecoveryTransactionIdentity{}, errors.New("recovery transaction identity is invalid")
 	}
 	journal, err := readJournal(root, path.Join(directory, "journal.jsonl"))
 	manifest, manifestErr := verifyTransactionManifest(root, directory, uid)
 	if err != nil || manifestErr != nil || !validJournal(journal) || len(journal) == 0 || journal[0].State == nil || manifest.Reason != journal[0].Mutation || !validRecoveryBinding(journal[0], manifest, journal[0].Mutation == systemchanges.RotationMutation && runTokenFingerprint(journal) != "") {
-		return "", systemchanges.ReleaseBinding{}, false, "", errors.New("recovery transaction lineage is invalid")
+		return RecoveryTransactionIdentity{}, errors.New("recovery transaction lineage is invalid")
 	}
 	if journal[0].Starting.Status != systemchanges.Managed && journal[0].Starting.Status != systemchanges.NotInstalled {
-		return "", systemchanges.ReleaseBinding{}, false, "", errors.New("recovery starting baseline is unsupported")
+		return RecoveryTransactionIdentity{}, errors.New("recovery starting baseline is unsupported")
 	}
 	forwardOnly := journal[0].Mutation == systemchanges.RotationMutation && runTokenFingerprint(journal) != ""
-	return journal[0].Starting.Status, recoveryRelease(*journal[0].State), forwardOnly, journal[len(journal)-1].Checkpoint, nil
+	return RecoveryTransactionIdentity{StartingStatus: journal[0].Starting.Status, Mutation: journal[0].Mutation, StartingRelease: journal[0].State.StartingRelease, CandidateRelease: journal[0].State.CandidateRelease, ForwardOnly: forwardOnly, Checkpoint: journal[len(journal)-1].Checkpoint}, nil
 }
 
 // RecoveryHealthObservation overlays one validated unfinished transaction on
@@ -1625,6 +1645,12 @@ func (a Adapter) Cleanup(lease systemchanges.ExecutionLease, changeSet string) e
 	if entries[len(entries)-1].Checkpoint == systemchanges.Complete && journalHasSubscription(entries[0].Steps) {
 		if a.subscription == nil || a.subscription.Cleanup(a.root) != nil {
 			return errors.New("completed subscription artifact cleanup failed")
+		}
+	}
+	if entries[len(entries)-1].Checkpoint == systemchanges.Complete && entries[0].Mutation == systemchanges.UpdateMutation {
+		cleaner, ok := a.software.(interface{ CleanupComplete(string) error })
+		if !ok || cleaner.CleanupComplete(a.root) != nil {
+			return errors.New("completed update candidate cleanup failed")
 		}
 	}
 	names := make([]string, 0, len(manifest.Files))

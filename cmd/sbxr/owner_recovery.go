@@ -11,9 +11,13 @@ type ownerRecovery struct {
 	changeSet             string
 	forwardOnly           bool
 	needsRunTokenRotation bool
+	currentStateRepair    bool
 }
 
 func (recovery ownerRecovery) ViewRecovery(context.Context) ownerconsole.RecoveryPresentation {
+	if recovery.currentStateRepair {
+		return ownerconsole.RecoveryPresentation{Kind: ownerconsole.RecoveryCurrentStateRepairAvailable, Proof: ownerconsole.ProvenCurrentState, CauseCode: "CURRENT-STATE-DRIFT", Explanation: "The current proven Desired State disagrees with one SBXR-owned Managed resource.", Evidence: "CURRENT-STATE-REPAIR-AVAILABLE", Guidance: "Review one forward repair of the current proven Desired State; do not adopt Observed State."}
+	}
 	if recovery.changeSet != "" {
 		if recovery.forwardOnly {
 			guidance := "Continue the exact forward-only recovery; do not rotate the token again."
@@ -45,8 +49,4 @@ func (recovery ownerRecovery) RetryAutomaticRollback(ctx context.Context) ownerc
 		kind, checkpoint, explanation = ownerconsole.ChangeSetSucceeded, "Complete", "Forward-only Tunnel run-token recovery proved Managed State and both routes."
 	}
 	return ownerconsole.DurableChangeSet{Kind: kind, OperationID: operation, Checkpoint: checkpoint, Explanation: explanation}
-}
-
-func (ownerRecovery) ReviewCurrentStateRepair(context.Context) ownerconsole.ChangeReview {
-	return clientAccessCorrection("Current-State repair authority is unavailable")
 }

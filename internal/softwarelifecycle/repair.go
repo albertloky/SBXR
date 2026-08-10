@@ -90,13 +90,13 @@ type RepairPlanRequest struct {
 }
 
 type RepairSummary struct {
-	CurrentRevision, CandidateRevision uint64
-	CurrentStateSHA256                 string
-	OwningModule                       systemchanges.Module
-	Steps, Checks, Details             []string
-	Disk                               systemchanges.DiskRequirement
-	StateEffect, Rollback              string
-	SudoAfterApproval, OneUse          bool
+	CurrentRevision, CandidateRevision      uint64
+	CurrentStateSHA256                      string
+	OwningModule                            systemchanges.Module
+	Steps, Checks, Details                  []string
+	Disk                                    systemchanges.DiskRequirement
+	StateEffect, Rollback                   string
+	PrivilegedMutationAfterApproval, OneUse bool
 }
 
 type RepairPlan struct {
@@ -157,9 +157,9 @@ func buildRepairPlan(request RepairPlanRequest, proof RepairContributionProof, r
 	summary := RepairSummary{
 		CurrentRevision: revision, CandidateRevision: revision + 1, CurrentStateSHA256: stateSHA256, OwningModule: proof.Owner,
 		Steps: steps, Checks: checks, Details: append([]string(nil), proof.Details...), Disk: request.Disk,
-		StateEffect:       fmt.Sprintf("publish revision %d with unchanged Owner intent after repaired resources pass required gates", revision+1),
-		Rollback:          "restore the exact pre-repair managed resources and current Desired State from the one transaction Rollback Snapshot",
-		SudoAfterApproval: true, OneUse: true,
+		StateEffect:                     fmt.Sprintf("publish revision %d with unchanged Owner intent after repaired resources pass required gates", revision+1),
+		Rollback:                        "restore the exact pre-repair managed resources and current Desired State from the one transaction Rollback Snapshot",
+		PrivilegedMutationAfterApproval: true, OneUse: true,
 	}
 	return &RepairPlan{identity: request.ChangeSet + "-plan-" + checksum[:12], sha256: checksum, revision: revision, stateSHA256: stateSHA256, proof: proof, contribution: request.Contribution, contributorType: reflect.TypeOf(request.Contribution), volatileSHA256: volatileSHA256, disk: request.Disk, summary: summary, used: &atomic.Bool{}}, nil
 }
@@ -281,6 +281,7 @@ type RepairApplyRequest struct {
 	Approval      RepairApproval
 	PreparedState systemchanges.PreparedStateCommit
 	SystemChanges systemchanges.Interface
+	Cancellation  *systemchanges.Cancellation
 }
 
 func (plan *RepairPlan) Apply(ctx context.Context, request RepairApplyRequest) systemchanges.ApplyResult {
@@ -316,6 +317,9 @@ func (plan *RepairPlan) Apply(ctx context.Context, request RepairApplyRequest) s
 	})
 	if err != nil {
 		return repairRefused("SOFTWARE-LIFECYCLE-REPAIR-PREPARED", "The prepared repair cannot form one complete Change Set")
+	}
+	if request.Cancellation != nil {
+		return request.SystemChanges.ApplyWithCancellation(change, request.Cancellation)
 	}
 	return request.SystemChanges.Apply(change)
 }

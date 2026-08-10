@@ -930,3 +930,12 @@ func TestAuthenticatedStartupRoutesValidatedRecoveryWithoutReadingProtectedState
 		t.Fatalf("authenticated startup = scenario %v recovery %+v", got.scenario, got.recoveryScreen)
 	}
 }
+
+func TestManagedStartupRoutesExactlyProvenCurrentStateRepair(t *testing.T) {
+	view := RecoveryPresentation{Kind: RecoveryCurrentStateRepairAvailable, Proof: ProvenCurrentState, CauseCode: "CURRENT-STATE-DRIFT", Explanation: "One owning Module proved drift.", Evidence: "CURRENT-STATE-REPAIR-AVAILABLE", Guidance: "Review one forward repair."}
+	updated, _ := (model{scenario: AuthenticatedOverview}).Update(startupLoadedMsg{startup: StartupPresentation{Status: InstallationManaged, Recovery: view}})
+	got := updated.(model)
+	if got.scenario != ManagedStateRepair || !got.recoveryScreen.available {
+		t.Fatalf("Managed repair startup = scenario %v recovery %+v", got.scenario, got.recoveryScreen)
+	}
+}

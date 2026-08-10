@@ -104,7 +104,7 @@ func TestPlanRepairDisclosesOneCurrentStateForwardRepair(t *testing.T) {
 		t.Fatalf("PlanRepair() = (%+v, %+v)", plan, finding)
 	}
 	summary := plan.Summary()
-	if summary.CurrentRevision != 7 || summary.CandidateRevision != 8 || summary.CurrentStateSHA256 != stateSHA || summary.OwningModule != systemchanges.ConnectionProfilesModule || summary.Disk != disk || !summary.OneUse || !summary.SudoAfterApproval || len(summary.Steps) != 1 || len(summary.Checks) != 2 || summary.StateEffect != "publish revision 8 with unchanged Owner intent after repaired resources pass required gates" || summary.Rollback == "" {
+	if summary.CurrentRevision != 7 || summary.CandidateRevision != 8 || summary.CurrentStateSHA256 != stateSHA || summary.OwningModule != systemchanges.ConnectionProfilesModule || summary.Disk != disk || !summary.OneUse || !summary.PrivilegedMutationAfterApproval || len(summary.Steps) != 1 || len(summary.Checks) != 2 || summary.StateEffect != "publish revision 8 with unchanged Owner intent after repaired resources pass required gates" || summary.Rollback == "" {
 		t.Fatalf("repair summary = %+v", summary)
 	}
 	if _, err := json.Marshal(plan); err == nil || strings.Contains(fmt.Sprintf("%#v", plan), "OWNER-SECRET") {

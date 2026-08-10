@@ -3,6 +3,8 @@ package ubuntu
 import (
 	"archive/tar"
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -75,6 +77,26 @@ func (store CandidateStore) Load() (softwarelifecycle.CandidateRecord, error) {
 		return err
 	})
 	return record, err
+}
+
+func (store CandidateStore) RemoveVerified(release softwarelifecycle.ReleaseIdentity) error {
+	if err := verifyCandidateDirectory(store.directory); err != nil {
+		return err
+	}
+	return store.withLock(func() error {
+		record, err := store.loadUnlocked()
+		if errors.Is(err, softwarelifecycle.ErrCandidateNotFound) {
+			return nil
+		}
+		digest := sha256.Sum256(record.Evidence.Index)
+		if err != nil || record.Evidence.Repository != release.Repository || record.Evidence.Tag != release.Tag || record.Evidence.Commit != release.Commit || hex.EncodeToString(digest[:]) != release.IndexSHA256 {
+			return errors.New("completed update candidate identity changed")
+		}
+		if err := os.Remove(store.path()); err != nil {
+			return err
+		}
+		return syncPath(store.directory)
+	})
 }
 
 func (store CandidateStore) loadUnlocked() (softwarelifecycle.CandidateRecord, error) {

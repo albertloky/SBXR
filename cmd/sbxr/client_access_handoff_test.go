@@ -3,7 +3,10 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"io"
+	"os"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/albertloky/SBXR/internal/connectionprofiles"
@@ -91,5 +94,60 @@ func TestDiagnosticsHandoffAcceptsOnlyViewOrReviewedBundleReplacement(t *testing
 		if validClientAccessHandoff(request) {
 			t.Fatalf("unsafe diagnostics request was accepted: %+v", request)
 		}
+	}
+}
+
+func TestSoftwareLifecycleHandoffAcceptsOnlyExactTypedActions(t *testing.T) {
+	update := clientAccessHandoffRequest{Schema: 1, Mode: "software-review", SoftwareAction: "update", ReleaseTag: "v1.5.0", ChangeSet: "update-0001"}
+	repair := clientAccessHandoffRequest{Schema: 1, Mode: "software-review", SoftwareAction: "repair", ChangeSet: "repair-0001"}
+	downgrade := clientAccessHandoffRequest{Schema: 1, Mode: "software-review", SoftwareAction: "downgrade", ReleaseTag: "v1.4.0", ChangeSet: "downgrade-0001"}
+	apply := update
+	apply.Mode, apply.ReviewedPlanIdentity, apply.ReviewedPlanSHA256 = "software-apply", "update-0001-plan-abcdef123456", strings.Repeat("a", 64)
+	if !validClientAccessHandoff(update) || !validClientAccessHandoff(downgrade) || !validClientAccessHandoff(repair) || !validClientAccessHandoff(apply) {
+		t.Fatal("exact Software Lifecycle request was refused")
+	}
+	for _, request := range []clientAccessHandoffRequest{
+		{Schema: 1, Mode: "software-review"},
+		{Schema: 1, Mode: "software-review", SoftwareAction: "apply"},
+		{Schema: 1, Mode: "software-review", SoftwareAction: "view"},
+		{Schema: 1, Mode: "software-review", SoftwareAction: "downgrade", ChangeSet: "downgrade-0001"},
+		{Schema: 1, Mode: "software-apply", SoftwareAction: "update", ReleaseTag: "v1.5.0", ChangeSet: "update-0001"},
+		{Schema: 1, Mode: "software-review", SoftwareAction: "update", ReleaseTag: "v1.5.0", ChangeSet: "update-0001", ReviewedPlanIdentity: "unexpected", ReviewedPlanSHA256: strings.Repeat("a", 64)},
+		{Schema: 1, Mode: "software-review", SoftwareAction: "downgrade", ReleaseTag: "../v1.4.0", ChangeSet: "downgrade-0001"},
+	} {
+		if validClientAccessHandoff(request) {
+			t.Fatalf("unsafe Software Lifecycle view accepted: %+v", request)
+		}
+	}
+}
+
+func TestSoftwareLifecycleHandoffCarriesOneBoundedCancellationRequest(t *testing.T) {
+	descriptors, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, child := os.NewFile(uintptr(descriptors[0]), "parent"), os.NewFile(uintptr(descriptors[1]), "child")
+	defer child.Close()
+	ready := make(chan struct{})
+	go func() {
+		approval := make([]byte, 6)
+		_, _ = io.ReadFull(child, approval)
+		close(ready)
+		cancel := make([]byte, 7)
+		_, _ = io.ReadFull(child, cancel)
+		_, _ = child.Write([]byte{'R'})
+	}()
+	session := &clientAccessHandoffSession{socket: parent, wait: func() error { return nil }, cancellable: true}
+	result := make(chan byte, 1)
+	go func() { terminal, _ := session.apply(); result <- terminal }()
+	<-ready
+	if err := session.cancel(); err != nil {
+		t.Fatal(err)
+	}
+	if terminal := <-result; terminal != 'R' {
+		t.Fatalf("terminal = %q", terminal)
+	}
+	if err := session.cancel(); err == nil {
+		t.Fatal("second cancellation request was accepted")
 	}
 }

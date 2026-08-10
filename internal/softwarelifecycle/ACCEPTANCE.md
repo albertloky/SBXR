@@ -189,7 +189,7 @@ Run:
 go test ./cmd/sbxr -run '^TestScheduledUpdateCheckInvokesOnlyStableSoftwareLifecycleView$' -count=1
 ```
 
-Require the scheduled seam to call only `Software Lifecycle.View` with Managed installed proof and stable discovery. It must not request architecture staging, Apply, approval, State publication, migrations, binary replacement, service restart, configuration change, or any product mutation. Production `private update-check` wiring and a real Clean-VPS timer run remain Pending on issue #127's installed verified completion receipt and complete production four-asset release.
+Require the scheduled seam to call only `Software Lifecycle.View` with Managed installed proof and stable discovery. It must not request architecture staging, Apply, approval, State publication, migrations, binary replacement, service restart, configuration change, or any product mutation. Production `private update-check` must freshly bind the installed Release Identity, refuse while a Change Set is unfinished, and use only the documented root-owned one-candidate store. A real Clean-VPS timer run remains Pending Release Qualification.
 
 ### SL-UPDATE-04 — One-use reviewed update and exact schema migration
 

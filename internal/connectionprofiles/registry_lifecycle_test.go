@@ -268,6 +268,22 @@ func TestRegistryPlansOnlyAuthorizedForwardRepairOfCurrentLineage(t *testing.T) 
 	}
 }
 
+func TestUnchangedCoreRegistryExcludesOnlySeparatelyOwnedRouteDrift(t *testing.T) {
+	request := validRegistryRequest(t)
+	request.XHTTP.RouteHealth.Origin = "http://127.0.0.1:1"
+	module := connectionprofiles.New(healthyRegistryHost(request))
+	if result := module.PlanUnchangedRegistry(t.Context(), request, "repair-0001", strings.Repeat("a", 64)); result.Plan != nil {
+		t.Fatal("ordinary unchanged proof ignored route drift")
+	}
+	if result := module.PlanUnchangedCoreRegistry(t.Context(), request, "repair-0001", strings.Repeat("a", 64)); result.Plan == nil {
+		t.Fatalf("core-only proof rejected separately owned route drift: %+v", result.Health)
+	}
+	request.Reality.XrayVersion = "changed"
+	if result := module.PlanUnchangedCoreRegistry(t.Context(), request, "repair-0001", strings.Repeat("a", 64)); result.Plan != nil {
+		t.Fatal("core-only proof ignored local core drift")
+	}
+}
+
 func withRegistryCredentials(request connectionprofiles.RegistryViewRequest, credentials connectionprofiles.RegistryCredentials) (connectionprofiles.ViewRequest, connectionprofiles.XHTTPViewRequest, connectionprofiles.WebSocketViewRequest) {
 	request.Reality.Credentials, request.XHTTP.Credentials, request.WebSocket.Credentials = credentials.Reality, credentials.XHTTP, credentials.WebSocket
 	return request.Reality, request.XHTTP, request.WebSocket

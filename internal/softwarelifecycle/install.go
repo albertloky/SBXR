@@ -83,6 +83,22 @@ func (candidate InstallCandidate) QualifiedComponent(name string) ([]byte, strin
 	return qualifiedComponent(candidate.cell.components, candidate.cell.staged.Architecture, name)
 }
 
+// ManagedUnit returns one fixed unit rendered from the authenticated candidate
+// payload. Callers cannot supply a path or template.
+func (candidate InstallCandidate) ManagedUnit(name string) ([]byte, bool) {
+	if !validInstallCandidate(candidate) {
+		return nil, false
+	}
+	executable, ok := executableArchiveBytes(candidate.cell.archive)
+	if !ok {
+		return nil, false
+	}
+	metadata, _, err := ReadPayloadMetadata(bytes.NewReader(executable), int64(len(executable)))
+	units, renderErr := RenderManagedUnits(metadata, candidate.cell.staged.Identity)
+	unit, exists := units[name]
+	return append([]byte(nil), unit...), err == nil && renderErr == nil && exists
+}
+
 func (candidate InstallCandidate) SoftwareLifecyclePreparedUpdate() (VerifiedRelease, StagedRelease, []byte, []byte, bool) {
 	if !validInstallCandidate(candidate) || !validInstalled(candidate.cell.verified) || candidate.cell.verified.Identity != candidate.cell.staged.Identity {
 		return VerifiedRelease{}, StagedRelease{}, nil, nil, false

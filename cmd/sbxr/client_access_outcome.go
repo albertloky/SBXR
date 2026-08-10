@@ -9,18 +9,78 @@ import (
 
 	"github.com/albertloky/SBXR/internal/connectionprofiles"
 	"github.com/albertloky/SBXR/internal/ownerconsole"
+	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 )
 
 type clientAccessOutcome struct {
-	mu             sync.Mutex
-	session        *clientAccessHandoffSession
-	request        clientAccessHandoffRequest
-	change         ownerconsole.DurableChangeSet
-	presentation   clientAccessPresentation
-	loaded         bool
-	providerAction managedProviderAction
-	providerEmail  string
-	providerAgree  bool
+	mu                                     sync.Mutex
+	session                                *clientAccessHandoffSession
+	request                                clientAccessHandoffRequest
+	change                                 ownerconsole.DurableChangeSet
+	presentation                           clientAccessPresentation
+	loaded                                 bool
+	providerAction                         managedProviderAction
+	providerEmail                          string
+	providerAgree                          bool
+	lifecycleLoad                          func(context.Context) (softwarelifecycle.VerifiedRelease, softwarelifecycle.ViewResult, error)
+	lifecycleView                          ownerconsole.LifecyclePresentation
+	lifecycleInstalled, lifecycleCandidate softwarelifecycle.VerifiedRelease
+	softwareReview                         *deferredSoftwareReview
+	repairReview                           *deferredRepairReview
+	softwareLaunch                         func(context.Context, clientAccessHandoffRequest) (*clientAccessHandoffSession, error)
+}
+
+type deferredSoftwareReview struct {
+	identity ownerconsole.PlanIdentity
+	view     ownerconsole.LifecyclePresentation
+}
+type deferredRepairReview struct{ identity ownerconsole.PlanIdentity }
+
+func (outcome *clientAccessOutcome) ViewLifecycle(ctx context.Context) ownerconsole.LifecyclePresentation {
+	if outcome == nil {
+		return ownerconsole.LifecyclePresentation{}
+	}
+	if outcome.lifecycleLoad == nil {
+		return outcome.load(ctx).Lifecycle
+	}
+	installed, view, err := outcome.lifecycleLoad(ctx)
+	if err != nil || view.VerifiedCandidate == nil || len(view.PermittedActions) != 1 {
+		return ownerconsole.LifecyclePresentation{}
+	}
+	presentation := softwareLifecyclePresentation(installed, view)
+	outcome.mu.Lock()
+	outcome.lifecycleView = presentation
+	outcome.lifecycleInstalled, outcome.lifecycleCandidate = installed, *view.VerifiedCandidate
+	outcome.mu.Unlock()
+	return presentation
+}
+
+func softwareLifecyclePresentation(installed softwarelifecycle.VerifiedRelease, view softwarelifecycle.ViewResult) ownerconsole.LifecyclePresentation {
+	if view.VerifiedCandidate == nil || len(view.PermittedActions) != 1 {
+		return ownerconsole.LifecyclePresentation{}
+	}
+	change := map[softwarelifecycle.Action]ownerconsole.LifecycleChange{softwarelifecycle.ReviewUpdate: ownerconsole.ReviewUpdate, softwarelifecycle.ReviewDowngrade: ownerconsole.ReviewDowngrade}[view.PermittedActions[0]]
+	if change == 0 {
+		return ownerconsole.LifecyclePresentation{}
+	}
+	migration := view.MigrationSummary
+	if migration == "" {
+		migration = "No State schema migration"
+	}
+	return ownerconsole.LifecyclePresentation{
+		Change: change, Installed: releaseIdentityPresentation(installed), Candidate: releaseIdentityPresentation(*view.VerifiedCandidate),
+		FreshlyVerified: true, CompatibleWithDesiredState: view.UpdateEligible || view.DowngradeCompatible, DiscoveryCannotApply: true, DowngradeSelectionAvailable: true,
+		AuthenticatedSequence: "download, verify release index and assets, stage, approve, switch, and verify agreement",
+		Migrations:            []string{migration}, RegeneratedRepresentations: []string{"raw", "base64", "v2rayN", "Shadowrocket", "Karing", "Mihomo", "sing-box"},
+		AffectedServices: []string{"cloudflared.service", "sbxr-subscription.service", "sing-box.service", "xray.service"},
+		RequiredChecks:   []string{"SOFTWARE-LIFECYCLE-UPDATE-STAGED", "SOFTWARE-LIFECYCLE-UPDATE-AGREEMENT", "State and publication agreement"},
+		AdvisoryChecks:   []string{"Outside-client and provider acceptance remains pending until performed"},
+		Interruption:     "brief controlled restart of only affected services", Cancellation: "Back before Apply changes nothing; after start, cancellation waits for a safe checkpoint", Rollback: "automatic exact prior-release rollback from the one transaction snapshot",
+	}
+}
+
+func releaseIdentityPresentation(release softwarelifecycle.VerifiedRelease) ownerconsole.ReleaseIdentityPresentation {
+	return ownerconsole.ReleaseIdentityPresentation{Repository: release.Identity.Repository, Tag: release.Identity.Tag, Commit: release.Identity.Commit, IndexSHA256: release.Identity.IndexSHA256, Sequence: release.Sequence}
 }
 
 func (*clientAccessOutcome) String() string   { return "Managed Client Access outcome: protected" }
@@ -50,7 +110,33 @@ func (outcome *clientAccessOutcome) RetryAutomaticRollback(ctx context.Context) 
 }
 
 func (outcome *clientAccessOutcome) ReviewCurrentStateRepair(ctx context.Context) ownerconsole.ChangeReview {
-	return ownerRecovery{}.ReviewCurrentStateRepair(ctx)
+	identity := make([]byte, 12)
+	if _, err := rand.Read(identity); err != nil {
+		return clientAccessCorrection("Change Set identity generation failed")
+	}
+	facts := outcome.load(ctx)
+	request := clientAccessHandoffRequest{Schema: 1, Mode: "software-review", SoftwareAction: "repair", ChangeSet: "repair-" + hex.EncodeToString(identity)}
+	launch := outcome.softwareLaunch
+	if launch == nil {
+		launch = launchClientAccessReview
+	}
+	session, err := launch(ctx, request)
+	if err != nil {
+		return clientAccessCorrection(err.Error())
+	}
+	if session.review.StartingRevision != facts.StateRevision || session.review.VolatileSHA256 != facts.Repair.VolatileSHA256 {
+		return clientAccessCorrection("The privileged repair Plan did not match the reviewed Managed facts")
+	}
+	request.Mode = "software-apply"
+	request.ReviewedPlanIdentity, request.ReviewedPlanSHA256 = session.review.Identity, session.review.SHA256
+	reviewIdentity := ownerconsole.PlanIdentity(session.review.Identity)
+	outcome.mu.Lock()
+	prior := outcome.session
+	outcome.session, outcome.request = nil, request
+	outcome.softwareReview, outcome.repairReview = nil, &deferredRepairReview{identity: reviewIdentity}
+	outcome.mu.Unlock()
+	prior.discard()
+	return ownerconsole.ChangeReview{Plan: &session.review.Plan}
 }
 
 func (outcome *clientAccessOutcome) Access(ctx context.Context) ownerconsole.AccessPresentation {
@@ -94,6 +180,67 @@ func (outcome *clientAccessOutcome) ReviewClientAccessChange(ctx context.Context
 		return unsupportedClientAccessReview()
 	}
 	return outcome.reviewAction(ctx, action, "")
+}
+
+func (outcome *clientAccessOutcome) ReviewLifecycleChange(ctx context.Context, change ownerconsole.LifecycleChange) ownerconsole.ChangeReview {
+	if change == ownerconsole.ReviewDowngrade {
+		outcome.mu.Lock()
+		outcome.request = clientAccessHandoffRequest{Schema: 1, Mode: "software-review", SoftwareAction: "downgrade"}
+		outcome.mu.Unlock()
+		return ownerconsole.ChangeReview{Editing: &ownerconsole.EditingPresentation{Title: "Select compatible downgrade", Field: ownerconsole.EditingField{Identity: "release-tag", Label: "Exact immutable release tag", Required: true}}}
+	}
+	if change != ownerconsole.ReviewUpdate {
+		return unsupportedClientAccessReview()
+	}
+	return outcome.reviewSoftwareChange(ctx, softwareUpdate, "")
+}
+
+func (outcome *clientAccessOutcome) reviewSoftwareChange(ctx context.Context, action softwareChangeAction, tag string) ownerconsole.ChangeReview {
+	identity := make([]byte, 12)
+	if _, err := rand.Read(identity); err != nil {
+		return clientAccessCorrection("Change Set identity generation failed")
+	}
+	facts := outcome.load(ctx)
+	view := outcome.ViewLifecycle(ctx)
+	want := ownerconsole.ReviewUpdate
+	if action == softwareDowngrade {
+		want = ownerconsole.ReviewDowngrade
+	}
+	selectedTag := view.Candidate.Tag
+	if action == softwareDowngrade {
+		selectedTag = tag
+	}
+	if selectedTag == "" || action == softwareUpdate && view.Change != want {
+		return clientAccessCorrection("Fresh Software Lifecycle selection is unavailable")
+	}
+	request := clientAccessHandoffRequest{Schema: 1, Mode: "software-review", SoftwareAction: string(action), ReleaseTag: selectedTag, ChangeSet: string(action) + "-" + hex.EncodeToString(identity)}
+	launch := outcome.softwareLaunch
+	if launch == nil {
+		launch = launchClientAccessReview
+	}
+	session, err := launch(ctx, request)
+	if err != nil {
+		return clientAccessCorrection(err.Error())
+	}
+	selected := view.Candidate
+	if action == softwareDowngrade {
+		selected = ownerconsole.ReleaseIdentityPresentation{Repository: softwarelifecycle.Repository, Tag: session.review.CandidateTag, Commit: session.review.CandidateCommit, IndexSHA256: session.review.CandidateIndexSHA256}
+		view = ownerconsole.LifecyclePresentation{Change: ownerconsole.ReviewDowngrade, Candidate: selected}
+	}
+	if session.review.StartingRevision != facts.StateRevision || session.review.CandidateRevision != facts.StateRevision+1 || session.review.CandidateTag != selected.Tag || session.review.CandidateCommit != selected.Commit || session.review.CandidateIndexSHA256 != selected.IndexSHA256 {
+		return clientAccessCorrection("The privileged Software Lifecycle Plan did not match the selected release")
+	}
+	reviewIdentity := ownerconsole.PlanIdentity(session.review.Identity)
+	request.Mode = "software-apply"
+	request.ReviewedPlanIdentity, request.ReviewedPlanSHA256 = session.review.Identity, session.review.SHA256
+	outcome.mu.Lock()
+	prior := outcome.session
+	outcome.session, outcome.request = nil, request
+	outcome.softwareReview = &deferredSoftwareReview{identity: reviewIdentity, view: view}
+	outcome.repairReview = nil
+	outcome.mu.Unlock()
+	prior.discard()
+	return ownerconsole.ChangeReview{Plan: &session.review.Plan}
 }
 
 func (outcome *clientAccessOutcome) ActOnCloudflare(ctx context.Context, request ownerconsole.CloudflareRequest) ownerconsole.CloudflareResponse {
@@ -148,6 +295,8 @@ func (outcome *clientAccessOutcome) reviewAction(ctx context.Context, action cli
 	outcome.mu.Lock()
 	prior := outcome.session
 	outcome.session, outcome.request = session, request
+	outcome.softwareReview = nil
+	outcome.repairReview = nil
 	outcome.mu.Unlock()
 	prior.discard()
 	effects := clientAccessEffects(action, profile)
@@ -173,6 +322,8 @@ func (outcome *clientAccessOutcome) reviewProviderAction(ctx context.Context, ac
 	outcome.mu.Lock()
 	prior := outcome.session
 	outcome.session, outcome.request = session, request
+	outcome.softwareReview = nil
+	outcome.repairReview = nil
 	outcome.mu.Unlock()
 	prior.discard()
 	return ownerconsole.ChangeReview{Plan: &ownerconsole.PlanPresentation{
@@ -216,6 +367,12 @@ func (outcome *clientAccessOutcome) Review(ctx context.Context) ownerconsole.Cha
 	if request.Mode == "provider" {
 		return outcome.reviewProviderAction(ctx, request.ProviderAction, request.Token, request.OwnerEmail, request.Agreement)
 	}
+	if (request.Mode == "software-review" || request.Mode == "software-apply") && request.SoftwareAction != "view" {
+		if request.SoftwareAction == "repair" {
+			return outcome.ReviewCurrentStateRepair(ctx)
+		}
+		return outcome.reviewSoftwareChange(ctx, softwareChangeAction(request.SoftwareAction), request.ReleaseTag)
+	}
 	if request.Mode != "change" {
 		return unsupportedClientAccessReview()
 	}
@@ -239,9 +396,54 @@ func clientAccessEffects(action clientAccessAction, profile connectionprofiles.P
 	}
 }
 
-func (outcome *clientAccessOutcome) Apply(_ context.Context, identity ownerconsole.PlanIdentity) ownerconsole.ChangeResult {
+func (outcome *clientAccessOutcome) Apply(ctx context.Context, identity ownerconsole.PlanIdentity) ownerconsole.ChangeResult {
 	outcome.mu.Lock()
-	if outcome.session == nil || identity != ownerconsole.PlanIdentity(outcome.session.review.Identity) || outcome.change.Kind == ownerconsole.ChangeSetActive {
+	if outcome.change.Kind == ownerconsole.ChangeSetActive {
+		outcome.mu.Unlock()
+		return ownerconsole.ChangeResult{Kind: ownerconsole.ChangePlanRejected, Explanation: "The exact reviewed Client Access Plan is unavailable."}
+	}
+	if outcome.session == nil && outcome.repairReview != nil && identity == outcome.repairReview.identity {
+		request, facts := outcome.request, outcome.presentation
+		launch := outcome.softwareLaunch
+		if launch == nil {
+			launch = launchClientAccessReview
+		}
+		outcome.mu.Unlock()
+		session, err := launch(ctx, request)
+		if err != nil || session.review.Identity != request.ReviewedPlanIdentity || session.review.SHA256 != request.ReviewedPlanSHA256 || session.review.StartingRevision != facts.StateRevision || session.review.VolatileSHA256 != facts.Repair.VolatileSHA256 {
+			session.discard()
+			return ownerconsole.ChangeResult{Kind: ownerconsole.ChangePlanRejected, Explanation: "The approved current-State repair changed during privileged recheck."}
+		}
+		outcome.mu.Lock()
+		if outcome.session != nil || outcome.repairReview == nil || outcome.repairReview.identity != identity || outcome.change.Kind == ownerconsole.ChangeSetActive {
+			outcome.mu.Unlock()
+			session.discard()
+			return ownerconsole.ChangeResult{Kind: ownerconsole.ChangePlanRejected, Explanation: "The exact reviewed current-State repair is unavailable."}
+		}
+		outcome.session = session
+	}
+	if outcome.session == nil && outcome.softwareReview != nil && identity == outcome.softwareReview.identity {
+		request, reviewed, facts := outcome.request, outcome.softwareReview.view, outcome.presentation
+		launch := outcome.softwareLaunch
+		if launch == nil {
+			launch = launchClientAccessReview
+		}
+		outcome.mu.Unlock()
+		session, err := launch(ctx, request)
+		if err != nil || session.review.Identity != request.ReviewedPlanIdentity || session.review.SHA256 != request.ReviewedPlanSHA256 || session.review.StartingRevision != facts.StateRevision || session.review.CandidateRevision != facts.StateRevision+1 || session.review.CandidateTag != reviewed.Candidate.Tag || session.review.CandidateCommit != reviewed.Candidate.Commit || session.review.CandidateIndexSHA256 != reviewed.Candidate.IndexSHA256 {
+			session.discard()
+			return ownerconsole.ChangeResult{Kind: ownerconsole.ChangePlanRejected, Explanation: "The approved Software Lifecycle Plan changed during privileged recheck."}
+		}
+		outcome.mu.Lock()
+		if outcome.session != nil || outcome.softwareReview == nil || outcome.softwareReview.identity != identity || outcome.change.Kind == ownerconsole.ChangeSetActive {
+			outcome.mu.Unlock()
+			session.discard()
+			return ownerconsole.ChangeResult{Kind: ownerconsole.ChangePlanRejected, Explanation: "The exact reviewed Software Lifecycle Plan is unavailable."}
+		}
+		outcome.session = session
+	}
+	validIdentity := outcome.softwareReview != nil && identity == outcome.softwareReview.identity || outcome.repairReview != nil && identity == outcome.repairReview.identity || outcome.softwareReview == nil && outcome.repairReview == nil && outcome.session != nil && identity == ownerconsole.PlanIdentity(outcome.session.review.Identity)
+	if outcome.session == nil || !validIdentity {
 		outcome.mu.Unlock()
 		return ownerconsole.ChangeResult{Kind: ownerconsole.ChangePlanRejected, Explanation: "The exact reviewed Client Access Plan is unavailable."}
 	}
@@ -287,6 +489,10 @@ func (outcome *clientAccessOutcome) Back(context.Context) ownerconsole.ChangeRev
 }
 func (outcome *clientAccessOutcome) Edit(ctx context.Context, input ownerconsole.EditingInput) ownerconsole.ChangeReview {
 	outcome.mu.Lock()
+	if outcome.request.Mode == "software-review" && outcome.request.SoftwareAction == "downgrade" && input.Field == "release-tag" {
+		outcome.mu.Unlock()
+		return outcome.reviewSoftwareChange(ctx, softwareDowngrade, input.Text)
+	}
 	action := outcome.providerAction
 	if action != managedCertificateIP && action != managedCertificateDomain {
 		outcome.mu.Unlock()
@@ -310,8 +516,15 @@ func (outcome *clientAccessOutcome) Edit(ctx context.Context, input ownerconsole
 		return unsupportedClientAccessReview()
 	}
 }
-func (outcome *clientAccessOutcome) RequestCancellation(context.Context, ownerconsole.OperationIdentity) ownerconsole.ChangeResult {
-	return ownerconsole.ChangeResult{Kind: ownerconsole.ChangePlanRejected, Explanation: "Cancellation is unavailable after this privileged Client Access Change Set starts."}
+func (outcome *clientAccessOutcome) RequestCancellation(_ context.Context, operation ownerconsole.OperationIdentity) ownerconsole.ChangeResult {
+	outcome.mu.Lock()
+	software := outcome.request.Mode == "software-apply" && outcome.change.Kind == ownerconsole.ChangeSetActive && outcome.change.OperationID == operation
+	session := outcome.session
+	outcome.mu.Unlock()
+	if !software || session.cancel() != nil {
+		return ownerconsole.ChangeResult{Kind: ownerconsole.ChangePlanRejected, Explanation: "Cancellation is unavailable at this Change Set checkpoint."}
+	}
+	return ownerconsole.ChangeResult{Kind: ownerconsole.ChangeCancellationRequested, OperationID: operation, Explanation: "Cancellation will restore the exact prior Managed release and State at the next safe checkpoint."}
 }
 func (outcome *clientAccessOutcome) ValidateProfile(context.Context, ownerconsole.AccessProfileID) ownerconsole.ProfileValidation {
 	return ownerconsole.ProfileValidation{}

@@ -658,6 +658,10 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		case InstallationManaged:
 			m.accessCatalog = message.startup.Access.catalog()
 			m.accessUnlocked = len(m.accessCatalog.all) != 0
+			if view, valid := validatedRecovery(message.startup.Recovery); valid && view.Kind == RecoveryCurrentStateRepairAvailable {
+				m.recoveryScreen.view, m.recoveryScreen.available = view, true
+				m.scenario, m.selected = ManagedStateRepair, selectedNavigation(ManagedStateRepair)
+			}
 		case InstallationRecoveryRequired:
 			view, valid := validatedRecovery(message.startup.Recovery)
 			m.recoveryScreen.view, m.recoveryScreen.available = view, valid
@@ -1547,9 +1551,15 @@ func (m model) updateLifecycleKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 	switch key {
 	case "up", "down", "tab", "shift+tab":
 		m.actionGeneration++
-		m.lifecycleScreen.action = 1 - m.lifecycleScreen.action
+		actions := lifecycleActions(m.lifecycleScreen.view)
+		if key == "up" || key == "shift+tab" {
+			m.lifecycleScreen.action = (m.lifecycleScreen.action + len(actions) - 1) % len(actions)
+		} else {
+			m.lifecycleScreen.action = (m.lifecycleScreen.action + 1) % len(actions)
+		}
 	case "enter", "space":
-		if m.lifecycleScreen.action == 1 {
+		actions := lifecycleActions(m.lifecycleScreen.view)
+		if m.lifecycleScreen.action == len(actions)-1 {
 			m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
 			return m, nil
 		}
@@ -1557,6 +1567,9 @@ func (m model) updateLifecycleKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 		m.lifecycleScreen.pending = true
 		m.operationState.start()
 		identity, change := asyncRequestIdentity{generation: m.actionGeneration, origin: m.scenario}, m.lifecycleScreen.view.Change
+		if actions[m.lifecycleScreen.action] == "Select compatible downgrade" {
+			change = ReviewDowngrade
+		}
 		return m, tea.Batch(func() tea.Msg {
 			return lifecycleReviewMsg{identity: identity, review: m.lifecycle.ReviewLifecycleChange(m.runContext, change)}
 		}, operationTick())

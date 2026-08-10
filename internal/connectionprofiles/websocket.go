@@ -91,6 +91,14 @@ type WebSocketViewResult struct {
 }
 
 func (module Interface) ViewWebSocket(ctx context.Context, request WebSocketViewRequest) WebSocketViewResult {
+	return module.viewWebSocket(ctx, request, true)
+}
+
+func (module Interface) viewWebSocketCore(ctx context.Context, request WebSocketViewRequest) WebSocketViewResult {
+	return module.viewWebSocket(ctx, request, false)
+}
+
+func (module Interface) viewWebSocket(ctx context.Context, request WebSocketViewRequest, includeRoute bool) WebSocketViewResult {
 	profile := WebSocketProfile{Name: "VLESS WebSocket", Compatibility: "WebSocket", Hostname: request.Hostname, TLSName: request.TLSName, HTTPHost: request.HTTPHost, Origin: fmt.Sprintf("%s:%d", request.OriginAddress, request.OriginPort), XrayVersion: request.XrayVersion, Enabled: request.Enabled, CredentialsReady: request.Credentials.valid()}
 	host, ok := module.host.(WebSocketHost)
 	if !ok {
@@ -109,7 +117,7 @@ func (module Interface) ViewWebSocket(ctx context.Context, request WebSocketView
 		return result
 	}
 	expectedOrigin := fmt.Sprintf("http://%s:%d", request.OriginAddress, request.OriginPort)
-	if request.RouteHealth.Hostname != request.Hostname || request.RouteHealth.Origin != expectedOrigin || request.RouteHealth.Health.Module != "Cloudflare Tunnel" || request.RouteHealth.Health.Outcome != cloudflaretunnel.Healthy || request.RouteHealth.Health.Code != "CLOUDFLARE-WEBSOCKET-ROUTE-HEALTHY" {
+	if includeRoute && (request.RouteHealth.Hostname != request.Hostname || request.RouteHealth.Origin != expectedOrigin || request.RouteHealth.Health.Module != "Cloudflare Tunnel" || request.RouteHealth.Health.Outcome != cloudflaretunnel.Healthy || request.RouteHealth.Health.Code != "CLOUDFLARE-WEBSOCKET-ROUTE-HEALTHY") {
 		result.Health = externalBlockedHealth(blockedWebSocket(observation.CheckedAt, Failed, "CONNECTION-PROFILES-WEBSOCKET-ROUTE", "The typed Cloudflare WebSocket route is not healthy or does not match", request.RouteHealth.Health.Code, "the selected hostname mapped to the reviewed loopback WebSocket origin with CLOUDFLARE-WEBSOCKET-ROUTE-HEALTHY"), "Use Cloudflare Tunnel repair to restore the selected WebSocket hostname to its exact reviewed loopback origin, then Check again.")
 		return result
 	}

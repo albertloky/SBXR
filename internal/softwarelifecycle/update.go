@@ -49,6 +49,7 @@ type UpdateApplyRequest struct {
 	Approval      UpdateApproval
 	PreparedState systemchanges.PreparedStateCommit
 	SystemChanges systemchanges.Interface
+	Cancellation  *systemchanges.Cancellation
 }
 
 type UpdateSummary struct {
@@ -59,7 +60,7 @@ type UpdateSummary struct {
 	Disk                                                                 systemchanges.DiskRequirement
 	Compatibility                                                        string
 	Interruption, Cancellation, Rollback                                 string
-	SudoAfterApproval, OneUse                                            bool
+	PrivilegedMutationAfterApproval, OneUse                              bool
 }
 
 type UpdatePlan struct {
@@ -162,10 +163,11 @@ func planReleaseChange(request UpdatePlanRequest, operation Action) (*UpdatePlan
 		AffectedServices:            []string{"cloudflared.service", "sbxr-subscription.service", "sing-box.service", "xray.service"},
 		SubscriptionRepresentations: []string{"raw", "base64", "v2rayN", "Shadowrocket", "Karing", "Mihomo", "sing-box"},
 		Checks:                      checkNames, Disk: request.Disk,
-		Interruption:      "restart only cloudflared, Xray, sing-box, and subscription serving after their prepared replacements validate",
-		Cancellation:      "Back before Apply changes nothing; cancellation after start waits for a safe checkpoint and restores the prior release and State",
-		Rollback:          "restore the exact prior release, service material, subscriptions, units, and Desired State from the one transaction snapshot",
-		SudoAfterApproval: true, OneUse: true,
+		Interruption:                    "restart only cloudflared, Xray, sing-box, and subscription serving after their prepared replacements validate",
+		Cancellation:                    "Back before Apply changes nothing; cancellation after start waits for a safe checkpoint and restores the prior release and State",
+		Rollback:                        "restore the exact prior release, service material, subscriptions, units, and Desired State from the one transaction snapshot",
+		PrivilegedMutationAfterApproval: true, OneUse: true,
+		Compatibility: "The authenticated candidate supports the complete sequential migration from the current Desired State schema",
 	}
 	if operation == ReviewDowngrade {
 		summary.Compatibility = fmt.Sprintf("Current Desired State schema %d is supported by the selected release", request.Installed.StateSchema)
@@ -227,6 +229,9 @@ func (plan *UpdatePlan) Apply(ctx context.Context, request UpdateApplyRequest) s
 	if err != nil {
 		return updateRefused("SOFTWARE-LIFECYCLE-UPDATE-PREPARED", "The prepared update cannot form one complete Change Set")
 	}
+	if request.Cancellation != nil {
+		return request.SystemChanges.ApplyWithCancellation(change, request.Cancellation)
+	}
 	return request.SystemChanges.Apply(change)
 }
 
@@ -276,6 +281,13 @@ func (plan *UpdatePlan) SHA256() string {
 		return ""
 	}
 	return plan.sha256
+}
+
+func (plan *UpdatePlan) VolatileSHA256() string {
+	if plan == nil {
+		return ""
+	}
+	return plan.volatileSHA256
 }
 func (plan *UpdatePlan) Summary() UpdateSummary {
 	if plan == nil {

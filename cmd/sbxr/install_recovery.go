@@ -48,9 +48,13 @@ func runInstallRecovery() error {
 	if err != nil || !pending {
 		return err
 	}
-	starting, release, forwardOnly, _, err := systemubuntu.RecoveryStartingRelease("/")
+	transaction, err := systemubuntu.RecoveryTransaction("/")
 	if err != nil {
 		return err
+	}
+	starting, release, forwardOnly := transaction.StartingStatus, transaction.StartingRelease, transaction.ForwardOnly
+	if release == (systemchanges.ReleaseBinding{}) {
+		release = transaction.CandidateRelease
 	}
 	stateModule := statefilesystem.New()
 	api := cloudflaretunnel.NewProductionAPI()
@@ -109,12 +113,39 @@ func runInstallRecovery() error {
 	if err != nil {
 		return err
 	}
-	adapter := systemubuntu.NewAtForInstallRecovery("/", installRecoveryObservation, host, systemubuntu.NewNativeFirewall(), cloudflareExecutor, certificateExecutor, profilesubuntu.NewDirectTLSExecutor(), subscriptionExecutor, softwareubuntu.NewRecoveryInstaller(), stateModule)
+	var software systemubuntu.SoftwareLifecycleExecutor = softwareubuntu.NewRecoveryInstaller()
+	if transaction.Mutation == systemchanges.UpdateMutation {
+		software, err = recoverySoftwareUpdater(transaction)
+		if err != nil {
+			return err
+		}
+	}
+	adapter := systemubuntu.NewAtForInstallRecovery("/", installRecoveryObservation, host, systemubuntu.NewNativeFirewall(), cloudflareExecutor, certificateExecutor, profilesubuntu.NewDirectTLSExecutor(), subscriptionExecutor, software, stateModule)
 	result := systemchanges.New(adapter).Recover()
 	if result.Outcome != systemchanges.Completed && result.Outcome != systemchanges.RollbackSucceeded {
 		return errors.New("install restart recovery requires inspection")
 	}
 	return nil
+}
+
+type recoveryReleaseSource struct {
+	evidence softwarelifecycle.ReleaseEvidence
+}
+
+func (source recoveryReleaseSource) Verify(_ context.Context, tag string) (softwarelifecycle.ReleaseEvidence, error) {
+	if tag != source.evidence.Tag {
+		return softwarelifecycle.ReleaseEvidence{}, errors.New("recovery candidate tag changed")
+	}
+	return source.evidence, nil
+}
+
+func recoverySoftwareUpdater(transaction systemubuntu.RecoveryTransactionIdentity) (softwareubuntu.Updater, error) {
+	if transaction.StartingRelease == (systemchanges.ReleaseBinding{}) || transaction.CandidateRelease == (systemchanges.ReleaseBinding{}) {
+		return softwareubuntu.Updater{}, errors.New("update recovery release binding is incomplete")
+	}
+	installed := softwarelifecycle.ReleaseIdentity{Repository: transaction.StartingRelease.Repository, Tag: transaction.StartingRelease.Tag, Commit: transaction.StartingRelease.Commit, IndexSHA256: transaction.StartingRelease.ReleaseIndexSHA256}
+	candidate := softwarelifecycle.ReleaseIdentity{Repository: transaction.CandidateRelease.Repository, Tag: transaction.CandidateRelease.Tag, Commit: transaction.CandidateRelease.Commit, IndexSHA256: transaction.CandidateRelease.ReleaseIndexSHA256}
+	return softwareubuntu.NewSnapshotRecoveryUpdater(installed, candidate)
 }
 
 func installRecoveryObservation() (systemchanges.Observation, error) {

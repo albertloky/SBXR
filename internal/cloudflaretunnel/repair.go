@@ -13,6 +13,64 @@ import (
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
 
+type ManagedRepairView struct {
+	Repairable   bool
+	StableSHA256 string
+	Health       Health
+}
+
+// ViewManagedRepair performs only fresh read-only ownership and agreement
+// inspection. It never constructs mutation steps or an executor.
+func (i Interface) ViewManagedRepair(ctx context.Context, request PlanRequest) ManagedRepairView {
+	owned := request.ManagedRepair
+	validDirect := (request.PublicIPv4 == "") == (owned.DirectIPv4RecordID == "") && (request.PublicIPv6 == "") == (owned.DirectIPv6RecordID == "")
+	if i.clock == nil || request.StartingRevision == 0 || !sha256Text.MatchString(request.StartingStateSHA256) || !sha256Text.MatchString(request.DesiredStateSHA256) || !tunnelUUID.MatchString(owned.TunnelID) || !immutableID.MatchString(owned.XHTTPDNSRecordID) || !immutableID.MatchString(owned.WebSocketDNSRecordID) || !validDirect || owned.DirectIPv4RecordID != "" && !immutableID.MatchString(owned.DirectIPv4RecordID) || owned.DirectIPv6RecordID != "" && !immutableID.MatchString(owned.DirectIPv6RecordID) || !validOwnedHostname(request.XHTTPHostname, request.Authority.ZoneName, "xhttp") || !validOwnedHostname(request.WebSocketHostname, request.Authority.ZoneName, "ws") || !validOwnedHostname(request.DirectHostname, request.Authority.ZoneName, "direct") || !validPublicAddresses(request.PublicIPv4, request.PublicIPv6) {
+		return ManagedRepairView{Health: finish(healthResult(i, Health{Outcome: Failed, Code: "CLOUDFLARE-REPAIR-VIEW-REFUSED", Explanation: "The managed repair inspection is incomplete."})).Health}
+	}
+	authority := i.View(ctx, request.Authority)
+	planner, plannerOK := i.api.(MutationPlanner)
+	observer, observerOK := i.api.(wholeTunnelObserver)
+	if authority.Health.Outcome != Healthy || !plannerOK || !observerOK {
+		return ManagedRepairView{Health: authority.Health}
+	}
+	expectedDNS := map[string][]string{request.XHTTPHostname: {owned.XHTTPDNSRecordID}, request.WebSocketHostname: {owned.WebSocketDNSRecordID}, request.DirectHostname: compactIDs(owned.DirectIPv4RecordID, owned.DirectIPv6RecordID)}
+	digests := make([]string, 0, 3)
+	for _, hostname := range []string{request.XHTTPHostname, request.WebSocketHostname, request.DirectHostname} {
+		observed, err := planner.ObserveMutation(ctx, MutationRequest{AccountID: request.Authority.AccountID, ZoneID: request.Authority.ZoneID, Tunnel: request.TunnelName, Hostname: hostname, Token: request.Authority.Token})
+		if err != nil || !sha256Text.MatchString(observed.Digest) || !sameOwnedResources(observed.Tunnels, []OwnedResource{{ID: owned.TunnelID, Name: request.TunnelName}}) || !sameOwnedIDs(observed.DNSRecords, hostname, expectedDNS[hostname]) {
+			return ManagedRepairView{Health: finish(healthResult(i, Health{Outcome: Failed, Code: "CLOUDFLARE-REPAIR-OWNERSHIP", Explanation: "Committed provider ownership could not be proved."})).Health}
+		}
+		digests = append(digests, observed.Digest)
+	}
+	expected, providerRequest := managedHealthRequest(request)
+	observed, err := observer.ObserveWholeTunnel(ctx, providerRequest)
+	if err != nil || observed.TunnelID != owned.TunnelID || !observed.XHTTPOriginReachable || !observed.WebSocketOriginReachable {
+		return ManagedRepairView{Health: EvaluateWholeTunnel(observed, expected)}
+	}
+	repairable := !sameRoutes(observed.Routes, expected.Routes) || !observed.Connected
+	byID := make(map[string]DNSObservation, len(observed.DNSRecords))
+	for _, record := range observed.DNSRecords {
+		byID[record.ID] = record
+	}
+	for _, want := range expected.DNSRecords {
+		got, exists := byID[want.ID]
+		if !exists {
+			return ManagedRepairView{Health: finish(healthResult(i, Health{Outcome: Failed, Code: "CLOUDFLARE-REPAIR-OWNERSHIP", Explanation: "A committed DNS identifier is absent."})).Health}
+		}
+		repairable = repairable || got.Name != want.Name || got.Type != want.Type || got.Content != want.Content || got.Proxied != want.Proxied
+	}
+	encoded, _ := json.Marshal(struct {
+		Observation WholeTunnelObservation
+		Digests     []string
+	}{observed, digests})
+	digest := sha256.Sum256(encoded)
+	code := "CLOUDFLARE-REPAIR-NOT-REQUIRED"
+	if repairable {
+		code = "CLOUDFLARE-REPAIR-AVAILABLE"
+	}
+	return ManagedRepairView{Repairable: repairable, StableSHA256: hex.EncodeToString(digest[:]), Health: finish(healthResult(i, Health{Outcome: Healthy, Code: code})).Health}
+}
+
 func (i Interface) planManagedRepair(ctx context.Context, request PlanRequest) PlanResult {
 	fail := func(code, found, required, explanation string) PlanResult {
 		health := Health{Module: "Cloudflare Tunnel", Outcome: Failed, Code: code, Problem: explanation, Found: found, Required: required, Explanation: explanation, WhyStopped: "SBXR repairs only freshly proved committed ownership", NextActions: []string{"Check again", "Back"}}

@@ -119,6 +119,14 @@ func NewAtForManagedProvider(root string, source ObservationSource, host Host, f
 	return adapter
 }
 
+// NewAtForSoftwareChange wires the fixed executors used by a verified release
+// update or compatible downgrade.
+func NewAtForSoftwareChange(root string, source ObservationSource, host Host, cloudflare CloudflareExecutor, profiles ConnectionProfilesExecutor, subscription SubscriptionPublicationExecutor, software SoftwareLifecycleExecutor, state systemchanges.StateRecovery) Adapter {
+	adapter := NewAt(root, source, host, state)
+	adapter.cloudflare, adapter.profiles, adapter.subscription, adapter.software = cloudflare, profiles, subscription, software
+	return adapter
+}
+
 func firstStateRecovery(states []systemchanges.StateRecovery) systemchanges.StateRecovery {
 	if len(states) == 1 {
 		return states[0]

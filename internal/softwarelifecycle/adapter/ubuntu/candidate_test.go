@@ -1,15 +1,63 @@
 package ubuntu
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 )
+
+func TestCandidateStoreDeletesOnlyTheExactAppliedReleaseAtComplete(t *testing.T) {
+	directory := filepath.Join(candidateTestRoot(t), "candidates")
+	store := NewCandidateStoreAt(directory)
+	record := candidateRecord("v1.1.0")
+	if err := store.RetainNewest(record); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(record.Evidence.Index)
+	identity := softwarelifecycle.ReleaseIdentity{Repository: record.Evidence.Repository, Tag: record.Evidence.Tag, Commit: record.Evidence.Commit, IndexSHA256: hex.EncodeToString(digest[:])}
+	changed := identity
+	changed.Commit = strings.Repeat("f", 40)
+	if err := store.RemoveVerified(changed); err == nil {
+		t.Fatal("different release identity deleted the retained candidate")
+	}
+	if _, err := store.Load(); err != nil {
+		t.Fatalf("candidate disappeared after refused cleanup: %v", err)
+	}
+	if err := store.RemoveVerified(identity); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Load(); !errors.Is(err, softwarelifecycle.ErrCandidateNotFound) {
+		t.Fatalf("applied candidate remains: %v", err)
+	}
+	if err := store.RemoveVerified(identity); err != nil {
+		t.Fatalf("completed cleanup was not restart-safe: %v", err)
+	}
+}
+
+func TestCompletedUpdatePreservesADifferentNewerRetainedCandidate(t *testing.T) {
+	root := candidateTestRoot(t)
+	store := NewCandidateStoreAt(filepath.Join(root, "var/lib/sbxr/software-lifecycle"))
+	record := candidateRecord("v1.2.0")
+	if err := store.RetainNewest(record); err != nil {
+		t.Fatal(err)
+	}
+	updater := Updater{expected: softwarelifecycle.ReleaseIdentity{Repository: softwarelifecycle.Repository, Tag: "v1.1.0", Commit: strings.Repeat("e", 40), IndexSHA256: strings.Repeat("f", 64)}}
+	if err := updater.CleanupComplete(root); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.Load(); err != nil || got.Evidence.Tag != "v1.2.0" {
+		t.Fatalf("newer candidate was not preserved: %+v, %v", got, err)
+	}
+}
 
 func TestCandidateStoreAtomicallyRetainsOnlyTheNewestVerifiedEvidence(t *testing.T) {
 	directory := filepath.Join(candidateTestRoot(t), "candidates")

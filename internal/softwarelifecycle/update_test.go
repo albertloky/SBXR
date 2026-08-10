@@ -53,10 +53,10 @@ func TestPlanUpdateDisclosesOneCompleteManagedToManagedTransaction(t *testing.T)
 		t.Fatalf("PlanUpdate() = (%+v, %+v)", plan, finding)
 	}
 	summary := plan.Summary()
-	if summary.CurrentRelease != installed.Identity || summary.CandidateRelease != candidate.cell.staged.Identity || summary.CurrentRevision != 7 || summary.CandidateRevision != 8 || summary.Disk != disk || !summary.OneUse || !summary.SudoAfterApproval {
+	if summary.CurrentRelease != installed.Identity || summary.CandidateRelease != candidate.cell.staged.Identity || summary.CurrentRevision != 7 || summary.CandidateRevision != 8 || summary.Disk != disk || !summary.OneUse || !summary.PrivilegedMutationAfterApproval {
 		t.Fatalf("summary = %+v", summary)
 	}
-	if !reflect.DeepEqual(summary.MigrationPath, []string{"State schema 1 -> 2: preserve all Owner meaning; regenerate release-bound material"}) || !reflect.DeepEqual(summary.AffectedServices, []string{"cloudflared.service", "sbxr-subscription.service", "sing-box.service", "xray.service"}) || len(summary.SubscriptionRepresentations) != 7 || summary.Interruption == "" || summary.Cancellation == "" || summary.Rollback == "" {
+	if !reflect.DeepEqual(summary.MigrationPath, []string{"State schema 1 -> 2: preserve all Owner meaning; regenerate release-bound material"}) || !reflect.DeepEqual(summary.AffectedServices, []string{"cloudflared.service", "sbxr-subscription.service", "sing-box.service", "xray.service"}) || len(summary.SubscriptionRepresentations) != 7 || summary.Compatibility == "" || summary.Interruption == "" || summary.Cancellation == "" || summary.Rollback == "" {
 		t.Fatalf("incomplete update review = %+v", summary)
 	}
 }

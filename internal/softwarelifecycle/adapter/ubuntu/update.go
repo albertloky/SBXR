@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -22,13 +23,19 @@ import (
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
 
-const maxUpdateSnapshot = 4 * softwarelifecycle.MaxAssetBytes
+const maxUpdateSnapshot = 6 * softwarelifecycle.MaxAssetBytes
+
+const (
+	updateCandidateArchive    = "candidate/application.tar.gz"
+	updateCandidateComponents = "candidate/components.tar.gz"
+)
 
 type Updater struct {
 	candidate Installer
 	prior     Installer
 	installed softwarelifecycle.VerifiedRelease
 	command   func(context.Context, string, ...string) ([]byte, error)
+	expected  softwarelifecycle.ReleaseIdentity
 }
 
 func NewUpdater(candidate, installedCandidate softwarelifecycle.InstallCandidate) (Updater, error) {
@@ -37,6 +44,36 @@ func NewUpdater(candidate, installedCandidate softwarelifecycle.InstallCandidate
 
 func NewDowngrader(candidate, installedCandidate softwarelifecycle.InstallCandidate) (Updater, error) {
 	return newReleaseChanger(candidate, installedCandidate, true)
+}
+
+// NewRecoveryUpdater constructs the rollback-only executor for one validated
+// unfinished update or downgrade transaction.
+func NewRecoveryUpdater(candidate softwarelifecycle.InstallCandidate, installed softwarelifecycle.ReleaseIdentity) (Updater, error) {
+	verified, staged, archive, components, valid := candidate.SoftwareLifecyclePreparedUpdate()
+	if !valid || verified.Identity == installed || installed.Repository != softwarelifecycle.Repository || !validPathToken(installed.Tag, 128, false) || !validPathToken(installed.Commit, 40, true) || !validPathToken(installed.IndexSHA256, 64, true) {
+		return Updater{}, errors.New("verified recovery release unavailable")
+	}
+	installer, err := newInstaller(staged, archive, components)
+	if err != nil {
+		return Updater{}, err
+	}
+	return newRecoveryUpdater(installer, installed)
+}
+
+// NewSnapshotRecoveryUpdater reconstructs the authenticated candidate only
+// from the protected transaction snapshot supplied to Inspect or Reverse.
+func NewSnapshotRecoveryUpdater(installed, candidate softwarelifecycle.ReleaseIdentity) (Updater, error) {
+	if installed == candidate || installed.Repository != softwarelifecycle.Repository || candidate.Repository != softwarelifecycle.Repository || !validPathToken(installed.Tag, 128, false) || !validPathToken(installed.Commit, 40, true) || !validPathToken(installed.IndexSHA256, 64, true) || !validPathToken(candidate.Tag, 128, false) || !validPathToken(candidate.Commit, 40, true) || !validPathToken(candidate.IndexSHA256, 64, true) {
+		return Updater{}, errors.New("verified recovery release unavailable")
+	}
+	return Updater{installed: softwarelifecycle.VerifiedRelease{Identity: installed}, expected: candidate, command: runUpdateCommand}, nil
+}
+
+func newRecoveryUpdater(candidate Installer, installed softwarelifecycle.ReleaseIdentity) (Updater, error) {
+	if candidate.staged.Identity == installed || installed.Repository != softwarelifecycle.Repository || !validPathToken(installed.Tag, 128, false) || !validPathToken(installed.Commit, 40, true) || !validPathToken(installed.IndexSHA256, 64, true) {
+		return Updater{}, errors.New("verified recovery release unavailable")
+	}
+	return Updater{candidate: candidate, installed: softwarelifecycle.VerifiedRelease{Identity: installed}, command: runUpdateCommand}, nil
 }
 
 func newReleaseChanger(candidate, installedCandidate softwarelifecycle.InstallCandidate, downgrade bool) (Updater, error) {
@@ -99,8 +136,9 @@ func validPathToken(value string, size int, hexOnly bool) bool {
 }
 
 type updateSnapshotHeader struct {
-	Schema  int                               `json:"schema"`
-	Release softwarelifecycle.ReleaseIdentity `json:"release"`
+	Schema    int                               `json:"schema"`
+	Release   softwarelifecycle.ReleaseIdentity `json:"release"`
+	Candidate softwarelifecycle.StagedRelease   `json:"candidate"`
 }
 
 type updateSnapshotEntry struct {
@@ -124,8 +162,14 @@ func (updater Updater) CaptureRollback(rootPath string, step systemchanges.Step,
 	}
 	var snapshot bytes.Buffer
 	archive := tar.NewWriter(&snapshot)
-	header, _ := json.Marshal(updateSnapshotHeader{Schema: 1, Release: updater.installed.Identity})
+	header, _ := json.Marshal(updateSnapshotHeader{Schema: 2, Release: updater.installed.Identity, Candidate: updater.candidate.staged})
 	if err := writeUpdateSnapshotEntry(archive, updateSnapshotEntry{name: "snapshot.json", mode: 0o600, typeflag: tar.TypeReg, body: header}); err != nil {
+		return err
+	}
+	if err := writeUpdateSnapshotEntry(archive, updateSnapshotEntry{name: updateCandidateArchive, mode: 0o600, typeflag: tar.TypeReg, body: updater.candidate.archive}); err != nil {
+		return err
+	}
+	if err := writeUpdateSnapshotEntry(archive, updateSnapshotEntry{name: updateCandidateComponents, mode: 0o600, typeflag: tar.TypeReg, body: updater.candidate.components}); err != nil {
 		return err
 	}
 	priorDirectory := strings.TrimPrefix(path.Dir(softwarelifecycle.ReleaseInstallPath(updater.installed.Identity)), "/")
@@ -261,10 +305,11 @@ func (updater Updater) Reverse(rootPath string, step systemchanges.Step, source 
 	if !softwareStep(step) || source == nil {
 		return systemchanges.StepEvidence{}, errors.New("Software Lifecycle update rollback unavailable")
 	}
-	entries, err := updater.readSnapshot(source)
+	entries, candidate, err := updater.readSnapshot(source)
 	if err != nil {
 		return systemchanges.StepEvidence{}, err
 	}
+	updater.candidate = candidate
 	root, err := os.OpenRoot(rootPath)
 	if err != nil {
 		return systemchanges.StepEvidence{}, err
@@ -319,6 +364,30 @@ func (updater Updater) Reverse(rootPath string, step systemchanges.Step, source 
 
 func runUpdateCommand(ctx context.Context, name string, arguments ...string) ([]byte, error) {
 	return exec.CommandContext(ctx, name, arguments...).CombinedOutput()
+}
+
+func (updater Updater) CleanupComplete(rootPath string) error {
+	identity := updater.candidate.staged.Identity
+	if identity == (softwarelifecycle.ReleaseIdentity{}) {
+		identity = updater.expected
+	}
+	if identity.Repository != softwarelifecycle.Repository || !validPathToken(identity.Tag, 128, false) || !validPathToken(identity.Commit, 40, true) || !validPathToken(identity.IndexSHA256, 64, true) {
+		return errors.New("completed update candidate unavailable")
+	}
+	directory := filepath.Join(rootPath, "var/lib/sbxr/software-lifecycle")
+	if _, err := os.Lstat(directory); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	store := NewCandidateStoreAt(directory)
+	record, err := store.Load()
+	if errors.Is(err, softwarelifecycle.ErrCandidateNotFound) {
+		return nil
+	}
+	digest := sha256.Sum256(record.Evidence.Index)
+	if err != nil || record.Evidence.Repository != identity.Repository || record.Evidence.Tag != identity.Tag || record.Evidence.Commit != identity.Commit || hex.EncodeToString(digest[:]) != identity.IndexSHA256 {
+		return err
+	}
+	return store.RemoveVerified(identity)
 }
 
 func (updater Updater) verifyRollbackSurface(root *os.Root, entries []updateSnapshotEntry, candidateDirectory, priorDirectory string) error {
@@ -478,10 +547,11 @@ func (updater Updater) Inspect(rootPath string, step systemchanges.Step, source 
 	if !softwareStep(step) || source == nil {
 		return "", errors.New("Software Lifecycle update inspection unavailable")
 	}
-	entries, err := updater.readSnapshot(source)
+	entries, candidate, err := updater.readSnapshot(source)
 	if err != nil {
 		return "", err
 	}
+	updater.candidate = candidate
 	root, err := os.OpenRoot(rootPath)
 	if err != nil {
 		return "", err
@@ -556,22 +626,37 @@ func (updater Updater) verifyPrior(root *os.Root) error {
 	return nil
 }
 
-func (updater Updater) readSnapshot(source io.Reader) ([]updateSnapshotEntry, error) {
+func (updater Updater) readSnapshot(source io.Reader) ([]updateSnapshotEntry, Installer, error) {
 	raw, err := io.ReadAll(io.LimitReader(source, maxUpdateSnapshot+1))
 	if err != nil || len(raw) > maxUpdateSnapshot || !exactTarBoundary(raw) {
-		return nil, errors.New("update snapshot boundary invalid")
+		return nil, Installer{}, errors.New("update snapshot boundary invalid")
 	}
 	archive := tar.NewReader(bytes.NewReader(raw))
 	header, err := archive.Next()
 	if err != nil || header.Name != "snapshot.json" || header.Typeflag != tar.TypeReg || header.Size <= 0 || header.Size > 1<<20 {
-		return nil, errors.New("update snapshot header invalid")
+		return nil, Installer{}, errors.New("update snapshot header invalid")
 	}
 	body, err := io.ReadAll(io.LimitReader(archive, header.Size+1))
 	var metadata updateSnapshotHeader
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
-	if err != nil || int64(len(body)) != header.Size || decoder.Decode(&metadata) != nil || decoder.Decode(&struct{}{}) != io.EOF || metadata.Schema != 1 || metadata.Release != updater.installed.Identity {
-		return nil, errors.New("update snapshot identity invalid")
+	if err != nil || int64(len(body)) != header.Size || decoder.Decode(&metadata) != nil || decoder.Decode(&struct{}{}) != io.EOF || metadata.Schema != 2 || metadata.Release != updater.installed.Identity {
+		return nil, Installer{}, errors.New("update snapshot identity invalid")
+	}
+	candidateMaterial := make(map[string][]byte, 2)
+	for _, name := range []string{updateCandidateArchive, updateCandidateComponents} {
+		header, err = archive.Next()
+		if err != nil || header.Name != name || header.Typeflag != tar.TypeReg || header.Mode != 0o600 || header.Size <= 0 || header.Size > softwarelifecycle.MaxAssetBytes {
+			return nil, Installer{}, errors.New("update snapshot candidate invalid")
+		}
+		candidateMaterial[name], err = io.ReadAll(io.LimitReader(archive, header.Size+1))
+		if err != nil || int64(len(candidateMaterial[name])) != header.Size {
+			return nil, Installer{}, errors.New("update snapshot candidate truncated")
+		}
+	}
+	candidate, err := newInstaller(metadata.Candidate, candidateMaterial[updateCandidateArchive], candidateMaterial[updateCandidateComponents])
+	if err != nil || updater.expected != (softwarelifecycle.ReleaseIdentity{}) && metadata.Candidate.Identity != updater.expected || updater.candidate.staged.Identity != (softwarelifecycle.ReleaseIdentity{}) && (metadata.Candidate != updater.candidate.staged || !bytes.Equal(candidate.archive, updater.candidate.archive) || !bytes.Equal(candidate.components, updater.candidate.components)) {
+		return nil, Installer{}, errors.New("update snapshot candidate identity invalid")
 	}
 	priorDirectory := strings.TrimPrefix(path.Dir(softwarelifecycle.ReleaseInstallPath(updater.installed.Identity)), "/")
 	allowedUnits := map[string]bool{}
@@ -586,27 +671,27 @@ func (updater Updater) readSnapshot(source io.Reader) ([]updateSnapshotEntry, er
 			break
 		}
 		if err != nil || header.Name == "" || seen[header.Name] || header.Name != priorDirectory && !strings.HasPrefix(header.Name, priorDirectory+"/") && !allowedUnits[header.Name] && header.Name != "usr/local/bin/sbxr" || header.Typeflag != tar.TypeDir && header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeSymlink || header.Size < 0 || header.Size > maxUpdateSnapshot {
-			return nil, errors.New("update snapshot entry invalid")
+			return nil, Installer{}, errors.New("update snapshot entry invalid")
 		}
 		seen[header.Name] = true
 		entry := updateSnapshotEntry{name: header.Name, link: header.Linkname, mode: fs.FileMode(header.Mode), typeflag: header.Typeflag}
 		if header.Typeflag == tar.TypeReg {
 			entry.body, err = io.ReadAll(io.LimitReader(archive, header.Size+1))
 			if err != nil || int64(len(entry.body)) != header.Size {
-				return nil, errors.New("update snapshot entry truncated")
+				return nil, Installer{}, errors.New("update snapshot entry truncated")
 			}
 		}
 		entries = append(entries, entry)
 	}
 	if !seen[priorDirectory] || !seen["usr/local/bin/sbxr"] || len(seen) < len(allowedUnits)+2 {
-		return nil, errors.New("update snapshot incomplete")
+		return nil, Installer{}, errors.New("update snapshot incomplete")
 	}
 	for name := range allowedUnits {
 		if !seen[name] {
-			return nil, errors.New("update snapshot unit missing")
+			return nil, Installer{}, errors.New("update snapshot unit missing")
 		}
 	}
-	return entries, nil
+	return entries, candidate, nil
 }
 
 func exactTarBoundary(raw []byte) bool {

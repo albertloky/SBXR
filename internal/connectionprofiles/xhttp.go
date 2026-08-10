@@ -120,6 +120,14 @@ type XHTTPViewResult struct {
 }
 
 func (module Interface) ViewXHTTP(ctx context.Context, request XHTTPViewRequest) XHTTPViewResult {
+	return module.viewXHTTP(ctx, request, true)
+}
+
+func (module Interface) viewXHTTPCore(ctx context.Context, request XHTTPViewRequest) XHTTPViewResult {
+	return module.viewXHTTP(ctx, request, false)
+}
+
+func (module Interface) viewXHTTP(ctx context.Context, request XHTTPViewRequest, includeRoute bool) XHTTPViewResult {
 	profile := XHTTPProfile{Name: "VLESS XHTTP", Hostname: request.Hostname, Origin: fmt.Sprintf("%s:%d", request.OriginAddress, request.OriginPort), Mode: string(request.Mode), XrayVersion: request.XrayVersion, Enabled: request.Enabled, CredentialsReady: request.Credentials.valid()}
 	host, ok := module.host.(XHTTPHost)
 	if !ok {
@@ -136,7 +144,7 @@ func (module Interface) ViewXHTTP(ctx context.Context, request XHTTPViewRequest)
 		return result
 	}
 	expectedOrigin := fmt.Sprintf("http://%s:%d", request.OriginAddress, request.OriginPort)
-	if request.RouteHealth.Hostname != request.Hostname || request.RouteHealth.Origin != expectedOrigin || request.RouteHealth.Health.Module != "Cloudflare Tunnel" || request.RouteHealth.Health.Outcome != cloudflaretunnel.Healthy || request.RouteHealth.Health.Code != "CLOUDFLARE-XHTTP-ROUTE-HEALTHY" {
+	if includeRoute && (request.RouteHealth.Hostname != request.Hostname || request.RouteHealth.Origin != expectedOrigin || request.RouteHealth.Health.Module != "Cloudflare Tunnel" || request.RouteHealth.Health.Outcome != cloudflaretunnel.Healthy || request.RouteHealth.Health.Code != "CLOUDFLARE-XHTTP-ROUTE-HEALTHY") {
 		result.Health = externalBlockedHealth(blockedXHTTP(observation.CheckedAt, Failed, "CONNECTION-PROFILES-XHTTP-ROUTE", "The typed Cloudflare XHTTP route is not healthy or does not match", request.RouteHealth.Health.Code, "the selected hostname mapped to the reviewed loopback XHTTP origin with CLOUDFLARE-XHTTP-ROUTE-HEALTHY"), "Use Cloudflare Tunnel repair to restore the selected XHTTP hostname to its exact reviewed loopback origin, then Check again.")
 		return result
 	}

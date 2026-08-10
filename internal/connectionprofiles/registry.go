@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/netip"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -717,11 +718,13 @@ type RegistryViewResult struct {
 	Publication    PublicationSource
 	Health         Health
 	VolatileSHA256 string
+	Repairable     bool
 }
 
 type RegistryPlanRequest struct {
 	Current, Candidate                                 RegistryViewRequest
 	ChangeSet, StartingStateSHA256, DesiredStateSHA256 string
+	ReleaseUpdate                                      bool
 	Repair                                             systemchanges.ForwardRepairAuthority
 	FreshInstallation                                  systemchanges.FreshInstallationAuthority
 	PortCorrection                                     RegistryPortCorrectionAuthority
@@ -737,6 +740,10 @@ func (result RegistryViewResult) Profile(id ProfileID) (RegistryProfile, bool) {
 }
 
 func (module Interface) ViewRegistry(ctx context.Context, request RegistryViewRequest) RegistryViewResult {
+	return module.viewRegistry(ctx, request, false)
+}
+
+func (module Interface) viewRegistry(ctx context.Context, request RegistryViewRequest, coreOnly bool) RegistryViewResult {
 	address, addressErr := netip.ParseAddr(request.ClientAddress)
 	if addressErr != nil || !address.IsGlobalUnicast() || request.Reality.Revision != request.XHTTP.Revision || request.Reality.Revision != request.WebSocket.Revision || request.Reality.Revision != request.Hysteria2.Revision || request.Reality.Revision != request.TUIC.Revision || request.Reality.Revision != request.AnyTLS.Revision {
 		return registryInvalidResult(request, registryHealth("CONNECTION-PROFILES-REGISTRY-INPUT", "the selected client address or profile revision is invalid"))
@@ -789,6 +796,9 @@ func (module Interface) ViewRegistry(ctx context.Context, request RegistryViewRe
 		appendProfile(profile, digest)
 	} else {
 		xhttp := module.ViewXHTTP(ctx, request.XHTTP)
+		if coreOnly {
+			xhttp = module.viewXHTTPCore(ctx, request.XHTTP)
+		}
 		if xhttp.Health.Outcome == Healthy && !request.Reality.Enabled && !xhttp.observation.NoCapabilities {
 			xhttp.Health = registryCapabilityFailure("Xray", "REALITY is disabled but xray.service still has capabilities")
 		}
@@ -802,6 +812,9 @@ func (module Interface) ViewRegistry(ctx context.Context, request RegistryViewRe
 		appendProfile(profile, digest)
 	} else {
 		websocket := module.ViewWebSocket(ctx, request.WebSocket)
+		if coreOnly {
+			websocket = module.viewWebSocketCore(ctx, request.WebSocket)
+		}
 		if websocket.Health.Outcome == Healthy && !request.Reality.Enabled && !websocket.observation.NoCapabilities {
 			websocket.Health = registryCapabilityFailure("Xray", "REALITY is disabled but xray.service still has capabilities")
 		}
@@ -864,9 +877,18 @@ func (module Interface) ViewRegistry(ctx context.Context, request RegistryViewRe
 	}
 	digest := sha256.Sum256([]byte(volatile))
 	if firstFailure != nil {
-		return RegistryViewResult{Profiles: results, Health: *firstFailure, VolatileSHA256: hex.EncodeToString(digest[:])}
+		return RegistryViewResult{Profiles: results, Health: *firstFailure, VolatileSHA256: hex.EncodeToString(digest[:]), Repairable: repairableRegistryCode(firstFailure.Code)}
 	}
 	return RegistryViewResult{Profiles: results, Publication: registryPublication(request), Health: Health{Module: "Connection Profiles", Profile: "Registry", Outcome: Healthy, Code: "CONNECTION-PROFILES-REGISTRY-HEALTHY", NextActions: []string{"Build Plan", "Back"}}, VolatileSHA256: hex.EncodeToString(digest[:])}
+}
+
+func repairableRegistryCode(code string) bool {
+	for _, suffix := range []string{"-CONFIGURATION", "-SERVICE", "-LISTENER", "-CAPABILITY", "-FUNCTION", "-EXPOSURE"} {
+		if strings.HasSuffix(code, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (module Interface) PlanRegistry(ctx context.Context, request RegistryPlanRequest) PlanResult {
@@ -887,9 +909,9 @@ func (module Interface) PlanRegistry(ctx context.Context, request RegistryPlanRe
 	if !repair && current.Health.Outcome != Healthy {
 		return PlanResult{Health: current.Health}
 	}
-	action, mutation, validChange := registryChange(request.Current, request.Candidate, repair, freshPorts, correctedPorts, correctionPurpose, correctionPort, correctionCandidate, correctionProtocol)
+	action, mutation, validChange := registryChange(request.Current, request.Candidate, repair, freshPorts, correctedPorts, request.ReleaseUpdate, correctionPurpose, correctionPort, correctionCandidate, correctionProtocol)
 	desiredStateValid := sha256Text.MatchString(request.DesiredStateSHA256)
-	stateBindingValid := freshPorts && request.StartingStateSHA256 == "" && desiredStateValid || sha256Text.MatchString(request.StartingStateSHA256) && desiredStateValid && (repair && request.StartingStateSHA256 == request.DesiredStateSHA256 && repairRevision == request.Current.Reality.Revision && repairSHA == request.StartingStateSHA256 || !repair && request.StartingStateSHA256 != request.DesiredStateSHA256)
+	stateBindingValid := freshPorts && request.StartingStateSHA256 == "" && desiredStateValid || sha256Text.MatchString(request.StartingStateSHA256) && desiredStateValid && (repair && request.StartingStateSHA256 == request.DesiredStateSHA256 && repairRevision == request.Current.Reality.Revision && repairSHA == request.StartingStateSHA256 || request.ReleaseUpdate && !repair && request.StartingStateSHA256 == request.DesiredStateSHA256 || !repair && request.StartingStateSHA256 != request.DesiredStateSHA256)
 	if !validChange || !registryLifecycleRevisions(request.Current, request.Candidate, freshPorts) || !planName.MatchString(request.ChangeSet) || !stateBindingValid {
 		return PlanResult{Health: registryPlanFailure("STATE", "the request does not contain one exact profile lifecycle change and State binding")}
 	}
@@ -935,7 +957,14 @@ func (module Interface) PlanRegistry(ctx context.Context, request RegistryPlanRe
 // core configuration for a Subscription-only Change Set. It contributes no
 // Connection Profiles mutation step.
 func (module Interface) PlanUnchangedRegistry(ctx context.Context, current RegistryViewRequest, changeSet, stateSHA256 string) PlanResult {
+	return module.planUnchangedRegistry(ctx, current, changeSet, stateSHA256, false)
+}
+
+func (module Interface) planUnchangedRegistry(ctx context.Context, current RegistryViewRequest, changeSet, stateSHA256 string, coreOnly bool) PlanResult {
 	view := module.ViewRegistry(ctx, current)
+	if coreOnly {
+		view = module.viewRegistry(ctx, current, true)
+	}
 	if view.Health.Outcome != Healthy || !planName.MatchString(changeSet) || !sha256Text.MatchString(stateSHA256) {
 		return PlanResult{Health: registryPlanFailure("UNCHANGED", "the current Managed registry is not freshly proved")}
 	}
@@ -955,6 +984,12 @@ func (module Interface) PlanUnchangedRegistry(ctx context.Context, current Regis
 	}
 	plan.steps, plan.checks = nil, nil
 	return PlanResult{Plan: plan, Health: Health{Module: "Connection Profiles", Profile: "Registry", Outcome: Healthy, Code: "CONNECTION-PROFILES-REGISTRY-UNCHANGED-READY", NextActions: []string{"Review Plan", "Back"}}}
+}
+
+// PlanUnchangedCoreRegistry proves and reproduces the exact current core while
+// a separately owned Cloudflare repair corrects only route agreement.
+func (module Interface) PlanUnchangedCoreRegistry(ctx context.Context, current RegistryViewRequest, changeSet, stateSHA256 string) PlanResult {
+	return module.planUnchangedRegistry(ctx, current, changeSet, stateSHA256, true)
 }
 
 func registryCorrectionExplains(result RegistryViewResult, purpose string) bool {
@@ -1066,7 +1101,10 @@ func registryEnablementChange(current, candidate RegistryViewRequest) (ProfileID
 	return changed.id, changed.candidate, true
 }
 
-func registryChange(current, candidate RegistryViewRequest, repair, freshInstallation, corrected bool, correctionPurpose string, correctionPort, correctionCandidate uint16, correctionProtocol string) (string, systemchanges.MutationClass, bool) {
+func registryChange(current, candidate RegistryViewRequest, repair, freshInstallation, corrected, releaseUpdate bool, correctionPurpose string, correctionPort, correctionCandidate uint16, correctionProtocol string) (string, systemchanges.MutationClass, bool) {
+	if releaseUpdate && !repair && !freshInstallation && !corrected && reflect.DeepEqual(registryComparable(current), registryComparable(candidate)) {
+		return "regenerate the complete registry for the freshly verified release", systemchanges.UpdateMutation, true
+	}
 	if repair && reflect.DeepEqual(registryComparable(current), registryComparable(candidate)) {
 		return "repair the current proven Desired State", systemchanges.RepairMutation, true
 	}
@@ -1456,7 +1494,7 @@ func registryInvalidResult(request RegistryViewRequest, health Health) RegistryV
 		facts := definitions[index]
 		profiles[index] = RegistryProfile{ID: definition.id, Name: definition.name, Hostname: facts.hostname, QualifiedVersion: facts.version, Enabled: facts.enabled, DefaultEnabled: true, CredentialsReady: facts.credentials, SelectedListener: selectedRegistryListener(request, definition.id), Health: health}
 	}
-	return RegistryViewResult{Profiles: profiles, Health: health}
+	return RegistryViewResult{Profiles: profiles, Health: health, Repairable: repairableRegistryCode(health.Code)}
 }
 
 func registryCapabilityFailure(core, found string) Health {
