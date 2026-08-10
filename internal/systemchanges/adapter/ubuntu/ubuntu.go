@@ -103,6 +103,14 @@ func NewAtForInstallRecovery(root string, source ObservationSource, host Host, f
 	return adapter
 }
 
+// NewAtForClientAccess wires only the fixed executors used by a Managed to
+// Managed Client Access Change Set.
+func NewAtForClientAccess(root string, source ObservationSource, host Host, firewall FirewallExecutor, cloudflare CloudflareExecutor, profiles ConnectionProfilesExecutor, subscription SubscriptionPublicationExecutor, state systemchanges.StateRecovery) Adapter {
+	adapter := NewAt(root, source, host, state)
+	adapter.firewall, adapter.cloudflare, adapter.profiles, adapter.subscription = firewall, cloudflare, profiles, subscription
+	return adapter
+}
+
 func firstStateRecovery(states []systemchanges.StateRecovery) systemchanges.StateRecovery {
 	if len(states) == 1 {
 		return states[0]

@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -182,17 +183,26 @@ type rollbackRecord struct {
 // Executor is the Cloudflare Adapter used only by the System Changes Ubuntu
 // transaction host. Every call executes one typed provider mutation.
 type Executor struct {
-	api             MutationAPI
-	token           ManagementToken
-	runToken        TunnelRunToken
-	request         PlanRequest
-	observation     string
-	tokenID         string
-	binding         cloudflareEvidenceBinding
-	serviceIdentity func() (int, int, int, error)
-	command         func(context.Context, string, ...string) ([]byte, error)
-	clock           Clock
-	releaseUpdate   bool
+	api                MutationAPI
+	token              ManagementToken
+	runToken           TunnelRunToken
+	request            PlanRequest
+	observation        string
+	tokenID            string
+	binding            cloudflareEvidenceBinding
+	serviceIdentity    func() (int, int, int, error)
+	command            func(context.Context, string, ...string) ([]byte, error)
+	clock              Clock
+	releaseUpdate      bool
+	clientAccess       *systemchanges.CloudflareChange
+	clientAccessHealth *clientAccessRouteHealth
+	clientAccessPrior  []Route
+}
+
+type clientAccessRouteHealth struct {
+	request          WholeTunnelRequest
+	expected         WholeTunnelExpected
+	xhttp, websocket bool
 }
 
 func (plan *Plan) Executor(api MutationAPI) (Executor, error) {
@@ -211,9 +221,17 @@ func (executor Executor) CaptureRollback(step systemchanges.Step, write func(io.
 		return errors.New("Cloudflare rollback capture unavailable")
 	}
 	change, _ := step.CloudflareChange()
+	if executor.clientAccess != nil && !reflect.DeepEqual(change, *executor.clientAccess) {
+		return errors.New("Cloudflare Client Access Plan changed")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	if (change.Action == systemchanges.CloudflareRoutesPut && change.TunnelID != "" || change.Action == systemchanges.CloudflareDNSRepair) && !executor.repairPlanStillFresh(ctx) {
+	if executor.clientAccess != nil {
+		current, err := executor.api.GetConfiguration(ctx, GetConfigurationRequest{AccountID: change.AccountID, TunnelID: change.TunnelID, Token: executor.token})
+		if err != nil || current.TunnelID != change.TunnelID || !sameRoutes(current.Routes, executor.clientAccessPrior) {
+			return errors.New("Cloudflare Client Access Plan observation changed")
+		}
+	} else if (change.Action == systemchanges.CloudflareRoutesPut && change.TunnelID != "" || change.Action == systemchanges.CloudflareDNSRepair) && !executor.repairPlanStillFresh(ctx) {
 		return errors.New("Cloudflare repair Plan observation changed")
 	}
 	record := rollbackRecord{Token: executor.token.value}
@@ -251,6 +269,9 @@ func (executor Executor) Execute(step systemchanges.Step, resolvedTunnelID strin
 	change, ok := step.CloudflareChange()
 	if !ok || executor.api == nil || executor.token.value == "" {
 		return systemchanges.StepEvidence{}, errors.New("Cloudflare step unavailable")
+	}
+	if executor.clientAccess != nil && !reflect.DeepEqual(change, *executor.clientAccess) {
+		return systemchanges.StepEvidence{}, errors.New("Cloudflare Client Access Plan changed")
 	}
 	switch change.Action {
 	case systemchanges.CloudflareTunnelCreate:
@@ -408,6 +429,9 @@ func (executor Executor) Reverse(step systemchanges.Step, evidence systemchanges
 	if !ok {
 		return systemchanges.StepEvidence{}, errors.New("Cloudflare rollback step unavailable")
 	}
+	if executor.clientAccess != nil && !reflect.DeepEqual(change, *executor.clientAccess) {
+		return systemchanges.StepEvidence{}, errors.New("Cloudflare Client Access Plan changed")
+	}
 	var err error
 	switch change.Action {
 	case systemchanges.CloudflareTunnelCreate:
@@ -451,6 +475,9 @@ func (executor Executor) InspectRepair(step systemchanges.Step, snapshot io.Read
 	change, ok := step.CloudflareChange()
 	if !ok {
 		return "", errors.New("Cloudflare repair inspection unavailable")
+	}
+	if executor.clientAccess != nil && !reflect.DeepEqual(change, *executor.clientAccess) {
+		return "", errors.New("Cloudflare Client Access Plan changed")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -536,6 +563,22 @@ func (executor Executor) WaitForWholeTunnel(ctx context.Context, request WholeTu
 }
 
 func (executor Executor) CheckWholeTunnel(evidence []systemchanges.StepEvidence, timeout time.Duration) (systemchanges.HealthStatus, error) {
+	if health := executor.clientAccessHealth; health != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		observed, err := executor.api.ObserveWholeTunnel(ctx, health.request)
+		if err != nil {
+			return systemchanges.Unknown, err
+		}
+		_, dnsAgree := compareDNS(observed.DNSRecords, health.expected.DNSRecords)
+		if observed.TunnelID != health.expected.TunnelID || !sameRoutes(observed.Routes, health.expected.Routes) || !dnsAgree {
+			return systemchanges.Failed, nil
+		}
+		if !observed.Connected || health.xhttp && !observed.XHTTPOriginReachable || health.websocket && !observed.WebSocketOriginReachable {
+			return systemchanges.NeedsAttention, nil
+		}
+		return systemchanges.Healthy, nil
+	}
 	if executor.request.ManagedRepair.TunnelID != "" {
 		expected, request := managedHealthRequest(executor.request)
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -347,6 +348,7 @@ type Result struct {
 	portCorrectionBinding Binding
 	freshInstallation     *freshInstallationProofCell
 	freshDNSHostname      string
+	intent                Intent
 }
 
 // FreshInstallationProof is a one-use, non-renderable Clean VPS proof for
@@ -450,6 +452,43 @@ type ListenerContribution struct {
 
 func NewListenerContribution(result Result) ListenerContribution {
 	return listenerContribution(result.Binding)
+}
+
+// PrepareProfileEnablement derives one candidate listener authority from a
+// freshly healthy Managed result. Only one enablement bit may change; ports,
+// addresses, SSH preservation, certificates, and every other intent stay fixed.
+func PrepareProfileEnablement(current Result, currentIntent, candidateIntent Intent) (ListenerContribution, string, error) {
+	if current.Outcome != Healthy || !current.Binding.approved || currentIntent.Baseline != Managed || candidateIntent.Baseline != Managed || currentIntent.Revision == 0 || candidateIntent.Revision != currentIntent.Revision || !reflect.DeepEqual(current.intent, currentIntent) {
+		return ListenerContribution{}, "", fmt.Errorf("current Managed Network Policy is unavailable")
+	}
+	currentEnabled := []bool{currentIntent.Profiles.VLESSRealityVision.Enabled, currentIntent.Profiles.VLESSXHTTP.Enabled, currentIntent.Profiles.VLESSWebSocket.Enabled, currentIntent.Profiles.Hysteria2.Enabled, currentIntent.Profiles.TUIC.Enabled, currentIntent.Profiles.AnyTLS.Enabled}
+	candidateEnabled := []bool{candidateIntent.Profiles.VLESSRealityVision.Enabled, candidateIntent.Profiles.VLESSXHTTP.Enabled, candidateIntent.Profiles.VLESSWebSocket.Enabled, candidateIntent.Profiles.Hysteria2.Enabled, candidateIntent.Profiles.TUIC.Enabled, candidateIntent.Profiles.AnyTLS.Enabled}
+	changes := 0
+	for index := range currentEnabled {
+		if currentEnabled[index] != candidateEnabled[index] {
+			changes++
+		}
+	}
+	normalized := candidateIntent
+	normalized.Profiles.VLESSRealityVision.Enabled = currentIntent.Profiles.VLESSRealityVision.Enabled
+	normalized.Profiles.VLESSXHTTP.Enabled = currentIntent.Profiles.VLESSXHTTP.Enabled
+	normalized.Profiles.VLESSWebSocket.Enabled = currentIntent.Profiles.VLESSWebSocket.Enabled
+	normalized.Profiles.Hysteria2.Enabled = currentIntent.Profiles.Hysteria2.Enabled
+	normalized.Profiles.TUIC.Enabled = currentIntent.Profiles.TUIC.Enabled
+	normalized.Profiles.AnyTLS.Enabled = currentIntent.Profiles.AnyTLS.Enabled
+	if changes != 1 || !reflect.DeepEqual(normalized, currentIntent) {
+		return ListenerContribution{}, "", fmt.Errorf("exactly one Connection Profile enablement may change")
+	}
+	policy := candidatePolicy(candidateIntent)
+	encoded, _ := json.Marshal(struct {
+		CurrentDigest string
+		Candidate     Intent
+		Policy        Policy
+	}{current.Binding.digest, candidateIntent, policy})
+	digest := sha256.Sum256(encoded)
+	checksum := hex.EncodeToString(digest[:])
+	binding := Binding{Digest: checksum, policy: policy, baseline: Managed, revision: candidateIntent.Revision, digest: checksum, approved: true}
+	return listenerContribution(binding), policy.Nftables, nil
 }
 
 func listenerContribution(binding Binding) ListenerContribution {
@@ -745,7 +784,7 @@ type Interface struct{ adapter Adapter }
 func New(adapter Adapter) Interface { return Interface{adapter: adapter} }
 
 func (i Interface) Evaluate(request Request) Result {
-	result := Result{Baseline: request.Intent.Baseline, Outcome: Healthy, Bounds: CheckBounds{DeterministicAttempts: 1, TemporaryAttempts: 3, TemporaryWindowSeconds: 60, LocalHealthSeconds: 60, CloudflareOwner: "Cloudflare Tunnel", ACMEOwner: "Certificate Lifecycle"}, Renewal: RenewalFreshness{ReevaluateAfterGlobalLockWait: true, RebuildOneUsePlan: true}}
+	result := Result{Baseline: request.Intent.Baseline, Outcome: Healthy, Bounds: CheckBounds{DeterministicAttempts: 1, TemporaryAttempts: 3, TemporaryWindowSeconds: 60, LocalHealthSeconds: 60, CloudflareOwner: "Cloudflare Tunnel", ACMEOwner: "Certificate Lifecycle"}, Renewal: RenewalFreshness{ReevaluateAfterGlobalLockWait: true, RebuildOneUsePlan: true}, intent: request.Intent}
 	if !validRequest(request) {
 		result.add(requiredFailure("NETWORK-INTENT-INVALID", "Network Policy intent is incomplete or unsupported", "a missing or invalid typed intent value", "one exact revision, Clean or Managed baseline, approved ports, addresses, profiles, and evaluation stage", "SBXR cannot inspect or adopt ambiguous intent", ownerFix("Return to the previous review and complete the Network Policy inputs.")))
 		return result

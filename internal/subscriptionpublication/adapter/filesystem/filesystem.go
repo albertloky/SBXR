@@ -10,11 +10,14 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"net"
+	"net/http"
 	"os"
 	"os/user"
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -28,6 +31,12 @@ const servingConfigurationName = "serving.json"
 type Executor struct {
 	uid, gid int
 	prove    func(context.Context, string) error
+	prior    *priorAuthorization
+}
+
+type priorAuthorization struct {
+	mu    sync.Mutex
+	token string
 }
 
 func New(prove func(context.Context, string) error) (Executor, error) {
@@ -42,7 +51,7 @@ func New(prove func(context.Context, string) error) (Executor, error) {
 	if err != nil {
 		return Executor{}, errors.New("sbxr-subscription group is invalid")
 	}
-	return Executor{uid: 0, gid: gid, prove: prove}, nil
+	return Executor{uid: 0, gid: gid, prove: prove, prior: &priorAuthorization{}}, nil
 }
 
 // NewAt supplies controlled ownership and health proof for Seam Verification.
@@ -54,7 +63,7 @@ func NewForFreshInstallation(prove func(context.Context, string) error) (Executo
 	if prove == nil {
 		return Executor{}, errors.New("Subscription Serving health proof unavailable")
 	}
-	return Executor{uid: 0, gid: -1, prove: prove}, nil
+	return Executor{uid: 0, gid: -1, prove: prove, prior: &priorAuthorization{}}, nil
 }
 
 func (executor Executor) resolved() (Executor, error) {
@@ -94,6 +103,16 @@ func (executor Executor) CaptureRollback(root string, write func(io.Reader) erro
 	target, err := storage.current()
 	if err != nil {
 		return err
+	}
+	if target != "" && executor.prior != nil {
+		configuration, readErr := storage.readConfiguration("current")
+		authorization, parseErr := parseServingAuthorization(configuration)
+		if readErr != nil || parseErr != nil {
+			return errors.New("prior Subscription Serving authorization is unprovable")
+		}
+		executor.prior.mu.Lock()
+		executor.prior.token = authorization.Token
+		executor.prior.mu.Unlock()
 	}
 	encoded, _ := json.Marshal(snapshot{Target: target})
 	return write(bytes.NewReader(encoded))
@@ -313,8 +332,63 @@ func (executor Executor) Check(root, code string, binding systemchanges.StateTra
 		if err := executor.prove(ctx, set.SelectedAddress()); err != nil {
 			return systemchanges.Failed, errors.New("Subscription Serving health proof failed")
 		}
+		if executor.prior != nil {
+			configuration, readErr := storage.readConfiguration("current")
+			current, parseErr := parseServingAuthorization(configuration)
+			executor.prior.mu.Lock()
+			prior := executor.prior.token
+			executor.prior.mu.Unlock()
+			if readErr != nil || parseErr != nil || proveServingAuthorization(ctx, set.SelectedAddress(), current, prior) != nil {
+				return systemchanges.Failed, errors.New("Subscription Serving authorization proof failed")
+			}
+		}
 	}
 	return systemchanges.Healthy, nil
+}
+
+type servingAuthorization struct {
+	Token      string `json:"token"`
+	ListenPort uint16 `json:"listen_port"`
+}
+
+func parseServingAuthorization(configuration []byte) (servingAuthorization, error) {
+	var authorization servingAuthorization
+	if json.Unmarshal(configuration, &authorization) != nil || authorization.Token == "" || authorization.ListenPort == 0 {
+		return servingAuthorization{}, errors.New("Subscription Serving authorization unavailable")
+	}
+	return authorization, nil
+}
+
+func proveServingAuthorization(ctx context.Context, address string, current servingAuthorization, prior string) error {
+	request := func(token string) (*http.Response, error) {
+		url := "https://" + net.JoinHostPort(address, strconv.Itoa(int(current.ListenPort))) + "/s/" + token + "/base64"
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return nil, err
+		}
+		return http.DefaultClient.Do(req)
+	}
+	response, err := request(current.Token)
+	if err != nil {
+		return err
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return errors.New("candidate Subscription authorization unavailable")
+	}
+	if prior == "" || prior == current.Token {
+		return nil
+	}
+	response, err = request(prior)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, 11))
+	if err != nil || response.StatusCode != http.StatusNotFound || string(body) != "not found\n" {
+		return errors.New("prior Subscription authorization remains active")
+	}
+	return nil
 }
 
 func (executor Executor) Cleanup(root string) error {

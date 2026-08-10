@@ -921,3 +921,12 @@ func TestRunTypedProgressNeverConflictsWithLargeDetails(t *testing.T) {
 		})
 	}
 }
+
+func TestAuthenticatedStartupRoutesValidatedRecoveryWithoutReadingProtectedState(t *testing.T) {
+	view := RecoveryPresentation{Kind: RecoveryRollbackAvailable, Proof: ProvenUnfinishedRollback, CauseCode: "SYSTEM-CHANGES-UNFINISHED", Explanation: "Validated unfinished change.", ChangeSet: "client-access-recovery", Material: "checksum-protected rollback material", Evidence: "DURABLE-TRANSACTION-PRESENT", Guidance: "Retry automatic rollback."}
+	updated, _ := (model{scenario: AuthenticatedOverview}).Update(startupLoadedMsg{startup: StartupPresentation{Status: InstallationRecoveryRequired, Recovery: view}})
+	got := updated.(model)
+	if got.scenario != RecoveryWithRollback || !got.recoveryScreen.available || got.recoveryScreen.view.ChangeSet != view.ChangeSet {
+		t.Fatalf("authenticated startup = scenario %v recovery %+v", got.scenario, got.recoveryScreen)
+	}
+}

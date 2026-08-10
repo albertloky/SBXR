@@ -1462,7 +1462,7 @@ func validCloudflareContract(step Step) bool {
 	case CloudflareTunnelCreate:
 		return step.forward == CreateCloudflareResource && step.rollback == DeleteCreatedCloudflareResource && change.ZoneID == "" && change.TunnelID == "" && change.TunnelIDFromStep == 0 && safeIdentity(change.TunnelName) && change.Hostname == "" && len(change.Routes) == 0
 	case CloudflareRoutesPut:
-		if step.forward != ConfigureCloudflareTunnel || step.rollback != RestoreCloudflareTunnel || !validTunnel || len(change.Routes) < 2 || change.Routes[len(change.Routes)-1] != (CloudflareRoute{Origin: "http_status:404"}) {
+		if step.forward != ConfigureCloudflareTunnel || step.rollback != RestoreCloudflareTunnel || !validTunnel || len(change.Routes) < 1 || change.Routes[len(change.Routes)-1] != (CloudflareRoute{Origin: "http_status:404"}) {
 			return false
 		}
 		for index, route := range change.Routes {

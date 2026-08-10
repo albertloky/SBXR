@@ -82,6 +82,8 @@ type Session struct {
 	Authenticator           Authenticator
 	AuthenticationPolicy    AuthenticationPolicy
 	Access                  AccessPresentation
+	AccessProvider          func(context.Context) AccessPresentation
+	StartupProvider         func(context.Context) StartupPresentation
 	Clipboard               Clipboard
 	Outcome                 OutcomeModule
 	Profiles                ProfilesModule
@@ -142,7 +144,7 @@ func Run(ctx context.Context, session Session) error {
 	fixture := scenarioFixture(session.Scenario)
 	accessCatalog := session.Access.catalog()
 	program := tea.NewProgram(
-		model{width: c.Width, height: c.Height, scenario: session.Scenario, selected: selectedNavigation(session.Scenario), unicode: c.Unicode, noColor: noColor, initialModes: initialModes, drawingModeProbeRequired: c.DrawingModeProbeRequired, inputFocused: fixture.acceptsInput, progressExpected: session.Updates != nil, authenticator: session.Authenticator, authenticationPolicy: session.AuthenticationPolicy, runContext: runContext, accessCatalog: accessCatalog, clipboard: session.Clipboard, outcome: session.Outcome, defaultOutcome: session.Outcome, profiles: session.Profiles, profileOutcomes: session.ProfileOutcomes, profileViewGeneration: 1, cloudflare: session.Cloudflare, cloudflareOutcomes: session.CloudflareOutcomes, cloudflareGeneration: 1, certificates: session.Certificates, certificateOutcomes: session.CertificateOutcomes, certificateGeneration: 1, diagnostics: session.Diagnostics, diagnosticsScreen: diagnosticsScreenState{generation: 1}, lifecycle: session.Lifecycle, lifecycleOutcomes: session.LifecycleOutcomes, lifecycleScreen: lifecycleScreenState{generation: 1}, recovery: session.Recovery, recoveryOutcomes: session.RecoveryOutcomes, recoveryScreen: recoveryScreenState{generation: 1}, completeRemoval: session.CompleteRemoval, completeRemovalOutcomes: session.CompleteRemovalOutcomes, completeRemovalScreen: completeRemovalScreenState{generation: 1, action: 1, forwardOnly: session.Scenario == ForwardOnlyRemoval}},
+		model{width: c.Width, height: c.Height, scenario: session.Scenario, selected: selectedNavigation(session.Scenario), unicode: c.Unicode, noColor: noColor, initialModes: initialModes, drawingModeProbeRequired: c.DrawingModeProbeRequired, inputFocused: fixture.acceptsInput, progressExpected: session.Updates != nil, authenticator: session.Authenticator, authenticationPolicy: session.AuthenticationPolicy, runContext: runContext, accessCatalog: accessCatalog, accessProvider: session.AccessProvider, startupProvider: session.StartupProvider, clipboard: session.Clipboard, outcome: session.Outcome, defaultOutcome: session.Outcome, profiles: session.Profiles, profileOutcomes: session.ProfileOutcomes, profileViewGeneration: 1, cloudflare: session.Cloudflare, cloudflareOutcomes: session.CloudflareOutcomes, cloudflareGeneration: 1, certificates: session.Certificates, certificateOutcomes: session.CertificateOutcomes, certificateGeneration: 1, diagnostics: session.Diagnostics, diagnosticsScreen: diagnosticsScreenState{generation: 1}, lifecycle: session.Lifecycle, lifecycleOutcomes: session.LifecycleOutcomes, lifecycleScreen: lifecycleScreenState{generation: 1}, recovery: session.Recovery, recoveryOutcomes: session.RecoveryOutcomes, recoveryScreen: recoveryScreenState{generation: 1}, completeRemoval: session.CompleteRemoval, completeRemovalOutcomes: session.CompleteRemovalOutcomes, completeRemovalScreen: completeRemovalScreenState{generation: 1, action: 1, forwardOnly: session.Scenario == ForwardOnlyRemoval}},
 		tea.WithContext(runContext),
 		tea.WithInput(session.Input),
 		tea.WithOutput(session.Output),
@@ -258,6 +260,8 @@ type model struct {
 	limitedReason              string
 	runContext                 context.Context
 	accessCatalog              accessCatalog
+	accessProvider             func(context.Context) AccessPresentation
+	startupProvider            func(context.Context) StartupPresentation
 	accessUnlocked             bool
 	accessFocused              bool
 	accessSelection            int
@@ -378,6 +382,8 @@ type pasteGuardExpiredMsg struct{}
 type authenticationFinishedMsg struct {
 	result AuthenticationResult
 }
+type accessLoadedMsg struct{ access AccessPresentation }
+type startupLoadedMsg struct{ startup StartupPresentation }
 type copyFinishedMsg struct {
 	name   string
 	result CopyResult
@@ -630,6 +636,12 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
 			m.limitedMode = false
 			m.accessUnlocked = len(m.accessCatalog.all) != 0
+			if m.startupProvider != nil {
+				return m, func() tea.Msg { return startupLoadedMsg{startup: m.startupProvider(m.runContext)} }
+			}
+			if m.accessProvider != nil {
+				return m, func() tea.Msg { return accessLoadedMsg{access: m.accessProvider(m.runContext)} }
+			}
 			if m.outcome != nil {
 				return m, m.inspectChangeCommand()
 			}
@@ -638,6 +650,25 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.scenario, m.selected = LimitedDashboard, selectedNavigation(LimitedDashboard)
 		m.limitedMode, m.limitedSelection = true, 0
 		m.limitedReason = authenticationExplanation(message.result)
+	case accessLoadedMsg:
+		m.accessCatalog = message.access.catalog()
+		m.accessUnlocked = len(m.accessCatalog.all) != 0
+	case startupLoadedMsg:
+		switch message.startup.Status {
+		case InstallationManaged:
+			m.accessCatalog = message.startup.Access.catalog()
+			m.accessUnlocked = len(m.accessCatalog.all) != 0
+		case InstallationRecoveryRequired:
+			view, valid := validatedRecovery(message.startup.Recovery)
+			m.recoveryScreen.view, m.recoveryScreen.available = view, valid
+			if valid {
+				m.scenario, m.selected = recoveryScenario(view.Kind), selectedNavigation(recoveryScenario(view.Kind))
+			} else {
+				m.scenario, m.selected = RecoveryWithoutRecovery, selectedNavigation(RecoveryWithoutRecovery)
+			}
+		default:
+			m.scenario, m.selected = RecoveryWithoutRecovery, selectedNavigation(RecoveryWithoutRecovery)
+		}
 	case copyFinishedMsg:
 		switch message.result {
 		case CopyConfirmed:

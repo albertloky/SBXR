@@ -18,6 +18,35 @@ import (
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
 
+func TestNativeFirewallRequiresExactCandidateExposureSet(t *testing.T) {
+	candidate := "table inet sbxr {\n chain input {\n  ip daddr 192.0.2.10 tcp dport { 443, 2222 } accept\n  ip daddr 192.0.2.10 udp dport 8443 accept\n }\n}"
+	active := []byte(candidate)
+	firewall := newNativeFirewall(func(context.Context, []byte, string, ...string) ([]byte, error) { return active, nil })
+	step, err := systemchanges.NewFirewallPolicyStep(candidate, 2222)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, err := firewall.CheckCandidate(step, time.Second); err != nil || status != systemchanges.Healthy {
+		t.Fatalf("candidate health = %s, %v", status, err)
+	}
+	active = []byte(strings.Replace(candidate, "443, ", "", 1))
+	if status, err := firewall.CheckCandidate(step, time.Second); err != nil || status != systemchanges.Failed {
+		t.Fatalf("missing exposure health = %s, %v", status, err)
+	}
+	active = []byte(strings.Replace(candidate, "443, 2222", "443, 2222, 9443", 1))
+	if status, err := firewall.CheckCandidate(step, time.Second); err != nil || status != systemchanges.Failed {
+		t.Fatalf("extra exposure health = %s, %v", status, err)
+	}
+	active = []byte(strings.Replace(candidate, "chain input", "chain output", 1))
+	if status, err := firewall.CheckCandidate(step, time.Second); err != nil || status != systemchanges.Failed {
+		t.Fatalf("wrong chain health = %s, %v", status, err)
+	}
+	active = []byte(strings.Replace(candidate, "ip daddr", "drop\n  ip daddr", 1))
+	if status, err := firewall.CheckCandidate(step, time.Second); err != nil || status != systemchanges.Failed {
+		t.Fatalf("preceding drop health = %s, %v", status, err)
+	}
+}
+
 func TestNativeFirewallUsesWatchdogAndExactHTTP01Handle(t *testing.T) {
 	t.Setenv("SSH_CONNECTION", "198.51.100.2 50000 192.0.2.10 2222")
 	var commands []string

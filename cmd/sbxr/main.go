@@ -41,6 +41,12 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) == 3 && os.Args[1] == "private" && os.Args[2] == "client-access" {
+		if servePrivateClientAccess(context.Background()) != nil {
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) == 3 && os.Args[1] == "private" && os.Args[2] == "recover" {
 		if runInstallRecovery(recoveryCertbotPath) != nil {
 			os.Exit(1)
@@ -62,5 +68,17 @@ func main() {
 
 func runOwnerConsole(ctx context.Context, input, output *os.File, environment []string) error {
 	capabilities := ownerconsole.DetectTerminal(input, output, environment)
+	if installedClientAccessMarker() {
+		managed := &clientAccessOutcome{}
+		return ownerconsole.Run(ctx, ownerconsole.Session{Input: input, Output: output, Environment: environment, Capabilities: &capabilities, Authenticator: systemAuthenticator{}, AuthenticationPolicy: ownerconsole.AuthenticateForAccess, Profiles: managed, ProfileOutcomes: managed, StartupProvider: managed.Startup, Recovery: managed})
+	}
 	return ownerconsole.Run(ctx, ownerconsole.Session{Input: input, Output: output, Environment: environment, Capabilities: &capabilities, Authenticator: systemAuthenticator{}, AuthenticationPolicy: ownerconsole.DeferAuthenticationUntilApply, Outcome: newInstallOutcome()})
+}
+
+func installedClientAccessMarker() bool {
+	executable, err := openCurrentClientAccessExecutable()
+	if err != nil {
+		return false
+	}
+	return executable.Close() == nil
 }

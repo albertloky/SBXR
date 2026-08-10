@@ -14,6 +14,7 @@ import (
 	profilesubuntu "github.com/albertloky/SBXR/internal/connectionprofiles/adapter/ubuntu"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 	softwareubuntu "github.com/albertloky/SBXR/internal/softwarelifecycle/adapter/ubuntu"
+	"github.com/albertloky/SBXR/internal/state"
 	statefilesystem "github.com/albertloky/SBXR/internal/state/adapter/filesystem"
 	subscriptionfilesystem "github.com/albertloky/SBXR/internal/subscriptionpublication/adapter/filesystem"
 	"github.com/albertloky/SBXR/internal/systemchanges"
@@ -57,14 +58,37 @@ func runInstallRecovery(certbot string) error {
 	if err != nil {
 		return err
 	}
-	subscriptionExecutor, err := subscriptionfilesystem.NewForFreshInstallation(func(ctx context.Context, address string) error {
-		return proveInstalledSubscription(ctx, address, 10443)
-	})
+	port := uint16(10443)
+	if observed, release, loadErr := managedLoadEvidence(); loadErr == nil {
+		loaded, stateErr := statefilesystem.New().Load(state.LoadRequest{Baseline: state.ManagedEvidence, SupportedRelease: release, Lineage: &state.LineageProof{Revision: observed.StateRevision, LastCompletedChangeSet: state.ChangeSetIdentity(observed.LastChangeSet), ReleaseIdentity: release}})
+		if stateErr == nil && loaded.Snapshot != nil {
+			port = loaded.Snapshot.DesiredState.Subscription.ListenPort
+		}
+	}
+	servingProof := func(ctx context.Context, address string) error {
+		return proveInstalledSubscription(ctx, address, port)
+	}
+	starting, startingErr := systemubuntu.RecoveryStartingStatus("/")
+	if startingErr != nil {
+		return startingErr
+	}
+	managed := starting == systemchanges.Managed
+	var subscriptionExecutor subscriptionfilesystem.Executor
+	if managed {
+		subscriptionExecutor, err = subscriptionfilesystem.New(servingProof)
+	} else {
+		subscriptionExecutor, err = subscriptionfilesystem.NewForFreshInstallation(servingProof)
+	}
 	if err != nil {
 		return err
 	}
 	stateModule := statefilesystem.New()
-	host, err := systemubuntu.NewFreshInstallHost("/", softwarelifecycle.ManagedUnitNames())
+	var host systemubuntu.InstallHost
+	if managed {
+		host, err = systemubuntu.NewInstallHost("/", softwarelifecycle.ManagedUnitNames())
+	} else {
+		host, err = systemubuntu.NewFreshInstallHost("/", softwarelifecycle.ManagedUnitNames())
+	}
 	if err != nil {
 		return err
 	}
@@ -106,4 +130,19 @@ func installRecoveryObservation() (systemchanges.Observation, error) {
 	result.Status, result.StateRevision = systemchanges.Managed, document.Revision
 	result.StateSHA256, result.LastChangeSet = document.Checksum, document.LastCompletedChangeSet
 	return result, nil
+}
+
+func managedLoadEvidence() (systemchanges.Observation, state.ReleaseIdentity, error) {
+	observed, err := installRecoveryObservation()
+	if err != nil || observed.Status != systemchanges.Managed {
+		return systemchanges.Observation{}, state.ReleaseIdentity{}, errors.New("Managed State lineage is unavailable")
+	}
+	body, err := os.ReadFile(statefilesystem.StatePath)
+	var envelope struct {
+		ReleaseIdentity state.ReleaseIdentity `json:"release_identity"`
+	}
+	if err != nil || json.Unmarshal(body, &envelope) != nil || envelope.ReleaseIdentity.Repository == "" || envelope.ReleaseIdentity.Tag == "" || envelope.ReleaseIdentity.Commit == "" || envelope.ReleaseIdentity.ReleaseIndexSHA256 == "" {
+		return systemchanges.Observation{}, state.ReleaseIdentity{}, errors.New("Managed Release Identity is unavailable")
+	}
+	return observed, envelope.ReleaseIdentity, nil
 }

@@ -91,6 +91,15 @@ type RegistryRotation struct {
 	used     atomic.Bool
 }
 
+type RegistryMutationAction string
+
+const (
+	EnableProfile                RegistryMutationAction = "Enable profile"
+	DisableProfile               RegistryMutationAction = "Disable profile"
+	RotateProfileCredential      RegistryMutationAction = "Rotate profile credential"
+	RotateEveryProfileCredential RegistryMutationAction = "Rotate every profile credential"
+)
+
 type FreshRegistryInputs struct {
 	profiles state.ConnectionProfiles
 	source   PublicationSource
@@ -217,6 +226,179 @@ func RotateRegistryCredentials(profiles state.ConnectionProfiles, source Publica
 		return nil, err
 	}
 	return &RegistryRotation{profiles: profiles, source: candidateSource, secrets: secrets}, nil
+}
+
+// PublicationSourceFor rebuilds the fixed publication handoff from one exact
+// Desired State candidate without reading any protected value.
+func PublicationSourceFor(address string, profiles state.ConnectionProfiles) (PublicationSource, error) {
+	parsed, err := netip.ParseAddr(address)
+	if err != nil || !parsed.IsGlobalUnicast() {
+		return PublicationSource{}, errors.New("Connection Profile publication address is invalid")
+	}
+	all := []struct {
+		enabled bool
+		profile PublicationProfile
+	}{
+		{profiles.VLESSRealityVision.Enabled, PublicationProfile{ID: VLESSRealityVisionProfileID, Name: registryDefinitions[0].name, Address: address, Port: profiles.VLESSRealityVision.Port, ServerName: profiles.VLESSRealityVision.ServerName, Transport: "RAW", Security: "REALITY", UUID: profiles.VLESSRealityVision.UUID, ShortID: profiles.VLESSRealityVision.ShortID, PublicKey: profiles.VLESSRealityVision.PublicKey, Fingerprint: profiles.VLESSRealityVision.Fingerprint, Flow: "xtls-rprx-vision"}},
+		{profiles.VLESSXHTTP.Enabled, PublicationProfile{ID: VLESSXHTTPProfileID, Name: registryDefinitions[1].name, Address: profiles.VLESSXHTTP.Hostname, Port: 443, Hostname: profiles.VLESSXHTTP.Hostname, Transport: "XHTTP", Security: "TLS", UUID: profiles.VLESSXHTTP.UUID, Path: profiles.VLESSXHTTP.Path, XHTTPServerMode: profiles.VLESSXHTTP.Mode}},
+		{profiles.VLESSWebSocket.Enabled, PublicationProfile{ID: VLESSWebSocketProfileID, Name: registryDefinitions[2].name, Address: profiles.VLESSWebSocket.Hostname, Port: 443, Hostname: profiles.VLESSWebSocket.Hostname, Transport: "WebSocket", Security: "TLS", UUID: profiles.VLESSWebSocket.UUID, Path: profiles.VLESSWebSocket.Path, HTTPHost: profiles.VLESSWebSocket.Hostname, TLSName: profiles.VLESSWebSocket.Hostname}},
+		{profiles.Hysteria2.Enabled, PublicationProfile{ID: Hysteria2ProfileID, Name: registryDefinitions[3].name, Address: address, Port: profiles.Hysteria2.Port, ServerName: profiles.Hysteria2.ServerName, Transport: "QUIC", Security: "TLS", Password: profiles.Hysteria2.Password, Obfuscation: profiles.Hysteria2.Obfuscation, ObfuscationSecret: profiles.Hysteria2.ObfuscationSecret}},
+		{profiles.TUIC.Enabled, PublicationProfile{ID: TUICProfileID, Name: registryDefinitions[4].name, Address: address, Port: profiles.TUIC.Port, ServerName: profiles.TUIC.ServerName, Transport: "QUIC", Security: "TLS", UUID: profiles.TUIC.UUID, Password: profiles.TUIC.Password, CongestionControl: profiles.TUIC.CongestionControl}},
+		{profiles.AnyTLS.Enabled, PublicationProfile{ID: AnyTLSProfileID, Name: registryDefinitions[5].name, Address: address, Port: profiles.AnyTLS.Port, ServerName: profiles.AnyTLS.ServerName, Transport: "TCP", Security: "TLS", Password: profiles.AnyTLS.Password}},
+	}
+	var source PublicationSource
+	for _, item := range all {
+		if item.enabled {
+			source.profiles = append(source.profiles, item.profile)
+		} else {
+			source.omissions = append(source.omissions, PublicationOmission{ID: item.profile.ID})
+		}
+	}
+	if !PublicationInputsMatch(source, profiles) {
+		return PublicationSource{}, errors.New("Connection Profile publication source does not match Desired State")
+	}
+	return source, nil
+}
+
+// PrepareRegistryMutation admits exactly one reviewed profile lifecycle action
+// and returns one redacted, one-use render authority for generated credentials.
+func PrepareRegistryMutation(action RegistryMutationAction, profile ProfileID, address string, profiles state.ConnectionProfiles, source PublicationSource) (*RegistryRotation, error) {
+	if !PublicationInputsMatch(source, profiles) {
+		return nil, errors.New("Connection Profile publication source does not match current settings")
+	}
+	if action == RotateEveryProfileCredential {
+		if profile != "" {
+			return nil, errors.New("all-profile rotation cannot select one profile")
+		}
+		return RotateRegistryCredentials(profiles, source)
+	}
+	if !knownProfile(profile) {
+		return nil, errors.New("Connection Profile selection is invalid")
+	}
+	secrets := registryCredentialReader{}
+	protect := func(value string) state.ClientAccessValue {
+		protected := state.NewClientAccessValue(value)
+		secrets[protected] = value
+		return protected
+	}
+	switch action {
+	case EnableProfile, DisableProfile:
+		enabled := profileEnabled(profiles, profile)
+		if enabled != (action == DisableProfile) {
+			return nil, errors.New("Connection Profile enablement is unchanged")
+		}
+		setProfileEnabled(&profiles, profile, action == EnableProfile)
+	case RotateProfileCredential:
+		if err := rotateOneProfile(&profiles, profile, protect); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, errors.New("Connection Profile mutation is invalid")
+	}
+	candidateSource, err := PublicationSourceFor(address, profiles)
+	if err != nil {
+		return nil, err
+	}
+	return &RegistryRotation{profiles: profiles, source: candidateSource, secrets: secrets}, nil
+}
+
+func knownProfile(profile ProfileID) bool {
+	for _, definition := range registryDefinitions {
+		if definition.id == profile {
+			return true
+		}
+	}
+	return false
+}
+
+func profileEnabled(profiles state.ConnectionProfiles, profile ProfileID) bool {
+	switch profile {
+	case VLESSRealityVisionProfileID:
+		return profiles.VLESSRealityVision.Enabled
+	case VLESSXHTTPProfileID:
+		return profiles.VLESSXHTTP.Enabled
+	case VLESSWebSocketProfileID:
+		return profiles.VLESSWebSocket.Enabled
+	case Hysteria2ProfileID:
+		return profiles.Hysteria2.Enabled
+	case TUICProfileID:
+		return profiles.TUIC.Enabled
+	case AnyTLSProfileID:
+		return profiles.AnyTLS.Enabled
+	default:
+		return false
+	}
+}
+
+func setProfileEnabled(profiles *state.ConnectionProfiles, profile ProfileID, enabled bool) {
+	switch profile {
+	case VLESSRealityVisionProfileID:
+		profiles.VLESSRealityVision.Enabled = enabled
+	case VLESSXHTTPProfileID:
+		profiles.VLESSXHTTP.Enabled = enabled
+	case VLESSWebSocketProfileID:
+		profiles.VLESSWebSocket.Enabled = enabled
+	case Hysteria2ProfileID:
+		profiles.Hysteria2.Enabled = enabled
+	case TUICProfileID:
+		profiles.TUIC.Enabled = enabled
+	case AnyTLSProfileID:
+		profiles.AnyTLS.Enabled = enabled
+	}
+}
+
+func rotateOneProfile(profiles *state.ConnectionProfiles, profile ProfileID, protect func(string) state.ClientAccessValue) error {
+	switch profile {
+	case VLESSRealityVisionProfileID:
+		credentials, err := GenerateRealityCredentials()
+		if err != nil {
+			return err
+		}
+		profiles.VLESSRealityVision.UUID = protect(credentials.uuid.value)
+		profiles.VLESSRealityVision.PrivateKey = state.NewInfrastructureSecret(credentials.privateKey.value)
+		profiles.VLESSRealityVision.PublicKey = credentials.publicKey.value
+		profiles.VLESSRealityVision.ShortID = protect(credentials.shortID.value)
+	case VLESSXHTTPProfileID:
+		credentials, err := GenerateXHTTPCredentials()
+		if err != nil {
+			return err
+		}
+		profiles.VLESSXHTTP.UUID, profiles.VLESSXHTTP.Path = protect(credentials.uuid.value), protect(credentials.path.value)
+	case VLESSWebSocketProfileID:
+		credentials, err := GenerateWebSocketCredentials()
+		if err != nil {
+			return err
+		}
+		profiles.VLESSWebSocket.UUID, profiles.VLESSWebSocket.Path = protect(credentials.uuid.value), protect(credentials.path.value)
+	case Hysteria2ProfileID:
+		credentials, err := GenerateHysteria2Credentials()
+		if err != nil {
+			return err
+		}
+		profiles.Hysteria2.Password = protect(credentials.password.value)
+		if profiles.Hysteria2.Obfuscation {
+			secret, err := generateHexSecret()
+			if err != nil {
+				return err
+			}
+			profiles.Hysteria2.ObfuscationSecret = protect(secret)
+		}
+	case TUICProfileID:
+		credentials, err := GenerateTUICCredentials()
+		if err != nil {
+			return err
+		}
+		profiles.TUIC.UUID, profiles.TUIC.Password = protect(credentials.uuid.value), protect(credentials.password.value)
+	case AnyTLSProfileID:
+		credentials, err := GenerateAnyTLSCredentials()
+		if err != nil {
+			return err
+		}
+		profiles.AnyTLS.Password = protect(credentials.password.value)
+	default:
+		return errors.New("Connection Profile selection is invalid")
+	}
+	return nil
 }
 
 type registryCredentialReader map[state.ClientAccessValue]string
@@ -747,6 +929,32 @@ func (module Interface) PlanRegistry(ctx context.Context, request RegistryPlanRe
 		return PlanResult{Health: registryPlanFailure(failure, "native validation, protected binding, or the reversible transaction failed")}
 	}
 	return PlanResult{Plan: plan, Health: Health{Module: "Connection Profiles", Profile: "Registry", Outcome: Healthy, Code: "CONNECTION-PROFILES-REGISTRY-PLAN-READY", NextActions: []string{"Review Plan", "Back"}}}
+}
+
+// PlanUnchangedRegistry revalidates and reproduces the current complete native
+// core configuration for a Subscription-only Change Set. It contributes no
+// Connection Profiles mutation step.
+func (module Interface) PlanUnchangedRegistry(ctx context.Context, current RegistryViewRequest, changeSet, stateSHA256 string) PlanResult {
+	view := module.ViewRegistry(ctx, current)
+	if view.Health.Outcome != Healthy || !planName.MatchString(changeSet) || !sha256Text.MatchString(stateSHA256) {
+		return PlanResult{Health: registryPlanFailure("UNCHANGED", "the current Managed registry is not freshly proved")}
+	}
+	xray, singBox, hysteria2 := registryConfigurations(current)
+	if len(xray) == 0 || len(singBox) == 0 {
+		return PlanResult{Health: registryPlanFailure("UNCHANGED", "the current complete core configuration is unavailable")}
+	}
+	plan, failure := module.buildSingBoxPlan(ctx, singBoxPlanSpec{
+		profile: "REGISTRY", description: "reproduce the unchanged complete six-profile registry for Subscription-only publication",
+		xrayVersion: current.Reality.XrayVersion, singBoxVersion: current.AnyTLS.SingBoxVersion, revision: current.Reality.Revision,
+		changeSet: changeSet, startingState: stateSHA256, desiredState: stateSHA256, xray: xray, singBox: singBox, volatileInputs: view.VolatileSHA256,
+		binding: registryComparable(current), reality: current.Reality, xhttp: &current.XHTTP, websocket: &current.WebSocket,
+		hysteria2: &hysteria2, tuic: &current.TUIC, anyTLS: &current.AnyTLS,
+	})
+	if failure != "" {
+		return PlanResult{Health: registryPlanFailure("UNCHANGED", "native validation or protected binding failed")}
+	}
+	plan.steps, plan.checks = nil, nil
+	return PlanResult{Plan: plan, Health: Health{Module: "Connection Profiles", Profile: "Registry", Outcome: Healthy, Code: "CONNECTION-PROFILES-REGISTRY-UNCHANGED-READY", NextActions: []string{"Review Plan", "Back"}}}
 }
 
 func registryCorrectionExplains(result RegistryViewResult, purpose string) bool {

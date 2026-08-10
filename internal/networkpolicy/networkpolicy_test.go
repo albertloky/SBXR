@@ -1200,6 +1200,34 @@ func managedBaseline() (networkpolicy.Intent, networkpolicy.Observations) {
 	return intent, observed
 }
 
+func TestPrepareProfileEnablementProducesOneReviewedCandidatePolicy(t *testing.T) {
+	currentIntent, observed := managedBaseline()
+	current := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: currentIntent, Stage: networkpolicy.PostApproval})
+	if current.Outcome != networkpolicy.Healthy {
+		t.Fatalf("current Managed policy = %+v", current.Findings)
+	}
+	candidate := currentIntent
+	candidate.Profiles.AnyTLS.Enabled = false
+	contribution, nftables, err := networkpolicy.PrepareProfileEnablement(current, currentIntent, candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, present, valid := contribution.ConnectionProfilesAnyTLSExposure()
+	if !valid || present || strings.Contains(nftables, "tcp dport 9443 accept") {
+		t.Fatalf("disabled AnyTLS exposure = present %t valid %t\n%s", present, valid, nftables)
+	}
+
+	candidate.Profiles.TUIC.Enabled = false
+	if _, _, err := networkpolicy.PrepareProfileEnablement(current, currentIntent, candidate); err == nil {
+		t.Fatal("two simultaneous profile toggles were accepted")
+	}
+	candidate = currentIntent
+	candidate.Profiles.AnyTLS.Port++
+	if _, _, err := networkpolicy.PrepareProfileEnablement(current, currentIntent, candidate); err == nil {
+		t.Fatal("profile enablement also changed a port")
+	}
+}
+
 func cloudflareRoutes() []networkpolicy.CloudflareRoute {
 	return []networkpolicy.CloudflareRoute{
 		{Profile: "VLESS XHTTP", OriginAddress: "127.0.0.1", OriginPort: 11080, Protocol: networkpolicy.TCP, Connected: true},

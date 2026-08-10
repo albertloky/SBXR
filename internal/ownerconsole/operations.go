@@ -28,6 +28,14 @@ func (status InstallationStatus) String() string {
 	return names[status]
 }
 
+// StartupPresentation is the secret-free, authenticated classification used
+// when protected State cannot be read by the public Owner Console process.
+type StartupPresentation struct {
+	Status   InstallationStatus
+	Access   AccessPresentation
+	Recovery RecoveryPresentation
+}
+
 type ModuleHealth uint8
 
 const (

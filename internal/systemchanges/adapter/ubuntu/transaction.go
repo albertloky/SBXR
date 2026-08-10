@@ -1214,6 +1214,35 @@ func validRecoveryBinding(prepared journalEntry, manifest snapshotManifest, forw
 	return prepared.Starting.Status == systemchanges.NotInstalled && binding.StartingRevision == 0 && binding.StartingSHA256 == "" && binding.StartingRelease == (systemchanges.ReleaseBinding{}) && manifest.Files["snapshot/prior-state.json"] == ""
 }
 
+// RecoveryStartingStatus reads the protected journal and manifest without
+// mutating them so startup can construct executors for the transaction's true
+// starting baseline rather than whichever State file is currently published.
+func RecoveryStartingStatus(rootPath string) (systemchanges.InstallationStatus, error) {
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
+	entries, err := fs.ReadDir(root.FS(), transactionDirectory)
+	if err != nil || len(entries) != 1 || !entries[0].IsDir() || !safeName(entries[0].Name()) {
+		return "", errors.New("one unfinished transaction was not proven")
+	}
+	directory := path.Join(transactionDirectory, entries[0].Name())
+	uid := os.Geteuid()
+	if verifyDirectory(root, directory, uid) != nil || verifyFile(root, path.Join(directory, "journal.jsonl"), uid) != nil {
+		return "", errors.New("recovery transaction identity is invalid")
+	}
+	journal, err := readJournal(root, path.Join(directory, "journal.jsonl"))
+	manifest, manifestErr := verifyTransactionManifest(root, directory, uid)
+	if err != nil || manifestErr != nil || !validJournal(journal) || len(journal) == 0 || journal[0].State == nil || manifest.Reason != journal[0].Mutation || !validRecoveryBinding(journal[0], manifest, journal[0].Mutation == systemchanges.RotationMutation && runTokenFingerprint(journal) != "") {
+		return "", errors.New("recovery transaction lineage is invalid")
+	}
+	if journal[0].Starting.Status != systemchanges.Managed && journal[0].Starting.Status != systemchanges.NotInstalled {
+		return "", errors.New("recovery starting baseline is unsupported")
+	}
+	return journal[0].Starting.Status, nil
+}
+
 func validRecoveryJournalBinding(prepared journalEntry) bool {
 	if prepared.State == nil || prepared.Mutation == "" {
 		return false
@@ -1273,6 +1302,22 @@ func (a Adapter) Check(lease systemchanges.ExecutionLease, check systemchanges.C
 		}
 		return a.subscription.Check(a.root, check.Code, binding, planSHA256, timeout)
 	}
+	if check.Owner == systemchanges.NetworkPolicyModule && (check.Code == "NETWORK-CLIENT-ACCESS-CANDIDATE" || check.Code == "NETWORK-CLIENT-ACCESS-ACTIVE") {
+		if a.firewall == nil {
+			return systemchanges.Unknown, errors.New("Network Policy health executor unavailable")
+		}
+		checker, ok := a.firewall.(interface {
+			CheckCandidate(systemchanges.Step, time.Duration) (systemchanges.HealthStatus, error)
+		})
+		if !ok {
+			return systemchanges.Unknown, errors.New("Network Policy candidate health unavailable")
+		}
+		step, err := a.activeFirewallPolicyStep()
+		if err != nil {
+			return systemchanges.Unknown, err
+		}
+		return checker.CheckCandidate(step, timeout)
+	}
 	if check.Owner == systemchanges.ConnectionProfilesModule && strings.HasPrefix(check.Code, "CONNECTION-PROFILES-") && strings.HasSuffix(check.Code, "-DIRECT-TLS") {
 		if a.profiles == nil {
 			return systemchanges.Unknown, errors.New("Connection Profiles health executor unavailable")
@@ -1288,6 +1333,28 @@ func (a Adapter) Check(lease systemchanges.ExecutionLease, check systemchanges.C
 		return systemchanges.Healthy, nil
 	}
 	return a.host.Check(check, phase, timeout)
+}
+
+func (a Adapter) activeFirewallPolicyStep() (systemchanges.Step, error) {
+	root, err := os.OpenRoot(a.root)
+	if err != nil {
+		return systemchanges.Step{}, err
+	}
+	defer root.Close()
+	entries, err := fs.ReadDir(root.FS(), transactionDirectory)
+	if err != nil || len(entries) != 1 || !entries[0].IsDir() {
+		return systemchanges.Step{}, errors.New("active firewall transaction unavailable")
+	}
+	journal, err := readJournal(root, path.Join(transactionDirectory, entries[0].Name(), "journal.jsonl"))
+	if err != nil || !validJournal(journal) {
+		return systemchanges.Step{}, errors.New("active firewall journal unavailable")
+	}
+	for _, persisted := range journal[0].Steps {
+		if persisted.Firewall != nil && persisted.Firewall.Action == systemchanges.FirewallPolicyAction {
+			return systemchanges.NewFirewallPolicyStep(persisted.Firewall.Candidate, persisted.Firewall.SSHPort)
+		}
+	}
+	return systemchanges.Step{}, errors.New("active firewall candidate unavailable")
 }
 
 func softwareLifecycleCheck(check systemchanges.Check) bool {

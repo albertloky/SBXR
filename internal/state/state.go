@@ -108,6 +108,37 @@ type Result struct {
 	loaded           *loadedState
 }
 
+// WithManagedConnectionProfileSecrets gives the owning Connection Profiles
+// composition one short-lived reader for an exact fresh Managed Load. The
+// reader returns no value after the callback completes.
+func (i Interface) WithManagedConnectionProfileSecrets(result Result, use func(Snapshot, ConnectionProfileSecretReader) error) error {
+	if i.implementation == nil || result.loaded == nil || result.loaded.owner != i.implementation || result.Status != Managed || result.Snapshot == nil || use == nil || !result.loaded.profileSecretsUsed.CompareAndSwap(false, true) {
+		return finding("STATE-CLIENT-ACCESS-LEASE", "Managed Client Access values", "the exact fresh Managed State authority is unavailable", "one fresh Managed Load and one immediate owning-Module callback", "protected values cannot be leased from caller-made or reused State", "reload current State and review again")
+	}
+	lease := newSecretReaderLease()
+	defer lease.revoke()
+	snapshot := *result.Snapshot
+	return use(snapshot, &connectionProfileSecretReader{lease: lease})
+}
+
+func (i Interface) WithManagedSubscriptionSecrets(result Result, use func(Snapshot, ClientAccessReader) error) error {
+	if i.implementation == nil || result.loaded == nil || result.loaded.owner != i.implementation || result.Status != Managed || result.Snapshot == nil || use == nil || !result.loaded.subscriptionSecretsUsed.CompareAndSwap(false, true) {
+		return finding("STATE-SUBSCRIPTION-LEASE", "Managed Subscription Publication values", "the exact fresh Managed State authority is unavailable", "one fresh Managed Load and one immediate Subscription Publication callback", "protected values cannot be leased from caller-made or reused State", "reload current State and review again")
+	}
+	lease := newSecretReaderLease()
+	defer lease.revoke()
+	return use(*result.Snapshot, &clientAccessReader{lease: lease})
+}
+
+func (i Interface) WithManagedCloudflareSecrets(result Result, use func(Snapshot, InfrastructureSecretReader) error) error {
+	if i.implementation == nil || result.loaded == nil || result.loaded.owner != i.implementation || result.Status != Managed || result.Snapshot == nil || use == nil || !result.loaded.cloudflareSecretsUsed.CompareAndSwap(false, true) {
+		return finding("STATE-CLOUDFLARE-LEASE", "Managed Cloudflare authority", "the exact fresh Managed State authority is unavailable", "one fresh Managed Load and one immediate Cloudflare Tunnel callback", "Infrastructure Secrets cannot be leased from caller-made or reused State", "reload current State and review again")
+	}
+	lease := newSecretReaderLease()
+	defer lease.revoke()
+	return use(*result.Snapshot, &infrastructureSecretReader{lease: lease})
+}
+
 // ManagementTokenInventory is State's secret-free proof of the current
 // behaviors that depend on Cloudflare management authority.
 type ManagementTokenInventory struct {
@@ -162,14 +193,15 @@ func (result Result) String() string {
 func (result Result) GoString() string { return result.String() }
 
 type loadedState struct {
-	owner           *implementation
-	status          InstallationStatus
-	revision        uint64
-	payloadChecksum string
-	bytes           []byte
-	present         bool
-	migration       MigrationReview
-	used            atomic.Bool
+	owner                                                              *implementation
+	status                                                             InstallationStatus
+	revision                                                           uint64
+	payloadChecksum                                                    string
+	bytes                                                              []byte
+	present                                                            bool
+	migration                                                          MigrationReview
+	used                                                               atomic.Bool
+	profileSecretsUsed, subscriptionSecretsUsed, cloudflareSecretsUsed atomic.Bool
 }
 
 // Finding is a typed, secret-safe refusal suitable for a Correction Flow.

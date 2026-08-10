@@ -182,6 +182,34 @@ func (firewall *NativeFirewall) Inspect(step systemchanges.Step, _ io.Reader, ti
 	return systemchanges.StepEffectAbsent, nil
 }
 
+func (firewall *NativeFirewall) CheckCandidate(step systemchanges.Step, timeout time.Duration) (systemchanges.HealthStatus, error) {
+	change, ok := step.FirewallChange()
+	if firewall == nil || firewall.run == nil || !ok || change.Action != systemchanges.FirewallPolicyAction || timeout <= 0 {
+		return systemchanges.Unknown, errors.New("native firewall candidate check unavailable")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	active, err := firewall.run(ctx, nil, "nft", "list", "table", "inet", "sbxr")
+	want, wantErr := canonicalNftPolicy([]byte(change.Candidate))
+	got, gotErr := canonicalNftPolicy(active)
+	if err != nil || wantErr != nil || gotErr != nil {
+		return systemchanges.Unknown, errors.New("inet sbxr candidate agreement unavailable")
+	}
+	if got != want {
+		return systemchanges.Failed, nil
+	}
+	return systemchanges.Healthy, nil
+}
+
+func canonicalNftPolicy(policy []byte) (string, error) {
+	text := strings.NewReplacer("{", " { ", "}", " } ", ";", " ; ", ",", " , ").Replace(string(policy))
+	fields := strings.Fields(text)
+	if len(fields) < 5 || fields[0] != "table" || fields[1] != "inet" || fields[2] != "sbxr" || fields[3] != "{" || fields[len(fields)-1] != "}" {
+		return "", errors.New("inet sbxr policy is malformed")
+	}
+	return strings.Join(fields, " "), nil
+}
+
 func (firewall *NativeFirewall) tablePresent(ctx context.Context) (bool, error) {
 	data, err := firewall.run(ctx, nil, "nft", "-j", "list", "tables")
 	if err != nil {

@@ -398,7 +398,17 @@ func (api *httpAPI) validWholeTunnelRequest(request WholeTunnelRequest) bool {
 }
 
 func validPublishedRoutes(routes []Route) bool {
-	return len(routes) == 3 && validZoneName(routes[0].Hostname) && routes[0].Service == xhttpOrigin && validZoneName(routes[1].Hostname) && routes[1].Service == webSocketOrigin && routes[0].Hostname != routes[1].Hostname && routes[2] == (Route{Service: "http_status:404"})
+	if len(routes) < 1 || len(routes) > 3 || routes[len(routes)-1] != (Route{Service: "http_status:404"}) {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, route := range routes[:len(routes)-1] {
+		if !validZoneName(route.Hostname) || route.Service != xhttpOrigin && route.Service != webSocketOrigin || seen[route.Service] {
+			return false
+		}
+		seen[route.Service] = true
+	}
+	return true
 }
 
 func safeObservedRoute(route Route) bool {
