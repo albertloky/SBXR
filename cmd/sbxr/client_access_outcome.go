@@ -68,6 +68,14 @@ func (outcome *clientAccessOutcome) ViewCertificates(ctx context.Context) ownerc
 	return outcome.load(ctx).Certificates
 }
 
+func (*clientAccessOutcome) ViewDiagnostics(ctx context.Context) ownerconsole.DiagnosticsPresentation {
+	return loadDiagnosticsPresentation(ctx)
+}
+
+func (*clientAccessOutcome) CreateSupportBundle(ctx context.Context, replacement ownerconsole.BundleReplacement) ownerconsole.SupportBundleResult {
+	return createSupportBundle(ctx, replacement)
+}
+
 func (outcome *clientAccessOutcome) ReviewProfileChange(ctx context.Context, request ownerconsole.ProfileChangeRequest) ownerconsole.ChangeReview {
 	action := map[ownerconsole.ProfileChange]clientAccessAction{ownerconsole.RotateProfileCredential: clientAccessRotateProfile, ownerconsole.EnableProfile: clientAccessEnableProfile, ownerconsole.DisableProfile: clientAccessDisableProfile}[request.Change]
 	if action == "" {

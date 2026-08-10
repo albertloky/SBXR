@@ -13,21 +13,29 @@ import (
 	"github.com/albertloky/SBXR/internal/state"
 )
 
-func managedProviderPresentations(ctx context.Context, snapshot state.Snapshot, secrets state.InfrastructureSecretReader, network networkpolicy.Result) (ownerconsole.CloudflarePresentation, ownerconsole.CertificatesPresentation) {
+type managedProviderPresentation struct {
+	cloudflare        ownerconsole.CloudflarePresentation
+	certificates      ownerconsole.CertificatesPresentation
+	cloudflareHealth  cloudflaretunnel.Outcome
+	certificateHealth certificatelifecycle.Outcome
+}
+
+func managedProviderPresentations(ctx context.Context, snapshot state.Snapshot, secrets state.InfrastructureSecretReader, network networkpolicy.Result) managedProviderPresentation {
 	desired := snapshot.DesiredState
 	viewRequest := cloudflaretunnel.ViewRequest{AccountID: desired.Cloudflare.AccountID, ZoneID: desired.Cloudflare.ZoneID, ZoneName: desired.Cloudflare.ZoneName, TokenRemoved: desired.Cloudflare.ManagementTokenRemoved, NetworkPath: network.CloudflareTunnelPath, CredentialDetail: true}
 	api := cloudflaretunnel.NewProductionAPI()
 	if !viewRequest.TokenRemoved {
 		token, err := cloudflaretunnel.NewManagementToken(secrets.ReadInfrastructureSecret(desired.Cloudflare.ManagementToken))
 		if err != nil {
-			return unavailableCloudflare("stored token is unavailable"), ownerconsole.CertificatesPresentation{}
+			return managedProviderPresentation{cloudflare: unavailableCloudflare("stored token is unavailable"), cloudflareHealth: cloudflaretunnel.Unknown}
 		}
 		viewRequest.Token = token
 	}
 	cloudflareView := cloudflaretunnel.New(api, cloudflaretunnel.SystemClock{}).View(ctx, viewRequest)
 	cloudflarePresentation := ownerCloudflarePresentation(cloudflareView)
+	result := managedProviderPresentation{cloudflare: cloudflarePresentation, cloudflareHealth: cloudflareView.Health.Outcome, certificateHealth: certificatelifecycle.Unknown}
 	if cloudflareView.Health.Outcome != cloudflaretunnel.Healthy || viewRequest.TokenRemoved {
-		return cloudflarePresentation, ownerconsole.CertificatesPresentation{}
+		return result
 	}
 	dns, err := api.ObserveCertificateDNS(ctx, cloudflaretunnel.CertificateDNSRequest{
 		ZoneID: desired.Cloudflare.ZoneID, ZoneName: desired.Cloudflare.ZoneName, Hostname: desired.Cloudflare.DirectHostname,
@@ -35,10 +43,12 @@ func managedProviderPresentations(ctx context.Context, snapshot state.Snapshot, 
 		IPv4RecordID: desired.Cloudflare.DirectIPv4RecordID, IPv6RecordID: desired.Cloudflare.DirectIPv6RecordID, Token: viewRequest.Token,
 	})
 	if err != nil {
-		return cloudflarePresentation, ownerconsole.CertificatesPresentation{}
+		return result
 	}
 	certificateView := certificatelifecycle.New(certificateubuntu.New(), installClock{}).View(ctx, certificateViewRequest(desired, network, dns))
-	return cloudflarePresentation, ownerCertificatesPresentation(certificateView, desired.Certificates.RenewalPolicy)
+	result.certificates = ownerCertificatesPresentation(certificateView, desired.Certificates.RenewalPolicy)
+	result.certificateHealth = certificateView.Health.Outcome
+	return result
 }
 
 func ownerCloudflarePresentation(view cloudflaretunnel.ViewResult) ownerconsole.CloudflarePresentation {

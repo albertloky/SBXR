@@ -20,6 +20,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"os/user"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -68,6 +69,23 @@ func New() (Server, error) {
 		return Server{}, failed("SUBSCRIPTION-SERVING-CERTIFICATE", "system trust roots are unavailable")
 	}
 	return Server{root: "/", uid: 0, gid: os.Getegid(), serviceUID: os.Geteuid(), serviceGID: os.Getegid(), roots: roots, now: time.Now, production: true}, nil
+}
+
+// Inspect validates the fixed production serving state without adopting the service identity.
+func Inspect() HealthResult {
+	group, err := user.LookupGroup("sbxr-subscription")
+	if err != nil {
+		return Result(err)
+	}
+	gid, err := strconv.Atoi(group.Gid)
+	if err != nil {
+		return Result(err)
+	}
+	roots, err := x509.SystemCertPool()
+	if err != nil {
+		return Result(err)
+	}
+	return Server{root: "/", uid: 0, gid: gid, roots: roots, now: time.Now, production: true}.Health()
 }
 
 // NewAt supplies the published-storage and certificate boundaries used by Seam Verification.

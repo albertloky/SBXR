@@ -45,6 +45,9 @@ func TestInstallerActivatesAndRollsBackOnlyTheReviewedRelease(t *testing.T) {
 	if status, checkErr := installer.Check(root, systemchanges.Check{Owner: systemchanges.SoftwareModule, Code: "SOFTWARE-LIFECYCLE-INSTALL-AGREEMENT"}, systemchanges.PostPublication, time.Minute); checkErr != nil || status != systemchanges.Healthy {
 		t.Fatalf("Check() = (%s, %v)", status, checkErr)
 	}
+	if status := inspectRelease(root, installer.staged.Identity, uint32(os.Geteuid())); status != systemchanges.Healthy {
+		t.Fatalf("InspectRelease() = %s", status)
+	}
 	releaseDirectory := filepath.Join(root, strings.TrimPrefix(path.Dir(installer.staged.InstallPath), "/"))
 	xray := filepath.Join(releaseDirectory, "xray")
 	xrayUnit, _ := os.ReadFile(filepath.Join(root, "etc/systemd/system/xray.service"))
@@ -55,6 +58,9 @@ func TestInstallerActivatesAndRollsBackOnlyTheReviewedRelease(t *testing.T) {
 	original, _ := os.ReadFile(unit)
 	if err := os.WriteFile(unit, []byte("changed"), 0o644); err != nil {
 		t.Fatal(err)
+	}
+	if status := inspectRelease(root, installer.staged.Identity, uint32(os.Geteuid())); status != systemchanges.Failed {
+		t.Fatalf("InspectRelease() after drift = %s", status)
 	}
 	if _, err := installer.Reverse(root, step, bytes.NewReader(rollback), time.Minute); err == nil {
 		t.Fatal("changed installed unit was deleted")

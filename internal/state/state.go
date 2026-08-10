@@ -108,6 +108,29 @@ type Result struct {
 	loaded           *loadedState
 }
 
+// HealthReleaseInspection is the non-secret Release Identity already proven by
+// one exact fresh Managed Load. Its proof bit cannot be caller-authored.
+type HealthReleaseInspection struct {
+	identity ReleaseIdentity
+	verified bool
+}
+
+func (inspection HealthReleaseInspection) HealthReleaseIdentityFacts() (string, string, string, string, bool) {
+	identity := inspection.identity
+	return identity.Repository, identity.Tag, identity.Commit, identity.ReleaseIndexSHA256, inspection.verified
+}
+
+func (i Interface) HealthReleaseInspection(result Result) HealthReleaseInspection {
+	if i.implementation == nil || result.loaded == nil || result.loaded.owner != i.implementation || result.loaded.status != Managed || result.Status != Managed || result.Snapshot == nil {
+		return HealthReleaseInspection{}
+	}
+	document, problem := decode(result.loaded.bytes)
+	if problem != nil || document.ReleaseIdentity != result.Snapshot.ReleaseIdentity {
+		return HealthReleaseInspection{}
+	}
+	return HealthReleaseInspection{identity: result.Snapshot.ReleaseIdentity, verified: true}
+}
+
 // WithManagedConnectionProfileSecrets gives the owning Connection Profiles
 // composition one short-lived reader for an exact fresh Managed Load. The
 // reader returns no value after the callback completes.

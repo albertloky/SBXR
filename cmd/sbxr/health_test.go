@@ -1,14 +1,117 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/albertloky/SBXR/internal/healthdiagnostics"
+	"github.com/albertloky/SBXR/internal/state"
+	"github.com/albertloky/SBXR/internal/systemchanges"
 )
 
 type healthEventMemory struct {
 	events []healthdiagnostics.DiagnosticEvent
+}
+
+type healthStateMemory []byte
+
+func (memory healthStateMemory) Read() ([]byte, error) { return append([]byte(nil), memory...), nil }
+func (healthStateMemory) Publish([]byte, []byte, string) ([]byte, error) {
+	return nil, errors.New("unused")
+}
+
+type healthBundleMemory struct {
+	names   []string
+	archive []byte
+}
+
+func (memory *healthBundleMemory) Existing() ([]string, error) {
+	return append([]string(nil), memory.names...), nil
+}
+func (memory *healthBundleMemory) Publish(candidate healthdiagnostics.BundleCandidate) error {
+	memory.names = append(memory.names, candidate.Name())
+	memory.archive = candidate.Archive()
+	return nil
+}
+
+func TestProductionDiagnosticsPresentationUsesTheSameElevenModuleCheck(t *testing.T) {
+	presentation, err := productionDiagnosticsPresentation(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(presentation.Modules) != 11 || len(presentation.Services) != 10 {
+		t.Fatalf("diagnostics counts = %d Modules, %d services", len(presentation.Modules), len(presentation.Services))
+	}
+	if presentation.Retention.EventDays != 30 || presentation.Retention.EventMiB != 50 || presentation.Retention.BundleLimit != 3 {
+		t.Fatalf("diagnostics retention = %+v", presentation.Retention)
+	}
+	seen := map[string]bool{}
+	for _, module := range presentation.Modules {
+		if module.Code == "" || module.CheckedAt == "" || seen[module.Module] {
+			t.Fatalf("diagnostics Module = %+v", module)
+		}
+		seen[module.Module] = true
+	}
+	if !seen[string(healthdiagnostics.StateModule)] || !seen[string(healthdiagnostics.OwnerConsoleModule)] {
+		t.Fatalf("diagnostics Modules = %#v", seen)
+	}
+}
+
+func TestExecutableBundleCompositionUsesOnlyOpaqueStateAndSafeCheckFacts(t *testing.T) {
+	document, err := os.ReadFile("../../internal/state/testdata/complete-state.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope struct {
+		Revision               uint64                  `json:"revision"`
+		ReleaseIdentity        state.ReleaseIdentity   `json:"release_identity"`
+		LastCompletedChangeSet state.ChangeSetIdentity `json:"last_completed_change_set"`
+	}
+	if json.Unmarshal(document, &envelope) != nil {
+		t.Fatal("State fixture was not readable")
+	}
+	stateModule := state.New(healthStateMemory(document))
+	loaded, err := stateModule.Load(state.LoadRequest{Baseline: state.ManagedEvidence, SupportedRelease: envelope.ReleaseIdentity, Lineage: &state.LineageProof{Revision: envelope.Revision, LastCompletedChangeSet: envelope.LastCompletedChangeSet, ReleaseIdentity: envelope.ReleaseIdentity}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	module, installation, inspections := productionHealthInputs(t.Context())
+	storage := &healthBundleMemory{}
+	result := buildSupportBundle(module, storage, healthdiagnostics.BundleRequest{
+		Check:    module.Check(t.Context(), installation, inspections...),
+		Release:  healthdiagnostics.ReleaseFactsFrom(systemchanges.NewReleaseHealthInspection(stateModule.HealthReleaseInspection(loaded))),
+		Platform: healthdiagnostics.PlatformFacts{OperatingSystem: "Ubuntu Server", Version: "24.04", Architecture: "amd64"},
+		Units:    []healthdiagnostics.UnitSummary{{Unit: "sbxr-health-check.timer", Status: healthdiagnostics.UnitActive}},
+	})
+	if result.Created == "" || len(storage.names) != 1 || !healthdiagnostics.ValidCompletedBundle(storage.archive) {
+		t.Fatalf("support bundle result = %+v", result)
+	}
+	if bytes.Contains(storage.archive, []byte("SECRET-MARKER")) || bytes.Contains(storage.archive, []byte("CLOUDFLARE-MANAGEMENT")) {
+		t.Fatal("support bundle exposed protected State values")
+	}
+}
+
+func TestScheduledInspectionsUseOwningModuleManagedResults(t *testing.T) {
+	statuses := map[healthdiagnostics.Module]healthdiagnostics.HealthStatus{
+		healthdiagnostics.NetworkPolicyModule:           healthdiagnostics.Healthy,
+		healthdiagnostics.CloudflareTunnelModule:        healthdiagnostics.NeedsAttention,
+		healthdiagnostics.CertificateLifecycleModule:    healthdiagnostics.Failed,
+		healthdiagnostics.ConnectionProfilesModule:      healthdiagnostics.Unknown,
+		healthdiagnostics.SubscriptionPublicationModule: healthdiagnostics.Healthy,
+		healthdiagnostics.SubscriptionServingModule:     healthdiagnostics.NeedsAttention,
+		healthdiagnostics.SoftwareLifecycleModule:       healthdiagnostics.Failed,
+		healthdiagnostics.OwnerConsoleModule:            healthdiagnostics.Healthy,
+	}
+	result := healthdiagnostics.New(nil).Check(t.Context(), healthdiagnostics.InstallationSummary{}, scheduledInspections(systemchanges.InstallationHealthFacts{Status: systemchanges.Managed}, statuses)...)
+	for _, checked := range result.Modules {
+		if want, ok := statuses[checked.Module]; ok && checked.Status != want {
+			t.Fatalf("%s health = %s, want %s", checked.Module, checked.Status, want)
+		}
+	}
 }
 
 func (memory *healthEventMemory) Load() ([]healthdiagnostics.DiagnosticEvent, error) {

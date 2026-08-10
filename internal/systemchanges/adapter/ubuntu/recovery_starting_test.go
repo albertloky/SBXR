@@ -54,6 +54,21 @@ func TestRecoveryStartingStatusComesFromTheProtectedTransaction(t *testing.T) {
 			if err != nil || got != status || gotRelease != release || forwardOnly || checkpoint != systemchanges.Prepared {
 				t.Fatalf("starting recovery = %s, %+v, forward=%t, checkpoint=%s, %v; want %s, %+v", got, gotRelease, forwardOnly, checkpoint, err, status, release)
 			}
+			base := systemchanges.Observation{Status: status, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}
+			if status == systemchanges.Managed {
+				base.StateRevision, base.StateSHA256, base.LastChangeSet = 7, starting.SHA256, "change-0007"
+			}
+			observed, err := RecoveryHealthObservation(root, func() (systemchanges.Observation, error) { return base, nil })
+			if err != nil || observed.Status != systemchanges.ChangeInProgress || observed.CurrentChangeSet != "client-access-recovery" || observed.Checkpoint != systemchanges.PreparedCheckpoint || observed.TotalSteps != 1 || !observed.RollbackAvailable {
+				t.Fatalf("health recovery observation = %+v, %v", observed, err)
+			}
+			if err := os.WriteFile(filepath.Join(directory, "journal.jsonl"), []byte("{\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			observed, err = RecoveryHealthObservation(root, func() (systemchanges.Observation, error) { return base, nil })
+			if err != nil || observed.Status != systemchanges.RecoveryRequired || observed.RecoveryCause != systemchanges.JournalUnprovable {
+				t.Fatalf("invalid health recovery observation = %+v, %v", observed, err)
+			}
 		})
 	}
 }
@@ -86,6 +101,7 @@ func TestRecoveryStartingReleaseReportsEveryForwardRunTokenCheckpoint(t *testing
 		{Checkpoint: systemchanges.StatePublicationStarted},
 		{Checkpoint: systemchanges.StatePublished},
 		{Checkpoint: systemchanges.PostPublicationHealthPassed},
+		{Checkpoint: systemchanges.Complete},
 	}
 	manifest, _ := json.Marshal(snapshotManifest{SchemaVersion: 1, Release: release, Reason: systemchanges.RotationMutation, Files: checksums})
 	if err := os.WriteFile(filepath.Join(directory, "manifest.json"), manifest, 0o600); err != nil {
@@ -104,6 +120,11 @@ func TestRecoveryStartingReleaseReportsEveryForwardRunTokenCheckpoint(t *testing
 		_, _, forwardOnly, checkpoint, err := RecoveryStartingRelease(root)
 		if err != nil || !forwardOnly || checkpoint != entries[length-1].Checkpoint {
 			t.Fatalf("checkpoint %s = forward=%t checkpoint=%s err=%v", entries[length-1].Checkpoint, forwardOnly, checkpoint, err)
+		}
+		base := systemchanges.Observation{Status: systemchanges.Managed, LastChangeSet: "change-0007", Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, StateRevision: starting.Revision, StateSHA256: starting.SHA256, WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}
+		observed, err := RecoveryHealthObservation(root, func() (systemchanges.Observation, error) { return base, nil })
+		if err != nil || observed.Status != systemchanges.ChangeInProgress || observed.CurrentChangeSet != "run-token-recovery" || observed.RollbackAvailable {
+			t.Fatalf("checkpoint %s health observation = %+v, %v", entries[length-1].Checkpoint, observed, err)
 		}
 	}
 }

@@ -36,6 +36,9 @@ func TestCleanVPSAuthorityRechecksTheExactNetworkPolicyBaseline(t *testing.T) {
 	if second := systemchanges.NewFreshInstallationAuthority(result.FreshInstallationProof()); !second.CertificateLifecycleFreshInstallation() {
 		t.Fatal("a second owning Module could not perform its own exact Clean VPS recheck")
 	}
+	if facts, ok := systemchanges.NewNotInstalledHealthInspection(result.FreshInstallationProof()).InstallationFacts(); !ok || facts.Status != systemchanges.NotInstalled {
+		t.Fatalf("Clean VPS health inspection = %+v, %t", facts, ok)
+	}
 
 	result = networkpolicy.New(adapter).Evaluate(request)
 	authority = systemchanges.NewFreshInstallationAuthority(result.FreshInstallationProof())

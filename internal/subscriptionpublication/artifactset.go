@@ -186,6 +186,10 @@ func (set PreparedArtifactSet) GenerationID() string {
 
 func (set PreparedArtifactSet) SelectedAddress() string { return set.metadata.SelectedAddress }
 
+func (set PreparedArtifactSet) PublicationFacts() (uint64, string, CompatibilityDefinition) {
+	return set.metadata.DesiredStateRevision, set.metadata.DesiredStateSHA256, CompatibilityDefinition(set.metadata.Compatibility)
+}
+
 func (set PreparedArtifactSet) AgreesWith(binding systemchanges.StateTransactionBinding) bool {
 	release := set.metadata.ReleaseIdentity
 	return set.metadata.ChangeSet == binding.ChangeSet && set.metadata.DesiredStateRevision == binding.CandidateRevision && set.metadata.DesiredStateSHA256 == binding.CandidateSHA256 && release.Repository == binding.CandidateRelease.Repository && release.Tag == binding.CandidateRelease.Tag && release.Commit == binding.CandidateRelease.Commit && release.ReleaseIndexSHA256 == binding.CandidateRelease.ReleaseIndexSHA256

@@ -47,6 +47,14 @@ func TestServeSwitchesAuthorizationAndCompleteBodiesTogether(t *testing.T) {
 	assertSubscriptionResponse(t, client, endpoint+oldToken, http.StatusNotFound, "not found\n")
 }
 
+func TestReadOnlyHealthDoesNotAdoptOrRequireTheServiceIdentity(t *testing.T) {
+	server, _, _, _ := testServer(t, "127.0.0.1")
+	server.serviceUID, server.serviceGID = 0, 0
+	if health := server.Health(); health.Status != Healthy || health.Code != "SUBSCRIPTION-SERVING-HTTPS" {
+		t.Fatalf("root-safe Health() = %+v", health)
+	}
+}
+
 func TestConcurrentRequestsObserveOnlyOneCompleteServingSnapshot(t *testing.T) {
 	server, roots, oldToken, oldBody := testServer(t, "127.0.0.1")
 	newToken := strings.Repeat("9", 64)

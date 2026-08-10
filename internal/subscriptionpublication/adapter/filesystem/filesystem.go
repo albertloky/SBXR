@@ -34,6 +34,13 @@ type Executor struct {
 	prior    *priorAuthorization
 }
 
+type PublishedFacts struct {
+	Revision      uint64
+	StateSHA256   string
+	Compatibility subscriptionpublication.CompatibilityDefinition
+	Serving       systemchanges.HealthStatus
+}
+
 type priorAuthorization struct {
 	mu    sync.Mutex
 	token string
@@ -344,6 +351,36 @@ func (executor Executor) Check(root, code string, binding systemchanges.StateTra
 		}
 	}
 	return systemchanges.Healthy, nil
+}
+
+// ObserveCurrent proves the active immutable publication and its Serving route without changing either.
+func (executor Executor) ObserveCurrent(root string, timeout time.Duration) (PublishedFacts, error) {
+	executor, err := executor.resolved()
+	if err != nil || timeout <= 0 {
+		return PublishedFacts{}, errors.New("Subscription Publication observation unavailable")
+	}
+	storage, err := openStore(root, false, executor.uid, executor.gid)
+	if err != nil {
+		return PublishedFacts{}, errors.New("active subscription artifact set is unprovable")
+	}
+	defer storage.root.Close()
+	set, err := storage.readSet("current", 0o750)
+	if err != nil {
+		return PublishedFacts{}, errors.New("active subscription artifact set is unprovable")
+	}
+	revision, stateSHA256, compatibility := set.PublicationFacts()
+	result := PublishedFacts{Revision: revision, StateSHA256: stateSHA256, Compatibility: compatibility, Serving: systemchanges.Unknown}
+	if executor.prove == nil {
+		return result, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := executor.prove(ctx, set.SelectedAddress()); err != nil {
+		result.Serving = systemchanges.Failed
+		return result, nil
+	}
+	result.Serving = systemchanges.Healthy
+	return result, nil
 }
 
 type servingAuthorization struct {

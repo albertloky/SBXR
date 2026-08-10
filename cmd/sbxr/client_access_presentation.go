@@ -8,14 +8,18 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/albertloky/SBXR/internal/connectionprofiles"
 	profilesubuntu "github.com/albertloky/SBXR/internal/connectionprofiles/adapter/ubuntu"
+	"github.com/albertloky/SBXR/internal/healthdiagnostics"
 	"github.com/albertloky/SBXR/internal/networkpolicy"
 	"github.com/albertloky/SBXR/internal/ownerconsole"
 	"github.com/albertloky/SBXR/internal/state"
 	statefilesystem "github.com/albertloky/SBXR/internal/state/adapter/filesystem"
 	"github.com/albertloky/SBXR/internal/subscriptionpublication"
+	subscriptionfilesystem "github.com/albertloky/SBXR/internal/subscriptionpublication/adapter/filesystem"
+	"github.com/albertloky/SBXR/internal/subscriptionserving"
 	"github.com/albertloky/SBXR/internal/systemchanges"
 	systemubuntu "github.com/albertloky/SBXR/internal/systemchanges/adapter/ubuntu"
 )
@@ -27,6 +31,7 @@ type clientAccessPresentation struct {
 	Cloudflare   ownerconsole.CloudflarePresentation
 	Certificates ownerconsole.CertificatesPresentation
 	Recovery     ownerconsole.RecoveryPresentation
+	health       map[healthdiagnostics.Module]healthdiagnostics.HealthStatus
 }
 
 func managedClientAccessPresentation(ctx context.Context) (clientAccessPresentation, error) {
@@ -50,12 +55,14 @@ func managedClientAccessPresentation(ctx context.Context) (clientAccessPresentat
 	if err != nil {
 		return clientAccessPresentation{}, err
 	}
-	presentation := clientAccessPresentation{Installation: ownerconsole.InstallationManaged}
+	presentation := clientAccessPresentation{Installation: ownerconsole.InstallationManaged, health: map[healthdiagnostics.Module]healthdiagnostics.HealthStatus{healthdiagnostics.StateModule: healthdiagnostics.Healthy}}
 	err = module.WithManagedConnectionProfileSecrets(loaded, func(snapshot state.Snapshot, secrets state.ConnectionProfileSecretReader) error {
 		return module.WithManagedSubscriptionSecrets(loaded, func(_ state.Snapshot, publicationSecrets state.ClientAccessReader) error {
 			return module.WithManagedCloudflareSecrets(loaded, func(_ state.Snapshot, cloudflareSecrets state.InfrastructureSecretReader) error {
 				if snapshot.DesiredState.Cloudflare.ManagementTokenRemoved {
-					presentation.Cloudflare, presentation.Certificates = managedProviderPresentations(ctx, snapshot, cloudflareSecrets, networkpolicy.Result{})
+					provider := managedProviderPresentations(ctx, snapshot, cloudflareSecrets, networkpolicy.Result{})
+					presentation.Cloudflare, presentation.Certificates = provider.cloudflare, provider.certificates
+					presentation.health[healthdiagnostics.CloudflareTunnelModule] = healthdiagnostics.HealthStatus(provider.cloudflareHealth)
 					return nil
 				}
 				disk := systemchanges.DiskRequirement{PreparationBytes: 8 << 20, TemporaryBytes: 8 << 20, SnapshotBytes: 32 << 20, JournalBytes: 8 << 20, RollbackBytes: 8 << 20, OverheadBytes: 256 << 20}
@@ -63,6 +70,7 @@ func managedClientAccessPresentation(ctx context.Context) (clientAccessPresentat
 				if err != nil {
 					return err
 				}
+				presentation.health[healthdiagnostics.NetworkPolicyModule] = healthdiagnostics.HealthStatus(network.Outcome)
 				request, err := clientAccessRegistryRequest(snapshot.DesiredState, snapshot.Revision, secrets, connectionprofiles.RegistryExposureAuthority(networkpolicy.NewListenerContribution(network)), xhttp, websocket)
 				if err != nil {
 					return err
@@ -72,6 +80,7 @@ func managedClientAccessPresentation(ctx context.Context) (clientAccessPresentat
 				if len(registry.Profiles) != 6 {
 					return errors.New("Managed Connection Profiles presentation unavailable")
 				}
+				presentation.health[healthdiagnostics.ConnectionProfilesModule] = healthdiagnostics.HealthStatus(registry.Health.Outcome)
 				source, err := connectionprofiles.PublicationSourceFor(snapshot.DesiredState.NetworkPolicy.PrimarySubscriptionAddress, snapshot.DesiredState.ConnectionProfiles)
 				if err != nil {
 					return err
@@ -94,12 +103,40 @@ func managedClientAccessPresentation(ctx context.Context) (clientAccessPresentat
 				}
 				presentation.Profiles = ownerProfilesPresentation(snapshot.DesiredState, registry.Profiles)
 				presentation.Access = ownerAccessPresentation(snapshot.DesiredState, source, artifacts, fullSource, fullArtifacts, publicationSecrets)
-				presentation.Cloudflare, presentation.Certificates = managedProviderPresentations(ctx, snapshot, cloudflareSecrets, network)
+				provider := managedProviderPresentations(ctx, snapshot, cloudflareSecrets, network)
+				presentation.Cloudflare, presentation.Certificates = provider.cloudflare, provider.certificates
+				presentation.health[healthdiagnostics.CloudflareTunnelModule] = healthdiagnostics.HealthStatus(provider.cloudflareHealth)
+				presentation.health[healthdiagnostics.CertificateLifecycleModule] = healthdiagnostics.HealthStatus(provider.certificateHealth)
+				publicationStorage, storageErr := subscriptionfilesystem.New(func(proofContext context.Context, address string) error {
+					return proveInstalledSubscription(proofContext, address, snapshot.DesiredState.Subscription.ListenPort)
+				})
+				if storageErr == nil {
+					if published, observeErr := publicationStorage.ObserveCurrent("/", 30*time.Second); observeErr == nil {
+						view := publication.View(subscriptionpublication.ViewRequest{Source: source, SubscriptionAddress: net.JoinHostPort(snapshot.DesiredState.NetworkPolicy.PrimarySubscriptionAddress, strconv.Itoa(int(snapshot.DesiredState.Subscription.ListenPort))), DesiredStateRevision: snapshot.Revision, PublishedRevision: published.Revision, DesiredStateSHA256: observed.StateSHA256, PublishedStateSHA256: published.StateSHA256, CompatibilityDefinition: subscriptionpublication.CurrentCompatibilityDefinition, PublishedCompatibility: published.Compatibility})
+						presentation.health[healthdiagnostics.SubscriptionPublicationModule] = publicationHealth(view.Status, published.Serving)
+					}
+				}
 				return nil
 			})
 		})
 	})
+	if err == nil && loaded.Snapshot != nil {
+		presentation.health[healthdiagnostics.SubscriptionServingModule] = healthdiagnostics.HealthStatus(subscriptionserving.Inspect().Status)
+	}
 	return presentation, err
+}
+
+func publicationHealth(status subscriptionpublication.PublicationStatus, serving systemchanges.HealthStatus) healthdiagnostics.HealthStatus {
+	if status == subscriptionpublication.PublicationCurrent && serving == systemchanges.Healthy {
+		return healthdiagnostics.Healthy
+	}
+	if status == subscriptionpublication.PublicationNeedsRegeneration || status == subscriptionpublication.PublicationNotPublished {
+		return healthdiagnostics.NeedsAttention
+	}
+	if serving == systemchanges.Failed {
+		return healthdiagnostics.Failed
+	}
+	return healthdiagnostics.Unknown
 }
 
 func ownerProfilesPresentation(desired state.DesiredState, observed []connectionprofiles.RegistryProfile) ownerconsole.ProfilesPresentation {

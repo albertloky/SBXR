@@ -123,6 +123,33 @@ type InstallationHealthFacts struct {
 	RecoveryCause          RecoveryCause
 }
 
+type releaseHealthSource interface {
+	HealthReleaseIdentityFacts() (string, string, string, string, bool)
+}
+
+// ReleaseHealthInspection carries only State's opaque, already validated
+// Managed Release Identity proof across the registered System Changes seam.
+type ReleaseHealthInspection struct {
+	release  ReleaseBinding
+	verified bool
+}
+
+func NewReleaseHealthInspection(source releaseHealthSource) ReleaseHealthInspection {
+	typeOf := reflect.TypeOf(source)
+	if typeOf == nil || typeOf.PkgPath() != "github.com/albertloky/SBXR/internal/state" || typeOf.Name() != "HealthReleaseInspection" {
+		return ReleaseHealthInspection{}
+	}
+	repository, tag, commit, indexSHA256, ok := source.HealthReleaseIdentityFacts()
+	if !ok || repository == "" || tag == "" || commit == "" || indexSHA256 == "" {
+		return ReleaseHealthInspection{}
+	}
+	return ReleaseHealthInspection{release: ReleaseBinding{Repository: repository, Tag: tag, Commit: commit, ReleaseIndexSHA256: indexSHA256}, verified: true}
+}
+
+func (inspection ReleaseHealthInspection) ReleaseIdentityFacts() (ReleaseBinding, bool) {
+	return inspection.release, inspection.verified
+}
+
 // InstallationFacts returns a copy of facts already validated by Inspect.
 func (facts InstallationHealthInspection) InstallationFacts() (InstallationHealthFacts, bool) {
 	if facts.inspection.Status == "" {
@@ -134,6 +161,16 @@ func (facts InstallationHealthInspection) InstallationFacts() (InstallationHealt
 		RollbackAvailable: facts.inspection.RollbackAvailable, ForwardRepairAvailable: facts.inspection.ForwardRepairAvailable,
 		RecoveryCause: facts.inspection.RecoveryCause,
 	}, true
+}
+
+// NewNotInstalledHealthInspection consumes a separate exact Clean VPS proof
+// and exposes only the resulting read-only installation fact.
+func NewNotInstalledHealthInspection(proof FreshInstallationProof) InstallationHealthInspection {
+	authority := NewFreshInstallationAuthority(proof)
+	if !authority.SystemChangesFreshInstallation() {
+		return InstallationHealthInspection{}
+	}
+	return InstallationHealthInspection{inspection: Inspection{Status: NotInstalled, Checkpoint: NoCheckpoint, Lock: LockReleased}}
 }
 
 // ManagedAuthority is a fresh, non-renderable proof that normal post-Managed

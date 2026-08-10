@@ -55,7 +55,11 @@ func TestAtomicArtifactSetActivationRollbackAndServingAgreement(t *testing.T) {
 			t.Fatalf("Check(%s) = %s, %v", code, health, err)
 		}
 	}
-	if proofs != 1 {
+	published, err := executor.ObserveCurrent(root, time.Second)
+	if err != nil || published.Revision != 8 || published.StateSHA256 != strings.Repeat("8", 64) || published.Compatibility != subscriptionpublication.CurrentCompatibilityDefinition || published.Serving != systemchanges.Healthy {
+		t.Fatalf("current publication = %#v, %v", published, err)
+	}
+	if proofs != 2 {
 		t.Fatalf("serving proofs = %d", proofs)
 	}
 

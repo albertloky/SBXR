@@ -1271,6 +1271,94 @@ func RecoveryStartingRelease(rootPath string) (systemchanges.InstallationStatus,
 	return journal[0].Starting.Status, recoveryRelease(*journal[0].State), forwardOnly, journal[len(journal)-1].Checkpoint, nil
 }
 
+// RecoveryHealthObservation overlays one validated unfinished transaction on
+// the current State observation without acquiring the mutation lock or changing
+// journal, snapshot, or rollback material.
+func RecoveryHealthObservation(rootPath string, source ObservationSource) (systemchanges.Observation, error) {
+	if source == nil {
+		return systemchanges.Observation{}, errors.New("health observation source unavailable")
+	}
+	base, err := source()
+	if err != nil {
+		return systemchanges.Observation{}, err
+	}
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		return systemchanges.Observation{}, err
+	}
+	defer root.Close()
+	entries, err := fs.ReadDir(root.FS(), transactionDirectory)
+	if errors.Is(err, fs.ErrNotExist) {
+		return base, nil
+	}
+	uid := os.Geteuid()
+	if err == nil && verifyDirectory(root, transactionDirectory, uid) != nil {
+		return healthRecoveryRequired(systemchanges.JournalUnprovable), nil
+	}
+	if err != nil || len(entries) > 1 || len(entries) == 1 && (!entries[0].IsDir() || !safeName(entries[0].Name())) {
+		return healthRecoveryRequired(systemchanges.JournalUnprovable), nil
+	}
+	if len(entries) == 0 {
+		return base, nil
+	}
+	changeSet := entries[0].Name()
+	directory := path.Join(transactionDirectory, changeSet)
+	if verifyDirectory(root, directory, uid) != nil || verifyFile(root, path.Join(directory, "journal.jsonl"), uid) != nil {
+		return healthRecoveryRequired(systemchanges.JournalUnprovable), nil
+	}
+	journal, journalErr := readJournal(root, path.Join(directory, "journal.jsonl"))
+	if journalErr != nil || !validJournal(journal) || len(journal) == 0 || journal[0].State == nil {
+		return healthRecoveryRequired(systemchanges.JournalUnprovable), nil
+	}
+	prepared := journal[0]
+	for _, entry := range journal[1:] {
+		if entry.Checkpoint == systemchanges.StateFinalized && entry.State != nil {
+			prepared.State = entry.State
+		}
+	}
+	irreversibleRemoval := prepared.Mutation == systemchanges.CompleteRemovalMutation && journalHasCheckpoint(journal, systemchanges.IrreversibleRemovalStarted)
+	irreversibleRotation := prepared.Mutation == systemchanges.RotationMutation && runTokenFingerprint(journal) != ""
+	if prepared.ChangeSet != changeSet || !validRecoveryJournalBinding(prepared) {
+		return healthRecoveryRequired(systemchanges.JournalUnprovable), nil
+	}
+	if !irreversibleRemoval {
+		manifest, manifestErr := verifyTransactionManifest(root, directory, uid)
+		if manifestErr != nil || manifest.Reason != prepared.Mutation || !validRecoveryBinding(prepared, manifest, irreversibleRotation) {
+			return healthRecoveryRequired(systemchanges.SnapshotUnprovable), nil
+		}
+	}
+	total := len(prepared.Steps)
+	last := journal[len(journal)-1].Checkpoint
+	starting := base.Status == prepared.Starting.Status && base.StateRevision == prepared.Starting.Revision && base.StateSHA256 == prepared.Starting.SHA256
+	candidate := base.Status == systemchanges.Managed && base.StateRevision == prepared.State.CandidateRevision && base.StateSHA256 == prepared.State.CandidateSHA256
+	removed := irreversibleRemoval && base.Status == systemchanges.NotInstalled
+	rollback := !irreversibleRemoval && !irreversibleRotation && last != systemchanges.Complete && last != systemchanges.RolledBack
+	completed := highestCompletedStep(journal)
+	if last == systemchanges.Complete {
+		completed = total
+	}
+	if !starting && !candidate && !removed {
+		return systemchanges.Observation{Status: systemchanges.RecoveryRequired, CurrentChangeSet: changeSet, LastChangeSet: base.LastChangeSet, Checkpoint: systemchanges.PreparedCheckpoint, CompletedSteps: completed, TotalSteps: total, RollbackAvailable: rollback, RecoveryCause: systemchanges.PriorAgreementUnprovable, StateRevision: base.StateRevision, StateSHA256: base.StateSHA256, WallTimeSynchronized: base.WallTimeSynchronized, MonotonicClock: base.MonotonicClock, TimeOwner: base.TimeOwner}, nil
+	}
+	base.Status, base.CurrentChangeSet = systemchanges.ChangeInProgress, changeSet
+	base.Checkpoint, base.CompletedSteps, base.TotalSteps, base.RollbackAvailable = systemchanges.PreparedCheckpoint, completed, total, rollback
+	return base, nil
+}
+
+func healthRecoveryRequired(cause systemchanges.RecoveryCause) systemchanges.Observation {
+	return systemchanges.Observation{Status: systemchanges.RecoveryRequired, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, RecoveryCause: cause, WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}
+}
+
+func highestCompletedStep(entries []journalEntry) int {
+	highest := 0
+	for _, entry := range entries {
+		if entry.Checkpoint == systemchanges.StepCompleted && entry.Step > highest {
+			highest = entry.Step
+		}
+	}
+	return highest
+}
+
 func validRecoveryJournalBinding(prepared journalEntry) bool {
 	if prepared.State == nil || prepared.Mutation == "" {
 		return false

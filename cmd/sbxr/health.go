@@ -1,61 +1,245 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"errors"
+	"os"
+	"os/exec"
+	"runtime"
+	"strings"
+	"time"
 
-	"github.com/albertloky/SBXR/internal/certificatelifecycle"
-	certificateubuntu "github.com/albertloky/SBXR/internal/certificatelifecycle/adapter/ubuntu"
-	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
-	"github.com/albertloky/SBXR/internal/connectionprofiles"
 	"github.com/albertloky/SBXR/internal/healthdiagnostics"
-	"github.com/albertloky/SBXR/internal/networkpolicy"
-	networkubuntu "github.com/albertloky/SBXR/internal/networkpolicy/adapter/ubuntu"
+	healthfilesystem "github.com/albertloky/SBXR/internal/healthdiagnostics/adapter/filesystem"
+	"github.com/albertloky/SBXR/internal/ownerconsole"
+	ownerubuntu "github.com/albertloky/SBXR/internal/ownerconsole/adapter/ubuntu"
+	"github.com/albertloky/SBXR/internal/softwarelifecycle"
+	softwareubuntu "github.com/albertloky/SBXR/internal/softwarelifecycle/adapter/ubuntu"
 	"github.com/albertloky/SBXR/internal/state"
 	statefilesystem "github.com/albertloky/SBXR/internal/state/adapter/filesystem"
-	"github.com/albertloky/SBXR/internal/subscriptionpublication"
-	"github.com/albertloky/SBXR/internal/subscriptionserving"
 	"github.com/albertloky/SBXR/internal/systemchanges"
 	systemubuntu "github.com/albertloky/SBXR/internal/systemchanges/adapter/ubuntu"
 )
 
 func runScheduledHealthCheck(ctx context.Context, history healthdiagnostics.EventHistory) error {
-	changes := systemchanges.New(systemubuntu.New(nil, nil))
-	installation := healthdiagnostics.InstallationSummaryFrom(changes.InstallationHealthInspection())
-	_, err := healthdiagnostics.New(nil).ScheduledCheck(ctx, history, installation, scheduledInspections()...)
+	module, installation, inspections := productionHealthInputs(ctx)
+	_, err := module.ScheduledCheck(ctx, history, installation, inspections...)
 	return err
 }
 
-func scheduledInspections() []healthdiagnostics.NamedInspection {
+func productionHealthInputs(ctx context.Context) (healthdiagnostics.Interface, healthdiagnostics.InstallationSummary, []healthdiagnostics.NamedInspection) {
+	changes := systemchanges.New(systemubuntu.New(healthObservation, nil))
+	lineage := changes.InstallationHealthInspection()
+	facts, _ := lineage.InstallationFacts()
+	if runtime.GOOS != "linux" {
+		facts = systemchanges.InstallationHealthFacts{}
+	}
+	statuses := map[healthdiagnostics.Module]healthdiagnostics.HealthStatus{}
+	if facts.Status == systemchanges.Managed {
+		if presentation, err := managedClientAccessPresentation(ctx); err == nil {
+			statuses = presentation.health
+		}
+		if finding, err := healthfilesystem.NewSelfInspector().Inspect(); err == nil {
+			statuses[healthdiagnostics.HealthDiagnosticsModule] = finding.Status
+		}
+		if _, release, err := managedLoadEvidence(); err == nil {
+			statuses[healthdiagnostics.SoftwareLifecycleModule] = healthdiagnostics.HealthStatus(softwareubuntu.InspectRelease("/", softwarelifecycle.ReleaseIdentity{Repository: release.Repository, Tag: release.Tag, Commit: release.Commit, IndexSHA256: release.ReleaseIndexSHA256}))
+		}
+		statuses[healthdiagnostics.OwnerConsoleModule] = healthdiagnostics.HealthStatus(ownerubuntu.Inspect().String())
+	}
+	return healthdiagnostics.New(nil), healthdiagnostics.InstallationSummaryFrom(lineage), scheduledInspections(facts, statuses)
+}
+
+func healthObservation() (systemchanges.Observation, error) {
+	if runtime.GOOS != "linux" {
+		return systemchanges.Observation{}, errors.New("Ubuntu health observation is unavailable")
+	}
+	return systemubuntu.RecoveryHealthObservation("/", installRecoveryObservation)
+}
+
+func productionDiagnosticsPresentation(ctx context.Context) (ownerconsole.DiagnosticsPresentation, error) {
+	module, installation, inspections := productionHealthInputs(ctx)
+	result := module.Check(ctx, installation, inspections...)
+	bundles, err := healthfilesystem.NewBundleStorage().Existing()
+	if err != nil {
+		return ownerconsole.DiagnosticsPresentation{}, err
+	}
+	services := make([]ownerconsole.ServiceHealthPresentation, 0, 10)
+	for _, unit := range healthDiagnosticUnits() {
+		services = append(services, ownerconsole.ServiceHealthPresentation{Service: unit, Status: ownerModuleHealth(unitHealth(ctx, unit))})
+	}
+	return diagnosticsPresentation(result, bundles, services)
+}
+
+func diagnosticsPresentation(result healthdiagnostics.CheckResult, bundles []string, services []ownerconsole.ServiceHealthPresentation) (ownerconsole.DiagnosticsPresentation, error) {
+	presentation := ownerconsole.DiagnosticsPresentation{
+		Installation:        ownerInstallationStatus(result.Installation.Status),
+		Retention:           ownerconsole.DiagnosticsRetention{EventDays: 30, EventMiB: 50, BundleLimit: 3},
+		ExternalCopyWarning: "A copied or moved bundle is outside SBXR retention, deletion, permission, and redaction control.", Services: append([]ownerconsole.ServiceHealthPresentation(nil), services...),
+	}
+	for _, checked := range result.Modules {
+		presentation.Modules = append(presentation.Modules, ownerconsole.ModuleHealthPresentation{
+			Module: string(checked.Module), CheckedAt: checked.CheckedAt.Format(time.RFC3339), Code: string(checked.Code),
+			Explanation: checked.Explanation, NextAction: checked.NextAction, Status: ownerModuleHealth(checked.Status),
+		})
+	}
+	presentedBundles, err := supportBundlePresentations(bundles)
+	if err != nil {
+		return ownerconsole.DiagnosticsPresentation{}, err
+	}
+	presentation.Bundles = presentedBundles
+	return presentation, nil
+}
+
+func productionSupportBundle(ctx context.Context, replacement ownerconsole.BundleReplacement) ownerconsole.SupportBundleResult {
+	module, installation, inspections := productionHealthInputs(ctx)
+	check := module.Check(ctx, installation, inspections...)
+	events, err := healthdiagnostics.NewEventHistory(healthfilesystem.NewEventStorage(), nil).Events()
+	if err != nil {
+		return ownerconsole.SupportBundleResult{Code: "HEALTH-DIAGNOSTICS-BUNDLE-EVENTS"}
+	}
+	release, err := managedHealthReleaseFacts()
+	if err != nil {
+		return ownerconsole.SupportBundleResult{Code: "HEALTH-DIAGNOSTICS-BUNDLE-RELEASE"}
+	}
+	platform, err := platformFacts()
+	if err != nil {
+		return ownerconsole.SupportBundleResult{Code: "HEALTH-DIAGNOSTICS-BUNDLE-PLATFORM"}
+	}
+	storage := healthfilesystem.NewBundleStorage()
+	return buildSupportBundle(module, storage, healthdiagnostics.BundleRequest{
+		Check: check, Events: events, Release: release, Platform: platform, Units: diagnosticUnitSummaries(ctx),
+		Replacement: healthdiagnostics.ReviewBundleReplacement(replacement.Archive),
+	})
+}
+
+func buildSupportBundle(module healthdiagnostics.Interface, storage healthdiagnostics.BundleStorage, request healthdiagnostics.BundleRequest) ownerconsole.SupportBundleResult {
+	result := module.BuildSupportBundle(storage, request)
+	if result.Status() != healthdiagnostics.BundleCreated {
+		return ownerconsole.SupportBundleResult{Code: string(result.Code())}
+	}
+	names, err := storage.Existing()
+	if err != nil {
+		return ownerconsole.SupportBundleResult{Code: "HEALTH-DIAGNOSTICS-BUNDLE-PRESENTATION"}
+	}
+	bundles, err := supportBundlePresentations(names)
+	if err != nil {
+		return ownerconsole.SupportBundleResult{Code: "HEALTH-DIAGNOSTICS-BUNDLE-PRESENTATION"}
+	}
+	return ownerconsole.SupportBundleResult{Created: result.ArchiveName(), Code: string(result.Code()), ExternalCopyWarning: result.ExternalCopyWarning(), Bundles: bundles}
+}
+
+func supportBundlePresentations(names []string) ([]ownerconsole.SupportBundlePresentation, error) {
+	result := make([]ownerconsole.SupportBundlePresentation, 0, len(names))
+	for _, archive := range names {
+		created := strings.TrimSuffix(strings.TrimPrefix(archive, "sbxr-support-"), ".tar.gz")
+		when, err := time.Parse("20060102T150405Z", created)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, ownerconsole.SupportBundlePresentation{Archive: archive, CreatedAt: when.Format(time.RFC3339)})
+	}
+	return result, nil
+}
+
+func managedHealthReleaseFacts() (healthdiagnostics.ReleaseFacts, error) {
+	observed, release, err := managedLoadEvidence()
+	if err != nil {
+		return healthdiagnostics.ReleaseFacts{}, err
+	}
+	module := statefilesystem.New()
+	loaded, err := module.Load(state.LoadRequest{Baseline: state.ManagedEvidence, SupportedRelease: release, Lineage: &state.LineageProof{Revision: observed.StateRevision, LastCompletedChangeSet: state.ChangeSetIdentity(observed.LastChangeSet), ReleaseIdentity: release}})
+	if err != nil {
+		return healthdiagnostics.ReleaseFacts{}, err
+	}
+	facts := healthdiagnostics.ReleaseFactsFrom(systemchanges.NewReleaseHealthInspection(module.HealthReleaseInspection(loaded)))
+	return facts, nil
+}
+
+func platformFacts() (healthdiagnostics.PlatformFacts, error) {
+	file, err := os.Open("/etc/os-release")
+	if err != nil {
+		return healthdiagnostics.PlatformFacts{}, err
+	}
+	defer file.Close()
+	values := map[string]string{}
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		key, value, ok := strings.Cut(scanner.Text(), "=")
+		if ok && (key == "ID" || key == "VERSION_ID") {
+			values[key] = strings.Trim(value, `"`)
+		}
+	}
+	if scanner.Err() != nil || values["ID"] != "ubuntu" || values["VERSION_ID"] != "24.04" || runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
+		return healthdiagnostics.PlatformFacts{}, errors.New("supported Ubuntu platform was not proven")
+	}
+	return healthdiagnostics.PlatformFacts{OperatingSystem: "Ubuntu Server", Version: values["VERSION_ID"], Architecture: runtime.GOARCH}, nil
+}
+
+func diagnosticUnitSummaries(ctx context.Context) []healthdiagnostics.UnitSummary {
+	result := make([]healthdiagnostics.UnitSummary, 0, 10)
+	for _, unit := range healthDiagnosticUnits() {
+		status := map[healthdiagnostics.HealthStatus]healthdiagnostics.UnitStatus{
+			healthdiagnostics.Healthy: healthdiagnostics.UnitActive, healthdiagnostics.NeedsAttention: healthdiagnostics.UnitInactive,
+			healthdiagnostics.Failed: healthdiagnostics.UnitFailed, healthdiagnostics.Unknown: healthdiagnostics.UnitUnknown,
+		}[unitHealth(ctx, unit)]
+		result = append(result, healthdiagnostics.UnitSummary{Unit: unit, Status: status})
+	}
+	return result
+}
+
+func healthDiagnosticUnits() []string {
+	units := softwarelifecycle.ManagedUnitNames()
+	result := make([]string, 0, len(units)-1)
+	for _, unit := range units {
+		if unit != "sbxr-update-check.service" {
+			result = append(result, unit)
+		}
+	}
+	return result
+}
+
+func unitHealth(ctx context.Context, unit string) healthdiagnostics.HealthStatus {
+	output, err := exec.CommandContext(ctx, "systemctl", "is-active", unit).Output()
+	status := strings.TrimSpace(string(output))
+	if err == nil && status == "active" {
+		return healthdiagnostics.Healthy
+	}
+	if status == "failed" {
+		return healthdiagnostics.Failed
+	}
+	if status == "inactive" {
+		return healthdiagnostics.NeedsAttention
+	}
+	return healthdiagnostics.Unknown
+}
+
+func ownerInstallationStatus(status healthdiagnostics.InstallationStatus) ownerconsole.InstallationStatus {
+	return map[healthdiagnostics.InstallationStatus]ownerconsole.InstallationStatus{
+		healthdiagnostics.NotInstalled: ownerconsole.InstallationNotInstalled, healthdiagnostics.Managed: ownerconsole.InstallationManaged,
+		healthdiagnostics.ChangeInProgress: ownerconsole.InstallationChangeInProgress, healthdiagnostics.RecoveryRequired: ownerconsole.InstallationRecoveryRequired,
+	}[status]
+}
+
+func ownerModuleHealth(status healthdiagnostics.HealthStatus) ownerconsole.ModuleHealth {
+	return map[healthdiagnostics.HealthStatus]ownerconsole.ModuleHealth{
+		healthdiagnostics.Healthy: ownerconsole.HealthHealthy, healthdiagnostics.NeedsAttention: ownerconsole.HealthNeedsAttention,
+		healthdiagnostics.Failed: ownerconsole.HealthFailed, healthdiagnostics.Unknown: ownerconsole.HealthUnknown,
+	}[status]
+}
+
+func scheduledInspections(installation systemchanges.InstallationHealthFacts, statuses map[healthdiagnostics.Module]healthdiagnostics.HealthStatus) []healthdiagnostics.NamedInspection {
 	stateModule := statefilesystem.New()
-	networkModule := networkpolicy.New(networkubuntu.New())
-	changes := systemchanges.New(systemubuntu.New(nil, nil))
-	tunnel := cloudflaretunnel.New(nil, nil)
-	certificates := certificatelifecycle.New(certificateubuntu.New(), nil)
-	profiles := connectionprofiles.New(nil)
 	return []healthdiagnostics.NamedInspection{
 		inspection(healthdiagnostics.StateModule, func(context.Context) (healthdiagnostics.HealthStatus, error) {
-			result, err := stateModule.Load(state.LoadRequest{})
-			if err != nil {
-				return healthdiagnostics.Unknown, err
+			if status, available := statuses[healthdiagnostics.StateModule]; available {
+				return status, nil
 			}
-			switch result.Status {
-			case state.NotInstalled, state.Managed:
-				return healthdiagnostics.Healthy, nil
-			case state.ChangeInProgress:
-				return healthdiagnostics.NeedsAttention, nil
-			default:
-				return healthdiagnostics.Unknown, nil
-			}
-		}),
-		inspection(healthdiagnostics.NetworkPolicyModule, func(context.Context) (healthdiagnostics.HealthStatus, error) {
-			return healthdiagnostics.HealthStatus(networkModule.Evaluate(networkpolicy.Request{}).Outcome), nil
+			return stateHealthStatus(stateModule, installation)
 		}),
 		inspection(healthdiagnostics.SystemChangesModule, func(context.Context) (healthdiagnostics.HealthStatus, error) {
-			result := changes.Inspect()
-			if len(result.Findings) > 0 {
-				return healthdiagnostics.Unknown, nil
-			}
-			switch result.Status {
+			switch installation.Status {
 			case systemchanges.NotInstalled, systemchanges.Managed:
 				return healthdiagnostics.Healthy, nil
 			case systemchanges.ChangeInProgress:
@@ -66,32 +250,53 @@ func scheduledInspections() []healthdiagnostics.NamedInspection {
 				return healthdiagnostics.Unknown, nil
 			}
 		}),
-		inspection(healthdiagnostics.CloudflareTunnelModule, func(ctx context.Context) (healthdiagnostics.HealthStatus, error) {
-			return healthdiagnostics.HealthStatus(tunnel.View(ctx, cloudflaretunnel.ViewRequest{}).Health.Outcome), nil
-		}),
-		inspection(healthdiagnostics.CertificateLifecycleModule, func(ctx context.Context) (healthdiagnostics.HealthStatus, error) {
-			return healthdiagnostics.HealthStatus(certificates.View(ctx, certificatelifecycle.ViewRequest{}).Health.Outcome), nil
-		}),
-		inspection(healthdiagnostics.ConnectionProfilesModule, func(ctx context.Context) (healthdiagnostics.HealthStatus, error) {
-			return healthdiagnostics.HealthStatus(profiles.ViewRegistry(ctx, connectionprofiles.RegistryViewRequest{}).Health.Outcome), nil
-		}),
-		inspection(healthdiagnostics.SubscriptionPublicationModule, func(context.Context) (healthdiagnostics.HealthStatus, error) {
-			if (subscriptionpublication.Interface{}).View(subscriptionpublication.ViewRequest{}).Status == subscriptionpublication.PublicationUnavailable {
-				return healthdiagnostics.Unknown, nil
-			}
-			return healthdiagnostics.Failed, nil
-		}),
-		inspection(healthdiagnostics.SubscriptionServingModule, func(context.Context) (healthdiagnostics.HealthStatus, error) {
-			server, err := subscriptionserving.New()
-			if err != nil {
-				return healthdiagnostics.Unknown, err
-			}
-			return healthdiagnostics.HealthStatus(server.Health().Status), nil
-		}),
-		{Module: healthdiagnostics.HealthDiagnosticsModule, Role: healthdiagnostics.Required},
-		{Module: healthdiagnostics.SoftwareLifecycleModule, Role: healthdiagnostics.Required},
-		{Module: healthdiagnostics.OwnerConsoleModule, Role: healthdiagnostics.Required},
+		moduleHealthInspection(healthdiagnostics.NetworkPolicyModule, statuses),
+		moduleHealthInspection(healthdiagnostics.CloudflareTunnelModule, statuses),
+		moduleHealthInspection(healthdiagnostics.CertificateLifecycleModule, statuses),
+		moduleHealthInspection(healthdiagnostics.ConnectionProfilesModule, statuses),
+		moduleHealthInspection(healthdiagnostics.SubscriptionPublicationModule, statuses),
+		moduleHealthInspection(healthdiagnostics.SubscriptionServingModule, statuses),
+		moduleHealthInspection(healthdiagnostics.HealthDiagnosticsModule, statuses),
+		moduleHealthInspection(healthdiagnostics.SoftwareLifecycleModule, statuses),
+		moduleHealthInspection(healthdiagnostics.OwnerConsoleModule, statuses),
 	}
+}
+
+func moduleHealthInspection(module healthdiagnostics.Module, statuses map[healthdiagnostics.Module]healthdiagnostics.HealthStatus) healthdiagnostics.NamedInspection {
+	status, available := statuses[module]
+	if !available {
+		return healthdiagnostics.NamedInspection{Module: module, Role: healthdiagnostics.Required}
+	}
+	return inspection(module, func(context.Context) (healthdiagnostics.HealthStatus, error) { return status, nil })
+}
+
+func stateHealthStatus(module state.Interface, installation systemchanges.InstallationHealthFacts) (healthdiagnostics.HealthStatus, error) {
+	if installation.Status == systemchanges.NotInstalled {
+		result, err := module.Load(state.LoadRequest{Baseline: state.CleanVPS})
+		if err == nil && result.Status == state.NotInstalled {
+			return healthdiagnostics.Healthy, nil
+		}
+		return healthdiagnostics.Unknown, err
+	}
+	observed, release, err := managedLoadEvidence()
+	if err != nil {
+		return healthdiagnostics.Unknown, err
+	}
+	lineage := &state.LineageProof{Revision: observed.StateRevision, LastCompletedChangeSet: state.ChangeSetIdentity(observed.LastChangeSet), ReleaseIdentity: release}
+	if installation.Status == systemchanges.ChangeInProgress {
+		lineage.ActiveChangeSet = state.ChangeSetIdentity(installation.CurrentChangeSet)
+	}
+	result, err := module.Load(state.LoadRequest{Baseline: state.ManagedEvidence, SupportedRelease: release, Lineage: lineage})
+	if err != nil {
+		return healthdiagnostics.Unknown, err
+	}
+	if result.Status == state.ChangeInProgress {
+		return healthdiagnostics.NeedsAttention, nil
+	}
+	if result.Status == state.Managed {
+		return healthdiagnostics.Healthy, nil
+	}
+	return healthdiagnostics.Unknown, nil
 }
 
 func inspection(module healthdiagnostics.Module, inspect func(context.Context) (healthdiagnostics.HealthStatus, error)) healthdiagnostics.NamedInspection {

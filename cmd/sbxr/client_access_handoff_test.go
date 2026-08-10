@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/albertloky/SBXR/internal/connectionprofiles"
+	"github.com/albertloky/SBXR/internal/ownerconsole"
 )
 
 func TestClientAccessHandoffAcceptsOnlyExactTypedRequests(t *testing.T) {
@@ -19,7 +20,9 @@ func TestClientAccessHandoffAcceptsOnlyExactTypedRequests(t *testing.T) {
 		{Schema: 1, Mode: "change", Action: clientAccessRotateAllProfiles, Profile: valid.Profile, ChangeSet: valid.ChangeSet},
 		{Schema: 1, Mode: "change", Action: "run-command", Profile: valid.Profile, ChangeSet: valid.ChangeSet},
 		{Schema: 1, Mode: "view", ChangeSet: valid.ChangeSet},
+		{Schema: 1, Mode: "view", DiagnosticsAction: "view"},
 		{Schema: 1, Mode: "recover", Action: clientAccessRotateProfile, ChangeSet: valid.ChangeSet},
+		{Schema: 1, Mode: "change", Action: clientAccessRotateAllProfiles, ChangeSet: valid.ChangeSet, BundleReplacement: ownerconsole.BundleReplacement{Archive: "sbxr-support-20260810T120000Z.tar.gz"}},
 	} {
 		if validClientAccessHandoff(changed) {
 			t.Fatalf("unsafe request accepted: %+v", changed)
@@ -69,6 +72,24 @@ func TestManagedProviderHandoffAcceptsOnlyExactReviewedActions(t *testing.T) {
 	} {
 		if validClientAccessHandoff(request) {
 			t.Fatalf("unsafe managed provider request was accepted: %+v", request)
+		}
+	}
+}
+
+func TestDiagnosticsHandoffAcceptsOnlyViewOrReviewedBundleReplacement(t *testing.T) {
+	view := clientAccessHandoffRequest{Schema: 1, Mode: "diagnostics", DiagnosticsAction: "view"}
+	bundle := clientAccessHandoffRequest{Schema: 1, Mode: "diagnostics", DiagnosticsAction: "bundle", BundleReplacement: ownerconsole.BundleReplacement{Archive: "sbxr-support-20260810T120000Z.tar.gz"}}
+	if !validClientAccessHandoff(view) || !validClientAccessHandoff(bundle) {
+		t.Fatal("exact diagnostics request was refused")
+	}
+	for _, request := range []clientAccessHandoffRequest{
+		{Schema: 1, Mode: "diagnostics"},
+		{Schema: 1, Mode: "diagnostics", DiagnosticsAction: "shell"},
+		{Schema: 1, Mode: "diagnostics", DiagnosticsAction: "view", ChangeSet: "client-access-0001"},
+		{Schema: 1, Mode: "diagnostics", DiagnosticsAction: "bundle", Action: clientAccessRotateAllProfiles},
+	} {
+		if validClientAccessHandoff(request) {
+			t.Fatalf("unsafe diagnostics request was accepted: %+v", request)
 		}
 	}
 }

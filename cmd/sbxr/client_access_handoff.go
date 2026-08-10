@@ -11,9 +11,11 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
 	"github.com/albertloky/SBXR/internal/connectionprofiles"
+	"github.com/albertloky/SBXR/internal/ownerconsole"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 	"github.com/albertloky/SBXR/internal/systemchanges"
 	systemubuntu "github.com/albertloky/SBXR/internal/systemchanges/adapter/ubuntu"
@@ -22,15 +24,17 @@ import (
 const maxClientAccessHandoffBytes = 16 << 10
 
 type clientAccessHandoffRequest struct {
-	Schema         int                   `json:"schema"`
-	Mode           string                `json:"mode"`
-	Action         clientAccessAction    `json:"action,omitempty"`
-	ProviderAction managedProviderAction `json:"provider_action,omitempty"`
-	Profile        string                `json:"profile,omitempty"`
-	ChangeSet      string                `json:"change_set"`
-	Token          string                `json:"token,omitempty"`
-	OwnerEmail     string                `json:"owner_email,omitempty"`
-	Agreement      bool                  `json:"agreement,omitempty"`
+	Schema            int                            `json:"schema"`
+	Mode              string                         `json:"mode"`
+	Action            clientAccessAction             `json:"action,omitempty"`
+	ProviderAction    managedProviderAction          `json:"provider_action,omitempty"`
+	Profile           string                         `json:"profile,omitempty"`
+	ChangeSet         string                         `json:"change_set"`
+	Token             string                         `json:"token,omitempty"`
+	OwnerEmail        string                         `json:"owner_email,omitempty"`
+	Agreement         bool                           `json:"agreement,omitempty"`
+	DiagnosticsAction string                         `json:"diagnostics_action,omitempty"`
+	BundleReplacement ownerconsole.BundleReplacement `json:"bundle_replacement,omitempty"`
 }
 
 func (clientAccessHandoffRequest) String() string { return "Client Access handoff request: protected" }
@@ -57,8 +61,20 @@ type clientAccessHandoffSession struct {
 }
 
 func validClientAccessHandoff(request clientAccessHandoffRequest) bool {
-	if request.Schema != 1 || request.Mode != "change" && request.Mode != "provider" && request.Mode != "view" && request.Mode != "recover" {
+	if request.Schema != 1 || request.Mode != "change" && request.Mode != "provider" && request.Mode != "view" && request.Mode != "recover" && request.Mode != "diagnostics" {
 		return false
+	}
+	if request.Mode != "diagnostics" && (request.DiagnosticsAction != "" || request.BundleReplacement.Archive != "") {
+		return false
+	}
+	if request.Mode == "diagnostics" {
+		if request.Action != "" || request.ProviderAction != "" || request.Profile != "" || request.ChangeSet != "" || request.Token != "" || request.OwnerEmail != "" || request.Agreement {
+			return false
+		}
+		if request.DiagnosticsAction == "view" {
+			return request.BundleReplacement.Archive == ""
+		}
+		return request.DiagnosticsAction == "bundle" && (request.BundleReplacement.Archive == "" || validSupportBundleName(request.BundleReplacement.Archive))
 	}
 	if request.Mode == "view" {
 		return request.Action == "" && request.Profile == "" && request.ChangeSet == ""
@@ -98,6 +114,15 @@ func validClientAccessHandoff(request clientAccessHandoffRequest) bool {
 	default:
 		return false
 	}
+}
+
+func validSupportBundleName(name string) bool {
+	const prefix, suffix = "sbxr-support-", ".tar.gz"
+	if len(name) != len(prefix)+len("20060102T150405Z")+len(suffix) || !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, suffix) {
+		return false
+	}
+	_, err := time.Parse("20060102T150405Z", strings.TrimSuffix(strings.TrimPrefix(name, prefix), suffix))
+	return err == nil
 }
 
 func validClientAccessChangeSet(value string) bool {
@@ -153,6 +178,16 @@ func serveClientAccess(ctx context.Context, socket, executable *os.File, verify 
 	var request clientAccessHandoffRequest
 	if readClientAccessMessage(socket, &request) != nil || !validClientAccessHandoff(request) {
 		return errors.New("Client Access request refused")
+	}
+	if request.Mode == "diagnostics" {
+		if request.DiagnosticsAction == "view" {
+			presentation, err := productionDiagnosticsPresentation(ctx)
+			if err != nil {
+				return err
+			}
+			return writeClientAccessMessage(socket, presentation)
+		}
+		return writeClientAccessMessage(socket, productionSupportBundle(ctx, request.BundleReplacement))
 	}
 	if request.Mode == "view" {
 		presentation, err := managedClientAccessPresentation(ctx)
@@ -229,6 +264,44 @@ func serveClientAccess(ctx context.Context, socket, executable *os.File, verify 
 	}
 	_, err = socket.Write([]byte{terminal})
 	return err
+}
+
+func loadDiagnosticsPresentation(ctx context.Context) ownerconsole.DiagnosticsPresentation {
+	request := clientAccessHandoffRequest{Schema: 1, Mode: "diagnostics", DiagnosticsAction: "view"}
+	var presentation ownerconsole.DiagnosticsPresentation
+	if requestClientAccessResult(ctx, request, &presentation) != nil {
+		return ownerconsole.DiagnosticsPresentation{}
+	}
+	return presentation
+}
+
+func createSupportBundle(ctx context.Context, replacement ownerconsole.BundleReplacement) ownerconsole.SupportBundleResult {
+	request := clientAccessHandoffRequest{Schema: 1, Mode: "diagnostics", DiagnosticsAction: "bundle", BundleReplacement: replacement}
+	var result ownerconsole.SupportBundleResult
+	if requestClientAccessResult(ctx, request, &result) != nil {
+		return ownerconsole.SupportBundleResult{}
+	}
+	return result
+}
+
+func requestClientAccessResult(ctx context.Context, request clientAccessHandoffRequest, result any) error {
+	if ctx == nil || !validClientAccessHandoff(request) || result == nil {
+		return errors.New("Client Access request launch refused")
+	}
+	executable, err := openCurrentClientAccessExecutable()
+	if err != nil {
+		return err
+	}
+	parent, wait, err := startClientAccessProcess(ctx, executable)
+	executable.Close()
+	if err != nil {
+		return err
+	}
+	defer parent.Close()
+	if writeClientAccessMessage(parent, request) != nil || readClientAccessMessage(parent, result) != nil || wait() != nil {
+		return errors.New("privileged Client Access result unavailable")
+	}
+	return nil
 }
 
 func retryClientAccessRecovery(ctx context.Context, changeSet string) (systemchanges.InstallationStatus, error) {

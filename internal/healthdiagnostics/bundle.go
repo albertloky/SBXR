@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/albertloky/SBXR/internal/systemchanges"
 )
 
 const (
@@ -25,6 +27,21 @@ const (
 type ReleaseFacts struct {
 	repository, tag, commit, releaseIndexSHA256 string
 	verified                                    bool
+}
+
+// ReleaseFactsFrom accepts only System Changes' opaque handoff of State's
+// exact fresh Managed Release Identity proof.
+func ReleaseFactsFrom(inspection systemchanges.ReleaseHealthInspection) ReleaseFacts {
+	identity, ok := inspection.ReleaseIdentityFacts()
+	if !ok {
+		return ReleaseFacts{}
+	}
+	repository, tag, commit, indexSHA256 := identity.Repository, identity.Tag, identity.Commit, identity.ReleaseIndexSHA256
+	repository = strings.TrimPrefix(repository, "https://")
+	if repository == "albertloky/SBXR" {
+		repository = "github.com/" + repository
+	}
+	return ReleaseFacts{repository: repository, tag: tag, commit: commit, releaseIndexSHA256: indexSHA256, verified: true}
 }
 
 type releaseRecord struct {

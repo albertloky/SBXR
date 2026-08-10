@@ -10,10 +10,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/albertloky/SBXR/internal/healthdiagnostics"
 	"github.com/albertloky/SBXR/internal/ownerconsole"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 	softwaregithub "github.com/albertloky/SBXR/internal/softwarelifecycle/adapter/github"
 	softwareubuntu "github.com/albertloky/SBXR/internal/softwarelifecycle/adapter/ubuntu"
+	"github.com/albertloky/SBXR/internal/systemchanges"
 )
 
 type installOutcome struct {
@@ -28,6 +30,31 @@ type installOutcome struct {
 
 func (*installOutcome) String() string   { return "Clean VPS installation outcome: protected" }
 func (*installOutcome) GoString() string { return "Clean VPS installation outcome: protected" }
+
+func (outcome *installOutcome) ViewDiagnostics(ctx context.Context) ownerconsole.DiagnosticsPresentation {
+	outcome.mu.Lock()
+	built := outcome.built
+	outcome.mu.Unlock()
+	var installation healthdiagnostics.InstallationSummary
+	var facts systemchanges.InstallationHealthFacts
+	statuses := map[healthdiagnostics.Module]healthdiagnostics.HealthStatus{}
+	if built != nil {
+		installation = built.health
+		facts.Status = systemchanges.NotInstalled
+		statuses[healthdiagnostics.NetworkPolicyModule] = healthdiagnostics.HealthStatus(built.wiring.network.Outcome)
+	}
+	result := healthdiagnostics.New(nil).Check(ctx, installation, scheduledInspections(facts, statuses)...)
+	services := make([]ownerconsole.ServiceHealthPresentation, 0, 10)
+	for _, unit := range healthDiagnosticUnits() {
+		services = append(services, ownerconsole.ServiceHealthPresentation{Service: unit, Status: ownerconsole.HealthUnknown})
+	}
+	presentation, _ := diagnosticsPresentation(result, nil, services)
+	return presentation
+}
+
+func (*installOutcome) CreateSupportBundle(context.Context, ownerconsole.BundleReplacement) ownerconsole.SupportBundleResult {
+	return ownerconsole.SupportBundleResult{Code: "HEALTH-DIAGNOSTICS-BUNDLE-RELEASE"}
+}
 
 var installFields = []ownerconsole.EditingField{
 	{Identity: "release-tag", Label: "Release tag", Required: true},

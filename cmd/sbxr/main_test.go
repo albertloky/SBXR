@@ -14,6 +14,8 @@ import (
 
 var _ ownerconsole.CloudflareModule = (*clientAccessOutcome)(nil)
 var _ ownerconsole.CertificatesModule = (*clientAccessOutcome)(nil)
+var _ ownerconsole.DiagnosticsModule = (*clientAccessOutcome)(nil)
+var _ ownerconsole.DiagnosticsModule = (*installOutcome)(nil)
 
 func TestDefaultRunRefusesRedirectedTerminal(t *testing.T) {
 	input, writeInput, err := os.Pipe()
@@ -39,6 +41,13 @@ func TestDefaultRunRefusesRedirectedTerminal(t *testing.T) {
 	}
 	if got := string(refusal); !strings.Contains(got, "interactive input") || strings.Contains(got, "CLIENT-ACCESS-MARKER") {
 		t.Fatalf("refusal = %q", got)
+	}
+}
+
+func TestPreinstallOutcomeProvidesRestrictedFailSafeDiagnostics(t *testing.T) {
+	presentation := newInstallOutcome().ViewDiagnostics(t.Context())
+	if presentation.Installation != ownerconsole.InstallationRecoveryRequired || len(presentation.Modules) != 11 || len(presentation.Services) != 10 || len(presentation.Bundles) != 0 {
+		t.Fatalf("preinstall diagnostics = %+v", presentation)
 	}
 }
 

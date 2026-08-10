@@ -95,3 +95,30 @@ This procedure has no live or Owner result in this file. Record results only aga
 9. Scan the private request, Plan review, journal, rollback snapshots, prepared manifests, protected service files, State results, certificate candidates, Owner Console transcript, typed health, and redacted Acceptance Record for management and run tokens, Owner email, ACME account data, Client Access Values, private keys, authorization values, complete subscription URLs, raw Certbot or provider output, and injected error markers. Any marker outside its owning protected artifact fails.
 
 Stable evidence codes are `RELEASE-PROVIDER-CERTIFICATES-N-TO-N+1`, `RELEASE-CLOUDFLARE-MANAGEMENT-TOKEN`, `RELEASE-CLOUDFLARE-RUN-TOKEN`, `RELEASE-CLOUDFLARE-IMMUTABLE-OWNERSHIP`, `RELEASE-DIRECT-TLS-HOSTNAME`, `RELEASE-CERTIFICATE-IP-HTTP01`, `RELEASE-CERTIFICATE-DOMAIN-HTTP01`, `RELEASE-CERTIFICATE-SERIAL-RENEWAL`, `RELEASE-CERTIFICATE-POINTER-ROLLBACK`, `RELEASE-PROVIDER-CERTIFICATE-RESTART`, `RELEASE-PROVIDER-CERTIFICATE-RECOVERY-REQUIRED`, and `RELEASE-PROVIDER-CERTIFICATE-SECRET-SCAN`.
+
+## `RELEASE-HEALTH-DIAGNOSTICS` — Integrated Verification — Codex
+
+This procedure has no live or Owner result in this file. Record results only against one exact Release Identity in its redacted Acceptance Record. No real VPS, reboot, provider, client, or Owner-console acceptance was authorized by issue #147; every such unperformed check remains Pending.
+
+1. From each exact installation status — `Not installed`, `Managed`, `Change in progress`, and `Recovery Required` — run the authenticated Diagnostics screen and `sbxr private health-check`. Require both paths to call the same Health and Diagnostics `Check`, return all eleven named Modules once, keep installation status separate from Module health, and show only fixed safe explanations, next actions, service summaries, retention limits, and bundle names.
+2. Start `sbxr-health-check.timer`, miss one weekly run while the Acceptance VPS is off, and reboot. Require `Persistent=true` to run the missed check once. Compare State, the active transaction journal, Rollback Snapshot, firewall, services, publication, provider resources, and every credential before and after; any mutation outside the root-only diagnostic event history fails.
+3. Exercise cancellation, an active reversible Change Set, rollback, worker death during forward work and rollback, restart recovery, an unprovable transaction, and Complete removal. Require diagnostics to preserve System Changes' exact status, progress, rollback/forward-only availability, and next action without opening, replacing, or deleting transaction evidence.
+4. Create three support bundles through the authenticated verified root handoff. Require exactly `manifest.json`, `report.txt`, and `facts.json`; root-owned `0700` directories; root-owned single-link `0600` archives; at most three completed bundles; and the external-copy warning. Before a fourth, review the exact three safe names and replace only the selected archive.
+5. Inject unique Client Access Value, Infrastructure Secret, journal, Rollback Snapshot, raw-output, environment, command-argument, client-address, destination, crash-report, and `SECRET-MARKER` values into every rejected input source. Require no marker in a completed archive, event history, Owner Console transcript, command line, environment, or Acceptance Record. Keep active System Changes evidence byte-for-byte unchanged.
+6. Inject short writes, changed reads, malformed history, unsafe ownership/modes, links, duplicate names, compression failure, every bundle transaction crash phase, final-sync failure, cleanup failure, and concurrent fourth-bundle publication. Require no partial completed archive, exact rollback or completion of the reviewed replacement, empty staging before later work, and fail-closed stable codes.
+7. Run the focused automated evidence:
+
+   ```sh
+   go test ./cmd/sbxr -run '^(TestPrivateScheduledHealthCommandCallsScheduledCheck|TestProductionDiagnosticsPresentationUsesTheSameElevenModuleCheck|TestScheduledInspectionsUseOwningModuleManagedResults|TestExecutableBundleCompositionUsesOnlyOpaqueStateAndSafeCheckFacts|TestDiagnosticsHandoffAcceptsOnlyViewOrReviewedBundleReplacement|TestClientAccessHandoffAcceptsOnlyExactTypedRequests|TestPreinstallOutcomeProvidesRestrictedFailSafeDiagnostics)$' -count=1
+   go test ./internal/healthdiagnostics/... -count=1
+   go test ./internal/state -run '^TestHealthReleaseInspectionComesOnlyFromTheExactFreshManagedLoad$' -count=1
+   go test ./internal/systemchanges/... -run 'Health|Recovery|Rollback|Restart|CompleteRemoval' -count=1
+   go test ./internal/networkpolicy -run '^TestCleanVPSAuthorityRechecksTheExactNetworkPolicyBaseline$' -count=1
+   go test ./internal/softwarelifecycle -run 'HealthCheck|ManagedUnit' -count=1
+   go test ./internal/ownerconsole -run '^(TestAccessProviderRunsOnlyAfterSuccessfulAuthentication|TestRunSupportBundleIsSingleFlightAndWaitsBehindExitConfirmation|TestValidatedSupportBundleBindsTheExactReplacement|TestRunCreatesOrExplicitlyReplacesACompletedSupportBundle)$' -count=1
+   go test ./... -count=1
+   ```
+
+8. Record separate redacted evidence for the automated run, the exact Acceptance VPS reboot and permissions run, and any required Owner Acceptance. Automated checks do not satisfy the unperformed VPS, provider, client, or Owner rows.
+
+Stable evidence codes are `RELEASE-HEALTH-DIAGNOSTICS`, `RELEASE-HEALTH-ELEVEN-MODULES`, `RELEASE-HEALTH-SCHEDULED-PERSISTENT`, `RELEASE-HEALTH-NO-MUTATION`, `RELEASE-HEALTH-LIFECYCLE-STATUS`, `RELEASE-DIAGNOSTIC-EVENT-RETENTION`, `RELEASE-SUPPORT-BUNDLE-THREE-FILE`, `RELEASE-SUPPORT-BUNDLE-REPLACEMENT`, `RELEASE-SUPPORT-BUNDLE-PERMISSIONS`, `RELEASE-SUPPORT-BUNDLE-NO-PARTIAL`, `RELEASE-SUPPORT-BUNDLE-TRANSACTION-EXEMPT`, and `RELEASE-HEALTH-SECRET-SCAN`.

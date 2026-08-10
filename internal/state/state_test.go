@@ -82,6 +82,23 @@ func TestLoadValidCurrentState(t *testing.T) {
 	}
 }
 
+func TestHealthReleaseInspectionComesOnlyFromTheExactFreshManagedLoad(t *testing.T) {
+	module := state.New(memoryStorage{document: completeDocument(t)})
+	loaded, err := module.Load(managedRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspection := module.HealthReleaseInspection(loaded)
+	repository, tag, commit, indexSHA256, ok := inspection.HealthReleaseIdentityFacts()
+	if !ok || repository != release.Repository || tag != release.Tag || commit != release.Commit || indexSHA256 != release.ReleaseIndexSHA256 {
+		t.Fatalf("health release inspection = %q, %q, %q, %q, %t", repository, tag, commit, indexSHA256, ok)
+	}
+	_, _, _, _, ok = (state.Interface{}).HealthReleaseInspection(loaded).HealthReleaseIdentityFacts()
+	if ok {
+		t.Fatal("a different State owner upgraded a Managed result")
+	}
+}
+
 func TestLoadReportsDeterministicSchemaOneToTwoMigrationReview(t *testing.T) {
 	want := &state.MigrationReview{
 		StartingSchema:  1,

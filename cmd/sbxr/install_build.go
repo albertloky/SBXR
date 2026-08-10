@@ -15,6 +15,7 @@ import (
 	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
 	"github.com/albertloky/SBXR/internal/connectionprofiles"
 	profilesubuntu "github.com/albertloky/SBXR/internal/connectionprofiles/adapter/ubuntu"
+	"github.com/albertloky/SBXR/internal/healthdiagnostics"
 	"github.com/albertloky/SBXR/internal/networkpolicy"
 	networkubuntu "github.com/albertloky/SBXR/internal/networkpolicy/adapter/ubuntu"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
@@ -37,6 +38,7 @@ type builtInstall struct {
 	network       func(networkpolicy.Request) networkpolicy.Result
 	disk          systemchanges.DiskRequirement
 	totalSteps    int
+	health        healthdiagnostics.InstallationSummary
 }
 
 func (built *builtInstall) prepareState(module state.Interface) (*state.PreparedCommit, error) {
@@ -247,7 +249,8 @@ func buildInstallWith(ctx context.Context, request softwareubuntu.InstallHandoff
 	for _, contribution := range contributions {
 		totalSteps += len(contribution.SoftwareLifecycleInstallContribution().Steps)
 	}
-	return &builtInstall{candidate: candidate, desired: desired, desiredSHA256: desiredSHA256, plan: installPlan, wiring: wiring, cloudflare: cloudflareResult.Plan, cloudflareAPI: dependencies.cloudflareAPI, contributions: contributions, networkIntent: intent, network: dependencies.network, disk: disk, totalSteps: totalSteps}, nil
+	health := healthdiagnostics.InstallationSummaryFrom(systemchanges.NewNotInstalledHealthInspection(baseNetwork.FreshInstallationProof()))
+	return &builtInstall{candidate: candidate, desired: desired, desiredSHA256: desiredSHA256, plan: installPlan, wiring: wiring, cloudflare: cloudflareResult.Plan, cloudflareAPI: dependencies.cloudflareAPI, contributions: contributions, networkIntent: intent, network: dependencies.network, disk: disk, totalSteps: totalSteps, health: health}, nil
 }
 
 type installEntropyReader struct {
