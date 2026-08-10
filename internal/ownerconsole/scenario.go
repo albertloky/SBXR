@@ -18,6 +18,7 @@ const (
 	CancellationRequested
 	RecoveryWithRollback
 	RecoveryWithoutRecovery
+	ManagedStateRepair
 	UpdateReview
 	CompleteRemovalConfirmation
 	ForwardOnlyRemoval
@@ -164,6 +165,11 @@ var scenarioFixtures = map[Scenario]fixture{
 		header: "Recovery Required - rev ? - authenticated", title: "THIS INSTALLATION CANNOT BE RECOVERED", navigation: servicesNavigation,
 		lines:   []string{"SYS-LINEAGE-019 - normal mutations are blocked.", "", "Desired State         missing", "Rollback Snapshot     checksum cannot be proven", "Automatic rollback    UNAVAILABLE", "", "SBXR cannot adopt files, force services, bypass the", "journal, restore an old revision, or recreate secrets.", "", "Complete removal, then rebuild from scratch.", "", "> View safe evidence", "  Read-only diagnostics", "  Check again", "  Complete removal", "", "Retry automatic rollback is intentionally absent."},
 		details: []string{"REBUILD REQUIRED", "", "No adoption or force-start.", "Complete removal then Clean-VPS rebuild."},
+	},
+	ManagedStateRepair: {
+		header: "Managed - rev 42 - authenticated", title: "REVIEW CURRENT-STATE REPAIR", navigation: servicesNavigation, allowsBack: true,
+		lines:   []string{"Current Desired State lineage is proven.", "Managed files drifted from that current State.", "", "> Review current-State repair", "  View safe evidence", "  Read-only diagnostics", "  Check again", "  Complete removal", "  Back"},
+		details: []string{"FORWARD REPAIR", "", "No historical State or secret restore.", "A fresh one-use Plan is required."},
 	},
 	UpdateReview: {
 		header: "Managed - rev 42 - authenticated", title: "REVIEW UPDATE PLAN", navigation: updatesNavigation, allowsBack: true,

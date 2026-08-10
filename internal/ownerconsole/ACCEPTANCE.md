@@ -177,6 +177,16 @@ go test ./internal/ownerconsole -run '^TestRun(CertificatesShowsBothLineagesAndR
 
 Require the IP and Direct TLS Hostname lineages, `shortlived` and `tlsserver` profiles, truthful serving expiry, IP due at `72 hours` or less, ordinary retry every `6 hours`, busy-lock retry within `1 hour` or `15 minutes` below `24 hours`, domain ACME Renewal Information with `15 days` fallback, one serial persistent randomized scheduler running at least twice daily, and typed activation or rollback facts. Require issuance and renewal to stop at separate exact reviewed Plans, Back to restore the originating screen, and Certificate Correction Flows to retain Check again, Back, and copyable redacted evidence at the minimum size. Require no Cloudflare token, DNS-01 authority, CAA creation, private key, ACME account material, unsafe typed fact, contradictory expiry, or Infrastructure Secret marker to render.
 
+### OC-OPERATIONS-01 — Diagnostics, release review, and Recovery Required
+
+Run:
+
+```sh
+go test ./internal/ownerconsole -run '^(TestValidatedSupportBundleBindsTheExactReplacement|TestRecoveryViewMapsEachKindToItsExactStatusScreen|TestRun(ShowsInstallationAndModuleHealthAsSeparateTypedFacts|CreatesOrExplicitlyReplacesACompletedSupportBundle|SupportBundleIsSingleFlightAndWaitsBehindExitConfirmation|ReviewsExactUpdateAndCompatibleDowngradeBeforeApply|RecoveryRequiredOffersOnlyActionsProvenByCurrentMaterial|RetryRollbackPresentsEveryTypedDurableResult|OperationsRefuseInfrastructureSecretMarkers|OperationsKeepFactsAndActionsReachableAtApprovedSizes|LateLifecycleAndRecoveryResultsNeverStealFocus))$' -count=1
+```
+
+Require exact installation status separately from Module and service health, stable findings and next actions, `30 days` or `50 MiB` event retention, three completed bundles, explicit fourth-bundle replacement, and the external-copy warning. Require update and downgrade discovery to show both freshly verified Release Identities, authenticated sequence, migrations, regenerated representations, affected services, checks, interruption, cancellation, and rollback, and to stop at a separate exact Plan review. Require Recovery Required to offer rollback only with valid unfinished material, current-State repair only from current proven State, and otherwise safe evidence, read-only diagnostics, Check again, Complete removal, and rebuild. Refuse unsafe typed facts and every historical restore, old-secret restore, Recovery Point, adoption, force-start, force-unlock, manual completion, and parcel path.
+
 ## Seam Verification
 
 ### OC-ENTER-PTY-01 — Real pseudo-terminal lifecycle

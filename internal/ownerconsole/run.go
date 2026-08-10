@@ -90,6 +90,11 @@ type Session struct {
 	CloudflareOutcomes   OutcomeModule
 	Certificates         CertificatesModule
 	CertificateOutcomes  OutcomeModule
+	Diagnostics          DiagnosticsModule
+	Lifecycle            LifecycleModule
+	LifecycleOutcomes    OutcomeModule
+	Recovery             RecoveryModule
+	RecoveryOutcomes     OutcomeModule
 }
 
 func Run(ctx context.Context, session Session) error {
@@ -135,7 +140,7 @@ func Run(ctx context.Context, session Session) error {
 	fixture := scenarioFixture(session.Scenario)
 	accessCatalog := session.Access.catalog()
 	program := tea.NewProgram(
-		model{width: c.Width, height: c.Height, scenario: session.Scenario, selected: selectedNavigation(session.Scenario), unicode: c.Unicode, noColor: noColor, initialModes: initialModes, drawingModeProbeRequired: c.DrawingModeProbeRequired, inputFocused: fixture.acceptsInput, progressExpected: session.Updates != nil, authenticator: session.Authenticator, authenticationPolicy: session.AuthenticationPolicy, runContext: runContext, accessCatalog: accessCatalog, clipboard: session.Clipboard, outcome: session.Outcome, defaultOutcome: session.Outcome, profiles: session.Profiles, profileOutcomes: session.ProfileOutcomes, profileViewGeneration: 1, cloudflare: session.Cloudflare, cloudflareOutcomes: session.CloudflareOutcomes, cloudflareGeneration: 1, certificates: session.Certificates, certificateOutcomes: session.CertificateOutcomes, certificateGeneration: 1},
+		model{width: c.Width, height: c.Height, scenario: session.Scenario, selected: selectedNavigation(session.Scenario), unicode: c.Unicode, noColor: noColor, initialModes: initialModes, drawingModeProbeRequired: c.DrawingModeProbeRequired, inputFocused: fixture.acceptsInput, progressExpected: session.Updates != nil, authenticator: session.Authenticator, authenticationPolicy: session.AuthenticationPolicy, runContext: runContext, accessCatalog: accessCatalog, clipboard: session.Clipboard, outcome: session.Outcome, defaultOutcome: session.Outcome, profiles: session.Profiles, profileOutcomes: session.ProfileOutcomes, profileViewGeneration: 1, cloudflare: session.Cloudflare, cloudflareOutcomes: session.CloudflareOutcomes, cloudflareGeneration: 1, certificates: session.Certificates, certificateOutcomes: session.CertificateOutcomes, certificateGeneration: 1, diagnostics: session.Diagnostics, diagnosticsScreen: diagnosticsScreenState{generation: 1}, lifecycle: session.Lifecycle, lifecycleOutcomes: session.LifecycleOutcomes, lifecycleScreen: lifecycleScreenState{generation: 1}, recovery: session.Recovery, recoveryOutcomes: session.RecoveryOutcomes, recoveryScreen: recoveryScreenState{generation: 1}},
 		tea.WithContext(runContext),
 		tea.WithInput(session.Input),
 		tea.WithOutput(session.Output),
@@ -235,6 +240,7 @@ type model struct {
 	pasteGuard                 bool
 	refreshed                  bool
 	pendingUpdate              *PresentationUpdate
+	operationState             operationPendingState
 	progress                   Progress
 	progressExpected           bool
 	progressReceived           bool
@@ -299,10 +305,61 @@ type model struct {
 	certificateAction          int
 	certificateGeneration      uint64
 	providerPage               int
+	diagnostics                DiagnosticsModule
+	diagnosticsScreen          diagnosticsScreenState
+	lifecycle                  LifecycleModule
+	lifecycleOutcomes          OutcomeModule
+	lifecycleScreen            lifecycleScreenState
+	recovery                   RecoveryModule
+	recoveryOutcomes           OutcomeModule
+	recoveryScreen             recoveryScreenState
+}
+
+type operationPendingState struct {
+	started      time.Time
+	elapsed      time.Duration
+	queuedResult tea.Msg
+}
+
+func (state *operationPendingState) start()               { state.started, state.elapsed = time.Now(), 0 }
+func (state *operationPendingState) stop()                { state.started, state.elapsed = time.Time{}, 0 }
+func (state *operationPendingState) queue(result tea.Msg) { state.queuedResult = result }
+func (state *operationPendingState) take() tea.Msg {
+	result := state.queuedResult
+	state.queuedResult = nil
+	return result
+}
+
+type diagnosticsScreenState struct {
+	view                 DiagnosticsPresentation
+	result               SupportBundleResult
+	feedback             string
+	replacement          BundleReplacement
+	generation           uint64
+	action, page         int
+	available, reviewing bool
+	pending              bool
+}
+
+type lifecycleScreenState struct {
+	view         LifecyclePresentation
+	generation   uint64
+	action, page int
+	available    bool
+	pending      bool
+}
+
+type recoveryScreenState struct {
+	view         RecoveryPresentation
+	generation   uint64
+	action, page int
+	available    bool
+	pending      bool
 }
 
 type probeTimeoutMsg struct{}
 type progressTickMsg time.Time
+type operationTickMsg time.Time
 type pasteGuardExpiredMsg struct{}
 type authenticationFinishedMsg struct {
 	result AuthenticationResult
@@ -386,6 +443,34 @@ type certificateReviewMsg struct {
 	identity asyncRequestIdentity
 	review   ChangeReview
 }
+type diagnosticsViewMsg struct {
+	generation uint64
+	view       DiagnosticsPresentation
+}
+type supportBundleMsg struct {
+	identity asyncRequestIdentity
+	result   SupportBundleResult
+}
+type lifecycleViewMsg struct {
+	generation uint64
+	view       LifecyclePresentation
+}
+type lifecycleReviewMsg struct {
+	identity asyncRequestIdentity
+	review   ChangeReview
+}
+type recoveryViewMsg struct {
+	generation uint64
+	view       RecoveryPresentation
+}
+type recoveryRetryMsg struct {
+	identity asyncRequestIdentity
+	change   DurableChangeSet
+}
+type recoveryReviewMsg struct {
+	identity asyncRequestIdentity
+	review   ChangeReview
+}
 
 type progressClock struct {
 	kind        ProgressKind
@@ -410,6 +495,15 @@ func (m model) Init() tea.Cmd {
 	}
 	if m.certificates != nil && m.scenario == CertificatesScreen {
 		commands = append(commands, m.viewCertificatesCommand())
+	}
+	if m.diagnostics != nil && m.scenario == ServicesDiagnosticsScreen {
+		commands = append(commands, m.viewDiagnosticsCommand())
+	}
+	if m.lifecycle != nil && m.scenario == UpdateReview {
+		commands = append(commands, m.viewLifecycleCommand())
+	}
+	if m.recovery != nil && isRecoveryScenario(m.scenario) {
+		commands = append(commands, m.viewRecoveryCommand())
 	}
 	if m.drawingModeProbeRequired {
 		commands = append(commands, tea.Tick(time.Second, func(time.Time) tea.Msg { return probeTimeoutMsg{} }))
@@ -474,6 +568,11 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, progressTick()
 		}
 		m.progressTicking = false
+	case operationTickMsg:
+		if m.operationsPending() && !m.operationState.started.IsZero() {
+			m.operationState.elapsed = time.Time(message).Sub(m.operationState.started)
+			return m, operationTick()
+		}
 	case liveProfileCheckTickMsg:
 		if m.liveProfileCheckPending && !m.liveProfileCheckStartedAt.IsZero() {
 			m.liveProfileCheckElapsed = time.Time(message).Sub(m.liveProfileCheckStartedAt)
@@ -627,6 +726,105 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.changeOrigin, m.hasChangeOrigin = m.scenario, true
 		m.outcome = m.certificateOutcomes
+		m.changeReview = validatedChangeReview(message.review)
+		m.planPage, m.changeFeedback, m.inputFocused = 0, "", false
+		m.scenario, m.selected = InstallationReview, selectedNavigation(InstallationReview)
+	case diagnosticsViewMsg:
+		if message.generation != m.diagnosticsScreen.generation || m.scenario != ServicesDiagnosticsScreen {
+			return m, nil
+		}
+		if m.exitConfirm {
+			m.operationState.queue(message)
+			return m, nil
+		}
+		m.diagnosticsScreen.view, m.diagnosticsScreen.available = validatedDiagnostics(message.view)
+	case supportBundleMsg:
+		if !message.identity.matches(m) || m.scenario != ServicesDiagnosticsScreen {
+			return m, nil
+		}
+		if m.exitConfirm {
+			m.operationState.queue(message)
+			return m, nil
+		}
+		m.diagnosticsScreen.pending = false
+		m.operationState.stop()
+		if result, valid := validatedSupportBundle(message.result, m.diagnosticsScreen.view, m.diagnosticsScreen.replacement); valid {
+			m.diagnosticsScreen.result = result
+			m.diagnosticsScreen.view.Bundles = append([]SupportBundlePresentation(nil), result.Bundles...)
+			m.diagnosticsScreen.feedback = ""
+		} else {
+			m.diagnosticsScreen.result = SupportBundleResult{}
+			m.diagnosticsScreen.feedback = "Support bundle result is unavailable."
+		}
+		m.diagnosticsScreen.reviewing, m.diagnosticsScreen.action, m.diagnosticsScreen.page = false, 0, 0
+		m.diagnosticsScreen.replacement = BundleReplacement{}
+	case lifecycleViewMsg:
+		if message.generation != m.lifecycleScreen.generation || m.scenario != UpdateReview {
+			return m, nil
+		}
+		if m.exitConfirm {
+			m.operationState.queue(message)
+			return m, nil
+		}
+		m.lifecycleScreen.view, m.lifecycleScreen.available = validatedLifecycle(message.view)
+		m.lifecycleScreen.available = m.lifecycleScreen.available && m.lifecycleOutcomes != nil
+	case lifecycleReviewMsg:
+		if !message.identity.matches(m) || m.lifecycleOutcomes == nil {
+			return m, nil
+		}
+		if m.exitConfirm {
+			m.operationState.queue(message)
+			return m, nil
+		}
+		m.lifecycleScreen.pending = false
+		m.operationState.stop()
+		m.changeOrigin, m.hasChangeOrigin = m.scenario, true
+		m.outcome = m.lifecycleOutcomes
+		m.changeReview = validatedChangeReview(message.review)
+		m.planPage, m.changeFeedback, m.inputFocused = 0, "", false
+		m.scenario, m.selected = InstallationReview, selectedNavigation(InstallationReview)
+	case recoveryViewMsg:
+		if message.generation != m.recoveryScreen.generation || !isRecoveryScenario(m.scenario) {
+			return m, nil
+		}
+		if m.exitConfirm {
+			m.operationState.queue(message)
+			return m, nil
+		}
+		m.recoveryScreen.view, m.recoveryScreen.available = validatedRecovery(message.view)
+		if m.recoveryScreen.available {
+			m.scenario = recoveryScenario(m.recoveryScreen.view.Kind)
+			m.selected = selectedNavigation(m.scenario)
+		}
+		if m.recoveryScreen.view.Kind == RecoveryCurrentStateRepairAvailable {
+			m.recoveryScreen.available = m.recoveryScreen.available && m.recoveryOutcomes != nil
+		}
+	case recoveryRetryMsg:
+		if !message.identity.matches(m) {
+			return m, nil
+		}
+		if m.exitConfirm {
+			m.operationState.queue(message)
+			return m, nil
+		}
+		m.recoveryScreen.pending = false
+		m.operationState.stop()
+		m.changeSet = validatedDurableChangeSet(message.change)
+		if m.changeSet.Kind == NoChangeSet {
+			return m, nil
+		}
+		m.scenario, m.selected = MultiStepChangeSet, selectedNavigation(MultiStepChangeSet)
+	case recoveryReviewMsg:
+		if !message.identity.matches(m) || m.recoveryOutcomes == nil {
+			return m, nil
+		}
+		if m.exitConfirm {
+			m.operationState.queue(message)
+			return m, nil
+		}
+		m.recoveryScreen.pending = false
+		m.operationState.stop()
+		m.changeOrigin, m.hasChangeOrigin, m.outcome = m.scenario, true, m.recoveryOutcomes
 		m.changeReview = validatedChangeReview(message.review)
 		m.planPage, m.changeFeedback, m.inputFocused = 0, "", false
 		m.scenario, m.selected = InstallationReview, selectedNavigation(InstallationReview)
@@ -976,6 +1174,15 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.scenario == ServicesDiagnosticsScreen && m.diagnostics != nil {
+			return m.updateDiagnosticsKey(message)
+		}
+		if m.scenario == UpdateReview && m.lifecycle != nil {
+			return m.updateLifecycleKey(message)
+		}
+		if isRecoveryScenario(m.scenario) && m.recovery != nil {
+			return m.updateRecoveryKey(message)
+		}
 		if m.scenario == SubscriptionScreen && m.profiles != nil {
 			if !m.profilesAvailable || !subscriptionFactsAgree(m.profilesView, m.accessCatalog.subscriptions) {
 				if message.String() == "esc" {
@@ -1044,6 +1251,14 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 					m.providerPage = 0
 					return m, m.refreshCertificatesCommand()
 				}
+				if item.scenario == ServicesDiagnosticsScreen && m.diagnostics != nil {
+					m.diagnosticsScreen.page = 0
+					return m, m.refreshDiagnosticsCommand()
+				}
+				if item.scenario == UpdateReview && m.lifecycle != nil {
+					m.lifecycleScreen.page = 0
+					return m, m.refreshLifecycleCommand()
+				}
 			}
 		case "esc":
 			if m.exitConfirm {
@@ -1052,6 +1267,195 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.scenario, m.selected = AuthenticatedOverview, 0
 			}
 		}
+	}
+	return m, nil
+}
+
+func (m *model) updateSectionPage(key string, page *int, count int) bool {
+	if *page+1 >= count {
+		return false
+	}
+	switch key {
+	case "enter", "space":
+		*page++
+	case "esc":
+		if *page > 0 {
+			*page--
+		} else {
+			m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+		}
+	}
+	return true
+}
+
+func (m model) operationsPending() bool {
+	return m.diagnosticsScreen.pending || m.lifecycleScreen.pending || m.recoveryScreen.pending
+}
+func operationTick() tea.Cmd {
+	return tea.Tick(time.Second, func(now time.Time) tea.Msg { return operationTickMsg(now) })
+}
+
+func (m model) updateDiagnosticsKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	key := message.String()
+	if m.diagnosticsScreen.pending {
+		if key == "esc" {
+			m.actionGeneration++
+			m.diagnosticsScreen.pending = false
+			m.diagnosticsScreen.replacement = BundleReplacement{}
+			m.operationState.stop()
+			m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+		}
+		return m, nil
+	}
+	if !m.diagnosticsScreen.available {
+		if key == "esc" {
+			m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+		}
+		return m, nil
+	}
+	if m.updateSectionPage(key, &m.diagnosticsScreen.page, m.diagnosticsPageCount()) {
+		return m, nil
+	}
+	actions := diagnosticsActions(m.diagnosticsScreen.view, m.diagnosticsScreen.reviewing)
+	switch key {
+	case "up", "shift+tab":
+		m.diagnosticsScreen.action = (m.diagnosticsScreen.action + len(actions) - 1) % len(actions)
+	case "down", "tab":
+		m.diagnosticsScreen.action = (m.diagnosticsScreen.action + 1) % len(actions)
+	case "enter", "space":
+		action := actions[m.diagnosticsScreen.action]
+		switch action.action {
+		case diagnosticsCheckAgain:
+			return m, m.refreshDiagnosticsCommand()
+		case diagnosticsCreateBundle:
+			m.actionGeneration++
+			identity := asyncRequestIdentity{generation: m.actionGeneration, origin: m.scenario}
+			m.diagnosticsScreen.pending = true
+			m.diagnosticsScreen.feedback = ""
+			m.diagnosticsScreen.replacement = action.replacement
+			m.operationState.start()
+			return m, tea.Batch(func() tea.Msg {
+				return supportBundleMsg{identity: identity, result: m.diagnostics.CreateSupportBundle(m.runContext, action.replacement)}
+			}, operationTick())
+		case diagnosticsReviewReplacement:
+			m.diagnosticsScreen.reviewing, m.diagnosticsScreen.action, m.diagnosticsScreen.page = true, 0, 0
+		case diagnosticsBack:
+			if m.diagnosticsScreen.reviewing {
+				m.diagnosticsScreen.reviewing, m.diagnosticsScreen.action, m.diagnosticsScreen.page = false, 0, 0
+			} else {
+				m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+			}
+		}
+	case "esc":
+		m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+	}
+	return m, nil
+}
+
+func (m model) updateLifecycleKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	key := message.String()
+	if m.lifecycleScreen.pending {
+		if key == "esc" {
+			m.actionGeneration++
+			m.lifecycleScreen.pending = false
+			m.operationState.stop()
+			m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+		}
+		return m, nil
+	}
+	if !m.lifecycleScreen.available {
+		if key == "esc" {
+			m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+		}
+		return m, nil
+	}
+	if m.updateSectionPage(key, &m.lifecycleScreen.page, m.lifecyclePageCount()) {
+		return m, nil
+	}
+	switch key {
+	case "up", "down", "tab", "shift+tab":
+		m.actionGeneration++
+		m.lifecycleScreen.action = 1 - m.lifecycleScreen.action
+	case "enter", "space":
+		if m.lifecycleScreen.action == 1 {
+			m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+			return m, nil
+		}
+		m.actionGeneration++
+		m.lifecycleScreen.pending = true
+		m.operationState.start()
+		identity, change := asyncRequestIdentity{generation: m.actionGeneration, origin: m.scenario}, m.lifecycleScreen.view.Change
+		return m, tea.Batch(func() tea.Msg {
+			return lifecycleReviewMsg{identity: identity, review: m.lifecycle.ReviewLifecycleChange(m.runContext, change)}
+		}, operationTick())
+	case "esc":
+		m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+	}
+	return m, nil
+}
+
+func (m model) updateRecoveryKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	key := message.String()
+	if m.recoveryScreen.pending {
+		if key == "esc" {
+			m.actionGeneration++
+			m.recoveryScreen.pending = false
+			m.operationState.stop()
+			m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+		}
+		return m, nil
+	}
+	if !m.recoveryScreen.available {
+		if key == "esc" {
+			m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+		}
+		return m, nil
+	}
+	if m.updateSectionPage(key, &m.recoveryScreen.page, m.recoveryPageCount()) {
+		return m, nil
+	}
+	actions := recoveryActions(m.recoveryScreen.view, m.diagnostics != nil)
+	switch key {
+	case "up", "shift+tab":
+		m.actionGeneration++
+		m.recoveryScreen.action = (m.recoveryScreen.action + len(actions) - 1) % len(actions)
+	case "down", "tab":
+		m.actionGeneration++
+		m.recoveryScreen.action = (m.recoveryScreen.action + 1) % len(actions)
+	case "enter", "space":
+		switch actions[m.recoveryScreen.action].action {
+		case recoveryRetry:
+			m.actionGeneration++
+			m.recoveryScreen.pending = true
+			m.operationState.start()
+			identity := asyncRequestIdentity{generation: m.actionGeneration, origin: m.scenario}
+			return m, tea.Batch(func() tea.Msg {
+				return recoveryRetryMsg{identity: identity, change: m.recovery.RetryAutomaticRollback(context.Background())}
+			}, operationTick())
+		case recoveryRepair:
+			m.actionGeneration++
+			m.recoveryScreen.pending = true
+			m.operationState.start()
+			identity := asyncRequestIdentity{generation: m.actionGeneration, origin: m.scenario}
+			return m, tea.Batch(func() tea.Msg {
+				return recoveryReviewMsg{identity: identity, review: m.recovery.ReviewCurrentStateRepair(m.runContext)}
+			}, operationTick())
+		case recoveryCopyEvidence:
+			return m, m.copyValue("safe recovery evidence", m.recoveryScreen.view.Evidence)
+		case recoveryDiagnostics:
+			m.scenario, m.selected = ServicesDiagnosticsScreen, selectedNavigation(ServicesDiagnosticsScreen)
+			if m.diagnostics != nil {
+				return m, m.refreshDiagnosticsCommand()
+			}
+		case recoveryCheckAgain:
+			return m, m.refreshRecoveryCommand()
+		case recoveryRemoval:
+			m.scenario, m.selected, m.inputFocused = CompleteRemovalConfirmation, selectedNavigation(CompleteRemovalConfirmation), true
+		case recoveryBack:
+			m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+		}
+	case "esc":
+		m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
 	}
 	return m, nil
 }
@@ -1243,6 +1647,65 @@ func (m model) certificatePageCount() int {
 	return providerPageCount(lines, len(actions), m.width, m.height)
 }
 
+func (m model) viewDiagnosticsCommand() tea.Cmd {
+	generation := m.diagnosticsScreen.generation
+	return func() tea.Msg {
+		return diagnosticsViewMsg{generation: generation, view: m.diagnostics.ViewDiagnostics(m.runContext)}
+	}
+}
+
+func (m *model) refreshDiagnosticsCommand() tea.Cmd {
+	m.diagnosticsScreen.generation++
+	return m.viewDiagnosticsCommand()
+}
+
+func (m model) diagnosticsPageCount() int {
+	if !m.diagnosticsScreen.available {
+		return 1
+	}
+	actions := diagnosticsActions(m.diagnosticsScreen.view, m.diagnosticsScreen.reviewing)
+	lines := diagnosticsLines(m.diagnosticsScreen.view, true, m.diagnosticsScreen.action, m.diagnosticsScreen.reviewing, m.diagnosticsScreen.result, m.diagnosticsScreen.feedback)
+	return providerPageCount(lines, len(actions), m.width, m.height)
+}
+
+func (m model) viewLifecycleCommand() tea.Cmd {
+	generation := m.lifecycleScreen.generation
+	return func() tea.Msg {
+		return lifecycleViewMsg{generation: generation, view: m.lifecycle.ViewLifecycle(m.runContext)}
+	}
+}
+
+func (m *model) refreshLifecycleCommand() tea.Cmd {
+	m.lifecycleScreen.generation++
+	return m.viewLifecycleCommand()
+}
+
+func (m model) lifecyclePageCount() int {
+	if !m.lifecycleScreen.available {
+		return 1
+	}
+	lines := lifecycleLines(m.lifecycleScreen.view, true, m.lifecycleScreen.action)
+	return providerPageCount(lines, len(lifecycleActions(m.lifecycleScreen.view)), m.width, m.height)
+}
+
+func (m model) viewRecoveryCommand() tea.Cmd {
+	generation := m.recoveryScreen.generation
+	return func() tea.Msg {
+		return recoveryViewMsg{generation: generation, view: m.recovery.ViewRecovery(m.runContext)}
+	}
+}
+func (m *model) refreshRecoveryCommand() tea.Cmd {
+	m.recoveryScreen.generation++
+	return m.viewRecoveryCommand()
+}
+func (m model) recoveryPageCount() int {
+	if !m.recoveryScreen.available {
+		return 1
+	}
+	lines := recoveryLines(m.recoveryScreen.view, true, m.recoveryScreen.action, m.diagnostics != nil)
+	return providerPageCount(lines, len(recoveryActions(m.recoveryScreen.view, m.diagnostics != nil)), m.width, m.height)
+}
+
 func (m *model) activateProfileAction() tea.Cmd {
 	profile := m.profilesView.Profiles[m.profileSelection]
 	action := profileActions(profile.Enabled)[m.profileAction]
@@ -1402,7 +1865,7 @@ func authenticationExplanation(result AuthenticationResult) string {
 
 func (m *model) dismissExitConfirmation() tea.Cmd {
 	m.exitConfirm = false
-	var liveCommand, cloudflareCommand tea.Cmd
+	var liveCommand, cloudflareCommand, operationCommand tea.Cmd
 	if m.pendingLiveProfileCheck != nil {
 		message := *m.pendingLiveProfileCheck
 		m.pendingLiveProfileCheck = nil
@@ -1417,12 +1880,18 @@ func (m *model) dismissExitConfirmation() tea.Cmd {
 			cloudflareCommand = m.finishCloudflareResponse(message)
 		}
 	}
+	if message := m.operationState.take(); message != nil {
+		if updated, command := m.Update(message); updated != nil {
+			*m = updated.(model)
+			operationCommand = command
+		}
+	}
 	if m.pendingUpdate == nil {
-		return tea.Batch(liveCommand, cloudflareCommand)
+		return tea.Batch(liveCommand, cloudflareCommand, operationCommand)
 	}
 	update := *m.pendingUpdate
 	m.pendingUpdate = nil
-	return tea.Batch(liveCommand, cloudflareCommand, m.applyPresentationUpdate(update))
+	return tea.Batch(liveCommand, cloudflareCommand, operationCommand, m.applyPresentationUpdate(update))
 }
 
 func (m *model) finishCloudflareResponse(message cloudflareResponseMsg) tea.Cmd {
@@ -1603,6 +2072,7 @@ func (m model) frame() string {
 		return content
 	}
 	currentFixture := scenarioFixture(m.scenario)
+	header, title := m.frameIdentity(currentFixture)
 	privacyChoices := []string{
 		"  Continue with authenticated Client Access Values",
 		"  Open the limited read-only dashboard",
@@ -1619,7 +2089,7 @@ func (m model) frame() string {
 		"Up/Down Select  Enter Continue  Ctrl+C Exit confirmation",
 	}
 	if m.scenario != PrivacyChoice {
-		main = append([]string{currentFixture.title, ""}, m.scenarioLines(currentFixture)...)
+		main = append([]string{title, ""}, m.scenarioLines(currentFixture)...)
 	}
 	if m.scenario == LimitedDashboard {
 		if m.limitedReason != "" {
@@ -1646,7 +2116,6 @@ func (m model) frame() string {
 		main[0] = m.title(main[0])
 	}
 	rows := make([]string, 0, height)
-	header := currentFixture.header
 	if header == "" {
 		header = "Managed - Owner Console"
 	}
@@ -1701,6 +2170,24 @@ func (m model) frame() string {
 	return strings.Join(rows, "\n")
 }
 
+func (m model) frameIdentity(current fixture) (string, string) {
+	if m.scenario != MultiStepChangeSet || m.outcome != nil || m.changeSet.Kind == NoChangeSet {
+		return current.header, current.title
+	}
+	switch m.changeSet.Kind {
+	case ChangeSetActive:
+		return "Change in progress - automatic rollback - authenticated", "AUTOMATIC ROLLBACK IN PROGRESS"
+	case ChangeSetSucceeded:
+		return "Managed - automatic rollback succeeded - authenticated", "AUTOMATIC ROLLBACK - PROVEN SUCCESS"
+	case ChangeSetRolledBack:
+		return "Managed - proven rollback - authenticated", "AUTOMATIC ROLLBACK - PROVEN ROLLBACK"
+	case ChangeSetRecoveryRequired:
+		return "Recovery Required - authenticated", "AUTOMATIC ROLLBACK - RECOVERY REQUIRED"
+	default:
+		return "Status unavailable - authenticated", "AUTOMATIC ROLLBACK - FACTS UNAVAILABLE"
+	}
+}
+
 func (m model) scenarioDetails(current fixture) []string {
 	if m.scenario == LiveProfileCheckScreen && m.liveProfileCheckValid {
 		if qr := qrLines(m.liveProfileCheck.TemporaryURL, 49, m.height-8); len(qr) != 0 {
@@ -1716,7 +2203,10 @@ func (m model) scenarioDetails(current fixture) []string {
 			return append([]string{"PLAN BINDING", "", "Identity  " + string(plan.Identity), fmt.Sprintf("Revision  %d", plan.DesiredStateRevision), "Desired State SHA-256", plan.DesiredStateSHA256, ""}, plan.RelevantChecksums...)
 		}
 	}
-	if m.scenario == MultiStepChangeSet && m.outcome != nil && m.changeSet.Kind != NoChangeSet {
+	if m.scenario == MultiStepChangeSet && m.changeSet.Kind != NoChangeSet {
+		if m.outcome == nil {
+			return []string{"AUTOMATIC ROLLBACK", "", "Typed durable Change Set result.", "Closing the Console does not stop rollback."}
+		}
 		return changeSetDetails(m.changeSet)
 	}
 	if m.scenario == DedicatedAccess {
@@ -1766,6 +2256,39 @@ func (m model) scenarioLines(current fixture) []string {
 		}
 		return providerPage(lines, actionCount, m.width, m.height, m.providerPage)
 	}
+	if m.scenario == ServicesDiagnosticsScreen && m.diagnostics != nil {
+		if m.diagnosticsScreen.pending {
+			return []string{spinner(m.unicode, m.operationState.elapsed) + " Creating support bundle - " + elapsed(m.operationState.elapsed), "The Diagnostics Module decides how long this takes.", "No percentage or completion time is inferred.", "", "> Back"}
+		}
+		lines := diagnosticsLines(m.diagnosticsScreen.view, m.diagnosticsScreen.available, m.diagnosticsScreen.action, m.diagnosticsScreen.reviewing, m.diagnosticsScreen.result, m.diagnosticsScreen.feedback)
+		actionCount := 1
+		if m.diagnosticsScreen.available {
+			actionCount = len(diagnosticsActions(m.diagnosticsScreen.view, m.diagnosticsScreen.reviewing))
+		}
+		return providerPage(lines, actionCount, m.width, m.height, m.diagnosticsScreen.page)
+	}
+	if m.scenario == UpdateReview && m.lifecycle != nil {
+		if m.lifecycleScreen.pending {
+			return []string{spinner(m.unicode, m.operationState.elapsed) + " Building exact release Plan - " + elapsed(m.operationState.elapsed), "The Software Lifecycle Module decides how long this takes.", "No percentage or result is inferred.", "", "> Back"}
+		}
+		lines := lifecycleLines(m.lifecycleScreen.view, m.lifecycleScreen.available, m.lifecycleScreen.action)
+		actionCount := 1
+		if m.lifecycleScreen.available {
+			actionCount = len(lifecycleActions(m.lifecycleScreen.view))
+		}
+		return providerPage(lines, actionCount, m.width, m.height, m.lifecycleScreen.page)
+	}
+	if isRecoveryScenario(m.scenario) && m.recovery != nil {
+		if m.recoveryScreen.pending {
+			return []string{spinner(m.unicode, m.operationState.elapsed) + " Checking recovery action - " + elapsed(m.operationState.elapsed), "The State-owning Module decides how long this takes.", "No percentage or result is inferred.", "", "> Back"}
+		}
+		lines := recoveryLines(m.recoveryScreen.view, m.recoveryScreen.available, m.recoveryScreen.action, m.diagnostics != nil)
+		actionCount := 1
+		if m.recoveryScreen.available {
+			actionCount = len(recoveryActions(m.recoveryScreen.view, m.diagnostics != nil))
+		}
+		return providerPage(lines, actionCount, m.width, m.height, m.recoveryScreen.page)
+	}
 	if m.scenario == InstallationReview && m.outcome != nil {
 		lines := changeReviewLines(m.changeReview, m.width, m.height, m.planPage)
 		if correction := m.changeReview.Correction; correction != nil {
@@ -1811,8 +2334,12 @@ func (m model) scenarioLines(current fixture) []string {
 		}
 		return lines
 	}
-	if m.scenario == MultiStepChangeSet && m.outcome != nil && m.changeSet.Kind != NoChangeSet {
-		return changeSetLines(m.changeSet)
+	if m.scenario == MultiStepChangeSet && m.changeSet.Kind != NoChangeSet {
+		lines := changeSetLines(m.changeSet)
+		if m.outcome == nil && m.changeSet.Kind == ChangeSetActive {
+			return append(lines[:len(lines)-3], "", "Close TUI - automatic rollback continues")
+		}
+		return lines
 	}
 	if m.scenario == ConnectionProfilesScreen && m.profiles != nil {
 		if !m.profilesAvailable {
@@ -2102,6 +2629,33 @@ func (m model) shortcuts() [2]string {
 		}
 		return [2]string{" Up/Down Action  Enter/Space Select", " Esc Back  Ctrl+C Exit confirmation  Q is never Exit"}
 	}
+	if m.scenario == ServicesDiagnosticsScreen && m.diagnostics != nil {
+		if m.diagnosticsScreen.pending {
+			return [2]string{" Esc Back", " Ctrl+C Exit confirmation  Q is never Exit"}
+		}
+		if m.diagnosticsScreen.page+1 < m.diagnosticsPageCount() {
+			return [2]string{" Enter/Space Next section  Esc Back", " Ctrl+C Exit confirmation  Q is never Exit"}
+		}
+		return [2]string{" Up/Down Action  Enter/Space Select", " Esc Back  Ctrl+C Exit confirmation  Q is never Exit"}
+	}
+	if m.scenario == UpdateReview && m.lifecycle != nil {
+		if m.lifecycleScreen.pending {
+			return [2]string{" Esc Back", " Ctrl+C Exit confirmation  Q is never Exit"}
+		}
+		if m.lifecycleScreen.page+1 < m.lifecyclePageCount() {
+			return [2]string{" Enter/Space Next section  Esc Back", " Ctrl+C Exit confirmation  Q is never Exit"}
+		}
+		return [2]string{" Up/Down Action  Enter/Space Select", " Esc Back  Ctrl+C Exit confirmation  Q is never Exit"}
+	}
+	if isRecoveryScenario(m.scenario) && m.recovery != nil {
+		if m.recoveryScreen.pending {
+			return [2]string{" Esc Back", " Ctrl+C Exit confirmation  Q is never Exit"}
+		}
+		if m.recoveryScreen.page+1 < m.recoveryPageCount() {
+			return [2]string{" Enter/Space Next section  Esc Back", " Ctrl+C Exit confirmation  Q is never Exit"}
+		}
+		return [2]string{" Up/Down Action  Enter/Space Select", " Esc Back  Ctrl+C Exit confirmation  Q is never Exit"}
+	}
 	second := " Ctrl+C Exit confirmation  Q is never Exit"
 	if scenarioFixture(m.scenario).allowsBack {
 		second = " Esc Back " + second
@@ -2125,6 +2679,21 @@ func selectedNavigation(scenario Scenario) int {
 		}
 	}
 	return 0
+}
+
+func isRecoveryScenario(scenario Scenario) bool {
+	return scenario == RecoveryWithRollback || scenario == RecoveryWithoutRecovery || scenario == ManagedStateRepair
+}
+
+func recoveryScenario(kind RecoveryKind) Scenario {
+	switch kind {
+	case RecoveryRollbackAvailable:
+		return RecoveryWithRollback
+	case RecoveryCurrentStateRepairAvailable:
+		return ManagedStateRepair
+	default:
+		return RecoveryWithoutRecovery
+	}
 }
 
 func fit(value string, width int) string {
