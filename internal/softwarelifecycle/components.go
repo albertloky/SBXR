@@ -18,7 +18,7 @@ import (
 
 const componentManifestName = "component-manifest.json"
 
-var componentCertbotLauncher = []byte("#!/bin/sh\ncase $0 in */certbot/bin/certbot) root=${0%/bin/certbot} ;; *) exit 1 ;; esac\nexec \"$root/bin/python3\" -I -S -c 'import runpy, sys; sys.path.insert(0, sys.argv.pop(1)); sys.argv[0] = \"certbot\"; runpy.run_module(\"certbot\", run_name=\"__main__\")' \"$root/lib/python3.12/site-packages\" \"$@\"\n")
+var componentCertbotLauncher = []byte("#!/bin/sh\ncase $0 in */certbot/bin/certbot) root=${0%/bin/certbot} ;; *) exit 1 ;; esac\nexec \"$root/bin/python3\" -I -S -c 'import sys; sys.path.insert(0, sys.argv.pop(1)); sys.argv[0] = \"certbot\"; from certbot.main import main; raise SystemExit(main())' \"$root/lib/python3.12/site-packages\" \"$@\"\n")
 
 func ComponentCertbotLauncher() []byte { return append([]byte(nil), componentCertbotLauncher...) }
 

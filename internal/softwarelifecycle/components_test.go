@@ -33,10 +33,10 @@ func TestComponentCertbotLauncherUsesOnlyTheBundledWheelDirectory(t *testing.T) 
 	if err := os.Symlink(python, filepath.Join(bin, "python3")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(bundled, "__main__.py"), []byte("import sys\nprint('bundled', *sys.argv[1:])\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(bundled, "main.py"), []byte("import sys\ndef main():\n print('bundled', *sys.argv[1:])\n return 0\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(hostile, "__main__.py"), []byte("print('hostile')\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(hostile, "main.py"), []byte("def main():\n print('hostile')\n return 0\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(filepath.Dir(hostile), "dirname"), []byte("#!/bin/sh\necho hostile-dirname\n"), 0o700); err != nil {
