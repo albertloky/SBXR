@@ -7,12 +7,13 @@ import (
 	"testing"
 )
 
-func TestBuildReleaseIndexBindsTheExactFourQualifiedAssets(t *testing.T) {
+func TestBuildReleaseIndexBindsInstallAndTheExactFourQualifiedArchives(t *testing.T) {
 	assets := []ReleaseIndexAsset{
 		{Role: ApplicationAMD64, Name: "sbxr-linux-amd64.tar.gz", Bytes: []byte("amd64 application")},
 		{Role: ApplicationARM64, Name: "sbxr-linux-arm64.tar.gz", Bytes: []byte("arm64 application")},
 		{Role: ComponentsAMD64, Name: "sbxr-components-linux-amd64.tar.gz", Bytes: []byte("amd64 components")},
 		{Role: ComponentsARM64, Name: "sbxr-components-linux-arm64.tar.gz", Bytes: []byte("arm64 components")},
+		{Role: Bootstrap, Name: "install.sh", Bytes: []byte("#!/bin/sh\nexit 1\n")},
 	}
 	body, err := BuildReleaseIndex(ReleaseIndexRequest{Version: "1.0.0", Sequence: 1, Tag: "v1.0.0", Commit: "0123456789abcdef0123456789abcdef01234567", StateSchema: 2, MinimumUpdaterSchema: 1, Assets: assets})
 	if err != nil {

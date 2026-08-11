@@ -238,7 +238,7 @@ func TestViewDiscoversVerifiesAndRetainsOneHigherStableCandidate(t *testing.T) {
 	if got.Refusal != nil || got.VerifiedCandidate == nil || got.VerifiedCandidate.Identity.Tag != "v1.1.0" || !got.UpdateEligible || !reflect.DeepEqual(got.PermittedActions, []softwarelifecycle.Action{softwarelifecycle.ReviewUpdate}) {
 		t.Fatalf("View() = %#v", got)
 	}
-	if source.discoveredTag != "" || store.replaces != 1 || !store.present || store.record.Evidence.Tag != "v1.1.0" || len(store.record.Evidence.Assets) != 4 {
+	if source.discoveredTag != "" || store.replaces != 1 || !store.present || store.record.Evidence.Tag != "v1.1.0" || len(store.record.Evidence.Assets) != 5 {
 		t.Fatalf("discovery retention = source tag %q, store %+v", source.discoveredTag, store)
 	}
 	if source.extracted != 0 || source.executed != 0 || source.mutated != 0 {

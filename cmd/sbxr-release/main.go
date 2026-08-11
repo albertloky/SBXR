@@ -65,7 +65,7 @@ func main() {
 		flags.Uint64Var(&options.sequence, "sequence", 0, "release sequence")
 		flags.StringVar(&options.tag, "tag", "", "immutable release tag")
 		flags.StringVar(&options.commit, "commit", "", "40-character commit SHA")
-		flags.StringVar(&options.directory, "directory", "", "directory containing the four release archives")
+		flags.StringVar(&options.directory, "directory", "", "directory containing install.sh and the four release archives")
 		flags.StringVar(&options.output, "output", "", "release-index.json output path")
 		if flags.Parse(os.Args[2:]) != nil || flags.NArg() != 0 || buildReleaseIndexFile(options) != nil {
 			fmt.Fprintln(os.Stderr, "sbxr release index refused")
@@ -115,20 +115,22 @@ func buildReleaseIndexFile(options indexOptions) error {
 	}
 	defer root.Close()
 	entries, err := fs.ReadDir(root.FS(), ".")
-	if err != nil || len(entries) != 4 {
+	if err != nil || len(entries) != 5 {
 		return errors.New("release asset set refused")
 	}
-	exact := map[string]bool{"sbxr-linux-amd64.tar.gz": true, "sbxr-linux-arm64.tar.gz": true, "sbxr-components-linux-amd64.tar.gz": true, "sbxr-components-linux-arm64.tar.gz": true}
+	exact := map[string]bool{"install.sh": true, "sbxr-linux-amd64.tar.gz": true, "sbxr-linux-arm64.tar.gz": true, "sbxr-components-linux-amd64.tar.gz": true, "sbxr-components-linux-arm64.tar.gz": true}
 	for _, entry := range entries {
 		if !exact[entry.Name()] {
 			return errors.New("release asset set refused")
 		}
 	}
-	assets := make([]softwarelifecycle.ReleaseIndexAsset, 0, 4)
-	for _, expected := range []struct {
+	assets := make([]softwarelifecycle.ReleaseIndexAsset, 0, 5)
+	expectedAssets := []struct {
 		role softwarelifecycle.Component
 		name string
-	}{{softwarelifecycle.ApplicationAMD64, "sbxr-linux-amd64.tar.gz"}, {softwarelifecycle.ApplicationARM64, "sbxr-linux-arm64.tar.gz"}, {softwarelifecycle.ComponentsAMD64, "sbxr-components-linux-amd64.tar.gz"}, {softwarelifecycle.ComponentsARM64, "sbxr-components-linux-arm64.tar.gz"}} {
+	}{{softwarelifecycle.ApplicationAMD64, "sbxr-linux-amd64.tar.gz"}, {softwarelifecycle.ApplicationARM64, "sbxr-linux-arm64.tar.gz"}, {softwarelifecycle.ComponentsAMD64, "sbxr-components-linux-amd64.tar.gz"}, {softwarelifecycle.ComponentsARM64, "sbxr-components-linux-arm64.tar.gz"}, {softwarelifecycle.Bootstrap, "install.sh"}}
+	openedAssets := make(map[string]fs.FileInfo, len(expectedAssets))
+	for _, expected := range expectedAssets {
 		info, err := root.Lstat(expected.name)
 		if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() <= 0 || info.Size() > softwarelifecycle.MaxAssetBytes {
 			return errors.New("release asset refused")
@@ -145,10 +147,22 @@ func buildReleaseIndexFile(options indexOptions) error {
 		body, readErr := io.ReadAll(io.LimitReader(file, softwarelifecycle.MaxAssetBytes+1))
 		after, statErr := file.Stat()
 		closeErr := file.Close()
-		if readErr != nil || statErr != nil || closeErr != nil || !os.SameFile(opened, after) || opened.Mode() != after.Mode() || opened.Size() != after.Size() || !opened.ModTime().Equal(after.ModTime()) || int64(len(body)) != info.Size() {
+		pathAfter, pathErr := root.Lstat(expected.name)
+		if readErr != nil || statErr != nil || closeErr != nil || pathErr != nil || !unchangedFile(opened, after) || !unchangedFile(opened, pathAfter) || int64(len(body)) != info.Size() {
 			return errors.New("release asset unavailable")
 		}
+		openedAssets[expected.name] = opened
 		assets = append(assets, softwarelifecycle.ReleaseIndexAsset{Role: expected.role, Name: expected.name, Bytes: body})
+	}
+	entries, err = fs.ReadDir(root.FS(), ".")
+	if err != nil || len(entries) != len(expectedAssets) {
+		return errors.New("release asset set changed")
+	}
+	for _, expected := range expectedAssets {
+		current, statErr := root.Lstat(expected.name)
+		if statErr != nil || !unchangedFile(openedAssets[expected.name], current) {
+			return errors.New("release asset changed")
+		}
 	}
 	metadata, err := releaseMetadata(softwarelifecycle.EmbeddedBuildIdentity{Repository: softwarelifecycle.Repository, Tag: options.tag, Commit: options.commit}, softwarelifecycle.AMD64)
 	if err != nil {
@@ -159,6 +173,10 @@ func buildReleaseIndexFile(options indexOptions) error {
 		return err
 	}
 	return writeExclusive(options.output, index)
+}
+
+func unchangedFile(before, after fs.FileInfo) bool {
+	return before != nil && after != nil && os.SameFile(before, after) && before.Mode() == after.Mode() && before.Size() == after.Size() && before.ModTime().Equal(after.ModTime())
 }
 
 func buildArchive(ctx context.Context, options buildOptions, validator payloadValidator, verifySource sourceVerifier) error {

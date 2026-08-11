@@ -59,6 +59,13 @@ var approvedExternalImports = map[string]bool{
 	"github.com/yeqown/go-qrcode/v2": true,
 }
 
+var approvedSoftwareLifecycleExternalImports = map[string]bool{
+	"github.com/klauspost/compress/snappy":       true,
+	"github.com/sigstore/sigstore-go/pkg/bundle": true,
+	"github.com/sigstore/sigstore-go/pkg/root":   true,
+	"github.com/sigstore/sigstore-go/pkg/verify": true,
+}
+
 type packageInfo struct {
 	ImportPath string
 	Imports    []string
@@ -610,7 +617,7 @@ func validatePackages(packages []packageInfo) error {
 	for _, current := range packages {
 		from := owningModule(current.ImportPath)
 		for _, imported := range current.Imports {
-			if isExternalImport(imported) && (from != "ownerconsole" || !approvedExternalImports[imported]) {
+			if isExternalImport(imported) && (from != "ownerconsole" || !approvedExternalImports[imported]) && (from != "softwarelifecycle" || !approvedSoftwareLifecycleExternalImports[imported]) {
 				return fmt.Errorf("unapproved production dependency %s -> %s", current.ImportPath, imported)
 			}
 			if forbiddenStandardLibrary[imported] {

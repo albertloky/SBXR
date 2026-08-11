@@ -219,7 +219,7 @@ func readCandidate(input io.Reader, fileSize int64) (softwarelifecycle.Candidate
 		if errors.Is(err, io.EOF) {
 			break
 		}
-		if err != nil || len(items) >= 6 || header.Typeflag != tar.TypeReg || header.Mode != 0o600 || !safeCandidateName(header.Name) || items[header.Name] != nil || header.Size <= 0 || header.Size > candidateLimit(header.Name) {
+		if err != nil || len(items) >= 7 || header.Typeflag != tar.TypeReg || header.Mode != 0o600 || !safeCandidateName(header.Name) || items[header.Name] != nil || header.Size <= 0 || header.Size > candidateLimit(header.Name) {
 			return softwarelifecycle.CandidateRecord{}, errors.New("update candidate archive refused")
 		}
 		body, err := io.ReadAll(io.LimitReader(archive, header.Size+1))
@@ -235,7 +235,7 @@ func readCandidate(input io.Reader, fileSize int64) (softwarelifecycle.Candidate
 	manifestBody, index := items[candidateManifestName], items["release-index.json"]
 	delete(items, candidateManifestName)
 	delete(items, "release-index.json")
-	if len(manifestBody) == 0 || len(index) == 0 || len(items) != 4 || softwarelifecycle.ValidateUniqueJSON(manifestBody) != nil {
+	if len(manifestBody) == 0 || len(index) == 0 || len(items) != 5 || softwarelifecycle.ValidateUniqueJSON(manifestBody) != nil {
 		return softwarelifecycle.CandidateRecord{}, errors.New("update candidate manifest refused")
 	}
 	var manifest candidateManifest

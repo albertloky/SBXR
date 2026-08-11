@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 )
@@ -79,13 +80,14 @@ func TestVerifyCandidateRefusesInvalidTagBeforeExternalVerification(t *testing.T
 	}
 }
 
-func TestBuildReleaseIndexFileReadsOnlyTheExactFourReleaseArchives(t *testing.T) {
+func TestBuildReleaseIndexFileReadsOnlyInstallAndTheExactFourReleaseArchives(t *testing.T) {
 	root := t.TempDir()
 	assets := []softwarelifecycle.ReleaseIndexAsset{
 		{Role: softwarelifecycle.ApplicationAMD64, Name: "sbxr-linux-amd64.tar.gz", Bytes: []byte("amd64 application")},
 		{Role: softwarelifecycle.ApplicationARM64, Name: "sbxr-linux-arm64.tar.gz", Bytes: []byte("arm64 application")},
 		{Role: softwarelifecycle.ComponentsAMD64, Name: "sbxr-components-linux-amd64.tar.gz", Bytes: []byte("amd64 components")},
 		{Role: softwarelifecycle.ComponentsARM64, Name: "sbxr-components-linux-arm64.tar.gz", Bytes: []byte("arm64 components")},
+		{Role: softwarelifecycle.Bootstrap, Name: "install.sh", Bytes: []byte("#!/bin/sh\nexit 1\n")},
 	}
 	for _, asset := range assets {
 		if err := os.WriteFile(filepath.Join(root, asset.Name), asset.Bytes, 0o600); err != nil {
@@ -139,7 +141,7 @@ func TestBuildReleaseIndexFileReadsOnlyTheExactFourReleaseArchives(t *testing.T)
 
 func TestBuildReleaseIndexFileRefusesAnAssetChangedWhileReading(t *testing.T) {
 	root := t.TempDir()
-	names := []string{"sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz", "sbxr-components-linux-amd64.tar.gz", "sbxr-components-linux-arm64.tar.gz"}
+	names := []string{"sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz", "sbxr-components-linux-amd64.tar.gz", "sbxr-components-linux-arm64.tar.gz", "install.sh"}
 	for index, name := range names {
 		body := []byte("asset")
 		if index == 0 {
@@ -181,6 +183,40 @@ func TestBuildReleaseIndexFileRefusesAnAssetChangedWhileReading(t *testing.T) {
 	}
 	if err == nil {
 		t.Fatal("asset changed during index construction was accepted")
+	}
+}
+
+func TestBuildReleaseIndexFileRefusesAReplacedAssetPath(t *testing.T) {
+	root := t.TempDir()
+	names := []string{"sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz", "sbxr-components-linux-amd64.tar.gz", "sbxr-components-linux-arm64.tar.gz", "install.sh"}
+	for index, name := range names {
+		body := []byte("asset")
+		if index == 1 {
+			body = bytes.Repeat([]byte("a"), 128<<20)
+		}
+		if err := os.WriteFile(filepath.Join(root, name), body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	target := filepath.Join(root, names[0])
+	replacement := filepath.Join(t.TempDir(), "replacement")
+	if err := os.WriteFile(replacement, []byte("other"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	started, stop, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		close(started)
+		time.Sleep(10 * time.Millisecond)
+		_ = os.Rename(replacement, target)
+		<-stop
+	}()
+	<-started
+	err := buildReleaseIndexFile(indexOptions{version: "1.0.0", sequence: 1, tag: "v1.0.0", commit: strings.Repeat("a", 40), directory: root, output: filepath.Join(root, "release-index.json")})
+	close(stop)
+	<-done
+	if err == nil {
+		t.Fatal("replaced release asset path was accepted")
 	}
 }
 

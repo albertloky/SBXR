@@ -43,10 +43,10 @@ func TestViewReportsOneExactVerifiedReleaseWithoutUsingIt(t *testing.T) {
 	if got.Refusal != nil || got.VerifiedCandidate == nil || got.VerifiedCandidate.Identity != wantIdentity {
 		t.Fatalf("View() = %#v, want exact verified candidate %#v", got, wantIdentity)
 	}
-	if got.InstallationStatus != softwarelifecycle.NotInstalled || got.UpdateEligible || got.MigrationSummary != "State schema 1; minimum updater schema 1" || !reflect.DeepEqual(got.AffectedComponents, []softwarelifecycle.Component{softwarelifecycle.ApplicationAMD64, softwarelifecycle.ApplicationARM64, softwarelifecycle.ComponentsAMD64, softwarelifecycle.ComponentsARM64}) || !reflect.DeepEqual(got.PermittedActions, []softwarelifecycle.Action{softwarelifecycle.ReviewInstall}) {
+	if got.InstallationStatus != softwarelifecycle.NotInstalled || got.UpdateEligible || got.MigrationSummary != "State schema 1; minimum updater schema 1" || !reflect.DeepEqual(got.AffectedComponents, []softwarelifecycle.Component{softwarelifecycle.ApplicationAMD64, softwarelifecycle.ApplicationARM64, softwarelifecycle.ComponentsAMD64, softwarelifecycle.ComponentsARM64, softwarelifecycle.Bootstrap}) || !reflect.DeepEqual(got.PermittedActions, []softwarelifecycle.Action{softwarelifecycle.ReviewInstall}) {
 		t.Fatalf("unsafe or incomplete View = %#v", got)
 	}
-	if got.VerifiedCandidate.Sequence != 1 || got.VerifiedCandidate.VerifiedAt != verifiedAt || len(got.VerifiedCandidate.Assets) != 4 {
+	if got.VerifiedCandidate.Sequence != 1 || got.VerifiedCandidate.VerifiedAt != verifiedAt || len(got.VerifiedCandidate.Assets) != 5 {
 		t.Fatalf("proof = %#v", got.VerifiedCandidate)
 	}
 	if source.extracted != 0 || source.executed != 0 || source.mutated != 0 {
@@ -432,6 +432,7 @@ func (source *releaseSource) Verify(context.Context, string) (softwarelifecycle.
 }
 
 func validEvidence() softwarelifecycle.ReleaseEvidence {
+	bootstrap := []byte("#!/bin/sh\nexit 1\n")
 	amd64 := executableArchive("verified amd64 executable")
 	arm64 := executableArchive("verified arm64 executable")
 	amd64Components := componentArchive(softwarelifecycle.AMD64)
@@ -440,7 +441,8 @@ func validEvidence() softwarelifecycle.ReleaseEvidence {
 	arm64Digest := sha256.Sum256(arm64)
 	amd64ComponentsDigest := sha256.Sum256(amd64Components)
 	arm64ComponentsDigest := sha256.Sum256(arm64Components)
-	index := []byte(fmt.Sprintf(`{"schema":1,"product":"sbxr","repository":"albertloky/SBXR","version":"1.0.0","sequence":1,"tag":"v1.0.0","commit":"0123456789abcdef0123456789abcdef01234567","state_schema":1,"minimum_updater_schema":1,"assets":[{"role":"application-linux-amd64","name":"sbxr-linux-amd64.tar.gz","size":%d,"sha256":"%s"},{"role":"application-linux-arm64","name":"sbxr-linux-arm64.tar.gz","size":%d,"sha256":"%s"},{"role":"components-linux-amd64","name":"sbxr-components-linux-amd64.tar.gz","size":%d,"sha256":"%s"},{"role":"components-linux-arm64","name":"sbxr-components-linux-arm64.tar.gz","size":%d,"sha256":"%s"}]}`, len(amd64), hex.EncodeToString(amd64Digest[:]), len(arm64), hex.EncodeToString(arm64Digest[:]), len(amd64Components), hex.EncodeToString(amd64ComponentsDigest[:]), len(arm64Components), hex.EncodeToString(arm64ComponentsDigest[:])))
+	bootstrapDigest := sha256.Sum256(bootstrap)
+	index := []byte(fmt.Sprintf(`{"schema":1,"product":"sbxr","repository":"albertloky/SBXR","version":"1.0.0","sequence":1,"tag":"v1.0.0","commit":"0123456789abcdef0123456789abcdef01234567","state_schema":1,"minimum_updater_schema":1,"assets":[{"role":"application-linux-amd64","name":"sbxr-linux-amd64.tar.gz","size":%d,"sha256":"%s"},{"role":"application-linux-arm64","name":"sbxr-linux-arm64.tar.gz","size":%d,"sha256":"%s"},{"role":"components-linux-amd64","name":"sbxr-components-linux-amd64.tar.gz","size":%d,"sha256":"%s"},{"role":"components-linux-arm64","name":"sbxr-components-linux-arm64.tar.gz","size":%d,"sha256":"%s"},{"role":"bootstrap","name":"install.sh","size":%d,"sha256":"%s"}]}`, len(amd64), hex.EncodeToString(amd64Digest[:]), len(arm64), hex.EncodeToString(arm64Digest[:]), len(amd64Components), hex.EncodeToString(amd64ComponentsDigest[:]), len(arm64Components), hex.EncodeToString(arm64ComponentsDigest[:]), len(bootstrap), hex.EncodeToString(bootstrapDigest[:])))
 	indexDigest := sha256.Sum256(index)
 	return softwarelifecycle.ReleaseEvidence{
 		Repository: "albertloky/SBXR",
@@ -452,6 +454,7 @@ func validEvidence() softwarelifecycle.ReleaseEvidence {
 			{Name: "sbxr-linux-arm64.tar.gz", Bytes: arm64},
 			{Name: "sbxr-components-linux-amd64.tar.gz", Bytes: amd64Components},
 			{Name: "sbxr-components-linux-arm64.tar.gz", Bytes: arm64Components},
+			{Name: "install.sh", Bytes: bootstrap},
 		},
 		AttestedAssets: []softwarelifecycle.AttestedAsset{
 			{Name: "release-index.json", SHA256: hex.EncodeToString(indexDigest[:])},
@@ -459,13 +462,14 @@ func validEvidence() softwarelifecycle.ReleaseEvidence {
 			{Name: "sbxr-linux-arm64.tar.gz", SHA256: hex.EncodeToString(arm64Digest[:])},
 			{Name: "sbxr-components-linux-amd64.tar.gz", SHA256: hex.EncodeToString(amd64ComponentsDigest[:])},
 			{Name: "sbxr-components-linux-arm64.tar.gz", SHA256: hex.EncodeToString(arm64ComponentsDigest[:])},
+			{Name: "install.sh", SHA256: hex.EncodeToString(bootstrapDigest[:])},
 		},
 		Verifier: softwarelifecycle.VerifierEvidence{
 			Version:                    "2.97.0",
 			SigningFingerprint:         "0123456789ABCDEF0123456789ABCDEF01234567",
 			OfficialSignedDistribution: true,
 			ReleaseVerified:            true,
-			VerifiedAssets:             []string{"release-index.json", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz", "sbxr-components-linux-amd64.tar.gz", "sbxr-components-linux-arm64.tar.gz"},
+			VerifiedAssets:             []string{"release-index.json", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz", "sbxr-components-linux-amd64.tar.gz", "sbxr-components-linux-arm64.tar.gz", "install.sh"},
 		},
 	}
 }

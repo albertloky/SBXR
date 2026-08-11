@@ -130,7 +130,7 @@ go run ./cmd/sbxr-release \
   -component-output <component-archive>
 ```
 
-Build `release-index.json` from a directory containing exactly the four fixed application and component archives:
+Build `release-index.json` from a directory containing exactly `install.sh` and the four fixed application and component archives:
 
 ```sh
 go run ./cmd/sbxr-release index \

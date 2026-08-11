@@ -23,7 +23,7 @@ type ReleaseIndexRequest struct {
 }
 
 func BuildReleaseIndex(request ReleaseIndexRequest) ([]byte, error) {
-	if !versionPattern.MatchString(request.Version) || request.Tag != "v"+request.Version || !commitPattern.MatchString(request.Commit) || request.Sequence == 0 || request.StateSchema == 0 || request.MinimumUpdaterSchema == 0 || request.MinimumUpdaterSchema > request.StateSchema || len(request.Assets) != 4 {
+	if !versionPattern.MatchString(request.Version) || request.Tag != "v"+request.Version || !commitPattern.MatchString(request.Commit) || request.Sequence == 0 || request.StateSchema == 0 || request.MinimumUpdaterSchema == 0 || request.MinimumUpdaterSchema > request.StateSchema || len(request.Assets) != 5 {
 		return nil, errors.New("release index refused")
 	}
 	assets := make(map[Component]ReleaseIndexAsset, len(request.Assets))
@@ -37,7 +37,7 @@ func BuildReleaseIndex(request ReleaseIndexRequest) ([]byte, error) {
 	for _, expected := range []struct {
 		role Component
 		name string
-	}{{ApplicationAMD64, "sbxr-linux-amd64.tar.gz"}, {ApplicationARM64, "sbxr-linux-arm64.tar.gz"}, {ComponentsAMD64, "sbxr-components-linux-amd64.tar.gz"}, {ComponentsARM64, "sbxr-components-linux-arm64.tar.gz"}} {
+	}{{ApplicationAMD64, "sbxr-linux-amd64.tar.gz"}, {ApplicationARM64, "sbxr-linux-arm64.tar.gz"}, {ComponentsAMD64, "sbxr-components-linux-amd64.tar.gz"}, {ComponentsARM64, "sbxr-components-linux-arm64.tar.gz"}, {Bootstrap, "install.sh"}} {
 		asset, ok := assets[expected.role]
 		if !ok || asset.Name != expected.name {
 			return nil, errors.New("release index role refused")

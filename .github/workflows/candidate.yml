@@ -94,6 +94,10 @@ jobs:
           pattern: candidate-*
           path: dist
           merge-multiple: true
+      - name: Add the bounded bootstrap placeholder for issue 156
+        run: |
+          printf '#!/bin/sh\nprintf "%s\\n" "SBXR bootstrap is not available yet" >&2\nexit 1\n' > dist/install.sh
+          chmod 0700 dist/install.sh
       - name: Build strict release index from exact asset bytes
         run: |
           go run ./cmd/sbxr-release index \
@@ -118,7 +122,7 @@ jobs:
       - name: Refuse secret markers in release assets
         run: |
           pattern='SECRET-MARKER|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer '
-          test -z "$(rg -a -l "$pattern" dist/release-index.json)"
+          test -z "$(rg -a -l "$pattern" dist/install.sh dist/release-index.json)"
           for archive in dist/sbxr-linux-amd64.tar.gz dist/sbxr-linux-arm64.tar.gz dist/sbxr-components-linux-amd64.tar.gz dist/sbxr-components-linux-arm64.tar.gz; do
             test -z "$(tar -xOzf "$archive" | rg -a -l "$pattern" -)"
           done
@@ -126,6 +130,7 @@ jobs:
         with:
           name: release-candidate
           path: |
+            dist/install.sh
             dist/release-index.json
             dist/sbxr-linux-amd64.tar.gz
             dist/sbxr-linux-arm64.tar.gz
@@ -154,7 +159,6 @@ jobs:
     if: github.event_name == 'release' && github.event.release.prerelease && !github.event.release.draft
     runs-on: ubuntu-24.04
     env:
-      GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ github.event.release.tag_name }}
       RELEASE_COMMIT: ${{ github.event.release.target_commitish }}
     steps:
@@ -165,20 +169,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Install and authenticate the pinned official GitHub CLI
-        run: |
-          sudo mkdir -p -m 0755 /etc/apt/keyrings
-          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null
-          sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null
-          sudo apt-get update
-          sudo apt-get install --yes --allow-downgrades gh=2.97.0
-          printf '%s\n' "$GH_TOKEN" | env -u GH_TOKEN -u GITHUB_TOKEN gh auth login --hostname github.com --with-token
-      - name: Verify the immutable exact five-file release through the production seam
+      - name: Verify the immutable exact six-asset release through public HTTPS
         run: |
           test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
-          gh release view "$RELEASE_TAG" --repo albertloky/SBXR --json assets,isImmutable,isPrerelease,targetCommitish | jq -e --arg commit "$RELEASE_COMMIT" \
-            '.isImmutable and .isPrerelease and .targetCommitish == $commit and ([.assets[].name] | sort) == ["release-index.json","sbxr-components-linux-amd64.tar.gz","sbxr-components-linux-arm64.tar.gz","sbxr-linux-amd64.tar.gz","sbxr-linux-arm64.tar.gz"]'
           verified=false
           for attempt in {1..12}; do
             if go run ./cmd/sbxr-release verify -tag "$RELEASE_TAG"; then
@@ -188,16 +181,15 @@ jobs:
             sleep 10
           done
           test "$verified" = true
-      - name: Download and scan the exact five verified assets
+      - name: Download and scan the exact six verified assets
         run: |
           mkdir -m 0700 dist
-          for asset in release-index.json sbxr-linux-amd64.tar.gz sbxr-linux-arm64.tar.gz sbxr-components-linux-amd64.tar.gz sbxr-components-linux-arm64.tar.gz; do
-            gh release download "$RELEASE_TAG" --repo albertloky/SBXR --pattern "$asset" --dir dist
-            gh release verify-asset "$RELEASE_TAG" "dist/$asset"
+          for asset in install.sh release-index.json sbxr-linux-amd64.tar.gz sbxr-linux-arm64.tar.gz sbxr-components-linux-amd64.tar.gz sbxr-components-linux-arm64.tar.gz; do
+            curl -fsSL "https://github.com/albertloky/SBXR/releases/download/$RELEASE_TAG/$asset" -o "dist/$asset"
           done
-          test "$(find dist -type f | wc -l)" -eq 5
+          test "$(find dist -type f | wc -l)" -eq 6
           pattern='SECRET-MARKER|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer '
-          test -z "$(rg -a -l "$pattern" dist/release-index.json)"
+          test -z "$(rg -a -l "$pattern" dist/install.sh dist/release-index.json)"
           for archive in dist/sbxr-linux-amd64.tar.gz dist/sbxr-linux-arm64.tar.gz dist/sbxr-components-linux-amd64.tar.gz dist/sbxr-components-linux-arm64.tar.gz; do
             test -z "$(tar -xOzf "$archive" | rg -a -l "$pattern" -)"
           done
@@ -219,7 +211,7 @@ jobs:
             echo '| Stage | Status | Evidence |'
             echo '|---|---|---|'
             echo '| Module Verification | Passed | Exact release commit: complete suite with PTY package isolated; race detector on every non-PTY package; `go vet ./...` |'
-            echo '| Seam Verification | Passed | Production GitHub verifier and every exact asset; native component qualification |'
+            echo '| Seam Verification | Passed | Public HTTPS and Sigstore release verifier plus every exact asset; native component qualification |'
             echo '| Integrated Verification | Passed | Both exact application archives staged; embedded identity, schemas, migrations, units, components, version output, Network Policy, and System Changes agree |'
             echo '| Codex Live Acceptance | Pending | Issue #151 |'
             echo '| Owner Acceptance | Pending | Issue #152 |'

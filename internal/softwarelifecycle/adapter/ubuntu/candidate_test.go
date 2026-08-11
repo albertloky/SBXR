@@ -209,18 +209,20 @@ func candidateRecord(tag string) softwarelifecycle.CandidateRecord {
 		Index:      []byte(`{"schema":1}`),
 		Assets: []softwarelifecycle.DownloadedAsset{
 			{Name: "four.tar.gz", Bytes: []byte("four")},
+			{Name: "install.sh", Bytes: []byte("install")},
 			{Name: "one.tar.gz", Bytes: []byte("one")},
 			{Name: "three.tar.gz", Bytes: []byte("three")},
 			{Name: "two.tar.gz", Bytes: []byte("two")},
 		},
 		AttestedAssets: []softwarelifecycle.AttestedAsset{
+			{Name: "install.sh", SHA256: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"},
 			{Name: "release-index.json", SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
 			{Name: "one.tar.gz", SHA256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
 			{Name: "two.tar.gz", SHA256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
 			{Name: "three.tar.gz", SHA256: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
 			{Name: "four.tar.gz", SHA256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},
 		},
-		Verifier: softwarelifecycle.VerifierEvidence{Version: "2.97.0", SigningFingerprint: "7F38BBB59D064DBCB3D84D725612B36462313325", OfficialSignedDistribution: true, ReleaseVerified: true, VerifiedAssets: []string{"release-index.json", "one.tar.gz", "two.tar.gz", "three.tar.gz", "four.tar.gz"}},
+		Verifier: softwarelifecycle.VerifierEvidence{Version: "2.97.0", SigningFingerprint: "7F38BBB59D064DBCB3D84D725612B36462313325", OfficialSignedDistribution: true, ReleaseVerified: true, VerifiedAssets: []string{"install.sh", "release-index.json", "one.tar.gz", "two.tar.gz", "three.tar.gz", "four.tar.gz"}},
 	}, VerifiedAt: time.Date(2026, 8, 9, 1, 2, 3, 0, time.UTC)}
 }
 

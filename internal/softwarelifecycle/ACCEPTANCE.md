@@ -1,6 +1,6 @@
 # Software Lifecycle acceptance
 
-This procedure defines stable checks for issues #125, #126, #127, and #128. It contains no run results, raw GitHub verifier output, Client Access Values, Infrastructure Secrets, or Owner-managed configuration.
+This procedure defines stable checks for issues #125, #126, #127, #128, and #155. It contains no run results, raw GitHub verifier output, Client Access Values, Infrastructure Secrets, or Owner-managed configuration.
 
 ## Module Verification
 
@@ -12,7 +12,7 @@ Run:
 go test ./internal/softwarelifecycle -run '^TestViewReportsOneExactVerifiedReleaseWithoutUsingIt$' -count=1
 ```
 
-Require one strict index, both application roles, both component roles, exact downloaded and attested equality, one `sbxr` executable per application archive, one strict complete offline component manifest per matching component archive, repository `albertloky/SBXR`, the selected immutable tag, the 40-character commit, index SHA-256, authenticated sequence, UTC verification time, all four asset digests, safe migration summary, and only `Review install` from Not installed. Require zero extraction to the host, execution, or product mutation.
+Require one strict index binding `install.sh`, both application roles, and both component roles; exact downloaded and attested equality across all six public release assets; one `sbxr` executable per application archive; one strict complete offline component manifest per matching component archive; repository `albertloky/SBXR`; the selected immutable tag; the 40-character commit; index SHA-256; authenticated sequence; UTC verification time; all five indexed asset digests; safe migration summary; and only `Review install` from Not installed. Require zero extraction to the host, execution, or product mutation.
 
 ### SL-VERIFY-02 — One-fact mutation and secret-safe refusal
 
@@ -42,7 +42,7 @@ Run:
 go test . -run '^Test(RepositoryDependencies|SoftwareLifecycleVerificationBoundary)$' -count=1
 ```
 
-Require the Software Lifecycle core to use no host mutation, process execution, syscall, unsafe capability, or other product Module before later tickets approve those dependencies. The GitHub process and temporary-download behavior must remain inside its genuine external Adapter.
+Require the Software Lifecycle core to use no host mutation, process execution, syscall, unsafe capability, or other product Module before later tickets approve those dependencies. Public GitHub HTTPS, bounded download, Snappy decoding, and Sigstore verification must remain inside its genuine external Adapter.
 
 ### SL-STAGE-01 — Authenticated selected-architecture handoff
 
@@ -56,25 +56,25 @@ Require `View` to authenticate and hand off only the archive whose indexed role 
 
 ## Seam Verification
 
-### SL-GITHUB-01 — Exact official GitHub CLI contracts
+### SL-GITHUB-01 — Exact public GitHub and Sigstore contracts
 
 Run:
 
 ```sh
-go test ./internal/softwarelifecycle/adapter/github -run '^TestSourceUsesExactGitHubReleaseAndPerAssetVerificationContracts$' -count=1
+go test ./internal/softwarelifecycle/adapter/github -run '^(TestSourcePubliclyVerifiesTheExactSixAssetReleaseWithoutCredentials|TestSigstoreVerifierAuthenticatesTheOfficialGitHubReleaseFixture)$' -count=1
 ```
 
-Require `/usr/bin/gh`, the exact qualified Debian package version, unchanged installed package files, the official APT origin and signed-by configuration, reviewed fingerprint `7F38BBB59D064DBCB3D84D725612B36462313325`, `gh release verify <tag> --repo albertloky/SBXR --format json`, bounded same-tag downloads, one same-tag `gh release verify-asset <tag> <file>` call for the index and each payload, strict attestation parsing, and only typed proof crossing the Adapter.
+Require no GitHub login, personal token, or installed GitHub CLI. Require public HTTPS to prove the exact immutable tag commit and exact six names; Sigstore `1.3.0` to authenticate one GitHub release bundle with one RFC 3161 timestamp, exact `https://dotcom.releases.github.com` identity, and trusted-root SHA-256 `26B3382D5700AFBCD84F980D1D5B6C52BFF743DC2A8EE86B8B44C8E1245CE485`; bounded same-release downloads; exact digest equality among GitHub metadata, signed subjects, the index, and downloaded bytes; and only typed proof crossing the Adapter.
 
 ### SL-GITHUB-02 — External verifier refusal
 
 Run:
 
 ```sh
-go test ./internal/softwarelifecycle/adapter/github -run '^TestSourceFailsClosedOnDistributionVerifierDownloadAssetOrAttestationFailure$' -count=1
+go test ./internal/softwarelifecycle/adapter/github -run '^TestSourceRefusesHostilePublicReleaseFactsWithOneSafeError$' -count=1
 ```
 
-Require signed-distribution, version, package-integrity, APT-origin, fingerprint, bounded-download, verifier, per-asset, malformed-output, wrong-repository, wrong-tag, and raw-error failures to produce no `ReleaseEvidence` and disclose no raw output.
+Require mutable, missing, duplicate, extra, changed, replaced, wrong-commit, wrong-repository, wrong-tag, wrong-digest, malformed-bundle, bounded-download, and signature failures to produce no `ReleaseEvidence` and disclose no raw output.
 
 ### SL-STAGE-02 — Safe extraction and complete embedded proof without candidate execution
 
@@ -93,12 +93,12 @@ Run:
 ```sh
 go test ./cmd/sbxr-release -run '^Test(BuildCompleteReleaseWritesApplicationAndQualifiedComponentsTogether|BuildArchiveProducesOneQualifiedExecutableForBothArchitectures|VerifiedGitSourceBindsTheCleanExactCommit|VerifyCandidateRefusesInvalidTagBeforeExternalVerification)$' -count=1
 go test ./cmd/sbxr-release -run '^TestBuildReleaseIndexFile' -count=1
-go test ./internal/softwarelifecycle -run '^TestBuildReleaseIndexBindsTheExactFourQualifiedAssets$' -count=1
+go test ./internal/softwarelifecycle -run '^TestBuildReleaseIndexBindsInstallAndTheExactFourQualifiedArchives$' -count=1
 go test ./internal/softwarelifecycle/adapter/ubuntu -run '^Test(RepositoryComponentSourceLockIsExact|AssembleReleaseComponentsUsesOnlyVerifiedSourceBytes)$' -count=1
 go test ./cmd/sbxr -run '^TestVersionReportsOnlyEmbeddedBuildFacts$' -count=1
 ```
 
-Require the production `cmd/sbxr-release` entry point to bind the requested commit to a clean tracked `HEAD`, export only that exact commit, and refuse mismatched or dirty source. Require pinned Go `1.26.5` and `CGO_ENABLED=0` to build exactly one stamped `sbxr` executable for each of `linux/amd64` and `linux/arm64`. Require each application archive to contain only that executable, with no native library dependency or language runtime. Require the matching component archive to come only from the repository-owned reviewed source manifest, whose exact official source, version, architecture, filename, byte size, SHA-256, and URL facts fail closed on any change. Require the complete Certbot `5.4.0` Ubuntu 24.04 / CPython 3.12 wheel closure plus qualification-only Mihomo `v1.19.29`, safe extraction, exact native qualification, removal of Mihomo before runtime archive assembly, and transaction-like two-output publication. An arbitrary local component tree, URL, command, script, package-manager behavior, caller-supplied asset size, or caller-supplied asset digest cannot satisfy this row. Require the index builder's directory to contain exactly the four fixed archive names and no extra entry, calculate each size and SHA-256 itself, bind the exact four roles, repository, tag, commit, sequence, State schema, and minimum updater schema, and refuse missing, duplicate, linked, occupied, or mismatched material. Require `sbxr version` and `sbxr version --json` to report only authenticated embedded repository, tag, commit, architecture, payload digest, and State schema; the executable must not invent or accept an index digest.
+Require the production `cmd/sbxr-release` entry point to bind the requested commit to a clean tracked `HEAD`, export only that exact commit, and refuse mismatched or dirty source. Require pinned Go `1.26.5` and `CGO_ENABLED=0` to build exactly one stamped `sbxr` executable for each of `linux/amd64` and `linux/arm64`. Require each application archive to contain only that executable, with no native library dependency or language runtime. Require the matching component archive to come only from the repository-owned reviewed source manifest, whose exact official source, version, architecture, filename, byte size, SHA-256, and URL facts fail closed on any change. Require the complete Certbot `5.4.0` Ubuntu 24.04 / CPython 3.12 wheel closure plus qualification-only Mihomo `v1.19.29`, safe extraction, exact native qualification, removal of Mihomo before runtime archive assembly, and transaction-like two-output publication. An arbitrary local component tree, URL, command, script, package-manager behavior, caller-supplied asset size, or caller-supplied asset digest cannot satisfy this row. Require the index builder's directory to contain exactly `install.sh` and the four fixed archive names with no extra entry, calculate each size and SHA-256 itself, bind the exact five roles, repository, tag, commit, sequence, State schema, and minimum updater schema, and refuse missing, duplicate, linked, occupied, changed, or mismatched material. Require `sbxr version` and `sbxr version --json` to report only authenticated embedded repository, tag, commit, architecture, payload digest, and State schema; the executable must not invent or accept an index digest.
 
 ### SL-STAGE-04 — Exact native configuration and subscription validators
 
@@ -234,7 +234,7 @@ go test ./internal/softwarelifecycle/adapter/ubuntu -run '^Test(Downgrader|Updat
 go test ./internal/state -run '^(TestPreparedCommitDurablyCompletesOneSystemChangesChangeSet|TestPostPublicationFailureRestoresPriorDesiredState|TestRollbackCanSurviveASecondProcessDeath|TestRestartAfterCompleteCleansUpWithoutRollback)$' -count=1
 ```
 
-Require an explicitly selected older tag to pass the same fresh five-file release verification and architecture staging as any other selected release. Disclose the installed and selected Release Identities side by side and offer only `Review downgrade` when the identities differ, the authenticated sequence is lower, the updater schema is supported, and both installed and selected releases use the currently publishable State schema `2`. Refuse same identity, non-lower sequence, incompatible State, stale approval, changed contributions, or changed prepared State.
+Require an explicitly selected older tag to pass the same fresh six-asset release verification and architecture staging as any other selected release. Disclose the installed and selected Release Identities side by side and offer only `Review downgrade` when the identities differ, the authenticated sequence is lower, the updater schema is supported, and both installed and selected releases use the currently publishable State schema `2`. Refuse same identity, non-lower sequence, incompatible State, stale approval, changed contributions, or changed prepared State.
 
 Require `PlanDowngrade` to reuse the update Plan's one-use approval, exact recheck, three affected Module contributions, one `Update` Change Set, health and agreement gates, single `N → N+1` State publication, four-service restart, rollback, process-restart inspection, retention, and durable cleanup. Stable discovery and `PlanUpdate` must continue rejecting lower sequences. No reverse migration, automatic downgrade, local history selector, old State revision, old secret, retained snapshot, or recovery parcel is accepted. Evidence remains secret-safe. External valid-release success, Integrated Verification, Codex Live Acceptance, Owner Acceptance, and Release Qualification remain Pending on the inherited #127/#128 prerequisites.
 
