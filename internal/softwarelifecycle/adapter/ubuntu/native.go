@@ -100,18 +100,18 @@ func (validator NativeValidator) Validate(ctx context.Context, metadata software
 		ok   func(string) bool
 	}{
 		{"xray-version", validator.xray, []string{"version"}, func(value string) bool { return versionFields(value, "Xray", "26.3.27") }},
-		{"xray-config", validator.xray, []string{"run", "-test", "-config", paths["xray.json"]}, emptySuccess},
+		{"xray-config", validator.xray, []string{"run", "-test", "-config", paths["xray.json"]}, exitSuccess},
 		{"sing-box-version", validator.singBox, []string{"version"}, func(value string) bool { return versionFields(value, "sing-box", "version", "1.13.16") }},
-		{"sing-box-config", validator.singBox, []string{"check", "-c", paths["sing-box.json"]}, emptySuccess},
-		{"sing-box-subscription", validator.singBox, []string{"check", "-c", paths["subscription-sing-box.json"]}, emptySuccess},
+		{"sing-box-config", validator.singBox, []string{"check", "-c", paths["sing-box.json"]}, exitSuccess},
+		{"sing-box-subscription", validator.singBox, []string{"check", "-c", paths["subscription-sing-box.json"]}, exitSuccess},
 		{"cloudflared-version", validator.cloudflared, []string{"--version"}, func(value string) bool { return strings.HasPrefix(value, "cloudflared version 2026.7.3 ") }},
-		{"cloudflared-config", validator.cloudflared, []string{"--config", paths["cloudflared.yml"], "tunnel", "ingress", "validate"}, emptySuccess},
+		{"cloudflared-config", validator.cloudflared, []string{"--config", paths["cloudflared.yml"], "tunnel", "ingress", "validate"}, exitSuccess},
 		{"certbot-version", validator.certbot, []string{"--version"}, certbotAtLeast54},
 		{"certbot-capabilities", validator.certbot, []string{"certonly", "--help", "all"}, func(value string) bool {
 			return strings.Contains(value, "--required-profile") && strings.Contains(value, "--ip-address") && strings.Contains(value, "--staging")
 		}},
 		{"mihomo-version", validator.mihomo, []string{"-v"}, func(value string) bool { return versionFields(value, "Mihomo", "Meta", "v1.19.29") }},
-		{"mihomo-config", validator.mihomo, []string{"-t", "-f", paths["subscription-mihomo.yaml"]}, emptySuccess},
+		{"mihomo-config", validator.mihomo, []string{"-t", "-f", paths["subscription-mihomo.yaml"]}, exitSuccess},
 	}
 	for _, check := range checks {
 		output, err := validator.run(ctx, check.name, check.args, 1<<20)
@@ -171,7 +171,7 @@ func validSubscriptions(artifacts map[string][]byte) bool {
 	return err == nil && bytes.Equal(decoded, raw) && bytes.Equal(artifacts["subscription-v2rayn.txt"], artifacts["subscription-base64.txt"]) && bytes.Equal(artifacts["subscription-shadowrocket.txt"], artifacts["subscription-base64.txt"]) && json.Valid(artifacts["subscription-karing.json"]) && bytes.Equal(artifacts["subscription-karing.json"], artifacts["subscription-sing-box.json"]) && len(artifacts["subscription-mihomo.yaml"]) > 0
 }
 
-func emptySuccess(value string) bool { return strings.TrimSpace(value) == "" }
+func exitSuccess(string) bool { return true }
 
 func versionFields(value string, want ...string) bool {
 	fields := strings.Fields(value)

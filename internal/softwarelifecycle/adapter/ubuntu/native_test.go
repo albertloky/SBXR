@@ -69,7 +69,7 @@ func TestNativeValidatorUsesEveryExactQualifiedBaselineAndRepresentation(t *test
 		case "/usr/bin/mihomo -v":
 			return []byte(mihomoVersion), nil
 		default:
-			return nil, nil
+			return []byte("native validator success details\n"), nil
 		}
 	}
 	if err := ubuntuadapter.NewNativeValidator(runner).Validate(t.Context(), metadata); err != nil {
