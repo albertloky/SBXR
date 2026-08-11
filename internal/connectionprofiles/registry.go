@@ -89,7 +89,7 @@ type RegistryRotation struct {
 	profiles state.ConnectionProfiles
 	source   PublicationSource
 	secrets  registryCredentialReader
-	used     atomic.Bool
+	used     *atomic.Bool
 }
 
 type RegistryMutationAction string
@@ -105,7 +105,7 @@ type FreshRegistryInputs struct {
 	profiles state.ConnectionProfiles
 	source   PublicationSource
 	secrets  registryCredentialReader
-	used     atomic.Bool
+	used     *atomic.Bool
 }
 
 func (FreshRegistryInputs) String() string   { return "Fresh registry inputs: redacted" }
@@ -130,7 +130,7 @@ func NewFreshRegistryInputs(request RegistryViewRequest) (*FreshRegistryInputs, 
 	if profiles.Hysteria2.Obfuscation {
 		values[profiles.Hysteria2.ObfuscationSecret] = request.Hysteria2.Credentials.obfuscationSecret.value
 	}
-	return &FreshRegistryInputs{profiles: profiles, source: registryPublication(request), secrets: values}, nil
+	return &FreshRegistryInputs{profiles: profiles, source: registryPublication(request), secrets: values, used: &atomic.Bool{}}, nil
 }
 
 func (inputs *FreshRegistryInputs) Profiles() state.ConnectionProfiles {
@@ -148,7 +148,7 @@ func (inputs *FreshRegistryInputs) PublicationSource() PublicationSource {
 }
 
 func (inputs *FreshRegistryInputs) WithClientAccessReader(use func(state.ClientAccessReader) error) error {
-	if inputs == nil || use == nil || !inputs.used.CompareAndSwap(false, true) {
+	if inputs == nil || inputs.used == nil || use == nil || !inputs.used.CompareAndSwap(false, true) {
 		return errors.New("fresh registry render authority unavailable")
 	}
 	lease := &registryCredentialLease{values: inputs.secrets}
@@ -178,7 +178,7 @@ func (rotation *RegistryRotation) PublicationSource() PublicationSource {
 // WithClientAccessReader leases generated values only for one immediate owning-
 // Module render. Retaining the reader after the callback yields no values.
 func (rotation *RegistryRotation) WithClientAccessReader(use func(state.ClientAccessReader) error) error {
-	if rotation == nil || use == nil || !rotation.used.CompareAndSwap(false, true) {
+	if rotation == nil || rotation.used == nil || use == nil || !rotation.used.CompareAndSwap(false, true) {
 		return errors.New("Connection Profile registry rotation render authority unavailable")
 	}
 	lease := &registryCredentialLease{values: rotation.secrets}
@@ -226,7 +226,7 @@ func RotateRegistryCredentials(profiles state.ConnectionProfiles, source Publica
 	if err != nil {
 		return nil, err
 	}
-	return &RegistryRotation{profiles: profiles, source: candidateSource, secrets: secrets}, nil
+	return &RegistryRotation{profiles: profiles, source: candidateSource, secrets: secrets, used: &atomic.Bool{}}, nil
 }
 
 // PublicationSourceFor rebuilds the fixed publication handoff from one exact
@@ -300,7 +300,7 @@ func PrepareRegistryMutation(action RegistryMutationAction, profile ProfileID, a
 	if err != nil {
 		return nil, err
 	}
-	return &RegistryRotation{profiles: profiles, source: candidateSource, secrets: secrets}, nil
+	return &RegistryRotation{profiles: profiles, source: candidateSource, secrets: secrets, used: &atomic.Bool{}}, nil
 }
 
 func knownProfile(profile ProfileID) bool {

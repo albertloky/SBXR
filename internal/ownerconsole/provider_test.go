@@ -34,12 +34,8 @@ func (stub *certificatesStub) ReviewCertificateChange(_ context.Context, change 
 
 func (stub *cloudflareStub) ViewCloudflare(context.Context) CloudflarePresentation { return stub.view }
 
-func (stub *cloudflareStub) ActOnCloudflare(ctx context.Context, request CloudflareRequest) CloudflareResponse {
-	select {
-	case <-ctx.Done():
-		return CloudflareResponse{}
-	case <-time.After(stub.actionDelay):
-	}
+func (stub *cloudflareStub) ActOnCloudflare(_ context.Context, request CloudflareRequest) CloudflareResponse {
+	time.Sleep(stub.actionDelay)
 	stub.mu.Lock()
 	defer stub.mu.Unlock()
 	stub.requests = append(stub.requests, request)

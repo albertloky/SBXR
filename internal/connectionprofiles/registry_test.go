@@ -110,6 +110,16 @@ func TestFreshRegistrySuppliesTheExactProtectedDesiredProfiles(t *testing.T) {
 	if err != nil || inputs.Profiles() != profiles || !connectionprofiles.PublicationInputsMatch(inputs.PublicationSource(), profiles) {
 		t.Fatalf("NewFreshRegistryInputs() = (%+v, %v)", inputs, err)
 	}
+	if rendered := fmt.Sprintf("%+v", *inputs); rendered != "Fresh registry inputs: redacted" {
+		t.Fatalf("dereferenced fresh registry inputs rendered as %q", rendered)
+	}
+	rotation, err := connectionprofiles.RotateRegistryCredentials(profiles, inputs.PublicationSource())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rendered := fmt.Sprintf("%+v", *rotation); rendered != "Connection Profile registry rotation: protected" {
+		t.Fatalf("dereferenced registry rotation rendered as %q", rendered)
+	}
 	if err := inputs.WithClientAccessReader(func(reader state.ClientAccessReader) error {
 		if reader.ReadClientAccessValue(profiles.VLESSRealityVision.UUID) == "" || reader.ReadClientAccessValue(profiles.AnyTLS.Password) == "" {
 			return fmt.Errorf("fresh registry values unavailable")

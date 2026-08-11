@@ -450,8 +450,7 @@ func TestRunDisconnectCancelsPendingAuthenticationBeforeApply(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer master.Close()
-	// Bubble Tea v2.0.8 can finish its resize probe after Run returns, so this
-	// one test-owned slave remains open until the test process exits.
+	defer slave.Close()
 	if err := pty.Setsize(slave, &pty.Winsize{Cols: 80, Rows: 24}); err != nil {
 		t.Fatal(err)
 	}

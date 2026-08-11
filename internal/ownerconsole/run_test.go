@@ -216,7 +216,7 @@ func TestRunUsesStyleAEventLoopAndRestoresTerminal(t *testing.T) {
 	input, writeInput := io.Pipe()
 	defer input.Close()
 	go func() {
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 		_, _ = writeInput.Write([]byte("\x03\r"))
 		_ = writeInput.Close()
 	}()
@@ -551,15 +551,15 @@ func runTranscriptSteps(t *testing.T, session Session, width, height int, steps 
 	go func() {
 		for _, step := range steps {
 			if step == "" {
-				time.Sleep(100 * time.Millisecond)
+				time.Sleep(60 * time.Millisecond)
 				continue
 			}
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(30 * time.Millisecond)
 			_, _ = writeInput.Write([]byte(step))
 		}
 		_ = writeInput.Close()
 	}()
-	ctx, cancel := context.WithTimeout(t.Context(), 6*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
 	if err := Run(ctx, session); err != nil {
 		t.Fatal(err)
@@ -602,13 +602,13 @@ func runPseudoTerminalTranscriptSteps(t *testing.T, session Session, width, heig
 			if authentication != nil && !authenticationWaited {
 				select {
 				case <-authentication.prompted:
-				case <-time.After(3 * time.Second):
+				case <-time.After(time.Second):
 					t.Fatal("authentication prompt did not appear")
 				}
 				_, _ = master.Write([]byte("\n"))
 				select {
 				case <-authentication.done:
-				case <-time.After(3 * time.Second):
+				case <-time.After(time.Second):
 					t.Fatal("authentication did not finish")
 				}
 				wanted := "LIMITED DASHBOARD"
@@ -618,14 +618,14 @@ func runPseudoTerminalTranscriptSteps(t *testing.T, session Session, width, heig
 				if session.Outcome == nil {
 					waitForTranscript(t, &output, wanted)
 				} else {
-					time.Sleep(150 * time.Millisecond)
+					time.Sleep(100 * time.Millisecond)
 				}
 				authenticationWaited = true
 			}
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(30 * time.Millisecond)
 			continue
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(30 * time.Millisecond)
 		_, _ = master.Write([]byte(step))
 	}
 	select {
@@ -633,10 +633,9 @@ func runPseudoTerminalTranscriptSteps(t *testing.T, session Session, width, heig
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(6 * time.Second):
+	case <-time.After(3 * time.Second):
 		t.Fatal("pseudo-terminal Run did not exit")
 	}
-	time.Sleep(100 * time.Millisecond)
 	_ = slave.Close()
 	_ = master.Close()
 	select {

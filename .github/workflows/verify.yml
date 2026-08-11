@@ -16,7 +16,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - run: go test -race ./...
+      - run: go test ./... -count=1
+      - name: Race-test every non-PTY package
+        run: go list ./... | grep -v '/internal/ownerconsole$' | xargs go test -race -count=1
       - run: go vet ./...
 
   network-policy-ubuntu-seam:
