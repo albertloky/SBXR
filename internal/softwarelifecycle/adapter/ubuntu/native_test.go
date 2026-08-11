@@ -82,6 +82,10 @@ func TestNativeValidatorUsesEveryExactQualifiedBaselineAndRepresentation(t *test
 	if err := ubuntuadapter.NewNativeValidator(runner).Validate(t.Context(), metadata); err != nil {
 		t.Fatal("newer supported Certbot refused")
 	}
+	certbotVersion = "informational startup text\ncertbot 5.4.0\n"
+	if err := ubuntuadapter.NewNativeValidator(runner).Validate(t.Context(), metadata); err != nil {
+		t.Fatal("exact Certbot version line with informational output refused")
+	}
 	certbotVersion = "certbot 5.3.9\n"
 	if err := ubuntuadapter.NewNativeValidator(runner).Validate(t.Context(), metadata); err == nil {
 		t.Fatal("Certbot below 5.4 accepted")
@@ -89,6 +93,10 @@ func TestNativeValidatorUsesEveryExactQualifiedBaselineAndRepresentation(t *test
 	certbotVersion = "certbot 6.0.garbage\n"
 	if err := ubuntuadapter.NewNativeValidator(runner).Validate(t.Context(), metadata); err == nil {
 		t.Fatal("malformed Certbot version accepted")
+	}
+	certbotVersion = "certbot 5.4.0\ncertbot 5.3.9\n"
+	if err := ubuntuadapter.NewNativeValidator(runner).Validate(t.Context(), metadata); err == nil {
+		t.Fatal("contradictory Certbot versions accepted")
 	}
 	certbotVersion = "certbot 5.4.0\n"
 	mihomoVersion = "unrelated-program v1.19.29\n"

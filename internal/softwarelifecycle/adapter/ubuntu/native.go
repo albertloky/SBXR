@@ -178,13 +178,14 @@ func versionFields(value string, want ...string) bool {
 	return len(fields) >= len(want) && slices.Equal(fields[:len(want)], want)
 }
 
-var certbotVersionPattern = regexp.MustCompile(`^certbot ([0-9]+)\.([0-9]+)(?:\.[0-9]+)?\s*$`)
+var certbotVersionPattern = regexp.MustCompile(`(?m)^certbot ([0-9]+)\.([0-9]+)(?:\.[0-9]+)?[ \t]*\r?$`)
 
 func certbotAtLeast54(value string) bool {
-	match := certbotVersionPattern.FindStringSubmatch(value)
-	if match == nil {
+	matches := certbotVersionPattern.FindAllStringSubmatch(value, 2)
+	if len(matches) != 1 {
 		return false
 	}
+	match := matches[0]
 	major, majorErr := strconv.Atoi(match[1])
 	minor, minorErr := strconv.Atoi(match[2])
 	return majorErr == nil && minorErr == nil && (major > 5 || major == 5 && minor >= 4)
