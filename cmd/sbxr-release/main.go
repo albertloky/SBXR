@@ -83,8 +83,8 @@ func main() {
 		return nil
 	})
 	flag.Parse()
-	if buildCompleteRelease(context.Background(), options, verifiedModuleSource, ubuntuadapter.BuildReleaseComponentArchive) != nil {
-		fmt.Fprintln(os.Stderr, "sbxr release build refused")
+	if err := buildCompleteRelease(context.Background(), options, verifiedModuleSource, ubuntuadapter.BuildReleaseComponentArchive); err != nil {
+		fmt.Fprintln(os.Stderr, "sbxr release build refused:", err)
 		os.Exit(1)
 	}
 }
@@ -181,7 +181,10 @@ func buildCompleteRelease(ctx context.Context, options buildOptions, verifySourc
 		return err
 	}
 	components, err := buildComponents(ctx, options.architecture, metadata)
-	if err != nil || len(components) == 0 || len(components) > softwarelifecycle.MaxAssetBytes {
+	if err != nil {
+		return err
+	}
+	if len(components) == 0 || len(components) > softwarelifecycle.MaxAssetBytes {
 		return errors.New("component release qualification refused")
 	}
 	return writePairExclusive(options.output, application, options.componentOutput, components)

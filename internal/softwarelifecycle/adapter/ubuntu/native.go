@@ -94,28 +94,29 @@ func (validator NativeValidator) Validate(ctx context.Context, metadata software
 		return errors.New("release qualification unavailable")
 	}
 	checks := []struct {
+		code string
 		name string
 		args []string
 		ok   func(string) bool
 	}{
-		{validator.xray, []string{"version"}, func(value string) bool { return versionFields(value, "Xray", "26.3.27") }},
-		{validator.xray, []string{"run", "-test", "-config", paths["xray.json"]}, emptySuccess},
-		{validator.singBox, []string{"version"}, func(value string) bool { return versionFields(value, "sing-box", "version", "1.13.16") }},
-		{validator.singBox, []string{"check", "-c", paths["sing-box.json"]}, emptySuccess},
-		{validator.singBox, []string{"check", "-c", paths["subscription-sing-box.json"]}, emptySuccess},
-		{validator.cloudflared, []string{"--version"}, func(value string) bool { return strings.HasPrefix(value, "cloudflared version 2026.7.3 ") }},
-		{validator.cloudflared, []string{"--config", paths["cloudflared.yml"], "tunnel", "ingress", "validate"}, emptySuccess},
-		{validator.certbot, []string{"--version"}, certbotAtLeast54},
-		{validator.certbot, []string{"certonly", "--help", "all"}, func(value string) bool {
+		{"xray-version", validator.xray, []string{"version"}, func(value string) bool { return versionFields(value, "Xray", "26.3.27") }},
+		{"xray-config", validator.xray, []string{"run", "-test", "-config", paths["xray.json"]}, emptySuccess},
+		{"sing-box-version", validator.singBox, []string{"version"}, func(value string) bool { return versionFields(value, "sing-box", "version", "1.13.16") }},
+		{"sing-box-config", validator.singBox, []string{"check", "-c", paths["sing-box.json"]}, emptySuccess},
+		{"sing-box-subscription", validator.singBox, []string{"check", "-c", paths["subscription-sing-box.json"]}, emptySuccess},
+		{"cloudflared-version", validator.cloudflared, []string{"--version"}, func(value string) bool { return strings.HasPrefix(value, "cloudflared version 2026.7.3 ") }},
+		{"cloudflared-config", validator.cloudflared, []string{"--config", paths["cloudflared.yml"], "tunnel", "ingress", "validate"}, emptySuccess},
+		{"certbot-version", validator.certbot, []string{"--version"}, certbotAtLeast54},
+		{"certbot-capabilities", validator.certbot, []string{"certonly", "--help", "all"}, func(value string) bool {
 			return strings.Contains(value, "--required-profile") && strings.Contains(value, "--ip-address") && strings.Contains(value, "--staging")
 		}},
-		{validator.mihomo, []string{"-v"}, func(value string) bool { return versionFields(value, "Mihomo", "Meta", "v1.19.29") }},
-		{validator.mihomo, []string{"-t", "-f", paths["subscription-mihomo.yaml"]}, emptySuccess},
+		{"mihomo-version", validator.mihomo, []string{"-v"}, func(value string) bool { return versionFields(value, "Mihomo", "Meta", "v1.19.29") }},
+		{"mihomo-config", validator.mihomo, []string{"-t", "-f", paths["subscription-mihomo.yaml"]}, emptySuccess},
 	}
 	for _, check := range checks {
 		output, err := validator.run(ctx, check.name, check.args, 1<<20)
 		if err != nil || !check.ok(string(output)) {
-			return errors.New("release qualification refused")
+			return errors.New("release qualification refused: " + check.code)
 		}
 	}
 	return nil

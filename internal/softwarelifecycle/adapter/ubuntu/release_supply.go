@@ -237,8 +237,11 @@ func assembleReleaseComponents(ctx context.Context, sources architectureSources,
 		return nil, err
 	}
 	defer os.RemoveAll(root)
-	if qualify == nil || qualify(ctx, root, metadata) != nil {
+	if qualify == nil {
 		return nil, errors.New("component native qualification refused")
+	}
+	if err := qualify(ctx, root, metadata); err != nil {
+		return nil, err
 	}
 	delete(files, "mihomo")
 	manifest, err := softwarelifecycle.NewComponentManifest(sources.Architecture, "5.4.0", files)

@@ -2,6 +2,7 @@ package ubuntu_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,6 +12,41 @@ import (
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 	ubuntuadapter "github.com/albertloky/SBXR/internal/softwarelifecycle/adapter/ubuntu"
 )
+
+func TestNativeValidatorReturnsOnlyTheExactSafeFailedCheck(t *testing.T) {
+	codes := []string{"xray-version", "xray-config", "sing-box-version", "sing-box-config", "sing-box-subscription", "cloudflared-version", "cloudflared-config", "certbot-version", "certbot-capabilities", "mihomo-version", "mihomo-config"}
+	for failedAt, code := range codes {
+		t.Run(code, func(t *testing.T) {
+			calls := 0
+			runner := func(_ context.Context, name string, arguments []string, _ int64) ([]byte, error) {
+				if calls == failedAt {
+					return nil, errors.New("SECRET-MARKER")
+				}
+				calls++
+				switch name + " " + strings.Join(arguments, " ") {
+				case "/usr/bin/xray version":
+					return []byte("Xray 26.3.27\n"), nil
+				case "/usr/bin/sing-box version":
+					return []byte("sing-box version 1.13.16\n"), nil
+				case "/usr/bin/cloudflared --version":
+					return []byte("cloudflared version 2026.7.3 (built 2026-08-01)\n"), nil
+				case "/snap/bin/certbot --version":
+					return []byte("certbot 5.4.0\n"), nil
+				case "/snap/bin/certbot certonly --help all":
+					return []byte("--required-profile --ip-address --staging\n"), nil
+				case "/usr/bin/mihomo -v":
+					return []byte("Mihomo Meta v1.19.29\n"), nil
+				default:
+					return nil, nil
+				}
+			}
+			err := ubuntuadapter.NewNativeValidator(runner).Validate(t.Context(), qualificationMetadata(softwarelifecycle.AMD64))
+			if err == nil || err.Error() != "release qualification refused: "+code {
+				t.Fatalf("failed check = %v", err)
+			}
+		})
+	}
+}
 
 func TestNativeValidatorUsesEveryExactQualifiedBaselineAndRepresentation(t *testing.T) {
 	metadata := qualificationMetadata(softwarelifecycle.AMD64)

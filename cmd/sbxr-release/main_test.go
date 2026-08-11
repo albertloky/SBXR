@@ -7,6 +7,7 @@ import (
 	"context"
 	"debug/buildinfo"
 	"debug/elf"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -45,9 +46,9 @@ func TestBuildCompleteReleaseWritesApplicationAndQualifiedComponentsTogether(t *
 	failedComponents := filepath.Join(root, "failed-components.tar.gz")
 	options.output, options.componentOutput = failedApplication, failedComponents
 	if err := buildCompleteRelease(t.Context(), options, currentSource, func(context.Context, softwarelifecycle.Architecture, softwarelifecycle.PayloadMetadata) ([]byte, error) {
-		return nil, io.ErrUnexpectedEOF
-	}); err == nil {
-		t.Fatal("component qualification failure accepted")
+		return nil, errors.New("release qualification refused: mihomo-config")
+	}); err == nil || err.Error() != "release qualification refused: mihomo-config" {
+		t.Fatalf("component qualification failure = %v", err)
 	}
 	if _, err := os.Stat(failedApplication); !os.IsNotExist(err) {
 		t.Fatalf("partial application output remains: %v", err)
