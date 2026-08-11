@@ -107,7 +107,7 @@ jobs:
         run: |
           go list ./... | grep -v '/internal/ownerconsole$' | xargs go test -count=1
           go test ./internal/ownerconsole -count=1
-          go list ./... | grep -v '/internal/ownerconsole$' | xargs go test -race -count=1
+          go list ./... | grep -v '/internal/ownerconsole$' | xargs go test -race -p 1 -count=1
           go vet ./...
       - name: Run Ubuntu production seams before publication
         run: |
@@ -205,7 +205,7 @@ jobs:
         run: |
           go list ./... | grep -v '/internal/ownerconsole$' | xargs go test -count=1
           go test ./internal/ownerconsole -count=1
-          go list ./... | grep -v '/internal/ownerconsole$' | xargs go test -race -count=1
+          go list ./... | grep -v '/internal/ownerconsole$' | xargs go test -race -p 1 -count=1
           go vet ./...
           sudo apt-get install --yes iproute2 nftables
           sudo env "PATH=$PATH" go test ./internal/networkpolicy/adapter/ubuntu -run TestProductionUbuntuSeam -count=1
