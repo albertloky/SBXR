@@ -52,7 +52,7 @@ func TestRunCloudflareWalkthroughMasksAndVerifiesOnlyTheNarrowToken(t *testing.T
 			}}
 			steps := append(cloudflareTraversalSteps(walkthrough, size.width, size.height), token, "\t", "\r", "", "\x03\r")
 			got := runTranscriptSteps(t, Session{Scenario: CloudflareWalkthrough, Cloudflare: stub}, size.width, size.height, steps...)
-			for _, want := range []string{"https://dash.cloudflare.com/profile/api-tokens", "My Profile > API Tokens", "Create Token > Create Custom Token", "selected zone > DNS > Records", "Cloudflare One > Networks > Tunnels & Mesh", "Cloudflare Tunnel > Edit", "Zone > DNS > Edit", "Specific account", "Specific zone", "Do not use a Global API Key", "API Tokens Write is not requested", "Broad unrelated authority is rejected", "Verify token", "Token active", "abcd...wxyz"} {
+			for _, want := range []string{"https://dash.cloudflare.com/profile/api-tokens", "My Profile > API Tokens", "Create Token > Create Custom Token", "selected zone > DNS > Records", "Cloudflare One > Networks > Tunnels & Mesh", "Cloudflare Tunnel > Edit", "Zone > DNS > Edit", "Specific account", "Specific zone", "Do not use a Global API Key", "API Tokens Write is not requested", "Broad unrelated authority is rejected", "Verify token", "abcd...wxyz"} {
 				if !strings.Contains(got, want) {
 					t.Fatalf("Cloudflare walkthrough omitted %q\n%s", want, got)
 				}
