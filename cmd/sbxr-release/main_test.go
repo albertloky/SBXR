@@ -72,6 +72,117 @@ func TestBuildCompleteReleaseWritesApplicationAndQualifiedComponentsTogether(t *
 	}
 }
 
+func TestVerifyCandidateRefusesInvalidTagBeforeExternalVerification(t *testing.T) {
+	if err := verifyCandidate(t.Context(), ""); err == nil {
+		t.Fatal("empty candidate tag accepted")
+	}
+}
+
+func TestBuildReleaseIndexFileReadsOnlyTheExactFourReleaseArchives(t *testing.T) {
+	root := t.TempDir()
+	assets := []softwarelifecycle.ReleaseIndexAsset{
+		{Role: softwarelifecycle.ApplicationAMD64, Name: "sbxr-linux-amd64.tar.gz", Bytes: []byte("amd64 application")},
+		{Role: softwarelifecycle.ApplicationARM64, Name: "sbxr-linux-arm64.tar.gz", Bytes: []byte("arm64 application")},
+		{Role: softwarelifecycle.ComponentsAMD64, Name: "sbxr-components-linux-amd64.tar.gz", Bytes: []byte("amd64 components")},
+		{Role: softwarelifecycle.ComponentsARM64, Name: "sbxr-components-linux-arm64.tar.gz", Bytes: []byte("arm64 components")},
+	}
+	for _, asset := range assets {
+		if err := os.WriteFile(filepath.Join(root, asset.Name), asset.Bytes, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commit := "0123456789abcdef0123456789abcdef01234567"
+	output := filepath.Join(root, "release-index.json")
+	if err := os.WriteFile(filepath.Join(root, "unexpected.tar.gz"), []byte("extra"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := buildReleaseIndexFile(indexOptions{version: "1.0.0", sequence: 1, tag: "v1.0.0", commit: commit, directory: root, output: output}); err == nil {
+		t.Fatal("extra release asset was indexed")
+	}
+	if err := os.Remove(filepath.Join(root, "unexpected.tar.gz")); err != nil {
+		t.Fatal(err)
+	}
+	if err := buildReleaseIndexFile(indexOptions{version: "1.0.0", sequence: 1, tag: "v1.0.0", commit: commit, directory: root, output: output}); err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := releaseMetadata(softwarelifecycle.EmbeddedBuildIdentity{Repository: softwarelifecycle.Repository, Tag: "v1.0.0", Commit: commit}, softwarelifecycle.AMD64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := softwarelifecycle.BuildReleaseIndex(softwarelifecycle.ReleaseIndexRequest{Version: "1.0.0", Sequence: 1, Tag: "v1.0.0", Commit: commit, StateSchema: metadata.StateSchema, MinimumUpdaterSchema: metadata.MinimumUpdaterSchema, Assets: assets})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(output); err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("release index = %s, %v; want %s", got, err, want)
+	}
+	if err := buildReleaseIndexFile(indexOptions{version: "1.0.0", sequence: 1, tag: "v1.0.0", commit: commit, directory: root, output: output}); err == nil {
+		t.Fatal("occupied release index was replaced")
+	}
+	if err := os.Remove(output); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(root, "sbxr-components-linux-arm64.tar.gz")); err != nil {
+		t.Fatal(err)
+	}
+	if err := buildReleaseIndexFile(indexOptions{version: "1.0.0", sequence: 1, tag: "v1.0.0", commit: commit, directory: root, output: filepath.Join(root, "missing-index.json")}); err == nil {
+		t.Fatal("incomplete release asset set was indexed")
+	}
+	if err := os.Symlink(filepath.Join(root, "sbxr-components-linux-amd64.tar.gz"), filepath.Join(root, "sbxr-components-linux-arm64.tar.gz")); err != nil {
+		t.Fatal(err)
+	}
+	if err := buildReleaseIndexFile(indexOptions{version: "1.0.0", sequence: 1, tag: "v1.0.0", commit: commit, directory: root, output: filepath.Join(root, "linked-index.json")}); err == nil {
+		t.Fatal("linked release asset was indexed")
+	}
+}
+
+func TestBuildReleaseIndexFileRefusesAnAssetChangedWhileReading(t *testing.T) {
+	root := t.TempDir()
+	names := []string{"sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz", "sbxr-components-linux-amd64.tar.gz", "sbxr-components-linux-arm64.tar.gz"}
+	for index, name := range names {
+		body := []byte("asset")
+		if index == 0 {
+			body = bytes.Repeat([]byte("a"), 8<<20)
+		}
+		if err := os.WriteFile(filepath.Join(root, name), body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	changing, err := os.OpenFile(filepath.Join(root, names[0]), os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, stop, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		first := true
+		for value := byte('b'); ; value ^= 1 {
+			if _, err := changing.WriteAt([]byte{value}, 4<<20); err != nil {
+				return
+			}
+			if first {
+				close(started)
+				first = false
+			}
+			select {
+			case <-stop:
+				return
+			default:
+			}
+		}
+	}()
+	<-started
+	err = buildReleaseIndexFile(indexOptions{version: "1.0.0", sequence: 1, tag: "v1.0.0", commit: strings.Repeat("a", 40), directory: root, output: filepath.Join(root, "release-index.json")})
+	close(stop)
+	<-done
+	if closeErr := changing.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if err == nil {
+		t.Fatal("asset changed during index construction was accepted")
+	}
+}
+
 type acceptingValidator struct{ calls int }
 
 func (validator *acceptingValidator) Validate(_ context.Context, metadata softwarelifecycle.PayloadMetadata) error {

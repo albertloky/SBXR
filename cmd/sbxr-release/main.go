@@ -10,17 +10,20 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/albertloky/SBXR/internal/certificatelifecycle"
 	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
 	"github.com/albertloky/SBXR/internal/connectionprofiles"
 	"github.com/albertloky/SBXR/internal/healthdiagnostics"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
+	githubadapter "github.com/albertloky/SBXR/internal/softwarelifecycle/adapter/github"
 	ubuntuadapter "github.com/albertloky/SBXR/internal/softwarelifecycle/adapter/ubuntu"
 	"github.com/albertloky/SBXR/internal/state"
 	"github.com/albertloky/SBXR/internal/subscriptionpublication"
@@ -40,7 +43,36 @@ type buildOptions struct {
 	architecture                         softwarelifecycle.Architecture
 }
 
+type indexOptions struct {
+	version, tag, commit, directory, output string
+	sequence                                uint64
+}
+
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "verify" {
+		flags := flag.NewFlagSet("verify", flag.ContinueOnError)
+		tag := flags.String("tag", "", "immutable release tag")
+		if flags.Parse(os.Args[2:]) != nil || flags.NArg() != 0 || verifyCandidate(context.Background(), *tag) != nil {
+			fmt.Fprintln(os.Stderr, "sbxr release verification refused")
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "index" {
+		flags := flag.NewFlagSet("index", flag.ContinueOnError)
+		var options indexOptions
+		flags.StringVar(&options.version, "version", "", "release version")
+		flags.Uint64Var(&options.sequence, "sequence", 0, "release sequence")
+		flags.StringVar(&options.tag, "tag", "", "immutable release tag")
+		flags.StringVar(&options.commit, "commit", "", "40-character commit SHA")
+		flags.StringVar(&options.directory, "directory", "", "directory containing the four release archives")
+		flags.StringVar(&options.output, "output", "", "release-index.json output path")
+		if flags.Parse(os.Args[2:]) != nil || flags.NArg() != 0 || buildReleaseIndexFile(options) != nil {
+			fmt.Fprintln(os.Stderr, "sbxr release index refused")
+			os.Exit(1)
+		}
+		return
+	}
 	var options buildOptions
 	flag.StringVar(&options.tag, "tag", "", "immutable release tag")
 	flag.StringVar(&options.commit, "commit", "", "40-character commit SHA")
@@ -55,6 +87,78 @@ func main() {
 		fmt.Fprintln(os.Stderr, "sbxr release build refused")
 		os.Exit(1)
 	}
+}
+
+func verifyCandidate(ctx context.Context, tag string) error {
+	module := softwarelifecycle.New(
+		githubadapter.New(),
+		softwarelifecycle.VerifierQualification{Version: githubadapter.Version, SigningFingerprint: githubadapter.SigningFingerprint},
+		time.Now,
+		ubuntuadapter.NewStager(),
+	)
+	for _, architecture := range []softwarelifecycle.Architecture{softwarelifecycle.AMD64, softwarelifecycle.ARM64} {
+		result := module.View(ctx, softwarelifecycle.ViewRequest{Tag: tag, Architecture: architecture, InstallationStatus: softwarelifecycle.NotInstalled})
+		if result.Refusal != nil || result.VerifiedCandidate == nil || result.StagedCandidate == nil || result.StagedCandidate.Architecture != architecture {
+			return errors.New("candidate verification refused")
+		}
+	}
+	return nil
+}
+
+func buildReleaseIndexFile(options indexOptions) error {
+	if options.directory == "" || options.output == "" {
+		return errors.New("release index refused")
+	}
+	root, err := os.OpenRoot(options.directory)
+	if err != nil {
+		return errors.New("release assets unavailable")
+	}
+	defer root.Close()
+	entries, err := fs.ReadDir(root.FS(), ".")
+	if err != nil || len(entries) != 4 {
+		return errors.New("release asset set refused")
+	}
+	exact := map[string]bool{"sbxr-linux-amd64.tar.gz": true, "sbxr-linux-arm64.tar.gz": true, "sbxr-components-linux-amd64.tar.gz": true, "sbxr-components-linux-arm64.tar.gz": true}
+	for _, entry := range entries {
+		if !exact[entry.Name()] {
+			return errors.New("release asset set refused")
+		}
+	}
+	assets := make([]softwarelifecycle.ReleaseIndexAsset, 0, 4)
+	for _, expected := range []struct {
+		role softwarelifecycle.Component
+		name string
+	}{{softwarelifecycle.ApplicationAMD64, "sbxr-linux-amd64.tar.gz"}, {softwarelifecycle.ApplicationARM64, "sbxr-linux-arm64.tar.gz"}, {softwarelifecycle.ComponentsAMD64, "sbxr-components-linux-amd64.tar.gz"}, {softwarelifecycle.ComponentsARM64, "sbxr-components-linux-arm64.tar.gz"}} {
+		info, err := root.Lstat(expected.name)
+		if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() <= 0 || info.Size() > softwarelifecycle.MaxAssetBytes {
+			return errors.New("release asset refused")
+		}
+		file, err := root.Open(expected.name)
+		if err != nil {
+			return errors.New("release asset unavailable")
+		}
+		opened, statErr := file.Stat()
+		if statErr != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) || opened.Size() != info.Size() {
+			file.Close()
+			return errors.New("release asset changed")
+		}
+		body, readErr := io.ReadAll(io.LimitReader(file, softwarelifecycle.MaxAssetBytes+1))
+		after, statErr := file.Stat()
+		closeErr := file.Close()
+		if readErr != nil || statErr != nil || closeErr != nil || !os.SameFile(opened, after) || opened.Mode() != after.Mode() || opened.Size() != after.Size() || !opened.ModTime().Equal(after.ModTime()) || int64(len(body)) != info.Size() {
+			return errors.New("release asset unavailable")
+		}
+		assets = append(assets, softwarelifecycle.ReleaseIndexAsset{Role: expected.role, Name: expected.name, Bytes: body})
+	}
+	metadata, err := releaseMetadata(softwarelifecycle.EmbeddedBuildIdentity{Repository: softwarelifecycle.Repository, Tag: options.tag, Commit: options.commit}, softwarelifecycle.AMD64)
+	if err != nil {
+		return errors.New("release metadata unavailable")
+	}
+	index, err := softwarelifecycle.BuildReleaseIndex(softwarelifecycle.ReleaseIndexRequest{Version: options.version, Sequence: options.sequence, Tag: options.tag, Commit: options.commit, StateSchema: metadata.StateSchema, MinimumUpdaterSchema: metadata.MinimumUpdaterSchema, Assets: assets})
+	if err != nil {
+		return err
+	}
+	return writeExclusive(options.output, index)
 }
 
 func buildArchive(ctx context.Context, options buildOptions, validator payloadValidator, verifySource sourceVerifier) error {
