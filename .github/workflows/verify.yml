@@ -16,7 +16,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - run: go test ./... -count=1
+      - name: Run the complete suite with the PTY package isolated
+        run: |
+          go list ./... | grep -v '/internal/ownerconsole$' | xargs go test -count=1
+          go test ./internal/ownerconsole -count=1
       - name: Race-test every non-PTY package
         run: go list ./... | grep -v '/internal/ownerconsole$' | xargs go test -race -count=1
       - run: go vet ./...

@@ -105,7 +105,8 @@ jobs:
             -output dist/release-index.json
       - name: Run complete automated verification before publication
         run: |
-          go test ./... -count=1
+          go list ./... | grep -v '/internal/ownerconsole$' | xargs go test -count=1
+          go test ./internal/ownerconsole -count=1
           go list ./... | grep -v '/internal/ownerconsole$' | xargs go test -race -count=1
           go vet ./...
       - name: Run Ubuntu production seams before publication
@@ -140,7 +141,7 @@ jobs:
             echo
             echo '| Stage | Status | Evidence |'
             echo '|---|---|---|'
-            echo '| Module Verification | Passed | Complete suite; race detector on every non-PTY package; `go vet ./...` |'
+            echo '| Module Verification | Passed | Complete suite with PTY package isolated; race detector on every non-PTY package; `go vet ./...` |'
             echo '| Seam Verification | Pending | GitHub attestation exists only after publication |'
             echo '| Integrated Verification | Pending | Exact published bytes have not passed the production release verifier |'
             echo '| Codex Live Acceptance | Pending | Issue #151 |'
@@ -202,7 +203,8 @@ jobs:
           done
       - name: Rerun automated acceptance against the exact release commit
         run: |
-          go test ./... -count=1
+          go list ./... | grep -v '/internal/ownerconsole$' | xargs go test -count=1
+          go test ./internal/ownerconsole -count=1
           go list ./... | grep -v '/internal/ownerconsole$' | xargs go test -race -count=1
           go vet ./...
           sudo apt-get install --yes iproute2 nftables
@@ -216,7 +218,7 @@ jobs:
             echo
             echo '| Stage | Status | Evidence |'
             echo '|---|---|---|'
-            echo '| Module Verification | Passed | Exact release commit: complete suite; race detector on every non-PTY package; `go vet ./...` |'
+            echo '| Module Verification | Passed | Exact release commit: complete suite with PTY package isolated; race detector on every non-PTY package; `go vet ./...` |'
             echo '| Seam Verification | Passed | Production GitHub verifier and every exact asset; native component qualification |'
             echo '| Integrated Verification | Passed | Both exact application archives staged; embedded identity, schemas, migrations, units, components, version output, Network Policy, and System Changes agree |'
             echo '| Codex Live Acceptance | Pending | Issue #151 |'

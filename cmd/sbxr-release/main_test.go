@@ -142,7 +142,7 @@ func TestBuildReleaseIndexFileRefusesAnAssetChangedWhileReading(t *testing.T) {
 	for index, name := range names {
 		body := []byte("asset")
 		if index == 0 {
-			body = bytes.Repeat([]byte("a"), 8<<20)
+			body = bytes.Repeat([]byte("a"), 64<<20)
 		}
 		if err := os.WriteFile(filepath.Join(root, name), body, 0o600); err != nil {
 			t.Fatal(err)
