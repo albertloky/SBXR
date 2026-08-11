@@ -204,7 +204,7 @@ func buildApplicationArchive(ctx context.Context, options buildOptions, verifySo
 	if err != nil {
 		return nil, softwarelifecycle.PayloadMetadata{}, errors.New("release source refused")
 	}
-	command := exec.CommandContext(ctx, "go", "build", "-trimpath", "-o", executablePath, "./cmd/sbxr")
+	command := exec.CommandContext(ctx, "go", "build", "-buildvcs=false", "-trimpath", "-o", executablePath, "./cmd/sbxr")
 	command.Dir = sourceRoot
 	command.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH="+string(options.architecture))
 	if output, err := command.CombinedOutput(); err != nil || len(output) != 0 {
