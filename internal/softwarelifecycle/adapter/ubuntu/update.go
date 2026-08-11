@@ -178,7 +178,7 @@ func (updater Updater) CaptureRollback(rootPath string, step systemchanges.Step,
 			return walkErr
 		}
 		info, err := entry.Info()
-		if err != nil || info.Mode()&0o022 != 0 || info.Sys().(*syscall.Stat_t).Uid != uint32(os.Geteuid()) {
+		if err != nil || (info.Mode()&os.ModeSymlink == 0 && info.Mode()&0o022 != 0) || info.Sys().(*syscall.Stat_t).Uid != uint32(os.Geteuid()) {
 			return fs.ErrPermission
 		}
 		value := updateSnapshotEntry{name: name, mode: info.Mode().Perm()}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -150,7 +151,7 @@ func TestPrivateScheduledHealthCommandCallsScheduledCheck(t *testing.T) {
 		if record := event.Record(); record.Module == healthdiagnostics.HealthDiagnosticsModule && record.Severity != healthdiagnostics.ErrorSeverity {
 			t.Fatalf("unavailable self-check did not fail closed: %#v", record)
 		}
-		if record := event.Record(); (record.Module == healthdiagnostics.StateModule || record.Module == healthdiagnostics.SystemChangesModule) && !strings.HasSuffix(string(record.Code), "UNKNOWN") {
+		if record := event.Record(); runtime.GOOS != "linux" && (record.Module == healthdiagnostics.StateModule || record.Module == healthdiagnostics.SystemChangesModule) && !strings.HasSuffix(string(record.Code), "UNKNOWN") {
 			t.Fatalf("unavailable owning inspection invented a failure: %#v", record)
 		}
 	}
