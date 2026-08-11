@@ -115,6 +115,31 @@ type HealthReleaseInspection struct {
 	verified bool
 }
 
+// SystemChangesLineageInspection exposes only the non-secret lineage from one
+// exact typed Load; callers cannot construct or reuse its proof bit.
+type SystemChangesLineageInspection struct {
+	revision uint64
+	sha256   string
+	change   ChangeSetIdentity
+	release  ReleaseIdentity
+	verified bool
+}
+
+func (inspection SystemChangesLineageInspection) SystemChangesStateLineageFacts() (uint64, string, ChangeSetIdentity, ReleaseIdentity, bool) {
+	return inspection.revision, inspection.sha256, inspection.change, inspection.release, inspection.verified
+}
+
+func (i Interface) SystemChangesLineageInspection(result Result) SystemChangesLineageInspection {
+	if i.implementation == nil || result.loaded == nil || result.loaded.owner != i.implementation || result.loaded.status != Managed || result.Status != Managed || result.Snapshot == nil || result.Snapshot.Revision != result.loaded.revision {
+		return SystemChangesLineageInspection{}
+	}
+	document, problem := decode(result.loaded.bytes)
+	if problem != nil || document.Revision != result.Snapshot.Revision || document.LastCompletedChangeSet != result.Snapshot.LastCompletedChangeSet || document.ReleaseIdentity != result.Snapshot.ReleaseIdentity || document.Checksum != result.loaded.payloadChecksum {
+		return SystemChangesLineageInspection{}
+	}
+	return SystemChangesLineageInspection{revision: document.Revision, sha256: document.Checksum, change: document.LastCompletedChangeSet, release: document.ReleaseIdentity, verified: true}
+}
+
 func (inspection HealthReleaseInspection) HealthReleaseIdentityFacts() (string, string, string, string, bool) {
 	identity := inspection.identity
 	return identity.Repository, identity.Tag, identity.Commit, identity.ReleaseIndexSHA256, inspection.verified

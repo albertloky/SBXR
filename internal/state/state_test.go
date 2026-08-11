@@ -99,6 +99,27 @@ func TestHealthReleaseInspectionComesOnlyFromTheExactFreshManagedLoad(t *testing
 	}
 }
 
+func TestSystemChangesLineageInspectionComesOnlyFromTheExactFreshManagedLoad(t *testing.T) {
+	module := state.New(memoryStorage{document: completeDocument(t)})
+	loaded, err := module.Load(managedRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision, checksum, changeSet, identity, ok := module.SystemChangesLineageInspection(loaded).SystemChangesStateLineageFacts()
+	if !ok || revision != 7 || len(checksum) != 64 || changeSet != "change-0007" || identity != release {
+		t.Fatalf("System Changes lineage = %d, %q, %q, %+v, %t", revision, checksum, changeSet, identity, ok)
+	}
+	_, _, _, _, ok = (state.Interface{}).SystemChangesLineageInspection(loaded).SystemChangesStateLineageFacts()
+	if ok {
+		t.Fatal("a different State owner upgraded a Managed result")
+	}
+	loaded.Snapshot.ReleaseIdentity.Tag = "v9.9.9"
+	_, _, _, _, ok = module.SystemChangesLineageInspection(loaded).SystemChangesStateLineageFacts()
+	if ok {
+		t.Fatal("a caller-mutated snapshot changed proven System Changes lineage")
+	}
+}
+
 func TestLoadReportsDeterministicSchemaOneToTwoMigrationReview(t *testing.T) {
 	want := &state.MigrationReview{
 		StartingSchema:  1,

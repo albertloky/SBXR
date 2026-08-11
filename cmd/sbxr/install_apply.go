@@ -76,19 +76,7 @@ func prepareInstallApply(ctx context.Context, request softwareubuntu.InstallHand
 		observationMu.RLock()
 		volatile := volatileSHA256
 		observationMu.RUnlock()
-		result := systemchanges.Observation{Status: systemchanges.NotInstalled, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, VolatileSHA256: volatile, WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}
-		transactions, _ := os.ReadDir("/var/lib/sbxr/transactions")
-		if len(transactions) == 1 && transactions[0].IsDir() {
-			result.Status, result.CurrentChangeSet = systemchanges.ChangeInProgress, string(requestChangeSet(request))
-			result.Checkpoint, result.TotalSteps, result.RollbackAvailable = systemchanges.PreparedCheckpoint, built.totalSteps, true
-		}
-		if _, statErr := os.Stat(statefilesystem.StatePath); statErr == nil {
-			result.StateRevision, result.StateSHA256 = 1, built.desiredSHA256
-			if result.Status != systemchanges.ChangeInProgress {
-				result.Status, result.LastChangeSet = systemchanges.Managed, string(requestChangeSet(request))
-			}
-		}
-		return result, nil
+		return observeInstallApply(installApplyStateObservation, os.ReadDir, string(requestChangeSet(request)), built.totalSteps, volatile)
 	}
 
 	approval := softwareubuntu.NewApproval(func(recheckContext context.Context) (softwarelifecycle.InstallRecheck, error) {
@@ -130,6 +118,48 @@ func prepareInstallApply(ctx context.Context, request softwareubuntu.InstallHand
 			return softwareubuntu.InstallRecoveryRequired
 		}
 	}, nil
+}
+
+func installApplyStateObservation() (systemchanges.Observation, error) {
+	observed, err := installRecoveryObservation()
+	if err != nil || observed.Status != systemchanges.Managed {
+		return observed, err
+	}
+	lineage, release, err := managedLoadEvidence()
+	if err != nil {
+		return systemchanges.Observation{}, err
+	}
+	module := statefilesystem.New()
+	loaded, err := module.Load(state.LoadRequest{Baseline: state.ManagedEvidence, SupportedRelease: release, Lineage: &state.LineageProof{Revision: lineage.StateRevision, LastCompletedChangeSet: state.ChangeSetIdentity(lineage.LastChangeSet), ReleaseIdentity: release}})
+	if err != nil {
+		return systemchanges.Observation{}, err
+	}
+	revision, sha256, lastChangeSet, loadedRelease, valid := module.SystemChangesLineageInspection(loaded).SystemChangesStateLineageFacts()
+	if !valid || loadedRelease != release {
+		return systemchanges.Observation{}, errors.New("install State lineage is unprovable")
+	}
+	lineage.StateRevision, lineage.StateSHA256, lineage.LastChangeSet = revision, sha256, string(lastChangeSet)
+	return lineage, nil
+}
+
+func observeInstallApply(stateSource systemubuntu.ObservationSource, readDir func(string) ([]os.DirEntry, error), changeSet string, totalSteps int, volatileSHA256 string) (systemchanges.Observation, error) {
+	observed, err := stateSource()
+	if err != nil || observed.Status != systemchanges.NotInstalled && observed.Status != systemchanges.Managed {
+		return systemchanges.Observation{}, errors.New("install State lineage is unprovable")
+	}
+	observed.VolatileSHA256 = volatileSHA256
+	entries, err := readDir(installTransactions)
+	if errors.Is(err, os.ErrNotExist) {
+		return observed, nil
+	}
+	if err != nil || len(entries) > 1 || len(entries) == 1 && (!entries[0].IsDir() || entries[0].Name() != changeSet) {
+		return systemchanges.Observation{}, errors.New("install transaction lineage is unprovable")
+	}
+	if len(entries) == 1 {
+		observed.Status, observed.CurrentChangeSet = systemchanges.ChangeInProgress, changeSet
+		observed.Checkpoint, observed.TotalSteps, observed.RollbackAvailable = systemchanges.PreparedCheckpoint, totalSteps, true
+	}
+	return observed, nil
 }
 
 func requestChangeSet(request softwareubuntu.InstallHandoffRequest) state.ChangeSetIdentity {

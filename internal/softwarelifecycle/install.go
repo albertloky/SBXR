@@ -476,13 +476,13 @@ func validInstallProof(proof InstallContributionProof) bool {
 	}
 	var pre, post bool
 	for _, step := range proof.Steps {
-		if step.Owner() != proof.Owner {
+		if !validInstallContributionOwner(InstallContributionName(proof.Name), proof.Owner, step.Owner()) {
 			return false
 		}
 	}
 	for _, check := range proof.Checks {
 		validOutcome := check.Classification == systemchanges.Required && check.Status == systemchanges.Healthy || check.Classification == systemchanges.Advisory && (check.Status == systemchanges.Healthy || check.Status == systemchanges.NeedsAttention && check.Disclosed)
-		if check.Owner != proof.Owner || !validOutcome || check.Scope != systemchanges.ServerSideCheck {
+		if !validInstallContributionOwner(InstallContributionName(proof.Name), proof.Owner, check.Owner) || !validOutcome || check.Scope != systemchanges.ServerSideCheck {
 			return false
 		}
 		pre = pre || check.Phase == systemchanges.PrePublication
@@ -501,6 +501,19 @@ func validInstallProof(proof InstallContributionProof) bool {
 		return false
 	}
 	return pre && post
+}
+
+func validInstallContributionOwner(name InstallContributionName, owner, effectOwner systemchanges.Module) bool {
+	if effectOwner == owner {
+		return true
+	}
+	if name == IPCertificateInstallContribution {
+		return owner == systemchanges.CertificateModule && effectOwner == systemchanges.NetworkPolicyModule
+	}
+	if name == DomainCertificateInstallContribution {
+		return owner == systemchanges.CertificateModule && (effectOwner == systemchanges.NetworkPolicyModule || effectOwner == systemchanges.ConnectionProfilesModule)
+	}
+	return false
 }
 
 func validInstallDisk(disk systemchanges.DiskRequirement) bool {

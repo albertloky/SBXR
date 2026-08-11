@@ -218,7 +218,12 @@ func buildInstallWith(ctx context.Context, request softwareubuntu.InstallHandoff
 	if err != nil {
 		return nil, err
 	}
-	profileResult := connectionprofiles.New(candidateHost).PlanRegistry(ctx, connectionprofiles.RegistryPlanRequest{Candidate: registry, ChangeSet: changeSet, DesiredStateSHA256: desiredSHA256, FreshInstallation: systemchanges.NewFreshInstallationAuthority(baseNetwork.FreshInstallationProof())})
+	startingRegistry := registry
+	startingRegistry.Reality.Revision, startingRegistry.XHTTP.Revision, startingRegistry.WebSocket.Revision = 0, 0, 0
+	startingRegistry.Hysteria2.Revision, startingRegistry.TUIC.Revision, startingRegistry.AnyTLS.Revision = 0, 0, 0
+	startingRegistry.Reality.Port, startingRegistry.XHTTP.OriginPort, startingRegistry.WebSocket.OriginPort = 0, 0, 0
+	startingRegistry.Hysteria2.Port, startingRegistry.TUIC.Port, startingRegistry.AnyTLS.Port = 0, 0, 0
+	profileResult := connectionprofiles.New(candidateHost).PlanRegistry(ctx, connectionprofiles.RegistryPlanRequest{Current: startingRegistry, Candidate: registry, ChangeSet: changeSet, DesiredStateSHA256: desiredSHA256, FreshInstallation: systemchanges.NewFreshInstallationAuthority(baseNetwork.FreshInstallationProof())})
 	if profileResult.Plan == nil {
 		return nil, errors.New("Connection Profiles install Plan refused")
 	}

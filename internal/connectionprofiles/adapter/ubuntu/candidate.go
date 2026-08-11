@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/albertloky/SBXR/internal/connectionprofiles"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
@@ -31,7 +32,7 @@ func NewCandidateHost(candidate softwarelifecycle.InstallCandidate) (CandidateHo
 	if !xrayOK || !singBoxOK {
 		return CandidateHost{}, errors.New("qualified candidate proxy cores unavailable")
 	}
-	return CandidateHost{xray: xray, singBox: singBox, xrayVersion: xrayVersion, singBoxVersion: singBoxVersion}, nil
+	return CandidateHost{xray: xray, singBox: singBox, xrayVersion: xrayVersion, singBoxVersion: strings.TrimPrefix(singBoxVersion, "v")}, nil
 }
 
 func (CandidateHost) ObserveReality(context.Context, connectionprofiles.RealityTarget) connectionprofiles.RealityObservation {

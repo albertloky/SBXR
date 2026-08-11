@@ -178,6 +178,17 @@ func TestPlanInstallRefusesMissingChangedOrCallerInventedInputs(t *testing.T) {
 	}
 }
 
+func TestInstallCertificateContributionAllowsOnlyItsExactCrossModuleEffects(t *testing.T) {
+	if !validInstallContributionOwner(IPCertificateInstallContribution, systemchanges.CertificateModule, systemchanges.NetworkPolicyModule) || !validInstallContributionOwner(DomainCertificateInstallContribution, systemchanges.CertificateModule, systemchanges.ConnectionProfilesModule) {
+		t.Fatal("required certificate installation effects were refused")
+	}
+	for _, owner := range []systemchanges.Module{systemchanges.StateModule, systemchanges.SoftwareModule, systemchanges.CloudflareModule} {
+		if validInstallContributionOwner(DomainCertificateInstallContribution, systemchanges.CertificateModule, owner) {
+			t.Fatalf("unowned certificate installation effect %q accepted", owner)
+		}
+	}
+}
+
 func TestApplyInstallRequestsApprovalOnceThenRejectsEveryChangedFact(t *testing.T) {
 	desired := strings.Repeat("a", 64)
 	request := InstallPlanRequest{Candidate: controlledInstallCandidate(), ChangeSet: "install-revision-1", DesiredStateSHA256: desired, Contributions: controlledInstallContributions(t, "install-revision-1", desired), Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}}
