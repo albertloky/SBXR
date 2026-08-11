@@ -193,9 +193,10 @@ func certbotAtLeast54(value string) bool {
 func runNative(ctx context.Context, name string, arguments []string, limit int64) ([]byte, error) {
 	command := exec.CommandContext(ctx, name, arguments...)
 	command.Env = []string{"PATH=/usr/bin:/bin"}
-	command.Stdin, command.Stderr = bytes.NewReader(nil), io.Discard
+	command.Stdin = bytes.NewReader(nil)
 	var output bytes.Buffer
 	command.Stdout = &boundedWriter{writer: &output, remaining: limit}
+	command.Stderr = command.Stdout
 	if err := command.Run(); err != nil {
 		return nil, err
 	}
