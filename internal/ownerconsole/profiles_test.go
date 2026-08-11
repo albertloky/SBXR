@@ -398,11 +398,19 @@ func TestRunCompletedLiveProfileCheckWaitsBehindExitConfirmation(t *testing.T) {
 	check := completeLiveProfileCheck()
 	check.TemporaryURL = "https://test/EXIT-PENDING-MARKER"
 	stub := &profilesStub{view: completeProfilesPresentation(), live: check, liveDelay: 80 * time.Millisecond}
-	steps := []string{"\r", "", strings.Repeat("\x1b[B", 5) + "\r", "", strings.Repeat("\x1b[B", 4) + "\r", "\x03", "", "", "\x1b[27u", "", "\x03\r"}
+	steps := []string{"\r", "", strings.Repeat("\x1b[B", 5) + "\r", "", strings.Repeat("\x1b[B", 4) + "\r", "\x03", "", "", "", "", "", "\x1b[27u", "", "\x03\r"}
 	got := runTranscriptSteps(t, Session{Profiles: stub, ProfileOutcomes: stub, Access: profileClientAccessPresentation(), Authenticator: &authenticationStub{result: AuthenticationSucceeded}, AuthenticationPolicy: AuthenticateForAccess}, 80, 24, steps...)
 	exit := strings.Index(got, "Exit SBXR?")
 	result := strings.Index(got, "EXIT-PENDING-MARKER")
-	if exit < 0 || result < exit || !strings.Contains(got[result:], "REALITY Vision auth=yes up=yes down=yes") {
+	afterExit := ""
+	if exit >= 0 {
+		afterExit = got[exit:]
+	}
+	complete := exit >= 0 && result >= exit && strings.Contains(afterExit, "Complete")
+	for _, profile := range []string{"REALITY Vision", "XHTTP", "WebSocket", "Hysteria2", "TUIC", "AnyTLS"} {
+		complete = complete && strings.Contains(afterExit, profile+" auth=yes up=yes down=yes")
+	}
+	if !complete {
 		t.Fatalf("completed Live Profile Check did not wait behind Exit confirmation and appear after Stay\n%s", got)
 	}
 }
