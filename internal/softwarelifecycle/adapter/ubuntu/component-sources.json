@@ -32,6 +32,15 @@
           "url": "https://github.com/cloudflare/cloudflared/releases/download/2026.7.3/cloudflared-linux-amd64"
         },
         {
+          "role": "mihomo",
+          "source": "github:MetaCubeX/mihomo",
+          "version": "v1.19.29",
+          "filename": "mihomo-linux-amd64-v1.19.29.gz",
+          "size": 17858765,
+          "sha256": "60de76a35a6cbf7b4fa4a20f5c257c24345d1d635ab1aa3877022a1997ef413c",
+          "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.29/mihomo-linux-amd64-v1.19.29.gz"
+        },
+        {
           "role": "certbot-wheel",
           "source": "pypi:acme",
           "version": "5.7.0",
@@ -224,6 +233,15 @@
           "size": 36990447,
           "sha256": "65259e652a7bea08bf5df603233ab22b8bf3116af8df9f9206209af6a1b955c0",
           "url": "https://github.com/cloudflare/cloudflared/releases/download/2026.7.3/cloudflared-linux-arm64"
+        },
+        {
+          "role": "mihomo",
+          "source": "github:MetaCubeX/mihomo",
+          "version": "v1.19.29",
+          "filename": "mihomo-linux-arm64-v1.19.29.gz",
+          "size": 16051759,
+          "sha256": "9a868b5e4e0ad91d9d71e1b41b0cfce78aaba44360c30df74a723f8e3926a86c",
+          "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.29/mihomo-linux-arm64-v1.19.29.gz"
         },
         {
           "role": "certbot-wheel",

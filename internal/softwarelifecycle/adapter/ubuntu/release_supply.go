@@ -28,7 +28,7 @@ import (
 //go:embed component-sources.json
 var componentSourceDocument []byte
 
-const componentSourceDocumentSHA256 = "54faf789c5f913c31fff964cc6986041f02629484a3352dddf8279aa03d98425"
+const componentSourceDocumentSHA256 = "eb593370516bd6839ef0276dbe170bf85dd83092ab0a6683363892499769b340"
 
 type componentSourceLock struct {
 	Schema        int                   `json:"schema"`
@@ -86,7 +86,7 @@ func validComponentSourceLock(lock componentSourceLock) bool {
 	}
 	for index, architecture := range []softwarelifecycle.Architecture{softwarelifecycle.AMD64, softwarelifecycle.ARM64} {
 		sources := lock.Architectures[index]
-		if sources.Architecture != architecture || len(sources.Artifacts) != 21 {
+		if sources.Architecture != architecture || len(sources.Artifacts) != 22 {
 			return false
 		}
 		roles, wheels := map[string]bool{}, map[string]bool{}
@@ -95,8 +95,8 @@ func validComponentSourceLock(lock componentSourceLock) bool {
 			if err != nil || parsed.Scheme != "https" || parsed.RawQuery != "" || parsed.Fragment != "" || path.Base(parsed.Path) != source.Filename || source.Size <= 0 || source.Size > softwarelifecycle.MaxAssetBytes || len(source.SHA256) != sha256.Size*2 {
 				return false
 			}
-			if sourceIndex < 3 {
-				wantRole := []string{"xray", "sing-box", "cloudflared"}[sourceIndex]
+			if sourceIndex < 4 {
+				wantRole := []string{"xray", "sing-box", "cloudflared", "mihomo"}[sourceIndex]
 				if source.Role != wantRole || roles[source.Role] {
 					return false
 				}
@@ -115,14 +115,15 @@ func validComponentSourceLock(lock componentSourceLock) bool {
 }
 
 func validReviewedComponents(sources architectureSources) bool {
-	xrayName, singBoxName, cloudflaredName := "Xray-linux-64.zip", "sing-box-1.13.16-linux-amd64.tar.gz", "cloudflared-linux-amd64"
+	xrayName, singBoxName, cloudflaredName, mihomoName := "Xray-linux-64.zip", "sing-box-1.13.16-linux-amd64.tar.gz", "cloudflared-linux-amd64", "mihomo-linux-amd64-v1.19.29.gz"
 	if sources.Architecture == softwarelifecycle.ARM64 {
-		xrayName, singBoxName, cloudflaredName = "Xray-linux-arm64-v8a.zip", "sing-box-1.13.16-linux-arm64.tar.gz", "cloudflared-linux-arm64"
+		xrayName, singBoxName, cloudflaredName, mihomoName = "Xray-linux-arm64-v8a.zip", "sing-box-1.13.16-linux-arm64.tar.gz", "cloudflared-linux-arm64", "mihomo-linux-arm64-v1.19.29.gz"
 	}
 	want := []struct{ source, version, filename, prefix string }{
 		{"github:XTLS/Xray-core", "v26.3.27", xrayName, "https://github.com/XTLS/Xray-core/releases/download/v26.3.27/"},
 		{"github:SagerNet/sing-box", "v1.13.16", singBoxName, "https://github.com/SagerNet/sing-box/releases/download/v1.13.16/"},
 		{"github:cloudflare/cloudflared", "2026.7.3", cloudflaredName, "https://github.com/cloudflare/cloudflared/releases/download/2026.7.3/"},
+		{"github:MetaCubeX/mihomo", "v1.19.29", mihomoName, "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.29/"},
 	}
 	for index, expected := range want {
 		got := sources.Artifacts[index]
@@ -220,6 +221,8 @@ func assembleReleaseComponents(ctx context.Context, sources architectureSources,
 			files["sing-box"], err = exactTarGzipFile(body, strings.TrimSuffix(source.Filename, ".tar.gz")+"/sing-box")
 		case "cloudflared":
 			files["cloudflared"] = append([]byte(nil), body...)
+		case "mihomo":
+			files["mihomo"], err = exactGzipFile(body)
 		case "certbot-wheel":
 			err = addWheel(files, body)
 		default:
@@ -229,10 +232,6 @@ func assembleReleaseComponents(ctx context.Context, sources architectureSources,
 			return nil, errors.New("component source extraction failed")
 		}
 	}
-	manifest, err := softwarelifecycle.NewComponentManifest(sources.Architecture, "5.4.0", files)
-	if err != nil {
-		return nil, err
-	}
 	root, err := materializeComponentFiles(files)
 	if err != nil {
 		return nil, err
@@ -241,7 +240,25 @@ func assembleReleaseComponents(ctx context.Context, sources architectureSources,
 	if qualify == nil || qualify(ctx, root, metadata) != nil {
 		return nil, errors.New("component native qualification refused")
 	}
+	delete(files, "mihomo")
+	manifest, err := softwarelifecycle.NewComponentManifest(sources.Architecture, "5.4.0", files)
+	if err != nil {
+		return nil, err
+	}
 	return softwarelifecycle.BuildComponentArchive(manifest, files)
+}
+
+func exactGzipFile(body []byte) ([]byte, error) {
+	compressed, err := gzip.NewReader(bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	value, readErr := io.ReadAll(io.LimitReader(compressed, softwarelifecycle.MaxAssetBytes+1))
+	closeErr := compressed.Close()
+	if readErr != nil || closeErr != nil || len(value) == 0 || len(value) > softwarelifecycle.MaxAssetBytes {
+		return nil, errors.New("component archive refused")
+	}
+	return value, nil
 }
 
 func exactZipFile(body []byte, name string) ([]byte, error) {
@@ -358,7 +375,7 @@ func materializeComponentFiles(files map[string][]byte) (string, error) {
 			return "", errors.New("component qualification unavailable")
 		}
 		mode := os.FileMode(0o600)
-		if name == "xray" || name == "sing-box" || name == "cloudflared" || name == "certbot/bin/certbot" {
+		if name == "xray" || name == "sing-box" || name == "cloudflared" || name == "mihomo" || name == "certbot/bin/certbot" {
 			mode = 0o700
 		}
 		if os.WriteFile(filename, files[name], mode) != nil {

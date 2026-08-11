@@ -56,7 +56,7 @@ func newNativeValidatorForComponents(runner NativeRunner, root string) NativeVal
 	return NativeValidator{
 		run:  runner,
 		xray: filepath.Join(root, "xray"), singBox: filepath.Join(root, "sing-box"), cloudflared: filepath.Join(root, "cloudflared"),
-		certbot: filepath.Join(root, "certbot/bin/certbot"), mihomo: "/usr/bin/mihomo",
+		certbot: filepath.Join(root, "certbot/bin/certbot"), mihomo: filepath.Join(root, "mihomo"),
 	}
 }
 

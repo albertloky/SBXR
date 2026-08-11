@@ -21,11 +21,11 @@ func TestRepositoryComponentSourceLockIsExact(t *testing.T) {
 	}
 	for _, architecture := range []softwarelifecycle.Architecture{softwarelifecycle.AMD64, softwarelifecycle.ARM64} {
 		sources, ok := lock.forArchitecture(architecture)
-		if !ok || len(sources.Artifacts) != 21 {
+		if !ok || len(sources.Artifacts) != 22 {
 			t.Fatalf("%s source count = %d, %v", architecture, len(sources.Artifacts), ok)
 		}
-		if sources.Artifacts[0].Role != "xray" || sources.Artifacts[1].Role != "sing-box" || sources.Artifacts[2].Role != "cloudflared" {
-			t.Fatalf("%s component roles = %+v", architecture, sources.Artifacts[:3])
+		if sources.Artifacts[0].Role != "xray" || sources.Artifacts[1].Role != "sing-box" || sources.Artifacts[2].Role != "cloudflared" || sources.Artifacts[3].Role != "mihomo" {
+			t.Fatalf("%s component roles = %+v", architecture, sources.Artifacts[:4])
 		}
 	}
 
@@ -43,23 +43,25 @@ func TestAssembleReleaseComponentsUsesOnlyVerifiedSourceBytes(t *testing.T) {
 	xray := zipFixture(t, "xray", []byte("xray"))
 	singBox := tarFixture(t, "sing-box-1.13.16-linux-amd64/sing-box", []byte("sing-box"))
 	cloudflared := []byte("cloudflared")
+	mihomo := gzipFixture(t, []byte("mihomo"))
 	wheel := zipFixture(t, "certbot/__init__.py", []byte("__version__ = '5.4.0'\n"))
 	sources := architectureSources{Architecture: softwarelifecycle.AMD64, Artifacts: []componentSource{
 		testComponentSource("xray", "Xray-linux-64.zip", xray),
 		testComponentSource("sing-box", "sing-box-1.13.16-linux-amd64.tar.gz", singBox),
 		testComponentSource("cloudflared", "cloudflared-linux-amd64", cloudflared),
+		testComponentSource("mihomo", "mihomo-linux-amd64-v1.19.29.gz", mihomo),
 		testComponentSource("certbot-wheel", "certbot-5.4.0-py3-none-any.whl", wheel),
 	}}
 	bodies := map[string][]byte{}
 	for _, source := range sources.Artifacts {
-		bodies[source.URL] = map[string][]byte{"xray": xray, "sing-box": singBox, "cloudflared": cloudflared, "certbot-wheel": wheel}[source.Role]
+		bodies[source.URL] = map[string][]byte{"xray": xray, "sing-box": singBox, "cloudflared": cloudflared, "mihomo": mihomo, "certbot-wheel": wheel}[source.Role]
 	}
 	qualified := false
 	archive, err := assembleReleaseComponents(t.Context(), sources, func(_ context.Context, source componentSource) ([]byte, error) {
 		return append([]byte(nil), bodies[source.URL]...), nil
 	}, func(_ context.Context, root string, _ softwarelifecycle.PayloadMetadata) error {
 		qualified = true
-		for _, name := range []string{"xray", "sing-box", "cloudflared", "certbot/bin/certbot", "certbot/lib/python3.12/site-packages/certbot/__init__.py"} {
+		for _, name := range []string{"xray", "sing-box", "cloudflared", "mihomo", "certbot/bin/certbot", "certbot/lib/python3.12/site-packages/certbot/__init__.py"} {
 			if _, err := readComponentFile(root, name); err != nil {
 				return err
 			}
@@ -69,8 +71,14 @@ func TestAssembleReleaseComponentsUsesOnlyVerifiedSourceBytes(t *testing.T) {
 	if err != nil || !qualified {
 		t.Fatalf("assembleReleaseComponents() = %v, qualified=%v", err, qualified)
 	}
-	if _, err := softwarelifecycle.ValidateComponentArchive(archive, softwarelifecycle.AMD64); err != nil {
+	manifest, err := softwarelifecycle.ValidateComponentArchive(archive, softwarelifecycle.AMD64)
+	if err != nil {
 		t.Fatal(err)
+	}
+	for _, file := range manifest.Files {
+		if file.Path == "mihomo" {
+			t.Fatal("qualification-only Mihomo entered the runtime component archive")
+		}
 	}
 
 	sources.Artifacts[0].SHA256 = hex.EncodeToString(make([]byte, sha256.Size))
@@ -115,6 +123,19 @@ func tarFixture(t *testing.T, name string, body []byte) []byte {
 		t.Fatal(err)
 	}
 	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := compressed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return output.Bytes()
+}
+
+func gzipFixture(t *testing.T, body []byte) []byte {
+	t.Helper()
+	var output bytes.Buffer
+	compressed := gzip.NewWriter(&output)
+	if _, err := compressed.Write(body); err != nil {
 		t.Fatal(err)
 	}
 	if err := compressed.Close(); err != nil {
