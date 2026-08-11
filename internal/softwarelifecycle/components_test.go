@@ -2,8 +2,54 @@ package softwarelifecycle
 
 import (
 	"bytes"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 )
+
+func TestComponentCertbotLauncherUsesOnlyTheBundledWheelDirectory(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "certbot")
+	bin := filepath.Join(root, "bin")
+	bundled := filepath.Join(root, "lib/python3.12/site-packages/certbot")
+	hostile := filepath.Join(t.TempDir(), "certbot")
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(bundled, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(hostile, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	launcher := filepath.Join(bin, "certbot")
+	if err := os.WriteFile(launcher, ComponentCertbotLauncher(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(python, filepath.Join(bin, "python3")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundled, "__main__.py"), []byte("import sys\nprint('bundled', *sys.argv[1:])\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hostile, "__main__.py"), []byte("print('hostile')\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(hostile), "dirname"), []byte("#!/bin/sh\necho hostile-dirname\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(launcher, "--version")
+	command.Dir = filepath.Dir(hostile)
+	command.Env = append(os.Environ(), "PATH="+filepath.Dir(hostile), "PYTHONHOME="+filepath.Dir(hostile), "PYTHONPATH="+filepath.Dir(hostile))
+	output, err := command.CombinedOutput()
+	if err != nil || string(output) != "bundled --version\n" {
+		t.Fatalf("launcher output = %q, %v", output, err)
+	}
+}
 
 func TestComponentArchiveIsExactOfflineAndArchitectureBound(t *testing.T) {
 	files := componentFixtureFiles()
