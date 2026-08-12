@@ -221,6 +221,13 @@ type executorFixture struct {
 	dnsPutCalls         int
 }
 
+func (api *executorFixture) GetTunnel(context.Context, GetTunnelRequest) (OwnedResource, error) {
+	if api.whole.TunnelID == "" {
+		return OwnedResource{}, APIError{Kind: APINotFound}
+	}
+	return OwnedResource{ID: api.whole.TunnelID, Name: "sbxr-main"}, nil
+}
+
 func (api *executorFixture) CreateTunnel(context.Context, CreateTunnelRequest) (CreatedTunnel, error) {
 	api.creates++
 	return NewCreatedTunnelResult(testTunnelID, "sbxr-main", "RUN-TOKEN-MARKER")

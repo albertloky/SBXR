@@ -307,10 +307,14 @@ type OwnerFacts struct {
 	Conflicts []CloudflareConflict
 }
 
-type CloudflareConflict struct{ Kind, ID, Name string }
+type CloudflareConflict struct {
+	Kind, ID, Name string
+	Routes         []CloudflareRoute
+}
 
 type CloudflareRoute struct {
 	Profile       string
+	Origin        string
 	OriginAddress string
 	OriginPort    uint16
 	Protocol      Protocol
@@ -457,7 +461,9 @@ type reclamationContract struct {
 	Targets       []reclamationTarget
 	Docker        *dockerReclamationContract
 	Firewall      *firewallReclamationContract
+	Cloudflare    *cloudflareReclamationContract
 }
+type cloudflareReclamationContract struct{ Conflicts []CloudflareConflict }
 type firewallReclamationContract struct {
 	Manager, PriorSHA256, OutboundSHA256, Candidate, Service, Listener, SessionSHA256, AuthorizedKeysPath, AuthorizedKeysSHA256 string
 	Objects, OutboundObjects                                                                                                    []string
@@ -573,6 +579,9 @@ func (authority ReclamationAuthority) SystemChangesDockerReclamation() (review, 
 	valid = fresh.reclamation != nil && reflect.DeepEqual(fresh.reclamation.contract, want) && fresh.Reclamation != nil && fresh.Reclamation.Digest == want.ReviewSHA256 && fresh.freshInstallation != nil
 	return
 }
+func (authority ReclamationAuthority) SystemChangesDockerReclamationAvailable() bool {
+	return authority.cell != nil && authority.cell.contract.Docker != nil
+}
 
 func (authority ReclamationAuthority) SystemChangesFirewallReclamation() (review, manager, priorSHA256, outboundSHA256, candidate, service, listener, sessionSHA256, authorizedKeysPath, authorizedKeysSHA256 string, objects, outboundObjects []string, valid bool) {
 	if authority.cell == nil || authority.cell.evaluate == nil || authority.cell.contract.Firewall == nil || !authority.cell.used.CompareAndSwap(false, true) {
@@ -587,6 +596,32 @@ func (authority ReclamationAuthority) SystemChangesFirewallReclamation() (review
 	outboundObjects = append([]string(nil), firewall.OutboundObjects...)
 	valid = fresh.reclamation != nil && reflect.DeepEqual(fresh.reclamation.contract, want) && fresh.Reclamation != nil && fresh.Reclamation.Digest == want.ReviewSHA256 && fresh.freshInstallation != nil
 	return
+}
+func (authority ReclamationAuthority) SystemChangesFirewallReclamationAvailable() bool {
+	return authority.cell != nil && authority.cell.contract.Firewall != nil
+}
+
+func (authority ReclamationAuthority) SystemChangesCloudflareReclamation() (review string, kinds, ids, names []string, routes [][]string, valid bool) {
+	if authority.cell == nil || authority.cell.evaluate == nil || authority.cell.contract.Cloudflare == nil || !authority.cell.used.CompareAndSwap(false, true) {
+		return
+	}
+	fresh := authority.cell.evaluate()
+	want := authority.cell.contract
+	review = want.ReviewSHA256
+	for _, conflict := range want.Cloudflare.Conflicts {
+		kinds, ids, names = append(kinds, conflict.Kind), append(ids, conflict.ID), append(names, conflict.Name)
+		var exact []string
+		for _, route := range conflict.Routes {
+			exact = append(exact, route.Profile+"\x00"+route.Origin)
+		}
+		routes = append(routes, exact)
+	}
+	valid = fresh.reclamation != nil && reflect.DeepEqual(fresh.reclamation.contract, want) && fresh.Reclamation != nil && fresh.Reclamation.Digest == want.ReviewSHA256 && fresh.freshInstallation != nil
+	return
+}
+
+func (authority ReclamationAuthority) SystemChangesCloudflareReclamationAvailable() bool {
+	return authority.cell != nil && authority.cell.contract.Cloudflare != nil
 }
 
 // CertificateLifecycleFreshDNSPrerequisites exposes only the exact Clean VPS
@@ -1036,6 +1071,9 @@ func (i Interface) Evaluate(request Request) Result {
 		if contract.Docker != nil || contract.Firewall != nil {
 			observed.Firewall.ActiveManager, observed.Firewall.UnexpectedRule = "", ""
 		}
+		if contract.Cloudflare != nil {
+			observed.OwnerFacts = OwnerFacts{DNS: "fresh", Tunnel: "fresh"}
+		}
 	}
 	result.SystemChanges = SystemChangesRequirements{ValidateCompleteCandidate: true, AtomicTableApply: true, RootOwnedWatchdog: true, ProveCurrentSSHResponsive: true, ProveDetectedSSHAdmitted: true, CancelAfterGate: "NETWORK-SSH-RESPONSIVE", RestoreExactPreviousRules: true}
 	if result.reclamation != nil && result.reclamation.contract.Firewall != nil {
@@ -1109,7 +1147,26 @@ func (i Interface) Evaluate(request Request) Result {
 
 func reviewedReclamationContract(observed Observations, plan *ReclamationPlan, candidate Policy) (reclamationContract, bool) {
 	contract := reclamationContract{PolicyVersion: reclamationPolicyVersion}
-	if plan == nil || !validSHA256(plan.Digest) || len(observed.Reclamation.UnsafePaths) != 0 || len(observed.OwnerFacts.Routes)+len(observed.OwnerFacts.Conflicts) != 0 || observed.OwnerFacts.DNS != "fresh" || observed.OwnerFacts.Tunnel != "fresh" {
+	if plan == nil || !validSHA256(plan.Digest) || len(observed.Reclamation.UnsafePaths) != 0 || observed.OwnerFacts.DNS != "fresh" || observed.OwnerFacts.Tunnel != "fresh" {
+		return reclamationContract{}, false
+	}
+	if len(observed.OwnerFacts.Conflicts) != 0 {
+		if len(observed.OwnerFacts.Routes) != 0 || observed.Reclamation.Docker != nil || observed.Reclamation.Firewall != nil || len(observed.Reclamation.Packages)+len(observed.Reclamation.Identities)+len(observed.Reclamation.Executables)+len(observed.Reclamation.Scripts)+len(observed.Listeners)+len(observed.ServiceIdentities)+len(observed.ResourcePaths) != 0 {
+			return reclamationContract{}, false
+		}
+		seen := map[string]bool{}
+		for _, conflict := range observed.OwnerFacts.Conflicts {
+			key := conflict.Kind + "\x00" + conflict.ID + "\x00" + conflict.Name
+			if seen[key] || conflict.ID == "" || conflict.Name == "" || !slices.Contains([]string{"DNS record", "Tunnel routes", "Tunnel"}, conflict.Kind) || conflict.Kind == "Tunnel routes" != (len(conflict.Routes) > 0) {
+				return reclamationContract{}, false
+			}
+			seen[key] = true
+		}
+		contract.ReviewSHA256 = plan.Digest
+		contract.Cloudflare = &cloudflareReclamationContract{Conflicts: append([]CloudflareConflict(nil), observed.OwnerFacts.Conflicts...)}
+		return contract, true
+	}
+	if len(observed.OwnerFacts.Routes) != 0 {
 		return reclamationContract{}, false
 	}
 	if docker := observed.Reclamation.Docker; docker != nil {
@@ -1377,6 +1434,12 @@ func reviewInstallation(result *Result, observed Observations, required bool) {
 	}
 	for _, conflict := range observed.OwnerFacts.Conflicts {
 		plan.Targets = append(plan.Targets, fmt.Sprintf("Cloudflare %s %s name %s", reviewFact(conflict.Kind), reviewFact(conflict.ID), reviewFact(conflict.Name)))
+		for _, route := range conflict.Routes {
+			plan.Targets = append(plan.Targets, fmt.Sprintf("delete Cloudflare route hostname %s origin %s", reviewFact(route.Profile), reviewFact(route.Origin)))
+		}
+	}
+	if len(observed.OwnerFacts.Conflicts) > 0 {
+		plan.Targets = append(plan.Targets, "replace exact conflicting Cloudflare resources with the reviewed SBXR Tunnel, routes, and DNS only after every conflict is verified absent")
 	}
 	plan.PermanentWarnings = []string{"Future reclamation is permanent", "Future interruption may require forward recovery"}
 	if slices.ContainsFunc(observed.Reclamation.Packages, func(pkg PackageConflict) bool {
@@ -1844,10 +1907,10 @@ func matchesPublicFamily(found, selected, wildcard string) bool {
 func expectedCloudflareRoutes(intent Intent) []CloudflareRoute {
 	var routes []CloudflareRoute
 	if intent.Profiles.VLESSXHTTP.Enabled {
-		routes = append(routes, CloudflareRoute{"VLESS XHTTP", intent.Profiles.VLESSXHTTP.Address, intent.Profiles.VLESSXHTTP.Port, TCP, true})
+		routes = append(routes, CloudflareRoute{Profile: "VLESS XHTTP", OriginAddress: intent.Profiles.VLESSXHTTP.Address, OriginPort: intent.Profiles.VLESSXHTTP.Port, Protocol: TCP, Connected: true})
 	}
 	if intent.Profiles.VLESSWebSocket.Enabled {
-		routes = append(routes, CloudflareRoute{"VLESS WebSocket", intent.Profiles.VLESSWebSocket.Address, intent.Profiles.VLESSWebSocket.Port, TCP, true})
+		routes = append(routes, CloudflareRoute{Profile: "VLESS WebSocket", OriginAddress: intent.Profiles.VLESSWebSocket.Address, OriginPort: intent.Profiles.VLESSWebSocket.Port, Protocol: TCP, Connected: true})
 	}
 	return routes
 }

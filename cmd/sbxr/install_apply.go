@@ -127,7 +127,7 @@ func recheckInstall(ctx context.Context, request softwareubuntu.InstallHandoffRe
 		if err != nil {
 			return softwarelifecycle.InstallRecheck{}, "", errors.New("Cloudflare management token refused")
 		}
-		ownerFacts, err = observeReclamationCloudflare(ctx, built.inventory, request.CloudflareAccountID, request.CloudflareZoneID, token, "sbxr-main", []string{"xhttp." + request.Draft.Domain, "ws." + request.Draft.Domain, "direct." + request.Draft.Domain})
+		ownerFacts, _, err = observeReclamationCloudflare(ctx, built.inventory, request.CloudflareAccountID, request.CloudflareZoneID, token, "sbxr-main", []string{"xhttp." + request.Draft.Domain, "ws." + request.Draft.Domain, "direct." + request.Draft.Domain})
 		if err != nil {
 			return softwarelifecycle.InstallRecheck{}, "", errors.New("Cloudflare conflict inventory failed")
 		}

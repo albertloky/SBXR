@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -9,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"time"
 
 	"github.com/albertloky/SBXR/internal/certificatelifecycle"
@@ -133,29 +135,54 @@ type reclamationReviewError struct {
 
 func (err *reclamationReviewError) Error() string { return "Reclaimable VPS review is required" }
 
-func observeReclamationCloudflare(ctx context.Context, api cloudflaretunnel.MutationPlanner, account, zone string, token cloudflaretunnel.ManagementToken, tunnel string, hostnames []string) (networkpolicy.OwnerFacts, error) {
+func observeReclamationCloudflare(ctx context.Context, api cloudflaretunnel.MutationPlanner, account, zone string, token cloudflaretunnel.ManagementToken, tunnel string, hostnames []string) (networkpolicy.OwnerFacts, []cloudflaretunnel.ReclamationConflict, error) {
 	facts := networkpolicy.OwnerFacts{DNS: "fresh", Tunnel: "fresh"}
 	if api == nil {
-		return networkpolicy.OwnerFacts{}, errors.New("Cloudflare inventory unavailable")
+		return networkpolicy.OwnerFacts{}, nil, errors.New("Cloudflare inventory unavailable")
 	}
+	var conflicts []cloudflaretunnel.ReclamationConflict
 	seen := map[string]bool{}
 	for _, hostname := range hostnames {
 		observed, err := api.ObserveMutation(ctx, cloudflaretunnel.MutationRequest{AccountID: account, ZoneID: zone, Tunnel: tunnel, Hostname: hostname, Token: token})
 		if err != nil {
-			return networkpolicy.OwnerFacts{}, err
+			return networkpolicy.OwnerFacts{}, nil, err
 		}
 		for _, resource := range observed.Tunnels {
 			key := "Tunnel\x00" + resource.ID + "\x00" + resource.Name
 			if !seen[key] {
-				facts.Conflicts = append(facts.Conflicts, networkpolicy.CloudflareConflict{Kind: "Tunnel", ID: resource.ID, Name: resource.Name})
+				routes := make([]networkpolicy.CloudflareRoute, len(observed.Routes))
+				for index, route := range observed.Routes {
+					routes[index] = networkpolicy.CloudflareRoute{Profile: route.Hostname, Origin: route.Service}
+				}
+				facts.Conflicts = append(facts.Conflicts, networkpolicy.CloudflareConflict{Kind: "Tunnel routes", ID: resource.ID, Name: resource.Name, Routes: routes}, networkpolicy.CloudflareConflict{Kind: "Tunnel", ID: resource.ID, Name: resource.Name})
+				conflicts = append(conflicts, cloudflaretunnel.ReclamationConflict{Kind: cloudflaretunnel.ReclamationRoutes, ID: resource.ID, Name: resource.Name, Routes: append([]cloudflaretunnel.Route(nil), observed.Routes...)}, cloudflaretunnel.ReclamationConflict{Kind: cloudflaretunnel.ReclamationTunnel, ID: resource.ID, Name: resource.Name})
 				seen[key] = true
 			}
 		}
 		for _, resource := range observed.DNSRecords {
 			facts.Conflicts = append(facts.Conflicts, networkpolicy.CloudflareConflict{Kind: "DNS record", ID: resource.ID, Name: resource.Name})
+			conflicts = append(conflicts, cloudflaretunnel.ReclamationConflict{Kind: cloudflaretunnel.ReclamationDNS, ID: resource.ID, Name: resource.Name})
 		}
 	}
-	return facts, nil
+	order := func(kind cloudflaretunnel.ReclamationKind) int {
+		if kind == cloudflaretunnel.ReclamationDNS {
+			return 0
+		}
+		if kind == cloudflaretunnel.ReclamationRoutes {
+			return 1
+		}
+		return 2
+	}
+	slices.SortStableFunc(conflicts, func(a, b cloudflaretunnel.ReclamationConflict) int {
+		if result := cmp.Compare(order(a.Kind), order(b.Kind)); result != 0 {
+			return result
+		}
+		return cmp.Compare(a.Name+a.ID, b.Name+b.ID)
+	})
+	slices.SortStableFunc(facts.Conflicts, func(a, b networkpolicy.CloudflareConflict) int {
+		return cmp.Compare(a.Kind+a.Name+a.ID, b.Kind+b.Name+b.ID)
+	})
+	return facts, conflicts, nil
 }
 
 type installReleaseStager struct {
@@ -190,7 +217,7 @@ func buildInstallWith(ctx context.Context, request softwareubuntu.InstallHandoff
 	if err != nil {
 		return nil, errors.New("Cloudflare management token refused")
 	}
-	ownerFacts, err := observeReclamationCloudflare(ctx, dependencies.inventory, request.CloudflareAccountID, request.CloudflareZoneID, token, "sbxr-main", []string{"xhttp." + draft.Domain, "ws." + draft.Domain, directHostname})
+	ownerFacts, cloudflareConflicts, err := observeReclamationCloudflare(ctx, dependencies.inventory, request.CloudflareAccountID, request.CloudflareZoneID, token, "sbxr-main", []string{"xhttp." + draft.Domain, "ws." + draft.Domain, directHostname})
 	if err != nil {
 		return nil, errors.New("Cloudflare conflict inventory failed")
 	}
@@ -239,7 +266,7 @@ func buildInstallWith(ctx context.Context, request softwareubuntu.InstallHandoff
 		return nil, fmt.Errorf("Desired State candidate refused: %w", err)
 	}
 	changeSet := "install-" + request.Session[:16]
-	cloudflareResult := dependencies.cloudflare(ctx, cloudflaretunnel.PlanRequest{Authority: cloudflaretunnel.ViewRequest{AccountID: request.CloudflareAccountID, ZoneID: request.CloudflareZoneID, ZoneName: draft.Domain, Token: token, NetworkPath: baseNetwork.CloudflareTunnelPath}, ChangeSet: changeSet, DesiredStateSHA256: desiredSHA256, TunnelName: "sbxr-main", XHTTPHostname: "xhttp." + draft.Domain, WebSocketHostname: "ws." + draft.Domain, DirectHostname: directHostname, PublicIPv4: draft.PublicIPv4, PublicIPv6: draft.PublicIPv6, CloudflaredVersion: cloudflaredVersion})
+	cloudflareResult := dependencies.cloudflare(ctx, cloudflaretunnel.PlanRequest{Authority: cloudflaretunnel.ViewRequest{AccountID: request.CloudflareAccountID, ZoneID: request.CloudflareZoneID, ZoneName: draft.Domain, Token: token, NetworkPath: baseNetwork.CloudflareTunnelPath}, ChangeSet: changeSet, DesiredStateSHA256: desiredSHA256, TunnelName: "sbxr-main", XHTTPHostname: "xhttp." + draft.Domain, WebSocketHostname: "ws." + draft.Domain, DirectHostname: directHostname, PublicIPv4: draft.PublicIPv4, PublicIPv6: draft.PublicIPv6, CloudflaredVersion: cloudflaredVersion, Reclamation: cloudflareConflicts})
 	if cloudflareResult.Plan == nil {
 		return nil, errors.New("Cloudflare install Plan refused")
 	}

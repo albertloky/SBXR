@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/netip"
@@ -117,8 +118,17 @@ func (api *httpAPI) ObserveMutation(ctx context.Context, request MutationRequest
 	if err != nil {
 		return MutationObservation{}, err
 	}
-	digest := sha256.Sum256([]byte(request.AccountID + "\n" + request.ZoneID + "\n" + request.Tunnel + "\n" + request.Hostname + "\n" + resourcesText(tunnels) + resourcesText(dns)))
-	return MutationObservation{Digest: hex.EncodeToString(digest[:]), Tunnels: tunnels, DNSRecords: dns}, nil
+	var routes []Route
+	if len(tunnels) == 1 {
+		configuration, configErr := api.GetConfiguration(ctx, GetConfigurationRequest{AccountID: request.AccountID, TunnelID: tunnels[0].ID, Token: request.Token})
+		if configErr != nil {
+			return MutationObservation{}, configErr
+		}
+		routes = append([]Route(nil), configuration.Routes...)
+	}
+	routeJSON, _ := json.Marshal(routes)
+	digest := sha256.Sum256([]byte(request.AccountID + "\n" + request.ZoneID + "\n" + request.Tunnel + "\n" + request.Hostname + "\n" + resourcesText(tunnels) + resourcesText(dns) + string(routeJSON)))
+	return MutationObservation{Digest: hex.EncodeToString(digest[:]), Tunnels: tunnels, DNSRecords: dns, Routes: routes}, nil
 }
 
 func (api *httpAPI) listResources(ctx context.Context, path string, query url.Values, token ManagementToken, uuid bool) ([]OwnedResource, error) {
@@ -439,4 +449,20 @@ func (api *httpAPI) DeleteTunnel(ctx context.Context, request DeleteTunnelReques
 		return nil
 	}
 	return err
+}
+
+func (api *httpAPI) GetTunnel(ctx context.Context, request GetTunnelRequest) (OwnedResource, error) {
+	if !immutableID.MatchString(request.AccountID) || !tunnelUUID.MatchString(request.ID) || request.Token.value == "" {
+		return OwnedResource{}, APIError{Kind: APIMalformed}
+	}
+	var envelope struct {
+		Result struct{ ID, Name string } `json:"result"`
+	}
+	if err := api.get(ctx, "/accounts/"+request.AccountID+"/cfd_tunnel/"+request.ID, nil, request.Token, &envelope); err != nil {
+		return OwnedResource{}, err
+	}
+	if envelope.Result.ID != request.ID || envelope.Result.Name == "" {
+		return OwnedResource{}, APIError{Kind: APIAmbiguous}
+	}
+	return OwnedResource{ID: envelope.Result.ID, Name: envelope.Result.Name}, nil
 }

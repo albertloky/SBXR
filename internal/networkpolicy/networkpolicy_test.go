@@ -115,6 +115,28 @@ func TestReviewedStandaloneExecutableBecomesOneUseFreshReclamationAuthority(t *t
 	}
 }
 
+func TestReviewedCloudflareConflictsBecomeOneUseExactReclamationAuthority(t *testing.T) {
+	observed := completeObservations()
+	observed.ReclamationComplete = true
+	observed.OwnerFacts = networkpolicy.OwnerFacts{DNS: "fresh", Tunnel: "fresh", Conflicts: []networkpolicy.CloudflareConflict{
+		{Kind: "DNS record", ID: strings.Repeat("d", 32), Name: "xhttp.example.com"},
+		{Kind: "Tunnel routes", ID: "11111111-1111-4111-8111-111111111111", Name: "sbxr-main", Routes: []networkpolicy.CloudflareRoute{{Profile: "xhttp.example.com", Origin: "http://127.0.0.1:8080"}, {Origin: "http_status:404"}}},
+		{Kind: "Tunnel", ID: "11111111-1111-4111-8111-111111111111", Name: "sbxr-main"},
+	}}
+	adapter := &stagedAdapter{observed: observed}
+	request := networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PreApproval, ReclamationReview: true, OwnerFacts: observed.OwnerFacts}
+	review := networkpolicy.New(adapter).Evaluate(request)
+	if review.Reclamation == nil {
+		t.Fatalf("Cloudflare conflicts omitted review: %+v", review.Findings)
+	}
+	request.Stage, request.ReviewedReclamationSHA256 = networkpolicy.PostApproval, review.Reclamation.Digest
+	approved := networkpolicy.New(adapter).Evaluate(request)
+	reviewed, kinds, ids, names, routes, valid := approved.ReclamationAuthority().SystemChangesCloudflareReclamation()
+	if !valid || reviewed != review.Reclamation.Digest || fmt.Sprint(kinds) != "[DNS record Tunnel routes Tunnel]" || len(ids) != 3 || names[0] != "xhttp.example.com" || len(routes[1]) != 2 {
+		t.Fatalf("Cloudflare authority = %q %v %v %v %v %t", reviewed, kinds, ids, names, routes, valid)
+	}
+}
+
 func TestReviewedInboundFirewallBecomesOneUseForwardReplacementAuthority(t *testing.T) {
 	observed := completeObservations()
 	observed.ReclamationComplete = true

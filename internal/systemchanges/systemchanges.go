@@ -631,6 +631,15 @@ type ReclamationTarget struct {
 	Packages                                                 []ReclamationPackageTarget
 	Docker                                                   *DockerReclamationTarget
 	Firewall                                                 *FirewallReclamationTarget
+	Cloudflare                                               *CloudflareReclamationTarget
+}
+
+type CloudflareReclamationTarget struct {
+	Conflicts []CloudflareReclamationConflict
+}
+type CloudflareReclamationConflict struct {
+	Kind, ID, Name string
+	Routes         []CloudflareRoute
 }
 
 type FirewallReclamationTarget struct {
@@ -659,6 +668,9 @@ type ReclamationAuthority interface {
 }
 
 func validReclamationTarget(target ReclamationTarget) bool {
+	if target.Kind == "cloudflare" {
+		return target.Cloudflare != nil && target.Docker == nil && target.Firewall == nil && target.Path == "" && target.SHA256 == "" && target.ProcessID == "" && target.PolicyVersion == 1 && validSHA256(target.ReviewSHA256) && len(target.Cloudflare.Conflicts) > 0
+	}
 	if target.Kind == "firewall" {
 		firewall := target.Firewall
 		return firewall != nil && target.Docker == nil && target.Path == "" && target.SHA256 == "" && target.ProcessID == "" && target.Package == "" && len(target.Packages) == 0 && target.PolicyVersion == 1 && validSHA256(target.ReviewSHA256) && firewall.Manager != "" && validSHA256(firewall.PriorSHA256) && validSHA256(firewall.OutboundSHA256) && strings.HasPrefix(firewall.Candidate, "table inet sbxr {") && firewall.Service != "" && firewall.Listener != "" && validSHA256(firewall.SessionSHA256) && filepath.IsAbs(firewall.AuthorizedKeysPath) && validSHA256(firewall.AuthorizedKeysSHA256) && len(firewall.Objects) > 0
@@ -756,33 +768,35 @@ const SafeCheckpointCancellation CancellationContract = "Wait for declared safe 
 const InspectBeforeIdempotentReverse InspectionContract = "Inspect effect before idempotent reverse"
 
 const (
-	ActivatePreparedConfiguration   OperationKind = "Activate prepared configuration"
-	RestorePriorConfiguration       OperationKind = "Restore prior configuration"
-	RecordManagementTokenChange     OperationKind = "Record management token change"
-	RestoreManagementTokenRecord    OperationKind = "Restore management token record"
-	ApplyApprovedNetworkPolicy      OperationKind = "Apply approved Network Policy"
-	OpenApprovedHTTP01              OperationKind = "Open approved HTTP-01 rule"
-	CloseRecordedHTTP01             OperationKind = "Close recorded HTTP-01 rule"
-	RestorePriorNetworkPolicy       OperationKind = "Restore prior Network Policy"
-	RemoveOwnedPublicExposure       OperationKind = "Remove owned public exposure"
-	RestoreOwnedPublicExposure      OperationKind = "Restore owned public exposure"
-	DeleteOwnedCloudflareResource   OperationKind = "Delete owned Cloudflare resource"
-	RestoreOwnedCloudflareResource  OperationKind = "Restore owned Cloudflare resource"
-	CreateCloudflareResource        OperationKind = "Create Cloudflare resource"
-	DeleteCreatedCloudflareResource OperationKind = "Delete created Cloudflare resource"
-	ConfigureCloudflareTunnel       OperationKind = "Configure Cloudflare Tunnel"
-	RestoreCloudflareTunnel         OperationKind = "Restore Cloudflare Tunnel"
-	ConfigureCloudflareDNS          OperationKind = "Configure owned Cloudflare DNS"
-	RestoreCloudflareDNS            OperationKind = "Restore owned Cloudflare DNS"
-	ActivateCloudflaredService      OperationKind = "Activate cloudflared service"
-	RotateCloudflaredRunToken       OperationKind = "Rotate cloudflared run token"
-	RestoreCloudflaredService       OperationKind = "Restore cloudflared service"
-	StageCertificateCandidate       OperationKind = "Stage certificate candidate"
-	DiscardCertificateCandidate     OperationKind = "Discard certificate candidate"
-	OrderCertificateCandidate       OperationKind = "Order certificate candidate"
-	PreserveCertificateLineage      OperationKind = "Preserve certificate lineage"
-	ActivateCertificateServingPair  OperationKind = "Activate certificate serving pair"
-	RestoreCertificateServingPair   OperationKind = "Restore certificate serving pair"
+	ActivatePreparedConfiguration         OperationKind = "Activate prepared configuration"
+	RestorePriorConfiguration             OperationKind = "Restore prior configuration"
+	RecordManagementTokenChange           OperationKind = "Record management token change"
+	RestoreManagementTokenRecord          OperationKind = "Restore management token record"
+	ApplyApprovedNetworkPolicy            OperationKind = "Apply approved Network Policy"
+	OpenApprovedHTTP01                    OperationKind = "Open approved HTTP-01 rule"
+	CloseRecordedHTTP01                   OperationKind = "Close recorded HTTP-01 rule"
+	RestorePriorNetworkPolicy             OperationKind = "Restore prior Network Policy"
+	RemoveOwnedPublicExposure             OperationKind = "Remove owned public exposure"
+	RestoreOwnedPublicExposure            OperationKind = "Restore owned public exposure"
+	DeleteOwnedCloudflareResource         OperationKind = "Delete owned Cloudflare resource"
+	RestoreOwnedCloudflareResource        OperationKind = "Restore owned Cloudflare resource"
+	DeleteConflictingCloudflareResource   OperationKind = "Delete conflicting Cloudflare resource"
+	PreserveConflictingCloudflareResource OperationKind = "Preserve conflicting Cloudflare resource"
+	CreateCloudflareResource              OperationKind = "Create Cloudflare resource"
+	DeleteCreatedCloudflareResource       OperationKind = "Delete created Cloudflare resource"
+	ConfigureCloudflareTunnel             OperationKind = "Configure Cloudflare Tunnel"
+	RestoreCloudflareTunnel               OperationKind = "Restore Cloudflare Tunnel"
+	ConfigureCloudflareDNS                OperationKind = "Configure owned Cloudflare DNS"
+	RestoreCloudflareDNS                  OperationKind = "Restore owned Cloudflare DNS"
+	ActivateCloudflaredService            OperationKind = "Activate cloudflared service"
+	RotateCloudflaredRunToken             OperationKind = "Rotate cloudflared run token"
+	RestoreCloudflaredService             OperationKind = "Restore cloudflared service"
+	StageCertificateCandidate             OperationKind = "Stage certificate candidate"
+	DiscardCertificateCandidate           OperationKind = "Discard certificate candidate"
+	OrderCertificateCandidate             OperationKind = "Order certificate candidate"
+	PreserveCertificateLineage            OperationKind = "Preserve certificate lineage"
+	ActivateCertificateServingPair        OperationKind = "Activate certificate serving pair"
+	RestoreCertificateServingPair         OperationKind = "Restore certificate serving pair"
 )
 
 type CertificateAction string
@@ -819,6 +833,9 @@ const (
 	CloudflareRoutesPut        CloudflareAction = "routes-put"
 	CloudflareDNSCreate        CloudflareAction = "dns-create"
 	CloudflareDNSRepair        CloudflareAction = "dns-repair"
+	CloudflareDNSDelete        CloudflareAction = "dns-delete"
+	CloudflareRoutesDelete     CloudflareAction = "routes-delete"
+	CloudflareTunnelDelete     CloudflareAction = "tunnel-delete"
 	CloudflaredActivate        CloudflareAction = "service-activate"
 	CloudflareRunTokenActivate CloudflareAction = "run-token-activate"
 )
@@ -963,6 +980,8 @@ func NewCertificateStep(change CertificateChange) (Step, error) {
 func NewCloudflareStep(change CloudflareChange) (Step, error) {
 	forward, rollback := CreateCloudflareResource, DeleteCreatedCloudflareResource
 	switch change.Action {
+	case CloudflareDNSDelete, CloudflareRoutesDelete, CloudflareTunnelDelete:
+		forward, rollback = DeleteConflictingCloudflareResource, PreserveConflictingCloudflareResource
 	case CloudflareRoutesPut:
 		forward, rollback = ConfigureCloudflareTunnel, RestoreCloudflareTunnel
 	case CloudflareDNSRepair:
@@ -1542,7 +1561,7 @@ func validModule(module Module) bool {
 
 func validOperation(operation OperationKind) bool {
 	switch operation {
-	case ActivatePreparedConfiguration, RestorePriorConfiguration, RecordManagementTokenChange, RestoreManagementTokenRecord, ApplyApprovedNetworkPolicy, OpenApprovedHTTP01, CloseRecordedHTTP01, RestorePriorNetworkPolicy, RemoveOwnedPublicExposure, RestoreOwnedPublicExposure, DeleteOwnedCloudflareResource, RestoreOwnedCloudflareResource, CreateCloudflareResource, DeleteCreatedCloudflareResource, ConfigureCloudflareTunnel, RestoreCloudflareTunnel, ConfigureCloudflareDNS, RestoreCloudflareDNS, ActivateCloudflaredService, RotateCloudflaredRunToken, RestoreCloudflaredService, StageCertificateCandidate, DiscardCertificateCandidate, OrderCertificateCandidate, PreserveCertificateLineage, ActivateCertificateServingPair, RestoreCertificateServingPair:
+	case ActivatePreparedConfiguration, RestorePriorConfiguration, RecordManagementTokenChange, RestoreManagementTokenRecord, ApplyApprovedNetworkPolicy, OpenApprovedHTTP01, CloseRecordedHTTP01, RestorePriorNetworkPolicy, RemoveOwnedPublicExposure, RestoreOwnedPublicExposure, DeleteOwnedCloudflareResource, RestoreOwnedCloudflareResource, DeleteConflictingCloudflareResource, PreserveConflictingCloudflareResource, CreateCloudflareResource, DeleteCreatedCloudflareResource, ConfigureCloudflareTunnel, RestoreCloudflareTunnel, ConfigureCloudflareDNS, RestoreCloudflareDNS, ActivateCloudflaredService, RotateCloudflaredRunToken, RestoreCloudflaredService, StageCertificateCandidate, DiscardCertificateCandidate, OrderCertificateCandidate, PreserveCertificateLineage, ActivateCertificateServingPair, RestoreCertificateServingPair:
 		return true
 	}
 	return false
@@ -1614,7 +1633,7 @@ func validCertificateHostname(hostname string) bool {
 }
 
 func cloudflareOperation(operation OperationKind) bool {
-	return operation == CreateCloudflareResource || operation == DeleteCreatedCloudflareResource || operation == ConfigureCloudflareTunnel || operation == RestoreCloudflareTunnel || operation == ConfigureCloudflareDNS || operation == RestoreCloudflareDNS || operation == ActivateCloudflaredService || operation == RotateCloudflaredRunToken || operation == RestoreCloudflaredService
+	return operation == DeleteConflictingCloudflareResource || operation == PreserveConflictingCloudflareResource || operation == CreateCloudflareResource || operation == DeleteCreatedCloudflareResource || operation == ConfigureCloudflareTunnel || operation == RestoreCloudflareTunnel || operation == ConfigureCloudflareDNS || operation == RestoreCloudflareDNS || operation == ActivateCloudflaredService || operation == RotateCloudflaredRunToken || operation == RestoreCloudflaredService
 }
 
 func validCloudflareContract(step Step) bool {
@@ -1645,6 +1664,12 @@ func validCloudflareContract(step Step) bool {
 	case CloudflareDNSRepair:
 		validType := change.RecordType == "CNAME" && change.Content != "" || (change.RecordType == "A" || change.RecordType == "AAAA") && change.Content != ""
 		return step.forward == ConfigureCloudflareDNS && step.rollback == RestoreCloudflareDNS && safeIdentity(change.ZoneID) && safeIdentity(change.DNSRecordID) && change.Hostname != "" && validType && len(change.Routes) == 0
+	case CloudflareDNSDelete:
+		return step.forward == DeleteConflictingCloudflareResource && step.rollback == PreserveConflictingCloudflareResource && safeIdentity(change.ZoneID) && safeIdentity(change.DNSRecordID) && change.Hostname != "" && change.TunnelID == "" && len(change.Routes) == 0
+	case CloudflareRoutesDelete:
+		return step.forward == DeleteConflictingCloudflareResource && step.rollback == PreserveConflictingCloudflareResource && safeIdentity(change.TunnelID) && change.TunnelName != "" && change.ZoneID != "" && len(change.Routes) > 0
+	case CloudflareTunnelDelete:
+		return step.forward == DeleteConflictingCloudflareResource && step.rollback == PreserveConflictingCloudflareResource && safeIdentity(change.TunnelID) && change.TunnelName != "" && change.ZoneID != "" && len(change.Routes) == 0
 	case CloudflaredActivate:
 		return step.forward == ActivateCloudflaredService && step.rollback == RestoreCloudflaredService && validTunnel && change.ZoneID == "" && change.Hostname == "" && len(change.Routes) == 0
 	case CloudflareRunTokenActivate:

@@ -101,6 +101,45 @@ func TestPlanBindsCompleteSecretSafeCloudflareInstallation(t *testing.T) {
 	}
 }
 
+func TestPlanDeletesOnlyReviewedConflictsBeforeCreatingTheCandidate(t *testing.T) {
+	module, request := plannedModule(t)
+	api := module.api.(*planningAPI)
+	api.mutation = MutationObservation{Digest: strings.Repeat("a", 64), Tunnels: []OwnedResource{{ID: testTunnelID, Name: "sbxr-main"}}, Routes: []Route{{Hostname: request.XHTTPHostname, Service: "http://127.0.0.1:8080"}, {Service: "http_status:404"}}, DNSRecords: []OwnedResource{{ID: testDNSID, Name: request.XHTTPHostname}}}
+	request.Reclamation = []ReclamationConflict{
+		{Kind: ReclamationDNS, ID: testDNSID, Name: request.XHTTPHostname},
+		{Kind: ReclamationRoutes, ID: testTunnelID, Name: "sbxr-main", Routes: append([]Route(nil), api.mutation.Routes...)},
+		{Kind: ReclamationTunnel, ID: testTunnelID, Name: "sbxr-main"},
+	}
+
+	result := module.Plan(t.Context(), request)
+	if result.Plan == nil || result.Health.Outcome != Healthy {
+		t.Fatalf("reclamation Plan = %+v", result)
+	}
+	steps := result.Plan.Steps()
+	if len(steps) != 10 {
+		t.Fatalf("steps = %d, want three exact deletions plus seven candidate steps", len(steps))
+	}
+	for index, action := range []systemchanges.CloudflareAction{systemchanges.CloudflareDNSDelete, systemchanges.CloudflareRoutesDelete, systemchanges.CloudflareTunnelDelete, systemchanges.CloudflareTunnelCreate} {
+		change, ok := steps[index].CloudflareChange()
+		if !ok || change.Action != action {
+			t.Fatalf("step %d = %#v, want %s", index+1, change, action)
+		}
+	}
+	if rendered := fmt.Sprintf("%+v %#v", result.Plan, result.Plan.Steps()); strings.Contains(rendered, "PLAN-SECRET-MARKER") {
+		t.Fatalf("reclamation Plan leaked token: %s", rendered)
+	}
+}
+
+func TestPlanRefusesAnExtraUnobservedReclamationTarget(t *testing.T) {
+	module, request := plannedModule(t)
+	api := module.api.(*planningAPI)
+	api.mutation = MutationObservation{Digest: strings.Repeat("a", 64), DNSRecords: []OwnedResource{{ID: testDNSID, Name: request.XHTTPHostname}}}
+	request.Reclamation = []ReclamationConflict{{Kind: ReclamationDNS, ID: testDNSID, Name: request.XHTTPHostname}, {Kind: ReclamationDNS, ID: strings.Repeat("9", 32), Name: "unrelated.example.com"}}
+	if result := module.Plan(t.Context(), request); result.Plan != nil || result.Health.Code != "CLOUDFLARE-UNOWNED-CONFLICT" {
+		t.Fatalf("extra reclamation target admitted: %+v", result)
+	}
+}
+
 func TestPlanReleaseUpdateRestartsOnlyTheVerifiedOwnedCloudflaredService(t *testing.T) {
 	module, request := plannedModule(t)
 	request.StartingRevision = 7
@@ -450,6 +489,22 @@ type planningAPI struct {
 
 func (api *planningAPI) ObserveWholeTunnel(context.Context, WholeTunnelRequest) (WholeTunnelObservation, error) {
 	return api.wholeTunnel, nil
+}
+
+func (api *planningAPI) GetTunnel(_ context.Context, request GetTunnelRequest) (OwnedResource, error) {
+	for _, observed := range api.mutations {
+		for _, tunnel := range observed.Tunnels {
+			if tunnel.ID == request.ID {
+				return tunnel, nil
+			}
+		}
+	}
+	for _, tunnel := range api.mutation.Tunnels {
+		if tunnel.ID == request.ID {
+			return tunnel, nil
+		}
+	}
+	return OwnedResource{}, APIError{Kind: APINotFound}
 }
 
 func healthyWholeTunnel(request PlanRequest) WholeTunnelObservation {

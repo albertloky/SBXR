@@ -84,6 +84,8 @@ type CloudflareExecutor interface {
 	ActivateService(string, io.Reader, time.Duration) (systemchanges.StepEvidence, error)
 	Reverse(systemchanges.Step, systemchanges.StepEvidence, io.Reader, time.Duration) (systemchanges.StepEvidence, error)
 	InspectRepair(systemchanges.Step, io.Reader, time.Duration) (systemchanges.StepEffect, error)
+	InspectReclamation(systemchanges.Step, time.Duration) (systemchanges.StepEffect, error)
+	VerifyReclamation([]systemchanges.Step, time.Duration) error
 	ReverseService(string, io.Reader, time.Duration) (systemchanges.StepEvidence, error)
 	InspectService(string, io.Reader) (systemchanges.StepEffect, error)
 	CheckWholeTunnel([]systemchanges.StepEvidence, time.Duration) (systemchanges.HealthStatus, error)
@@ -583,6 +585,9 @@ func (a Adapter) LoadForwardInstallationEvidence(lease systemchanges.ExecutionLe
 }
 
 func (a Adapter) VerifyReclamationReady(lease systemchanges.ExecutionLease, changeSet string, target systemchanges.ReclamationTarget, timeout time.Duration) error {
+	if target.Kind == "cloudflare" {
+		return verifyCloudflareReclamationSteps(a, lease, changeSet, target)
+	}
 	if !safeName(changeSet) {
 		return errors.New("reclamation transaction unavailable")
 	}
@@ -709,6 +714,10 @@ func (a Adapter) runPackage(timeout time.Duration, name string, arguments ...str
 }
 
 func (a Adapter) DeleteReclamationTarget(lease systemchanges.ExecutionLease, changeSet string, target systemchanges.ReclamationTarget, timeout time.Duration) (systemchanges.StepEvidence, error) {
+	if target.Kind == "cloudflare" {
+		digest := sha256.Sum256([]byte(target.ReviewSHA256 + "\x00cloudflare-steps-pending"))
+		return systemchanges.StepEvidence{Code: "cloudflare-conflicts-pending", SHA256: hex.EncodeToString(digest[:])}, nil
+	}
 	if target.Kind == "firewall" {
 		firewall, ok := a.firewall.(firewallReclamationExecutor)
 		if !lease.Authorized() || !safeName(changeSet) || target.Firewall == nil || !ok {
@@ -811,6 +820,10 @@ func (a Adapter) deleteReclamationTarget(changeSet string, target systemchanges.
 }
 
 func (a Adapter) StopReclamationProcess(lease systemchanges.ExecutionLease, target systemchanges.ReclamationTarget, timeout time.Duration) (systemchanges.StepEvidence, error) {
+	if target.Kind == "cloudflare" {
+		digest := sha256.Sum256([]byte(target.ReviewSHA256 + "\x00cloudflare-authority-verified"))
+		return systemchanges.StepEvidence{Code: "cloudflare-authority-verified", SHA256: hex.EncodeToString(digest[:])}, nil
+	}
 	if target.Kind == "firewall" {
 		if !lease.Authorized() || target.Firewall == nil || a.verifyFirewallSSH(*target.Firewall, timeout) != nil {
 			return systemchanges.StepEvidence{}, errors.New("firewall reclamation unavailable")
@@ -871,6 +884,12 @@ func (a Adapter) StopReclamationProcess(lease systemchanges.ExecutionLease, targ
 }
 
 func (a Adapter) InspectReclamationTarget(lease systemchanges.ExecutionLease, changeSet string, target systemchanges.ReclamationTarget, _ time.Duration) (systemchanges.StepEffect, error) {
+	if target.Kind == "cloudflare" {
+		if err := verifyCloudflareReclamationSteps(a, lease, changeSet, target); err != nil {
+			return "", err
+		}
+		return systemchanges.StepEffectAbsent, nil
+	}
 	if target.Kind == "firewall" {
 		firewall, ok := a.firewall.(firewallReclamationExecutor)
 		if !lease.RecoveryAuthorized() || !safeName(changeSet) || target.Firewall == nil || !ok {
@@ -948,6 +967,41 @@ func (a Adapter) InspectReclamationTarget(lease systemchanges.ExecutionLease, ch
 		return "", err
 	}
 	return systemchanges.StepEffectPresent, nil
+}
+
+func verifyCloudflareReclamationSteps(a Adapter, lease systemchanges.ExecutionLease, changeSet string, target systemchanges.ReclamationTarget) error {
+	if !lease.Authorized() || !safeName(changeSet) || target.Cloudflare == nil || len(target.Cloudflare.Conflicts) == 0 || a.cloudflare == nil {
+		return errors.New("Cloudflare reclamation authority unavailable")
+	}
+	root, err := os.OpenRoot(a.root)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	entries, err := readJournal(root, path.Join(transactionDirectory, changeSet, "journal.jsonl"))
+	if err != nil || len(entries) == 0 || len(entries[0].Steps) < len(target.Cloudflare.Conflicts) {
+		return errors.New("Cloudflare reclamation journal unavailable")
+	}
+	for index, conflict := range target.Cloudflare.Conflicts {
+		persisted := entries[0].Steps[index].Cloudflare
+		if persisted == nil || persisted.AccountID == "" || persisted.ZoneID == "" {
+			return errors.New("Cloudflare reclamation step unavailable")
+		}
+		step, stepErr := systemchanges.NewCloudflareStep(*persisted)
+		effect, inspectErr := a.cloudflare.InspectReclamation(step, time.Minute)
+		if stepErr != nil || inspectErr != nil || effect != systemchanges.StepEffectAbsent || persisted.DNSRecordID != "" && persisted.DNSRecordID != conflict.ID || persisted.DNSRecordID == "" && persisted.TunnelID != conflict.ID || persisted.Hostname != "" && persisted.Hostname != conflict.Name || persisted.TunnelName != "" && persisted.TunnelName != conflict.Name || !reflect.DeepEqual(persisted.Routes, conflict.Routes) {
+			return errors.New("Cloudflare reclamation changed")
+		}
+	}
+	steps := make([]systemchanges.Step, len(target.Cloudflare.Conflicts))
+	for index := range steps {
+		var stepErr error
+		steps[index], stepErr = systemchanges.NewCloudflareStep(*entries[0].Steps[index].Cloudflare)
+		if stepErr != nil {
+			return stepErr
+		}
+	}
+	return a.cloudflare.VerifyReclamation(steps, time.Minute)
 }
 
 func packageReclamationTargets(target systemchanges.ReclamationTarget) []systemchanges.ReclamationTarget {
@@ -1943,6 +1997,12 @@ func (a Adapter) InspectStep(lease systemchanges.ExecutionLease, recovery system
 		}
 		return a.cloudflare.InspectService(a.root, bytes.NewReader(content))
 	}
+	if cloudflareReclamation(step) {
+		if a.cloudflare == nil {
+			return "", errors.New("Cloudflare reclamation executor unavailable")
+		}
+		return a.cloudflare.InspectReclamation(step, timeout)
+	}
 	if cloudflareRepair(step) {
 		if a.cloudflare == nil {
 			return "", errors.New("Cloudflare repair executor unavailable")
@@ -1993,6 +2053,11 @@ func runTokenActivation(step systemchanges.Step) bool {
 func cloudflareRepair(step systemchanges.Step) bool {
 	change, ok := step.CloudflareChange()
 	return ok && (change.Action == systemchanges.CloudflareRoutesPut && change.TunnelID != "" || change.Action == systemchanges.CloudflareDNSRepair)
+}
+
+func cloudflareReclamation(step systemchanges.Step) bool {
+	change, ok := step.CloudflareChange()
+	return ok && (change.Action == systemchanges.CloudflareDNSDelete || change.Action == systemchanges.CloudflareRoutesDelete || change.Action == systemchanges.CloudflareTunnelDelete)
 }
 
 func (a Adapter) RestoreRecoveryState(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction) (systemchanges.RollbackAgreement, error) {

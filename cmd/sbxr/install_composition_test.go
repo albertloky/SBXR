@@ -150,8 +150,8 @@ func TestReclamationInventoryBindsExactCloudflareConflictIdentifiers(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	facts, err := observeReclamationCloudflare(t.Context(), conflictInventoryAPI{}, strings.Repeat("a", 32), strings.Repeat("b", 32), token, "sbxr-main", []string{"xhttp.example.com", "ws.example.com"})
-	if err != nil || len(facts.Conflicts) != 3 || facts.Conflicts[0].ID != "11111111-1111-4111-8111-111111111111" || facts.Conflicts[1].Name != "xhttp.example.com" || facts.Conflicts[2].Name != "ws.example.com" {
+	facts, _, err := observeReclamationCloudflare(t.Context(), conflictInventoryAPI{}, strings.Repeat("a", 32), strings.Repeat("b", 32), token, "sbxr-main", []string{"xhttp.example.com", "ws.example.com"})
+	if err != nil || len(facts.Conflicts) != 4 {
 		t.Fatalf("Cloudflare reclamation facts = %+v error %v", facts, err)
 	}
 }

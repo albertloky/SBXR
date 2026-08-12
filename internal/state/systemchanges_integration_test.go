@@ -1579,6 +1579,10 @@ type deferredCloudflareAPI struct {
 	whole  cloudflaretunnel.WholeTunnelObservation
 }
 
+func (api *deferredCloudflareAPI) GetTunnel(context.Context, cloudflaretunnel.GetTunnelRequest) (cloudflaretunnel.OwnedResource, error) {
+	return cloudflaretunnel.OwnedResource{}, cloudflaretunnel.APIError{Kind: cloudflaretunnel.APINotFound}
+}
+
 func (api *deferredCloudflareAPI) Observe(context.Context, cloudflaretunnel.ObservationRequest) (cloudflaretunnel.Observation, error) {
 	return cloudflaretunnel.Observation{Account: cloudflaretunnel.AccountObservation{ID: strings.Repeat("1", 32)}, Zone: cloudflaretunnel.ZoneObservation{ID: strings.Repeat("2", 32), AccountID: strings.Repeat("1", 32), Name: "example.com", Status: "active", AssignedNameServers: []string{"a.ns.cloudflare.com"}, ObservedNameServers: []string{"a.ns.cloudflare.com"}}, Token: cloudflaretunnel.TokenObservation{ID: strings.Repeat("6", 32), Status: "active"}, Policies: []cloudflaretunnel.TokenPolicy{{Effect: "allow", PermissionGroups: []string{"Account API Tokens Read", "Cloudflare Tunnel Edit"}, Resources: map[string]string{"com.cloudflare.api.account." + strings.Repeat("1", 32): "*"}}, {Effect: "allow", PermissionGroups: []string{"DNS Write"}, Resources: map[string]string{"com.cloudflare.api.account.zone." + strings.Repeat("2", 32): "*"}}}}, nil
 }

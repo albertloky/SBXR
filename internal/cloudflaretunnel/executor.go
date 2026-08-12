@@ -85,6 +85,10 @@ type DeleteTunnelRequest struct {
 	AccountID, ID string
 	Token         ManagementToken
 }
+type GetTunnelRequest struct {
+	AccountID, ID string
+	Token         ManagementToken
+}
 type GetTunnelTokenRequest struct {
 	AccountID, TunnelID string
 	Token               ManagementToken
@@ -221,6 +225,9 @@ func (executor Executor) CaptureRollback(step systemchanges.Step, write func(io.
 		return errors.New("Cloudflare rollback capture unavailable")
 	}
 	change, _ := step.CloudflareChange()
+	if change.Action == systemchanges.CloudflareDNSDelete || change.Action == systemchanges.CloudflareRoutesDelete || change.Action == systemchanges.CloudflareTunnelDelete {
+		return write(strings.NewReader(`{"irreversible_cloudflare_reclamation":true}`))
+	}
 	if executor.clientAccess != nil && !reflect.DeepEqual(change, *executor.clientAccess) {
 		return errors.New("Cloudflare Client Access Plan changed")
 	}
@@ -274,6 +281,48 @@ func (executor Executor) Execute(step systemchanges.Step, resolvedTunnelID strin
 		return systemchanges.StepEvidence{}, errors.New("Cloudflare Client Access Plan changed")
 	}
 	switch change.Action {
+	case systemchanges.CloudflareDNSDelete:
+		current, err := executor.api.GetDNSRecord(ctx, GetDNSRecordRequest{ZoneID: change.ZoneID, ID: change.DNSRecordID, Token: executor.token})
+		if apiErrorIs(err, APINotFound) {
+			return providerEvidence("cloudflare-dns-conflict-deleted", string(systemchanges.CloudflareDNSRecordResource), change.DNSRecordID), nil
+		}
+		if err != nil || current.ID != change.DNSRecordID || current.Name != change.Hostname || executor.api.DeleteDNSRecord(ctx, DeleteDNSRecordRequest{ZoneID: change.ZoneID, ID: change.DNSRecordID, Token: executor.token}) != nil {
+			return systemchanges.StepEvidence{}, errors.New("Cloudflare DNS conflict changed")
+		}
+		if _, err = executor.api.GetDNSRecord(ctx, GetDNSRecordRequest{ZoneID: change.ZoneID, ID: change.DNSRecordID, Token: executor.token}); !apiErrorIs(err, APINotFound) {
+			return systemchanges.StepEvidence{}, errors.New("Cloudflare DNS conflict absence unproved")
+		}
+		return providerEvidence("cloudflare-dns-conflict-deleted", string(systemchanges.CloudflareDNSRecordResource), change.DNSRecordID), nil
+	case systemchanges.CloudflareRoutesDelete:
+		current, err := executor.api.GetConfiguration(ctx, GetConfigurationRequest{AccountID: change.AccountID, TunnelID: change.TunnelID, Token: executor.token})
+		want := make([]Route, len(change.Routes))
+		for index, route := range change.Routes {
+			want[index] = Route{Hostname: route.Hostname, Service: route.Origin}
+		}
+		if err != nil || !sameRoutes(current.Routes, want) {
+			if err == nil && sameRoutes(current.Routes, []Route{{Service: "http_status:404"}}) {
+				return providerEvidence("cloudflare-routes-conflict-deleted", string(systemchanges.CloudflareRouteResource), change.TunnelID), nil
+			}
+			return systemchanges.StepEvidence{}, errors.New("Cloudflare routes conflict changed")
+		}
+		removed := []Route{{Service: "http_status:404"}}
+		configured, err := executor.api.PutConfiguration(ctx, PutConfigurationRequest{AccountID: change.AccountID, TunnelID: change.TunnelID, Token: executor.token, Routes: removed})
+		if err != nil || !sameRoutes(configured.Routes, removed) {
+			return systemchanges.StepEvidence{}, errors.New("Cloudflare routes conflict absence unproved")
+		}
+		return providerEvidence("cloudflare-routes-conflict-deleted", string(systemchanges.CloudflareRouteResource), change.TunnelID), nil
+	case systemchanges.CloudflareTunnelDelete:
+		tunnel, err := executor.api.GetTunnel(ctx, GetTunnelRequest{AccountID: change.AccountID, ID: change.TunnelID, Token: executor.token})
+		if apiErrorIs(err, APINotFound) {
+			return providerEvidence("cloudflare-tunnel-conflict-deleted", string(systemchanges.CloudflareTunnelResource), change.TunnelID), nil
+		}
+		if err != nil || tunnel != (OwnedResource{ID: change.TunnelID, Name: change.TunnelName}) || executor.api.DeleteTunnel(ctx, DeleteTunnelRequest{AccountID: change.AccountID, ID: change.TunnelID, Token: executor.token}) != nil {
+			return systemchanges.StepEvidence{}, errors.New("Cloudflare Tunnel conflict changed")
+		}
+		if _, err = executor.api.GetTunnel(ctx, GetTunnelRequest{AccountID: change.AccountID, ID: change.TunnelID, Token: executor.token}); !apiErrorIs(err, APINotFound) {
+			return systemchanges.StepEvidence{}, errors.New("Cloudflare Tunnel conflict absence unproved")
+		}
+		return providerEvidence("cloudflare-tunnel-conflict-deleted", string(systemchanges.CloudflareTunnelResource), change.TunnelID), nil
 	case systemchanges.CloudflareTunnelCreate:
 		if !executor.planStillFresh(ctx) {
 			return systemchanges.StepEvidence{}, errors.New("Cloudflare Plan observation changed")
@@ -383,12 +432,12 @@ func (executor Executor) planStillFresh(ctx context.Context) bool {
 	digests := make([]string, 0, 3)
 	for _, hostname := range []string{executor.request.XHTTPHostname, executor.request.WebSocketHostname, executor.request.DirectHostname} {
 		observed, err := executor.api.ObserveMutation(ctx, MutationRequest{AccountID: executor.request.Authority.AccountID, ZoneID: executor.request.Authority.ZoneID, Tunnel: executor.request.TunnelName, Hostname: hostname, Token: executor.token})
-		if err != nil || len(observed.Tunnels) != 0 || len(observed.DNSRecords) != 0 || !sha256Text.MatchString(observed.Digest) {
+		if err != nil || !sha256Text.MatchString(observed.Digest) || len(observed.Tunnels)+len(observed.DNSRecords) != 0 && !reclamationMatches(executor.request.Reclamation, observed) {
 			return false
 		}
 		digests = append(digests, observed.Digest)
 	}
-	return strings.Join(digests, "\n") == executor.observation
+	return len(executor.request.Reclamation) > 0 || strings.Join(digests, "\n") == executor.observation
 }
 
 func (executor Executor) repairPlanStillFresh(ctx context.Context) bool {
@@ -521,6 +570,68 @@ func (executor Executor) InspectRepair(step systemchanges.Step, snapshot io.Read
 		}
 	}
 	return "", errors.New("Cloudflare repair effect is contradictory")
+}
+
+func (executor Executor) InspectReclamation(step systemchanges.Step, timeout time.Duration) (systemchanges.StepEffect, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	change, ok := step.CloudflareChange()
+	if !ok || executor.token.value == "" {
+		return "", errors.New("Cloudflare reclamation inspection unavailable")
+	}
+	switch change.Action {
+	case systemchanges.CloudflareDNSDelete:
+		current, err := executor.api.GetDNSRecord(ctx, GetDNSRecordRequest{ZoneID: change.ZoneID, ID: change.DNSRecordID, Token: executor.token})
+		if apiErrorIs(err, APINotFound) {
+			return systemchanges.StepEffectPresent, nil
+		}
+		if err == nil && current.ID == change.DNSRecordID && current.Name == change.Hostname {
+			return systemchanges.StepEffectAbsent, nil
+		}
+	case systemchanges.CloudflareRoutesDelete:
+		current, err := executor.api.GetConfiguration(ctx, GetConfigurationRequest{AccountID: change.AccountID, TunnelID: change.TunnelID, Token: executor.token})
+		want := make([]Route, len(change.Routes))
+		for i, route := range change.Routes {
+			want[i] = Route{Hostname: route.Hostname, Service: route.Origin}
+		}
+		if err == nil && sameRoutes(current.Routes, []Route{{Service: "http_status:404"}}) {
+			return systemchanges.StepEffectPresent, nil
+		}
+		if err == nil && sameRoutes(current.Routes, want) {
+			return systemchanges.StepEffectAbsent, nil
+		}
+	case systemchanges.CloudflareTunnelDelete:
+		current, err := executor.api.GetTunnel(ctx, GetTunnelRequest{AccountID: change.AccountID, ID: change.TunnelID, Token: executor.token})
+		if apiErrorIs(err, APINotFound) {
+			return systemchanges.StepEffectPresent, nil
+		}
+		if err == nil && current == (OwnedResource{ID: change.TunnelID, Name: change.TunnelName}) {
+			return systemchanges.StepEffectAbsent, nil
+		}
+	}
+	return "", errors.New("Cloudflare reclamation effect changed")
+}
+
+func (executor Executor) VerifyReclamation(steps []systemchanges.Step, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	want := executor.request.Reclamation
+	var got MutationObservation
+	for _, hostname := range []string{executor.request.XHTTPHostname, executor.request.WebSocketHostname, executor.request.DirectHostname} {
+		observed, err := executor.api.ObserveMutation(ctx, MutationRequest{AccountID: executor.request.Authority.AccountID, ZoneID: executor.request.Authority.ZoneID, Tunnel: executor.request.TunnelName, Hostname: hostname, Token: executor.token})
+		if err != nil {
+			return err
+		}
+		got.Tunnels = appendUniqueResources(got.Tunnels, observed.Tunnels...)
+		got.DNSRecords = appendUniqueResources(got.DNSRecords, observed.DNSRecords...)
+		if len(observed.Routes) > 0 {
+			got.Routes = append([]Route(nil), observed.Routes...)
+		}
+	}
+	if len(steps) < len(want) || !reclamationMatches(want, got) {
+		return errors.New("Cloudflare reclamation set changed")
+	}
+	return nil
 }
 
 func providerEvidence(code, resourceType, resourceID string) systemchanges.StepEvidence {

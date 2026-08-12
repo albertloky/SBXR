@@ -5,10 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -42,6 +44,7 @@ type MutationAPI interface {
 	CreateTunnel(context.Context, CreateTunnelRequest) (CreatedTunnel, error)
 	PutConfiguration(context.Context, PutConfigurationRequest) (Configuration, error)
 	GetConfiguration(context.Context, GetConfigurationRequest) (Configuration, error)
+	GetTunnel(context.Context, GetTunnelRequest) (OwnedResource, error)
 	CreateDNSRecord(context.Context, CreateDNSRecordRequest) (OwnedResource, error)
 	GetDNSRecord(context.Context, GetDNSRecordRequest) (DNSObservation, error)
 	PutDNSRecord(context.Context, PutDNSRecordRequest) (OwnedResource, error)
@@ -68,6 +71,22 @@ type MutationObservation struct {
 	Digest     string
 	Tunnels    []OwnedResource
 	DNSRecords []OwnedResource
+	Routes     []Route
+}
+
+type ReclamationKind string
+
+const (
+	ReclamationDNS    ReclamationKind = "DNS record"
+	ReclamationRoutes ReclamationKind = "Tunnel routes"
+	ReclamationTunnel ReclamationKind = "Tunnel"
+)
+
+type ReclamationConflict struct {
+	Kind   ReclamationKind
+	ID     string
+	Name   string
+	Routes []Route
 }
 
 type runTokenCell struct {
@@ -120,6 +139,7 @@ type PlanRequest struct {
 	ManagedRepair        OwnedTunnelBinding
 	ReleaseUpdate        bool
 	CandidateServiceUnit string
+	Reclamation          []ReclamationConflict
 }
 
 type ManagementTokenAction string
@@ -296,6 +316,7 @@ func (i Interface) Plan(ctx context.Context, request PlanRequest) PlanResult {
 	}
 	hostnames := []string{request.XHTTPHostname, request.WebSocketHostname, request.DirectHostname}
 	digests := make([]string, 0, len(hostnames))
+	var aggregate MutationObservation
 	for _, hostname := range hostnames {
 		observed, err := planner.ObserveMutation(ctx, MutationRequest{AccountID: request.Authority.AccountID, ZoneID: request.Authority.ZoneID, Tunnel: request.TunnelName, Hostname: hostname, Token: request.Authority.Token})
 		if err != nil || !sha256Text.MatchString(observed.Digest) {
@@ -306,7 +327,16 @@ func (i Interface) Plan(ctx context.Context, request PlanRequest) PlanResult {
 			}
 			return PlanResult{Health: finish(healthResult(i, health)).Health}
 		}
+		aggregate.Tunnels = appendUniqueResources(aggregate.Tunnels, observed.Tunnels...)
+		aggregate.DNSRecords = appendUniqueResources(aggregate.DNSRecords, observed.DNSRecords...)
+		if len(observed.Routes) > 0 {
+			aggregate.Routes = append([]Route(nil), observed.Routes...)
+		}
 		if len(observed.Tunnels) != 0 || len(observed.DNSRecords) != 0 {
+			if len(request.Reclamation) > 0 {
+				digests = append(digests, observed.Digest)
+				continue
+			}
 			health.Code = "CLOUDFLARE-UNOWNED-CONFLICT"
 			health.Explanation = "A reviewed Tunnel or hostname is occupied and cannot be overwritten or adopted."
 			health.NextActions = []string{"Check again", "Back"}
@@ -321,6 +351,10 @@ func (i Interface) Plan(ctx context.Context, request PlanRequest) PlanResult {
 			return PlanResult{Health: finish(healthResult(i, health)).Health}
 		}
 		digests = append(digests, observed.Digest)
+	}
+	if len(request.Reclamation) > 0 && !reclamationMatches(request.Reclamation, aggregate) {
+		health.Code, health.Explanation = "CLOUDFLARE-UNOWNED-CONFLICT", "The reviewed Cloudflare conflict set changed or contains an unrelated resource."
+		return PlanResult{Health: finish(healthResult(i, health)).Health}
 	}
 	steps, binding, err := installationSteps(request)
 	if err != nil {
@@ -340,6 +374,15 @@ func (i Interface) Plan(ctx context.Context, request PlanRequest) PlanResult {
 	plan := &Plan{identity: identity, sha256: checksum, observation: bound.Observation, request: request, steps: steps, checks: wholeTunnelChecks(), binding: binding, runToken: TunnelRunToken{cell: &runTokenCell{}}, used: use.(*atomic.Bool)}
 	health = Health{Module: "Cloudflare Tunnel", Outcome: Healthy, Code: "CLOUDFLARE-PLAN-READY", Explanation: "The complete owned Cloudflare change is ready for review."}
 	return PlanResult{Plan: plan, Health: finish(healthResult(i, health)).Health}
+}
+
+func appendUniqueResources(current []OwnedResource, values ...OwnedResource) []OwnedResource {
+	for _, value := range values {
+		if !slices.Contains(current, value) {
+			current = append(current, value)
+		}
+	}
+	return current
 }
 
 func (i Interface) planReleaseUpdate(ctx context.Context, request PlanRequest) PlanResult {
@@ -611,13 +654,34 @@ func (plan *Plan) Apply(module systemchanges.Interface, prepared systemchanges.P
 }
 
 func installationSteps(request PlanRequest) ([]systemchanges.Step, cloudflareEvidenceBinding, error) {
-	changes := []systemchanges.CloudflareChange{
+	changes := make([]systemchanges.CloudflareChange, 0, len(request.Reclamation)+6)
+	for _, conflict := range request.Reclamation {
+		change := systemchanges.CloudflareChange{AccountID: request.Authority.AccountID, ZoneID: request.Authority.ZoneID, TunnelID: conflict.ID, TunnelName: conflict.Name}
+		switch conflict.Kind {
+		case ReclamationDNS:
+			change.Action, change.DNSRecordID, change.Hostname, change.TunnelID, change.TunnelName = systemchanges.CloudflareDNSDelete, conflict.ID, conflict.Name, "", ""
+		case ReclamationRoutes:
+			change.Action, change.Routes = systemchanges.CloudflareRoutesDelete, systemRoutes(conflict.Routes)
+		case ReclamationTunnel:
+			change.Action = systemchanges.CloudflareTunnelDelete
+		default:
+			return nil, cloudflareEvidenceBinding{}, errors.New("unsupported Cloudflare reclamation target")
+		}
+		changes = append(changes, change)
+	}
+	offset := len(changes)
+	changes = append(changes, []systemchanges.CloudflareChange{
 		{Action: systemchanges.CloudflareTunnelCreate, AccountID: request.Authority.AccountID, TunnelName: request.TunnelName},
 		{Action: systemchanges.CloudflareRoutesPut, AccountID: request.Authority.AccountID, TunnelIDFromStep: 1, Routes: []systemchanges.CloudflareRoute{{Hostname: request.XHTTPHostname, Origin: xhttpOrigin}, {Hostname: request.WebSocketHostname, Origin: webSocketOrigin}, {Origin: "http_status:404"}}},
 		{Action: systemchanges.CloudflareDNSCreate, AccountID: request.Authority.AccountID, ZoneID: request.Authority.ZoneID, TunnelIDFromStep: 1, Hostname: request.XHTTPHostname, RecordType: "CNAME"},
 		{Action: systemchanges.CloudflareDNSCreate, AccountID: request.Authority.AccountID, ZoneID: request.Authority.ZoneID, TunnelIDFromStep: 1, Hostname: request.WebSocketHostname, RecordType: "CNAME"},
+	}...)
+	for index := offset; index < len(changes); index++ {
+		if changes[index].TunnelIDFromStep == 1 {
+			changes[index].TunnelIDFromStep = offset + 1
+		}
 	}
-	binding := cloudflareEvidenceBinding{tunnel: 1, xhttp: 3, websocket: 4}
+	binding := cloudflareEvidenceBinding{tunnel: offset + 1, xhttp: offset + 3, websocket: offset + 4}
 	if request.PublicIPv4 != "" {
 		changes = append(changes, systemchanges.CloudflareChange{Action: systemchanges.CloudflareDNSCreate, AccountID: request.Authority.AccountID, ZoneID: request.Authority.ZoneID, Hostname: request.DirectHostname, RecordType: "A", Content: request.PublicIPv4})
 		binding.directIPv4 = len(changes)
@@ -651,6 +715,32 @@ func wholeTunnelChecks() []systemchanges.Check {
 
 func validPlanRequest(request PlanRequest) bool {
 	return request.StartingRevision == 0 && safePlanName.MatchString(request.ChangeSet) && sha256Text.MatchString(request.DesiredStateSHA256) && safePlanName.MatchString(request.TunnelName) && request.CloudflaredVersion == qualifiedCloudflaredVersion && validOwnedHostname(request.XHTTPHostname, request.Authority.ZoneName, "xhttp") && validOwnedHostname(request.WebSocketHostname, request.Authority.ZoneName, "ws") && validOwnedHostname(request.DirectHostname, request.Authority.ZoneName, "direct") && request.XHTTPHostname != request.WebSocketHostname && request.XHTTPHostname != request.DirectHostname && request.WebSocketHostname != request.DirectHostname && validPublicAddresses(request.PublicIPv4, request.PublicIPv6)
+}
+
+func reclamationMatches(want []ReclamationConflict, got MutationObservation) bool {
+	if len(want) == 0 {
+		return false
+	}
+	matched := 0
+	for _, tunnel := range got.Tunnels {
+		if !slices.ContainsFunc(want, func(item ReclamationConflict) bool {
+			return item.Kind == ReclamationTunnel && item.ID == tunnel.ID && item.Name == tunnel.Name
+		}) || !slices.ContainsFunc(want, func(item ReclamationConflict) bool {
+			return item.Kind == ReclamationRoutes && item.ID == tunnel.ID && item.Name == tunnel.Name && reflect.DeepEqual(item.Routes, got.Routes)
+		}) {
+			return false
+		}
+		matched += 2
+	}
+	for _, dns := range got.DNSRecords {
+		if !slices.ContainsFunc(want, func(item ReclamationConflict) bool {
+			return item.Kind == ReclamationDNS && item.ID == dns.ID && item.Name == dns.Name
+		}) {
+			return false
+		}
+		matched++
+	}
+	return matched > 0 && matched == len(want)
 }
 
 func validOwnedHostname(hostname, zone, label string) bool {
