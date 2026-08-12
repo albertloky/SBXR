@@ -118,26 +118,27 @@ type Adapter interface {
 }
 
 type Observations struct {
-	Host              HostFacts
-	Lineage           LineageState
-	PublicIPv4        []string
-	PublicIPv6        []string
-	Listeners         []Listener
-	ServiceIdentities []string
-	ResourcePaths     []string
-	SSH               SSHFacts
-	Firewall          FirewallFacts
-	Routes            RouteFacts
-	Outbound          OutboundFacts
-	Disk              DiskFacts
-	Time              TimeFacts
-	OwnerFacts        OwnerFacts
-	Certificate       CertificateFacts
-	LocalProofs       []LocalProof
-	Checksums         map[string]string
-	Ephemeral         PortRange
-	PortCandidates    []PortCandidate
-	Reclamation       ReclamationFacts
+	Host                HostFacts
+	Lineage             LineageState
+	PublicIPv4          []string
+	PublicIPv6          []string
+	Listeners           []Listener
+	ServiceIdentities   []string
+	ResourcePaths       []string
+	SSH                 SSHFacts
+	Firewall            FirewallFacts
+	Routes              RouteFacts
+	Outbound            OutboundFacts
+	Disk                DiskFacts
+	Time                TimeFacts
+	OwnerFacts          OwnerFacts
+	Certificate         CertificateFacts
+	LocalProofs         []LocalProof
+	Checksums           map[string]string
+	Ephemeral           PortRange
+	PortCandidates      []PortCandidate
+	Reclamation         ReclamationFacts
+	ReclamationComplete bool
 }
 
 type InstallationClass string
@@ -950,6 +951,9 @@ func reviewInstallation(result *Result, observed Observations) {
 	if result.InstallationClass != ReclaimableVPS {
 		return
 	}
+	if !observed.ReclamationComplete {
+		return
+	}
 	if len(observed.Reclamation.UnsafePaths) > 0 {
 		result.add(requiredFailure("NETWORK-RECLAMATION-PROTECTED", "A reclamation target is linked, mounted, shared, or otherwise ambiguous", safeFact(observed.Reclamation.UnsafePaths[0]), "only exact unchanged regular unshared targets", "SBXR never guesses through a filesystem boundary", ownerFix("Reimage the VPS or remove the conflict through its proven owner.")))
 		return
@@ -961,8 +965,12 @@ func reviewInstallation(result *Result, observed Observations) {
 		}
 	}
 	for _, listener := range observed.Listeners {
-		if !reclaimableListener(listener, observed.SSH) || listener.Executable == "" {
+		if !reclaimableListener(listener, observed.SSH) {
 			continue
+		}
+		if listener.Executable == "" {
+			result.add(requiredFailure("NETWORK-RECLAMATION-UNPROVED", "A conflicting listener has no proven executable", safeFact(listener.Process, listener.Service), "one exact /proc process executable or supported unambiguous script", "SBXR never plans deletion from only a socket or process name", ownerFix("Stop the ambiguous owner outside SBXR or reimage the VPS.")))
+			return
 		}
 		proved := slices.ContainsFunc(observed.Reclamation.Executables, func(file FileConflict) bool { return file.Path == listener.Executable && file.SHA256 != "" }) || slices.ContainsFunc(observed.Reclamation.Scripts, func(script ScriptConflict) bool {
 			return script.Process == listener.Process && script.Service == listener.Service && script.SHA256 != ""

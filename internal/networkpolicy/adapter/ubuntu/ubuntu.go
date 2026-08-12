@@ -78,6 +78,7 @@ func (a Adapter) Observe(request networkpolicy.ObservationRequest) (networkpolic
 		Checksums: map[string]string{},
 	}
 	observed.Reclamation = a.reclamationFacts(observed.ResourcePaths, observed.Listeners)
+	observed.ReclamationComplete = true
 	observed.Disk = diskFacts(a.root)
 	observed.Checksums["routes"] = checksumFiles(a.path("/proc/net/route"), a.path("/proc/net/ipv6_route"))
 	observed.Checksums["listeners"] = checksumFiles(a.path("/proc/net/tcp"), a.path("/proc/net/tcp6"), a.path("/proc/net/udp"), a.path("/proc/net/udp6"))

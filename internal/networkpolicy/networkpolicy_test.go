@@ -52,6 +52,7 @@ func TestCleanVPSAuthorityRechecksTheExactNetworkPolicyBaseline(t *testing.T) {
 
 func TestReclaimableVPSReviewBindsEverySafeConflictWithoutChangingObservedState(t *testing.T) {
 	observed := completeObservations()
+	observed.ReclamationComplete = true
 	observed.Listeners = append(observed.Listeners, networkpolicy.Listener{Address: "0.0.0.0", Port: 443, Protocol: networkpolicy.TCP, Process: "xray", Service: "xray.service", Executable: "/usr/local/bin/xray", Ownership: networkpolicy.Unproved})
 	observed.Reclamation = networkpolicy.ReclamationFacts{
 		Packages:    []networkpolicy.PackageConflict{{Name: "xray", Version: "1.2.3", Owns: "/usr/local/bin/xray", OwnedPaths: []string{"/usr/local/bin/xray"}}},
@@ -85,6 +86,9 @@ func TestReclamationReviewRefusesIncompleteOwnershipProof(t *testing.T) {
 		"listener without executable digest": {code: "NETWORK-RECLAMATION-UNPROVED", alter: func(observed *networkpolicy.Observations) {
 			observed.Listeners = append(observed.Listeners, networkpolicy.Listener{Address: "0.0.0.0", Port: 443, Protocol: networkpolicy.TCP, Process: "nginx", Service: "nginx.service", Executable: "/usr/sbin/nginx"})
 		}},
+		"listener without executable identity": {code: "NETWORK-RECLAMATION-UNPROVED", alter: func(observed *networkpolicy.Observations) {
+			observed.Listeners = append(observed.Listeners, networkpolicy.Listener{Address: "0.0.0.0", Port: 443, Protocol: networkpolicy.TCP, Process: "unknown"})
+		}},
 		"unproved exclusive identity": {code: "NETWORK-RECLAMATION-UNPROVED", alter: func(observed *networkpolicy.Observations) {
 			observed.Reclamation.Identities = []networkpolicy.IdentityConflict{{Name: "xray", Kind: "service user"}}
 		}},
@@ -95,6 +99,7 @@ func TestReclamationReviewRefusesIncompleteOwnershipProof(t *testing.T) {
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
 			observed := completeObservations()
+			observed.ReclamationComplete = true
 			test.alter(&observed)
 			result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PreApproval})
 			if result.Reclamation != nil {
@@ -135,6 +140,7 @@ func TestProtectedHostFoundationRefusesAReclamationPlan(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			observed := completeObservations()
+			observed.ReclamationComplete = true
 			alter(&observed)
 			result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PreApproval})
 			if result.Reclamation != nil || result.ProtectedFoundation.Version != 1 || !slices.Contains(result.ProtectedFoundation.Paths, "/usr/bin/apt-get") {
