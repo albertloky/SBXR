@@ -28,6 +28,22 @@ type outcomeStub struct {
 	applyPlans       []PlanIdentity
 	applyContexts    []context.Context
 	cancelled        []OperationIdentity
+	reclamationCalls int
+	reclamationOK    bool
+}
+
+func (stub *outcomeStub) ConfirmReclamation(_ context.Context, identity PlanIdentity, approval ReclamationApproval) ChangeReview {
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	stub.reclamationCalls++
+	plan := stub.reviews[0].Plan
+	stub.reclamationOK = plan != nil && approval.NetworkPolicyReclamationApproval(identity, plan.ReclamationDigest) && !approval.NetworkPolicyReclamationApproval(identity, plan.ReclamationDigest)
+	if plan == nil || !stub.reclamationOK {
+		return ChangeReview{}
+	}
+	confirmed := *plan
+	confirmed.ReclamationConfirmed = true
+	return ChangeReview{Plan: &confirmed}
 }
 
 func (stub *outcomeStub) Review(context.Context) ChangeReview {
@@ -246,6 +262,34 @@ func TestRunRefusesUnsafeTypedPlanEvidence(t *testing.T) {
 	got := runTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: stub}, 120, 36, "", "\x03\r")
 	if strings.Contains(got, "INFRASTRUCTURE-SECRET-MARKER") || !strings.Contains(got, "OWNER-CONSOLE-TYPED-OUTCOME-REFUSED") {
 		t.Fatalf("unsafe typed Plan was rendered instead of refused\n%s", got)
+	}
+}
+
+func TestRunConfirmsExactReclamationReviewWithoutApplyingAnything(t *testing.T) {
+	review := completePlan("reclaim-vps-review")
+	review.Plan.LineageUnavailable, review.Plan.DesiredStateRevision, review.Plan.DesiredStateSHA256 = true, 0, ""
+	review.Plan.ReclamationDigest = strings.Repeat("c", 64)
+	review.Plan.Effects = []string{"Review exact executable, service, package, firewall, Docker, and Cloudflare conflict targets; change nothing"}
+	review.Plan.Interruption = "No work starts; interruption changes nothing."
+	review.Plan.Cancellation = "Back or Cancel changes nothing."
+	review.Plan.Rollback = "No rollback exists because this review makes no change."
+	stub := &outcomeStub{reviews: []ChangeReview{review}}
+	steps := append([]string{""}, planTraversalSteps(review.Plan, 120, 36)...)
+	steps = append(steps, "\t", ReclamationPhrase, "\t", "\r", "", "\x03\r")
+	got := runTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: stub}, 120, 36, steps...)
+	if stub.reclamationCalls != 1 || !stub.reclamationOK || len(stub.applyPlans) != 0 || !strings.Contains(got, "Reclamation review confirmed") || !strings.Contains(got, "No host change was") {
+		t.Fatalf("reclamation confirmation crossed the review-only boundary: calls=%d ok=%t apply=%v\n%s", stub.reclamationCalls, stub.reclamationOK, stub.applyPlans, got)
+	}
+}
+
+func TestReclamationApprovalIsOpaqueExactAndOneUse(t *testing.T) {
+	digest := strings.Repeat("d", 64)
+	approval := ReclamationApproval{cell: &reclamationApprovalCell{identity: "reclaim-vps-review", digest: digest}}
+	if (ReclamationApproval{}).NetworkPolicyReclamationApproval("reclaim-vps-review", digest) || approval.NetworkPolicyReclamationApproval("other-plan", digest) || approval.NetworkPolicyReclamationApproval("reclaim-vps-review", strings.Repeat("e", 64)) || !approval.NetworkPolicyReclamationApproval("reclaim-vps-review", digest) || approval.NetworkPolicyReclamationApproval("reclaim-vps-review", digest) {
+		t.Fatal("reclamation approval was forgeable, mismatched, or reusable")
+	}
+	if _, err := approval.MarshalJSON(); err == nil || strings.Contains(fmt.Sprintf("%v %#v", approval, approval), digest) {
+		t.Fatal("reclamation approval was renderable")
 	}
 }
 

@@ -6,11 +6,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"runtime"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/albertloky/SBXR/internal/healthdiagnostics"
+	"github.com/albertloky/SBXR/internal/networkpolicy"
 	"github.com/albertloky/SBXR/internal/ownerconsole"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 	softwaregithub "github.com/albertloky/SBXR/internal/softwarelifecycle/adapter/github"
@@ -19,13 +21,14 @@ import (
 )
 
 type installOutcome struct {
-	mu        sync.Mutex
-	values    map[string]string
-	request   softwareubuntu.InstallHandoffRequest
-	built     *builtInstall
-	change    ownerconsole.DurableChangeSet
-	cancel    chan struct{}
-	cancelled bool
+	mu          sync.Mutex
+	values      map[string]string
+	request     softwareubuntu.InstallHandoffRequest
+	built       *builtInstall
+	reclamation *networkpolicy.ReclamationPlan
+	change      ownerconsole.DurableChangeSet
+	cancel      chan struct{}
+	cancelled   bool
 }
 
 func (*installOutcome) String() string   { return "Clean VPS installation outcome: protected" }
@@ -93,6 +96,9 @@ func (outcome *installOutcome) Review(ctx context.Context) ownerconsole.ChangeRe
 			return installCorrection(err)
 		}
 	}
+	if outcome.reclamation != nil {
+		return reclamationReview(outcome.reclamation, false)
+	}
 	summary := outcome.built.plan.Summary()
 	return ownerconsole.ChangeReview{Plan: &ownerconsole.PlanPresentation{
 		Identity: ownerconsole.PlanIdentity(outcome.built.plan.Identity()), DesiredStateRevision: 1, DesiredStateSHA256: outcome.built.desiredSHA256,
@@ -153,6 +159,15 @@ func (outcome *installOutcome) Apply(ctx context.Context, identity ownerconsole.
 	return ownerconsole.ChangeResult{Kind: ownerconsole.ChangeStarted, OperationID: operation, Explanation: "The exact reviewed installation Plan started."}
 }
 
+func (outcome *installOutcome) ConfirmReclamation(_ context.Context, identity ownerconsole.PlanIdentity, approval ownerconsole.ReclamationApproval) ownerconsole.ChangeReview {
+	outcome.mu.Lock()
+	defer outcome.mu.Unlock()
+	if outcome.reclamation == nil || !approval.NetworkPolicyReclamationApproval(identity, outcome.reclamation.Digest) {
+		return ownerconsole.ChangeReview{}
+	}
+	return reclamationReview(outcome.reclamation, true)
+}
+
 func (outcome *installOutcome) Inspect(context.Context) ownerconsole.DurableChangeSet {
 	outcome.mu.Lock()
 	defer outcome.mu.Unlock()
@@ -164,7 +179,7 @@ func (outcome *installOutcome) Fix(ctx context.Context, _ ownerconsole.Correctio
 }
 func (outcome *installOutcome) CheckAgain(ctx context.Context) ownerconsole.ChangeReview {
 	outcome.mu.Lock()
-	outcome.built = nil
+	outcome.built, outcome.reclamation = nil, nil
 	outcome.mu.Unlock()
 	return outcome.Review(ctx)
 }
@@ -221,10 +236,36 @@ func (outcome *installOutcome) build(ctx context.Context) error {
 	}
 	built, err := buildInstall(ctx, request)
 	if err != nil {
+		var review *reclamationReviewError
+		if errors.As(err, &review) && review.plan != nil {
+			outcome.request, outcome.reclamation = request, review.plan
+			return nil
+		}
 		return err
 	}
 	outcome.request, outcome.built = request, built
 	return nil
+}
+
+func reclamationReview(plan *networkpolicy.ReclamationPlan, confirmed bool) ownerconsole.ChangeReview {
+	if plan == nil || len(plan.Digest) != 64 {
+		return ownerconsole.ChangeReview{}
+	}
+	effects := append([]string(nil), plan.Targets...)
+	effects = append(effects, plan.Preservation...)
+	effects = append(effects, plan.PermanentWarnings...)
+	effects = slices.DeleteFunc(effects, func(value string) bool { return value == "" || len(value) > 320 })
+	if len(effects) == 0 {
+		effects = []string{"Review the exact detected conflicts; change nothing"}
+	}
+	return ownerconsole.ChangeReview{Plan: &ownerconsole.PlanPresentation{
+		Identity: ownerconsole.PlanIdentity("reclaim-vps-" + plan.Digest[:16]), LineageUnavailable: true,
+		RelevantChecksums: []string{"Reclamation facts SHA-256 " + plan.Digest}, ObservedState: "Reclaimable VPS: exact read-only conflict facts",
+		VerifiedExternalInputs: []string{"Fresh Network Policy host and conflict observations", "Protected Host Foundation version 1"},
+		Effects:                effects, RequiredChecks: []string{"Fresh privileged recheck must match this exact digest before any later reclamation"}, AdvisoryChecks: []string{"Review-only confirmation grants no mutation authority"},
+		Interruption: plan.Interruption, Cancellation: plan.Cancellation, Rollback: plan.Rollback,
+		ReclamationDigest: plan.Digest, ReclamationConfirmed: confirmed,
+	}}
 }
 
 func installCorrection(err error) ownerconsole.ChangeReview {

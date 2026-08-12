@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -76,6 +77,7 @@ func (a Adapter) Observe(request networkpolicy.ObservationRequest) (networkpolic
 		Ephemeral: a.ephemeralRange(),
 		Checksums: map[string]string{},
 	}
+	observed.Reclamation = a.reclamationFacts(observed.ResourcePaths)
 	observed.Disk = diskFacts(a.root)
 	observed.Checksums["routes"] = checksumFiles(a.path("/proc/net/route"), a.path("/proc/net/ipv6_route"))
 	observed.Checksums["listeners"] = checksumFiles(a.path("/proc/net/tcp"), a.path("/proc/net/tcp6"), a.path("/proc/net/udp"), a.path("/proc/net/udp6"))
@@ -109,6 +111,130 @@ func (a Adapter) Observe(request networkpolicy.ObservationRequest) (networkpolic
 	}
 	observed.PortCandidates = availableCandidates(request.Intent, observed)
 	return observed, nil
+}
+
+func (a Adapter) reclamationFacts(paths []string) networkpolicy.ReclamationFacts {
+	facts := networkpolicy.ReclamationFacts{}
+	processes, scripts := a.reclamationProcesses()
+	facts.Scripts = scripts
+	status := readOptional(a.path("/var/lib/dpkg/status"))
+	for _, paragraph := range strings.Split(status, "\n\n") {
+		fields := map[string]string{}
+		for _, line := range strings.Split(paragraph, "\n") {
+			if key, value, ok := strings.Cut(line, ": "); ok {
+				fields[key] = value
+			}
+		}
+		name := fields["Package"]
+		if name == "" || fields["Status"] != "install ok installed" {
+			continue
+		}
+		owned := strings.Fields(readOptional(a.path("/var/lib/dpkg/info/" + name + ".list")))
+		for _, path := range paths {
+			if slices.Contains(owned, path) {
+				facts.Packages = append(facts.Packages, networkpolicy.PackageConflict{Name: name, Version: fields["Version"], Owns: path})
+			}
+		}
+		if slices.Contains([]string{"docker.io", "docker-ce", "containerd.io"}, name) {
+			if facts.Docker == nil {
+				facts.Docker = &networkpolicy.DockerConflict{Service: "docker.service", Status: "installed", PreservedData: []string{"images", "volumes", "Compose definitions", "bind mounts", "application data"}}
+			}
+			facts.Docker.Packages = append(facts.Docker.Packages, name+" "+fields["Version"])
+		}
+	}
+	for _, path := range paths {
+		info, err := os.Lstat(a.path(path))
+		if err != nil {
+			continue
+		}
+		if info.Mode()&os.ModeSymlink != 0 || a.mountPoint(path) {
+			facts.UnsafePaths = append(facts.UnsafePaths, path)
+			continue
+		}
+		if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+			continue
+		}
+		data, err := os.ReadFile(a.path(path))
+		if err != nil {
+			continue
+		}
+		stat, _ := info.Sys().(*syscall.Stat_t)
+		file := networkpolicy.FileConflict{Path: path, SHA256: checksum(data), Mode: uint32(info.Mode().Perm()), Links: 1, Mount: a.mountPoint(path)}
+		if owner, ok := processes[path]; ok {
+			file.Process, file.Service = owner.process, owner.service
+		}
+		if stat != nil {
+			file.OwnerUID, file.Links = stat.Uid, uint64(stat.Nlink)
+		}
+		for _, pkg := range facts.Packages {
+			if pkg.Owns == path {
+				file.Package = pkg.Name
+			}
+		}
+		facts.Executables = append(facts.Executables, file)
+	}
+	for _, source := range []struct{ path, kind string }{{"/etc/passwd", "service user"}, {"/etc/group", "service group"}} {
+		for _, line := range strings.Split(readOptional(a.path(source.path)), "\n") {
+			name, _, ok := strings.Cut(line, ":")
+			if ok && slices.Contains([]string{"xray", "sing-box", "cloudflared", "sbxr"}, name) {
+				facts.Identities = append(facts.Identities, networkpolicy.IdentityConflict{Name: name, Kind: source.kind, Exclusive: true})
+			}
+		}
+	}
+	return facts
+}
+
+func (a Adapter) reclamationProcesses() (map[string]socketOwner, []networkpolicy.ScriptConflict) {
+	executables := map[string]socketOwner{}
+	var scripts []networkpolicy.ScriptConflict
+	processes, _ := os.ReadDir(a.path("/proc"))
+	for _, process := range processes {
+		if _, err := strconv.Atoi(process.Name()); err != nil {
+			continue
+		}
+		base := filepath.Join("/proc", process.Name())
+		name := strings.TrimSpace(readOptional(a.path(filepath.Join(base, "comm"))))
+		service := ""
+		for _, line := range strings.Split(readOptional(a.path(filepath.Join(base, "cgroup"))), "\n") {
+			_, path, ok := strings.Cut(line, "::")
+			if candidate := filepath.Base(path); ok && strings.HasSuffix(candidate, ".service") {
+				service = candidate
+				break
+			}
+		}
+		executable, err := os.Readlink(a.path(filepath.Join(base, "exe")))
+		if err == nil && filepath.IsAbs(executable) {
+			executables[executable] = socketOwner{name, service}
+		}
+		if !slices.Contains([]string{"sh", "bash", "dash", "python", "python3", "perl", "ruby", "node"}, filepath.Base(executable)) {
+			continue
+		}
+		arguments := strings.Split(readOptional(a.path(filepath.Join(base, "cmdline"))), "\x00")
+		if len(arguments) < 2 || !filepath.IsAbs(arguments[1]) {
+			continue
+		}
+		data, readErr := os.ReadFile(a.path(arguments[1]))
+		if readErr == nil {
+			links := uint64(1)
+			if info, statErr := os.Lstat(a.path(arguments[1])); statErr == nil {
+				if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+					links = uint64(stat.Nlink)
+				}
+			}
+			scripts = append(scripts, networkpolicy.ScriptConflict{Interpreter: executable, Path: arguments[1], SHA256: checksum(data), Process: name, Service: service, Links: links, Mount: a.mountPoint(arguments[1])})
+		}
+	}
+	return executables, scripts
+}
+
+func (a Adapter) mountPoint(path string) bool {
+	for _, line := range strings.Split(readOptional(a.path("/proc/self/mountinfo")), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 4 && fields[4] == path {
+			return true
+		}
+	}
+	return false
 }
 
 func (a Adapter) ubuntuServer() bool {

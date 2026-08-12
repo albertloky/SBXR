@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -45,6 +47,73 @@ func TestCleanVPSAuthorityRechecksTheExactNetworkPolicyBaseline(t *testing.T) {
 	adapter.observed.Listeners = append(adapter.observed.Listeners, networkpolicy.Listener{Address: "0.0.0.0", Port: 443, Protocol: networkpolicy.TCP, Process: "unrelated"})
 	if authority.CertificateLifecycleFreshInstallation() {
 		t.Fatal("changed Clean VPS facts retained installation authority")
+	}
+}
+
+func TestReclaimableVPSReviewBindsEverySafeConflictWithoutChangingObservedState(t *testing.T) {
+	observed := completeObservations()
+	observed.Listeners = append(observed.Listeners, networkpolicy.Listener{Address: "0.0.0.0", Port: 443, Protocol: networkpolicy.TCP, Process: "xray", Service: "xray.service", Ownership: networkpolicy.Unproved})
+	observed.Reclamation = networkpolicy.ReclamationFacts{
+		Packages:    []networkpolicy.PackageConflict{{Name: "xray", Version: "1.2.3", Owns: "/usr/local/bin/xray"}},
+		Identities:  []networkpolicy.IdentityConflict{{Name: "xray", Kind: "service user", Exclusive: true}},
+		Executables: []networkpolicy.FileConflict{{Path: "/usr/local/bin/xray", SHA256: strings.Repeat("a", 64), OwnerUID: 0, Mode: 0o755, Links: 1, Process: "xray", Service: "xray.service", Package: "xray"}},
+		Scripts:     []networkpolicy.ScriptConflict{{Interpreter: "/usr/bin/python3", Path: "/opt/proxy/server.py", SHA256: strings.Repeat("b", 64), Process: "python3", Service: "proxy.service"}},
+		Docker:      &networkpolicy.DockerConflict{Service: "docker.service", Packages: []string{"docker.io"}, PreservedData: []string{"images", "volumes", "Compose definitions", "bind mounts", "application data"}},
+	}
+	observed.OwnerFacts = networkpolicy.OwnerFacts{DNS: "dns-record-id-1", Tunnel: "tunnel-id-1", Routes: []networkpolicy.CloudflareRoute{{Profile: "xhttp.example.test", OriginAddress: "127.0.0.1", OriginPort: 11080, Protocol: networkpolicy.TCP}}}
+	want := observed
+	result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PreApproval})
+	if result.InstallationClass != networkpolicy.ReclaimableVPS || result.Reclamation == nil || result.Reclamation.Digest == "" {
+		t.Fatalf("reclaimable classification = %q plan=%+v findings=%+v", result.InstallationClass, result.Reclamation, result.Findings)
+	}
+	rendered := fmt.Sprintf("%+v", result.Reclamation)
+	for _, safe := range []string{"/usr/local/bin/xray", "/opt/proxy/server.py", "xray.service", "xray 1.2.3", "docker.service", "dns-record-id-1", "tunnel-id-1", "preserve images", "no rollback"} {
+		if !strings.Contains(rendered, safe) {
+			t.Fatalf("reclamation Plan omitted %q: %s", safe, rendered)
+		}
+	}
+	if strings.Contains(rendered, "SECRET") || !reflect.DeepEqual(observed, want) {
+		t.Fatalf("review leaked or changed Observed State: %s\nwant=%+v\ngot=%+v", rendered, want, observed)
+	}
+}
+
+func TestInstallationReviewDistinguishesCleanContradictoryAndUnsupportedHosts(t *testing.T) {
+	request := networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PreApproval}
+	clean := completeObservations()
+	clean.Listeners = []networkpolicy.Listener{{Address: "0.0.0.0", Port: clean.SSH.DetectedPort, Protocol: networkpolicy.TCP, Process: "sshd", Service: "ssh.service", Ownership: networkpolicy.Unproved}}
+	if got := networkpolicy.New(staticAdapter{observed: clean}).Evaluate(request).InstallationClass; got != networkpolicy.CleanVPS {
+		t.Fatalf("clean classification = %q", got)
+	}
+	contradictory := clean
+	contradictory.Lineage = networkpolicy.ContradictoryLineage
+	if got := networkpolicy.New(staticAdapter{observed: contradictory}).Evaluate(request).InstallationClass; got != networkpolicy.ContradictoryVPS {
+		t.Fatalf("contradictory classification = %q", got)
+	}
+	unsupported := clean
+	unsupported.Host.UbuntuVersion = "22.04"
+	if got := networkpolicy.New(staticAdapter{observed: unsupported}).Evaluate(request).InstallationClass; got != networkpolicy.UnsupportedHost {
+		t.Fatalf("unsupported classification = %q", got)
+	}
+}
+
+func TestProtectedHostFoundationRefusesAReclamationPlan(t *testing.T) {
+	for name, alter := range map[string]func(*networkpolicy.Observations){
+		"package tool": func(observed *networkpolicy.Observations) {
+			observed.Reclamation.Executables = []networkpolicy.FileConflict{{Path: "/usr/bin/apt-get", SHA256: strings.Repeat("a", 64), OwnerUID: 0, Mode: 0o755, Links: 1}}
+		},
+		"linked target": func(observed *networkpolicy.Observations) {
+			observed.Reclamation.UnsafePaths = []string{"/usr/local/bin/xray"}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			observed := completeObservations()
+			alter(&observed)
+			result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PreApproval})
+			if result.Reclamation != nil || result.ProtectedFoundation.Version != 1 || !slices.Contains(result.ProtectedFoundation.Paths, "/usr/bin/apt-get") {
+				t.Fatalf("protected foundation = %+v plan=%+v", result.ProtectedFoundation, result.Reclamation)
+			}
+			assertFinding(t, result, networkpolicy.Failed, networkpolicy.Required, "NETWORK-RECLAMATION-PROTECTED")
+		})
 	}
 }
 

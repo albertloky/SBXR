@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/albertloky/SBXR/internal/networkpolicy"
 	"github.com/albertloky/SBXR/internal/ownerconsole"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 )
@@ -84,6 +85,18 @@ func TestPreinstallOutcomeProvidesRestrictedFailSafeDiagnostics(t *testing.T) {
 	presentation := newInstallOutcome().ViewDiagnostics(t.Context())
 	if presentation.Installation != ownerconsole.InstallationRecoveryRequired || len(presentation.Modules) != 11 || len(presentation.Services) != 10 || len(presentation.Bundles) != 0 {
 		t.Fatalf("preinstall diagnostics = %+v", presentation)
+	}
+}
+
+func TestReclaimableVPSUsesTheInstallationReviewWithoutStartingApply(t *testing.T) {
+	plan := &networkpolicy.ReclamationPlan{Digest: strings.Repeat("a", 64), Targets: []string{"executable /usr/local/bin/xray sha256 " + strings.Repeat("b", 64)}, Preservation: []string{"preserve Docker volumes"}, PermanentWarnings: []string{"Future reclamation is permanent"}, Interruption: "No work starts; interruption changes nothing", Cancellation: "Back or Cancel changes nothing", Rollback: "no rollback exists after future permanent reclamation starts"}
+	review := reclamationReview(plan, false)
+	if review.Plan == nil || review.Plan.ReclamationDigest != plan.Digest || review.Plan.ReclamationConfirmed || !review.Plan.LineageUnavailable || !strings.Contains(strings.Join(review.Plan.Effects, " "), "/usr/local/bin/xray") {
+		t.Fatalf("reclamation installation review = %+v", review)
+	}
+	outcome := &installOutcome{values: map[string]string{}, reclamation: plan}
+	if result := outcome.Apply(t.Context(), review.Plan.Identity); result.Kind != ownerconsole.ChangePlanRejected || outcome.change.Kind != ownerconsole.NoChangeSet {
+		t.Fatalf("review-only reclamation started work: result=%+v change=%+v", result, outcome.change)
 	}
 }
 

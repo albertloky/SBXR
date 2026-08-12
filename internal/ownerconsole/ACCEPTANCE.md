@@ -117,6 +117,8 @@ go test ./internal/ownerconsole -run '^TestRun(ReviewsCompleteTypedPlanWithoutSt
 
 Require read-only review and pre-approval disconnect to start no work. Require a complete typed Plan with revision, checksums, observations, verified external inputs, effects, Required and Advisory checks, interruption, cancellation, and rollback. Require Correction Flow Problem, Found, Required, stop reason, separate Fix Plan, current Owner steps, input or selection, Check again, Back, and redacted evidence. Require Back to restore an operable typed editing field and build a separate updated Plan. Keep every fact and action reachable without clipping at both `80×24` and `120×36`. Reject incomplete or unsafe presentation facts without rendering their marker.
 
+For a Reclaimable VPS review, require the exact phrase `RECLAIM THIS VPS` through the interactive terminal path. Pass only an opaque, exact-Plan and facts-digest-bound, one-use approval to the owning Module. Caller booleans, environment variables, command arguments, redirected input, and an incorrect phrase grant no authority. Confirmation remains review-only: it starts no Change Set and reports that no host change was made.
+
 ### OC-CHANGE-02 — Approval, durable Change Set result, and cancellation
 
 Run:

@@ -31,6 +31,7 @@ func TestComposedInstallBuildsAndPreparesTheCompleteRevisionOnePlan(t *testing.T
 		network:    networkModule.Evaluate,
 		cloudflare: cloudflareModule.Plan,
 		random:     newInstallEntropyReader(request.Entropy),
+		inventory:  cloudflareAPI,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -49,6 +50,47 @@ func TestComposedInstallBuildsAndPreparesTheCompleteRevisionOnePlan(t *testing.T
 			t.Fatalf("composed installation evidence exposed protected marker %q", marker)
 		}
 	}
+}
+
+func TestComposedInstallRoutesAReclaimableVPSToReviewBeforeProviderPlanning(t *testing.T) {
+	request := composedInstallRequest(t)
+	plan := &networkpolicy.ReclamationPlan{Digest: strings.Repeat("f", 64), Targets: []string{"executable /usr/local/bin/xray"}}
+	providerCalled := false
+	_, err := buildInstallWith(t.Context(), request, installBuildDependencies{
+		stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
+			return request.Candidate.Staged, nil
+		},
+		network: func(networkpolicy.Request) networkpolicy.Result {
+			return networkpolicy.Result{InstallationClass: networkpolicy.ReclaimableVPS, Reclamation: plan}
+		},
+		cloudflare: func(context.Context, cloudflaretunnel.PlanRequest) cloudflaretunnel.PlanResult {
+			providerCalled = true
+			return cloudflaretunnel.PlanResult{}
+		},
+		random:    newInstallEntropyReader(request.Entropy),
+		inventory: composedCloudflareAPI{},
+	})
+	var review *reclamationReviewError
+	if !errors.As(err, &review) || review.plan != plan || providerCalled {
+		t.Fatalf("reclaimable routing = error %v review %+v provider-called %t", err, review, providerCalled)
+	}
+}
+
+func TestReclamationInventoryBindsExactCloudflareConflictIdentifiers(t *testing.T) {
+	token, err := cloudflaretunnel.NewManagementToken("cfat_COMPOSED-INSTALL-SECRET-MARKER-000000000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, err := observeReclamationCloudflare(t.Context(), conflictInventoryAPI{}, strings.Repeat("a", 32), strings.Repeat("b", 32), token, "sbxr-main", []string{"xhttp.example.com", "ws.example.com"})
+	if err != nil || len(facts.Conflicts) != 3 || facts.Conflicts[0].ID != "11111111-1111-4111-8111-111111111111" || facts.Conflicts[1].Name != "xhttp.example.com" || facts.Conflicts[2].Name != "ws.example.com" {
+		t.Fatalf("Cloudflare reclamation facts = %+v error %v", facts, err)
+	}
+}
+
+type conflictInventoryAPI struct{}
+
+func (conflictInventoryAPI) ObserveMutation(_ context.Context, request cloudflaretunnel.MutationRequest) (cloudflaretunnel.MutationObservation, error) {
+	return cloudflaretunnel.MutationObservation{Tunnels: []cloudflaretunnel.OwnedResource{{ID: "11111111-1111-4111-8111-111111111111", Name: "sbxr-main"}}, DNSRecords: []cloudflaretunnel.OwnedResource{{ID: strings.Repeat("d", 32), Name: request.Hostname}}}, nil
 }
 
 func composedInstallRequest(t *testing.T) softwareubuntu.InstallHandoffRequest {

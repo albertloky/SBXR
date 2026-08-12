@@ -137,6 +137,58 @@ type Observations struct {
 	Checksums         map[string]string
 	Ephemeral         PortRange
 	PortCandidates    []PortCandidate
+	Reclamation       ReclamationFacts
+}
+
+type InstallationClass string
+
+const (
+	CleanVPS         InstallationClass = "Clean VPS"
+	ReclaimableVPS   InstallationClass = "Reclaimable VPS"
+	ContradictoryVPS InstallationClass = "contradictory lineage"
+	UnsupportedHost  InstallationClass = "unsupported host"
+)
+
+type ReclamationFacts struct {
+	Packages    []PackageConflict
+	Identities  []IdentityConflict
+	Executables []FileConflict
+	Scripts     []ScriptConflict
+	UnsafePaths []string
+	Docker      *DockerConflict
+}
+
+type PackageConflict struct{ Name, Version, Owns string }
+type IdentityConflict struct {
+	Name, Kind string
+	Exclusive  bool
+}
+type FileConflict struct {
+	Path, SHA256, Process, Service, Package string
+	OwnerUID                                uint32
+	Mode                                    uint32
+	Links                                   uint64
+	Mount                                   bool
+}
+type ScriptConflict struct {
+	Interpreter, Path, SHA256, Process, Service string
+	Links                                       uint64
+	Mount                                       bool
+}
+type DockerConflict struct {
+	Service, Status         string
+	Packages, PreservedData []string
+}
+
+type ProtectedHostFoundation struct {
+	Version uint16
+	Paths   []string
+}
+
+type ReclamationPlan struct {
+	Digest, Classification                   string
+	Targets, Preservation, PermanentWarnings []string
+	Interruption, Cancellation, Rollback     string
 }
 
 type PortRange struct {
@@ -226,10 +278,13 @@ type TimeFacts struct {
 }
 
 type OwnerFacts struct {
-	DNS    string
-	Tunnel string
-	Routes []CloudflareRoute
+	DNS       string
+	Tunnel    string
+	Routes    []CloudflareRoute
+	Conflicts []CloudflareConflict
 }
+
+type CloudflareConflict struct{ Kind, ID, Name string }
 
 type CloudflareRoute struct {
 	Profile       string
@@ -327,6 +382,9 @@ type ListenerProof struct {
 
 type Result struct {
 	Baseline              Baseline
+	InstallationClass     InstallationClass
+	Reclamation           *ReclamationPlan
+	ProtectedFoundation   ProtectedHostFoundation
 	Outcome               Outcome
 	Findings              []Finding
 	Policy                Policy
@@ -807,6 +865,10 @@ func (i Interface) Evaluate(request Request) Result {
 	observed.Outbound = OutboundFacts{}
 	applyManagedProof(request.Managed, &observed)
 	result.Policy = candidatePolicy(request.Intent)
+	reviewInstallation(&result, observed)
+	if result.Outcome == Failed {
+		return result
+	}
 	result.SystemChanges = SystemChangesRequirements{ValidateCompleteCandidate: true, AtomicTableApply: true, RootOwnedWatchdog: true, ProveCurrentSSHResponsive: true, ProveDetectedSSHAdmitted: true, CancelAfterGate: "NETWORK-SSH-RESPONSIVE", RestoreExactPreviousRules: true}
 	result.SSHSafety = SSHSafety{FutureOutsideReconnectUnproved: true, Warning: "One existing SSH session cannot prove a future outside reconnection.", RecoveryPath: "VPS provider console"}
 	result.CompleteRemoval = CompleteRemoval{Family: "inet", Table: "sbxr", PreserveUnrelatedPolicy: true}
@@ -863,6 +925,139 @@ func (i Interface) Evaluate(request Request) Result {
 		result.freshInstallation = &freshInstallationProofCell{evaluate: func() Result { return i.Evaluate(request) }, digest: result.Binding.Digest}
 	}
 	return result
+}
+
+func reviewInstallation(result *Result, observed Observations) {
+	result.ProtectedFoundation = ProtectedHostFoundation{Version: 1, Paths: []string{"/bin/sh", "/boot", "/etc/apt", "/etc/passwd", "/etc/sbxr", "/etc/shadow", "/etc/ssh", "/lib", "/lib64", "/proc", "/run", "/sbin/init", "/sys", "/usr/bin/apt", "/usr/bin/apt-get", "/usr/bin/dpkg", "/usr/bin/env", "/usr/bin/sudo", "/usr/bin/systemctl", "/usr/lib", "/usr/local/bin/sbxr", "/usr/sbin/sshd", "/var/lib/dpkg", "/var/lib/sbxr"}}
+	unsupported := observed.Host.UbuntuVersion != "24.04" && !strings.HasPrefix(observed.Host.UbuntuVersion, "24.04.") || !observed.Host.UbuntuServer || !observed.Host.Systemd || observed.Host.Architecture != "amd64" && observed.Host.Architecture != "arm64"
+	switch {
+	case unsupported:
+		result.InstallationClass = UnsupportedHost
+	case observed.Lineage == ContradictoryLineage:
+		result.InstallationClass = ContradictoryVPS
+	case hasReclamationConflict(observed):
+		result.InstallationClass = ReclaimableVPS
+	default:
+		result.InstallationClass = CleanVPS
+		return
+	}
+	if result.InstallationClass != ReclaimableVPS {
+		return
+	}
+	if len(observed.Reclamation.UnsafePaths) > 0 {
+		result.add(requiredFailure("NETWORK-RECLAMATION-PROTECTED", "A reclamation target is linked, mounted, shared, or otherwise ambiguous", safeFact(observed.Reclamation.UnsafePaths[0]), "only exact unchanged regular unshared targets", "SBXR never guesses through a filesystem boundary", ownerFix("Reimage the VPS or remove the conflict through its proven owner.")))
+		return
+	}
+	for _, file := range observed.Reclamation.Executables {
+		if protectedPath(file.Path, result.ProtectedFoundation.Paths) || file.Mount || file.Links > 1 {
+			if !slices.Contains(result.ProtectedFoundation.Paths, file.Path) {
+				result.ProtectedFoundation.Paths = append(result.ProtectedFoundation.Paths, file.Path)
+			}
+			result.add(requiredFailure("NETWORK-RECLAMATION-PROTECTED", "A reclamation target belongs to the Protected Host Foundation", safeFact(file.Path), "no SSH, current-shell, system, package-tool, shared-library, mount, or recovery dependency target", "SBXR never offers destruction of the host foundation", ownerFix("Reimage the VPS or remove the conflict through its proven owner.")))
+			return
+		}
+	}
+	for _, pkg := range observed.Reclamation.Packages {
+		if protectedPath(pkg.Owns, result.ProtectedFoundation.Paths) {
+			result.add(requiredFailure("NETWORK-RECLAMATION-PROTECTED", "A package conflict owns part of the Protected Host Foundation", safeFact(pkg.Name, pkg.Owns), "no package owning SSH, system tools, shared libraries, mounts, or recovery dependencies", "SBXR never offers removal of a package that owns the host foundation", ownerFix("Reimage the VPS or remove the conflict through its proven owner.")))
+			return
+		}
+	}
+	for _, script := range observed.Reclamation.Scripts {
+		if protectedPath(script.Path, result.ProtectedFoundation.Paths) || script.Mount || script.Links > 1 {
+			result.add(requiredFailure("NETWORK-RECLAMATION-PROTECTED", "A script target belongs to the Protected Host Foundation", safeFact(script.Path), "no shared, mounted, system, or recovery script target", "SBXR never offers destruction of a protected script", ownerFix("Reimage the VPS or remove the conflict through its proven owner.")))
+			return
+		}
+	}
+	plan := ReclamationPlan{Classification: string(ReclaimableVPS), Interruption: "No work starts; an interrupted review changes nothing", Cancellation: "Back or Cancel changes nothing", Rollback: "no rollback exists after future permanent reclamation starts"}
+	for _, value := range observed.Reclamation.Executables {
+		path := reviewFact(value.Path)
+		plan.Targets = append(plan.Targets, fmt.Sprintf("executable %s sha256 %s", path, reviewFact(value.SHA256)), fmt.Sprintf("executable %s process %s service %s package %s", path, reviewFact(value.Process), reviewFact(value.Service), reviewFact(value.Package)))
+	}
+	for _, value := range observed.Reclamation.Scripts {
+		path := reviewFact(value.Path)
+		plan.Targets = append(plan.Targets, fmt.Sprintf("script %s sha256 %s", path, reviewFact(value.SHA256)), fmt.Sprintf("script %s via preserved interpreter %s process %s service %s", path, reviewFact(value.Interpreter), reviewFact(value.Process), reviewFact(value.Service)))
+	}
+	for _, value := range observed.Reclamation.Packages {
+		plan.Targets = append(plan.Targets, fmt.Sprintf("package %s %s owns %s", reviewFact(value.Name), reviewFact(value.Version), reviewFact(value.Owns)))
+	}
+	for _, value := range observed.Reclamation.Identities {
+		plan.Targets = append(plan.Targets, fmt.Sprintf("identity %s kind %s exclusive %t", reviewFact(value.Name), reviewFact(value.Kind), value.Exclusive))
+	}
+	if value := observed.Reclamation.Docker; value != nil {
+		plan.Targets = append(plan.Targets, fmt.Sprintf("Docker service %s status %s", reviewFact(value.Service), reviewFact(value.Status)))
+		for _, pkg := range value.Packages {
+			plan.Targets = append(plan.Targets, "Docker package "+reviewFact(pkg))
+		}
+		for _, preserved := range value.PreservedData {
+			plan.Preservation = append(plan.Preservation, "preserve "+reviewFact(preserved))
+		}
+	}
+	for _, listener := range observed.Listeners {
+		if reclaimableListener(listener, observed.SSH) {
+			plan.Targets = append(plan.Targets, fmt.Sprintf("listener %s:%d/%s process %s service %s", reviewFact(listener.Address), listener.Port, listener.Protocol, reviewFact(listener.Process), reviewFact(listener.Service)))
+		}
+	}
+	for _, service := range observed.ServiceIdentities {
+		plan.Targets = append(plan.Targets, "service identity "+reviewFact(service))
+	}
+	for _, path := range observed.ResourcePaths {
+		plan.Targets = append(plan.Targets, "resource path "+reviewFact(path))
+	}
+	if observed.Firewall.ActiveManager != "" || observed.Firewall.UnexpectedRule != "" {
+		plan.Targets = append(plan.Targets, "firewall owner "+reviewFact(observed.Firewall.ActiveManager)+" rule "+reviewFact(observed.Firewall.UnexpectedRule))
+	}
+	if observed.OwnerFacts.DNS != "" {
+		plan.Targets = append(plan.Targets, "Cloudflare DNS "+reviewFact(observed.OwnerFacts.DNS))
+	}
+	if observed.OwnerFacts.Tunnel != "" {
+		plan.Targets = append(plan.Targets, "Cloudflare Tunnel "+reviewFact(observed.OwnerFacts.Tunnel))
+	}
+	for _, route := range observed.OwnerFacts.Routes {
+		plan.Targets = append(plan.Targets, fmt.Sprintf("Cloudflare route %s to %s:%d/%s connected %t", reviewFact(route.Profile), reviewFact(route.OriginAddress), route.OriginPort, route.Protocol, route.Connected))
+	}
+	for _, conflict := range observed.OwnerFacts.Conflicts {
+		plan.Targets = append(plan.Targets, fmt.Sprintf("Cloudflare %s %s name %s", reviewFact(conflict.Kind), reviewFact(conflict.ID), reviewFact(conflict.Name)))
+	}
+	plan.PermanentWarnings = []string{"Future reclamation is permanent", "Future interruption may require forward recovery"}
+	encoded, _ := json.Marshal(struct {
+		Facts      Observations
+		Plan       ReclamationPlan
+		Foundation ProtectedHostFoundation
+	}{observed, plan, result.ProtectedFoundation})
+	digest := sha256.Sum256(encoded)
+	plan.Digest = hex.EncodeToString(digest[:])
+	result.Reclamation = &plan
+}
+
+func reviewFact(value string) string {
+	value = strings.TrimSpace(strings.NewReplacer("\r", " ", "\n", " ", "\t", " ").Replace(value))
+	if value == "" {
+		return "none"
+	}
+	if strings.Contains(value, "INFRASTRUCTURE-SECRET-MARKER") || strings.Contains(value, "-----BEGIN ") || len(value) > 200 {
+		return "unsafe fact withheld"
+	}
+	return value
+}
+
+func hasReclamationConflict(observed Observations) bool {
+	r := observed.Reclamation
+	ownerConflict := func(value string) bool { return value != "" && value != "fresh" }
+	return len(r.Packages)+len(r.Identities)+len(r.Executables)+len(r.Scripts)+len(r.UnsafePaths) > 0 || r.Docker != nil || len(observed.ServiceIdentities)+len(observed.ResourcePaths) > 0 || observed.Firewall.ActiveManager != "" || observed.Firewall.UnexpectedRule != "" || observed.Firewall.SBXRTableState != "" && observed.Firewall.SBXRTableState != "absent" || ownerConflict(observed.OwnerFacts.DNS) || ownerConflict(observed.OwnerFacts.Tunnel) || len(observed.OwnerFacts.Routes)+len(observed.OwnerFacts.Conflicts) > 0 || slices.ContainsFunc(observed.Listeners, func(listener Listener) bool { return reclaimableListener(listener, observed.SSH) })
+}
+
+func reclaimableListener(listener Listener, ssh SSHFacts) bool {
+	return listener.Ownership != SBXROwned && (ssh.DetectedPort == 0 || listener.Port != ssh.DetectedPort || listener.Protocol != TCP)
+}
+
+func protectedPath(path string, protected []string) bool {
+	for _, root := range protected {
+		if path == root || strings.HasPrefix(path, root+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func cleanVPSAuthorityEligible(result Result) bool {
@@ -1615,7 +1810,7 @@ func bind(request Request, observed Observations, policy Policy) Binding {
 }
 
 func ownerFactsProvided(facts OwnerFacts) bool {
-	return facts.DNS != "" || facts.Tunnel != "" || len(facts.Routes) > 0
+	return facts.DNS != "" || facts.Tunnel != "" || len(facts.Routes) > 0 || len(facts.Conflicts) > 0
 }
 
 func certificateFactsProvided(facts CertificateFacts) bool {

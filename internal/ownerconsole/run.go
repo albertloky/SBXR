@@ -1055,6 +1055,21 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 						m.planPage++
 						return m, nil
 					}
+					plan := m.changeReview.Plan
+					if plan.ReclamationDigest != "" && !plan.ReclamationConfirmed {
+						module, ok := m.outcome.(ReclamationOutcomeModule)
+						if !ok || m.input != ReclamationPhrase {
+							m.changeFeedback = "Type exactly: " + ReclamationPhrase
+							return m, nil
+						}
+						approval := ReclamationApproval{cell: &reclamationApprovalCell{identity: plan.Identity, digest: plan.ReclamationDigest}}
+						return m, func() tea.Msg {
+							return changeReviewMsg{review: module.ConfirmReclamation(m.runContext, plan.Identity, approval)}
+						}
+					}
+					if plan.ReclamationConfirmed {
+						return m, m.backChangeCommand()
+					}
 					m.pendingPlanApply = true
 					return m, m.authenticationCommand()
 				}
@@ -1099,6 +1114,8 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				if correction := m.changeReview.Correction; correction != nil && correction.InputLabel != "" {
 					m.inputFocused = true
 				} else if m.changeReview.Editing != nil {
+					m.inputFocused = true
+				} else if plan := m.changeReview.Plan; plan != nil && plan.ReclamationDigest != "" && !plan.ReclamationConfirmed && m.planPage+1 == m.planPageCount() {
 					m.inputFocused = true
 				}
 			case "esc":
@@ -2927,6 +2944,12 @@ func (m model) shortcuts() [2]string {
 			return [2]string{" Enter/Space Next plan section  Esc Back", " Ctrl+C Exit confirmation  Q is never Exit"}
 		}
 		if m.changeReview.Plan != nil {
+			if m.changeReview.Plan.ReclamationDigest != "" {
+				if m.changeReview.Plan.ReclamationConfirmed {
+					return [2]string{" Enter/Space Back  Esc Back", "Review only: no host change started"}
+				}
+				return [2]string{" Tab Type exact phrase  Enter/Space Confirm review", "Esc Back  No host change starts"}
+			}
 			return [2]string{" Enter/Space Apply exact Plan  Esc Back", " Ctrl+C Exit confirmation  Q is never Exit"}
 		}
 		if m.changeReview.Editing != nil {

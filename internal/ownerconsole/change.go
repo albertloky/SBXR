@@ -77,6 +77,8 @@ type PlanPresentation struct {
 	RequiredChecks                       []string
 	AdvisoryChecks                       []string
 	Interruption, Cancellation, Rollback string
+	ReclamationDigest                    string
+	ReclamationConfirmed                 bool
 }
 
 type CorrectionPresentation struct {
@@ -133,7 +135,8 @@ func validatedChangeReview(review ChangeReview) ChangeReview {
 	}
 	if plan := review.Plan; plan != nil {
 		lineage := safeSHA256(plan.DesiredStateSHA256) || plan.LineageUnavailable && plan.DesiredStateRevision == 0 && plan.DesiredStateSHA256 == ""
-		if !safeIdentifier(string(plan.Identity)) || !lineage || !completeStrings(plan.RelevantChecksums, 32) || !safeLine(plan.ObservedState) || !completeStrings(plan.VerifiedExternalInputs, 32) || !completeStrings(plan.Effects, 64) || !completeStrings(plan.RequiredChecks, 64) || !completeStrings(plan.AdvisoryChecks, 64) || !safeLine(plan.Interruption) || !safeLine(plan.Cancellation) || !safeLine(plan.Rollback) {
+		reclamation := plan.ReclamationDigest == "" && !plan.ReclamationConfirmed || safeSHA256(plan.ReclamationDigest)
+		if !safeIdentifier(string(plan.Identity)) || !lineage || !reclamation || !completeStrings(plan.RelevantChecksums, 32) || !safeLine(plan.ObservedState) || !completeStrings(plan.VerifiedExternalInputs, 32) || !completeStrings(plan.Effects, 64) || !completeStrings(plan.RequiredChecks, 64) || !completeStrings(plan.AdvisoryChecks, 64) || !safeLine(plan.Interruption) || !safeLine(plan.Cancellation) || !safeLine(plan.Rollback) {
 			return invalidChangeReview()
 		}
 		copy := *plan
@@ -264,6 +267,12 @@ func changeReviewLines(review ChangeReview, width, height, page int) []string {
 		if page+1 < len(pages) {
 			return append(lines, "", "> Enter Next plan section", "  Esc Previous section or safe editing")
 		}
+		if plan.ReclamationDigest != "" {
+			if plan.ReclamationConfirmed {
+				return append(lines, "", "> Back", "  Review only - no host change was made")
+			}
+			return append(lines, "", "> Confirm exact reclamation review", "  Esc Back or Cancel - no host change")
+		}
 		return append(lines, "", "> Apply exact one-use Plan", "  Esc Previous plan section or safe editing")
 	}
 	if editing := review.Editing; editing != nil {
@@ -347,6 +356,14 @@ func planFactLines(plan *PlanPresentation) []string {
 	}
 	for _, value := range plan.AdvisoryChecks {
 		lines = append(lines, "Advisory - "+value)
+	}
+	if plan.ReclamationDigest != "" {
+		lines = append(lines, "Reclamation review digest "+plan.ReclamationDigest)
+		if plan.ReclamationConfirmed {
+			lines = append(lines, "Reclamation review confirmed. No host change was made.")
+		} else {
+			lines = append(lines, "Type exactly: "+ReclamationPhrase, "> [required text input]")
+		}
 	}
 	return append(lines, "Interruption: "+plan.Interruption, "Cancellation: "+plan.Cancellation, "Rollback: "+plan.Rollback)
 }

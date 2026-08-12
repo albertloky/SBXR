@@ -113,6 +113,7 @@ func buildInstall(ctx context.Context, request softwareubuntu.InstallHandoffRequ
 		cloudflare:    cloudflareModule.Plan,
 		random:        newInstallEntropyReader(request.Entropy),
 		cloudflareAPI: cloudflareAPI,
+		inventory:     cloudflareAPI,
 	})
 }
 
@@ -122,6 +123,38 @@ type installBuildDependencies struct {
 	cloudflare    func(context.Context, cloudflaretunnel.PlanRequest) cloudflaretunnel.PlanResult
 	random        io.Reader
 	cloudflareAPI cloudflaretunnel.MutationAPI
+	inventory     cloudflaretunnel.MutationPlanner
+}
+
+type reclamationReviewError struct {
+	plan *networkpolicy.ReclamationPlan
+}
+
+func (err *reclamationReviewError) Error() string { return "Reclaimable VPS review is required" }
+
+func observeReclamationCloudflare(ctx context.Context, api cloudflaretunnel.MutationPlanner, account, zone string, token cloudflaretunnel.ManagementToken, tunnel string, hostnames []string) (networkpolicy.OwnerFacts, error) {
+	facts := networkpolicy.OwnerFacts{DNS: "fresh", Tunnel: "fresh"}
+	if api == nil {
+		return networkpolicy.OwnerFacts{}, errors.New("Cloudflare inventory unavailable")
+	}
+	seen := map[string]bool{}
+	for _, hostname := range hostnames {
+		observed, err := api.ObserveMutation(ctx, cloudflaretunnel.MutationRequest{AccountID: account, ZoneID: zone, Tunnel: tunnel, Hostname: hostname, Token: token})
+		if err != nil {
+			return networkpolicy.OwnerFacts{}, err
+		}
+		for _, resource := range observed.Tunnels {
+			key := "Tunnel\x00" + resource.ID + "\x00" + resource.Name
+			if !seen[key] {
+				facts.Conflicts = append(facts.Conflicts, networkpolicy.CloudflareConflict{Kind: "Tunnel", ID: resource.ID, Name: resource.Name})
+				seen[key] = true
+			}
+		}
+		for _, resource := range observed.DNSRecords {
+			facts.Conflicts = append(facts.Conflicts, networkpolicy.CloudflareConflict{Kind: "DNS record", ID: resource.ID, Name: resource.Name})
+		}
+	}
+	return facts, nil
 }
 
 type installReleaseStager struct {
@@ -152,11 +185,22 @@ func buildInstallWith(ctx context.Context, request softwareubuntu.InstallHandoff
 	networkDisk := networkpolicy.DiskRequirement{PreparationBytes: disk.PreparationBytes, TemporaryBytes: disk.TemporaryBytes, SnapshotBytes: disk.SnapshotBytes, JournalBytes: disk.JournalBytes, RollbackBytes: disk.RollbackBytes, OverheadBytes: disk.OverheadBytes}
 	draft := request.Draft
 	directHostname := "direct." + draft.Domain
+	token, err := cloudflaretunnel.NewManagementToken(request.CloudflareToken)
+	if err != nil {
+		return nil, errors.New("Cloudflare management token refused")
+	}
+	ownerFacts, err := observeReclamationCloudflare(ctx, dependencies.inventory, request.CloudflareAccountID, request.CloudflareZoneID, token, "sbxr-main", []string{"xhttp." + draft.Domain, "ws." + draft.Domain, directHostname})
+	if err != nil {
+		return nil, errors.New("Cloudflare conflict inventory failed")
+	}
 	intent := networkpolicy.Intent{Revision: 1, Baseline: networkpolicy.Clean, PublicIPv4: draft.PublicIPv4, PublicIPv6: draft.PublicIPv6, PrimarySubscriptionAddress: draft.PrimaryAddress, CertificateHostname: directHostname, SSHPort: draft.SSHPort, SubscriptionPort: draft.SubscriptionPort, Profiles: networkpolicy.Profiles{VLESSRealityVision: networkpolicy.Profile{Enabled: true, Port: draft.RealityPort}, VLESSXHTTP: networkpolicy.Profile{Enabled: true, Address: "127.0.0.1", Port: 11080}, VLESSWebSocket: networkpolicy.Profile{Enabled: true, Address: "127.0.0.1", Port: 11081}, Hysteria2: networkpolicy.Profile{Enabled: true, Port: draft.Hysteria2Port}, TUIC: networkpolicy.Profile{Enabled: true, Port: draft.TUICPort}, AnyTLS: networkpolicy.Profile{Enabled: true, Port: draft.AnyTLSPort}}, Disk: networkDisk}
-	baseNetwork := dependencies.network(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PreApproval})
+	baseNetwork := dependencies.network(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PreApproval, OwnerFacts: ownerFacts})
+	if baseNetwork.Reclamation != nil {
+		return nil, &reclamationReviewError{plan: baseNetwork.Reclamation}
+	}
 	httpIntent := intent
 	httpIntent.TemporaryHTTP = true
-	httpNetwork := dependencies.network(networkpolicy.Request{Intent: httpIntent, Stage: networkpolicy.PreApproval})
+	httpNetwork := dependencies.network(networkpolicy.Request{Intent: httpIntent, Stage: networkpolicy.PreApproval, OwnerFacts: ownerFacts})
 	if baseNetwork.Outcome == networkpolicy.Failed || httpNetwork.Outcome == networkpolicy.Failed {
 		return nil, errors.New("Clean VPS Network Policy refused the installation")
 	}
@@ -191,10 +235,6 @@ func buildInstallWith(ctx context.Context, request softwareubuntu.InstallHandoff
 		return nil, fmt.Errorf("Desired State candidate refused: %w", err)
 	}
 	changeSet := "install-" + request.Session[:16]
-	token, err := cloudflaretunnel.NewManagementToken(request.CloudflareToken)
-	if err != nil {
-		return nil, errors.New("Cloudflare management token refused")
-	}
 	cloudflareResult := dependencies.cloudflare(ctx, cloudflaretunnel.PlanRequest{Authority: cloudflaretunnel.ViewRequest{AccountID: request.CloudflareAccountID, ZoneID: request.CloudflareZoneID, ZoneName: draft.Domain, Token: token, NetworkPath: baseNetwork.CloudflareTunnelPath}, ChangeSet: changeSet, DesiredStateSHA256: desiredSHA256, TunnelName: "sbxr-main", XHTTPHostname: "xhttp." + draft.Domain, WebSocketHostname: "ws." + draft.Domain, DirectHostname: directHostname, PublicIPv4: draft.PublicIPv4, PublicIPv6: draft.PublicIPv6, CloudflaredVersion: cloudflaredVersion})
 	if cloudflareResult.Plan == nil {
 		return nil, errors.New("Cloudflare install Plan refused")

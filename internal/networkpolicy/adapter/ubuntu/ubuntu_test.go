@@ -17,7 +17,9 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 	root := t.TempDir()
 	files := map[string]string{
 		"etc/os-release":                        "ID=ubuntu\nVERSION_ID=\"24.04\"\n",
-		"var/lib/dpkg/status":                   "Package: ubuntu-server\nStatus: install ok installed\n\n",
+		"var/lib/dpkg/status":                   "Package: ubuntu-server\nStatus: install ok installed\n\nPackage: xray\nStatus: install ok installed\nVersion: 1.2.3\n\n",
+		"var/lib/dpkg/info/xray.list":           "/usr/local/bin/xray\n",
+		"etc/passwd":                            "xray:x:997:997::/nonexistent:/usr/sbin/nologin\n",
 		"proc/meminfo":                          "MemTotal:        1048576 kB\nSwapTotal:       8388608 kB\n",
 		"proc/net/tcp":                          "  sl  local_address rem_address   st tx_queue tr tm->when retrnsmt uid timeout inode\n   0: 00000000:01BB 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 4242\n",
 		"proc/net/tcp6":                         "  sl  local_address rem_address   st\n   0: 00000000000000000000000001000000:2B48 00000000000000000000000000000000:0000 0A\n",
@@ -40,10 +42,25 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if err := os.Chmod(filepath.Join(root, "usr/local/bin/xray"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(filepath.Join(root, "proc/123/fd"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink("socket:[4242]", filepath.Join(root, "proc/123/fd/4")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "proc/124"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "proc/124/comm"), []byte("xray\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "proc/124/cgroup"), []byte("0::/system.slice/xray.service\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/usr/local/bin/xray", filepath.Join(root, "proc/124/exe")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(root, "run/systemd/system"), 0o700); err != nil {
@@ -97,6 +114,9 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 	}
 	if len(observed.ResourcePaths) != 1 || observed.ResourcePaths[0] != "/usr/local/bin/xray" {
 		t.Fatalf("proxy remnants = %+v", observed.ResourcePaths)
+	}
+	if len(observed.Reclamation.Executables) != 1 || observed.Reclamation.Executables[0].SHA256 == "" || observed.Reclamation.Executables[0].Package != "xray" || observed.Reclamation.Executables[0].Process != "xray" || observed.Reclamation.Executables[0].Service != "xray.service" || len(observed.Reclamation.Packages) != 1 || observed.Reclamation.Packages[0].Version != "1.2.3" || len(observed.Reclamation.Identities) != 1 {
+		t.Fatalf("reclamation facts = %+v", observed.Reclamation)
 	}
 	if observed.Firewall.RootVerified {
 		t.Fatal("unprivileged fixture observation guessed root-only nftables facts")
