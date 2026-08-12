@@ -76,6 +76,26 @@ func TestComposedInstallRoutesAReclaimableVPSToReviewBeforeProviderPlanning(t *t
 	}
 }
 
+func TestComposedInstallRefusesAnIncompleteReclaimableInventory(t *testing.T) {
+	request := composedInstallRequest(t)
+	providerCalled := false
+	module := networkpolicy.New(incompleteReclamationObserver{})
+	_, err := buildInstallWith(t.Context(), request, installBuildDependencies{
+		stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
+			return request.Candidate.Staged, nil
+		},
+		network: module.Evaluate,
+		cloudflare: func(context.Context, cloudflaretunnel.PlanRequest) cloudflaretunnel.PlanResult {
+			providerCalled = true
+			return cloudflaretunnel.PlanResult{}
+		},
+		random: newInstallEntropyReader(request.Entropy), inventory: composedCloudflareAPI{},
+	})
+	if err == nil || providerCalled {
+		t.Fatalf("incomplete reclamation inventory continued: error %v provider-called %t", err, providerCalled)
+	}
+}
+
 func TestReclamationInventoryBindsExactCloudflareConflictIdentifiers(t *testing.T) {
 	token, err := cloudflaretunnel.NewManagementToken("cfat_COMPOSED-INSTALL-SECRET-MARKER-000000000")
 	if err != nil {
@@ -133,6 +153,14 @@ func (composedNetworkObserver) Observe(networkpolicy.ObservationRequest) (networ
 		Disk:     networkpolicy.DiskFacts{FilesystemBytes: 20 << 30, AvailableBytes: 3 << 30}, Time: networkpolicy.TimeFacts{Synchronized: true, Owner: "systemd-timesyncd"}, OwnerFacts: networkpolicy.OwnerFacts{DNS: "fresh", Tunnel: "fresh"},
 		Certificate: networkpolicy.CertificateFacts{DNS: networkpolicy.DNSFacts{Hostname: "direct.example.com"}, CAA: networkpolicy.CAAFacts{Issuer: "letsencrypt.org", HTTP01Allowed: true}}, Checksums: map[string]string{"sshd_config": "sha256:ssh", "nftables": "sha256:nft"},
 	}, nil
+}
+
+type incompleteReclamationObserver struct{ composedNetworkObserver }
+
+func (incompleteReclamationObserver) Observe(request networkpolicy.ObservationRequest) (networkpolicy.Observations, error) {
+	observed, err := (composedNetworkObserver{}).Observe(request)
+	observed.Reclamation.Docker = &networkpolicy.DockerConflict{Service: "docker.service", Status: "unknown"}
+	return observed, err
 }
 
 type composedCloudflareAPI struct{}

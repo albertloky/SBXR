@@ -77,7 +77,10 @@ func (a Adapter) Observe(request networkpolicy.ObservationRequest) (networkpolic
 		Ephemeral: a.ephemeralRange(),
 		Checksums: map[string]string{},
 	}
-	observed.Reclamation = a.reclamationFacts(observed.ResourcePaths, observed.Listeners)
+	observed.Reclamation, err = a.reclamationFacts(observed.ResourcePaths, observed.Listeners)
+	if err != nil {
+		return networkpolicy.Observations{}, err
+	}
 	observed.ReclamationComplete = true
 	observed.Disk = diskFacts(a.root)
 	observed.Checksums["routes"] = checksumFiles(a.path("/proc/net/route"), a.path("/proc/net/ipv6_route"))
@@ -114,17 +117,34 @@ func (a Adapter) Observe(request networkpolicy.ObservationRequest) (networkpolic
 	return observed, nil
 }
 
-func (a Adapter) reclamationFacts(paths []string, listeners []networkpolicy.Listener) networkpolicy.ReclamationFacts {
+func (a Adapter) reclamationFacts(paths []string, listeners []networkpolicy.Listener) (networkpolicy.ReclamationFacts, error) {
+	status, err := os.ReadFile(a.path("/var/lib/dpkg/status"))
+	if err != nil {
+		return networkpolicy.ReclamationFacts{}, err
+	}
+	passwd, err := os.ReadFile(a.path("/etc/passwd"))
+	if err != nil {
+		return networkpolicy.ReclamationFacts{}, err
+	}
+	group, err := os.ReadFile(a.path("/etc/group"))
+	if err != nil {
+		return networkpolicy.ReclamationFacts{}, err
+	}
+	if _, err := os.ReadFile(a.path("/proc/self/mountinfo")); err != nil {
+		return networkpolicy.ReclamationFacts{}, err
+	}
 	facts := networkpolicy.ReclamationFacts{ProtectedPaths: a.currentShells()}
-	processes, scripts := a.reclamationProcesses()
+	processes, scripts, err := a.reclamationProcesses()
+	if err != nil {
+		return networkpolicy.ReclamationFacts{}, err
+	}
 	facts.Scripts = scripts
 	for _, listener := range listeners {
 		if listener.Executable != "" && !slices.Contains(paths, listener.Executable) {
 			paths = append(paths, listener.Executable)
 		}
 	}
-	status := readOptional(a.path("/var/lib/dpkg/status"))
-	for _, paragraph := range strings.Split(status, "\n\n") {
+	for _, paragraph := range strings.Split(string(status), "\n\n") {
 		fields := map[string]string{}
 		for _, line := range strings.Split(paragraph, "\n") {
 			if key, value, ok := strings.Cut(line, ": "); ok {
@@ -135,7 +155,17 @@ func (a Adapter) reclamationFacts(paths []string, listeners []networkpolicy.List
 		if name == "" || fields["Status"] != "install ok installed" {
 			continue
 		}
-		owned := strings.Fields(readOptional(a.path("/var/lib/dpkg/info/" + name + ".list")))
+		listName := name + ".list"
+		if architecture := fields["Architecture"]; architecture != "" {
+			if _, statErr := os.Stat(a.path("/var/lib/dpkg/info/" + name + ":" + architecture + ".list")); statErr == nil {
+				listName = name + ":" + architecture + ".list"
+			}
+		}
+		ownedData, readErr := os.ReadFile(a.path("/var/lib/dpkg/info/" + listName))
+		if readErr != nil {
+			return networkpolicy.ReclamationFacts{}, readErr
+		}
+		owned := strings.Fields(string(ownedData))
 		for _, path := range paths {
 			if slices.Contains(owned, path) {
 				facts.Packages = append(facts.Packages, networkpolicy.PackageConflict{Name: name, Version: fields["Version"], Owns: path, OwnedPaths: append([]string(nil), owned...)})
@@ -163,7 +193,7 @@ func (a Adapter) reclamationFacts(paths []string, listeners []networkpolicy.List
 		}
 		data, err := os.ReadFile(a.path(path))
 		if err != nil {
-			continue
+			return networkpolicy.ReclamationFacts{}, err
 		}
 		stat, _ := info.Sys().(*syscall.Stat_t)
 		file := networkpolicy.FileConflict{Path: path, SHA256: checksum(data), Mode: uint32(info.Mode().Perm()), Links: 1, Mount: a.mountPoint(path)}
@@ -180,15 +210,18 @@ func (a Adapter) reclamationFacts(paths []string, listeners []networkpolicy.List
 		}
 		facts.Executables = append(facts.Executables, file)
 	}
-	for _, source := range []struct{ path, kind string }{{"/etc/passwd", "service user"}, {"/etc/group", "service group"}} {
-		for _, line := range strings.Split(readOptional(a.path(source.path)), "\n") {
+	for _, source := range []struct {
+		data []byte
+		kind string
+	}{{passwd, "service user"}, {group, "service group"}} {
+		for _, line := range strings.Split(string(source.data), "\n") {
 			name, _, ok := strings.Cut(line, ":")
 			if ok && slices.Contains([]string{"xray", "sing-box", "cloudflared", "sbxr"}, name) {
 				facts.Identities = append(facts.Identities, networkpolicy.IdentityConflict{Name: name, Kind: source.kind})
 			}
 		}
 	}
-	return facts
+	return facts, nil
 }
 
 func (a Adapter) currentShells() []string {
@@ -218,10 +251,13 @@ func (a Adapter) currentShells() []string {
 	return shells
 }
 
-func (a Adapter) reclamationProcesses() (map[string]socketOwner, []networkpolicy.ScriptConflict) {
+func (a Adapter) reclamationProcesses() (map[string]socketOwner, []networkpolicy.ScriptConflict, error) {
 	executables := map[string]socketOwner{}
 	var scripts []networkpolicy.ScriptConflict
-	processes, _ := os.ReadDir(a.path("/proc"))
+	processes, err := os.ReadDir(a.path("/proc"))
+	if err != nil {
+		return nil, nil, err
+	}
 	for _, process := range processes {
 		if _, err := strconv.Atoi(process.Name()); err != nil {
 			continue
@@ -248,17 +284,18 @@ func (a Adapter) reclamationProcesses() (map[string]socketOwner, []networkpolicy
 			continue
 		}
 		data, readErr := os.ReadFile(a.path(arguments[1]))
-		if readErr == nil {
-			links := uint64(1)
-			if info, statErr := os.Lstat(a.path(arguments[1])); statErr == nil {
-				if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-					links = uint64(stat.Nlink)
-				}
-			}
-			scripts = append(scripts, networkpolicy.ScriptConflict{Interpreter: executable, Path: arguments[1], SHA256: checksum(data), Process: name, Service: service, Links: links, Mount: a.mountPoint(arguments[1])})
+		if readErr != nil {
+			return nil, nil, readErr
 		}
+		links := uint64(1)
+		if info, statErr := os.Lstat(a.path(arguments[1])); statErr == nil {
+			if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+				links = uint64(stat.Nlink)
+			}
+		}
+		scripts = append(scripts, networkpolicy.ScriptConflict{Interpreter: executable, Path: arguments[1], SHA256: checksum(data), Process: name, Service: service, Links: links, Mount: a.mountPoint(arguments[1])})
 	}
-	return executables, scripts
+	return executables, scripts, nil
 }
 
 func (a Adapter) mountPoint(path string) bool {

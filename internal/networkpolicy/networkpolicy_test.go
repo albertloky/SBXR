@@ -110,6 +110,16 @@ func TestReclamationReviewRefusesIncompleteOwnershipProof(t *testing.T) {
 	}
 }
 
+func TestIncompleteReclaimableInventoryCannotBecomeCleanInstallationAuthority(t *testing.T) {
+	observed := completeObservations()
+	observed.Reclamation.Docker = &networkpolicy.DockerConflict{Service: "docker.service", Status: "unknown"}
+	result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PreApproval})
+	assertFinding(t, result, networkpolicy.Failed, networkpolicy.Required, "NETWORK-RECLAMATION-UNPROVED")
+	if result.Reclamation != nil || result.FreshInstallationProof() != (networkpolicy.FreshInstallationProof{}) {
+		t.Fatalf("incomplete Reclaimable VPS received plan or Clean authority: %+v", result)
+	}
+}
+
 func TestInstallationReviewDistinguishesCleanContradictoryAndUnsupportedHosts(t *testing.T) {
 	request := networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PreApproval}
 	clean := completeObservations()

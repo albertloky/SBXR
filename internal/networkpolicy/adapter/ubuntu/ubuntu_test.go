@@ -18,9 +18,12 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 	files := map[string]string{
 		"etc/os-release":                        "ID=ubuntu\nVERSION_ID=\"24.04\"\n",
 		"var/lib/dpkg/status":                   "Package: ubuntu-server\nStatus: install ok installed\n\nPackage: xray\nStatus: install ok installed\nVersion: 1.2.3\n\nPackage: nginx\nStatus: install ok installed\nVersion: 1.24.0\n\n",
+		"var/lib/dpkg/info/ubuntu-server.list":  "/usr/share/doc/ubuntu-server/copyright\n",
 		"var/lib/dpkg/info/xray.list":           "/usr/local/bin/xray\n/usr/share/doc/xray/copyright\n",
 		"var/lib/dpkg/info/nginx.list":          "/usr/sbin/nginx\n/usr/share/doc/nginx/copyright\n",
 		"etc/passwd":                            "xray:x:997:997::/nonexistent:/usr/sbin/nologin\n",
+		"etc/group":                             "xray:x:997:\n",
+		"proc/self/mountinfo":                   "",
 		"proc/meminfo":                          "MemTotal:        1048576 kB\nSwapTotal:       8388608 kB\n",
 		"proc/net/tcp":                          "  sl  local_address rem_address   st tx_queue tr tm->when retrnsmt uid timeout inode\n   0: 00000000:01BB 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 4242\n",
 		"proc/net/tcp6":                         "  sl  local_address rem_address   st\n   0: 00000000000000000000000001000000:2B48 00000000000000000000000000000000:0000 0A\n",
@@ -123,7 +126,7 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 	if len(observed.ResourcePaths) != 1 || observed.ResourcePaths[0] != "/usr/local/bin/xray" {
 		t.Fatalf("proxy remnants = %+v", observed.ResourcePaths)
 	}
-	if len(observed.Reclamation.Executables) != 2 || observed.Reclamation.Executables[0].SHA256 == "" || observed.Reclamation.Executables[0].Package != "xray" || observed.Reclamation.Executables[0].Process != "xray" || observed.Reclamation.Executables[0].Service != "xray.service" || observed.Reclamation.Executables[1].Path != "/usr/sbin/nginx" || observed.Reclamation.Executables[1].SHA256 == "" || observed.Reclamation.Executables[1].Package != "nginx" || observed.Reclamation.Executables[1].Process != "nginx" || len(observed.Reclamation.Packages) != 2 || observed.Reclamation.Packages[0].Version != "1.2.3" || len(observed.Reclamation.Packages[0].OwnedPaths) != 2 || len(observed.Reclamation.Identities) != 1 || observed.Reclamation.Identities[0].Exclusive {
+	if len(observed.Reclamation.Executables) != 2 || observed.Reclamation.Executables[0].SHA256 == "" || observed.Reclamation.Executables[0].Package != "xray" || observed.Reclamation.Executables[0].Process != "xray" || observed.Reclamation.Executables[0].Service != "xray.service" || observed.Reclamation.Executables[1].Path != "/usr/sbin/nginx" || observed.Reclamation.Executables[1].SHA256 == "" || observed.Reclamation.Executables[1].Package != "nginx" || observed.Reclamation.Executables[1].Process != "nginx" || len(observed.Reclamation.Packages) != 2 || observed.Reclamation.Packages[0].Version != "1.2.3" || len(observed.Reclamation.Packages[0].OwnedPaths) != 2 || len(observed.Reclamation.Identities) != 2 || observed.Reclamation.Identities[0].Exclusive || observed.Reclamation.Identities[1].Exclusive {
 		t.Fatalf("reclamation facts = %+v", observed.Reclamation)
 	}
 	if observed.Firewall.RootVerified {
@@ -242,14 +245,24 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 	if len(qualified.PublicIPv4) != 1 || qualified.PublicIPv4[0] != "8.8.8.8" || len(qualified.PublicIPv6) != 1 || qualified.PublicIPv6[0] != "2001:4860:4860::8888" {
 		t.Fatalf("qualified public addresses = IPv4 %v IPv6 %v", qualified.PublicIPv4, qualified.PublicIPv6)
 	}
+	if err := os.Remove(filepath.Join(root, "var/lib/dpkg/info/nginx.list")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewAt(root).Observe(networkpolicy.ObservationRequest{Stage: networkpolicy.PreApproval}); err == nil {
+		t.Fatal("incomplete package ownership was marked as a complete reclamation inventory")
+	}
 }
 
 func TestAdapterUsesRealDNSAndVerifiedHTTPSWithoutCredentials(t *testing.T) {
 	root := t.TempDir()
 	for name, data := range map[string]string{
-		"etc/os-release":      "ID=ubuntu\nVERSION_ID=\"24.04\"\n",
-		"var/lib/dpkg/status": "Package: ubuntu-server\nStatus: install ok installed\n\n",
-		"proc/meminfo":        "MemTotal:        1048576 kB\n",
+		"etc/os-release":                       "ID=ubuntu\nVERSION_ID=\"24.04\"\n",
+		"etc/passwd":                           "root:x:0:0:root:/root:/bin/bash\n",
+		"etc/group":                            "root:x:0:\n",
+		"var/lib/dpkg/status":                  "Package: ubuntu-server\nStatus: install ok installed\n\n",
+		"var/lib/dpkg/info/ubuntu-server.list": "/usr/share/doc/ubuntu-server/copyright\n",
+		"proc/meminfo":                         "MemTotal:        1048576 kB\n",
+		"proc/self/mountinfo":                  "",
 	} {
 		path := filepath.Join(root, name)
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

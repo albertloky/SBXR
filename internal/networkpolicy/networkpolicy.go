@@ -952,6 +952,7 @@ func reviewInstallation(result *Result, observed Observations) {
 		return
 	}
 	if !observed.ReclamationComplete {
+		result.add(requiredFailure("NETWORK-RECLAMATION-UNPROVED", "Reclaimable VPS facts are incomplete", "one or more conflict ownership facts are unavailable", "one complete listener, process, service, package, identity, executable, script, mount, Docker, firewall, SSH, port, and Cloudflare inventory", "SBXR never treats incomplete conflict evidence as a Clean VPS", ownerFix("Restore read access to the host inventory or reimage the VPS.")))
 		return
 	}
 	if len(observed.Reclamation.UnsafePaths) > 0 {
@@ -1080,8 +1081,14 @@ func reviewFact(value string) string {
 
 func hasReclamationConflict(observed Observations) bool {
 	r := observed.Reclamation
+	if len(r.Packages)+len(r.Identities)+len(r.Executables)+len(r.Scripts)+len(r.UnsafePaths) > 0 || r.Docker != nil {
+		return true
+	}
+	if !observed.ReclamationComplete {
+		return false
+	}
 	ownerConflict := func(value string) bool { return value != "" && value != "fresh" }
-	return len(r.Packages)+len(r.Identities)+len(r.Executables)+len(r.Scripts)+len(r.UnsafePaths) > 0 || r.Docker != nil || len(observed.ServiceIdentities)+len(observed.ResourcePaths) > 0 || observed.Firewall.ActiveManager != "" || observed.Firewall.UnexpectedRule != "" || observed.Firewall.SBXRTableState != "" && observed.Firewall.SBXRTableState != "absent" || ownerConflict(observed.OwnerFacts.DNS) || ownerConflict(observed.OwnerFacts.Tunnel) || len(observed.OwnerFacts.Routes)+len(observed.OwnerFacts.Conflicts) > 0 || slices.ContainsFunc(observed.Listeners, func(listener Listener) bool { return reclaimableListener(listener, observed.SSH) })
+	return len(observed.ServiceIdentities)+len(observed.ResourcePaths) > 0 || observed.Firewall.ActiveManager != "" || observed.Firewall.UnexpectedRule != "" || observed.Firewall.SBXRTableState != "" && observed.Firewall.SBXRTableState != "absent" || ownerConflict(observed.OwnerFacts.DNS) || ownerConflict(observed.OwnerFacts.Tunnel) || len(observed.OwnerFacts.Routes)+len(observed.OwnerFacts.Conflicts) > 0 || slices.ContainsFunc(observed.Listeners, func(listener Listener) bool { return reclaimableListener(listener, observed.SSH) })
 }
 
 func reclaimableListener(listener Listener, ssh SSHFacts) bool {
