@@ -150,15 +150,19 @@ const (
 )
 
 type ReclamationFacts struct {
-	Packages    []PackageConflict
-	Identities  []IdentityConflict
-	Executables []FileConflict
-	Scripts     []ScriptConflict
-	UnsafePaths []string
-	Docker      *DockerConflict
+	Packages       []PackageConflict
+	Identities     []IdentityConflict
+	Executables    []FileConflict
+	Scripts        []ScriptConflict
+	UnsafePaths    []string
+	ProtectedPaths []string
+	Docker         *DockerConflict
 }
 
-type PackageConflict struct{ Name, Version, Owns string }
+type PackageConflict struct {
+	Name, Version, Owns string
+	OwnedPaths          []string
+}
 type IdentityConflict struct {
 	Name, Kind string
 	Exclusive  bool
@@ -222,12 +226,13 @@ type HostFacts struct {
 }
 
 type Listener struct {
-	Address   string
-	Port      uint16
-	Protocol  Protocol
-	Process   string
-	Service   string
-	Ownership Ownership
+	Address    string
+	Port       uint16
+	Protocol   Protocol
+	Process    string
+	Service    string
+	Ownership  Ownership
+	Executable string
 }
 
 type Ownership string
@@ -929,6 +934,7 @@ func (i Interface) Evaluate(request Request) Result {
 
 func reviewInstallation(result *Result, observed Observations) {
 	result.ProtectedFoundation = ProtectedHostFoundation{Version: 1, Paths: []string{"/bin/sh", "/boot", "/etc/apt", "/etc/passwd", "/etc/sbxr", "/etc/shadow", "/etc/ssh", "/lib", "/lib64", "/proc", "/run", "/sbin/init", "/sys", "/usr/bin/apt", "/usr/bin/apt-get", "/usr/bin/dpkg", "/usr/bin/env", "/usr/bin/sudo", "/usr/bin/systemctl", "/usr/lib", "/usr/local/bin/sbxr", "/usr/sbin/sshd", "/var/lib/dpkg", "/var/lib/sbxr"}}
+	result.ProtectedFoundation.Paths = append(result.ProtectedFoundation.Paths, observed.Reclamation.ProtectedPaths...)
 	unsupported := observed.Host.UbuntuVersion != "24.04" && !strings.HasPrefix(observed.Host.UbuntuVersion, "24.04.") || !observed.Host.UbuntuServer || !observed.Host.Systemd || observed.Host.Architecture != "amd64" && observed.Host.Architecture != "arm64"
 	switch {
 	case unsupported:
@@ -948,6 +954,24 @@ func reviewInstallation(result *Result, observed Observations) {
 		result.add(requiredFailure("NETWORK-RECLAMATION-PROTECTED", "A reclamation target is linked, mounted, shared, or otherwise ambiguous", safeFact(observed.Reclamation.UnsafePaths[0]), "only exact unchanged regular unshared targets", "SBXR never guesses through a filesystem boundary", ownerFix("Reimage the VPS or remove the conflict through its proven owner.")))
 		return
 	}
+	for _, identity := range observed.Reclamation.Identities {
+		if !identity.Exclusive {
+			result.add(requiredFailure("NETWORK-RECLAMATION-UNPROVED", "A conflicting identity is not proven exclusive", safeFact(identity.Name), "one identity used only by the exact conflicting service", "SBXR never deletes a shared or merely name-matched identity", ownerFix("Remove the identity through its proven owner or reimage the VPS.")))
+			return
+		}
+	}
+	for _, listener := range observed.Listeners {
+		if !reclaimableListener(listener, observed.SSH) || listener.Executable == "" {
+			continue
+		}
+		proved := slices.ContainsFunc(observed.Reclamation.Executables, func(file FileConflict) bool { return file.Path == listener.Executable && file.SHA256 != "" }) || slices.ContainsFunc(observed.Reclamation.Scripts, func(script ScriptConflict) bool {
+			return script.Process == listener.Process && script.Service == listener.Service && script.SHA256 != ""
+		})
+		if !proved {
+			result.add(requiredFailure("NETWORK-RECLAMATION-UNPROVED", "A conflicting listener lacks an exact executable or script digest", safeFact(listener.Executable, listener.Process), "one exact unchanged executable or supported unambiguous script", "SBXR never plans deletion from only a socket or process name", ownerFix("Stop the ambiguous owner outside SBXR or reimage the VPS.")))
+			return
+		}
+	}
 	for _, file := range observed.Reclamation.Executables {
 		if protectedPath(file.Path, result.ProtectedFoundation.Paths) || file.Mount || file.Links > 1 {
 			if !slices.Contains(result.ProtectedFoundation.Paths, file.Path) {
@@ -958,7 +982,7 @@ func reviewInstallation(result *Result, observed Observations) {
 		}
 	}
 	for _, pkg := range observed.Reclamation.Packages {
-		if protectedPath(pkg.Owns, result.ProtectedFoundation.Paths) {
+		if slices.ContainsFunc(pkg.OwnedPaths, func(path string) bool { return protectedPath(path, result.ProtectedFoundation.Paths) }) {
 			result.add(requiredFailure("NETWORK-RECLAMATION-PROTECTED", "A package conflict owns part of the Protected Host Foundation", safeFact(pkg.Name, pkg.Owns), "no package owning SSH, system tools, shared libraries, mounts, or recovery dependencies", "SBXR never offers removal of a package that owns the host foundation", ownerFix("Reimage the VPS or remove the conflict through its proven owner.")))
 			return
 		}
@@ -979,7 +1003,7 @@ func reviewInstallation(result *Result, observed Observations) {
 		plan.Targets = append(plan.Targets, fmt.Sprintf("script %s sha256 %s", path, reviewFact(value.SHA256)), fmt.Sprintf("script %s via preserved interpreter %s process %s service %s", path, reviewFact(value.Interpreter), reviewFact(value.Process), reviewFact(value.Service)))
 	}
 	for _, value := range observed.Reclamation.Packages {
-		plan.Targets = append(plan.Targets, fmt.Sprintf("package %s %s owns %s", reviewFact(value.Name), reviewFact(value.Version), reviewFact(value.Owns)))
+		plan.Targets = append(plan.Targets, fmt.Sprintf("package %s %s owns conflict %s; complete owned-path digest %s", reviewFact(value.Name), reviewFact(value.Version), reviewFact(value.Owns), digestStrings(value.OwnedPaths)))
 	}
 	for _, value := range observed.Reclamation.Identities {
 		plan.Targets = append(plan.Targets, fmt.Sprintf("identity %s kind %s exclusive %t", reviewFact(value.Name), reviewFact(value.Kind), value.Exclusive))
@@ -1028,6 +1052,11 @@ func reviewInstallation(result *Result, observed Observations) {
 	digest := sha256.Sum256(encoded)
 	plan.Digest = hex.EncodeToString(digest[:])
 	result.Reclamation = &plan
+}
+
+func digestStrings(values []string) string {
+	digest := sha256.Sum256([]byte(strings.Join(values, "\n")))
+	return hex.EncodeToString(digest[:])
 }
 
 func reviewFact(value string) string {

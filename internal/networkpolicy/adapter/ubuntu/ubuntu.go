@@ -77,7 +77,7 @@ func (a Adapter) Observe(request networkpolicy.ObservationRequest) (networkpolic
 		Ephemeral: a.ephemeralRange(),
 		Checksums: map[string]string{},
 	}
-	observed.Reclamation = a.reclamationFacts(observed.ResourcePaths)
+	observed.Reclamation = a.reclamationFacts(observed.ResourcePaths, observed.Listeners)
 	observed.Disk = diskFacts(a.root)
 	observed.Checksums["routes"] = checksumFiles(a.path("/proc/net/route"), a.path("/proc/net/ipv6_route"))
 	observed.Checksums["listeners"] = checksumFiles(a.path("/proc/net/tcp"), a.path("/proc/net/tcp6"), a.path("/proc/net/udp"), a.path("/proc/net/udp6"))
@@ -113,10 +113,15 @@ func (a Adapter) Observe(request networkpolicy.ObservationRequest) (networkpolic
 	return observed, nil
 }
 
-func (a Adapter) reclamationFacts(paths []string) networkpolicy.ReclamationFacts {
-	facts := networkpolicy.ReclamationFacts{}
+func (a Adapter) reclamationFacts(paths []string, listeners []networkpolicy.Listener) networkpolicy.ReclamationFacts {
+	facts := networkpolicy.ReclamationFacts{ProtectedPaths: a.currentShells()}
 	processes, scripts := a.reclamationProcesses()
 	facts.Scripts = scripts
+	for _, listener := range listeners {
+		if listener.Executable != "" && !slices.Contains(paths, listener.Executable) {
+			paths = append(paths, listener.Executable)
+		}
+	}
 	status := readOptional(a.path("/var/lib/dpkg/status"))
 	for _, paragraph := range strings.Split(status, "\n\n") {
 		fields := map[string]string{}
@@ -132,7 +137,8 @@ func (a Adapter) reclamationFacts(paths []string) networkpolicy.ReclamationFacts
 		owned := strings.Fields(readOptional(a.path("/var/lib/dpkg/info/" + name + ".list")))
 		for _, path := range paths {
 			if slices.Contains(owned, path) {
-				facts.Packages = append(facts.Packages, networkpolicy.PackageConflict{Name: name, Version: fields["Version"], Owns: path})
+				facts.Packages = append(facts.Packages, networkpolicy.PackageConflict{Name: name, Version: fields["Version"], Owns: path, OwnedPaths: append([]string(nil), owned...)})
+				break
 			}
 		}
 		if slices.Contains([]string{"docker.io", "docker-ce", "containerd.io"}, name) {
@@ -177,11 +183,38 @@ func (a Adapter) reclamationFacts(paths []string) networkpolicy.ReclamationFacts
 		for _, line := range strings.Split(readOptional(a.path(source.path)), "\n") {
 			name, _, ok := strings.Cut(line, ":")
 			if ok && slices.Contains([]string{"xray", "sing-box", "cloudflared", "sbxr"}, name) {
-				facts.Identities = append(facts.Identities, networkpolicy.IdentityConflict{Name: name, Kind: source.kind, Exclusive: true})
+				facts.Identities = append(facts.Identities, networkpolicy.IdentityConflict{Name: name, Kind: source.kind})
 			}
 		}
 	}
 	return facts
+}
+
+func (a Adapter) currentShells() []string {
+	var shells []string
+	pid := os.Getppid()
+	for range 16 {
+		base := filepath.Join("/proc", strconv.Itoa(pid))
+		executable, err := os.Readlink(a.path(filepath.Join(base, "exe")))
+		if err == nil && slices.Contains([]string{"sh", "bash", "dash", "zsh", "fish"}, filepath.Base(executable)) {
+			shells = append(shells, executable)
+		}
+		stat := readOptional(a.path(filepath.Join(base, "stat")))
+		end := strings.LastIndex(stat, ") ")
+		if end < 0 {
+			break
+		}
+		fields := strings.Fields(stat[end+2:])
+		if len(fields) < 2 {
+			break
+		}
+		parent, err := strconv.Atoi(fields[1])
+		if err != nil || parent <= 1 || parent == pid {
+			break
+		}
+		pid = parent
+	}
+	return shells
 }
 
 func (a Adapter) reclamationProcesses() (map[string]socketOwner, []networkpolicy.ScriptConflict) {
@@ -204,7 +237,7 @@ func (a Adapter) reclamationProcesses() (map[string]socketOwner, []networkpolicy
 		}
 		executable, err := os.Readlink(a.path(filepath.Join(base, "exe")))
 		if err == nil && filepath.IsAbs(executable) {
-			executables[executable] = socketOwner{name, service}
+			executables[executable] = socketOwner{name, service, executable}
 		}
 		if !slices.Contains([]string{"sh", "bash", "dash", "python", "python3", "perl", "ruby", "node"}, filepath.Base(executable)) {
 			continue
@@ -448,7 +481,7 @@ func (a Adapter) listeners() []networkpolicy.Listener {
 				if len(fields) > 9 {
 					owner = owners[fields[9]]
 				}
-				listeners = append(listeners, networkpolicy.Listener{Address: procAddress(address), Port: uint16(port), Protocol: source.protocol, Process: owner.process, Service: owner.service, Ownership: networkpolicy.Unproved})
+				listeners = append(listeners, networkpolicy.Listener{Address: procAddress(address), Port: uint16(port), Protocol: source.protocol, Process: owner.process, Service: owner.service, Executable: owner.executable, Ownership: networkpolicy.Unproved})
 			}
 		}
 		file.Close()
@@ -456,7 +489,7 @@ func (a Adapter) listeners() []networkpolicy.Listener {
 	return listeners
 }
 
-type socketOwner struct{ process, service string }
+type socketOwner struct{ process, service, executable string }
 
 func (a Adapter) socketOwners() map[string]socketOwner {
 	owners := map[string]socketOwner{}
@@ -466,6 +499,7 @@ func (a Adapter) socketOwners() map[string]socketOwner {
 			continue
 		}
 		name := strings.TrimSpace(readOptional(a.path(filepath.Join("/proc", process.Name(), "comm"))))
+		executable, _ := os.Readlink(a.path(filepath.Join("/proc", process.Name(), "exe")))
 		service := ""
 		for _, line := range strings.Split(readOptional(a.path(filepath.Join("/proc", process.Name(), "cgroup"))), "\n") {
 			_, path, ok := strings.Cut(line, "::")
@@ -478,7 +512,7 @@ func (a Adapter) socketOwners() map[string]socketOwner {
 		for _, file := range files {
 			target, err := os.Readlink(a.path(filepath.Join("/proc", process.Name(), "fd", file.Name())))
 			if err == nil && strings.HasPrefix(target, "socket:[") && strings.HasSuffix(target, "]") {
-				owners[strings.TrimSuffix(strings.TrimPrefix(target, "socket:["), "]")] = socketOwner{name, service}
+				owners[strings.TrimSuffix(strings.TrimPrefix(target, "socket:["), "]")] = socketOwner{name, service, executable}
 			}
 		}
 	}

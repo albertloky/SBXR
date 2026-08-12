@@ -52,9 +52,9 @@ func TestCleanVPSAuthorityRechecksTheExactNetworkPolicyBaseline(t *testing.T) {
 
 func TestReclaimableVPSReviewBindsEverySafeConflictWithoutChangingObservedState(t *testing.T) {
 	observed := completeObservations()
-	observed.Listeners = append(observed.Listeners, networkpolicy.Listener{Address: "0.0.0.0", Port: 443, Protocol: networkpolicy.TCP, Process: "xray", Service: "xray.service", Ownership: networkpolicy.Unproved})
+	observed.Listeners = append(observed.Listeners, networkpolicy.Listener{Address: "0.0.0.0", Port: 443, Protocol: networkpolicy.TCP, Process: "xray", Service: "xray.service", Executable: "/usr/local/bin/xray", Ownership: networkpolicy.Unproved})
 	observed.Reclamation = networkpolicy.ReclamationFacts{
-		Packages:    []networkpolicy.PackageConflict{{Name: "xray", Version: "1.2.3", Owns: "/usr/local/bin/xray"}},
+		Packages:    []networkpolicy.PackageConflict{{Name: "xray", Version: "1.2.3", Owns: "/usr/local/bin/xray", OwnedPaths: []string{"/usr/local/bin/xray"}}},
 		Identities:  []networkpolicy.IdentityConflict{{Name: "xray", Kind: "service user", Exclusive: true}},
 		Executables: []networkpolicy.FileConflict{{Path: "/usr/local/bin/xray", SHA256: strings.Repeat("a", 64), OwnerUID: 0, Mode: 0o755, Links: 1, Process: "xray", Service: "xray.service", Package: "xray"}},
 		Scripts:     []networkpolicy.ScriptConflict{{Interpreter: "/usr/bin/python3", Path: "/opt/proxy/server.py", SHA256: strings.Repeat("b", 64), Process: "python3", Service: "proxy.service"}},
@@ -74,6 +74,34 @@ func TestReclaimableVPSReviewBindsEverySafeConflictWithoutChangingObservedState(
 	}
 	if strings.Contains(rendered, "SECRET") || !reflect.DeepEqual(observed, want) {
 		t.Fatalf("review leaked or changed Observed State: %s\nwant=%+v\ngot=%+v", rendered, want, observed)
+	}
+}
+
+func TestReclamationReviewRefusesIncompleteOwnershipProof(t *testing.T) {
+	tests := map[string]struct {
+		code  string
+		alter func(*networkpolicy.Observations)
+	}{
+		"listener without executable digest": {code: "NETWORK-RECLAMATION-UNPROVED", alter: func(observed *networkpolicy.Observations) {
+			observed.Listeners = append(observed.Listeners, networkpolicy.Listener{Address: "0.0.0.0", Port: 443, Protocol: networkpolicy.TCP, Process: "nginx", Service: "nginx.service", Executable: "/usr/sbin/nginx"})
+		}},
+		"unproved exclusive identity": {code: "NETWORK-RECLAMATION-UNPROVED", alter: func(observed *networkpolicy.Observations) {
+			observed.Reclamation.Identities = []networkpolicy.IdentityConflict{{Name: "xray", Kind: "service user"}}
+		}},
+		"package also owns protected library": {code: "NETWORK-RECLAMATION-PROTECTED", alter: func(observed *networkpolicy.Observations) {
+			observed.Reclamation.Packages = []networkpolicy.PackageConflict{{Name: "xray", Version: "1.2.3", Owns: "/usr/local/bin/xray", OwnedPaths: []string{"/usr/local/bin/xray", "/usr/lib/libshared.so"}}}
+		}},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			observed := completeObservations()
+			test.alter(&observed)
+			result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PreApproval})
+			if result.Reclamation != nil {
+				t.Fatalf("incomplete ownership received a plan: %+v", result.Reclamation)
+			}
+			assertFinding(t, result, networkpolicy.Failed, networkpolicy.Required, test.code)
+		})
 	}
 }
 

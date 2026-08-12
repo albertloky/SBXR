@@ -17,8 +17,9 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 	root := t.TempDir()
 	files := map[string]string{
 		"etc/os-release":                        "ID=ubuntu\nVERSION_ID=\"24.04\"\n",
-		"var/lib/dpkg/status":                   "Package: ubuntu-server\nStatus: install ok installed\n\nPackage: xray\nStatus: install ok installed\nVersion: 1.2.3\n\n",
-		"var/lib/dpkg/info/xray.list":           "/usr/local/bin/xray\n",
+		"var/lib/dpkg/status":                   "Package: ubuntu-server\nStatus: install ok installed\n\nPackage: xray\nStatus: install ok installed\nVersion: 1.2.3\n\nPackage: nginx\nStatus: install ok installed\nVersion: 1.24.0\n\n",
+		"var/lib/dpkg/info/xray.list":           "/usr/local/bin/xray\n/usr/share/doc/xray/copyright\n",
+		"var/lib/dpkg/info/nginx.list":          "/usr/sbin/nginx\n/usr/share/doc/nginx/copyright\n",
 		"etc/passwd":                            "xray:x:997:997::/nonexistent:/usr/sbin/nologin\n",
 		"proc/meminfo":                          "MemTotal:        1048576 kB\nSwapTotal:       8388608 kB\n",
 		"proc/net/tcp":                          "  sl  local_address rem_address   st tx_queue tr tm->when retrnsmt uid timeout inode\n   0: 00000000:01BB 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 4242\n",
@@ -32,6 +33,7 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 		"proc/sys/net/ipv4/ip_local_port_range": "32768 60999\n",
 		"sys/class/dmi/id/product_name":         "Fixture Hypervisor\n",
 		"usr/local/bin/xray":                    "inactive proxy remnant\n",
+		"usr/sbin/nginx":                        "active web server\n",
 	}
 	for name, data := range files {
 		path := filepath.Join(root, name)
@@ -45,10 +47,16 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 	if err := os.Chmod(filepath.Join(root, "usr/local/bin/xray"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(filepath.Join(root, "usr/sbin/nginx"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(filepath.Join(root, "proc/123/fd"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink("socket:[4242]", filepath.Join(root, "proc/123/fd/4")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/usr/sbin/nginx", filepath.Join(root, "proc/123/exe")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(root, "proc/124"), 0o700); err != nil {
@@ -84,7 +92,7 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 	if observed.Host.UbuntuVersion != "24.04" || !observed.Host.Systemd || observed.Host.LogicalCPUs < 1 || observed.Host.PhysicalRAM != 1<<30 || observed.Host.Virtualization != "Fixture Hypervisor" {
 		t.Fatalf("host facts = %+v", observed.Host)
 	}
-	if len(observed.Listeners) != 2 || observed.Listeners[0].Port != 443 || observed.Listeners[0].Protocol != networkpolicy.TCP || observed.Listeners[0].Process != "nginx" || observed.Listeners[0].Service != "nginx.service" || observed.Listeners[1].Address != "::1" || observed.Listeners[1].Port != 11080 || observed.Ephemeral != (networkpolicy.PortRange{First: 32768, Last: 60999}) {
+	if len(observed.Listeners) != 2 || observed.Listeners[0].Port != 443 || observed.Listeners[0].Protocol != networkpolicy.TCP || observed.Listeners[0].Process != "nginx" || observed.Listeners[0].Service != "nginx.service" || observed.Listeners[0].Executable != "/usr/sbin/nginx" || observed.Listeners[1].Address != "::1" || observed.Listeners[1].Port != 11080 || observed.Ephemeral != (networkpolicy.PortRange{First: 32768, Last: 60999}) {
 		t.Fatalf("network facts = listeners %+v ephemeral %+v", observed.Listeners, observed.Ephemeral)
 	}
 	if len(observed.PortCandidates) == 0 {
@@ -115,7 +123,7 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 	if len(observed.ResourcePaths) != 1 || observed.ResourcePaths[0] != "/usr/local/bin/xray" {
 		t.Fatalf("proxy remnants = %+v", observed.ResourcePaths)
 	}
-	if len(observed.Reclamation.Executables) != 1 || observed.Reclamation.Executables[0].SHA256 == "" || observed.Reclamation.Executables[0].Package != "xray" || observed.Reclamation.Executables[0].Process != "xray" || observed.Reclamation.Executables[0].Service != "xray.service" || len(observed.Reclamation.Packages) != 1 || observed.Reclamation.Packages[0].Version != "1.2.3" || len(observed.Reclamation.Identities) != 1 {
+	if len(observed.Reclamation.Executables) != 2 || observed.Reclamation.Executables[0].SHA256 == "" || observed.Reclamation.Executables[0].Package != "xray" || observed.Reclamation.Executables[0].Process != "xray" || observed.Reclamation.Executables[0].Service != "xray.service" || observed.Reclamation.Executables[1].Path != "/usr/sbin/nginx" || observed.Reclamation.Executables[1].SHA256 == "" || observed.Reclamation.Executables[1].Package != "nginx" || observed.Reclamation.Executables[1].Process != "nginx" || len(observed.Reclamation.Packages) != 2 || observed.Reclamation.Packages[0].Version != "1.2.3" || len(observed.Reclamation.Packages[0].OwnedPaths) != 2 || len(observed.Reclamation.Identities) != 1 || observed.Reclamation.Identities[0].Exclusive {
 		t.Fatalf("reclamation facts = %+v", observed.Reclamation)
 	}
 	if observed.Firewall.RootVerified {
