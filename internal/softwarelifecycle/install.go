@@ -151,6 +151,11 @@ func NewNetworkInstallContribution(result networkpolicy.Result, changeSet, desir
 		{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-INSTALL-PREFLIGHT"},
 		{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PostPublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-INSTALL-AGREEMENT"},
 	}
+	for _, gate := range result.PostApplyGates {
+		if gate.Code == "NETWORK-DOCKER-ABSENT" {
+			checks = append(checks, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PostPublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: gate.Code})
+		}
+	}
 	checks = append(checks, advisoryChecks...)
 	digest := sha256.Sum256([]byte(result.Binding.Digest + result.Policy.Nftables))
 	stableBody, _ := json.Marshal(struct {

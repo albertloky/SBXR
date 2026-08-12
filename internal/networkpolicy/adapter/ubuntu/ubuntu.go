@@ -117,6 +117,12 @@ func (a Adapter) Observe(request networkpolicy.ObservationRequest) (networkpolic
 					}
 					observed.Checksums["nftables"] = checksum(rules)
 					observed.Checksums["sbxr_nftables"] = sbxrChecksum
+					if observed.Reclamation.Docker != nil {
+						if dockerDigest, objects, dockerErr := dockerFirewallDigest(rules); dockerErr == nil && len(objects) > 0 {
+							observed.Reclamation.Docker.FirewallSHA256 = dockerDigest
+							observed.Reclamation.Docker.FirewallObjects = objects
+						}
+					}
 				}
 			}
 		}
@@ -183,11 +189,22 @@ func (a Adapter) reclamationFacts(paths []string, listeners []networkpolicy.List
 				break
 			}
 		}
-		if slices.Contains([]string{"docker.io", "docker-ce", "containerd.io"}, name) {
+		if slices.Contains([]string{"docker.io", "docker-ce", "docker-ce-cli", "containerd", "containerd.io"}, name) {
 			if facts.Docker == nil {
-				facts.Docker = &networkpolicy.DockerConflict{Service: "docker.service", Status: "installed", PreservedData: []string{"images", "volumes", "Compose definitions", "bind mounts", "application data"}}
+				facts.Docker = &networkpolicy.DockerConflict{Service: "docker.service", PreservedData: []string{"images", "volumes", "Compose definitions", "bind mounts", "container configuration", "application data"}}
 			}
-			facts.Docker.Packages = append(facts.Docker.Packages, name+" "+fields["Version"])
+			pkg := networkpolicy.PackageConflict{Name: name, Version: fields["Version"], OwnedPaths: append([]string(nil), owned...)}
+			if slices.Contains(owned, "/usr/bin/dockerd") && slices.ContainsFunc(owned, func(path string) bool { return strings.HasSuffix(path, "/docker.service") }) {
+				pkg.ControlSHA256, err = a.dockerPackageControlDigest(name)
+				if err != nil {
+					return networkpolicy.ReclamationFacts{}, err
+				}
+				pkg.Owns = "/usr/bin/dockerd"
+				facts.Docker.Packages = append(facts.Docker.Packages, pkg)
+			} else if ownedRuntimePath(owned) != "" || name == "docker-ce-cli" {
+				pkg.Owns = ownedRuntimePath(owned)
+				facts.Docker.RuntimePackages = append(facts.Docker.RuntimePackages, pkg)
+			}
 		}
 	}
 	for _, path := range paths {
@@ -224,7 +241,243 @@ func (a Adapter) reclamationFacts(paths []string, listeners []networkpolicy.List
 		file.Package = ownedPackage
 		facts.Executables = append(facts.Executables, file)
 	}
+	if facts.Docker != nil {
+		if owner, ok := processes["/usr/bin/dockerd"]; ok && owner.service == "docker.service" {
+			digest, _, digestErr := a.stableRegularDigest(a.path(owner.executable))
+			if digestErr != nil {
+				return networkpolicy.ReclamationFacts{}, digestErr
+			}
+			facts.Docker.Status, facts.Docker.ServiceExecutable, facts.Docker.ServiceSHA256, facts.Docker.ProcessID = "active", owner.executable, digest, owner.processID
+		} else if len(facts.Docker.Packages) > 0 {
+			return networkpolicy.ReclamationFacts{}, errors.New("active Docker service ownership unavailable")
+		} else {
+			facts.Docker = nil
+		}
+		if facts.Docker != nil {
+			facts.Docker.PreservedPaths, facts.Docker.PreservedSHA256, err = a.dockerPreservedPaths()
+			if err != nil {
+				return networkpolicy.ReclamationFacts{}, err
+			}
+		}
+	}
 	return facts, nil
+}
+
+func (a Adapter) dockerPackageControlDigest(packageName string) (string, error) {
+	files, err := filepath.Glob(a.path("/var/lib/dpkg/info/" + packageName + ".*"))
+	qualified, qualifiedErr := filepath.Glob(a.path("/var/lib/dpkg/info/" + packageName + ":*.*"))
+	if err != nil || qualifiedErr != nil {
+		return "", errors.New("Docker package control inventory unavailable")
+	}
+	files = append(files, qualified...)
+	slices.Sort(files)
+	digest := sha256.New()
+	for _, name := range files {
+		body, err := os.ReadFile(name)
+		info, statErr := os.Lstat(name)
+		if err != nil || statErr != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+			return "", err
+		}
+		fmt.Fprintf(digest, "%s\x00%d\x00", filepath.Base(name), info.Mode().Perm())
+		digest.Write(body)
+	}
+	if len(files) == 0 {
+		return "", errors.New("Docker package control inventory unavailable")
+	}
+	return hex.EncodeToString(digest.Sum(nil)), nil
+}
+
+func (a Adapter) dockerPreservedPaths() ([]string, []string, error) {
+	paths := []string{"/var/lib/docker", "/etc/docker"}
+	containers := a.path("/var/lib/docker/containers")
+	if _, err := os.Stat(containers); err == nil {
+		if err := filepath.Walk(containers, func(name string, info os.FileInfo, err error) error {
+			if err != nil || info == nil {
+				return errors.New("Docker container inventory unavailable")
+			}
+			if !info.Mode().IsRegular() || filepath.Ext(name) != ".json" {
+				return nil
+			}
+			body, err := os.ReadFile(name)
+			if err != nil {
+				return err
+			}
+			var value any
+			if json.Unmarshal(body, &value) != nil {
+				return errors.New("Docker container configuration invalid")
+			}
+			collectDockerPaths("", value, &paths)
+			return nil
+		}); err != nil {
+			return nil, nil, err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, nil, err
+	}
+	var existing, digests []string
+	for _, preserved := range paths {
+		if _, err := os.Lstat(a.path(preserved)); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		digest, err := a.digestPreservedTree(preserved)
+		if err != nil {
+			return nil, nil, err
+		}
+		existing, digests = append(existing, preserved), append(digests, digest)
+	}
+	if len(existing) == 0 {
+		return nil, nil, errors.New("Docker preserved data inventory unavailable")
+	}
+	return existing, digests, nil
+}
+
+func collectDockerPaths(key string, value any, paths *[]string) {
+	switch value := value.(type) {
+	case map[string]any:
+		for childKey, child := range value {
+			collectDockerPaths(childKey, child, paths)
+		}
+	case []any:
+		for _, child := range value {
+			collectDockerPaths(key, child, paths)
+		}
+	case string:
+		lower := strings.ToLower(key)
+		if !strings.Contains(lower, "source") && !strings.Contains(lower, "bind") && !strings.Contains(lower, "working_dir") && !strings.Contains(lower, "config_files") {
+			return
+		}
+		for _, field := range strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ';' }) {
+			if strings.Contains(lower, "bind") {
+				field, _, _ = strings.Cut(field, ":")
+			}
+			field = strings.TrimSpace(field)
+			if filepath.IsAbs(field) && !strings.HasPrefix(field, "/var/lib/docker/") && !strings.HasPrefix(field, "/etc/docker/") && !slices.Contains(*paths, filepath.Clean(field)) {
+				*paths = append(*paths, filepath.Clean(field))
+			}
+		}
+	}
+}
+
+func dockerFirewallDigest(data []byte) (string, []string, error) {
+	var document struct {
+		Nftables []map[string]json.RawMessage `json:"nftables"`
+	}
+	if err := json.Unmarshal(data, &document); err != nil {
+		return "", nil, err
+	}
+	chains := map[string]bool{}
+	for _, item := range document.Nftables {
+		raw, ok := item["chain"]
+		if !ok {
+			continue
+		}
+		var chain struct {
+			Family string `json:"family"`
+			Table  string `json:"table"`
+			Name   string `json:"name"`
+		}
+		if json.Unmarshal(raw, &chain) != nil {
+			return "", nil, errors.New("Docker firewall inventory invalid")
+		}
+		lower := strings.ToLower(chain.Name)
+		if lower == "docker" || strings.HasPrefix(lower, "docker-") {
+			chains[chain.Family+"\x00"+chain.Table+"\x00"+chain.Name] = true
+		}
+	}
+	var docker []map[string]json.RawMessage
+	for _, item := range document.Nftables {
+		if dockerFirewallItem(item, chains) {
+			docker = append(docker, item)
+		}
+	}
+	encoded, _ := json.Marshal(docker)
+	objects := make([]string, len(docker))
+	for index, item := range docker {
+		itemBody, _ := json.Marshal(item)
+		objects[index] = string(itemBody)
+	}
+	return checksum(encoded), objects, nil
+}
+
+func dockerFirewallItem(item map[string]json.RawMessage, chains map[string]bool) bool {
+	for kind, raw := range item {
+		var identity struct{ Family, Table, Name, Chain string }
+		if json.Unmarshal(raw, &identity) != nil {
+			return false
+		}
+		if kind == "chain" && chains[identity.Family+"\x00"+identity.Table+"\x00"+identity.Name] {
+			return true
+		}
+		if kind == "rule" {
+			if chains[identity.Family+"\x00"+identity.Table+"\x00"+identity.Chain] {
+				return true
+			}
+			var rule any
+			if json.Unmarshal(raw, &rule) != nil {
+				return false
+			}
+			for key := range chains {
+				parts := strings.Split(key, "\x00")
+				if parts[0] == identity.Family && parts[1] == identity.Table && referencesTarget(rule, parts[2]) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func referencesTarget(value any, target string) bool {
+	switch value := value.(type) {
+	case map[string]any:
+		if got, ok := value["target"].(string); ok && got == target {
+			return true
+		}
+		for _, child := range value {
+			if referencesTarget(child, target) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range value {
+			if referencesTarget(child, target) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (a Adapter) digestPreservedTree(root string) (string, error) {
+	digest := sha256.New()
+	err := filepath.Walk(a.path(root), func(name string, info os.FileInfo, err error) error {
+		if err != nil || info == nil || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("Docker preserved data is unproved")
+		}
+		relative := strings.TrimPrefix(name, a.root)
+		fmt.Fprintf(digest, "%s\x00%d\x00%d\x00", relative, info.Mode(), info.Size())
+		if info.Mode().IsRegular() {
+			body, readErr := os.ReadFile(name)
+			if readErr != nil {
+				return readErr
+			}
+			digest.Write(body)
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(digest.Sum(nil)), nil
+}
+
+func ownedRuntimePath(paths []string) string {
+	for _, path := range paths {
+		if path == "/usr/bin/containerd" || strings.HasSuffix(path, "/containerd.service") {
+			return path
+		}
+	}
+	return ""
 }
 
 func (a Adapter) currentShells() ([]string, error) {

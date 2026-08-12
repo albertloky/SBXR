@@ -629,12 +629,21 @@ type ReclamationTarget struct {
 	OwnedPaths                                               []string
 	Identities                                               []ReclamationIdentity
 	Packages                                                 []ReclamationPackageTarget
+	Docker                                                   *DockerReclamationTarget
+}
+
+type DockerReclamationTarget struct {
+	Service, Executable, ExecutableSHA256, ProcessID, FirewallSHA256 string
+	RuntimePackages                                                  []ReclamationPackageTarget
+	PreservedData                                                    []string
+	PreservedPaths, PreservedSHA256                                  []string
+	FirewallObjects                                                  []string
 }
 
 type ReclamationPackageTarget struct {
-	Path, SHA256, ProcessID, Package, PackageVersion string
-	OwnedPaths                                       []string
-	Identities                                       []ReclamationIdentity
+	Path, SHA256, ProcessID, Package, PackageVersion, ControlSHA256 string
+	OwnedPaths                                                      []string
+	Identities                                                      []ReclamationIdentity
 }
 
 type ReclamationIdentity struct{ Name, Kind string }
@@ -644,6 +653,26 @@ type ReclamationAuthority interface {
 }
 
 func validReclamationTarget(target ReclamationTarget) bool {
+	if target.Kind == "docker" {
+		if target.Docker == nil || target.Path != "" || target.SHA256 != "" || target.ProcessID != "" || target.Package != "" || len(target.Packages) != 1 || !validSHA256(target.ReviewSHA256) || target.PolicyVersion != 1 {
+			return false
+		}
+		docker := target.Docker
+		if docker.Service != "docker.service" || docker.Executable != "/usr/bin/dockerd" || !validSHA256(docker.ExecutableSHA256) || !validReclamationProcessID(docker.ProcessID) || !validSHA256(docker.FirewallSHA256) || len(docker.FirewallObjects) == 0 || len(docker.RuntimePackages) == 0 || len(docker.PreservedData) != 6 || len(docker.PreservedPaths) == 0 || len(docker.PreservedPaths) != len(docker.PreservedSHA256) {
+			return false
+		}
+		for _, pkg := range target.Packages {
+			if !slices.Contains([]string{"docker.io", "docker-ce"}, pkg.Package) || pkg.PackageVersion == "" || !validSHA256(pkg.ControlSHA256) || len(pkg.OwnedPaths) == 0 {
+				return false
+			}
+		}
+		for _, pkg := range docker.RuntimePackages {
+			if !slices.Contains([]string{"containerd", "containerd.io", "docker-ce-cli"}, pkg.Package) || pkg.PackageVersion == "" || len(pkg.OwnedPaths) == 0 {
+				return false
+			}
+		}
+		return true
+	}
 	if target.Kind == "package-purge-set" {
 		if target.Path != "" || target.SHA256 != "" || target.Interpreter != "" || target.ProcessID != "" || target.Package != "" || target.PackageVersion != "" || len(target.Identities) != 0 || target.PolicyVersion != 1 || !validSHA256(target.ReviewSHA256) || len(target.Packages) < 2 {
 			return false

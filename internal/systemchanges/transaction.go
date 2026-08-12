@@ -977,36 +977,62 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 	}
 	var reclamation *ReclamationTarget
 	if spec.Reclamation != nil {
-		policyVersion, review, kinds, paths, digests, interpreters, processIDs, packages, packageVersions, ownedPaths, identityNames, identityKinds, valid := spec.Reclamation.SystemChangesReclamation()
-		if !valid || len(kinds) == 0 || len(paths) != len(kinds) || len(digests) != len(kinds) || len(interpreters) != len(kinds) || len(processIDs) != len(kinds) || len(packages) != len(kinds) || len(packageVersions) != len(kinds) || len(ownedPaths) != len(kinds) || len(identityNames) != len(kinds) || len(identityKinds) != len(kinds) {
-			return finish(lock, nothingChanged(spec, "SYSTEM-CHANGES-RECLAMATION-STALE", Prepared))
+		dockerReview, service, executable, executableSHA256, dockerPID, firewallSHA256, firewallObjects, dockerPackages, dockerVersions, controlSHA256, dockerOwnedPaths, runtimePackages, runtimeVersions, runtimeOwnedPaths, preserved, preservedPaths, preservedSHA256, dockerValid := "", "", "", "", "", "", []string(nil), []string(nil), []string(nil), []string(nil), [][]string(nil), []string(nil), []string(nil), [][]string(nil), []string(nil), []string(nil), []string(nil), false
+		if dockerAuthority, ok := spec.Reclamation.(interface {
+			SystemChangesDockerReclamation() (string, string, string, string, string, string, []string, []string, []string, []string, [][]string, []string, []string, [][]string, []string, []string, []string, bool)
+		}); ok {
+			dockerReview, service, executable, executableSHA256, dockerPID, firewallSHA256, firewallObjects, dockerPackages, dockerVersions, controlSHA256, dockerOwnedPaths, runtimePackages, runtimeVersions, runtimeOwnedPaths, preserved, preservedPaths, preservedSHA256, dockerValid = dockerAuthority.SystemChangesDockerReclamation()
 		}
-		identities := func(index int) []ReclamationIdentity {
-			if len(identityNames[index]) != len(identityKinds[index]) {
-				return nil
-			}
-			result := make([]ReclamationIdentity, len(identityNames[index]))
-			for identity := range result {
-				result[identity] = ReclamationIdentity{Name: identityNames[index][identity], Kind: identityKinds[index][identity]}
-			}
-			return result
-		}
-		target := ReclamationTarget{Kind: kinds[0], Path: paths[0], SHA256: digests[0], Interpreter: interpreters[0], ProcessID: processIDs[0], ReviewSHA256: review, Package: packages[0], PackageVersion: packageVersions[0], PolicyVersion: policyVersion, Identities: identities(0)}
-		if len(kinds) > 1 {
-			target = ReclamationTarget{Kind: "package-purge-set", ReviewSHA256: review, PolicyVersion: policyVersion}
-			for index := range kinds {
-				if kinds[index] != "package-purge" {
+		if dockerValid {
+			target := ReclamationTarget{Kind: "docker", ReviewSHA256: dockerReview, PolicyVersion: 1, Docker: &DockerReclamationTarget{Service: service, Executable: executable, ExecutableSHA256: executableSHA256, ProcessID: dockerPID, FirewallSHA256: firewallSHA256, FirewallObjects: append([]string(nil), firewallObjects...), PreservedData: append([]string(nil), preserved...), PreservedPaths: append([]string(nil), preservedPaths...), PreservedSHA256: append([]string(nil), preservedSHA256...)}}
+			for index := range runtimePackages {
+				if index >= len(runtimeVersions) || index >= len(runtimeOwnedPaths) {
 					return finish(lock, nothingChanged(spec, "SYSTEM-CHANGES-RECLAMATION-STALE", Prepared))
 				}
-				target.Packages = append(target.Packages, ReclamationPackageTarget{Path: paths[index], SHA256: digests[index], ProcessID: processIDs[index], Package: packages[index], PackageVersion: packageVersions[index], OwnedPaths: append([]string(nil), ownedPaths[index]...), Identities: identities(index)})
+				target.Docker.RuntimePackages = append(target.Docker.RuntimePackages, ReclamationPackageTarget{Package: runtimePackages[index], PackageVersion: runtimeVersions[index], OwnedPaths: append([]string(nil), runtimeOwnedPaths[index]...)})
 			}
-		} else if len(ownedPaths) == 1 {
-			target.OwnedPaths = append([]string(nil), ownedPaths[0]...)
+			for index := range dockerPackages {
+				if index >= len(dockerVersions) || index >= len(controlSHA256) || index >= len(dockerOwnedPaths) {
+					return finish(lock, nothingChanged(spec, "SYSTEM-CHANGES-RECLAMATION-STALE", Prepared))
+				}
+				target.Packages = append(target.Packages, ReclamationPackageTarget{Package: dockerPackages[index], PackageVersion: dockerVersions[index], ControlSHA256: controlSHA256[index], OwnedPaths: append([]string(nil), dockerOwnedPaths[index]...)})
+			}
+			if !validReclamationTarget(target) {
+				return finish(lock, nothingChanged(spec, "SYSTEM-CHANGES-RECLAMATION-STALE", Prepared))
+			}
+			reclamation = &target
+		} else {
+			policyVersion, review, kinds, paths, digests, interpreters, processIDs, packages, packageVersions, ownedPaths, identityNames, identityKinds, valid := spec.Reclamation.SystemChangesReclamation()
+			if !valid || len(kinds) == 0 || len(paths) != len(kinds) || len(digests) != len(kinds) || len(interpreters) != len(kinds) || len(processIDs) != len(kinds) || len(packages) != len(kinds) || len(packageVersions) != len(kinds) || len(ownedPaths) != len(kinds) || len(identityNames) != len(kinds) || len(identityKinds) != len(kinds) {
+				return finish(lock, nothingChanged(spec, "SYSTEM-CHANGES-RECLAMATION-STALE", Prepared))
+			}
+			identities := func(index int) []ReclamationIdentity {
+				if len(identityNames[index]) != len(identityKinds[index]) {
+					return nil
+				}
+				result := make([]ReclamationIdentity, len(identityNames[index]))
+				for identity := range result {
+					result[identity] = ReclamationIdentity{Name: identityNames[index][identity], Kind: identityKinds[index][identity]}
+				}
+				return result
+			}
+			target := ReclamationTarget{Kind: kinds[0], Path: paths[0], SHA256: digests[0], Interpreter: interpreters[0], ProcessID: processIDs[0], ReviewSHA256: review, Package: packages[0], PackageVersion: packageVersions[0], PolicyVersion: policyVersion, Identities: identities(0)}
+			if len(kinds) > 1 {
+				target = ReclamationTarget{Kind: "package-purge-set", ReviewSHA256: review, PolicyVersion: policyVersion}
+				for index := range kinds {
+					if kinds[index] != "package-purge" {
+						return finish(lock, nothingChanged(spec, "SYSTEM-CHANGES-RECLAMATION-STALE", Prepared))
+					}
+					target.Packages = append(target.Packages, ReclamationPackageTarget{Path: paths[index], SHA256: digests[index], ProcessID: processIDs[index], Package: packages[index], PackageVersion: packageVersions[index], OwnedPaths: append([]string(nil), ownedPaths[index]...), Identities: identities(index)})
+				}
+			} else if len(ownedPaths) == 1 {
+				target.OwnedPaths = append([]string(nil), ownedPaths[0]...)
+			}
+			if !validReclamationTarget(target) {
+				return finish(lock, nothingChanged(spec, "SYSTEM-CHANGES-RECLAMATION-STALE", Prepared))
+			}
+			reclamation = &target
 		}
-		if !validReclamationTarget(target) {
-			return finish(lock, nothingChanged(spec, "SYSTEM-CHANGES-RECLAMATION-STALE", Prepared))
-		}
-		reclamation = &target
 	}
 	preparation := Preparation{
 		ChangeSet: spec.Identity, Mutation: spec.Mutation, OutcomeOwner: spec.OutcomeOwner, Starting: spec.StartingState,

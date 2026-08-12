@@ -3,6 +3,7 @@ package ubuntu
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -11,9 +12,11 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -577,6 +580,12 @@ func (a Adapter) VerifyReclamationReady(lease systemchanges.ExecutionLease, chan
 	if !safeName(changeSet) {
 		return errors.New("reclamation transaction unavailable")
 	}
+	if target.Kind == "docker" {
+		if err := a.verifyDockerReclamation(target, timeout); err != nil {
+			return err
+		}
+		return a.writeReclamationPackageInventory(changeSet, target, timeout)
+	}
 	if target.Kind == "package-purge-set" {
 		for _, item := range packageReclamationTargets(target) {
 			if err := a.verifyReclamationReadyTarget(lease, item, timeout); err != nil {
@@ -624,6 +633,16 @@ func sameFilesystem(first, second os.FileInfo) bool {
 }
 
 func (a Adapter) DeleteReclamationTarget(lease systemchanges.ExecutionLease, changeSet string, target systemchanges.ReclamationTarget, timeout time.Duration) (systemchanges.StepEvidence, error) {
+	if target.Kind == "docker" {
+		if !lease.Authorized() || !safeName(changeSet) {
+			return systemchanges.StepEvidence{}, errors.New("Docker reclamation unavailable")
+		}
+		evidence, err := a.deleteDockerReclamation(target, timeout)
+		if err != nil {
+			return systemchanges.StepEvidence{}, err
+		}
+		return evidence, a.verifyReclamationPackageInventory(changeSet, dockerPackageTargets(target), timeout)
+	}
 	if target.Kind == "package-purge-set" {
 		items := packageReclamationTargets(target)
 		for _, item := range items {
@@ -709,6 +728,12 @@ func (a Adapter) deleteReclamationTarget(changeSet string, target systemchanges.
 }
 
 func (a Adapter) StopReclamationProcess(lease systemchanges.ExecutionLease, target systemchanges.ReclamationTarget, timeout time.Duration) (systemchanges.StepEvidence, error) {
+	if target.Kind == "docker" {
+		if !lease.Authorized() {
+			return systemchanges.StepEvidence{}, errors.New("Docker reclamation unavailable")
+		}
+		return a.stopDockerReclamation(target, timeout, lease.RecoveryAuthorized())
+	}
 	if target.Kind == "package-purge-set" {
 		items := packageReclamationTargets(target)
 		for _, item := range items {
@@ -756,6 +781,27 @@ func (a Adapter) StopReclamationProcess(lease systemchanges.ExecutionLease, targ
 }
 
 func (a Adapter) InspectReclamationTarget(lease systemchanges.ExecutionLease, changeSet string, target systemchanges.ReclamationTarget, _ time.Duration) (systemchanges.StepEffect, error) {
+	if target.Kind == "docker" {
+		if !lease.RecoveryAuthorized() || !safeName(changeSet) {
+			return "", errors.New("Docker recovery unavailable")
+		}
+		targets := dockerPackageTargets(target)
+		if _, err := a.readReclamationPackageInventory(changeSet, targets); err != nil {
+			return "", err
+		}
+		for _, pkg := range target.Packages {
+			if a.packageInstalled(systemchanges.ReclamationTarget{Package: pkg.Package, PackageVersion: pkg.PackageVersion}, time.Minute) {
+				return systemchanges.StepEffectPresent, nil
+			}
+		}
+		if err := a.verifyDockerPreservation(target, time.Minute); err != nil {
+			return "", err
+		}
+		if err := a.verifyReclamationPackageInventory(changeSet, targets, time.Minute); err != nil {
+			return "", err
+		}
+		return systemchanges.StepEffectAbsent, nil
+	}
 	if target.Kind == "package-purge-set" {
 		items := packageReclamationTargets(target)
 		if _, err := a.readReclamationPackageInventory(changeSet, items); err != nil {
@@ -815,6 +861,298 @@ func packageReclamationTargets(target systemchanges.ReclamationTarget) []systemc
 	return result
 }
 
+func dockerPackageTargets(target systemchanges.ReclamationTarget) []systemchanges.ReclamationTarget {
+	result := make([]systemchanges.ReclamationTarget, len(target.Packages))
+	for index, pkg := range target.Packages {
+		result[index] = systemchanges.ReclamationTarget{Kind: "package-purge", Package: pkg.Package, PackageVersion: pkg.PackageVersion, OwnedPaths: append([]string(nil), pkg.OwnedPaths...), ReviewSHA256: target.ReviewSHA256}
+	}
+	return result
+}
+
+func (a Adapter) verifyDockerReclamation(target systemchanges.ReclamationTarget, timeout time.Duration) error {
+	if target.Docker == nil || target.Docker.Service != "docker.service" || target.Docker.Executable != "/usr/bin/dockerd" || len(target.Packages) == 0 {
+		return errors.New("Docker reclamation invalid")
+	}
+	process := systemchanges.ReclamationTarget{Kind: "executable", Path: target.Docker.Executable, SHA256: target.Docker.ExecutableSHA256, ProcessID: target.Docker.ProcessID}
+	if err := a.verifyReclamationProcess(process); err != nil {
+		return errors.New("Docker service process changed")
+	}
+	if _, _, err := a.reclamationDigestAt(path.Join(a.root, strings.TrimPrefix(target.Docker.Executable, "/")), process); err != nil {
+		return errors.New("Docker executable changed")
+	}
+	firewall, err := a.reclamationPackageCommand(timeout, "/usr/sbin/nft", "--json", "list", "ruleset")
+	firewallDigest, tables, parseErr := dockerFirewallState(firewall)
+	if err != nil || parseErr != nil || len(tables) == 0 || firewallDigest != target.Docker.FirewallSHA256 {
+		return errors.New("Docker firewall state changed")
+	}
+	return a.verifyDockerPackages(target, timeout)
+}
+
+func (a Adapter) verifyDockerPackages(target systemchanges.ReclamationTarget, timeout time.Duration) error {
+	if err := a.verifyDockerPreservation(target, timeout); err != nil {
+		return err
+	}
+	for _, pkg := range target.Packages {
+		if slices.ContainsFunc(target.Docker.RuntimePackages, func(runtime systemchanges.ReclamationPackageTarget) bool { return runtime.Package == pkg.Package }) {
+			return errors.New("independent runtime package selected for purge")
+		}
+		if err := a.verifyDockerOwner(pkg, timeout); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a Adapter) verifyDockerOwner(target systemchanges.ReclamationPackageTarget, timeout time.Duration) error {
+	digest, err := a.dockerControlDigest(target.Package)
+	if err != nil || digest != target.ControlSHA256 || a.verifyPackageOwnership(target, timeout) != nil {
+		return errors.New("Docker package control changed")
+	}
+	return nil
+}
+
+func (a Adapter) verifyDockerPreservation(target systemchanges.ReclamationTarget, timeout time.Duration) error {
+	for index, preserved := range target.Docker.PreservedPaths {
+		digest, err := a.digestDockerPreservedTree(preserved)
+		if err != nil || digest != target.Docker.PreservedSHA256[index] {
+			return errors.New("Docker preserved data changed")
+		}
+	}
+	for _, runtime := range target.Docker.RuntimePackages {
+		if err := a.verifyPackageOwnership(runtime, timeout); err != nil {
+			return errors.New("independent runtime package changed")
+		}
+	}
+	return nil
+}
+
+func (a Adapter) digestDockerPreservedTree(root string) (string, error) {
+	digest := sha256.New()
+	err := filepath.Walk(path.Join(a.root, strings.TrimPrefix(root, "/")), func(name string, info os.FileInfo, err error) error {
+		if err != nil || info == nil || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("Docker preserved data is unproved")
+		}
+		relative := strings.TrimPrefix(name, a.root)
+		fmt.Fprintf(digest, "%s\x00%d\x00%d\x00", relative, info.Mode(), info.Size())
+		if info.Mode().IsRegular() {
+			body, readErr := os.ReadFile(name)
+			if readErr != nil {
+				return readErr
+			}
+			digest.Write(body)
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(digest.Sum(nil)), nil
+}
+
+func (a Adapter) stopDockerReclamation(target systemchanges.ReclamationTarget, timeout time.Duration, recovery bool) (systemchanges.StepEvidence, error) {
+	if err := a.verifyDockerReclamation(target, timeout); err != nil {
+		if !recovery {
+			return systemchanges.StepEvidence{}, err
+		}
+		output, statusErr := a.reclamationPackageCommand(timeout, "/usr/bin/systemctl", "is-active", "docker.service")
+		if dockerInactive(output, statusErr) {
+			process := systemchanges.ReclamationTarget{Kind: "executable", Path: target.Docker.Executable, SHA256: target.Docker.ExecutableSHA256, ProcessID: target.Docker.ProcessID}
+			if _, _, digestErr := a.reclamationDigestAt(path.Join(a.root, strings.TrimPrefix(target.Docker.Executable, "/")), process); digestErr != nil || a.verifyDockerPackages(target, timeout) != nil {
+				return systemchanges.StepEvidence{}, errors.New("Docker recovery ownership changed")
+			}
+			if err := a.removeDockerFirewall(target, timeout); err != nil {
+				return systemchanges.StepEvidence{}, err
+			}
+			digest := sha256.Sum256([]byte(target.Docker.Service + "\x00" + target.Docker.ExecutableSHA256))
+			return systemchanges.StepEvidence{Code: "docker-service-stopped", SHA256: hex.EncodeToString(digest[:])}, nil
+		}
+		pid, pidErr := a.reclamationPackageCommand(timeout, "/usr/bin/systemctl", "show", "--property", "MainPID", "--value", "docker.service")
+		target.Docker.ProcessID = strings.TrimSpace(string(pid))
+		parsedPID, parseErr := strconv.Atoi(target.Docker.ProcessID)
+		process := systemchanges.ReclamationTarget{Kind: "executable", Path: target.Docker.Executable, SHA256: target.Docker.ExecutableSHA256, ProcessID: target.Docker.ProcessID}
+		if statusErr != nil || strings.TrimSpace(string(output)) != "active" || pidErr != nil || parseErr != nil || parsedPID <= 0 || a.verifyReclamationProcess(process) != nil {
+			return systemchanges.StepEvidence{}, errors.New("Docker recovery process changed")
+		}
+		if _, _, digestErr := a.reclamationDigestAt(path.Join(a.root, strings.TrimPrefix(target.Docker.Executable, "/")), process); digestErr != nil || a.verifyDockerPackages(target, timeout) != nil {
+			return systemchanges.StepEvidence{}, errors.New("Docker recovery ownership changed")
+		}
+	}
+	return a.stopVerifiedDocker(target, timeout)
+}
+
+func (a Adapter) stopVerifiedDocker(target systemchanges.ReclamationTarget, timeout time.Duration) (systemchanges.StepEvidence, error) {
+	pid, err := strconv.Atoi(target.Docker.ProcessID)
+	stop := a.stopProcess
+	if stop == nil {
+		stop = signalReclamationProcess
+	}
+	process := systemchanges.ReclamationTarget{Kind: "executable", Path: target.Docker.Executable, ProcessID: target.Docker.ProcessID}
+	if err != nil || stop(pid, path.Join(a.root, "proc", target.Docker.ProcessID, "status"), timeout, func() error { return a.verifyReclamationProcess(process) }) != nil {
+		return systemchanges.StepEvidence{}, errors.New("Docker service process changed")
+	}
+	if _, err := a.reclamationPackageCommand(timeout, "/usr/bin/systemctl", "stop", "docker.service"); err != nil {
+		return systemchanges.StepEvidence{}, errors.New("Docker service stop failed")
+	}
+	if err := a.removeDockerFirewall(target, timeout); err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	if output, statusErr := a.reclamationPackageCommand(timeout, "/usr/bin/systemctl", "is-active", "docker.service"); !dockerInactive(output, statusErr) {
+		return systemchanges.StepEvidence{}, errors.New("Docker service stop unproved")
+	}
+	digest := sha256.Sum256([]byte(target.Docker.Service + "\x00" + target.Docker.ExecutableSHA256))
+	return systemchanges.StepEvidence{Code: "docker-service-stopped", SHA256: hex.EncodeToString(digest[:])}, nil
+}
+
+func (a Adapter) removeDockerFirewall(target systemchanges.ReclamationTarget, timeout time.Duration) error {
+	rules, err := a.reclamationPackageCommand(timeout, "/usr/sbin/nft", "--json", "list", "ruleset")
+	_, objects, parseErr := dockerFirewallState(rules)
+	if err != nil || parseErr != nil {
+		return errors.New("Docker firewall state changed")
+	}
+	authorized := map[string]bool{}
+	for _, raw := range target.Docker.FirewallObjects {
+		if !json.Valid([]byte(raw)) {
+			return errors.New("Docker firewall authority invalid")
+		}
+		authorized[raw] = true
+	}
+	for _, current := range objects {
+		if !authorized[current.Raw] {
+			return errors.New("Docker firewall state changed")
+		}
+	}
+	slices.Reverse(objects)
+	for _, object := range objects {
+		arguments := []string{"delete", object.Kind, object.Family, object.Table}
+		if object.Kind == "rule" {
+			arguments = append(arguments, "handle", strconv.FormatUint(object.Handle, 10))
+		} else {
+			arguments = append(arguments, object.Name)
+		}
+		if _, err := a.reclamationPackageCommand(timeout, "/usr/sbin/nft", arguments...); err != nil {
+			return errors.New("Docker firewall removal failed")
+		}
+	}
+	return nil
+}
+
+func dockerInactive(output []byte, err error) bool {
+	if err == nil {
+		return false
+	}
+	switch strings.TrimSpace(string(output)) {
+	case "inactive", "failed", "unknown":
+		return true
+	}
+	return false
+}
+
+func (a Adapter) deleteDockerReclamation(target systemchanges.ReclamationTarget, timeout time.Duration) (systemchanges.StepEvidence, error) {
+	if err := a.verifyDockerPackages(target, timeout); err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	if output, statusErr := a.reclamationPackageCommand(timeout, "/usr/bin/systemctl", "is-active", "docker.service"); !dockerInactive(output, statusErr) {
+		return systemchanges.StepEvidence{}, errors.New("Docker service restarted")
+	}
+	firewall, err := a.reclamationPackageCommand(timeout, "/usr/sbin/nft", "--json", "list", "ruleset")
+	_, tables, parseErr := dockerFirewallState(firewall)
+	if err != nil || parseErr != nil || len(tables) != 0 {
+		return systemchanges.StepEvidence{}, errors.New("Docker firewall effects remain")
+	}
+	for _, pkg := range target.Packages {
+		if err := a.purgeDockerPackage(pkg, target.Docker.PreservedPaths, timeout); err != nil {
+			return systemchanges.StepEvidence{}, err
+		}
+	}
+	digest := sha256.Sum256([]byte(target.ReviewSHA256 + "\x00" + target.Docker.FirewallSHA256))
+	return systemchanges.StepEvidence{Code: "docker-owners-purged", SHA256: hex.EncodeToString(digest[:])}, nil
+}
+
+func (a Adapter) purgeDockerPackage(target systemchanges.ReclamationPackageTarget, preserved []string, timeout time.Duration) error {
+	if err := a.verifyDockerOwner(target, timeout); err != nil {
+		return err
+	}
+	if a.dockerPurge != nil {
+		return a.dockerPurge(target, preserved, timeout)
+	}
+	body, _ := json.Marshal(struct {
+		Target    systemchanges.ReclamationPackageTarget `json:"target"`
+		Preserved []string                               `json:"preserved"`
+	}{target, preserved})
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, "/proc/self/exe", "private", "docker-purge")
+	command.Stdin, command.Env = bytes.NewReader(body), []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"}
+	if output, err := command.CombinedOutput(); err != nil || len(output) != 0 || a.packageInstalled(systemchanges.ReclamationTarget{Package: target.Package, PackageVersion: target.PackageVersion}, timeout) {
+		return errors.New("exact Docker package purge failed")
+	}
+	return nil
+}
+
+func ServeDockerPurge(source io.Reader) error {
+	var request struct {
+		Target    systemchanges.ReclamationPackageTarget `json:"target"`
+		Preserved []string                               `json:"preserved"`
+	}
+	if json.NewDecoder(io.LimitReader(source, 1<<20)).Decode(&request) != nil || !slices.Contains([]string{"docker.io", "docker-ce"}, request.Target.Package) || !validDigest(request.Target.ControlSHA256) || len(request.Preserved) == 0 {
+		return errors.New("Docker purge request invalid")
+	}
+	lock, err := os.OpenFile("/var/lib/dpkg/lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	lockSpec := syscall.Flock_t{Type: syscall.F_WRLCK, Whence: io.SeekStart}
+	if syscall.FcntlFlock(lock.Fd(), syscall.F_SETLKW, &lockSpec) != nil {
+		return errors.New("Docker package lock unavailable")
+	}
+	if _, _, errno := syscall.Syscall(syscall.SYS_FCNTL, lock.Fd(), syscall.F_SETFD, 0); errno != 0 {
+		return errors.New("Docker package lock handoff unavailable")
+	}
+	adapter := Adapter{root: "/", uid: 0}
+	if err := adapter.verifyDockerOwner(request.Target, time.Minute); err != nil {
+		return err
+	}
+	err = enterDockerPurgeNamespace(request.Target.Package, request.Preserved)
+	runtime.KeepAlive(lock)
+	return err
+}
+
+func (a Adapter) dockerControlDigest(packageName string) (string, error) {
+	return dockerControlDigest(path.Join(a.root, "var/lib/dpkg/info"), packageName, a)
+}
+
+func dockerControlFiles(directory, packageName string) ([]string, error) {
+	files, err := filepath.Glob(path.Join(directory, packageName+".*"))
+	qualified, qualifiedErr := filepath.Glob(path.Join(directory, packageName+":*.*"))
+	if err != nil || qualifiedErr != nil {
+		return nil, errors.New("Docker package control inventory unavailable")
+	}
+	files = append(files, qualified...)
+	sort.Strings(files)
+	return files, nil
+}
+
+func dockerControlDigest(directory, packageName string, a Adapter) (string, error) {
+	files, err := dockerControlFiles(directory, packageName)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.New()
+	for _, name := range files {
+		body, err := a.readStablePackageControl(directory, name)
+		info, statErr := os.Lstat(name)
+		if err != nil || statErr != nil {
+			return "", err
+		}
+		fmt.Fprintf(digest, "%s\x00%d\x00", filepath.Base(name), info.Mode().Perm())
+		digest.Write(body)
+	}
+	if len(files) == 0 {
+		return "", errors.New("Docker package control inventory unavailable")
+	}
+	return hex.EncodeToString(digest.Sum(nil)), nil
+}
+
 func (a Adapter) reclamationPackageCommand(timeout time.Duration, name string, arguments ...string) ([]byte, error) {
 	run := a.packageCommand
 	if run == nil {
@@ -826,6 +1164,24 @@ func (a Adapter) reclamationPackageCommand(timeout time.Duration, name string, a
 func (a Adapter) packageInstalled(target systemchanges.ReclamationTarget, timeout time.Duration) bool {
 	output, err := a.reclamationPackageCommand(timeout, "/usr/bin/dpkg-query", "-W", "-f=${Status}\t${Version}\n", target.Package)
 	return err == nil && string(output) == "install ok installed\t"+target.PackageVersion+"\n"
+}
+
+func (a Adapter) verifyPackageOwnership(target systemchanges.ReclamationPackageTarget, timeout time.Duration) error {
+	if !a.packageInstalled(systemchanges.ReclamationTarget{Package: target.Package, PackageVersion: target.PackageVersion}, timeout) {
+		return errors.New("package ownership changed")
+	}
+	infoDirectory := path.Join(a.root, "var/lib/dpkg/info")
+	lists, _ := filepath.Glob(path.Join(infoDirectory, target.Package+".list"))
+	qualified, _ := filepath.Glob(path.Join(infoDirectory, target.Package+":*.list"))
+	lists = append(lists, qualified...)
+	if len(lists) != 1 {
+		return errors.New("package ownership changed")
+	}
+	body, err := a.readStablePackageControl(infoDirectory, lists[0])
+	if err != nil || !slices.Equal(strings.Fields(string(body)), target.OwnedPaths) {
+		return errors.New("package ownership changed")
+	}
+	return nil
 }
 
 func (a Adapter) packageHeld(name string, timeout time.Duration) bool {
@@ -2121,6 +2477,16 @@ func (a Adapter) Check(lease systemchanges.ExecutionLease, check systemchanges.C
 		}
 		return checker.CheckCandidate(step, timeout)
 	}
+	if check.Owner == systemchanges.NetworkPolicyModule && check.Code == "NETWORK-DOCKER-ABSENT" {
+		target, err := a.activeDockerReclamation()
+		if err != nil {
+			return systemchanges.Unknown, err
+		}
+		if err := a.dockerStillAbsent(target, timeout); err != nil {
+			return systemchanges.Failed, err
+		}
+		return systemchanges.Healthy, nil
+	}
 	if check.Owner == systemchanges.ConnectionProfilesModule && strings.HasPrefix(check.Code, "CONNECTION-PROFILES-") && strings.HasSuffix(check.Code, "-DIRECT-TLS") {
 		if a.profiles == nil {
 			return systemchanges.Unknown, errors.New("Connection Profiles health executor unavailable")
@@ -2136,6 +2502,145 @@ func (a Adapter) Check(lease systemchanges.ExecutionLease, check systemchanges.C
 		return systemchanges.Healthy, nil
 	}
 	return a.host.Check(check, phase, timeout)
+}
+
+func (a Adapter) activeDockerReclamation() (systemchanges.ReclamationTarget, error) {
+	root, err := os.OpenRoot(a.root)
+	if err != nil {
+		return systemchanges.ReclamationTarget{}, err
+	}
+	defer root.Close()
+	entries, err := fs.ReadDir(root.FS(), transactionDirectory)
+	if err != nil || len(entries) != 1 || !entries[0].IsDir() {
+		return systemchanges.ReclamationTarget{}, errors.New("active Docker transaction unavailable")
+	}
+	journal, err := readJournal(root, path.Join(transactionDirectory, entries[0].Name(), "journal.jsonl"))
+	if err != nil || !validJournal(journal) || journal[0].Reclamation == nil || journal[0].Reclamation.Kind != "docker" {
+		return systemchanges.ReclamationTarget{}, errors.New("active Docker reclamation unavailable")
+	}
+	return *journal[0].Reclamation, nil
+}
+
+func (a Adapter) dockerStillAbsent(target systemchanges.ReclamationTarget, timeout time.Duration) error {
+	if err := a.verifyDockerPreservation(target, timeout); err != nil {
+		return err
+	}
+	for _, pkg := range target.Packages {
+		if a.packageInstalled(systemchanges.ReclamationTarget{Package: pkg.Package, PackageVersion: pkg.PackageVersion}, timeout) {
+			return errors.New("Docker package returned")
+		}
+	}
+	if output, err := a.reclamationPackageCommand(timeout, "/usr/bin/systemctl", "is-active", "docker.service"); !dockerInactive(output, err) {
+		return errors.New("Docker service returned")
+	}
+	firewall, err := a.reclamationPackageCommand(timeout, "/usr/sbin/nft", "--json", "list", "ruleset")
+	_, tables, parseErr := dockerFirewallState(firewall)
+	if err != nil || parseErr != nil || len(tables) != 0 {
+		return errors.New("Docker firewall effects returned")
+	}
+	return nil
+}
+
+type dockerFirewallObject struct {
+	Kind, Family, Table, Name, Raw string
+	Handle                         uint64
+}
+
+func dockerFirewallItem(item map[string]json.RawMessage, chains map[string]bool) bool {
+	for kind, raw := range item {
+		var identity struct{ Family, Table, Name, Chain string }
+		if json.Unmarshal(raw, &identity) != nil {
+			return false
+		}
+		if kind == "chain" && chains[identity.Family+"\x00"+identity.Table+"\x00"+identity.Name] {
+			return true
+		}
+		if kind == "rule" {
+			if chains[identity.Family+"\x00"+identity.Table+"\x00"+identity.Chain] {
+				return true
+			}
+			var rule any
+			if json.Unmarshal(raw, &rule) != nil {
+				return false
+			}
+			for key := range chains {
+				parts := strings.Split(key, "\x00")
+				if parts[0] == identity.Family && parts[1] == identity.Table && referencesTarget(rule, parts[2]) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func referencesTarget(value any, target string) bool {
+	switch value := value.(type) {
+	case map[string]any:
+		if got, ok := value["target"].(string); ok && got == target {
+			return true
+		}
+		for _, child := range value {
+			if referencesTarget(child, target) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range value {
+			if referencesTarget(child, target) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func dockerFirewallState(data []byte) (string, []dockerFirewallObject, error) {
+	var document struct {
+		Nftables []map[string]json.RawMessage `json:"nftables"`
+	}
+	if err := json.Unmarshal(data, &document); err != nil {
+		return "", nil, err
+	}
+	chains := map[string]bool{}
+	var objects []dockerFirewallObject
+	for _, item := range document.Nftables {
+		raw, ok := item["chain"]
+		if !ok {
+			continue
+		}
+		var chain dockerFirewallObject
+		if json.Unmarshal(raw, &chain) != nil {
+			return "", nil, errors.New("Docker firewall inventory invalid")
+		}
+		chain.Kind = "chain"
+		lower := strings.ToLower(chain.Name)
+		if lower == "docker" || strings.HasPrefix(lower, "docker-") {
+			chains[chain.Family+"\x00"+chain.Table+"\x00"+chain.Name] = true
+			objects = append(objects, chain)
+		}
+	}
+	var docker []map[string]json.RawMessage
+	for _, item := range document.Nftables {
+		if dockerFirewallItem(item, chains) {
+			docker = append(docker, item)
+			itemBody, _ := json.Marshal(item)
+			if raw, ok := item["rule"]; ok {
+				var rule dockerFirewallObject
+				if json.Unmarshal(raw, &rule) != nil || rule.Handle == 0 {
+					return "", nil, errors.New("Docker firewall rule identity unavailable")
+				}
+				rule.Kind = "rule"
+				rule.Raw = string(itemBody)
+				objects = append(objects, rule)
+			} else if len(objects) > 0 {
+				objects[len(objects)-1].Raw = string(itemBody)
+			}
+		}
+	}
+	encoded, _ := json.Marshal(docker)
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:]), objects, nil
 }
 
 func (a Adapter) activeFirewallPolicyStep() (systemchanges.Step, error) {

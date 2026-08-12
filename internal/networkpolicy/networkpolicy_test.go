@@ -60,7 +60,7 @@ func TestReclaimableVPSReviewBindsEverySafeConflictWithoutChangingObservedState(
 		Identities:  []networkpolicy.IdentityConflict{{Name: "xray", Kind: "service user", Exclusive: true}},
 		Executables: []networkpolicy.FileConflict{{Path: "/usr/local/bin/xray", SHA256: strings.Repeat("a", 64), OwnerUID: 0, Mode: 0o755, Links: 1, Process: "xray", Service: "xray.service", Package: "xray"}},
 		Scripts:     []networkpolicy.ScriptConflict{{Interpreter: "/usr/bin/python3", Path: "/opt/proxy/server.py", SHA256: strings.Repeat("b", 64), Process: "python3", Service: "proxy.service", Regular: true, Links: 1}},
-		Docker:      &networkpolicy.DockerConflict{Service: "docker.service", Packages: []string{"docker.io"}, PreservedData: []string{"images", "volumes", "Compose definitions", "bind mounts", "application data"}},
+		Docker:      &networkpolicy.DockerConflict{Service: "docker.service", Packages: []networkpolicy.PackageConflict{{Name: "docker.io"}}, PreservedData: []string{"images", "volumes", "Compose definitions", "bind mounts", "application data"}},
 	}
 	observed.OwnerFacts = networkpolicy.OwnerFacts{DNS: "dns-record-id-1", Tunnel: "tunnel-id-1", Routes: []networkpolicy.CloudflareRoute{{Profile: "xhttp.example.test", OriginAddress: "127.0.0.1", OriginPort: 11080, Protocol: networkpolicy.TCP}}}
 	want := observed
@@ -188,6 +188,41 @@ func TestReviewedAllowlistedPackagesAreBoundAsOneExactPurgeSet(t *testing.T) {
 	_, _, kinds, _, _, _, _, packages, _, _, _, _, valid := networkpolicy.New(adapter).Evaluate(request).ReclamationAuthority().SystemChangesReclamation()
 	if !valid || len(kinds) != 2 || packages[0] != "xray" || packages[1] != "sing-box" {
 		t.Fatalf("package purge set = %v %v %t", kinds, packages, valid)
+	}
+}
+
+func TestReviewedDockerConflictBindsOnlyExactDockerOwnersAndPreservesRuntimeAndData(t *testing.T) {
+	observed := completeObservations()
+	observed.ReclamationComplete = true
+	observed.Firewall.RootVerified = true
+	observed.Reclamation.Docker = &networkpolicy.DockerConflict{
+		Service: "docker.service", Status: "active", ServiceExecutable: "/usr/bin/dockerd", ServiceSHA256: strings.Repeat("d", 64), ProcessID: "4242", FirewallSHA256: strings.Repeat("f", 64),
+		Packages:        []networkpolicy.PackageConflict{{Name: "docker.io", Version: "26.1.3", Owns: "/usr/bin/dockerd", ControlSHA256: strings.Repeat("c", 64), OwnedPaths: []string{"/usr/bin/dockerd", "/usr/lib/systemd/system/docker.service"}}},
+		RuntimePackages: []networkpolicy.PackageConflict{{Name: "containerd", Version: "1.7.24", Owns: "/usr/bin/containerd", OwnedPaths: []string{"/usr/bin/containerd", "/usr/lib/systemd/system/containerd.service"}}},
+		PreservedData:   []string{"images", "volumes", "Compose definitions", "bind mounts", "container configuration", "application data"},
+		PreservedPaths:  []string{"/var/lib/docker", "/etc/docker"}, PreservedSHA256: []string{strings.Repeat("1", 64), strings.Repeat("2", 64)},
+		FirewallObjects: []string{`{"chain":{"family":"ip","name":"DOCKER","table":"filter"}}`},
+	}
+	observed.Firewall.ActiveManager = "docker.service"
+	observed.Firewall.UnexpectedRule = "Docker FORWARD integration"
+	adapter := &stagedAdapter{observed: observed}
+	request := networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PreApproval, ReclamationReview: true}
+	review := networkpolicy.New(adapter).Evaluate(request)
+	if review.Reclamation == nil {
+		t.Fatalf("Docker conflict did not receive a review Plan: %+v", review.Findings)
+	}
+	request.Stage, request.ReviewedReclamationSHA256 = networkpolicy.PostApproval, review.Reclamation.Digest
+	approved := networkpolicy.New(adapter).Evaluate(request)
+	if !hasGate(approved.PostApplyGates, "NETWORK-DOCKER-ABSENT") {
+		t.Fatalf("Docker absence is not a required Managed gate: %+v", approved.PostApplyGates)
+	}
+	reviewed, service, executable, executableSHA256, processID, firewallSHA256, _, packages, versions, _, ownedPaths, runtimePackages, runtimeVersions, runtimeOwnedPaths, preserved, preservedPaths, preservedSHA256, valid := approved.ReclamationAuthority().SystemChangesDockerReclamation()
+	if !valid || reviewed != review.Reclamation.Digest || service != "docker.service" || executable != "/usr/bin/dockerd" || executableSHA256 != strings.Repeat("d", 64) || processID != "4242" || firewallSHA256 != strings.Repeat("f", 64) || !slices.Equal(packages, []string{"docker.io"}) || !slices.Equal(versions, []string{"26.1.3"}) || !reflect.DeepEqual(ownedPaths, [][]string{{"/usr/bin/dockerd", "/usr/lib/systemd/system/docker.service"}}) || !slices.Equal(runtimePackages, []string{"containerd"}) || !slices.Equal(runtimeVersions, []string{"1.7.24"}) || !reflect.DeepEqual(runtimeOwnedPaths, [][]string{{"/usr/bin/containerd", "/usr/lib/systemd/system/containerd.service"}}) || !slices.Equal(preserved, observed.Reclamation.Docker.PreservedData) || !slices.Equal(preservedPaths, observed.Reclamation.Docker.PreservedPaths) || !slices.Equal(preservedSHA256, observed.Reclamation.Docker.PreservedSHA256) {
+		t.Fatalf("Docker authority = %q %q %q %q %q %q %v %v %v %v %v %v %v %v %v %t", reviewed, service, executable, executableSHA256, processID, firewallSHA256, packages, versions, ownedPaths, runtimePackages, runtimeVersions, runtimeOwnedPaths, preserved, preservedPaths, preservedSHA256, valid)
+	}
+	adapter.observed.Reclamation.Docker.FirewallSHA256 = strings.Repeat("e", 64)
+	if _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, valid := approved.ReclamationAuthority().SystemChangesDockerReclamation(); valid {
+		t.Fatal("changed Docker firewall facts retained authority")
 	}
 }
 

@@ -163,8 +163,8 @@ type ReclamationFacts struct {
 }
 
 type PackageConflict struct {
-	Name, Version, Owns string
-	OwnedPaths          []string
+	Name, Version, Owns, ControlSHA256 string
+	OwnedPaths                         []string
 }
 type IdentityConflict struct {
 	Name, Kind string
@@ -186,8 +186,11 @@ type ScriptConflict struct {
 	Mount                                       bool
 }
 type DockerConflict struct {
-	Service, Status         string
-	Packages, PreservedData []string
+	Service, Status, ServiceExecutable, ServiceSHA256, ProcessID, FirewallSHA256 string
+	Packages, RuntimePackages                                                    []PackageConflict
+	PreservedData                                                                []string
+	PreservedPaths, PreservedSHA256                                              []string
+	FirewallObjects                                                              []string
 }
 
 type ProtectedHostFoundation struct {
@@ -445,6 +448,14 @@ type reclamationContract struct {
 	PolicyVersion uint16
 	ReviewSHA256  string
 	Targets       []reclamationTarget
+	Docker        *dockerReclamationContract
+}
+type dockerReclamationContract struct {
+	Service, Executable, ExecutableSHA256, ProcessID, FirewallSHA256 string
+	Packages, RuntimePackages                                        []PackageConflict
+	PreservedData                                                    []string
+	PreservedPaths, PreservedSHA256                                  []string
+	FirewallObjects                                                  []string
 }
 type reclamationTarget struct {
 	Kind, Path, SHA256, Interpreter, ProcessID, Package, PackageVersion string
@@ -522,6 +533,31 @@ func (authority ReclamationAuthority) SystemChangesReclamation() (policyVersion 
 		}
 		identityNames, identityKinds = append(identityNames, names), append(identityKinds, kinds)
 	}
+	valid = fresh.reclamation != nil && reflect.DeepEqual(fresh.reclamation.contract, want) && fresh.Reclamation != nil && fresh.Reclamation.Digest == want.ReviewSHA256 && fresh.freshInstallation != nil
+	return
+}
+
+func (authority ReclamationAuthority) SystemChangesDockerReclamation() (review, service, executable, executableSHA256, processID, firewallSHA256 string, firewallObjects, packages, versions, controlSHA256 []string, ownedPaths [][]string, runtimePackages, runtimeVersions []string, runtimeOwnedPaths [][]string, preserved, preservedPaths, preservedSHA256 []string, valid bool) {
+	if authority.cell == nil || authority.cell.evaluate == nil || authority.cell.contract.Docker == nil || !authority.cell.used.CompareAndSwap(false, true) {
+		return
+	}
+	fresh := authority.cell.evaluate()
+	want := authority.cell.contract
+	docker := want.Docker
+	review, service, executable, executableSHA256, processID, firewallSHA256 = want.ReviewSHA256, docker.Service, docker.Executable, docker.ExecutableSHA256, docker.ProcessID, docker.FirewallSHA256
+	firewallObjects = append([]string(nil), docker.FirewallObjects...)
+	for _, pkg := range docker.Packages {
+		packages, versions = append(packages, pkg.Name), append(versions, pkg.Version)
+		controlSHA256 = append(controlSHA256, pkg.ControlSHA256)
+		ownedPaths = append(ownedPaths, append([]string(nil), pkg.OwnedPaths...))
+	}
+	for _, pkg := range docker.RuntimePackages {
+		runtimePackages = append(runtimePackages, pkg.Name)
+		runtimeVersions = append(runtimeVersions, pkg.Version)
+		runtimeOwnedPaths = append(runtimeOwnedPaths, append([]string(nil), pkg.OwnedPaths...))
+	}
+	preserved = append([]string(nil), docker.PreservedData...)
+	preservedPaths, preservedSHA256 = append([]string(nil), docker.PreservedPaths...), append([]string(nil), docker.PreservedSHA256...)
 	valid = fresh.reclamation != nil && reflect.DeepEqual(fresh.reclamation.contract, want) && fresh.Reclamation != nil && fresh.Reclamation.Digest == want.ReviewSHA256 && fresh.freshInstallation != nil
 	return
 }
@@ -970,6 +1006,9 @@ func (i Interface) Evaluate(request Request) Result {
 		})
 		observed.Reclamation = ReclamationFacts{}
 		observed.ServiceIdentities, observed.ResourcePaths = nil, nil
+		if contract.Docker != nil {
+			observed.Firewall.ActiveManager, observed.Firewall.UnexpectedRule = "", ""
+		}
 	}
 	result.SystemChanges = SystemChangesRequirements{ValidateCompleteCandidate: true, AtomicTableApply: true, RootOwnedWatchdog: true, ProveCurrentSSHResponsive: true, ProveDetectedSSHAdmitted: true, CancelAfterGate: "NETWORK-SSH-RESPONSIVE", RestoreExactPreviousRules: true}
 	result.SSHSafety = SSHSafety{FutureOutsideReconnectUnproved: true, Warning: "One existing SSH session cannot prove a future outside reconnection.", RecoveryPath: "VPS provider console"}
@@ -1023,6 +1062,9 @@ func (i Interface) Evaluate(request Request) Result {
 		{Code: "NETWORK-POLICY-ACTIVE", Required: "only the approved SBXR nftables table and exposure are active"},
 		{Code: "NETWORK-SSH-RESPONSIVE", Required: "the current SSH session remains responsive before watchdog cancellation"},
 	}
+	if result.reclamation != nil && result.reclamation.contract.Docker != nil {
+		result.PostApplyGates = append(result.PostApplyGates, Gate{Code: "NETWORK-DOCKER-ABSENT", Required: "Docker remains absent, its competing firewall effects do not return, and preserved data is unchanged"})
+	}
 	if cleanVPSAuthorityEligible(result) {
 		result.freshInstallation = &freshInstallationProofCell{evaluate: func() Result { return i.Evaluate(request) }, digest: result.Binding.Digest}
 	}
@@ -1034,7 +1076,27 @@ func (i Interface) Evaluate(request Request) Result {
 
 func reviewedReclamationContract(observed Observations, plan *ReclamationPlan) (reclamationContract, bool) {
 	contract := reclamationContract{PolicyVersion: reclamationPolicyVersion}
-	if plan == nil || !validSHA256(plan.Digest) || len(observed.Reclamation.UnsafePaths) != 0 || observed.Reclamation.Docker != nil || len(observed.OwnerFacts.Routes)+len(observed.OwnerFacts.Conflicts) != 0 || observed.Firewall.ActiveManager != "" || observed.Firewall.UnexpectedRule != "" || observed.OwnerFacts.DNS != "fresh" || observed.OwnerFacts.Tunnel != "fresh" {
+	if plan == nil || !validSHA256(plan.Digest) || len(observed.Reclamation.UnsafePaths) != 0 || len(observed.OwnerFacts.Routes)+len(observed.OwnerFacts.Conflicts) != 0 || observed.OwnerFacts.DNS != "fresh" || observed.OwnerFacts.Tunnel != "fresh" {
+		return reclamationContract{}, false
+	}
+	if docker := observed.Reclamation.Docker; docker != nil {
+		if len(observed.Reclamation.Packages)+len(observed.Reclamation.Identities)+len(observed.Reclamation.Executables)+len(observed.Reclamation.Scripts) != 0 || len(observed.Listeners)+len(observed.ServiceIdentities)+len(observed.ResourcePaths) != 0 || docker.Service != "docker.service" || docker.Status != "active" || !filepath.IsAbs(docker.ServiceExecutable) || !validSHA256(docker.ServiceSHA256) || !validProcessID(docker.ProcessID) || !validSHA256(docker.FirewallSHA256) || len(docker.FirewallObjects) == 0 || observed.Firewall.ActiveManager != "docker.service" || observed.Firewall.UnexpectedRule == "" || len(docker.Packages) != 1 || len(docker.PreservedData) != 6 || len(docker.PreservedPaths) == 0 || len(docker.PreservedPaths) != len(docker.PreservedSHA256) {
+			return reclamationContract{}, false
+		}
+		for _, pkg := range append(append([]PackageConflict(nil), docker.Packages...), docker.RuntimePackages...) {
+			if pkg.Name == "" || pkg.Version == "" || len(pkg.OwnedPaths) == 0 || slices.Contains([]string{"docker.io", "docker-ce"}, pkg.Name) && !validSHA256(pkg.ControlSHA256) || slices.ContainsFunc(pkg.OwnedPaths, func(path string) bool {
+				return slices.ContainsFunc(docker.PreservedPaths, func(preserved string) bool {
+					return path == preserved || strings.HasPrefix(path, preserved+"/") || strings.HasPrefix(preserved, path+"/")
+				})
+			}) {
+				return reclamationContract{}, false
+			}
+		}
+		contract.ReviewSHA256 = plan.Digest
+		contract.Docker = &dockerReclamationContract{Service: docker.Service, Executable: docker.ServiceExecutable, ExecutableSHA256: docker.ServiceSHA256, ProcessID: docker.ProcessID, FirewallSHA256: docker.FirewallSHA256, FirewallObjects: append([]string(nil), docker.FirewallObjects...), Packages: append([]PackageConflict(nil), docker.Packages...), RuntimePackages: append([]PackageConflict(nil), docker.RuntimePackages...), PreservedData: append([]string(nil), docker.PreservedData...), PreservedPaths: append([]string(nil), docker.PreservedPaths...), PreservedSHA256: append([]string(nil), docker.PreservedSHA256...)}
+		return contract, true
+	}
+	if observed.Firewall.ActiveManager != "" || observed.Firewall.UnexpectedRule != "" {
 		return reclamationContract{}, false
 	}
 	listeners := slices.DeleteFunc(append([]Listener(nil), observed.Listeners...), func(listener Listener) bool { return !reclaimableListener(listener, observed.SSH) })
@@ -1215,9 +1277,12 @@ func reviewInstallation(result *Result, observed Observations, required bool) {
 		plan.Targets = append(plan.Targets, fmt.Sprintf("identity %s kind %s exclusive %t", reviewFact(value.Name), reviewFact(value.Kind), value.Exclusive))
 	}
 	if value := observed.Reclamation.Docker; value != nil {
-		plan.Targets = append(plan.Targets, fmt.Sprintf("Docker service %s status %s", reviewFact(value.Service), reviewFact(value.Status)))
+		plan.Targets = append(plan.Targets, fmt.Sprintf("Docker service %s status %s executable %s sha256 %s process %s", reviewFact(value.Service), reviewFact(value.Status), reviewFact(value.ServiceExecutable), reviewFact(value.ServiceSHA256), reviewFact(value.ProcessID)), "Docker firewall sha256 "+reviewFact(value.FirewallSHA256))
 		for _, pkg := range value.Packages {
-			plan.Targets = append(plan.Targets, "Docker package "+reviewFact(pkg))
+			plan.Targets = append(plan.Targets, fmt.Sprintf("Docker package %s %s owns %s; complete owned-path digest %s", reviewFact(pkg.Name), reviewFact(pkg.Version), reviewFact(pkg.Owns), digestStrings(pkg.OwnedPaths)))
+		}
+		for _, pkg := range value.RuntimePackages {
+			plan.Preservation = append(plan.Preservation, fmt.Sprintf("preserve independently used runtime package %s %s owned-path digest %s", reviewFact(pkg.Name), reviewFact(pkg.Version), digestStrings(pkg.OwnedPaths)))
 		}
 		for _, preserved := range value.PreservedData {
 			plan.Preservation = append(plan.Preservation, "preserve "+reviewFact(preserved))

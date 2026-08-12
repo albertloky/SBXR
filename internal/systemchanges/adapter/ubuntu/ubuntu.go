@@ -33,6 +33,7 @@ type Adapter struct {
 	afterReclamationDigest   func(string)
 	afterReclamationProof    func(string)
 	afterPackageControlProof func(string)
+	dockerPurge              func(systemchanges.ReclamationPackageTarget, []string, time.Duration) error
 	stopProcess              func(int, string, time.Duration, func() error) error
 	packageCommand           func(time.Duration, string, ...string) ([]byte, error)
 }

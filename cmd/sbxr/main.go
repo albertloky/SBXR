@@ -15,6 +15,7 @@ import (
 	softwareubuntu "github.com/albertloky/SBXR/internal/softwarelifecycle/adapter/ubuntu"
 	"github.com/albertloky/SBXR/internal/state/adapter/filesystem"
 	"github.com/albertloky/SBXR/internal/subscriptionserving"
+	systemubuntu "github.com/albertloky/SBXR/internal/systemchanges/adapter/ubuntu"
 )
 
 func main() {
@@ -57,6 +58,12 @@ func main() {
 	}
 	if len(os.Args) == 3 && os.Args[1] == "private" && os.Args[2] == "recover" {
 		if runInstallRecovery() != nil {
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) == 3 && os.Args[1] == "private" && os.Args[2] == "docker-purge" {
+		if systemubuntu.ServeDockerPurge(os.Stdin) != nil {
 			os.Exit(1)
 		}
 		return

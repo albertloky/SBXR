@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -448,4 +449,161 @@ func TestPackagePurgeRefusesLateUnrelatedPackageChange(t *testing.T) {
 	if err := recovered.verifyReclamationPackageInventory("change-1", []systemchanges.ReclamationTarget{target}, time.Second); err == nil {
 		t.Fatal("late unrelated package change was accepted")
 	}
+}
+
+func TestDockerReclamationPurgesOnlyReviewedOwnersAndPreservesRuntimeAndData(t *testing.T) {
+	root := t.TempDir()
+	dockerd := []byte("exact dockerd")
+	dockerdDigest := sha256.Sum256(dockerd)
+	for name, data := range map[string]string{
+		"var/lib/dpkg/info/docker.io.list":   "/usr/bin/dockerd\n/usr/lib/systemd/system/docker.service\n",
+		"var/lib/dpkg/info/docker.io.postrm": "#!/bin/sh\nexit 0\n",
+		"var/lib/dpkg/info/containerd.list":  "/usr/bin/containerd\n/usr/lib/systemd/system/containerd.service\n",
+		"usr/bin/dockerd":                    string(dockerd),
+		"var/lib/docker/image":               "image-bytes",
+		"var/lib/docker/volumes":             "volume-bytes",
+		"etc/docker/daemon.json":             "{}",
+	} {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(root, "proc/4242"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/usr/bin/dockerd", filepath.Join(root, "proc/4242/exe")); err != nil {
+		t.Fatal(err)
+	}
+	before := digestTree(t, root, "var/lib/docker", "etc/docker")
+	installed, active, firewallActive := true, true, true
+	adapter := NewAt(root, nil, nil)
+	adapter.packageCommand = func(_ time.Duration, name string, arguments ...string) ([]byte, error) {
+		switch {
+		case name == "/usr/bin/dpkg-query" && len(arguments) == 3 && arguments[2] == "containerd":
+			return []byte("install ok installed\t1.7.24\n"), nil
+		case name == "/usr/bin/dpkg-query" && len(arguments) == 3 && installed:
+			return []byte("install ok installed\t26.1.3\n"), nil
+		case name == "/usr/bin/dpkg-query" && len(arguments) == 3:
+			return nil, os.ErrNotExist
+		case name == "/usr/bin/systemctl" && slices.Equal(arguments, []string{"is-active", "docker.service"}) && active:
+			return []byte("active\n"), nil
+		case name == "/usr/bin/systemctl" && slices.Equal(arguments, []string{"show", "--property", "MainPID", "--value", "docker.service"}):
+			return []byte("4343\n"), nil
+		case name == "/usr/bin/systemctl" && slices.Equal(arguments, []string{"stop", "docker.service"}):
+			active = false
+			return nil, nil
+		case name == "/usr/sbin/nft" && len(arguments) > 0 && arguments[0] == "delete":
+			firewallActive = false
+			return nil, nil
+		case name == "/usr/bin/systemctl":
+			return []byte("inactive\n"), fmt.Errorf("inactive")
+		case name == "/usr/sbin/nft":
+			if !firewallActive {
+				return []byte(`{"nftables":[{"table":{"family":"inet","name":"sbxr"}}]}`), nil
+			}
+			return []byte(`{"nftables":[{"chain":{"family":"ip","table":"filter","name":"DOCKER"}}]}`), nil
+		case name == "/usr/bin/dpkg":
+			installed = false
+			return nil, nil
+		}
+		return nil, fmt.Errorf("unexpected command %s %v", name, arguments)
+	}
+	adapter.stopProcess = func(_ int, _ string, _ time.Duration, verify func() error) error {
+		if err := verify(); err != nil {
+			return err
+		}
+		active = false
+		return nil
+	}
+	target := systemchanges.ReclamationTarget{Kind: "docker", ReviewSHA256: strings.Repeat("a", 64), PolicyVersion: 1, Packages: []systemchanges.ReclamationPackageTarget{{Package: "docker.io", PackageVersion: "26.1.3", OwnedPaths: []string{"/usr/bin/dockerd", "/usr/lib/systemd/system/docker.service"}}}, Docker: &systemchanges.DockerReclamationTarget{Service: "docker.service", Executable: "/usr/bin/dockerd", ExecutableSHA256: strings.Repeat("d", 64), ProcessID: "4242", FirewallSHA256: strings.Repeat("f", 64), RuntimePackages: []systemchanges.ReclamationPackageTarget{{Package: "containerd", PackageVersion: "1.7.24", OwnedPaths: []string{"/usr/bin/containerd", "/usr/lib/systemd/system/containerd.service"}}}, PreservedData: []string{"images", "volumes", "Compose definitions", "bind mounts", "container configuration", "application data"}}}
+	target.Packages[0].ControlSHA256, _ = adapter.dockerControlDigest("docker.io")
+	adapter.dockerPurge = func(pkg systemchanges.ReclamationPackageTarget, preserved []string, _ time.Duration) error {
+		if pkg.ControlSHA256 == "" || !slices.Equal(preserved, []string{"/var/lib/docker", "/etc/docker"}) {
+			return fmt.Errorf("Docker purge boundary changed")
+		}
+		installed = false
+		return nil
+	}
+	for _, preserved := range []string{"/var/lib/docker", "/etc/docker"} {
+		digest, err := adapter.digestDockerPreservedTree(preserved)
+		if err != nil {
+			t.Fatal(err)
+		}
+		target.Docker.PreservedPaths = append(target.Docker.PreservedPaths, preserved)
+		target.Docker.PreservedSHA256 = append(target.Docker.PreservedSHA256, digest)
+	}
+	target.Docker.ExecutableSHA256 = fmt.Sprintf("%x", dockerdDigest)
+	firewallSHA256, objects, _ := dockerFirewallState([]byte(`{"nftables":[{"chain":{"family":"ip","table":"filter","name":"DOCKER"}}]}`))
+	target.Docker.FirewallSHA256 = firewallSHA256
+	target.Docker.FirewallObjects = []string{objects[0].Raw}
+	if _, err := adapter.stopDockerReclamation(target, time.Second, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(root, "proc/4242/exe")); err != nil || os.MkdirAll(filepath.Join(root, "proc/4343"), 0o755) != nil || os.Symlink("/usr/bin/dockerd", filepath.Join(root, "proc/4343/exe")) != nil {
+		t.Fatal("prepare restarted Docker process")
+	}
+	active = true
+	firewallActive = true
+	if _, err := adapter.stopDockerReclamation(target, time.Second, true); err != nil {
+		t.Fatalf("recovery did not stop freshly proved Docker PID: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "usr/bin/dockerd"), []byte("changed dockerd"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.stopDockerReclamation(target, time.Second, true); err == nil {
+		t.Fatal("inactive recovery accepted a changed Docker executable")
+	}
+	if err := os.WriteFile(filepath.Join(root, "usr/bin/dockerd"), dockerd, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.deleteDockerReclamation(target, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if after := digestTree(t, root, "var/lib/docker", "etc/docker"); after != before || active || installed {
+		t.Fatalf("Docker reclamation = data %q want %q active=%t installed=%t", after, before, active, installed)
+	}
+	if err := adapter.dockerStillAbsent(target, time.Second); err != nil {
+		t.Fatalf("Managed Docker absence = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "var/lib/docker/image"), []byte("changed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.verifyDockerPreservation(target, time.Second); err == nil {
+		t.Fatal("recovery accepted changed Docker data")
+	}
+	if err := os.WriteFile(filepath.Join(root, "var/lib/docker/image"), []byte("image-bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	active = true
+	if err := adapter.dockerStillAbsent(target, time.Second); err == nil {
+		t.Fatal("Managed health accepted a restarted Docker service")
+	}
+}
+
+func TestDockerInactiveRefusesCommandFailure(t *testing.T) {
+	if dockerInactive(nil, fmt.Errorf("systemctl failed")) || !dockerInactive([]byte("inactive\n"), fmt.Errorf("exit status 3")) {
+		t.Fatal("Docker service state did not distinguish native inactive from command failure")
+	}
+}
+
+func digestTree(t *testing.T, root string, names ...string) string {
+	t.Helper()
+	hash := sha256.New()
+	for _, name := range names {
+		_ = filepath.Walk(filepath.Join(root, name), func(path string, info os.FileInfo, err error) error {
+			if err == nil && info.Mode().IsRegular() {
+				body, readErr := os.ReadFile(path)
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				fmt.Fprintf(hash, "%s\x00%s\x00", strings.TrimPrefix(path, root), body)
+			}
+			return nil
+		})
+	}
+	return fmt.Sprintf("%x", hash.Sum(nil))
 }
