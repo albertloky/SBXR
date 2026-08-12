@@ -178,6 +178,7 @@ type FileConflict struct {
 }
 type ScriptConflict struct {
 	Interpreter, Path, SHA256, Process, Service string
+	ProcessID                                   string
 	Links                                       uint64
 	Mount                                       bool
 }
@@ -235,6 +236,7 @@ type Listener struct {
 	Service    string
 	Ownership  Ownership
 	Executable string
+	ProcessID  string
 }
 
 type Ownership string
@@ -979,8 +981,8 @@ func reviewInstallation(result *Result, observed Observations, required bool) {
 			result.add(requiredFailure("NETWORK-RECLAMATION-UNPROVED", "A conflicting listener has no proven executable", safeFact(listener.Process, listener.Service), "one exact /proc process executable or supported unambiguous script", "SBXR never plans deletion from only a socket or process name", ownerFix("Stop the ambiguous owner outside SBXR or reimage the VPS.")))
 			return
 		}
-		proved := slices.ContainsFunc(observed.Reclamation.Executables, func(file FileConflict) bool { return file.Path == listener.Executable && file.SHA256 != "" }) || slices.ContainsFunc(observed.Reclamation.Scripts, func(script ScriptConflict) bool {
-			return script.Process == listener.Process && script.Service == listener.Service && script.SHA256 != ""
+		proved := slices.ContainsFunc(observed.Reclamation.Executables, func(file FileConflict) bool { return file.Path == listener.Executable && file.SHA256 != "" }) || listener.ProcessID != "" && slices.ContainsFunc(observed.Reclamation.Scripts, func(script ScriptConflict) bool {
+			return script.ProcessID == listener.ProcessID && script.Interpreter == listener.Executable && script.SHA256 != ""
 		})
 		if !proved {
 			result.add(requiredFailure("NETWORK-RECLAMATION-UNPROVED", "A conflicting listener lacks an exact executable or script digest", safeFact(listener.Executable, listener.Process), "one exact unchanged executable or supported unambiguous script", "SBXR never plans deletion from only a socket or process name", ownerFix("Stop the ambiguous owner outside SBXR or reimage the VPS.")))

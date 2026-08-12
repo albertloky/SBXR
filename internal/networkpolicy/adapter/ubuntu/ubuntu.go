@@ -251,9 +251,7 @@ func (a Adapter) currentShells() ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		if slices.Contains([]string{"sh", "bash", "dash", "zsh", "fish"}, filepath.Base(executable)) {
-			shells = append(shells, executable)
-		}
+		shells = append(shells, executable)
 		statData, err := os.ReadFile(a.path(filepath.Join(base, "stat")))
 		if err != nil {
 			return nil, err
@@ -299,7 +297,7 @@ func (a Adapter) reclamationProcesses() (map[string]socketOwner, []networkpolicy
 		}
 		executable, err := os.Readlink(a.path(filepath.Join(base, "exe")))
 		if err == nil && filepath.IsAbs(executable) {
-			executables[executable] = socketOwner{name, service, executable}
+			executables[executable] = socketOwner{name, service, executable, process.Name()}
 		}
 		if !slices.Contains([]string{"sh", "bash", "dash", "python", "python3", "perl", "ruby", "node"}, filepath.Base(executable)) {
 			continue
@@ -318,7 +316,7 @@ func (a Adapter) reclamationProcesses() (map[string]socketOwner, []networkpolicy
 				links = uint64(stat.Nlink)
 			}
 		}
-		scripts = append(scripts, networkpolicy.ScriptConflict{Interpreter: executable, Path: arguments[1], SHA256: checksum(data), Process: name, Service: service, Links: links, Mount: a.mountPoint(arguments[1])})
+		scripts = append(scripts, networkpolicy.ScriptConflict{Interpreter: executable, Path: arguments[1], SHA256: checksum(data), Process: name, Service: service, ProcessID: process.Name(), Links: links, Mount: a.mountPoint(arguments[1])})
 	}
 	return executables, scripts, nil
 }
@@ -550,7 +548,7 @@ func (a Adapter) listeners(strict bool) ([]networkpolicy.Listener, error) {
 				if len(fields) > 9 {
 					owner = owners[fields[9]]
 				}
-				listeners = append(listeners, networkpolicy.Listener{Address: procAddress(address), Port: uint16(port), Protocol: source.protocol, Process: owner.process, Service: owner.service, Executable: owner.executable, Ownership: networkpolicy.Unproved})
+				listeners = append(listeners, networkpolicy.Listener{Address: procAddress(address), Port: uint16(port), Protocol: source.protocol, Process: owner.process, Service: owner.service, Executable: owner.executable, ProcessID: owner.processID, Ownership: networkpolicy.Unproved})
 			}
 		}
 		if err := scanner.Err(); err != nil {
@@ -562,7 +560,7 @@ func (a Adapter) listeners(strict bool) ([]networkpolicy.Listener, error) {
 	return listeners, nil
 }
 
-type socketOwner struct{ process, service, executable string }
+type socketOwner struct{ process, service, executable, processID string }
 
 func (a Adapter) socketOwners(strict bool) (map[string]socketOwner, error) {
 	owners := map[string]socketOwner{}
@@ -591,7 +589,7 @@ func (a Adapter) socketOwners(strict bool) (map[string]socketOwner, error) {
 		for _, file := range files {
 			target, err := os.Readlink(a.path(filepath.Join("/proc", process.Name(), "fd", file.Name())))
 			if err == nil && strings.HasPrefix(target, "socket:[") && strings.HasSuffix(target, "]") {
-				owners[strings.TrimSuffix(strings.TrimPrefix(target, "socket:["), "]")] = socketOwner{name, service, executable}
+				owners[strings.TrimSuffix(strings.TrimPrefix(target, "socket:["), "]")] = socketOwner{name, service, executable, process.Name()}
 			}
 		}
 	}

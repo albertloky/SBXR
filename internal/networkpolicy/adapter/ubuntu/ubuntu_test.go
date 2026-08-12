@@ -100,10 +100,10 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "proc", parent), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink("/bin/zsh", filepath.Join(root, "proc", parent, "exe")); err != nil {
+	if err := os.Symlink("/opt/custom/nu", filepath.Join(root, "proc", parent, "exe")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "proc", parent, "stat"), []byte(parent+" (zsh) S 1 0 0 0\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "proc", parent, "stat"), []byte(parent+" (nu) S 1 0 0 0\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -158,7 +158,7 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 	if len(observed.Reclamation.Executables) != 2 || observed.Reclamation.Executables[0].SHA256 == "" || observed.Reclamation.Executables[0].Package != "xray" || observed.Reclamation.Executables[0].Process != "xray" || observed.Reclamation.Executables[0].Service != "xray.service" || observed.Reclamation.Executables[1].Path != "/usr/sbin/nginx" || observed.Reclamation.Executables[1].SHA256 == "" || observed.Reclamation.Executables[1].Package != "nginx" || observed.Reclamation.Executables[1].Process != "nginx" || len(observed.Reclamation.Packages) != 2 || observed.Reclamation.Packages[0].Version != "1.2.3" || len(observed.Reclamation.Packages[0].OwnedPaths) != 2 || len(observed.Reclamation.Identities) != 2 || observed.Reclamation.Identities[0].Exclusive || observed.Reclamation.Identities[1].Exclusive {
 		t.Fatalf("reclamation facts = %+v", observed.Reclamation)
 	}
-	if len(observed.Reclamation.Scripts) != 1 || observed.Reclamation.Scripts[0].Path != "/opt/app/server.py" || !slices.Contains(observed.Reclamation.ProtectedPaths, "/opt/shared/python") || slices.ContainsFunc(observed.Reclamation.Executables, func(file networkpolicy.FileConflict) bool { return file.Path == "/opt/shared/python" }) {
+	if len(observed.Reclamation.Scripts) != 1 || observed.Reclamation.Scripts[0].Path != "/opt/app/server.py" || observed.Reclamation.Scripts[0].ProcessID != "125" || observed.Listeners[2].ProcessID != "125" || !slices.Contains(observed.Reclamation.ProtectedPaths, "/opt/shared/python") || !slices.Contains(observed.Reclamation.ProtectedPaths, "/opt/custom/nu") || slices.ContainsFunc(observed.Reclamation.Executables, func(file networkpolicy.FileConflict) bool { return file.Path == "/opt/shared/python" }) {
 		t.Fatalf("script interpreter was not protected: %+v", observed.Reclamation)
 	}
 	if observed.Firewall.RootVerified {
@@ -284,7 +284,7 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 	if _, err := NewAt(root).Observe(networkpolicy.ObservationRequest{Stage: networkpolicy.PreApproval, ReclamationReview: true}); err == nil {
 		t.Fatal("unreadable current-shell ancestry was marked complete")
 	}
-	if err := os.WriteFile(parentStat, []byte(parent+" (zsh) S 1 0 0 0\n"), 0o600); err != nil {
+	if err := os.WriteFile(parentStat, []byte(parent+" (nu) S 1 0 0 0\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(filepath.Join(root, "var/lib/dpkg/info/nginx.list")); err != nil {

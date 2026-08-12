@@ -89,6 +89,10 @@ func TestReclamationReviewRefusesIncompleteOwnershipProof(t *testing.T) {
 		"listener without executable identity": {code: "NETWORK-RECLAMATION-UNPROVED", alter: func(observed *networkpolicy.Observations) {
 			observed.Listeners = append(observed.Listeners, networkpolicy.Listener{Address: "0.0.0.0", Port: 443, Protocol: networkpolicy.TCP, Process: "unknown"})
 		}},
+		"script from a different process": {code: "NETWORK-RECLAMATION-UNPROVED", alter: func(observed *networkpolicy.Observations) {
+			observed.Listeners = append(observed.Listeners, networkpolicy.Listener{Address: "0.0.0.0", Port: 443, Protocol: networkpolicy.TCP, Process: "python3", Executable: "/usr/bin/python3", ProcessID: "100"})
+			observed.Reclamation.Scripts = []networkpolicy.ScriptConflict{{Interpreter: "/usr/bin/python3", Path: "/opt/other.py", SHA256: strings.Repeat("a", 64), Process: "python3", ProcessID: "200"}}
+		}},
 		"unproved exclusive identity": {code: "NETWORK-RECLAMATION-UNPROVED", alter: func(observed *networkpolicy.Observations) {
 			observed.Reclamation.Identities = []networkpolicy.IdentityConflict{{Name: "xray", Kind: "service user"}}
 		}},
