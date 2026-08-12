@@ -86,3 +86,76 @@ func TestReclamationDigestRefusesPathReplacementDuringProof(t *testing.T) {
 		t.Fatalf("neighbour changed: %q, %v", got, err)
 	}
 }
+
+func TestReclamationDeleteRestoresAReplacementInsteadOfDeletingIt(t *testing.T) {
+	root := t.TempDir()
+	name := filepath.Join(root, "opt/app/proxy")
+	if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, transactionDirectory, "change-1"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte("reviewed proxy")
+	replacement := []byte("unrelated replacement")
+	if err := os.WriteFile(name, original, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(original)
+	contract := systemchanges.ReclamationTarget{Kind: "executable", Path: "/opt/app/proxy", SHA256: fmt.Sprintf("%x", digest), ProcessID: "4242", ReviewSHA256: fmt.Sprintf("%x", digest)}
+	adapter := NewAt(root, nil, nil)
+	adapter.afterReclamationProof = func(path string) {
+		if err := os.Rename(path, path+".reviewed"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, replacement, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := adapter.deleteReclamationTarget("change-1", contract); err == nil {
+		t.Fatal("replacement between proof and quarantine was deleted")
+	}
+	if got, err := os.ReadFile(name); err != nil || string(got) != string(replacement) {
+		t.Fatalf("replacement was not restored: %q, %v", got, err)
+	}
+	if got, err := os.ReadFile(name + ".reviewed"); err != nil || string(got) != string(original) {
+		t.Fatalf("reviewed inode changed: %q, %v", got, err)
+	}
+}
+
+func TestReclamationScriptAndProcessHandleRecheckExactProcess(t *testing.T) {
+	root := t.TempDir()
+	proc := filepath.Join(root, "proc/4242")
+	if err := os.MkdirAll(proc, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/usr/bin/python3", filepath.Join(proc, "exe")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(proc, "cmdline"), []byte("/usr/bin/python3\x00/opt/app/proxy.py\x00"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	target := systemchanges.ReclamationTarget{Kind: "script", Path: "/opt/app/proxy.py", Interpreter: "/usr/bin/python3", ProcessID: "4242"}
+	adapter := NewAt(root, nil, nil)
+	if err := adapter.verifyReclamationProcess(target); err != nil {
+		t.Fatalf("exact script process = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(proc, "cmdline"), []byte("/usr/bin/python3\x00/opt/app/other.py\x00"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.verifyReclamationProcess(target); err == nil {
+		t.Fatal("same interpreter with another script was accepted")
+	}
+	adapter.stopProcess = func(_ int, verify func() error) error {
+		if err := os.Remove(filepath.Join(proc, "exe")); err != nil {
+			return err
+		}
+		if err := os.Symlink("/usr/bin/other", filepath.Join(proc, "exe")); err != nil {
+			return err
+		}
+		return verify()
+	}
+	if err := adapter.stopProcess(4242, func() error { return adapter.verifyReclamationProcess(target) }); err == nil {
+		t.Fatal("process replacement after handle acquisition was accepted")
+	}
+}

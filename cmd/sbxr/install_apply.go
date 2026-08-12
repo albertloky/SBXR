@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	certificateubuntu "github.com/albertloky/SBXR/internal/certificatelifecycle/adapter/ubuntu"
+	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
 	profilesubuntu "github.com/albertloky/SBXR/internal/connectionprofiles/adapter/ubuntu"
 	"github.com/albertloky/SBXR/internal/networkpolicy"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
@@ -80,27 +81,13 @@ func prepareInstallApply(ctx context.Context, request softwareubuntu.InstallHand
 	}
 
 	approval := softwareubuntu.NewApproval(func(recheckContext context.Context) (softwarelifecycle.InstallRecheck, error) {
-		fresh := built.network(networkpolicy.Request{Intent: built.networkIntent, Stage: networkpolicy.PostApproval, ReclamationReview: request.ReviewedReclamationSHA256 != "", ReviewedReclamationSHA256: request.ReviewedReclamationSHA256})
-		if fresh.Outcome == networkpolicy.Failed || fresh.Outcome == networkpolicy.Unknown {
-			return softwarelifecycle.InstallRecheck{}, errors.New("privileged Network Policy recheck failed")
-		}
-		contributions := append([]softwarelifecycle.InstallContribution(nil), built.contributions...)
-		for index, contribution := range contributions {
-			if contribution.SoftwareLifecycleInstallContribution().Name == string(softwarelifecycle.NetworkInstallContribution) {
-				contributions[index] = softwarelifecycle.NewNetworkInstallContribution(fresh, string(requestChangeSet(request)), built.desiredSHA256)
-			}
-		}
-		freshDigest := sha256.New()
-		for _, contribution := range contributions {
-			_, _ = io.WriteString(freshDigest, contribution.SoftwareLifecycleInstallContribution().SHA256)
+		recheck, freshVolatileSHA256, err := recheckInstall(recheckContext, request, built)
+		if err != nil {
+			return softwarelifecycle.InstallRecheck{}, err
 		}
 		observationMu.Lock()
-		volatileSHA256 = hex.EncodeToString(freshDigest.Sum(nil))
+		volatileSHA256 = freshVolatileSHA256
 		observationMu.Unlock()
-		recheck := softwarelifecycle.InstallRecheck{Candidate: built.candidate, Contributions: contributions, PrivilegedNetworkHealthy: true}
-		if request.ReviewedReclamationSHA256 != "" {
-			recheck.Reclamation = fresh.ReclamationAuthority()
-		}
 		return recheck, nil
 	})
 
@@ -131,6 +118,39 @@ func prepareInstallApply(ctx context.Context, request softwareubuntu.InstallHand
 			return softwareubuntu.InstallRecoveryRequired
 		}
 	}, nil
+}
+
+func recheckInstall(ctx context.Context, request softwareubuntu.InstallHandoffRequest, built *builtInstall) (softwarelifecycle.InstallRecheck, string, error) {
+	ownerFacts := networkpolicy.OwnerFacts{}
+	if request.ReviewedReclamationSHA256 != "" {
+		token, err := cloudflaretunnel.NewManagementToken(request.CloudflareToken)
+		if err != nil {
+			return softwarelifecycle.InstallRecheck{}, "", errors.New("Cloudflare management token refused")
+		}
+		ownerFacts, err = observeReclamationCloudflare(ctx, built.inventory, request.CloudflareAccountID, request.CloudflareZoneID, token, "sbxr-main", []string{"xhttp." + request.Draft.Domain, "ws." + request.Draft.Domain, "direct." + request.Draft.Domain})
+		if err != nil {
+			return softwarelifecycle.InstallRecheck{}, "", errors.New("Cloudflare conflict inventory failed")
+		}
+	}
+	fresh := built.network(networkpolicy.Request{Intent: built.networkIntent, Stage: networkpolicy.PostApproval, OwnerFacts: ownerFacts, ReclamationReview: request.ReviewedReclamationSHA256 != "", ReviewedReclamationSHA256: request.ReviewedReclamationSHA256})
+	if fresh.Outcome == networkpolicy.Failed || fresh.Outcome == networkpolicy.Unknown {
+		return softwarelifecycle.InstallRecheck{}, "", errors.New("privileged Network Policy recheck failed")
+	}
+	contributions := append([]softwarelifecycle.InstallContribution(nil), built.contributions...)
+	for index, contribution := range contributions {
+		if contribution.SoftwareLifecycleInstallContribution().Name == string(softwarelifecycle.NetworkInstallContribution) {
+			contributions[index] = softwarelifecycle.NewNetworkInstallContribution(fresh, string(requestChangeSet(request)), built.desiredSHA256)
+		}
+	}
+	freshDigest := sha256.New()
+	for _, contribution := range contributions {
+		_, _ = io.WriteString(freshDigest, contribution.SoftwareLifecycleInstallContribution().SHA256)
+	}
+	recheck := softwarelifecycle.InstallRecheck{Candidate: built.candidate, Contributions: contributions, PrivilegedNetworkHealthy: true}
+	if request.ReviewedReclamationSHA256 != "" {
+		recheck.Reclamation = fresh.ReclamationAuthority()
+	}
+	return recheck, hex.EncodeToString(freshDigest.Sum(nil)), nil
 }
 
 func installApplyStateObservation() (systemchanges.Observation, error) {

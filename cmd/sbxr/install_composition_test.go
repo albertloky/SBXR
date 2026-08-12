@@ -94,6 +94,14 @@ func TestComposedInstallCarriesTheExactReviewedStandaloneTargetIntoOneInstallPla
 	if err != nil || built == nil || built.plan == nil || built.plan.Summary().Result != softwarelifecycle.Managed {
 		t.Fatalf("reviewed reclamation install = (%+v, %v)", built, err)
 	}
+	recheck, _, err := recheckInstall(t.Context(), request, built)
+	if err != nil || recheck.Reclamation == nil {
+		t.Fatalf("privileged reclamation recheck = (%+v, %v)", recheck, err)
+	}
+	kind, path, digest, _, processID, reviewDigest, valid := recheck.Reclamation.SystemChangesReclamation()
+	if !valid || kind != "executable" || path != "/opt/standalone/proxy" || digest != strings.Repeat("9", 64) || processID != "4242" || reviewDigest != request.ReviewedReclamationSHA256 {
+		t.Fatalf("reclamation Apply authority = (%q, %q, %q, %q, %q, %t)", kind, path, digest, processID, reviewDigest, valid)
+	}
 }
 
 func TestComposedInstallRefusesAnIncompleteReclaimableInventory(t *testing.T) {
@@ -165,10 +173,10 @@ func composedInstallRequest(t *testing.T) softwareubuntu.InstallHandoffRequest {
 
 type composedNetworkObserver struct{}
 
-func (composedNetworkObserver) Observe(networkpolicy.ObservationRequest) (networkpolicy.Observations, error) {
+func (composedNetworkObserver) Observe(request networkpolicy.ObservationRequest) (networkpolicy.Observations, error) {
 	return networkpolicy.Observations{
 		Host:       networkpolicy.HostFacts{UbuntuVersion: "24.04.3", UbuntuServer: true, Architecture: "amd64", Systemd: true, LogicalCPUs: 1, PhysicalRAM: 1024 << 20},
-		PublicIPv4: []string{"192.0.2.10"}, SSH: networkpolicy.SSHFacts{DetectedPort: 22, ServerAddress: "192.0.2.10", CurrentSessions: []string{"session-1"}}, Firewall: networkpolicy.FirewallFacts{SBXRTableState: "absent"}, Routes: networkpolicy.RouteFacts{IPv4: "default via 192.0.2.1"},
+		PublicIPv4: []string{"192.0.2.10"}, SSH: networkpolicy.SSHFacts{DetectedPort: 22, ServerAddress: "192.0.2.10", CurrentSessions: []string{"session-1"}}, Firewall: networkpolicy.FirewallFacts{SBXRTableState: "absent", RootVerified: request.Stage == networkpolicy.PostApproval}, Routes: networkpolicy.RouteFacts{IPv4: "default via 192.0.2.1"},
 		Outbound: networkpolicy.OutboundFacts{DNS: true, GitHubHTTPS: true, GitHubAttestationHTTPS: true, CloudflareHTTPS: true, ACMEHTTPS: true, CertificateEndpointsHTTPS: true, TimeService: true, TunnelTCP7844: true, TunnelUDP7844: true},
 		Disk:     networkpolicy.DiskFacts{FilesystemBytes: 20 << 30, AvailableBytes: 3 << 30}, Time: networkpolicy.TimeFacts{Synchronized: true, Owner: "systemd-timesyncd"}, OwnerFacts: networkpolicy.OwnerFacts{DNS: "fresh", Tunnel: "fresh"},
 		Certificate: networkpolicy.CertificateFacts{DNS: networkpolicy.DNSFacts{Hostname: "direct.example.com"}, CAA: networkpolicy.CAAFacts{Issuer: "letsencrypt.org", HTTP01Allowed: true}}, Checksums: map[string]string{"sshd_config": "sha256:ssh", "nftables": "sha256:nft"},

@@ -293,8 +293,8 @@ type RunTokenRotationAdapter interface {
 type ForwardReclamationAdapter interface {
 	VerifyReclamationReady(ExecutionLease, ReclamationTarget, time.Duration) error
 	StopReclamationProcess(ExecutionLease, ReclamationTarget, time.Duration) (StepEvidence, error)
-	DeleteReclamationTarget(ExecutionLease, ReclamationTarget, time.Duration) (StepEvidence, error)
-	InspectReclamationTarget(ExecutionLease, ReclamationTarget, time.Duration) (StepEffect, error)
+	DeleteReclamationTarget(ExecutionLease, string, ReclamationTarget, time.Duration) (StepEvidence, error)
+	InspectReclamationTarget(ExecutionLease, string, ReclamationTarget, time.Duration) (StepEffect, error)
 	LoadForwardInstallationState(ExecutionLease, RecoveryTransaction) (any, error)
 	LoadForwardInstallationEvidence(ExecutionLease, RecoveryTransaction) ([]StepEvidence, error)
 }
@@ -682,13 +682,13 @@ func continueReclamationInstallation(lease ExecutionLease, adapter TransactionAd
 		recovery.LastCheckpoint = ReclamationProcessStopped
 	}
 	if recovery.LastCheckpoint == ReclamationProcessStopped {
-		effect, err := forward.InspectReclamationTarget(lease, *recovery.Reclamation, recovery.Timeouts.Check)
+		effect, err := forward.InspectReclamationTarget(lease, recovery.ChangeSet, *recovery.Reclamation, recovery.Timeouts.Check)
 		if err != nil {
 			return forwardReclamationRequired(spec, "SYSTEM-CHANGES-RECLAMATION-INSPECTION", ReclamationProcessStopped)
 		}
 		var evidence StepEvidence
 		if effect == StepEffectPresent {
-			evidence, err = forward.DeleteReclamationTarget(lease, *recovery.Reclamation, recovery.Timeouts.Step)
+			evidence, err = forward.DeleteReclamationTarget(lease, recovery.ChangeSet, *recovery.Reclamation, recovery.Timeouts.Step)
 		} else if effect == StepEffectAbsent {
 			digest := sha256.Sum256([]byte(recovery.Reclamation.Kind + "\x00" + recovery.Reclamation.Path + "\x00" + recovery.Reclamation.SHA256))
 			evidence = StepEvidence{Code: "reclamation-target-deleted", SHA256: hex.EncodeToString(digest[:])}
@@ -1095,7 +1095,7 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 			if err != nil || !safeIdentity(processEvidence.Code) || !validSHA256(processEvidence.SHA256) || adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: ReclamationProcessStopped, Step: index, Evidence: &processEvidence}) != nil {
 				return finish(lock, forwardReclamationRequired(spec, "SYSTEM-CHANGES-RECLAMATION-PROCESS", IrreversibleReclamationStarted))
 			}
-			evidence, err := reclamationForward.DeleteReclamationTarget(lease, *reclamation, spec.Timeouts.Step)
+			evidence, err := reclamationForward.DeleteReclamationTarget(lease, spec.Identity, *reclamation, spec.Timeouts.Step)
 			if err != nil || !safeIdentity(evidence.Code) || !validSHA256(evidence.SHA256) || adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: ReclamationTargetDeleted, Step: index, Evidence: &evidence}) != nil {
 				return finish(lock, forwardReclamationRequired(spec, "SYSTEM-CHANGES-RECLAMATION-DELETE", IrreversibleReclamationStarted))
 			}

@@ -575,35 +575,55 @@ func (a Adapter) VerifyReclamationReady(lease systemchanges.ExecutionLease, targ
 	if !lease.Authorized() || a.reclamationMounted(target.Path) {
 		return errors.New("reclamation target unavailable")
 	}
-	executable, err := os.Readlink(path.Join(a.root, "proc", target.ProcessID, "exe"))
-	if err != nil || executable != target.Path && executable != target.Interpreter {
-		return errors.New("reclamation process changed")
+	if err := a.verifyReclamationProcess(target); err != nil {
+		return err
 	}
-	_, err = a.reclamationDigest(target)
+	_, _, err := a.reclamationDigestAt(path.Join(a.root, strings.TrimPrefix(target.Path, "/")), target)
 	return err
 }
 
-func (a Adapter) DeleteReclamationTarget(lease systemchanges.ExecutionLease, target systemchanges.ReclamationTarget, timeout time.Duration) (systemchanges.StepEvidence, error) {
-	if !lease.Authorized() || a.reclamationMounted(target.Path) {
+func (a Adapter) DeleteReclamationTarget(lease systemchanges.ExecutionLease, changeSet string, target systemchanges.ReclamationTarget, _ time.Duration) (systemchanges.StepEvidence, error) {
+	if !lease.Authorized() || !safeName(changeSet) || a.reclamationMounted(target.Path) {
 		return systemchanges.StepEvidence{}, errors.New("reclamation target unavailable")
 	}
-	if _, err := a.reclamationDigest(target); err != nil {
-		return systemchanges.StepEvidence{}, err
-	}
+	return a.deleteReclamationTarget(changeSet, target)
+}
+
+func (a Adapter) deleteReclamationTarget(changeSet string, target systemchanges.ReclamationTarget) (systemchanges.StepEvidence, error) {
 	name := path.Join(a.root, strings.TrimPrefix(target.Path, "/"))
-	if err := os.Remove(name); err != nil {
+	quarantine := path.Join(a.root, transactionDirectory, changeSet, "reclamation-target")
+	if _, err := os.Lstat(quarantine); errors.Is(err, fs.ErrNotExist) {
+		_, proved, proofErr := a.reclamationDigestAt(name, target)
+		if proofErr != nil {
+			return systemchanges.StepEvidence{}, proofErr
+		}
+		if a.afterReclamationProof != nil {
+			a.afterReclamationProof(name)
+		}
+		if err := os.Rename(name, quarantine); err != nil {
+			return systemchanges.StepEvidence{}, err
+		}
+		_, moved, movedErr := a.reclamationDigestAt(quarantine, target)
+		_, originalErr := os.Lstat(name)
+		if movedErr != nil || !os.SameFile(proved, moved) || !errors.Is(originalErr, fs.ErrNotExist) {
+			if errors.Is(originalErr, fs.ErrNotExist) {
+				_ = os.Rename(quarantine, name)
+			}
+			return systemchanges.StepEvidence{}, errors.New("reclamation target changed before quarantine")
+		}
+	} else if err != nil {
 		return systemchanges.StepEvidence{}, err
-	}
-	directory, err := os.Open(filepath.Dir(name))
-	if err != nil {
-		return systemchanges.StepEvidence{}, err
-	}
-	syncErr := directory.Sync()
-	closeErr := directory.Close()
-	if syncErr != nil || closeErr != nil {
-		return systemchanges.StepEvidence{}, errors.New("reclamation deletion was not synchronized")
 	}
 	if _, err := os.Lstat(name); !errors.Is(err, fs.ErrNotExist) {
+		return systemchanges.StepEvidence{}, errors.New("reclamation pathname was replaced")
+	}
+	if _, _, err := a.reclamationDigestAt(quarantine, target); err != nil || os.Remove(quarantine) != nil {
+		return systemchanges.StepEvidence{}, errors.New("quarantined reclamation target changed")
+	}
+	if syncHostDirectory(filepath.Dir(name)) != nil || syncHostDirectory(filepath.Dir(quarantine)) != nil {
+		return systemchanges.StepEvidence{}, errors.New("reclamation deletion was not synchronized")
+	}
+	if _, err := os.Lstat(quarantine); !errors.Is(err, fs.ErrNotExist) {
 		return systemchanges.StepEvidence{}, errors.New("reclamation target absence unproved")
 	}
 	digest := sha256.Sum256([]byte(target.Kind + "\x00" + target.Path + "\x00" + target.SHA256))
@@ -620,17 +640,21 @@ func (a Adapter) StopReclamationProcess(lease systemchanges.ExecutionLease, targ
 		expected = target.Interpreter
 	}
 	procExe := path.Join(a.root, "proc", target.ProcessID, "exe")
-	current, readErr := os.Readlink(procExe)
+	_, readErr := os.Readlink(procExe)
 	if errors.Is(readErr, fs.ErrNotExist) && lease.RecoveryAuthorized() {
 		digest := sha256.Sum256([]byte(target.ProcessID + "\x00" + expected))
 		return systemchanges.StepEvidence{Code: "reclamation-process-stopped", SHA256: hex.EncodeToString(digest[:])}, nil
 	}
-	if err != nil || readErr != nil || current != expected || syscall.Kill(pid, syscall.SIGTERM) != nil {
+	stop := a.stopProcess
+	if stop == nil {
+		stop = signalReclamationProcess
+	}
+	if err != nil || stop(pid, func() error { return a.verifyReclamationProcess(target) }) != nil {
 		return systemchanges.StepEvidence{}, errors.New("reclamation process changed")
 	}
 	deadline := time.Now().Add(timeout)
 	for {
-		current, readErr = os.Readlink(procExe)
+		current, readErr := os.Readlink(procExe)
 		if errors.Is(readErr, fs.ErrNotExist) {
 			break
 		}
@@ -643,15 +667,22 @@ func (a Adapter) StopReclamationProcess(lease systemchanges.ExecutionLease, targ
 	return systemchanges.StepEvidence{Code: "reclamation-process-stopped", SHA256: hex.EncodeToString(digest[:])}, nil
 }
 
-func (a Adapter) InspectReclamationTarget(lease systemchanges.ExecutionLease, target systemchanges.ReclamationTarget, _ time.Duration) (systemchanges.StepEffect, error) {
-	if !lease.RecoveryAuthorized() {
+func (a Adapter) InspectReclamationTarget(lease systemchanges.ExecutionLease, changeSet string, target systemchanges.ReclamationTarget, _ time.Duration) (systemchanges.StepEffect, error) {
+	if !lease.RecoveryAuthorized() || !safeName(changeSet) {
 		return "", errors.New("reclamation recovery unavailable")
 	}
 	name := path.Join(a.root, strings.TrimPrefix(target.Path, "/"))
+	quarantine := path.Join(a.root, transactionDirectory, changeSet, "reclamation-target")
+	if _, err := os.Lstat(quarantine); err == nil {
+		if _, _, err := a.reclamationDigestAt(quarantine, target); err != nil {
+			return "", err
+		}
+		return systemchanges.StepEffectPresent, nil
+	}
 	if _, err := os.Lstat(name); errors.Is(err, fs.ErrNotExist) {
 		return systemchanges.StepEffectAbsent, nil
 	}
-	if _, err := a.reclamationDigest(target); err != nil {
+	if _, _, err := a.reclamationDigestAt(name, target); err != nil {
 		return "", err
 	}
 	return systemchanges.StepEffectPresent, nil
@@ -659,16 +690,21 @@ func (a Adapter) InspectReclamationTarget(lease systemchanges.ExecutionLease, ta
 
 func (a Adapter) reclamationDigest(target systemchanges.ReclamationTarget) (string, error) {
 	name := path.Join(a.root, strings.TrimPrefix(target.Path, "/"))
+	digest, _, err := a.reclamationDigestAt(name, target)
+	return digest, err
+}
+
+func (a Adapter) reclamationDigestAt(name string, target systemchanges.ReclamationTarget) (string, os.FileInfo, error) {
 	fd, err := syscall.Open(name, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	file := os.NewFile(uintptr(fd), name)
 	defer file.Close()
 	before, err := file.Stat()
 	stat, ok := before.Sys().(*syscall.Stat_t)
 	if err != nil || !ok || !before.Mode().IsRegular() || stat.Nlink != 1 {
-		return "", errors.New("reclamation target is not one regular file")
+		return "", nil, errors.New("reclamation target is not one regular file")
 	}
 	hash := func() (string, error) {
 		if _, err := file.Seek(0, io.SeekStart); err != nil {
@@ -688,9 +724,41 @@ func (a Adapter) reclamationDigest(target systemchanges.ReclamationTarget) (stri
 	second, secondErr := hash()
 	pathInfo, pathErr := os.Lstat(name)
 	if err != nil || statErr != nil || secondErr != nil || first != target.SHA256 || second != first || !os.SameFile(before, after) || pathErr != nil || pathInfo.Mode()&os.ModeSymlink != 0 || !os.SameFile(after, pathInfo) || before.Size() != after.Size() || before.ModTime() != after.ModTime() {
-		return "", errors.New("reclamation target changed")
+		return "", nil, errors.New("reclamation target changed")
 	}
-	return first, nil
+	return first, after, nil
+}
+
+func (a Adapter) verifyReclamationProcess(target systemchanges.ReclamationTarget) error {
+	base := path.Join(a.root, "proc", target.ProcessID)
+	expected := target.Path
+	if target.Kind == "script" {
+		expected = target.Interpreter
+	}
+	executable, err := os.Readlink(path.Join(base, "exe"))
+	if err != nil || executable != expected {
+		return errors.New("reclamation process changed")
+	}
+	if target.Kind == "script" {
+		cmdline, err := os.ReadFile(path.Join(base, "cmdline"))
+		if err != nil || string(cmdline) != target.Interpreter+"\x00"+target.Path+"\x00" {
+			return errors.New("reclamation script process changed")
+		}
+	}
+	return nil
+}
+
+func syncHostDirectory(name string) error {
+	directory, err := os.Open(name)
+	if err != nil {
+		return err
+	}
+	syncErr := directory.Sync()
+	closeErr := directory.Close()
+	if syncErr != nil {
+		return syncErr
+	}
+	return closeErr
 }
 
 func (a Adapter) reclamationMounted(target string) bool {

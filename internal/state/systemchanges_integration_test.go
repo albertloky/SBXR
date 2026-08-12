@@ -302,13 +302,13 @@ func (a *systemChangesAdapter) StopReclamationProcess(systemchanges.ExecutionLea
 	return systemchanges.StepEvidence{Code: "reclamation-process-stopped", SHA256: testSHA('c')}, nil
 }
 
-func (a *systemChangesAdapter) DeleteReclamationTarget(_ systemchanges.ExecutionLease, _ systemchanges.ReclamationTarget, _ time.Duration) (systemchanges.StepEvidence, error) {
+func (a *systemChangesAdapter) DeleteReclamationTarget(_ systemchanges.ExecutionLease, _ string, _ systemchanges.ReclamationTarget, _ time.Duration) (systemchanges.StepEvidence, error) {
 	a.events = append(a.events, "delete exact reclamation target")
 	a.reclamationPresent = false
 	return systemchanges.StepEvidence{Code: "reclamation-target-deleted", SHA256: testSHA('d')}, nil
 }
 
-func (a *systemChangesAdapter) InspectReclamationTarget(systemchanges.ExecutionLease, systemchanges.ReclamationTarget, time.Duration) (systemchanges.StepEffect, error) {
+func (a *systemChangesAdapter) InspectReclamationTarget(systemchanges.ExecutionLease, string, systemchanges.ReclamationTarget, time.Duration) (systemchanges.StepEffect, error) {
 	a.events = append(a.events, "inspect exact reclamation target")
 	if a.reclamationPresent {
 		return systemchanges.StepEffectPresent, nil

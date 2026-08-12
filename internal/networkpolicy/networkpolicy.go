@@ -1132,11 +1132,13 @@ func reviewInstallation(result *Result, observed Observations, required bool) {
 		plan.Targets = append(plan.Targets, fmt.Sprintf("Cloudflare %s %s name %s", reviewFact(conflict.Kind), reviewFact(conflict.ID), reviewFact(conflict.Name)))
 	}
 	plan.PermanentWarnings = []string{"Future reclamation is permanent", "Future interruption may require forward recovery"}
+	reviewedFacts := observed
+	reviewedFacts.Firewall.RootVerified = false
 	encoded, _ := json.Marshal(struct {
 		Facts      Observations
 		Plan       ReclamationPlan
 		Foundation ProtectedHostFoundation
-	}{observed, plan, result.ProtectedFoundation})
+	}{reviewedFacts, plan, result.ProtectedFoundation})
 	digest := sha256.Sum256(encoded)
 	plan.Digest = hex.EncodeToString(digest[:])
 	result.Reclamation = &plan

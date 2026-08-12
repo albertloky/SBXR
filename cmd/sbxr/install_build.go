@@ -33,6 +33,7 @@ type builtInstall struct {
 	wiring        *installWiring
 	cloudflare    *cloudflaretunnel.Plan
 	cloudflareAPI cloudflaretunnel.MutationAPI
+	inventory     cloudflaretunnel.MutationPlanner
 	contributions []softwarelifecycle.InstallContribution
 	networkIntent networkpolicy.Intent
 	network       func(networkpolicy.Request) networkpolicy.Result
@@ -295,7 +296,7 @@ func buildInstallWith(ctx context.Context, request softwareubuntu.InstallHandoff
 		totalSteps += len(contribution.SoftwareLifecycleInstallContribution().Steps)
 	}
 	health := healthdiagnostics.InstallationSummaryFrom(systemchanges.NewNotInstalledHealthInspection(baseNetwork.FreshInstallationProof()))
-	return &builtInstall{candidate: candidate, desired: desired, desiredSHA256: desiredSHA256, plan: installPlan, wiring: wiring, cloudflare: cloudflareResult.Plan, cloudflareAPI: dependencies.cloudflareAPI, contributions: contributions, networkIntent: intent, network: dependencies.network, disk: disk, totalSteps: totalSteps, health: health}, nil
+	return &builtInstall{candidate: candidate, desired: desired, desiredSHA256: desiredSHA256, plan: installPlan, wiring: wiring, cloudflare: cloudflareResult.Plan, cloudflareAPI: dependencies.cloudflareAPI, inventory: dependencies.inventory, contributions: contributions, networkIntent: intent, network: dependencies.network, disk: disk, totalSteps: totalSteps, health: health}, nil
 }
 
 type installEntropyReader struct {

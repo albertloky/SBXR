@@ -28,6 +28,8 @@ type Adapter struct {
 	fresh                  *systemchanges.FreshInstallationAuthority
 	freshLock              bool
 	afterReclamationDigest func(string)
+	afterReclamationProof  func(string)
+	stopProcess            func(int, func() error) error
 }
 
 // ObservationSource reloads coordinated State lineage and volatile bindings.
