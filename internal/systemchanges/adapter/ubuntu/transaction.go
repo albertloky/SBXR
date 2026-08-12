@@ -578,8 +578,19 @@ func (a Adapter) VerifyReclamationReady(lease systemchanges.ExecutionLease, targ
 	if err := a.verifyReclamationProcess(target); err != nil {
 		return err
 	}
+	targetInfo, targetErr := os.Lstat(path.Join(a.root, strings.TrimPrefix(target.Path, "/")))
+	transactionInfo, transactionErr := os.Lstat(path.Join(a.root, transactionDirectory))
+	if targetErr != nil || transactionErr != nil || !sameFilesystem(targetInfo, transactionInfo) {
+		return errors.New("reclamation target cannot enter protected quarantine")
+	}
 	_, _, err := a.reclamationDigestAt(path.Join(a.root, strings.TrimPrefix(target.Path, "/")), target)
 	return err
+}
+
+func sameFilesystem(first, second os.FileInfo) bool {
+	firstStat, firstOK := first.Sys().(*syscall.Stat_t)
+	secondStat, secondOK := second.Sys().(*syscall.Stat_t)
+	return firstOK && secondOK && firstStat.Dev == secondStat.Dev
 }
 
 func (a Adapter) DeleteReclamationTarget(lease systemchanges.ExecutionLease, changeSet string, target systemchanges.ReclamationTarget, _ time.Duration) (systemchanges.StepEvidence, error) {
@@ -613,6 +624,9 @@ func (a Adapter) deleteReclamationTarget(changeSet string, target systemchanges.
 		}
 	} else if err != nil {
 		return systemchanges.StepEvidence{}, err
+	}
+	if _, err := os.Lstat(name); !errors.Is(err, fs.ErrNotExist) {
+		return systemchanges.StepEvidence{}, errors.New("reclamation pathname was replaced")
 	}
 	if _, _, err := a.reclamationDigestAt(quarantine, target); err != nil || os.Remove(quarantine) != nil {
 		return systemchanges.StepEvidence{}, errors.New("quarantined reclamation target changed")

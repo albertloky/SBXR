@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -144,6 +145,55 @@ func TestReclamationQuarantineRestoreNeverOverwritesANewPath(t *testing.T) {
 		t.Fatalf("quarantined target changed: %q, %v", got, err)
 	}
 }
+
+func TestReclamationRecoveryPreservesQuarantineAndReplacement(t *testing.T) {
+	root := t.TempDir()
+	name := filepath.Join(root, "opt/app/proxy")
+	quarantine := filepath.Join(root, transactionDirectory, "change-1", "reclamation-target")
+	if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(quarantine), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	reviewed := []byte("reviewed")
+	replacement := []byte("unrelated")
+	if err := os.WriteFile(quarantine, reviewed, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(name, replacement, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(reviewed)
+	target := systemchanges.ReclamationTarget{Kind: "executable", Path: "/opt/app/proxy", SHA256: fmt.Sprintf("%x", digest), ProcessID: "4242", ReviewSHA256: fmt.Sprintf("%x", digest)}
+	adapter := NewAt(root, nil, nil)
+	if _, err := adapter.deleteReclamationTarget("change-1", target); err == nil {
+		t.Fatal("recovery deleted quarantine while original pathname was occupied")
+	}
+	if got, err := os.ReadFile(name); err != nil || string(got) != string(replacement) {
+		t.Fatalf("replacement changed: %q, %v", got, err)
+	}
+	if got, err := os.ReadFile(quarantine); err != nil || string(got) != string(reviewed) {
+		t.Fatalf("quarantine changed: %q, %v", got, err)
+	}
+}
+
+func TestReclamationReadinessRefusesCrossDeviceQuarantine(t *testing.T) {
+	first := fakeFileInfo{stat: &syscall.Stat_t{Dev: 11}}
+	second := fakeFileInfo{stat: &syscall.Stat_t{Dev: 22}}
+	if sameFilesystem(first, second) || !sameFilesystem(first, fakeFileInfo{stat: &syscall.Stat_t{Dev: 11}}) {
+		t.Fatal("cross-device quarantine was accepted")
+	}
+}
+
+type fakeFileInfo struct{ stat *syscall.Stat_t }
+
+func (fakeFileInfo) Name() string       { return "fixture" }
+func (fakeFileInfo) Size() int64        { return 0 }
+func (fakeFileInfo) Mode() os.FileMode  { return 0o755 }
+func (fakeFileInfo) ModTime() time.Time { return time.Time{} }
+func (fakeFileInfo) IsDir() bool        { return false }
+func (info fakeFileInfo) Sys() any      { return info.stat }
 
 func TestReclamationScriptAndProcessHandleRecheckExactProcess(t *testing.T) {
 	root := t.TempDir()
