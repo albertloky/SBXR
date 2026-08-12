@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -56,6 +57,10 @@ func (a Adapter) Observe(request networkpolicy.ObservationRequest) (networkpolic
 	if err != nil {
 		return networkpolicy.Observations{}, err
 	}
+	listeners, err := a.listeners(request.ReclamationReview)
+	if err != nil {
+		return networkpolicy.Observations{}, err
+	}
 	observed := networkpolicy.Observations{
 		Host: networkpolicy.HostFacts{
 			UbuntuVersion:  version,
@@ -66,7 +71,7 @@ func (a Adapter) Observe(request networkpolicy.ObservationRequest) (networkpolic
 			PhysicalRAM:    memory,
 			Virtualization: strings.TrimSpace(readOptional(a.path("/sys/class/dmi/id/product_name"))),
 		},
-		Listeners:         a.listeners(),
+		Listeners:         listeners,
 		ServiceIdentities: a.serviceIdentities(),
 		ResourcePaths:     a.resourcePaths(),
 		SSH:               sshFacts(),
@@ -77,11 +82,13 @@ func (a Adapter) Observe(request networkpolicy.ObservationRequest) (networkpolic
 		Ephemeral: a.ephemeralRange(),
 		Checksums: map[string]string{},
 	}
-	observed.Reclamation, err = a.reclamationFacts(observed.ResourcePaths, observed.Listeners)
-	if err != nil {
-		return networkpolicy.Observations{}, err
+	if request.ReclamationReview {
+		observed.Reclamation, err = a.reclamationFacts(observed.ResourcePaths, observed.Listeners)
+		if err != nil {
+			return networkpolicy.Observations{}, err
+		}
+		observed.ReclamationComplete = true
 	}
-	observed.ReclamationComplete = true
 	observed.Disk = diskFacts(a.root)
 	observed.Checksums["routes"] = checksumFiles(a.path("/proc/net/route"), a.path("/proc/net/ipv6_route"))
 	observed.Checksums["listeners"] = checksumFiles(a.path("/proc/net/tcp"), a.path("/proc/net/tcp6"), a.path("/proc/net/udp"), a.path("/proc/net/udp6"))
@@ -133,14 +140,25 @@ func (a Adapter) reclamationFacts(paths []string, listeners []networkpolicy.List
 	if _, err := os.ReadFile(a.path("/proc/self/mountinfo")); err != nil {
 		return networkpolicy.ReclamationFacts{}, err
 	}
-	facts := networkpolicy.ReclamationFacts{ProtectedPaths: a.currentShells()}
+	shells, err := a.currentShells()
+	if err != nil {
+		return networkpolicy.ReclamationFacts{}, err
+	}
+	facts := networkpolicy.ReclamationFacts{ProtectedPaths: shells}
 	processes, scripts, err := a.reclamationProcesses()
 	if err != nil {
 		return networkpolicy.ReclamationFacts{}, err
 	}
 	facts.Scripts = scripts
+	interpreters := map[string]bool{}
+	for _, script := range scripts {
+		interpreters[script.Interpreter] = true
+		if !slices.Contains(facts.ProtectedPaths, script.Interpreter) {
+			facts.ProtectedPaths = append(facts.ProtectedPaths, script.Interpreter)
+		}
+	}
 	for _, listener := range listeners {
-		if listener.Executable != "" && !slices.Contains(paths, listener.Executable) {
+		if listener.Executable != "" && !interpreters[listener.Executable] && !slices.Contains(paths, listener.Executable) {
 			paths = append(paths, listener.Executable)
 		}
 	}
@@ -224,23 +242,30 @@ func (a Adapter) reclamationFacts(paths []string, listeners []networkpolicy.List
 	return facts, nil
 }
 
-func (a Adapter) currentShells() []string {
+func (a Adapter) currentShells() ([]string, error) {
 	var shells []string
 	pid := os.Getppid()
 	for range 16 {
 		base := filepath.Join("/proc", strconv.Itoa(pid))
 		executable, err := os.Readlink(a.path(filepath.Join(base, "exe")))
-		if err == nil && slices.Contains([]string{"sh", "bash", "dash", "zsh", "fish"}, filepath.Base(executable)) {
+		if err != nil {
+			return nil, err
+		}
+		if slices.Contains([]string{"sh", "bash", "dash", "zsh", "fish"}, filepath.Base(executable)) {
 			shells = append(shells, executable)
 		}
-		stat := readOptional(a.path(filepath.Join(base, "stat")))
+		statData, err := os.ReadFile(a.path(filepath.Join(base, "stat")))
+		if err != nil {
+			return nil, err
+		}
+		stat := string(statData)
 		end := strings.LastIndex(stat, ") ")
 		if end < 0 {
-			break
+			return nil, errors.New("current shell ancestry is malformed")
 		}
 		fields := strings.Fields(stat[end+2:])
 		if len(fields) < 2 {
-			break
+			return nil, errors.New("current shell ancestry is incomplete")
 		}
 		parent, err := strconv.Atoi(fields[1])
 		if err != nil || parent <= 1 || parent == pid {
@@ -248,7 +273,7 @@ func (a Adapter) currentShells() []string {
 		}
 		pid = parent
 	}
-	return shells
+	return shells, nil
 }
 
 func (a Adapter) reclamationProcesses() (map[string]socketOwner, []networkpolicy.ScriptConflict, error) {
@@ -490,9 +515,12 @@ func (a Adapter) physicalRAM() (uint64, error) {
 	return 0, scanner.Err()
 }
 
-func (a Adapter) listeners() []networkpolicy.Listener {
+func (a Adapter) listeners(strict bool) ([]networkpolicy.Listener, error) {
 	var listeners []networkpolicy.Listener
-	owners := a.socketOwners()
+	owners, err := a.socketOwners(strict)
+	if err != nil {
+		return nil, err
+	}
 	for _, source := range []struct {
 		name     string
 		protocol networkpolicy.Protocol
@@ -504,6 +532,9 @@ func (a Adapter) listeners() []networkpolicy.Listener {
 	} {
 		file, err := os.Open(a.path(source.name))
 		if err != nil {
+			if strict {
+				return nil, err
+			}
 			continue
 		}
 		scanner := bufio.NewScanner(file)
@@ -522,16 +553,26 @@ func (a Adapter) listeners() []networkpolicy.Listener {
 				listeners = append(listeners, networkpolicy.Listener{Address: procAddress(address), Port: uint16(port), Protocol: source.protocol, Process: owner.process, Service: owner.service, Executable: owner.executable, Ownership: networkpolicy.Unproved})
 			}
 		}
+		if err := scanner.Err(); err != nil {
+			file.Close()
+			return nil, err
+		}
 		file.Close()
 	}
-	return listeners
+	return listeners, nil
 }
 
 type socketOwner struct{ process, service, executable string }
 
-func (a Adapter) socketOwners() map[string]socketOwner {
+func (a Adapter) socketOwners(strict bool) (map[string]socketOwner, error) {
 	owners := map[string]socketOwner{}
-	processes, _ := os.ReadDir(a.path("/proc"))
+	processes, err := os.ReadDir(a.path("/proc"))
+	if err != nil {
+		if strict {
+			return nil, err
+		}
+		return owners, nil
+	}
 	for _, process := range processes {
 		if _, err := strconv.Atoi(process.Name()); err != nil {
 			continue
@@ -554,7 +595,7 @@ func (a Adapter) socketOwners() map[string]socketOwner {
 			}
 		}
 	}
-	return owners
+	return owners, nil
 }
 
 func procAddress(value string) string {

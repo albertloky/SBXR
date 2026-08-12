@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -27,7 +29,7 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 		"proc/meminfo":                          "MemTotal:        1048576 kB\nSwapTotal:       8388608 kB\n",
 		"proc/net/tcp":                          "  sl  local_address rem_address   st tx_queue tr tm->when retrnsmt uid timeout inode\n   0: 00000000:01BB 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 4242\n",
 		"proc/net/tcp6":                         "  sl  local_address rem_address   st\n   0: 00000000000000000000000001000000:2B48 00000000000000000000000000000000:0000 0A\n",
-		"proc/net/udp":                          "  sl  local_address rem_address   st\n",
+		"proc/net/udp":                          "  sl  local_address rem_address   st tx_queue tr tm->when retrnsmt uid timeout inode\n   0: 0100007F:3039 00000000:0000 07 00000000:00000000 00:00000000 00000000 1000 0 5252\n",
 		"proc/net/udp6":                         "  sl  local_address rem_address   st\n",
 		"proc/net/route":                        "Iface Destination Gateway Flags RefCnt Use Metric Mask\neth0 00000000 010200C0 0003 0 0 0 00000000\n",
 		"proc/net/ipv6_route":                   "",
@@ -37,6 +39,11 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 		"sys/class/dmi/id/product_name":         "Fixture Hypervisor\n",
 		"usr/local/bin/xray":                    "inactive proxy remnant\n",
 		"usr/sbin/nginx":                        "active web server\n",
+		"proc/125/comm":                         "python3\n",
+		"proc/125/cgroup":                       "0::/system.slice/proxy.service\n",
+		"proc/125/cmdline":                      "/opt/shared/python\x00/opt/app/server.py\x00",
+		"opt/shared/python":                     "shared interpreter\n",
+		"opt/app/server.py":                     "print('proxy')\n",
 	}
 	for name, data := range files {
 		path := filepath.Join(root, name)
@@ -51,6 +58,9 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Chmod(filepath.Join(root, "usr/sbin/nginx"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(root, "opt/shared/python"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(root, "proc/123/fd"), 0o700); err != nil {
@@ -74,7 +84,26 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 	if err := os.Symlink("/usr/local/bin/xray", filepath.Join(root, "proc/124/exe")); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(root, "proc/125/fd"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("socket:[5252]", filepath.Join(root, "proc/125/fd/5")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/opt/shared/python", filepath.Join(root, "proc/125/exe")); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(filepath.Join(root, "run/systemd/system"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	parent := strconv.Itoa(os.Getppid())
+	if err := os.MkdirAll(filepath.Join(root, "proc", parent), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/bin/zsh", filepath.Join(root, "proc", parent, "exe")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "proc", parent, "stat"), []byte(parent+" (zsh) S 1 0 0 0\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -88,14 +117,14 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 			AnyTLS: networkpolicy.Profile{Enabled: true, Port: 9443},
 		},
 	}
-	observed, err := NewAt(root).Observe(networkpolicy.ObservationRequest{Intent: candidateIntent, Stage: networkpolicy.PreApproval})
+	observed, err := NewAt(root).Observe(networkpolicy.ObservationRequest{Intent: candidateIntent, Stage: networkpolicy.PreApproval, ReclamationReview: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if observed.Host.UbuntuVersion != "24.04" || !observed.Host.Systemd || observed.Host.LogicalCPUs < 1 || observed.Host.PhysicalRAM != 1<<30 || observed.Host.Virtualization != "Fixture Hypervisor" {
 		t.Fatalf("host facts = %+v", observed.Host)
 	}
-	if len(observed.Listeners) != 2 || observed.Listeners[0].Port != 443 || observed.Listeners[0].Protocol != networkpolicy.TCP || observed.Listeners[0].Process != "nginx" || observed.Listeners[0].Service != "nginx.service" || observed.Listeners[0].Executable != "/usr/sbin/nginx" || observed.Listeners[1].Address != "::1" || observed.Listeners[1].Port != 11080 || observed.Ephemeral != (networkpolicy.PortRange{First: 32768, Last: 60999}) {
+	if len(observed.Listeners) != 3 || observed.Listeners[0].Port != 443 || observed.Listeners[0].Protocol != networkpolicy.TCP || observed.Listeners[0].Process != "nginx" || observed.Listeners[0].Service != "nginx.service" || observed.Listeners[0].Executable != "/usr/sbin/nginx" || observed.Listeners[1].Address != "::1" || observed.Listeners[1].Port != 11080 || observed.Listeners[2].Process != "python3" || observed.Listeners[2].Executable != "/opt/shared/python" || observed.Ephemeral != (networkpolicy.PortRange{First: 32768, Last: 60999}) {
 		t.Fatalf("network facts = listeners %+v ephemeral %+v", observed.Listeners, observed.Ephemeral)
 	}
 	if len(observed.PortCandidates) == 0 {
@@ -128,6 +157,9 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 	}
 	if len(observed.Reclamation.Executables) != 2 || observed.Reclamation.Executables[0].SHA256 == "" || observed.Reclamation.Executables[0].Package != "xray" || observed.Reclamation.Executables[0].Process != "xray" || observed.Reclamation.Executables[0].Service != "xray.service" || observed.Reclamation.Executables[1].Path != "/usr/sbin/nginx" || observed.Reclamation.Executables[1].SHA256 == "" || observed.Reclamation.Executables[1].Package != "nginx" || observed.Reclamation.Executables[1].Process != "nginx" || len(observed.Reclamation.Packages) != 2 || observed.Reclamation.Packages[0].Version != "1.2.3" || len(observed.Reclamation.Packages[0].OwnedPaths) != 2 || len(observed.Reclamation.Identities) != 2 || observed.Reclamation.Identities[0].Exclusive || observed.Reclamation.Identities[1].Exclusive {
 		t.Fatalf("reclamation facts = %+v", observed.Reclamation)
+	}
+	if len(observed.Reclamation.Scripts) != 1 || observed.Reclamation.Scripts[0].Path != "/opt/app/server.py" || !slices.Contains(observed.Reclamation.ProtectedPaths, "/opt/shared/python") || slices.ContainsFunc(observed.Reclamation.Executables, func(file networkpolicy.FileConflict) bool { return file.Path == "/opt/shared/python" }) {
+		t.Fatalf("script interpreter was not protected: %+v", observed.Reclamation)
 	}
 	if observed.Firewall.RootVerified {
 		t.Fatal("unprivileged fixture observation guessed root-only nftables facts")
@@ -245,10 +277,20 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 	if len(qualified.PublicIPv4) != 1 || qualified.PublicIPv4[0] != "8.8.8.8" || len(qualified.PublicIPv6) != 1 || qualified.PublicIPv6[0] != "2001:4860:4860::8888" {
 		t.Fatalf("qualified public addresses = IPv4 %v IPv6 %v", qualified.PublicIPv4, qualified.PublicIPv6)
 	}
+	parentStat := filepath.Join(root, "proc", parent, "stat")
+	if err := os.Remove(parentStat); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewAt(root).Observe(networkpolicy.ObservationRequest{Stage: networkpolicy.PreApproval, ReclamationReview: true}); err == nil {
+		t.Fatal("unreadable current-shell ancestry was marked complete")
+	}
+	if err := os.WriteFile(parentStat, []byte(parent+" (zsh) S 1 0 0 0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Remove(filepath.Join(root, "var/lib/dpkg/info/nginx.list")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewAt(root).Observe(networkpolicy.ObservationRequest{Stage: networkpolicy.PreApproval}); err == nil {
+	if _, err := NewAt(root).Observe(networkpolicy.ObservationRequest{Stage: networkpolicy.PreApproval, ReclamationReview: true}); err == nil {
 		t.Fatal("incomplete package ownership was marked as a complete reclamation inventory")
 	}
 }
@@ -311,7 +353,7 @@ func TestProductionUbuntuSeam(t *testing.T) {
 	}
 	defer listener.Close()
 	port := uint16(listener.Addr().(*net.TCPAddr).Port)
-	observed, err := New().Observe(networkpolicy.ObservationRequest{Stage: networkpolicy.PostApproval})
+	observed, err := New().Observe(networkpolicy.ObservationRequest{Stage: networkpolicy.PostApproval, ReclamationReview: true})
 	if err != nil {
 		t.Fatal(err)
 	}

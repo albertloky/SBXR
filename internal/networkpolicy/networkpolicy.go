@@ -101,9 +101,10 @@ func (d DiskRequirement) Total() uint64 {
 }
 
 type ObservationRequest struct {
-	Intent Intent
-	Stage  Stage
-	Scope  ObservationScope
+	Intent            Intent
+	Stage             Stage
+	Scope             ObservationScope
+	ReclamationReview bool
 }
 
 type ObservationScope string
@@ -310,6 +311,7 @@ type Request struct {
 	Certificate       CertificateFacts
 	Outside           OutsideFacts
 	RelevantChecksums map[string]string
+	ReclamationReview bool
 }
 
 type ProofStatus string
@@ -857,7 +859,7 @@ func (i Interface) Evaluate(request Request) Result {
 		result.add(requiredFailure("NETWORK-ADAPTER-UNAVAILABLE", "Ubuntu observations are unavailable", "no Adapter", "one Ubuntu-host Adapter", "SBXR cannot prove the network baseline", Fix{OwnerChecklist: []string{"Restore the Ubuntu-host Adapter."}}))
 		return result
 	}
-	observed, err := i.adapter.Observe(ObservationRequest{Intent: request.Intent, Stage: request.Stage, Scope: LocalObservations})
+	observed, err := i.adapter.Observe(ObservationRequest{Intent: request.Intent, Stage: request.Stage, Scope: LocalObservations, ReclamationReview: request.ReclamationReview})
 	if err != nil {
 		result.add(requiredFailure("NETWORK-OBSERVATION-FAILED", "Ubuntu observation failed", "typed observation unavailable", "fresh typed Ubuntu facts", "SBXR cannot prove the network baseline", Fix{OwnerChecklist: []string{"Correct the observation failure."}}))
 		return result
@@ -871,7 +873,7 @@ func (i Interface) Evaluate(request Request) Result {
 	observed.Outbound = OutboundFacts{}
 	applyManagedProof(request.Managed, &observed)
 	result.Policy = candidatePolicy(request.Intent)
-	reviewInstallation(&result, observed)
+	reviewInstallation(&result, observed, request.ReclamationReview)
 	if result.Outcome == Failed {
 		return result
 	}
@@ -890,7 +892,7 @@ func (i Interface) Evaluate(request Request) Result {
 	if result.Outcome == Failed {
 		return result
 	}
-	external, err := i.adapter.Observe(ObservationRequest{Intent: request.Intent, Stage: request.Stage, Scope: ExternalObservations})
+	external, err := i.adapter.Observe(ObservationRequest{Intent: request.Intent, Stage: request.Stage, Scope: ExternalObservations, ReclamationReview: request.ReclamationReview})
 	if err != nil {
 		result.add(requiredFailure("NETWORK-OBSERVATION-FAILED", "External network observation failed", "typed external observation unavailable", "fresh configured-resolver and verified-protocol facts", "SBXR cannot prove required outbound dependencies", Fix{OwnerChecklist: []string{"Correct the external observation failure."}}))
 		return result
@@ -933,9 +935,13 @@ func (i Interface) Evaluate(request Request) Result {
 	return result
 }
 
-func reviewInstallation(result *Result, observed Observations) {
+func reviewInstallation(result *Result, observed Observations, required bool) {
 	result.ProtectedFoundation = ProtectedHostFoundation{Version: 1, Paths: []string{"/bin/sh", "/boot", "/etc/apt", "/etc/passwd", "/etc/sbxr", "/etc/shadow", "/etc/ssh", "/lib", "/lib64", "/proc", "/run", "/sbin/init", "/sys", "/usr/bin/apt", "/usr/bin/apt-get", "/usr/bin/dpkg", "/usr/bin/env", "/usr/bin/sudo", "/usr/bin/systemctl", "/usr/lib", "/usr/local/bin/sbxr", "/usr/sbin/sshd", "/var/lib/dpkg", "/var/lib/sbxr"}}
 	result.ProtectedFoundation.Paths = append(result.ProtectedFoundation.Paths, observed.Reclamation.ProtectedPaths...)
+	if required && !observed.ReclamationComplete {
+		result.add(requiredFailure("NETWORK-RECLAMATION-UNPROVED", "Installation conflict inventory is incomplete", "one or more conflict ownership facts are unavailable", "one complete listener, process, service, package, identity, executable, script, mount, Docker, firewall, SSH, port, and Cloudflare inventory", "SBXR never treats incomplete conflict evidence as a Clean VPS", ownerFix("Restore read access to the host inventory or reimage the VPS.")))
+		return
+	}
 	unsupported := observed.Host.UbuntuVersion != "24.04" && !strings.HasPrefix(observed.Host.UbuntuVersion, "24.04.") || !observed.Host.UbuntuServer || !observed.Host.Systemd || observed.Host.Architecture != "amd64" && observed.Host.Architecture != "arm64"
 	switch {
 	case unsupported:

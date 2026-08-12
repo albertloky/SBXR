@@ -63,7 +63,7 @@ func TestReclaimableVPSReviewBindsEverySafeConflictWithoutChangingObservedState(
 	}
 	observed.OwnerFacts = networkpolicy.OwnerFacts{DNS: "dns-record-id-1", Tunnel: "tunnel-id-1", Routes: []networkpolicy.CloudflareRoute{{Profile: "xhttp.example.test", OriginAddress: "127.0.0.1", OriginPort: 11080, Protocol: networkpolicy.TCP}}}
 	want := observed
-	result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PreApproval})
+	result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PreApproval, ReclamationReview: true})
 	if result.InstallationClass != networkpolicy.ReclaimableVPS || result.Reclamation == nil || result.Reclamation.Digest == "" {
 		t.Fatalf("reclaimable classification = %q plan=%+v findings=%+v", result.InstallationClass, result.Reclamation, result.Findings)
 	}
@@ -101,7 +101,7 @@ func TestReclamationReviewRefusesIncompleteOwnershipProof(t *testing.T) {
 			observed := completeObservations()
 			observed.ReclamationComplete = true
 			test.alter(&observed)
-			result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PreApproval})
+			result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PreApproval, ReclamationReview: true})
 			if result.Reclamation != nil {
 				t.Fatalf("incomplete ownership received a plan: %+v", result.Reclamation)
 			}
@@ -113,7 +113,7 @@ func TestReclamationReviewRefusesIncompleteOwnershipProof(t *testing.T) {
 func TestIncompleteReclaimableInventoryCannotBecomeCleanInstallationAuthority(t *testing.T) {
 	observed := completeObservations()
 	observed.Reclamation.Docker = &networkpolicy.DockerConflict{Service: "docker.service", Status: "unknown"}
-	result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PreApproval})
+	result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PreApproval, ReclamationReview: true})
 	assertFinding(t, result, networkpolicy.Failed, networkpolicy.Required, "NETWORK-RECLAMATION-UNPROVED")
 	if result.Reclamation != nil || result.FreshInstallationProof() != (networkpolicy.FreshInstallationProof{}) {
 		t.Fatalf("incomplete Reclaimable VPS received plan or Clean authority: %+v", result)
@@ -121,8 +121,9 @@ func TestIncompleteReclaimableInventoryCannotBecomeCleanInstallationAuthority(t 
 }
 
 func TestInstallationReviewDistinguishesCleanContradictoryAndUnsupportedHosts(t *testing.T) {
-	request := networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PreApproval}
+	request := networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PreApproval, ReclamationReview: true}
 	clean := completeObservations()
+	clean.ReclamationComplete = true
 	clean.Listeners = []networkpolicy.Listener{{Address: "0.0.0.0", Port: clean.SSH.DetectedPort, Protocol: networkpolicy.TCP, Process: "sshd", Service: "ssh.service", Ownership: networkpolicy.Unproved}}
 	if got := networkpolicy.New(staticAdapter{observed: clean}).Evaluate(request).InstallationClass; got != networkpolicy.CleanVPS {
 		t.Fatalf("clean classification = %q", got)
@@ -152,7 +153,7 @@ func TestProtectedHostFoundationRefusesAReclamationPlan(t *testing.T) {
 			observed := completeObservations()
 			observed.ReclamationComplete = true
 			alter(&observed)
-			result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PreApproval})
+			result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PreApproval, ReclamationReview: true})
 			if result.Reclamation != nil || result.ProtectedFoundation.Version != 1 || !slices.Contains(result.ProtectedFoundation.Paths, "/usr/bin/apt-get") {
 				t.Fatalf("protected foundation = %+v plan=%+v", result.ProtectedFoundation, result.Reclamation)
 			}
