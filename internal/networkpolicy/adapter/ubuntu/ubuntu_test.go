@@ -311,6 +311,25 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestStableRegularDigestRefusesPathReplacementDuringRead(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "target")
+	if err := os.WriteFile(path, []byte("original"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	adapter := Adapter{afterFirstDigest: func(name string) {
+		if err := os.Rename(name, name+".old"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(name, []byte("replacement"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}}
+	if _, _, err := adapter.stableRegularDigest(path); err == nil {
+		t.Fatal("path replacement retained an executable digest")
+	}
+}
+
 func TestAdapterUsesRealDNSAndVerifiedHTTPSWithoutCredentials(t *testing.T) {
 	root := t.TempDir()
 	for name, data := range map[string]string{

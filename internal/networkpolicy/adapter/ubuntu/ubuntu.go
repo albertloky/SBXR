@@ -30,11 +30,12 @@ import (
 )
 
 type Adapter struct {
-	root       string
-	external   bool
-	privileged bool
-	output     func(string, ...string) ([]byte, error)
-	addresses  func() ([]net.Addr, error)
+	root             string
+	external         bool
+	privileged       bool
+	output           func(string, ...string) ([]byte, error)
+	addresses        func() ([]net.Addr, error)
+	afterFirstDigest func(string)
 }
 
 func New() Adapter { return Adapter{root: "/", external: true, privileged: os.Geteuid() == 0} }
@@ -198,23 +199,20 @@ func (a Adapter) reclamationFacts(paths []string, listeners []networkpolicy.List
 		}
 	}
 	for _, path := range paths {
-		info, err := os.Lstat(a.path(path))
-		if err != nil {
-			continue
-		}
-		if info.Mode()&os.ModeSymlink != 0 || a.mountPoint(path) {
+		if a.mountPoint(path) {
 			facts.UnsafePaths = append(facts.UnsafePaths, path)
 			continue
 		}
-		if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		digest, info, err := a.stableRegularDigest(a.path(path))
+		if err != nil {
+			facts.UnsafePaths = append(facts.UnsafePaths, path)
 			continue
 		}
-		data, err := os.ReadFile(a.path(path))
-		if err != nil {
-			return networkpolicy.ReclamationFacts{}, err
+		if info.Mode().Perm()&0o111 == 0 {
+			continue
 		}
 		stat, _ := info.Sys().(*syscall.Stat_t)
-		file := networkpolicy.FileConflict{Path: path, SHA256: checksum(data), Mode: uint32(info.Mode().Perm()), Links: 1, Mount: a.mountPoint(path)}
+		file := networkpolicy.FileConflict{Path: path, SHA256: digest, Mode: uint32(info.Mode().Perm()), Links: 1}
 		if owner, ok := processes[path]; ok {
 			file.Process, file.Service = owner.process, owner.service
 		}
@@ -306,25 +304,70 @@ func (a Adapter) reclamationProcesses() (map[string]socketOwner, []networkpolicy
 		if len(arguments) < 2 || !filepath.IsAbs(arguments[1]) {
 			continue
 		}
-		info, statErr := os.Lstat(a.path(arguments[1]))
-		if statErr != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || a.mountPoint(arguments[1]) {
+		if a.mountPoint(arguments[1]) {
 			return nil, nil, errors.New("script target is not an exact regular unmounted file")
 		}
-		stat, ok := info.Sys().(*syscall.Stat_t)
-		if !ok || stat.Nlink != 1 {
-			return nil, nil, errors.New("script target is shared or unproved")
-		}
-		data, readErr := os.ReadFile(a.path(arguments[1]))
+		digest, _, readErr := a.stableRegularDigest(a.path(arguments[1]))
 		if readErr != nil {
 			return nil, nil, readErr
 		}
-		after, afterErr := os.Lstat(a.path(arguments[1]))
-		if afterErr != nil || !os.SameFile(info, after) {
-			return nil, nil, errors.New("script target changed while reading")
-		}
-		scripts = append(scripts, networkpolicy.ScriptConflict{Interpreter: executable, Path: arguments[1], SHA256: checksum(data), Process: name, Service: service, ProcessID: process.Name(), Regular: true, Links: 1})
+		scripts = append(scripts, networkpolicy.ScriptConflict{Interpreter: executable, Path: arguments[1], SHA256: digest, Process: name, Service: service, ProcessID: process.Name(), Regular: true, Links: 1})
 	}
 	return executables, scripts, nil
+}
+
+func (a Adapter) stableRegularDigest(path string) (string, os.FileInfo, error) {
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return "", nil, err
+	}
+	file := os.NewFile(uintptr(fd), path)
+	defer file.Close()
+	before, err := file.Stat()
+	if err != nil || !before.Mode().IsRegular() || before.Mode()&os.ModeSymlink != 0 {
+		return "", nil, errors.New("target is not a regular file")
+	}
+	stat, ok := before.Sys().(*syscall.Stat_t)
+	if !ok || stat.Nlink != 1 {
+		return "", nil, errors.New("target is shared or unproved")
+	}
+	hash := func() (string, error) {
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return "", err
+		}
+		digest := sha256.New()
+		if _, err := io.Copy(digest, file); err != nil {
+			return "", err
+		}
+		return hex.EncodeToString(digest.Sum(nil)), nil
+	}
+	first, err := hash()
+	if err != nil {
+		return "", nil, err
+	}
+	if a.afterFirstDigest != nil {
+		a.afterFirstDigest(path)
+	}
+	middle, err := file.Stat()
+	if err != nil {
+		return "", nil, err
+	}
+	second, err := hash()
+	if err != nil {
+		return "", nil, err
+	}
+	after, err := file.Stat()
+	pathInfo, pathErr := os.Lstat(path)
+	if err != nil || pathErr != nil || first != second || !sameRegularFile(before, middle) || !sameRegularFile(middle, after) || !os.SameFile(after, pathInfo) || pathInfo.Mode()&os.ModeSymlink != 0 {
+		return "", nil, errors.New("target changed while reading")
+	}
+	return first, after, nil
+}
+
+func sameRegularFile(first, second os.FileInfo) bool {
+	firstStat, firstOK := first.Sys().(*syscall.Stat_t)
+	secondStat, secondOK := second.Sys().(*syscall.Stat_t)
+	return firstOK && secondOK && first.Mode() == second.Mode() && first.Size() == second.Size() && first.ModTime() == second.ModTime() && firstStat.Dev == secondStat.Dev && firstStat.Ino == secondStat.Ino && firstStat.Nlink == 1 && secondStat.Nlink == 1
 }
 
 func (a Adapter) mountPoint(path string) bool {
