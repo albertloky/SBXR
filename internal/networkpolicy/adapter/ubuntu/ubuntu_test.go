@@ -287,6 +287,22 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 	if err := os.WriteFile(parentStat, []byte(parent+" (nu) S 1 0 0 0\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	script := filepath.Join(root, "opt/app/server.py")
+	if err := os.Remove(script); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/usr/sbin/nginx", script); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewAt(root).Observe(networkpolicy.ObservationRequest{Stage: networkpolicy.PreApproval, ReclamationReview: true}); err == nil {
+		t.Fatal("symlink script target was accepted")
+	}
+	if err := os.Remove(script); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(script, []byte("print('proxy')\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Remove(filepath.Join(root, "var/lib/dpkg/info/nginx.list")); err != nil {
 		t.Fatal(err)
 	}

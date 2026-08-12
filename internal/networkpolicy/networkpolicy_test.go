@@ -58,7 +58,7 @@ func TestReclaimableVPSReviewBindsEverySafeConflictWithoutChangingObservedState(
 		Packages:    []networkpolicy.PackageConflict{{Name: "xray", Version: "1.2.3", Owns: "/usr/local/bin/xray", OwnedPaths: []string{"/usr/local/bin/xray"}}},
 		Identities:  []networkpolicy.IdentityConflict{{Name: "xray", Kind: "service user", Exclusive: true}},
 		Executables: []networkpolicy.FileConflict{{Path: "/usr/local/bin/xray", SHA256: strings.Repeat("a", 64), OwnerUID: 0, Mode: 0o755, Links: 1, Process: "xray", Service: "xray.service", Package: "xray"}},
-		Scripts:     []networkpolicy.ScriptConflict{{Interpreter: "/usr/bin/python3", Path: "/opt/proxy/server.py", SHA256: strings.Repeat("b", 64), Process: "python3", Service: "proxy.service"}},
+		Scripts:     []networkpolicy.ScriptConflict{{Interpreter: "/usr/bin/python3", Path: "/opt/proxy/server.py", SHA256: strings.Repeat("b", 64), Process: "python3", Service: "proxy.service", Regular: true, Links: 1}},
 		Docker:      &networkpolicy.DockerConflict{Service: "docker.service", Packages: []string{"docker.io"}, PreservedData: []string{"images", "volumes", "Compose definitions", "bind mounts", "application data"}},
 	}
 	observed.OwnerFacts = networkpolicy.OwnerFacts{DNS: "dns-record-id-1", Tunnel: "tunnel-id-1", Routes: []networkpolicy.CloudflareRoute{{Profile: "xhttp.example.test", OriginAddress: "127.0.0.1", OriginPort: 11080, Protocol: networkpolicy.TCP}}}
@@ -91,7 +91,7 @@ func TestReclamationReviewRefusesIncompleteOwnershipProof(t *testing.T) {
 		}},
 		"script from a different process": {code: "NETWORK-RECLAMATION-UNPROVED", alter: func(observed *networkpolicy.Observations) {
 			observed.Listeners = append(observed.Listeners, networkpolicy.Listener{Address: "0.0.0.0", Port: 443, Protocol: networkpolicy.TCP, Process: "python3", Executable: "/usr/bin/python3", ProcessID: "100"})
-			observed.Reclamation.Scripts = []networkpolicy.ScriptConflict{{Interpreter: "/usr/bin/python3", Path: "/opt/other.py", SHA256: strings.Repeat("a", 64), Process: "python3", ProcessID: "200"}}
+			observed.Reclamation.Scripts = []networkpolicy.ScriptConflict{{Interpreter: "/usr/bin/python3", Path: "/opt/other.py", SHA256: strings.Repeat("a", 64), Process: "python3", ProcessID: "200", Regular: true, Links: 1}}
 		}},
 		"unproved exclusive identity": {code: "NETWORK-RECLAMATION-UNPROVED", alter: func(observed *networkpolicy.Observations) {
 			observed.Reclamation.Identities = []networkpolicy.IdentityConflict{{Name: "xray", Kind: "service user"}}

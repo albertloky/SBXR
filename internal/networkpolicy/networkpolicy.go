@@ -179,6 +179,7 @@ type FileConflict struct {
 type ScriptConflict struct {
 	Interpreter, Path, SHA256, Process, Service string
 	ProcessID                                   string
+	Regular                                     bool
 	Links                                       uint64
 	Mount                                       bool
 }
@@ -1005,7 +1006,7 @@ func reviewInstallation(result *Result, observed Observations, required bool) {
 		}
 	}
 	for _, script := range observed.Reclamation.Scripts {
-		if protectedPath(script.Path, result.ProtectedFoundation.Paths) || script.Mount || script.Links > 1 {
+		if !script.Regular || protectedPath(script.Path, result.ProtectedFoundation.Paths) || script.Mount || script.Links != 1 {
 			result.add(requiredFailure("NETWORK-RECLAMATION-PROTECTED", "A script target belongs to the Protected Host Foundation", safeFact(script.Path), "no shared, mounted, system, or recovery script target", "SBXR never offers destruction of a protected script", ownerFix("Reimage the VPS or remove the conflict through its proven owner.")))
 			return
 		}

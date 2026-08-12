@@ -306,17 +306,23 @@ func (a Adapter) reclamationProcesses() (map[string]socketOwner, []networkpolicy
 		if len(arguments) < 2 || !filepath.IsAbs(arguments[1]) {
 			continue
 		}
+		info, statErr := os.Lstat(a.path(arguments[1]))
+		if statErr != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || a.mountPoint(arguments[1]) {
+			return nil, nil, errors.New("script target is not an exact regular unmounted file")
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || stat.Nlink != 1 {
+			return nil, nil, errors.New("script target is shared or unproved")
+		}
 		data, readErr := os.ReadFile(a.path(arguments[1]))
 		if readErr != nil {
 			return nil, nil, readErr
 		}
-		links := uint64(1)
-		if info, statErr := os.Lstat(a.path(arguments[1])); statErr == nil {
-			if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-				links = uint64(stat.Nlink)
-			}
+		after, afterErr := os.Lstat(a.path(arguments[1]))
+		if afterErr != nil || !os.SameFile(info, after) {
+			return nil, nil, errors.New("script target changed while reading")
 		}
-		scripts = append(scripts, networkpolicy.ScriptConflict{Interpreter: executable, Path: arguments[1], SHA256: checksum(data), Process: name, Service: service, ProcessID: process.Name(), Links: links, Mount: a.mountPoint(arguments[1])})
+		scripts = append(scripts, networkpolicy.ScriptConflict{Interpreter: executable, Path: arguments[1], SHA256: checksum(data), Process: name, Service: service, ProcessID: process.Name(), Regular: true, Links: 1})
 	}
 	return executables, scripts, nil
 }
