@@ -5,9 +5,11 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"debug/buildinfo"
 	"debug/elf"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -18,6 +20,7 @@ import (
 	"time"
 
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
+	"github.com/creack/pty"
 )
 
 func TestBuildCompleteReleaseWritesApplicationAndQualifiedComponentsTogether(t *testing.T) {
@@ -78,6 +81,218 @@ func TestVerifyCandidateRefusesInvalidTagBeforeExternalVerification(t *testing.T
 	if err := verifyCandidate(t.Context(), ""); err == nil {
 		t.Fatal("empty candidate tag accepted")
 	}
+}
+
+func TestBuildBootstrapFileBindsOneReleaseWithoutAnIndexSelfReference(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "install.sh")
+	err := buildBootstrapFile(bootstrapOptions{version: "1.0.0", sequence: 7, tag: "v1.0.0", commit: "0123456789abcdef0123456789abcdef01234567", output: output})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	for _, exact := range []string{"REPOSITORY=", "albertloky/SBXR", "TAG=", "v1.0.0", "COMMIT=", "0123456789abcdef0123456789abcdef01234567", "VERSION=", "1.0.0", "SEQUENCE=", "7", "ARCHITECTURES=", "amd64 arm64", "install.sh release-index.json sbxr-linux-amd64.tar.gz sbxr-linux-arm64.tar.gz sbxr-components-linux-amd64.tar.gz sbxr-components-linux-arm64.tar.gz"} {
+		if !strings.Contains(text, exact) {
+			t.Fatalf("bootstrap does not bind %q", exact)
+		}
+	}
+	if strings.Contains(strings.ToLower(text), "index_sha256=") {
+		t.Fatal("bootstrap recreated the impossible release-index self-reference")
+	}
+	info, err := os.Stat(output)
+	if err != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("bootstrap mode = %v, %v", info.Mode(), err)
+	}
+	if err := exec.Command("/bin/sh", "-n", output).Run(); err != nil {
+		t.Fatalf("generated bootstrap syntax: %v", err)
+	}
+}
+
+func TestGeneratedBootstrapVerifiesAndLaunchesOnlyTheExactReleaseAsTheOwner(t *testing.T) {
+	for _, test := range []struct {
+		arguments []string
+		arm64     bool
+	}{{}, {arguments: []string{"--tag", "v1.0.0"}}, {arm64: true}} {
+		fixture := newBootstrapFixture(t)
+		if test.arm64 {
+			fixture.machine = "aarch64"
+			fixture.version = strings.Replace(fixture.version, `"architecture":"amd64"`, `"architecture":"arm64"`, 1)
+			fixture.writeBoundaries(t)
+		}
+		fixture.hostileEnvironment = true
+		fixture.writeBoundaries(t)
+		output, err := fixture.run(test.arguments...)
+		if err != nil {
+			t.Fatalf("bootstrap %v = %v\n%s", test, err, output)
+		}
+		if !strings.Contains(output, "SBXR bootstrap: verifying release") || !strings.Contains(output, "SBXR bootstrap: launching Owner Console") || strings.Contains(output, "PRIVATE-SECRET-MARKER") {
+			t.Fatalf("unsafe bootstrap output = %q", output)
+		}
+		launched, err := os.ReadFile(fixture.launchRecord)
+		if err != nil || strings.Contains(string(launched), "PRIVATE-SECRET-MARKER") || !strings.Contains(string(launched), "HOME="+fixture.home) || !strings.Contains(string(launched), "USER=owner") {
+			t.Fatalf("Owner launch environment = %q, %v", launched, err)
+		}
+		if matches, _ := filepath.Glob(filepath.Join(fixture.root, "tmp", "sbxr-bootstrap.*")); len(matches) != 0 {
+			t.Fatalf("bootstrap temporary material remains: %v", matches)
+		}
+	}
+}
+
+func TestGeneratedBootstrapRefusesHostileInputsWithOnlyFixedSafeOutput(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		change func(*bootstrapFixture)
+		args   []string
+	}{
+		{name: "wrong pinned tag", args: []string{"--tag", "v1.0.1"}},
+		{name: "changed index", change: func(f *bootstrapFixture) { f.index = strings.Replace(f.index, `"sequence":7`, `"sequence":8`, 1) }},
+		{name: "changed archive", change: func(f *bootstrapFixture) { f.archive = []byte("changed archive") }},
+		{name: "extra archive material", change: func(f *bootstrapFixture) { f.tarList = "sbxr\nextra" }},
+		{name: "path substitution", change: func(f *bootstrapFixture) { f.substitute = true }},
+		{name: "redirect substitution", change: func(f *bootstrapFixture) { f.redirect = "https://attacker.invalid/PRIVATE-SECRET-MARKER" }},
+		{name: "unsupported architecture", change: func(f *bootstrapFixture) { f.machine = "riscv64" }},
+		{name: "wrong executable identity", change: func(f *bootstrapFixture) {
+			f.version = strings.Replace(f.version, `"commit":"0123456789abcdef0123456789abcdef01234567"`, `"commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"`, 1)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newBootstrapFixture(t)
+			if test.change != nil {
+				test.change(fixture)
+				fixture.writeBoundaries(t)
+			}
+			output, err := fixture.run(test.args...)
+			if err == nil || !strings.Contains(output, "SBXR-BOOTSTRAP-REFUSED") || strings.Contains(output, "PRIVATE-SECRET-MARKER") {
+				t.Fatalf("hostile bootstrap = %v, %q", err, output)
+			}
+			if _, statErr := os.Stat(fixture.launchRecord); !os.IsNotExist(statErr) {
+				t.Fatalf("hostile bootstrap launched: %v", statErr)
+			}
+		})
+	}
+
+	fixture := newBootstrapFixture(t)
+	command := exec.Command("/bin/sh", fixture.script)
+	output, err := command.CombinedOutput()
+	if err == nil || string(output) != "SBXR-BOOTSTRAP-REFUSED\n" {
+		t.Fatalf("non-interactive bootstrap = %v, %q", err, output)
+	}
+
+	interrupted := newBootstrapFixture(t)
+	interrupted.interrupt = true
+	interrupted.writeBoundaries(t)
+	interruptedOutput, interruptErr := interrupted.run()
+	if interruptErr == nil || !strings.Contains(interruptedOutput, "SBXR-BOOTSTRAP-INTERRUPTED") || strings.Contains(interruptedOutput, "PRIVATE-SECRET-MARKER") {
+		t.Fatalf("interrupted bootstrap = %v, %q", interruptErr, interruptedOutput)
+	}
+
+	cleanupFailure := newBootstrapFixture(t)
+	cleanupFailure.cleanupFail = true
+	cleanupFailure.writeBoundaries(t)
+	cleanupOutput, cleanupErr := cleanupFailure.run()
+	if cleanupErr == nil || !strings.Contains(cleanupOutput, "SBXR-BOOTSTRAP-CLEANUP-FAILED") || strings.Contains(cleanupOutput, "PRIVATE-SECRET-MARKER") {
+		t.Fatalf("cleanup failure = %v, %q", cleanupErr, cleanupOutput)
+	}
+}
+
+type bootstrapFixture struct {
+	root, home, script, launchRecord string
+	index, version, redirect         string
+	archive                          []byte
+	machine, tarList                 string
+	substitute, interrupt            bool
+	hostileEnvironment, cleanupFail  bool
+}
+
+func newBootstrapFixture(t *testing.T) *bootstrapFixture {
+	t.Helper()
+	root := t.TempDir()
+	fixture := &bootstrapFixture{root: root, home: filepath.Join(root, "home", "owner"), script: filepath.Join(root, "install.sh"), launchRecord: filepath.Join(root, "launched"), redirect: "https://release-assets.githubusercontent.com/exact", archive: []byte("exact archive bytes"), machine: "x86_64", tarList: "sbxr"}
+	for _, directory := range []string{"bin", "usr/bin", "etc", "tmp", "fixtures", "home/owner"} {
+		if err := os.MkdirAll(filepath.Join(root, directory), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink("/bin/sh", filepath.Join(root, "bin", "sh")); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(fixture.archive)
+	archiveSHA := fmt.Sprintf("%x", digest)
+	otherSHA := strings.Repeat("a", 64)
+	fixture.index = fmt.Sprintf(`{"schema":1,"product":"sbxr","repository":"albertloky/SBXR","version":"1.0.0","sequence":7,"tag":"v1.0.0","commit":"0123456789abcdef0123456789abcdef01234567","state_schema":2,"minimum_updater_schema":1,"assets":[{"role":"application-linux-amd64","name":"sbxr-linux-amd64.tar.gz","size":%d,"sha256":"%s"},{"role":"application-linux-arm64","name":"sbxr-linux-arm64.tar.gz","size":%d,"sha256":"%s"},{"role":"components-linux-amd64","name":"sbxr-components-linux-amd64.tar.gz","size":1,"sha256":"%s"},{"role":"components-linux-arm64","name":"sbxr-components-linux-arm64.tar.gz","size":1,"sha256":"%s"},{"role":"bootstrap","name":"install.sh","size":1,"sha256":"%s"}]}`, len(fixture.archive), archiveSHA, len(fixture.archive), archiveSHA, otherSHA, otherSHA, otherSHA)
+	fixture.version = `{"build":{"repository":"albertloky/SBXR","tag":"v1.0.0","commit":"0123456789abcdef0123456789abcdef01234567","payload_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"architecture":"amd64","state_schema":2}`
+	fixture.writeBoundaries(t)
+	if err := buildBootstrapFile(bootstrapOptions{version: "1.0.0", sequence: 7, tag: "v1.0.0", commit: "0123456789abcdef0123456789abcdef01234567", output: fixture.script, root: root}); err != nil {
+		t.Fatal(err)
+	}
+	return fixture
+}
+
+func (fixture *bootstrapFixture) writeBoundaries(t *testing.T) {
+	t.Helper()
+	mustScript := func(name, body string) {
+		path := filepath.Join(fixture.root, name)
+		if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body+"\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(fixture.root, "etc", "os-release"), []byte("ID=ubuntu\nVERSION_ID=\"24.04\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fixture.root, "fixtures", "index"), []byte(fixture.index), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fixture.root, "fixtures", "archive"), fixture.archive, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mustScript("usr/bin/id", `if [ "${1-}" = "-un" ]; then echo owner; else echo 1000; fi`)
+	mustScript("usr/bin/uname", `echo `+fixture.machine)
+	mustScript("usr/bin/getent", fmt.Sprintf(`echo 'owner:x:1000:1000::%s:/bin/sh'`, fixture.home))
+	mustScript("usr/bin/mktemp", `path=${2%XXXXXX}TEST; mkdir "$path" || exit 1; echo "$path"`)
+	mustScript("usr/bin/stat", `if [ "$1" = "-c" ]; then format=$2; path=$3; case "$format" in '%s') exec /usr/bin/stat -f '%z' "$path" ;; '%u:%a:%F') if [ -d "$path" ]; then echo '1000:700:directory'; else echo '1000:600:regular file'; fi ;; '%u:%a:%h:%F') echo '1000:700:1:regular file' ;; esac; fi`)
+	mustScript("usr/bin/sha256sum", `shasum -a 256 "$1"`)
+	curlEffect := fmt.Sprintf(`case "$url" in */release-index.json) cp '%s' "$out" ;; */sbxr-linux-amd64.tar.gz|*/sbxr-linux-arm64.tar.gz) cp '%s' "$out" ;; *) exit 1 ;; esac; printf '%%s' '%s'`, filepath.Join(fixture.root, "fixtures", "index"), filepath.Join(fixture.root, "fixtures", "archive"), fixture.redirect)
+	if fixture.substitute {
+		curlEffect = fmt.Sprintf(`ln -s '%s' "$out"; printf '%%s' '%s'`, filepath.Join(fixture.root, "fixtures", "archive"), fixture.redirect)
+	}
+	if fixture.interrupt {
+		curlEffect = `kill -TERM "$PPID"; sleep 1; exit 1`
+	}
+	mustScript("usr/bin/curl", `if [ -n "${CURL_HOME-}${TAR_OPTIONS-}${CLOUDFLARE_API_TOKEN-}" ]; then printf '%s\n' 'PRIVATE-SECRET-MARKER' >&2; exit 1; fi; printf '%s\n' 'PRIVATE-SECRET-MARKER' >&2; out=''; url=''; while [ "$#" -gt 0 ]; do case "$1" in --output) out=$2; shift 2 ;; http*) url=$1; shift ;; *) shift ;; esac; done; `+curlEffect)
+	mustScript("usr/bin/tar", fmt.Sprintf(`case "$1" in -tzf) printf '%%s\n' '%s' ;; -xzf) while [ "$#" -gt 0 ]; do if [ "$1" = '-C' ]; then destination=$2; fi; shift; done; cat >"$destination/sbxr" <<'SBXR'
+#!/bin/sh
+if [ "${1-}" = version ] && [ "${2-}" = --json ]; then printf '%%s\n' '%s'; exit 0; fi
+/usr/bin/env >'%s'
+SBXR
+chmod 700 "$destination/sbxr" ;; *) exit 1 ;; esac`, fixture.tarList, fixture.version, fixture.launchRecord))
+	for _, tool := range []string{"grep", "sed", "cut", "env"} {
+		mustScript("usr/bin/"+tool, `exec /usr/bin/`+tool+` "$@"`)
+	}
+	for _, tool := range []string{"chmod", "rm"} {
+		mustScript("bin/"+tool, `exec /bin/`+tool+` "$@"`)
+	}
+	if fixture.cleanupFail {
+		mustScript("bin/rm", `exit 1`)
+	}
+}
+
+func (fixture *bootstrapFixture) run(arguments ...string) (string, error) {
+	command := exec.Command("/bin/sh", append([]string{fixture.script}, arguments...)...)
+	command.Env = append(os.Environ(), "TERM=xterm-256color", "CLOUDFLARE_API_TOKEN=PRIVATE-SECRET-MARKER")
+	if fixture.hostileEnvironment {
+		command.Env = append(command.Env, "SBXR_BOOTSTRAP_CLEAN=1", "CURL_HOME=/PRIVATE-SECRET-MARKER", "TAR_OPTIONS=--checkpoint-action=exec=PRIVATE-SECRET-MARKER")
+	}
+	terminal, err := pty.Start(command)
+	if err != nil {
+		return "", err
+	}
+	body, _ := io.ReadAll(terminal)
+	waitErr := command.Wait()
+	_ = terminal.Close()
+	return strings.ReplaceAll(string(body), "\r", ""), waitErr
 }
 
 func TestBuildReleaseIndexFileReadsOnlyInstallAndTheExactFourReleaseArchives(t *testing.T) {

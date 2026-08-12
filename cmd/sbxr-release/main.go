@@ -48,6 +48,12 @@ type indexOptions struct {
 	sequence                                uint64
 }
 
+type bootstrapOptions struct {
+	version, tag, commit, output string
+	sequence                     uint64
+	root                         string
+}
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "verify" {
 		flags := flag.NewFlagSet("verify", flag.ContinueOnError)
@@ -69,6 +75,20 @@ func main() {
 		flags.StringVar(&options.output, "output", "", "release-index.json output path")
 		if flags.Parse(os.Args[2:]) != nil || flags.NArg() != 0 || buildReleaseIndexFile(options) != nil {
 			fmt.Fprintln(os.Stderr, "sbxr release index refused")
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "bootstrap" {
+		flags := flag.NewFlagSet("bootstrap", flag.ContinueOnError)
+		var options bootstrapOptions
+		flags.StringVar(&options.version, "version", "", "release version")
+		flags.Uint64Var(&options.sequence, "sequence", 0, "release sequence")
+		flags.StringVar(&options.tag, "tag", "", "immutable release tag")
+		flags.StringVar(&options.commit, "commit", "", "40-character commit SHA")
+		flags.StringVar(&options.output, "output", "", "install.sh output path")
+		if flags.Parse(os.Args[2:]) != nil || flags.NArg() != 0 || buildBootstrapFile(options) != nil {
+			fmt.Fprintln(os.Stderr, "sbxr bootstrap build refused")
 			os.Exit(1)
 		}
 		return

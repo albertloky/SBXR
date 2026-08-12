@@ -14,6 +14,25 @@ SBXR is a single-owner terminal application for installing and managing a six-pr
 
 Run SBXR as your normal account. Do not start the Owner Console with `sudo`. SBXR opens the normal system `sudo` prompt only when authentication or an approved change needs it.
 
+## Pasteable Install Command
+
+> [!WARNING]
+> Installation remains unavailable until an exact six-asset stable release is published and this URL is verified. Do not run the commands below against the current prerelease.
+
+The ordinary command follows only GitHub's stable release selection:
+
+```bash
+bash <(curl -fsSL https://github.com/albertloky/SBXR/releases/latest/download/install.sh)
+```
+
+For exact acceptance or advanced use, select one immutable tag in both the URL and argument:
+
+```bash
+bash <(curl -fsSL https://github.com/albertloky/SBXR/releases/download/<tag>/install.sh) --tag <tag>
+```
+
+The first `install.sh` download is trusted through GitHub HTTPS. The release-specific script accepts only Ubuntu Server 24.04 on `amd64` or `arm64` in a real interactive terminal. It verifies the exact release index, selected archive, embedded executable identity, architecture, and digests in a fresh Owner-only temporary directory, removes that directory after the Owner Console exits, and never receives Cloudflare authority or performs Destructive Reclamation.
+
 ## User commands
 
 The installed executable is `/usr/local/bin/sbxr` and is normally available as `sbxr`.
@@ -118,6 +137,17 @@ These are not Owner commands. They are called only by SBXR's installed systemd u
 ## Release-maintainer commands
 
 These repository commands build and verify immutable release material. They are not VPS management commands.
+
+Generate the release-specific `install.sh` before building the index:
+
+```sh
+go run ./cmd/sbxr-release bootstrap \
+  -version <version> \
+  -sequence <sequence> \
+  -tag <tag> \
+  -commit <commit> \
+  -output <install.sh>
+```
 
 Build one application archive and its matching component archive from a clean exact commit using Go `1.26.5`:
 

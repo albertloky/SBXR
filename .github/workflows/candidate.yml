@@ -94,10 +94,19 @@ jobs:
           pattern: candidate-*
           path: dist
           merge-multiple: true
-      - name: Add the bounded bootstrap placeholder for issue 156
+      - name: Generate the exact release bootstrap
         run: |
-          printf '#!/bin/sh\nprintf "%s\\n" "SBXR bootstrap is not available yet" >&2\nexit 1\n' > dist/install.sh
-          chmod 0700 dist/install.sh
+          go run ./cmd/sbxr-release bootstrap \
+            -version "$CANDIDATE_VERSION" \
+            -sequence "$CANDIDATE_SEQUENCE" \
+            -tag "$CANDIDATE_TAG" \
+            -commit "$GITHUB_SHA" \
+            -output dist/install.sh
+          test "$(stat -c '%a' dist/install.sh)" = 700
+          if dist/install.sh >bootstrap.out 2>&1; then
+            exit 1
+          fi
+          test "$(cat bootstrap.out)" = SBXR-BOOTSTRAP-REFUSED
       - name: Build strict release index from exact asset bytes
         run: |
           go run ./cmd/sbxr-release index \

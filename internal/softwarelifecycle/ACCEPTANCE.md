@@ -1,6 +1,6 @@
 # Software Lifecycle acceptance
 
-This procedure defines stable checks for issues #125, #126, #127, #128, and #155. It contains no run results, raw GitHub verifier output, Client Access Values, Infrastructure Secrets, or Owner-managed configuration.
+This procedure defines stable checks for issues #125, #126, #127, #128, #155, and #156. It contains no run results, raw GitHub verifier output, Client Access Values, Infrastructure Secrets, or Owner-managed configuration.
 
 ## Module Verification
 
@@ -99,6 +99,16 @@ go test ./cmd/sbxr -run '^TestVersionReportsOnlyEmbeddedBuildFacts$' -count=1
 ```
 
 Require the production `cmd/sbxr-release` entry point to bind the requested commit to a clean tracked `HEAD`, export only that exact commit, and refuse mismatched or dirty source. Require pinned Go `1.26.5` and `CGO_ENABLED=0` to build exactly one stamped `sbxr` executable for each of `linux/amd64` and `linux/arm64`. Require each application archive to contain only that executable, with no native library dependency or language runtime. Require the matching component archive to come only from the repository-owned reviewed source manifest, whose exact official source, version, architecture, filename, byte size, SHA-256, and URL facts fail closed on any change. Require the complete Certbot `5.4.0` Ubuntu 24.04 / CPython 3.12 wheel closure plus qualification-only Mihomo `v1.19.29`, safe extraction, exact native qualification, removal of Mihomo before runtime archive assembly, and transaction-like two-output publication. An arbitrary local component tree, URL, command, script, package-manager behavior, caller-supplied asset size, or caller-supplied asset digest cannot satisfy this row. Require the index builder's directory to contain exactly `install.sh` and the four fixed archive names with no extra entry, calculate each size and SHA-256 itself, bind the exact five roles, repository, tag, commit, sequence, State schema, and minimum updater schema, and refuse missing, duplicate, linked, occupied, changed, or mismatched material. Require `sbxr version` and `sbxr version --json` to report only authenticated embedded repository, tag, commit, architecture, payload digest, and State schema; the executable must not invent or accept an index digest.
+
+### SL-BOOTSTRAP-01 — Real generated Pasteable Install Command
+
+Run:
+
+```sh
+go test ./cmd/sbxr-release -run '^Test(BuildBootstrapFile|GeneratedBootstrap)' -count=1
+```
+
+Require one executable release-specific `install.sh` to embed the exact repository, immutable tag, commit, version, sequence, `amd64 arm64`, and all six fixed names without recreating the impossible index-digest self-reference. Require zero arguments to represent GitHub's stable selection and `--tag <tag>` to accept only the embedded immutable tag. Require Ubuntu Server 24.04, `amd64` or `arm64`, one real input/output terminal, fixed absolute launch tools, and a non-root Owner. Require one fresh Owner-only directory, HTTPS-only bounded redirects to the exact GitHub release asset boundary, one strict exact index, selected archive size and SHA-256, exactly one extracted `sbxr`, matching reported repository, tag, commit, architecture, payload digest, and State schema, then launch as the same Owner with an allowlisted environment. Require cleanup after success, ordinary refusal, and interruption; cleanup failure must become `SBXR-BOOTSTRAP-CLEANUP-FAILED`. Changed index/archive/identity, extra archive material, path or redirect substitution, wrong tag/platform, environment injection, non-interactive use, interruption, and injected secret markers must expose only fixed bootstrap codes. Issue #156 begins on its specified prepared supported host and the script refuses a missing launch tool without mutation. Bootstrap Prerequisite Repair and its bounded pre-Plan `sudo` are implemented only by the immediately dependent issue #157. This slice never receives provider authority, invokes `sudo`, or performs Destructive Reclamation.
 
 ### SL-STAGE-04 — Exact native configuration and subscription validators
 
