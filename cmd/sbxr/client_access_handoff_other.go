@@ -11,6 +11,7 @@ import (
 func openCurrentClientAccessExecutable() (*os.File, error) {
 	return nil, errors.New("Client Access changes are supported only on Linux")
 }
+
 func verifyClientAccessProcess(*os.File, *os.File) error {
 	return errors.New("Client Access changes are supported only on Linux")
 }

@@ -43,7 +43,7 @@ func pendingInstallRecovery() (bool, error) {
 	return len(entries) == 1, nil
 }
 
-func runInstallRecovery() error {
+func runInstallRecovery() (resultErr error) {
 	pending, err := pendingInstallRecovery()
 	if err != nil {
 		return err
@@ -52,8 +52,19 @@ func runInstallRecovery() error {
 		if orphanedCompleteRemoval(false) {
 			return runOrphanedCompleteRemovalRecovery()
 		}
+		if err := removeInstallRecoveryReceipt(); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
 		return nil
 	}
+	defer func() {
+		if resultErr == nil {
+			resultErr = removeInstallRecoveryReceipt()
+			if errors.Is(resultErr, os.ErrNotExist) {
+				resultErr = nil
+			}
+		}
+	}()
 	transaction, err := systemubuntu.RecoveryTransaction("/")
 	if err != nil {
 		if orphanedCompleteRemoval(true) {

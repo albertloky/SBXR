@@ -3,7 +3,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
+	"slices"
 
 	"github.com/albertloky/SBXR/internal/healthdiagnostics"
 	healthfilesystem "github.com/albertloky/SBXR/internal/healthdiagnostics/adapter/filesystem"
@@ -80,7 +82,11 @@ func main() {
 
 func runOwnerConsole(ctx context.Context, input, output *os.File, environment []string) error {
 	capabilities := ownerconsole.DetectTerminal(input, output, environment)
-	if installedClientAccessMarker() {
+	installed := installedClientAccessMarker()
+	if slices.Contains(environment, "SBXR_INSTALLED_REENTRY=1") && !installed {
+		return errors.New("installed Client Access executable changed before re-entry")
+	}
+	if installed || clientAccessRecoveryMarker() {
 		managed := &clientAccessOutcome{}
 		return ownerconsole.Run(ctx, ownerconsole.Session{Input: input, Output: output, Environment: environment, Capabilities: &capabilities, Authenticator: systemAuthenticator{}, AuthenticationPolicy: ownerconsole.AuthenticateForAccess, Profiles: managed, ProfileOutcomes: managed, Cloudflare: managed, CloudflareOutcomes: managed, Certificates: managed, CertificateOutcomes: managed, Diagnostics: managed, Lifecycle: managed, LifecycleOutcomes: managed, CompleteRemoval: managed, CompleteRemovalOutcomes: managed, StartupProvider: managed.Startup, Recovery: managed})
 	}

@@ -2,14 +2,18 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/albertloky/SBXR/internal/ownerconsole"
+	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 )
 
 var _ ownerconsole.CloudflareModule = (*clientAccessOutcome)(nil)
@@ -41,6 +45,38 @@ func TestDefaultRunRefusesRedirectedTerminal(t *testing.T) {
 	}
 	if got := string(refusal); !strings.Contains(got, "interactive input") || strings.Contains(got, "CLIENT-ACCESS-MARKER") {
 		t.Fatalf("refusal = %q", got)
+	}
+}
+
+func TestInstalledReentryRefusesAnExecutableChangedBeforeLaunch(t *testing.T) {
+	if err := runOwnerConsole(context.Background(), os.Stdin, os.Stdout, []string{"TERM=xterm-256color", "SBXR_INSTALLED_REENTRY=1"}); err == nil || err.Error() != "installed Client Access executable changed before re-entry" {
+		t.Fatalf("changed installed re-entry = %v", err)
+	}
+}
+
+func TestPreactivationRecoveryReceiptBindsTheAuthenticatedExecutable(t *testing.T) {
+	name := filepath.Join(t.TempDir(), "recovery.json")
+	receipt := recoveryReceipt{Schema: 1, ChangeSet: "install-session-0001", Repository: softwarelifecycle.Repository, Tag: "v1.0.0", Commit: strings.Repeat("a", 40), ReleaseIndexSHA256: strings.Repeat("b", 64), PayloadSHA256: strings.Repeat("d", 64)}
+	body, _ := json.Marshal(receipt)
+	if err := os.WriteFile(name, append(body, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uid := info.Sys().(*syscall.Stat_t).Uid
+	report := versionReport{Build: softwarelifecycle.EmbeddedBuildIdentity{Repository: receipt.Repository, Tag: receipt.Tag, Commit: receipt.Commit, PayloadSHA256: receipt.PayloadSHA256}}
+	if !validClientAccessRecoveryMarker(name, report, uid) {
+		t.Fatal("exact recovery receipt was refused")
+	}
+	receipt.Commit = strings.Repeat("c", 40)
+	body, _ = json.Marshal(receipt)
+	if err := os.WriteFile(name, append(body, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if validClientAccessRecoveryMarker(name, report, uid) {
+		t.Fatal("changed recovery receipt was accepted")
 	}
 }
 

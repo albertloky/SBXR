@@ -108,11 +108,20 @@ func prepareInstallApply(ctx context.Context, request softwareubuntu.InstallHand
 		cancellation.Request()
 	}()
 	return func() softwareubuntu.InstallApplyOutcome {
+		if err := writeInstallRecoveryReceipt(string(requestChangeSet(request)), staged.Identity, staged.Build.PayloadSHA256); err != nil {
+			return softwareubuntu.InstallRecoveryRequired
+		}
 		result := built.plan.Apply(ctx, softwarelifecycle.InstallApplyRequest{Approval: approval, PreparedState: prepared, SystemChanges: changes, Cancellation: cancellation})
 		switch result.Outcome {
 		case systemchanges.Completed:
+			if removeInstallRecoveryReceipt() != nil {
+				return softwareubuntu.InstallRecoveryRequired
+			}
 			return softwareubuntu.InstallCompleted
 		case systemchanges.RollbackSucceeded:
+			if removeInstallRecoveryReceipt() != nil {
+				return softwareubuntu.InstallRecoveryRequired
+			}
 			return softwareubuntu.InstallRolledBack
 		default:
 			return softwareubuntu.InstallRecoveryRequired

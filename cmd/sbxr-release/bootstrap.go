@@ -29,7 +29,7 @@ func buildBootstrapFile(options bootstrapOptions) error {
 	root := strings.TrimSuffix(options.root, "/")
 	cleanBody := "'" + strings.ReplaceAll(body.String(), "'", `'"'"'`) + "'"
 	body.Reset()
-	fmt.Fprintf(&body, "#!/bin/sh\nexec %s/usr/bin/env -i TERM=\"${TERM-}\" PATH=/usr/bin:/bin LC_ALL=C %s/bin/sh -c %s sbxr-bootstrap \"$@\"\n", root, root, cleanBody)
+	fmt.Fprintf(&body, "#!/bin/sh\nROOT='%s'\nprerequisites_refused() { printf '%%s\\n' 'SBXR-BOOTSTRAP-PREREQUISITES-REFUSED' >&2; exit 1; }\n[ -x \"$ROOT/usr/bin/env\" ] || prerequisites_refused\nexec \"$ROOT/usr/bin/env\" -i TERM=\"${TERM-}\" PATH=/usr/bin:/bin LC_ALL=C \"$ROOT/bin/sh\" -c %s sbxr-bootstrap \"$@\"\n", root, cleanBody)
 	file, err := os.OpenFile(options.output, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o700)
 	if err != nil {
 		return errors.New("bootstrap output refused")
@@ -76,6 +76,15 @@ refuse() {
   printf '%s\n' 'SBXR-BOOTSTRAP-REFUSED' >&2
   exit 1
 }
+prerequisites_refused() {
+	trap - EXIT
+	if ! cleanup; then
+		printf '%s\n' 'SBXR-BOOTSTRAP-CLEANUP-FAILED' >&2
+		exit 1
+	fi
+  printf '%s\n' 'SBXR-BOOTSTRAP-PREREQUISITES-REFUSED' >&2
+  exit 1
+}
 interrupted() {
 	trap - EXIT
 	if ! cleanup; then
@@ -99,11 +108,16 @@ fi
 [ -t 0 ] && [ -t 1 ] || refuse
 case "${TERM-}" in ''|*[!A-Za-z0-9._+-]*) refuse ;; esac
 
-for tool in curl grep id mktemp sed sha256sum stat tar uname getent cut env; do
-  [ -x "$ROOT/usr/bin/$tool" ] || refuse
+for tool in apt-get cut env getent grep id mktemp stat sudo uname; do
+  [ -x "$ROOT/usr/bin/$tool" ] || prerequisites_refused
 done
-[ -x "$ROOT/bin/chmod" ] && [ -x "$ROOT/bin/rm" ] || refuse
+[ -x "$ROOT/bin/chmod" ] && [ -x "$ROOT/bin/rm" ] && [ -x "$ROOT/bin/sh" ] || prerequisites_refused
 [ "$("$ROOT/usr/bin/id" -u 2>/dev/null)" != '0' ] || refuse
+
+for tool in "$ROOT/usr/bin/apt-get" "$ROOT/usr/bin/cut" "$ROOT/usr/bin/env" "$ROOT/usr/bin/getent" "$ROOT/usr/bin/grep" "$ROOT/usr/bin/id" "$ROOT/usr/bin/mktemp" "$ROOT/usr/bin/stat" "$ROOT/usr/bin/uname" "$ROOT/bin/chmod" "$ROOT/bin/rm" "$ROOT/bin/sh"; do
+  [ "$("$ROOT/usr/bin/stat" -Lc '%u:%a:%F' "$tool" 2>/dev/null)" = '0:755:regular file' ] || prerequisites_refused
+done
+case "$("$ROOT/usr/bin/stat" -Lc '%u:%a:%F' "$ROOT/usr/bin/sudo" 2>/dev/null)" in '0:4755:regular file'|'0:755:regular file') : ;; *) prerequisites_refused ;; esac
 
 os_release="$ROOT/etc/os-release"
 [ -f "$os_release" ] && [ ! -L "$os_release" ] || refuse
@@ -124,6 +138,15 @@ owner_home=$("$ROOT/usr/bin/getent" passwd "$owner_uid" 2>/dev/null | "$ROOT/usr
 case "$owner_name:$owner_home" in *[!A-Za-z0-9._+/:@-]*|*:|*:) refuse ;; esac
 [ -d "$owner_home" ] || refuse
 
+printf '%s\n' 'SBXR bootstrap: repairing fixed prerequisites'
+"$ROOT/usr/bin/sudo" -- "$ROOT/usr/bin/apt-get" update >/dev/null 2>&1 || prerequisites_refused
+"$ROOT/usr/bin/sudo" -- "$ROOT/usr/bin/apt-get" install --yes --no-install-recommends --reinstall ca-certificates curl iproute2 nftables iptables sudo >/dev/null 2>&1 || prerequisites_refused
+
+for tool in curl readlink sed sha256sum tar; do
+  [ -x "$ROOT/usr/bin/$tool" ] || prerequisites_refused
+  [ "$("$ROOT/usr/bin/stat" -Lc '%u:%a:%F' "$ROOT/usr/bin/$tool" 2>/dev/null)" = '0:755:regular file' ] || prerequisites_refused
+done
+
 WORK=$("$ROOT/usr/bin/mktemp" -d "$ROOT/tmp/sbxr-bootstrap.XXXXXX" 2>/dev/null) || refuse
 "$ROOT/bin/chmod" 0700 "$WORK" >/dev/null 2>&1 || refuse
 [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%F' "$WORK" 2>/dev/null)" = "$owner_uid:700:directory" ] || refuse
@@ -143,11 +166,45 @@ download() {
   [ -f "$destination" ] && [ ! -L "$destination" ] || return 1
 }
 
+active="$ROOT/usr/local/bin/sbxr"
+recovery_receipt="$ROOT/var/lib/sbxr-recovery.json"
+reentry=''
+if [ -e "$active" ] || [ -L "$active" ]; then
+  [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%F' "$active" 2>/dev/null)" = '0:777:symbolic link' ] || refuse
+  installed_target=$("$ROOT/usr/bin/readlink" "$active" 2>/dev/null) || refuse
+  case "$installed_target" in /opt/sbxr/releases/*/sbxr) : ;; *) refuse ;; esac
+  executable="$ROOT$installed_target"
+  for directory in "$ROOT/usr/local/bin" "$ROOT/opt" "$ROOT/opt/sbxr" "$ROOT/opt/sbxr/releases" "${executable%/sbxr}"; do
+    [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%F' "$directory" 2>/dev/null)" = '0:755:directory' ] || refuse
+  done
+  [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$executable" 2>/dev/null)" = '0:755:1:regular file' ] || refuse
+  "$executable" version --json >"$WORK/version.json" 2>"$WORK/private.log" || refuse
+  installed_pattern='^\{"build":\{"repository":"{{.Repository}}","tag":"[A-Za-z0-9][A-Za-z0-9._+-]*","commit":"[0-9a-f]{40}","payload_sha256":"[0-9a-f]{64}"\},"architecture":"'$ARCH'","state_schema":[1-9][0-9]*\}$'
+  "$ROOT/usr/bin/grep" -Eq "$installed_pattern" "$WORK/version.json" >/dev/null 2>&1 || refuse
+  installed_tag=$("$ROOT/usr/bin/sed" -n 's|.*"tag":"\([A-Za-z0-9][A-Za-z0-9._+-]*\)","commit".*|\1|p' "$WORK/version.json") || refuse
+  installed_commit=$("$ROOT/usr/bin/sed" -n 's|.*"commit":"\([0-9a-f]\{40\}\)","payload_sha256".*|\1|p' "$WORK/version.json") || refuse
+  installed_prefix="/opt/sbxr/releases/$installed_tag-$installed_commit-"
+  installed_digest=${installed_target#"$installed_prefix"}
+  installed_digest=${installed_digest%/sbxr}
+  case "$installed_digest" in *[!0-9a-f]*|'') refuse ;; esac
+  [ "${#installed_digest}" -eq 64 ] && [ "$installed_target" = "$installed_prefix$installed_digest/sbxr" ] || refuse
+  reentry=1
+  printf '%s\n' 'SBXR bootstrap: re-entering installed Owner Console'
+else
 printf '%s\n' 'SBXR bootstrap: verifying release'
 index="$WORK/release-index.json"
 download 'release-index.json' "$index" "$WORK/index.url" 1048576 || refuse
 [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%F' "$index" 2>/dev/null)" = "$owner_uid:600:regular file" ] || refuse
 [ "$("$ROOT/usr/bin/stat" -c '%s' "$index" 2>/dev/null)" -le 1048576 ] || refuse
+index_sha=$("$ROOT/usr/bin/sha256sum" "$index" 2>/dev/null | "$ROOT/usr/bin/cut" -d' ' -f1) || refuse
+
+if [ -e "$recovery_receipt" ] || [ -L "$recovery_receipt" ]; then
+  [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$recovery_receipt" 2>/dev/null)" = '0:644:1:regular file' ] || refuse
+  receipt_pattern='^\{"schema":1,"change_set":"[a-z0-9][a-z0-9.-]*","repository":"{{.Repository}}","tag":"{{.Tag}}","commit":"{{.Commit}}","release_index_sha256":"'$index_sha'","payload_sha256":"[0-9a-f]{64}"\}$'
+  "$ROOT/usr/bin/grep" -Eq "$receipt_pattern" "$recovery_receipt" >/dev/null 2>&1 || refuse
+  reentry=1
+  printf '%s\n' 'SBXR bootstrap: entering unfinished-install recovery'
+fi
 
 index_pattern='^\{"schema":1,"product":"sbxr","repository":"{{.Repository}}","version":"{{.Version}}","sequence":{{.Sequence}},"tag":"{{.Tag}}","commit":"{{.Commit}}","state_schema":[1-9][0-9]*,"minimum_updater_schema":[1-9][0-9]*,"assets":\[\{"role":"application-linux-amd64","name":"sbxr-linux-amd64.tar.gz","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\},\{"role":"application-linux-arm64","name":"sbxr-linux-arm64.tar.gz","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\},\{"role":"components-linux-amd64","name":"sbxr-components-linux-amd64.tar.gz","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\},\{"role":"components-linux-arm64","name":"sbxr-components-linux-arm64.tar.gz","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\},\{"role":"bootstrap","name":"install.sh","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\}\]\}$'
 "$ROOT/usr/bin/grep" -Eq "$index_pattern" "$index" >/dev/null 2>&1 || refuse
@@ -175,9 +232,22 @@ executable="$WORK/sbxr"
 "$executable" version --json >"$WORK/version.json" 2>"$WORK/private.log" || refuse
 version_pattern='^\{"build":\{"repository":"{{.Repository}}","tag":"{{.Tag}}","commit":"{{.Commit}}","payload_sha256":"[0-9a-f]{64}"\},"architecture":"'$ARCH'","state_schema":'$state_schema'\}$'
 "$ROOT/usr/bin/grep" -Eq "$version_pattern" "$WORK/version.json" >/dev/null 2>&1 || refuse
+if [ -n "$reentry" ]; then
+  payload_sha=$("$ROOT/usr/bin/sed" -n 's|.*"payload_sha256":"\([0-9a-f]\{64\}\)".*|\1|p' "$WORK/version.json") || refuse
+  "$ROOT/usr/bin/grep" -q '"payload_sha256":"'$payload_sha'"' "$recovery_receipt" >/dev/null 2>&1 || refuse
+fi
+fi
 
 printf '%s\n' 'SBXR bootstrap: launching Owner Console'
-"$ROOT/usr/bin/env" -i HOME="$owner_home" USER="$owner_name" LOGNAME="$owner_name" TERM="$TERM" LANG=C.UTF-8 PATH=/usr/bin:/bin "$executable"
+if [ -n "$reentry" ]; then
+  if [ -e "$active" ] || [ -L "$active" ]; then
+    "$ROOT/usr/bin/env" -i HOME="$owner_home" USER="$owner_name" LOGNAME="$owner_name" TERM="$TERM" LANG=C.UTF-8 PATH=/usr/bin:/bin SBXR_INSTALLED_REENTRY=1 "$executable"
+  else
+    "$ROOT/usr/bin/env" -i HOME="$owner_home" USER="$owner_name" LOGNAME="$owner_name" TERM="$TERM" LANG=C.UTF-8 PATH=/usr/bin:/bin "$executable"
+  fi
+else
+  "$ROOT/usr/bin/env" -i HOME="$owner_home" USER="$owner_name" LOGNAME="$owner_name" TERM="$TERM" LANG=C.UTF-8 PATH=/usr/bin:/bin "$executable"
+fi
 launch_status=$?
 cleanup
 if [ "$?" -ne 0 ]; then
