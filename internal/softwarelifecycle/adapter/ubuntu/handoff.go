@@ -40,19 +40,20 @@ var (
 // InstallHandoffRequest is the one typed request allowed across the private
 // inherited Unix socket. It contains no command, path, script, or operation.
 type InstallHandoffRequest struct {
-	Schema              int                                       `json:"schema"`
-	Session             string                                    `json:"session"`
-	Tag                 string                                    `json:"tag"`
-	Architecture        softwarelifecycle.Architecture            `json:"architecture"`
-	Draft               softwarelifecycle.InstallationDraft       `json:"draft"`
-	CloudflareAccountID string                                    `json:"cloudflare_account_id"`
-	CloudflareZoneID    string                                    `json:"cloudflare_zone_id"`
-	CloudflareToken     string                                    `json:"cloudflare_token"`
-	RealityTarget       string                                    `json:"reality_target"`
-	RealityServerName   string                                    `json:"reality_server_name"`
-	ReviewedPlanSHA256  string                                    `json:"reviewed_plan_sha256"`
-	Entropy             []byte                                    `json:"entropy"`
-	Candidate           softwarelifecycle.InstallCandidateHandoff `json:"candidate"`
+	Schema                    int                                       `json:"schema"`
+	Session                   string                                    `json:"session"`
+	Tag                       string                                    `json:"tag"`
+	Architecture              softwarelifecycle.Architecture            `json:"architecture"`
+	Draft                     softwarelifecycle.InstallationDraft       `json:"draft"`
+	CloudflareAccountID       string                                    `json:"cloudflare_account_id"`
+	CloudflareZoneID          string                                    `json:"cloudflare_zone_id"`
+	CloudflareToken           string                                    `json:"cloudflare_token"`
+	RealityTarget             string                                    `json:"reality_target"`
+	RealityServerName         string                                    `json:"reality_server_name"`
+	ReviewedPlanSHA256        string                                    `json:"reviewed_plan_sha256"`
+	ReviewedReclamationSHA256 string                                    `json:"reviewed_reclamation_sha256,omitempty"`
+	Entropy                   []byte                                    `json:"entropy"`
+	Candidate                 softwarelifecycle.InstallCandidateHandoff `json:"candidate"`
 }
 
 func (InstallHandoffRequest) String() string {
@@ -80,6 +81,7 @@ func validInstallHandoffRequest(request InstallHandoffRequest) bool {
 		(request.Architecture == softwarelifecycle.AMD64 || request.Architecture == softwarelifecycle.ARM64) && request.Draft.Valid() &&
 		handoffCloudflare.MatchString(request.CloudflareAccountID) && handoffCloudflare.MatchString(request.CloudflareZoneID) && handoffToken.MatchString(request.CloudflareToken) &&
 		err == nil && port == "443" && host == request.RealityServerName && handoffHostname.MatchString(host) && validLowerHex(request.ReviewedPlanSHA256, 64) &&
+		(request.ReviewedReclamationSHA256 == "" || validLowerHex(request.ReviewedReclamationSHA256, 64)) &&
 		len(request.Entropy) == 32 && !bytes.Equal(request.Entropy, make([]byte, 32)) &&
 		request.Candidate.Valid() && request.Candidate.Staged.Architecture == request.Architecture && request.Candidate.Staged.Identity.Tag == request.Tag
 }

@@ -164,11 +164,12 @@ func NewNetworkInstallContribution(result networkpolicy.Result, changeSet, desir
 }
 
 type InstallPlanRequest struct {
-	Candidate          InstallCandidate
-	ChangeSet          string
-	DesiredStateSHA256 string
-	Contributions      []InstallContribution
-	Disk               systemchanges.DiskRequirement
+	Candidate                 InstallCandidate
+	ChangeSet                 string
+	DesiredStateSHA256        string
+	Contributions             []InstallContribution
+	Disk                      systemchanges.DiskRequirement
+	ReviewedReclamationSHA256 string
 }
 
 type InstallSummary struct {
@@ -208,13 +209,14 @@ type InstallPlan struct {
 	proofs                           []InstallContributionProof
 	disk                             systemchanges.DiskRequirement
 	used                             *atomic.Bool
+	reclamation                      string
 }
 
 func PlanInstall(request InstallPlanRequest) (*InstallPlan, *InstallFinding) {
 	refuse := func() (*InstallPlan, *InstallFinding) {
 		return nil, &InstallFinding{Code: InstallPlanRefused, Problem: "The reviewed fresh-install Plan is incomplete or stale", NextAction: "Check the Clean VPS and build a fresh Plan"}
 	}
-	if !validInstallCandidate(request.Candidate) || !installIdentityPattern.MatchString(request.ChangeSet) || !hashPattern.MatchString(request.DesiredStateSHA256) || !validInstallDisk(request.Disk) {
+	if !validInstallCandidate(request.Candidate) || !installIdentityPattern.MatchString(request.ChangeSet) || !hashPattern.MatchString(request.DesiredStateSHA256) || request.ReviewedReclamationSHA256 != "" && !hashPattern.MatchString(request.ReviewedReclamationSHA256) || !validInstallDisk(request.Disk) {
 		return refuse()
 	}
 	want := map[InstallContributionName]systemchanges.Module{
@@ -225,6 +227,7 @@ func PlanInstall(request InstallPlanRequest) (*InstallPlan, *InstallFinding) {
 	proofs := make([]InstallContributionProof, 0, len(request.Contributions))
 	seen := map[InstallContributionName]bool{}
 	var steps []systemchanges.Step
+	var reclamationPrelude []systemchanges.Step
 	var checks []systemchanges.Check
 	var ports []string
 	var firewall string
@@ -242,7 +245,17 @@ func PlanInstall(request InstallPlanRequest) (*InstallPlan, *InstallFinding) {
 		}
 		seen[name] = true
 		proofs = append(proofs, proof)
-		steps = append(steps, proof.Steps...)
+		if request.ReviewedReclamationSHA256 != "" && name == CloudflareInstallContribution {
+			for _, step := range proof.Steps {
+				if step.Forward() == systemchanges.ActivatePreparedConfiguration {
+					steps = append(steps, step)
+				} else {
+					reclamationPrelude = append(reclamationPrelude, step)
+				}
+			}
+		} else {
+			steps = append(steps, proof.Steps...)
+		}
 		checks = append(checks, proof.Checks...)
 		stable += proof.StableSHA256
 		if name == NetworkInstallContribution {
@@ -262,7 +275,7 @@ func PlanInstall(request InstallPlanRequest) (*InstallPlan, *InstallFinding) {
 	if err != nil {
 		return refuse()
 	}
-	steps = append([]systemchanges.Step{softwareStep}, steps...)
+	steps = append(reclamationPrelude, append([]systemchanges.Step{softwareStep}, steps...)...)
 	softwareChecks := []systemchanges.Check{
 		{Owner: systemchanges.SoftwareModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "SOFTWARE-LIFECYCLE-INSTALL-STAGED"},
 		{Owner: systemchanges.SoftwareModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PostPublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "SOFTWARE-LIFECYCLE-INSTALL-AGREEMENT"},
@@ -274,7 +287,8 @@ func PlanInstall(request InstallPlanRequest) (*InstallPlan, *InstallFinding) {
 		DesiredState string
 		Proofs       []InstallContributionProof
 		Disk         systemchanges.DiskRequirement
-	}{request.Candidate.cell.staged, request.ChangeSet, request.DesiredStateSHA256, proofs, request.Disk}
+		Reclamation  string
+	}{request.Candidate.cell.staged, request.ChangeSet, request.DesiredStateSHA256, proofs, request.Disk, request.ReviewedReclamationSHA256}
 	encoded, err := json.Marshal(bound)
 	if err != nil {
 		return refuse()
@@ -302,13 +316,14 @@ func PlanInstall(request InstallPlanRequest) (*InstallPlan, *InstallFinding) {
 		Rollback:          "remove only additions recorded by this Change Set and prove Not installed",
 		SudoAfterApproval: true, OneUse: true, SecretsMemoryOnly: true,
 	}
-	return &InstallPlan{identity: identity, sha256: checksum, volatileSHA256: hex.EncodeToString(volatileDigest[:]), changeSet: request.ChangeSet, desiredStateSHA256: request.DesiredStateSHA256, candidate: request.Candidate, summary: summary, steps: steps, checks: checks, proofs: proofs, disk: request.Disk, used: &atomic.Bool{}}, nil
+	return &InstallPlan{identity: identity, sha256: checksum, volatileSHA256: hex.EncodeToString(volatileDigest[:]), changeSet: request.ChangeSet, desiredStateSHA256: request.DesiredStateSHA256, candidate: request.Candidate, summary: summary, steps: steps, checks: checks, proofs: proofs, disk: request.Disk, used: &atomic.Bool{}, reclamation: request.ReviewedReclamationSHA256}, nil
 }
 
 type InstallRecheck struct {
 	Candidate                InstallCandidate
 	Contributions            []InstallContribution
 	PrivilegedNetworkHealthy bool
+	Reclamation              systemchanges.ReclamationAuthority
 }
 
 type InstallApproval interface {
@@ -339,6 +354,9 @@ func (plan *InstallPlan) Apply(ctx context.Context, request InstallApplyRequest)
 	if !rechecked.PrivilegedNetworkHealthy || !sameInstallCandidate(plan.candidate, rechecked.Candidate) || !contributionsMatch || stableSHA256 != plan.volatileSHA256 {
 		return installRefused("SOFTWARE-LIFECYCLE-INSTALL-STALE", "A privileged or volatile install fact changed after approval")
 	}
+	if (plan.reclamation == "") != (rechecked.Reclamation == nil) {
+		return installRefused("SOFTWARE-LIFECYCLE-INSTALL-STALE", "The privileged reclamation authority changed after approval")
+	}
 	preparedRelease, ok := request.PreparedState.(interface {
 		SoftwareLifecyclePreparedRelease() (repository, tag, commit, releaseIndexSHA256 string, valid bool)
 	})
@@ -353,7 +371,7 @@ func (plan *InstallPlan) Apply(ctx context.Context, request InstallApplyRequest)
 		Identity: plan.changeSet, Mutation: systemchanges.InstallationMutation, OutcomeOwner: systemchanges.SoftwareModule,
 		StartingState: systemchanges.StateLineage{Status: systemchanges.NotInstalled}, TargetStateSHA256: plan.desiredStateSHA256,
 		Plan: systemchanges.PlanBinding{Identity: plan.identity, SHA256: plan.sha256, VolatileSHA256: freshSHA256}, PreparedState: request.PreparedState,
-		Steps: plan.steps, Checks: plan.checks, Timeouts: systemchanges.Timeouts{Step: 10 * time.Minute, Check: 5 * time.Minute}, Disk: plan.disk,
+		Steps: plan.steps, Checks: plan.checks, Timeouts: systemchanges.Timeouts{Step: 10 * time.Minute, Check: 5 * time.Minute}, Disk: plan.disk, Reclamation: rechecked.Reclamation,
 	})
 	if err != nil {
 		return installRefused("SOFTWARE-LIFECYCLE-INSTALL-PREPARED", "The prepared revision 1 State does not match the reviewed install Plan")

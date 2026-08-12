@@ -80,7 +80,7 @@ func prepareInstallApply(ctx context.Context, request softwareubuntu.InstallHand
 	}
 
 	approval := softwareubuntu.NewApproval(func(recheckContext context.Context) (softwarelifecycle.InstallRecheck, error) {
-		fresh := built.network(networkpolicy.Request{Intent: built.networkIntent, Stage: networkpolicy.PostApproval})
+		fresh := built.network(networkpolicy.Request{Intent: built.networkIntent, Stage: networkpolicy.PostApproval, ReclamationReview: request.ReviewedReclamationSHA256 != "", ReviewedReclamationSHA256: request.ReviewedReclamationSHA256})
 		if fresh.Outcome == networkpolicy.Failed || fresh.Outcome == networkpolicy.Unknown {
 			return softwarelifecycle.InstallRecheck{}, errors.New("privileged Network Policy recheck failed")
 		}
@@ -97,7 +97,11 @@ func prepareInstallApply(ctx context.Context, request softwareubuntu.InstallHand
 		observationMu.Lock()
 		volatileSHA256 = hex.EncodeToString(freshDigest.Sum(nil))
 		observationMu.Unlock()
-		return softwarelifecycle.InstallRecheck{Candidate: built.candidate, Contributions: contributions, PrivilegedNetworkHealthy: true}, nil
+		recheck := softwarelifecycle.InstallRecheck{Candidate: built.candidate, Contributions: contributions, PrivilegedNetworkHealthy: true}
+		if request.ReviewedReclamationSHA256 != "" {
+			recheck.Reclamation = fresh.ReclamationAuthority()
+		}
+		return recheck, nil
 	})
 
 	adapter := systemubuntu.NewAtForInstall("/", observation, installHost, systemchanges.NewFreshInstallationAuthority(built.wiring.network.FreshInstallationProof()), systemubuntu.NewNativeFirewall(), cloudflareExecutor, certificateExecutor, profilesubuntu.NewDirectTLSExecutor(), subscriptionExecutor, softwareExecutor, stateModule)

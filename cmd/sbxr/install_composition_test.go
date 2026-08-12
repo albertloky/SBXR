@@ -76,6 +76,26 @@ func TestComposedInstallRoutesAReclaimableVPSToReviewBeforeProviderPlanning(t *t
 	}
 }
 
+func TestComposedInstallCarriesTheExactReviewedStandaloneTargetIntoOneInstallPlan(t *testing.T) {
+	request := composedInstallRequest(t)
+	cloudflareAPI := composedCloudflareAPI{}
+	cloudflareModule := cloudflaretunnel.New(cloudflareAPI, composedClock{})
+	networkModule := networkpolicy.New(composedReclamationObserver{})
+	dependencies := installBuildDependencies{stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
+		return request.Candidate.Staged, nil
+	}, network: networkModule.Evaluate, cloudflare: cloudflareModule.Plan, random: newInstallEntropyReader(request.Entropy), inventory: cloudflareAPI}
+	_, err := buildInstallWith(t.Context(), request, dependencies)
+	var review *reclamationReviewError
+	if !errors.As(err, &review) || review.plan == nil {
+		t.Fatalf("initial reclamation review = %v", err)
+	}
+	request.ReviewedReclamationSHA256 = review.plan.Digest
+	built, err := buildInstallWith(t.Context(), request, dependencies)
+	if err != nil || built == nil || built.plan == nil || built.plan.Summary().Result != softwarelifecycle.Managed {
+		t.Fatalf("reviewed reclamation install = (%+v, %v)", built, err)
+	}
+}
+
 func TestComposedInstallRefusesAnIncompleteReclaimableInventory(t *testing.T) {
 	request := composedInstallRequest(t)
 	providerCalled := false
@@ -162,6 +182,15 @@ func (incompleteReclamationObserver) Observe(request networkpolicy.ObservationRe
 	observed, err := (composedNetworkObserver{}).Observe(request)
 	observed.Reclamation.Docker = &networkpolicy.DockerConflict{Service: "docker.service", Status: "unknown"}
 	observed.ReclamationComplete = false
+	return observed, err
+}
+
+type composedReclamationObserver struct{ composedNetworkObserver }
+
+func (composedReclamationObserver) Observe(request networkpolicy.ObservationRequest) (networkpolicy.Observations, error) {
+	observed, err := (composedNetworkObserver{}).Observe(request)
+	observed.Listeners = append(observed.Listeners, networkpolicy.Listener{Address: "0.0.0.0", Port: 443, Protocol: networkpolicy.TCP, Process: "standalone-proxy", Executable: "/opt/standalone/proxy", ProcessID: "4242"})
+	observed.Reclamation.Executables = []networkpolicy.FileConflict{{Path: "/opt/standalone/proxy", SHA256: strings.Repeat("9", 64), Process: "standalone-proxy", ProcessID: "4242", Mode: 0o755, Links: 1}}
 	return observed, err
 }
 

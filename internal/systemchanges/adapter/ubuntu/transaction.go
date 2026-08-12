@@ -12,7 +12,9 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -146,6 +148,7 @@ type journalEntry struct {
 	Steps        []journalStep                          `json:"steps,omitempty"`
 	Checks       []systemchanges.Check                  `json:"health_gates,omitempty"`
 	Timeouts     systemchanges.Timeouts                 `json:"timeouts,omitempty"`
+	Reclamation  *systemchanges.ReclamationTarget       `json:"reclamation,omitempty"`
 	Evidence     *systemchanges.StepEvidence            `json:"evidence,omitempty"`
 }
 
@@ -280,7 +283,7 @@ func (a Adapter) Prepare(lease systemchanges.ExecutionLease, preparation systemc
 			steps[index].Certificate = &certificate
 		}
 	}
-	entry := journalEntry{Checkpoint: systemchanges.Prepared, ChangeSet: preparation.ChangeSet, Mutation: preparation.Mutation, Starting: preparation.Starting, OutcomeOwner: preparation.OutcomeOwner, PlanSHA256: preparation.PlanSHA256, State: &preparation.State, Steps: steps, Checks: preparation.Checks, Timeouts: preparation.Timeouts}
+	entry := journalEntry{Checkpoint: systemchanges.Prepared, ChangeSet: preparation.ChangeSet, Mutation: preparation.Mutation, Starting: preparation.Starting, OutcomeOwner: preparation.OutcomeOwner, PlanSHA256: preparation.PlanSHA256, State: &preparation.State, Steps: steps, Checks: preparation.Checks, Timeouts: preparation.Timeouts, Reclamation: preparation.Reclamation}
 	if _, err := writeProtected(root, path.Join(temporary, "journal.jsonl"), strings.NewReader(""), a.uid); err != nil {
 		return err
 	}
@@ -528,6 +531,180 @@ func (a Adapter) LoadRunTokenRotationState(lease systemchanges.ExecutionLease, r
 		return nil, err
 	}
 	return a.state.SystemChangesLoadRunTokenRotation(lease, bindingJSON, bytes.NewReader(candidate), bytes.NewReader(manifests))
+}
+
+func (a Adapter) LoadForwardInstallationState(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction) (any, error) {
+	candidate, err := a.recoveryArtifact(lease, recovery.ChangeSet, "prepared/state.json")
+	if err != nil {
+		return nil, err
+	}
+	manifests, err := a.recoveryArtifact(lease, recovery.ChangeSet, "prepared/manifests.json")
+	if err != nil {
+		return nil, err
+	}
+	bindingJSON, err := json.Marshal(recovery.State)
+	if err != nil {
+		return nil, err
+	}
+	return a.state.SystemChangesLoadForwardInstallation(lease, bindingJSON, bytes.NewReader(candidate), bytes.NewReader(manifests))
+}
+
+func (a Adapter) LoadForwardInstallationEvidence(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction) ([]systemchanges.StepEvidence, error) {
+	if !lease.RecoveryAuthorized() || !safeName(recovery.ChangeSet) {
+		return nil, errors.New("forward installation evidence unavailable")
+	}
+	root, err := os.OpenRoot(a.root)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	entries, err := readJournal(root, path.Join(transactionDirectory, recovery.ChangeSet, "journal.jsonl"))
+	if err != nil || !validJournal(entries) {
+		return nil, errors.New("forward installation journal invalid")
+	}
+	evidence := make([]systemchanges.StepEvidence, len(recovery.Steps))
+	for _, entry := range entries {
+		if entry.Checkpoint == systemchanges.StepCompleted && entry.Step > 0 && entry.Step <= len(evidence) && entry.Evidence != nil {
+			evidence[entry.Step-1] = *entry.Evidence
+		}
+	}
+	return evidence, nil
+}
+
+func (a Adapter) VerifyReclamationReady(lease systemchanges.ExecutionLease, target systemchanges.ReclamationTarget, _ time.Duration) error {
+	if !lease.Authorized() || a.reclamationMounted(target.Path) {
+		return errors.New("reclamation target unavailable")
+	}
+	executable, err := os.Readlink(path.Join(a.root, "proc", target.ProcessID, "exe"))
+	if err != nil || executable != target.Path && executable != target.Interpreter {
+		return errors.New("reclamation process changed")
+	}
+	_, err = a.reclamationDigest(target)
+	return err
+}
+
+func (a Adapter) DeleteReclamationTarget(lease systemchanges.ExecutionLease, target systemchanges.ReclamationTarget, timeout time.Duration) (systemchanges.StepEvidence, error) {
+	if !lease.Authorized() || a.reclamationMounted(target.Path) {
+		return systemchanges.StepEvidence{}, errors.New("reclamation target unavailable")
+	}
+	if _, err := a.reclamationDigest(target); err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	name := path.Join(a.root, strings.TrimPrefix(target.Path, "/"))
+	if err := os.Remove(name); err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	directory, err := os.Open(filepath.Dir(name))
+	if err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	syncErr := directory.Sync()
+	closeErr := directory.Close()
+	if syncErr != nil || closeErr != nil {
+		return systemchanges.StepEvidence{}, errors.New("reclamation deletion was not synchronized")
+	}
+	if _, err := os.Lstat(name); !errors.Is(err, fs.ErrNotExist) {
+		return systemchanges.StepEvidence{}, errors.New("reclamation target absence unproved")
+	}
+	digest := sha256.Sum256([]byte(target.Kind + "\x00" + target.Path + "\x00" + target.SHA256))
+	return systemchanges.StepEvidence{Code: "reclamation-target-deleted", SHA256: hex.EncodeToString(digest[:])}, nil
+}
+
+func (a Adapter) StopReclamationProcess(lease systemchanges.ExecutionLease, target systemchanges.ReclamationTarget, timeout time.Duration) (systemchanges.StepEvidence, error) {
+	if !lease.Authorized() {
+		return systemchanges.StepEvidence{}, errors.New("reclamation process unavailable")
+	}
+	pid, err := strconv.Atoi(target.ProcessID)
+	expected := target.Path
+	if target.Kind == "script" {
+		expected = target.Interpreter
+	}
+	procExe := path.Join(a.root, "proc", target.ProcessID, "exe")
+	current, readErr := os.Readlink(procExe)
+	if errors.Is(readErr, fs.ErrNotExist) && lease.RecoveryAuthorized() {
+		digest := sha256.Sum256([]byte(target.ProcessID + "\x00" + expected))
+		return systemchanges.StepEvidence{Code: "reclamation-process-stopped", SHA256: hex.EncodeToString(digest[:])}, nil
+	}
+	if err != nil || readErr != nil || current != expected || syscall.Kill(pid, syscall.SIGTERM) != nil {
+		return systemchanges.StepEvidence{}, errors.New("reclamation process changed")
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		current, readErr = os.Readlink(procExe)
+		if errors.Is(readErr, fs.ErrNotExist) {
+			break
+		}
+		if readErr != nil || current != expected || !time.Now().Before(deadline) {
+			return systemchanges.StepEvidence{}, errors.New("reclamation process did not stop")
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	digest := sha256.Sum256([]byte(target.ProcessID + "\x00" + expected))
+	return systemchanges.StepEvidence{Code: "reclamation-process-stopped", SHA256: hex.EncodeToString(digest[:])}, nil
+}
+
+func (a Adapter) InspectReclamationTarget(lease systemchanges.ExecutionLease, target systemchanges.ReclamationTarget, _ time.Duration) (systemchanges.StepEffect, error) {
+	if !lease.RecoveryAuthorized() {
+		return "", errors.New("reclamation recovery unavailable")
+	}
+	name := path.Join(a.root, strings.TrimPrefix(target.Path, "/"))
+	if _, err := os.Lstat(name); errors.Is(err, fs.ErrNotExist) {
+		return systemchanges.StepEffectAbsent, nil
+	}
+	if _, err := a.reclamationDigest(target); err != nil {
+		return "", err
+	}
+	return systemchanges.StepEffectPresent, nil
+}
+
+func (a Adapter) reclamationDigest(target systemchanges.ReclamationTarget) (string, error) {
+	name := path.Join(a.root, strings.TrimPrefix(target.Path, "/"))
+	fd, err := syscall.Open(name, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return "", err
+	}
+	file := os.NewFile(uintptr(fd), name)
+	defer file.Close()
+	before, err := file.Stat()
+	stat, ok := before.Sys().(*syscall.Stat_t)
+	if err != nil || !ok || !before.Mode().IsRegular() || stat.Nlink != 1 {
+		return "", errors.New("reclamation target is not one regular file")
+	}
+	hash := func() (string, error) {
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return "", err
+		}
+		digest := sha256.New()
+		if _, err := io.Copy(digest, file); err != nil {
+			return "", err
+		}
+		return hex.EncodeToString(digest.Sum(nil)), nil
+	}
+	first, err := hash()
+	if a.afterReclamationDigest != nil {
+		a.afterReclamationDigest(name)
+	}
+	after, statErr := file.Stat()
+	second, secondErr := hash()
+	pathInfo, pathErr := os.Lstat(name)
+	if err != nil || statErr != nil || secondErr != nil || first != target.SHA256 || second != first || !os.SameFile(before, after) || pathErr != nil || pathInfo.Mode()&os.ModeSymlink != 0 || !os.SameFile(after, pathInfo) || before.Size() != after.Size() || before.ModTime() != after.ModTime() {
+		return "", errors.New("reclamation target changed")
+	}
+	return first, nil
+}
+
+func (a Adapter) reclamationMounted(target string) bool {
+	data, err := os.ReadFile(path.Join(a.root, "proc/self/mountinfo"))
+	if err != nil {
+		return true
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 4 && fields[4] == target {
+			return true
+		}
+	}
+	return false
 }
 
 func (a Adapter) Execute(lease systemchanges.ExecutionLease, changeSet string, number int, step systemchanges.Step, timeout time.Duration, cancellation *systemchanges.Cancellation) (systemchanges.StepEvidence, error) {
@@ -786,6 +963,7 @@ func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges
 		}
 	}
 	irreversible := prepared.Mutation == systemchanges.CompleteRemovalMutation && journalHasCheckpoint(journal, systemchanges.IrreversibleRemovalStarted)
+	irreversibleReclamation := prepared.Reclamation != nil && journalHasCheckpoint(journal, systemchanges.IrreversibleReclamationStarted)
 	removalSnapshotDeleted := prepared.Mutation == systemchanges.CompleteRemovalMutation && journalHasCheckpoint(journal, systemchanges.TransactionMaterialDeletionAuthorized)
 	irreversibleRotation := prepared.Mutation == systemchanges.RotationMutation && runTokenFingerprint(journal) != ""
 	if prepared.State == nil || prepared.ChangeSet != changeSet || !validRecoveryJournalBinding(prepared) {
@@ -837,13 +1015,14 @@ func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges
 	complete := last.Checkpoint == systemchanges.Complete && observed.Status == systemchanges.Managed && observed.LastChangeSet == changeSet && candidateState
 	unfinished := observed.Status == systemchanges.ChangeInProgress && observed.CurrentChangeSet == changeSet && (startingState || candidateState) && (last.Checkpoint != systemchanges.RolledBack || startingState)
 	irreversibleRemoval := irreversible && (observed.Status == systemchanges.ChangeInProgress && observed.CurrentChangeSet == changeSet || observed.Status == systemchanges.NotInstalled)
-	if err != nil || !complete && !unfinished && !irreversibleRemoval {
+	forwardInstall := irreversibleReclamation && (observed.Status == systemchanges.ChangeInProgress && observed.CurrentChangeSet == changeSet || observed.Status == systemchanges.Managed && observed.LastChangeSet == changeSet)
+	if err != nil || !complete && !unfinished && !irreversibleRemoval && !forwardInstall {
 		return systemchanges.RecoveryTransaction{}, errors.New("current State does not match the recovery transaction")
 	}
 	return systemchanges.RecoveryTransaction{
 		ChangeSet: changeSet, Mutation: prepared.Mutation, Starting: prepared.Starting, StartingRelease: prepared.State.StartingRelease,
 		Candidate: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: prepared.State.CandidateRevision, SHA256: prepared.State.CandidateSHA256}, CandidateRelease: prepared.State.CandidateRelease,
-		OutcomeOwner: prepared.OutcomeOwner, State: *prepared.State, Steps: steps, Checks: append([]systemchanges.Check(nil), prepared.Checks...), AttemptedSteps: highestStartedStep(journal), RollbackStep: rollbackResumeStep(journal), LastCheckpoint: last.Checkpoint, Timeouts: prepared.Timeouts, PriorRunTokenSHA256: runTokenFingerprint(journal), IrreversibleRemovalStarted: irreversible,
+		OutcomeOwner: prepared.OutcomeOwner, State: *prepared.State, Steps: steps, Checks: append([]systemchanges.Check(nil), prepared.Checks...), AttemptedSteps: highestStartedStep(journal), RollbackStep: rollbackResumeStep(journal), LastCheckpoint: last.Checkpoint, Timeouts: prepared.Timeouts, PriorRunTokenSHA256: runTokenFingerprint(journal), IrreversibleRemovalStarted: irreversible, IrreversibleReclamationStarted: irreversibleReclamation, Reclamation: prepared.Reclamation,
 	}, nil
 }
 
@@ -1365,7 +1544,7 @@ func RecoveryTransaction(rootPath string) (RecoveryTransactionIdentity, error) {
 	if journal[0].Starting.Status != systemchanges.Managed && journal[0].Starting.Status != systemchanges.NotInstalled && (journal[0].Starting.Status != systemchanges.RecoveryRequired || journal[0].Mutation != systemchanges.CompleteRemovalMutation) {
 		return RecoveryTransactionIdentity{}, errors.New("recovery starting baseline is unsupported")
 	}
-	forwardOnly := journal[0].Mutation == systemchanges.RotationMutation && runTokenFingerprint(journal) != "" || irreversibleRemoval
+	forwardOnly := journal[0].Mutation == systemchanges.RotationMutation && runTokenFingerprint(journal) != "" || irreversibleRemoval || journal[0].Reclamation != nil && journalHasCheckpoint(journal, systemchanges.IrreversibleReclamationStarted)
 	return RecoveryTransactionIdentity{ChangeSet: journal[0].ChangeSet, StartingStatus: journal[0].Starting.Status, StartingRevision: journal[0].Starting.Revision, Mutation: journal[0].Mutation, StartingRelease: journal[0].State.StartingRelease, CandidateRelease: journal[0].State.CandidateRelease, ForwardOnly: forwardOnly, Checkpoint: journal[len(journal)-1].Checkpoint, CompletedSteps: highestCompletedStep(journal), TotalSteps: len(journal[0].Steps)}, nil
 }
 
@@ -1431,7 +1610,8 @@ func RecoveryHealthObservation(rootPath string, source ObservationSource) (syste
 	starting := base.Status == prepared.Starting.Status && base.StateRevision == prepared.Starting.Revision && base.StateSHA256 == prepared.Starting.SHA256
 	candidate := base.Status == systemchanges.Managed && base.StateRevision == prepared.State.CandidateRevision && base.StateSHA256 == prepared.State.CandidateSHA256
 	removed := irreversibleRemoval && base.Status == systemchanges.NotInstalled
-	rollback := !irreversibleRemoval && !irreversibleRotation && last != systemchanges.Complete && last != systemchanges.RolledBack
+	irreversibleReclamation := prepared.Reclamation != nil && journalHasCheckpoint(journal, systemchanges.IrreversibleReclamationStarted)
+	rollback := !irreversibleRemoval && !irreversibleRotation && !irreversibleReclamation && last != systemchanges.Complete && last != systemchanges.RolledBack
 	completed := highestCompletedStep(journal)
 	if last == systemchanges.Complete {
 		completed = total
@@ -1881,6 +2061,17 @@ func validJournal(entries []journalEntry) bool {
 	return len(entries) > 0
 }
 
+func reclamationPreludeJournalSteps(steps []journalStep) int {
+	count := 0
+	for _, step := range steps {
+		if step.Owner != systemchanges.CloudflareModule || step.Forward == systemchanges.ActivatePreparedConfiguration {
+			break
+		}
+		count++
+	}
+	return count
+}
+
 func validNextCheckpoint(entries []journalEntry, next journalEntry) bool {
 	if len(entries) == 0 {
 		return next.Checkpoint == systemchanges.Prepared && next.ChangeSet != "" && next.Mutation != "" && next.OutcomeOwner != "" && next.PlanSHA256 != "" && next.State != nil && len(next.Steps) > 0 && len(next.Checks) > 0 && next.Timeouts.Step > 0 && next.Timeouts.Check > 0
@@ -1897,28 +2088,38 @@ func validNextCheckpoint(entries []journalEntry, next journalEntry) bool {
 		}
 	}
 	irreversibleRemoval := entries[0].Mutation == systemchanges.CompleteRemovalMutation && journalHasCheckpoint(entries, systemchanges.IrreversibleRemovalStarted)
+	irreversibleReclamation := entries[0].Reclamation != nil && journalHasCheckpoint(entries, systemchanges.IrreversibleReclamationStarted)
 	switch last.Checkpoint {
 	case systemchanges.Prepared:
 		return next.Checkpoint == systemchanges.StepStarted && next.Step == 1 || next.Checkpoint == systemchanges.IrreversibleRunTokenRotationStarted && next.Step == 0 && entries[0].Mutation == systemchanges.RotationMutation && validEvidence(next.Evidence) || next.Checkpoint == systemchanges.CancellationRequested && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0
+	case systemchanges.IrreversibleReclamationStarted:
+		return next.Checkpoint == systemchanges.ReclamationProcessStopped && next.Step == last.Step && validEvidence(next.Evidence)
+	case systemchanges.ReclamationProcessStopped:
+		return next.Checkpoint == systemchanges.ReclamationTargetDeleted && next.Step == last.Step && validEvidence(next.Evidence)
+	case systemchanges.ReclamationTargetDeleted:
+		return next.Checkpoint == systemchanges.StepStarted && next.Step == last.Step+1
 	case systemchanges.IrreversibleRunTokenRotationStarted:
 		return next.Checkpoint == systemchanges.StateFinalized && next.Step == 0 && next.State != nil
 	case systemchanges.StepStarted:
-		if irreversibleRemoval {
+		if irreversibleRemoval || irreversibleReclamation {
 			return next.Checkpoint == systemchanges.StepCompleted && next.Step == last.Step && validEvidence(next.Evidence)
 		}
 		return next.Checkpoint == systemchanges.StepCompleted && next.Step == last.Step && validEvidence(next.Evidence) || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
 	case systemchanges.StepCompleted:
 		if last.Step < rollbackCapable {
-			if irreversibleRemoval {
+			if irreversibleRemoval || irreversibleReclamation {
 				return next.Checkpoint == systemchanges.StepStarted && next.Step == last.Step+1
 			}
-			return next.Checkpoint == systemchanges.StateFinalized && next.Step == last.Step && next.State != nil || next.Checkpoint == systemchanges.StepStarted && next.Step == last.Step+1 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
+			return next.Checkpoint == systemchanges.StateFinalized && next.Step == last.Step && next.State != nil || entries[0].Reclamation != nil && last.Step == reclamationPreludeJournalSteps(entries[0].Steps) && next.Checkpoint == systemchanges.IrreversibleReclamationStarted && next.Step == last.Step || next.Checkpoint == systemchanges.StepStarted && next.Step == last.Step+1 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
 		}
 		if irreversibleRemoval {
 			return next.Checkpoint == systemchanges.PrePublicationHealthPassed && next.Step == 0
 		}
 		return next.Checkpoint == systemchanges.StateFinalized && next.Step == 0 && next.State != nil || next.Checkpoint == systemchanges.PrePublicationHealthPassed && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
 	case systemchanges.StateFinalized:
+		if entries[0].Reclamation != nil && !irreversibleReclamation && last.Step == reclamationPreludeJournalSteps(entries[0].Steps) {
+			return next.Checkpoint == systemchanges.IrreversibleReclamationStarted && next.Step == last.Step
+		}
 		return next.Checkpoint == systemchanges.StepStarted && next.Step == last.Step+1 || next.Checkpoint == systemchanges.PrePublicationHealthPassed && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
 	case systemchanges.PrePublicationHealthPassed:
 		if entries[0].Mutation == systemchanges.CompleteRemovalMutation {

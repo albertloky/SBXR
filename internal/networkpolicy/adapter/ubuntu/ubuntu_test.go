@@ -303,6 +303,29 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 	if err := os.WriteFile(script, []byte("print('proxy')\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	cmdline := filepath.Join(root, "proc/125/cmdline")
+	for name, arguments := range map[string]string{
+		"evaluation":    "/opt/shared/python\x00-c\x00exec(open('/opt/app/server.py').read())\x00",
+		"module":        "/opt/shared/python\x00-m\x00server\x00",
+		"extra wrapper": "/opt/shared/python\x00/opt/app/server.py\x00--wrapped\x00",
+		"relative":      "/opt/shared/python\x00server.py\x00",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := os.WriteFile(cmdline, []byte(arguments), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got, err := NewAt(root).Observe(networkpolicy.ObservationRequest{Stage: networkpolicy.PreApproval, ReclamationReview: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Reclamation.Scripts) != 0 {
+				t.Fatalf("ambiguous script form accepted: %+v", got.Reclamation.Scripts)
+			}
+		})
+	}
+	if err := os.WriteFile(cmdline, []byte("/opt/shared/python\x00/opt/app/server.py\x00"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Remove(filepath.Join(root, "var/lib/dpkg/info/nginx.list")); err != nil {
 		t.Fatal(err)
 	}

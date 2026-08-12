@@ -170,6 +170,16 @@ go test . -run '^Test(RepositoryDependencies|SoftwareLifecycleVerificationBounda
 
 Require Software Lifecycle to depend only on the approved Network Policy and System Changes coordination seams. Every other owning Module contributes through the typed `systemchanges.InstallContribution`; no eleven-value positional handoff, product-module cycle, generic plugin framework, or caller-authored step bypass is accepted.
 
+### SL-INSTALL-06 — One exact reclamation handoff
+
+Run:
+
+```sh
+go test ./cmd/sbxr ./internal/softwarelifecycle ./internal/state -run 'Test(InstallComposition|ReclamationInstallation|DeferredCloudflareFinalization)' -count=1
+```
+
+Require the exact typed reclamation phrase to bind the reviewed digest into the rebuilt install Plan. After approval, Network Policy must freshly recheck the same facts and issue one opaque one-use authority for System Changes. For reclamation installs, run only the reversible Cloudflare provider-creation prefix before the irreversible boundary, finalize and synchronize the complete provider-valued revision-1 State and recovery material, then stop and remove the exact target under System Changes' forward-only protocol. Any failure or cancellation before the durable boundary restores Not installed; after it, recovery can only continue to exact Managed agreement and transaction cleanup.
+
 ### SL-UPDATE-01 — Stable channel and explicit alternate
 
 Run:

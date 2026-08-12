@@ -265,7 +265,7 @@ func TestRunRefusesUnsafeTypedPlanEvidence(t *testing.T) {
 	}
 }
 
-func TestRunConfirmsExactReclamationReviewWithoutApplyingAnything(t *testing.T) {
+func TestRunConfirmsExactReclamationReviewBeforeSeparateApply(t *testing.T) {
 	review := completePlan("reclaim-vps-review")
 	review.Plan.LineageUnavailable, review.Plan.DesiredStateRevision, review.Plan.DesiredStateSHA256 = true, 0, ""
 	review.Plan.ReclamationDigest = strings.Repeat("c", 64)
@@ -277,7 +277,7 @@ func TestRunConfirmsExactReclamationReviewWithoutApplyingAnything(t *testing.T) 
 	steps := append([]string{""}, planTraversalSteps(review.Plan, 120, 36)...)
 	steps = append(steps, "\t", ReclamationPhrase, "\t", "\r", "", "\x03\r")
 	got := runTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: stub}, 120, 36, steps...)
-	if stub.reclamationCalls != 1 || !stub.reclamationOK || len(stub.applyPlans) != 0 || !strings.Contains(got, "Reclamation review confirmed") || !strings.Contains(got, "No host change was") {
+	if stub.reclamationCalls != 1 || !stub.reclamationOK || len(stub.applyPlans) != 0 || !strings.Contains(got, "Reclamation review confirmed") || !strings.Contains(got, "Apply has not") {
 		t.Fatalf("reclamation confirmation crossed the review-only boundary: calls=%d ok=%t apply=%v\n%s", stub.reclamationCalls, stub.reclamationOK, stub.applyPlans, got)
 	}
 }

@@ -376,6 +376,10 @@ func (i Interface) forwardRunTokenMaterial(binding systemChangesTransactionBindi
 // SystemChangesLoadRunTokenRotation reconstructs only the State publication
 // authority required by a later forward-recovery phase.
 func (i Interface) SystemChangesLoadRunTokenRotation(lease any, bindingJSON []byte, candidateSource, manifestsSource io.Reader) (any, error) {
+	return i.systemChangesLoadForwardState(lease, bindingJSON, candidateSource, manifestsSource, false)
+}
+
+func (i Interface) systemChangesLoadForwardState(lease any, bindingJSON []byte, candidateSource, manifestsSource io.Reader, allowAbsent bool) (any, error) {
 	if !validSystemChangesRecoveryLease(lease) || i.implementation == nil || i.implementation.storage == nil || candidateSource == nil || manifestsSource == nil {
 		return nil, finding("STATE-RUN-TOKEN-RECOVERY", "Tunnel run-token recovery", "no complete durable handoff", "the active recovery lease and finalized artifacts", "State cannot reconstruct authority from partial evidence", "use Recovery Required")
 	}
@@ -403,11 +407,13 @@ func (i Interface) SystemChangesLoadRunTokenRotation(lease any, bindingJSON []by
 	}
 	copies := copiesFromManifestSet(manifests)
 	current, readErr := i.implementation.storage.Read()
-	if readErr != nil {
+	if readErr != nil && !(allowAbsent && errors.Is(readErr, fs.ErrNotExist)) {
 		return nil, readErr
 	}
 	prior := current
-	if bytes.Equal(current, candidateBytes) {
+	if readErr != nil {
+		prior = nil
+	} else if bytes.Equal(current, candidateBytes) {
 		prior = nil
 	} else {
 		priorDocument, priorProblem := decode(current)
@@ -416,6 +422,12 @@ func (i Interface) SystemChangesLoadRunTokenRotation(lease any, bindingJSON []by
 		}
 	}
 	return &TransactionMaterial{startingRevision: binding.StartingRevision, candidateRevision: binding.CandidateRevision, startingChecksum: binding.StartingSHA256, candidateChecksum: binding.CandidateSHA256, manifestChecksum: binding.PreparedManifestSHA256, preparedChecksum: binding.PreparedStateSHA256, changeSet: binding.ChangeSet, priorState: prior, preparedState: candidateBytes, serviceCopies: copies, storage: i.implementation.storage, publication: &publicationAuthority{}, startingRelease: binding.StartingRelease, candidateRelease: binding.CandidateRelease, forwardRecovery: true}, nil
+}
+
+// SystemChangesLoadForwardInstallation reconstructs the already prepared
+// revision-one publication authority after irreversible reclamation.
+func (i Interface) SystemChangesLoadForwardInstallation(lease any, bindingJSON []byte, candidateSource, manifestsSource io.Reader) (any, error) {
+	return i.systemChangesLoadForwardState(lease, bindingJSON, candidateSource, manifestsSource, true)
 }
 
 func copiesFromManifestSet(manifests preparedManifestSet) PreparedServiceCopies {

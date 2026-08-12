@@ -194,13 +194,13 @@ func buildInstallWith(ctx context.Context, request softwareubuntu.InstallHandoff
 		return nil, errors.New("Cloudflare conflict inventory failed")
 	}
 	intent := networkpolicy.Intent{Revision: 1, Baseline: networkpolicy.Clean, PublicIPv4: draft.PublicIPv4, PublicIPv6: draft.PublicIPv6, PrimarySubscriptionAddress: draft.PrimaryAddress, CertificateHostname: directHostname, SSHPort: draft.SSHPort, SubscriptionPort: draft.SubscriptionPort, Profiles: networkpolicy.Profiles{VLESSRealityVision: networkpolicy.Profile{Enabled: true, Port: draft.RealityPort}, VLESSXHTTP: networkpolicy.Profile{Enabled: true, Address: "127.0.0.1", Port: 11080}, VLESSWebSocket: networkpolicy.Profile{Enabled: true, Address: "127.0.0.1", Port: 11081}, Hysteria2: networkpolicy.Profile{Enabled: true, Port: draft.Hysteria2Port}, TUIC: networkpolicy.Profile{Enabled: true, Port: draft.TUICPort}, AnyTLS: networkpolicy.Profile{Enabled: true, Port: draft.AnyTLSPort}}, Disk: networkDisk}
-	baseNetwork := dependencies.network(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PreApproval, OwnerFacts: ownerFacts, ReclamationReview: true})
-	if baseNetwork.Reclamation != nil {
+	baseNetwork := dependencies.network(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PreApproval, OwnerFacts: ownerFacts, ReclamationReview: true, ReviewedReclamationSHA256: request.ReviewedReclamationSHA256})
+	if baseNetwork.Reclamation != nil && request.ReviewedReclamationSHA256 == "" {
 		return nil, &reclamationReviewError{plan: baseNetwork.Reclamation}
 	}
 	httpIntent := intent
 	httpIntent.TemporaryHTTP = true
-	httpNetwork := dependencies.network(networkpolicy.Request{Intent: httpIntent, Stage: networkpolicy.PreApproval, OwnerFacts: ownerFacts, ReclamationReview: true})
+	httpNetwork := dependencies.network(networkpolicy.Request{Intent: httpIntent, Stage: networkpolicy.PreApproval, OwnerFacts: ownerFacts, ReclamationReview: true, ReviewedReclamationSHA256: request.ReviewedReclamationSHA256})
 	if baseNetwork.Outcome == networkpolicy.Failed || httpNetwork.Outcome == networkpolicy.Failed {
 		return nil, errors.New("Clean VPS Network Policy refused the installation")
 	}
@@ -285,7 +285,7 @@ func buildInstallWith(ctx context.Context, request softwareubuntu.InstallHandoff
 	}
 
 	contributions := []softwarelifecycle.InstallContribution{softwarelifecycle.NewNetworkInstallContribution(baseNetwork, changeSet, desiredSHA256), profileResult.Plan, cloudflareResult.Plan, ipPlan, domainPlan, subscriptionPlan}
-	installPlan, finding := softwarelifecycle.PlanInstall(softwarelifecycle.InstallPlanRequest{Candidate: candidate, ChangeSet: changeSet, DesiredStateSHA256: desiredSHA256, Contributions: contributions, Disk: disk})
+	installPlan, finding := softwarelifecycle.PlanInstall(softwarelifecycle.InstallPlanRequest{Candidate: candidate, ChangeSet: changeSet, DesiredStateSHA256: desiredSHA256, Contributions: contributions, Disk: disk, ReviewedReclamationSHA256: request.ReviewedReclamationSHA256})
 	if finding != nil || installPlan == nil || request.ReviewedPlanSHA256 != "" && installPlan.SHA256() != request.ReviewedPlanSHA256 {
 		return nil, errors.New("reviewed install Plan changed")
 	}

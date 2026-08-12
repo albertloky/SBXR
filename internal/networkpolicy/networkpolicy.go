@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -171,6 +172,7 @@ type IdentityConflict struct {
 }
 type FileConflict struct {
 	Path, SHA256, Process, Service, Package string
+	ProcessID                               string
 	OwnerUID                                uint32
 	Mode                                    uint32
 	Links                                   uint64
@@ -307,14 +309,15 @@ type CloudflareRoute struct {
 const UnprovedResource = "unproved"
 
 type Request struct {
-	Intent            Intent
-	Stage             Stage
-	Managed           ManagedProof
-	OwnerFacts        OwnerFacts
-	Certificate       CertificateFacts
-	Outside           OutsideFacts
-	RelevantChecksums map[string]string
-	ReclamationReview bool
+	Intent                    Intent
+	Stage                     Stage
+	Managed                   ManagedProof
+	OwnerFacts                OwnerFacts
+	Certificate               CertificateFacts
+	Outside                   OutsideFacts
+	RelevantChecksums         map[string]string
+	ReclamationReview         bool
+	ReviewedReclamationSHA256 string
 }
 
 type ProofStatus string
@@ -416,6 +419,7 @@ type Result struct {
 	portCorrection        *portCorrectionCell
 	portCorrectionBinding Binding
 	freshInstallation     *freshInstallationProofCell
+	reclamation           *reclamationAuthorityCell
 	freshDNSHostname      string
 	intent                Intent
 }
@@ -423,6 +427,17 @@ type Result struct {
 // FreshInstallationProof is a one-use, non-renderable Clean VPS proof for
 // System Changes. It re-runs the exact Network Policy request when consumed.
 type FreshInstallationProof struct{ cell *freshInstallationProofCell }
+
+// ReclamationAuthority is the one-use exact target handoff consumed only by
+// System Changes after a fresh privileged inventory matches the reviewed Plan.
+type ReclamationAuthority struct{ cell *reclamationAuthorityCell }
+
+type reclamationTarget struct{ kind, path, digest, interpreter, processID, review string }
+type reclamationAuthorityCell struct {
+	evaluate func() Result
+	target   reclamationTarget
+	used     atomic.Bool
+}
 
 type freshInstallationProofCell struct {
 	evaluate func() Result
@@ -441,6 +456,26 @@ func (result Result) FreshInstallationProof() FreshInstallationProof {
 		return FreshInstallationProof{}
 	}
 	return FreshInstallationProof{cell: &freshInstallationProofCell{evaluate: result.freshInstallation.evaluate, digest: result.freshInstallation.digest}}
+}
+
+func (ReclamationAuthority) String() string { return "Network Policy reclamation authority: redacted" }
+func (ReclamationAuthority) GoString() string {
+	return "Network Policy reclamation authority: redacted"
+}
+func (ReclamationAuthority) MarshalJSON() ([]byte, error) {
+	return nil, fmt.Errorf("Network Policy reclamation authority cannot be rendered")
+}
+func (result Result) ReclamationAuthority() ReclamationAuthority {
+	return ReclamationAuthority{cell: result.reclamation}
+}
+func (authority ReclamationAuthority) SystemChangesReclamation() (kind, path, digest, interpreter, processID, review string, valid bool) {
+	if authority.cell == nil || authority.cell.evaluate == nil || !authority.cell.used.CompareAndSwap(false, true) {
+		return "", "", "", "", "", "", false
+	}
+	fresh := authority.cell.evaluate()
+	want := authority.cell.target
+	return want.kind, want.path, want.digest, want.interpreter, want.processID, want.review,
+		fresh.reclamation != nil && fresh.reclamation.target == want && fresh.Reclamation != nil && fresh.Reclamation.Digest == want.review && fresh.freshInstallation != nil
 }
 
 // CertificateLifecycleFreshDNSPrerequisites exposes only the exact Clean VPS
@@ -880,6 +915,11 @@ func (i Interface) Evaluate(request Request) Result {
 	if result.Outcome == Failed {
 		return result
 	}
+	if target, ok := standaloneReclamationTarget(observed, result.Reclamation); ok && request.ReviewedReclamationSHA256 == target.review {
+		result.reclamation = &reclamationAuthorityCell{target: target}
+		observed.Listeners = slices.DeleteFunc(append([]Listener(nil), observed.Listeners...), func(listener Listener) bool { return listener.ProcessID == target.processID })
+		observed.Reclamation = ReclamationFacts{}
+	}
 	result.SystemChanges = SystemChangesRequirements{ValidateCompleteCandidate: true, AtomicTableApply: true, RootOwnedWatchdog: true, ProveCurrentSSHResponsive: true, ProveDetectedSSHAdmitted: true, CancelAfterGate: "NETWORK-SSH-RESPONSIVE", RestoreExactPreviousRules: true}
 	result.SSHSafety = SSHSafety{FutureOutsideReconnectUnproved: true, Warning: "One existing SSH session cannot prove a future outside reconnection.", RecoveryPath: "VPS provider console"}
 	result.CompleteRemoval = CompleteRemoval{Family: "inet", Table: "sbxr", PreserveUnrelatedPolicy: true}
@@ -935,7 +975,37 @@ func (i Interface) Evaluate(request Request) Result {
 	if cleanVPSAuthorityEligible(result) {
 		result.freshInstallation = &freshInstallationProofCell{evaluate: func() Result { return i.Evaluate(request) }, digest: result.Binding.Digest}
 	}
+	if result.reclamation != nil {
+		result.reclamation.evaluate = func() Result { return i.Evaluate(request) }
+	}
 	return result
+}
+
+func standaloneReclamationTarget(observed Observations, plan *ReclamationPlan) (reclamationTarget, bool) {
+	if plan == nil || !validSHA256(plan.Digest) || len(observed.Reclamation.Packages)+len(observed.Reclamation.Identities)+len(observed.Reclamation.UnsafePaths) != 0 || observed.Reclamation.Docker != nil || len(observed.ServiceIdentities)+len(observed.ResourcePaths)+len(observed.OwnerFacts.Routes)+len(observed.OwnerFacts.Conflicts) != 0 || observed.Firewall.ActiveManager != "" || observed.Firewall.UnexpectedRule != "" || observed.OwnerFacts.DNS != "fresh" || observed.OwnerFacts.Tunnel != "fresh" {
+		return reclamationTarget{}, false
+	}
+	listeners := slices.DeleteFunc(append([]Listener(nil), observed.Listeners...), func(listener Listener) bool { return !reclaimableListener(listener, observed.SSH) })
+	if len(listeners) == 0 || !validProcessID(listeners[0].ProcessID) || listeners[0].Service != "" {
+		return reclamationTarget{}, false
+	}
+	listener := listeners[0]
+	for _, current := range listeners[1:] {
+		if current.ProcessID != listener.ProcessID || current.Process != listener.Process || current.Executable != listener.Executable || current.Service != "" {
+			return reclamationTarget{}, false
+		}
+	}
+	if len(observed.Reclamation.Executables) == 1 && len(observed.Reclamation.Scripts) == 0 {
+		file := observed.Reclamation.Executables[0]
+		valid := filepath.IsAbs(file.Path) && validSHA256(file.SHA256) && file.ProcessID == listener.ProcessID && file.Path == listener.Executable && file.Service == "" && file.Package == "" && file.Links == 1 && !file.Mount
+		return reclamationTarget{kind: "executable", path: file.Path, digest: file.SHA256, processID: file.ProcessID, review: plan.Digest}, valid
+	}
+	if len(observed.Reclamation.Scripts) == 1 && len(observed.Reclamation.Executables) == 0 {
+		script := observed.Reclamation.Scripts[0]
+		valid := filepath.IsAbs(script.Path) && filepath.IsAbs(script.Interpreter) && validSHA256(script.SHA256) && script.ProcessID == listener.ProcessID && script.Interpreter == listener.Executable && script.Service == "" && script.Regular && script.Links == 1 && !script.Mount
+		return reclamationTarget{kind: "script", path: script.Path, digest: script.SHA256, interpreter: script.Interpreter, processID: script.ProcessID, review: plan.Digest}, valid
+	}
+	return reclamationTarget{}, false
 }
 
 func reviewInstallation(result *Result, observed Observations, required bool) {
@@ -1077,6 +1147,23 @@ func digestStrings(values []string) string {
 	return hex.EncodeToString(digest[:])
 }
 
+func validSHA256(value string) bool {
+	decoded, err := hex.DecodeString(value)
+	return len(value) == 64 && err == nil && hex.EncodeToString(decoded) == value
+}
+
+func validProcessID(value string) bool {
+	if value == "" || len(value) > 10 || value[0] == '0' {
+		return false
+	}
+	for _, character := range value {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func reviewFact(value string) string {
 	value = strings.TrimSpace(strings.NewReplacer("\r", " ", "\n", " ", "\t", " ").Replace(value))
 	if value == "" {
@@ -1166,7 +1253,7 @@ func evaluateSSH(result *Result, intent Intent, facts SSHFacts) {
 
 func validRequest(request Request) bool {
 	intent := request.Intent
-	if intent.Revision == 0 || request.Stage != PreApproval && request.Stage != PostApproval || intent.Baseline != Clean && intent.Baseline != Managed || intent.SSHPort == 0 || intent.SubscriptionPort == 0 || intent.PublicIPv4 == "" && intent.PublicIPv6 == "" || intent.PrimarySubscriptionAddress != intent.PublicIPv4 && intent.PrimarySubscriptionAddress != intent.PublicIPv6 {
+	if intent.Revision == 0 || request.Stage != PreApproval && request.Stage != PostApproval || intent.Baseline != Clean && intent.Baseline != Managed || intent.SSHPort == 0 || intent.SubscriptionPort == 0 || intent.PublicIPv4 == "" && intent.PublicIPv6 == "" || intent.PrimarySubscriptionAddress != intent.PublicIPv4 && intent.PrimarySubscriptionAddress != intent.PublicIPv6 || request.ReviewedReclamationSHA256 != "" && !validSHA256(request.ReviewedReclamationSHA256) {
 		return false
 	}
 	if intent.PublicIPv4 != "" && (net.ParseIP(intent.PublicIPv4) == nil || net.ParseIP(intent.PublicIPv4).To4() == nil) || intent.PublicIPv6 != "" && (net.ParseIP(intent.PublicIPv6) == nil || net.ParseIP(intent.PublicIPv6).To4() != nil) {

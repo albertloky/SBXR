@@ -43,43 +43,45 @@ import (
 )
 
 type systemChangesAdapter struct {
-	observation     systemchanges.Observation
-	closes          atomic.Int32
-	events          []string
-	artifacts       map[string][]byte
-	statuses        map[systemchanges.GatePhase]systemchanges.HealthStatus
-	beforeStep      func() error
-	afterPrepare    func()
-	beforeCheck     func()
-	prepareErr      error
-	closeErr        error
-	stepEvidence    *systemchanges.StepEvidence
-	lease           systemchanges.ExecutionLease
-	executeCount    int
-	failStep        int
-	failReverse     bool
-	agreementErr    error
-	serviceErr      error
-	removalReadyErr error
-	tokenRevoked    bool
-	failRemoval     systemchanges.IrreversibleRemovalPhase
-	removalErr      error
-	finalAbsent     bool
-	holdErr         error
-	recoveryLoadErr error
-	inspectionErr   error
-	restoreErr      error
-	noRecovery      bool
-	recovery        *systemchanges.RecoveryTransaction
-	stateRecovery   systemchanges.StateRecovery
-	stateBinding    []byte
-	crashBefore     systemchanges.DurableCheckpoint
-	crashAfter      systemchanges.DurableCheckpoint
-	failRecord      systemchanges.DurableCheckpoint
-	crashed         bool
-	lockHeld        bool
-	cloudflare      *cloudflaretunnel.Executor
-	rotationChanged bool
+	observation        systemchanges.Observation
+	closes             atomic.Int32
+	events             []string
+	artifacts          map[string][]byte
+	statuses           map[systemchanges.GatePhase]systemchanges.HealthStatus
+	beforeStep         func() error
+	afterPrepare       func()
+	beforeCheck        func()
+	prepareErr         error
+	closeErr           error
+	stepEvidence       *systemchanges.StepEvidence
+	lease              systemchanges.ExecutionLease
+	executeCount       int
+	failStep           int
+	failReverse        bool
+	agreementErr       error
+	serviceErr         error
+	removalReadyErr    error
+	tokenRevoked       bool
+	failRemoval        systemchanges.IrreversibleRemovalPhase
+	removalErr         error
+	finalAbsent        bool
+	holdErr            error
+	recoveryLoadErr    error
+	inspectionErr      error
+	restoreErr         error
+	noRecovery         bool
+	recovery           *systemchanges.RecoveryTransaction
+	stateRecovery      systemchanges.StateRecovery
+	stateBinding       []byte
+	crashBefore        systemchanges.DurableCheckpoint
+	crashAfter         systemchanges.DurableCheckpoint
+	crashStep          int
+	failRecord         systemchanges.DurableCheckpoint
+	crashed            bool
+	lockHeld           bool
+	cloudflare         *cloudflaretunnel.Executor
+	rotationChanged    bool
+	reclamationPresent bool
 }
 
 type controlledInfrastructureSecret struct {
@@ -175,7 +177,7 @@ func (a *systemChangesAdapter) Prepare(lease systemchanges.ExecutionLease, prepa
 	a.recovery = &systemchanges.RecoveryTransaction{
 		ChangeSet: preparation.ChangeSet, Mutation: preparation.Mutation, Starting: preparation.Starting, StartingRelease: preparation.State.StartingRelease,
 		Candidate: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: preparation.State.CandidateRevision, SHA256: preparation.State.CandidateSHA256}, CandidateRelease: preparation.State.CandidateRelease,
-		OutcomeOwner: preparation.OutcomeOwner, State: preparation.State, Steps: append([]systemchanges.Step(nil), preparation.Steps...), Checks: append([]systemchanges.Check(nil), preparation.Checks...), LastCheckpoint: systemchanges.Prepared, Timeouts: preparation.Timeouts,
+		OutcomeOwner: preparation.OutcomeOwner, State: preparation.State, Steps: append([]systemchanges.Step(nil), preparation.Steps...), Checks: append([]systemchanges.Check(nil), preparation.Checks...), LastCheckpoint: systemchanges.Prepared, Timeouts: preparation.Timeouts, Reclamation: preparation.Reclamation,
 	}
 	a.stateBinding, _ = json.Marshal(preparation.State)
 	if a.afterPrepare != nil {
@@ -189,7 +191,7 @@ func (a *systemChangesAdapter) Prepare(lease systemchanges.ExecutionLease, prepa
 }
 
 func (a *systemChangesAdapter) Record(_ systemchanges.ExecutionLease, record systemchanges.CheckpointRecord) error {
-	if a.crashBefore == record.Checkpoint && !a.crashed {
+	if a.crashBefore == record.Checkpoint && (a.crashStep == 0 || a.crashStep == record.Step) && !a.crashed {
 		a.crashed = true
 		panic("controlled worker death")
 	}
@@ -201,6 +203,9 @@ func (a *systemChangesAdapter) Record(_ systemchanges.ExecutionLease, record sys
 		a.recovery.LastCheckpoint = record.Checkpoint
 		if record.Checkpoint == systemchanges.IrreversibleRemovalStarted {
 			a.recovery.IrreversibleRemovalStarted = true
+		}
+		if record.Checkpoint == systemchanges.IrreversibleReclamationStarted {
+			a.recovery.IrreversibleReclamationStarted = true
 		}
 		switch record.Checkpoint {
 		case systemchanges.StepStarted:
@@ -221,7 +226,7 @@ func (a *systemChangesAdapter) Record(_ systemchanges.ExecutionLease, record sys
 			a.recovery.Candidate.SHA256 = record.State.CandidateSHA256
 		}
 	}
-	if a.crashAfter == record.Checkpoint && !a.crashed {
+	if a.crashAfter == record.Checkpoint && (a.crashStep == 0 || a.crashStep == record.Step) && !a.crashed {
 		a.crashed = true
 		panic("controlled worker death")
 	}
@@ -271,6 +276,46 @@ func (a *systemChangesAdapter) LoadRunTokenRotationState(lease systemchanges.Exe
 	return a.stateRecovery.SystemChangesLoadRunTokenRotation(lease, binding, bytes.NewReader(a.artifacts["prepared/state.json"]), bytes.NewReader(a.artifacts["prepared/manifests.json"]))
 }
 
+func (a *systemChangesAdapter) LoadForwardInstallationState(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction) (any, error) {
+	binding, _ := json.Marshal(recovery.State)
+	return a.stateRecovery.SystemChangesLoadForwardInstallation(lease, binding, bytes.NewReader(a.artifacts["prepared/state.json"]), bytes.NewReader(a.artifacts["prepared/manifests.json"]))
+}
+
+func (a *systemChangesAdapter) LoadForwardInstallationEvidence(systemchanges.ExecutionLease, systemchanges.RecoveryTransaction) ([]systemchanges.StepEvidence, error) {
+	evidence := make([]systemchanges.StepEvidence, len(a.recovery.Steps))
+	for index := 0; index < a.recovery.AttemptedSteps && index < len(evidence); index++ {
+		evidence[index] = systemchanges.StepEvidence{Code: "step-ok", SHA256: testSHA('a')}
+	}
+	return evidence, nil
+}
+
+func (a *systemChangesAdapter) VerifyReclamationReady(systemchanges.ExecutionLease, systemchanges.ReclamationTarget, time.Duration) error {
+	a.events = append(a.events, "verify exact reclamation target")
+	if !a.reclamationPresent {
+		return errors.New("target changed")
+	}
+	return nil
+}
+
+func (a *systemChangesAdapter) StopReclamationProcess(systemchanges.ExecutionLease, systemchanges.ReclamationTarget, time.Duration) (systemchanges.StepEvidence, error) {
+	a.events = append(a.events, "stop exact reclamation process")
+	return systemchanges.StepEvidence{Code: "reclamation-process-stopped", SHA256: testSHA('c')}, nil
+}
+
+func (a *systemChangesAdapter) DeleteReclamationTarget(_ systemchanges.ExecutionLease, _ systemchanges.ReclamationTarget, _ time.Duration) (systemchanges.StepEvidence, error) {
+	a.events = append(a.events, "delete exact reclamation target")
+	a.reclamationPresent = false
+	return systemchanges.StepEvidence{Code: "reclamation-target-deleted", SHA256: testSHA('d')}, nil
+}
+
+func (a *systemChangesAdapter) InspectReclamationTarget(systemchanges.ExecutionLease, systemchanges.ReclamationTarget, time.Duration) (systemchanges.StepEffect, error) {
+	a.events = append(a.events, "inspect exact reclamation target")
+	if a.reclamationPresent {
+		return systemchanges.StepEffectPresent, nil
+	}
+	return systemchanges.StepEffectAbsent, nil
+}
+
 func (a *systemChangesAdapter) Execute(_ systemchanges.ExecutionLease, _ string, _ int, step systemchanges.Step, _ time.Duration, _ *systemchanges.Cancellation) (systemchanges.StepEvidence, error) {
 	a.executeCount++
 	a.events = append(a.events, "execute "+string(step.Forward()))
@@ -291,6 +336,9 @@ func (a *systemChangesAdapter) Execute(_ systemchanges.ExecutionLease, _ string,
 			resolved = "f70ff985-a4ef-4643-bbbc-4a0ed4fc8415"
 		}
 		return a.cloudflare.Execute(step, resolved, time.Minute)
+	}
+	if change, ok := step.CloudflareChange(); ok && change.Action == systemchanges.CloudflareTunnelCreate {
+		return systemchanges.StepEvidence{Code: "step-ok", SHA256: testSHA('a'), ResourceType: string(systemchanges.CloudflareTunnelResource), ResourceID: "tunnel-123"}, nil
 	}
 	return systemchanges.StepEvidence{Code: "step-ok", SHA256: testSHA('a')}, nil
 }
@@ -503,6 +551,101 @@ func TestExplicitCancellationWaitsForSafeCheckpointThenRollsBack(t *testing.T) {
 	want := "Prepared,Step started 1,execute Activate prepared configuration,Step completed 1,Cancellation requested 1,Rollback started,Rollback step started 1,reverse Restore prior configuration,Rollback step completed 1,rollback verified,Rollback verified,Rolled back,cleanup"
 	if got := strings.Join(adapter.events, ","); got != want {
 		t.Fatalf("cancellation checkpoints = %s, want %s", got, want)
+	}
+}
+
+type reclamationNetworkObserver struct{ observed networkpolicy.Observations }
+
+func (observer reclamationNetworkObserver) Observe(networkpolicy.ObservationRequest) (networkpolicy.Observations, error) {
+	return observer.observed, nil
+}
+
+func reviewedReclamationAuthority(t *testing.T) systemchanges.ReclamationAuthority {
+	t.Helper()
+	intent := networkpolicy.Intent{Revision: 1, Baseline: networkpolicy.Clean, PublicIPv4: "192.0.2.10", PrimarySubscriptionAddress: "192.0.2.10", CertificateHostname: "direct.example.com", SSHPort: 2222, SubscriptionPort: 10443, Profiles: networkpolicy.Profiles{VLESSRealityVision: networkpolicy.Profile{Enabled: true, Port: 443}, VLESSXHTTP: networkpolicy.Profile{Enabled: true, Address: "127.0.0.1", Port: 11080}, VLESSWebSocket: networkpolicy.Profile{Enabled: true, Address: "127.0.0.1", Port: 11081}, Hysteria2: networkpolicy.Profile{Enabled: true, Port: 443}, TUIC: networkpolicy.Profile{Enabled: true, Port: 8443}, AnyTLS: networkpolicy.Profile{Enabled: true, Port: 9443}}, Disk: networkpolicy.DiskRequirement{PreparationBytes: 100, TemporaryBytes: 100, SnapshotBytes: 100, JournalBytes: 100, RollbackBytes: 100, OverheadBytes: 100}}
+	observed := networkpolicy.Observations{Host: networkpolicy.HostFacts{UbuntuVersion: "24.04.3", UbuntuServer: true, Architecture: "amd64", Systemd: true, LogicalCPUs: 1, PhysicalRAM: 1024 << 20}, PublicIPv4: []string{"192.0.2.10"}, SSH: networkpolicy.SSHFacts{DetectedPort: 2222, ServerAddress: "192.0.2.10", CurrentSessions: []string{"session-1"}}, Firewall: networkpolicy.FirewallFacts{SBXRTableState: "absent", RootVerified: true}, Routes: networkpolicy.RouteFacts{IPv4: "default via 192.0.2.1"}, Outbound: networkpolicy.OutboundFacts{DNS: true, GitHubHTTPS: true, GitHubAttestationHTTPS: true, CloudflareHTTPS: true, ACMEHTTPS: true, CertificateEndpointsHTTPS: true, TimeService: true, TunnelTCP7844: true, TunnelUDP7844: true}, Disk: networkpolicy.DiskFacts{FilesystemBytes: 20 << 30, AvailableBytes: 3 << 30}, Time: networkpolicy.TimeFacts{Synchronized: true, Owner: "systemd-timesyncd"}, OwnerFacts: networkpolicy.OwnerFacts{DNS: "fresh", Tunnel: "fresh"}, Certificate: networkpolicy.CertificateFacts{DNS: networkpolicy.DNSFacts{Hostname: "direct.example.com", IPv4: []string{"192.0.2.10"}}, CAA: networkpolicy.CAAFacts{Issuer: "letsencrypt.org", HTTP01Allowed: true}}, Checksums: map[string]string{"sshd_config": "sha256:ssh", "nftables": "sha256:nft"}, ReclamationComplete: true}
+	observed.Listeners = []networkpolicy.Listener{{Address: "0.0.0.0", Port: 443, Protocol: networkpolicy.TCP, Process: "standalone-proxy", Executable: "/opt/standalone/proxy", ProcessID: "4242"}}
+	observed.Reclamation.Executables = []networkpolicy.FileConflict{{Path: "/opt/standalone/proxy", SHA256: testSHA('a'), Process: "standalone-proxy", ProcessID: "4242", Mode: 0o755, Links: 1}}
+	module := networkpolicy.New(reclamationNetworkObserver{observed})
+	review := module.Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PreApproval, ReclamationReview: true})
+	if review.Reclamation == nil {
+		t.Fatalf("reclamation review = %+v", review.Findings)
+	}
+	approved := module.Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval, ReclamationReview: true, ReviewedReclamationSHA256: review.Reclamation.Digest})
+	return approved.ReclamationAuthority()
+}
+
+func TestReclamationInstallationCrossesOneDurableForwardOnlyBoundary(t *testing.T) {
+	authority := reviewedReclamationAuthority(t)
+	stateModule, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.InstallationMutation, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-PREFLIGHT"}, systemChangeTestOptions{stepTimeout: 30 * time.Second, reclamation: authority})
+	cancellation := systemchanges.NewCancellation()
+	adapter := &systemChangesAdapter{observation: observed, stateRecovery: stateModule, reclamationPresent: true}
+	adapter.beforeStep = func() error {
+		if adapter.executeCount == 2 {
+			cancellation.Request()
+		}
+		return nil
+	}
+	result := systemchanges.New(adapter).ApplyWithCancellation(changeSet, cancellation)
+	if result.Outcome != systemchanges.Completed || adapter.reclamationPresent || strings.Contains(strings.Join(adapter.events, ","), "reverse") {
+		t.Fatalf("reclamation install = %+v events=%v", result, adapter.events)
+	}
+	events := strings.Join(adapter.events, ",")
+	if !strings.Contains(events, "Step completed 1,verify exact reclamation target,Irreversible reclamation started 1,stop exact reclamation process,Reclamation process stopped 1,delete exact reclamation target,Reclamation target deleted 1,Step started 2") {
+		t.Fatalf("durable reclamation order = %s", events)
+	}
+	loaded, err := stateModule.Load(LoadRequest{Baseline: ManagedEvidence, SupportedRelease: testRelease, Lineage: &LineageProof{Revision: 1, LastCompletedChangeSet: "change-0001", ReleaseIdentity: testRelease}})
+	if err != nil || loaded.Snapshot == nil || loaded.Snapshot.Revision != 1 || adapter.recovery != nil {
+		t.Fatalf("final Managed proof = (%+v, %v), recovery=%+v", loaded, err, adapter.recovery)
+	}
+}
+
+func TestReclamationInstallationCancellationBeforeCheckpointRestoresNotInstalled(t *testing.T) {
+	_, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.InstallationMutation, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-PREFLIGHT"}, systemChangeTestOptions{stepTimeout: 30 * time.Second, reclamation: reviewedReclamationAuthority(t)})
+	cancellation := systemchanges.NewCancellation()
+	adapter := &systemChangesAdapter{observation: observed, reclamationPresent: true, beforeStep: func() error {
+		cancellation.Request()
+		return nil
+	}}
+	result := systemchanges.New(adapter).ApplyWithCancellation(changeSet, cancellation)
+	if result.Outcome != systemchanges.RollbackSucceeded || result.RestoredStatus != systemchanges.NotInstalled || !adapter.reclamationPresent || !strings.Contains(strings.Join(adapter.events, ","), "reverse Delete created Cloudflare resource") {
+		t.Fatalf("pre-checkpoint cancellation = %+v events=%v", result, adapter.events)
+	}
+}
+
+func TestReclamationInstallationRestartsForwardAfterEveryDurableCheckpoint(t *testing.T) {
+	checkpoints := []systemchanges.DurableCheckpoint{systemchanges.IrreversibleReclamationStarted, systemchanges.ReclamationProcessStopped, systemchanges.ReclamationTargetDeleted, systemchanges.StepStarted, systemchanges.StepCompleted, systemchanges.PrePublicationHealthPassed, systemchanges.StatePublicationStarted, systemchanges.StatePublished, systemchanges.PostPublicationHealthPassed, systemchanges.Complete}
+	for _, checkpoint := range checkpoints {
+		t.Run(string(checkpoint), func(t *testing.T) {
+			stateModule, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.InstallationMutation, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-PREFLIGHT"}, systemChangeTestOptions{stepTimeout: 30 * time.Second, reclamation: reviewedReclamationAuthority(t)})
+			adapter := &systemChangesAdapter{observation: observed, stateRecovery: stateModule, reclamationPresent: true, crashAfter: checkpoint}
+			if checkpoint == systemchanges.StepStarted || checkpoint == systemchanges.StepCompleted {
+				adapter.crashStep = 2
+			}
+			func() {
+				defer func() { _ = recover() }()
+				systemchanges.New(adapter).Apply(changeSet)
+			}()
+			adapter.crashAfter, adapter.crashed = "", false
+			result := systemchanges.New(adapter).Recover()
+			if result.Outcome != systemchanges.Completed || adapter.reclamationPresent || adapter.recovery != nil || strings.Contains(strings.Join(adapter.events, ","), "reverse") {
+				t.Fatalf("recovery after %s = %+v events=%v", checkpoint, result, adapter.events)
+			}
+		})
+	}
+}
+
+func TestReclamationInstallationRecoverySurvivesASecondWorkerDeath(t *testing.T) {
+	stateModule, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.InstallationMutation, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-PREFLIGHT"}, systemChangeTestOptions{stepTimeout: 30 * time.Second, reclamation: reviewedReclamationAuthority(t)})
+	adapter := &systemChangesAdapter{observation: observed, stateRecovery: stateModule, reclamationPresent: true, crashAfter: systemchanges.ReclamationTargetDeleted}
+	crash := func(run func()) { defer func() { _ = recover() }(); run() }
+	crash(func() { systemchanges.New(adapter).Apply(changeSet) })
+	adapter.crashAfter, adapter.crashStep, adapter.crashed = systemchanges.StepStarted, 2, false
+	crash(func() { systemchanges.New(adapter).Recover() })
+	adapter.crashAfter, adapter.crashed = "", false
+	result := systemchanges.New(adapter).Recover()
+	if result.Outcome != systemchanges.Completed || adapter.recovery != nil || strings.Contains(strings.Join(adapter.events, ","), "reverse") {
+		t.Fatalf("second forward recovery = %+v events=%v", result, adapter.events)
 	}
 }
 
@@ -1101,8 +1244,25 @@ func TestDeferredCloudflareFinalizationPublishesProviderValuesInRevisionOne(t *t
 		t.Fatal(err)
 	}
 	observed := systemchanges.Observation{Status: systemchanges.NotInstalled, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, VolatileSHA256: testSHA('2'), FilesystemBytes: 20 << 30, AvailableBytes: 5 << 30, WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}
-	adapter := &systemChangesAdapter{observation: observed, cloudflare: &executor}
-	result := planResult.Plan.Apply(systemchanges.New(adapter), prepared, systemchanges.StateLineage{Status: systemchanges.NotInstalled}, testSHA('2'), systemchanges.DiskRequirement{PreparationBytes: 100, TemporaryBytes: 100, SnapshotBytes: 100, JournalBytes: 100, RollbackBytes: 100, OverheadBytes: 100})
+	authority := reviewedReclamationAuthority(t)
+	changeSet, err := systemchanges.NewChangeSet(systemchanges.ChangeSetSpec{
+		Identity: "cloudflare-change-0001", Mutation: systemchanges.InstallationMutation, OutcomeOwner: systemchanges.CloudflareModule,
+		StartingState: systemchanges.StateLineage{Status: systemchanges.NotInstalled}, TargetStateSHA256: templateSHA,
+		Plan:          systemchanges.PlanBinding{Identity: planResult.Plan.Identity(), SHA256: planResult.Plan.SHA256(), VolatileSHA256: testSHA('2')},
+		PreparedState: prepared, Steps: planResult.Plan.Steps(), Checks: planResult.Plan.Checks(), Reclamation: authority,
+		Timeouts: systemchanges.Timeouts{Step: 5 * time.Minute, Check: 5 * time.Minute},
+		Disk:     systemchanges.DiskRequirement{PreparationBytes: 100, TemporaryBytes: 100, SnapshotBytes: 100, JournalBytes: 100, RollbackBytes: 100, OverheadBytes: 100},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := &systemChangesAdapter{observation: observed, cloudflare: &executor, stateRecovery: stateModule, reclamationPresent: true, crashAfter: systemchanges.IrreversibleReclamationStarted}
+	func() {
+		defer func() { _ = recover() }()
+		systemchanges.New(adapter).Apply(changeSet)
+	}()
+	adapter.crashAfter, adapter.crashed = "", false
+	result := systemchanges.New(adapter).Recover()
 	if result.Outcome != systemchanges.Completed {
 		t.Fatalf("Apply = %+v, events=%v", result, adapter.events)
 	}
@@ -1115,6 +1275,10 @@ func TestDeferredCloudflareFinalizationPublishesProviderValuesInRevisionOne(t *t
 	finalized := slices.ContainsFunc(adapter.events, func(event string) bool { return strings.HasPrefix(event, string(systemchanges.StateFinalized)) })
 	if strings.Count(document, "CLOUDFLARE-DEFERRED-RUN-TOKEN-MARKER") != 1 || !finalized {
 		t.Fatalf("deferred finalization was not one-use and durable: events=%v", adapter.events)
+	}
+	events := strings.Join(adapter.events, ",")
+	if strings.Index(events, string(systemchanges.StateFinalized)) > strings.Index(events, string(systemchanges.IrreversibleReclamationStarted)) {
+		t.Fatalf("recovery material was not durable before reclamation: %v", adapter.events)
 	}
 	if strings.Contains(strings.Join(adapter.events, "\n")+fmt.Sprintf("%+v", result), "CLOUDFLARE-DEFERRED-RUN-TOKEN-MARKER") {
 		t.Fatal("run token escaped protected State artifacts")
@@ -1505,6 +1669,7 @@ type systemChangeTestOptions struct {
 	candidateEdit      func(*DesiredState)
 	subscription       bool
 	subscriptionBundle []byte
+	reclamation        systemchanges.ReclamationAuthority
 }
 
 func preparedSystemChangeWithOptions(t *testing.T, mutation systemchanges.MutationClass, check systemchanges.Check, options systemChangeTestOptions) (Interface, *systemchanges.ChangeSet, *systemchanges.ChangeSet, systemchanges.Observation) {
@@ -1593,6 +1758,13 @@ func preparedSystemChangeWithOptions(t *testing.T, mutation systemchanges.Mutati
 		t.Fatal(err)
 	}
 	steps := append([]systemchanges.Step{step}, options.extraSteps...)
+	if options.reclamation != nil {
+		prelude, preludeErr := systemchanges.NewCloudflareStep(systemchanges.CloudflareChange{Action: systemchanges.CloudflareTunnelCreate, AccountID: "account-123", TunnelName: "sbxr-main"})
+		if preludeErr != nil {
+			t.Fatal(preludeErr)
+		}
+		steps = append([]systemchanges.Step{prelude}, steps...)
+	}
 	if len(options.steps) > 0 {
 		steps = append([]systemchanges.Step(nil), options.steps...)
 	}
@@ -1638,6 +1810,7 @@ func preparedSystemChangeWithOptions(t *testing.T, mutation systemchanges.Mutati
 		StartingState: starting, TargetStateSHA256: target,
 		Plan:          systemchanges.PlanBinding{Identity: planIdentity, SHA256: planSHA256, VolatileSHA256: testSHA('2')},
 		PreparedState: prepared, TypedRemovalConfirmation: typedRemoval, PermanentRemovalSelection: permanentRemoval, Steps: steps,
+		Reclamation: options.reclamation,
 		Checks: func() []systemchanges.Check {
 			pre, post := check, check
 			pre.Phase, post.Phase = systemchanges.PrePublication, systemchanges.PostPublication

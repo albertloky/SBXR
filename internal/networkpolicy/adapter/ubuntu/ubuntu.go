@@ -214,7 +214,7 @@ func (a Adapter) reclamationFacts(paths []string, listeners []networkpolicy.List
 		stat, _ := info.Sys().(*syscall.Stat_t)
 		file := networkpolicy.FileConflict{Path: path, SHA256: digest, Mode: uint32(info.Mode().Perm()), Links: 1}
 		if owner, ok := processes[path]; ok {
-			file.Process, file.Service = owner.process, owner.service
+			file.Process, file.Service, file.ProcessID = owner.process, owner.service, owner.processID
 		}
 		if stat != nil {
 			file.OwnerUID, file.Links = stat.Uid, uint64(stat.Nlink)
@@ -301,7 +301,7 @@ func (a Adapter) reclamationProcesses() (map[string]socketOwner, []networkpolicy
 			continue
 		}
 		arguments := strings.Split(readOptional(a.path(filepath.Join(base, "cmdline"))), "\x00")
-		if len(arguments) < 2 || !filepath.IsAbs(arguments[1]) {
+		if len(arguments) != 3 || arguments[2] != "" || !filepath.IsAbs(arguments[0]) || filepath.Clean(arguments[0]) != arguments[0] || !filepath.IsAbs(arguments[1]) || filepath.Clean(arguments[1]) != arguments[1] {
 			continue
 		}
 		if a.mountPoint(arguments[1]) {

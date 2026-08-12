@@ -14,19 +14,20 @@ import (
 const lockDirectory = "run/sbxr"
 
 type Adapter struct {
-	root         string
-	uid          int
-	source       ObservationSource
-	host         Host
-	firewall     FirewallExecutor
-	cloudflare   CloudflareExecutor
-	certificate  CertificateExecutor
-	profiles     ConnectionProfilesExecutor
-	subscription SubscriptionPublicationExecutor
-	software     SoftwareLifecycleExecutor
-	state        systemchanges.StateRecovery
-	fresh        *systemchanges.FreshInstallationAuthority
-	freshLock    bool
+	root                   string
+	uid                    int
+	source                 ObservationSource
+	host                   Host
+	firewall               FirewallExecutor
+	cloudflare             CloudflareExecutor
+	certificate            CertificateExecutor
+	profiles               ConnectionProfilesExecutor
+	subscription           SubscriptionPublicationExecutor
+	software               SoftwareLifecycleExecutor
+	state                  systemchanges.StateRecovery
+	fresh                  *systemchanges.FreshInstallationAuthority
+	freshLock              bool
+	afterReclamationDigest func(string)
 }
 
 // ObservationSource reloads coordinated State lineage and volatile bindings.

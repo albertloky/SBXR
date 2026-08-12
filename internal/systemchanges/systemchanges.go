@@ -9,6 +9,7 @@ import (
 	"math/bits"
 	"net/mail"
 	"net/netip"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -621,6 +622,33 @@ const (
 	CompleteRemovalMutation    MutationClass = "Complete removal"
 )
 
+type ReclamationTarget struct {
+	Kind, Path, SHA256, Interpreter, ProcessID, ReviewSHA256 string
+}
+
+type ReclamationAuthority interface {
+	SystemChangesReclamation() (kind, path, digest, interpreter, processID, review string, valid bool)
+}
+
+func validReclamationTarget(target ReclamationTarget) bool {
+	if target.Kind != "executable" && target.Kind != "script" || !filepath.IsAbs(target.Path) || filepath.Clean(target.Path) != target.Path || !validSHA256(target.SHA256) || !validSHA256(target.ReviewSHA256) || !validReclamationProcessID(target.ProcessID) {
+		return false
+	}
+	return target.Kind == "executable" && target.Interpreter == "" || target.Kind == "script" && filepath.IsAbs(target.Interpreter) && filepath.Clean(target.Interpreter) == target.Interpreter
+}
+
+func validReclamationProcessID(value string) bool {
+	if value == "" || len(value) > 10 || value[0] == '0' {
+		return false
+	}
+	for _, character := range value {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 type Module string
 
 const (
@@ -1147,6 +1175,7 @@ type ChangeSetSpec struct {
 	PreparedState             PreparedStateCommit
 	TypedRemovalConfirmation  TypedRemovalConfirmation
 	PermanentRemovalSelection PermanentRemovalSelection
+	Reclamation               ReclamationAuthority
 	Steps                     []Step
 	Checks                    []Check
 	Timeouts                  Timeouts
@@ -1183,7 +1212,8 @@ func NewChangeSet(spec ChangeSetSpec) (*ChangeSet, error) {
 	selectionReview, selected := validPermanentRemovalSelection(spec.PermanentRemovalSelection)
 	confirmedRemoval := spec.Mutation == CompleteRemovalMutation && typed && selected && confirmationReview == selectionReview
 	validRemoval := validRemovalSteps(spec.Steps)
-	if !safeIdentity(spec.Identity) || !validMutation(spec.Mutation) || !validModule(spec.OutcomeOwner) || !validStartingState(spec.StartingState, spec.Mutation) || !validTargetState(spec) || !safeIdentity(spec.Plan.Identity) || !validSHA256(spec.Plan.SHA256) || !validSHA256(spec.Plan.VolatileSHA256) || spec.PreparedState == nil || len(spec.Steps) == 0 || len(spec.Checks) == 0 || spec.Timeouts.Step <= 0 || spec.Timeouts.Step > maxStepTimeout || spec.Timeouts.Check <= 0 || spec.Timeouts.Check > maxCheckTimeout || spec.Disk.PreparationBytes == 0 || spec.Disk.TemporaryBytes == 0 || spec.Disk.SnapshotBytes == 0 || spec.Disk.JournalBytes == 0 || spec.Disk.RollbackBytes == 0 || spec.Disk.OverheadBytes == 0 || !diskValid || reserved > ^uint64(0)-largestFloor || spec.Mutation == CompleteRemovalMutation != confirmedRemoval || spec.Mutation == CompleteRemovalMutation != validRemoval || spec.Mutation == CompleteRemovalMutation && !removalStepsMatchReview(spec.Steps, selectionReview) || spec.Mutation != CompleteRemovalMutation && (spec.TypedRemovalConfirmation != nil || spec.PermanentRemovalSelection != nil) {
+	reclamation := spec.Reclamation != nil && trustedAuthority(spec.Reclamation, "github.com/albertloky/SBXR/internal/networkpolicy", "ReclamationAuthority")
+	if !safeIdentity(spec.Identity) || !validMutation(spec.Mutation) || !validModule(spec.OutcomeOwner) || !validStartingState(spec.StartingState, spec.Mutation) || !validTargetState(spec) || !safeIdentity(spec.Plan.Identity) || !validSHA256(spec.Plan.SHA256) || !validSHA256(spec.Plan.VolatileSHA256) || spec.PreparedState == nil || len(spec.Steps) == 0 || len(spec.Checks) == 0 || spec.Timeouts.Step <= 0 || spec.Timeouts.Step > maxStepTimeout || spec.Timeouts.Check <= 0 || spec.Timeouts.Check > maxCheckTimeout || spec.Disk.PreparationBytes == 0 || spec.Disk.TemporaryBytes == 0 || spec.Disk.SnapshotBytes == 0 || spec.Disk.JournalBytes == 0 || spec.Disk.RollbackBytes == 0 || spec.Disk.OverheadBytes == 0 || !diskValid || reserved > ^uint64(0)-largestFloor || spec.Mutation == CompleteRemovalMutation != confirmedRemoval || spec.Mutation == CompleteRemovalMutation != validRemoval || spec.Mutation == CompleteRemovalMutation && !removalStepsMatchReview(spec.Steps, selectionReview) || spec.Mutation != CompleteRemovalMutation && (spec.TypedRemovalConfirmation != nil || spec.PermanentRemovalSelection != nil) || spec.Reclamation != nil && (!reclamation || spec.Mutation != InstallationMutation || spec.StartingState.Status != NotInstalled) {
 		return nil, &Finding{Code: "SYSTEM-CHANGES-CHANGE-SET-INVALID", Problem: "The Change Set is incomplete or untyped", Found: "a missing or invalid typed transaction input", Required: "one opaque prepared State commit, exact lineage and Plan checksums, typed steps and rollback, checks, disk reservation, and bounded timeouts", WhyStopped: "System Changes never accepts an arbitrary mutation surface", NextAction: "Rebuild and review the Change Set through its owning Module."}
 	}
 	for _, step := range spec.Steps {

@@ -269,7 +269,7 @@ func changeReviewLines(review ChangeReview, width, height, page int) []string {
 		}
 		if plan.ReclamationDigest != "" {
 			if plan.ReclamationConfirmed {
-				return append(lines, "", "> Back", "  Review only - no host change was made")
+				return append(lines, "", "> Apply exact one-use Plan", "  sudo starts only after Apply")
 			}
 			return append(lines, "", "> Confirm exact reclamation review", "  Esc Back or Cancel - no host change")
 		}
@@ -360,7 +360,7 @@ func planFactLines(plan *PlanPresentation) []string {
 	if plan.ReclamationDigest != "" {
 		lines = append(lines, "Reclamation review digest "+plan.ReclamationDigest)
 		if plan.ReclamationConfirmed {
-			lines = append(lines, "Reclamation review confirmed. No host change was made.")
+			lines = append(lines, "Reclamation review confirmed. Apply has not started.")
 		} else {
 			lines = append(lines, "Type exactly: "+ReclamationPhrase, "> [required text input]")
 		}

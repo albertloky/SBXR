@@ -327,6 +327,23 @@ func installHandoffFixture() InstallHandoffRequest {
 	}
 }
 
+func TestInstallHandoffBindsReviewedReclamationDigest(t *testing.T) {
+	request := installHandoffFixture()
+	request.ReviewedReclamationSHA256 = strings.Repeat("f", 64)
+	body, err := encodeInstallHandoffRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodeInstallHandoffRequest(body)
+	if err != nil || decoded.ReviewedReclamationSHA256 != request.ReviewedReclamationSHA256 {
+		t.Fatalf("reclamation handoff = %q, %v", decoded.ReviewedReclamationSHA256, err)
+	}
+	request.ReviewedReclamationSHA256 = strings.Repeat("F", 64)
+	if _, err := encodeInstallHandoffRequest(request); err == nil {
+		t.Fatal("non-canonical reclamation digest was accepted")
+	}
+}
+
 func socketPair(t *testing.T) (*os.File, *os.File) {
 	t.Helper()
 	descriptors, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)

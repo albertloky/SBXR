@@ -1068,7 +1068,8 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 						}
 					}
 					if plan.ReclamationConfirmed {
-						return m, m.backChangeCommand()
+						m.pendingPlanApply = true
+						return m, m.authenticationCommand()
 					}
 					m.pendingPlanApply = true
 					return m, m.authenticationCommand()
@@ -2946,7 +2947,7 @@ func (m model) shortcuts() [2]string {
 		if m.changeReview.Plan != nil {
 			if m.changeReview.Plan.ReclamationDigest != "" {
 				if m.changeReview.Plan.ReclamationConfirmed {
-					return [2]string{" Enter/Space Back  Esc Back", "Review only: no host change started"}
+					return [2]string{" Enter/Space Apply exact Plan  Esc Back", "sudo starts only after this separate Apply"}
 				}
 				return [2]string{" Tab Type exact phrase  Enter/Space Confirm review", "Esc Back  No host change starts"}
 			}

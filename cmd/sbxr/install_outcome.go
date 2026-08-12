@@ -159,13 +159,33 @@ func (outcome *installOutcome) Apply(ctx context.Context, identity ownerconsole.
 	return ownerconsole.ChangeResult{Kind: ownerconsole.ChangeStarted, OperationID: operation, Explanation: "The exact reviewed installation Plan started."}
 }
 
-func (outcome *installOutcome) ConfirmReclamation(_ context.Context, identity ownerconsole.PlanIdentity, approval ownerconsole.ReclamationApproval) ownerconsole.ChangeReview {
+func (outcome *installOutcome) ConfirmReclamation(ctx context.Context, identity ownerconsole.PlanIdentity, approval ownerconsole.ReclamationApproval) ownerconsole.ChangeReview {
 	outcome.mu.Lock()
-	defer outcome.mu.Unlock()
 	if outcome.reclamation == nil || !approval.NetworkPolicyReclamationApproval(identity, outcome.reclamation.Digest) {
+		outcome.mu.Unlock()
 		return ownerconsole.ChangeReview{}
 	}
-	return reclamationReview(outcome.reclamation, true)
+	outcome.request.ReviewedReclamationSHA256 = outcome.reclamation.Digest
+	request := outcome.request
+	outcome.mu.Unlock()
+	built, err := buildInstall(ctx, request)
+	outcome.mu.Lock()
+	defer outcome.mu.Unlock()
+	if err != nil {
+		return installCorrection(err)
+	}
+	outcome.request, outcome.built = request, built
+	outcome.reclamation = nil
+	summary := built.plan.Summary()
+	return ownerconsole.ChangeReview{Plan: &ownerconsole.PlanPresentation{
+		Identity: ownerconsole.PlanIdentity(built.plan.Identity()), DesiredStateRevision: 1, DesiredStateSHA256: built.desiredSHA256,
+		RelevantChecksums: []string{"Plan SHA-256 " + built.plan.SHA256(), "Reclamation facts SHA-256 " + request.ReviewedReclamationSHA256}, ObservedState: "Reclaimable VPS: exact reviewed conflict followed by revision-one installation",
+		VerifiedExternalInputs: []string{"Verified release " + summary.ReleaseIdentity.Tag, "Fresh Network Policy reclamation review"},
+		Effects:                []string{"Permanently remove the exact reviewed conflict after the durable irreversible checkpoint", "Install SBXR and publish Desired State revision 1"},
+		RequiredChecks:         []string{"Fresh privileged reclamation proof", "Managed State and exact candidate agreement"},
+		Interruption:           "Before Irreversible reclamation started, cancellation rolls back; afterward recovery continues forward to Managed", Cancellation: "Unavailable after Irreversible reclamation started", Rollback: "No rollback exists after permanent reclamation starts",
+		ReclamationDigest: request.ReviewedReclamationSHA256, ReclamationConfirmed: true,
+	}}
 }
 
 func (outcome *installOutcome) Inspect(context.Context) ownerconsole.DurableChangeSet {

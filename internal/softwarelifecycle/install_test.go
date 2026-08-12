@@ -103,6 +103,40 @@ func TestPlanInstallDisclosesTheCompleteReviewedFreshInstallation(t *testing.T) 
 	}
 }
 
+func TestPlanInstallPlacesOnlyReversibleProviderCreationBeforeReclamation(t *testing.T) {
+	desired := strings.Repeat("a", 64)
+	contributions := controlledInstallContributions(t, "install-revision-1", desired)
+	for index, contribution := range contributions {
+		controlled := contribution.(controlledInstallContribution)
+		if InstallContributionName(controlled.proof.Name) != CloudflareInstallContribution {
+			continue
+		}
+		create, err := systemchanges.NewCloudflareStep(systemchanges.CloudflareChange{Action: systemchanges.CloudflareTunnelCreate, AccountID: "account-123", TunnelName: "sbxr-main"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		activate, err := systemchanges.NewStep(systemchanges.CloudflareModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
+		if err != nil {
+			t.Fatal(err)
+		}
+		controlled.proof.Steps = []systemchanges.Step{create, activate}
+		contributions[index] = controlled
+	}
+	plan, finding := PlanInstall(InstallPlanRequest{
+		Candidate: controlledInstallCandidate(), ChangeSet: "install-revision-1", DesiredStateSHA256: desired,
+		Contributions: contributions, ReviewedReclamationSHA256: strings.Repeat("f", 64),
+		Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1},
+	})
+	if finding != nil || plan == nil || len(plan.steps) < 3 || plan.steps[0].Forward() != systemchanges.CreateCloudflareResource || plan.steps[1].Owner() != systemchanges.SoftwareModule {
+		t.Fatalf("reclamation install order = (%+v, %+v)", plan, finding)
+	}
+	for index, step := range plan.steps {
+		if step.Owner() == systemchanges.CloudflareModule && step.Forward() == systemchanges.ActivatePreparedConfiguration && index < 2 {
+			t.Fatalf("cloudflared activation crossed the reclamation boundary at step %d", index+1)
+		}
+	}
+}
+
 func TestNetworkInstallContributionAcceptsOnlyTheUnprivilegedCleanVPSReview(t *testing.T) {
 	intent := networkpolicy.Intent{Revision: 1, Baseline: networkpolicy.Clean, PublicIPv4: "192.0.2.10", PrimarySubscriptionAddress: "192.0.2.10", CertificateHostname: "direct.example.com", SSHPort: 2222, SubscriptionPort: 10443, Profiles: networkpolicy.Profiles{VLESSRealityVision: networkpolicy.Profile{Enabled: true, Port: 443}, VLESSXHTTP: networkpolicy.Profile{Enabled: true, Address: "127.0.0.1", Port: 11080}, VLESSWebSocket: networkpolicy.Profile{Enabled: true, Address: "127.0.0.1", Port: 11081}, Hysteria2: networkpolicy.Profile{Enabled: true, Port: 443}, TUIC: networkpolicy.Profile{Enabled: true, Port: 8443}, AnyTLS: networkpolicy.Profile{Enabled: true, Port: 9443}}, Disk: networkpolicy.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}}
 	observed := networkpolicy.Observations{Host: networkpolicy.HostFacts{UbuntuVersion: "24.04.3", UbuntuServer: true, Architecture: "amd64", Systemd: true, LogicalCPUs: 1, PhysicalRAM: 512 << 20}, PublicIPv4: []string{"192.0.2.10"}, SSH: networkpolicy.SSHFacts{DetectedPort: 2222, ServerAddress: "192.0.2.10", CurrentSessions: []string{"session"}}, Firewall: networkpolicy.FirewallFacts{SBXRTableState: "absent"}, Routes: networkpolicy.RouteFacts{IPv4: "default"}, Outbound: networkpolicy.OutboundFacts{DNS: true, GitHubHTTPS: true, GitHubAttestationHTTPS: true, CloudflareHTTPS: true, ACMEHTTPS: true, CertificateEndpointsHTTPS: true, TimeService: true, TunnelTCP7844: true, TunnelUDP7844: true}, Disk: networkpolicy.DiskFacts{FilesystemBytes: 20 << 30, AvailableBytes: 3 << 30}, Time: networkpolicy.TimeFacts{Synchronized: true, Owner: "systemd-timesyncd"}, OwnerFacts: networkpolicy.OwnerFacts{DNS: "fresh", Tunnel: "fresh"}, Certificate: networkpolicy.CertificateFacts{DNS: networkpolicy.DNSFacts{Hostname: "direct.example.com", IPv4: []string{"192.0.2.10"}}, CAA: networkpolicy.CAAFacts{Issuer: "letsencrypt.org", HTTP01Allowed: true}}, Checksums: map[string]string{"routes": "route", "listeners": "listeners"}}

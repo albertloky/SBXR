@@ -53,6 +53,7 @@ func TestCleanVPSAuthorityRechecksTheExactNetworkPolicyBaseline(t *testing.T) {
 func TestReclaimableVPSReviewBindsEverySafeConflictWithoutChangingObservedState(t *testing.T) {
 	observed := completeObservations()
 	observed.ReclamationComplete = true
+	observed.Firewall.RootVerified = true
 	observed.Listeners = append(observed.Listeners, networkpolicy.Listener{Address: "0.0.0.0", Port: 443, Protocol: networkpolicy.TCP, Process: "xray", Service: "xray.service", Executable: "/usr/local/bin/xray", Ownership: networkpolicy.Unproved})
 	observed.Reclamation = networkpolicy.ReclamationFacts{
 		Packages:    []networkpolicy.PackageConflict{{Name: "xray", Version: "1.2.3", Owns: "/usr/local/bin/xray", OwnedPaths: []string{"/usr/local/bin/xray"}}},
@@ -75,6 +76,42 @@ func TestReclaimableVPSReviewBindsEverySafeConflictWithoutChangingObservedState(
 	}
 	if strings.Contains(rendered, "SECRET") || !reflect.DeepEqual(observed, want) {
 		t.Fatalf("review leaked or changed Observed State: %s\nwant=%+v\ngot=%+v", rendered, want, observed)
+	}
+}
+
+func TestReviewedStandaloneExecutableBecomesOneUseFreshReclamationAuthority(t *testing.T) {
+	observed := completeObservations()
+	observed.ReclamationComplete = true
+	observed.Firewall.RootVerified = true
+	observed.Listeners = append(observed.Listeners, networkpolicy.Listener{Address: "0.0.0.0", Port: 443, Protocol: networkpolicy.TCP, Process: "standalone-proxy", Executable: "/opt/standalone/proxy", ProcessID: "4242"})
+	observed.Reclamation.Executables = []networkpolicy.FileConflict{{Path: "/opt/standalone/proxy", SHA256: strings.Repeat("a", 64), Process: "standalone-proxy", ProcessID: "4242", OwnerUID: 0, Mode: 0o755, Links: 1}}
+	adapter := &stagedAdapter{observed: observed}
+	request := networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PreApproval, ReclamationReview: true}
+	review := networkpolicy.New(adapter).Evaluate(request)
+	if review.Reclamation == nil {
+		t.Fatalf("standalone conflict did not receive a review Plan: %+v", review.Findings)
+	}
+	request.Stage = networkpolicy.PostApproval
+	request.ReviewedReclamationSHA256 = review.Reclamation.Digest
+	approved := networkpolicy.New(adapter).Evaluate(request)
+	if approved.Reclamation == nil || approved.Reclamation.Digest != review.Reclamation.Digest {
+		t.Fatalf("fresh reclamation digest = %+v, want %s", approved.Reclamation, review.Reclamation.Digest)
+	}
+	kind, path, digest, interpreter, processID, reviewed, valid := approved.ReclamationAuthority().SystemChangesReclamation()
+	if !valid || kind != "executable" || path != "/opt/standalone/proxy" || digest != strings.Repeat("a", 64) || interpreter != "" || processID != "4242" || reviewed != review.Reclamation.Digest {
+		t.Fatalf("reclamation authority = %q %q %q %q %q %q %t", kind, path, digest, interpreter, processID, reviewed, valid)
+	}
+	if _, _, _, _, _, _, valid := approved.ReclamationAuthority().SystemChangesReclamation(); valid {
+		t.Fatal("reclamation authority was reusable")
+	}
+	if !systemchanges.NewFreshInstallationAuthority(approved.FreshInstallationProof()).SystemChangesFreshInstallation() {
+		t.Fatal("reviewed future Clean VPS received no installation authority")
+	}
+
+	adapter.observed.Reclamation.Executables[0].SHA256 = strings.Repeat("b", 64)
+	stale := networkpolicy.New(adapter).Evaluate(request)
+	if _, _, _, _, _, _, valid := stale.ReclamationAuthority().SystemChangesReclamation(); valid {
+		t.Fatal("changed executable retained reclamation authority")
 	}
 }
 
