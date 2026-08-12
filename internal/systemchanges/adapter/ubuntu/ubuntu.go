@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
@@ -29,7 +30,7 @@ type Adapter struct {
 	freshLock              bool
 	afterReclamationDigest func(string)
 	afterReclamationProof  func(string)
-	stopProcess            func(int, func() error) error
+	stopProcess            func(int, string, time.Duration, func() error) error
 }
 
 // ObservationSource reloads coordinated State lineage and volatile bindings.

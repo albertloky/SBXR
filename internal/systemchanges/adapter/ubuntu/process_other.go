@@ -2,8 +2,11 @@
 
 package ubuntu
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
 
-func signalReclamationProcess(int, func() error) error {
+func signalReclamationProcess(int, string, time.Duration, func() error) error {
 	return errors.New("pidfd process control requires Linux")
 }

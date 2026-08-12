@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
@@ -123,6 +124,27 @@ func TestReclamationDeleteRestoresAReplacementInsteadOfDeletingIt(t *testing.T) 
 	}
 }
 
+func TestReclamationQuarantineRestoreNeverOverwritesANewPath(t *testing.T) {
+	directory := t.TempDir()
+	quarantine := filepath.Join(directory, "quarantine")
+	target := filepath.Join(directory, "target")
+	if err := os.WriteFile(quarantine, []byte("reviewed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("unrelated"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := renameNoReplace(quarantine, target); err == nil {
+		t.Fatal("quarantine restore overwrote an unrelated path")
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != "unrelated" {
+		t.Fatalf("unrelated target changed: %q, %v", got, err)
+	}
+	if got, err := os.ReadFile(quarantine); err != nil || string(got) != "reviewed" {
+		t.Fatalf("quarantined target changed: %q, %v", got, err)
+	}
+}
+
 func TestReclamationScriptAndProcessHandleRecheckExactProcess(t *testing.T) {
 	root := t.TempDir()
 	proc := filepath.Join(root, "proc/4242")
@@ -146,7 +168,7 @@ func TestReclamationScriptAndProcessHandleRecheckExactProcess(t *testing.T) {
 	if err := adapter.verifyReclamationProcess(target); err == nil {
 		t.Fatal("same interpreter with another script was accepted")
 	}
-	adapter.stopProcess = func(_ int, verify func() error) error {
+	adapter.stopProcess = func(_ int, _ string, _ time.Duration, verify func() error) error {
 		if err := os.Remove(filepath.Join(proc, "exe")); err != nil {
 			return err
 		}
@@ -155,7 +177,7 @@ func TestReclamationScriptAndProcessHandleRecheckExactProcess(t *testing.T) {
 		}
 		return verify()
 	}
-	if err := adapter.stopProcess(4242, func() error { return adapter.verifyReclamationProcess(target) }); err == nil {
+	if err := adapter.stopProcess(4242, filepath.Join(proc, "status"), time.Second, func() error { return adapter.verifyReclamationProcess(target) }); err == nil {
 		t.Fatal("process replacement after handle acquisition was accepted")
 	}
 }

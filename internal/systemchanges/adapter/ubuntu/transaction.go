@@ -607,15 +607,12 @@ func (a Adapter) deleteReclamationTarget(changeSet string, target systemchanges.
 		_, originalErr := os.Lstat(name)
 		if movedErr != nil || !os.SameFile(proved, moved) || !errors.Is(originalErr, fs.ErrNotExist) {
 			if errors.Is(originalErr, fs.ErrNotExist) {
-				_ = os.Rename(quarantine, name)
+				_ = renameNoReplace(quarantine, name)
 			}
 			return systemchanges.StepEvidence{}, errors.New("reclamation target changed before quarantine")
 		}
 	} else if err != nil {
 		return systemchanges.StepEvidence{}, err
-	}
-	if _, err := os.Lstat(name); !errors.Is(err, fs.ErrNotExist) {
-		return systemchanges.StepEvidence{}, errors.New("reclamation pathname was replaced")
 	}
 	if _, _, err := a.reclamationDigestAt(quarantine, target); err != nil || os.Remove(quarantine) != nil {
 		return systemchanges.StepEvidence{}, errors.New("quarantined reclamation target changed")
@@ -649,7 +646,7 @@ func (a Adapter) StopReclamationProcess(lease systemchanges.ExecutionLease, targ
 	if stop == nil {
 		stop = signalReclamationProcess
 	}
-	if err != nil || stop(pid, func() error { return a.verifyReclamationProcess(target) }) != nil {
+	if err != nil || stop(pid, path.Join(a.root, "proc", target.ProcessID, "status"), timeout, func() error { return a.verifyReclamationProcess(target) }) != nil {
 		return systemchanges.StepEvidence{}, errors.New("reclamation process changed")
 	}
 	deadline := time.Now().Add(timeout)
