@@ -1001,6 +1001,15 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 				return finish(lock, nothingChanged(spec, "SYSTEM-CHANGES-RECLAMATION-STALE", Prepared))
 			}
 			reclamation = &target
+		} else if firewallAuthority, ok := spec.Reclamation.(interface {
+			SystemChangesFirewallReclamation() (string, string, string, string, string, string, string, string, string, string, []string, []string, bool)
+		}); ok {
+			review, manager, prior, outbound, candidate, service, listener, session, keysPath, keys, objects, outboundObjects, valid := firewallAuthority.SystemChangesFirewallReclamation()
+			target := ReclamationTarget{Kind: "firewall", ReviewSHA256: review, PolicyVersion: 1, Firewall: &FirewallReclamationTarget{Manager: manager, PriorSHA256: prior, OutboundSHA256: outbound, Candidate: candidate, Service: service, Listener: listener, SessionSHA256: session, AuthorizedKeysPath: keysPath, AuthorizedKeysSHA256: keys, Objects: append([]string(nil), objects...), OutboundObjects: append([]string(nil), outboundObjects...)}}
+			if !valid || !validReclamationTarget(target) {
+				return finish(lock, nothingChanged(spec, "SYSTEM-CHANGES-RECLAMATION-STALE", Prepared))
+			}
+			reclamation = &target
 		} else {
 			policyVersion, review, kinds, paths, digests, interpreters, processIDs, packages, packageVersions, ownedPaths, identityNames, identityKinds, valid := spec.Reclamation.SystemChangesReclamation()
 			if !valid || len(kinds) == 0 || len(paths) != len(kinds) || len(digests) != len(kinds) || len(interpreters) != len(kinds) || len(processIDs) != len(kinds) || len(packages) != len(kinds) || len(packageVersions) != len(kinds) || len(ownedPaths) != len(kinds) || len(identityNames) != len(kinds) || len(identityKinds) != len(kinds) {

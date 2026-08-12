@@ -160,6 +160,12 @@ type ReclamationFacts struct {
 	UnsafePaths    []string
 	ProtectedPaths []string
 	Docker         *DockerConflict
+	Firewall       *FirewallConflict
+}
+
+type FirewallConflict struct {
+	Manager, SHA256, OutboundSHA256 string
+	Objects, OutboundObjects        []string
 }
 
 type PackageConflict struct {
@@ -254,9 +260,10 @@ const (
 )
 
 type SSHFacts struct {
-	DetectedPort    uint16
-	ServerAddress   string
-	CurrentSessions []string
+	DetectedPort                                                uint16
+	ServerAddress                                               string
+	CurrentSessions                                             []string
+	Service, Listener, AuthorizedKeysPath, AuthorizedKeysSHA256 string
 }
 
 type FirewallFacts struct {
@@ -449,6 +456,11 @@ type reclamationContract struct {
 	ReviewSHA256  string
 	Targets       []reclamationTarget
 	Docker        *dockerReclamationContract
+	Firewall      *firewallReclamationContract
+}
+type firewallReclamationContract struct {
+	Manager, PriorSHA256, OutboundSHA256, Candidate, Service, Listener, SessionSHA256, AuthorizedKeysPath, AuthorizedKeysSHA256 string
+	Objects, OutboundObjects                                                                                                    []string
 }
 type dockerReclamationContract struct {
 	Service, Executable, ExecutableSHA256, ProcessID, FirewallSHA256 string
@@ -558,6 +570,21 @@ func (authority ReclamationAuthority) SystemChangesDockerReclamation() (review, 
 	}
 	preserved = append([]string(nil), docker.PreservedData...)
 	preservedPaths, preservedSHA256 = append([]string(nil), docker.PreservedPaths...), append([]string(nil), docker.PreservedSHA256...)
+	valid = fresh.reclamation != nil && reflect.DeepEqual(fresh.reclamation.contract, want) && fresh.Reclamation != nil && fresh.Reclamation.Digest == want.ReviewSHA256 && fresh.freshInstallation != nil
+	return
+}
+
+func (authority ReclamationAuthority) SystemChangesFirewallReclamation() (review, manager, priorSHA256, outboundSHA256, candidate, service, listener, sessionSHA256, authorizedKeysPath, authorizedKeysSHA256 string, objects, outboundObjects []string, valid bool) {
+	if authority.cell == nil || authority.cell.evaluate == nil || authority.cell.contract.Firewall == nil || !authority.cell.used.CompareAndSwap(false, true) {
+		return
+	}
+	fresh := authority.cell.evaluate()
+	want := authority.cell.contract
+	firewall := want.Firewall
+	review, manager, priorSHA256, outboundSHA256, candidate = want.ReviewSHA256, firewall.Manager, firewall.PriorSHA256, firewall.OutboundSHA256, firewall.Candidate
+	service, listener, sessionSHA256, authorizedKeysPath, authorizedKeysSHA256 = firewall.Service, firewall.Listener, firewall.SessionSHA256, firewall.AuthorizedKeysPath, firewall.AuthorizedKeysSHA256
+	objects = append([]string(nil), firewall.Objects...)
+	outboundObjects = append([]string(nil), firewall.OutboundObjects...)
 	valid = fresh.reclamation != nil && reflect.DeepEqual(fresh.reclamation.contract, want) && fresh.Reclamation != nil && fresh.Reclamation.Digest == want.ReviewSHA256 && fresh.freshInstallation != nil
 	return
 }
@@ -999,18 +1026,21 @@ func (i Interface) Evaluate(request Request) Result {
 	if result.Outcome == Failed {
 		return result
 	}
-	if contract, ok := reviewedReclamationContract(observed, result.Reclamation); ok && request.ReviewedReclamationSHA256 == contract.ReviewSHA256 {
+	if contract, ok := reviewedReclamationContract(observed, result.Reclamation, result.Policy); ok && request.ReviewedReclamationSHA256 == contract.ReviewSHA256 {
 		result.reclamation = &reclamationAuthorityCell{contract: contract}
 		observed.Listeners = slices.DeleteFunc(append([]Listener(nil), observed.Listeners...), func(listener Listener) bool {
 			return slices.ContainsFunc(contract.Targets, func(target reclamationTarget) bool { return target.ProcessID == listener.ProcessID })
 		})
 		observed.Reclamation = ReclamationFacts{}
 		observed.ServiceIdentities, observed.ResourcePaths = nil, nil
-		if contract.Docker != nil {
+		if contract.Docker != nil || contract.Firewall != nil {
 			observed.Firewall.ActiveManager, observed.Firewall.UnexpectedRule = "", ""
 		}
 	}
 	result.SystemChanges = SystemChangesRequirements{ValidateCompleteCandidate: true, AtomicTableApply: true, RootOwnedWatchdog: true, ProveCurrentSSHResponsive: true, ProveDetectedSSHAdmitted: true, CancelAfterGate: "NETWORK-SSH-RESPONSIVE", RestoreExactPreviousRules: true}
+	if result.reclamation != nil && result.reclamation.contract.Firewall != nil {
+		result.SystemChanges.RestoreExactPreviousRules = false
+	}
 	result.SSHSafety = SSHSafety{FutureOutsideReconnectUnproved: true, Warning: "One existing SSH session cannot prove a future outside reconnection.", RecoveryPath: "VPS provider console"}
 	result.CompleteRemoval = CompleteRemoval{Family: "inet", Table: "sbxr", PreserveUnrelatedPolicy: true}
 	evaluateSSH(&result, request.Intent, observed.SSH)
@@ -1065,6 +1095,9 @@ func (i Interface) Evaluate(request Request) Result {
 	if result.reclamation != nil && result.reclamation.contract.Docker != nil {
 		result.PostApplyGates = append(result.PostApplyGates, Gate{Code: "NETWORK-DOCKER-ABSENT", Required: "Docker remains absent, its competing firewall effects do not return, and preserved data is unchanged"})
 	}
+	if result.reclamation != nil && result.reclamation.contract.Firewall != nil {
+		result.PostApplyGates = append(result.PostApplyGates, Gate{Code: "NETWORK-INBOUND-REPLACED", Required: "only the exact approved inbound SBXR exposure remains and outbound policy is unchanged"})
+	}
 	if cleanVPSAuthorityEligible(result) {
 		result.freshInstallation = &freshInstallationProofCell{evaluate: func() Result { return i.Evaluate(request) }, digest: result.Binding.Digest}
 	}
@@ -1074,7 +1107,7 @@ func (i Interface) Evaluate(request Request) Result {
 	return result
 }
 
-func reviewedReclamationContract(observed Observations, plan *ReclamationPlan) (reclamationContract, bool) {
+func reviewedReclamationContract(observed Observations, plan *ReclamationPlan, candidate Policy) (reclamationContract, bool) {
 	contract := reclamationContract{PolicyVersion: reclamationPolicyVersion}
 	if plan == nil || !validSHA256(plan.Digest) || len(observed.Reclamation.UnsafePaths) != 0 || len(observed.OwnerFacts.Routes)+len(observed.OwnerFacts.Conflicts) != 0 || observed.OwnerFacts.DNS != "fresh" || observed.OwnerFacts.Tunnel != "fresh" {
 		return reclamationContract{}, false
@@ -1094,6 +1127,18 @@ func reviewedReclamationContract(observed Observations, plan *ReclamationPlan) (
 		}
 		contract.ReviewSHA256 = plan.Digest
 		contract.Docker = &dockerReclamationContract{Service: docker.Service, Executable: docker.ServiceExecutable, ExecutableSHA256: docker.ServiceSHA256, ProcessID: docker.ProcessID, FirewallSHA256: docker.FirewallSHA256, FirewallObjects: append([]string(nil), docker.FirewallObjects...), Packages: append([]PackageConflict(nil), docker.Packages...), RuntimePackages: append([]PackageConflict(nil), docker.RuntimePackages...), PreservedData: append([]string(nil), docker.PreservedData...), PreservedPaths: append([]string(nil), docker.PreservedPaths...), PreservedSHA256: append([]string(nil), docker.PreservedSHA256...)}
+		return contract, true
+	}
+	if firewall := observed.Reclamation.Firewall; firewall != nil {
+		if observed.Reclamation.Docker != nil || len(observed.Reclamation.Packages)+len(observed.Reclamation.Identities)+len(observed.Reclamation.Executables)+len(observed.Reclamation.Scripts) != 0 || len(observed.Listeners)+len(observed.ServiceIdentities)+len(observed.ResourcePaths) != 0 || !observed.Firewall.RootVerified || firewall.Manager == "" || firewall.Manager != observed.Firewall.ActiveManager || observed.Firewall.UnexpectedRule == "" || !validSHA256(firewall.SHA256) || !validSHA256(firewall.OutboundSHA256) || len(firewall.Objects) == 0 || observed.SSH.Service == "" || observed.SSH.Listener == "" || !filepath.IsAbs(observed.SSH.AuthorizedKeysPath) || !validSHA256(observed.SSH.AuthorizedKeysSHA256) || observed.SSH.DetectedPort == 0 || len(observed.SSH.CurrentSessions) == 0 {
+			return reclamationContract{}, false
+		}
+		candidate.Nftables = renderNftables(candidate)
+		if candidate.Nftables == "" {
+			return reclamationContract{}, false
+		}
+		contract.ReviewSHA256 = plan.Digest
+		contract.Firewall = &firewallReclamationContract{Manager: firewall.Manager, PriorSHA256: firewall.SHA256, OutboundSHA256: firewall.OutboundSHA256, Candidate: candidate.Nftables, Service: observed.SSH.Service, Listener: observed.SSH.Listener, SessionSHA256: observed.SSH.CurrentSessions[0], AuthorizedKeysPath: observed.SSH.AuthorizedKeysPath, AuthorizedKeysSHA256: observed.SSH.AuthorizedKeysSHA256, Objects: append([]string(nil), firewall.Objects...), OutboundObjects: append([]string(nil), firewall.OutboundObjects...)}
 		return contract, true
 	}
 	if observed.Firewall.ActiveManager != "" || observed.Firewall.UnexpectedRule != "" {
@@ -1288,6 +1333,25 @@ func reviewInstallation(result *Result, observed Observations, required bool) {
 			plan.Preservation = append(plan.Preservation, "preserve "+reviewFact(preserved))
 		}
 	}
+	if value := observed.Reclamation.Firewall; value != nil {
+		candidate := candidatePolicy(result.intent)
+		candidate.Nftables = renderNftables(candidate)
+		facts := make([]string, len(value.Objects))
+		for index, object := range value.Objects {
+			facts[index] = safeNftReviewFact(object)
+		}
+		plan.Targets = append(plan.Targets,
+			fmt.Sprintf("replace inbound firewall manager %s structural sha256 %s", reviewFact(value.Manager), reviewFact(value.SHA256)),
+			"existing safe structural rule facts "+strings.Join(facts, " | "),
+			"exact replacement policy "+candidate.Nftables,
+			"affected inbound exposure: remove every reviewed non-SBXR input base chain; unrelated services may become unreachable",
+		)
+		plan.Preservation = append(plan.Preservation,
+			fmt.Sprintf("preserve SSH service %s listener %s port %d current session and authorized keys sha256 %s", reviewFact(observed.SSH.Service), reviewFact(observed.SSH.Listener), observed.SSH.DetectedPort, reviewFact(observed.SSH.AuthorizedKeysSHA256)),
+			"preserve loopback, established and related traffic, required ICMP and IPv6 neighbour behaviour",
+			"preserve outbound policy unchanged",
+		)
+	}
 	for _, listener := range observed.Listeners {
 		if reclaimableListener(listener, observed.SSH) {
 			plan.Targets = append(plan.Targets, fmt.Sprintf("listener %s:%d/%s process %s service %s", reviewFact(listener.Address), listener.Port, listener.Protocol, reviewFact(listener.Process), reviewFact(listener.Service)))
@@ -1332,6 +1396,35 @@ func reviewInstallation(result *Result, observed Observations, required bool) {
 	result.Reclamation = &plan
 }
 
+func safeNftReviewFact(raw string) string {
+	var value any
+	if json.Unmarshal([]byte(raw), &value) != nil {
+		return "unsafe firewall fact withheld"
+	}
+	var clean func(any) any
+	clean = func(current any) any {
+		switch typed := current.(type) {
+		case map[string]any:
+			for key, child := range typed {
+				if key == "comment" || key == "counter" {
+					delete(typed, key)
+					continue
+				}
+				typed[key] = clean(child)
+			}
+		case []any:
+			for index := range typed {
+				typed[index] = clean(typed[index])
+			}
+		case string:
+			return reviewFact(typed)
+		}
+		return current
+	}
+	encoded, _ := json.Marshal(clean(value))
+	return string(encoded)
+}
+
 func digestStrings(values []string) string {
 	digest := sha256.Sum256([]byte(strings.Join(values, "\n")))
 	return hex.EncodeToString(digest[:])
@@ -1367,7 +1460,7 @@ func reviewFact(value string) string {
 
 func hasReclamationConflict(observed Observations) bool {
 	r := observed.Reclamation
-	if len(r.Packages)+len(r.Identities)+len(r.Executables)+len(r.Scripts)+len(r.UnsafePaths) > 0 || r.Docker != nil {
+	if len(r.Packages)+len(r.Identities)+len(r.Executables)+len(r.Scripts)+len(r.UnsafePaths) > 0 || r.Docker != nil || r.Firewall != nil {
 		return true
 	}
 	if !observed.ReclamationComplete {

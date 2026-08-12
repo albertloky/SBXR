@@ -71,6 +71,12 @@ type FirewallExecutor interface {
 	Inspect(systemchanges.Step, io.Reader, time.Duration) (systemchanges.StepEffect, error)
 }
 
+type firewallReclamationExecutor interface {
+	VerifyReplacement(systemchanges.FirewallReclamationTarget, time.Duration) error
+	ReplaceForward(systemchanges.FirewallReclamationTarget, time.Duration) (systemchanges.StepEvidence, error)
+	ReplacementState(systemchanges.FirewallReclamationTarget, time.Duration) (systemchanges.StepEffect, error)
+}
+
 type CloudflareExecutor interface {
 	CaptureRollback(systemchanges.Step, func(io.Reader) error) error
 	CaptureServiceRollback(string, func(io.Reader) error) error
@@ -580,6 +586,13 @@ func (a Adapter) VerifyReclamationReady(lease systemchanges.ExecutionLease, chan
 	if !safeName(changeSet) {
 		return errors.New("reclamation transaction unavailable")
 	}
+	if target.Kind == "firewall" {
+		firewall, ok := a.firewall.(firewallReclamationExecutor)
+		if !lease.Authorized() || target.Firewall == nil || !ok || a.verifyFirewallSSH(*target.Firewall, timeout) != nil {
+			return errors.New("firewall reclamation unavailable")
+		}
+		return firewall.VerifyReplacement(*target.Firewall, timeout)
+	}
 	if target.Kind == "docker" {
 		if err := a.verifyDockerReclamation(target, timeout); err != nil {
 			return err
@@ -632,7 +645,77 @@ func sameFilesystem(first, second os.FileInfo) bool {
 	return firstOK && secondOK && firstStat.Dev == secondStat.Dev
 }
 
+func (a Adapter) verifyFirewallSSH(target systemchanges.FirewallReclamationTarget, timeout time.Duration) error {
+	if target.Service != "ssh.service" && target.Service != "sshd.service" {
+		return errors.New("reviewed SSH service unavailable")
+	}
+	output, err := a.runPackage(timeout, "systemctl", "is-active", target.Service)
+	if err != nil || strings.TrimSpace(string(output)) != "active" {
+		return errors.New("reviewed SSH service changed")
+	}
+	port := listenerPort(target.Listener)
+	pid, pidErr := a.runPackage(timeout, "systemctl", "show", "--property", "MainPID", "--value", target.Service)
+	listeners, err := a.runPackage(timeout, "ss", "-Hlnp", "sport", "=", ":"+strconv.Itoa(int(port)))
+	processID := strings.TrimSpace(string(pid))
+	if port == 0 || pidErr != nil || processID == "" || processID == "0" || err != nil || !strings.Contains(string(listeners), ":"+strconv.Itoa(int(port))) || !strings.Contains(string(listeners), "pid="+processID+",") {
+		return errors.New("reviewed SSH listener invalid")
+	}
+	connection := os.Getenv("SSH_CONNECTION")
+	session := sha256.Sum256([]byte(connection))
+	if connection == "" || hex.EncodeToString(session[:]) != target.SessionSHA256 {
+		return errors.New("reviewed SSH session changed")
+	}
+	keys, err := stableProtectedFile(path.Join(a.root, strings.TrimPrefix(target.AuthorizedKeysPath, "/")))
+	if err != nil || hex.EncodeToString(keys[:]) != target.AuthorizedKeysSHA256 {
+		return errors.New("reviewed authorized keys changed")
+	}
+	return nil
+}
+
+func stableProtectedFile(name string) ([32]byte, error) {
+	file, err := os.OpenRoot("/")
+	if err != nil {
+		return [32]byte{}, err
+	}
+	defer file.Close()
+	handle, err := file.Open(strings.TrimPrefix(name, "/"))
+	if err != nil {
+		return [32]byte{}, err
+	}
+	defer handle.Close()
+	before, err := handle.Stat()
+	if err != nil || !before.Mode().IsRegular() {
+		return [32]byte{}, errors.New("protected file invalid")
+	}
+	digest := sha256.New()
+	if _, err := io.Copy(digest, handle); err != nil {
+		return [32]byte{}, err
+	}
+	after, err := handle.Stat()
+	pathInfo, pathErr := os.Lstat(name)
+	if err != nil || pathErr != nil || !before.ModTime().Equal(after.ModTime()) || before.Size() != after.Size() || !os.SameFile(before, after) || !os.SameFile(after, pathInfo) || pathInfo.Mode()&os.ModeSymlink != 0 {
+		return [32]byte{}, errors.New("protected file changed")
+	}
+	var result [32]byte
+	copy(result[:], digest.Sum(nil))
+	return result, nil
+}
+
+func (a Adapter) runPackage(timeout time.Duration, name string, arguments ...string) ([]byte, error) {
+	if a.packageCommand != nil {
+		return a.packageCommand(timeout, name, arguments...)
+	}
+	return runPackageCommand(timeout, name, arguments...)
+}
+
 func (a Adapter) DeleteReclamationTarget(lease systemchanges.ExecutionLease, changeSet string, target systemchanges.ReclamationTarget, timeout time.Duration) (systemchanges.StepEvidence, error) {
+	if target.Kind == "firewall" {
+		firewall, ok := a.firewall.(firewallReclamationExecutor)
+		if !lease.Authorized() || !safeName(changeSet) || target.Firewall == nil || !ok {
+			return systemchanges.StepEvidence{}, errors.New("firewall reclamation unavailable")
+		}
+		return firewall.ReplaceForward(*target.Firewall, timeout)
+	}
 	if target.Kind == "docker" {
 		if !lease.Authorized() || !safeName(changeSet) {
 			return systemchanges.StepEvidence{}, errors.New("Docker reclamation unavailable")
@@ -728,6 +811,13 @@ func (a Adapter) deleteReclamationTarget(changeSet string, target systemchanges.
 }
 
 func (a Adapter) StopReclamationProcess(lease systemchanges.ExecutionLease, target systemchanges.ReclamationTarget, timeout time.Duration) (systemchanges.StepEvidence, error) {
+	if target.Kind == "firewall" {
+		if !lease.Authorized() || target.Firewall == nil || a.verifyFirewallSSH(*target.Firewall, timeout) != nil {
+			return systemchanges.StepEvidence{}, errors.New("firewall reclamation unavailable")
+		}
+		digest := sha256.Sum256([]byte(target.ReviewSHA256 + "\x00" + target.Firewall.PriorSHA256))
+		return systemchanges.StepEvidence{Code: "inbound-firewall-ready", SHA256: hex.EncodeToString(digest[:])}, nil
+	}
 	if target.Kind == "docker" {
 		if !lease.Authorized() {
 			return systemchanges.StepEvidence{}, errors.New("Docker reclamation unavailable")
@@ -781,6 +871,13 @@ func (a Adapter) StopReclamationProcess(lease systemchanges.ExecutionLease, targ
 }
 
 func (a Adapter) InspectReclamationTarget(lease systemchanges.ExecutionLease, changeSet string, target systemchanges.ReclamationTarget, _ time.Duration) (systemchanges.StepEffect, error) {
+	if target.Kind == "firewall" {
+		firewall, ok := a.firewall.(firewallReclamationExecutor)
+		if !lease.RecoveryAuthorized() || !safeName(changeSet) || target.Firewall == nil || !ok {
+			return "", errors.New("firewall recovery unavailable")
+		}
+		return firewall.ReplacementState(*target.Firewall, time.Minute)
+	}
 	if target.Kind == "docker" {
 		if !lease.RecoveryAuthorized() || !safeName(changeSet) {
 			return "", errors.New("Docker recovery unavailable")

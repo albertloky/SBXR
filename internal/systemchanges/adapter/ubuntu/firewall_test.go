@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -44,6 +45,66 @@ func TestNativeFirewallRequiresExactCandidateExposureSet(t *testing.T) {
 	active = []byte(strings.Replace(candidate, "ip daddr", "drop\n  ip daddr", 1))
 	if status, err := firewall.CheckCandidate(step, time.Second); err != nil || status != systemchanges.Failed {
 		t.Fatalf("preceding drop health = %s, %v", status, err)
+	}
+}
+
+func TestNativeFirewallReplacementPreservesOutboundAndUsesForwardWatchdog(t *testing.T) {
+	t.Setenv("SSH_CONNECTION", "198.51.100.2 50000 192.0.2.10 2222")
+	chain := `{"chain":{"family":"inet","table":"filter","name":"input","hook":"input","prio":0,"policy":"accept"}}`
+	digest, objects, outboundDigest, outbound, err := replacementFirewallState([]byte(`{"nftables":[` + chain + `,{"chain":{"family":"inet","table":"filter","name":"output","hook":"output","prio":0,"policy":"accept"}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := "table inet sbxr {\n chain input {\n  type filter hook input priority filter; policy drop;\n  ct state established,related accept\n  iifname \"lo\" accept\n  ip protocol icmp accept\n  meta l4proto ipv6-icmp accept\n  tcp dport 2222 accept\n }\n}"
+	target := systemchanges.FirewallReclamationTarget{Manager: "ufw.service", PriorSHA256: digest, OutboundSHA256: outboundDigest, Candidate: candidate, Listener: "192.0.2.10:2222/tcp", Objects: objects, OutboundObjects: outbound}
+	var commands, applied []string
+	active := false
+	managerActive := true
+	run := func(_ context.Context, input []byte, name string, args ...string) ([]byte, error) {
+		command := name + " " + strings.Join(args, " ")
+		commands = append(commands, command)
+		switch {
+		case command == "nft --check --file -", command == "systemctl disable ufw.service", command == "systemctl daemon-reload", strings.HasPrefix(command, "systemd-run "):
+			return nil, nil
+		case command == "systemctl stop ufw.service":
+			managerActive = false
+			return nil, nil
+		case command == "systemctl is-active ufw.service":
+			if managerActive {
+				return []byte("active\n"), nil
+			}
+			return []byte("inactive\n"), errors.New("inactive")
+		case command == "nft -j list ruleset":
+			if active {
+				return []byte(`{"nftables":[{"chain":{"family":"inet","table":"sbxr","name":"input","hook":"input","prio":0,"policy":"drop"}},{"chain":{"family":"inet","table":"filter","name":"output","hook":"output","prio":0,"policy":"accept"}}]}`), nil
+			}
+			return []byte(`{"nftables":[` + chain + `,{"chain":{"family":"inet","table":"filter","name":"output","hook":"output","prio":0,"policy":"accept"}}]}`), nil
+		case command == "nft --file -":
+			applied = append(applied, string(input))
+			active = true
+			return nil, nil
+		case command == "ss -Htn state established":
+			return []byte("ESTAB 0 0 192.0.2.10:2222 198.51.100.2:50000"), nil
+		case command == "nft -j list table inet sbxr":
+			return []byte(`{"nftables":[{"rule":{"family":"inet","table":"sbxr","chain":"input","expr":[{"match":{"op":"==","left":{"payload":{"protocol":"tcp","field":"dport"}},"right":2222}},{"accept":null}]}}]}`), nil
+		case command == "nft list table inet sbxr":
+			return []byte(candidate), nil
+		case command == "systemctl stop sbxr-firewall-watchdog.timer sbxr-firewall-watchdog.service":
+			return nil, nil
+		case command == "systemctl is-active sbxr-firewall-watchdog.timer sbxr-firewall-watchdog.service":
+			return []byte("inactive\ninactive\n"), nil
+		}
+		return nil, errors.New("unexpected command")
+	}
+	firewall := newNativeFirewall(run)
+	firewall.watchdogDirectory = t.TempDir()
+	firewall.managerDropInDirectory = t.TempDir()
+	evidence, err := firewall.ReplaceForward(target, time.Second)
+	if err != nil || evidence.Code != "inbound-firewall-replaced" || len(applied) != 1 || !strings.Contains(applied[0], "destroy chain inet filter input") || strings.Contains(applied[0], "output") {
+		t.Fatalf("replacement = %+v err=%v commands=%v applied=%v", evidence, err, commands, applied)
+	}
+	if joined := strings.Join(commands, "\n"); !strings.Contains(joined, "systemctl disable ufw.service") || !strings.Contains(joined, "systemctl stop ufw.service") || !strings.Contains(joined, "systemd-run --quiet --unit sbxr-firewall-watchdog") {
+		t.Fatalf("replacement commands = %s", joined)
 	}
 }
 
@@ -253,5 +314,46 @@ func TestProductionFirewallSeam(t *testing.T) {
 	}
 	if output, err := exec.Command("nft", "list", "table", "inet", "sbxr_test_unrelated").CombinedOutput(); err != nil {
 		t.Fatalf("unrelated table changed: %v: %s", err, output)
+	}
+}
+
+func TestProductionFirewallReplacementSeam(t *testing.T) {
+	if runtime.GOOS != "linux" || os.Geteuid() != 0 || os.Getenv("SBXR_CONTROLLED_FIREWALL_RECLAMATION_SEAM") != "1" {
+		t.Skip("controlled forward firewall reclamation requires an isolated disposable Ubuntu host and explicit approval")
+	}
+	for _, command := range []string{"nft", "ss", "systemd-run", "systemctl"} {
+		if _, err := exec.LookPath(command); err != nil {
+			t.Fatalf("controlled firewall reclamation requires %s", command)
+		}
+	}
+	manager := os.Getenv("SBXR_CONTROLLED_FIREWALL_MANAGER")
+	if manager == "" {
+		t.Fatal("SBXR_CONTROLLED_FIREWALL_MANAGER must name the disposable reviewed manager")
+	}
+	rules, err := exec.Command("nft", "-j", "list", "ruleset").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prior, objects, outbound, outboundObjects, err := replacementFirewallState(rules)
+	if err != nil || len(objects) == 0 {
+		t.Fatalf("controlled inbound firewall unavailable: %v", err)
+	}
+	portText := os.Getenv("SSH_CONNECTION")
+	fields := strings.Fields(portText)
+	if len(fields) != 4 {
+		t.Fatal("controlled seam requires the live SSH_CONNECTION")
+	}
+	port, _ := strconv.ParseUint(fields[3], 10, 16)
+	candidate := fmt.Sprintf("table inet sbxr {\n chain input {\n  type filter hook input priority filter; policy drop;\n  ct state established,related accept\n  iifname \"lo\" accept\n  ip protocol icmp accept\n  meta l4proto ipv6-icmp accept\n  tcp dport %d accept\n }\n}", port)
+	target := systemchanges.FirewallReclamationTarget{Manager: manager, PriorSHA256: prior, OutboundSHA256: outbound, Candidate: candidate, Listener: net.JoinHostPort(fields[2], fields[3]) + "/tcp", Objects: objects, OutboundObjects: outboundObjects}
+	firewall := NewNativeFirewall()
+	if err := firewall.VerifyReplacement(target, 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := firewall.ReplaceForward(target, 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if effect, err := firewall.ReplacementState(target, 10*time.Second); err != nil || effect != systemchanges.StepEffectAbsent {
+		t.Fatalf("forward replacement recovery evidence = %s, %v", effect, err)
 	}
 }

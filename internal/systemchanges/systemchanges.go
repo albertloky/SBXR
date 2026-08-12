@@ -630,6 +630,12 @@ type ReclamationTarget struct {
 	Identities                                               []ReclamationIdentity
 	Packages                                                 []ReclamationPackageTarget
 	Docker                                                   *DockerReclamationTarget
+	Firewall                                                 *FirewallReclamationTarget
+}
+
+type FirewallReclamationTarget struct {
+	Manager, PriorSHA256, OutboundSHA256, Candidate, Service, Listener, SessionSHA256, AuthorizedKeysPath, AuthorizedKeysSHA256 string
+	Objects, OutboundObjects                                                                                                    []string
 }
 
 type DockerReclamationTarget struct {
@@ -653,6 +659,10 @@ type ReclamationAuthority interface {
 }
 
 func validReclamationTarget(target ReclamationTarget) bool {
+	if target.Kind == "firewall" {
+		firewall := target.Firewall
+		return firewall != nil && target.Docker == nil && target.Path == "" && target.SHA256 == "" && target.ProcessID == "" && target.Package == "" && len(target.Packages) == 0 && target.PolicyVersion == 1 && validSHA256(target.ReviewSHA256) && firewall.Manager != "" && validSHA256(firewall.PriorSHA256) && validSHA256(firewall.OutboundSHA256) && strings.HasPrefix(firewall.Candidate, "table inet sbxr {") && firewall.Service != "" && firewall.Listener != "" && validSHA256(firewall.SessionSHA256) && filepath.IsAbs(firewall.AuthorizedKeysPath) && validSHA256(firewall.AuthorizedKeysSHA256) && len(firewall.Objects) > 0
+	}
 	if target.Kind == "docker" {
 		if target.Docker == nil || target.Path != "" || target.SHA256 != "" || target.ProcessID != "" || target.Package != "" || len(target.Packages) != 1 || !validSHA256(target.ReviewSHA256) || target.PolicyVersion != 1 {
 			return false

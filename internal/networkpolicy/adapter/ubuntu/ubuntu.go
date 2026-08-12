@@ -75,7 +75,7 @@ func (a Adapter) Observe(request networkpolicy.ObservationRequest) (networkpolic
 		Listeners:         listeners,
 		ServiceIdentities: a.serviceIdentities(),
 		ResourcePaths:     a.resourcePaths(),
-		SSH:               sshFacts(),
+		SSH:               a.sshFacts(),
 		Routes: networkpolicy.RouteFacts{
 			IPv4: present(a.path("/proc/net/route")),
 			IPv6: present(a.path("/proc/net/ipv6_route")),
@@ -103,7 +103,7 @@ func (a Adapter) Observe(request networkpolicy.ObservationRequest) (networkpolic
 		}
 		observed.Firewall.ActiveManager = activeFirewallManager()
 	}
-	if request.Stage == networkpolicy.PostApproval && a.privileged {
+	if a.privileged {
 		if rules, commandErr := a.privilegedOutput("nft", "-j", "list", "ruleset"); commandErr == nil {
 			state, unexpected, sbxrChecksum, parseErr := inspectNftables(rules)
 			if parseErr == nil {
@@ -121,6 +121,11 @@ func (a Adapter) Observe(request networkpolicy.ObservationRequest) (networkpolic
 						if dockerDigest, objects, dockerErr := dockerFirewallDigest(rules); dockerErr == nil && len(objects) > 0 {
 							observed.Reclamation.Docker.FirewallSHA256 = dockerDigest
 							observed.Reclamation.Docker.FirewallObjects = objects
+						}
+					}
+					if request.ReclamationReview && observed.Reclamation.Docker == nil && observed.Firewall.ActiveManager != "" && observed.Firewall.ActiveManager != "docker.service" && unexpected != "" {
+						if digest, objects, outboundDigest, outbound, firewallErr := firewallDigests(rules); firewallErr == nil && len(objects) > 0 {
+							observed.Reclamation.Firewall = &networkpolicy.FirewallConflict{Manager: observed.Firewall.ActiveManager, SHA256: digest, Objects: objects, OutboundSHA256: outboundDigest, OutboundObjects: outbound}
 						}
 					}
 				}
@@ -723,6 +728,62 @@ func inspectNftables(data []byte) (state, unexpected, sbxrChecksum string, err e
 	return state, unexpected, checksum(encoded), nil
 }
 
+func firewallDigests(data []byte) (string, []string, string, []string, error) {
+	var document struct {
+		Nftables []map[string]json.RawMessage `json:"nftables"`
+	}
+	if err := json.Unmarshal(data, &document); err != nil {
+		return "", nil, "", nil, err
+	}
+	chains := map[string]bool{}
+	for _, item := range document.Nftables {
+		var chain struct {
+			Family, Table, Name, Hook string
+		}
+		if raw := item["chain"]; len(raw) > 0 && json.Unmarshal(raw, &chain) == nil && chain.Hook == "input" && !(chain.Family == "inet" && chain.Table == "sbxr") {
+			chains[chain.Family+"\x00"+chain.Table+"\x00"+chain.Name] = true
+		}
+	}
+	var objects, outbound []string
+	for _, item := range document.Nftables {
+		delete(item, "counter")
+		if rule := item["rule"]; len(rule) > 0 {
+			var value map[string]any
+			if json.Unmarshal(rule, &value) == nil {
+				delete(value, "counter")
+				for _, field := range []string{"expr"} {
+					if expressions, ok := value[field].([]any); ok {
+						for _, expression := range expressions {
+							if object, ok := expression.(map[string]any); ok {
+								delete(object, "counter")
+							}
+						}
+					}
+				}
+				item["rule"], _ = json.Marshal(value)
+			}
+		}
+		var identity struct{ Family, Table, Name, Chain string }
+		encoded, _ := json.Marshal(item)
+		if strings.Contains(string(encoded), `"family":"inet","name":"sbxr"`) || strings.Contains(string(encoded), `"family":"inet","table":"sbxr"`) {
+			continue
+		}
+		objects = append(objects, string(encoded))
+		chainRaw, ruleRaw := item["chain"], item["rule"]
+		chainDeleted := len(chainRaw) > 0 && json.Unmarshal(chainRaw, &identity) == nil && chains[identity.Family+"\x00"+identity.Table+"\x00"+identity.Name]
+		ruleDeleted := len(ruleRaw) > 0 && json.Unmarshal(ruleRaw, &identity) == nil && chains[identity.Family+"\x00"+identity.Table+"\x00"+identity.Chain]
+		if !chainDeleted && !ruleDeleted {
+			outbound = append(outbound, string(encoded))
+		}
+	}
+	if len(objects) == 0 {
+		return "", nil, "", nil, errors.New("inbound firewall unavailable")
+	}
+	digest := sha256.Sum256([]byte(strings.Join(objects, "\n")))
+	outboundDigest := sha256.Sum256([]byte(strings.Join(outbound, "\n")))
+	return hex.EncodeToString(digest[:]), objects, hex.EncodeToString(outboundDigest[:]), outbound, nil
+}
+
 func (a Adapter) resourcePaths() []string {
 	var found []string
 	for _, path := range []string{
@@ -1066,7 +1127,7 @@ func prefixes(values ...string) []netip.Prefix {
 	return result
 }
 
-func sshFacts() networkpolicy.SSHFacts {
+func (a Adapter) sshFacts() networkpolicy.SSHFacts {
 	fields := strings.Fields(os.Getenv("SSH_CONNECTION"))
 	facts := networkpolicy.SSHFacts{}
 	if len(fields) == 4 {
@@ -1076,10 +1137,34 @@ func sshFacts() networkpolicy.SSHFacts {
 		facts.ServerAddress = fields[2]
 		facts.CurrentSessions = []string{checksum([]byte(os.Getenv("SSH_CONNECTION")))}
 	}
-	if sessions, err := exec.Command("who").Output(); err == nil {
+	if sessions, err := a.privilegedOutput("who"); err == nil {
 		for _, session := range strings.Split(strings.TrimSpace(string(sessions)), "\n") {
 			if session != "" {
 				facts.CurrentSessions = append(facts.CurrentSessions, checksum([]byte(session)))
+			}
+		}
+	}
+	for _, service := range []string{"ssh.service", "sshd.service"} {
+		if state, err := a.privilegedOutput("systemctl", "is-active", service); err == nil && strings.TrimSpace(string(state)) == "active" {
+			facts.Service = service
+			break
+		}
+	}
+	if facts.DetectedPort != 0 {
+		facts.Listener = net.JoinHostPort(facts.ServerAddress, strconv.Itoa(int(facts.DetectedPort))) + "/tcp"
+	}
+	user := os.Getenv("SUDO_USER")
+	if user == "" {
+		user = os.Getenv("USER")
+	}
+	if user != "" {
+		if home, err := a.privilegedOutput("getent", "passwd", user); err == nil {
+			fields := strings.Split(strings.TrimSpace(string(home)), ":")
+			if len(fields) == 7 {
+				facts.AuthorizedKeysPath = filepath.Join(fields[5], ".ssh", "authorized_keys")
+				if digest, info, err := a.stableRegularDigest(a.path(facts.AuthorizedKeysPath)); err == nil && info.Size() > 0 {
+					facts.AuthorizedKeysSHA256 = digest
+				}
 			}
 		}
 	}
@@ -1101,7 +1186,7 @@ func activeTimeOwner() string {
 }
 
 func activeFirewallManager() string {
-	for _, service := range []string{"ufw.service", "firewalld.service", "docker.service"} {
+	for _, service := range []string{"ufw.service", "firewalld.service", "nftables.service", "docker.service"} {
 		if exec.Command("systemctl", "is-active", "--quiet", service).Run() == nil {
 			return service
 		}

@@ -115,6 +115,37 @@ func TestReviewedStandaloneExecutableBecomesOneUseFreshReclamationAuthority(t *t
 	}
 }
 
+func TestReviewedInboundFirewallBecomesOneUseForwardReplacementAuthority(t *testing.T) {
+	observed := completeObservations()
+	observed.ReclamationComplete = true
+	observed.Firewall.ActiveManager = "ufw.service"
+	observed.Firewall.UnexpectedRule = `manager "nftables"; service "nftables"; table "filter"; chain "input"; rule "base chain hook input"`
+	observed.Reclamation.Firewall = &networkpolicy.FirewallConflict{
+		Manager: "ufw.service", SHA256: strings.Repeat("f", 64), OutboundSHA256: strings.Repeat("d", 64),
+		Objects: []string{`{"chain":{"family":"inet","table":"filter","name":"input","hook":"input","prio":0,"policy":"accept"}}`},
+	}
+	observed.SSH.Service = "ssh.service"
+	observed.SSH.Listener = "0.0.0.0:2222/tcp"
+	observed.SSH.AuthorizedKeysPath = "/root/.ssh/authorized_keys"
+	observed.SSH.AuthorizedKeysSHA256 = strings.Repeat("e", 64)
+	adapter := &stagedAdapter{observed: observed}
+	request := networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PreApproval, ReclamationReview: true}
+	review := networkpolicy.New(adapter).Evaluate(request)
+	if review.Reclamation == nil || !strings.Contains(fmt.Sprintf("%+v", review.Reclamation), "replace inbound firewall") || !strings.Contains(fmt.Sprintf("%+v", review.Reclamation), "preserve SSH service ssh.service") {
+		t.Fatalf("firewall replacement Plan = %+v findings=%+v", review.Reclamation, review.Findings)
+	}
+	request.Stage = networkpolicy.PostApproval
+	request.ReviewedReclamationSHA256 = review.Reclamation.Digest
+	approved := networkpolicy.New(adapter).Evaluate(request)
+	reviewed, manager, prior, _, candidate, service, listener, session, keysPath, keys, objects, _, valid := approved.ReclamationAuthority().SystemChangesFirewallReclamation()
+	if !valid || reviewed != review.Reclamation.Digest || manager != "ufw.service" || prior != strings.Repeat("f", 64) || service != "ssh.service" || listener != "0.0.0.0:2222/tcp" || keysPath != "/root/.ssh/authorized_keys" || keys != strings.Repeat("e", 64) || len(objects) != 1 || !strings.Contains(candidate, "policy drop") || !strings.Contains(candidate, "{ 443, 2222, 9443, 10443 }") {
+		t.Fatalf("firewall authority = %q %q %q %q %q %q %q %q %v %t", reviewed, manager, prior, candidate, service, listener, session, keys, objects, valid)
+	}
+	if _, _, _, _, _, _, _, _, _, _, _, _, valid := approved.ReclamationAuthority().SystemChangesFirewallReclamation(); valid {
+		t.Fatal("firewall reclamation authority was reusable")
+	}
+}
+
 func TestReviewedPackageConflictsBecomeExactPurgeOrHoldAuthority(t *testing.T) {
 	tests := []struct {
 		name, packageName, wantKind string

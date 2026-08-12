@@ -11,6 +11,8 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -25,13 +27,322 @@ type firewallCommand func(context.Context, []byte, string, ...string) ([]byte, e
 // NativeFirewall applies only the typed inet sbxr contract under the
 // transaction Adapter. The global System Changes lock serializes its state.
 type NativeFirewall struct {
-	run            firewallCommand
-	recordedHandle uint64
+	run                    firewallCommand
+	recordedHandle         uint64
+	watchdogDirectory      string
+	managerDropInDirectory string
+}
+
+func (firewall *NativeFirewall) VerifyReplacement(target systemchanges.FirewallReclamationTarget, timeout time.Duration) error {
+	if firewall == nil || firewall.run == nil || timeout <= 0 {
+		return errors.New("native firewall replacement unavailable")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if _, err := firewall.run(ctx, []byte(target.Candidate), "nft", "--check", "--file", "-"); err != nil {
+		return errors.New("native firewall replacement candidate invalid")
+	}
+	manager, err := firewall.run(ctx, nil, "systemctl", "is-active", target.Manager)
+	if err != nil || strings.TrimSpace(string(manager)) != "active" {
+		return errors.New("reviewed firewall manager changed")
+	}
+	rules, err := firewall.run(ctx, nil, "nft", "-j", "list", "ruleset")
+	digest, objects, outboundDigest, outbound, parseErr := replacementFirewallState(rules)
+	if err != nil || parseErr != nil || digest != target.PriorSHA256 || !slices.Equal(objects, target.Objects) || outboundDigest != target.OutboundSHA256 || !slices.Equal(outbound, target.OutboundObjects) {
+		return errors.New("reviewed inbound firewall changed")
+	}
+	return nil
+}
+
+func (firewall *NativeFirewall) ReplaceForward(target systemchanges.FirewallReclamationTarget, timeout time.Duration) (systemchanges.StepEvidence, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	effect, err := firewall.ReplacementState(target, timeout)
+	if err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	if effect == systemchanges.StepEffectAbsent {
+		managerState, stateErr := firewall.run(ctx, nil, "systemctl", "is-active", target.Manager)
+		if stateErr == nil || strings.TrimSpace(string(managerState)) != "inactive" {
+			return systemchanges.StepEvidence{}, errors.New("competing firewall manager returned")
+		}
+		digest := sha256.Sum256([]byte(target.Candidate))
+		return systemchanges.StepEvidence{Code: "inbound-firewall-replaced", SHA256: fmt.Sprintf("%x", digest)}, nil
+	}
+	manager, managerErr := firewall.run(ctx, nil, "systemctl", "is-active", target.Manager)
+	state := strings.TrimSpace(string(manager))
+	dropInPath, dropInErr := managerDropIn(firewall.managerDropInDirectory, target.Manager)
+	if dropInErr != nil {
+		return systemchanges.StepEvidence{}, errors.New("competing firewall manager recovery invalid")
+	}
+	if managerErr == nil && state == "active" {
+		if _, err := firewall.run(ctx, nil, "systemctl", "disable", target.Manager); err != nil {
+			return systemchanges.StepEvidence{}, errors.New("competing firewall manager did not stop")
+		}
+		if dropInPath == "" {
+			dropInPath, err = writeManagerDropIn(firewall.managerDropInDirectory, target.Manager)
+		}
+		if err != nil {
+			return systemchanges.StepEvidence{}, errors.New("competing firewall manager did not stop")
+		}
+		if _, err := firewall.run(ctx, nil, "systemctl", "daemon-reload"); err != nil {
+			return systemchanges.StepEvidence{}, errors.New("competing firewall manager did not stop")
+		}
+		if _, err := firewall.run(ctx, nil, "systemctl", "stop", target.Manager); err != nil {
+			return systemchanges.StepEvidence{}, errors.New("competing firewall manager did not stop")
+		}
+		managerState, stateErr := firewall.run(ctx, nil, "systemctl", "is-active", target.Manager)
+		if stateErr == nil || strings.TrimSpace(string(managerState)) != "inactive" {
+			return systemchanges.StepEvidence{}, errors.New("competing firewall manager remained active")
+		}
+		if err := firewall.verifyReplacementState(target, ctx); err != nil {
+			return systemchanges.StepEvidence{}, err
+		}
+	} else if state != "inactive" {
+		return systemchanges.StepEvidence{}, errors.New("competing firewall manager changed")
+	}
+	if dropInPath != "" && os.Remove(dropInPath) != nil {
+		return systemchanges.StepEvidence{}, errors.New("competing firewall manager cleanup failed")
+	}
+	if firewall.runError(ctx, "systemctl", "daemon-reload") != nil {
+		return systemchanges.StepEvidence{}, errors.New("competing firewall manager cleanup failed")
+	}
+	script, err := replacementScript(target.Objects, target.Candidate)
+	if err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	watchdogPath, err := writeForwardFirewallWatchdog(firewall.watchdogDirectory, string(script))
+	if err != nil {
+		return systemchanges.StepEvidence{}, errors.New("forward firewall watchdog unavailable")
+	}
+	if err := firewall.armWatchdog(ctx, watchdogPath); err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	if _, err := firewall.run(ctx, script, "nft", "--file", "-"); err != nil {
+		return systemchanges.StepEvidence{}, errors.New("forward inbound firewall replacement failed")
+	}
+	if err := firewall.verifySSH(ctx, listenerPort(target.Listener)); err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	if status, err := firewall.ReplacementState(target, timeout); err != nil || status != systemchanges.StepEffectAbsent {
+		return systemchanges.StepEvidence{}, errors.New("forward inbound firewall replacement disagrees")
+	}
+	managerState, stateErr := firewall.run(ctx, nil, "systemctl", "is-active", target.Manager)
+	if stateErr == nil || strings.TrimSpace(string(managerState)) != "inactive" {
+		return systemchanges.StepEvidence{}, errors.New("competing firewall manager returned")
+	}
+	if err := firewall.cancelWatchdog(ctx); err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	if err := os.Remove(watchdogPath); err != nil {
+		return systemchanges.StepEvidence{}, errors.New("forward firewall watchdog cleanup failed")
+	}
+	digest := sha256.Sum256([]byte(target.Candidate))
+	return systemchanges.StepEvidence{Code: "inbound-firewall-replaced", SHA256: fmt.Sprintf("%x", digest)}, nil
+}
+
+func writeManagerDropIn(root, manager string) (string, error) {
+	if strings.Contains(manager, "/") || manager == "" {
+		return "", errors.New("invalid manager")
+	}
+	directory := filepath.Join(root, manager+".d")
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		return "", err
+	}
+	name := filepath.Join(directory, "90-sbxr-reclamation.conf")
+	file, err := os.CreateTemp(directory, ".sbxr-reclamation-*")
+	if err != nil {
+		return "", err
+	}
+	temporary := file.Name()
+	defer os.Remove(temporary)
+	if err := file.Chmod(0o600); err != nil {
+		file.Close()
+		return "", err
+	}
+	_, writeErr := file.WriteString("[Service]\nExecStop=\nExecStopPost=\nRestart=no\n")
+	if writeErr == nil {
+		writeErr = file.Sync()
+	}
+	closeErr := file.Close()
+	if writeErr != nil {
+		return "", writeErr
+	}
+	if closeErr != nil {
+		return "", closeErr
+	}
+	if err := renameNoReplace(temporary, name); err != nil || syncHostDirectory(directory) != nil {
+		return "", errors.New("manager drop-in publication failed")
+	}
+	return name, nil
+}
+
+func managerDropIn(root, manager string) (string, error) {
+	name := filepath.Join(root, manager+".d", "90-sbxr-reclamation.conf")
+	data, err := os.ReadFile(name)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil || string(data) != "[Service]\nExecStop=\nExecStopPost=\nRestart=no\n" {
+		return "", errors.New("manager drop-in changed")
+	}
+	info, err := os.Lstat(name)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		return "", errors.New("manager drop-in invalid")
+	}
+	return name, nil
+}
+
+func (firewall *NativeFirewall) runError(ctx context.Context, name string, args ...string) error {
+	_, err := firewall.run(ctx, nil, name, args...)
+	return err
+}
+
+func (firewall *NativeFirewall) verifyReplacementState(target systemchanges.FirewallReclamationTarget, ctx context.Context) error {
+	rules, err := firewall.run(ctx, nil, "nft", "-j", "list", "ruleset")
+	digest, objects, outboundDigest, outbound, parseErr := replacementFirewallState(rules)
+	if err != nil || parseErr != nil || digest != target.PriorSHA256 || !slices.Equal(objects, target.Objects) || outboundDigest != target.OutboundSHA256 || !slices.Equal(outbound, target.OutboundObjects) {
+		return errors.New("reviewed firewall changed")
+	}
+	return nil
+}
+
+func writeForwardFirewallWatchdog(directory, candidate string) (string, error) {
+	file, err := os.CreateTemp(directory, ".sbxr-firewall-forward-*")
+	if err != nil {
+		return "", err
+	}
+	name := file.Name()
+	writeErr := file.Chmod(0o600)
+	if writeErr == nil {
+		_, writeErr = file.WriteString(candidate)
+	}
+	if writeErr == nil {
+		writeErr = file.Sync()
+	}
+	if writeErr == nil {
+		writeErr = file.Close()
+	}
+	if writeErr != nil {
+		_ = file.Close()
+		_ = os.Remove(name)
+		return "", errors.New("forward firewall watchdog file unavailable")
+	}
+	return name, nil
+}
+
+func (firewall *NativeFirewall) ReplacementState(target systemchanges.FirewallReclamationTarget, timeout time.Duration) (systemchanges.StepEffect, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	rules, err := firewall.run(ctx, nil, "nft", "-j", "list", "ruleset")
+	if err != nil {
+		return "", err
+	}
+	_, objects, outboundDigest, outbound, parseErr := replacementFirewallState(rules)
+	if parseErr != nil {
+		return "", parseErr
+	}
+	if outboundDigest != target.OutboundSHA256 || !slices.Equal(outbound, target.OutboundObjects) {
+		return "", errors.New("outbound firewall changed")
+	}
+	if slices.Equal(objects, target.OutboundObjects) {
+		active, err := firewall.run(ctx, nil, "nft", "list", "table", "inet", "sbxr")
+		want, wantErr := canonicalNftPolicy([]byte(target.Candidate))
+		got, gotErr := canonicalNftPolicy(active)
+		if err == nil && wantErr == nil && gotErr == nil && want == got {
+			managerState, stateErr := firewall.run(ctx, nil, "systemctl", "is-active", target.Manager)
+			if stateErr == nil || strings.TrimSpace(string(managerState)) != "inactive" {
+				return "", errors.New("competing firewall manager returned")
+			}
+			return systemchanges.StepEffectAbsent, nil
+		}
+	}
+	if slices.Equal(objects, target.Objects) {
+		return systemchanges.StepEffectPresent, nil
+	}
+	return "", errors.New("inbound firewall state changed")
+}
+
+func replacementFirewallState(data []byte) (string, []string, string, []string, error) {
+	var document struct {
+		Nftables []map[string]json.RawMessage `json:"nftables"`
+	}
+	if json.Unmarshal(data, &document) != nil {
+		return "", nil, "", nil, errors.New("invalid nftables ruleset")
+	}
+	chains := map[string]bool{}
+	for _, item := range document.Nftables {
+		var chain struct{ Family, Table, Name, Hook string }
+		if raw := item["chain"]; len(raw) > 0 && json.Unmarshal(raw, &chain) == nil && chain.Hook == "input" && !(chain.Family == "inet" && chain.Table == "sbxr") {
+			chains[chain.Family+"\x00"+chain.Table+"\x00"+chain.Name] = true
+		}
+	}
+	var objects, outbound []string
+	for _, item := range document.Nftables {
+		delete(item, "counter")
+		if rule := item["rule"]; len(rule) > 0 {
+			var value map[string]any
+			if json.Unmarshal(rule, &value) == nil {
+				delete(value, "counter")
+				if expressions, ok := value["expr"].([]any); ok {
+					for _, expression := range expressions {
+						if object, ok := expression.(map[string]any); ok {
+							delete(object, "counter")
+						}
+					}
+				}
+				item["rule"], _ = json.Marshal(value)
+			}
+		}
+		var identity struct{ Family, Table, Name, Chain string }
+		encoded, _ := json.Marshal(item)
+		if strings.Contains(string(encoded), `"family":"inet","name":"sbxr"`) || strings.Contains(string(encoded), `"family":"inet","table":"sbxr"`) {
+			continue
+		}
+		objects = append(objects, string(encoded))
+		chainRaw, ruleRaw := item["chain"], item["rule"]
+		chainDeleted := len(chainRaw) > 0 && json.Unmarshal(chainRaw, &identity) == nil && chains[identity.Family+"\x00"+identity.Table+"\x00"+identity.Name]
+		ruleDeleted := len(ruleRaw) > 0 && json.Unmarshal(ruleRaw, &identity) == nil && chains[identity.Family+"\x00"+identity.Table+"\x00"+identity.Chain]
+		if !chainDeleted && !ruleDeleted {
+			outbound = append(outbound, string(encoded))
+		}
+	}
+	digest := sha256.Sum256([]byte(strings.Join(objects, "\n")))
+	outboundDigest := sha256.Sum256([]byte(strings.Join(outbound, "\n")))
+	return fmt.Sprintf("%x", digest), objects, fmt.Sprintf("%x", outboundDigest), outbound, nil
+}
+
+func replacementScript(objects []string, candidate string) ([]byte, error) {
+	var commands []string
+	for _, raw := range objects {
+		var item map[string]json.RawMessage
+		var chain struct{ Family, Table, Name, Hook string }
+		if json.Unmarshal([]byte(raw), &item) != nil || len(item["chain"]) == 0 || json.Unmarshal(item["chain"], &chain) != nil || chain.Hook != "input" {
+			continue
+		}
+		commands = append(commands, fmt.Sprintf("destroy chain %s %s %s", chain.Family, chain.Table, chain.Name))
+	}
+	if len(commands) == 0 {
+		return nil, errors.New("reviewed inbound chains unavailable")
+	}
+	return []byte("destroy table inet sbxr\n" + strings.Join(commands, "\n") + "\n" + candidate), nil
+}
+
+func listenerPort(listener string) uint16 {
+	value := strings.TrimSuffix(listener, "/tcp")
+	_, port, err := net.SplitHostPort(value)
+	parsed, parseErr := strconv.ParseUint(port, 10, 16)
+	if err != nil || parseErr != nil {
+		return 0
+	}
+	return uint16(parsed)
 }
 
 func NewNativeFirewall() *NativeFirewall { return newNativeFirewall(runFirewallCommand) }
 
-func newNativeFirewall(run firewallCommand) *NativeFirewall { return &NativeFirewall{run: run} }
+func newNativeFirewall(run firewallCommand) *NativeFirewall {
+	return &NativeFirewall{run: run, watchdogDirectory: "/run", managerDropInDirectory: "/run/systemd/system"}
+}
 
 func runFirewallCommand(ctx context.Context, stdin []byte, name string, args ...string) ([]byte, error) {
 	command := exec.CommandContext(ctx, name, args...)
