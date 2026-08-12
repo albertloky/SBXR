@@ -29,6 +29,7 @@ const (
 	IrreversibleReclamationStarted        DurableCheckpoint = "Irreversible reclamation started"
 	ReclamationProcessStopped             DurableCheckpoint = "Reclamation process stopped"
 	ReclamationTargetDeleted              DurableCheckpoint = "Reclamation target deleted"
+	PackageHoldsRemoved                   DurableCheckpoint = "SBXR package holds removed"
 	TokenRevocationVerified               DurableCheckpoint = "Cloudflare token revocation verified"
 	LocalStateDeleted                     DurableCheckpoint = "Local State deleted"
 	SecretsDeleted                        DurableCheckpoint = "Infrastructure Secrets deleted"
@@ -155,6 +156,7 @@ const (
 	CloudflareDNSRecordsPhase                  IrreversibleRemovalPhase = "owned Cloudflare DNS records"
 	CloudflareTunnelPhase                      IrreversibleRemovalPhase = "owned Cloudflare Tunnel"
 	LocalStatePhase                            IrreversibleRemovalPhase = "local State"
+	PackageHoldsPhase                          IrreversibleRemovalPhase = "SBXR package holds"
 	SecretsPhase                               IrreversibleRemovalPhase = "Infrastructure Secrets"
 	CertificatesPhase                          IrreversibleRemovalPhase = "certificates"
 	TransactionMaterialDeletionAuthorizedPhase IrreversibleRemovalPhase = "transaction material deletion authorization"
@@ -171,6 +173,7 @@ var irreversibleRemovalPhases = []struct {
 	phase      IrreversibleRemovalPhase
 	checkpoint DurableCheckpoint
 }{
+	{PackageHoldsPhase, PackageHoldsRemoved},
 	{LocalStatePhase, LocalStateDeleted},
 	{SecretsPhase, SecretsDeleted},
 	{CertificatesPhase, CertificatesDeleted},
@@ -291,7 +294,7 @@ type RunTokenRotationAdapter interface {
 }
 
 type ForwardReclamationAdapter interface {
-	VerifyReclamationReady(ExecutionLease, ReclamationTarget, time.Duration) error
+	VerifyReclamationReady(ExecutionLease, string, ReclamationTarget, time.Duration) error
 	StopReclamationProcess(ExecutionLease, ReclamationTarget, time.Duration) (StepEvidence, error)
 	DeleteReclamationTarget(ExecutionLease, string, ReclamationTarget, time.Duration) (StepEvidence, error)
 	InspectReclamationTarget(ExecutionLease, string, ReclamationTarget, time.Duration) (StepEffect, error)
@@ -974,9 +977,33 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 	}
 	var reclamation *ReclamationTarget
 	if spec.Reclamation != nil {
-		kind, path, digest, interpreter, processID, review, valid := spec.Reclamation.SystemChangesReclamation()
-		target := ReclamationTarget{Kind: kind, Path: path, SHA256: digest, Interpreter: interpreter, ProcessID: processID, ReviewSHA256: review}
-		if !validReclamationTarget(target) || !valid {
+		policyVersion, review, kinds, paths, digests, interpreters, processIDs, packages, packageVersions, ownedPaths, identityNames, identityKinds, valid := spec.Reclamation.SystemChangesReclamation()
+		if !valid || len(kinds) == 0 || len(paths) != len(kinds) || len(digests) != len(kinds) || len(interpreters) != len(kinds) || len(processIDs) != len(kinds) || len(packages) != len(kinds) || len(packageVersions) != len(kinds) || len(ownedPaths) != len(kinds) || len(identityNames) != len(kinds) || len(identityKinds) != len(kinds) {
+			return finish(lock, nothingChanged(spec, "SYSTEM-CHANGES-RECLAMATION-STALE", Prepared))
+		}
+		identities := func(index int) []ReclamationIdentity {
+			if len(identityNames[index]) != len(identityKinds[index]) {
+				return nil
+			}
+			result := make([]ReclamationIdentity, len(identityNames[index]))
+			for identity := range result {
+				result[identity] = ReclamationIdentity{Name: identityNames[index][identity], Kind: identityKinds[index][identity]}
+			}
+			return result
+		}
+		target := ReclamationTarget{Kind: kinds[0], Path: paths[0], SHA256: digests[0], Interpreter: interpreters[0], ProcessID: processIDs[0], ReviewSHA256: review, Package: packages[0], PackageVersion: packageVersions[0], PolicyVersion: policyVersion, Identities: identities(0)}
+		if len(kinds) > 1 {
+			target = ReclamationTarget{Kind: "package-purge-set", ReviewSHA256: review, PolicyVersion: policyVersion}
+			for index := range kinds {
+				if kinds[index] != "package-purge" {
+					return finish(lock, nothingChanged(spec, "SYSTEM-CHANGES-RECLAMATION-STALE", Prepared))
+				}
+				target.Packages = append(target.Packages, ReclamationPackageTarget{Path: paths[index], SHA256: digests[index], ProcessID: processIDs[index], Package: packages[index], PackageVersion: packageVersions[index], OwnedPaths: append([]string(nil), ownedPaths[index]...), Identities: identities(index)})
+			}
+		} else if len(ownedPaths) == 1 {
+			target.OwnedPaths = append([]string(nil), ownedPaths[0]...)
+		}
+		if !validReclamationTarget(target) {
 			return finish(lock, nothingChanged(spec, "SYSTEM-CHANGES-RECLAMATION-STALE", Prepared))
 		}
 		reclamation = &target
@@ -1084,7 +1111,7 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 			if cancellation.Requested() {
 				return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, index))
 			}
-			if reclamationForward.VerifyReclamationReady(lease, *reclamation, spec.Timeouts.Check) != nil {
+			if reclamationForward.VerifyReclamationReady(lease, spec.Identity, *reclamation, spec.Timeouts.Check) != nil {
 				return finish(lock, rollbackChange(lease, adapter, transaction, spec, index, "SYSTEM-CHANGES-RECLAMATION-RECHECK", StateFinalized))
 			}
 			if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: IrreversibleReclamationStarted, Step: index}); err != nil {

@@ -197,6 +197,7 @@ type ProtectedHostFoundation struct {
 
 type ReclamationPlan struct {
 	Digest, Classification                   string
+	PackagePolicyVersion                     uint16
 	Targets, Preservation, PermanentWarnings []string
 	Interruption, Cancellation, Rollback     string
 }
@@ -432,12 +433,25 @@ type FreshInstallationProof struct{ cell *freshInstallationProofCell }
 // System Changes after a fresh privileged inventory matches the reviewed Plan.
 type ReclamationAuthority struct{ cell *reclamationAuthorityCell }
 
-type reclamationTarget struct{ kind, path, digest, interpreter, processID, review string }
 type reclamationAuthorityCell struct {
 	evaluate func() Result
-	target   reclamationTarget
+	contract reclamationContract
 	used     atomic.Bool
 }
+
+const reclamationPolicyVersion uint16 = 1
+
+type reclamationContract struct {
+	PolicyVersion uint16
+	ReviewSHA256  string
+	Targets       []reclamationTarget
+}
+type reclamationTarget struct {
+	Kind, Path, SHA256, Interpreter, ProcessID, Package, PackageVersion string
+	OwnedPaths                                                          []string
+	Identities                                                          []reclamationIdentity
+}
+type reclamationIdentity struct{ Name, Kind string }
 
 type freshInstallationProofCell struct {
 	evaluate func() Result
@@ -468,14 +482,48 @@ func (ReclamationAuthority) MarshalJSON() ([]byte, error) {
 func (result Result) ReclamationAuthority() ReclamationAuthority {
 	return ReclamationAuthority{cell: result.reclamation}
 }
-func (authority ReclamationAuthority) SystemChangesReclamation() (kind, path, digest, interpreter, processID, review string, valid bool) {
+
+// ReclamationPolicy returns only the safe current policy that must survive a
+// successful install. Purged packages create no continuing policy.
+type CurrentReclamationPolicy struct {
+	Version uint16
+	Held    *PackageConflict
+	Path    string
+	SHA256  string
+}
+
+func (result Result) ReclamationPolicy() (CurrentReclamationPolicy, bool) {
+	if result.reclamation == nil || result.reclamation.contract.PolicyVersion != reclamationPolicyVersion {
+		return CurrentReclamationPolicy{}, false
+	}
+	for _, target := range result.reclamation.contract.Targets {
+		if target.Kind == "package-hold" {
+			pkg := PackageConflict{Name: target.Package, Version: target.PackageVersion, Owns: target.Path}
+			return CurrentReclamationPolicy{Version: reclamationPolicyVersion, Held: &pkg, Path: target.Path, SHA256: target.SHA256}, true
+		}
+	}
+	return CurrentReclamationPolicy{}, true
+}
+func (authority ReclamationAuthority) SystemChangesReclamation() (policyVersion uint16, review string, kinds, paths, digests, interpreters, processIDs, packages, packageVersions []string, ownedPaths, identityNames, identityKinds [][]string, valid bool) {
 	if authority.cell == nil || authority.cell.evaluate == nil || !authority.cell.used.CompareAndSwap(false, true) {
-		return "", "", "", "", "", "", false
+		return
 	}
 	fresh := authority.cell.evaluate()
-	want := authority.cell.target
-	return want.kind, want.path, want.digest, want.interpreter, want.processID, want.review,
-		fresh.reclamation != nil && fresh.reclamation.target == want && fresh.Reclamation != nil && fresh.Reclamation.Digest == want.review && fresh.freshInstallation != nil
+	want := authority.cell.contract
+	policyVersion, review = want.PolicyVersion, want.ReviewSHA256
+	for _, target := range want.Targets {
+		kinds, paths, digests = append(kinds, target.Kind), append(paths, target.Path), append(digests, target.SHA256)
+		interpreters, processIDs = append(interpreters, target.Interpreter), append(processIDs, target.ProcessID)
+		packages, packageVersions = append(packages, target.Package), append(packageVersions, target.PackageVersion)
+		ownedPaths = append(ownedPaths, append([]string(nil), target.OwnedPaths...))
+		var names, kinds []string
+		for _, identity := range target.Identities {
+			names, kinds = append(names, identity.Name), append(kinds, identity.Kind)
+		}
+		identityNames, identityKinds = append(identityNames, names), append(identityKinds, kinds)
+	}
+	valid = fresh.reclamation != nil && reflect.DeepEqual(fresh.reclamation.contract, want) && fresh.Reclamation != nil && fresh.Reclamation.Digest == want.ReviewSHA256 && fresh.freshInstallation != nil
+	return
 }
 
 // CertificateLifecycleFreshDNSPrerequisites exposes only the exact Clean VPS
@@ -915,10 +963,13 @@ func (i Interface) Evaluate(request Request) Result {
 	if result.Outcome == Failed {
 		return result
 	}
-	if target, ok := standaloneReclamationTarget(observed, result.Reclamation); ok && request.ReviewedReclamationSHA256 == target.review {
-		result.reclamation = &reclamationAuthorityCell{target: target}
-		observed.Listeners = slices.DeleteFunc(append([]Listener(nil), observed.Listeners...), func(listener Listener) bool { return listener.ProcessID == target.processID })
+	if contract, ok := reviewedReclamationContract(observed, result.Reclamation); ok && request.ReviewedReclamationSHA256 == contract.ReviewSHA256 {
+		result.reclamation = &reclamationAuthorityCell{contract: contract}
+		observed.Listeners = slices.DeleteFunc(append([]Listener(nil), observed.Listeners...), func(listener Listener) bool {
+			return slices.ContainsFunc(contract.Targets, func(target reclamationTarget) bool { return target.ProcessID == listener.ProcessID })
+		})
 		observed.Reclamation = ReclamationFacts{}
+		observed.ServiceIdentities, observed.ResourcePaths = nil, nil
 	}
 	result.SystemChanges = SystemChangesRequirements{ValidateCompleteCandidate: true, AtomicTableApply: true, RootOwnedWatchdog: true, ProveCurrentSSHResponsive: true, ProveDetectedSSHAdmitted: true, CancelAfterGate: "NETWORK-SSH-RESPONSIVE", RestoreExactPreviousRules: true}
 	result.SSHSafety = SSHSafety{FutureOutsideReconnectUnproved: true, Warning: "One existing SSH session cannot prove a future outside reconnection.", RecoveryPath: "VPS provider console"}
@@ -981,31 +1032,93 @@ func (i Interface) Evaluate(request Request) Result {
 	return result
 }
 
-func standaloneReclamationTarget(observed Observations, plan *ReclamationPlan) (reclamationTarget, bool) {
-	if plan == nil || !validSHA256(plan.Digest) || len(observed.Reclamation.Packages)+len(observed.Reclamation.Identities)+len(observed.Reclamation.UnsafePaths) != 0 || observed.Reclamation.Docker != nil || len(observed.ServiceIdentities)+len(observed.ResourcePaths)+len(observed.OwnerFacts.Routes)+len(observed.OwnerFacts.Conflicts) != 0 || observed.Firewall.ActiveManager != "" || observed.Firewall.UnexpectedRule != "" || observed.OwnerFacts.DNS != "fresh" || observed.OwnerFacts.Tunnel != "fresh" {
-		return reclamationTarget{}, false
+func reviewedReclamationContract(observed Observations, plan *ReclamationPlan) (reclamationContract, bool) {
+	contract := reclamationContract{PolicyVersion: reclamationPolicyVersion}
+	if plan == nil || !validSHA256(plan.Digest) || len(observed.Reclamation.UnsafePaths) != 0 || observed.Reclamation.Docker != nil || len(observed.OwnerFacts.Routes)+len(observed.OwnerFacts.Conflicts) != 0 || observed.Firewall.ActiveManager != "" || observed.Firewall.UnexpectedRule != "" || observed.OwnerFacts.DNS != "fresh" || observed.OwnerFacts.Tunnel != "fresh" {
+		return reclamationContract{}, false
 	}
 	listeners := slices.DeleteFunc(append([]Listener(nil), observed.Listeners...), func(listener Listener) bool { return !reclaimableListener(listener, observed.SSH) })
+	if len(observed.Reclamation.Packages) > 0 {
+		if len(observed.Reclamation.Scripts) != 0 || len(observed.Reclamation.Executables) != len(observed.Reclamation.Packages) || len(observed.Reclamation.Identities) != 0 || len(listeners) == 0 {
+			return reclamationContract{}, false
+		}
+		unsupported := 0
+		for _, pkg := range observed.Reclamation.Packages {
+			kind := "package-purge"
+			if !slices.Contains([]string{"xray", "sing-box", "cloudflared"}, pkg.Name) {
+				kind, unsupported = "package-hold", unsupported+1
+			}
+			var files []FileConflict
+			for _, file := range observed.Reclamation.Executables {
+				if file.Package == pkg.Name {
+					files = append(files, file)
+				}
+			}
+			if len(files) != 1 {
+				return reclamationContract{}, false
+			}
+			file := files[0]
+			valid := filepath.IsAbs(file.Path) && validSHA256(file.SHA256) && file.ProcessID != "" && file.Links == 1 && !file.Mount && pkg.Name != "" && pkg.Version != "" && slices.ContainsFunc(listeners, func(listener Listener) bool {
+				return listener.ProcessID == file.ProcessID && listener.Executable == file.Path
+			})
+			if !valid {
+				return reclamationContract{}, false
+			}
+			target := reclamationTarget{Kind: kind, Path: file.Path, SHA256: file.SHA256, ProcessID: file.ProcessID, Package: pkg.Name, PackageVersion: pkg.Version, OwnedPaths: append([]string(nil), pkg.OwnedPaths...)}
+			contract.Targets = append(contract.Targets, target)
+		}
+		if unsupported > 1 || unsupported == 1 && len(contract.Targets) != 1 || slices.ContainsFunc(observed.ResourcePaths, func(path string) bool {
+			return !slices.ContainsFunc(observed.Reclamation.Packages, func(pkg PackageConflict) bool { return slices.Contains(pkg.OwnedPaths, path) })
+		}) || slices.ContainsFunc(observed.ServiceIdentities, func(service string) bool {
+			return !slices.ContainsFunc(contract.Targets, func(target reclamationTarget) bool {
+				return service == target.Package+".service" || service == "process:"+target.Package
+			})
+		}) || slices.ContainsFunc(listeners, func(listener Listener) bool {
+			return !slices.ContainsFunc(contract.Targets, func(target reclamationTarget) bool {
+				return listener.ProcessID == target.ProcessID && listener.Executable == target.Path
+			})
+		}) {
+			return reclamationContract{}, false
+		}
+		contract.ReviewSHA256 = plan.Digest
+		return contract, true
+	}
+	if len(observed.ServiceIdentities)+len(observed.ResourcePaths) != 0 {
+		return reclamationContract{}, false
+	}
 	if len(listeners) == 0 || !validProcessID(listeners[0].ProcessID) || listeners[0].Service != "" {
-		return reclamationTarget{}, false
+		return reclamationContract{}, false
 	}
 	listener := listeners[0]
 	for _, current := range listeners[1:] {
 		if current.ProcessID != listener.ProcessID || current.Process != listener.Process || current.Executable != listener.Executable || current.Service != "" {
-			return reclamationTarget{}, false
+			return reclamationContract{}, false
 		}
+	}
+	identities := make([]reclamationIdentity, len(observed.Reclamation.Identities))
+	for index, identity := range observed.Reclamation.Identities {
+		if !identity.Exclusive {
+			return reclamationContract{}, false
+		}
+		identities[index] = reclamationIdentity{Name: identity.Name, Kind: identity.Kind}
 	}
 	if len(observed.Reclamation.Executables) == 1 && len(observed.Reclamation.Scripts) == 0 {
 		file := observed.Reclamation.Executables[0]
-		valid := filepath.IsAbs(file.Path) && validSHA256(file.SHA256) && file.ProcessID == listener.ProcessID && file.Path == listener.Executable && file.Service == "" && file.Package == "" && file.Links == 1 && !file.Mount
-		return reclamationTarget{kind: "executable", path: file.Path, digest: file.SHA256, processID: file.ProcessID, review: plan.Digest}, valid
+		valid := filepath.IsAbs(file.Path) && validSHA256(file.SHA256) && file.ProcessID == listener.ProcessID && file.Path == listener.Executable && file.Service == "" && file.Links == 1 && !file.Mount
+		if len(observed.Reclamation.Packages) == 0 && file.Package == "" {
+			contract.ReviewSHA256 = plan.Digest
+			contract.Targets = []reclamationTarget{{Kind: "executable", Path: file.Path, SHA256: file.SHA256, ProcessID: file.ProcessID}}
+			return contract, valid
+		}
 	}
 	if len(observed.Reclamation.Scripts) == 1 && len(observed.Reclamation.Executables) == 0 {
 		script := observed.Reclamation.Scripts[0]
 		valid := filepath.IsAbs(script.Path) && filepath.IsAbs(script.Interpreter) && validSHA256(script.SHA256) && script.ProcessID == listener.ProcessID && script.Interpreter == listener.Executable && script.Service == "" && script.Regular && script.Links == 1 && !script.Mount
-		return reclamationTarget{kind: "script", path: script.Path, digest: script.SHA256, interpreter: script.Interpreter, processID: script.ProcessID, review: plan.Digest}, valid
+		contract.ReviewSHA256 = plan.Digest
+		contract.Targets = []reclamationTarget{{Kind: "script", Path: script.Path, SHA256: script.SHA256, Interpreter: script.Interpreter, ProcessID: script.ProcessID}}
+		return contract, valid && len(observed.Reclamation.Packages) == 0 && len(identities) == 0
 	}
-	return reclamationTarget{}, false
+	return reclamationContract{}, false
 }
 
 func reviewInstallation(result *Result, observed Observations, required bool) {
@@ -1082,6 +1195,11 @@ func reviewInstallation(result *Result, observed Observations, required bool) {
 		}
 	}
 	plan := ReclamationPlan{Classification: string(ReclaimableVPS), Interruption: "No work starts; an interrupted review changes nothing", Cancellation: "Back or Cancel changes nothing", Rollback: "no rollback exists after future permanent reclamation starts"}
+	if len(observed.Reclamation.Packages) > 0 {
+		plan.PackagePolicyVersion = reclamationPolicyVersion
+		plan.Targets = append(plan.Targets, "package purge allowlist v1 exact xray, sing-box, cloudflared")
+		plan.Preservation = append(plan.Preservation, "preserve package users and groups")
+	}
 	for _, value := range observed.Reclamation.Executables {
 		path := reviewFact(value.Path)
 		plan.Targets = append(plan.Targets, fmt.Sprintf("executable %s sha256 %s", path, reviewFact(value.SHA256)), fmt.Sprintf("executable %s process %s service %s package %s", path, reviewFact(value.Process), reviewFact(value.Service), reviewFact(value.Package)))
@@ -1132,6 +1250,11 @@ func reviewInstallation(result *Result, observed Observations, required bool) {
 		plan.Targets = append(plan.Targets, fmt.Sprintf("Cloudflare %s %s name %s", reviewFact(conflict.Kind), reviewFact(conflict.ID), reviewFact(conflict.Name)))
 	}
 	plan.PermanentWarnings = []string{"Future reclamation is permanent", "Future interruption may require forward recovery"}
+	if slices.ContainsFunc(observed.Reclamation.Packages, func(pkg PackageConflict) bool {
+		return !slices.Contains([]string{"xray", "sing-box", "cloudflared"}, pkg.Name)
+	}) {
+		plan.PermanentWarnings = append(plan.PermanentWarnings, "Unsupported package remains installed but damaged", "The held package may miss security updates", "explicit package repair may restore the deleted executable", "There is no rollback after deletion", "manual repair may be required")
+	}
 	reviewedFacts := observed
 	reviewedFacts.Firewall.RootVerified = false
 	encoded, _ := json.Marshal(struct {

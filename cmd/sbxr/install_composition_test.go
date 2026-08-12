@@ -98,9 +98,30 @@ func TestComposedInstallCarriesTheExactReviewedStandaloneTargetIntoOneInstallPla
 	if err != nil || recheck.Reclamation == nil {
 		t.Fatalf("privileged reclamation recheck = (%+v, %v)", recheck, err)
 	}
-	kind, path, digest, _, processID, reviewDigest, valid := recheck.Reclamation.SystemChangesReclamation()
-	if !valid || kind != "executable" || path != "/opt/standalone/proxy" || digest != strings.Repeat("9", 64) || processID != "4242" || reviewDigest != request.ReviewedReclamationSHA256 {
-		t.Fatalf("reclamation Apply authority = (%q, %q, %q, %q, %q, %t)", kind, path, digest, processID, reviewDigest, valid)
+	_, reviewed, kinds, paths, digests, _, processIDs, _, _, _, _, _, valid := recheck.Reclamation.SystemChangesReclamation()
+	if !valid || len(kinds) != 1 || kinds[0] != "executable" || paths[0] != "/opt/standalone/proxy" || digests[0] != strings.Repeat("9", 64) || processIDs[0] != "4242" || reviewed != request.ReviewedReclamationSHA256 {
+		t.Fatalf("reclamation Apply authority = (%v, %v, %v, %v, %q, %t)", kinds, paths, digests, processIDs, reviewed, valid)
+	}
+}
+
+func TestComposedInstallPersistsOnlyTheReviewedHeldPackagePolicy(t *testing.T) {
+	request := composedInstallRequest(t)
+	cloudflareAPI := composedCloudflareAPI{}
+	cloudflareModule := cloudflaretunnel.New(cloudflareAPI, composedClock{})
+	networkModule := networkpolicy.New(composedHeldPackageObserver{})
+	dependencies := installBuildDependencies{stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
+		return request.Candidate.Staged, nil
+	}, network: networkModule.Evaluate, cloudflare: cloudflareModule.Plan, random: newInstallEntropyReader(request.Entropy), inventory: cloudflareAPI}
+	_, err := buildInstallWith(t.Context(), request, dependencies)
+	var review *reclamationReviewError
+	if !errors.As(err, &review) || review.plan == nil {
+		t.Fatalf("held package review = %v", err)
+	}
+	request.ReviewedReclamationSHA256 = review.plan.Digest
+	built, err := buildInstallWith(t.Context(), request, dependencies)
+	want := state.ReclamationPolicy{Version: 1, Held: state.HeldPackagePolicy{Name: "vendor-proxy", Version: "4.5.6", DeletedExecutable: "/opt/vendor-proxy/proxy", SHA256: strings.Repeat("9", 64)}}
+	if err != nil || built == nil || built.desired.Reclamation != want {
+		t.Fatalf("persisted reclamation policy = %+v, error %v", built, err)
 	}
 }
 
@@ -199,6 +220,18 @@ func (composedReclamationObserver) Observe(request networkpolicy.ObservationRequ
 	observed, err := (composedNetworkObserver{}).Observe(request)
 	observed.Listeners = append(observed.Listeners, networkpolicy.Listener{Address: "0.0.0.0", Port: 443, Protocol: networkpolicy.TCP, Process: "standalone-proxy", Executable: "/opt/standalone/proxy", ProcessID: "4242"})
 	observed.Reclamation.Executables = []networkpolicy.FileConflict{{Path: "/opt/standalone/proxy", SHA256: strings.Repeat("9", 64), Process: "standalone-proxy", ProcessID: "4242", Mode: 0o755, Links: 1}}
+	return observed, err
+}
+
+type composedHeldPackageObserver struct{ composedNetworkObserver }
+
+func (composedHeldPackageObserver) Observe(request networkpolicy.ObservationRequest) (networkpolicy.Observations, error) {
+	observed, err := (composedNetworkObserver{}).Observe(request)
+	observed.Listeners = append(observed.Listeners, networkpolicy.Listener{Address: "0.0.0.0", Port: 443, Protocol: networkpolicy.TCP, Process: "vendor-proxy", Service: "vendor-proxy.service", Executable: "/opt/vendor-proxy/proxy", ProcessID: "4242"})
+	observed.ServiceIdentities = []string{"vendor-proxy.service"}
+	observed.ResourcePaths = []string{"/opt/vendor-proxy/proxy"}
+	observed.Reclamation.Packages = []networkpolicy.PackageConflict{{Name: "vendor-proxy", Version: "4.5.6", Owns: "/opt/vendor-proxy/proxy", OwnedPaths: []string{"/opt/vendor-proxy/proxy"}}}
+	observed.Reclamation.Executables = []networkpolicy.FileConflict{{Path: "/opt/vendor-proxy/proxy", SHA256: strings.Repeat("9", 64), Process: "vendor-proxy", Service: "vendor-proxy.service", ProcessID: "4242", Package: "vendor-proxy", Mode: 0o755, Links: 1}}
 	return observed, err
 }
 

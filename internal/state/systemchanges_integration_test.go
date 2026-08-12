@@ -289,7 +289,7 @@ func (a *systemChangesAdapter) LoadForwardInstallationEvidence(systemchanges.Exe
 	return evidence, nil
 }
 
-func (a *systemChangesAdapter) VerifyReclamationReady(systemchanges.ExecutionLease, systemchanges.ReclamationTarget, time.Duration) error {
+func (a *systemChangesAdapter) VerifyReclamationReady(systemchanges.ExecutionLease, string, systemchanges.ReclamationTarget, time.Duration) error {
 	a.events = append(a.events, "verify exact reclamation target")
 	if !a.reclamationPresent {
 		return errors.New("target changed")
@@ -2026,7 +2026,7 @@ func TestCompleteRemovalWaitsForVerifiedRevocationBeforeDeletingTheLocalToken(t 
 func TestCompleteRemovalResumesForwardAfterEveryIrreversibleCheckpointDeath(t *testing.T) {
 	checkpoints := []systemchanges.DurableCheckpoint{
 		systemchanges.OwnedDNSRecordsDeleted, systemchanges.OwnedTunnelDeleted, systemchanges.OwnedExternalDeletionVerified,
-		systemchanges.TokenRevocationVerified, systemchanges.LocalStateDeleted, systemchanges.SecretsDeleted,
+		systemchanges.TokenRevocationVerified, systemchanges.PackageHoldsRemoved, systemchanges.LocalStateDeleted, systemchanges.SecretsDeleted,
 		systemchanges.CertificatesDeleted, systemchanges.TransactionMaterialDeleted, systemchanges.ReleasesDeleted,
 		systemchanges.UnitsDeleted, systemchanges.IdentitiesDeleted, systemchanges.ListenersDeleted,
 		systemchanges.PreparedArtifactsDeleted, systemchanges.OwnedFirewallStateDeleted, systemchanges.FinalRemovalAbsenceVerified,
@@ -3168,7 +3168,7 @@ func (host *controlledUbuntuHost) DeleteIrreversibleRemovalPhase(phase systemcha
 func (host *controlledUbuntuHost) VerifyFinalRemovalAbsence(_ time.Duration) (bool, error) {
 	host.recoveryEvents = append(host.recoveryEvents, "verify final removal absence")
 	want := []systemchanges.IrreversibleRemovalPhase{
-		systemchanges.LocalStatePhase, systemchanges.SecretsPhase, systemchanges.CertificatesPhase,
+		systemchanges.PackageHoldsPhase, systemchanges.LocalStatePhase, systemchanges.SecretsPhase, systemchanges.CertificatesPhase,
 		systemchanges.TransactionMaterialDeletionAuthorizedPhase,
 		systemchanges.ReleasesPhase, systemchanges.UnitsPhase, systemchanges.IdentitiesPhase,
 		systemchanges.ListenersPhase, systemchanges.PreparedArtifactsPhase, systemchanges.OwnedFirewallStatePhase,
@@ -3716,7 +3716,7 @@ func TestUbuntuAdapterCompletesForwardOnlyRemovalAfterVerifiedTokenRevocation(t 
 
 func TestUbuntuAdapterRemovalResumesForwardDeletionAfterProcessDeathAtEveryCheckpoint(t *testing.T) {
 	checkpoints := []systemchanges.DurableCheckpoint{
-		systemchanges.TokenRevocationVerified, systemchanges.LocalStateDeleted, systemchanges.SecretsDeleted,
+		systemchanges.TokenRevocationVerified, systemchanges.PackageHoldsRemoved, systemchanges.LocalStateDeleted, systemchanges.SecretsDeleted,
 		systemchanges.CertificatesDeleted, systemchanges.TransactionMaterialDeletionAuthorized, systemchanges.TransactionMaterialDeleted, systemchanges.ReleasesDeleted,
 		systemchanges.UnitsDeleted, systemchanges.IdentitiesDeleted, systemchanges.ListenersDeleted,
 		systemchanges.PreparedArtifactsDeleted, systemchanges.OwnedFirewallStateDeleted, systemchanges.FinalRemovalAbsenceVerified,
@@ -3858,7 +3858,7 @@ func TestUbuntuAdapterRemovalResumesAfterDeathBetweenFinalJournalAndDirectoryDel
 			host := &controlledUbuntuHost{
 				root: root, removedResources: removed,
 				irreversiblePhases: []systemchanges.IrreversibleRemovalPhase{
-					systemchanges.LocalStatePhase, systemchanges.SecretsPhase, systemchanges.CertificatesPhase,
+					systemchanges.PackageHoldsPhase, systemchanges.LocalStatePhase, systemchanges.SecretsPhase, systemchanges.CertificatesPhase,
 					systemchanges.TransactionMaterialDeletionAuthorizedPhase,
 					systemchanges.ReleasesPhase, systemchanges.UnitsPhase, systemchanges.IdentitiesPhase,
 					systemchanges.ListenersPhase, systemchanges.PreparedArtifactsPhase, systemchanges.OwnedFirewallStatePhase,

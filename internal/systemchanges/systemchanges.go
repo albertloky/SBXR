@@ -624,17 +624,63 @@ const (
 
 type ReclamationTarget struct {
 	Kind, Path, SHA256, Interpreter, ProcessID, ReviewSHA256 string
+	Package, PackageVersion                                  string
+	PolicyVersion                                            uint16
+	OwnedPaths                                               []string
+	Identities                                               []ReclamationIdentity
+	Packages                                                 []ReclamationPackageTarget
 }
 
+type ReclamationPackageTarget struct {
+	Path, SHA256, ProcessID, Package, PackageVersion string
+	OwnedPaths                                       []string
+	Identities                                       []ReclamationIdentity
+}
+
+type ReclamationIdentity struct{ Name, Kind string }
+
 type ReclamationAuthority interface {
-	SystemChangesReclamation() (kind, path, digest, interpreter, processID, review string, valid bool)
+	SystemChangesReclamation() (policyVersion uint16, review string, kinds, paths, digests, interpreters, processIDs, packages, packageVersions []string, ownedPaths, identityNames, identityKinds [][]string, valid bool)
 }
 
 func validReclamationTarget(target ReclamationTarget) bool {
-	if target.Kind != "executable" && target.Kind != "script" || !filepath.IsAbs(target.Path) || filepath.Clean(target.Path) != target.Path || !validSHA256(target.SHA256) || !validSHA256(target.ReviewSHA256) || !validReclamationProcessID(target.ProcessID) {
+	if target.Kind == "package-purge-set" {
+		if target.Path != "" || target.SHA256 != "" || target.Interpreter != "" || target.ProcessID != "" || target.Package != "" || target.PackageVersion != "" || len(target.Identities) != 0 || target.PolicyVersion != 1 || !validSHA256(target.ReviewSHA256) || len(target.Packages) < 2 {
+			return false
+		}
+		for _, pkg := range target.Packages {
+			if !validReclamationTarget(ReclamationTarget{Kind: "package-purge", Path: pkg.Path, SHA256: pkg.SHA256, ProcessID: pkg.ProcessID, ReviewSHA256: target.ReviewSHA256, Package: pkg.Package, PackageVersion: pkg.PackageVersion, PolicyVersion: target.PolicyVersion, OwnedPaths: pkg.OwnedPaths, Identities: pkg.Identities}) {
+				return false
+			}
+		}
+		return true
+	}
+	if !filepath.IsAbs(target.Path) || filepath.Clean(target.Path) != target.Path || !validSHA256(target.SHA256) || !validSHA256(target.ReviewSHA256) || !validReclamationProcessID(target.ProcessID) {
 		return false
 	}
-	return target.Kind == "executable" && target.Interpreter == "" || target.Kind == "script" && filepath.IsAbs(target.Interpreter) && filepath.Clean(target.Interpreter) == target.Interpreter
+	switch target.Kind {
+	case "executable":
+		return target.Interpreter == "" && target.Package == "" && target.PackageVersion == "" && target.PolicyVersion == 1 && len(target.OwnedPaths) == 0 && len(target.Identities) == 0
+	case "script":
+		return filepath.IsAbs(target.Interpreter) && filepath.Clean(target.Interpreter) == target.Interpreter && target.Package == "" && target.PackageVersion == "" && target.PolicyVersion == 1 && len(target.OwnedPaths) == 0 && len(target.Identities) == 0
+	case "package-purge", "package-hold":
+		if target.Interpreter != "" || target.Package == "" || target.PackageVersion == "" || target.PolicyVersion != 1 || len(target.OwnedPaths) == 0 || len(target.Identities) != 0 || target.Kind == "package-purge" && !slices.Contains([]string{"xray", "sing-box", "cloudflared"}, target.Package) || target.Kind == "package-hold" && slices.Contains([]string{"xray", "sing-box", "cloudflared"}, target.Package) {
+			return false
+		}
+		for index, owned := range target.OwnedPaths {
+			if !filepath.IsAbs(owned) || filepath.Clean(owned) != owned || slices.Contains(target.OwnedPaths[:index], owned) {
+				return false
+			}
+		}
+		for _, identity := range target.Identities {
+			if identity.Name == "" || identity.Kind == "" || identity.Name != target.Package {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
 }
 
 func validReclamationProcessID(value string) bool {

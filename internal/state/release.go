@@ -38,6 +38,9 @@ func ReleaseDefinitions() (map[string][]byte, error) {
 		}
 	}
 	v1Schema := schemaFor(1)
+	payload := v1Schema.Properties["payload"]
+	delete(payload.Properties, "reclamation")
+	v1Schema.Properties["payload"] = payload
 	certificates := v1Schema.Properties["payload"].Properties["certificates"]
 	delete(certificates.Properties, "owner_email")
 	v1, err := json.Marshal(v1Schema)

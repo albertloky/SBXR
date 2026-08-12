@@ -35,6 +35,9 @@ func TestReleaseDefinitionsExposeTheCompleteDeterministicSchemasOneAndTwo(t *tes
 	if _, exists := schema.Properties["payload"].Properties["certificates"].Properties["owner_email"]; !exists {
 		t.Fatal("schema v2 does not contain owner_email")
 	}
+	if _, exists := schema.Properties["payload"].Properties["reclamation"]; !exists {
+		t.Fatal("schema v2 does not contain the optional safe reclamation policy")
+	}
 }
 
 func TestReleaseMigrationsExposeOnlyTheNetworkFreeSchemaOneToTwoTransformation(t *testing.T) {

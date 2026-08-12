@@ -2,9 +2,11 @@
 package ubuntu
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"syscall"
 	"time"
@@ -15,22 +17,32 @@ import (
 const lockDirectory = "run/sbxr"
 
 type Adapter struct {
-	root                   string
-	uid                    int
-	source                 ObservationSource
-	host                   Host
-	firewall               FirewallExecutor
-	cloudflare             CloudflareExecutor
-	certificate            CertificateExecutor
-	profiles               ConnectionProfilesExecutor
-	subscription           SubscriptionPublicationExecutor
-	software               SoftwareLifecycleExecutor
-	state                  systemchanges.StateRecovery
-	fresh                  *systemchanges.FreshInstallationAuthority
-	freshLock              bool
-	afterReclamationDigest func(string)
-	afterReclamationProof  func(string)
-	stopProcess            func(int, string, time.Duration, func() error) error
+	root                     string
+	uid                      int
+	source                   ObservationSource
+	host                     Host
+	firewall                 FirewallExecutor
+	cloudflare               CloudflareExecutor
+	certificate              CertificateExecutor
+	profiles                 ConnectionProfilesExecutor
+	subscription             SubscriptionPublicationExecutor
+	software                 SoftwareLifecycleExecutor
+	state                    systemchanges.StateRecovery
+	fresh                    *systemchanges.FreshInstallationAuthority
+	freshLock                bool
+	afterReclamationDigest   func(string)
+	afterReclamationProof    func(string)
+	afterPackageControlProof func(string)
+	stopProcess              func(int, string, time.Duration, func() error) error
+	packageCommand           func(time.Duration, string, ...string) ([]byte, error)
+}
+
+func runPackageCommand(timeout time.Duration, name string, arguments ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, name, arguments...)
+	command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"}
+	return command.CombinedOutput()
 }
 
 // ObservationSource reloads coordinated State lineage and volatile bindings.

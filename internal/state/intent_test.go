@@ -287,6 +287,26 @@ func completeDesiredState() DesiredState {
 	}
 }
 
+func TestDesiredStateAcceptsOnlySafeCurrentReclamationPolicy(t *testing.T) {
+	desired := completeDesiredState()
+	desired.Reclamation = ReclamationPolicy{Version: 1, Held: HeldPackagePolicy{Name: "vendor-proxy", Version: "4.5.6", DeletedExecutable: "/opt/vendor-proxy/proxy", SHA256: strings.Repeat("a", 64)}}
+	if finding := validateDesiredState(desired); finding != nil {
+		t.Fatalf("safe reclamation policy refused: %+v", finding)
+	}
+	for _, alter := range []func(*DesiredState){
+		func(value *DesiredState) { value.Reclamation.Version = 2 },
+		func(value *DesiredState) { value.Reclamation.Held.DeletedExecutable = "relative" },
+		func(value *DesiredState) { value.Reclamation.Held.SHA256 = "SECRET-MARKER" },
+		func(value *DesiredState) { value.Reclamation.Held.Name = "" },
+	} {
+		candidate := desired
+		alter(&candidate)
+		if finding := validateDesiredState(candidate); finding == nil || finding.Code != "STATE-RECLAMATION-POLICY" {
+			t.Fatalf("unsafe reclamation policy accepted: %+v", candidate.Reclamation)
+		}
+	}
+}
+
 func documentFor(t *testing.T, desired DesiredState) string {
 	t.Helper()
 	payload, err := marshalProtectedJSON(desired)

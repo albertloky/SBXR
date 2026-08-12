@@ -292,6 +292,8 @@ func (host completeRemovalHost) DeleteIrreversibleRemovalPhase(phase systemchang
 	defer cancel()
 	var err error
 	switch phase {
+	case systemchanges.PackageHoldsPhase:
+		err = host.removeReclamationHold(ctx)
 	case systemchanges.LocalStatePhase:
 		err = host.removeTree("var/lib/sbxr/state")
 	case systemchanges.SecretsPhase:
@@ -359,6 +361,9 @@ func (host completeRemovalHost) DeleteIrreversibleRemovalPhase(phase systemchang
 func (host completeRemovalHost) VerifyFinalRemovalAbsence(timeout time.Duration) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+	if host.reclamationHoldPresent(ctx) {
+		return false, nil
+	}
 	for _, name := range []string{"var/lib/sbxr/state", "etc/sbxr", "var/lib/sbxr/certificates", "var/lib/sbxr/certbot", "var/lib/sbxr/subscriptions", "var/lib/sbxr/software-lifecycle", "var/lib/sbxr/diagnostics", "opt/sbxr/releases"} {
 		if _, err := os.Lstat(host.path(name)); !errors.Is(err, fs.ErrNotExist) {
 			return false, nil
@@ -384,6 +389,25 @@ func (host completeRemovalHost) VerifyFinalRemovalAbsence(timeout time.Duration)
 		return false, nil
 	}
 	return true, nil
+}
+
+func (host completeRemovalHost) reclamationHoldPresent(ctx context.Context) bool {
+	if host.desired.Reclamation.Version == 0 {
+		return false
+	}
+	output, err := host.run(ctx, nil, "/usr/bin/apt-mark", "showhold")
+	return err == nil && slices.Contains(strings.Fields(string(output)), host.desired.Reclamation.Held.Name)
+}
+
+func (host completeRemovalHost) removeReclamationHold(ctx context.Context) error {
+	if host.desired.Reclamation.Version == 0 || !host.reclamationHoldPresent(ctx) {
+		return nil
+	}
+	name := host.desired.Reclamation.Held.Name
+	if _, err := host.run(ctx, nil, "/usr/bin/apt-mark", "unhold", name); err != nil || host.reclamationHoldPresent(ctx) {
+		return errors.New("SBXR package hold removal failed")
+	}
+	return nil
 }
 
 func (host completeRemovalHost) PrepareRemovalFinalization(timeout time.Duration) error {

@@ -13,6 +13,8 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -571,20 +573,48 @@ func (a Adapter) LoadForwardInstallationEvidence(lease systemchanges.ExecutionLe
 	return evidence, nil
 }
 
-func (a Adapter) VerifyReclamationReady(lease systemchanges.ExecutionLease, target systemchanges.ReclamationTarget, _ time.Duration) error {
+func (a Adapter) VerifyReclamationReady(lease systemchanges.ExecutionLease, changeSet string, target systemchanges.ReclamationTarget, timeout time.Duration) error {
+	if !safeName(changeSet) {
+		return errors.New("reclamation transaction unavailable")
+	}
+	if target.Kind == "package-purge-set" {
+		for _, item := range packageReclamationTargets(target) {
+			if err := a.verifyReclamationReadyTarget(lease, item, timeout); err != nil {
+				return err
+			}
+		}
+		return a.writeReclamationPackageInventory(changeSet, target, timeout)
+	}
+	if err := a.verifyReclamationReadyTarget(lease, target, timeout); err != nil {
+		return err
+	}
+	if target.Kind == "package-purge" {
+		return a.writeReclamationPackageInventory(changeSet, target, timeout)
+	}
+	return nil
+}
+
+func (a Adapter) verifyReclamationReadyTarget(lease systemchanges.ExecutionLease, target systemchanges.ReclamationTarget, timeout time.Duration) error {
 	if !lease.Authorized() || a.reclamationMounted(target.Path) {
 		return errors.New("reclamation target unavailable")
 	}
 	if err := a.verifyReclamationProcess(target); err != nil {
 		return err
 	}
-	targetInfo, targetErr := os.Lstat(path.Join(a.root, strings.TrimPrefix(target.Path, "/")))
-	transactionInfo, transactionErr := os.Lstat(path.Join(a.root, transactionDirectory))
-	if targetErr != nil || transactionErr != nil || !sameFilesystem(targetInfo, transactionInfo) {
-		return errors.New("reclamation target cannot enter protected quarantine")
+	if target.Kind != "package-purge" {
+		targetInfo, targetErr := os.Lstat(path.Join(a.root, strings.TrimPrefix(target.Path, "/")))
+		transactionInfo, transactionErr := os.Lstat(path.Join(a.root, transactionDirectory))
+		if targetErr != nil || transactionErr != nil || !sameFilesystem(targetInfo, transactionInfo) {
+			return errors.New("reclamation target cannot enter protected quarantine")
+		}
 	}
-	_, _, err := a.reclamationDigestAt(path.Join(a.root, strings.TrimPrefix(target.Path, "/")), target)
-	return err
+	if _, _, err := a.reclamationDigestAt(path.Join(a.root, strings.TrimPrefix(target.Path, "/")), target); err != nil {
+		return err
+	}
+	if target.Package == "" {
+		return nil
+	}
+	return a.verifyReclamationPackage(target, timeout)
 }
 
 func sameFilesystem(first, second os.FileInfo) bool {
@@ -593,11 +623,48 @@ func sameFilesystem(first, second os.FileInfo) bool {
 	return firstOK && secondOK && firstStat.Dev == secondStat.Dev
 }
 
-func (a Adapter) DeleteReclamationTarget(lease systemchanges.ExecutionLease, changeSet string, target systemchanges.ReclamationTarget, _ time.Duration) (systemchanges.StepEvidence, error) {
+func (a Adapter) DeleteReclamationTarget(lease systemchanges.ExecutionLease, changeSet string, target systemchanges.ReclamationTarget, timeout time.Duration) (systemchanges.StepEvidence, error) {
+	if target.Kind == "package-purge-set" {
+		items := packageReclamationTargets(target)
+		for _, item := range items {
+			if _, err := a.purgeReclamationPackage(item, timeout); err != nil {
+				return systemchanges.StepEvidence{}, err
+			}
+		}
+		if err := a.verifyReclamationPackageInventory(changeSet, items, timeout); err != nil {
+			return systemchanges.StepEvidence{}, err
+		}
+		digest := sha256.Sum256([]byte(target.Kind + "\x00" + target.ReviewSHA256))
+		return systemchanges.StepEvidence{Code: "reclamation-packages-purged", SHA256: hex.EncodeToString(digest[:])}, nil
+	}
 	if !lease.Authorized() || !safeName(changeSet) || a.reclamationMounted(target.Path) {
 		return systemchanges.StepEvidence{}, errors.New("reclamation target unavailable")
 	}
-	return a.deleteReclamationTarget(changeSet, target)
+	if target.Kind == "package-purge" {
+		evidence, err := a.purgeReclamationPackage(target, timeout)
+		if err != nil {
+			return systemchanges.StepEvidence{}, err
+		}
+		return evidence, a.verifyReclamationPackageInventory(changeSet, []systemchanges.ReclamationTarget{target}, timeout)
+	}
+	name := path.Join(a.root, strings.TrimPrefix(target.Path, "/"))
+	if target.Kind == "package-hold" {
+		if _, err := os.Lstat(name); errors.Is(err, fs.ErrNotExist) {
+			if err := a.holdReclamationPackage(target, timeout); err != nil {
+				return systemchanges.StepEvidence{}, err
+			}
+			digest := sha256.Sum256([]byte(target.Kind + "\x00" + target.Package + "\x00" + target.Path))
+			return systemchanges.StepEvidence{Code: "reclamation-package-held", SHA256: hex.EncodeToString(digest[:])}, nil
+		}
+	}
+	evidence, err := a.deleteReclamationTarget(changeSet, target)
+	if err != nil || target.Kind != "package-hold" {
+		return evidence, err
+	}
+	if err := a.holdReclamationPackage(target, timeout); err != nil {
+		return systemchanges.StepEvidence{}, err
+	}
+	return evidence, nil
 }
 
 func (a Adapter) deleteReclamationTarget(changeSet string, target systemchanges.ReclamationTarget) (systemchanges.StepEvidence, error) {
@@ -642,6 +709,16 @@ func (a Adapter) deleteReclamationTarget(changeSet string, target systemchanges.
 }
 
 func (a Adapter) StopReclamationProcess(lease systemchanges.ExecutionLease, target systemchanges.ReclamationTarget, timeout time.Duration) (systemchanges.StepEvidence, error) {
+	if target.Kind == "package-purge-set" {
+		items := packageReclamationTargets(target)
+		for _, item := range items {
+			if _, err := a.StopReclamationProcess(lease, item, timeout); err != nil {
+				return systemchanges.StepEvidence{}, err
+			}
+		}
+		digest := sha256.Sum256([]byte(target.Kind + "\x00" + target.ReviewSHA256))
+		return systemchanges.StepEvidence{Code: "reclamation-package-processes-stopped", SHA256: hex.EncodeToString(digest[:])}, nil
+	}
 	if !lease.Authorized() {
 		return systemchanges.StepEvidence{}, errors.New("reclamation process unavailable")
 	}
@@ -679,6 +756,21 @@ func (a Adapter) StopReclamationProcess(lease systemchanges.ExecutionLease, targ
 }
 
 func (a Adapter) InspectReclamationTarget(lease systemchanges.ExecutionLease, changeSet string, target systemchanges.ReclamationTarget, _ time.Duration) (systemchanges.StepEffect, error) {
+	if target.Kind == "package-purge-set" {
+		items := packageReclamationTargets(target)
+		if _, err := a.readReclamationPackageInventory(changeSet, items); err != nil {
+			return "", err
+		}
+		for _, item := range items {
+			if a.packageInstalled(item, time.Minute) {
+				return systemchanges.StepEffectPresent, nil
+			}
+		}
+		if err := a.verifyReclamationPackageInventory(changeSet, items, time.Minute); err != nil {
+			return "", err
+		}
+		return systemchanges.StepEffectAbsent, nil
+	}
 	if !lease.RecoveryAuthorized() || !safeName(changeSet) {
 		return "", errors.New("reclamation recovery unavailable")
 	}
@@ -690,13 +782,244 @@ func (a Adapter) InspectReclamationTarget(lease systemchanges.ExecutionLease, ch
 		}
 		return systemchanges.StepEffectPresent, nil
 	}
+	if target.Kind == "package-purge" {
+		targets := []systemchanges.ReclamationTarget{target}
+		if _, err := a.readReclamationPackageInventory(changeSet, targets); err != nil {
+			return "", err
+		}
+		if a.packageInstalled(target, time.Minute) {
+			return systemchanges.StepEffectPresent, nil
+		}
+		if err := a.verifyReclamationPackageInventory(changeSet, targets, time.Minute); err != nil {
+			return "", err
+		}
+		return systemchanges.StepEffectAbsent, nil
+	}
 	if _, err := os.Lstat(name); errors.Is(err, fs.ErrNotExist) {
+		if target.Kind == "package-hold" && !a.packageHeld(target.Package, time.Minute) {
+			return systemchanges.StepEffectPresent, nil
+		}
 		return systemchanges.StepEffectAbsent, nil
 	}
 	if _, _, err := a.reclamationDigestAt(name, target); err != nil {
 		return "", err
 	}
 	return systemchanges.StepEffectPresent, nil
+}
+
+func packageReclamationTargets(target systemchanges.ReclamationTarget) []systemchanges.ReclamationTarget {
+	result := make([]systemchanges.ReclamationTarget, len(target.Packages))
+	for index, item := range target.Packages {
+		result[index] = systemchanges.ReclamationTarget{Kind: "package-purge", Path: item.Path, SHA256: item.SHA256, ProcessID: item.ProcessID, ReviewSHA256: target.ReviewSHA256, Package: item.Package, PackageVersion: item.PackageVersion, PolicyVersion: target.PolicyVersion, OwnedPaths: append([]string(nil), item.OwnedPaths...), Identities: append([]systemchanges.ReclamationIdentity(nil), item.Identities...)}
+	}
+	return result
+}
+
+func (a Adapter) reclamationPackageCommand(timeout time.Duration, name string, arguments ...string) ([]byte, error) {
+	run := a.packageCommand
+	if run == nil {
+		run = runPackageCommand
+	}
+	return run(timeout, name, arguments...)
+}
+
+func (a Adapter) packageInstalled(target systemchanges.ReclamationTarget, timeout time.Duration) bool {
+	output, err := a.reclamationPackageCommand(timeout, "/usr/bin/dpkg-query", "-W", "-f=${Status}\t${Version}\n", target.Package)
+	return err == nil && string(output) == "install ok installed\t"+target.PackageVersion+"\n"
+}
+
+func (a Adapter) packageHeld(name string, timeout time.Duration) bool {
+	output, err := a.reclamationPackageCommand(timeout, "/usr/bin/apt-mark", "showhold")
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(strings.TrimSuffix(string(output), "\n"), "\n") {
+		if line == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (a Adapter) verifyReclamationPackage(target systemchanges.ReclamationTarget, timeout time.Duration) error {
+	if !a.packageInstalled(target, timeout) || target.Kind == "package-hold" && a.packageHeld(target.Package, timeout) {
+		return errors.New("reclamation package changed")
+	}
+	if target.Kind != "package-purge" {
+		return nil
+	}
+	infoDirectory := path.Join(a.root, "var/lib/dpkg/info")
+	entries, err := filepath.Glob(path.Join(infoDirectory, target.Package+".*"))
+	qualified, qualifiedErr := filepath.Glob(path.Join(infoDirectory, target.Package+":*.*"))
+	if err != nil || qualifiedErr != nil {
+		return errors.New("package control inventory unavailable")
+	}
+	entries = append(entries, qualified...)
+	var lists []string
+	for _, entry := range entries {
+		base := filepath.Base(entry)
+		dot := strings.LastIndexByte(base, '.')
+		if dot < 0 {
+			return errors.New("package control inventory unavailable")
+		}
+		suffix := base[dot+1:]
+		if suffix != "list" && suffix != "md5sums" {
+			return errors.New("package maintainer behavior is not safely bounded")
+		}
+		if suffix == "list" {
+			lists = append(lists, entry)
+		}
+	}
+	if len(lists) != 1 {
+		return errors.New("package owned paths unavailable")
+	}
+	owned, err := a.readStablePackageControl(infoDirectory, lists[0])
+	if err != nil || !slices.Equal(strings.Fields(string(owned)), target.OwnedPaths) {
+		return errors.New("package owned paths changed")
+	}
+	return nil
+}
+
+func (a Adapter) readStablePackageControl(directory, name string) ([]byte, error) {
+	directoryBefore, err := os.Lstat(directory)
+	if err != nil || !directoryBefore.IsDir() || directoryBefore.Mode().Perm()&0o022 != 0 || int(directoryBefore.Sys().(*syscall.Stat_t).Uid) != a.uid {
+		return nil, errors.New("package control directory is not protected")
+	}
+	file, err := os.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	before, err := file.Stat()
+	if err != nil || !before.Mode().IsRegular() || before.Mode().Perm()&0o022 != 0 || before.Sys().(*syscall.Stat_t).Nlink != 1 || int(before.Sys().(*syscall.Stat_t).Uid) != a.uid {
+		return nil, errors.New("package control file is not protected")
+	}
+	body, err := io.ReadAll(file)
+	after, statErr := file.Stat()
+	pathAfter, pathErr := os.Lstat(name)
+	directoryAfter, directoryErr := os.Lstat(directory)
+	if err != nil || statErr != nil || pathErr != nil || directoryErr != nil || !os.SameFile(before, after) || before.Size() != after.Size() || before.ModTime() != after.ModTime() || !os.SameFile(after, pathAfter) || !os.SameFile(directoryBefore, directoryAfter) {
+		return nil, errors.New("package control file changed")
+	}
+	return body, nil
+}
+
+func (a Adapter) purgeReclamationPackage(target systemchanges.ReclamationTarget, timeout time.Duration) (systemchanges.StepEvidence, error) {
+	if a.packageInstalled(target, timeout) {
+		if err := a.verifyReclamationPackage(target, timeout); err != nil {
+			return systemchanges.StepEvidence{}, err
+		}
+		if a.afterPackageControlProof != nil {
+			a.afterPackageControlProof(target.Package)
+		}
+		if err := a.verifyReclamationPackage(target, timeout); err != nil {
+			return systemchanges.StepEvidence{}, err
+		}
+		if _, err := a.reclamationPackageCommand(timeout, "/usr/bin/dpkg", "--purge", "--no-triggers", "--", target.Package); err != nil || a.packageInstalled(target, timeout) {
+			return systemchanges.StepEvidence{}, errors.New("exact package purge failed")
+		}
+	}
+	digest := sha256.Sum256([]byte(target.Kind + "\x00" + target.Package + "\x00" + target.PackageVersion))
+	return systemchanges.StepEvidence{Code: "reclamation-package-purged", SHA256: hex.EncodeToString(digest[:])}, nil
+}
+
+func (a Adapter) packageInventory(timeout time.Duration) (map[string]string, error) {
+	output, err := a.reclamationPackageCommand(timeout, "/usr/bin/dpkg-query", "-W", "-f=${Package}\t${Version}\t${Architecture}\t${Status}\t${Triggers-Pending}\t${Triggers-Awaited}\n")
+	if err != nil {
+		return nil, errors.New("package inventory unavailable")
+	}
+	result := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSuffix(string(output), "\n"), "\n") {
+		fields := strings.Split(line, "\t")
+		if len(fields) != 6 || slices.Contains(fields[:4], "") || result[fields[0]] != "" {
+			return nil, errors.New("package inventory malformed")
+		}
+		result[fields[0]] = strings.Join(fields[1:], "\t")
+	}
+	return result, nil
+}
+
+type reclamationPackageInventory struct {
+	Review   string            `json:"review"`
+	Packages map[string]string `json:"packages"`
+}
+
+func (a Adapter) writeReclamationPackageInventory(changeSet string, target systemchanges.ReclamationTarget, timeout time.Duration) error {
+	inventory, err := a.packageInventory(timeout)
+	if err != nil {
+		return err
+	}
+	body, err := json.Marshal(reclamationPackageInventory{Review: target.ReviewSHA256, Packages: inventory})
+	if err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(a.root)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	name := path.Join(transactionDirectory, changeSet, "reclamation-packages.json")
+	if existing, readErr := root.ReadFile(name); readErr == nil {
+		if !bytes.Equal(existing, body) {
+			return errors.New("package inventory changed before reclamation")
+		}
+		return nil
+	}
+	if _, err := writeProtected(root, name, bytes.NewReader(body), a.uid); err != nil {
+		return err
+	}
+	return syncDirectory(root, path.Join(transactionDirectory, changeSet))
+}
+
+func (a Adapter) verifyReclamationPackageInventory(changeSet string, targets []systemchanges.ReclamationTarget, timeout time.Duration) error {
+	before, err := a.readReclamationPackageInventory(changeSet, targets)
+	if err != nil {
+		return err
+	}
+	for _, target := range targets {
+		delete(before, target.Package)
+	}
+	after, err := a.packageInventory(timeout)
+	if err != nil || !reflect.DeepEqual(before, after) {
+		return errors.New("package purge changed unrelated packages")
+	}
+	return nil
+}
+
+func (a Adapter) readReclamationPackageInventory(changeSet string, targets []systemchanges.ReclamationTarget) (map[string]string, error) {
+	root, err := os.OpenRoot(a.root)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	name := path.Join(transactionDirectory, changeSet, "reclamation-packages.json")
+	if err := verifyFile(root, name, a.uid); err != nil {
+		return nil, errors.New("durable package inventory unavailable")
+	}
+	body, err := root.ReadFile(name)
+	if err != nil {
+		return nil, err
+	}
+	var before reclamationPackageInventory
+	if json.Unmarshal(body, &before) != nil || !validDigest(before.Review) || before.Review != targets[0].ReviewSHA256 || before.Packages == nil {
+		return nil, errors.New("durable package inventory invalid")
+	}
+	for _, target := range targets {
+		if !strings.HasPrefix(before.Packages[target.Package], target.PackageVersion+"\t") {
+			return nil, errors.New("reviewed package inventory changed")
+		}
+	}
+	return before.Packages, nil
+}
+
+func (a Adapter) holdReclamationPackage(target systemchanges.ReclamationTarget, timeout time.Duration) error {
+	if !a.packageInstalled(target, timeout) {
+		return errors.New("damaged package changed")
+	}
+	if _, err := a.reclamationPackageCommand(timeout, "/usr/bin/apt-mark", "hold", target.Package); err != nil || !a.packageHeld(target.Package, timeout) {
+		return errors.New("damaged package hold failed")
+	}
+	return nil
 }
 
 func (a Adapter) reclamationDigest(target systemchanges.ReclamationTarget) (string, error) {

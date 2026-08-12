@@ -24,6 +24,8 @@ go test ./internal/healthdiagnostics -run '^TestCheckFailsClosedOnMalformedContr
 
 Require malformed, contradictory, timed-out, panicking, erroring, and non-allowlisted inspection output to become Required `Unknown` with `HEALTH-DIAGNOSTICS-CHECK-UNKNOWN` and a stopping gate fact. Raw output and injected markers must not cross the Interface.
 
+Require the current State reclamation policy to produce one persistent Advisory naming only the exact held package/version, deleted executable, native hold status, and no-rollback fact. A returned executable is typed `NETWORK-RECLAMATION-EXECUTABLE-RETURNED` drift and is never deleted by Diagnostics. Missing hold or unreadable evidence remains typed safe drift/Unknown.
+
 ### HD-CHECK-03 — Required and Advisory facts
 
 Run:

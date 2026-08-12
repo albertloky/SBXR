@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"path/filepath"
 )
 
 // ClientAccessValue is a credential-bearing value used by an outside client.
@@ -87,6 +88,19 @@ type DesiredState struct {
 	Certificates       CertificateSettings  `json:"certificates"`
 	NetworkPolicy      NetworkPolicyInputs  `json:"network_policy"`
 	Software           SoftwareSettings     `json:"software"`
+	Reclamation        ReclamationPolicy    `json:"reclamation,omitempty"`
+}
+
+type ReclamationPolicy struct {
+	Version uint16            `json:"version"`
+	Held    HeldPackagePolicy `json:"held_package"`
+}
+
+type HeldPackagePolicy struct {
+	Name              string `json:"name"`
+	Version           string `json:"version"`
+	DeletedExecutable string `json:"deleted_executable"`
+	SHA256            string `json:"sha256"`
 }
 
 // CandidateSHA256 returns the exact protected serialization checksum State
@@ -284,6 +298,9 @@ type SoftwareSettings struct {
 }
 
 func validateDesiredState(desired DesiredState) *Finding {
+	if finding := validateReclamationPolicy(desired.Reclamation); finding != nil {
+		return finding
+	}
 	profiles := desired.ConnectionProfiles
 	if desired.Installation.ID == "" || desired.Installation.Domain == "" {
 		return intentFinding("STATE-INTENT-INCOMPLETE", "installation identity", "a required identity value is absent", "one installation ID and domain", "the installation cannot be identified", "complete the installation identity and review again")
@@ -344,6 +361,20 @@ func validateDesiredState(desired DesiredState) *Finding {
 	}
 	if portConflict(desired) {
 		return crossSectionIntent("listener ports", "two TCP or UDP listeners conflict")
+	}
+	return nil
+}
+
+func validateReclamationPolicy(policy ReclamationPolicy) *Finding {
+	if policy.Version == 0 && policy.Held == (HeldPackagePolicy{}) {
+		return nil
+	}
+	if policy.Version != 1 {
+		return intentFinding("STATE-RECLAMATION-POLICY", "reclamation policy", "an unsupported policy shape", "version 1 with one exact held package", "State cannot safely diagnose or remove an ambiguous hold", "rebuild the installation Plan")
+	}
+	held := policy.Held
+	if held.Name == "" || held.Version == "" || !filepath.IsAbs(held.DeletedExecutable) || filepath.Clean(held.DeletedExecutable) != held.DeletedExecutable || !validSHA256(held.SHA256) {
+		return intentFinding("STATE-RECLAMATION-POLICY", "reclamation policy", "an invalid package, path, version, or digest", "one exact safe held-package policy", "State never stores raw package arguments or file contents", "rebuild the installation Plan")
 	}
 	return nil
 }

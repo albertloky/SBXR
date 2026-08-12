@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -13,6 +14,23 @@ import (
 	"github.com/albertloky/SBXR/internal/state"
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
+
+func TestReclamationDiagnosticsPersistentlyReportsHoldAndReturnedExecutableDrift(t *testing.T) {
+	policy := state.ReclamationPolicy{Version: 1, Held: state.HeldPackagePolicy{Name: "vendor-proxy", Version: "4.5.6", DeletedExecutable: "/opt/vendor-proxy/proxy", SHA256: strings.Repeat("a", 64)}}
+	run := func(context.Context, string, ...string) ([]byte, error) { return []byte("vendor-proxy\n"), nil }
+	held := reclamationDiagnostics(t.Context(), policy, func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }, run)
+	if len(held) != 1 || held[0].HoldStatus != "Held" || held[0].Code != "NETWORK-RECLAMATION-PACKAGE-HELD" || !held[0].NoRollback {
+		t.Fatalf("held package advisory = %+v", held)
+	}
+	returned := reclamationDiagnostics(t.Context(), policy, func(string) (os.FileInfo, error) { return nil, nil }, run)
+	if len(returned) != 1 || returned[0].HoldStatus != "Executable returned" || returned[0].Code != "NETWORK-RECLAMATION-EXECUTABLE-RETURNED" {
+		t.Fatalf("returned executable drift = %+v", returned)
+	}
+	missing := reclamationDiagnostics(t.Context(), policy, func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }, func(context.Context, string, ...string) ([]byte, error) { return nil, nil })
+	if len(missing) != 1 || missing[0].HoldStatus != "Hold missing" || missing[0].Code != "NETWORK-RECLAMATION-HOLD-MISSING" {
+		t.Fatalf("missing hold drift = %+v", missing)
+	}
+}
 
 type healthEventMemory struct {
 	events []healthdiagnostics.DiagnosticEvent

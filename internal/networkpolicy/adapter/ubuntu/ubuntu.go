@@ -130,14 +130,6 @@ func (a Adapter) reclamationFacts(paths []string, listeners []networkpolicy.List
 	if err != nil {
 		return networkpolicy.ReclamationFacts{}, err
 	}
-	passwd, err := os.ReadFile(a.path("/etc/passwd"))
-	if err != nil {
-		return networkpolicy.ReclamationFacts{}, err
-	}
-	group, err := os.ReadFile(a.path("/etc/group"))
-	if err != nil {
-		return networkpolicy.ReclamationFacts{}, err
-	}
 	if _, err := os.ReadFile(a.path("/proc/self/mountinfo")); err != nil {
 		return networkpolicy.ReclamationFacts{}, err
 	}
@@ -203,6 +195,16 @@ func (a Adapter) reclamationFacts(paths []string, listeners []networkpolicy.List
 			facts.UnsafePaths = append(facts.UnsafePaths, path)
 			continue
 		}
+		ownedPackage := ""
+		for _, pkg := range facts.Packages {
+			if slices.Contains(pkg.OwnedPaths, path) {
+				ownedPackage = pkg.Name
+				break
+			}
+		}
+		if info, err := os.Lstat(a.path(path)); err == nil && info.IsDir() && ownedPackage != "" {
+			continue
+		}
 		digest, info, err := a.stableRegularDigest(a.path(path))
 		if err != nil {
 			facts.UnsafePaths = append(facts.UnsafePaths, path)
@@ -219,23 +221,8 @@ func (a Adapter) reclamationFacts(paths []string, listeners []networkpolicy.List
 		if stat != nil {
 			file.OwnerUID, file.Links = stat.Uid, uint64(stat.Nlink)
 		}
-		for _, pkg := range facts.Packages {
-			if pkg.Owns == path {
-				file.Package = pkg.Name
-			}
-		}
+		file.Package = ownedPackage
 		facts.Executables = append(facts.Executables, file)
-	}
-	for _, source := range []struct {
-		data []byte
-		kind string
-	}{{passwd, "service user"}, {group, "service group"}} {
-		for _, line := range strings.Split(string(source.data), "\n") {
-			name, _, ok := strings.Cut(line, ":")
-			if ok && slices.Contains([]string{"xray", "sing-box", "cloudflared", "sbxr"}, name) {
-				facts.Identities = append(facts.Identities, networkpolicy.IdentityConflict{Name: name, Kind: source.kind})
-			}
-		}
 	}
 	return facts, nil
 }

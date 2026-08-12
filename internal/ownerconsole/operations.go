@@ -71,10 +71,16 @@ type SupportBundlePresentation struct {
 	Archive, CreatedAt string
 }
 
+type ReclamationAdvisoryPresentation struct {
+	Package, Version, DeletedExecutable, HoldStatus, Code string
+	NoRollback                                            bool
+}
+
 type DiagnosticsPresentation struct {
 	Installation        InstallationStatus
 	Modules             []ModuleHealthPresentation
 	Services            []ServiceHealthPresentation
+	Reclamation         []ReclamationAdvisoryPresentation
 	Bundles             []SupportBundlePresentation
 	Retention           DiagnosticsRetention
 	ExternalCopyWarning string
@@ -112,9 +118,15 @@ func validatedDiagnostics(presentation DiagnosticsPresentation) (DiagnosticsPres
 		}
 		seenBundles[bundle.Archive] = true
 	}
+	for _, advisory := range presentation.Reclamation {
+		if !safeProviderLines([]string{advisory.Package, advisory.Version, advisory.DeletedExecutable, advisory.HoldStatus, advisory.Code}, 5) || !advisory.NoRollback || advisory.HoldStatus != "Held" && advisory.HoldStatus != "Hold missing" && advisory.HoldStatus != "Executable returned" && advisory.HoldStatus != "Unknown" {
+			return DiagnosticsPresentation{}, false
+		}
+	}
 	presentation.Modules = append([]ModuleHealthPresentation(nil), presentation.Modules...)
 	presentation.Services = append([]ServiceHealthPresentation(nil), presentation.Services...)
 	presentation.Bundles = append([]SupportBundlePresentation(nil), presentation.Bundles...)
+	presentation.Reclamation = append([]ReclamationAdvisoryPresentation(nil), presentation.Reclamation...)
 	return presentation, true
 }
 
@@ -166,6 +178,12 @@ func diagnosticsLines(presentation DiagnosticsPresentation, valid bool, selected
 	lines = append(lines, "", "SERVICES")
 	for _, service := range presentation.Services {
 		lines = append(lines, fmt.Sprintf("%s - %s", service.Service, service.Status))
+	}
+	if len(presentation.Reclamation) > 0 {
+		lines = append(lines, "", "RECLAMATION ADVISORY")
+		for _, advisory := range presentation.Reclamation {
+			lines = append(lines, fmt.Sprintf("%s %s - %s", advisory.Package, advisory.Version, advisory.HoldStatus), "Deleted executable - "+advisory.DeletedExecutable, "Code - "+advisory.Code, "No rollback exists; explicit or manual package repair may restore the executable.")
+		}
 	}
 	lines = append(lines, "",
 		fmt.Sprintf("Redacted events - %d days or %d MiB, oldest eligible first", presentation.Retention.EventDays, presentation.Retention.EventMiB),

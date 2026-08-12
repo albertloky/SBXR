@@ -6,13 +6,46 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/albertloky/SBXR/internal/ownerconsole"
+	"github.com/albertloky/SBXR/internal/state"
 	"github.com/albertloky/SBXR/internal/systemchanges"
 	systemubuntu "github.com/albertloky/SBXR/internal/systemchanges/adapter/ubuntu"
 )
+
+func TestCompleteRemovalRemovesOnlyTheSBXROwnedPackageHoldWithoutRepair(t *testing.T) {
+	held := true
+	var commands [][]string
+	host := completeRemovalHost{desired: state.DesiredState{Reclamation: state.ReclamationPolicy{Version: 1, Held: state.HeldPackagePolicy{Name: "vendor-proxy", Version: "4.5.6", DeletedExecutable: "/opt/vendor-proxy/proxy", SHA256: strings.Repeat("a", 64)}}}, run: func(_ context.Context, _ []byte, name string, args ...string) ([]byte, error) {
+		commands = append(commands, append([]string{name}, args...))
+		if name != "/usr/bin/apt-mark" {
+			return nil, errors.New("unexpected command")
+		}
+		if len(args) == 1 && args[0] == "showhold" {
+			if held {
+				return []byte("unrelated\nvendor-proxy\n"), nil
+			}
+			return []byte("unrelated\n"), nil
+		}
+		if len(args) == 2 && args[0] == "unhold" && args[1] == "vendor-proxy" {
+			held = false
+			return nil, nil
+		}
+		return nil, errors.New("unexpected arguments")
+	}}
+	if _, err := host.DeleteIrreversibleRemovalPhase(systemchanges.PackageHoldsPhase, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range commands {
+		joined := strings.Join(command, " ")
+		if strings.Contains(joined, "install") || strings.Contains(joined, "repair") || strings.Contains(joined, "purge") || strings.Contains(joined, "unhold unrelated") {
+			t.Fatalf("Complete removal broadened package work: %s", joined)
+		}
+	}
+}
 
 func TestCompleteRemovalLocalDeletionDoesNotFollowSymlinksAndDeletesRunnerLast(t *testing.T) {
 	root := t.TempDir()

@@ -34,6 +34,8 @@ go test -v ./internal/state ./internal/state/adapter/filesystem -run '^(TestLoad
 
 Pass when the persisted schema `1` predecessor reports one explicit schema `1` to `2` path and refuses publication until the Owner supplies the Certificate Lifecycle renewal email. Load and PrepareCommit report the ordered step, meaning change, generated-service effects, interruption, required Owner input, and starting-release readability without exposing protected values. Exact unchanged schema-1 repair and Complete removal rollback remain schema 1 and available; they do not claim or perform migration. Every other schema, unknown or deprecated field, and unsupported Release Identity must be refused without changing current State. Downgrade has no reverse migration; Software Lifecycle must prove the target release can read current Desired State before it creates a Plan.
 
+Schema 2 may persist one optional reclamation policy version 1 containing only the held package name and version, deleted executable path and SHA-256. It stores no raw arguments, contents, command output, identities, process facts, or secrets. The policy remains current through health, Diagnostics, migration, and Complete removal; schema 1 remains unchanged.
+
 ## `STATE-MODULE-PUBLISH` — Module Verification — Codex
 
 Run:

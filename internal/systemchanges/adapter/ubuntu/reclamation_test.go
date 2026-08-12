@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -229,5 +230,222 @@ func TestReclamationScriptAndProcessHandleRecheckExactProcess(t *testing.T) {
 	}
 	if err := adapter.stopProcess(4242, filepath.Join(proc, "status"), time.Second, func() error { return adapter.verifyReclamationProcess(target) }); err == nil {
 		t.Fatal("process replacement after handle acquisition was accepted")
+	}
+}
+
+func TestPackageReclamationUsesOnlyExactNativePurgeAndHoldCommands(t *testing.T) {
+	t.Run("allowlisted purge", func(t *testing.T) {
+		installed := true
+		var commands []string
+		root := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(root, "var/lib/dpkg/info"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "var/lib/dpkg/info/xray.list"), []byte("/opt/xray\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		adapter := NewAt(root, nil, nil)
+		adapter.packageCommand = func(_ time.Duration, name string, arguments ...string) ([]byte, error) {
+			commands = append(commands, name+" "+strings.Join(arguments, " "))
+			switch {
+			case name == "/usr/bin/dpkg-query" && len(arguments) == 3 && installed:
+				return []byte("install ok installed\t1.2.3\n"), nil
+			case name == "/usr/bin/dpkg-query" && len(arguments) == 3:
+				return nil, os.ErrNotExist
+			case name == "/usr/bin/dpkg-query" && installed:
+				return []byte("xray\t1.2.3\tamd64\tinstall ok installed\t\t\nunrelated\t9.9\tamd64\tinstall ok installed\t\t\n"), nil
+			case name == "/usr/bin/dpkg-query":
+				return []byte("unrelated\t9.9\tamd64\tinstall ok installed\t\t\n"), nil
+			case name == "/usr/bin/dpkg":
+				installed = false
+				return nil, nil
+			default:
+				return nil, fmt.Errorf("unexpected command")
+			}
+		}
+		target := systemchanges.ReclamationTarget{Kind: "package-purge", Package: "xray", PackageVersion: "1.2.3", OwnedPaths: []string{"/opt/xray"}}
+		if _, err := adapter.purgeReclamationPackage(target, time.Second); err != nil {
+			t.Fatal(err)
+		}
+		joined := strings.Join(commands, "\n")
+		if !strings.Contains(joined, "/usr/bin/dpkg --purge --no-triggers -- xray") || strings.Contains(joined, "apt-get") || strings.Contains(joined, "autoremove") || strings.Contains(joined, "upgrade") {
+			t.Fatalf("package purge commands = %s", joined)
+		}
+	})
+
+	t.Run("unsupported package hold", func(t *testing.T) {
+		held := false
+		adapter := NewAt(t.TempDir(), nil, nil)
+		adapter.packageCommand = func(_ time.Duration, name string, arguments ...string) ([]byte, error) {
+			switch {
+			case name == "/usr/bin/dpkg-query":
+				return []byte("install ok installed\t4.5.6\n"), nil
+			case name == "/usr/bin/apt-mark" && len(arguments) == 2 && arguments[0] == "hold" && arguments[1] == "vendor-proxy":
+				held = true
+				return []byte("vendor-proxy set on hold.\n"), nil
+			case name == "/usr/bin/apt-mark" && len(arguments) == 1 && arguments[0] == "showhold":
+				if held {
+					return []byte("vendor-proxy\n"), nil
+				}
+				return nil, nil
+			default:
+				return nil, fmt.Errorf("unexpected command")
+			}
+		}
+		target := systemchanges.ReclamationTarget{Kind: "package-hold", Package: "vendor-proxy", PackageVersion: "4.5.6"}
+		if err := adapter.holdReclamationPackage(target, time.Second); err != nil || !held {
+			t.Fatalf("package hold = %v, held=%t", err, held)
+		}
+	})
+}
+
+func TestPackagePurgeRefusesUnrelatedDependencyMutation(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "var/lib/dpkg/info"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "var/lib/dpkg/info/xray:amd64.postrm"), []byte("#!/bin/sh\nrm -rf /srv/site\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	adapter := NewAt(root, nil, nil)
+	adapter.packageCommand = func(_ time.Duration, name string, arguments ...string) ([]byte, error) {
+		if name == "/usr/bin/dpkg-query" && len(arguments) == 3 {
+			return []byte("install ok installed\t1.2.3\n"), nil
+		}
+		if name == "/usr/bin/dpkg-query" {
+			return []byte("xray\t1.2.3\tamd64\tinstall ok installed\t\t\nunrelated\t9.9\tamd64\tinstall ok installed\t\t\n"), nil
+		}
+		return nil, fmt.Errorf("unexpected mutation command")
+	}
+	target := systemchanges.ReclamationTarget{Kind: "package-purge", Package: "xray", PackageVersion: "1.2.3", OwnedPaths: []string{"/opt/xray"}}
+	if _, err := adapter.purgeReclamationPackage(target, time.Second); err == nil {
+		t.Fatal("package with hostile maintainer script was accepted")
+	}
+}
+
+func TestPackagePurgeRefusesChangedOwnedPaths(t *testing.T) {
+	root := t.TempDir()
+	info := filepath.Join(root, "var/lib/dpkg/info")
+	if err := os.MkdirAll(info, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(info, "xray.list"), []byte("/opt/xray\n/var/www/site\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	adapter := NewAt(root, nil, nil)
+	adapter.packageCommand = func(_ time.Duration, name string, arguments ...string) ([]byte, error) {
+		if name == "/usr/bin/dpkg-query" && len(arguments) == 3 {
+			return []byte("install ok installed\t1.2.3\n"), nil
+		}
+		return nil, fmt.Errorf("unexpected mutation command")
+	}
+	target := systemchanges.ReclamationTarget{Kind: "package-purge", Package: "xray", PackageVersion: "1.2.3", OwnedPaths: []string{"/opt/xray"}}
+	if _, err := adapter.purgeReclamationPackage(target, time.Second); err == nil {
+		t.Fatal("changed package-owned paths were accepted")
+	}
+}
+
+func TestPackagePurgeRefusesConffilesSymlinksAndLateReplacement(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		setup      func(string) error
+		hook       func(string)
+		wrongOwner bool
+	}{
+		{name: "conffiles", setup: func(info string) error {
+			return os.WriteFile(filepath.Join(info, "xray.conffiles"), []byte("/var/www/site\n"), 0o600)
+		}},
+		{name: "symlink list", setup: func(info string) error {
+			if err := os.WriteFile(filepath.Join(info, "owned"), []byte("/opt/xray\n"), 0o600); err != nil {
+				return err
+			}
+			return os.Symlink("owned", filepath.Join(info, "xray.list"))
+		}},
+		{name: "wrong owner directory", wrongOwner: true, setup: func(info string) error {
+			return os.WriteFile(filepath.Join(info, "xray.list"), []byte("/opt/xray\n"), 0o600)
+		}},
+		{name: "replacement after proof", setup: func(info string) error {
+			return os.WriteFile(filepath.Join(info, "xray.list"), []byte("/opt/xray\n"), 0o600)
+		}, hook: func(info string) {
+			if err := os.WriteFile(filepath.Join(info, "replacement"), []byte("/opt/xray\n/var/www/site\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(filepath.Join(info, "replacement"), filepath.Join(info, "xray.list")); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			info := filepath.Join(root, "var/lib/dpkg/info")
+			if err := os.MkdirAll(info, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := test.setup(info); err != nil {
+				t.Fatal(err)
+			}
+			adapter := NewAt(root, nil, nil)
+			if test.wrongOwner {
+				adapter.uid++
+			}
+			adapter.packageCommand = func(_ time.Duration, name string, arguments ...string) ([]byte, error) {
+				if name == "/usr/bin/dpkg-query" && len(arguments) == 3 {
+					return []byte("install ok installed\t1.2.3\n"), nil
+				}
+				return nil, fmt.Errorf("unexpected mutation command")
+			}
+			if test.hook != nil {
+				adapter.afterPackageControlProof = func(string) { test.hook(info) }
+			}
+			target := systemchanges.ReclamationTarget{Kind: "package-purge", Package: "xray", PackageVersion: "1.2.3", OwnedPaths: []string{"/opt/xray"}}
+			if _, err := adapter.purgeReclamationPackage(target, time.Second); err == nil {
+				t.Fatal("unsafe package control material was accepted")
+			}
+		})
+	}
+}
+
+func TestPackagePurgeRefusesLateUnrelatedPackageChange(t *testing.T) {
+	installed := true
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, transactionDirectory, "change-1"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "var/lib/dpkg/info"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "var/lib/dpkg/info/xray.list"), []byte("/opt/xray\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	command := func(_ time.Duration, name string, arguments ...string) ([]byte, error) {
+		switch {
+		case name == "/usr/bin/dpkg-query" && len(arguments) == 3 && installed:
+			return []byte("install ok installed\t1.2.3\n"), nil
+		case name == "/usr/bin/dpkg-query" && len(arguments) == 3:
+			return nil, os.ErrNotExist
+		case name == "/usr/bin/dpkg-query" && installed:
+			return []byte("xray\t1.2.3\tamd64\tinstall ok installed\t\t\nunrelated\t9.9\tamd64\tinstall ok installed\t\t\n"), nil
+		case name == "/usr/bin/dpkg-query":
+			return []byte("unrelated\t9.9\tamd64\tdeinstall ok config-files\tforeign-trigger\t\n"), nil
+		case name == "/usr/bin/dpkg":
+			installed = false
+			return nil, nil
+		}
+		return nil, fmt.Errorf("unexpected command")
+	}
+	target := systemchanges.ReclamationTarget{Kind: "package-purge", Package: "xray", PackageVersion: "1.2.3", ReviewSHA256: strings.Repeat("a", 64), OwnedPaths: []string{"/opt/xray"}}
+	adapter := NewAt(root, nil, nil)
+	adapter.packageCommand = command
+	if err := adapter.writeReclamationPackageInventory("change-1", target, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.purgeReclamationPackage(target, time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	recovered := NewAt(root, nil, nil)
+	recovered.packageCommand = command
+	if err := recovered.verifyReclamationPackageInventory("change-1", []systemchanges.ReclamationTarget{target}, time.Second); err == nil {
+		t.Fatal("late unrelated package change was accepted")
 	}
 }

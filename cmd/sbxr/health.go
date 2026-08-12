@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -69,7 +70,57 @@ func productionDiagnosticsPresentation(ctx context.Context) (ownerconsole.Diagno
 	for _, unit := range healthDiagnosticUnits() {
 		services = append(services, ownerconsole.ServiceHealthPresentation{Service: unit, Status: ownerModuleHealth(unitHealth(ctx, unit))})
 	}
-	return diagnosticsPresentation(result, bundles, services)
+	presentation, err := diagnosticsPresentation(result, bundles, services)
+	if err != nil {
+		return ownerconsole.DiagnosticsPresentation{}, err
+	}
+	if result.Installation.Status == healthdiagnostics.Managed {
+		policy, err := managedReclamationPolicy()
+		if err != nil {
+			return ownerconsole.DiagnosticsPresentation{}, err
+		}
+		presentation.Reclamation = reclamationDiagnostics(ctx, policy, os.Lstat, runReclamationDiagnosticCommand)
+	}
+	return presentation, nil
+}
+
+func managedReclamationPolicy() (state.ReclamationPolicy, error) {
+	observed, release, err := managedLoadEvidence()
+	if err != nil {
+		return state.ReclamationPolicy{}, err
+	}
+	module := statefilesystem.New()
+	loaded, err := module.Load(state.LoadRequest{Baseline: state.ManagedEvidence, SupportedRelease: release, Lineage: &state.LineageProof{Revision: observed.StateRevision, LastCompletedChangeSet: state.ChangeSetIdentity(observed.LastChangeSet), ReleaseIdentity: release}})
+	if err != nil || loaded.Snapshot == nil {
+		return state.ReclamationPolicy{}, errors.New("current reclamation policy unavailable")
+	}
+	return loaded.Snapshot.DesiredState.Reclamation, nil
+}
+
+func runReclamationDiagnosticCommand(ctx context.Context, name string, arguments ...string) ([]byte, error) {
+	command := exec.CommandContext(ctx, name, arguments...)
+	command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"}
+	return command.Output()
+}
+
+func reclamationDiagnostics(ctx context.Context, policy state.ReclamationPolicy, lstat func(string) (os.FileInfo, error), run func(context.Context, string, ...string) ([]byte, error)) []ownerconsole.ReclamationAdvisoryPresentation {
+	if policy.Version == 0 {
+		return nil
+	}
+	held := policy.Held
+	advisory := ownerconsole.ReclamationAdvisoryPresentation{Package: held.Name, Version: held.Version, DeletedExecutable: held.DeletedExecutable, HoldStatus: "Held", Code: "NETWORK-RECLAMATION-PACKAGE-HELD", NoRollback: true}
+	if _, err := lstat(held.DeletedExecutable); err == nil {
+		advisory.HoldStatus, advisory.Code = "Executable returned", "NETWORK-RECLAMATION-EXECUTABLE-RETURNED"
+	} else if !errors.Is(err, os.ErrNotExist) {
+		advisory.HoldStatus, advisory.Code = "Unknown", "NETWORK-RECLAMATION-INSPECTION-UNKNOWN"
+	}
+	output, err := run(ctx, "/usr/bin/apt-mark", "showhold")
+	if err != nil {
+		advisory.HoldStatus, advisory.Code = "Unknown", "NETWORK-RECLAMATION-INSPECTION-UNKNOWN"
+	} else if !slices.Contains(strings.Fields(string(output)), held.Name) && advisory.HoldStatus == "Held" {
+		advisory.HoldStatus, advisory.Code = "Hold missing", "NETWORK-RECLAMATION-HOLD-MISSING"
+	}
+	return []ownerconsole.ReclamationAdvisoryPresentation{advisory}
 }
 
 func diagnosticsPresentation(result healthdiagnostics.CheckResult, bundles []string, services []ownerconsole.ServiceHealthPresentation) (ownerconsole.DiagnosticsPresentation, error) {

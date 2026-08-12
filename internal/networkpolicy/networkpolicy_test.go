@@ -97,11 +97,11 @@ func TestReviewedStandaloneExecutableBecomesOneUseFreshReclamationAuthority(t *t
 	if approved.Reclamation == nil || approved.Reclamation.Digest != review.Reclamation.Digest {
 		t.Fatalf("fresh reclamation digest = %+v, want %s", approved.Reclamation, review.Reclamation.Digest)
 	}
-	kind, path, digest, interpreter, processID, reviewed, valid := approved.ReclamationAuthority().SystemChangesReclamation()
-	if !valid || kind != "executable" || path != "/opt/standalone/proxy" || digest != strings.Repeat("a", 64) || interpreter != "" || processID != "4242" || reviewed != review.Reclamation.Digest {
-		t.Fatalf("reclamation authority = %q %q %q %q %q %q %t", kind, path, digest, interpreter, processID, reviewed, valid)
+	version, reviewed, kinds, paths, digests, interpreters, processIDs, _, _, _, _, _, valid := approved.ReclamationAuthority().SystemChangesReclamation()
+	if !valid || version != 1 || len(kinds) != 1 || kinds[0] != "executable" || paths[0] != "/opt/standalone/proxy" || digests[0] != strings.Repeat("a", 64) || interpreters[0] != "" || processIDs[0] != "4242" || reviewed != review.Reclamation.Digest {
+		t.Fatalf("reclamation authority = %v %v %v %v %v %q %t", kinds, paths, digests, interpreters, processIDs, reviewed, valid)
 	}
-	if _, _, _, _, _, _, valid := approved.ReclamationAuthority().SystemChangesReclamation(); valid {
+	if _, _, _, _, _, _, _, _, _, _, _, _, valid := approved.ReclamationAuthority().SystemChangesReclamation(); valid {
 		t.Fatal("reclamation authority was reusable")
 	}
 	if !systemchanges.NewFreshInstallationAuthority(approved.FreshInstallationProof()).SystemChangesFreshInstallation() {
@@ -110,8 +110,84 @@ func TestReviewedStandaloneExecutableBecomesOneUseFreshReclamationAuthority(t *t
 
 	adapter.observed.Reclamation.Executables[0].SHA256 = strings.Repeat("b", 64)
 	stale := networkpolicy.New(adapter).Evaluate(request)
-	if _, _, _, _, _, _, valid := stale.ReclamationAuthority().SystemChangesReclamation(); valid {
+	if _, _, _, _, _, _, _, _, _, _, _, _, valid := stale.ReclamationAuthority().SystemChangesReclamation(); valid {
 		t.Fatal("changed executable retained reclamation authority")
+	}
+}
+
+func TestReviewedPackageConflictsBecomeExactPurgeOrHoldAuthority(t *testing.T) {
+	tests := []struct {
+		name, packageName, wantKind string
+	}{
+		{name: "fixed allowlisted package", packageName: "xray", wantKind: "package-purge"},
+		{name: "unsupported package", packageName: "vendor-proxy", wantKind: "package-hold"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			observed := completeObservations()
+			observed.ReclamationComplete = true
+			observed.Firewall.RootVerified = true
+			observed.Listeners = append(observed.Listeners, networkpolicy.Listener{Address: "0.0.0.0", Port: 443, Protocol: networkpolicy.TCP, Process: test.packageName, Executable: "/opt/" + test.packageName + "/proxy", ProcessID: "4242"})
+			observed.Reclamation.Packages = []networkpolicy.PackageConflict{{Name: test.packageName, Version: "1.2.3", Owns: "/opt/" + test.packageName + "/proxy", OwnedPaths: []string{"/etc/" + test.packageName + "/config", "/opt/" + test.packageName + "/proxy"}}}
+			observed.Reclamation.Executables = []networkpolicy.FileConflict{{Path: "/opt/" + test.packageName + "/proxy", SHA256: strings.Repeat("a", 64), Process: test.packageName, ProcessID: "4242", Package: test.packageName, OwnerUID: 0, Mode: 0o755, Links: 1}}
+			adapter := &stagedAdapter{observed: observed}
+			request := networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PreApproval, ReclamationReview: true}
+			review := networkpolicy.New(adapter).Evaluate(request)
+			if review.Reclamation == nil {
+				t.Fatalf("package conflict did not receive a review Plan: %+v", review.Findings)
+			}
+			request.Stage, request.ReviewedReclamationSHA256 = networkpolicy.PostApproval, review.Reclamation.Digest
+			approved := networkpolicy.New(adapter).Evaluate(request)
+			version, reviewed, kinds, paths, digests, _, processIDs, packages, packageVersions, ownedPaths, _, _, valid := approved.ReclamationAuthority().SystemChangesReclamation()
+			if !valid || len(kinds) != 1 || kinds[0] != test.wantKind || paths[0] != "/opt/"+test.packageName+"/proxy" || digests[0] != strings.Repeat("a", 64) || processIDs[0] != "4242" || packages[0] != test.packageName || packageVersions[0] != "1.2.3" || !slices.Equal(ownedPaths[0], observed.Reclamation.Packages[0].OwnedPaths) || version != 1 || reviewed != review.Reclamation.Digest {
+				t.Fatalf("package authority = %v %v %v %v %v %q %t", kinds, paths, digests, packages, packageVersions, reviewed, valid)
+			}
+			warnings := strings.Join(review.Reclamation.PermanentWarnings, " ")
+			if test.wantKind == "package-hold" {
+				for _, want := range []string{"package remains installed but damaged", "miss security updates", "explicit package repair may restore", "no rollback", "manual repair"} {
+					if !strings.Contains(warnings, want) {
+						t.Fatalf("unsupported-package warning omitted %q: %s", want, warnings)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestPackagePurgeAllowlistRefusesFuzzyNames(t *testing.T) {
+	for _, name := range []string{"xray-extra", "my-sing-box", "cloudflared2", "XRAY"} {
+		observed := completeObservations()
+		observed.ReclamationComplete = true
+		observed.Reclamation.Packages = []networkpolicy.PackageConflict{{Name: name, Version: "1", Owns: "/opt/proxy", OwnedPaths: []string{"/opt/proxy"}}}
+		observed.Reclamation.Executables = []networkpolicy.FileConflict{{Path: "/opt/proxy", SHA256: strings.Repeat("a", 64), Package: name, Process: "proxy", ProcessID: "4242", Links: 1}}
+		observed.Listeners = append(observed.Listeners, networkpolicy.Listener{Address: "0.0.0.0", Port: 443, Protocol: networkpolicy.TCP, Process: "proxy", Executable: "/opt/proxy", ProcessID: "4242"})
+		result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PreApproval, ReclamationReview: true})
+		if result.Reclamation == nil || !strings.Contains(strings.Join(result.Reclamation.PermanentWarnings, " "), "package remains installed but damaged") {
+			t.Fatalf("fuzzy package %q was treated as allowlisted purge: %+v", name, result.Reclamation)
+		}
+	}
+}
+
+func TestReviewedAllowlistedPackagesAreBoundAsOneExactPurgeSet(t *testing.T) {
+	observed := completeObservations()
+	observed.ReclamationComplete = true
+	observed.Firewall.RootVerified = true
+	for index, name := range []string{"xray", "sing-box"} {
+		path, pid := "/opt/"+name+"/proxy", fmt.Sprint(4242+index)
+		observed.Listeners = append(observed.Listeners, networkpolicy.Listener{Address: "0.0.0.0", Port: uint16(443 + index), Protocol: networkpolicy.TCP, Process: name, Service: name + ".service", Executable: path, ProcessID: pid})
+		observed.Reclamation.Packages = append(observed.Reclamation.Packages, networkpolicy.PackageConflict{Name: name, Version: "1.2.3", Owns: path, OwnedPaths: []string{path}})
+		observed.Reclamation.Executables = append(observed.Reclamation.Executables, networkpolicy.FileConflict{Path: path, SHA256: strings.Repeat(string(rune('a'+index)), 64), Process: name, Service: name + ".service", ProcessID: pid, Package: name, Links: 1})
+	}
+	adapter := &stagedAdapter{observed: observed}
+	request := networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PreApproval, ReclamationReview: true}
+	review := networkpolicy.New(adapter).Evaluate(request)
+	if review.Reclamation == nil {
+		t.Fatalf("package set review = %+v", review.Findings)
+	}
+	request.Stage, request.ReviewedReclamationSHA256 = networkpolicy.PostApproval, review.Reclamation.Digest
+	_, _, kinds, _, _, _, _, packages, _, _, _, _, valid := networkpolicy.New(adapter).Evaluate(request).ReclamationAuthority().SystemChangesReclamation()
+	if !valid || len(kinds) != 2 || packages[0] != "xray" || packages[1] != "sing-box" {
+		t.Fatalf("package purge set = %v %v %t", kinds, packages, valid)
 	}
 }
 
