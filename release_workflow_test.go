@@ -46,6 +46,7 @@ func TestStableWorkflowReverifiesTheExactPublicInstallerBeforeREADMEActivation(t
 		"ref: ${{ steps.release.outputs.commit }}",
 		"test \"$(git rev-parse HEAD)\" = \"$(jq -r .target_commitish release.json)\"",
 		"gh run download \"$record_run_id\" --name \"automated-acceptance-record-$RELEASE_TAG\"",
+		"jq -j .body release.json > acceptance-record.md",
 		"cmp acceptance-record.md retained-acceptance/acceptance-record.md",
 		"go run ./cmd/sbxr-release verify -tag \"$RELEASE_TAG\"",
 		"releases/latest/download/install.sh",
@@ -64,6 +65,9 @@ func TestStableWorkflowReverifiesTheExactPublicInstallerBeforeREADMEActivation(t
 		if !strings.Contains(workflow, required) {
 			t.Fatalf("stable workflow omitted %q", required)
 		}
+	}
+	if strings.Contains(workflow, "jq -r .body release.json > acceptance-record.md") {
+		t.Fatal("stable workflow adds a byte to the retained Acceptance Record")
 	}
 	driver, err := os.ReadFile(".github/workflows/stable_bootstrap.py")
 	if err != nil {

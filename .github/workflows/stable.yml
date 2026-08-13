@@ -43,7 +43,7 @@ jobs:
           test "$(jq -r .id release.json)" = "$(jq -r .id latest.json)"
           test "$(jq '.assets | length' release.json)" = 6
           test "$(jq -r '.assets[].name' release.json | sort)" = "$(printf '%s\n' install.sh release-index.json sbxr-components-linux-amd64.tar.gz sbxr-components-linux-arm64.tar.gz sbxr-linux-amd64.tar.gz sbxr-linux-arm64.tar.gz | sort)"
-          jq -r .body release.json > acceptance-record.md
+          jq -j .body release.json > acceptance-record.md
           record_run_url="$(sed -n 's/^Workflow evidence: //p' acceptance-record.md)"
           printf '%s\n' "$record_run_url" | grep -Eq '^https://github\.com/albertloky/SBXR/actions/runs/[1-9][0-9]*$'
           record_run_id="${record_run_url##*/}"
