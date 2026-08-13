@@ -100,6 +100,16 @@ go test ./cmd/sbxr -run '^TestVersionReportsOnlyEmbeddedBuildFacts$' -count=1
 
 Require the production `cmd/sbxr-release` entry point to bind the requested commit to a clean tracked `HEAD`, export only that exact commit, and refuse mismatched or dirty source. Require pinned Go `1.26.5` and `CGO_ENABLED=0` to build exactly one stamped `sbxr` executable for each of `linux/amd64` and `linux/arm64`. Require each application archive to contain only that executable, with no native library dependency or language runtime. Require the matching component archive to come only from the repository-owned reviewed source manifest, whose exact official source, version, architecture, filename, byte size, SHA-256, and URL facts fail closed on any change. Require the complete Certbot `5.4.0` Ubuntu 24.04 / CPython 3.12 wheel closure plus qualification-only Mihomo `v1.19.29`, safe extraction, exact native qualification, removal of Mihomo before runtime archive assembly, and transaction-like two-output publication. An arbitrary local component tree, URL, command, script, package-manager behavior, caller-supplied asset size, or caller-supplied asset digest cannot satisfy this row. Require the index builder's directory to contain exactly `install.sh` and the four fixed archive names with no extra entry, calculate each size and SHA-256 itself, bind the exact five roles, repository, tag, commit, sequence, State schema, and minimum updater schema, and refuse missing, duplicate, linked, occupied, changed, or mismatched material. Require `sbxr version` and `sbxr version --json` to report only authenticated embedded repository, tag, commit, architecture, payload digest, and State schema; the executable must not invent or accept an index digest.
 
+### SL-RELEASE-05 — Installer-only automated Acceptance Record
+
+Run:
+
+```sh
+go test ./cmd/sbxr-release -run '^TestAutomatedAcceptanceRecord' -count=1
+```
+
+After public HTTPS and Sigstore verification and every required automated check pass, require `cmd/sbxr-release acceptance` to accept one unchanged directory containing exactly the six fixed regular release assets. It must strictly decode the index, match the fixed repository, tag, commit, roles, names, sizes, and SHA-256 values, and write one exclusive redacted Acceptance Record. The release workflow must prove no client-facing Connection Profile, publication, serving, or Client Access outcome changed from the fixed installer baseline before it applies ADR-0007's automated-only exception. The record must mark Module, Seam, and Integrated Verification `Passed`; mark Codex Live and Owner Acceptance `Not required`; state that no live evidence was performed; include the exact six asset digests and workflow URL; and define every identity, artifact, attestation, required-check, and client-scope invalidation. Store the record in the workflow summary, retained workflow artifact, and prerelease body without adding a seventh release asset. Stable publication remains blocked on issue #166.
+
 ### SL-BOOTSTRAP-01 — Real generated Pasteable Install Command
 
 Run:

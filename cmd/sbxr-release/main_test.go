@@ -83,6 +83,116 @@ func TestVerifyCandidateRefusesInvalidTagBeforeExternalVerification(t *testing.T
 	}
 }
 
+func TestAutomatedAcceptanceRecordBindsOneExactInstallerRelease(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"install.sh", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz", "sbxr-components-linux-amd64.tar.gz", "sbxr-components-linux-arm64.tar.gz"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("qualified "+name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tag, commit := "v1.0.2", strings.Repeat("a", 40)
+	if err := buildReleaseIndexFile(indexOptions{version: "1.0.2", sequence: 3, tag: tag, commit: commit, directory: root, output: filepath.Join(root, "release-index.json")}); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(t.TempDir(), "acceptance-record.md")
+	err := writeAutomatedAcceptanceRecord(acceptanceOptions{tag: tag, commit: commit, directory: root, output: output, evidenceURL: "https://github.com/albertloky/SBXR/actions/runs/123456789"}, time.Date(2026, 8, 13, 3, 4, 5, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	for _, want := range []string{"# SBXR automated Acceptance Record", "Status: Qualified - installer-only automated exception", "Repository: albertloky/SBXR", "Tag: v1.0.2", "Commit: " + commit, "Recorded at: 2026-08-13T03:04:05Z", "Runner: GitHub Actions ubuntu-24.04", "Go toolchain: go1.26.5", "Public verifier: 1.3.0", "Stable result code: RELEASE-INSTALLER-AUTOMATED-QUALIFICATION", "| Module Verification | Passed |", "| Seam Verification | Passed |", "| Integrated Verification | Passed |", "| Codex Live Acceptance | Not required | ADR-0007 installer-only scope", "| Owner Acceptance | Not required | No client-facing change", "No live VPS, provider, maintained-client, or Owner evidence was performed.", "install.sh", "release-index.json", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz", "sbxr-components-linux-amd64.tar.gz", "sbxr-components-linux-arm64.tar.gz", "https://github.com/albertloky/SBXR/actions/runs/123456789", "Any asset, attestation, repository, tag, commit, release-index digest, required check, or client-facing change invalidates this record."} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("Acceptance Record omitted %q\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "SECRET-MARKER") {
+		t.Fatal("Acceptance Record exposed a secret marker")
+	}
+}
+
+func TestAutomatedAcceptanceRecordRefusesChangedOrExtraReleaseMaterial(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		change func(*testing.T, string)
+	}{
+		{name: "changed indexed asset", change: func(t *testing.T, root string) {
+			t.Helper()
+			mustWrite(t, filepath.Join(root, "install.sh"), "changed")
+		}},
+		{name: "extra asset", change: func(t *testing.T, root string) { t.Helper(); mustWrite(t, filepath.Join(root, "extra"), "unexpected") }},
+		{name: "duplicate index key", change: func(t *testing.T, root string) {
+			t.Helper()
+			name := filepath.Join(root, "release-index.json")
+			body, err := os.ReadFile(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mustWrite(t, name, strings.Replace(string(body), `"schema":1`, `"schema":1,"schema":1`, 1))
+		}},
+		{name: "duplicate nested index key", change: func(t *testing.T, root string) {
+			t.Helper()
+			name := filepath.Join(root, "release-index.json")
+			body, err := os.ReadFile(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mustWrite(t, name, strings.Replace(string(body), `"role":"application-linux-amd64"`, `"role":"application-linux-amd64","role":"application-linux-amd64"`, 1))
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			for _, name := range []string{"install.sh", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz", "sbxr-components-linux-amd64.tar.gz", "sbxr-components-linux-arm64.tar.gz"} {
+				mustWrite(t, filepath.Join(root, name), "qualified "+name)
+			}
+			commit := strings.Repeat("a", 40)
+			if err := buildReleaseIndexFile(indexOptions{version: "1.0.2", sequence: 3, tag: "v1.0.2", commit: commit, directory: root, output: filepath.Join(root, "release-index.json")}); err != nil {
+				t.Fatal(err)
+			}
+			test.change(t, root)
+			err := writeAutomatedAcceptanceRecord(acceptanceOptions{tag: "v1.0.2", commit: commit, directory: root, output: filepath.Join(t.TempDir(), "acceptance-record.md"), evidenceURL: "https://github.com/albertloky/SBXR/actions/runs/123456789"}, time.Now())
+			if err == nil {
+				t.Fatal("changed release material received an Acceptance Record")
+			}
+		})
+	}
+}
+
+func TestAutomatedAcceptanceRecordRefusesAnEarlierAssetReplacedAfterItsRead(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"install.sh", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz", "sbxr-components-linux-amd64.tar.gz", "sbxr-components-linux-arm64.tar.gz"} {
+		mustWrite(t, filepath.Join(root, name), "qualified "+name)
+	}
+	commit := strings.Repeat("a", 40)
+	if err := buildReleaseIndexFile(indexOptions{version: "1.0.2", sequence: 3, tag: "v1.0.2", commit: commit, directory: root, output: filepath.Join(root, "release-index.json")}); err != nil {
+		t.Fatal(err)
+	}
+	replaced := false
+	err := writeAutomatedAcceptanceRecord(acceptanceOptions{tag: "v1.0.2", commit: commit, directory: root, output: filepath.Join(t.TempDir(), "acceptance-record.md"), evidenceURL: "https://github.com/albertloky/SBXR/actions/runs/123456789", afterAssetRead: func(name string) {
+		if name == "release-index.json" && !replaced {
+			replaced = true
+			replacement := filepath.Join(t.TempDir(), "replacement")
+			mustWrite(t, replacement, "changed install")
+			if err := os.Rename(replacement, filepath.Join(root, "install.sh")); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}}, time.Now())
+	if err == nil || !replaced {
+		t.Fatalf("late asset replacement = %v, replaced=%t", err, replaced)
+	}
+}
+
+func mustWrite(t *testing.T, name, body string) {
+	t.Helper()
+	if err := os.WriteFile(name, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestBuildBootstrapFileBindsOneReleaseWithoutAnIndexSelfReference(t *testing.T) {
 	output := filepath.Join(t.TempDir(), "install.sh")
 	err := buildBootstrapFile(bootstrapOptions{version: "1.0.0", sequence: 7, tag: "v1.0.0", commit: "0123456789abcdef0123456789abcdef01234567", output: output})
@@ -218,7 +328,7 @@ func TestGeneratedBootstrapRefusesMissingWrapperFoundationWithOnlyTheFixedCode(t
 func TestGeneratedBootstrapCleansLocaleAndLoaderEnvironmentBeforeItsFirstExternalCommand(t *testing.T) {
 	fixture := newBootstrapFixture(t)
 	command := exec.Command("/bin/sh", fixture.script)
-	command.Env = append(os.Environ(), "TERM=xterm-256color", "LC_ALL=fr_FR.UTF-8", "LD_PRELOAD=/PRIVATE-SECRET-MARKER")
+	command.Env = append(os.Environ(), "TERM=xterm-256color", "LC_ALL=fr_FR.UTF-8", "LD_PRELOAD=/sbxr-hostile-loader-injection")
 	terminal, err := pty.Start(command)
 	if err != nil {
 		t.Fatal(err)
@@ -227,7 +337,8 @@ func TestGeneratedBootstrapCleansLocaleAndLoaderEnvironmentBeforeItsFirstExterna
 	waitErr := command.Wait()
 	_ = terminal.Close()
 	output := strings.ReplaceAll(string(body), "\r", "")
-	if waitErr != nil || strings.Contains(output, "PRIVATE-SECRET-MARKER") || !strings.Contains(output, "launching Owner Console") {
+	launched, readErr := os.ReadFile(fixture.launchRecord)
+	if waitErr != nil || readErr != nil || strings.Contains(output, "PRIVATE-SECRET-MARKER") || !strings.Contains(output, "launching Owner Console") || strings.Contains(string(launched), "LD_PRELOAD") || strings.Contains(string(launched), "sbxr-hostile-loader-injection") {
 		t.Fatalf("wrapper environment boundary = %v, %q", waitErr, output)
 	}
 }
@@ -352,7 +463,7 @@ func (fixture *bootstrapFixture) writeBoundaries(t *testing.T) {
 	if fixture.changedPrerequisiteOwnership {
 		ownership = "1000:755:regular file"
 	}
-	mustScript("usr/bin/stat", `if [ "$1" = "-Lc" ]; then echo '`+ownership+`'; exit; fi; if [ "$1" = "-c" ]; then format=$2; path=$3; case "$format" in '%s') exec /usr/bin/stat -f '%z' "$path" ;; '%u:%a:%F') case "$path" in */usr/local/bin/sbxr) echo '0:777:symbolic link' ;; */usr/local/bin|*/opt|*/opt/sbxr|*/opt/sbxr/releases|*/opt/sbxr/releases/*) echo '0:755:directory' ;; *) if [ -d "$path" ]; then echo '1000:700:directory'; else echo '1000:600:regular file'; fi ;; esac ;; '%u:%a:%h:%F') case "$path" in */var/lib/sbxr-recovery.json) echo '0:644:1:regular file' ;; */opt/sbxr/releases/*/sbxr) echo '0:755:1:regular file' ;; *) echo '1000:700:1:regular file' ;; esac ;; esac; fi`)
+	mustScript("usr/bin/stat", `if [ "$1" = "-Lc" ]; then echo '`+ownership+`'; exit; fi; if [ "$1" = "-c" ]; then format=$2; path=$3; case "$format" in '%s') /usr/bin/wc -c <"$path" | /usr/bin/tr -d ' ' ;; '%u:%a:%F') case "$path" in */usr/local/bin/sbxr) echo '0:777:symbolic link' ;; */usr/local/bin|*/opt|*/opt/sbxr|*/opt/sbxr/releases|*/opt/sbxr/releases/*) echo '0:755:directory' ;; *) if [ -d "$path" ]; then echo '1000:700:directory'; else echo '1000:600:regular file'; fi ;; esac ;; '%u:%a:%h:%F') case "$path" in */var/lib/sbxr-recovery.json) echo '0:644:1:regular file' ;; */opt/sbxr/releases/*/sbxr) echo '0:755:1:regular file' ;; *) echo '1000:700:1:regular file' ;; esac ;; esac; fi`)
 	mustScript("usr/bin/sha256sum", `shasum -a 256 "$1"`)
 	curlEffect := fmt.Sprintf(`case "$url" in */release-index.json) cp '%s' "$out" ;; */sbxr-linux-amd64.tar.gz|*/sbxr-linux-arm64.tar.gz) cp '%s' "$out" ;; *) exit 1 ;; esac; printf '%%s' '%s'`, filepath.Join(fixture.root, "fixtures", "index"), filepath.Join(fixture.root, "fixtures", "archive"), fixture.redirect)
 	if fixture.substitute {

@@ -459,7 +459,7 @@ func TestProductionUbuntuSeam(t *testing.T) {
 	}
 	defer listener.Close()
 	port := uint16(listener.Addr().(*net.TCPAddr).Port)
-	observed, err := New().Observe(networkpolicy.ObservationRequest{Stage: networkpolicy.PostApproval, ReclamationReview: true})
+	observed, err := New().Observe(networkpolicy.ObservationRequest{Stage: networkpolicy.PostApproval})
 	if err != nil {
 		t.Fatal(err)
 	}

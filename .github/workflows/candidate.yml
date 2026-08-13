@@ -167,6 +167,9 @@ jobs:
   verify-release:
     if: github.event_name == 'release' && github.event.release.prerelease && !github.event.release.draft
     runs-on: ubuntu-24.04
+    permissions:
+      attestations: read
+      contents: write
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name }}
       RELEASE_COMMIT: ${{ github.event.release.target_commitish }}
@@ -174,6 +177,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -190,6 +194,14 @@ jobs:
             sleep 10
           done
           test "$verified" = true
+      - name: Prove the exact commit has installer-only scope
+        run: |
+          git rev-parse --verify v1.0.1
+          git diff --quiet v1.0.1...HEAD -- \
+            internal/connectionprofiles \
+            internal/subscriptionpublication \
+            internal/subscriptionserving \
+            cmd/sbxr/client_access_outcome.go
       - name: Download and scan the exact six verified assets
         run: |
           mkdir -m 0700 dist
@@ -211,19 +223,25 @@ jobs:
           sudo apt-get install --yes iproute2 nftables
           sudo env "PATH=$PATH" go test ./internal/networkpolicy/adapter/ubuntu -run TestProductionUbuntuSeam -count=1
           sudo env "PATH=$PATH" SBXR_CONTROLLED_FIREWALL_SEAM=1 go test ./internal/systemchanges/adapter/ubuntu -run TestProductionFirewallSeam -count=1
-      - name: Record final automated stage matrix
+      - name: Build the exact redacted automated Acceptance Record
         run: |
-          index_sha256="$(sha256sum dist/release-index.json | cut -d ' ' -f 1)"
-          {
-            echo '## Automated Acceptance Ladder'
-            echo
-            echo '| Stage | Status | Evidence |'
-            echo '|---|---|---|'
-            echo '| Module Verification | Passed | Exact release commit: complete suite with PTY package isolated; race detector on every non-PTY package; `go vet ./...` |'
-            echo '| Seam Verification | Passed | Public HTTPS and Sigstore release verifier plus every exact asset; native component qualification |'
-            echo '| Integrated Verification | Passed | Both exact application archives staged; embedded identity, schemas, migrations, units, components, version output, Network Policy, and System Changes agree |'
-            echo '| Codex Live Acceptance | Pending | Issue #151 |'
-            echo '| Owner Acceptance | Pending | Issue #152 |'
-            echo
-            echo "Release Identity: albertloky/SBXR $RELEASE_TAG $RELEASE_COMMIT $index_sha256"
-          } >> "$GITHUB_STEP_SUMMARY"
+          go run ./cmd/sbxr-release acceptance \
+            -tag "$RELEASE_TAG" \
+            -commit "$RELEASE_COMMIT" \
+            -directory dist \
+            -output acceptance-record.md \
+            -evidence-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          pattern='SECRET-MARKER|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer '
+          test -z "$(rg -a -l "$pattern" acceptance-record.md)"
+          cat acceptance-record.md >> "$GITHUB_STEP_SUMMARY"
+          test -z "$(rg -a -l "$pattern" "$GITHUB_STEP_SUMMARY")"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: automated-acceptance-record-${{ github.event.release.tag_name }}
+          path: acceptance-record.md
+          if-no-files-found: error
+          retention-days: 90
+      - name: Publish the durable redacted record without changing the six assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$RELEASE_TAG" --notes-file acceptance-record.md

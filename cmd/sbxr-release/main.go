@@ -55,6 +55,20 @@ type bootstrapOptions struct {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "acceptance" {
+		flags := flag.NewFlagSet("acceptance", flag.ContinueOnError)
+		var options acceptanceOptions
+		flags.StringVar(&options.tag, "tag", "", "immutable release tag")
+		flags.StringVar(&options.commit, "commit", "", "40-character commit SHA")
+		flags.StringVar(&options.directory, "directory", "", "directory containing the exact six release assets")
+		flags.StringVar(&options.output, "output", "", "redacted Acceptance Record output path")
+		flags.StringVar(&options.evidenceURL, "evidence-url", "", "GitHub Actions evidence URL")
+		if flags.Parse(os.Args[2:]) != nil || flags.NArg() != 0 || writeAutomatedAcceptanceRecord(options, time.Now()) != nil {
+			fmt.Fprintln(os.Stderr, "sbxr acceptance record refused")
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "verify" {
 		flags := flag.NewFlagSet("verify", flag.ContinueOnError)
 		tag := flags.String("tag", "", "immutable release tag")

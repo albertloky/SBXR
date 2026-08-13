@@ -3,7 +3,7 @@
 SBXR is a single-owner terminal application for installing and managing a six-profile proxy service on an Ubuntu VPS. It brings installation, Client Access, Cloudflare Tunnel, certificates, subscriptions, health checks, updates, recovery, and Complete removal into one Owner Console.
 
 > [!IMPORTANT]
-> SBXR v1 is still a prerelease. Automated qualification is complete, but Codex Live Acceptance, Owner Acceptance, and final Release Qualification are still pending. Do not treat the current candidate as stable or latest.
+> SBXR v1 is still a prerelease. ADR-0007 permits automated Release Qualification for one exact installer-only candidate, but stable publication and public-command activation remain pending under issue #166. Do not treat the current candidate as stable or latest.
 
 ## Supported system
 

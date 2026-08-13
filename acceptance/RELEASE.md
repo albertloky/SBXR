@@ -191,3 +191,18 @@ This procedure records no result. It mints one acceptance candidate, not a stabl
 7. Any artifact-bearing source, embedded asset, migration, schema, unit, compatibility definition, index, or payload change creates a new Release Identity and resets affected automated and later evidence. Do not mark the candidate stable/latest or enable automatic discovery before #153 records final Release Qualification.
 
 Stable evidence codes are `RELEASE-CANDIDATE-SOURCE`, `RELEASE-CANDIDATE-AMD64`, `RELEASE-CANDIDATE-ARM64`, `RELEASE-CANDIDATE-INDEX`, `RELEASE-CANDIDATE-EXACT-SIX-ASSETS`, `RELEASE-CANDIDATE-GITHUB-ATTESTATION`, `RELEASE-CANDIDATE-ASSET-VERIFICATION`, `RELEASE-CANDIDATE-MODULE-VERIFICATION`, `RELEASE-CANDIDATE-SEAM-VERIFICATION`, `RELEASE-CANDIDATE-INTEGRATED-VERIFICATION`, `RELEASE-CANDIDATE-SECRET-SCAN`, and `RELEASE-CANDIDATE-LIVE-PENDING`.
+
+## `RELEASE-INSTALLER-AUTOMATED-QUALIFICATION` — Release Qualification — Codex
+
+This procedure applies only to one exact six-asset installer Release Identity under ADR-0007. It does not qualify an identity with a client-facing change.
+
+1. Publish one immutable prerelease with exactly `install.sh`, `release-index.json`, and the four fixed architecture archives. The release event must resolve to one exact 40-character commit.
+2. Verify the public release through `cmd/sbxr-release verify` without GitHub login or a personal token. Require the exact repository, immutable tag, commit, release-index digest, six names, six digests, and six attestations with no extra asset.
+3. Download the six public assets into one private directory. Run the complete Module and Integrated suites, the supported race suite, `go vet ./...`, both native Ubuntu production seams, hostile fixtures, durable checkpoint death/recovery cases, second-death cases, and simulated reboot cases from the exact release commit.
+4. Compare the exact commit with the last candidate baseline and refuse the automated-only exception if Connection Profiles, Subscription Publication, Subscription Serving, or a Client Access outcome changed.
+5. Scan the exact bootstrap, index, safely streamed archive contents, generated Acceptance Record, and workflow summary for secret markers, private-key blocks, and authorization values.
+6. Run `go run ./cmd/sbxr-release acceptance` only after every required check passes. It must reopen one unchanged directory containing exactly the six regular assets, compare the index identity and every indexed size and digest, and write one exclusive redacted record. Publish that record in the workflow summary, the retained workflow artifact, and the prerelease body without adding a seventh release asset.
+7. Mark Module, Seam, and Integrated Verification `Passed`. Mark Codex Live Acceptance and Owner Acceptance `Not required` only because ADR-0007 approves this installer-only automated exception. State that no live VPS, provider, maintained client, or Owner evidence was performed.
+8. Any changed asset, attestation, repository, tag, commit, release-index digest, required check, or client-facing change invalidates the record and blocks stable publication. Issue #166 must reverify the same record and public bytes before making the release stable or activating the README command.
+
+Stable evidence codes are `RELEASE-INSTALLER-AUTOMATED-QUALIFICATION`, `RELEASE-INSTALLER-EXACT-SIX-ASSETS`, `RELEASE-INSTALLER-PUBLIC-ATTESTATION`, `RELEASE-INSTALLER-MODULE-PASSED`, `RELEASE-INSTALLER-SEAM-PASSED`, `RELEASE-INSTALLER-INTEGRATED-PASSED`, `RELEASE-INSTALLER-SECRET-SCAN`, `RELEASE-INSTALLER-LIVE-NOT-REQUIRED`, and `RELEASE-INSTALLER-OWNER-NOT-REQUIRED`.
