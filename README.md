@@ -3,7 +3,7 @@
 SBXR is a single-owner terminal application for installing and managing a six-profile proxy service on an Ubuntu VPS. It brings installation, Client Access, Cloudflare Tunnel, certificates, subscriptions, health checks, updates, recovery, and Complete removal into one Owner Console.
 
 > [!IMPORTANT]
-> The ordinary install command selects only the newest qualified stable release. Release `v1.0.4` is the first stable installer qualified under ADR-0007's automated installer-only exception.
+> The ordinary install command selects only the newest qualified stable release. Release `v1.0.6` is the current stable installer qualified under ADR-0007's automated installer-only exception.
 
 ## Supported system
 
@@ -26,7 +26,7 @@ bash <(curl -fsSL https://github.com/albertloky/SBXR/releases/latest/download/in
 To select the currently qualified immutable release exactly, use:
 
 ```bash
-bash <(curl -fsSL https://github.com/albertloky/SBXR/releases/download/v1.0.4/install.sh) --tag v1.0.4
+bash <(curl -fsSL https://github.com/albertloky/SBXR/releases/download/v1.0.6/install.sh) --tag v1.0.6
 ```
 
 The first `install.sh` download is trusted through GitHub HTTPS. The release-specific script accepts only Ubuntu Server 24.04 on `amd64` or `arm64` in a real interactive terminal. With ordinary `sudo`, it updates APT metadata and installs or repairs only `ca-certificates`, `curl`, `iproute2`, `nftables`, `iptables`, `sudo`, and their required Ubuntu foundation. It then either proves and re-enters the exact installed root-owned release or verifies the exact release index, selected archive, embedded executable identity, architecture, and digests in a fresh Owner-only temporary directory. The Owner Console always runs as the original non-root Owner. Temporary material is removed after it exits. The script never receives Cloudflare authority, upgrades the host, performs unrelated package cleanup, or performs Destructive Reclamation. The Owner authenticates before installation review. The review may use cached ordinary `sudo` only to read the fixed nftables and iptables facts needed for the exact Plan. The authenticated Owner Console admits a Clean VPS without destructive confirmation. For a Reclaimable VPS, it shows the complete exact effects and requires `RECLAIM THIS VPS` before the privileged child freshly rechecks the same Plan and starts one durable Change Set.

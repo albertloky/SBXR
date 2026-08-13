@@ -91,7 +91,7 @@ func TestREADMEActivatesOnlyTheVerifiedStableInstaller(t *testing.T) {
 	readme := string(body)
 	for _, required := range []string{
 		"https://github.com/albertloky/SBXR/releases/latest/download/install.sh",
-		"https://github.com/albertloky/SBXR/releases/download/v1.0.4/install.sh) --tag v1.0.4",
+		"https://github.com/albertloky/SBXR/releases/download/v1.0.6/install.sh) --tag v1.0.6",
 		"Ubuntu 24.04",
 		"GitHub HTTPS",
 		"TUI controls",
