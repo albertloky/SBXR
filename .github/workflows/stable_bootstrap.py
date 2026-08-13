@@ -11,6 +11,7 @@ import time
 command = "bash <(curl -fsSL https://github.com/albertloky/SBXR/releases/latest/download/install.sh)"
 pid, terminal = pty.fork()
 if pid == 0:
+    fcntl.ioctl(1, termios.TIOCSWINSZ, struct.pack("HHHH", 36, 120, 0, 0))
     environment = {
         "HOME": os.environ["HOME"],
         "LANG": "C.UTF-8",
@@ -21,7 +22,6 @@ if pid == 0:
     }
     os.execve("/bin/bash", ["bash", "-lc", command], environment)
 
-fcntl.ioctl(terminal, termios.TIOCSWINSZ, struct.pack("HHHH", 36, 120, 0, 0))
 output = bytearray()
 deadline = time.monotonic() + 120
 while time.monotonic() < deadline and b"Not installed" not in output:

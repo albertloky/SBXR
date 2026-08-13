@@ -60,4 +60,13 @@ func TestStableWorkflowReverifiesTheExactPublicInstallerBeforeREADMEActivation(t
 			t.Fatalf("stable workflow omitted %q", required)
 		}
 	}
+	driver, err := os.ReadFile(".github/workflows/stable_bootstrap.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	childSize := strings.Index(string(driver), "if pid == 0:\n    fcntl.ioctl(1, termios.TIOCSWINSZ")
+	childExec := strings.Index(string(driver), "    os.execve(")
+	if childSize < 0 || childExec < 0 || childSize > childExec {
+		t.Fatal("stable bootstrap can inspect the PTY before its size is set")
+	}
 }
