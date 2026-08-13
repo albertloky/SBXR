@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"reflect"
+	"slices"
 	"sync"
 	"sync/atomic"
 )
@@ -126,6 +127,25 @@ type NetworkPolicyValidator interface {
 
 type SoftwareLifecycleValidator interface {
 	ValidateSoftwareLifecycle(SoftwareLifecycleIntent) error
+}
+
+// RuntimeArtifactContribution is implemented by the typed owning-Module value
+// whose prepared artifacts use the root runtime form.
+type RuntimeArtifactContribution interface {
+	StateRuntimeArtifacts() (source any, services []string, valid bool)
+}
+
+// RuntimeArtifactContributions are process-local preparation authority.
+type RuntimeArtifactContributions []RuntimeArtifactContribution
+
+func (RuntimeArtifactContributions) MarshalJSON() ([]byte, error) {
+	return nil, errProtectedValueRendering
+}
+func (RuntimeArtifactContributions) String() string {
+	return "[redacted runtime artifact contributions]"
+}
+func (RuntimeArtifactContributions) GoString() string {
+	return "[redacted runtime artifact contributions]"
 }
 
 // SemanticValidators contains every required owning-Module validation Seam.
@@ -312,6 +332,7 @@ type PrepareRequest struct {
 	Candidate                DesiredState
 	SemanticValidators       SemanticValidators
 	ServiceMaterials         ServiceMaterials
+	RuntimeArtifacts         RuntimeArtifactContributions
 	SubscriptionPublication  SubscriptionPublicationPreparer
 	ReviewedInputs           ReviewedInputs
 }
@@ -922,6 +943,9 @@ func (i Interface) prepareCommit(request PrepareRequest, deferred *deferredCloud
 		return nil, err
 	}
 	copies.Subscription = &subscription
+	if err := applyRuntimeArtifactContributions(copies, request.RuntimeArtifacts, request.SemanticValidators.ConnectionProfiles); err != nil {
+		return nil, finding("STATE-RUNTIME-ARTIFACT", "root runtime artifact", "the owning-Module contribution is missing, duplicated, or invalid", "one typed contribution for each exact prepared artifact", "State alone must bind the root runtime form", "regenerate the owning Module contribution and review again")
+	}
 	targetSchema := supportedSchema
 	if preserveSchema {
 		targetSchema = loaded.migration.StartingSchema
@@ -1259,6 +1283,41 @@ func prepareServiceBytes(service, module, group string, revision uint64, changeS
 		Service: service, OwningModule: module, CandidateRevision: revision, ChangeSet: changeSet,
 		Owner: "root", Group: group, DirectoryMode: 0o750, FileMode: 0o640, SHA256: hex.EncodeToString(digest[:]),
 	}, bytes: data}, nil
+}
+
+func applyRuntimeArtifactContributions(copies PreparedServiceCopies, contributions RuntimeArtifactContributions, validator ConnectionProfilesValidator) error {
+	expectedSource := any(validator)
+	if owner, ok := validator.(interface{ StateRuntimeArtifactOwner() any }); ok {
+		expectedSource = owner.StateRuntimeArtifactOwner()
+	}
+	prepared := map[string]*PreparedServiceCopy{
+		"xray.service":              copies.Xray,
+		"sing-box.service":          copies.SingBox,
+		"cloudflared.service":       copies.Cloudflared,
+		"sbxr-subscription.service": copies.Subscription,
+	}
+	seen := make(map[string]bool, len(contributions))
+	for _, contribution := range contributions {
+		if contribution == nil || (reflect.ValueOf(contribution).Kind() == reflect.Pointer && reflect.ValueOf(contribution).IsNil()) {
+			return errors.New("runtime artifact contribution unavailable")
+		}
+		source, services, valid := contribution.StateRuntimeArtifacts()
+		typeOf := reflect.TypeOf(source)
+		if !valid || source != expectedSource || typeOf == nil || typeOf.Kind() != reflect.Pointer || typeOf.Elem().PkgPath() != "github.com/albertloky/SBXR/internal/connectionprofiles" || typeOf.Elem().Name() != "Plan" || len(services) == 0 || !slices.IsSorted(services) {
+			return errors.New("runtime artifact contribution invalid")
+		}
+		for _, service := range services {
+			copy := prepared[service]
+			if copy == nil || seen[service] {
+				return errors.New("runtime artifact contribution invalid")
+			}
+			seen[service] = true
+			copy.manifest.Group = "root"
+			copy.manifest.DirectoryMode = 0o755
+			copy.manifest.FileMode = 0o644
+		}
+	}
+	return nil
 }
 
 func prepareConnectionProfileServices(validator ConnectionProfilesValidator, candidate ConnectionProfiles, reviewed ReviewedInputs, requireReviewedPlan bool) (xray, singBox []byte, err error) {

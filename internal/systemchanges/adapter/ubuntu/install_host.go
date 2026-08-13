@@ -30,7 +30,7 @@ var fixedInstallUnits = []string{"cloudflared.service", "sbxr-cert-renew.service
 // activating the prepared proxy-core configurations and systemd lifecycle.
 type InstallHost struct {
 	root             string
-	uid              int
+	uid, rootGID     int
 	xrayGID, singGID int
 	units            []string
 	run              func(context.Context, string, ...string) error
@@ -50,14 +50,14 @@ func NewInstallHost(root string, units []string) (InstallHost, error) {
 	if !slices.Equal(units, fixedInstallUnits) {
 		return InstallHost{}, errors.New("managed units unavailable")
 	}
-	return InstallHost{root: root, uid: 0, xrayGID: xrayGID, singGID: singGID, units: append([]string(nil), units...), run: runInstallCommand, output: runInstallOutput, managed: true}, nil
+	return InstallHost{root: root, uid: 0, rootGID: 0, xrayGID: xrayGID, singGID: singGID, units: append([]string(nil), units...), run: runInstallCommand, output: runInstallOutput, managed: true}, nil
 }
 
 func NewFreshInstallHost(root string, units []string) (InstallHost, error) {
 	if !slices.Equal(units, fixedInstallUnits) {
 		return InstallHost{}, errors.New("managed units unavailable")
 	}
-	return InstallHost{root: root, uid: 0, xrayGID: -1, singGID: -1, units: append([]string(nil), units...), run: runInstallCommand, output: runInstallOutput}, nil
+	return InstallHost{root: root, uid: 0, rootGID: 0, xrayGID: -1, singGID: -1, units: append([]string(nil), units...), run: runInstallCommand, output: runInstallOutput}, nil
 }
 
 func (host InstallHost) resolved() (InstallHost, error) {
@@ -90,11 +90,11 @@ func (host InstallHost) CaptureRollback(step systemchanges.Step, write func(io.R
 				return errors.New("managed service rollback state unavailable")
 			}
 		}
-		xray, err := host.readManagedConfiguration("etc/sbxr/xray/config.json", host.xrayGID)
+		xray, err := host.readManagedConfiguration("etc/sbxr/xray/config.json", host.xrayGID, 0o640)
 		if err != nil {
 			return err
 		}
-		singBox, err := host.readManagedConfiguration("etc/sbxr/sing-box/config.json", host.singGID)
+		singBox, err := host.readManagedConfiguration("etc/sbxr/sing-box/config.json", host.singGID, 0o640)
 		if err != nil {
 			return err
 		}
@@ -116,11 +116,6 @@ func (host InstallHost) Execute(step systemchanges.Step, timeout time.Duration, 
 	if !connectionProfilesInstallStep(step) || timeout <= 0 || cancellation == nil || cancellation.Requested() {
 		return systemchanges.StepEvidence{}, errors.New("install host step refused")
 	}
-	var resolveErr error
-	host, resolveErr = host.resolved()
-	if resolveErr != nil {
-		return systemchanges.StepEvidence{}, resolveErr
-	}
 	prepared, err := host.preparedConfigurations()
 	if err != nil {
 		return systemchanges.StepEvidence{}, err
@@ -128,28 +123,28 @@ func (host InstallHost) Execute(step systemchanges.Step, timeout time.Duration, 
 	restart := make([]string, 0, 2)
 	if host.managed {
 		for name, unit := range map[string]string{"etc/sbxr/xray/config.json": "xray.service", "etc/sbxr/sing-box/config.json": "sing-box.service"} {
-			gid := host.xrayGID
-			if unit == "sing-box.service" {
-				gid = host.singGID
+			artifact := prepared[name]
+			gid, groupErr := host.installArtifactGID(artifact.manifest.Group)
+			if groupErr != nil {
+				return systemchanges.StepEvidence{}, groupErr
 			}
-			current, readErr := host.readManagedConfiguration(name, gid)
+			current, readErr := host.readManagedConfiguration(name, gid, fs.FileMode(artifact.manifest.FileMode))
 			if readErr != nil {
 				return systemchanges.StepEvidence{}, readErr
 			}
-			if !bytes.Equal(current, prepared[name]) {
+			if !bytes.Equal(current, artifact.body) {
 				restart = append(restart, unit)
 			}
 		}
 	} else {
 		restart = append(restart, "xray.service", "sing-box.service")
 	}
-	groups := map[string]int{"etc/sbxr/xray/config.json": host.xrayGID, "etc/sbxr/sing-box/config.json": host.singGID}
-	for name, body := range prepared {
-		gid, ok := groups[name]
-		if !ok {
-			return systemchanges.StepEvidence{}, errors.New("prepared configuration owner unavailable")
+	for name, artifact := range prepared {
+		gid, err := host.installArtifactGID(artifact.manifest.Group)
+		if err != nil {
+			return systemchanges.StepEvidence{}, err
 		}
-		if err := writeInstallConfiguration(host.root, name, body, host.uid, gid); err != nil {
+		if err := writeInstallConfiguration(host.root, name, artifact, host.uid, gid); err != nil {
 			return systemchanges.StepEvidence{}, err
 		}
 	}
@@ -166,7 +161,7 @@ func (host InstallHost) Execute(step systemchanges.Step, timeout time.Duration, 
 	if cancellation.Requested() {
 		return systemchanges.StepEvidence{}, errors.New("install cancelled at a safe checkpoint")
 	}
-	digest := sha256.Sum256(append(append([]byte(nil), prepared["etc/sbxr/xray/config.json"]...), prepared["etc/sbxr/sing-box/config.json"]...))
+	digest := sha256.Sum256(append(append([]byte(nil), prepared["etc/sbxr/xray/config.json"].body...), prepared["etc/sbxr/sing-box/config.json"].body...))
 	return systemchanges.StepEvidence{Code: "connection-profiles-activated", SHA256: hex.EncodeToString(digest[:])}, nil
 }
 
@@ -184,12 +179,14 @@ func (host InstallHost) Reverse(step systemchanges.Step, snapshot io.Reader, tim
 		if err != nil {
 			return systemchanges.StepEvidence{}, err
 		}
-		for name, configuration := range map[string][]byte{"etc/sbxr/xray/config.json": prior.Xray, "etc/sbxr/sing-box/config.json": prior.SingBox} {
-			gid := host.xrayGID
-			if name == "etc/sbxr/sing-box/config.json" {
-				gid = host.singGID
-			}
-			if err := writeInstallConfiguration(host.root, name, configuration, host.uid, gid); err != nil {
+		for name, priorArtifact := range map[string]struct {
+			body  []byte
+			group string
+			gid   int
+		}{"etc/sbxr/xray/config.json": {prior.Xray, "xray", host.xrayGID}, "etc/sbxr/sing-box/config.json": {prior.SingBox, "sing-box", host.singGID}} {
+			digest := sha256.Sum256(priorArtifact.body)
+			artifact := preparedInstallConfiguration{body: priorArtifact.body, manifest: installServiceManifest{Owner: "root", Group: priorArtifact.group, DirectoryMode: 0o750, FileMode: 0o640, SHA256: hex.EncodeToString(digest[:])}}
+			if err := writeInstallConfiguration(host.root, name, artifact, host.uid, priorArtifact.gid); err != nil {
 				return systemchanges.StepEvidence{}, err
 			}
 		}
@@ -271,7 +268,7 @@ func (host InstallHost) InspectStep(step systemchanges.Step, snapshot io.Reader,
 			return systemchanges.StepEffectAbsent, nil
 		}
 		candidate, err := host.preparedConfigurations()
-		if err == nil && bytes.Equal(active["etc/sbxr/xray/config.json"], candidate["etc/sbxr/xray/config.json"]) && bytes.Equal(active["etc/sbxr/sing-box/config.json"], candidate["etc/sbxr/sing-box/config.json"]) {
+		if err == nil && bytes.Equal(active["etc/sbxr/xray/config.json"], candidate["etc/sbxr/xray/config.json"].body) && bytes.Equal(active["etc/sbxr/sing-box/config.json"], candidate["etc/sbxr/sing-box/config.json"].body) {
 			return systemchanges.StepEffectPresent, nil
 		}
 		return "", errors.New("managed Connection Profiles effect is contradictory")
@@ -309,7 +306,7 @@ func parseInstallRollback(body []byte) (installRollback, error) {
 	return snapshot, nil
 }
 
-func (host InstallHost) readManagedConfiguration(name string, gid int) ([]byte, error) {
+func (host InstallHost) readManagedConfiguration(name string, gid int, mode fs.FileMode) ([]byte, error) {
 	file, err := os.Open(filepath.Join(host.root, name))
 	if err != nil {
 		return nil, errors.New("managed rollback configuration unavailable")
@@ -317,7 +314,7 @@ func (host InstallHost) readManagedConfiguration(name string, gid int) ([]byte, 
 	defer file.Close()
 	info, err := file.Stat()
 	stat, ok := info.Sys().(*syscall.Stat_t)
-	if err != nil || !ok || !info.Mode().IsRegular() || info.Mode().Perm() != 0o640 || stat.Uid != uint32(host.uid) || stat.Gid != uint32(gid) || stat.Nlink != 1 {
+	if err != nil || !ok || !info.Mode().IsRegular() || info.Mode().Perm() != mode || stat.Uid != uint32(host.uid) || stat.Gid != uint32(gid) || stat.Nlink != 1 {
 		return nil, errors.New("managed rollback configuration identity changed")
 	}
 	body, err := io.ReadAll(io.LimitReader(file, 1<<20))
@@ -405,21 +402,77 @@ func (host InstallHost) VerifyRollback(agreement systemchanges.RollbackAgreement
 	return nil
 }
 
-func (host InstallHost) preparedConfigurations() (map[string][]byte, error) {
+type installServiceManifest struct {
+	Service, OwningModule, Owner, Group, SHA256 string
+	CandidateRevision                           uint64
+	ChangeSet                                   string
+	DirectoryMode, FileMode                     uint32
+}
+
+type preparedInstallConfiguration struct {
+	body     []byte
+	manifest installServiceManifest
+}
+
+func (host InstallHost) preparedConfigurations() (map[string]preparedInstallConfiguration, error) {
 	entries, err := os.ReadDir(filepath.Join(host.root, transactionDirectory))
 	if err != nil || len(entries) != 1 || !entries[0].IsDir() {
 		return nil, errors.New("active install transaction unavailable")
 	}
 	base := filepath.Join(host.root, transactionDirectory, entries[0].Name(), "prepared")
-	result := map[string][]byte{}
-	for source, destination := range map[string]string{"xray.json": "etc/sbxr/xray/config.json", "sing-box.json": "etc/sbxr/sing-box/config.json"} {
+	var manifests struct {
+		Xray    *installServiceManifest `json:"xray"`
+		SingBox *installServiceManifest `json:"sing_box"`
+	}
+	manifestBytes, err := os.ReadFile(filepath.Join(base, "manifests.json"))
+	if err != nil || json.Unmarshal(manifestBytes, &manifests) != nil {
+		return nil, errors.New("prepared service manifests unavailable")
+	}
+	result := map[string]preparedInstallConfiguration{}
+	for source, target := range map[string]struct {
+		destination string
+		manifest    *installServiceManifest
+		service     string
+	}{
+		"xray.json":     {"etc/sbxr/xray/config.json", manifests.Xray, "xray.service"},
+		"sing-box.json": {"etc/sbxr/sing-box/config.json", manifests.SingBox, "sing-box.service"},
+	} {
 		body, err := os.ReadFile(filepath.Join(base, source))
-		if err != nil || len(body) == 0 {
+		if err != nil || !validInstallManifest(target.manifest, target.service, body) {
 			return nil, errors.New("prepared Connection Profiles configuration unavailable")
 		}
-		result[destination] = body
+		result[target.destination] = preparedInstallConfiguration{body: body, manifest: *target.manifest}
 	}
 	return result, nil
+}
+
+func validInstallManifest(manifest *installServiceManifest, service string, body []byte) bool {
+	if manifest == nil || manifest.Service != service || manifest.OwningModule != "connectionprofiles" || manifest.CandidateRevision == 0 || manifest.ChangeSet == "" || manifest.Owner != "root" || len(body) == 0 {
+		return false
+	}
+	currentGroup := map[string]string{"xray.service": "xray", "sing-box.service": "sing-box"}[service]
+	currentForm := manifest.DirectoryMode == 0o750 && manifest.FileMode == 0o640 && manifest.Group == currentGroup
+	rootForm := manifest.DirectoryMode == 0o755 && manifest.FileMode == 0o644 && manifest.Group == "root"
+	digest := sha256.Sum256(body)
+	return (currentForm || rootForm) && manifest.SHA256 == hex.EncodeToString(digest[:])
+}
+
+func (host InstallHost) installArtifactGID(group string) (int, error) {
+	switch group {
+	case "root":
+		return host.rootGID, nil
+	case "xray":
+		if host.xrayGID >= 0 {
+			return host.xrayGID, nil
+		}
+	case "sing-box":
+		if host.singGID >= 0 {
+			return host.singGID, nil
+		}
+	default:
+		return 0, errors.New("prepared configuration owner unavailable")
+	}
+	return installGroupID(group)
 }
 
 func (host InstallHost) command(ctx context.Context, name string, arguments ...string) error {
@@ -437,27 +490,130 @@ func installConfigurationPaths() []string {
 	return []string{"etc/sbxr/xray/config.json", "etc/sbxr/sing-box/config.json"}
 }
 
-func writeInstallConfiguration(root, name string, body []byte, uid, gid int) error {
+func writeInstallConfiguration(root, name string, artifact preparedInstallConfiguration, uid, gid int) error {
+	body, manifest := artifact.body, artifact.manifest
+	digest := sha256.Sum256(body)
+	if manifest.Owner != "root" || manifest.SHA256 != hex.EncodeToString(digest[:]) {
+		return errors.New("prepared configuration manifest changed")
+	}
 	directory := filepath.Dir(filepath.Join(root, name))
-	if err := os.Mkdir(directory, 0o750); err != nil && !errors.Is(err, fs.ErrExist) {
+	if info, err := os.Lstat(directory); err == nil && (!info.IsDir() || info.Mode()&os.ModeSymlink != 0) {
+		return errors.New("managed configuration directory identity changed")
+	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	if err := os.Chown(directory, uid, gid); err != nil || os.Chmod(directory, 0o750) != nil {
+	if err := os.Mkdir(directory, fs.FileMode(manifest.DirectoryMode)); err != nil && !errors.Is(err, fs.ErrExist) {
+		return err
+	}
+	directoryFile, err := openInstallNoFollow(directory, syscall.O_RDONLY|syscall.O_DIRECTORY)
+	if err != nil {
+		return err
+	}
+	defer directoryFile.Close()
+	directoryInfo, err := directoryFile.Stat()
+	if err != nil || !directoryInfo.IsDir() || directoryInfo.Mode()&os.ModeSymlink != 0 || directoryFile.Chown(uid, gid) != nil || directoryFile.Chmod(fs.FileMode(manifest.DirectoryMode)) != nil {
 		return errors.New("managed configuration directory ownership failed")
 	}
+	target := filepath.Join(root, name)
+	if targetFile, err := openInstallNoFollow(target, syscall.O_RDONLY); err == nil {
+		info, statErr := targetFile.Stat()
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		_ = targetFile.Close()
+		if statErr != nil || !ok || !info.Mode().IsRegular() || stat.Nlink != 1 {
+			return errors.New("managed configuration replacement refused")
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
 	temporary := filepath.Join(root, name+".preparing")
-	if err := os.WriteFile(temporary, body, 0o640); err != nil {
+	if err := removeStaleInstallTemporary(temporary, uid, gid, fs.FileMode(manifest.FileMode)); err != nil {
 		return err
 	}
-	if err := os.Chown(temporary, uid, gid); err != nil || os.Chmod(temporary, 0o640) != nil {
-		_ = os.Remove(temporary)
-		return errors.New("managed configuration ownership failed")
+	file, err := os.OpenFile(temporary, os.O_RDWR|os.O_CREATE|os.O_EXCL, fs.FileMode(manifest.FileMode))
+	if err != nil {
+		return err
 	}
-	if err := os.Rename(temporary, filepath.Join(root, name)); err != nil {
+	if err = file.Chown(uid, gid); err == nil {
+		err = file.Chmod(fs.FileMode(manifest.FileMode))
+	}
+	if err == nil {
+		_, err = file.Write(body)
+	}
+	if err == nil {
+		err = file.Sync()
+	}
+	if err != nil {
+		_ = file.Close()
 		_ = os.Remove(temporary)
 		return err
+	}
+	if err := verifyInstallFile(file, body, uid, gid, fs.FileMode(manifest.FileMode)); err != nil {
+		_ = file.Close()
+		_ = os.Remove(temporary)
+		return err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(temporary)
+		return err
+	}
+	if err := os.Rename(temporary, target); err != nil {
+		_ = os.Remove(temporary)
+		return err
+	}
+	if err := directoryFile.Sync(); err != nil {
+		return err
+	}
+	return verifyInstallArtifact(target, body, uid, gid, fs.FileMode(manifest.FileMode))
+}
+
+func verifyInstallArtifact(path string, want []byte, uid, gid int, mode fs.FileMode) error {
+	file, err := openInstallNoFollow(path, syscall.O_RDONLY)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return verifyInstallFile(file, want, uid, gid, mode)
+}
+
+func verifyInstallFile(file *os.File, want []byte, uid, gid int, mode fs.FileMode) error {
+	info, err := file.Stat()
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if err != nil || !ok || !info.Mode().IsRegular() || info.Mode().Perm() != mode || stat.Uid != uint32(uid) || stat.Gid != uint32(gid) || stat.Nlink != 1 {
+		return errors.New("managed configuration verification failed")
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	got, err := io.ReadAll(io.LimitReader(file, 1<<20))
+	if err != nil || !bytes.Equal(got, want) {
+		return errors.New("managed configuration verification failed")
 	}
 	return nil
+}
+
+func removeStaleInstallTemporary(path string, uid, gid int, mode fs.FileMode) error {
+	file, err := openInstallNoFollow(path, syscall.O_RDONLY)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return errors.New("managed configuration temporary identity changed")
+	}
+	defer file.Close()
+	info, statErr := file.Stat()
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if statErr != nil || !ok || !info.Mode().IsRegular() || info.Mode().Perm() != mode || stat.Uid != uint32(uid) || stat.Gid != uint32(gid) || stat.Nlink != 1 {
+		return errors.New("managed configuration temporary identity changed")
+	}
+	return os.Remove(path)
+}
+
+func openInstallNoFollow(path string, flags int) (*os.File, error) {
+	descriptor, err := syscall.Open(path, flags|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(descriptor), path), nil
 }
 
 func installGroupID(name string) (int, error) {
@@ -500,7 +656,7 @@ func (host InstallHost) verifyClientAccessListeners(ctx context.Context) error {
 	}
 	for _, item := range []struct{ path, protocol, service string }{{"etc/sbxr/xray/config.json", "tcp", "xray"}, {"etc/sbxr/sing-box/config.json", "", "sing-box"}} {
 		body, err := os.ReadFile(filepath.Join(host.root, item.path))
-		candidate := prepared[item.path]
+		candidate := prepared[item.path].body
 		var document struct {
 			Inbounds []inbound `json:"inbounds"`
 		}

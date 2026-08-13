@@ -26,6 +26,12 @@ type installWiring struct {
 
 func (w *installWiring) Identity() string { return w.install.Identity() }
 func (w *installWiring) SHA256() string   { return w.install.SHA256() }
+func (w *installWiring) StateRuntimeArtifactOwner() any {
+	if w == nil {
+		return nil
+	}
+	return w.profiles
+}
 
 func (w *installWiring) ValidateConnectionProfiles(profiles state.ConnectionProfiles, secrets state.ConnectionProfileSecretReader) error {
 	if w == nil || w.profiles == nil {

@@ -735,6 +735,19 @@ func (plan *Plan) PrepareConnectionProfiles(profiles state.ConnectionProfiles, s
 	return append([]byte(nil), plan.configuration...), append([]byte(nil), plan.singBoxConfiguration...), nil
 }
 
+// StateRuntimeArtifacts binds the root runtime form to this reviewed owning-Module Plan.
+func (plan *Plan) StateRuntimeArtifacts() (any, []string, bool) {
+	valid := plan != nil && plan.identity != "" && sha256Text.MatchString(plan.sha256) && plan.preparedBinding != "" && len(plan.configuration)+len(plan.singBoxConfiguration) > 0
+	services := []string(nil)
+	if plan != nil && len(plan.singBoxConfiguration) > 0 {
+		services = append(services, "sing-box.service")
+	}
+	if plan != nil && len(plan.configuration) > 0 {
+		services = append(services, "xray.service")
+	}
+	return plan, services, valid
+}
+
 func (plan *Plan) StateConnectionProfilesRepair() (uint64, string, bool) {
 	if plan == nil {
 		return 0, "", false

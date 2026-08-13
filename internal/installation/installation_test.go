@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"slices"
 	"strings"
@@ -52,6 +53,144 @@ func TestComposedInstallBuildsAndPreparesTheCompleteRevisionOnePlan(t *testing.T
 			t.Fatalf("composed installation evidence exposed protected marker %q", marker)
 		}
 	}
+}
+
+func TestRootRuntimeArtifactsCrossStateAndSystemChangesInterfaces(t *testing.T) {
+	request := composedInstallRequest(t)
+	request.Session = strings.Repeat("b", 64)
+	cloudflareAPI := composedCloudflareAPI{}
+	built, err := buildInstallWith(t.Context(), request, buildDependencies{
+		stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
+			return request.Candidate.Staged, nil
+		},
+		network: networkpolicy.New(composedNetworkObserver{}).Evaluate, cloudflare: cloudflaretunnel.New(cloudflareAPI, composedClock{}).Plan,
+		random: newInstallEntropyReader(request.Entropy), inventory: cloudflareAPI,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	storage := &publishingInstallState{}
+	prepared, err := prepareRootRuntimeStateForTest(t, built, state.New(storage))
+	if err != nil {
+		t.Fatal(err)
+	}
+	changeSetID, _, _, candidateSHA, planID, planSHA, valid := prepared.SystemChangesPreparedState()
+	if !valid {
+		t.Fatal("prepared State binding unavailable")
+	}
+	volatile := strings.Repeat("9", 64)
+	adapter := &runtimeArtifactTransactionAdapter{observation: systemchanges.Observation{Status: systemchanges.NotInstalled, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, VolatileSHA256: volatile, FilesystemBytes: 20 << 30, AvailableBytes: 5 << 30, WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}}
+	step, _ := systemchanges.NewStep(systemchanges.ConnectionProfilesModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
+	steps := []systemchanges.Step{step}
+	checks := []systemchanges.Check{{Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "ROOT-RUNTIME-PRE"}, {Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PostPublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "ROOT-RUNTIME-POST"}}
+	changeSet, err := systemchanges.NewChangeSet(systemchanges.ChangeSetSpec{Identity: changeSetID, Mutation: systemchanges.InstallationMutation, OutcomeOwner: systemchanges.SoftwareModule, StartingState: systemchanges.StateLineage{Status: systemchanges.NotInstalled}, TargetStateSHA256: candidateSHA, Plan: systemchanges.PlanBinding{Identity: planID, SHA256: planSHA, VolatileSHA256: volatile}, PreparedState: prepared, Steps: steps, Checks: checks, Timeouts: systemchanges.Timeouts{Step: time.Second, Check: time.Second}, Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := systemchanges.New(adapter).Apply(changeSet)
+	if result.Outcome != systemchanges.Completed {
+		t.Fatalf("System Changes Apply = %+v", result)
+	}
+	for _, name := range []string{"xray", "sing_box"} {
+		if !strings.Contains(string(adapter.artifacts["prepared/manifests.json"]), `"`+name+`"`) || !strings.Contains(string(adapter.artifacts["prepared/manifests.json"]), `"Group":"root"`) || !strings.Contains(string(adapter.artifacts["prepared/manifests.json"]), `"FileMode":420`) {
+			t.Fatalf("root-runtime manifests = %s", adapter.artifacts["prepared/manifests.json"])
+		}
+	}
+}
+
+type rootRuntimeTestWiring struct{ *installWiring }
+
+func (*rootRuntimeTestWiring) ValidateCloudflare(state.CloudflareSettings, state.InfrastructureSecretReader) error {
+	return nil
+}
+
+func prepareRootRuntimeStateForTest(t *testing.T, built *builtInstall, module state.Interface) (*state.PreparedCommit, error) {
+	t.Helper()
+	loaded, err := module.Load(state.LoadRequest{Baseline: state.CleanVPS})
+	if err != nil {
+		return nil, err
+	}
+	candidate := built.desired
+	candidate.Cloudflare.TunnelID = "550e8400-e29b-41d4-a716-446655440001"
+	candidate.Cloudflare.XHTTPDNSRecordID = "dns-xhttp-root-runtime"
+	candidate.Cloudflare.WebSocketDNSRecordID = "dns-websocket-root-runtime"
+	candidate.Cloudflare.DirectIPv4RecordID = "dns-direct-root-runtime"
+	candidate.Cloudflare.TunnelRunToken = state.NewInfrastructureSecret("ROOT-RUNTIME-RUN-TOKEN")
+	proofs := map[softwarelifecycle.InstallContributionName]softwarelifecycle.InstallContributionProof{}
+	for _, contribution := range built.contributions {
+		proof := contribution.SoftwareLifecycleInstallContribution()
+		proofs[softwarelifecycle.InstallContributionName(proof.Name)] = proof
+	}
+	certificateDigest := sha256.Sum256([]byte(proofs[softwarelifecycle.IPCertificateInstallContribution].SHA256 + proofs[softwarelifecycle.DomainCertificateInstallContribution].SHA256))
+	checksums, err := state.NewManagedInputChecksums(proofs[softwarelifecycle.ProfilesInstallContribution].SHA256, proofs[softwarelifecycle.SubscriptionInstallContribution].SHA256, proofs[softwarelifecycle.CloudflareInstallContribution].SHA256, hex.EncodeToString(certificateDigest[:]), proofs[softwarelifecycle.NetworkInstallContribution].SHA256, built.plan.SHA256())
+	if err != nil {
+		return nil, err
+	}
+	reviewed, err := state.NewReviewedInputs(state.PlanIdentity(built.plan.Identity()), built.plan.SHA256(), checksums)
+	if err != nil {
+		return nil, err
+	}
+	wiring := &rootRuntimeTestWiring{built.wiring}
+	release := candidateRelease(built.candidate)
+	return module.PrepareCommit(state.PrepareRequest{Loaded: loaded, CandidateReleaseIdentity: state.ReleaseIdentity{Repository: release.Repository, Tag: release.Tag, Commit: release.Commit, ReleaseIndexSHA256: release.IndexSHA256}, ChangeSet: state.ChangeSetIdentity("install-" + built.desired.Installation.ID[:16]), Candidate: candidate, SemanticValidators: state.SemanticValidators{ConnectionProfiles: wiring, Subscription: wiring, Cloudflare: wiring, Certificates: wiring, NetworkPolicy: wiring, SoftwareLifecycle: wiring}, ServiceMaterials: state.ServiceMaterialsFor(candidate), RuntimeArtifacts: state.RuntimeArtifactContributions{built.wiring.profiles}, SubscriptionPublication: wiring, ReviewedInputs: reviewed})
+}
+
+type publishingInstallState struct{ document []byte }
+
+func (storage *publishingInstallState) Read() ([]byte, error) {
+	if storage.document == nil {
+		return nil, fs.ErrNotExist
+	}
+	return append([]byte(nil), storage.document...), nil
+}
+func (storage *publishingInstallState) Publish(_ []byte, candidate []byte, _ string) ([]byte, error) {
+	storage.document = append([]byte(nil), candidate...)
+	return append([]byte(nil), candidate...), nil
+}
+
+type runtimeArtifactLock struct{}
+
+func (runtimeArtifactLock) Close() error { return nil }
+
+type runtimeArtifactTransactionAdapter struct {
+	observation systemchanges.Observation
+	artifacts   map[string][]byte
+}
+
+func (adapter *runtimeArtifactTransactionAdapter) Observe() (systemchanges.Observation, error) {
+	return adapter.observation, nil
+}
+func (*runtimeArtifactTransactionAdapter) TryLock() (systemchanges.Lock, bool, error) {
+	return runtimeArtifactLock{}, true, nil
+}
+func (adapter *runtimeArtifactTransactionAdapter) Prepare(_ systemchanges.ExecutionLease, preparation systemchanges.Preparation) error {
+	adapter.artifacts = map[string][]byte{}
+	return preparation.WriteStateArtifacts(func(name string, _ uint32, source io.Reader) error {
+		body, err := io.ReadAll(source)
+		adapter.artifacts[name] = body
+		return err
+	})
+}
+func (*runtimeArtifactTransactionAdapter) Record(systemchanges.ExecutionLease, systemchanges.CheckpointRecord) error {
+	return nil
+}
+func (*runtimeArtifactTransactionAdapter) Execute(systemchanges.ExecutionLease, string, int, systemchanges.Step, time.Duration, *systemchanges.Cancellation) (systemchanges.StepEvidence, error) {
+	return systemchanges.StepEvidence{Code: "root-runtime-applied", SHA256: strings.Repeat("a", 64)}, nil
+}
+func (*runtimeArtifactTransactionAdapter) Reverse(systemchanges.ExecutionLease, string, int, systemchanges.Step, time.Duration) (systemchanges.StepEvidence, error) {
+	return systemchanges.StepEvidence{}, nil
+}
+func (*runtimeArtifactTransactionAdapter) Check(systemchanges.ExecutionLease, systemchanges.Check, systemchanges.GatePhase, time.Duration) (systemchanges.HealthStatus, error) {
+	return systemchanges.Healthy, nil
+}
+func (*runtimeArtifactTransactionAdapter) VerifyAgreement(systemchanges.ExecutionLease, systemchanges.Agreement, time.Duration) error {
+	return nil
+}
+func (*runtimeArtifactTransactionAdapter) VerifyRollback(systemchanges.ExecutionLease, systemchanges.RollbackAgreement, time.Duration) error {
+	return nil
+}
+func (*runtimeArtifactTransactionAdapter) Cleanup(systemchanges.ExecutionLease, string) error {
+	return nil
 }
 
 func TestDestructiveReclamationCompositionBindsAllOwningModulesToOneChangeSet(t *testing.T) {

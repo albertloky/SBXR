@@ -86,6 +86,26 @@ func TestPrepareCommitValidatesCandidateAndSerializesLeastPrivilegeMaterial(t *t
 	}
 }
 
+func TestPrepareCommitRefusesCallerMadeRootRuntimeArtifactContribution(t *testing.T) {
+	candidate := completeDesiredState()
+	stateModule, request, _ := managedPrepareRequest(t, candidate)
+	request.RuntimeArtifacts = RuntimeArtifactContributions{controlledRuntimeArtifact{}}
+
+	_, err := stateModule.PrepareCommit(request)
+	if err == nil || !strings.Contains(err.Error(), "STATE-RUNTIME-ARTIFACT") {
+		t.Fatalf("caller-made runtime contribution error = %v", err)
+	}
+	if strings.Contains(fmt.Sprintf("%v %#v", request.RuntimeArtifacts, request.RuntimeArtifacts), "xray.service") {
+		t.Fatal("root-runtime contribution rendered process-local preparation facts")
+	}
+}
+
+type controlledRuntimeArtifact struct{}
+
+func (artifact controlledRuntimeArtifact) StateRuntimeArtifacts() (any, []string, bool) {
+	return artifact, []string{"xray.service", "sing-box.service"}, true
+}
+
 func TestCandidateSHA256MatchesPreparedRevisionOneState(t *testing.T) {
 	candidate := completeDesiredState()
 	want, err := marshalProtectedJSON(candidate)
