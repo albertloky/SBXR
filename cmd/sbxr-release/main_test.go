@@ -251,6 +251,22 @@ func TestGeneratedBootstrapVerifiesAndLaunchesOnlyTheExactReleaseAsTheOwner(t *t
 	}
 }
 
+func TestGeneratedBootstrapAcceptsOnlyTheStandardUbuntuOSReleaseSymlink(t *testing.T) {
+	valid := newBootstrapFixture(t)
+	valid.osReleaseLink = "../usr/lib/os-release"
+	valid.writeBoundaries(t)
+	if output, err := valid.run(); err != nil || !strings.Contains(output, "launching Owner Console") {
+		t.Fatalf("standard Ubuntu os-release symlink = %v\n%s", err, output)
+	}
+
+	hostile := newBootstrapFixture(t)
+	hostile.osReleaseLink = "../fixtures/index"
+	hostile.writeBoundaries(t)
+	if output, err := hostile.run(); err == nil || strings.TrimSpace(output) != "SBXR-BOOTSTRAP-REFUSED" {
+		t.Fatalf("substituted os-release symlink = %v\n%s", err, output)
+	}
+}
+
 func TestGeneratedBootstrapRepairsOnlyFixedPrerequisitesAndReentersTheInstalledRelease(t *testing.T) {
 	fixture := newBootstrapFixture(t)
 	fixture.installed = true
@@ -409,6 +425,7 @@ type bootstrapFixture struct {
 	index, version, redirect                             string
 	archive                                              []byte
 	machine, tarList                                     string
+	osReleaseLink                                        string
 	substitute, interrupt, installed, unfinished         bool
 	hostileEnvironment, cleanupFail                      bool
 	changedPrerequisiteOwnership                         bool
@@ -446,7 +463,21 @@ func (fixture *bootstrapFixture) writeBoundaries(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(fixture.root, "etc", "os-release"), []byte("ID=ubuntu\nVERSION_ID=\"24.04\"\n"), 0o600); err != nil {
+	osRelease := filepath.Join(fixture.root, "etc", "os-release")
+	if err := os.Remove(osRelease); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if fixture.osReleaseLink != "" {
+		if err := os.MkdirAll(filepath.Join(fixture.root, "usr", "lib"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(fixture.root, "usr", "lib", "os-release"), []byte("ID=ubuntu\nVERSION_ID=\"24.04\"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(fixture.osReleaseLink, osRelease); err != nil {
+			t.Fatal(err)
+		}
+	} else if err := os.WriteFile(osRelease, []byte("ID=ubuntu\nVERSION_ID=\"24.04\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(fixture.root, "fixtures", "index"), []byte(fixture.index), 0o600); err != nil {

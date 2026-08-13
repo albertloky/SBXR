@@ -108,18 +108,22 @@ fi
 [ -t 0 ] && [ -t 1 ] || refuse
 case "${TERM-}" in ''|*[!A-Za-z0-9._+-]*) refuse ;; esac
 
-for tool in apt-get cut env getent grep id mktemp stat sudo uname; do
+for tool in apt-get cut env getent grep id mktemp readlink stat sudo uname; do
   [ -x "$ROOT/usr/bin/$tool" ] || prerequisites_refused
 done
 [ -x "$ROOT/bin/chmod" ] && [ -x "$ROOT/bin/rm" ] && [ -x "$ROOT/bin/sh" ] || prerequisites_refused
 [ "$("$ROOT/usr/bin/id" -u 2>/dev/null)" != '0' ] || refuse
 
-for tool in "$ROOT/usr/bin/apt-get" "$ROOT/usr/bin/cut" "$ROOT/usr/bin/env" "$ROOT/usr/bin/getent" "$ROOT/usr/bin/grep" "$ROOT/usr/bin/id" "$ROOT/usr/bin/mktemp" "$ROOT/usr/bin/stat" "$ROOT/usr/bin/uname" "$ROOT/bin/chmod" "$ROOT/bin/rm" "$ROOT/bin/sh"; do
+for tool in "$ROOT/usr/bin/apt-get" "$ROOT/usr/bin/cut" "$ROOT/usr/bin/env" "$ROOT/usr/bin/getent" "$ROOT/usr/bin/grep" "$ROOT/usr/bin/id" "$ROOT/usr/bin/mktemp" "$ROOT/usr/bin/readlink" "$ROOT/usr/bin/stat" "$ROOT/usr/bin/uname" "$ROOT/bin/chmod" "$ROOT/bin/rm" "$ROOT/bin/sh"; do
   [ "$("$ROOT/usr/bin/stat" -Lc '%u:%a:%F' "$tool" 2>/dev/null)" = '0:755:regular file' ] || prerequisites_refused
 done
 case "$("$ROOT/usr/bin/stat" -Lc '%u:%a:%F' "$ROOT/usr/bin/sudo" 2>/dev/null)" in '0:4755:regular file'|'0:755:regular file') : ;; *) prerequisites_refused ;; esac
 
 os_release="$ROOT/etc/os-release"
+if [ -L "$os_release" ]; then
+  [ "$("$ROOT/usr/bin/readlink" "$os_release" 2>/dev/null)" = '../usr/lib/os-release' ] || refuse
+  os_release="$ROOT/usr/lib/os-release"
+fi
 [ -f "$os_release" ] && [ ! -L "$os_release" ] || refuse
 "$ROOT/usr/bin/grep" -qx 'ID=ubuntu' "$os_release" >/dev/null 2>&1 || refuse
 "$ROOT/usr/bin/grep" -Eq '^VERSION_ID="?24\.04"?$' "$os_release" >/dev/null 2>&1 || refuse
