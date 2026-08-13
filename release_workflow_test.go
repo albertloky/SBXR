@@ -34,3 +34,30 @@ func TestCandidateWorkflowPublishesOnlyAQualifiedInstallerAcceptanceRecord(t *te
 		t.Fatal("Acceptance Record became a seventh release asset")
 	}
 }
+
+func TestStableWorkflowReverifiesTheExactPublicInstallerBeforeREADMEActivation(t *testing.T) {
+	body, err := os.ReadFile(".github/workflows/stable.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(body)
+	for _, required := range []string{
+		"go run ./cmd/sbxr-release verify -tag \"$RELEASE_TAG\"",
+		"releases/latest/download/install.sh",
+		"releases/download/$RELEASE_TAG/install.sh",
+		"cmp latest-install.sh pinned-install.sh",
+		"Status: Qualified - installer-only automated exception",
+		"Release index SHA-256:",
+		"test \"$(jq '.assets | length' release.json)\" = 6",
+		"python3 .github/workflows/stable_bootstrap.py",
+		"SBXR bootstrap: launching Owner Console",
+		"Not installed",
+		"test ! -e /usr/local/bin/sbxr",
+		"test ! -e /var/lib/sbxr",
+		"SECRET-MARKER|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer ",
+	} {
+		if !strings.Contains(workflow, required) {
+			t.Fatalf("stable workflow omitted %q", required)
+		}
+	}
+}

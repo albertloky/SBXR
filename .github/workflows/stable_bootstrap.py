@@ -1,0 +1,54 @@
+import fcntl
+import os
+import pty
+import select
+import signal
+import struct
+import termios
+import time
+
+
+command = "bash <(curl -fsSL https://github.com/albertloky/SBXR/releases/latest/download/install.sh)"
+pid, terminal = pty.fork()
+if pid == 0:
+    environment = {
+        "HOME": os.environ["HOME"],
+        "LANG": "C.UTF-8",
+        "LOGNAME": os.environ["USER"],
+        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "TERM": "xterm-256color",
+        "USER": os.environ["USER"],
+    }
+    os.execve("/bin/bash", ["bash", "-lc", command], environment)
+
+fcntl.ioctl(terminal, termios.TIOCSWINSZ, struct.pack("HHHH", 36, 120, 0, 0))
+output = bytearray()
+deadline = time.monotonic() + 120
+while time.monotonic() < deadline and b"Not installed" not in output:
+    ready, _, _ = select.select([terminal], [], [], 1)
+    if ready:
+        try:
+            output.extend(os.read(terminal, 65536))
+        except OSError:
+            break
+
+if b"SBXR bootstrap: launching Owner Console" not in output or b"Not installed" not in output:
+    os.killpg(pid, signal.SIGTERM)
+    raise SystemExit("public bootstrap did not reach the Owner Console")
+
+os.write(terminal, b"\x03")
+time.sleep(1)
+os.write(terminal, b"\r")
+for _ in range(20):
+    child, status = os.waitpid(pid, os.WNOHANG)
+    if child == pid:
+        if not os.WIFEXITED(status) or os.WEXITSTATUS(status) != 0:
+            raise SystemExit("public bootstrap did not exit cleanly")
+        break
+    time.sleep(0.5)
+else:
+    os.killpg(pid, signal.SIGTERM)
+    raise SystemExit("public bootstrap did not clean up")
+
+with open("bootstrap-transcript.txt", "wb") as transcript:
+    transcript.write(output)
