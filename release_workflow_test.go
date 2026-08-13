@@ -73,3 +73,31 @@ func TestStableWorkflowReverifiesTheExactPublicInstallerBeforeREADMEActivation(t
 		t.Fatal("stable bootstrap does not prove alternate-screen support")
 	}
 }
+
+func TestREADMEActivatesOnlyTheVerifiedStableInstaller(t *testing.T) {
+	body, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	readme := string(body)
+	for _, required := range []string{
+		"https://github.com/albertloky/SBXR/releases/latest/download/install.sh",
+		"https://github.com/albertloky/SBXR/releases/download/v1.0.4/install.sh) --tag v1.0.4",
+		"Ubuntu 24.04",
+		"GitHub HTTPS",
+		"TUI controls",
+		"RECLAIM THIS VPS",
+		"After it, neither Back nor Cancel is available.",
+		"Recovery Required",
+		"COMPLETE REMOVAL",
+	} {
+		if !strings.Contains(readme, required) {
+			t.Fatalf("active README omitted %q", required)
+		}
+	}
+	for _, unavailable := range []string{"Installation remains unavailable", "releases/download/<tag>/install.sh"} {
+		if strings.Contains(readme, unavailable) {
+			t.Fatalf("active README retained %q", unavailable)
+		}
+	}
+}

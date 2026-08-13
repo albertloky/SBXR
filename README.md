@@ -3,11 +3,12 @@
 SBXR is a single-owner terminal application for installing and managing a six-profile proxy service on an Ubuntu VPS. It brings installation, Client Access, Cloudflare Tunnel, certificates, subscriptions, health checks, updates, recovery, and Complete removal into one Owner Console.
 
 > [!IMPORTANT]
-> SBXR v1 is still a prerelease. ADR-0007 permits automated Release Qualification for one exact installer-only candidate, but stable publication and public-command activation remain pending under issue #166. Do not treat the current candidate as stable or latest.
+> The ordinary install command selects only the newest qualified stable release. Release `v1.0.4` is the first stable installer qualified under ADR-0007's automated installer-only exception.
 
 ## Supported system
 
 - Ubuntu 24.04 on `amd64` or `arm64`
+- `curl` available for the first GitHub HTTPS download
 - An interactive SSH terminal
 - At least `80×24`; `120×36` adds a details column
 - Ordinary `sudo` access for approved privileged operations
@@ -16,22 +17,25 @@ Run SBXR as your normal account. Do not start the Owner Console with `sudo`. SBX
 
 ## Pasteable Install Command
 
-> [!WARNING]
-> Installation remains unavailable until an exact six-asset stable release is published and this URL is verified. Do not run the commands below against the current prerelease.
-
 The ordinary command follows only GitHub's stable release selection:
 
 ```bash
 bash <(curl -fsSL https://github.com/albertloky/SBXR/releases/latest/download/install.sh)
 ```
 
-For exact acceptance or advanced use, select one immutable tag in both the URL and argument:
+To select the currently qualified immutable release exactly, use:
 
 ```bash
-bash <(curl -fsSL https://github.com/albertloky/SBXR/releases/download/<tag>/install.sh) --tag <tag>
+bash <(curl -fsSL https://github.com/albertloky/SBXR/releases/download/v1.0.4/install.sh) --tag v1.0.4
 ```
 
 The first `install.sh` download is trusted through GitHub HTTPS. The release-specific script accepts only Ubuntu Server 24.04 on `amd64` or `arm64` in a real interactive terminal. With ordinary `sudo`, it updates APT metadata and installs or repairs only `ca-certificates`, `curl`, `iproute2`, `nftables`, `iptables`, `sudo`, and their required Ubuntu foundation. It then either proves and re-enters the exact installed root-owned release or verifies the exact release index, selected archive, embedded executable identity, architecture, and digests in a fresh Owner-only temporary directory. The Owner Console always runs as the original non-root Owner. Temporary material is removed after it exits. The script never receives Cloudflare authority, upgrades the host, performs unrelated package cleanup, or performs Destructive Reclamation. The Owner authenticates before installation review. The review may use cached ordinary `sudo` only to read the fixed nftables and iptables facts needed for the exact Plan. The authenticated Owner Console admits a Clean VPS without destructive confirmation. For a Reclaimable VPS, it shows the complete exact effects and requires `RECLAIM THIS VPS` before the privileged child freshly rechecks the same Plan and starts one durable Change Set.
+
+## Destructive reclamation and recovery
+
+Before **Irreversible reclamation started**, Back and Cancel remain available and SBXR can roll back its reversible preparation. After that durable checkpoint, rollback and cancellation are unavailable. A command failure, lost SSH session, process death, or VPS reboot enters **Recovery Required** and continues the exact recorded operation forward from its last proven checkpoint when SBXR starts again.
+
+Complete removal deletes only SBXR-owned resources and package holds. It does not restore software, identities, Docker, firewall policy, or Cloudflare resources that the Owner approved for permanent reclamation. Complete removal succeeds only after SBXR proves **Not installed** with no retained SBXR recovery material.
 
 ## User commands
 
