@@ -73,7 +73,7 @@ func buildCompleteRemoval(ctx context.Context, changeSet string, prepareState bo
 	if ctx == nil || !validClientAccessChangeSet(changeSet) {
 		return nil, errors.New("complete Complete removal inputs are required")
 	}
-	if pending, err := pendingInstallRecovery(); err != nil || pending {
+	if pending, err := pendingStartupRecovery(); err != nil || pending {
 		return nil, errors.New("an unfinished Change Set must recover before Complete removal")
 	}
 	module := statefilesystem.New()

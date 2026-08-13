@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -41,42 +40,35 @@ type clientAccessPresentation struct {
 }
 
 func managedClientAccessPresentation(ctx context.Context) (clientAccessPresentation, error) {
-	pending, pendingErr := pendingInstallRecovery()
+	transaction, pending, pendingErr := productionPendingChangeSetReader().PendingChangeSet()
 	if pendingErr == nil && pending {
-		if transaction, err := systemubuntu.RecoveryTransaction("/"); err == nil {
-			entries, readErr := os.ReadDir(installTransactions)
-			if readErr == nil && len(entries) == 1 {
-				recovery := ownerRecovery{changeSet: entries[0].Name(), forwardOnly: transaction.ForwardOnly, needsRunTokenRotation: transaction.Checkpoint == systemchanges.IrreversibleRunTokenRotationStarted, completeRemoval: transaction.Mutation == systemchanges.CompleteRemovalMutation}
-				presentation := clientAccessPresentation{Installation: ownerconsole.InstallationRecoveryRequired, Recovery: recovery.ViewRecovery(ctx)}
-				if transaction.Mutation == systemchanges.CompleteRemovalMutation {
-					kind, checkpoint, token := ownerconsole.CompleteRemovalRollbackCapable, ownerconsole.RemovalBeforeIrreversibleCheckpoint, ownerconsole.RemovalTokenAvailable
-					if transaction.ForwardOnly {
-						kind, checkpoint, token = ownerconsole.CompleteRemovalForwardOnly, ownerconsole.RemovalIrreversibleStarted, ownerconsole.RemovalProviderDeletionInProgress
-						if transaction.Checkpoint == systemchanges.OwnedExternalDeletionVerified {
-							token = ownerconsole.RemovalTokenAwaitingOwnerRevocation
-						}
-						if transaction.Checkpoint == systemchanges.TokenRevocationVerified || systemchanges.IsIrreversibleRemovalCheckpoint(transaction.Checkpoint) && transaction.Checkpoint != systemchanges.IrreversibleRemovalStarted && transaction.Checkpoint != systemchanges.OwnedDNSRecordsDeleted && transaction.Checkpoint != systemchanges.OwnedTunnelDeleted && transaction.Checkpoint != systemchanges.OwnedExternalDeletionVerified {
-							token = ownerconsole.RemovalTokenRevocationVerified
-						}
-						if transaction.Checkpoint == systemchanges.LocalStateDeleted || transaction.Checkpoint == systemchanges.SecretsDeleted || transaction.Checkpoint == systemchanges.CertificatesDeleted || transaction.Checkpoint == systemchanges.TransactionMaterialDeletionAuthorized || transaction.Checkpoint == systemchanges.TransactionMaterialDeleted || transaction.Checkpoint == systemchanges.ReleasesDeleted || transaction.Checkpoint == systemchanges.UnitsDeleted || transaction.Checkpoint == systemchanges.IdentitiesDeleted || transaction.Checkpoint == systemchanges.ListenersDeleted || transaction.Checkpoint == systemchanges.PreparedArtifactsDeleted || transaction.Checkpoint == systemchanges.OwnedFirewallStateDeleted || transaction.Checkpoint == systemchanges.FinalRemovalAbsenceVerified {
-							token = ownerconsole.RemovalLocalTokenDeleted
-						}
+		if transaction.Identity != systemubuntu.FinalizingRemovalChangeSet {
+			recovery := ownerRecovery{changeSet: transaction.Identity, forwardOnly: transaction.ForwardOnly, needsRunTokenRotation: transaction.Checkpoint == systemchanges.IrreversibleRunTokenRotationStarted, completeRemoval: transaction.Kind == systemchanges.CompleteRemovalMutation}
+			presentation := clientAccessPresentation{Installation: ownerconsole.InstallationRecoveryRequired, Recovery: recovery.ViewRecovery(ctx)}
+			if transaction.Kind == systemchanges.CompleteRemovalMutation {
+				kind, checkpoint, token := ownerconsole.CompleteRemovalRollbackCapable, ownerconsole.RemovalBeforeIrreversibleCheckpoint, ownerconsole.RemovalTokenAvailable
+				if transaction.ForwardOnly {
+					kind, checkpoint, token = ownerconsole.CompleteRemovalForwardOnly, ownerconsole.RemovalIrreversibleStarted, ownerconsole.RemovalProviderDeletionInProgress
+					if transaction.Checkpoint == systemchanges.OwnedExternalDeletionVerified {
+						token = ownerconsole.RemovalTokenAwaitingOwnerRevocation
 					}
-					starting := map[systemchanges.InstallationStatus]ownerconsole.InstallationStatus{systemchanges.Managed: ownerconsole.InstallationManaged, systemchanges.RecoveryRequired: ownerconsole.InstallationRecoveryRequired}[transaction.StartingStatus]
-					presentation.Removal = ownerconsole.CompleteRemovalPresentation{Kind: kind, StartingStatus: starting, StartingRevision: transaction.StartingRevision, Progress: ownerconsole.CompleteRemovalProgress{OperationID: ownerconsole.OperationIdentity(transaction.ChangeSet), CompletedSteps: completeRemovalCompletedSteps(transaction), TotalSteps: completeRemovalTotalSteps}, Checkpoint: checkpoint, TokenPhase: token}
+					if transaction.Checkpoint == systemchanges.TokenRevocationVerified || systemchanges.IsIrreversibleRemovalCheckpoint(transaction.Checkpoint) && transaction.Checkpoint != systemchanges.IrreversibleRemovalStarted && transaction.Checkpoint != systemchanges.OwnedDNSRecordsDeleted && transaction.Checkpoint != systemchanges.OwnedTunnelDeleted && transaction.Checkpoint != systemchanges.OwnedExternalDeletionVerified {
+						token = ownerconsole.RemovalTokenRevocationVerified
+					}
+					if transaction.Checkpoint == systemchanges.LocalStateDeleted || transaction.Checkpoint == systemchanges.SecretsDeleted || transaction.Checkpoint == systemchanges.CertificatesDeleted || transaction.Checkpoint == systemchanges.TransactionMaterialDeletionAuthorized || transaction.Checkpoint == systemchanges.TransactionMaterialDeleted || transaction.Checkpoint == systemchanges.ReleasesDeleted || transaction.Checkpoint == systemchanges.UnitsDeleted || transaction.Checkpoint == systemchanges.IdentitiesDeleted || transaction.Checkpoint == systemchanges.ListenersDeleted || transaction.Checkpoint == systemchanges.PreparedArtifactsDeleted || transaction.Checkpoint == systemchanges.OwnedFirewallStateDeleted || transaction.Checkpoint == systemchanges.FinalRemovalAbsenceVerified {
+						token = ownerconsole.RemovalLocalTokenDeleted
+					}
 				}
-				return presentation, nil
+				starting := map[systemchanges.InstallationStatus]ownerconsole.InstallationStatus{systemchanges.Managed: ownerconsole.InstallationManaged, systemchanges.RecoveryRequired: ownerconsole.InstallationRecoveryRequired}[transaction.StartingStatus]
+				presentation.Removal = ownerconsole.CompleteRemovalPresentation{Kind: kind, StartingStatus: starting, StartingRevision: transaction.StartingRevision, Progress: ownerconsole.CompleteRemovalProgress{OperationID: ownerconsole.OperationIdentity(transaction.Identity), CompletedSteps: completeRemovalCompletedSteps(transaction), TotalSteps: completeRemovalTotalSteps}, Checkpoint: checkpoint, TokenPhase: token}
 			}
+			return presentation, nil
 		}
-		if orphanedCompleteRemoval(true) {
-			recovery := ownerRecovery{changeSet: systemubuntu.FinalizingRemovalChangeSet, forwardOnly: true, completeRemoval: true}
-			return clientAccessPresentation{Installation: ownerconsole.InstallationRecoveryRequired, Recovery: recovery.ViewRecovery(ctx)}, nil
-		}
-		return clientAccessPresentation{Installation: ownerconsole.InstallationRecoveryRequired, Recovery: ownerRecovery{}.ViewRecovery(ctx)}, nil
-	}
-	if pendingErr == nil && orphanedCompleteRemoval(false) {
 		recovery := ownerRecovery{changeSet: systemubuntu.FinalizingRemovalChangeSet, forwardOnly: true, completeRemoval: true}
 		return clientAccessPresentation{Installation: ownerconsole.InstallationRecoveryRequired, Recovery: recovery.ViewRecovery(ctx)}, nil
+	}
+	if pendingErr != nil {
+		return clientAccessPresentation{Installation: ownerconsole.InstallationRecoveryRequired, Recovery: ownerRecovery{}.ViewRecovery(ctx)}, nil
 	}
 	observed, release, err := managedLoadEvidence()
 	if err != nil {
@@ -167,7 +159,7 @@ func managedClientAccessPresentation(ctx context.Context) (clientAccessPresentat
 	return presentation, err
 }
 
-func completeRemovalCompletedSteps(transaction systemubuntu.RecoveryTransactionIdentity) uint16 {
+func completeRemovalCompletedSteps(transaction systemchanges.PendingChangeSet) uint16 {
 	completed := uint16(transaction.CompletedSteps)
 	forward := map[systemchanges.DurableCheckpoint]uint16{
 		systemchanges.IrreversibleRemovalStarted: 4, systemchanges.OwnedDNSRecordsDeleted: 5, systemchanges.OwnedTunnelDeleted: 6, systemchanges.OwnedExternalDeletionVerified: 7,

@@ -130,7 +130,7 @@ func prepareSoftwareRepairBuild(ctx context.Context, changeSet string, prepareSt
 	if ctx == nil || !validClientAccessChangeSet(changeSet) {
 		return nil, errors.New("complete current-State repair inputs are required")
 	}
-	if pending, err := pendingInstallRecovery(); err != nil || pending {
+	if pending, err := pendingStartupRecovery(); err != nil || pending {
 		return nil, errors.New("an unfinished Change Set must recover before current-State repair")
 	}
 	observed, release, err := managedLoadEvidence()

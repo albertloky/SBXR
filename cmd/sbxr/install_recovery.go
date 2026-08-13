@@ -22,34 +22,45 @@ import (
 	systemubuntu "github.com/albertloky/SBXR/internal/systemchanges/adapter/ubuntu"
 )
 
-const installTransactions = "/var/lib/sbxr/transactions"
-
-func pendingInstallRecovery() (bool, error) {
-	info, statErr := os.Lstat(installTransactions)
-	if errors.Is(statErr, os.ErrNotExist) {
-		return false, nil
-	}
-	if statErr != nil {
-		return false, errors.New("install recovery transaction is unprovable")
-	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o700 || stat.Uid != 0 {
-		return false, errors.New("install recovery transaction is unprovable")
-	}
-	entries, err := os.ReadDir(installTransactions)
-	if err != nil || len(entries) > 1 || len(entries) == 1 && !entries[0].IsDir() {
-		return false, errors.New("install recovery transaction is unprovable")
-	}
-	return len(entries) == 1, nil
+func pendingStartupRecovery() (bool, error) {
+	_, pending, err := productionPendingChangeSetReader().PendingChangeSet()
+	return pending, err
 }
 
-func runInstallRecovery() (resultErr error) {
-	pending, err := pendingInstallRecovery()
+type recoveryHandler func(systemchanges.PendingChangeSet) error
+
+func productionPendingChangeSetReader() systemchanges.PendingChangeSetReader {
+	return systemubuntu.NewAt("/", nil, nil)
+}
+
+func recoveryRoutes(handler recoveryHandler) map[systemchanges.MutationClass]recoveryHandler {
+	return map[systemchanges.MutationClass]recoveryHandler{
+		systemchanges.InstallationMutation:       handler,
+		systemchanges.RepairMutation:             handler,
+		systemchanges.SettingChangeMutation:      handler,
+		systemchanges.RotationMutation:           handler,
+		systemchanges.CertificateChangeMutation:  handler,
+		systemchanges.UpdateMutation:             handler,
+		systemchanges.CertificateRenewalMutation: handler,
+		systemchanges.CompleteRemovalMutation:    handler,
+	}
+}
+
+func dispatchPendingChangeSet(pending systemchanges.PendingChangeSet, routes map[systemchanges.MutationClass]recoveryHandler) error {
+	handler := routes[pending.Kind]
+	if handler == nil {
+		return errors.New("pending Change Set kind is unsupported")
+	}
+	return handler(pending)
+}
+
+func runStartupRecovery() (resultErr error) {
+	pending, found, err := productionPendingChangeSetReader().PendingChangeSet()
 	if err != nil {
 		return err
 	}
-	if !pending {
-		if orphanedCompleteRemoval(false) {
+	if !found {
+		if orphanedCompleteRemoval() {
 			return runOrphanedCompleteRemovalRecovery()
 		}
 		if err := removeInstallRecoveryReceipt(); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -57,6 +68,19 @@ func runInstallRecovery() (resultErr error) {
 		}
 		return nil
 	}
+	return dispatchPendingChangeSet(pending, recoveryRoutes(runProvenRecovery))
+}
+
+func orphanedCompleteRemoval() bool {
+	observed, err := installRecoveryObservation()
+	return err == nil && validOrphanedCompleteRemoval(observed.Status, installedClientAccessMarker())
+}
+
+func validOrphanedCompleteRemoval(status systemchanges.InstallationStatus, installed bool) bool {
+	return status == systemchanges.NotInstalled && installed
+}
+
+func runProvenRecovery(transaction systemchanges.PendingChangeSet) (resultErr error) {
 	defer func() {
 		if resultErr == nil {
 			resultErr = removeInstallRecoveryReceipt()
@@ -65,12 +89,8 @@ func runInstallRecovery() (resultErr error) {
 			}
 		}
 	}()
-	transaction, err := systemubuntu.RecoveryTransaction("/")
-	if err != nil {
-		if orphanedCompleteRemoval(true) {
-			return runOrphanedCompleteRemovalRecovery()
-		}
-		return err
+	if transaction.Identity == systemubuntu.FinalizingRemovalChangeSet {
+		return runOrphanedCompleteRemovalRecovery()
 	}
 	starting, release, forwardOnly := transaction.StartingStatus, transaction.StartingRelease, transaction.ForwardOnly
 	if release == (systemchanges.ReleaseBinding{}) {
@@ -78,8 +98,9 @@ func runInstallRecovery() (resultErr error) {
 	}
 	stateModule := statefilesystem.New()
 	api := cloudflaretunnel.NewProductionAPI()
-	if transaction.Mutation == systemchanges.CompleteRemovalMutation {
+	if transaction.Kind == systemchanges.CompleteRemovalMutation {
 		var base systemubuntu.InstallHost
+		var err error
 		if forwardOnly {
 			base, err = systemubuntu.NewFreshInstallHost("/", softwarelifecycle.ManagedUnitNames())
 		} else {
@@ -151,7 +172,7 @@ func runInstallRecovery() (resultErr error) {
 		return err
 	}
 	var software systemubuntu.SoftwareLifecycleExecutor = softwareubuntu.NewRecoveryInstaller()
-	if transaction.Mutation == systemchanges.UpdateMutation {
+	if transaction.Kind == systemchanges.UpdateMutation {
 		software, err = recoverySoftwareUpdater(transaction)
 		if err != nil {
 			return err
@@ -163,26 +184,6 @@ func runInstallRecovery() (resultErr error) {
 		return errors.New("install restart recovery requires inspection")
 	}
 	return nil
-}
-
-func orphanedCompleteRemoval(pending bool) bool {
-	observed, err := installRecoveryObservation()
-	if err != nil {
-		return false
-	}
-	var entries []string
-	if pending {
-		directories, err := os.ReadDir(installTransactions)
-		if err != nil || len(directories) != 1 || !directories[0].IsDir() {
-			return false
-		}
-		entries = []string{directories[0].Name()}
-	}
-	return validOrphanedCompleteRemoval(observed.Status, installedClientAccessMarker(), pending, entries)
-}
-
-func validOrphanedCompleteRemoval(status systemchanges.InstallationStatus, installed, pending bool, entries []string) bool {
-	return status == systemchanges.NotInstalled && installed && (!pending || len(entries) == 1 && entries[0] == systemubuntu.FinalizingRemovalChangeSet)
 }
 
 func runOrphanedCompleteRemovalRecovery() error {
@@ -209,7 +210,7 @@ func (source recoveryReleaseSource) Verify(_ context.Context, tag string) (softw
 	return source.evidence, nil
 }
 
-func recoverySoftwareUpdater(transaction systemubuntu.RecoveryTransactionIdentity) (softwareubuntu.Updater, error) {
+func recoverySoftwareUpdater(transaction systemchanges.PendingChangeSet) (softwareubuntu.Updater, error) {
 	if transaction.StartingRelease == (systemchanges.ReleaseBinding{}) || transaction.CandidateRelease == (systemchanges.ReleaseBinding{}) {
 		return softwareubuntu.Updater{}, errors.New("update recovery release binding is incomplete")
 	}

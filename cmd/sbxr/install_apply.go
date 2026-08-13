@@ -9,7 +9,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"path/filepath"
 	"sync"
 
@@ -27,10 +26,10 @@ import (
 )
 
 func prepareInstallApply(ctx context.Context, request softwareubuntu.InstallHandoffRequest) (func() softwareubuntu.InstallApplyOutcome, error) {
-	if pending, err := pendingInstallRecovery(); err != nil {
+	if pending, err := pendingStartupRecovery(); err != nil {
 		return nil, err
 	} else if pending {
-		if err := runInstallRecovery(); err != nil {
+		if err := runStartupRecovery(); err != nil {
 			return nil, err
 		}
 		return nil, errors.New("prior installation recovered; build a fresh Plan")
@@ -77,7 +76,7 @@ func prepareInstallApply(ctx context.Context, request softwareubuntu.InstallHand
 		observationMu.RLock()
 		volatile := volatileSHA256
 		observationMu.RUnlock()
-		return observeInstallApply(installApplyStateObservation, os.ReadDir, string(requestChangeSet(request)), built.totalSteps, volatile)
+		return observeInstallApply(installApplyStateObservation, productionPendingChangeSetReader(), string(requestChangeSet(request)), built.totalSteps, volatile)
 	}
 
 	approval := softwareubuntu.NewApproval(func(recheckContext context.Context) (softwarelifecycle.InstallRecheck, error) {
@@ -175,23 +174,21 @@ func installApplyStateObservation() (systemchanges.Observation, error) {
 	return lineage, nil
 }
 
-func observeInstallApply(stateSource systemubuntu.ObservationSource, readDir func(string) ([]os.DirEntry, error), changeSet string, totalSteps int, volatileSHA256 string) (systemchanges.Observation, error) {
+func observeInstallApply(stateSource systemubuntu.ObservationSource, reader systemchanges.PendingChangeSetReader, changeSet string, totalSteps int, volatileSHA256 string) (systemchanges.Observation, error) {
 	observed, err := stateSource()
 	if err != nil || observed.Status != systemchanges.NotInstalled && observed.Status != systemchanges.Managed {
 		return systemchanges.Observation{}, errors.New("install State lineage is unprovable")
 	}
 	observed.VolatileSHA256 = volatileSHA256
-	entries, err := readDir(installTransactions)
-	if errors.Is(err, os.ErrNotExist) {
+	pending, found, err := reader.PendingChangeSet()
+	if err == nil && !found {
 		return observed, nil
 	}
-	if err != nil || len(entries) > 1 || len(entries) == 1 && (!entries[0].IsDir() || entries[0].Name() != changeSet) {
+	if err != nil || pending.Identity != changeSet {
 		return systemchanges.Observation{}, errors.New("install transaction lineage is unprovable")
 	}
-	if len(entries) == 1 {
-		observed.Status, observed.CurrentChangeSet = systemchanges.ChangeInProgress, changeSet
-		observed.Checkpoint, observed.TotalSteps, observed.RollbackAvailable = systemchanges.PreparedCheckpoint, totalSteps, true
-	}
+	observed.Status, observed.CurrentChangeSet = systemchanges.ChangeInProgress, changeSet
+	observed.Checkpoint, observed.TotalSteps, observed.RollbackAvailable = systemchanges.PreparedCheckpoint, totalSteps, !pending.ForwardOnly
 	return observed, nil
 }
 

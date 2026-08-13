@@ -20,7 +20,6 @@ import (
 	"github.com/albertloky/SBXR/internal/ownerconsole"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 	"github.com/albertloky/SBXR/internal/systemchanges"
-	systemubuntu "github.com/albertloky/SBXR/internal/systemchanges/adapter/ubuntu"
 )
 
 const maxClientAccessHandoffBytes = 16 << 10
@@ -461,23 +460,17 @@ func serveClientAccess(ctx context.Context, socket, executable *os.File, verify 
 		return err
 	}
 	if request.Mode == "recover" {
-		orphan := request.ChangeSet == systemubuntu.FinalizingRemovalChangeSet && orphanedCompleteRemovalDirectory()
-		if !orphan {
-			entries, err := os.ReadDir(installTransactions)
-			if err != nil || len(entries) != 1 || entries[0].Name() != request.ChangeSet {
-				return errors.New("Client Access recovery request refused")
-			}
-			if _, err := systemubuntu.RecoveryStartingStatus("/"); err != nil {
-				return errors.New("Client Access recovery failed")
-			}
+		pending, found, err := productionPendingChangeSetReader().PendingChangeSet()
+		if err != nil || !found || pending.Identity != request.ChangeSet {
+			return errors.New("Client Access recovery request refused")
 		}
-		if runInstallRecovery() != nil {
+		if runStartupRecovery() != nil {
 			return errors.New("Client Access recovery failed")
 		}
 		observed, err := installRecoveryObservation()
-		pending, pendingErr := pendingInstallRecovery()
+		stillPending, pendingErr := pendingStartupRecovery()
 		status := systemchanges.InstallationStatus("")
-		if err == nil && pendingErr == nil && !pending && (observed.Status == systemchanges.Managed || observed.Status == systemchanges.NotInstalled) {
+		if err == nil && pendingErr == nil && !stillPending && (observed.Status == systemchanges.Managed || observed.Status == systemchanges.NotInstalled) {
 			status = observed.Status
 		}
 		return writeClientAccessMessage(socket, clientAccessRecoveryResult{Status: status})
@@ -504,11 +497,6 @@ func serveClientAccess(ctx context.Context, socket, executable *os.File, verify 
 	}
 	_, err = socket.Write([]byte{terminal})
 	return err
-}
-
-func orphanedCompleteRemovalDirectory() bool {
-	pending, err := pendingInstallRecovery()
-	return err == nil && orphanedCompleteRemoval(pending)
 }
 
 func loadDiagnosticsPresentation(ctx context.Context) ownerconsole.DiagnosticsPresentation {

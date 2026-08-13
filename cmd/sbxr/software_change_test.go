@@ -13,7 +13,6 @@ import (
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 	"github.com/albertloky/SBXR/internal/state"
 	"github.com/albertloky/SBXR/internal/systemchanges"
-	systemubuntu "github.com/albertloky/SBXR/internal/systemchanges/adapter/ubuntu"
 )
 
 type controlledLifecycleViewer struct {
@@ -144,7 +143,7 @@ func TestComposedSoftwareApplyCarriesCancellationAndRestartIdentity(t *testing.T
 	}
 	starting := systemchanges.ReleaseBinding{Repository: softwarelifecycle.Repository, Tag: "v1.4.0", Commit: strings.Repeat("a", 40), ReleaseIndexSHA256: strings.Repeat("b", 64)}
 	candidate := systemchanges.ReleaseBinding{Repository: softwarelifecycle.Repository, Tag: "v1.5.0", Commit: strings.Repeat("c", 40), ReleaseIndexSHA256: strings.Repeat("d", 64)}
-	if _, err := recoverySoftwareUpdater(systemubuntu.RecoveryTransactionIdentity{StartingRelease: starting, CandidateRelease: candidate}); err != nil {
+	if _, err := recoverySoftwareUpdater(systemchanges.PendingChangeSet{StartingRelease: starting, CandidateRelease: candidate}); err != nil {
 		t.Fatalf("transaction-scoped restart identity refused: %v", err)
 	}
 }

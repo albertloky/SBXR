@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"os"
 	"strings"
 	"testing"
 
@@ -11,9 +10,8 @@ import (
 
 func TestInstallApplyObservationFailsClosedAndKeepsProvenStateLineage(t *testing.T) {
 	changeSet := "install-aaaaaaaaaaaaaaaa"
-	empty := func(string) ([]os.DirEntry, error) { return nil, os.ErrNotExist }
 	managed := systemchanges.Observation{Status: systemchanges.Managed, StateRevision: 7, StateSHA256: strings.Repeat("a", 64), LastChangeSet: "change-0007", Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}
-	got, err := observeInstallApply(func() (systemchanges.Observation, error) { return managed, nil }, empty, changeSet, 19, "volatile")
+	got, err := observeInstallApply(func() (systemchanges.Observation, error) { return managed, nil }, pendingChangeSetReaderStub{}, changeSet, 19, "volatile")
 	if err != nil || got.StateRevision != 7 || got.StateSHA256 != managed.StateSHA256 || got.LastChangeSet != managed.LastChangeSet {
 		t.Fatalf("observeInstallApply() = (%+v, %v)", got, err)
 	}
@@ -29,20 +27,11 @@ func TestInstallApplyObservationFailsClosedAndKeepsProvenStateLineage(t *testing
 		{name: "unexpected transaction", state: systemubuntuObservation{observation: systemchanges.Observation{Status: systemchanges.NotInstalled}}, transaction: "other-change"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			readDir := func(string) ([]os.DirEntry, error) {
-				if test.readErr != nil {
-					return nil, test.readErr
-				}
-				if test.transaction == "" {
-					return nil, os.ErrNotExist
-				}
-				directory := t.TempDir()
-				if err := os.Mkdir(directory+"/"+test.transaction, 0o700); err != nil {
-					t.Fatal(err)
-				}
-				return os.ReadDir(directory)
+			reader := pendingChangeSetReaderStub{err: test.readErr}
+			if test.transaction != "" {
+				reader.pending, reader.found = systemchanges.PendingChangeSet{Identity: test.transaction}, true
 			}
-			if _, err := observeInstallApply(test.state.load, readDir, changeSet, 19, "volatile"); err == nil {
+			if _, err := observeInstallApply(test.state.load, reader, changeSet, 19, "volatile"); err == nil {
 				t.Fatal("unprovable install lineage accepted")
 			}
 		})

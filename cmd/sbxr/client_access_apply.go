@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"os"
 
 	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
 	"github.com/albertloky/SBXR/internal/connectionprofiles"
@@ -58,16 +57,19 @@ func clientAccessObservation(built *builtClientAccess) (systemchanges.Observatio
 	if err != nil {
 		return systemchanges.Observation{}, err
 	}
-	entries, readErr := os.ReadDir(installTransactions)
-	if readErr == nil && len(entries) == 1 && entries[0].IsDir() {
+	pending, found, readErr := productionPendingChangeSetReader().PendingChangeSet()
+	if readErr != nil || found && pending.Identity != built.plan.changeSetID {
+		return systemchanges.Observation{}, errors.New("Client Access transaction lineage is unprovable")
+	}
+	if found {
 		observed.Status, observed.CurrentChangeSet = systemchanges.ChangeInProgress, built.plan.changeSetID
-		observed.Checkpoint, observed.TotalSteps, observed.RollbackAvailable = systemchanges.PreparedCheckpoint, built.totalSteps, true
+		observed.Checkpoint, observed.TotalSteps, observed.RollbackAvailable = systemchanges.PreparedCheckpoint, built.totalSteps, !pending.ForwardOnly
 	}
 	return observed, nil
 }
 
 func prepareManagedClientAccess(ctx context.Context, request clientAccessBuildRequest) (*builtClientAccess, state.Interface, error) {
-	if pending, err := pendingInstallRecovery(); err != nil {
+	if pending, err := pendingStartupRecovery(); err != nil {
 		return nil, state.Interface{}, err
 	} else if pending {
 		return nil, state.Interface{}, errors.New("an unfinished Change Set must recover before a new Client Access Plan")

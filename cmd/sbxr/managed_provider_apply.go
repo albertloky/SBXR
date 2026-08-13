@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"os"
 
 	profilesubuntu "github.com/albertloky/SBXR/internal/connectionprofiles/adapter/ubuntu"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
@@ -48,10 +47,13 @@ func managedProviderObservation(built *builtManagedProvider) (systemchanges.Obse
 	if err != nil {
 		return systemchanges.Observation{}, err
 	}
-	entries, readErr := os.ReadDir(installTransactions)
-	if readErr == nil && len(entries) == 1 && entries[0].IsDir() {
+	pending, found, readErr := productionPendingChangeSetReader().PendingChangeSet()
+	if readErr != nil || found && pending.Identity != built.changeSet {
+		return systemchanges.Observation{}, errors.New("managed provider transaction lineage is unprovable")
+	}
+	if found {
 		observed.Status, observed.CurrentChangeSet = systemchanges.ChangeInProgress, built.changeSet
-		observed.Checkpoint, observed.TotalSteps, observed.RollbackAvailable = systemchanges.PreparedCheckpoint, built.totalSteps, true
+		observed.Checkpoint, observed.TotalSteps, observed.RollbackAvailable = systemchanges.PreparedCheckpoint, built.totalSteps, !pending.ForwardOnly
 	}
 	return observed, nil
 }

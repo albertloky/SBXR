@@ -57,7 +57,7 @@ func main() {
 		return
 	}
 	if len(os.Args) == 3 && os.Args[1] == "private" && os.Args[2] == "recover" {
-		if runInstallRecovery() != nil {
+		if runStartupRecovery() != nil {
 			os.Exit(1)
 		}
 		return

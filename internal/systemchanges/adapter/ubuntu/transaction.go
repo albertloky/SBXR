@@ -2401,71 +2401,116 @@ func validRecoveryBinding(prepared journalEntry, manifest snapshotManifest, forw
 	return prepared.Starting.Status == systemchanges.NotInstalled && binding.StartingRevision == 0 && binding.StartingSHA256 == "" && binding.StartingRelease == (systemchanges.ReleaseBinding{}) && manifest.Files["snapshot/prior-state.json"] == ""
 }
 
-// RecoveryStartingStatus reads the protected journal and manifest without
-// mutating them so startup can construct executors for the transaction's true
-// starting baseline rather than whichever State file is currently published.
-func RecoveryStartingStatus(rootPath string) (systemchanges.InstallationStatus, error) {
-	status, _, _, _, err := RecoveryStartingRelease(rootPath)
-	return status, err
-}
-
-type RecoveryTransactionIdentity struct {
+type recoveryTransactionIdentity struct {
 	ChangeSet                         string
 	StartingStatus                    systemchanges.InstallationStatus
 	StartingRevision                  uint64
 	Mutation                          systemchanges.MutationClass
+	OutcomeOwner                      systemchanges.Module
 	StartingRelease, CandidateRelease systemchanges.ReleaseBinding
 	ForwardOnly                       bool
 	Checkpoint                        systemchanges.DurableCheckpoint
 	CompletedSteps, TotalSteps        int
 }
 
-// RecoveryStartingRelease returns only the release already authenticated by
-// the protected journal and manifest so recovery can reconstruct fixed tools.
-func RecoveryStartingRelease(rootPath string) (systemchanges.InstallationStatus, systemchanges.ReleaseBinding, bool, systemchanges.DurableCheckpoint, error) {
-	identity, err := RecoveryTransaction(rootPath)
+// PendingChangeSet reports only proven, secret-safe facts needed by startup.
+func (a Adapter) PendingChangeSet() (systemchanges.PendingChangeSet, bool, error) {
+	root, err := os.OpenRoot(a.root)
 	if err != nil {
-		return "", systemchanges.ReleaseBinding{}, false, "", err
+		return systemchanges.PendingChangeSet{}, false, err
 	}
-	release := identity.StartingRelease
-	if release == (systemchanges.ReleaseBinding{}) {
-		release = identity.CandidateRelease
+	defer root.Close()
+	entries, err := fs.ReadDir(root.FS(), transactionDirectory)
+	if errors.Is(err, fs.ErrNotExist) || err == nil && len(entries) == 0 {
+		return systemchanges.PendingChangeSet{}, false, nil
 	}
-	return identity.StartingStatus, release, identity.ForwardOnly, identity.Checkpoint, nil
+	if err != nil || verifyDirectory(root, transactionDirectory, a.uid) != nil || len(entries) != 1 || !entries[0].IsDir() || !safeName(entries[0].Name()) {
+		return systemchanges.PendingChangeSet{}, false, errors.New("one unfinished transaction was not proven")
+	}
+	if entries[0].Name() == finalizingRemovalDirectory {
+		if err := verifyFinalizingPendingChangeSet(root, a.uid); err != nil {
+			return systemchanges.PendingChangeSet{}, false, err
+		}
+		return systemchanges.PendingChangeSet{Identity: finalizingRemovalDirectory, Kind: systemchanges.CompleteRemovalMutation, StartingStatus: systemchanges.NotInstalled, ForwardOnly: true, Checkpoint: systemchanges.FinalRemovalAbsenceVerified}, true, nil
+	}
+	identity, err := readRecoveryTransactionIdentity(a.root)
+	if err != nil {
+		return systemchanges.PendingChangeSet{}, false, err
+	}
+	if !validPendingOwnership(identity.Mutation, identity.OutcomeOwner, identity.StartingStatus) {
+		return systemchanges.PendingChangeSet{}, false, errors.New("recovery transaction ownership is invalid")
+	}
+	return systemchanges.PendingChangeSet{Identity: identity.ChangeSet, Kind: identity.Mutation, StartingStatus: identity.StartingStatus, StartingRevision: identity.StartingRevision, StartingRelease: identity.StartingRelease, CandidateRelease: identity.CandidateRelease, ForwardOnly: identity.ForwardOnly, Checkpoint: identity.Checkpoint, CompletedSteps: identity.CompletedSteps, TotalSteps: identity.TotalSteps}, true, nil
 }
 
-func RecoveryTransaction(rootPath string) (RecoveryTransactionIdentity, error) {
+func verifyFinalizingPendingChangeSet(root *os.Root, uid int) error {
+	directory := path.Join(transactionDirectory, finalizingRemovalDirectory)
+	if err := verifyDirectory(root, directory, uid); err != nil {
+		return errors.New("final Complete removal identity is invalid")
+	}
+	entries, err := fs.ReadDir(root.FS(), directory)
+	if err != nil || len(entries) > 1 || len(entries) == 1 && (entries[0].Name() != "journal.jsonl" || !entries[0].Type().IsRegular()) {
+		return errors.New("final Complete removal identity is invalid")
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	journalName := path.Join(directory, "journal.jsonl")
+	journal, err := readJournal(root, journalName)
+	if verifyFile(root, journalName, uid) != nil || err != nil || !validJournal(journal) || journal[0].Mutation != systemchanges.CompleteRemovalMutation || !validPendingOwnership(journal[0].Mutation, journal[0].OutcomeOwner, journal[0].Starting.Status) || journal[len(journal)-1].Checkpoint != systemchanges.FinalRemovalAbsenceVerified {
+		return errors.New("final Complete removal identity is invalid")
+	}
+	return nil
+}
+
+func validPendingOwnership(kind systemchanges.MutationClass, owner systemchanges.Module, starting systemchanges.InstallationStatus) bool {
+	switch kind {
+	case systemchanges.InstallationMutation, systemchanges.RepairMutation, systemchanges.SettingChangeMutation, systemchanges.RotationMutation, systemchanges.CertificateChangeMutation, systemchanges.UpdateMutation, systemchanges.CertificateRenewalMutation, systemchanges.CompleteRemovalMutation:
+	default:
+		return false
+	}
+	if starting == systemchanges.NotInstalled && kind != systemchanges.InstallationMutation || starting == systemchanges.Managed && kind == systemchanges.InstallationMutation || starting == systemchanges.RecoveryRequired && kind != systemchanges.CompleteRemovalMutation {
+		return false
+	}
+	switch owner {
+	case systemchanges.ConnectionProfilesModule, systemchanges.SubscriptionModule, systemchanges.CloudflareModule, systemchanges.CertificateModule, systemchanges.SoftwareModule, systemchanges.NetworkPolicyModule, systemchanges.HealthDiagnosticsModule, systemchanges.StateModule:
+		return true
+	}
+	return false
+}
+
+func readRecoveryTransactionIdentity(rootPath string) (recoveryTransactionIdentity, error) {
 	root, err := os.OpenRoot(rootPath)
 	if err != nil {
-		return RecoveryTransactionIdentity{}, err
+		return recoveryTransactionIdentity{}, err
 	}
 	defer root.Close()
 	entries, err := fs.ReadDir(root.FS(), transactionDirectory)
 	if err != nil || len(entries) != 1 || !entries[0].IsDir() || !safeName(entries[0].Name()) {
-		return RecoveryTransactionIdentity{}, errors.New("one unfinished transaction was not proven")
+		return recoveryTransactionIdentity{}, errors.New("one unfinished transaction was not proven")
 	}
 	directory := path.Join(transactionDirectory, entries[0].Name())
 	uid := os.Geteuid()
 	if verifyDirectory(root, directory, uid) != nil || verifyFile(root, path.Join(directory, "journal.jsonl"), uid) != nil {
-		return RecoveryTransactionIdentity{}, errors.New("recovery transaction identity is invalid")
+		return recoveryTransactionIdentity{}, errors.New("recovery transaction identity is invalid")
 	}
 	journal, err := readJournal(root, path.Join(directory, "journal.jsonl"))
-	if err != nil || !validJournal(journal) || len(journal) == 0 || journal[0].State == nil {
-		return RecoveryTransactionIdentity{}, errors.New("recovery transaction lineage is invalid")
+	if err != nil || !validJournal(journal) || len(journal) == 0 || journal[0].State == nil || journal[0].ChangeSet != entries[0].Name() {
+		return recoveryTransactionIdentity{}, errors.New("recovery transaction lineage is invalid")
 	}
 	irreversibleRemoval := journal[0].Mutation == systemchanges.CompleteRemovalMutation && journalHasCheckpoint(journal, systemchanges.IrreversibleRemovalStarted)
 	removalSnapshotDeleted := journal[0].Mutation == systemchanges.CompleteRemovalMutation && journalHasCheckpoint(journal, systemchanges.TransactionMaterialDeletionAuthorized)
 	if !removalSnapshotDeleted {
 		manifest, manifestErr := verifyTransactionManifest(root, directory, uid)
 		if manifestErr != nil || manifest.Reason != journal[0].Mutation || !validRecoveryBinding(journal[0], manifest, journal[0].Mutation == systemchanges.RotationMutation && runTokenFingerprint(journal) != "") {
-			return RecoveryTransactionIdentity{}, errors.New("recovery transaction lineage is invalid")
+			return recoveryTransactionIdentity{}, errors.New("recovery transaction lineage is invalid")
 		}
 	}
 	if journal[0].Starting.Status != systemchanges.Managed && journal[0].Starting.Status != systemchanges.NotInstalled && (journal[0].Starting.Status != systemchanges.RecoveryRequired || journal[0].Mutation != systemchanges.CompleteRemovalMutation) {
-		return RecoveryTransactionIdentity{}, errors.New("recovery starting baseline is unsupported")
+		return recoveryTransactionIdentity{}, errors.New("recovery starting baseline is unsupported")
 	}
 	forwardOnly := journal[0].Mutation == systemchanges.RotationMutation && runTokenFingerprint(journal) != "" || irreversibleRemoval || journal[0].Reclamation != nil && journalHasCheckpoint(journal, systemchanges.IrreversibleReclamationStarted)
-	return RecoveryTransactionIdentity{ChangeSet: journal[0].ChangeSet, StartingStatus: journal[0].Starting.Status, StartingRevision: journal[0].Starting.Revision, Mutation: journal[0].Mutation, StartingRelease: journal[0].State.StartingRelease, CandidateRelease: journal[0].State.CandidateRelease, ForwardOnly: forwardOnly, Checkpoint: journal[len(journal)-1].Checkpoint, CompletedSteps: highestCompletedStep(journal), TotalSteps: len(journal[0].Steps)}, nil
+	return recoveryTransactionIdentity{ChangeSet: journal[0].ChangeSet, StartingStatus: journal[0].Starting.Status, StartingRevision: journal[0].Starting.Revision, Mutation: journal[0].Mutation, OutcomeOwner: journal[0].OutcomeOwner, StartingRelease: journal[0].State.StartingRelease, CandidateRelease: journal[0].State.CandidateRelease, ForwardOnly: forwardOnly, Checkpoint: journal[len(journal)-1].Checkpoint, CompletedSteps: highestCompletedStep(journal), TotalSteps: len(journal[0].Steps)}, nil
 }
 
 // RecoveryHealthObservation overlays one validated unfinished transaction on

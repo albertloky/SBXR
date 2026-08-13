@@ -219,6 +219,24 @@ type RecoveryTransaction struct {
 	Reclamation                    *ReclamationTarget
 }
 
+// PendingChangeSet is the secret-safe identity needed to select one recovery
+// owner. Journal entries, rollback material, and Adapter details stay private.
+type PendingChangeSet struct {
+	Identity                          string
+	Kind                              MutationClass
+	StartingStatus                    InstallationStatus
+	StartingRevision                  uint64
+	StartingRelease, CandidateRelease ReleaseBinding
+	ForwardOnly                       bool
+	Checkpoint                        DurableCheckpoint
+	CompletedSteps, TotalSteps        int
+}
+
+// PendingChangeSetReader is System Changes' read-only startup seam.
+type PendingChangeSetReader interface {
+	PendingChangeSet() (PendingChangeSet, bool, error)
+}
+
 type ExecutionLease struct{ authority *executionAuthority }
 type executionAuthority struct {
 	active   atomic.Bool

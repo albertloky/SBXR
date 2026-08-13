@@ -33,26 +33,33 @@ func TestRecoveryStartingStatusComesFromTheProtectedTransaction(t *testing.T) {
 				checksums[name] = testDigest(body)
 			}
 			release := systemchanges.ReleaseBinding{Repository: "albertloky/SBXR", Tag: "v1.0.0", Commit: "0123456789abcdef0123456789abcdef01234567", ReleaseIndexSHA256: testDigest([]byte("release"))}
+			mutation, owner := systemchanges.SettingChangeMutation, systemchanges.StateModule
 			starting := systemchanges.StateLineage{Status: status}
 			binding := systemchanges.StateTransactionBinding{ChangeSet: "client-access-recovery", CandidateRevision: 1, CandidateSHA256: testDigest([]byte("candidate")), CandidateRelease: release, PreparedStateSHA256: checksums["prepared/state.json"], PreparedManifestSHA256: checksums["prepared/manifests.json"]}
 			if status == systemchanges.Managed {
 				starting.Revision, starting.SHA256 = 7, testDigest([]byte("starting"))
 				binding.StartingRevision, binding.CandidateRevision, binding.StartingSHA256, binding.StartingRelease = 7, 8, starting.SHA256, release
+			} else {
+				mutation, owner = systemchanges.InstallationMutation, systemchanges.SoftwareModule
 			}
-			entry := journalEntry{Checkpoint: systemchanges.Prepared, ChangeSet: "client-access-recovery", Mutation: systemchanges.SettingChangeMutation, Starting: starting, OutcomeOwner: systemchanges.StateModule, PlanSHA256: testDigest([]byte("plan")), State: &binding,
+			entry := journalEntry{Checkpoint: systemchanges.Prepared, ChangeSet: "client-access-recovery", Mutation: mutation, Starting: starting, OutcomeOwner: owner, PlanSHA256: testDigest([]byte("plan")), State: &binding,
 				Steps:  []journalStep{{Owner: systemchanges.ConnectionProfilesModule, Forward: systemchanges.ActivatePreparedConfiguration, Rollback: systemchanges.RestorePriorConfiguration, Cancellation: systemchanges.SafeCheckpointCancellation, Inspection: systemchanges.InspectBeforeIdempotentReverse}},
 				Checks: []systemchanges.Check{{Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PostPublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CONNECTION-PROFILES-ACTIVE"}}, Timeouts: systemchanges.Timeouts{Step: time.Minute, Check: time.Minute}}
 			journal, _ := json.Marshal(entry)
 			if err := os.WriteFile(filepath.Join(directory, "journal.jsonl"), append(journal, '\n'), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			manifest, _ := json.Marshal(snapshotManifest{SchemaVersion: 1, Release: release, Reason: systemchanges.SettingChangeMutation, Files: checksums})
+			manifest, _ := json.Marshal(snapshotManifest{SchemaVersion: 1, Release: release, Reason: mutation, Files: checksums})
 			if err := os.WriteFile(filepath.Join(directory, "manifest.json"), manifest, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			got, gotRelease, forwardOnly, checkpoint, err := RecoveryStartingRelease(root)
-			if err != nil || got != status || gotRelease != release || forwardOnly || checkpoint != systemchanges.Prepared {
-				t.Fatalf("starting recovery = %s, %+v, forward=%t, checkpoint=%s, %v; want %s, %+v", got, gotRelease, forwardOnly, checkpoint, err, status, release)
+			pending, found, err := NewAt(root, nil, nil).PendingChangeSet()
+			gotRelease := pending.StartingRelease
+			if gotRelease == (systemchanges.ReleaseBinding{}) {
+				gotRelease = pending.CandidateRelease
+			}
+			if err != nil || !found || pending.StartingStatus != status || gotRelease != release || pending.ForwardOnly || pending.Checkpoint != systemchanges.Prepared {
+				t.Fatalf("starting recovery = %+v, found=%t, %v; want %s, %+v", pending, found, err, status, release)
 			}
 			base := systemchanges.Observation{Status: status, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}
 			if status == systemchanges.Managed {
@@ -117,9 +124,9 @@ func TestRecoveryStartingReleaseReportsEveryForwardRunTokenCheckpoint(t *testing
 			_, _ = file.Write(append(encoded, '\n'))
 		}
 		_ = file.Close()
-		_, _, forwardOnly, checkpoint, err := RecoveryStartingRelease(root)
-		if err != nil || !forwardOnly || checkpoint != entries[length-1].Checkpoint {
-			t.Fatalf("checkpoint %s = forward=%t checkpoint=%s err=%v", entries[length-1].Checkpoint, forwardOnly, checkpoint, err)
+		pending, found, err := NewAt(root, nil, nil).PendingChangeSet()
+		if err != nil || !found || !pending.ForwardOnly || pending.Checkpoint != entries[length-1].Checkpoint {
+			t.Fatalf("checkpoint %s = pending=%+v found=%t err=%v", entries[length-1].Checkpoint, pending, found, err)
 		}
 		base := systemchanges.Observation{Status: systemchanges.Managed, LastChangeSet: "change-0007", Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, StateRevision: starting.Revision, StateSHA256: starting.SHA256, WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}
 		observed, err := RecoveryHealthObservation(root, func() (systemchanges.Observation, error) { return base, nil })

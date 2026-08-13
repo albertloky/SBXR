@@ -135,7 +135,7 @@ func prepareManagedProvider(ctx context.Context, request managedProviderBuildReq
 	if ctx == nil || request.ChangeSet == "" || request.Disk == (systemchanges.DiskRequirement{}) {
 		return nil, state.Interface{}, errors.New("complete managed provider inputs are required")
 	}
-	if pending, err := pendingInstallRecovery(); err != nil || pending {
+	if pending, err := pendingStartupRecovery(); err != nil || pending {
 		return nil, state.Interface{}, errors.New("an unfinished Change Set must recover before a provider Plan")
 	}
 	observed, release, err := managedLoadEvidence()

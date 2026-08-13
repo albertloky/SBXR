@@ -24,7 +24,7 @@ func runScheduledUpdateCheck(ctx context.Context, lifecycle updateViewer, instal
 }
 
 func runProductionScheduledUpdateCheck(ctx context.Context) error {
-	if pending, err := pendingInstallRecovery(); err != nil || pending {
+	if pending, err := pendingStartupRecovery(); err != nil || pending {
 		return errors.New("an unfinished Change Set must recover before update discovery")
 	}
 	_, release, err := managedLoadEvidence()

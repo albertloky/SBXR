@@ -65,7 +65,7 @@ func prepareSoftwareChange(ctx context.Context, action softwareChangeAction, tag
 	if ctx == nil || action != softwareUpdate && action != softwareDowngrade || !validClientAccessChangeSet(changeSet) {
 		return nil, errors.New("complete Software Lifecycle change inputs are required")
 	}
-	if pending, err := pendingInstallRecovery(); err != nil || pending {
+	if pending, err := pendingStartupRecovery(); err != nil || pending {
 		return nil, errors.New("an unfinished Change Set must recover before a Software Lifecycle Plan")
 	}
 	observed, release, err := managedLoadEvidence()

@@ -13,7 +13,6 @@ import (
 	"github.com/albertloky/SBXR/internal/ownerconsole"
 	"github.com/albertloky/SBXR/internal/state"
 	"github.com/albertloky/SBXR/internal/systemchanges"
-	systemubuntu "github.com/albertloky/SBXR/internal/systemchanges/adapter/ubuntu"
 )
 
 func TestCompleteRemovalRemovesOnlyTheSBXROwnedPackageHoldWithoutRepair(t *testing.T) {
@@ -189,10 +188,10 @@ func TestCompleteRemovalKeepsExecutableWhenRecoveryServiceFinalizationFails(t *t
 }
 
 func TestCompleteRemovalBootDetectorAcceptsEnabledRunnerAfterJournalDeletion(t *testing.T) {
-	if !validOrphanedCompleteRemoval(systemchanges.NotInstalled, true, false, nil) {
+	if !validOrphanedCompleteRemoval(systemchanges.NotInstalled, true) {
 		t.Fatal("authenticated no-journal recovery runner was not recognized")
 	}
-	if validOrphanedCompleteRemoval(systemchanges.Managed, true, false, nil) || validOrphanedCompleteRemoval(systemchanges.NotInstalled, false, false, nil) {
+	if validOrphanedCompleteRemoval(systemchanges.Managed, true) || validOrphanedCompleteRemoval(systemchanges.NotInstalled, false) {
 		t.Fatal("unproved orphaned Complete removal was accepted")
 	}
 }
@@ -212,7 +211,7 @@ func TestCompleteRemovalPresentationCrossesToForwardOnlyAndEndsNotInstalled(t *t
 	if complete.Kind != ownerconsole.CompleteRemovalSucceeded || complete.FinalStatus != ownerconsole.InstallationNotInstalled || complete.Progress.CompletedSteps != completeRemovalTotalSteps || !complete.NoRecoveryMaterial {
 		t.Fatalf("completed presentation = %+v", complete)
 	}
-	progress := completeRemovalCompletedSteps(systemubuntu.RecoveryTransactionIdentity{Checkpoint: systemchanges.SecretsDeleted, CompletedSteps: 4})
+	progress := completeRemovalCompletedSteps(systemchanges.PendingChangeSet{Checkpoint: systemchanges.SecretsDeleted, CompletedSteps: 4})
 	if progress != 10 {
 		t.Fatalf("restart progress = %d, want 10", progress)
 	}
