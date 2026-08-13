@@ -273,14 +273,15 @@ type releaseSubject struct {
 }
 
 type releasePredicate struct {
-	OwnerID, PURL, ReleaseID, Repository, RepositoryID, Tag string
+	DatabaseID, OwnerID, PackageID, PURL, Repository, RepositoryID, Tag string
 }
 
 func (p *releasePredicate) UnmarshalJSON(body []byte) error {
 	var value struct {
+		DatabaseID   string `json:"databaseId"`
 		OwnerID      string `json:"ownerId"`
+		PackageID    string `json:"packageId"`
 		PURL         string `json:"purl"`
-		ReleaseID    string `json:"releaseId"`
 		Repository   string `json:"repository"`
 		RepositoryID string `json:"repositoryId"`
 		Tag          string `json:"tag"`
@@ -290,7 +291,7 @@ func (p *releasePredicate) UnmarshalJSON(body []byte) error {
 	if decoder.Decode(&value) != nil || decoder.Decode(&struct{}{}) != io.EOF {
 		return errors.New("release predicate refused")
 	}
-	*p = releasePredicate{value.OwnerID, value.PURL, value.ReleaseID, value.Repository, value.RepositoryID, value.Tag}
+	*p = releasePredicate{value.DatabaseID, value.OwnerID, value.PackageID, value.PURL, value.Repository, value.RepositoryID, value.Tag}
 	return nil
 }
 
@@ -305,7 +306,8 @@ func parseReleaseStatement(body []byte, tag, commit string) (map[string]string, 
 		return nil, errors.New("release statement refused")
 	}
 	purl := "pkg:github/" + softwarelifecycle.Repository + "@" + tag
-	if statement.Type != "https://in-toto.io/Statement/v1" || statement.PredicateType != "https://in-toto.io/attestation/release/v0.1" ||
+	if statement.Type != "https://in-toto.io/Statement/v1" || statement.PredicateType != "https://in-toto.io/attestation/release/v0.2" ||
+		statement.Predicate.DatabaseID == "" || statement.Predicate.OwnerID == "" || statement.Predicate.PackageID == "" || statement.Predicate.RepositoryID == "" ||
 		statement.Predicate.Repository != softwarelifecycle.Repository || statement.Predicate.Tag != tag || statement.Predicate.PURL != purl || len(statement.Subject) != 7 {
 		return nil, errors.New("release statement refused")
 	}

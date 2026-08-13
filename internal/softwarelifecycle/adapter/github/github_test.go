@@ -75,6 +75,23 @@ func TestSourceRefusesHostilePublicReleaseFactsWithOneSafeError(t *testing.T) {
 	}
 }
 
+func TestReleaseStatementRefusesAMissingRequiredV02PredicateField(t *testing.T) {
+	fixture := newReleaseFixture(t)
+	body, err := fixture.verifier([]byte(`{"fixture":true}`), "sha1", fixtureCommit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var statement map[string]any
+	if json.Unmarshal(body, &statement) != nil {
+		t.Fatal("fixture statement refused")
+	}
+	delete(statement["predicate"].(map[string]any), "packageId")
+	body, _ = json.Marshal(statement)
+	if _, err := parseReleaseStatement(body, "v1.0.0", fixtureCommit); err == nil {
+		t.Fatal("release/v0.2 statement without packageId accepted")
+	}
+}
+
 func TestSourceDiscoversStableAndReviewedReleasesThroughPublicHTTPS(t *testing.T) {
 	fixture := newReleaseFixture(t)
 	source := NewWithEndpoint(fixture.server.Client(), fixture.server.URL, fixture.verifier)
@@ -165,8 +182,8 @@ func (fixture *releaseFixture) verifier(body []byte, algorithm, digest string) (
 		subjects = append(subjects, map[string]any{"name": name, "digest": map[string]string{"sha256": fixture.attested[name]}})
 	}
 	return json.Marshal(map[string]any{
-		"_type": "https://in-toto.io/Statement/v1", "predicateType": "https://in-toto.io/attestation/release/v0.1", "subject": subjects,
-		"predicate": map[string]string{"ownerId": "1", "purl": "pkg:github/" + softwarelifecycle.Repository + "@v1.0.0", "releaseId": "2", "repository": softwarelifecycle.Repository, "repositoryId": "3", "tag": "v1.0.0"},
+		"_type": "https://in-toto.io/Statement/v1", "predicateType": "https://in-toto.io/attestation/release/v0.2", "subject": subjects,
+		"predicate": map[string]string{"databaseId": "2", "ownerId": "1", "packageId": "4", "purl": "pkg:github/" + softwarelifecycle.Repository + "@v1.0.0", "repository": softwarelifecycle.Repository, "repositoryId": "3", "tag": "v1.0.0"},
 	})
 }
 
