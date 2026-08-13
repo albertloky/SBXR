@@ -1,4 +1,4 @@
-package main
+package installation
 
 import (
 	"bytes"
@@ -10,13 +10,11 @@ import (
 	"io/fs"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
 	"github.com/albertloky/SBXR/internal/networkpolicy"
-	"github.com/albertloky/SBXR/internal/ownerconsole"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 	softwareubuntu "github.com/albertloky/SBXR/internal/softwarelifecycle/adapter/ubuntu"
 	"github.com/albertloky/SBXR/internal/state"
@@ -28,7 +26,7 @@ func TestComposedInstallBuildsAndPreparesTheCompleteRevisionOnePlan(t *testing.T
 	cloudflareAPI := composedCloudflareAPI{}
 	cloudflareModule := cloudflaretunnel.New(cloudflareAPI, composedClock{})
 	networkModule := networkpolicy.New(composedNetworkObserver{})
-	built, err := buildInstallWith(t.Context(), request, installBuildDependencies{
+	built, err := buildInstallWith(t.Context(), request, buildDependencies{
 		stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
 			return request.Candidate.Staged, nil
 		},
@@ -59,7 +57,7 @@ func TestComposedInstallBuildsAndPreparesTheCompleteRevisionOnePlan(t *testing.T
 func TestDestructiveReclamationCompositionBindsAllOwningModulesToOneChangeSet(t *testing.T) {
 	request := composedInstallRequest(t)
 	cloudflareAPI := composedCloudflareAPI{}
-	built, err := buildInstallWith(t.Context(), request, installBuildDependencies{
+	built, err := buildInstallWith(t.Context(), request, buildDependencies{
 		stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
 			return request.Candidate.Staged, nil
 		},
@@ -96,7 +94,7 @@ func TestComposedInstallRoutesAReclaimableVPSToReviewBeforeProviderPlanning(t *t
 	request := composedInstallRequest(t)
 	plan := &networkpolicy.ReclamationPlan{Digest: strings.Repeat("f", 64), Targets: []string{"executable /usr/local/bin/xray"}}
 	providerCalled := false
-	_, err := buildInstallWith(t.Context(), request, installBuildDependencies{
+	_, err := buildInstallWith(t.Context(), request, buildDependencies{
 		stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
 			return request.Candidate.Staged, nil
 		},
@@ -121,7 +119,7 @@ func TestComposedInstallCarriesTheExactReviewedStandaloneTargetIntoOneInstallPla
 	cloudflareAPI := composedCloudflareAPI{}
 	cloudflareModule := cloudflaretunnel.New(cloudflareAPI, composedClock{})
 	networkModule := networkpolicy.New(composedReclamationObserver{})
-	dependencies := installBuildDependencies{stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
+	dependencies := buildDependencies{stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
 		return request.Candidate.Staged, nil
 	}, network: networkModule.Evaluate, cloudflare: cloudflareModule.Plan, random: newInstallEntropyReader(request.Entropy), inventory: cloudflareAPI}
 	_, err := buildInstallWith(t.Context(), request, dependencies)
@@ -149,7 +147,7 @@ func TestDestructiveReclamationCompositionKeepsTheExactFactsInTheConfirmedPlan(t
 	cloudflareAPI := composedCloudflareAPI{}
 	cloudflareModule := cloudflaretunnel.New(cloudflareAPI, composedClock{})
 	networkModule := networkpolicy.New(composedReclamationObserver{})
-	dependencies := installBuildDependencies{stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
+	dependencies := buildDependencies{stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
 		return request.Candidate.Staged, nil
 	}, network: networkModule.Evaluate, cloudflare: cloudflareModule.Plan, random: newInstallEntropyReader(request.Entropy), inventory: cloudflareAPI}
 	_, err := buildInstallWith(t.Context(), request, dependencies)
@@ -162,13 +160,13 @@ func TestDestructiveReclamationCompositionKeepsTheExactFactsInTheConfirmedPlan(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	confirmed := reclamationInstallReview(built, request, review.plan)
-	if confirmed.Plan == nil || !slices.Contains(confirmed.Plan.Effects, "executable /opt/standalone/proxy sha256 "+strings.Repeat("9", 64)) || !slices.Contains(confirmed.Plan.Effects, "identity proxy kind service user exclusive true") {
-		t.Fatalf("confirmed reclamation Plan lost exact effects: %+v", confirmed.Plan)
+	confirmed := finalPlan(built, request, review.plan)
+	if confirmed == nil || !slices.Contains(confirmed.Effects, "executable /opt/standalone/proxy sha256 "+strings.Repeat("9", 64)) || !slices.Contains(confirmed.Effects, "identity proxy kind service user exclusive true") {
+		t.Fatalf("confirmed reclamation Plan lost exact effects: %+v", confirmed)
 	}
 	for _, effect := range installPlanEffects() {
-		if !slices.Contains(confirmed.Plan.Effects, effect) {
-			t.Fatalf("confirmed reclamation Plan lost install effect %q: %+v", effect, confirmed.Plan)
+		if !slices.Contains(confirmed.Effects, effect) {
+			t.Fatalf("confirmed reclamation Plan lost install effect %q: %+v", effect, confirmed)
 		}
 	}
 }
@@ -185,70 +183,6 @@ func TestDestructiveReclamationCompositionKeepsLongFirewallFactsWithoutUnsafeLin
 	}
 }
 
-func TestDestructiveReclamationCompositionRefusesAnUnrenderableExactPlan(t *testing.T) {
-	plan := &networkpolicy.ReclamationPlan{Digest: strings.Repeat("9", 64), Targets: make([]string, 65)}
-	for index := range plan.Targets {
-		plan.Targets[index] = fmt.Sprintf("exact firewall fact %d", index)
-	}
-	review := reclamationReview(plan, false)
-	if review.Correction == nil || review.Correction.Evidence != "INSTALL-RECLAMATION-PLAN-TOO-LARGE" || !slices.Equal(review.Correction.Selections, []ownerconsole.CorrectionSelection{{Identity: "firewall-simplified", Label: "The firewall policy is now simpler"}}) {
-		t.Fatalf("large exact Plan = %+v", review)
-	}
-}
-
-func TestDestructiveReclamationCompositionReportsApplyCancellationFailureAndManagedCompletion(t *testing.T) {
-	request := composedInstallRequest(t)
-	built := composedBuiltInstall(t, request, composedNetworkObserver{}, composedCloudflareAPI{})
-	for _, test := range []struct {
-		name     string
-		terminal softwareubuntu.InstallApplyOutcome
-		err      error
-		want     ownerconsole.ChangeSetStatus
-	}{
-		{name: "Managed completion", terminal: softwareubuntu.InstallCompleted, want: ownerconsole.ChangeSetSucceeded},
-		{name: "safe rollback", terminal: softwareubuntu.InstallRolledBack, want: ownerconsole.ChangeSetRolledBack},
-		{name: "terminal loss", err: errors.New("worker ended"), want: ownerconsole.ChangeSetRecoveryRequired},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			outcome := &installOutcome{values: map[string]string{}, request: request, built: built}
-			outcome.launch = func(context.Context, softwareubuntu.InstallHandoffRequest, <-chan struct{}) (softwareubuntu.InstallApplyOutcome, error) {
-				return test.terminal, test.err
-			}
-			if got := outcome.Apply(t.Context(), ownerconsole.PlanIdentity(built.plan.Identity())); got.Kind != ownerconsole.ChangeStarted {
-				t.Fatalf("Apply() = %+v", got)
-			}
-			for deadline := time.Now().Add(time.Second); outcome.Inspect(t.Context()).Kind == ownerconsole.ChangeSetActive && time.Now().Before(deadline); {
-				time.Sleep(time.Millisecond)
-			}
-			if got := outcome.Inspect(t.Context()); got.Kind != test.want {
-				t.Fatalf("terminal result = %+v", got)
-			}
-		})
-	}
-
-	started := make(chan struct{})
-	release := make(chan struct{})
-	var once sync.Once
-	outcome := &installOutcome{values: map[string]string{}, request: request, built: built, launch: func(_ context.Context, _ softwareubuntu.InstallHandoffRequest, cancellation <-chan struct{}) (softwareubuntu.InstallApplyOutcome, error) {
-		once.Do(func() { close(started) })
-		<-cancellation
-		close(release)
-		return softwareubuntu.InstallRolledBack, nil
-	}}
-	if got := outcome.Apply(t.Context(), ownerconsole.PlanIdentity(built.plan.Identity())); got.Kind != ownerconsole.ChangeStarted {
-		t.Fatalf("Apply() = %+v", got)
-	}
-	<-started
-	operation := outcome.Inspect(t.Context()).OperationID
-	if got := outcome.RequestCancellation(t.Context(), operation); got.Kind != ownerconsole.ChangeCancellationRequested {
-		t.Fatalf("RequestCancellation() = %+v", got)
-	}
-	<-release
-	if got := outcome.Apply(t.Context(), "changed-plan"); got.Kind != ownerconsole.ChangePlanRejected {
-		t.Fatalf("stale review = %+v", got)
-	}
-}
-
 type composedPlanAPI interface {
 	cloudflaretunnel.API
 	cloudflaretunnel.MutationPlanner
@@ -256,7 +190,7 @@ type composedPlanAPI interface {
 
 func composedBuiltInstall(t *testing.T, request softwareubuntu.InstallHandoffRequest, observer networkpolicy.Adapter, api composedPlanAPI) *builtInstall {
 	t.Helper()
-	built, err := buildInstallWith(t.Context(), request, installBuildDependencies{
+	built, err := buildInstallWith(t.Context(), request, buildDependencies{
 		stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
 			return request.Candidate.Staged, nil
 		},
@@ -315,8 +249,8 @@ func TestDestructiveReclamationCompositionCarriesEveryApprovedEffectThroughPrivi
 	}
 }
 
-func composedInstallDependencies(request softwareubuntu.InstallHandoffRequest, observer networkpolicy.Adapter, api composedPlanAPI) installBuildDependencies {
-	return installBuildDependencies{
+func composedInstallDependencies(request softwareubuntu.InstallHandoffRequest, observer networkpolicy.Adapter, api composedPlanAPI) buildDependencies {
+	return buildDependencies{
 		stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
 			return request.Candidate.Staged, nil
 		},
@@ -390,7 +324,7 @@ func TestComposedInstallPersistsOnlyTheReviewedHeldPackagePolicy(t *testing.T) {
 	cloudflareAPI := composedCloudflareAPI{}
 	cloudflareModule := cloudflaretunnel.New(cloudflareAPI, composedClock{})
 	networkModule := networkpolicy.New(composedHeldPackageObserver{})
-	dependencies := installBuildDependencies{stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
+	dependencies := buildDependencies{stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
 		return request.Candidate.Staged, nil
 	}, network: networkModule.Evaluate, cloudflare: cloudflareModule.Plan, random: newInstallEntropyReader(request.Entropy), inventory: cloudflareAPI}
 	_, err := buildInstallWith(t.Context(), request, dependencies)
@@ -410,7 +344,7 @@ func TestComposedInstallRefusesAnIncompleteReclaimableInventory(t *testing.T) {
 	request := composedInstallRequest(t)
 	providerCalled := false
 	module := networkpolicy.New(incompleteReclamationObserver{})
-	_, err := buildInstallWith(t.Context(), request, installBuildDependencies{
+	_, err := buildInstallWith(t.Context(), request, buildDependencies{
 		stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
 			return request.Candidate.Staged, nil
 		},
@@ -435,6 +369,273 @@ func TestReclamationInventoryBindsExactCloudflareConflictIdentifiers(t *testing.
 	if err != nil || len(facts.Conflicts) != 4 {
 		t.Fatalf("Cloudflare reclamation facts = %+v error %v", facts, err)
 	}
+}
+
+func TestInstallationInterfaceValidatesDependenciesAndTypedDraft(t *testing.T) {
+	if module, err := New(Dependencies{}); err == nil || module != nil {
+		t.Fatalf("New() = (%+v, %v), want construction refusal", module, err)
+	}
+	module := newTestInstallation(t, composedNetworkObserver{}, nil)
+	result := module.Review(t.Context(), Draft{})
+	if result.Invalid == nil || result.Invalid.Field != "release-tag" || result.Plan != nil || result.Reclamation != nil {
+		t.Fatalf("invalid Draft = %+v", result)
+	}
+}
+
+func TestInstallationInterfaceReviewsCleanVPSAndKeepsOneUseApprovalMemoryOnly(t *testing.T) {
+	module := newTestInstallation(t, composedNetworkObserver{}, nil)
+	review := module.Review(t.Context(), composedDraft(t))
+	if review.Plan == nil || review.Plan.DesiredStateRevision != 1 || len(review.Plan.Effects) != 5 || review.Approval.cell == nil {
+		t.Fatalf("clean VPS Review = %+v", review)
+	}
+	if _, err := review.Approval.MarshalJSON(); err == nil || strings.Contains(fmt.Sprintf("%v %#v", review.Approval, review.Approval), "COMPOSED-INSTALL-SECRET-MARKER") {
+		t.Fatal("Approval became renderable or exposed protected material")
+	}
+	restarted := newTestInstallation(t, composedNetworkObserver{}, nil)
+	if result := restarted.Apply(t.Context(), review.Approval); result.Kind != ApplyRefused {
+		t.Fatalf("pre-Apply restart retained authority: %+v", result)
+	}
+	if result := module.Apply(t.Context(), review.Approval); result.Kind != ApplyStarted {
+		t.Fatalf("Apply() = %+v", result)
+	}
+	if result := module.Apply(t.Context(), review.Approval); result.Kind != ApplyRefused {
+		t.Fatalf("Approval replay = %+v", result)
+	}
+	changed := newTestInstallation(t, composedNetworkObserver{}, nil)
+	stale := changed.Review(t.Context(), composedDraft(t))
+	current := changed.Review(t.Context(), composedDraft(t))
+	if result := changed.Apply(t.Context(), stale.Approval); result.Kind != ApplyRefused {
+		t.Fatalf("stale Approval = %+v", result)
+	}
+	if result := changed.Apply(t.Context(), current.Approval); result.Kind != ApplyStarted {
+		t.Fatalf("current Approval = %+v", result)
+	}
+}
+
+func TestInstallationInterfaceRequiresExactReclamationConfirmation(t *testing.T) {
+	module := newTestInstallation(t, composedReclamationObserver{}, nil)
+	review := module.Review(t.Context(), composedDraft(t))
+	if review.Reclamation == nil || review.Reclamation.ReclamationConfirmed || review.Reclamation.ReclamationDigest == "" {
+		t.Fatalf("Reclaimable VPS Review = %+v", review)
+	}
+	wrong := module.ConfirmReclamation(t.Context(), ReclamationConfirmation{Identity: review.Reclamation.Identity, Digest: review.Reclamation.ReclamationDigest, Phrase: "reclaim this vps"})
+	if wrong.Invalid == nil || wrong.Plan != nil {
+		t.Fatalf("changed confirmation accepted: %+v", wrong)
+	}
+	review = module.Review(t.Context(), composedDraft(t))
+	confirmed := module.ConfirmReclamation(t.Context(), ReclamationConfirmation{Identity: review.Reclamation.Identity, Digest: review.Reclamation.ReclamationDigest, Phrase: ReclamationPhrase})
+	if confirmed.Plan == nil || !confirmed.Plan.ReclamationConfirmed || confirmed.Plan.ReclamationDigest != review.Reclamation.ReclamationDigest || confirmed.Approval.cell == nil {
+		t.Fatalf("exact confirmation = %+v", confirmed)
+	}
+	for _, effect := range installPlanEffects() {
+		if !slices.Contains(confirmed.Plan.Effects, effect) {
+			t.Fatalf("confirmed Plan lost %q", effect)
+		}
+	}
+}
+
+func TestInstallationInterfaceTracksOneOperationCancellationAndTerminalState(t *testing.T) {
+	started, cancelled := make(chan struct{}), make(chan struct{})
+	module := newTestInstallation(t, composedNetworkObserver{}, func(_ context.Context, _ softwareubuntu.InstallHandoffRequest, cancellation <-chan struct{}) (softwareubuntu.InstallApplyOutcome, error) {
+		close(started)
+		<-cancellation
+		close(cancelled)
+		return softwareubuntu.InstallRolledBack, nil
+	})
+	first := module.Review(t.Context(), composedDraft(t))
+	result := module.Apply(t.Context(), first.Approval)
+	if result.Kind != ApplyStarted || result.Operation == "" {
+		t.Fatalf("Apply() = %+v", result)
+	}
+	<-started
+	second := module.Review(t.Context(), composedDraft(t))
+	if got := module.Apply(t.Context(), second.Approval); got.Kind != ApplyRefused {
+		t.Fatalf("second active operation = %+v", got)
+	}
+	if _, err := module.Inspect(t.Context(), "install-stale"); err == nil {
+		t.Fatal("Inspect accepted stale Operation Identity")
+	}
+	if got := module.RequestCancellation(t.Context(), "install-stale"); got.Kind != ApplyRefused {
+		t.Fatalf("stale cancellation = %+v", got)
+	}
+	if got := module.RequestCancellation(t.Context(), result.Operation); got.Kind != CancellationRequested {
+		t.Fatalf("cancellation = %+v", got)
+	}
+	<-cancelled
+	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); {
+		operation, err := module.Inspect(t.Context(), result.Operation)
+		if err == nil && operation.Status == RolledBack {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("operation did not report Rolled back")
+}
+
+func TestInstallationInterfaceReportsEveryTerminalAndOwnsOnlyInstallationRecovery(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		terminal softwareubuntu.InstallApplyOutcome
+		err      error
+		want     OperationStatus
+	}{
+		{"Completed", softwareubuntu.InstallCompleted, nil, Completed},
+		{"Rolled back", softwareubuntu.InstallRolledBack, nil, RolledBack},
+		{"Recovery Required", 0, errors.New("worker ended"), RecoveryRequired},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			module := newTestInstallation(t, composedNetworkObserver{}, func(context.Context, softwareubuntu.InstallHandoffRequest, <-chan struct{}) (softwareubuntu.InstallApplyOutcome, error) {
+				return test.terminal, test.err
+			})
+			review := module.Review(t.Context(), composedDraft(t))
+			result := module.Apply(t.Context(), review.Approval)
+			for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); {
+				operation, err := module.Inspect(t.Context(), result.Operation)
+				if err == nil && operation.Status != OperationActive {
+					if operation.Status != test.want {
+						t.Fatalf("terminal = %+v", operation)
+					}
+					return
+				}
+				time.Sleep(time.Millisecond)
+			}
+			t.Fatal("terminal operation unavailable")
+		})
+	}
+	recovered := false
+	module := newTestInstallation(t, composedNetworkObserver{}, nil)
+	module.dependencies.Recover = func(context.Context, systemchanges.PendingChangeSet) error { recovered = true; return nil }
+	if err := module.Recover(t.Context(), systemchanges.PendingChangeSet{Identity: "install-aaaaaaaaaaaaaaaa", Kind: systemchanges.UpdateMutation}); err == nil || recovered {
+		t.Fatal("Installation recovered another mutation kind")
+	}
+	if err := module.Recover(t.Context(), systemchanges.PendingChangeSet{Identity: "install-aaaaaaaaaaaaaaaa", Kind: systemchanges.InstallationMutation}); err != nil || !recovered {
+		t.Fatalf("Installation recovery = %v", err)
+	}
+}
+
+func TestInstallationPrivilegedBoundaryRefusesChangedFactsBeforeMutation(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		change func(*Interface)
+	}{
+		{name: "release", change: func(module *Interface) {
+			module.dependencies.Stage = func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
+				return softwarelifecycle.StagedRelease{}, errors.New("changed release")
+			}
+		}},
+		{name: "provider", change: func(module *Interface) { module.dependencies.Inventory = composedConflictAPI{} }},
+		{name: "Network Policy", change: func(module *Interface) {
+			module.dependencies.Network = func(networkpolicy.Request) networkpolicy.Result {
+				return networkpolicy.Result{Outcome: networkpolicy.Failed}
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mutated := false
+			module := newTestInstallation(t, composedNetworkObserver{}, func(context.Context, softwareubuntu.InstallHandoffRequest, <-chan struct{}) (softwareubuntu.InstallApplyOutcome, error) {
+				mutated = true
+				return softwareubuntu.InstallCompleted, nil
+			})
+			review := module.Review(t.Context(), composedDraft(t))
+			if review.Approval.cell == nil {
+				t.Fatal("Review did not retain Approval")
+			}
+			test.change(module)
+			if apply, err := PreparePrivilegedApply(module, t.Context(), review.Approval.cell.request); err == nil || apply != nil || mutated {
+				t.Fatalf("changed %s facts: prepared=%t error=%v mutation=%t", test.name, apply != nil, err, mutated)
+			}
+		})
+	}
+}
+
+func TestInstallationPrivilegedBoundaryRefusesAnotherModulesRecovery(t *testing.T) {
+	module := newTestInstallation(t, composedNetworkObserver{}, nil)
+	reader := &pendingReaderStub{pending: systemchanges.PendingChangeSet{Identity: "update-aaaaaaaaaaaaaaaa", Kind: systemchanges.UpdateMutation}, found: true}
+	module.dependencies.Pending = reader
+	if apply, err := PreparePrivilegedApply(module, t.Context(), composedInstallRequest(t)); err == nil || apply != nil {
+		t.Fatalf("non-Installation recovery: prepared=%t error=%v", apply != nil, err)
+	}
+}
+
+type pendingReaderStub struct {
+	pending systemchanges.PendingChangeSet
+	found   bool
+	err     error
+}
+
+func (reader pendingReaderStub) PendingChangeSet() (systemchanges.PendingChangeSet, bool, error) {
+	return reader.pending, reader.found, reader.err
+}
+
+func composedDraft(t *testing.T) Draft {
+	request := composedInstallRequest(t)
+	return Draft{Tag: request.Tag, Architecture: request.Architecture, Installation: request.Draft, CloudflareAccountID: request.CloudflareAccountID, CloudflareZoneID: request.CloudflareZoneID, CloudflareToken: request.CloudflareToken, RealityTarget: request.RealityTarget, RealityServerName: request.RealityServerName}
+}
+
+func newTestInstallation(t *testing.T, observer networkpolicy.Adapter, launch func(context.Context, softwareubuntu.InstallHandoffRequest, <-chan struct{}) (softwareubuntu.InstallApplyOutcome, error)) *Interface {
+	t.Helper()
+	request := composedInstallRequest(t)
+	api := interfaceTestAPI{}
+	cloudflare := cloudflaretunnel.New(api, composedClock{})
+	if launch == nil {
+		launch = func(context.Context, softwareubuntu.InstallHandoffRequest, <-chan struct{}) (softwareubuntu.InstallApplyOutcome, error) {
+			return softwareubuntu.InstallCompleted, nil
+		}
+	}
+	module, err := New(Dependencies{
+		ReleaseCandidate: func(context.Context, string, softwarelifecycle.Architecture) (softwarelifecycle.InstallCandidateHandoff, error) {
+			return request.Candidate, nil
+		},
+		Stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
+			return request.Candidate.Staged, nil
+		},
+		Network: networkpolicy.New(observer).Evaluate, Cloudflare: cloudflare.Plan, CloudflareAPI: api, Inventory: api, Entropy: bytes.NewReader(bytes.Repeat([]byte{0x42}, 4096)), Launch: launch,
+		Recover: func(context.Context, systemchanges.PendingChangeSet) error { return nil }, Pending: pendingReaderStub{}, WriteReceipt: func(string, softwarelifecycle.ReleaseIdentity, string) error { return nil }, RemoveReceipt: func() error { return nil }, ObserveState: func() (systemchanges.Observation, error) {
+			return systemchanges.Observation{Status: systemchanges.NotInstalled}, nil
+		}, LoadManaged: func() (systemchanges.Observation, state.ReleaseIdentity, error) {
+			return systemchanges.Observation{}, state.ReleaseIdentity{}, nil
+		}, ProveSubscription: func(context.Context, string, uint16) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return module
+}
+
+type interfaceTestAPI struct{ composedCloudflareAPI }
+
+func (interfaceTestAPI) CreateTunnel(context.Context, cloudflaretunnel.CreateTunnelRequest) (cloudflaretunnel.CreatedTunnel, error) {
+	return cloudflaretunnel.CreatedTunnel{}, nil
+}
+func (interfaceTestAPI) PutConfiguration(context.Context, cloudflaretunnel.PutConfigurationRequest) (cloudflaretunnel.Configuration, error) {
+	return cloudflaretunnel.Configuration{}, nil
+}
+func (interfaceTestAPI) GetConfiguration(context.Context, cloudflaretunnel.GetConfigurationRequest) (cloudflaretunnel.Configuration, error) {
+	return cloudflaretunnel.Configuration{}, nil
+}
+func (interfaceTestAPI) GetTunnel(context.Context, cloudflaretunnel.GetTunnelRequest) (cloudflaretunnel.OwnedResource, error) {
+	return cloudflaretunnel.OwnedResource{}, nil
+}
+func (interfaceTestAPI) CreateDNSRecord(context.Context, cloudflaretunnel.CreateDNSRecordRequest) (cloudflaretunnel.OwnedResource, error) {
+	return cloudflaretunnel.OwnedResource{}, nil
+}
+func (interfaceTestAPI) GetDNSRecord(context.Context, cloudflaretunnel.GetDNSRecordRequest) (cloudflaretunnel.DNSObservation, error) {
+	return cloudflaretunnel.DNSObservation{}, nil
+}
+func (interfaceTestAPI) PutDNSRecord(context.Context, cloudflaretunnel.PutDNSRecordRequest) (cloudflaretunnel.OwnedResource, error) {
+	return cloudflaretunnel.OwnedResource{}, nil
+}
+func (interfaceTestAPI) ObserveWholeTunnel(context.Context, cloudflaretunnel.WholeTunnelRequest) (cloudflaretunnel.WholeTunnelObservation, error) {
+	return cloudflaretunnel.WholeTunnelObservation{}, nil
+}
+func (interfaceTestAPI) ObserveCertificateDNS(context.Context, cloudflaretunnel.CertificateDNSRequest) (cloudflaretunnel.CertificateDNSFacts, error) {
+	return cloudflaretunnel.CertificateDNSFacts{}, nil
+}
+func (interfaceTestAPI) DeleteDNSRecord(context.Context, cloudflaretunnel.DeleteDNSRecordRequest) error {
+	return nil
+}
+func (interfaceTestAPI) DeleteTunnel(context.Context, cloudflaretunnel.DeleteTunnelRequest) error {
+	return nil
 }
 
 type conflictInventoryAPI struct{}

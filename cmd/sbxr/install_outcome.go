@@ -2,17 +2,23 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
+	profilesubuntu "github.com/albertloky/SBXR/internal/connectionprofiles/adapter/ubuntu"
 	"github.com/albertloky/SBXR/internal/healthdiagnostics"
+	"github.com/albertloky/SBXR/internal/installation"
 	"github.com/albertloky/SBXR/internal/networkpolicy"
+	networkubuntu "github.com/albertloky/SBXR/internal/networkpolicy/adapter/ubuntu"
 	"github.com/albertloky/SBXR/internal/ownerconsole"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 	softwaregithub "github.com/albertloky/SBXR/internal/softwarelifecycle/adapter/github"
@@ -21,44 +27,19 @@ import (
 )
 
 type installOutcome struct {
-	mu          sync.Mutex
-	values      map[string]string
-	request     softwareubuntu.InstallHandoffRequest
-	built       *builtInstall
-	reclamation *networkpolicy.ReclamationPlan
-	change      ownerconsole.DurableChangeSet
-	cancel      chan struct{}
-	cancelled   bool
-	launch      func(context.Context, softwareubuntu.InstallHandoffRequest, <-chan struct{}) (softwareubuntu.InstallApplyOutcome, error)
+	mu                sync.Mutex
+	module            *installation.Interface
+	construction      error
+	values            map[string]string
+	approval          installation.Approval
+	plan              ownerconsole.PlanIdentity
+	reclamationDigest string
+	operation         installation.OperationIdentity
+	reviewedHealth    *installation.ReviewedHealth
 }
 
 func (*installOutcome) String() string   { return "Clean VPS installation outcome: protected" }
 func (*installOutcome) GoString() string { return "Clean VPS installation outcome: protected" }
-
-func (outcome *installOutcome) ViewDiagnostics(ctx context.Context) ownerconsole.DiagnosticsPresentation {
-	outcome.mu.Lock()
-	built := outcome.built
-	outcome.mu.Unlock()
-	var installation healthdiagnostics.InstallationSummary
-	var facts systemchanges.InstallationHealthFacts
-	statuses := map[healthdiagnostics.Module]healthdiagnostics.HealthStatus{}
-	if built != nil {
-		installation = built.health
-		facts.Status = systemchanges.NotInstalled
-		statuses[healthdiagnostics.NetworkPolicyModule] = healthdiagnostics.HealthStatus(built.wiring.network.Outcome)
-	}
-	result := healthdiagnostics.New(nil).Check(ctx, installation, scheduledInspections(facts, statuses)...)
-	services := make([]ownerconsole.ServiceHealthPresentation, 0, 10)
-	for _, unit := range healthDiagnosticUnits() {
-		services = append(services, ownerconsole.ServiceHealthPresentation{Service: unit, Status: ownerconsole.HealthUnknown})
-	}
-	presentation, _ := diagnosticsPresentation(result, nil, services)
-	return presentation
-}
-
-func (*installOutcome) CreateSupportBundle(context.Context, ownerconsole.BundleReplacement) ownerconsole.SupportBundleResult {
-	return ownerconsole.SupportBundleResult{Code: "HEALTH-DIAGNOSTICS-BUNDLE-RELEASE"}
-}
 
 var installFields = []ownerconsole.EditingField{
 	{Identity: "release-tag", Label: "Release tag", Required: true},
@@ -80,12 +61,65 @@ var installFields = []ownerconsole.EditingField{
 }
 
 func newInstallOutcome() *installOutcome {
-	return &installOutcome{values: map[string]string{}, launch: softwareubuntu.LaunchInstallApplyWithCancellation}
+	module, err := newInstallationModule()
+	return &installOutcome{module: module, construction: err, values: map[string]string{}}
+}
+
+func newInstallationModule() (*installation.Interface, error) {
+	stager := softwareubuntu.NewStager()
+	lifecycle := softwarelifecycle.New(softwaregithub.New(), softwarelifecycle.VerifierQualification{Version: softwaregithub.Version, SigningFingerprint: softwaregithub.SigningFingerprint}, time.Now, stager)
+	network := networkpolicy.New(networkubuntu.New())
+	api := cloudflaretunnel.NewProductionAPI()
+	cloudflare := cloudflaretunnel.New(api, cloudflaretunnel.SystemClock{})
+	return installation.New(installation.Dependencies{
+		ReleaseCandidate: func(ctx context.Context, tag string, architecture softwarelifecycle.Architecture) (softwarelifecycle.InstallCandidateHandoff, error) {
+			view := lifecycle.View(ctx, softwarelifecycle.ViewRequest{Tag: tag, Architecture: architecture, InstallationStatus: softwarelifecycle.NotInstalled})
+			candidate := view.InstallCandidate()
+			handoff, valid := candidate.InstallHandoff()
+			if view.Refusal != nil || !valid {
+				return softwarelifecycle.InstallCandidateHandoff{}, errors.New("the exact release could not be verified and staged")
+			}
+			return handoff, nil
+		}, Stage: stager.Stage, Network: network.Evaluate, Cloudflare: cloudflare.Plan, CloudflareAPI: api, Inventory: api,
+		Entropy: installation.DefaultEntropy(), Launch: softwareubuntu.LaunchInstallApplyWithCancellation,
+		Recover: func(_ context.Context, pending systemchanges.PendingChangeSet) error {
+			return runProvenRecovery(pending)
+		},
+		Pending: productionPendingChangeSetReader(), WriteReceipt: writeInstallRecoveryReceipt, RemoveReceipt: removeInstallRecoveryReceipt,
+		ObserveState: installRecoveryObservation, LoadManaged: managedLoadEvidence, ProveSubscription: proveInstalledSubscription,
+	})
+}
+
+func (outcome *installOutcome) ViewDiagnostics(ctx context.Context) ownerconsole.DiagnosticsPresentation {
+	installationSummary := healthdiagnostics.InstallationSummary{}
+	facts := systemchanges.InstallationHealthFacts{}
+	statuses := map[healthdiagnostics.Module]healthdiagnostics.HealthStatus{}
+	outcome.mu.Lock()
+	if outcome.reviewedHealth != nil {
+		installationSummary = outcome.reviewedHealth.Installation
+		facts.Status = systemchanges.NotInstalled
+		statuses[healthdiagnostics.NetworkPolicyModule] = outcome.reviewedHealth.Network
+	}
+	outcome.mu.Unlock()
+	result := healthdiagnostics.New(nil).Check(ctx, installationSummary, scheduledInspections(facts, statuses)...)
+	services := make([]ownerconsole.ServiceHealthPresentation, 0, 10)
+	for _, unit := range healthDiagnosticUnits() {
+		services = append(services, ownerconsole.ServiceHealthPresentation{Service: unit, Status: ownerconsole.HealthUnknown})
+	}
+	presentation, _ := diagnosticsPresentation(result, nil, services)
+	return presentation
+}
+
+func (*installOutcome) CreateSupportBundle(context.Context, ownerconsole.BundleReplacement) ownerconsole.SupportBundleResult {
+	return ownerconsole.SupportBundleResult{Code: "HEALTH-DIAGNOSTICS-BUNDLE-RELEASE"}
 }
 
 func (outcome *installOutcome) Review(ctx context.Context) ownerconsole.ChangeReview {
 	outcome.mu.Lock()
 	defer outcome.mu.Unlock()
+	if outcome.construction != nil || outcome.module == nil {
+		return installCorrection(errors.New("Installation Module construction failed"))
+	}
 	for _, field := range installFields {
 		if outcome.values[field.Identity] == "" {
 			if field.Identity == "cloudflare-token" {
@@ -94,24 +128,11 @@ func (outcome *installOutcome) Review(ctx context.Context) ownerconsole.ChangeRe
 			return ownerconsole.ChangeReview{Editing: &ownerconsole.EditingPresentation{Title: "Clean VPS installation", Field: field}}
 		}
 	}
-	if outcome.built == nil {
-		if err := outcome.build(ctx); err != nil {
-			return installCorrection(err)
-		}
+	draft, err := outcome.draft()
+	if err != nil {
+		return installCorrection(err)
 	}
-	if outcome.reclamation != nil {
-		return reclamationReview(outcome.reclamation, false)
-	}
-	summary := outcome.built.plan.Summary()
-	return ownerconsole.ChangeReview{Plan: &ownerconsole.PlanPresentation{
-		Identity: ownerconsole.PlanIdentity(outcome.built.plan.Identity()), DesiredStateRevision: 1, DesiredStateSHA256: outcome.built.desiredSHA256,
-		RelevantChecksums: []string{"Plan SHA-256 " + outcome.built.plan.SHA256()}, ObservedState: "Proven Clean VPS baseline: Not installed",
-		VerifiedExternalInputs: []string{"Verified release " + summary.ReleaseIdentity.Tag, "Scoped Cloudflare account and zone authority", "Fresh Network Policy observations"},
-		Effects:                installPlanEffects(),
-		RequiredChecks:         []string{"Pre-publication module health", "Desired State agreement", "Post-publication HTTPS, Tunnel, certificate, profile, unit, timer, and permission agreement"},
-		AdvisoryChecks:         []string{"Direct DNS is pending only until the reviewed Cloudflare steps create it"},
-		Interruption:           summary.Interruption, Cancellation: summary.Cancellation, Rollback: summary.Rollback,
-	}}
+	return outcome.presentReview(outcome.module.Review(ctx, draft))
 }
 
 func (outcome *installOutcome) Edit(ctx context.Context, input ownerconsole.EditingInput) ownerconsole.ChangeReview {
@@ -125,225 +146,160 @@ func (outcome *installOutcome) Edit(ctx context.Context, input ownerconsole.Edit
 	}
 	if known && input.Text != "" {
 		outcome.values[input.Field] = input.Text
-		outcome.built = nil
+		outcome.approval, outcome.plan = installation.Approval{}, ""
+		outcome.reviewedHealth = nil
 	}
 	outcome.mu.Unlock()
 	return outcome.Review(ctx)
 }
 
-func (outcome *installOutcome) Apply(ctx context.Context, identity ownerconsole.PlanIdentity) ownerconsole.ChangeResult {
-	outcome.mu.Lock()
-	if outcome.built == nil || identity != ownerconsole.PlanIdentity(outcome.built.plan.Identity()) || outcome.change.Kind == ownerconsole.ChangeSetActive {
-		outcome.mu.Unlock()
-		return ownerconsole.ChangeResult{Kind: ownerconsole.ChangePlanRejected, Explanation: "The exact reviewed installation Plan is unavailable."}
+func (outcome *installOutcome) draft() (installation.Draft, error) {
+	port := func(name string) (uint16, error) {
+		value, err := strconv.ParseUint(outcome.values[name], 10, 16)
+		return uint16(value), err
 	}
-	request := outcome.request
-	request.ReviewedPlanSHA256 = outcome.built.plan.SHA256()
-	operation := ownerconsole.OperationIdentity("install-" + request.Session[:16])
-	totalSteps := uint16(outcome.built.totalSteps)
-	outcome.change = ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetActive, OperationID: operation, TotalSteps: totalSteps, Checkpoint: "Awaiting verified sudo handoff", Explanation: "The reviewed installation is running."}
-	outcome.cancel, outcome.cancelled = make(chan struct{}), false
-	cancellation := outcome.cancel
-	launch := outcome.launch
-	outcome.mu.Unlock()
-	go func() {
-		terminal, err := launch(context.Background(), request, cancellation)
-		outcome.mu.Lock()
-		defer outcome.mu.Unlock()
-		if err == nil && terminal == softwareubuntu.InstallCompleted {
-			outcome.change = ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetSucceeded, OperationID: operation, CompletedSteps: totalSteps, TotalSteps: totalSteps, Checkpoint: "Complete", Explanation: "Desired State revision 1 and all required agreement checks passed."}
-			return
-		}
-		if err == nil && terminal == softwareubuntu.InstallRolledBack {
-			outcome.change = ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetRolledBack, OperationID: operation, TotalSteps: totalSteps, Checkpoint: "Rolled back", Explanation: "The privileged process proved rollback to Not installed."}
-			return
-		}
-		outcome.change = ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetRecoveryRequired, OperationID: operation, TotalSteps: totalSteps, Checkpoint: "Installation stopped", Explanation: "The privileged installation did not prove Complete; inspect the durable recovery result."}
-	}()
-	return ownerconsole.ChangeResult{Kind: ownerconsole.ChangeStarted, OperationID: operation, Explanation: "The exact reviewed installation Plan started."}
+	ssh, e1 := port("ssh-port")
+	reality, e2 := port("reality-port")
+	hysteria2, e3 := port("hysteria2-port")
+	tuic, e4 := port("tuic-port")
+	anyTLS, e5 := port("anytls-port")
+	subscription, e6 := port("subscription-port")
+	if errors.Join(e1, e2, e3, e4, e5, e6) != nil {
+		return installation.Draft{}, errors.New("one or more ports are invalid")
+	}
+	return installation.Draft{Tag: outcome.values["release-tag"], Architecture: softwarelifecycle.Architecture(runtime.GOARCH), Installation: softwarelifecycle.InstallationDraft{Domain: outcome.values["domain"], OwnerEmail: outcome.values["owner-email"], PublicIPv4: outcome.values["public-ipv4"], PrimaryAddress: outcome.values["primary-address"], SSHPort: ssh, RealityPort: reality, Hysteria2Port: hysteria2, TUICPort: tuic, AnyTLSPort: anyTLS, SubscriptionPort: subscription}, CloudflareAccountID: outcome.values["cloudflare-account"], CloudflareZoneID: outcome.values["cloudflare-zone"], CloudflareToken: outcome.values["cloudflare-token"], RealityTarget: outcome.values["reality-target"], RealityServerName: outcome.values["reality-server-name"]}, nil
+}
+
+func (outcome *installOutcome) presentReview(review installation.ReviewResult) ownerconsole.ChangeReview {
+	if review.Plan == nil {
+		outcome.reviewedHealth = nil
+	}
+	if review.Invalid != nil {
+		return installCorrection(errors.New(review.Invalid.Problem))
+	}
+	if review.Correction != nil {
+		return ownerCorrection(review.Correction)
+	}
+	plan := review.Plan
+	if plan == nil {
+		plan = review.Reclamation
+	}
+	if plan == nil {
+		return installCorrection(errors.New("Installation review unavailable"))
+	}
+	if review.Plan != nil {
+		outcome.approval, outcome.plan = review.Approval, ownerconsole.PlanIdentity(plan.Identity)
+		outcome.reclamationDigest = ""
+		outcome.reviewedHealth = review.Health
+	}
+	if review.Reclamation != nil {
+		outcome.reclamationDigest = plan.ReclamationDigest
+	}
+	return ownerconsole.ChangeReview{Plan: ownerPlan(plan)}
+}
+
+func ownerPlan(plan *installation.Plan) *ownerconsole.PlanPresentation {
+	if plan == nil {
+		return nil
+	}
+	return &ownerconsole.PlanPresentation{Identity: ownerconsole.PlanIdentity(plan.Identity), DesiredStateRevision: plan.DesiredStateRevision, DesiredStateSHA256: plan.DesiredStateSHA256, LineageUnavailable: plan.LineageUnavailable, RelevantChecksums: append([]string(nil), plan.RelevantChecksums...), ObservedState: plan.ObservedState, VerifiedExternalInputs: append([]string(nil), plan.VerifiedExternalInputs...), Effects: append([]string(nil), plan.Effects...), RequiredChecks: append([]string(nil), plan.RequiredChecks...), AdvisoryChecks: append([]string(nil), plan.AdvisoryChecks...), Interruption: plan.Interruption, Cancellation: plan.Cancellation, Rollback: plan.Rollback, ReclamationDigest: plan.ReclamationDigest, ReclamationConfirmed: plan.ReclamationConfirmed}
+}
+
+func ownerCorrection(value *installation.Correction) ownerconsole.ChangeReview {
+	selections := make([]ownerconsole.CorrectionSelection, len(value.Selections))
+	for index, selection := range value.Selections {
+		selections[index] = ownerconsole.CorrectionSelection{Identity: selection.Identity, Label: selection.Label}
+	}
+	return ownerconsole.ChangeReview{Correction: &ownerconsole.CorrectionPresentation{Problem: value.Problem, Found: value.Found, Required: value.Required, WhyStopped: value.WhyStopped, FixWithSBXR: value.FixWithSBXR, OwnerSteps: append([]string(nil), value.OwnerSteps...), InputLabel: value.InputLabel, Selections: selections, Evidence: value.Evidence}}
 }
 
 func (outcome *installOutcome) ConfirmReclamation(ctx context.Context, identity ownerconsole.PlanIdentity, approval ownerconsole.ReclamationApproval) ownerconsole.ChangeReview {
 	outcome.mu.Lock()
-	if outcome.reclamation == nil || !approval.NetworkPolicyReclamationApproval(identity, outcome.reclamation.Digest) {
+	defer outcome.mu.Unlock()
+	digest := outcome.reclamationDigest
+	outcome.reclamationDigest = ""
+	if digest == "" || !approval.NetworkPolicyReclamationApproval(identity, digest) {
+		return installCorrection(errors.New("the exact current reclamation review and confirmation are required"))
+	}
+	return outcome.presentReview(outcome.module.ConfirmReclamation(ctx, installation.ReclamationConfirmation{Identity: string(identity), Digest: digest, Phrase: installation.ReclamationPhrase}))
+}
+
+func (outcome *installOutcome) Apply(ctx context.Context, identity ownerconsole.PlanIdentity) ownerconsole.ChangeResult {
+	outcome.mu.Lock()
+	if identity != outcome.plan {
 		outcome.mu.Unlock()
-		return ownerconsole.ChangeReview{}
+		return ownerconsole.ChangeResult{Kind: ownerconsole.ChangePlanRejected, Explanation: "The exact reviewed installation Plan is unavailable."}
 	}
-	outcome.request.ReviewedReclamationSHA256 = outcome.reclamation.Digest
-	request := outcome.request
+	approval := outcome.approval
+	result := outcome.module.Apply(ctx, approval)
+	outcome.approval, outcome.plan = installation.Approval{}, ""
+	if result.Kind == installation.ApplyStarted {
+		outcome.operation = result.Operation
+	}
 	outcome.mu.Unlock()
-	built, err := buildInstall(ctx, request)
+	if result.Kind != installation.ApplyStarted {
+		return ownerconsole.ChangeResult{Kind: ownerconsole.ChangePlanRejected, Explanation: result.Reason}
+	}
+	return ownerconsole.ChangeResult{Kind: ownerconsole.ChangeStarted, OperationID: ownerconsole.OperationIdentity(result.Operation), Explanation: result.Reason}
+}
+
+func (outcome *installOutcome) Inspect(ctx context.Context) ownerconsole.DurableChangeSet {
 	outcome.mu.Lock()
-	defer outcome.mu.Unlock()
+	identity := outcome.operation
+	outcome.mu.Unlock()
+	if identity == "" {
+		return ownerconsole.DurableChangeSet{}
+	}
+	operation, err := outcome.module.Inspect(ctx, identity)
 	if err != nil {
-		return installCorrection(err)
+		return ownerconsole.DurableChangeSet{}
 	}
-	reclamation := outcome.reclamation
-	outcome.request, outcome.built = request, built
-	outcome.reclamation = nil
-	return reclamationInstallReview(built, request, reclamation)
+	kind := map[installation.OperationStatus]ownerconsole.ChangeSetStatus{installation.OperationActive: ownerconsole.ChangeSetActive, installation.Completed: ownerconsole.ChangeSetSucceeded, installation.RolledBack: ownerconsole.ChangeSetRolledBack, installation.RecoveryRequired: ownerconsole.ChangeSetRecoveryRequired}[operation.Status]
+	return ownerconsole.DurableChangeSet{Kind: kind, OperationID: ownerconsole.OperationIdentity(operation.Identity), CompletedSteps: operation.CompletedSteps, TotalSteps: operation.TotalSteps, Checkpoint: operation.Checkpoint, Explanation: operation.Explanation}
 }
 
-func reclamationInstallReview(built *builtInstall, request softwareubuntu.InstallHandoffRequest, reclamation *networkpolicy.ReclamationPlan) ownerconsole.ChangeReview {
-	if built == nil || built.plan == nil || reclamation == nil || len(reclamation.Digest) != 64 || reclamation.Digest != request.ReviewedReclamationSHA256 {
-		return ownerconsole.ChangeReview{}
+func (outcome *installOutcome) RequestCancellation(ctx context.Context, identity ownerconsole.OperationIdentity) ownerconsole.ChangeResult {
+	result := outcome.module.RequestCancellation(ctx, installation.OperationIdentity(identity))
+	if result.Kind != installation.CancellationRequested {
+		return ownerconsole.ChangeResult{Kind: ownerconsole.ChangePlanRejected, Explanation: result.Reason}
 	}
-	summary := built.plan.Summary()
-	installEffects := installPlanEffects()
-	effects, ok := reclamationPlanEffects(reclamation, 64-len(installEffects))
-	if !ok {
-		return reclamationPlanCorrection()
-	}
-	effects = append(effects, installEffects...)
-	return ownerconsole.ChangeReview{Plan: &ownerconsole.PlanPresentation{
-		Identity: ownerconsole.PlanIdentity(built.plan.Identity()), DesiredStateRevision: 1, DesiredStateSHA256: built.desiredSHA256,
-		RelevantChecksums: []string{"Plan SHA-256 " + built.plan.SHA256(), "Reclamation facts SHA-256 " + request.ReviewedReclamationSHA256}, ObservedState: "Reclaimable VPS: exact reviewed conflict followed by revision-one installation",
-		VerifiedExternalInputs: []string{"Verified release " + summary.ReleaseIdentity.Tag, "Fresh Network Policy reclamation review"},
-		Effects:                effects,
-		RequiredChecks:         []string{"Fresh privileged reclamation proof", "Managed State and exact candidate agreement"},
-		Interruption:           "Before Irreversible reclamation started, cancellation rolls back; afterward recovery continues forward to Managed", Cancellation: "Unavailable after Irreversible reclamation started", Rollback: "No rollback exists after permanent reclamation starts",
-		ReclamationDigest: request.ReviewedReclamationSHA256, ReclamationConfirmed: true,
-	}}
-}
-
-func installPlanEffects() []string {
-	return []string{"Install the exact verified release and managed units", "Create six Connection Profiles and one HTTPS subscription", "Create one Cloudflare Tunnel and exact DNS records", "Issue and activate the IP and domain certificate lineages", "Publish Desired State revision 1 exactly once"}
-}
-
-func (outcome *installOutcome) Inspect(context.Context) ownerconsole.DurableChangeSet {
-	outcome.mu.Lock()
-	defer outcome.mu.Unlock()
-	return outcome.change
+	return ownerconsole.ChangeResult{Kind: ownerconsole.ChangeCancellationRequested, OperationID: identity, Explanation: result.Reason}
 }
 
 func (outcome *installOutcome) Fix(ctx context.Context, _ ownerconsole.CorrectionInput) ownerconsole.ChangeReview {
 	return outcome.Review(ctx)
 }
 func (outcome *installOutcome) CheckAgain(ctx context.Context) ownerconsole.ChangeReview {
-	outcome.mu.Lock()
-	outcome.built, outcome.reclamation = nil, nil
-	outcome.mu.Unlock()
 	return outcome.Review(ctx)
 }
-func (outcome *installOutcome) Back(context.Context) ownerconsole.ChangeReview {
+func (*installOutcome) Back(context.Context) ownerconsole.ChangeReview {
 	return ownerconsole.ChangeReview{Editing: &ownerconsole.EditingPresentation{Title: "Clean VPS installation", Field: installFields[0]}}
-}
-func (outcome *installOutcome) RequestCancellation(_ context.Context, operation ownerconsole.OperationIdentity) ownerconsole.ChangeResult {
-	outcome.mu.Lock()
-	defer outcome.mu.Unlock()
-	if outcome.change.Kind != ownerconsole.ChangeSetActive || outcome.change.OperationID != operation || outcome.cancel == nil {
-		return ownerconsole.ChangeResult{Kind: ownerconsole.ChangePlanRejected, Explanation: "Cancellation is accepted only by the active privileged Change Set."}
-	}
-	if !outcome.cancelled {
-		close(outcome.cancel)
-		outcome.cancelled = true
-	}
-	return ownerconsole.ChangeResult{Kind: ownerconsole.ChangeCancellationRequested, OperationID: operation, Explanation: "Cancellation will roll back at the next declared safe checkpoint."}
-}
-
-func (outcome *installOutcome) build(ctx context.Context) error {
-	port := func(name string) (uint16, error) {
-		value, err := strconv.ParseUint(outcome.values[name], 10, 16)
-		return uint16(value), err
-	}
-	ssh, err1 := port("ssh-port")
-	reality, err2 := port("reality-port")
-	hysteria2, err3 := port("hysteria2-port")
-	tuic, err4 := port("tuic-port")
-	anyTLS, err5 := port("anytls-port")
-	subscription, err6 := port("subscription-port")
-	if errors.Join(err1, err2, err3, err4, err5, err6) != nil {
-		return errors.New("one or more ports are invalid")
-	}
-	architecture := softwarelifecycle.Architecture(runtime.GOARCH)
-	lifecycle := softwarelifecycle.New(softwaregithub.New(), softwarelifecycle.VerifierQualification{Version: softwaregithub.Version, SigningFingerprint: softwaregithub.SigningFingerprint}, time.Now, softwareubuntu.NewStager())
-	view := lifecycle.View(ctx, softwarelifecycle.ViewRequest{Tag: outcome.values["release-tag"], Architecture: architecture, InstallationStatus: softwarelifecycle.NotInstalled})
-	candidate := view.InstallCandidate()
-	handoff, valid := candidate.InstallHandoff()
-	if view.Refusal != nil || !valid {
-		return errors.New("the exact release could not be verified and staged")
-	}
-	sessionBytes, entropy := make([]byte, 32), make([]byte, 32)
-	if _, err := rand.Read(sessionBytes); err != nil {
-		return errors.New("installation identity generation failed")
-	}
-	if _, err := rand.Read(entropy); err != nil {
-		return errors.New("installation entropy generation failed")
-	}
-	request := softwareubuntu.InstallHandoffRequest{
-		Schema: 1, Session: hex.EncodeToString(sessionBytes), Tag: outcome.values["release-tag"], Architecture: architecture,
-		Draft:               softwarelifecycle.InstallationDraft{Domain: outcome.values["domain"], OwnerEmail: outcome.values["owner-email"], PublicIPv4: outcome.values["public-ipv4"], PrimaryAddress: outcome.values["primary-address"], SSHPort: ssh, RealityPort: reality, Hysteria2Port: hysteria2, TUICPort: tuic, AnyTLSPort: anyTLS, SubscriptionPort: subscription},
-		CloudflareAccountID: outcome.values["cloudflare-account"], CloudflareZoneID: outcome.values["cloudflare-zone"], CloudflareToken: outcome.values["cloudflare-token"],
-		RealityTarget: outcome.values["reality-target"], RealityServerName: outcome.values["reality-server-name"], Entropy: entropy, Candidate: handoff,
-	}
-	built, err := buildInstall(ctx, request)
-	if err != nil {
-		var review *reclamationReviewError
-		if errors.As(err, &review) && review.plan != nil {
-			outcome.request, outcome.reclamation = request, review.plan
-			return nil
-		}
-		return err
-	}
-	outcome.request, outcome.built = request, built
-	return nil
-}
-
-func reclamationReview(plan *networkpolicy.ReclamationPlan, confirmed bool) ownerconsole.ChangeReview {
-	if plan == nil || len(plan.Digest) != 64 {
-		return ownerconsole.ChangeReview{}
-	}
-	effects, ok := reclamationPlanEffects(plan, 64)
-	if !ok {
-		return reclamationPlanCorrection()
-	}
-	if len(effects) == 0 {
-		effects = []string{"Review the exact detected conflicts; change nothing"}
-	}
-	return ownerconsole.ChangeReview{Plan: &ownerconsole.PlanPresentation{
-		Identity: ownerconsole.PlanIdentity("reclaim-vps-" + plan.Digest[:16]), LineageUnavailable: true,
-		RelevantChecksums: []string{"Reclamation facts SHA-256 " + plan.Digest}, ObservedState: "Reclaimable VPS: exact read-only conflict facts",
-		VerifiedExternalInputs: []string{"Fresh Network Policy host and conflict observations", "Protected Host Foundation version 1"},
-		Effects:                effects, RequiredChecks: []string{"Fresh privileged recheck must match this exact digest before any later reclamation"}, AdvisoryChecks: []string{"Review-only confirmation grants no mutation authority"},
-		Interruption: plan.Interruption, Cancellation: plan.Cancellation, Rollback: plan.Rollback,
-		ReclamationDigest: plan.Digest, ReclamationConfirmed: confirmed,
-	}}
-}
-
-func reclamationPlanEffects(plan *networkpolicy.ReclamationPlan, limit int) ([]string, bool) {
-	if plan == nil {
-		return nil, false
-	}
-	values := append(append(append([]string(nil), plan.Targets...), plan.Preservation...), plan.PermanentWarnings...)
-	var effects []string
-	for _, value := range values {
-		value = strings.ReplaceAll(value, "\r\n", "\n")
-		lines := strings.Split(value, "\n")
-		for _, line := range lines {
-			value = line
-			for value != "" {
-				end := min(len(value), 320)
-				for end > 0 && end < len(value) && value[end]&0xc0 == 0x80 {
-					end--
-				}
-				if end == 0 {
-					return nil, false
-				}
-				effects = append(effects, value[:end])
-				if len(effects) > limit {
-					return nil, false
-				}
-				value = value[end:]
-			}
-		}
-	}
-	return effects, true
-}
-
-func reclamationPlanCorrection() ownerconsole.ChangeReview {
-	return ownerconsole.ChangeReview{Correction: &ownerconsole.CorrectionPresentation{Problem: "The exact reclamation Plan is too large to display", Found: "More than 64 safe effect rows are required", Required: "Remove unsupported or unrelated firewall complexity, then check again", WhyStopped: "SBXR never hides or truncates destructive Plan facts", OwnerSteps: []string{"Simplify the existing firewall policy or reimage the VPS, then run the check again."}, Selections: []ownerconsole.CorrectionSelection{{Identity: "firewall-simplified", Label: "The firewall policy is now simpler"}}, Evidence: "INSTALL-RECLAMATION-PLAN-TOO-LARGE"}}
 }
 
 func installCorrection(err error) ownerconsole.ChangeReview {
 	return ownerconsole.ChangeReview{Correction: &ownerconsole.CorrectionPresentation{Problem: "The installation Plan could not be built", Found: "One required release, provider, network, or installation input did not pass", Required: "Correct the named input or external fact, then check again", WhyStopped: "SBXR never continues with an incomplete or changed installation Plan", FixWithSBXR: true, InputLabel: "Corrected value", Evidence: "INSTALL-PLAN-REFUSED: " + err.Error()}}
+}
+
+func proveInstalledSubscription(ctx context.Context, address string, port uint16) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+net.JoinHostPort(address, fmt.Sprint(port))+"/", nil)
+	if err != nil {
+		return err
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return err
+	}
+	return response.Body.Close()
+}
+
+func trimVersion(version string) string { return strings.TrimPrefix(version, "v") }
+
+type installClock struct{}
+
+func (installClock) Now() time.Time { return time.Now() }
+
+type installSingBoxValidator struct{ host profilesubuntu.CandidateHost }
+
+func (validator installSingBoxValidator) ValidateSingBox(ctx context.Context, document io.Reader) error {
+	return validator.host.ValidateSingBox(ctx, "1.13.16", document)
 }

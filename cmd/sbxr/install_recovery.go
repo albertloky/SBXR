@@ -68,6 +68,13 @@ func runStartupRecovery() (resultErr error) {
 		}
 		return nil
 	}
+	if pending.Kind == systemchanges.InstallationMutation {
+		installationModule, err := newInstallationModule()
+		if err != nil {
+			return err
+		}
+		return installationModule.Recover(context.Background(), pending)
+	}
 	return dispatchPendingChangeSet(pending, recoveryRoutes(runProvenRecovery))
 }
 

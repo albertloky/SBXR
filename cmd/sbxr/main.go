@@ -9,6 +9,7 @@ import (
 
 	"github.com/albertloky/SBXR/internal/healthdiagnostics"
 	healthfilesystem "github.com/albertloky/SBXR/internal/healthdiagnostics/adapter/filesystem"
+	"github.com/albertloky/SBXR/internal/installation"
 	"github.com/albertloky/SBXR/internal/networkpolicy"
 	"github.com/albertloky/SBXR/internal/networkpolicy/adapter/ubuntu"
 	"github.com/albertloky/SBXR/internal/ownerconsole"
@@ -45,7 +46,10 @@ func main() {
 		return
 	}
 	if len(os.Args) == 3 && os.Args[1] == "private" && os.Args[2] == "install-apply" {
-		if softwareubuntu.ServeInstallApply(context.Background(), prepareInstallApply) != nil {
+		installationModule, err := newInstallationModule()
+		if err != nil || softwareubuntu.ServeInstallApply(context.Background(), func(ctx context.Context, request softwareubuntu.InstallHandoffRequest) (func() softwareubuntu.InstallApplyOutcome, error) {
+			return installation.PreparePrivilegedApply(installationModule, ctx, request)
+		}) != nil {
 			os.Exit(1)
 		}
 		return

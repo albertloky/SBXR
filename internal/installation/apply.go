@@ -1,14 +1,11 @@
-package main
+package installation
 
 import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"io"
-	"net"
-	"net/http"
 	"path/filepath"
 	"sync"
 
@@ -25,16 +22,24 @@ import (
 	systemubuntu "github.com/albertloky/SBXR/internal/systemchanges/adapter/ubuntu"
 )
 
-func prepareInstallApply(ctx context.Context, request softwareubuntu.InstallHandoffRequest) (func() softwareubuntu.InstallApplyOutcome, error) {
-	if pending, err := pendingStartupRecovery(); err != nil {
+// PreparePrivilegedApply is process-startup wiring for the private Ubuntu handoff.
+// It is not an Owner workflow action.
+func PreparePrivilegedApply(module *Interface, ctx context.Context, request softwareubuntu.InstallHandoffRequest) (func() softwareubuntu.InstallApplyOutcome, error) {
+	if module == nil {
+		return nil, errors.New("Installation Module unavailable")
+	}
+	if pending, found, err := module.dependencies.Pending.PendingChangeSet(); err != nil {
 		return nil, err
-	} else if pending {
-		if err := runStartupRecovery(); err != nil {
+	} else if found {
+		if pending.Kind != systemchanges.InstallationMutation {
+			return nil, errors.New("another Module owns the pending Change Set recovery")
+		}
+		if err := module.Recover(ctx, pending); err != nil {
 			return nil, err
 		}
 		return nil, errors.New("prior installation recovered; build a fresh Plan")
 	}
-	built, err := buildInstall(ctx, request)
+	built, err := module.build(ctx, request)
 	if err != nil || built.cloudflareAPI == nil || built.network == nil {
 		return nil, errors.New("complete install composition refused")
 	}
@@ -56,7 +61,7 @@ func prepareInstallApply(ctx context.Context, request softwareubuntu.InstallHand
 		return nil, err
 	}
 	subscriptionExecutor, err := subscriptionfilesystem.NewForFreshInstallation(func(proofContext context.Context, address string) error {
-		return proveInstalledSubscription(proofContext, address, built.desired.Subscription.ListenPort)
+		return module.dependencies.ProveSubscription(proofContext, address, built.desired.Subscription.ListenPort)
 	})
 	if err != nil {
 		return nil, err
@@ -76,7 +81,7 @@ func prepareInstallApply(ctx context.Context, request softwareubuntu.InstallHand
 		observationMu.RLock()
 		volatile := volatileSHA256
 		observationMu.RUnlock()
-		return observeInstallApply(installApplyStateObservation, productionPendingChangeSetReader(), string(requestChangeSet(request)), built.totalSteps, volatile)
+		return observeInstallApply(module.installApplyStateObservation, module.dependencies.Pending, string(requestChangeSet(request)), built.totalSteps, volatile)
 	}
 
 	approval := softwareubuntu.NewApproval(func(recheckContext context.Context) (softwarelifecycle.InstallRecheck, error) {
@@ -98,18 +103,18 @@ func prepareInstallApply(ctx context.Context, request softwareubuntu.InstallHand
 		cancellation.Request()
 	}()
 	return func() softwareubuntu.InstallApplyOutcome {
-		if err := writeInstallRecoveryReceipt(string(requestChangeSet(request)), staged.Identity, staged.Build.PayloadSHA256); err != nil {
+		if err := module.dependencies.WriteReceipt(string(requestChangeSet(request)), staged.Identity, staged.Build.PayloadSHA256); err != nil {
 			return softwareubuntu.InstallRecoveryRequired
 		}
 		result := built.plan.Apply(ctx, softwarelifecycle.InstallApplyRequest{Approval: approval, PreparedState: prepared, SystemChanges: changes, Cancellation: cancellation})
 		switch result.Outcome {
 		case systemchanges.Completed:
-			if removeInstallRecoveryReceipt() != nil {
+			if module.dependencies.RemoveReceipt() != nil {
 				return softwareubuntu.InstallRecoveryRequired
 			}
 			return softwareubuntu.InstallCompleted
 		case systemchanges.RollbackSucceeded:
-			if removeInstallRecoveryReceipt() != nil {
+			if module.dependencies.RemoveReceipt() != nil {
 				return softwareubuntu.InstallRecoveryRequired
 			}
 			return softwareubuntu.InstallRolledBack
@@ -152,21 +157,21 @@ func recheckInstall(ctx context.Context, request softwareubuntu.InstallHandoffRe
 	return recheck, hex.EncodeToString(freshDigest.Sum(nil)), nil
 }
 
-func installApplyStateObservation() (systemchanges.Observation, error) {
-	observed, err := installRecoveryObservation()
+func (module *Interface) installApplyStateObservation() (systemchanges.Observation, error) {
+	observed, err := module.dependencies.ObserveState()
 	if err != nil || observed.Status != systemchanges.Managed {
 		return observed, err
 	}
-	lineage, release, err := managedLoadEvidence()
+	lineage, release, err := module.dependencies.LoadManaged()
 	if err != nil {
 		return systemchanges.Observation{}, err
 	}
-	module := statefilesystem.New()
-	loaded, err := module.Load(state.LoadRequest{Baseline: state.ManagedEvidence, SupportedRelease: release, Lineage: &state.LineageProof{Revision: lineage.StateRevision, LastCompletedChangeSet: state.ChangeSetIdentity(lineage.LastChangeSet), ReleaseIdentity: release}})
+	stateModule := statefilesystem.New()
+	loaded, err := stateModule.Load(state.LoadRequest{Baseline: state.ManagedEvidence, SupportedRelease: release, Lineage: &state.LineageProof{Revision: lineage.StateRevision, LastCompletedChangeSet: state.ChangeSetIdentity(lineage.LastChangeSet), ReleaseIdentity: release}})
 	if err != nil {
 		return systemchanges.Observation{}, err
 	}
-	revision, sha256, lastChangeSet, loadedRelease, valid := module.SystemChangesLineageInspection(loaded).SystemChangesStateLineageFacts()
+	revision, sha256, lastChangeSet, loadedRelease, valid := stateModule.SystemChangesLineageInspection(loaded).SystemChangesStateLineageFacts()
 	if !valid || loadedRelease != release {
 		return systemchanges.Observation{}, errors.New("install State lineage is unprovable")
 	}
@@ -194,20 +199,4 @@ func observeInstallApply(stateSource systemubuntu.ObservationSource, reader syst
 
 func requestChangeSet(request softwareubuntu.InstallHandoffRequest) state.ChangeSetIdentity {
 	return state.ChangeSetIdentity("install-" + request.Session[:16])
-}
-
-func proveInstalledSubscription(ctx context.Context, address string, port uint16) error {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+net.JoinHostPort(address, formatPort(port))+"/", nil)
-	if err != nil {
-		return err
-	}
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		return err
-	}
-	return response.Body.Close()
-}
-
-func formatPort(port uint16) string {
-	return fmt.Sprint(port)
 }

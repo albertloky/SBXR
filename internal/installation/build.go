@@ -1,4 +1,4 @@
-package main
+package installation
 
 import (
 	"cmp"
@@ -19,7 +19,6 @@ import (
 	profilesubuntu "github.com/albertloky/SBXR/internal/connectionprofiles/adapter/ubuntu"
 	"github.com/albertloky/SBXR/internal/healthdiagnostics"
 	"github.com/albertloky/SBXR/internal/networkpolicy"
-	networkubuntu "github.com/albertloky/SBXR/internal/networkpolicy/adapter/ubuntu"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 	softwareubuntu "github.com/albertloky/SBXR/internal/softwarelifecycle/adapter/ubuntu"
 	"github.com/albertloky/SBXR/internal/state"
@@ -106,21 +105,7 @@ func (validator installSingBoxValidator) ValidateSingBox(ctx context.Context, do
 	return validator.host.ValidateSingBox(ctx, "1.13.16", document)
 }
 
-func buildInstall(ctx context.Context, request softwareubuntu.InstallHandoffRequest) (*builtInstall, error) {
-	networkModule := networkpolicy.New(networkubuntu.New())
-	cloudflareAPI := cloudflaretunnel.NewProductionAPI()
-	cloudflareModule := cloudflaretunnel.New(cloudflareAPI, cloudflaretunnel.SystemClock{})
-	return buildInstallWith(ctx, request, installBuildDependencies{
-		stage:         softwareubuntu.NewStager().Stage,
-		network:       networkModule.Evaluate,
-		cloudflare:    cloudflareModule.Plan,
-		random:        newInstallEntropyReader(request.Entropy),
-		cloudflareAPI: cloudflareAPI,
-		inventory:     cloudflareAPI,
-	})
-}
-
-type installBuildDependencies struct {
+type buildDependencies struct {
 	stage         func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error)
 	network       func(networkpolicy.Request) networkpolicy.Result
 	cloudflare    func(context.Context, cloudflaretunnel.PlanRequest) cloudflaretunnel.PlanResult
@@ -193,7 +178,7 @@ func (stager installReleaseStager) Stage(ctx context.Context, request softwareli
 	return stager.stage(ctx, request)
 }
 
-func buildInstallWith(ctx context.Context, request softwareubuntu.InstallHandoffRequest, dependencies installBuildDependencies) (*builtInstall, error) {
+func buildInstallWith(ctx context.Context, request softwareubuntu.InstallHandoffRequest, dependencies buildDependencies) (*builtInstall, error) {
 	if dependencies.stage == nil || dependencies.network == nil || dependencies.cloudflare == nil || dependencies.random == nil {
 		return nil, errors.New("install composition dependencies unavailable")
 	}

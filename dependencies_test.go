@@ -32,6 +32,7 @@ var registeredModules = map[string]bool{
 	"cloudflaretunnel":        true,
 	"softwarelifecycle":       true,
 	"healthdiagnostics":       true,
+	"installation":            true,
 	"networkpolicy":           true,
 	"state":                   true,
 	"systemchanges":           true,
@@ -44,6 +45,7 @@ var approvedModuleDependencies = map[string]map[string]bool{
 	"cloudflaretunnel":        {"networkpolicy": true, "softwarelifecycle": true, "systemchanges": true},
 	"connectionprofiles":      {"cloudflaretunnel": true, "softwarelifecycle": true, "state": true, "systemchanges": true},
 	"healthdiagnostics":       {"systemchanges": true},
+	"installation":            {"certificatelifecycle": true, "cloudflaretunnel": true, "connectionprofiles": true, "healthdiagnostics": true, "networkpolicy": true, "softwarelifecycle": true, "state": true, "subscriptionpublication": true, "systemchanges": true},
 	"softwarelifecycle":       {"networkpolicy": true, "systemchanges": true},
 	"subscriptionpublication": {"connectionprofiles": true, "softwarelifecycle": true, "state": true, "systemchanges": true},
 }
@@ -95,7 +97,7 @@ func TestRepositoryDependencies(t *testing.T) {
 }
 
 func TestModuleRegistry(t *testing.T) {
-	want := "certificatelifecycle,cloudflaretunnel,connectionprofiles,healthdiagnostics,networkpolicy,ownerconsole,softwarelifecycle,state,subscriptionpublication,subscriptionserving,systemchanges"
+	want := "certificatelifecycle,cloudflaretunnel,connectionprofiles,healthdiagnostics,installation,networkpolicy,ownerconsole,softwarelifecycle,state,subscriptionpublication,subscriptionserving,systemchanges"
 	got := make([]string, 0, len(registeredModules))
 	for module := range registeredModules {
 		got = append(got, module)
