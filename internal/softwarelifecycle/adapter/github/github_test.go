@@ -109,6 +109,44 @@ func TestSourceDiscoversStableAndReviewedReleasesThroughPublicHTTPS(t *testing.T
 	}
 }
 
+func TestSourceRefusesAutomaticStableDiscoveryUntilTheAcceptanceRecordAgrees(t *testing.T) {
+	for _, change := range []func(*releaseFixture){
+		func(f *releaseFixture) { f.release.Body = "" },
+		func(f *releaseFixture) {
+			f.release.Body = strings.Replace(f.release.Body, fixtureCommit, strings.Repeat("b", 40), 1)
+		},
+		func(f *releaseFixture) {
+			f.release.Body = strings.Replace(f.release.Body, f.attested["release-index.json"], strings.Repeat("b", 64), 1)
+		},
+	} {
+		fixture := newReleaseFixture(t)
+		change(fixture)
+		source := NewWithEndpoint(fixture.server.Client(), fixture.server.URL, fixture.verifier)
+		if got, err := source.Discover(t.Context(), ""); err == nil || got.Tag != "" {
+			t.Fatalf("Discover() = %#v, %v", got, err)
+		}
+	}
+}
+
+func TestSourceBindsAStableAcceptanceRecordToTheDownloadedIndex(t *testing.T) {
+	fixture := newReleaseFixture(t)
+	fixture.release.Body = strings.Replace(fixture.release.Body, fixture.attested["release-index.json"], strings.Repeat("b", 64), 1)
+	source := NewWithEndpoint(fixture.server.Client(), fixture.server.URL, fixture.verifier)
+	if got, err := source.Verify(t.Context(), "v1.0.0"); err == nil || got.Repository != "" {
+		t.Fatalf("Verify() = %#v, %v", got, err)
+	}
+}
+
+func TestSourceStillVerifiesAReviewedPrereleaseBeforeItsAcceptanceRecordExists(t *testing.T) {
+	fixture := newReleaseFixture(t)
+	fixture.release.Prerelease = true
+	fixture.release.Body = ""
+	source := NewWithEndpoint(fixture.server.Client(), fixture.server.URL, fixture.verifier)
+	if _, err := source.Verify(t.Context(), "v1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSigstoreVerifierAuthenticatesTheOfficialGitHubReleaseFixture(t *testing.T) {
 	if source := New(); source.client == nil || source.verifier == nil {
 		t.Fatal("compiled GitHub trust root disagrees with its reviewed digest")
@@ -167,7 +205,25 @@ func newReleaseFixture(t *testing.T) *releaseFixture {
 			URL: fmt.Sprintf("%s/repos/%s/releases/assets/%d", fixture.server.URL, softwarelifecycle.Repository, index+1),
 		})
 	}
+	fixture.release.Body = stableAcceptanceFixture(fixture.attested["release-index.json"])
 	return fixture
+}
+
+func stableAcceptanceFixture(indexSHA256 string) string {
+	return "# SBXR automated Acceptance Record\n\n" +
+		"Status: Qualified - installer-only automated exception\n" +
+		"Repository: " + softwarelifecycle.Repository + "\n" +
+		"Tag: v1.0.0\n" +
+		"Commit: " + fixtureCommit + "\n" +
+		"Release index SHA-256: " + indexSHA256 + "\n" +
+		"Stable result code: RELEASE-INSTALLER-AUTOMATED-QUALIFICATION\n\n" +
+		"| Module Verification | Passed | exact |\n" +
+		"| Seam Verification | Passed | exact |\n" +
+		"| Integrated Verification | Passed | exact |\n" +
+		"| Codex Live Acceptance | Not required | exact |\n" +
+		"| Owner Acceptance | Not required | exact |\n\n" +
+		"No live VPS, provider, maintained-client, or Owner evidence was performed.\n\n" +
+		"Any asset, attestation, repository, tag, commit, release-index digest, required check, or client-facing change invalidates this record.\n"
 }
 
 func (fixture *releaseFixture) verifier(body []byte, algorithm, digest string) ([]byte, error) {

@@ -42,6 +42,11 @@ func TestStableWorkflowReverifiesTheExactPublicInstallerBeforeREADMEActivation(t
 	}
 	workflow := string(body)
 	for _, required := range []string{
+		"actions: read",
+		"ref: ${{ steps.release.outputs.commit }}",
+		"test \"$(git rev-parse HEAD)\" = \"$(jq -r .target_commitish release.json)\"",
+		"gh run download \"$record_run_id\" --name \"automated-acceptance-record-$RELEASE_TAG\"",
+		"cmp acceptance-record.md retained-acceptance/acceptance-record.md",
 		"go run ./cmd/sbxr-release verify -tag \"$RELEASE_TAG\"",
 		"releases/latest/download/install.sh",
 		"releases/download/$RELEASE_TAG/install.sh",

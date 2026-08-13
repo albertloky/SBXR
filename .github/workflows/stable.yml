@@ -9,6 +9,7 @@ on:
         type: string
 
 permissions:
+  actions: read
   attestations: read
   contents: read
 
@@ -17,8 +18,18 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       RELEASE_TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
     steps:
+      - name: Resolve the exact stable release identity
+        id: release
+        run: |
+          commit="$(curl -fsSL "https://api.github.com/repos/albertloky/SBXR/releases/tags/$RELEASE_TAG" | jq -r .target_commitish)"
+          test "$(printf '%s' "$commit" | wc -c)" -eq 40
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.release.outputs.commit }}
+          fetch-depth: 0
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -26,12 +37,19 @@ jobs:
       - name: Reverify the exact qualified stable identity
         run: |
           curl -fsSL "https://api.github.com/repos/albertloky/SBXR/releases/tags/$RELEASE_TAG" -o release.json
+          test "$(git rev-parse HEAD)" = "$(jq -r .target_commitish release.json)"
           curl -fsSL "https://api.github.com/repos/albertloky/SBXR/releases/latest" -o latest.json
           jq -e --arg tag "$RELEASE_TAG" '.tag_name == $tag and .immutable == true and .draft == false and .prerelease == false and (.target_commitish | test("^[0-9a-f]{40}$"))' release.json
           test "$(jq -r .id release.json)" = "$(jq -r .id latest.json)"
           test "$(jq '.assets | length' release.json)" = 6
           test "$(jq -r '.assets[].name' release.json | sort)" = "$(printf '%s\n' install.sh release-index.json sbxr-components-linux-amd64.tar.gz sbxr-components-linux-arm64.tar.gz sbxr-linux-amd64.tar.gz sbxr-linux-arm64.tar.gz | sort)"
           jq -r .body release.json > acceptance-record.md
+          record_run_url="$(sed -n 's/^Workflow evidence: //p' acceptance-record.md)"
+          printf '%s\n' "$record_run_url" | grep -Eq '^https://github\.com/albertloky/SBXR/actions/runs/[1-9][0-9]*$'
+          record_run_id="${record_run_url##*/}"
+          mkdir -m 0700 retained-acceptance
+          gh run download "$record_run_id" --name "automated-acceptance-record-$RELEASE_TAG" --dir retained-acceptance
+          cmp acceptance-record.md retained-acceptance/acceptance-record.md
           grep -Fx 'Status: Qualified - installer-only automated exception' acceptance-record.md
           grep -Fx 'No live VPS, provider, maintained-client, or Owner evidence was performed.' acceptance-record.md
           go run ./cmd/sbxr-release verify -tag "$RELEASE_TAG"

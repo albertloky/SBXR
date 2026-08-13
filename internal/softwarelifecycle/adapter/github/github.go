@@ -83,6 +83,13 @@ func (source Source) Discover(ctx context.Context, reviewedTag string) (software
 	if source.getJSON(ctx, source.baseURL+path, 1<<20, &release) != nil || !safeTag(release.Tag) {
 		return softwarelifecycle.ReleaseListing{}, errors.New("GitHub release discovery refused")
 	}
+	if reviewedTag == "" {
+		assets, err := exactReleaseAssets(source.baseURL, release.Assets)
+		if err != nil || release.Draft || release.Prerelease || !release.Immutable || !commitPattern.MatchString(release.TargetCommitish) ||
+			!stableAcceptanceRecord(release.Body, release.Tag, release.TargetCommitish, assets["release-index.json"].SHA256) {
+			return softwarelifecycle.ReleaseListing{}, errors.New("GitHub stable release discovery refused")
+		}
+	}
 	return softwarelifecycle.ReleaseListing{Tag: release.Tag, Draft: release.Draft, Prerelease: release.Prerelease}, nil
 }
 
@@ -100,6 +107,14 @@ func (source Source) Verify(ctx context.Context, tag string) (softwarelifecycle.
 	if source.getJSON(ctx, source.baseURL+"/repos/"+softwarelifecycle.Repository+"/releases/tags/"+url.PathEscape(tag), 1<<20, &release) != nil ||
 		release.Tag != tag || release.TargetCommitish != commit || release.Draft || !release.Immutable || len(release.Assets) != 6 {
 		return softwarelifecycle.ReleaseEvidence{}, errors.New("GitHub immutable release refused")
+	}
+	recordIndexSHA256 := ""
+	if !release.Prerelease {
+		var ok bool
+		recordIndexSHA256, ok = acceptanceRecordIndexSHA256(release.Body, tag, commit)
+		if !ok {
+			return softwarelifecycle.ReleaseEvidence{}, errors.New("GitHub stable acceptance record refused")
+		}
 	}
 	metadata, err := exactReleaseAssets(source.baseURL, release.Assets)
 	if err != nil {
@@ -141,6 +156,12 @@ func (source Source) Verify(ctx context.Context, tag string) (softwarelifecycle.
 			downloaded = append(downloaded, softwarelifecycle.DownloadedAsset{Name: name, Bytes: body})
 		}
 	}
+	if recordIndexSHA256 != "" {
+		digest := sha256.Sum256(index)
+		if hex.EncodeToString(digest[:]) != recordIndexSHA256 {
+			return softwarelifecycle.ReleaseEvidence{}, errors.New("GitHub stable acceptance record refused")
+		}
+	}
 	proofs := make([]softwarelifecycle.AttestedAsset, 0, len(names))
 	for _, name := range names {
 		proofs = append(proofs, softwarelifecycle.AttestedAsset{Name: name, SHA256: metadata[name].SHA256})
@@ -161,10 +182,57 @@ type githubRef struct {
 type githubRelease struct {
 	Tag             string        `json:"tag_name"`
 	TargetCommitish string        `json:"target_commitish"`
+	Body            string        `json:"body"`
 	Draft           bool          `json:"draft"`
 	Prerelease      bool          `json:"prerelease"`
 	Immutable       bool          `json:"immutable"`
 	Assets          []githubAsset `json:"assets"`
+}
+
+func stableAcceptanceRecord(body, tag, commit, indexSHA256 string) bool {
+	recorded, ok := acceptanceRecordIndexSHA256(body, tag, commit)
+	return ok && (indexSHA256 == "" || recorded == indexSHA256)
+}
+
+func acceptanceRecordIndexSHA256(body, tag, commit string) (string, bool) {
+	if len(body) == 0 || len(body) > 64<<10 || strings.ContainsAny(body, "\r\x00") {
+		return "", false
+	}
+	required := []string{
+		"# SBXR automated Acceptance Record",
+		"Status: Qualified - installer-only automated exception",
+		"Repository: " + softwarelifecycle.Repository,
+		"Tag: " + tag,
+		"Commit: " + commit,
+		"Stable result code: RELEASE-INSTALLER-AUTOMATED-QUALIFICATION",
+		"No live VPS, provider, maintained-client, or Owner evidence was performed.",
+		"Any asset, attestation, repository, tag, commit, release-index digest, required check, or client-facing change invalidates this record.",
+	}
+	for _, line := range required {
+		if strings.Count(body, line+"\n") != 1 {
+			return "", false
+		}
+	}
+	for _, stage := range []string{"Module Verification", "Seam Verification", "Integrated Verification", "Codex Live Acceptance", "Owner Acceptance"} {
+		status := "Passed"
+		if stage == "Codex Live Acceptance" || stage == "Owner Acceptance" {
+			status = "Not required"
+		}
+		if strings.Count(body, "| "+stage+" | "+status+" |") != 1 {
+			return "", false
+		}
+	}
+	prefix := "Release index SHA-256: "
+	var digest string
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			if digest != "" {
+				return "", false
+			}
+			digest = strings.TrimPrefix(line, prefix)
+		}
+	}
+	return digest, hashPattern.MatchString(digest)
 }
 
 type githubAsset struct {
