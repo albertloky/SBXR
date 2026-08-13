@@ -33,7 +33,11 @@ while time.monotonic() < deadline and b"Not installed" not in output:
             break
 
 if b"SBXR bootstrap: launching Owner Console" not in output or b"Not installed" not in output:
-    os.killpg(pid, signal.SIGTERM)
+    os.write(2, output)
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
     raise SystemExit("public bootstrap did not reach the Owner Console")
 
 os.write(terminal, b"\x03")
