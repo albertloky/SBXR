@@ -67,23 +67,24 @@ cleanup() {
 	[ ! -e "$path" ] && [ ! -L "$path" ] || return 1
   fi
 }
-refuse() {
+fixed_refusal() {
+	code=$1
 	trap - EXIT
 	if ! cleanup; then
 		printf '%s\n' 'SBXR-BOOTSTRAP-CLEANUP-FAILED' >&2
 		exit 1
 	fi
-  printf '%s\n' 'SBXR-BOOTSTRAP-REFUSED' >&2
-  exit 1
+	printf '%s\n' "$code" >&2
+	exit 1
+}
+refuse() {
+	fixed_refusal 'SBXR-BOOTSTRAP-REFUSED'
 }
 prerequisites_refused() {
-	trap - EXIT
-	if ! cleanup; then
-		printf '%s\n' 'SBXR-BOOTSTRAP-CLEANUP-FAILED' >&2
-		exit 1
-	fi
-  printf '%s\n' 'SBXR-BOOTSTRAP-PREREQUISITES-REFUSED' >&2
-  exit 1
+	fixed_refusal 'SBXR-BOOTSTRAP-PREREQUISITES-REFUSED'
+}
+launch_refused() {
+	fixed_refusal 'SBXR-BOOTSTRAP-LAUNCH-REFUSED'
 }
 interrupted() {
 	trap - EXIT
@@ -108,16 +109,20 @@ fi
 [ -t 0 ] && [ -t 1 ] || refuse
 case "${TERM-}" in ''|*[!A-Za-z0-9._+-]*) refuse ;; esac
 
-for tool in apt-get cut env getent grep id mktemp readlink stat sudo uname; do
+for tool in apt-get cut env getent grep id mktemp readlink stat uname; do
   [ -x "$ROOT/usr/bin/$tool" ] || prerequisites_refused
 done
 [ -x "$ROOT/bin/chmod" ] && [ -x "$ROOT/bin/rm" ] && [ -x "$ROOT/bin/sh" ] || prerequisites_refused
-[ "$("$ROOT/usr/bin/id" -u 2>/dev/null)" != '0' ] || refuse
+launch_uid=$("$ROOT/usr/bin/id" -u 2>/dev/null) || refuse
+case "$launch_uid" in ''|*[!0-9]*) refuse ;; esac
 
 for tool in "$ROOT/usr/bin/apt-get" "$ROOT/usr/bin/cut" "$ROOT/usr/bin/env" "$ROOT/usr/bin/getent" "$ROOT/usr/bin/grep" "$ROOT/usr/bin/id" "$ROOT/usr/bin/mktemp" "$ROOT/usr/bin/readlink" "$ROOT/usr/bin/stat" "$ROOT/usr/bin/uname" "$ROOT/bin/chmod" "$ROOT/bin/rm" "$ROOT/bin/sh"; do
   [ "$("$ROOT/usr/bin/stat" -Lc '%u:%a:%F' "$tool" 2>/dev/null)" = '0:755:regular file' ] || prerequisites_refused
 done
-case "$("$ROOT/usr/bin/stat" -Lc '%u:%a:%F' "$ROOT/usr/bin/sudo" 2>/dev/null)" in '0:4755:regular file'|'0:755:regular file') : ;; *) prerequisites_refused ;; esac
+if [ "$launch_uid" != '0' ]; then
+  [ -x "$ROOT/usr/bin/sudo" ] || launch_refused
+  case "$("$ROOT/usr/bin/stat" -Lc '%u:%a:%F' "$ROOT/usr/bin/sudo" 2>/dev/null)" in '0:4755:regular file'|'0:755:regular file') : ;; *) launch_refused ;; esac
+fi
 
 os_release="$ROOT/etc/os-release"
 if [ -L "$os_release" ]; then
@@ -136,15 +141,20 @@ case "$machine" in
 esac
 case " $ARCHITECTURES " in *" $ARCH "*) : ;; *) refuse ;; esac
 
-owner_uid=$("$ROOT/usr/bin/id" -u 2>/dev/null) || refuse
+owner_uid=$launch_uid
 owner_name=$("$ROOT/usr/bin/id" -un 2>/dev/null) || refuse
 owner_home=$("$ROOT/usr/bin/getent" passwd "$owner_uid" 2>/dev/null | "$ROOT/usr/bin/cut" -d: -f6) || refuse
 case "$owner_name:$owner_home" in *[!A-Za-z0-9._+/:@-]*|*:|*:) refuse ;; esac
 [ -d "$owner_home" ] || refuse
 
 printf '%s\n' 'SBXR bootstrap: repairing fixed prerequisites'
-"$ROOT/usr/bin/sudo" -- "$ROOT/usr/bin/apt-get" update >/dev/null 2>&1 || prerequisites_refused
-"$ROOT/usr/bin/sudo" -- "$ROOT/usr/bin/apt-get" install --yes --no-install-recommends --reinstall ca-certificates curl iproute2 nftables iptables sudo >/dev/null 2>&1 || prerequisites_refused
+if [ "$owner_uid" = '0' ]; then
+  "$ROOT/usr/bin/apt-get" update >/dev/null 2>&1 || prerequisites_refused
+  "$ROOT/usr/bin/apt-get" install --yes --no-install-recommends --reinstall ca-certificates curl iproute2 nftables iptables sudo >/dev/null 2>&1 || prerequisites_refused
+else
+  "$ROOT/usr/bin/sudo" -- "$ROOT/usr/bin/apt-get" update >/dev/null 2>&1 || launch_refused
+  "$ROOT/usr/bin/sudo" -- "$ROOT/usr/bin/apt-get" install --yes --no-install-recommends --reinstall ca-certificates curl iproute2 nftables iptables sudo >/dev/null 2>&1 || launch_refused
+fi
 
 for tool in curl readlink sed sha256sum tar; do
   [ -x "$ROOT/usr/bin/$tool" ] || prerequisites_refused
@@ -242,15 +252,20 @@ if [ -n "$reentry" ]; then
 fi
 fi
 
+launch_tag=$("$ROOT/usr/bin/sed" -n 's|.*"tag":"\([A-Za-z0-9][A-Za-z0-9._+-]*\)","commit".*|\1|p' "$WORK/version.json") || refuse
+launch_commit=$("$ROOT/usr/bin/sed" -n 's|.*"commit":"\([0-9a-f]\{40\}\)","payload_sha256".*|\1|p' "$WORK/version.json") || refuse
+launch_sha=$("$ROOT/usr/bin/sha256sum" "$executable" 2>/dev/null | "$ROOT/usr/bin/cut" -d' ' -f1) || refuse
+case "$launch_tag:$launch_commit:$launch_sha" in *[!A-Za-z0-9._+:-]*|::*|*::) refuse ;; esac
+[ "${#launch_commit}" -eq 40 ] && [ "${#launch_sha}" -eq 64 ] || refuse
 printf '%s\n' 'SBXR bootstrap: launching Owner Console'
 if [ -n "$reentry" ]; then
   if [ -e "$active" ] || [ -L "$active" ]; then
-    "$ROOT/usr/bin/env" -i HOME="$owner_home" USER="$owner_name" LOGNAME="$owner_name" TERM="$TERM" LANG=C.UTF-8 PATH=/usr/bin:/bin SBXR_INSTALLED_REENTRY=1 "$executable"
+    "$ROOT/usr/bin/env" -i HOME="$owner_home" USER="$owner_name" LOGNAME="$owner_name" TERM="$TERM" LANG=C.UTF-8 PATH=/usr/bin:/bin SBXR_INSTALLED_REENTRY=1 SBXR_OWNER_LAUNCH_TAG="$launch_tag" SBXR_OWNER_LAUNCH_COMMIT="$launch_commit" SBXR_OWNER_LAUNCH_SHA256="$launch_sha" "$executable" private owner-launch
   else
-    "$ROOT/usr/bin/env" -i HOME="$owner_home" USER="$owner_name" LOGNAME="$owner_name" TERM="$TERM" LANG=C.UTF-8 PATH=/usr/bin:/bin "$executable"
+    "$ROOT/usr/bin/env" -i HOME="$owner_home" USER="$owner_name" LOGNAME="$owner_name" TERM="$TERM" LANG=C.UTF-8 PATH=/usr/bin:/bin SBXR_OWNER_LAUNCH_TAG="$launch_tag" SBXR_OWNER_LAUNCH_COMMIT="$launch_commit" SBXR_OWNER_LAUNCH_SHA256="$launch_sha" "$executable" private owner-launch
   fi
 else
-  "$ROOT/usr/bin/env" -i HOME="$owner_home" USER="$owner_name" LOGNAME="$owner_name" TERM="$TERM" LANG=C.UTF-8 PATH=/usr/bin:/bin "$executable"
+  "$ROOT/usr/bin/env" -i HOME="$owner_home" USER="$owner_name" LOGNAME="$owner_name" TERM="$TERM" LANG=C.UTF-8 PATH=/usr/bin:/bin SBXR_OWNER_LAUNCH_TAG="$launch_tag" SBXR_OWNER_LAUNCH_COMMIT="$launch_commit" SBXR_OWNER_LAUNCH_SHA256="$launch_sha" "$executable" private owner-launch
 fi
 launch_status=$?
 cleanup
@@ -261,7 +276,7 @@ if [ "$?" -ne 0 ]; then
 fi
 trap - EXIT
 if [ "$launch_status" -ne 0 ]; then
-  printf '%s\n' 'SBXR-BOOTSTRAP-LAUNCH-FAILED' >&2
+  printf '%s\n' 'SBXR-BOOTSTRAP-LAUNCH-REFUSED' >&2
 fi
 exit "$launch_status"
 `

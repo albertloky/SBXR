@@ -45,6 +45,20 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) == 3 && os.Args[1] == "private" && os.Args[2] == "owner-launch" {
+		if softwareubuntu.LaunchOwnerConsole(context.Background()) != nil {
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) == 3 && os.Args[1] == "private" && os.Args[2] == "root-owner-console" {
+		if softwareubuntu.ServeRootOwnerConsole(func() error {
+			return runOwnerConsole(context.Background(), os.Stdin, os.Stdout, os.Environ())
+		}) != nil {
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) == 3 && os.Args[1] == "private" && os.Args[2] == "install-apply" {
 		installationModule, err := newInstallationModule()
 		if err != nil || softwareubuntu.ServeInstallApply(context.Background(), func(ctx context.Context, request softwareubuntu.InstallHandoffRequest) (func() softwareubuntu.InstallApplyOutcome, error) {
@@ -99,10 +113,10 @@ func runOwnerConsole(ctx context.Context, input, output *os.File, environment []
 	}
 	if installed || clientAccessRecoveryMarker() {
 		managed := &clientAccessOutcome{}
-		return ownerconsole.Run(ctx, ownerconsole.Session{Input: input, Output: output, Environment: environment, Capabilities: &capabilities, Authenticator: systemAuthenticator{}, AuthenticationPolicy: ownerconsole.AuthenticateForAccess, Profiles: managed, ProfileOutcomes: managed, Cloudflare: managed, CloudflareOutcomes: managed, Certificates: managed, CertificateOutcomes: managed, Diagnostics: managed, Lifecycle: managed, LifecycleOutcomes: managed, CompleteRemoval: managed, CompleteRemovalOutcomes: managed, StartupProvider: managed.Startup, Recovery: managed})
+		return ownerconsole.Run(ctx, ownerconsole.Session{Input: input, Output: output, Environment: environment, Capabilities: &capabilities, Scenario: ownerconsole.AuthenticatedOverview, Profiles: managed, ProfileOutcomes: managed, Cloudflare: managed, CloudflareOutcomes: managed, Certificates: managed, CertificateOutcomes: managed, Diagnostics: managed, Lifecycle: managed, LifecycleOutcomes: managed, CompleteRemoval: managed, CompleteRemovalOutcomes: managed, StartupProvider: managed.Startup, Recovery: managed})
 	}
 	install := newInstallOutcome()
-	return ownerconsole.Run(ctx, ownerconsole.Session{Input: input, Output: output, Environment: environment, Capabilities: &capabilities, Authenticator: systemAuthenticator{}, AuthenticationPolicy: ownerconsole.AuthenticateForAccess, Outcome: install, Diagnostics: install})
+	return ownerconsole.Run(ctx, ownerconsole.Session{Input: input, Output: output, Environment: environment, Capabilities: &capabilities, Scenario: ownerconsole.InstallationReview, Outcome: install, Diagnostics: install})
 }
 
 func installedClientAccessMarker() bool {

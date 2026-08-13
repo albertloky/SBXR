@@ -519,6 +519,9 @@ type progressClock struct {
 
 func (m model) Init() tea.Cmd {
 	commands := []tea.Cmd{tea.RequestBackgroundColor}
+	if m.scenario == AuthenticatedOverview && m.startupProvider != nil {
+		commands = append(commands, func() tea.Msg { return startupLoadedMsg{startup: m.startupProvider(m.runContext)} })
+	}
 	if m.outcome != nil {
 		if m.scenario == InstallationReview {
 			commands = append(commands, m.enterChangeCommand())
@@ -1067,9 +1070,8 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 							return changeReviewMsg{review: module.ConfirmReclamation(m.runContext, plan.Identity, approval)}
 						}
 					}
-					if plan.ReclamationConfirmed {
-						m.pendingPlanApply = true
-						return m, m.authenticationCommand()
+					if m.authenticator == nil {
+						return m, m.applyChangeCommand()
 					}
 					m.pendingPlanApply = true
 					return m, m.authenticationCommand()

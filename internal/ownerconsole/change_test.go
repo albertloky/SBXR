@@ -367,6 +367,15 @@ func TestRunApprovedWorkUsesAnOperationContextIndependentOfTheConsole(t *testing
 	}
 }
 
+func TestRootOwnerConsoleAppliesWithoutASecondAuthentication(t *testing.T) {
+	stub := &outcomeStub{reviews: []ChangeReview{completePlan("root-console-plan")}, applyResults: []ChangeResult{{Kind: ChangeStarted, OperationID: "root-console-change"}}}
+	steps := append(planTraversalSteps(stub.reviews[0].Plan, 120, 36), "\r", "", "\x03\r")
+	got := runTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: stub}, 120, 36, steps...)
+	if len(stub.applyPlans) != 1 || stub.applyPlans[0] != "root-console-plan" || strings.Contains(got, "authentication") || strings.Contains(got, "LIMITED DASHBOARD") {
+		t.Fatalf("root Owner Console approval = plans %#v\n%s", stub.applyPlans, got)
+	}
+}
+
 func TestRunReadOnlyChoiceCreatesNothingAndFreshInstallReviewsWithoutSudo(t *testing.T) {
 	stub := &outcomeStub{reviews: []ChangeReview{completePlan("install-plan-privacy")}}
 	limited := runTranscriptSteps(t, Session{Outcome: stub, AuthenticationPolicy: DeferAuthenticationUntilApply}, 80, 24, "\x1b[B\r", "\x03\r")

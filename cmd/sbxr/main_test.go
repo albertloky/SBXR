@@ -3,10 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -101,26 +99,6 @@ func TestInstallationPresentationClearsReviewedHealthWhenReviewIsInvalidated(t *
 	outcome.Edit(t.Context(), ownerconsole.EditingInput{Field: "release-tag", Text: "changed"})
 	if outcome.reviewedHealth != nil {
 		t.Fatal("edited Installation retained stale reviewed health")
-	}
-}
-
-func TestSystemAuthenticationReportsEveryOutcome(t *testing.T) {
-	if got := systemAuthenticationResult(nil, nil); got != ownerconsole.AuthenticationSucceeded {
-		t.Fatalf("successful authentication = %v", got)
-	}
-	denied := exec.Command("/usr/bin/false").Run()
-	if got := systemAuthenticationResult(denied, nil); got != ownerconsole.AuthenticationDenied {
-		t.Fatalf("denied authentication = %v", got)
-	}
-	cancelled := exec.Command("/bin/sh", "-c", "kill -INT $$").Run()
-	if got := systemAuthenticationResult(cancelled, nil); got != ownerconsole.AuthenticationCancelled {
-		t.Fatalf("cancelled authentication = %v", got)
-	}
-	if got := systemAuthenticationResult(errors.New("command unavailable"), nil); got != ownerconsole.AuthenticationFailed {
-		t.Fatalf("failed authentication = %v", got)
-	}
-	if got := systemAuthenticationResult(context.DeadlineExceeded, context.DeadlineExceeded); got != ownerconsole.AuthenticationExpired {
-		t.Fatalf("expired authentication = %v", got)
 	}
 }
 

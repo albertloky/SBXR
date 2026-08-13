@@ -251,6 +251,58 @@ func TestGeneratedBootstrapVerifiesAndLaunchesOnlyTheExactReleaseAsTheOwner(t *t
 	}
 }
 
+func TestGeneratedBootstrapAdmitsARootOwnerLaunchIdentityWithoutSudo(t *testing.T) {
+	fixture := newBootstrapFixture(t)
+	fixture.rootOwner = true
+	fixture.home = filepath.Join(fixture.root, "root")
+	if err := os.MkdirAll(fixture.home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fixture.writeBoundaries(t)
+
+	output, err := fixture.run()
+	if err != nil || !strings.Contains(output, "launching Owner Console") {
+		t.Fatalf("root Owner Launch Identity = %v\n%s", err, output)
+	}
+	if _, err := os.Stat(fixture.prerequisiteRecord); !os.IsNotExist(err) {
+		t.Fatalf("root launch used sudo: %v", err)
+	}
+	launched, err := os.ReadFile(fixture.launchRecord)
+	if err != nil || !strings.Contains(string(launched), "USER=root") {
+		t.Fatalf("root Owner Console launch = %q, %v", launched, err)
+	}
+}
+
+func TestGeneratedBootstrapRoutesOwnerLaunchThroughThePrivateUbuntuAdapter(t *testing.T) {
+	fixture := newBootstrapFixture(t)
+	output, err := fixture.run()
+	if err != nil {
+		t.Fatalf("non-root Owner Launch Identity = %v\n%s", err, output)
+	}
+	launched, err := os.ReadFile(fixture.launchRecord)
+	if err != nil || !strings.Contains(string(launched), "ARGS=private owner-launch") || !strings.Contains(string(launched), "SBXR_OWNER_LAUNCH_TAG=v1.0.0") || !strings.Contains(string(launched), "SBXR_OWNER_LAUNCH_COMMIT=0123456789abcdef0123456789abcdef01234567") || !strings.Contains(string(launched), "SBXR_OWNER_LAUNCH_SHA256=") {
+		t.Fatalf("private Owner launch = %q, %v", launched, err)
+	}
+}
+
+func TestGeneratedBootstrapReturnsOneFixedRefusalWhenLaunchAuthenticationFails(t *testing.T) {
+	fixture := newBootstrapFixture(t)
+	fixture.authenticationRefused = true
+	fixture.writeBoundaries(t)
+
+	output, err := fixture.run()
+	if err == nil || strings.Count(output, "SBXR-BOOTSTRAP-LAUNCH-REFUSED") != 1 || strings.Contains(output, "LIMITED DASHBOARD") {
+		t.Fatalf("authentication refusal = %v\n%s", err, output)
+	}
+	if _, err := os.Stat(fixture.launchRecord); !os.IsNotExist(err) {
+		t.Fatalf("refused authentication opened Owner Console: %v", err)
+	}
+	commands, err := os.ReadFile(fixture.prerequisiteRecord)
+	if err != nil || !strings.Contains(string(commands), "--preserve-fds=3") {
+		t.Fatalf("launch refusal did not come from sudo authentication: %q, %v", commands, err)
+	}
+}
+
 func TestGeneratedBootstrapAcceptsOnlyTheStandardUbuntuOSReleaseSymlink(t *testing.T) {
 	valid := newBootstrapFixture(t)
 	valid.osReleaseLink = "../usr/lib/os-release"
@@ -284,7 +336,7 @@ func TestGeneratedBootstrapRepairsOnlyFixedPrerequisitesAndReentersTheInstalledR
 		t.Fatalf("installed re-entry output = %q", output)
 	}
 	launched, err := os.ReadFile(fixture.launchRecord)
-	if err != nil || !strings.Contains(string(launched), "HOME="+fixture.home) || !strings.Contains(string(launched), "USER=owner") || !strings.Contains(string(launched), "SBXR_INSTALLED_REENTRY=1") {
+	if err != nil || !strings.Contains(string(launched), "HOME="+fixture.home) || !strings.Contains(string(launched), "USER=owner") || !strings.Contains(string(launched), "SBXR_INSTALLED_REENTRY=1") || !strings.Contains(string(launched), "ARGS=private owner-launch") {
 		t.Fatalf("installed Owner launch = %q, %v", launched, err)
 	}
 }
@@ -298,7 +350,7 @@ func TestGeneratedBootstrapEntersRecoveryForAnUnfinishedInstallWithoutAnActiveLi
 		t.Fatalf("unfinished install re-entry = %v, %q", err, output)
 	}
 	launched, err := os.ReadFile(fixture.launchRecord)
-	if err != nil || strings.Contains(string(launched), "SBXR_INSTALLED_REENTRY=1") {
+	if err != nil || strings.Contains(string(launched), "SBXR_INSTALLED_REENTRY=1") || !strings.Contains(string(launched), "ARGS=private owner-launch") {
 		t.Fatalf("unfinished install launch = %q, %v", launched, err)
 	}
 }
@@ -316,17 +368,27 @@ func TestGeneratedBootstrapRefusesChangedPrerequisiteOwnershipBeforeSudo(t *test
 	}
 }
 
-func TestGeneratedBootstrapRefusesMissingPrerequisiteBeforeSudo(t *testing.T) {
+func TestGeneratedBootstrapReturnsTheFixedLaunchRefusalWhenAuthenticationIsUnavailable(t *testing.T) {
 	fixture := newBootstrapFixture(t)
 	if err := os.Remove(filepath.Join(fixture.root, "usr/bin/sudo")); err != nil {
 		t.Fatal(err)
 	}
 	output, err := fixture.run()
-	if err == nil || !strings.Contains(output, "SBXR-BOOTSTRAP-PREREQUISITES-REFUSED") || strings.Contains(output, "PRIVATE-SECRET-MARKER") {
+	if err == nil || !strings.Contains(output, "SBXR-BOOTSTRAP-LAUNCH-REFUSED") || strings.Contains(output, "PRIVATE-SECRET-MARKER") {
 		t.Fatalf("missing prerequisite = %v, %q", err, output)
 	}
 	if _, statErr := os.Stat(fixture.prerequisiteRecord); !os.IsNotExist(statErr) {
 		t.Fatalf("missing prerequisite reached sudo: %v", statErr)
+	}
+}
+
+func TestGeneratedBootstrapReturnsTheFixedLaunchRefusalWhenPrerequisiteSudoIsDenied(t *testing.T) {
+	fixture := newBootstrapFixture(t)
+	fixture.prerequisiteSudoRefused = true
+	fixture.writeBoundaries(t)
+	output, err := fixture.run()
+	if err == nil || strings.Count(output, "SBXR-BOOTSTRAP-LAUNCH-REFUSED") != 1 || strings.Contains(output, "SBXR-BOOTSTRAP-PREREQUISITES-REFUSED") {
+		t.Fatalf("prerequisite sudo refusal = %v, %q", err, output)
 	}
 }
 
@@ -429,6 +491,9 @@ type bootstrapFixture struct {
 	substitute, interrupt, installed, unfinished         bool
 	hostileEnvironment, cleanupFail                      bool
 	changedPrerequisiteOwnership                         bool
+	rootOwner                                            bool
+	authenticationRefused                                bool
+	prerequisiteSudoRefused                              bool
 }
 
 func newBootstrapFixture(t *testing.T) *bootstrapFixture {
@@ -486,15 +551,19 @@ func (fixture *bootstrapFixture) writeBoundaries(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(fixture.root, "fixtures", "archive"), fixture.archive, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	mustScript("usr/bin/id", `if [ "${1-}" = "-un" ]; then echo owner; else echo 1000; fi`)
+	ownerUID, ownerName := "1000", "owner"
+	if fixture.rootOwner {
+		ownerUID, ownerName = "0", "root"
+	}
+	mustScript("usr/bin/id", `if [ "${1-}" = "-un" ]; then echo `+ownerName+`; else echo `+ownerUID+`; fi`)
 	mustScript("usr/bin/uname", `echo `+fixture.machine)
-	mustScript("usr/bin/getent", fmt.Sprintf(`echo 'owner:x:1000:1000::%s:/bin/sh'`, fixture.home))
+	mustScript("usr/bin/getent", fmt.Sprintf(`echo '%s:x:%s:%s::%s:/bin/sh'`, ownerName, ownerUID, ownerUID, fixture.home))
 	mustScript("usr/bin/mktemp", `path=${2%XXXXXX}TEST; mkdir "$path" || exit 1; echo "$path"`)
 	ownership := "0:755:regular file"
 	if fixture.changedPrerequisiteOwnership {
 		ownership = "1000:755:regular file"
 	}
-	mustScript("usr/bin/stat", `if [ "$1" = "-Lc" ]; then echo '`+ownership+`'; exit; fi; if [ "$1" = "-c" ]; then format=$2; path=$3; case "$format" in '%s') /usr/bin/wc -c <"$path" | /usr/bin/tr -d ' ' ;; '%u:%a:%F') case "$path" in */usr/local/bin/sbxr) echo '0:777:symbolic link' ;; */usr/local/bin|*/opt|*/opt/sbxr|*/opt/sbxr/releases|*/opt/sbxr/releases/*) echo '0:755:directory' ;; *) if [ -d "$path" ]; then echo '1000:700:directory'; else echo '1000:600:regular file'; fi ;; esac ;; '%u:%a:%h:%F') case "$path" in */var/lib/sbxr-recovery.json) echo '0:644:1:regular file' ;; */opt/sbxr/releases/*/sbxr) echo '0:755:1:regular file' ;; *) echo '1000:700:1:regular file' ;; esac ;; esac; fi`)
+	mustScript("usr/bin/stat", `if [ "$1" = "-Lc" ]; then echo '`+ownership+`'; exit; fi; if [ "$1" = "-c" ]; then format=$2; path=$3; case "$format" in '%s') /usr/bin/wc -c <"$path" | /usr/bin/tr -d ' ' ;; '%u:%a:%F') case "$path" in */usr/local/bin/sbxr) echo '0:777:symbolic link' ;; */usr/local/bin|*/opt|*/opt/sbxr|*/opt/sbxr/releases|*/opt/sbxr/releases/*) echo '0:755:directory' ;; *) if [ -d "$path" ]; then echo '`+ownerUID+`:700:directory'; else echo '`+ownerUID+`:600:regular file'; fi ;; esac ;; '%u:%a:%h:%F') case "$path" in */var/lib/sbxr-recovery.json) echo '0:644:1:regular file' ;; */opt/sbxr/releases/*/sbxr) echo '0:755:1:regular file' ;; *) echo '`+ownerUID+`:700:1:regular file' ;; esac ;; esac; fi`)
 	mustScript("usr/bin/sha256sum", `shasum -a 256 "$1"`)
 	curlEffect := fmt.Sprintf(`case "$url" in */release-index.json) cp '%s' "$out" ;; */sbxr-linux-amd64.tar.gz|*/sbxr-linux-arm64.tar.gz) cp '%s' "$out" ;; *) exit 1 ;; esac; printf '%%s' '%s'`, filepath.Join(fixture.root, "fixtures", "index"), filepath.Join(fixture.root, "fixtures", "archive"), fixture.redirect)
 	if fixture.substitute {
@@ -504,13 +573,22 @@ func (fixture *bootstrapFixture) writeBoundaries(t *testing.T) {
 		curlEffect = `kill -TERM "$PPID"; sleep 1; exit 1`
 	}
 	mustScript("usr/bin/curl", `if [ -n "${CURL_HOME-}${TAR_OPTIONS-}${CLOUDFLARE_API_TOKEN-}" ]; then printf '%s\n' 'PRIVATE-SECRET-MARKER' >&2; exit 1; fi; printf '%s\n' 'PRIVATE-SECRET-MARKER' >&2; out=''; url=''; while [ "$#" -gt 0 ]; do case "$1" in --output) out=$2; shift 2 ;; http*) url=$1; shift ;; *) shift ;; esac; done; `+curlEffect)
+	ownerLaunch := fmt.Sprintf(`/usr/bin/env >'%s'
+printf 'ARGS=%%s\n' "$*" >>'%s'`, fixture.launchRecord, fixture.launchRecord)
+	if fixture.authenticationRefused {
+		ownerLaunch = fmt.Sprintf(`'%s' --preserve-fds=3 -- /bin/true`, filepath.Join(fixture.root, "usr/bin/sudo"))
+	}
 	mustScript("usr/bin/tar", fmt.Sprintf(`case "$1" in -tzf) printf '%%s\n' '%s' ;; -xzf) while [ "$#" -gt 0 ]; do if [ "$1" = '-C' ]; then destination=$2; fi; shift; done; cat >"$destination/sbxr" <<'SBXR'
 #!/bin/sh
 if [ "${1-}" = version ] && [ "${2-}" = --json ]; then printf '%%s\n' '%s'; exit 0; fi
-/usr/bin/env >'%s'
+%s
 SBXR
-chmod 700 "$destination/sbxr" ;; *) exit 1 ;; esac`, fixture.tarList, fixture.version, fixture.launchRecord))
-	mustScript("usr/bin/sudo", fmt.Sprintf(`printf '%%s\n' "$*" >>'%s'; [ "$1" = -- ] && shift; "$@"`, fixture.prerequisiteRecord))
+chmod 700 "$destination/sbxr" ;; *) exit 1 ;; esac`, fixture.tarList, fixture.version, ownerLaunch))
+	prerequisiteRefusal := ""
+	if fixture.prerequisiteSudoRefused {
+		prerequisiteRefusal = `[ "$1" = -- ] && exit 1;`
+	}
+	mustScript("usr/bin/sudo", fmt.Sprintf(`printf '%%s\n' "$*" >>'%s'; [ "$1" = --preserve-fds=3 ] && exit 1; %s [ "$1" = -- ] && shift; "$@"`, fixture.prerequisiteRecord, prerequisiteRefusal))
 	mustScript("usr/bin/apt-get", `exit 0`)
 	for _, tool := range []string{"grep", "sed", "cut", "env", "readlink"} {
 		mustScript("usr/bin/"+tool, `exec /usr/bin/`+tool+` "$@"`)
@@ -526,13 +604,15 @@ chmod 700 "$destination/sbxr" ;; *) exit 1 ;; esac`, fixture.tarList, fixture.ve
 	}
 	if fixture.installed {
 		digest := strings.Repeat("c", 64)
+		installedBody := fmt.Sprintf(`if [ "${1-}" = version ] && [ "${2-}" = --json ]; then printf '%%s\n' '%s'; exit 0; fi
+/usr/bin/env >'%s'
+printf 'ARGS=%%s\n' "$*" >>'%s'`, fixture.version, fixture.launchRecord, fixture.launchRecord)
 		target := "/opt/sbxr/releases/v1.0.0-0123456789abcdef0123456789abcdef01234567-" + digest + "/sbxr"
 		installed := filepath.Join(fixture.root, target)
 		if err := os.MkdirAll(filepath.Dir(installed), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		mustScript(strings.TrimPrefix(target, "/"), fmt.Sprintf(`if [ "${1-}" = version ] && [ "${2-}" = --json ]; then printf '%%s\n' '%s'; exit 0; fi
-/usr/bin/env >'%s'`, fixture.version, fixture.launchRecord))
+		mustScript(strings.TrimPrefix(target, "/"), installedBody)
 		if err := os.MkdirAll(filepath.Join(fixture.root, "usr/local/bin"), 0o755); err != nil {
 			t.Fatal(err)
 		}
