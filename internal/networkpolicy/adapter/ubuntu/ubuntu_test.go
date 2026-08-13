@@ -1,6 +1,7 @@
 package ubuntu
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -14,6 +15,53 @@ import (
 
 	"github.com/albertloky/SBXR/internal/networkpolicy"
 )
+
+func TestReadOnlyFirewallPlanningUsesOnlyFixedCachedSudoCommands(t *testing.T) {
+	for command, path := range map[string]string{"nft": "/usr/sbin/nft", "iptables-save": "/usr/sbin/iptables-save", "ip6tables-save": "/usr/sbin/ip6tables-save"} {
+		cmd, err := sudoReadOnlyFirewallCommand(command, "-j", "list", "ruleset")
+		want := []string{"/usr/bin/sudo", "-n", "--", path, "-j", "list", "ruleset"}
+		if err != nil || !slices.Equal(cmd.Args, want) {
+			t.Fatalf("%s planning command = %v, %v", command, cmd.Args, err)
+		}
+	}
+	if _, err := sudoReadOnlyFirewallCommand("systemctl", "stop", "ufw.service"); !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("mutating planning command accepted: %v", err)
+	}
+}
+
+func TestProductionAdapterKeepsSSHObservationOutsideCachedSudo(t *testing.T) {
+	root := t.TempDir()
+	keys := filepath.Join(root, "home", "owner", ".ssh", "authorized_keys")
+	if err := os.MkdirAll(filepath.Dir(keys), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keys, []byte("ssh-ed25519 fixture\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	adapter := New()
+	adapter.root = root
+	adapter.firewallOutput = func(string, ...string) ([]byte, error) { return nil, os.ErrPermission }
+	adapter.output = func(command string, arguments ...string) ([]byte, error) {
+		switch command + " " + strings.Join(arguments, " ") {
+		case "who ":
+			return []byte("owner pts/0 2026-08-13 (203.0.113.10)\n"), nil
+		case "systemctl is-active ssh.service":
+			return []byte("active\n"), nil
+		case "systemctl is-active sshd.service":
+			return []byte("inactive\n"), nil
+		case "getent passwd owner":
+			return []byte("owner:x:1000:1000::/home/owner:/bin/bash\n"), nil
+		default:
+			return nil, os.ErrNotExist
+		}
+	}
+	t.Setenv("SSH_CONNECTION", "203.0.113.10 50000 198.51.100.20 22")
+	t.Setenv("SUDO_USER", "owner")
+	facts := adapter.sshFacts()
+	if facts.Service != "ssh.service" || facts.Listener != "198.51.100.20:22/tcp" || facts.AuthorizedKeysPath != "/home/owner/.ssh/authorized_keys" || len(facts.AuthorizedKeysSHA256) != 64 || len(facts.CurrentSessions) != 2 {
+		t.Fatalf("SSH facts = %+v", facts)
+	}
+}
 
 func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 	root := t.TempDir()

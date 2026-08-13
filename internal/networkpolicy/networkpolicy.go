@@ -1025,6 +1025,37 @@ func (result Result) HTTP01Contribution() (HTTP01Contribution, bool) {
 	return HTTP01Contribution{candidate: policy.Nftables, sshPort: sshPort, revision: result.Binding.revision, selectedIP: policy.CertificateAddress, digest: result.Binding.digest}, true
 }
 
+// PrepareHTTP01AfterFirewallReclamation binds the temporary certificate rule
+// to the exact approved post-reclamation SBXR policy without re-approving the
+// rejected firewall manager under a different candidate policy.
+func PrepareHTTP01AfterFirewallReclamation(result Result, current, candidate Intent) (HTTP01Contribution, bool) {
+	if result.reclamation == nil || result.reclamation.contract.Firewall == nil || current.TemporaryHTTP || !candidate.TemporaryHTTP {
+		return HTTP01Contribution{}, false
+	}
+	normalized := candidate
+	normalized.TemporaryHTTP = false
+	if current != normalized {
+		return HTTP01Contribution{}, false
+	}
+	policy := candidatePolicy(candidate)
+	policy.Nftables = renderNftables(policy)
+	var sshPort uint16
+	for _, exposure := range policy.Exposures {
+		if exposure.Purpose == "SSH preservation" && exposure.Protocol == TCP {
+			sshPort = exposure.Port
+		}
+	}
+	if policy.TemporaryHTTP == nil || policy.TemporaryHTTP.Identity != "sbxr:acme-http-01" || !policy.TemporaryHTTP.RecordNativeHandles || strings.Count(policy.Nftables, `comment "sbxr:acme-http-01"`) != 1 || sshPort == 0 || policy.CertificateAddress == "" {
+		return HTTP01Contribution{}, false
+	}
+	encoded, _ := json.Marshal(struct {
+		Current string
+		Policy  Policy
+	}{result.Binding.digest, policy})
+	digest := sha256.Sum256(encoded)
+	return HTTP01Contribution{candidate: policy.Nftables, sshPort: sshPort, revision: candidate.Revision, selectedIP: policy.CertificateAddress, digest: hex.EncodeToString(digest[:])}, true
+}
+
 func (contribution HTTP01Contribution) SystemChangesHTTP01() (string, uint16, uint64, string, string, bool) {
 	return contribution.candidate, contribution.sshPort, contribution.revision, contribution.selectedIP, contribution.digest, contribution.digest != ""
 }

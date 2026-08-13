@@ -98,7 +98,7 @@ func runOwnerConsole(ctx context.Context, input, output *os.File, environment []
 		return ownerconsole.Run(ctx, ownerconsole.Session{Input: input, Output: output, Environment: environment, Capabilities: &capabilities, Authenticator: systemAuthenticator{}, AuthenticationPolicy: ownerconsole.AuthenticateForAccess, Profiles: managed, ProfileOutcomes: managed, Cloudflare: managed, CloudflareOutcomes: managed, Certificates: managed, CertificateOutcomes: managed, Diagnostics: managed, Lifecycle: managed, LifecycleOutcomes: managed, CompleteRemoval: managed, CompleteRemovalOutcomes: managed, StartupProvider: managed.Startup, Recovery: managed})
 	}
 	install := newInstallOutcome()
-	return ownerconsole.Run(ctx, ownerconsole.Session{Input: input, Output: output, Environment: environment, Capabilities: &capabilities, Authenticator: systemAuthenticator{}, AuthenticationPolicy: ownerconsole.DeferAuthenticationUntilApply, Outcome: install, Diagnostics: install})
+	return ownerconsole.Run(ctx, ownerconsole.Session{Input: input, Output: output, Environment: environment, Capabilities: &capabilities, Authenticator: systemAuthenticator{}, AuthenticationPolicy: ownerconsole.AuthenticateForAccess, Outcome: install, Diagnostics: install})
 }
 
 func installedClientAccessMarker() bool {

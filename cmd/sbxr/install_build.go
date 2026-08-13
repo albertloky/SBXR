@@ -229,11 +229,14 @@ func buildInstallWith(ctx context.Context, request softwareubuntu.InstallHandoff
 	httpIntent := intent
 	httpIntent.TemporaryHTTP = true
 	httpNetwork := dependencies.network(networkpolicy.Request{Intent: httpIntent, Stage: networkpolicy.PreApproval, OwnerFacts: ownerFacts, ReclamationReview: true, ReviewedReclamationSHA256: request.ReviewedReclamationSHA256})
-	if baseNetwork.Outcome == networkpolicy.Failed || httpNetwork.Outcome == networkpolicy.Failed {
+	http01, postFirewallHTTP := networkpolicy.PrepareHTTP01AfterFirewallReclamation(baseNetwork, intent, httpIntent)
+	if baseNetwork.Outcome == networkpolicy.Failed || httpNetwork.Outcome == networkpolicy.Failed && !postFirewallHTTP {
 		return nil, errors.New("Clean VPS Network Policy refused the installation")
 	}
-	http01, ok := httpNetwork.HTTP01Contribution()
-	if !ok {
+	if !postFirewallHTTP {
+		http01, postFirewallHTTP = httpNetwork.HTTP01Contribution()
+	}
+	if !postFirewallHTTP {
 		return nil, errors.New("temporary HTTP-01 authority is unavailable")
 	}
 
@@ -315,7 +318,7 @@ func buildInstallWith(ctx context.Context, request softwareubuntu.InstallHandoff
 		return nil, err
 	}
 
-	contributions := []softwarelifecycle.InstallContribution{softwarelifecycle.NewNetworkInstallContribution(baseNetwork, changeSet, desiredSHA256), profileResult.Plan, cloudflareResult.Plan, ipPlan, domainPlan, subscriptionPlan}
+	contributions := []softwarelifecycle.InstallContribution{softwarelifecycle.NewReviewedNetworkInstallContribution(baseNetwork, changeSet, desiredSHA256), profileResult.Plan, cloudflareResult.Plan, ipPlan, domainPlan, subscriptionPlan}
 	installPlan, finding := softwarelifecycle.PlanInstall(softwarelifecycle.InstallPlanRequest{Candidate: candidate, ChangeSet: changeSet, DesiredStateSHA256: desiredSHA256, Contributions: contributions, Disk: disk, ReviewedReclamationSHA256: request.ReviewedReclamationSHA256})
 	if finding != nil || installPlan == nil || request.ReviewedPlanSHA256 != "" && installPlan.SHA256() != request.ReviewedPlanSHA256 {
 		return nil, errors.New("reviewed install Plan changed")

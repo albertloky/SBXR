@@ -159,6 +159,14 @@ func TestReviewedInboundFirewallBecomesOneUseForwardReplacementAuthority(t *test
 	request.Stage = networkpolicy.PostApproval
 	request.ReviewedReclamationSHA256 = review.Reclamation.Digest
 	approved := networkpolicy.New(adapter).Evaluate(request)
+	httpIntent := completeIntent()
+	httpIntent.TemporaryHTTP = true
+	http01, ok := networkpolicy.PrepareHTTP01AfterFirewallReclamation(approved, completeIntent(), httpIntent)
+	candidateHTTP, sshHTTP, revisionHTTP, selectedHTTP, digestHTTP, validHTTP := http01.SystemChangesHTTP01()
+	if !ok || !validHTTP {
+		t.Logf("HTTP-01 facts: candidate=%q ssh=%d revision=%d selected=%q digest=%q", candidateHTTP, sshHTTP, revisionHTTP, selectedHTTP, digestHTTP)
+		t.Fatal("approved firewall reclamation did not provide the later temporary HTTP-01 authority")
+	}
 	reviewed, manager, prior, _, candidate, service, listener, session, keysPath, keys, objects, _, valid := approved.ReclamationAuthority().SystemChangesFirewallReclamation()
 	if !valid || reviewed != review.Reclamation.Digest || manager != "ufw.service" || prior != strings.Repeat("f", 64) || service != "ssh.service" || listener != "0.0.0.0:2222/tcp" || keysPath != "/root/.ssh/authorized_keys" || keys != strings.Repeat("e", 64) || len(objects) != 1 || !strings.Contains(candidate, "policy drop") || !strings.Contains(candidate, "{ 443, 2222, 9443, 10443 }") {
 		t.Fatalf("firewall authority = %q %q %q %q %q %q %q %q %v %t", reviewed, manager, prior, candidate, service, listener, session, keys, objects, valid)

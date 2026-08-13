@@ -138,7 +138,7 @@ Run:
 go test ./internal/softwarelifecycle/adapter/ubuntu -run '^Test(Approval|DraftStore|InstallApply|InstallExecutable)' -count=1
 ```
 
-Require the fixed Owner draft path, strict allowlisted fields, canonical JSON, an Owner-owned `0600` single-link regular file beneath an Owner-owned `0700` directory, atomic replacement, safe discard, and refusal of links, broad modes, unknown fields, malformed values, and outside-file replacement. Infrastructure Secrets and Client Access Values never enter the draft. Require the exact ordinary-sudo command `/usr/bin/sudo --preserve-fds=3 -- /proc/self/fd/3 private install-apply`, one already-open verified executable descriptor, one inherited Unix socket, root and peer/executable identity checks, one bounded strict typed JSON request, independent candidate restaging, prepare-before-`READY`, one final `APPLY`, and safe refusal of duplicate/unknown/malformed/oversized input, replay, EOF, wrong peer, changed executable or candidate, and parent death before mutation. Production composition of the complete owning-Module Plan and its command entry remains Pending; this row proves the private transport, not a completed Clean-VPS install.
+Require the fixed Owner draft path, strict allowlisted fields, canonical JSON, an Owner-owned `0600` single-link regular file beneath an Owner-owned `0700` directory, atomic replacement, safe discard, and refusal of links, broad modes, unknown fields, malformed values, and outside-file replacement. Infrastructure Secrets and Client Access Values never enter the draft. Require the exact ordinary-sudo command `/usr/bin/sudo --preserve-fds=3 -- /proc/self/fd/3 private install-apply`, one already-open verified executable descriptor, one inherited Unix socket, root and peer/executable identity checks, one bounded strict typed JSON request, independent candidate restaging, prepare-before-`READY`, one final `APPLY`, and safe refusal of duplicate/unknown/malformed/oversized input, replay, EOF, wrong peer, changed executable or candidate, and parent death before mutation. The authenticated installation review may use cached ordinary `sudo -n` only for the fixed read-only `nft`, `iptables-save`, and `ip6tables-save` observations that the exact firewall Plan requires. Mutation remains unavailable until the separate approved install handoff.
 
 ### SL-INSTALL-03 — Exact software activation and partial rollback
 
@@ -176,9 +176,15 @@ Run:
 
 ```sh
 go test ./cmd/sbxr ./internal/softwarelifecycle ./internal/state -run 'Test(InstallComposition|ReclamationInstallation|DeferredCloudflareFinalization)' -count=1
+go test ./cmd/sbxr -run '^Test(DestructiveReclamationComposition|ComposedInstall)' -count=1
+go test ./cmd/sbxr -run 'Test(PreinstallOutcome|OwnerRecovery|ReclamationDiagnostics|ProductionDiagnostics|CompleteRemoval)' -count=1
+go test ./internal/state -run 'Test(ReclamationInstallation|DeferredCloudflareFinalization|CompleteRemoval)' -count=1
+go test ./internal/systemchanges/adapter/ubuntu -run 'Test(Package|Docker|NativeFirewall|Reclamation)' -count=1
 ```
 
 Require the exact typed reclamation phrase to bind the reviewed digest into the rebuilt install Plan. After approval, Network Policy must freshly recheck the same facts and issue one opaque one-use authority for System Changes. For reclamation installs, run only the reversible Cloudflare provider-creation prefix before the irreversible boundary, finalize and synchronize the complete provider-valued revision-1 State and recovery material, then stop and remove the exact target under System Changes' forward-only protocol. Any failure or cancellation before the durable boundary restores Not installed; after it, recovery can only continue to exact Managed agreement and transaction cleanup.
+
+The confirmed Owner Console Plan must retain every exact reviewed reclamation target, preservation fact, permanent warning, and complete installation effect. It must not replace them with a generic destructive-effect summary. The executable composition matrix covers the Clean path, standalone executable, direct script, preserved identity, package purge or hold, Docker and preserved data, firewall and SSH, Cloudflare DNS, routes, and Tunnel authority, stale review, cancellation, safe rollback, terminal loss, Recovery Required, Managed completion, Diagnostics, and Complete removal. The production transaction checks then kill and restart the forward worker at every durable reclamation checkpoint, repeat a second death, and simulate reboot through a fresh recovery runner.
 
 ### SL-UPDATE-01 — Stable channel and explicit alternate
 

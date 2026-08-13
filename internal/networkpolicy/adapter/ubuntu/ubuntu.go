@@ -34,11 +34,35 @@ type Adapter struct {
 	external         bool
 	privileged       bool
 	output           func(string, ...string) ([]byte, error)
+	firewallOutput   func(string, ...string) ([]byte, error)
 	addresses        func() ([]net.Addr, error)
 	afterFirstDigest func(string)
 }
 
-func New() Adapter { return Adapter{root: "/", external: true, privileged: os.Geteuid() == 0} }
+func New() Adapter {
+	adapter := Adapter{root: "/", external: true, privileged: true}
+	if os.Geteuid() != 0 {
+		adapter.firewallOutput = sudoReadOnlyFirewallOutput
+	}
+	return adapter
+}
+
+func sudoReadOnlyFirewallOutput(command string, arguments ...string) ([]byte, error) {
+	cmd, err := sudoReadOnlyFirewallCommand(command, arguments...)
+	if err != nil {
+		return nil, err
+	}
+	return cmd.Output()
+}
+
+func sudoReadOnlyFirewallCommand(command string, arguments ...string) (*exec.Cmd, error) {
+	paths := map[string]string{"nft": "/usr/sbin/nft", "iptables-save": "/usr/sbin/iptables-save", "ip6tables-save": "/usr/sbin/ip6tables-save"}
+	path := paths[command]
+	if path == "" {
+		return nil, os.ErrPermission
+	}
+	return exec.Command("/usr/bin/sudo", append([]string{"-n", "--", path}, arguments...)...), nil
+}
 
 // NewAt creates the same read-only Adapter over a controlled filesystem seam.
 func NewAt(root string) Adapter { return Adapter{root: root} }
@@ -104,7 +128,7 @@ func (a Adapter) Observe(request networkpolicy.ObservationRequest) (networkpolic
 		observed.Firewall.ActiveManager = activeFirewallManager()
 	}
 	if a.privileged {
-		if rules, commandErr := a.privilegedOutput("nft", "-j", "list", "ruleset"); commandErr == nil {
+		if rules, commandErr := a.readOnlyFirewallOutput("nft", "-j", "list", "ruleset"); commandErr == nil {
 			state, unexpected, sbxrChecksum, parseErr := inspectNftables(rules)
 			if parseErr == nil {
 				legacy, legacyErr := a.legacyIPTablesRule()
@@ -648,9 +672,16 @@ func (a Adapter) privilegedOutput(command string, arguments ...string) ([]byte, 
 	return nil, os.ErrNotExist
 }
 
+func (a Adapter) readOnlyFirewallOutput(command string, arguments ...string) ([]byte, error) {
+	if a.firewallOutput != nil {
+		return a.firewallOutput(command, arguments...)
+	}
+	return a.privilegedOutput(command, arguments...)
+}
+
 func (a Adapter) legacyIPTablesRule() (string, error) {
 	for _, command := range []string{"iptables-save", "ip6tables-save"} {
-		output, err := a.privilegedOutput(command)
+		output, err := a.readOnlyFirewallOutput(command)
 		if err != nil {
 			return "", err
 		}

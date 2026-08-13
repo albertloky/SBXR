@@ -6,8 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"runtime"
-	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,6 +29,7 @@ type installOutcome struct {
 	change      ownerconsole.DurableChangeSet
 	cancel      chan struct{}
 	cancelled   bool
+	launch      func(context.Context, softwareubuntu.InstallHandoffRequest, <-chan struct{}) (softwareubuntu.InstallApplyOutcome, error)
 }
 
 func (*installOutcome) String() string   { return "Clean VPS installation outcome: protected" }
@@ -78,7 +79,9 @@ var installFields = []ownerconsole.EditingField{
 	{Identity: "reality-server-name", Label: "REALITY server name", Required: true},
 }
 
-func newInstallOutcome() *installOutcome { return &installOutcome{values: map[string]string{}} }
+func newInstallOutcome() *installOutcome {
+	return &installOutcome{values: map[string]string{}, launch: softwareubuntu.LaunchInstallApplyWithCancellation}
+}
 
 func (outcome *installOutcome) Review(ctx context.Context) ownerconsole.ChangeReview {
 	outcome.mu.Lock()
@@ -104,7 +107,7 @@ func (outcome *installOutcome) Review(ctx context.Context) ownerconsole.ChangeRe
 		Identity: ownerconsole.PlanIdentity(outcome.built.plan.Identity()), DesiredStateRevision: 1, DesiredStateSHA256: outcome.built.desiredSHA256,
 		RelevantChecksums: []string{"Plan SHA-256 " + outcome.built.plan.SHA256()}, ObservedState: "Proven Clean VPS baseline: Not installed",
 		VerifiedExternalInputs: []string{"Verified release " + summary.ReleaseIdentity.Tag, "Scoped Cloudflare account and zone authority", "Fresh Network Policy observations"},
-		Effects:                []string{"Install the exact verified release and managed units", "Create six Connection Profiles and one HTTPS subscription", "Create one Cloudflare Tunnel and exact DNS records", "Issue and activate the IP and domain certificate lineages", "Publish Desired State revision 1 exactly once"},
+		Effects:                installPlanEffects(),
 		RequiredChecks:         []string{"Pre-publication module health", "Desired State agreement", "Post-publication HTTPS, Tunnel, certificate, profile, unit, timer, and permission agreement"},
 		AdvisoryChecks:         []string{"Direct DNS is pending only until the reviewed Cloudflare steps create it"},
 		Interruption:           summary.Interruption, Cancellation: summary.Cancellation, Rollback: summary.Rollback,
@@ -141,9 +144,10 @@ func (outcome *installOutcome) Apply(ctx context.Context, identity ownerconsole.
 	outcome.change = ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetActive, OperationID: operation, TotalSteps: totalSteps, Checkpoint: "Awaiting verified sudo handoff", Explanation: "The reviewed installation is running."}
 	outcome.cancel, outcome.cancelled = make(chan struct{}), false
 	cancellation := outcome.cancel
+	launch := outcome.launch
 	outcome.mu.Unlock()
 	go func() {
-		terminal, err := softwareubuntu.LaunchInstallApplyWithCancellation(context.Background(), request, cancellation)
+		terminal, err := launch(context.Background(), request, cancellation)
 		outcome.mu.Lock()
 		defer outcome.mu.Unlock()
 		if err == nil && terminal == softwareubuntu.InstallCompleted {
@@ -174,18 +178,36 @@ func (outcome *installOutcome) ConfirmReclamation(ctx context.Context, identity 
 	if err != nil {
 		return installCorrection(err)
 	}
+	reclamation := outcome.reclamation
 	outcome.request, outcome.built = request, built
 	outcome.reclamation = nil
+	return reclamationInstallReview(built, request, reclamation)
+}
+
+func reclamationInstallReview(built *builtInstall, request softwareubuntu.InstallHandoffRequest, reclamation *networkpolicy.ReclamationPlan) ownerconsole.ChangeReview {
+	if built == nil || built.plan == nil || reclamation == nil || len(reclamation.Digest) != 64 || reclamation.Digest != request.ReviewedReclamationSHA256 {
+		return ownerconsole.ChangeReview{}
+	}
 	summary := built.plan.Summary()
+	installEffects := installPlanEffects()
+	effects, ok := reclamationPlanEffects(reclamation, 64-len(installEffects))
+	if !ok {
+		return reclamationPlanCorrection()
+	}
+	effects = append(effects, installEffects...)
 	return ownerconsole.ChangeReview{Plan: &ownerconsole.PlanPresentation{
 		Identity: ownerconsole.PlanIdentity(built.plan.Identity()), DesiredStateRevision: 1, DesiredStateSHA256: built.desiredSHA256,
 		RelevantChecksums: []string{"Plan SHA-256 " + built.plan.SHA256(), "Reclamation facts SHA-256 " + request.ReviewedReclamationSHA256}, ObservedState: "Reclaimable VPS: exact reviewed conflict followed by revision-one installation",
 		VerifiedExternalInputs: []string{"Verified release " + summary.ReleaseIdentity.Tag, "Fresh Network Policy reclamation review"},
-		Effects:                []string{"Permanently remove the exact reviewed conflict after the durable irreversible checkpoint", "Install SBXR and publish Desired State revision 1"},
+		Effects:                effects,
 		RequiredChecks:         []string{"Fresh privileged reclamation proof", "Managed State and exact candidate agreement"},
 		Interruption:           "Before Irreversible reclamation started, cancellation rolls back; afterward recovery continues forward to Managed", Cancellation: "Unavailable after Irreversible reclamation started", Rollback: "No rollback exists after permanent reclamation starts",
 		ReclamationDigest: request.ReviewedReclamationSHA256, ReclamationConfirmed: true,
 	}}
+}
+
+func installPlanEffects() []string {
+	return []string{"Install the exact verified release and managed units", "Create six Connection Profiles and one HTTPS subscription", "Create one Cloudflare Tunnel and exact DNS records", "Issue and activate the IP and domain certificate lineages", "Publish Desired State revision 1 exactly once"}
 }
 
 func (outcome *installOutcome) Inspect(context.Context) ownerconsole.DurableChangeSet {
@@ -271,10 +293,10 @@ func reclamationReview(plan *networkpolicy.ReclamationPlan, confirmed bool) owne
 	if plan == nil || len(plan.Digest) != 64 {
 		return ownerconsole.ChangeReview{}
 	}
-	effects := append([]string(nil), plan.Targets...)
-	effects = append(effects, plan.Preservation...)
-	effects = append(effects, plan.PermanentWarnings...)
-	effects = slices.DeleteFunc(effects, func(value string) bool { return value == "" || len(value) > 320 })
+	effects, ok := reclamationPlanEffects(plan, 64)
+	if !ok {
+		return reclamationPlanCorrection()
+	}
 	if len(effects) == 0 {
 		effects = []string{"Review the exact detected conflicts; change nothing"}
 	}
@@ -286,6 +308,40 @@ func reclamationReview(plan *networkpolicy.ReclamationPlan, confirmed bool) owne
 		Interruption: plan.Interruption, Cancellation: plan.Cancellation, Rollback: plan.Rollback,
 		ReclamationDigest: plan.Digest, ReclamationConfirmed: confirmed,
 	}}
+}
+
+func reclamationPlanEffects(plan *networkpolicy.ReclamationPlan, limit int) ([]string, bool) {
+	if plan == nil {
+		return nil, false
+	}
+	values := append(append(append([]string(nil), plan.Targets...), plan.Preservation...), plan.PermanentWarnings...)
+	var effects []string
+	for _, value := range values {
+		value = strings.ReplaceAll(value, "\r\n", "\n")
+		lines := strings.Split(value, "\n")
+		for _, line := range lines {
+			value = line
+			for value != "" {
+				end := min(len(value), 320)
+				for end > 0 && end < len(value) && value[end]&0xc0 == 0x80 {
+					end--
+				}
+				if end == 0 {
+					return nil, false
+				}
+				effects = append(effects, value[:end])
+				if len(effects) > limit {
+					return nil, false
+				}
+				value = value[end:]
+			}
+		}
+	}
+	return effects, true
+}
+
+func reclamationPlanCorrection() ownerconsole.ChangeReview {
+	return ownerconsole.ChangeReview{Correction: &ownerconsole.CorrectionPresentation{Problem: "The exact reclamation Plan is too large to display", Found: "More than 64 safe effect rows are required", Required: "Remove unsupported or unrelated firewall complexity, then check again", WhyStopped: "SBXR never hides or truncates destructive Plan facts", OwnerSteps: []string{"Simplify the existing firewall policy or reimage the VPS, then run the check again."}, Selections: []ownerconsole.CorrectionSelection{{Identity: "firewall-simplified", Label: "The firewall policy is now simpler"}}, Evidence: "INSTALL-RECLAMATION-PLAN-TOO-LARGE"}}
 }
 
 func installCorrection(err error) ownerconsole.ChangeReview {

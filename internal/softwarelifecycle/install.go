@@ -119,6 +119,16 @@ func (value networkInstallContribution) SoftwareLifecycleInstallContribution() l
 }
 
 func NewNetworkInstallContribution(result networkpolicy.Result, changeSet, desiredStateSHA256 string) InstallContribution {
+	return newNetworkInstallContribution(result, changeSet, desiredStateSHA256, result.Outcome != networkpolicy.Unknown)
+}
+
+// NewReviewedNetworkInstallContribution records a complete read-only Plan.
+// Privileged authority remains unavailable until the later fresh recheck.
+func NewReviewedNetworkInstallContribution(result networkpolicy.Result, changeSet, desiredStateSHA256 string) InstallContribution {
+	return newNetworkInstallContribution(result, changeSet, desiredStateSHA256, false)
+}
+
+func newNetworkInstallContribution(result networkpolicy.Result, changeSet, desiredStateSHA256 string, privileged bool) InstallContribution {
 	if result.Baseline != networkpolicy.Clean || (result.Outcome != networkpolicy.Healthy && result.Outcome != networkpolicy.NeedsAttention && result.Outcome != networkpolicy.Unknown) || !hashPattern.MatchString(result.Binding.Digest) || result.Policy.Table != "inet sbxr" || result.Policy.Nftables == "" || !installIdentityPattern.MatchString(changeSet) || !hashPattern.MatchString(desiredStateSHA256) {
 		return networkInstallContribution{}
 	}
@@ -164,7 +174,7 @@ func NewNetworkInstallContribution(result networkpolicy.Result, changeSet, desir
 		Firewall string
 	}{result.Baseline, ports, result.Policy.Nftables})
 	stableDigest := sha256.Sum256(stableBody)
-	proof := InstallContributionProof{Name: string(NetworkInstallContribution), Owner: systemchanges.NetworkPolicyModule, Identity: "network-install-" + hex.EncodeToString(digest[:6]), SHA256: hex.EncodeToString(digest[:]), StableSHA256: hex.EncodeToString(stableDigest[:]), ChangeSet: changeSet, DesiredStateSHA256: desiredStateSHA256, Steps: []systemchanges.Step{step}, Checks: checks, Ports: ports, Firewall: result.Policy.Nftables, Details: []string{"Clean VPS admission and exact SBXR-owned nftables policy; no adoption or bypass"}, Privileged: result.Outcome != networkpolicy.Unknown}
+	proof := InstallContributionProof{Name: string(NetworkInstallContribution), Owner: systemchanges.NetworkPolicyModule, Identity: "network-install-" + hex.EncodeToString(digest[:6]), SHA256: hex.EncodeToString(digest[:]), StableSHA256: hex.EncodeToString(stableDigest[:]), ChangeSet: changeSet, DesiredStateSHA256: desiredStateSHA256, Steps: []systemchanges.Step{step}, Checks: checks, Ports: ports, Firewall: result.Policy.Nftables, Details: []string{"Clean VPS admission and exact SBXR-owned nftables policy; no adoption or bypass"}, Privileged: privileged}
 	return networkInstallContribution{proof: proof}
 }
 
