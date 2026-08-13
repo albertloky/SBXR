@@ -69,4 +69,7 @@ func TestStableWorkflowReverifiesTheExactPublicInstallerBeforeREADMEActivation(t
 	if childSize < 0 || childExec < 0 || childSize > childExec {
 		t.Fatal("stable bootstrap can inspect the PTY before its size is set")
 	}
+	if !strings.Contains(string(driver), `b"\x1b[?1;2$y`) {
+		t.Fatal("stable bootstrap does not prove alternate-screen support")
+	}
 }

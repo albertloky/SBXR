@@ -23,12 +23,16 @@ if pid == 0:
     os.execve("/bin/bash", ["bash", "-lc", command], environment)
 
 output = bytearray()
+terminal_reported = False
 deadline = time.monotonic() + 120
 while time.monotonic() < deadline and b"Not installed" not in output:
     ready, _, _ = select.select([terminal], [], [], 1)
     if ready:
         try:
             output.extend(os.read(terminal, 65536))
+            if not terminal_reported and b"\x1b[?1049$p" in output:
+                os.write(terminal, b"\x1b[?1;2$y\x1b[?6;2$y\x1b[?25;1$y\x1b[?1000;2$y\x1b[?1002;2$y\x1b[?1003;2$y\x1b[?1006;2$y\x1b[?1049;2$y\x1b[?2004;2$y\x1b[1;1R")
+                terminal_reported = True
         except OSError:
             break
 
