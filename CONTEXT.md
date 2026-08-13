@@ -16,6 +16,38 @@ _Avoid_: Protocol, mode, node
 A Not installed Ubuntu host without prior SBXR resources or unrelated infrastructure occupying an SBXR-owned seam; ordinary non-conflicting software may be present.
 _Avoid_: Empty VPS, freshly imaged VPS
 
+**Reclaimable VPS**:
+A Not installed Ubuntu host where the Owner accepts deletion of every specifically reviewed conflict at SBXR's fixed seams while resources outside those exact conflicts must remain unchanged.
+_Avoid_: Clean VPS, disposable VPS, automatically adopted VPS
+
+**Pasteable Install Command**:
+One command the Owner can paste on a Clean VPS or Reclaimable VPS to fetch the current qualified stable bootstrap, install or repair only fixed prerequisites, and enter review-first installation without itself authorizing Apply or performing Destructive Reclamation.
+_Avoid_: One-line installer, unattended installer
+
+**Installation**:
+The review-first process that moves SBXR from a proven Not installed state to proven Managed state through one exact Plan, one Apply attempt, and any required rollback or forward recovery.
+_Avoid_: Update, repair, Complete removal, Pasteable Install Command
+
+**Bootstrap Prerequisite Repair**:
+The narrow pre-Plan root operation allowed to install or repair SBXR's fixed launch prerequisites; it cannot stop services, remove conflicting packages, change firewall policy, delete identities, inspect Infrastructure Secrets, or mutate Cloudflare.
+_Avoid_: Destructive Reclamation, Apply, host cleanup
+
+**Destructive Reclamation**:
+An Owner-approved forward-only operation that records durable recovery authority before permanently removing the exact conflicts shown in the reviewed Plan, then continues until SBXR reaches Managed.
+_Avoid_: Repair, cleanup, adoption
+
+**Reclamation Boundary**:
+The fixed limit on Destructive Reclamation: remove only reviewed conflicting packages without autoremove; stop an exact conflicting process and delete its freshly re-proved exact executable or unambiguous script when both appear in the Plan; preserve unrelated data; delete only exclusive conflicting identities; replace inbound firewall policy while preserving SSH and outbound traffic; and remove Docker while preserving its images, volumes, and application data. An exact package-owned executable may be deleted and its package held only with an explicit damaged-package and missed-security-update warning.
+_Avoid_: Clean the server, remove anything suspicious, best-effort cleanup
+
+**Protected Host Foundation**:
+The fixed operating-system executables, services, libraries, interpreters, mounts, package tools, current shell, SSH access, and recovery dependencies that Destructive Reclamation must never delete even when they occupy a requested seam.
+_Avoid_: Probably safe to delete, replaceable system file
+
+**Irreversible Reclamation Started**:
+The durable checkpoint written before the first destructive effect; before it the Owner may leave without change, and after it SBXR offers only exact forward recovery to Managed.
+_Avoid_: Apply started, point of no return, partial cleanup
+
 **Acceptance VPS**:
 A disposable VPS reserved for explicitly approved live acceptance, where destructive installation, change, rollback, recovery, and Complete removal checks may run without risking Owner data that must be preserved.
 _Avoid_: Production VPS, valued VPS
