@@ -188,6 +188,19 @@ func (store CandidateStore) removeTemporary() error {
 	return syncPath(store.directory)
 }
 
+func syncPath(name string) error {
+	directory, err := os.Open(name)
+	if err != nil {
+		return err
+	}
+	err = directory.Sync()
+	closeErr := directory.Close()
+	if err != nil {
+		return err
+	}
+	return closeErr
+}
+
 func writeCandidate(output io.Writer, record softwarelifecycle.CandidateRecord) error {
 	manifest, err := json.Marshal(candidateManifest{Schema: 1, Sequence: record.Sequence, Repository: record.Evidence.Repository, Tag: record.Evidence.Tag, Commit: record.Evidence.Commit, AttestedAssets: record.Evidence.AttestedAssets, Verifier: record.Evidence.Verifier, VerifiedAt: record.VerifiedAt.Format(time.RFC3339Nano)})
 	if err != nil {

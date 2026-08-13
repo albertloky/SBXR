@@ -207,7 +207,7 @@ func TestInstallApplyReportsRecoveryRequiredAsAnExactSecretSafeTerminal(t *testi
 	}
 }
 
-func TestInstallApplyUsesOnlyTheApprovedSudoCommandAndInheritedDescriptors(t *testing.T) {
+func TestInstallApplyUsesOnlyTheApprovedRootCommandAndInheritedDescriptors(t *testing.T) {
 	parent, child := socketPair(t)
 	defer parent.Close()
 	defer child.Close()
@@ -217,9 +217,9 @@ func TestInstallApplyUsesOnlyTheApprovedSudoCommandAndInheritedDescriptors(t *te
 	}
 	defer executable.Close()
 	command := installApplyCommand(t.Context(), child, executable)
-	want := []string{"/usr/bin/sudo", "--preserve-fds=3", "--", "/proc/self/fd/3", "private", "install-apply"}
+	want := []string{"/proc/self/fd/3", "private", "install-apply"}
 	if command.Path != want[0] || strings.Join(command.Args, "\x00") != strings.Join(want, "\x00") || command.Stdin != child || len(command.ExtraFiles) != 1 || command.ExtraFiles[0] != executable {
-		t.Fatalf("sudo command = path %q args %q stdin=%v extra=%v", command.Path, command.Args, command.Stdin, command.ExtraFiles)
+		t.Fatalf("root Apply command = path %q args %q stdin=%v extra=%v", command.Path, command.Args, command.Stdin, command.ExtraFiles)
 	}
 }
 

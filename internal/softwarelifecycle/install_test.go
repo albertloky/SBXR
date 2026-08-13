@@ -88,17 +88,17 @@ func TestPlanInstallDisclosesTheCompleteReviewedFreshInstallation(t *testing.T) 
 		t.Fatalf("PlanInstall() = (%+v, %+v)", plan, finding)
 	}
 	summary := plan.Summary()
-	if summary.ReleaseIdentity != candidate.cell.staged.Identity || summary.Revision != 1 || summary.InstallationStatus != NotInstalled || summary.Result != Managed || summary.RollbackResult != NotInstalled || summary.Disk != disk || !summary.SudoAfterApproval || !summary.OneUse || !summary.SecretsMemoryOnly {
+	if summary.ReleaseIdentity != candidate.cell.staged.Identity || summary.Revision != 1 || summary.InstallationStatus != NotInstalled || summary.Result != Managed || summary.RollbackResult != NotInstalled || summary.Disk != disk || summary.SudoAfterApproval || !summary.OneUse || !summary.SecretsMemoryOnly {
 		t.Fatalf("summary = %+v", summary)
 	}
 	if !reflect.DeepEqual(summary.Files, []string{"/opt/sbxr/releases/v1.0.0-0123456789abcdef0123456789abcdef01234567-" + strings.Repeat("b", 64) + "/sbxr", "/usr/local/bin/sbxr", "/var/lib/sbxr", "/etc/sbxr", "/etc/systemd/system"}) {
 		t.Fatalf("files = %#v", summary.Files)
 	}
-	if len(summary.Units) != 11 || len(summary.Profiles) != 6 || len(summary.SubscriptionRepresentations) != 7 || len(summary.Ports) == 0 || len(summary.Checks) == 0 || len(summary.Ownership) != 4 || len(summary.Cloudflare) != 1 || len(summary.Certificates) != 2 || summary.Interruption == "" || summary.Cancellation == "" || summary.Rollback == "" {
+	if len(summary.Units) != 11 || len(summary.Profiles) != 6 || len(summary.SubscriptionRepresentations) != 7 || len(summary.Ports) == 0 || len(summary.Checks) == 0 || len(summary.Ownership) != 3 || len(summary.Cloudflare) != 1 || len(summary.Certificates) != 2 || summary.Interruption == "" || summary.Cancellation == "" || summary.Rollback == "" {
 		t.Fatalf("incomplete review = %+v", summary)
 	}
 	rendered := fmt.Sprintf("%s %+v %#v", plan, plan, summary)
-	if strings.Contains(rendered, "SECRET-INSTALL-MARKER") || !strings.Contains(rendered, "ordinary system sudo after approval") || !strings.Contains(rendered, "rollback to Not installed") {
+	if strings.Contains(rendered, "SECRET-INSTALL-MARKER") || strings.Contains(rendered, "installation draft") || strings.Contains(rendered, "sudo") || !strings.Contains(rendered, "root Apply after approval") || !strings.Contains(rendered, "rollback to Not installed") {
 		t.Fatalf("unsafe or incomplete rendering: %s", rendered)
 	}
 }

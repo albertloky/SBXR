@@ -95,7 +95,7 @@ func TestInstallationPresentationCannotApplyWithoutModuleApproval(t *testing.T) 
 }
 
 func TestInstallationPresentationClearsReviewedHealthWhenReviewIsInvalidated(t *testing.T) {
-	outcome := &installOutcome{values: map[string]string{}, reviewedHealth: &installation.ReviewedHealth{Network: healthdiagnostics.Healthy}}
+	outcome := &installOutcome{reviewedHealth: &installation.ReviewedHealth{Network: healthdiagnostics.Healthy}}
 	outcome.Edit(t.Context(), ownerconsole.EditingInput{Field: "release-tag", Text: "changed"})
 	if outcome.reviewedHealth != nil {
 		t.Fatal("edited Installation retained stale reviewed health")

@@ -421,6 +421,13 @@ func TestRunRendersCanonicalStyleAFixturesAtBothApprovedSizes(t *testing.T) {
 	}
 }
 
+func TestInstallationReviewOffersNoPersistentDraftAction(t *testing.T) {
+	got := runTranscript(t, Session{Scenario: InstallationReview}, 80, 24, "\x03\r")
+	if strings.Contains(got, "Save non-secret draft") {
+		t.Fatalf("Installation Review offered persistent draft storage\n%s", got)
+	}
+}
+
 func TestCanonicalFramesRemainExact(t *testing.T) {
 	scenarios := []Scenario{
 		AuthenticatedOverview, DedicatedAccess, LimitedDashboard, InstallationReview,
@@ -461,7 +468,7 @@ func TestCanonicalFramesRemainExact(t *testing.T) {
 			fmt.Fprintf(&frames, "%d/%d/%d\n%s\n", scenario, size[0], size[1], frame)
 		}
 	}
-	want := "284f66d1c80b33a9c4b416403ac36852af1f2d584e9370e7fceb4a31296e0454"
+	want := "8de96de36661e3cc85957c04e7297ed8506191386ac3a717d145c8cacc37f0c3"
 	if got := fmt.Sprintf("%x", sha256.Sum256([]byte(frames.String()))); got != want {
 		t.Fatalf("canonical frame snapshot = %s, want %s", got, want)
 	}
@@ -703,7 +710,7 @@ func TestRunDegradesColorAndUnicodeWithoutLosingMeaning(t *testing.T) {
 
 func TestRunWrapsSafetyTextAndShowsOnlyLegalShortcuts(t *testing.T) {
 	installation := runTranscript(t, Session{Scenario: InstallationReview}, 80, 24, "\x03\r")
-	if !strings.Contains(installation, "Download, verification and unprivileged preflight passed.") {
+	if !strings.Contains(installation, "Download, verification and preflight passed.") {
 		t.Fatal("minimum-size frame clipped safety text instead of wrapping it")
 	}
 	forwardOnly := runTranscript(t, Session{Scenario: ForwardOnlyRemoval}, 80, 24, "\x03\r")

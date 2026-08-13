@@ -30,7 +30,6 @@ type installOutcome struct {
 	mu                sync.Mutex
 	module            *installation.Interface
 	construction      error
-	values            map[string]string
 	approval          installation.Approval
 	plan              ownerconsole.PlanIdentity
 	reclamationDigest string
@@ -62,7 +61,7 @@ var installFields = []ownerconsole.EditingField{
 
 func newInstallOutcome() *installOutcome {
 	module, err := newInstallationModule()
-	return &installOutcome{module: module, construction: err, values: map[string]string{}}
+	return &installOutcome{module: module, construction: err}
 }
 
 func newInstallationModule() (*installation.Interface, error) {
@@ -116,58 +115,86 @@ func (*installOutcome) CreateSupportBundle(context.Context, ownerconsole.BundleR
 
 func (outcome *installOutcome) Review(ctx context.Context) ownerconsole.ChangeReview {
 	outcome.mu.Lock()
-	defer outcome.mu.Unlock()
-	if outcome.construction != nil || outcome.module == nil {
+	module, construction := outcome.module, outcome.construction
+	outcome.mu.Unlock()
+	if construction != nil || module == nil {
 		return installCorrection(errors.New("Installation Module construction failed"))
 	}
-	for _, field := range installFields {
-		if outcome.values[field.Identity] == "" {
-			if field.Identity == "cloudflare-token" {
-				field.Value = ""
-			}
-			return ownerconsole.ChangeReview{Editing: &ownerconsole.EditingPresentation{Title: "Clean VPS installation", Field: field}}
-		}
-	}
-	draft, err := outcome.draft()
-	if err != nil {
-		return installCorrection(err)
-	}
-	return outcome.presentReview(outcome.module.Review(ctx, draft))
+	review := module.Review(ctx, installation.Draft{})
+	outcome.mu.Lock()
+	defer outcome.mu.Unlock()
+	return outcome.presentReview(review)
 }
 
 func (outcome *installOutcome) Edit(ctx context.Context, input ownerconsole.EditingInput) ownerconsole.ChangeReview {
+	update, err := installationDraftUpdate(input)
+	if err != nil {
+		return installCorrection(err)
+	}
 	outcome.mu.Lock()
-	known := false
-	for _, field := range installFields {
-		if field.Identity == input.Field {
-			known = true
-			break
-		}
-	}
-	if known && input.Text != "" {
-		outcome.values[input.Field] = input.Text
-		outcome.approval, outcome.plan = installation.Approval{}, ""
-		outcome.reviewedHealth = nil
-	}
+	module := outcome.module
+	outcome.approval, outcome.plan = installation.Approval{}, ""
+	outcome.reviewedHealth = nil
 	outcome.mu.Unlock()
-	return outcome.Review(ctx)
+	if module == nil {
+		return installCorrection(errors.New("Installation Module construction failed"))
+	}
+	review := module.Review(ctx, update)
+	outcome.mu.Lock()
+	defer outcome.mu.Unlock()
+	return outcome.presentReview(review)
 }
 
-func (outcome *installOutcome) draft() (installation.Draft, error) {
-	port := func(name string) (uint16, error) {
-		value, err := strconv.ParseUint(outcome.values[name], 10, 16)
+func installationDraftUpdate(input ownerconsole.EditingInput) (installation.Draft, error) {
+	if input.Text == "" {
+		return installation.Draft{}, errors.New("Installation input is empty")
+	}
+	update := installation.Draft{Architecture: softwarelifecycle.Architecture(runtime.GOARCH)}
+	var err error
+	port := func() (uint16, error) {
+		value, err := strconv.ParseUint(input.Text, 10, 16)
 		return uint16(value), err
 	}
-	ssh, e1 := port("ssh-port")
-	reality, e2 := port("reality-port")
-	hysteria2, e3 := port("hysteria2-port")
-	tuic, e4 := port("tuic-port")
-	anyTLS, e5 := port("anytls-port")
-	subscription, e6 := port("subscription-port")
-	if errors.Join(e1, e2, e3, e4, e5, e6) != nil {
-		return installation.Draft{}, errors.New("one or more ports are invalid")
+	switch input.Field {
+	case "release-tag":
+		update.Tag = input.Text
+	case "domain":
+		update.Installation.Domain = input.Text
+	case "owner-email":
+		update.Installation.OwnerEmail = input.Text
+	case "public-ipv4":
+		update.Installation.PublicIPv4 = input.Text
+	case "primary-address":
+		update.Installation.PrimaryAddress = input.Text
+	case "ssh-port":
+		update.Installation.SSHPort, err = port()
+	case "reality-port":
+		update.Installation.RealityPort, err = port()
+	case "hysteria2-port":
+		update.Installation.Hysteria2Port, err = port()
+	case "tuic-port":
+		update.Installation.TUICPort, err = port()
+	case "anytls-port":
+		update.Installation.AnyTLSPort, err = port()
+	case "subscription-port":
+		update.Installation.SubscriptionPort, err = port()
+	case "cloudflare-account":
+		update.CloudflareAccountID = input.Text
+	case "cloudflare-zone":
+		update.CloudflareZoneID = input.Text
+	case "cloudflare-token":
+		update.CloudflareToken = input.Text
+	case "reality-target":
+		update.RealityTarget = input.Text
+	case "reality-server-name":
+		update.RealityServerName = input.Text
+	default:
+		return installation.Draft{}, errors.New("unknown Installation field")
 	}
-	return installation.Draft{Tag: outcome.values["release-tag"], Architecture: softwarelifecycle.Architecture(runtime.GOARCH), Installation: softwarelifecycle.InstallationDraft{Domain: outcome.values["domain"], OwnerEmail: outcome.values["owner-email"], PublicIPv4: outcome.values["public-ipv4"], PrimaryAddress: outcome.values["primary-address"], SSHPort: ssh, RealityPort: reality, Hysteria2Port: hysteria2, TUICPort: tuic, AnyTLSPort: anyTLS, SubscriptionPort: subscription}, CloudflareAccountID: outcome.values["cloudflare-account"], CloudflareZoneID: outcome.values["cloudflare-zone"], CloudflareToken: outcome.values["cloudflare-token"], RealityTarget: outcome.values["reality-target"], RealityServerName: outcome.values["reality-server-name"]}, nil
+	if err != nil {
+		return installation.Draft{}, errors.New("Installation port is invalid")
+	}
+	return update, nil
 }
 
 func (outcome *installOutcome) presentReview(review installation.ReviewResult) ownerconsole.ChangeReview {
@@ -175,6 +202,11 @@ func (outcome *installOutcome) presentReview(review installation.ReviewResult) o
 		outcome.reviewedHealth = nil
 	}
 	if review.Invalid != nil {
+		for _, field := range installFields {
+			if field.Identity == review.Invalid.Field {
+				return ownerconsole.ChangeReview{Editing: &ownerconsole.EditingPresentation{Title: "Clean VPS installation", Field: field}}
+			}
+		}
 		return installCorrection(errors.New(review.Invalid.Problem))
 	}
 	if review.Correction != nil {
@@ -272,8 +304,21 @@ func (outcome *installOutcome) Fix(ctx context.Context, _ ownerconsole.Correctio
 func (outcome *installOutcome) CheckAgain(ctx context.Context) ownerconsole.ChangeReview {
 	return outcome.Review(ctx)
 }
-func (*installOutcome) Back(context.Context) ownerconsole.ChangeReview {
-	return ownerconsole.ChangeReview{Editing: &ownerconsole.EditingPresentation{Title: "Clean VPS installation", Field: installFields[0]}}
+
+func (outcome *installOutcome) Back(ctx context.Context) ownerconsole.ChangeReview {
+	outcome.mu.Lock()
+	outcome.approval, outcome.plan = installation.Approval{}, ""
+	outcome.reclamationDigest = ""
+	outcome.reviewedHealth = nil
+	module := outcome.module
+	outcome.mu.Unlock()
+	if module == nil {
+		return installCorrection(errors.New("Installation Module construction failed"))
+	}
+	review := module.Review(ctx, installation.DiscardDraft())
+	outcome.mu.Lock()
+	defer outcome.mu.Unlock()
+	return outcome.presentReview(review)
 }
 
 func installCorrection(err error) ownerconsole.ChangeReview {

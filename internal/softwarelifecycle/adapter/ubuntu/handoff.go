@@ -193,7 +193,7 @@ func readInstallHandoffRequest(reader io.Reader) (InstallHandoffRequest, error) 
 	return decodeInstallHandoffRequest(body)
 }
 
-// ServeInstallApply runs only inside the exact sudo child selected by cmd/sbxr.
+// ServeInstallApply runs only inside the root Apply process selected by cmd/sbxr.
 func ServeInstallApply(ctx context.Context, prepare InstallApplyPreparer) error {
 	executable := os.NewFile(3, "verified-sbxr")
 	if executable == nil {
@@ -203,8 +203,8 @@ func ServeInstallApply(ctx context.Context, prepare InstallApplyPreparer) error 
 	return serveInstallApply(ctx, os.Stdin, executable, verifyInstallApplyProcess, prepare)
 }
 
-// LaunchInstallApply performs the only supported privilege transition after
-// the Owner has reviewed the exact Plan represented by request.
+// LaunchInstallApply starts the root Apply process after the Owner reviews the
+// exact Plan represented by request.
 func LaunchInstallApply(ctx context.Context, request InstallHandoffRequest) (InstallApplyOutcome, error) {
 	executable, err := openVerifiedInstallExecutable(request.Candidate.Staged)
 	if err != nil {
@@ -258,7 +258,7 @@ func launchInstallApplyWithCancellation(ctx context.Context, request InstallHand
 	wait, err := start(ctx, child, executable)
 	child.Close()
 	if err != nil {
-		return 0, errors.New("ordinary system sudo failed")
+		return 0, errors.New("root install process failed")
 	}
 	if err := writeInstallHandoffRequest(parent, request); err != nil {
 		return 0, err
@@ -342,7 +342,7 @@ func startInstallApplyProcess(ctx context.Context, socket, executable *os.File) 
 }
 
 func installApplyCommand(ctx context.Context, socket, executable *os.File) *exec.Cmd {
-	command := exec.CommandContext(ctx, "/usr/bin/sudo", "--preserve-fds=3", "--", "/proc/self/fd/3", "private", "install-apply")
+	command := exec.CommandContext(ctx, "/proc/self/fd/3", "private", "install-apply")
 	command.Stdin, command.Stdout, command.Stderr = socket, os.Stdout, os.Stderr
 	command.ExtraFiles = []*os.File{executable}
 	return command

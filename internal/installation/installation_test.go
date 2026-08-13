@@ -382,8 +382,39 @@ func TestInstallationInterfaceValidatesDependenciesAndTypedDraft(t *testing.T) {
 	}
 }
 
-func TestInstallationInterfaceReviewsCleanVPSAndKeepsOneUseApprovalMemoryOnly(t *testing.T) {
+func TestInstallationInterfaceOwnsPartialDraftUntilDiscard(t *testing.T) {
 	module := newTestInstallation(t, composedNetworkObserver{}, nil)
+	if result := module.Review(t.Context(), Draft{Tag: "v1.0.0"}); result.Invalid == nil || result.Invalid.Field != "domain" {
+		t.Fatalf("partial draft = %+v", result)
+	}
+	if result := module.Review(t.Context(), Draft{}); result.Invalid == nil || result.Invalid.Field != "domain" {
+		t.Fatalf("active process forgot partial draft = %+v", result)
+	}
+	if result := module.Review(t.Context(), DiscardDraft()); result.Invalid == nil || result.Invalid.Field != "release-tag" {
+		t.Fatalf("discard retained partial draft = %+v", result)
+	}
+}
+
+func TestInstallationInterfaceCancellationBeforeApplyDiscardsDraftAndApproval(t *testing.T) {
+	module := newTestInstallation(t, composedNetworkObserver{}, nil)
+	review := module.Review(t.Context(), composedDraft(t))
+	if review.Plan == nil || review.Approval.cell == nil {
+		t.Fatalf("Review = %+v", review)
+	}
+	if result := module.RequestCancellation(t.Context(), ""); result.Kind != CancellationRequested {
+		t.Fatalf("pre-Apply cancellation = %+v", result)
+	}
+	if result := module.Apply(t.Context(), review.Approval); result.Kind != ApplyRefused {
+		t.Fatalf("cancelled Approval remained usable: %+v", result)
+	}
+	if fresh := module.Review(t.Context(), Draft{}); fresh.Invalid == nil || fresh.Invalid.Field != "release-tag" {
+		t.Fatalf("cancelled draft remained available: %+v", fresh)
+	}
+}
+
+func TestInstallationInterfaceReviewsCleanVPSAndKeepsOneUseApprovalMemoryOnly(t *testing.T) {
+	observer := &countingInstallationObserver{}
+	module := newTestInstallation(t, observer, nil)
 	review := module.Review(t.Context(), composedDraft(t))
 	if review.Plan == nil || review.Plan.DesiredStateRevision != 1 || len(review.Plan.Effects) != 5 || review.Approval.cell == nil {
 		t.Fatalf("clean VPS Review = %+v", review)
@@ -391,9 +422,13 @@ func TestInstallationInterfaceReviewsCleanVPSAndKeepsOneUseApprovalMemoryOnly(t 
 	if _, err := review.Approval.MarshalJSON(); err == nil || strings.Contains(fmt.Sprintf("%v %#v", review.Approval, review.Approval), "COMPOSED-INSTALL-SECRET-MARKER") {
 		t.Fatal("Approval became renderable or exposed protected material")
 	}
-	restarted := newTestInstallation(t, composedNetworkObserver{}, nil)
+	observations := observer.calls
+	restarted := newTestInstallation(t, observer, nil)
 	if result := restarted.Apply(t.Context(), review.Approval); result.Kind != ApplyRefused {
 		t.Fatalf("pre-Apply restart retained authority: %+v", result)
+	}
+	if fresh := restarted.Review(t.Context(), composedDraft(t)); fresh.Plan == nil || observer.calls <= observations {
+		t.Fatalf("later launch did not perform a fresh Review: review=%+v observations=%d before=%d", fresh, observer.calls, observations)
 	}
 	if result := module.Apply(t.Context(), review.Approval); result.Kind != ApplyStarted {
 		t.Fatalf("Apply() = %+v", result)
@@ -685,6 +720,13 @@ func (composedNetworkObserver) Observe(request networkpolicy.ObservationRequest)
 		Certificate: networkpolicy.CertificateFacts{DNS: networkpolicy.DNSFacts{Hostname: "direct.example.com"}, CAA: networkpolicy.CAAFacts{Issuer: "letsencrypt.org", HTTP01Allowed: true}}, Checksums: map[string]string{"sshd_config": "sha256:ssh", "nftables": "sha256:nft"},
 		ReclamationComplete: true,
 	}, nil
+}
+
+type countingInstallationObserver struct{ calls int }
+
+func (observer *countingInstallationObserver) Observe(request networkpolicy.ObservationRequest) (networkpolicy.Observations, error) {
+	observer.calls++
+	return (composedNetworkObserver{}).Observe(request)
 }
 
 type incompleteReclamationObserver struct{ composedNetworkObserver }

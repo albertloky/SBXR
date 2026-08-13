@@ -322,14 +322,14 @@ func PlanInstall(request InstallPlanRequest) (*InstallPlan, *InstallFinding) {
 	summary := InstallSummary{
 		ReleaseIdentity: staged.Identity, Revision: 1, InstallationStatus: NotInstalled, Result: Managed, RollbackResult: NotInstalled,
 		Files: []string{staged.InstallPath, "/usr/local/bin/sbxr", "/var/lib/sbxr", "/etc/sbxr", "/etc/systemd/system"}, Units: unitNames,
-		Ownership:                   []string{"release executable and systemd units: root:root", "installation draft: Owner 0600", "generated State: root-only", "service material: root and the named non-root service identity"},
+		Ownership:                   []string{"release executable and systemd units: root:root", "generated State: root-only", "runtime service material: root:root 0644"},
 		Profiles:                    []string{"VLESS REALITY Vision", "VLESS XHTTP", "VLESS WebSocket", "Hysteria2", "TUIC", "AnyTLS"},
 		SubscriptionRepresentations: []string{"raw", "base64", "v2rayN", "Shadowrocket", "Karing", "Mihomo", "sing-box"},
 		Cloudflare:                  cloudflare, Certificates: certificates, Ports: ports, Firewall: firewall, Disk: request.Disk, Checks: checkNames,
 		Interruption:      "no managed service exists before Apply; failed Apply rolls back all SBXR-owned additions",
 		Cancellation:      "Back before Apply changes nothing; cancellation after start waits for a safe checkpoint and rolls back",
 		Rollback:          "remove only additions recorded by this Change Set and prove Not installed",
-		SudoAfterApproval: true, OneUse: true, SecretsMemoryOnly: true,
+		SudoAfterApproval: false, OneUse: true, SecretsMemoryOnly: true,
 	}
 	return &InstallPlan{identity: identity, sha256: checksum, volatileSHA256: hex.EncodeToString(volatileDigest[:]), changeSet: request.ChangeSet, desiredStateSHA256: request.DesiredStateSHA256, candidate: request.Candidate, summary: summary, steps: steps, checks: checks, proofs: proofs, disk: request.Disk, used: &atomic.Bool{}, reclamation: request.ReviewedReclamationSHA256}, nil
 }
@@ -342,8 +342,7 @@ type InstallRecheck struct {
 }
 
 type InstallApproval interface {
-	// AuthorizeAndRecheck runs only inside the verified short-lived root child
-	// after the ordinary system sudo handoff.
+	// AuthorizeAndRecheck runs only inside the verified root Apply process.
 	AuthorizeAndRecheck(context.Context) (InstallRecheck, error)
 }
 
@@ -398,7 +397,7 @@ func (plan *InstallPlan) Apply(ctx context.Context, request InstallApplyRequest)
 }
 
 func installRefused(code, problem string) systemchanges.ApplyResult {
-	return systemchanges.ApplyResult{Outcome: systemchanges.Refused, NothingChanged: true, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: systemchanges.EvidenceRules{SecretSafeOnly: true}, Finding: &systemchanges.Finding{Code: code, Owner: systemchanges.SoftwareModule, Problem: problem, Found: "the reviewed install authority is unavailable or changed", Required: "one fresh exact review followed by the verified ordinary-sudo handoff and a complete root recheck", WhyStopped: "stale or incomplete approval cannot authorize host mutation", NextAction: "Return to review and create a fresh install Plan."}}
+	return systemchanges.ApplyResult{Outcome: systemchanges.Refused, NothingChanged: true, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: systemchanges.EvidenceRules{SecretSafeOnly: true}, Finding: &systemchanges.Finding{Code: code, Owner: systemchanges.SoftwareModule, Problem: problem, Found: "the reviewed install authority is unavailable or changed", Required: "one fresh exact review followed by a complete root recheck", WhyStopped: "stale or incomplete approval cannot authorize host mutation", NextAction: "Return to review and create a fresh install Plan."}}
 }
 
 func sameInstallCandidate(left, right InstallCandidate) bool {
@@ -491,7 +490,7 @@ func (plan *InstallPlan) String() string {
 	if plan == nil {
 		return "Software Lifecycle install Plan: unavailable"
 	}
-	return fmt.Sprintf("Software Lifecycle install Plan %s: revision 1, %s, %d files/categories, %d units, 6 Connection Profiles, 7 subscription representations, ordinary system sudo after approval, rollback to Not installed", plan.identity, plan.summary.ReleaseIdentity.Tag, len(plan.summary.Files), len(plan.summary.Units))
+	return fmt.Sprintf("Software Lifecycle install Plan %s: revision 1, %s, %d files/categories, %d units, 6 Connection Profiles, 7 subscription representations, root Apply after approval, rollback to Not installed", plan.identity, plan.summary.ReleaseIdentity.Tag, len(plan.summary.Files), len(plan.summary.Units))
 }
 func (plan *InstallPlan) GoString() string { return plan.String() }
 

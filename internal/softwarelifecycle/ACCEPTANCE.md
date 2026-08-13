@@ -140,15 +140,15 @@ go test ./internal/softwarelifecycle -run '^Test(PlanInstall|ApplyInstall|Networ
 
 Require one exact staged Release Identity, revision `1`, owned files and ownership categories, ten units, six profiles, seven subscription representations, typed Cloudflare and certificate effects, ports, the complete `inet sbxr` candidate, all disk categories, checks, interruption, cancellation, and rollback to `Not installed` before approval. Require every Plan object to be one-use. After approval, require one root-verified Network Policy contribution whose reviewed stable digest is unchanged; independently derive the fresh volatile digest from every owning contribution. Any changed candidate, listener, port, firewall, address, resource, provider fact, component contribution, State binding, or checksum returns only a secret-safe stale-Plan refusal.
 
-### SL-INSTALL-02 — Ordinary sudo and non-secret draft boundary
+### SL-INSTALL-02 — Root Apply and memory-only input boundary
 
 Run:
 
 ```sh
-go test ./internal/softwarelifecycle/adapter/ubuntu -run '^Test(Approval|DraftStore|InstallApply|InstallExecutable)' -count=1
+go test ./internal/softwarelifecycle/adapter/ubuntu -run '^Test(Approval|InstallApply|InstallExecutable)' -count=1
 ```
 
-Require the fixed Owner draft path, strict allowlisted fields, canonical JSON, an Owner-owned `0600` single-link regular file beneath an Owner-owned `0700` directory, atomic replacement, safe discard, and refusal of links, broad modes, unknown fields, malformed values, and outside-file replacement. Infrastructure Secrets and Client Access Values never enter the draft. Require the exact ordinary-sudo command `/usr/bin/sudo --preserve-fds=3 -- /proc/self/fd/3 private install-apply`, one already-open verified executable descriptor, one inherited Unix socket, root and peer/executable identity checks, one bounded strict typed JSON request, independent candidate restaging, prepare-before-`READY`, one final `APPLY`, and safe refusal of duplicate/unknown/malformed/oversized input, replay, EOF, wrong peer, changed executable or candidate, and parent death before mutation. The authenticated installation review may use cached ordinary `sudo -n` only for the fixed read-only `nft`, `iptables-save`, and `ip6tables-save` observations that the exact firewall Plan requires. Mutation remains unavailable until the separate approved install handoff.
+Require partial input and one-use Approval to exist only inside the active Installation process. Back, pre-Apply cancellation, Console exit, terminal loss, and process death discard unfinished input. A later launch starts with fresh Owner input and fresh read-only observations through Installation Review. Infrastructure Secrets and Client Access Values are not persisted. Require one root process, one bounded strict typed Apply request, an independent candidate recheck, and safe refusal of duplicate, unknown, malformed, oversized, replayed, changed, or incomplete input. Mutation remains unavailable until the separate approved Apply action.
 
 ### SL-INSTALL-03 — Exact software activation and partial rollback
 

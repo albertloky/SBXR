@@ -28,7 +28,10 @@ type Draft struct {
 	RealityTarget, RealityServerName                            string
 	Architecture                                                softwarelifecycle.Architecture
 	Installation                                                softwarelifecycle.InstallationDraft
+	discard                                                     bool
 }
+
+func DiscardDraft() Draft { return Draft{discard: true} }
 
 type Dependencies struct {
 	ReleaseCandidate  func(context.Context, string, softwarelifecycle.Architecture) (softwarelifecycle.InstallCandidateHandoff, error)
@@ -140,6 +143,7 @@ type Operation struct {
 type Interface struct {
 	dependencies Dependencies
 	mu           sync.Mutex
+	draft        Draft
 	reclamation  *networkpolicy.ReclamationPlan
 	request      softwareubuntu.InstallHandoffRequest
 	approval     *approvalCell
@@ -160,6 +164,8 @@ func (*Interface) GoString() string { return "Installation Module: protected" }
 
 func (module *Interface) Review(ctx context.Context, draft Draft) ReviewResult {
 	module.mu.Lock()
+	module.draft = mergeDraft(module.draft, draft)
+	draft = module.draft
 	module.approval, module.reclamation, module.request = nil, nil, softwareubuntu.InstallHandoffRequest{}
 	module.mu.Unlock()
 	if invalid := validateDraft(draft); invalid != nil {
@@ -248,6 +254,7 @@ func (module *Interface) Apply(_ context.Context, approval Approval) ApplyResult
 		return ApplyResult{Kind: ApplyRefused, Reason: "A fresh exact Installation Approval is required."}
 	}
 	module.approval = nil
+	module.draft = Draft{}
 	if module.operation.Status == OperationActive {
 		module.mu.Unlock()
 		return ApplyResult{Kind: ApplyRefused, Reason: "One Installation operation is already active."}
@@ -259,7 +266,7 @@ func (module *Interface) Apply(_ context.Context, approval Approval) ApplyResult
 	}
 	operation := OperationIdentity("install-" + request.Session[:16])
 	total := uint16(built.totalSteps)
-	module.operation = Operation{Identity: operation, Status: OperationActive, TotalSteps: total, Checkpoint: "Awaiting verified sudo handoff", Explanation: "The reviewed installation is running."}
+	module.operation = Operation{Identity: operation, Status: OperationActive, TotalSteps: total, Checkpoint: "Awaiting fresh root recheck", Explanation: "The reviewed installation is running."}
 	module.cancel, module.cancelled = make(chan struct{}), false
 	cancellation, launch := module.cancel, module.dependencies.Launch
 	module.mu.Unlock()
@@ -279,6 +286,47 @@ func (module *Interface) Apply(_ context.Context, approval Approval) ApplyResult
 	return ApplyResult{Kind: ApplyStarted, Operation: operation, Reason: "The exact reviewed installation Plan started."}
 }
 
+func mergeDraft(current, update Draft) Draft {
+	if update.discard {
+		return Draft{}
+	}
+	if update.Tag != "" {
+		current.Tag = update.Tag
+	}
+	if update.Architecture != "" {
+		current.Architecture = update.Architecture
+	}
+	for target, value := range map[*string]string{
+		&current.CloudflareAccountID:         update.CloudflareAccountID,
+		&current.CloudflareZoneID:            update.CloudflareZoneID,
+		&current.CloudflareToken:             update.CloudflareToken,
+		&current.RealityTarget:               update.RealityTarget,
+		&current.RealityServerName:           update.RealityServerName,
+		&current.Installation.Domain:         update.Installation.Domain,
+		&current.Installation.OwnerEmail:     update.Installation.OwnerEmail,
+		&current.Installation.PublicIPv4:     update.Installation.PublicIPv4,
+		&current.Installation.PublicIPv6:     update.Installation.PublicIPv6,
+		&current.Installation.PrimaryAddress: update.Installation.PrimaryAddress,
+	} {
+		if value != "" {
+			*target = value
+		}
+	}
+	for target, value := range map[*uint16]uint16{
+		&current.Installation.SSHPort:          update.Installation.SSHPort,
+		&current.Installation.RealityPort:      update.Installation.RealityPort,
+		&current.Installation.Hysteria2Port:    update.Installation.Hysteria2Port,
+		&current.Installation.TUICPort:         update.Installation.TUICPort,
+		&current.Installation.AnyTLSPort:       update.Installation.AnyTLSPort,
+		&current.Installation.SubscriptionPort: update.Installation.SubscriptionPort,
+	} {
+		if value != 0 {
+			*target = value
+		}
+	}
+	return current
+}
+
 func (module *Interface) Inspect(_ context.Context, identity OperationIdentity) (Operation, error) {
 	module.mu.Lock()
 	defer module.mu.Unlock()
@@ -291,6 +339,11 @@ func (module *Interface) Inspect(_ context.Context, identity OperationIdentity) 
 func (module *Interface) RequestCancellation(_ context.Context, identity OperationIdentity) ApplyResult {
 	module.mu.Lock()
 	defer module.mu.Unlock()
+	if identity == "" && module.operation.Status != OperationActive {
+		module.draft = Draft{}
+		module.approval, module.reclamation, module.request = nil, nil, softwareubuntu.InstallHandoffRequest{}
+		return ApplyResult{Kind: CancellationRequested, Reason: "The unfinished Installation input was discarded."}
+	}
 	if identity == "" || module.operation.Identity != identity || module.operation.Status != OperationActive || module.cancel == nil {
 		return ApplyResult{Kind: ApplyRefused, Reason: "Cancellation requires the exact active Installation Operation Identity."}
 	}

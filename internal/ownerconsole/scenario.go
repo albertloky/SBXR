@@ -122,17 +122,17 @@ var scenarioFixtures = map[Scenario]fixture{
 		details: []string{"DETAILS", "", "Safe read-only facts remain available.", "No Change Set began."},
 	},
 	InstallationReview: {
-		header: "Not installed - unprivileged", title: "REVIEW INSTALLATION PLAN", navigation: overviewNavigation, allowsBack: true,
-		lines:   []string{"Download, verification and unprivileged preflight passed.", "", "Release    v1.0.0 - commit 7ca1... - index 48ab...", "Files      1 executable - 11 embedded Modules", "Services   4 services - 3 timers", "Ports      SSH, 443 TCP+UDP, 8443, 9443, 10443", "Disk       3.8 GiB free after reservation", "Rollback   Automatic until durable Complete", "", "Apply will show the normal system sudo prompt,", "recheck volatile facts, then start one Change Set.", "", "> Apply installation", "  Back and edit", "  Save non-secret draft", "", "Esc changes nothing - Enter opens sudo prompt"},
+		header: "Not installed - authenticated", title: "REVIEW INSTALLATION PLAN", navigation: overviewNavigation, allowsBack: true,
+		lines:   []string{"Download, verification and preflight passed.", "", "Release    v1.0.0 - commit 7ca1... - index 48ab...", "Files      1 executable - 11 embedded Modules", "Services   4 services - 3 timers", "Ports      SSH, 443 TCP+UDP, 8443, 9443, 10443", "Disk       3.8 GiB free after reservation", "Rollback   Automatic until durable Complete", "", "Apply will recheck volatile facts,", "then start one Change Set.", "", "> Apply installation", "  Back and discard input", "", "Esc discards input - Enter applies the Plan"},
 		details: []string{"PLAN", "", "Required checks passed.", "Rollback remains available until durable Complete."},
 	},
 	CloudflareWalkthrough: {
-		header: "Not installed - unprivileged", title: "CLOUDFLARE TOKEN - STEP 3 OF 5", navigation: cloudflareNavigation, allowsBack: true,
+		header: "Not installed - authenticated", title: "CLOUDFLARE TOKEN - STEP 3 OF 5", navigation: cloudflareNavigation, allowsBack: true,
 		lines:   []string{"dash.cloudflare.com/profile/api-tokens", "My Profile > API Tokens > Create Token", "> Create Custom Token", "", "Name       SBXR - selected account / selected zone", "Account    Cloudflare Tunnel                 Edit", "Zone       DNS                               Edit", "Resources  Include > Specific account > selected", "           Include > Specific zone > selected", "", "Continue to summary > Create Token > copy once", "", "Scoped token (masked, memory-only):", "> ********", "", "> Verify token", "  Back and continue later"},
 		details: []string{"MINIMUM AUTHORITY", "", "Specific account", "Specific zone", "No Global API Key", "Token remains memory-only"},
 	},
 	CorrectionFlow: {
-		header: "Not installed - unprivileged", title: "CORRECTION FLOW - NET-PORT-004", navigation: networkNavigation, allowsBack: true, acceptsInput: true, inputLine: 9,
+		header: "Not installed - authenticated", title: "CORRECTION FLOW - NET-PORT-004", navigation: networkNavigation, allowsBack: true, acceptsInput: true, inputLine: 9,
 		lines:   []string{"PROBLEM   9443/TCP is already in use", "FOUND     caddy.service - 0.0.0.0:9443/TCP", "REQUIRED  available public TCP port for AnyTLS", "", "WHY SBXR STOPPED", "Overwriting an unrelated listener could break it.", "There is no Continue anyway.", "", "Optional preferred port (1024-65535):", "> -", "", "> Fix with SBXR - choose and prove a safe port", "  Check again", "  Back", "", "No mutation has begun."},
 		details: []string{"SAFE EVIDENCE", "", "NET-PORT-004", "No mutation has begun.", "Evidence is redacted."},
 	},
