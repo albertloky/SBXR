@@ -8,6 +8,10 @@ SBXR is a single-owner system for managing a fixed set of proxy connection choic
 The one person who exclusively controls an SBXR installation and its credentials.
 _Avoid_: User, account, administrator
 
+**Owner Launch Identity**:
+The root or non-root Linux identity through which the Owner starts SBXR. It is distinct from the Owner, who is the person in control.
+_Avoid_: Owner, Owner account, User, service identity
+
 **Connection Profile**:
 One named connection choice that the Owner can configure, test, export, and use from a client device.
 _Avoid_: Protocol, mode, node
