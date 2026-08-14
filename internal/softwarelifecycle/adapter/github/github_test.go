@@ -113,6 +113,12 @@ func TestSourceRefusesAutomaticStableDiscoveryUntilTheAcceptanceRecordAgrees(t *
 	for _, change := range []func(*releaseFixture){
 		func(f *releaseFixture) { f.release.Body = "" },
 		func(f *releaseFixture) {
+			f.release.Body = strings.Replace(f.release.Body, "Status: Qualified - root-runtime package policy", "Status: Qualified - installer-only automated exception", 1)
+		},
+		func(f *releaseFixture) {
+			f.release.Body = strings.Replace(f.release.Body, "Integrated Ubuntu Verification: Not required", "Integrated Ubuntu Verification: Passed", 1)
+		},
+		func(f *releaseFixture) {
 			f.release.Body = strings.Replace(f.release.Body, fixtureCommit, strings.Repeat("b", 40), 1)
 		},
 		func(f *releaseFixture) {
@@ -211,19 +217,20 @@ func newReleaseFixture(t *testing.T) *releaseFixture {
 
 func stableAcceptanceFixture(indexSHA256 string) string {
 	return "# SBXR automated Acceptance Record\n\n" +
-		"Status: Qualified - installer-only automated exception\n" +
+		"Status: Qualified - root-runtime package policy\n" +
 		"Repository: " + softwarelifecycle.Repository + "\n" +
 		"Tag: v1.0.0\n" +
 		"Commit: " + fixtureCommit + "\n" +
 		"Release index SHA-256: " + indexSHA256 + "\n" +
-		"Stable result code: RELEASE-INSTALLER-AUTOMATED-QUALIFICATION\n\n" +
+		"Stable result code: RELEASE-ROOT-RUNTIME-PACKAGE-QUALIFICATION\n\n" +
 		"| Module Verification | Passed | exact |\n" +
 		"| Seam Verification | Passed | exact |\n" +
 		"| Integrated Verification | Passed | exact |\n" +
-		"| Codex Live Acceptance | Not required | exact |\n" +
-		"| Owner Acceptance | Not required | exact |\n\n" +
-		"No live VPS, provider, maintained-client, or Owner evidence was performed.\n\n" +
-		"Any asset, attestation, repository, tag, commit, release-index digest, required check, or client-facing change invalidates this record.\n"
+		"| Codex Live Acceptance | Not required | ADR-0010 privilege and service-identity scope; no live VPS evidence claimed |\n" +
+		"| Owner Acceptance | Not required | ADR-0010 privilege and service-identity scope; no maintained-client evidence claimed |\n\n" +
+		"Integrated Ubuntu Verification: Not required - ADR-0010 privilege and service-identity scope; no automated Ubuntu integration evidence claimed.\n" +
+		"No Integrated Ubuntu Verification, live VPS, provider, maintained-client, or Owner evidence was performed.\n\n" +
+		"Any asset, attestation, repository, tag, commit, release-index digest, qualification scope, required check, or client-facing change invalidates this record.\n"
 }
 
 func (fixture *releaseFixture) verifier(body []byte, algorithm, digest string) ([]byte, error) {

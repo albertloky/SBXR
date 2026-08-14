@@ -54,7 +54,7 @@ go test ./internal/subscriptionserving -run '^TestServeSupportsTheSelectedIPv6Fa
 
 Require the bracketed IPv6 request shape and selected-family TLS verification where IPv6 loopback is available. The IPv4 path is covered by `SS-SERVE-01`. Production must additionally bind the exact selected qualified IP at `10443/TCP`.
 
-### SS-SERVE-06 — Separate read-only service identity
+### SS-SERVE-06 — Root read-only service identity
 
 Run:
 

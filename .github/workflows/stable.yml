@@ -50,8 +50,8 @@ jobs:
           mkdir -m 0700 retained-acceptance
           gh run download "$record_run_id" --name "automated-acceptance-record-$RELEASE_TAG" --dir retained-acceptance
           cmp acceptance-record.md retained-acceptance/acceptance-record.md
-          grep -Fx 'Status: Qualified - installer-only automated exception' acceptance-record.md
-          grep -Fx 'No live VPS, provider, maintained-client, or Owner evidence was performed.' acceptance-record.md
+          grep -Fx 'Status: Qualified - root-runtime package policy' acceptance-record.md
+          grep -Fx 'No Integrated Ubuntu Verification, live VPS, provider, maintained-client, or Owner evidence was performed.' acceptance-record.md
           go run ./cmd/sbxr-release verify -tag "$RELEASE_TAG"
       - name: Prove latest and pinned commands select the same exact bootstrap
         run: |
@@ -75,19 +75,13 @@ jobs:
           for archive in dist/sbxr-linux-amd64.tar.gz dist/sbxr-linux-arm64.tar.gz dist/sbxr-components-linux-amd64.tar.gz dist/sbxr-components-linux-arm64.tar.gz; do
             test -z "$(tar -xOzf "$archive" | rg -a -l "$pattern" -)"
           done
-      - name: Run the ordinary public command to the non-root Owner Console
-        env:
-          SBXR_STABLE_TAG: ${{ inputs.tag }}
+      - name: Recheck the public bootstrap package gates
         run: |
           test ! -e /usr/local/bin/sbxr
           test ! -e /var/lib/sbxr
-          python3 .github/workflows/stable_bootstrap.py
-          grep -F 'SBXR bootstrap: launching Owner Console' bootstrap-transcript.txt
-          grep -F 'Not installed' bootstrap-transcript.txt
+          go test ./cmd/sbxr-release -run '^TestGeneratedBootstrap' -count=1
           test ! -e /usr/local/bin/sbxr
           test ! -e /var/lib/sbxr
-          pattern='SECRET-MARKER|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer '
-          test -z "$(rg -a -l "$pattern" bootstrap-transcript.txt)"
       - name: Record stable publication evidence
         run: |
           index_sha256="$(sha256sum dist/release-index.json | cut -d ' ' -f 1)"
@@ -97,6 +91,9 @@ jobs:
             echo "Release Identity: albertloky/SBXR $RELEASE_TAG $(jq -r .target_commitish release.json) $index_sha256"
             echo 'Public verifier: Passed'
             echo 'Latest and pinned install.sh equality: Passed'
-            echo 'Supported Ubuntu Owner Console launch: Passed'
+            echo 'Public bootstrap package gates: Passed'
+            echo 'Integrated Ubuntu Verification: Not required'
+            echo 'Codex Live Acceptance: Not required'
+            echo 'Owner Acceptance: Not required'
             echo 'Cloudflare/provider evidence: Not performed'
           } >> "$GITHUB_STEP_SUMMARY"

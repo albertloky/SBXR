@@ -200,13 +200,16 @@ func acceptanceRecordIndexSHA256(body, tag, commit string) (string, bool) {
 	}
 	required := []string{
 		"# SBXR automated Acceptance Record",
-		"Status: Qualified - installer-only automated exception",
+		"Status: Qualified - root-runtime package policy",
 		"Repository: " + softwarelifecycle.Repository,
 		"Tag: " + tag,
 		"Commit: " + commit,
-		"Stable result code: RELEASE-INSTALLER-AUTOMATED-QUALIFICATION",
-		"No live VPS, provider, maintained-client, or Owner evidence was performed.",
-		"Any asset, attestation, repository, tag, commit, release-index digest, required check, or client-facing change invalidates this record.",
+		"Stable result code: RELEASE-ROOT-RUNTIME-PACKAGE-QUALIFICATION",
+		"Integrated Ubuntu Verification: Not required - ADR-0010 privilege and service-identity scope; no automated Ubuntu integration evidence claimed.",
+		"| Codex Live Acceptance | Not required | ADR-0010 privilege and service-identity scope; no live VPS evidence claimed |",
+		"| Owner Acceptance | Not required | ADR-0010 privilege and service-identity scope; no maintained-client evidence claimed |",
+		"No Integrated Ubuntu Verification, live VPS, provider, maintained-client, or Owner evidence was performed.",
+		"Any asset, attestation, repository, tag, commit, release-index digest, qualification scope, required check, or client-facing change invalidates this record.",
 	}
 	for _, line := range required {
 		if strings.Count(body, line+"\n") != 1 {

@@ -38,27 +38,6 @@ type PresentationUpdate struct {
 	Progress Progress
 }
 
-type AuthenticationResult uint8
-
-const (
-	AuthenticationSucceeded AuthenticationResult = iota + 1
-	AuthenticationDenied
-	AuthenticationCancelled
-	AuthenticationFailed
-	AuthenticationExpired
-)
-
-type Authenticator interface {
-	Authenticate(context.Context, io.Reader, io.Writer) AuthenticationResult
-}
-
-type AuthenticationPolicy uint8
-
-const (
-	AuthenticateForAccess AuthenticationPolicy = iota
-	DeferAuthenticationUntilApply
-)
-
 type Capabilities struct {
 	InteractiveInput         bool
 	InteractiveOutput        bool
@@ -79,8 +58,6 @@ type Session struct {
 	Capabilities            *Capabilities
 	Scenario                Scenario
 	Updates                 <-chan PresentationUpdate
-	Authenticator           Authenticator
-	AuthenticationPolicy    AuthenticationPolicy
 	Access                  AccessPresentation
 	AccessProvider          func(context.Context) AccessPresentation
 	StartupProvider         func(context.Context) StartupPresentation
@@ -144,7 +121,7 @@ func Run(ctx context.Context, session Session) error {
 	fixture := scenarioFixture(session.Scenario)
 	accessCatalog := session.Access.catalog()
 	program := tea.NewProgram(
-		model{width: c.Width, height: c.Height, scenario: session.Scenario, selected: selectedNavigation(session.Scenario), unicode: c.Unicode, noColor: noColor, initialModes: initialModes, drawingModeProbeRequired: c.DrawingModeProbeRequired, inputFocused: fixture.acceptsInput, progressExpected: session.Updates != nil, authenticator: session.Authenticator, authenticationPolicy: session.AuthenticationPolicy, runContext: runContext, accessCatalog: accessCatalog, accessProvider: session.AccessProvider, startupProvider: session.StartupProvider, clipboard: session.Clipboard, outcome: session.Outcome, defaultOutcome: session.Outcome, profiles: session.Profiles, profileOutcomes: session.ProfileOutcomes, profileViewGeneration: 1, cloudflare: session.Cloudflare, cloudflareOutcomes: session.CloudflareOutcomes, cloudflareGeneration: 1, certificates: session.Certificates, certificateOutcomes: session.CertificateOutcomes, certificateGeneration: 1, diagnostics: session.Diagnostics, diagnosticsScreen: diagnosticsScreenState{generation: 1}, lifecycle: session.Lifecycle, lifecycleOutcomes: session.LifecycleOutcomes, lifecycleScreen: lifecycleScreenState{generation: 1}, recovery: session.Recovery, recoveryOutcomes: session.RecoveryOutcomes, recoveryScreen: recoveryScreenState{generation: 1}, completeRemoval: session.CompleteRemoval, completeRemovalOutcomes: session.CompleteRemovalOutcomes, completeRemovalScreen: completeRemovalScreenState{generation: 1, action: 1, forwardOnly: session.Scenario == ForwardOnlyRemoval}},
+		model{width: c.Width, height: c.Height, scenario: session.Scenario, selected: selectedNavigation(session.Scenario), unicode: c.Unicode, noColor: noColor, initialModes: initialModes, drawingModeProbeRequired: c.DrawingModeProbeRequired, inputFocused: fixture.acceptsInput, progressExpected: session.Updates != nil, runContext: runContext, accessCatalog: accessCatalog, accessProvider: session.AccessProvider, startupProvider: session.StartupProvider, clipboard: session.Clipboard, outcome: session.Outcome, defaultOutcome: session.Outcome, profiles: session.Profiles, profileOutcomes: session.ProfileOutcomes, profileViewGeneration: 1, cloudflare: session.Cloudflare, cloudflareOutcomes: session.CloudflareOutcomes, cloudflareGeneration: 1, certificates: session.Certificates, certificateOutcomes: session.CertificateOutcomes, certificateGeneration: 1, diagnostics: session.Diagnostics, diagnosticsScreen: diagnosticsScreenState{generation: 1}, lifecycle: session.Lifecycle, lifecycleOutcomes: session.LifecycleOutcomes, lifecycleScreen: lifecycleScreenState{generation: 1}, recovery: session.Recovery, recoveryOutcomes: session.RecoveryOutcomes, recoveryScreen: recoveryScreenState{generation: 1}, completeRemoval: session.CompleteRemoval, completeRemovalOutcomes: session.CompleteRemovalOutcomes, completeRemovalScreen: completeRemovalScreenState{generation: 1, action: 1, forwardOnly: session.Scenario == ForwardOnlyRemoval}},
 		tea.WithContext(runContext),
 		tea.WithInput(session.Input),
 		tea.WithOutput(session.Output),
@@ -253,11 +230,6 @@ type model struct {
 	progressClock              progressClock
 	progressTicking            bool
 	privacySelection           int
-	limitedMode                bool
-	limitedSelection           int
-	authenticator              Authenticator
-	authenticationPolicy       AuthenticationPolicy
-	limitedReason              string
 	runContext                 context.Context
 	accessCatalog              accessCatalog
 	accessProvider             func(context.Context) AccessPresentation
@@ -271,7 +243,6 @@ type model struct {
 	defaultOutcome             OutcomeModule
 	changeReview               ChangeReview
 	changeSet                  DurableChangeSet
-	pendingPlanApply           bool
 	changeFeedback             string
 	correctionSelection        int
 	correctionAction           int
@@ -379,9 +350,6 @@ type probeTimeoutMsg struct{}
 type progressTickMsg time.Time
 type operationTickMsg time.Time
 type pasteGuardExpiredMsg struct{}
-type authenticationFinishedMsg struct {
-	result AuthenticationResult
-}
 type accessLoadedMsg struct{ access AccessPresentation }
 type startupLoadedMsg struct{ startup StartupPresentation }
 type copyFinishedMsg struct {
@@ -630,29 +598,6 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case pasteGuardExpiredMsg:
 		m.pasteGuard = false
-	case authenticationFinishedMsg:
-		if message.result == AuthenticationSucceeded {
-			if m.pendingPlanApply {
-				m.pendingPlanApply = false
-				return m, m.applyChangeCommand()
-			}
-			m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
-			m.limitedMode = false
-			m.accessUnlocked = len(m.accessCatalog.all) != 0
-			if m.startupProvider != nil {
-				return m, func() tea.Msg { return startupLoadedMsg{startup: m.startupProvider(m.runContext)} }
-			}
-			if m.accessProvider != nil {
-				return m, func() tea.Msg { return accessLoadedMsg{access: m.accessProvider(m.runContext)} }
-			}
-			if m.outcome != nil {
-				return m, m.inspectChangeCommand()
-			}
-			return m, nil
-		}
-		m.scenario, m.selected = LimitedDashboard, selectedNavigation(LimitedDashboard)
-		m.limitedMode, m.limitedSelection = true, 0
-		m.limitedReason = authenticationExplanation(message.result)
 	case accessLoadedMsg:
 		m.accessCatalog = message.access.catalog()
 		m.accessUnlocked = len(m.accessCatalog.all) != 0
@@ -732,7 +677,6 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.changeFeedback = message.result.Explanation
 			if m.changeReview.Plan != nil {
 				m.changeReview = ChangeReview{}
-				m.pendingPlanApply = false
 			}
 		}
 	case profilesViewMsg:
@@ -1070,11 +1014,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 							return changeReviewMsg{review: module.ConfirmReclamation(m.runContext, plan.Identity, approval)}
 						}
 					}
-					if m.authenticator == nil {
-						return m, m.applyChangeCommand()
-					}
-					m.pendingPlanApply = true
-					return m, m.authenticationCommand()
+					return m, m.applyChangeCommand()
 				}
 				if correction := m.changeReview.Correction; correction != nil {
 					if m.planPage+1 < m.correctionPageCount(correction) {
@@ -1142,51 +1082,10 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			case "enter", "space":
 				switch m.privacySelection {
 				case 0:
-					switch m.authenticationPolicy {
-					case DeferAuthenticationUntilApply:
-						m.scenario, m.selected = InstallationReview, selectedNavigation(InstallationReview)
-						if m.outcome != nil {
-							return m, m.enterChangeCommand()
-						}
-						return m, nil
-					case AuthenticateForAccess:
-						return m, m.authenticationCommand()
-					default:
-						m.scenario, m.selected = LimitedDashboard, selectedNavigation(LimitedDashboard)
-						m.limitedMode, m.limitedSelection = true, 0
-						m.limitedReason = "Authentication policy is unavailable."
-						return m, nil
-					}
+					return m.enterAuthenticatedOverview(true)
 				case 1:
-					m.scenario, m.selected = LimitedDashboard, selectedNavigation(LimitedDashboard)
-					m.limitedMode, m.limitedSelection = true, 0
-					m.limitedReason = "Owner selected the limited read-only dashboard."
+					return m.enterAuthenticatedOverview(false)
 				case 2:
-					return m, tea.Quit
-				}
-			}
-			return m, nil
-		}
-		if m.limitedMode {
-			if m.scenario != LimitedDashboard {
-				if message.String() == "esc" {
-					m.scenario, m.selected = LimitedDashboard, selectedNavigation(LimitedDashboard)
-				}
-				return m, nil
-			}
-			actions := m.legalLimitedActions()
-			switch message.String() {
-			case "up", "shift+tab":
-				m.limitedSelection = (m.limitedSelection + len(actions) - 1) % len(actions)
-			case "down", "tab":
-				m.limitedSelection = (m.limitedSelection + 1) % len(actions)
-			case "enter", "space":
-				switch actions[m.limitedSelection].action {
-				case retryAuthentication:
-					return m, m.authenticationCommand()
-				case viewSafeDiagnostics:
-					m.scenario, m.selected = ServicesDiagnosticsScreen, selectedNavigation(ServicesDiagnosticsScreen)
-				case exitLimitedDashboard:
 					return m, tea.Quit
 				}
 			}
@@ -1751,16 +1650,24 @@ func (m model) updateCompleteRemovalKey(message tea.KeyPressMsg) (tea.Model, tea
 	return m, nil
 }
 
-func (m model) legalLimitedActions() []limitedActionDefinition {
-	if m.authenticationPolicy == AuthenticateForAccess {
-		return limitedActions[:]
-	}
-	return limitedActions[1:]
-}
-
 func (m model) copySelectedAccessValue() tea.Cmd {
 	entry := m.accessCatalog.all[m.accessSelection]
 	return m.copyValue(entry.name, entry.value)
+}
+
+func (m model) enterAuthenticatedOverview(withAccess bool) (tea.Model, tea.Cmd) {
+	m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+	m.accessUnlocked = withAccess && len(m.accessCatalog.all) != 0
+	if m.startupProvider != nil {
+		return m, func() tea.Msg { return startupLoadedMsg{startup: m.startupProvider(m.runContext)} }
+	}
+	if withAccess && m.accessProvider != nil {
+		return m, func() tea.Msg { return accessLoadedMsg{access: m.accessProvider(m.runContext)} }
+	}
+	if m.outcome != nil {
+		return m, m.inspectChangeCommand()
+	}
+	return m, nil
 }
 
 func (m model) copyValue(name, value string) tea.Cmd {
@@ -1770,16 +1677,6 @@ func (m model) copyValue(name, value string) tea.Cmd {
 	return func() tea.Msg {
 		return copyFinishedMsg{name: name, result: m.clipboard.Copy(m.runContext, value)}
 	}
-}
-
-func (m model) authenticationCommand() tea.Cmd {
-	if m.authenticator == nil {
-		return func() tea.Msg { return authenticationFinishedMsg{result: AuthenticationFailed} }
-	}
-	command := &authenticationCommand{ctx: m.runContext, authenticator: m.authenticator}
-	return tea.Exec(command, func(error) tea.Msg {
-		return authenticationFinishedMsg{result: command.result}
-	})
 }
 
 func (m model) reviewChangeCommand() tea.Cmd {
@@ -2149,42 +2046,6 @@ func (m model) accessValueHit(x, y int) bool {
 	return x > navigationWidth && x < right && y >= frameRowsBeforeBody+accessRowsBeforeValue && y < frameRowsBeforeBody+accessRowsBeforeValue+len(lines)
 }
 
-type authenticationCommand struct {
-	ctx           context.Context
-	authenticator Authenticator
-	input         io.Reader
-	output        io.Writer
-	result        AuthenticationResult
-}
-
-func (command *authenticationCommand) SetStdin(input io.Reader)   { command.input = input }
-func (command *authenticationCommand) SetStdout(output io.Writer) { command.output = output }
-func (command *authenticationCommand) SetStderr(output io.Writer) {
-	if command.output == nil {
-		command.output = output
-	}
-}
-func (command *authenticationCommand) Run() error {
-	command.result = command.authenticator.Authenticate(command.ctx, command.input, command.output)
-	if command.result < AuthenticationSucceeded || command.result > AuthenticationExpired {
-		command.result = AuthenticationFailed
-	}
-	return nil
-}
-
-func authenticationExplanation(result AuthenticationResult) string {
-	switch result {
-	case AuthenticationDenied:
-		return "System authentication was denied."
-	case AuthenticationCancelled:
-		return "System authentication was cancelled."
-	case AuthenticationExpired:
-		return "System authentication expired."
-	default:
-		return "System authentication failed."
-	}
-}
-
 func (m *model) dismissExitConfirmation() tea.Cmd {
 	m.exitConfirm = false
 	var liveCommand, cloudflareCommand, operationCommand tea.Cmd
@@ -2396,8 +2257,8 @@ func (m model) frame() string {
 	currentFixture := scenarioFixture(m.scenario)
 	header, title := m.frameIdentity(currentFixture)
 	privacyChoices := []string{
-		"  Continue with authenticated Client Access Values",
-		"  Open the limited read-only dashboard",
+		"  Continue with Client Access Values",
+		"  Continue without Client Access Values",
 		"  Exit SBXR",
 	}
 	privacyChoices[m.privacySelection] = ">" + privacyChoices[m.privacySelection][1:]
@@ -2406,17 +2267,12 @@ func (m model) frame() string {
 		"Client Access Values may remain in terminal scrollback,",
 		"screenshots, screen recordings, SSH session logs, clipboard",
 		"history, and synchronized clipboards.", "",
-		"No Client Access Value or sudo prompt appears before your choice.", "",
+		"No Client Access Value appears before your choice.", "",
 		privacyChoices[0], privacyChoices[1], privacyChoices[2], "",
 		"Up/Down Select  Enter Continue  Ctrl+C Exit confirmation",
 	}
 	if m.scenario != PrivacyChoice {
 		main = append([]string{title, ""}, m.scenarioLines(currentFixture)...)
-	}
-	if m.scenario == LimitedDashboard {
-		if m.limitedReason != "" {
-			main[2] = m.limitedReason
-		}
 	}
 	if m.exitConfirm {
 		main = []string{
@@ -2460,7 +2316,7 @@ func (m model) frame() string {
 		left, right := "", ""
 		if row < len(navigation) {
 			prefix := "  "
-			if row == m.selected && !m.inputFocused && !m.accessFocused && m.scenario != PrivacyChoice && !m.limitedMode {
+			if row == m.selected && !m.inputFocused && !m.accessFocused && m.scenario != PrivacyChoice {
 				prefix = "> "
 			}
 			left = prefix + navigation[row].label
@@ -2740,17 +2596,6 @@ func (m model) scenarioLines(current fixture) []string {
 			lines = append(lines, "", m.copyFeedback)
 		}
 		return append(lines, "", "Clipboard history may retain copied values.")
-	}
-	if m.scenario == LimitedDashboard {
-		lines := append([]string(nil), current.lines...)
-		for index, action := range m.legalLimitedActions() {
-			prefix := "  "
-			if index == m.limitedSelection {
-				prefix = "> "
-			}
-			lines = append(lines, prefix+action.label)
-		}
-		return lines
 	}
 	if m.progressExpected && current.progress != NoProgress {
 		if !m.progressReceived {

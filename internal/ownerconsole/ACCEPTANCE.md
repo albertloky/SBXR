@@ -56,16 +56,17 @@ go test . -run '^Test(RepositoryDependencies|OwnerConsolePresentationBoundary)$'
 
 Require only the approved Bubble Tea v2, Lip Gloss v2, and reviewed QR production stack. The pseudo-terminal package is test-only. Reject product-Module imports, host mutation, arbitrary commands, State persistence, provider logic, release verification, diagnostics collection, recovery algorithms, or privileged logic inside Owner Console.
 
-### OC-ACCESS-01 — Privacy and ordinary system authentication
+### OC-ACCESS-01 — Authenticated root launch and Access privacy
 
 Run:
 
 ```sh
-go test ./internal/ownerconsole -run '^TestRunMakesThePerLaunchPrivacyAndAuthenticationDecisionBeforeAccess$' -count=1
-go test ./cmd/sbxr -run '^TestSystemAuthenticationReportsEveryOutcome$' -count=1
+go test ./cmd/sbxr-release -run '^TestGeneratedBootstrap(AdmitsARootOwnerLaunchIdentityWithoutSudo|RoutesOwnerLaunchThroughThePrivateUbuntuAdapter|ReturnsOneFixedRefusalWhenLaunchAuthenticationFails)$' -count=1
+go test ./cmd/sbxr -run '^TestRootOwnerConsoleStartsManagedWorkWithoutASecondSudo$' -count=1
+go test ./internal/ownerconsole -run '^TestSecurityPresentationUsesTheAuthenticatedRootRuntimeModel$' -count=1
 ```
 
-Require the warning on every launch before sudo or a Client Access Value. Require all three choices, one normal system authentication only after the authenticated choice on an existing installation, and no authentication before fresh-install Apply. Require successful authentication to enter authenticated Overview. Require denied, cancelled, failed, or expired authentication to enter explained limited mode without Client Access Values or privileged presentation.
+Require root to start the complete Owner Console directly. Require a non-root Owner Launch Identity to authenticate before SBXR shows a Console screen, and require refusal to make no change. Require the root Console to start managed work without a second sudo handoff. Require the Security presentation to describe one authenticated runtime without a root warning banner. Client Access Values remain behind the privacy choice inside that already authenticated Console.
 
 ### OC-ACCESS-02 — Dedicated Access, copy, and QR
 
@@ -124,10 +125,10 @@ For a Reclaimable VPS review, require the exact phrase `RECLAIM THIS VPS` throug
 Run:
 
 ```sh
-go test ./internal/ownerconsole -run '^TestRun(RejectsStaleApprovalAndRebuildsAPlan|ShowsChangeSetProgressAndRequestsSafeCancellation|RelaunchShowsOnlyTypedChangeSetResult|ApprovedWorkUsesAnOperationContextIndependentOfTheConsole|DisconnectCancelsPendingAuthenticationBeforeApply|MalformedOutcomeFactsNeverInventADomainResult)$' -count=1
+go test ./internal/ownerconsole -run '^TestRun(RejectsStaleApprovalAndRebuildsAPlan|ShowsChangeSetProgressAndRequestsSafeCancellation|RelaunchShowsOnlyTypedChangeSetResult|ApprovedWorkUsesAnOperationContextIndependentOfTheConsole|MalformedOutcomeFactsNeverInventADomainResult)$' -count=1
 ```
 
-Require Apply to receive only the exact reviewed Plan identity after authentication. Require stale or reused refusal to rebuild a fresh Plan. Require approved work to remain independent of Console exit, explicit cancellation to wait for a safe rollback checkpoint, and relaunch to show only typed active Change Set, success, rollback, or Recovery Required facts without inference from process exit or service reachability.
+Require Apply to receive only the exact reviewed Plan identity from the already authenticated root Console. Require stale or reused refusal to rebuild a fresh Plan. Require approved work to remain independent of Console exit, explicit cancellation to wait for a safe rollback checkpoint, and relaunch to show only typed active Change Set, success, rollback, or Recovery Required facts without inference from process exit or service reachability.
 
 ### OC-PROFILES-01 — Six profile states and actions
 
@@ -154,10 +155,10 @@ Require the universal, v2rayN, Shadowrocket, Karing, Mihomo, and sing-box repres
 Run:
 
 ```sh
-go test ./internal/ownerconsole -run '^TestRun(LiveProfileCheckRequiresAuthenticationAndShowsAutomaticPerProfileTraffic|LiveProfileCheckShowsURLAndAutomaticProgressWhileRunning|LongLiveProfileCheckURLKeepsEveryResultAndBackAtMinimumSize|BackCancelsAndErasesSessionOnlyLiveProfileCheck|CompletedLiveProfileCheckWaitsBehindExitConfirmation|LateProfileResultsNeverMoveOrRelabelTheCurrentScreen|CancelledLiveProfileCheckCannotOverwriteANewerRun|RefusesUnsafeProfileAndLiveCheckFacts|RefusesInvalidLiveProfileCheckStreams|NilLiveStreamFailsSafeAndBackCancelsANonClosingStream)$' -count=1
+go test ./internal/ownerconsole -run '^TestRun(LiveProfileCheckRequiresPrivacyChoiceAndShowsAutomaticPerProfileTraffic|LiveProfileCheckShowsURLAndAutomaticProgressWhileRunning|LongLiveProfileCheckURLKeepsEveryResultAndBackAtMinimumSize|BackCancelsAndErasesSessionOnlyLiveProfileCheck|CompletedLiveProfileCheckWaitsBehindExitConfirmation|LateProfileResultsNeverMoveOrRelabelTheCurrentScreen|CancelledLiveProfileCheckCannotOverwriteANewerRun|RefusesUnsafeProfileAndLiveCheckFacts|RefusesInvalidLiveProfileCheckStreams|NilLiveStreamFailsSafeAndBackCancelsANonClosingStream)$' -count=1
 ```
 
-Require Live Profile Check to remain unavailable before this launch's successful authentication and outside Managed state. Require one typed Module request to stream one temporary test URL while the check is active, same-source QR only when it fits, spinner and monotonic elapsed time, and automatic pending then authenticated uplink and downlink results for all six profiles. Require an explicit session-only and memory-only explanation, cancellation and erasure on Back, no manual success action, no effect on Managed state, and fail-safe refusal of Infrastructure Secret markers or malformed typed facts.
+Require Live Profile Check to remain unavailable before this root Console launch's Client Access privacy choice and outside Managed state. Require one typed Module request to stream one temporary test URL while the check is active, same-source QR only when it fits, spinner and monotonic elapsed time, and automatic pending then authenticated uplink and downlink results for all six profiles. Require an explicit session-only and memory-only explanation, cancellation and erasure on Back, no manual success action, no effect on Managed state, and fail-safe refusal of Infrastructure Secret markers or malformed typed facts.
 
 ### OC-PROVIDER-01 — Cloudflare walkthrough, credential, and correction journeys
 

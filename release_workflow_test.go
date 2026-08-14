@@ -6,18 +6,21 @@ import (
 	"testing"
 )
 
-func TestCandidateWorkflowPublishesOnlyAQualifiedInstallerAcceptanceRecord(t *testing.T) {
+func TestCandidateWorkflowPublishesOnlyAQualifiedRootRuntimeAcceptanceRecord(t *testing.T) {
 	body, err := os.ReadFile(".github/workflows/candidate.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	workflow := string(body)
 	for _, required := range []string{
-		"git diff --quiet v1.0.1...HEAD --",
-		"internal/connectionprofiles",
-		"internal/subscriptionpublication",
-		"internal/subscriptionserving",
+		`test "$(git rev-parse HEAD^)" = 4138f75929afbf3ae11e7f635201a053350b9edb`,
+		"git diff --quiet v1.0.6...HEAD --",
+		"internal/connectionprofiles/registry.go",
+		"internal/subscriptionpublication/render.go",
 		"cmd/sbxr/client_access_outcome.go",
+		"Integrated Ubuntu Verification: Not required - ADR-0010 privilege and service-identity scope",
+		"Codex Live Acceptance | Not required | ADR-0010 privilege and service-identity scope",
+		"Owner Acceptance | Not required | ADR-0010 privilege and service-identity scope",
 		"go run ./cmd/sbxr-release acceptance",
 		"-directory dist",
 		"-output acceptance-record.md",
@@ -52,12 +55,12 @@ func TestStableWorkflowReverifiesTheExactPublicInstallerBeforeREADMEActivation(t
 		"releases/latest/download/install.sh",
 		"releases/download/$RELEASE_TAG/install.sh",
 		"cmp latest-install.sh pinned-install.sh",
-		"Status: Qualified - installer-only automated exception",
+		"Status: Qualified - root-runtime package policy",
 		"Release index SHA-256:",
 		"test \"$(jq '.assets | length' release.json)\" = 6",
-		"python3 .github/workflows/stable_bootstrap.py",
-		"SBXR bootstrap: launching Owner Console",
-		"Not installed",
+		"go test ./cmd/sbxr-release -run '^TestGeneratedBootstrap' -count=1",
+		"Public bootstrap package gates: Passed",
+		"Integrated Ubuntu Verification: Not required",
 		"test ! -e /usr/local/bin/sbxr",
 		"test ! -e /var/lib/sbxr",
 		"SECRET-MARKER|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer ",
@@ -69,17 +72,8 @@ func TestStableWorkflowReverifiesTheExactPublicInstallerBeforeREADMEActivation(t
 	if strings.Contains(workflow, "jq -r .body release.json > acceptance-record.md") {
 		t.Fatal("stable workflow adds a byte to the retained Acceptance Record")
 	}
-	driver, err := os.ReadFile(".github/workflows/stable_bootstrap.py")
-	if err != nil {
-		t.Fatal(err)
-	}
-	childSize := strings.Index(string(driver), "if pid == 0:\n    fcntl.ioctl(1, termios.TIOCSWINSZ")
-	childExec := strings.Index(string(driver), "    os.execve(")
-	if childSize < 0 || childExec < 0 || childSize > childExec {
-		t.Fatal("stable bootstrap can inspect the PTY before its size is set")
-	}
-	if !strings.Contains(string(driver), `b"\x1b[?1;2$y`) {
-		t.Fatal("stable bootstrap does not prove alternate-screen support")
+	if strings.Contains(workflow, "stable_bootstrap.py") || strings.Contains(workflow, "Supported Ubuntu Owner Console launch: Passed") {
+		t.Fatal("stable workflow claimed an automated Ubuntu launch")
 	}
 }
 

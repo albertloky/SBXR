@@ -25,7 +25,7 @@ The project shall be optimized exclusively for:
 •	No quotas, billing, groups, invitations, or account administration
 The installed management command shall be:
 sbxr
-On an existing installation, running sbxr automatically requests sudo authentication once when the VPS requires it, then opens the terminal interface; the Owner never has to type sudo sbxr manually. A short-lived privileged reader supplies only the approved dashboard Client Access Values, while the TUI itself remains non-root and Infrastructure Secrets remain root-only. If authentication is denied, SBXR opens a limited read-only dashboard without Client Access Values. During fresh installation, download, verification, preflight, and review remain unprivileged; sudo is requested only after the Owner approves the installation Plan. Closing the interface does not stop the proxy services.
+On an existing installation, root starts `sbxr` directly. A sudo-authorized non-root Owner Launch Identity authenticates before SBXR shows a screen. The complete Owner Console then runs as root. If authentication is denied, SBXR makes no change and shows no Console. The same root execution model applies during fresh installation. Closing the interface does not stop the proxy services.
 2. Running services
 The normal installation contains:
 xray.service
@@ -478,9 +478,9 @@ Raw URI
 sing-box JSON
 Mihomo YAML
 20. Security ownership and trust boundaries
-The Owner Console remains non-root. Running sbxr requests sudo once when required; short-lived privileged processes may read approved Client Access Values or apply a validated, revision-bound Plan, but may not accept arbitrary commands or paths. Denied authentication yields a limited read-only dashboard.
+The complete Owner Console runs as root. Root starts it directly. A sudo-authorized non-root Owner Launch Identity authenticates before SBXR shows a Console screen. Denied authentication makes no change.
 
-Xray, sing-box, cloudflared, and Subscription Serving run as separate non-root identities. Xray and sing-box receive only `CAP_NET_BIND_SERVICE` when an approved selected port below 1024 requires it. Root-only directories and files use `0700` and `0600`; root-owned service-readable directories and files use `0750` and `0640`. Each service reads only its own prepared configuration and credentials. Secrets never appear in command arguments or environment variables; cloudflared uses `--token-file`.
+Xray, sing-box, cloudflared, and Subscription Serving use `User=root` and `Group=root` without separate service identities. Xray and sing-box receive only `CAP_NET_BIND_SERVICE` when an approved selected port below 1024 requires it. Runtime service directories and files use `root:root 0755` and `root:root 0644`. Every local Linux identity can read that runtime material. Desired State, Cloudflare management credentials, transaction journals, recovery material, and health events remain root-only. Secrets never appear in command arguments or environment variables; cloudflared uses `--token-file`.
 
 The authenticated dashboard deliberately displays all Client Access Values by default. Infrastructure Secrets never appear on the dashboard. Cloudflare credentials may reveal only their first and last four characters; certificate private keys, REALITY private keys, ACME account material, recovery journals, and Rollback Snapshot contents are never revealable. Redaction, verified releases, SSH preservation, safe REALITY targets, TLS verification, private origins, service isolation, and file permissions cannot be bypassed. Every refusal includes an exact corrective work plan, with a separate reviewable Plan for any correction SBXR can safely perform.
 

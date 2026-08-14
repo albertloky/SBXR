@@ -82,7 +82,7 @@ func TestRunShowsOnlyTheTypedNativeValidationResult(t *testing.T) {
 func TestRunOpensOnlyTheSelectedProfileInAuthenticatedAccess(t *testing.T) {
 	stub := &profilesStub{view: completeProfilesPresentation()}
 	steps := []string{"\r", "", strings.Repeat("\x1b[B", 2) + "\r", "", "\x1b[B\r", "", "\x03\r"}
-	got := runTranscriptSteps(t, Session{Profiles: stub, ProfileOutcomes: stub, Access: profileClientAccessPresentation(), Authenticator: &authenticationStub{result: AuthenticationSucceeded}, AuthenticationPolicy: AuthenticateForAccess}, 80, 24, steps...)
+	got := runTranscriptSteps(t, Session{Profiles: stub, ProfileOutcomes: stub, Access: profileClientAccessPresentation()}, 80, 24, steps...)
 	if !strings.Contains(got, "CLIENT-XHTTP-MARKER") || strings.Contains(got, "CLIENT-REALITY-MARKER") {
 		t.Fatalf("Open in Access did not focus only the selected profile\n%s", got)
 	}
@@ -152,7 +152,7 @@ func TestRunRefusesUnsafeProfileAndLiveCheckFacts(t *testing.T) {
 	unsafeLive.TemporaryURL = "https://example.test/INFRASTRUCTURE-SECRET-MARKER-COMPLETE-TOKEN"
 	stub := &profilesStub{view: completeProfilesPresentation(), live: unsafeLive}
 	steps := []string{"\r", "", strings.Repeat("\x1b[B", 5) + "\r", "", strings.Repeat("\x1b[B", 4) + "\r", "", "\x03\r"}
-	liveOutput := runTranscriptSteps(t, Session{Profiles: stub, ProfileOutcomes: stub, Access: profileClientAccessPresentation(), Authenticator: &authenticationStub{result: AuthenticationSucceeded}, AuthenticationPolicy: AuthenticateForAccess}, 80, 24, steps...)
+	liveOutput := runTranscriptSteps(t, Session{Profiles: stub, ProfileOutcomes: stub, Access: profileClientAccessPresentation()}, 80, 24, steps...)
 	if strings.Contains(liveOutput, "INFRASTRUCTURE-SECRET-MARKER") || !strings.Contains(liveOutput, "Live Profile Check facts are unavailable") {
 		t.Fatalf("unsafe Live Profile Check facts crossed the Run boundary\n%s", liveOutput)
 	}
@@ -261,18 +261,18 @@ func pendingLiveProfileCheck(url string) LiveProfileCheckPresentation {
 	return LiveProfileCheckPresentation{TemporaryURL: url, Results: results}
 }
 
-func TestRunLiveProfileCheckRequiresAuthenticationAndShowsAutomaticPerProfileTraffic(t *testing.T) {
+func TestRunLiveProfileCheckRequiresPrivacyChoiceAndShowsAutomaticPerProfileTraffic(t *testing.T) {
 	blocked := &profilesStub{view: completeProfilesPresentation(), live: completeLiveProfileCheck()}
 	blockedOutput := runTranscriptSteps(t, Session{Scenario: SubscriptionScreen, Profiles: blocked, ProfileOutcomes: blocked, Access: profileClientAccessPresentation()}, 80, 24, "", strings.Repeat("\x1b[B", 4)+"\r", "", "\x03\r")
 	if blocked.liveCalls != 0 || strings.Contains(blockedOutput, "LIVE-TEMP-MARKER") {
-		t.Fatalf("Live Profile Check started without this launch's authentication\n%s", blockedOutput)
+		t.Fatalf("Live Profile Check started before this launch's Client Access privacy choice\n%s", blockedOutput)
 	}
 
 	for _, size := range []struct{ width, height int }{{80, 24}, {120, 36}} {
 		t.Run(fmt.Sprintf("%dx%d", size.width, size.height), func(t *testing.T) {
 			stub := &profilesStub{view: completeProfilesPresentation(), live: completeLiveProfileCheck()}
 			steps := []string{"\r", "", strings.Repeat("\x1b[B", 5) + "\r", "", strings.Repeat("\x1b[B", 4) + "\r", "", "\x1b[27u", "", "\x03\r"}
-			got := runTranscriptSteps(t, Session{Profiles: stub, ProfileOutcomes: stub, Access: profileClientAccessPresentation(), Authenticator: &authenticationStub{result: AuthenticationSucceeded}, AuthenticationPolicy: AuthenticateForAccess}, size.width, size.height, steps...)
+			got := runTranscriptSteps(t, Session{Profiles: stub, ProfileOutcomes: stub, Access: profileClientAccessPresentation()}, size.width, size.height, steps...)
 			if stub.liveCalls != 1 {
 				t.Fatalf("Live Profile Check calls = %d", stub.liveCalls)
 			}
@@ -300,7 +300,7 @@ func TestRunLiveProfileCheckShowsURLAndAutomaticProgressWhileRunning(t *testing.
 		steps = append(steps, "")
 	}
 	steps = append(steps, "\x03\r")
-	got := runTranscriptSteps(t, Session{Profiles: stub, ProfileOutcomes: stub, Access: profileClientAccessPresentation(), Authenticator: &authenticationStub{result: AuthenticationSucceeded}, AuthenticationPolicy: AuthenticateForAccess}, 120, 36, steps...)
+	got := runTranscriptSteps(t, Session{Profiles: stub, ProfileOutcomes: stub, Access: profileClientAccessPresentation()}, 120, 36, steps...)
 	for _, want := range []string{"LIVE-TEMP-MARKER", "QR - same temporary test URL", "REALITY Vision PENDING", "AnyTLS PENDING", "Running 00:00", "Running 00:01", "Complete"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("staged Live Profile Check omitted %q\n%s", want, got)
@@ -336,7 +336,7 @@ func TestRunRefusesInvalidLiveProfileCheckStreams(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			stub := &profilesStub{view: completeProfilesPresentation(), liveUpdates: test.updates}
 			steps := []string{"\r", "", strings.Repeat("\x1b[B", 5) + "\r", "", strings.Repeat("\x1b[B", 4) + "\r", "", "", "\x03\r"}
-			got := runTranscriptSteps(t, Session{Profiles: stub, ProfileOutcomes: stub, Access: profileClientAccessPresentation(), Authenticator: &authenticationStub{result: AuthenticationSucceeded}, AuthenticationPolicy: AuthenticateForAccess}, 80, 24, steps...)
+			got := runTranscriptSteps(t, Session{Profiles: stub, ProfileOutcomes: stub, Access: profileClientAccessPresentation()}, 80, 24, steps...)
 			if !strings.Contains(got, "Live Profile Check facts are unavailable") {
 				t.Fatalf("invalid Live Profile Check stream was accepted\n%s", got)
 			}
@@ -348,14 +348,14 @@ func TestRunNilLiveStreamFailsSafeAndBackCancelsANonClosingStream(t *testing.T) 
 	start := []string{"\r", "", strings.Repeat("\x1b[B", 5) + "\r", "", strings.Repeat("\x1b[B", 4) + "\r", ""}
 	t.Run("nil", func(t *testing.T) {
 		stub := &profilesStub{view: completeProfilesPresentation(), nilLive: true}
-		got := runTranscriptSteps(t, Session{Profiles: stub, ProfileOutcomes: stub, Access: profileClientAccessPresentation(), Authenticator: &authenticationStub{result: AuthenticationSucceeded}, AuthenticationPolicy: AuthenticateForAccess}, 80, 24, append(start, "", "\x03\r")...)
+		got := runTranscriptSteps(t, Session{Profiles: stub, ProfileOutcomes: stub, Access: profileClientAccessPresentation()}, 80, 24, append(start, "", "\x03\r")...)
 		if !strings.Contains(got, "Live Profile Check facts are unavailable") {
 			t.Fatalf("nil Live Profile Check stream did not fail safe\n%s", got)
 		}
 	})
 	t.Run("non-closing", func(t *testing.T) {
 		stub := &profilesStub{view: completeProfilesPresentation(), nonClosingLive: true, liveCancelled: make(chan struct{})}
-		got := runTranscriptSteps(t, Session{Profiles: stub, ProfileOutcomes: stub, Access: profileClientAccessPresentation(), Authenticator: &authenticationStub{result: AuthenticationSucceeded}, AuthenticationPolicy: AuthenticateForAccess}, 80, 24, append(start, "\x1b[27u", "", "\x03\r")...)
+		got := runTranscriptSteps(t, Session{Profiles: stub, ProfileOutcomes: stub, Access: profileClientAccessPresentation()}, 80, 24, append(start, "\x1b[27u", "", "\x03\r")...)
 		select {
 		case <-stub.liveCancelled:
 		default:
@@ -372,7 +372,7 @@ func TestRunLongLiveProfileCheckURLKeepsEveryResultAndBackAtMinimumSize(t *testi
 	check.TemporaryURL = "https://test/" + strings.Repeat("a", 110)
 	stub := &profilesStub{view: completeProfilesPresentation(), live: check}
 	steps := []string{"\r", "", strings.Repeat("\x1b[B", 5) + "\r", "", strings.Repeat("\x1b[B", 4) + "\r", "", "\x03\r"}
-	got := runTranscriptSteps(t, Session{Profiles: stub, ProfileOutcomes: stub, Access: profileClientAccessPresentation(), Authenticator: &authenticationStub{result: AuthenticationSucceeded}, AuthenticationPolicy: AuthenticateForAccess}, 80, 24, steps...)
+	got := runTranscriptSteps(t, Session{Profiles: stub, ProfileOutcomes: stub, Access: profileClientAccessPresentation()}, 80, 24, steps...)
 	for _, want := range []string{"REALITY Vision auth=yes up=yes down=yes", "AnyTLS auth=yes up=yes down=yes", "> Back"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("long temporary URL hid %q at minimum size\n%s", want, got)
@@ -383,7 +383,7 @@ func TestRunLongLiveProfileCheckURLKeepsEveryResultAndBackAtMinimumSize(t *testi
 func TestRunBackCancelsAndErasesSessionOnlyLiveProfileCheck(t *testing.T) {
 	stub := &profilesStub{view: completeProfilesPresentation(), liveStarted: make(chan struct{}), liveCancelled: make(chan struct{})}
 	steps := []string{"\r", "", strings.Repeat("\x1b[B", 5) + "\r", "", strings.Repeat("\x1b[B", 4) + "\r", "", "\x1b[27u", "", "\x03\r"}
-	got := runTranscriptSteps(t, Session{Profiles: stub, ProfileOutcomes: stub, Access: profileClientAccessPresentation(), Authenticator: &authenticationStub{result: AuthenticationSucceeded}, AuthenticationPolicy: AuthenticateForAccess}, 80, 24, steps...)
+	got := runTranscriptSteps(t, Session{Profiles: stub, ProfileOutcomes: stub, Access: profileClientAccessPresentation()}, 80, 24, steps...)
 	select {
 	case <-stub.liveCancelled:
 	default:
@@ -399,7 +399,7 @@ func TestRunCompletedLiveProfileCheckWaitsBehindExitConfirmation(t *testing.T) {
 	check.TemporaryURL = "https://test/EXIT-PENDING-MARKER"
 	stub := &profilesStub{view: completeProfilesPresentation(), live: check, liveDelay: 80 * time.Millisecond}
 	steps := []string{"\r", "", strings.Repeat("\x1b[B", 5) + "\r", "", strings.Repeat("\x1b[B", 4) + "\r", "\x03", "", "", "", "", "", "\x1b[27u", "", "\x03\r"}
-	got := runTranscriptSteps(t, Session{Profiles: stub, ProfileOutcomes: stub, Access: profileClientAccessPresentation(), Authenticator: &authenticationStub{result: AuthenticationSucceeded}, AuthenticationPolicy: AuthenticateForAccess}, 80, 24, steps...)
+	got := runTranscriptSteps(t, Session{Profiles: stub, ProfileOutcomes: stub, Access: profileClientAccessPresentation()}, 80, 24, steps...)
 	exit := strings.Index(got, "Exit SBXR?")
 	result := strings.Index(got, "EXIT-PENDING-MARKER")
 	afterExit := ""
@@ -439,7 +439,7 @@ func TestRunCancelledLiveProfileCheckCannotOverwriteANewerRun(t *testing.T) {
 	current.TemporaryURL = "https://test/CURRENT-B-MARKER"
 	stub := &profilesStub{view: completeProfilesPresentation(), liveReplies: []LiveProfileCheckPresentation{late, current}, lateLiveRelease: make(chan struct{})}
 	steps := []string{"\r", "", strings.Repeat("\x1b[B", 5) + "\r", "", strings.Repeat("\x1b[B", 4) + "\r", "", "\x1b[27u", "", strings.Repeat("\x1b[B", 4) + "\r", "", "", "\x03\r"}
-	got := runTranscriptSteps(t, Session{Profiles: stub, ProfileOutcomes: stub, Access: profileClientAccessPresentation(), Authenticator: &authenticationStub{result: AuthenticationSucceeded}, AuthenticationPolicy: AuthenticateForAccess}, 80, 24, steps...)
+	got := runTranscriptSteps(t, Session{Profiles: stub, ProfileOutcomes: stub, Access: profileClientAccessPresentation()}, 80, 24, steps...)
 	if stub.liveCalls != 2 || strings.Contains(got, "LATE-A-MARKER") || !strings.Contains(got, "CURRENT-B-MARKER") {
 		t.Fatalf("a cancelled Live Profile Check overwrote its newer run: calls=%d\n%s", stub.liveCalls, got)
 	}

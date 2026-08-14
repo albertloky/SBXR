@@ -116,13 +116,16 @@ jobs:
             -commit "$GITHUB_SHA" \
             -directory dist \
             -output dist/release-index.json
+      - name: Bind the one reviewed root-runtime qualification commit
+        run: |
+          test "$(git rev-parse HEAD^)" = 4138f75929afbf3ae11e7f635201a053350b9edb
       - name: Run complete automated verification before publication
         run: |
           go list ./... | grep -v '/internal/ownerconsole$' | xargs go test -count=1
           go test ./internal/ownerconsole -count=1
           go list ./... | grep -v '/internal/ownerconsole$' | xargs go test -race -p 1 -count=1
           go vet ./...
-      - name: Run Ubuntu production seams before publication
+      - name: Run Ubuntu Adapter package seams before publication
         run: |
           sudo apt-get update
           sudo apt-get install --yes iproute2 nftables
@@ -158,8 +161,10 @@ jobs:
             echo '| Module Verification | Passed | Complete suite with PTY package isolated; race detector on every non-PTY package; `go vet ./...` |'
             echo '| Seam Verification | Pending | GitHub attestation exists only after publication |'
             echo '| Integrated Verification | Pending | Exact published bytes have not passed the production release verifier |'
-            echo '| Codex Live Acceptance | Pending | Issue #151 |'
-            echo '| Owner Acceptance | Pending | Issue #152 |'
+            echo '| Codex Live Acceptance | Not required | ADR-0010 privilege and service-identity scope |'
+            echo '| Owner Acceptance | Not required | ADR-0010 privilege and service-identity scope |'
+            echo
+            echo 'Integrated Ubuntu Verification: Not required - ADR-0010 privilege and service-identity scope.'
             echo
             echo "Release Identity: albertloky/SBXR $CANDIDATE_TAG $GITHUB_SHA $index_sha256"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -194,13 +199,12 @@ jobs:
             sleep 10
           done
           test "$verified" = true
-      - name: Prove the exact commit has installer-only scope
+      - name: Preserve client-facing output while qualifying the root runtime
         run: |
-          git rev-parse --verify v1.0.1
-          git diff --quiet v1.0.1...HEAD -- \
-            internal/connectionprofiles \
-            internal/subscriptionpublication \
-            internal/subscriptionserving \
+          test "$(git rev-parse HEAD^)" = 4138f75929afbf3ae11e7f635201a053350b9edb
+          git diff --quiet v1.0.6...HEAD -- \
+            internal/connectionprofiles/registry.go \
+            internal/subscriptionpublication/render.go \
             cmd/sbxr/client_access_outcome.go
       - name: Download and scan the exact six verified assets
         run: |

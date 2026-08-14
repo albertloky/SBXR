@@ -83,7 +83,7 @@ func TestVerifyCandidateRefusesInvalidTagBeforeExternalVerification(t *testing.T
 	}
 }
 
-func TestAutomatedAcceptanceRecordBindsOneExactInstallerRelease(t *testing.T) {
+func TestAutomatedAcceptanceRecordBindsOneExactRootRuntimeRelease(t *testing.T) {
 	root := t.TempDir()
 	for _, name := range []string{"install.sh", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz", "sbxr-components-linux-amd64.tar.gz", "sbxr-components-linux-arm64.tar.gz"} {
 		if err := os.WriteFile(filepath.Join(root, name), []byte("qualified "+name), 0o600); err != nil {
@@ -104,13 +104,18 @@ func TestAutomatedAcceptanceRecordBindsOneExactInstallerRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(body)
-	for _, want := range []string{"# SBXR automated Acceptance Record", "Status: Qualified - installer-only automated exception", "Repository: albertloky/SBXR", "Tag: v1.0.2", "Commit: " + commit, "Recorded at: 2026-08-13T03:04:05Z", "Runner: GitHub Actions ubuntu-24.04", "Go toolchain: go1.26.5", "Public verifier: 1.3.0", "Stable result code: RELEASE-INSTALLER-AUTOMATED-QUALIFICATION", "| Module Verification | Passed |", "| Seam Verification | Passed |", "| Integrated Verification | Passed |", "| Codex Live Acceptance | Not required | ADR-0007 installer-only scope", "| Owner Acceptance | Not required | No client-facing change", "No live VPS, provider, maintained-client, or Owner evidence was performed.", "install.sh", "release-index.json", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz", "sbxr-components-linux-amd64.tar.gz", "sbxr-components-linux-arm64.tar.gz", "https://github.com/albertloky/SBXR/actions/runs/123456789", "Any asset, attestation, repository, tag, commit, release-index digest, required check, or client-facing change invalidates this record."} {
+	for _, want := range []string{"# SBXR automated Acceptance Record", "Status: Qualified - root-runtime package policy", "Repository: albertloky/SBXR", "Tag: v1.0.2", "Commit: " + commit, "Recorded at: 2026-08-13T03:04:05Z", "Runner: GitHub Actions ubuntu-24.04", "Go toolchain: go1.26.5", "Public verifier: 1.3.0", "Stable result code: RELEASE-ROOT-RUNTIME-PACKAGE-QUALIFICATION", "| Module Verification | Passed |", "| Seam Verification | Passed |", "| Integrated Verification | Passed | Package composition through existing product Interfaces |", "Integrated Ubuntu Verification: Not required - ADR-0010 privilege and service-identity scope; no automated Ubuntu integration evidence claimed.", "| Codex Live Acceptance | Not required | ADR-0010 privilege and service-identity scope; no live VPS evidence claimed |", "| Owner Acceptance | Not required | ADR-0010 privilege and service-identity scope; no maintained-client evidence claimed |", "No Integrated Ubuntu Verification, live VPS, provider, maintained-client, or Owner evidence was performed.", "install.sh", "release-index.json", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz", "sbxr-components-linux-amd64.tar.gz", "sbxr-components-linux-arm64.tar.gz", "https://github.com/albertloky/SBXR/actions/runs/123456789", "Any asset, attestation, repository, tag, commit, release-index digest, qualification scope, required check, or client-facing change invalidates this record."} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("Acceptance Record omitted %q\n%s", want, text)
 		}
 	}
 	if strings.Contains(text, "SECRET-MARKER") {
 		t.Fatal("Acceptance Record exposed a secret marker")
+	}
+	for _, obsolete := range []string{"installer-only automated exception", "ADR-0007 installer-only scope"} {
+		if strings.Contains(text, obsolete) {
+			t.Fatalf("Acceptance Record retained obsolete %q", obsolete)
+		}
 	}
 }
 

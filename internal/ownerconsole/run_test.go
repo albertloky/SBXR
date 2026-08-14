@@ -116,7 +116,7 @@ func TestRunRevealsOnlyAuthenticatedDedicatedAccessValues(t *testing.T) {
 		steps = append(steps, "\x1b[B")
 	}
 	steps = append(steps, "\x03\r")
-	got := runTranscriptSteps(t, Session{Authenticator: &authenticationStub{result: AuthenticationSucceeded}, Access: access}, 80, 24, steps...)
+	got := runTranscriptSteps(t, Session{Access: access}, 80, 24, steps...)
 	for _, marker := range []string{"REALITY-MARKER", "XHTTP-MARKER", "WEBSOCKET-MARKER", "HYSTERIA2-MARKER", "TUIC-MARKER", "ANYTLS-MARKER", "SUBSCRIPTION-MARKER", "V2RAYN-MARKER", "SHADOWROCKET-MARKER", "KARING-MARKER", "MIHOMO-MARKER", "SINGBOX-MARKER"} {
 		if !strings.Contains(got, marker) {
 			t.Fatalf("authenticated Access omitted %q\n%s", marker, got)
@@ -133,7 +133,7 @@ func TestRunRejectsInfrastructureSecretMarkerAtTheAccessBoundary(t *testing.T) {
 	access := clientAccessPresentation()
 	access.Links[3].URL = "https://INFRASTRUCTURE-SECRET-MARKER-COMPLETE-TOKEN@example.test/karing"
 	clipboard := &clipboardStub{result: CopyConfirmed}
-	got := runTranscriptSteps(t, Session{Authenticator: &authenticationStub{result: AuthenticationSucceeded}, Clipboard: clipboard, Access: access}, 80, 24, "\r", "", "\x1b[B", "\r", "\r", "\x03\r")
+	got := runTranscriptSteps(t, Session{Clipboard: clipboard, Access: access}, 80, 24, "\r", "", "\x1b[B", "\r", "\r", "\x03\r")
 	if strings.Contains(got, "INFRASTRUCTURE-SECRET-MARKER") || len(clipboard.copied()) != 0 || !strings.Contains(got, "No value is available") {
 		t.Fatalf("Access accepted or copied an Infrastructure Secret marker\n%s", got)
 	}
@@ -150,7 +150,7 @@ func TestRunCopiesEveryApprovedAccessValueWithExactFeedback(t *testing.T) {
 		}
 	}
 	steps = append(steps, "\x03\r")
-	got := runTranscriptSteps(t, Session{Authenticator: &authenticationStub{result: AuthenticationSucceeded}, Clipboard: clipboard, Access: access}, 80, 24, steps...)
+	got := runTranscriptSteps(t, Session{Clipboard: clipboard, Access: access}, 80, 24, steps...)
 	want := make([]string, 0, 12)
 	for index, profile := range access.Profiles {
 		want = append(want, profile.ShareURI)
@@ -181,7 +181,7 @@ func TestRunReportsUnconfirmedAndFailedCopyWithoutLosingManualSelection(t *testi
 		t.Run(test.name, func(t *testing.T) {
 			access := clientAccessPresentation()
 			clipboard := &clipboardStub{result: test.result}
-			got := runTranscriptSteps(t, Session{Authenticator: &authenticationStub{result: AuthenticationSucceeded}, Clipboard: clipboard, Access: access}, 80, 24, "\r", "", "\x1b[B", "\r", "\r", "", "\x03\r")
+			got := runTranscriptSteps(t, Session{Clipboard: clipboard, Access: access}, 80, 24, "\r", "", "\x1b[B", "\r", "\r", "", "\x03\r")
 			if !strings.Contains(got, test.want) || !strings.Contains(got, "CLIENT-REALITY-MARKER") || len(clipboard.copied()) != 1 {
 				t.Fatalf("%s copy lost its exact fallback or selectable value\n%s", test.name, got)
 			}
@@ -192,7 +192,7 @@ func TestRunReportsUnconfirmedAndFailedCopyWithoutLosingManualSelection(t *testi
 func TestRunMouseClickAndEnterUseTheSameExplicitCopyAction(t *testing.T) {
 	access := clientAccessPresentation()
 	clipboard := &clipboardStub{result: CopyConfirmed}
-	got := runTranscriptSteps(t, Session{Authenticator: &authenticationStub{result: AuthenticationSucceeded}, Clipboard: clipboard, Access: access}, 80, 24, "\r", "", "\x1b[B", "\r", "", "\x1b[<0;30;8M", "", "\x03\r")
+	got := runTranscriptSteps(t, Session{Clipboard: clipboard, Access: access}, 80, 24, "\r", "", "\x1b[B", "\r", "", "\x1b[<0;30;8M", "", "\x03\r")
 	if !slices.Equal(clipboard.copied(), []string{access.Profiles[0].ShareURI}) || !strings.Contains(got, "opied REALITY Vision.") {
 		t.Fatalf("mouse click did not use the selected value's explicit copy action\n%s", got)
 	}
@@ -200,11 +200,11 @@ func TestRunMouseClickAndEnterUseTheSameExplicitCopyAction(t *testing.T) {
 
 func TestRunShowsQRFromTheSameValueOnlyWhenItFits(t *testing.T) {
 	access := clientAccessPresentation()
-	minimum := runTranscriptSteps(t, Session{Authenticator: &authenticationStub{result: AuthenticationSucceeded}, Access: access}, 80, 24, "\r", "", "\x1b[B", "\r", "", "\x03\r")
+	minimum := runTranscriptSteps(t, Session{Access: access}, 80, 24, "\r", "", "\x1b[B", "\r", "", "\x03\r")
 	if !strings.Contains(minimum, "QR omitted at this size; exact text remains available.") || strings.Contains(minimum, "QR - same value as text") {
 		t.Fatalf("minimum Access did not omit only the QR\n%s", minimum)
 	}
-	large := runTranscriptSteps(t, Session{Authenticator: &authenticationStub{result: AuthenticationSucceeded}, Access: access}, 120, 36, "\r", "", "\x1b[B", "\r", "", "\x03\r")
+	large := runTranscriptSteps(t, Session{Access: access}, 120, 36, "\r", "", "\x1b[B", "\r", "", "\x03\r")
 	if !strings.Contains(large, "QR - same value as text") || !strings.ContainsAny(large, "▀▄█") || !strings.Contains(large, "CLIENT-REALITY-MARKER") {
 		t.Fatalf("large Access did not render a QR beside its exact text\n%s", large)
 	}
@@ -264,106 +264,6 @@ func capableTerminal(width, height int) Capabilities {
 	}
 }
 
-type authenticationStub struct {
-	result   AuthenticationResult
-	calls    int
-	prompted chan struct{}
-	done     chan struct{}
-	once     sync.Once
-}
-
-func (stub *authenticationStub) Authenticate(_ context.Context, input io.Reader, output io.Writer) AuthenticationResult {
-	stub.calls++
-	_, _ = io.WriteString(output, "Normal system sudo authentication\n")
-	if stub.prompted != nil {
-		close(stub.prompted)
-	}
-	_, _ = io.CopyN(io.Discard, input, 1)
-	if stub.done != nil {
-		stub.once.Do(func() { close(stub.done) })
-	}
-	return stub.result
-}
-
-func TestRunMakesThePerLaunchPrivacyAndAuthenticationDecisionBeforeAccess(t *testing.T) {
-	t.Run("limited choice", func(t *testing.T) {
-		authentication := &authenticationStub{result: AuthenticationSucceeded}
-		got := runTranscriptSteps(t, Session{Authenticator: authentication, Access: clientAccessPresentation()}, 80, 24, "\x1b[B", "\r", "\x1b[B", "\r", "\x03\r")
-		if authentication.calls != 0 || !strings.Contains(got, "LIMITED DASHBOARD") || !strings.Contains(got, "Owner selected the limited read-only dashboard.") || !strings.Contains(got, "SERVICES AND DIAGNOSTICS") || strings.Contains(got, "CLIENT-REALITY-MARKER") {
-			t.Fatalf("limited choice escaped its read-only boundary or lost its explanation\n%s", got)
-		}
-	})
-
-	t.Run("exit choice", func(t *testing.T) {
-		authentication := &authenticationStub{result: AuthenticationSucceeded}
-		got := runTranscriptSteps(t, Session{Authenticator: authentication}, 80, 24, "\x1b[B\x1b[B\r")
-		if authentication.calls != 0 || strings.Contains(got, "Normal system sudo authentication") {
-			t.Fatalf("exit choice requested authentication\n%s", got)
-		}
-	})
-
-	t.Run("successful system authentication", func(t *testing.T) {
-		authentication := &authenticationStub{result: AuthenticationSucceeded}
-		got := runAuthenticationTranscript(t, authentication, "OVERVIEW")
-		if authentication.calls != 1 || !strings.Contains(got, "OVERVIEW") {
-			t.Fatalf("successful system authentication did not enter the authenticated overview\n%s", got)
-		}
-	})
-
-	t.Run("fresh installation remains unprivileged", func(t *testing.T) {
-		authentication := &authenticationStub{result: AuthenticationSucceeded}
-		got := runTranscriptSteps(t, Session{Authenticator: authentication, AuthenticationPolicy: DeferAuthenticationUntilApply}, 80, 24, "\r", "\x03\r")
-		if authentication.calls != 0 || !strings.Contains(got, "REVIEW INSTALLATION PLAN") || strings.Contains(got, "Normal system sudo authentication") {
-			t.Fatalf("fresh installation requested authentication before Apply\n%s", got)
-		}
-	})
-
-	for _, activation := range []string{"\r", " "} {
-		t.Run("deferred limited action "+fmt.Sprintf("%q", activation), func(t *testing.T) {
-			authentication := &authenticationStub{result: AuthenticationSucceeded}
-			got := runTranscriptSteps(t, Session{Authenticator: authentication, AuthenticationPolicy: DeferAuthenticationUntilApply}, 80, 24, "\x1b[B", "\r", activation, "\x03\r")
-			if authentication.calls != 0 || strings.Contains(got, "Authenticate again") || !strings.Contains(got, "SERVICES AND DIAGNOSTICS") {
-				t.Fatalf("deferred limited mode exposed authentication before Apply\n%s", got)
-			}
-		})
-	}
-
-	t.Run("unknown authentication policy fails closed", func(t *testing.T) {
-		authentication := &authenticationStub{result: AuthenticationSucceeded}
-		got := runTranscriptSteps(t, Session{Authenticator: authentication, AuthenticationPolicy: AuthenticationPolicy(255), Access: clientAccessPresentation()}, 80, 24, "\r", "\r", "\x03\r")
-		if authentication.calls != 0 || strings.Contains(got, "Authenticate again") || !strings.Contains(got, "Authentication policy is unavailable.") || !strings.Contains(got, "SERVICES AND DIAGNOSTICS") || strings.Contains(got, "CLIENT-REALITY-MARKER") {
-			t.Fatalf("unknown authentication policy did not fail closed\n%s", got)
-		}
-	})
-
-	for _, test := range []struct {
-		name, explanation string
-		result            AuthenticationResult
-	}{
-		{name: "denied", result: AuthenticationDenied, explanation: "System authentication was denied."},
-		{name: "cancelled", result: AuthenticationCancelled, explanation: "System authentication was cancelled."},
-		{name: "failed", result: AuthenticationFailed, explanation: "System authentication failed."},
-		{name: "expired", result: AuthenticationExpired, explanation: "System authentication expired."},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			authentication := &authenticationStub{result: test.result}
-			got := runAuthenticationTranscript(t, authentication, "LIMITED DASHBOARD")
-			if authentication.calls != 1 || !strings.Contains(got, "LIMITED DASHBOARD") || !strings.Contains(got, test.explanation) || !strings.Contains(got, "Client Access Values HIDDEN") || !strings.Contains(got, "Privileged actions UNAVAILABLE") {
-				t.Fatalf("%s authentication did not enter explained limited mode\n%s", test.name, got)
-			}
-		})
-	}
-}
-
-func runAuthenticationTranscript(t *testing.T, authentication *authenticationStub, wanted string) string {
-	t.Helper()
-	got := runPseudoTerminalTranscriptSteps(t, Session{Authenticator: authentication}, 80, 24, "\r", "", "\x03\r")
-	if !strings.Contains(got, wanted) {
-		t.Fatalf("authentication transcript did not reach %q\n%s", wanted, got)
-	}
-	return got
-}
-
 func waitForTranscript(t *testing.T, output *synchronizedBuffer, wanted string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -382,7 +282,6 @@ func TestRunRendersCanonicalStyleAFixturesAtBothApprovedSizes(t *testing.T) {
 	}{
 		{AuthenticatedOverview, "OVERVIEW"},
 		{DedicatedAccess, "CLIENT ACCESS VALUES"},
-		{LimitedDashboard, "LIMITED DASHBOARD"},
 		{InstallationReview, "REVIEW INSTALLATION PLAN"},
 		{CloudflareWalkthrough, "CLOUDFLARE TOKEN"},
 		{CorrectionFlow, "CORRECTION FLOW"},
@@ -430,7 +329,7 @@ func TestInstallationReviewOffersNoPersistentDraftAction(t *testing.T) {
 
 func TestCanonicalFramesRemainExact(t *testing.T) {
 	scenarios := []Scenario{
-		AuthenticatedOverview, DedicatedAccess, LimitedDashboard, InstallationReview,
+		AuthenticatedOverview, DedicatedAccess, InstallationReview,
 		CloudflareWalkthrough, CorrectionFlow, MeasuredDownload, UnknownCloudflareVerification,
 		MultiStepChangeSet, CancellationRequested, RecoveryWithRollback, RecoveryWithoutRecovery,
 		UpdateReview, CompleteRemovalConfirmation, ForwardOnlyRemoval, UndersizedPause,
@@ -468,7 +367,7 @@ func TestCanonicalFramesRemainExact(t *testing.T) {
 			fmt.Fprintf(&frames, "%d/%d/%d\n%s\n", scenario, size[0], size[1], frame)
 		}
 	}
-	want := "8de96de36661e3cc85957c04e7297ed8506191386ac3a717d145c8cacc37f0c3"
+	want := "3b155d585005a5aa9102d8ce3a690aab882c2ac405d38dc9942fe4915c136b94"
 	if got := fmt.Sprintf("%x", sha256.Sum256([]byte(frames.String()))); got != want {
 		t.Fatalf("canonical frame snapshot = %s, want %s", got, want)
 	}
@@ -541,11 +440,23 @@ func TestRunEveryPersistentNavigationItemOpensItsScreen(t *testing.T) {
 	}
 }
 
+func TestSecurityPresentationUsesTheAuthenticatedRootRuntimeModel(t *testing.T) {
+	screen := scenarioFixtures[SecurityScreen]
+	text := strings.Join(append(append([]string{}, screen.lines...), screen.details...), "\n")
+	for _, want := range []string{"Owner Console uses one authenticated runtime.", "Root or authenticated non-root launch"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("Security presentation omitted %q", want)
+		}
+	}
+	for _, obsolete := range []string{"Owner Console runs non-root.", "Short-lived validated privilege"} {
+		if strings.Contains(text, obsolete) {
+			t.Fatalf("Security presentation retained %q", obsolete)
+		}
+	}
+}
+
 func runTranscriptSteps(t *testing.T, session Session, width, height int, steps ...string) string {
 	t.Helper()
-	if session.Authenticator != nil {
-		return runPseudoTerminalTranscriptSteps(t, session, width, height, steps...)
-	}
 	capabilities := capableTerminal(width, height)
 	if session.Capabilities == nil {
 		session.Capabilities = &capabilities
@@ -596,39 +507,10 @@ func runPseudoTerminalTranscriptSteps(t *testing.T, session Session, width, heig
 	if session.Environment == nil {
 		session.Environment = []string{"TERM=xterm-256color", "COLORTERM=truecolor", "LANG=C.UTF-8"}
 	}
-	authentication, _ := session.Authenticator.(*authenticationStub)
-	if authentication != nil {
-		authentication.prompted = make(chan struct{})
-		authentication.done = make(chan struct{})
-	}
 	done := make(chan error, 1)
 	go func() { done <- Run(t.Context(), session) }()
-	authenticationWaited := false
 	for _, step := range steps {
 		if step == "" {
-			if authentication != nil && !authenticationWaited {
-				select {
-				case <-authentication.prompted:
-				case <-time.After(time.Second):
-					t.Fatal("authentication prompt did not appear")
-				}
-				_, _ = master.Write([]byte("\n"))
-				select {
-				case <-authentication.done:
-				case <-time.After(time.Second):
-					t.Fatal("authentication did not finish")
-				}
-				wanted := "LIMITED DASHBOARD"
-				if authentication.result == AuthenticationSucceeded {
-					wanted = "OVERVIEW"
-				}
-				if session.Outcome == nil {
-					waitForTranscript(t, &output, wanted)
-				} else {
-					time.Sleep(100 * time.Millisecond)
-				}
-				authenticationWaited = true
-			}
 			time.Sleep(30 * time.Millisecond)
 			continue
 		}

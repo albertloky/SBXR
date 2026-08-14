@@ -8,7 +8,6 @@ const (
 	PrivacyChoice Scenario = iota
 	AuthenticatedOverview
 	DedicatedAccess
-	LimitedDashboard
 	InstallationReview
 	CloudflareWalkthrough
 	CorrectionFlow
@@ -56,25 +55,6 @@ type navigationItem struct {
 	exit     bool
 }
 
-type limitedAction uint8
-
-const (
-	retryAuthentication limitedAction = iota
-	viewSafeDiagnostics
-	exitLimitedDashboard
-)
-
-type limitedActionDefinition struct {
-	label  string
-	action limitedAction
-}
-
-var limitedActions = [...]limitedActionDefinition{
-	{label: "Authenticate again", action: retryAuthentication},
-	{label: "View secret-safe diagnostics", action: viewSafeDiagnostics},
-	{label: "Exit SBXR", action: exitLimitedDashboard},
-}
-
 var navigation = []navigationItem{
 	{id: overviewNavigation, label: "Overview", scenario: AuthenticatedOverview},
 	{id: accessNavigation, label: "Access", scenario: DedicatedAccess},
@@ -113,13 +93,8 @@ var scenarioFixtures = map[Scenario]fixture{
 	},
 	DedicatedAccess: {
 		header: "Managed - rev 42 - authenticated", title: "CLIENT ACCESS VALUES", navigation: accessNavigation, allowsBack: true,
-		lines:   []string{"Client Access Values require this launch's privacy choice", "and successful system authentication.", "", "No value is available in a limited or unprivileged session.", "", "Access never depends on PgDn."},
+		lines:   []string{"Client Access Values require this launch's privacy choice.", "", "No value is available when the Owner continues without them.", "", "Access never depends on PgDn."},
 		details: []string{"PRIVACY", "", "Values may remain in:", "- terminal scrollback", "- clipboard history", "- synchronized clipboards", "- screen recordings"},
-	},
-	LimitedDashboard: {
-		header: "Managed - rev 42 - limited", title: "LIMITED DASHBOARD", navigation: overviewNavigation,
-		lines:   []string{"Sudo authentication was denied or cancelled.", "", "[HEALTHY] Installation lineage proven - revision 42", "[HEALTHY] 6 Modules Healthy - 0 Failed - 0 Unknown", "[HEALTHY] Last secret-safe inspection 2 minutes ago", "", "Client Access Values                 HIDDEN", "Privileged actions                  UNAVAILABLE", "", "Nothing failed and no Change Set began.", ""},
-		details: []string{"DETAILS", "", "Safe read-only facts remain available.", "No Change Set began."},
 	},
 	InstallationReview: {
 		header: "Not installed - authenticated", title: "REVIEW INSTALLATION PLAN", navigation: overviewNavigation, allowsBack: true,
@@ -218,8 +193,8 @@ var scenarioFixtures = map[Scenario]fixture{
 	},
 	SecurityScreen: {
 		title: "SECURITY", navigation: securityNavigation, allowsBack: true,
-		lines:   []string{"Owner Console runs non-root.", "Infrastructure Secrets never render or copy.", "", "> Review privacy and access boundaries"},
-		details: []string{"One Owner", "Short-lived validated privilege", "No telemetry or automatic uploads"},
+		lines:   []string{"Owner Console uses one authenticated runtime.", "Infrastructure Secrets never render or copy.", "", "> Review privacy and access boundaries"},
+		details: []string{"One Owner", "Root or authenticated non-root launch", "No telemetry or automatic uploads"},
 	},
 	LiveProfileCheckScreen: {
 		title: "LIVE PROFILE CHECK", navigation: subscriptionNavigation, allowsBack: true,

@@ -1,10 +1,8 @@
 package ownerconsole
 
 import (
-	"bufio"
 	"bytes"
 	"context"
-	"encoding/base64"
 	"io"
 	"os"
 	"os/exec"
@@ -15,111 +13,6 @@ import (
 
 	"github.com/creack/pty"
 )
-
-type pseudoTerminalAuthentication struct {
-	terminal            *os.File
-	prompted, completed chan struct{}
-}
-
-func (authentication *pseudoTerminalAuthentication) Authenticate(_ context.Context, input io.Reader, output io.Writer) AuthenticationResult {
-	disableEcho := exec.Command("stty", "-echo")
-	disableEcho.Stdin = authentication.terminal
-	if disableEcho.Run() != nil {
-		return AuthenticationFailed
-	}
-	defer func() {
-		restoreEcho := exec.Command("stty", "echo")
-		restoreEcho.Stdin = authentication.terminal
-		_ = restoreEcho.Run()
-	}()
-	_, _ = io.WriteString(output, "Normal system sudo authentication: ")
-	close(authentication.prompted)
-	_, err := bufio.NewReader(input).ReadString('\n')
-	_, _ = io.WriteString(output, "\n")
-	close(authentication.completed)
-	if err != nil {
-		return AuthenticationCancelled
-	}
-	return AuthenticationSucceeded
-}
-
-func TestRunHandsSudoAndClipboardRequestsThroughTheRealPseudoTerminal(t *testing.T) {
-	master, slave, err := pty.Open()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer master.Close()
-	defer slave.Close()
-	if err := pty.Setsize(master, &pty.Winsize{Cols: 80, Rows: 24}); err != nil {
-		t.Fatal(err)
-	}
-	capabilities := capableTerminal(80, 24)
-	authentication := &pseudoTerminalAuthentication{terminal: slave, prompted: make(chan struct{}), completed: make(chan struct{})}
-	transcript := make(chan string, 1)
-	go func() {
-		var output bytes.Buffer
-		_, _ = io.Copy(&output, master)
-		transcript <- output.String()
-	}()
-	done := make(chan error, 1)
-	go func() {
-		done <- Run(context.Background(), Session{Input: slave, Output: slave, Environment: []string{"TERM=xterm-256color", "COLORTERM=truecolor", "LANG=C.UTF-8"}, Capabilities: &capabilities, Authenticator: authentication, Access: clientAccessPresentation()})
-	}()
-	time.Sleep(100 * time.Millisecond)
-	if _, err := master.Write([]byte("\r")); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-authentication.prompted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("normal system authentication prompt was not handed the terminal")
-	}
-	if _, err := master.Write([]byte("OWNER-PASSWORD-MARKER\n")); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-authentication.completed:
-	case <-time.After(3 * time.Second):
-		t.Fatal("normal system authentication did not complete")
-	}
-	time.Sleep(100 * time.Millisecond)
-	if _, err := master.Write([]byte("\x1b[B\r")); err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(100 * time.Millisecond)
-	if _, err := master.Write([]byte("\r")); err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(100 * time.Millisecond)
-	if _, err := master.Write([]byte("\x03\r")); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("Owner Console did not exit")
-	}
-	if err := slave.Close(); err != nil {
-		t.Fatal(err)
-	}
-	got := <-transcript
-	prompt := strings.Index(got, "Normal system sudo authentication")
-	if prompt < 0 || strings.LastIndex(got[:prompt], "\x1b[?1049l") < strings.LastIndex(got[:prompt], "\x1b[?1049h") || strings.Index(got[prompt:], "\x1b[?1049h") < 0 {
-		t.Fatalf("sudo handoff did not leave and re-enter the alternate screen\n%s", got)
-	}
-	if strings.Contains(got, "OWNER-PASSWORD-MARKER") {
-		t.Fatal("Owner Console or the pseudo-terminal echoed the system password")
-	}
-	encoded := base64.StdEncoding.EncodeToString([]byte(clientAccessPresentation().Profiles[0].ShareURI))
-	for _, want := range []string{"\x1b[4m", "\x1b]52;c;" + encoded, "opy request sent. If it is not in your clipboard, select"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("pseudo-terminal transcript missing %q\n%s", want, got)
-		}
-	}
-}
 
 func TestRunThroughPseudoTerminalRestoresTerminal(t *testing.T) {
 	master, slave, err := pty.Open()

@@ -2,15 +2,10 @@ package ownerconsole
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"sync"
 	"testing"
-	"time"
-
-	"github.com/creack/pty"
 )
 
 type outcomeStub struct {
@@ -210,7 +205,7 @@ func TestRunRejectsStaleApprovalAndRebuildsAPlan(t *testing.T) {
 			steps := append(planTraversalSteps(first.Plan, size.width, size.height), "\r", "", "")
 			steps = append(steps, planTraversalSteps(second.Plan, size.width, size.height)...)
 			steps = append(steps, "", "\x03\r")
-			got := runTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: stub, Authenticator: &authenticationStub{result: AuthenticationSucceeded}}, size.width, size.height, steps...)
+			got := runTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: stub}, size.width, size.height, steps...)
 			if len(stub.applyPlans) != 1 || stub.applyPlans[0] != "install-plan-1" || stub.reviewCalls != 2 {
 				t.Fatalf("stale approval calls = plans %#v reviews %d", stub.applyPlans, stub.reviewCalls)
 			}
@@ -358,7 +353,7 @@ func TestRunFixPlanBackRestoresCorrectionEditingState(t *testing.T) {
 func TestRunApprovedWorkUsesAnOperationContextIndependentOfTheConsole(t *testing.T) {
 	stub := &outcomeStub{reviews: []ChangeReview{completePlan("install-plan-continues")}, applyResults: []ChangeResult{{Kind: ChangeStarted, OperationID: "change-set-continues", Explanation: "Approved work is durably owned by the outcome Module."}}}
 	steps := append(planTraversalSteps(stub.reviews[0].Plan, 120, 36), "\r", "", "", "\x03\r")
-	got := runTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: stub, Authenticator: &authenticationStub{result: AuthenticationSucceeded}}, 120, 36, steps...)
+	got := runTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: stub}, 120, 36, steps...)
 	if len(stub.applyContexts) != 1 || stub.applyContexts[0].Err() != nil {
 		t.Fatal("closing the Console cancelled the approved operation request")
 	}
@@ -373,19 +368,6 @@ func TestRootOwnerConsoleAppliesWithoutASecondAuthentication(t *testing.T) {
 	got := runTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: stub}, 120, 36, steps...)
 	if len(stub.applyPlans) != 1 || stub.applyPlans[0] != "root-console-plan" || strings.Contains(got, "authentication") || strings.Contains(got, "LIMITED DASHBOARD") {
 		t.Fatalf("root Owner Console approval = plans %#v\n%s", stub.applyPlans, got)
-	}
-}
-
-func TestRunReadOnlyChoiceCreatesNothingAndFreshInstallReviewsWithoutSudo(t *testing.T) {
-	stub := &outcomeStub{reviews: []ChangeReview{completePlan("install-plan-privacy")}}
-	limited := runTranscriptSteps(t, Session{Outcome: stub, AuthenticationPolicy: DeferAuthenticationUntilApply}, 80, 24, "\x1b[B\r", "\x03\r")
-	if stub.reviewCalls != 0 || len(stub.applyPlans) != 0 || !strings.Contains(limited, "LIMITED DASHBOARD") {
-		t.Fatalf("read-only choice created work or sudo\n%s", limited)
-	}
-
-	got := runTranscriptSteps(t, Session{Outcome: stub, AuthenticationPolicy: DeferAuthenticationUntilApply}, 120, 36, "\r", "", "\x03\r")
-	if stub.reviewCalls != 1 || len(stub.applyPlans) != 0 || !strings.Contains(got, "install-plan-privacy") || strings.Contains(got, "Normal system sudo authentication") {
-		t.Fatalf("fresh-install review was not unprivileged and mutation-free\n%s", got)
 	}
 }
 
@@ -489,59 +471,6 @@ func TestRunCopiesCorrectionEvidenceThroughAnExplicitAction(t *testing.T) {
 	}
 }
 
-type cancellingAuthentication struct{ prompted chan struct{} }
-
-func (authentication *cancellingAuthentication) Authenticate(ctx context.Context, _ io.Reader, _ io.Writer) AuthenticationResult {
-	close(authentication.prompted)
-	<-ctx.Done()
-	return AuthenticationCancelled
-}
-
-func TestRunDisconnectCancelsPendingAuthenticationBeforeApply(t *testing.T) {
-	master, slave, err := pty.Open()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer master.Close()
-	defer slave.Close()
-	if err := pty.Setsize(slave, &pty.Winsize{Cols: 80, Rows: 24}); err != nil {
-		t.Fatal(err)
-	}
-	go func() { _, _ = io.Copy(io.Discard, master) }()
-	stub := &outcomeStub{reviews: []ChangeReview{completePlan("install-plan-pending-sudo")}}
-	authentication := &cancellingAuthentication{prompted: make(chan struct{})}
-	capabilities := capableTerminal(80, 24)
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-	go func() {
-		done <- Run(ctx, Session{Input: slave, Output: slave, Capabilities: &capabilities, Scenario: InstallationReview, Outcome: stub, Authenticator: authentication})
-	}()
-	time.Sleep(300 * time.Millisecond)
-	for range minimumPlanPages(stub.reviews[0].Plan, 80, 24) {
-		if _, err := master.Write([]byte("\r")); err != nil {
-			t.Fatal(err)
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	select {
-	case <-authentication.prompted:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Apply did not reach pending ordinary authentication")
-	}
-	cancel()
-	select {
-	case err := <-done:
-		if err != nil && !errors.Is(err, context.Canceled) {
-			t.Fatal(err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("disconnect did not cancel pending authentication")
-	}
-	if len(stub.applyPlans) != 0 {
-		t.Fatal("pending authentication reached Apply after disconnect")
-	}
-}
-
 func TestRunMalformedOutcomeFactsNeverInventADomainResult(t *testing.T) {
 	t.Run("currentChangeSet facts", func(t *testing.T) {
 		stub := &outcomeStub{currentChangeSet: DurableChangeSet{Kind: ChangeSetSucceeded, OperationID: "bad\x1b-operation"}}
@@ -554,7 +483,7 @@ func TestRunMalformedOutcomeFactsNeverInventADomainResult(t *testing.T) {
 	t.Run("apply facts", func(t *testing.T) {
 		stub := &outcomeStub{reviews: []ChangeReview{completePlan("install-plan-invalid-result")}, applyResults: []ChangeResult{{Kind: ChangeStarted, OperationID: "bad\x1b-operation"}}}
 		steps := append(planTraversalSteps(stub.reviews[0].Plan, 120, 36), "\r", "", "", "\r", "\x03\r")
-		got := runTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: stub, Authenticator: &authenticationStub{result: AuthenticationSucceeded}}, 120, 36, steps...)
+		got := runTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: stub}, 120, 36, steps...)
 		if !strings.Contains(got, "No result was inferred") || strings.Contains(got, "CHANGE IN PROGRESS") || strings.Contains(got, "RECOVERY REQUIRED") || stub.reviewCalls != 1 || len(stub.applyPlans) != 1 {
 			t.Fatalf("malformed Apply facts invented a rejection or currentChangeSet result\n%s", got)
 		}
