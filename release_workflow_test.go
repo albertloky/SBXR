@@ -13,7 +13,7 @@ func TestCandidateWorkflowPublishesOnlyAQualifiedRootRuntimeAcceptanceRecord(t *
 	}
 	workflow := string(body)
 	for _, required := range []string{
-		`test "$(git rev-parse HEAD^)" = 4138f75929afbf3ae11e7f635201a053350b9edb`,
+		"git merge-base --is-ancestor da184b692ba630dc97e8830c0d73785f38d0996a HEAD",
 		"git diff --quiet v1.0.6...HEAD --",
 		"internal/connectionprofiles/registry.go",
 		"internal/subscriptionpublication/render.go",
