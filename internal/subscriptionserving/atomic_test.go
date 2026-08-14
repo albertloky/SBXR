@@ -36,12 +36,12 @@ func TestServeSwitchesAuthorizationAndCompleteBodiesTogether(t *testing.T) {
 	newRaw := []byte("vless://candidate")
 	newBase64 := []byte(base64.StdEncoding.EncodeToString(newRaw))
 	for _, name := range []string{"base64", "v2rayn", "shadowrocket"} {
-		mustFile(t, server.root, artifactPath+"/"+name, newBase64, 0o640)
+		mustFile(t, server.root, artifactPath+"/"+name, newBase64, 0o644)
 	}
-	mustFile(t, server.root, artifactPath+"/raw", newRaw, 0o640)
+	mustFile(t, server.root, artifactPath+"/raw", newRaw, 0o644)
 	rewriteArtifactDigests(t, server)
 	configuration, _ := json.Marshal(map[string]any{"token": newToken, "listen_port": 10443, "certificate_pointer": "/var/lib/sbxr/certificates/ip/current", "primary_address": "127.0.0.1"})
-	mustFile(t, server.root, configurationPath, configuration, 0o640)
+	mustFile(t, server.root, configurationPath, configuration, 0o644)
 
 	assertSubscriptionResponse(t, client, endpoint+newToken, http.StatusOK, string(newBase64))
 	assertSubscriptionResponse(t, client, endpoint+oldToken, http.StatusNotFound, "not found\n")
@@ -121,7 +121,7 @@ func TestServePreservesDeliberateProfileDisablementAcrossActivation(t *testing.T
 	newArtifacts := installPublicationFixture(t, candidateServer, "2001:db8::10", true)
 	newToken := strings.Repeat("9", 64)
 	configuration, _ := json.Marshal(map[string]any{"token": newToken, "listen_port": 10443, "certificate_pointer": "/var/lib/sbxr/certificates/ip/current", "primary_address": "127.0.0.1"})
-	mustFile(t, candidateServer.root, configurationPath, configuration, 0o640)
+	mustFile(t, candidateServer.root, configurationPath, configuration, 0o644)
 	candidate := filepath.Join(server.root, "var/lib/sbxr/subscriptions/candidate-disabled")
 	copyServingSnapshot(t, filepath.Join(candidateServer.root, artifactPath), candidate)
 
@@ -139,7 +139,7 @@ func TestServePreservesDeliberateProfileDisablementAcrossActivation(t *testing.T
 	reenabledToken := strings.Repeat("8", 64)
 	reenabled := filepath.Join(server.root, "var/lib/sbxr/subscriptions/prior")
 	configuration, _ = json.Marshal(map[string]any{"token": reenabledToken, "listen_port": 10443, "certificate_pointer": "/var/lib/sbxr/certificates/ip/current", "primary_address": "127.0.0.1"})
-	mustFile(t, reenabled, configurationName, configuration, 0o640)
+	mustFile(t, reenabled, configurationName, configuration, 0o644)
 	disabled := filepath.Join(server.root, "var/lib/sbxr/subscriptions/disabled")
 	if os.Rename(filepath.Join(server.root, artifactPath), disabled) != nil || os.Rename(reenabled, filepath.Join(server.root, artifactPath)) != nil {
 		t.Fatal("reactivate complete enabled serving snapshot")
@@ -158,7 +158,7 @@ func TestServeKeepsThePreviousProvenHTTPSStateWhenCertificateActivationFails(t *
 	assertSubscriptionResponse(t, client, endpoint, http.StatusOK, body)
 
 	invalid := "var/lib/sbxr/certificates/ip/sets/ip-invalid"
-	mustDirectory(t, server.root, invalid, 0o750)
+	mustDirectory(t, server.root, invalid, 0o755)
 	pointer := filepath.Join(server.root, certificatePath)
 	next := pointer + ".next"
 	if os.Symlink("sets/ip-invalid", next) != nil || os.Rename(next, pointer) != nil {
@@ -266,7 +266,7 @@ func TestPublicationGateAndRollbackPassThroughServe(t *testing.T) {
 	assertSubscriptionResponse(t, client, endpoint+oldToken, http.StatusNotFound, "not found\n")
 
 	invalid := "var/lib/sbxr/certificates/ip/sets/ip-invalid-gate"
-	mustDirectory(t, server.root, invalid, 0o750)
+	mustDirectory(t, server.root, invalid, 0o755)
 	pointer := filepath.Join(server.root, certificatePath)
 	next := pointer + ".next"
 	if os.Symlink("sets/ip-invalid-gate", next) != nil || os.Rename(next, pointer) != nil {
@@ -329,7 +329,7 @@ func activateServingSnapshot(t *testing.T, server Server, candidate string) {
 
 func copyServingSnapshot(t *testing.T, source, destination string) {
 	t.Helper()
-	if err := os.Mkdir(destination, 0o750); err != nil {
+	if err := os.Mkdir(destination, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	entries, err := os.ReadDir(source)
@@ -338,7 +338,7 @@ func copyServingSnapshot(t *testing.T, source, destination string) {
 	}
 	for _, entry := range entries {
 		body, err := os.ReadFile(filepath.Join(source, entry.Name()))
-		if err != nil || os.WriteFile(filepath.Join(destination, entry.Name()), body, 0o640) != nil {
+		if err != nil || os.WriteFile(filepath.Join(destination, entry.Name()), body, 0o644) != nil {
 			t.Fatalf("copy serving snapshot %s: %v", entry.Name(), err)
 		}
 	}
@@ -348,9 +348,9 @@ func writeCandidateSnapshot(t *testing.T, directory, token string, raw []byte) {
 	t.Helper()
 	encoded := []byte(base64.StdEncoding.EncodeToString(raw))
 	for _, name := range []string{"base64", "v2rayn", "shadowrocket"} {
-		mustFile(t, directory, name, encoded, 0o640)
+		mustFile(t, directory, name, encoded, 0o644)
 	}
-	mustFile(t, directory, "raw", raw, 0o640)
+	mustFile(t, directory, "raw", raw, 0o644)
 	metadataPath := filepath.Join(directory, "metadata")
 	var metadata map[string]any
 	body, _ := os.ReadFile(metadataPath)
@@ -365,9 +365,9 @@ func writeCandidateSnapshot(t *testing.T, directory, token string, raw []byte) {
 	}
 	metadata["artifact_sha256"] = digests
 	body, _ = json.Marshal(metadata)
-	mustFile(t, directory, "metadata", body, 0o640)
+	mustFile(t, directory, "metadata", body, 0o644)
 	configuration, _ := json.Marshal(map[string]any{"token": token, "listen_port": 10443, "certificate_pointer": "/var/lib/sbxr/certificates/ip/current", "primary_address": "127.0.0.1"})
-	mustFile(t, directory, configurationName, configuration, 0o640)
+	mustFile(t, directory, configurationName, configuration, 0o644)
 }
 
 func assertSubscriptionResponse(t *testing.T, client *http.Client, endpoint string, status int, body string) {

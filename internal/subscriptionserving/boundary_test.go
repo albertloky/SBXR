@@ -168,8 +168,8 @@ func TestServeEnforcesFixedResourceBounds(t *testing.T) {
 		server, roots, token, _ := testServer(t, "127.0.0.1")
 		prefix, suffix := []byte(`{"padding":"`), []byte(`"}`)
 		body := append(append(prefix, bytes.Repeat([]byte{'x'}, (1<<20)-len(prefix)-len(suffix))...), suffix...)
-		mustFile(t, server.root, artifactPath+"/karing", body, 0o640)
-		mustFile(t, server.root, artifactPath+"/sing-box", body, 0o640)
+		mustFile(t, server.root, artifactPath+"/karing", body, 0o644)
+		mustFile(t, server.root, artifactPath+"/sing-box", body, 0o644)
 		rewriteArtifactDigests(t, server)
 		listener, cancel := startServer(t, server, "tcp4", "127.0.0.1:0")
 		defer cancel()
@@ -205,7 +205,7 @@ func rewriteArtifactDigests(t *testing.T, server Server) {
 	}
 	metadata["artifact_sha256"] = digests
 	body, _ = json.Marshal(metadata)
-	mustFile(t, server.root, artifactPath+"/metadata", body, 0o640)
+	mustFile(t, server.root, artifactPath+"/metadata", body, 0o644)
 }
 
 func TestServeEnforcesFixedConnectionTimeouts(t *testing.T) {
@@ -329,7 +329,7 @@ func TestServeRejectsEveryUnsafeArtifactSet(t *testing.T) {
 		change func(t *testing.T, server Server)
 	}{
 		{"unexpected entry", func(t *testing.T, server Server) {
-			mustFile(t, server.root, artifactPath+"/extra", []byte("marker"), 0o640)
+			mustFile(t, server.root, artifactPath+"/extra", []byte("marker"), 0o644)
 		}},
 		{"partial set", func(t *testing.T, server Server) {
 			if err := os.Remove(filepath.Join(server.root, artifactPath, "raw")); err != nil {
@@ -338,7 +338,7 @@ func TestServeRejectsEveryUnsafeArtifactSet(t *testing.T) {
 		}},
 		{"non-regular entry", func(t *testing.T, server Server) {
 			path := filepath.Join(server.root, artifactPath, "raw")
-			if err := os.Remove(path); err != nil || os.Mkdir(path, 0o640) != nil {
+			if err := os.Remove(path); err != nil || os.Mkdir(path, 0o644) != nil {
 				t.Fatal("replace artifact with directory")
 			}
 		}},
@@ -349,7 +349,7 @@ func TestServeRejectsEveryUnsafeArtifactSet(t *testing.T) {
 			}
 		}},
 		{"configuration symbolic link", func(t *testing.T, server Server) {
-			mustFile(t, server.root, "arbitrary-file-marker", []byte("ARBITRARY-FILE-MARKER"), 0o640)
+			mustFile(t, server.root, "arbitrary-file-marker", []byte("ARBITRARY-FILE-MARKER"), 0o644)
 			path := filepath.Join(server.root, configurationPath)
 			if err := os.Remove(path); err != nil || os.Symlink("../../arbitrary-file-marker", path) != nil {
 				t.Fatal("replace configuration with symbolic link")
@@ -368,30 +368,30 @@ func TestServeRejectsEveryUnsafeArtifactSet(t *testing.T) {
 			}
 		}},
 		{"changed raw", func(t *testing.T, server Server) {
-			mustFile(t, server.root, artifactPath+"/raw", []byte("CHANGED-RAW-MARKER"), 0o640)
+			mustFile(t, server.root, artifactPath+"/raw", []byte("CHANGED-RAW-MARKER"), 0o644)
 		}},
 		{"changed v2rayN", func(t *testing.T, server Server) {
-			mustFile(t, server.root, artifactPath+"/v2rayn", []byte("CHANGED-V2RAYN-MARKER"), 0o640)
+			mustFile(t, server.root, artifactPath+"/v2rayn", []byte("CHANGED-V2RAYN-MARKER"), 0o644)
 		}},
 		{"changed Shadowrocket", func(t *testing.T, server Server) {
-			mustFile(t, server.root, artifactPath+"/shadowrocket", []byte("CHANGED-SHADOWROCKET-MARKER"), 0o640)
+			mustFile(t, server.root, artifactPath+"/shadowrocket", []byte("CHANGED-SHADOWROCKET-MARKER"), 0o644)
 		}},
 		{"changed Karing", func(t *testing.T, server Server) {
-			mustFile(t, server.root, artifactPath+"/karing", []byte("{}"), 0o640)
+			mustFile(t, server.root, artifactPath+"/karing", []byte("{}"), 0o644)
 		}},
 		{"coordinated Karing and sing-box change", func(t *testing.T, server Server) {
-			mustFile(t, server.root, artifactPath+"/karing", []byte("{}"), 0o640)
-			mustFile(t, server.root, artifactPath+"/sing-box", []byte("{}"), 0o640)
+			mustFile(t, server.root, artifactPath+"/karing", []byte("{}"), 0o644)
+			mustFile(t, server.root, artifactPath+"/sing-box", []byte("{}"), 0o644)
 		}},
 		{"invalid sing-box", func(t *testing.T, server Server) {
-			mustFile(t, server.root, artifactPath+"/sing-box", []byte("INVALID-JSON-MARKER"), 0o640)
+			mustFile(t, server.root, artifactPath+"/sing-box", []byte("INVALID-JSON-MARKER"), 0o644)
 		}},
-		{"empty Mihomo", func(t *testing.T, server Server) { mustFile(t, server.root, artifactPath+"/mihomo", []byte{}, 0o640) }},
+		{"empty Mihomo", func(t *testing.T, server Server) { mustFile(t, server.root, artifactPath+"/mihomo", []byte{}, 0o644) }},
 		{"changed Mihomo", func(t *testing.T, server Server) {
-			mustFile(t, server.root, artifactPath+"/mihomo", []byte("proxies: []\n"), 0o640)
+			mustFile(t, server.root, artifactPath+"/mihomo", []byte("proxies: []\n"), 0o644)
 		}},
 		{"changed metadata", func(t *testing.T, server Server) {
-			mustFile(t, server.root, artifactPath+"/metadata", []byte("{}\n"), 0o640)
+			mustFile(t, server.root, artifactPath+"/metadata", []byte("{}\n"), 0o644)
 		}},
 		{"unknown metadata fact", func(t *testing.T, server Server) {
 			mutateArtifactMetadata(t, server, func(metadata map[string]any) { metadata["unexpected"] = true })
@@ -403,10 +403,10 @@ func TestServeRejectsEveryUnsafeArtifactSet(t *testing.T) {
 			mutateArtifactMetadata(t, server, func(metadata map[string]any) { metadata["compatibility_definition"] = "changed" })
 		}},
 		{"oversized response", func(t *testing.T, server Server) {
-			mustFile(t, server.root, artifactPath+"/mihomo", bytes.Repeat([]byte{'x'}, (1<<20)+1), 0o640)
+			mustFile(t, server.root, artifactPath+"/mihomo", bytes.Repeat([]byte{'x'}, (1<<20)+1), 0o644)
 		}},
 		{"oversized metadata", func(t *testing.T, server Server) {
-			mustFile(t, server.root, artifactPath+"/metadata", bytes.Repeat([]byte{'x'}, (64<<10)+1), 0o640)
+			mustFile(t, server.root, artifactPath+"/metadata", bytes.Repeat([]byte{'x'}, (64<<10)+1), 0o644)
 		}},
 	}
 	for _, check := range checks {
@@ -446,7 +446,7 @@ func mutateArtifactMetadata(t *testing.T, server Server, mutate func(map[string]
 	}
 	mutate(metadata)
 	body, _ = json.Marshal(metadata)
-	mustFile(t, server.root, artifactPath+"/metadata", body, 0o640)
+	mustFile(t, server.root, artifactPath+"/metadata", body, 0o644)
 }
 
 func TestServeReturnsOneIndistinguishableRefusalForEveryHostileRequestShape(t *testing.T) {

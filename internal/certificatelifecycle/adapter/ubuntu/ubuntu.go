@@ -29,7 +29,7 @@ type Adapter struct {
 	readFile           func(string) ([]byte, error)
 	command            func(context.Context, string, ...string) ([]byte, error)
 	root, ariDirectory string
-	uid                int
+	uid, gid           int
 	httpClient         *http.Client
 }
 

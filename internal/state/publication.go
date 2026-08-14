@@ -153,6 +153,11 @@ func (transaction *TransactionMaterial) SystemChangesFinalizeCloudflare(lease an
 	if err != nil {
 		return nil, err
 	}
+	// Deferred Cloudflare facts do not replace the exact owning-Module forms
+	// that were accepted during initial State preparation.
+	copies.Xray = transaction.serviceCopies.Xray
+	copies.SingBox = transaction.serviceCopies.SingBox
+	copies.Subscription = transaction.serviceCopies.Subscription
 	preparedState, candidateChecksum, err := prepareStateDocument(supportedSchema, transaction.candidateRevision, transaction.candidateRelease, transaction.changeSet, candidate)
 	if err != nil {
 		return nil, finding("STATE-CLOUDFLARE-SERIALIZATION", "final Cloudflare candidate", "the final candidate could not be serialized", "one byte-stable complete candidate", "publication bytes must be exact", "roll back the active Change Set")

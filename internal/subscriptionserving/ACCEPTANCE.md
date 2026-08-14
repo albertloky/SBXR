@@ -32,7 +32,7 @@ Run:
 go test ./internal/subscriptionserving -run '^TestServeFailsClosedOnUnsafeInputs$' -count=1
 ```
 
-Require short authorization input, wider artifact or parent permissions, wrong ownership, unauthorized symbolic links, unavailable certificate files, expired certificates, mismatched IP identity, and untrusted chains to stop before serving. Require Certificate Lifecycle's one approved relative `current` pointer to its exact versioned `0750`/`0640` set.
+Require short authorization input, wrong artifact or parent permissions, wrong ownership, unauthorized symbolic links, unavailable certificate files, expired certificates, mismatched IP identity, and untrusted chains to stop before serving. Require Certificate Lifecycle's one approved relative `current` pointer to its exact versioned `root:root 0755`/`0644` set.
 
 ### SS-SERVE-04 — No insecure fallback
 
@@ -59,10 +59,10 @@ Require the bracketed IPv6 request shape and selected-family TLS verification wh
 Run:
 
 ```sh
-go test ./internal/subscriptionserving -run '^Test(ServiceUnitHasOnlyReadOnlySubscriptionAuthority|ServeRefusesTheWrongServiceIdentity)$' -count=1
+go test ./internal/subscriptionserving ./internal/subscriptionserving/adapter/ubuntu -run '^Test(ServiceUnitHasOnlyReadOnlySubscriptionAuthority|ServeRefusesTheWrongServiceIdentity|ProductionServeRefusesOldAndMixedServiceIdentity|RuntimeInspectionRejectsOldMixedAndIncompleteFacts|InspectorSuppliesExactUbuntuRuntimeFacts|InspectorRefusesAmbiguousListenerFacts)$' -count=1
 ```
 
-Require the `sbxr-subscription` user and group, fixed private startup mode, read-only allowlisted runtime paths, hidden unrelated process information, no service capability or writable SBXR path, disabled core dumps, and the fixed systemd protections. Require `Serve` itself to refuse a changed effective service identity.
+Require the `root:root` service identity, fixed private startup mode, read-only allowlisted runtime paths, hidden unrelated process information, no service capability or writable SBXR path, disabled core dumps, and the fixed systemd protections. Require the Ubuntu Adapter to supply the effective unit, active process, and one exact `10443/TCP` listener to the Subscription Serving Interface. Require the Interface to reject an old or mixed identity, changed containment or filesystem view, wrong process, and wrong or ambiguous listener. Require `Serve` itself to refuse an old, mixed, or changed effective service identity.
 
 ### SS-SERVE-07 — Owning storage boundaries
 
@@ -72,7 +72,7 @@ Run:
 go test ./internal/subscriptionpublication/adapter/filesystem ./internal/certificatelifecycle/adapter/ubuntu -count=1
 ```
 
-Require the owning Modules to preserve root-only `0700`/`0600` candidates and only the active root-owned, `sbxr-subscription`-readable `0750`/`0640` artifact and certificate sets.
+Require Subscription Publication to keep inactive `root:root 0644` artifacts non-traversable outside root at `0700`, require Certificate Lifecycle to keep native candidates at `0700`/`0600`, and publish only active `root:root 0755`/`0644` artifact and certificate sets.
 
 ### SS-SERVE-08 — Exact named representations
 
@@ -180,7 +180,7 @@ Use only generated test Client Access Values and a generated trusted test chain.
 
 ## Integrated Verification
 
-Status must remain `Pending — integrated release` until installation through one complete Change Set proves the real user/group, unit, selected-IP firewall and listener, prepared service configuration, immutable artifact activation, certificate activation, restart, rollback, post-publication agreement, and durable `Complete` together.
+Status must remain `Pending — integrated release` until installation through one complete Change Set proves the real `root:root` identity, unit, selected-IP firewall and listener, prepared service configuration, immutable artifact activation, certificate activation, restart, rollback, post-publication agreement, and durable `Complete` together.
 
 ## Codex Live Acceptance
 

@@ -13,7 +13,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/user"
 	"path"
 	"strconv"
 	"strings"
@@ -50,15 +49,7 @@ func New(prove func(context.Context, string) error) (Executor, error) {
 	if prove == nil {
 		return Executor{}, errors.New("Subscription Serving health proof unavailable")
 	}
-	group, err := user.LookupGroup("sbxr-subscription")
-	if err != nil {
-		return Executor{}, errors.New("sbxr-subscription group unavailable")
-	}
-	gid, err := strconv.Atoi(group.Gid)
-	if err != nil {
-		return Executor{}, errors.New("sbxr-subscription group is invalid")
-	}
-	return Executor{uid: 0, gid: gid, prove: prove, prior: &priorAuthorization{}}, nil
+	return Executor{uid: 0, gid: 0, prove: prove, prior: &priorAuthorization{}}, nil
 }
 
 // NewAt supplies controlled ownership and health proof for Seam Verification.
@@ -70,19 +61,7 @@ func NewForFreshInstallation(prove func(context.Context, string) error) (Executo
 	if prove == nil {
 		return Executor{}, errors.New("Subscription Serving health proof unavailable")
 	}
-	return Executor{uid: 0, gid: -1, prove: prove, prior: &priorAuthorization{}}, nil
-}
-
-func (executor Executor) resolved() (Executor, error) {
-	if executor.gid >= 0 {
-		return executor, nil
-	}
-	group, err := user.LookupGroup("sbxr-subscription")
-	if err != nil {
-		return Executor{}, errors.New("sbxr-subscription group unavailable")
-	}
-	executor.gid, err = strconv.Atoi(group.Gid)
-	return executor, err
+	return Executor{uid: 0, gid: 0, prove: prove, prior: &priorAuthorization{}}, nil
 }
 
 type snapshot struct {
@@ -126,11 +105,6 @@ func (executor Executor) CaptureRollback(root string, write func(io.Reader) erro
 }
 
 func (executor Executor) Activate(root, prepared string, binding systemchanges.StateTransactionBinding, expectedSHA256 string, timeout time.Duration) (systemchanges.StepEvidence, error) {
-	var resolveErr error
-	executor, resolveErr = executor.resolved()
-	if resolveErr != nil {
-		return systemchanges.StepEvidence{}, resolveErr
-	}
 	if timeout <= 0 {
 		return systemchanges.StepEvidence{}, errors.New("subscription activation timeout is invalid")
 	}
@@ -160,22 +134,22 @@ func (executor Executor) Activate(root, prepared string, binding systemchanges.S
 		return systemchanges.StepEvidence{}, err
 	}
 	if prior == "" {
-		if err := storage.root.Chmod(target, 0o750); err != nil {
+		if err := storage.setServingMode(target, true); err != nil {
 			return systemchanges.StepEvidence{}, errors.New("subscription candidate permission failed")
 		}
 		if err := storage.root.Rename(target, "current"); err != nil {
-			_ = storage.root.Chmod(target, 0o700)
+			_ = storage.setServingMode(target, false)
 			return systemchanges.StepEvidence{}, errors.New("subscription activation failed")
 		}
 	} else {
 		if _, err := storage.root.Lstat(prior); !errors.Is(err, os.ErrNotExist) || storage.root.Rename(target, prior) != nil {
 			return systemchanges.StepEvidence{}, errors.New("prior subscription staging path is unavailable")
 		}
-		if err := storage.root.Chmod(prior, 0o750); err != nil || exchangeDirectories(storage.root, "current", prior) != nil {
-			_ = storage.root.Chmod(prior, 0o700)
+		if err := storage.setServingMode(prior, true); err != nil || exchangeDirectories(storage.root, "current", prior) != nil {
+			_ = storage.setServingMode(prior, false)
 			return systemchanges.StepEvidence{}, errors.New("subscription activation failed")
 		}
-		if err := storage.root.Chmod(prior, 0o700); err != nil {
+		if err := storage.setServingMode(prior, false); err != nil {
 			return systemchanges.StepEvidence{}, errors.New("prior subscription generation could not be isolated")
 		}
 	}
@@ -205,11 +179,6 @@ func readPreparedConfiguration(prepared string, uid int) ([]byte, error) {
 }
 
 func (executor Executor) Reverse(root string, source io.Reader, _ time.Duration) (systemchanges.StepEvidence, error) {
-	var resolveErr error
-	executor, resolveErr = executor.resolved()
-	if resolveErr != nil {
-		return systemchanges.StepEvidence{}, resolveErr
-	}
 	prior, err := decodeSnapshot(source)
 	if err != nil {
 		return systemchanges.StepEvidence{}, err
@@ -242,20 +211,20 @@ func (executor Executor) Reverse(root string, source io.Reader, _ time.Duration)
 	}
 	if prior.Target != "" {
 		if _, err := storage.readSet(prior.Target, 0o700); err != nil {
-			if _, transientErr := storage.readSet(prior.Target, 0o750); transientErr != nil {
+			if _, transientErr := storage.readSet(prior.Target, 0o755); transientErr != nil {
 				return systemchanges.StepEvidence{}, errors.New("prior subscription artifact set is unprovable")
 			}
 		}
 	}
 	if prior.Target != "" {
-		if err := storage.root.Chmod(prior.Target, 0o750); err != nil {
+		if err := storage.setServingMode(prior.Target, true); err != nil {
 			return systemchanges.StepEvidence{}, errors.New("prior subscription generation could not be restored")
 		}
 		if err := exchangeDirectories(storage.root, "current", prior.Target); err != nil {
-			_ = storage.root.Chmod(prior.Target, 0o700)
+			_ = storage.setServingMode(prior.Target, false)
 			return systemchanges.StepEvidence{}, errors.New("prior subscription restore failed")
 		}
-		if err := storage.root.Chmod(prior.Target, 0o700); err != nil {
+		if err := storage.setServingMode(prior.Target, false); err != nil {
 			return systemchanges.StepEvidence{}, errors.New("subscription candidate could not be isolated")
 		}
 	} else if current != "" {
@@ -279,11 +248,6 @@ func (executor Executor) Reverse(root string, source io.Reader, _ time.Duration)
 }
 
 func (executor Executor) Inspect(root string, source io.Reader, _ time.Duration) (systemchanges.StepEffect, error) {
-	var resolveErr error
-	executor, resolveErr = executor.resolved()
-	if resolveErr != nil {
-		return "", resolveErr
-	}
 	prior, err := decodeSnapshot(source)
 	if err != nil {
 		return "", err
@@ -311,11 +275,6 @@ func (executor Executor) Inspect(root string, source io.Reader, _ time.Duration)
 }
 
 func (executor Executor) Check(root, code string, binding systemchanges.StateTransactionBinding, expectedSHA256 string, timeout time.Duration) (systemchanges.HealthStatus, error) {
-	var resolveErr error
-	executor, resolveErr = executor.resolved()
-	if resolveErr != nil {
-		return systemchanges.Unknown, resolveErr
-	}
 	storage, err := openStore(root, false, executor.uid, executor.gid)
 	if err != nil {
 		return systemchanges.Failed, errors.New("active subscription artifact set is unprovable")
@@ -325,7 +284,7 @@ func (executor Executor) Check(root, code string, binding systemchanges.StateTra
 	if err != nil || current == "" {
 		return systemchanges.Failed, errors.New("active subscription artifact set is unprovable")
 	}
-	set, err := storage.readSet("current", 0o750)
+	set, err := storage.readSet("current", 0o755)
 	bundle, bundleErr := set.Bundle()
 	if err != nil || bundleErr != nil || !set.AgreesWith(binding) || subscriptionpublication.BundleSHA256(bundle) != expectedSHA256 {
 		return systemchanges.Failed, errors.New("active subscription artifact set does not agree with State")
@@ -355,8 +314,7 @@ func (executor Executor) Check(root, code string, binding systemchanges.StateTra
 
 // ObserveCurrent proves the active immutable publication and its Serving route without changing either.
 func (executor Executor) ObserveCurrent(root string, timeout time.Duration) (PublishedFacts, error) {
-	executor, err := executor.resolved()
-	if err != nil || timeout <= 0 {
+	if timeout <= 0 {
 		return PublishedFacts{}, errors.New("Subscription Publication observation unavailable")
 	}
 	storage, err := openStore(root, false, executor.uid, executor.gid)
@@ -374,7 +332,7 @@ func (executor Executor) ObserveCurrent(root string, timeout time.Duration) (Pub
 	if current == "" {
 		return PublishedFacts{Serving: systemchanges.Unknown}, nil
 	}
-	set, err := storage.readSet("current", 0o750)
+	set, err := storage.readSet("current", 0o755)
 	if err != nil {
 		return PublishedFacts{}, errors.New("active subscription artifact set is unprovable")
 	}
@@ -439,11 +397,6 @@ func proveServingAuthorization(ctx context.Context, address string, current serv
 }
 
 func (executor Executor) Cleanup(root string) error {
-	var resolveErr error
-	executor, resolveErr = executor.resolved()
-	if resolveErr != nil {
-		return resolveErr
-	}
 	storage, err := openStore(root, false, executor.uid, executor.gid)
 	if err != nil {
 		return err
@@ -480,7 +433,7 @@ func openStore(host string, create bool, uid, gid int) (*store, error) {
 	for _, wanted := range []struct {
 		name string
 		mode fs.FileMode
-	}{{subscriptionDirectory, 0o750}, {subscriptionDirectory + "/sets", 0o700}} {
+	}{{subscriptionDirectory, 0o755}, {subscriptionDirectory + "/sets", 0o700}} {
 		info, statErr := root.Lstat(wanted.name)
 		if errors.Is(statErr, os.ErrNotExist) && create {
 			if err := root.Mkdir(wanted.name, wanted.mode); err != nil || root.Chown(wanted.name, uid, gid) != nil {
@@ -512,7 +465,7 @@ func (storage *store) current() (string, error) {
 	if err != nil {
 		return "", errors.New("active subscription pointer is unprovable")
 	}
-	set, err := storage.readSet("current", 0o750)
+	set, err := storage.readSet("current", 0o755)
 	if err != nil {
 		return "", errors.New("active subscription artifact set is unprovable")
 	}
@@ -537,7 +490,7 @@ func (storage *store) readSet(target string, mode fs.FileMode) (subscriptionpubl
 		name := path.Join(target, artifactName)
 		info, err := storage.root.Lstat(name)
 		stat, ok := fileStat(info)
-		if err != nil || !ok || !info.Mode().IsRegular() || info.Mode().Type() != 0 || info.Mode().Perm() != 0o640 || info.Size() > 4<<20 || stat.Uid != uint32(storage.uid) || stat.Gid != uint32(storage.gid) {
+		if err != nil || !ok || !info.Mode().IsRegular() || info.Mode().Type() != 0 || info.Mode().Perm() != 0o644 || info.Size() > 4<<20 || stat.Uid != uint32(storage.uid) || stat.Gid != uint32(storage.gid) {
 			return subscriptionpublication.PreparedArtifactSet{}, errors.New("subscription artifact is unsafe")
 		}
 		body, err := storage.root.ReadFile(name)
@@ -556,7 +509,7 @@ func (storage *store) readConfiguration(target string) ([]byte, error) {
 	name := path.Join(target, servingConfigurationName)
 	info, err := storage.root.Lstat(name)
 	stat, ok := fileStat(info)
-	if err != nil || !ok || !info.Mode().IsRegular() || info.Mode().Type() != 0 || info.Mode().Perm() != 0o640 || info.Size() <= 0 || info.Size() > 64<<10 || stat.Uid != uint32(storage.uid) || stat.Gid != uint32(storage.gid) {
+	if err != nil || !ok || !info.Mode().IsRegular() || info.Mode().Type() != 0 || info.Mode().Perm() != 0o644 || info.Size() <= 0 || info.Size() > 64<<10 || stat.Uid != uint32(storage.uid) || stat.Gid != uint32(storage.gid) {
 		return nil, errors.New("Subscription Serving configuration is unsafe")
 	}
 	configuration, err := storage.root.ReadFile(name)
@@ -592,7 +545,7 @@ func (storage *store) writeSet(target string, set subscriptionpublication.Prepar
 	defer storage.root.RemoveAll(temporary)
 	for _, artifact := range set.Files() {
 		name := path.Join(temporary, artifact.Name)
-		file, err := storage.root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o640)
+		file, err := storage.root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 		if err != nil {
 			return errors.New("subscription artifact write failed")
 		}
@@ -604,7 +557,7 @@ func (storage *store) writeSet(target string, set subscriptionpublication.Prepar
 		}
 	}
 	configurationPath := path.Join(temporary, servingConfigurationName)
-	configurationFile, err := storage.root.OpenFile(configurationPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o640)
+	configurationFile, err := storage.root.OpenFile(configurationPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return errors.New("Subscription Serving configuration write failed")
 	}
@@ -618,6 +571,14 @@ func (storage *store) writeSet(target string, set subscriptionpublication.Prepar
 		return errors.New("subscription generation activation failed")
 	}
 	return syncRootDirectory(storage.root, "sets")
+}
+
+func (storage *store) setServingMode(target string, active bool) error {
+	directoryMode := fs.FileMode(0o700)
+	if active {
+		directoryMode = 0o755
+	}
+	return storage.root.Chmod(target, directoryMode)
 }
 
 func (storage *store) hasOtherSet(keep string) (bool, error) {

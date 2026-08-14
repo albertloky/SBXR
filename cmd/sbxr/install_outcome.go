@@ -23,6 +23,8 @@ import (
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 	softwaregithub "github.com/albertloky/SBXR/internal/softwarelifecycle/adapter/github"
 	softwareubuntu "github.com/albertloky/SBXR/internal/softwarelifecycle/adapter/ubuntu"
+	"github.com/albertloky/SBXR/internal/subscriptionserving"
+	servingubuntu "github.com/albertloky/SBXR/internal/subscriptionserving/adapter/ubuntu"
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
 
@@ -326,6 +328,9 @@ func installCorrection(err error) ownerconsole.ChangeReview {
 }
 
 func proveInstalledSubscription(ctx context.Context, address string, port uint16) error {
+	if result := servingubuntu.New().Inspect(ctx); result.Status != subscriptionserving.Healthy {
+		return errors.New("Subscription Serving runtime health proof failed")
+	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+net.JoinHostPort(address, fmt.Sprint(port))+"/", nil)
 	if err != nil {
 		return err

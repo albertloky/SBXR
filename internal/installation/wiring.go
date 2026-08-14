@@ -38,6 +38,12 @@ func (w *installWiring) StateCloudflareRuntimeArtifactOwner() any {
 	}
 	return w.cloudflare
 }
+func (w *installWiring) StateSubscriptionRuntimeArtifactOwner() any {
+	if w == nil {
+		return nil
+	}
+	return w.subscription
+}
 
 func (w *installWiring) ValidateConnectionProfiles(profiles state.ConnectionProfiles, secrets state.ConnectionProfileSecretReader) error {
 	if w == nil || w.profiles == nil {

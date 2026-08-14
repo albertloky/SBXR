@@ -18,7 +18,7 @@ import (
 	statefilesystem "github.com/albertloky/SBXR/internal/state/adapter/filesystem"
 	"github.com/albertloky/SBXR/internal/subscriptionpublication"
 	subscriptionfilesystem "github.com/albertloky/SBXR/internal/subscriptionpublication/adapter/filesystem"
-	"github.com/albertloky/SBXR/internal/subscriptionserving"
+	servingubuntu "github.com/albertloky/SBXR/internal/subscriptionserving/adapter/ubuntu"
 	"github.com/albertloky/SBXR/internal/systemchanges"
 	systemubuntu "github.com/albertloky/SBXR/internal/systemchanges/adapter/ubuntu"
 )
@@ -145,7 +145,7 @@ func managedClientAccessPresentation(ctx context.Context) (clientAccessPresentat
 		})
 	})
 	if err == nil && loaded.Snapshot != nil {
-		presentation.health[healthdiagnostics.SubscriptionServingModule] = healthdiagnostics.HealthStatus(subscriptionserving.Inspect().Status)
+		presentation.health[healthdiagnostics.SubscriptionServingModule] = healthdiagnostics.HealthStatus(servingubuntu.New().Inspect(ctx).Status)
 		if repair, repairErr := inspectSoftwareRepair(ctx); repairErr == nil && repair.ForwardRepairAvailable {
 			presentation.Recovery = (ownerRecovery{currentStateRepair: true}).ViewRecovery(ctx)
 			presentation.Repair = repair

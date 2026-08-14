@@ -944,7 +944,7 @@ func transactionServeProof(t *testing.T) (*transactionServingFixture, context.Ca
 	for _, directory := range []struct {
 		name string
 		mode fs.FileMode
-	}{{"var", 0o755}, {"var/lib", 0o755}, {"var/lib/sbxr", 0o755}, {"var/lib/sbxr/subscriptions", 0o750}, {"var/lib/sbxr/subscriptions/current", 0o750}, {"var/lib/sbxr/certificates", 0o755}, {"var/lib/sbxr/certificates/ip", 0o750}, {"var/lib/sbxr/certificates/ip/sets", 0o750}, {"var/lib/sbxr/certificates/ip/sets/ip-transaction", 0o750}} {
+	}{{"var", 0o755}, {"var/lib", 0o755}, {"var/lib/sbxr", 0o755}, {"var/lib/sbxr/subscriptions", 0o755}, {"var/lib/sbxr/subscriptions/current", 0o755}, {"var/lib/sbxr/certificates", 0o755}, {"var/lib/sbxr/certificates/ip", 0o755}, {"var/lib/sbxr/certificates/ip/sets", 0o755}, {"var/lib/sbxr/certificates/ip/sets/ip-transaction", 0o755}} {
 		if err := os.Mkdir(filepath.Join(root, directory.name), directory.mode); err != nil {
 			t.Fatal(err)
 		}
@@ -952,7 +952,7 @@ func transactionServeProof(t *testing.T) (*transactionServingFixture, context.Ca
 	token := strings.Repeat("7", 64)
 	configuration, _ := json.Marshal(map[string]any{"token": token, "listen_port": 10443, "certificate_pointer": "/var/lib/sbxr/certificates/ip/current", "primary_address": "192.0.2.10"})
 	write := func(name string, body []byte) {
-		if err := os.WriteFile(filepath.Join(root, name), body, 0o640); err != nil {
+		if err := os.WriteFile(filepath.Join(root, name), body, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1036,7 +1036,7 @@ func (fixture *transactionServingFixture) activate(prepared string) error {
 	defer bundle.Close()
 	current := filepath.Join(fixture.root, "var/lib/sbxr/subscriptions/current")
 	candidate := filepath.Join(fixture.root, "var/lib/sbxr/subscriptions/candidate")
-	if err := os.Mkdir(candidate, 0o750); err != nil {
+	if err := os.Mkdir(candidate, 0o755); err != nil {
 		return err
 	}
 	reader := tar.NewReader(bundle)
@@ -1050,12 +1050,12 @@ func (fixture *transactionServingFixture) activate(prepared string) error {
 			return errors.New("candidate serving bundle invalid")
 		}
 		body, readErr := io.ReadAll(reader)
-		if readErr != nil || os.WriteFile(filepath.Join(candidate, header.Name), body, 0o640) != nil {
+		if readErr != nil || os.WriteFile(filepath.Join(candidate, header.Name), body, 0o644) != nil {
 			return errors.New("candidate serving snapshot unavailable")
 		}
 		files++
 	}
-	if files != 8 || os.WriteFile(filepath.Join(candidate, "serving.json"), configuration, 0o640) != nil {
+	if files != 8 || os.WriteFile(filepath.Join(candidate, "serving.json"), configuration, 0o644) != nil {
 		return errors.New("candidate serving snapshot incomplete")
 	}
 	prior := filepath.Join(fixture.root, "var/lib/sbxr/subscriptions/prior")

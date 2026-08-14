@@ -7,8 +7,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=sbxr-subscription
-Group=sbxr-subscription
+User=root
+Group=root
 ExecStart=/usr/local/bin/sbxr private subscription-serve
 StandardOutput=null
 StandardError=null

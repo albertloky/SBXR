@@ -23,20 +23,20 @@ import (
 func TestServingCertificateObservationUsesTheAnchoredActivePointer(t *testing.T) {
 	root := t.TempDir()
 	set := filepath.Join(root, "var/lib/sbxr/certificates/domain/sets/domain-active")
-	if err := os.MkdirAll(set, 0o750); err != nil {
+	if err := os.MkdirAll(set, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
 	template := &x509.Certificate{SerialNumber: big.NewInt(7), Subject: pkix.Name{CommonName: "direct.example.com"}, DNSNames: []string{"direct.example.com"}, NotBefore: now.Add(-15 * 24 * time.Hour), NotAfter: now.Add(30 * 24 * time.Hour), AuthorityKeyId: []byte{1, 2, 3}}
 	der, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err := os.WriteFile(filepath.Join(set, "fullchain.pem"), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o640); err != nil {
+	if err := os.WriteFile(filepath.Join(set, "fullchain.pem"), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink("sets/domain-active", filepath.Join(root, "var/lib/sbxr/certificates/domain/current")); err != nil {
 		t.Fatal(err)
 	}
-	observed, certificate, found, err := (Adapter{root: root, uid: os.Geteuid()}).observeServingCertificate(certificatelifecycle.DomainLineage)
+	observed, certificate, found, err := (Adapter{root: root, uid: os.Geteuid(), gid: os.Getegid()}).observeServingCertificate(certificatelifecycle.DomainLineage)
 	if err != nil || !found || certificate == nil || observed.Identity != "direct.example.com" || observed.Profile != "tlsserver" || observed.ActiveServingID != "domain-active" || !observed.NotAfter.Equal(template.NotAfter) {
 		t.Fatalf("active domain observation = (%+v, %+v, %t, %v)", observed, certificate, found, err)
 	}

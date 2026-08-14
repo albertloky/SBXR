@@ -1294,6 +1294,10 @@ func applyRuntimeArtifactContributions(copies PreparedServiceCopies, contributio
 	if owner, ok := validators.Cloudflare.(interface{ StateCloudflareRuntimeArtifactOwner() any }); ok {
 		cloudflareSource = owner.StateCloudflareRuntimeArtifactOwner()
 	}
+	subscriptionSource := any(validators.Subscription)
+	if owner, ok := validators.Subscription.(interface{ StateSubscriptionRuntimeArtifactOwner() any }); ok {
+		subscriptionSource = owner.StateSubscriptionRuntimeArtifactOwner()
+	}
 	prepared := map[string]*PreparedServiceCopy{
 		"xray.service":              copies.Xray,
 		"sing-box.service":          copies.SingBox,
@@ -1311,8 +1315,11 @@ func applyRuntimeArtifactContributions(copies PreparedServiceCopies, contributio
 		}
 		for _, service := range services {
 			expectedSource, packagePath, typeName := connectionProfilesSource, "github.com/albertloky/SBXR/internal/connectionprofiles", "Plan"
-			if service == "cloudflared.service" {
+			switch service {
+			case "cloudflared.service":
 				expectedSource, packagePath, typeName = cloudflareSource, "github.com/albertloky/SBXR/internal/cloudflaretunnel", "Plan"
+			case "sbxr-subscription.service":
+				expectedSource, packagePath, typeName = subscriptionSource, "github.com/albertloky/SBXR/internal/subscriptionpublication", "Plan"
 			}
 			copy := prepared[service]
 			typeOf, expectedType := reflect.TypeOf(source), reflect.TypeOf(expectedSource)

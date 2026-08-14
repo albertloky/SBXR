@@ -75,7 +75,7 @@ func TestIPActivationFailureRestoresPriorPointerAndReprovesService(t *testing.T)
 	root, roots := writeCandidate(t, now, "192.0.2.10", false)
 	base := filepath.Join(root, "var/lib/sbxr/certificates/ip")
 	prior := filepath.Join(base, "sets/ip-prior")
-	if err := os.MkdirAll(prior, 0o750); err != nil {
+	if err := os.MkdirAll(prior, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink("sets/ip-prior", filepath.Join(base, "current")); err != nil {
@@ -112,7 +112,7 @@ func TestIPActivationFailureRestoresPriorPointerAndReprovesService(t *testing.T)
 				continue
 			}
 			info, statErr := os.Lstat(match)
-			if statErr != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o640 {
+			if statErr != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o644 {
 				t.Fatalf("serving file %s = %v %v", match, info, statErr)
 			}
 		}
@@ -124,12 +124,12 @@ func TestIPActivationRestartInspectionAndCompleteCleanup(t *testing.T) {
 	root, roots := writeCandidate(t, now, "192.0.2.10", false)
 	base := filepath.Join(root, "var/lib/sbxr/certificates/ip")
 	prior := filepath.Join(base, "sets/ip-prior")
-	if err := os.MkdirAll(prior, 0o750); err != nil {
+	if err := os.MkdirAll(prior, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"fullchain.pem", "privkey.pem"} {
 		file := filepath.Join(prior, name)
-		if err := os.WriteFile(file, []byte("prior"), 0o640); err != nil {
+		if err := os.WriteFile(file, []byte("prior"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Chown(file, os.Geteuid(), os.Getegid()); err != nil {
@@ -208,7 +208,7 @@ func TestDomainActivationSwitchesAndRestoresSharedPointer(t *testing.T) {
 	root, roots := writeDomainCandidate(t, now, "direct.example.com", false, false, false)
 	base := filepath.Join(root, "var/lib/sbxr/certificates/domain")
 	prior := filepath.Join(base, "sets/domain-prior")
-	if err := os.MkdirAll(prior, 0o750); err != nil {
+	if err := os.MkdirAll(prior, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink("sets/domain-prior", filepath.Join(base, "current")); err != nil {
@@ -241,12 +241,12 @@ func TestDomainActivationUsesSafeSharedFilesAndCleansPriorSet(t *testing.T) {
 	root, roots := writeDomainCandidate(t, now, "direct.example.com", false, false, false)
 	base := filepath.Join(root, "var/lib/sbxr/certificates/domain")
 	prior := filepath.Join(base, "sets/domain-prior")
-	if err := os.MkdirAll(prior, 0o750); err != nil {
+	if err := os.MkdirAll(prior, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"fullchain.pem", "privkey.pem"} {
 		file := filepath.Join(prior, name)
-		if err := os.WriteFile(file, []byte("prior"), 0o640); err != nil {
+		if err := os.WriteFile(file, []byte("prior"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Chown(file, os.Geteuid(), os.Getegid()); err != nil {
@@ -270,7 +270,7 @@ func TestDomainActivationUsesSafeSharedFilesAndCleansPriorSet(t *testing.T) {
 	}
 	for _, name := range []string{"fullchain.pem", "privkey.pem"} {
 		info, err := os.Lstat(filepath.Join(base, current, name))
-		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o640 {
+		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o644 {
 			t.Fatalf("shared domain file %s = %v, %v", name, info, err)
 		}
 	}

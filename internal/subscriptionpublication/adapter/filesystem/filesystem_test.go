@@ -38,12 +38,12 @@ func TestAtomicArtifactSetActivationRollbackAndServingAgreement(t *testing.T) {
 	}
 	current := filepath.Join(root, "var/lib/sbxr/subscriptions/current")
 	first := "sets/revision-00000000000000000008-888888888888"
-	if info, err := os.Lstat(current); err != nil || !info.IsDir() || info.Mode().Perm() != 0o750 {
+	if info, err := os.Lstat(current); err != nil || !info.IsDir() || info.Mode().Perm() != 0o755 {
 		t.Fatalf("current = %v, %v", info, err)
 	}
 	for _, name := range subscriptionpublication.Names() {
 		info, err := os.Lstat(filepath.Join(current, name))
-		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o640 {
+		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o644 {
 			t.Fatalf("%s mode = %v, %v", name, info, err)
 		}
 	}
@@ -75,7 +75,7 @@ func TestAtomicArtifactSetActivationRollbackAndServingAgreement(t *testing.T) {
 	setsInfo, _ := os.Stat(filepath.Join(root, "var/lib/sbxr/subscriptions/sets"))
 	priorInfo, _ := os.Stat(filepath.Join(root, "var/lib/sbxr/subscriptions", first))
 	activeInfo, _ := os.Stat(current)
-	if setsInfo.Mode().Perm() != 0o700 || priorInfo.Mode().Perm() != 0o700 || activeInfo.Mode().Perm() != 0o750 {
+	if setsInfo.Mode().Perm() != 0o700 || priorInfo.Mode().Perm() != 0o700 || activeInfo.Mode().Perm() != 0o755 {
 		t.Fatalf("serving traversal modes = sets %o, prior %o, active %o", setsInfo.Mode().Perm(), priorInfo.Mode().Perm(), activeInfo.Mode().Perm())
 	}
 	if _, err := executor.Reverse(root, bytes.NewReader(prior.Bytes()), time.Second); err != nil {
@@ -191,8 +191,13 @@ func TestRestartReconcilesAnInterruptedDirectoryExchange(t *testing.T) {
 	if err := os.Rename(current, temporary); err != nil || os.Rename(priorPath, current) != nil || os.Rename(temporary, priorPath) != nil {
 		t.Fatal("simulate interruption after exchange")
 	}
-	if err := os.Chmod(current, 0o750); err != nil || os.Chmod(priorPath, 0o700) != nil {
+	if err := os.Chmod(current, 0o755); err != nil || os.Chmod(priorPath, 0o700) != nil {
 		t.Fatal("simulate interrupted exchange permissions")
+	}
+	for _, name := range append(subscriptionpublication.Names(), "serving.json") {
+		if os.Chmod(filepath.Join(current, name), 0o644) != nil || os.Chmod(filepath.Join(priorPath, name), 0o644) != nil {
+			t.Fatal("simulate interrupted exchange file permissions")
+		}
 	}
 	if effect, err := executor.Inspect(root, bytes.NewReader(prior.Bytes()), time.Second); effect != systemchanges.StepEffectPresent || err != nil {
 		t.Fatalf("Inspect interrupted exchange = %s, %v", effect, err)
@@ -221,7 +226,7 @@ func TestRestartRestoresPriorBeforeInactiveModeSettles(t *testing.T) {
 		t.Fatal(err)
 	}
 	priorPath := filepath.Join(root, "var/lib/sbxr/subscriptions/sets/revision-00000000000000000008-888888888888")
-	if err := os.Chmod(priorPath, 0o750); err != nil {
+	if err := os.Chmod(priorPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := executor.Reverse(root, bytes.NewReader(prior.Bytes()), time.Second); err != nil {
@@ -251,7 +256,7 @@ func TestStorageFailureLeavesPriorGenerationActive(t *testing.T) {
 	}
 	info, _ := os.Stat(current)
 	raw, _ := os.ReadFile(filepath.Join(current, "raw"))
-	if info.Mode().Perm() != 0o750 || !bytes.Contains(raw, []byte("BODY-N8")) {
+	if info.Mode().Perm() != 0o755 || !bytes.Contains(raw, []byte("BODY-N8")) {
 		t.Fatalf("failed storage changed current mode=%o raw=%q", info.Mode().Perm(), raw)
 	}
 }

@@ -20,7 +20,6 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
-	"os/user"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -61,31 +60,30 @@ type Server struct {
 }
 
 func New() (Server, error) {
-	if os.Geteuid() == 0 || os.Getegid() == 0 {
+	if os.Geteuid() != 0 || os.Getegid() != 0 {
 		return Server{}, failed("SUBSCRIPTION-SERVING-IDENTITY", "service identity is invalid")
 	}
 	roots, err := x509.SystemCertPool()
 	if err != nil {
 		return Server{}, failed("SUBSCRIPTION-SERVING-CERTIFICATE", "system trust roots are unavailable")
 	}
-	return Server{root: "/", uid: 0, gid: os.Getegid(), serviceUID: os.Geteuid(), serviceGID: os.Getegid(), roots: roots, now: time.Now, production: true}, nil
+	return Server{root: "/", uid: 0, gid: 0, serviceUID: 0, serviceGID: 0, roots: roots, now: time.Now, production: true}, nil
 }
 
-// Inspect validates the fixed production serving state without adopting the service identity.
-func Inspect() HealthResult {
-	group, err := user.LookupGroup("sbxr-subscription")
-	if err != nil {
-		return Result(err)
-	}
-	gid, err := strconv.Atoi(group.Gid)
-	if err != nil {
-		return Result(err)
-	}
+type RuntimeObservation struct {
+	Unit, User, Group, ActiveState string
+	MainPID, ListenerPID           uint64
+	ProcessUID, ProcessGID         uint32
+	Listener                       netip.AddrPort
+}
+
+// InspectRuntime validates the fixed production runtime and active immutable state.
+func InspectRuntime(observation RuntimeObservation) HealthResult {
 	roots, err := x509.SystemCertPool()
 	if err != nil {
 		return Result(err)
 	}
-	return Server{root: "/", uid: 0, gid: gid, roots: roots, now: time.Now, production: true}.Health()
+	return Server{root: "/", uid: 0, gid: 0, roots: roots, now: time.Now, production: true}.InspectRuntime(observation)
 }
 
 // NewAt supplies the published-storage and certificate boundaries used by Seam Verification.
@@ -97,6 +95,18 @@ func NewAt(root string, uid, gid int, roots *x509.CertPool, now time.Time) Serve
 func (server Server) Health() HealthResult {
 	_, err := server.load()
 	return Result(err)
+}
+
+// InspectRuntime is the Seam Verification form of the complete runtime check.
+func (server Server) InspectRuntime(observation RuntimeObservation) HealthResult {
+	state, err := server.load()
+	if err != nil {
+		return Result(err)
+	}
+	if observation.Unit != serviceUnit || observation.User != "root" || observation.Group != "root" || observation.ActiveState != "active" || observation.MainPID == 0 || observation.ProcessUID != 0 || observation.ProcessGID != 0 || observation.ListenerPID != observation.MainPID || observation.Listener != netip.AddrPortFrom(state.address, 10443) {
+		return Result(failed("SUBSCRIPTION-SERVING-RUNTIME", "installed runtime identity, containment, listener, or filesystem view is invalid"))
+	}
+	return Result(nil)
 }
 
 type configuration struct {
@@ -151,7 +161,7 @@ func (server Server) Serve(ctx context.Context, listener net.Listener) error {
 	if ctx == nil || listener == nil || server.roots == nil || server.now == nil {
 		return failed("SUBSCRIPTION-SERVING-INPUT", "runtime input is unavailable")
 	}
-	if server.serviceUID == 0 || os.Geteuid() != server.serviceUID || os.Getegid() != server.serviceGID {
+	if server.production && (server.serviceUID != 0 || server.serviceGID != 0 || os.Geteuid() != 0 || os.Getegid() != 0) || !server.production && (os.Geteuid() != server.serviceUID || os.Getegid() != server.serviceGID) {
 		_ = listener.Close()
 		return failed("SUBSCRIPTION-SERVING-IDENTITY", "runtime service identity is invalid")
 	}
@@ -467,8 +477,8 @@ func (server Server) load() (servingState, error) {
 		return servingState{}, failed("SUBSCRIPTION-SERVING-ARTIFACT", "active serving snapshot is invalid or unsafe")
 	}
 	certificateDirectory, pointerErr := server.activeCertificateDirectory()
-	chain, chainErr := server.safeFile(certificateDirectory+"/fullchain.pem", 0o640, 1<<20, false)
-	key, keyErr := server.safeFile(certificateDirectory+"/privkey.pem", 0o640, 1<<20, false)
+	chain, chainErr := server.safeFile(certificateDirectory+"/fullchain.pem", 0o644, 1<<20, false)
+	key, keyErr := server.safeFile(certificateDirectory+"/privkey.pem", 0o644, 1<<20, false)
 	certificate, pairErr := tls.X509KeyPair(chain, key)
 	if pointerErr != nil || chainErr != nil || keyErr != nil || pairErr != nil || !validCertificate(certificate, address, server.roots, server.now()) {
 		return servingState{}, failed("SUBSCRIPTION-SERVING-CERTIFICATE", "active HTTPS certificate is invalid or unavailable")
@@ -481,7 +491,7 @@ func (server Server) activeCertificateDirectory() (string, error) {
 	if err != nil {
 		// systemd's read-only bind exposes the validated active pointer target
 		// directly at current inside the service's otherwise empty namespace.
-		if !server.safeDirectory(certificatePath, 0o750, server.gid) {
+		if !server.safeDirectory(certificatePath, 0o755, server.gid) {
 			return "", errors.New("active Subscription Serving certificate pointer is unsafe")
 		}
 		return certificatePath, nil
@@ -489,11 +499,11 @@ func (server Server) activeCertificateDirectory() (string, error) {
 	if !safeCertificateTarget(target) {
 		return "", errors.New("active Subscription Serving certificate pointer is unsafe")
 	}
-	if !server.safeDirectory("var/lib/sbxr/certificates/ip/sets", 0o750, server.gid) {
+	if !server.safeDirectory("var/lib/sbxr/certificates/ip/sets", 0o755, server.gid) {
 		return "", errors.New("active Subscription Serving certificate sets are unsafe")
 	}
 	directory := filepath.Join("var/lib/sbxr/certificates/ip", target)
-	if !server.safeDirectory(directory, 0o750, server.gid) {
+	if !server.safeDirectory(directory, 0o755, server.gid) {
 		return "", errors.New("active Subscription Serving certificate set is unsafe")
 	}
 	return directory, nil
@@ -694,10 +704,10 @@ func (server Server) safeParents() error {
 		mode fs.FileMode
 	}{
 		{"var", 0o755}, {"var/lib", 0o755}, {"var/lib/sbxr", 0o755},
-		{"var/lib/sbxr/subscriptions", 0o750}, {artifactPath, 0o750}, {"var/lib/sbxr/certificates", 0o755}, {"var/lib/sbxr/certificates/ip", 0o750},
+		{"var/lib/sbxr/subscriptions", 0o755}, {artifactPath, 0o755}, {"var/lib/sbxr/certificates", 0o755}, {"var/lib/sbxr/certificates/ip", 0o755},
 	} {
 		group := server.gid
-		if wanted.mode == 0o755 {
+		if wanted.name == "var" || wanted.name == "var/lib" {
 			group = -1
 		}
 		exact := server.safeDirectory(wanted.name, wanted.mode, group)
@@ -726,7 +736,7 @@ func (server Server) safeFile(name string, mode fs.FileMode, limit int64, allowE
 
 func safeSnapshotFile(snapshot *os.Root, name string, uid, gid int, limit int64, allowEmpty bool) ([]byte, error) {
 	info, err := snapshot.Lstat(name)
-	if !safeFileInfo(info, err, uid, gid, 0o640, limit, allowEmpty) {
+	if !safeFileInfo(info, err, uid, gid, 0o644, limit, allowEmpty) {
 		return nil, errors.New("unsafe snapshot file")
 	}
 	return snapshot.ReadFile(name)

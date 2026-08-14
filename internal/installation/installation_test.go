@@ -104,7 +104,7 @@ func TestRootRuntimeArtifactsCrossStateAndSystemChangesInterfaces(t *testing.T) 
 	if result.Outcome != systemchanges.Completed {
 		t.Fatalf("System Changes Apply = %+v", result)
 	}
-	for _, name := range []string{"xray", "sing_box", "cloudflared"} {
+	for _, name := range []string{"xray", "sing_box", "cloudflared", "subscription"} {
 		if !strings.Contains(string(adapter.artifacts["prepared/manifests.json"]), `"`+name+`"`) || !strings.Contains(string(adapter.artifacts["prepared/manifests.json"]), `"Group":"root"`) || !strings.Contains(string(adapter.artifacts["prepared/manifests.json"]), `"FileMode":420`) {
 			t.Fatalf("root-runtime manifests = %s", adapter.artifacts["prepared/manifests.json"])
 		}
@@ -145,7 +145,7 @@ func prepareRootRuntimeStateForTest(t *testing.T, built *builtInstall, module st
 	}
 	wiring := &rootRuntimeTestWiring{built.wiring}
 	release := candidateRelease(built.candidate)
-	return module.PrepareCommit(state.PrepareRequest{Loaded: loaded, CandidateReleaseIdentity: state.ReleaseIdentity{Repository: release.Repository, Tag: release.Tag, Commit: release.Commit, ReleaseIndexSHA256: release.IndexSHA256}, ChangeSet: state.ChangeSetIdentity("install-" + built.desired.Installation.ID[:16]), Candidate: candidate, SemanticValidators: state.SemanticValidators{ConnectionProfiles: wiring, Subscription: wiring, Cloudflare: wiring, Certificates: wiring, NetworkPolicy: wiring, SoftwareLifecycle: wiring}, ServiceMaterials: state.ServiceMaterialsFor(candidate), RuntimeArtifacts: state.RuntimeArtifactContributions{built.wiring.profiles, built.wiring.cloudflare}, SubscriptionPublication: wiring, ReviewedInputs: reviewed})
+	return module.PrepareCommit(state.PrepareRequest{Loaded: loaded, CandidateReleaseIdentity: state.ReleaseIdentity{Repository: release.Repository, Tag: release.Tag, Commit: release.Commit, ReleaseIndexSHA256: release.IndexSHA256}, ChangeSet: state.ChangeSetIdentity("install-" + built.desired.Installation.ID[:16]), Candidate: candidate, SemanticValidators: state.SemanticValidators{ConnectionProfiles: wiring, Subscription: wiring, Cloudflare: wiring, Certificates: wiring, NetworkPolicy: wiring, SoftwareLifecycle: wiring}, ServiceMaterials: state.ServiceMaterialsFor(candidate), RuntimeArtifacts: state.RuntimeArtifactContributions{built.wiring.profiles, built.wiring.cloudflare, built.wiring.subscription}, SubscriptionPublication: wiring, ReviewedInputs: reviewed})
 }
 
 type publishingInstallState struct{ document []byte }

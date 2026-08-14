@@ -41,14 +41,14 @@ func (adapter Adapter) observeServingCertificate(lineage certificatelifecycle.Li
 	}
 	defer base.Close()
 	baseInfo, err := base.Stat(".")
-	if err != nil || !baseInfo.IsDir() || baseInfo.Mode().Perm() != 0o750 || fileUID(baseInfo) != adapter.uid {
+	if err != nil || !baseInfo.IsDir() || baseInfo.Mode().Perm() != 0o755 || fileUID(baseInfo) != adapter.uid || fileGID(baseInfo) != adapter.gid {
 		return certificatelifecycle.CertificateObservation{}, nil, false, errors.New("certificate serving directory is unsafe")
 	}
 	pointer, err := base.Lstat("current")
 	if errors.Is(err, os.ErrNotExist) {
 		return certificatelifecycle.CertificateObservation{}, nil, false, nil
 	}
-	if err != nil || pointer.Mode()&os.ModeSymlink == 0 || fileUID(pointer) != adapter.uid {
+	if err != nil || pointer.Mode()&os.ModeSymlink == 0 || fileUID(pointer) != adapter.uid || fileGID(pointer) != adapter.gid {
 		return certificatelifecycle.CertificateObservation{}, nil, false, errors.New("certificate serving pointer is unsafe")
 	}
 	target, err := base.Readlink("current")
@@ -56,11 +56,11 @@ func (adapter Adapter) observeServingCertificate(lineage certificatelifecycle.Li
 		return certificatelifecycle.CertificateObservation{}, nil, false, errors.New("certificate serving target is unsafe")
 	}
 	set, err := base.Lstat(target)
-	if err != nil || !set.IsDir() || set.Mode().Perm() != 0o750 || fileUID(set) != adapter.uid {
+	if err != nil || !set.IsDir() || set.Mode().Perm() != 0o755 || fileUID(set) != adapter.uid || fileGID(set) != adapter.gid {
 		return certificatelifecycle.CertificateObservation{}, nil, false, errors.New("certificate serving set is unsafe")
 	}
 	chainInfo, err := base.Lstat(filepath.Join(target, "fullchain.pem"))
-	if err != nil || !chainInfo.Mode().IsRegular() || chainInfo.Mode().Perm() != 0o640 || chainInfo.Size() <= 0 || chainInfo.Size() > maximumOutput || fileUID(chainInfo) != adapter.uid {
+	if err != nil || !chainInfo.Mode().IsRegular() || chainInfo.Mode().Perm() != 0o644 || chainInfo.Size() <= 0 || chainInfo.Size() > maximumOutput || fileUID(chainInfo) != adapter.uid || fileGID(chainInfo) != adapter.gid {
 		return certificatelifecycle.CertificateObservation{}, nil, false, errors.New("certificate serving chain is unsafe")
 	}
 	chain, err := base.ReadFile(filepath.Join(target, "fullchain.pem"))

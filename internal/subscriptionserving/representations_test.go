@@ -206,7 +206,7 @@ func installPublicationFixture(t *testing.T, server Server, address string, disa
 		if got := fmt.Sprintf("%x", sha256.Sum256(file.Body)); got != publicationFixtureSHA256[disableWebSocket][file.Name] {
 			t.Fatalf("immutable Publication fixture %s SHA-256 = %s", file.Name, got)
 		}
-		if err := os.WriteFile(filepath.Join(server.root, artifactPath, file.Name), file.Body, 0o640); err != nil {
+		if err := os.WriteFile(filepath.Join(server.root, artifactPath, file.Name), file.Body, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}

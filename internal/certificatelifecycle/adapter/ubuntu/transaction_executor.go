@@ -13,9 +13,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -38,23 +36,7 @@ func NewTransactionExecutor(certbot string) (TransactionExecutor, error) {
 	if clean != certbot || !filepath.IsAbs(clean) || !strings.HasPrefix(clean, "/opt/sbxr/releases/") || !strings.HasSuffix(clean, "/certbot/bin/certbot") || strings.Count(strings.TrimPrefix(strings.TrimSuffix(clean, "/certbot/bin/certbot"), "/opt/sbxr/releases/"), "/") != 0 {
 		return TransactionExecutor{}, errors.New("versioned Certbot path unavailable")
 	}
-	group, err := user.LookupGroup("sbxr-subscription")
-	if err != nil {
-		return TransactionExecutor{}, errors.New("sbxr-subscription group unavailable")
-	}
-	gid, err := strconv.Atoi(group.Gid)
-	if err != nil {
-		return TransactionExecutor{}, errors.New("sbxr-subscription group is invalid")
-	}
-	domainGroup, err := user.LookupGroup("sing-box")
-	if err != nil {
-		return TransactionExecutor{}, errors.New("sing-box group unavailable")
-	}
-	domainGID, err := strconv.Atoi(domainGroup.Gid)
-	if err != nil {
-		return TransactionExecutor{}, errors.New("sing-box group is invalid")
-	}
-	return TransactionExecutor{now: time.Now, uid: 0, gid: gid, domainGID: domainGID, certbot: certbot, run: runCertificateCommand, prove: proveSubscriptionHTTPS}, nil
+	return TransactionExecutor{now: time.Now, uid: 0, gid: 0, domainGID: 0, certbot: certbot, run: runCertificateCommand, prove: proveSubscriptionHTTPS}, nil
 }
 
 func NewFreshTransactionExecutor(certbot string) (TransactionExecutor, error) {
@@ -62,27 +44,7 @@ func NewFreshTransactionExecutor(certbot string) (TransactionExecutor, error) {
 	if clean != certbot || !filepath.IsAbs(clean) || !strings.HasPrefix(clean, "/opt/sbxr/releases/") || !strings.HasSuffix(clean, "/certbot/bin/certbot") || strings.Count(strings.TrimPrefix(strings.TrimSuffix(clean, "/certbot/bin/certbot"), "/opt/sbxr/releases/"), "/") != 0 {
 		return TransactionExecutor{}, errors.New("versioned Certbot path unavailable")
 	}
-	return TransactionExecutor{now: time.Now, uid: 0, gid: -1, domainGID: -1, certbot: certbot, run: runCertificateCommand, prove: proveSubscriptionHTTPS}, nil
-}
-
-func (executor TransactionExecutor) resolved() (TransactionExecutor, error) {
-	if executor.gid >= 0 && executor.domainGID >= 0 {
-		return executor, nil
-	}
-	group, err := user.LookupGroup("sbxr-subscription")
-	if err != nil {
-		return TransactionExecutor{}, errors.New("sbxr-subscription group unavailable")
-	}
-	executor.gid, err = strconv.Atoi(group.Gid)
-	if err != nil {
-		return TransactionExecutor{}, errors.New("sbxr-subscription group is invalid")
-	}
-	domainGroup, err := user.LookupGroup("sing-box")
-	if err != nil {
-		return TransactionExecutor{}, errors.New("sing-box group unavailable")
-	}
-	executor.domainGID, err = strconv.Atoi(domainGroup.Gid)
-	return executor, err
+	return TransactionExecutor{now: time.Now, uid: 0, gid: 0, domainGID: 0, certbot: certbot, run: runCertificateCommand, prove: proveSubscriptionHTTPS}, nil
 }
 
 func (executor TransactionExecutor) CaptureRollback(root string, step systemchanges.Step, write func(io.Reader) error) error {
@@ -110,11 +72,6 @@ func (executor TransactionExecutor) CaptureRollback(root string, step systemchan
 }
 
 func (executor TransactionExecutor) Execute(root string, step systemchanges.Step, timeout time.Duration, cancellation *systemchanges.Cancellation) (systemchanges.StepEvidence, error) {
-	var resolveErr error
-	executor, resolveErr = executor.resolved()
-	if resolveErr != nil {
-		return systemchanges.StepEvidence{}, resolveErr
-	}
 	change, ok := step.CertificateChange()
 	if !ok || cancellation.Requested() {
 		return systemchanges.StepEvidence{}, errors.New("certificate action cancelled or invalid")
@@ -184,11 +141,6 @@ func (executor TransactionExecutor) Execute(root string, step systemchanges.Step
 }
 
 func (executor TransactionExecutor) Reverse(root string, step systemchanges.Step, snapshot io.Reader, timeout time.Duration) (systemchanges.StepEvidence, error) {
-	var resolveErr error
-	executor, resolveErr = executor.resolved()
-	if resolveErr != nil {
-		return systemchanges.StepEvidence{}, resolveErr
-	}
 	change, ok := step.CertificateChange()
 	if !ok {
 		return systemchanges.StepEvidence{}, errors.New("certificate rollback unavailable")
@@ -237,11 +189,6 @@ func (executor TransactionExecutor) Reverse(root string, step systemchanges.Step
 }
 
 func (executor TransactionExecutor) Inspect(root string, step systemchanges.Step, snapshot io.Reader, _ time.Duration) (systemchanges.StepEffect, error) {
-	var resolveErr error
-	executor, resolveErr = executor.resolved()
-	if resolveErr != nil {
-		return "", resolveErr
-	}
 	change, ok := step.CertificateChange()
 	if !ok {
 		return "", errors.New("certificate inspection unavailable")
@@ -279,11 +226,6 @@ func (executor TransactionExecutor) Inspect(root string, step systemchanges.Step
 }
 
 func (executor TransactionExecutor) Check(root, code string, _ systemchanges.GatePhase, timeout time.Duration) (systemchanges.HealthStatus, error) {
-	var resolveErr error
-	executor, resolveErr = executor.resolved()
-	if resolveErr != nil {
-		return systemchanges.Unknown, resolveErr
-	}
 	if code == "CERTIFICATE-DOMAIN-CANDIDATE" {
 		if _, err := servingDomainIdentity(root, executor.roots, executor.clock(), executor.uid, executor.servingGID(systemchanges.CertificateDomainActivate)); err != nil {
 			return systemchanges.Failed, err
@@ -310,11 +252,6 @@ func (executor TransactionExecutor) Check(root, code string, _ systemchanges.Gat
 }
 
 func (executor TransactionExecutor) Cleanup(root string, action systemchanges.CertificateAction) error {
-	var resolveErr error
-	executor, resolveErr = executor.resolved()
-	if resolveErr != nil {
-		return resolveErr
-	}
 	base, prefix := certificateServingBase(root, action)
 	if action != systemchanges.CertificateIPActivate && action != systemchanges.CertificateDomainActivate {
 		return errors.New("certificate cleanup lineage unavailable")
@@ -384,13 +321,13 @@ func (executor TransactionExecutor) installServingSet(root, certName, lineage st
 	base := filepath.Join(root, "var/lib/sbxr/certificates", lineage)
 	set := filepath.Join(base, "sets", id)
 	for _, directory := range []string{base, filepath.Join(base, "sets"), set} {
-		if err := os.MkdirAll(directory, 0o750); err != nil || ensureServingDirectory(directory, executor.uid, gid) != nil {
+		if err := os.MkdirAll(directory, 0o755); err != nil || ensureServingDirectory(directory, executor.uid, gid) != nil {
 			return errors.New("serving certificate directory setup failed")
 		}
 	}
 	for name, content := range map[string][]byte{"fullchain.pem": chain, "privkey.pem": key} {
 		target := filepath.Join(set, name)
-		file, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o640)
+		file, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 		if errors.Is(err, os.ErrExist) {
 			existing, readErr := safeServingFile(target, executor.uid, gid)
 			if readErr != nil || string(existing) != string(content) {
@@ -401,7 +338,7 @@ func (executor TransactionExecutor) installServingSet(root, certName, lineage st
 		} else if _, err = file.Write(content); err != nil || file.Sync() != nil || file.Close() != nil {
 			return errors.New("serving certificate write failed")
 		}
-		if os.Chmod(target, 0o640) != nil || os.Chown(target, executor.uid, gid) != nil {
+		if os.Chmod(target, 0o644) != nil || os.Chown(target, executor.uid, gid) != nil {
 			return errors.New("serving certificate write failed")
 		}
 	}
@@ -537,7 +474,7 @@ func (executor TransactionExecutor) servingGID(action systemchanges.CertificateA
 }
 
 func ensureServingDirectory(name string, uid, gid int) error {
-	if err := os.Chown(name, uid, gid); err != nil || os.Chmod(name, 0o750) != nil {
+	if err := os.Chown(name, uid, gid); err != nil || os.Chmod(name, 0o755) != nil {
 		return errors.New("serving directory ownership failed")
 	}
 	return safeServingDirectory(name, uid, gid)
@@ -545,7 +482,7 @@ func ensureServingDirectory(name string, uid, gid int) error {
 
 func safeServingDirectory(name string, uid, gid int) error {
 	info, err := os.Lstat(name)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o750 || fileUID(info) != uid || fileGID(info) != gid {
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o755 || fileUID(info) != uid || fileGID(info) != gid {
 		return errors.New("serving directory is unsafe")
 	}
 	return nil
@@ -553,7 +490,7 @@ func safeServingDirectory(name string, uid, gid int) error {
 
 func safeServingFile(name string, uid, gid int) ([]byte, error) {
 	info, err := os.Lstat(name)
-	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o640 || info.Size() <= 0 || info.Size() > 1<<20 || fileUID(info) != uid || fileGID(info) != gid {
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o644 || info.Size() <= 0 || info.Size() > 1<<20 || fileUID(info) != uid || fileGID(info) != gid {
 		return nil, errors.New("serving file is unsafe")
 	}
 	return os.ReadFile(name)

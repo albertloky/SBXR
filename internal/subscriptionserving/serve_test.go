@@ -17,6 +17,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -111,7 +112,7 @@ func TestServeFailsClosedOnUnsafeInputs(t *testing.T) {
 		{"short token", "SUBSCRIPTION-SERVING-ARTIFACT", func(t *testing.T, server *Server) {
 			path := filepath.Join(server.root, configurationPath)
 			body, _ := os.ReadFile(path)
-			mustFile(t, server.root, configurationPath, []byte(strings.Replace(string(body), "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20", "01", 1)), 0o640)
+			mustFile(t, server.root, configurationPath, []byte(strings.Replace(string(body), "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20", "01", 1)), 0o644)
 		}},
 		{"writable artifact", "SUBSCRIPTION-SERVING-ARTIFACT", func(t *testing.T, server *Server) {
 			if err := os.Chmod(filepath.Join(server.root, artifactPath, "base64"), 0o660); err != nil {
@@ -133,7 +134,7 @@ func TestServeFailsClosedOnUnsafeInputs(t *testing.T) {
 		{"mismatched certificate", "SUBSCRIPTION-SERVING-CERTIFICATE", func(t *testing.T, server *Server) {
 			path := filepath.Join(server.root, configurationPath)
 			body, _ := os.ReadFile(path)
-			mustFile(t, server.root, configurationPath, []byte(strings.Replace(string(body), "127.0.0.1", "127.0.0.2", 1)), 0o640)
+			mustFile(t, server.root, configurationPath, []byte(strings.Replace(string(body), "127.0.0.1", "127.0.0.2", 1)), 0o644)
 		}},
 		{"unavailable certificate", "SUBSCRIPTION-SERVING-CERTIFICATE", func(t *testing.T, server *Server) {
 			target, _ := os.Readlink(filepath.Join(server.root, certificatePath))
@@ -213,7 +214,7 @@ func TestServeSupportsTheSelectedIPv6Family(t *testing.T) {
 func TestServiceUnitHasOnlyReadOnlySubscriptionAuthority(t *testing.T) {
 	unit := ServiceUnit()
 	for _, required := range []string{
-		"User=sbxr-subscription", "Group=sbxr-subscription", "ExecStart=/usr/local/bin/sbxr private subscription-serve",
+		"User=root", "Group=root", "ExecStart=/usr/local/bin/sbxr private subscription-serve",
 		"StandardOutput=null", "StandardError=null",
 		"ProtectSystem=strict", "NoNewPrivileges=true", "PrivateTmp=true", "ProtectHome=true",
 		"TemporaryFileSystem=/:ro", "BindReadOnlyPaths=/usr/local/bin/sbxr",
@@ -247,6 +248,61 @@ func TestServeRefusesTheWrongServiceIdentity(t *testing.T) {
 	}
 }
 
+func TestProductionServeRefusesOldAndMixedServiceIdentity(t *testing.T) {
+	for _, identity := range []struct {
+		name     string
+		uid, gid int
+	}{
+		{name: "old", uid: 123, gid: 123},
+		{name: "mixed user", uid: 123, gid: 0},
+		{name: "mixed group", uid: 0, gid: 123},
+	} {
+		t.Run(identity.name, func(t *testing.T) {
+			server, _, _, _ := testServer(t, "127.0.0.1")
+			server.production = true
+			server.serviceUID, server.serviceGID = identity.uid, identity.gid
+			listener, err := net.Listen("tcp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			serveErr := server.Serve(t.Context(), listener)
+			var failure *Failure
+			if !errors.As(serveErr, &failure) || failure.Code != "SUBSCRIPTION-SERVING-IDENTITY" {
+				t.Fatalf("production identity (%d:%d) = %v", identity.uid, identity.gid, serveErr)
+			}
+		})
+	}
+}
+
+func TestRuntimeInspectionRejectsOldMixedAndIncompleteFacts(t *testing.T) {
+	server, _, _, _ := testServer(t, "127.0.0.1")
+	healthy := RuntimeObservation{Unit: ServiceUnit(), User: "root", Group: "root", ActiveState: "active", MainPID: 42, ListenerPID: 42, Listener: netip.MustParseAddrPort("127.0.0.1:10443")}
+	if result := server.InspectRuntime(healthy); result.Status != Healthy {
+		t.Fatalf("complete runtime = %+v", result)
+	}
+	for _, test := range []struct {
+		name   string
+		change func(*RuntimeObservation)
+	}{
+		{name: "old identity", change: func(value *RuntimeObservation) { value.User, value.Group = "sbxr-subscription", "sbxr-subscription" }},
+		{name: "mixed identity", change: func(value *RuntimeObservation) { value.Group = "sbxr-subscription" }},
+		{name: "missing containment", change: func(value *RuntimeObservation) {
+			value.Unit = strings.Replace(value.Unit, "NoNewPrivileges=true\n", "", 1)
+		}},
+		{name: "wrong listener", change: func(value *RuntimeObservation) { value.Listener = netip.MustParseAddrPort("127.0.0.1:10444") }},
+		{name: "wrong process", change: func(value *RuntimeObservation) { value.ListenerPID++ }},
+		{name: "old process identity", change: func(value *RuntimeObservation) { value.ProcessUID, value.ProcessGID = 123, 123 }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			observation := healthy
+			test.change(&observation)
+			if result := server.InspectRuntime(observation); result.Status != Failed || result.Code != "SUBSCRIPTION-SERVING-RUNTIME" {
+				t.Fatalf("runtime result = %+v", result)
+			}
+		})
+	}
+}
+
 func startServer(t *testing.T, server Server, network, address string) (net.Listener, context.CancelFunc) {
 	t.Helper()
 	listener, err := net.Listen(network, address)
@@ -269,10 +325,10 @@ func testServer(t *testing.T, address string) (Server, *x509.CertPool, string, s
 	token := hex.EncodeToString(tokenBytes)
 	body := "dmxlc3M6Ly9leGFtcGxl"
 	mustDirectory(t, root, "var/lib/sbxr", 0o755)
-	mustDirectory(t, root, "var/lib/sbxr/subscriptions", 0o750)
-	mustDirectory(t, root, "var/lib/sbxr/subscriptions/current", 0o750)
+	mustDirectory(t, root, "var/lib/sbxr/subscriptions", 0o755)
+	mustDirectory(t, root, "var/lib/sbxr/subscriptions/current", 0o755)
 	configuration, _ := json.Marshal(map[string]any{"token": token, "listen_port": 10443, "certificate_pointer": "/var/lib/sbxr/certificates/ip/current", "primary_address": address})
-	mustFile(t, root, configurationPath, configuration, 0o640)
+	mustFile(t, root, configurationPath, configuration, 0o644)
 	contents := map[string][]byte{
 		"base64": []byte(body), "raw": []byte("vless://example"), "v2rayn": []byte(body), "shadowrocket": []byte(body),
 		"karing": []byte("{}"), "mihomo": []byte("proxies: []\n"), "sing-box": []byte("{}"),
@@ -290,7 +346,7 @@ func testServer(t *testing.T, address string) (Server, *x509.CertPool, string, s
 		"profile_count": 1, "omissions": []map[string]string{{"id": "vless-xhttp"}, {"id": "vless-websocket"}, {"id": "hysteria2"}, {"id": "tuic"}, {"id": "anytls"}}, "validation_complete": true,
 	})
 	for _, name := range []string{"base64", "raw", "v2rayn", "shadowrocket", "karing", "mihomo", "sing-box", "metadata"} {
-		mustFile(t, root, "var/lib/sbxr/subscriptions/current/"+name, contents[name], 0o640)
+		mustFile(t, root, "var/lib/sbxr/subscriptions/current/"+name, contents[name], 0o644)
 	}
 	roots := testCertificate(t, root, address)
 	return NewAt(root, uid, gid, roots, time.Now()), roots, token, body
@@ -308,11 +364,11 @@ func testCertificate(t *testing.T, root, address string) *x509.CertPool {
 	chain := append(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER}), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootDER})...)
 	keyDER, _ := x509.MarshalPKCS8PrivateKey(leafKey)
 	mustDirectory(t, root, "var/lib/sbxr/certificates", 0o755)
-	mustDirectory(t, root, "var/lib/sbxr/certificates/ip", 0o750)
-	mustDirectory(t, root, "var/lib/sbxr/certificates/ip/sets", 0o750)
-	mustDirectory(t, root, "var/lib/sbxr/certificates/ip/sets/ip-fixture", 0o750)
-	mustFile(t, root, "var/lib/sbxr/certificates/ip/sets/ip-fixture/fullchain.pem", chain, 0o640)
-	mustFile(t, root, "var/lib/sbxr/certificates/ip/sets/ip-fixture/privkey.pem", pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0o640)
+	mustDirectory(t, root, "var/lib/sbxr/certificates/ip", 0o755)
+	mustDirectory(t, root, "var/lib/sbxr/certificates/ip/sets", 0o755)
+	mustDirectory(t, root, "var/lib/sbxr/certificates/ip/sets/ip-fixture", 0o755)
+	mustFile(t, root, "var/lib/sbxr/certificates/ip/sets/ip-fixture/fullchain.pem", chain, 0o644)
+	mustFile(t, root, "var/lib/sbxr/certificates/ip/sets/ip-fixture/privkey.pem", pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0o644)
 	if err := os.Symlink("sets/ip-fixture", filepath.Join(root, certificatePath)); err != nil {
 		t.Fatal(err)
 	}
