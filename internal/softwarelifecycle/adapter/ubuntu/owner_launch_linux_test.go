@@ -25,11 +25,10 @@ func TestOwnerLaunchExecutesTheSameDescriptorThatPassedVerification(t *testing.T
 	if err := verifyOwnerConsoleExecutable(executable, facts); err != nil {
 		t.Fatalf("verify owner console executable: %v", err)
 	}
-	replacement := filepath.Join(t.TempDir(), "replacement")
-	if err := os.WriteFile(replacement, []byte("replacement"), 0o700); err != nil {
+	if err := os.Rename(name, name+".verified"); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Rename(replacement, name); err != nil {
+	if err := os.WriteFile(name, []byte("replacement"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
