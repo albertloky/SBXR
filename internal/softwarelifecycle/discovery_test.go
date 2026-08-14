@@ -120,6 +120,21 @@ func TestViewDiscoveryRejectsSameOlderAndIncompatibleReleases(t *testing.T) {
 	}
 }
 
+func TestViewDiscoveryDoesNotOfferTheRootRuntimeReleaseToV106(t *testing.T) {
+	evidence := updateEvidence(2, "v1.1.0", strings.Repeat("b", 40))
+	source := &discoveryReleaseSource{evidence: evidence, listing: softwarelifecycle.ReleaseListing{Tag: evidence.Tag}}
+	store := &candidateMemory{}
+	installed := installedRelease(1)
+	installed.Identity.Tag = "v1.0.6"
+	discovery := softwarelifecycle.StableUpdateDiscovery()
+
+	got := softwarelifecycle.NewWithCandidateRetention(source, qualification(), func() time.Time { return verifiedAt }, store).View(t.Context(), softwarelifecycle.ViewRequest{InstallationStatus: softwarelifecycle.Managed, Installed: &installed, UpdateDiscovery: &discovery})
+
+	if got.Refusal != nil || got.VerifiedCandidate != nil || got.UpdateEligible || len(got.PermittedActions) != 0 || store.present || store.replaces != 0 {
+		t.Fatalf("v1.0.6 discovery = %#v, store=%+v", got, store)
+	}
+}
+
 func TestViewDiscoveryAcceptsACompleteForwardStateMigrationPath(t *testing.T) {
 	evidence := updateEvidenceWithMigration(2, "v1.1.0", strings.Repeat("b", 40))
 	source := &discoveryReleaseSource{evidence: evidence, listing: softwarelifecycle.ReleaseListing{Tag: evidence.Tag}}

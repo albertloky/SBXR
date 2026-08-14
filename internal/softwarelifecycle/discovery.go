@@ -109,7 +109,7 @@ func (module Interface) loadCandidate() (VerifiedRelease, bool, error) {
 }
 
 func eligibleUpdate(installed, candidate VerifiedRelease) bool {
-	return validInstalled(installed) && validInstalled(candidate) && candidate.Identity != installed.Identity && candidate.Sequence > installed.Sequence && candidate.MinimumUpdaterSchema <= 1 && compatibleStateSchemas(installed.StateSchema, candidate)
+	return validInstalled(installed) && installed.Identity.Tag != "v1.0.6" && validInstalled(candidate) && candidate.Identity != installed.Identity && candidate.Sequence > installed.Sequence && candidate.MinimumUpdaterSchema <= 1 && compatibleStateSchemas(installed.StateSchema, candidate)
 }
 
 func eligibleDowngrade(installed, candidate VerifiedRelease) bool {

@@ -1,6 +1,6 @@
 # Software Lifecycle acceptance
 
-This procedure defines stable checks for issues #125, #126, #127, #128, #155, and #156. It contains no run results, raw GitHub verifier output, Client Access Values, Infrastructure Secrets, or Owner-managed configuration.
+This procedure defines stable checks for issues #125, #126, #127, #128, #155, #156, and #178. It contains no run results, raw GitHub verifier output, Client Access Values, Infrastructure Secrets, or Owner-managed configuration.
 
 ## Module Verification
 
@@ -201,12 +201,12 @@ The confirmed Owner Console Plan must retain every exact reviewed reclamation ta
 Run:
 
 ```sh
-go test ./internal/softwarelifecycle -run '^TestViewDiscovery(HonorsStableAndReviewedAlternateChannels|RejectsSameOlderAndIncompatibleReleases|AcceptsACompleteForwardStateMigrationPath)$' -count=1
+go test ./internal/softwarelifecycle -run '^TestViewDiscovery(HonorsStableAndReviewedAlternateChannels|RejectsSameOlderAndIncompatibleReleases|DoesNotOfferTheRootRuntimeReleaseToV106|AcceptsACompleteForwardStateMigrationPath)$' -count=1
 go test ./internal/softwarelifecycle -run '^TestPayloadMetadataAcceptsOnlyCompleteSequentialNoNetworkMigrationMaterial$' -count=1
 go test ./internal/softwarelifecycle/adapter/github -run '^TestSourceDiscover' -count=1
 ```
 
-Require the default GitHub request to select only the current stable release, ignore drafts and unintended prereleases before asset verification, and never cross to another tag. One explicitly reviewed alternate may select only that exact safe tag. Require duplicate keys, unknown fields, trailing documents, unsafe tags, and raw command failures to return no listing. Require same Release Identity, automatic downgrade, non-higher sequence, newer updater schema, and a changed State schema without the complete embedded forward path to expose no candidate or action. Require an authenticated higher sequence with the installed schema or a complete sequential deterministic no-network forward path embedded identically in both application archives to expose only `Review update`.
+Require the default GitHub request to select only the current stable release, ignore drafts and unintended prereleases before asset verification, and never cross to another tag. One explicitly reviewed alternate may select only that exact safe tag. Require duplicate keys, unknown fields, trailing documents, unsafe tags, and raw command failures to return no listing. Require same Release Identity, automatic downgrade, non-higher sequence, newer updater schema, and a changed State schema without the complete embedded forward path to expose no candidate or action. An installed `v1.0.6` must expose and retain no newer Update because its service-identity form is incompatible with the root-runtime design; discovery receives no Complete removal authority and gives no migration or removal guidance. Require an authenticated higher sequence from every compatible installed release, with the installed schema or a complete sequential deterministic no-network forward path embedded identically in both application archives, to expose only `Review update`.
 
 ### SL-UPDATE-02 — One newest verified unapplied candidate
 
