@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io/fs"
 	"reflect"
-	"slices"
 	"sync"
 	"sync/atomic"
 )
@@ -127,25 +126,6 @@ type NetworkPolicyValidator interface {
 
 type SoftwareLifecycleValidator interface {
 	ValidateSoftwareLifecycle(SoftwareLifecycleIntent) error
-}
-
-// RuntimeArtifactContribution is implemented by the typed owning-Module value
-// whose prepared artifacts use the root runtime form.
-type RuntimeArtifactContribution interface {
-	StateRuntimeArtifacts() (source any, services []string, valid bool)
-}
-
-// RuntimeArtifactContributions are process-local preparation authority.
-type RuntimeArtifactContributions []RuntimeArtifactContribution
-
-func (RuntimeArtifactContributions) MarshalJSON() ([]byte, error) {
-	return nil, errProtectedValueRendering
-}
-func (RuntimeArtifactContributions) String() string {
-	return "[redacted runtime artifact contributions]"
-}
-func (RuntimeArtifactContributions) GoString() string {
-	return "[redacted runtime artifact contributions]"
 }
 
 // SemanticValidators contains every required owning-Module validation Seam.
@@ -332,7 +312,6 @@ type PrepareRequest struct {
 	Candidate                DesiredState
 	SemanticValidators       SemanticValidators
 	ServiceMaterials         ServiceMaterials
-	RuntimeArtifacts         RuntimeArtifactContributions
 	SubscriptionPublication  SubscriptionPublicationPreparer
 	ReviewedInputs           ReviewedInputs
 }
@@ -912,9 +891,9 @@ func (i Interface) prepareCommit(request PrepareRequest, deferred *deferredCloud
 	}
 	var copies PreparedServiceCopies
 	if materials.Xray != nil {
-		prepared, err := prepareServiceCopy("xray.service", "connectionprofiles", "xray", revision, request.ChangeSet, materials.Xray)
+		prepared, err := prepareServiceCopy("xray.service", "connectionprofiles", revision, request.ChangeSet, materials.Xray)
 		if nativeXray != nil {
-			prepared, err = prepareServiceBytes("xray.service", "connectionprofiles", "xray", revision, request.ChangeSet, nativeXray)
+			prepared, err = prepareServiceBytes("xray.service", "connectionprofiles", revision, request.ChangeSet, nativeXray)
 		}
 		if err != nil {
 			return nil, err
@@ -922,9 +901,9 @@ func (i Interface) prepareCommit(request PrepareRequest, deferred *deferredCloud
 		copies.Xray = &prepared
 	}
 	if materials.SingBox != nil {
-		prepared, err := prepareServiceCopy("sing-box.service", "connectionprofiles", "sing-box", revision, request.ChangeSet, materials.SingBox)
+		prepared, err := prepareServiceCopy("sing-box.service", "connectionprofiles", revision, request.ChangeSet, materials.SingBox)
 		if nativeSingBox != nil {
-			prepared, err = prepareServiceBytes("sing-box.service", "connectionprofiles", "sing-box", revision, request.ChangeSet, nativeSingBox)
+			prepared, err = prepareServiceBytes("sing-box.service", "connectionprofiles", revision, request.ChangeSet, nativeSingBox)
 		}
 		if err != nil {
 			return nil, err
@@ -932,20 +911,17 @@ func (i Interface) prepareCommit(request PrepareRequest, deferred *deferredCloud
 		copies.SingBox = &prepared
 	}
 	if materials.Cloudflared != nil {
-		prepared, err := prepareServiceCopy("cloudflared.service", "cloudflaretunnel", "cloudflared", revision, request.ChangeSet, materials.Cloudflared)
+		prepared, err := prepareServiceCopy("cloudflared.service", "cloudflaretunnel", revision, request.ChangeSet, materials.Cloudflared)
 		if err != nil {
 			return nil, err
 		}
 		copies.Cloudflared = &prepared
 	}
-	subscription, err := prepareServiceCopy("sbxr-subscription.service", "subscriptionserving", "sbxr-subscription", revision, request.ChangeSet, materials.Subscription)
+	subscription, err := prepareServiceCopy("sbxr-subscription.service", "subscriptionserving", revision, request.ChangeSet, materials.Subscription)
 	if err != nil {
 		return nil, err
 	}
 	copies.Subscription = &subscription
-	if err := applyRuntimeArtifactContributions(copies, request.RuntimeArtifacts, request.SemanticValidators, deferred != nil); err != nil {
-		return nil, finding("STATE-RUNTIME-ARTIFACT", "root runtime artifact", "the owning-Module contribution is missing, duplicated, or invalid", "one typed contribution for each exact prepared artifact", "State alone must bind the root runtime form", "regenerate the owning Module contribution and review again")
-	}
 	targetSchema := supportedSchema
 	if preserveSchema {
 		targetSchema = loaded.migration.StartingSchema
@@ -1266,78 +1242,23 @@ func expectedServiceMaterials(candidate DesiredState) ServiceMaterials {
 	return materials
 }
 
-func prepareServiceCopy(service, module, group string, revision uint64, changeSet ChangeSetIdentity, material any) (PreparedServiceCopy, error) {
+func prepareServiceCopy(service, module string, revision uint64, changeSet ChangeSetIdentity, material any) (PreparedServiceCopy, error) {
 	data, err := marshalProtectedJSON(material)
 	if err != nil {
 		return PreparedServiceCopy{}, finding("STATE-SERVICE-SERIALIZATION", "prepared service material", "typed serialization failed", "one complete deterministic JSON copy", "transaction material must be byte-stable before mutation", "correct the typed material and review again")
 	}
-	return prepareServiceBytes(service, module, group, revision, changeSet, data)
+	return prepareServiceBytes(service, module, revision, changeSet, data)
 }
 
-func prepareServiceBytes(service, module, group string, revision uint64, changeSet ChangeSetIdentity, data []byte) (PreparedServiceCopy, error) {
+func prepareServiceBytes(service, module string, revision uint64, changeSet ChangeSetIdentity, data []byte) (PreparedServiceCopy, error) {
 	if len(data) == 0 || len(data) > 1<<20 || !json.Valid(data) {
 		return PreparedServiceCopy{}, finding("STATE-SERVICE-SERIALIZATION", "prepared service material", "owning-Module bytes are empty, oversized, or invalid JSON", "one complete deterministic native configuration", "transaction material must be byte-stable before mutation", "correct the owning Module configuration and review again")
 	}
 	digest := sha256.Sum256(data)
 	return PreparedServiceCopy{manifest: ServiceManifest{
 		Service: service, OwningModule: module, CandidateRevision: revision, ChangeSet: changeSet,
-		Owner: "root", Group: group, DirectoryMode: 0o750, FileMode: 0o640, SHA256: hex.EncodeToString(digest[:]),
+		Owner: "root", Group: "root", DirectoryMode: 0o755, FileMode: 0o644, SHA256: hex.EncodeToString(digest[:]),
 	}, bytes: data}, nil
-}
-
-func applyRuntimeArtifactContributions(copies PreparedServiceCopies, contributions RuntimeArtifactContributions, validators SemanticValidators, deferredCloudflare bool) error {
-	connectionProfilesSource := any(validators.ConnectionProfiles)
-	if owner, ok := validators.ConnectionProfiles.(interface{ StateRuntimeArtifactOwner() any }); ok {
-		connectionProfilesSource = owner.StateRuntimeArtifactOwner()
-	}
-	cloudflareSource := any(validators.Cloudflare)
-	if owner, ok := validators.Cloudflare.(interface{ StateCloudflareRuntimeArtifactOwner() any }); ok {
-		cloudflareSource = owner.StateCloudflareRuntimeArtifactOwner()
-	}
-	subscriptionSource := any(validators.Subscription)
-	if owner, ok := validators.Subscription.(interface{ StateSubscriptionRuntimeArtifactOwner() any }); ok {
-		subscriptionSource = owner.StateSubscriptionRuntimeArtifactOwner()
-	}
-	prepared := map[string]*PreparedServiceCopy{
-		"xray.service":              copies.Xray,
-		"sing-box.service":          copies.SingBox,
-		"cloudflared.service":       copies.Cloudflared,
-		"sbxr-subscription.service": copies.Subscription,
-	}
-	seen := make(map[string]bool, len(contributions))
-	for _, contribution := range contributions {
-		if contribution == nil || (reflect.ValueOf(contribution).Kind() == reflect.Pointer && reflect.ValueOf(contribution).IsNil()) {
-			return errors.New("runtime artifact contribution unavailable")
-		}
-		source, services, valid := contribution.StateRuntimeArtifacts()
-		if !valid || len(services) == 0 || !slices.IsSorted(services) {
-			return errors.New("runtime artifact contribution invalid")
-		}
-		for _, service := range services {
-			expectedSource, packagePath, typeName := connectionProfilesSource, "github.com/albertloky/SBXR/internal/connectionprofiles", "Plan"
-			switch service {
-			case "cloudflared.service":
-				expectedSource, packagePath, typeName = cloudflareSource, "github.com/albertloky/SBXR/internal/cloudflaretunnel", "Plan"
-			case "sbxr-subscription.service":
-				expectedSource, packagePath, typeName = subscriptionSource, "github.com/albertloky/SBXR/internal/subscriptionpublication", "Plan"
-			}
-			copy := prepared[service]
-			typeOf, expectedType := reflect.TypeOf(source), reflect.TypeOf(expectedSource)
-			if typeOf == nil || typeOf != expectedType || !typeOf.Comparable() || typeOf.Kind() != reflect.Pointer || typeOf.Elem().PkgPath() != packagePath || typeOf.Elem().Name() != typeName || source != expectedSource || copy == nil && !(deferredCloudflare && service == "cloudflared.service") || seen[service] {
-				return errors.New("runtime artifact contribution invalid")
-			}
-			seen[service] = true
-			if copy != nil {
-				copy.manifest.Group = "root"
-				copy.manifest.DirectoryMode = 0o755
-				copy.manifest.FileMode = 0o644
-			}
-		}
-	}
-	if deferredCloudflare && !seen["cloudflared.service"] {
-		return errors.New("runtime artifact contribution unavailable")
-	}
-	return nil
 }
 
 func prepareConnectionProfileServices(validator ConnectionProfilesValidator, candidate ConnectionProfiles, reviewed ReviewedInputs, requireReviewedPlan bool) (xray, singBox []byte, err error) {

@@ -1235,8 +1235,6 @@ func TestDeferredCloudflareFinalizationPublishesProviderValuesInRevisionOne(t *t
 	}
 	validator.planIdentity = string(request.ReviewedInputs.planIdentity)
 	validator.planSHA256 = request.ReviewedInputs.planSHA256
-	validator.runtimeOwner = planResult.Plan
-	request.RuntimeArtifacts = RuntimeArtifactContributions{planResult.Plan}
 	prepared, err := stateModule.PrepareDeferredCloudflareCommit(request, planResult.Plan)
 	if err != nil {
 		t.Fatal(err)
@@ -1316,8 +1314,6 @@ func TestOwnerAssistedRunTokenRotationPausesThenRecoversForwardWithBothRoutes(t 
 		t.Fatalf("rotation Plan = %+v", planResult.Health)
 	}
 	request := preparedRequest(t, loaded, starting, "cloudflare-run-token-rotation-integration")
-	request.RuntimeArtifacts = RuntimeArtifactContributions{planResult.Plan}
-	request.SemanticValidators.Cloudflare.(*validatingSeams).runtimeOwner = planResult.Plan
 	request.ReviewedInputs, err = NewReviewedInputs(PlanIdentity(planResult.Plan.Identity()), planResult.Plan.SHA256(), request.ReviewedInputs.managed)
 	if err != nil {
 		t.Fatal(err)
@@ -3324,10 +3320,10 @@ func TestWebSocketPostMutationFailureRestoresPriorCompleteXrayConfiguration(t *t
 	prepareLock(t, root)
 	prior := []byte(`{"inbounds":[{"tag":"vless-reality-vision"}],"outbounds":[{"protocol":"freedom"}]}`)
 	active := filepath.Join(root, "etc/sbxr/xray/config.json")
-	if err := os.MkdirAll(filepath.Dir(active), 0o750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(active), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(active, prior, 0o640); err != nil {
+	if err := os.WriteFile(active, prior, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	host := &controlledUbuntuHost{
@@ -3349,10 +3345,10 @@ func TestHysteria2PostMutationFailureRestoresPriorCompleteSingBoxConfiguration(t
 	prepareLock(t, root)
 	prior := []byte(`{"inbounds":[{"tag":"prior-hysteria2"}],"outbounds":[{"tag":"direct","type":"direct"}]}`)
 	active := filepath.Join(root, "etc/sbxr/sing-box/config.json")
-	if err := os.MkdirAll(filepath.Dir(active), 0o750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(active), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(active, prior, 0o640); err != nil {
+	if err := os.WriteFile(active, prior, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	host := &controlledUbuntuHost{root: root, failExecute: true, preparedConfiguration: "prepared/sing-box.json", activeConfiguration: "etc/sbxr/sing-box/config.json", rollbackWant: prior, preparedWant: candidate}
@@ -3372,10 +3368,10 @@ func TestTUICPostMutationFailureRestoresPriorCompleteSingBoxConfiguration(t *tes
 	prepareLock(t, root)
 	prior := []byte(`{"inbounds":[{"tag":"prior-hysteria2"}],"outbounds":[{"tag":"direct","type":"direct"}]}`)
 	active := filepath.Join(root, "etc/sbxr/sing-box/config.json")
-	if err := os.MkdirAll(filepath.Dir(active), 0o750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(active), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(active, prior, 0o640); err != nil {
+	if err := os.WriteFile(active, prior, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	host := &controlledUbuntuHost{root: root, failExecute: true, preparedConfiguration: "prepared/sing-box.json", activeConfiguration: "etc/sbxr/sing-box/config.json", rollbackWant: prior, preparedWant: candidate}
@@ -3395,10 +3391,10 @@ func TestAnyTLSPostMutationFailureRestoresPriorCompleteSingBoxConfiguration(t *t
 	prepareLock(t, root)
 	prior := []byte(`{"inbounds":[{"tag":"prior-tuic"}],"outbounds":[{"tag":"direct","type":"direct"}]}`)
 	active := filepath.Join(root, "etc/sbxr/sing-box/config.json")
-	if err := os.MkdirAll(filepath.Dir(active), 0o750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(active), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(active, prior, 0o640); err != nil {
+	if err := os.WriteFile(active, prior, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	host := &controlledUbuntuHost{root: root, failExecute: true, preparedConfiguration: "prepared/sing-box.json", activeConfiguration: "etc/sbxr/sing-box/config.json", rollbackWant: prior, preparedWant: candidate}

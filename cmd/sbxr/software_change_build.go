@@ -212,7 +212,7 @@ func buildSoftwareChange(ctx context.Context, module state.Interface, loaded sta
 	}
 	prepared, err := module.PrepareSoftwareUpdateCommit(state.PrepareRequest{
 		Loaded: loaded, CandidateReleaseIdentity: state.ReleaseIdentity{Repository: candidate.Identity.Repository, Tag: candidate.Identity.Tag, Commit: candidate.Identity.Commit, ReleaseIndexSHA256: candidate.Identity.IndexSHA256}, ChangeSet: state.ChangeSetIdentity(changeSet), Candidate: desired,
-		SemanticValidators: state.SemanticValidators{ConnectionProfiles: wiring, Subscription: wiring, Cloudflare: wiring, Certificates: wiring, NetworkPolicy: wiring, SoftwareLifecycle: wiring}, ServiceMaterials: state.ServiceMaterialsFor(desired), RuntimeArtifacts: state.RuntimeArtifactContributions{profiles.Plan, cloudflareResult.Plan, publication.Plan}, SubscriptionPublication: wiring, ReviewedInputs: reviewed,
+		SemanticValidators: state.SemanticValidators{ConnectionProfiles: wiring, Subscription: wiring, Cloudflare: wiring, Certificates: wiring, NetworkPolicy: wiring, SoftwareLifecycle: wiring}, ServiceMaterials: state.ServiceMaterialsFor(desired), SubscriptionPublication: wiring, ReviewedInputs: reviewed,
 	}, plan)
 	if err != nil {
 		return nil, err
@@ -237,12 +237,8 @@ type softwareChangeWiring struct {
 	plan        *softwarelifecycle.UpdatePlan
 }
 
-func (w *softwareChangeWiring) Identity() string                           { return w.plan.Identity() }
-func (w *softwareChangeWiring) SHA256() string                             { return w.plan.SHA256() }
-func (w *softwareChangeWiring) StateRuntimeArtifactOwner() any             { return w.profiles }
-func (w *softwareChangeWiring) StateCloudflareRuntimeArtifactOwner() any   { return w.cloudflare }
-func (w *softwareChangeWiring) StateSubscriptionRuntimeArtifactOwner() any { return w.publication }
-
+func (w *softwareChangeWiring) Identity() string { return w.plan.Identity() }
+func (w *softwareChangeWiring) SHA256() string   { return w.plan.SHA256() }
 func (w *softwareChangeWiring) ValidateConnectionProfiles(value state.ConnectionProfiles, secrets state.ConnectionProfileSecretReader) error {
 	return w.profiles.ValidateConnectionProfiles(value, secrets)
 }

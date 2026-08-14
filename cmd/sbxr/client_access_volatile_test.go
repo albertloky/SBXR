@@ -17,7 +17,7 @@ func TestClientAccessVolatileDigestChangesWithReviewedArtifactsAndSystemState(t 
 	}
 	for _, name := range paths {
 		path := filepath.Join(root, name)
-		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil || os.WriteFile(path, []byte(name), 0o640) != nil {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil || os.WriteFile(path, []byte(name), 0o644) != nil {
 			t.Fatal("write reviewed artifact")
 		}
 	}

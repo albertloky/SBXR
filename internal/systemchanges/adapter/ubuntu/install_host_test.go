@@ -27,9 +27,9 @@ func TestInstallHostActivatesAndReversesOnlyPreparedProxyConfigurations(t *testi
 		t.Fatal(err)
 	}
 	xray, singBox := []byte(`{"inbounds":[{"tag":"xray"}]}`), []byte(`{"inbounds":[{"tag":"sing-box"}]}`)
-	writePreparedInstall(t, prepared, xray, singBox, false)
+	writePreparedInstall(t, prepared, xray, singBox)
 	var commands []string
-	host := InstallHost{root: root, uid: os.Geteuid(), rootGID: os.Getegid(), xrayGID: os.Getegid(), singGID: os.Getegid(), units: append([]string(nil), fixedInstallUnits...), run: func(_ context.Context, name string, arguments ...string) error {
+	host := InstallHost{root: root, uid: os.Geteuid(), rootGID: os.Getegid(), units: append([]string(nil), fixedInstallUnits...), run: func(_ context.Context, name string, arguments ...string) error {
 		commands = append(commands, name+" "+strings.Join(arguments, " "))
 		return nil
 	}}
@@ -74,8 +74,8 @@ func TestInstallHostEnforcesRootRuntimeManifest(t *testing.T) {
 		t.Fatal(err)
 	}
 	xray, singBox := []byte(`{"inbounds":[{"tag":"xray"}]}`), []byte(`{"inbounds":[{"tag":"sing-box"}]}`)
-	writePreparedInstall(t, prepared, xray, singBox, true)
-	host := InstallHost{root: root, uid: os.Geteuid(), rootGID: os.Getegid(), xrayGID: -1, singGID: -1, units: append([]string(nil), fixedInstallUnits...), run: func(context.Context, string, ...string) error { return nil }}
+	writePreparedInstall(t, prepared, xray, singBox)
+	host := InstallHost{root: root, uid: os.Geteuid(), rootGID: os.Getegid(), units: append([]string(nil), fixedInstallUnits...), run: func(context.Context, string, ...string) error { return nil }}
 	step, _ := systemchanges.NewStep(systemchanges.ConnectionProfilesModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
 	if _, err := host.Execute(step, time.Second, systemchanges.NewCancellation()); err != nil {
 		t.Fatal(err)
@@ -90,6 +90,32 @@ func TestInstallHostEnforcesRootRuntimeManifest(t *testing.T) {
 		if directory, err := os.Stat(filepath.Dir(path)); err != nil || directory.Mode().Perm() != 0o755 {
 			t.Fatalf("root-runtime directory %s = %v, %v", name, directory, err)
 		}
+	}
+}
+
+func TestInstallHostRefusesLegacyServiceIdentityManifest(t *testing.T) {
+	root := t.TempDir()
+	prepared := filepath.Join(root, transactionDirectory, "legacy-runtime-refusal", "prepared")
+	if err := os.MkdirAll(prepared, 0o700); err != nil || os.MkdirAll(filepath.Join(root, "etc/sbxr"), 0o755) != nil {
+		t.Fatal("prepare test root")
+	}
+	writePreparedInstall(t, prepared, []byte(`{"xray":true}`), []byte(`{"sing_box":true}`))
+	manifestPath := filepath.Join(prepared, "manifests.json")
+	manifests, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifests = bytes.Replace(manifests, []byte(`"Group":"root"`), []byte(`"Group":"xray"`), 1)
+	manifests = bytes.Replace(manifests, []byte(`"Group":"root"`), []byte(`"Group":"sing-box"`), 1)
+	manifests = bytes.ReplaceAll(manifests, []byte(`"DirectoryMode":493`), []byte(`"DirectoryMode":488`))
+	manifests = bytes.ReplaceAll(manifests, []byte(`"FileMode":420`), []byte(`"FileMode":416`))
+	if err := os.WriteFile(manifestPath, manifests, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	host := InstallHost{root: root, uid: os.Geteuid(), rootGID: os.Getegid(), units: append([]string(nil), fixedInstallUnits...), run: func(context.Context, string, ...string) error { return nil }}
+	step, _ := systemchanges.NewStep(systemchanges.ConnectionProfilesModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
+	if _, err := host.Execute(step, time.Second, systemchanges.NewCancellation()); err == nil {
+		t.Fatal("InstallHost accepted the removed service-identity artifact form")
 	}
 }
 
@@ -119,11 +145,11 @@ func TestInstallHostRefusesChangedDigestAndLinkedReplacement(t *testing.T) {
 			if err := os.MkdirAll(prepared, 0o700); err != nil || os.MkdirAll(filepath.Join(root, "etc/sbxr"), 0o755) != nil {
 				t.Fatal("prepare test root")
 			}
-			writePreparedInstall(t, prepared, []byte(`{"xray":true}`), []byte(`{"sing_box":true}`), true)
+			writePreparedInstall(t, prepared, []byte(`{"xray":true}`), []byte(`{"sing_box":true}`))
 			if err := test.change(root, prepared); err != nil {
 				t.Fatal(err)
 			}
-			host := InstallHost{root: root, uid: os.Geteuid(), rootGID: os.Getegid(), xrayGID: -1, singGID: -1, units: append([]string(nil), fixedInstallUnits...), run: func(context.Context, string, ...string) error { return nil }}
+			host := InstallHost{root: root, uid: os.Geteuid(), rootGID: os.Getegid(), units: append([]string(nil), fixedInstallUnits...), run: func(context.Context, string, ...string) error { return nil }}
 			step, _ := systemchanges.NewStep(systemchanges.ConnectionProfilesModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
 			if _, err := host.Execute(step, time.Second, systemchanges.NewCancellation()); err == nil {
 				t.Fatal("InstallHost accepted changed artifact identity")
@@ -138,13 +164,13 @@ func TestInstallHostReconcilesSafeTemporaryAfterRestart(t *testing.T) {
 	if err := os.MkdirAll(prepared, 0o700); err != nil || os.MkdirAll(filepath.Join(root, "etc/sbxr/xray"), 0o755) != nil || os.MkdirAll(filepath.Join(root, "etc/sbxr/sing-box"), 0o755) != nil {
 		t.Fatal("prepare test root")
 	}
-	writePreparedInstall(t, prepared, []byte(`{"xray":true}`), []byte(`{"sing_box":true}`), true)
+	writePreparedInstall(t, prepared, []byte(`{"xray":true}`), []byte(`{"sing_box":true}`))
 	for _, name := range installConfigurationPaths() {
 		if err := os.WriteFile(filepath.Join(root, name+".preparing"), []byte("interrupted"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	host := InstallHost{root: root, uid: os.Geteuid(), rootGID: os.Getegid(), xrayGID: -1, singGID: -1, units: append([]string(nil), fixedInstallUnits...), run: func(context.Context, string, ...string) error { return nil }}
+	host := InstallHost{root: root, uid: os.Geteuid(), rootGID: os.Getegid(), units: append([]string(nil), fixedInstallUnits...), run: func(context.Context, string, ...string) error { return nil }}
 	step, _ := systemchanges.NewStep(systemchanges.ConnectionProfilesModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
 	if _, err := host.Execute(step, time.Second, systemchanges.NewCancellation()); err != nil {
 		t.Fatal(err)
@@ -158,7 +184,7 @@ func TestInstallHostProvesEverySelectedClientAccessListener(t *testing.T) {
 		"etc/sbxr/sing-box/config.json": `{"inbounds":[{"type":"tuic","listen":"0.0.0.0","listen_port":8443}]}`,
 	} {
 		path := filepath.Join(root, name)
-		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil || os.WriteFile(path, []byte(body), 0o640) != nil {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil || os.WriteFile(path, []byte(body), 0o644) != nil {
 			t.Fatal("write active configuration")
 		}
 	}
@@ -166,7 +192,7 @@ func TestInstallHostProvesEverySelectedClientAccessListener(t *testing.T) {
 	if err := os.MkdirAll(prepared, 0o700); err != nil {
 		t.Fatal("write reviewed configuration")
 	}
-	writePreparedInstall(t, prepared, []byte(`{"inbounds":[{"listen":"127.0.0.1","port":11080}]}`), []byte(`{"inbounds":[{"type":"tuic","listen":"0.0.0.0","listen_port":8443}]}`), false)
+	writePreparedInstall(t, prepared, []byte(`{"inbounds":[{"listen":"127.0.0.1","port":11080}]}`), []byte(`{"inbounds":[{"type":"tuic","listen":"0.0.0.0","listen_port":8443}]}`))
 	listeners := []byte("tcp LISTEN 0 4096 127.0.0.1:11080 0.0.0.0:* users:((\"xray\",pid=1,fd=1))\nudp UNCONN 0 0 0.0.0.0:8443 0.0.0.0:* users:((\"sing-box\",pid=2,fd=2))\n")
 	host := InstallHost{root: root, output: func(context.Context, string, ...string) ([]byte, error) { return listeners, nil }}
 	check := systemchanges.Check{Owner: systemchanges.ConnectionProfilesModule, Code: "CONNECTION-PROFILES-CLIENT-ACCESS-LISTENERS"}
@@ -192,7 +218,7 @@ func TestManagedInstallHostSnapshotsActivatesAndRestoresPriorConfigurations(t *t
 	prior := map[string][]byte{"etc/sbxr/xray/config.json": []byte(`{"prior":"xray"}`), "etc/sbxr/sing-box/config.json": []byte(`{"prior":"sing-box"}`)}
 	for name, body := range prior {
 		path := filepath.Join(root, name)
-		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil || os.WriteFile(path, body, 0o640) != nil {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil || os.WriteFile(path, body, 0o644) != nil {
 			t.Fatal("write prior configuration")
 		}
 	}
@@ -200,9 +226,9 @@ func TestManagedInstallHostSnapshotsActivatesAndRestoresPriorConfigurations(t *t
 	if err := os.MkdirAll(prepared, 0o700); err != nil {
 		t.Fatal("write prepared configuration")
 	}
-	writePreparedInstall(t, prepared, []byte(`{"next":"xray"}`), []byte(`{"next":"sing-box"}`), false)
+	writePreparedInstall(t, prepared, []byte(`{"next":"xray"}`), []byte(`{"next":"sing-box"}`))
 	var commands []string
-	host := InstallHost{root: root, uid: os.Geteuid(), rootGID: os.Getegid(), xrayGID: os.Getegid(), singGID: os.Getegid(), units: append([]string(nil), fixedInstallUnits...), managed: true, run: func(_ context.Context, name string, arguments ...string) error {
+	host := InstallHost{root: root, uid: os.Geteuid(), rootGID: os.Getegid(), units: append([]string(nil), fixedInstallUnits...), managed: true, run: func(_ context.Context, name string, arguments ...string) error {
 		commands = append(commands, name+" "+strings.Join(arguments, " "))
 		return nil
 	}}
@@ -233,14 +259,10 @@ func TestManagedInstallHostSnapshotsActivatesAndRestoresPriorConfigurations(t *t
 	}
 }
 
-func writePreparedInstall(t *testing.T, prepared string, xray, singBox []byte, rootRuntime bool) {
+func writePreparedInstall(t *testing.T, prepared string, xray, singBox []byte) {
 	t.Helper()
-	group, directoryMode, fileMode := "xray", 0o750, 0o640
-	if rootRuntime {
-		group, directoryMode, fileMode = "root", 0o755, 0o644
-	}
 	xrayDigest, singDigest := sha256.Sum256(xray), sha256.Sum256(singBox)
-	manifests := fmt.Sprintf(`{"xray":{"Service":"xray.service","OwningModule":"connectionprofiles","CandidateRevision":8,"ChangeSet":"change-0008","Owner":"root","Group":%q,"DirectoryMode":%d,"FileMode":%d,"SHA256":"%x"},"sing_box":{"Service":"sing-box.service","OwningModule":"connectionprofiles","CandidateRevision":8,"ChangeSet":"change-0008","Owner":"root","Group":%q,"DirectoryMode":%d,"FileMode":%d,"SHA256":"%x"}}`, group, directoryMode, fileMode, xrayDigest, map[bool]string{true: "root", false: "sing-box"}[rootRuntime], directoryMode, fileMode, singDigest)
+	manifests := fmt.Sprintf(`{"xray":{"Service":"xray.service","OwningModule":"connectionprofiles","CandidateRevision":8,"ChangeSet":"change-0008","Owner":"root","Group":"root","DirectoryMode":493,"FileMode":420,"SHA256":"%x"},"sing_box":{"Service":"sing-box.service","OwningModule":"connectionprofiles","CandidateRevision":8,"ChangeSet":"change-0008","Owner":"root","Group":"root","DirectoryMode":493,"FileMode":420,"SHA256":"%x"}}`, xrayDigest, singDigest)
 	for name, body := range map[string][]byte{"xray.json": xray, "sing-box.json": singBox, "manifests.json": []byte(manifests)} {
 		if err := os.WriteFile(filepath.Join(prepared, name), body, 0o600); err != nil {
 			t.Fatal(err)

@@ -44,15 +44,14 @@ func TestPrepareCommitValidatesCandidateAndSerializesLeastPrivilegeMaterial(t *t
 		copy        *PreparedServiceCopy
 		service     string
 		module      string
-		group       string
 		want        any
 		mustHave    []string
 		mustNotHave []string
 	}{
-		{copy: preparation.serviceCopies.Xray, service: "xray.service", module: "connectionprofiles", group: "xray", want: serviceMaterialsFor(candidate).Xray, mustHave: []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}, mustNotHave: []string{"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "xhttp.example.com", "ws.example.com", "HYSTERIA2-SECRET-MARKER-00000001", "CLOUDFLARE-MANAGEMENT-SECRET-MARKER", "CLOUDFLARE-RUN-SECRET-MARKER-00001", "6666666666666666666666666666666666666666666666666666666666666666"}},
-		{copy: preparation.serviceCopies.SingBox, service: "sing-box.service", module: "connectionprofiles", group: "sing-box", want: serviceMaterialsFor(candidate).SingBox, mustHave: []string{"HYSTERIA2-SECRET-MARKER-00000001", "TUIC-PASSWORD-SECRET-MARKER-00001", "ANYTLS-PASSWORD-SECRET-MARKER-01", "/var/lib/sbxr/certificates/domain/current"}, mustNotHave: []string{"domain-certificate", "11111111-1111-4111-8111-111111111111", "CLOUDFLARE-MANAGEMENT-SECRET-MARKER", "CLOUDFLARE-RUN-SECRET-MARKER-00001", "6666666666666666666666666666666666666666666666666666666666666666"}},
-		{copy: preparation.serviceCopies.Cloudflared, service: "cloudflared.service", module: "cloudflaretunnel", group: "cloudflared", want: serviceMaterialsFor(candidate).Cloudflared, mustHave: []string{"CLOUDFLARE-RUN-SECRET-MARKER-00001"}, mustNotHave: []string{"CLOUDFLARE-MANAGEMENT-SECRET-MARKER", "11111111-1111-4111-8111-111111111111", "HYSTERIA2-SECRET-MARKER-00000001", "6666666666666666666666666666666666666666666666666666666666666666"}},
-		{copy: preparation.serviceCopies.Subscription, service: "sbxr-subscription.service", module: "subscriptionserving", group: "sbxr-subscription", want: serviceMaterialsFor(candidate).Subscription, mustHave: []string{"6666666666666666666666666666666666666666666666666666666666666666", "/var/lib/sbxr/certificates/ip/current"}, mustNotHave: []string{"ip-certificate", "CLOUDFLARE-MANAGEMENT-SECRET-MARKER", "CLOUDFLARE-RUN-SECRET-MARKER-00001", "11111111-1111-4111-8111-111111111111", "HYSTERIA2-SECRET-MARKER-00000001"}},
+		{copy: preparation.serviceCopies.Xray, service: "xray.service", module: "connectionprofiles", want: serviceMaterialsFor(candidate).Xray, mustHave: []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}, mustNotHave: []string{"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "xhttp.example.com", "ws.example.com", "HYSTERIA2-SECRET-MARKER-00000001", "CLOUDFLARE-MANAGEMENT-SECRET-MARKER", "CLOUDFLARE-RUN-SECRET-MARKER-00001", "6666666666666666666666666666666666666666666666666666666666666666"}},
+		{copy: preparation.serviceCopies.SingBox, service: "sing-box.service", module: "connectionprofiles", want: serviceMaterialsFor(candidate).SingBox, mustHave: []string{"HYSTERIA2-SECRET-MARKER-00000001", "TUIC-PASSWORD-SECRET-MARKER-00001", "ANYTLS-PASSWORD-SECRET-MARKER-01", "/var/lib/sbxr/certificates/domain/current"}, mustNotHave: []string{"domain-certificate", "11111111-1111-4111-8111-111111111111", "CLOUDFLARE-MANAGEMENT-SECRET-MARKER", "CLOUDFLARE-RUN-SECRET-MARKER-00001", "6666666666666666666666666666666666666666666666666666666666666666"}},
+		{copy: preparation.serviceCopies.Cloudflared, service: "cloudflared.service", module: "cloudflaretunnel", want: serviceMaterialsFor(candidate).Cloudflared, mustHave: []string{"CLOUDFLARE-RUN-SECRET-MARKER-00001"}, mustNotHave: []string{"CLOUDFLARE-MANAGEMENT-SECRET-MARKER", "11111111-1111-4111-8111-111111111111", "HYSTERIA2-SECRET-MARKER-00000001", "6666666666666666666666666666666666666666666666666666666666666666"}},
+		{copy: preparation.serviceCopies.Subscription, service: "sbxr-subscription.service", module: "subscriptionserving", want: serviceMaterialsFor(candidate).Subscription, mustHave: []string{"6666666666666666666666666666666666666666666666666666666666666666", "/var/lib/sbxr/certificates/ip/current"}, mustNotHave: []string{"ip-certificate", "CLOUDFLARE-MANAGEMENT-SECRET-MARKER", "CLOUDFLARE-RUN-SECRET-MARKER-00001", "11111111-1111-4111-8111-111111111111", "HYSTERIA2-SECRET-MARKER-00000001"}},
 	}
 
 	for _, check := range checks {
@@ -61,7 +60,7 @@ func TestPrepareCommitValidatesCandidateAndSerializesLeastPrivilegeMaterial(t *t
 				t.Fatal("required service copy was omitted")
 			}
 			manifest := check.copy.manifest
-			if manifest.Service != check.service || manifest.OwningModule != check.module || manifest.CandidateRevision != 8 || manifest.ChangeSet != "change-0008" || manifest.Owner != "root" || manifest.Group != check.group || manifest.DirectoryMode != 0o750 || manifest.FileMode != 0o640 {
+			if manifest.Service != check.service || manifest.OwningModule != check.module || manifest.CandidateRevision != 8 || manifest.ChangeSet != "change-0008" || manifest.Owner != "root" || manifest.Group != "root" || manifest.DirectoryMode != 0o755 || manifest.FileMode != 0o644 {
 				t.Fatalf("manifest = %+v", manifest)
 			}
 			digest := sha256.Sum256(check.copy.bytes)
@@ -88,26 +87,6 @@ func TestPrepareCommitValidatesCandidateAndSerializesLeastPrivilegeMaterial(t *t
 			}
 		})
 	}
-}
-
-func TestPrepareCommitRefusesCallerMadeRootRuntimeArtifactContribution(t *testing.T) {
-	candidate := completeDesiredState()
-	stateModule, request, _ := managedPrepareRequest(t, candidate)
-	request.RuntimeArtifacts = RuntimeArtifactContributions{controlledRuntimeArtifact{}}
-
-	_, err := stateModule.PrepareCommit(request)
-	if err == nil || !strings.Contains(err.Error(), "STATE-RUNTIME-ARTIFACT") {
-		t.Fatalf("caller-made runtime contribution error = %v", err)
-	}
-	if strings.Contains(fmt.Sprintf("%v %#v", request.RuntimeArtifacts, request.RuntimeArtifacts), "xray.service") {
-		t.Fatal("root-runtime contribution rendered process-local preparation facts")
-	}
-}
-
-type controlledRuntimeArtifact struct{}
-
-func (artifact controlledRuntimeArtifact) StateRuntimeArtifacts() (any, []string, bool) {
-	return artifact, []string{"xray.service", "sing-box.service"}, true
 }
 
 func TestCandidateSHA256MatchesPreparedRevisionOneState(t *testing.T) {
@@ -318,8 +297,6 @@ func TestPrepareRunTokenRotationKeepsTheOldTokenOnlyInRollbackMaterial(t *testin
 		t.Fatalf("rotation Plan = %+v", planResult.Health)
 	}
 	request := preparedRequest(t, loaded, starting, "cloudflare-run-token-rotation-prepare")
-	request.RuntimeArtifacts = RuntimeArtifactContributions{planResult.Plan}
-	request.SemanticValidators.Cloudflare.(*validatingSeams).runtimeOwner = planResult.Plan
 	request.ReviewedInputs, err = NewReviewedInputs(PlanIdentity(planResult.Plan.Identity()), planResult.Plan.SHA256(), request.ReviewedInputs.managed)
 	if err != nil {
 		t.Fatal(err)
@@ -739,13 +716,10 @@ type validatingSeams struct {
 	planIdentity        string
 	planSHA256          string
 	subscriptionBundle  []byte
-	runtimeOwner        any
 }
 
-func (v *validatingSeams) Identity() string                         { return v.planIdentity }
-func (v *validatingSeams) SHA256() string                           { return v.planSHA256 }
-func (v *validatingSeams) StateCloudflareRuntimeArtifactOwner() any { return v.runtimeOwner }
-
+func (v *validatingSeams) Identity() string { return v.planIdentity }
+func (v *validatingSeams) SHA256() string   { return v.planSHA256 }
 func (v *validatingSeams) validate(module string, got, want any) error {
 	v.calls[module]++
 	if v.reject == module || !reflect.DeepEqual(got, want) {

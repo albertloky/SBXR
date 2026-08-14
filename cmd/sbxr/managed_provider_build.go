@@ -80,13 +80,8 @@ type managedProviderWiring struct {
 	certificate *certificatelifecycle.Plan
 }
 
-func (w *managedProviderWiring) Identity() string                         { return w.plan.Identity() }
-func (w *managedProviderWiring) SHA256() string                           { return w.plan.SHA256() }
-func (w *managedProviderWiring) StateRuntimeArtifactOwner() any           { return w.profiles }
-func (w *managedProviderWiring) StateCloudflareRuntimeArtifactOwner() any { return w.cloudflare }
-func (w *managedProviderWiring) StateSubscriptionRuntimeArtifactOwner() any {
-	return w.publication
-}
+func (w *managedProviderWiring) Identity() string { return w.plan.Identity() }
+func (w *managedProviderWiring) SHA256() string   { return w.plan.SHA256() }
 func (w *managedProviderWiring) ValidateConnectionProfiles(value state.ConnectionProfiles, secrets state.ConnectionProfileSecretReader) error {
 	return w.profiles.ValidateConnectionProfiles(value, secrets)
 }
@@ -403,15 +398,5 @@ func providerPrepareRequest(loaded state.Result, snapshot state.Snapshot, candid
 	if err != nil {
 		return state.PrepareRequest{}, err
 	}
-	runtimeArtifacts := state.RuntimeArtifactContributions{}
-	if contribution, ok := wiring.profiles.(state.RuntimeArtifactContribution); ok {
-		runtimeArtifacts = append(runtimeArtifacts, contribution)
-	}
-	if wiring.cloudflare != nil {
-		runtimeArtifacts = append(runtimeArtifacts, wiring.cloudflare)
-	}
-	if contribution, ok := wiring.publication.(state.RuntimeArtifactContribution); ok {
-		runtimeArtifacts = append(runtimeArtifacts, contribution)
-	}
-	return state.PrepareRequest{Loaded: loaded, CandidateReleaseIdentity: snapshot.ReleaseIdentity, ChangeSet: state.ChangeSetIdentity(request.ChangeSet), Candidate: candidate, SemanticValidators: state.SemanticValidators{ConnectionProfiles: wiring, Subscription: wiring, Cloudflare: wiring, Certificates: wiring, NetworkPolicy: wiring, SoftwareLifecycle: wiring}, ServiceMaterials: state.ServiceMaterialsFor(candidate), RuntimeArtifacts: runtimeArtifacts, SubscriptionPublication: wiring, ReviewedInputs: reviewed}, nil
+	return state.PrepareRequest{Loaded: loaded, CandidateReleaseIdentity: snapshot.ReleaseIdentity, ChangeSet: state.ChangeSetIdentity(request.ChangeSet), Candidate: candidate, SemanticValidators: state.SemanticValidators{ConnectionProfiles: wiring, Subscription: wiring, Cloudflare: wiring, Certificates: wiring, NetworkPolicy: wiring, SoftwareLifecycle: wiring}, ServiceMaterials: state.ServiceMaterialsFor(candidate), SubscriptionPublication: wiring, ReviewedInputs: reviewed}, nil
 }

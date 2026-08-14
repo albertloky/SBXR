@@ -203,14 +203,10 @@ func buildClientAccess(ctx context.Context, module state.Interface, loaded state
 				if err != nil {
 					return err
 				}
-				profileRuntime, ok := profilePlan.(state.RuntimeArtifactContribution)
-				if !ok {
-					return errors.New("Connection Profiles runtime contribution unavailable")
-				}
 				prepared, err := module.PrepareCommit(state.PrepareRequest{
 					Loaded: loaded, CandidateReleaseIdentity: snapshot.ReleaseIdentity, ChangeSet: state.ChangeSetIdentity(request.ChangeSet), Candidate: candidate,
-					SemanticValidators: state.SemanticValidators{ConnectionProfiles: wiring, Subscription: wiring, Cloudflare: wiring, Certificates: wiring, NetworkPolicy: wiring, SoftwareLifecycle: wiring},
-					ServiceMaterials:   state.ServiceMaterialsFor(candidate), RuntimeArtifacts: state.RuntimeArtifactContributions{profileRuntime, publicationResult.Plan},
+					SemanticValidators:      state.SemanticValidators{ConnectionProfiles: wiring, Subscription: wiring, Cloudflare: wiring, Certificates: wiring, NetworkPolicy: wiring, SoftwareLifecycle: wiring},
+					ServiceMaterials:        state.ServiceMaterialsFor(candidate),
 					SubscriptionPublication: wiring, ReviewedInputs: reviewed,
 				})
 				if err != nil {
@@ -252,11 +248,6 @@ type clientAccessWiring struct {
 	*clientAccessPlan
 	current state.DesiredState
 	network networkpolicy.Result
-}
-
-func (w *clientAccessWiring) StateRuntimeArtifactOwner() any { return w.profile }
-func (w *clientAccessWiring) StateSubscriptionRuntimeArtifactOwner() any {
-	return w.publication
 }
 
 func (w *clientAccessWiring) ValidateCloudflare(candidate state.CloudflareSettings, _ state.InfrastructureSecretReader) error {

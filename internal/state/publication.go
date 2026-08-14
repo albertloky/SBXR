@@ -183,29 +183,24 @@ func deferredEvidenceFinding() error {
 func prepareServiceCopies(revision uint64, changeSet ChangeSetIdentity, materials ServiceMaterials) (PreparedServiceCopies, error) {
 	var copies PreparedServiceCopies
 	for _, item := range []struct {
-		service, module, group string
-		material               any
-		target                 **PreparedServiceCopy
+		service, module string
+		material        any
+		target          **PreparedServiceCopy
 	}{
-		{"xray.service", "connectionprofiles", "xray", materials.Xray, &copies.Xray},
-		{"sing-box.service", "connectionprofiles", "sing-box", materials.SingBox, &copies.SingBox},
-		{"cloudflared.service", "cloudflaretunnel", "cloudflared", materials.Cloudflared, &copies.Cloudflared},
+		{"xray.service", "connectionprofiles", materials.Xray, &copies.Xray},
+		{"sing-box.service", "connectionprofiles", materials.SingBox, &copies.SingBox},
+		{"cloudflared.service", "cloudflaretunnel", materials.Cloudflared, &copies.Cloudflared},
 	} {
 		if item.material == nil || reflect.ValueOf(item.material).IsNil() {
 			continue
 		}
-		prepared, err := prepareServiceCopy(item.service, item.module, item.group, revision, changeSet, item.material)
+		prepared, err := prepareServiceCopy(item.service, item.module, revision, changeSet, item.material)
 		if err != nil {
 			return PreparedServiceCopies{}, err
 		}
-		if item.service == "cloudflared.service" {
-			prepared.manifest.Group = "root"
-			prepared.manifest.DirectoryMode = 0o755
-			prepared.manifest.FileMode = 0o644
-		}
 		*item.target = &prepared
 	}
-	subscription, err := prepareServiceCopy("sbxr-subscription.service", "subscriptionserving", "sbxr-subscription", revision, changeSet, materials.Subscription)
+	subscription, err := prepareServiceCopy("sbxr-subscription.service", "subscriptionserving", revision, changeSet, materials.Subscription)
 	if err != nil {
 		return PreparedServiceCopies{}, err
 	}

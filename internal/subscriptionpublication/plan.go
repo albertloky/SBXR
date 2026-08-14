@@ -238,11 +238,6 @@ func (plan *Plan) PrepareSubscriptionPublication() ([]byte, error) {
 	return append([]byte(nil), plan.bundle...), nil
 }
 
-// StateRuntimeArtifacts binds the Subscription Serving form to this exact reviewed Plan.
-func (plan *Plan) StateRuntimeArtifacts() (any, []string, bool) {
-	return plan, []string{"sbxr-subscription.service"}, plan != nil
-}
-
 // ValidateSubscription binds State's subscription credential and listener to this Plan.
 func (plan *Plan) ValidateSubscription(settings state.SubscriptionSettings, secrets state.ClientAccessReader) error {
 	if plan == nil || secrets == nil || settings != plan.binding.Subscription || secrets.ReadClientAccessValue(settings.Token) == "" {

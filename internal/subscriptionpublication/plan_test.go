@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"testing"
 
@@ -42,10 +41,6 @@ func TestPlanBindsOneCompleteValidatedArtifactSetWithoutRenderingSecrets(t *test
 	}
 	if contribution := result.Plan.SoftwareLifecycleUpdateContribution(); contribution.Name != "Subscription Publication" || contribution.ChangeSet != "change-0008" || contribution.Owner != systemchanges.SubscriptionModule {
 		t.Fatalf("update contribution = %+v", contribution)
-	}
-	runtimeSource, services, valid := result.Plan.StateRuntimeArtifacts()
-	if !valid || runtimeSource != result.Plan || !slices.Equal(services, []string{"sbxr-subscription.service"}) {
-		t.Fatalf("root runtime contribution = %#v, %v, %v", runtimeSource, services, valid)
 	}
 	summary := result.Plan.Summary()
 	if summary.ProfileCount != 6 || len(summary.Representations) != 7 || summary.ChangeSet != "change-0008" || summary.DesiredStateRevision != 8 || summary.ReleaseIdentity != release || summary.SelectedAddress != "198.51.100.10" || summary.CompatibilityDefinition != string(subscriptionpublication.CurrentCompatibilityDefinition) || !validSummaryChecksums(summary.RelevantChecksums) || !summary.ValidationComplete || summary.Replacement != "complete artifact set N to N+1" || summary.Rollback != "restore the exact prior complete artifact set" {

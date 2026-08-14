@@ -12,7 +12,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -29,48 +28,26 @@ var fixedInstallUnits = []string{"cloudflared.service", "sbxr-cert-renew.service
 // InstallHost owns the remaining fixed Ubuntu effects for the first install:
 // activating the prepared proxy-core configurations and systemd lifecycle.
 type InstallHost struct {
-	root             string
-	uid, rootGID     int
-	xrayGID, singGID int
-	units            []string
-	run              func(context.Context, string, ...string) error
-	output           func(context.Context, string, ...string) ([]byte, error)
-	managed          bool
+	root         string
+	uid, rootGID int
+	units        []string
+	run          func(context.Context, string, ...string) error
+	output       func(context.Context, string, ...string) ([]byte, error)
+	managed      bool
 }
 
 func NewInstallHost(root string, units []string) (InstallHost, error) {
-	xrayGID, err := installGroupID("xray")
-	if err != nil {
-		return InstallHost{}, err
-	}
-	singGID, err := installGroupID("sing-box")
-	if err != nil {
-		return InstallHost{}, err
-	}
 	if !slices.Equal(units, fixedInstallUnits) {
 		return InstallHost{}, errors.New("managed units unavailable")
 	}
-	return InstallHost{root: root, uid: 0, rootGID: 0, xrayGID: xrayGID, singGID: singGID, units: append([]string(nil), units...), run: runInstallCommand, output: runInstallOutput, managed: true}, nil
+	return InstallHost{root: root, uid: 0, rootGID: 0, units: append([]string(nil), units...), run: runInstallCommand, output: runInstallOutput, managed: true}, nil
 }
 
 func NewFreshInstallHost(root string, units []string) (InstallHost, error) {
 	if !slices.Equal(units, fixedInstallUnits) {
 		return InstallHost{}, errors.New("managed units unavailable")
 	}
-	return InstallHost{root: root, uid: 0, rootGID: 0, xrayGID: -1, singGID: -1, units: append([]string(nil), units...), run: runInstallCommand, output: runInstallOutput}, nil
-}
-
-func (host InstallHost) resolved() (InstallHost, error) {
-	if host.xrayGID >= 0 && host.singGID >= 0 {
-		return host, nil
-	}
-	var err error
-	host.xrayGID, err = installGroupID("xray")
-	if err != nil {
-		return InstallHost{}, err
-	}
-	host.singGID, err = installGroupID("sing-box")
-	return host, err
+	return InstallHost{root: root, uid: 0, rootGID: 0, units: append([]string(nil), units...), run: runInstallCommand, output: runInstallOutput}, nil
 }
 
 func (host InstallHost) CaptureRollback(step systemchanges.Step, write func(io.Reader) error) error {
@@ -78,11 +55,6 @@ func (host InstallHost) CaptureRollback(step systemchanges.Step, write func(io.R
 		return errors.New("install host rollback capture unavailable")
 	}
 	if host.managed {
-		var resolveErr error
-		host, resolveErr = host.resolved()
-		if resolveErr != nil {
-			return resolveErr
-		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		for _, unit := range []string{"xray.service", "sing-box.service"} {
@@ -90,11 +62,11 @@ func (host InstallHost) CaptureRollback(step systemchanges.Step, write func(io.R
 				return errors.New("managed service rollback state unavailable")
 			}
 		}
-		xray, err := host.readManagedConfiguration("etc/sbxr/xray/config.json", host.xrayGID, 0o640)
+		xray, err := host.readManagedConfiguration("etc/sbxr/xray/config.json", host.rootGID, 0o644)
 		if err != nil {
 			return err
 		}
-		singBox, err := host.readManagedConfiguration("etc/sbxr/sing-box/config.json", host.singGID, 0o640)
+		singBox, err := host.readManagedConfiguration("etc/sbxr/sing-box/config.json", host.rootGID, 0o644)
 		if err != nil {
 			return err
 		}
@@ -124,11 +96,7 @@ func (host InstallHost) Execute(step systemchanges.Step, timeout time.Duration, 
 	if host.managed {
 		for name, unit := range map[string]string{"etc/sbxr/xray/config.json": "xray.service", "etc/sbxr/sing-box/config.json": "sing-box.service"} {
 			artifact := prepared[name]
-			gid, groupErr := host.installArtifactGID(artifact.manifest.Group)
-			if groupErr != nil {
-				return systemchanges.StepEvidence{}, groupErr
-			}
-			current, readErr := host.readManagedConfiguration(name, gid, fs.FileMode(artifact.manifest.FileMode))
+			current, readErr := host.readManagedConfiguration(name, host.rootGID, fs.FileMode(artifact.manifest.FileMode))
 			if readErr != nil {
 				return systemchanges.StepEvidence{}, readErr
 			}
@@ -140,11 +108,7 @@ func (host InstallHost) Execute(step systemchanges.Step, timeout time.Duration, 
 		restart = append(restart, "xray.service", "sing-box.service")
 	}
 	for name, artifact := range prepared {
-		gid, err := host.installArtifactGID(artifact.manifest.Group)
-		if err != nil {
-			return systemchanges.StepEvidence{}, err
-		}
-		if err := writeInstallConfiguration(host.root, name, artifact, host.uid, gid); err != nil {
+		if err := writeInstallConfiguration(host.root, name, artifact, host.uid, host.rootGID); err != nil {
 			return systemchanges.StepEvidence{}, err
 		}
 	}
@@ -175,18 +139,10 @@ func (host InstallHost) Reverse(step systemchanges.Step, snapshot io.Reader, tim
 		if err != nil {
 			return systemchanges.StepEvidence{}, err
 		}
-		host, err = host.resolved()
-		if err != nil {
-			return systemchanges.StepEvidence{}, err
-		}
-		for name, priorArtifact := range map[string]struct {
-			body  []byte
-			group string
-			gid   int
-		}{"etc/sbxr/xray/config.json": {prior.Xray, "xray", host.xrayGID}, "etc/sbxr/sing-box/config.json": {prior.SingBox, "sing-box", host.singGID}} {
-			digest := sha256.Sum256(priorArtifact.body)
-			artifact := preparedInstallConfiguration{body: priorArtifact.body, manifest: installServiceManifest{Owner: "root", Group: priorArtifact.group, DirectoryMode: 0o750, FileMode: 0o640, SHA256: hex.EncodeToString(digest[:])}}
-			if err := writeInstallConfiguration(host.root, name, artifact, host.uid, priorArtifact.gid); err != nil {
+		for name, body := range map[string][]byte{"etc/sbxr/xray/config.json": prior.Xray, "etc/sbxr/sing-box/config.json": prior.SingBox} {
+			digest := sha256.Sum256(body)
+			artifact := preparedInstallConfiguration{body: body, manifest: installServiceManifest{Owner: "root", Group: "root", DirectoryMode: 0o755, FileMode: 0o644, SHA256: hex.EncodeToString(digest[:])}}
+			if err := writeInstallConfiguration(host.root, name, artifact, host.uid, host.rootGID); err != nil {
 				return systemchanges.StepEvidence{}, err
 			}
 		}
@@ -450,29 +406,8 @@ func validInstallManifest(manifest *installServiceManifest, service string, body
 	if manifest == nil || manifest.Service != service || manifest.OwningModule != "connectionprofiles" || manifest.CandidateRevision == 0 || manifest.ChangeSet == "" || manifest.Owner != "root" || len(body) == 0 {
 		return false
 	}
-	currentGroup := map[string]string{"xray.service": "xray", "sing-box.service": "sing-box"}[service]
-	currentForm := manifest.DirectoryMode == 0o750 && manifest.FileMode == 0o640 && manifest.Group == currentGroup
-	rootForm := manifest.DirectoryMode == 0o755 && manifest.FileMode == 0o644 && manifest.Group == "root"
 	digest := sha256.Sum256(body)
-	return (currentForm || rootForm) && manifest.SHA256 == hex.EncodeToString(digest[:])
-}
-
-func (host InstallHost) installArtifactGID(group string) (int, error) {
-	switch group {
-	case "root":
-		return host.rootGID, nil
-	case "xray":
-		if host.xrayGID >= 0 {
-			return host.xrayGID, nil
-		}
-	case "sing-box":
-		if host.singGID >= 0 {
-			return host.singGID, nil
-		}
-	default:
-		return 0, errors.New("prepared configuration owner unavailable")
-	}
-	return installGroupID(group)
+	return manifest.Group == "root" && manifest.DirectoryMode == 0o755 && manifest.FileMode == 0o644 && manifest.SHA256 == hex.EncodeToString(digest[:])
 }
 
 func (host InstallHost) command(ctx context.Context, name string, arguments ...string) error {
@@ -614,18 +549,6 @@ func openInstallNoFollow(path string, flags int) (*os.File, error) {
 		return nil, err
 	}
 	return os.NewFile(uintptr(descriptor), path), nil
-}
-
-func installGroupID(name string) (int, error) {
-	group, err := user.LookupGroup(name)
-	if err != nil {
-		return 0, errors.New("managed service group unavailable")
-	}
-	gid, err := strconv.Atoi(group.Gid)
-	if err != nil {
-		return 0, errors.New("managed service group is invalid")
-	}
-	return gid, nil
 }
 
 func runInstallCommand(ctx context.Context, name string, arguments ...string) error {

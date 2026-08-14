@@ -215,13 +215,6 @@ func (plan *Plan) Checks() []systemchanges.Check {
 	return append([]systemchanges.Check(nil), plan.checks...)
 }
 
-func (plan *Plan) StateRuntimeArtifacts() (source any, services []string, valid bool) {
-	if plan == nil || plan.identity == "" || !sha256Text.MatchString(plan.sha256) {
-		return nil, nil, false
-	}
-	return plan, []string{"cloudflared.service"}, true
-}
-
 // CertificateLifecycleFreshDNSPlan exposes only the exact Direct DNS records
 // contained in a reviewed fresh-install Plan.
 func (plan *Plan) CertificateLifecycleFreshDNSPlan() (hostname, ipv4, ipv6, desiredStateSHA256 string, valid bool) {

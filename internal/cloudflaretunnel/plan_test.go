@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -105,10 +104,6 @@ func TestPlanBindsCompleteSecretSafeCloudflareInstallation(t *testing.T) {
 	}
 	if _, _, _, ok := first.Plan.StateDeferredCloudflare(); !ok {
 		t.Fatal("State finalization authority unavailable")
-	}
-	source, services, valid := first.Plan.StateRuntimeArtifacts()
-	if !valid || source != first.Plan || !slices.Equal(services, []string{"cloudflared.service"}) {
-		t.Fatalf("State runtime contribution = %T, %v, %t", source, services, valid)
 	}
 	if len(configurations) != 2 || !strings.Contains(string(configurations[0]), xhttpOrigin) || !strings.Contains(string(configurations[0]), webSocketOrigin) {
 		t.Fatalf("native validation configurations = %q", configurations)

@@ -11,7 +11,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -234,10 +233,6 @@ func TestRealityPlanBindsExactReviewedConfigurationForState(t *testing.T) {
 	xray, singBox, err := plan.PrepareConnectionProfiles(profiles, secrets)
 	if err != nil || singBox != nil || !bytes.Equal(xray, host.validated) {
 		t.Fatalf("reviewed State configuration = (%s, %s, %v)", xray, singBox, err)
-	}
-	source, services, valid := plan.StateRuntimeArtifacts()
-	if !valid || source != plan || !slices.Equal(services, []string{"xray.service"}) {
-		t.Fatalf("State runtime artifacts = (%T, %v, %t)", source, services, valid)
 	}
 	secrets.clients[uuid] = "22222222-2222-4222-8222-222222222222"
 	if _, _, err := plan.PrepareConnectionProfiles(profiles, secrets); err == nil {

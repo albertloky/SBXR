@@ -283,11 +283,7 @@ func buildSoftwareRepair(ctx context.Context, module state.Interface, loaded sta
 	if err != nil {
 		return nil, err
 	}
-	runtimeArtifacts := state.RuntimeArtifactContributions{profilePlan, publicationPlan}
-	if cloudflarePlan != nil {
-		runtimeArtifacts = append(runtimeArtifacts, cloudflarePlan)
-	}
-	prepared, err := module.PrepareSoftwareRepairCommit(state.PrepareRequest{Loaded: loaded, CandidateReleaseIdentity: snapshot.ReleaseIdentity, ChangeSet: state.ChangeSetIdentity(changeSet), Candidate: desired, SemanticValidators: state.SemanticValidators{ConnectionProfiles: wiring, Subscription: wiring, Cloudflare: wiring, Certificates: wiring, NetworkPolicy: wiring, SoftwareLifecycle: wiring}, ServiceMaterials: state.ServiceMaterialsFor(desired), RuntimeArtifacts: runtimeArtifacts, SubscriptionPublication: wiring, ReviewedInputs: reviewed}, plan)
+	prepared, err := module.PrepareSoftwareRepairCommit(state.PrepareRequest{Loaded: loaded, CandidateReleaseIdentity: snapshot.ReleaseIdentity, ChangeSet: state.ChangeSetIdentity(changeSet), Candidate: desired, SemanticValidators: state.SemanticValidators{ConnectionProfiles: wiring, Subscription: wiring, Cloudflare: wiring, Certificates: wiring, NetworkPolicy: wiring, SoftwareLifecycle: wiring}, ServiceMaterials: state.ServiceMaterialsFor(desired), SubscriptionPublication: wiring, ReviewedInputs: reviewed}, plan)
 	if err != nil {
 		return nil, err
 	}
@@ -308,11 +304,8 @@ type softwareRepairWiring struct {
 	network     networkpolicy.Result
 }
 
-func (w *softwareRepairWiring) Identity() string                           { return w.plan.Identity() }
-func (w *softwareRepairWiring) SHA256() string                             { return w.plan.SHA256() }
-func (w *softwareRepairWiring) StateRuntimeArtifactOwner() any             { return w.profiles }
-func (w *softwareRepairWiring) StateCloudflareRuntimeArtifactOwner() any   { return w.cloudflare }
-func (w *softwareRepairWiring) StateSubscriptionRuntimeArtifactOwner() any { return w.publication }
+func (w *softwareRepairWiring) Identity() string { return w.plan.Identity() }
+func (w *softwareRepairWiring) SHA256() string   { return w.plan.SHA256() }
 func (w *softwareRepairWiring) ValidateConnectionProfiles(value state.ConnectionProfiles, secrets state.ConnectionProfileSecretReader) error {
 	return w.profiles.ValidateConnectionProfiles(value, secrets)
 }
