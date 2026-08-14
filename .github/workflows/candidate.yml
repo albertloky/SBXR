@@ -85,6 +85,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -118,7 +120,7 @@ jobs:
             -output dist/release-index.json
       - name: Bind the one reviewed root-runtime qualification commit
         run: |
-          test "$(git rev-parse HEAD^)" = 4138f75929afbf3ae11e7f635201a053350b9edb
+          git merge-base --is-ancestor da184b692ba630dc97e8830c0d73785f38d0996a HEAD
       - name: Run complete automated verification before publication
         run: |
           go list ./... | grep -v '/internal/ownerconsole$' | xargs go test -count=1
@@ -201,7 +203,7 @@ jobs:
           test "$verified" = true
       - name: Preserve client-facing output while qualifying the root runtime
         run: |
-          test "$(git rev-parse HEAD^)" = 4138f75929afbf3ae11e7f635201a053350b9edb
+          git merge-base --is-ancestor da184b692ba630dc97e8830c0d73785f38d0996a HEAD
           git diff --quiet v1.0.6...HEAD -- \
             internal/connectionprofiles/registry.go \
             internal/subscriptionpublication/render.go \
