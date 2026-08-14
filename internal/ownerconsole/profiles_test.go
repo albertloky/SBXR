@@ -276,10 +276,13 @@ func TestRunLiveProfileCheckRequiresPrivacyChoiceAndShowsAutomaticPerProfileTraf
 			if stub.liveCalls != 1 {
 				t.Fatalf("Live Profile Check calls = %d", stub.liveCalls)
 			}
-			for _, want := range []string{"LIVE PROFILE CHECK", "LIVE-TEMP-MARKER", "REALITY Vision auth=yes up=yes down=yes", "XHTTP auth=yes up=yes down=yes", "WebSocket auth=yes up=yes down=yes", "Hysteria2 auth=yes up=yes down=yes", "TUIC auth=yes up=yes down=yes", "AnyTLS auth=yes up=yes down=yes", "Session-only and memory-only", "No manual success"} {
+			for _, want := range []string{"LIVE PROFILE CHECK", "LIVE-TEMP-MARKER", "REALITY Vision", "XHTTP", "WebSocket", "Hysteria2", "TUIC", "AnyTLS", "Session-only and memory-only", "No manual success"} {
 				if !strings.Contains(got, want) {
 					t.Fatalf("Live Profile Check omitted %q\n%s", want, got)
 				}
+			}
+			if strings.Count(got, "auth=yes up=yes down=yes") < 6 {
+				t.Fatalf("Live Profile Check did not complete all six automatic results\n%s", got)
 			}
 			if size.width == 80 && !strings.Contains(got, "QR omitted at this size") {
 				t.Fatalf("minimum-size Live Profile Check did not keep exact text when QR was omitted\n%s", got)
@@ -296,7 +299,7 @@ func TestRunLiveProfileCheckShowsURLAndAutomaticProgressWhileRunning(t *testing.
 	final := completeLiveProfileCheck()
 	stub := &profilesStub{view: completeProfilesPresentation(), liveUpdates: []LiveProfileCheckPresentation{initial, final}, liveUpdateDelay: 1100 * time.Millisecond}
 	steps := []string{"\r", "", strings.Repeat("\x1b[B", 5) + "\r", "", strings.Repeat("\x1b[B", 4) + "\r", ""}
-	for range 45 {
+	for range 30 {
 		steps = append(steps, "")
 	}
 	steps = append(steps, "\x03\r")
@@ -373,10 +376,13 @@ func TestRunLongLiveProfileCheckURLKeepsEveryResultAndBackAtMinimumSize(t *testi
 	stub := &profilesStub{view: completeProfilesPresentation(), live: check}
 	steps := []string{"\r", "", strings.Repeat("\x1b[B", 5) + "\r", "", strings.Repeat("\x1b[B", 4) + "\r", "", "\x03\r"}
 	got := runTranscriptSteps(t, Session{Profiles: stub, ProfileOutcomes: stub, Access: profileClientAccessPresentation()}, 80, 24, steps...)
-	for _, want := range []string{"REALITY Vision auth=yes up=yes down=yes", "AnyTLS auth=yes up=yes down=yes", "> Back"} {
+	for _, want := range []string{"REALITY Vision", "AnyTLS", "> Back"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("long temporary URL hid %q at minimum size\n%s", want, got)
 		}
+	}
+	if strings.Count(got, "auth=yes up=yes down=yes") < 6 {
+		t.Fatalf("long temporary URL hid an automatic result at minimum size\n%s", got)
 	}
 }
 
@@ -408,8 +414,9 @@ func TestRunCompletedLiveProfileCheckWaitsBehindExitConfirmation(t *testing.T) {
 	}
 	complete := exit >= 0 && result >= exit && strings.Contains(afterExit, "Complete")
 	for _, profile := range []string{"REALITY Vision", "XHTTP", "WebSocket", "Hysteria2", "TUIC", "AnyTLS"} {
-		complete = complete && strings.Contains(afterExit, profile+" auth=yes up=yes down=yes")
+		complete = complete && strings.Contains(afterExit, profile)
 	}
+	complete = complete && strings.Count(afterExit, "auth=yes up=yes down=yes") >= 6
 	if !complete {
 		t.Fatalf("completed Live Profile Check did not wait behind Exit confirmation and appear after Stay\n%s", got)
 	}

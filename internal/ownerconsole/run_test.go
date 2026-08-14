@@ -482,7 +482,7 @@ func runTranscriptSteps(t *testing.T, session Session, width, height int, steps 
 	if err := Run(ctx, session); err != nil {
 		t.Fatal(err)
 	}
-	return output.String()
+	return strings.NewReplacer("\x1b[4h", "", "\x1b[4l", "").Replace(output.String())
 }
 
 func runPseudoTerminalTranscriptSteps(t *testing.T, session Session, width, height int, steps ...string) string {
