@@ -22,13 +22,12 @@ import (
 type InstallContributionName string
 
 const (
-	NetworkInstallContribution           InstallContributionName = "Network Policy"
-	ProfilesInstallContribution          InstallContributionName = "Connection Profiles"
-	CloudflareInstallContribution        InstallContributionName = "Cloudflare Tunnel"
-	IPCertificateInstallContribution     InstallContributionName = "Certificate Lifecycle IP"
-	DomainCertificateInstallContribution InstallContributionName = "Certificate Lifecycle domain"
-	SubscriptionInstallContribution      InstallContributionName = "Subscription Publication"
-	InstallPlanRefused                   RefusalCode             = "SOFTWARE-LIFECYCLE-INSTALL-PLAN-REFUSED"
+	NetworkInstallContribution      InstallContributionName = "Network Policy"
+	ProfilesInstallContribution     InstallContributionName = "Connection Profiles"
+	CloudflareInstallContribution   InstallContributionName = "Cloudflare Tunnel"
+	CertificateInstallContribution  InstallContributionName = "Certificate Lifecycle"
+	SubscriptionInstallContribution InstallContributionName = "Subscription Publication"
+	InstallPlanRefused              RefusalCode             = "SOFTWARE-LIFECYCLE-INSTALL-PLAN-REFUSED"
 )
 
 var installIdentityPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
@@ -236,13 +235,13 @@ func PlanInstall(request InstallPlanRequest) (*InstallPlan, *InstallFinding) {
 	}
 	want := map[InstallContributionName]systemchanges.Module{
 		NetworkInstallContribution: systemchanges.NetworkPolicyModule, ProfilesInstallContribution: systemchanges.ConnectionProfilesModule,
-		CloudflareInstallContribution: systemchanges.CloudflareModule, IPCertificateInstallContribution: systemchanges.CertificateModule,
-		DomainCertificateInstallContribution: systemchanges.CertificateModule, SubscriptionInstallContribution: systemchanges.SubscriptionModule,
+		CloudflareInstallContribution: systemchanges.CloudflareModule, CertificateInstallContribution: systemchanges.CertificateModule,
+		SubscriptionInstallContribution: systemchanges.SubscriptionModule,
 	}
 	proofs := make([]InstallContributionProof, 0, len(request.Contributions))
 	seen := map[InstallContributionName]bool{}
 	var steps []systemchanges.Step
-	var reclamationPrelude []systemchanges.Step
+	var cloudflarePrelude []systemchanges.Step
 	var checks []systemchanges.Check
 	var ports []string
 	var firewall string
@@ -260,12 +259,12 @@ func PlanInstall(request InstallPlanRequest) (*InstallPlan, *InstallFinding) {
 		}
 		seen[name] = true
 		proofs = append(proofs, proof)
-		if request.ReviewedReclamationSHA256 != "" && name == CloudflareInstallContribution {
+		if name == CloudflareInstallContribution {
 			for _, step := range proof.Steps {
 				if step.Forward() == systemchanges.ActivatePreparedConfiguration {
 					steps = append(steps, step)
 				} else {
-					reclamationPrelude = append(reclamationPrelude, step)
+					cloudflarePrelude = append(cloudflarePrelude, step)
 				}
 			}
 		} else {
@@ -279,7 +278,7 @@ func PlanInstall(request InstallPlanRequest) (*InstallPlan, *InstallFinding) {
 		if name == CloudflareInstallContribution {
 			cloudflare = append(cloudflare, proof.Details...)
 		}
-		if name == IPCertificateInstallContribution || name == DomainCertificateInstallContribution {
+		if name == CertificateInstallContribution {
 			certificates = append(certificates, proof.Details...)
 		}
 	}
@@ -290,7 +289,7 @@ func PlanInstall(request InstallPlanRequest) (*InstallPlan, *InstallFinding) {
 	if err != nil {
 		return refuse()
 	}
-	steps = append(reclamationPrelude, append([]systemchanges.Step{softwareStep}, steps...)...)
+	steps = append(cloudflarePrelude, append([]systemchanges.Step{softwareStep}, steps...)...)
 	softwareChecks := []systemchanges.Check{
 		{Owner: systemchanges.SoftwareModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "SOFTWARE-LIFECYCLE-INSTALL-STAGED"},
 		{Owner: systemchanges.SoftwareModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PostPublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "SOFTWARE-LIFECYCLE-INSTALL-AGREEMENT"},
@@ -428,10 +427,10 @@ func sameInstallContributions(want []InstallContributionProof, got []InstallCont
 		fresh += proof.SHA256
 		stable += proof.StableSHA256
 		if name == NetworkInstallContribution {
-			if !proof.Privileged || proof.StableSHA256 != expected.StableSHA256 {
+			if !proof.Privileged || proof.StableSHA256 != expected.StableSHA256 || !hashPattern.MatchString(proof.SHA256) || proof.Identity != "network-install-"+proof.SHA256[:12] {
 				return "", "", false
 			}
-			proof.SHA256, proof.Privileged = expected.SHA256, expected.Privileged
+			proof.Identity, proof.SHA256, proof.Privileged = expected.Identity, expected.SHA256, expected.Privileged
 		}
 		if !reflect.DeepEqual(proof, expected) {
 			return "", "", false
@@ -539,10 +538,7 @@ func validInstallContributionOwner(name InstallContributionName, owner, effectOw
 	if effectOwner == owner {
 		return true
 	}
-	if name == IPCertificateInstallContribution {
-		return owner == systemchanges.CertificateModule && effectOwner == systemchanges.NetworkPolicyModule
-	}
-	if name == DomainCertificateInstallContribution {
+	if name == CertificateInstallContribution {
 		return owner == systemchanges.CertificateModule && (effectOwner == systemchanges.NetworkPolicyModule || effectOwner == systemchanges.ConnectionProfilesModule)
 	}
 	return false

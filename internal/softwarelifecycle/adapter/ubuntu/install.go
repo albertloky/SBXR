@@ -13,7 +13,6 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
-	"os/user"
 	"path"
 	"sort"
 	"strings"
@@ -25,16 +24,13 @@ import (
 )
 
 type Installer struct {
-	staged           softwarelifecycle.StagedRelease
-	archive          []byte
-	components       []byte
-	manifest         softwarelifecycle.ComponentManifest
-	identities       bool
-	identitiesAbsent func() error
-	createIdentities func() error
-	removeIdentities func() error
-	enableRecovery   func() error
-	disableRecovery  func() error
+	staged             softwarelifecycle.StagedRelease
+	archive            []byte
+	components         []byte
+	manifest           softwarelifecycle.ComponentManifest
+	manageRecoveryUnit bool
+	enableRecovery     func() error
+	disableRecovery    func() error
 }
 
 func NewInstaller(candidate softwarelifecycle.InstallCandidate) (Installer, error) {
@@ -43,10 +39,7 @@ func NewInstaller(candidate softwarelifecycle.InstallCandidate) (Installer, erro
 		return Installer{}, errors.New("verified install candidate unavailable")
 	}
 	installer, err := newInstaller(staged, archive, components)
-	installer.identities = err == nil
-	installer.identitiesAbsent = installIdentitiesAbsent
-	installer.createIdentities = createInstallIdentities
-	installer.removeIdentities = removeInstallIdentities
+	installer.manageRecoveryUnit = err == nil
 	installer.enableRecovery = enableInstallRecovery
 	installer.disableRecovery = disableInstallRecovery
 	return installer, err
@@ -73,13 +66,10 @@ func newInstaller(staged softwarelifecycle.StagedRelease, archive []byte, compon
 type installRollback struct {
 	Schema     int                             `json:"schema"`
 	Created    []string                        `json:"created"`
-	Identities []string                        `json:"identities,omitempty"`
 	Staged     softwarelifecycle.StagedRelease `json:"staged"`
 	Archive    []byte                          `json:"archive"`
 	Components []byte                          `json:"components"`
 }
-
-var installIdentities = softwarelifecycle.ManagedIdentityNames()
 
 func (installer Installer) CaptureRollback(rootPath string, step systemchanges.Step, write func(io.Reader) error) error {
 	if !softwareStep(step) || write == nil {
@@ -95,21 +85,12 @@ func (installer Installer) CaptureRollback(rootPath string, step systemchanges.S
 			return errors.New("an SBXR install target already exists")
 		}
 	}
-	if installer.identities {
-		if installer.identitiesAbsent == nil || installer.identitiesAbsent() != nil {
-			return errors.New("managed service identity observation failed")
-		}
-	}
-	identities := []string(nil)
-	if installer.identities {
-		identities = append(identities, installIdentities...)
-	}
-	document, _ := json.Marshal(installRollback{Schema: 1, Created: installer.installedFiles(), Identities: identities, Staged: installer.staged, Archive: installer.archive, Components: installer.components})
+	document, _ := json.Marshal(installRollback{Schema: 1, Created: installer.installedFiles(), Staged: installer.staged, Archive: installer.archive, Components: installer.components})
 	return write(bytes.NewReader(document))
 }
 
 func NewRecoveryInstaller() Installer {
-	return Installer{identities: true, identitiesAbsent: installIdentitiesAbsent, createIdentities: createInstallIdentities, removeIdentities: removeInstallIdentities, enableRecovery: enableInstallRecovery, disableRecovery: disableInstallRecovery}
+	return Installer{manageRecoveryUnit: true, enableRecovery: enableInstallRecovery, disableRecovery: disableInstallRecovery}
 }
 
 func (installer Installer) Activate(rootPath string, step systemchanges.Step, _ time.Duration) (systemchanges.StepEvidence, error) {
@@ -129,14 +110,6 @@ func (installer Installer) Activate(rootPath string, step systemchanges.Step, _ 
 		return systemchanges.StepEvidence{}, err
 	}
 	defer root.Close()
-	if installer.identities {
-		if installer.createIdentities == nil {
-			return systemchanges.StepEvidence{}, errors.New("managed service identity creation unavailable")
-		}
-		if err := installer.createIdentities(); err != nil {
-			return systemchanges.StepEvidence{}, err
-		}
-	}
 	directories := []struct {
 		name string
 		mode fs.FileMode
@@ -166,7 +139,7 @@ func (installer Installer) Activate(rootPath string, step systemchanges.Step, _ 
 	if err := installer.verify(root, metadata); err != nil {
 		return systemchanges.StepEvidence{}, err
 	}
-	if installer.identities && (installer.enableRecovery == nil || installer.enableRecovery() != nil) {
+	if installer.manageRecoveryUnit && (installer.enableRecovery == nil || installer.enableRecovery() != nil) {
 		return systemchanges.StepEvidence{}, errors.New("restart recovery enablement failed")
 	}
 	digest := sha256.Sum256(executable)
@@ -194,7 +167,7 @@ func (installer Installer) Reverse(rootPath string, step systemchanges.Step, sou
 	if err := installer.verifyRollbackTargets(root, metadata); err != nil {
 		return systemchanges.StepEvidence{}, errors.New("installed release changed before rollback")
 	}
-	if installer.identities && (installer.disableRecovery == nil || installer.disableRecovery() != nil) {
+	if installer.manageRecoveryUnit && (installer.disableRecovery == nil || installer.disableRecovery() != nil) {
 		return systemchanges.StepEvidence{}, errors.New("restart recovery disablement failed")
 	}
 	for _, name := range reverseStrings(rollback.Created) {
@@ -209,14 +182,6 @@ func (installer Installer) Reverse(rootPath string, step systemchanges.Step, sou
 	_ = root.Remove("etc/sbxr")
 	if err := syncInstallDirectories(root, "opt/sbxr/releases", "etc/systemd/system", "usr/local/bin"); err != nil {
 		return systemchanges.StepEvidence{}, err
-	}
-	if installer.identities {
-		if installer.removeIdentities == nil {
-			return systemchanges.StepEvidence{}, errors.New("managed service identity removal unavailable")
-		}
-		if err := installer.removeIdentities(); err != nil {
-			return systemchanges.StepEvidence{}, err
-		}
 	}
 	digest := sha256.Sum256([]byte("not-installed"))
 	return systemchanges.StepEvidence{Code: "software-release-removed", SHA256: hex.EncodeToString(digest[:])}, nil
@@ -233,79 +198,11 @@ func (installer Installer) fromRollback(source io.Reader) (Installer, installRol
 	if err != nil {
 		return Installer{}, installRollback{}, errors.New("Software Lifecycle rollback proof invalid")
 	}
-	rebuilt.identities, rebuilt.removeIdentities, rebuilt.disableRecovery = installer.identities, installer.removeIdentities, installer.disableRecovery
-	wantIdentities := []string(nil)
-	if rebuilt.identities {
-		wantIdentities = installIdentities
-	}
-	if !equalStrings(rollback.Created, rebuilt.installedFiles()) || !equalStrings(rollback.Identities, wantIdentities) {
+	rebuilt.manageRecoveryUnit, rebuilt.disableRecovery = installer.manageRecoveryUnit, installer.disableRecovery
+	if !equalStrings(rollback.Created, rebuilt.installedFiles()) {
 		return Installer{}, installRollback{}, errors.New("Software Lifecycle rollback proof invalid")
 	}
 	return rebuilt, rollback, nil
-}
-
-func installIdentitiesAbsent() error {
-	for _, name := range installIdentities {
-		if _, err := user.Lookup(name); err == nil {
-			return errors.New("an SBXR service identity already exists")
-		} else if _, absent := err.(user.UnknownUserError); !absent {
-			return err
-		}
-		if _, err := user.LookupGroup(name); err == nil {
-			return errors.New("an SBXR service group already exists")
-		} else if _, absent := err.(user.UnknownGroupError); !absent {
-			return err
-		}
-	}
-	return nil
-}
-
-func createInstallIdentities() error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	created := []string{}
-	for _, name := range installIdentities {
-		if exec.CommandContext(ctx, "/usr/sbin/groupadd", "--system", name).Run() != nil {
-			for index := len(created) - 1; index >= 0; index-- {
-				_ = exec.CommandContext(ctx, "/usr/sbin/userdel", created[index]).Run()
-				_ = exec.CommandContext(ctx, "/usr/sbin/groupdel", created[index]).Run()
-			}
-			return errors.New("managed service identity creation failed")
-		}
-		if exec.CommandContext(ctx, "/usr/sbin/useradd", "--system", "--gid", name, "--no-create-home", "--shell", "/usr/sbin/nologin", name).Run() != nil {
-			_ = exec.CommandContext(ctx, "/usr/sbin/groupdel", name).Run()
-			for index := len(created) - 1; index >= 0; index-- {
-				_ = exec.CommandContext(ctx, "/usr/sbin/userdel", created[index]).Run()
-				_ = exec.CommandContext(ctx, "/usr/sbin/groupdel", created[index]).Run()
-			}
-			return errors.New("managed service identity creation failed")
-		}
-		created = append(created, name)
-	}
-	return nil
-}
-
-func removeInstallIdentities() error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	for index := len(installIdentities) - 1; index >= 0; index-- {
-		name := installIdentities[index]
-		if _, err := user.Lookup(name); err == nil {
-			if exec.CommandContext(ctx, "/usr/sbin/userdel", name).Run() != nil {
-				return errors.New("managed service identity removal failed")
-			}
-		} else if _, absent := err.(user.UnknownUserError); !absent {
-			return errors.New("managed service identity removal failed")
-		}
-		if _, err := user.LookupGroup(name); err == nil {
-			if exec.CommandContext(ctx, "/usr/sbin/groupdel", name).Run() != nil {
-				return errors.New("managed service identity removal failed")
-			}
-		} else if _, absent := err.(user.UnknownGroupError); !absent {
-			return errors.New("managed service identity removal failed")
-		}
-	}
-	return nil
 }
 
 func enableInstallRecovery() error  { return setInstallRecovery("enable") }

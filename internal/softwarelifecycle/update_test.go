@@ -158,7 +158,7 @@ func controlledUpdateContributions(t *testing.T, changeSet, desired string) []Up
 	t.Helper()
 	all := controlledInstallContributions(t, changeSet, desired)
 	result := make([]UpdateContribution, 0, 3)
-	for _, index := range []int{1, 2, 5} {
+	for _, index := range []int{1, 2, 4} {
 		result = append(result, all[index].(UpdateContribution))
 	}
 	return result

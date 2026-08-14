@@ -182,8 +182,8 @@ func TestPlanInstallRefusesMissingChangedOrCallerInventedInputs(t *testing.T) {
 		{"wrong change set", func(r *InstallPlanRequest) { r.ChangeSet = "../unsafe" }},
 		{"wrong state checksum", func(r *InstallPlanRequest) { r.DesiredStateSHA256 = strings.Repeat("A", 64) }},
 		{"missing disk category", func(r *InstallPlanRequest) { r.Disk.RollbackBytes = 0 }},
-		{"missing contribution", func(r *InstallPlanRequest) { r.Contributions = r.Contributions[:5] }},
-		{"duplicate contribution", func(r *InstallPlanRequest) { r.Contributions[5] = r.Contributions[0] }},
+		{"missing contribution", func(r *InstallPlanRequest) { r.Contributions = r.Contributions[:4] }},
+		{"duplicate contribution", func(r *InstallPlanRequest) { r.Contributions[4] = r.Contributions[0] }},
 		{"changed contribution state", func(r *InstallPlanRequest) {
 			proof := installContributionProof(r.Contributions[0])
 			proof.DesiredStateSHA256 = strings.Repeat("c", 64)
@@ -213,11 +213,11 @@ func TestPlanInstallRefusesMissingChangedOrCallerInventedInputs(t *testing.T) {
 }
 
 func TestInstallCertificateContributionAllowsOnlyItsExactCrossModuleEffects(t *testing.T) {
-	if !validInstallContributionOwner(IPCertificateInstallContribution, systemchanges.CertificateModule, systemchanges.NetworkPolicyModule) || !validInstallContributionOwner(DomainCertificateInstallContribution, systemchanges.CertificateModule, systemchanges.ConnectionProfilesModule) {
+	if !validInstallContributionOwner(CertificateInstallContribution, systemchanges.CertificateModule, systemchanges.NetworkPolicyModule) || !validInstallContributionOwner(CertificateInstallContribution, systemchanges.CertificateModule, systemchanges.ConnectionProfilesModule) {
 		t.Fatal("required certificate installation effects were refused")
 	}
 	for _, owner := range []systemchanges.Module{systemchanges.StateModule, systemchanges.SoftwareModule, systemchanges.CloudflareModule} {
-		if validInstallContributionOwner(DomainCertificateInstallContribution, systemchanges.CertificateModule, owner) {
+		if validInstallContributionOwner(CertificateInstallContribution, systemchanges.CertificateModule, owner) {
 			t.Fatalf("unowned certificate installation effect %q accepted", owner)
 		}
 	}
@@ -312,8 +312,7 @@ func controlledInstallContributions(t *testing.T, changeSet, desired string) []I
 		{NetworkInstallContribution, systemchanges.NetworkPolicyModule},
 		{ProfilesInstallContribution, systemchanges.ConnectionProfilesModule},
 		{CloudflareInstallContribution, systemchanges.CloudflareModule},
-		{IPCertificateInstallContribution, systemchanges.CertificateModule},
-		{DomainCertificateInstallContribution, systemchanges.CertificateModule},
+		{CertificateInstallContribution, systemchanges.CertificateModule},
 		{SubscriptionInstallContribution, systemchanges.SubscriptionModule},
 	}
 	result := make([]InstallContribution, 0, len(names))
@@ -330,6 +329,9 @@ func controlledInstallContributions(t *testing.T, changeSet, desired string) []I
 			{Owner: value.owner, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PostPublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: fmt.Sprintf("INSTALL-%02d-POST", index)},
 		}
 		proof := InstallContributionProof{Name: string(value.name), Owner: value.owner, Identity: fmt.Sprintf("component-plan-%d", index), SHA256: strings.Repeat(fmt.Sprintf("%x", index+1), 64), StableSHA256: strings.Repeat(fmt.Sprintf("%x", index+6), 64), ChangeSet: changeSet, DesiredStateSHA256: desired, Steps: []systemchanges.Step{step}, Checks: checks, Details: []string{string(value.name) + " exact install effects"}}
+		if value.name == CertificateInstallContribution {
+			proof.Details = []string{"Certificate Lifecycle IP exact install effects", "Certificate Lifecycle domain exact install effects"}
+		}
 		if value.owner == systemchanges.NetworkPolicyModule {
 			proof.Ports = []string{"SSH preservation: public 2222/TCP", "VLESS REALITY Vision: public 443/TCP"}
 			proof.Firewall = "replace only table inet sbxr; preserve SSH on 2222/TCP"

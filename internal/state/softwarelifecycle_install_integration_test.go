@@ -97,6 +97,7 @@ func TestSoftwareLifecycleInstallPublishesRevisionOneOnlyAfterCompleteAgreement(
 	rechecked := lifecycleContributions(t, changeSet, desired)
 	recheckedNetwork := rechecked[0].SoftwareLifecycleInstallContribution()
 	recheckedNetwork.Privileged, recheckedNetwork.SHA256 = true, strings.Repeat("f", 64)
+	recheckedNetwork.Identity = "network-install-" + recheckedNetwork.SHA256[:12]
 	rechecked[0] = lifecycleContribution{recheckedNetwork}
 	var fresh string
 	for _, contribution := range rechecked {
@@ -125,7 +126,7 @@ func lifecycleContributions(t *testing.T, changeSet, desired string) []softwarel
 		owner systemchanges.Module
 	}{
 		{"Network Policy", systemchanges.NetworkPolicyModule}, {"Connection Profiles", systemchanges.ConnectionProfilesModule}, {"Cloudflare Tunnel", systemchanges.CloudflareModule},
-		{"Certificate Lifecycle IP", systemchanges.CertificateModule}, {"Certificate Lifecycle domain", systemchanges.CertificateModule}, {"Subscription Publication", systemchanges.SubscriptionModule},
+		{"Certificate Lifecycle", systemchanges.CertificateModule}, {"Subscription Publication", systemchanges.SubscriptionModule},
 	}
 	result := make([]softwarelifecycle.InstallContribution, 0, len(definitions))
 	for index, definition := range definitions {

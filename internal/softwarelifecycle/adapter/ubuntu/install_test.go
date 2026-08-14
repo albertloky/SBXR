@@ -29,6 +29,9 @@ import (
 
 func TestInstallerActivatesAndRollsBackOnlyTheReviewedRelease(t *testing.T) {
 	installer := installFixture(t)
+	installer.manageRecoveryUnit = true
+	installer.enableRecovery = func() error { return nil }
+	installer.disableRecovery = func() error { return nil }
 	step, err := systemchanges.NewStep(systemchanges.SoftwareModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
 	if err != nil {
 		t.Fatal(err)
@@ -37,6 +40,9 @@ func TestInstallerActivatesAndRollsBackOnlyTheReviewedRelease(t *testing.T) {
 	var rollback []byte
 	if err := installer.CaptureRollback(root, step, func(source io.Reader) error { rollback, _ = io.ReadAll(source); return nil }); err != nil {
 		t.Fatal(err)
+	}
+	if bytes.Contains(rollback, []byte(`"identities"`)) {
+		t.Fatalf("fresh-install rollback retained service identities: %s", rollback)
 	}
 	evidence, err := installer.Activate(root, step, time.Minute)
 	if err != nil || evidence.Code != "software-release-installed" {
@@ -69,8 +75,7 @@ func TestInstallerActivatesAndRollsBackOnlyTheReviewedRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	recovery := NewRecoveryInstaller()
-	recovery.identities = false
-	recovery.removeIdentities = installer.removeIdentities
+	recovery.manageRecoveryUnit = false
 	if _, err := recovery.Reverse(root, step, bytes.NewReader(rollback), time.Minute); err != nil {
 		t.Fatal(err)
 	}
@@ -82,13 +87,10 @@ func TestInstallerActivatesAndRollsBackOnlyTheReviewedRelease(t *testing.T) {
 	}
 }
 
-func TestInstallerCreatesAndRollsBackOnlyItsFreshServiceIdentities(t *testing.T) {
+func TestInstallerEnablesAndRollsBackRestartRecoveryWithoutServiceIdentities(t *testing.T) {
 	installer := installFixture(t)
-	installer.identities = true
+	installer.manageRecoveryUnit = true
 	calls := []string{}
-	installer.identitiesAbsent = func() error { calls = append(calls, "absent"); return nil }
-	installer.createIdentities = func() error { calls = append(calls, "create"); return nil }
-	installer.removeIdentities = func() error { calls = append(calls, "remove"); return nil }
 	installer.enableRecovery = func() error { calls = append(calls, "enable-recovery"); return nil }
 	installer.disableRecovery = func() error { calls = append(calls, "disable-recovery"); return nil }
 	step, _ := systemchanges.NewStep(systemchanges.SoftwareModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
@@ -101,7 +103,6 @@ func TestInstallerCreatesAndRollsBackOnlyItsFreshServiceIdentities(t *testing.T)
 		t.Fatal(err)
 	}
 	recovery := NewRecoveryInstaller()
-	recovery.removeIdentities = installer.removeIdentities
 	recovery.disableRecovery = installer.disableRecovery
 	if effect, err := recovery.Inspect(root, step, bytes.NewReader(rollback), time.Minute); err != nil || effect != systemchanges.StepEffectPresent {
 		t.Fatalf("recovery Inspect() = (%s, %v)", effect, err)
@@ -109,8 +110,8 @@ func TestInstallerCreatesAndRollsBackOnlyItsFreshServiceIdentities(t *testing.T)
 	if _, err := recovery.Reverse(root, step, bytes.NewReader(rollback), time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(calls, ","); got != "absent,create,enable-recovery,disable-recovery,remove" {
-		t.Fatalf("service identity lifecycle = %q", got)
+	if got := strings.Join(calls, ","); got != "enable-recovery,disable-recovery" {
+		t.Fatalf("restart recovery lifecycle = %q", got)
 	}
 }
 

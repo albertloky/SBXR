@@ -661,6 +661,28 @@ func (plan *Plan) SoftwareLifecycleInstallContribution() lifecyclecontract.Insta
 	}
 	return lifecyclecontract.InstallContribution{Name: name, Owner: systemchanges.CertificateModule, Identity: plan.identity, SHA256: plan.sha256, StableSHA256: plan.sha256, ChangeSet: plan.request.ChangeSet, DesiredStateSHA256: plan.request.DesiredStateSHA256, Steps: plan.Steps(), Checks: plan.Checks(), Details: []string{plan.String()}}
 }
+
+type FreshInstallContribution struct {
+	proof lifecyclecontract.InstallContribution
+}
+
+func NewFreshInstallContribution(ip, domain *Plan) (FreshInstallContribution, bool) {
+	ipProof, domainProof := ip.SoftwareLifecycleInstallContribution(), domain.SoftwareLifecycleInstallContribution()
+	if ipProof.Name != "Certificate Lifecycle IP" || domainProof.Name != "Certificate Lifecycle domain" || ipProof.ChangeSet != domainProof.ChangeSet || ipProof.DesiredStateSHA256 != domainProof.DesiredStateSHA256 {
+		return FreshInstallContribution{}, false
+	}
+	digest := sha256.Sum256([]byte(ipProof.SHA256 + domainProof.SHA256))
+	checksum := hex.EncodeToString(digest[:])
+	return FreshInstallContribution{proof: lifecyclecontract.InstallContribution{
+		Name: "Certificate Lifecycle", Owner: systemchanges.CertificateModule, Identity: "certificate-install-" + checksum[:12], SHA256: checksum, StableSHA256: checksum,
+		ChangeSet: ipProof.ChangeSet, DesiredStateSHA256: ipProof.DesiredStateSHA256,
+		Steps: append(append([]systemchanges.Step(nil), ipProof.Steps...), domainProof.Steps...), Checks: append(append([]systemchanges.Check(nil), ipProof.Checks...), domainProof.Checks...), Details: append(append([]string(nil), ipProof.Details...), domainProof.Details...),
+	}}, true
+}
+
+func (value FreshInstallContribution) SoftwareLifecycleInstallContribution() lifecyclecontract.InstallContribution {
+	return value.proof
+}
 func (plan *Plan) Consume() bool {
 	return plan != nil && plan.used != nil && plan.used.CompareAndSwap(false, true)
 }

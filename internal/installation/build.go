@@ -56,12 +56,11 @@ func (built *builtInstall) prepareState(module state.Interface) (*state.Prepared
 		proof := contribution.SoftwareLifecycleInstallContribution()
 		proofs[softwarelifecycle.InstallContributionName(proof.Name)] = proof
 	}
-	certificateDigest := sha256.Sum256([]byte(proofs[softwarelifecycle.IPCertificateInstallContribution].SHA256 + proofs[softwarelifecycle.DomainCertificateInstallContribution].SHA256))
 	checksums, err := state.NewManagedInputChecksums(
 		proofs[softwarelifecycle.ProfilesInstallContribution].SHA256,
 		proofs[softwarelifecycle.SubscriptionInstallContribution].SHA256,
 		proofs[softwarelifecycle.CloudflareInstallContribution].SHA256,
-		hex.EncodeToString(certificateDigest[:]),
+		proofs[softwarelifecycle.CertificateInstallContribution].SHA256,
 		proofs[softwarelifecycle.NetworkInstallContribution].SHA256,
 		built.plan.SHA256(),
 	)
@@ -304,7 +303,11 @@ func buildInstallWith(ctx context.Context, request softwareubuntu.InstallHandoff
 		return nil, err
 	}
 
-	contributions := []softwarelifecycle.InstallContribution{softwarelifecycle.NewReviewedNetworkInstallContribution(baseNetwork, changeSet, desiredSHA256), profileResult.Plan, cloudflareResult.Plan, ipPlan, domainPlan, subscriptionPlan}
+	certificateContribution, valid := certificatelifecycle.NewFreshInstallContribution(ipPlan, domainPlan)
+	if !valid {
+		return nil, errors.New("complete Certificate Lifecycle install contribution unavailable")
+	}
+	contributions := []softwarelifecycle.InstallContribution{softwarelifecycle.NewReviewedNetworkInstallContribution(baseNetwork, changeSet, desiredSHA256), profileResult.Plan, cloudflareResult.Plan, certificateContribution, subscriptionPlan}
 	installPlan, finding := softwarelifecycle.PlanInstall(softwarelifecycle.InstallPlanRequest{Candidate: candidate, ChangeSet: changeSet, DesiredStateSHA256: desiredSHA256, Contributions: contributions, Disk: disk, ReviewedReclamationSHA256: request.ReviewedReclamationSHA256})
 	if finding != nil || installPlan == nil || request.ReviewedPlanSHA256 != "" && installPlan.SHA256() != request.ReviewedPlanSHA256 {
 		return nil, errors.New("reviewed install Plan changed")
