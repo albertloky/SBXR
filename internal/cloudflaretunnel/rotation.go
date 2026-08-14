@@ -48,6 +48,9 @@ func (i Interface) planRunTokenRotation(ctx context.Context, request PlanRequest
 	if health := EvaluateWholeTunnel(observed, expected); health.Outcome != Healthy {
 		return PlanResult{Health: health}
 	}
+	if err := i.validateNativeIngress(ctx, request); err != nil {
+		return fail("CLOUDFLARE-RUN-TOKEN-ROTATION-REFUSED", err.Error())
+	}
 	change := systemchanges.CloudflareChange{
 		Action: systemchanges.CloudflareRunTokenActivate, AccountID: request.Authority.AccountID, ZoneID: request.Authority.ZoneID,
 		TunnelID: rotation.TunnelID, XHTTPDNSRecordID: rotation.XHTTPDNSRecordID, WebSocketDNSRecordID: rotation.WebSocketDNSRecordID,

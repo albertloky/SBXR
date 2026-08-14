@@ -17,13 +17,13 @@ import (
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
 
-func TestCloudflaredServiceUsesProtectedTokenFileAndNonRootIdentity(t *testing.T) {
+func TestCloudflaredServiceUsesProtectedTokenFileAndRootIdentity(t *testing.T) {
 	unit := CloudflaredServiceUnit()
 	if !ValidateCloudflaredServiceUnit(unit) || strings.Contains(unit, "TOKEN=") || strings.Contains(unit, "PLAN-SECRET-MARKER") {
 		t.Fatalf("unsafe cloudflared unit:\n%s", unit)
 	}
-	if ValidateCloudflaredServiceUnit(strings.Replace(unit, "User=cloudflared", "User=root", 1)) {
-		t.Fatal("root cloudflared service accepted")
+	if !strings.Contains(unit, "User=root\nGroup=root") || ValidateCloudflaredServiceUnit(strings.Replace(unit, "Group=root", "Group=cloudflared", 1)) {
+		t.Fatal("cloudflared unit did not enforce one root runtime identity")
 	}
 }
 
@@ -53,9 +53,10 @@ func TestExecutorInstallsAndRollsBackProtectedCloudflaredService(t *testing.T) {
 		}
 	}
 	var commands []string
-	serviceGID := testServiceGID(t)
+	serviceGID := os.Getegid()
 	executor := Executor{
-		serviceIdentity: func() (int, int, int, error) { return os.Geteuid(), os.Getegid(), serviceGID, nil },
+		request:         PlanRequest{XHTTPHostname: "xhttp.example.com", WebSocketHostname: "ws.example.com"},
+		serviceIdentity: func() (int, int, error) { return os.Geteuid(), serviceGID, nil },
 		command: func(_ context.Context, name string, arguments ...string) ([]byte, error) {
 			commands = append(commands, name+" "+strings.Join(arguments, " "))
 			if len(arguments) == 1 && arguments[0] == "--version" {
@@ -76,7 +77,7 @@ func TestExecutorInstallsAndRollsBackProtectedCloudflaredService(t *testing.T) {
 	if evidence, err := executor.ActivateService(root, strings.NewReader(material), time.Minute); err != nil || evidence.Code != "cloudflared-service-activated" {
 		t.Fatalf("ActivateService() = %+v, %v", evidence, err)
 	}
-	if err := ValidateInstalledService(root, os.Geteuid(), os.Getegid(), serviceGID); err != nil {
+	if err := ValidateInstalledService(root, os.Geteuid(), serviceGID); err != nil {
 		t.Fatal(err)
 	}
 	token, err := os.ReadFile(filepath.Join(root, "etc/sbxr/cloudflared/token"))
@@ -113,9 +114,9 @@ func TestExecutorSnapshotsRestartsAndRestoresManagedCloudflaredService(t *testin
 			t.Fatal(err)
 		}
 	}
-	serviceGID := testServiceGID(t)
+	serviceGID := os.Getegid()
 	var commands []string
-	executor := Executor{serviceIdentity: func() (int, int, int, error) { return os.Geteuid(), os.Getegid(), serviceGID, nil }, command: func(_ context.Context, name string, arguments ...string) ([]byte, error) {
+	executor := Executor{request: PlanRequest{XHTTPHostname: "xhttp.example.com", WebSocketHostname: "ws.example.com"}, serviceIdentity: func() (int, int, error) { return os.Geteuid(), serviceGID, nil }, command: func(_ context.Context, name string, arguments ...string) ([]byte, error) {
 		commands = append(commands, name+" "+strings.Join(arguments, " "))
 		if len(arguments) == 1 && arguments[0] == "--version" {
 			return []byte("cloudflared version 2026.7.3 (built 2026-08-01)"), nil
@@ -150,7 +151,7 @@ func TestExecutorSnapshotsRestartsAndRestoresManagedCloudflaredService(t *testin
 		name, path string
 		candidate  []byte
 		mode       os.FileMode
-	}{{"token", "etc/sbxr/cloudflared/token", priorToken, 0o640}, {"config", "etc/sbxr/cloudflared/config.yml", priorConfig, 0o640}, {"unit", "etc/systemd/system/cloudflared.service", candidateUnit, 0o644}} {
+	}{{"token", "etc/sbxr/cloudflared/token", priorToken, 0o644}, {"config", "etc/sbxr/cloudflared/config.yml", priorConfig, 0o644}, {"unit", "etc/systemd/system/cloudflared.service", candidateUnit, 0o644}} {
 		t.Run("changed "+hostile.name, func(t *testing.T) {
 			name := filepath.Join(root, hostile.path)
 			changed := append(append([]byte(nil), hostile.candidate...), 'x')
@@ -187,7 +188,7 @@ func TestInspectServiceFindsDirectoriesCreatedBeforeFirstFile(t *testing.T) {
 			if err := os.MkdirAll(filepath.Join(root, "etc/systemd/system"), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			executor := Executor{serviceIdentity: func() (int, int, int, error) { return os.Geteuid(), os.Getegid(), testServiceGID(t), nil }}
+			executor := Executor{serviceIdentity: func() (int, int, error) { return os.Geteuid(), os.Getegid(), nil }}
 			var rollback []byte
 			if err := executor.CaptureServiceRollback(root, func(source io.Reader) error {
 				var err error
@@ -214,9 +215,9 @@ func TestExecutorRemovesTheOldTokenAtCheckpointAndRestartsOnlyWithTheNewToken(t 
 			t.Fatal(err)
 		}
 	}
-	serviceGID := testServiceGID(t)
+	serviceGID := os.Getegid()
 	var commands []string
-	executor := Executor{serviceIdentity: func() (int, int, int, error) { return os.Geteuid(), os.Getegid(), serviceGID, nil }, command: func(_ context.Context, name string, arguments ...string) ([]byte, error) {
+	executor := Executor{request: PlanRequest{XHTTPHostname: "xhttp.example.com", WebSocketHostname: "ws.example.com"}, serviceIdentity: func() (int, int, error) { return os.Geteuid(), serviceGID, nil }, command: func(_ context.Context, name string, arguments ...string) ([]byte, error) {
 		commands = append(commands, name+" "+strings.Join(arguments, " "))
 		if len(arguments) == 1 && arguments[0] == "--version" {
 			return []byte("cloudflared version 2026.7.3 (built 2026-08-01)"), nil
@@ -308,20 +309,25 @@ func TestInstalledCloudflaredServiceRequiresExactProtectedLayout(t *testing.T) {
 	for _, directory := range []struct {
 		name string
 		mode os.FileMode
-	}{{"etc", 0o755}, {"etc/sbxr", 0o755}, {"etc/sbxr/cloudflared", 0o750}, {"etc/systemd", 0o755}, {"etc/systemd/system", 0o755}} {
+	}{{"etc", 0o755}, {"etc/sbxr", 0o755}, {"etc/sbxr/cloudflared", 0o755}, {"etc/systemd", 0o755}, {"etc/systemd/system", 0o755}} {
 		name, mode := directory.name, directory.mode
 		if err := os.MkdirAll(filepath.Join(root, name), mode); err != nil || os.Chmod(filepath.Join(root, name), mode) != nil {
 			t.Fatal(err)
 		}
 	}
-	serviceGID := testServiceGID(t)
+	serviceGID := os.Getegid()
 	if err := os.Chown(filepath.Join(root, "etc/sbxr/cloudflared"), os.Geteuid(), serviceGID); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "etc/sbxr/cloudflared/token"), []byte("SERVICE-TOKEN-MARKER"), 0o640); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "etc/sbxr/cloudflared/token"), []byte("SERVICE-TOKEN-MARKER"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "etc/sbxr/cloudflared/config.yml"), []byte("ingress: []\n"), 0o640); err != nil {
+	material := serviceMaterial{Routes: []struct {
+		Hostname string `json:"hostname"`
+		Origin   string `json:"origin"`
+	}{{Hostname: "xhttp.example.com", Origin: xhttpOrigin}, {Hostname: "ws.example.com", Origin: webSocketOrigin}}}
+	configuration := serviceConfiguration(material)
+	if err := os.WriteFile(filepath.Join(root, "etc/sbxr/cloudflared/config.yml"), configuration, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	unit := filepath.Join(root, "etc/systemd/system/cloudflared.service")
@@ -333,28 +339,48 @@ func TestInstalledCloudflaredServiceRequiresExactProtectedLayout(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := ValidateInstalledService(root, os.Geteuid(), os.Getegid(), serviceGID); err != nil {
+	executor := Executor{request: PlanRequest{XHTTPHostname: "xhttp.example.com", WebSocketHostname: "ws.example.com"}, serviceIdentity: func() (int, int, error) { return os.Geteuid(), serviceGID, nil }}
+	if err := executor.ValidateInstalledService(root); err != nil {
 		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "etc/sbxr/cloudflared/config.yml"), []byte(`{"ingress":[]}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := executor.ValidateInstalledService(root); err == nil {
+		t.Fatal("incomplete ingress configuration accepted")
+	}
+	if err := os.WriteFile(filepath.Join(root, "etc/sbxr/cloudflared/config.yml"), configuration, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(root, "etc/sbxr/cloudflared/token"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := executor.ValidateInstalledService(root); err == nil {
+		t.Fatal("wrong token mode accepted")
 	}
 	if err := os.Chmod(filepath.Join(root, "etc/sbxr/cloudflared/token"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := ValidateInstalledService(root, os.Geteuid(), os.Getegid(), serviceGID); err == nil {
-		t.Fatal("wider token mode accepted")
-	}
-}
-
-func testServiceGID(t *testing.T) int {
-	t.Helper()
-	groups, err := os.Getgroups()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, gid := range groups {
-		if gid != os.Getegid() {
-			return gid
+	for name, replacement := range map[string]string{
+		"old identity":        "User=cloudflared\nGroup=cloudflared",
+		"mixed identity":      "User=root\nGroup=cloudflared",
+		"missing containment": "User=root\nGroup=root",
+		"unsafe token":        "User=root\nGroup=root",
+	} {
+		candidate := CloudflaredServiceUnit()
+		switch name {
+		case "old identity", "mixed identity":
+			candidate = strings.Replace(candidate, "User=root\nGroup=root", replacement, 1)
+		case "missing containment":
+			candidate = strings.Replace(candidate, "PrivateTmp=true\n", "", 1)
+		case "unsafe token":
+			candidate = strings.Replace(candidate, "--token-file /etc/sbxr/cloudflared/token", "--token SERVICE-TOKEN-MARKER", 1)
+		}
+		if err := os.WriteFile(unit, []byte(candidate), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := executor.ValidateInstalledService(root); err == nil {
+			t.Fatalf("%s accepted", name)
 		}
 	}
-	t.Skip("a distinct supplementary group is required")
-	return 0
 }

@@ -23,10 +23,14 @@ import (
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
 
+func newCloudflareTestModule(api cloudflaretunnel.API, clock cloudflaretunnel.Clock) cloudflaretunnel.Interface {
+	return cloudflaretunnel.New(api, clock, func(context.Context, []byte) error { return nil })
+}
+
 func TestComposedInstallBuildsAndPreparesTheCompleteRevisionOnePlan(t *testing.T) {
 	request := composedInstallRequest(t)
 	cloudflareAPI := composedCloudflareAPI{}
-	cloudflareModule := cloudflaretunnel.New(cloudflareAPI, composedClock{})
+	cloudflareModule := newCloudflareTestModule(cloudflareAPI, composedClock{})
 	networkModule := networkpolicy.New(composedNetworkObserver{})
 	built, err := buildInstallWith(t.Context(), request, buildDependencies{
 		stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
@@ -65,7 +69,7 @@ func TestRootRuntimeArtifactsCrossStateAndSystemChangesInterfaces(t *testing.T) 
 			stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
 				return request.Candidate.Staged, nil
 			},
-			network: networkpolicy.New(composedNetworkObserver{}).Evaluate, cloudflare: cloudflaretunnel.New(cloudflareAPI, composedClock{}).Plan,
+			network: networkpolicy.New(composedNetworkObserver{}).Evaluate, cloudflare: newCloudflareTestModule(cloudflareAPI, composedClock{}).Plan,
 			random: newInstallEntropyReader(request.Entropy), inventory: cloudflareAPI,
 		})
 		if err != nil {
@@ -85,14 +89,14 @@ func TestRootRuntimeArtifactsCrossStateAndSystemChangesInterfaces(t *testing.T) 
 		}
 		volatile := strings.Repeat("9", 64)
 		adapter := &runtimeArtifactTransactionAdapter{failPost: failPost, observation: systemchanges.Observation{Status: systemchanges.NotInstalled, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, VolatileSHA256: volatile, FilesystemBytes: 20 << 30, AvailableBytes: 5 << 30, WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}}
-		changeSet, changeSetErr := systemchanges.NewChangeSet(systemchanges.ChangeSetSpec{Identity: changeSetID, Mutation: systemchanges.InstallationMutation, OutcomeOwner: systemchanges.SoftwareModule, StartingState: systemchanges.StateLineage{Status: systemchanges.NotInstalled}, TargetStateSHA256: candidateSHA, Plan: systemchanges.PlanBinding{Identity: planID, SHA256: planSHA, VolatileSHA256: volatile}, PreparedState: prepared, Steps: built.wiring.profiles.Steps(), Checks: built.wiring.profiles.Checks(), Timeouts: systemchanges.Timeouts{Step: time.Second, Check: time.Second}, Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}})
+		changeSet, changeSetErr := systemchanges.NewChangeSet(systemchanges.ChangeSetSpec{Identity: changeSetID, Mutation: systemchanges.InstallationMutation, OutcomeOwner: systemchanges.CloudflareModule, StartingState: systemchanges.StateLineage{Status: systemchanges.NotInstalled}, TargetStateSHA256: candidateSHA, Plan: systemchanges.PlanBinding{Identity: planID, SHA256: planSHA, VolatileSHA256: volatile}, PreparedState: prepared, Steps: built.wiring.cloudflare.Steps(), Checks: built.wiring.cloudflare.Checks(), Timeouts: systemchanges.Timeouts{Step: time.Second, Check: time.Second}, Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}})
 		if changeSetErr != nil {
 			t.Fatal(changeSetErr)
 		}
 		return adapter, systemchanges.New(adapter).Apply(changeSet)
 	}
 	rolledBackAdapter, rolledBack := apply(true)
-	if rolledBack.Outcome != systemchanges.RollbackSucceeded || rolledBackAdapter.reversed != len(built.wiring.profiles.Steps()) {
+	if rolledBack.Outcome != systemchanges.RollbackSucceeded || rolledBackAdapter.reversed != len(built.wiring.cloudflare.Steps()) {
 		t.Fatalf("System Changes rollback = %+v, reversed=%d", rolledBack, rolledBackAdapter.reversed)
 	}
 	built = build("c")
@@ -100,7 +104,7 @@ func TestRootRuntimeArtifactsCrossStateAndSystemChangesInterfaces(t *testing.T) 
 	if result.Outcome != systemchanges.Completed {
 		t.Fatalf("System Changes Apply = %+v", result)
 	}
-	for _, name := range []string{"xray", "sing_box"} {
+	for _, name := range []string{"xray", "sing_box", "cloudflared"} {
 		if !strings.Contains(string(adapter.artifacts["prepared/manifests.json"]), `"`+name+`"`) || !strings.Contains(string(adapter.artifacts["prepared/manifests.json"]), `"Group":"root"`) || !strings.Contains(string(adapter.artifacts["prepared/manifests.json"]), `"FileMode":420`) {
 			t.Fatalf("root-runtime manifests = %s", adapter.artifacts["prepared/manifests.json"])
 		}
@@ -141,7 +145,7 @@ func prepareRootRuntimeStateForTest(t *testing.T, built *builtInstall, module st
 	}
 	wiring := &rootRuntimeTestWiring{built.wiring}
 	release := candidateRelease(built.candidate)
-	return module.PrepareCommit(state.PrepareRequest{Loaded: loaded, CandidateReleaseIdentity: state.ReleaseIdentity{Repository: release.Repository, Tag: release.Tag, Commit: release.Commit, ReleaseIndexSHA256: release.IndexSHA256}, ChangeSet: state.ChangeSetIdentity("install-" + built.desired.Installation.ID[:16]), Candidate: candidate, SemanticValidators: state.SemanticValidators{ConnectionProfiles: wiring, Subscription: wiring, Cloudflare: wiring, Certificates: wiring, NetworkPolicy: wiring, SoftwareLifecycle: wiring}, ServiceMaterials: state.ServiceMaterialsFor(candidate), RuntimeArtifacts: state.RuntimeArtifactContributions{built.wiring.profiles}, SubscriptionPublication: wiring, ReviewedInputs: reviewed})
+	return module.PrepareCommit(state.PrepareRequest{Loaded: loaded, CandidateReleaseIdentity: state.ReleaseIdentity{Repository: release.Repository, Tag: release.Tag, Commit: release.Commit, ReleaseIndexSHA256: release.IndexSHA256}, ChangeSet: state.ChangeSetIdentity("install-" + built.desired.Installation.ID[:16]), Candidate: candidate, SemanticValidators: state.SemanticValidators{ConnectionProfiles: wiring, Subscription: wiring, Cloudflare: wiring, Certificates: wiring, NetworkPolicy: wiring, SoftwareLifecycle: wiring}, ServiceMaterials: state.ServiceMaterialsFor(candidate), RuntimeArtifacts: state.RuntimeArtifactContributions{built.wiring.profiles, built.wiring.cloudflare}, SubscriptionPublication: wiring, ReviewedInputs: reviewed})
 }
 
 type publishingInstallState struct{ document []byte }
@@ -190,9 +194,22 @@ func (*runtimeArtifactTransactionAdapter) Record(systemchanges.ExecutionLease, s
 	return nil
 }
 
-func (adapter *runtimeArtifactTransactionAdapter) Execute(systemchanges.ExecutionLease, string, int, systemchanges.Step, time.Duration, *systemchanges.Cancellation) (systemchanges.StepEvidence, error) {
+func (adapter *runtimeArtifactTransactionAdapter) Execute(_ systemchanges.ExecutionLease, _ string, number int, step systemchanges.Step, _ time.Duration, _ *systemchanges.Cancellation) (systemchanges.StepEvidence, error) {
 	adapter.artifacts["active/xray.json"] = append([]byte(nil), adapter.artifacts["prepared/xray.json"]...)
 	adapter.artifacts["active/sing-box.json"] = append([]byte(nil), adapter.artifacts["prepared/sing-box.json"]...)
+	adapter.artifacts["active/cloudflared.json"] = append([]byte(nil), adapter.artifacts["prepared/cloudflared.json"]...)
+	if change, ok := step.CloudflareChange(); ok {
+		evidence := systemchanges.StepEvidence{Code: "root-runtime-applied", SHA256: strings.Repeat("a", 64), ResourceID: fmt.Sprintf("resource-%d", number)}
+		switch change.Action {
+		case systemchanges.CloudflareTunnelCreate:
+			evidence.ResourceType = string(systemchanges.CloudflareTunnelResource)
+		case systemchanges.CloudflareRoutesPut:
+			evidence.ResourceType = string(systemchanges.CloudflareRouteResource)
+		case systemchanges.CloudflareDNSCreate:
+			evidence.ResourceType = string(systemchanges.CloudflareDNSRecordResource)
+		}
+		return evidence, nil
+	}
 	return systemchanges.StepEvidence{Code: "root-runtime-applied", SHA256: strings.Repeat("a", 64)}, nil
 }
 func (adapter *runtimeArtifactTransactionAdapter) Reverse(systemchanges.ExecutionLease, string, int, systemchanges.Step, time.Duration) (systemchanges.StepEvidence, error) {
@@ -201,16 +218,17 @@ func (adapter *runtimeArtifactTransactionAdapter) Reverse(systemchanges.Executio
 }
 func (adapter *runtimeArtifactTransactionAdapter) Check(_ systemchanges.ExecutionLease, _ systemchanges.Check, phase systemchanges.GatePhase, _ time.Duration) (systemchanges.HealthStatus, error) {
 	if adapter.failPost && phase == systemchanges.PostPublication {
-		adapter.artifacts["active/sing-box.json"] = []byte(`{"inbounds":[]}`)
+		adapter.artifacts["active/cloudflared.json"] = []byte(`{"routes":[]}`)
 	}
 	var manifests struct {
-		Xray    *struct{ SHA256 string } `json:"xray"`
-		SingBox *struct{ SHA256 string } `json:"sing_box"`
+		Xray        *struct{ SHA256 string } `json:"xray"`
+		SingBox     *struct{ SHA256 string } `json:"sing_box"`
+		Cloudflared *struct{ SHA256 string } `json:"cloudflared"`
 	}
-	if err := json.Unmarshal(adapter.artifacts["prepared/manifests.json"], &manifests); err != nil || manifests.Xray == nil || manifests.SingBox == nil {
+	if err := json.Unmarshal(adapter.artifacts["prepared/manifests.json"], &manifests); err != nil || manifests.Xray == nil || manifests.SingBox == nil || manifests.Cloudflared == nil {
 		return systemchanges.Unknown, err
 	}
-	for name, expected := range map[string]string{"active/xray.json": manifests.Xray.SHA256, "active/sing-box.json": manifests.SingBox.SHA256} {
+	for name, expected := range map[string]string{"active/xray.json": manifests.Xray.SHA256, "active/sing-box.json": manifests.SingBox.SHA256, "active/cloudflared.json": manifests.Cloudflared.SHA256} {
 		digest := sha256.Sum256(adapter.artifacts[name])
 		if hex.EncodeToString(digest[:]) != expected {
 			return systemchanges.Failed, nil
@@ -236,7 +254,7 @@ func TestDestructiveReclamationCompositionBindsAllOwningModulesToOneChangeSet(t 
 			return request.Candidate.Staged, nil
 		},
 		network:    networkpolicy.New(composedNetworkObserver{}).Evaluate,
-		cloudflare: cloudflaretunnel.New(cloudflareAPI, composedClock{}).Plan,
+		cloudflare: newCloudflareTestModule(cloudflareAPI, composedClock{}).Plan,
 		random:     newInstallEntropyReader(request.Entropy),
 		inventory:  cloudflareAPI,
 	})
@@ -291,7 +309,7 @@ func TestComposedInstallRoutesAReclaimableVPSToReviewBeforeProviderPlanning(t *t
 func TestComposedInstallCarriesTheExactReviewedStandaloneTargetIntoOneInstallPlan(t *testing.T) {
 	request := composedInstallRequest(t)
 	cloudflareAPI := composedCloudflareAPI{}
-	cloudflareModule := cloudflaretunnel.New(cloudflareAPI, composedClock{})
+	cloudflareModule := newCloudflareTestModule(cloudflareAPI, composedClock{})
 	networkModule := networkpolicy.New(composedReclamationObserver{})
 	dependencies := buildDependencies{stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
 		return request.Candidate.Staged, nil
@@ -319,7 +337,7 @@ func TestComposedInstallCarriesTheExactReviewedStandaloneTargetIntoOneInstallPla
 func TestDestructiveReclamationCompositionKeepsTheExactFactsInTheConfirmedPlan(t *testing.T) {
 	request := composedInstallRequest(t)
 	cloudflareAPI := composedCloudflareAPI{}
-	cloudflareModule := cloudflaretunnel.New(cloudflareAPI, composedClock{})
+	cloudflareModule := newCloudflareTestModule(cloudflareAPI, composedClock{})
 	networkModule := networkpolicy.New(composedReclamationObserver{})
 	dependencies := buildDependencies{stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
 		return request.Candidate.Staged, nil
@@ -368,7 +386,7 @@ func composedBuiltInstall(t *testing.T, request softwareubuntu.InstallHandoffReq
 		stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
 			return request.Candidate.Staged, nil
 		},
-		network: networkpolicy.New(observer).Evaluate, cloudflare: cloudflaretunnel.New(api, composedClock{}).Plan,
+		network: networkpolicy.New(observer).Evaluate, cloudflare: newCloudflareTestModule(api, composedClock{}).Plan,
 		random: newInstallEntropyReader(request.Entropy), inventory: api,
 	})
 	if err != nil {
@@ -428,7 +446,7 @@ func composedInstallDependencies(request softwareubuntu.InstallHandoffRequest, o
 		stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
 			return request.Candidate.Staged, nil
 		},
-		network: networkpolicy.New(observer).Evaluate, cloudflare: cloudflaretunnel.New(api, composedClock{}).Plan,
+		network: networkpolicy.New(observer).Evaluate, cloudflare: newCloudflareTestModule(api, composedClock{}).Plan,
 		random: newInstallEntropyReader(request.Entropy), inventory: api,
 	}
 }
@@ -496,7 +514,7 @@ func verifyCloudflareAuthority(t *testing.T, value any) {
 func TestComposedInstallPersistsOnlyTheReviewedHeldPackagePolicy(t *testing.T) {
 	request := composedInstallRequest(t)
 	cloudflareAPI := composedCloudflareAPI{}
-	cloudflareModule := cloudflaretunnel.New(cloudflareAPI, composedClock{})
+	cloudflareModule := newCloudflareTestModule(cloudflareAPI, composedClock{})
 	networkModule := networkpolicy.New(composedHeldPackageObserver{})
 	dependencies := buildDependencies{stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
 		return request.Candidate.Staged, nil
@@ -785,7 +803,7 @@ func newTestInstallation(t *testing.T, observer networkpolicy.Adapter, launch fu
 	t.Helper()
 	request := composedInstallRequest(t)
 	api := interfaceTestAPI{}
-	cloudflare := cloudflaretunnel.New(api, composedClock{})
+	cloudflare := newCloudflareTestModule(api, composedClock{})
 	if launch == nil {
 		launch = func(context.Context, softwareubuntu.InstallHandoffRequest, <-chan struct{}) (softwareubuntu.InstallApplyOutcome, error) {
 			return softwareubuntu.InstallCompleted, nil

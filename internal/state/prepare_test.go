@@ -17,6 +17,10 @@ import (
 	"github.com/albertloky/SBXR/internal/networkpolicy"
 )
 
+func newCloudflareTestModule(api cloudflaretunnel.API, clock cloudflaretunnel.Clock) cloudflaretunnel.Interface {
+	return cloudflaretunnel.New(api, clock, func(context.Context, []byte) error { return nil })
+}
+
 func TestPrepareCommitValidatesCandidateAndSerializesLeastPrivilegeMaterial(t *testing.T) {
 	candidate := completeDesiredState()
 	stateModule, request, validators := managedPrepareRequest(t, candidate)
@@ -243,7 +247,7 @@ func TestPrepareManagementTokenChangeAcceptsOnlyTheReviewedCloudflarePlan(t *tes
 					t.Fatal(err)
 				}
 			}
-			planResult := cloudflaretunnel.New(provider, cloudflaretunnel.SystemClock{}).Plan(context.Background(), cloudflaretunnel.PlanRequest{
+			planResult := newCloudflareTestModule(provider, cloudflaretunnel.SystemClock{}).Plan(context.Background(), cloudflaretunnel.PlanRequest{
 				Authority: cloudflaretunnel.ViewRequest{AccountID: starting.Cloudflare.AccountID, ZoneID: starting.Cloudflare.ZoneID, ZoneName: starting.Cloudflare.ZoneName, Token: token, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
 				ChangeSet: "cloudflare-token-change", StartingRevision: 7, StartingStateSHA256: loaded.loaded.payloadChecksum, DesiredStateSHA256: templateSHA,
 				ManagementToken: stateTestManagementTokenChange(action, inventory, test.removed),
@@ -303,7 +307,7 @@ func TestPrepareRunTokenRotationKeepsTheOldTokenOnlyInRollbackMaterial(t *testin
 		t.Fatal(err)
 	}
 	provider := &deferredCloudflareAPI{}
-	planResult := cloudflaretunnel.New(provider, cloudflaretunnel.SystemClock{}).Plan(t.Context(), cloudflaretunnel.PlanRequest{
+	planResult := newCloudflareTestModule(provider, cloudflaretunnel.SystemClock{}).Plan(t.Context(), cloudflaretunnel.PlanRequest{
 		Authority: cloudflaretunnel.ViewRequest{AccountID: starting.Cloudflare.AccountID, ZoneID: starting.Cloudflare.ZoneID, ZoneName: starting.Cloudflare.ZoneName, Token: managementToken, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
 		ChangeSet: "cloudflare-run-token-rotation-prepare", StartingRevision: 7, StartingStateSHA256: loaded.loaded.payloadChecksum, DesiredStateSHA256: hex.EncodeToString(templateDigest[:]),
 		XHTTPHostname: starting.Cloudflare.XHTTPHostname, WebSocketHostname: starting.Cloudflare.WebSocketHostname, DirectHostname: starting.Cloudflare.DirectHostname,
@@ -314,6 +318,8 @@ func TestPrepareRunTokenRotationKeepsTheOldTokenOnlyInRollbackMaterial(t *testin
 		t.Fatalf("rotation Plan = %+v", planResult.Health)
 	}
 	request := preparedRequest(t, loaded, starting, "cloudflare-run-token-rotation-prepare")
+	request.RuntimeArtifacts = RuntimeArtifactContributions{planResult.Plan}
+	request.SemanticValidators.Cloudflare.(*validatingSeams).runtimeOwner = planResult.Plan
 	request.ReviewedInputs, err = NewReviewedInputs(PlanIdentity(planResult.Plan.Identity()), planResult.Plan.SHA256(), request.ReviewedInputs.managed)
 	if err != nil {
 		t.Fatal(err)
@@ -357,7 +363,7 @@ func TestPrepareManagementTokenReplacementRejectsDifferentSelectedAuthority(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan := cloudflaretunnel.New(&deferredCloudflareAPI{}, cloudflaretunnel.SystemClock{}).Plan(context.Background(), cloudflaretunnel.PlanRequest{
+	plan := newCloudflareTestModule(&deferredCloudflareAPI{}, cloudflaretunnel.SystemClock{}).Plan(context.Background(), cloudflaretunnel.PlanRequest{
 		Authority: cloudflaretunnel.ViewRequest{AccountID: starting.Cloudflare.AccountID, ZoneID: starting.Cloudflare.ZoneID, ZoneName: starting.Cloudflare.ZoneName, Token: token, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
 		ChangeSet: "cloudflare-token-authority-mismatch", StartingRevision: 7, StartingStateSHA256: loaded.loaded.payloadChecksum, DesiredStateSHA256: hex.EncodeToString(digest[:]),
 		ManagementToken: cloudflaretunnel.ManagementTokenChange{Action: cloudflaretunnel.ManagementTokenReplace, CurrentTokenID: strings.Repeat("5", 32)},
@@ -397,7 +403,7 @@ func TestManagementTokenRemovalUsesTheCurrentStateInventory(t *testing.T) {
 		ChangeSet: "cloudflare-token-inventory", StartingRevision: 7, StartingStateSHA256: loaded.loaded.payloadChecksum, DesiredStateSHA256: testSHA('8'),
 		ManagementToken: cloudflaretunnel.ManagementTokenChange{Action: cloudflaretunnel.ManagementTokenRemove, CurrentTokenID: strings.Repeat("5", 32), Inventory: inventory},
 	}
-	module := cloudflaretunnel.New(&deferredCloudflareAPI{}, cloudflaretunnel.SystemClock{})
+	module := newCloudflareTestModule(&deferredCloudflareAPI{}, cloudflaretunnel.SystemClock{})
 	request.ManagementToken.Inventory = fakeManagementTokenInventory{}
 	if fake := module.Plan(context.Background(), request); fake.Plan != nil || fake.Health.Code != "CLOUDFLARE-MANAGEMENT-TOKEN-REFUSED" {
 		t.Fatalf("caller-made inventory = %+v", fake)
@@ -733,10 +739,12 @@ type validatingSeams struct {
 	planIdentity        string
 	planSHA256          string
 	subscriptionBundle  []byte
+	runtimeOwner        any
 }
 
-func (v *validatingSeams) Identity() string { return v.planIdentity }
-func (v *validatingSeams) SHA256() string   { return v.planSHA256 }
+func (v *validatingSeams) Identity() string                         { return v.planIdentity }
+func (v *validatingSeams) SHA256() string                           { return v.planSHA256 }
+func (v *validatingSeams) StateCloudflareRuntimeArtifactOwner() any { return v.runtimeOwner }
 
 func (v *validatingSeams) validate(module string, got, want any) error {
 	v.calls[module]++

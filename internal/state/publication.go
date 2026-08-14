@@ -193,6 +193,11 @@ func prepareServiceCopies(revision uint64, changeSet ChangeSetIdentity, material
 		if err != nil {
 			return PreparedServiceCopies{}, err
 		}
+		if item.service == "cloudflared.service" {
+			prepared.manifest.Group = "root"
+			prepared.manifest.DirectoryMode = 0o755
+			prepared.manifest.FileMode = 0o644
+		}
 		*item.target = &prepared
 	}
 	subscription, err := prepareServiceCopy("sbxr-subscription.service", "subscriptionserving", "sbxr-subscription", revision, changeSet, materials.Subscription)

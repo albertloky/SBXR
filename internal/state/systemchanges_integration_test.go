@@ -1209,7 +1209,7 @@ func TestDeferredCloudflareFinalizationPublishesProviderValuesInRevisionOne(t *t
 		t.Fatal(err)
 	}
 	provider := &deferredCloudflareAPI{}
-	module := cloudflaretunnel.New(provider, cloudflaretunnel.SystemClock{})
+	module := newCloudflareTestModule(provider, cloudflaretunnel.SystemClock{})
 	planResult := module.Plan(t.Context(), cloudflaretunnel.PlanRequest{
 		Authority: cloudflaretunnel.ViewRequest{AccountID: candidate.Cloudflare.AccountID, ZoneID: candidate.Cloudflare.ZoneID, ZoneName: candidate.Cloudflare.ZoneName, Token: managementToken, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
 		ChangeSet: "cloudflare-change-0001", DesiredStateSHA256: templateSHA, TunnelName: candidate.Cloudflare.TunnelName,
@@ -1235,6 +1235,8 @@ func TestDeferredCloudflareFinalizationPublishesProviderValuesInRevisionOne(t *t
 	}
 	validator.planIdentity = string(request.ReviewedInputs.planIdentity)
 	validator.planSHA256 = request.ReviewedInputs.planSHA256
+	validator.runtimeOwner = planResult.Plan
+	request.RuntimeArtifacts = RuntimeArtifactContributions{planResult.Plan}
 	prepared, err := stateModule.PrepareDeferredCloudflareCommit(request, planResult.Plan)
 	if err != nil {
 		t.Fatal(err)
@@ -1304,7 +1306,7 @@ func TestOwnerAssistedRunTokenRotationPausesThenRecoversForwardWithBothRoutes(t 
 	templateDigest := sha256.Sum256(template)
 	managementToken, _ := cloudflaretunnel.NewManagementToken("cfat_ROTATION-MANAGEMENT-TOKEN-MARKER-0000")
 	provider := &deferredCloudflareAPI{}
-	planResult := cloudflaretunnel.New(provider, cloudflaretunnel.SystemClock{}).Plan(t.Context(), cloudflaretunnel.PlanRequest{
+	planResult := newCloudflareTestModule(provider, cloudflaretunnel.SystemClock{}).Plan(t.Context(), cloudflaretunnel.PlanRequest{
 		Authority: cloudflaretunnel.ViewRequest{AccountID: starting.Cloudflare.AccountID, ZoneID: starting.Cloudflare.ZoneID, ZoneName: starting.Cloudflare.ZoneName, Token: managementToken, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
 		ChangeSet: "cloudflare-run-token-rotation-integration", StartingRevision: 7, StartingStateSHA256: loaded.loaded.payloadChecksum, DesiredStateSHA256: fmt.Sprintf("%x", templateDigest),
 		XHTTPHostname: starting.Cloudflare.XHTTPHostname, WebSocketHostname: starting.Cloudflare.WebSocketHostname, DirectHostname: starting.Cloudflare.DirectHostname, PublicIPv4: starting.NetworkPolicy.PublicIPv4, CloudflaredVersion: starting.Software.CloudflaredVersion,
@@ -1314,6 +1316,8 @@ func TestOwnerAssistedRunTokenRotationPausesThenRecoversForwardWithBothRoutes(t 
 		t.Fatalf("rotation Plan = %+v", planResult.Health)
 	}
 	request := preparedRequest(t, loaded, starting, "cloudflare-run-token-rotation-integration")
+	request.RuntimeArtifacts = RuntimeArtifactContributions{planResult.Plan}
+	request.SemanticValidators.Cloudflare.(*validatingSeams).runtimeOwner = planResult.Plan
 	request.ReviewedInputs, err = NewReviewedInputs(PlanIdentity(planResult.Plan.Identity()), planResult.Plan.SHA256(), request.ReviewedInputs.managed)
 	if err != nil {
 		t.Fatal(err)
@@ -1400,7 +1404,7 @@ func TestManagedCloudflareRepairUsesOneReviewedTransactionAndPublishesTheUnchang
 		XHTTPHostname: starting.Cloudflare.XHTTPHostname, WebSocketHostname: starting.Cloudflare.WebSocketHostname, DirectHostname: starting.Cloudflare.DirectHostname, PublicIPv4: starting.NetworkPolicy.PublicIPv4, CloudflaredVersion: starting.Software.CloudflaredVersion,
 		ManagedRepair: cloudflaretunnel.RunTokenRotation{TunnelID: starting.Cloudflare.TunnelID, XHTTPDNSRecordID: starting.Cloudflare.XHTTPDNSRecordID, WebSocketDNSRecordID: starting.Cloudflare.WebSocketDNSRecordID, DirectIPv4RecordID: starting.Cloudflare.DirectIPv4RecordID},
 	}
-	planResult := cloudflaretunnel.New(provider, cloudflaretunnel.SystemClock{}).Plan(t.Context(), request)
+	planResult := newCloudflareTestModule(provider, cloudflaretunnel.SystemClock{}).Plan(t.Context(), request)
 	if planResult.Plan == nil {
 		t.Fatalf("repair Plan = %+v", planResult.Health)
 	}
@@ -1542,7 +1546,7 @@ func preparedManagementTokenChange(t *testing.T, action cloudflaretunnel.Managem
 			t.Fatal(err)
 		}
 	}
-	planResult := cloudflaretunnel.New(provider, cloudflaretunnel.SystemClock{}).Plan(t.Context(), cloudflaretunnel.PlanRequest{
+	planResult := newCloudflareTestModule(provider, cloudflaretunnel.SystemClock{}).Plan(t.Context(), cloudflaretunnel.PlanRequest{
 		Authority: cloudflaretunnel.ViewRequest{AccountID: starting.Cloudflare.AccountID, ZoneID: starting.Cloudflare.ZoneID, ZoneName: starting.Cloudflare.ZoneName, Token: managementToken, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
 		ChangeSet: changeSet, StartingRevision: 7, StartingStateSHA256: loaded.loaded.payloadChecksum, DesiredStateSHA256: fmt.Sprintf("%x", digest), ManagementToken: stateTestManagementTokenChange(action, inventory),
 	})

@@ -12,7 +12,6 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -194,7 +193,7 @@ type Executor struct {
 	observation        string
 	tokenID            string
 	binding            cloudflareEvidenceBinding
-	serviceIdentity    func() (int, int, int, error)
+	serviceIdentity    func() (int, int, error)
 	command            func(context.Context, string, ...string) ([]byte, error)
 	clock              Clock
 	releaseUpdate      bool
@@ -729,6 +728,19 @@ func (executor Executor) CheckWholeTunnel(evidence []systemchanges.StepEvidence,
 	return systemHealth(health), nil
 }
 
+func (executor Executor) CheckRuntime(root string, evidence []systemchanges.StepEvidence, rotation *systemchanges.CloudflareChange, timeout time.Duration) (systemchanges.HealthStatus, error) {
+	if err := executor.ValidateInstalledService(root); err != nil {
+		return systemchanges.Failed, err
+	}
+	if err := executor.ValidateNativeConfiguration(root, timeout); err != nil {
+		return systemchanges.Failed, err
+	}
+	if rotation != nil {
+		return executor.CheckRunTokenRotation(*rotation, timeout)
+	}
+	return executor.CheckWholeTunnel(evidence, timeout)
+}
+
 func systemHealth(health Health) systemchanges.HealthStatus {
 	switch health.Outcome {
 	case Healthy:
@@ -799,30 +811,27 @@ func (executor Executor) validateInstalledService(root string) error {
 	if identity == nil {
 		identity = cloudflaredIdentity
 	}
-	rootUID, rootGID, cloudflaredGID, err := identity()
+	rootUID, rootGID, err := identity()
 	if err != nil {
 		return err
 	}
+	installed, readErr := readManagedService(root, rootUID, rootGID)
+	unit := cloudflaredServiceUnit
 	if executor.releaseUpdate {
-		installed, readErr := readManagedService(root, rootUID, rootGID, cloudflaredGID)
-		if readErr != nil || !bytes.Equal(installed.Unit, []byte(executor.request.CandidateServiceUnit)) {
-			return errors.New("candidate cloudflared service is unproved")
-		}
-		return nil
+		unit = executor.request.CandidateServiceUnit
 	}
-	return ValidateInstalledService(root, rootUID, rootGID, cloudflaredGID)
+	material := serviceMaterial{Routes: []struct {
+		Hostname string `json:"hostname"`
+		Origin   string `json:"origin"`
+	}{{Hostname: executor.request.XHTTPHostname, Origin: xhttpOrigin}, {Hostname: executor.request.WebSocketHostname, Origin: webSocketOrigin}}}
+	if readErr != nil || !bytes.Equal(installed.Unit, []byte(unit)) || !bytes.Equal(installed.Config, serviceConfiguration(material)) {
+		return errors.New("candidate cloudflared service is unproved")
+	}
+	return nil
 }
 
-func cloudflaredIdentity() (int, int, int, error) {
-	account, err := user.Lookup("cloudflared")
-	if err != nil {
-		return 0, 0, 0, err
-	}
-	gid, err := strconv.Atoi(account.Gid)
-	if err != nil {
-		return 0, 0, 0, err
-	}
-	return os.Geteuid(), os.Getegid(), gid, nil
+func cloudflaredIdentity() (int, int, error) {
+	return os.Geteuid(), os.Getegid(), nil
 }
 
 func (executor Executor) ValidateNativeConfiguration(root string, timeout time.Duration) error {

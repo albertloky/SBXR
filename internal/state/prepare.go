@@ -943,7 +943,7 @@ func (i Interface) prepareCommit(request PrepareRequest, deferred *deferredCloud
 		return nil, err
 	}
 	copies.Subscription = &subscription
-	if err := applyRuntimeArtifactContributions(copies, request.RuntimeArtifacts, request.SemanticValidators.ConnectionProfiles); err != nil {
+	if err := applyRuntimeArtifactContributions(copies, request.RuntimeArtifacts, request.SemanticValidators, deferred != nil); err != nil {
 		return nil, finding("STATE-RUNTIME-ARTIFACT", "root runtime artifact", "the owning-Module contribution is missing, duplicated, or invalid", "one typed contribution for each exact prepared artifact", "State alone must bind the root runtime form", "regenerate the owning Module contribution and review again")
 	}
 	targetSchema := supportedSchema
@@ -1285,10 +1285,14 @@ func prepareServiceBytes(service, module, group string, revision uint64, changeS
 	}, bytes: data}, nil
 }
 
-func applyRuntimeArtifactContributions(copies PreparedServiceCopies, contributions RuntimeArtifactContributions, validator ConnectionProfilesValidator) error {
-	expectedSource := any(validator)
-	if owner, ok := validator.(interface{ StateRuntimeArtifactOwner() any }); ok {
-		expectedSource = owner.StateRuntimeArtifactOwner()
+func applyRuntimeArtifactContributions(copies PreparedServiceCopies, contributions RuntimeArtifactContributions, validators SemanticValidators, deferredCloudflare bool) error {
+	connectionProfilesSource := any(validators.ConnectionProfiles)
+	if owner, ok := validators.ConnectionProfiles.(interface{ StateRuntimeArtifactOwner() any }); ok {
+		connectionProfilesSource = owner.StateRuntimeArtifactOwner()
+	}
+	cloudflareSource := any(validators.Cloudflare)
+	if owner, ok := validators.Cloudflare.(interface{ StateCloudflareRuntimeArtifactOwner() any }); ok {
+		cloudflareSource = owner.StateCloudflareRuntimeArtifactOwner()
 	}
 	prepared := map[string]*PreparedServiceCopy{
 		"xray.service":              copies.Xray,
@@ -1302,20 +1306,29 @@ func applyRuntimeArtifactContributions(copies PreparedServiceCopies, contributio
 			return errors.New("runtime artifact contribution unavailable")
 		}
 		source, services, valid := contribution.StateRuntimeArtifacts()
-		typeOf := reflect.TypeOf(source)
-		if !valid || source != expectedSource || typeOf == nil || typeOf.Kind() != reflect.Pointer || typeOf.Elem().PkgPath() != "github.com/albertloky/SBXR/internal/connectionprofiles" || typeOf.Elem().Name() != "Plan" || len(services) == 0 || !slices.IsSorted(services) {
+		if !valid || len(services) == 0 || !slices.IsSorted(services) {
 			return errors.New("runtime artifact contribution invalid")
 		}
 		for _, service := range services {
+			expectedSource, packagePath, typeName := connectionProfilesSource, "github.com/albertloky/SBXR/internal/connectionprofiles", "Plan"
+			if service == "cloudflared.service" {
+				expectedSource, packagePath, typeName = cloudflareSource, "github.com/albertloky/SBXR/internal/cloudflaretunnel", "Plan"
+			}
 			copy := prepared[service]
-			if copy == nil || seen[service] {
+			typeOf, expectedType := reflect.TypeOf(source), reflect.TypeOf(expectedSource)
+			if typeOf == nil || typeOf != expectedType || !typeOf.Comparable() || typeOf.Kind() != reflect.Pointer || typeOf.Elem().PkgPath() != packagePath || typeOf.Elem().Name() != typeName || source != expectedSource || copy == nil && !(deferredCloudflare && service == "cloudflared.service") || seen[service] {
 				return errors.New("runtime artifact contribution invalid")
 			}
 			seen[service] = true
-			copy.manifest.Group = "root"
-			copy.manifest.DirectoryMode = 0o755
-			copy.manifest.FileMode = 0o644
+			if copy != nil {
+				copy.manifest.Group = "root"
+				copy.manifest.DirectoryMode = 0o755
+				copy.manifest.FileMode = 0o644
+			}
 		}
+	}
+	if deferredCloudflare && !seen["cloudflared.service"] {
+		return errors.New("runtime artifact contribution unavailable")
 	}
 	return nil
 }

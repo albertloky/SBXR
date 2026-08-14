@@ -24,8 +24,8 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-User=cloudflared
-Group=cloudflared
+User=root
+Group=root
 ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate run --token-file /etc/sbxr/cloudflared/token
 Restart=on-failure
 NoNewPrivileges=true
@@ -40,12 +40,12 @@ WantedBy=multi-user.target
 func CloudflaredServiceUnit() string { return cloudflaredServiceUnit }
 
 func ValidateCloudflaredServiceUnit(unit string) bool {
-	return unit == cloudflaredServiceUnit && strings.Contains(unit, "User=cloudflared\nGroup=cloudflared") && strings.Contains(unit, "--token-file "+cloudflaredTokenPath) && !strings.Contains(unit, "Environment=")
+	return unit == cloudflaredServiceUnit && strings.Contains(unit, "User=root\nGroup=root") && strings.Contains(unit, "--token-file "+cloudflaredTokenPath) && !strings.Contains(unit, "Environment=")
 }
 
 // ValidateServiceMaterial is the final read-only guard used by the System
 // Changes Adapter before activating prepared cloudflared material.
-func ValidateServiceMaterial(root string, rootUID, rootGID, cloudflaredGID int) error {
+func ValidateServiceMaterial(root string, rootUID, rootGID int) error {
 	checks := []struct {
 		name      string
 		mode      fs.FileMode
@@ -54,9 +54,9 @@ func ValidateServiceMaterial(root string, rootUID, rootGID, cloudflaredGID int) 
 	}{
 		{"etc", 0o755, true, rootGID},
 		{"etc/sbxr", 0o755, true, rootGID},
-		{"etc/sbxr/cloudflared", 0o750, true, cloudflaredGID},
-		{"etc/sbxr/cloudflared/token", 0o640, false, cloudflaredGID},
-		{"etc/sbxr/cloudflared/config.yml", 0o640, false, cloudflaredGID},
+		{"etc/sbxr/cloudflared", 0o755, true, rootGID},
+		{"etc/sbxr/cloudflared/token", 0o644, false, rootGID},
+		{"etc/sbxr/cloudflared/config.yml", 0o644, false, rootGID},
 		{"etc/systemd", 0o755, true, rootGID},
 		{"etc/systemd/system", 0o755, true, rootGID},
 	}
@@ -73,8 +73,8 @@ func ValidateServiceMaterial(root string, rootUID, rootGID, cloudflaredGID int) 
 	return nil
 }
 
-func ValidateInstalledService(root string, rootUID, rootGID, cloudflaredGID int) error {
-	if err := ValidateServiceMaterial(root, rootUID, rootGID, cloudflaredGID); err != nil {
+func ValidateInstalledService(root string, rootUID, rootGID int) error {
+	if err := ValidateServiceMaterial(root, rootUID, rootGID); err != nil {
 		return err
 	}
 	name := filepath.Join(root, "etc/systemd/system/cloudflared.service")
@@ -130,12 +130,12 @@ func (executor Executor) CaptureServiceRollback(rootPath string, write func(io.R
 	if identity == nil {
 		identity = cloudflaredIdentity
 	}
-	rootUID, rootGID, cloudflaredGID, err := identity()
+	rootUID, rootGID, err := identity()
 	if err != nil {
 		return err
 	}
 	if executor.releaseUpdate {
-		snapshot, readErr := readManagedService(rootPath, rootUID, rootGID, cloudflaredGID)
+		snapshot, readErr := readManagedService(rootPath, rootUID, rootGID)
 		if readErr != nil {
 			return readErr
 		}
@@ -171,8 +171,8 @@ func (executor Executor) RunTokenFingerprint(rootPath string) (string, error) {
 	if identity == nil {
 		identity = cloudflaredIdentity
 	}
-	rootUID, rootGID, cloudflaredGID, err := identity()
-	if err != nil || ValidateInstalledService(rootPath, rootUID, rootGID, cloudflaredGID) != nil {
+	rootUID, rootGID, err := identity()
+	if err != nil || ValidateInstalledService(rootPath, rootUID, rootGID) != nil {
 		return "", errors.New("installed cloudflared run token is unproved")
 	}
 	content, err := os.ReadFile(filepath.Join(rootPath, "etc/sbxr/cloudflared/token"))
@@ -216,7 +216,7 @@ func (executor Executor) ActivateService(rootPath string, source io.Reader, time
 	if identity == nil {
 		identity = cloudflaredIdentity
 	}
-	rootUID, rootGID, cloudflaredGID, err := identity()
+	rootUID, rootGID, err := identity()
 	if err != nil {
 		return systemchanges.StepEvidence{}, err
 	}
@@ -241,7 +241,7 @@ func (executor Executor) ActivateService(rootPath string, source io.Reader, time
 	if err := ensureServiceDirectory(root, "etc/sbxr", 0o755, rootUID, rootGID); err != nil {
 		return systemchanges.StepEvidence{}, err
 	}
-	if err := ensureServiceDirectory(root, "etc/sbxr/cloudflared", 0o750, rootUID, cloudflaredGID); err != nil {
+	if err := ensureServiceDirectory(root, "etc/sbxr/cloudflared", 0o755, rootUID, rootGID); err != nil {
 		return systemchanges.StepEvidence{}, err
 	}
 	if err := ensureServiceDirectory(root, "etc/systemd", 0o755, rootUID, rootGID); err != nil {
@@ -265,8 +265,8 @@ func (executor Executor) ActivateService(rootPath string, source io.Reader, time
 		mode    fs.FileMode
 		gid     int
 	}{
-		{"etc/sbxr/cloudflared/token", []byte(material.TunnelRunToken + "\n"), 0o640, cloudflaredGID},
-		{"etc/sbxr/cloudflared/config.yml", config, 0o640, cloudflaredGID},
+		{"etc/sbxr/cloudflared/token", []byte(material.TunnelRunToken + "\n"), 0o644, rootGID},
+		{"etc/sbxr/cloudflared/config.yml", config, 0o644, rootGID},
 		{"etc/systemd/system/cloudflared.service", []byte(cloudflaredServiceUnit), 0o644, rootGID},
 	} {
 		if err := writeServiceFile(root, file.name, file.content, file.mode, rootUID, file.gid); err != nil {
@@ -293,11 +293,11 @@ func (executor Executor) activateManagedService(rootPath string, material servic
 	if identity == nil {
 		identity = cloudflaredIdentity
 	}
-	rootUID, rootGID, cloudflaredGID, err := identity()
+	rootUID, rootGID, err := identity()
 	if err != nil {
 		return systemchanges.StepEvidence{}, err
 	}
-	installed, err := readManagedService(rootPath, rootUID, rootGID, cloudflaredGID)
+	installed, err := readManagedService(rootPath, rootUID, rootGID)
 	if err != nil || !bytes.Equal(installed.Token, []byte(material.TunnelRunToken+"\n")) || !bytes.Equal(installed.Config, serviceConfiguration(material)) || !bytes.Equal(installed.Unit, []byte(executor.request.CandidateServiceUnit)) {
 		return systemchanges.StepEvidence{}, errors.New("managed cloudflared service changed before restart")
 	}
@@ -337,7 +337,7 @@ func (executor Executor) RotateService(rootPath string, source io.Reader, timeou
 	if identity == nil {
 		identity = cloudflaredIdentity
 	}
-	rootUID, rootGID, cloudflaredGID, err := identity()
+	rootUID, rootGID, err := identity()
 	if err != nil {
 		return systemchanges.StepEvidence{}, err
 	}
@@ -350,7 +350,7 @@ func (executor Executor) RotateService(rootPath string, source io.Reader, timeou
 		name string
 		mode fs.FileMode
 		gid  int
-	}{{"etc", 0o755, rootGID}, {"etc/sbxr", 0o755, rootGID}, {"etc/sbxr/cloudflared", 0o750, cloudflaredGID}, {"etc/systemd", 0o755, rootGID}, {"etc/systemd/system", 0o755, rootGID}} {
+	}{{"etc", 0o755, rootGID}, {"etc/sbxr", 0o755, rootGID}, {"etc/sbxr/cloudflared", 0o755, rootGID}, {"etc/systemd", 0o755, rootGID}, {"etc/systemd/system", 0o755, rootGID}} {
 		if validateServiceDirectory(root, directory.name, directory.mode, rootUID, directory.gid) != nil {
 			return systemchanges.StepEvidence{}, errors.New("cloudflared rotation baseline is unsafe")
 		}
@@ -376,7 +376,7 @@ func (executor Executor) RotateService(rootPath string, source io.Reader, timeou
 		}
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return systemchanges.StepEvidence{}, err
-	} else if err := writeServiceFile(root, "etc/sbxr/cloudflared/token", newToken, 0o640, rootUID, cloudflaredGID); err != nil {
+	} else if err := writeServiceFile(root, "etc/sbxr/cloudflared/token", newToken, 0o644, rootUID, rootGID); err != nil {
 		return systemchanges.StepEvidence{}, err
 	}
 	if syncServiceNamespace(root, "etc/sbxr/cloudflared", "etc/sbxr", "etc") != nil || executor.validateInstalledService(rootPath) != nil || executor.ValidateNativeConfiguration(rootPath, timeout) != nil {
@@ -461,11 +461,11 @@ func (executor Executor) restoreManagedService(rootPath string, root *os.Root, s
 	if identity == nil {
 		identity = cloudflaredIdentity
 	}
-	rootUID, rootGID, cloudflaredGID, err := identity()
+	rootUID, rootGID, err := identity()
 	if err != nil {
 		return systemchanges.StepEvidence{}, err
 	}
-	current, err := readManagedService(rootPath, rootUID, rootGID, cloudflaredGID)
+	current, err := readManagedService(rootPath, rootUID, rootGID)
 	effect, exact := managedServiceEffect(current, snapshot, executor.request.CandidateServiceUnit)
 	if err != nil || !exact {
 		return systemchanges.StepEvidence{}, errors.New("managed cloudflared service changed before rollback")
@@ -478,7 +478,7 @@ func (executor Executor) restoreManagedService(rootPath string, root *os.Root, s
 		body []byte
 		mode fs.FileMode
 		gid  int
-	}{{"etc/sbxr/cloudflared/token", snapshot.Token, 0o640, cloudflaredGID}, {"etc/sbxr/cloudflared/config.yml", snapshot.Config, 0o640, cloudflaredGID}, {"etc/systemd/system/cloudflared.service", snapshot.Unit, 0o644, rootGID}} {
+	}{{"etc/sbxr/cloudflared/token", snapshot.Token, 0o644, rootGID}, {"etc/sbxr/cloudflared/config.yml", snapshot.Config, 0o644, rootGID}, {"etc/systemd/system/cloudflared.service", snapshot.Unit, 0o644, rootGID}} {
 		if err := replaceServiceFile(root, file.name, file.body, file.mode, rootUID, file.gid); err != nil {
 			return systemchanges.StepEvidence{}, err
 		}
@@ -510,8 +510,8 @@ func (executor Executor) InspectService(rootPath string, source io.Reader) (syst
 		if identity == nil {
 			identity = cloudflaredIdentity
 		}
-		rootUID, rootGID, cloudflaredGID, identityErr := identity()
-		current, readErr := readManagedService(rootPath, rootUID, rootGID, cloudflaredGID)
+		rootUID, rootGID, identityErr := identity()
+		current, readErr := readManagedService(rootPath, rootUID, rootGID)
 		if identityErr != nil || readErr != nil {
 			return "", errors.New("managed cloudflared service is unproved")
 		}
@@ -676,8 +676,8 @@ func readServiceSnapshot(source io.Reader) (serviceRollback, bool) {
 	return snapshot, ok
 }
 
-func readManagedService(rootPath string, rootUID, rootGID, cloudflaredGID int) (serviceRollback, error) {
-	if err := ValidateServiceMaterial(rootPath, rootUID, rootGID, cloudflaredGID); err != nil {
+func readManagedService(rootPath string, rootUID, rootGID int) (serviceRollback, error) {
+	if err := ValidateServiceMaterial(rootPath, rootUID, rootGID); err != nil {
 		return serviceRollback{}, err
 	}
 	root, err := os.OpenRoot(rootPath)
@@ -692,7 +692,7 @@ func readManagedService(rootPath string, rootUID, rootGID, cloudflaredGID int) (
 		uid  int
 		gid  int
 		body *[]byte
-	}{{"etc/sbxr/cloudflared/token", 0o640, rootUID, cloudflaredGID, &result.Token}, {"etc/sbxr/cloudflared/config.yml", 0o640, rootUID, cloudflaredGID, &result.Config}, {"etc/systemd/system/cloudflared.service", 0o644, rootUID, rootGID, &result.Unit}} {
+	}{{"etc/sbxr/cloudflared/token", 0o644, rootUID, rootGID, &result.Token}, {"etc/sbxr/cloudflared/config.yml", 0o644, rootUID, rootGID, &result.Config}, {"etc/systemd/system/cloudflared.service", 0o644, rootUID, rootGID, &result.Unit}} {
 		info, statErr := root.Lstat(file.name)
 		owner, owned := fileOwner(info)
 		body, readErr := root.ReadFile(file.name)

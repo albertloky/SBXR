@@ -88,13 +88,12 @@ type CloudflareExecutor interface {
 	VerifyReclamation([]systemchanges.Step, time.Duration) error
 	ReverseService(string, io.Reader, time.Duration) (systemchanges.StepEvidence, error)
 	InspectService(string, io.Reader) (systemchanges.StepEffect, error)
-	CheckWholeTunnel([]systemchanges.StepEvidence, time.Duration) (systemchanges.HealthStatus, error)
+	CheckRuntime(string, []systemchanges.StepEvidence, *systemchanges.CloudflareChange, time.Duration) (systemchanges.HealthStatus, error)
 	ValidateInstalledService(string) error
 	RunTokenFingerprint(string) (string, error)
 	RemoveRunToken(string) error
 	RetrieveRunToken(systemchanges.CloudflareChange, string, time.Duration) (any, bool, error)
 	RotateService(string, io.Reader, time.Duration) (systemchanges.StepEvidence, error)
-	CheckRunTokenRotation(systemchanges.CloudflareChange, time.Duration) (systemchanges.HealthStatus, error)
 }
 
 type CertificateExecutor interface {
@@ -2652,13 +2651,13 @@ func (a Adapter) Check(lease systemchanges.ExecutionLease, check systemchanges.C
 		}
 		change, rotation, err := a.activeRunTokenRotation()
 		if err == nil && rotation {
-			return a.cloudflare.CheckRunTokenRotation(change, timeout)
+			return a.cloudflare.CheckRuntime(a.root, nil, &change, timeout)
 		}
 		evidence, err := a.activeStepEvidence()
 		if err != nil {
 			return systemchanges.Unknown, err
 		}
-		return a.cloudflare.CheckWholeTunnel(evidence, timeout)
+		return a.cloudflare.CheckRuntime(a.root, evidence, nil, timeout)
 	}
 	if check.Owner == systemchanges.CertificateModule && (check.Code == "CERTIFICATE-IP-CANDIDATE" || check.Code == "CERTIFICATE-IP-HTTPS" || check.Code == "CERTIFICATE-DOMAIN-CANDIDATE") {
 		if a.certificate == nil {

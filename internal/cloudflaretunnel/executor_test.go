@@ -105,7 +105,7 @@ func TestManagedRepairBoundsProviderWriteRetries(t *testing.T) {
 func TestExecutorRechecksPlanAndNeverDeletesWithoutJournaledID(t *testing.T) {
 	_, request := plannedModule(t)
 	api := &executorFixture{planningAPI: planningAPI{observation: healthyAuthorityObservation(), mutation: MutationObservation{Digest: strings.Repeat("a", 64)}}}
-	result := New(api, &planClock{}).Plan(context.Background(), request)
+	result := newPlanningInterface(api).Plan(context.Background(), request)
 	if result.Plan == nil {
 		t.Fatalf("Plan = %+v", result.Health)
 	}
@@ -128,7 +128,7 @@ func TestExecutorExposesCertificateDNSFactsWithoutProviderAuthority(t *testing.T
 	_, request := plannedModule(t)
 	want := CertificateDNSFacts{Hostname: request.DirectHostname, Addresses: []netip.Addr{netip.MustParseAddr(request.PublicIPv4), netip.MustParseAddr(request.PublicIPv6)}, EffectiveCAA: EffectiveCAA{Name: request.Authority.ZoneName, Records: []CAARecord{{Tag: "issue", Value: "letsencrypt.org; validationmethods=http-01"}}}}
 	api := &executorFixture{planningAPI: planningAPI{observation: healthyAuthorityObservation(), mutation: MutationObservation{Digest: strings.Repeat("a", 64)}}, certificateFacts: want}
-	result := New(api, &planClock{}).Plan(context.Background(), request)
+	result := newPlanningInterface(api).Plan(context.Background(), request)
 	executor, err := result.Plan.Executor(api)
 	if err != nil {
 		t.Fatal(err)
@@ -148,7 +148,7 @@ func TestExecutorExposesCertificateDNSFactsWithoutProviderAuthority(t *testing.T
 func TestExecutorWholeTunnelCheckUsesJournaledIdentifiers(t *testing.T) {
 	_, request := plannedModule(t)
 	api := &executorFixture{planningAPI: planningAPI{observation: healthyAuthorityObservation(), mutation: MutationObservation{Digest: strings.Repeat("a", 64)}}}
-	result := New(api, &planClock{}).Plan(context.Background(), request)
+	result := newPlanningInterface(api).Plan(context.Background(), request)
 	executor, err := result.Plan.Executor(api)
 	if err != nil {
 		t.Fatal(err)

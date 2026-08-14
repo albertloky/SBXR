@@ -2,7 +2,9 @@ package cloudflaretunnel
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -60,6 +62,11 @@ const (
 
 func TestPlanBindsCompleteSecretSafeCloudflareInstallation(t *testing.T) {
 	module, request := plannedModule(t)
+	var configurations [][]byte
+	module.nativeIngress = func(_ context.Context, configuration []byte) error {
+		configurations = append(configurations, append([]byte(nil), configuration...))
+		return nil
+	}
 	first, second := module.Plan(context.Background(), request), module.Plan(context.Background(), request)
 	if first.Plan == nil || second.Plan == nil || first.Health.Outcome != Healthy || first.Plan.Identity() != second.Plan.Identity() || first.Plan.SHA256() != second.Plan.SHA256() {
 		t.Fatalf("deterministic Plan = first %+v second %+v", first, second)
@@ -98,6 +105,22 @@ func TestPlanBindsCompleteSecretSafeCloudflareInstallation(t *testing.T) {
 	}
 	if _, _, _, ok := first.Plan.StateDeferredCloudflare(); !ok {
 		t.Fatal("State finalization authority unavailable")
+	}
+	source, services, valid := first.Plan.StateRuntimeArtifacts()
+	if !valid || source != first.Plan || !slices.Equal(services, []string{"cloudflared.service"}) {
+		t.Fatalf("State runtime contribution = %T, %v, %t", source, services, valid)
+	}
+	if len(configurations) != 2 || !strings.Contains(string(configurations[0]), xhttpOrigin) || !strings.Contains(string(configurations[0]), webSocketOrigin) {
+		t.Fatalf("native validation configurations = %q", configurations)
+	}
+}
+
+func TestPlanRefusesFailedNativeIngressValidation(t *testing.T) {
+	module, request := plannedModule(t)
+	module.nativeIngress = func(context.Context, []byte) error { return errors.New("invalid ingress") }
+	result := module.Plan(t.Context(), request)
+	if result.Plan != nil || result.Health.Code != "CLOUDFLARE-PLAN-REFUSED" {
+		t.Fatalf("invalid native ingress admitted: %+v", result)
 	}
 }
 
@@ -159,6 +182,10 @@ func TestPlanReleaseUpdateRestartsOnlyTheVerifiedOwnedCloudflaredService(t *test
 	if repair := result.Plan.SoftwareLifecycleRepairContribution(); repair.Name != "" {
 		t.Fatalf("release update also exposed repair authority = %+v", repair)
 	}
+	module.nativeIngress = func(context.Context, []byte) error { return errors.New("invalid ingress") }
+	if refused := module.Plan(t.Context(), request); refused.Plan != nil || refused.Health.Code != "CLOUDFLARE-RELEASE-UPDATE-REFUSED" {
+		t.Fatalf("release update admitted invalid native ingress: %+v", refused)
+	}
 }
 
 func TestPlanNamesOwnerAssistedRunTokenRotationAndBindsOwnedIdentifiers(t *testing.T) {
@@ -198,6 +225,10 @@ func TestPlanNamesOwnerAssistedRunTokenRotationAndBindsOwnedIdentifiers(t *testi
 	if !result.Plan.MatchesDesiredState(request.Authority.AccountID, request.Authority.ZoneID, request.Authority.ZoneName, request.TunnelName, request.XHTTPHostname, request.WebSocketHostname, request.DirectHostname, request.PublicIPv4, request.PublicIPv6, request.Authority.Token.value) {
 		t.Fatal("managed rotation Plan did not match its Desired State authority")
 	}
+	module.nativeIngress = func(context.Context, []byte) error { return errors.New("invalid ingress") }
+	if refused := module.Plan(t.Context(), request); refused.Plan != nil || refused.Health.Code != "CLOUDFLARE-RUN-TOKEN-ROTATION-REFUSED" {
+		t.Fatalf("rotation admitted invalid native ingress: %+v", refused)
+	}
 }
 
 func TestManagedRepairPlansOnlyCommittedOwnedDriftAndBlocksConflicts(t *testing.T) {
@@ -226,6 +257,11 @@ func TestManagedRepairPlansOnlyCommittedOwnedDriftAndBlocksConflicts(t *testing.
 	if contribution := result.Plan.SoftwareLifecycleRepairContribution(); contribution.Name != "Cloudflare Tunnel" || contribution.Owner != systemchanges.CloudflareModule || contribution.CurrentRevision != 7 || contribution.CurrentStateSHA256 != request.StartingStateSHA256 || len(contribution.Steps) != 3 || len(contribution.Checks) == 0 {
 		t.Fatalf("Software Lifecycle repair contribution = %+v", contribution)
 	}
+	module.nativeIngress = func(context.Context, []byte) error { return errors.New("invalid ingress") }
+	if refused := module.Plan(t.Context(), request); refused.Plan != nil || refused.Health.Code != "CLOUDFLARE-REPAIR-REFUSED" {
+		t.Fatalf("repair admitted invalid native ingress: %+v", refused)
+	}
+	module.nativeIngress = func(context.Context, []byte) error { return nil }
 	api.mutations[request.XHTTPHostname] = MutationObservation{Digest: strings.Repeat("d", 64), Tunnels: []OwnedResource{{ID: testTunnelID, Name: request.TunnelName}}, DNSRecords: []OwnedResource{{ID: strings.Repeat("9", 32), Name: request.XHTTPHostname}}}
 	blocked := module.Plan(t.Context(), request)
 	if blocked.Plan != nil || blocked.Health.Code != "CLOUDFLARE-REPAIR-OWNERSHIP" || blocked.Health.Problem == "" || blocked.Health.Found == "" || blocked.Health.Required == "" || blocked.Health.WhyStopped == "" || fmt.Sprint(blocked.Health.NextActions) != "[Check again Back]" {
@@ -473,7 +509,13 @@ func plannedModule(t *testing.T) (Interface, PlanRequest) {
 	}
 	api := &planningAPI{observation: healthyAuthorityObservation(), mutation: MutationObservation{Digest: strings.Repeat("a", 64)}}
 	request := PlanRequest{Authority: ViewRequest{AccountID: testAccountID, ZoneID: testZoneID, ZoneName: "example.com", Token: token, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}}, ChangeSet: "cloudflare-change-0001", DesiredStateSHA256: strings.Repeat("b", 64), TunnelName: "sbxr-main", XHTTPHostname: "xhttp.example.com", WebSocketHostname: "ws.example.com", DirectHostname: "direct.example.com", PublicIPv4: "192.0.2.10", PublicIPv6: "2001:db8::10", CloudflaredVersion: qualifiedCloudflaredVersion}
-	return New(api, &planClock{}), request
+	return newPlanningInterface(api), request
+}
+
+func newPlanningInterface(api API) Interface {
+	module := New(api, &planClock{})
+	module.nativeIngress = func(context.Context, []byte) error { return nil }
+	return module
 }
 
 type planningAPI struct {

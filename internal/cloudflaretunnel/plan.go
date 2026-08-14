@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"os"
 	"reflect"
 	"regexp"
 	"slices"
@@ -214,6 +215,13 @@ func (plan *Plan) Checks() []systemchanges.Check {
 	return append([]systemchanges.Check(nil), plan.checks...)
 }
 
+func (plan *Plan) StateRuntimeArtifacts() (source any, services []string, valid bool) {
+	if plan == nil || plan.identity == "" || !sha256Text.MatchString(plan.sha256) {
+		return nil, nil, false
+	}
+	return plan, []string{"cloudflared.service"}, true
+}
+
 // CertificateLifecycleFreshDNSPlan exposes only the exact Direct DNS records
 // contained in a reviewed fresh-install Plan.
 func (plan *Plan) CertificateLifecycleFreshDNSPlan() (hostname, ipv4, ipv6, desiredStateSHA256 string, valid bool) {
@@ -361,6 +369,10 @@ func (i Interface) Plan(ctx context.Context, request PlanRequest) PlanResult {
 		health.Explanation = err.Error()
 		return PlanResult{Health: finish(healthResult(i, health)).Health}
 	}
+	if err := i.validateNativeIngress(ctx, request); err != nil {
+		health.Explanation = err.Error()
+		return PlanResult{Health: finish(healthResult(i, health)).Health}
+	}
 	bound := struct {
 		Request              PlanRequest
 		TokenID, Observation string
@@ -374,6 +386,33 @@ func (i Interface) Plan(ctx context.Context, request PlanRequest) PlanResult {
 	plan := &Plan{identity: identity, sha256: checksum, observation: bound.Observation, request: request, steps: steps, checks: wholeTunnelChecks(), binding: binding, runToken: TunnelRunToken{cell: &runTokenCell{}}, used: use.(*atomic.Bool)}
 	health = Health{Module: "Cloudflare Tunnel", Outcome: Healthy, Code: "CLOUDFLARE-PLAN-READY", Explanation: "The complete owned Cloudflare change is ready for review."}
 	return PlanResult{Plan: plan, Health: finish(healthResult(i, health)).Health}
+}
+
+func validateNativeIngress(ctx context.Context, configuration []byte) error {
+	file, err := os.CreateTemp("", "sbxr-cloudflared-*.json")
+	if err != nil {
+		return errors.New("cloudflared native configuration validation failed")
+	}
+	name := file.Name()
+	defer os.Remove(name)
+	if _, err = file.Write(configuration); err != nil || file.Close() != nil {
+		return errors.New("cloudflared native configuration validation failed")
+	}
+	if _, err = runCommand(ctx, "/usr/bin/cloudflared", "--config", name, "tunnel", "ingress", "validate"); err != nil {
+		return errors.New("cloudflared native configuration validation failed")
+	}
+	return nil
+}
+
+func (i Interface) validateNativeIngress(ctx context.Context, request PlanRequest) error {
+	if i.nativeIngress == nil {
+		return errors.New("cloudflared native configuration validation failed")
+	}
+	material := serviceMaterial{Routes: []struct {
+		Hostname string `json:"hostname"`
+		Origin   string `json:"origin"`
+	}{{Hostname: request.XHTTPHostname, Origin: xhttpOrigin}, {Hostname: request.WebSocketHostname, Origin: webSocketOrigin}}}
+	return i.nativeIngress(ctx, serviceConfiguration(material))
 }
 
 func appendUniqueResources(current []OwnedResource, values ...OwnedResource) []OwnedResource {
@@ -406,6 +445,9 @@ func (i Interface) planReleaseUpdate(ctx context.Context, request PlanRequest) P
 	}
 	if health := EvaluateWholeTunnel(observed, expected); health.Outcome != Healthy {
 		return PlanResult{Health: health}
+	}
+	if err := i.validateNativeIngress(ctx, request); err != nil {
+		return fail(err.Error())
 	}
 	step, err := systemchanges.NewStep(systemchanges.CloudflareModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
 	if err != nil {

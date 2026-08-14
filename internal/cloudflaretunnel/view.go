@@ -106,11 +106,20 @@ type APIError struct {
 func (e APIError) Error() string { return "Cloudflare API " + string(e.Kind) + " failure" }
 
 type Interface struct {
-	api   API
-	clock Clock
+	api           API
+	clock         Clock
+	nativeIngress NativeIngressValidator
 }
 
-func New(api API, clock Clock) Interface { return Interface{api: api, clock: clock} }
+type NativeIngressValidator func(context.Context, []byte) error
+
+func New(api API, clock Clock, validators ...NativeIngressValidator) Interface {
+	validator := validateNativeIngress
+	if len(validators) == 1 && validators[0] != nil {
+		validator = validators[0]
+	}
+	return Interface{api: api, clock: clock, nativeIngress: validator}
+}
 
 func NewProduction() Interface { return New(NewProductionAPI(), SystemClock{}) }
 

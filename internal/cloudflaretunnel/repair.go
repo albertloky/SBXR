@@ -151,6 +151,11 @@ func (i Interface) planManagedRepair(ctx context.Context, request PlanRequest) P
 		health := finish(healthResult(i, Health{Module: "Cloudflare Tunnel", Outcome: Healthy, Code: "CLOUDFLARE-REPAIR-NOT-REQUIRED", Explanation: "The committed Tunnel, routes, DNS, credentials, and service already agree."})).Health
 		return PlanResult{Health: health}
 	}
+	if !observed.Connected {
+		if err := i.validateNativeIngress(ctx, request); err != nil {
+			return fail("CLOUDFLARE-REPAIR-REFUSED", "invalid native ingress", "one cloudflared-native valid candidate", err.Error())
+		}
+	}
 	bound := request
 	bound.Authority.Token = ManagementToken{}
 	encoded, _ := json.Marshal(struct {
