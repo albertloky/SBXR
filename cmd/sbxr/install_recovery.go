@@ -185,7 +185,7 @@ func runProvenRecovery(transaction systemchanges.PendingChangeSet) (resultErr er
 			return err
 		}
 	}
-	adapter := systemubuntu.NewAtForInstallRecovery("/", installRecoveryObservation, host, systemubuntu.NewNativeFirewall(), cloudflareExecutor, certificateExecutor, profilesubuntu.NewDirectTLSExecutor(), subscriptionExecutor, software, stateModule)
+	adapter := systemubuntu.NewAtForInstallRecovery("/", installRecoveryObservation, host, systemubuntu.NewNativeFirewall(), cloudflareExecutor, certificateExecutor, profilesubuntu.NewRuntimeExecutor(), subscriptionExecutor, software, stateModule)
 	result := systemchanges.New(adapter).Recover()
 	if result.Outcome != systemchanges.Completed && result.Outcome != systemchanges.RollbackSucceeded {
 		return errors.New("install restart recovery requires inspection")

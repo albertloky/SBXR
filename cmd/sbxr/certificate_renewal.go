@@ -50,7 +50,7 @@ func (planner productionRenewalPlanner) BuildFresh(lineage certificatelifecycle.
 		return nil, errors.New("certificate renewal transaction Adapter unavailable")
 	}
 	observation := func() (systemchanges.Observation, error) { return managedProviderObservation(built) }
-	*planner.adapter = systemubuntu.NewAtForManagedProvider("/", observation, host, systemubuntu.NewNativeFirewall(), nil, built.certificate, profilesubuntu.NewDirectTLSExecutor(), subscription, stateModule)
+	*planner.adapter = systemubuntu.NewAtForManagedProvider("/", observation, host, systemubuntu.NewNativeFirewall(), nil, built.certificate, profilesubuntu.NewRuntimeExecutor(), subscription, stateModule)
 	return built.certificatePlan.RenewalChangeSet(built.prepared, built.starting, built.volatileSHA, built.disk)
 }
 

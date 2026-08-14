@@ -11,7 +11,6 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -27,17 +26,12 @@ const realityConfigurationPath = "etc/sbxr/xray/config.json"
 type commandRunner func(context.Context, io.Reader, string, ...string) (string, error)
 
 type RealityHost struct {
-	root         string
-	run          commandRunner
-	probe        func(context.Context, connectionprofiles.RealityTarget) connectionprofiles.RealityObservation
-	now          func() time.Time
-	rootUID      uint32
-	xrayGID      uint32
-	xrayGroup    bool
-	xrayUser     bool
-	singBoxGID   uint32
-	singBoxGroup bool
-	singBoxUser  bool
+	root    string
+	run     commandRunner
+	probe   func(context.Context, connectionprofiles.RealityTarget) connectionprofiles.RealityObservation
+	now     func() time.Time
+	rootUID uint32
+	rootGID uint32
 }
 
 type xrayServiceObservation struct {
@@ -47,43 +41,14 @@ type xrayServiceObservation struct {
 	unit              string
 	identity          string
 	running           bool
+	contained         bool
 	netBindService    bool
 	noCapabilities    bool
 	listeners         string
 }
 
 func NewRealityHost(root string) RealityHost {
-	group, _ := user.LookupGroup("xray")
-	account, _ := user.Lookup("xray")
-	singBoxGroup, _ := user.LookupGroup("sing-box")
-	singBoxAccount, _ := user.Lookup("sing-box")
-	gid := uint64(0)
-	groupValid := false
-	if group != nil {
-		var err error
-		gid, err = strconv.ParseUint(group.Gid, 10, 32)
-		groupValid = err == nil
-	}
-	uid, uidErr := strconv.ParseUint(accountID(account), 10, 32)
-	userValid := uidErr == nil && uid != 0 && groupValid && account.Gid == group.Gid
-	singBoxGID, singBoxGIDErr := strconv.ParseUint(groupID(singBoxGroup), 10, 32)
-	singBoxUID, singBoxUIDErr := strconv.ParseUint(accountID(singBoxAccount), 10, 32)
-	singBoxValid := singBoxGIDErr == nil && singBoxUIDErr == nil && singBoxUID != 0 && singBoxAccount.Gid == singBoxGroup.Gid
-	return RealityHost{root: root, run: runRealityCommand, probe: probeRealityTarget, now: time.Now, rootUID: 0, xrayGID: uint32(gid), xrayGroup: groupValid, xrayUser: userValid, singBoxGID: uint32(singBoxGID), singBoxGroup: singBoxGIDErr == nil, singBoxUser: singBoxValid}
-}
-
-func groupID(group *user.Group) string {
-	if group == nil {
-		return ""
-	}
-	return group.Gid
-}
-
-func accountID(account *user.User) string {
-	if account == nil {
-		return ""
-	}
-	return account.Uid
+	return RealityHost{root: root, run: runRealityCommand, probe: probeRealityTarget, now: time.Now, rootUID: 0, rootGID: 0}
 }
 
 func (host RealityHost) ObserveReality(ctx context.Context, target connectionprofiles.RealityTarget) connectionprofiles.RealityObservation {
@@ -94,7 +59,7 @@ func (host RealityHost) ObserveReality(ctx context.Context, target connectionpro
 	service := host.observeXrayService(ctx, target.ListenerPort)
 	observation.CheckedAt, observation.ConfigurationSafe = service.checkedAt, service.configurationSafe
 	observation.ServiceInstalled, observation.ServiceUnit, observation.ServiceIdentity = service.installed, service.unit, service.identity
-	observation.ServiceRunning, observation.NetBindService = service.running, service.netBindService
+	observation.ServiceRunning, observation.ServiceContained, observation.NetBindService = service.running, service.contained, service.netBindService
 	if listener, ok := exactListener(service.listeners, target.ListenerPort, func(address string) bool { return address == "0.0.0.0" || address == "::" || address == "*" }); ok {
 		observation.Listener = listener
 	}
@@ -109,7 +74,7 @@ func (host RealityHost) ObserveWebSocket(ctx context.Context, listenerPort uint1
 	loopback := host.observeLoopbackXray(ctx, listenerPort)
 	observation := connectionprofiles.WebSocketObservation{
 		CheckedAt: loopback.CheckedAt, ConfigurationSafe: loopback.ConfigurationSafe, ConfigurationValid: loopback.ConfigurationValid,
-		ServiceUnit: loopback.ServiceUnit, ServiceIdentity: loopback.ServiceIdentity, ServiceRunning: loopback.ServiceRunning, NoCapabilities: loopback.NoCapabilities, Listener: loopback.Listener,
+		ServiceUnit: loopback.ServiceUnit, ServiceIdentity: loopback.ServiceIdentity, ServiceRunning: loopback.ServiceRunning, ServiceContained: loopback.ServiceContained, NoCapabilities: loopback.NoCapabilities, Listener: loopback.Listener,
 	}
 	if observation.ConfigurationSafe && observation.ConfigurationValid {
 		observation.HostMatches, observation.PathMatches = host.webSocketConfigurationAgreement(listenerPort, expectedHost, expectedPath)
@@ -168,7 +133,7 @@ func (host RealityHost) observeLoopbackXray(ctx context.Context, listenerPort ui
 	service := host.observeXrayService(ctx, listenerPort)
 	observation := connectionprofiles.XHTTPObservation{
 		CheckedAt: service.checkedAt, ConfigurationSafe: service.configurationSafe, ServiceUnit: service.unit,
-		ServiceIdentity: service.identity, ServiceRunning: service.running, NoCapabilities: service.noCapabilities,
+		ServiceIdentity: service.identity, ServiceRunning: service.running, ServiceContained: service.contained, NoCapabilities: service.noCapabilities,
 	}
 	if observation.ConfigurationSafe {
 		validation, cancel := context.WithTimeout(ctx, 60*time.Second)
@@ -198,12 +163,19 @@ func (host RealityHost) observeXrayService(ctx context.Context, listenerPort uin
 	listeners, _ := host.run(ctx, nil, "ss", "-H", "-ltn", "sport", "=", ":"+strconv.Itoa(int(listenerPort)))
 	service := xrayServiceObservation{
 		checkedAt: host.now().UTC(), configurationSafe: host.safeConfiguration(), installed: strings.TrimSpace(unit) == "xray.service", unit: strings.TrimSpace(unit),
-		running: activeErr == nil && strings.TrimSpace(active) == "active", netBindService: strings.TrimSpace(capabilities) == "CAP_NET_BIND_SERVICE" && strings.TrimSpace(ambient) == "CAP_NET_BIND_SERVICE", noCapabilities: strings.TrimSpace(capabilities) == "" && strings.TrimSpace(ambient) == "", listeners: listeners,
+		running: activeErr == nil && strings.TrimSpace(active) == "active", contained: host.serviceContained(ctx, "xray.service"), netBindService: strings.TrimSpace(capabilities) == "CAP_NET_BIND_SERVICE" && strings.TrimSpace(ambient) == "CAP_NET_BIND_SERVICE", noCapabilities: strings.TrimSpace(capabilities) == "" && strings.TrimSpace(ambient) == "", listeners: listeners,
 	}
-	if host.xrayUser && strings.TrimSpace(identity) == "xray" && strings.TrimSpace(group) == "xray" {
-		service.identity = "xray"
+	if strings.TrimSpace(identity) == "root" && strings.TrimSpace(group) == "root" {
+		service.identity = "root"
 	}
 	return service
+}
+
+func (host RealityHost) serviceContained(ctx context.Context, service string) bool {
+	noNewPrivileges, _ := host.run(ctx, nil, "systemctl", "show", "--property=NoNewPrivileges", "--value", service)
+	protectHome, _ := host.run(ctx, nil, "systemctl", "show", "--property=ProtectHome", "--value", service)
+	protectSystem, _ := host.run(ctx, nil, "systemctl", "show", "--property=ProtectSystem", "--value", service)
+	return strings.TrimSpace(noNewPrivileges) == "yes" && strings.TrimSpace(protectHome) == "yes" && strings.TrimSpace(protectSystem) == "strict"
 }
 
 func (host RealityHost) ValidateReality(ctx context.Context, version string, configuration io.Reader) error {
@@ -222,9 +194,6 @@ func (host RealityHost) ValidateReality(ctx context.Context, version string, con
 }
 
 func (host RealityHost) safeConfiguration() bool {
-	if !host.xrayGroup || !host.xrayUser {
-		return false
-	}
 	directoryName := filepath.Join(host.root, "etc/sbxr/xray")
 	fileName := filepath.Join(host.root, realityConfigurationPath)
 	for _, ancestor := range []string{filepath.Join(host.root, "etc"), filepath.Join(host.root, "etc/sbxr")} {
@@ -235,12 +204,12 @@ func (host RealityHost) safeConfiguration() bool {
 	}
 	directory, directoryErr := os.Lstat(directoryName)
 	file, fileErr := os.Lstat(fileName)
-	if directoryErr != nil || fileErr != nil || !directory.IsDir() || directory.Mode()&os.ModeSymlink != 0 || directory.Mode().Perm() != 0o750 || !file.Mode().IsRegular() || file.Mode()&os.ModeSymlink != 0 || file.Mode().Perm() != 0o640 || file.Size() <= 0 || file.Size() > 1<<20 {
+	if directoryErr != nil || fileErr != nil || !directory.IsDir() || directory.Mode()&os.ModeSymlink != 0 || directory.Mode().Perm() != 0o755 || !file.Mode().IsRegular() || file.Mode()&os.ModeSymlink != 0 || file.Mode().Perm() != 0o644 || file.Size() <= 0 || file.Size() > 1<<20 {
 		return false
 	}
 	directoryStat, directoryOK := directory.Sys().(*syscall.Stat_t)
 	fileStat, fileOK := file.Sys().(*syscall.Stat_t)
-	return directoryOK && fileOK && directoryStat.Uid == host.rootUID && directoryStat.Gid == host.xrayGID && fileStat.Uid == host.rootUID && fileStat.Gid == host.xrayGID && fileStat.Nlink == 1
+	return directoryOK && fileOK && directoryStat.Uid == host.rootUID && directoryStat.Gid == host.rootGID && fileStat.Uid == host.rootUID && fileStat.Gid == host.rootGID && fileStat.Nlink == 1
 }
 
 func exactListener(output string, expectedPort uint16, allowed func(string) bool) (connectionprofiles.Listener, bool) {

@@ -212,7 +212,7 @@ func validWebSocketRequest(t *testing.T) connectionprofiles.WebSocketViewRequest
 
 func healthyWebSocketObservation() connectionprofiles.WebSocketObservation {
 	return connectionprofiles.WebSocketObservation{
-		CheckedAt: healthyRealityObservation().CheckedAt, ConfigurationSafe: true, ConfigurationValid: true, ServiceUnit: "xray.service", ServiceIdentity: "xray", ServiceRunning: true,
+		CheckedAt: healthyRealityObservation().CheckedAt, ConfigurationSafe: true, ConfigurationValid: true, ServiceUnit: "xray.service", ServiceIdentity: "root", ServiceRunning: true, ServiceContained: true,
 		Listener: connectionprofiles.Listener{Address: "127.0.0.1", Port: 11081, Protocol: "tcp"}, HostMatches: true, PathMatches: true,
 	}
 }

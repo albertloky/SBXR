@@ -61,6 +61,6 @@ func applySoftwareChange(ctx context.Context, built *builtSoftwareChange, cancel
 		observed.VolatileSHA256 = approval.fresh
 		return observed, nil
 	}
-	adapter := systemubuntu.NewAtForSoftwareChange("/", observation, host, built.cloudflare, profilesubuntu.NewDirectTLSExecutor(), subscription, software, built.module)
+	adapter := systemubuntu.NewAtForSoftwareChange("/", observation, host, built.cloudflare, profilesubuntu.NewRuntimeExecutor(), subscription, software, built.module)
 	return built.plan.Apply(ctx, softwarelifecycle.UpdateApplyRequest{Approval: approval, PreparedState: built.prepared, SystemChanges: systemchanges.New(adapter), Cancellation: cancellation})
 }

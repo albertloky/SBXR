@@ -380,6 +380,6 @@ func applySoftwareRepair(ctx context.Context, built *builtSoftwareRepair, cancel
 		}
 		return approval.fresh, nil
 	}
-	adapter := systemubuntu.NewAtForClientAccess("/", observation, host, systemubuntu.NewNativeFirewall(), built.cloudflare, profilesubuntu.NewDirectTLSExecutor(), subscription, built.module)
+	adapter := systemubuntu.NewAtForClientAccess("/", observation, host, systemubuntu.NewNativeFirewall(), built.cloudflare, profilesubuntu.NewRuntimeExecutor(), subscription, built.module)
 	return built.plan.Apply(ctx, softwarelifecycle.RepairApplyRequest{Approval: approval, PreparedState: built.prepared, SystemChanges: systemchanges.New(adapter), Cancellation: cancellation})
 }

@@ -49,17 +49,23 @@ func (TransactionMaterial) GoString() string             { return "[redacted tra
 
 // SystemChangesBindings returns only exact non-secret transaction lineage.
 type systemChangesTransactionBinding struct {
-	LineageUnavailable     bool              `json:"lineage_unavailable,omitempty"`
-	RawStatePresent        bool              `json:"raw_state_present,omitempty"`
-	StartingRevision       uint64            `json:"starting_revision"`
-	CandidateRevision      uint64            `json:"candidate_revision"`
-	StartingSHA256         string            `json:"starting_sha256"`
-	CandidateSHA256        string            `json:"candidate_sha256"`
-	PreparedStateSHA256    string            `json:"prepared_state_sha256"`
-	PreparedManifestSHA256 string            `json:"prepared_manifest_sha256"`
-	ChangeSet              ChangeSetIdentity `json:"change_set"`
-	StartingRelease        ReleaseIdentity   `json:"starting_release"`
-	CandidateRelease       ReleaseIdentity   `json:"candidate_release"`
+	LineageUnavailable     bool                             `json:"lineage_unavailable,omitempty"`
+	RawStatePresent        bool                             `json:"raw_state_present,omitempty"`
+	StartingRevision       uint64                           `json:"starting_revision"`
+	CandidateRevision      uint64                           `json:"candidate_revision"`
+	StartingSHA256         string                           `json:"starting_sha256"`
+	CandidateSHA256        string                           `json:"candidate_sha256"`
+	PreparedStateSHA256    string                           `json:"prepared_state_sha256"`
+	PreparedManifestSHA256 string                           `json:"prepared_manifest_sha256"`
+	ConnectionProfiles     connectionProfilesRuntimeBinding `json:"connection_profiles,omitempty"`
+	ChangeSet              ChangeSetIdentity                `json:"change_set"`
+	StartingRelease        ReleaseIdentity                  `json:"starting_release"`
+	CandidateRelease       ReleaseIdentity                  `json:"candidate_release"`
+}
+
+type connectionProfilesRuntimeBinding struct {
+	XraySHA256    string `json:"xray_sha256,omitempty"`
+	SingBoxSHA256 string `json:"sing_box_sha256,omitempty"`
 }
 
 func (transaction *TransactionMaterial) SystemChangesBindings(lease any) ([]byte, error) {
@@ -71,8 +77,20 @@ func (transaction *TransactionMaterial) SystemChangesBindings(lease any) ([]byte
 		StartingRevision: transaction.startingRevision, CandidateRevision: transaction.candidateRevision,
 		StartingSHA256: transaction.startingChecksum, CandidateSHA256: transaction.candidateChecksum,
 		PreparedStateSHA256: transaction.preparedChecksum, PreparedManifestSHA256: transaction.manifestChecksum,
-		ChangeSet: transaction.changeSet, StartingRelease: transaction.startingRelease, CandidateRelease: transaction.candidateRelease,
+		ConnectionProfiles: connectionProfilesBinding(transaction.serviceCopies),
+		ChangeSet:          transaction.changeSet, StartingRelease: transaction.startingRelease, CandidateRelease: transaction.candidateRelease,
 	})
+}
+
+func connectionProfilesBinding(copies PreparedServiceCopies) connectionProfilesRuntimeBinding {
+	binding := connectionProfilesRuntimeBinding{}
+	if copies.Xray != nil {
+		binding.XraySHA256 = copies.Xray.manifest.SHA256
+	}
+	if copies.SingBox != nil {
+		binding.SingBoxSHA256 = copies.SingBox.manifest.SHA256
+	}
+	return binding
 }
 
 func (transaction *TransactionMaterial) SystemChangesDeferred(lease any) bool {

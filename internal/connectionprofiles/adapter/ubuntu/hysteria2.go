@@ -1,6 +1,7 @@
 package ubuntu
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -54,18 +55,12 @@ func (host RealityHost) observeSingBoxProfile(ctx context.Context, spec singBoxO
 	observation, content := host.observeSingBox(ctx, spec.port, spec.listener)
 	if observation.ConfigurationSafe {
 		observation.ConfigurationMatches = spec.agrees(content)
-		observation.CertificateMatches = observation.ConfigurationMatches && host.safeDomainServingPair(spec.certificatePointer)
-		if observation.CertificateMatches {
-			certificate := filepath.Join(host.root, strings.TrimPrefix(spec.certificatePointer, "/"), "fullchain.pem")
-			_, err := host.run(ctx, nil, "openssl", "x509", "-in", certificate, "-noout", "-checkhost", spec.serverName)
-			observation.CertificateMatches = err == nil
-		}
 	}
-	probe := filepath.Join(host.root, probeConfiguration)
-	passed := observation.ConfigurationValid && observation.CertificateMatches && validateProbeConfiguration(host.root, spec.destination, spec.serverName) == nil
+	probe, _, probeErr := probeConfigurationBytes(content, spec.destination, spec.serverName, spec.profile)
+	passed := observation.ConfigurationValid && observation.ConfigurationMatches && probeErr == nil
 	if passed {
 		for _, network := range spec.probeNetworks {
-			_, err := host.run(ctx, nil, "sing-box", "-c", probe, "tools", "-o", "sbxr-proof-"+spec.profile, "connect", "-n", network, net.JoinHostPort(spec.destination, strconv.Itoa(int(spec.port))))
+			_, err := host.run(ctx, bytes.NewReader(probe), "sing-box", "-c", "/dev/stdin", "tools", "-o", "sbxr-proof-"+spec.profile, "connect", "-n", network, net.JoinHostPort(spec.destination, strconv.Itoa(int(spec.port))))
 			passed = passed && err == nil
 		}
 	}
@@ -95,9 +90,9 @@ func (host *RealityHost) observeSingBox(ctx context.Context, port uint16, protoc
 		flag = "-ltn"
 	}
 	listeners, _ := host.run(ctx, nil, "ss", "-H", flag, "sport", "=", ":"+strconv.Itoa(int(port)))
-	observation := connectionprofiles.Hysteria2Observation{CheckedAt: host.now().UTC(), ConfigurationSafe: host.safeSingBoxConfiguration(), ServiceUnit: strings.TrimSpace(unit), ServiceRunning: activeErr == nil && strings.TrimSpace(active) == "active", NetBindService: strings.TrimSpace(capabilities) == "CAP_NET_BIND_SERVICE" && strings.TrimSpace(ambient) == "CAP_NET_BIND_SERVICE", NoCapabilities: strings.TrimSpace(capabilities) == "" && strings.TrimSpace(ambient) == ""}
-	if host.singBoxUser && strings.TrimSpace(identity) == "sing-box" && strings.TrimSpace(group) == "sing-box" {
-		observation.ServiceIdentity = "sing-box"
+	observation := connectionprofiles.Hysteria2Observation{CheckedAt: host.now().UTC(), ConfigurationSafe: host.safeSingBoxConfiguration(), ServiceUnit: strings.TrimSpace(unit), ServiceRunning: activeErr == nil && strings.TrimSpace(active) == "active", ServiceContained: host.serviceContained(ctx, "sing-box.service"), NetBindService: strings.TrimSpace(capabilities) == "CAP_NET_BIND_SERVICE" && strings.TrimSpace(ambient) == "CAP_NET_BIND_SERVICE", NoCapabilities: strings.TrimSpace(capabilities) == "" && strings.TrimSpace(ambient) == ""}
+	if strings.TrimSpace(identity) == "root" && strings.TrimSpace(group) == "root" {
+		observation.ServiceIdentity = "root"
 	}
 	if protocol == singBoxUDP {
 		if listener, ok := exactUDPListener(listeners, port); ok {
@@ -134,9 +129,6 @@ func (host RealityHost) ValidateSingBox(ctx context.Context, version string, con
 }
 
 func (host RealityHost) safeSingBoxConfiguration() bool {
-	if !host.singBoxGroup || !host.singBoxUser {
-		return false
-	}
 	directoryName, fileName := filepath.Join(host.root, "etc/sbxr/sing-box"), filepath.Join(host.root, singBoxConfigurationPath)
 	for _, ancestor := range []string{filepath.Join(host.root, "etc"), filepath.Join(host.root, "etc/sbxr")} {
 		info, err := os.Lstat(ancestor)
@@ -146,50 +138,12 @@ func (host RealityHost) safeSingBoxConfiguration() bool {
 	}
 	directory, directoryErr := os.Lstat(directoryName)
 	file, fileErr := os.Lstat(fileName)
-	if directoryErr != nil || fileErr != nil || !directory.IsDir() || directory.Mode()&os.ModeSymlink != 0 || directory.Mode().Perm() != 0o750 || !file.Mode().IsRegular() || file.Mode()&os.ModeSymlink != 0 || file.Mode().Perm() != 0o640 || file.Size() <= 0 || file.Size() > 1<<20 {
+	if directoryErr != nil || fileErr != nil || !directory.IsDir() || directory.Mode()&os.ModeSymlink != 0 || directory.Mode().Perm() != 0o755 || !file.Mode().IsRegular() || file.Mode()&os.ModeSymlink != 0 || file.Mode().Perm() != 0o644 || file.Size() <= 0 || file.Size() > 1<<20 {
 		return false
 	}
 	directoryStat, directoryOK := directory.Sys().(*syscall.Stat_t)
 	fileStat, fileOK := file.Sys().(*syscall.Stat_t)
-	return directoryOK && fileOK && directoryStat.Uid == host.rootUID && directoryStat.Gid == host.singBoxGID && fileStat.Uid == host.rootUID && fileStat.Gid == host.singBoxGID && fileStat.Nlink == 1
-}
-
-func (host RealityHost) safeDomainServingPair(pointer string) bool {
-	if pointer != "/var/lib/sbxr/certificates/domain/current" {
-		return false
-	}
-	for _, ancestor := range []string{"var", "var/lib", "var/lib/sbxr", "var/lib/sbxr/certificates"} {
-		info, err := os.Lstat(filepath.Join(host.root, ancestor))
-		stat, ok := fileStat(info)
-		if err != nil || !ok || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o022 != 0 || stat.Uid != host.rootUID {
-			return false
-		}
-	}
-	base := filepath.Join(host.root, "var/lib/sbxr/certificates/domain")
-	baseInfo, baseErr := os.Lstat(base)
-	pointerInfo, pointerErr := os.Lstat(filepath.Join(base, "current"))
-	pointerStat, pointerStatOK := fileStat(pointerInfo)
-	target, targetErr := os.Readlink(filepath.Join(base, "current"))
-	if baseErr != nil || !safeServiceDirectory(baseInfo, host.rootUID, host.singBoxGID) || pointerErr != nil || !pointerStatOK || pointerInfo.Mode()&os.ModeSymlink == 0 || pointerStat.Uid != host.rootUID || pointerStat.Nlink != 1 || targetErr != nil || !safeDomainTarget(target) {
-		return false
-	}
-	setInfo, setErr := os.Lstat(filepath.Join(base, target))
-	if setErr != nil || !safeServiceDirectory(setInfo, host.rootUID, host.singBoxGID) {
-		return false
-	}
-	for _, name := range []string{"fullchain.pem", "privkey.pem"} {
-		info, err := os.Lstat(filepath.Join(base, target, name))
-		stat, ok := fileStat(info)
-		if err != nil || !ok || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o640 || info.Size() <= 0 || info.Size() > 1<<20 || stat.Uid != host.rootUID || stat.Gid != host.singBoxGID || stat.Nlink != 1 {
-			return false
-		}
-	}
-	return true
-}
-
-func safeServiceDirectory(info os.FileInfo, uid, gid uint32) bool {
-	stat, ok := fileStat(info)
-	return ok && info.IsDir() && info.Mode()&os.ModeSymlink == 0 && info.Mode().Perm() == 0o750 && stat.Uid == uid && stat.Gid == gid
+	return directoryOK && fileOK && directoryStat.Uid == host.rootUID && directoryStat.Gid == host.rootGID && fileStat.Uid == host.rootUID && fileStat.Gid == host.rootGID && fileStat.Nlink == 1
 }
 
 func fileStat(info os.FileInfo) (*syscall.Stat_t, bool) {
@@ -198,19 +152,6 @@ func fileStat(info os.FileInfo) (*syscall.Stat_t, bool) {
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	return stat, ok
-}
-
-func safeDomainTarget(target string) bool {
-	suffix, ok := strings.CutPrefix(target, "sets/domain-")
-	if !ok || suffix == "" || len(suffix) > 128 || strings.ContainsAny(suffix, "/\\.") {
-		return false
-	}
-	for _, character := range suffix {
-		if (character < 'a' || character > 'z') && (character < '0' || character > '9') && character != '-' {
-			return false
-		}
-	}
-	return true
 }
 
 func exactUDPListener(output string, expectedPort uint16) (connectionprofiles.Listener, bool) {

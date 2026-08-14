@@ -95,7 +95,7 @@ func PreparePrivilegedApply(module *Interface, ctx context.Context, request soft
 		return recheck, nil
 	})
 
-	adapter := systemubuntu.NewAtForInstall("/", observation, installHost, systemchanges.NewFreshInstallationAuthority(built.wiring.network.FreshInstallationProof()), systemubuntu.NewNativeFirewall(), cloudflareExecutor, certificateExecutor, profilesubuntu.NewDirectTLSExecutor(), subscriptionExecutor, softwareExecutor, stateModule)
+	adapter := systemubuntu.NewAtForInstall("/", observation, installHost, systemchanges.NewFreshInstallationAuthority(built.wiring.network.FreshInstallationProof()), systemubuntu.NewNativeFirewall(), cloudflareExecutor, certificateExecutor, profilesubuntu.NewRuntimeExecutor(), subscriptionExecutor, softwareExecutor, stateModule)
 	changes := systemchanges.New(adapter)
 	cancellation := systemchanges.NewCancellation()
 	go func() {

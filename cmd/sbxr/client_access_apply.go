@@ -32,7 +32,7 @@ func applyClientAccess(ctx context.Context, built *builtClientAccess, module sta
 		return systemchanges.Interface{}.Apply(nil)
 	}
 	observation := func() (systemchanges.Observation, error) { return clientAccessObservation(built) }
-	adapter := systemubuntu.NewAtForClientAccess("/", observation, host, systemubuntu.NewNativeFirewall(), built.cloudflare, profilesubuntu.NewDirectTLSExecutor(), subscription, module)
+	adapter := systemubuntu.NewAtForClientAccess("/", observation, host, systemubuntu.NewNativeFirewall(), built.cloudflare, profilesubuntu.NewRuntimeExecutor(), subscription, module)
 	changeSet, err := built.plan.changeSet(built.prepared, built.starting, built.volatileSHA, built.disk)
 	if err != nil {
 		return systemchanges.New(adapter).Apply(nil)

@@ -6,8 +6,8 @@ After=network-online.target sbxr-recovery.service
 
 [Service]
 Type=simple
-User=xray
-Group=xray
+User=root
+Group=root
 ExecStart=/usr/bin/xray run -config /etc/sbxr/xray/config.json
 Restart=on-failure
 NoNewPrivileges=true
@@ -26,8 +26,8 @@ After=network-online.target sbxr-recovery.service
 
 [Service]
 Type=simple
-User=sing-box
-Group=sing-box
+User=root
+Group=root
 ExecStart=/usr/bin/sing-box run -c /etc/sbxr/sing-box/config.json
 Restart=on-failure
 NoNewPrivileges=true

@@ -27,7 +27,7 @@ func applyManagedProvider(ctx context.Context, built *builtManagedProvider, modu
 		return systemchanges.Interface{}.Apply(nil)
 	}
 	observation := func() (systemchanges.Observation, error) { return managedProviderObservation(built) }
-	adapter := systemubuntu.NewAtForManagedProvider("/", observation, host, systemubuntu.NewNativeFirewall(), built.cloudflare, built.certificate, profilesubuntu.NewDirectTLSExecutor(), subscription, module)
+	adapter := systemubuntu.NewAtForManagedProvider("/", observation, host, systemubuntu.NewNativeFirewall(), built.cloudflare, built.certificate, profilesubuntu.NewRuntimeExecutor(), subscription, module)
 	changes := systemchanges.New(adapter)
 	if built.cloudflarePlan != nil {
 		return built.cloudflarePlan.Apply(changes, built.prepared, built.starting, built.volatileSHA, built.disk)

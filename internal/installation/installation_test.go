@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -56,38 +57,46 @@ func TestComposedInstallBuildsAndPreparesTheCompleteRevisionOnePlan(t *testing.T
 }
 
 func TestRootRuntimeArtifactsCrossStateAndSystemChangesInterfaces(t *testing.T) {
-	request := composedInstallRequest(t)
-	request.Session = strings.Repeat("b", 64)
-	cloudflareAPI := composedCloudflareAPI{}
-	built, err := buildInstallWith(t.Context(), request, buildDependencies{
-		stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
-			return request.Candidate.Staged, nil
-		},
-		network: networkpolicy.New(composedNetworkObserver{}).Evaluate, cloudflare: cloudflaretunnel.New(cloudflareAPI, composedClock{}).Plan,
-		random: newInstallEntropyReader(request.Entropy), inventory: cloudflareAPI,
-	})
-	if err != nil {
-		t.Fatal(err)
+	build := func(session string) *builtInstall {
+		request := composedInstallRequest(t)
+		request.Session = strings.Repeat(session, 64)
+		cloudflareAPI := composedCloudflareAPI{}
+		built, err := buildInstallWith(t.Context(), request, buildDependencies{
+			stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
+				return request.Candidate.Staged, nil
+			},
+			network: networkpolicy.New(composedNetworkObserver{}).Evaluate, cloudflare: cloudflaretunnel.New(cloudflareAPI, composedClock{}).Plan,
+			random: newInstallEntropyReader(request.Entropy), inventory: cloudflareAPI,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return built
 	}
-	storage := &publishingInstallState{}
-	prepared, err := prepareRootRuntimeStateForTest(t, built, state.New(storage))
-	if err != nil {
-		t.Fatal(err)
+	built := build("b")
+	apply := func(failPost bool) (*runtimeArtifactTransactionAdapter, systemchanges.ApplyResult) {
+		prepared, prepareErr := prepareRootRuntimeStateForTest(t, built, state.New(&publishingInstallState{}))
+		if prepareErr != nil {
+			t.Fatal(prepareErr)
+		}
+		changeSetID, _, _, candidateSHA, planID, planSHA, valid := prepared.SystemChangesPreparedState()
+		if !valid {
+			t.Fatal("prepared State binding unavailable")
+		}
+		volatile := strings.Repeat("9", 64)
+		adapter := &runtimeArtifactTransactionAdapter{failPost: failPost, observation: systemchanges.Observation{Status: systemchanges.NotInstalled, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, VolatileSHA256: volatile, FilesystemBytes: 20 << 30, AvailableBytes: 5 << 30, WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}}
+		changeSet, changeSetErr := systemchanges.NewChangeSet(systemchanges.ChangeSetSpec{Identity: changeSetID, Mutation: systemchanges.InstallationMutation, OutcomeOwner: systemchanges.SoftwareModule, StartingState: systemchanges.StateLineage{Status: systemchanges.NotInstalled}, TargetStateSHA256: candidateSHA, Plan: systemchanges.PlanBinding{Identity: planID, SHA256: planSHA, VolatileSHA256: volatile}, PreparedState: prepared, Steps: built.wiring.profiles.Steps(), Checks: built.wiring.profiles.Checks(), Timeouts: systemchanges.Timeouts{Step: time.Second, Check: time.Second}, Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}})
+		if changeSetErr != nil {
+			t.Fatal(changeSetErr)
+		}
+		return adapter, systemchanges.New(adapter).Apply(changeSet)
 	}
-	changeSetID, _, _, candidateSHA, planID, planSHA, valid := prepared.SystemChangesPreparedState()
-	if !valid {
-		t.Fatal("prepared State binding unavailable")
+	rolledBackAdapter, rolledBack := apply(true)
+	if rolledBack.Outcome != systemchanges.RollbackSucceeded || rolledBackAdapter.reversed != len(built.wiring.profiles.Steps()) {
+		t.Fatalf("System Changes rollback = %+v, reversed=%d", rolledBack, rolledBackAdapter.reversed)
 	}
-	volatile := strings.Repeat("9", 64)
-	adapter := &runtimeArtifactTransactionAdapter{observation: systemchanges.Observation{Status: systemchanges.NotInstalled, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, VolatileSHA256: volatile, FilesystemBytes: 20 << 30, AvailableBytes: 5 << 30, WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}}
-	step, _ := systemchanges.NewStep(systemchanges.ConnectionProfilesModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
-	steps := []systemchanges.Step{step}
-	checks := []systemchanges.Check{{Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "ROOT-RUNTIME-PRE"}, {Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PostPublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "ROOT-RUNTIME-POST"}}
-	changeSet, err := systemchanges.NewChangeSet(systemchanges.ChangeSetSpec{Identity: changeSetID, Mutation: systemchanges.InstallationMutation, OutcomeOwner: systemchanges.SoftwareModule, StartingState: systemchanges.StateLineage{Status: systemchanges.NotInstalled}, TargetStateSHA256: candidateSHA, Plan: systemchanges.PlanBinding{Identity: planID, SHA256: planSHA, VolatileSHA256: volatile}, PreparedState: prepared, Steps: steps, Checks: checks, Timeouts: systemchanges.Timeouts{Step: time.Second, Check: time.Second}, Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	result := systemchanges.New(adapter).Apply(changeSet)
+	built = build("c")
+	adapter, result := apply(false)
 	if result.Outcome != systemchanges.Completed {
 		t.Fatalf("System Changes Apply = %+v", result)
 	}
@@ -147,6 +156,10 @@ func (storage *publishingInstallState) Publish(_ []byte, candidate []byte, _ str
 	storage.document = append([]byte(nil), candidate...)
 	return append([]byte(nil), candidate...), nil
 }
+func (storage *publishingInstallState) Restore(_ []byte, prior []byte) ([]byte, error) {
+	storage.document = append([]byte(nil), prior...)
+	return append([]byte(nil), prior...), nil
+}
 
 type runtimeArtifactLock struct{}
 
@@ -155,6 +168,8 @@ func (runtimeArtifactLock) Close() error { return nil }
 type runtimeArtifactTransactionAdapter struct {
 	observation systemchanges.Observation
 	artifacts   map[string][]byte
+	failPost    bool
+	reversed    int
 }
 
 func (adapter *runtimeArtifactTransactionAdapter) Observe() (systemchanges.Observation, error) {
@@ -174,13 +189,33 @@ func (adapter *runtimeArtifactTransactionAdapter) Prepare(_ systemchanges.Execut
 func (*runtimeArtifactTransactionAdapter) Record(systemchanges.ExecutionLease, systemchanges.CheckpointRecord) error {
 	return nil
 }
-func (*runtimeArtifactTransactionAdapter) Execute(systemchanges.ExecutionLease, string, int, systemchanges.Step, time.Duration, *systemchanges.Cancellation) (systemchanges.StepEvidence, error) {
+
+func (adapter *runtimeArtifactTransactionAdapter) Execute(systemchanges.ExecutionLease, string, int, systemchanges.Step, time.Duration, *systemchanges.Cancellation) (systemchanges.StepEvidence, error) {
+	adapter.artifacts["active/xray.json"] = append([]byte(nil), adapter.artifacts["prepared/xray.json"]...)
+	adapter.artifacts["active/sing-box.json"] = append([]byte(nil), adapter.artifacts["prepared/sing-box.json"]...)
 	return systemchanges.StepEvidence{Code: "root-runtime-applied", SHA256: strings.Repeat("a", 64)}, nil
 }
-func (*runtimeArtifactTransactionAdapter) Reverse(systemchanges.ExecutionLease, string, int, systemchanges.Step, time.Duration) (systemchanges.StepEvidence, error) {
-	return systemchanges.StepEvidence{}, nil
+func (adapter *runtimeArtifactTransactionAdapter) Reverse(systemchanges.ExecutionLease, string, int, systemchanges.Step, time.Duration) (systemchanges.StepEvidence, error) {
+	adapter.reversed++
+	return systemchanges.StepEvidence{Code: "root-runtime-restored", SHA256: strings.Repeat("b", 64)}, nil
 }
-func (*runtimeArtifactTransactionAdapter) Check(systemchanges.ExecutionLease, systemchanges.Check, systemchanges.GatePhase, time.Duration) (systemchanges.HealthStatus, error) {
+func (adapter *runtimeArtifactTransactionAdapter) Check(_ systemchanges.ExecutionLease, _ systemchanges.Check, phase systemchanges.GatePhase, _ time.Duration) (systemchanges.HealthStatus, error) {
+	if adapter.failPost && phase == systemchanges.PostPublication {
+		adapter.artifacts["active/sing-box.json"] = []byte(`{"inbounds":[]}`)
+	}
+	var manifests struct {
+		Xray    *struct{ SHA256 string } `json:"xray"`
+		SingBox *struct{ SHA256 string } `json:"sing_box"`
+	}
+	if err := json.Unmarshal(adapter.artifacts["prepared/manifests.json"], &manifests); err != nil || manifests.Xray == nil || manifests.SingBox == nil {
+		return systemchanges.Unknown, err
+	}
+	for name, expected := range map[string]string{"active/xray.json": manifests.Xray.SHA256, "active/sing-box.json": manifests.SingBox.SHA256} {
+		digest := sha256.Sum256(adapter.artifacts[name])
+		if hex.EncodeToString(digest[:]) != expected {
+			return systemchanges.Failed, nil
+		}
+	}
 	return systemchanges.Healthy, nil
 }
 func (*runtimeArtifactTransactionAdapter) VerifyAgreement(systemchanges.ExecutionLease, systemchanges.Agreement, time.Duration) error {

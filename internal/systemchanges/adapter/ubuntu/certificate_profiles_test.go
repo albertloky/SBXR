@@ -36,22 +36,27 @@ func (recordingCertificateExecutor) Cleanup(string, systemchanges.CertificateAct
 type recordingProfilesExecutor struct {
 	events                 *[]string
 	validation, activation error
+	healthy                bool
+	checked                *string
 }
 
-func (executor recordingProfilesExecutor) ValidateConfiguration(string, string, string, time.Duration) error {
+func (executor recordingProfilesExecutor) ValidateConfiguration(string, string, string, systemchanges.ConnectionProfilesRuntimeBinding, time.Duration) error {
 	*executor.events = append(*executor.events, "configuration-validate")
 	return executor.validation
 }
-func (executor recordingProfilesExecutor) Activate(string, string, string, time.Duration) error {
+func (executor recordingProfilesExecutor) Activate(string, string, string, systemchanges.ConnectionProfilesRuntimeBinding, time.Duration) error {
 	*executor.events = append(*executor.events, "restart-and-prove-three")
 	return executor.activation
 }
-func (executor recordingProfilesExecutor) Restore(string, string, string, time.Duration) error {
+func (executor recordingProfilesExecutor) Restore(string, string, string, systemchanges.ConnectionProfilesRuntimeBinding, time.Duration) error {
 	*executor.events = append(*executor.events, "restart-and-reprove-prior-three")
 	return nil
 }
-func (recordingProfilesExecutor) Check(string, string, string, string, time.Duration) (bool, error) {
-	return true, nil
+func (executor recordingProfilesExecutor) Check(_, _, _, code string, _ systemchanges.ConnectionProfilesRuntimeBinding, _ time.Duration) (bool, error) {
+	if executor.checked != nil {
+		*executor.checked = code
+	}
+	return executor.healthy, nil
 }
 
 func TestDomainActivationOrchestrationRefusesBeforeSwitchAndRestoresAfterConsumerFailure(t *testing.T) {
@@ -62,17 +67,18 @@ func TestDomainActivationOrchestrationRefusesBeforeSwitchAndRestoresAfterConsume
 	}
 	var events []string
 	certificate := recordingCertificateExecutor{events: &events}
-	profiles := recordingProfilesExecutor{events: &events, validation: errors.New("configuration refused")}
-	if _, err := executeDomainCertificateActivation("/", certificate, profiles, step, time.Minute, systemchanges.NewCancellation()); err == nil || strings.Join(events, ",") != "configuration-validate" {
+	profiles := recordingProfilesExecutor{events: &events, validation: errors.New("configuration refused"), healthy: true}
+	runtime := systemchanges.ConnectionProfilesRuntimeBinding{SingBoxSHA256: strings.Repeat("d", 64)}
+	if _, err := executeDomainCertificateActivation("/", certificate, profiles, runtime, step, time.Minute, systemchanges.NewCancellation()); err == nil || strings.Join(events, ",") != "configuration-validate" {
 		t.Fatalf("configuration refusal events=%#v err=%v", events, err)
 	}
 
 	events = nil
 	profiles.validation, profiles.activation = nil, errors.New("one consumer refused")
-	if _, err := executeDomainCertificateActivation("/", certificate, profiles, step, time.Minute, systemchanges.NewCancellation()); err == nil || strings.Join(events, ",") != "configuration-validate,certificate-switch,restart-and-prove-three" {
+	if _, err := executeDomainCertificateActivation("/", certificate, profiles, runtime, step, time.Minute, systemchanges.NewCancellation()); err == nil || strings.Join(events, ",") != "configuration-validate,certificate-switch,restart-and-prove-three" {
 		t.Fatalf("consumer refusal events=%#v err=%v", events, err)
 	}
-	if _, err := reverseDomainCertificateActivation("/", certificate, profiles, step, strings.NewReader(`{}`), time.Minute); err != nil {
+	if _, err := reverseDomainCertificateActivation("/", certificate, profiles, runtime, step, strings.NewReader(`{}`), time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	if got := strings.Join(events, ","); got != "configuration-validate,certificate-switch,restart-and-prove-three,certificate-restore,restart-and-reprove-prior-three" || strings.Contains(got, "order") {

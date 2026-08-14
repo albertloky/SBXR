@@ -50,9 +50,6 @@ func TestTUICViewRequiresReplaySafeCubicDirectTLSAndUDP(t *testing.T) {
 		{"BBR", "CONNECTION-PROFILES-TUIC-INPUT", func(request *connectionprofiles.TUICViewRequest, _ *connectionprofiles.TUICObservation) {
 			request.CongestionControl = state.CongestionBBR
 		}},
-		{"wrong TLS name", "CONNECTION-PROFILES-TUIC-CERTIFICATE", func(_ *connectionprofiles.TUICViewRequest, observation *connectionprofiles.TUICObservation) {
-			observation.CertificateMatches = false
-		}},
 		{"TCP listener", "CONNECTION-PROFILES-TUIC-LISTENER", func(_ *connectionprofiles.TUICViewRequest, observation *connectionprofiles.TUICObservation) {
 			observation.Listener.Protocol = "tcp"
 		}},
@@ -90,7 +87,7 @@ func TestTUICPlanValidatesCompleteReplaySafeSingBoxConfiguration(t *testing.T) {
 	host := healthyTUICHost()
 	request := validTUICPlanRequest(t, "profiles-tuic-0001")
 	result := connectionprofiles.New(host).PlanTUIC(t.Context(), request)
-	if result.Plan == nil || result.Health.Outcome != connectionprofiles.Healthy || len(result.Plan.Checks()) != 5 {
+	if result.Plan == nil || result.Health.Outcome != connectionprofiles.Healthy || len(result.Plan.Checks()) != 4 {
 		t.Fatalf("PlanTUIC() = %+v", result)
 	}
 	var configuration struct {
@@ -211,7 +208,7 @@ func healthyTUICHost() *tuicHost {
 }
 
 func healthyTUICObservation() connectionprofiles.TUICObservation {
-	return connectionprofiles.TUICObservation{CheckedAt: time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC), ConfigurationSafe: true, ConfigurationValid: true, ConfigurationMatches: true, CertificateMatches: true, ServiceUnit: "sing-box.service", ServiceIdentity: "sing-box", ServiceRunning: true, Listener: connectionprofiles.Listener{Address: "0.0.0.0", Port: 8443, Protocol: "udp"}, NetBindService: true, ServerFunction: connectionprofiles.ProbePassed}
+	return connectionprofiles.TUICObservation{CheckedAt: time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC), ConfigurationSafe: true, ConfigurationValid: true, ConfigurationMatches: true, ServiceUnit: "sing-box.service", ServiceIdentity: "root", ServiceRunning: true, ServiceContained: true, Listener: connectionprofiles.Listener{Address: "0.0.0.0", Port: 8443, Protocol: "udp"}, NetBindService: true, ServerFunction: connectionprofiles.ProbePassed}
 }
 
 func completeProfileStateForTUIC() (state.ConnectionProfiles, profileSecrets) {

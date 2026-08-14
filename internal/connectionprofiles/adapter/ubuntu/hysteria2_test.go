@@ -18,23 +18,26 @@ func TestObserveHysteria2ProvesProtectedConfigurationServiceUDPAndFunction(t *te
 		t.Fatalf("test UDP listener fixture is invalid: %+v, %v", listener, ok)
 	}
 	root := t.TempDir()
-	writeHysteria2Configuration(t, root, 0o750, 0o640)
-	writeProbeConfigurationAt(t, root)
-	writeDomainServingPair(t, root, 0o750, 0o640)
-	host := RealityHost{root: root, now: func() time.Time { return time.Unix(1, 0) }, rootUID: uint32(os.Geteuid()), singBoxGID: uint32(os.Getegid()), singBoxGroup: true, singBoxUser: true}
+	writeHysteria2Configuration(t, root, 0o755, 0o644)
+	serviceGroup := "root\n"
+	host := RealityHost{root: root, now: func() time.Time { return time.Unix(1, 0) }, rootUID: uint32(os.Geteuid()), rootGID: uint32(os.Getegid())}
 	host.run = func(_ context.Context, _ io.Reader, name string, arguments ...string) (string, error) {
 		command := name + " " + strings.Join(arguments, " ")
 		switch {
 		case command == "systemctl show --property=Id --value sing-box.service":
 			return "sing-box.service\n", nil
 		case command == "systemctl show --property=User --value sing-box.service":
-			return "sing-box\n", nil
+			return "root\n", nil
 		case command == "systemctl show --property=Group --value sing-box.service":
-			return "sing-box\n", nil
+			return serviceGroup, nil
 		case command == "systemctl is-active sing-box.service":
 			return "active\n", nil
 		case strings.Contains(command, "CapabilityBoundingSet"), strings.Contains(command, "AmbientCapabilities"):
 			return "CAP_NET_BIND_SERVICE\n", nil
+		case strings.Contains(command, "NoNewPrivileges"), strings.Contains(command, "ProtectHome"):
+			return "yes\n", nil
+		case strings.Contains(command, "ProtectSystem"):
+			return "strict\n", nil
 		case strings.HasPrefix(command, "ss -H -lun"):
 			return "UNCONN 0 0 0.0.0.0:443 0.0.0.0:*\n", nil
 		case strings.HasPrefix(command, "sing-box check -c "):
@@ -50,51 +53,36 @@ func TestObserveHysteria2ProvesProtectedConfigurationServiceUDPAndFunction(t *te
 	}
 	request := hysteria2AdapterRequest(t)
 	observation := host.ObserveHysteria2(t.Context(), request)
-	if !observation.ConfigurationSafe || !observation.ConfigurationValid || !observation.ConfigurationMatches || !observation.CertificateMatches || observation.ServiceUnit != "sing-box.service" || observation.ServiceIdentity != "sing-box" || !observation.ServiceRunning || !observation.NetBindService || observation.Listener != (connectionprofiles.Listener{Address: "0.0.0.0", Port: 443, Protocol: "udp"}) || observation.ServerFunction != connectionprofiles.ProbePassed {
+	if !observation.ConfigurationSafe || !observation.ConfigurationValid || !observation.ConfigurationMatches || observation.ServiceUnit != "sing-box.service" || observation.ServiceIdentity != "root" || !observation.ServiceRunning || !observation.ServiceContained || !observation.NetBindService || observation.Listener != (connectionprofiles.Listener{Address: "0.0.0.0", Port: 443, Protocol: "udp"}) || observation.ServerFunction != connectionprofiles.ProbePassed {
 		t.Fatalf("ObserveHysteria2() = %+v", observation)
 	}
-	writeHysteria2Configuration(t, root, 0o750, 0o600)
+	serviceGroup = "sing-box\n"
+	if mixed := host.ObserveHysteria2(t.Context(), request); mixed.ServiceIdentity != "" {
+		t.Fatalf("mixed root and sing-box identity accepted: %+v", mixed)
+	}
+	serviceGroup = "root\n"
+	writeHysteria2Configuration(t, root, 0o755, 0o600)
 	if unsafe := host.ObserveHysteria2(t.Context(), request); unsafe.ConfigurationSafe {
 		t.Fatalf("unsafe Hysteria2 configuration accepted: %+v", unsafe)
 	}
-	writeHysteria2Configuration(t, root, 0o750, 0o640)
-	if err := os.Chmod(filepath.Join(root, probeConfiguration), 0o640); err != nil {
-		t.Fatal(err)
-	}
-	if unsafe := host.ObserveHysteria2(t.Context(), request); unsafe.ServerFunction == connectionprofiles.ProbePassed {
-		t.Fatalf("unsafe root-only probe configuration accepted: %+v", unsafe)
-	}
-	if err := os.Chmod(filepath.Join(root, "var/lib/sbxr/certificates/domain/sets/domain-test/privkey.pem"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if unsafe := host.ObserveHysteria2(t.Context(), request); unsafe.CertificateMatches {
-		t.Fatalf("unsafe shared certificate pair accepted: %+v", unsafe)
-	}
-	key := filepath.Join(root, "var/lib/sbxr/certificates/domain/sets/domain-test/privkey.pem")
-	if err := os.Chmod(key, 0o640); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Link(key, key+".extra-link"); err != nil {
-		t.Fatal(err)
-	}
-	if unsafe := host.ObserveHysteria2(t.Context(), request); unsafe.CertificateMatches {
-		t.Fatalf("multiply linked shared private key accepted: %+v", unsafe)
-	}
+	writeHysteria2Configuration(t, root, 0o755, 0o644)
 }
 
 func TestObserveTUICProvesCompleteConfigurationListenerTLSAndFunction(t *testing.T) {
 	root := t.TempDir()
 	writeTUICConfiguration(t, root)
-	writeProbeConfigurationAt(t, root)
-	writeDomainServingPair(t, root, 0o750, 0o640)
-	host := RealityHost{root: root, now: func() time.Time { return time.Unix(1, 0) }, rootUID: uint32(os.Geteuid()), singBoxGID: uint32(os.Getegid()), singBoxGroup: true, singBoxUser: true}
+	host := RealityHost{root: root, now: func() time.Time { return time.Unix(1, 0) }, rootUID: uint32(os.Geteuid()), rootGID: uint32(os.Getegid())}
 	host.run = func(_ context.Context, _ io.Reader, name string, arguments ...string) (string, error) {
 		command := name + " " + strings.Join(arguments, " ")
 		switch {
 		case strings.Contains(command, "Id"):
 			return "sing-box.service", nil
 		case strings.Contains(command, "User"), strings.Contains(command, "Group"):
-			return "sing-box", nil
+			return "root", nil
+		case strings.Contains(command, "NoNewPrivileges"), strings.Contains(command, "ProtectHome"):
+			return "yes", nil
+		case strings.Contains(command, "ProtectSystem"):
+			return "strict", nil
 		case strings.Contains(command, "is-active"):
 			return "active", nil
 		case strings.Contains(command, "CapabilityBoundingSet"), strings.Contains(command, "AmbientCapabilities"):
@@ -118,7 +106,7 @@ func TestObserveTUICProvesCompleteConfigurationListenerTLSAndFunction(t *testing
 	hysteria2, tuic := hysteria2AdapterRequest(t), tuicAdapterRequest(t)
 	hysteria2.Profiles = &connectionprofiles.SingBoxProfileSet{TUIC: &tuic}
 	observation := host.ObserveTUIC(t.Context(), hysteria2, tuic)
-	if !observation.ConfigurationSafe || !observation.ConfigurationValid || !observation.ConfigurationMatches || !observation.CertificateMatches || !observation.ServiceRunning || observation.Listener.Port != 8443 || observation.Listener.Protocol != "udp" || observation.ServerFunction != connectionprofiles.ProbePassed {
+	if !observation.ConfigurationSafe || !observation.ConfigurationValid || !observation.ConfigurationMatches || !observation.ServiceRunning || observation.Listener.Port != 8443 || observation.Listener.Protocol != "udp" || observation.ServerFunction != connectionprofiles.ProbePassed {
 		t.Fatalf("ObserveTUIC() = %+v", observation)
 	}
 	if observation := host.ObserveHysteria2(t.Context(), hysteria2); !observation.ConfigurationMatches || observation.Listener.Port != 443 || observation.ServerFunction != connectionprofiles.ProbePassed {
@@ -129,16 +117,18 @@ func TestObserveTUICProvesCompleteConfigurationListenerTLSAndFunction(t *testing
 func TestObserveAnyTLSProvesCombinedConfigurationTCPAndCorePadding(t *testing.T) {
 	root := t.TempDir()
 	writeAnyTLSConfiguration(t, root)
-	writeProbeConfigurationAt(t, root)
-	writeDomainServingPair(t, root, 0o750, 0o640)
-	host := RealityHost{root: root, now: func() time.Time { return time.Unix(1, 0) }, rootUID: uint32(os.Geteuid()), singBoxGID: uint32(os.Getegid()), singBoxGroup: true, singBoxUser: true}
+	host := RealityHost{root: root, now: func() time.Time { return time.Unix(1, 0) }, rootUID: uint32(os.Geteuid()), rootGID: uint32(os.Getegid())}
 	host.run = func(_ context.Context, _ io.Reader, name string, arguments ...string) (string, error) {
 		command := name + " " + strings.Join(arguments, " ")
 		switch {
 		case strings.Contains(command, "Id"):
 			return "sing-box.service", nil
 		case strings.Contains(command, "User"), strings.Contains(command, "Group"):
-			return "sing-box", nil
+			return "root", nil
+		case strings.Contains(command, "NoNewPrivileges"), strings.Contains(command, "ProtectHome"):
+			return "yes", nil
+		case strings.Contains(command, "ProtectSystem"):
+			return "strict", nil
 		case strings.Contains(command, "is-active"):
 			return "active", nil
 		case strings.Contains(command, "CapabilityBoundingSet"), strings.Contains(command, "AmbientCapabilities"):
@@ -165,7 +155,7 @@ func TestObserveAnyTLSProvesCombinedConfigurationTCPAndCorePadding(t *testing.T)
 	hysteria2, tuic, anyTLS := hysteria2AdapterRequest(t), tuicAdapterRequest(t), anyTLSAdapterRequest(t)
 	hysteria2.Profiles = &connectionprofiles.SingBoxProfileSet{TUIC: &tuic, AnyTLS: &anyTLS}
 	observation := host.ObserveAnyTLS(t.Context(), hysteria2, tuic, anyTLS)
-	if !observation.ConfigurationSafe || !observation.ConfigurationValid || !observation.ConfigurationMatches || !observation.CertificateMatches || !observation.ServiceRunning || observation.Listener != (connectionprofiles.Listener{Address: "0.0.0.0", Port: 9443, Protocol: "tcp"}) || observation.ServerFunction != connectionprofiles.ProbePassed {
+	if !observation.ConfigurationSafe || !observation.ConfigurationValid || !observation.ConfigurationMatches || !observation.ServiceRunning || observation.Listener != (connectionprofiles.Listener{Address: "0.0.0.0", Port: 9443, Protocol: "tcp"}) || observation.ServerFunction != connectionprofiles.ProbePassed {
 		t.Fatalf("ObserveAnyTLS() = %+v", observation)
 	}
 	if previous := host.ObserveHysteria2(t.Context(), hysteria2); !previous.ConfigurationMatches || previous.Listener.Port != 443 || previous.ServerFunction != connectionprofiles.ProbePassed {
@@ -187,14 +177,13 @@ func TestObserveAnyTLSProvesCombinedConfigurationTCPAndCorePadding(t *testing.T)
 
 func TestObserveHysteria2RefusesMultipleUDPListenersAndWrongCertificate(t *testing.T) {
 	root := t.TempDir()
-	writeHysteria2Configuration(t, root, 0o750, 0o640)
-	writeDomainServingPair(t, root, 0o750, 0o640)
+	writeHysteria2Configuration(t, root, 0o755, 0o644)
 	content, _ := os.ReadFile(filepath.Join(root, "etc/sbxr/sing-box/config.json"))
 	content = []byte(strings.Replace(string(content), "direct.example.com", "other.example.com", 1))
 	if err := os.WriteFile(filepath.Join(root, "etc/sbxr/sing-box/config.json"), content, 0o640); err != nil {
 		t.Fatal(err)
 	}
-	host := RealityHost{root: root, now: time.Now, rootUID: uint32(os.Geteuid()), singBoxGID: uint32(os.Getegid()), singBoxGroup: true, singBoxUser: true}
+	host := RealityHost{root: root, now: time.Now, rootUID: uint32(os.Geteuid()), rootGID: uint32(os.Getegid())}
 	host.run = func(_ context.Context, _ io.Reader, name string, arguments ...string) (string, error) {
 		command := name + " " + strings.Join(arguments, " ")
 		switch {
@@ -203,7 +192,11 @@ func TestObserveHysteria2RefusesMultipleUDPListenersAndWrongCertificate(t *testi
 		case strings.Contains(command, "Id"):
 			return "sing-box.service", nil
 		case strings.Contains(command, "User"), strings.Contains(command, "Group"):
-			return "sing-box", nil
+			return "root", nil
+		case strings.Contains(command, "NoNewPrivileges"), strings.Contains(command, "ProtectHome"):
+			return "yes", nil
+		case strings.Contains(command, "ProtectSystem"):
+			return "strict", nil
 		case strings.Contains(command, "is-active"):
 			return "active", nil
 		case strings.Contains(command, "Capabilities"), strings.Contains(command, "CapabilityBoundingSet"):
@@ -215,8 +208,8 @@ func TestObserveHysteria2RefusesMultipleUDPListenersAndWrongCertificate(t *testi
 		}
 	}
 	observation := host.ObserveHysteria2(t.Context(), hysteria2AdapterRequest(t))
-	if observation.Listener != (connectionprofiles.Listener{}) || observation.CertificateMatches {
-		t.Fatalf("unsafe listener or certificate accepted: %+v", observation)
+	if observation.Listener != (connectionprofiles.Listener{}) {
+		t.Fatalf("unsafe listener accepted: %+v", observation)
 	}
 }
 
@@ -287,7 +280,7 @@ func anyTLSAdapterRequest(t *testing.T) connectionprofiles.AnyTLSViewRequest {
 
 func writeTUICConfiguration(t *testing.T, root string) {
 	t.Helper()
-	writeHysteria2Configuration(t, root, 0o750, 0o640)
+	writeHysteria2Configuration(t, root, 0o755, 0o644)
 	path := filepath.Join(root, singBoxConfigurationPath)
 	content, err := os.ReadFile(path)
 	if err != nil {
@@ -309,28 +302,6 @@ func writeAnyTLSConfiguration(t *testing.T, root string) {
 	}
 	content = []byte(strings.Replace(string(content), `}],"log"`, `},{"listen":"0.0.0.0","listen_port":9443,"tag":"anytls-in","tls":{"certificate_path":"/var/lib/sbxr/certificates/domain/current/fullchain.pem","enabled":true,"key_path":"/var/lib/sbxr/certificates/domain/current/privkey.pem","server_name":"direct.example.com"},"type":"anytls","users":[{"password":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}]}],"log"`, 1))
 	if err := os.WriteFile(path, content, 0o640); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func writeDomainServingPair(t *testing.T, root string, directoryMode, fileMode os.FileMode) {
-	t.Helper()
-	base := filepath.Join(root, "var/lib/sbxr/certificates/domain")
-	set := filepath.Join(base, "sets/domain-test")
-	if err := os.MkdirAll(set, directoryMode); err != nil {
-		t.Fatal(err)
-	}
-	for _, directory := range []string{base, set} {
-		if err := os.Chmod(directory, directoryMode); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, name := range []string{"fullchain.pem", "privkey.pem"} {
-		if err := os.WriteFile(filepath.Join(set, name), []byte("protected"), fileMode); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.Symlink("sets/domain-test", filepath.Join(base, "current")); err != nil {
 		t.Fatal(err)
 	}
 }

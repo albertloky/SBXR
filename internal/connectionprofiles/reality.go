@@ -137,6 +137,7 @@ type RealityObservation struct {
 	ServiceUnit       string
 	ServiceIdentity   string
 	ServiceRunning    bool
+	ServiceContained  bool
 	ConfigurationSafe bool
 	Listener          Listener
 	NetBindService    bool
@@ -281,11 +282,11 @@ func (module Interface) View(ctx context.Context, request ViewRequest) ViewResul
 	}
 	if request.Revision > 0 {
 		if !observation.ConfigurationSafe {
-			result.Health = blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-CONFIGURATION", "The protected Xray configuration is unsafe", "ownership, mode, path, or symbolic-link proof failed", "root-owned protected material under /etc/sbxr")
+			result.Health = blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-CONFIGURATION", "The root-runtime Xray configuration is unsafe", "ownership, mode, path, or symbolic-link proof failed", "root:root 0755/0644 material under /etc/sbxr")
 			return result
 		}
-		if observation.ServiceUnit != "xray.service" || observation.ServiceIdentity != "xray" || !observation.ServiceRunning {
-			result.Health = blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-SERVICE", "The fixed Xray service is not running safely", "xray.service or its distinct non-root identity disagrees", "running xray.service as xray")
+		if !rootServiceHealthy(observation.ServiceUnit, observation.ServiceIdentity, observation.ServiceRunning, observation.ServiceContained, "xray.service") {
+			result.Health = blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-SERVICE", "The fixed Xray service is not running safely", "xray.service root identity, state, or containment disagrees", "running contained xray.service as root")
 			return result
 		}
 		if !publicTCPListener(observation.Listener, request.Port) {
@@ -303,6 +304,10 @@ func (module Interface) View(ctx context.Context, request ViewRequest) ViewResul
 	}
 	result.Health = Health{Time: observation.CheckedAt, Module: "Connection Profiles", Profile: profile.Name, Outcome: Healthy, Code: "CONNECTION-PROFILES-REALITY-HEALTHY", NextActions: nextActions}
 	return result
+}
+
+func rootServiceHealthy(unit, identity string, running, contained bool, expectedUnit string) bool {
+	return unit == expectedUnit && identity == "root" && running && contained
 }
 
 func selectedPort(port, preferred uint16, reviewedAlternative bool) bool {
@@ -398,8 +403,8 @@ func (module Interface) buildSingBoxPlan(ctx context.Context, spec singBoxPlanSp
 	if err != nil {
 		return nil, "TRANSACTION"
 	}
-	checks := make([]systemchanges.Check, 0, 5)
-	for _, suffix := range []string{"CONFIGURATION", "LISTENER", "SERVICE", "CERTIFICATE", "FUNCTION"} {
+	checks := make([]systemchanges.Check, 0, 4)
+	for _, suffix := range []string{"CONFIGURATION", "LISTENER", "SERVICE", "FUNCTION"} {
 		phase := systemchanges.PrePublication
 		if suffix == "FUNCTION" {
 			phase = systemchanges.PostPublication
@@ -487,16 +492,16 @@ type PlanResult struct {
 }
 
 type xrayPlanSpec struct {
-	identityPrefix, description, profile, codePrefix, postCheck, version string
-	revision                                                             uint64
-	changeSet, startingStateSHA256, desiredStateSHA256                   string
-	volatileSHA256                                                       string
-	configuration                                                        []byte
-	request                                                              any
-	reality                                                              ViewRequest
-	xhttp                                                                *XHTTPViewRequest
-	websocket                                                            *WebSocketViewRequest
-	checkedAt                                                            time.Time
+	identityPrefix, description, profile, codePrefix, version string
+	revision                                                  uint64
+	changeSet, startingStateSHA256, desiredStateSHA256        string
+	volatileSHA256                                            string
+	configuration                                             []byte
+	request                                                   any
+	reality                                                   ViewRequest
+	xhttp                                                     *XHTTPViewRequest
+	websocket                                                 *WebSocketViewRequest
+	checkedAt                                                 time.Time
 }
 
 func (module Interface) buildXrayPlan(ctx context.Context, spec xrayPlanSpec) (*Plan, *Health) {
@@ -519,7 +524,7 @@ func (module Interface) buildXrayPlan(ctx context.Context, spec xrayPlanSpec) (*
 		{Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: spec.codePrefix + "-CONFIGURATION"},
 		{Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: spec.codePrefix + "-LISTENER"},
 		{Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: spec.codePrefix + "-SERVICE"},
-		{Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PostPublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: spec.codePrefix + "-" + spec.postCheck},
+		{Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PostPublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: spec.codePrefix + "-CONFIGURATION"},
 	}
 	binding := struct {
 		Request         any
@@ -551,7 +556,7 @@ func (module Interface) Plan(ctx context.Context, request PlanRequest) PlanResul
 	}
 	plan, failure := module.buildXrayPlan(ctx, xrayPlanSpec{
 		identityPrefix: "profiles-reality-", description: fmt.Sprintf("validate and activate VLESS REALITY Vision on %d/TCP through xray.service, then prove configuration, listener, service, and REALITY security; rollback restores the prior configuration", request.View.Port),
-		profile: view.Profile.Name, codePrefix: "CONNECTION-PROFILES-REALITY", postCheck: "SECURITY", version: request.View.XrayVersion,
+		profile: view.Profile.Name, codePrefix: "CONNECTION-PROFILES-REALITY", version: request.View.XrayVersion,
 		revision: request.View.Revision, changeSet: request.ChangeSet, startingStateSHA256: request.StartingStateSHA256, desiredStateSHA256: request.DesiredStateSHA256,
 		volatileSHA256: view.VolatileSHA256, configuration: configuration, request: request, reality: request.View, checkedAt: view.Health.Time,
 	})

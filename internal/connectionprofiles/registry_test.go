@@ -207,7 +207,7 @@ func TestRegistryPlanDisablesAndReenablesEveryProfileWithoutChangingCredentials(
 			candidate.Exposure = registryPolicyContribution(candidate)
 			host := healthyRegistryHost(current)
 			disabled := connectionprofiles.New(host).PlanRegistry(t.Context(), connectionprofiles.RegistryPlanRequest{Current: current, Candidate: candidate, ChangeSet: fmt.Sprintf("profiles-registry-disable-%02d", index), StartingStateSHA256: strings.Repeat("a", 64), DesiredStateSHA256: strings.Repeat("b", 64)})
-			if disabled.Plan == nil || disabled.Health.Outcome != connectionprofiles.Healthy || !registryPlanIsReversible(disabled.Plan) || len(disabled.Plan.Checks()) != 5 {
+			if disabled.Plan == nil || disabled.Health.Outcome != connectionprofiles.Healthy || !registryPlanIsReversible(disabled.Plan) || len(disabled.Plan.Checks()) != 4 {
 				t.Fatalf("disable Plan = %+v", disabled)
 			}
 			profiles, secrets := completeProfileStateForAnyTLS()

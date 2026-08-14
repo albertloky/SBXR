@@ -53,14 +53,14 @@ func TestHysteria2ViewRequiresDirectTLSUDPAndSafeService(t *testing.T) {
 		name, code string
 		edit       func(*connectionprofiles.Hysteria2ViewRequest, *connectionprofiles.Hysteria2Observation)
 	}{
-		{"wrong certificate identity", "CONNECTION-PROFILES-HYSTERIA2-CERTIFICATE", func(_ *connectionprofiles.Hysteria2ViewRequest, observation *connectionprofiles.Hysteria2Observation) {
-			observation.CertificateMatches = false
-		}},
 		{"TCP listener", "CONNECTION-PROFILES-HYSTERIA2-LISTENER", func(_ *connectionprofiles.Hysteria2ViewRequest, observation *connectionprofiles.Hysteria2Observation) {
 			observation.Listener.Protocol = "tcp"
 		}},
 		{"service failure", "CONNECTION-PROFILES-HYSTERIA2-SERVICE", func(_ *connectionprofiles.Hysteria2ViewRequest, observation *connectionprofiles.Hysteria2Observation) {
 			observation.ServiceRunning = false
+		}},
+		{"old service identity", "CONNECTION-PROFILES-HYSTERIA2-SERVICE", func(_ *connectionprofiles.Hysteria2ViewRequest, observation *connectionprofiles.Hysteria2Observation) {
+			observation.ServiceIdentity = "sing-box"
 		}},
 		{"unsafe configuration", "CONNECTION-PROFILES-HYSTERIA2-CONFIGURATION", func(_ *connectionprofiles.Hysteria2ViewRequest, observation *connectionprofiles.Hysteria2Observation) {
 			observation.ConfigurationSafe = false
@@ -103,7 +103,7 @@ func TestHysteria2PlanValidatesExactSingBoxConfiguration(t *testing.T) {
 	host := healthyHysteria2Host()
 	request := validHysteria2PlanRequest(t, "profiles-hysteria2-0001")
 	result := connectionprofiles.New(host).PlanHysteria2(t.Context(), request)
-	if result.Plan == nil || result.Health.Outcome != connectionprofiles.Healthy || len(result.Plan.Steps()) != 1 || len(result.Plan.Checks()) != 5 {
+	if result.Plan == nil || result.Health.Outcome != connectionprofiles.Healthy || len(result.Plan.Steps()) != 1 || len(result.Plan.Checks()) != 4 {
 		t.Fatalf("PlanHysteria2() = %+v", result)
 	}
 	var configuration struct {
@@ -235,7 +235,7 @@ func healthyHysteria2Host() *hysteria2Host {
 }
 
 func healthyHysteria2Observation() connectionprofiles.Hysteria2Observation {
-	return connectionprofiles.Hysteria2Observation{CheckedAt: time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC), ConfigurationSafe: true, ConfigurationValid: true, ConfigurationMatches: true, CertificateMatches: true, ServiceUnit: "sing-box.service", ServiceIdentity: "sing-box", ServiceRunning: true, Listener: connectionprofiles.Listener{Address: "0.0.0.0", Port: 443, Protocol: "udp"}, NetBindService: true, ServerFunction: connectionprofiles.ProbePassed}
+	return connectionprofiles.Hysteria2Observation{CheckedAt: time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC), ConfigurationSafe: true, ConfigurationValid: true, ConfigurationMatches: true, ServiceUnit: "sing-box.service", ServiceIdentity: "root", ServiceRunning: true, ServiceContained: true, Listener: connectionprofiles.Listener{Address: "0.0.0.0", Port: 443, Protocol: "udp"}, NetBindService: true, ServerFunction: connectionprofiles.ProbePassed}
 }
 
 func completeProfileStateForHysteria2() (state.ConnectionProfiles, profileSecrets) {

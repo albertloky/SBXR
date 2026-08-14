@@ -118,12 +118,10 @@ func (module Interface) viewAnyTLS(ctx context.Context, hysteria2 Hysteria2ViewR
 	}
 	if checkActive && request.Revision > 0 {
 		switch {
-		case observation.ConfigurationSafe && observation.ConfigurationValid && !observation.CertificateMatches:
-			result.Health = blockedAnyTLS(observation.CheckedAt, Failed, "CONNECTION-PROFILES-ANYTLS-CERTIFICATE", "The active certificate binding does not agree", "the shared certificate protection or identity differs", request.ServerName+" through the shared active Direct TLS pair")
 		case !observation.ConfigurationSafe || !observation.ConfigurationValid || !observation.ConfigurationMatches:
 			result.Health = blockedAnyTLS(observation.CheckedAt, Failed, "CONNECTION-PROFILES-ANYTLS-CONFIGURATION", "The protected sing-box configuration is unsafe, invalid, or different", "ownership, native validity, exact active agreement, or core padding ownership failed", "the reviewed complete Hysteria2, TUIC, and AnyTLS configuration without copied padding")
-		case observation.ServiceUnit != "sing-box.service" || observation.ServiceIdentity != "sing-box" || !observation.ServiceRunning:
-			result.Health = blockedAnyTLS(observation.CheckedAt, Failed, "CONNECTION-PROFILES-ANYTLS-SERVICE", "The fixed sing-box service is not running safely", "sing-box.service or its non-root identity disagrees", "running sing-box.service as sing-box")
+		case !rootServiceHealthy(observation.ServiceUnit, observation.ServiceIdentity, observation.ServiceRunning, observation.ServiceContained, "sing-box.service"):
+			result.Health = blockedAnyTLS(observation.CheckedAt, Failed, "CONNECTION-PROFILES-ANYTLS-SERVICE", "The fixed sing-box service is not running safely", "sing-box.service root identity, state, or containment disagrees", "running contained sing-box.service as root")
 		case !publicTCPListener(observation.Listener, request.Port):
 			result.Health = blockedAnyTLS(observation.CheckedAt, Failed, "CONNECTION-PROFILES-ANYTLS-LISTENER", "The AnyTLS listener disagrees", fmt.Sprintf("%s/%d/%s", observation.Listener.Address, observation.Listener.Port, observation.Listener.Protocol), "public 9443/TCP")
 		case observation.NetBindService != singBoxNeedsCapability(hysteria2, tuic, request) || !singBoxNeedsCapability(hysteria2, tuic, request) && !observation.NoCapabilities:

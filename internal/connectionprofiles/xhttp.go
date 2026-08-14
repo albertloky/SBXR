@@ -84,6 +84,7 @@ type XHTTPObservation struct {
 	ServiceUnit        string
 	ServiceIdentity    string
 	ServiceRunning     bool
+	ServiceContained   bool
 	NoCapabilities     bool
 	Listener           Listener
 }
@@ -150,11 +151,11 @@ func (module Interface) viewXHTTP(ctx context.Context, request XHTTPViewRequest,
 	}
 	if request.Revision > 0 {
 		if !observation.ConfigurationSafe || !observation.ConfigurationValid {
-			result.Health = blockedXHTTP(observation.CheckedAt, Failed, "CONNECTION-PROFILES-XHTTP-CONFIGURATION", "The protected Xray configuration is unsafe", "ownership, mode, path, or symbolic-link proof failed", "root-owned protected material under /etc/sbxr")
+			result.Health = blockedXHTTP(observation.CheckedAt, Failed, "CONNECTION-PROFILES-XHTTP-CONFIGURATION", "The root-runtime Xray configuration is unsafe", "ownership, mode, path, or symbolic-link proof failed", "root:root 0755/0644 material under /etc/sbxr")
 			return result
 		}
-		if observation.ServiceUnit != "xray.service" || observation.ServiceIdentity != "xray" || !observation.ServiceRunning {
-			result.Health = blockedXHTTP(observation.CheckedAt, Failed, "CONNECTION-PROFILES-XHTTP-SERVICE", "The fixed Xray service is not running safely", "xray.service or its distinct non-root identity disagrees", "running xray.service as xray")
+		if !rootServiceHealthy(observation.ServiceUnit, observation.ServiceIdentity, observation.ServiceRunning, observation.ServiceContained, "xray.service") {
+			result.Health = blockedXHTTP(observation.CheckedAt, Failed, "CONNECTION-PROFILES-XHTTP-SERVICE", "The fixed Xray service is not running safely", "xray.service root identity, state, or containment disagrees", "running contained xray.service as root")
 			return result
 		}
 		if observation.Listener != (Listener{Address: "127.0.0.1", Port: request.OriginPort, Protocol: "tcp"}) {
@@ -213,7 +214,7 @@ func (module Interface) PlanXHTTP(ctx context.Context, request XHTTPPlanRequest)
 	volatileSHA256 := hex.EncodeToString(volatile[:])
 	plan, failure := module.buildXrayPlan(ctx, xrayPlanSpec{
 		identityPrefix: "profiles-xhttp-", description: "validate and activate VLESS XHTTP on 127.0.0.1:11080/TCP through xray.service and its typed Cloudflare route; rollback restores the prior configuration",
-		profile: view.Profile.Name, codePrefix: "CONNECTION-PROFILES-XHTTP", postCheck: "ROUTE", version: request.View.XrayVersion,
+		profile: view.Profile.Name, codePrefix: "CONNECTION-PROFILES-XHTTP", version: request.View.XrayVersion,
 		revision: request.View.Revision, changeSet: request.ChangeSet, startingStateSHA256: request.StartingStateSHA256, desiredStateSHA256: request.DesiredStateSHA256,
 		volatileSHA256: volatileSHA256, configuration: configuration, request: request, reality: request.Reality, xhttp: &request.View, checkedAt: view.Health.Time,
 	})

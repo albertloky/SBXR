@@ -80,6 +80,7 @@ func (built *builtInstall) prepareState(module state.Interface) (*state.Prepared
 		Candidate:                built.desired,
 		SemanticValidators:       state.SemanticValidators{ConnectionProfiles: built.wiring, Subscription: built.wiring, Cloudflare: built.wiring, Certificates: built.wiring, NetworkPolicy: built.wiring, SoftwareLifecycle: built.wiring},
 		ServiceMaterials:         state.ServiceMaterialsFor(built.desired),
+		RuntimeArtifacts:         state.RuntimeArtifactContributions{built.wiring.profiles},
 		SubscriptionPublication:  built.wiring,
 		ReviewedInputs:           reviewed,
 	}

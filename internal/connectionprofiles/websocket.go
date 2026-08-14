@@ -54,6 +54,7 @@ type WebSocketObservation struct {
 	ServiceUnit        string
 	ServiceIdentity    string
 	ServiceRunning     bool
+	ServiceContained   bool
 	NoCapabilities     bool
 	Listener           Listener
 	HostMatches        bool
@@ -123,7 +124,7 @@ func (module Interface) viewWebSocket(ctx context.Context, request WebSocketView
 	}
 	if request.Revision > 0 {
 		if !observation.ConfigurationSafe || !observation.ConfigurationValid {
-			result.Health = blockedWebSocket(observation.CheckedAt, Failed, "CONNECTION-PROFILES-WEBSOCKET-CONFIGURATION", "The protected Xray configuration is unsafe or invalid", "ownership, mode, path, symbolic-link, or native validation proof failed", "root-owned protected material under /etc/sbxr accepted by Xray")
+			result.Health = blockedWebSocket(observation.CheckedAt, Failed, "CONNECTION-PROFILES-WEBSOCKET-CONFIGURATION", "The root-runtime Xray configuration is unsafe or invalid", "ownership, mode, path, symbolic-link, or native validation proof failed", "root:root 0755/0644 material under /etc/sbxr accepted by Xray")
 			return result
 		}
 		if !observation.HostMatches {
@@ -134,8 +135,8 @@ func (module Interface) viewWebSocket(ctx context.Context, request WebSocketView
 			result.Health = blockedWebSocket(observation.CheckedAt, Failed, "CONNECTION-PROFILES-WEBSOCKET-PATH", "The active WebSocket path does not agree", "the protected active configuration has a different path", "the exact reviewed high-entropy path")
 			return result
 		}
-		if observation.ServiceUnit != "xray.service" || observation.ServiceIdentity != "xray" || !observation.ServiceRunning {
-			result.Health = blockedWebSocket(observation.CheckedAt, Failed, "CONNECTION-PROFILES-WEBSOCKET-SERVICE", "The fixed Xray service is not running safely", "xray.service or its distinct non-root identity disagrees", "running xray.service as xray")
+		if !rootServiceHealthy(observation.ServiceUnit, observation.ServiceIdentity, observation.ServiceRunning, observation.ServiceContained, "xray.service") {
+			result.Health = blockedWebSocket(observation.CheckedAt, Failed, "CONNECTION-PROFILES-WEBSOCKET-SERVICE", "The fixed Xray service is not running safely", "xray.service root identity, state, or containment disagrees", "running contained xray.service as root")
 			return result
 		}
 		if observation.Listener != (Listener{Address: "127.0.0.1", Port: request.OriginPort, Protocol: "tcp"}) {
@@ -193,7 +194,7 @@ func (module Interface) PlanWebSocket(ctx context.Context, request WebSocketPlan
 	volatileSHA256 := hex.EncodeToString(volatile[:])
 	plan, failure := module.buildXrayPlan(ctx, xrayPlanSpec{
 		identityPrefix: "profiles-websocket-", description: "validate and activate independent VLESS WebSocket on 127.0.0.1:11081/TCP through xray.service and its typed Cloudflare route; rollback restores the prior configuration",
-		profile: websocket.Profile.Name, codePrefix: "CONNECTION-PROFILES-WEBSOCKET", postCheck: "ROUTE", version: request.View.XrayVersion,
+		profile: websocket.Profile.Name, codePrefix: "CONNECTION-PROFILES-WEBSOCKET", version: request.View.XrayVersion,
 		revision: request.View.Revision, changeSet: request.ChangeSet, startingStateSHA256: request.StartingStateSHA256, desiredStateSHA256: request.DesiredStateSHA256,
 		volatileSHA256: volatileSHA256, configuration: configuration, request: request, reality: request.Reality, xhttp: &request.XHTTP, websocket: &request.View, checkedAt: websocket.Health.Time,
 	})

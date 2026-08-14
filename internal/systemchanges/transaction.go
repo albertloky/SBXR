@@ -87,17 +87,24 @@ type ReleaseBinding struct {
 }
 
 type StateTransactionBinding struct {
-	LineageUnavailable     bool           `json:"lineage_unavailable,omitempty"`
-	RawStatePresent        bool           `json:"raw_state_present,omitempty"`
-	StartingRevision       uint64         `json:"starting_revision"`
-	CandidateRevision      uint64         `json:"candidate_revision"`
-	StartingSHA256         string         `json:"starting_sha256"`
-	CandidateSHA256        string         `json:"candidate_sha256"`
-	PreparedStateSHA256    string         `json:"prepared_state_sha256"`
-	PreparedManifestSHA256 string         `json:"prepared_manifest_sha256"`
-	ChangeSet              string         `json:"change_set"`
-	StartingRelease        ReleaseBinding `json:"starting_release"`
-	CandidateRelease       ReleaseBinding `json:"candidate_release"`
+	LineageUnavailable     bool                             `json:"lineage_unavailable,omitempty"`
+	RawStatePresent        bool                             `json:"raw_state_present,omitempty"`
+	StartingRevision       uint64                           `json:"starting_revision"`
+	CandidateRevision      uint64                           `json:"candidate_revision"`
+	StartingSHA256         string                           `json:"starting_sha256"`
+	CandidateSHA256        string                           `json:"candidate_sha256"`
+	PreparedStateSHA256    string                           `json:"prepared_state_sha256"`
+	PreparedManifestSHA256 string                           `json:"prepared_manifest_sha256"`
+	ConnectionProfiles     ConnectionProfilesRuntimeBinding `json:"connection_profiles,omitempty"`
+	ChangeSet              string                           `json:"change_set"`
+	StartingRelease        ReleaseBinding                   `json:"starting_release"`
+	CandidateRelease       ReleaseBinding                   `json:"candidate_release"`
+}
+
+// ConnectionProfilesRuntimeBinding identifies the exact reviewed runtime bytes.
+type ConnectionProfilesRuntimeBinding struct {
+	XraySHA256    string `json:"xray_sha256,omitempty"`
+	SingBoxSHA256 string `json:"sing_box_sha256,omitempty"`
 }
 
 type Preparation struct {

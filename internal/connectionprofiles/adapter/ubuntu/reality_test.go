@@ -34,38 +34,40 @@ func TestObserveCoreCapabilitiesRequiresSuccessfulEmptyServiceSets(t *testing.T)
 func TestRealityHostReturnsOnlyTypedSafeUbuntuAndXrayFacts(t *testing.T) {
 	root := t.TempDir()
 	directory := filepath.Join(root, "etc/sbxr/xray")
-	if err := os.MkdirAll(directory, 0o750); err != nil {
+	if err := os.MkdirAll(directory, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	configuration := filepath.Join(directory, "config.json")
-	if err := os.WriteFile(configuration, []byte(`{"secret":"REALITY-SECRET-MARKER"}`), 0o640); err != nil {
+	if err := os.WriteFile(configuration, []byte(`{"secret":"REALITY-SECRET-MARKER"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	serviceGroup := "root\n"
 	host := RealityHost{
 		root: root,
 		probe: func(context.Context, connectionprofiles.RealityTarget) connectionprofiles.RealityObservation {
 			return connectionprofiles.RealityObservation{Probe: connectionprofiles.ProbePassed, Class: connectionprofiles.OrdinaryTarget, AcceptedNames: []string{"edge.example.net"}, RouteVerified: true}
 		},
-		now:       func() time.Time { return time.Date(2026, time.August, 7, 12, 0, 0, 0, time.UTC) },
-		rootUID:   uint32(os.Geteuid()),
-		xrayGID:   uint32(os.Getegid()),
-		xrayGroup: true,
-		xrayUser:  true,
+		now:     func() time.Time { return time.Date(2026, time.August, 7, 12, 0, 0, 0, time.UTC) },
+		rootUID: uint32(os.Geteuid()), rootGID: uint32(os.Getegid()),
 		run: func(_ context.Context, _ io.Reader, name string, arguments ...string) (string, error) {
 			command := name + " " + strings.Join(arguments, " ")
 			switch command {
 			case "systemctl show --property=Id --value xray.service":
 				return "xray.service\n", nil
 			case "systemctl show --property=User --value xray.service":
-				return "xray\n", nil
+				return "root\n", nil
 			case "systemctl show --property=Group --value xray.service":
-				return "xray\n", nil
+				return serviceGroup, nil
 			case "systemctl is-active xray.service":
 				return "active\n", nil
 			case "systemctl show --property=CapabilityBoundingSet --value xray.service":
 				return "CAP_NET_BIND_SERVICE\n", nil
 			case "systemctl show --property=AmbientCapabilities --value xray.service":
 				return "CAP_NET_BIND_SERVICE\n", nil
+			case "systemctl show --property=NoNewPrivileges --value xray.service", "systemctl show --property=ProtectHome --value xray.service":
+				return "yes\n", nil
+			case "systemctl show --property=ProtectSystem --value xray.service":
+				return "strict\n", nil
 			case "ss -H -ltn sport = :443":
 				return "LISTEN 0 4096 0.0.0.0:443 0.0.0.0:*\n", nil
 			default:
@@ -74,25 +76,26 @@ func TestRealityHostReturnsOnlyTypedSafeUbuntuAndXrayFacts(t *testing.T) {
 		},
 	}
 	observation := host.ObserveReality(t.Context(), connectionprofiles.RealityTarget{Address: "edge.example.net:443", ServerName: "edge.example.net", ListenerPort: 443})
-	if !observation.ConfigurationSafe || !observation.ServiceInstalled || !observation.ServiceRunning || observation.ServiceUnit != "xray.service" || observation.ServiceIdentity != "xray" || !observation.NetBindService || observation.Listener != (connectionprofiles.Listener{Address: "0.0.0.0", Port: 443, Protocol: "tcp"}) {
+	if !observation.ConfigurationSafe || !observation.ServiceInstalled || !observation.ServiceRunning || !observation.ServiceContained || observation.ServiceUnit != "xray.service" || observation.ServiceIdentity != "root" || !observation.NetBindService || observation.Listener != (connectionprofiles.Listener{Address: "0.0.0.0", Port: 443, Protocol: "tcp"}) {
 		t.Fatalf("ObserveReality() = %+v", observation)
 	}
 	if strings.Contains(fmt.Sprintf("%+v", observation), "REALITY-SECRET-MARKER") {
 		t.Fatalf("typed observation leaked protected configuration: %+v", observation)
 	}
+	serviceGroup = "xray\n"
+	if mixed := host.ObserveReality(t.Context(), connectionprofiles.RealityTarget{ListenerPort: 443}); mixed.ServiceIdentity != "" {
+		t.Fatalf("mixed root and xray identity accepted: %+v", mixed)
+	}
+	serviceGroup = "root\n"
 
-	if err := os.Chmod(configuration, 0o644); err != nil {
+	if err := os.Chmod(configuration, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if unsafe := host.ObserveReality(t.Context(), connectionprofiles.RealityTarget{}); unsafe.ConfigurationSafe {
-		t.Fatalf("world-readable configuration accepted: %+v", unsafe)
+		t.Fatalf("wrong root-runtime mode accepted: %+v", unsafe)
 	}
-	if err := os.Chmod(configuration, 0o640); err != nil {
+	if err := os.Chmod(configuration, 0o644); err != nil {
 		t.Fatal(err)
-	}
-	host.xrayGroup = false
-	if host.safeConfiguration() {
-		t.Fatal("missing xray group accepted root-group material")
 	}
 
 	linkedRoot := t.TempDir()
@@ -104,17 +107,12 @@ func TestRealityHostReturnsOnlyTypedSafeUbuntuAndXrayFacts(t *testing.T) {
 	}
 	linked := host
 	linked.root = linkedRoot
-	linked.xrayGroup = true
 	if linked.safeConfiguration() {
 		t.Fatal("symbolic-link ancestor accepted protected configuration")
 	}
 }
 
-func TestRealityHostRequiresDistinctXrayUserAndRecognizesProviderNetwork(t *testing.T) {
-	host := RealityHost{xrayGroup: true}
-	if host.safeConfiguration() {
-		t.Fatal("missing non-root xray user accepted protected configuration")
-	}
+func TestRealityHostRecognizesProviderNetwork(t *testing.T) {
 	addresses := []netip.Addr{netip.MustParseAddr("192.0.2.20")}
 	if matched, valid := addressInPrefixes(addresses, []string{"192.0.2.0/24"}); !matched || !valid {
 		t.Fatalf("provider network match = (%t, %t)", matched, valid)
@@ -154,19 +152,23 @@ func TestRealityHostRunsOnlyPinnedNativeValidationWithConfigurationOnStdin(t *te
 func TestRealityHostObservesExactXHTTPLoopbackListener(t *testing.T) {
 	root := t.TempDir()
 	directory := filepath.Join(root, "etc/sbxr/xray")
-	if err := os.MkdirAll(directory, 0o750); err != nil {
+	if err := os.MkdirAll(directory, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(directory, "config.json"), []byte(`{"inbounds":[]}`), 0o640); err != nil {
+	if err := os.WriteFile(filepath.Join(directory, "config.json"), []byte(`{"inbounds":[]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	host := RealityHost{root: root, now: func() time.Time { return time.Date(2026, time.August, 7, 12, 0, 0, 0, time.UTC) }, rootUID: uint32(os.Geteuid()), xrayGID: uint32(os.Getegid()), xrayGroup: true, xrayUser: true}
+	host := RealityHost{root: root, now: func() time.Time { return time.Date(2026, time.August, 7, 12, 0, 0, 0, time.UTC) }, rootUID: uint32(os.Geteuid()), rootGID: uint32(os.Getegid())}
 	host.run = func(_ context.Context, _ io.Reader, name string, arguments ...string) (string, error) {
 		switch name + " " + strings.Join(arguments, " ") {
 		case "systemctl show --property=Id --value xray.service":
 			return "xray.service\n", nil
 		case "systemctl show --property=User --value xray.service", "systemctl show --property=Group --value xray.service":
-			return "xray\n", nil
+			return "root\n", nil
+		case "systemctl show --property=NoNewPrivileges --value xray.service", "systemctl show --property=ProtectHome --value xray.service":
+			return "yes\n", nil
+		case "systemctl show --property=ProtectSystem --value xray.service":
+			return "strict\n", nil
 		case "systemctl is-active xray.service":
 			return "active\n", nil
 		case "ss -H -ltn sport = :11080":
@@ -178,7 +180,7 @@ func TestRealityHostObservesExactXHTTPLoopbackListener(t *testing.T) {
 		}
 	}
 	observation := host.ObserveXHTTP(t.Context(), 11080)
-	if !observation.ConfigurationSafe || !observation.ConfigurationValid || observation.ServiceUnit != "xray.service" || observation.ServiceIdentity != "xray" || !observation.ServiceRunning || observation.Listener != (connectionprofiles.Listener{Address: "127.0.0.1", Port: 11080, Protocol: "tcp"}) {
+	if !observation.ConfigurationSafe || !observation.ConfigurationValid || observation.ServiceUnit != "xray.service" || observation.ServiceIdentity != "root" || !observation.ServiceRunning || !observation.ServiceContained || observation.Listener != (connectionprofiles.Listener{Address: "127.0.0.1", Port: 11080, Protocol: "tcp"}) {
 		t.Fatalf("ObserveXHTTP() = %+v", observation)
 	}
 	host.run = func(_ context.Context, _ io.Reader, name string, arguments ...string) (string, error) {
@@ -186,7 +188,11 @@ func TestRealityHostObservesExactXHTTPLoopbackListener(t *testing.T) {
 		case "systemctl show --property=Id --value xray.service":
 			return "xray.service\n", nil
 		case "systemctl show --property=User --value xray.service", "systemctl show --property=Group --value xray.service":
-			return "xray\n", nil
+			return "root\n", nil
+		case "systemctl show --property=NoNewPrivileges --value xray.service", "systemctl show --property=ProtectHome --value xray.service":
+			return "yes\n", nil
+		case "systemctl show --property=ProtectSystem --value xray.service":
+			return "strict\n", nil
 		case "systemctl is-active xray.service":
 			return "active\n", nil
 		case "ss -H -ltn sport = :11080":
@@ -205,20 +211,24 @@ func TestRealityHostObservesExactXHTTPLoopbackListener(t *testing.T) {
 func TestRealityHostObservesExactWebSocketLoopbackListener(t *testing.T) {
 	root := t.TempDir()
 	directory := filepath.Join(root, "etc/sbxr/xray")
-	if err := os.MkdirAll(directory, 0o750); err != nil {
+	if err := os.MkdirAll(directory, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(directory, "config.json"), []byte(`{"inbounds":[{"tag":"vless-websocket","listen":"127.0.0.1","port":11081,"streamSettings":{"method":"websocket","security":"none","wsSettings":{"host":"ws.example.com","path":"/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}}}]}`), 0o640); err != nil {
+	if err := os.WriteFile(filepath.Join(directory, "config.json"), []byte(`{"inbounds":[{"tag":"vless-websocket","listen":"127.0.0.1","port":11081,"streamSettings":{"method":"websocket","security":"none","wsSettings":{"host":"ws.example.com","path":"/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}}}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	listeners := "LISTEN 0 4096 127.0.0.1:11081 0.0.0.0:*\n"
-	host := RealityHost{root: root, now: func() time.Time { return time.Date(2026, time.August, 7, 12, 0, 0, 0, time.UTC) }, rootUID: uint32(os.Geteuid()), xrayGID: uint32(os.Getegid()), xrayGroup: true, xrayUser: true}
+	host := RealityHost{root: root, now: func() time.Time { return time.Date(2026, time.August, 7, 12, 0, 0, 0, time.UTC) }, rootUID: uint32(os.Geteuid()), rootGID: uint32(os.Getegid())}
 	host.run = func(_ context.Context, _ io.Reader, name string, arguments ...string) (string, error) {
 		switch name + " " + strings.Join(arguments, " ") {
 		case "systemctl show --property=Id --value xray.service":
 			return "xray.service\n", nil
 		case "systemctl show --property=User --value xray.service", "systemctl show --property=Group --value xray.service":
-			return "xray\n", nil
+			return "root\n", nil
+		case "systemctl show --property=NoNewPrivileges --value xray.service", "systemctl show --property=ProtectHome --value xray.service":
+			return "yes\n", nil
+		case "systemctl show --property=ProtectSystem --value xray.service":
+			return "strict\n", nil
 		case "systemctl is-active xray.service":
 			return "active\n", nil
 		case "ss -H -ltn sport = :11081":
@@ -230,7 +240,7 @@ func TestRealityHostObservesExactWebSocketLoopbackListener(t *testing.T) {
 		}
 	}
 	observation := host.ObserveWebSocket(t.Context(), 11081, "ws.example.com", "/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
-	if !observation.ConfigurationSafe || !observation.ConfigurationValid || !observation.HostMatches || !observation.PathMatches || observation.ServiceUnit != "xray.service" || observation.ServiceIdentity != "xray" || !observation.ServiceRunning || observation.Listener != (connectionprofiles.Listener{Address: "127.0.0.1", Port: 11081, Protocol: "tcp"}) {
+	if !observation.ConfigurationSafe || !observation.ConfigurationValid || !observation.HostMatches || !observation.PathMatches || observation.ServiceUnit != "xray.service" || observation.ServiceIdentity != "root" || !observation.ServiceRunning || !observation.ServiceContained || observation.Listener != (connectionprofiles.Listener{Address: "127.0.0.1", Port: 11081, Protocol: "tcp"}) {
 		t.Fatalf("ObserveWebSocket() = %+v", observation)
 	}
 	if mismatch := host.ObserveWebSocket(t.Context(), 11081, "wrong.example.com", "/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"); mismatch.HostMatches || mismatch.PathMatches {

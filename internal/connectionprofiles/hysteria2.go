@@ -76,14 +76,15 @@ func (credentials Hysteria2Credentials) valid() bool {
 }
 
 type Hysteria2Observation struct {
-	CheckedAt                                time.Time
-	ConfigurationSafe, ConfigurationValid    bool
-	ConfigurationMatches, CertificateMatches bool
-	ServiceUnit, ServiceIdentity             string
-	ServiceRunning, NetBindService           bool
-	NoCapabilities                           bool
-	Listener                                 Listener
-	ServerFunction                           ProbeStatus
+	CheckedAt                             time.Time
+	ConfigurationSafe, ConfigurationValid bool
+	ConfigurationMatches                  bool
+	ServiceUnit, ServiceIdentity          string
+	ServiceRunning, ServiceContained      bool
+	NetBindService                        bool
+	NoCapabilities                        bool
+	Listener                              Listener
+	ServerFunction                        ProbeStatus
 }
 
 type Hysteria2Host interface {
@@ -165,16 +166,12 @@ func (module Interface) viewHysteria2(ctx context.Context, request Hysteria2View
 		return result
 	}
 	if checkActive && request.Revision > 0 {
-		if observation.ConfigurationSafe && observation.ConfigurationValid && !observation.CertificateMatches {
-			result.Health = blockedHysteria2(observation.CheckedAt, Failed, "CONNECTION-PROFILES-HYSTERIA2-CERTIFICATE", "The active certificate binding does not agree", "the protected configuration, shared pointer, certificate protection, or certificate identity differs", request.ServerName+" through the shared active Direct TLS pair")
-			return result
-		}
 		if !observation.ConfigurationSafe || !observation.ConfigurationValid || !observation.ConfigurationMatches {
-			result.Health = blockedHysteria2(observation.CheckedAt, Failed, "CONNECTION-PROFILES-HYSTERIA2-CONFIGURATION", "The protected sing-box configuration is unsafe, invalid, or different", "ownership, mode, link, native validity, or active configuration agreement failed", "root-owned service-readable material under /etc/sbxr accepted by sing-box 1.13.16")
+			result.Health = blockedHysteria2(observation.CheckedAt, Failed, "CONNECTION-PROFILES-HYSTERIA2-CONFIGURATION", "The root-runtime sing-box configuration is unsafe, invalid, or different", "ownership, mode, link, native validity, or active configuration agreement failed", "root:root 0755/0644 material under /etc/sbxr accepted by sing-box 1.13.16")
 			return result
 		}
-		if observation.ServiceUnit != "sing-box.service" || observation.ServiceIdentity != "sing-box" || !observation.ServiceRunning {
-			result.Health = blockedHysteria2(observation.CheckedAt, Failed, "CONNECTION-PROFILES-HYSTERIA2-SERVICE", "The fixed sing-box service is not running safely", "sing-box.service or its distinct non-root identity disagrees", "running sing-box.service as sing-box")
+		if !rootServiceHealthy(observation.ServiceUnit, observation.ServiceIdentity, observation.ServiceRunning, observation.ServiceContained, "sing-box.service") {
+			result.Health = blockedHysteria2(observation.CheckedAt, Failed, "CONNECTION-PROFILES-HYSTERIA2-SERVICE", "The fixed sing-box service is not running safely", "sing-box.service root identity, state, or containment disagrees", "running contained sing-box.service as root")
 			return result
 		}
 		if !publicUDPListener(observation.Listener, port) {

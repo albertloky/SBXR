@@ -54,9 +54,6 @@ func TestAnyTLSViewRequiresVersionFloorCorePaddingDirectTLSAndTCP(t *testing.T) 
 		{"copied padding", "CONNECTION-PROFILES-ANYTLS-INPUT", func(request *connectionprofiles.AnyTLSViewRequest, _ *connectionprofiles.AnyTLSObservation) {
 			request.UseCorePadding = false
 		}},
-		{"wrong TLS identity", "CONNECTION-PROFILES-ANYTLS-CERTIFICATE", func(_ *connectionprofiles.AnyTLSViewRequest, observation *connectionprofiles.AnyTLSObservation) {
-			observation.CertificateMatches = false
-		}},
 		{"UDP listener", "CONNECTION-PROFILES-ANYTLS-LISTENER", func(_ *connectionprofiles.AnyTLSViewRequest, observation *connectionprofiles.AnyTLSObservation) {
 			observation.Listener.Protocol = "udp"
 		}},
@@ -94,7 +91,7 @@ func TestAnyTLSPlanValidatesCompleteConfigurationWithoutCopiedPadding(t *testing
 	host := healthyAnyTLSHost()
 	request := validAnyTLSPlanRequest(t, "profiles-anytls-0001")
 	result := connectionprofiles.New(host).PlanAnyTLS(t.Context(), request)
-	if result.Plan == nil || result.Health.Outcome != connectionprofiles.Healthy || len(result.Plan.Checks()) != 5 {
+	if result.Plan == nil || result.Health.Outcome != connectionprofiles.Healthy || len(result.Plan.Checks()) != 4 {
 		t.Fatalf("PlanAnyTLS() = %+v", result)
 	}
 	if bytes.Count(host.validated, []byte(`"type"`)) < 4 || !bytes.Contains(host.validated, []byte(`"type":"anytls"`)) || !bytes.Contains(host.validated, []byte(`"listen_port":9443`)) || !bytes.Contains(host.validated, []byte(anyTLSPasswordMarker)) || bytes.Contains(host.validated, []byte(`"padding_scheme"`)) || bytes.Contains(host.validated, []byte(`"insecure"`)) {
@@ -171,7 +168,7 @@ func healthyAnyTLSHost() *anyTLSHost {
 }
 
 func healthyAnyTLSObservation() connectionprofiles.AnyTLSObservation {
-	return connectionprofiles.AnyTLSObservation{CheckedAt: time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC), ConfigurationSafe: true, ConfigurationValid: true, ConfigurationMatches: true, CertificateMatches: true, ServiceUnit: "sing-box.service", ServiceIdentity: "sing-box", ServiceRunning: true, Listener: connectionprofiles.Listener{Address: "0.0.0.0", Port: 9443, Protocol: "tcp"}, NetBindService: true, ServerFunction: connectionprofiles.ProbePassed}
+	return connectionprofiles.AnyTLSObservation{CheckedAt: time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC), ConfigurationSafe: true, ConfigurationValid: true, ConfigurationMatches: true, ServiceUnit: "sing-box.service", ServiceIdentity: "root", ServiceRunning: true, ServiceContained: true, Listener: connectionprofiles.Listener{Address: "0.0.0.0", Port: 9443, Protocol: "tcp"}, NetBindService: true, ServerFunction: connectionprofiles.ProbePassed}
 }
 
 func completeProfileStateForAnyTLS() (state.ConnectionProfiles, profileSecrets) {

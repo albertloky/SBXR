@@ -89,6 +89,13 @@ func TestRealityViewAndPlanProduceOneSafeNativeConfiguration(t *testing.T) {
 	if contribution := planResult.Plan.SoftwareLifecycleUpdateContribution(); contribution.Name != "Connection Profiles" || contribution.ChangeSet != "profiles-reality-0001" || contribution.Owner != systemchanges.ConnectionProfilesModule {
 		t.Fatalf("update contribution = %+v", contribution)
 	}
+	for name, unit := range connectionprofiles.SystemdUnits() {
+		for _, fact := range []string{"User=root", "Group=root", "NoNewPrivileges=true", "ProtectHome=true", "ProtectSystem=strict", "AmbientCapabilities=CAP_NET_BIND_SERVICE", "CapabilityBoundingSet=CAP_NET_BIND_SERVICE"} {
+			if !strings.Contains(unit, fact) {
+				t.Fatalf("%s does not contain %q:\n%s", name, fact, unit)
+			}
+		}
+	}
 	if rendered := fmt.Sprintf("%+v", planResult); strings.Contains(rendered, uuidMarker) || strings.Contains(rendered, privateKeyMarker) || strings.Contains(rendered, shortIDMarker) || strings.Contains(rendered, string(host.validated)) {
 		t.Fatalf("Plan() leaked protected material: %s", rendered)
 	}
@@ -159,6 +166,12 @@ func TestRealityViewFailsClosedForEveryNamedTargetBlocker(t *testing.T) {
 		}, "CONNECTION-PROFILES-REALITY-PROBE"},
 		{"service failure", func(_ *connectionprofiles.ViewRequest, observation *connectionprofiles.RealityObservation) {
 			observation.ServiceRunning = false
+		}, "CONNECTION-PROFILES-REALITY-SERVICE"},
+		{"old service identity", func(_ *connectionprofiles.ViewRequest, observation *connectionprofiles.RealityObservation) {
+			observation.ServiceIdentity = "xray"
+		}, "CONNECTION-PROFILES-REALITY-SERVICE"},
+		{"missing service containment", func(_ *connectionprofiles.ViewRequest, observation *connectionprofiles.RealityObservation) {
+			observation.ServiceContained = false
 		}, "CONNECTION-PROFILES-REALITY-SERVICE"},
 		{"listener failure", func(_ *connectionprofiles.ViewRequest, observation *connectionprofiles.RealityObservation) {
 			observation.Listener.Port = 8443
@@ -382,8 +395,9 @@ func healthyRealityObservation() connectionprofiles.RealityObservation {
 		RouteVerified:     true,
 		ServiceInstalled:  true,
 		ServiceUnit:       "xray.service",
-		ServiceIdentity:   "xray",
+		ServiceIdentity:   "root",
 		ServiceRunning:    true,
+		ServiceContained:  true,
 		ConfigurationSafe: true,
 		Listener:          connectionprofiles.Listener{Address: "0.0.0.0", Port: 443, Protocol: "tcp"},
 		NetBindService:    true,

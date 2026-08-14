@@ -237,7 +237,7 @@ func validXHTTPRequest(t *testing.T) connectionprofiles.XHTTPViewRequest {
 
 func healthyXHTTPObservation() connectionprofiles.XHTTPObservation {
 	return connectionprofiles.XHTTPObservation{
-		CheckedAt: healthyRealityObservation().CheckedAt, ConfigurationSafe: true, ConfigurationValid: true, ServiceUnit: "xray.service", ServiceIdentity: "xray", ServiceRunning: true,
+		CheckedAt: healthyRealityObservation().CheckedAt, ConfigurationSafe: true, ConfigurationValid: true, ServiceUnit: "xray.service", ServiceIdentity: "root", ServiceRunning: true, ServiceContained: true,
 		Listener: connectionprofiles.Listener{Address: "127.0.0.1", Port: 11080, Protocol: "tcp"},
 	}
 }

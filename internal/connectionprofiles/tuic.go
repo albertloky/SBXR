@@ -125,12 +125,10 @@ func (module Interface) viewTUIC(ctx context.Context, hysteria2 Hysteria2ViewReq
 	}
 	if checkActive && request.Revision > 0 {
 		switch {
-		case observation.ConfigurationSafe && observation.ConfigurationValid && !observation.CertificateMatches:
-			result.Health = blockedTUIC(observation.CheckedAt, Failed, "CONNECTION-PROFILES-TUIC-CERTIFICATE", "The active certificate binding does not agree", "the shared certificate protection or identity differs", request.ServerName+" through the shared active Direct TLS pair")
 		case !observation.ConfigurationSafe || !observation.ConfigurationValid || !observation.ConfigurationMatches:
 			result.Health = blockedTUIC(observation.CheckedAt, Failed, "CONNECTION-PROFILES-TUIC-CONFIGURATION", "The protected sing-box configuration is unsafe, invalid, or different", "ownership, native validity, or exact active agreement failed", "the reviewed complete Hysteria2 and TUIC configuration")
-		case observation.ServiceUnit != "sing-box.service" || observation.ServiceIdentity != "sing-box" || !observation.ServiceRunning:
-			result.Health = blockedTUIC(observation.CheckedAt, Failed, "CONNECTION-PROFILES-TUIC-SERVICE", "The fixed sing-box service is not running safely", "sing-box.service or its non-root identity disagrees", "running sing-box.service as sing-box")
+		case !rootServiceHealthy(observation.ServiceUnit, observation.ServiceIdentity, observation.ServiceRunning, observation.ServiceContained, "sing-box.service"):
+			result.Health = blockedTUIC(observation.CheckedAt, Failed, "CONNECTION-PROFILES-TUIC-SERVICE", "The fixed sing-box service is not running safely", "sing-box.service root identity, state, or containment disagrees", "running contained sing-box.service as root")
 		case !publicUDPListener(observation.Listener, request.Port):
 			result.Health = blockedTUIC(observation.CheckedAt, Failed, "CONNECTION-PROFILES-TUIC-LISTENER", "The TUIC listener disagrees", fmt.Sprintf("%s/%d/%s", observation.Listener.Address, observation.Listener.Port, observation.Listener.Protocol), "public 8443/UDP")
 		case observation.NetBindService != singBoxNeedsCapability(hysteria2, request, AnyTLSViewRequest{}) || !singBoxNeedsCapability(hysteria2, request, AnyTLSViewRequest{}) && !observation.NoCapabilities:

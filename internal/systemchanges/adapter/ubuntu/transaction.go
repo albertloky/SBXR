@@ -107,10 +107,10 @@ type CertificateExecutor interface {
 }
 
 type ConnectionProfilesExecutor interface {
-	ValidateConfiguration(root, destination, hostname string, timeout time.Duration) error
-	Activate(root, destination, hostname string, timeout time.Duration) error
-	Restore(root, destination, hostname string, timeout time.Duration) error
-	Check(root, destination, hostname, code string, timeout time.Duration) (bool, error)
+	ValidateConfiguration(root, destination, hostname string, runtime systemchanges.ConnectionProfilesRuntimeBinding, timeout time.Duration) error
+	Activate(root, destination, hostname string, runtime systemchanges.ConnectionProfilesRuntimeBinding, timeout time.Duration) error
+	Restore(root, destination, hostname string, runtime systemchanges.ConnectionProfilesRuntimeBinding, timeout time.Duration) error
+	Check(root, destination, hostname, code string, runtime systemchanges.ConnectionProfilesRuntimeBinding, timeout time.Duration) (bool, error)
 }
 
 type SubscriptionPublicationExecutor interface {
@@ -1672,7 +1672,11 @@ func (a Adapter) Execute(lease systemchanges.ExecutionLease, changeSet string, n
 		}
 		change, _ := step.CertificateChange()
 		if change.Action == systemchanges.CertificateDomainActivate {
-			return executeDomainCertificateActivation(a.root, a.certificate, a.profiles, step, timeout, cancellation)
+			binding, _, err := a.recoveryPublicationBinding(lease, changeSet)
+			if err != nil {
+				return systemchanges.StepEvidence{}, err
+			}
+			return executeDomainCertificateActivation(a.root, a.certificate, a.profiles, binding.ConnectionProfiles, step, timeout, cancellation)
 		}
 		return a.certificate.Execute(a.root, step, timeout, cancellation)
 	}
@@ -1758,7 +1762,11 @@ func (a Adapter) Reverse(lease systemchanges.ExecutionLease, changeSet string, n
 		}
 		change, _ := step.CertificateChange()
 		if change.Action == systemchanges.CertificateDomainActivate {
-			return reverseDomainCertificateActivation(a.root, a.certificate, a.profiles, step, bytes.NewReader(content), timeout)
+			binding, _, err := a.recoveryPublicationBinding(lease, changeSet)
+			if err != nil {
+				return systemchanges.StepEvidence{}, err
+			}
+			return reverseDomainCertificateActivation(a.root, a.certificate, a.profiles, binding.ConnectionProfiles, step, bytes.NewReader(content), timeout)
 		}
 		return a.certificate.Reverse(a.root, step, bytes.NewReader(content), timeout)
 	}
@@ -1777,22 +1785,22 @@ func (a Adapter) Reverse(lease systemchanges.ExecutionLease, changeSet string, n
 	return a.host.Reverse(step, bytes.NewReader(content), timeout)
 }
 
-func executeDomainCertificateActivation(root string, certificate CertificateExecutor, profiles ConnectionProfilesExecutor, step systemchanges.Step, timeout time.Duration, cancellation *systemchanges.Cancellation) (systemchanges.StepEvidence, error) {
+func executeDomainCertificateActivation(root string, certificate CertificateExecutor, profiles ConnectionProfilesExecutor, runtime systemchanges.ConnectionProfilesRuntimeBinding, step systemchanges.Step, timeout time.Duration, cancellation *systemchanges.Cancellation) (systemchanges.StepEvidence, error) {
 	change, ok := step.CertificateChange()
-	if !ok || change.Action != systemchanges.CertificateDomainActivate || certificate == nil || profiles == nil || profiles.ValidateConfiguration(root, change.DestinationIP, change.Identity, timeout) != nil {
+	if !ok || change.Action != systemchanges.CertificateDomainActivate || certificate == nil || profiles == nil || profiles.ValidateConfiguration(root, change.DestinationIP, change.Identity, runtime, timeout) != nil {
 		return systemchanges.StepEvidence{}, errors.New("Connection Profiles configuration is unproved")
 	}
 	evidence, err := certificate.Execute(root, step, timeout, cancellation)
 	if err != nil {
 		return systemchanges.StepEvidence{}, err
 	}
-	if profiles.Activate(root, change.DestinationIP, change.Identity, timeout) != nil {
+	if profiles.Activate(root, change.DestinationIP, change.Identity, runtime, timeout) != nil {
 		return systemchanges.StepEvidence{}, errors.New("Direct TLS consumers are unproved")
 	}
 	return evidence, nil
 }
 
-func reverseDomainCertificateActivation(root string, certificate CertificateExecutor, profiles ConnectionProfilesExecutor, step systemchanges.Step, snapshot io.Reader, timeout time.Duration) (systemchanges.StepEvidence, error) {
+func reverseDomainCertificateActivation(root string, certificate CertificateExecutor, profiles ConnectionProfilesExecutor, runtime systemchanges.ConnectionProfilesRuntimeBinding, step systemchanges.Step, snapshot io.Reader, timeout time.Duration) (systemchanges.StepEvidence, error) {
 	change, ok := step.CertificateChange()
 	if !ok || change.Action != systemchanges.CertificateDomainActivate || certificate == nil || profiles == nil {
 		return systemchanges.StepEvidence{}, errors.New("Direct TLS rollback is unavailable")
@@ -1801,7 +1809,7 @@ func reverseDomainCertificateActivation(root string, certificate CertificateExec
 	if err != nil {
 		return systemchanges.StepEvidence{}, err
 	}
-	if profiles.Restore(root, change.DestinationIP, change.Identity, timeout) != nil {
+	if profiles.Restore(root, change.DestinationIP, change.Identity, runtime, timeout) != nil {
 		return systemchanges.StepEvidence{}, errors.New("prior Direct TLS consumers are unproved")
 	}
 	return evidence, nil
@@ -2694,21 +2702,38 @@ func (a Adapter) Check(lease systemchanges.ExecutionLease, check systemchanges.C
 		}
 		return systemchanges.Healthy, nil
 	}
-	if check.Owner == systemchanges.ConnectionProfilesModule && strings.HasPrefix(check.Code, "CONNECTION-PROFILES-") && strings.HasSuffix(check.Code, "-DIRECT-TLS") {
-		if a.profiles == nil {
-			return systemchanges.Unknown, errors.New("Connection Profiles health executor unavailable")
-		}
+	if check.Owner == systemchanges.ConnectionProfilesModule && strings.HasPrefix(check.Code, "CONNECTION-PROFILES-") {
+		return a.checkConnectionProfiles(lease, check, timeout)
+	}
+	return a.host.Check(check, phase, timeout)
+}
+
+func (a Adapter) checkConnectionProfiles(lease systemchanges.ExecutionLease, check systemchanges.Check, timeout time.Duration) (systemchanges.HealthStatus, error) {
+	if a.profiles == nil {
+		return systemchanges.Unknown, errors.New("Connection Profiles health executor unavailable")
+	}
+	destination, hostname := "", ""
+	xraySHA256, singBoxSHA256 := "", ""
+	if strings.HasSuffix(check.Code, "-DIRECT-TLS") {
 		change, err := a.activeDomainCertificateChange()
 		if err != nil {
 			return systemchanges.Unknown, err
 		}
-		healthy, checkErr := a.profiles.Check(a.root, change.DestinationIP, change.Identity, check.Code, timeout)
-		if checkErr != nil || !healthy {
-			return systemchanges.Failed, checkErr
-		}
-		return systemchanges.Healthy, nil
+		destination, hostname = change.DestinationIP, change.Identity
 	}
-	return a.host.Check(check, phase, timeout)
+	binding, _, err := a.activeTransactionBinding()
+	if err != nil || !lease.Authorized() {
+		return systemchanges.Unknown, err
+	}
+	xraySHA256, singBoxSHA256 = binding.ConnectionProfiles.XraySHA256, binding.ConnectionProfiles.SingBoxSHA256
+	if xraySHA256 == "" && singBoxSHA256 == "" || xraySHA256 != "" && !validDigest(xraySHA256) || singBoxSHA256 != "" && !validDigest(singBoxSHA256) {
+		return systemchanges.Unknown, errors.New("reviewed Connection Profiles runtime binding unavailable")
+	}
+	healthy, checkErr := a.profiles.Check(a.root, destination, hostname, check.Code, systemchanges.ConnectionProfilesRuntimeBinding{XraySHA256: xraySHA256, SingBoxSHA256: singBoxSHA256}, timeout)
+	if checkErr != nil || !healthy {
+		return systemchanges.Failed, checkErr
+	}
+	return systemchanges.Healthy, nil
 }
 
 func (a Adapter) activeDockerReclamation() (systemchanges.ReclamationTarget, error) {
