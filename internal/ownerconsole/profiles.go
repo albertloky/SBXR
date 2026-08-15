@@ -53,11 +53,9 @@ type ProfilesPresentation struct {
 type ProfileChange uint8
 
 const (
-	RotateProfileCredential ProfileChange = iota + 1
-	ChangeProfilePort
-	RepairProfile
-	EnableProfile
-	DisableProfile
+	RotateProfileCredential ProfileChange = 1
+	EnableProfile           ProfileChange = 4
+	DisableProfile          ProfileChange = 5
 )
 
 type ProfileChangeRequest struct {
@@ -234,9 +232,7 @@ func profileActions(enabled bool) []profileAction {
 	return []profileAction{
 		{label: "Open in Access", kind: openAccessAction},
 		{label: "Rotate credential", kind: reviewProfileChangeAction, change: RotateProfileCredential},
-		{label: "Change port", kind: reviewProfileChangeAction, change: ChangeProfilePort},
 		{label: "Validate native configuration", kind: validateProfileAction},
-		{label: "Repair", kind: reviewProfileChangeAction, change: RepairProfile},
 		{label: toggle, kind: reviewProfileChangeAction, change: toggleChange},
 	}
 }

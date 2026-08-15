@@ -44,7 +44,7 @@ func (stub *profilesStub) ValidateProfile(_ context.Context, profile AccessProfi
 	return stub.validation
 }
 
-func TestRunReviewsEachProfileChangeWithoutStartingIt(t *testing.T) {
+func TestRunReviewsEachCompleteProfileChangeWithoutStartingIt(t *testing.T) {
 	for _, test := range []struct {
 		name         string
 		profile      int
@@ -53,10 +53,8 @@ func TestRunReviewsEachProfileChangeWithoutStartingIt(t *testing.T) {
 		planIdentity PlanIdentity
 	}{
 		{name: "rotate one", action: 1, change: RotateProfileCredential, planIdentity: "rotate-one-profile"},
-		{name: "change port", action: 2, change: ChangeProfilePort, planIdentity: "change-profile-port"},
-		{name: "repair", action: 4, change: RepairProfile, planIdentity: "repair-profile"},
-		{name: "disable", action: 5, change: DisableProfile, planIdentity: "disable-profile"},
-		{name: "enable", profile: 5, action: 5, change: EnableProfile, planIdentity: "enable-profile"},
+		{name: "disable", action: 3, change: DisableProfile, planIdentity: "disable-profile"},
+		{name: "enable", profile: 5, action: 3, change: EnableProfile, planIdentity: "enable-profile"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			stub := &profilesStub{view: completeProfilesPresentation(), profileReviews: map[ProfileChange]ChangeReview{test.change: completePlan(test.planIdentity)}}
@@ -72,7 +70,7 @@ func TestRunReviewsEachProfileChangeWithoutStartingIt(t *testing.T) {
 
 func TestRunShowsOnlyTheTypedNativeValidationResult(t *testing.T) {
 	stub := &profilesStub{view: completeProfilesPresentation(), validation: ProfileValidation{Profile: TUICProfile, Health: ProfileHealthy, Code: "CONNECTION-PROFILES-TUIC-NATIVE-VALID"}}
-	keys := strings.Repeat("\x1b[B", 4) + strings.Repeat("\x1b[C", 3) + "\r"
+	keys := strings.Repeat("\x1b[B", 4) + strings.Repeat("\x1b[C", 2) + "\r"
 	got := runTranscriptSteps(t, Session{Scenario: ConnectionProfilesScreen, Profiles: stub, ProfileOutcomes: stub}, 80, 24, "", keys, "", "\x03\r")
 	if len(stub.validationProfile) != 1 || stub.validationProfile[0] != TUICProfile || !strings.Contains(got, "Native validation HEALTHY") || !strings.Contains(got, "CONNECTION-PROFILES-TUIC-NATIVE-VALID") || len(stub.applyPlans) != 0 {
 		t.Fatalf("native validation was not rendered as a read-only typed result\n%s", got)
@@ -143,7 +141,7 @@ func TestRunRefusesUnsafeProfileAndLiveCheckFacts(t *testing.T) {
 		t.Fatalf("unsafe profile facts crossed the Run boundary\n%s", profileOutput)
 	}
 	unsafeValidation := &profilesStub{view: completeProfilesPresentation(), validation: ProfileValidation{Profile: RealityVisionProfile, Health: ProfileFailed, Code: "INFRASTRUCTURE-SECRET-MARKER-COMPLETE-TOKEN"}}
-	validationOutput := runTranscriptSteps(t, Session{Scenario: ConnectionProfilesScreen, Profiles: unsafeValidation, ProfileOutcomes: unsafeValidation}, 80, 24, "", strings.Repeat("\x1b[C", 3)+"\r", "", "\x03\r")
+	validationOutput := runTranscriptSteps(t, Session{Scenario: ConnectionProfilesScreen, Profiles: unsafeValidation, ProfileOutcomes: unsafeValidation}, 80, 24, "", strings.Repeat("\x1b[C", 2)+"\r", "", "\x03\r")
 	if strings.Contains(validationOutput, "INFRASTRUCTURE-SECRET-MARKER") || !strings.Contains(validationOutput, "OWNER-CONSOLE-PROFILE-VALIDATION-UNAVAILABLE") {
 		t.Fatalf("unsafe native-validation facts crossed the Run boundary\n%s", validationOutput)
 	}
@@ -433,7 +431,7 @@ func TestRunLateProfileResultsNeverMoveOrRelabelTheCurrentScreen(t *testing.T) {
 
 	t.Run("validation after profile change", func(t *testing.T) {
 		stub := &profilesStub{view: completeProfilesPresentation(), validationDelay: 120 * time.Millisecond, validation: ProfileValidation{Profile: RealityVisionProfile, Health: ProfileHealthy, Code: "LATE-VALIDATION-MARKER"}}
-		got := runTranscriptSteps(t, Session{Scenario: ConnectionProfilesScreen, Profiles: stub, ProfileOutcomes: stub}, 80, 24, "", strings.Repeat("\x1b[C", 3)+"\r", "\x1b[B", "", "", "\x03\r")
+		got := runTranscriptSteps(t, Session{Scenario: ConnectionProfilesScreen, Profiles: stub, ProfileOutcomes: stub}, 80, 24, "", strings.Repeat("\x1b[C", 2)+"\r", "\x1b[B", "", "", "\x03\r")
 		if strings.Contains(got, "LATE-VALIDATION-MARKER") || !strings.Contains(got, "XHTTP packet-up") {
 			t.Fatalf("late validation was attached to a different profile\n%s", got)
 		}
@@ -483,17 +481,20 @@ func profileClientAccessPresentation() AccessPresentation {
 	return access
 }
 
-func TestRunShowsAllSixTypedConnectionProfilesAndDisabledStateTruthfully(t *testing.T) {
+func TestRunShowsAllSixTypedConnectionProfilesWithOnlyCompleteActions(t *testing.T) {
 	for _, size := range []struct{ width, height int }{{80, 24}, {120, 36}} {
 		for index := range 6 {
 			name := AccessProfileID(index + 1).String()
 			t.Run(fmt.Sprintf("%dx%d/%s", size.width, size.height, name), func(t *testing.T) {
 				stub := &profilesStub{view: completeProfilesPresentation()}
 				got := runTranscriptSteps(t, Session{Scenario: ConnectionProfilesScreen, Profiles: stub, ProfileOutcomes: stub}, size.width, size.height, "", strings.Repeat("\x1b[B", index), "", "\x03\r")
-				for _, want := range []string{name, "Service", "Listener", "Public address or hostname", "Selected port and transport", "native settings reviewed", "Open in Access", "Rotate credential", "Change port", "Validate native configuration", "Repair"} {
+				for _, want := range []string{name, "Service", "Listener", "Public address or hostname", "Selected port and transport", "native settings reviewed", "Open in Access", "Rotate credential", "Validate native configuration"} {
 					if !strings.Contains(got, want) {
 						t.Fatalf("typed Connection Profile view omitted %q\n%s", want, got)
 					}
+				}
+				if strings.Contains(got, "Change port") || strings.Contains(got, "Repair") {
+					t.Fatalf("Connection Profile exposed an incomplete action\n%s", got)
 				}
 				if index < 5 && !strings.Contains(got, "Disable") {
 					t.Fatalf("enabled Connection Profile omitted Disable\n%s", got)

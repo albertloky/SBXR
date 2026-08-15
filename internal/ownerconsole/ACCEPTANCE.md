@@ -155,10 +155,11 @@ Require Apply to receive only the exact reviewed Plan identity from the already 
 Run:
 
 ```sh
-go test ./internal/ownerconsole -run '^TestRun(ShowsAllSixTypedConnectionProfilesAndDisabledStateTruthfully|ReviewsEachProfileChangeWithoutStartingIt|ShowsOnlyTheTypedNativeValidationResult|OpensOnlyTheSelectedProfileInAuthenticatedAccess|ProfileAndSubscriptionPlanBackRestoreTheirSelection)$' -count=1
+go test ./internal/ownerconsole -run '^TestRun(ShowsAllSixTypedConnectionProfilesWithOnlyCompleteActions|ReviewsEachCompleteProfileChangeWithoutStartingIt|ShowsOnlyTheTypedNativeValidationResult|OpensOnlyTheSelectedProfileInAuthenticatedAccess|ProfileAndSubscriptionPlanBackRestoreTheirSelection)$' -count=1
+go test ./cmd/sbxr -run '^TestProductionProfileActionSeamRefusesHiddenPortAndRepairValues$' -count=1
 ```
 
-Require each named profile to show only typed enabled state, service and listener health, public address or hostname, port and transport, settings, exposure, and publication facts. Require disabled state to retain settings and credential, close exposure, omit publication, and remain distinct from failure. Require Open in Access to focus only the selected profile after authentication. Require rotate one credential, reviewed port change, native validation, repair, enable, and disable to return through the Profiles Module without starting work before exact Plan approval.
+Require each named profile to show only typed enabled state, service and listener health, public address or hostname, port and transport, settings, exposure, and publication facts. Require disabled state to retain settings and credential, close exposure, omit publication, and remain distinct from failure. Require Open in Access to focus only the selected profile after authentication. Require rotate one credential, native validation, enable, and disable to return through the Profiles Module without starting work before exact Plan approval. Require `Change port` and per-profile `Repair` to be absent from production actions, and require their reserved typed values to fail closed at the production action seam.
 
 ### OC-PROFILES-02 — Subscription and distinct Client Access changes
 

@@ -406,9 +406,8 @@ Enable or disable
 Show settings
 Display its share URI and QR code on the main dashboard by default
 Rotate credential
-Change port
 Run configuration test
-Repair current configuration
+`Change port` and per-profile `Repair` are not production actions until separately specified complete reviewed workflows exist.
 The dashboard shall offer one optional post-Managed `Run Live Profile Check` action. It uses the universal subscription once, displays one temporary test URL and QR code, automatically attributes successful outside traffic to each Connection Profile, never gates installation, and retains no test token, counter difference, client-IP history, destination history, access log, or persistent traffic history.
 17. Cloudflare use after this revision
 SBXR shall store one dedicated, root-only Cloudflare API token with all permissions SBXR needs for the selected Cloudflare account and zone, including tunnel management and the required DNS changes. The token remains memory-only until successful installation commits it; abandonment or rollback discards it. After success, Cloudflare Tunnel reuses it automatically for approved DNS, Tunnel, repair, and update work, so the Owner need not paste it again for normal later changes. Certificate Lifecycle and the ACME client receive only typed DNS and CAA facts, never the token. Immutable account and zone IDs bind the installation; changing either requires a separately reviewed migration.

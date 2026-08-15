@@ -21,6 +21,19 @@ var _ ownerconsole.CertificatesModule = (*clientAccessOutcome)(nil)
 var _ ownerconsole.DiagnosticsModule = (*clientAccessOutcome)(nil)
 var _ ownerconsole.DiagnosticsModule = (*installOutcome)(nil)
 
+func TestProductionProfileActionSeamRefusesHiddenPortAndRepairValues(t *testing.T) {
+	outcome := &clientAccessOutcome{}
+	for _, test := range []struct {
+		name   string
+		change ownerconsole.ProfileChange
+	}{{"Change port", 2}, {"Repair", 3}} {
+		review := outcome.ReviewProfileChange(t.Context(), ownerconsole.ProfileChangeRequest{Profile: ownerconsole.RealityVisionProfile, Change: test.change})
+		if review.Correction == nil || review.Plan != nil || review.Editing != nil || review.Correction.Evidence != "CLIENT-ACCESS-PLAN-REFUSED" {
+			t.Fatalf("hidden production profile action %s (%d) = %+v", test.name, test.change, review)
+		}
+	}
+}
+
 func TestDefaultRunRefusesRedirectedTerminal(t *testing.T) {
 	input, writeInput, err := os.Pipe()
 	if err != nil {
