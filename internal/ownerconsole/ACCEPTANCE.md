@@ -88,6 +88,16 @@ go test ./internal/ownerconsole -run '^TestRunKeepsHostilePasteAsVisibleInputDat
 
 Require typed `Q` and `q`, single-line or multiline bracketed paste, confirmation words, escape-like bytes, untrusted control characters, and bytes after a hostile embedded paste terminator to remain inert input data. Require a safe visible form or an explicit neutralization marker, no verbatim control output, no screen change, and no approval or exit until the explicit key action.
 
+### OC-ACTIVE-01A — Safe-editing focus equals activation
+
+Run:
+
+```sh
+go test ./internal/ownerconsole -run '^TestRunSafeEditingFocusMatchesThePublicActionInARealPseudoTerminal$' -count=1
+```
+
+Require a real pseudo-terminal to prove that physical `Enter` submits the focused field, `Space` remains input data, and `Tab` moves to the visible action area. Require arrows or `Tab` to change the persistent action selection, `Enter` or `Space` to activate only that selection, and `Shift+Tab` to return to the unchanged field. Require Bubble Tea's native blinking bar and block cursors without an application blink timer, persistent non-color focus markers, no selected persistent-navigation item while safe editing owns activation, and hostile pasted control content to remain data without a public action.
+
 ### OC-ACTIVE-02 — Refresh and confirmation stability
 
 Run:

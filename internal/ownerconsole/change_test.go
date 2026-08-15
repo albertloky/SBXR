@@ -411,6 +411,54 @@ func TestRunShowsReadOnlyInstallationFactsAndDetectedPublicIPv4(t *testing.T) {
 	}
 }
 
+func TestRunSafeEditingFocusMatchesThePublicActionInARealPseudoTerminal(t *testing.T) {
+	editing := ChangeReview{Editing: &EditingPresentation{Title: "Installation choices", Field: EditingField{Identity: "domain", Label: "Domain", Value: "owner.example.test", Required: true}}}
+
+	t.Run("physical Enter submits the field", func(t *testing.T) {
+		stub := &outcomeStub{reviews: []ChangeReview{editing}, editReview: editing}
+		got := runPseudoTerminalTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: stub}, 80, 24, "", "\r", "", "\x03\r")
+		if len(stub.edits) != 1 || stub.edits[0] != (EditingInput{Field: "domain", Text: "owner.example.test"}) || stub.backCalls != 0 {
+			t.Fatalf("text focus executed the wrong public action: edits=%+v back=%d\n%s", stub.edits, stub.backCalls, got)
+		}
+		if !strings.Contains(got, "> Domain:") || !strings.Contains(got, "\x1b[5 q") || !strings.Contains(got, "\x1b[8;53H") {
+			t.Fatalf("text focus did not use Bubble Tea's native blinking bar cursor\n%s", got)
+		}
+	})
+
+	t.Run("Space remains data and Shift Tab preserves it", func(t *testing.T) {
+		stub := &outcomeStub{reviews: []ChangeReview{editing}, editReview: editing}
+		_ = runPseudoTerminalTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: stub}, 80, 24, "", " ", "\t", "\x1b[Z", "\r", "", "\x03\r")
+		if len(stub.edits) != 1 || stub.edits[0] != (EditingInput{Field: "domain", Text: "owner.example.test "}) || stub.backCalls != 0 {
+			t.Fatalf("Space or Shift+Tab changed the field action: edits=%+v back=%d", stub.edits, stub.backCalls)
+		}
+	})
+
+	t.Run("visible action selection", func(t *testing.T) {
+		stub := &outcomeStub{reviews: []ChangeReview{editing}, backReview: editing}
+		got := runPseudoTerminalTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: stub}, 80, 24, "", "\t", "", "\x1b[B", "", " ", "", "\x03\r")
+		if stub.backCalls != 1 || len(stub.edits) != 0 {
+			t.Fatalf("visible Back selection executed the wrong public action: edits=%+v back=%d\n%s", stub.edits, stub.backCalls, got)
+		}
+		for _, want := range []string{"> Review updated request", "> Back", "\x1b[1 q"} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("action focus did not show %q\n%s", want, got)
+			}
+		}
+		if strings.Contains(got, "> Overview") {
+			t.Fatalf("persistent navigation looked selected while safe editing owned activation\n%s", got)
+		}
+	})
+
+	t.Run("hostile paste remains data", func(t *testing.T) {
+		stub := &outcomeStub{reviews: []ChangeReview{editing}}
+		paste := "\x1b[200~\nQq\x1b[31mAPPLY\x03\x1b[201~"
+		got := runPseudoTerminalTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: stub}, 80, 24, "", paste, "", "\x03\r")
+		if len(stub.edits) != 0 || stub.backCalls != 0 || len(stub.applyPlans) != 0 || !strings.Contains(got, "SAFE EDITING") || !strings.Contains(got, "controls neutralized") {
+			t.Fatalf("hostile paste escaped text input: edits=%+v back=%d apply=%+v\n%s", stub.edits, stub.backCalls, stub.applyPlans, got)
+		}
+	})
+}
+
 func TestRunPagesLongValidReviewsAtLargeSize(t *testing.T) {
 	t.Run("Plan", func(t *testing.T) {
 		review := completePlan("long-plan")

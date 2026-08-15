@@ -42,6 +42,15 @@ type EditingInput struct {
 	Text  string
 }
 
+type editingAction uint8
+
+const (
+	editingReview editingAction = iota
+	editingBack
+)
+
+var editingActions = [...]string{"Review updated request", "Back"}
+
 type correctionAction uint8
 
 const (
@@ -297,7 +306,7 @@ func changeReviewLines(review ChangeReview, width, height, page int) []string {
 		for _, fact := range editing.Facts {
 			lines = append(lines, fact.Label+": "+fact.Value)
 		}
-		return append(lines, editing.Field.Label+": "+editing.Field.Value, "", "> Review updated request", "  Esc Back")
+		return append(lines, editing.Field.Label+": "+editing.Field.Value, "", "  Review updated request", "  Back")
 	}
 	correction := review.Correction
 	if correction == nil {

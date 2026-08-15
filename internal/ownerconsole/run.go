@@ -244,6 +244,7 @@ type model struct {
 	changeReview               ChangeReview
 	changeSet                  DurableChangeSet
 	changeFeedback             string
+	editingAction              editingAction
 	correctionSelection        int
 	correctionAction           int
 	planPage                   int
@@ -989,6 +990,33 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.scenario == InstallationReview && m.outcome != nil {
+			if m.changeReview.Editing != nil && m.inputFocused {
+				if message.String() == "enter" {
+					return m, m.editChangeCommand()
+				}
+				if m.editFocusedInput(message) {
+					return m, m.backChangeCommand()
+				}
+				return m, nil
+			}
+			if m.changeReview.Editing != nil {
+				switch message.String() {
+				case "up", "left":
+					m.editingAction = (m.editingAction + editingAction(len(editingActions)) - 1) % editingAction(len(editingActions))
+				case "down", "right", "tab":
+					m.editingAction = (m.editingAction + 1) % editingAction(len(editingActions))
+				case "shift+tab":
+					m.inputFocused = true
+				case "enter", "space":
+					if m.editingAction == editingBack {
+						return m, m.backChangeCommand()
+					}
+					return m, m.editChangeCommand()
+				case "esc":
+					return m, m.backChangeCommand()
+				}
+				return m, nil
+			}
 			if m.inputFocused {
 				if m.editFocusedInput(message) {
 					return m, m.backChangeCommand()
@@ -1995,7 +2023,8 @@ func (m model) editChangeCommand() tea.Cmd {
 }
 
 func (m *model) focusChangeInput() {
-	m.inputFocused = false
+	m.inputFocused, m.editingAction = false, editingReview
+	m.inputTruncated, m.pasteNeutralized, m.pasteGuard = false, false, false
 	if correction := m.changeReview.Correction; correction != nil && correction.InputLabel != "" {
 		m.inputFocused = true
 		return
@@ -2236,13 +2265,53 @@ func (m model) View() tea.View {
 	if m.drawingModeProbeRequired && !m.probeDone {
 		return tea.NewView("")
 	}
-	view := tea.NewView(m.frame())
+	frame := m.frame()
+	view := tea.NewView(frame)
 	view.AltScreen = true
 	view.MouseMode = tea.MouseModeNone
 	if m.scenario == DedicatedAccess && m.accessUnlocked {
 		view.MouseMode = tea.MouseModeCellMotion
 	}
+	view.Cursor = m.focusCursor(frame)
 	return view
+}
+
+func (m model) focusCursor(frame string) *tea.Cursor {
+	if m.exitConfirm || m.width < minimumWidth || m.height < minimumHeight || m.scenario != InstallationReview || m.outcome == nil || m.changeReview.Editing == nil {
+		return nil
+	}
+	needle, offset, shape := "", 0, tea.CursorBlock
+	if m.inputFocused {
+		contentWidth := m.width - navigationWidth - 1
+		if m.width >= 120 {
+			contentWidth = 48
+		}
+		inputLines := wrapLines([]string{"> " + m.changeReview.Editing.Field.Label + ": " + m.quotedInput()}, contentWidth)
+		main := append([]string{scenarioFixture(m.scenario).title, ""}, m.scenarioLines(scenarioFixture(m.scenario))...)
+		main = wrapLines(main, contentWidth)
+		for row, line := range main {
+			if strings.HasPrefix(line, "> "+m.changeReview.Editing.Field.Label+":") {
+				x, y := lipgloss.Width(inputLines[len(inputLines)-1]), 2+row+len(inputLines)-1
+				if x == contentWidth {
+					x, y = 0, y+1
+				}
+				cursor := tea.NewCursor(navigationWidth+1+x, y)
+				cursor.Shape = tea.CursorBar
+				return cursor
+			}
+		}
+		return nil
+	} else {
+		needle = "> " + editingActions[m.editingAction]
+	}
+	for y, line := range strings.Split(frame, "\n") {
+		if index := strings.Index(line, needle); index >= 0 {
+			cursor := tea.NewCursor(lipgloss.Width(line[:index])+offset, y)
+			cursor.Shape = shape
+			return cursor
+		}
+	}
+	return nil
 }
 
 func (m model) frame() string {
@@ -2316,7 +2385,7 @@ func (m model) frame() string {
 		left, right := "", ""
 		if row < len(navigation) {
 			prefix := "  "
-			if row == m.selected && !m.inputFocused && !m.accessFocused && m.scenario != PrivacyChoice {
+			if row == m.selected && !m.inputFocused && !m.accessFocused && m.scenario != PrivacyChoice && !(m.scenario == InstallationReview && m.outcome != nil) {
 				prefix = "> "
 			}
 			left = prefix + navigation[row].label
@@ -2530,13 +2599,23 @@ func (m model) scenarioLines(current fixture) []string {
 			}
 		}
 		if editing := m.changeReview.Editing; editing != nil {
-			value := "-"
-			if m.input != "" {
-				value = strconv.QuoteToGraphic(m.input)
-			}
+			value := m.visibleInput()
 			for index, line := range lines {
 				if strings.HasPrefix(line, editing.Field.Label+":") {
-					lines[index] = editing.Field.Label + ": " + value
+					prefix := "  "
+					if m.inputFocused {
+						prefix = "> "
+					}
+					lines[index] = prefix + editing.Field.Label + ": " + value
+				}
+				for action, label := range editingActions {
+					if strings.TrimSpace(line) == label {
+						prefix := "  "
+						if !m.inputFocused && editingAction(action) == m.editingAction {
+							prefix = "> "
+						}
+						lines[index] = prefix + label
+					}
 				}
 			}
 		}
@@ -2609,19 +2688,27 @@ func (m model) scenarioLines(current fixture) []string {
 		if m.inputFocused {
 			prefix = "> "
 		}
-		value := "-"
-		if m.input != "" {
-			value = strconv.QuoteToGraphic(m.input)
-		}
-		if m.pasteNeutralized {
-			value += " [terminal controls neutralized]"
-		}
-		if m.inputTruncated {
-			value += " [input limit reached]"
-		}
-		lines[current.inputLine] = prefix + value
+		lines[current.inputLine] = prefix + m.visibleInput()
 	}
 	return lines
+}
+
+func (m model) visibleInput() string {
+	value := m.quotedInput()
+	if m.pasteNeutralized {
+		value += " [terminal controls neutralized]"
+	}
+	if m.inputTruncated {
+		value += " [input limit reached]"
+	}
+	return value
+}
+
+func (m model) quotedInput() string {
+	if m.input == "" {
+		return "-"
+	}
+	return strconv.QuoteToGraphic(m.input)
 }
 
 type correctionActionDefinition struct {
@@ -2776,6 +2863,9 @@ func (m model) shortcuts() [2]string {
 		return [2]string{" Ctrl+C Exit confirmation", " Q is never Exit"}
 	}
 	if m.inputFocused {
+		if m.scenario == InstallationReview && m.outcome != nil && m.changeReview.Editing != nil {
+			return [2]string{" Enter Submit field  Space is input data  Tab Actions", " Esc Back  Ctrl+C Exit confirmation"}
+		}
 		return [2]string{" Type or paste input  Tab Navigation", " Q is input data  Ctrl+C Exit confirmation  Esc Back"}
 	}
 	if m.scenario == PrivacyChoice {
@@ -2801,7 +2891,7 @@ func (m model) shortcuts() [2]string {
 			return [2]string{" Enter/Space Apply exact Plan  Esc Back", " Ctrl+C Exit confirmation  Q is never Exit"}
 		}
 		if m.changeReview.Editing != nil {
-			return [2]string{" Type or paste input  Tab Actions  Enter/Space Review", " Esc Back  Ctrl+C Exit confirmation"}
+			return [2]string{" Up/Down Action  Enter/Space Select  Shift+Tab Field", " Esc Back  Ctrl+C Exit confirmation"}
 		}
 		return [2]string{" R Check again  Esc Back", " No result inferred  Ctrl+C Exit confirmation"}
 	}
