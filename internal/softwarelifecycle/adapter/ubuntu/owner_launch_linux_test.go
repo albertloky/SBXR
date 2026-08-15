@@ -32,8 +32,7 @@ func TestOwnerLaunchExecutesTheSameDescriptorThatPassedVerification(t *testing.T
 		t.Fatal(err)
 	}
 
-	command := exec.Command("/proc/self/fd/3", "-test.run=^TestOwnerLaunchDescriptorHelper$")
-	command.ExtraFiles = []*os.File{executable}
+	command := exec.Command(fmt.Sprintf("/proc/%d/fd/%d", os.Getpid(), executable.Fd()), "-test.run=^TestOwnerLaunchDescriptorHelper$")
 	command.Env = append(os.Environ(), "SBXR_OWNER_LAUNCH_DESCRIPTOR_HELPER=1", "SBXR_OWNER_LAUNCH_TAG="+facts.tag, "SBXR_OWNER_LAUNCH_COMMIT="+facts.commit, "SBXR_OWNER_LAUNCH_SHA256="+facts.sha256)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("same descriptor launch = %v\n%s", err, output)
@@ -45,8 +44,8 @@ func TestOwnerLaunchDescriptorHelper(t *testing.T) {
 		return
 	}
 	facts, err := ownerLaunchFactsFromEnvironment(os.Geteuid())
-	executable := os.NewFile(3, "verified-owner-console")
-	if err != nil || executable == nil {
+	executable, openErr := os.Open("/proc/self/exe")
+	if err != nil || openErr != nil {
 		t.Fatalf("launch facts = %v", err)
 	}
 	defer executable.Close()

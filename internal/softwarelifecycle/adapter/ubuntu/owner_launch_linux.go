@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -42,14 +43,13 @@ func launchOwnerConsole(ctx context.Context) error {
 	if facts.installedReentryMarker != "" {
 		rootEnvironment = append(rootEnvironment, "SBXR_INSTALLED_REENTRY=1")
 	}
-	rootEnvironment = append(rootEnvironment, "/proc/self/fd/3", "private", "root-owner-console")
-	arguments := append([]string{"--preserve-fds=3", "--", "/usr/bin/env"}, rootEnvironment...)
+	rootEnvironment = append(rootEnvironment, fmt.Sprintf("/proc/%d/fd/%d", os.Getpid(), executable.Fd()), "private", "root-owner-console")
+	arguments := append([]string{"--", "/usr/bin/env"}, rootEnvironment...)
 	command := exec.CommandContext(ctx, "/usr/bin/sudo", arguments...)
 	if facts.uid == 0 {
 		command = exec.CommandContext(ctx, "/usr/bin/env", rootEnvironment...)
 	}
 	command.Stdin, command.Stdout, command.Stderr = os.Stdin, os.Stdout, os.Stderr
-	command.ExtraFiles = []*os.File{executable}
 	return command.Run()
 }
 
@@ -84,8 +84,8 @@ func verifyRootOwnerConsoleProcess() error {
 	if err != nil {
 		return err
 	}
-	executable := os.NewFile(3, "verified-owner-console")
-	if executable == nil {
+	executable, err := os.Open("/proc/self/exe")
+	if err != nil {
 		return errors.New("Owner Console descriptor unavailable")
 	}
 	defer executable.Close()
