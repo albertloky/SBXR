@@ -48,6 +48,10 @@ _Avoid_: Clean the server, remove anything suspicious, best-effort cleanup
 The fixed operating-system executables, services, libraries, interpreters, mounts, package tools, current shell, SSH access, and recovery dependencies that Destructive Reclamation must never delete even when they occupy a requested seam.
 _Avoid_: Probably safe to delete, replaceable system file
 
+**SSH Preservation Proof**:
+The in-memory agreement between the direct SSH session identity captured at launch and fresh observations of its active service, exact listener, and established connection. A listening SSH port or another session is not sufficient.
+_Avoid_: SSH port, SSH configuration, session guess
+
 **Irreversible Reclamation Started**:
 The durable checkpoint written before the first destructive effect; before it the Owner may leave without change, and after it SBXR offers only exact forward recovery to Managed.
 _Avoid_: Apply started, point of no return, partial cleanup
