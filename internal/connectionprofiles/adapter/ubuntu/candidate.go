@@ -18,6 +18,7 @@ import (
 type CandidateHost struct {
 	xray, singBox               []byte
 	xrayVersion, singBoxVersion string
+	probe                       realityProbeDependencies
 }
 
 func (CandidateHost) String() string   { return "Connection Profiles candidate host: redacted" }
@@ -32,29 +33,33 @@ func NewCandidateHost(candidate softwarelifecycle.InstallCandidate) (CandidateHo
 	if !xrayOK || !singBoxOK {
 		return CandidateHost{}, errors.New("qualified candidate proxy cores unavailable")
 	}
-	return CandidateHost{xray: xray, singBox: singBox, xrayVersion: xrayVersion, singBoxVersion: strings.TrimPrefix(singBoxVersion, "v")}, nil
+	host := CandidateHost{xray: xray, singBox: singBox, xrayVersion: xrayVersion, singBoxVersion: strings.TrimPrefix(singBoxVersion, "v")}
+	host.probe = productionRealityProbe(func(ctx context.Context, address string) error {
+		return runCandidate(ctx, host.xray, nil, "tls", "ping", address)
+	})
+	return host, nil
 }
 
-func (CandidateHost) ObserveReality(context.Context, connectionprofiles.RealityTarget) connectionprofiles.RealityObservation {
-	return connectionprofiles.RealityObservation{}
+func (host CandidateHost) ObserveReality(ctx context.Context, target connectionprofiles.RealityTarget) connectionprofiles.RealityObservation {
+	return probeRealityTargetWith(ctx, target, host.probe)
 }
 
 func (host CandidateHost) ValidateReality(ctx context.Context, version string, configuration io.Reader) error {
-	if version != host.xrayVersion {
+	if version != host.xrayVersion || configuration == nil {
 		return errors.New("qualified Xray version changed")
 	}
 	return runCandidate(ctx, host.xray, configuration, "run", "-test", "-config", "stdin:")
 }
 
 func (host CandidateHost) ValidateSingBox(ctx context.Context, version string, configuration io.Reader) error {
-	if version != host.singBoxVersion {
+	if version != host.singBoxVersion || configuration == nil {
 		return errors.New("qualified sing-box version changed")
 	}
 	return runCandidate(ctx, host.singBox, configuration, "check", "-c", "/dev/stdin")
 }
 
 func runCandidate(ctx context.Context, executable []byte, configuration io.Reader, arguments ...string) error {
-	if len(executable) == 0 || configuration == nil {
+	if len(executable) == 0 {
 		return errors.New("candidate validation unavailable")
 	}
 	directory, err := os.MkdirTemp("", "sbxr-component-")

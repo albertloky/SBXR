@@ -113,6 +113,16 @@ const (
 	ProbeInconclusive ProbeStatus = "inconclusive"
 )
 
+type RealityProbeFailure string
+
+const (
+	RealityProbeNativeFailure      RealityProbeFailure = "native probe failed"
+	RealityProbeUnknownTarget      RealityProbeFailure = "target classification unavailable"
+	RealityProbeRouteFailure       RealityProbeFailure = "route failed"
+	RealityProbeCertificateFailure RealityProbeFailure = "certificate invalid"
+	RealityProbeNameFailure        RealityProbeFailure = "certificate name mismatched"
+)
+
 type RealityTarget struct {
 	Address          string
 	ServerName       string
@@ -129,6 +139,7 @@ type Listener struct {
 type RealityObservation struct {
 	CheckedAt         time.Time
 	Probe             ProbeStatus
+	ProbeFailure      RealityProbeFailure
 	Class             TargetClass
 	AcceptedNames     []string
 	RouteVerified     bool
@@ -237,9 +248,23 @@ type ViewResult struct {
 	observation RealityObservation
 }
 
+type RealityTargetReview struct {
+	Target RealityTarget
+	Health Health
+}
+
 type Interface struct{ host RealityHost }
 
 func New(host RealityHost) Interface { return Interface{host: host} }
+
+func (module Interface) ReviewRealityTarget(ctx context.Context, target RealityTarget) RealityTargetReview {
+	if module.host == nil {
+		return RealityTargetReview{Target: target, Health: blocked(time.Time{}, Unknown, "CONNECTION-PROFILES-REALITY-HOST", "The Ubuntu and native Xray observation is unavailable", "no local host boundary", "one typed Ubuntu and Xray observation")}
+	}
+	observedTarget := target
+	observedTarget.ListenerPort = 443
+	return RealityTargetReview{Target: target, Health: realityTargetHealth(target, module.host.ObserveReality(ctx, observedTarget))}
+}
 
 func (module Interface) View(ctx context.Context, request ViewRequest) ViewResult {
 	profile := Profile{Name: "VLESS REALITY Vision", Transport: "RAW", Security: "REALITY", Flow: "xtls-rprx-vision", Target: request.Target.Address, ServerName: request.Target.ServerName, XrayVersion: request.XrayVersion, Enabled: request.Enabled, Port: request.Port, CredentialsReady: request.Credentials.valid()}
@@ -255,29 +280,12 @@ func (module Interface) View(ctx context.Context, request ViewRequest) ViewResul
 	profile.Listener = observation.Listener
 	result := ViewResult{Profile: profile, observation: observation}
 	result.VolatileSHA256 = realityObservationSHA256(request, observation)
-	host, port, err := net.SplitHostPort(request.Target.Address)
-	if err != nil || port != "443" || host != request.Target.ServerName || !validHostname(host) {
-		result.Health = externalBlockedHealth(blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-TARGET", "The VLESS REALITY Vision target is invalid", "the target address, port, or accepted name is wrong", "one ordinary external target using its accepted name on 443/TCP"), "Select an ordinary non-Cloudflare, non-Apple or iCloud target whose address and accepted name agree on 443/TCP, then Check again.")
+	if targetHealth := realityTargetHealth(request.Target, observation); targetHealth.Outcome != Healthy {
+		result.Health = targetHealth
 		return result
 	}
 	if !selectedPort(request.Port, 443, request.reviewedAlternative) || request.XrayVersion != qualifiedXrayVersion || request.Fingerprint != "chrome" || !request.Credentials.valid() || !request.Enabled {
 		result.Health = blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-TARGET", "The VLESS REALITY Vision SBXR inputs are invalid", "the selected listener, credential, fingerprint, enabled state, or qualified release is wrong", "one enabled profile using the reviewed listener, Chrome fingerprint, and Xray v26.3.27")
-		return result
-	}
-	if observation.Probe != ProbePassed {
-		result.Health = externalBlockedHealth(blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-PROBE", "The bounded REALITY target probe did not pass", string(observation.Probe), "one conclusive xray tls ping route and safety result"), "Correct or replace the external target until the bounded xray tls ping route and safety probe passes, then Check again.")
-		return result
-	}
-	if observation.Class == CloudflareTarget || observation.Class == AppleICloudTarget || observation.Class != OrdinaryTarget {
-		result.Health = externalBlockedHealth(blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-TARGET-CLASS", "The REALITY target belongs to a forbidden or unknown target class", string(observation.Class), "one suitable non-Cloudflare, non-Apple or iCloud target"), "Select a suitable external target that is neither Cloudflare nor Apple or iCloud, then Check again.")
-		return result
-	}
-	if !observation.RouteVerified {
-		result.Health = externalBlockedHealth(blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-ROUTE", "The REALITY route is unproved", "the target route could not be confirmed", "one conclusive target route"), "Correct the external target or VPS route until the exact route is conclusive, then Check again.")
-		return result
-	}
-	if !slices.Contains(observation.AcceptedNames, request.Target.ServerName) {
-		result.Health = externalBlockedHealth(blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-NAME", "The REALITY accepted name does not match", strings.Join(observation.AcceptedNames, ","), request.Target.ServerName), "Select an external target whose accepted TLS name exactly matches the reviewed server name, then Check again.")
 		return result
 	}
 	if request.Revision > 0 {
@@ -304,6 +312,41 @@ func (module Interface) View(ctx context.Context, request ViewRequest) ViewResul
 	}
 	result.Health = Health{Time: observation.CheckedAt, Module: "Connection Profiles", Profile: profile.Name, Outcome: Healthy, Code: "CONNECTION-PROFILES-REALITY-HEALTHY", NextActions: nextActions}
 	return result
+}
+
+func realityTargetHealth(target RealityTarget, observation RealityObservation) Health {
+	host, port, err := net.SplitHostPort(target.Address)
+	if err != nil || port != "443" || host != target.ServerName || !validHostname(host) {
+		return externalBlockedHealth(blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-TARGET", "The VLESS REALITY Vision target is invalid", "the target address, port, or accepted name is wrong", "one ordinary external target using its accepted name on 443/TCP"), "Enter one ordinary non-Cloudflare, non-Apple or iCloud hostname without :443, then Check again.")
+	}
+	if observation.Class == CloudflareTarget || observation.Class == AppleICloudTarget {
+		return externalBlockedHealth(blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-TARGET-CLASS", "The REALITY target belongs to a forbidden target class", string(observation.Class), "one suitable non-Cloudflare, non-Apple or iCloud target"), "Enter a suitable external hostname that is neither Cloudflare nor Apple or iCloud, then Check again.")
+	}
+	switch observation.ProbeFailure {
+	case RealityProbeUnknownTarget:
+		return externalBlockedHealth(blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-TARGET-CLASS", "The REALITY target class could not be proved", string(observation.ProbeFailure), "one suitable non-Cloudflare, non-Apple or iCloud target"), "Enter a suitable external hostname whose target class can be proved, then Check again.")
+	case RealityProbeRouteFailure:
+		return externalBlockedHealth(blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-ROUTE", "The REALITY route failed", string(observation.ProbeFailure), "one reachable target route"), "Correct the external hostname or VPS route until the target is reachable, then Check again.")
+	case RealityProbeCertificateFailure:
+		return externalBlockedHealth(blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-CERTIFICATE", "The REALITY target certificate is invalid", string(observation.ProbeFailure), "one publicly trusted current certificate"), "Enter an external hostname with one publicly trusted current certificate, then Check again.")
+	case RealityProbeNameFailure:
+		return externalBlockedHealth(blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-NAME", "The REALITY accepted name does not match", strings.Join(observation.AcceptedNames, ","), target.ServerName), "Enter the exact hostname accepted by the target certificate, then Check again.")
+	case RealityProbeNativeFailure:
+		return externalBlockedHealth(blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-PROBE", "The bounded native REALITY target probe failed", string(observation.ProbeFailure), "one successful bounded authenticated Xray target probe"), "Correct or replace the external hostname until the bounded native Xray probe passes, then Check again.")
+	}
+	if observation.Probe != ProbePassed {
+		return externalBlockedHealth(blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-PROBE", "The bounded REALITY target probe did not pass", string(observation.Probe), "one conclusive xray tls ping route, certificate, and safety result"), "Correct or replace the external hostname until the bounded xray tls ping, certificate, route, and safety probe passes, then Check again.")
+	}
+	if observation.Class != OrdinaryTarget {
+		return externalBlockedHealth(blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-TARGET-CLASS", "The REALITY target belongs to an unknown target class", string(observation.Class), "one suitable non-Cloudflare, non-Apple or iCloud target"), "Enter a suitable external hostname that is neither Cloudflare nor Apple or iCloud, then Check again.")
+	}
+	if !observation.RouteVerified {
+		return externalBlockedHealth(blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-ROUTE", "The REALITY route is unproved", "the target route could not be confirmed", "one conclusive target route"), "Correct the external hostname or VPS route until the exact route is conclusive, then Check again.")
+	}
+	if !slices.Contains(observation.AcceptedNames, target.ServerName) {
+		return externalBlockedHealth(blocked(observation.CheckedAt, Failed, "CONNECTION-PROFILES-REALITY-NAME", "The REALITY accepted name does not match", strings.Join(observation.AcceptedNames, ","), target.ServerName), "Enter an external hostname whose accepted TLS name exactly matches, then Check again.")
+	}
+	return Health{Time: observation.CheckedAt, Module: "Connection Profiles", Profile: "VLESS REALITY Vision", Outcome: Healthy, Code: "CONNECTION-PROFILES-REALITY-TARGET-HEALTHY", NextActions: []string{"Continue Installation", "Back"}}
 }
 
 func rootServiceHealthy(unit, identity string, running, contained bool, expectedUnit string) bool {

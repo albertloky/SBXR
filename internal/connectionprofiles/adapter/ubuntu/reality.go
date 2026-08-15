@@ -3,6 +3,7 @@ package ubuntu
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"io"
@@ -256,6 +257,53 @@ func runRealityCommand(ctx context.Context, input io.Reader, name string, argume
 }
 
 func probeRealityTarget(ctx context.Context, target connectionprofiles.RealityTarget) connectionprofiles.RealityObservation {
+	return probeRealityTargetWith(ctx, target, productionRealityProbe(func(probe context.Context, address string) error {
+		_, err := runRealityCommand(probe, nil, "xray", "tls", "ping", address)
+		return err
+	}))
+}
+
+type realityProbeDependencies struct {
+	ping       func(context.Context, string) error
+	lookup     func(context.Context, string, string) ([]netip.Addr, error)
+	cloudflare func(context.Context) ([]netip.Prefix, error)
+	tlsState   func(context.Context, string, string) (tls.ConnectionState, error)
+	verify     func([]*x509.Certificate) error
+}
+
+func productionRealityProbe(ping func(context.Context, string) error) realityProbeDependencies {
+	return realityProbeDependencies{
+		ping:       ping,
+		lookup:     net.DefaultResolver.LookupNetIP,
+		cloudflare: cloudflarePrefixes,
+		verify: func(certificates []*x509.Certificate) error {
+			if len(certificates) == 0 {
+				return errors.New("certificate unavailable")
+			}
+			intermediates := x509.NewCertPool()
+			for _, certificate := range certificates[1:] {
+				intermediates.AddCert(certificate)
+			}
+			_, err := certificates[0].Verify(x509.VerifyOptions{Intermediates: intermediates})
+			return err
+		},
+		tlsState: func(ctx context.Context, address, serverName string) (tls.ConnectionState, error) {
+			dialer := &net.Dialer{Timeout: 15 * time.Second}
+			connection, err := dialer.DialContext(ctx, "tcp", address)
+			if err != nil {
+				return tls.ConnectionState{}, err
+			}
+			defer connection.Close()
+			client := tls.Client(connection, &tls.Config{ServerName: serverName, MinVersion: tls.VersionTLS12, InsecureSkipVerify: true}) // Verification is completed below from the returned peer chain.
+			if err := client.HandshakeContext(ctx); err != nil {
+				return tls.ConnectionState{}, err
+			}
+			return client.ConnectionState(), nil
+		},
+	}
+}
+
+func probeRealityTargetWith(ctx context.Context, target connectionprofiles.RealityTarget, dependencies realityProbeDependencies) connectionprofiles.RealityObservation {
 	observation := connectionprofiles.RealityObservation{Probe: connectionprofiles.ProbeInconclusive}
 	host, port, err := net.SplitHostPort(target.Address)
 	if err != nil || port != "443" || host != target.ServerName {
@@ -268,21 +316,20 @@ func probeRealityTarget(ctx context.Context, target connectionprofiles.RealityTa
 	}
 	probe, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	if _, err := runRealityCommand(probe, nil, "xray", "tls", "ping", target.Address); err != nil {
-		observation.Probe = connectionprofiles.ProbeFailed
-		return observation
-	}
-	addresses, err := net.DefaultResolver.LookupNetIP(probe, "ip", host)
+	addresses, err := dependencies.lookup(probe, "ip", host)
 	if err != nil || len(addresses) == 0 {
+		observation.ProbeFailure = connectionprofiles.RealityProbeUnknownTarget
 		return observation
 	}
 	providerNetwork, validProviderPrefixes := addressInPrefixes(addresses, target.ProviderPrefixes)
 	if !validProviderPrefixes {
+		observation.ProbeFailure = connectionprofiles.RealityProbeUnknownTarget
 		return observation
 	}
 	observation.ProviderNetwork = providerNetwork
-	prefixes, err := cloudflarePrefixes(probe)
+	prefixes, err := dependencies.cloudflare(probe)
 	if err != nil {
+		observation.ProbeFailure = connectionprofiles.RealityProbeUnknownTarget
 		return observation
 	}
 	for _, address := range addresses {
@@ -292,24 +339,34 @@ func probeRealityTarget(ctx context.Context, target connectionprofiles.RealityTa
 			return observation
 		}
 	}
-	dialer := &net.Dialer{Timeout: 15 * time.Second}
-	connection, err := tls.DialWithDialer(dialer, "tcp", target.Address, &tls.Config{ServerName: target.ServerName, MinVersion: tls.VersionTLS12})
+	state, err := dependencies.tlsState(probe, target.Address, target.ServerName)
 	if err != nil {
 		observation.Probe = connectionprofiles.ProbeFailed
+		observation.ProbeFailure = connectionprofiles.RealityProbeRouteFailure
 		return observation
 	}
-	defer connection.Close()
-	certificates := connection.ConnectionState().PeerCertificates
-	if len(certificates) == 0 || certificates[0].VerifyHostname(target.ServerName) != nil {
+	observation.RouteVerified = true
+	certificates := state.PeerCertificates
+	if len(certificates) == 0 || dependencies.verify == nil || dependencies.verify(certificates) != nil {
 		observation.Probe = connectionprofiles.ProbeFailed
+		observation.ProbeFailure = connectionprofiles.RealityProbeCertificateFailure
 		return observation
 	}
 	observation.AcceptedNames = append([]string(nil), certificates[0].DNSNames...)
-	if certificates[0].VerifyHostname(target.ServerName) == nil && !slices.Contains(observation.AcceptedNames, target.ServerName) {
+	if certificates[0].VerifyHostname(target.ServerName) != nil {
+		observation.Probe = connectionprofiles.ProbeFailed
+		observation.ProbeFailure = connectionprofiles.RealityProbeNameFailure
+		return observation
+	}
+	if !slices.Contains(observation.AcceptedNames, target.ServerName) {
 		observation.AcceptedNames = append(observation.AcceptedNames, target.ServerName)
 	}
+	if dependencies.ping == nil || dependencies.ping(probe, target.Address) != nil {
+		observation.Probe = connectionprofiles.ProbeFailed
+		observation.ProbeFailure = connectionprofiles.RealityProbeNativeFailure
+		return observation
+	}
 	observation.Class = connectionprofiles.OrdinaryTarget
-	observation.RouteVerified = true
 	observation.Probe = connectionprofiles.ProbePassed
 	return observation
 }

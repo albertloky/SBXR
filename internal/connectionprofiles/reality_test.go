@@ -63,6 +63,27 @@ func (host *realityHost) ValidateReality(_ context.Context, version string, conf
 	return host.validation
 }
 
+func TestRealityTargetReviewUsesTheCompleteSafetyProbeWithoutManagedServiceFacts(t *testing.T) {
+	observation := healthyRealityObservation()
+	observation.ConfigurationSafe, observation.ServiceRunning, observation.ServiceContained = false, false, false
+	observation.Listener = connectionprofiles.Listener{}
+	review := connectionprofiles.New(&realityHost{observation: observation}).ReviewRealityTarget(t.Context(), connectionprofiles.RealityTarget{Address: "edge.example.net:443", ServerName: "edge.example.net"})
+	if review.Health.Outcome != connectionprofiles.Healthy || review.Target.Address != "edge.example.net:443" || review.Target.ServerName != "edge.example.net" {
+		t.Fatalf("ReviewRealityTarget() = %+v", review)
+	}
+
+	observation.Class, observation.Probe = connectionprofiles.CloudflareTarget, connectionprofiles.ProbeFailed
+	review = connectionprofiles.New(&realityHost{observation: observation}).ReviewRealityTarget(t.Context(), connectionprofiles.RealityTarget{Address: "edge.example.net:443", ServerName: "edge.example.net"})
+	if review.Health.Outcome != connectionprofiles.Failed || review.Health.Code != "CONNECTION-PROFILES-REALITY-TARGET-CLASS" || review.Health.CorrectionFlow().OwnerWork == "" {
+		t.Fatalf("unsafe ReviewRealityTarget() = %+v", review)
+	}
+
+	review = connectionprofiles.New(&realityHost{observation: healthyRealityObservation()}).ReviewRealityTarget(t.Context(), connectionprofiles.RealityTarget{Address: "[edge.example.net:443]:443", ServerName: "edge.example.net:443"})
+	if review.Health.Outcome != connectionprofiles.Failed || review.Health.Code != "CONNECTION-PROFILES-REALITY-TARGET" || review.Health.CorrectionFlow().OwnerWork == "" {
+		t.Fatalf("hostname with port ReviewRealityTarget() = %+v", review)
+	}
+}
+
 func TestRealityViewAndPlanProduceOneSafeNativeConfiguration(t *testing.T) {
 	host := &realityHost{observation: healthyRealityObservation()}
 	module := connectionprofiles.New(host)

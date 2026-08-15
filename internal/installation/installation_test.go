@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
+	"github.com/albertloky/SBXR/internal/connectionprofiles"
 	"github.com/albertloky/SBXR/internal/networkpolicy"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 	softwareubuntu "github.com/albertloky/SBXR/internal/softwarelifecycle/adapter/ubuntu"
@@ -667,8 +668,7 @@ func TestInstallationReviewOwnsFirstDraftDefaultsAndProgression(t *testing.T) {
 		{"cloudflare-account", Draft{SubmittedField: "cloudflare-account", CloudflareAccountID: complete.CloudflareAccountID}, ""},
 		{"cloudflare-zone", Draft{SubmittedField: "cloudflare-zone", CloudflareZoneID: complete.CloudflareZoneID}, ""},
 		{"cloudflare-token", Draft{SubmittedField: "cloudflare-token", CloudflareToken: complete.CloudflareToken}, ""},
-		{"reality-target", Draft{SubmittedField: "reality-target", RealityTarget: complete.RealityTarget}, ""},
-		{"reality-server-name", Draft{SubmittedField: "reality-server-name", RealityServerName: complete.RealityServerName}, ""},
+		{"reality-target", Draft{SubmittedField: "reality-target", SubmittedValue: complete.RealityServerName}, ""},
 	}
 	for _, field := range fields {
 		review := module.Review(t.Context(), Draft{})
@@ -682,7 +682,7 @@ func TestInstallationReviewOwnsFirstDraftDefaultsAndProgression(t *testing.T) {
 			t.Fatalf("proven Public IPv4 was not marked detected: %+v", review.Invalid)
 		}
 		review = module.Review(t.Context(), field.update)
-		if field.identity == "reality-server-name" && review.Plan == nil {
+		if field.identity == "reality-target" && review.Plan == nil {
 			t.Fatalf("complete default journey = %+v", review)
 		}
 	}
@@ -721,6 +721,55 @@ func TestInstallationReviewGuidesUnprovedAndAmbiguousNetworkFacts(t *testing.T) 
 	review := module.Review(t.Context(), Draft{})
 	if review.Correction == nil || review.Correction.InputLabel != "" || len(review.Correction.OwnerSteps) != 1 || review.Invalid != nil {
 		t.Fatalf("unproved SSH did not stop with exact recovery guidance: %+v", review)
+	}
+}
+
+func TestInstallationReviewDerivesAndImmediatelyChecksOneRealityHostname(t *testing.T) {
+	module := newTestInstallation(t, composedNetworkObserver{}, nil)
+	complete := composedDraft(t)
+	for _, input := range []Draft{
+		{SubmittedField: "domain", SubmittedValue: complete.Installation.Domain},
+		{SubmittedField: "owner-email", SubmittedValue: complete.Installation.OwnerEmail},
+		{SubmittedField: "public-ipv4", SubmittedValue: complete.Installation.PublicIPv4},
+		{SubmittedField: "reality-port", SubmittedValue: "443"},
+		{SubmittedField: "hysteria2-port", SubmittedValue: "443"},
+		{SubmittedField: "tuic-port", SubmittedValue: "8443"},
+		{SubmittedField: "anytls-port", SubmittedValue: "9443"},
+		{SubmittedField: "subscription-port", SubmittedValue: "10443"},
+		{SubmittedField: "cloudflare-account", SubmittedValue: complete.CloudflareAccountID},
+		{SubmittedField: "cloudflare-zone", SubmittedValue: complete.CloudflareZoneID},
+		{SubmittedField: "cloudflare-token", SubmittedValue: complete.CloudflareToken},
+	} {
+		module.Review(t.Context(), input)
+	}
+
+	var target connectionprofiles.RealityTarget
+	for _, test := range []struct{ name, code, found string }{
+		{name: "Cloudflare", code: "CONNECTION-PROFILES-REALITY-TARGET-CLASS", found: "cloudflare-fronted"},
+		{name: "Apple", code: "CONNECTION-PROFILES-REALITY-TARGET-CLASS", found: "apple-or-icloud"},
+		{name: "iCloud", code: "CONNECTION-PROFILES-REALITY-TARGET-CLASS", found: "apple-or-icloud"},
+		{name: "unknown", code: "CONNECTION-PROFILES-REALITY-TARGET-CLASS", found: "unknown"},
+		{name: "invalid certificate", code: "CONNECTION-PROFILES-REALITY-CERTIFICATE", found: "certificate invalid"},
+		{name: "mismatched name", code: "CONNECTION-PROFILES-REALITY-NAME", found: "other.example.net"},
+		{name: "failed route", code: "CONNECTION-PROFILES-REALITY-ROUTE", found: "unproved"},
+		{name: "failed probe", code: "CONNECTION-PROFILES-REALITY-PROBE", found: "failed"},
+	} {
+		module.dependencies.ReviewRealityTarget = func(_ context.Context, reviewed connectionprofiles.RealityTarget) connectionprofiles.RealityTargetReview {
+			target = reviewed
+			return connectionprofiles.RealityTargetReview{Target: reviewed, Health: connectionprofiles.Health{Outcome: connectionprofiles.Failed, Code: test.code, Problem: "The REALITY target is unsafe", Found: test.found, Required: "one ordinary target", WhyStopped: "Connection Profiles fails closed", BlockerOwner: connectionprofiles.ExternalBlocker, BlockerAction: "Enter one ordinary hostname, then Check again."}}
+		}
+		review := module.Review(t.Context(), Draft{SubmittedField: "reality-target", SubmittedValue: "edge.example.net"})
+		if review.Invalid == nil || review.Invalid.Field != "reality-target" || review.Invalid.Value != "edge.example.net" || target.Address != "edge.example.net:443" || target.ServerName != "edge.example.net" || module.nextField != len(draftFields)-1 || module.draft.RealityTarget != "" || len(review.Invalid.Facts) < 4 || review.Invalid.Facts[len(review.Invalid.Facts)-2].Value != "Enter one ordinary hostname, then Check again." || !strings.Contains(review.Invalid.Facts[len(review.Invalid.Facts)-1].Value, test.code) {
+			t.Fatalf("%s REALITY target Review = %+v, target = %+v, draft = %+v", test.name, review, target, module.draft)
+		}
+	}
+
+	module.dependencies.ReviewRealityTarget = func(_ context.Context, reviewed connectionprofiles.RealityTarget) connectionprofiles.RealityTargetReview {
+		return connectionprofiles.RealityTargetReview{Target: reviewed, Health: connectionprofiles.Health{Outcome: connectionprofiles.Healthy}}
+	}
+	review := module.Review(t.Context(), Draft{SubmittedField: "reality-target", SubmittedValue: "edge.example.net"})
+	if review.Plan == nil || module.draft.RealityTarget != "edge.example.net:443" || module.draft.RealityServerName != "edge.example.net" {
+		t.Fatalf("safe REALITY target Review = %+v, draft = %+v", review, module.draft)
 	}
 }
 
@@ -1034,6 +1083,9 @@ func newTestInstallationWith(t *testing.T, observer networkpolicy.Adapter, launc
 	}
 	module, err := New(Dependencies{
 		Preflight: func() networkpolicy.InstallationPreflightResult { return preflight },
+		ReviewRealityTarget: func(_ context.Context, target connectionprofiles.RealityTarget) connectionprofiles.RealityTargetReview {
+			return connectionprofiles.RealityTargetReview{Target: target, Health: connectionprofiles.Health{Outcome: connectionprofiles.Healthy}}
+		},
 		RunningRelease: func() (RunningRelease, error) {
 			return RunningRelease{Tag: request.Tag, Architecture: request.Architecture}, nil
 		},

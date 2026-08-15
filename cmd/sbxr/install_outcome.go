@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
+	"github.com/albertloky/SBXR/internal/connectionprofiles"
 	profilesubuntu "github.com/albertloky/SBXR/internal/connectionprofiles/adapter/ubuntu"
 	"github.com/albertloky/SBXR/internal/healthdiagnostics"
 	"github.com/albertloky/SBXR/internal/installation"
@@ -52,8 +53,7 @@ var installFields = []ownerconsole.EditingField{
 	{Identity: "cloudflare-account", Label: "Cloudflare account ID", Required: true},
 	{Identity: "cloudflare-zone", Label: "Cloudflare zone ID", Required: true},
 	{Identity: "cloudflare-token", Label: "Cloudflare scoped token", Required: true},
-	{Identity: "reality-target", Label: "REALITY target host:443", Required: true},
-	{Identity: "reality-server-name", Label: "REALITY server name", Required: true},
+	{Identity: "reality-target", Label: "REALITY target hostname", Required: true},
 }
 
 func newInstallOutcome() *installOutcome {
@@ -74,21 +74,44 @@ func newInstallationModuleWith(releaseSource func() (versionReport, error), pref
 	}
 	api := cloudflaretunnel.NewProductionAPI()
 	cloudflare := cloudflaretunnel.New(api, cloudflaretunnel.SystemClock{})
+	releaseCandidate := func(ctx context.Context, tag string, architecture softwarelifecycle.Architecture) (softwarelifecycle.InstallCandidateHandoff, error) {
+		view := lifecycle.View(ctx, softwarelifecycle.ViewRequest{Tag: tag, Architecture: architecture, InstallationStatus: softwarelifecycle.NotInstalled})
+		candidate := view.InstallCandidate()
+		handoff, valid := candidate.InstallHandoff()
+		if view.Refusal != nil || !valid {
+			return softwarelifecycle.InstallCandidateHandoff{}, errors.New("the exact release could not be verified and staged")
+		}
+		return handoff, nil
+	}
 	return installation.New(installation.Dependencies{
 		Preflight: preflightSource,
+		ReviewRealityTarget: func(ctx context.Context, target connectionprofiles.RealityTarget) connectionprofiles.RealityTargetReview {
+			unavailable := func() connectionprofiles.RealityTargetReview {
+				return connectionprofiles.RealityTargetReview{Target: target, Health: connectionprofiles.Health{Module: "Connection Profiles", Profile: "VLESS REALITY Vision", Outcome: connectionprofiles.Failed, Code: "CONNECTION-PROFILES-REALITY-HOST", Problem: "The authenticated Xray target probe is unavailable", Found: "the exact running release candidate could not supply Xray", Required: "one authenticated staged Xray candidate", WhyStopped: "Connection Profiles never substitutes an unrelated system Xray", NextActions: []string{"Check again", "Back"}, BlockerOwner: connectionprofiles.SBXROwnedBlocker, BlockerAction: "Check the release connection, then submit this hostname again."}}
+			}
+			report, err := releaseSource()
+			if err != nil {
+				return unavailable()
+			}
+			handoff, err := releaseCandidate(ctx, report.Build.Tag, report.Architecture)
+			if err != nil {
+				return unavailable()
+			}
+			candidate, err := softwarelifecycle.RebuildInstallCandidate(ctx, handoff, stager)
+			if err != nil {
+				return unavailable()
+			}
+			host, err := profilesubuntu.NewCandidateHost(candidate)
+			if err != nil {
+				return unavailable()
+			}
+			return connectionprofiles.New(host).ReviewRealityTarget(ctx, target)
+		},
 		RunningRelease: func() (installation.RunningRelease, error) {
 			report, err := releaseSource()
 			return installation.RunningRelease{Tag: report.Build.Tag, Architecture: report.Architecture}, err
 		},
-		ReleaseCandidate: func(ctx context.Context, tag string, architecture softwarelifecycle.Architecture) (softwarelifecycle.InstallCandidateHandoff, error) {
-			view := lifecycle.View(ctx, softwarelifecycle.ViewRequest{Tag: tag, Architecture: architecture, InstallationStatus: softwarelifecycle.NotInstalled})
-			candidate := view.InstallCandidate()
-			handoff, valid := candidate.InstallHandoff()
-			if view.Refusal != nil || !valid {
-				return softwarelifecycle.InstallCandidateHandoff{}, errors.New("the exact release could not be verified and staged")
-			}
-			return handoff, nil
-		}, Stage: stager.Stage, Network: network.Evaluate, Cloudflare: cloudflare.Plan, CloudflareAPI: api, Inventory: api,
+		ReleaseCandidate: releaseCandidate, Stage: stager.Stage, Network: network.Evaluate, Cloudflare: cloudflare.Plan, CloudflareAPI: api, Inventory: api,
 		Entropy: installation.DefaultEntropy(), Launch: softwareubuntu.LaunchInstallApplyWithCancellation,
 		Recover: func(_ context.Context, pending systemchanges.PendingChangeSet) error {
 			return runProvenRecovery(pending)

@@ -2,6 +2,10 @@ package ubuntu
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/netip"
@@ -12,7 +16,28 @@ import (
 	"time"
 
 	"github.com/albertloky/SBXR/internal/connectionprofiles"
+	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 )
+
+type realityProbeResultHost struct {
+	observation connectionprofiles.RealityObservation
+}
+
+func (host realityProbeResultHost) ObserveReality(context.Context, connectionprofiles.RealityTarget) connectionprofiles.RealityObservation {
+	return host.observation
+}
+
+func (realityProbeResultHost) ValidateReality(context.Context, string, io.Reader) error { return nil }
+
+type authenticatedCandidateStager struct {
+	staged        softwarelifecycle.StagedRelease
+	authenticated bool
+}
+
+func (stager *authenticatedCandidateStager) Stage(_ context.Context, request softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
+	stager.authenticated = request.Authenticated()
+	return stager.staged, nil
+}
 
 func TestObserveCoreCapabilitiesRequiresSuccessfulEmptyServiceSets(t *testing.T) {
 	host := RealityHost{now: func() time.Time { return time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC) }, run: func(context.Context, io.Reader, string, ...string) (string, error) { return "\n", nil }}
@@ -109,6 +134,118 @@ func TestRealityHostReturnsOnlyTypedSafeUbuntuAndXrayFacts(t *testing.T) {
 	linked.root = linkedRoot
 	if linked.safeConfiguration() {
 		t.Fatal("symbolic-link ancestor accepted protected configuration")
+	}
+}
+
+func TestInstallationRealityTargetReviewUsesTheProductionProbeSeam(t *testing.T) {
+	target := connectionprofiles.RealityTarget{Address: "edge.example.net:443", ServerName: "edge.example.net"}
+	base := realityProbeDependencies{
+		ping: func(context.Context, string) error { return nil },
+		lookup: func(context.Context, string, string) ([]netip.Addr, error) {
+			return []netip.Addr{netip.MustParseAddr("203.0.113.20")}, nil
+		},
+		cloudflare: func(context.Context) ([]netip.Prefix, error) {
+			return []netip.Prefix{netip.MustParsePrefix("198.51.100.0/24")}, nil
+		},
+		tlsState: func(context.Context, string, string) (tls.ConnectionState, error) {
+			return tls.ConnectionState{PeerCertificates: []*x509.Certificate{{DNSNames: []string{"edge.example.net"}}}}, nil
+		},
+		verify: func([]*x509.Certificate) error { return nil },
+	}
+	review := connectionprofiles.New(realityProbeResultHost{probeRealityTargetWith(t.Context(), target, base)}).ReviewRealityTarget(t.Context(), target)
+	if review.Health.Outcome != connectionprofiles.Healthy {
+		t.Fatalf("production target Review = %+v", review)
+	}
+
+	for _, unsafe := range []struct {
+		name, code string
+		target     connectionprofiles.RealityTarget
+		change     func(*realityProbeDependencies)
+	}{
+		{name: "Cloudflare", code: "CONNECTION-PROFILES-REALITY-TARGET-CLASS", target: target, change: func(dependencies *realityProbeDependencies) {
+			dependencies.cloudflare = func(context.Context) ([]netip.Prefix, error) {
+				return []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")}, nil
+			}
+		}},
+		{name: "Apple or iCloud", code: "CONNECTION-PROFILES-REALITY-TARGET-CLASS", target: connectionprofiles.RealityTarget{Address: "apple.com:443", ServerName: "apple.com"}},
+		{name: "iCloud", code: "CONNECTION-PROFILES-REALITY-TARGET-CLASS", target: connectionprofiles.RealityTarget{Address: "icloud.com:443", ServerName: "icloud.com"}},
+		{name: "unknown class", code: "CONNECTION-PROFILES-REALITY-TARGET-CLASS", target: target, change: func(dependencies *realityProbeDependencies) {
+			dependencies.lookup = func(context.Context, string, string) ([]netip.Addr, error) {
+				return nil, fmt.Errorf("controlled DNS failure")
+			}
+		}},
+		{name: "invalid certificate", code: "CONNECTION-PROFILES-REALITY-CERTIFICATE", target: target, change: func(dependencies *realityProbeDependencies) {
+			dependencies.verify = func([]*x509.Certificate) error { return fmt.Errorf("controlled certificate failure") }
+		}},
+		{name: "failed probe", code: "CONNECTION-PROFILES-REALITY-PROBE", target: target, change: func(dependencies *realityProbeDependencies) {
+			dependencies.ping = func(context.Context, string) error { return fmt.Errorf("controlled native failure") }
+		}},
+		{name: "mismatched name", code: "CONNECTION-PROFILES-REALITY-NAME", target: target, change: func(dependencies *realityProbeDependencies) {
+			dependencies.tlsState = func(context.Context, string, string) (tls.ConnectionState, error) {
+				return tls.ConnectionState{PeerCertificates: []*x509.Certificate{{DNSNames: []string{"other.example.net"}}}}, nil
+			}
+		}},
+		{name: "failed route", code: "CONNECTION-PROFILES-REALITY-ROUTE", target: target, change: func(dependencies *realityProbeDependencies) {
+			dependencies.tlsState = func(context.Context, string, string) (tls.ConnectionState, error) {
+				return tls.ConnectionState{}, fmt.Errorf("controlled route failure")
+			}
+		}},
+	} {
+		dependencies := base
+		if unsafe.change != nil {
+			unsafe.change(&dependencies)
+		}
+		observation := probeRealityTargetWith(t.Context(), unsafe.target, dependencies)
+		if failed := connectionprofiles.New(realityProbeResultHost{observation}).ReviewRealityTarget(t.Context(), unsafe.target); failed.Health.Outcome != connectionprofiles.Failed || failed.Health.Code != unsafe.code || failed.Health.CorrectionFlow().OwnerWork == "" {
+			t.Fatalf("%s production target Review = %+v", unsafe.name, failed)
+		}
+	}
+}
+
+func TestRealityTargetReviewRunsAuthenticatedCandidateXray(t *testing.T) {
+	xray := []byte("#!/bin/sh\n[ \"$*\" = \"tls ping edge.example.net:443\" ]\n")
+	files := map[string][]byte{
+		"xray": xray, "sing-box": []byte("qualified sing-box"), "cloudflared": []byte("qualified cloudflared"),
+		"certbot/bin/certbot": softwarelifecycle.ComponentCertbotLauncher(), "certbot/pyvenv.cfg": []byte("home = /usr/bin\nversion = 3.12\n"),
+		"certbot/lib/python3.12/site-packages/certbot/__init__.py": []byte("__version__ = '5.4.0'\n"),
+	}
+	manifest, err := softwarelifecycle.NewComponentManifest(softwarelifecycle.AMD64, "5.4.0", files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	components, err := softwarelifecycle.BuildComponentArchive(manifest, files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	application := []byte("authenticated application archive")
+	applicationDigest, componentDigest := sha256.Sum256(application), sha256.Sum256(components)
+	identity := softwarelifecycle.ReleaseIdentity{Repository: softwarelifecycle.Repository, Tag: "v1.0.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}
+	applicationAsset := softwarelifecycle.AssetProof{Role: softwarelifecycle.ApplicationAMD64, Name: "sbxr-linux-amd64.tar.gz", Size: int64(len(application)), SHA256: hex.EncodeToString(applicationDigest[:])}
+	componentAsset := softwarelifecycle.AssetProof{Role: softwarelifecycle.ComponentsAMD64, Name: "sbxr-components-linux-amd64.tar.gz", Size: int64(len(components)), SHA256: hex.EncodeToString(componentDigest[:])}
+	staged := softwarelifecycle.StagedRelease{Identity: identity, Build: softwarelifecycle.EmbeddedBuildIdentity{Repository: identity.Repository, Tag: identity.Tag, Commit: identity.Commit, PayloadSHA256: strings.Repeat("c", 64)}, Architecture: softwarelifecycle.AMD64, ExecutableSHA256: strings.Repeat("d", 64), ComponentsSHA256: hex.EncodeToString(componentDigest[:]), InstallPath: softwarelifecycle.ReleaseInstallPath(identity), StateSchema: 1}
+	handoff := softwarelifecycle.InstallCandidateHandoff{Verified: softwarelifecycle.VerifiedRelease{Identity: identity, Sequence: 1, StateSchema: 1, Assets: []softwarelifecycle.AssetProof{applicationAsset, componentAsset}}, Staged: staged, ApplicationAsset: applicationAsset, ComponentAsset: componentAsset, ApplicationArchive: application, ComponentArchive: components}
+	stager := &authenticatedCandidateStager{staged: staged}
+	candidate, err := softwarelifecycle.RebuildInstallCandidate(t.Context(), handoff, stager)
+	if err != nil || !stager.authenticated {
+		t.Fatalf("authenticated candidate = (%v, %t)", err, stager.authenticated)
+	}
+	host, err := NewCandidateHost(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.probe.lookup = func(context.Context, string, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("203.0.113.20")}, nil
+	}
+	host.probe.cloudflare = func(context.Context) ([]netip.Prefix, error) {
+		return []netip.Prefix{netip.MustParsePrefix("198.51.100.0/24")}, nil
+	}
+	host.probe.tlsState = func(context.Context, string, string) (tls.ConnectionState, error) {
+		return tls.ConnectionState{PeerCertificates: []*x509.Certificate{{DNSNames: []string{"edge.example.net"}}}}, nil
+	}
+	host.probe.verify = func([]*x509.Certificate) error { return nil }
+	target := connectionprofiles.RealityTarget{Address: "edge.example.net:443", ServerName: "edge.example.net"}
+	if review := connectionprofiles.New(host).ReviewRealityTarget(t.Context(), target); review.Health.Outcome != connectionprofiles.Healthy {
+		t.Fatalf("authenticated candidate target Review = %+v", review)
 	}
 }
 

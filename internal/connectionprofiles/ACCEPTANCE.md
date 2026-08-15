@@ -8,6 +8,7 @@ Run:
 
 ```sh
 go test ./internal/connectionprofiles/... -run 'TestReality'
+go test ./internal/connectionprofiles/... -run 'Test(RealityTargetReview|InstallationRealityTargetReview)'
 go test ./internal/connectionprofiles/... -run 'TestXHTTP|TestGenerateXHTTP'
 go test ./internal/connectionprofiles/... -run 'TestWebSocket|TestGenerateWebSocket'
 go test ./internal/connectionprofiles/... -run 'TestHysteria2|TestGenerateHysteria2'
@@ -19,7 +20,8 @@ go test ./internal/connectionprofiles/... -run 'TestRegistryUsesEveryReviewedAlt
 
 The focused checks cover:
 
-- `CONNECTION-PROFILES-REALITY-TARGET`, `-NAME`, `-TARGET-CLASS`, `-PROBE`: exact target `443/TCP`, matching accepted name, Cloudflare and Apple or iCloud rejection, and failed or inconclusive probe refusal;
+- `CONNECTION-PROFILES-REALITY-TARGET`, `-NAME`, `-TARGET-CLASS`, `-CERTIFICATE`, `-ROUTE`, `-PROBE`: exact target `443/TCP`, matching accepted name, Cloudflare and Apple or iCloud rejection, and distinct certificate, route, failed, or inconclusive probe refusal;
+- first-Installation `ReviewRealityTarget`: one hostname-derived `443/TCP` target through the complete production classification path and authenticated staged Xray candidate, with typed field-local guidance for Cloudflare, Apple, iCloud, unknown, invalid-certificate, mismatched-name, failed-route, and failed-probe results;
 - `CONNECTION-PROFILES-REALITY-NATIVE`: complete native-validator refusal without raw output;
 - `CONNECTION-PROFILES-REALITY-CONFIGURATION`, `-LISTENER`, `-SERVICE`, `-CAPABILITY`, `-SECURITY`: root:`root` `0755`/`0644` material, selected TCP listener, contained root service, narrow capability, typed REALITY health, and exact prepared-configuration Change Set gates;
 - deterministic secret-safe Plan rendering without secret-derived configuration hashes, matching UUID/X25519/short-ID credentials, State's revoked-after-use secret-reader handoff into the protected native Xray artifact, changed-observation and stale/reused Apply rejection, exact activation and rollback step, and unique secret-marker exclusion.
@@ -105,7 +107,7 @@ On an explicitly approved Acceptance VPS and exact Release Identity:
 
 Albert accepts import and outside connection on each affected maintained client and real network. No automated, native, local-VPS, or disposable-client result satisfies this row.
 
-The redacted ticket evidence must mark Module Verification and pinned-native Seam Verification independently. For WebSocket it must keep parser proof separate from real Cloudflare reconnect and keepalive behavior. For Hysteria2 and TUIC it must keep native parser and same-VPS server proof separate from real outside authenticated TCP and UDP uplink and downlink. For AnyTLS it must keep the pinned parser/core-padding proof separate from real outside authenticated TCP uplink, downlink, reconnect, idle, and sustained traffic. For the registry it must not turn local omission, native validation, typed publication handoff, or simulated Live Profile Check into a maintained-client claim. Karing XHTTP remains **Not offered** until separately qualified. Leave Codex Live Acceptance, integrated Subscription Publication, maintained-client acceptance, and Owner Acceptance Pending until actually performed.
+The redacted ticket evidence must mark Module Verification and pinned-native Seam Verification independently. The first-Installation REALITY target probe proves only bounded same-VPS DNS, certificate-name, route, target-class, and native-probe safety; it is not outside-client, Live Profile Check, or maintained-client acceptance. For WebSocket it must keep parser proof separate from real Cloudflare reconnect and keepalive behavior. For Hysteria2 and TUIC it must keep native parser and same-VPS server proof separate from real outside authenticated TCP and UDP uplink and downlink. For AnyTLS it must keep the pinned parser/core-padding proof separate from real outside authenticated TCP uplink, downlink, reconnect, idle, and sustained traffic. For the registry it must not turn local omission, native validation, typed publication handoff, or simulated Live Profile Check into a maintained-client claim. Karing XHTTP remains **Not offered** until separately qualified. Leave Codex Live Acceptance, integrated Subscription Publication, maintained-client acceptance, and Owner Acceptance Pending until actually performed.
 
 ## Current acceptance status
 

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/mail"
 	"net/netip"
 	"regexp"
@@ -17,6 +18,7 @@ import (
 	"sync/atomic"
 
 	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
+	"github.com/albertloky/SBXR/internal/connectionprofiles"
 	"github.com/albertloky/SBXR/internal/healthdiagnostics"
 	"github.com/albertloky/SBXR/internal/networkpolicy"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
@@ -39,27 +41,28 @@ type Draft struct {
 func DiscardDraft() Draft { return Draft{discard: true} }
 
 type Dependencies struct {
-	Preflight         func() networkpolicy.InstallationPreflightResult
-	RunningRelease    func() (RunningRelease, error)
-	ReleaseCandidate  func(context.Context, string, softwarelifecycle.Architecture) (softwarelifecycle.InstallCandidateHandoff, error)
-	Stage             func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error)
-	Network           func(networkpolicy.Request) networkpolicy.Result
-	Cloudflare        func(context.Context, cloudflaretunnel.PlanRequest) cloudflaretunnel.PlanResult
-	CloudflareAPI     cloudflaretunnel.MutationAPI
-	Inventory         cloudflaretunnel.MutationPlanner
-	Entropy           io.Reader
-	Launch            func(context.Context, softwareubuntu.InstallHandoffRequest, <-chan struct{}) (softwareubuntu.InstallApplyOutcome, error)
-	Recover           func(context.Context, systemchanges.PendingChangeSet) error
-	Pending           systemchanges.PendingChangeSetReader
-	WriteReceipt      func(string, softwarelifecycle.ReleaseIdentity, string) error
-	RemoveReceipt     func() error
-	ObserveState      func() (systemchanges.Observation, error)
-	LoadManaged       func() (systemchanges.Observation, state.ReleaseIdentity, error)
-	ProveSubscription func(context.Context, string, uint16) error
+	Preflight           func() networkpolicy.InstallationPreflightResult
+	RunningRelease      func() (RunningRelease, error)
+	ReviewRealityTarget func(context.Context, connectionprofiles.RealityTarget) connectionprofiles.RealityTargetReview
+	ReleaseCandidate    func(context.Context, string, softwarelifecycle.Architecture) (softwarelifecycle.InstallCandidateHandoff, error)
+	Stage               func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error)
+	Network             func(networkpolicy.Request) networkpolicy.Result
+	Cloudflare          func(context.Context, cloudflaretunnel.PlanRequest) cloudflaretunnel.PlanResult
+	CloudflareAPI       cloudflaretunnel.MutationAPI
+	Inventory           cloudflaretunnel.MutationPlanner
+	Entropy             io.Reader
+	Launch              func(context.Context, softwareubuntu.InstallHandoffRequest, <-chan struct{}) (softwareubuntu.InstallApplyOutcome, error)
+	Recover             func(context.Context, systemchanges.PendingChangeSet) error
+	Pending             systemchanges.PendingChangeSetReader
+	WriteReceipt        func(string, softwarelifecycle.ReleaseIdentity, string) error
+	RemoveReceipt       func() error
+	ObserveState        func() (systemchanges.Observation, error)
+	LoadManaged         func() (systemchanges.Observation, state.ReleaseIdentity, error)
+	ProveSubscription   func(context.Context, string, uint16) error
 }
 
 func (dependencies Dependencies) validate() error {
-	if dependencies.Preflight == nil || dependencies.RunningRelease == nil || dependencies.ReleaseCandidate == nil || dependencies.Stage == nil || dependencies.Network == nil || dependencies.Cloudflare == nil || dependencies.CloudflareAPI == nil || dependencies.Inventory == nil || dependencies.Entropy == nil || dependencies.Launch == nil || dependencies.Recover == nil || dependencies.Pending == nil || dependencies.WriteReceipt == nil || dependencies.RemoveReceipt == nil || dependencies.ObserveState == nil || dependencies.LoadManaged == nil || dependencies.ProveSubscription == nil {
+	if dependencies.Preflight == nil || dependencies.RunningRelease == nil || dependencies.ReviewRealityTarget == nil || dependencies.ReleaseCandidate == nil || dependencies.Stage == nil || dependencies.Network == nil || dependencies.Cloudflare == nil || dependencies.CloudflareAPI == nil || dependencies.Inventory == nil || dependencies.Entropy == nil || dependencies.Launch == nil || dependencies.Recover == nil || dependencies.Pending == nil || dependencies.WriteReceipt == nil || dependencies.RemoveReceipt == nil || dependencies.ObserveState == nil || dependencies.LoadManaged == nil || dependencies.ProveSubscription == nil {
 		return errors.New("Installation dependencies unavailable")
 	}
 	return nil
@@ -225,6 +228,12 @@ func (module *Interface) Review(ctx context.Context, draft Draft) ReviewResult {
 			module.mu.Unlock()
 			return ReviewResult{Invalid: invalid}
 		}
+		if draft.SubmittedField == "reality-target" {
+			if invalid := module.reviewRealityTarget(ctx, candidate); invalid != nil {
+				module.mu.Unlock()
+				return ReviewResult{Invalid: invalid}
+			}
+		}
 		module.draft, module.nextField = candidate, module.nextField+1
 		if validateDraft(candidate) == nil {
 			module.nextField = len(draftFields)
@@ -233,6 +242,10 @@ func (module *Interface) Review(ctx context.Context, draft Draft) ReviewResult {
 		module.draft = mergeDraft(module.draft, draft)
 		if invalid := validateDraft(module.draft); invalid != nil {
 			module.nextField = draftFieldIndex(invalid.Field)
+		} else if invalid := module.reviewRealityTarget(ctx, module.draft); invalid != nil {
+			module.nextField = draftFieldIndex(invalid.Field)
+			module.mu.Unlock()
+			return ReviewResult{Invalid: invalid}
 		} else {
 			module.nextField = len(draftFields)
 		}
@@ -401,12 +414,18 @@ func mergeDraft(current, update Draft) Draft {
 		current.Installation.PublicIPv4 = update.Installation.PublicIPv4
 		current.Installation.PrimaryAddress = update.Installation.PublicIPv4
 	}
+	if update.RealityTarget != "" {
+		host, port, err := net.SplitHostPort(update.RealityTarget)
+		if err == nil && port == "443" {
+			current.RealityTarget, current.RealityServerName = update.RealityTarget, host
+		} else {
+			current.RealityTarget, current.RealityServerName = net.JoinHostPort(update.RealityTarget, "443"), update.RealityTarget
+		}
+	}
 	for target, value := range map[*string]string{
 		&current.CloudflareAccountID:     update.CloudflareAccountID,
 		&current.CloudflareZoneID:        update.CloudflareZoneID,
 		&current.CloudflareToken:         update.CloudflareToken,
-		&current.RealityTarget:           update.RealityTarget,
-		&current.RealityServerName:       update.RealityServerName,
 		&current.Installation.Domain:     update.Installation.Domain,
 		&current.Installation.OwnerEmail: update.Installation.OwnerEmail,
 		&current.Installation.PublicIPv6: update.Installation.PublicIPv6,
@@ -463,9 +482,7 @@ func updateDraftField(current Draft, field, value string) (Draft, error) {
 	case "cloudflare-token":
 		current.CloudflareToken = value
 	case "reality-target":
-		current.RealityTarget = value
-	case "reality-server-name":
-		current.RealityServerName = value
+		current.RealityTarget, current.RealityServerName = net.JoinHostPort(value, "443"), value
 	default:
 		return current, errors.New("The Installation field is unknown.")
 	}
@@ -473,7 +490,7 @@ func updateDraftField(current Draft, field, value string) (Draft, error) {
 }
 
 var (
-	draftFields = []string{"domain", "owner-email", "public-ipv4", "reality-port", "hysteria2-port", "tuic-port", "anytls-port", "subscription-port", "cloudflare-account", "cloudflare-zone", "cloudflare-token", "reality-target", "reality-server-name"}
+	draftFields = []string{"domain", "owner-email", "public-ipv4", "reality-port", "hysteria2-port", "tuic-port", "anytls-port", "subscription-port", "cloudflare-account", "cloudflare-zone", "cloudflare-token", "reality-target"}
 	draftDomain = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$`)
 	draftID     = regexp.MustCompile(`^[0-9a-f]{32}$`)
 	draftTag    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$`)
@@ -536,8 +553,6 @@ func draftFieldValue(draft Draft, field string) string {
 	case "cloudflare-token":
 		return draft.CloudflareToken
 	case "reality-target":
-		return draft.RealityTarget
-	case "reality-server-name":
 		return draft.RealityServerName
 	default:
 		return ""
@@ -580,17 +595,30 @@ func validateDraftField(draft Draft, field string) *InvalidInput {
 		if _, err := cloudflaretunnel.NewManagementToken(value); err != nil {
 			return invalid("The Cloudflare Account API Token is invalid.")
 		}
-	case "reality-target":
-		host, port, found := strings.Cut(value, ":")
-		if !found || port != "443" || !draftDomain.MatchString(host) {
-			return invalid("The REALITY target must be one valid hostname on port 443.")
-		}
-	case "reality-server-name":
-		if !draftDomain.MatchString(value) {
-			return invalid("The REALITY server name is invalid.")
-		}
 	}
 	return nil
+}
+
+func (module *Interface) reviewRealityTarget(ctx context.Context, draft Draft) *InvalidInput {
+	target := connectionprofiles.RealityTarget{Address: draft.RealityTarget, ServerName: draft.RealityServerName}
+	review := module.dependencies.ReviewRealityTarget(ctx, target)
+	if review.Target.Address == target.Address && review.Target.ServerName == target.ServerName && review.Health.Outcome == connectionprofiles.Healthy {
+		return nil
+	}
+	invalid := &InvalidInput{Field: "reality-target", Value: draft.RealityServerName, Problem: review.Health.Problem}
+	module.attachReviewFacts(invalid)
+	flow := review.Health.CorrectionFlow()
+	guidance := flow.OwnerWork
+	if guidance == "" {
+		guidance = flow.FixWithSBXR
+	}
+	if guidance != "" {
+		invalid.Facts = append(invalid.Facts, ReviewFact{Label: "REALITY target correction", Value: guidance})
+	}
+	if review.Health.Code != "" {
+		invalid.Facts = append(invalid.Facts, ReviewFact{Label: "REALITY target evidence", Value: review.Health.Code})
+	}
+	return invalid
 }
 
 func (module *Interface) Inspect(_ context.Context, identity OperationIdentity) (Operation, error) {
