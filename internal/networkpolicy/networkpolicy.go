@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -1077,9 +1078,36 @@ const (
 
 type SSHPreservationFailure struct{ Cause SSHPreservationFailureCause }
 
-type SSHPreservationProof struct{ serverPort uint16 }
+type SSHPreservationProof struct{ cell *sshPreservationProofCell }
 
-func (proof SSHPreservationProof) ServerPort() uint16 { return proof.serverPort }
+type sshPreservationProofCell struct {
+	identity string
+	digest   string
+	used     atomic.Bool
+}
+
+func (proof SSHPreservationProof) ServerPort() uint16 {
+	if proof.cell == nil {
+		return 0
+	}
+	fields := strings.Fields(proof.cell.identity)
+	if len(fields) != 4 {
+		return 0
+	}
+	port, _ := strconv.ParseUint(fields[3], 10, 16)
+	return uint16(port)
+}
+func (SSHPreservationProof) String() string   { return "SSH Preservation Proof: redacted" }
+func (SSHPreservationProof) GoString() string { return "SSH Preservation Proof: redacted" }
+func (SSHPreservationProof) MarshalJSON() ([]byte, error) {
+	return nil, errors.New("SSH Preservation Proof cannot be rendered")
+}
+func (proof SSHPreservationProof) SystemChangesSSHPreservation() (string, string, bool) {
+	if proof.cell == nil || !proof.cell.used.CompareAndSwap(false, true) {
+		return "", "", false
+	}
+	return proof.cell.identity, proof.cell.digest, proof.cell.identity != "" && len(proof.cell.digest) == 64
+}
 
 func (i Interface) ProveSSHPreservation(identity string) (SSHPreservationProof, *SSHPreservationFailure) {
 	proof, failure, _ := i.proveSSHPreservation(identity)
@@ -1117,7 +1145,7 @@ func (i Interface) proveSSHPreservation(identity string) (SSHPreservationProof, 
 	if !slices.Contains(ssh.CurrentSessions, hex.EncodeToString(digest[:])) {
 		return SSHPreservationProof{}, &SSHPreservationFailure{Cause: SSHOriginalSessionLost}, observed
 	}
-	return SSHPreservationProof{serverPort: uint16(serverPort)}, nil, observed
+	return SSHPreservationProof{cell: &sshPreservationProofCell{identity: canonical, digest: hex.EncodeToString(digest[:])}}, nil, observed
 }
 
 type InstallationPreflightResult struct {
@@ -1125,6 +1153,11 @@ type InstallationPreflightResult struct {
 	UsablePublicIPv4 []string
 	Failure          *Finding
 	SSHFailureCause  SSHPreservationFailureCause
+	sshProof         SSHPreservationProof
+}
+
+func (result InstallationPreflightResult) SSHPreservationProof() SSHPreservationProof {
+	return result.sshProof
 }
 
 func (i Interface) InstallationPreflight(identity string) InstallationPreflightResult {
@@ -1146,7 +1179,7 @@ func (i Interface) InstallationPreflight(identity string) InstallationPreflightR
 		finding := requiredFailure("NETWORK-INSTALLATION-SSH-UNPROVED", "The active SSH session could not be proved", "the local interface observation included an unusable public-address candidate", "only usable public-address candidates", "Installation cannot continue from contradictory local facts", Fix{OwnerChecklist: []string{"Use Check again for a fresh read-only observation, or return to a safe Owner Console screen."}})
 		return InstallationPreflightResult{Failure: &finding, SSHFailureCause: SSHObservationUnavailable}
 	}
-	return InstallationPreflightResult{ActiveSSHPort: proof.ServerPort(), UsablePublicIPv4: addresses}
+	return InstallationPreflightResult{ActiveSSHPort: proof.ServerPort(), UsablePublicIPv4: addresses, sshProof: proof}
 }
 
 func UsablePublicAddress(value string) bool {

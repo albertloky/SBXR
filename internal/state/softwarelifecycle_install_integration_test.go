@@ -71,7 +71,7 @@ func TestSoftwareLifecycleInstallPublishesRevisionOneOnlyAfterCompleteAgreement(
 	digest := sha256.Sum256(template)
 	desired := hex.EncodeToString(digest[:])
 	contributions := lifecycleContributions(t, changeSet, desired)
-	plan, finding := softwarelifecycle.PlanInstall(softwarelifecycle.InstallPlanRequest{Candidate: view.InstallCandidate(), ChangeSet: changeSet, DesiredStateSHA256: desired, Contributions: contributions, Disk: systemchanges.DiskRequirement{PreparationBytes: 100, TemporaryBytes: 100, SnapshotBytes: 100, JournalBytes: 100, RollbackBytes: 100, OverheadBytes: 100}})
+	plan, finding := softwarelifecycle.PlanInstall(softwarelifecycle.InstallPlanRequest{Candidate: view.InstallCandidate(), ChangeSet: changeSet, DesiredStateSHA256: desired, Contributions: contributions, Disk: systemchanges.DiskRequirement{PreparationBytes: 100, TemporaryBytes: 100, SnapshotBytes: 100, JournalBytes: 100, RollbackBytes: 100, OverheadBytes: 100}, SSHPreservation: testSSHPreservationAuthority(t)})
 	if finding != nil {
 		t.Fatal(finding)
 	}

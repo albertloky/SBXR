@@ -82,6 +82,10 @@ type systemChangesAdapter struct {
 	cloudflare         *cloudflaretunnel.Executor
 	rotationChanged    bool
 	reclamationPresent bool
+	sshChecks          int
+	failSSHAt          int
+	sshAgreement       string
+	preparationRender  string
 }
 
 type controlledInfrastructureSecret struct {
@@ -156,6 +160,7 @@ func (lock systemChangesLock) Close() error { lock.closes.Add(1); return lock.er
 
 func (a *systemChangesAdapter) Prepare(lease systemchanges.ExecutionLease, preparation systemchanges.Preparation) error {
 	a.lease = lease
+	a.preparationRender = fmt.Sprintf("%v %#v", preparation, preparation)
 	if a.prepareErr != nil {
 		return a.prepareErr
 	}
@@ -169,6 +174,18 @@ func (a *systemChangesAdapter) Prepare(lease systemchanges.ExecutionLease, prepa
 	}); err != nil {
 		return err
 	}
+	if preparation.SSHAgreementSHA256 != "" {
+		a.sshAgreement = preparation.SSHAgreementSHA256
+		if err := preparation.WriteSSHPreservation(func(source io.Reader) error {
+			content, err := io.ReadAll(source)
+			if err == nil {
+				a.artifacts["ssh-preservation"] = content
+			}
+			return err
+		}); err != nil {
+			return err
+		}
+	}
 	if a.crashBefore == systemchanges.Prepared && !a.crashed {
 		a.crashed = true
 		panic("controlled worker death")
@@ -177,7 +194,7 @@ func (a *systemChangesAdapter) Prepare(lease systemchanges.ExecutionLease, prepa
 	a.recovery = &systemchanges.RecoveryTransaction{
 		ChangeSet: preparation.ChangeSet, Mutation: preparation.Mutation, Starting: preparation.Starting, StartingRelease: preparation.State.StartingRelease,
 		Candidate: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: preparation.State.CandidateRevision, SHA256: preparation.State.CandidateSHA256}, CandidateRelease: preparation.State.CandidateRelease,
-		OutcomeOwner: preparation.OutcomeOwner, State: preparation.State, Steps: append([]systemchanges.Step(nil), preparation.Steps...), Checks: append([]systemchanges.Check(nil), preparation.Checks...), LastCheckpoint: systemchanges.Prepared, Timeouts: preparation.Timeouts, Reclamation: preparation.Reclamation,
+		OutcomeOwner: preparation.OutcomeOwner, State: preparation.State, Steps: append([]systemchanges.Step(nil), preparation.Steps...), Checks: append([]systemchanges.Check(nil), preparation.Checks...), LastCheckpoint: systemchanges.Prepared, Timeouts: preparation.Timeouts, Reclamation: preparation.Reclamation, SSHPreservationSHA256: preparation.SSHAgreementSHA256,
 	}
 	a.stateBinding, _ = json.Marshal(preparation.State)
 	if a.afterPrepare != nil {
@@ -394,8 +411,19 @@ func (a *systemChangesAdapter) VerifyAgreement(systemchanges.ExecutionLease, sys
 	return a.agreementErr
 }
 
+func (a *systemChangesAdapter) VerifySSHPreservation(_ systemchanges.ExecutionLease, _ string, agreement string, _ systemchanges.SSHPreservationPhase, _ time.Duration) error {
+	a.sshChecks++
+	a.events = append(a.events, fmt.Sprintf("SSH Preservation check %d", a.sshChecks))
+	digest := sha256.Sum256(a.artifacts["ssh-preservation"])
+	if agreement != hex.EncodeToString(digest[:]) || a.sshChecks == a.failSSHAt {
+		return errors.New("controlled SSH Preservation failure")
+	}
+	return nil
+}
+
 func (a *systemChangesAdapter) Cleanup(systemchanges.ExecutionLease, string) error {
 	a.events = append(a.events, "cleanup")
+	delete(a.artifacts, "ssh-preservation")
 	a.recovery = nil
 	return nil
 }
@@ -760,6 +788,71 @@ func TestFailedInstallationRestoresProvenNotInstalledBaseline(t *testing.T) {
 	loaded, err := stateModule.Load(LoadRequest{Baseline: CleanVPS})
 	if err != nil || loaded.Status != NotInstalled || loaded.Snapshot != nil {
 		t.Fatalf("restored clean baseline = (%+v, %v)", loaded, err)
+	}
+}
+
+func TestInstallationFirewallRequiresExactSSHAgreementImmediatelyBeforeAndAfterMutation(t *testing.T) {
+	identity := "203.0.113.9 50000 203.0.113.10 2222"
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(identity)))
+	observedSSH := networkpolicy.Observations{
+		SSH:       networkpolicy.SSHFacts{DetectedPort: 2222, ServerAddress: "203.0.113.10", CurrentSessions: []string{digest}, SessionsComplete: true, Service: "ssh.service", Listener: "0.0.0.0:2222/tcp"},
+		Listeners: []networkpolicy.Listener{{Address: "0.0.0.0", Port: 2222, Protocol: networkpolicy.TCP, Process: "sshd", Service: "ssh.service"}},
+	}
+	firewall := testFirewallStep(t)
+	_, unproved, _, unprovedObserved := preparedSystemChangeWithOptions(t, systemchanges.InstallationMutation, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-PREFLIGHT"}, systemChangeTestOptions{steps: []systemchanges.Step{firewall}, stepTimeout: time.Second, withoutSSH: true})
+	unprovedAdapter := &systemChangesAdapter{observation: unprovedObserved}
+	if result := systemchanges.New(unprovedAdapter).Apply(unproved); result.Outcome != systemchanges.Refused || !result.NothingChanged || unprovedAdapter.executeCount != 0 || len(unprovedAdapter.events) != 0 {
+		t.Fatalf("unproved Installation firewall = %+v events=%v", result, unprovedAdapter.events)
+	}
+
+	for _, test := range []struct {
+		name        string
+		failAt      int
+		wantRuns    int
+		wantReverse bool
+	}{
+		{name: "failed pre-check changes nothing", failAt: 1, wantRuns: 0},
+		{name: "failed post-check restores prior firewall", failAt: 2, wantRuns: 1, wantReverse: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			freshProof, proofFailure := networkpolicy.New(reclamationNetworkObserver{observed: observedSSH}).ProveSSHPreservation(identity)
+			if proofFailure != nil {
+				t.Fatal(proofFailure)
+			}
+			_, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.InstallationMutation, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-PREFLIGHT"}, systemChangeTestOptions{steps: []systemchanges.Step{firewall}, stepTimeout: time.Second, sshPreservation: systemchanges.NewSSHPreservationAuthority(freshProof)})
+			adapter := &systemChangesAdapter{observation: observed, failSSHAt: test.failAt}
+			result := systemchanges.New(adapter).Apply(changeSet)
+			joined := strings.Join(adapter.events, ",")
+			_, rawRetained := adapter.artifacts["ssh-preservation"]
+			if result.Outcome != systemchanges.RollbackSucceeded || result.SSHPreservationSHA256 != digest || adapter.executeCount != test.wantRuns || strings.Contains(joined, "execute "+string(firewall.Forward())) != (test.wantRuns == 1) || strings.Contains(joined, "reverse "+string(firewall.Rollback())) != test.wantReverse || rawRetained || adapter.sshAgreement != digest {
+				t.Fatalf("SSH-protected firewall = %+v events=%s", result, joined)
+			}
+		})
+	}
+
+	for _, test := range []struct {
+		name        string
+		failSSHAt   int
+		failReverse bool
+		want        systemchanges.ApplyOutcome
+		wantRaw     bool
+	}{
+		{name: "Managed retains only SHA agreement", want: systemchanges.Completed},
+		{name: "Recovery Required retains raw identity", failSSHAt: 2, failReverse: true, want: systemchanges.RecoveryRequiredOutcome, wantRaw: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			freshProof, proofFailure := networkpolicy.New(reclamationNetworkObserver{observed: observedSSH}).ProveSSHPreservation(identity)
+			if proofFailure != nil {
+				t.Fatal(proofFailure)
+			}
+			_, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.InstallationMutation, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-PREFLIGHT"}, systemChangeTestOptions{steps: []systemchanges.Step{firewall}, stepTimeout: time.Second, sshPreservation: systemchanges.NewSSHPreservationAuthority(freshProof)})
+			adapter := &systemChangesAdapter{observation: observed, failSSHAt: test.failSSHAt, failReverse: test.failReverse}
+			result := systemchanges.New(adapter).Apply(changeSet)
+			_, rawRetained := adapter.artifacts["ssh-preservation"]
+			if result.Outcome != test.want || result.Outcome != systemchanges.RecoveryRequiredOutcome && result.SSHPreservationSHA256 != digest || rawRetained != test.wantRaw || adapter.sshAgreement != digest || strings.Contains(adapter.preparationRender, identity) {
+				t.Fatalf("SSH material lifecycle = %+v raw=%t agreement=%s", result, rawRetained, adapter.sshAgreement)
+			}
+		})
 	}
 }
 
@@ -1674,10 +1767,15 @@ type systemChangeTestOptions struct {
 	subscription       bool
 	subscriptionBundle []byte
 	reclamation        systemchanges.ReclamationAuthority
+	sshPreservation    systemchanges.SSHPreservationAuthority
+	withoutSSH         bool
 }
 
 func preparedSystemChangeWithOptions(t *testing.T, mutation systemchanges.MutationClass, check systemchanges.Check, options systemChangeTestOptions) (Interface, *systemchanges.ChangeSet, *systemchanges.ChangeSet, systemchanges.Observation) {
 	t.Helper()
+	if mutation == systemchanges.InstallationMutation && options.sshPreservation == (systemchanges.SSHPreservationAuthority{}) && !options.withoutSSH {
+		options.sshPreservation = testSSHPreservationAuthority(t)
+	}
 	candidate := completeDesiredState()
 	candidate.Subscription.Token = NewClientAccessValue(testSHA('e'))
 	if options.candidateEdit != nil {
@@ -1814,7 +1912,8 @@ func preparedSystemChangeWithOptions(t *testing.T, mutation systemchanges.Mutati
 		StartingState: starting, TargetStateSHA256: target,
 		Plan:          systemchanges.PlanBinding{Identity: planIdentity, SHA256: planSHA256, VolatileSHA256: testSHA('2')},
 		PreparedState: prepared, TypedRemovalConfirmation: typedRemoval, PermanentRemovalSelection: permanentRemoval, Steps: steps,
-		Reclamation: options.reclamation,
+		Reclamation:     options.reclamation,
+		SSHPreservation: options.sshPreservation,
 		Checks: func() []systemchanges.Check {
 			pre, post := check, check
 			pre.Phase, post.Phase = systemchanges.PrePublication, systemchanges.PostPublication
@@ -1842,6 +1941,21 @@ func preparedSystemChangeWithOptions(t *testing.T, mutation systemchanges.Mutati
 		t.Fatal(err)
 	}
 	return module, changeSet, duplicate, observed
+}
+
+func testSSHPreservationAuthority(t *testing.T) systemchanges.SSHPreservationAuthority {
+	t.Helper()
+	identity := "203.0.113.9 50000 203.0.113.10 2222"
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(identity)))
+	observed := networkpolicy.Observations{
+		SSH:       networkpolicy.SSHFacts{DetectedPort: 2222, ServerAddress: "203.0.113.10", CurrentSessions: []string{digest}, SessionsComplete: true, Service: "ssh.service", Listener: "0.0.0.0:2222/tcp"},
+		Listeners: []networkpolicy.Listener{{Address: "0.0.0.0", Port: 2222, Protocol: networkpolicy.TCP, Process: "sshd", Service: "ssh.service"}},
+	}
+	proof, failure := networkpolicy.New(reclamationNetworkObserver{observed: observed}).ProveSSHPreservation(identity)
+	if failure != nil {
+		t.Fatal(failure)
+	}
+	return systemchanges.NewSSHPreservationAuthority(proof)
 }
 
 func TestEveryMutationClassUsesOneSystemChangesLockBeforeLiveWork(t *testing.T) {
@@ -2381,13 +2495,15 @@ func allRemovalResources(host *controlledUbuntuHost, removed bool) bool {
 }
 
 type controlledFirewall struct {
-	events        []string
-	failSSH       bool
-	requestCancel bool
-	failReverse   bool
-	failClose     bool
-	temporaryOpen bool
-	unrelated     string
+	events         []string
+	failSSH        bool
+	requestCancel  bool
+	failReverse    bool
+	failClose      bool
+	temporaryOpen  bool
+	unrelated      string
+	sshChecks      int
+	failSSHProofAt int
 }
 
 func (firewall *controlledFirewall) CaptureRollback(_ systemchanges.Step, write func(io.Reader) error) error {
@@ -2440,6 +2556,23 @@ func (firewall *controlledFirewall) Execute(step systemchanges.Step, rollbackPat
 	}
 	digest := sha256.Sum256([]byte(change.Action + systemchanges.FirewallAction(firewall.unrelated)))
 	return systemchanges.StepEvidence{Code: code, SHA256: fmt.Sprintf("%x", digest)}, nil
+}
+
+func (firewall *controlledFirewall) ExecuteProtected(step systemchanges.Step, rollbackPath string, timeout time.Duration, cancellation *systemchanges.Cancellation) (systemchanges.StepEvidence, error) {
+	return firewall.Execute(step, rollbackPath, timeout, cancellation)
+}
+
+func (firewall *controlledFirewall) VerifySSHIdentity(identity string, _ time.Duration) error {
+	firewall.sshChecks++
+	firewall.events = append(firewall.events, fmt.Sprintf("exact SSH check %d", firewall.sshChecks))
+	if identity != "203.0.113.9 50000 203.0.113.10 2222" || firewall.sshChecks == firewall.failSSHProofAt {
+		return errors.New("exact SSH session unavailable")
+	}
+	return nil
+}
+
+func (firewall *controlledFirewall) VerifySSHSession(identity string, timeout time.Duration) error {
+	return firewall.VerifySSHIdentity(identity, timeout)
 }
 
 func (firewall *controlledFirewall) Commit(_ systemchanges.Step, evidence systemchanges.StepEvidence) error {
@@ -3595,6 +3728,36 @@ func TestUbuntuFirewallSeamPreservesSSHAndCleansOnlyExactHTTP01Rule(t *testing.T
 				t.Fatalf("%s = %+v; firewall=%+v", test.name, failedResult, failedFirewall)
 			}
 		})
+	}
+}
+
+func TestUbuntuInstallationFirewallKeepsRawSSHIdentityOnlyForUnfinishedRecovery(t *testing.T) {
+	identity := "203.0.113.9 50000 203.0.113.10 2222"
+	agreement := fmt.Sprintf("%x", sha256.Sum256([]byte(identity)))
+	firewallStep := testFirewallStep(t)
+	stateModule, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.InstallationMutation, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-SSH-RESPONSIVE"}, systemChangeTestOptions{steps: []systemchanges.Step{firewallStep}, stepTimeout: time.Second})
+	root := t.TempDir()
+	prepareLock(t, root)
+	firewall := &controlledFirewall{failSSHProofAt: 2, failReverse: true}
+	adapter := ubuntu.NewAtWithFirewall(root, func() (systemchanges.Observation, error) { return observed, nil }, &controlledUbuntuHost{root: root}, firewall, stateModule)
+	result := systemchanges.New(adapter).Apply(changeSet)
+	identityPath := filepath.Join(root, "var/lib/sbxr/transactions/change-0001/snapshot/ssh-preservation.identity")
+	raw, err := os.ReadFile(identityPath)
+	if result.Outcome != systemchanges.RecoveryRequiredOutcome || err != nil || string(raw) != identity || strings.Contains(fmt.Sprintf("%+v", result), identity) {
+		t.Fatalf("SSH material result=%+v raw_present=%t raw_match=%t read_error=%t", result, err == nil, string(raw) == identity, err != nil)
+	}
+	events := strings.Join(firewall.events, ",")
+	if !strings.Contains(events, "exact SSH check 1,native validate,arm root watchdog,apply only inet sbxr,existing SSH responsive,detected SSH admitted,exact SSH check 2") || strings.Contains(events, "durable step evidence") || strings.Contains(events, "cancel watchdog") {
+		t.Fatalf("post-check watchdog order = %s", events)
+	}
+	info, statErr := os.Stat(identityPath)
+	journal, journalErr := os.ReadFile(filepath.Join(root, "var/lib/sbxr/transactions/change-0001/journal.jsonl"))
+	var mode fs.FileMode
+	if info != nil {
+		mode = info.Mode().Perm()
+	}
+	if statErr != nil || mode != 0o600 || journalErr != nil || !bytes.Contains(journal, []byte(agreement)) || bytes.Contains(journal, []byte(identity)) {
+		t.Fatalf("protected unfinished SSH material mode=%v stat_error=%t journal_error=%t agreement_present=%t raw_absent=%t", mode, statErr != nil, journalErr != nil, bytes.Contains(journal, []byte(agreement)), !bytes.Contains(journal, []byte(identity)))
 	}
 }
 

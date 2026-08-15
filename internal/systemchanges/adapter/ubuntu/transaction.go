@@ -149,19 +149,20 @@ type journalStep struct {
 }
 
 type journalEntry struct {
-	Checkpoint   systemchanges.DurableCheckpoint        `json:"checkpoint"`
-	Step         int                                    `json:"step,omitempty"`
-	ChangeSet    string                                 `json:"change_set,omitempty"`
-	Mutation     systemchanges.MutationClass            `json:"mutation,omitempty"`
-	Starting     systemchanges.StateLineage             `json:"starting_state,omitempty"`
-	OutcomeOwner systemchanges.Module                   `json:"outcome_owner,omitempty"`
-	PlanSHA256   string                                 `json:"plan_sha256,omitempty"`
-	State        *systemchanges.StateTransactionBinding `json:"state,omitempty"`
-	Steps        []journalStep                          `json:"steps,omitempty"`
-	Checks       []systemchanges.Check                  `json:"health_gates,omitempty"`
-	Timeouts     systemchanges.Timeouts                 `json:"timeouts,omitempty"`
-	Reclamation  *systemchanges.ReclamationTarget       `json:"reclamation,omitempty"`
-	Evidence     *systemchanges.StepEvidence            `json:"evidence,omitempty"`
+	Checkpoint         systemchanges.DurableCheckpoint        `json:"checkpoint"`
+	Step               int                                    `json:"step,omitempty"`
+	ChangeSet          string                                 `json:"change_set,omitempty"`
+	Mutation           systemchanges.MutationClass            `json:"mutation,omitempty"`
+	Starting           systemchanges.StateLineage             `json:"starting_state,omitempty"`
+	OutcomeOwner       systemchanges.Module                   `json:"outcome_owner,omitempty"`
+	PlanSHA256         string                                 `json:"plan_sha256,omitempty"`
+	State              *systemchanges.StateTransactionBinding `json:"state,omitempty"`
+	Steps              []journalStep                          `json:"steps,omitempty"`
+	Checks             []systemchanges.Check                  `json:"health_gates,omitempty"`
+	Timeouts           systemchanges.Timeouts                 `json:"timeouts,omitempty"`
+	Reclamation        *systemchanges.ReclamationTarget       `json:"reclamation,omitempty"`
+	SSHAgreementSHA256 string                                 `json:"ssh_agreement_sha256,omitempty"`
+	Evidence           *systemchanges.StepEvidence            `json:"evidence,omitempty"`
 }
 
 func (a Adapter) Prepare(lease systemchanges.ExecutionLease, preparation systemchanges.Preparation) error {
@@ -205,6 +206,16 @@ func (a Adapter) Prepare(lease systemchanges.ExecutionLease, preparation systemc
 	}
 	if err := preparation.WriteStateArtifacts(write); err != nil {
 		return err
+	}
+	if preparation.SSHAgreementSHA256 != "" {
+		if !validDigest(preparation.SSHAgreementSHA256) {
+			return errors.New("SSH Preservation agreement is invalid")
+		}
+		if err := preparation.WriteSSHPreservation(func(source io.Reader) error {
+			return write("snapshot/ssh-preservation.identity", 0o600, source)
+		}); err != nil || checksums["snapshot/ssh-preservation.identity"] != preparation.SSHAgreementSHA256 {
+			return errors.New("SSH Preservation material is unproved")
+		}
 	}
 	for _, step := range preparation.Steps {
 		if !subscriptionActivation(step) {
@@ -295,7 +306,7 @@ func (a Adapter) Prepare(lease systemchanges.ExecutionLease, preparation systemc
 			steps[index].Certificate = &certificate
 		}
 	}
-	entry := journalEntry{Checkpoint: systemchanges.Prepared, ChangeSet: preparation.ChangeSet, Mutation: preparation.Mutation, Starting: preparation.Starting, OutcomeOwner: preparation.OutcomeOwner, PlanSHA256: preparation.PlanSHA256, State: &preparation.State, Steps: steps, Checks: preparation.Checks, Timeouts: preparation.Timeouts, Reclamation: preparation.Reclamation}
+	entry := journalEntry{Checkpoint: systemchanges.Prepared, ChangeSet: preparation.ChangeSet, Mutation: preparation.Mutation, Starting: preparation.Starting, OutcomeOwner: preparation.OutcomeOwner, PlanSHA256: preparation.PlanSHA256, State: &preparation.State, Steps: steps, Checks: preparation.Checks, Timeouts: preparation.Timeouts, Reclamation: preparation.Reclamation, SSHAgreementSHA256: preparation.SSHAgreementSHA256}
 	if _, err := writeProtected(root, path.Join(temporary, "journal.jsonl"), strings.NewReader(""), a.uid); err != nil {
 		return err
 	}
@@ -1633,6 +1644,18 @@ func (a Adapter) Execute(lease systemchanges.ExecutionLease, changeSet string, n
 		if _, err := a.recoveryArtifact(lease, changeSet, name); err != nil {
 			return systemchanges.StepEvidence{}, err
 		}
+		agreement, agreementErr := a.sshPreservationAgreement(lease, changeSet)
+		if agreementErr != nil {
+			return systemchanges.StepEvidence{}, agreementErr
+		}
+		if agreement != "" {
+			if protected, ok := a.firewall.(interface {
+				ExecuteProtected(systemchanges.Step, string, time.Duration, *systemchanges.Cancellation) (systemchanges.StepEvidence, error)
+			}); ok {
+				return protected.ExecuteProtected(step, path.Join(a.root, transactionDirectory, changeSet, name), timeout, cancellation)
+			}
+			return systemchanges.StepEvidence{}, errors.New("protected firewall Adapter unavailable")
+		}
 		return a.firewall.Execute(step, path.Join(a.root, transactionDirectory, changeSet, name), timeout, cancellation)
 	}
 	if softwareInstallation(step) {
@@ -1705,6 +1728,58 @@ func (a Adapter) Execute(lease systemchanges.ExecutionLease, changeSet string, n
 	}
 	evidence, err := a.host.Execute(step, timeout, cancellation)
 	return evidence, err
+}
+
+func (a Adapter) sshPreservationAgreement(lease systemchanges.ExecutionLease, changeSet string) (string, error) {
+	if !lease.Authorized() || !safeName(changeSet) {
+		return "", errors.New("SSH Preservation agreement unavailable")
+	}
+	root, err := os.OpenRoot(a.root)
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
+	journal, err := readJournal(root, path.Join(transactionDirectory, changeSet, "journal.jsonl"))
+	if err != nil || len(journal) == 0 || !validJournal(journal) {
+		return "", errors.New("SSH Preservation agreement unavailable")
+	}
+	return journal[0].SSHAgreementSHA256, nil
+}
+
+func (a Adapter) VerifySSHPreservation(lease systemchanges.ExecutionLease, changeSet, agreement string, phase systemchanges.SSHPreservationPhase, timeout time.Duration) error {
+	if !lease.Authorized() || a.firewall == nil || !safeName(changeSet) || !validDigest(agreement) || timeout <= 0 {
+		return errors.New("SSH Preservation inspection unavailable")
+	}
+	root, err := os.OpenRoot(a.root)
+	if err != nil {
+		return errors.New("SSH Preservation inspection unavailable")
+	}
+	defer root.Close()
+	directory := path.Join(transactionDirectory, changeSet)
+	manifest, err := verifyTransactionManifest(root, directory, a.uid)
+	journal, journalErr := readJournal(root, path.Join(directory, "journal.jsonl"))
+	identity, readErr := root.ReadFile(path.Join(directory, "snapshot/ssh-preservation.identity"))
+	if err != nil || journalErr != nil || len(journal) == 0 || journal[0].SSHAgreementSHA256 != agreement || manifest.Files["snapshot/ssh-preservation.identity"] != agreement || readErr != nil {
+		return errors.New("SSH Preservation agreement unavailable")
+	}
+	digest := sha256.Sum256(identity)
+	if hex.EncodeToString(digest[:]) != agreement {
+		return errors.New("SSH Preservation agreement changed")
+	}
+	verifier, ok := a.firewall.(interface {
+		VerifySSHSession(string, time.Duration) error
+		VerifySSHIdentity(string, time.Duration) error
+	})
+	if !ok {
+		return errors.New("SSH Preservation inspection unavailable")
+	}
+	if phase == systemchanges.BeforeFirewallReplacement {
+		return verifier.VerifySSHSession(string(identity), timeout)
+	}
+	if phase != systemchanges.AfterFirewallReplacement {
+		return errors.New("SSH Preservation phase invalid")
+	}
+	return verifier.VerifySSHIdentity(string(identity), timeout)
 }
 
 func (a Adapter) Reverse(lease systemchanges.ExecutionLease, changeSet string, number int, step systemchanges.Step, timeout time.Duration) (systemchanges.StepEvidence, error) {
@@ -1938,7 +2013,7 @@ func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges
 	return systemchanges.RecoveryTransaction{
 		ChangeSet: changeSet, Mutation: prepared.Mutation, Starting: prepared.Starting, StartingRelease: prepared.State.StartingRelease,
 		Candidate: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: prepared.State.CandidateRevision, SHA256: prepared.State.CandidateSHA256}, CandidateRelease: prepared.State.CandidateRelease,
-		OutcomeOwner: prepared.OutcomeOwner, State: *prepared.State, Steps: steps, Checks: append([]systemchanges.Check(nil), prepared.Checks...), AttemptedSteps: highestStartedStep(journal), RollbackStep: rollbackResumeStep(journal), LastCheckpoint: last.Checkpoint, Timeouts: prepared.Timeouts, PriorRunTokenSHA256: runTokenFingerprint(journal), IrreversibleRemovalStarted: irreversible, IrreversibleReclamationStarted: irreversibleReclamation, Reclamation: prepared.Reclamation,
+		OutcomeOwner: prepared.OutcomeOwner, State: *prepared.State, Steps: steps, Checks: append([]systemchanges.Check(nil), prepared.Checks...), AttemptedSteps: highestStartedStep(journal), RollbackStep: rollbackResumeStep(journal), LastCheckpoint: last.Checkpoint, Timeouts: prepared.Timeouts, PriorRunTokenSHA256: runTokenFingerprint(journal), IrreversibleRemovalStarted: irreversible, IrreversibleReclamationStarted: irreversibleReclamation, Reclamation: prepared.Reclamation, SSHPreservationSHA256: prepared.SSHAgreementSHA256,
 	}, nil
 }
 

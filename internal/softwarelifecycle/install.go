@@ -184,6 +184,7 @@ type InstallPlanRequest struct {
 	Contributions             []InstallContribution
 	Disk                      systemchanges.DiskRequirement
 	ReviewedReclamationSHA256 string
+	SSHPreservation           systemchanges.SSHPreservationAuthority
 }
 
 type InstallSummary struct {
@@ -224,6 +225,7 @@ type InstallPlan struct {
 	disk                             systemchanges.DiskRequirement
 	used                             *atomic.Bool
 	reclamation                      string
+	sshPreservation                  systemchanges.SSHPreservationAuthority
 }
 
 func PlanInstall(request InstallPlanRequest) (*InstallPlan, *InstallFinding) {
@@ -330,7 +332,7 @@ func PlanInstall(request InstallPlanRequest) (*InstallPlan, *InstallFinding) {
 		Rollback:          "remove only additions recorded by this Change Set and prove Not installed",
 		SudoAfterApproval: false, OneUse: true, SecretsMemoryOnly: true,
 	}
-	return &InstallPlan{identity: identity, sha256: checksum, volatileSHA256: hex.EncodeToString(volatileDigest[:]), changeSet: request.ChangeSet, desiredStateSHA256: request.DesiredStateSHA256, candidate: request.Candidate, summary: summary, steps: steps, checks: checks, proofs: proofs, disk: request.Disk, used: &atomic.Bool{}, reclamation: request.ReviewedReclamationSHA256}, nil
+	return &InstallPlan{identity: identity, sha256: checksum, volatileSHA256: hex.EncodeToString(volatileDigest[:]), changeSet: request.ChangeSet, desiredStateSHA256: request.DesiredStateSHA256, candidate: request.Candidate, summary: summary, steps: steps, checks: checks, proofs: proofs, disk: request.Disk, used: &atomic.Bool{}, reclamation: request.ReviewedReclamationSHA256, sshPreservation: request.SSHPreservation}, nil
 }
 
 type InstallRecheck struct {
@@ -385,6 +387,7 @@ func (plan *InstallPlan) Apply(ctx context.Context, request InstallApplyRequest)
 		StartingState: systemchanges.StateLineage{Status: systemchanges.NotInstalled}, TargetStateSHA256: plan.desiredStateSHA256,
 		Plan: systemchanges.PlanBinding{Identity: plan.identity, SHA256: plan.sha256, VolatileSHA256: freshSHA256}, PreparedState: request.PreparedState,
 		Steps: plan.steps, Checks: plan.checks, Timeouts: systemchanges.Timeouts{Step: 10 * time.Minute, Check: 5 * time.Minute}, Disk: plan.disk, Reclamation: rechecked.Reclamation,
+		SSHPreservation: plan.sshPreservation,
 	})
 	if err != nil {
 		return installRefused("SOFTWARE-LIFECYCLE-INSTALL-PREPARED", "The prepared revision 1 State does not match the reviewed install Plan")

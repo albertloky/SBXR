@@ -115,6 +115,26 @@ func TestSSHPreservationProofRejectsEveryUnprovedCauseWithoutRawIdentity(t *test
 	}
 }
 
+func TestInstallationPreflightCarriesOneOpaqueExactSSHAgreement(t *testing.T) {
+	identity := "203.0.113.9 50000 203.0.113.10 2222"
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(identity)))
+	listener := networkpolicy.Listener{Address: "0.0.0.0", Port: 2222, Protocol: networkpolicy.TCP, Process: "sshd", Service: "ssh.service"}
+	observed := networkpolicy.Observations{SSH: networkpolicy.SSHFacts{DetectedPort: 2222, ServerAddress: "203.0.113.10", CurrentSessions: []string{digest}, SessionsComplete: true, Service: "ssh.service", Listener: "0.0.0.0:2222/tcp"}, Listeners: []networkpolicy.Listener{listener}}
+
+	result := networkpolicy.New(staticAdapter{observed: observed}).InstallationPreflight(identity)
+	proof := result.SSHPreservationProof()
+	raw, agreement, valid := proof.SystemChangesSSHPreservation()
+	if result.Failure != nil || !valid || raw != identity || agreement != digest {
+		t.Fatalf("SSH agreement = failure=%+v raw_match=%t digest_match=%t valid=%t", result.Failure, raw == identity, agreement == digest, valid)
+	}
+	if _, _, repeated := proof.SystemChangesSSHPreservation(); repeated {
+		t.Fatal("SSH Preservation Proof was reusable")
+	}
+	if strings.Contains(fmt.Sprintf("%+v", proof), identity) {
+		t.Fatal("opaque SSH Preservation Proof rendered the raw identity")
+	}
+}
+
 func TestCleanVPSAuthorityRechecksTheExactNetworkPolicyBaseline(t *testing.T) {
 	adapter := &stagedAdapter{observed: completeObservations()}
 	request := networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PostApproval}

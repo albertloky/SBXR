@@ -92,7 +92,7 @@ func TestInstallationInterfaceOwnsRootRuntimeTransactionOutcomes(t *testing.T) {
 						return request.Candidate.Staged, nil
 					},
 					network: networkpolicy.New(composedNetworkObserver{}).Evaluate, cloudflare: newCloudflareTestModule(api, composedClock{}).Plan,
-					random: newInstallEntropyReader(request.Entropy), cloudflareAPI: api, inventory: api,
+					random: newInstallEntropyReader(request.Entropy), cloudflareAPI: api, inventory: api, sshProof: composedSSHProof(t),
 				})
 				if err != nil {
 					launchErr = err
@@ -200,11 +200,21 @@ func (*runtimeArtifactTransactionAdapter) TryLock() (systemchanges.Lock, bool, e
 }
 func (adapter *runtimeArtifactTransactionAdapter) Prepare(_ systemchanges.ExecutionLease, preparation systemchanges.Preparation) error {
 	adapter.artifacts = map[string][]byte{}
-	return preparation.WriteStateArtifacts(func(name string, _ uint32, source io.Reader) error {
+	if err := preparation.WriteStateArtifacts(func(name string, _ uint32, source io.Reader) error {
 		body, err := io.ReadAll(source)
 		adapter.artifacts[name] = body
 		return err
-	})
+	}); err != nil {
+		return err
+	}
+	if preparation.SSHAgreementSHA256 != "" {
+		return preparation.WriteSSHPreservation(func(source io.Reader) error {
+			body, err := io.ReadAll(source)
+			adapter.artifacts["ssh-preservation"] = body
+			return err
+		})
+	}
+	return nil
 }
 func (adapter *runtimeArtifactTransactionAdapter) ReplaceStateArtifacts(_ systemchanges.ExecutionLease, changeSet string, binding systemchanges.StateTransactionBinding, stream func(func(string, uint32, io.Reader) error) error) error {
 	if binding.ChangeSet != changeSet {
@@ -304,6 +314,13 @@ func (*runtimeArtifactTransactionAdapter) VerifyAgreement(systemchanges.Executio
 	return nil
 }
 func (*runtimeArtifactTransactionAdapter) VerifyRollback(systemchanges.ExecutionLease, systemchanges.RollbackAgreement, time.Duration) error {
+	return nil
+}
+func (adapter *runtimeArtifactTransactionAdapter) VerifySSHPreservation(_ systemchanges.ExecutionLease, _ string, agreement string, _ systemchanges.SSHPreservationPhase, _ time.Duration) error {
+	digest := sha256.Sum256(adapter.artifacts["ssh-preservation"])
+	if hex.EncodeToString(digest[:]) != agreement {
+		return errors.New("SSH agreement changed")
+	}
 	return nil
 }
 func (*runtimeArtifactTransactionAdapter) Cleanup(systemchanges.ExecutionLease, string) error {
@@ -1331,6 +1348,25 @@ func (composedNetworkObserver) Observe(request networkpolicy.ObservationRequest)
 		Certificate: networkpolicy.CertificateFacts{DNS: networkpolicy.DNSFacts{Hostname: "direct.example.com"}, CAA: networkpolicy.CAAFacts{Issuer: "letsencrypt.org", HTTP01Allowed: true}}, Checksums: map[string]string{"sshd_config": "sha256:ssh", "nftables": "sha256:nft"},
 		ReclamationComplete: true,
 	}, nil
+}
+
+type composedSSHObserver struct{ composedNetworkObserver }
+
+func (composedSSHObserver) Observe(request networkpolicy.ObservationRequest) (networkpolicy.Observations, error) {
+	observed, err := (composedNetworkObserver{}).Observe(request)
+	digest := sha256.Sum256([]byte("1.1.1.1 50000 8.8.8.8 22"))
+	observed.SSH = networkpolicy.SSHFacts{DetectedPort: 22, ServerAddress: "8.8.8.8", CurrentSessions: []string{hex.EncodeToString(digest[:])}, SessionsComplete: true, Service: "ssh.service", Listener: "0.0.0.0:22/tcp"}
+	observed.Listeners = []networkpolicy.Listener{{Address: "0.0.0.0", Port: 22, Protocol: networkpolicy.TCP, Process: "sshd", Service: "ssh.service"}}
+	return observed, err
+}
+
+func composedSSHProof(t *testing.T) networkpolicy.SSHPreservationProof {
+	t.Helper()
+	proof, failure := networkpolicy.New(composedSSHObserver{}).ProveSSHPreservation("1.1.1.1 50000 8.8.8.8 22")
+	if failure != nil {
+		t.Fatal(failure)
+	}
+	return proof
 }
 
 type countingInstallationObserver struct{ calls int }

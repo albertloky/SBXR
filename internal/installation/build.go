@@ -111,6 +111,7 @@ type buildDependencies struct {
 	random        io.Reader
 	cloudflareAPI cloudflaretunnel.MutationAPI
 	inventory     cloudflaretunnel.MutationPlanner
+	sshProof      networkpolicy.SSHPreservationProof
 }
 
 type reclamationReviewError struct {
@@ -307,7 +308,7 @@ func buildInstallWith(ctx context.Context, request softwareubuntu.InstallHandoff
 		return nil, errors.New("complete Certificate Lifecycle install contribution unavailable")
 	}
 	contributions := []softwarelifecycle.InstallContribution{softwarelifecycle.NewReviewedNetworkInstallContribution(baseNetwork, changeSet, desiredSHA256), profileResult.Plan, cloudflareResult.Plan, certificateContribution, subscriptionPlan}
-	installPlan, finding := softwarelifecycle.PlanInstall(softwarelifecycle.InstallPlanRequest{Candidate: candidate, ChangeSet: changeSet, DesiredStateSHA256: desiredSHA256, Contributions: contributions, Disk: disk, ReviewedReclamationSHA256: request.ReviewedReclamationSHA256})
+	installPlan, finding := softwarelifecycle.PlanInstall(softwarelifecycle.InstallPlanRequest{Candidate: candidate, ChangeSet: changeSet, DesiredStateSHA256: desiredSHA256, Contributions: contributions, Disk: disk, ReviewedReclamationSHA256: request.ReviewedReclamationSHA256, SSHPreservation: systemchanges.NewSSHPreservationAuthority(dependencies.sshProof)})
 	if finding != nil || installPlan == nil || request.ReviewedPlanSHA256 != "" && installPlan.SHA256() != request.ReviewedPlanSHA256 {
 		return nil, errors.New("reviewed install Plan changed")
 	}

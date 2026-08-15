@@ -39,7 +39,11 @@ func PreparePrivilegedApply(module *Interface, ctx context.Context, request soft
 		}
 		return nil, errors.New("prior installation recovered; build a fresh Plan")
 	}
-	built, err := module.build(ctx, request)
+	preflight := module.dependencies.Preflight()
+	if preflight.Failure != nil || preflight.ActiveSSHPort != request.Draft.SSHPort {
+		return nil, errors.New("fresh SSH Preservation Proof refused")
+	}
+	built, err := module.build(ctx, request, preflight.SSHPreservationProof())
 	if err != nil || built.cloudflareAPI == nil || built.network == nil {
 		return nil, errors.New("complete install composition refused")
 	}

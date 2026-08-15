@@ -230,6 +230,39 @@ func TestSSHProofRejectsAnotherConnectionAndEarlierTerminalVerdict(t *testing.T)
 	}
 }
 
+func TestNativeFirewallSSHAgreementRequiresTheExactOriginalTuple(t *testing.T) {
+	identity := "198.51.100.2 50000 192.0.2.10 2222"
+	session := "ESTAB 0 0 192.0.2.10:2222 198.51.100.2:50000"
+	policy := `{"nftables":[{"rule":{"family":"inet","table":"sbxr","chain":"input","expr":[{"match":{"op":"==","left":{"payload":{"protocol":"tcp","field":"dport"}},"right":2222}},{"accept":null}]}}]}`
+	policyAvailable := false
+	firewall := newNativeFirewall(func(_ context.Context, _ []byte, name string, args ...string) ([]byte, error) {
+		switch name + " " + strings.Join(args, " ") {
+		case "ss -Htn state established":
+			return []byte(session), nil
+		case "nft -j list table inet sbxr":
+			if !policyAvailable {
+				return nil, errors.New("table absent")
+			}
+			return []byte(policy), nil
+		default:
+			return nil, errors.New("unexpected command")
+		}
+	})
+	if err := firewall.VerifySSHSession(identity, time.Second); err != nil {
+		t.Fatalf("pre-replacement exact session check failed: %v", err)
+	}
+	if err := firewall.VerifySSHIdentity(identity, time.Second); err == nil {
+		t.Fatal("post-replacement check accepted an absent candidate policy")
+	}
+	policyAvailable = true
+	if err := firewall.VerifySSHIdentity(identity, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := firewall.VerifySSHIdentity("198.51.100.9 50001 192.0.2.10 2222", time.Second); err == nil {
+		t.Fatal("another same-port SSH session satisfied the original agreement")
+	}
+}
+
 func TestProductionFirewallSeam(t *testing.T) {
 	if runtime.GOOS != "linux" || os.Geteuid() != 0 || os.Getenv("SBXR_CONTROLLED_FIREWALL_SEAM") != "1" {
 		t.Skip("controlled production firewall mutation requires isolated Ubuntu and explicit approval")

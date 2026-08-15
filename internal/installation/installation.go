@@ -195,20 +195,22 @@ type Operation struct {
 }
 
 type Interface struct {
-	dependencies   Dependencies
-	mu             sync.Mutex
-	draft          Draft
-	reclamation    *networkpolicy.ReclamationPlan
-	request        softwareubuntu.InstallHandoffRequest
-	approval       *approvalCell
-	operation      Operation
-	cancel         chan struct{}
-	cancelled      bool
-	nextField      int
-	initialized    bool
-	reviewFacts    []ReviewFact
-	detectedIPv4   bool
-	ipv4Candidates []string
+	dependencies        Dependencies
+	mu                  sync.Mutex
+	draft               Draft
+	reclamation         *networkpolicy.ReclamationPlan
+	request             softwareubuntu.InstallHandoffRequest
+	approval            *approvalCell
+	operation           Operation
+	cancel              chan struct{}
+	cancelled           bool
+	nextField           int
+	initialized         bool
+	reviewFacts         []ReviewFact
+	detectedIPv4        bool
+	ipv4Candidates      []string
+	sshProof            networkpolicy.SSHPreservationProof
+	reclamationSSHProof networkpolicy.SSHPreservationProof
 }
 
 func New(dependencies Dependencies) (*Interface, error) {
@@ -283,7 +285,7 @@ func (module *Interface) Review(ctx context.Context, draft Draft) ReviewResult {
 			module.nextField = len(draftFields)
 		}
 	}
-	draft = module.draft
+	draft, sshProof := module.draft, module.sshProof
 	module.approval, module.reclamation, module.request = nil, nil, softwareubuntu.InstallHandoffRequest{}
 	if module.nextField < len(draftFields) {
 		invalid := module.invalidDraftField(draft, draftFields[module.nextField], "Submit this Installation field to continue.")
@@ -309,7 +311,7 @@ func (module *Interface) Review(ctx context.Context, draft Draft) ReviewResult {
 		return correction(errors.New("installation entropy generation failed"))
 	}
 	request := softwareubuntu.InstallHandoffRequest{Schema: 1, Session: hex.EncodeToString(session), Tag: draft.Tag, Architecture: draft.Architecture, Draft: draft.Installation, CloudflareAccountID: draft.CloudflareAccountID, CloudflareZoneID: draft.CloudflareZoneID, CloudflareToken: draft.CloudflareToken, RealityTarget: draft.RealityTarget, RealityServerName: draft.RealityServerName, Entropy: entropy, Candidate: handoff}
-	built, err := module.build(ctx, request)
+	built, err := module.build(ctx, request, sshProof)
 	if err != nil {
 		var reclaim *reclamationReviewError
 		if errors.As(err, &reclaim) && reclaim.plan != nil {
@@ -318,7 +320,7 @@ func (module *Interface) Review(ctx context.Context, draft Draft) ReviewResult {
 				return reclamationCorrection()
 			}
 			module.mu.Lock()
-			module.request, module.reclamation = request, reclaim.plan
+			module.request, module.reclamation, module.reclamationSSHProof = request, reclaim.plan, sshProof
 			module.mu.Unlock()
 			return ReviewResult{Reclamation: plan}
 		}
@@ -341,6 +343,7 @@ func (module *Interface) initializeDraft() *Correction {
 		return &Correction{Problem: "The verified running Installation facts are unavailable", Found: "the running Release Identity or active SSH port could not be proved", Required: "one verified running release and one proven active SSH session", WhyStopped: "Installation never asks the Owner to re-enter facts that SBXR must prove", OwnerSteps: []string{"Restart Installation through the verified Pasteable Install Command after SSH access is restored."}, Evidence: "INSTALL-RUNTIME-FACTS-UNPROVED"}
 	}
 	module.draft.Tag, module.draft.Architecture, module.draft.Installation.SSHPort = release.Tag, release.Architecture, preflight.ActiveSSHPort
+	module.sshProof = preflight.SSHPreservationProof()
 	module.ipv4Candidates = append([]string(nil), preflight.UsablePublicIPv4...)
 	if len(preflight.UsablePublicIPv4) == 1 {
 		module.draft.Installation.PublicIPv4 = preflight.UsablePublicIPv4[0]
@@ -355,12 +358,14 @@ func (module *Interface) initializeDraft() *Correction {
 func (module *Interface) resetDraft() {
 	module.draft, module.nextField, module.initialized = initialDraft(), 0, false
 	module.reviewFacts, module.detectedIPv4, module.ipv4Candidates = nil, false, nil
+	module.sshProof = networkpolicy.SSHPreservationProof{}
+	module.reclamationSSHProof = networkpolicy.SSHPreservationProof{}
 }
 
 func (module *Interface) ConfirmReclamation(ctx context.Context, confirmation ReclamationConfirmation) ReviewResult {
 	module.mu.Lock()
-	reclamation, request := module.reclamation, module.request
-	module.approval, module.reclamation, module.request = nil, nil, softwareubuntu.InstallHandoffRequest{}
+	reclamation, request, sshProof := module.reclamation, module.request, module.reclamationSSHProof
+	module.approval, module.reclamation, module.request, module.reclamationSSHProof = nil, nil, softwareubuntu.InstallHandoffRequest{}, networkpolicy.SSHPreservationProof{}
 	module.mu.Unlock()
 	identity := ""
 	if reclamation != nil && len(reclamation.Digest) == 64 {
@@ -370,15 +375,15 @@ func (module *Interface) ConfirmReclamation(ctx context.Context, confirmation Re
 		return ReviewResult{Invalid: &InvalidInput{Field: "reclamation-confirmation", Problem: "The exact current reclamation review and confirmation are required."}}
 	}
 	request.ReviewedReclamationSHA256 = reclamation.Digest
-	built, err := module.build(ctx, request)
+	built, err := module.build(ctx, request, sshProof)
 	if err != nil {
 		return correction(err)
 	}
 	return module.finalReview(built, request, reclamation)
 }
 
-func (module *Interface) build(ctx context.Context, request softwareubuntu.InstallHandoffRequest) (*builtInstall, error) {
-	return buildInstallWith(ctx, request, buildDependencies{stage: module.dependencies.Stage, network: module.dependencies.Network, cloudflare: module.dependencies.Cloudflare, random: newInstallEntropyReader(request.Entropy), cloudflareAPI: module.dependencies.CloudflareAPI, inventory: module.dependencies.Inventory})
+func (module *Interface) build(ctx context.Context, request softwareubuntu.InstallHandoffRequest, sshProof networkpolicy.SSHPreservationProof) (*builtInstall, error) {
+	return buildInstallWith(ctx, request, buildDependencies{stage: module.dependencies.Stage, network: module.dependencies.Network, cloudflare: module.dependencies.Cloudflare, random: newInstallEntropyReader(request.Entropy), cloudflareAPI: module.dependencies.CloudflareAPI, inventory: module.dependencies.Inventory, sshProof: sshProof})
 }
 
 func (module *Interface) finalReview(built *builtInstall, request softwareubuntu.InstallHandoffRequest, reclamation *networkpolicy.ReclamationPlan) ReviewResult {

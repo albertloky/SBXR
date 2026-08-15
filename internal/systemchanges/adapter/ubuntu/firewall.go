@@ -375,6 +375,14 @@ func (firewall *NativeFirewall) CaptureRollback(step systemchanges.Step, write f
 }
 
 func (firewall *NativeFirewall) Execute(step systemchanges.Step, rollbackPath string, timeout time.Duration, cancellation *systemchanges.Cancellation) (systemchanges.StepEvidence, error) {
+	return firewall.execute(step, rollbackPath, timeout, cancellation, true)
+}
+
+func (firewall *NativeFirewall) ExecuteProtected(step systemchanges.Step, rollbackPath string, timeout time.Duration, cancellation *systemchanges.Cancellation) (systemchanges.StepEvidence, error) {
+	return firewall.execute(step, rollbackPath, timeout, cancellation, false)
+}
+
+func (firewall *NativeFirewall) execute(step systemchanges.Step, rollbackPath string, timeout time.Duration, cancellation *systemchanges.Cancellation, legacySSHCheck bool) (systemchanges.StepEvidence, error) {
 	change, ok := step.FirewallChange()
 	if firewall == nil || firewall.run == nil || !ok || timeout <= 0 || rollbackPath == "" {
 		return systemchanges.StepEvidence{}, errors.New("native firewall contract unavailable")
@@ -401,8 +409,10 @@ func (firewall *NativeFirewall) Execute(step systemchanges.Step, rollbackPath st
 	if _, err := firewall.run(ctx, script, "nft", "--file", "-"); err != nil {
 		return systemchanges.StepEvidence{}, errors.New("atomic inet sbxr apply failed")
 	}
-	if err := firewall.verifySSH(ctx, change.SSHPort); err != nil {
-		return systemchanges.StepEvidence{}, err
+	if legacySSHCheck {
+		if err := firewall.verifySSH(ctx, change.SSHPort); err != nil {
+			return systemchanges.StepEvidence{}, err
+		}
 	}
 	if cancellation.Requested() {
 		return systemchanges.StepEvidence{}, errors.New("firewall cancellation reached the proven SSH-safe checkpoint")
@@ -570,8 +580,51 @@ func (firewall *NativeFirewall) cancelWatchdog(ctx context.Context) error {
 }
 
 func (firewall *NativeFirewall) verifySSH(ctx context.Context, port uint16) error {
+	return firewall.verifySSHIdentity(ctx, port, os.Getenv("SSH_CONNECTION"))
+}
+
+func (firewall *NativeFirewall) VerifySSHIdentity(identity string, timeout time.Duration) error {
+	port, err := sshIdentityPort(identity)
+	if firewall == nil || firewall.run == nil || err != nil || timeout <= 0 {
+		return errors.New("SSH Preservation identity invalid")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return firewall.verifySSHIdentity(ctx, port, identity)
+}
+
+func (firewall *NativeFirewall) VerifySSHSession(identity string, timeout time.Duration) error {
+	port, err := sshIdentityPort(identity)
+	if firewall == nil || firewall.run == nil || timeout <= 0 {
+		return errors.New("SSH Preservation inspection unavailable")
+	}
+	if err != nil {
+		return errors.New("SSH Preservation identity invalid")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 	connections, err := firewall.run(ctx, nil, "ss", "-Htn", "state", "established")
-	if err != nil || !currentSSHSessionPresent(connections, port, os.Getenv("SSH_CONNECTION")) {
+	if err != nil || !currentSSHSessionPresent(connections, port, identity) {
+		return errors.New("existing SSH session is not responsive")
+	}
+	return nil
+}
+
+func sshIdentityPort(identity string) (uint16, error) {
+	fields := strings.Fields(identity)
+	if len(fields) != 4 {
+		return 0, errors.New("invalid identity")
+	}
+	port, err := strconv.ParseUint(fields[3], 10, 16)
+	if err != nil || port == 0 {
+		return 0, errors.New("invalid identity")
+	}
+	return uint16(port), nil
+}
+
+func (firewall *NativeFirewall) verifySSHIdentity(ctx context.Context, port uint16, identity string) error {
+	connections, err := firewall.run(ctx, nil, "ss", "-Htn", "state", "established")
+	if err != nil || !currentSSHSessionPresent(connections, port, identity) {
 		return errors.New("existing SSH session is not responsive")
 	}
 	policy, err := firewall.run(ctx, nil, "nft", "-j", "list", "table", "inet", "sbxr")

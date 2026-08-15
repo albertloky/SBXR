@@ -108,17 +108,25 @@ type ConnectionProfilesRuntimeBinding struct {
 }
 
 type Preparation struct {
-	ChangeSet    string
-	Mutation     MutationClass
-	OutcomeOwner Module
-	Starting     StateLineage
-	PlanSHA256   string
-	State        StateTransactionBinding
-	Steps        []Step
-	Checks       []Check
-	Timeouts     Timeouts
-	Reclamation  *ReclamationTarget
-	writeState   func(func(name string, mode uint32, source io.Reader) error) error
+	ChangeSet          string
+	Mutation           MutationClass
+	OutcomeOwner       Module
+	Starting           StateLineage
+	PlanSHA256         string
+	State              StateTransactionBinding
+	Steps              []Step
+	Checks             []Check
+	Timeouts           Timeouts
+	Reclamation        *ReclamationTarget
+	writeState         func(func(name string, mode uint32, source io.Reader) error) error
+	sshIdentity        string
+	SSHAgreementSHA256 string
+}
+
+func (Preparation) String() string   { return "System Changes Preparation: redacted" }
+func (Preparation) GoString() string { return "System Changes Preparation: redacted" }
+func (Preparation) MarshalJSON() ([]byte, error) {
+	return nil, errors.New("System Changes Preparation JSON unavailable")
 }
 
 func (preparation Preparation) WriteStateArtifacts(write func(name string, mode uint32, source io.Reader) error) error {
@@ -126,6 +134,13 @@ func (preparation Preparation) WriteStateArtifacts(write func(name string, mode 
 		return fmt.Errorf("state artifact handoff unavailable")
 	}
 	return preparation.writeState(write)
+}
+
+func (preparation Preparation) WriteSSHPreservation(write func(source io.Reader) error) error {
+	if preparation.sshIdentity == "" || write == nil {
+		return errors.New("SSH Preservation material unavailable")
+	}
+	return write(strings.NewReader(preparation.sshIdentity))
 }
 
 type Agreement struct {
@@ -224,6 +239,7 @@ type RecoveryTransaction struct {
 	IrreversibleRemovalStarted     bool
 	IrreversibleReclamationStarted bool
 	Reclamation                    *ReclamationTarget
+	SSHPreservationSHA256          string
 }
 
 // PendingChangeSet is the secret-safe identity needed to select one recovery
@@ -293,6 +309,17 @@ type TransactionAdapter interface {
 	VerifyRollback(ExecutionLease, RollbackAgreement, time.Duration) error
 	Cleanup(lease ExecutionLease, changeSet string) error
 }
+
+type SSHPreservationAdapter interface {
+	VerifySSHPreservation(ExecutionLease, string, string, SSHPreservationPhase, time.Duration) error
+}
+
+type SSHPreservationPhase string
+
+const (
+	BeforeFirewallReplacement SSHPreservationPhase = "Before firewall replacement"
+	AfterFirewallReplacement  SSHPreservationPhase = "After firewall replacement"
+)
 
 type RecoveryAdapter interface {
 	LoadRecovery(ExecutionLease) (RecoveryTransaction, error)
@@ -452,7 +479,7 @@ func (i Interface) Recover() ApplyResult {
 		if adapter.Cleanup(lease, recovery.ChangeSet) != nil {
 			return finish(lock, recoveryRequired(spec, "SYSTEM-CHANGES-CLEANUP", Complete))
 		}
-		return finish(lock, ApplyResult{Outcome: Completed, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence()})
+		return finish(lock, ApplyResult{Outcome: Completed, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(), SSHPreservationSHA256: recovery.SSHPreservationSHA256})
 	}
 	if recovery.LastCheckpoint == RolledBack {
 		if recoveryAdapter.VerifyStartingServices(lease, recovery, recovery.Timeouts.Check) != nil || adapter.Cleanup(lease, recovery.ChangeSet) != nil {
@@ -973,13 +1000,20 @@ func rollbackRecovered(lease ExecutionLease, adapter TransactionAdapter, recover
 }
 
 func recoveredRollbackResult(recovery RecoveryTransaction, restored InstallationStatus) ApplyResult {
-	return ApplyResult{Outcome: RollbackSucceeded, RestoredStatus: restored, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(), Finding: &Finding{Code: "SYSTEM-CHANGES-ROLLED-BACK-AFTER-RESTART", Owner: recovery.OutcomeOwner, Problem: "The interrupted Change Set was rolled back from durable evidence", Found: string(recovery.LastCheckpoint), Required: "the prior proven installation status", WhyStopped: "SYSTEM-CHANGES-RESTART", NextAction: "Start only services proven against the restored Desired State."}}
+	return ApplyResult{Outcome: RollbackSucceeded, RestoredStatus: restored, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(), SSHPreservationSHA256: recovery.SSHPreservationSHA256, Finding: &Finding{Code: "SYSTEM-CHANGES-ROLLED-BACK-AFTER-RESTART", Owner: recovery.OutcomeOwner, Problem: "The interrupted Change Set was rolled back from durable evidence", Found: string(recovery.LastCheckpoint), Required: "the prior proven installation status", WhyStopped: "SYSTEM-CHANGES-RESTART", NextAction: "Start only services proven against the restored Desired State."}}
 }
 
 func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Cancellation) ApplyResult {
 	adapter, ok := i.adapter.(TransactionAdapter)
 	if !ok {
 		return finish(lock, refused("SYSTEM-CHANGES-TRANSACTION-ADAPTER", "Durable transaction execution is unavailable", "the Adapter has no transaction capability", "one protected durable transaction Adapter", "live work cannot start without recovery material", "Restore the Adapter and create a fresh Plan.", true))
+	}
+	sshIdentity, sshSHA256, sshProtected := spec.SSHPreservation.consume()
+	spec.sshPreservationSHA256 = sshSHA256
+	needsSSHProtection := spec.Mutation == InstallationMutation && containsFirewallStep(spec.Steps)
+	sshAdapter, hasSSHAdapter := adapter.(SSHPreservationAdapter)
+	if needsSSHProtection && (!sshProtected || !hasSSHAdapter) {
+		return finish(lock, nothingChanged(spec, "SYSTEM-CHANGES-SSH-PRESERVATION", Prepared))
 	}
 	lease := newExecutionLease()
 	defer lease.revoke()
@@ -1097,10 +1131,14 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 			}
 		}
 	}
+	if !needsSSHProtection {
+		sshIdentity, sshSHA256, sshProtected = "", "", false
+	}
 	preparation := Preparation{
 		ChangeSet: spec.Identity, Mutation: spec.Mutation, OutcomeOwner: spec.OutcomeOwner, Starting: spec.StartingState,
 		PlanSHA256: spec.Plan.SHA256, State: binding,
 		Steps: append([]Step(nil), spec.Steps...), Checks: append([]Check(nil), spec.Checks...), Timeouts: spec.Timeouts, Reclamation: reclamation,
+		sshIdentity: sshIdentity, SSHAgreementSHA256: sshSHA256,
 		writeState: func(write func(name string, mode uint32, source io.Reader) error) error {
 			return transaction.SystemChangesWriteArtifacts(lease, write)
 		},
@@ -1236,11 +1274,19 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 			}
 			return finish(lock, nothingChanged(spec, "SYSTEM-CHANGES-JOURNAL", StepStarted))
 		}
+		if _, firewall := step.FirewallChange(); firewall && needsSSHProtection && sshAdapter.VerifySSHPreservation(lease, spec.Identity, sshSHA256, BeforeFirewallReplacement, spec.Timeouts.Check) != nil {
+			return finish(lock, rollbackChange(lease, adapter, transaction, spec, index, "SYSTEM-CHANGES-SSH-PRESERVATION", StepStarted))
+		}
 		executionCancellation := cancellation
 		if irreversibleReclamation {
 			executionCancellation = nil
 		}
 		evidence, err := adapter.Execute(lease, spec.Identity, number, step, spec.Timeouts.Step, executionCancellation)
+		if err == nil {
+			if _, firewall := step.FirewallChange(); firewall && needsSSHProtection {
+				err = sshAdapter.VerifySSHPreservation(lease, spec.Identity, sshSHA256, AfterFirewallReplacement, spec.Timeouts.Check)
+			}
+		}
 		if err != nil || !safeIdentity(evidence.Code) || !validSHA256(evidence.SHA256) || !validCloudflareEvidence(step, number, evidence, evidenceByStep) {
 			if irreversibleRemoval || irreversibleReclamation {
 				if irreversibleReclamation {
@@ -1377,7 +1423,16 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 		}
 		return finish(lock, recoveryRequired(spec, "SYSTEM-CHANGES-CLEANUP", Complete))
 	}
-	return finish(lock, ApplyResult{Outcome: Completed, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence()}, spec.OutcomeOwner)
+	return finish(lock, ApplyResult{Outcome: Completed, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(), SSHPreservationSHA256: spec.sshPreservationSHA256}, spec.OutcomeOwner)
+}
+
+func containsFirewallStep(steps []Step) bool {
+	for _, step := range steps {
+		if _, ok := step.FirewallChange(); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func forwardReclamationRequired(spec ChangeSetSpec, cause string, checkpoint DurableCheckpoint) ApplyResult {
@@ -1461,7 +1516,8 @@ func rollbackChange(lease ExecutionLease, adapter TransactionAdapter, transactio
 	}
 	return ApplyResult{
 		Outcome: RollbackSucceeded, RestoredStatus: restored, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(),
-		Finding: &Finding{Code: "SYSTEM-CHANGES-ROLLED-BACK", Owner: spec.OutcomeOwner, Problem: "The Change Set stopped and its exact baseline was restored", Found: string(checkpoint), Required: "the prior proven installation status", WhyStopped: cause, NextAction: "Inspect the restored baseline and create a fresh Plan."},
+		SSHPreservationSHA256: spec.sshPreservationSHA256,
+		Finding:               &Finding{Code: "SYSTEM-CHANGES-ROLLED-BACK", Owner: spec.OutcomeOwner, Problem: "The Change Set stopped and its exact baseline was restored", Found: string(checkpoint), Required: "the prior proven installation status", WhyStopped: cause, NextAction: "Inspect the restored baseline and create a fresh Plan."},
 	}
 }
 

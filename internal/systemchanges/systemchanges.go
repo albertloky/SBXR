@@ -208,6 +208,34 @@ type FreshInstallationProof interface {
 	SystemChangesFreshInstallation() bool
 }
 
+type SSHPreservationProof interface {
+	SystemChangesSSHPreservation() (identity, sha256 string, valid bool)
+}
+
+type SSHPreservationAuthority struct{ proof SSHPreservationProof }
+
+func (SSHPreservationAuthority) String() string   { return "SSH Preservation authority: redacted" }
+func (SSHPreservationAuthority) GoString() string { return "SSH Preservation authority: redacted" }
+func (SSHPreservationAuthority) MarshalJSON() ([]byte, error) {
+	return nil, errors.New("SSH Preservation authority cannot be rendered")
+}
+
+func NewSSHPreservationAuthority(proof SSHPreservationProof) SSHPreservationAuthority {
+	typeOf := reflect.TypeOf(proof)
+	if typeOf == nil || typeOf.Kind() != reflect.Struct || typeOf.PkgPath() != "github.com/albertloky/SBXR/internal/networkpolicy" || typeOf.Name() != "SSHPreservationProof" {
+		return SSHPreservationAuthority{}
+	}
+	return SSHPreservationAuthority{proof: proof}
+}
+
+func (authority SSHPreservationAuthority) consume() (string, string, bool) {
+	if authority.proof == nil {
+		return "", "", false
+	}
+	identity, digest, valid := authority.proof.SystemChangesSSHPreservation()
+	return identity, digest, valid && identity != "" && validSHA256(digest)
+}
+
 type completeRemovalAuthorityCell struct {
 	adapter                Adapter
 	status                 InstallationStatus
@@ -1280,6 +1308,8 @@ type ChangeSetSpec struct {
 	TypedRemovalConfirmation  TypedRemovalConfirmation
 	PermanentRemovalSelection PermanentRemovalSelection
 	Reclamation               ReclamationAuthority
+	SSHPreservation           SSHPreservationAuthority
+	sshPreservationSHA256     string
 	Steps                     []Step
 	Checks                    []Check
 	Timeouts                  Timeouts
@@ -1366,6 +1396,7 @@ type ApplyResult struct {
 	Evidence               EvidenceRules      `json:"evidence_rules"`
 	Finding                *Finding           `json:"finding,omitempty"`
 	UnremovableTraces      []string           `json:"unremovable_traces,omitempty"`
+	SSHPreservationSHA256  string             `json:"ssh_preservation_sha256,omitempty"`
 }
 
 func (i Interface) Apply(changeSet *ChangeSet) ApplyResult {
