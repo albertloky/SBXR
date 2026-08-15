@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 )
 
 type completeRemovalStub struct {
@@ -102,6 +104,29 @@ func TestRunCompleteRemovalRequiresTwoDistinctExactOwnerActs(t *testing.T) {
 	got := runTranscriptSteps(t, Session{Scenario: CompleteRemovalConfirmation, CompleteRemoval: stub, CompleteRemovalOutcomes: &outcomeStub{}}, 80, 24, steps...)
 	if stub.reviews != 1 || !strings.Contains(got, "complete-removal-plan") || !strings.Contains(got, "REVIEW COMPLETE REMOVAL PLAN") {
 		t.Fatalf("two exact Owner acts did not open one Plan review: reviews=%d\n%s", stub.reviews, got)
+	}
+}
+
+func TestRunCompleteRemovalHelpAtBothSizesCannotConfirmOrSelect(t *testing.T) {
+	for _, size := range []struct{ width, height int }{{120, 36}, {80, 24}} {
+		view := managedRemovalReview()
+		help := softwarelifecycle.CompleteRemovalConfirmationGuidance()
+		view.ConfirmationHelp = ConfirmationHelp{Title: help.Title, Lines: help.Lines}
+		stub := &completeRemovalStub{view: view, review: completeRemovalPlan()}
+		steps := []string{""}
+		if size.width == 80 {
+			steps = append(steps, "h", "", "\x1b")
+		}
+		steps = append(steps, "", "\x1b[200~COMPLETE REMOVAL\nPermanently remove SBXR\x1b[201~", "", "\x03\r")
+		got := runPseudoTerminalTranscriptSteps(t, Session{Scenario: CompleteRemovalConfirmation, CompleteRemoval: stub, CompleteRemovalOutcomes: &outcomeStub{}}, size.width, size.height, steps...)
+		for _, want := range []string{"COMPLETE REMOVAL HELP", "owned local", "Cloudflare resources", "Irreversible removal started", "forward-only", "Certificate Transparency", "does not type", "Permanently", "remove SBXR", "Esc Return without confirming"} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("%dx%d Complete removal Help omitted %q\n%s", size.width, size.height, want, got)
+			}
+		}
+		if stub.reviews != 0 {
+			t.Fatalf("%dx%d Help or hostile paste submitted Complete removal", size.width, size.height)
+		}
 	}
 }
 
@@ -228,7 +253,7 @@ func TestRunCompleteRemovalUpdateWaitsBehindExitConfirmation(t *testing.T) {
 }
 
 func managedRemovalReview() CompleteRemovalPresentation {
-	return CompleteRemovalPresentation{Kind: CompleteRemovalReviewAvailable, StartingStatus: InstallationManaged, StartingRevision: 42, Checkpoint: RemovalBeforeIrreversibleCheckpoint, TokenPhase: RemovalTokenAvailable}
+	return CompleteRemovalPresentation{Kind: CompleteRemovalReviewAvailable, StartingStatus: InstallationManaged, StartingRevision: 42, Checkpoint: RemovalBeforeIrreversibleCheckpoint, TokenPhase: RemovalTokenAvailable, ConfirmationHelp: ConfirmationHelp{Title: "COMPLETE REMOVAL HELP", Lines: []string{"Review exact owned deletion without confirming."}}}
 }
 
 func completeRemovalPlan() ChangeReview {

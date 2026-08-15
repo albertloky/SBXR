@@ -933,7 +933,7 @@ func TestInstallationReviewKeepsTheRunningReleaseReadOnlyAfterCandidateFailure(t
 		return original(ctx, tag, architecture)
 	}
 	review := module.Review(t.Context(), composedDraft(t))
-	if review.Correction == nil || review.Correction.InputLabel != "" || review.Invalid != nil {
+	if review.Correction == nil || review.Correction.InputLabel != "" || review.Correction.FixWithSBXR || len(review.Correction.OwnerSteps) != 1 || review.Invalid != nil {
 		t.Fatalf("running release failure became editable: %+v", review)
 	}
 	review = module.Review(t.Context(), Draft{})
@@ -1033,6 +1033,16 @@ func TestInstallationInterfaceRequiresExactReclamationConfirmation(t *testing.T)
 	for _, effect := range installPlanEffects() {
 		if !slices.Contains(confirmed.Plan.Effects, effect) {
 			t.Fatalf("confirmed Plan lost %q", effect)
+		}
+	}
+}
+
+func TestReclamationConfirmationGuidanceOwnsTheExactDestructiveBoundary(t *testing.T) {
+	guidance := ReclamationConfirmationGuidance()
+	joined := strings.Join(guidance.Lines, " ")
+	for _, want := range []string{"RECLAIM THIS VPS", "Reclamation Boundary", "without autoremove", "Protected Host Foundation", "SSH access", "Irreversible Reclamation Started", "forward recovery to Managed", "does not confirm"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("ReclamationConfirmationGuidance() omitted %q: %+v", want, guidance)
 		}
 	}
 }

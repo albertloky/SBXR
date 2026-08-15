@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/albertloky/SBXR/internal/installation"
 )
 
 type outcomeStub struct {
@@ -38,6 +40,7 @@ func (stub *outcomeStub) ConfirmReclamation(_ context.Context, identity PlanIden
 	}
 	confirmed := *plan
 	confirmed.ReclamationConfirmed = true
+	confirmed.ConfirmationHelp = ConfirmationHelp{}
 	return ChangeReview{Plan: &confirmed}
 }
 
@@ -264,6 +267,7 @@ func TestRunConfirmsExactReclamationReviewBeforeSeparateApply(t *testing.T) {
 	review := completePlan("reclaim-vps-review")
 	review.Plan.LineageUnavailable, review.Plan.DesiredStateRevision, review.Plan.DesiredStateSHA256 = true, 0, ""
 	review.Plan.ReclamationDigest = strings.Repeat("c", 64)
+	review.Plan.ConfirmationHelp = ConfirmationHelp{Title: "RECLAIM THIS VPS HELP", Lines: []string{"Review the exact boundary without confirming."}}
 	review.Plan.Effects = []string{"Review exact executable, service, package, firewall, Docker, and Cloudflare conflict targets; change nothing"}
 	review.Plan.Interruption = "No work starts; interruption changes nothing."
 	review.Plan.Cancellation = "Back or Cancel changes nothing."
@@ -274,6 +278,31 @@ func TestRunConfirmsExactReclamationReviewBeforeSeparateApply(t *testing.T) {
 	got := runTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: stub}, 120, 36, steps...)
 	if stub.reclamationCalls != 1 || !stub.reclamationOK || len(stub.applyPlans) != 0 || !strings.Contains(got, "Reclamation review confirmed") || !strings.Contains(got, "Apply has not") {
 		t.Fatalf("reclamation confirmation crossed the review-only boundary: calls=%d ok=%t apply=%v\n%s", stub.reclamationCalls, stub.reclamationOK, stub.applyPlans, got)
+	}
+}
+
+func TestRunShowsReclamationHelpAtBothSizesWithoutConfirming(t *testing.T) {
+	for _, size := range []struct{ width, height int }{{120, 36}, {80, 24}} {
+		review := completePlan("reclaim-vps-help")
+		review.Plan.LineageUnavailable, review.Plan.DesiredStateRevision, review.Plan.DesiredStateSHA256 = true, 0, ""
+		review.Plan.ReclamationDigest = strings.Repeat("c", 64)
+		help := installation.ReclamationConfirmationGuidance()
+		review.Plan.ConfirmationHelp = ConfirmationHelp{Title: help.Title, Lines: help.Lines}
+		stub := &outcomeStub{reviews: []ChangeReview{review}}
+		steps := []string{""}
+		if size.width == 80 {
+			steps = append(steps, "h", "", "\x1b")
+		}
+		steps = append(steps, "", "\x1b[200~RECLAIM THIS VPS\n\x1b[201~", "", "\x03\r")
+		got := runPseudoTerminalTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: stub}, size.width, size.height, steps...)
+		for _, want := range []string{"RECLAIM THIS VPS HELP", "clamation Boundary", "Protected Host Foundation", "Irreversible Reclamation Started", "to Managed", "Help does not confirm", "Esc Return without confirming"} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("%dx%d reclamation Help omitted %q\n%s", size.width, size.height, want, got)
+			}
+		}
+		if stub.reclamationCalls != 0 || len(stub.applyPlans) != 0 {
+			t.Fatalf("%dx%d Help or hostile paste confirmed reclamation: calls=%d apply=%v", size.width, size.height, stub.reclamationCalls, stub.applyPlans)
+		}
 	}
 }
 
@@ -382,6 +411,38 @@ func TestRunCheckAgainReturnsToTheOwningModule(t *testing.T) {
 	_ = runTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: stub}, 80, 24, steps...)
 	if stub.checkCalls != 1 {
 		t.Fatalf("Check again calls = %d", stub.checkCalls)
+	}
+}
+
+func TestRunCorrectionInputReachesOwnerAndFreshCorrectionClearsStaleState(t *testing.T) {
+	first := ChangeReview{Correction: &CorrectionPresentation{Problem: "External correction required", Found: "provider value missing", Required: "one exact external value", WhyStopped: "the owning Module needs fresh provider facts", FixWithSBXR: true, OwnerSteps: []string{"Enter the provider value"}, InputLabel: "Provider value", Selections: []CorrectionSelection{{Identity: "account", Label: "Selected account"}}, Evidence: "PROVIDER-VALUE-MISSING"}}
+	second := ChangeReview{Correction: &CorrectionPresentation{Problem: "External correction changed", Found: "provider facts changed", Required: "fresh provider evidence", WhyStopped: "the owning Module rechecked the provider", FixWithSBXR: true, OwnerSteps: []string{"Enter the current value"}, InputLabel: "Current provider value", Selections: []CorrectionSelection{{Identity: "zone", Label: "Selected zone"}}, Evidence: "PROVIDER-FACTS-CHANGED"}}
+	third := ChangeReview{Correction: &CorrectionPresentation{Problem: "Fresh external correction", Found: "fresh provider facts", Required: "provider publication", WhyStopped: "publication is pending", OwnerSteps: []string{"Publish the value"}, Selections: []CorrectionSelection{{Identity: "published", Label: "Value published"}}, Evidence: "PROVIDER-FRESH-CHECK"}}
+	stub := &outcomeStub{reviews: []ChangeReview{first, second, third}}
+	got := runTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: stub}, 120, 36, "", "stale-value", "\t", "\r", "", "\t", "r", "", "\x03\r")
+	if len(stub.fixes) != 1 || stub.fixes[0] != (CorrectionInput{Text: "stale-value", Selection: "account"}) || stub.checkCalls != 1 {
+		t.Fatalf("correction calls = fixes=%+v checks=%d", stub.fixes, stub.checkCalls)
+	}
+	fresh := strings.LastIndex(got, "Fresh external correction")
+	if fresh < 0 || strings.Contains(got[fresh:], "stale-value") || !strings.Contains(got[fresh:], "fresh provider facts") {
+		t.Fatalf("fresh correction retained stale input or omitted fresh facts\n%s", got)
+	}
+}
+
+func TestRunCorrectionInputCannotConfirmAReclamationPlan(t *testing.T) {
+	correction := ChangeReview{Correction: &CorrectionPresentation{Problem: "External correction required", Found: "provider value missing", Required: "one external value", WhyStopped: "the owning Module needs that value", FixWithSBXR: true, OwnerSteps: []string{"Enter the provider value"}, InputLabel: "Provider value", Evidence: "PROVIDER-VALUE-MISSING"}}
+	reclamation := completePlan("reclaim-after-correction")
+	reclamation.Plan.LineageUnavailable, reclamation.Plan.DesiredStateRevision, reclamation.Plan.DesiredStateSHA256 = true, 0, ""
+	reclamation.Plan.ReclamationDigest = strings.Repeat("d", 64)
+	help := installation.ReclamationConfirmationGuidance()
+	reclamation.Plan.ConfirmationHelp = ConfirmationHelp{Title: help.Title, Lines: help.Lines}
+	stub := &outcomeStub{reviews: []ChangeReview{correction, reclamation}}
+	steps := []string{"", ReclamationPhrase, "\t", "\r", ""}
+	steps = append(steps, planTraversalSteps(reclamation.Plan, 120, 36)...)
+	steps = append(steps, "\r", "", "\x03\r")
+	got := runTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: stub}, 120, 36, steps...)
+	if len(stub.fixes) != 1 || stub.reclamationCalls != 0 || !strings.Contains(got, "Type exactly: "+ReclamationPhrase) {
+		t.Fatalf("stale correction input confirmed reclamation: fixes=%+v confirmations=%d\n%s", stub.fixes, stub.reclamationCalls, got)
 	}
 }
 

@@ -221,7 +221,11 @@ func ownerPlan(plan *installation.Plan) *ownerconsole.PlanPresentation {
 	if plan == nil {
 		return nil
 	}
-	return &ownerconsole.PlanPresentation{Identity: ownerconsole.PlanIdentity(plan.Identity), DesiredStateRevision: plan.DesiredStateRevision, DesiredStateSHA256: plan.DesiredStateSHA256, LineageUnavailable: plan.LineageUnavailable, RelevantChecksums: append([]string(nil), plan.RelevantChecksums...), ObservedState: plan.ObservedState, VerifiedExternalInputs: append([]string(nil), plan.VerifiedExternalInputs...), Effects: append([]string(nil), plan.Effects...), RequiredChecks: append([]string(nil), plan.RequiredChecks...), AdvisoryChecks: append([]string(nil), plan.AdvisoryChecks...), Interruption: plan.Interruption, Cancellation: plan.Cancellation, Rollback: plan.Rollback, ReclamationDigest: plan.ReclamationDigest, ReclamationConfirmed: plan.ReclamationConfirmed}
+	help := ownerconsole.ConfirmationHelp{}
+	if plan.ReclamationDigest != "" && !plan.ReclamationConfirmed {
+		help = ownerconsole.ConfirmationHelp{Title: plan.ConfirmationHelp.Title, Lines: append([]string(nil), plan.ConfirmationHelp.Lines...)}
+	}
+	return &ownerconsole.PlanPresentation{Identity: ownerconsole.PlanIdentity(plan.Identity), DesiredStateRevision: plan.DesiredStateRevision, DesiredStateSHA256: plan.DesiredStateSHA256, LineageUnavailable: plan.LineageUnavailable, RelevantChecksums: append([]string(nil), plan.RelevantChecksums...), ObservedState: plan.ObservedState, VerifiedExternalInputs: append([]string(nil), plan.VerifiedExternalInputs...), Effects: append([]string(nil), plan.Effects...), RequiredChecks: append([]string(nil), plan.RequiredChecks...), AdvisoryChecks: append([]string(nil), plan.AdvisoryChecks...), Interruption: plan.Interruption, Cancellation: plan.Cancellation, Rollback: plan.Rollback, ReclamationDigest: plan.ReclamationDigest, ReclamationConfirmed: plan.ReclamationConfirmed, ConfirmationHelp: help}
 }
 
 func ownerCorrection(value *installation.Correction) ownerconsole.ChangeReview {
@@ -309,7 +313,7 @@ func (outcome *installOutcome) Back(ctx context.Context) ownerconsole.ChangeRevi
 }
 
 func installCorrection(err error) ownerconsole.ChangeReview {
-	return ownerconsole.ChangeReview{Correction: &ownerconsole.CorrectionPresentation{Problem: "The installation Plan could not be built", Found: "One required release, provider, network, or installation input did not pass", Required: "Correct the named input or external fact, then check again", WhyStopped: "SBXR never continues with an incomplete or changed installation Plan", FixWithSBXR: true, InputLabel: "Corrected value", Evidence: "INSTALL-PLAN-REFUSED: " + err.Error()}}
+	return ownerconsole.ChangeReview{Correction: &ownerconsole.CorrectionPresentation{Problem: "The installation Plan could not be built", Found: "One required release, provider, network, or installation input did not pass", Required: "Correct the named input or external fact, then check again", WhyStopped: "SBXR never continues with an incomplete or changed installation Plan", OwnerSteps: []string{"Restore the required external fact, then use Check again for a fresh Installation review."}, Evidence: "INSTALL-PLAN-REFUSED: " + err.Error()}}
 }
 
 func proveInstalledSubscription(ctx context.Context, address string, port uint16) error {

@@ -247,6 +247,7 @@ type model struct {
 	changeFeedback             string
 	editingAction              editingAction
 	editingHelpOpen            bool
+	confirmationHelpOpen       bool
 	correctionSelection        int
 	correctionAction           int
 	planPage                   int
@@ -642,23 +643,17 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.copyFeedback = "Copy failed. Select the text manually."
 		}
 	case changeReviewMsg:
-		previousField := ""
-		if m.changeReview.Editing != nil {
-			previousField = m.changeReview.Editing.Field.Identity
+		feedback := m.changeFeedback
+		m.setFreshChangeReview(message.review)
+		if m.changeReview.Plan != nil && feedback != "" {
+			m.changeFeedback = feedback
 		}
-		m.changeReview = validatedChangeReview(message.review)
-		m.planPage, m.correctionAction, m.correctionSelection = 0, 0, 0
-		if m.changeReview.Editing != nil && m.changeReview.Editing.Field.Identity != previousField {
-			m.changeFeedback = ""
-		}
-		m.copyFeedback = ""
-		m.focusChangeInput()
 	case changeBackMsg:
 		if m.hasChangeOrigin && message.review == (ChangeReview{}) {
 			m.scenario, m.selected = m.changeOrigin, selectedNavigation(m.changeOrigin)
 			m.changeReview, m.changeFeedback, m.outcome = ChangeReview{}, "", m.defaultOutcome
 			m.hasChangeOrigin = false
-			m.inputFocused = false
+			m.resetFreshChangeState()
 			return m, nil
 		}
 		m.changeReview = validatedChangeReview(message.review)
@@ -712,9 +707,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.changeOrigin, m.hasChangeOrigin = m.scenario, true
 		m.outcome = m.profileOutcomes
-		m.changeReview = validatedChangeReview(message.review)
-		m.planPage, m.changeFeedback = 0, ""
-		m.focusChangeInput()
+		m.setFreshChangeReview(message.review)
 		m.scenario, m.selected = InstallationReview, selectedNavigation(InstallationReview)
 	case profileValidationMsg:
 		if !message.identity.matches(m) {
@@ -766,8 +759,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.changeOrigin, m.hasChangeOrigin = m.scenario, true
 		m.outcome = m.certificateOutcomes
-		m.changeReview = validatedChangeReview(message.review)
-		m.planPage, m.changeFeedback, m.inputFocused = 0, "", false
+		m.setFreshChangeReview(message.review)
 		m.scenario, m.selected = InstallationReview, selectedNavigation(InstallationReview)
 	case diagnosticsViewMsg:
 		if message.generation != m.diagnosticsScreen.generation || m.scenario != ServicesDiagnosticsScreen {
@@ -820,8 +812,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.operationState.stop()
 		m.changeOrigin, m.hasChangeOrigin = m.scenario, true
 		m.outcome = m.lifecycleOutcomes
-		m.changeReview = validatedChangeReview(message.review)
-		m.planPage, m.changeFeedback, m.inputFocused = 0, "", false
+		m.setFreshChangeReview(message.review)
 		m.scenario, m.selected = InstallationReview, selectedNavigation(InstallationReview)
 	case recoveryViewMsg:
 		if message.generation != m.recoveryScreen.generation || !isRecoveryScenario(m.scenario) {
@@ -865,8 +856,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.recoveryScreen.pending = false
 		m.operationState.stop()
 		m.changeOrigin, m.hasChangeOrigin, m.outcome = m.scenario, true, m.recoveryOutcomes
-		m.changeReview = validatedChangeReview(message.review)
-		m.planPage, m.changeFeedback, m.inputFocused = 0, "", false
+		m.setFreshChangeReview(message.review)
 		m.scenario, m.selected = InstallationReview, selectedNavigation(InstallationReview)
 	case completeRemovalViewMsg:
 		if message.generation != m.completeRemovalScreen.generation || m.scenario != CompleteRemovalConfirmation && m.scenario != ForwardOnlyRemoval {
@@ -941,8 +931,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.operationState.stop()
 		m.discardInput()
 		m.changeOrigin, m.hasChangeOrigin, m.outcome = CompleteRemovalConfirmation, true, m.completeRemovalOutcomes
-		m.changeReview = validatedChangeReview(message.review)
-		m.planPage, m.changeFeedback = 0, ""
+		m.setFreshChangeReview(message.review)
 		m.scenario, m.selected = InstallationReview, selectedNavigation(InstallationReview)
 	case completeRemovalCancelMsg:
 		if !message.identity.matches(m) {
@@ -1016,6 +1005,12 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.scenario == InstallationReview && m.outcome != nil {
+			if m.confirmationHelpOpen {
+				if message.String() == "esc" {
+					m.confirmationHelpOpen = false
+				}
+				return m, nil
+			}
 			if m.editingHelpOpen {
 				if message.String() == "esc" {
 					m.editingHelpOpen, m.inputFocused = false, true
@@ -1066,6 +1061,11 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			switch message.String() {
+			case "h":
+				if plan := m.changeReview.Plan; plan != nil && plan.ReclamationDigest != "" && !plan.ReclamationConfirmed && validConfirmationHelp(plan.ConfirmationHelp) {
+					m.confirmationHelpOpen = true
+				}
+				return m, nil
 			case "enter", "space":
 				if m.changeReview.Plan != nil {
 					if m.planPage+1 < m.planPageCount() {
@@ -1644,6 +1644,12 @@ func (m model) updateRecoveryKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m model) updateCompleteRemovalKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := message.String()
+	if m.confirmationHelpOpen {
+		if key == "esc" {
+			m.confirmationHelpOpen = false
+		}
+		return m, nil
+	}
 	if m.completeRemovalScreen.pending {
 		if key == "esc" {
 			m.actionGeneration++
@@ -1675,6 +1681,10 @@ func (m model) updateCompleteRemovalKey(message tea.KeyPressMsg) (tea.Model, tea
 			m.discardInput()
 			m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
 		}
+		return m, nil
+	}
+	if key == "h" && view.Kind == CompleteRemovalReviewAvailable && validConfirmationHelp(view.ConfirmationHelp) {
+		m.confirmationHelpOpen = true
 		return m, nil
 	}
 	if m.updateSectionPage(key, &m.completeRemovalScreen.page, m.completeRemovalPageCount()) {
@@ -2084,6 +2094,7 @@ func (m *model) focusChangeInput() {
 	m.inputFocused, m.editingAction = false, editingReview
 	m.tokenRevealed = false
 	m.editingHelpOpen = false
+	m.confirmationHelpOpen = false
 	m.inputTruncated, m.pasteNeutralized, m.pasteGuard = false, false, false
 	if correction := m.changeReview.Correction; correction != nil && correction.InputLabel != "" {
 		m.inputFocused = true
@@ -2093,6 +2104,17 @@ func (m *model) focusChangeInput() {
 		m.input = editing.Field.Value
 		m.inputFocused = true
 	}
+}
+
+func (m *model) setFreshChangeReview(review ChangeReview) {
+	m.changeReview = validatedChangeReview(review)
+	m.resetFreshChangeState()
+}
+
+func (m *model) resetFreshChangeState() {
+	m.input, m.changeFeedback, m.copyFeedback = "", "", ""
+	m.planPage, m.correctionAction, m.correctionSelection = 0, 0, 0
+	m.focusChangeInput()
 }
 
 func (m model) inspectChangeCommand() tea.Cmd {
@@ -2177,8 +2199,7 @@ func (m *model) finishCloudflareResponse(message cloudflareResponseMsg) tea.Cmd 
 	if message.response.Review != nil && message.response.Presentation == nil && m.cloudflareOutcomes != nil {
 		m.changeOrigin, m.hasChangeOrigin = m.scenario, true
 		m.outcome = m.cloudflareOutcomes
-		m.changeReview = validatedChangeReview(*message.response.Review)
-		m.planPage, m.changeFeedback = 0, ""
+		m.setFreshChangeReview(*message.response.Review)
 		m.scenario, m.selected = InstallationReview, selectedNavigation(InstallationReview)
 		return nil
 	}
@@ -2193,6 +2214,7 @@ func (m *model) cancelCloudflareAction() {
 func (m *model) discardInput() {
 	m.input, m.inputFocused = "", false
 	m.tokenRevealed = false
+	m.confirmationHelpOpen = false
 	m.inputTruncated, m.pasteNeutralized, m.pasteGuard = false, false, false
 }
 
@@ -2510,6 +2532,9 @@ func (m model) frameIdentity(current fixture) (string, string) {
 }
 
 func (m model) scenarioDetails(current fixture) []string {
+	if m.scenario == CompleteRemovalConfirmation && m.completeRemovalScreen.view.Kind == CompleteRemovalReviewAvailable && validConfirmationHelp(m.completeRemovalScreen.view.ConfirmationHelp) {
+		return confirmationHelpLines(m.completeRemovalScreen.view.ConfirmationHelp)
+	}
 	if m.scenario == LiveProfileCheckScreen && m.liveProfileCheckValid {
 		if qr := qrLines(m.liveProfileCheck.TemporaryURL, 49, m.height-8); len(qr) != 0 {
 			return append([]string{"QR - same temporary test URL", ""}, qr...)
@@ -2524,6 +2549,9 @@ func (m model) scenarioDetails(current fixture) []string {
 			return []string{"REDACTED EVIDENCE", "", correction.Evidence, "", "No raw output or secrets."}
 		}
 		if plan := m.changeReview.Plan; plan != nil {
+			if plan.ReclamationDigest != "" && !plan.ReclamationConfirmed && validConfirmationHelp(plan.ConfirmationHelp) {
+				return confirmationHelpLines(plan.ConfirmationHelp)
+			}
 			return append([]string{"PLAN BINDING", "", "Identity  " + string(plan.Identity), fmt.Sprintf("Revision  %d", plan.DesiredStateRevision), "Desired State SHA-256", plan.DesiredStateSHA256, ""}, plan.RelevantChecksums...)
 		}
 	}
@@ -2556,6 +2584,9 @@ func (m model) scenarioDetails(current fixture) []string {
 
 func (m model) scenarioLines(current fixture) []string {
 	if (m.scenario == CompleteRemovalConfirmation || m.scenario == ForwardOnlyRemoval) && m.completeRemoval != nil {
+		if m.confirmationHelpOpen && validConfirmationHelp(m.completeRemovalScreen.view.ConfirmationHelp) {
+			return confirmationHelpLines(m.completeRemovalScreen.view.ConfirmationHelp)
+		}
 		if m.completeRemovalScreen.pending {
 			label, explanation := "Building exact Complete removal Plan", "No mutation, percentage, or result is inferred."
 			if m.completeRemovalScreen.pendingAction == completeRemovalCancel {
@@ -2635,6 +2666,9 @@ func (m model) scenarioLines(current fixture) []string {
 		return providerPage(lines, actionCount, m.width, m.height, m.recoveryScreen.page)
 	}
 	if m.scenario == InstallationReview && m.outcome != nil {
+		if m.confirmationHelpOpen && m.changeReview.Plan != nil {
+			return confirmationHelpLines(m.changeReview.Plan.ConfirmationHelp)
+		}
 		if m.editingHelpOpen && m.changeReview.Editing != nil {
 			width := m.width - navigationWidth - 1
 			if m.width >= 120 {

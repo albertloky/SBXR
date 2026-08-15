@@ -17,6 +17,21 @@ import (
 
 const CompleteRemovalPlanRefused RefusalCode = "SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-PLAN-REFUSED"
 
+type ConfirmationGuidance struct {
+	Title string
+	Lines []string
+}
+
+func CompleteRemovalConfirmationGuidance() ConfirmationGuidance {
+	return ConfirmationGuidance{Title: "COMPLETE REMOVAL HELP", Lines: []string{
+		"COMPLETE REMOVAL authorizes deletion only of the exact owned local and Cloudflare resources in the reviewed Plan.",
+		"Owned deletion includes State, access values, secrets, certificates, transaction and release material, runtime, firewall, DNS, routes, and Tunnel.",
+		"Before Irreversible removal started, Back or Cancel restores the proven start; after it, removal is forward-only.",
+		"Certificate Transparency, DNS caches, copied clients, and physical VPS media can remain outside SBXR authority.",
+		"Help does not type COMPLETE REMOVAL, select Permanently remove SBXR, approve the reviewed Plan, or start Apply.",
+	}}
+}
+
 type completeRemovalCandidateCell struct {
 	authority              systemchanges.CompleteRemovalAuthority
 	status                 systemchanges.InstallationStatus

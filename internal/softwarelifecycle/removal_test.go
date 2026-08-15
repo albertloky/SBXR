@@ -18,6 +18,16 @@ import (
 
 type removalStatusAdapter struct{ observation systemchanges.Observation }
 
+func TestCompleteRemovalConfirmationGuidanceOwnsDeletionAndIrreversibility(t *testing.T) {
+	guidance := softwarelifecycle.CompleteRemovalConfirmationGuidance()
+	joined := strings.Join(guidance.Lines, " ")
+	for _, want := range []string{"COMPLETE REMOVAL", "owned local", "Cloudflare", "Irreversible removal started", "forward-only", "Certificate Transparency", "does not type", "Permanently remove SBXR"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("CompleteRemovalConfirmationGuidance() omitted %q: %+v", want, guidance)
+		}
+	}
+}
+
 func (adapter removalStatusAdapter) Observe() (systemchanges.Observation, error) {
 	return adapter.observation, nil
 }

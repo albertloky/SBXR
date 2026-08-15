@@ -29,6 +29,22 @@ import (
 
 const ReclamationPhrase = "RECLAIM THIS VPS"
 
+type ConfirmationGuidance struct {
+	Title string
+	Lines []string
+}
+
+func ReclamationConfirmationGuidance() ConfirmationGuidance {
+	return ConfirmationGuidance{Title: "RECLAIM THIS VPS HELP", Lines: []string{
+		"RECLAIM THIS VPS authorizes only the conflicts in this exact reviewed Plan.",
+		"Reclamation Boundary: without autoremove, delete only freshly re-proved conflict files, scripts, and identities.",
+		"May replace inbound firewall and Docker; preserves SSH, outbound traffic, images, volumes, and application data.",
+		"Protected Host Foundation preserves the OS, package tools, current shell, SSH access, and recovery dependencies.",
+		"Before Irreversible Reclamation Started, return changes nothing; after it, only forward recovery to Managed remains.",
+		"Help does not confirm RECLAIM THIS VPS, approve the reviewed Plan, or start Apply.",
+	}}
+}
+
 type Draft struct {
 	SubmittedField, SubmittedValue                              string
 	Tag, CloudflareAccountID, CloudflareZoneID, CloudflareToken string
@@ -113,6 +129,7 @@ type Plan struct {
 	RequiredChecks, AdvisoryChecks                      []string
 	ObservedState, Interruption, Cancellation, Rollback string
 	ReclamationDigest                                   string
+	ConfirmationHelp                                    ConfirmationGuidance
 }
 
 type ReviewResult struct {
@@ -825,7 +842,7 @@ func validateDraft(draft Draft) *InvalidInput {
 }
 
 func correction(err error) ReviewResult {
-	return ReviewResult{Correction: &Correction{Problem: "The installation Plan could not be built", Found: "One required release, provider, network, or installation input did not pass", Required: "Correct the named input or external fact, then check again", WhyStopped: "SBXR never continues with an incomplete or changed installation Plan", FixWithSBXR: true, InputLabel: "Corrected value", Evidence: "INSTALL-PLAN-REFUSED: " + err.Error()}}
+	return ReviewResult{Correction: &Correction{Problem: "The installation Plan could not be built", Found: "One required release, provider, network, or installation input did not pass", Required: "Correct the named input or external fact, then check again", WhyStopped: "SBXR never continues with an incomplete or changed installation Plan", OwnerSteps: []string{"Restore the required external fact, then use Check again for a fresh Installation review."}, Evidence: "INSTALL-PLAN-REFUSED: " + err.Error()}}
 }
 
 func reclamationCorrection() ReviewResult {
@@ -868,7 +885,7 @@ func reclamationPlan(plan *networkpolicy.ReclamationPlan, confirmed bool) *Plan 
 	if len(effects) == 0 {
 		effects = []string{"Review the exact detected conflicts; change nothing"}
 	}
-	return &Plan{Identity: "reclaim-vps-" + plan.Digest[:16], LineageUnavailable: true, RelevantChecksums: []string{"Reclamation facts SHA-256 " + plan.Digest}, ObservedState: "Reclaimable VPS: exact read-only conflict facts", VerifiedExternalInputs: []string{"Fresh Network Policy host and conflict observations", "Protected Host Foundation version 1"}, Effects: effects, RequiredChecks: []string{"Fresh privileged recheck must match this exact digest before any later reclamation"}, AdvisoryChecks: []string{"Review-only confirmation grants no mutation authority"}, Interruption: plan.Interruption, Cancellation: plan.Cancellation, Rollback: plan.Rollback, ReclamationDigest: plan.Digest, ReclamationConfirmed: confirmed}
+	return &Plan{Identity: "reclaim-vps-" + plan.Digest[:16], LineageUnavailable: true, RelevantChecksums: []string{"Reclamation facts SHA-256 " + plan.Digest}, ObservedState: "Reclaimable VPS: exact read-only conflict facts", VerifiedExternalInputs: []string{"Fresh Network Policy host and conflict observations", "Protected Host Foundation version 1"}, Effects: effects, RequiredChecks: []string{"Fresh privileged recheck must match this exact digest before any later reclamation"}, AdvisoryChecks: []string{"Review-only confirmation grants no mutation authority"}, Interruption: plan.Interruption, Cancellation: plan.Cancellation, Rollback: plan.Rollback, ReclamationDigest: plan.Digest, ReclamationConfirmed: confirmed, ConfirmationHelp: ReclamationConfirmationGuidance()}
 }
 
 func installPlanEffects() []string {

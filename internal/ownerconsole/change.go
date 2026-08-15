@@ -56,6 +56,11 @@ type EditingHelp struct {
 	Sensitivity                                     EditingSensitivity
 }
 
+type ConfirmationHelp struct {
+	Title string
+	Lines []string
+}
+
 var allowedHelpURLs = map[string]bool{
 	"https://developers.cloudflare.com/fundamentals/manage-domains/add-site/":                      true,
 	"https://eff-certbot.readthedocs.io/en/stable/using.html#certbot-command-line-options":         true,
@@ -125,6 +130,7 @@ type PlanPresentation struct {
 	Interruption, Cancellation, Rollback string
 	ReclamationDigest                    string
 	ReclamationConfirmed                 bool
+	ConfirmationHelp                     ConfirmationHelp
 }
 
 type CorrectionPresentation struct {
@@ -182,7 +188,9 @@ func validatedChangeReview(review ChangeReview) ChangeReview {
 	if plan := review.Plan; plan != nil {
 		lineage := safeSHA256(plan.DesiredStateSHA256) || plan.LineageUnavailable && plan.DesiredStateRevision == 0 && plan.DesiredStateSHA256 == ""
 		reclamation := plan.ReclamationDigest == "" && !plan.ReclamationConfirmed || safeSHA256(plan.ReclamationDigest)
-		if !safeIdentifier(string(plan.Identity)) || !lineage || !reclamation || !completeStrings(plan.RelevantChecksums, 32) || !safeLine(plan.ObservedState) || !completeStrings(plan.VerifiedExternalInputs, 32) || !completeStrings(plan.Effects, 64) || !completeStrings(plan.RequiredChecks, 64) || !completeStrings(plan.AdvisoryChecks, 64) || !safeLine(plan.Interruption) || !safeLine(plan.Cancellation) || !safeLine(plan.Rollback) {
+		helpRequired := plan.ReclamationDigest != "" && !plan.ReclamationConfirmed
+		helpValid := helpRequired && validConfirmationHelp(plan.ConfirmationHelp) || !helpRequired && emptyConfirmationHelp(plan.ConfirmationHelp)
+		if !safeIdentifier(string(plan.Identity)) || !lineage || !reclamation || !helpValid || !completeStrings(plan.RelevantChecksums, 32) || !safeLine(plan.ObservedState) || !completeStrings(plan.VerifiedExternalInputs, 32) || !completeStrings(plan.Effects, 64) || !completeStrings(plan.RequiredChecks, 64) || !completeStrings(plan.AdvisoryChecks, 64) || !safeLine(plan.Interruption) || !safeLine(plan.Cancellation) || !safeLine(plan.Rollback) {
 			return invalidChangeReview()
 		}
 		copy := *plan
@@ -191,6 +199,7 @@ func validatedChangeReview(review ChangeReview) ChangeReview {
 		copy.Effects = append([]string(nil), plan.Effects...)
 		copy.RequiredChecks = append([]string(nil), plan.RequiredChecks...)
 		copy.AdvisoryChecks = append([]string(nil), plan.AdvisoryChecks...)
+		copy.ConfirmationHelp.Lines = append([]string(nil), plan.ConfirmationHelp.Lines...)
 		return ChangeReview{Plan: &copy}
 	}
 	if editing := review.Editing; editing != nil {
@@ -205,7 +214,7 @@ func validatedChangeReview(review ChangeReview) ChangeReview {
 	}
 	correction := review.Correction
 	correctionRoute := correction.FixWithSBXR || len(correction.OwnerSteps) > 0
-	requiredOwnerChoice := correction.InputLabel != "" || len(correction.Selections) > 0
+	requiredOwnerChoice := correction.InputLabel != "" || len(correction.Selections) > 0 || len(correction.OwnerSteps) > 0
 	if !safeLine(correction.Problem) || !safeLine(correction.Found) || !safeLine(correction.Required) || !safeLine(correction.WhyStopped) || !safeStrings(correction.OwnerSteps, 32) || !safeOptionalLine(correction.InputLabel) || !safeSelections(correction.Selections) || !safeLine(correction.Evidence) || !correctionRoute || !requiredOwnerChoice {
 		return invalidChangeReview()
 	}
@@ -288,6 +297,18 @@ func safeEditingHelp(help EditingHelp) bool {
 	validSensitivity := help.Sensitivity == PublicInformation || help.Sensitivity == PersonalInformation || help.Sensitivity == InfrastructureSecret
 	validExample := help.Sensitivity == InfrastructureSecret && help.Example == "" || help.Sensitivity != InfrastructureSecret && safeLine(help.Example)
 	return safeLine(help.Purpose) && completeStrings(help.Instructions, 8) && safeLine(help.AcceptedFormat) && completeStrings(help.CommonMistakes, 8) && safeLine(help.Recovery) && validExample && allowedHelpURLs[help.URL] && validSensitivity
+}
+
+func validConfirmationHelp(help ConfirmationHelp) bool {
+	return safeLine(help.Title) && completeStrings(help.Lines, 12)
+}
+
+func emptyConfirmationHelp(help ConfirmationHelp) bool {
+	return help.Title == "" && len(help.Lines) == 0
+}
+
+func confirmationHelpLines(help ConfirmationHelp) []string {
+	return append(append([]string{help.Title, ""}, help.Lines...), "", "Esc Return without confirming")
 }
 
 func editingHelpLines(editing *EditingPresentation, width int) []string {
@@ -384,7 +405,7 @@ func changeReviewLines(review ChangeReview, width, height, page int) []string {
 			if plan.ReclamationConfirmed {
 				return append(lines, "", "> Apply exact one-use Plan", "  sudo starts only after Apply")
 			}
-			return append(lines, "", "> Confirm exact reclamation review", "  Esc Back or Cancel - no host change")
+			return append(lines, "", "H Help for "+ReclamationPhrase, "> Confirm exact reclamation review", "  Esc Back or Cancel - no host change")
 		}
 		return append(lines, "", "> Apply exact one-use Plan", "  Esc Previous plan section or safe editing")
 	}

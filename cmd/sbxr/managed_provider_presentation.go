@@ -10,6 +10,7 @@ import (
 	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
 	"github.com/albertloky/SBXR/internal/networkpolicy"
 	"github.com/albertloky/SBXR/internal/ownerconsole"
+	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 	"github.com/albertloky/SBXR/internal/state"
 )
 
@@ -87,6 +88,10 @@ func ownerCloudflareExternalGuidance(correction cloudflaretunnel.ExternalCorrect
 }
 
 func ownerCompleteRemovalPresentation(presentation ownerconsole.CompleteRemovalPresentation) ownerconsole.CompleteRemovalPresentation {
+	if presentation.Kind == ownerconsole.CompleteRemovalReviewAvailable {
+		help := softwarelifecycle.CompleteRemovalConfirmationGuidance()
+		presentation.ConfirmationHelp = ownerconsole.ConfirmationHelp{Title: help.Title, Lines: append([]string(nil), help.Lines...)}
+	}
 	if presentation.Kind == ownerconsole.CompleteRemovalForwardOnly && presentation.TokenPhase == ownerconsole.RemovalTokenAwaitingOwnerRevocation {
 		presentation.ManagementTokenRevocation = ownerCloudflareExternalGuidance(cloudflaretunnel.ManagementTokenRevocation)
 	}

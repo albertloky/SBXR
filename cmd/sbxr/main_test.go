@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -18,6 +19,20 @@ import (
 )
 
 var _ ownerconsole.CloudflareModule = (*clientAccessOutcome)(nil)
+
+func TestProductionConsequentialConfirmationHelpCrossesTypedBoundaries(t *testing.T) {
+	reclamation := ownerPlan(&installation.Plan{ReclamationDigest: strings.Repeat("a", 64), ConfirmationHelp: installation.ReclamationConfirmationGuidance()})
+	if reclamation.ConfirmationHelp.Title == "" || !strings.Contains(strings.Join(reclamation.ConfirmationHelp.Lines, " "), "Reclamation Boundary") || !strings.Contains(strings.Join(reclamation.ConfirmationHelp.Lines, " "), "Protected Host Foundation") {
+		t.Fatalf("reclamation Help did not cross the production presentation boundary: %+v", reclamation.ConfirmationHelp)
+	}
+
+	outcome := &clientAccessOutcome{loaded: true, presentation: clientAccessPresentation{Installation: ownerconsole.InstallationManaged, StateRevision: 42}}
+	removal := outcome.ViewCompleteRemoval(t.Context())
+	if removal.Kind != ownerconsole.CompleteRemovalReviewAvailable || removal.ConfirmationHelp.Title == "" || !strings.Contains(strings.Join(removal.ConfirmationHelp.Lines, " "), "COMPLETE REMOVAL") || !strings.Contains(strings.Join(removal.ConfirmationHelp.Lines, " "), "Irreversible removal started") {
+		t.Fatalf("Complete removal Help did not cross the production presentation boundary: %+v", removal)
+	}
+}
+
 var _ ownerconsole.CertificatesModule = (*clientAccessOutcome)(nil)
 var _ ownerconsole.DiagnosticsModule = (*clientAccessOutcome)(nil)
 var _ ownerconsole.DiagnosticsModule = (*installOutcome)(nil)
@@ -65,7 +80,7 @@ func TestProductionCompleteRemovalCheckAgainUsesOnlyTheAwaitingOperation(t *test
 	}
 
 	outcome, calls = newOutcome()
-	if view := outcome.CheckCompleteRemoval(t.Context(), "different-operation"); *calls != 0 || view != (ownerconsole.CompleteRemovalPresentation{}) {
+	if view := outcome.CheckCompleteRemoval(t.Context(), "different-operation"); *calls != 0 || !reflect.DeepEqual(view, ownerconsole.CompleteRemovalPresentation{}) {
 		t.Fatalf("wrong-operation CheckCompleteRemoval() calls=%d view=%+v", *calls, view)
 	}
 }

@@ -72,6 +72,7 @@ type CompleteRemovalPresentation struct {
 	TokenPhase                CompleteRemovalTokenPhase
 	ManagementTokenRevocation CloudflareExternalGuidance
 	NoRecoveryMaterial        bool
+	ConfirmationHelp          ConfirmationHelp
 }
 
 // CompleteRemovalApproval can only be formed after the two separate controls
@@ -146,6 +147,7 @@ var completeRemovalDefinitions = [...]completeRemovalDefinition{
 				"",
 				"Type exactly: COMPLETE REMOVAL",
 				"> " + removalInput(input),
+				"H Help for COMPLETE REMOVAL",
 				"",
 			}
 		},
@@ -292,7 +294,10 @@ func emptyRemovalProgress(p CompleteRemovalPresentation) bool {
 
 func validatedCompleteRemoval(presentation CompleteRemovalPresentation) (CompleteRemovalPresentation, bool) {
 	definition, valid := completeRemovalDefinitionFor(presentation.Kind)
-	return presentation, valid && definition.valid(presentation)
+	helpRequired := presentation.Kind == CompleteRemovalReviewAvailable
+	helpValid := helpRequired && validConfirmationHelp(presentation.ConfirmationHelp) || !helpRequired && emptyConfirmationHelp(presentation.ConfirmationHelp)
+	presentation.ConfirmationHelp.Lines = append([]string(nil), presentation.ConfirmationHelp.Lines...)
+	return presentation, valid && helpValid && definition.valid(presentation)
 }
 
 func validCompleteRemovalCancellation(prior, result CompleteRemovalPresentation) bool {

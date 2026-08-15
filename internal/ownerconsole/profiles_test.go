@@ -68,6 +68,17 @@ func TestRunReviewsEachCompleteProfileChangeWithoutStartingIt(t *testing.T) {
 	}
 }
 
+func TestRunScenarioReturnClearsStaleCorrectionState(t *testing.T) {
+	correction := ChangeReview{Correction: &CorrectionPresentation{Problem: "Profile correction required", Found: "provider value missing", Required: "one current provider value", WhyStopped: "the profile owner needs fresh facts", FixWithSBXR: true, OwnerSteps: []string{"Enter the current provider value"}, InputLabel: "Provider value", Selections: []CorrectionSelection{{Identity: "current", Label: "Current profile"}}, Evidence: "PROFILE-VALUE-MISSING"}}
+	stub := &profilesStub{view: completeProfilesPresentation(), profileReviews: map[ProfileChange]ChangeReview{RotateProfileCredential: correction}}
+	got := runTranscriptSteps(t, Session{Scenario: ConnectionProfilesScreen, Profiles: stub, ProfileOutcomes: stub}, 120, 36,
+		"", "\x1b[C\r", "", "stale-value", "\t", "\x1b[B\x1b[B\r", "", "\x1b[27u", "", "\r", "", "\t", "\r", "", "\x03\r")
+	fresh := strings.LastIndex(got, "Profile correction required")
+	if len(stub.profileChanges) != 2 || len(stub.fixes) != 0 || !strings.Contains(got, "Required correction input is empty") || fresh < 0 || strings.Contains(got[fresh:], "Copied redacted evidence") {
+		t.Fatalf("scenario return retained stale correction state: changes=%+v fixes=%+v\n%s", stub.profileChanges, stub.fixes, got)
+	}
+}
+
 func TestRunShowsOnlyTheTypedNativeValidationResult(t *testing.T) {
 	stub := &profilesStub{view: completeProfilesPresentation(), validation: ProfileValidation{Profile: TUICProfile, Health: ProfileHealthy, Code: "CONNECTION-PROFILES-TUIC-NATIVE-VALID"}}
 	keys := strings.Repeat("\x1b[B", 4) + strings.Repeat("\x1b[C", 2) + "\r"
