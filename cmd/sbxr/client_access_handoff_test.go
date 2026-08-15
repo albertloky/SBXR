@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/albertloky/SBXR/internal/connectionprofiles"
+	"github.com/albertloky/SBXR/internal/networkpolicy"
 	"github.com/albertloky/SBXR/internal/ownerconsole"
 )
 
@@ -48,6 +49,32 @@ func TestClientAccessHandoffAcceptsOnlyExactTypedRequests(t *testing.T) {
 	}
 	if strings.Contains(valid.String(), "client-access") {
 		t.Fatal("request rendering exposed privileged facts")
+	}
+}
+
+func TestClientAccessHandoffPreservesOnlyTypedSSHFailureCause(t *testing.T) {
+	firewallRequest := clientAccessHandoffRequest{Schema: 1, Mode: "change", Action: clientAccessEnableProfile, Profile: string(connectionprofiles.AnyTLSProfileID), ChangeSet: "client-access-0001"}
+	for _, cause := range []networkpolicy.SSHPreservationFailureCause{networkpolicy.SSHLaunchIdentityInvalid, networkpolicy.SSHOriginalSessionLost, networkpolicy.SSHObservationUnavailable} {
+		var encoded bytes.Buffer
+		if err := writeClientAccessMessage(&encoded, clientAccessHandoffReview{SSHFailureCause: cause}); err != nil {
+			t.Fatal(err)
+		}
+		var decoded clientAccessHandoffReview
+		if err := readClientAccessMessage(&encoded, &decoded); err != nil || decoded.SSHFailureCause != cause || !validClientAccessSSHFailureReview(firewallRequest, decoded) {
+			t.Fatalf("typed SSH failure round trip for %q was refused", cause)
+		}
+	}
+	invalid := clientAccessHandoffReview{SSHFailureCause: networkpolicy.SSHOriginalSessionLost}
+	rotation := firewallRequest
+	rotation.Action = clientAccessRotateProfile
+	for _, request := range []clientAccessHandoffRequest{rotation, {Schema: 1, Mode: "software-review", SoftwareAction: "repair", ChangeSet: "repair-0001"}} {
+		if validClientAccessSSHFailureReview(request, invalid) {
+			t.Fatal("SSH failure response was accepted for non-firewall work")
+		}
+	}
+	invalid.SSHFailureCause = "different session"
+	if validClientAccessSSHFailureReview(firewallRequest, invalid) {
+		t.Fatal("unknown SSH failure cause was accepted")
 	}
 }
 

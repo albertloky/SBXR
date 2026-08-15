@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 
 	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
 	"github.com/albertloky/SBXR/internal/connectionprofiles"
 	profilesubuntu "github.com/albertloky/SBXR/internal/connectionprofiles/adapter/ubuntu"
+	"github.com/albertloky/SBXR/internal/networkpolicy"
+	networkubuntu "github.com/albertloky/SBXR/internal/networkpolicy/adapter/ubuntu"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 	"github.com/albertloky/SBXR/internal/state"
 	statefilesystem "github.com/albertloky/SBXR/internal/state/adapter/filesystem"
@@ -74,6 +77,11 @@ func prepareManagedClientAccess(ctx context.Context, request clientAccessBuildRe
 	} else if pending {
 		return nil, state.Interface{}, errors.New("an unfinished Change Set must recover before a new Client Access Plan")
 	}
+	sshPreservation, sshFailure := managedClientAccessSSHPreservation(request.Action)
+	if sshFailure != nil {
+		return nil, state.Interface{}, &clientAccessSSHReviewError{Cause: sshFailure.Cause}
+	}
+	request.SSHPreservation = sshPreservation
 	observed, release, err := managedLoadEvidence()
 	if err != nil {
 		return nil, state.Interface{}, err
@@ -97,6 +105,17 @@ func prepareManagedClientAccess(ctx context.Context, request clientAccessBuildRe
 		built.volatileSHA, err = clientAccessVolatileSHA("/")
 	}
 	return built, module, err
+}
+
+func managedClientAccessSSHPreservation(action clientAccessAction) (systemchanges.SSHPreservationAuthority, *networkpolicy.SSHPreservationFailure) {
+	if !clientAccessChangesFirewall(action) {
+		return systemchanges.SSHPreservationAuthority{}, nil
+	}
+	proof, failure := networkpolicy.New(networkubuntu.New()).ProveSSHPreservation(os.Getenv("SBXR_SSH_CONNECTION"))
+	if failure != nil {
+		return systemchanges.SSHPreservationAuthority{}, failure
+	}
+	return systemchanges.NewSSHPreservationAuthority(proof), nil
 }
 
 type installedSingBoxValidator struct {

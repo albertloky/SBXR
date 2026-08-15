@@ -36,22 +36,24 @@ type clientAccessPublicationPlan interface {
 }
 
 type clientAccessPlanEffects struct {
-	SHA256 string
-	Steps  []systemchanges.Step
-	Checks []systemchanges.Check
+	SHA256          string
+	Steps           []systemchanges.Step
+	Checks          []systemchanges.Check
+	SSHPreservation systemchanges.SSHPreservationAuthority
 }
 
 // clientAccessPlan is the application-level umbrella Plan. Its one identity is
 // the only identity State and System Changes accept for the coordinated work.
 type clientAccessPlan struct {
-	changeSetID string
-	action      clientAccessAction
-	identity    string
-	sha256      string
-	profile     clientAccessProfilePlan
-	publication clientAccessPublicationPlan
-	steps       []systemchanges.Step
-	checks      []systemchanges.Check
+	changeSetID     string
+	action          clientAccessAction
+	identity        string
+	sha256          string
+	profile         clientAccessProfilePlan
+	publication     clientAccessPublicationPlan
+	steps           []systemchanges.Step
+	checks          []systemchanges.Check
+	sshPreservation systemchanges.SSHPreservationAuthority
 }
 
 func newClientAccessPlan(changeSet string, action clientAccessAction, profile clientAccessProfilePlan, publication clientAccessPublicationPlan, effects ...clientAccessPlanEffects) (*clientAccessPlan, error) {
@@ -78,6 +80,11 @@ func newClientAccessPlan(changeSet string, action clientAccessAction, profile cl
 	digest := sha256.Sum256(bound)
 	checksum := hex.EncodeToString(digest[:])
 	steps := append(append(append([]systemchanges.Step(nil), extra.Steps...), profile.Steps()...), publication.Steps()...)
+	for _, step := range steps {
+		if step.Forward() == systemchanges.ApplyApprovedNetworkPolicy && extra.SSHPreservation == (systemchanges.SSHPreservationAuthority{}) {
+			return nil, errors.New("Client Access firewall Plan requires SSH Preservation Proof")
+		}
+	}
 	checks := append(append(append([]systemchanges.Check(nil), extra.Checks...), profile.Checks()...), publication.Checks()...)
 	checks = append(checks,
 		systemchanges.Check{Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CONNECTION-PROFILES-CLIENT-ACCESS-LISTENERS"},
@@ -86,7 +93,7 @@ func newClientAccessPlan(changeSet string, action clientAccessAction, profile cl
 	if len(steps) == 0 || len(checks) == 0 {
 		return nil, errors.New("complete Client Access effects and gates are required")
 	}
-	return &clientAccessPlan{changeSetID: changeSet, action: action, identity: changeSet + "-client-access-" + checksum[:12], sha256: checksum, profile: profile, publication: publication, steps: steps, checks: checks}, nil
+	return &clientAccessPlan{changeSetID: changeSet, action: action, identity: changeSet + "-client-access-" + checksum[:12], sha256: checksum, profile: profile, publication: publication, steps: steps, checks: checks, sshPreservation: extra.SSHPreservation}, nil
 }
 
 func validClientAccessAction(action clientAccessAction) bool {
@@ -96,6 +103,10 @@ func validClientAccessAction(action clientAccessAction) bool {
 	default:
 		return false
 	}
+}
+
+func clientAccessChangesFirewall(action clientAccessAction) bool {
+	return action == clientAccessEnableProfile || action == clientAccessDisableProfile
 }
 
 func (plan *clientAccessPlan) Identity() string {
@@ -170,7 +181,7 @@ func (plan *clientAccessPlan) changeSet(prepared systemchanges.PreparedStateComm
 		Identity: plan.changeSetID, Mutation: mutation, OutcomeOwner: systemchanges.StateModule,
 		StartingState: starting, TargetStateSHA256: candidateSHA256,
 		Plan:          systemchanges.PlanBinding{Identity: plan.identity, SHA256: plan.sha256, VolatileSHA256: volatileSHA256},
-		PreparedState: prepared, Steps: plan.steps, Checks: plan.checks,
+		PreparedState: prepared, SSHPreservation: plan.sshPreservation, Steps: plan.steps, Checks: plan.checks,
 		Timeouts: systemchanges.Timeouts{Step: time.Minute, Check: time.Minute}, Disk: disk,
 	})
 }

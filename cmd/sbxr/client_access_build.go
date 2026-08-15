@@ -23,6 +23,7 @@ type clientAccessBuildRequest struct {
 	CurrentXHTTP     cloudflaretunnel.XHTTPRouteHealth
 	CurrentWebSocket cloudflaretunnel.WebSocketRouteHealth
 	Disk             systemchanges.DiskRequirement
+	SSHPreservation  systemchanges.SSHPreservationAuthority
 }
 
 type clientAccessBuildDependencies struct {
@@ -108,7 +109,7 @@ func buildClientAccess(ctx context.Context, module state.Interface, loaded state
 				currentExposure := networkpolicy.NewListenerContribution(currentNetwork)
 				candidateExposure := connectionprofiles.RegistryExposureAuthority(currentExposure)
 				var effect clientAccessPlanEffects
-				if request.Action == clientAccessEnableProfile || request.Action == clientAccessDisableProfile {
+				if clientAccessChangesFirewall(request.Action) {
 					planned, nftables, planErr := networkpolicy.PrepareProfileEnablement(currentNetwork, currentIntent, candidateIntent)
 					if planErr != nil {
 						return planErr
@@ -119,14 +120,14 @@ func buildClientAccess(ctx context.Context, module state.Interface, loaded state
 						return stepErr
 					}
 					digest := sha256.Sum256([]byte(nftables))
-					effect = clientAccessPlanEffects{SHA256: hex.EncodeToString(digest[:]), Steps: []systemchanges.Step{step}, Checks: []systemchanges.Check{
+					effect = clientAccessPlanEffects{SHA256: hex.EncodeToString(digest[:]), SSHPreservation: request.SSHPreservation, Steps: []systemchanges.Step{step}, Checks: []systemchanges.Check{
 						{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-CLIENT-ACCESS-CANDIDATE"},
 						{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PostPublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-CLIENT-ACCESS-ACTIVE"},
 					}}
 				}
 
 				var cloudflareExecutor cloudflaretunnel.Executor
-				if (request.Action == clientAccessEnableProfile || request.Action == clientAccessDisableProfile) && (request.Profile == connectionprofiles.VLESSXHTTPProfileID || request.Profile == connectionprofiles.VLESSWebSocketProfileID) {
+				if clientAccessChangesFirewall(request.Action) && (request.Profile == connectionprofiles.VLESSXHTTPProfileID || request.Profile == connectionprofiles.VLESSWebSocketProfileID) {
 					routes, routeErr := cloudflaretunnel.PrepareClientAccessRoutes(cloudflaretunnel.ClientAccessRoutesRequest{
 						ChangeSet: request.ChangeSet, AccountID: candidate.Cloudflare.AccountID, ZoneID: candidate.Cloudflare.ZoneID, TunnelID: candidate.Cloudflare.TunnelID,
 						XHTTPHostname: candidate.Cloudflare.XHTTPHostname, WebSocketHostname: candidate.Cloudflare.WebSocketHostname, XHTTPDNSRecordID: candidate.Cloudflare.XHTTPDNSRecordID, WebSocketDNSRecordID: candidate.Cloudflare.WebSocketDNSRecordID,

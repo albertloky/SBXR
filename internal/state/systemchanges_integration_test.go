@@ -553,7 +553,7 @@ func TestLiveStepFailureRestoresBaselineInSafeReverseOrder(t *testing.T) {
 	if string(result.Outcome) != "Rollback succeeded" || result.RestoredStatus != systemchanges.Managed || result.NothingChanged || !result.PlanConsumed || adapter.closes.Load() != 1 {
 		t.Fatalf("failed Apply() = %+v; lock closes = %d", result, adapter.closes.Load())
 	}
-	wantEvents := "Prepared,Step started 1,execute Activate prepared configuration,Step completed 1,Step started 2,execute Apply approved Network Policy,Rollback started,Rollback step started 2,reverse Restore prior Network Policy,Rollback step completed 2,Rollback step started 1,reverse Restore prior configuration,Rollback step completed 1,rollback verified,Rollback verified,Rolled back,cleanup"
+	wantEvents := "Prepared,Step started 1,execute Activate prepared configuration,Step completed 1,Step started 2,SSH Preservation check 1,execute Apply approved Network Policy,Rollback started,Rollback step started 2,reverse Restore prior Network Policy,Rollback step completed 2,Rollback step started 1,reverse Restore prior configuration,Rollback step completed 1,rollback verified,Rollback verified,Rolled back,cleanup"
 	if got := strings.Join(adapter.events, ","); got != wantEvents {
 		t.Fatalf("rollback checkpoints = %s, want %s", got, wantEvents)
 	}
@@ -791,7 +791,7 @@ func TestFailedInstallationRestoresProvenNotInstalledBaseline(t *testing.T) {
 	}
 }
 
-func TestInstallationFirewallRequiresExactSSHAgreementImmediatelyBeforeAndAfterMutation(t *testing.T) {
+func TestInstallationAndManagedFirewallRequireExactSSHAgreementImmediatelyBeforeAndAfterMutation(t *testing.T) {
 	identity := "203.0.113.9 50000 203.0.113.10 2222"
 	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(identity)))
 	observedSSH := networkpolicy.Observations{
@@ -799,27 +799,32 @@ func TestInstallationFirewallRequiresExactSSHAgreementImmediatelyBeforeAndAfterM
 		Listeners: []networkpolicy.Listener{{Address: "0.0.0.0", Port: 2222, Protocol: networkpolicy.TCP, Process: "sshd", Service: "ssh.service"}},
 	}
 	firewall := testFirewallStep(t)
-	_, unproved, _, unprovedObserved := preparedSystemChangeWithOptions(t, systemchanges.InstallationMutation, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-PREFLIGHT"}, systemChangeTestOptions{steps: []systemchanges.Step{firewall}, stepTimeout: time.Second, withoutSSH: true})
-	unprovedAdapter := &systemChangesAdapter{observation: unprovedObserved}
-	if result := systemchanges.New(unprovedAdapter).Apply(unproved); result.Outcome != systemchanges.Refused || !result.NothingChanged || unprovedAdapter.executeCount != 0 || len(unprovedAdapter.events) != 0 {
-		t.Fatalf("unproved Installation firewall = %+v events=%v", result, unprovedAdapter.events)
+	for _, mutation := range []systemchanges.MutationClass{systemchanges.InstallationMutation, systemchanges.SettingChangeMutation} {
+		_, unproved, _, unprovedObserved := preparedSystemChangeWithOptions(t, mutation, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-PREFLIGHT"}, systemChangeTestOptions{steps: []systemchanges.Step{firewall}, stepTimeout: time.Second, withoutSSH: true})
+		unprovedAdapter := &systemChangesAdapter{observation: unprovedObserved}
+		if result := systemchanges.New(unprovedAdapter).Apply(unproved); result.Outcome != systemchanges.Refused || !result.NothingChanged || unprovedAdapter.executeCount != 0 || len(unprovedAdapter.events) != 0 {
+			t.Fatalf("unproved %s firewall = %+v events=%v", mutation, result, unprovedAdapter.events)
+		}
 	}
 
 	for _, test := range []struct {
 		name        string
+		mutation    systemchanges.MutationClass
 		failAt      int
 		wantRuns    int
 		wantReverse bool
 	}{
-		{name: "failed pre-check changes nothing", failAt: 1, wantRuns: 0},
-		{name: "failed post-check restores prior firewall", failAt: 2, wantRuns: 1, wantReverse: true},
+		{name: "Installation failed pre-check changes nothing", mutation: systemchanges.InstallationMutation, failAt: 1, wantRuns: 0},
+		{name: "Installation failed post-check restores prior firewall", mutation: systemchanges.InstallationMutation, failAt: 2, wantRuns: 1, wantReverse: true},
+		{name: "Managed failed pre-check changes nothing", mutation: systemchanges.SettingChangeMutation, failAt: 1, wantRuns: 0},
+		{name: "Managed failed post-check restores prior firewall", mutation: systemchanges.SettingChangeMutation, failAt: 2, wantRuns: 1, wantReverse: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			freshProof, proofFailure := networkpolicy.New(reclamationNetworkObserver{observed: observedSSH}).ProveSSHPreservation(identity)
 			if proofFailure != nil {
 				t.Fatal(proofFailure)
 			}
-			_, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.InstallationMutation, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-PREFLIGHT"}, systemChangeTestOptions{steps: []systemchanges.Step{firewall}, stepTimeout: time.Second, sshPreservation: systemchanges.NewSSHPreservationAuthority(freshProof)})
+			_, changeSet, _, observed := preparedSystemChangeWithOptions(t, test.mutation, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-PREFLIGHT"}, systemChangeTestOptions{steps: []systemchanges.Step{firewall}, stepTimeout: time.Second, sshPreservation: systemchanges.NewSSHPreservationAuthority(freshProof)})
 			adapter := &systemChangesAdapter{observation: observed, failSSHAt: test.failAt}
 			result := systemchanges.New(adapter).Apply(changeSet)
 			joined := strings.Join(adapter.events, ",")
@@ -845,7 +850,7 @@ func TestInstallationFirewallRequiresExactSSHAgreementImmediatelyBeforeAndAfterM
 			if proofFailure != nil {
 				t.Fatal(proofFailure)
 			}
-			_, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.InstallationMutation, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-PREFLIGHT"}, systemChangeTestOptions{steps: []systemchanges.Step{firewall}, stepTimeout: time.Second, sshPreservation: systemchanges.NewSSHPreservationAuthority(freshProof)})
+			_, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.SettingChangeMutation, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-PREFLIGHT"}, systemChangeTestOptions{steps: []systemchanges.Step{firewall}, stepTimeout: time.Second, sshPreservation: systemchanges.NewSSHPreservationAuthority(freshProof)})
 			adapter := &systemChangesAdapter{observation: observed, failSSHAt: test.failSSHAt, failReverse: test.failReverse}
 			result := systemchanges.New(adapter).Apply(changeSet)
 			_, rawRetained := adapter.artifacts["ssh-preservation"]
@@ -1773,7 +1778,7 @@ type systemChangeTestOptions struct {
 
 func preparedSystemChangeWithOptions(t *testing.T, mutation systemchanges.MutationClass, check systemchanges.Check, options systemChangeTestOptions) (Interface, *systemchanges.ChangeSet, *systemchanges.ChangeSet, systemchanges.Observation) {
 	t.Helper()
-	if mutation == systemchanges.InstallationMutation && options.sshPreservation == (systemchanges.SSHPreservationAuthority{}) && !options.withoutSSH {
+	if (mutation == systemchanges.InstallationMutation || mutation == systemchanges.SettingChangeMutation) && options.sshPreservation == (systemchanges.SSHPreservationAuthority{}) && !options.withoutSSH {
 		options.sshPreservation = testSSHPreservationAuthority(t)
 	}
 	candidate := completeDesiredState()
@@ -3699,7 +3704,7 @@ func TestUbuntuFirewallSeamPreservesSSHAndCleansOnlyExactHTTP01Rule(t *testing.T
 	firewall := &controlledFirewall{unrelated: "table inet unrelated remains"}
 	result := systemchanges.New(ubuntu.NewAtWithFirewall(root, func() (systemchanges.Observation, error) { return observed, nil }, host, firewall)).Apply(changeSet)
 	events := strings.Join(firewall.events, ",")
-	for _, required := range []string{"native validate,arm root watchdog,apply only inet sbxr,existing SSH responsive,detected SSH admitted,durable step evidence,cancel watchdog", "record sbxr:acme-http-01,durable step evidence,cancel watchdog", "delete only sbxr:acme-http-01,prove TCP 80 prior policy"} {
+	for _, required := range []string{"exact SSH check 1,native validate,arm root watchdog,apply only inet sbxr,existing SSH responsive,detected SSH admitted,exact SSH check 2,durable step evidence,cancel watchdog", "record sbxr:acme-http-01,durable step evidence,cancel watchdog", "delete only sbxr:acme-http-01,prove TCP 80 prior policy"} {
 		if !strings.Contains(events, required) {
 			t.Fatalf("firewall result %+v events %q omit %q", result, events, required)
 		}

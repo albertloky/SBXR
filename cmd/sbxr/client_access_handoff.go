@@ -17,6 +17,7 @@ import (
 	"github.com/albertloky/SBXR/internal/certificatelifecycle"
 	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
 	"github.com/albertloky/SBXR/internal/connectionprofiles"
+	"github.com/albertloky/SBXR/internal/networkpolicy"
 	"github.com/albertloky/SBXR/internal/ownerconsole"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 	"github.com/albertloky/SBXR/internal/systemchanges"
@@ -53,6 +54,15 @@ type clientAccessHandoffReview struct {
 	StartingRevision, CandidateRevision                  uint64
 	TotalSteps                                           uint16
 	Plan                                                 ownerconsole.PlanPresentation
+	SSHFailureCause                                      networkpolicy.SSHPreservationFailureCause `json:"ssh_failure_cause,omitempty"`
+}
+
+type clientAccessSSHReviewError struct {
+	Cause networkpolicy.SSHPreservationFailureCause
+}
+
+func (*clientAccessSSHReviewError) Error() string {
+	return "Managed Client Access SSH Preservation Proof unavailable"
 }
 
 type clientAccessRecoveryResult struct {
@@ -477,6 +487,10 @@ func serveClientAccess(ctx context.Context, socket, executable *os.File, verify 
 	disk := systemchanges.DiskRequirement{PreparationBytes: 8 << 20, TemporaryBytes: 8 << 20, SnapshotBytes: 32 << 20, JournalBytes: 8 << 20, RollbackBytes: 8 << 20, OverheadBytes: 256 << 20}
 	built, module, err := prepareManagedClientAccess(ctx, clientAccessBuildRequest{Action: request.Action, Profile: connectionprofiles.ProfileID(request.Profile), ChangeSet: request.ChangeSet, Disk: disk})
 	if err != nil {
+		var sshFailure *clientAccessSSHReviewError
+		if errors.As(err, &sshFailure) {
+			return writeClientAccessMessage(socket, clientAccessHandoffReview{SSHFailureCause: sshFailure.Cause})
+		}
 		return err
 	}
 	review := clientAccessHandoffReview{Identity: built.plan.Identity(), SHA256: built.plan.SHA256(), DesiredStateSHA256: built.candidateSHA, VolatileSHA256: built.volatileSHA, StartingRevision: built.starting.Revision, CandidateRevision: built.starting.Revision + 1, TotalSteps: uint16(built.totalSteps)}
@@ -581,8 +595,20 @@ func launchClientAccessReview(ctx context.Context, request clientAccessHandoffRe
 		return nil, err
 	}
 	var review clientAccessHandoffReview
+	if err := readClientAccessMessage(parent, &review); err != nil {
+		parent.Close()
+		_ = wait()
+		return nil, errors.New("privileged Client Access review unavailable")
+	}
+	if validClientAccessSSHFailureReview(request, review) {
+		parent.Close()
+		if wait() != nil {
+			return nil, errors.New("privileged Client Access review unavailable")
+		}
+		return nil, &clientAccessSSHReviewError{Cause: review.SSHFailureCause}
+	}
 	unprovenRemoval := (request.Mode == "removal-review" || request.Mode == "removal-apply") && review.StartingRevision == 0 && review.CandidateRevision == 0 && review.DesiredStateSHA256 == "" && review.Plan.LineageUnavailable
-	if err := readClientAccessMessage(parent, &review); err != nil || review.Identity == "" || len(review.SHA256) != 64 || len(review.VolatileSHA256) != 64 || !unprovenRemoval && (len(review.DesiredStateSHA256) != 64 || review.CandidateRevision != review.StartingRevision+1) || review.TotalSteps == 0 || (request.Mode == "software-review" || request.Mode == "software-apply" || request.Mode == "removal-review" || request.Mode == "removal-apply") && !validSoftwarePlanPresentation(review) {
+	if review.SSHFailureCause != "" || review.Identity == "" || len(review.SHA256) != 64 || len(review.VolatileSHA256) != 64 || !unprovenRemoval && (len(review.DesiredStateSHA256) != 64 || review.CandidateRevision != review.StartingRevision+1) || review.TotalSteps == 0 || (request.Mode == "software-review" || request.Mode == "software-apply" || request.Mode == "removal-review" || request.Mode == "removal-apply") && !validSoftwarePlanPresentation(review) {
 		parent.Close()
 		_ = wait()
 		return nil, errors.New("privileged Client Access review unavailable")
@@ -595,6 +621,14 @@ func launchClientAccessReview(ctx context.Context, request clientAccessHandoffRe
 		return &clientAccessHandoffSession{used: true, review: review}, nil
 	}
 	return &clientAccessHandoffSession{socket: parent, wait: wait, review: review, cancellable: request.Mode == "software-apply" || request.Mode == "removal-apply"}, nil
+}
+
+func validClientAccessSSHFailureCause(cause networkpolicy.SSHPreservationFailureCause) bool {
+	return cause == networkpolicy.SSHLaunchIdentityInvalid || cause == networkpolicy.SSHOriginalSessionLost || cause == networkpolicy.SSHObservationUnavailable
+}
+
+func validClientAccessSSHFailureReview(request clientAccessHandoffRequest, review clientAccessHandoffReview) bool {
+	return request.Mode == "change" && clientAccessChangesFirewall(request.Action) && validClientAccessSSHFailureCause(review.SSHFailureCause)
 }
 
 func loadClientAccessPresentation(ctx context.Context) clientAccessPresentation {

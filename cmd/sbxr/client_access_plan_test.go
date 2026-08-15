@@ -1,10 +1,13 @@
 package main
 
 import (
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/albertloky/SBXR/internal/networkpolicy"
 	"github.com/albertloky/SBXR/internal/state"
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
@@ -80,6 +83,43 @@ func TestClientAccessPlanBindsCorePublicationAndStateIntoOneChangeSet(t *testing
 	if changed, err := plan.changeSet(prepared, systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: prepared.starting}, strings.Repeat("a", 64), systemchanges.DiskRequirement{PreparationBytes: 1}); err == nil || changed != nil {
 		t.Fatal("partial child Plan identity was accepted")
 	}
+}
+
+func TestClientAccessFirewallPlanRefusesMissingSSHPreservationProof(t *testing.T) {
+	firewall, err := systemchanges.NewFirewallPolicyStep("table inet sbxr {\n chain input {\n  type filter hook input priority filter\n  policy drop\n  tcp dport 2222 accept\n }\n}", 2222)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := clientAccessProfilePlanStub{"profile-plan", strings.Repeat("a", 64), nil, []systemchanges.Check{{Owner: systemchanges.ConnectionProfilesModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CONNECTION-PROFILES-AGREEMENT"}}}
+	publication := clientAccessPublicationPlanStub{"publication-plan", strings.Repeat("b", 64), nil, []systemchanges.Check{{Owner: systemchanges.SubscriptionModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PostPublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "SUBSCRIPTION-PUBLICATION-AGREEMENT"}}}
+	effect := clientAccessPlanEffects{SHA256: strings.Repeat("c", 64), Steps: []systemchanges.Step{firewall}, Checks: []systemchanges.Check{{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-CLIENT-ACCESS-CANDIDATE"}}}
+	if plan, err := newClientAccessPlan("change-0008", clientAccessEnableProfile, profile, publication, effect); err == nil || plan != nil {
+		t.Fatal("firewall-changing Client Access Plan accepted missing SSH Preservation Proof")
+	}
+	effect.SSHPreservation = clientAccessTestSSHPreservation(t)
+	if plan, err := newClientAccessPlan("change-0008", clientAccessEnableProfile, profile, publication, effect); err != nil || plan == nil {
+		t.Fatalf("SSH-protected Client Access firewall Plan = (%v, %v)", plan, err)
+	}
+}
+
+type clientAccessSSHObserver struct{ observed networkpolicy.Observations }
+
+func (observer clientAccessSSHObserver) Observe(networkpolicy.ObservationRequest) (networkpolicy.Observations, error) {
+	return observer.observed, nil
+}
+
+func clientAccessTestSSHPreservation(t *testing.T) systemchanges.SSHPreservationAuthority {
+	t.Helper()
+	identity := "203.0.113.9 50000 203.0.113.10 2222"
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(identity)))
+	proof, failure := networkpolicy.New(clientAccessSSHObserver{networkpolicy.Observations{
+		SSH:       networkpolicy.SSHFacts{DetectedPort: 2222, ServerAddress: "203.0.113.10", CurrentSessions: []string{digest}, SessionsComplete: true, Service: "ssh.service", Listener: "0.0.0.0:2222/tcp"},
+		Listeners: []networkpolicy.Listener{{Address: "0.0.0.0", Port: 2222, Protocol: networkpolicy.TCP, Service: "ssh.service"}},
+	}}).ProveSSHPreservation(identity)
+	if failure != nil {
+		t.Fatal("test SSH Preservation Proof unavailable")
+	}
+	return systemchanges.NewSSHPreservationAuthority(proof)
 }
 
 type clientAccessPreparedStub struct {

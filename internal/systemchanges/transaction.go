@@ -1010,7 +1010,7 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 	}
 	sshIdentity, sshSHA256, sshProtected := spec.SSHPreservation.consume()
 	spec.sshPreservationSHA256 = sshSHA256
-	needsSSHProtection := spec.Mutation == InstallationMutation && containsFirewallStep(spec.Steps)
+	needsSSHProtection := (spec.Mutation == InstallationMutation || spec.Mutation == SettingChangeMutation) && containsFirewallStep(spec.Steps)
 	sshAdapter, hasSSHAdapter := adapter.(SSHPreservationAdapter)
 	if needsSSHProtection && (!sshProtected || !hasSSHAdapter) {
 		return finish(lock, nothingChanged(spec, "SYSTEM-CHANGES-SSH-PRESERVATION", Prepared))
@@ -1274,7 +1274,7 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 			}
 			return finish(lock, nothingChanged(spec, "SYSTEM-CHANGES-JOURNAL", StepStarted))
 		}
-		if _, firewall := step.FirewallChange(); firewall && needsSSHProtection && sshAdapter.VerifySSHPreservation(lease, spec.Identity, sshSHA256, BeforeFirewallReplacement, spec.Timeouts.Check) != nil {
+		if isFirewallReplacement(step) && needsSSHProtection && sshAdapter.VerifySSHPreservation(lease, spec.Identity, sshSHA256, BeforeFirewallReplacement, spec.Timeouts.Check) != nil {
 			return finish(lock, rollbackChange(lease, adapter, transaction, spec, index, "SYSTEM-CHANGES-SSH-PRESERVATION", StepStarted))
 		}
 		executionCancellation := cancellation
@@ -1283,7 +1283,7 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 		}
 		evidence, err := adapter.Execute(lease, spec.Identity, number, step, spec.Timeouts.Step, executionCancellation)
 		if err == nil {
-			if _, firewall := step.FirewallChange(); firewall && needsSSHProtection {
+			if isFirewallReplacement(step) && needsSSHProtection {
 				err = sshAdapter.VerifySSHPreservation(lease, spec.Identity, sshSHA256, AfterFirewallReplacement, spec.Timeouts.Check)
 			}
 		}
@@ -1428,11 +1428,16 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 
 func containsFirewallStep(steps []Step) bool {
 	for _, step := range steps {
-		if _, ok := step.FirewallChange(); ok {
+		if isFirewallReplacement(step) {
 			return true
 		}
 	}
 	return false
+}
+
+func isFirewallReplacement(step Step) bool {
+	change, ok := step.FirewallChange()
+	return ok && change.Action == FirewallPolicyAction
 }
 
 func forwardReclamationRequired(spec ChangeSetSpec, cause string, checkpoint DurableCheckpoint) ApplyResult {

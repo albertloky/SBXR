@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"strconv"
 	"strings"
 	"sync"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/albertloky/SBXR/internal/certificatelifecycle"
 	"github.com/albertloky/SBXR/internal/connectionprofiles"
+	"github.com/albertloky/SBXR/internal/networkpolicy"
 	"github.com/albertloky/SBXR/internal/ownerconsole"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 	"github.com/albertloky/SBXR/internal/systemchanges"
@@ -36,6 +38,10 @@ type clientAccessOutcome struct {
 	providerLaunch                         func(context.Context, clientAccessHandoffRequest) (*clientAccessHandoffSession, error)
 	recoveryRetry                          func(context.Context, string) (systemchanges.InstallationStatus, error)
 	removalPoll                            time.Duration
+	sshPreflight                           func(clientAccessAction) *networkpolicy.SSHPreservationFailure
+	clientAccessLaunch                     func(context.Context, clientAccessHandoffRequest) (*clientAccessHandoffSession, error)
+	sshCorrectionAction                    clientAccessAction
+	sshCorrectionProfile                   connectionprofiles.ProfileID
 }
 
 type deferredSoftwareReview struct {
@@ -481,18 +487,45 @@ func certificateEditing(field, value, feedback string) ownerconsole.ChangeReview
 }
 
 func (outcome *clientAccessOutcome) reviewAction(ctx context.Context, action clientAccessAction, profile connectionprofiles.ProfileID) ownerconsole.ChangeReview {
+	if clientAccessChangesFirewall(action) {
+		preflight := outcome.sshPreflight
+		if preflight == nil {
+			preflight = func(action clientAccessAction) *networkpolicy.SSHPreservationFailure {
+				_, failure := managedClientAccessSSHPreservation(action)
+				return failure
+			}
+		}
+		if failure := preflight(action); failure != nil {
+			outcome.mu.Lock()
+			outcome.sshCorrectionAction, outcome.sshCorrectionProfile = action, profile
+			outcome.mu.Unlock()
+			return clientAccessSSHCorrection(failure.Cause)
+		}
+	}
 	identity := make([]byte, 12)
 	if _, err := rand.Read(identity); err != nil {
 		return clientAccessCorrection("Change Set identity generation failed")
 	}
 	request := clientAccessHandoffRequest{Schema: 1, Mode: "change", Action: action, Profile: string(profile), ChangeSet: "client-access-" + hex.EncodeToString(identity)}
-	session, err := launchClientAccessReview(ctx, request)
+	launch := outcome.clientAccessLaunch
+	if launch == nil {
+		launch = launchClientAccessReview
+	}
+	session, err := launch(ctx, request)
 	if err != nil {
+		var sshFailure *clientAccessSSHReviewError
+		if errors.As(err, &sshFailure) {
+			outcome.mu.Lock()
+			outcome.sshCorrectionAction, outcome.sshCorrectionProfile = action, profile
+			outcome.mu.Unlock()
+			return clientAccessSSHCorrection(sshFailure.Cause)
+		}
 		return clientAccessCorrection(err.Error())
 	}
 	outcome.mu.Lock()
 	prior := outcome.session
 	outcome.session, outcome.request = session, request
+	outcome.sshCorrectionAction, outcome.sshCorrectionProfile = "", ""
 	outcome.softwareReview = nil
 	outcome.repairReview = nil
 	outcome.removalReview = nil
@@ -714,11 +747,20 @@ func (outcome *clientAccessOutcome) Inspect(context.Context) ownerconsole.Durabl
 func (outcome *clientAccessOutcome) Fix(context.Context, ownerconsole.CorrectionInput) ownerconsole.ChangeReview {
 	return unsupportedClientAccessReview()
 }
-func (outcome *clientAccessOutcome) CheckAgain(context.Context) ownerconsole.ChangeReview {
-	return unsupportedClientAccessReview()
+func (outcome *clientAccessOutcome) CheckAgain(ctx context.Context) ownerconsole.ChangeReview {
+	outcome.mu.Lock()
+	action, profile := outcome.sshCorrectionAction, outcome.sshCorrectionProfile
+	outcome.mu.Unlock()
+	if !clientAccessChangesFirewall(action) {
+		return unsupportedClientAccessReview()
+	}
+	return outcome.reviewAction(ctx, action, profile)
 }
 func (outcome *clientAccessOutcome) Back(context.Context) ownerconsole.ChangeReview {
-	return unsupportedClientAccessReview()
+	outcome.mu.Lock()
+	outcome.sshCorrectionAction, outcome.sshCorrectionProfile = "", ""
+	outcome.mu.Unlock()
+	return ownerconsole.ChangeReview{}
 }
 func (outcome *clientAccessOutcome) Edit(ctx context.Context, input ownerconsole.EditingInput) ownerconsole.ChangeReview {
 	outcome.mu.Lock()
@@ -780,5 +822,21 @@ func unsupportedClientAccessReview() ownerconsole.ChangeReview {
 }
 func clientAccessCorrection(found string) ownerconsole.ChangeReview {
 	return ownerconsole.ChangeReview{Correction: &ownerconsole.CorrectionPresentation{Problem: "The Client Access Plan could not be prepared", Found: found, Required: "One fresh proven Managed revision and the exact supported Client Access action", WhyStopped: "SBXR never guesses privileged or secret-bearing inputs", FixWithSBXR: true, Selections: []ownerconsole.CorrectionSelection{{Identity: "back", Label: "Back"}}, Evidence: "CLIENT-ACCESS-PLAN-REFUSED"}}
+}
+
+func clientAccessSSHCorrection(cause networkpolicy.SSHPreservationFailureCause) ownerconsole.ChangeReview {
+	found := "the direct SSH launch identity is missing or invalid"
+	steps := []string{"Exit and restart SBXR through one direct SSH session."}
+	if cause == networkpolicy.SSHOriginalSessionLost {
+		found = "the original direct SSH session is no longer established"
+	} else if cause == networkpolicy.SSHObservationUnavailable {
+		found = "the SSH service, listener, or established-session observation is temporarily unavailable"
+		steps = []string{"Use Check again for a fresh read-only observation, or select Back."}
+	}
+	return ownerconsole.ChangeReview{Correction: &ownerconsole.CorrectionPresentation{
+		Problem: "The Client Access firewall change could not prove the original direct SSH session", Found: found,
+		Required: "fresh SSH Preservation Proof for the exact launch session", WhyStopped: "Managed Client Access cannot preserve a different or unproved SSH session",
+		HideCheckAgain: cause != networkpolicy.SSHObservationUnavailable, OwnerSteps: steps, Evidence: "CLIENT-ACCESS-PLAN-REFUSED",
+	}}
 }
 func uintText(value uint64) string { return strconv.FormatUint(value, 10) }

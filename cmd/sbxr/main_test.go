@@ -13,6 +13,7 @@ import (
 
 	"github.com/albertloky/SBXR/internal/healthdiagnostics"
 	"github.com/albertloky/SBXR/internal/installation"
+	"github.com/albertloky/SBXR/internal/networkpolicy"
 	"github.com/albertloky/SBXR/internal/ownerconsole"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 	"github.com/albertloky/SBXR/internal/systemchanges"
@@ -46,6 +47,76 @@ func TestProductionProfileActionSeamRefusesHiddenPortAndRepairValues(t *testing.
 		review := outcome.ReviewProfileChange(t.Context(), ownerconsole.ProfileChangeRequest{Profile: ownerconsole.RealityVisionProfile, Change: test.change})
 		if review.Correction == nil || review.Plan != nil || review.Editing != nil || review.Correction.Evidence != "CLIENT-ACCESS-PLAN-REFUSED" {
 			t.Fatalf("hidden production profile action %s (%d) = %+v", test.name, test.change, review)
+		}
+	}
+}
+
+func TestManagedClientAccessSSHFailureSelectsOnlyLegalCorrectionActions(t *testing.T) {
+	for _, test := range []struct {
+		cause networkpolicy.SSHPreservationFailureCause
+		hide  bool
+	}{
+		{cause: networkpolicy.SSHLaunchIdentityInvalid, hide: true},
+		{cause: networkpolicy.SSHOriginalSessionLost, hide: true},
+		{cause: networkpolicy.SSHObservationUnavailable},
+	} {
+		outcome := &clientAccessOutcome{sshPreflight: func(clientAccessAction) *networkpolicy.SSHPreservationFailure {
+			return &networkpolicy.SSHPreservationFailure{Cause: test.cause}
+		}}
+		review := outcome.ReviewProfileChange(t.Context(), ownerconsole.ProfileChangeRequest{Profile: ownerconsole.RealityVisionProfile, Change: ownerconsole.EnableProfile})
+		if review.Correction == nil || review.Plan != nil || review.Correction.Evidence != "CLIENT-ACCESS-PLAN-REFUSED" || review.Correction.HideCheckAgain != test.hide || review.Correction.FixWithSBXR {
+			t.Fatalf("Managed Client Access SSH Correction for %q = %+v", test.cause, review)
+		}
+		if test.cause == networkpolicy.SSHObservationUnavailable {
+			outcome.sshPreflight = func(clientAccessAction) *networkpolicy.SSHPreservationFailure { return nil }
+			outcome.clientAccessLaunch = func(context.Context, clientAccessHandoffRequest) (*clientAccessHandoffSession, error) {
+				return &clientAccessHandoffSession{review: clientAccessHandoffReview{Identity: "client-access-plan", SHA256: strings.Repeat("a", 64), DesiredStateSHA256: strings.Repeat("b", 64), VolatileSHA256: strings.Repeat("c", 64), StartingRevision: 7, CandidateRevision: 8, TotalSteps: 2}}, nil
+			}
+			if retried := outcome.CheckAgain(t.Context()); retried.Plan == nil || retried.Correction != nil {
+				t.Fatalf("Managed Client Access Check again = %+v", retried)
+			}
+		}
+		if backed := outcome.Back(t.Context()); backed != (ownerconsole.ChangeReview{}) {
+			t.Fatalf("Managed Client Access Back = %+v", backed)
+		}
+	}
+}
+
+func TestManagedClientAccessNonFirewallChangeDoesNotRequireDirectSSH(t *testing.T) {
+	preflights, launches := 0, 0
+	outcome := &clientAccessOutcome{
+		sshPreflight: func(clientAccessAction) *networkpolicy.SSHPreservationFailure {
+			preflights++
+			return &networkpolicy.SSHPreservationFailure{Cause: networkpolicy.SSHLaunchIdentityInvalid}
+		},
+		clientAccessLaunch: func(context.Context, clientAccessHandoffRequest) (*clientAccessHandoffSession, error) {
+			launches++
+			return &clientAccessHandoffSession{review: clientAccessHandoffReview{Identity: "client-access-plan", SHA256: strings.Repeat("a", 64), DesiredStateSHA256: strings.Repeat("b", 64), VolatileSHA256: strings.Repeat("c", 64), StartingRevision: 7, CandidateRevision: 8, TotalSteps: 2}}, nil
+		},
+	}
+	review := outcome.ReviewProfileChange(t.Context(), ownerconsole.ProfileChangeRequest{Profile: ownerconsole.RealityVisionProfile, Change: ownerconsole.RotateProfileCredential})
+	if review.Plan == nil || review.Correction != nil || preflights != 0 || launches != 1 {
+		t.Fatalf("non-firewall Managed Client Access review = %+v preflights=%d launches=%d", review, preflights, launches)
+	}
+}
+
+func TestManagedClientAccessPrivilegedRecheckPreservesSSHFailureCause(t *testing.T) {
+	for _, test := range []struct {
+		cause networkpolicy.SSHPreservationFailureCause
+		hide  bool
+	}{
+		{cause: networkpolicy.SSHOriginalSessionLost, hide: true},
+		{cause: networkpolicy.SSHObservationUnavailable},
+	} {
+		outcome := &clientAccessOutcome{
+			sshPreflight: func(clientAccessAction) *networkpolicy.SSHPreservationFailure { return nil },
+			clientAccessLaunch: func(context.Context, clientAccessHandoffRequest) (*clientAccessHandoffSession, error) {
+				return nil, &clientAccessSSHReviewError{Cause: test.cause}
+			},
+		}
+		review := outcome.ReviewProfileChange(t.Context(), ownerconsole.ProfileChangeRequest{Profile: ownerconsole.RealityVisionProfile, Change: ownerconsole.EnableProfile})
+		if review.Correction == nil || review.Correction.Evidence != "CLIENT-ACCESS-PLAN-REFUSED" || review.Correction.HideCheckAgain != test.hide || review.Correction.FixWithSBXR {
+			t.Fatalf("privileged Managed Client Access SSH Correction for %q = %+v", test.cause, review)
 		}
 	}
 }
