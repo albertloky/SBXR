@@ -136,6 +136,7 @@ type PlanPresentation struct {
 type CorrectionPresentation struct {
 	Problem, Found, Required, WhyStopped string
 	FixWithSBXR                          bool
+	HideCheckAgain                       bool
 	OwnerSteps                           []string
 	InputLabel                           string
 	Selections                           []CorrectionSelection

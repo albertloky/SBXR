@@ -21,6 +21,7 @@ type ownerLaunchFacts struct {
 	uid                    int
 	tag, commit, sha256    string
 	installedReentryMarker string
+	sshConnection          string
 }
 
 func launchOwnerConsole(ctx context.Context) error {
@@ -35,6 +36,9 @@ func launchOwnerConsole(ctx context.Context) error {
 	defer executable.Close()
 
 	rootEnvironment := []string{"-i", "HOME=/root", "USER=root", "LOGNAME=root", "TERM=" + os.Getenv("TERM"), "LANG=C.UTF-8", "PATH=/usr/bin:/bin", "SBXR_OWNER_LAUNCH_UID=" + strconv.Itoa(facts.uid), "SBXR_OWNER_LAUNCH_TAG=" + facts.tag, "SBXR_OWNER_LAUNCH_COMMIT=" + facts.commit, "SBXR_OWNER_LAUNCH_SHA256=" + facts.sha256}
+	if facts.sshConnection != "" {
+		rootEnvironment = append(rootEnvironment, "SBXR_SSH_CONNECTION="+facts.sshConnection)
+	}
 	if facts.installedReentryMarker != "" {
 		rootEnvironment = append(rootEnvironment, "SBXR_INSTALLED_REENTRY=1")
 	}
@@ -94,7 +98,7 @@ func verifyRootOwnerConsoleProcess() error {
 }
 
 func ownerLaunchFactsFromEnvironment(uid int) (ownerLaunchFacts, error) {
-	facts := ownerLaunchFacts{uid: uid, tag: os.Getenv("SBXR_OWNER_LAUNCH_TAG"), commit: os.Getenv("SBXR_OWNER_LAUNCH_COMMIT"), sha256: os.Getenv("SBXR_OWNER_LAUNCH_SHA256"), installedReentryMarker: os.Getenv("SBXR_INSTALLED_REENTRY")}
+	facts := ownerLaunchFacts{uid: uid, tag: os.Getenv("SBXR_OWNER_LAUNCH_TAG"), commit: os.Getenv("SBXR_OWNER_LAUNCH_COMMIT"), sha256: os.Getenv("SBXR_OWNER_LAUNCH_SHA256"), installedReentryMarker: os.Getenv("SBXR_INSTALLED_REENTRY"), sshConnection: os.Getenv("SBXR_SSH_CONNECTION")}
 	if facts.tag == "" || len(facts.commit) != 40 || len(facts.sha256) != 64 || facts.installedReentryMarker != "" && facts.installedReentryMarker != "1" {
 		return ownerLaunchFacts{}, errors.New("Owner Console Release Identity refused")
 	}

@@ -2841,11 +2841,10 @@ func (m model) correctionActions(correction *CorrectionPresentation) []correctio
 	if correction.FixWithSBXR {
 		actions = append(actions, correctionActionDefinition{correctionFix, "Fix with SBXR - review a separate Plan"})
 	}
-	return append(actions,
-		correctionActionDefinition{correctionCheck, "Check again"},
-		correctionActionDefinition{correctionCopy, "Copy redacted evidence"},
-		correctionActionDefinition{correctionBack, "Back"},
-	)
+	if !correction.HideCheckAgain {
+		actions = append(actions, correctionActionDefinition{correctionCheck, "Check again"})
+	}
+	return append(actions, correctionActionDefinition{correctionCopy, "Copy redacted evidence"}, correctionActionDefinition{correctionBack, "Back"})
 }
 
 func (m model) correctionActionCount(correction *CorrectionPresentation) int {

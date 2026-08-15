@@ -29,7 +29,7 @@ func buildBootstrapFile(options bootstrapOptions) error {
 	root := strings.TrimSuffix(options.root, "/")
 	cleanBody := "'" + strings.ReplaceAll(body.String(), "'", `'"'"'`) + "'"
 	body.Reset()
-	fmt.Fprintf(&body, "#!/bin/sh\nROOT='%s'\nprerequisites_refused() { printf '%%s\\n' 'SBXR-BOOTSTRAP-PREREQUISITES-REFUSED' >&2; exit 1; }\n[ -x \"$ROOT/usr/bin/env\" ] || prerequisites_refused\nexec \"$ROOT/usr/bin/env\" -i TERM=\"${TERM-}\" PATH=/usr/bin:/bin LC_ALL=C \"$ROOT/bin/sh\" -c %s sbxr-bootstrap \"$@\"\n", root, cleanBody)
+	fmt.Fprintf(&body, "#!/bin/sh\nset -f\nROOT='%s'\nprerequisites_refused() { printf '%%s\\n' 'SBXR-BOOTSTRAP-PREREQUISITES-REFUSED' >&2; exit 1; }\nvalid_ip() { case \"$1\" in *:*) case \"$1\" in *[!0-9A-Fa-f:.]*|*[.:][.:][.:]*) return 1 ;; esac ;; *.*) case \"$1\" in *[!0-9.]*) return 1 ;; esac ;; *) return 1 ;; esac; \"$ROOT/usr/bin/env\" -i PATH=/usr/bin:/bin LC_ALL=C \"$ROOT/usr/bin/getent\" ahosts \"$1\" >/dev/null 2>&1; }\nvalid_ssh_connection() { set -- ${SSH_CONNECTION-}; [ \"$#\" -eq 4 ] || return 1; valid_ip \"$1\" && valid_ip \"$3\" || return 1; case \"$2:$4\" in *[!0-9:]*) return 1 ;; esac; [ \"$2\" -ge 1 ] 2>/dev/null && [ \"$2\" -le 65535 ] && [ \"$4\" -ge 1 ] 2>/dev/null && [ \"$4\" -le 65535 ]; }\n[ -x \"$ROOT/usr/bin/env\" ] && [ -x \"$ROOT/usr/bin/getent\" ] || prerequisites_refused\nssh_connection=''\nif valid_ssh_connection; then ssh_connection=$SSH_CONNECTION; fi\nexec \"$ROOT/usr/bin/env\" -i TERM=\"${TERM-}\" PATH=/usr/bin:/bin LC_ALL=C SBXR_SSH_CONNECTION=\"$ssh_connection\" \"$ROOT/bin/sh\" -c %s sbxr-bootstrap \"$@\"\n", root, cleanBody)
 	file, err := os.OpenFile(options.output, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o700)
 	if err != nil {
 		return errors.New("bootstrap output refused")
@@ -265,7 +265,7 @@ if [ -n "$reentry" ]; then
     "$ROOT/usr/bin/env" -i HOME="$owner_home" USER="$owner_name" LOGNAME="$owner_name" TERM="$TERM" LANG=C.UTF-8 PATH=/usr/bin:/bin SBXR_OWNER_LAUNCH_TAG="$launch_tag" SBXR_OWNER_LAUNCH_COMMIT="$launch_commit" SBXR_OWNER_LAUNCH_SHA256="$launch_sha" "$executable" private owner-launch
   fi
 else
-  "$ROOT/usr/bin/env" -i HOME="$owner_home" USER="$owner_name" LOGNAME="$owner_name" TERM="$TERM" LANG=C.UTF-8 PATH=/usr/bin:/bin SBXR_OWNER_LAUNCH_TAG="$launch_tag" SBXR_OWNER_LAUNCH_COMMIT="$launch_commit" SBXR_OWNER_LAUNCH_SHA256="$launch_sha" "$executable" private owner-launch
+  "$ROOT/usr/bin/env" -i HOME="$owner_home" USER="$owner_name" LOGNAME="$owner_name" TERM="$TERM" LANG=C.UTF-8 PATH=/usr/bin:/bin SBXR_SSH_CONNECTION="$SBXR_SSH_CONNECTION" SBXR_OWNER_LAUNCH_TAG="$launch_tag" SBXR_OWNER_LAUNCH_COMMIT="$launch_commit" SBXR_OWNER_LAUNCH_SHA256="$launch_sha" "$executable" private owner-launch
 fi
 launch_status=$?
 cleanup

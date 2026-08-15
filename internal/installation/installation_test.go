@@ -830,10 +830,14 @@ func TestInstallationReviewGuidesUnprovedAndAmbiguousNetworkFacts(t *testing.T) 
 	}
 
 	finding := networkpolicy.Finding{Code: "NETWORK-INSTALLATION-SSH-UNPROVED", Problem: "The active SSH session could not be proved", Found: "no session", Required: "one active SSH session", WhyStopped: "SSH access cannot be preserved", Fix: networkpolicy.Fix{OwnerChecklist: []string{"Reconnect through SSH, then start Installation again."}}}
-	module := newTestInstallationWithPreflight(t, composedNetworkObserver{}, networkpolicy.InstallationPreflightResult{Failure: &finding})
+	module := newTestInstallationWithPreflight(t, composedNetworkObserver{}, networkpolicy.InstallationPreflightResult{Failure: &finding, SSHFailureCause: networkpolicy.SSHOriginalSessionLost})
 	review := module.Review(t.Context(), Draft{})
-	if review.Correction == nil || review.Correction.InputLabel != "" || len(review.Correction.OwnerSteps) != 1 || review.Invalid != nil {
+	if review.Correction == nil || review.Correction.InputLabel != "" || len(review.Correction.OwnerSteps) != 1 || review.Correction.SSHFailureCause != networkpolicy.SSHOriginalSessionLost || review.Invalid != nil {
 		t.Fatalf("unproved SSH did not stop with exact recovery guidance: %+v", review)
+	}
+	module = newTestInstallationWithPreflight(t, composedNetworkObserver{}, networkpolicy.InstallationPreflightResult{Failure: &finding, SSHFailureCause: networkpolicy.SSHObservationUnavailable})
+	if review := module.Review(t.Context(), Draft{}); review.Correction == nil || review.Correction.SSHFailureCause != networkpolicy.SSHObservationUnavailable {
+		t.Fatalf("temporary SSH observation failure removed Check again: %+v", review)
 	}
 }
 

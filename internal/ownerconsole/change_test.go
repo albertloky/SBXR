@@ -3,6 +3,7 @@ package ownerconsole
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -196,6 +197,18 @@ func TestRunPresentsCompleteCorrectionFlowWithoutBypass(t *testing.T) {
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("Correction Flow exposed bypass %q", forbidden)
 		}
+	}
+}
+
+func TestCorrectionFlowCanRequireExitAndRestartWithoutCheckAgain(t *testing.T) {
+	correction := &CorrectionPresentation{Problem: "The direct SSH session could not be proved", Found: "the original session is closed", Required: "one fresh direct SSH launch", WhyStopped: "Installation cannot preserve a different session", OwnerSteps: []string{"Exit and restart from direct SSH."}, Evidence: "NETWORK-INSTALLATION-SSH-UNPROVED", HideCheckAgain: true}
+	actions := (model{}).correctionActions(correction)
+	labels := make([]string, len(actions))
+	for index := range actions {
+		labels[index] = actions[index].label
+	}
+	if slices.Contains(labels, "Check again") || !slices.Contains(labels, "Copy redacted evidence") || !slices.Contains(labels, "Back") {
+		t.Fatalf("restart-only Correction Flow actions = %v", labels)
 	}
 }
 

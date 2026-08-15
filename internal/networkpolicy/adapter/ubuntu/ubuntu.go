@@ -14,6 +14,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1130,23 +1131,17 @@ func observedSSHListener(listeners []networkpolicy.Listener, facts networkpolicy
 }
 
 func (a Adapter) sshFacts() networkpolicy.SSHFacts {
-	fields := strings.Fields(os.Getenv("SSH_CONNECTION"))
+	fields := strings.Fields(os.Getenv("SBXR_SSH_CONNECTION"))
 	facts := networkpolicy.SSHFacts{}
 	if len(fields) == 4 {
 		if port, err := strconv.ParseUint(fields[3], 10, 16); err == nil {
 			facts.DetectedPort = uint16(port)
 		}
-		facts.ServerAddress = fields[2]
-		facts.CurrentSessions = []string{checksum([]byte(os.Getenv("SSH_CONNECTION")))}
-	}
-	if sessions, err := a.privilegedOutput("who"); err == nil {
-		facts.SessionsComplete = true
-		for _, session := range strings.Split(strings.TrimSpace(string(sessions)), "\n") {
-			if session != "" {
-				facts.CurrentSessions = append(facts.CurrentSessions, checksum([]byte(session)))
-			}
+		if address, err := netip.ParseAddr(fields[2]); err == nil {
+			facts.ServerAddress = address.String()
 		}
 	}
+	facts.CurrentSessions, facts.SessionsComplete = a.establishedTCPSessions()
 	for _, service := range []string{"ssh.service", "sshd.service"} {
 		if state, err := a.privilegedOutput("systemctl", "is-active", service); err == nil && strings.TrimSpace(string(state)) == "active" {
 			facts.Service = service
@@ -1169,6 +1164,41 @@ func (a Adapter) sshFacts() networkpolicy.SSHFacts {
 		}
 	}
 	return facts
+}
+
+func (a Adapter) establishedTCPSessions() ([]string, bool) {
+	var sessions []string
+	for _, name := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {
+		file, err := os.Open(a.path(name))
+		if err != nil {
+			return nil, false
+		}
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			fields := strings.Fields(scanner.Text())
+			if len(fields) < 4 || fields[3] != "01" {
+				continue
+			}
+			serverAddress, serverPort, serverOK := procEndpoint(fields[1])
+			clientAddress, clientPort, clientOK := procEndpoint(fields[2])
+			if serverOK && clientOK {
+				sessions = append(sessions, checksum([]byte(fmt.Sprintf("%s %d %s %d", clientAddress, clientPort, serverAddress, serverPort))))
+			}
+		}
+		err = scanner.Err()
+		file.Close()
+		if err != nil {
+			return nil, false
+		}
+	}
+	return sessions, true
+}
+
+func procEndpoint(value string) (string, uint16, bool) {
+	address, portText, ok := strings.Cut(value, ":")
+	port, err := strconv.ParseUint(portText, 16, 16)
+	parsed, addressErr := netip.ParseAddr(procAddress(address))
+	return parsed.String(), uint16(port), ok && err == nil && addressErr == nil && port != 0
 }
 
 func timeFacts() networkpolicy.TimeFacts {

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 )
@@ -1066,40 +1067,86 @@ type Interface struct{ adapter Adapter }
 
 func New(adapter Adapter) Interface { return Interface{adapter: adapter} }
 
+type SSHPreservationFailureCause string
+
+const (
+	SSHLaunchIdentityInvalid  SSHPreservationFailureCause = "launch identity invalid"
+	SSHObservationUnavailable SSHPreservationFailureCause = "observation unavailable"
+	SSHOriginalSessionLost    SSHPreservationFailureCause = "original session lost"
+)
+
+type SSHPreservationFailure struct{ Cause SSHPreservationFailureCause }
+
+type SSHPreservationProof struct{ serverPort uint16 }
+
+func (proof SSHPreservationProof) ServerPort() uint16 { return proof.serverPort }
+
+func (i Interface) ProveSSHPreservation(identity string) (SSHPreservationProof, *SSHPreservationFailure) {
+	proof, failure, _ := i.proveSSHPreservation(identity)
+	return proof, failure
+}
+
+func (i Interface) proveSSHPreservation(identity string) (SSHPreservationProof, *SSHPreservationFailure, Observations) {
+	fields := strings.Fields(identity)
+	if len(fields) != 4 {
+		return SSHPreservationProof{}, &SSHPreservationFailure{Cause: SSHLaunchIdentityInvalid}, Observations{}
+	}
+	client, clientErr := netip.ParseAddr(fields[0])
+	clientPort, clientPortErr := strconv.ParseUint(fields[1], 10, 16)
+	server, serverErr := netip.ParseAddr(fields[2])
+	serverPort, serverPortErr := strconv.ParseUint(fields[3], 10, 16)
+	if clientErr != nil || serverErr != nil || clientPortErr != nil || serverPortErr != nil || clientPort == 0 || serverPort == 0 {
+		return SSHPreservationProof{}, &SSHPreservationFailure{Cause: SSHLaunchIdentityInvalid}, Observations{}
+	}
+	if i.adapter == nil {
+		return SSHPreservationProof{}, &SSHPreservationFailure{Cause: SSHObservationUnavailable}, Observations{}
+	}
+	observed, err := i.adapter.Observe(ObservationRequest{Stage: PreApproval, Scope: LocalObservations})
+	if err != nil {
+		return SSHPreservationProof{}, &SSHPreservationFailure{Cause: SSHObservationUnavailable}, Observations{}
+	}
+	ssh := observed.SSH
+	validListener := slices.ContainsFunc(observed.Listeners, func(listener Listener) bool {
+		return listener.Port == uint16(serverPort) && listener.Protocol == TCP && listener.Service == ssh.Service && ListenerCoversAddress(listener.Address, server.String()) && ssh.Listener == net.JoinHostPort(listener.Address, fields[3])+"/tcp"
+	})
+	if ssh.DetectedPort != uint16(serverPort) || ssh.ServerAddress != server.String() || !ssh.SessionsComplete || ssh.Service != "ssh.service" && ssh.Service != "sshd.service" || !validListener {
+		return SSHPreservationProof{}, &SSHPreservationFailure{Cause: SSHObservationUnavailable}, observed
+	}
+	canonical := fmt.Sprintf("%s %d %s %d", client, clientPort, server, serverPort)
+	digest := sha256.Sum256([]byte(canonical))
+	if !slices.Contains(ssh.CurrentSessions, hex.EncodeToString(digest[:])) {
+		return SSHPreservationProof{}, &SSHPreservationFailure{Cause: SSHOriginalSessionLost}, observed
+	}
+	return SSHPreservationProof{serverPort: uint16(serverPort)}, nil, observed
+}
+
 type InstallationPreflightResult struct {
 	ActiveSSHPort    uint16
 	UsablePublicIPv4 []string
 	Failure          *Finding
+	SSHFailureCause  SSHPreservationFailureCause
 }
 
-func (i Interface) InstallationPreflight() InstallationPreflightResult {
-	failure := func(found string) InstallationPreflightResult {
-		finding := requiredFailure("NETWORK-INSTALLATION-SSH-UNPROVED", "The active SSH session could not be proved", found, "one active ssh.service or sshd.service session with one exact listener and detected port", "Installation cannot preserve SSH access from incomplete or contradictory facts", Fix{OwnerChecklist: []string{"Reconnect through one active SSH session, or use the VPS provider console to restore SSH, then start Installation again."}})
-		return InstallationPreflightResult{Failure: &finding}
-	}
-	if i.adapter == nil {
-		return failure("the Ubuntu network Adapter is unavailable")
-	}
-	observed, err := i.adapter.Observe(ObservationRequest{Stage: PreApproval, Scope: LocalObservations})
-	if err != nil {
-		return failure("the local Ubuntu observation failed")
-	}
-	ssh := observed.SSH
-	_, addressErr := netip.ParseAddr(ssh.ServerAddress)
-	validSessions := len(ssh.CurrentSessions) > 0 && slices.IndexFunc(ssh.CurrentSessions, func(value string) bool { return !validSHA256(value) }) == -1
-	validListener := slices.ContainsFunc(observed.Listeners, func(listener Listener) bool {
-		return listener.Port == ssh.DetectedPort && listener.Protocol == TCP && listener.Service == ssh.Service && ListenerCoversAddress(listener.Address, ssh.ServerAddress) && ssh.Listener == net.JoinHostPort(listener.Address, fmt.Sprint(listener.Port))+"/tcp"
-	})
-	if ssh.DetectedPort == 0 || addressErr != nil || !ssh.SessionsComplete || !validSessions || ssh.Service != "ssh.service" && ssh.Service != "sshd.service" || !validListener {
-		return failure(fmt.Sprintf("port %d, service %q, listener %q, and %d current session proofs", ssh.DetectedPort, ssh.Service, ssh.Listener, len(ssh.CurrentSessions)))
+func (i Interface) InstallationPreflight(identity string) InstallationPreflightResult {
+	proof, proofFailure, observed := i.proveSSHPreservation(identity)
+	if proofFailure != nil {
+		found, steps := "the direct SSH launch identity is missing or invalid", []string{"Exit and restart through one direct SSH session."}
+		if proofFailure.Cause == SSHObservationUnavailable {
+			found, steps = "the SSH service, listener, or socket observation is temporarily unavailable", []string{"Use Check again for a fresh read-only observation, or return to a safe Owner Console screen."}
+		} else if proofFailure.Cause == SSHOriginalSessionLost {
+			found, steps = "the original direct SSH session is no longer established", []string{"Exit and restart through a new direct SSH session."}
+		}
+		finding := requiredFailure("NETWORK-INSTALLATION-SSH-UNPROVED", "The active SSH session could not be proved", found, "fresh SSH Preservation Proof for the exact launch session", "Installation cannot preserve a different or unproved SSH session", Fix{OwnerChecklist: steps})
+		return InstallationPreflightResult{Failure: &finding, SSHFailureCause: proofFailure.Cause}
 	}
 	addresses := slices.Clone(observed.PublicIPv4)
 	slices.Sort(addresses)
 	addresses = slices.Compact(addresses)
 	if slices.IndexFunc(addresses, func(value string) bool { return !UsablePublicAddress(value) }) != -1 {
-		return failure("the local interface observation included an unusable public-address candidate")
+		finding := requiredFailure("NETWORK-INSTALLATION-SSH-UNPROVED", "The active SSH session could not be proved", "the local interface observation included an unusable public-address candidate", "only usable public-address candidates", "Installation cannot continue from contradictory local facts", Fix{OwnerChecklist: []string{"Use Check again for a fresh read-only observation, or return to a safe Owner Console screen."}})
+		return InstallationPreflightResult{Failure: &finding, SSHFailureCause: SSHObservationUnavailable}
 	}
-	return InstallationPreflightResult{ActiveSSHPort: ssh.DetectedPort, UsablePublicIPv4: addresses}
+	return InstallationPreflightResult{ActiveSSHPort: proof.ServerPort(), UsablePublicIPv4: addresses}
 }
 
 func UsablePublicAddress(value string) bool {

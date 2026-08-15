@@ -1,6 +1,7 @@
 package networkpolicy_test
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,7 +26,9 @@ type stagedAdapter struct {
 }
 
 func TestInstallationPreflightReturnsOnlyProvenLocalNetworkFacts(t *testing.T) {
-	validSSH := networkpolicy.SSHFacts{DetectedPort: 2222, ServerAddress: "203.0.113.10", CurrentSessions: []string{strings.Repeat("a", 64)}, SessionsComplete: true, Service: "ssh.service", Listener: "0.0.0.0:2222/tcp"}
+	identity := "203.0.113.9 50000 203.0.113.10 2222"
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(identity)))
+	validSSH := networkpolicy.SSHFacts{DetectedPort: 2222, ServerAddress: "203.0.113.10", CurrentSessions: []string{digest}, SessionsComplete: true, Service: "ssh.service", Listener: "0.0.0.0:2222/tcp"}
 	validListener := networkpolicy.Listener{Address: "0.0.0.0", Port: 2222, Protocol: networkpolicy.TCP, Process: "sshd", Service: "ssh.service"}
 	for _, test := range []struct {
 		name      string
@@ -38,7 +41,12 @@ func TestInstallationPreflightReturnsOnlyProvenLocalNetworkFacts(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			adapter := &stagedAdapter{observed: networkpolicy.Observations{SSH: validSSH, Listeners: []networkpolicy.Listener{validListener}, PublicIPv4: test.addresses}}
-			result := networkpolicy.New(adapter).InstallationPreflight()
+			proof, failure := networkpolicy.New(adapter).ProveSSHPreservation(identity)
+			if failure != nil || proof.ServerPort() != 2222 {
+				t.Fatalf("SSH Preservation Proof = %+v, %+v", proof, failure)
+			}
+			adapter.requests = nil
+			result := networkpolicy.New(adapter).InstallationPreflight(identity)
 			if result.Failure != nil || result.ActiveSSHPort != 2222 || !slices.Equal(result.UsablePublicIPv4, test.want) {
 				t.Fatalf("Installation preflight = %+v", result)
 			}
@@ -62,7 +70,7 @@ func TestInstallationPreflightReturnsOnlyProvenLocalNetworkFacts(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			ssh := validSSH
 			test.change(&ssh)
-			result := networkpolicy.New(staticAdapter{observed: networkpolicy.Observations{SSH: ssh, Listeners: []networkpolicy.Listener{validListener}}}).InstallationPreflight()
+			result := networkpolicy.New(staticAdapter{observed: networkpolicy.Observations{SSH: ssh, Listeners: []networkpolicy.Listener{validListener}}}).InstallationPreflight(identity)
 			if result.Failure == nil || result.Failure.Code != "NETWORK-INSTALLATION-SSH-UNPROVED" || len(result.Failure.Fix.OwnerChecklist) == 0 {
 				t.Fatalf("invalid SSH preflight = %+v", result)
 			}
@@ -70,10 +78,40 @@ func TestInstallationPreflightReturnsOnlyProvenLocalNetworkFacts(t *testing.T) {
 	}
 
 	for _, listeners := range [][]networkpolicy.Listener{nil, {{Address: "0.0.0.0", Port: 22, Protocol: networkpolicy.TCP, Process: "sshd", Service: "ssh.service"}}, {{Address: "0.0.0.0", Port: 2222, Protocol: networkpolicy.TCP, Process: "other", Service: "other.service"}}, {{Address: "127.0.0.1", Port: 2222, Protocol: networkpolicy.TCP, Process: "sshd", Service: "ssh.service"}}} {
-		result := networkpolicy.New(staticAdapter{observed: networkpolicy.Observations{SSH: validSSH, Listeners: listeners}}).InstallationPreflight()
+		result := networkpolicy.New(staticAdapter{observed: networkpolicy.Observations{SSH: validSSH, Listeners: listeners}}).InstallationPreflight(identity)
 		if result.Failure == nil || result.Failure.Code != "NETWORK-INSTALLATION-SSH-UNPROVED" {
 			t.Fatalf("unproved observed SSH listener = %+v", result)
 		}
+	}
+}
+
+func TestSSHPreservationProofRejectsEveryUnprovedCauseWithoutRawIdentity(t *testing.T) {
+	identity := "203.0.113.9 50000 203.0.113.10 2222"
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(identity)))
+	listener := networkpolicy.Listener{Address: "0.0.0.0", Port: 2222, Protocol: networkpolicy.TCP, Process: "sshd", Service: "ssh.service"}
+	valid := networkpolicy.Observations{SSH: networkpolicy.SSHFacts{DetectedPort: 2222, ServerAddress: "203.0.113.10", CurrentSessions: []string{digest}, SessionsComplete: true, Service: "ssh.service", Listener: "0.0.0.0:2222/tcp"}, Listeners: []networkpolicy.Listener{listener}}
+	for _, test := range []struct {
+		name     string
+		identity string
+		observed networkpolicy.Observations
+		cause    networkpolicy.SSHPreservationFailureCause
+	}{
+		{name: "missing identity", observed: valid, cause: networkpolicy.SSHLaunchIdentityInvalid},
+		{name: "malformed identity", identity: "203.0.113.9 50000 203.0.113.10", observed: valid, cause: networkpolicy.SSHLaunchIdentityInvalid},
+		{name: "inactive service", identity: identity, observed: func() networkpolicy.Observations { value := valid; value.SSH.Service = ""; return value }(), cause: networkpolicy.SSHObservationUnavailable},
+		{name: "wrong listener", identity: identity, observed: func() networkpolicy.Observations { value := valid; value.Listeners = nil; return value }(), cause: networkpolicy.SSHObservationUnavailable},
+		{name: "different session on same port", identity: identity, observed: func() networkpolicy.Observations {
+			value := valid
+			value.SSH.CurrentSessions = []string{strings.Repeat("a", 64)}
+			return value
+		}(), cause: networkpolicy.SSHOriginalSessionLost},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proof, failure := networkpolicy.New(staticAdapter{observed: test.observed}).ProveSSHPreservation(test.identity)
+			if proof.ServerPort() != 0 || failure == nil || failure.Cause != test.cause || strings.Contains(fmt.Sprintf("%+v", failure), identity) {
+				t.Fatalf("unproved SSH = %+v, %+v", proof, failure)
+			}
+		})
 	}
 }
 

@@ -248,7 +248,7 @@ func TestGeneratedBootstrapVerifiesAndLaunchesOnlyTheExactReleaseAsTheOwner(t *t
 		}
 		launched, err := os.ReadFile(fixture.launchRecord)
 		if err != nil || strings.Contains(string(launched), "PRIVATE-SECRET-MARKER") || !strings.Contains(string(launched), "HOME="+fixture.home) || !strings.Contains(string(launched), "USER=owner") {
-			t.Fatalf("Owner launch environment = %q, %v", launched, err)
+			t.Fatalf("Owner launch environment was unsafe or incomplete: %v", err)
 		}
 		if matches, _ := filepath.Glob(filepath.Join(fixture.root, "tmp", "sbxr-bootstrap.*")); len(matches) != 0 {
 			t.Fatalf("bootstrap temporary material remains: %v", matches)
@@ -273,8 +273,8 @@ func TestGeneratedBootstrapAdmitsARootOwnerLaunchIdentityWithoutSudo(t *testing.
 		t.Fatalf("root launch used sudo: %v", err)
 	}
 	launched, err := os.ReadFile(fixture.launchRecord)
-	if err != nil || !strings.Contains(string(launched), "USER=root") {
-		t.Fatalf("root Owner Console launch = %q, %v", launched, err)
+	if err != nil || !strings.Contains(string(launched), "USER=root") || !strings.Contains(string(launched), "SBXR_SSH_CONNECTION="+fixture.sshConnection) || strings.Contains("\n"+string(launched), "\nSSH_CONNECTION=") {
+		t.Fatalf("root Owner Console launch was incomplete: %v", err)
 	}
 }
 
@@ -285,8 +285,20 @@ func TestGeneratedBootstrapRoutesOwnerLaunchThroughThePrivateUbuntuAdapter(t *te
 		t.Fatalf("non-root Owner Launch Identity = %v\n%s", err, output)
 	}
 	launched, err := os.ReadFile(fixture.launchRecord)
-	if err != nil || !strings.Contains(string(launched), "ARGS=private owner-launch") || !strings.Contains(string(launched), "SBXR_OWNER_LAUNCH_TAG=v1.0.0") || !strings.Contains(string(launched), "SBXR_OWNER_LAUNCH_COMMIT=0123456789abcdef0123456789abcdef01234567") || !strings.Contains(string(launched), "SBXR_OWNER_LAUNCH_SHA256=") {
-		t.Fatalf("private Owner launch = %q, %v", launched, err)
+	if err != nil || !strings.Contains(string(launched), "ARGS=private owner-launch") || !strings.Contains(string(launched), "SBXR_OWNER_LAUNCH_TAG=v1.0.0") || !strings.Contains(string(launched), "SBXR_OWNER_LAUNCH_COMMIT=0123456789abcdef0123456789abcdef01234567") || !strings.Contains(string(launched), "SBXR_OWNER_LAUNCH_SHA256=") || !strings.Contains(string(launched), "SBXR_SSH_CONNECTION="+fixture.sshConnection) || strings.Contains("\n"+string(launched), "\nSSH_CONNECTION=") {
+		t.Fatalf("private Owner launch was incomplete or unsafe: %v", err)
+	}
+}
+
+func TestGeneratedBootstrapCarriesOnlyAValidDirectSSHIdentity(t *testing.T) {
+	for index, identity := range []string{"", "203.0.113.9 50000 203.0.113.10", "not-an-address 50000 203.0.113.10 2222", "dead.beef 50000 203.0.113.10 2222", "bad 50000 203.0.113.10 2222", "* 50000 203.0.113.10 2222", "203.0.113.9 0 203.0.113.10 2222", "203.0.113.9 50000 203.0.113.10 65536"} {
+		fixture := newBootstrapFixture(t)
+		fixture.sshConnection = identity
+		output, err := fixture.run()
+		launched, readErr := os.ReadFile(fixture.launchRecord)
+		if err != nil || readErr != nil || !strings.Contains(output, "launching Owner Console") || !strings.Contains(string(launched), "SBXR_SSH_CONNECTION=\n") || identity != "" && strings.Contains(string(launched), identity) {
+			t.Fatalf("invalid SSH identity case %d did not reach the safe Console without carriage: %v", index, err)
+		}
 	}
 }
 
@@ -342,7 +354,7 @@ func TestGeneratedBootstrapRepairsOnlyFixedPrerequisitesAndReentersTheInstalledR
 	}
 	launched, err := os.ReadFile(fixture.launchRecord)
 	if err != nil || !strings.Contains(string(launched), "HOME="+fixture.home) || !strings.Contains(string(launched), "USER=owner") || !strings.Contains(string(launched), "SBXR_INSTALLED_REENTRY=1") || !strings.Contains(string(launched), "ARGS=private owner-launch") {
-		t.Fatalf("installed Owner launch = %q, %v", launched, err)
+		t.Fatalf("installed Owner launch was incomplete: %v", err)
 	}
 }
 
@@ -356,7 +368,7 @@ func TestGeneratedBootstrapEntersRecoveryForAnUnfinishedInstallWithoutAnActiveLi
 	}
 	launched, err := os.ReadFile(fixture.launchRecord)
 	if err != nil || strings.Contains(string(launched), "SBXR_INSTALLED_REENTRY=1") || !strings.Contains(string(launched), "ARGS=private owner-launch") {
-		t.Fatalf("unfinished install launch = %q, %v", launched, err)
+		t.Fatalf("unfinished install launch was incomplete: %v", err)
 	}
 }
 
@@ -411,7 +423,7 @@ func TestGeneratedBootstrapRefusesMissingWrapperFoundationWithOnlyTheFixedCode(t
 func TestGeneratedBootstrapCleansLocaleAndLoaderEnvironmentBeforeItsFirstExternalCommand(t *testing.T) {
 	fixture := newBootstrapFixture(t)
 	command := exec.Command("/bin/sh", fixture.script)
-	command.Env = append(os.Environ(), "TERM=xterm-256color", "LC_ALL=fr_FR.UTF-8", "LD_PRELOAD=/sbxr-hostile-loader-injection")
+	command.Env = append(os.Environ(), "TERM=xterm-256color", "LC_ALL=fr_FR.UTF-8", "LD_PRELOAD=/sbxr-hostile-loader-injection", "SSH_CONNECTION=203.0.113.9 50000 203.0.113.10 2222")
 	terminal, err := pty.Start(command)
 	if err != nil {
 		t.Fatal(err)
@@ -465,6 +477,7 @@ func TestGeneratedBootstrapRefusesHostileInputsWithOnlyFixedSafeOutput(t *testin
 
 	fixture := newBootstrapFixture(t)
 	command := exec.Command("/bin/sh", fixture.script)
+	command.Env = append(os.Environ(), "SSH_CONNECTION="+fixture.sshConnection)
 	output, err := command.CombinedOutput()
 	if err == nil || string(output) != "SBXR-BOOTSTRAP-REFUSED\n" {
 		t.Fatalf("non-interactive bootstrap = %v, %q", err, output)
@@ -489,6 +502,8 @@ func TestGeneratedBootstrapRefusesHostileInputsWithOnlyFixedSafeOutput(t *testin
 
 type bootstrapFixture struct {
 	root, home, script, launchRecord, prerequisiteRecord string
+	sshConnection                                        string
+	ownerUID, executablePath                             string
 	index, version, redirect                             string
 	archive                                              []byte
 	machine, tarList                                     string
@@ -504,7 +519,7 @@ type bootstrapFixture struct {
 func newBootstrapFixture(t *testing.T) *bootstrapFixture {
 	t.Helper()
 	root := t.TempDir()
-	fixture := &bootstrapFixture{root: root, home: filepath.Join(root, "home", "owner"), script: filepath.Join(root, "install.sh"), launchRecord: filepath.Join(root, "launched"), prerequisiteRecord: filepath.Join(root, "prerequisites"), redirect: "https://release-assets.githubusercontent.com/exact", archive: []byte("exact archive bytes"), machine: "x86_64", tarList: "sbxr"}
+	fixture := &bootstrapFixture{root: root, home: filepath.Join(root, "home", "owner"), script: filepath.Join(root, "install.sh"), launchRecord: filepath.Join(root, "launched"), prerequisiteRecord: filepath.Join(root, "prerequisites"), sshConnection: "203.0.113.9 50000 203.0.113.10 2222", redirect: "https://release-assets.githubusercontent.com/exact", archive: []byte("exact archive bytes"), machine: "x86_64", tarList: "sbxr"}
 	for _, directory := range []string{"bin", "usr/bin", "etc", "tmp", "fixtures", "home/owner"} {
 		if err := os.MkdirAll(filepath.Join(root, directory), 0o700); err != nil {
 			t.Fatal(err)
@@ -557,12 +572,15 @@ func (fixture *bootstrapFixture) writeBoundaries(t *testing.T) {
 		t.Fatal(err)
 	}
 	ownerUID, ownerName := "1000", "owner"
+	if fixture.ownerUID != "" {
+		ownerUID = fixture.ownerUID
+	}
 	if fixture.rootOwner {
 		ownerUID, ownerName = "0", "root"
 	}
 	mustScript("usr/bin/id", `if [ "${1-}" = "-un" ]; then echo `+ownerName+`; else echo `+ownerUID+`; fi`)
 	mustScript("usr/bin/uname", `echo `+fixture.machine)
-	mustScript("usr/bin/getent", fmt.Sprintf(`echo '%s:x:%s:%s::%s:/bin/sh'`, ownerName, ownerUID, ownerUID, fixture.home))
+	mustScript("usr/bin/getent", fmt.Sprintf(`if [ "${1-}" = ahosts ]; then case "${2-}" in 203.0.113.9|203.0.113.10|2001:db8::1|2001:db8::2) printf '%%s STREAM\n' "$2"; exit 0 ;; *) exit 1 ;; esac; fi; echo '%s:x:%s:%s::%s:/bin/sh'`, ownerName, ownerUID, ownerUID, fixture.home))
 	mustScript("usr/bin/mktemp", `path=${2%XXXXXX}TEST; mkdir "$path" || exit 1; echo "$path"`)
 	ownership := "0:755:regular file"
 	if fixture.changedPrerequisiteOwnership {
@@ -583,12 +601,16 @@ printf 'ARGS=%%s\n' "$*" >>'%s'`, fixture.launchRecord, fixture.launchRecord)
 	if fixture.authenticationRefused {
 		ownerLaunch = fmt.Sprintf(`'%s' --preserve-fds=3 -- /bin/true`, filepath.Join(fixture.root, "usr/bin/sudo"))
 	}
-	mustScript("usr/bin/tar", fmt.Sprintf(`case "$1" in -tzf) printf '%%s\n' '%s' ;; -xzf) while [ "$#" -gt 0 ]; do if [ "$1" = '-C' ]; then destination=$2; fi; shift; done; cat >"$destination/sbxr" <<'SBXR'
+	extractExecutable := fmt.Sprintf(`cat >"$destination/sbxr" <<'SBXR'
 #!/bin/sh
 if [ "${1-}" = version ] && [ "${2-}" = --json ]; then printf '%%s\n' '%s'; exit 0; fi
 %s
 SBXR
-chmod 700 "$destination/sbxr" ;; *) exit 1 ;; esac`, fixture.tarList, fixture.version, ownerLaunch))
+chmod 700 "$destination/sbxr"`, fixture.version, ownerLaunch)
+	if fixture.executablePath != "" {
+		extractExecutable = fmt.Sprintf(`cp %q "$destination/sbxr" && chmod 700 "$destination/sbxr"`, fixture.executablePath)
+	}
+	mustScript("usr/bin/tar", fmt.Sprintf(`case "$1" in -tzf) printf '%%s\n' '%s' ;; -xzf) while [ "$#" -gt 0 ]; do if [ "$1" = '-C' ]; then destination=$2; fi; shift; done; %s ;; *) exit 1 ;; esac`, fixture.tarList, extractExecutable))
 	prerequisiteRefusal := ""
 	if fixture.prerequisiteSudoRefused {
 		prerequisiteRefusal = `[ "$1" = -- ] && exit 1;`
@@ -639,7 +661,7 @@ printf 'ARGS=%%s\n' "$*" >>'%s'`, fixture.version, fixture.launchRecord, fixture
 
 func (fixture *bootstrapFixture) run(arguments ...string) (string, error) {
 	command := exec.Command("/bin/sh", append([]string{fixture.script}, arguments...)...)
-	command.Env = append(os.Environ(), "TERM=xterm-256color", "CLOUDFLARE_API_TOKEN=PRIVATE-SECRET-MARKER")
+	command.Env = append(os.Environ(), "TERM=xterm-256color", "CLOUDFLARE_API_TOKEN=PRIVATE-SECRET-MARKER", "SSH_CONNECTION="+fixture.sshConnection)
 	if fixture.hostileEnvironment {
 		command.Env = append(command.Env, "SBXR_BOOTSTRAP_CLEAN=1", "CURL_HOME=/PRIVATE-SECRET-MARKER", "TAR_OPTIONS=--checkpoint-action=exec=PRIVATE-SECRET-MARKER")
 	}

@@ -1,6 +1,7 @@
 package ubuntu
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net"
@@ -38,13 +39,23 @@ func TestProductionAdapterKeepsSSHObservationOutsideCachedSudo(t *testing.T) {
 	if err := os.WriteFile(keys, []byte("ssh-ed25519 fixture\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	for name, body := range map[string]string{
+		"proc/net/tcp":  "  sl  local_address rem_address   st\n   0: 146433C6:0016 0A7100CB:C350 01\n   1: 146433C6:0016 0B7100CB:C351 01\n",
+		"proc/net/tcp6": "  sl  local_address rem_address   st\n",
+	} {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	adapter := New()
 	adapter.root = root
 	adapter.firewallOutput = func(string, ...string) ([]byte, error) { return nil, os.ErrPermission }
 	adapter.output = func(command string, arguments ...string) ([]byte, error) {
 		switch command + " " + strings.Join(arguments, " ") {
-		case "who ":
-			return []byte("owner pts/0 2026-08-13 (203.0.113.10)\n"), nil
 		case "systemctl is-active ssh.service":
 			return []byte("active\n"), nil
 		case "systemctl is-active sshd.service":
@@ -55,11 +66,12 @@ func TestProductionAdapterKeepsSSHObservationOutsideCachedSudo(t *testing.T) {
 			return nil, os.ErrNotExist
 		}
 	}
-	t.Setenv("SSH_CONNECTION", "203.0.113.10 50000 198.51.100.20 22")
+	t.Setenv("SBXR_SSH_CONNECTION", "203.0.113.10 50000 198.51.100.20 22")
 	t.Setenv("SUDO_USER", "owner")
 	facts := adapter.sshFacts()
-	if facts.Service != "ssh.service" || facts.Listener != "" || !facts.SessionsComplete || facts.AuthorizedKeysPath != "/home/owner/.ssh/authorized_keys" || len(facts.AuthorizedKeysSHA256) != 64 || len(facts.CurrentSessions) != 2 {
-		t.Fatalf("SSH facts = %+v", facts)
+	wantSession := fmt.Sprintf("%x", sha256.Sum256([]byte("203.0.113.10 50000 198.51.100.20 22")))
+	if facts.Service != "ssh.service" || facts.Listener != "" || !facts.SessionsComplete || facts.AuthorizedKeysPath != "/home/owner/.ssh/authorized_keys" || len(facts.AuthorizedKeysSHA256) != 64 || len(facts.CurrentSessions) != 2 || facts.CurrentSessions[0] != wantSession {
+		t.Fatal("SSH facts were incomplete or did not contain only digests")
 	}
 }
 
@@ -465,7 +477,7 @@ func TestProductionUbuntuSeam(t *testing.T) {
 	if _, err := exec.LookPath("nft"); err != nil {
 		t.Fatal("production Ubuntu seam requires nft")
 	}
-	t.Setenv("SSH_CONNECTION", "198.51.100.2 12345 192.0.2.10 2222")
+	t.Setenv("SBXR_SSH_CONNECTION", "198.51.100.2 12345 192.0.2.10 2222")
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -499,7 +511,7 @@ func TestProductionUbuntuSeam(t *testing.T) {
 		t.Fatalf("temporary production socket 127.0.0.1:%d/TCP was not observed", port)
 	}
 	if observed.SSH.DetectedPort != 2222 || observed.SSH.ServerAddress != "192.0.2.10" || len(observed.SSH.CurrentSessions) == 0 {
-		t.Fatalf("controlled production SSH-session facts = %+v", observed.SSH)
+		t.Fatal("controlled production SSH-session facts were incomplete")
 	}
 	if !observed.Outbound.DNS || !observed.Outbound.GitHubHTTPS || !observed.Outbound.GitHubAttestationHTTPS || !observed.Outbound.CloudflareHTTPS || !observed.Outbound.ACMEHTTPS || !observed.Outbound.CertificateEndpointsHTTPS {
 		t.Fatalf("production DNS/verified HTTPS facts = %+v", observed.Outbound)

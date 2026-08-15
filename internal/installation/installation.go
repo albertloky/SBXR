@@ -115,6 +115,7 @@ type InvalidInput struct {
 type Correction struct {
 	Problem, Found, Required, WhyStopped, InputLabel, Evidence string
 	FixWithSBXR                                                bool
+	SSHFailureCause                                            networkpolicy.SSHPreservationFailureCause
 	OwnerSteps                                                 []string
 	Selections                                                 []Selection
 }
@@ -333,7 +334,7 @@ func (module *Interface) initializeDraft() *Correction {
 	preflight := module.dependencies.Preflight()
 	if preflight.Failure != nil {
 		failure := preflight.Failure
-		return &Correction{Problem: failure.Problem, Found: failure.Found, Required: failure.Required, WhyStopped: failure.WhyStopped, OwnerSteps: append([]string(nil), failure.Fix.OwnerChecklist...), Evidence: failure.Code}
+		return &Correction{Problem: failure.Problem, Found: failure.Found, Required: failure.Required, WhyStopped: failure.WhyStopped, OwnerSteps: append([]string(nil), failure.Fix.OwnerChecklist...), Evidence: failure.Code, SSHFailureCause: preflight.SSHFailureCause}
 	}
 	release, err := module.dependencies.RunningRelease()
 	if err != nil || release.Tag == "" || release.Architecture == "" || preflight.ActiveSSHPort == 0 {

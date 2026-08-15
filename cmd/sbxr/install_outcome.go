@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -70,7 +71,9 @@ func newInstallationModuleWith(releaseSource func() (versionReport, error), pref
 	lifecycle := softwarelifecycle.New(softwaregithub.New(), softwarelifecycle.VerifierQualification{Version: softwaregithub.Version, SigningFingerprint: softwaregithub.SigningFingerprint}, time.Now, stager)
 	network := networkpolicy.New(networkubuntu.New())
 	if preflightSource == nil {
-		preflightSource = network.InstallationPreflight
+		preflightSource = func() networkpolicy.InstallationPreflightResult {
+			return network.InstallationPreflight(os.Getenv("SBXR_SSH_CONNECTION"))
+		}
 	}
 	api := cloudflaretunnel.NewProductionAPI()
 	cloudflare := cloudflaretunnel.New(api, cloudflaretunnel.SystemClock{})
@@ -233,7 +236,8 @@ func ownerCorrection(value *installation.Correction) ownerconsole.ChangeReview {
 	for index, selection := range value.Selections {
 		selections[index] = ownerconsole.CorrectionSelection{Identity: selection.Identity, Label: selection.Label}
 	}
-	return ownerconsole.ChangeReview{Correction: &ownerconsole.CorrectionPresentation{Problem: value.Problem, Found: value.Found, Required: value.Required, WhyStopped: value.WhyStopped, FixWithSBXR: value.FixWithSBXR, OwnerSteps: append([]string(nil), value.OwnerSteps...), InputLabel: value.InputLabel, Selections: selections, Evidence: value.Evidence}}
+	hideCheckAgain := value.SSHFailureCause == networkpolicy.SSHLaunchIdentityInvalid || value.SSHFailureCause == networkpolicy.SSHOriginalSessionLost
+	return ownerconsole.ChangeReview{Correction: &ownerconsole.CorrectionPresentation{Problem: value.Problem, Found: value.Found, Required: value.Required, WhyStopped: value.WhyStopped, FixWithSBXR: value.FixWithSBXR, HideCheckAgain: hideCheckAgain, OwnerSteps: append([]string(nil), value.OwnerSteps...), InputLabel: value.InputLabel, Selections: selections, Evidence: value.Evidence}}
 }
 
 func (outcome *installOutcome) ConfirmReclamation(ctx context.Context, identity ownerconsole.PlanIdentity, approval ownerconsole.ReclamationApproval) ownerconsole.ChangeReview {

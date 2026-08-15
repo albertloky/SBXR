@@ -57,6 +57,20 @@ func TestOwnerLaunchDescriptorHelper(t *testing.T) {
 	}
 }
 
+func TestOwnerLaunchFactsCarryOptionalInternalSSHIdentity(t *testing.T) {
+	facts := ownerLaunchFacts{uid: 1000, tag: "v1.0.0", commit: strings.Repeat("a", 40), sha256: strings.Repeat("b", 64), sshConnection: "203.0.113.9 50000 203.0.113.10 2222"}
+	for index, identity := range []string{"", facts.sshConnection} {
+		t.Setenv("SBXR_OWNER_LAUNCH_TAG", facts.tag)
+		t.Setenv("SBXR_OWNER_LAUNCH_COMMIT", facts.commit)
+		t.Setenv("SBXR_OWNER_LAUNCH_SHA256", facts.sha256)
+		t.Setenv("SBXR_SSH_CONNECTION", identity)
+		got, err := ownerLaunchFactsFromEnvironment(facts.uid)
+		if err != nil || got.sshConnection != identity {
+			t.Fatalf("valid SSH identity case %d was refused: %v", index, err)
+		}
+	}
+}
+
 func stampedOwnerLaunchTestExecutable(t *testing.T) (string, ownerLaunchFacts) {
 	t.Helper()
 	running, err := os.Executable()

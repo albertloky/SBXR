@@ -3,10 +3,27 @@ package main
 import (
 	"testing"
 
+	"github.com/albertloky/SBXR/internal/installation"
 	"github.com/albertloky/SBXR/internal/networkpolicy"
 	"github.com/albertloky/SBXR/internal/ownerconsole"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 )
+
+func TestInstallationSSHFailureCauseSelectsOnlyLegalCorrectionActions(t *testing.T) {
+	for _, test := range []struct {
+		cause networkpolicy.SSHPreservationFailureCause
+		hide  bool
+	}{
+		{cause: networkpolicy.SSHLaunchIdentityInvalid, hide: true},
+		{cause: networkpolicy.SSHOriginalSessionLost, hide: true},
+		{cause: networkpolicy.SSHObservationUnavailable},
+	} {
+		presented := ownerCorrection(&installation.Correction{Problem: "SSH proof failed", Found: "redacted cause", Required: "fresh proof", WhyStopped: "Installation stopped", OwnerSteps: []string{"Follow the exact safe guidance."}, Evidence: "NETWORK-INSTALLATION-SSH-UNPROVED", SSHFailureCause: test.cause})
+		if presented.Correction == nil || presented.Correction.HideCheckAgain != test.hide {
+			t.Fatalf("SSH Correction action mapping for %q was wrong", test.cause)
+		}
+	}
+}
 
 func newTestInstallOutcome(t *testing.T) *installOutcome {
 	t.Helper()
