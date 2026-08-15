@@ -62,8 +62,11 @@ type ChangeReview struct {
 
 type EditingPresentation struct {
 	Title string
+	Facts []EditingFact
 	Field EditingField
 }
+
+type EditingFact struct{ Label, Value string }
 
 type PlanPresentation struct {
 	Identity                             PlanIdentity
@@ -148,10 +151,12 @@ func validatedChangeReview(review ChangeReview) ChangeReview {
 		return ChangeReview{Plan: &copy}
 	}
 	if editing := review.Editing; editing != nil {
-		if !safeLine(editing.Title) || !safeIdentifier(editing.Field.Identity) || !safeLine(editing.Field.Label) || !safeOptionalLine(editing.Field.Value) {
+		if !safeLine(editing.Title) || !safeEditingFacts(editing.Facts) || !safeIdentifier(editing.Field.Identity) || !safeLine(editing.Field.Label) || !safeOptionalLine(editing.Field.Value) {
 			return invalidChangeReview()
 		}
-		return ChangeReview{Editing: editing}
+		copy := *editing
+		copy.Facts = append([]EditingFact(nil), editing.Facts...)
+		return ChangeReview{Editing: &copy}
 	}
 	correction := review.Correction
 	correctionRoute := correction.FixWithSBXR || len(correction.OwnerSteps) > 0
@@ -219,6 +224,18 @@ func safeSelections(values []CorrectionSelection) bool {
 	return true
 }
 
+func safeEditingFacts(values []EditingFact) bool {
+	if len(values) > 8 {
+		return false
+	}
+	for _, value := range values {
+		if !safeLine(value.Label) || !safeLine(value.Value) {
+			return false
+		}
+	}
+	return true
+}
+
 func safeOptionalLine(value string) bool { return value == "" || safeLine(value) }
 
 func safeLine(value string) bool {
@@ -276,7 +293,11 @@ func changeReviewLines(review ChangeReview, width, height, page int) []string {
 		return append(lines, "", "> Apply exact one-use Plan", "  Esc Previous plan section or safe editing")
 	}
 	if editing := review.Editing; editing != nil {
-		return []string{"SAFE EDITING - " + editing.Title, "", "No Plan, Change Set, rollback material, or sudo exists.", editing.Field.Label + ": " + editing.Field.Value, "", "> Review updated request", "  Esc Back"}
+		lines := []string{"SAFE EDITING - " + editing.Title, "", "No Plan, Change Set, rollback material, or sudo exists."}
+		for _, fact := range editing.Facts {
+			lines = append(lines, fact.Label+": "+fact.Value)
+		}
+		return append(lines, editing.Field.Label+": "+editing.Field.Value, "", "> Review updated request", "  Esc Back")
 	}
 	correction := review.Correction
 	if correction == nil {

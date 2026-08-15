@@ -14,7 +14,6 @@ import (
 	"math/big"
 	"net"
 	"net/http"
-	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -107,6 +106,7 @@ func (a Adapter) Observe(request networkpolicy.ObservationRequest) (networkpolic
 		Ephemeral: a.ephemeralRange(),
 		Checksums: map[string]string{},
 	}
+	observed.SSH.Listener = observedSSHListener(observed.Listeners, observed.SSH)
 	if request.ReclamationReview {
 		observed.Reclamation, err = a.reclamationFacts(observed.ResourcePaths, observed.Listeners)
 		if err != nil {
@@ -1117,45 +1117,16 @@ func (a Adapter) publicAddresses() (ipv4, ipv6 []string) {
 }
 
 func usablePublicAddress(ip net.IP) bool {
-	address, ok := netip.AddrFromSlice(ip)
-	if !ok {
-		return false
-	}
-	address = address.Unmap()
-	if !address.IsGlobalUnicast() {
-		return false
-	}
-	blocked := ipv6SpecialUse
-	if address.Is4() {
-		blocked = ipv4SpecialUse
-	} else if !netip.MustParsePrefix("2000::/3").Contains(address) {
-		return false
-	}
-	for _, prefix := range blocked {
-		if prefix.Contains(address) {
-			return false
-		}
-	}
-	return true
+	return networkpolicy.UsablePublicAddress(ip.String())
 }
 
-var ipv4SpecialUse = prefixes(
-	"0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16",
-	"172.16.0.0/12", "192.0.0.0/24", "192.0.2.0/24", "192.88.99.0/24", "192.168.0.0/16",
-	"198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4",
-)
-
-var ipv6SpecialUse = prefixes(
-	"::/128", "::1/128", "::ffff:0:0/96", "64:ff9b::/96", "100::/64", "2001::/23", "2001:db8::/32",
-	"2002::/16", "3fff::/20", "fc00::/7", "fe80::/10", "ff00::/8",
-)
-
-func prefixes(values ...string) []netip.Prefix {
-	result := make([]netip.Prefix, 0, len(values))
-	for _, value := range values {
-		result = append(result, netip.MustParsePrefix(value))
+func observedSSHListener(listeners []networkpolicy.Listener, facts networkpolicy.SSHFacts) string {
+	for _, listener := range listeners {
+		if listener.Port == facts.DetectedPort && listener.Protocol == networkpolicy.TCP && listener.Service == facts.Service && networkpolicy.ListenerCoversAddress(listener.Address, facts.ServerAddress) {
+			return net.JoinHostPort(listener.Address, strconv.Itoa(int(listener.Port))) + "/tcp"
+		}
 	}
-	return result
+	return ""
 }
 
 func (a Adapter) sshFacts() networkpolicy.SSHFacts {
@@ -1169,6 +1140,7 @@ func (a Adapter) sshFacts() networkpolicy.SSHFacts {
 		facts.CurrentSessions = []string{checksum([]byte(os.Getenv("SSH_CONNECTION")))}
 	}
 	if sessions, err := a.privilegedOutput("who"); err == nil {
+		facts.SessionsComplete = true
 		for _, session := range strings.Split(strings.TrimSpace(string(sessions)), "\n") {
 			if session != "" {
 				facts.CurrentSessions = append(facts.CurrentSessions, checksum([]byte(session)))
@@ -1180,9 +1152,6 @@ func (a Adapter) sshFacts() networkpolicy.SSHFacts {
 			facts.Service = service
 			break
 		}
-	}
-	if facts.DetectedPort != 0 {
-		facts.Listener = net.JoinHostPort(facts.ServerAddress, strconv.Itoa(int(facts.DetectedPort))) + "/tcp"
 	}
 	user := os.Getenv("SUDO_USER")
 	if user == "" {

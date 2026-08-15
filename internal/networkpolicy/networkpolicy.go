@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/netip"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -263,6 +264,7 @@ type SSHFacts struct {
 	DetectedPort                                                uint16
 	ServerAddress                                               string
 	CurrentSessions                                             []string
+	SessionsComplete                                            bool
 	Service, Listener, AuthorizedKeysPath, AuthorizedKeysSHA256 string
 }
 
@@ -1064,6 +1066,74 @@ type Interface struct{ adapter Adapter }
 
 func New(adapter Adapter) Interface { return Interface{adapter: adapter} }
 
+type InstallationPreflightResult struct {
+	ActiveSSHPort    uint16
+	UsablePublicIPv4 []string
+	Failure          *Finding
+}
+
+func (i Interface) InstallationPreflight() InstallationPreflightResult {
+	failure := func(found string) InstallationPreflightResult {
+		finding := requiredFailure("NETWORK-INSTALLATION-SSH-UNPROVED", "The active SSH session could not be proved", found, "one active ssh.service or sshd.service session with one exact listener and detected port", "Installation cannot preserve SSH access from incomplete or contradictory facts", Fix{OwnerChecklist: []string{"Reconnect through one active SSH session, or use the VPS provider console to restore SSH, then start Installation again."}})
+		return InstallationPreflightResult{Failure: &finding}
+	}
+	if i.adapter == nil {
+		return failure("the Ubuntu network Adapter is unavailable")
+	}
+	observed, err := i.adapter.Observe(ObservationRequest{Stage: PreApproval, Scope: LocalObservations})
+	if err != nil {
+		return failure("the local Ubuntu observation failed")
+	}
+	ssh := observed.SSH
+	_, addressErr := netip.ParseAddr(ssh.ServerAddress)
+	validSessions := len(ssh.CurrentSessions) > 0 && slices.IndexFunc(ssh.CurrentSessions, func(value string) bool { return !validSHA256(value) }) == -1
+	validListener := slices.ContainsFunc(observed.Listeners, func(listener Listener) bool {
+		return listener.Port == ssh.DetectedPort && listener.Protocol == TCP && listener.Service == ssh.Service && ListenerCoversAddress(listener.Address, ssh.ServerAddress) && ssh.Listener == net.JoinHostPort(listener.Address, fmt.Sprint(listener.Port))+"/tcp"
+	})
+	if ssh.DetectedPort == 0 || addressErr != nil || !ssh.SessionsComplete || !validSessions || ssh.Service != "ssh.service" && ssh.Service != "sshd.service" || !validListener {
+		return failure(fmt.Sprintf("port %d, service %q, listener %q, and %d current session proofs", ssh.DetectedPort, ssh.Service, ssh.Listener, len(ssh.CurrentSessions)))
+	}
+	addresses := slices.Clone(observed.PublicIPv4)
+	slices.Sort(addresses)
+	addresses = slices.Compact(addresses)
+	if slices.IndexFunc(addresses, func(value string) bool { return !UsablePublicAddress(value) }) != -1 {
+		return failure("the local interface observation included an unusable public-address candidate")
+	}
+	return InstallationPreflightResult{ActiveSSHPort: ssh.DetectedPort, UsablePublicIPv4: addresses}
+}
+
+func UsablePublicAddress(value string) bool {
+	address, err := netip.ParseAddr(value)
+	if err != nil || !address.IsGlobalUnicast() {
+		return false
+	}
+	blocked := ipv6SpecialUse
+	if address.Is4() {
+		blocked = ipv4SpecialUse
+	} else if !netip.MustParsePrefix("2000::/3").Contains(address) {
+		return false
+	}
+	for _, prefix := range blocked {
+		if prefix.Contains(address) {
+			return false
+		}
+	}
+	return true
+}
+
+var (
+	ipv4SpecialUse = addressPrefixes("0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.0.0.0/24", "192.0.2.0/24", "192.88.99.0/24", "192.168.0.0/16", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4")
+	ipv6SpecialUse = addressPrefixes("::/128", "::1/128", "::ffff:0:0/96", "64:ff9b::/96", "100::/64", "2001::/23", "2001:db8::/32", "2002::/16", "3fff::/20", "fc00::/7", "fe80::/10", "ff00::/8")
+)
+
+func addressPrefixes(values ...string) []netip.Prefix {
+	result := make([]netip.Prefix, len(values))
+	for index, value := range values {
+		result[index] = netip.MustParsePrefix(value)
+	}
+	return result
+}
+
 func (i Interface) Evaluate(request Request) Result {
 	result := Result{Baseline: request.Intent.Baseline, Outcome: Healthy, Bounds: CheckBounds{DeterministicAttempts: 1, TemporaryAttempts: 3, TemporaryWindowSeconds: 60, LocalHealthSeconds: 60, CloudflareOwner: "Cloudflare Tunnel", ACMEOwner: "Certificate Lifecycle"}, Renewal: RenewalFreshness{ReevaluateAfterGlobalLockWait: true, RebuildOneUsePlan: true}, intent: request.Intent}
 	if !validRequest(request) {
@@ -1798,7 +1868,7 @@ func rebuiltArtifacts() [7]RebuiltArtifact {
 func currentSSHListener(listener Listener, listeners []Listener, facts SSHFacts) bool {
 	var current Listener
 	for _, candidate := range listeners {
-		if candidate.Port == facts.DetectedPort && candidate.Protocol == TCP && coversAddress(candidate.Address, facts.ServerAddress) {
+		if candidate.Port == facts.DetectedPort && candidate.Protocol == TCP && ListenerCoversAddress(candidate.Address, facts.ServerAddress) {
 			current = candidate
 			break
 		}
@@ -1812,7 +1882,7 @@ func currentSSHListener(listener Listener, listeners []Listener, facts SSHFacts)
 	return current.Process != "" && listener.Process == current.Process || current.Service != "" && listener.Service == current.Service
 }
 
-func coversAddress(listenerAddress, serverAddress string) bool {
+func ListenerCoversAddress(listenerAddress, serverAddress string) bool {
 	server := net.ParseIP(serverAddress)
 	if server == nil {
 		return false

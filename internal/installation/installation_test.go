@@ -630,7 +630,7 @@ func TestInstallationInterfaceValidatesDependenciesAndTypedDraft(t *testing.T) {
 	}
 	module := newTestInstallation(t, composedNetworkObserver{}, nil)
 	result := module.Review(t.Context(), Draft{})
-	if result.Invalid == nil || result.Invalid.Field != "release-tag" || result.Plan != nil || result.Reclamation != nil {
+	if result.Invalid == nil || result.Invalid.Field != "domain" || result.Plan != nil || result.Reclamation != nil {
 		t.Fatalf("invalid Draft = %+v", result)
 	}
 }
@@ -643,7 +643,7 @@ func TestInstallationInterfaceOwnsPartialDraftUntilDiscard(t *testing.T) {
 	if result := module.Review(t.Context(), Draft{}); result.Invalid == nil || result.Invalid.Field != "domain" {
 		t.Fatalf("active process forgot partial draft = %+v", result)
 	}
-	if result := module.Review(t.Context(), DiscardDraft()); result.Invalid == nil || result.Invalid.Field != "release-tag" {
+	if result := module.Review(t.Context(), DiscardDraft()); result.Invalid == nil || result.Invalid.Field != "domain" {
 		t.Fatalf("discard retained partial draft = %+v", result)
 	}
 }
@@ -656,12 +656,9 @@ func TestInstallationReviewOwnsFirstDraftDefaultsAndProgression(t *testing.T) {
 		update   Draft
 		want     string
 	}{
-		{"release-tag", Draft{SubmittedField: "release-tag", Tag: complete.Tag, Architecture: complete.Architecture}, ""},
 		{"domain", Draft{SubmittedField: "domain", Installation: softwarelifecycle.InstallationDraft{Domain: complete.Installation.Domain}}, ""},
 		{"owner-email", Draft{SubmittedField: "owner-email", Installation: softwarelifecycle.InstallationDraft{OwnerEmail: complete.Installation.OwnerEmail}}, ""},
-		{"public-ipv4", Draft{SubmittedField: "public-ipv4", Installation: softwarelifecycle.InstallationDraft{PublicIPv4: complete.Installation.PublicIPv4}}, ""},
-		{"primary-address", Draft{SubmittedField: "primary-address", Installation: softwarelifecycle.InstallationDraft{PrimaryAddress: complete.Installation.PrimaryAddress}}, ""},
-		{"ssh-port", Draft{SubmittedField: "ssh-port", Installation: softwarelifecycle.InstallationDraft{SSHPort: 22}}, ""},
+		{"public-ipv4", Draft{SubmittedField: "public-ipv4", Installation: softwarelifecycle.InstallationDraft{PublicIPv4: complete.Installation.PublicIPv4}}, complete.Installation.PublicIPv4},
 		{"reality-port", Draft{SubmittedField: "reality-port", Installation: softwarelifecycle.InstallationDraft{RealityPort: 443}}, "443"},
 		{"hysteria2-port", Draft{SubmittedField: "hysteria2-port", Installation: softwarelifecycle.InstallationDraft{Hysteria2Port: 443}}, "443"},
 		{"tuic-port", Draft{SubmittedField: "tuic-port", Installation: softwarelifecycle.InstallationDraft{TUICPort: 8443}}, "8443"},
@@ -678,6 +675,12 @@ func TestInstallationReviewOwnsFirstDraftDefaultsAndProgression(t *testing.T) {
 		if review.Invalid == nil || review.Invalid.Field != field.identity || review.Invalid.Value != field.want {
 			t.Fatalf("next field before %s = %+v", field.identity, review)
 		}
+		if len(review.Invalid.Facts) < 2 || review.Invalid.Facts[0] != (ReviewFact{Label: "Running release tag", Value: complete.Tag}) || review.Invalid.Facts[1] != (ReviewFact{Label: "Active SSH port", Value: "22"}) {
+			t.Fatalf("read-only Installation facts = %+v", review.Invalid.Facts)
+		}
+		if field.identity == "public-ipv4" && !review.Invalid.Detected {
+			t.Fatalf("proven Public IPv4 was not marked detected: %+v", review.Invalid)
+		}
 		review = module.Review(t.Context(), field.update)
 		if field.identity == "reality-server-name" && review.Plan == nil {
 			t.Fatalf("complete default journey = %+v", review)
@@ -685,8 +688,60 @@ func TestInstallationReviewOwnsFirstDraftDefaultsAndProgression(t *testing.T) {
 	}
 }
 
+func TestInstallationReviewGuidesUnprovedAndAmbiguousNetworkFacts(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		preflight networkpolicy.InstallationPreflightResult
+		wantValue string
+	}{
+		{name: "zero public IPv4 candidates", preflight: networkpolicy.InstallationPreflightResult{ActiveSSHPort: 2222}},
+		{name: "multiple public IPv4 candidates", preflight: networkpolicy.InstallationPreflightResult{ActiveSSHPort: 2222, UsablePublicIPv4: []string{"1.1.1.1", "9.9.9.9"}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			module := newTestInstallationWithPreflight(t, composedNetworkObserver{}, test.preflight)
+			if review := module.Review(t.Context(), Draft{}); review.Invalid == nil || review.Invalid.Field != "domain" || len(review.Invalid.Facts) < 2 || review.Invalid.Facts[1] != (ReviewFact{Label: "Active SSH port", Value: "2222"}) {
+				t.Fatalf("initial Review = %+v", review)
+			}
+			if review := module.Review(t.Context(), Draft{SubmittedField: "domain", SubmittedValue: "example.com"}); review.Invalid == nil || review.Invalid.Field != "owner-email" {
+				t.Fatalf("Domain Review = %+v", review)
+			}
+			review := module.Review(t.Context(), Draft{SubmittedField: "owner-email", SubmittedValue: "owner@example.com"})
+			if review.Invalid == nil || review.Invalid.Field != "public-ipv4" || review.Invalid.Value != test.wantValue || review.Invalid.Detected || len(review.Invalid.Facts) < 3 || review.Invalid.Facts[2].Label != "Public IPv4 guidance" {
+				t.Fatalf("guided Public IPv4 Review = %+v", review)
+			}
+			module.Review(t.Context(), Draft{SubmittedField: "public-ipv4", SubmittedValue: "8.8.8.8"})
+			if module.draft.Installation.PublicIPv4 != "8.8.8.8" || module.draft.Installation.PrimaryAddress != "8.8.8.8" || module.draft.Installation.SSHPort != 2222 {
+				t.Fatalf("derived Installation network facts = %+v", module.draft.Installation)
+			}
+		})
+	}
+
+	finding := networkpolicy.Finding{Code: "NETWORK-INSTALLATION-SSH-UNPROVED", Problem: "The active SSH session could not be proved", Found: "no session", Required: "one active SSH session", WhyStopped: "SSH access cannot be preserved", Fix: networkpolicy.Fix{OwnerChecklist: []string{"Reconnect through SSH, then start Installation again."}}}
+	module := newTestInstallationWithPreflight(t, composedNetworkObserver{}, networkpolicy.InstallationPreflightResult{Failure: &finding})
+	review := module.Review(t.Context(), Draft{})
+	if review.Correction == nil || review.Correction.InputLabel != "" || len(review.Correction.OwnerSteps) != 1 || review.Invalid != nil {
+		t.Fatalf("unproved SSH did not stop with exact recovery guidance: %+v", review)
+	}
+}
+
+func TestInstallationReviewRejectsSpecialUseIPv4AndDerivesTheBatchPrimaryAddress(t *testing.T) {
+	module := newTestInstallationWithPreflight(t, composedNetworkObserver{}, networkpolicy.InstallationPreflightResult{ActiveSSHPort: 22})
+	module.Review(t.Context(), Draft{SubmittedField: "domain", SubmittedValue: "example.com"})
+	module.Review(t.Context(), Draft{SubmittedField: "owner-email", SubmittedValue: "owner@example.com"})
+	review := module.Review(t.Context(), Draft{SubmittedField: "public-ipv4", SubmittedValue: "10.0.0.1"})
+	if review.Invalid == nil || review.Invalid.Field != "public-ipv4" || module.draft.Installation.PrimaryAddress != "" {
+		t.Fatalf("special-use Public IPv4 Review = %+v, draft = %+v", review, module.draft.Installation)
+	}
+
+	module = newTestInstallationWithPreflight(t, composedNetworkObserver{}, networkpolicy.InstallationPreflightResult{ActiveSSHPort: 22, UsablePublicIPv4: []string{"1.1.1.1"}})
+	review = module.Review(t.Context(), composedDraft(t))
+	if review.Plan == nil || module.draft.Installation.PublicIPv4 != "8.8.8.8" || module.draft.Installation.PrimaryAddress != "8.8.8.8" {
+		t.Fatalf("batch-derived Primary subscription address = %+v, draft = %+v", review, module.draft.Installation)
+	}
+}
+
 func TestInstallationReviewShowsEveryExplicitPortReplacementInThePlan(t *testing.T) {
-	module := newTestInstallation(t, replacementPortObserver{}, nil)
+	module := newTestInstallationWithPreflight(t, replacementPortObserver{}, networkpolicy.InstallationPreflightResult{ActiveSSHPort: 2222, UsablePublicIPv4: []string{"8.8.8.8"}})
 	draft := composedDraft(t)
 	draft.Installation.SSHPort = 2222
 	draft.Installation.RealityPort = 1443
@@ -704,7 +759,7 @@ func TestInstallationReviewShowsEveryExplicitPortReplacementInThePlan(t *testing
 	}
 }
 
-func TestInstallationReviewReturnsAReleaseFailureToTheReleaseField(t *testing.T) {
+func TestInstallationReviewKeepsTheRunningReleaseReadOnlyAfterCandidateFailure(t *testing.T) {
 	module := newTestInstallation(t, composedNetworkObserver{}, nil)
 	calls := 0
 	original := module.dependencies.ReleaseCandidate
@@ -716,12 +771,12 @@ func TestInstallationReviewReturnsAReleaseFailureToTheReleaseField(t *testing.T)
 		return original(ctx, tag, architecture)
 	}
 	review := module.Review(t.Context(), composedDraft(t))
-	if review.Invalid == nil || review.Invalid.Field != "release-tag" || review.Correction != nil {
-		t.Fatalf("release failure was not field-local: %+v", review)
+	if review.Correction == nil || review.Correction.InputLabel != "" || review.Invalid != nil {
+		t.Fatalf("running release failure became editable: %+v", review)
 	}
-	review = module.Review(t.Context(), Draft{SubmittedField: "release-tag", SubmittedValue: "v1.0.0", Architecture: softwarelifecycle.AMD64})
+	review = module.Review(t.Context(), Draft{})
 	if review.Plan == nil {
-		t.Fatalf("corrected release lost the complete earlier draft: %+v", review)
+		t.Fatalf("release retry lost the complete earlier draft: %+v", review)
 	}
 }
 
@@ -745,7 +800,7 @@ func TestInstallationInterfaceCancellationBeforeApplyDiscardsDraftAndApproval(t 
 	if result := module.Apply(t.Context(), review.Approval); result.Kind != ApplyRefused {
 		t.Fatalf("cancelled Approval remained usable: %+v", result)
 	}
-	if fresh := module.Review(t.Context(), Draft{}); fresh.Invalid == nil || fresh.Invalid.Field != "release-tag" {
+	if fresh := module.Review(t.Context(), Draft{}); fresh.Invalid == nil || fresh.Invalid.Field != "domain" {
 		t.Fatalf("cancelled draft remained available: %+v", fresh)
 	}
 }
@@ -959,6 +1014,15 @@ func composedDraft(t *testing.T) Draft {
 }
 
 func newTestInstallation(t *testing.T, observer networkpolicy.Adapter, launch func(context.Context, softwareubuntu.InstallHandoffRequest, <-chan struct{}) (softwareubuntu.InstallApplyOutcome, error)) *Interface {
+	request := composedInstallRequest(t)
+	return newTestInstallationWith(t, observer, launch, networkpolicy.InstallationPreflightResult{ActiveSSHPort: request.Draft.SSHPort, UsablePublicIPv4: []string{request.Draft.PublicIPv4}})
+}
+
+func newTestInstallationWithPreflight(t *testing.T, observer networkpolicy.Adapter, preflight networkpolicy.InstallationPreflightResult) *Interface {
+	return newTestInstallationWith(t, observer, nil, preflight)
+}
+
+func newTestInstallationWith(t *testing.T, observer networkpolicy.Adapter, launch func(context.Context, softwareubuntu.InstallHandoffRequest, <-chan struct{}) (softwareubuntu.InstallApplyOutcome, error), preflight networkpolicy.InstallationPreflightResult) *Interface {
 	t.Helper()
 	request := composedInstallRequest(t)
 	api := interfaceTestAPI{}
@@ -969,6 +1033,10 @@ func newTestInstallation(t *testing.T, observer networkpolicy.Adapter, launch fu
 		}
 	}
 	module, err := New(Dependencies{
+		Preflight: func() networkpolicy.InstallationPreflightResult { return preflight },
+		RunningRelease: func() (RunningRelease, error) {
+			return RunningRelease{Tag: request.Tag, Architecture: request.Architecture}, nil
+		},
 		ReleaseCandidate: func(context.Context, string, softwarelifecycle.Architecture) (softwarelifecycle.InstallCandidateHandoff, error) {
 			return request.Candidate, nil
 		},
@@ -1067,7 +1135,7 @@ func composedInstallRequest(t *testing.T) softwareubuntu.InstallHandoffRequest {
 	staged := softwarelifecycle.StagedRelease{Identity: identity, Build: softwarelifecycle.EmbeddedBuildIdentity{Repository: identity.Repository, Tag: identity.Tag, Commit: identity.Commit, PayloadSHA256: strings.Repeat("3", 64)}, Architecture: softwarelifecycle.AMD64, ExecutableSHA256: strings.Repeat("4", 64), ComponentsSHA256: componentAsset.SHA256, InstallPath: softwarelifecycle.ReleaseInstallPath(identity), StateSchema: 2}
 	return softwareubuntu.InstallHandoffRequest{
 		Schema: 1, Session: strings.Repeat("a", 64), Tag: identity.Tag, Architecture: softwarelifecycle.AMD64,
-		Draft:               softwarelifecycle.InstallationDraft{Domain: "example.com", OwnerEmail: "owner@example.com", PublicIPv4: "192.0.2.10", PrimaryAddress: "192.0.2.10", SSHPort: 22, RealityPort: 443, Hysteria2Port: 443, TUICPort: 8443, AnyTLSPort: 9443, SubscriptionPort: 10443},
+		Draft:               softwarelifecycle.InstallationDraft{Domain: "example.com", OwnerEmail: "owner@example.com", PublicIPv4: "8.8.8.8", PrimaryAddress: "8.8.8.8", SSHPort: 22, RealityPort: 443, Hysteria2Port: 443, TUICPort: 8443, AnyTLSPort: 9443, SubscriptionPort: 10443},
 		CloudflareAccountID: strings.Repeat("b", 32), CloudflareZoneID: strings.Repeat("c", 32), CloudflareToken: "cfat_COMPOSED-INSTALL-SECRET-MARKER-000000000", RealityTarget: "www.microsoft.com:443", RealityServerName: "www.microsoft.com", Entropy: bytes.Repeat([]byte{0x42}, 32),
 		Candidate: softwarelifecycle.InstallCandidateHandoff{Verified: verified, Staged: staged, ApplicationAsset: applicationAsset, ComponentAsset: componentAsset, ApplicationArchive: application, ComponentArchive: components},
 	}
@@ -1078,7 +1146,7 @@ type composedNetworkObserver struct{}
 func (composedNetworkObserver) Observe(request networkpolicy.ObservationRequest) (networkpolicy.Observations, error) {
 	return networkpolicy.Observations{
 		Host:       networkpolicy.HostFacts{UbuntuVersion: "24.04.3", UbuntuServer: true, Architecture: "amd64", Systemd: true, LogicalCPUs: 1, PhysicalRAM: 1024 << 20},
-		PublicIPv4: []string{"192.0.2.10"}, SSH: networkpolicy.SSHFacts{DetectedPort: 22, ServerAddress: "192.0.2.10", CurrentSessions: []string{strings.Repeat("6", 64)}}, Firewall: networkpolicy.FirewallFacts{SBXRTableState: "absent", RootVerified: request.Stage == networkpolicy.PostApproval}, Routes: networkpolicy.RouteFacts{IPv4: "default via 192.0.2.1"},
+		PublicIPv4: []string{"8.8.8.8"}, SSH: networkpolicy.SSHFacts{DetectedPort: 22, ServerAddress: "8.8.8.8", CurrentSessions: []string{strings.Repeat("6", 64)}}, Firewall: networkpolicy.FirewallFacts{SBXRTableState: "absent", RootVerified: request.Stage == networkpolicy.PostApproval}, Routes: networkpolicy.RouteFacts{IPv4: "default via 192.0.2.1"},
 		Outbound: networkpolicy.OutboundFacts{DNS: true, GitHubHTTPS: true, GitHubAttestationHTTPS: true, CloudflareHTTPS: true, ACMEHTTPS: true, CertificateEndpointsHTTPS: true, TimeService: true, TunnelTCP7844: true, TunnelUDP7844: true},
 		Disk:     networkpolicy.DiskFacts{FilesystemBytes: 20 << 30, AvailableBytes: 3 << 30}, Time: networkpolicy.TimeFacts{Synchronized: true, Owner: "systemd-timesyncd"}, OwnerFacts: networkpolicy.OwnerFacts{DNS: "fresh", Tunnel: "fresh"},
 		Certificate: networkpolicy.CertificateFacts{DNS: networkpolicy.DNSFacts{Hostname: "direct.example.com"}, CAA: networkpolicy.CAAFacts{Issuer: "letsencrypt.org", HTTP01Allowed: true}}, Checksums: map[string]string{"sshd_config": "sha256:ssh", "nftables": "sha256:nft"},

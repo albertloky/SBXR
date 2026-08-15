@@ -58,8 +58,21 @@ func TestProductionAdapterKeepsSSHObservationOutsideCachedSudo(t *testing.T) {
 	t.Setenv("SSH_CONNECTION", "203.0.113.10 50000 198.51.100.20 22")
 	t.Setenv("SUDO_USER", "owner")
 	facts := adapter.sshFacts()
-	if facts.Service != "ssh.service" || facts.Listener != "198.51.100.20:22/tcp" || facts.AuthorizedKeysPath != "/home/owner/.ssh/authorized_keys" || len(facts.AuthorizedKeysSHA256) != 64 || len(facts.CurrentSessions) != 2 {
+	if facts.Service != "ssh.service" || facts.Listener != "" || !facts.SessionsComplete || facts.AuthorizedKeysPath != "/home/owner/.ssh/authorized_keys" || len(facts.AuthorizedKeysSHA256) != 64 || len(facts.CurrentSessions) != 2 {
 		t.Fatalf("SSH facts = %+v", facts)
+	}
+}
+
+func TestObservedSSHListenerRequiresIndependentSocketOwnership(t *testing.T) {
+	facts := networkpolicy.SSHFacts{DetectedPort: 2222, ServerAddress: "203.0.113.10", Service: "ssh.service"}
+	listener := networkpolicy.Listener{Address: "0.0.0.0", Port: 2222, Protocol: networkpolicy.TCP, Process: "sshd", Service: "ssh.service"}
+	if got := observedSSHListener([]networkpolicy.Listener{listener}, facts); got != "0.0.0.0:2222/tcp" {
+		t.Fatalf("observed SSH listener = %q", got)
+	}
+	for _, changed := range []networkpolicy.Listener{{Address: "0.0.0.0", Port: 22, Protocol: networkpolicy.TCP, Service: "ssh.service"}, {Address: "0.0.0.0", Port: 2222, Protocol: networkpolicy.TCP, Service: "other.service"}, {Address: "127.0.0.1", Port: 2222, Protocol: networkpolicy.TCP, Service: "ssh.service"}} {
+		if got := observedSSHListener([]networkpolicy.Listener{changed}, facts); got != "" {
+			t.Fatalf("contradictory SSH listener accepted: %q", got)
+		}
 	}
 }
 

@@ -24,6 +24,59 @@ type stagedAdapter struct {
 	failExternal bool
 }
 
+func TestInstallationPreflightReturnsOnlyProvenLocalNetworkFacts(t *testing.T) {
+	validSSH := networkpolicy.SSHFacts{DetectedPort: 2222, ServerAddress: "203.0.113.10", CurrentSessions: []string{strings.Repeat("a", 64)}, SessionsComplete: true, Service: "ssh.service", Listener: "0.0.0.0:2222/tcp"}
+	validListener := networkpolicy.Listener{Address: "0.0.0.0", Port: 2222, Protocol: networkpolicy.TCP, Process: "sshd", Service: "ssh.service"}
+	for _, test := range []struct {
+		name      string
+		addresses []string
+		want      []string
+	}{
+		{name: "zero candidates"},
+		{name: "one candidate", addresses: []string{"8.8.8.8"}, want: []string{"8.8.8.8"}},
+		{name: "multiple candidates", addresses: []string{"9.9.9.9", "1.1.1.1"}, want: []string{"1.1.1.1", "9.9.9.9"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			adapter := &stagedAdapter{observed: networkpolicy.Observations{SSH: validSSH, Listeners: []networkpolicy.Listener{validListener}, PublicIPv4: test.addresses}}
+			result := networkpolicy.New(adapter).InstallationPreflight()
+			if result.Failure != nil || result.ActiveSSHPort != 2222 || !slices.Equal(result.UsablePublicIPv4, test.want) {
+				t.Fatalf("Installation preflight = %+v", result)
+			}
+			if len(adapter.requests) != 1 || adapter.requests[0].Scope != networkpolicy.LocalObservations {
+				t.Fatalf("Installation preflight observations = %+v", adapter.requests)
+			}
+		})
+	}
+
+	for _, test := range []struct {
+		name   string
+		change func(*networkpolicy.SSHFacts)
+	}{
+		{name: "missing port", change: func(facts *networkpolicy.SSHFacts) { facts.DetectedPort = 0 }},
+		{name: "malformed address", change: func(facts *networkpolicy.SSHFacts) { facts.ServerAddress = "not-an-address" }},
+		{name: "missing session", change: func(facts *networkpolicy.SSHFacts) { facts.CurrentSessions = nil }},
+		{name: "incomplete session enumeration", change: func(facts *networkpolicy.SSHFacts) { facts.SessionsComplete = false }},
+		{name: "inactive service", change: func(facts *networkpolicy.SSHFacts) { facts.Service = "" }},
+		{name: "contradictory listener", change: func(facts *networkpolicy.SSHFacts) { facts.Listener = "0.0.0.0:22/tcp" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ssh := validSSH
+			test.change(&ssh)
+			result := networkpolicy.New(staticAdapter{observed: networkpolicy.Observations{SSH: ssh, Listeners: []networkpolicy.Listener{validListener}}}).InstallationPreflight()
+			if result.Failure == nil || result.Failure.Code != "NETWORK-INSTALLATION-SSH-UNPROVED" || len(result.Failure.Fix.OwnerChecklist) == 0 {
+				t.Fatalf("invalid SSH preflight = %+v", result)
+			}
+		})
+	}
+
+	for _, listeners := range [][]networkpolicy.Listener{nil, {{Address: "0.0.0.0", Port: 22, Protocol: networkpolicy.TCP, Process: "sshd", Service: "ssh.service"}}, {{Address: "0.0.0.0", Port: 2222, Protocol: networkpolicy.TCP, Process: "other", Service: "other.service"}}, {{Address: "127.0.0.1", Port: 2222, Protocol: networkpolicy.TCP, Process: "sshd", Service: "ssh.service"}}} {
+		result := networkpolicy.New(staticAdapter{observed: networkpolicy.Observations{SSH: validSSH, Listeners: listeners}}).InstallationPreflight()
+		if result.Failure == nil || result.Failure.Code != "NETWORK-INSTALLATION-SSH-UNPROVED" {
+			t.Fatalf("unproved observed SSH listener = %+v", result)
+		}
+	}
+}
+
 func TestCleanVPSAuthorityRechecksTheExactNetworkPolicyBaseline(t *testing.T) {
 	adapter := &stagedAdapter{observed: completeObservations()}
 	request := networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PostApproval}

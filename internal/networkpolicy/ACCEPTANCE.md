@@ -10,6 +10,7 @@ This record covers the Network Policy Module only. It is not Release Qualificati
 - `NETWORK-NFTABLES-OWNERSHIP`: `go test ./internal/networkpolicy -run 'TestEvaluate(IsolatedNftablesCandidateAndSSHSafety|NftablesIntervalsAndCompetingPolicy)'`
 - `NETWORK-COMPETING-MANAGER`: `go test ./internal/networkpolicy -run TestEvaluateNftablesIntervalsAndCompetingPolicy && go test ./internal/networkpolicy/adapter/ubuntu -run TestAdapterCollectsTypedFactsWithoutMutation`
 - `NETWORK-SSH-PRESERVATION`: `go test ./internal/networkpolicy -run TestEvaluateIsolatedNftablesCandidateAndSSHSafety`
+- `NETWORK-INSTALLATION-PREFLIGHT`: `go test ./internal/networkpolicy -run '^TestInstallationPreflightReturnsOnlyProvenLocalNetworkFacts$' -count=1`
 - `NETWORK-RETRY`: `go test ./internal/networkpolicy -run TestEvaluateBoundsOutboundAndRenewalFreshness`
 - `NETWORK-RECHECK`: `go test ./internal/networkpolicy -run 'TestEvaluate(BoundsOutboundAndRenewalFreshness|HTTP01OutsideFailureStaysExternal)'`
 - `NETWORK-PROVIDER-BOUNDARY`: `go test ./internal/networkpolicy -run TestEvaluateKeepsLocalAndOutsideProofDistinct`
@@ -23,6 +24,8 @@ This record covers the Network Policy Module only. It is not Release Qualificati
 - `NETWORK-REPOSITORY`: `go test ./...`
 
 `NETWORK-UBUNTU-SEAM` always runs the controlled read-only fixture check. `TestProductionUbuntuSeam` additionally collects real facts when the runner is Ubuntu; it is intentionally skipped elsewhere. Neither check applies nftables, changes a service, edits SSH, or writes host configuration.
+
+`NETWORK-INSTALLATION-PREFLIGHT` proves one active SSH port from the local service, listener, and every current session. It returns sorted usable local public IPv4 candidates without calling an external public-IP service. Missing or contradictory SSH facts stop with typed recovery guidance.
 
 ## Baseline procedure
 

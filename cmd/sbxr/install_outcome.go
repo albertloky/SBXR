@@ -7,7 +7,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -42,12 +41,9 @@ func (*installOutcome) String() string   { return "Clean VPS installation outcom
 func (*installOutcome) GoString() string { return "Clean VPS installation outcome: protected" }
 
 var installFields = []ownerconsole.EditingField{
-	{Identity: "release-tag", Label: "Release tag", Required: true},
 	{Identity: "domain", Label: "Domain", Required: true},
 	{Identity: "owner-email", Label: "Owner email", Required: true},
 	{Identity: "public-ipv4", Label: "Public IPv4", Required: true},
-	{Identity: "primary-address", Label: "Primary subscription address", Required: true},
-	{Identity: "ssh-port", Label: "SSH port", Value: "22", Required: true},
 	{Identity: "reality-port", Label: "REALITY port", Required: true},
 	{Identity: "hysteria2-port", Label: "Hysteria2 port", Required: true},
 	{Identity: "tuic-port", Label: "TUIC port", Required: true},
@@ -66,12 +62,24 @@ func newInstallOutcome() *installOutcome {
 }
 
 func newInstallationModule() (*installation.Interface, error) {
+	return newInstallationModuleWith(readOwnVersion, nil)
+}
+
+func newInstallationModuleWith(releaseSource func() (versionReport, error), preflightSource func() networkpolicy.InstallationPreflightResult) (*installation.Interface, error) {
 	stager := softwareubuntu.NewStager()
 	lifecycle := softwarelifecycle.New(softwaregithub.New(), softwarelifecycle.VerifierQualification{Version: softwaregithub.Version, SigningFingerprint: softwaregithub.SigningFingerprint}, time.Now, stager)
 	network := networkpolicy.New(networkubuntu.New())
+	if preflightSource == nil {
+		preflightSource = network.InstallationPreflight
+	}
 	api := cloudflaretunnel.NewProductionAPI()
 	cloudflare := cloudflaretunnel.New(api, cloudflaretunnel.SystemClock{})
 	return installation.New(installation.Dependencies{
+		Preflight: preflightSource,
+		RunningRelease: func() (installation.RunningRelease, error) {
+			report, err := releaseSource()
+			return installation.RunningRelease{Tag: report.Build.Tag, Architecture: report.Architecture}, err
+		},
 		ReleaseCandidate: func(ctx context.Context, tag string, architecture softwarelifecycle.Architecture) (softwarelifecycle.InstallCandidateHandoff, error) {
 			view := lifecycle.View(ctx, softwarelifecycle.ViewRequest{Tag: tag, Architecture: architecture, InstallationStatus: softwarelifecycle.NotInstalled})
 			candidate := view.InstallCandidate()
@@ -136,7 +144,7 @@ func (outcome *installOutcome) Edit(ctx context.Context, input ownerconsole.Edit
 	if module == nil {
 		return installCorrection(errors.New("Installation Module construction failed"))
 	}
-	review := module.Review(ctx, installation.Draft{SubmittedField: input.Field, SubmittedValue: input.Text, Architecture: softwarelifecycle.Architecture(runtime.GOARCH)})
+	review := module.Review(ctx, installation.Draft{SubmittedField: input.Field, SubmittedValue: input.Text})
 	outcome.mu.Lock()
 	defer outcome.mu.Unlock()
 	return outcome.presentReview(review)
@@ -149,10 +157,17 @@ func (outcome *installOutcome) presentReview(review installation.ReviewResult) o
 	if review.Invalid != nil {
 		for _, field := range installFields {
 			if field.Identity == review.Invalid.Field {
+				if review.Invalid.Detected {
+					field.Label += " (detected)"
+				}
 				if review.Invalid.Value != "" {
 					field.Value = review.Invalid.Value
 				}
-				return ownerconsole.ChangeReview{Editing: &ownerconsole.EditingPresentation{Title: "Clean VPS installation", Field: field}}
+				facts := make([]ownerconsole.EditingFact, len(review.Invalid.Facts))
+				for index, fact := range review.Invalid.Facts {
+					facts[index] = ownerconsole.EditingFact{Label: fact.Label, Value: fact.Value}
+				}
+				return ownerconsole.ChangeReview{Editing: &ownerconsole.EditingPresentation{Title: "Clean VPS installation", Facts: facts, Field: field}}
 			}
 		}
 		return installCorrection(errors.New(review.Invalid.Problem))

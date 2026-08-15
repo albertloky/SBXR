@@ -397,6 +397,20 @@ func TestRunPlanBackReturnsToSafeEditing(t *testing.T) {
 	}
 }
 
+func TestRunShowsReadOnlyInstallationFactsAndDetectedPublicIPv4(t *testing.T) {
+	review := ChangeReview{Editing: &EditingPresentation{
+		Title: "Clean VPS installation",
+		Facts: []EditingFact{{Label: "Running release tag", Value: "v1.0.7"}, {Label: "Active SSH port", Value: "2222"}},
+		Field: EditingField{Identity: "public-ipv4", Label: "Public IPv4 (detected)", Value: "8.8.8.8", Required: true},
+	}}
+	got := runTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: &outcomeStub{reviews: []ChangeReview{review}}}, 120, 36, "", "\x03\r")
+	for _, want := range []string{"Running release tag: v1.0.7", "Active SSH port: 2222", `Public IPv4 (detected): "8.8.8.8"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Installation editing omitted %q\n%s", want, got)
+		}
+	}
+}
+
 func TestRunPagesLongValidReviewsAtLargeSize(t *testing.T) {
 	t.Run("Plan", func(t *testing.T) {
 		review := completePlan("long-plan")
