@@ -648,6 +648,91 @@ func TestInstallationInterfaceOwnsPartialDraftUntilDiscard(t *testing.T) {
 	}
 }
 
+func TestInstallationReviewOwnsFirstDraftDefaultsAndProgression(t *testing.T) {
+	module := newTestInstallation(t, composedNetworkObserver{}, nil)
+	complete := composedDraft(t)
+	fields := []struct {
+		identity string
+		update   Draft
+		want     string
+	}{
+		{"release-tag", Draft{SubmittedField: "release-tag", Tag: complete.Tag, Architecture: complete.Architecture}, ""},
+		{"domain", Draft{SubmittedField: "domain", Installation: softwarelifecycle.InstallationDraft{Domain: complete.Installation.Domain}}, ""},
+		{"owner-email", Draft{SubmittedField: "owner-email", Installation: softwarelifecycle.InstallationDraft{OwnerEmail: complete.Installation.OwnerEmail}}, ""},
+		{"public-ipv4", Draft{SubmittedField: "public-ipv4", Installation: softwarelifecycle.InstallationDraft{PublicIPv4: complete.Installation.PublicIPv4}}, ""},
+		{"primary-address", Draft{SubmittedField: "primary-address", Installation: softwarelifecycle.InstallationDraft{PrimaryAddress: complete.Installation.PrimaryAddress}}, ""},
+		{"ssh-port", Draft{SubmittedField: "ssh-port", Installation: softwarelifecycle.InstallationDraft{SSHPort: 22}}, ""},
+		{"reality-port", Draft{SubmittedField: "reality-port", Installation: softwarelifecycle.InstallationDraft{RealityPort: 443}}, "443"},
+		{"hysteria2-port", Draft{SubmittedField: "hysteria2-port", Installation: softwarelifecycle.InstallationDraft{Hysteria2Port: 443}}, "443"},
+		{"tuic-port", Draft{SubmittedField: "tuic-port", Installation: softwarelifecycle.InstallationDraft{TUICPort: 8443}}, "8443"},
+		{"anytls-port", Draft{SubmittedField: "anytls-port", Installation: softwarelifecycle.InstallationDraft{AnyTLSPort: 9443}}, "9443"},
+		{"subscription-port", Draft{SubmittedField: "subscription-port", Installation: softwarelifecycle.InstallationDraft{SubscriptionPort: 10443}}, "10443"},
+		{"cloudflare-account", Draft{SubmittedField: "cloudflare-account", CloudflareAccountID: complete.CloudflareAccountID}, ""},
+		{"cloudflare-zone", Draft{SubmittedField: "cloudflare-zone", CloudflareZoneID: complete.CloudflareZoneID}, ""},
+		{"cloudflare-token", Draft{SubmittedField: "cloudflare-token", CloudflareToken: complete.CloudflareToken}, ""},
+		{"reality-target", Draft{SubmittedField: "reality-target", RealityTarget: complete.RealityTarget}, ""},
+		{"reality-server-name", Draft{SubmittedField: "reality-server-name", RealityServerName: complete.RealityServerName}, ""},
+	}
+	for _, field := range fields {
+		review := module.Review(t.Context(), Draft{})
+		if review.Invalid == nil || review.Invalid.Field != field.identity || review.Invalid.Value != field.want {
+			t.Fatalf("next field before %s = %+v", field.identity, review)
+		}
+		review = module.Review(t.Context(), field.update)
+		if field.identity == "reality-server-name" && review.Plan == nil {
+			t.Fatalf("complete default journey = %+v", review)
+		}
+	}
+}
+
+func TestInstallationReviewShowsEveryExplicitPortReplacementInThePlan(t *testing.T) {
+	module := newTestInstallation(t, replacementPortObserver{}, nil)
+	draft := composedDraft(t)
+	draft.Installation.SSHPort = 2222
+	draft.Installation.RealityPort = 1443
+	draft.Installation.Hysteria2Port = 2443
+	draft.Installation.TUICPort = 38443
+	draft.Installation.AnyTLSPort = 39443
+	draft.Installation.SubscriptionPort = 40443
+	review := module.Review(t.Context(), draft)
+	if review.Plan == nil {
+		t.Fatalf("replacement Review = %+v", review)
+	}
+	want := "Use SSH 2222/TCP, REALITY 1443/TCP, Hysteria2 2443/UDP, TUIC 38443/UDP, AnyTLS 39443/TCP, and Subscription HTTPS 40443/TCP"
+	if !slices.Contains(review.Plan.Effects, want) {
+		t.Fatalf("reviewed Plan omitted explicit replacements: %+v", review.Plan.Effects)
+	}
+}
+
+func TestInstallationReviewReturnsAReleaseFailureToTheReleaseField(t *testing.T) {
+	module := newTestInstallation(t, composedNetworkObserver{}, nil)
+	calls := 0
+	original := module.dependencies.ReleaseCandidate
+	module.dependencies.ReleaseCandidate = func(ctx context.Context, tag string, architecture softwarelifecycle.Architecture) (softwarelifecycle.InstallCandidateHandoff, error) {
+		calls++
+		if calls == 1 {
+			return softwarelifecycle.InstallCandidateHandoff{}, errors.New("release unavailable")
+		}
+		return original(ctx, tag, architecture)
+	}
+	review := module.Review(t.Context(), composedDraft(t))
+	if review.Invalid == nil || review.Invalid.Field != "release-tag" || review.Correction != nil {
+		t.Fatalf("release failure was not field-local: %+v", review)
+	}
+	review = module.Review(t.Context(), Draft{SubmittedField: "release-tag", SubmittedValue: "v1.0.0", Architecture: softwarelifecycle.AMD64})
+	if review.Plan == nil {
+		t.Fatalf("corrected release lost the complete earlier draft: %+v", review)
+	}
+}
+
+type replacementPortObserver struct{ composedNetworkObserver }
+
+func (replacementPortObserver) Observe(request networkpolicy.ObservationRequest) (networkpolicy.Observations, error) {
+	observed, err := (composedNetworkObserver{}).Observe(request)
+	observed.SSH.DetectedPort = 2222
+	return observed, err
+}
+
 func TestInstallationInterfaceCancellationBeforeApplyDiscardsDraftAndApproval(t *testing.T) {
 	module := newTestInstallation(t, composedNetworkObserver{}, nil)
 	review := module.Review(t.Context(), composedDraft(t))

@@ -146,9 +146,11 @@ Run:
 
 ```sh
 go test ./internal/softwarelifecycle/adapter/ubuntu -run '^Test(Approval|InstallApply|InstallExecutable)' -count=1
+go test ./internal/installation -run '^TestInstallation(InterfaceOwnsPartialDraftUntilDiscard|InterfaceCancellationBeforeApplyDiscardsDraftAndApproval|ReviewOwnsFirstDraftDefaultsAndProgression|ReviewShowsEveryExplicitPortReplacementInThePlan|ReviewReturnsAReleaseFailureToTheReleaseField)$' -count=1
+go test ./cmd/sbxr -run '^Test(InstallationBackDiscardsUnfinishedInput|LaterProcessStartsWithFreshInstallationInput|ProductionInstallationJourneyReturnsAnInvalidPortToItsExactField)$' -count=1
 ```
 
-Require partial input and one-use Approval to exist only inside the active Installation process. Back, pre-Apply cancellation, Console exit, terminal loss, and process death discard unfinished input. A later launch starts with fresh Owner input and fresh read-only observations through Installation Review. Infrastructure Secrets and Client Access Values are not persisted. Require one root process, one bounded strict typed Apply request, an independent candidate recheck, and safe refusal of duplicate, unknown, malformed, oversized, replayed, changed, or incomplete input. Mutation remains unavailable until the separate approved Apply action.
+Require partial input and one-use Approval to exist only inside the active Installation process. Require Installation to initialize REALITY `443`, Hysteria2 `443`, TUIC `8443`, AnyTLS `9443`, and Subscription HTTPS `10443`; return each submitted field to the exact next field; keep an invalid field local while preserving earlier valid input; and show every selected port in the reviewed Plan. Back, pre-Apply cancellation, Console exit, terminal loss, and process death discard unfinished input. A later launch starts with fresh Owner input and fresh read-only observations through Installation Review. Infrastructure Secrets and Client Access Values are not persisted. Require one root process, one bounded strict typed Apply request, an independent candidate recheck, and safe refusal of duplicate, unknown, malformed, oversized, replayed, changed, or incomplete input. Mutation remains unavailable until the separate approved Apply action. These commands are local automated evidence only; they do not claim live VPS acceptance.
 
 ### SL-INSTALL-03 — Exact software activation and partial rollback
 

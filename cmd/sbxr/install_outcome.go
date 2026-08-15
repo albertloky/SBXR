@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -49,11 +48,11 @@ var installFields = []ownerconsole.EditingField{
 	{Identity: "public-ipv4", Label: "Public IPv4", Required: true},
 	{Identity: "primary-address", Label: "Primary subscription address", Required: true},
 	{Identity: "ssh-port", Label: "SSH port", Value: "22", Required: true},
-	{Identity: "reality-port", Label: "REALITY port", Value: "443", Required: true},
-	{Identity: "hysteria2-port", Label: "Hysteria2 port", Value: "443", Required: true},
-	{Identity: "tuic-port", Label: "TUIC port", Value: "8443", Required: true},
-	{Identity: "anytls-port", Label: "AnyTLS port", Value: "9443", Required: true},
-	{Identity: "subscription-port", Label: "Subscription HTTPS port", Value: "10443", Required: true},
+	{Identity: "reality-port", Label: "REALITY port", Required: true},
+	{Identity: "hysteria2-port", Label: "Hysteria2 port", Required: true},
+	{Identity: "tuic-port", Label: "TUIC port", Required: true},
+	{Identity: "anytls-port", Label: "AnyTLS port", Required: true},
+	{Identity: "subscription-port", Label: "Subscription HTTPS port", Required: true},
 	{Identity: "cloudflare-account", Label: "Cloudflare account ID", Required: true},
 	{Identity: "cloudflare-zone", Label: "Cloudflare zone ID", Required: true},
 	{Identity: "cloudflare-token", Label: "Cloudflare scoped token", Required: true},
@@ -129,10 +128,6 @@ func (outcome *installOutcome) Review(ctx context.Context) ownerconsole.ChangeRe
 }
 
 func (outcome *installOutcome) Edit(ctx context.Context, input ownerconsole.EditingInput) ownerconsole.ChangeReview {
-	update, err := installationDraftUpdate(input)
-	if err != nil {
-		return installCorrection(err)
-	}
 	outcome.mu.Lock()
 	module := outcome.module
 	outcome.approval, outcome.plan = installation.Approval{}, ""
@@ -141,62 +136,10 @@ func (outcome *installOutcome) Edit(ctx context.Context, input ownerconsole.Edit
 	if module == nil {
 		return installCorrection(errors.New("Installation Module construction failed"))
 	}
-	review := module.Review(ctx, update)
+	review := module.Review(ctx, installation.Draft{SubmittedField: input.Field, SubmittedValue: input.Text, Architecture: softwarelifecycle.Architecture(runtime.GOARCH)})
 	outcome.mu.Lock()
 	defer outcome.mu.Unlock()
 	return outcome.presentReview(review)
-}
-
-func installationDraftUpdate(input ownerconsole.EditingInput) (installation.Draft, error) {
-	if input.Text == "" {
-		return installation.Draft{}, errors.New("Installation input is empty")
-	}
-	update := installation.Draft{Architecture: softwarelifecycle.Architecture(runtime.GOARCH)}
-	var err error
-	port := func() (uint16, error) {
-		value, err := strconv.ParseUint(input.Text, 10, 16)
-		return uint16(value), err
-	}
-	switch input.Field {
-	case "release-tag":
-		update.Tag = input.Text
-	case "domain":
-		update.Installation.Domain = input.Text
-	case "owner-email":
-		update.Installation.OwnerEmail = input.Text
-	case "public-ipv4":
-		update.Installation.PublicIPv4 = input.Text
-	case "primary-address":
-		update.Installation.PrimaryAddress = input.Text
-	case "ssh-port":
-		update.Installation.SSHPort, err = port()
-	case "reality-port":
-		update.Installation.RealityPort, err = port()
-	case "hysteria2-port":
-		update.Installation.Hysteria2Port, err = port()
-	case "tuic-port":
-		update.Installation.TUICPort, err = port()
-	case "anytls-port":
-		update.Installation.AnyTLSPort, err = port()
-	case "subscription-port":
-		update.Installation.SubscriptionPort, err = port()
-	case "cloudflare-account":
-		update.CloudflareAccountID = input.Text
-	case "cloudflare-zone":
-		update.CloudflareZoneID = input.Text
-	case "cloudflare-token":
-		update.CloudflareToken = input.Text
-	case "reality-target":
-		update.RealityTarget = input.Text
-	case "reality-server-name":
-		update.RealityServerName = input.Text
-	default:
-		return installation.Draft{}, errors.New("unknown Installation field")
-	}
-	if err != nil {
-		return installation.Draft{}, errors.New("Installation port is invalid")
-	}
-	return update, nil
 }
 
 func (outcome *installOutcome) presentReview(review installation.ReviewResult) ownerconsole.ChangeReview {
@@ -206,6 +149,9 @@ func (outcome *installOutcome) presentReview(review installation.ReviewResult) o
 	if review.Invalid != nil {
 		for _, field := range installFields {
 			if field.Identity == review.Invalid.Field {
+				if review.Invalid.Value != "" {
+					field.Value = review.Invalid.Value
+				}
 				return ownerconsole.ChangeReview{Editing: &ownerconsole.EditingPresentation{Title: "Clean VPS installation", Field: field}}
 			}
 		}

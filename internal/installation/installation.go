@@ -8,6 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/mail"
+	"net/netip"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,6 +28,7 @@ import (
 const ReclamationPhrase = "RECLAIM THIS VPS"
 
 type Draft struct {
+	SubmittedField, SubmittedValue                              string
 	Tag, CloudflareAccountID, CloudflareZoneID, CloudflareToken string
 	RealityTarget, RealityServerName                            string
 	Architecture                                                softwarelifecycle.Architecture
@@ -58,7 +63,7 @@ func (dependencies Dependencies) validate() error {
 	return nil
 }
 
-type InvalidInput struct{ Field, Problem string }
+type InvalidInput struct{ Field, Value, Problem string }
 
 type Correction struct {
 	Problem, Found, Required, WhyStopped, InputLabel, Evidence string
@@ -150,13 +155,14 @@ type Interface struct {
 	operation    Operation
 	cancel       chan struct{}
 	cancelled    bool
+	nextField    int
 }
 
 func New(dependencies Dependencies) (*Interface, error) {
 	if err := dependencies.validate(); err != nil {
 		return nil, err
 	}
-	return &Interface{dependencies: dependencies}, nil
+	return &Interface{dependencies: dependencies, draft: initialDraft()}, nil
 }
 
 func (*Interface) String() string   { return "Installation Module: protected" }
@@ -164,16 +170,61 @@ func (*Interface) GoString() string { return "Installation Module: protected" }
 
 func (module *Interface) Review(ctx context.Context, draft Draft) ReviewResult {
 	module.mu.Lock()
-	module.draft = mergeDraft(module.draft, draft)
+	if draft.discard {
+		module.draft, module.nextField = initialDraft(), 0
+	} else if draft.SubmittedField != "" {
+		if module.nextField >= len(draftFields) || draft.SubmittedField != draftFields[module.nextField] {
+			field := draftFields[min(module.nextField, len(draftFields)-1)]
+			result := invalidDraftField(module.draft, field, "Submit the current Installation field before continuing.")
+			module.mu.Unlock()
+			return ReviewResult{Invalid: result}
+		}
+		value := draft.SubmittedValue
+		if value == "" {
+			value = draftFieldValue(draft, draft.SubmittedField)
+		}
+		if strings.TrimSpace(value) == "" {
+			module.mu.Unlock()
+			return ReviewResult{Invalid: &InvalidInput{Field: draft.SubmittedField, Problem: "A required Installation value is missing."}}
+		}
+		candidate, err := updateDraftField(module.draft, draft.SubmittedField, value, draft.Architecture)
+		if err != nil {
+			module.mu.Unlock()
+			return ReviewResult{Invalid: &InvalidInput{Field: draft.SubmittedField, Value: value, Problem: err.Error()}}
+		}
+		if invalid := validateDraftField(candidate, draft.SubmittedField); invalid != nil {
+			module.mu.Unlock()
+			return ReviewResult{Invalid: invalid}
+		}
+		module.draft, module.nextField = candidate, module.nextField+1
+		if validateDraft(candidate) == nil {
+			module.nextField = len(draftFields)
+		}
+	} else if draft != (Draft{}) {
+		module.draft = mergeDraft(module.draft, draft)
+		if invalid := validateDraft(module.draft); invalid != nil {
+			module.nextField = draftFieldIndex(invalid.Field)
+		} else {
+			module.nextField = len(draftFields)
+		}
+	}
 	draft = module.draft
 	module.approval, module.reclamation, module.request = nil, nil, softwareubuntu.InstallHandoffRequest{}
+	if module.nextField < len(draftFields) {
+		invalid := invalidDraftField(draft, draftFields[module.nextField], "Submit this Installation field to continue.")
+		module.mu.Unlock()
+		return ReviewResult{Invalid: invalid}
+	}
 	module.mu.Unlock()
 	if invalid := validateDraft(draft); invalid != nil {
 		return ReviewResult{Invalid: invalid}
 	}
 	handoff, err := module.dependencies.ReleaseCandidate(ctx, draft.Tag, draft.Architecture)
 	if err != nil {
-		return correction(errors.New("the exact release could not be verified and staged"))
+		module.mu.Lock()
+		module.nextField = draftFieldIndex("release-tag")
+		module.mu.Unlock()
+		return ReviewResult{Invalid: &InvalidInput{Field: "release-tag", Value: draft.Tag, Problem: "The exact release could not be verified and staged."}}
 	}
 	session, entropy := make([]byte, 32), make([]byte, 32)
 	if _, err := io.ReadFull(module.dependencies.Entropy, session); err != nil {
@@ -288,7 +339,7 @@ func (module *Interface) Apply(_ context.Context, approval Approval) ApplyResult
 
 func mergeDraft(current, update Draft) Draft {
 	if update.discard {
-		return Draft{}
+		return initialDraft()
 	}
 	if update.Tag != "" {
 		current.Tag = update.Tag
@@ -327,6 +378,177 @@ func mergeDraft(current, update Draft) Draft {
 	return current
 }
 
+func updateDraftField(current Draft, field, value string, architecture softwarelifecycle.Architecture) (Draft, error) {
+	if architecture != "" {
+		current.Architecture = architecture
+	}
+	port := func() (uint16, error) {
+		parsed, err := strconv.ParseUint(value, 10, 16)
+		if err != nil || parsed == 0 {
+			return 0, errors.New("The Installation port is invalid.")
+		}
+		return uint16(parsed), nil
+	}
+	var err error
+	switch field {
+	case "release-tag":
+		current.Tag = value
+	case "domain":
+		current.Installation.Domain = value
+	case "owner-email":
+		current.Installation.OwnerEmail = value
+	case "public-ipv4":
+		current.Installation.PublicIPv4 = value
+	case "primary-address":
+		current.Installation.PrimaryAddress = value
+	case "ssh-port":
+		current.Installation.SSHPort, err = port()
+	case "reality-port":
+		current.Installation.RealityPort, err = port()
+	case "hysteria2-port":
+		current.Installation.Hysteria2Port, err = port()
+	case "tuic-port":
+		current.Installation.TUICPort, err = port()
+	case "anytls-port":
+		current.Installation.AnyTLSPort, err = port()
+	case "subscription-port":
+		current.Installation.SubscriptionPort, err = port()
+	case "cloudflare-account":
+		current.CloudflareAccountID = value
+	case "cloudflare-zone":
+		current.CloudflareZoneID = value
+	case "cloudflare-token":
+		current.CloudflareToken = value
+	case "reality-target":
+		current.RealityTarget = value
+	case "reality-server-name":
+		current.RealityServerName = value
+	default:
+		return current, errors.New("The Installation field is unknown.")
+	}
+	return current, err
+}
+
+var (
+	draftFields = []string{"release-tag", "domain", "owner-email", "public-ipv4", "primary-address", "ssh-port", "reality-port", "hysteria2-port", "tuic-port", "anytls-port", "subscription-port", "cloudflare-account", "cloudflare-zone", "cloudflare-token", "reality-target", "reality-server-name"}
+	draftDomain = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$`)
+	draftID     = regexp.MustCompile(`^[0-9a-f]{32}$`)
+	draftTag    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$`)
+)
+
+func initialDraft() Draft {
+	return Draft{Installation: softwarelifecycle.InstallationDraft{RealityPort: 443, Hysteria2Port: 443, TUICPort: 8443, AnyTLSPort: 9443, SubscriptionPort: 10443}}
+}
+
+func draftFieldIndex(field string) int {
+	for index, candidate := range draftFields {
+		if candidate == field {
+			return index
+		}
+	}
+	return 0
+}
+
+func invalidDraftField(draft Draft, field, problem string) *InvalidInput {
+	return &InvalidInput{Field: field, Value: draftFieldValue(draft, field), Problem: problem}
+}
+
+func draftFieldValue(draft Draft, field string) string {
+	switch field {
+	case "release-tag":
+		return draft.Tag
+	case "domain":
+		return draft.Installation.Domain
+	case "owner-email":
+		return draft.Installation.OwnerEmail
+	case "public-ipv4":
+		return draft.Installation.PublicIPv4
+	case "primary-address":
+		return draft.Installation.PrimaryAddress
+	case "ssh-port":
+		return portText(draft.Installation.SSHPort)
+	case "reality-port":
+		return portText(draft.Installation.RealityPort)
+	case "hysteria2-port":
+		return portText(draft.Installation.Hysteria2Port)
+	case "tuic-port":
+		return portText(draft.Installation.TUICPort)
+	case "anytls-port":
+		return portText(draft.Installation.AnyTLSPort)
+	case "subscription-port":
+		return portText(draft.Installation.SubscriptionPort)
+	case "cloudflare-account":
+		return draft.CloudflareAccountID
+	case "cloudflare-zone":
+		return draft.CloudflareZoneID
+	case "cloudflare-token":
+		return draft.CloudflareToken
+	case "reality-target":
+		return draft.RealityTarget
+	case "reality-server-name":
+		return draft.RealityServerName
+	default:
+		return ""
+	}
+}
+
+func portText(port uint16) string {
+	if port == 0 {
+		return ""
+	}
+	return strconv.Itoa(int(port))
+}
+
+func validateDraftField(draft Draft, field string) *InvalidInput {
+	value := draftFieldValue(draft, field)
+	invalid := func(problem string) *InvalidInput { return &InvalidInput{Field: field, Value: value, Problem: problem} }
+	if strings.TrimSpace(value) == "" {
+		return invalid("A required Installation value is missing.")
+	}
+	switch field {
+	case "release-tag":
+		if !draftTag.MatchString(value) {
+			return invalid("The Release tag is invalid.")
+		}
+	case "domain":
+		if !draftDomain.MatchString(value) {
+			return invalid("The Domain is invalid.")
+		}
+	case "owner-email":
+		address, err := mail.ParseAddress(value)
+		if err != nil || address.Name != "" || address.Address != value {
+			return invalid("The Owner email is invalid.")
+		}
+	case "public-ipv4":
+		address, err := netip.ParseAddr(value)
+		if err != nil || !address.Is4() || !address.IsGlobalUnicast() {
+			return invalid("The Public IPv4 is invalid.")
+		}
+	case "primary-address":
+		if value != draft.Installation.PublicIPv4 && value != draft.Installation.PublicIPv6 {
+			return invalid("The Primary subscription address must be one reviewed public address.")
+		}
+	case "cloudflare-account", "cloudflare-zone":
+		if !draftID.MatchString(value) {
+			return invalid("The Cloudflare identifier is invalid.")
+		}
+	case "cloudflare-token":
+		if _, err := cloudflaretunnel.NewManagementToken(value); err != nil {
+			return invalid("The Cloudflare Account API Token is invalid.")
+		}
+	case "reality-target":
+		host, port, found := strings.Cut(value, ":")
+		if !found || port != "443" || !draftDomain.MatchString(host) {
+			return invalid("The REALITY target must be one valid hostname on port 443.")
+		}
+	case "reality-server-name":
+		if !draftDomain.MatchString(value) {
+			return invalid("The REALITY server name is invalid.")
+		}
+	}
+	return nil
+}
+
 func (module *Interface) Inspect(_ context.Context, identity OperationIdentity) (Operation, error) {
 	module.mu.Lock()
 	defer module.mu.Unlock()
@@ -340,7 +562,7 @@ func (module *Interface) RequestCancellation(_ context.Context, identity Operati
 	module.mu.Lock()
 	defer module.mu.Unlock()
 	if identity == "" && module.operation.Status != OperationActive {
-		module.draft = Draft{}
+		module.draft, module.nextField = initialDraft(), 0
 		module.approval, module.reclamation, module.request = nil, nil, softwareubuntu.InstallHandoffRequest{}
 		return ApplyResult{Kind: CancellationRequested, Reason: "The unfinished Installation input was discarded."}
 	}
@@ -362,14 +584,13 @@ func (module *Interface) Recover(ctx context.Context, pending systemchanges.Pend
 }
 
 func validateDraft(draft Draft) *InvalidInput {
-	values := []struct{ field, value string }{{"release-tag", draft.Tag}, {"domain", draft.Installation.Domain}, {"owner-email", draft.Installation.OwnerEmail}, {"public-ipv4", draft.Installation.PublicIPv4}, {"primary-address", draft.Installation.PrimaryAddress}, {"cloudflare-account", draft.CloudflareAccountID}, {"cloudflare-zone", draft.CloudflareZoneID}, {"cloudflare-token", draft.CloudflareToken}, {"reality-target", draft.RealityTarget}, {"reality-server-name", draft.RealityServerName}}
-	for _, value := range values {
-		if strings.TrimSpace(value.value) == "" {
-			return &InvalidInput{Field: value.field, Problem: "A required Installation value is missing."}
+	for _, field := range draftFields {
+		if invalid := validateDraftField(draft, field); invalid != nil {
+			return invalid
 		}
 	}
-	if draft.Architecture == "" || draft.Installation.SSHPort == 0 || draft.Installation.RealityPort == 0 || draft.Installation.Hysteria2Port == 0 || draft.Installation.TUICPort == 0 || draft.Installation.AnyTLSPort == 0 || draft.Installation.SubscriptionPort == 0 {
-		return &InvalidInput{Field: "ports-or-architecture", Problem: "The Architecture and every required port must be valid."}
+	if draft.Architecture == "" {
+		return &InvalidInput{Field: "release-tag", Value: draft.Tag, Problem: "The Installation Architecture is invalid."}
 	}
 	return nil
 }
@@ -385,6 +606,7 @@ func reclamationCorrection() ReviewResult {
 func finalPlan(built *builtInstall, request softwareubuntu.InstallHandoffRequest, reclamation *networkpolicy.ReclamationPlan) *Plan {
 	summary := built.plan.Summary()
 	plan := &Plan{Identity: built.plan.Identity(), DesiredStateRevision: 1, DesiredStateSHA256: built.desiredSHA256, RelevantChecksums: []string{"Plan SHA-256 " + built.plan.SHA256()}, ObservedState: "Proven Clean VPS baseline: Not installed", VerifiedExternalInputs: []string{"Verified release " + summary.ReleaseIdentity.Tag, "Scoped Cloudflare account and zone authority", "Fresh Network Policy observations"}, Effects: installPlanEffects(), RequiredChecks: []string{"Pre-publication module health", "Desired State agreement", "Post-publication HTTPS, Tunnel, certificate, profile, unit, timer, and permission agreement"}, AdvisoryChecks: []string{"Direct DNS is pending only until the reviewed Cloudflare steps create it"}, Interruption: summary.Interruption, Cancellation: summary.Cancellation, Rollback: summary.Rollback}
+	plan.Effects = append(plan.Effects, fmt.Sprintf("Use SSH %d/TCP, REALITY %d/TCP, Hysteria2 %d/UDP, TUIC %d/UDP, AnyTLS %d/TCP, and Subscription HTTPS %d/TCP", request.Draft.SSHPort, request.Draft.RealityPort, request.Draft.Hysteria2Port, request.Draft.TUICPort, request.Draft.AnyTLSPort, request.Draft.SubscriptionPort))
 	if reclamation == nil {
 		return plan
 	}
