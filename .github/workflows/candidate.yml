@@ -163,10 +163,10 @@ jobs:
             echo '| Module Verification | Passed | Complete suite with PTY package isolated; race detector on every non-PTY package; `go vet ./...` |'
             echo '| Seam Verification | Pending | GitHub attestation exists only after publication |'
             echo '| Integrated Verification | Pending | Exact published bytes have not passed the production release verifier |'
-            echo '| Codex Live Acceptance | Not required | ADR-0010 privilege and service-identity scope |'
-            echo '| Owner Acceptance | Not required | ADR-0010 privilege and service-identity scope |'
+            echo '| Codex Live Acceptance | Not required | ADR-0010 root-runtime package and public-seam scope |'
+            echo '| Owner Acceptance | Not required | ADR-0010 root-runtime package and public-seam scope |'
             echo
-            echo 'Integrated Ubuntu Verification: Not required - ADR-0010 privilege and service-identity scope.'
+            echo 'Integrated Ubuntu Verification: Not required - ADR-0010 root-runtime package and public-seam scope.'
             echo
             echo "Release Identity: albertloky/SBXR $CANDIDATE_TAG $GITHUB_SHA $index_sha256"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -201,13 +201,12 @@ jobs:
             sleep 10
           done
           test "$verified" = true
-      - name: Preserve client-facing output while qualifying the root runtime
+      - name: Preserve fixed emitted client payloads while qualifying the root runtime
         run: |
           git merge-base --is-ancestor da184b692ba630dc97e8830c0d73785f38d0996a HEAD
           git diff --quiet v1.0.6...HEAD -- \
             internal/connectionprofiles/registry.go \
-            internal/subscriptionpublication/render.go \
-            cmd/sbxr/client_access_outcome.go
+            internal/subscriptionpublication/render.go
       - name: Download and scan the exact six verified assets
         run: |
           mkdir -m 0700 dist

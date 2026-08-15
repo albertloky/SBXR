@@ -205,9 +205,9 @@ func acceptanceRecordIndexSHA256(body, tag, commit string) (string, bool) {
 		"Tag: " + tag,
 		"Commit: " + commit,
 		"Stable result code: RELEASE-ROOT-RUNTIME-PACKAGE-QUALIFICATION",
-		"Integrated Ubuntu Verification: Not required - ADR-0010 privilege and service-identity scope; no automated Ubuntu integration evidence claimed.",
-		"| Codex Live Acceptance | Not required | ADR-0010 privilege and service-identity scope; no live VPS evidence claimed |",
-		"| Owner Acceptance | Not required | ADR-0010 privilege and service-identity scope; no maintained-client evidence claimed |",
+		"Integrated Ubuntu Verification: Not required - ADR-0010 root-runtime package and public-seam scope; no automated Ubuntu integration evidence claimed.",
+		"| Codex Live Acceptance | Not required | ADR-0010 root-runtime package and public-seam scope; no live VPS evidence claimed |",
+		"| Owner Acceptance | Not required | ADR-0010 root-runtime package and public-seam scope; no maintained-client evidence claimed |",
 		"No Integrated Ubuntu Verification, live VPS, provider, maintained-client, or Owner evidence was performed.",
 		"Any asset, attestation, repository, tag, commit, release-index digest, qualification scope, required check, or client-facing change invalidates this record.",
 	}

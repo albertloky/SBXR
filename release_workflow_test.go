@@ -17,10 +17,9 @@ func TestCandidateWorkflowPublishesOnlyAQualifiedRootRuntimeAcceptanceRecord(t *
 		"git diff --quiet v1.0.6...HEAD --",
 		"internal/connectionprofiles/registry.go",
 		"internal/subscriptionpublication/render.go",
-		"cmd/sbxr/client_access_outcome.go",
-		"Integrated Ubuntu Verification: Not required - ADR-0010 privilege and service-identity scope",
-		"Codex Live Acceptance | Not required | ADR-0010 privilege and service-identity scope",
-		"Owner Acceptance | Not required | ADR-0010 privilege and service-identity scope",
+		"Integrated Ubuntu Verification: Not required - ADR-0010 root-runtime package and public-seam scope",
+		"Codex Live Acceptance | Not required | ADR-0010 root-runtime package and public-seam scope",
+		"Owner Acceptance | Not required | ADR-0010 root-runtime package and public-seam scope",
 		"go run ./cmd/sbxr-release acceptance",
 		"-directory dist",
 		"-output acceptance-record.md",
@@ -35,6 +34,21 @@ func TestCandidateWorkflowPublishesOnlyAQualifiedRootRuntimeAcceptanceRecord(t *
 	}
 	if strings.Contains(workflow, "gh release upload") {
 		t.Fatal("Acceptance Record became a seventh release asset")
+	}
+	if strings.Contains(workflow, "cmd/sbxr/client_access_outcome.go") {
+		t.Fatal("qualified Client Access changes remained blocked by the root-runtime freeze")
+	}
+	for _, twice := range []string{
+		"go list ./... | grep -v '/internal/ownerconsole$' | xargs go test -count=1",
+		"go test ./internal/ownerconsole -count=1",
+		"go list ./... | grep -v '/internal/ownerconsole$' | xargs go test -race -p 1 -count=1",
+		"go vet ./...",
+		"go test ./internal/networkpolicy/adapter/ubuntu -run TestProductionUbuntuSeam -count=1",
+		"go test ./internal/systemchanges/adapter/ubuntu -run TestProductionFirewallSeam -count=1",
+	} {
+		if strings.Count(workflow, twice) < 2 {
+			t.Fatalf("candidate workflow must run %q before and after publication", twice)
+		}
 	}
 }
 
