@@ -26,6 +26,9 @@ func newTestInstallOutcome(t *testing.T) *installOutcome {
 
 func TestInstallationBackDiscardsUnfinishedInput(t *testing.T) {
 	var outcome ownerconsole.OutcomeModule = newTestInstallOutcome(t)
+	if review := outcome.Review(t.Context()); review.Editing == nil || review.Editing.Field.Identity != "domain" || review.Editing.Help.Purpose == "" || review.Editing.Help.URL != "https://developers.cloudflare.com/fundamentals/manage-domains/add-site/" {
+		t.Fatalf("Domain Help did not cross the Installation presentation boundary: %+v", review)
+	}
 	if review := outcome.Edit(t.Context(), ownerconsole.EditingInput{Field: "domain", Text: "example.com"}); review.Editing == nil || review.Editing.Field.Identity != "owner-email" {
 		t.Fatalf("edited Installation input = %+v", review)
 	}

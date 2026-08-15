@@ -245,6 +245,7 @@ type model struct {
 	changeSet                  DurableChangeSet
 	changeFeedback             string
 	editingAction              editingAction
+	editingHelpOpen            bool
 	correctionSelection        int
 	correctionAction           int
 	planPage                   int
@@ -990,6 +991,12 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.scenario == InstallationReview && m.outcome != nil {
+			if m.editingHelpOpen {
+				if message.String() == "esc" {
+					m.editingHelpOpen, m.inputFocused = false, true
+				}
+				return m, nil
+			}
 			if m.changeReview.Editing != nil && m.inputFocused {
 				if message.String() == "enter" {
 					return m, m.editChangeCommand()
@@ -1000,16 +1007,21 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if m.changeReview.Editing != nil {
+				actions := editingActions(m.changeReview.Editing)
 				switch message.String() {
 				case "up", "left":
-					m.editingAction = (m.editingAction + editingAction(len(editingActions)) - 1) % editingAction(len(editingActions))
+					m.editingAction = (m.editingAction + editingAction(len(actions)) - 1) % editingAction(len(actions))
 				case "down", "right", "tab":
-					m.editingAction = (m.editingAction + 1) % editingAction(len(editingActions))
+					m.editingAction = (m.editingAction + 1) % editingAction(len(actions))
 				case "shift+tab":
 					m.inputFocused = true
 				case "enter", "space":
-					if m.editingAction == editingBack {
+					if actions[m.editingAction] == "Back" {
 						return m, m.backChangeCommand()
+					}
+					if actions[m.editingAction] == "Help for this field" {
+						m.editingHelpOpen = true
+						return m, nil
 					}
 					return m, m.editChangeCommand()
 				case "esc":
@@ -2024,6 +2036,7 @@ func (m model) editChangeCommand() tea.Cmd {
 
 func (m *model) focusChangeInput() {
 	m.inputFocused, m.editingAction = false, editingReview
+	m.editingHelpOpen = false
 	m.inputTruncated, m.pasteNeutralized, m.pasteGuard = false, false, false
 	if correction := m.changeReview.Correction; correction != nil && correction.InputLabel != "" {
 		m.inputFocused = true
@@ -2277,7 +2290,7 @@ func (m model) View() tea.View {
 }
 
 func (m model) focusCursor(frame string) *tea.Cursor {
-	if m.exitConfirm || m.width < minimumWidth || m.height < minimumHeight || m.scenario != InstallationReview || m.outcome == nil || m.changeReview.Editing == nil {
+	if m.exitConfirm || m.editingHelpOpen || m.width < minimumWidth || m.height < minimumHeight || m.scenario != InstallationReview || m.outcome == nil || m.changeReview.Editing == nil {
 		return nil
 	}
 	needle, offset, shape := "", 0, tea.CursorBlock
@@ -2302,7 +2315,7 @@ func (m model) focusCursor(frame string) *tea.Cursor {
 		}
 		return nil
 	} else {
-		needle = "> " + editingActions[m.editingAction]
+		needle = "> " + editingActions(m.changeReview.Editing)[m.editingAction]
 	}
 	for y, line := range strings.Split(frame, "\n") {
 		if index := strings.Index(line, needle); index >= 0 {
@@ -2455,6 +2468,9 @@ func (m model) scenarioDetails(current fixture) []string {
 		return []string{"QR omitted; exact temporary test URL remains visible."}
 	}
 	if m.scenario == InstallationReview && m.outcome != nil {
+		if editing := m.changeReview.Editing; editing != nil && editing.Help.Purpose != "" {
+			return editingHelpLines(editing, m.width-navigationWidth-50)
+		}
 		if correction := m.changeReview.Correction; correction != nil {
 			return []string{"REDACTED EVIDENCE", "", correction.Evidence, "", "No raw output or secrets."}
 		}
@@ -2570,6 +2586,13 @@ func (m model) scenarioLines(current fixture) []string {
 		return providerPage(lines, actionCount, m.width, m.height, m.recoveryScreen.page)
 	}
 	if m.scenario == InstallationReview && m.outcome != nil {
+		if m.editingHelpOpen && m.changeReview.Editing != nil {
+			width := m.width - navigationWidth - 1
+			if m.width >= 120 {
+				width = 48
+			}
+			return editingHelpLines(m.changeReview.Editing, width)
+		}
 		lines := changeReviewLines(m.changeReview, m.width, m.height, m.planPage)
 		if correction := m.changeReview.Correction; correction != nil {
 			for index, line := range lines {
@@ -2608,7 +2631,7 @@ func (m model) scenarioLines(current fixture) []string {
 					}
 					lines[index] = prefix + editing.Field.Label + ": " + value
 				}
-				for action, label := range editingActions {
+				for action, label := range editingActions(editing) {
 					if strings.TrimSpace(line) == label {
 						prefix := "  "
 						if !m.inputFocused && editingAction(action) == m.editingAction {

@@ -98,6 +98,16 @@ go test ./internal/ownerconsole -run '^TestRunSafeEditingFocusMatchesThePublicAc
 
 Require a real pseudo-terminal to prove that physical `Enter` submits the focused field, `Space` remains input data, and `Tab` moves to the visible action area. Require arrows or `Tab` to change the persistent action selection, `Enter` or `Space` to activate only that selection, and `Shift+Tab` to return to the unchanged field. Require Bubble Tea's native blinking bar and block cursors without an application blink timer, persistent non-color focus markers, no selected persistent-navigation item while safe editing owns activation, and hostile pasted control content to remain data without a public action.
 
+### OC-ACTIVE-01B — Typed field Help
+
+Run:
+
+```sh
+go test ./internal/ownerconsole -run '^Test(RunShowsTheSameCompleteDomainHelpAtExactTerminalSizes|EditingHelpRefusesANonAllowlistedLink)$' -count=1
+```
+
+Require the owning Module's complete Domain Help at exact `120×36` in the detail column and at exact `80×24` through **Help for this field**. Require `Esc` to return to the unchanged field, exact focus/action activation, the static allowlisted HTTPS terminal hyperlink with its exact plain URL, and refusal of any other link target. Owner Console renders bounded typed facts. It does not fetch documentation or execute a browser command.
+
 ### OC-ACTIVE-02 — Refresh and confirmation stability
 
 Run:

@@ -75,10 +75,21 @@ type RunningRelease struct {
 
 type ReviewFact struct{ Label, Value string }
 
+type FieldSensitivity uint8
+
+const PublicInformation FieldSensitivity = 1
+
+type FieldHelp struct {
+	Purpose, AcceptedFormat, Example, URL string
+	Instructions, CommonMistakes          []string
+	Sensitivity                           FieldSensitivity
+}
+
 type InvalidInput struct {
 	Field, Value, Problem string
 	Detected              bool
 	Facts                 []ReviewFact
+	Help                  FieldHelp
 }
 
 type Correction struct {
@@ -496,6 +507,16 @@ var (
 	draftTag    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$`)
 )
 
+var domainHelp = FieldHelp{
+	Purpose:        "Choose the public domain that SBXR will use for its managed hostnames.",
+	Instructions:   []string{"Enter a domain that you own and can manage in Cloudflare."},
+	AcceptedFormat: "Lowercase DNS name without a scheme, path, port, or trailing dot.",
+	CommonMistakes: []string{"Do not enter https://, a URL path, a port, or a domain that you do not control."},
+	Example:        "vpn.example",
+	URL:            "https://developers.cloudflare.com/fundamentals/manage-domains/add-site/",
+	Sensitivity:    PublicInformation,
+}
+
 func initialDraft() Draft {
 	return Draft{Installation: softwarelifecycle.InstallationDraft{RealityPort: 443, Hysteria2Port: 443, TUICPort: 8443, AnyTLSPort: 9443, SubscriptionPort: 10443}}
 }
@@ -517,6 +538,11 @@ func (module *Interface) invalidDraftField(draft Draft, field, problem string) *
 
 func (module *Interface) attachReviewFacts(invalid *InvalidInput) {
 	invalid.Facts = append([]ReviewFact(nil), module.reviewFacts...)
+	if invalid.Field == "domain" {
+		invalid.Help = domainHelp
+		invalid.Help.Instructions = append([]string(nil), domainHelp.Instructions...)
+		invalid.Help.CommonMistakes = append([]string(nil), domainHelp.CommonMistakes...)
+	}
 	if invalid.Field == "public-ipv4" {
 		invalid.Detected = module.detectedIPv4
 		if !module.detectedIPv4 {
@@ -574,6 +600,9 @@ func validateDraftField(draft Draft, field string) *InvalidInput {
 	}
 	switch field {
 	case "domain":
+		if value == domainHelp.Example {
+			return invalid("The Domain is a tutorial example and cannot become Desired State.")
+		}
 		if !draftDomain.MatchString(value) {
 			return invalid("The Domain is invalid.")
 		}

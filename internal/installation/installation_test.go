@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -633,6 +634,27 @@ func TestInstallationInterfaceValidatesDependenciesAndTypedDraft(t *testing.T) {
 	result := module.Review(t.Context(), Draft{})
 	if result.Invalid == nil || result.Invalid.Field != "domain" || result.Plan != nil || result.Reclamation != nil {
 		t.Fatalf("invalid Draft = %+v", result)
+	}
+}
+
+func TestInstallationReviewSuppliesDomainHelpAndRejectsItsExample(t *testing.T) {
+	module := newTestInstallation(t, composedNetworkObserver{}, nil)
+	review := module.Review(t.Context(), Draft{})
+	want := FieldHelp{
+		Purpose:        "Choose the public domain that SBXR will use for its managed hostnames.",
+		Instructions:   []string{"Enter a domain that you own and can manage in Cloudflare."},
+		AcceptedFormat: "Lowercase DNS name without a scheme, path, port, or trailing dot.",
+		CommonMistakes: []string{"Do not enter https://, a URL path, a port, or a domain that you do not control."},
+		Example:        "vpn.example",
+		URL:            "https://developers.cloudflare.com/fundamentals/manage-domains/add-site/",
+		Sensitivity:    PublicInformation,
+	}
+	if review.Invalid == nil || !reflect.DeepEqual(review.Invalid.Help, want) {
+		t.Fatalf("Domain Help = %+v", review.Invalid)
+	}
+	review = module.Review(t.Context(), Draft{SubmittedField: "domain", SubmittedValue: want.Example})
+	if review.Invalid == nil || review.Invalid.Field != "domain" || review.Plan != nil || !strings.Contains(review.Invalid.Problem, "tutorial") {
+		t.Fatalf("tutorial Domain Review = %+v", review)
 	}
 }
 

@@ -42,14 +42,31 @@ type EditingInput struct {
 	Text  string
 }
 
+type EditingSensitivity uint8
+
+const PublicInformation EditingSensitivity = 1
+
+type EditingHelp struct {
+	Purpose, AcceptedFormat, Example, URL string
+	Instructions, CommonMistakes          []string
+	Sensitivity                           EditingSensitivity
+}
+
+const domainHelpURL = "https://developers.cloudflare.com/fundamentals/manage-domains/add-site/"
+
 type editingAction uint8
 
 const (
 	editingReview editingAction = iota
-	editingBack
 )
 
-var editingActions = [...]string{"Review updated request", "Back"}
+func editingActions(editing *EditingPresentation) []string {
+	actions := []string{"Review updated request"}
+	if editing != nil && editing.Help.Purpose != "" {
+		actions = append(actions, "Help for this field")
+	}
+	return append(actions, "Back")
+}
 
 type correctionAction uint8
 
@@ -73,6 +90,7 @@ type EditingPresentation struct {
 	Title string
 	Facts []EditingFact
 	Field EditingField
+	Help  EditingHelp
 }
 
 type EditingFact struct{ Label, Value string }
@@ -160,11 +178,13 @@ func validatedChangeReview(review ChangeReview) ChangeReview {
 		return ChangeReview{Plan: &copy}
 	}
 	if editing := review.Editing; editing != nil {
-		if !safeLine(editing.Title) || !safeEditingFacts(editing.Facts) || !safeIdentifier(editing.Field.Identity) || !safeLine(editing.Field.Label) || !safeOptionalLine(editing.Field.Value) {
+		if !safeLine(editing.Title) || !safeEditingFacts(editing.Facts) || !safeIdentifier(editing.Field.Identity) || !safeLine(editing.Field.Label) || !safeOptionalLine(editing.Field.Value) || !safeEditingHelp(editing.Help) {
 			return invalidChangeReview()
 		}
 		copy := *editing
 		copy.Facts = append([]EditingFact(nil), editing.Facts...)
+		copy.Help.Instructions = append([]string(nil), editing.Help.Instructions...)
+		copy.Help.CommonMistakes = append([]string(nil), editing.Help.CommonMistakes...)
 		return ChangeReview{Editing: &copy}
 	}
 	correction := review.Correction
@@ -245,6 +265,45 @@ func safeEditingFacts(values []EditingFact) bool {
 	return true
 }
 
+func safeEditingHelp(help EditingHelp) bool {
+	if help.Purpose == "" && len(help.Instructions) == 0 && help.AcceptedFormat == "" && len(help.CommonMistakes) == 0 && help.Example == "" && help.URL == "" && help.Sensitivity == 0 {
+		return true
+	}
+	return safeLine(help.Purpose) && completeStrings(help.Instructions, 8) && safeLine(help.AcceptedFormat) && completeStrings(help.CommonMistakes, 8) && safeLine(help.Example) && help.URL == domainHelpURL && help.Sensitivity == PublicInformation
+}
+
+func editingHelpLines(editing *EditingPresentation, width int) []string {
+	help := editing.Help
+	lines := []string{strings.ToUpper(editing.Field.Label) + " HELP", "Purpose: " + help.Purpose}
+	for _, instruction := range help.Instructions {
+		lines = append(lines, "Instructions: "+instruction)
+	}
+	lines = append(lines, "Accepted format: "+help.AcceptedFormat)
+	for _, mistake := range help.CommonMistakes {
+		lines = append(lines, "Common mistakes: "+mistake)
+	}
+	lines = append(lines, "EXAMPLE ONLY — DO NOT COPY: "+help.Example, "Sensitivity: "+help.Sensitivity.String())
+	lines = append(lines, terminalHyperlinkLines(help.URL, width)...)
+	return append(lines, "", "Esc Return to field")
+}
+
+func (sensitivity EditingSensitivity) String() string {
+	if sensitivity == PublicInformation {
+		return "Public Information"
+	}
+	return "Unknown"
+}
+
+func terminalHyperlinkLines(url string, width int) []string {
+	lines := []string{"Official Help: \x1b]8;;" + domainHelpURL + "\aOpen official Help\x1b]8;;\a"}
+	for url != "" {
+		count := min(len(url), max(width, 1))
+		lines = append(lines, url[:count])
+		url = url[count:]
+	}
+	return lines
+}
+
 func safeOptionalLine(value string) bool { return value == "" || safeLine(value) }
 
 func safeLine(value string) bool {
@@ -306,7 +365,11 @@ func changeReviewLines(review ChangeReview, width, height, page int) []string {
 		for _, fact := range editing.Facts {
 			lines = append(lines, fact.Label+": "+fact.Value)
 		}
-		return append(lines, editing.Field.Label+": "+editing.Field.Value, "", "  Review updated request", "  Back")
+		lines = append(lines, editing.Field.Label+": "+editing.Field.Value, "")
+		for _, action := range editingActions(editing) {
+			lines = append(lines, "  "+action)
+		}
+		return lines
 	}
 	correction := review.Correction
 	if correction == nil {

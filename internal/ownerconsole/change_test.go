@@ -411,6 +411,95 @@ func TestRunShowsReadOnlyInstallationFactsAndDetectedPublicIPv4(t *testing.T) {
 	}
 }
 
+func TestRunShowsTheSameCompleteDomainHelpAtExactTerminalSizes(t *testing.T) {
+	help := EditingHelp{
+		Purpose:        "Choose the public domain that SBXR will use for its managed hostnames.",
+		Instructions:   []string{"Enter a domain that you own and can manage in Cloudflare."},
+		AcceptedFormat: "Lowercase DNS name without a scheme, path, port, or trailing dot.",
+		CommonMistakes: []string{"Do not enter https://, a URL path, a port, or a domain that you do not control."},
+		Example:        "vpn.example",
+		URL:            "https://developers.cloudflare.com/fundamentals/manage-domains/add-site/",
+		Sensitivity:    PublicInformation,
+	}
+	editing := ChangeReview{Editing: &EditingPresentation{Title: "Clean VPS installation", Field: EditingField{Identity: "domain", Label: "Domain", Value: "owner.example.test", Required: true}, Help: help}}
+
+	wide := runPseudoTerminalTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: &outcomeStub{reviews: []ChangeReview{editing}}}, 120, 36, "", "\x03\r")
+	for _, want := range []string{"DOMAIN HELP", "Purpose", "Choose the public domain", "Accepted format", "Lowercase DNS name", "Common mistakes", "Do not enter https://", "EXAMPLE ONLY — DO NOT COPY", help.Example, "Sensitivity", "Public Information", "developers.cloudflare.com/fundamentals/", "manage-domains/add-site/", "\x1b]8;;" + help.URL} {
+		if !strings.Contains(wide, want) {
+			t.Fatalf("wide Domain Help omitted %q\n%s", want, wide)
+		}
+	}
+	if strings.Contains(wide, "PLAN BINDING") {
+		t.Fatalf("wide Domain Help retained stale Plan details\n%s", wide)
+	}
+	requireClosedHelpHyperlinks(t, wide, help.URL)
+
+	stub := &outcomeStub{reviews: []ChangeReview{editing}, editReview: editing}
+	narrow := runPseudoTerminalTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: stub}, 80, 24, "", "\t", "\x1b[B", "\r", "", "\x1b", "", "\r", "", "\x03\r")
+	for _, want := range []string{"Help for this field", "> Help for this field", "DOMAIN HELP", "Choose the public domain", "Lowercase DNS name", "EXAMPLE ONLY — DO NOT COPY", help.Example, "developers.cloudflare.com/fundamentals/", "manage-domains/add-site/"} {
+		if !strings.Contains(narrow, want) {
+			t.Fatalf("narrow Domain Help omitted %q\n%s", want, narrow)
+		}
+	}
+	if len(stub.edits) != 1 || stub.edits[0] != (EditingInput{Field: "domain", Text: "owner.example.test"}) || stub.backCalls != 0 {
+		t.Fatalf("Help changed input or activated the wrong action: edits=%+v back=%d", stub.edits, stub.backCalls)
+	}
+	requireClosedHelpHyperlinks(t, narrow, help.URL)
+
+	for _, width := range []int{49, 58} {
+		visible := ""
+		for index, line := range terminalHyperlinkLines(help.URL, width) {
+			open := "\x1b]8;;" + help.URL + "\a"
+			close := "\x1b]8;;\a"
+			if index == 0 {
+				start, end := strings.Index(line, open), strings.Index(line, close)
+				if start < 0 || end < start || strings.Count(line, open) != 1 || strings.Count(line, close) != 1 || !strings.Contains(line[start+len(open):end], "Open official Help") {
+					t.Fatalf("width %d Help link was not closed on its row: %q", width, line)
+				}
+				continue
+			}
+			if strings.Contains(line, "\x1b]") {
+				t.Fatalf("width %d plain Help URL contained terminal controls: %q", width, line)
+			}
+			visible += line
+		}
+		if visible != help.URL {
+			t.Fatalf("width %d Help link text = %q, want %q", width, visible, help.URL)
+		}
+	}
+}
+
+func requireClosedHelpHyperlinks(t *testing.T, transcript, url string) {
+	t.Helper()
+	open := "\x1b]8;;" + url + "\a"
+	close := "\x1b]8;;\a"
+	count := 0
+	for rest := transcript; ; {
+		start := strings.Index(rest, open)
+		if start < 0 {
+			break
+		}
+		rest = rest[start+len(open):]
+		end := strings.Index(rest, close)
+		boundary := strings.IndexAny(rest, "\r\n")
+		if end < 0 || boundary >= 0 && boundary < end {
+			t.Fatalf("Help hyperlink crossed a frame row")
+		}
+		count++
+		rest = rest[end+len(close):]
+	}
+	if count < 1 {
+		t.Fatalf("wrapped Help URL emitted %d closed hyperlink fragments\n%s", count, transcript)
+	}
+}
+
+func TestEditingHelpRefusesANonAllowlistedLink(t *testing.T) {
+	review := validatedChangeReview(ChangeReview{Editing: &EditingPresentation{Title: "Clean VPS installation", Field: EditingField{Identity: "domain", Label: "Domain", Required: true}, Help: EditingHelp{Purpose: "Purpose", Instructions: []string{"Instructions"}, AcceptedFormat: "Format", CommonMistakes: []string{"Mistake"}, Example: "vpn.example", URL: "https://owner.example.test/help", Sensitivity: PublicInformation}}})
+	if review.Correction == nil || review.Editing != nil {
+		t.Fatalf("non-allowlisted Help URL was accepted: %+v", review)
+	}
+}
+
 func TestRunSafeEditingFocusMatchesThePublicActionInARealPseudoTerminal(t *testing.T) {
 	editing := ChangeReview{Editing: &EditingPresentation{Title: "Installation choices", Field: EditingField{Identity: "domain", Label: "Domain", Value: "owner.example.test", Required: true}}}
 
