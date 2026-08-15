@@ -208,7 +208,7 @@ func runProvenRecovery(transaction systemchanges.PendingChangeSet) (resultErr er
 	}
 	result := systemchanges.New(adapter).RecoverWithSSHRecovery(recoveryIdentity, authority)
 	if transaction.ForwardFirewallPending && sshFailure != nil {
-		return &clientAccessSSHReviewError{Cause: sshFailure.Cause}
+		return &sshPreservationFailureError{Cause: sshFailure.Cause}
 	}
 	if result.Outcome != systemchanges.Completed && result.Outcome != systemchanges.RollbackSucceeded {
 		return errors.New("install restart recovery requires inspection")

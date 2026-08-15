@@ -236,7 +236,7 @@ func ownerCorrection(value *installation.Correction) ownerconsole.ChangeReview {
 	for index, selection := range value.Selections {
 		selections[index] = ownerconsole.CorrectionSelection{Identity: selection.Identity, Label: selection.Label}
 	}
-	hideCheckAgain := value.SSHFailureCause == networkpolicy.SSHLaunchIdentityInvalid || value.SSHFailureCause == networkpolicy.SSHOriginalSessionLost
+	hideCheckAgain := value.SSHFailureCause != "" && !sshObservationTemporary(value.SSHFailureCause)
 	return ownerconsole.ChangeReview{Correction: &ownerconsole.CorrectionPresentation{Problem: value.Problem, Found: value.Found, Required: value.Required, WhyStopped: value.WhyStopped, FixWithSBXR: value.FixWithSBXR, HideCheckAgain: hideCheckAgain, OwnerSteps: append([]string(nil), value.OwnerSteps...), InputLabel: value.InputLabel, Selections: selections, Evidence: value.Evidence}}
 }
 

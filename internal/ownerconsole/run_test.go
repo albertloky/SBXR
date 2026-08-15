@@ -821,7 +821,7 @@ func TestAuthenticatedStartupRoutesValidatedRecoveryWithoutReadingProtectedState
 }
 
 func TestRecoveryRetryRoutesTypedSSHFailureBackToCorrectionActions(t *testing.T) {
-	correction := RecoveryPresentation{Kind: RecoveryForwardOnly, Proof: ProvenForwardOnlyRecovery, CauseCode: "SYSTEM-CHANGES-SSH-OBSERVATION", Explanation: "Fresh SSH Preservation Proof is unavailable.", ChangeSet: "install-recovery-0001", Material: "checksum-protected forward recovery material", Evidence: "SSH-PRESERVATION-REDACTED", Guidance: "Check again.", SSHBlocked: true}
+	correction := RecoveryPresentation{Kind: RecoveryForwardOnly, Proof: ProvenForwardOnlyRecovery, CauseCode: "SYSTEM-CHANGES-UNFINISHED", Explanation: "Fresh SSH Preservation Proof is unavailable.", ChangeSet: "install-recovery-0001", Material: "checksum-protected forward recovery material", Evidence: "SSH-PRESERVATION-REDACTED", Guidance: "Check again.", SSHBlocked: true, InstallationForward: true}
 	current := model{scenario: RecoveryWithRollback, actionGeneration: 4, recoveryScreen: recoveryScreenState{available: true, pending: true}}
 	updated, _ := current.Update(recoveryRetryMsg{identity: asyncRequestIdentity{generation: 4, origin: RecoveryWithRollback}, result: RecoveryRetryResult{Correction: correction}})
 	got := updated.(model)

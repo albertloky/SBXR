@@ -395,7 +395,7 @@ type RecoveryPresentation struct {
 	Proof                                                           RecoveryProof
 	CauseCode, Explanation, ChangeSet, Material, Evidence, Guidance string
 	ExternalGuidance                                                CloudflareExternalGuidance
-	SSHBlocked, HideCheckAgain                                      bool
+	SSHBlocked, HideCheckAgain, InstallationForward                 bool
 }
 
 type RecoveryProof uint8
@@ -420,10 +420,13 @@ func validatedRecovery(p RecoveryPresentation) (RecoveryPresentation, bool) {
 		p.Kind == RecoveryCurrentStateRepairAvailable && p.Proof == ProvenCurrentState && p.ChangeSet == "" && p.Material == "" ||
 		p.Kind == RecoveryRebuildRequired && p.Proof == ProvenRebuildRequired && p.ChangeSet == "" && p.Material == ""
 	if p.SSHBlocked {
-		if p.Kind != RecoveryForwardOnly || p.HideCheckAgain && p.CauseCode != "SYSTEM-CHANGES-SSH-RESTART" || !p.HideCheckAgain && p.CauseCode != "SYSTEM-CHANGES-SSH-OBSERVATION" {
+		if p.Kind != RecoveryForwardOnly || !p.InstallationForward || p.CauseCode != "SYSTEM-CHANGES-UNFINISHED" {
 			return RecoveryPresentation{}, false
 		}
 	} else if p.HideCheckAgain {
+		return RecoveryPresentation{}, false
+	}
+	if p.InstallationForward && (p.Kind != RecoveryForwardOnly || p.CauseCode != "SYSTEM-CHANGES-UNFINISHED") {
 		return RecoveryPresentation{}, false
 	}
 	if !validVariant || !externalValid {

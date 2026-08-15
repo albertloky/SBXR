@@ -79,7 +79,7 @@ func prepareManagedClientAccess(ctx context.Context, request clientAccessBuildRe
 	}
 	sshPreservation, sshFailure := managedClientAccessSSHPreservation(request.Action)
 	if sshFailure != nil {
-		return nil, state.Interface{}, &clientAccessSSHReviewError{Cause: sshFailure.Cause}
+		return nil, state.Interface{}, &sshPreservationFailureError{Cause: sshFailure.Cause}
 	}
 	request.SSHPreservation = sshPreservation
 	observed, release, err := managedLoadEvidence()

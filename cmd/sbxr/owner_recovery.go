@@ -34,7 +34,7 @@ func (recovery ownerRecovery) ViewRecovery(context.Context) ownerconsole.Recover
 				return ownerconsole.RecoveryPresentation{Kind: ownerconsole.RecoveryForwardOnly, Proof: ownerconsole.ProvenForwardOnlyRecovery, CauseCode: "SYSTEM-CHANGES-COMPLETE-REMOVAL-FORWARD", Explanation: "Irreversible Complete removal has started.", ChangeSet: recovery.changeSet, Material: "checksum-protected forward removal material", Evidence: "IRREVERSIBLE-REMOVAL-STARTED", Guidance: "Revoke the scoped Cloudflare token when requested, then continue the exact forward-only removal. Back, Cancel, and rollback are unavailable."}
 			}
 			if recovery.installationForward {
-				return ownerconsole.RecoveryPresentation{Kind: ownerconsole.RecoveryForwardOnly, Proof: ownerconsole.ProvenForwardOnlyRecovery, CauseCode: "SYSTEM-CHANGES-INSTALLATION-FORWARD", Explanation: "Irreversible Reclamation Started for the unfinished Installation.", ChangeSet: recovery.changeSet, Material: "checksum-protected forward installation material", Evidence: "IRREVERSIBLE-RECLAMATION-STARTED", Guidance: "Continue the exact forward-only Installation to Managed. Back, Cancel, and rollback are unavailable."}
+				return ownerconsole.RecoveryPresentation{Kind: ownerconsole.RecoveryForwardOnly, Proof: ownerconsole.ProvenForwardOnlyRecovery, CauseCode: "SYSTEM-CHANGES-UNFINISHED", Explanation: "Irreversible Reclamation Started for the unfinished Installation.", ChangeSet: recovery.changeSet, Material: "checksum-protected forward installation material", Evidence: "IRREVERSIBLE-RECLAMATION-STARTED", Guidance: "Continue the exact forward-only Installation to Managed. Back, Cancel, and rollback are unavailable.", InstallationForward: true}
 			}
 			guidance := "Continue the exact forward-only recovery; do not rotate the token again."
 			if recovery.needsRunTokenRotation {
@@ -61,7 +61,7 @@ func (recovery ownerRecovery) RetryAutomaticRollback(ctx context.Context) ownerc
 		retry = retryClientAccessRecovery
 	}
 	status, err := retry(ctx, recovery.changeSet)
-	var sshFailure *clientAccessSSHReviewError
+	var sshFailure *sshPreservationFailureError
 	if errors.As(err, &sshFailure) {
 		failure := &networkpolicy.SSHPreservationFailure{Cause: sshFailure.Cause}
 		return ownerconsole.RecoveryRetryResult{Correction: sshRecoveryCorrection(recovery.changeSet, failure)}
@@ -70,12 +70,16 @@ func (recovery ownerRecovery) RetryAutomaticRollback(ctx context.Context) ownerc
 }
 
 func sshRecoveryCorrection(changeSet string, failure *networkpolicy.SSHPreservationFailure) ownerconsole.RecoveryPresentation {
-	temporary := failure != nil && failure.Cause == networkpolicy.SSHObservationUnavailable
-	cause, guidance := "SYSTEM-CHANGES-SSH-RESTART", "Exit SBXR and restart it from a new direct active SSH session."
+	temporary := failure != nil && sshObservationTemporary(failure.Cause)
+	guidance := "Exit SBXR and restart it from a new direct active SSH session."
 	if temporary {
-		cause, guidance = "SYSTEM-CHANGES-SSH-OBSERVATION", "The SSH service, listener, or socket observation is temporarily unavailable. Select Check again, copy redacted evidence, or go Back."
+		guidance = "The SSH service, listener, or socket observation is temporarily unavailable. Select Check again, copy redacted evidence, or go Back."
 	}
-	return ownerconsole.RecoveryPresentation{Kind: ownerconsole.RecoveryForwardOnly, Proof: ownerconsole.ProvenForwardOnlyRecovery, CauseCode: cause, Explanation: "Forward firewall recovery requires fresh SSH Preservation Proof from this direct session.", ChangeSet: changeSet, Material: "checksum-protected forward recovery material", Evidence: "SSH-PRESERVATION-REDACTED", Guidance: guidance, SSHBlocked: true, HideCheckAgain: !temporary}
+	return ownerconsole.RecoveryPresentation{Kind: ownerconsole.RecoveryForwardOnly, Proof: ownerconsole.ProvenForwardOnlyRecovery, CauseCode: "SYSTEM-CHANGES-UNFINISHED", Explanation: "Forward firewall recovery requires fresh SSH Preservation Proof from this direct session.", ChangeSet: changeSet, Material: "checksum-protected forward recovery material", Evidence: "SSH-PRESERVATION-REDACTED", Guidance: guidance, SSHBlocked: true, HideCheckAgain: !temporary, InstallationForward: true}
+}
+
+func sshObservationTemporary(cause networkpolicy.SSHPreservationFailureCause) bool {
+	return cause == networkpolicy.SSHObservationUnavailable
 }
 
 func ownerRecoveryResult(recovery ownerRecovery, status systemchanges.InstallationStatus, err error) ownerconsole.DurableChangeSet {

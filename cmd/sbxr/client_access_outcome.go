@@ -284,7 +284,7 @@ func (outcome *clientAccessOutcome) RetryAutomaticRollback(ctx context.Context) 
 	return ownerRecovery{
 		changeSet: presentation.ChangeSet, forwardOnly: presentation.Kind == ownerconsole.RecoveryForwardOnly,
 		completeRemoval:       presentation.CauseCode == "SYSTEM-CHANGES-COMPLETE-REMOVAL-FORWARD",
-		installationForward:   presentation.CauseCode == "SYSTEM-CHANGES-INSTALLATION-FORWARD" || presentation.SSHBlocked,
+		installationForward:   presentation.InstallationForward,
 		needsRunTokenRotation: presentation.Evidence == "IRREVERSIBLE-RUN-TOKEN-ROTATION-STARTED" && strings.Contains(presentation.Guidance, "Select Rotate token"),
 	}.RetryAutomaticRollback(ctx)
 }
@@ -514,7 +514,7 @@ func (outcome *clientAccessOutcome) reviewAction(ctx context.Context, action cli
 	}
 	session, err := launch(ctx, request)
 	if err != nil {
-		var sshFailure *clientAccessSSHReviewError
+		var sshFailure *sshPreservationFailureError
 		if errors.As(err, &sshFailure) {
 			outcome.mu.Lock()
 			outcome.sshCorrectionAction, outcome.sshCorrectionProfile = action, profile
@@ -830,14 +830,14 @@ func clientAccessSSHCorrection(cause networkpolicy.SSHPreservationFailureCause) 
 	steps := []string{"Exit and restart SBXR through one direct SSH session."}
 	if cause == networkpolicy.SSHOriginalSessionLost {
 		found = "the original direct SSH session is no longer established"
-	} else if cause == networkpolicy.SSHObservationUnavailable {
+	} else if sshObservationTemporary(cause) {
 		found = "the SSH service, listener, or established-session observation is temporarily unavailable"
 		steps = []string{"Use Check again for a fresh read-only observation, or select Back."}
 	}
 	return ownerconsole.ChangeReview{Correction: &ownerconsole.CorrectionPresentation{
 		Problem: "The Client Access firewall change could not prove the original direct SSH session", Found: found,
 		Required: "fresh SSH Preservation Proof for the exact launch session", WhyStopped: "Managed Client Access cannot preserve a different or unproved SSH session",
-		HideCheckAgain: cause != networkpolicy.SSHObservationUnavailable, OwnerSteps: steps, Evidence: "CLIENT-ACCESS-PLAN-REFUSED",
+		HideCheckAgain: !sshObservationTemporary(cause), OwnerSteps: steps, Evidence: "CLIENT-ACCESS-PLAN-REFUSED",
 	}}
 }
 func uintText(value uint64) string { return strconv.FormatUint(value, 10) }
