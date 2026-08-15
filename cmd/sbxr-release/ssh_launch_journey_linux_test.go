@@ -43,7 +43,8 @@ func TestGeneratedBootstrapCarriesTheExactSessionThroughRootInstallationPrefligh
 	output, err := fixture.run()
 	result, readErr := os.ReadFile(record)
 	if err != nil || readErr != nil || string(result) != "PORT=2222\nCLEAN=true\n" || strings.Contains(output, fixture.sshConnection) || strings.Contains(output, "PRIVATE-SECRET-MARKER") {
-		t.Fatalf("command-level SSH Preservation journey failed safely: run=%v read=%v", err, readErr)
+		redacted := strings.ReplaceAll(strings.ReplaceAll(output, fixture.sshConnection, "[redacted SSH identity]"), "PRIVATE-SECRET-MARKER", "[redacted marker]")
+		t.Fatalf("command-level SSH Preservation journey failed safely: run=%v read=%v output=%q", err, readErr, redacted)
 	}
 }
 
@@ -91,7 +92,7 @@ func main() {
 		return
 	}
 	if len(os.Args) == 3 && os.Args[1] == "private" && os.Args[2] == "owner-launch" {
-		if softwareubuntu.LaunchOwnerConsole(context.Background()) != nil { os.Exit(1) }
+		if err := softwareubuntu.LaunchOwnerConsole(context.Background()); err != nil { fmt.Fprintln(os.Stderr, err); os.Exit(1) }
 		return
 	}
 	if len(os.Args) == 3 && os.Args[1] == "private" && os.Args[2] == "root-owner-console" {
@@ -101,7 +102,7 @@ func main() {
 			if result.Failure != nil || result.ActiveSSHPort == 0 { return fmt.Errorf("preflight refused") }
 			return os.WriteFile(%q, []byte(fmt.Sprintf("PORT=%%d\nCLEAN=%%t\n", result.ActiveSSHPort, clean)), 0644)
 		})
-		if err != nil { os.Exit(1) }
+		if err != nil { fmt.Fprintln(os.Stderr, err); os.Exit(1) }
 		return
 	}
 	if strings.Contains(strings.Join(os.Args, " "), "PRIVATE-SECRET-MARKER") { os.Exit(1) }
