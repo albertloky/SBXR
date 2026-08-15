@@ -389,6 +389,7 @@ type RecoveryPresentation struct {
 	Kind                                                            RecoveryKind
 	Proof                                                           RecoveryProof
 	CauseCode, Explanation, ChangeSet, Material, Evidence, Guidance string
+	ExternalGuidance                                                CloudflareExternalGuidance
 }
 
 type RecoveryProof uint8
@@ -404,11 +405,15 @@ func validatedRecovery(p RecoveryPresentation) (RecoveryPresentation, bool) {
 	if p.Kind.String() == "" || !safeProviderLines([]string{p.CauseCode, p.Explanation, p.Evidence, p.Guidance}, 4) || !safeOptionalLine(p.ChangeSet) || !safeOptionalLine(p.Material) {
 		return RecoveryPresentation{}, false
 	}
+	externalValid := emptyCloudflareExternalGuidance(p.ExternalGuidance)
+	if p.Kind == RecoveryForwardOnly && p.CauseCode == "SYSTEM-CHANGES-RUN-TOKEN-FORWARD" && p.Evidence == "IRREVERSIBLE-RUN-TOKEN-ROTATION-STARTED" {
+		externalValid = externalValid || validCloudflareExternalGuidance(p.ExternalGuidance, "https://developers.cloudflare.com/tunnel/advanced/tunnel-tokens/")
+	}
 	validVariant := p.Kind == RecoveryRollbackAvailable && p.Proof == ProvenUnfinishedRollback && p.ChangeSet != "" && p.Material != "" ||
 		p.Kind == RecoveryForwardOnly && p.Proof == ProvenForwardOnlyRecovery && p.ChangeSet != "" && p.Material != "" ||
 		p.Kind == RecoveryCurrentStateRepairAvailable && p.Proof == ProvenCurrentState && p.ChangeSet == "" && p.Material == "" ||
 		p.Kind == RecoveryRebuildRequired && p.Proof == ProvenRebuildRequired && p.ChangeSet == "" && p.Material == ""
-	if !validVariant {
+	if !validVariant || !externalValid {
 		return RecoveryPresentation{}, false
 	}
 	return p, true
@@ -472,6 +477,10 @@ func recoveryLines(p RecoveryPresentation, valid bool, selected int, diagnostics
 		lines = append(lines, "Recovery material - "+p.Material)
 	}
 	lines = append(lines, "Safe evidence - "+p.Evidence, "Guidance - "+p.Guidance)
+	if !emptyCloudflareExternalGuidance(p.ExternalGuidance) {
+		lines = append(lines, p.ExternalGuidance.Instructions[:]...)
+		lines = append(lines, terminalHyperlinkLines(p.ExternalGuidance.HelpURL, 58)...)
+	}
 	if p.Kind == RecoveryRebuildRequired {
 		lines = append(lines, "Retry automatic rollback is intentionally absent.")
 	}

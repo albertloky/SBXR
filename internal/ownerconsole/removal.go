@@ -14,6 +14,7 @@ const completeRemovalPhrase = "COMPLETE REMOVAL"
 type CompleteRemovalModule interface {
 	ViewCompleteRemoval(context.Context) CompleteRemovalPresentation
 	WatchCompleteRemoval(context.Context) <-chan CompleteRemovalPresentation
+	CheckCompleteRemoval(context.Context, OperationIdentity) CompleteRemovalPresentation
 	ReviewCompleteRemoval(context.Context, CompleteRemovalApproval) ChangeReview
 	CancelCompleteRemoval(context.Context, OperationIdentity) CompleteRemovalPresentation
 }
@@ -59,17 +60,18 @@ const (
 )
 
 type CompleteRemovalPresentation struct {
-	Kind               CompleteRemovalKind
-	StartingStatus     InstallationStatus
-	FinalStatus        InstallationStatus
-	StartingRevision   uint64
-	RestoredStatus     InstallationStatus
-	RestoredRevision   uint64
-	CancellationProof  CompleteRemovalCancellationProof
-	Progress           CompleteRemovalProgress
-	Checkpoint         CompleteRemovalCheckpoint
-	TokenPhase         CompleteRemovalTokenPhase
-	NoRecoveryMaterial bool
+	Kind                      CompleteRemovalKind
+	StartingStatus            InstallationStatus
+	FinalStatus               InstallationStatus
+	StartingRevision          uint64
+	RestoredStatus            InstallationStatus
+	RestoredRevision          uint64
+	CancellationProof         CompleteRemovalCancellationProof
+	Progress                  CompleteRemovalProgress
+	Checkpoint                CompleteRemovalCheckpoint
+	TokenPhase                CompleteRemovalTokenPhase
+	ManagementTokenRevocation CloudflareExternalGuidance
+	NoRecoveryMaterial        bool
 }
 
 // CompleteRemovalApproval can only be formed after the two separate controls
@@ -86,6 +88,7 @@ const (
 	completeRemovalLocked completeRemovalAction = iota + 1
 	completeRemovalReview
 	completeRemovalCancel
+	completeRemovalCheckAgain
 	completeRemovalBack
 )
 
@@ -111,7 +114,7 @@ var completeRemovalDefinitions = [...]completeRemovalDefinition{
 		acceptsInput: true,
 		header:       func(p CompleteRemovalPresentation) string { return p.StartingStatus.String() + " - authenticated" },
 		valid: func(p CompleteRemovalPresentation) bool {
-			return validRemovalStart(p) && emptyRemovalProgress(p) && p.FinalStatus == 0 && p.RestoredStatus == 0 && p.RestoredRevision == 0 && p.CancellationProof == 0 && p.Checkpoint == RemovalBeforeIrreversibleCheckpoint && p.TokenPhase == RemovalTokenAvailable && !p.NoRecoveryMaterial
+			return validRemovalStart(p) && emptyRemovalProgress(p) && p.FinalStatus == 0 && p.RestoredStatus == 0 && p.RestoredRevision == 0 && p.CancellationProof == 0 && p.Checkpoint == RemovalBeforeIrreversibleCheckpoint && p.TokenPhase == RemovalTokenAvailable && emptyCloudflareExternalGuidance(p.ManagementTokenRevocation) && !p.NoRecoveryMaterial
 		},
 		lines: func(p CompleteRemovalPresentation, input string) []string {
 			return []string{
@@ -161,7 +164,7 @@ var completeRemovalDefinitions = [...]completeRemovalDefinition{
 			return "Change in progress - rollback available - authenticated"
 		},
 		valid: func(p CompleteRemovalPresentation) bool {
-			return validRemovalStart(p) && validRemovalProgress(p.Progress) && p.FinalStatus == 0 && p.RestoredStatus == 0 && p.RestoredRevision == 0 && p.CancellationProof == 0 && p.Checkpoint == RemovalBeforeIrreversibleCheckpoint && p.TokenPhase == RemovalTokenAvailable && !p.NoRecoveryMaterial
+			return validRemovalStart(p) && validRemovalProgress(p.Progress) && p.FinalStatus == 0 && p.RestoredStatus == 0 && p.RestoredRevision == 0 && p.CancellationProof == 0 && p.Checkpoint == RemovalBeforeIrreversibleCheckpoint && p.TokenPhase == RemovalTokenAvailable && emptyCloudflareExternalGuidance(p.ManagementTokenRevocation) && !p.NoRecoveryMaterial
 		},
 		lines: func(p CompleteRemovalPresentation, _ string) []string {
 			return []string{
@@ -186,7 +189,7 @@ var completeRemovalDefinitions = [...]completeRemovalDefinition{
 		valid: func(p CompleteRemovalPresentation) bool {
 			exact := p.CancellationProof == RemovalRestoredExactStart && p.RestoredStatus == p.StartingStatus && p.RestoredRevision == p.StartingRevision
 			managedBaseline := p.StartingStatus == InstallationRecoveryRequired && p.CancellationProof == RemovalRestoredProvenManagedBaseline && p.RestoredStatus == InstallationManaged && p.RestoredRevision > 0
-			return validRemovalStart(p) && emptyRemovalProgress(p) && p.FinalStatus == 0 && (exact || managedBaseline) && p.Checkpoint == RemovalBeforeIrreversibleCheckpoint && p.TokenPhase == RemovalTokenAvailable && !p.NoRecoveryMaterial
+			return validRemovalStart(p) && emptyRemovalProgress(p) && p.FinalStatus == 0 && (exact || managedBaseline) && p.Checkpoint == RemovalBeforeIrreversibleCheckpoint && p.TokenPhase == RemovalTokenAvailable && emptyCloudflareExternalGuidance(p.ManagementTokenRevocation) && !p.NoRecoveryMaterial
 		},
 		lines: func(p CompleteRemovalPresentation, _ string) []string {
 			return []string{
@@ -207,7 +210,11 @@ var completeRemovalDefinitions = [...]completeRemovalDefinition{
 		watchesUpdates: true,
 		header:         func(CompleteRemovalPresentation) string { return "Change in progress - forward-only - authenticated" },
 		valid: func(p CompleteRemovalPresentation) bool {
-			return validRemovalStart(p) && validRemovalProgress(p.Progress) && p.FinalStatus == 0 && p.RestoredStatus == 0 && p.RestoredRevision == 0 && p.CancellationProof == 0 && p.Checkpoint == RemovalIrreversibleStarted && p.TokenPhase >= RemovalProviderDeletionInProgress && p.TokenPhase <= RemovalLocalTokenDeleted && !p.NoRecoveryMaterial
+			guidanceValid := emptyCloudflareExternalGuidance(p.ManagementTokenRevocation)
+			if p.TokenPhase == RemovalTokenAwaitingOwnerRevocation {
+				guidanceValid = validCloudflareExternalGuidance(p.ManagementTokenRevocation, "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/")
+			}
+			return validRemovalStart(p) && validRemovalProgress(p.Progress) && p.FinalStatus == 0 && p.RestoredStatus == 0 && p.RestoredRevision == 0 && p.CancellationProof == 0 && p.Checkpoint == RemovalIrreversibleStarted && p.TokenPhase >= RemovalProviderDeletionInProgress && p.TokenPhase <= RemovalLocalTokenDeleted && guidanceValid && !p.NoRecoveryMaterial
 		},
 		lines: func(p CompleteRemovalPresentation, _ string) []string {
 			lines := []string{
@@ -224,11 +231,10 @@ var completeRemovalDefinitions = [...]completeRemovalDefinition{
 					"Do not revoke the scoped Cloudflare token yet.",
 				)
 			} else if p.TokenPhase == RemovalTokenAwaitingOwnerRevocation {
-				lines = append(lines,
-					"ALBERT'S EXACT REVOCATION STEP",
-					"Open dash.cloudflare.com/profile/api-tokens and revoke the scoped SBXR token.",
-					"SBXR will verify token rejection, then delete the local token copy.",
-				)
+				lines = append(lines, "ALBERT'S EXACT REVOCATION STEP")
+				lines = append(lines, p.ManagementTokenRevocation.Instructions[:]...)
+				lines = append(lines, terminalHyperlinkLines(p.ManagementTokenRevocation.HelpURL, 58)...)
+				lines = append(lines, "SBXR will verify token rejection, then delete the local token copy.")
 			} else {
 				lines = append(lines, "Cloudflare token revocation - verified", "Local token deletion - "+removalProofStatus(p.TokenPhase == RemovalLocalTokenDeleted))
 			}
@@ -241,7 +247,7 @@ var completeRemovalDefinitions = [...]completeRemovalDefinition{
 		title:    "COMPLETE REMOVAL - PROVEN COMPLETE",
 		header:   func(CompleteRemovalPresentation) string { return "Not installed - authenticated" },
 		valid: func(p CompleteRemovalPresentation) bool {
-			return validRemovalStart(p) && p.FinalStatus == InstallationNotInstalled && p.RestoredStatus == 0 && p.RestoredRevision == 0 && p.CancellationProof == 0 && validRemovalProgress(p.Progress) && p.Progress.CompletedSteps == p.Progress.TotalSteps && p.Checkpoint == RemovalProvenComplete && p.TokenPhase == RemovalLocalTokenDeleted && p.NoRecoveryMaterial
+			return validRemovalStart(p) && p.FinalStatus == InstallationNotInstalled && p.RestoredStatus == 0 && p.RestoredRevision == 0 && p.CancellationProof == 0 && validRemovalProgress(p.Progress) && p.Progress.CompletedSteps == p.Progress.TotalSteps && p.Checkpoint == RemovalProvenComplete && p.TokenPhase == RemovalLocalTokenDeleted && emptyCloudflareExternalGuidance(p.ManagementTokenRevocation) && p.NoRecoveryMaterial
 		},
 		lines: func(p CompleteRemovalPresentation, _ string) []string {
 			return []string{
@@ -265,6 +271,11 @@ func completeRemovalDefinitionFor(kind CompleteRemovalKind) (completeRemovalDefi
 	}
 	definition := completeRemovalDefinitions[kind]
 	return definition, definition.header != nil && definition.valid != nil && definition.lines != nil && definition.actions != nil
+}
+
+func completeRemovalWatchesUpdates(presentation CompleteRemovalPresentation) bool {
+	definition, valid := completeRemovalDefinitionFor(presentation.Kind)
+	return valid && definition.watchesUpdates && presentation.TokenPhase != RemovalTokenAwaitingOwnerRevocation
 }
 
 func validRemovalStart(p CompleteRemovalPresentation) bool {
@@ -309,7 +320,11 @@ func completeRemovalActions(presentation CompleteRemovalPresentation, input stri
 	if !valid {
 		return []completeRemovalActionDefinition{{action: completeRemovalBack, label: "Back"}}
 	}
-	return definition.actions(input)
+	actions := definition.actions(input)
+	if presentation.Kind == CompleteRemovalForwardOnly && presentation.TokenPhase == RemovalTokenAwaitingOwnerRevocation {
+		return []completeRemovalActionDefinition{{action: completeRemovalCheckAgain, label: "Check again"}}
+	}
+	return actions
 }
 
 func completeRemovalLines(presentation CompleteRemovalPresentation, valid bool, input string, selected int) []string {

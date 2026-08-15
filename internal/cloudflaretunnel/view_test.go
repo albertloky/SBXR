@@ -163,6 +163,41 @@ func TestCredentialGuidanceUsesCurrentAccountTokenPathAndMinimumAuthority(t *tes
 	}
 }
 
+func TestExternalCorrectionGuidanceUsesCurrentOfficialPathsAndExactCredentialActs(t *testing.T) {
+	want := map[cloudflaretunnel.ExternalCorrection]struct {
+		url     string
+		content []string
+	}{
+		cloudflaretunnel.NameserverCorrection: {
+			url:     "https://developers.cloudflare.com/dns/nameservers/update-nameservers/",
+			content: []string{"domain Overview", "assigned Cloudflare nameservers", "registrar or reseller", "Check again"},
+		},
+		cloudflaretunnel.ManagementTokenRevocation: {
+			url:     "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/",
+			content: []string{"Manage Account > Account API Tokens", "SBXR - selected account / selected zone", "only that Account API Token", "Global API Key", "user API token", "Tunnel run token", "Check again"},
+		},
+		cloudflaretunnel.TunnelRunTokenRotation: {
+			url:     "https://developers.cloudflare.com/tunnel/advanced/tunnel-tokens/",
+			content: []string{"Networking > Tunnels", "committed SBXR Tunnel", "Rotate token", "only that Tunnel run token", "management Account API Token"},
+		},
+	}
+	for correction, expected := range want {
+		help, ok := cloudflaretunnel.ExternalCorrectionGuidance(correction)
+		joined := strings.Join(help.Instructions, " ")
+		if !ok || help.URL != expected.url || len(help.Instructions) == 0 || strings.Contains(joined, "My Profile > API Tokens") {
+			t.Fatalf("%v correction guidance = %+v, ok=%t", correction, help, ok)
+		}
+		for _, content := range expected.content {
+			if !strings.Contains(joined, content) {
+				t.Fatalf("%v correction guidance omitted %q: %+v", correction, content, help)
+			}
+		}
+	}
+	if help, ok := cloudflaretunnel.ExternalCorrectionGuidance(0); ok || help.URL != "" || len(help.Instructions) != 0 {
+		t.Fatalf("unknown correction guidance = %+v, ok=%t", help, ok)
+	}
+}
+
 func TestViewReportsDeliberatelyRemovedManagementTokenWithoutFalseHealth(t *testing.T) {
 	result := cloudflaretunnel.New(nil, &controlledClock{now: time.Date(2026, time.August, 7, 12, 0, 0, 0, time.UTC)}).View(context.Background(), cloudflaretunnel.ViewRequest{
 		AccountID:    accountID,
@@ -197,6 +232,13 @@ func TestViewFailsClosedWithoutLeakingAuthority(t *testing.T) {
 			if strings.Contains(rendered, token) || strings.Contains(rendered, "MANAGEMENT-TOKEN-MARKER") {
 				t.Fatalf("safe formatting leaked token: %s", rendered)
 			}
+		}
+	})
+
+	t.Run("authorization refusal retains only the configured correction scope", func(t *testing.T) {
+		result := cloudflaretunnel.New(&staticAPI{err: cloudflaretunnel.APIError{Kind: cloudflaretunnel.APIForbidden, RequiredPermission: cloudflaretunnel.DNSWritePermission}}, &controlledClock{}).View(context.Background(), request)
+		if result.Health.Code != "CLOUDFLARE-TOKEN-PERMISSION" || result.Account.ID != accountID || result.Zone.ID != zoneID || result.Zone.Name != "example.com" || result.PermissionCorrection.Required != "Zone > DNS > Edit on selected zone "+zoneID || !strings.Contains(strings.Join(result.PermissionCorrection.DashboardSteps, " "), "Check current token again") {
+			t.Fatalf("authorization correction scope = account %+v zone %+v health %+v", result.Account, result.Zone, result.Health)
 		}
 	})
 
@@ -292,6 +334,9 @@ func TestViewFailsClosedWithoutLeakingAuthority(t *testing.T) {
 			}
 			if result.Health.Problem == "" || !strings.Contains(result.Health.Found, test.found) || result.Health.Required == "" || result.Health.WhyStopped == "" || result.Health.Evidence == "" || strings.Contains(strings.Join(result.Health.NextActions, " "), "Continue anyway") {
 				t.Fatalf("unsafe authority omitted Correction Flow facts: %+v", result.Health)
+			}
+			if test.name == "missing capability" && result.PermissionCorrection.Required != "Account > Cloudflare Tunnel > Edit on selected account "+accountID {
+				t.Fatalf("missing capability correction = %+v", result.PermissionCorrection)
 			}
 			if rendered := result.String() + result.Health.Found; strings.Contains(rendered, "PROVIDER-FIELD-MARKER") || strings.Contains(rendered, token) {
 				t.Fatalf("unsafe authority leaked provider material: %s", rendered)

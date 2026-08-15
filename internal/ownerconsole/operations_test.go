@@ -114,6 +114,20 @@ func TestRunRecoveryRequiredOffersOnlyActionsProvenByCurrentMaterial(t *testing.
 	}
 }
 
+func TestRunForwardOnlyRotationShowsExactHelpOnlyAfterTheCheckpoint(t *testing.T) {
+	view := RecoveryPresentation{
+		Kind: RecoveryForwardOnly, Proof: ProvenForwardOnlyRecovery, CauseCode: "SYSTEM-CHANGES-RUN-TOKEN-FORWARD", Explanation: "The old Tunnel run token was removed at the irreversible checkpoint.", ChangeSet: "run-token-rotation", Material: "checksum-protected forward recovery material", Evidence: "IRREVERSIBLE-RUN-TOKEN-ROTATION-STARTED", Guidance: "Follow the exact committed-Tunnel rotation Help.",
+		ExternalGuidance: CloudflareExternalGuidance{Instructions: [3]string{"Open the Cloudflare dashboard > Networking > Tunnels and select the committed SBXR Tunnel.", "Select Rotate token for only that Tunnel run token, then return to SBXR forward recovery.", "Do not rotate another Tunnel or the management Account API Token."}, HelpURL: "https://developers.cloudflare.com/tunnel/advanced/tunnel-tokens/"},
+	}
+	steps := append(sectionTraversalSteps(providerPageCount(recoveryLines(view, true, 0, false), len(recoveryActions(view, false)), 80, 24)), "\x03\r")
+	got := runTranscriptSteps(t, Session{Scenario: RecoveryWithRollback, Recovery: &recoveryStub{view: view}}, 80, 24, steps...)
+	for _, want := range []string{"Networking > Tunnels", "committed SBXR Tunnel", "Select Rotate token for only that Tunnel run", "management Account API", "Token.", "developers.cloudflare.com/tunnel/advanced/tunnel-t", "okens/"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("forward-only rotation Help omitted %q\n%s", want, got)
+		}
+	}
+}
+
 func TestRecoveryViewMapsEachKindToItsExactStatusScreen(t *testing.T) {
 	tests := []struct {
 		kind     RecoveryKind

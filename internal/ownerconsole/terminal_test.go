@@ -290,13 +290,16 @@ func TestRunResizeRemasksInitialAndManagedCloudflareTokens(t *testing.T) {
 	}
 	initial := ChangeReview{Editing: &EditingPresentation{Title: "Clean VPS installation", Field: EditingField{Identity: "cloudflare-token", Label: "Cloudflare Account API Token", Required: true}, Help: help}}
 	credential := CloudflarePresentation{Kind: CloudflareCredentialPresentation, Credential: completeCloudflareCredential()}
+	managedSetup := append(cloudflareTraversalSteps(credential, 120, 36), "\x1b[B\r", "")
+	managedSetup = append(managedSetup, cloudflareReplacingTraversalSteps(credential, 120, 36)...)
+	managedSetup = append(managedSetup, secret, "\x12")
 	for _, test := range []struct {
 		name    string
 		session Session
 		setup   []string
 	}{
 		{name: "initial Installation", session: Session{Scenario: InstallationReview, Outcome: &outcomeStub{reviews: []ChangeReview{initial}}}, setup: []string{secret, "\x12"}},
-		{name: "managed replacement", session: Session{Scenario: CloudflareWalkthrough, Cloudflare: &cloudflareStub{view: credential}}, setup: []string{"\x1b[B\r", "\r", secret, "\x12"}},
+		{name: "managed replacement", session: Session{Scenario: CloudflareWalkthrough, Cloudflare: &cloudflareStub{view: credential}}, setup: managedSetup},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got := runRevealedResizePseudoTerminal(t, test.session, test.setup)

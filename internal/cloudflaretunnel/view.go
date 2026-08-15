@@ -101,7 +101,8 @@ const (
 
 // APIError deliberately drops provider text at the Module boundary.
 type APIError struct {
-	Kind APIErrorKind
+	Kind               APIErrorKind
+	RequiredPermission PermissionKind
 }
 
 func (e APIError) Error() string { return "Cloudflare API " + string(e.Kind) + " failure" }
@@ -209,11 +210,26 @@ type ViewResult struct {
 	Capability              CapabilityStatus
 	NetworkPath             networkpolicy.CloudflareTunnelPath
 	Walkthrough             Walkthrough
+	PermissionCorrection    PermissionCorrection
 	Health                  Health
 	LastCheck               time.Time
 	verifiedManagementToken VerifiedManagementToken
 	tokenVerified           bool
 }
+
+type PermissionCorrection struct {
+	Capability, AccountID, ZoneID, ZoneName, Found, Required, WhyStopped, Evidence string
+	DashboardSteps                                                                 []string
+	URL                                                                            string
+}
+
+type PermissionKind uint8
+
+const (
+	AccountAPITokensReadPermission PermissionKind = iota + 1
+	CloudflareTunnelEditPermission
+	DNSWritePermission
+)
 
 func (result ViewResult) String() string {
 	return fmt.Sprintf("Cloudflare View: account=%s zone=%s token=%s health=%s code=%s", result.Account.ID, result.Zone.ID, result.Credential.Status, result.Health.Outcome, result.Health.Code)
@@ -326,6 +342,55 @@ func CredentialGuidance(input CredentialInput) (CredentialHelp, bool) {
 	}
 }
 
+type ExternalCorrection uint8
+
+const (
+	NameserverCorrection ExternalCorrection = iota + 1
+	ManagementTokenRevocation
+	TunnelRunTokenRotation
+)
+
+type ExternalCorrectionHelp struct {
+	Instructions []string
+	URL          string
+}
+
+func ExternalCorrectionGuidance(correction ExternalCorrection) (ExternalCorrectionHelp, bool) {
+	var help ExternalCorrectionHelp
+	switch correction {
+	case NameserverCorrection:
+		help = ExternalCorrectionHelp{
+			Instructions: []string{
+				"In Cloudflare, select the domain; open domain Overview; copy both assigned Cloudflare nameservers exactly.",
+				"At the registrar or reseller that controls the domain, remove every old authoritative nameserver and add exactly both assigned Cloudflare nameservers.",
+				"Do not use a guessed registrar URL; use that provider's nameserver controls. Wait for public delegation, then select Check again in SBXR.",
+			},
+			URL: "https://developers.cloudflare.com/dns/nameservers/update-nameservers/",
+		}
+	case ManagementTokenRevocation:
+		help = ExternalCorrectionHelp{
+			Instructions: []string{
+				"Open Manage Account > Account API Tokens in the selected account.",
+				"Find the Account API Token named SBXR - selected account / selected zone and revoke only that Account API Token.",
+				"Do not revoke a Global API Key, user API token, Tunnel run token, or any unrelated account token. Return to SBXR and select Check again.",
+			},
+			URL: "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/",
+		}
+	case TunnelRunTokenRotation:
+		help = ExternalCorrectionHelp{
+			Instructions: []string{
+				"Open the Cloudflare dashboard > Networking > Tunnels and select the committed SBXR Tunnel.",
+				"Select Rotate token for only that Tunnel run token, then return to SBXR forward recovery.",
+				"Do not rotate another Tunnel or the management Account API Token.",
+			},
+			URL: "https://developers.cloudflare.com/tunnel/advanced/tunnel-tokens/",
+		}
+	default:
+		return ExternalCorrectionHelp{}, false
+	}
+	return help, true
+}
+
 type Health struct {
 	Time        time.Time
 	Module      string
@@ -350,9 +415,9 @@ func (i Interface) View(ctx context.Context, request ViewRequest) ViewResult {
 		result.Health = Health{Outcome: Failed, Code: "CLOUDFLARE-VIEW-INVALID", Found: "an unavailable Adapter or clock, malformed immutable ID, invalid zone name, or missing token", Explanation: "The selected Cloudflare authority is incomplete.", NextActions: []string{"Back"}}
 		return finish(result)
 	}
+	result.Account = AccountStatus{ID: request.AccountID}
+	result.Zone = ZoneStatus{ID: request.ZoneID, Name: request.ZoneName}
 	if request.TokenRemoved {
-		result.Account = AccountStatus{ID: request.AccountID}
-		result.Zone = ZoneStatus{ID: request.ZoneID, Name: request.ZoneName}
 		result.Credential = CredentialStatus{Status: "removed"}
 		result.Capability = CapabilityStatus{RequiredPermissions: requiredPermissions(), AccountID: request.AccountID, ZoneID: request.ZoneID}
 		result.Health = Health{Outcome: Unknown, Code: "CLOUDFLARE-MANAGEMENT-TOKEN-REMOVED", Explanation: "The management token was deliberately removed, so provider authority and dependent provider health cannot be checked.", NextActions: []string{"Check now", "Replace token", "Remove from SBXR"}}
@@ -366,6 +431,9 @@ func (i Interface) View(ctx context.Context, request ViewRequest) ViewResult {
 	observed, err := i.observe(ctx, ObservationRequest{AccountID: request.AccountID, ZoneID: request.ZoneID, ZoneName: request.ZoneName, Token: request.Token})
 	if err != nil {
 		result.Health = safeAPIHealth(err)
+		if result.Health.Code == "CLOUDFLARE-TOKEN-PERMISSION" {
+			result.PermissionCorrection = permissionCorrection(request, result.Health.Found, apiRequiredPermission(err))
+		}
 		return finish(result)
 	}
 	result.Account = AccountStatus{ID: observed.Account.ID, Name: observed.Account.Name}
@@ -383,6 +451,7 @@ func (i Interface) View(ctx context.Context, request ViewRequest) ViewResult {
 	result.Capability = CapabilityStatus{RequiredPermissions: requiredPermissions(), EffectivePermissions: effective, UnapprovedPermissions: unapproved, AccountID: request.AccountID, ZoneID: request.ZoneID, ReadsVerified: valid, Exact: valid}
 	if !result.Capability.ReadsVerified {
 		result.Health = missingPermissionHealth(found)
+		result.PermissionCorrection = permissionCorrection(request, found, permissionFromFinding(found))
 		return finish(result)
 	}
 	if !result.Zone.Active || !result.Zone.Delegated {
@@ -572,6 +641,67 @@ func missingPermissionHealth(found ...string) Health {
 		fact = found[0]
 	}
 	return Health{Outcome: Failed, Code: "CLOUDFLARE-TOKEN-PERMISSION", Found: fact, Explanation: "The token's active status, selected binding, exact capabilities, or resource scope could not be proved.", NextActions: []string{"Check current token again", "Enter replacement token", "Verify replacement", "Back"}}
+}
+
+func permissionCorrection(request ViewRequest, found string, permission PermissionKind) PermissionCorrection {
+	label := permission.dashboardLabel()
+	if label == "" {
+		label = "exact selected Cloudflare Account API Token authority"
+	}
+	scope := "selected account " + request.AccountID
+	if permission == DNSWritePermission {
+		scope = "selected zone " + request.ZoneID
+	}
+	required := label + " on " + scope
+	return PermissionCorrection{
+		Capability: "Required Cloudflare Account API Token authority", AccountID: request.AccountID, ZoneID: request.ZoneID, ZoneName: request.ZoneName,
+		Found: found, Required: required, WhyStopped: "SBXR does not bypass required Cloudflare authority", Evidence: "copyable redacted CLOUDFLARE-TOKEN-PERMISSION result",
+		DashboardSteps: []string{"Open Manage Account > Account API Tokens in the selected account.", "Edit the SBXR - selected account / selected zone token; require " + required + ".", "Save the token, return to SBXR, and select Check current token again."},
+		URL:            "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/",
+	}
+}
+
+func permissionFromFinding(found string) PermissionKind {
+	for _, permission := range []PermissionKind{AccountAPITokensReadPermission, CloudflareTunnelEditPermission, DNSWritePermission} {
+		if strings.Contains(found, permission.apiName()) {
+			return permission
+		}
+	}
+	return 0
+}
+
+func apiRequiredPermission(err error) PermissionKind {
+	var apiError APIError
+	if errors.As(err, &apiError) {
+		return apiError.RequiredPermission
+	}
+	return 0
+}
+
+func (permission PermissionKind) apiName() string {
+	switch permission {
+	case AccountAPITokensReadPermission:
+		return "Account API Tokens Read"
+	case CloudflareTunnelEditPermission:
+		return "Cloudflare Tunnel Edit"
+	case DNSWritePermission:
+		return "DNS Write"
+	default:
+		return ""
+	}
+}
+
+func (permission PermissionKind) dashboardLabel() string {
+	switch permission {
+	case AccountAPITokensReadPermission:
+		return "Account > Account API Tokens > Read"
+	case CloudflareTunnelEditPermission:
+		return "Account > Cloudflare Tunnel > Edit"
+	case DNSWritePermission:
+		return "Zone > DNS > Edit"
+	default:
+		return ""
+	}
 }
 
 func safeAPIHealth(err error) Health {

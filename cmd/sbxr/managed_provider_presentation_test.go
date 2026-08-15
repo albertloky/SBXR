@@ -21,6 +21,25 @@ func TestManagedProviderPresentationKeepsTypedCloudflareAndCertificateFacts(t *t
 		t.Fatalf("Cloudflare presentation = %+v", cloudflare)
 	}
 
+	missing := ownerCloudflarePresentation(cloudflaretunnel.ViewResult{
+		Health: cloudflaretunnel.Health{Outcome: cloudflaretunnel.Failed, Code: "CLOUDFLARE-TOKEN-PERMISSION", Found: "token is missing DNS Write"},
+		PermissionCorrection: cloudflaretunnel.PermissionCorrection{
+			Capability: "Required Cloudflare Account API Token authority", AccountID: "11111111111111111111111111111111", ZoneID: "22222222222222222222222222222222", ZoneName: "example.com", Found: "token is missing DNS Write", Required: "Zone > DNS > Edit on selected zone 22222222222222222222222222222222", WhyStopped: "SBXR does not bypass required Cloudflare authority", Evidence: "copyable redacted CLOUDFLARE-TOKEN-PERMISSION result",
+			DashboardSteps: []string{"Open Manage Account > Account API Tokens in the selected account.", "Edit the exact token permission.", "Return to SBXR and select Check current token again."}, URL: "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/",
+		},
+	})
+	if missing.Kind != ownerconsole.CloudflareMissingPermissionPresentation || missing.MissingPermission.Account != "11111111111111111111111111111111" || missing.MissingPermission.Zone != "22222222222222222222222222222222 (example.com)" || missing.MissingPermission.Required != "Zone > DNS > Edit on selected zone 22222222222222222222222222222222" {
+		t.Fatalf("missing-permission presentation = %+v", missing)
+	}
+
+	pending := ownerCloudflarePresentation(cloudflaretunnel.ViewResult{
+		Zone:   cloudflaretunnel.ZoneStatus{Name: "example.com", AssignedNameServers: []string{"alice.ns.cloudflare.com", "bob.ns.cloudflare.com"}, ObservedNameServers: []string{"old-a.example.net", "old-b.example.net"}},
+		Health: cloudflaretunnel.Health{Outcome: cloudflaretunnel.NeedsAttention, Code: "CLOUDFLARE-ZONE-PENDING"},
+	})
+	if pending.Kind != ownerconsole.CloudflarePendingZonePresentation || pending.PendingZone.HelpURL != "https://developers.cloudflare.com/dns/nameservers/update-nameservers/" || len(pending.PendingZone.RegistrarSteps) != 3 {
+		t.Fatalf("pending-zone presentation = %+v", pending)
+	}
+
 	certificate := ownerCertificatesPresentation(certificatelifecycle.ViewResult{
 		IP:        certificatelifecycle.LineageStatus{Identity: "192.0.2.10", RequiredProfile: "shortlived", Valid: true, Due: true, NotAfter: now.Add(72 * time.Hour), ActiveServingID: "ip-current"},
 		Domain:    certificatelifecycle.LineageStatus{Identity: "direct.example.com", RequiredProfile: "tlsserver", Valid: true, NotAfter: now.Add(15 * 24 * time.Hour), ActiveServingID: "domain-current"},

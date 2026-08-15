@@ -3,6 +3,7 @@ package cloudflaretunnel
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -66,15 +67,15 @@ func (api *httpAPI) Observe(ctx context.Context, request ObservationRequest) (Ob
 	}
 	token, err := api.verifyToken(ctx, request)
 	if err != nil {
-		return Observation{}, err
+		return Observation{}, requiringPermission(err, AccountAPITokensReadPermission)
 	}
 	policies, err := api.tokenPolicies(ctx, request, token.ID, token.Status)
 	if err != nil {
-		return Observation{}, err
+		return Observation{}, requiringPermission(err, AccountAPITokensReadPermission)
 	}
 	account, zone, err := api.selectedZone(ctx, request)
 	if err != nil {
-		return Observation{}, err
+		return Observation{}, requiringPermission(err, DNSWritePermission)
 	}
 	nameservers, err := api.resolver.LookupNS(ctx, request.ZoneName)
 	if err != nil {
@@ -88,6 +89,15 @@ func (api *httpAPI) Observe(ctx context.Context, request ObservationRequest) (Ob
 		zone.ObservedNameServers[index] = nameserver.Host
 	}
 	return Observation{Account: account, Zone: zone, Token: token, Policies: policies}, nil
+}
+
+func requiringPermission(err error, permission PermissionKind) error {
+	var apiError APIError
+	if errors.As(err, &apiError) && (apiError.Kind == APIUnauthorized || apiError.Kind == APIForbidden) {
+		apiError.RequiredPermission = permission
+		return apiError
+	}
+	return err
 }
 
 func (api *httpAPI) verifyToken(ctx context.Context, request ObservationRequest) (TokenObservation, error) {

@@ -14,6 +14,7 @@ import (
 	"github.com/albertloky/SBXR/internal/installation"
 	"github.com/albertloky/SBXR/internal/ownerconsole"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
+	"github.com/albertloky/SBXR/internal/systemchanges"
 )
 
 var _ ownerconsole.CloudflareModule = (*clientAccessOutcome)(nil)
@@ -31,6 +32,41 @@ func TestProductionProfileActionSeamRefusesHiddenPortAndRepairValues(t *testing.
 		if review.Correction == nil || review.Plan != nil || review.Editing != nil || review.Correction.Evidence != "CLIENT-ACCESS-PLAN-REFUSED" {
 			t.Fatalf("hidden production profile action %s (%d) = %+v", test.name, test.change, review)
 		}
+	}
+}
+
+func TestProductionCompleteRemovalCheckAgainUsesOnlyTheAwaitingOperation(t *testing.T) {
+	const operation = ownerconsole.OperationIdentity("complete-removal-operation")
+	newOutcome := func() (*clientAccessOutcome, *int) {
+		calls := 0
+		outcome := &clientAccessOutcome{
+			loaded: true,
+			presentation: clientAccessPresentation{Installation: ownerconsole.InstallationRecoveryRequired, Removal: ownerconsole.CompleteRemovalPresentation{
+				Kind: ownerconsole.CompleteRemovalForwardOnly, StartingStatus: ownerconsole.InstallationManaged, StartingRevision: 42,
+				Progress: ownerconsole.CompleteRemovalProgress{OperationID: operation, CompletedSteps: 7, TotalSteps: 10}, Checkpoint: ownerconsole.RemovalIrreversibleStarted, TokenPhase: ownerconsole.RemovalTokenAwaitingOwnerRevocation,
+			}},
+			request: clientAccessHandoffRequest{Schema: 1, Mode: "removal-apply"},
+			change:  ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetRecoveryRequired, OperationID: operation, CompletedSteps: 7, TotalSteps: 10, Checkpoint: "Awaiting Owner token revocation"},
+			recoveryRetry: func(_ context.Context, got string) (systemchanges.InstallationStatus, error) {
+				calls++
+				if got != string(operation) {
+					t.Fatalf("Complete removal retry operation = %q", got)
+				}
+				return systemchanges.NotInstalled, nil
+			},
+		}
+		return outcome, &calls
+	}
+
+	outcome, calls := newOutcome()
+	view := outcome.CheckCompleteRemoval(t.Context(), operation)
+	if *calls != 1 || view.Kind != ownerconsole.CompleteRemovalSucceeded || view.FinalStatus != ownerconsole.InstallationNotInstalled || !view.NoRecoveryMaterial {
+		t.Fatalf("CheckCompleteRemoval() calls=%d view=%+v", *calls, view)
+	}
+
+	outcome, calls = newOutcome()
+	if view := outcome.CheckCompleteRemoval(t.Context(), "different-operation"); *calls != 0 || view != (ownerconsole.CompleteRemovalPresentation{}) {
+		t.Fatalf("wrong-operation CheckCompleteRemoval() calls=%d view=%+v", *calls, view)
 	}
 }
 
@@ -117,7 +153,7 @@ func TestInstallationPresentationClearsReviewedHealthWhenReviewIsInvalidated(t *
 
 func TestOwnerRecoveryPresentsRunTokenRotationAsForwardOnly(t *testing.T) {
 	view := (ownerRecovery{changeSet: "provider-run-token", forwardOnly: true, needsRunTokenRotation: true}).ViewRecovery(t.Context())
-	if view.Kind != ownerconsole.RecoveryForwardOnly || view.Proof != ownerconsole.ProvenForwardOnlyRecovery || !strings.Contains(view.Guidance, "Rotate token") || strings.Contains(view.Guidance, "rollback") {
+	if view.Kind != ownerconsole.RecoveryForwardOnly || view.Proof != ownerconsole.ProvenForwardOnlyRecovery || view.ExternalGuidance.HelpURL != "https://developers.cloudflare.com/tunnel/advanced/tunnel-tokens/" || !strings.Contains(strings.Join(view.ExternalGuidance.Instructions[:], " "), "Networking > Tunnels") || strings.Contains(view.Guidance, "rollback") {
 		t.Fatalf("forward-only recovery = %+v", view)
 	}
 }

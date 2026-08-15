@@ -15,6 +15,34 @@ type completeRemovalStub struct {
 	delay         time.Duration
 	reviews       int
 	cancellations []OperationIdentity
+	checks        []OperationIdentity
+	checkResult   *CompleteRemovalPresentation
+}
+
+func TestRunCompleteRemovalAwaitingRevocationShowsExactAccountTokenHelpBeforeCheckAgain(t *testing.T) {
+	view := CompleteRemovalPresentation{
+		Kind: CompleteRemovalForwardOnly, StartingStatus: InstallationManaged, StartingRevision: 42,
+		Progress: CompleteRemovalProgress{OperationID: "complete-removal-operation", CompletedSteps: 7, TotalSteps: 10}, Checkpoint: RemovalIrreversibleStarted, TokenPhase: RemovalTokenAwaitingOwnerRevocation,
+		ManagementTokenRevocation: CloudflareExternalGuidance{
+			Instructions: [3]string{"Open Manage Account > Account API Tokens in the selected account.", "Find the Account API Token named SBXR - selected account / selected zone and revoke only that Account API Token.", "Do not revoke a Global API Key, user API token, Tunnel run token, or any unrelated account token. Return to SBXR and select Check again."},
+			HelpURL:      "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/",
+		},
+	}
+	checked := view
+	checked.Progress.CompletedSteps = 8
+	checked.TokenPhase = RemovalTokenRevocationVerified
+	checked.ManagementTokenRevocation = CloudflareExternalGuidance{}
+	stub := &completeRemovalStub{view: view, updates: make(chan CompleteRemovalPresentation), checkResult: &checked}
+	steps := append(sectionTraversalSteps(providerPageCount(completeRemovalLines(view, true, "", 0), 1, 80, 24)), "\r", "", "\x03\r")
+	got := runTranscriptSteps(t, Session{Scenario: ForwardOnlyRemoval, CompleteRemoval: stub}, 80, 24, steps...)
+	for _, want := range []string{"Manage Account > Account API Tokens", "SBXR - selected account", "selected zone and revoke only that Account API Token", "Global API Key", "user API token", "Tunnel run", "developers.cloudflare.com/fundamentals/api/get-sta", "Check again", "Cloudflare token revocation - verified"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("awaiting-revocation Help omitted %q\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "My Profile > API Tokens") || len(stub.checks) != 1 || stub.checks[0] != "complete-removal-operation" || stub.reviews != 0 {
+		t.Fatalf("awaiting-revocation Help bypassed or misrouted the typed check: checks=%#v reviews=%d\n%s", stub.checks, stub.reviews, got)
+	}
 }
 
 func (stub *completeRemovalStub) ViewCompleteRemoval(context.Context) CompleteRemovalPresentation {
@@ -23,6 +51,15 @@ func (stub *completeRemovalStub) ViewCompleteRemoval(context.Context) CompleteRe
 
 func (stub *completeRemovalStub) WatchCompleteRemoval(context.Context) <-chan CompleteRemovalPresentation {
 	return stub.updates
+}
+
+func (stub *completeRemovalStub) CheckCompleteRemoval(_ context.Context, operation OperationIdentity) CompleteRemovalPresentation {
+	stub.checks = append(stub.checks, operation)
+	if stub.checkResult != nil {
+		stub.view = *stub.checkResult
+		return stub.view
+	}
+	return stub.view
 }
 
 func (stub *completeRemovalStub) ReviewCompleteRemoval(context.Context, CompleteRemovalApproval) ChangeReview {
@@ -114,7 +151,7 @@ func TestRunCompleteRemovalCancellationPreservesStartingStatus(t *testing.T) {
 
 func TestRunCompleteRemovalForwardOnlyRestartAndSuccessAreTruthful(t *testing.T) {
 	for _, size := range []struct{ width, height int }{{80, 24}, {120, 36}} {
-		forward := CompleteRemovalPresentation{Kind: CompleteRemovalForwardOnly, StartingStatus: InstallationManaged, StartingRevision: 42, Progress: CompleteRemovalProgress{OperationID: "complete-removal-operation", CompletedSteps: 4, TotalSteps: 10}, Checkpoint: RemovalIrreversibleStarted, TokenPhase: RemovalTokenAwaitingOwnerRevocation}
+		forward := CompleteRemovalPresentation{Kind: CompleteRemovalForwardOnly, StartingStatus: InstallationManaged, StartingRevision: 42, Progress: CompleteRemovalProgress{OperationID: "complete-removal-operation", CompletedSteps: 4, TotalSteps: 10}, Checkpoint: RemovalIrreversibleStarted, TokenPhase: RemovalProviderDeletionInProgress}
 		updates := make(chan CompleteRemovalPresentation)
 		go func() {
 			for _, update := range []CompleteRemovalPresentation{
@@ -128,7 +165,7 @@ func TestRunCompleteRemovalForwardOnlyRestartAndSuccessAreTruthful(t *testing.T)
 			close(updates)
 		}()
 		got := runTranscriptSteps(t, Session{Scenario: ForwardOnlyRemoval, CompleteRemoval: &completeRemovalStub{view: forward, updates: updates}}, size.width, size.height, "", "\x1b[27u", "", "", "", "", "\x03\r")
-		for _, want := range []string{"FORWARD-ONLY", "Irreversible removal started", "Durable progress - 4 of 10 steps", "dash.cloudflare.com/profile/api-tokens", "scoped SBXR token", "verify token rejection", "Cloudflare token revocation - verified", "Local token deletion", "Restart continues", "PROVEN NOT INSTALLED", "no SBXR recovery material"} {
+		for _, want := range []string{"FORWARD-ONLY", "Irreversible removal started", "Durable progress - 4 of 10 steps", "Do not revoke the scoped Cloudflare token yet", "Cloudflare token revocation - verified", "Local token deletion", "Restart continues", "PROVEN NOT INSTALLED", "no SBXR recovery material"} {
 			if !strings.Contains(got, want) {
 				t.Fatalf("%dx%d forward-only removal omitted %q\n%s", size.width, size.height, want, got)
 			}
@@ -156,11 +193,11 @@ func TestRunCompleteRemovalRefusesUnsafeTypedFacts(t *testing.T) {
 }
 
 func TestRunCompleteRemovalForwardOnlyStreamFailureNeverRestoresBack(t *testing.T) {
-	forward := CompleteRemovalPresentation{Kind: CompleteRemovalForwardOnly, StartingStatus: InstallationManaged, StartingRevision: 42, Progress: CompleteRemovalProgress{OperationID: "complete-removal-operation", CompletedSteps: 4, TotalSteps: 10}, Checkpoint: RemovalIrreversibleStarted, TokenPhase: RemovalTokenAwaitingOwnerRevocation}
+	forward := CompleteRemovalPresentation{Kind: CompleteRemovalForwardOnly, StartingStatus: InstallationManaged, StartingRevision: 42, Progress: CompleteRemovalProgress{OperationID: "complete-removal-operation", CompletedSteps: 4, TotalSteps: 10}, Checkpoint: RemovalIrreversibleStarted, TokenPhase: RemovalProviderDeletionInProgress}
 	closed := make(chan CompleteRemovalPresentation)
 	close(closed)
 	invalid := make(chan CompleteRemovalPresentation, 1)
-	invalid <- CompleteRemovalPresentation{Kind: CompleteRemovalForwardOnly, StartingStatus: InstallationManaged, StartingRevision: 42, Progress: CompleteRemovalProgress{OperationID: "complete-removal-operation", CompletedSteps: 3, TotalSteps: 10}, Checkpoint: RemovalIrreversibleStarted, TokenPhase: RemovalTokenAwaitingOwnerRevocation}
+	invalid <- CompleteRemovalPresentation{Kind: CompleteRemovalForwardOnly, StartingStatus: InstallationManaged, StartingRevision: 42, Progress: CompleteRemovalProgress{OperationID: "complete-removal-operation", CompletedSteps: 3, TotalSteps: 10}, Checkpoint: RemovalIrreversibleStarted, TokenPhase: RemovalProviderDeletionInProgress}
 	for name, updates := range map[string]<-chan CompleteRemovalPresentation{"nil": nil, "closed": closed, "non-monotonic": invalid} {
 		t.Run(name, func(t *testing.T) {
 			got := runTranscriptSteps(t, Session{Scenario: ForwardOnlyRemoval, CompleteRemoval: &completeRemovalStub{view: forward, updates: updates}}, 80, 24, "", "\x1b[27u", "", "\x03\r")
@@ -176,7 +213,7 @@ func TestRunCompleteRemovalForwardOnlyStreamFailureNeverRestoresBack(t *testing.
 }
 
 func TestRunCompleteRemovalUpdateWaitsBehindExitConfirmation(t *testing.T) {
-	forward := CompleteRemovalPresentation{Kind: CompleteRemovalForwardOnly, StartingStatus: InstallationManaged, StartingRevision: 42, Progress: CompleteRemovalProgress{OperationID: "complete-removal-operation", CompletedSteps: 4, TotalSteps: 10}, Checkpoint: RemovalIrreversibleStarted, TokenPhase: RemovalTokenAwaitingOwnerRevocation}
+	forward := CompleteRemovalPresentation{Kind: CompleteRemovalForwardOnly, StartingStatus: InstallationManaged, StartingRevision: 42, Progress: CompleteRemovalProgress{OperationID: "complete-removal-operation", CompletedSteps: 4, TotalSteps: 10}, Checkpoint: RemovalIrreversibleStarted, TokenPhase: RemovalProviderDeletionInProgress}
 	updates := make(chan CompleteRemovalPresentation)
 	go func() {
 		time.Sleep(120 * time.Millisecond)

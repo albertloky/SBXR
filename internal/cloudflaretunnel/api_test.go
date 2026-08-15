@@ -2,6 +2,7 @@ package cloudflaretunnel_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -109,6 +110,10 @@ func TestHTTPAPIRefusesMalformedAmbiguousAndUnsafeResponses(t *testing.T) {
 			api := cloudflaretunnel.NewFixtureHTTPAPI(server.Client(), server.URL, staticResolver{})
 			_, gotErr := api.Observe(context.Background(), request)
 			assertAPIError(t, gotErr, test.kind)
+			var apiError cloudflaretunnel.APIError
+			if (test.kind == cloudflaretunnel.APIUnauthorized || test.kind == cloudflaretunnel.APIForbidden) && (!errors.As(gotErr, &apiError) || apiError.RequiredPermission != cloudflaretunnel.AccountAPITokensReadPermission) {
+				t.Fatalf("authorization refusal required permission = %+v", gotErr)
+			}
 			if strings.Contains(gotErr.Error(), "PROVIDER-ERROR-MARKER") || strings.Contains(gotErr.Error(), token) {
 				t.Fatalf("error leaked provider material: %v", gotErr)
 			}
@@ -156,6 +161,33 @@ func TestHTTPAPIRefusesMalformedAmbiguousAndUnsafeResponses(t *testing.T) {
 		_, gotErr := api.Observe(context.Background(), request)
 		assertAPIError(t, gotErr, cloudflaretunnel.APITemporary)
 	})
+}
+
+func TestHTTPAPIAttributesSelectedZoneRefusalToDNSWrite(t *testing.T) {
+	managementToken, err := cloudflaretunnel.NewManagementToken(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/accounts/" + accountID + "/tokens/verify":
+			fmt.Fprint(response, `{"success":true,"result":{"id":"`+tokenID+`","status":"active"}}`)
+		case "/accounts/" + accountID + "/tokens/" + tokenID:
+			fmt.Fprint(response, `{"success":true,"result":{"id":"`+tokenID+`","status":"active","policies":[{"effect":"allow","permission_groups":[{"id":"a","name":"Account API Tokens Read"}],"resources":{"com.cloudflare.api.account.`+accountID+`":"*"}}]}}`)
+		case "/zones":
+			response.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(response, `{"success":false}`)
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer server.Close()
+	api := cloudflaretunnel.NewFixtureHTTPAPI(server.Client(), server.URL, staticResolver{})
+	_, gotErr := api.Observe(context.Background(), cloudflaretunnel.ObservationRequest{AccountID: accountID, ZoneID: zoneID, ZoneName: "example.com", Token: managementToken})
+	var apiError cloudflaretunnel.APIError
+	if !errors.As(gotErr, &apiError) || apiError.Kind != cloudflaretunnel.APIForbidden || apiError.RequiredPermission != cloudflaretunnel.DNSWritePermission {
+		t.Fatalf("selected-zone authorization refusal = %+v", gotErr)
+	}
 }
 
 func officialShapeServer(t *testing.T, zones string, counts ...int) *httptest.Server {

@@ -112,13 +112,21 @@ func TestRunCloudflareCredentialOffersOnlyTheFourExactActions(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			review := completePlan(PlanIdentity(test.plan))
 			review.Plan.Effects = test.effects
-			stub := &cloudflareStub{view: CloudflarePresentation{Kind: CloudflareCredentialPresentation, Credential: completeCloudflareCredential()}, responses: map[CloudflareAction]CloudflareResponse{test.request: {Review: &review}}}
+			presentation := CloudflarePresentation{Kind: CloudflareCredentialPresentation, Credential: completeCloudflareCredential()}
+			stub := &cloudflareStub{view: presentation, responses: map[CloudflareAction]CloudflareResponse{test.request: {Review: &review}}}
 			outcomes := &outcomeStub{}
-			got := runTranscriptSteps(t, Session{Scenario: CloudflareWalkthrough, Cloudflare: stub, CloudflareOutcomes: outcomes}, 120, 36, "", strings.Repeat("\x1b[B", test.action)+"\r", "", "\x03\r")
+			steps := append(cloudflareTraversalSteps(presentation, 120, 36), strings.Repeat("\x1b[B", test.action)+"\r", "", "\x03\r")
+			got := runTranscriptSteps(t, Session{Scenario: CloudflareWalkthrough, Cloudflare: stub, CloudflareOutcomes: outcomes}, 120, 36, steps...)
 			for _, want := range []string{"Check now", "Replace token", "Remove from SBXR", "Rotate genuine Tunnel run token", test.plan} {
 				if !strings.Contains(got, want) {
 					t.Fatalf("credential journey omitted %q\n%s", want, got)
 				}
+			}
+			if strings.Contains(got, "My Profile > API Tokens") {
+				t.Fatalf("credential journey rendered stale user-token guidance\n%s", got)
+			}
+			if strings.Contains(got, "revoke only that") || strings.Contains(got, "Select Rotate token") {
+				t.Fatalf("credential journey rendered a post-approval provider act before Plan review\n%s", got)
 			}
 			for _, effect := range test.wantEffects {
 				if !strings.Contains(got, effect) {
@@ -134,10 +142,14 @@ func TestRunCloudflareCredentialOffersOnlyTheFourExactActions(t *testing.T) {
 
 func TestRunCloudflareReplacementKeepsTheOldTokenUntilCandidateReview(t *testing.T) {
 	review := completePlan("replace-cloudflare-token")
-	stub := &cloudflareStub{view: CloudflarePresentation{Kind: CloudflareCredentialPresentation, Credential: completeCloudflareCredential()}, responses: map[CloudflareAction]CloudflareResponse{VerifyReplacementManagementToken: {Review: &review}}}
+	presentation := CloudflarePresentation{Kind: CloudflareCredentialPresentation, Credential: completeCloudflareCredential()}
+	stub := &cloudflareStub{view: presentation, responses: map[CloudflareAction]CloudflareResponse{VerifyReplacementManagementToken: {Review: &review}}}
 	outcomes := &outcomeStub{}
 	const candidate = "CANDIDATE-INFRASTRUCTURE-SECRET-COMPLETE-TOKEN"
-	got := runTranscriptSteps(t, Session{Scenario: CloudflareWalkthrough, Cloudflare: stub, CloudflareOutcomes: outcomes}, 120, 36, "", "\x1b[B\r", "\r", candidate, "\t\r", "", "\x03\r")
+	steps := append(cloudflareTraversalSteps(presentation, 120, 36), "\x1b[B\r", "")
+	steps = append(steps, cloudflareReplacingTraversalSteps(presentation, 120, 36)...)
+	steps = append(steps, candidate, "\t\r", "", "\x03\r")
+	got := runTranscriptSteps(t, Session{Scenario: CloudflareWalkthrough, Cloudflare: stub, CloudflareOutcomes: outcomes}, 120, 36, steps...)
 	if strings.Contains(got, candidate) || !strings.Contains(got, "Current token stays active") || !strings.Contains(got, "Manage Account > Account API Tokens") || !strings.Contains(got, "Account API Tokens Read") || !strings.Contains(got, "Tunnel Edit") || !strings.Contains(got, "DNS Edit") || !strings.Contains(got, "replace-cloudflare-token") {
 		t.Fatalf("replacement did not remain masked, active, and review-first\n%s", got)
 	}
@@ -148,9 +160,13 @@ func TestRunCloudflareReplacementKeepsTheOldTokenUntilCandidateReview(t *testing
 
 func TestRunCloudflareReplacementRevealIsFocusedAndRemasks(t *testing.T) {
 	review := completePlan("replace-cloudflare-token")
-	stub := &cloudflareStub{view: CloudflarePresentation{Kind: CloudflareCredentialPresentation, Credential: completeCloudflareCredential()}, responses: map[CloudflareAction]CloudflareResponse{VerifyReplacementManagementToken: {Review: &review}}}
+	presentation := CloudflarePresentation{Kind: CloudflareCredentialPresentation, Credential: completeCloudflareCredential()}
+	stub := &cloudflareStub{view: presentation, responses: map[CloudflareAction]CloudflareResponse{VerifyReplacementManagementToken: {Review: &review}}}
 	const candidate = "cfat_MANAGED-SECRET-MARKER-012345678901234567890"
-	got := runTranscriptSteps(t, Session{Scenario: CloudflareWalkthrough, Cloudflare: stub, CloudflareOutcomes: &outcomeStub{}}, 120, 36, "", "\x1b[B\r", "\r", candidate, "\x12", "", "\t", "", "\x1b[Z", "\t\r", "", "\x03\r")
+	steps := append(cloudflareTraversalSteps(presentation, 120, 36), "\x1b[B\r", "")
+	steps = append(steps, cloudflareReplacingTraversalSteps(presentation, 120, 36)...)
+	steps = append(steps, candidate, "\x12", "", "\t", "", "\x1b[Z", "\t\r", "", "\x03\r")
+	got := runTranscriptSteps(t, Session{Scenario: CloudflareWalkthrough, Cloudflare: stub, CloudflareOutcomes: &outcomeStub{}}, 120, 36, steps...)
 	if len(stub.requests) != 1 || stub.requests[0] != (CloudflareRequest{Action: VerifyReplacementManagementToken, Token: candidate}) {
 		t.Fatalf("managed replacement request = %#v", stub.requests)
 	}
@@ -170,8 +186,10 @@ func TestRunCloudflareReplacementRevealIsFocusedAndRemasks(t *testing.T) {
 func TestRunCloudflareCheckNowRefreshesWithoutAcceptingALateResultOnAnotherVisit(t *testing.T) {
 	checked := CloudflarePresentation{Kind: CloudflareCredentialPresentation, Credential: completeCloudflareCredential()}
 	checked.Credential.Account = "fresh checked account"
-	stub := &cloudflareStub{view: CloudflarePresentation{Kind: CloudflareCredentialPresentation, Credential: completeCloudflareCredential()}, responses: map[CloudflareAction]CloudflareResponse{CheckCurrentManagementToken: {Presentation: &checked}}}
-	got := runTranscriptSteps(t, Session{Scenario: CloudflareWalkthrough, Cloudflare: stub}, 120, 36, "", "\r", "", "\x03\r")
+	presentation := CloudflarePresentation{Kind: CloudflareCredentialPresentation, Credential: completeCloudflareCredential()}
+	stub := &cloudflareStub{view: presentation, responses: map[CloudflareAction]CloudflareResponse{CheckCurrentManagementToken: {Presentation: &checked}}}
+	steps := append(cloudflareTraversalSteps(presentation, 120, 36), "\r", "", "\x03\r")
+	got := runTranscriptSteps(t, Session{Scenario: CloudflareWalkthrough, Cloudflare: stub}, 120, 36, steps...)
 	if len(stub.requests) != 1 || stub.requests[0].Action != CheckCurrentManagementToken || !strings.Contains(got, "fresh checked account") {
 		t.Fatalf("Check now did not refresh through the typed Module result: requests=%#v\n%s", stub.requests, got)
 	}
@@ -186,7 +204,7 @@ func TestRunCloudflareCheckNowRefreshesWithoutAcceptingALateResultOnAnotherVisit
 
 	stub = &cloudflareStub{view: CloudflarePresentation{Kind: CloudflareCredentialPresentation, Credential: completeCloudflareCredential()}, responses: map[CloudflareAction]CloudflareResponse{CheckCurrentManagementToken: {Presentation: &late}}, actionDelay: 150 * time.Millisecond}
 	const candidate = "FOCUS-SAFE-CANDIDATE-TOKEN"
-	got = runTranscriptSteps(t, Session{Scenario: CloudflareWalkthrough, Cloudflare: stub}, 120, 36, "", "\r", "\x1b[B\r", candidate, "", "\x1b[27u", "", "\x03\r")
+	got = runTranscriptSteps(t, Session{Scenario: CloudflareWalkthrough, Cloudflare: stub}, 120, 36, "", "\r", "\x1b[27u", strings.Repeat("\x1b[B", 3)+"\r", "", "\x1b[B\r", candidate, "", "\x1b[27u", "", "\x03\r")
 	if strings.Contains(got, "LATE-CLOUDFLARE-RESULT") || strings.Contains(got, candidate) || !strings.Contains(got, "Token active") {
 		t.Fatalf("late Check now stole replacement focus or Esc skipped Back\n%s", got)
 	}
@@ -197,7 +215,7 @@ func TestRunCloudflareActionsShowWaitingStateAndQueueExitResult(t *testing.T) {
 	checked.Credential.Account = "CLOUDFLARE-WAIT-COMPLETE"
 	pending := CloudflarePresentation{Kind: CloudflarePendingZonePresentation, PendingZone: CloudflarePendingZone{
 		Zone: "example.test", AssignedNameServers: []string{"alice.ns.cloudflare.com", "bob.ns.cloudflare.com"},
-		RegistrarSteps: []string{"Keep both assigned nameservers at the registrar"}, Evidence: "CLOUDFLARE-ZONE-WAIT-COMPLETE",
+		RegistrarSteps: []string{"Keep both assigned nameservers at the registrar"}, Evidence: "CLOUDFLARE-ZONE-WAIT-COMPLETE", HelpURL: "https://developers.cloudflare.com/dns/nameservers/update-nameservers/",
 	}}
 	for _, test := range []struct {
 		name         string
@@ -230,8 +248,10 @@ func TestRunCloudflareActionsShowWaitingStateAndQueueExitResult(t *testing.T) {
 		})
 	}
 
-	stub := &cloudflareStub{view: CloudflarePresentation{Kind: CloudflareCredentialPresentation, Credential: completeCloudflareCredential()}, responses: map[CloudflareAction]CloudflareResponse{CheckCurrentManagementToken: {Presentation: &checked}}, actionDelay: 100 * time.Millisecond}
-	got := runTranscriptSteps(t, Session{Scenario: CloudflareWalkthrough, Cloudflare: stub}, 120, 36, "", "\r", "\x03", "", "", "\x1b[27u", "", "\x03\r")
+	presentation := CloudflarePresentation{Kind: CloudflareCredentialPresentation, Credential: completeCloudflareCredential()}
+	stub := &cloudflareStub{view: presentation, responses: map[CloudflareAction]CloudflareResponse{CheckCurrentManagementToken: {Presentation: &checked}}, actionDelay: 100 * time.Millisecond}
+	steps := append(cloudflareTraversalSteps(presentation, 120, 36), "\r", "\x03", "", "", "\x1b[27u", "", "\x03\r")
+	got := runTranscriptSteps(t, Session{Scenario: CloudflareWalkthrough, Cloudflare: stub}, 120, 36, steps...)
 	exit, result := strings.Index(got, "Exit SBXR?"), strings.Index(got, "CLOUDFLARE-WAIT-COMPLETE")
 	if exit < 0 || result < exit {
 		t.Fatalf("completed Cloudflare result did not wait behind Exit confirmation\n%s", got)
@@ -246,7 +266,7 @@ func TestRunCloudflareActionsShowWaitingStateAndQueueExitResult(t *testing.T) {
 	const abandonedToken = "ABANDONED-CLOUDFLARE-INFRASTRUCTURE-SECRET-TOKEN"
 	walkthrough := completeCloudflareWalkthrough()
 	stub = &cloudflareStub{view: walkthrough, responses: map[CloudflareAction]CloudflareResponse{VerifyInitialManagementToken: {Presentation: &checked}}, actionDelay: 150 * time.Millisecond}
-	steps := append(cloudflareTraversalSteps(walkthrough, 120, 36), abandonedToken, "\t\r", "\x1b[27u", "", "", strings.Repeat("\x1b[B", 10)+"\r", "", "\x03\r")
+	steps = append(cloudflareTraversalSteps(walkthrough, 120, 36), abandonedToken, "\t\r", "\x1b[27u", "", "", strings.Repeat("\x1b[B", 10)+"\r", "", "\x03\r")
 	got = runTranscriptSteps(t, Session{Scenario: CloudflareWalkthrough, Cloudflare: stub}, 120, 36, steps...)
 	if strings.Contains(got, abandonedToken) || !strings.Contains(got, "COMPLETE REMOVAL") {
 		t.Fatalf("Back retained an abandoned Cloudflare token in another input screen\n%s", got)
@@ -299,10 +319,13 @@ func TestRunCloudflareMissingPermissionAndPendingZoneHaveExactCorrectionActions(
 		const candidate = "REPLACEMENT-INFRASTRUCTURE-SECRET-COMPLETE-TOKEN"
 		steps := append(cloudflareTraversalSteps(missing, 80, 24), "\t\x1b[B\r", "\r", candidate, "\t\r", "", "\x03\r")
 		got := runTranscriptSteps(t, Session{Scenario: CloudflareWalkthrough, Cloudflare: stub, CloudflareOutcomes: &outcomeStub{}}, 80, 24, steps...)
-		for _, want := range []string{"Problem", "Cloudflare Tunnel Edit", "token again", "placement token", "Verify replacement", "Back"} {
+		for _, want := range []string{"Problem", "Cloudflare Tunnel Edit", "selected account", "selected zone", "Manage Account > Account API Tokens", "Account API Tokens > Read", "DNS > Edit", "developers.cloudflare.com/fundamentals/api/get-sta", "token again", "placement token", "Verify replacement", "Back"} {
 			if !strings.Contains(got, want) {
 				t.Fatalf("missing-permission flow omitted %q\n%s", want, got)
 			}
+		}
+		if strings.Contains(got, "My Profile > API Tokens") {
+			t.Fatalf("missing-permission flow rendered stale user-token guidance\n%s", got)
 		}
 		if strings.Contains(got, candidate) || len(stub.requests) != 1 || stub.requests[0].Action != VerifyReplacementManagementToken || stub.requests[0].Token != candidate {
 			t.Fatalf("missing-permission replacement was exposed or misrouted: requests=%#v\n%s", stub.requests, got)
@@ -312,13 +335,15 @@ func TestRunCloudflareMissingPermissionAndPendingZoneHaveExactCorrectionActions(
 	t.Run("pending zone", func(t *testing.T) {
 		pending := CloudflarePresentation{Kind: CloudflarePendingZonePresentation, PendingZone: CloudflarePendingZone{
 			Zone: "example.test", AssignedNameServers: []string{"alice.ns.cloudflare.com", "bob.ns.cloudflare.com"},
-			ObservedNameServers: []string{"old-a.example.net", "old-b.example.net"}, RegistrarSteps: []string{"Open the registrar nameserver controls", "Replace the old nameservers with both assigned Cloudflare nameservers"}, Evidence: "CLOUDFLARE-ZONE-PENDING",
+			ObservedNameServers: []string{"old-a.example.net", "old-b.example.net"},
+			RegistrarSteps:      []string{"In Cloudflare, select the domain; open domain Overview; copy both assigned Cloudflare nameservers exactly.", "At the registrar or reseller that controls the domain, remove every old authoritative nameserver and add exactly both assigned Cloudflare nameservers.", "Do not use a guessed registrar URL; use that provider's nameserver controls. Wait for public delegation, then select Check again in SBXR."},
+			Evidence:            "CLOUDFLARE-ZONE-PENDING", HelpURL: "https://developers.cloudflare.com/dns/nameservers/update-nameservers/",
 		}}
 		checked := pending
 		stub := &cloudflareStub{view: pending, responses: map[CloudflareAction]CloudflareResponse{WaitAnotherTenMinutes: {Presentation: &checked}}}
 		steps := append(cloudflareTraversalSteps(pending, 80, 24), "\x1b[B\r", "", "\x03\r")
 		got := runTranscriptSteps(t, Session{Scenario: CloudflareWalkthrough, Cloudflare: stub}, 80, 24, steps...)
-		for _, want := range []string{"alice.ns.cloudflare.com", "old-a.example.net", "Check again", "Wait another 10 minutes", "Back and continue later"} {
+		for _, want := range []string{"alice.ns.cloudflare.com", "old-a.example.net", "domain", "Overview", "registrar or reseller", "guessed registrar URL", "developers.cloudflare.com/dns/nameservers/update-n", "Check again", "Wait another 10 minutes", "Back and continue later"} {
 			if !strings.Contains(got, want) {
 				t.Fatalf("pending-zone flow omitted %q\n%s", want, got)
 			}
@@ -386,11 +411,13 @@ func TestRunCertificateCorrectionAndTypedRollbackRemainSecretSafe(t *testing.T) 
 func TestRunProviderPlansBackRestoreTheirOriginAndUnsafeFactsNeverRender(t *testing.T) {
 	t.Run("Cloudflare Back", func(t *testing.T) {
 		review := completePlan("cloudflare-back")
-		stub := &cloudflareStub{view: CloudflarePresentation{Kind: CloudflareCredentialPresentation, Credential: completeCloudflareCredential()}, responses: map[CloudflareAction]CloudflareResponse{ReviewTunnelRunTokenRotation: {Review: &review}}}
+		presentation := CloudflarePresentation{Kind: CloudflareCredentialPresentation, Credential: completeCloudflareCredential()}
+		stub := &cloudflareStub{view: presentation, responses: map[CloudflareAction]CloudflareResponse{ReviewTunnelRunTokenRotation: {Review: &review}}}
 		outcomes := &outcomeStub{}
-		got := runTranscriptSteps(t, Session{Scenario: CloudflareWalkthrough, Cloudflare: stub, CloudflareOutcomes: outcomes}, 120, 36, "", strings.Repeat("\x1b[B", 3)+"\r", "", "\x1b[27u", "", "\x03\r")
+		steps := append(cloudflareTraversalSteps(presentation, 120, 36), strings.Repeat("\x1b[B", 3)+"\r", "", "\x1b[27u", "", "\x03\r")
+		got := runTranscriptSteps(t, Session{Scenario: CloudflareWalkthrough, Cloudflare: stub, CloudflareOutcomes: outcomes}, 120, 36, steps...)
 		plan := strings.Index(got, "cloudflare-back")
-		if outcomes.backCalls != 1 || plan < 0 || !strings.Contains(got[plan:], "Token active") {
+		if outcomes.backCalls != 1 || plan < 0 || !strings.Contains(got[plan:], "Rotate genuine Tunnel run token") {
 			t.Fatalf("Plan Back did not restore Cloudflare safely: back=%d\n%s", outcomes.backCalls, got)
 		}
 	})
@@ -483,6 +510,12 @@ func completeCertificatesPresentation(present bool) CertificatesPresentation {
 func cloudflareTraversalSteps(presentation CloudflarePresentation, width, height int) []string {
 	actions := cloudflareActions(presentation.Kind, false)
 	lines := cloudflareLines(presentation, true, "", 0, false, false)
+	return sectionTraversalSteps(providerPageCount(lines, len(actions), width, height))
+}
+
+func cloudflareReplacingTraversalSteps(presentation CloudflarePresentation, width, height int) []string {
+	actions := cloudflareActions(presentation.Kind, true)
+	lines := cloudflareLines(presentation, true, "", 0, true, false)
 	return sectionTraversalSteps(providerPageCount(lines, len(actions), width, height))
 }
 

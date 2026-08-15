@@ -222,6 +222,11 @@ type CloudflareCredential struct {
 	HelpURL                  string
 }
 
+type CloudflareExternalGuidance struct {
+	Instructions [3]string
+	HelpURL      string
+}
+
 type CloudflareCredentialStatus uint8
 
 const (
@@ -253,7 +258,7 @@ type CloudflarePendingZone struct {
 	Zone                                string
 	AssignedNameServers                 []string
 	ObservedNameServers, RegistrarSteps []string
-	Evidence                            string
+	Evidence, HelpURL                   string
 }
 
 type CloudflareAction uint8
@@ -305,7 +310,8 @@ func validateCloudflareWalkthrough(presentation CloudflarePresentation) (Cloudfl
 func validateCloudflareCredential(presentation CloudflarePresentation) (CloudflarePresentation, bool) {
 	credential := presentation.Credential
 	valid := credential.Status.String() != "" && safeProviderLines([]string{credential.FirstFour, credential.LastFour, credential.Account, credential.Zone, credential.LastVerification}, 5) &&
-		len([]rune(credential.FirstFour)) == 4 && len([]rune(credential.LastFour)) == 4 && safeOptionalLine(credential.Expiry) && completeStrings(credential.Uses, 16) && completeStrings(credential.Guidance, 8) && credential.HelpURL == "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/" && presentation.Walkthrough == (CloudflareWalkthroughFacts{}) && emptyMissingPermission(presentation.MissingPermission) && emptyPendingZone(presentation.PendingZone)
+		len([]rune(credential.FirstFour)) == 4 && len([]rune(credential.LastFour)) == 4 && safeOptionalLine(credential.Expiry) && completeStrings(credential.Uses, 16) && completeStrings(credential.Guidance, 8) && credential.HelpURL == "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/" &&
+		presentation.Walkthrough == (CloudflareWalkthroughFacts{}) && emptyMissingPermission(presentation.MissingPermission) && emptyPendingZone(presentation.PendingZone)
 	if !valid {
 		return CloudflarePresentation{}, false
 	}
@@ -326,7 +332,7 @@ func validateCloudflareMissingPermission(presentation CloudflarePresentation) (C
 
 func validateCloudflarePendingZone(presentation CloudflarePresentation) (CloudflarePresentation, bool) {
 	pending := presentation.PendingZone
-	valid := safeLine(pending.Zone) && completeStrings(pending.AssignedNameServers, 4) && safeStrings(pending.ObservedNameServers, 4) && completeStrings(pending.RegistrarSteps, 8) && safeLine(pending.Evidence) && presentation.Walkthrough == (CloudflareWalkthroughFacts{}) && emptyCloudflareCredential(presentation.Credential) && emptyMissingPermission(presentation.MissingPermission)
+	valid := safeLine(pending.Zone) && completeStrings(pending.AssignedNameServers, 4) && safeStrings(pending.ObservedNameServers, 4) && completeStrings(pending.RegistrarSteps, 8) && safeLine(pending.Evidence) && pending.HelpURL == "https://developers.cloudflare.com/dns/nameservers/update-nameservers/" && presentation.Walkthrough == (CloudflareWalkthroughFacts{}) && emptyCloudflareCredential(presentation.Credential) && emptyMissingPermission(presentation.MissingPermission)
 	if !valid {
 		return CloudflarePresentation{}, false
 	}
@@ -340,8 +346,16 @@ func safeProviderLines(values []string, count int) bool {
 	return len(values) == count && safeStrings(values, count)
 }
 
+func validCloudflareExternalGuidance(guidance CloudflareExternalGuidance, helpURL string) bool {
+	return completeStrings(guidance.Instructions[:], len(guidance.Instructions)) && guidance.HelpURL == helpURL
+}
+
+func emptyCloudflareExternalGuidance(guidance CloudflareExternalGuidance) bool {
+	return guidance == (CloudflareExternalGuidance{})
+}
+
 func emptyPendingZone(pending CloudflarePendingZone) bool {
-	return pending.Zone == "" && len(pending.AssignedNameServers) == 0 && len(pending.ObservedNameServers) == 0 && len(pending.RegistrarSteps) == 0 && pending.Evidence == ""
+	return pending.Zone == "" && len(pending.AssignedNameServers) == 0 && len(pending.ObservedNameServers) == 0 && len(pending.RegistrarSteps) == 0 && pending.Evidence == "" && pending.HelpURL == ""
 }
 
 func emptyMissingPermission(missing CloudflareMissingPermission) bool {
@@ -496,7 +510,10 @@ func cloudflareCredentialLines(presentation CloudflarePresentation, input string
 		lines = append(lines, "Create the replacement Account API Token")
 		lines = append(lines, credential.Guidance...)
 		lines = append(lines, terminalHyperlinkLines(credential.HelpURL, 58)...)
-		lines = append(lines, "Current token stays active until the candidate verifies and its exact Plan is approved.", "Replacement token - masked and memory-only: "+input, "")
+		lines = append(lines, "Current token stays active until the candidate verifies and its exact Plan is approved.", "")
+	}
+	if replacing {
+		lines = append(lines, "Replacement token - masked and memory-only: "+input, "")
 	}
 	return lines
 }
@@ -525,6 +542,7 @@ func cloudflarePendingZoneLines(presentation CloudflarePresentation, _ string, _
 	for _, step := range pending.RegistrarSteps {
 		lines = append(lines, "Owner step: "+step)
 	}
+	lines = append(lines, terminalHyperlinkLines(pending.HelpURL, 58)...)
 	lines = append(lines, "Redacted evidence: "+pending.Evidence, "")
 	return lines
 }

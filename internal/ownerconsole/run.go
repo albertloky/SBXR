@@ -481,6 +481,11 @@ type completeRemovalCancelMsg struct {
 	identity asyncRequestIdentity
 	view     CompleteRemovalPresentation
 }
+type completeRemovalCheckMsg struct {
+	identity asyncRequestIdentity
+	prior    CompleteRemovalPresentation
+	view     CompleteRemovalPresentation
+}
 
 type progressClock struct {
 	kind        ProgressKind
@@ -874,7 +879,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		forwardOnly := m.completeRemovalScreen.forwardOnly || m.scenario == ForwardOnlyRemoval
 		m.completeRemovalScreen.view, m.completeRemovalScreen.available = validatedCompleteRemoval(message.view)
 		definition, defined := completeRemovalDefinitionFor(m.completeRemovalScreen.view.Kind)
-		if defined && definition.watchesUpdates {
+		if defined && completeRemovalWatchesUpdates(m.completeRemovalScreen.view) {
 			m.completeRemovalScreen.available = m.completeRemovalScreen.available && message.updates != nil
 		}
 		if defined && definition.acceptsInput {
@@ -897,7 +902,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.selected = selectedNavigation(m.scenario)
 		m.inputFocused = false
-		if m.completeRemovalScreen.available && defined && definition.watchesUpdates {
+		if m.completeRemovalScreen.available && defined && completeRemovalWatchesUpdates(m.completeRemovalScreen.view) {
 			return m, waitCompleteRemovalUpdate(m.runContext, message.generation, message.updates)
 		}
 	case completeRemovalUpdateMsg:
@@ -920,7 +925,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.completeRemovalScreen.view = next
 		m.scenario, m.selected = completeRemovalScenario(next.Kind), selectedNavigation(completeRemovalScenario(next.Kind))
-		if definition, defined := completeRemovalDefinitionFor(next.Kind); defined && definition.watchesUpdates {
+		if _, defined := completeRemovalDefinitionFor(next.Kind); defined && completeRemovalWatchesUpdates(next) {
 			return m, waitCompleteRemovalUpdate(m.runContext, message.generation, message.updates)
 		}
 	case completeRemovalReviewMsg:
@@ -955,6 +960,13 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.completeRemovalScreen.available = m.completeRemovalScreen.available && validCompleteRemovalCancellation(prior, m.completeRemovalScreen.view)
 		m.completeRemovalScreen.action, m.completeRemovalScreen.page = 0, 0
 		m.scenario, m.selected = CompleteRemovalConfirmation, selectedNavigation(CompleteRemovalConfirmation)
+	case completeRemovalCheckMsg:
+		if !message.identity.matches(m) || m.scenario != ForwardOnlyRemoval || !validCompleteRemovalTransition(message.prior, message.view) {
+			return m, nil
+		}
+		m.completeRemovalScreen.view, m.completeRemovalScreen.available = validatedCompleteRemoval(message.view)
+		m.completeRemovalScreen.page, m.completeRemovalScreen.action = 0, 0
+		return m, m.refreshCompleteRemovalCommand()
 	case tea.PasteMsg:
 		if m.width >= minimumWidth && m.height >= minimumHeight && !m.exitConfirm && m.inputFocused {
 			m.appendInput(message.Content)
@@ -1701,6 +1713,12 @@ func (m model) updateCompleteRemovalKey(message tea.KeyPressMsg) (tea.Model, tea
 			return m, tea.Batch(func() tea.Msg {
 				return completeRemovalCancelMsg{identity: identity, view: m.completeRemoval.CancelCompleteRemoval(context.Background(), operation)}
 			}, operationTick())
+		case completeRemovalCheckAgain:
+			m.actionGeneration++
+			identity, operation, prior := asyncRequestIdentity{generation: m.actionGeneration, origin: m.scenario}, view.Progress.OperationID, view
+			return m, func() tea.Msg {
+				return completeRemovalCheckMsg{identity: identity, prior: prior, view: m.completeRemoval.CheckCompleteRemoval(m.runContext, operation)}
+			}
 		case completeRemovalBack:
 			m.discardInput()
 			m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
@@ -1960,7 +1978,12 @@ func (m model) recoveryPageCount() int {
 func (m model) viewCompleteRemovalCommand() tea.Cmd {
 	generation := m.completeRemovalScreen.generation
 	return func() tea.Msg {
-		return completeRemovalViewMsg{generation: generation, view: m.completeRemoval.ViewCompleteRemoval(m.runContext), updates: m.completeRemoval.WatchCompleteRemoval(m.runContext)}
+		view := m.completeRemoval.ViewCompleteRemoval(m.runContext)
+		var updates <-chan CompleteRemovalPresentation
+		if completeRemovalWatchesUpdates(view) {
+			updates = m.completeRemoval.WatchCompleteRemoval(m.runContext)
+		}
+		return completeRemovalViewMsg{generation: generation, view: view, updates: updates}
 	}
 }
 

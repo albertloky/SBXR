@@ -60,7 +60,7 @@ func managedClientAccessPresentation(ctx context.Context) (clientAccessPresentat
 					}
 				}
 				starting := map[systemchanges.InstallationStatus]ownerconsole.InstallationStatus{systemchanges.Managed: ownerconsole.InstallationManaged, systemchanges.RecoveryRequired: ownerconsole.InstallationRecoveryRequired}[transaction.StartingStatus]
-				presentation.Removal = ownerconsole.CompleteRemovalPresentation{Kind: kind, StartingStatus: starting, StartingRevision: transaction.StartingRevision, Progress: ownerconsole.CompleteRemovalProgress{OperationID: ownerconsole.OperationIdentity(transaction.Identity), CompletedSteps: completeRemovalCompletedSteps(transaction), TotalSteps: completeRemovalTotalSteps}, Checkpoint: checkpoint, TokenPhase: token}
+				presentation.Removal = ownerCompleteRemovalPresentation(ownerconsole.CompleteRemovalPresentation{Kind: kind, StartingStatus: starting, StartingRevision: transaction.StartingRevision, Progress: ownerconsole.CompleteRemovalProgress{OperationID: ownerconsole.OperationIdentity(transaction.Identity), CompletedSteps: completeRemovalCompletedSteps(transaction), TotalSteps: completeRemovalTotalSteps}, Checkpoint: checkpoint, TokenPhase: token})
 			}
 			return presentation, nil
 		}

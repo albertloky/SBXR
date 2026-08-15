@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 
+	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
 	"github.com/albertloky/SBXR/internal/ownerconsole"
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
@@ -26,9 +27,13 @@ func (recovery ownerRecovery) ViewRecovery(context.Context) ownerconsole.Recover
 			}
 			guidance := "Continue the exact forward-only recovery; do not rotate the token again."
 			if recovery.needsRunTokenRotation {
-				guidance = "Select Rotate token in Cloudflare, then continue the exact forward-only recovery."
+				guidance = "Follow the exact committed-Tunnel rotation Help, then continue the exact forward-only recovery."
 			}
-			return ownerconsole.RecoveryPresentation{Kind: ownerconsole.RecoveryForwardOnly, Proof: ownerconsole.ProvenForwardOnlyRecovery, CauseCode: "SYSTEM-CHANGES-RUN-TOKEN-FORWARD", Explanation: "The old Tunnel run token was removed at the irreversible checkpoint.", ChangeSet: recovery.changeSet, Material: "checksum-protected forward recovery material", Evidence: "IRREVERSIBLE-RUN-TOKEN-ROTATION-STARTED", Guidance: guidance}
+			presentation := ownerconsole.RecoveryPresentation{Kind: ownerconsole.RecoveryForwardOnly, Proof: ownerconsole.ProvenForwardOnlyRecovery, CauseCode: "SYSTEM-CHANGES-RUN-TOKEN-FORWARD", Explanation: "The old Tunnel run token was removed at the irreversible checkpoint.", ChangeSet: recovery.changeSet, Material: "checksum-protected forward recovery material", Evidence: "IRREVERSIBLE-RUN-TOKEN-ROTATION-STARTED", Guidance: guidance}
+			if recovery.needsRunTokenRotation {
+				presentation.ExternalGuidance = ownerCloudflareExternalGuidance(cloudflaretunnel.TunnelRunTokenRotation)
+			}
+			return presentation
 		}
 		return ownerconsole.RecoveryPresentation{Kind: ownerconsole.RecoveryRollbackAvailable, Proof: ownerconsole.ProvenUnfinishedRollback, CauseCode: "SYSTEM-CHANGES-UNFINISHED", Explanation: "A validated unfinished Change Set requires automatic recovery.", ChangeSet: recovery.changeSet, Material: "checksum-protected rollback material", Evidence: "DURABLE-TRANSACTION-PRESENT", Guidance: "Retry the exact automatic rollback before any new change."}
 	}

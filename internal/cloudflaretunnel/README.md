@@ -81,7 +81,7 @@ The walkthrough was qualified on `2026-08-15` against these Cloudflare dashboard
 
 Every release containing onboarding changes must requalify these labels. The fixed resource boundary and permissions do not change merely because Cloudflare renames a page.
 
-The current sources are Cloudflare's [Account API tokens](https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/), [account and zone IDs](https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/), and [API token permissions](https://developers.cloudflare.com/fundamentals/api/reference/permissions/).
+The current sources are Cloudflare's [Account API tokens](https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/), [account and zone IDs](https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/), [API token permissions](https://developers.cloudflare.com/fundamentals/api/reference/permissions/), [nameserver update](https://developers.cloudflare.com/dns/nameservers/update-nameservers/), and [Tunnel-token rotation](https://developers.cloudflare.com/tunnel/advanced/tunnel-tokens/).
 
 ## Secret and network boundary
 
@@ -100,4 +100,4 @@ Missing or broader permission, wildcard or changed scope, inactive status, and u
 3. `Verify replacement`
 4. `Back`
 
-There is no `Continue anyway` path. A pending zone instead offers `Check again`, `Wait another 10 minutes`, and `Back and continue later` with assigned and publicly observed nameserver facts, a 10-minute activation-check window, and exact registrar guidance.
+There is no `Continue anyway` path. Missing-permission Help names the exact selected account or zone scope, exact failed permission, `Manage Account > Account API Tokens`, and safe recheck. A pending zone instead offers `Check again`, `Wait another 10 minutes`, and `Back and continue later` with assigned and publicly observed nameserver facts, the selected-domain Overview steps, provider-neutral registrar or reseller instructions, the official Cloudflare nameserver source, and no guessed registrar link. Only after `Irreversible run-token rotation started` does token-rotation Help name `Networking > Tunnels > selected committed SBXR Tunnel > Rotate token`. Complete-removal revocation appears only after provider deletion is proved; it names only the exact `SBXR - selected account / selected zone` Account API Token and excludes the Global API Key, user API tokens, Tunnel run tokens, and unrelated account tokens. All links are fixed allowlisted HTTPS text. Guidance never replaces provider verification, Check again, Plan review, or approval.

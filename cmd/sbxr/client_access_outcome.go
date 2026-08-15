@@ -53,7 +53,7 @@ func (outcome *clientAccessOutcome) ViewCompleteRemoval(ctx context.Context) own
 	outcome.mu.Unlock()
 	facts := outcome.load(ctx)
 	if facts.Removal.Kind != 0 && change.Kind == ownerconsole.NoChangeSet {
-		return facts.Removal
+		return ownerCompleteRemovalPresentation(facts.Removal)
 	}
 	start := facts.Installation
 	startingRevision := facts.StateRevision
@@ -84,7 +84,16 @@ func (outcome *clientAccessOutcome) ViewCompleteRemoval(ctx context.Context) own
 		presentation.Kind, presentation.FinalStatus, presentation.Checkpoint, presentation.TokenPhase, presentation.NoRecoveryMaterial = ownerconsole.CompleteRemovalSucceeded, ownerconsole.InstallationNotInstalled, ownerconsole.RemovalProvenComplete, ownerconsole.RemovalLocalTokenDeleted, true
 		presentation.Progress = ownerconsole.CompleteRemovalProgress{OperationID: change.OperationID, CompletedSteps: change.TotalSteps, TotalSteps: change.TotalSteps}
 	}
-	return presentation
+	return ownerCompleteRemovalPresentation(presentation)
+}
+
+func (outcome *clientAccessOutcome) CheckCompleteRemoval(ctx context.Context, operation ownerconsole.OperationIdentity) ownerconsole.CompleteRemovalPresentation {
+	presentation := outcome.ViewCompleteRemoval(ctx)
+	if presentation.Kind != ownerconsole.CompleteRemovalForwardOnly || presentation.TokenPhase != ownerconsole.RemovalTokenAwaitingOwnerRevocation || presentation.Progress.OperationID != operation {
+		return ownerconsole.CompleteRemovalPresentation{}
+	}
+	outcome.advanceCompleteRemoval(ctx, presentation)
+	return outcome.ViewCompleteRemoval(ctx)
 }
 
 func (outcome *clientAccessOutcome) WatchCompleteRemoval(ctx context.Context) <-chan ownerconsole.CompleteRemovalPresentation {
@@ -96,6 +105,9 @@ func (outcome *clientAccessOutcome) WatchCompleteRemoval(ctx context.Context) <-
 			select {
 			case updates <- presentation:
 			case <-ctx.Done():
+				return
+			}
+			if presentation.TokenPhase == ownerconsole.RemovalTokenAwaitingOwnerRevocation {
 				return
 			}
 			if presentation.Kind != ownerconsole.CompleteRemovalRollbackCapable && presentation.Kind != ownerconsole.CompleteRemovalForwardOnly {
@@ -114,30 +126,33 @@ func (outcome *clientAccessOutcome) WatchCompleteRemoval(ctx context.Context) <-
 				return
 			}
 			if presentation.Kind == ownerconsole.CompleteRemovalRollbackCapable || presentation.Kind == ownerconsole.CompleteRemovalForwardOnly {
-				retry := outcome.recoveryRetry
-				if retry == nil {
-					retry = retryClientAccessRecovery
-				}
-				status, err := retry(ctx, string(presentation.Progress.OperationID))
-				if err == nil && status == systemchanges.NotInstalled {
-					outcome.mu.Lock()
-					outcome.request.Mode = "removal-apply"
-					outcome.change = ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetSucceeded, OperationID: presentation.Progress.OperationID, CompletedSteps: presentation.Progress.TotalSteps, TotalSteps: presentation.Progress.TotalSteps, Checkpoint: "Not installed", Explanation: "Complete removal proved Not installed with no retained recovery material."}
-					outcome.mu.Unlock()
-				} else if err == nil && status == systemchanges.Managed {
-					outcome.mu.Lock()
-					outcome.change = ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetRolledBack, OperationID: presentation.Progress.OperationID, Checkpoint: "Rolled back", Explanation: "Automatic recovery restored the exact Managed starting revision."}
-					outcome.mu.Unlock()
-				} else if err == nil && status == "" {
-					outcome.mu.Lock()
-					outcome.request.Mode = "removal-apply"
-					outcome.change = ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetRecoveryRequired, OperationID: presentation.Progress.OperationID, CompletedSteps: 7, TotalSteps: presentation.Progress.TotalSteps, Checkpoint: "Awaiting Owner token revocation", Explanation: "Cloudflare resources are deleted. Revoke the scoped token, then continue the exact forward-only Complete removal."}
-					outcome.mu.Unlock()
-				}
+				outcome.advanceCompleteRemoval(ctx, presentation)
 			}
 		}
 	}()
 	return updates
+}
+
+func (outcome *clientAccessOutcome) advanceCompleteRemoval(ctx context.Context, presentation ownerconsole.CompleteRemovalPresentation) {
+	retry := outcome.recoveryRetry
+	if retry == nil {
+		retry = retryClientAccessRecovery
+	}
+	status, err := retry(ctx, string(presentation.Progress.OperationID))
+	if err != nil {
+		return
+	}
+	outcome.mu.Lock()
+	defer outcome.mu.Unlock()
+	outcome.request.Mode = "removal-apply"
+	switch status {
+	case systemchanges.NotInstalled:
+		outcome.change = ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetSucceeded, OperationID: presentation.Progress.OperationID, CompletedSteps: presentation.Progress.TotalSteps, TotalSteps: presentation.Progress.TotalSteps, Checkpoint: "Not installed", Explanation: "Complete removal proved Not installed with no retained recovery material."}
+	case systemchanges.Managed:
+		outcome.change = ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetRolledBack, OperationID: presentation.Progress.OperationID, Checkpoint: "Rolled back", Explanation: "Automatic recovery restored the exact Managed starting revision."}
+	case "":
+		outcome.change = ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetRecoveryRequired, OperationID: presentation.Progress.OperationID, CompletedSteps: 7, TotalSteps: presentation.Progress.TotalSteps, Checkpoint: "Awaiting Owner token revocation", Explanation: "Cloudflare resources are deleted. Revoke the scoped token, then continue the exact forward-only Complete removal."}
+	}
 }
 
 func (outcome *clientAccessOutcome) ReviewCompleteRemoval(ctx context.Context, approval ownerconsole.CompleteRemovalApproval) ownerconsole.ChangeReview {

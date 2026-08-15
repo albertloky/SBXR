@@ -53,7 +53,8 @@ func managedProviderPresentations(ctx context.Context, snapshot state.Snapshot, 
 
 func ownerCloudflarePresentation(view cloudflaretunnel.ViewResult) ownerconsole.CloudflarePresentation {
 	if view.Health.Code == "CLOUDFLARE-ZONE-PENDING" {
-		return ownerconsole.CloudflarePresentation{Kind: ownerconsole.CloudflarePendingZonePresentation, PendingZone: ownerconsole.CloudflarePendingZone{Zone: view.Zone.Name, AssignedNameServers: view.Zone.AssignedNameServers, ObservedNameServers: view.Zone.ObservedNameServers, RegistrarSteps: []string{view.Zone.RegistrarGuidance}, Evidence: view.Health.Code}}
+		guidance, _ := cloudflaretunnel.ExternalCorrectionGuidance(cloudflaretunnel.NameserverCorrection)
+		return ownerconsole.CloudflarePresentation{Kind: ownerconsole.CloudflarePendingZonePresentation, PendingZone: ownerconsole.CloudflarePendingZone{Zone: view.Zone.Name, AssignedNameServers: view.Zone.AssignedNameServers, ObservedNameServers: view.Zone.ObservedNameServers, RegistrarSteps: guidance.Instructions, Evidence: view.Health.Code, HelpURL: guidance.URL}}
 	}
 	if view.Health.Outcome == cloudflaretunnel.Healthy || view.Credential.Status == "removed" {
 		tokenHelp, _ := cloudflaretunnel.CredentialGuidance(cloudflaretunnel.AccountTokenInput)
@@ -68,7 +69,28 @@ func ownerCloudflarePresentation(view cloudflaretunnel.ViewResult) ownerconsole.
 		}
 		return ownerconsole.CloudflarePresentation{Kind: ownerconsole.CloudflareCredentialPresentation, Credential: ownerconsole.CloudflareCredential{Status: status, FirstFour: first, LastFour: last, Account: view.Account.ID, Zone: view.Zone.Name, LastVerification: view.LastCheck.UTC().Format(time.RFC3339), Expiry: expiry, Uses: view.Credential.Uses, Guidance: tokenHelp.Instructions, HelpURL: tokenHelp.URL}}
 	}
+	if view.Health.Code == "CLOUDFLARE-TOKEN-PERMISSION" {
+		correction := view.PermissionCorrection
+		return ownerconsole.CloudflarePresentation{Kind: ownerconsole.CloudflareMissingPermissionPresentation, MissingPermission: ownerconsole.CloudflareMissingPermission{
+			Capability: correction.Capability, Account: correction.AccountID, Zone: fmt.Sprintf("%s (%s)", correction.ZoneID, correction.ZoneName), Found: correction.Found,
+			Required: correction.Required, WhyStopped: correction.WhyStopped, Evidence: correction.Evidence, DashboardSteps: correction.DashboardSteps, HelpURL: correction.URL,
+		}}
+	}
 	return unavailableCloudflare(view.Health.Found)
+}
+
+func ownerCloudflareExternalGuidance(correction cloudflaretunnel.ExternalCorrection) ownerconsole.CloudflareExternalGuidance {
+	help, _ := cloudflaretunnel.ExternalCorrectionGuidance(correction)
+	var instructions [3]string
+	copy(instructions[:], help.Instructions)
+	return ownerconsole.CloudflareExternalGuidance{Instructions: instructions, HelpURL: help.URL}
+}
+
+func ownerCompleteRemovalPresentation(presentation ownerconsole.CompleteRemovalPresentation) ownerconsole.CompleteRemovalPresentation {
+	if presentation.Kind == ownerconsole.CompleteRemovalForwardOnly && presentation.TokenPhase == ownerconsole.RemovalTokenAwaitingOwnerRevocation {
+		presentation.ManagementTokenRevocation = ownerCloudflareExternalGuidance(cloudflaretunnel.ManagementTokenRevocation)
+	}
+	return presentation
 }
 
 func unavailableCloudflare(found string) ownerconsole.CloudflarePresentation {

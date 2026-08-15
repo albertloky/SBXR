@@ -218,11 +218,12 @@ func TestCompleteRemovalPresentationCrossesToForwardOnlyAndEndsNotInstalled(t *t
 }
 
 func TestCompleteRemovalWatcherAdvancesFromProviderDeletionToOwnerRevocation(t *testing.T) {
+	retries := 0
 	outcome := &clientAccessOutcome{
 		loaded: true, request: clientAccessHandoffRequest{Mode: "removal-apply"}, removalPoll: time.Millisecond,
 		presentation:  clientAccessPresentation{Installation: ownerconsole.InstallationManaged, StateRevision: 7},
 		change:        ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetRecoveryRequired, OperationID: "complete-removal-0001", TotalSteps: completeRemovalTotalSteps, Checkpoint: "Provider deletion in progress"},
-		recoveryRetry: func(context.Context, string) (systemchanges.InstallationStatus, error) { return "", nil },
+		recoveryRetry: func(context.Context, string) (systemchanges.InstallationStatus, error) { retries++; return "", nil },
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
@@ -232,6 +233,9 @@ func TestCompleteRemovalWatcherAdvancesFromProviderDeletionToOwnerRevocation(t *
 	}
 	if second := <-updates; second.TokenPhase != ownerconsole.RemovalTokenAwaitingOwnerRevocation || second.Progress.CompletedSteps != 7 {
 		t.Fatalf("second presentation = %+v", second)
+	}
+	if _, open := <-updates; open || retries != 1 {
+		t.Fatalf("awaiting Owner revocation did not stop for explicit Check again: open=%t retries=%d", open, retries)
 	}
 }
 
