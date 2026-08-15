@@ -80,6 +80,7 @@ type FieldSensitivity uint8
 const (
 	PublicInformation FieldSensitivity = iota + 1
 	PersonalInformation
+	InfrastructureSecret
 )
 
 type FieldHelp struct {
@@ -558,6 +559,12 @@ var installationFieldHelp = map[string]FieldHelp{
 	},
 }
 
+var cloudflareCredentialInputs = map[string]cloudflaretunnel.CredentialInput{
+	"cloudflare-account": cloudflaretunnel.AccountIDInput,
+	"cloudflare-zone":    cloudflaretunnel.ZoneIDInput,
+	"cloudflare-token":   cloudflaretunnel.AccountTokenInput,
+}
+
 func portFieldHelp(profile, transport, example string) FieldHelp {
 	return FieldHelp{
 		Purpose:        fmt.Sprintf("Choose the %s %s port.", profile, transport),
@@ -598,7 +605,7 @@ func (module *Interface) attachReviewFacts(invalid *InvalidInput) {
 	if module.draft.RealityServerName != "" {
 		invalid.Facts = append(invalid.Facts, ReviewFact{Label: "REALITY server name", Value: module.draft.RealityServerName})
 	}
-	if help, ok := installationFieldHelp[invalid.Field]; ok {
+	if help, ok := fieldHelp(invalid.Field); ok {
 		invalid.Help = help
 		invalid.Help.Instructions = append([]string(nil), help.Instructions...)
 		invalid.Help.CommonMistakes = append([]string(nil), help.CommonMistakes...)
@@ -612,6 +619,25 @@ func (module *Interface) attachReviewFacts(invalid *InvalidInput) {
 			}
 		}
 	}
+}
+
+func fieldHelp(field string) (FieldHelp, bool) {
+	if help, ok := installationFieldHelp[field]; ok {
+		return help, true
+	}
+	input, ok := cloudflareCredentialInputs[field]
+	if !ok {
+		return FieldHelp{}, false
+	}
+	help, ok := cloudflaretunnel.CredentialGuidance(input)
+	if !ok {
+		return FieldHelp{}, false
+	}
+	sensitivity := PublicInformation
+	if help.InfrastructureSecret {
+		sensitivity = InfrastructureSecret
+	}
+	return FieldHelp{Purpose: help.Purpose, Instructions: append([]string(nil), help.Instructions...), AcceptedFormat: help.AcceptedFormat, CommonMistakes: append([]string(nil), help.CommonMistakes...), Recovery: help.Recovery, Example: help.Example, URL: help.URL, Sensitivity: sensitivity}, true
 }
 
 func draftFieldValue(draft Draft, field string) string {
@@ -693,8 +719,15 @@ func validateDraftField(draft Draft, field string) *InvalidInput {
 }
 
 func nonProductionExampleValue(field, value string) bool {
-	for _, help := range installationFieldHelp {
+	for helpField := range installationFieldHelp {
+		help, _ := fieldHelp(helpField)
 		if value == help.Example {
+			return true
+		}
+	}
+	for helpField := range cloudflareCredentialInputs {
+		help, _ := fieldHelp(helpField)
+		if help.Example != "" && value == help.Example {
 			return true
 		}
 	}

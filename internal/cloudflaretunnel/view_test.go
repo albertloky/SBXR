@@ -129,6 +129,40 @@ func TestViewVerifiesOneScopedCloudflareAuthority(t *testing.T) {
 	}
 }
 
+func TestCredentialGuidanceUsesCurrentAccountTokenPathAndMinimumAuthority(t *testing.T) {
+	want := map[cloudflaretunnel.CredentialInput]struct {
+		example, url string
+		secret       bool
+	}{
+		cloudflaretunnel.AccountIDInput:    {"11111111111111111111111111111111", "https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/", false},
+		cloudflaretunnel.ZoneIDInput:       {"22222222222222222222222222222222", "https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/", false},
+		cloudflaretunnel.AccountTokenInput: {"", "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/", true},
+	}
+	for input, expected := range want {
+		help, ok := cloudflaretunnel.CredentialGuidance(input)
+		if !ok || help.Purpose == "" || len(help.Instructions) == 0 || help.AcceptedFormat == "" || len(help.CommonMistakes) == 0 || help.Recovery == "" || help.Example != expected.example || help.URL != expected.url || help.InfrastructureSecret != expected.secret {
+			t.Fatalf("%s guidance = %+v, ok=%t", input, help, ok)
+		}
+	}
+	account, _ := cloudflaretunnel.CredentialGuidance(cloudflaretunnel.AccountIDInput)
+	zone, _ := cloudflaretunnel.CredentialGuidance(cloudflaretunnel.ZoneIDInput)
+	if !slices.Equal(account.Instructions, []string{"Open Account home; use Search or CMD/CTRL+K, find the account, and select Copy account ID."}) || !slices.Equal(zone.Instructions, []string{"Select the domain; open domain Overview; in API, copy the Zone ID."}) {
+		t.Fatalf("current account and zone ID paths = account %q zone %q", account.Instructions, zone.Instructions)
+	}
+	tokenHelp, _ := cloudflaretunnel.CredentialGuidance(cloudflaretunnel.AccountTokenInput)
+	joined := strings.Join(append(append([]string{}, tokenHelp.Instructions...), tokenHelp.CommonMistakes...), " ")
+	for _, want := range []string{"Manage Account > Account API Tokens", "Account > Account API Tokens > Read", "Account > Cloudflare Tunnel > Edit", "Zone > DNS > Edit", "selected account", "selected zone", "Global API Key", "user API token", "Write", "wildcard", "unrelated permission"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("Account API Token guidance omitted %q: %+v", want, tokenHelp)
+		}
+	}
+	for _, placeholder := range []string{"cfat_placeholder________________________________", "cfat_your_token_________________________________"} {
+		if _, err := cloudflaretunnel.NewManagementToken(placeholder); err == nil {
+			t.Fatalf("placeholder token %q was accepted", placeholder)
+		}
+	}
+}
+
 func TestViewReportsDeliberatelyRemovedManagementTokenWithoutFalseHealth(t *testing.T) {
 	result := cloudflaretunnel.New(nil, &controlledClock{now: time.Date(2026, time.August, 7, 12, 0, 0, 0, time.UTC)}).View(context.Background(), cloudflaretunnel.ViewRequest{
 		AccountID:    accountID,

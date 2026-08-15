@@ -73,13 +73,15 @@ The final result always says that Certificate Transparency entries and provider 
 
 ## Current onboarding labels
 
-The walkthrough was qualified on `2026-08-07` against these Cloudflare dashboard labels:
+The walkthrough was qualified on `2026-08-15` against these Cloudflare dashboard labels:
 
 - `Manage Account > Account API Tokens`
 - `selected domain > DNS > Records`
 - `Cloudflare One > Networks > Tunnels & Mesh`
 
 Every release containing onboarding changes must requalify these labels. The fixed resource boundary and permissions do not change merely because Cloudflare renames a page.
+
+The current sources are Cloudflare's [Account API tokens](https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/), [account and zone IDs](https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/), and [API token permissions](https://developers.cloudflare.com/fundamentals/api/reference/permissions/).
 
 ## Secret and network boundary
 

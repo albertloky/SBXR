@@ -555,6 +555,72 @@ func TestRunFieldChangeClearsEditingStateThroughThePublicOutcome(t *testing.T) {
 	}
 }
 
+func TestRunMasksAndRevealsOnlyTheFocusedInstallationInfrastructureSecret(t *testing.T) {
+	const secret = "cfat_INITIAL-SECRET-MARKER-012345678901234567890"
+	help := EditingHelp{
+		Purpose: "Authorize only SBXR's Cloudflare work.", Instructions: []string{"Open Manage Account > Account API Tokens; Create Token."},
+		AcceptedFormat: "cfat_ plus 35 to 75 letters, digits, _ or -.", CommonMistakes: []string{"No Global API Key or broad authority."},
+		Recovery: "Create the exact scoped Account API Token.", URL: "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/", Sensitivity: InfrastructureSecret,
+	}
+	token := ChangeReview{Editing: &EditingPresentation{Title: "Clean VPS installation", Field: EditingField{Identity: "cloudflare-token", Label: "Cloudflare Account API Token", Required: true}, Help: help}}
+	domain := ChangeReview{Editing: &EditingPresentation{Title: "Clean VPS installation", Field: EditingField{Identity: "reality-target", Label: "REALITY target hostname", Required: true}}}
+
+	t.Run("masked by default", func(t *testing.T) {
+		got := runPseudoTerminalTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: &outcomeStub{reviews: []ChangeReview{token}}}, 80, 24, "", secret, "", "\x03\r")
+		if strings.Contains(got, secret) || !strings.Contains(got, "[entered]") || !strings.Contains(got, "Ctrl+R Reveal token") {
+			t.Fatalf("default token frame was not masked\n%s", got)
+		}
+	})
+
+	t.Run("Help is complete at exact terminal sizes", func(t *testing.T) {
+		for _, size := range []struct{ width, height int }{{120, 36}, {80, 24}} {
+			steps := []string{"", "\x03\r"}
+			if size.width == 80 {
+				steps = []string{"", "\t", "\x1b[B", "\r", "", "\x03\r"}
+			}
+			got := runPseudoTerminalTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: &outcomeStub{reviews: []ChangeReview{token}}}, size.width, size.height, steps...)
+			for _, want := range []string{"CLOUDFLARE ACCOUNT API TOKEN HELP", "Manage Account > Account API", "Tokens;", "cfat_ plus 35 to 75", "No Global API Key", "Infrastructure Secret", "account-owned-tokens/", "Esc Return to field"} {
+				if !strings.Contains(got, want) {
+					t.Fatalf("%dx%d token Help omitted %q\n%s", size.width, size.height, want, got)
+				}
+			}
+			if strings.Contains(got, "EXAMPLE ONLY") {
+				t.Fatalf("%dx%d token Help exposed an example\n%s", size.width, size.height, got)
+			}
+			requireClosedHelpHyperlinks(t, got, help.URL)
+		}
+	})
+
+	t.Run("focused reveal is deliberate", func(t *testing.T) {
+		got := runPseudoTerminalTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: &outcomeStub{reviews: []ChangeReview{token}}}, 80, 24, "", secret, "\x12", "", "\x03\r")
+		for _, want := range []string{secret, "TOKEN REVEALED", "screenshots and recordings can capture", "Mask "} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("controlled Reveal omitted %q\n%s", want, got)
+			}
+		}
+	})
+
+	t.Run("focus loss and submission remask", func(t *testing.T) {
+		stub := &outcomeStub{reviews: []ChangeReview{token}, editReview: domain}
+		got := runPseudoTerminalTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: stub}, 80, 24, "", secret, "\x12", "", "\t", "", "\x1b[Z", "\r", "", "\x03\r")
+		if len(stub.edits) != 1 || stub.edits[0] != (EditingInput{Field: "cloudflare-token", Text: secret}) {
+			t.Fatalf("secret submission = %+v", stub.edits)
+		}
+		if lastSecret, remasked, next := strings.LastIndex(got, secret), strings.LastIndex(got, "Ctrl+R Reveal token"), strings.LastIndex(got, "REALITY target hostname"); lastSecret < 0 || remasked < lastSecret || next < remasked {
+			t.Fatalf("focus loss or screen change did not remask before the next field\n%s", got)
+		}
+	})
+
+	t.Run("paste cannot reveal or activate", func(t *testing.T) {
+		stub := &outcomeStub{reviews: []ChangeReview{token}}
+		paste := "\x1b[200~" + secret + "\x12\nAPPLY\x1b[201~"
+		got := runPseudoTerminalTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: stub}, 80, 24, "", paste, "", "\x03\r")
+		if strings.Contains(got, secret) || strings.Contains(got, "TOKEN REVEALED") || len(stub.edits) != 0 || len(stub.applyPlans) != 0 || stub.backCalls != 0 {
+			t.Fatalf("pasted token escaped masked data input: edits=%+v apply=%+v back=%d\n%s", stub.edits, stub.applyPlans, stub.backCalls, got)
+		}
+	})
+}
+
 func TestRunSafeEditingFocusMatchesThePublicActionInARealPseudoTerminal(t *testing.T) {
 	editing := ChangeReview{Editing: &EditingPresentation{Title: "Installation choices", Field: EditingField{Identity: "domain", Label: "Domain", Value: "owner.example.test", Required: true}}}
 

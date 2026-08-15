@@ -73,3 +73,27 @@ func TestProductionInstallationJourneyReturnsAnInvalidPortToItsExactField(t *tes
 		t.Fatalf("corrected REALITY port lost earlier input or the next default: %+v", review)
 	}
 }
+
+func TestProductionInstallationJourneyCarriesCloudflareOwnedTokenHelp(t *testing.T) {
+	outcome := newTestInstallOutcome(t)
+	for _, input := range []ownerconsole.EditingInput{
+		{Field: "domain", Text: "example.com"},
+		{Field: "owner-email", Text: "owner@example.com"},
+		{Field: "public-ipv4", Text: "8.8.8.8"},
+		{Field: "reality-port", Text: "443"},
+		{Field: "hysteria2-port", Text: "443"},
+		{Field: "tuic-port", Text: "8443"},
+		{Field: "anytls-port", Text: "9443"},
+		{Field: "subscription-port", Text: "10443"},
+		{Field: "cloudflare-account", Text: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		{Field: "cloudflare-zone", Text: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+	} {
+		if review := outcome.Edit(t.Context(), input); review.Editing == nil {
+			t.Fatalf("%s did not continue field-local editing: %+v", input.Field, review)
+		}
+	}
+	review := outcome.Review(t.Context())
+	if review.Editing == nil || review.Editing.Field.Identity != "cloudflare-token" || review.Editing.Help.Sensitivity != ownerconsole.InfrastructureSecret || review.Editing.Help.Example != "" || review.Editing.Help.URL != "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/" {
+		t.Fatalf("Cloudflare token Help did not cross the production presentation boundary: %+v", review)
+	}
+}

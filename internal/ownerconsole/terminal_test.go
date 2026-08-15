@@ -281,6 +281,93 @@ func TestRunAllowsSafeExitWhileUndersized(t *testing.T) {
 	}
 }
 
+func TestRunResizeRemasksInitialAndManagedCloudflareTokens(t *testing.T) {
+	const secret = "cfat_RESIZE-SECRET-MARKER-012345678901234567890"
+	help := EditingHelp{
+		Purpose: "Authorize only SBXR's Cloudflare work.", Instructions: []string{"Open Manage Account > Account API Tokens; Create Token."},
+		AcceptedFormat: "cfat_ plus 35 to 75 letters, digits, _ or -.", CommonMistakes: []string{"No Global API Key or broad authority."},
+		Recovery: "Create the exact scoped Account API Token.", URL: "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/", Sensitivity: InfrastructureSecret,
+	}
+	initial := ChangeReview{Editing: &EditingPresentation{Title: "Clean VPS installation", Field: EditingField{Identity: "cloudflare-token", Label: "Cloudflare Account API Token", Required: true}, Help: help}}
+	credential := CloudflarePresentation{Kind: CloudflareCredentialPresentation, Credential: completeCloudflareCredential()}
+	for _, test := range []struct {
+		name    string
+		session Session
+		setup   []string
+	}{
+		{name: "initial Installation", session: Session{Scenario: InstallationReview, Outcome: &outcomeStub{reviews: []ChangeReview{initial}}}, setup: []string{secret, "\x12"}},
+		{name: "managed replacement", session: Session{Scenario: CloudflareWalkthrough, Cloudflare: &cloudflareStub{view: credential}}, setup: []string{"\x1b[B\r", "\r", secret, "\x12"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := runRevealedResizePseudoTerminal(t, test.session, test.setup)
+			if strings.Count(got, "cfat_RESIZE-SECRET-MARKER") != 1 || !strings.Contains(got, "TOKEN REVEALED") || !strings.Contains(got, "TERMINAL IS TOO SMALL") || !strings.Contains(got, "Ctrl+R Reveal token") {
+				t.Fatalf("resize did not remask the controlled Reveal\n%s", got)
+			}
+		})
+	}
+}
+
+func runRevealedResizePseudoTerminal(t *testing.T, session Session, setup []string) string {
+	t.Helper()
+	master, slave, err := pty.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	defer slave.Close()
+	if err := pty.Setsize(master, &pty.Winsize{Cols: 120, Rows: 36}); err != nil {
+		t.Fatal(err)
+	}
+	capabilities := capableTerminal(120, 36)
+	transcript := make(chan string, 1)
+	go func() {
+		var output bytes.Buffer
+		_, _ = io.Copy(&output, master)
+		transcript <- output.String()
+	}()
+	session.Input, session.Output, session.Capabilities = slave, slave, &capabilities
+	done := make(chan error, 1)
+	go func() { done <- Run(context.Background(), session) }()
+	time.Sleep(100 * time.Millisecond)
+	for _, keys := range setup {
+		if _, err := master.Write([]byte(keys)); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(60 * time.Millisecond)
+	}
+	if err := pty.Setsize(master, &pty.Winsize{Cols: 72, Rows: 20}); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Kill(os.Getpid(), syscall.SIGWINCH); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if _, err := master.Write([]byte("\x03\x1b")); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if err := pty.Setsize(master, &pty.Winsize{Cols: 120, Rows: 36}); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Kill(os.Getpid(), syscall.SIGWINCH); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if _, err := master.Write([]byte("\x03\r")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Owner Console did not exit after token resize")
+	}
+	_ = slave.Close()
+	return <-transcript
+}
+
 func TestRunPreservesInteractionStateThroughResizeAndRefresh(t *testing.T) {
 	master, slave, err := pty.Open()
 	if err != nil {

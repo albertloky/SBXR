@@ -219,6 +219,7 @@ type model struct {
 	inputTruncated             bool
 	pasteNeutralized           bool
 	pasteGuard                 bool
+	tokenRevealed              bool
 	refreshed                  bool
 	pendingUpdate              *PresentationUpdate
 	operationState             operationPendingState
@@ -530,6 +531,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := message.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = message.Width, message.Height
+		if m.width < minimumWidth || m.height < minimumHeight {
+			m.tokenRevealed = false
+		}
 	case tea.BackgroundColorMsg:
 		m.dark = message.IsDark()
 		m.appearanceKnown = true
@@ -972,6 +976,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.width < minimumWidth || m.height < minimumHeight {
+			m.tokenRevealed = false
 			switch message.String() {
 			case "ctrl+c":
 				m.exitConfirm = true
@@ -994,6 +999,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if message.String() == "ctrl+c" {
+			m.tokenRevealed = false
 			m.exitConfirm = true
 			return m, nil
 		}
@@ -1005,7 +1011,12 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if m.changeReview.Editing != nil && m.inputFocused {
+				if message.String() == "ctrl+r" && m.installationSecretInput() {
+					m.tokenRevealed = !m.tokenRevealed
+					return m, nil
+				}
 				if message.String() == "enter" {
+					m.tokenRevealed = false
 					return m, m.editChangeCommand()
 				}
 				if m.editFocusedInput(message) {
@@ -1224,7 +1235,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				switch message.String() {
 				case "enter", "space":
 					m.providerPage++
-					m.inputFocused = m.cloudflareView.Kind == CloudflareWalkthroughPresentation && m.providerPage+1 == m.cloudflarePageCount()
+					m.inputFocused = (m.cloudflareView.Kind == CloudflareWalkthroughPresentation || m.cloudflareReplacing || m.cloudflareView.Kind == CloudflareMissingPermissionPresentation) && m.providerPage+1 == m.cloudflarePageCount()
 				case "esc":
 					if m.providerPage > 0 {
 						m.providerPage--
@@ -1236,6 +1247,10 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if m.inputFocused {
+				if message.String() == "ctrl+r" && m.cloudflareSecretInput() {
+					m.tokenRevealed = !m.tokenRevealed
+					return m, nil
+				}
 				if m.editFocusedInput(message) {
 					m.discardInput()
 					if m.cloudflareReplacing {
@@ -1807,7 +1822,8 @@ func (m *model) activateCloudflareAction() tea.Cmd {
 	case cloudflareBeginReplacement:
 		m.actionGeneration++
 		m.discardInput()
-		m.inputFocused, m.cloudflareReplacing = true, true
+		m.cloudflareReplacing, m.providerPage = true, 0
+		m.inputFocused = m.cloudflarePageCount() == 1
 		if m.cloudflareView.Kind == CloudflareMissingPermissionPresentation {
 			m.cloudflareAction = 2
 		} else {
@@ -1839,7 +1855,7 @@ func (m model) cloudflarePageCount() int {
 		return 1
 	}
 	actions := cloudflareActions(m.cloudflareView.Kind, m.cloudflareReplacing)
-	lines := cloudflareLines(m.cloudflareView, m.cloudflareAvailable, m.input, m.cloudflareAction, m.cloudflareReplacing)
+	lines := cloudflareLines(m.cloudflareView, m.cloudflareAvailable, m.input, m.cloudflareAction, m.cloudflareReplacing, m.tokenRevealed && m.cloudflareSecretInput())
 	return providerPageCount(lines, len(actions), m.width, m.height)
 }
 
@@ -2043,6 +2059,7 @@ func (m model) editChangeCommand() tea.Cmd {
 
 func (m *model) focusChangeInput() {
 	m.inputFocused, m.editingAction = false, editingReview
+	m.tokenRevealed = false
 	m.editingHelpOpen = false
 	m.inputTruncated, m.pasteNeutralized, m.pasteGuard = false, false, false
 	if correction := m.changeReview.Correction; correction != nil && correction.InputLabel != "" {
@@ -2152,6 +2169,7 @@ func (m *model) cancelCloudflareAction() {
 
 func (m *model) discardInput() {
 	m.input, m.inputFocused = "", false
+	m.tokenRevealed = false
 	m.inputTruncated, m.pasteNeutralized, m.pasteGuard = false, false, false
 }
 
@@ -2255,6 +2273,7 @@ func (m *model) editFocusedInput(message tea.KeyPressMsg) bool {
 	switch message.String() {
 	case "tab", "shift+tab":
 		m.inputFocused = false
+		m.tokenRevealed = false
 	case "backspace":
 		runes := []rune(m.input)
 		if len(runes) > 0 {
@@ -2544,7 +2563,7 @@ func (m model) scenarioLines(current fixture) []string {
 				"> Back",
 			}
 		}
-		lines := cloudflareLines(m.cloudflareView, m.cloudflareAvailable, m.input, m.cloudflareAction, m.cloudflareReplacing)
+		lines := cloudflareLines(m.cloudflareView, m.cloudflareAvailable, m.input, m.cloudflareAction, m.cloudflareReplacing, m.tokenRevealed && m.cloudflareSecretInput())
 		actionCount := 1
 		if m.cloudflareAvailable {
 			actionCount = len(cloudflareActions(m.cloudflareView.Kind, m.cloudflareReplacing))
@@ -2648,6 +2667,9 @@ func (m model) scenarioLines(current fixture) []string {
 					}
 				}
 			}
+			if m.tokenRevealed && m.installationSecretInput() {
+				lines = append(lines, "", "TOKEN REVEALED — screenshots and recordings can capture it.")
+			}
 		}
 		if m.changeFeedback != "" {
 			lines = append([]string{m.changeFeedback, ""}, lines...)
@@ -2738,7 +2760,18 @@ func (m model) quotedInput() string {
 	if m.input == "" {
 		return "-"
 	}
+	if m.installationSecretInput() && !m.tokenRevealed {
+		return maskedTokenInput(m.input)
+	}
 	return strconv.QuoteToGraphic(m.input)
+}
+
+func (m model) installationSecretInput() bool {
+	return m.scenario == InstallationReview && m.outcome != nil && m.changeReview.Editing != nil && m.changeReview.Editing.Help.Sensitivity == InfrastructureSecret
+}
+
+func (m model) cloudflareSecretInput() bool {
+	return m.scenario == CloudflareWalkthrough && m.cloudflare != nil && m.cloudflareAvailable && m.inputFocused && (m.cloudflareView.Kind == CloudflareWalkthroughPresentation || m.cloudflareReplacing || m.cloudflareView.Kind == CloudflareMissingPermissionPresentation)
 }
 
 type correctionActionDefinition struct {
@@ -2894,7 +2927,21 @@ func (m model) shortcuts() [2]string {
 	}
 	if m.inputFocused {
 		if m.scenario == InstallationReview && m.outcome != nil && m.changeReview.Editing != nil {
+			if m.installationSecretInput() {
+				action := "Reveal"
+				if m.tokenRevealed {
+					action = "Mask"
+				}
+				return [2]string{" Enter Submit field  Tab Actions  Ctrl+R " + action + " token", " Space is input data  Esc Back  Ctrl+C Exit confirmation"}
+			}
 			return [2]string{" Enter Submit field  Space is input data  Tab Actions", " Esc Back  Ctrl+C Exit confirmation"}
+		}
+		if m.cloudflareSecretInput() {
+			action := "Reveal"
+			if m.tokenRevealed {
+				action = "Mask"
+			}
+			return [2]string{" Type or paste masked token  Tab Actions  Ctrl+R " + action + " token", " Esc Back  Ctrl+C Exit confirmation"}
 		}
 		return [2]string{" Type or paste input  Tab Navigation", " Q is input data  Ctrl+C Exit confirmation  Esc Back"}
 	}

@@ -13,7 +13,7 @@ import (
 	"github.com/albertloky/SBXR/internal/networkpolicy"
 )
 
-const qualifiedOn = "2026-08-07"
+const qualifiedOn = "2026-08-15"
 
 var (
 	immutableID  = regexp.MustCompile(`^[0-9a-f]{32}$`)
@@ -33,7 +33,8 @@ const (
 type ManagementToken struct{ value string }
 
 func NewManagementToken(value string) (ManagementToken, error) {
-	if !accountToken.MatchString(value) {
+	lower := strings.ToLower(value)
+	if !accountToken.MatchString(value) || strings.Contains(lower, "placeholder") || strings.Contains(lower, "your_token") {
 		return ManagementToken{}, errors.New("Cloudflare account API token required")
 	}
 	return ManagementToken{value: value}, nil
@@ -269,6 +270,60 @@ type Walkthrough struct {
 	Tunnels       string
 	Permissions   []string
 	Resources     []string
+}
+
+type CredentialInput string
+
+const (
+	AccountIDInput    CredentialInput = "account-id"
+	ZoneIDInput       CredentialInput = "zone-id"
+	AccountTokenInput CredentialInput = "account-token"
+)
+
+type CredentialHelp struct {
+	Purpose, AcceptedFormat, Recovery, Example, URL string
+	Instructions, CommonMistakes                    []string
+	InfrastructureSecret                            bool
+}
+
+func CredentialGuidance(input CredentialInput) (CredentialHelp, bool) {
+	switch input {
+	case AccountIDInput:
+		return CredentialHelp{
+			Purpose:        "Bind SBXR to one Cloudflare account.",
+			Instructions:   []string{"Open Account home; use Search or CMD/CTRL+K, find the account, and select Copy account ID."},
+			AcceptedFormat: "Exactly 32 lowercase hexadecimal characters.",
+			CommonMistakes: []string{"Do not use a zone ID or account name."},
+			Recovery:       "Copy the selected account ID again.",
+			Example:        "11111111111111111111111111111111",
+			URL:            "https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/",
+		}, true
+	case ZoneIDInput:
+		return CredentialHelp{
+			Purpose:        "Bind SBXR to the selected Cloudflare domain.",
+			Instructions:   []string{"Select the domain; open domain Overview; in API, copy the Zone ID."},
+			AcceptedFormat: "Exactly 32 lowercase hexadecimal characters.",
+			CommonMistakes: []string{"Do not use an account ID or domain name."},
+			Recovery:       "Copy the selected domain's Zone ID again.",
+			Example:        "22222222222222222222222222222222",
+			URL:            "https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/",
+		}, true
+	case AccountTokenInput:
+		return CredentialHelp{
+			Purpose: "Authorize only SBXR's Cloudflare work.",
+			Instructions: []string{
+				"Open Manage Account > Account API Tokens; Create Token.",
+				"Add Account > Account API Tokens > Read and Account > Cloudflare Tunnel > Edit for the selected account; add Zone > DNS > Edit for the selected zone.",
+			},
+			AcceptedFormat:       "cfat_ plus 35 to 75 letters, digits, _ or -.",
+			CommonMistakes:       []string{"No Global API Key, user API token, Write, wildcard, or unrelated permission."},
+			Recovery:             "Create or correct the exact scoped Account API Token.",
+			URL:                  "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/",
+			InfrastructureSecret: true,
+		}, true
+	default:
+		return CredentialHelp{}, false
+	}
 }
 
 type Health struct {

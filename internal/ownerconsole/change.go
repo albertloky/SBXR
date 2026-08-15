@@ -47,6 +47,7 @@ type EditingSensitivity uint8
 const (
 	PublicInformation EditingSensitivity = iota + 1
 	PersonalInformation
+	InfrastructureSecret
 )
 
 type EditingHelp struct {
@@ -61,6 +62,8 @@ var allowedHelpURLs = map[string]bool{
 	"https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml": true,
 	"https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml": true,
 	"https://xtls.github.io/en/config/transport.html#realityobject":                                true,
+	"https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/":            true,
+	"https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/":         true,
 }
 
 type editingAction uint8
@@ -278,8 +281,9 @@ func safeEditingHelp(help EditingHelp) bool {
 	if help.Purpose == "" && len(help.Instructions) == 0 && help.AcceptedFormat == "" && len(help.CommonMistakes) == 0 && help.Recovery == "" && help.Example == "" && help.URL == "" && help.Sensitivity == 0 {
 		return true
 	}
-	validSensitivity := help.Sensitivity == PublicInformation || help.Sensitivity == PersonalInformation
-	return safeLine(help.Purpose) && completeStrings(help.Instructions, 8) && safeLine(help.AcceptedFormat) && completeStrings(help.CommonMistakes, 8) && safeLine(help.Recovery) && safeLine(help.Example) && allowedHelpURLs[help.URL] && validSensitivity
+	validSensitivity := help.Sensitivity == PublicInformation || help.Sensitivity == PersonalInformation || help.Sensitivity == InfrastructureSecret
+	validExample := help.Sensitivity == InfrastructureSecret && help.Example == "" || help.Sensitivity != InfrastructureSecret && safeLine(help.Example)
+	return safeLine(help.Purpose) && completeStrings(help.Instructions, 8) && safeLine(help.AcceptedFormat) && completeStrings(help.CommonMistakes, 8) && safeLine(help.Recovery) && validExample && allowedHelpURLs[help.URL] && validSensitivity
 }
 
 func editingHelpLines(editing *EditingPresentation, width int) []string {
@@ -292,7 +296,11 @@ func editingHelpLines(editing *EditingPresentation, width int) []string {
 	for _, mistake := range help.CommonMistakes {
 		lines = append(lines, "Common mistakes: "+mistake)
 	}
-	lines = append(lines, "Recovery: "+help.Recovery, "EXAMPLE ONLY — DO NOT COPY: "+help.Example, "Sensitivity: "+help.Sensitivity.String())
+	lines = append(lines, "Recovery: "+help.Recovery)
+	if help.Example != "" {
+		lines = append(lines, "EXAMPLE ONLY — DO NOT COPY: "+help.Example)
+	}
+	lines = append(lines, "Sensitivity: "+help.Sensitivity.String())
 	lines = append(lines, terminalHyperlinkLines(help.URL, width)...)
 	return append(lines, "", "Esc Return to field")
 }
@@ -303,6 +311,8 @@ func (sensitivity EditingSensitivity) String() string {
 		return "Public Information"
 	case PersonalInformation:
 		return "Personal Information"
+	case InfrastructureSecret:
+		return "Infrastructure Secret"
 	default:
 		return "Unknown"
 	}

@@ -17,7 +17,7 @@ func TestManagedProviderPresentationKeepsTypedCloudflareAndCertificateFacts(t *t
 		Credential: cloudflaretunnel.CredentialStatus{Status: "active", FirstFour: "cfat", LastFour: "last", Uses: []string{"manage one Tunnel"}},
 		Health:     cloudflaretunnel.Health{Outcome: cloudflaretunnel.Healthy}, LastCheck: now,
 	})
-	if cloudflare.Kind != ownerconsole.CloudflareCredentialPresentation || cloudflare.Credential.Status != ownerconsole.CloudflareTokenActive || cloudflare.Credential.LastVerification != now.Format(time.RFC3339) {
+	if cloudflare.Kind != ownerconsole.CloudflareCredentialPresentation || cloudflare.Credential.Status != ownerconsole.CloudflareTokenActive || cloudflare.Credential.LastVerification != now.Format(time.RFC3339) || len(cloudflare.Credential.Guidance) != 2 || cloudflare.Credential.HelpURL != "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/" {
 		t.Fatalf("Cloudflare presentation = %+v", cloudflare)
 	}
 

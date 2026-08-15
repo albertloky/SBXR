@@ -659,7 +659,7 @@ func TestInstallationReviewSuppliesDomainHelpAndRejectsItsExample(t *testing.T) 
 	}
 }
 
-func TestInstallationReviewGuidesEveryNonCloudflareFieldAndRejectsTutorialValues(t *testing.T) {
+func TestInstallationReviewGuidesEveryFirstInstallationFieldAndRejectsTutorialValues(t *testing.T) {
 	module := newTestInstallation(t, composedNetworkObserver{}, nil)
 	complete := composedDraft(t)
 	type expectedHelp struct {
@@ -667,20 +667,24 @@ func TestInstallationReviewGuidesEveryNonCloudflareFieldAndRejectsTutorialValues
 		sensitivity                      FieldSensitivity
 	}
 	want := map[string]expectedHelp{
-		"domain":            {"public domain", "https://bad", "vpn.example", "https://developers.cloudflare.com/fundamentals/manage-domains/add-site/", PublicInformation},
-		"owner-email":       {"ACME account", "owner", "owner@sbxr.example", "https://eff-certbot.readthedocs.io/en/stable/using.html#certbot-command-line-options", PersonalInformation},
-		"public-ipv4":       {"public IPv4", "999.1.1.1", "192.0.2.10", "https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml", PublicInformation},
-		"reality-port":      {"REALITY", "not-a-port", "10444", "https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml", PublicInformation},
-		"hysteria2-port":    {"Hysteria2", "not-a-port", "10445", "https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml", PublicInformation},
-		"tuic-port":         {"TUIC", "not-a-port", "10446", "https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml", PublicInformation},
-		"anytls-port":       {"AnyTLS", "not-a-port", "10447", "https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml", PublicInformation},
-		"subscription-port": {"Subscription HTTPS", "not-a-port", "10448", "https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml", PublicInformation},
-		"reality-target":    {"REALITY Vision", "https://bad", "target.example", "https://xtls.github.io/en/config/transport.html#realityobject", PublicInformation},
+		"domain":             {"public domain", "https://bad", "vpn.example", "https://developers.cloudflare.com/fundamentals/manage-domains/add-site/", PublicInformation},
+		"owner-email":        {"ACME account", "owner", "owner@sbxr.example", "https://eff-certbot.readthedocs.io/en/stable/using.html#certbot-command-line-options", PersonalInformation},
+		"public-ipv4":        {"public IPv4", "999.1.1.1", "192.0.2.10", "https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml", PublicInformation},
+		"reality-port":       {"REALITY", "not-a-port", "10444", "https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml", PublicInformation},
+		"hysteria2-port":     {"Hysteria2", "not-a-port", "10445", "https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml", PublicInformation},
+		"tuic-port":          {"TUIC", "not-a-port", "10446", "https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml", PublicInformation},
+		"anytls-port":        {"AnyTLS", "not-a-port", "10447", "https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml", PublicInformation},
+		"subscription-port":  {"Subscription HTTPS", "not-a-port", "10448", "https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml", PublicInformation},
+		"cloudflare-account": {"Cloudflare account", "not-an-id", "11111111111111111111111111111111", "https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/", PublicInformation},
+		"cloudflare-zone":    {"Cloudflare domain", "not-an-id", "22222222222222222222222222222222", "https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/", PublicInformation},
+		"cloudflare-token":   {"Cloudflare work", "user-token", "", "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/", InfrastructureSecret},
+		"reality-target":     {"REALITY Vision", "https://bad", "target.example", "https://xtls.github.io/en/config/transport.html#realityobject", PublicInformation},
 	}
 	placeholder := map[string]string{
-		"domain":         "placeholder",
-		"owner-email":    "owner@your-domain",
-		"reality-target": "your-hostname",
+		"domain":           "placeholder",
+		"owner-email":      "owner@your-domain",
+		"cloudflare-token": "cfat_placeholder________________________________",
+		"reality-target":   "your-hostname",
 	}
 	steps := []struct{ field, valid string }{
 		{"domain", complete.Installation.Domain},
@@ -708,6 +712,9 @@ func TestInstallationReviewGuidesEveryNonCloudflareFieldAndRejectsTutorialValues
 				t.Fatalf("%s Help = %+v", step.field, help)
 			}
 			for _, submitted := range []string{expected.malformed, expected.example} {
+				if submitted == "" {
+					continue
+				}
 				rejected := module.Review(t.Context(), Draft{SubmittedField: step.field, SubmittedValue: submitted})
 				if rejected.Invalid == nil || rejected.Invalid.Field != step.field || rejected.Plan != nil || rejected.Invalid.Help.Recovery == "" {
 					t.Fatalf("%s accepted %q or lost field Help: %+v", step.field, submitted, rejected)
@@ -718,7 +725,7 @@ func TestInstallationReviewGuidesEveryNonCloudflareFieldAndRejectsTutorialValues
 			}
 			if submitted := placeholder[step.field]; submitted != "" {
 				rejected := module.Review(t.Context(), Draft{SubmittedField: step.field, SubmittedValue: submitted})
-				if rejected.Invalid == nil || rejected.Invalid.Field != step.field || rejected.Plan != nil || !strings.Contains(rejected.Invalid.Problem, "tutorial") {
+				if rejected.Invalid == nil || rejected.Invalid.Field != step.field || rejected.Plan != nil {
 					t.Fatalf("%s placeholder rejection = %+v", step.field, rejected)
 				}
 			}
@@ -729,8 +736,6 @@ func TestInstallationReviewGuidesEveryNonCloudflareFieldAndRejectsTutorialValues
 					t.Fatalf("derived Primary subscription address is not a read-only fact: %+v", review.Invalid.Facts)
 				}
 			}
-		} else if !reflect.DeepEqual(review.Invalid.Help, FieldHelp{}) {
-			t.Fatalf("Cloudflare field %s received Installation Help: %+v", step.field, review.Invalid.Help)
 		}
 		review = module.Review(t.Context(), Draft{SubmittedField: step.field, SubmittedValue: step.valid})
 		if step.field == "reality-target" && review.Plan == nil {

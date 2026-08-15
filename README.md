@@ -119,7 +119,7 @@ Input is limited to 1,024 characters. When the terminal becomes smaller than `80
 | Access values | `Up` / `Down` chooses a value; `Enter` / `Space` copies it; a left mouse click on the visible selected value performs the same explicit copy action; `Tab` returns to navigation. |
 | Connection Profiles | `Up` / `Down` chooses a profile, `Left` / `Right` chooses its action, and `Enter` / `Space` selects it. |
 | Subscription, certificates, diagnostics, updates, and recovery | `Up` / `Down` chooses an action; `Enter` / `Space` selects it; `Esc` returns to Overview. |
-| Cloudflare token field | Type or paste the token, `Tab` returns to actions, and `Shift+Tab` returns from actions to the token field. The complete token is masked and must not be copied into evidence. |
+| Cloudflare token field | Type or paste the token. `Ctrl+R` toggles Reveal or Mask only while the field is focused. `Tab` returns to actions, and `Shift+Tab` returns from actions to the token field. Focus loss, submission, screen change, and exit remask the complete token. Owner Console never copies it or records it as evidence. |
 | Live Profile Check | `Esc` stops the session-only check and returns to Subscription. |
 | Complete removal | Type exactly `COMPLETE REMOVAL`, use `Tab` to return to actions, then separately select **Permanently remove SBXR**. Before the irreversible checkpoint, Back and Cancel remain available. After it, neither Back nor Cancel is available. |
 

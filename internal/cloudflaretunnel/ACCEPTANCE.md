@@ -6,6 +6,7 @@ This record covers automated Cloudflare authority, management-token lifecycle, i
 
 - `CLOUDFLARE-MODULE`: `go test ./internal/cloudflaretunnel`
 - `CLOUDFLARE-AUTHORITY`: `go test ./internal/cloudflaretunnel -run 'TestView(VerifiesOneScopedCloudflareAuthority|FailsClosedWithoutLeakingAuthority)'`
+- `CLOUDFLARE-CREDENTIAL-GUIDANCE`: `go test ./internal/cloudflaretunnel -run '^TestCredentialGuidanceUsesCurrentAccountTokenPathAndMinimumAuthority$'`
 - `CLOUDFLARE-SEAM`: `go test ./internal/cloudflaretunnel -run 'TestHTTPAPI(ParsesOfficialShapesWithScopedAuthenticationAndPagination|RefusesMalformedAmbiguousAndUnsafeResponses)'`
 - `CLOUDFLARE-PLAN`: `go test ./internal/cloudflaretunnel -run 'Test(Plan|Executor|WholeTunnel|CloudflaredService|InstalledCloudflared|LocalOrigin)'`
 - `CLOUDFLARE-SERVICE-SEAM`: `go test ./internal/cloudflaretunnel -run 'TestExecutorInstallsAndRollsBackProtectedCloudflaredService|TestLocalOriginObserverRequiresHTTP'`
@@ -27,7 +28,7 @@ This record covers automated Cloudflare authority, management-token lifecycle, i
 
 ## Procedure
 
-1. Create a memory-only `cfat_` token fixture containing a unique marker. Confirm a Global API Key, missing Adapter, missing clock, malformed immutable ID, invalid zone name, and missing Network Policy proof stop before a provider call.
+1. Confirm typed guidance uses `Manage Account > Account API Tokens`, gives the current account-ID and zone-ID paths, and requires only Account API Tokens Read and Cloudflare Tunnel Edit on the selected account plus DNS Edit on the selected zone. Create a memory-only `cfat_` token fixture containing a unique marker. Confirm Global API Keys, user API tokens, Account API Tokens Write, unrelated permissions, wildcard resources, malformed or placeholder tokens, inactive tokens, missing Adapter, missing clock, malformed immutable ID, invalid zone name, and missing Network Policy proof stop before a provider call.
 2. Return the exact selected account and zone, active token, future expiry, assigned nameservers, matching public nameservers, `Account API Tokens Read`, `Cloudflare Tunnel Edit`, and `DNS Write` policies scoped only to the selected account and zone. Confirm `CLOUDFLARE-AUTHORITY-VERIFIED` is Healthy while `WritesProven` remains false.
 3. Remove each permission, add an unrelated permission, use an all-zone wildcard, add a second resource, change an immutable ID, disable the token, expire it, and change the zone binding in turn. Confirm each result fails before mutation with `CLOUDFLARE-TOKEN-PERMISSION` and exactly `Check current token again`, `Enter replacement token`, `Verify replacement`, and `Back`.
 4. Fail Cloudflare HTTPS, TCP `7844`, and UDP `7844` in turn. Confirm Cloudflare Tunnel consumes the typed Network Policy result, returns `CLOUDFLARE-NETWORK-PATH`, makes no API request, and offers no network or provider-firewall mutation.
