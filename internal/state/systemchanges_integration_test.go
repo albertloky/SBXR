@@ -43,49 +43,51 @@ import (
 )
 
 type systemChangesAdapter struct {
-	observation        systemchanges.Observation
-	closes             atomic.Int32
-	events             []string
-	artifacts          map[string][]byte
-	statuses           map[systemchanges.GatePhase]systemchanges.HealthStatus
-	beforeStep         func() error
-	afterPrepare       func()
-	beforeCheck        func()
-	prepareErr         error
-	closeErr           error
-	stepEvidence       *systemchanges.StepEvidence
-	lease              systemchanges.ExecutionLease
-	executeCount       int
-	failStep           int
-	failReverse        bool
-	agreementErr       error
-	serviceErr         error
-	removalReadyErr    error
-	tokenRevoked       bool
-	failRemoval        systemchanges.IrreversibleRemovalPhase
-	removalErr         error
-	finalAbsent        bool
-	holdErr            error
-	recoveryLoadErr    error
-	inspectionErr      error
-	restoreErr         error
-	noRecovery         bool
-	recovery           *systemchanges.RecoveryTransaction
-	stateRecovery      systemchanges.StateRecovery
-	stateBinding       []byte
-	crashBefore        systemchanges.DurableCheckpoint
-	crashAfter         systemchanges.DurableCheckpoint
-	crashStep          int
-	failRecord         systemchanges.DurableCheckpoint
-	crashed            bool
-	lockHeld           bool
-	cloudflare         *cloudflaretunnel.Executor
-	rotationChanged    bool
-	reclamationPresent bool
-	sshChecks          int
-	failSSHAt          int
-	sshAgreement       string
-	preparationRender  string
+	observation             systemchanges.Observation
+	closes                  atomic.Int32
+	events                  []string
+	artifacts               map[string][]byte
+	statuses                map[systemchanges.GatePhase]systemchanges.HealthStatus
+	beforeStep              func() error
+	afterPrepare            func()
+	beforeCheck             func()
+	prepareErr              error
+	closeErr                error
+	stepEvidence            *systemchanges.StepEvidence
+	lease                   systemchanges.ExecutionLease
+	executeCount            int
+	failStep                int
+	failReverse             bool
+	agreementErr            error
+	serviceErr              error
+	removalReadyErr         error
+	tokenRevoked            bool
+	failRemoval             systemchanges.IrreversibleRemovalPhase
+	removalErr              error
+	finalAbsent             bool
+	holdErr                 error
+	recoveryLoadErr         error
+	inspectionErr           error
+	restoreErr              error
+	noRecovery              bool
+	recovery                *systemchanges.RecoveryTransaction
+	stateRecovery           systemchanges.StateRecovery
+	stateBinding            []byte
+	crashBefore             systemchanges.DurableCheckpoint
+	crashAfter              systemchanges.DurableCheckpoint
+	crashStep               int
+	failRecord              systemchanges.DurableCheckpoint
+	crashed                 bool
+	lockHeld                bool
+	cloudflare              *cloudflaretunnel.Executor
+	rotationChanged         bool
+	reclamationPresent      bool
+	sshChecks               int
+	failSSHAt               int
+	sshAgreement            string
+	sshRecoveryAttempts     []string
+	sshRecoveryAttemptCount int
+	preparationRender       string
 }
 
 type controlledInfrastructureSecret struct {
@@ -421,9 +423,22 @@ func (a *systemChangesAdapter) VerifySSHPreservation(_ systemchanges.ExecutionLe
 	return nil
 }
 
+func (a *systemChangesAdapter) AppendRecoverySSHPreservation(_ systemchanges.ExecutionLease, _ string, identity, agreement string) error {
+	digest := sha256.Sum256([]byte(identity))
+	if agreement != hex.EncodeToString(digest[:]) {
+		return errors.New("controlled recovery SSH Preservation failure")
+	}
+	a.sshRecoveryAttempts = append(a.sshRecoveryAttempts, identity)
+	a.sshRecoveryAttemptCount++
+	a.artifacts["ssh-preservation"] = []byte(identity)
+	a.sshAgreement = agreement
+	return nil
+}
+
 func (a *systemChangesAdapter) Cleanup(systemchanges.ExecutionLease, string) error {
 	a.events = append(a.events, "cleanup")
 	delete(a.artifacts, "ssh-preservation")
+	a.sshRecoveryAttempts = nil
 	a.recovery = nil
 	return nil
 }
@@ -674,6 +689,43 @@ func TestReclamationInstallationRecoverySurvivesASecondWorkerDeath(t *testing.T)
 	result := systemchanges.New(adapter).Recover()
 	if result.Outcome != systemchanges.Completed || adapter.recovery != nil || strings.Contains(strings.Join(adapter.events, ","), "reverse") {
 		t.Fatalf("second forward recovery = %+v events=%v", result, adapter.events)
+	}
+}
+
+func TestReclamationRecoveryRequiresFreshSSHProofForTheNextFirewallChange(t *testing.T) {
+	firewall := testFirewallStep(t)
+	stateModule, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.InstallationMutation, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-PREFLIGHT"}, systemChangeTestOptions{extraSteps: []systemchanges.Step{firewall}, stepTimeout: 30 * time.Second, reclamation: reviewedReclamationAuthority(t)})
+	adapter := &systemChangesAdapter{observation: observed, stateRecovery: stateModule, reclamationPresent: true, crashAfter: systemchanges.StepCompleted, crashStep: 2}
+	func() {
+		defer func() { _ = recover() }()
+		systemchanges.New(adapter).Apply(changeSet)
+	}()
+	adapter.crashAfter, adapter.crashed = "", false
+	executed := adapter.executeCount
+	if result := systemchanges.New(adapter).Recover(); result.Outcome != systemchanges.RecoveryRequiredOutcome || adapter.executeCount != executed {
+		t.Fatalf("saved SSH identity authorized forward recovery = %+v events=%v", result, adapter.events)
+	}
+	lostIdentity := "198.51.100.7 50500 203.0.113.10 2222"
+	captured, captureFailure := networkpolicy.New(nil).CaptureSSHRecoveryIdentity(lostIdentity)
+	if captureFailure != nil {
+		t.Fatal(captureFailure)
+	}
+	if result := systemchanges.New(adapter).RecoverWithSSHRecovery(systemchanges.NewRecoverySSHIdentityAuthority(captured), systemchanges.SSHPreservationAuthority{}); result.Outcome != systemchanges.RecoveryRequiredOutcome || adapter.executeCount != executed || len(adapter.sshRecoveryAttempts) != 1 || adapter.sshRecoveryAttempts[0] != lostIdentity {
+		t.Fatalf("unproved recovery identity history = %+v attempts=%v", result, adapter.sshRecoveryAttempts)
+	}
+
+	recoveryIdentity := "198.51.100.8 51000 203.0.113.10 2222"
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(recoveryIdentity)))
+	proof, failure := networkpolicy.New(reclamationNetworkObserver{observed: networkpolicy.Observations{
+		SSH:       networkpolicy.SSHFacts{DetectedPort: 2222, ServerAddress: "203.0.113.10", CurrentSessions: []string{digest}, SessionsComplete: true, Service: "ssh.service", Listener: "0.0.0.0:2222/tcp"},
+		Listeners: []networkpolicy.Listener{{Address: "0.0.0.0", Port: 2222, Protocol: networkpolicy.TCP, Process: "sshd", Service: "ssh.service"}},
+	}}).ProveSSHPreservation(recoveryIdentity)
+	if failure != nil {
+		t.Fatal(failure)
+	}
+	result := systemchanges.New(adapter).RecoverWithSSHPreservation(systemchanges.NewSSHPreservationAuthority(proof))
+	if result.Outcome != systemchanges.Completed || result.SSHPreservationSHA256 != digest || adapter.executeCount != executed+1 || adapter.recovery != nil || adapter.sshRecoveryAttemptCount != 2 || len(adapter.sshRecoveryAttempts) != 0 || strings.Contains(fmt.Sprintf("%+v %v", result, adapter.events), recoveryIdentity) {
+		t.Fatalf("fresh recovery SSH proof = %+v attempts=%d retained=%d events=%v", result, adapter.sshRecoveryAttemptCount, len(adapter.sshRecoveryAttempts), adapter.events)
 	}
 }
 
@@ -1950,7 +2002,11 @@ func preparedSystemChangeWithOptions(t *testing.T, mutation systemchanges.Mutati
 
 func testSSHPreservationAuthority(t *testing.T) systemchanges.SSHPreservationAuthority {
 	t.Helper()
-	identity := "203.0.113.9 50000 203.0.113.10 2222"
+	return sshPreservationAuthorityFor(t, "203.0.113.9 50000 203.0.113.10 2222")
+}
+
+func sshPreservationAuthorityFor(t *testing.T, identity string) systemchanges.SSHPreservationAuthority {
+	t.Helper()
 	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(identity)))
 	observed := networkpolicy.Observations{
 		SSH:       networkpolicy.SSHFacts{DetectedPort: 2222, ServerAddress: "203.0.113.10", CurrentSessions: []string{digest}, SessionsComplete: true, Service: "ssh.service", Listener: "0.0.0.0:2222/tcp"},
@@ -3736,17 +3792,17 @@ func TestUbuntuFirewallSeamPreservesSSHAndCleansOnlyExactHTTP01Rule(t *testing.T
 	}
 }
 
-func TestUbuntuInstallationFirewallKeepsRawSSHIdentityOnlyForUnfinishedRecovery(t *testing.T) {
+func TestUbuntuFirewallKeepsEveryRawSSHIdentityOnlyForUnfinishedRecovery(t *testing.T) {
 	identity := "203.0.113.9 50000 203.0.113.10 2222"
 	agreement := fmt.Sprintf("%x", sha256.Sum256([]byte(identity)))
 	firewallStep := testFirewallStep(t)
-	stateModule, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.InstallationMutation, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-SSH-RESPONSIVE"}, systemChangeTestOptions{steps: []systemchanges.Step{firewallStep}, stepTimeout: time.Second})
+	stateModule, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.SettingChangeMutation, systemchanges.Check{Owner: systemchanges.NetworkPolicyModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "NETWORK-SSH-RESPONSIVE"}, systemChangeTestOptions{steps: []systemchanges.Step{firewallStep}, stepTimeout: time.Second})
 	root := t.TempDir()
 	prepareLock(t, root)
 	firewall := &controlledFirewall{failSSHProofAt: 2, failReverse: true}
 	adapter := ubuntu.NewAtWithFirewall(root, func() (systemchanges.Observation, error) { return observed, nil }, &controlledUbuntuHost{root: root}, firewall, stateModule)
 	result := systemchanges.New(adapter).Apply(changeSet)
-	identityPath := filepath.Join(root, "var/lib/sbxr/transactions/change-0001/snapshot/ssh-preservation.identity")
+	identityPath := filepath.Join(root, "var/lib/sbxr/transactions/change-0008/snapshot/ssh-preservation.identity")
 	raw, err := os.ReadFile(identityPath)
 	if result.Outcome != systemchanges.RecoveryRequiredOutcome || err != nil || string(raw) != identity || strings.Contains(fmt.Sprintf("%+v", result), identity) {
 		t.Fatalf("SSH material result=%+v raw_present=%t raw_match=%t read_error=%t", result, err == nil, string(raw) == identity, err != nil)
@@ -3756,13 +3812,41 @@ func TestUbuntuInstallationFirewallKeepsRawSSHIdentityOnlyForUnfinishedRecovery(
 		t.Fatalf("post-check watchdog order = %s", events)
 	}
 	info, statErr := os.Stat(identityPath)
-	journal, journalErr := os.ReadFile(filepath.Join(root, "var/lib/sbxr/transactions/change-0001/journal.jsonl"))
+	journal, journalErr := os.ReadFile(filepath.Join(root, "var/lib/sbxr/transactions/change-0008/journal.jsonl"))
 	var mode fs.FileMode
 	if info != nil {
 		mode = info.Mode().Perm()
 	}
 	if statErr != nil || mode != 0o600 || journalErr != nil || !bytes.Contains(journal, []byte(agreement)) || bytes.Contains(journal, []byte(identity)) {
 		t.Fatalf("protected unfinished SSH material mode=%v stat_error=%t journal_error=%t agreement_present=%t raw_absent=%t", mode, statErr != nil, journalErr != nil, bytes.Contains(journal, []byte(agreement)), !bytes.Contains(journal, []byte(identity)))
+	}
+	observed.Status, observed.CurrentChangeSet, observed.Checkpoint, observed.TotalSteps, observed.RollbackAvailable = systemchanges.ChangeInProgress, "change-0008", systemchanges.PreparedCheckpoint, 1, true
+
+	attempts := []string{"198.51.100.8 51000 203.0.113.10 2222", "198.51.100.9 52000 203.0.113.10 2222"}
+	var retries []systemchanges.ApplyResult
+	for _, attempt := range attempts {
+		retry := systemchanges.New(adapter).RecoverWithSSHPreservation(sshPreservationAuthorityFor(t, attempt))
+		retries = append(retries, retry)
+		if retry.Outcome != systemchanges.RecoveryRequiredOutcome {
+			t.Fatalf("unfinished recovery attempt = %+v", retry)
+		}
+	}
+	paths, globErr := filepath.Glob(filepath.Join(root, "var/lib/sbxr/transactions/change-0008/snapshot/ssh-preservation-recovery-*.identity"))
+	if globErr != nil || len(paths) != len(attempts) {
+		entries, _ := os.ReadDir(filepath.Join(root, "var/lib/sbxr/transactions/change-0008/snapshot"))
+		t.Fatalf("recovery SSH history paths=%v entries=%v retries=%+v error=%v", paths, entries, retries, globErr)
+	}
+	for index, name := range paths {
+		body, readErr := os.ReadFile(name)
+		if readErr != nil || string(body) != attempts[index] {
+			t.Fatalf("recovery SSH history %d was not append-only", index+1)
+		}
+	}
+	firewall.failReverse = false
+	rolledBack := systemchanges.New(adapter).Recover()
+	_, transactionErr := os.Stat(filepath.Join(root, "var/lib/sbxr/transactions/change-0008"))
+	if rolledBack.Outcome != systemchanges.RollbackSucceeded || !errors.Is(transactionErr, os.ErrNotExist) {
+		t.Fatalf("proof-free recovery rollback = %+v transaction_error=%v", rolledBack, transactionErr)
 	}
 }
 

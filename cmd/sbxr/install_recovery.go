@@ -13,6 +13,8 @@ import (
 	certificateubuntu "github.com/albertloky/SBXR/internal/certificatelifecycle/adapter/ubuntu"
 	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
 	profilesubuntu "github.com/albertloky/SBXR/internal/connectionprofiles/adapter/ubuntu"
+	"github.com/albertloky/SBXR/internal/networkpolicy"
+	networkubuntu "github.com/albertloky/SBXR/internal/networkpolicy/adapter/ubuntu"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 	softwareubuntu "github.com/albertloky/SBXR/internal/softwarelifecycle/adapter/ubuntu"
 	"github.com/albertloky/SBXR/internal/state"
@@ -186,7 +188,28 @@ func runProvenRecovery(transaction systemchanges.PendingChangeSet) (resultErr er
 		}
 	}
 	adapter := systemubuntu.NewAtForInstallRecovery("/", installRecoveryObservation, host, systemubuntu.NewNativeFirewall(), cloudflareExecutor, certificateExecutor, profilesubuntu.NewRuntimeExecutor(), subscriptionExecutor, software, stateModule)
-	result := systemchanges.New(adapter).Recover()
+	authority := systemchanges.SSHPreservationAuthority{}
+	recoveryIdentity := systemchanges.RecoverySSHIdentityAuthority{}
+	var sshFailure *networkpolicy.SSHPreservationFailure
+	if transaction.SSHPreservationTracked {
+		identity := os.Getenv("SBXR_SSH_CONNECTION")
+		captured, captureFailure := networkpolicy.New(nil).CaptureSSHRecoveryIdentity(identity)
+		if captureFailure == nil {
+			recoveryIdentity = systemchanges.NewRecoverySSHIdentityAuthority(captured)
+		}
+		proof, failure := networkpolicy.New(networkubuntu.New()).ProveSSHPreservation(identity)
+		sshFailure = failure
+		if captureFailure != nil {
+			sshFailure = captureFailure
+		}
+		if failure == nil {
+			authority = systemchanges.NewSSHPreservationAuthority(proof)
+		}
+	}
+	result := systemchanges.New(adapter).RecoverWithSSHRecovery(recoveryIdentity, authority)
+	if transaction.ForwardFirewallPending && sshFailure != nil {
+		return &clientAccessSSHReviewError{Cause: sshFailure.Cause}
+	}
 	if result.Outcome != systemchanges.Completed && result.Outcome != systemchanges.RollbackSucceeded {
 		return errors.New("install restart recovery requires inspection")
 	}

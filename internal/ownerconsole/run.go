@@ -457,7 +457,7 @@ type recoveryViewMsg struct {
 }
 type recoveryRetryMsg struct {
 	identity asyncRequestIdentity
-	change   DurableChangeSet
+	result   RecoveryRetryResult
 }
 type recoveryReviewMsg struct {
 	identity asyncRequestIdentity
@@ -840,7 +840,15 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.recoveryScreen.pending = false
 		m.operationState.stop()
-		m.changeSet = validatedDurableChangeSet(message.change)
+		if correction, valid := validatedRecovery(message.result.Correction); valid && correction.SSHBlocked && message.result.Change == (DurableChangeSet{}) {
+			m.recoveryScreen.view, m.recoveryScreen.available = correction, true
+			m.scenario, m.selected = recoveryScenario(correction.Kind), selectedNavigation(recoveryScenario(correction.Kind))
+			return m, nil
+		}
+		if message.result.Correction != (RecoveryPresentation{}) {
+			return m, nil
+		}
+		m.changeSet = validatedDurableChangeSet(message.result.Change)
 		if m.changeSet.Kind == NoChangeSet {
 			return m, nil
 		}
@@ -1608,7 +1616,7 @@ func (m model) updateRecoveryKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.operationState.start()
 			identity := asyncRequestIdentity{generation: m.actionGeneration, origin: m.scenario}
 			return m, tea.Batch(func() tea.Msg {
-				return recoveryRetryMsg{identity: identity, change: m.recovery.RetryAutomaticRollback(context.Background())}
+				return recoveryRetryMsg{identity: identity, result: m.recovery.RetryAutomaticRollback(context.Background())}
 			}, operationTick())
 		case recoveryRepair:
 			m.actionGeneration++

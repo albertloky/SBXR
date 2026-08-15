@@ -279,11 +279,12 @@ func (outcome *clientAccessOutcome) ViewRecovery(ctx context.Context) ownerconso
 	return outcome.load(ctx).Recovery
 }
 
-func (outcome *clientAccessOutcome) RetryAutomaticRollback(ctx context.Context) ownerconsole.DurableChangeSet {
+func (outcome *clientAccessOutcome) RetryAutomaticRollback(ctx context.Context) ownerconsole.RecoveryRetryResult {
 	presentation := outcome.load(ctx).Recovery
 	return ownerRecovery{
 		changeSet: presentation.ChangeSet, forwardOnly: presentation.Kind == ownerconsole.RecoveryForwardOnly,
 		completeRemoval:       presentation.CauseCode == "SYSTEM-CHANGES-COMPLETE-REMOVAL-FORWARD",
+		installationForward:   presentation.CauseCode == "SYSTEM-CHANGES-INSTALLATION-FORWARD" || presentation.SSHBlocked,
 		needsRunTokenRotation: presentation.Evidence == "IRREVERSIBLE-RUN-TOKEN-ROTATION-STARTED" && strings.Contains(presentation.Guidance, "Select Rotate token"),
 	}.RetryAutomaticRollback(ctx)
 }

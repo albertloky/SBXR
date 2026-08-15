@@ -115,6 +115,21 @@ func TestSSHPreservationProofRejectsEveryUnprovedCauseWithoutRawIdentity(t *test
 	}
 }
 
+func TestRecoverySSHIdentityValidationDoesNotCreateLiveMutationProof(t *testing.T) {
+	module := networkpolicy.New(nil)
+	identity, failure := module.CaptureSSHRecoveryIdentity("203.0.113.9 50000 203.0.113.10 2222")
+	raw, digest, valid := identity.SystemChangesRecoverySSHIdentity()
+	if failure != nil || !valid || raw != "203.0.113.9 50000 203.0.113.10 2222" || digest != fmt.Sprintf("%x", sha256.Sum256([]byte(raw))) || strings.Contains(fmt.Sprintf("%v %#v", identity, identity), raw) {
+		t.Fatalf("validated recovery identity = failure=%+v valid=%t raw_match=%t", failure, valid, raw == "203.0.113.9 50000 203.0.113.10 2222")
+	}
+	if _, _, reusable := identity.SystemChangesRecoverySSHIdentity(); reusable {
+		t.Fatal("recovery SSH identity was reusable")
+	}
+	if _, failure := module.CaptureSSHRecoveryIdentity("not-an-ssh-connection"); failure == nil || failure.Cause != networkpolicy.SSHLaunchIdentityInvalid {
+		t.Fatalf("invalid recovery identity = %+v", failure)
+	}
+}
+
 func TestInstallationPreflightCarriesOneOpaqueExactSSHAgreement(t *testing.T) {
 	identity := "203.0.113.9 50000 203.0.113.10 2222"
 	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(identity)))

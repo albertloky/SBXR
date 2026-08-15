@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 
 	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
+	"github.com/albertloky/SBXR/internal/networkpolicy"
 	"github.com/albertloky/SBXR/internal/ownerconsole"
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
@@ -13,7 +15,10 @@ type ownerRecovery struct {
 	forwardOnly           bool
 	needsRunTokenRotation bool
 	completeRemoval       bool
+	installationForward   bool
 	currentStateRepair    bool
+	sshFailure            *networkpolicy.SSHPreservationFailure
+	retry                 func(context.Context, string) (systemchanges.InstallationStatus, error)
 }
 
 func (recovery ownerRecovery) ViewRecovery(context.Context) ownerconsole.RecoveryPresentation {
@@ -22,8 +27,14 @@ func (recovery ownerRecovery) ViewRecovery(context.Context) ownerconsole.Recover
 	}
 	if recovery.changeSet != "" {
 		if recovery.forwardOnly {
+			if recovery.sshFailure != nil {
+				return sshRecoveryCorrection(recovery.changeSet, recovery.sshFailure)
+			}
 			if recovery.completeRemoval {
 				return ownerconsole.RecoveryPresentation{Kind: ownerconsole.RecoveryForwardOnly, Proof: ownerconsole.ProvenForwardOnlyRecovery, CauseCode: "SYSTEM-CHANGES-COMPLETE-REMOVAL-FORWARD", Explanation: "Irreversible Complete removal has started.", ChangeSet: recovery.changeSet, Material: "checksum-protected forward removal material", Evidence: "IRREVERSIBLE-REMOVAL-STARTED", Guidance: "Revoke the scoped Cloudflare token when requested, then continue the exact forward-only removal. Back, Cancel, and rollback are unavailable."}
+			}
+			if recovery.installationForward {
+				return ownerconsole.RecoveryPresentation{Kind: ownerconsole.RecoveryForwardOnly, Proof: ownerconsole.ProvenForwardOnlyRecovery, CauseCode: "SYSTEM-CHANGES-INSTALLATION-FORWARD", Explanation: "Irreversible Reclamation Started for the unfinished Installation.", ChangeSet: recovery.changeSet, Material: "checksum-protected forward installation material", Evidence: "IRREVERSIBLE-RECLAMATION-STARTED", Guidance: "Continue the exact forward-only Installation to Managed. Back, Cancel, and rollback are unavailable."}
 			}
 			guidance := "Continue the exact forward-only recovery; do not rotate the token again."
 			if recovery.needsRunTokenRotation {
@@ -40,13 +51,31 @@ func (recovery ownerRecovery) ViewRecovery(context.Context) ownerconsole.Recover
 	return ownerconsole.RecoveryPresentation{Kind: ownerconsole.RecoveryRebuildRequired, Proof: ownerconsole.ProvenRebuildRequired, CauseCode: "STATE-LINEAGE-UNPROVABLE", Explanation: "The installed State lineage could not be validated.", Evidence: "MANAGED-STATE-REFUSED", Guidance: "Use read-only diagnostics, complete removal, or rebuild from a fresh review."}
 }
 
-func (recovery ownerRecovery) RetryAutomaticRollback(ctx context.Context) ownerconsole.DurableChangeSet {
+func (recovery ownerRecovery) RetryAutomaticRollback(ctx context.Context) ownerconsole.RecoveryRetryResult {
 	operation := ownerconsole.OperationIdentity("automatic-recovery")
 	if recovery.changeSet == "" {
-		return ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetRecoveryRequired, OperationID: operation, Checkpoint: "Recovery Required", Explanation: "Automatic recovery did not prove a safe terminal state."}
+		return ownerconsole.RecoveryRetryResult{Change: ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetRecoveryRequired, OperationID: operation, Checkpoint: "Recovery Required", Explanation: "Automatic recovery did not prove a safe terminal state."}}
 	}
-	status, err := retryClientAccessRecovery(ctx, recovery.changeSet)
-	return ownerRecoveryResult(recovery, status, err)
+	retry := recovery.retry
+	if retry == nil {
+		retry = retryClientAccessRecovery
+	}
+	status, err := retry(ctx, recovery.changeSet)
+	var sshFailure *clientAccessSSHReviewError
+	if errors.As(err, &sshFailure) {
+		failure := &networkpolicy.SSHPreservationFailure{Cause: sshFailure.Cause}
+		return ownerconsole.RecoveryRetryResult{Correction: sshRecoveryCorrection(recovery.changeSet, failure)}
+	}
+	return ownerconsole.RecoveryRetryResult{Change: ownerRecoveryResult(recovery, status, err)}
+}
+
+func sshRecoveryCorrection(changeSet string, failure *networkpolicy.SSHPreservationFailure) ownerconsole.RecoveryPresentation {
+	temporary := failure != nil && failure.Cause == networkpolicy.SSHObservationUnavailable
+	cause, guidance := "SYSTEM-CHANGES-SSH-RESTART", "Exit SBXR and restart it from a new direct active SSH session."
+	if temporary {
+		cause, guidance = "SYSTEM-CHANGES-SSH-OBSERVATION", "The SSH service, listener, or socket observation is temporarily unavailable. Select Check again, copy redacted evidence, or go Back."
+	}
+	return ownerconsole.RecoveryPresentation{Kind: ownerconsole.RecoveryForwardOnly, Proof: ownerconsole.ProvenForwardOnlyRecovery, CauseCode: cause, Explanation: "Forward firewall recovery requires fresh SSH Preservation Proof from this direct session.", ChangeSet: changeSet, Material: "checksum-protected forward recovery material", Evidence: "SSH-PRESERVATION-REDACTED", Guidance: guidance, SSHBlocked: true, HideCheckAgain: !temporary}
 }
 
 func ownerRecoveryResult(recovery ownerRecovery, status systemchanges.InstallationStatus, err error) ownerconsole.DurableChangeSet {
@@ -66,6 +95,8 @@ func ownerRecoveryResult(recovery ownerRecovery, status systemchanges.Installati
 		kind, checkpoint, explanation = ownerconsole.ChangeSetSucceeded, "Complete", "Forward-only Tunnel run-token recovery proved Managed State and both routes."
 		if recovery.completeRemoval {
 			checkpoint, explanation = "Not installed", "Forward-only Complete removal proved Not installed with no retained recovery material."
+		} else if recovery.installationForward {
+			explanation = "Forward-only Installation recovery proved Managed State."
 		}
 	}
 	return ownerconsole.DurableChangeSet{Kind: kind, OperationID: operation, Checkpoint: checkpoint, Explanation: explanation}

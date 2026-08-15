@@ -251,6 +251,8 @@ type PendingChangeSet struct {
 	StartingRevision                  uint64
 	StartingRelease, CandidateRelease ReleaseBinding
 	ForwardOnly                       bool
+	ForwardFirewallPending            bool
+	SSHPreservationTracked            bool
 	Checkpoint                        DurableCheckpoint
 	CompletedSteps, TotalSteps        int
 }
@@ -312,6 +314,10 @@ type TransactionAdapter interface {
 
 type SSHPreservationAdapter interface {
 	VerifySSHPreservation(ExecutionLease, string, string, SSHPreservationPhase, time.Duration) error
+}
+
+type RecoverySSHPreservationAdapter interface {
+	AppendRecoverySSHPreservation(ExecutionLease, string, string, string) error
 }
 
 type SSHPreservationPhase string
@@ -410,6 +416,20 @@ func (step Step) CertificateChange() (CertificateChange, bool) {
 // Recover is the private startup path for unfinished ordinary forward work.
 // It never resumes the forward transaction.
 func (i Interface) Recover() ApplyResult {
+	return i.recover(RecoverySSHIdentityAuthority{}, SSHPreservationAuthority{})
+}
+
+// RecoverWithSSHPreservation records one freshly proved direct SSH identity
+// for this recovery attempt. Saved recovery material never creates authority.
+func (i Interface) RecoverWithSSHPreservation(authority SSHPreservationAuthority) ApplyResult {
+	return i.recover(RecoverySSHIdentityAuthority{}, authority)
+}
+
+func (i Interface) RecoverWithSSHRecovery(identity RecoverySSHIdentityAuthority, proof SSHPreservationAuthority) ApplyResult {
+	return i.recover(identity, proof)
+}
+
+func (i Interface) recover(identityAuthority RecoverySSHIdentityAuthority, authority SSHPreservationAuthority) ApplyResult {
 	adapter, transactionOK := i.adapter.(TransactionAdapter)
 	recoveryAdapter, recoveryOK := i.adapter.(RecoveryAdapter)
 	if !transactionOK || !recoveryOK {
@@ -450,6 +470,21 @@ func (i Interface) Recover() ApplyResult {
 		return finish(lock, recoveryRequired(ChangeSetSpec{OutcomeOwner: StateModule}, "SYSTEM-CHANGES-RECOVERY-LINEAGE", Prepared))
 	}
 	recovery.Steps = append([]Step(nil), recovery.Steps...)
+	sshIdentity, sshSHA256, freshSSH := authority.consume()
+	recoveryIdentity, recoverySHA256, hasRecoveryIdentity := identityAuthority.consume()
+	if !hasRecoveryIdentity && freshSSH {
+		recoveryIdentity, recoverySHA256, hasRecoveryIdentity = sshIdentity, sshSHA256, true
+	}
+	if hasRecoveryIdentity {
+		appender, ok := i.adapter.(RecoverySSHPreservationAdapter)
+		if !ok || appender.AppendRecoverySSHPreservation(lease, recovery.ChangeSet, recoveryIdentity, recoverySHA256) != nil {
+			freshSSH = false
+		} else if freshSSH && sshSHA256 == recoverySHA256 {
+			recovery.SSHPreservationSHA256 = sshSHA256
+		} else {
+			freshSSH = false
+		}
+	}
 	spec := ChangeSetSpec{Identity: recovery.ChangeSet, Mutation: recovery.Mutation, StartingState: recovery.Starting, OutcomeOwner: recovery.OutcomeOwner, Steps: recovery.Steps, Checks: recovery.Checks, Timeouts: recovery.Timeouts}
 	if recovery.Mutation == CompleteRemovalMutation && recovery.IrreversibleRemovalStarted {
 		removalAdapter, ok := i.adapter.(IrreversibleRemovalAdapter)
@@ -470,7 +505,7 @@ func (i Interface) Recover() ApplyResult {
 		if !ok {
 			return finish(lock, forwardReclamationRequired(spec, "SYSTEM-CHANGES-RECLAMATION-ADAPTER", recovery.LastCheckpoint))
 		}
-		return finish(lock, continueReclamationInstallation(lease, adapter, forward, recovery, spec))
+		return finish(lock, continueReclamationInstallation(lease, adapter, forward, recovery, spec, freshSSH))
 	}
 	if err := recoveryAdapter.AllowProvenServices(lease, recovery, recovery.Timeouts.Check); err != nil {
 		return finish(lock, recoveryRequired(spec, "SYSTEM-CHANGES-SERVICE-HOLDBACK", recovery.LastCheckpoint))
@@ -711,7 +746,7 @@ func reclamationPreludeSteps(steps []Step) int {
 	return count
 }
 
-func continueReclamationInstallation(lease ExecutionLease, adapter TransactionAdapter, forward ForwardReclamationAdapter, recovery RecoveryTransaction, spec ChangeSetSpec) ApplyResult {
+func continueReclamationInstallation(lease ExecutionLease, adapter TransactionAdapter, forward ForwardReclamationAdapter, recovery RecoveryTransaction, spec ChangeSetSpec, freshSSH bool) ApplyResult {
 	record := func(point DurableCheckpoint, step int, evidence *StepEvidence) bool {
 		return adapter.Record(lease, CheckpointRecord{ChangeSet: recovery.ChangeSet, Checkpoint: point, Step: step, Evidence: evidence}) == nil
 	}
@@ -763,10 +798,17 @@ func continueReclamationInstallation(lease ExecutionLease, adapter TransactionAd
 		}
 		for number := next; number <= len(recovery.Steps); number++ {
 			step := recovery.Steps[number-1]
+			sshAdapter, hasSSHAdapter := adapter.(SSHPreservationAdapter)
+			if isFirewallReplacement(step) && (!freshSSH || !hasSSHAdapter || sshAdapter.VerifySSHPreservation(lease, recovery.ChangeSet, recovery.SSHPreservationSHA256, BeforeFirewallReplacement, recovery.Timeouts.Check) != nil) {
+				return forwardReclamationRequired(spec, "SYSTEM-CHANGES-SSH-PRESERVATION", recovery.LastCheckpoint)
+			}
 			if !(recovery.LastCheckpoint == StepStarted && number == recovery.AttemptedSteps) && !record(StepStarted, number, nil) {
 				return forwardReclamationRequired(spec, "SYSTEM-CHANGES-JOURNAL", StepStarted)
 			}
 			evidence, err := adapter.Execute(lease, recovery.ChangeSet, number, step, recovery.Timeouts.Step, nil)
+			if err == nil && isFirewallReplacement(step) {
+				err = sshAdapter.VerifySSHPreservation(lease, recovery.ChangeSet, recovery.SSHPreservationSHA256, AfterFirewallReplacement, recovery.Timeouts.Check)
+			}
 			if err != nil || !safeIdentity(evidence.Code) || !validSHA256(evidence.SHA256) || adapter.Record(lease, CheckpointRecord{ChangeSet: recovery.ChangeSet, Checkpoint: StepCompleted, Step: number, Evidence: &evidence, CompletedStep: &step}) != nil {
 				return forwardReclamationRequired(spec, "SYSTEM-CHANGES-INSTALL-FORWARD", StepStarted)
 			}
@@ -807,7 +849,7 @@ func continueReclamationInstallation(lease ExecutionLease, adapter TransactionAd
 	if adapter.Cleanup(lease, recovery.ChangeSet) != nil {
 		return forwardReclamationRequired(spec, "SYSTEM-CHANGES-CLEANUP", Complete)
 	}
-	return ApplyResult{Outcome: Completed, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence()}
+	return ApplyResult{Outcome: Completed, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(), SSHPreservationSHA256: recovery.SSHPreservationSHA256}
 }
 
 func NextIrreversibleRemovalCheckpoint(checkpoint DurableCheckpoint) (DurableCheckpoint, bool) {

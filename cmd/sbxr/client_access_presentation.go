@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	profilesubuntu "github.com/albertloky/SBXR/internal/connectionprofiles/adapter/ubuntu"
 	"github.com/albertloky/SBXR/internal/healthdiagnostics"
 	"github.com/albertloky/SBXR/internal/networkpolicy"
+	networkubuntu "github.com/albertloky/SBXR/internal/networkpolicy/adapter/ubuntu"
 	"github.com/albertloky/SBXR/internal/ownerconsole"
 	"github.com/albertloky/SBXR/internal/state"
 	statefilesystem "github.com/albertloky/SBXR/internal/state/adapter/filesystem"
@@ -43,7 +45,10 @@ func managedClientAccessPresentation(ctx context.Context) (clientAccessPresentat
 	transaction, pending, pendingErr := productionPendingChangeSetReader().PendingChangeSet()
 	if pendingErr == nil && pending {
 		if transaction.Identity != systemubuntu.FinalizingRemovalChangeSet {
-			recovery := ownerRecovery{changeSet: transaction.Identity, forwardOnly: transaction.ForwardOnly, needsRunTokenRotation: transaction.Checkpoint == systemchanges.IrreversibleRunTokenRotationStarted, completeRemoval: transaction.Kind == systemchanges.CompleteRemovalMutation}
+			recovery := ownerRecovery{changeSet: transaction.Identity, forwardOnly: transaction.ForwardOnly, needsRunTokenRotation: transaction.Checkpoint == systemchanges.IrreversibleRunTokenRotationStarted, completeRemoval: transaction.Kind == systemchanges.CompleteRemovalMutation, installationForward: transaction.Kind == systemchanges.InstallationMutation && transaction.ForwardOnly}
+			if transaction.ForwardFirewallPending {
+				_, recovery.sshFailure = networkpolicy.New(networkubuntu.New()).ProveSSHPreservation(os.Getenv("SBXR_SSH_CONNECTION"))
+			}
 			presentation := clientAccessPresentation{Installation: ownerconsole.InstallationRecoveryRequired, Recovery: recovery.ViewRecovery(ctx)}
 			if transaction.Kind == systemchanges.CompleteRemovalMutation {
 				kind, checkpoint, token := ownerconsole.CompleteRemovalRollbackCapable, ownerconsole.RemovalBeforeIrreversibleCheckpoint, ownerconsole.RemovalTokenAvailable

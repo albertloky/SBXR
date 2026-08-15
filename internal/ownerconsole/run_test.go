@@ -820,6 +820,16 @@ func TestAuthenticatedStartupRoutesValidatedRecoveryWithoutReadingProtectedState
 	}
 }
 
+func TestRecoveryRetryRoutesTypedSSHFailureBackToCorrectionActions(t *testing.T) {
+	correction := RecoveryPresentation{Kind: RecoveryForwardOnly, Proof: ProvenForwardOnlyRecovery, CauseCode: "SYSTEM-CHANGES-SSH-OBSERVATION", Explanation: "Fresh SSH Preservation Proof is unavailable.", ChangeSet: "install-recovery-0001", Material: "checksum-protected forward recovery material", Evidence: "SSH-PRESERVATION-REDACTED", Guidance: "Check again.", SSHBlocked: true}
+	current := model{scenario: RecoveryWithRollback, actionGeneration: 4, recoveryScreen: recoveryScreenState{available: true, pending: true}}
+	updated, _ := current.Update(recoveryRetryMsg{identity: asyncRequestIdentity{generation: 4, origin: RecoveryWithRollback}, result: RecoveryRetryResult{Correction: correction}})
+	got := updated.(model)
+	if got.scenario != RecoveryWithRollback || !got.recoveryScreen.available || got.recoveryScreen.pending || got.recoveryScreen.view.CauseCode != correction.CauseCode {
+		t.Fatalf("retry SSH correction route = scenario=%v screen=%+v", got.scenario, got.recoveryScreen)
+	}
+}
+
 func TestManagedStartupRoutesExactlyProvenCurrentStateRepair(t *testing.T) {
 	view := RecoveryPresentation{Kind: RecoveryCurrentStateRepairAvailable, Proof: ProvenCurrentState, CauseCode: "CURRENT-STATE-DRIFT", Explanation: "One owning Module proved drift.", Evidence: "CURRENT-STATE-REPAIR-AVAILABLE", Guidance: "Review one forward repair."}
 	updated, _ := (model{scenario: AuthenticatedOverview}).Update(startupLoadedMsg{startup: StartupPresentation{Status: InstallationManaged, Recovery: view}})

@@ -66,7 +66,8 @@ func (*clientAccessSSHReviewError) Error() string {
 }
 
 type clientAccessRecoveryResult struct {
-	Status systemchanges.InstallationStatus
+	Status          systemchanges.InstallationStatus
+	SSHFailureCause networkpolicy.SSHPreservationFailureCause `json:"ssh_failure_cause,omitempty"`
 }
 
 type clientAccessHandoffSession struct {
@@ -473,7 +474,11 @@ func serveClientAccess(ctx context.Context, socket, executable *os.File, verify 
 		if err != nil || !found || pending.Identity != request.ChangeSet {
 			return errors.New("Client Access recovery request refused")
 		}
-		if runStartupRecovery() != nil {
+		if recoveryErr := runStartupRecovery(); recoveryErr != nil {
+			var sshFailure *clientAccessSSHReviewError
+			if errors.As(recoveryErr, &sshFailure) {
+				return writeClientAccessMessage(socket, clientAccessRecoveryResult{SSHFailureCause: sshFailure.Cause})
+			}
 			return errors.New("Client Access recovery failed")
 		}
 		observed, err := installRecoveryObservation()
@@ -555,6 +560,10 @@ func retryClientAccessRecovery(ctx context.Context, changeSet string) (systemcha
 	if ctx == nil || !validClientAccessHandoff(request) {
 		return "", errors.New("Client Access recovery launch refused")
 	}
+	pending, found, pendingErr := productionPendingChangeSetReader().PendingChangeSet()
+	if pendingErr != nil || !found || pending.Identity != changeSet {
+		return "", errors.New("Client Access recovery launch refused")
+	}
 	executable, err := openCurrentClientAccessExecutable()
 	if err != nil {
 		return "", err
@@ -570,8 +579,11 @@ func retryClientAccessRecovery(ctx context.Context, changeSet string) (systemcha
 		return "", errors.New("Client Access recovery unavailable")
 	}
 	var result clientAccessRecoveryResult
-	if readClientAccessMessage(parent, &result) != nil || result.Status != "" && result.Status != systemchanges.Managed && result.Status != systemchanges.NotInstalled {
+	if readClientAccessMessage(parent, &result) != nil || result.Status != "" && result.Status != systemchanges.Managed && result.Status != systemchanges.NotInstalled || result.SSHFailureCause != "" && (!pending.ForwardFirewallPending || result.Status != "" || !validClientAccessSSHFailureCause(result.SSHFailureCause)) {
 		return "", errors.New("Client Access recovery did not prove a terminal installation status")
+	}
+	if result.SSHFailureCause != "" {
+		return "", &clientAccessSSHReviewError{Cause: result.SSHFailureCause}
 	}
 	return result.Status, nil
 }

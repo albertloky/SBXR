@@ -353,7 +353,7 @@ func TestGeneratedBootstrapRepairsOnlyFixedPrerequisitesAndReentersTheInstalledR
 		t.Fatalf("installed re-entry output = %q", output)
 	}
 	launched, err := os.ReadFile(fixture.launchRecord)
-	if err != nil || !strings.Contains(string(launched), "HOME="+fixture.home) || !strings.Contains(string(launched), "USER=owner") || !strings.Contains(string(launched), "SBXR_INSTALLED_REENTRY=1") || !strings.Contains(string(launched), "ARGS=private owner-launch") {
+	if err != nil || !strings.Contains(string(launched), "HOME="+fixture.home) || !strings.Contains(string(launched), "USER=owner") || !strings.Contains(string(launched), "SBXR_INSTALLED_REENTRY=1") || !strings.Contains(string(launched), "SBXR_SSH_CONNECTION="+fixture.sshConnection) || !strings.Contains(string(launched), "ARGS=private owner-launch") || strings.Contains("\n"+string(launched), "\nSSH_CONNECTION=") {
 		t.Fatalf("installed Owner launch was incomplete: %v", err)
 	}
 }
@@ -367,7 +367,7 @@ func TestGeneratedBootstrapEntersRecoveryForAnUnfinishedInstallWithoutAnActiveLi
 		t.Fatalf("unfinished install re-entry = %v, %q", err, output)
 	}
 	launched, err := os.ReadFile(fixture.launchRecord)
-	if err != nil || strings.Contains(string(launched), "SBXR_INSTALLED_REENTRY=1") || !strings.Contains(string(launched), "ARGS=private owner-launch") {
+	if err != nil || strings.Contains(string(launched), "SBXR_INSTALLED_REENTRY=1") || !strings.Contains(string(launched), "SBXR_SSH_CONNECTION="+fixture.sshConnection) || !strings.Contains(string(launched), "ARGS=private owner-launch") || strings.Contains("\n"+string(launched), "\nSSH_CONNECTION=") {
 		t.Fatalf("unfinished install launch was incomplete: %v", err)
 	}
 }

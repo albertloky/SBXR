@@ -214,6 +214,38 @@ type SSHPreservationProof interface {
 
 type SSHPreservationAuthority struct{ proof SSHPreservationProof }
 
+type RecoverySSHIdentityProof interface {
+	SystemChangesRecoverySSHIdentity() (identity, sha256 string, valid bool)
+}
+
+type RecoverySSHIdentityAuthority struct{ proof RecoverySSHIdentityProof }
+
+func (RecoverySSHIdentityAuthority) String() string {
+	return "recovery SSH identity authority: redacted"
+}
+func (RecoverySSHIdentityAuthority) GoString() string {
+	return "recovery SSH identity authority: redacted"
+}
+func (RecoverySSHIdentityAuthority) MarshalJSON() ([]byte, error) {
+	return nil, errors.New("recovery SSH identity authority cannot be rendered")
+}
+
+func NewRecoverySSHIdentityAuthority(proof RecoverySSHIdentityProof) RecoverySSHIdentityAuthority {
+	typeOf := reflect.TypeOf(proof)
+	if typeOf == nil || typeOf.Kind() != reflect.Struct || typeOf.PkgPath() != "github.com/albertloky/SBXR/internal/networkpolicy" || typeOf.Name() != "SSHRecoveryIdentity" {
+		return RecoverySSHIdentityAuthority{}
+	}
+	return RecoverySSHIdentityAuthority{proof: proof}
+}
+
+func (authority RecoverySSHIdentityAuthority) consume() (string, string, bool) {
+	if authority.proof == nil {
+		return "", "", false
+	}
+	identity, digest, valid := authority.proof.SystemChangesRecoverySSHIdentity()
+	return identity, digest, valid && identity != "" && validSHA256(digest)
+}
+
 func (SSHPreservationAuthority) String() string   { return "SSH Preservation authority: redacted" }
 func (SSHPreservationAuthority) GoString() string { return "SSH Preservation authority: redacted" }
 func (SSHPreservationAuthority) MarshalJSON() ([]byte, error) {

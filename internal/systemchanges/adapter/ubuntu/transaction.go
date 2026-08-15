@@ -1758,8 +1758,8 @@ func (a Adapter) VerifySSHPreservation(lease systemchanges.ExecutionLease, chang
 	directory := path.Join(transactionDirectory, changeSet)
 	manifest, err := verifyTransactionManifest(root, directory, a.uid)
 	journal, journalErr := readJournal(root, path.Join(directory, "journal.jsonl"))
-	identity, readErr := root.ReadFile(path.Join(directory, "snapshot/ssh-preservation.identity"))
-	if err != nil || journalErr != nil || len(journal) == 0 || journal[0].SSHAgreementSHA256 != agreement || manifest.Files["snapshot/ssh-preservation.identity"] != agreement || readErr != nil {
+	identity, readErr := recoverySSHIdentity(root, directory, manifest, agreement, a.uid)
+	if err != nil || journalErr != nil || len(journal) == 0 || readErr != nil {
 		return errors.New("SSH Preservation agreement unavailable")
 	}
 	digest := sha256.Sum256(identity)
@@ -1780,6 +1780,58 @@ func (a Adapter) VerifySSHPreservation(lease systemchanges.ExecutionLease, chang
 		return errors.New("SSH Preservation phase invalid")
 	}
 	return verifier.VerifySSHIdentity(string(identity), timeout)
+}
+
+func (a Adapter) AppendRecoverySSHPreservation(lease systemchanges.ExecutionLease, changeSet, identity, agreement string) error {
+	if !lease.RecoveryAuthorized() || !safeName(changeSet) || !validDigest(agreement) || fmt.Sprintf("%x", sha256.Sum256([]byte(identity))) != agreement {
+		return errors.New("recovery SSH Preservation material refused")
+	}
+	root, err := os.OpenRoot(a.root)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	directory := path.Join(transactionDirectory, changeSet)
+	if _, err := verifyTransactionManifest(root, directory, a.uid); err != nil {
+		return err
+	}
+	entries, err := fs.ReadDir(root.FS(), path.Join(directory, "snapshot"))
+	if err != nil {
+		return err
+	}
+	attempts := 0
+	for _, entry := range entries {
+		if recoverySSHIdentityArtifact("snapshot/" + entry.Name()) {
+			attempts++
+		}
+	}
+	name := path.Join(directory, "snapshot", fmt.Sprintf("ssh-preservation-recovery-%06d.identity", attempts+1))
+	checksum, err := writeProtected(root, name, strings.NewReader(identity), a.uid)
+	if err != nil || checksum != agreement {
+		return errors.New("recovery SSH Preservation material unavailable")
+	}
+	return syncDirectory(root, path.Join(directory, "snapshot"))
+}
+
+func recoverySSHIdentity(root *os.Root, directory string, manifest snapshotManifest, agreement string, uid int) ([]byte, error) {
+	if manifest.Files["snapshot/ssh-preservation.identity"] == agreement {
+		return root.ReadFile(path.Join(directory, "snapshot/ssh-preservation.identity"))
+	}
+	entries, err := fs.ReadDir(root.FS(), path.Join(directory, "snapshot"))
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		relative := "snapshot/" + entry.Name()
+		if !recoverySSHIdentityArtifact(relative) || verifyFile(root, path.Join(directory, relative), uid) != nil {
+			continue
+		}
+		identity, err := root.ReadFile(path.Join(directory, relative))
+		if err == nil && fmt.Sprintf("%x", sha256.Sum256(identity)) == agreement {
+			return identity, nil
+		}
+	}
+	return nil, errors.New("recovery SSH Preservation identity unavailable")
 }
 
 func (a Adapter) Reverse(lease systemchanges.ExecutionLease, changeSet string, number int, step systemchanges.Step, timeout time.Duration) (systemchanges.StepEvidence, error) {
@@ -2491,6 +2543,8 @@ type recoveryTransactionIdentity struct {
 	OutcomeOwner                      systemchanges.Module
 	StartingRelease, CandidateRelease systemchanges.ReleaseBinding
 	ForwardOnly                       bool
+	ForwardFirewallPending            bool
+	SSHPreservationTracked            bool
 	Checkpoint                        systemchanges.DurableCheckpoint
 	CompletedSteps, TotalSteps        int
 }
@@ -2522,7 +2576,7 @@ func (a Adapter) PendingChangeSet() (systemchanges.PendingChangeSet, bool, error
 	if !validPendingOwnership(identity.Mutation, identity.OutcomeOwner, identity.StartingStatus) {
 		return systemchanges.PendingChangeSet{}, false, errors.New("recovery transaction ownership is invalid")
 	}
-	return systemchanges.PendingChangeSet{Identity: identity.ChangeSet, Kind: identity.Mutation, StartingStatus: identity.StartingStatus, StartingRevision: identity.StartingRevision, StartingRelease: identity.StartingRelease, CandidateRelease: identity.CandidateRelease, ForwardOnly: identity.ForwardOnly, Checkpoint: identity.Checkpoint, CompletedSteps: identity.CompletedSteps, TotalSteps: identity.TotalSteps}, true, nil
+	return systemchanges.PendingChangeSet{Identity: identity.ChangeSet, Kind: identity.Mutation, StartingStatus: identity.StartingStatus, StartingRevision: identity.StartingRevision, StartingRelease: identity.StartingRelease, CandidateRelease: identity.CandidateRelease, ForwardOnly: identity.ForwardOnly, ForwardFirewallPending: identity.ForwardFirewallPending, SSHPreservationTracked: identity.SSHPreservationTracked, Checkpoint: identity.Checkpoint, CompletedSteps: identity.CompletedSteps, TotalSteps: identity.TotalSteps}, true, nil
 }
 
 func verifyFinalizingPendingChangeSet(root *os.Root, uid int) error {
@@ -2592,7 +2646,14 @@ func readRecoveryTransactionIdentity(rootPath string) (recoveryTransactionIdenti
 		return recoveryTransactionIdentity{}, errors.New("recovery starting baseline is unsupported")
 	}
 	forwardOnly := journal[0].Mutation == systemchanges.RotationMutation && runTokenFingerprint(journal) != "" || irreversibleRemoval || journal[0].Reclamation != nil && journalHasCheckpoint(journal, systemchanges.IrreversibleReclamationStarted)
-	return recoveryTransactionIdentity{ChangeSet: journal[0].ChangeSet, StartingStatus: journal[0].Starting.Status, StartingRevision: journal[0].Starting.Revision, Mutation: journal[0].Mutation, OutcomeOwner: journal[0].OutcomeOwner, StartingRelease: journal[0].State.StartingRelease, CandidateRelease: journal[0].State.CandidateRelease, ForwardOnly: forwardOnly, Checkpoint: journal[len(journal)-1].Checkpoint, CompletedSteps: highestCompletedStep(journal), TotalSteps: len(journal[0].Steps)}, nil
+	completed := highestCompletedStep(journal)
+	forwardFirewallPending := false
+	if forwardOnly {
+		for index, step := range journal[0].Steps {
+			forwardFirewallPending = forwardFirewallPending || index+1 > completed && step.Firewall != nil && step.Firewall.Action == systemchanges.FirewallPolicyAction
+		}
+	}
+	return recoveryTransactionIdentity{ChangeSet: journal[0].ChangeSet, StartingStatus: journal[0].Starting.Status, StartingRevision: journal[0].Starting.Revision, Mutation: journal[0].Mutation, OutcomeOwner: journal[0].OutcomeOwner, StartingRelease: journal[0].State.StartingRelease, CandidateRelease: journal[0].State.CandidateRelease, ForwardOnly: forwardOnly, ForwardFirewallPending: forwardFirewallPending, SSHPreservationTracked: journal[0].SSHAgreementSHA256 != "", Checkpoint: journal[len(journal)-1].Checkpoint, CompletedSteps: completed, TotalSteps: len(journal[0].Steps)}, nil
 }
 
 // RecoveryHealthObservation overlays one validated unfinished transaction on
@@ -3129,6 +3190,14 @@ func (a Adapter) Cleanup(lease systemchanges.ExecutionLease, changeSet string) e
 	for name := range manifest.Files {
 		names = append(names, name)
 	}
+	if entries, readErr := fs.ReadDir(root.FS(), path.Join(target, "snapshot")); readErr == nil {
+		for _, entry := range entries {
+			name := "snapshot/" + entry.Name()
+			if recoverySSHIdentityArtifact(name) {
+				names = append(names, name)
+			}
+		}
+	}
 	sort.Strings(names)
 	for _, name := range names {
 		if err := root.Remove(path.Join(target, name)); err != nil {
@@ -3580,12 +3649,25 @@ func verifyTransactionManifest(root *os.Root, directory string, uid int) (snapsh
 			return nil
 		}
 		relative := strings.TrimPrefix(name, directory+"/")
-		if !want[relative] {
+		if !want[relative] && !recoverySSHIdentityArtifact(relative) {
 			return fmt.Errorf("unexpected transaction artifact %s", relative)
+		}
+		if recoverySSHIdentityArtifact(relative) && verifyFile(root, name, uid) != nil {
+			return errors.New("invalid recovery SSH Preservation artifact")
 		}
 		return nil
 	})
 	return manifest, err
+}
+
+func recoverySSHIdentityArtifact(name string) bool {
+	const prefix, suffix = "snapshot/ssh-preservation-recovery-", ".identity"
+	if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, suffix) {
+		return false
+	}
+	digits := strings.TrimSuffix(strings.TrimPrefix(name, prefix), suffix)
+	number, err := strconv.Atoi(digits)
+	return err == nil && number > 0 && fmt.Sprintf("%06d", number) == digits
 }
 
 func readSnapshotManifest(root *os.Root, directory string, uid int) (snapshotManifest, error) {

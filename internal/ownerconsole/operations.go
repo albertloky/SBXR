@@ -364,8 +364,13 @@ func lifecycleLines(p LifecyclePresentation, valid bool, selected int) []string 
 
 type RecoveryModule interface {
 	ViewRecovery(context.Context) RecoveryPresentation
-	RetryAutomaticRollback(context.Context) DurableChangeSet
+	RetryAutomaticRollback(context.Context) RecoveryRetryResult
 	ReviewCurrentStateRepair(context.Context) ChangeReview
+}
+
+type RecoveryRetryResult struct {
+	Change     DurableChangeSet
+	Correction RecoveryPresentation
 }
 
 type RecoveryKind uint8
@@ -390,6 +395,7 @@ type RecoveryPresentation struct {
 	Proof                                                           RecoveryProof
 	CauseCode, Explanation, ChangeSet, Material, Evidence, Guidance string
 	ExternalGuidance                                                CloudflareExternalGuidance
+	SSHBlocked, HideCheckAgain                                      bool
 }
 
 type RecoveryProof uint8
@@ -413,6 +419,13 @@ func validatedRecovery(p RecoveryPresentation) (RecoveryPresentation, bool) {
 		p.Kind == RecoveryForwardOnly && p.Proof == ProvenForwardOnlyRecovery && p.ChangeSet != "" && p.Material != "" ||
 		p.Kind == RecoveryCurrentStateRepairAvailable && p.Proof == ProvenCurrentState && p.ChangeSet == "" && p.Material == "" ||
 		p.Kind == RecoveryRebuildRequired && p.Proof == ProvenRebuildRequired && p.ChangeSet == "" && p.Material == ""
+	if p.SSHBlocked {
+		if p.Kind != RecoveryForwardOnly || p.HideCheckAgain && p.CauseCode != "SYSTEM-CHANGES-SSH-RESTART" || !p.HideCheckAgain && p.CauseCode != "SYSTEM-CHANGES-SSH-OBSERVATION" {
+			return RecoveryPresentation{}, false
+		}
+	} else if p.HideCheckAgain {
+		return RecoveryPresentation{}, false
+	}
 	if !validVariant || !externalValid {
 		return RecoveryPresentation{}, false
 	}
@@ -437,6 +450,13 @@ type recoveryActionDefinition struct {
 }
 
 func recoveryActions(p RecoveryPresentation, diagnostics bool) []recoveryActionDefinition {
+	if p.SSHBlocked {
+		actions := []recoveryActionDefinition{}
+		if !p.HideCheckAgain {
+			actions = append(actions, recoveryActionDefinition{"Check again", recoveryCheckAgain})
+		}
+		return append(actions, recoveryActionDefinition{"Copy redacted evidence", recoveryCopyEvidence}, recoveryActionDefinition{"Back", recoveryBack})
+	}
 	actions := []recoveryActionDefinition{}
 	if p.Kind == RecoveryRollbackAvailable {
 		actions = append(actions, recoveryActionDefinition{"Retry automatic rollback", recoveryRetry})

@@ -260,9 +260,9 @@ case "$launch_tag:$launch_commit:$launch_sha" in *[!A-Za-z0-9._+:-]*|::*|*::) re
 printf '%s\n' 'SBXR bootstrap: launching Owner Console'
 if [ -n "$reentry" ]; then
   if [ -e "$active" ] || [ -L "$active" ]; then
-    "$ROOT/usr/bin/env" -i HOME="$owner_home" USER="$owner_name" LOGNAME="$owner_name" TERM="$TERM" LANG=C.UTF-8 PATH=/usr/bin:/bin SBXR_INSTALLED_REENTRY=1 SBXR_OWNER_LAUNCH_TAG="$launch_tag" SBXR_OWNER_LAUNCH_COMMIT="$launch_commit" SBXR_OWNER_LAUNCH_SHA256="$launch_sha" "$executable" private owner-launch
+    "$ROOT/usr/bin/env" -i HOME="$owner_home" USER="$owner_name" LOGNAME="$owner_name" TERM="$TERM" LANG=C.UTF-8 PATH=/usr/bin:/bin SBXR_INSTALLED_REENTRY=1 SBXR_SSH_CONNECTION="$SBXR_SSH_CONNECTION" SBXR_OWNER_LAUNCH_TAG="$launch_tag" SBXR_OWNER_LAUNCH_COMMIT="$launch_commit" SBXR_OWNER_LAUNCH_SHA256="$launch_sha" "$executable" private owner-launch
   else
-    "$ROOT/usr/bin/env" -i HOME="$owner_home" USER="$owner_name" LOGNAME="$owner_name" TERM="$TERM" LANG=C.UTF-8 PATH=/usr/bin:/bin SBXR_OWNER_LAUNCH_TAG="$launch_tag" SBXR_OWNER_LAUNCH_COMMIT="$launch_commit" SBXR_OWNER_LAUNCH_SHA256="$launch_sha" "$executable" private owner-launch
+    "$ROOT/usr/bin/env" -i HOME="$owner_home" USER="$owner_name" LOGNAME="$owner_name" TERM="$TERM" LANG=C.UTF-8 PATH=/usr/bin:/bin SBXR_SSH_CONNECTION="$SBXR_SSH_CONNECTION" SBXR_OWNER_LAUNCH_TAG="$launch_tag" SBXR_OWNER_LAUNCH_COMMIT="$launch_commit" SBXR_OWNER_LAUNCH_SHA256="$launch_sha" "$executable" private owner-launch
   fi
 else
   "$ROOT/usr/bin/env" -i HOME="$owner_home" USER="$owner_name" LOGNAME="$owner_name" TERM="$TERM" LANG=C.UTF-8 PATH=/usr/bin:/bin SBXR_SSH_CONNECTION="$SBXR_SSH_CONNECTION" SBXR_OWNER_LAUNCH_TAG="$launch_tag" SBXR_OWNER_LAUNCH_COMMIT="$launch_commit" SBXR_OWNER_LAUNCH_SHA256="$launch_sha" "$executable" private owner-launch

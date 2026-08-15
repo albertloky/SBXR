@@ -1080,6 +1080,8 @@ type SSHPreservationFailure struct{ Cause SSHPreservationFailureCause }
 
 type SSHPreservationProof struct{ cell *sshPreservationProofCell }
 
+type SSHRecoveryIdentity struct{ cell *sshPreservationProofCell }
+
 type sshPreservationProofCell struct {
 	identity string
 	digest   string
@@ -1109,23 +1111,39 @@ func (proof SSHPreservationProof) SystemChangesSSHPreservation() (string, string
 	return proof.cell.identity, proof.cell.digest, proof.cell.identity != "" && len(proof.cell.digest) == 64
 }
 
+func (SSHRecoveryIdentity) String() string   { return "SSH recovery identity: redacted" }
+func (SSHRecoveryIdentity) GoString() string { return "SSH recovery identity: redacted" }
+func (SSHRecoveryIdentity) MarshalJSON() ([]byte, error) {
+	return nil, errors.New("SSH recovery identity JSON unavailable")
+}
+func (identity SSHRecoveryIdentity) SystemChangesRecoverySSHIdentity() (string, string, bool) {
+	if identity.cell == nil || !identity.cell.used.CompareAndSwap(false, true) {
+		return "", "", false
+	}
+	return identity.cell.identity, identity.cell.digest, identity.cell.identity != "" && len(identity.cell.digest) == 64
+}
+
+func (i Interface) CaptureSSHRecoveryIdentity(identity string) (SSHRecoveryIdentity, *SSHPreservationFailure) {
+	canonical, digest, failure := canonicalSSHIdentity(identity)
+	if failure != nil {
+		return SSHRecoveryIdentity{}, failure
+	}
+	return SSHRecoveryIdentity{cell: &sshPreservationProofCell{identity: canonical, digest: digest}}, nil
+}
+
 func (i Interface) ProveSSHPreservation(identity string) (SSHPreservationProof, *SSHPreservationFailure) {
 	proof, failure, _ := i.proveSSHPreservation(identity)
 	return proof, failure
 }
 
 func (i Interface) proveSSHPreservation(identity string) (SSHPreservationProof, *SSHPreservationFailure, Observations) {
-	fields := strings.Fields(identity)
-	if len(fields) != 4 {
-		return SSHPreservationProof{}, &SSHPreservationFailure{Cause: SSHLaunchIdentityInvalid}, Observations{}
+	canonical, digest, failure := canonicalSSHIdentity(identity)
+	if failure != nil {
+		return SSHPreservationProof{}, failure, Observations{}
 	}
-	client, clientErr := netip.ParseAddr(fields[0])
-	clientPort, clientPortErr := strconv.ParseUint(fields[1], 10, 16)
-	server, serverErr := netip.ParseAddr(fields[2])
-	serverPort, serverPortErr := strconv.ParseUint(fields[3], 10, 16)
-	if clientErr != nil || serverErr != nil || clientPortErr != nil || serverPortErr != nil || clientPort == 0 || serverPort == 0 {
-		return SSHPreservationProof{}, &SSHPreservationFailure{Cause: SSHLaunchIdentityInvalid}, Observations{}
-	}
+	fields := strings.Fields(canonical)
+	serverPort, _ := strconv.ParseUint(fields[3], 10, 16)
+	server, _ := netip.ParseAddr(fields[2])
 	if i.adapter == nil {
 		return SSHPreservationProof{}, &SSHPreservationFailure{Cause: SSHObservationUnavailable}, Observations{}
 	}
@@ -1140,12 +1158,27 @@ func (i Interface) proveSSHPreservation(identity string) (SSHPreservationProof, 
 	if ssh.DetectedPort != uint16(serverPort) || ssh.ServerAddress != server.String() || !ssh.SessionsComplete || ssh.Service != "ssh.service" && ssh.Service != "sshd.service" || !validListener {
 		return SSHPreservationProof{}, &SSHPreservationFailure{Cause: SSHObservationUnavailable}, observed
 	}
-	canonical := fmt.Sprintf("%s %d %s %d", client, clientPort, server, serverPort)
-	digest := sha256.Sum256([]byte(canonical))
-	if !slices.Contains(ssh.CurrentSessions, hex.EncodeToString(digest[:])) {
+	if !slices.Contains(ssh.CurrentSessions, digest) {
 		return SSHPreservationProof{}, &SSHPreservationFailure{Cause: SSHOriginalSessionLost}, observed
 	}
-	return SSHPreservationProof{cell: &sshPreservationProofCell{identity: canonical, digest: hex.EncodeToString(digest[:])}}, nil, observed
+	return SSHPreservationProof{cell: &sshPreservationProofCell{identity: canonical, digest: digest}}, nil, observed
+}
+
+func canonicalSSHIdentity(identity string) (string, string, *SSHPreservationFailure) {
+	fields := strings.Fields(identity)
+	if len(fields) != 4 {
+		return "", "", &SSHPreservationFailure{Cause: SSHLaunchIdentityInvalid}
+	}
+	client, clientErr := netip.ParseAddr(fields[0])
+	clientPort, clientPortErr := strconv.ParseUint(fields[1], 10, 16)
+	server, serverErr := netip.ParseAddr(fields[2])
+	serverPort, serverPortErr := strconv.ParseUint(fields[3], 10, 16)
+	if clientErr != nil || serverErr != nil || clientPortErr != nil || serverPortErr != nil || clientPort == 0 || serverPort == 0 {
+		return "", "", &SSHPreservationFailure{Cause: SSHLaunchIdentityInvalid}
+	}
+	canonical := fmt.Sprintf("%s %d %s %d", client, clientPort, server, serverPort)
+	digest := sha256.Sum256([]byte(canonical))
+	return canonical, hex.EncodeToString(digest[:]), nil
 }
 
 type InstallationPreflightResult struct {

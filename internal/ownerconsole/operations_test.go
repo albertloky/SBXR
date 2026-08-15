@@ -34,11 +34,11 @@ type recoveryStub struct {
 }
 
 func (stub *recoveryStub) ViewRecovery(context.Context) RecoveryPresentation { return stub.view }
-func (stub *recoveryStub) RetryAutomaticRollback(ctx context.Context) DurableChangeSet {
+func (stub *recoveryStub) RetryAutomaticRollback(ctx context.Context) RecoveryRetryResult {
 	time.Sleep(stub.delay)
 	stub.retryContext = ctx
 	stub.retries++
-	return stub.retryResult
+	return RecoveryRetryResult{Change: stub.retryResult}
 }
 func (stub *recoveryStub) ReviewCurrentStateRepair(context.Context) ChangeReview {
 	time.Sleep(stub.delay)
@@ -109,6 +109,35 @@ func TestRunRecoveryRequiredOffersOnlyActionsProvenByCurrentMaterial(t *testing.
 			}
 			if test.wantRetry == 1 && stub.retryContext.Done() != nil {
 				t.Fatal("automatic rollback was tied to the Console context")
+			}
+		})
+	}
+}
+
+func TestForwardFirewallRecoverySSHCorrectionHasOnlyItsLegalActions(t *testing.T) {
+	base := RecoveryPresentation{Kind: RecoveryForwardOnly, Proof: ProvenForwardOnlyRecovery, CauseCode: "SYSTEM-CHANGES-SSH-OBSERVATION", Explanation: "Fresh SSH Preservation Proof is unavailable.", ChangeSet: "install-recovery-0001", Material: "checksum-protected forward recovery material", Evidence: "SSH-PRESERVATION-REDACTED", Guidance: "Check again.", SSHBlocked: true}
+	for _, test := range []struct {
+		name, cause string
+		hide        bool
+		want        []string
+	}{
+		{name: "temporary observation", cause: "SYSTEM-CHANGES-SSH-OBSERVATION", want: []string{"Check again", "Copy redacted evidence", "Back"}},
+		{name: "restart required", cause: "SYSTEM-CHANGES-SSH-RESTART", hide: true, want: []string{"Copy redacted evidence", "Back"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			view := base
+			view.CauseCode, view.HideCheckAgain = test.cause, test.hide
+			validated, ok := validatedRecovery(view)
+			if !ok {
+				t.Fatal("SSH recovery correction was refused")
+			}
+			actions := recoveryActions(validated, true)
+			labels := make([]string, len(actions))
+			for index, action := range actions {
+				labels[index] = action.label
+			}
+			if !reflect.DeepEqual(labels, test.want) {
+				t.Fatalf("legal actions = %v, want %v", labels, test.want)
 			}
 		})
 	}

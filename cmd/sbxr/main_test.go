@@ -257,3 +257,55 @@ func TestOwnerRecoveryDoesNotReportManagedWhileRemovalAwaitsTokenRevocation(t *t
 		t.Fatalf("nonterminal removal recovery = %+v", result)
 	}
 }
+
+func TestOwnerRecoveryMapsSSHFailureCauseToExactCorrection(t *testing.T) {
+	for _, test := range []struct {
+		cause networkpolicy.SSHPreservationFailureCause
+		code  string
+		hide  bool
+	}{
+		{cause: networkpolicy.SSHLaunchIdentityInvalid, code: "SYSTEM-CHANGES-SSH-RESTART", hide: true},
+		{cause: networkpolicy.SSHOriginalSessionLost, code: "SYSTEM-CHANGES-SSH-RESTART", hide: true},
+		{cause: networkpolicy.SSHObservationUnavailable, code: "SYSTEM-CHANGES-SSH-OBSERVATION"},
+	} {
+		failure := &networkpolicy.SSHPreservationFailure{Cause: test.cause}
+		view := (ownerRecovery{changeSet: "install-recovery-0001", forwardOnly: true, sshFailure: failure}).ViewRecovery(t.Context())
+		if !view.SSHBlocked || view.CauseCode != test.code || view.HideCheckAgain != test.hide {
+			t.Fatalf("SSH recovery correction for %s = %+v", test.cause, view)
+		}
+	}
+}
+
+func TestOwnerRecoveryNamesForwardInstallationWithoutRunTokenGuidance(t *testing.T) {
+	view := (ownerRecovery{changeSet: "install-recovery-0001", forwardOnly: true, installationForward: true}).ViewRecovery(t.Context())
+	if view.CauseCode != "SYSTEM-CHANGES-INSTALLATION-FORWARD" || !strings.Contains(view.Explanation, "Irreversible Reclamation Started") || strings.Contains(view.Guidance, "token") {
+		t.Fatalf("forward Installation recovery = %+v", view)
+	}
+}
+
+func TestOwnerRecoveryRetryPreservesTypedSSHCorrection(t *testing.T) {
+	for _, test := range []struct {
+		cause networkpolicy.SSHPreservationFailureCause
+		code  string
+		hide  bool
+	}{
+		{cause: networkpolicy.SSHLaunchIdentityInvalid, code: "SYSTEM-CHANGES-SSH-RESTART", hide: true},
+		{cause: networkpolicy.SSHOriginalSessionLost, code: "SYSTEM-CHANGES-SSH-RESTART", hide: true},
+		{cause: networkpolicy.SSHObservationUnavailable, code: "SYSTEM-CHANGES-SSH-OBSERVATION"},
+	} {
+		recovery := ownerRecovery{changeSet: "install-recovery-0001", forwardOnly: true, installationForward: true, retry: func(context.Context, string) (systemchanges.InstallationStatus, error) {
+			return "", &clientAccessSSHReviewError{Cause: test.cause}
+		}}
+		result := recovery.RetryAutomaticRollback(t.Context())
+		if result.Change != (ownerconsole.DurableChangeSet{}) || !result.Correction.SSHBlocked || result.Correction.CauseCode != test.code || result.Correction.HideCheckAgain != test.hide {
+			t.Fatalf("retry SSH correction for %s = %+v", test.cause, result)
+		}
+	}
+}
+
+func TestOwnerRecoveryReportsSuccessfulForwardInstallation(t *testing.T) {
+	result := ownerRecoveryResult(ownerRecovery{forwardOnly: true, installationForward: true}, systemchanges.Managed, nil)
+	if result.Kind != ownerconsole.ChangeSetSucceeded || result.Checkpoint != "Complete" || result.Explanation != "Forward-only Installation recovery proved Managed State." || strings.Contains(result.Explanation, "token") {
+		t.Fatalf("successful forward Installation = %+v", result)
+	}
+}
