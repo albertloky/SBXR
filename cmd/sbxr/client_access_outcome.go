@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/albertloky/SBXR/internal/certificatelifecycle"
 	"github.com/albertloky/SBXR/internal/connectionprofiles"
 	"github.com/albertloky/SBXR/internal/ownerconsole"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
@@ -32,6 +33,7 @@ type clientAccessOutcome struct {
 	repairReview                           *deferredRepairReview
 	removalReview                          *deferredRemovalReview
 	softwareLaunch                         func(context.Context, clientAccessHandoffRequest) (*clientAccessHandoffSession, error)
+	providerLaunch                         func(context.Context, clientAccessHandoffRequest) (*clientAccessHandoffSession, error)
 	recoveryRetry                          func(context.Context, string) (systemchanges.InstallationStatus, error)
 	removalPoll                            time.Duration
 }
@@ -359,7 +361,7 @@ func (outcome *clientAccessOutcome) ReviewLifecycleChange(ctx context.Context, c
 		outcome.mu.Lock()
 		outcome.request = clientAccessHandoffRequest{Schema: 1, Mode: "software-review", SoftwareAction: "downgrade"}
 		outcome.mu.Unlock()
-		return ownerconsole.ChangeReview{Editing: &ownerconsole.EditingPresentation{Title: "Select compatible downgrade", Field: ownerconsole.EditingField{Identity: "release-tag", Label: "Exact immutable release tag", Required: true}}}
+		return downgradeEditing("", "")
 	}
 	if change != ownerconsole.ReviewUpdate {
 		return unsupportedClientAccessReview()
@@ -383,6 +385,9 @@ func (outcome *clientAccessOutcome) reviewSoftwareChange(ctx context.Context, ac
 		selectedTag = tag
 	}
 	if selectedTag == "" || action == softwareUpdate && view.Change != want {
+		if action == softwareDowngrade {
+			return downgradeEditing(tag, "SBXR could not prove this tag is an older compatible release. Choose another official tag or try again.")
+		}
 		return clientAccessCorrection("Fresh Software Lifecycle selection is unavailable")
 	}
 	request := clientAccessHandoffRequest{Schema: 1, Mode: "software-review", SoftwareAction: string(action), ReleaseTag: selectedTag, ChangeSet: string(action) + "-" + hex.EncodeToString(identity)}
@@ -392,6 +397,9 @@ func (outcome *clientAccessOutcome) reviewSoftwareChange(ctx context.Context, ac
 	}
 	session, err := launch(ctx, request)
 	if err != nil {
+		if action == softwareDowngrade {
+			return downgradeEditing(tag, "SBXR could not prove this tag is an older compatible release. Choose another official tag or try again.")
+		}
 		return clientAccessCorrection(err.Error())
 	}
 	selected := view.Candidate
@@ -452,7 +460,24 @@ func (outcome *clientAccessOutcome) ReviewCertificateChange(ctx context.Context,
 	outcome.mu.Lock()
 	outcome.providerAction, outcome.providerEmail, outcome.providerAgree = action, "", false
 	outcome.mu.Unlock()
-	return ownerconsole.ChangeReview{Editing: &ownerconsole.EditingPresentation{Title: "Certificate issuance or renewal", Field: ownerconsole.EditingField{Identity: "owner-email", Label: "Owner email", Required: true}}}
+	return certificateEditing("owner-email", "", "")
+}
+
+func downgradeEditing(value, feedback string) ownerconsole.ChangeReview {
+	guidance := softwarelifecycle.DowngradeInputGuidance()
+	return ownerconsole.ChangeReview{Editing: &ownerconsole.EditingPresentation{Title: "Select compatible downgrade", Field: ownerconsole.EditingField{Identity: "release-tag", Label: "Exact immutable release tag", Value: value, Required: true}, Feedback: feedback, Help: ownerconsole.EditingHelp{Purpose: guidance.Purpose, Instructions: guidance.Instructions, AcceptedFormat: guidance.AcceptedFormat, CommonMistakes: guidance.CommonMistakes, Recovery: guidance.Recovery, Example: guidance.Example, URL: guidance.URL, Sensitivity: ownerconsole.PublicInformation}}}
+}
+
+func certificateEditing(field, value, feedback string) ownerconsole.ChangeReview {
+	guidance := certificatelifecycle.OwnerEmailInputGuidance()
+	label, sensitivity := "Owner email", ownerconsole.PersonalInformation
+	facts := []ownerconsole.EditingFact(nil)
+	if field == "subscriber-agreement" {
+		guidance = certificatelifecycle.SubscriberAgreementInputGuidance()
+		label, sensitivity = "Type AGREE after reviewing the subscriber agreement", ownerconsole.PublicInformation
+		facts = []ownerconsole.EditingFact{{Label: "Let's Encrypt Policy and Legal Repository", Value: guidance.URL}}
+	}
+	return ownerconsole.ChangeReview{Editing: &ownerconsole.EditingPresentation{Title: "Certificate issuance or renewal", Facts: facts, Field: ownerconsole.EditingField{Identity: field, Label: label, Value: value, Required: true}, Feedback: feedback, Help: ownerconsole.EditingHelp{Purpose: guidance.Purpose, Instructions: guidance.Instructions, AcceptedFormat: guidance.AcceptedFormat, CommonMistakes: guidance.CommonMistakes, Recovery: guidance.Recovery, Example: guidance.Example, URL: guidance.URL, Sensitivity: sensitivity}}}
 }
 
 func (outcome *clientAccessOutcome) reviewAction(ctx context.Context, action clientAccessAction, profile connectionprofiles.ProfileID) ownerconsole.ChangeReview {
@@ -489,7 +514,11 @@ func (outcome *clientAccessOutcome) reviewProviderAction(ctx context.Context, ac
 		return clientAccessCorrection("Change Set identity generation failed")
 	}
 	request := clientAccessHandoffRequest{Schema: 1, Mode: "provider", ProviderAction: action, ChangeSet: "provider-" + hex.EncodeToString(identity), Token: token, OwnerEmail: email, Agreement: agreement}
-	session, err := launchClientAccessReview(ctx, request)
+	launch := outcome.providerLaunch
+	if launch == nil {
+		launch = launchClientAccessReview
+	}
+	session, err := launch(ctx, request)
 	if err != nil {
 		return clientAccessCorrection(err.Error())
 	}
@@ -695,6 +724,9 @@ func (outcome *clientAccessOutcome) Edit(ctx context.Context, input ownerconsole
 	outcome.mu.Lock()
 	if outcome.request.Mode == "software-review" && outcome.request.SoftwareAction == "downgrade" && input.Field == "release-tag" {
 		outcome.mu.Unlock()
+		if !softwarelifecycle.ValidDowngradeTag(input.Text) {
+			return downgradeEditing(input.Text, "Enter one exact immutable release tag in vX.Y.Z form.")
+		}
 		return outcome.reviewSoftwareChange(ctx, softwareDowngrade, input.Text)
 	}
 	action := outcome.providerAction
@@ -704,15 +736,19 @@ func (outcome *clientAccessOutcome) Edit(ctx context.Context, input ownerconsole
 	}
 	switch input.Field {
 	case "owner-email":
+		if !certificatelifecycle.ValidOwnerEmail(input.Text) {
+			outcome.mu.Unlock()
+			return certificateEditing("owner-email", input.Text, "Enter one exact local-part@domain email address without a display name or spaces.")
+		}
 		outcome.providerEmail = input.Text
 		outcome.mu.Unlock()
-		return ownerconsole.ChangeReview{Editing: &ownerconsole.EditingPresentation{Title: "Certificate issuance or renewal", Field: ownerconsole.EditingField{Identity: "subscriber-agreement", Label: "Type AGREE after reviewing the subscriber agreement", Required: true}}}
+		return certificateEditing("subscriber-agreement", "", "")
 	case "subscriber-agreement":
 		outcome.providerAgree = input.Text == "AGREE"
 		email, agreed := outcome.providerEmail, outcome.providerAgree
 		outcome.mu.Unlock()
 		if !agreed {
-			return ownerconsole.ChangeReview{Editing: &ownerconsole.EditingPresentation{Title: "Certificate issuance or renewal", Field: ownerconsole.EditingField{Identity: "subscriber-agreement", Label: "Type AGREE after reviewing the subscriber agreement", Required: true}}}
+			return certificateEditing("subscriber-agreement", input.Text, "Type exact uppercase AGREE only after you review the current agreement.")
 		}
 		return outcome.reviewProviderAction(ctx, action, "", email, true)
 	default:

@@ -532,6 +532,53 @@ func TestRunShowsEveryInstallationHelpSourceAtExactTerminalSizes(t *testing.T) {
 	}
 }
 
+func TestRunShowsCompleteDowngradeAndCertificateGuidanceAtExactTerminalSizes(t *testing.T) {
+	tests := []struct {
+		name   string
+		review ChangeReview
+		wants  []string
+	}{
+		{
+			name: "downgrade",
+			review: ChangeReview{Editing: &EditingPresentation{Title: "Select compatible downgrade", Field: EditingField{Identity: "release-tag", Label: "Exact immutable release tag", Required: true}, Feedback: "Enter one exact immutable release tag in vX.Y.Z form.", Help: EditingHelp{
+				Purpose: "Select one older compatible SBXR release.", Instructions: []string{"Open official SBXR Releases and copy one immutable tag; SBXR refuses unproved compatibility."}, AcceptedFormat: "One exact immutable vX.Y.Z tag with no spaces or suffix.", CommonMistakes: []string{"vX.Y.Z is tutorial only; malformed, current, newer, incompatible, branch, commit, URL, or prerelease values are refused."}, Recovery: "Choose another official tag; no Plan or host change exists until compatibility passes.", Example: "vX.Y.Z", URL: "https://github.com/albertloky/SBXR/releases", Sensitivity: PublicInformation,
+			}}},
+			wants: []string{"older compatible SBXR", "release.", "vX.Y.Z", "compatibility", "Field correction: Enter one exact immutable", "https://github.com/albertloky/SBXR/releases"},
+		},
+		{
+			name: "email",
+			review: ChangeReview{Editing: &EditingPresentation{Title: "Certificate issuance or renewal", Field: EditingField{Identity: "owner-email", Label: "Owner email", Required: true}, Help: EditingHelp{
+				Purpose: "Supply one email to Certbot for ACME account registration.", Instructions: []string{"SBXR keeps this Personal Information in protected Desired State; Let's Encrypt ended expiration emails on June 4, 2025."}, AcceptedFormat: "One exact local-part@domain email address with no display name, spaces, or control data.", CommonMistakes: []string{"Display names, two addresses, whitespace, and typing mistakes are refused."}, Recovery: "Correct it and submit again; no certificate request or Plan exists yet.", Example: "owner@sbxr.example", URL: "https://letsencrypt.org/docs/expiration-emails/", Sensitivity: PersonalInformation,
+			}}},
+			wants: []string{"Personal Information", "protected Desired", "State", "ended expiration", "emails on June 4, 2025", "local-part@domain", "typing mistakes", "request or Plan exists", "https://letsencrypt.org/docs/expiration-emails/"},
+		},
+		{
+			name: "agreement",
+			review: ChangeReview{Editing: &EditingPresentation{Title: "Certificate issuance or renewal", Facts: []EditingFact{{Label: "Let's Encrypt Policy and Legal Repository", Value: "https://letsencrypt.org/repository/"}}, Field: EditingField{Identity: "subscriber-agreement", Label: "Type AGREE after reviewing the subscriber agreement", Required: true}, Help: EditingHelp{
+				Purpose: "Review the current Let's Encrypt Subscriber Agreement before certificate issuance.", Instructions: []string{"Open the current Policy and Legal Repository and read the current Subscriber Agreement.", "Opening Help does not accept the agreement, authorize issuance, or approve a Plan."}, AcceptedFormat: "Exact uppercase AGREE after review.", CommonMistakes: []string{"Lowercase, added spaces, and any other text are refused."}, Recovery: "Review the current agreement, then type AGREE; use Back if you do not agree.", Example: "AGREE only after review", URL: "https://letsencrypt.org/repository/", Sensitivity: PublicInformation,
+			}}},
+			wants: []string{"Policy and Legal Repository", "Opening Help does not accept", "authorize issuance", "approve a Plan.", "Exact uppercase AGREE", "https://letsencrypt.org/repository/"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, size := range []struct{ width, height int }{{120, 36}, {80, 24}} {
+				steps := []string{"", "\x03\r"}
+				if size.width == 80 {
+					steps = []string{"", "\t", "\x1b[B", "\r", "", "\x03\r"}
+				}
+				got := runPseudoTerminalTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: &outcomeStub{reviews: []ChangeReview{test.review}}}, size.width, size.height, steps...)
+				for _, want := range test.wants {
+					if !strings.Contains(got, want) {
+						t.Fatalf("%dx%d guidance omitted %q\n%s", size.width, size.height, want, got)
+					}
+				}
+				requireClosedHelpHyperlinks(t, got, test.review.Editing.Help.URL)
+			}
+		})
+	}
+}
+
 func TestRunFieldChangeClearsEditingStateThroughThePublicOutcome(t *testing.T) {
 	domain := ChangeReview{Editing: &EditingPresentation{Title: "Clean VPS installation", Field: EditingField{Identity: "domain", Label: "Domain", Required: true}, Help: EditingHelp{Purpose: "Choose the public domain.", Instructions: []string{"Enter the domain."}, AcceptedFormat: "One lowercase DNS domain.", CommonMistakes: []string{"Do not enter a URL."}, Recovery: "Correct the domain and submit it again.", Example: "vpn.example", URL: "https://developers.cloudflare.com/fundamentals/manage-domains/add-site/", Sensitivity: PublicInformation}}}
 	email := ChangeReview{Editing: &EditingPresentation{Title: "Clean VPS installation", Field: EditingField{Identity: "owner-email", Label: "Owner email", Required: true}, Help: EditingHelp{Purpose: "Register the ACME account.", Instructions: []string{"Enter one email."}, AcceptedFormat: "One local-part@domain address.", CommonMistakes: []string{"Do not enter a display name."}, Recovery: "Correct the email and submit it again.", Example: "owner@sbxr.example", URL: "https://eff-certbot.readthedocs.io/en/stable/using.html#certbot-command-line-options", Sensitivity: PersonalInformation}}}

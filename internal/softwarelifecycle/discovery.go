@@ -3,10 +3,32 @@ package softwarelifecycle
 import (
 	"context"
 	"errors"
+	"regexp"
 	"time"
 )
 
 var ErrCandidateNotFound = errors.New("verified update candidate not found")
+
+var immutableReleaseTag = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
+
+type InputGuidance struct {
+	Purpose, AcceptedFormat, Recovery, Example, URL string
+	Instructions, CommonMistakes                    []string
+}
+
+func DowngradeInputGuidance() InputGuidance {
+	return InputGuidance{
+		Purpose:        "Select one older compatible SBXR release.",
+		Instructions:   []string{"Open official SBXR Releases and copy one immutable tag; SBXR refuses unproved compatibility."},
+		AcceptedFormat: "One exact immutable vX.Y.Z tag with no spaces or suffix.",
+		CommonMistakes: []string{"vX.Y.Z is tutorial only; malformed, current, newer, incompatible, branch, commit, URL, or prerelease values are refused."},
+		Recovery:       "Choose another official tag; no Plan or host change exists until compatibility passes.",
+		Example:        "vX.Y.Z",
+		URL:            "https://github.com/albertloky/SBXR/releases",
+	}
+}
+
+func ValidDowngradeTag(tag string) bool { return immutableReleaseTag.MatchString(tag) }
 
 type ReleaseListing struct {
 	Tag        string
@@ -113,7 +135,7 @@ func eligibleUpdate(installed, candidate VerifiedRelease) bool {
 }
 
 func eligibleDowngrade(installed, candidate VerifiedRelease) bool {
-	return validInstalled(installed) && validInstalled(candidate) && candidate.Identity != installed.Identity && candidate.Sequence < installed.Sequence && candidate.MinimumUpdaterSchema <= 1 && candidate.StateSchema == 2 && candidate.StateSchema == installed.StateSchema
+	return validInstalled(installed) && validInstalled(candidate) && ValidDowngradeTag(candidate.Identity.Tag) && candidate.Identity != installed.Identity && candidate.Sequence < installed.Sequence && candidate.MinimumUpdaterSchema <= 1 && candidate.StateSchema == 2 && candidate.StateSchema == installed.StateSchema
 }
 
 func compatibleStateSchemas(installed uint64, candidate VerifiedRelease) bool {

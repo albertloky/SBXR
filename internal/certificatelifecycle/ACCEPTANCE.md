@@ -91,3 +91,11 @@ On the same explicitly approved Acceptance VPS and exact Release Identity:
 | Owner Acceptance | Albert | Pending if the first release or an affected maintained-client surface requires it | Automation cannot claim Albert's maintained client, device, network, or workflow acceptance. |
 
 Module accepted; Release Qualification pending. The fixed `sbxr-ip` and `sbxr-domain` lineages, qualified standalone HTTP-01 boundary, isolated staging, strict candidate checks, atomic serving pointers, checked rollback, narrow standing renewal policy, and one persistent randomized serial scheduler are verified locally. Real `sbxr-ip` staging, production, and renewal; real `sbxr-domain` staging, staging renewal, production, and production renewal; public reachability; outside-VPS normal-verification checks; Integrated Verification; Codex Live Acceptance; required Owner Acceptance; and Release Qualification remain Pending. Unperformed rows stay Pending.
+
+Require current email and agreement guidance plus exact field boundaries with:
+
+```sh
+go test ./internal/certificatelifecycle ./cmd/sbxr -run 'Test(CertificateInputGuidanceOwnsEmailAndCurrentAgreementFacts|ManagedCertificateInputsStayFieldLocalUntilExactAgreement)$' -count=1
+```
+
+These automated checks do not claim public ACME issuance or Owner Acceptance.

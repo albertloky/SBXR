@@ -17,6 +17,32 @@ import (
 
 type certificateNetworkAdapter struct{ observed networkpolicy.Observations }
 
+func TestCertificateInputGuidanceOwnsEmailAndCurrentAgreementFacts(t *testing.T) {
+	email := certificatelifecycle.OwnerEmailInputGuidance()
+	joined := strings.Join(append(append([]string{email.Purpose, email.AcceptedFormat, email.Recovery}, email.Instructions...), email.CommonMistakes...), " ")
+	for _, want := range []string{"ACME", "expiration", "Personal Information", "mistake"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("OwnerEmailInputGuidance() omitted %q: %+v", want, email)
+		}
+	}
+	if email.URL != "https://letsencrypt.org/docs/expiration-emails/" {
+		t.Fatalf("email URL = %q", email.URL)
+	}
+	for _, value := range []string{"", "Owner <owner@example.com>", "owner@example.com other@example.com", "owner@example.com\n", "owner@sbxr.example"} {
+		if certificatelifecycle.ValidOwnerEmail(value) {
+			t.Fatalf("ValidOwnerEmail(%q) = true", value)
+		}
+	}
+	if !certificatelifecycle.ValidOwnerEmail("owner@example.com") {
+		t.Fatal("ValidOwnerEmail(owner@example.com) = false")
+	}
+
+	agreement := certificatelifecycle.SubscriberAgreementInputGuidance()
+	if agreement.URL != "https://letsencrypt.org/repository/" || agreement.AcceptedFormat != "Exact uppercase AGREE after review." || !strings.Contains(strings.Join(agreement.Instructions, " "), "does not accept") {
+		t.Fatalf("SubscriberAgreementInputGuidance() = %+v", agreement)
+	}
+}
+
 func (adapter certificateNetworkAdapter) Observe(networkpolicy.ObservationRequest) (networkpolicy.Observations, error) {
 	return adapter.observed, nil
 }

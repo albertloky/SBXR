@@ -28,6 +28,40 @@ const (
 	domainCertName = "sbxr-domain"
 )
 
+type InputGuidance struct {
+	Purpose, AcceptedFormat, Recovery, Example, URL string
+	Instructions, CommonMistakes                    []string
+}
+
+func OwnerEmailInputGuidance() InputGuidance {
+	return InputGuidance{
+		Purpose:        "Supply one email to Certbot for ACME account registration.",
+		Instructions:   []string{"SBXR keeps this Personal Information in protected Desired State; Let's Encrypt ended expiration emails on June 4, 2025."},
+		AcceptedFormat: "One exact local-part@domain email address with no display name, spaces, or control data.",
+		CommonMistakes: []string{"Display names, two addresses, whitespace, and typing mistakes are refused."},
+		Recovery:       "Correct it and submit again; no certificate request or Plan exists yet.",
+		Example:        "owner@sbxr.example",
+		URL:            "https://letsencrypt.org/docs/expiration-emails/",
+	}
+}
+
+func SubscriberAgreementInputGuidance() InputGuidance {
+	return InputGuidance{
+		Purpose:        "Review the current Let's Encrypt Subscriber Agreement before certificate issuance.",
+		Instructions:   []string{"Open the current Policy and Legal Repository and read the current Subscriber Agreement.", "Opening Help does not accept the agreement, authorize issuance, or approve a Plan."},
+		AcceptedFormat: "Exact uppercase AGREE after review.",
+		CommonMistakes: []string{"Lowercase, added spaces, and any other text are refused."},
+		Recovery:       "Review the current agreement, then type AGREE; use Back if you do not agree.",
+		Example:        "AGREE only after review",
+		URL:            "https://letsencrypt.org/repository/",
+	}
+}
+
+func ValidOwnerEmail(value string) bool {
+	address, err := mail.ParseAddress(value)
+	return err == nil && address.Address == value && address.Name == "" && !strings.ContainsAny(value, "\r\n") && !strings.HasSuffix(strings.ToLower(value), ".example")
+}
+
 var (
 	stateSHA256 = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	hostname    = regexp.MustCompile(`(?i)^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9]?))*$`)
@@ -714,8 +748,7 @@ func (module Interface) Plan(ctx context.Context, request PlanRequest) PlanResul
 	if view.Health.Outcome != Healthy {
 		return PlanResult{Health: view.Health}
 	}
-	address, err := mail.ParseAddress(request.OwnerEmail)
-	if err != nil || address.Address != request.OwnerEmail || address.Name != "" || strings.ContainsAny(request.OwnerEmail, "\r\n") {
+	if !ValidOwnerEmail(request.OwnerEmail) {
 		finding := health(view.Health.Time, Failed, "CERTIFICATE-PLAN-OWNER-EMAIL", "The reviewed registration identity is invalid", "the Owner email is missing, malformed, named, or contains control data", "one exact reviewed Owner contact email")
 		finding.NextActions = []string{"Enter and review one Owner contact email", "Back"}
 		return PlanResult{Health: finding}

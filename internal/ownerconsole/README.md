@@ -41,3 +41,5 @@ A manageable exit restores the terminal. Forced termination such as `kill -9`, V
 ```sh
 reset
 ```
+
+Managed downgrade and certificate editing presents only owning-Module Help. At `120×36` and `80×24`, the complete guidance and exact plain official URL remain available. Field-local refusal retains the submitted value. Help never creates agreement, issuance, Plan, or Apply authority.

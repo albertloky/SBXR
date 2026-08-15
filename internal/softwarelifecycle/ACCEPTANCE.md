@@ -325,3 +325,9 @@ go test ./internal/systemchanges ./internal/state -run 'Test(CompleteRemoval|Irr
 After rollback-capable public and Tunnel-route absence is durable, require exact local-deletion readiness before recording `Irreversible removal started`. Delete the immutable-ID-proven DNS records and Tunnel forward-only, record `Owned external deletion verified`, and keep the scoped token copy protected until Cloudflare rejection is verified. A still-usable token waits for Albert, stops automatic watching, and gives Cloudflare Tunnel-owned instructions to revoke only the exact `SBXR - selected account / selected zone` Account API Token at `Manage Account > Account API Tokens`. Only explicit `Check again` for the same operation identity can restart provider verification. An unavailable proof reports the last durable forward checkpoint without rollback or secret-bearing native errors.
 
 Delete only in this order: State, Infrastructure Secrets, certificates, durable `Transaction material deletion authorized`, transaction material except the journal, releases, units, identities, listeners, prepared artifacts, and owned firewall state. Every phase is idempotent and durably recorded. Process death immediately before or after any record resumes at the first phase not durably proved, including a crash during checksummed snapshot/manifest deletion after its authorization record. Report success only after exact `Not installed` and complete recovery-material absence are observed, then remove the journal and private restart runner last. External Integrated Verification, Codex Live Acceptance, Owner Acceptance, and Release Qualification remain Pending on issue #127 and the inherited production prerequisites.
+
+Require downgrade Help and field-local validation with:
+
+```sh
+go test ./internal/softwarelifecycle ./cmd/sbxr -run 'Test(DowngradeInputGuidanceAndValidationUseImmutableReleaseTags|ManagedDowngradeRejectsMalformedAndUnprovedTagsAtTheField)$' -count=1
+```

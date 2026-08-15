@@ -269,3 +269,9 @@ reset
 ```
 
 SSH-disconnect and integrated product journeys remain separate acceptance work. Codex Live Acceptance and Owner Acceptance require an explicitly approved Acceptance Run and must not be inferred from these checks.
+
+Require complete managed downgrade and certificate guidance at both supported sizes with:
+
+```sh
+go test ./internal/ownerconsole -run '^TestRunShowsCompleteDowngradeAndCertificateGuidanceAtExactTerminalSizes$' -count=1
+```

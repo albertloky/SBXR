@@ -64,6 +64,9 @@ var allowedHelpURLs = map[string]bool{
 	"https://xtls.github.io/en/config/transport.html#realityobject":                                true,
 	"https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/":            true,
 	"https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/":         true,
+	"https://github.com/albertloky/SBXR/releases":                                                  true,
+	"https://letsencrypt.org/docs/expiration-emails/":                                              true,
+	"https://letsencrypt.org/repository/":                                                          true,
 }
 
 type editingAction uint8
@@ -99,10 +102,11 @@ type ChangeReview struct {
 }
 
 type EditingPresentation struct {
-	Title string
-	Facts []EditingFact
-	Field EditingField
-	Help  EditingHelp
+	Title    string
+	Facts    []EditingFact
+	Field    EditingField
+	Help     EditingHelp
+	Feedback string
 }
 
 type EditingFact struct{ Label, Value string }
@@ -190,7 +194,7 @@ func validatedChangeReview(review ChangeReview) ChangeReview {
 		return ChangeReview{Plan: &copy}
 	}
 	if editing := review.Editing; editing != nil {
-		if !safeLine(editing.Title) || !safeEditingFacts(editing.Facts) || !safeIdentifier(editing.Field.Identity) || !safeLine(editing.Field.Label) || !safeOptionalLine(editing.Field.Value) || !safeEditingHelp(editing.Help) {
+		if !safeLine(editing.Title) || !safeEditingFacts(editing.Facts) || !safeIdentifier(editing.Field.Identity) || !safeLine(editing.Field.Label) || !safeOptionalLine(editing.Field.Value) || !safeEditingHelp(editing.Help) || !safeOptionalLine(editing.Feedback) {
 			return invalidChangeReview()
 		}
 		copy := *editing
@@ -390,6 +394,9 @@ func changeReviewLines(review ChangeReview, width, height, page int) []string {
 			lines = append(lines, fact.Label+": "+fact.Value)
 		}
 		lines = append(lines, editing.Field.Label+": "+editing.Field.Value, "")
+		if editing.Feedback != "" {
+			lines = append(lines, "Field correction: "+editing.Feedback, "")
+		}
 		for _, action := range editingActions(editing) {
 			lines = append(lines, "  "+action)
 		}

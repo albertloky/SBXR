@@ -117,6 +117,8 @@ func verifiedSoftwareChangeCandidates(ctx context.Context, release state.Release
 		if !softwareReleaseTag.MatchString(selectedTag) {
 			return softwarelifecycle.VerifiedRelease{}, softwarelifecycle.InstallCandidate{}, softwarelifecycle.VerifiedRelease{}, softwarelifecycle.InstallCandidate{}, errors.New("reviewed update release tag is unavailable")
 		}
+	} else if !softwarelifecycle.ValidDowngradeTag(selectedTag) {
+		return softwarelifecycle.VerifiedRelease{}, softwarelifecycle.InstallCandidate{}, softwarelifecycle.VerifiedRelease{}, softwarelifecycle.InstallCandidate{}, errors.New("reviewed downgrade release tag is unavailable")
 	}
 	view := module.View(ctx, softwarelifecycle.ViewRequest{Tag: selectedTag, Architecture: architecture, InstallationStatus: softwarelifecycle.Managed, Installed: installed})
 	want := softwarelifecycle.ReviewUpdate

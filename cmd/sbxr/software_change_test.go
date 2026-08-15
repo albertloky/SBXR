@@ -61,6 +61,63 @@ func TestManagedOwnerConsolePresentsFreshlyVerifiedUpdateWithoutApplying(t *test
 	}
 }
 
+func TestManagedDowngradeRejectsMalformedAndUnprovedTagsAtTheField(t *testing.T) {
+	installed := softwarelifecycle.VerifiedRelease{Identity: softwarelifecycle.ReleaseIdentity{Repository: softwarelifecycle.Repository, Tag: "v2.0.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}, Sequence: 20, StateSchema: 2, MinimumUpdaterSchema: 1}
+	candidate := softwarelifecycle.VerifiedRelease{Identity: softwarelifecycle.ReleaseIdentity{Repository: softwarelifecycle.Repository, Tag: "v1.9.0", Commit: strings.Repeat("c", 40), IndexSHA256: strings.Repeat("d", 64)}, Sequence: 19, StateSchema: 2, MinimumUpdaterSchema: 1}
+	launches := 0
+	outcome := &clientAccessOutcome{
+		loaded: true, presentation: clientAccessPresentation{Installation: ownerconsole.InstallationManaged, StateRevision: 7, StateSHA256: strings.Repeat("e", 64)},
+		lifecycleLoad: func(context.Context) (softwarelifecycle.VerifiedRelease, softwarelifecycle.ViewResult, error) {
+			return installed, softwarelifecycle.ViewResult{InstallationStatus: softwarelifecycle.Managed, VerifiedCandidate: &candidate, DowngradeCompatible: true, PermittedActions: []softwarelifecycle.Action{softwarelifecycle.ReviewDowngrade}}, nil
+		},
+		softwareLaunch: func(context.Context, clientAccessHandoffRequest) (*clientAccessHandoffSession, error) {
+			launches++
+			return nil, errors.New("controlled incompatible release")
+		},
+	}
+
+	initial := outcome.ReviewLifecycleChange(t.Context(), ownerconsole.ReviewDowngrade)
+	if initial.Editing == nil || initial.Editing.Help.URL != "https://github.com/albertloky/SBXR/releases" {
+		t.Fatalf("initial review = %+v", initial)
+	}
+	malformed := outcome.Edit(t.Context(), ownerconsole.EditingInput{Field: "release-tag", Text: "vX.Y.Z"})
+	if malformed.Editing == nil || malformed.Editing.Field.Identity != "release-tag" || malformed.Editing.Feedback == "" || launches != 0 {
+		t.Fatalf("malformed review = %+v; launches=%d", malformed, launches)
+	}
+	unproved := outcome.Edit(t.Context(), ownerconsole.EditingInput{Field: "release-tag", Text: "v1.9.0"})
+	if unproved.Editing == nil || unproved.Editing.Field.Value != "v1.9.0" || unproved.Editing.Feedback == "" || launches != 1 {
+		t.Fatalf("unproved review = %+v; launches=%d", unproved, launches)
+	}
+}
+
+func TestManagedCertificateInputsStayFieldLocalUntilExactAgreement(t *testing.T) {
+	launches := []clientAccessHandoffRequest{}
+	outcome := &clientAccessOutcome{providerLaunch: func(_ context.Context, request clientAccessHandoffRequest) (*clientAccessHandoffSession, error) {
+		launches = append(launches, request)
+		return &clientAccessHandoffSession{used: true, review: controlledSoftwareReview("certificate-plan-abcdef", "Exact certificate effects")}, nil
+	}}
+	initial := outcome.ReviewCertificateChange(t.Context(), ownerconsole.IssueIPCertificate)
+	if initial.Editing == nil || initial.Editing.Help.URL != "https://letsencrypt.org/docs/expiration-emails/" || initial.Editing.Help.Sensitivity != ownerconsole.PersonalInformation {
+		t.Fatalf("initial review = %+v", initial)
+	}
+	invalid := outcome.Edit(t.Context(), ownerconsole.EditingInput{Field: "owner-email", Text: "Owner <owner@example.com>"})
+	if invalid.Editing == nil || invalid.Editing.Field.Identity != "owner-email" || invalid.Editing.Feedback == "" || len(launches) != 0 {
+		t.Fatalf("invalid email review = %+v", invalid)
+	}
+	agreement := outcome.Edit(t.Context(), ownerconsole.EditingInput{Field: "owner-email", Text: "owner@example.com"})
+	if agreement.Editing == nil || agreement.Editing.Field.Identity != "subscriber-agreement" || agreement.Editing.Help.URL != "https://letsencrypt.org/repository/" || len(agreement.Editing.Facts) != 1 {
+		t.Fatalf("agreement review = %+v", agreement)
+	}
+	refused := outcome.Edit(t.Context(), ownerconsole.EditingInput{Field: "subscriber-agreement", Text: "agree"})
+	if refused.Editing == nil || refused.Editing.Field.Identity != "subscriber-agreement" || refused.Editing.Feedback == "" || outcome.providerAgree || len(launches) != 0 {
+		t.Fatalf("refused agreement review = %+v; providerAgree=%t", refused, outcome.providerAgree)
+	}
+	approved := outcome.Edit(t.Context(), ownerconsole.EditingInput{Field: "subscriber-agreement", Text: "AGREE"})
+	if approved.Plan == nil || !outcome.providerAgree || len(launches) != 1 || !launches[0].Agreement || launches[0].OwnerEmail != "owner@example.com" {
+		t.Fatalf("approved agreement review = %+v; providerAgree=%t launches=%+v", approved, outcome.providerAgree, launches)
+	}
+}
+
 func TestManagedUpdateUsesReadOnlyPlanningSudoThenSeparateApplySudo(t *testing.T) {
 	installed := softwarelifecycle.VerifiedRelease{Identity: softwarelifecycle.ReleaseIdentity{Repository: softwarelifecycle.Repository, Tag: "v1.4.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}, Sequence: 14, StateSchema: 2, MinimumUpdaterSchema: 1}
 	candidate := softwarelifecycle.VerifiedRelease{Identity: softwarelifecycle.ReleaseIdentity{Repository: softwarelifecycle.Repository, Tag: "v1.5.0", Commit: strings.Repeat("c", 40), IndexSHA256: strings.Repeat("d", 64)}, Sequence: 15, StateSchema: 2, MinimumUpdaterSchema: 1}

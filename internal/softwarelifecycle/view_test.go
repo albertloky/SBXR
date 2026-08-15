@@ -403,6 +403,12 @@ func TestViewOffersOnlyAFreshCompatibleExplicitDowngrade(t *testing.T) {
 	if got.Refusal != nil || got.VerifiedCandidate == nil || got.DowngradeCompatible || got.PermittedActions != nil {
 		t.Fatalf("incompatible downgrade View = %#v", got)
 	}
+
+	prereleaseEvidence := updateEvidenceWithMigration(1, "v1.0.0-rc.1", strings.Repeat("c", 40))
+	prerelease := softwarelifecycle.New(&releaseSource{evidence: prereleaseEvidence}, qualification(), func() time.Time { return verifiedAt }).View(t.Context(), softwarelifecycle.ViewRequest{Tag: "v1.0.0-rc.1", InstallationStatus: softwarelifecycle.Managed, Installed: installed})
+	if prerelease.Refusal != nil || prerelease.VerifiedCandidate == nil || prerelease.DowngradeCompatible || prerelease.PermittedActions != nil {
+		t.Fatalf("prerelease downgrade View = %#v", prerelease)
+	}
 }
 
 type releaseSource struct {

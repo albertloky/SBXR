@@ -115,6 +115,8 @@ func TestSoftwareLifecycleHandoffAcceptsOnlyExactTypedActions(t *testing.T) {
 		{Schema: 1, Mode: "software-apply", SoftwareAction: "update", ReleaseTag: "v1.5.0", ChangeSet: "update-0001"},
 		{Schema: 1, Mode: "software-review", SoftwareAction: "update", ReleaseTag: "v1.5.0", ChangeSet: "update-0001", ReviewedPlanIdentity: "unexpected", ReviewedPlanSHA256: strings.Repeat("a", 64)},
 		{Schema: 1, Mode: "software-review", SoftwareAction: "downgrade", ReleaseTag: "../v1.4.0", ChangeSet: "downgrade-0001"},
+		{Schema: 1, Mode: "software-review", SoftwareAction: "downgrade", ReleaseTag: "v1.4.0-rc.1", ChangeSet: "downgrade-0001"},
+		{Schema: 1, Mode: "software-review", SoftwareAction: "downgrade", ReleaseTag: "vX.Y.Z", ChangeSet: "downgrade-0001"},
 	} {
 		if validClientAccessHandoff(request) {
 			t.Fatalf("unsafe Software Lifecycle view accepted: %+v", request)

@@ -8,13 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/mail"
 	"os"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/albertloky/SBXR/internal/certificatelifecycle"
 	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
 	"github.com/albertloky/SBXR/internal/connectionprofiles"
 	"github.com/albertloky/SBXR/internal/ownerconsole"
@@ -99,7 +99,7 @@ func validClientAccessHandoff(request clientAccessHandoffRequest) bool {
 		case "repair":
 			return validClientAccessChangeSet(request.ChangeSet) && request.ReleaseTag == "" && binding
 		case "downgrade":
-			return validClientAccessChangeSet(request.ChangeSet) && softwareReleaseTag.MatchString(request.ReleaseTag) && binding
+			return validClientAccessChangeSet(request.ChangeSet) && softwarelifecycle.ValidDowngradeTag(request.ReleaseTag) && binding
 		default:
 			return false
 		}
@@ -136,8 +136,7 @@ func validClientAccessHandoff(request clientAccessHandoffRequest) bool {
 		case managedCloudflareRemove, managedCloudflareRotate:
 			return request.Token == "" && request.OwnerEmail == "" && !request.Agreement
 		case managedCertificateIP, managedCertificateDomain:
-			address, err := mail.ParseAddress(request.OwnerEmail)
-			return request.Token == "" && request.Agreement && err == nil && address.Address == request.OwnerEmail && address.Name == "" && !strings.ContainsAny(request.OwnerEmail, "\r\n\x00")
+			return request.Token == "" && request.Agreement && certificatelifecycle.ValidOwnerEmail(request.OwnerEmail)
 		}
 	}
 	if !validClientAccessAction(request.Action) {

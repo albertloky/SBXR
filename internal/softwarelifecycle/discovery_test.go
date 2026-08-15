@@ -37,6 +37,21 @@ func (source *discoveryReleaseSource) Verify(context.Context, string) (softwarel
 	return source.evidence, source.verifyErr
 }
 
+func TestDowngradeInputGuidanceAndValidationUseImmutableReleaseTags(t *testing.T) {
+	guidance := softwarelifecycle.DowngradeInputGuidance()
+	if guidance.URL != "https://github.com/albertloky/SBXR/releases" || !strings.Contains(guidance.AcceptedFormat, "vX.Y.Z") || !strings.Contains(guidance.Purpose, "compatible") {
+		t.Fatalf("DowngradeInputGuidance() = %+v", guidance)
+	}
+	for _, value := range []string{"", "vX.Y.Z", "1.2.3", "v1.2", "v01.2.3", "v1.2.3-rc.1"} {
+		if softwarelifecycle.ValidDowngradeTag(value) {
+			t.Fatalf("ValidDowngradeTag(%q) = true", value)
+		}
+	}
+	if !softwarelifecycle.ValidDowngradeTag("v1.2.3") {
+		t.Fatal("ValidDowngradeTag(v1.2.3) = false")
+	}
+}
+
 func TestViewDiscoveryHonorsStableAndReviewedAlternateChannels(t *testing.T) {
 	tests := []struct {
 		name       string
