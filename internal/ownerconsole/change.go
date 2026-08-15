@@ -44,15 +44,24 @@ type EditingInput struct {
 
 type EditingSensitivity uint8
 
-const PublicInformation EditingSensitivity = 1
+const (
+	PublicInformation EditingSensitivity = iota + 1
+	PersonalInformation
+)
 
 type EditingHelp struct {
-	Purpose, AcceptedFormat, Example, URL string
-	Instructions, CommonMistakes          []string
-	Sensitivity                           EditingSensitivity
+	Purpose, AcceptedFormat, Recovery, Example, URL string
+	Instructions, CommonMistakes                    []string
+	Sensitivity                                     EditingSensitivity
 }
 
-const domainHelpURL = "https://developers.cloudflare.com/fundamentals/manage-domains/add-site/"
+var allowedHelpURLs = map[string]bool{
+	"https://developers.cloudflare.com/fundamentals/manage-domains/add-site/":                      true,
+	"https://eff-certbot.readthedocs.io/en/stable/using.html#certbot-command-line-options":         true,
+	"https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml": true,
+	"https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml": true,
+	"https://xtls.github.io/en/config/transport.html#realityobject":                                true,
+}
 
 type editingAction uint8
 
@@ -266,10 +275,11 @@ func safeEditingFacts(values []EditingFact) bool {
 }
 
 func safeEditingHelp(help EditingHelp) bool {
-	if help.Purpose == "" && len(help.Instructions) == 0 && help.AcceptedFormat == "" && len(help.CommonMistakes) == 0 && help.Example == "" && help.URL == "" && help.Sensitivity == 0 {
+	if help.Purpose == "" && len(help.Instructions) == 0 && help.AcceptedFormat == "" && len(help.CommonMistakes) == 0 && help.Recovery == "" && help.Example == "" && help.URL == "" && help.Sensitivity == 0 {
 		return true
 	}
-	return safeLine(help.Purpose) && completeStrings(help.Instructions, 8) && safeLine(help.AcceptedFormat) && completeStrings(help.CommonMistakes, 8) && safeLine(help.Example) && help.URL == domainHelpURL && help.Sensitivity == PublicInformation
+	validSensitivity := help.Sensitivity == PublicInformation || help.Sensitivity == PersonalInformation
+	return safeLine(help.Purpose) && completeStrings(help.Instructions, 8) && safeLine(help.AcceptedFormat) && completeStrings(help.CommonMistakes, 8) && safeLine(help.Recovery) && safeLine(help.Example) && allowedHelpURLs[help.URL] && validSensitivity
 }
 
 func editingHelpLines(editing *EditingPresentation, width int) []string {
@@ -282,20 +292,24 @@ func editingHelpLines(editing *EditingPresentation, width int) []string {
 	for _, mistake := range help.CommonMistakes {
 		lines = append(lines, "Common mistakes: "+mistake)
 	}
-	lines = append(lines, "EXAMPLE ONLY — DO NOT COPY: "+help.Example, "Sensitivity: "+help.Sensitivity.String())
+	lines = append(lines, "Recovery: "+help.Recovery, "EXAMPLE ONLY — DO NOT COPY: "+help.Example, "Sensitivity: "+help.Sensitivity.String())
 	lines = append(lines, terminalHyperlinkLines(help.URL, width)...)
 	return append(lines, "", "Esc Return to field")
 }
 
 func (sensitivity EditingSensitivity) String() string {
-	if sensitivity == PublicInformation {
+	switch sensitivity {
+	case PublicInformation:
 		return "Public Information"
+	case PersonalInformation:
+		return "Personal Information"
+	default:
+		return "Unknown"
 	}
-	return "Unknown"
 }
 
 func terminalHyperlinkLines(url string, width int) []string {
-	lines := []string{"Official Help: \x1b]8;;" + domainHelpURL + "\aOpen official Help\x1b]8;;\a"}
+	lines := []string{"Official Help: \x1b]8;;" + url + "\aOpen official Help\x1b]8;;\a"}
 	for url != "" {
 		count := min(len(url), max(width, 1))
 		lines = append(lines, url[:count])

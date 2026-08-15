@@ -641,10 +641,11 @@ func TestInstallationReviewSuppliesDomainHelpAndRejectsItsExample(t *testing.T) 
 	module := newTestInstallation(t, composedNetworkObserver{}, nil)
 	review := module.Review(t.Context(), Draft{})
 	want := FieldHelp{
-		Purpose:        "Choose the public domain that SBXR will use for its managed hostnames.",
-		Instructions:   []string{"Enter a domain that you own and can manage in Cloudflare."},
-		AcceptedFormat: "Lowercase DNS name without a scheme, path, port, or trailing dot.",
-		CommonMistakes: []string{"Do not enter https://, a URL path, a port, or a domain that you do not control."},
+		Purpose:        "Choose SBXR's public domain.",
+		Instructions:   []string{"Enter your Cloudflare domain."},
+		AcceptedFormat: "Lowercase DNS name only.",
+		CommonMistakes: []string{"No URL, port, or final dot."},
+		Recovery:       "Correct it; prior values remain.",
 		Example:        "vpn.example",
 		URL:            "https://developers.cloudflare.com/fundamentals/manage-domains/add-site/",
 		Sensitivity:    PublicInformation,
@@ -655,6 +656,91 @@ func TestInstallationReviewSuppliesDomainHelpAndRejectsItsExample(t *testing.T) 
 	review = module.Review(t.Context(), Draft{SubmittedField: "domain", SubmittedValue: want.Example})
 	if review.Invalid == nil || review.Invalid.Field != "domain" || review.Plan != nil || !strings.Contains(review.Invalid.Problem, "tutorial") {
 		t.Fatalf("tutorial Domain Review = %+v", review)
+	}
+}
+
+func TestInstallationReviewGuidesEveryNonCloudflareFieldAndRejectsTutorialValues(t *testing.T) {
+	module := newTestInstallation(t, composedNetworkObserver{}, nil)
+	complete := composedDraft(t)
+	type expectedHelp struct {
+		purpose, malformed, example, url string
+		sensitivity                      FieldSensitivity
+	}
+	want := map[string]expectedHelp{
+		"domain":            {"public domain", "https://bad", "vpn.example", "https://developers.cloudflare.com/fundamentals/manage-domains/add-site/", PublicInformation},
+		"owner-email":       {"ACME account", "owner", "owner@sbxr.example", "https://eff-certbot.readthedocs.io/en/stable/using.html#certbot-command-line-options", PersonalInformation},
+		"public-ipv4":       {"public IPv4", "999.1.1.1", "192.0.2.10", "https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml", PublicInformation},
+		"reality-port":      {"REALITY", "not-a-port", "10444", "https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml", PublicInformation},
+		"hysteria2-port":    {"Hysteria2", "not-a-port", "10445", "https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml", PublicInformation},
+		"tuic-port":         {"TUIC", "not-a-port", "10446", "https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml", PublicInformation},
+		"anytls-port":       {"AnyTLS", "not-a-port", "10447", "https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml", PublicInformation},
+		"subscription-port": {"Subscription HTTPS", "not-a-port", "10448", "https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml", PublicInformation},
+		"reality-target":    {"REALITY Vision", "https://bad", "target.example", "https://xtls.github.io/en/config/transport.html#realityobject", PublicInformation},
+	}
+	placeholder := map[string]string{
+		"domain":         "placeholder",
+		"owner-email":    "owner@your-domain",
+		"reality-target": "your-hostname",
+	}
+	steps := []struct{ field, valid string }{
+		{"domain", complete.Installation.Domain},
+		{"owner-email", complete.Installation.OwnerEmail},
+		{"public-ipv4", complete.Installation.PublicIPv4},
+		{"reality-port", "443"},
+		{"hysteria2-port", "443"},
+		{"tuic-port", "8443"},
+		{"anytls-port", "9443"},
+		{"subscription-port", "10443"},
+		{"cloudflare-account", complete.CloudflareAccountID},
+		{"cloudflare-zone", complete.CloudflareZoneID},
+		{"cloudflare-token", complete.CloudflareToken},
+		{"reality-target", complete.RealityServerName},
+	}
+	for _, step := range steps {
+		review := module.Review(t.Context(), Draft{})
+		if review.Invalid == nil || review.Invalid.Field != step.field {
+			t.Fatalf("%s initial Review = %+v", step.field, review)
+		}
+		expected, guided := want[step.field]
+		if guided {
+			help := review.Invalid.Help
+			if !strings.Contains(help.Purpose, expected.purpose) || len(help.Instructions) == 0 || help.AcceptedFormat == "" || len(help.CommonMistakes) == 0 || help.Recovery == "" || help.Example != expected.example || help.URL != expected.url || help.Sensitivity != expected.sensitivity {
+				t.Fatalf("%s Help = %+v", step.field, help)
+			}
+			for _, submitted := range []string{expected.malformed, expected.example} {
+				rejected := module.Review(t.Context(), Draft{SubmittedField: step.field, SubmittedValue: submitted})
+				if rejected.Invalid == nil || rejected.Invalid.Field != step.field || rejected.Plan != nil || rejected.Invalid.Help.Recovery == "" {
+					t.Fatalf("%s accepted %q or lost field Help: %+v", step.field, submitted, rejected)
+				}
+				if submitted == expected.example && !strings.Contains(rejected.Invalid.Problem, "tutorial") {
+					t.Fatalf("%s tutorial rejection = %+v", step.field, rejected.Invalid)
+				}
+			}
+			if submitted := placeholder[step.field]; submitted != "" {
+				rejected := module.Review(t.Context(), Draft{SubmittedField: step.field, SubmittedValue: submitted})
+				if rejected.Invalid == nil || rejected.Invalid.Field != step.field || rejected.Plan != nil || !strings.Contains(rejected.Invalid.Problem, "tutorial") {
+					t.Fatalf("%s placeholder rejection = %+v", step.field, rejected)
+				}
+			}
+			if step.field == "hysteria2-port" {
+				if !slices.ContainsFunc(review.Invalid.Facts, func(fact ReviewFact) bool {
+					return fact.Label == "Primary subscription address" && fact.Value == complete.Installation.PublicIPv4
+				}) {
+					t.Fatalf("derived Primary subscription address is not a read-only fact: %+v", review.Invalid.Facts)
+				}
+			}
+		} else if !reflect.DeepEqual(review.Invalid.Help, FieldHelp{}) {
+			t.Fatalf("Cloudflare field %s received Installation Help: %+v", step.field, review.Invalid.Help)
+		}
+		review = module.Review(t.Context(), Draft{SubmittedField: step.field, SubmittedValue: step.valid})
+		if step.field == "reality-target" && review.Plan == nil {
+			t.Fatalf("complete guided journey = %+v", review)
+		}
+		if step.field == "reality-target" && !slices.ContainsFunc(review.Plan.Effects, func(effect string) bool {
+			return strings.Contains(effect, "Primary subscription address") && strings.Contains(effect, complete.Installation.PublicIPv4) && strings.Contains(effect, "server name "+complete.RealityServerName)
+		}) {
+			t.Fatalf("derived values are not visible in the read-only Plan: %+v", review.Plan.Effects)
+		}
 	}
 }
 

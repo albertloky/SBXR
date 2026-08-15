@@ -191,7 +191,7 @@ func (outcome *installOutcome) presentReview(review installation.ReviewResult) o
 					facts[index] = ownerconsole.EditingFact{Label: fact.Label, Value: fact.Value}
 				}
 				help := review.Invalid.Help
-				return ownerconsole.ChangeReview{Editing: &ownerconsole.EditingPresentation{Title: "Clean VPS installation", Facts: facts, Field: field, Help: ownerconsole.EditingHelp{Purpose: help.Purpose, Instructions: append([]string(nil), help.Instructions...), AcceptedFormat: help.AcceptedFormat, CommonMistakes: append([]string(nil), help.CommonMistakes...), Example: help.Example, URL: help.URL, Sensitivity: ownerconsole.EditingSensitivity(help.Sensitivity)}}}
+				return ownerconsole.ChangeReview{Editing: &ownerconsole.EditingPresentation{Title: "Clean VPS installation", Facts: facts, Field: field, Help: ownerconsole.EditingHelp{Purpose: help.Purpose, Instructions: append([]string(nil), help.Instructions...), AcceptedFormat: help.AcceptedFormat, CommonMistakes: append([]string(nil), help.CommonMistakes...), Recovery: help.Recovery, Example: help.Example, URL: help.URL, Sensitivity: ownerconsole.EditingSensitivity(help.Sensitivity)}}}
 			}
 		}
 		return installCorrection(errors.New(review.Invalid.Problem))

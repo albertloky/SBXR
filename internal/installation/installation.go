@@ -77,12 +77,15 @@ type ReviewFact struct{ Label, Value string }
 
 type FieldSensitivity uint8
 
-const PublicInformation FieldSensitivity = 1
+const (
+	PublicInformation FieldSensitivity = iota + 1
+	PersonalInformation
+)
 
 type FieldHelp struct {
-	Purpose, AcceptedFormat, Example, URL string
-	Instructions, CommonMistakes          []string
-	Sensitivity                           FieldSensitivity
+	Purpose, AcceptedFormat, Recovery, Example, URL string
+	Instructions, CommonMistakes                    []string
+	Sensitivity                                     FieldSensitivity
 }
 
 type InvalidInput struct {
@@ -507,14 +510,65 @@ var (
 	draftTag    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$`)
 )
 
-var domainHelp = FieldHelp{
-	Purpose:        "Choose the public domain that SBXR will use for its managed hostnames.",
-	Instructions:   []string{"Enter a domain that you own and can manage in Cloudflare."},
-	AcceptedFormat: "Lowercase DNS name without a scheme, path, port, or trailing dot.",
-	CommonMistakes: []string{"Do not enter https://, a URL path, a port, or a domain that you do not control."},
-	Example:        "vpn.example",
-	URL:            "https://developers.cloudflare.com/fundamentals/manage-domains/add-site/",
-	Sensitivity:    PublicInformation,
+var installationFieldHelp = map[string]FieldHelp{
+	"domain": {
+		Purpose:        "Choose SBXR's public domain.",
+		Instructions:   []string{"Enter your Cloudflare domain."},
+		AcceptedFormat: "Lowercase DNS name only.",
+		CommonMistakes: []string{"No URL, port, or final dot."},
+		Recovery:       "Correct it; prior values remain.",
+		Example:        "vpn.example",
+		URL:            "https://developers.cloudflare.com/fundamentals/manage-domains/add-site/",
+		Sensitivity:    PublicInformation,
+	},
+	"owner-email": {
+		Purpose:        "Register and recover the ACME account.",
+		Instructions:   []string{"Enter one address you monitor."},
+		AcceptedFormat: "local-part@domain; no spaces.",
+		CommonMistakes: []string{"No name or multiple addresses."},
+		Recovery:       "Correct it; prior values remain.",
+		Example:        "owner@sbxr.example",
+		URL:            "https://eff-certbot.readthedocs.io/en/stable/using.html#certbot-command-line-options",
+		Sensitivity:    PersonalInformation,
+	},
+	"public-ipv4": {
+		Purpose:        "Select the direct-service public IPv4.",
+		Instructions:   []string{"Use the VPS network details."},
+		AcceptedFormat: "Public dotted-decimal IPv4.",
+		CommonMistakes: []string{"No private or special-use IP."},
+		Recovery:       "Use the VPS provider's usable IPv4.",
+		Example:        "192.0.2.10",
+		URL:            "https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml",
+		Sensitivity:    PublicInformation,
+	},
+	"reality-port":      portFieldHelp("REALITY", "TCP", "10444"),
+	"hysteria2-port":    portFieldHelp("Hysteria2", "UDP", "10445"),
+	"tuic-port":         portFieldHelp("TUIC", "UDP", "10446"),
+	"anytls-port":       portFieldHelp("AnyTLS", "TCP", "10447"),
+	"subscription-port": portFieldHelp("Subscription HTTPS", "TCP", "10448"),
+	"reality-target": {
+		Purpose:        "Choose the REALITY Vision HTTPS target.",
+		Instructions:   []string{"Enter an ordinary external host."},
+		AcceptedFormat: "Lowercase DNS hostname only.",
+		CommonMistakes: []string{"No URL, port, or blocked host."},
+		Recovery:       "Replace it; SBXR probes again.",
+		Example:        "target.example",
+		URL:            "https://xtls.github.io/en/config/transport.html#realityobject",
+		Sensitivity:    PublicInformation,
+	},
+}
+
+func portFieldHelp(profile, transport, example string) FieldHelp {
+	return FieldHelp{
+		Purpose:        fmt.Sprintf("Choose the %s %s port.", profile, transport),
+		Instructions:   []string{"Keep the default if available."},
+		AcceptedFormat: "Decimal integer from 1 to 65535.",
+		CommonMistakes: []string{"No text, sign, space, or zero."},
+		Recovery:       fmt.Sprintf("Use a valid %s port.", profile),
+		Example:        example,
+		URL:            "https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml",
+		Sensitivity:    PublicInformation,
+	}
 }
 
 func initialDraft() Draft {
@@ -538,10 +592,16 @@ func (module *Interface) invalidDraftField(draft Draft, field, problem string) *
 
 func (module *Interface) attachReviewFacts(invalid *InvalidInput) {
 	invalid.Facts = append([]ReviewFact(nil), module.reviewFacts...)
-	if invalid.Field == "domain" {
-		invalid.Help = domainHelp
-		invalid.Help.Instructions = append([]string(nil), domainHelp.Instructions...)
-		invalid.Help.CommonMistakes = append([]string(nil), domainHelp.CommonMistakes...)
+	if module.draft.Installation.PrimaryAddress != "" {
+		invalid.Facts = append(invalid.Facts, ReviewFact{Label: "Primary subscription address", Value: module.draft.Installation.PrimaryAddress})
+	}
+	if module.draft.RealityServerName != "" {
+		invalid.Facts = append(invalid.Facts, ReviewFact{Label: "REALITY server name", Value: module.draft.RealityServerName})
+	}
+	if help, ok := installationFieldHelp[invalid.Field]; ok {
+		invalid.Help = help
+		invalid.Help.Instructions = append([]string(nil), help.Instructions...)
+		invalid.Help.CommonMistakes = append([]string(nil), help.CommonMistakes...)
 	}
 	if invalid.Field == "public-ipv4" {
 		invalid.Detected = module.detectedIPv4
@@ -598,12 +658,12 @@ func validateDraftField(draft Draft, field string) *InvalidInput {
 	if strings.TrimSpace(value) == "" {
 		return invalid("A required Installation value is missing.")
 	}
+	if nonProductionExampleValue(field, value) {
+		return invalid("The submitted value is a tutorial example and cannot become Desired State.")
+	}
 	switch field {
 	case "domain":
-		if value == domainHelp.Example {
-			return invalid("The Domain is a tutorial example and cannot become Desired State.")
-		}
-		if !draftDomain.MatchString(value) {
+		if !validDraftHostname(value) {
 			return invalid("The Domain is invalid.")
 		}
 	case "owner-email":
@@ -624,8 +684,43 @@ func validateDraftField(draft Draft, field string) *InvalidInput {
 		if _, err := cloudflaretunnel.NewManagementToken(value); err != nil {
 			return invalid("The Cloudflare Account API Token is invalid.")
 		}
+	case "reality-target":
+		if !validDraftHostname(value) {
+			return invalid("The REALITY target hostname is invalid.")
+		}
 	}
 	return nil
+}
+
+func nonProductionExampleValue(field, value string) bool {
+	for _, help := range installationFieldHelp {
+		if value == help.Example {
+			return true
+		}
+	}
+	name := value
+	if field == "owner-email" {
+		if at := strings.LastIndexByte(value, '@'); at >= 0 {
+			name = value[at+1:]
+		}
+	}
+	if field != "domain" && field != "owner-email" && field != "reality-target" {
+		return false
+	}
+	name = strings.ToLower(name)
+	return name == "placeholder" || name == "your-domain" || name == "your-hostname" || strings.HasSuffix(name, ".example")
+}
+
+func validDraftHostname(value string) bool {
+	if !draftDomain.MatchString(value) || len(value) > 253 || strings.Contains(value, "..") {
+		return false
+	}
+	for _, label := range strings.Split(value, ".") {
+		if len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+	}
+	return true
 }
 
 func (module *Interface) reviewRealityTarget(ctx context.Context, draft Draft) *InvalidInput {
@@ -708,6 +803,7 @@ func finalPlan(built *builtInstall, request softwareubuntu.InstallHandoffRequest
 	summary := built.plan.Summary()
 	plan := &Plan{Identity: built.plan.Identity(), DesiredStateRevision: 1, DesiredStateSHA256: built.desiredSHA256, RelevantChecksums: []string{"Plan SHA-256 " + built.plan.SHA256()}, ObservedState: "Proven Clean VPS baseline: Not installed", VerifiedExternalInputs: []string{"Verified release " + summary.ReleaseIdentity.Tag, "Scoped Cloudflare account and zone authority", "Fresh Network Policy observations"}, Effects: installPlanEffects(), RequiredChecks: []string{"Pre-publication module health", "Desired State agreement", "Post-publication HTTPS, Tunnel, certificate, profile, unit, timer, and permission agreement"}, AdvisoryChecks: []string{"Direct DNS is pending only until the reviewed Cloudflare steps create it"}, Interruption: summary.Interruption, Cancellation: summary.Cancellation, Rollback: summary.Rollback}
 	plan.Effects = append(plan.Effects, fmt.Sprintf("Use SSH %d/TCP, REALITY %d/TCP, Hysteria2 %d/UDP, TUIC %d/UDP, AnyTLS %d/TCP, and Subscription HTTPS %d/TCP", request.Draft.SSHPort, request.Draft.RealityPort, request.Draft.Hysteria2Port, request.Draft.TUICPort, request.Draft.AnyTLSPort, request.Draft.SubscriptionPort))
+	plan.Effects = append(plan.Effects, fmt.Sprintf("Use public IPv4 %s as the Primary subscription address and REALITY target %s with server name %s", request.Draft.PrimaryAddress, request.RealityTarget, request.RealityServerName))
 	if reclamation == nil {
 		return plan
 	}

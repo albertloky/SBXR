@@ -413,10 +413,11 @@ func TestRunShowsReadOnlyInstallationFactsAndDetectedPublicIPv4(t *testing.T) {
 
 func TestRunShowsTheSameCompleteDomainHelpAtExactTerminalSizes(t *testing.T) {
 	help := EditingHelp{
-		Purpose:        "Choose the public domain that SBXR will use for its managed hostnames.",
-		Instructions:   []string{"Enter a domain that you own and can manage in Cloudflare."},
-		AcceptedFormat: "Lowercase DNS name without a scheme, path, port, or trailing dot.",
-		CommonMistakes: []string{"Do not enter https://, a URL path, a port, or a domain that you do not control."},
+		Purpose:        "Choose SBXR's public domain.",
+		Instructions:   []string{"Enter your Cloudflare domain."},
+		AcceptedFormat: "Lowercase DNS name only.",
+		CommonMistakes: []string{"No URL, port, or final dot."},
+		Recovery:       "Correct it; prior values remain.",
 		Example:        "vpn.example",
 		URL:            "https://developers.cloudflare.com/fundamentals/manage-domains/add-site/",
 		Sensitivity:    PublicInformation,
@@ -424,7 +425,7 @@ func TestRunShowsTheSameCompleteDomainHelpAtExactTerminalSizes(t *testing.T) {
 	editing := ChangeReview{Editing: &EditingPresentation{Title: "Clean VPS installation", Field: EditingField{Identity: "domain", Label: "Domain", Value: "owner.example.test", Required: true}, Help: help}}
 
 	wide := runPseudoTerminalTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: &outcomeStub{reviews: []ChangeReview{editing}}}, 120, 36, "", "\x03\r")
-	for _, want := range []string{"DOMAIN HELP", "Purpose", "Choose the public domain", "Accepted format", "Lowercase DNS name", "Common mistakes", "Do not enter https://", "EXAMPLE ONLY — DO NOT COPY", help.Example, "Sensitivity", "Public Information", "developers.cloudflare.com/fundamentals/", "manage-domains/add-site/", "\x1b]8;;" + help.URL} {
+	for _, want := range []string{"DOMAIN HELP", "Purpose", "Choose SBXR's public domain", "Accepted format", "Lowercase DNS name", "Common mistakes", "No URL, port, or final dot", "Recovery", "EXAMPLE ONLY — DO NOT COPY", help.Example, "Sensitivity", "Public Information", "developers.cloudflare.com/fundamentals/", "manage-domains/add-site/", "Esc Return to field", "\x1b]8;;" + help.URL} {
 		if !strings.Contains(wide, want) {
 			t.Fatalf("wide Domain Help omitted %q\n%s", want, wide)
 		}
@@ -436,7 +437,7 @@ func TestRunShowsTheSameCompleteDomainHelpAtExactTerminalSizes(t *testing.T) {
 
 	stub := &outcomeStub{reviews: []ChangeReview{editing}, editReview: editing}
 	narrow := runPseudoTerminalTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: stub}, 80, 24, "", "\t", "\x1b[B", "\r", "", "\x1b", "", "\r", "", "\x03\r")
-	for _, want := range []string{"Help for this field", "> Help for this field", "DOMAIN HELP", "Choose the public domain", "Lowercase DNS name", "EXAMPLE ONLY — DO NOT COPY", help.Example, "developers.cloudflare.com/fundamentals/", "manage-domains/add-site/"} {
+	for _, want := range []string{"Help for this field", "> Help for this field", "DOMAIN HELP", "Choose SBXR's public domain", "Lowercase DNS name", "EXAMPLE ONLY — DO NOT COPY", help.Example, "developers.cloudflare.com/fundamentals/", "manage-domains/add-site/", "Esc Return to field"} {
 		if !strings.Contains(narrow, want) {
 			t.Fatalf("narrow Domain Help omitted %q\n%s", want, narrow)
 		}
@@ -494,9 +495,63 @@ func requireClosedHelpHyperlinks(t *testing.T, transcript, url string) {
 }
 
 func TestEditingHelpRefusesANonAllowlistedLink(t *testing.T) {
-	review := validatedChangeReview(ChangeReview{Editing: &EditingPresentation{Title: "Clean VPS installation", Field: EditingField{Identity: "domain", Label: "Domain", Required: true}, Help: EditingHelp{Purpose: "Purpose", Instructions: []string{"Instructions"}, AcceptedFormat: "Format", CommonMistakes: []string{"Mistake"}, Example: "vpn.example", URL: "https://owner.example.test/help", Sensitivity: PublicInformation}}})
+	review := validatedChangeReview(ChangeReview{Editing: &EditingPresentation{Title: "Clean VPS installation", Field: EditingField{Identity: "domain", Label: "Domain", Required: true}, Help: EditingHelp{Purpose: "Purpose", Instructions: []string{"Instructions"}, AcceptedFormat: "Format", CommonMistakes: []string{"Mistake"}, Recovery: "Correct the field.", Example: "vpn.example", URL: "https://owner.example.test/help", Sensitivity: PublicInformation}}})
 	if review.Correction == nil || review.Editing != nil {
 		t.Fatalf("non-allowlisted Help URL was accepted: %+v", review)
+	}
+}
+
+func TestRunShowsEveryInstallationHelpSourceAtExactTerminalSizes(t *testing.T) {
+	tests := []struct {
+		name, label, urlTail string
+		help                 EditingHelp
+	}{
+		{"Owner email", "Owner email", "certbot-command-line-options", EditingHelp{Purpose: "Register and recover the ACME account.", Instructions: []string{"Enter one address you monitor."}, AcceptedFormat: "local-part@domain; no spaces.", CommonMistakes: []string{"No name or multiple addresses."}, Recovery: "Correct it; prior values remain.", Example: "owner@sbxr.example", URL: "https://eff-certbot.readthedocs.io/en/stable/using.html#certbot-command-line-options", Sensitivity: PersonalInformation}},
+		{"Public IPv4", "Public IPv4", "iana-ipv4-special-registry.xhtml", EditingHelp{Purpose: "Select the direct-service public IPv4.", Instructions: []string{"Use the VPS network details."}, AcceptedFormat: "Public dotted-decimal IPv4.", CommonMistakes: []string{"No private or special-use IP."}, Recovery: "Use the VPS provider's usable IPv4.", Example: "192.0.2.10", URL: "https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml", Sensitivity: PublicInformation}},
+		{"Port", "REALITY port", "service-names-port-numbers.xhtml", EditingHelp{Purpose: "Choose the REALITY TCP port.", Instructions: []string{"Keep the default if available."}, AcceptedFormat: "Decimal integer from 1 to 65535.", CommonMistakes: []string{"No text, sign, space, or zero."}, Recovery: "Use a valid REALITY port.", Example: "10444", URL: "https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml", Sensitivity: PublicInformation}},
+		{"Longest port", "Subscription HTTPS port", "service-names-port-numbers.xhtml", EditingHelp{Purpose: "Choose the Subscription HTTPS TCP port.", Instructions: []string{"Keep the default if available."}, AcceptedFormat: "Decimal integer from 1 to 65535.", CommonMistakes: []string{"No text, sign, space, or zero."}, Recovery: "Use a valid Subscription HTTPS port.", Example: "10448", URL: "https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml", Sensitivity: PublicInformation}},
+		{"REALITY target", "REALITY target hostname", "transport.html#realityobject", EditingHelp{Purpose: "Choose the REALITY Vision HTTPS target.", Instructions: []string{"Enter an ordinary external host."}, AcceptedFormat: "Lowercase DNS hostname only.", CommonMistakes: []string{"No URL, port, or blocked host."}, Recovery: "Replace it; SBXR probes again.", Example: "target.example", URL: "https://xtls.github.io/en/config/transport.html#realityobject", Sensitivity: PublicInformation}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			review := ChangeReview{Editing: &EditingPresentation{Title: "Clean VPS installation", Field: EditingField{Identity: "guided-field", Label: test.label, Required: true}, Help: test.help}}
+			for _, size := range []struct{ width, height int }{{120, 36}, {80, 24}} {
+				steps := []string{"", "\x03\r"}
+				if size.width == 80 {
+					steps = []string{"", "\t", "\x1b[B", "\r", "", "\x03\r"}
+				}
+				got := runPseudoTerminalTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: &outcomeStub{reviews: []ChangeReview{review}}}, size.width, size.height, steps...)
+				for _, want := range []string{strings.ToUpper(test.label) + " HELP", test.help.Purpose, test.help.Recovery, "EXAMPLE ONLY — DO NOT COPY: " + test.help.Example, test.help.Sensitivity.String(), test.urlTail, "Esc Return to field", "\x1b]8;;" + test.help.URL} {
+					if !strings.Contains(got, want) {
+						t.Fatalf("%dx%d Help omitted %q\n%s", size.width, size.height, want, got)
+					}
+				}
+				requireClosedHelpHyperlinks(t, got, test.help.URL)
+			}
+		})
+	}
+}
+
+func TestRunFieldChangeClearsEditingStateThroughThePublicOutcome(t *testing.T) {
+	domain := ChangeReview{Editing: &EditingPresentation{Title: "Clean VPS installation", Field: EditingField{Identity: "domain", Label: "Domain", Required: true}, Help: EditingHelp{Purpose: "Choose the public domain.", Instructions: []string{"Enter the domain."}, AcceptedFormat: "One lowercase DNS domain.", CommonMistakes: []string{"Do not enter a URL."}, Recovery: "Correct the domain and submit it again.", Example: "vpn.example", URL: "https://developers.cloudflare.com/fundamentals/manage-domains/add-site/", Sensitivity: PublicInformation}}}
+	email := ChangeReview{Editing: &EditingPresentation{Title: "Clean VPS installation", Field: EditingField{Identity: "owner-email", Label: "Owner email", Required: true}, Help: EditingHelp{Purpose: "Register the ACME account.", Instructions: []string{"Enter one email."}, AcceptedFormat: "One local-part@domain address.", CommonMistakes: []string{"Do not enter a display name."}, Recovery: "Correct the email and submit it again.", Example: "owner@sbxr.example", URL: "https://eff-certbot.readthedocs.io/en/stable/using.html#certbot-command-line-options", Sensitivity: PersonalInformation}}}
+	stub := &outcomeStub{reviews: []ChangeReview{domain}, editReview: email}
+	got := runPseudoTerminalTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: stub}, 80, 24,
+		"", "\r", "", "owner.com", "\t", "\x1b[B", "\r", "", "\x1b", "", "\r", "", "\x03", "", "\x1b", "", "owner@example.com", "\t", "\r", "", "\x03\r")
+	if len(stub.edits) != 2 || stub.edits[0] != (EditingInput{Field: "domain", Text: "owner.com"}) || stub.edits[1] != (EditingInput{Field: "owner-email", Text: "owner@example.com"}) || stub.backCalls != 0 {
+		t.Fatalf("field change retained input, Help selection, or correction action: edits=%+v back=%d", stub.edits, stub.backCalls)
+	}
+	const stale = "Required editing input is empty. Nothing was submitted."
+	firstDismissal := strings.Index(got, "Stay in SBXR")
+	if firstDismissal < 0 {
+		t.Fatalf("first Exit confirmation was not shown\n%s", got)
+	}
+	redraw := got[firstDismissal+len("Stay in SBXR"):]
+	if secondConfirmation := strings.LastIndex(redraw, "Exit SBXR?"); secondConfirmation >= 0 {
+		redraw = redraw[:secondConfirmation]
+	}
+	if strings.Contains(redraw, stale) {
+		t.Fatalf("field change retained stale feedback after a full public redraw\n%s", got)
 	}
 }
 

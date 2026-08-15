@@ -633,8 +633,15 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.copyFeedback = "Copy failed. Select the text manually."
 		}
 	case changeReviewMsg:
+		previousField := ""
+		if m.changeReview.Editing != nil {
+			previousField = m.changeReview.Editing.Field.Identity
+		}
 		m.changeReview = validatedChangeReview(message.review)
 		m.planPage, m.correctionAction, m.correctionSelection = 0, 0, 0
+		if m.changeReview.Editing != nil && m.changeReview.Editing.Field.Identity != previousField {
+			m.changeFeedback = ""
+		}
 		m.copyFeedback = ""
 		m.focusChangeInput()
 	case changeBackMsg:

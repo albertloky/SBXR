@@ -29,7 +29,7 @@ func TestInstallationBackDiscardsUnfinishedInput(t *testing.T) {
 	if review := outcome.Review(t.Context()); review.Editing == nil || review.Editing.Field.Identity != "domain" || review.Editing.Help.Purpose == "" || review.Editing.Help.URL != "https://developers.cloudflare.com/fundamentals/manage-domains/add-site/" {
 		t.Fatalf("Domain Help did not cross the Installation presentation boundary: %+v", review)
 	}
-	if review := outcome.Edit(t.Context(), ownerconsole.EditingInput{Field: "domain", Text: "example.com"}); review.Editing == nil || review.Editing.Field.Identity != "owner-email" {
+	if review := outcome.Edit(t.Context(), ownerconsole.EditingInput{Field: "domain", Text: "example.com"}); review.Editing == nil || review.Editing.Field.Identity != "owner-email" || review.Editing.Help.Recovery == "" || review.Editing.Help.Sensitivity != ownerconsole.PersonalInformation || review.Editing.Help.URL != "https://eff-certbot.readthedocs.io/en/stable/using.html#certbot-command-line-options" {
 		t.Fatalf("edited Installation input = %+v", review)
 	}
 	if review := outcome.Back(t.Context()); review.Editing == nil || review.Editing.Field.Identity != "domain" || review.Editing.Field.Value != "" {
