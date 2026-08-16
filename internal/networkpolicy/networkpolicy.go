@@ -64,14 +64,16 @@ type Intent struct {
 	SSHPort                    uint16
 	Profiles                   Profiles
 	SubscriptionPort           uint16
-	TemporaryHTTP              bool
+	TemporaryHTTPLineage       CertificateLineage
 	Disk                       DiskRequirement
 }
 
 func (i Intent) SelectedPorts() []uint16 {
-	ports := []uint16{i.SSHPort}
+	ports := []uint16{i.SSHPort, i.SubscriptionPort}
 	for _, profile := range profileDefinitions(i) {
-		ports = append(ports, profile.profile.Port)
+		if profile.profile.Enabled && profile.name != "Subscription HTTPS" {
+			ports = append(ports, profile.profile.Port)
+		}
 	}
 	return ports
 }
@@ -330,6 +332,7 @@ const UnprovedResource = "unproved"
 type Request struct {
 	Intent                    Intent
 	Stage                     Stage
+	CloudflareProfileSetup    *CloudflareProfileSetupRequest
 	Managed                   ManagedProof
 	OwnerFacts                OwnerFacts
 	Certificate               CertificateFacts
@@ -337,6 +340,18 @@ type Request struct {
 	RelevantChecksums         map[string]string
 	ReclamationReview         bool
 	ReviewedReclamationSHA256 string
+}
+
+type ChangeSetBinding struct {
+	StartingRevision   uint64
+	CandidateRevision  uint64
+	ChangeSetID        string
+	DesiredStateSHA256 string
+}
+
+type CloudflareProfileSetupRequest struct {
+	Candidate Intent
+	Binding   ChangeSetBinding
 }
 
 type ProofStatus string
@@ -414,33 +429,34 @@ type ListenerProof struct {
 }
 
 type Result struct {
-	Baseline              Baseline
-	InstallationClass     InstallationClass
-	Reclamation           *ReclamationPlan
-	ProtectedFoundation   ProtectedHostFoundation
-	Outcome               Outcome
-	Findings              []Finding
-	Policy                Policy
-	SystemChanges         SystemChangesRequirements
-	SSHSafety             SSHSafety
-	CompleteRemoval       CompleteRemoval
-	Certificate           CertificatePolicy
-	CertificateRetry      *CertificateRetryHandoff
-	Reachability          []ReachabilityProof
-	ProviderGuidance      []ProviderGuidance
-	SameVPSProvesOutside  bool
-	Renewal               RenewalFreshness
-	Binding               Binding
-	PreApplyGates         []Gate
-	PostApplyGates        []Gate
-	Bounds                CheckBounds
-	CloudflareTunnelPath  CloudflareTunnelPath
-	portCorrection        *portCorrectionCell
-	portCorrectionBinding Binding
-	freshInstallation     *freshInstallationProofCell
-	reclamation           *reclamationAuthorityCell
-	freshDNSHostname      string
-	intent                Intent
+	Baseline               Baseline
+	InstallationClass      InstallationClass
+	Reclamation            *ReclamationPlan
+	ProtectedFoundation    ProtectedHostFoundation
+	Outcome                Outcome
+	Findings               []Finding
+	Policy                 Policy
+	SystemChanges          SystemChangesRequirements
+	SSHSafety              SSHSafety
+	CompleteRemoval        CompleteRemoval
+	Certificate            CertificatePolicy
+	CertificateRetry       *CertificateRetryHandoff
+	Reachability           []ReachabilityProof
+	ProviderGuidance       []ProviderGuidance
+	SameVPSProvesOutside   bool
+	Renewal                RenewalFreshness
+	Binding                Binding
+	CloudflareProfileSetup *CloudflareProfileSetupPlan
+	PreApplyGates          []Gate
+	PostApplyGates         []Gate
+	Bounds                 CheckBounds
+	CloudflareTunnelPath   CloudflareTunnelPath
+	portCorrection         *portCorrectionCell
+	portCorrectionBinding  Binding
+	freshInstallation      *freshInstallationProofCell
+	reclamation            *reclamationAuthorityCell
+	freshDNSHostname       string
+	intent                 Intent
 }
 
 // FreshInstallationProof is a one-use, non-renderable Clean VPS proof for
@@ -924,9 +940,53 @@ const (
 type TemporaryHTTPPolicy struct {
 	Identity            string
 	Purpose             string
+	Lineage             CertificateLineage
 	Exposure            Exposure
 	RecordNativeHandles bool
 	RemoveAfter         [5]CleanupOutcome
+}
+
+type CertificateLineage string
+
+const (
+	SBXRIP     CertificateLineage = "sbxr-ip"
+	SBXRDomain CertificateLineage = "sbxr-domain"
+)
+
+type CollisionFinding struct {
+	Exposure Exposure
+	Found    string
+}
+
+type DirectAdmission struct {
+	Exposure     Exposure
+	RequiredGate string
+}
+
+type RouteAdmission struct {
+	Route        CloudflareRoute
+	RequiredGate string
+}
+
+type CloudflareProfileSetupPlan struct {
+	Binding          ChangeSetBinding
+	ReviewedPorts    []Exposure
+	LoopbackOrigins  []Exposure
+	PublicRoutes     []CloudflareRoute
+	DirectListeners  []Exposure
+	TemporaryHTTP    TemporaryHTTPPolicy
+	CandidatePolicy  Policy
+	Collisions       []CollisionFinding
+	DirectAdmissions []DirectAdmission
+	RouteAdmissions  []RouteAdmission
+	SSHSafety        SSHSafety
+	SSHPreservation  Gate
+	http01           HTTP01Contribution
+	approved         bool
+}
+
+func (plan CloudflareProfileSetupPlan) HTTP01Contribution() (HTTP01Contribution, bool) {
+	return plan.http01, plan.approved && plan.http01.digest != ""
 }
 
 type SystemChangesRequirements struct {
@@ -1033,11 +1093,11 @@ func (result Result) HTTP01Contribution() (HTTP01Contribution, bool) {
 // to the exact approved post-reclamation SBXR policy without re-approving the
 // rejected firewall manager under a different candidate policy.
 func PrepareHTTP01AfterFirewallReclamation(result Result, current, candidate Intent) (HTTP01Contribution, bool) {
-	if result.reclamation == nil || result.reclamation.contract.Firewall == nil || current.TemporaryHTTP || !candidate.TemporaryHTTP {
+	if result.reclamation == nil || result.reclamation.contract.Firewall == nil || current.TemporaryHTTPLineage != "" || candidate.TemporaryHTTPLineage == "" {
 		return HTTP01Contribution{}, false
 	}
 	normalized := candidate
-	normalized.TemporaryHTTP = false
+	normalized.TemporaryHTTPLineage = ""
 	if current != normalized {
 		return HTTP01Contribution{}, false
 	}
@@ -1303,18 +1363,30 @@ func (i Interface) Evaluate(request Request) Result {
 	evaluateDisk(&result, request.Intent.Disk, observed.Disk)
 	evaluateTime(&result, request.Intent.Baseline, observed.Time)
 	evaluateOwnership(&result, request.Intent, observed)
+	evaluateCloudflareProfileSetup(&result, request, observed)
 	result.Policy.Nftables = renderNftables(result.Policy)
 	if result.Outcome == Failed {
 		return result
 	}
-	external, err := i.adapter.Observe(ObservationRequest{Intent: request.Intent, Stage: request.Stage, Scope: ExternalObservations, ReclamationReview: request.ReclamationReview})
+	externalIntent := request.Intent
+	if request.CloudflareProfileSetup != nil {
+		externalIntent = request.CloudflareProfileSetup.Candidate
+	}
+	external, err := i.adapter.Observe(ObservationRequest{Intent: externalIntent, Stage: request.Stage, Scope: ExternalObservations, ReclamationReview: request.ReclamationReview})
 	if err != nil {
 		result.add(requiredFailure("NETWORK-OBSERVATION-FAILED", "External network observation failed", "typed external observation unavailable", "fresh configured-resolver and verified-protocol facts", "SBXR cannot prove required outbound dependencies", Fix{OwnerChecklist: []string{"Correct the external observation failure."}}))
 		return result
 	}
 	observed.Outbound = external.Outbound
-	evaluateOutbound(&result, observed.Outbound)
+	outboundIntent := request.Intent
+	if request.CloudflareProfileSetup != nil {
+		outboundIntent = request.CloudflareProfileSetup.Candidate
+	}
+	evaluateOutbound(&result, outboundIntent, observed.Outbound)
 	evaluateReachability(&result, request, observed)
+	if result.CloudflareProfileSetup != nil && result.Outcome == Healthy {
+		result.CloudflareProfileSetup.approved = true
+	}
 	result.Binding = bind(request, observed, result.Policy)
 	result.Binding.approved = result.Outcome == Healthy || cleanVPSAuthorityEligible(result)
 	if result.portCorrection != nil && len(result.Findings) == 1 && result.Findings[0].Code == "NETWORK-MANAGED-DRIFT" {
@@ -1357,6 +1429,116 @@ func (i Interface) Evaluate(request Request) Result {
 		result.reclamation.evaluate = func() Result { return i.Evaluate(request) }
 	}
 	return result
+}
+
+func evaluateCloudflareProfileSetup(result *Result, request Request, observed Observations) {
+	if request.CloudflareProfileSetup == nil {
+		return
+	}
+	setup := request.CloudflareProfileSetup
+	if !validCloudflareProfileSetupRequest(request.Intent, *setup, request.Stage) {
+		result.add(requiredFailure("NETWORK-SETUP-INTENT-INVALID", "Cloudflare Profile Setup network intent is invalid", "stale, partial, or mismatched setup facts", "one complete revision-bound candidate for all five deferred profiles", "Network Policy never plans partial or cross-Change Set exposure", ownerFix("Rebuild the Cloudflare Profile Setup Plan from the current Managed revision.")))
+		return
+	}
+	candidate := candidatePolicy(setup.Candidate)
+	candidate.SSHAddress = result.Policy.SSHAddress
+	candidate.Nftables = renderNftables(candidate)
+	httpIntent := request.Intent
+	httpIntent.Revision = setup.Candidate.Revision
+	httpIntent.TemporaryHTTPLineage = SBXRDomain
+	httpPolicy := candidatePolicy(httpIntent)
+	httpPolicy.SSHAddress = result.Policy.SSHAddress
+	httpPolicy.Nftables = renderNftables(httpPolicy)
+	encoded, _ := json.Marshal(struct {
+		Binding ChangeSetBinding
+		Policy  Policy
+	}{setup.Binding, httpPolicy})
+	httpDigest := sha256.Sum256(encoded)
+	plan := CloudflareProfileSetupPlan{
+		Binding:         setup.Binding,
+		CandidatePolicy: candidate,
+		TemporaryHTTP:   *httpPolicy.TemporaryHTTP,
+		SSHSafety:       result.SSHSafety,
+		SSHPreservation: Gate{Code: "NETWORK-SSH-PRESERVED", Required: "fresh SSH Preservation Proof for the bound Change Set before and after public exposure changes"},
+		http01: HTTP01Contribution{
+			candidate: httpPolicy.Nftables,
+			sshPort:   setup.Candidate.SSHPort, revision: setup.Candidate.Revision,
+			selectedIP: setup.Candidate.PrimarySubscriptionAddress,
+			digest:     hex.EncodeToString(httpDigest[:]),
+		},
+	}
+	for _, definition := range profileDefinitions(setup.Candidate) {
+		exposure := Exposure{definition.name, definition.address, definition.profile.Port, definition.protocol}
+		plan.ReviewedPorts = append(plan.ReviewedPorts, exposure)
+		switch definition.name {
+		case "VLESS XHTTP origin", "VLESS WebSocket origin":
+			plan.LoopbackOrigins = append(plan.LoopbackOrigins, exposure)
+		case "Hysteria2", "TUIC", "AnyTLS":
+			plan.DirectListeners = append(plan.DirectListeners, exposure)
+			plan.DirectAdmissions = append(plan.DirectAdmissions, DirectAdmission{Exposure: exposure, RequiredGate: "owning service and exact listener proved ready before public admission"})
+		}
+	}
+	plan.PublicRoutes = []CloudflareRoute{
+		{Profile: "VLESS XHTTP", OriginAddress: setup.Candidate.Profiles.VLESSXHTTP.Address, OriginPort: setup.Candidate.Profiles.VLESSXHTTP.Port, Protocol: TCP},
+		{Profile: "VLESS WebSocket", OriginAddress: setup.Candidate.Profiles.VLESSWebSocket.Address, OriginPort: setup.Candidate.Profiles.VLESSWebSocket.Port, Protocol: TCP},
+	}
+	for _, route := range plan.PublicRoutes {
+		plan.RouteAdmissions = append(plan.RouteAdmissions, RouteAdmission{Route: route, RequiredGate: "exact loopback origin and cloudflared route proved ready before public route admission"})
+	}
+	for _, exposure := range append(append([]Exposure(nil), plan.LoopbackOrigins...), plan.DirectListeners...) {
+		if listener, conflict := conflictingListener(observed.Listeners, exposure, candidate); conflict {
+			found := listenerFact(listener)
+			plan.Collisions = append(plan.Collisions, CollisionFinding{Exposure: exposure, Found: found})
+			result.add(requiredFailure("NETWORK-SETUP-PORT-COLLISION", "A Cloudflare Profile Setup listener port is occupied", found, fmt.Sprintf("%s:%d/%s bindable for %s", exposure.Address, exposure.Port, exposure.Protocol, exposure.Purpose), "Network Policy never adopts, moves, or exposes an occupied listener", ownerFix("Stop the exact conflicting owner or review a new candidate port, then check again.")))
+		}
+	}
+	if listener, conflict := conflictingListener(observed.Listeners, plan.TemporaryHTTP.Exposure, candidate); conflict {
+		found := listenerFact(listener)
+		plan.Collisions = append(plan.Collisions, CollisionFinding{Exposure: plan.TemporaryHTTP.Exposure, Found: found})
+		result.add(requiredFailure("NETWORK-SETUP-PORT-COLLISION", "Cloudflare Profile Setup temporary TCP 80 is occupied", found, "public:80/TCP bindable for exact sbxr-domain HTTP-01", "Network Policy never adopts, moves, or shares temporary certificate exposure", ownerFix("Stop the exact conflicting owner, then check again.")))
+	}
+	for _, conflict := range observed.OwnerFacts.Conflicts {
+		result.add(requiredFailure("NETWORK-SETUP-PROVIDER-COLLISION", "A Cloudflare Profile Setup provider seam is occupied", safeFact(conflict.Kind, conflict.Name), "no conflicting Tunnel, route, or DNS identity", "Network Policy never adopts, deletes, or renames an unowned provider resource", ownerFix("Correct the exact provider collision through its owner, then check again.")))
+	}
+	result.CloudflareProfileSetup = &plan
+}
+
+func validCloudflareProfileSetupRequest(current Intent, setup CloudflareProfileSetupRequest, stage Stage) bool {
+	binding, candidate := setup.Binding, setup.Candidate
+	if current.Baseline != Managed || candidate.Baseline != Managed || binding.StartingRevision != current.Revision || binding.CandidateRevision != candidate.Revision || candidate.Revision != current.Revision+1 || !validSHA256(binding.DesiredStateSHA256) || !safeChangeSetID(binding.ChangeSetID) || !validRequest(Request{Intent: candidate, Stage: stage}) || candidate.TemporaryHTTPLineage != "" {
+		return false
+	}
+	deferred := []Profile{current.Profiles.VLESSXHTTP, current.Profiles.VLESSWebSocket, current.Profiles.Hysteria2, current.Profiles.TUIC, current.Profiles.AnyTLS}
+	for _, profile := range deferred {
+		if profile != (Profile{}) {
+			return false
+		}
+	}
+	if !candidate.Profiles.VLESSXHTTP.Enabled || !candidate.Profiles.VLESSWebSocket.Enabled || !candidate.Profiles.Hysteria2.Enabled || !candidate.Profiles.TUIC.Enabled || !candidate.Profiles.AnyTLS.Enabled || candidate.Profiles.VLESSXHTTP.Address != "127.0.0.1" || candidate.Profiles.VLESSWebSocket.Address != "127.0.0.1" || candidate.CertificateHostname == "" {
+		return false
+	}
+	currentBase, candidateBase := current, candidate
+	currentBase.Revision, candidateBase.Revision = 0, 0
+	currentBase.CertificateHostname, candidateBase.CertificateHostname = "", ""
+	currentBase.Profiles.VLESSXHTTP, candidateBase.Profiles.VLESSXHTTP = Profile{}, Profile{}
+	currentBase.Profiles.VLESSWebSocket, candidateBase.Profiles.VLESSWebSocket = Profile{}, Profile{}
+	currentBase.Profiles.Hysteria2, candidateBase.Profiles.Hysteria2 = Profile{}, Profile{}
+	currentBase.Profiles.TUIC, candidateBase.Profiles.TUIC = Profile{}, Profile{}
+	currentBase.Profiles.AnyTLS, candidateBase.Profiles.AnyTLS = Profile{}, Profile{}
+	return reflect.DeepEqual(currentBase, candidateBase)
+}
+
+func safeChangeSetID(value string) bool {
+	if value == "" || len(value) > 128 {
+		return false
+	}
+	for _, character := range value {
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || strings.ContainsRune("-_.:", character) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func reviewedReclamationContract(observed Observations, plan *ReclamationPlan, candidate Policy) (reclamationContract, bool) {
@@ -1813,7 +1995,7 @@ func evaluateSSH(result *Result, intent Intent, facts SSHFacts) {
 
 func validRequest(request Request) bool {
 	intent := request.Intent
-	if intent.Revision == 0 || request.Stage != PreApproval && request.Stage != PostApproval || intent.Baseline != Clean && intent.Baseline != Managed || intent.SSHPort == 0 || intent.SubscriptionPort == 0 || intent.PublicIPv4 == "" && intent.PublicIPv6 == "" || intent.PrimarySubscriptionAddress != intent.PublicIPv4 && intent.PrimarySubscriptionAddress != intent.PublicIPv6 || request.ReviewedReclamationSHA256 != "" && !validSHA256(request.ReviewedReclamationSHA256) {
+	if intent.Revision == 0 || request.Stage != PreApproval && request.Stage != PostApproval || intent.Baseline != Clean && intent.Baseline != Managed || intent.SSHPort == 0 || intent.SubscriptionPort == 0 || intent.PublicIPv4 == "" && intent.PublicIPv6 == "" || intent.PrimarySubscriptionAddress != intent.PublicIPv4 && intent.PrimarySubscriptionAddress != intent.PublicIPv6 || request.ReviewedReclamationSHA256 != "" && !validSHA256(request.ReviewedReclamationSHA256) || intent.TemporaryHTTPLineage != "" && intent.TemporaryHTTPLineage != SBXRIP && intent.TemporaryHTTPLineage != SBXRDomain {
 		return false
 	}
 	if intent.PublicIPv4 != "" && (net.ParseIP(intent.PublicIPv4) == nil || net.ParseIP(intent.PublicIPv4).To4() == nil) || intent.PublicIPv6 != "" && (net.ParseIP(intent.PublicIPv6) == nil || net.ParseIP(intent.PublicIPv6).To4() != nil) {
@@ -1827,7 +2009,7 @@ func validRequest(request Request) bool {
 	if (intent.Profiles.Hysteria2.Enabled || intent.Profiles.TUIC.Enabled || intent.Profiles.AnyTLS.Enabled) && intent.CertificateHostname == "" {
 		return false
 	}
-	return intent.Profiles.VLESSXHTTP.Address != "" && intent.Profiles.VLESSWebSocket.Address != ""
+	return (!intent.Profiles.VLESSXHTTP.Enabled || intent.Profiles.VLESSXHTTP.Address != "") && (!intent.Profiles.VLESSWebSocket.Enabled || intent.Profiles.VLESSWebSocket.Address != "")
 }
 
 func evaluateOwnership(result *Result, intent Intent, observed Observations) {
@@ -1889,7 +2071,7 @@ func evaluateOwnership(result *Result, intent Intent, observed Observations) {
 				return
 			}
 		}
-		if intent.TemporaryHTTP {
+		if intent.TemporaryHTTPLineage != "" {
 			if listener, ok := conflictingListener(observed.Listeners, Exposure{"ACME HTTP-01", "public", 80, TCP}, policy); ok {
 				result.CertificateRetry = &CertificateRetryHandoff{Owner: "Certificate Lifecycle", KeepCurrentCertificate: true, Until: "fresh Network Policy evaluation passes"}
 				result.add(requiredFailure("NETWORK-FIXED-PORT-CONFLICT", "Fixed TCP 80 is occupied", listenerFact(listener), "TCP 80 free for one exact temporary HTTP-01 interval; keep the current certificate and let Certificate Lifecycle own bounded retry until a fresh evaluation passes", "SBXR never moves TCP 80, stops its current owner, or discards the current certificate", ownerFix("Stop or reconfigure the named owner outside SBXR, then check again.")))
@@ -1927,6 +2109,22 @@ func evaluateOwnership(result *Result, intent Intent, observed Observations) {
 		result.add(requiredFailure("NETWORK-LINEAGE-RECOVERY", "Managed network lineage is unproved", string(observed.Lineage), "one provable current Managed revision", "SBXR cannot classify discovered resources as current Desired State", ownerFix("Use the Recovery Required flow.")))
 		return
 	}
+	if !cloudflareProfilesEnabled(intent) {
+		unknown := observed.OwnerFacts.DNS == "" || observed.OwnerFacts.Tunnel == "" || observed.OwnerFacts.DNS == UnprovedResource || observed.OwnerFacts.Tunnel == UnprovedResource
+		unexpectedListener := slices.ContainsFunc(observed.Listeners, func(listener Listener) bool {
+			return listener.Ownership == SBXROwned && !matchesAnyExposure(listener, policy)
+		})
+		unexpected := unexpectedListener || len(observed.OwnerFacts.Routes)+len(observed.OwnerFacts.Conflicts) > 0 || !unknown && (observed.OwnerFacts.DNS != "absent" || observed.OwnerFacts.Tunnel != "absent") || observed.Firewall.SBXRTableState != "matches Desired State"
+		if unexpected {
+			result.add(requiredFailure("NETWORK-DEFERRED-EXPOSURE-ACTIVE", "A deferred Cloudflare or Connection Profile exposure is active", "an unexpected listener, firewall rule, route, DNS, or Tunnel fact", "all five deferred profiles and every Cloudflare exposure exactly absent", "Network Policy never adopts or automatically moves unexpected active exposure", ownerFix("Remove the exposure through its proven owner, then check again.")))
+			return
+		}
+		if unknown {
+			finding := requiredFailure("NETWORK-DEFERRED-EXPOSURE-UNKNOWN", "Deferred Cloudflare exposure absence is unproved", fmt.Sprintf("DNS %q; Tunnel %q", observed.OwnerFacts.DNS, observed.OwnerFacts.Tunnel), "fresh proof that Cloudflare DNS, Tunnel, and routes are absent", "Network Policy does not adopt or infer the meaning of unproved provider facts", ownerFix("Restore the read-only absence check, then check again."))
+			finding.Outcome = Unknown
+			result.add(finding)
+		}
+	}
 	var drift []string
 	var correction *portCorrectionCell
 	correctionConflicts := 0
@@ -1954,7 +2152,10 @@ func evaluateOwnership(result *Result, intent Intent, observed Observations) {
 	if !cloudflareRoutesMatch(observed.OwnerFacts.Routes, expectedCloudflareRoutes(intent)) {
 		drift = append(drift, "Cloudflare routes missing or different")
 	}
-	otherDrift := observed.Firewall.SBXRTableState != "matches Desired State" || observed.OwnerFacts.DNS != "matches Desired State" || observed.OwnerFacts.Tunnel != "matches Desired State"
+	otherDrift := observed.Firewall.SBXRTableState != "matches Desired State"
+	if cloudflareProfilesEnabled(intent) {
+		otherDrift = otherDrift || observed.OwnerFacts.DNS != "matches Desired State" || observed.OwnerFacts.Tunnel != "matches Desired State"
+	}
 	if len(drift) > 0 || otherDrift {
 		exactCorrection := correctionConflicts == 1 && len(drift) == 1 && !otherDrift && correction != nil
 		if exactCorrection {
@@ -2129,6 +2330,10 @@ func expectedCloudflareRoutes(intent Intent) []CloudflareRoute {
 	return routes
 }
 
+func cloudflareProfilesEnabled(intent Intent) bool {
+	return intent.Profiles.VLESSXHTTP.Enabled || intent.Profiles.VLESSWebSocket.Enabled || intent.Profiles.Hysteria2.Enabled || intent.Profiles.TUIC.Enabled || intent.Profiles.AnyTLS.Enabled
+}
+
 func cloudflareRoutesMatch(found, required []CloudflareRoute) bool {
 	if len(found) != len(required) {
 		return false
@@ -2249,8 +2454,14 @@ func evaluateAddresses(result *Result, intent Intent, observed Observations) {
 	}
 }
 
-func evaluateOutbound(result *Result, facts OutboundFacts) {
-	result.CloudflareTunnelPath = CloudflareTunnelPath{HTTPS: boolProofStatus(facts.CloudflareHTTPS), TCP7844: boolProofStatus(facts.TunnelTCP7844), UDP7844: boolProofStatus(facts.TunnelUDP7844)}
+func evaluateOutbound(result *Result, intent Intent, facts OutboundFacts) {
+	if cloudflareProfilesEnabled(intent) {
+		result.CloudflareTunnelPath.HTTPS = boolProofStatus(facts.CloudflareHTTPS)
+	}
+	if intent.Profiles.VLESSXHTTP.Enabled || intent.Profiles.VLESSWebSocket.Enabled {
+		result.CloudflareTunnelPath.TCP7844 = boolProofStatus(facts.TunnelTCP7844)
+		result.CloudflareTunnelPath.UDP7844 = boolProofStatus(facts.TunnelUDP7844)
+	}
 	checks := []struct {
 		ok   bool
 		code string
@@ -2259,12 +2470,30 @@ func evaluateOutbound(result *Result, facts OutboundFacts) {
 		{facts.DNS, "NETWORK-OUTBOUND-DNS", "Ubuntu configured DNS resolver"},
 		{facts.GitHubHTTPS, "NETWORK-OUTBOUND-GITHUB-HTTPS", "verified HTTPS to GitHub release services"},
 		{facts.GitHubAttestationHTTPS, "NETWORK-OUTBOUND-GITHUB-ATTESTATION-HTTPS", "verified HTTPS to GitHub attestation services"},
-		{facts.CloudflareHTTPS, "NETWORK-OUTBOUND-CLOUDFLARE-HTTPS", "verified HTTPS to the Cloudflare API"},
 		{facts.ACMEHTTPS, "NETWORK-OUTBOUND-ACME-HTTPS", "verified HTTPS to the approved ACME issuer"},
 		{facts.CertificateEndpointsHTTPS, "NETWORK-OUTBOUND-CERTIFICATE-HTTPS", "verified HTTPS to required certificate chain or revocation endpoints"},
 		{facts.TimeService, "NETWORK-OUTBOUND-TIME", "the active time service"},
-		{facts.TunnelTCP7844, "NETWORK-OUTBOUND-TUNNEL-TCP", "Cloudflare Tunnel outbound TCP 7844"},
-		{facts.TunnelUDP7844, "NETWORK-OUTBOUND-TUNNEL-UDP", "Cloudflare Tunnel outbound UDP 7844"},
+	}
+	if cloudflareProfilesEnabled(intent) {
+		checks = append(checks, struct {
+			ok   bool
+			code string
+			name string
+		}{facts.CloudflareHTTPS, "NETWORK-OUTBOUND-CLOUDFLARE-HTTPS", "verified HTTPS to the Cloudflare API"})
+	}
+	if intent.Profiles.VLESSXHTTP.Enabled || intent.Profiles.VLESSWebSocket.Enabled {
+		checks = append(checks,
+			struct {
+				ok   bool
+				code string
+				name string
+			}{facts.TunnelTCP7844, "NETWORK-OUTBOUND-TUNNEL-TCP", "Cloudflare Tunnel outbound TCP 7844"},
+			struct {
+				ok   bool
+				code string
+				name string
+			}{facts.TunnelUDP7844, "NETWORK-OUTBOUND-TUNNEL-UDP", "Cloudflare Tunnel outbound UDP 7844"},
+		)
 	}
 	for _, check := range checks {
 		if !check.ok {
@@ -2406,10 +2635,10 @@ func providerGuidance(intent Intent, policy Policy, address string, port uint16,
 func candidatePolicy(intent Intent) Policy {
 	policy := Policy{Table: "inet sbxr", PublicIPv4: intent.PublicIPv4, PublicIPv6: intent.PublicIPv6, PrimaryAddress: intent.PrimarySubscriptionAddress, CertificateAddress: intent.PrimarySubscriptionAddress}
 	policy.Exposures = append(policy.Exposures, Exposure{"SSH preservation", "public", intent.SSHPort, TCP})
-	if intent.TemporaryHTTP {
+	if intent.TemporaryHTTPLineage != "" {
 		exposure := Exposure{"ACME HTTP-01", "public", 80, TCP}
 		policy.Exposures = append(policy.Exposures, exposure)
-		policy.TemporaryHTTP = &TemporaryHTTPPolicy{Identity: "sbxr:acme-http-01", Purpose: "ACME HTTP-01 validation for IP and domain certificates", Exposure: exposure, RecordNativeHandles: true, RemoveAfter: [5]CleanupOutcome{CleanupSuccess, CleanupFailure, CleanupInterruption, CleanupCancellation, CleanupRollback}}
+		policy.TemporaryHTTP = &TemporaryHTTPPolicy{Identity: "sbxr:acme-http-01", Purpose: "ACME HTTP-01 validation for " + string(intent.TemporaryHTTPLineage), Lineage: intent.TemporaryHTTPLineage, Exposure: exposure, RecordNativeHandles: true, RemoveAfter: [5]CleanupOutcome{CleanupSuccess, CleanupFailure, CleanupInterruption, CleanupCancellation, CleanupRollback}}
 	}
 	for _, current := range profileDefinitions(intent) {
 		if current.profile.Enabled {

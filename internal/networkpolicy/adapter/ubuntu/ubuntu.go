@@ -72,7 +72,7 @@ func (a Adapter) Observe(request networkpolicy.ObservationRequest) (networkpolic
 		if !a.external {
 			return networkpolicy.Observations{}, nil
 		}
-		return networkpolicy.Observations{Outbound: outboundFacts(timeFacts().Synchronized)}, nil
+		return networkpolicy.Observations{Outbound: outboundFacts(timeFacts().Synchronized, request.Intent)}, nil
 	}
 	version, err := a.ubuntuVersion()
 	if err != nil {
@@ -124,7 +124,7 @@ func (a Adapter) Observe(request networkpolicy.ObservationRequest) (networkpolic
 	if a.external {
 		observed.Time = timeFacts()
 		if request.Scope != networkpolicy.LocalObservations {
-			observed.Outbound = outboundFacts(observed.Time.Synchronized)
+			observed.Outbound = outboundFacts(observed.Time.Synchronized, request.Intent)
 		}
 		observed.Firewall.ActiveManager = activeFirewallManager()
 	}
@@ -1224,7 +1224,7 @@ func activeFirewallManager() string {
 	return ""
 }
 
-func outboundFacts(timeOK bool) networkpolicy.OutboundFacts {
+func outboundFacts(timeOK bool, intent networkpolicy.Intent) networkpolicy.OutboundFacts {
 	type check struct {
 		name string
 		fn   func() bool
@@ -1233,11 +1233,18 @@ func outboundFacts(timeOK bool) networkpolicy.OutboundFacts {
 		{"dns", func() bool { _, err := net.LookupHost("github.com"); return err == nil }},
 		{"github", func() bool { return httpsReachable("https://github.com") }},
 		{"github-attestations", func() bool { return httpsReachable("https://api.github.com/repos/albertloky/SBXR/attestations") }},
-		{"cloudflare", func() bool { return httpsReachable("https://api.cloudflare.com/client/v4/") }},
 		{"acme", func() bool { return httpsReachable("https://acme-v02.api.letsencrypt.org/directory") }},
 		{"certificate-endpoints", func() bool { return httpsReachable("https://letsencrypt.org/certs/isrgrootx1.der") }},
-		{"tunnel-tcp", func() bool { return dialReachable("tcp", "region1.v2.argotunnel.com:7844") }},
-		{"tunnel-udp", func() bool { return quicVersionResponse("region1.v2.argotunnel.com:7844") }},
+	}
+	cloudflare := intent.Profiles.VLESSXHTTP.Enabled || intent.Profiles.VLESSWebSocket.Enabled || intent.Profiles.Hysteria2.Enabled || intent.Profiles.TUIC.Enabled || intent.Profiles.AnyTLS.Enabled
+	if cloudflare {
+		checks = append(checks, check{"cloudflare", func() bool { return httpsReachable("https://api.cloudflare.com/client/v4/") }})
+	}
+	if intent.Profiles.VLESSXHTTP.Enabled || intent.Profiles.VLESSWebSocket.Enabled {
+		checks = append(checks,
+			check{"tunnel-tcp", func() bool { return dialReachable("tcp", "region1.v2.argotunnel.com:7844") }},
+			check{"tunnel-udp", func() bool { return quicVersionResponse("region1.v2.argotunnel.com:7844") }},
+		)
 	}
 	results := map[string]bool{}
 	var mutex sync.Mutex

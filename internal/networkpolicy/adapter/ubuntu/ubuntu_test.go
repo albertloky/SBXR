@@ -448,12 +448,22 @@ func TestAdapterUsesRealDNSAndVerifiedHTTPSWithoutCredentials(t *testing.T) {
 	adapter := NewAt(root)
 	adapter.external = true
 	adapter.addresses = func() ([]net.Addr, error) { return nil, nil }
-	observed, err := adapter.Observe(networkpolicy.ObservationRequest{Stage: networkpolicy.PreApproval})
+	observed, err := adapter.Observe(networkpolicy.ObservationRequest{Intent: productionCandidateIntent(), Stage: networkpolicy.PreApproval})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !observed.Outbound.DNS || !observed.Outbound.GitHubHTTPS || !observed.Outbound.GitHubAttestationHTTPS || !observed.Outbound.CloudflareHTTPS || !observed.Outbound.ACMEHTTPS || !observed.Outbound.CertificateEndpointsHTTPS {
 		t.Fatalf("real DNS/verified HTTPS seam = %+v", observed.Outbound)
+	}
+	cloudflareFree := productionCandidateIntent()
+	cloudflareFree.CertificateHostname = ""
+	cloudflareFree.Profiles = networkpolicy.Profiles{VLESSRealityVision: cloudflareFree.Profiles.VLESSRealityVision}
+	observed, err = adapter.Observe(networkpolicy.ObservationRequest{Intent: cloudflareFree, Stage: networkpolicy.PreApproval})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observed.Outbound.CloudflareHTTPS || observed.Outbound.TunnelTCP7844 || observed.Outbound.TunnelUDP7844 {
+		t.Fatalf("Cloudflare-free outbound observation = %+v", observed.Outbound)
 	}
 }
 
@@ -484,7 +494,7 @@ func TestProductionUbuntuSeam(t *testing.T) {
 	}
 	defer listener.Close()
 	port := uint16(listener.Addr().(*net.TCPAddr).Port)
-	observed, err := New().Observe(networkpolicy.ObservationRequest{Stage: networkpolicy.PostApproval})
+	observed, err := New().Observe(networkpolicy.ObservationRequest{Intent: productionCandidateIntent(), Stage: networkpolicy.PostApproval})
 	if err != nil {
 		t.Fatal(err)
 	}

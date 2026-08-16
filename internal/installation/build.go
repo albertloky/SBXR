@@ -212,7 +212,7 @@ func buildInstallWith(ctx context.Context, request softwareubuntu.InstallHandoff
 		return nil, &reclamationReviewError{plan: baseNetwork.Reclamation}
 	}
 	httpIntent := intent
-	httpIntent.TemporaryHTTP = true
+	httpIntent.TemporaryHTTPLineage = networkpolicy.SBXRIP
 	httpNetwork := dependencies.network(networkpolicy.Request{Intent: httpIntent, Stage: networkpolicy.PreApproval, OwnerFacts: ownerFacts, ReclamationReview: true, ReviewedReclamationSHA256: request.ReviewedReclamationSHA256})
 	http01, postFirewallHTTP := networkpolicy.PrepareHTTP01AfterFirewallReclamation(baseNetwork, intent, httpIntent)
 	if baseNetwork.Outcome == networkpolicy.Failed || httpNetwork.Outcome == networkpolicy.Failed && !postFirewallHTTP {

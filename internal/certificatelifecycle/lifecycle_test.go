@@ -460,7 +460,7 @@ func completePlanRequest() certificatelifecycle.PlanRequest {
 }
 
 func testHTTP01Contribution(revision uint64) networkpolicy.HTTP01Contribution {
-	intent := networkpolicy.Intent{Revision: revision, Baseline: networkpolicy.Clean, PublicIPv4: "192.0.2.10", PrimarySubscriptionAddress: "192.0.2.10", CertificateHostname: "direct.example.com", SSHPort: 22, SubscriptionPort: 10443, TemporaryHTTP: true,
+	intent := networkpolicy.Intent{Revision: revision, Baseline: networkpolicy.Clean, PublicIPv4: "192.0.2.10", PrimarySubscriptionAddress: "192.0.2.10", CertificateHostname: "direct.example.com", SSHPort: 22, SubscriptionPort: 10443, TemporaryHTTPLineage: networkpolicy.SBXRDomain,
 		Profiles: networkpolicy.Profiles{VLESSRealityVision: networkpolicy.Profile{Port: 443}, VLESSXHTTP: networkpolicy.Profile{Address: "127.0.0.1", Port: 11080}, VLESSWebSocket: networkpolicy.Profile{Address: "127.0.0.1", Port: 11081}, Hysteria2: networkpolicy.Profile{Port: 443}, TUIC: networkpolicy.Profile{Port: 8443}, AnyTLS: networkpolicy.Profile{Port: 9443}},
 		Disk:     networkpolicy.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1},
 	}

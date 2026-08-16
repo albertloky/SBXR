@@ -286,7 +286,7 @@ func TestReviewedInboundFirewallBecomesOneUseForwardReplacementAuthority(t *test
 	request.ReviewedReclamationSHA256 = review.Reclamation.Digest
 	approved := networkpolicy.New(adapter).Evaluate(request)
 	httpIntent := completeIntent()
-	httpIntent.TemporaryHTTP = true
+	httpIntent.TemporaryHTTPLineage = networkpolicy.SBXRDomain
 	http01, ok := networkpolicy.PrepareHTTP01AfterFirewallReclamation(approved, completeIntent(), httpIntent)
 	candidateHTTP, sshHTTP, revisionHTTP, selectedHTTP, digestHTTP, validHTTP := http01.SystemChangesHTTP01()
 	if !ok || !validHTTP {
@@ -549,7 +549,7 @@ func TestCleanVPSAuthorityBootstrapsTheKernelLockOnlyWhenApplyStarts(t *testing.
 
 func TestCleanVPSAllowsOnlyAbsentDirectDNSForTheReviewedCloudflareInstall(t *testing.T) {
 	intent, observed := completeIntent(), completeObservations()
-	intent.TemporaryHTTP = true
+	intent.TemporaryHTTPLineage = networkpolicy.SBXRDomain
 	observed.Certificate.DNS = networkpolicy.DNSFacts{Hostname: intent.CertificateHostname}
 	result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PreApproval})
 	if result.Outcome != networkpolicy.NeedsAttention {
@@ -703,7 +703,7 @@ func TestListenerContributionUsesOnlyImmutableEvaluatedPolicy(t *testing.T) {
 
 func TestFailedEvaluationCannotBeUpgradedThroughPublicOutcome(t *testing.T) {
 	intent := completeIntent()
-	intent.TemporaryHTTP = true
+	intent.TemporaryHTTPLineage = networkpolicy.SBXRDomain
 	result := networkpolicy.New(staticAdapter{observed: completeObservations()}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval, Outside: networkpolicy.OutsideFacts{HTTP01: networkpolicy.ProofFailed}})
 	if result.Outcome != networkpolicy.Failed {
 		t.Fatalf("failed fixture = %+v", result)
@@ -789,6 +789,129 @@ func TestEvaluateSupportedCleanBaseline(t *testing.T) {
 	}
 }
 
+func TestEvaluateRevisionOneExposesOnlyInstalledCapability(t *testing.T) {
+	intent := revisionOneIntent(completeIntent())
+	intent.TemporaryHTTPLineage = networkpolicy.SBXRIP
+	observed := completeObservations()
+	observed.OwnerFacts = networkpolicy.OwnerFacts{}
+	observed.Outbound.CloudflareHTTPS = false
+	observed.Outbound.TunnelTCP7844 = false
+	observed.Outbound.TunnelUDP7844 = false
+
+	result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
+
+	want := []networkpolicy.Exposure{
+		{Purpose: "SSH preservation", Address: "public", Port: 2222, Protocol: networkpolicy.TCP},
+		{Purpose: "VLESS REALITY Vision", Address: "public", Port: 443, Protocol: networkpolicy.TCP},
+		{Purpose: "Subscription HTTPS", Address: "public", Port: 10443, Protocol: networkpolicy.TCP},
+	}
+	want = append(want[:1], append([]networkpolicy.Exposure{{Purpose: "ACME HTTP-01", Address: "public", Port: 80, Protocol: networkpolicy.TCP}}, want[1:]...)...)
+	if result.Outcome != networkpolicy.Healthy || !reflect.DeepEqual(result.Policy.Exposures, want) || result.Policy.TemporaryHTTP == nil || result.Policy.TemporaryHTTP.Lineage != networkpolicy.SBXRIP || result.CloudflareTunnelPath != (networkpolicy.CloudflareTunnelPath{}) {
+		t.Fatalf("revision 1 = outcome %q exposures %+v findings %+v", result.Outcome, result.Policy.Exposures, result.Findings)
+	}
+}
+
+func TestEvaluateRevisionOneExpectedAbsenceIsHealthy(t *testing.T) {
+	intent, observed := managedBaseline()
+	intent = revisionOneIntent(intent)
+	observed.Listeners = []networkpolicy.Listener{observed.Listeners[0], observed.Listeners[4]}
+	observed.LocalProofs = observed.LocalProofs[:1]
+	observed.OwnerFacts = networkpolicy.OwnerFacts{DNS: "absent", Tunnel: "absent"}
+	observed.Certificate = networkpolicy.CertificateFacts{}
+	observed.Outbound.CloudflareHTTPS = false
+	observed.Outbound.TunnelTCP7844 = false
+	observed.Outbound.TunnelUDP7844 = false
+
+	result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
+	if result.Outcome != networkpolicy.Healthy || len(result.Findings) != 0 {
+		t.Fatalf("expected absence = outcome %q findings %+v", result.Outcome, result.Findings)
+	}
+
+	observed.Listeners = append(observed.Listeners, networkpolicy.Listener{Address: "0.0.0.0", Port: 8443, Protocol: networkpolicy.UDP, Process: "sing-box", Service: "sing-box.service", Ownership: networkpolicy.SBXROwned})
+	failed := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
+	assertFinding(t, failed, networkpolicy.Failed, networkpolicy.Required, "NETWORK-DEFERRED-EXPOSURE-ACTIVE")
+}
+
+func TestEvaluatePlansOneBoundCloudflareProfileSetupWithoutMutation(t *testing.T) {
+	current, observed := managedBaseline()
+	current = revisionOneIntent(current)
+	observed.Listeners = []networkpolicy.Listener{observed.Listeners[0], observed.Listeners[4]}
+	observed.LocalProofs = observed.LocalProofs[:1]
+	observed.OwnerFacts = networkpolicy.OwnerFacts{DNS: "absent", Tunnel: "absent"}
+	observed.Certificate = networkpolicy.CertificateFacts{}
+
+	candidate := current
+	candidate.Revision = 2
+	candidate.CertificateHostname = "direct.example.com"
+	candidate.Profiles.VLESSXHTTP = networkpolicy.Profile{Enabled: true, Address: "127.0.0.1", Port: 11080}
+	candidate.Profiles.VLESSWebSocket = networkpolicy.Profile{Enabled: true, Address: "127.0.0.1", Port: 11081}
+	candidate.Profiles.Hysteria2 = networkpolicy.Profile{Enabled: true, Port: 443}
+	candidate.Profiles.TUIC = networkpolicy.Profile{Enabled: true, Port: 8443}
+	candidate.Profiles.AnyTLS = networkpolicy.Profile{Enabled: true, Port: 9443}
+	binding := networkpolicy.ChangeSetBinding{StartingRevision: 1, CandidateRevision: 2, ChangeSetID: "change-set-2", DesiredStateSHA256: strings.Repeat("a", 64)}
+
+	request := networkpolicy.Request{
+		Intent:                 current,
+		Stage:                  networkpolicy.PostApproval,
+		CloudflareProfileSetup: &networkpolicy.CloudflareProfileSetupRequest{Candidate: candidate, Binding: binding},
+	}
+	result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(request)
+
+	if result.Outcome != networkpolicy.Healthy || result.CloudflareProfileSetup == nil {
+		t.Fatalf("setup plan = outcome %q setup %+v findings %+v", result.Outcome, result.CloudflareProfileSetup, result.Findings)
+	}
+	plan := result.CloudflareProfileSetup
+	if plan.Binding != binding || len(plan.ReviewedPorts) != 7 || len(plan.LoopbackOrigins) != 2 || len(plan.PublicRoutes) != 2 || len(plan.DirectListeners) != 3 || len(plan.DirectAdmissions) != 3 || len(plan.RouteAdmissions) != 2 {
+		t.Fatalf("typed setup plan = %+v", plan)
+	}
+	http01, available := plan.HTTP01Contribution()
+	httpCandidate, _, revision, _, _, valid := http01.SystemChangesHTTP01()
+	if plan.TemporaryHTTP.Lineage != networkpolicy.SBXRDomain || plan.TemporaryHTTP.Exposure.Port != 80 || len(plan.Collisions) != 0 || plan.CandidatePolicy.Nftables == "" || plan.SSHPreservation.Code != "NETWORK-SSH-PRESERVED" || !available || !valid || revision != 2 || !strings.Contains(httpCandidate, `comment "sbxr:acme-http-01"`) || strings.Contains(httpCandidate, "udp dport") || strings.Contains(httpCandidate, "9443") {
+		t.Fatalf("setup authority = %+v", plan)
+	}
+
+	changed := request
+	changed.CloudflareProfileSetup = &networkpolicy.CloudflareProfileSetupRequest{Candidate: candidate, Binding: binding}
+	changed.CloudflareProfileSetup.Binding.ChangeSetID = "change-set-elsewhere"
+	if !result.Binding.Stale(changed, observed) {
+		t.Fatal("changed Change Set did not stale the reviewed setup")
+	}
+	changed.CloudflareProfileSetup.Binding.DesiredStateSHA256 = strings.Repeat("b", 64)
+	if !result.Binding.Stale(changed, observed) {
+		t.Fatal("changed Desired State checksum did not stale the reviewed setup")
+	}
+	changed.CloudflareProfileSetup.Binding.CandidateRevision = 3
+	invalid := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(changed)
+	assertFinding(t, invalid, networkpolicy.Failed, networkpolicy.Required, "NETWORK-SETUP-INTENT-INVALID")
+
+	observed.Listeners = append(observed.Listeners, networkpolicy.Listener{Address: "0.0.0.0", Port: 8443, Protocol: networkpolicy.UDP, Process: "other", Service: "other.service"})
+	collision := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(request)
+	if collision.CloudflareProfileSetup == nil || len(collision.CloudflareProfileSetup.Collisions) != 1 || collision.CloudflareProfileSetup.Collisions[0].Exposure.Purpose != "TUIC" {
+		t.Fatalf("typed setup collision = %+v", collision.CloudflareProfileSetup)
+	}
+	if _, available := collision.CloudflareProfileSetup.HTTP01Contribution(); available {
+		t.Fatal("refused setup retained executable HTTP-01 authority")
+	}
+	assertFinding(t, collision, networkpolicy.Failed, networkpolicy.Required, "NETWORK-SETUP-PORT-COLLISION")
+
+	observed.Listeners[len(observed.Listeners)-1] = networkpolicy.Listener{Address: "0.0.0.0", Port: 80, Protocol: networkpolicy.TCP, Process: "httpd", Service: "httpd.service"}
+	httpCollision := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(request)
+	if httpCollision.CloudflareProfileSetup == nil || len(httpCollision.CloudflareProfileSetup.Collisions) != 1 || httpCollision.CloudflareProfileSetup.Collisions[0].Exposure.Port != 80 {
+		t.Fatalf("typed HTTP-01 collision = %+v", httpCollision.CloudflareProfileSetup)
+	}
+	assertFinding(t, httpCollision, networkpolicy.Failed, networkpolicy.Required, "NETWORK-SETUP-PORT-COLLISION")
+
+	observed.Listeners = observed.Listeners[:len(observed.Listeners)-1]
+	observed.OwnerFacts.Conflicts = []networkpolicy.CloudflareConflict{{Kind: "Tunnel", ID: "existing-id", Name: "existing-name"}}
+	providerCollision := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(request)
+	if providerCollision.CloudflareProfileSetup == nil {
+		t.Fatal("provider collision omitted the typed Cloudflare Profile Setup result")
+	}
+	if len(providerCollision.Findings) < 2 || providerCollision.Findings[len(providerCollision.Findings)-1].Code != "NETWORK-SETUP-PROVIDER-COLLISION" {
+		t.Fatalf("provider collision findings = %+v", providerCollision.Findings)
+	}
+}
+
 func TestEvaluateIsolatedNftablesCandidateAndSSHSafety(t *testing.T) {
 	result := networkpolicy.New(staticAdapter{observed: completeObservations()}).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PostApproval})
 	want := `table inet sbxr {
@@ -839,7 +962,7 @@ func TestEvaluateIsolatedNftablesCandidateAndSSHSafety(t *testing.T) {
 func TestEvaluateNftablesIntervalsAndCompetingPolicy(t *testing.T) {
 	t.Run("TCP 80 exists only during certificate work", func(t *testing.T) {
 		intent := completeIntent()
-		intent.TemporaryHTTP = true
+		intent.TemporaryHTTPLineage = networkpolicy.SBXRDomain
 		result := networkpolicy.New(staticAdapter{observed: completeObservations()}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
 		if !strings.Contains(result.Policy.Nftables, `tcp dport 80 accept comment "sbxr:acme-http-01"`) {
 			t.Fatalf("temporary candidate = %q", result.Policy.Nftables)
@@ -881,11 +1004,12 @@ func TestEvaluateNftablesIntervalsAndCompetingPolicy(t *testing.T) {
 
 func TestEvaluateExactTemporaryHTTP01Policy(t *testing.T) {
 	intent := completeIntent()
-	intent.TemporaryHTTP = true
+	intent.TemporaryHTTPLineage = networkpolicy.SBXRDomain
 	result := networkpolicy.New(staticAdapter{observed: completeObservations()}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
 	want := &networkpolicy.TemporaryHTTPPolicy{
 		Identity:            "sbxr:acme-http-01",
-		Purpose:             "ACME HTTP-01 validation for IP and domain certificates",
+		Purpose:             "ACME HTTP-01 validation for sbxr-domain",
+		Lineage:             networkpolicy.SBXRDomain,
 		Exposure:            networkpolicy.Exposure{Purpose: "ACME HTTP-01", Address: "public", Port: 80, Protocol: networkpolicy.TCP},
 		RecordNativeHandles: true,
 		RemoveAfter: [5]networkpolicy.CleanupOutcome{
@@ -907,7 +1031,7 @@ func TestEvaluateExactTemporaryHTTP01Policy(t *testing.T) {
 func TestEvaluateHTTP01ExposesOnlySelectedCertificateAddress(t *testing.T) {
 	intent := completeIntent()
 	intent.PublicIPv6 = "2001:db8::10"
-	intent.TemporaryHTTP = true
+	intent.TemporaryHTTPLineage = networkpolicy.SBXRDomain
 	observed := completeObservations()
 	observed.PublicIPv6 = []string{"2001:db8::10"}
 	observed.Routes.IPv6 = "default via 2001:db8::1"
@@ -1031,7 +1155,7 @@ func TestEvaluateBoundsOutboundAndRenewalFreshness(t *testing.T) {
 
 func TestEvaluateHTTP01OutsideFailureStaysExternal(t *testing.T) {
 	intent := completeIntent()
-	intent.TemporaryHTTP = true
+	intent.TemporaryHTTPLineage = networkpolicy.SBXRDomain
 	request := networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval, Outside: networkpolicy.OutsideFacts{HTTP01: networkpolicy.ProofFailed}}
 	result := networkpolicy.New(staticAdapter{observed: completeObservations()}).Evaluate(request)
 	assertFinding(t, result, networkpolicy.Failed, networkpolicy.Required, "NETWORK-OUTSIDE-HTTP01")
@@ -1548,7 +1672,7 @@ func TestEvaluateCorrectiveNetworkPolicy(t *testing.T) {
 
 	t.Run("temporary TCP 80 is exact and never moved", func(t *testing.T) {
 		intent, observed := completeIntent(), completeObservations()
-		intent.TemporaryHTTP = true
+		intent.TemporaryHTTPLineage = networkpolicy.SBXRDomain
 		observed.Listeners = []networkpolicy.Listener{{Address: "0.0.0.0", Port: 80, Protocol: networkpolicy.TCP, Process: "nginx", Service: "nginx.service"}}
 		result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
 		assertFinding(t, result, networkpolicy.Failed, networkpolicy.Required, "NETWORK-FIXED-PORT-CONFLICT")
@@ -1565,7 +1689,7 @@ func TestEvaluateCorrectiveNetworkPolicy(t *testing.T) {
 
 	t.Run("temporary TCP 80 appears only when requested", func(t *testing.T) {
 		intent := completeIntent()
-		intent.TemporaryHTTP = true
+		intent.TemporaryHTTPLineage = networkpolicy.SBXRDomain
 		result := networkpolicy.New(staticAdapter{observed: completeObservations()}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
 		for _, exposure := range result.Policy.Exposures {
 			if exposure.Purpose == "ACME HTTP-01" && exposure.Address == "public" && exposure.Port == 80 && exposure.Protocol == networkpolicy.TCP {
@@ -1717,6 +1841,17 @@ func completeIntent() networkpolicy.Intent {
 			OverheadBytes:    100,
 		},
 	}
+}
+
+func revisionOneIntent(intent networkpolicy.Intent) networkpolicy.Intent {
+	intent.Revision = 1
+	intent.CertificateHostname = ""
+	intent.Profiles.VLESSXHTTP = networkpolicy.Profile{}
+	intent.Profiles.VLESSWebSocket = networkpolicy.Profile{}
+	intent.Profiles.Hysteria2 = networkpolicy.Profile{}
+	intent.Profiles.TUIC = networkpolicy.Profile{}
+	intent.Profiles.AnyTLS = networkpolicy.Profile{}
+	return intent
 }
 
 func completeObservations() networkpolicy.Observations {
