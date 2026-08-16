@@ -1,12 +1,14 @@
-# SBXR TUI interaction prototype
+# SBXR staged Owner Console journey prototype
 
-Throwaway prototype for [Prototype the TUI interaction model](https://github.com/albertloky/SBXR/issues/7).
+Throwaway prototype for [Prototype the staged Owner Console journeys](https://github.com/albertloky/SBXR/issues/206).
 
-Question: which information structure makes SBXR's safety rules easiest for one Owner to understand and operate?
+Question: which information structure makes the Cloudflare-free Installation result and the later atomic five-profile Cloudflare Profile Setup easiest for one Owner to understand at exact `80×24` and `120×36` terminal sizes?
 
-Albert selected Style A. The prototype renders its persistent-navigation design at the exact `80×24` minimum and a `120×36` large-terminal example using only terminal-achievable primitives. Client Access Values live in the `Access` menu instead of relying on `PgDn`. Large terminals add a second details column. Progress uses a measured bar for known totals, an animated spinner for unknown durations, or a step list with an animated current step and a bar when that step is measurable.
+Use the floating `A`, `B`, and `C` switcher or the left and right arrow keys to compare three structures. Use the browser-only selectors to change the terminal size and journey screen. The selectors and floating switcher are not part of the Owner Console.
 
-The browser dropdowns are explicitly outside the TUI. They switch terminal size and product scenario for review; the real TUI would read the current terminal dimensions automatically.
+- `A — Guided stages`: one current step and one main decision.
+- `B — Checklist workspace`: the complete setup checklist stays visible.
+- `C — Outcome first`: the target result and irreversible safety boundary stay visible.
 
 Run:
 
@@ -14,6 +16,6 @@ Run:
 python3 -m http.server 4173 --directory prototypes/tui-interaction-model
 ```
 
-Then open <http://127.0.0.1:4173/>.
+Then open <http://127.0.0.1:4173/?variant=A&screen=install-success&size=minimum>.
 
-This is read-only throwaway HTML. It contains no real credentials and performs no VPS action.
+This is read-only throwaway HTML. It uses fake domains and a fake token. It performs no VPS or Cloudflare action. Visible Cloudflare dashboard labels are planning inputs and still require release-time requalification.

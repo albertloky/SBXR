@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SBXR terminal-faithful TUI prototype</title>
+  <title>SBXR staged Owner Console prototype</title>
   <style>
     :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     * { box-sizing: border-box; }
@@ -12,495 +12,307 @@
     header strong { color: #ffd271; }
     header span { font-size: 13px; }
     .controls { display: flex; align-items: center; gap: 10px; }
-    select, input { font: 14px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; padding: 7px 9px; border: 1px solid #8c97a6; border-radius: 5px; background: white; color: #18202b; }
-    select { min-width: 360px; }
-    main { padding: 28px 18px 80px; display: grid; justify-items: center; gap: 14px; }
+    select, input, button { font: 14px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    select, input { padding: 7px 9px; border: 1px solid #8c97a6; border-radius: 5px; background: white; color: #18202b; }
+    #screen { min-width: 390px; }
+    main { padding: 28px 18px 100px; display: grid; justify-items: center; gap: 14px; }
     .measure { width: min(100%, var(--terminal-width, 80ch)); display: flex; justify-content: space-between; color: #5d6878; font: 12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
     .terminal-shell { background: #cdd3dc; padding: 7px; border: 1px solid #aeb7c3; }
-    #terminal {
-      margin: 0; width: var(--terminal-width, 80ch); height: var(--terminal-height, 24em); overflow: hidden; white-space: pre;
-      background: #fbfbfa; color: #202733; font: 16px/1em ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-variant-ligatures: none; tab-size: 1; padding: 0;
-    }
+    #terminal { margin: 0; width: var(--terminal-width, 80ch); height: var(--terminal-height, 24em); overflow: hidden; white-space: pre; background: #fbfbfa; color: #202733; font: 16px/1em ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-variant-ligatures: none; tab-size: 1; padding: 0; }
     #terminal .blue { color: #005cc5; font-weight: 700; }
     #terminal .green { color: #087f5b; font-weight: 700; }
     #terminal .amber { color: #9a5d00; font-weight: 700; }
     #terminal .red { color: #b42318; font-weight: 700; }
-    #terminal .dim { color: #6a7483; }
     #terminal .reverse { background: #1e63b6; color: white; }
     .below { width: min(100%, var(--terminal-width, 80ch)); display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: end; }
     .below label { font-size: 12px; color: #4c5869; }
     .below input { display: block; width: 100%; margin-top: 5px; }
-    .note { font-size: 12px; line-height: 1.45; color: #5c6674; max-width: 80ch; }
+    .note { font-size: 12px; line-height: 1.45; color: #5c6674; max-width: 88ch; }
     .toast { min-height: 18px; font: 12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; color: #005cc5; text-align: right; }
+    .switcher { position: fixed; z-index: 10; left: 50%; bottom: 18px; transform: translateX(-50%); display: grid; grid-template-columns: 42px minmax(250px, auto) 42px; align-items: center; background: #111827; color: white; border: 1px solid #536175; border-radius: 999px; box-shadow: 0 8px 28px #0004; overflow: hidden; }
+    .switcher button { border: 0; background: transparent; color: white; padding: 10px; cursor: pointer; }
+    .switcher button:hover { background: #ffffff18; }
+    #variant-label { padding: 0 14px; text-align: center; font: 13px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
     @media (max-width: 900px) {
       header { align-items: stretch; flex-direction: column; }
       .controls { align-items: stretch; flex-direction: column; }
-      select { min-width: 0; width: 100%; }
+      select { min-width: 0 !important; width: 100%; }
       main { justify-items: start; overflow-x: auto; }
-      .terminal-shell, .measure, .below { margin-left: 0; }
     }
   </style>
 </head>
 <body>
   <header>
-    <span><strong>PROTOTYPE VIEWER — NOT PART OF THE TUI</strong> · the grid below is exactly what a terminal can draw</span>
+    <span><strong>PROTOTYPE VIEWER — NOT PART OF THE TUI</strong> · exact terminal grid below</span>
     <div class="controls">
       <label>Terminal size
-        <select id="size">
-          <option value="minimum">80×24 · minimum</option>
-          <option value="wide">120×36 · large/full-screen example</option>
-        </select>
+        <select id="size"><option value="minimum">80×24 · minimum</option><option value="wide">120×36 · large</option></select>
       </label>
-      <label>Screen
-        <select id="screen"></select>
-      </label>
+      <label>Journey screen <select id="screen"></select></label>
     </div>
   </header>
   <main>
-    <div class="measure"><span>Style A · persistent navigation</span><strong id="dimensions">80 columns × 24 rows</strong></div>
+    <div class="measure"><span id="structure">A · guided stages</span><strong id="dimensions">80 columns × 24 rows</strong></div>
     <div class="terminal-shell"><pre id="terminal" tabindex="0" aria-label="SBXR terminal prototype"></pre></div>
     <div class="below">
-      <label>Prototype keystroke feeder — use only on screens with an active text field
-        <input id="typed" autocomplete="off" placeholder="Paste text containing Q here">
+      <label>Fake token entry — try typing or pasting `Q`
+        <input id="typed" autocomplete="off" placeholder="Fake token; never use a real credential">
       </label>
       <div class="toast" id="toast">No action has run.</div>
     </div>
-    <p class="note">Inside the terminal grid: character cells, box-drawing symbols, ANSI-style foreground/background colors, underline, and reverse video only. There are no rounded cards, shadows, gradients, proportional fonts, browser dropdowns, or native web controls.</p>
+    <p class="note">The browser selectors, text box, and variant switcher are review tools. Inside the terminal grid, the design uses terminal-achievable characters and colors only. All provider names and fake values are non-secret planning examples.</p>
   </main>
+  <div class="switcher" aria-label="Prototype variant switcher">
+    <button id="previous" aria-label="Previous variant">←</button><span id="variant-label"></span><button id="next" aria-label="Next variant">→</button>
+  </div>
   <script>
     const LEFT = 21;
-    const sizes = {
-      minimum: { width: 80, height: 24 },
-      wide: { width: 120, height: 36 }
-    };
-
+    const variants = { A: { name: 'Guided stages', structure: 'guided stages' }, B: { name: 'Checklist workspace', structure: 'checklist workspace' }, C: { name: 'Outcome first', structure: 'outcome first' } };
+    const variantKeys = Object.keys(variants);
+    const sizes = { minimum: { width: 80, height: 24 }, wide: { width: 120, height: 36 } };
     const screens = [
-      ['dashboard', 'Managed · dashboard'],
-      ['access', 'Managed · Client Access Values'],
-      ['limited', 'Managed · limited read-only'],
-      ['install', 'Not installed · installation review'],
-      ['cloudflare', 'Not installed · Cloudflare walkthrough'],
-      ['correction', 'Correction Flow · occupied port'],
-      ['download', 'Download in progress · known size'],
-      ['verify', 'Connection check · unknown duration'],
-      ['change', 'Change in progress'],
-      ['cancel', 'Change in progress · cancellation requested'],
-      ['recovery-valid', 'Recovery Required · rollback available'],
-      ['recovery-impossible', 'Recovery Required · rebuild required'],
-      ['update', 'Managed · update review'],
-      ['remove-confirm', 'Complete removal · confirmation'],
-      ['remove-forward', 'Complete removal · irreversible progress'],
-      ['small', 'Terminal resized to 72×20'],
+      ['install-success', '1 · First Installation success'], ['overview', '2 · Managed dashboard action'],
+      ['token-guide', '3 · Token creation guide'], ['token-compare', '4 · Token security comparison'],
+      ['token-entry', '5 · Masked token entry'], ['zone', '6 · Zone selection'],
+      ['fields', '7 · Remaining field sequence'], ['plan', '8 · Plan review'],
+      ['prepare', '9 · Reversible Apply preparation'], ['irreversible', '10 · Final irreversible confirmation'],
+      ['forward', '11 · Forward-only Apply progress'], ['correction-token', '12 · Correction Flow · token'],
+      ['correction-provider', '13 · Correction Flow · provider'], ['correction-collision', '14 · Correction Flow · collision'],
+      ['rollback', '15 · Rollback result'], ['recovery', '16 · Recovery Required'],
+      ['back', '17 · Back behavior'], ['complete', '18 · Completed five-profile result']
     ];
-
-    const menu = [
-      'Overview', 'Access', 'Connection Profiles', 'Cloudflare Tunnel',
-      'Certificates', 'Subscription', 'Network', 'Updates', 'Diagnostics', 'Security',
-      'Complete removal', 'Exit SBXR'
-    ];
-
+    const menu = ['Overview', 'Access', 'Connection Profiles', 'Cloudflare', 'Certificates', 'Subscription', 'Network', 'Updates', 'Diagnostics', 'Security', 'Complete removal', 'Exit SBXR'];
     const params = new URL(location.href).searchParams;
-    const state = { screen: params.get('screen') || 'dashboard', size: params.get('size') || 'minimum', typed: '', cursor: 0, frame: 0 };
-    if (!screens.some(([id]) => id === state.screen)) state.screen = 'dashboard';
+    const state = { variant: params.get('variant') || 'A', screen: params.get('screen') || 'install-success', size: params.get('size') || 'minimum', typed: '', revealed: false, frame: 0 };
+    if (!variants[state.variant]) state.variant = 'A';
+    if (!screens.some(([id]) => id === state.screen)) state.screen = 'install-success';
     if (!sizes[state.size]) state.size = 'minimum';
 
-    const select = document.querySelector('#screen');
-    screens.forEach(([value, label]) => select.add(new Option(label, value)));
-    select.value = state.screen;
-    select.addEventListener('change', () => { state.screen = select.value; state.cursor = 0; state.typed = ''; typed.value = ''; setUrl(); render(); });
-
+    const screenSelect = document.querySelector('#screen');
+    screens.forEach(([value, label]) => screenSelect.add(new Option(label, value)));
+    screenSelect.value = state.screen;
+    screenSelect.addEventListener('change', () => { state.screen = screenSelect.value; state.typed = ''; state.revealed = false; typed.value = ''; setUrl(); render(); });
     const sizeSelect = document.querySelector('#size');
     sizeSelect.value = state.size;
-    sizeSelect.addEventListener('change', () => { state.size = sizeSelect.value; setUrl(); render(); });
-
+    sizeSelect.addEventListener('change', () => { state.size = sizeSelect.value; state.revealed = false; setUrl(); render(); });
     const typed = document.querySelector('#typed');
-    typed.addEventListener('input', () => {
-      state.typed = typed.value;
-      document.querySelector('#toast').textContent = /q/i.test(state.typed)
-        ? 'Q stayed in the field. No exit or navigation action fired.'
-        : 'Input changed. No action fired.';
-      render();
-    });
+    typed.addEventListener('input', () => { state.typed = typed.value; document.querySelector('#toast').textContent = /q/i.test(state.typed) ? 'Q stayed in the field. No shortcut fired.' : 'Input changed. No action fired.'; render(); });
 
     function setUrl() {
       const url = new URL(location.href);
-      url.searchParams.set('screen', state.screen);
-      url.searchParams.set('size', state.size);
+      url.searchParams.set('variant', state.variant); url.searchParams.set('screen', state.screen); url.searchParams.set('size', state.size);
       history.replaceState({}, '', url);
     }
-
-    function fit(text, width) {
-      const raw = String(text ?? '');
-      return raw.length > width ? raw.slice(0, Math.max(0, width - 1)) + '…' : raw.padEnd(width, ' ');
+    function cycleVariant(delta) {
+      const index = variantKeys.indexOf(state.variant);
+      state.variant = variantKeys[(index + delta + variantKeys.length) % variantKeys.length];
+      state.revealed = false; setUrl(); render();
     }
-
-    function progressBar(percent, cells = 20) {
-      const filled = Math.round(percent / 100 * cells);
-      return `[${'█'.repeat(filled)}${'░'.repeat(cells - filled)}] ${String(percent).padStart(3)}%`;
-    }
-
-    function navSelection() {
-      if (state.screen === 'access') return 1;
-      if (state.screen === 'cloudflare') return 3;
-      if (state.screen === 'correction' || state.screen === 'small') return 6;
-      if (['update', 'download', 'verify', 'change', 'cancel'].includes(state.screen)) return 7;
-      if (state.screen.startsWith('recovery')) return 8;
-      if (state.screen.startsWith('remove')) return 10;
-      return 0;
-    }
-
-    function view() {
-      const fake = state.typed || '—';
-      const downloadProgress = 42 + state.frame % 56;
-      const stepProgress = 54 + state.frame % 20;
+    document.querySelector('#previous').addEventListener('click', () => cycleVariant(-1));
+    document.querySelector('#next').addEventListener('click', () => cycleVariant(1));
+    function fit(text, width) { const raw = String(text ?? ''); return raw.length > width ? raw.slice(0, Math.max(0, width - 1)) + '…' : raw.padEnd(width, ' '); }
+    function bar(done, total, cells = 16) { const filled = Math.round(done / total * cells); return `[${'█'.repeat(filled)}${'░'.repeat(cells - filled)}] ${done}/${total}`; }
+    function fakeToken() { if (!state.typed) return '—'; return state.revealed ? state.typed : '•'.repeat(Math.min(32, state.typed.length)); }
+    function navSelection() { return ['install-success', 'overview'].includes(state.screen) ? 0 : 3; }
+    function baseView() {
+      const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'][state.frame % 10];
       return {
-        dashboard: {
-          status: 'Managed', tone: 'green', revision: '42', auth: 'authenticated', title: 'OVERVIEW',
-          lines: [
-            'All six Connection Profiles are Healthy.', '',
-            'CONNECTION PROFILES',
-            '✓ REALITY Vision             443/TCP',
-            '✓ XHTTP Cloudflare           xhttp.example.test',
-            '✓ WebSocket Cloudflare       ws.example.test',
-            '✓ Hysteria2                  443/UDP',
-            '✓ TUIC                       8443/UDP',
-            '✓ AnyTLS                     9443/TCP', '',
-            'CLIENT ACCESS',
-            '› Open Access',
-            '  Run Live Profile Check', '',
-            'Access values have their own menu and privacy warning.'
-          ],
-          actions: [11, 12],
-          aside: ['SYSTEM DETAILS', '', 'VPS        203.0.113.10', 'Uptime     18 days', 'Last check 2 minutes ago', '', 'RECENT ACTIVITY', '', '✓ Health check passed', '✓ Certificate renewed', '· No active Change Set']
-        },
-        access: {
-          status: 'Managed', tone: 'green', revision: '42', auth: 'authenticated', title: 'CLIENT ACCESS VALUES',
-          lines: [
-            'Visible after privacy warning + sudo authentication.', '',
-            '1 REALITY    vless://FAKE-REALITY…        [QR]',
-            '2 XHTTP      vless://FAKE-XHTTP…          [QR]',
-            '3 WebSocket  vless://FAKE-WEBSOCKET…      [QR]',
-            '4 Hysteria2  hysteria2://FAKE-HY2…        [QR]',
-            '5 TUIC       tuic://FAKE-TUIC…             [QR]',
-            '6 AnyTLS     anytls://FAKE-ANYTLS…         [QR]', '',
-            'Subscription',
-            'https://203.0.113.10:10443/s/FAKE-TOKEN', '',
-            '› Select a value to copy',
-            '  Export client configuration', '',
-            'Clipboard history may retain copied values.',
-            'Esc Overview · ↑↓ Select · Enter Copy'
-          ],
-          actions: [12, 13],
-          aside: ['PRIVACY', '', 'Values may remain in:', '· terminal scrollback', '· clipboard history', '· screen recordings', '', 'Press H to hide values.']
-        },
-        limited: {
-          status: 'Managed', tone: 'amber', revision: '42', auth: 'limited', title: 'LIMITED DASHBOARD',
-          lines: [
-            'Sudo authentication was denied or cancelled.', '',
-            '✓ Installation lineage proven · revision 42',
-            '✓ 6 Modules Healthy · 0 Failed · 0 Unknown',
-            '✓ Last secret-safe inspection 2 minutes ago', '',
-            'Client Access Values                 HIDDEN',
-            'Privileged actions                  UNAVAILABLE', '',
-            'Nothing failed and no Change Set began.', '',
-            '› Authenticate again',
-            '  View secret-safe diagnostics',
-            '  Exit SBXR'
-          ],
-          actions: [11, 12, 13]
-        },
-        install: {
-          status: 'Not installed', tone: 'blue', revision: '—', auth: 'unprivileged', title: 'REVIEW INSTALLATION PLAN',
-          lines: [
-            'Download, verification and unprivileged preflight passed.', '',
-            'Release    v1.0.0 · commit 7ca1… · index 48ab…',
-            'Files      1 executable · 11 embedded Modules',
-            'Services   4 services · 3 timers',
-            'Ports      SSH, 443 TCP+UDP, 8443, 9443, 10443',
-            'Disk       3.8 GiB free after reservation',
-            'Rollback   Automatic until durable Complete', '',
-            'Apply will show the normal system sudo prompt,',
-            'recheck volatile facts, then start one Change Set.', '',
-            '› Apply installation',
-            '  Back and edit',
-            '  Save non-secret draft', '',
-            'Esc changes nothing · Enter opens sudo prompt'
-          ],
-          actions: [12, 13, 14]
-        },
-        cloudflare: {
-          status: 'Not installed', tone: 'blue', revision: '—', auth: 'unprivileged', title: 'CLOUDFLARE TOKEN · STEP 3 OF 5',
-          lines: [
-            'dash.cloudflare.com/profile/api-tokens',
-            'My Profile › API Tokens › Create Token',
-            '› Create Custom Token', '',
-            'Name       SBXR — selected account / selected zone',
-            'Account    Cloudflare Tunnel                 Edit',
-            'Zone       DNS                               Edit',
-            'Resources  Include › Specific account › selected',
-            '           Include › Specific zone › selected', '',
-            'Continue to summary › Create Token › copy once', '',
-            'Scoped token (masked, memory-only):',
-            '> ' + fake, '',
-            '› Verify token',
-            '  Back and continue later'
-          ],
-          actions: [15, 16], input: true
-        },
-        correction: {
-          status: 'Not installed', tone: 'red', revision: '—', auth: 'unprivileged', title: 'CORRECTION FLOW · NET-PORT-004',
-          lines: [
-            'PROBLEM   9443/TCP is already in use',
-            'FOUND     caddy.service · 0.0.0.0:9443/TCP',
-            'REQUIRED  available public TCP port for AnyTLS', '',
-            'WHY SBXR STOPPED',
-            'Overwriting an unrelated listener could break it.',
-            'There is no Continue anyway.', '',
-            'Optional preferred port (1024–65535):',
-            '> ' + fake, '',
-            '› Fix with SBXR — choose and prove a safe port',
-            '  Check again',
-            '  Back', '',
-            'No mutation has begun.'
-          ],
-          actions: [11, 12, 13], input: true
-        },
-        download: {
-          status: 'Change in progress', tone: 'blue', revision: '42', auth: 'authenticated', title: 'DOWNLOAD RELEASE v1.1.0',
-          lines: [
-            'The file size is known, so SBXR shows real progress.', '',
-            'Downloading  ' + progressBar(downloadProgress),
-            `${(62.9 * downloadProgress / 100).toFixed(1)} MiB of 62.9 MiB · 8.2 MiB/s`, '',
-            'The signature is verified after the download.', '',
-            '› Request cancellation',
-            '  Close TUI'
-          ],
-          actions: [7, 8],
-          aside: ['WHY A BAR?', '', 'Downloaded bytes and total', 'bytes are both known.', '', 'The percentage is measured,', 'not estimated.']
-        },
-        verify: {
-          status: 'Checking', tone: 'blue', revision: '42', auth: 'authenticated', title: 'CHECK CLOUDFLARE CONNECTION',
-          lines: [
-            'The provider decides how long this takes.', '',
-            'SPIN Verifying tunnel route…       00:18', '',
-            'No percentage is shown because SBXR cannot know it.', '',
-            '› Request cancellation',
-            '  Close TUI'
-          ],
-          actions: [6, 7],
-          aside: ['WHY A SPINNER?', '', 'SBXR knows the check is', 'alive, but not how much work', 'the provider has left.', '', 'Elapsed time stays visible.']
-        },
-        change: {
-          status: 'Change in progress', tone: 'blue', revision: '42', auth: 'authenticated', title: 'UPDATE TO v1.1.0 · 00:01:42',
-          lines: [
-            'The global mutation lock is held by Change Set 01J8…', '',
-            '✓ Prepared',
-            '✓ Release switched',
-            'SPIN Validate prepared sing-box configuration',
-            '     ' + progressBar(stepProgress),
-            '· Pre-publication health',
-            '· Publish Desired State revision 43',
-            '· Post-publication health',
-            '· Complete', '',
-            'Current Desired State remains revision 42.',
-            'Closing the TUI or losing SSH does not stop work.', '',
-            '› Request cancellation',
-            '  Close TUI',
-            '  View safe evidence'
-          ],
-          actions: [14, 15, 16],
-          aside: ['CHANGE SET 01J8…', '', '2 of 7 steps complete', `Step 3 is measurable: ${stepProgress}%`, '', 'Current revision  42', 'Target revision   43', '', 'Safe cancellation checkpoint', 'after validation.']
-        },
-        cancel: {
-          status: 'Change in progress', tone: 'amber', revision: '42', auth: 'authenticated', title: 'CANCELLATION REQUESTED · 00:01:51',
-          lines: [
-            'SBXR will not kill an unsafe step midway.', '',
-            '✓ Cancellation requested · durable',
-            'SPIN Finish configuration validation',
-            '· Record next safe checkpoint',
-            '· Automatic rollback to revision 42',
-            '· Prove rollback',
-            '· Return to Managed', '',
-            'Closing the TUI or losing SSH changes nothing.',
-            'Automatic rollback cannot be cancelled.', '',
-            '› Close TUI',
-            '  View safe evidence'
-          ],
-          actions: [12, 13]
-        },
-        'recovery-valid': {
-          status: 'Recovery Required', tone: 'red', revision: '42', auth: 'authenticated', title: 'AUTOMATIC ROLLBACK IS AVAILABLE',
-          lines: [
-            'SYS-LINEAGE-011 · normal mutations are blocked.', '',
-            'Last proven State     Managed · revision 42',
-            'Unfinished Change Set 01J8… update to v1.1.0',
-            'Journal               Valid',
-            'Rollback Snapshot     Valid and checksum-proven',
-            'Affected service      sing-box stopped', '',
-            'Retry only runs the rollback authorized by the',
-            'original approved Plan. It cannot change the target.', '',
-            '› Retry automatic rollback',
-            '  View safe evidence',
-            '  Check again',
-            '  Read-only dashboard',
-            '  Complete removal'
-          ],
-          actions: [11, 12, 13, 14, 15]
-        },
-        'recovery-impossible': {
-          status: 'Recovery Required', tone: 'red', revision: '?', auth: 'authenticated', title: 'THIS INSTALLATION CANNOT BE RECOVERED',
-          lines: [
-            'SYS-LINEAGE-019 · normal mutations are blocked.', '',
-            'Desired State         missing',
-            'Rollback Snapshot     checksum cannot be proven',
-            'Automatic rollback    UNAVAILABLE', '',
-            'SBXR cannot adopt files, force services, bypass the',
-            'journal, restore an old revision, or recreate secrets.', '',
-            'Complete removal, then rebuild from scratch.', '',
-            '› View safe evidence',
-            '  Read-only diagnostics',
-            '  Check again',
-            '  Complete removal', '',
-            'Retry automatic rollback is intentionally absent.'
-          ],
-          actions: [11, 12, 13, 14]
-        },
-        update: {
-          status: 'Managed', tone: 'blue', revision: '42', auth: 'authenticated', title: 'REVIEW UPDATE PLAN',
-          lines: [
-            'Discovery and verification changed nothing.', '',
-            'Installed    v1.0.0 · sequence 12 · revision 42',
-            'Candidate    v1.1.0 · sequence 13 · immutable',
-            'Migration    schema 4 → 5 · reviewed and complete',
-            'Interruption sing-box restarts briefly',
-            'Rollback     active Change Set only', '',
-            'Apply rebuilds a fresh one-use Plan. The previous',
-            'release is deleted after durable Complete.', '',
-            '› Apply update',
-            '  View every changed file and service',
-            '  Not now'
-          ],
-          actions: [11, 12, 13]
-        },
-        'remove-confirm': {
-          status: 'Managed', tone: 'red', revision: '42', auth: 'authenticated', title: 'COMPLETE REMOVAL · PERMANENT',
-          lines: [
-            'Removes State, secrets, certificates, releases,',
-            'services, identities, listeners, and SBXR firewall.', '',
-            'Client copies may remain. A virtual VPS cannot promise',
-            'physical secure erasure.', '',
-            'Before Irreversible removal started: rollback possible.',
-            'After it: no cancellation, restore, or Back.', '',
-            'Type exactly: COMPLETE REMOVAL',
-            '> ' + fake, '',
-            state.typed === 'COMPLETE REMOVAL'
-              ? '› Permanently remove SBXR'
-              : '· Permanently remove SBXR  [locked]',
-            '  Back', '',
-            'Ordinary Enter or partial pasted text cannot confirm.'
-          ],
-          actions: state.typed === 'COMPLETE REMOVAL' ? [12, 13] : [13], input: true
-        },
-        'remove-forward': {
-          status: 'Change in progress', tone: 'red', revision: '—', auth: 'authenticated', title: 'IRREVERSIBLE REMOVAL STARTED',
-          lines: [
-            'Cancellation and restore are no longer possible.',
-            'Restart continues deletion in this fixed order.', '',
-            '✓ Public exposure removed and verified',
-            '✓ Irreversible removal started · durable',
-            'SPIN Delete Desired State and secrets',
-            '· Delete certificates and releases',
-            '· Delete services and identities',
-            '· Delete SBXR nftables table',
-            '· Delete removal runner and journal last',
-            '· Prove Not installed', '',
-            'No Back action. No cancellation action.', '',
-            '› View forward-only progress'
-          ],
-          actions: [14]
-        },
-        small: {
-          status: 'Screen paused', tone: 'red', revision: '42', auth: 'authenticated', title: 'TERMINAL IS TOO SMALL',
-          lines: [
-            '', 'Required   80 columns × 24 rows',
-            'Current    72 columns × 20 rows', '',
-            'The current screen, input and selection are preserved.',
-            'Nothing was approved, discarded, or partly redrawn.', '',
-            'Enlarge the terminal to continue.', '',
-            '› Exit SBXR'
-          ],
-          actions: [9]
-        }
+        'install-success': { status: 'Managed', tone: 'green', revision: '1', title: 'INSTALLATION COMPLETE', step: 0, lines: [
+          'Desired State revision 1 is durable and proven.', '', 'Profiles       1 of 6 set up',
+          'Enabled        VLESS REALITY Vision', 'Not set up     XHTTP, WebSocket, Hysteria2, TUIC, AnyTLS',
+          'Cloudflare     Not required for first Installation', 'Subscription   1 profile; five exact omissions', '',
+          'This is a complete Managed result, not partial setup.', '', '> Continue to Overview', '  View installation result'
+        ], aside: ['FIRST INSTALLATION', '', 'Managed is proven.', 'Cloudflare-free is expected.', '', 'No setup warning.', 'No empty provider fields.', 'No fake profile entries.'] },
+        overview: { status: 'Managed', tone: 'green', revision: '1', title: 'OVERVIEW', step: 0, lines: [
+          'Installation   Managed', 'Profiles       1 of 6 set up', 'Enabled        1', 'Not set up     5', '',
+          'VLESS REALITY Vision                    ENABLED', 'Five Cloudflare profiles                NOT SET UP', '',
+          '> Set up Cloudflare profiles  Optional', '  Run Live Profile Check', '  Open Access', '',
+          'Not set up is accepted and is not unhealthy.'
+        ], aside: ['AVAILABLE NOW', '', 'REALITY Access', 'REALITY Live Profile Check', 'Update and downgrade', 'Diagnostics', '', 'SETUP ADDS', '', 'XHTTP + WebSocket', 'Hysteria2 + TUIC + AnyTLS'] },
+        'token-guide': { status: 'Managed', tone: 'blue', revision: '1', title: 'TOKEN GUIDE · 1 OF 2', step: 1, lines: [
+          'Open https://dash.cloudflare.com/profile/api-tokens', 'My Profile > API Tokens > Create Token', 'Choose Create Custom Token.', '',
+          'Add these permission rows:', 'User    API Tokens          Edit', 'Account Cloudflare Tunnel   Edit',
+          'Zone    DNS                 Edit', 'Zone    Zone                Read', '',
+          'Account resources  Include > All accounts', 'Zone resources     Include > All zones',
+          'Expiry             None', 'Client IP filter   None', '', '> Next: security comparison', '  Back to Overview'
+        ], aside: ['RELEASE CHECK', '', 'Visible Cloudflare labels', 'and paths must be checked', 'again for each release.', '', 'This guide is not provider', 'verification evidence.'] },
+        'token-compare': { status: 'Managed', tone: 'amber', revision: '1', title: 'TOKEN GUIDE · 2 OF 2', step: 1, lines: [
+          'DEDICATED BROAD USER API TOKEN             REQUIRED', 'Created only for SBXR; can be rotated and revoked.',
+          'API Tokens Edit can manage every token of this user.', '',
+          'GLOBAL API KEY                              REJECTED', 'Too broad, shared, and not an SBXR-owned token.', '',
+          'ACCOUNT API TOKEN                           REJECTED', 'Wrong token type for the required User token lifecycle.', '',
+          'SBXR later uses only the selected account, selected zone,', 'current token ID, candidate token ID, and owned IDs.', '',
+          '> I understand; enter the token', '  Back to token creation guide'
+        ], aside: ['TRADE-OFF', '', 'Broad provider authority', 'enables automatic rotation.', '', 'Immutable IDs and the', 'Module Interface restrict', 'what SBXR may do with it.'] },
+        'token-entry': { status: 'Managed', tone: 'blue', revision: '1', title: 'ENTER MANAGEMENT TOKEN', step: 2, lines: [
+          'Dedicated Broad Cloudflare User API Token', '> ' + fakeToken(), '',
+          state.revealed ? 'REVEALED while this field is focused.' : 'MASKED. Focused Ctrl+R reveals it deliberately.',
+          'Focus loss, submit, resize, Back, or exit remasks it.', 'Before approval it is memory-only.', '',
+          '[x] I created it only for SBXR', '[x] Four exact permissions and all-resource scopes',
+          '[x] No expiry and no client-IP restriction', '', '> Verify token', '  Help for this field', '  Back to security comparison'
+        ], aside: ['NEVER INCLUDED IN', '', 'Plan or journal', 'logs or errors', 'arguments or environment', 'diagnostics or evidence', 'support bundles', '', 'Stored root-only after approval'] },
+        zone: { status: 'Managed', tone: 'blue', revision: '1', title: 'SELECT ACTIVE ZONE', step: 3, lines: [
+          'Token active. Required read probes passed.', 'Successful reads do not prove write authority.', '',
+          '> example.test', '  account: Primary account · zone: Active', '  example.net', '  account: Primary account · zone: Active', '',
+          'The selected zone supplies the selected account.', 'SBXR binds immutable account and zone IDs root-only.',
+          'Those identifiers are not shown or copied.', '', '> Use example.test', '  Check zones again', '  Back and replace token'
+        ], aside: ['AUTOMATED EVIDENCE', '', 'GET /user/tokens/verify', 'Paginated GET /zones', 'Selected-zone DNS list', 'Selected-account Tunnel list', '', 'Writes are proven only by Apply.'] },
+        fields: { status: 'Managed', tone: 'blue', revision: '1', title: 'REVIEW SETUP FIELDS', step: 4, lines: [
+          '1 Token               verified and masked', '2 Zone                example.test', '3 Generated hostnames',
+          '  xhttp.example.test · ws.example.test', '  direct.example.test', '4 Reviewed ports',
+          '  443/UDP · 8443/UDP · 9443/TCP', '  origins 127.0.0.1:11080 and :11081', '',
+          'Only a collision or occupied port asks for an alternative.', 'SBXR never adopts or silently renames existing resources.', '',
+          '> Build setup Plan', '  Change selected zone', '  Back to token entry'
+        ], aside: ['NO EXTRA FIELD', '', 'Tunnel name is fixed.', 'Credentials are generated.', 'Paths are fixed.', 'Account comes from zone.', '', 'Owner input exists only', 'when a real choice is needed.'] },
+        plan: { status: 'Managed', tone: 'blue', revision: '1', title: 'REVIEW CLOUDFLARE PROFILE SETUP PLAN', step: 5, lines: [
+          'Revision 1 -> 2 · one Change Set · five profiles', 'Provider   1 Tunnel · 2 routes · DNS-only direct record',
+          'Local      Xray origins · sing-box · cloudflared', 'Network    temporary 80/TCP · 3 reviewed public ports',
+          'Certificate sbxr-domain · CT residue can remain', 'Publish    all 6 profiles atomically, last', '',
+          'Before Irreversible Cloudflare setup started:', 'Cancel or failure restores proven revision 1.',
+          'After it: no rollback; finish forward or Recovery Required.', '',
+          '> Apply this exact Plan', '  View every effect and gate', '  Back and edit'
+        ], aside: ['PLAN BINDS', '', 'Release Identity', 'revision + checksums', 'account + zone', 'hostnames + ports', 'typed Module effects', 'Required gates', 'interruption + recovery'] },
+        prepare: { status: 'Change in progress', tone: 'blue', revision: '1', title: 'PREPARE CLOUDFLARE PROFILE SETUP', step: 6, lines: [
+          'Revision 1 remains current. No Cloudflare write occurred.', '', '✓ Plan revalidated; global lock held',
+          '✓ Disk and recovery space reserved', '✓ Five credentials and candidate artifacts prepared',
+          '✓ Recovery runner installed', spinner + ' Write and verify journal + Rollback Snapshot',
+          '· Request final irreversible confirmation', '', 'Cancel waits for a safe checkpoint, then restores revision 1.',
+          'Closing the Console does not cancel approved work.', '', '> Request cancellation', '  Close Console', '  View safe evidence'
+        ], aside: ['ROLLBACK AVAILABLE', '', 'Target: Managed rev 1', 'Cloudflare writes: none', 'Token: protected candidate', '', 'Back is not cancellation.', 'Use Request cancellation.'] },
+        irreversible: { status: 'Change in progress', tone: 'red', revision: '1', title: 'FINAL CONFIRMATION · IRREVERSIBLE', step: 6, lines: [
+          'Preparation is complete and rollback is still available.', '', 'Confirming will:',
+          '1 Record Irreversible Cloudflare setup started.', '2 Delete and prove deletion of the Rollback Snapshot.',
+          '3 Start the first Cloudflare write.', '', 'After confirmation, Cancel and rollback are unavailable.',
+          'SBXR must finish all five profiles forward or enter', 'Recovery Required. Revision 1 is not a restore target.', '',
+          '> Start irreversible Cloudflare setup', '  Cancel and restore revision 1', '  View prepared evidence'
+        ], aside: ['LAST REVERSIBLE SCREEN', '', 'Back does not confirm.', 'Exit does not confirm.', 'Only the selected action', 'crosses the checkpoint.', '', 'No partial setup result.'] },
+        forward: { status: 'Change in progress', tone: 'red', revision: '1', title: 'IRREVERSIBLE SETUP IN PROGRESS', step: 7, lines: [
+          'Forward-only. No Back, Cancel, or rollback.', '', '✓ Irreversible checkpoint durable; snapshot deleted',
+          '✓ Tunnel created; immutable ID journaled', '✓ Loopback origins and cloudflared proven',
+          '✓ DNS-only direct records created', spinner + ' Issue and activate sbxr-domain  ' + bar(2, 4),
+          '· Start direct profiles, then admit public ports', '· Create public Tunnel routes',
+          '· Activate complete six-profile subscriptions', '· Publish revision 2 · prove agreement · Complete', '',
+          '> View safe evidence', '  Close Console'
+        ], aside: ['FORWARD ORDER', '', 'Exposure follows readiness.', 'Publication is last.', 'Complete is success.', '', 'Restart resumes from the', 'last durable checkpoint.'] },
+        'correction-token': { status: 'Managed', tone: 'red', revision: '1', title: 'CORRECTION FLOW · TOKEN PERMISSION', step: 2, lines: [
+          'PROBLEM   Required selected-zone access is forbidden', 'FOUND     DNS list probe returned forbidden',
+          'REQUIRED  DNS Edit across All zones', '', 'WHY SBXR STOPPED', 'This token cannot support the reviewed setup.', '',
+          'Cloudflare: edit or replace the dedicated SBXR token.', 'Do not enter a Global API Key or Account API Token.', '',
+          '> Enter replacement token', '  Check current token again', '  Copy redacted evidence', '  Back'
+        ], aside: ['CLASSIFICATION', '', 'Needs attention', '', 'No provider write.', 'No Plan.', 'No stored replacement.', 'No Continue anyway.'] },
+        'correction-provider': { status: 'Managed', tone: 'amber', revision: '1', title: 'CORRECTION FLOW · PROVIDER UNKNOWN', step: 3, lines: [
+          'PROBLEM   Cloudflare result is uncertain', 'FOUND     Request timed out after a bounded wait',
+          'REQUIRED  Fresh successful read evidence', '', 'WHY SBXR STOPPED', 'A timeout cannot be treated as success or rejection.', '',
+          '> Check again', '  Back and continue later', '  Copy redacted evidence', '',
+          'Status is Unknown. No setup Plan or mutation exists.'
+        ], aside: ['ALSO UNKNOWN', '', 'Rate limit', 'Cloudflare 5xx', 'Malformed response', 'Uncertain network failure', '', 'Nothing is inferred.'] },
+        'correction-collision': { status: 'Managed', tone: 'red', revision: '1', title: 'CORRECTION FLOW · RESOURCE COLLISION', step: 4, lines: [
+          'PROBLEM   ws.example.test already has a DNS record', 'FOUND     Existing record is not owned by SBXR',
+          'REQUIRED  An available exact WebSocket hostname', '', 'WHY SBXR STOPPED',
+          'SBXR never adopts, overwrites, deletes, or silently renames it.', '',
+          'Owner work: remove or rename the unrelated record in', 'Cloudflare, or return and select another active zone.', '',
+          '> Check again', '  Select another zone', '  Back', '  Copy redacted evidence'
+        ], aside: ['OWNERSHIP RULE', '', 'Names are not ownership.', 'Only immutable SBXR-owned', 'resource IDs authorize later', 'change or deletion.'] },
+        rollback: { status: 'Managed', tone: 'green', revision: '1', title: 'SETUP ROLLED BACK', step: 0, lines: [
+          'Cancellation or failure occurred before the irreversible boundary.', '', '✓ Desired State revision 1 restored and proven',
+          '✓ No unfinished Change Set', '✓ No SBXR-owned Cloudflare resource exists',
+          '✓ Token candidate and temporary material removed', '✓ Five deferred profiles remain Not set up', '',
+          'Profiles       1 of 6 set up', 'Installation   Managed', '', '> Return to Overview',
+          '  Start a fresh setup journey', '  View rollback evidence'
+        ], aside: ['RESULT', '', 'Rolled back', 'not Failed Managed', 'not partial setup', 'not Recovery Required', '', 'A fresh Plan is required.'] },
+        recovery: { status: 'Recovery Required', tone: 'red', revision: '1', title: 'CLOUDFLARE PROFILE SETUP · UNRESOLVED', step: 7, lines: [
+          'The irreversible boundary was crossed. Normal actions are blocked.', '', 'Last committed revision       1',
+          'Last durable setup checkpoint DNS records created', 'Candidate five-profile State  protected recovery material',
+          'Partial profile presentation  UNAVAILABLE', '', '> Retry Cloudflare Profile Setup recovery',
+          '  View safe evidence', '  Check again', '  Complete removal', '',
+          'No Access, repair, update, rotation, or Live Profile Check.', 'Revision 1 cannot be selected as a restore target.'
+        ], aside: ['ONLY OUTCOMES', '', 'Complete forward to rev 2', 'or remain Recovery Required', 'or Complete removal', '', 'Never publish a subset.'] },
+        back: { status: 'Managed', tone: 'blue', revision: '1', title: 'BACK AND EXIT BEHAVIOR', step: 4, lines: [
+          'Before Plan approval', 'Back returns one setup screen; no mutation exists.',
+          'Token remasks. Leaving setup discards the memory-only token.', '',
+          'After Apply starts, before irreversible checkpoint', 'Back does not stop work. Use Request cancellation.',
+          'Safe cancellation proves rollback to revision 1.', '', 'After irreversible checkpoint',
+          'Back and Cancel are absent. Close only hides presentation.', 'Restart continues forward recovery.', '',
+          'After a durable result', 'Back returns to Overview without changing the result.'
+        ], aside: ['KEY RULE', '', 'Navigation is not authority.', '', 'Approval starts work.', 'Cancellation is explicit.', 'A durable checkpoint fixes', 'the legal actions.'] },
+        complete: { status: 'Managed', tone: 'green', revision: '2', title: 'CLOUDFLARE PROFILE SETUP COMPLETE', step: 8, lines: [
+          'Desired State revision 2 is durable and proven.', '', 'Profiles       6 of 6 set up', 'Enabled        6', 'Not set up     0', '',
+          '✓ VLESS REALITY Vision     ✓ VLESS XHTTP', '✓ VLESS WebSocket          ✓ Hysteria2',
+          '✓ TUIC                     ✓ AnyTLS', '', 'The setup action is gone. Access now publishes all six.', '',
+          '> Open Access', '  Run Live Profile Check', '  View Cloudflare management'
+        ], aside: ['CLOUDFLARE ACTIONS', '', 'Check now', 'Rotate management token', 'Remove from SBXR when legal', 'Rotate Tunnel run token', '', 'Stored token stays masked.'] }
       }[state.screen];
     }
 
+    function decorate(view) {
+      const checklist = ['Token guide', 'Verify token', 'Select zone', 'Review fields', 'Review Plan', 'Prepare', 'Apply forward', 'Complete'];
+      if (state.variant === 'A') { view.title = (view.step ? `STEP ${Math.min(view.step, 8)} OF 8 · ` : '') + view.title; return view; }
+      if (state.variant === 'B') {
+        const compact = checklist.map((item, index) => `${index + 1} ${index + 1 < view.step ? '✓' : index + 1 === view.step ? '>' : '·'} ${item}`);
+        if (state.size === 'minimum') view.lines = ['CHECKLIST  ' + compact.map(item => item.split(' ').slice(0, 2).join('')).join('  ')].concat(view.lines);
+        else view.aside = ['SETUP CHECKLIST', ''].concat(compact, '', 'Current item stays open', 'in the work area.');
+        view.title = 'WORKSPACE · ' + view.title;
+        return fitNarrow(view);
+      }
+      const outcome = view.step >= 7 ? 'TARGET  6 enabled or Recovery Required' : 'TARGET  Managed revision 2 · 6 enabled';
+      const boundary = view.step >= 7 ? 'BOUNDARY  crossed · forward-only' : 'BOUNDARY  not crossed · revision 1 restorable';
+      view.lines = [outcome, boundary, ''].concat(view.lines);
+      view.aside = ['OUTCOME CONTRACT', '', 'No partial setup.', 'Publication last.', 'Complete is success.', '', 'Before boundary:', 'restore revision 1.', '', 'After boundary:', 'forward or Recovery Required.'];
+      view.title = 'OUTCOME FIRST · ' + view.title;
+      return fitNarrow(view);
+    }
+    function fitNarrow(view) {
+      if (state.size !== 'minimum') return view;
+      while (view.lines.length > 17) {
+        const blank = view.lines.indexOf('');
+        if (blank < 0) break;
+        view.lines.splice(blank, 1);
+      }
+      return view;
+    }
     function render() {
-      const d = view();
-      const { width, height } = sizes[state.size];
-      const right = width - LEFT - 1;
-      const bodyHeight = height - 5;
-      const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'][state.frame % 10];
-      const selectedMenu = navSelection();
-      const main = [d.title, ''].concat(d.lines).map(line => String(line).replaceAll('SPIN', spinner));
-      const aside = state.size === 'wide' ? (d.aside || ['DETAILS', '', 'The wider terminal keeps', 'supporting information visible', 'without changing screens.']) : [];
-      const nav = menu.map((item, index) => index === selectedMenu ? '› ' + item : '  ' + item);
-      while (nav.length < bodyHeight) nav.push('');
-
-      const headerStatus = `${d.status} · rev ${d.revision} · ${d.auth}`;
+      const d = decorate(baseView());
+      const { width, height } = sizes[state.size]; const right = width - LEFT - 1; const bodyHeight = height - 5; const selectedMenu = navSelection();
+      const main = [d.title, ''].concat(d.lines); const aside = state.size === 'wide' ? (d.aside || []) : [];
+      const nav = menu.map((item, index) => index === selectedMenu ? '› ' + item : '  ' + item); while (nav.length < bodyHeight) nav.push('');
       const rows = [];
-      rows.push(fit(` SBXR`, 18) + fit(headerStatus, width - 18));
+      rows.push(fit(' SBXR', 18) + fit(`${d.status} · rev ${d.revision} · authenticated`, width - 18));
       rows.push('─'.repeat(LEFT) + '┼' + '─'.repeat(right));
       for (let i = 0; i < bodyHeight; i++) {
         let content;
-        if (state.size === 'wide') {
-          const first = 48;
-          const second = right - first - 1;
-          content = fit(main[i], first) + '│' + fit(aside[i], second);
-        } else {
-          content = fit(main[i], right);
-        }
+        if (state.size === 'wide') { const first = 58; const second = right - first - 1; content = fit(main[i], first) + '│' + fit(aside[i], second); }
+        else content = fit(main[i], right);
         rows.push(fit(nav[i], LEFT) + '│' + content);
       }
       rows.push('─'.repeat(LEFT) + '┴' + '─'.repeat(right));
-      rows.push(fit(' ↑↓ Navigate  Tab Next  Enter Select  Esc Back  Ctrl+C Exit confirmation', width));
-      rows.push(fit(' Q is never Exit · pasted text is always input data · background refresh holds focus', width));
+      rows.push(fit(' ↑↓ Navigate  Tab Next  Enter Select  Esc Back when shown  Ctrl+C Exit', width));
+      rows.push(fit(' Q is never Exit · pasted text is input · Help and results stay until dismissed', width));
       if (rows.length !== height || rows.some(row => row.length !== width)) throw new Error('terminal grid invariant failed');
-
       const escaped = rows.join('\n').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
       document.querySelector('#terminal').innerHTML = colorize(escaped, d);
-      document.querySelector('#terminal').dataset.rows = rows.length;
-      document.querySelector('#terminal').dataset.columns = width;
-      document.querySelector('#terminal').style.setProperty('--terminal-width', `${width}ch`);
-      document.querySelector('#terminal').style.setProperty('--terminal-height', `${height}em`);
-      document.querySelector('main').style.setProperty('--terminal-width', `${width}ch`);
-      document.querySelector('main').style.setProperty('--terminal-height', `${height}em`);
+      document.querySelector('#terminal').dataset.rows = rows.length; document.querySelector('#terminal').dataset.columns = width;
+      document.querySelector('#terminal').style.setProperty('--terminal-width', `${width}ch`); document.querySelector('#terminal').style.setProperty('--terminal-height', `${height}em`);
+      document.querySelector('main').style.setProperty('--terminal-width', `${width}ch`); document.querySelector('main').style.setProperty('--terminal-height', `${height}em`);
       document.querySelector('#dimensions').textContent = `${width} columns × ${height} rows`;
+      document.querySelector('#structure').textContent = `${state.variant} · ${variants[state.variant].structure}`;
+      document.querySelector('#variant-label').textContent = `${state.variant} — ${variants[state.variant].name}`;
     }
-
     function colorize(text, d) {
       let output = text;
       output = output.replace(' SBXR', '<span class="blue"> SBXR</span>');
       output = output.replace(d.status, `<span class="${d.tone}">${d.status}</span>`);
       output = output.replace(d.title, `<span class="blue">${d.title}</span>`);
-      output = output.replaceAll('✓', '<span class="green">✓</span>');
-      output = output.replaceAll('UNAVAILABLE', '<span class="red">UNAVAILABLE</span>');
-      output = output.replace(/(^|[│\n])› /g, '$1<span class="reverse">› </span>');
-      return output;
+      output = output.replaceAll('✓', '<span class="green">✓</span>').replaceAll('UNAVAILABLE', '<span class="red">UNAVAILABLE</span>');
+      output = output.replace(/(^|[│\n])&gt; /g, '$1<span class="reverse">&gt; </span>'); return output;
     }
-
     document.addEventListener('keydown', event => {
+      if (event.target === typed && event.ctrlKey && event.key.toLowerCase() === 'r') { event.preventDefault(); state.revealed = !state.revealed; document.querySelector('#toast').textContent = state.revealed ? 'Fake token revealed while focused.' : 'Fake token masked.'; render(); return; }
       if (['INPUT', 'SELECT', 'TEXTAREA'].includes(event.target.tagName) || event.target.isContentEditable) return;
-      if (event.key === 'q' || event.key === 'Q') {
-        document.querySelector('#toast').textContent = 'Q has no navigation binding. Exit remains Ctrl+C → confirmation.';
-      } else if (event.key === 'Enter') {
-        document.querySelector('#toast').textContent = 'Prototype only: Enter would open the selected action or separate Plan.';
-      }
+      if (event.key === 'ArrowLeft') { event.preventDefault(); cycleVariant(-1); }
+      else if (event.key === 'ArrowRight') { event.preventDefault(); cycleVariant(1); }
+      else if (event.key === 'q' || event.key === 'Q') document.querySelector('#toast').textContent = 'Q has no navigation binding.';
     });
-
-    setUrl();
-    render();
-    setInterval(() => { state.frame += 1; render(); }, 250);
+    setUrl(); render(); setInterval(() => { state.frame += 1; render(); }, 250);
   </script>
 </body>
 </html>
