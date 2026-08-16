@@ -74,12 +74,13 @@
       ['install-success', '1 · First Installation success'], ['overview', '2 · Managed dashboard action'],
       ['token-guide', '3 · Token creation guide'], ['token-compare', '4 · Token security comparison'],
       ['token-entry', '5 · Masked token entry'], ['zone', '6 · Zone selection'],
-      ['fields', '7 · Remaining field sequence'], ['plan', '8 · Plan review'],
-      ['prepare', '9 · Reversible Apply preparation'], ['irreversible', '10 · Final irreversible confirmation'],
-      ['forward', '11 · Forward-only Apply progress'], ['correction-token', '12 · Correction Flow · token'],
-      ['correction-provider', '13 · Correction Flow · provider'], ['correction-collision', '14 · Correction Flow · collision'],
-      ['rollback', '15 · Rollback result'], ['recovery', '16 · Recovery Required'],
-      ['back', '17 · Back behavior'], ['complete', '18 · Completed five-profile result']
+      ['fields', '7 · Remaining field sequence'], ['plan', '8 · Plan summary'],
+      ['plan-sections', '9 · Plan section index'], ['prepare', '10 · Reversible Apply preparation'],
+      ['irreversible', '11 · Final irreversible confirmation'], ['forward', '12 · Forward-only Apply progress'],
+      ['correction-token', '13 · Correction Flow · token'], ['correction-provider', '14 · Correction Flow · provider'],
+      ['correction-collision', '15 · Correction Flow · collision'], ['rollback', '16 · Rollback result'],
+      ['recovery', '17 · Recovery Required'], ['back', '18 · Back behavior'],
+      ['complete', '19 · Completed five-profile result']
     ];
     const menu = ['Overview', 'Access', 'Connection Profiles', 'Cloudflare', 'Certificates', 'Subscription', 'Network', 'Updates', 'Diagnostics', 'Security', 'Complete removal', 'Exit SBXR'];
     const params = new URL(location.href).searchParams;
@@ -172,6 +173,20 @@
           'After it: no rollback; finish forward or Recovery Required.', '',
           '> Apply this exact Plan', '  View every effect and gate', '  Back and edit'
         ], aside: ['PLAN BINDS', '', 'Release Identity', 'revision + checksums', 'account + zone', 'hostnames + ports', 'typed Module effects', 'Required gates', 'interruption + recovery'] },
+        'plan-sections': { status: 'Managed', tone: 'blue', revision: '1', title: 'PLAN · EVERY EFFECT AND GATE', step: 5, lines: [
+          '> 1 Starting authority',
+          '  2 Cloudflare authority',
+          '  3 Names and ports',
+          '  4 Provider and local effects',
+          '  5 Certificate and network',
+          '  6 Profiles and publication',
+          '  7 Checks and unchanged resources',
+          '  8 Interruption and recovery', '',
+          'Enter opens one complete section. Esc returns to this index.',
+          'The summary retains Apply; this index does not approve it.', '',
+          '> Open Starting authority',
+          '  Return to Plan summary'
+        ], aside: ['SECTION CONTENT', '', 'Exact typed facts', 'Required + Advisory gates', 'Secret-safe effects', 'Unchanged categories', 'Cancellation + recovery', '', 'No PgDn dependency.'] },
         prepare: { status: 'Change in progress', tone: 'blue', revision: '1', title: 'PREPARE CLOUDFLARE PROFILE SETUP', step: 6, lines: [
           'Revision 1 remains current. No Cloudflare write occurred.', '', '✓ Plan revalidated; global lock held',
           '✓ Disk and recovery space reserved', '✓ Five credentials and candidate artifacts prepared',
@@ -188,10 +203,13 @@
         ], aside: ['LAST REVERSIBLE SCREEN', '', 'Back does not confirm.', 'Exit does not confirm.', 'Only the selected action', 'crosses the checkpoint.', '', 'No partial setup result.'] },
         forward: { status: 'Change in progress', tone: 'red', revision: '1', title: 'IRREVERSIBLE SETUP IN PROGRESS', step: 7, lines: [
           'Forward-only. No Back, Cancel, or rollback.', '', '✓ Irreversible checkpoint durable; snapshot deleted',
-          '✓ Tunnel created; immutable ID journaled', '✓ Loopback origins and cloudflared proven',
-          '✓ DNS-only direct records created', spinner + ' Issue and activate sbxr-domain  ' + bar(2, 4),
-          '· Start direct profiles, then admit public ports', '· Create public Tunnel routes',
-          '· Activate complete six-profile subscriptions', '· Publish revision 2 · prove agreement · Complete', '',
+          '1 ✓ Prepare', '2 ✓ Cross irreversible boundary',
+          '3 ✓ Create Tunnel and origins',
+          '4 ' + spinner + ' Create direct DNS and certificate  ' + bar(2, 4),
+          '5 · Start direct profiles and admit ports',
+          '6 · Create public routes',
+          '7 · Activate subscriptions and pass gates',
+          '8 · Publish, prove, and Complete', '',
           '> View safe evidence', '  Close Console'
         ], aside: ['FORWARD ORDER', '', 'Exposure follows readiness.', 'Publication is last.', 'Complete is success.', '', 'Restart resumes from the', 'last durable checkpoint.'] },
         'correction-token': { status: 'Managed', tone: 'red', revision: '1', title: 'CORRECTION FLOW · TOKEN PERMISSION', step: 2, lines: [
@@ -237,8 +255,13 @@
         ], aside: ['KEY RULE', '', 'Navigation is not authority.', '', 'Approval starts work.', 'Cancellation is explicit.', 'A durable checkpoint fixes', 'the legal actions.'] },
         complete: { status: 'Managed', tone: 'green', revision: '2', title: 'CLOUDFLARE PROFILE SETUP COMPLETE', step: 8, lines: [
           'Desired State revision 2 is durable and proven.', '', 'Profiles       6 of 6 set up', 'Enabled        6', 'Not set up     0', '',
-          '✓ VLESS REALITY Vision     ✓ VLESS XHTTP', '✓ VLESS WebSocket          ✓ Hysteria2',
-          '✓ TUIC                     ✓ AnyTLS', '', 'The setup action is gone. Access now publishes all six.', '',
+          '✓ VLESS REALITY Vision                       ENABLED',
+          '✓ VLESS XHTTP                                ENABLED',
+          '✓ VLESS WebSocket                            ENABLED',
+          '✓ Hysteria2                                  ENABLED',
+          '✓ TUIC                                       ENABLED',
+          '✓ AnyTLS                                     ENABLED', '',
+          'The setup action is gone. No Client Access Value is shown.',
           '> Open Access', '  Run Live Profile Check', '  View Cloudflare management'
         ], aside: ['CLOUDFLARE ACTIONS', '', 'Check now', 'Rotate management token', 'Remove from SBXR when legal', 'Rotate Tunnel run token', '', 'Stored token stays masked.'] }
       }[state.screen];

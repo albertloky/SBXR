@@ -10,6 +10,8 @@ Use the floating `A`, `B`, and `C` switcher or the left and right arrow keys to 
 - `B — Checklist workspace`: the complete setup checklist stays visible.
 - `C — Outcome first`: the target result and irreversible safety boundary stay visible.
 
+Albert selected `A — Guided stages`. The accepted journey keeps a separate first-Installation result; a two-screen token guide with explicit broad-authority acknowledgment; one-step zone selection; fixed reviewed hostnames and ports unless a Correction Flow is required; an eight-section Plan; eight Owner-visible Apply stages; dedicated Correction Flows; explicit `Check again`; in-memory masked token preservation only while the Owner remains inside setup; Overview after rollback; and Access after a six-row completed result. Variants `B` and `C` remain only as rejected comparison evidence.
+
 Run:
 
 ```sh
