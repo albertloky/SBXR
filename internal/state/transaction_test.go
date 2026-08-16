@@ -70,6 +70,7 @@ func TestPrepareCommitDerivesRevisionFromExactLoad(t *testing.T) {
 	candidate := completeDesiredState()
 
 	t.Run("fresh installation is revision 1", func(t *testing.T) {
+		candidate := realityOnlyDesiredState()
 		storage := &mutableStateStorage{err: fs.ErrNotExist}
 		stateModule := New(storage)
 		loaded, err := stateModule.Load(LoadRequest{Baseline: CleanVPS})
@@ -106,7 +107,9 @@ func TestPrepareCommitDerivesRevisionFromExactLoad(t *testing.T) {
 func TestPrepareCommitReportsSchemaOneToTwoReleaseCompatibility(t *testing.T) {
 	candidate := completeDesiredState()
 	candidate.Certificates.OwnerEmail = "owner@example.com"
-	storage := &mutableStateStorage{document: documentFor(t, candidate)}
+	candidate.ConnectionProfiles.VLESSXHTTP.Enabled = false
+	candidate.ConnectionProfiles.VLESSXHTTP.Lifecycle = ProfileDisabled
+	storage := &mutableStateStorage{document: schemaOneDocumentFor(t, candidate)}
 	stateModule := New(storage)
 	loaded, err := stateModule.Load(intentManagedRequest())
 	if err != nil {
@@ -124,6 +127,9 @@ func TestPrepareCommitReportsSchemaOneToTwoReleaseCompatibility(t *testing.T) {
 	if review == nil || review.StartingSchema != 1 || review.TargetSchema != 2 || len(review.Steps) != 1 || review.Steps[0].FromSchema != 1 || review.Steps[0].ToSchema != 2 || review.StartingRelease != testRelease || review.TargetRelease != request.CandidateReleaseIdentity || review.StartingReleaseCanReadCandidate {
 		t.Fatalf("PrepareCommit() migration review = %#v, want complete schema 1 to 2 path and incompatible starting release", review)
 	}
+	if prepared.candidate.ConnectionProfiles.VLESSRealityVision.Lifecycle != ProfileEnabled || prepared.candidate.ConnectionProfiles.VLESSXHTTP.Lifecycle != ProfileDisabled || prepared.candidate.ConnectionProfiles.AnyTLS.Lifecycle != ProfileEnabled {
+		t.Fatal("schema 1 to 2 migration did not preserve enabled and disabled profile lifecycles explicitly")
+	}
 	from, to, steps, networkFree := prepared.SoftwareLifecyclePreparedMigration()
 	if from != 0 || to != 0 || steps != 0 || networkFree {
 		t.Fatalf("generic SoftwareLifecyclePreparedMigration() = (%d, %d, %d, %t), want no update authority", from, to, steps, networkFree)
@@ -133,7 +139,7 @@ func TestPrepareCommitReportsSchemaOneToTwoReleaseCompatibility(t *testing.T) {
 func TestPrepareCommitRequiresRenewalEmailForSchemaOneToTwoMigration(t *testing.T) {
 	candidate := completeDesiredState()
 	candidate.Certificates.OwnerEmail = ""
-	stateModule := New(&mutableStateStorage{document: documentFor(t, candidate)})
+	stateModule := New(&mutableStateStorage{document: schemaOneDocumentFor(t, candidate)})
 	loaded, err := stateModule.Load(intentManagedRequest())
 	if err != nil {
 		t.Fatal(err)
@@ -441,7 +447,7 @@ func TestPreparedTransactionPublishesExactlyOnceAndReturnsAgreementInputs(t *tes
 }
 
 func TestFreshInstallationPublishesRevisionOneOnlyAtPublication(t *testing.T) {
-	candidate := completeDesiredState()
+	candidate := realityOnlyDesiredState()
 	storage := &mutableStateStorage{err: fs.ErrNotExist}
 	stateModule := New(storage)
 	loaded, err := stateModule.Load(LoadRequest{Baseline: CleanVPS})
@@ -471,8 +477,8 @@ func TestFreshInstallationPublishesRevisionOneOnlyAtPublication(t *testing.T) {
 	if err != nil || agreement.PublishedRevision() != 1 {
 		t.Fatalf("Publish() = (%+v, %v), want revision 1", agreement, err)
 	}
-	if published, readErr := storage.Read(); readErr != nil || !bytes.Contains(published, []byte("CLOUDFLARE-MANAGEMENT-SECRET-MARKER")) {
-		t.Fatal("revision 1 omitted the verified Cloudflare management token")
+	if published, readErr := storage.Read(); readErr != nil || bytes.Contains(published, []byte("CLOUDFLARE-MANAGEMENT-SECRET-MARKER")) || bytes.Contains(published, []byte("domain-certificate")) {
+		t.Fatal("revision 1 contains deferred Cloudflare or domain-certificate facts")
 	}
 }
 

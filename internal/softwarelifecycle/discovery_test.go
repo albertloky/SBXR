@@ -16,6 +16,7 @@ import (
 
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 	ubuntuadapter "github.com/albertloky/SBXR/internal/softwarelifecycle/adapter/ubuntu"
+	"github.com/albertloky/SBXR/internal/state"
 )
 
 type discoveryReleaseSource struct {
@@ -299,7 +300,7 @@ func updateEvidenceWithMigration(sequence uint64, tag, commit string) softwareli
 		metadata.Build.Tag, metadata.Build.Commit, metadata.Architecture = tag, commit, architecture
 		metadata.StateSchema = 2
 		metadata.Schemas["desired-state-v2.schema.json"] = []byte(`{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"SBXR Desired State v2","type":"object"}`)
-		metadata.Migrations = []softwarelifecycle.EmbeddedMigration{{Name: "state-v1-to-v2.json", From: 1, To: 2, Document: []byte(`{"schema":1,"from":1,"to":2,"operations":[{"op":"replace","path":"/schema_version","value":2}]}`)}}
+		metadata.Migrations = []softwarelifecycle.EmbeddedMigration{{Name: "state-v1-to-v2.json", From: 1, To: 2, Document: state.ReleaseMigrations()["state-v1-to-v2.json"]}}
 		stamped, err := softwarelifecycle.StampPayload([]byte("qualified executable"), metadata)
 		if err != nil {
 			panic(err)

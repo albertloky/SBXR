@@ -643,6 +643,7 @@ type Plan struct {
 	steps            []systemchanges.Step
 	checks           []systemchanges.Check
 	used             *atomic.Bool
+	stateUsed        *atomic.Bool
 }
 
 func (plan *Plan) Identity() string {
@@ -681,6 +682,15 @@ func (plan *Plan) MatchesDesiredState(renewalPolicy bool, ownerEmail, acmeAccoun
 		return false
 	}
 	return renewalPolicy && ownerEmail == plan.request.OwnerEmail && acmeAccountID == "letsencrypt" && ipCertificateID == ipCertName && ipServingPointer == "/var/lib/sbxr/certificates/ip/current" && domainCertificateID == domainCertName && domainServingPointer == "/var/lib/sbxr/certificates/domain/current" && domainHostname == plan.request.View.DirectHostname
+}
+
+// StateProfileSetupCertificate binds the domain-certificate contribution to
+// one exact staged setup lineage without exposing certificate material.
+func (plan *Plan) StateProfileSetupCertificate() (startingRevision, candidateRevision uint64, startingStateSHA256, desiredStateSHA256, changeSet string, valid bool) {
+	if plan == nil || plan.request.Lineage != DomainLineage || plan.request.StandingRenewal || plan.identity == "" || plan.sha256 == "" || plan.stateUsed == nil || !plan.stateUsed.CompareAndSwap(false, true) {
+		return 0, 0, "", "", "", false
+	}
+	return plan.request.StartingRevision, plan.request.StartingRevision + 1, plan.request.StartingStateSHA256, plan.request.DesiredStateSHA256, plan.request.ChangeSet, true
 }
 
 func (plan *Plan) SoftwareLifecycleInstallContribution() lifecyclecontract.InstallContribution {
@@ -835,7 +845,7 @@ func (module Interface) Plan(ctx context.Context, request PlanRequest) PlanResul
 	encoded, _ := json.Marshal(binding)
 	digest := sha256.Sum256(encoded)
 	sha := hex.EncodeToString(digest[:])
-	plan := &Plan{identity: identityPrefix + sha[:12], sha256: sha, request: request, orders: orders, steps: steps, checks: checks, used: &atomic.Bool{}}
+	plan := &Plan{identity: identityPrefix + sha[:12], sha256: sha, request: request, orders: orders, steps: steps, checks: checks, used: &atomic.Bool{}, stateUsed: &atomic.Bool{}}
 	return PlanResult{Plan: plan, Health: Health{Time: view.Health.Time, Module: "Certificate Lifecycle", Outcome: Healthy, Code: "CERTIFICATE-PLAN-READY", NextActions: []string{"Review Plan", "Back"}}}
 }
 

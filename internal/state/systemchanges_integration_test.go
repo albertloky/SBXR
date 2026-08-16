@@ -1065,6 +1065,7 @@ func replaceAllClientAccessValues(candidate *DesiredState) {
 	candidate.ConnectionProfiles.VLESSRealityVision.PublicKey = "CLIENT-ACCESS-REVOCATION-MARKER-reality-public"
 	candidate.ConnectionProfiles.VLESSRealityVision.ShortID = access("reality-short-id")
 	candidate.ConnectionProfiles.VLESSXHTTP.Enabled = false
+	candidate.ConnectionProfiles.VLESSXHTTP.Lifecycle = ProfileDisabled
 	candidate.ConnectionProfiles.VLESSXHTTP.UUID = access("xhttp-uuid")
 	candidate.ConnectionProfiles.VLESSXHTTP.Path = access("xhttp-path")
 	candidate.ConnectionProfiles.VLESSWebSocket.UUID = access("websocket-uuid")
@@ -1349,7 +1350,7 @@ func (executor *transactionSubscriptionExecutor) Check(_ string, _ string, _ sys
 
 func (*transactionSubscriptionExecutor) Cleanup(string) error { return nil }
 
-func TestDeferredCloudflareFinalizationPublishesProviderValuesInRevisionOne(t *testing.T) {
+func TestDeferredCloudflareFinalizationCannotPublishProviderValuesInRevisionOne(t *testing.T) {
 	candidate := completeDesiredState()
 	candidate.Cloudflare.AccountID = strings.Repeat("1", 32)
 	candidate.Cloudflare.ZoneID = strings.Repeat("2", 32)
@@ -1398,54 +1399,11 @@ func TestDeferredCloudflareFinalizationPublishesProviderValuesInRevisionOne(t *t
 	}
 	validator.planIdentity = string(request.ReviewedInputs.planIdentity)
 	validator.planSHA256 = request.ReviewedInputs.planSHA256
-	prepared, err := stateModule.PrepareDeferredCloudflareCommit(request, planResult.Plan)
-	if err != nil {
-		t.Fatal(err)
+	_, err = stateModule.PrepareDeferredCloudflareCommit(request, planResult.Plan)
+	if err == nil {
+		t.Fatal("Cloudflare provider values were prepared for revision 1")
 	}
-	executor, err := planResult.Plan.Executor(provider)
-	if err != nil {
-		t.Fatal(err)
-	}
-	observed := systemchanges.Observation{Status: systemchanges.NotInstalled, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, VolatileSHA256: testSHA('2'), FilesystemBytes: 20 << 30, AvailableBytes: 5 << 30, WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}
-	authority := reviewedReclamationAuthority(t)
-	changeSet, err := systemchanges.NewChangeSet(systemchanges.ChangeSetSpec{
-		Identity: "cloudflare-change-0001", Mutation: systemchanges.InstallationMutation, OutcomeOwner: systemchanges.CloudflareModule,
-		StartingState: systemchanges.StateLineage{Status: systemchanges.NotInstalled}, TargetStateSHA256: templateSHA,
-		Plan:          systemchanges.PlanBinding{Identity: planResult.Plan.Identity(), SHA256: planResult.Plan.SHA256(), VolatileSHA256: testSHA('2')},
-		PreparedState: prepared, Steps: planResult.Plan.Steps(), Checks: planResult.Plan.Checks(), Reclamation: authority,
-		Timeouts: systemchanges.Timeouts{Step: 5 * time.Minute, Check: 5 * time.Minute},
-		Disk:     systemchanges.DiskRequirement{PreparationBytes: 100, TemporaryBytes: 100, SnapshotBytes: 100, JournalBytes: 100, RollbackBytes: 100, OverheadBytes: 100},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter := &systemChangesAdapter{observation: observed, cloudflare: &executor, stateRecovery: stateModule, reclamationPresent: true, crashAfter: systemchanges.IrreversibleReclamationStarted}
-	func() {
-		defer func() { _ = recover() }()
-		systemchanges.New(adapter).Apply(changeSet)
-	}()
-	adapter.crashAfter, adapter.crashed = "", false
-	result := systemchanges.New(adapter).Recover()
-	if result.Outcome != systemchanges.Completed {
-		t.Fatalf("Apply = %+v, events=%v", result, adapter.events)
-	}
-	document := string(storage.document)
-	for _, value := range []string{"f70ff985-a4ef-4643-bbbc-4a0ed4fc8415", "CLOUDFLARE-DEFERRED-RUN-TOKEN-MARKER", strings.Repeat("3", 32), strings.Repeat("4", 32), strings.Repeat("5", 32)} {
-		if !strings.Contains(document, value) {
-			t.Fatalf("published revision 1 omitted finalized value %q", value)
-		}
-	}
-	finalized := slices.ContainsFunc(adapter.events, func(event string) bool { return strings.HasPrefix(event, string(systemchanges.StateFinalized)) })
-	if strings.Count(document, "CLOUDFLARE-DEFERRED-RUN-TOKEN-MARKER") != 1 || !finalized {
-		t.Fatalf("deferred finalization was not one-use and durable: events=%v", adapter.events)
-	}
-	events := strings.Join(adapter.events, ",")
-	if strings.Index(events, string(systemchanges.StateFinalized)) > strings.Index(events, string(systemchanges.IrreversibleReclamationStarted)) {
-		t.Fatalf("recovery material was not durable before reclamation: %v", adapter.events)
-	}
-	if strings.Contains(strings.Join(adapter.events, "\n")+fmt.Sprintf("%+v", result), "CLOUDFLARE-DEFERRED-RUN-TOKEN-MARKER") {
-		t.Fatal("run token escaped protected State artifacts")
-	}
+	assertFinding(t, err, "STATE-PROFILE-LIFECYCLE")
 }
 
 func TestOwnerAssistedRunTokenRotationPausesThenRecoversForwardWithBothRoutes(t *testing.T) {
@@ -1848,6 +1806,9 @@ func preparedSystemChangeWithOptions(t *testing.T, mutation systemchanges.Mutati
 		options.sshPreservation = testSSHPreservationAuthority(t)
 	}
 	candidate := completeDesiredState()
+	if mutation == systemchanges.InstallationMutation {
+		candidate = realityOnlyDesiredState()
+	}
 	candidate.Subscription.Token = NewClientAccessValue(testSHA('e'))
 	if options.candidateEdit != nil {
 		options.candidateEdit(&candidate)

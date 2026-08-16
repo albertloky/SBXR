@@ -39,6 +39,70 @@ func TestLoadCompleteDesiredState(t *testing.T) {
 	}
 }
 
+func TestLoadRevisionOneWithOnlyRealitySetUp(t *testing.T) {
+	desired := realityOnlyDesiredState()
+	document := strings.Replace(documentFor(t, desired), `"revision":7`, `"revision":1`, 1)
+	document = strings.Replace(document, `"last_completed_change_set":"change-0007"`, `"last_completed_change_set":"change-0001"`, 1)
+	request := intentManagedRequest()
+	request.Lineage.Revision = 1
+	request.Lineage.LastCompletedChangeSet = "change-0001"
+
+	result, err := New(intentStorage{document: document}).Load(request)
+	if err != nil || result.Status != Managed || result.Snapshot == nil || !reflect.DeepEqual(result.Snapshot.DesiredState, desired) {
+		t.Fatalf("Load() reality-only revision 1 = (%+v, %v)", result, err)
+	}
+
+	complete := strings.Replace(documentFor(t, completeDesiredState()), `"revision":7`, `"revision":1`, 1)
+	complete = strings.Replace(complete, `"last_completed_change_set":"change-0007"`, `"last_completed_change_set":"change-0001"`, 1)
+	result, err = New(intentStorage{document: complete}).Load(request)
+	var problem *Finding
+	if result.Status != RecoveryRequired || !errors.As(err, &problem) || problem.Code != "STATE-PROFILE-LIFECYCLE" {
+		t.Fatalf("Load() six-profile revision 1 = (%+v, %v)", result, err)
+	}
+}
+
+func TestLoadRefusesMixedNotSetUpAndConfiguredProfiles(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		change func(*DesiredState)
+	}{
+		{"one deferred profile configured", func(desired *DesiredState) {
+			desired.ConnectionProfiles.AnyTLS.Password = NewClientAccessValue("DEFERRED-CLIENT-SECRET-MARKER")
+		}},
+		{"one deferred profile enabled", func(desired *DesiredState) {
+			desired.ConnectionProfiles.AnyTLS.Lifecycle = ProfileEnabled
+			desired.ConnectionProfiles.AnyTLS.Enabled = true
+		}},
+		{"placeholder Cloudflare facts", func(desired *DesiredState) {
+			desired.Cloudflare.TunnelID = "deferred"
+		}},
+		{"placeholder domain certificate", func(desired *DesiredState) {
+			desired.Certificates.DomainCertificateID = "deferred"
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			desired := realityOnlyDesiredState()
+			test.change(&desired)
+			result, err := New(intentStorage{document: documentFor(t, desired)}).Load(intentManagedRequest())
+			var problem *Finding
+			if result.Status != RecoveryRequired || !errors.As(err, &problem) || problem.Code != "STATE-PROFILE-LIFECYCLE" || strings.Contains(err.Error(), "DEFERRED-CLIENT-SECRET-MARKER") {
+				t.Fatalf("Load() placeholder refusal = (%+v, %v)", result, err)
+			}
+		})
+	}
+}
+
+func TestLoadPreservesExplicitEnabledAndDisabledProfiles(t *testing.T) {
+	desired := completeDesiredState()
+	desired.ConnectionProfiles.VLESSRealityVision.Lifecycle = ProfileEnabled
+	desired.ConnectionProfiles.VLESSXHTTP.Lifecycle = ProfileDisabled
+	desired.ConnectionProfiles.VLESSXHTTP.Enabled = false
+	result, err := New(intentStorage{document: documentFor(t, desired)}).Load(intentManagedRequest())
+	if err != nil || result.Snapshot == nil || result.Snapshot.DesiredState.ConnectionProfiles.VLESSXHTTP.Lifecycle != ProfileDisabled {
+		t.Fatalf("Load() configured lifecycle = (%+v, %v)", result, err)
+	}
+}
+
 func TestLoadDistinguishesRemovedManagementTokenFromMissingSecret(t *testing.T) {
 	removed := completeDesiredState()
 	removed.Cloudflare.ManagementToken = InfrastructureSecret{}
@@ -143,6 +207,7 @@ func TestLoadRequiresExactIntentSchema(t *testing.T) {
 		{name: "case-changed section", document: strings.Replace(document, `"installation":`, `"Installation":`, 1)},
 		{name: "Observed State", document: strings.Replace(document, `"software":`, `"observed_state":{},"software":`, 1)},
 		{name: "generic extension", document: strings.Replace(document, `"software":`, `"extensions":{},"software":`, 1)},
+		{name: "schema 2 lifecycle in schema 1", document: strings.Replace(document, `"schema_version":2`, `"schema_version":1`, 1)},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := New(intentStorage{document: tt.document}).Load(intentManagedRequest())
@@ -168,9 +233,18 @@ func TestLoadTreatsSecretsAsOpaqueAndDoesNotRenderThem(t *testing.T) {
 	}
 }
 
+func TestLoadKeepsExistingSchemaTwoProfilesValidWithoutLifecycleFields(t *testing.T) {
+	document := strings.Replace(schemaOneDocumentFor(t, completeDesiredState()), `"schema_version":1`, `"schema_version":2`, 1)
+	result, err := New(intentStorage{document: document}).Load(intentManagedRequest())
+	if err != nil || result.Status != Managed {
+		t.Fatalf("Load() existing schema 2 = (%+v, %v), want Managed", result, err)
+	}
+}
+
 func TestLoadAllowsPortReuseByDisabledProfiles(t *testing.T) {
 	desired := completeDesiredState()
 	desired.ConnectionProfiles.VLESSRealityVision.Enabled = false
+	desired.ConnectionProfiles.VLESSRealityVision.Lifecycle = ProfileDisabled
 	desired.NetworkPolicy.SSHPort = desired.ConnectionProfiles.VLESSRealityVision.Port
 	result, err := New(intentStorage{document: documentFor(t, desired)}).Load(intentManagedRequest())
 	if err != nil || result.Status != Managed {
@@ -186,6 +260,7 @@ func completeDesiredState() DesiredState {
 		},
 		ConnectionProfiles: ConnectionProfiles{
 			VLESSRealityVision: VLESSRealityVision{
+				Lifecycle:   ProfileEnabled,
 				Enabled:     true,
 				Port:        443,
 				UUID:        NewClientAccessValue("11111111-1111-4111-8111-111111111111"),
@@ -197,6 +272,7 @@ func completeDesiredState() DesiredState {
 				Fingerprint: "chrome",
 			},
 			VLESSXHTTP: VLESSXHTTP{
+				Lifecycle:     ProfileEnabled,
 				Enabled:       true,
 				UUID:          NewClientAccessValue("22222222-2222-4222-8222-222222222222"),
 				Path:          NewClientAccessValue("/2222222222222222222222222222222222222222222222222222222222222222"),
@@ -206,6 +282,7 @@ func completeDesiredState() DesiredState {
 				Mode:          XHTTPPacketUp,
 			},
 			VLESSWebSocket: VLESSWebSocket{
+				Lifecycle:     ProfileEnabled,
 				Enabled:       true,
 				UUID:          NewClientAccessValue("33333333-3333-4333-8333-333333333333"),
 				Hostname:      "ws.example.com",
@@ -214,6 +291,7 @@ func completeDesiredState() DesiredState {
 				Path:          NewClientAccessValue("/4444444444444444444444444444444444444444444444444444444444444444"),
 			},
 			Hysteria2: Hysteria2{
+				Lifecycle:         ProfileEnabled,
 				Enabled:           true,
 				Port:              443,
 				Password:          NewClientAccessValue("HYSTERIA2-SECRET-MARKER-00000001"),
@@ -224,6 +302,7 @@ func completeDesiredState() DesiredState {
 				ObfuscationSecret: ClientAccessValue{},
 			},
 			TUIC: TUIC{
+				Lifecycle:         ProfileEnabled,
 				Enabled:           true,
 				Port:              8443,
 				UUID:              NewClientAccessValue("55555555-5555-4555-8555-555555555555"),
@@ -234,6 +313,7 @@ func completeDesiredState() DesiredState {
 				ZeroRTT:           false,
 			},
 			AnyTLS: AnyTLS{
+				Lifecycle:     ProfileEnabled,
 				Enabled:       true,
 				Port:          9443,
 				Password:      NewClientAccessValue("ANYTLS-PASSWORD-SECRET-MARKER-01"),
@@ -287,6 +367,22 @@ func completeDesiredState() DesiredState {
 	}
 }
 
+func realityOnlyDesiredState() DesiredState {
+	desired := completeDesiredState()
+	desired.Installation.Domain = ""
+	desired.ConnectionProfiles.VLESSRealityVision.Lifecycle = ProfileEnabled
+	desired.ConnectionProfiles.VLESSXHTTP = VLESSXHTTP{Lifecycle: ProfileNotSetUp}
+	desired.ConnectionProfiles.VLESSWebSocket = VLESSWebSocket{Lifecycle: ProfileNotSetUp}
+	desired.ConnectionProfiles.Hysteria2 = Hysteria2{Lifecycle: ProfileNotSetUp}
+	desired.ConnectionProfiles.TUIC = TUIC{Lifecycle: ProfileNotSetUp}
+	desired.ConnectionProfiles.AnyTLS = AnyTLS{Lifecycle: ProfileNotSetUp}
+	desired.Cloudflare = CloudflareSettings{}
+	desired.Certificates.DomainCertificateID = ""
+	desired.Certificates.DomainServingPointer = ""
+	desired.Certificates.DomainHostname = ""
+	return desired
+}
+
 func TestDesiredStateAcceptsOnlySafeCurrentReclamationPolicy(t *testing.T) {
 	desired := completeDesiredState()
 	desired.Reclamation = ReclamationPolicy{Version: 1, Held: HeldPackagePolicy{Name: "vendor-proxy", Version: "4.5.6", DeletedExecutable: "/opt/vendor-proxy/proxy", SHA256: strings.Repeat("a", 64)}}
@@ -321,9 +417,19 @@ func documentFor(t *testing.T, desired DesiredState) string {
 		LastCompletedChangeSet ChangeSetIdentity `json:"last_completed_change_set"`
 		Payload                json.RawMessage   `json:"payload"`
 		Checksum               string            `json:"checksum"`
-	}{1, 7, testRelease, "change-0007", payload, hex.EncodeToString(checksum[:])})
+	}{2, 7, testRelease, "change-0007", payload, hex.EncodeToString(checksum[:])})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return string(document)
+}
+
+func schemaOneDocumentFor(t *testing.T, desired DesiredState) string {
+	desired.ConnectionProfiles.VLESSRealityVision.Lifecycle = ""
+	desired.ConnectionProfiles.VLESSXHTTP.Lifecycle = ""
+	desired.ConnectionProfiles.VLESSWebSocket.Lifecycle = ""
+	desired.ConnectionProfiles.Hysteria2.Lifecycle = ""
+	desired.ConnectionProfiles.TUIC.Lifecycle = ""
+	desired.ConnectionProfiles.AnyTLS.Lifecycle = ""
+	return strings.Replace(documentFor(t, desired), `"schema_version":2`, `"schema_version":1`, 1)
 }

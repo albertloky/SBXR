@@ -3,6 +3,7 @@ package state
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"testing"
 )
 
@@ -24,6 +25,11 @@ func TestReleaseDefinitionsExposeTheCompleteDeterministicSchemasOneAndTwo(t *tes
 	if _, exists := payload.Properties["certificates"].Properties["owner_email"]; exists {
 		t.Fatal("schema v1 unexpectedly contains owner_email")
 	}
+	for name, profile := range profiles.Properties {
+		if _, exists := profile.Properties["lifecycle"]; exists {
+			t.Fatalf("schema v1 %s unexpectedly contains lifecycle", name)
+		}
+	}
 	for name, property := range payload.Properties {
 		if property.Type != "object" || property.AdditionalProperties == nil || *property.AdditionalProperties || len(property.Properties) == 0 {
 			t.Fatalf("incomplete %s schema = %#v", name, property)
@@ -38,11 +44,19 @@ func TestReleaseDefinitionsExposeTheCompleteDeterministicSchemasOneAndTwo(t *tes
 	if _, exists := schema.Properties["payload"].Properties["reclamation"]; !exists {
 		t.Fatal("schema v2 does not contain the optional safe reclamation policy")
 	}
+	for name, profile := range schema.Properties["payload"].Properties["connection_profiles"].Properties {
+		if _, exists := profile.Properties["lifecycle"]; !exists {
+			t.Fatalf("schema v2 %s does not contain lifecycle", name)
+		}
+		if slices.Contains(profile.Required, "lifecycle") {
+			t.Fatalf("schema v2 %s breaks existing documents by requiring lifecycle", name)
+		}
+	}
 }
 
 func TestReleaseMigrationsExposeOnlyTheNetworkFreeSchemaOneToTwoTransformation(t *testing.T) {
 	got := ReleaseMigrations()
-	want := []byte(`{"schema":1,"from":1,"to":2,"operations":[{"op":"replace","path":"/schema_version","value":2}]}`)
+	want := []byte(`{"schema":1,"from":1,"to":2,"operations":[{"op":"replace","path":"/schema_version","value":2},{"op":"derive-profile-lifecycle","path":"/payload/connection_profiles/vless_reality_vision/lifecycle","from":"/payload/connection_profiles/vless_reality_vision/enabled","true":"Enabled","false":"Disabled"},{"op":"derive-profile-lifecycle","path":"/payload/connection_profiles/vless_xhttp/lifecycle","from":"/payload/connection_profiles/vless_xhttp/enabled","true":"Enabled","false":"Disabled"},{"op":"derive-profile-lifecycle","path":"/payload/connection_profiles/vless_websocket/lifecycle","from":"/payload/connection_profiles/vless_websocket/enabled","true":"Enabled","false":"Disabled"},{"op":"derive-profile-lifecycle","path":"/payload/connection_profiles/hysteria2/lifecycle","from":"/payload/connection_profiles/hysteria2/enabled","true":"Enabled","false":"Disabled"},{"op":"derive-profile-lifecycle","path":"/payload/connection_profiles/tuic/lifecycle","from":"/payload/connection_profiles/tuic/enabled","true":"Enabled","false":"Disabled"},{"op":"derive-profile-lifecycle","path":"/payload/connection_profiles/anytls/lifecycle","from":"/payload/connection_profiles/anytls/enabled","true":"Enabled","false":"Disabled"}]}`)
 	if len(got) != 1 || !bytes.Equal(got["state-v1-to-v2.json"], want) {
 		t.Fatalf("ReleaseMigrations() = %q", got)
 	}

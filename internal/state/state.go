@@ -422,15 +422,28 @@ func decode(data []byte) (persistedDocument, *Finding) {
 		}
 		return persistedDocument{}, finding("STATE-DOCUMENT-INVALID", "Desired State payload", "an invalid typed payload", "one complete supported typed payload", "the stored intent is incomplete", "use the Recovery Required flow")
 	}
+	if document.SchemaVersion == 1 && hasExplicitProfileLifecycle(payload.ConnectionProfiles) {
+		return persistedDocument{}, finding("STATE-DOCUMENT-UNSUPPORTED-FIELD", "Desired State schema 1", "a schema 2 lifecycle field", "only fields defined by schema 1", "schema meaning cannot change without migration", "use a compatible verified release and review the migration")
+	}
 	document.desiredState = DesiredState(payload)
 	checksum := sha256.Sum256(document.Payload)
 	if hex.EncodeToString(checksum[:]) != document.Checksum {
 		return persistedDocument{}, finding("STATE-CHECKSUM-MISMATCH", "Desired State integrity", "the payload integrity check failed", "the persisted payload checksum to match", "the document may have changed outside an approved Change Set", "use the Recovery Required flow")
 	}
-	if finding := validateDesiredState(payload); finding != nil {
+	if finding := validateDesiredStateVersion(payload, true); finding != nil {
 		return persistedDocument{}, finding
 	}
+	if document.Revision == 1 {
+		realityOnly, lifecycleFinding := validateProfileLifecycles(payload.ConnectionProfiles, document.SchemaVersion == 1)
+		if lifecycleFinding != nil || !realityOnly {
+			return persistedDocument{}, profileLifecycleFinding("Desired State revision 1", "the revision contains more than VLESS REALITY Vision")
+		}
+	}
 	return document, nil
+}
+
+func hasExplicitProfileLifecycle(profiles ConnectionProfiles) bool {
+	return profiles.VLESSRealityVision.Lifecycle != "" || profiles.VLESSXHTTP.Lifecycle != "" || profiles.VLESSWebSocket.Lifecycle != "" || profiles.Hysteria2.Lifecycle != "" || profiles.TUIC.Lifecycle != "" || profiles.AnyTLS.Lifecycle != ""
 }
 
 func migrationSteps(start SchemaVersion) []MigrationStepReview {
@@ -439,7 +452,7 @@ func migrationSteps(start SchemaVersion) []MigrationStepReview {
 	}
 	return []MigrationStepReview{{
 		FromSchema: 1, ToSchema: 2,
-		MeaningChanges:          []string{"Schema 2 adds the Owner-approved certificate renewal email"},
+		MeaningChanges:          []string{"Schema 2 adds the Owner-approved certificate renewal email and explicit Connection Profile lifecycle states"},
 		GeneratedServiceEffects: []string{"Regenerate and validate all release-bound service and subscription material"},
 		ServiceInterruption:     true,
 		RequiredOwnerInput:      true,

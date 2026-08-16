@@ -153,8 +153,18 @@ type ConnectionProfiles struct {
 	AnyTLS             AnyTLS             `json:"anytls"`
 }
 
+// ProfileLifecycle separates capability setup from exposure and health.
+type ProfileLifecycle string
+
+const (
+	ProfileNotSetUp ProfileLifecycle = "Not set up"
+	ProfileEnabled  ProfileLifecycle = "Enabled"
+	ProfileDisabled ProfileLifecycle = "Disabled"
+)
+
 // VLESSRealityVision is the direct Xray TCP Connection Profile.
 type VLESSRealityVision struct {
+	Lifecycle   ProfileLifecycle     `json:"lifecycle,omitempty"`
 	Enabled     bool                 `json:"enabled"`
 	Port        uint16               `json:"port"`
 	UUID        ClientAccessValue    `json:"uuid"`
@@ -173,6 +183,7 @@ const XHTTPPacketUp XHTTPMode = "packet-up"
 
 // VLESSXHTTP is the Xray Connection Profile behind Cloudflare Tunnel.
 type VLESSXHTTP struct {
+	Lifecycle     ProfileLifecycle  `json:"lifecycle,omitempty"`
 	Enabled       bool              `json:"enabled"`
 	UUID          ClientAccessValue `json:"uuid"`
 	Path          ClientAccessValue `json:"path"`
@@ -184,6 +195,7 @@ type VLESSXHTTP struct {
 
 // VLESSWebSocket is the compatibility Xray profile behind Cloudflare Tunnel.
 type VLESSWebSocket struct {
+	Lifecycle     ProfileLifecycle  `json:"lifecycle,omitempty"`
 	Enabled       bool              `json:"enabled"`
 	UUID          ClientAccessValue `json:"uuid"`
 	Hostname      string            `json:"hostname"`
@@ -194,6 +206,7 @@ type VLESSWebSocket struct {
 
 // Hysteria2 is the primary sing-box UDP Connection Profile.
 type Hysteria2 struct {
+	Lifecycle         ProfileLifecycle  `json:"lifecycle,omitempty"`
 	Enabled           bool              `json:"enabled"`
 	Port              uint16            `json:"port"`
 	Password          ClientAccessValue `json:"password"`
@@ -214,6 +227,7 @@ const (
 
 // TUIC is the secondary sing-box UDP Connection Profile.
 type TUIC struct {
+	Lifecycle         ProfileLifecycle  `json:"lifecycle,omitempty"`
 	Enabled           bool              `json:"enabled"`
 	Port              uint16            `json:"port"`
 	UUID              ClientAccessValue `json:"uuid"`
@@ -226,6 +240,7 @@ type TUIC struct {
 
 // AnyTLS is the direct sing-box TCP Connection Profile.
 type AnyTLS struct {
+	Lifecycle     ProfileLifecycle  `json:"lifecycle,omitempty"`
 	Enabled       bool              `json:"enabled"`
 	Port          uint16            `json:"port"`
 	Password      ClientAccessValue `json:"password"`
@@ -298,29 +313,37 @@ type SoftwareSettings struct {
 }
 
 func validateDesiredState(desired DesiredState) *Finding {
+	return validateDesiredStateVersion(desired, false)
+}
+
+func validateDesiredStateVersion(desired DesiredState, allowLegacyLifecycle bool) *Finding {
 	if finding := validateReclamationPolicy(desired.Reclamation); finding != nil {
 		return finding
 	}
 	profiles := desired.ConnectionProfiles
-	if desired.Installation.ID == "" || desired.Installation.Domain == "" {
+	realityOnly, lifecycleFinding := validateProfileLifecycles(profiles, allowLegacyLifecycle)
+	if lifecycleFinding != nil {
+		return lifecycleFinding
+	}
+	if desired.Installation.ID == "" || realityOnly && desired.Installation.Domain != "" || !realityOnly && desired.Installation.Domain == "" {
 		return intentFinding("STATE-INTENT-INCOMPLETE", "installation identity", "a required identity value is absent", "one installation ID and domain", "the installation cannot be identified", "complete the installation identity and review again")
 	}
 	if !profiles.VLESSRealityVision.UUID.isSet() || !profiles.VLESSRealityVision.PrivateKey.isSet() || !profiles.VLESSRealityVision.ShortID.isSet() || profiles.VLESSRealityVision.Port == 0 || profiles.VLESSRealityVision.PublicKey == "" || profiles.VLESSRealityVision.Target == "" || profiles.VLESSRealityVision.ServerName == "" || profiles.VLESSRealityVision.Fingerprint == "" {
 		return intentFinding("STATE-INTENT-INCOMPLETE", "VLESS REALITY Vision", "a required profile value is absent", "complete settings and independent credentials", "partial Connection Profiles cannot become Desired State", "complete the profile and review again")
 	}
-	if !profiles.VLESSXHTTP.UUID.isSet() || !profiles.VLESSXHTTP.Path.isSet() || profiles.VLESSXHTTP.Hostname == "" || profiles.VLESSXHTTP.OriginAddress == "" || profiles.VLESSXHTTP.OriginPort == 0 || profiles.VLESSXHTTP.Mode == "" {
+	if !realityOnly && (!profiles.VLESSXHTTP.UUID.isSet() || !profiles.VLESSXHTTP.Path.isSet() || profiles.VLESSXHTTP.Hostname == "" || profiles.VLESSXHTTP.OriginAddress == "" || profiles.VLESSXHTTP.OriginPort == 0 || profiles.VLESSXHTTP.Mode == "") {
 		return intentFinding("STATE-INTENT-INCOMPLETE", "VLESS XHTTP", "a required profile value is absent", "complete settings and an independent credential", "partial Connection Profiles cannot become Desired State", "complete the profile and review again")
 	}
-	if !profiles.VLESSWebSocket.UUID.isSet() || !profiles.VLESSWebSocket.Path.isSet() || profiles.VLESSWebSocket.Hostname == "" || profiles.VLESSWebSocket.OriginAddress == "" || profiles.VLESSWebSocket.OriginPort == 0 {
+	if !realityOnly && (!profiles.VLESSWebSocket.UUID.isSet() || !profiles.VLESSWebSocket.Path.isSet() || profiles.VLESSWebSocket.Hostname == "" || profiles.VLESSWebSocket.OriginAddress == "" || profiles.VLESSWebSocket.OriginPort == 0) {
 		return intentFinding("STATE-INTENT-INCOMPLETE", "VLESS WebSocket", "a required profile value is absent", "complete settings and independent access values", "partial Connection Profiles cannot become Desired State", "complete the profile and review again")
 	}
-	if !profiles.Hysteria2.Password.isSet() || profiles.Hysteria2.Port == 0 || profiles.Hysteria2.ServerName == "" || profiles.Hysteria2.CertificateID == "" || profiles.Hysteria2.MasqueradeURL == "" {
+	if !realityOnly && (!profiles.Hysteria2.Password.isSet() || profiles.Hysteria2.Port == 0 || profiles.Hysteria2.ServerName == "" || profiles.Hysteria2.CertificateID == "" || profiles.Hysteria2.MasqueradeURL == "") {
 		return intentFinding("STATE-INTENT-INCOMPLETE", "Hysteria2", "a required profile value is absent", "complete settings and an independent credential", "partial Connection Profiles cannot become Desired State", "complete the profile and review again")
 	}
-	if !profiles.TUIC.UUID.isSet() || !profiles.TUIC.Password.isSet() || profiles.TUIC.Port == 0 || profiles.TUIC.ServerName == "" || profiles.TUIC.CertificateID == "" || profiles.TUIC.CongestionControl == "" {
+	if !realityOnly && (!profiles.TUIC.UUID.isSet() || !profiles.TUIC.Password.isSet() || profiles.TUIC.Port == 0 || profiles.TUIC.ServerName == "" || profiles.TUIC.CertificateID == "" || profiles.TUIC.CongestionControl == "") {
 		return intentFinding("STATE-INTENT-INCOMPLETE", "TUIC", "a required profile value is absent", "complete settings and independent credentials", "partial Connection Profiles cannot become Desired State", "complete the profile and review again")
 	}
-	if !profiles.AnyTLS.Password.isSet() || profiles.AnyTLS.Port == 0 || profiles.AnyTLS.ServerName == "" || profiles.AnyTLS.CertificateID == "" || profiles.AnyTLS.PaddingScheme == "" {
+	if !realityOnly && (!profiles.AnyTLS.Password.isSet() || profiles.AnyTLS.Port == 0 || profiles.AnyTLS.ServerName == "" || profiles.AnyTLS.CertificateID == "" || profiles.AnyTLS.PaddingScheme == "") {
 		return intentFinding("STATE-INTENT-INCOMPLETE", "AnyTLS", "a required profile value is absent", "complete settings and an independent credential", "partial Connection Profiles cannot become Desired State", "complete the profile and review again")
 	}
 	if !desired.Subscription.Token.isSet() || desired.Subscription.ListenPort == 0 || desired.Subscription.CertificateID == "" {
@@ -328,11 +351,17 @@ func validateDesiredState(desired DesiredState) *Finding {
 	}
 	cloudflare := desired.Cloudflare
 	managementTokenValid := !cloudflare.ManagementTokenRemoved && cloudflare.ManagementToken.isSet() && cloudflare.ManagementTokenState == "" || cloudflare.ManagementTokenRemoved && !cloudflare.ManagementToken.isSet() && cloudflare.ManagementTokenState == CloudflareManagementUnmanaged
-	if empty(cloudflare.AccountID, cloudflare.ZoneID, cloudflare.ZoneName, cloudflare.TunnelID, cloudflare.TunnelName, cloudflare.XHTTPHostname, cloudflare.WebSocketHostname, cloudflare.DirectHostname, cloudflare.XHTTPDNSRecordID, cloudflare.WebSocketDNSRecordID) || !managementTokenValid || !cloudflare.TunnelRunToken.isSet() {
+	if realityOnly && cloudflare != (CloudflareSettings{}) {
+		return intentFinding("STATE-PROFILE-LIFECYCLE", "Not set up Cloudflare profiles", "Cloudflare authority or provider facts are present", "no deferred or placeholder Cloudflare facts", "Not set up capability must be represented by omission", "remove the deferred facts and review again")
+	}
+	if !realityOnly && (empty(cloudflare.AccountID, cloudflare.ZoneID, cloudflare.ZoneName, cloudflare.TunnelID, cloudflare.TunnelName, cloudflare.XHTTPHostname, cloudflare.WebSocketHostname, cloudflare.DirectHostname, cloudflare.XHTTPDNSRecordID, cloudflare.WebSocketDNSRecordID) || !managementTokenValid || !cloudflare.TunnelRunToken.isSet()) {
 		return intentFinding("STATE-INTENT-INCOMPLETE", "Cloudflare authority", "a required authority or immutable binding is absent", "scoped authority and every owned resource identity", "Cloudflare ownership cannot be proven", "complete the Cloudflare bindings and review again")
 	}
 	certificates := desired.Certificates
-	if empty(certificates.ACMEAccountID, certificates.IPCertificateID, certificates.IPServingPointer, certificates.DomainCertificateID, certificates.DomainServingPointer, certificates.DomainHostname) {
+	if realityOnly && (certificates.DomainCertificateID != "" || certificates.DomainServingPointer != "" || certificates.DomainHostname != "") {
+		return intentFinding("STATE-PROFILE-LIFECYCLE", "Not set up domain certificate", "domain-certificate facts are present", "no deferred or placeholder domain-certificate facts", "Not set up capability must be represented by omission", "remove the deferred facts and review again")
+	}
+	if empty(certificates.ACMEAccountID, certificates.IPCertificateID, certificates.IPServingPointer) || !realityOnly && empty(certificates.DomainCertificateID, certificates.DomainServingPointer, certificates.DomainHostname) {
 		return intentFinding("STATE-INTENT-INCOMPLETE", "certificate settings", "a required certificate identity is absent", "both lineages and serving pointers", "active certificate material cannot be identified", "complete the certificate settings and review again")
 	}
 	network := desired.NetworkPolicy
@@ -344,25 +373,93 @@ func validateDesiredState(desired DesiredState) *Finding {
 		return intentFinding("STATE-INTENT-INCOMPLETE", "software settings", "a managed component version is absent", "one pinned version for every managed component", "the intended installation is incomplete", "complete the software settings and review again")
 	}
 
-	if cloudflare.ZoneName != desired.Installation.Domain || profiles.VLESSXHTTP.Hostname != cloudflare.XHTTPHostname || profiles.VLESSWebSocket.Hostname != cloudflare.WebSocketHostname {
+	if !realityOnly && (cloudflare.ZoneName != desired.Installation.Domain || profiles.VLESSXHTTP.Hostname != cloudflare.XHTTPHostname || profiles.VLESSWebSocket.Hostname != cloudflare.WebSocketHostname) {
 		return crossSectionIntent("Cloudflare hostname bindings", "Connection Profiles and immutable Cloudflare bindings disagree")
 	}
-	if profiles.VLESSXHTTP.UUID.value == profiles.VLESSWebSocket.UUID.value || profiles.VLESSXHTTP.Path.value == profiles.VLESSWebSocket.Path.value || profiles.VLESSXHTTP.Hostname == profiles.VLESSWebSocket.Hostname {
+	if !realityOnly && (profiles.VLESSXHTTP.UUID.value == profiles.VLESSWebSocket.UUID.value || profiles.VLESSXHTTP.Path.value == profiles.VLESSWebSocket.Path.value || profiles.VLESSXHTTP.Hostname == profiles.VLESSWebSocket.Hostname) {
 		return crossSectionIntent("Cloudflare Connection Profile independence", "XHTTP and WebSocket share a credential or hostname")
 	}
-	if profiles.Hysteria2.ServerName != cloudflare.DirectHostname || profiles.TUIC.ServerName != cloudflare.DirectHostname || profiles.AnyTLS.ServerName != cloudflare.DirectHostname || certificates.DomainHostname != cloudflare.DirectHostname {
+	if !realityOnly && (profiles.Hysteria2.ServerName != cloudflare.DirectHostname || profiles.TUIC.ServerName != cloudflare.DirectHostname || profiles.AnyTLS.ServerName != cloudflare.DirectHostname || certificates.DomainHostname != cloudflare.DirectHostname) {
 		return crossSectionIntent("direct TLS hostname", "profiles, certificate, and Cloudflare bindings disagree")
 	}
-	if profiles.Hysteria2.CertificateID != certificates.DomainCertificateID || profiles.TUIC.CertificateID != certificates.DomainCertificateID || profiles.AnyTLS.CertificateID != certificates.DomainCertificateID || desired.Subscription.CertificateID != certificates.IPCertificateID {
+	if (!realityOnly && (profiles.Hysteria2.CertificateID != certificates.DomainCertificateID || profiles.TUIC.CertificateID != certificates.DomainCertificateID || profiles.AnyTLS.CertificateID != certificates.DomainCertificateID)) || desired.Subscription.CertificateID != certificates.IPCertificateID {
 		return crossSectionIntent("certificate bindings", "a service refers to a different certificate identity")
 	}
-	if !validNetworkBindings(network, cloudflare) {
+	if !realityOnly && !validNetworkBindings(network, cloudflare) {
 		return crossSectionIntent("Network Policy address bindings", "qualified addresses, primary address, and DNS identities disagree")
 	}
 	if portConflict(desired) {
 		return crossSectionIntent("listener ports", "two TCP or UDP listeners conflict")
 	}
 	return nil
+}
+
+func validateProfileLifecycles(profiles ConnectionProfiles, allowLegacy bool) (bool, *Finding) {
+	states := []struct {
+		name      string
+		lifecycle ProfileLifecycle
+		enabled   bool
+		empty     bool
+	}{
+		{"VLESS REALITY Vision", profiles.VLESSRealityVision.Lifecycle, profiles.VLESSRealityVision.Enabled, profiles.VLESSRealityVision == (VLESSRealityVision{Lifecycle: profiles.VLESSRealityVision.Lifecycle})},
+		{"VLESS XHTTP", profiles.VLESSXHTTP.Lifecycle, profiles.VLESSXHTTP.Enabled, profiles.VLESSXHTTP == (VLESSXHTTP{Lifecycle: profiles.VLESSXHTTP.Lifecycle})},
+		{"VLESS WebSocket", profiles.VLESSWebSocket.Lifecycle, profiles.VLESSWebSocket.Enabled, profiles.VLESSWebSocket == (VLESSWebSocket{Lifecycle: profiles.VLESSWebSocket.Lifecycle})},
+		{"Hysteria2", profiles.Hysteria2.Lifecycle, profiles.Hysteria2.Enabled, profiles.Hysteria2 == (Hysteria2{Lifecycle: profiles.Hysteria2.Lifecycle})},
+		{"TUIC", profiles.TUIC.Lifecycle, profiles.TUIC.Enabled, profiles.TUIC == (TUIC{Lifecycle: profiles.TUIC.Lifecycle})},
+		{"AnyTLS", profiles.AnyTLS.Lifecycle, profiles.AnyTLS.Enabled, profiles.AnyTLS == (AnyTLS{Lifecycle: profiles.AnyTLS.Lifecycle})},
+	}
+	notSetUp := 0
+	for _, profile := range states {
+		switch profile.lifecycle {
+		case "":
+			if !allowLegacy {
+				return false, profileLifecycleFinding(profile.name, "the lifecycle state is absent")
+			}
+		case ProfileEnabled:
+			if !profile.enabled {
+				return false, profileLifecycleFinding(profile.name, "Enabled disagrees with exposure")
+			}
+		case ProfileDisabled:
+			if profile.enabled {
+				return false, profileLifecycleFinding(profile.name, "Disabled disagrees with exposure")
+			}
+		case ProfileNotSetUp:
+			notSetUp++
+			if profile.enabled || !profile.empty {
+				return false, profileLifecycleFinding(profile.name, "Not set up contains settings, credentials, or exposure")
+			}
+		default:
+			return false, profileLifecycleFinding(profile.name, "an unsupported lifecycle state")
+		}
+	}
+	if notSetUp == 0 {
+		return false, nil
+	}
+	if notSetUp != 5 || states[0].lifecycle != ProfileEnabled {
+		return false, profileLifecycleFinding("Connection Profiles", "a partial setup state")
+	}
+	return true, nil
+}
+
+func profileLifecycleFinding(concept, found string) *Finding {
+	return intentFinding("STATE-PROFILE-LIFECYCLE", concept, found, "Enabled, Disabled, or the exact atomic five-profile Not set up state", "State cannot persist partial capability or placeholder facts", "rebuild the complete candidate and review again")
+}
+
+func withExplicitProfileLifecycles(desired DesiredState) DesiredState {
+	profiles := &desired.ConnectionProfiles
+	set := func(enabled bool) ProfileLifecycle {
+		if enabled {
+			return ProfileEnabled
+		}
+		return ProfileDisabled
+	}
+	profiles.VLESSRealityVision.Lifecycle = set(profiles.VLESSRealityVision.Enabled)
+	profiles.VLESSXHTTP.Lifecycle = set(profiles.VLESSXHTTP.Enabled)
+	profiles.VLESSWebSocket.Lifecycle = set(profiles.VLESSWebSocket.Enabled)
+	profiles.Hysteria2.Lifecycle = set(profiles.Hysteria2.Enabled)
+	profiles.TUIC.Lifecycle = set(profiles.TUIC.Enabled)
+	profiles.AnyTLS.Lifecycle = set(profiles.AnyTLS.Enabled)
+	return desired
 }
 
 func validateReclamationPolicy(policy ReclamationPolicy) *Finding {

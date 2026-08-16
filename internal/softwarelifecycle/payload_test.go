@@ -87,7 +87,7 @@ func TestPayloadMetadataAcceptsOnlyCompleteSequentialNoNetworkMigrationMaterial(
 	valid := payloadMetadata()
 	valid.StateSchema = 2
 	valid.Schemas["desired-state-v2.schema.json"] = []byte(`{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"SBXR Desired State v2","type":"object"}`)
-	valid.Migrations = []softwarelifecycle.EmbeddedMigration{{Name: "state-v1-to-v2.json", From: 1, To: 2, Document: []byte(`{"schema":1,"from":1,"to":2,"operations":[{"op":"replace","path":"/schema_version","value":2}]}`)}}
+	valid.Migrations = []softwarelifecycle.EmbeddedMigration{{Name: "state-v1-to-v2.json", From: 1, To: 2, Document: state.ReleaseMigrations()["state-v1-to-v2.json"]}}
 	if _, err := softwarelifecycle.StampPayload([]byte("executable"), valid); err != nil {
 		t.Fatalf("complete forward migration refused: %v", err)
 	}

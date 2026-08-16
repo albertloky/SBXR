@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"reflect"
 	"slices"
 	"strings"
@@ -86,6 +87,115 @@ func TestPrepareCommitValidatesCandidateAndSerializesLeastPrivilegeMaterial(t *t
 				t.Fatal("prepared copy contains comments or provenance")
 			}
 		})
+	}
+}
+
+func TestPrepareCommitRequiresTypedCloudflareAuthorityForCompleteProfileSetup(t *testing.T) {
+	starting := realityOnlyDesiredState()
+	starting.Certificates.ACMEAccountID = "letsencrypt"
+	starting.Certificates.IPCertificateID = "sbxr-ip"
+	starting.Subscription.CertificateID = "sbxr-ip"
+	storage := &mutableStateStorage{document: documentFor(t, starting)}
+	module := New(storage)
+	loaded, err := module.Load(intentManagedRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := completeDesiredState()
+	candidate.Certificates.ACMEAccountID = "letsencrypt"
+	candidate.Certificates.IPCertificateID = "sbxr-ip"
+	candidate.Certificates.DomainCertificateID = "sbxr-domain"
+	candidate.Subscription.CertificateID = "sbxr-ip"
+	candidate.ConnectionProfiles.Hysteria2.CertificateID = "sbxr-domain"
+	candidate.ConnectionProfiles.TUIC.CertificateID = "sbxr-domain"
+	candidate.ConnectionProfiles.AnyTLS.CertificateID = "sbxr-domain"
+	request := preparedRequest(t, loaded, candidate, "change-0008")
+	_, err = module.PrepareCommit(request)
+	assertFinding(t, err, "STATE-CLOUDFLARE-DEFERRED")
+
+	candidate.Cloudflare.AccountID = strings.Repeat("1", 32)
+	candidate.Cloudflare.ZoneID = strings.Repeat("2", 32)
+	candidate.Cloudflare.TunnelName = "sbxr-main"
+	candidate.Cloudflare.TunnelID = ""
+	candidate.Cloudflare.TunnelRunToken = InfrastructureSecret{}
+	candidate.Cloudflare.XHTTPDNSRecordID = ""
+	candidate.Cloudflare.WebSocketDNSRecordID = ""
+	candidate.Cloudflare.DirectIPv4RecordID = ""
+	candidate.Cloudflare.DirectIPv6RecordID = ""
+	candidate.Software.CloudflaredVersion = "2026.7.3"
+	template, marshalErr := marshalProtectedJSON(candidate)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	digest := sha256.Sum256(template)
+	managementTokenText := "cfat_" + strings.Repeat("a", 40)
+	candidate.Cloudflare.ManagementToken = NewInfrastructureSecret(managementTokenText)
+	template, marshalErr = marshalProtectedJSON(candidate)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	digest = sha256.Sum256(template)
+	managementToken, tokenErr := cloudflaretunnel.NewManagementToken(managementTokenText)
+	if tokenErr != nil {
+		t.Fatal(tokenErr)
+	}
+	planResult := newCloudflareTestModule(&deferredCloudflareAPI{}, cloudflaretunnel.SystemClock{}).Plan(t.Context(), cloudflaretunnel.PlanRequest{
+		Authority: cloudflaretunnel.ViewRequest{AccountID: candidate.Cloudflare.AccountID, ZoneID: candidate.Cloudflare.ZoneID, ZoneName: candidate.Cloudflare.ZoneName, Token: managementToken, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
+		ChangeSet: "change-0008", StartingRevision: 7, StartingStateSHA256: loaded.loaded.payloadChecksum, DesiredStateSHA256: fmt.Sprintf("%x", digest), TunnelName: candidate.Cloudflare.TunnelName,
+		XHTTPHostname: candidate.Cloudflare.XHTTPHostname, WebSocketHostname: candidate.Cloudflare.WebSocketHostname, DirectHostname: candidate.Cloudflare.DirectHostname, PublicIPv4: candidate.NetworkPolicy.PublicIPv4,
+		CloudflaredVersion: candidate.Software.CloudflaredVersion,
+	})
+	if planResult.Plan == nil {
+		t.Fatalf("Cloudflare Plan = %+v", planResult.Health)
+	}
+	module = New(storage)
+	loaded, err = module.Load(intentManagedRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request = preparedRequest(t, loaded, candidate, "change-0008")
+	request.ReviewedInputs, err = NewReviewedInputs(PlanIdentity(planResult.Plan.Identity()), planResult.Plan.SHA256(), request.ReviewedInputs.managed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validator := request.SemanticValidators.Cloudflare.(*validatingSeams)
+	validator.planIdentity = string(request.ReviewedInputs.planIdentity)
+	validator.planSHA256 = request.ReviewedInputs.planSHA256
+	_, err = module.PrepareDeferredCloudflareCommit(request, planResult.Plan)
+	assertFinding(t, err, "STATE-CERTIFICATE-SETUP")
+}
+
+func TestPrepareCommitRefusesMixedNotSetUpAndConfiguredProfiles(t *testing.T) {
+	starting := realityOnlyDesiredState()
+	candidate := completeDesiredState()
+
+	partial := candidate
+	partial.ConnectionProfiles.AnyTLS = AnyTLS{Lifecycle: ProfileNotSetUp}
+	module := New(&mutableStateStorage{document: documentFor(t, starting)})
+	loaded, err := module.Load(intentManagedRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = module.PrepareCommit(preparedRequest(t, loaded, partial, "change-0008"))
+	assertFinding(t, err, "STATE-PROFILE-LIFECYCLE")
+}
+
+func TestPrepareCommitAcceptsCloudflareFreeRevisionOne(t *testing.T) {
+	module := New(&mutableStateStorage{err: fs.ErrNotExist})
+	loaded, err := module.Load(LoadRequest{Baseline: CleanVPS})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := realityOnlyDesiredState()
+	request := preparedRequest(t, loaded, candidate, "change-0001")
+	request.SemanticValidators.Cloudflare = nil
+
+	prepared, err := module.PrepareCommit(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.Revision() != 1 || prepared.serviceCopies.Xray == nil || prepared.serviceCopies.SingBox != nil || prepared.serviceCopies.Cloudflared != nil || prepared.serviceCopies.Subscription == nil {
+		t.Fatalf("revision 1 prepared service set = %+v", prepared.serviceCopies)
 	}
 }
 
@@ -647,12 +757,16 @@ func TestPrepareCommitOmitsDisabledProfileCredentials(t *testing.T) {
 		disable                 func(*ConnectionProfiles)
 		service                 func(PreparedServiceCopies) *PreparedServiceCopy
 	}{
-		{"VLESS REALITY Vision", "11111111-1111-4111-8111-111111111111", "", func(p *ConnectionProfiles) { p.VLESSRealityVision.Enabled = false }, func(c PreparedServiceCopies) *PreparedServiceCopy { return c.Xray }},
-		{"VLESS XHTTP", "22222222-2222-4222-8222-222222222222", "xhttp.example.com", func(p *ConnectionProfiles) { p.VLESSXHTTP.Enabled = false }, func(c PreparedServiceCopies) *PreparedServiceCopy { return c.Xray }},
-		{"VLESS WebSocket", "33333333-3333-4333-8333-333333333333", "ws.example.com", func(p *ConnectionProfiles) { p.VLESSWebSocket.Enabled = false }, func(c PreparedServiceCopies) *PreparedServiceCopy { return c.Xray }},
-		{"Hysteria2", "HYSTERIA2-SECRET-MARKER-00000001", "", func(p *ConnectionProfiles) { p.Hysteria2.Enabled = false }, func(c PreparedServiceCopies) *PreparedServiceCopy { return c.SingBox }},
-		{"TUIC", "TUIC-PASSWORD-SECRET-MARKER-00001", "", func(p *ConnectionProfiles) { p.TUIC.Enabled = false }, func(c PreparedServiceCopies) *PreparedServiceCopy { return c.SingBox }},
-		{"AnyTLS", "ANYTLS-PASSWORD-SECRET-MARKER-01", "", func(p *ConnectionProfiles) { p.AnyTLS.Enabled = false }, func(c PreparedServiceCopies) *PreparedServiceCopy { return c.SingBox }},
+		{"VLESS REALITY Vision", "11111111-1111-4111-8111-111111111111", "", func(p *ConnectionProfiles) {
+			p.VLESSRealityVision.Enabled, p.VLESSRealityVision.Lifecycle = false, ProfileDisabled
+		}, func(c PreparedServiceCopies) *PreparedServiceCopy { return c.Xray }},
+		{"VLESS XHTTP", "22222222-2222-4222-8222-222222222222", "xhttp.example.com", func(p *ConnectionProfiles) { p.VLESSXHTTP.Enabled, p.VLESSXHTTP.Lifecycle = false, ProfileDisabled }, func(c PreparedServiceCopies) *PreparedServiceCopy { return c.Xray }},
+		{"VLESS WebSocket", "33333333-3333-4333-8333-333333333333", "ws.example.com", func(p *ConnectionProfiles) {
+			p.VLESSWebSocket.Enabled, p.VLESSWebSocket.Lifecycle = false, ProfileDisabled
+		}, func(c PreparedServiceCopies) *PreparedServiceCopy { return c.Xray }},
+		{"Hysteria2", "HYSTERIA2-SECRET-MARKER-00000001", "", func(p *ConnectionProfiles) { p.Hysteria2.Enabled, p.Hysteria2.Lifecycle = false, ProfileDisabled }, func(c PreparedServiceCopies) *PreparedServiceCopy { return c.SingBox }},
+		{"TUIC", "TUIC-PASSWORD-SECRET-MARKER-00001", "", func(p *ConnectionProfiles) { p.TUIC.Enabled, p.TUIC.Lifecycle = false, ProfileDisabled }, func(c PreparedServiceCopies) *PreparedServiceCopy { return c.SingBox }},
+		{"AnyTLS", "ANYTLS-PASSWORD-SECRET-MARKER-01", "", func(p *ConnectionProfiles) { p.AnyTLS.Enabled, p.AnyTLS.Lifecycle = false, ProfileDisabled }, func(c PreparedServiceCopies) *PreparedServiceCopy { return c.SingBox }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -682,9 +796,11 @@ func TestPrepareCommitAcceptsPreparedCoreWithAllProfilesDisabled(t *testing.T) {
 	}{
 		{"Xray", func(p *ConnectionProfiles) {
 			p.VLESSRealityVision.Enabled, p.VLESSXHTTP.Enabled, p.VLESSWebSocket.Enabled = false, false, false
+			p.VLESSRealityVision.Lifecycle, p.VLESSXHTTP.Lifecycle, p.VLESSWebSocket.Lifecycle = ProfileDisabled, ProfileDisabled, ProfileDisabled
 		}, func(c PreparedServiceCopies) *PreparedServiceCopy { return c.Xray }},
 		{"sing-box", func(p *ConnectionProfiles) {
 			p.Hysteria2.Enabled, p.TUIC.Enabled, p.AnyTLS.Enabled = false, false, false
+			p.Hysteria2.Lifecycle, p.TUIC.Lifecycle, p.AnyTLS.Lifecycle = ProfileDisabled, ProfileDisabled, ProfileDisabled
 		}, func(c PreparedServiceCopies) *PreparedServiceCopy { return c.SingBox }},
 	}
 	for _, test := range tests {

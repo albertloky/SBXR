@@ -63,7 +63,7 @@ func TestSoftwareLifecycleInstallPublishesRevisionOneOnlyAfterCompleteAgreement(
 		t.Fatalf("View() = %+v", view)
 	}
 
-	candidate := completeDesiredState()
+	candidate := realityOnlyDesiredState()
 	template, err := marshalProtectedJSON(candidate)
 	if err != nil {
 		t.Fatal(err)

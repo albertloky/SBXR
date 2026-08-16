@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/albertloky/SBXR/internal/state"
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
 
@@ -138,7 +139,7 @@ func TestApplyDowngradeRejectsStaleFactsAndReuse(t *testing.T) {
 func controlledUpdateReleases() (VerifiedRelease, InstallCandidate) {
 	installed := VerifiedRelease{Identity: ReleaseIdentity{Repository: Repository, Tag: "v1.0.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("a", 64)}, Sequence: 1, StateSchema: 1, MinimumUpdaterSchema: 1}
 	candidate := controlledInstallCandidate()
-	candidate.cell.verified = VerifiedRelease{Identity: candidate.cell.staged.Identity, Sequence: 2, StateSchema: 2, MinimumUpdaterSchema: 1, Migrations: []EmbeddedMigration{{Name: "state-v1-to-v2.json", From: 1, To: 2, Document: []byte(`{"schema":1,"from":1,"to":2,"operations":[{"op":"replace","path":"/schema_version","value":2}]}`)}}}
+	candidate.cell.verified = VerifiedRelease{Identity: candidate.cell.staged.Identity, Sequence: 2, StateSchema: 2, MinimumUpdaterSchema: 1, Migrations: []EmbeddedMigration{{Name: "state-v1-to-v2.json", From: 1, To: 2, Document: state.ReleaseMigrations()["state-v1-to-v2.json"]}}}
 	return installed, candidate
 }
 

@@ -43,11 +43,17 @@ func ReleaseDefinitions() (map[string][]byte, error) {
 	v1Schema.Properties["payload"] = payload
 	certificates := v1Schema.Properties["payload"].Properties["certificates"]
 	delete(certificates.Properties, "owner_email")
+	profiles := v1Schema.Properties["payload"].Properties["connection_profiles"]
+	for name, profile := range profiles.Properties {
+		delete(profile.Properties, "lifecycle")
+		profiles.Properties[name] = profile
+	}
 	v1, err := json.Marshal(v1Schema)
 	if err != nil {
 		return nil, err
 	}
-	v2, err := json.Marshal(schemaFor(2))
+	v2Schema := schemaFor(2)
+	v2, err := json.Marshal(v2Schema)
 	if err != nil {
 		return nil, err
 	}
@@ -55,7 +61,7 @@ func ReleaseDefinitions() (map[string][]byte, error) {
 }
 
 func ReleaseMigrations() map[string][]byte {
-	return map[string][]byte{"state-v1-to-v2.json": []byte(`{"schema":1,"from":1,"to":2,"operations":[{"op":"replace","path":"/schema_version","value":2}]}`)}
+	return map[string][]byte{"state-v1-to-v2.json": []byte(`{"schema":1,"from":1,"to":2,"operations":[{"op":"replace","path":"/schema_version","value":2},{"op":"derive-profile-lifecycle","path":"/payload/connection_profiles/vless_reality_vision/lifecycle","from":"/payload/connection_profiles/vless_reality_vision/enabled","true":"Enabled","false":"Disabled"},{"op":"derive-profile-lifecycle","path":"/payload/connection_profiles/vless_xhttp/lifecycle","from":"/payload/connection_profiles/vless_xhttp/enabled","true":"Enabled","false":"Disabled"},{"op":"derive-profile-lifecycle","path":"/payload/connection_profiles/vless_websocket/lifecycle","from":"/payload/connection_profiles/vless_websocket/enabled","true":"Enabled","false":"Disabled"},{"op":"derive-profile-lifecycle","path":"/payload/connection_profiles/hysteria2/lifecycle","from":"/payload/connection_profiles/hysteria2/enabled","true":"Enabled","false":"Disabled"},{"op":"derive-profile-lifecycle","path":"/payload/connection_profiles/tuic/lifecycle","from":"/payload/connection_profiles/tuic/enabled","true":"Enabled","false":"Disabled"},{"op":"derive-profile-lifecycle","path":"/payload/connection_profiles/anytls/lifecycle","from":"/payload/connection_profiles/anytls/enabled","true":"Enabled","false":"Disabled"}]}`)}
 }
 
 func releaseSchemaFor(valueType reflect.Type) releaseSchema {

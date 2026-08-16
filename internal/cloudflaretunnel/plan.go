@@ -649,6 +649,8 @@ func (plan *Plan) StateDeferredCloudflare() (source any, bindingJSON []byte, tem
 	bindingJSON, err := json.Marshal(struct {
 		AccountID, ZoneID, TunnelName, XHTTPHostname, WebSocketHostname, DirectHostname string
 		PublicIPv4, PublicIPv6                                                          string
+		StartingRevision                                                                uint64
+		StartingStateSHA256                                                             string
 		TunnelStep, XHTTPDNSRecordStep, WebSocketDNSRecordStep                          int
 		DirectIPv4RecordStep, DirectIPv6RecordStep                                      int
 	}{
@@ -656,6 +658,7 @@ func (plan *Plan) StateDeferredCloudflare() (source any, bindingJSON []byte, tem
 		TunnelName: plan.request.TunnelName, XHTTPHostname: plan.request.XHTTPHostname,
 		WebSocketHostname: plan.request.WebSocketHostname, DirectHostname: plan.request.DirectHostname,
 		PublicIPv4: plan.request.PublicIPv4, PublicIPv6: plan.request.PublicIPv6,
+		StartingRevision: plan.request.StartingRevision, StartingStateSHA256: plan.request.StartingStateSHA256,
 		TunnelStep: b.tunnel, XHTTPDNSRecordStep: b.xhttp, WebSocketDNSRecordStep: b.websocket,
 		DirectIPv4RecordStep: b.directIPv4, DirectIPv6RecordStep: b.directIPv6,
 	})
@@ -668,7 +671,7 @@ func (plan *Plan) Apply(module systemchanges.Interface, prepared systemchanges.P
 	}
 	mutation := systemchanges.InstallationMutation
 	targetSHA256 := plan.request.DesiredStateSHA256
-	if plan.request.ManagementToken.Action != "" || plan.request.RunTokenRotation.TunnelID != "" || plan.request.ManagedRepair.TunnelID != "" {
+	if plan.request.StartingRevision > 0 || plan.request.ManagementToken.Action != "" || plan.request.RunTokenRotation.TunnelID != "" || plan.request.ManagedRepair.TunnelID != "" {
 		changeSet, revision, startingSHA256, candidateSHA256, planIdentity, planSHA256, valid := prepared.SystemChangesPreparedState()
 		if !valid || starting.Status != systemchanges.Managed || starting.SHA256 != plan.request.StartingStateSHA256 || changeSet != plan.request.ChangeSet || revision != starting.Revision+1 || startingSHA256 != starting.SHA256 || planIdentity != plan.identity || planSHA256 != plan.sha256 || !sha256Text.MatchString(candidateSHA256) {
 			return module.Apply(nil)
@@ -749,7 +752,8 @@ func wholeTunnelChecks() []systemchanges.Check {
 }
 
 func validPlanRequest(request PlanRequest) bool {
-	return request.StartingRevision == 0 && safePlanName.MatchString(request.ChangeSet) && sha256Text.MatchString(request.DesiredStateSHA256) && safePlanName.MatchString(request.TunnelName) && request.CloudflaredVersion == qualifiedCloudflaredVersion && validOwnedHostname(request.XHTTPHostname, request.Authority.ZoneName, "xhttp") && validOwnedHostname(request.WebSocketHostname, request.Authority.ZoneName, "ws") && validOwnedHostname(request.DirectHostname, request.Authority.ZoneName, "direct") && request.XHTTPHostname != request.WebSocketHostname && request.XHTTPHostname != request.DirectHostname && request.WebSocketHostname != request.DirectHostname && validPublicAddresses(request.PublicIPv4, request.PublicIPv6)
+	validStartingState := request.StartingRevision == 0 && request.StartingStateSHA256 == "" || request.StartingRevision > 0 && sha256Text.MatchString(request.StartingStateSHA256)
+	return validStartingState && safePlanName.MatchString(request.ChangeSet) && sha256Text.MatchString(request.DesiredStateSHA256) && safePlanName.MatchString(request.TunnelName) && request.CloudflaredVersion == qualifiedCloudflaredVersion && validOwnedHostname(request.XHTTPHostname, request.Authority.ZoneName, "xhttp") && validOwnedHostname(request.WebSocketHostname, request.Authority.ZoneName, "ws") && validOwnedHostname(request.DirectHostname, request.Authority.ZoneName, "direct") && request.XHTTPHostname != request.WebSocketHostname && request.XHTTPHostname != request.DirectHostname && request.WebSocketHostname != request.DirectHostname && validPublicAddresses(request.PublicIPv4, request.PublicIPv6)
 }
 
 func reclamationMatches(want []ReclamationConflict, got MutationObservation) bool {

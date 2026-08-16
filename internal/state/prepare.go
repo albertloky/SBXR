@@ -313,6 +313,7 @@ type PrepareRequest struct {
 	SemanticValidators       SemanticValidators
 	ServiceMaterials         ServiceMaterials
 	SubscriptionPublication  SubscriptionPublicationPreparer
+	ProfileSetupCertificate  ProfileSetupCertificateAuthority
 	ReviewedInputs           ReviewedInputs
 }
 
@@ -383,6 +384,12 @@ type CloudflareEvidenceBinding struct {
 
 type DeferredCloudflareAuthority interface {
 	StateDeferredCloudflare() (source any, bindingJSON []byte, templateSHA256 string, valid bool)
+	MatchesDesiredState(accountID, zoneID, zoneName, tunnelName, xhttpHostname, webSocketHostname, directHostname, publicIPv4, publicIPv6, managementToken string) bool
+}
+
+type ProfileSetupCertificateAuthority interface {
+	StateProfileSetupCertificate() (startingRevision, candidateRevision uint64, startingStateSHA256, desiredStateSHA256, changeSet string, valid bool)
+	MatchesDesiredState(renewalPolicy bool, ownerEmail, acmeAccountID, ipCertificateID, ipServingPointer, domainCertificateID, domainServingPointer, domainHostname string) bool
 }
 
 type ManagementTokenChangeAuthority interface {
@@ -505,12 +512,16 @@ func (i Interface) PrepareSoftwareUpdateCommit(request PrepareRequest, authority
 		FromSchema, ToSchema               uint64
 	}
 	current, problem := decode(request.Loaded.loaded.bytes)
+	currentDesired := current.desiredState
+	if current.SchemaVersion == 1 {
+		currentDesired = withExplicitProfileLifecycles(currentDesired)
+	}
 	candidateBytes, candidateErr := marshalProtectedJSON(request.Candidate)
 	candidateDigest := sha256.Sum256(candidateBytes)
 	bindingErr := json.Unmarshal(bindingJSON, &binding)
 	currentIdentity := binding.Current.Repository == current.ReleaseIdentity.Repository && binding.Current.Tag == current.ReleaseIdentity.Tag && binding.Current.Commit == current.ReleaseIdentity.Commit && binding.Current.IndexSHA256 == current.ReleaseIdentity.ReleaseIndexSHA256
 	candidateIdentity := binding.Candidate.Repository == request.CandidateReleaseIdentity.Repository && binding.Candidate.Tag == request.CandidateReleaseIdentity.Tag && binding.Candidate.Commit == request.CandidateReleaseIdentity.Commit && binding.Candidate.IndexSHA256 == request.CandidateReleaseIdentity.ReleaseIndexSHA256
-	if !valid || bindingErr != nil || problem != nil || candidateErr != nil || request.Loaded.Status != Managed || binding.StartingRevision != request.Loaded.loaded.revision || binding.StartingStateSHA256 != request.Loaded.loaded.payloadChecksum || binding.DesiredSHA256 != hex.EncodeToString(candidateDigest[:]) || !currentIdentity || !candidateIdentity || binding.FromSchema != uint64(current.SchemaVersion) || binding.ToSchema != uint64(supportedSchema) || !reflect.DeepEqual(current.desiredState, request.Candidate) {
+	if !valid || bindingErr != nil || problem != nil || candidateErr != nil || request.Loaded.Status != Managed || binding.StartingRevision != request.Loaded.loaded.revision || binding.StartingStateSHA256 != request.Loaded.loaded.payloadChecksum || binding.DesiredSHA256 != hex.EncodeToString(candidateDigest[:]) || !currentIdentity || !candidateIdentity || binding.FromSchema != uint64(current.SchemaVersion) || binding.ToSchema != uint64(supportedSchema) || !reflect.DeepEqual(currentDesired, request.Candidate) {
 		return nil, finding("STATE-SOFTWARE-UPDATE-PLAN", "Software Lifecycle update", "the release, migration, revision, or Desired State meaning differs from review", "the exact current Desired State with only its reviewed release/schema successor", "updates preserve all Owner values and secrets", "reload State and rebuild the update Plan")
 	}
 	commit, err := i.prepareCommit(request, nil, nil, false)
@@ -722,21 +733,39 @@ func (i Interface) PrepareDeferredCloudflareCommit(request PrepareRequest, autho
 	if typeOf == nil || typeOf.Kind() != reflect.Pointer || typeOf.Elem().PkgPath() != "github.com/albertloky/SBXR/internal/cloudflaretunnel" || typeOf.Elem().Name() != "Plan" {
 		return nil, finding("STATE-CLOUDFLARE-DEFERRED", "deferred Cloudflare finalization", "the authority did not come from Cloudflare Tunnel", "one exact reviewed Cloudflare Plan", "caller-made provider bindings cannot authorize State", "rebuild the Cloudflare Plan")
 	}
+	if request.Loaded.loaded != nil && request.Loaded.loaded.status == NotInstalled {
+		return nil, profileLifecycleFinding("Desired State revision 1", "the candidate contains more than VLESS REALITY Vision")
+	}
 	source, bindingJSON, templateSHA256, valid := authority.StateDeferredCloudflare()
 	runToken, sourceOK := source.(VerifiedInfrastructureSecret)
 	var planned struct {
 		AccountID, ZoneID, TunnelName, XHTTPHostname, WebSocketHostname, DirectHostname string
 		PublicIPv4, PublicIPv6                                                          string
+		StartingRevision                                                                uint64
+		StartingStateSHA256                                                             string
 		CloudflareEvidenceBinding
 	}
 	bindingErr := json.Unmarshal(bindingJSON, &planned)
 	binding := planned.CloudflareEvidenceBinding
 	template, templateErr := marshalProtectedJSON(request.Candidate)
 	templateDigest := sha256.Sum256(template)
+	templateDigestText := hex.EncodeToString(templateDigest[:])
 	candidate := request.Candidate
-	fixedFactsMatch := planned.AccountID == candidate.Cloudflare.AccountID && planned.ZoneID == candidate.Cloudflare.ZoneID && planned.TunnelName == candidate.Cloudflare.TunnelName && planned.XHTTPHostname == candidate.Cloudflare.XHTTPHostname && planned.WebSocketHostname == candidate.Cloudflare.WebSocketHostname && planned.DirectHostname == candidate.Cloudflare.DirectHostname && planned.PublicIPv4 == candidate.NetworkPolicy.PublicIPv4 && planned.PublicIPv6 == candidate.NetworkPolicy.PublicIPv6
-	if !valid || bindingErr != nil || !fixedFactsMatch || !sourceOK || runToken == nil || templateErr != nil || hex.EncodeToString(templateDigest[:]) != templateSHA256 || !validCloudflareEvidenceBinding(binding, request.Candidate.NetworkPolicy) {
+	loaded := request.Loaded.loaded
+	startingStateMatches := loaded != nil && planned.StartingRevision == loaded.revision && planned.StartingStateSHA256 == loaded.payloadChecksum
+	fixedFactsMatch := authority.MatchesDesiredState(candidate.Cloudflare.AccountID, candidate.Cloudflare.ZoneID, candidate.Cloudflare.ZoneName, candidate.Cloudflare.TunnelName, candidate.Cloudflare.XHTTPHostname, candidate.Cloudflare.WebSocketHostname, candidate.Cloudflare.DirectHostname, candidate.NetworkPolicy.PublicIPv4, candidate.NetworkPolicy.PublicIPv6, candidate.Cloudflare.ManagementToken.value)
+	if !valid || bindingErr != nil || !startingStateMatches || !fixedFactsMatch || !sourceOK || runToken == nil || templateErr != nil || templateDigestText != templateSHA256 || !validCloudflareEvidenceBinding(binding, request.Candidate.NetworkPolicy) {
 		return nil, finding("STATE-CLOUDFLARE-DEFERRED", "deferred Cloudflare finalization", "the run-token handoff or evidence binding is incomplete", "one exact one-use State finalization binding", "provider-created values cannot be guessed", "rebuild the Cloudflare Plan")
+	}
+	certificateType := reflect.TypeOf(request.ProfileSetupCertificate)
+	if certificateType == nil || certificateType.Kind() != reflect.Pointer || certificateType.Elem().PkgPath() != "github.com/albertloky/SBXR/internal/certificatelifecycle" || certificateType.Elem().Name() != "Plan" {
+		return nil, finding("STATE-CERTIFICATE-SETUP", "domain-certificate setup", "the authority did not come from Certificate Lifecycle", "one exact reviewed domain-certificate Plan", "caller-made certificate facts cannot fill deferred slots", "rebuild the Certificate Lifecycle Plan")
+	}
+	certificateStart, certificateCandidate, certificateStartingSHA, certificateDesiredSHA, certificateChangeSet, certificateValid := request.ProfileSetupCertificate.StateProfileSetupCertificate()
+	certificates := candidate.Certificates
+	certificateFactsMatch := request.ProfileSetupCertificate.MatchesDesiredState(certificates.RenewalPolicy, certificates.OwnerEmail, certificates.ACMEAccountID, certificates.IPCertificateID, certificates.IPServingPointer, certificates.DomainCertificateID, certificates.DomainServingPointer, certificates.DomainHostname)
+	if !certificateValid || loaded == nil || certificateStart != loaded.revision || certificateCandidate != loaded.revision+1 || certificateStartingSHA != loaded.payloadChecksum || certificateDesiredSHA != templateDigestText || certificateChangeSet != string(request.ChangeSet) || !certificateFactsMatch {
+		return nil, finding("STATE-CERTIFICATE-SETUP", "domain-certificate setup", "the certificate contribution differs from the candidate or loaded lineage", "one exact Plan-bound domain-certificate contribution", "caller-made or stale certificate facts cannot fill deferred slots", "rebuild the Certificate Lifecycle Plan")
 	}
 	original := request.Candidate
 	staged, ok := stageDeferredCloudflare(original)
@@ -833,10 +862,22 @@ func (i Interface) prepareCommit(request PrepareRequest, deferred *deferredCloud
 	if i.implementation == nil || i.implementation.storage == nil {
 		return nil, finding("STATE-STORAGE-UNAVAILABLE", "Desired State storage", "no storage Adapter", "the production State storage Adapter", "State cannot prepare trusted transaction material", "restore the State Adapter and review again")
 	}
+	allowLegacyLifecycle := preserveSchema && request.Loaded.loaded != nil && request.Loaded.loaded.migration.StartingSchema == 1
+	if _, problem := validateProfileLifecycles(request.Candidate.ConnectionProfiles, allowLegacyLifecycle); problem != nil {
+		return nil, problem
+	}
 	if request.Loaded.loaded != nil {
 		prior, problem := decode(request.Loaded.loaded.bytes)
+		if problem == nil {
+			realityOnly, _ := validateProfileLifecycles(prior.desiredState.ConnectionProfiles, true)
+			candidateRealityOnly, _ := validateProfileLifecycles(request.Candidate.ConnectionProfiles, false)
+			if realityOnly && !candidateRealityOnly && deferred == nil {
+				return nil, finding("STATE-CLOUDFLARE-DEFERRED", "Cloudflare Profile Setup", "the complete candidate did not come from the typed Cloudflare finalization path", "one exact Cloudflare Plan with provider-returned identifiers and secrets", "caller-made provider facts cannot fill deferred slots", "prepare the candidate with PrepareDeferredCloudflareCommit")
+			}
+		}
 		changed := problem == nil && (prior.desiredState.Cloudflare.ManagementToken.value != request.Candidate.Cloudflare.ManagementToken.value || prior.desiredState.Cloudflare.ManagementTokenRemoved != request.Candidate.Cloudflare.ManagementTokenRemoved || prior.desiredState.Cloudflare.ManagementTokenState != request.Candidate.Cloudflare.ManagementTokenState)
-		if changed != (tokenChange != nil) {
+		authorizedTokenChange := tokenChange != nil || deferred != nil && !deferred.rotation
+		if request.Loaded.loaded.status != NotInstalled && changed != authorizedTokenChange {
 			return nil, finding("STATE-CLOUDFLARE-TOKEN-PLAN", "Cloudflare management-token change", "the candidate token state does not match its reviewed authority", "every replacement or removal to use one Cloudflare-owned Plan", "generic setting Plans cannot change Infrastructure Secrets", "rebuild the management-token Plan")
 		}
 	}
@@ -850,11 +891,17 @@ func (i Interface) prepareCommit(request PrepareRequest, deferred *deferredCloud
 	if problem != nil {
 		return nil, problem
 	}
+	if problem := validateDesiredStateVersion(request.Candidate, allowLegacyLifecycle); problem != nil {
+		return nil, problem
+	}
 	if !preserveSchema && loaded.migration.StartingSchema == 1 && request.Candidate.Certificates.OwnerEmail == "" {
 		return nil, finding("STATE-MIGRATION-OWNER-INPUT", "schema 1 to 2 migration", "the certificate renewal email has not been reviewed", "one Owner-approved renewal email through the Certificate Lifecycle review", "schema 2 cannot promise standing renewal without its required Owner input", "review certificate issuance with the renewal email")
 	}
-	if problem := validateDesiredState(request.Candidate); problem != nil {
-		return nil, problem
+	if loaded.status == NotInstalled {
+		realityOnly, _ := validateProfileLifecycles(request.Candidate.ConnectionProfiles, false)
+		if !realityOnly {
+			return nil, profileLifecycleFinding("Desired State revision 1", "the candidate contains more than VLESS REALITY Vision")
+		}
 	}
 	revision := loaded.revision + 1
 	if revision == 0 || !validReleaseIdentity(request.CandidateReleaseIdentity) || !validChangeSetIdentity(request.ChangeSet) {
@@ -1114,6 +1161,9 @@ func checksumServiceManifests(copies PreparedServiceCopies) (string, error) {
 }
 
 func validateSemantics(candidate DesiredState, validators SemanticValidators) bool {
+	if realityOnly, finding := validateProfileLifecycles(candidate.ConnectionProfiles, false); finding == nil && realityOnly {
+		return validateSemanticsExceptCloudflare(candidate, validators)
+	}
 	software := SoftwareLifecycleIntent{Installation: candidate.Installation, Software: candidate.Software}
 	if missingValidator(validators.ConnectionProfiles) || missingValidator(validators.Subscription) || missingValidator(validators.Cloudflare) || missingValidator(validators.Certificates) || missingValidator(validators.NetworkPolicy) || missingValidator(validators.SoftwareLifecycle) {
 		return false
@@ -1224,11 +1274,11 @@ func expectedServiceMaterials(candidate DesiredState) ServiceMaterials {
 			PrimaryAddress:     candidate.NetworkPolicy.PrimarySubscriptionAddress,
 		},
 	}
-	xrayConfigured := p.VLESSRealityVision != (VLESSRealityVision{}) || p.VLESSXHTTP != (VLESSXHTTP{}) || p.VLESSWebSocket != (VLESSWebSocket{})
+	xrayConfigured := p.VLESSRealityVision != (VLESSRealityVision{Lifecycle: p.VLESSRealityVision.Lifecycle}) || p.VLESSXHTTP != (VLESSXHTTP{Lifecycle: p.VLESSXHTTP.Lifecycle}) || p.VLESSWebSocket != (VLESSWebSocket{Lifecycle: p.VLESSWebSocket.Lifecycle})
 	if xrayConfigured {
 		materials.Xray = &xray
 	}
-	singBoxConfigured := p.Hysteria2 != (Hysteria2{}) || p.TUIC != (TUIC{}) || p.AnyTLS != (AnyTLS{})
+	singBoxConfigured := p.Hysteria2 != (Hysteria2{Lifecycle: p.Hysteria2.Lifecycle}) || p.TUIC != (TUIC{Lifecycle: p.TUIC.Lifecycle}) || p.AnyTLS != (AnyTLS{Lifecycle: p.AnyTLS.Lifecycle})
 	if singBoxConfigured {
 		materials.SingBox = &singBox
 	}

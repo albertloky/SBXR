@@ -314,7 +314,7 @@ func validStateSchema(document []byte) bool {
 }
 
 const qualifiedStateSchemaSHA256 = "3e1488c7c2a999883a878aa03091db89f6abe9ae32bf0739d9ebf604f3ff2edf"
-const qualifiedMigrationSHA256 = "1655761d084966b81cde678bd3509ca4bd927086028fce944911900bcc48cac7"
+const qualifiedMigrationSHA256 = "1d2527a35e0a5869af2668f2c693a3c56c5e13e51fd39c2090b7f0ac9ad069d4"
 
 var qualifiedArtifactSHA256 = map[string]string{
 	"cloudflared.yml":               "f777beda7b02af53ae71a3b235a26c76ddaab447be0ba4acab5d6189669460ed",
