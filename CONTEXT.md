@@ -16,6 +16,22 @@ _Avoid_: Owner, Owner account, User, service identity
 One named connection choice that the Owner can configure, test, export, and use from a client device.
 _Avoid_: Protocol, mode, node
 
+**Not set up**:
+The accepted long-term Connection Profile state in which SBXR has not created the profile's complete settings, credentials, and owned dependencies, so the profile cannot be enabled, exported, or tested until its setup flow succeeds. Not set up does not itself mean that Installation or a Module is unhealthy.
+_Avoid_: Disabled, Failed, partially configured
+
+**Enabled**:
+The Connection Profile state in which complete settings, credentials, and owned dependencies exist and SBXR exposes and publishes the profile.
+_Avoid_: Set up, Healthy, active service
+
+**Disabled**:
+The Connection Profile state in which complete settings, credentials, and owned dependencies already exist but SBXR does not expose or publish the profile; the Owner can review a later Change Set to enable it without repeating setup.
+_Avoid_: Not set up, Failed, deleted
+
+**Set up Connection Profile**:
+A Connection Profile whose lifecycle state is Enabled or Disabled because its complete settings, credentials, and owned dependencies exist. Set up is a collective description, not a fourth lifecycle state.
+_Avoid_: Not set up, configured, Healthy
+
 **Clean VPS**:
 A Not installed Ubuntu host without prior SBXR resources or unrelated infrastructure occupying an SBXR-owned seam; ordinary non-conflicting software may be present.
 _Avoid_: Empty VPS, freshly imaged VPS
@@ -31,6 +47,10 @@ _Avoid_: One-line installer, unattended installer
 **Installation**:
 The review-first process that moves SBXR from a proven Not installed state to proven Managed state through one exact Plan, one Apply attempt, and any required rollback or forward recovery.
 _Avoid_: Update, repair, Complete removal, Pasteable Install Command
+
+**Cloudflare Profile Setup**:
+The review-first Managed-to-Managed process that atomically creates the complete settings, credentials, and owned dependencies for VLESS XHTTP, VLESS WebSocket, Hysteria2, TUIC, and AnyTLS. Before Irreversible Cloudflare setup started it can restore the prior Managed revision; afterward it must complete forward or enter Recovery Required.
+_Avoid_: Installation, Cloudflare Tunnel, partial profile setup
 
 **Bootstrap Prerequisite Repair**:
 The narrow pre-Plan root operation allowed to install or repair SBXR's fixed launch prerequisites; it cannot stop services, remove conflicting packages, change firewall policy, delete identities, inspect Infrastructure Secrets, or mutate Cloudflare.
@@ -55,6 +75,10 @@ _Avoid_: SSH port, SSH configuration, session guess
 **Irreversible Reclamation Started**:
 The durable checkpoint written before the first destructive effect; before it the Owner may leave without change, and after it SBXR offers only exact forward recovery to Managed.
 _Avoid_: Apply started, point of no return, partial cleanup
+
+**Irreversible Cloudflare setup started**:
+The durable Cloudflare Profile Setup checkpoint after which SBXR has deleted rollback authority and must complete all five profiles forward or enter Recovery Required.
+_Avoid_: Cloudflare write started, setup cannot fail, partial profile setup
 
 **Acceptance VPS**:
 A disposable VPS reserved for explicitly approved live acceptance, where destructive installation, change, rollback, recovery, and Complete removal checks may run without risking Owner data that must be preserved.
@@ -103,6 +127,10 @@ _Avoid_: Infrastructure credential
 **Infrastructure Secret**:
 A credential or private key used by SBXR or a managed service to administer infrastructure or prove server identity, rather than by a client device.
 _Avoid_: Client credential, Client Access Value
+
+**Dedicated Broad Cloudflare User API Token**:
+The Infrastructure Secret that the Owner creates only for SBXR with user-scoped API Tokens Edit plus Cloudflare Tunnel Edit, DNS Edit, and Zone Read across every Cloudflare account and zone available to that Owner. It gives SBXR authority over the Owner's User API Tokens and is stored root-only for guided Cloudflare health, repair, update, rotation, and Complete removal; the legacy Global API Key is never accepted in its place.
+_Avoid_: Global API Key, Account API Token, least-authority token, Tunnel run token
 
 **Desired State**:
 The Owner's saved intended SBXR configuration and last successfully committed revision.
