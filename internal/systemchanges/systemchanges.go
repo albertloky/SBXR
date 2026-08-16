@@ -672,14 +672,15 @@ func activityPolicies(status InstallationStatus, lock LockState) []ActivityPolic
 type MutationClass string
 
 const (
-	InstallationMutation       MutationClass = "Installation"
-	RepairMutation             MutationClass = "Repair"
-	SettingChangeMutation      MutationClass = "Setting change"
-	RotationMutation           MutationClass = "Rotation"
-	CertificateChangeMutation  MutationClass = "Certificate issuance or renewal"
-	UpdateMutation             MutationClass = "Update"
-	CertificateRenewalMutation MutationClass = "Automatic certificate renewal"
-	CompleteRemovalMutation    MutationClass = "Complete removal"
+	InstallationMutation           MutationClass = "Installation"
+	RepairMutation                 MutationClass = "Repair"
+	SettingChangeMutation          MutationClass = "Setting change"
+	RotationMutation               MutationClass = "Rotation"
+	CertificateChangeMutation      MutationClass = "Certificate issuance or renewal"
+	UpdateMutation                 MutationClass = "Update"
+	CertificateRenewalMutation     MutationClass = "Automatic certificate renewal"
+	CloudflareProfileSetupMutation MutationClass = "Cloudflare Profile Setup"
+	CompleteRemovalMutation        MutationClass = "Complete removal"
 )
 
 type ReclamationTarget struct {
@@ -1330,23 +1331,33 @@ const (
 )
 
 type ChangeSetSpec struct {
-	Identity                  string
-	Mutation                  MutationClass
-	OutcomeOwner              Module
-	StartingState             StateLineage
-	TargetStateSHA256         string
-	Plan                      PlanBinding
-	PreparedState             PreparedStateCommit
-	TypedRemovalConfirmation  TypedRemovalConfirmation
-	PermanentRemovalSelection PermanentRemovalSelection
-	Reclamation               ReclamationAuthority
-	SSHPreservation           SSHPreservationAuthority
-	sshPreservationSHA256     string
-	Steps                     []Step
-	Checks                    []Check
-	Timeouts                  Timeouts
-	Disk                      DiskRequirement
+	Identity                    string
+	Mutation                    MutationClass
+	OutcomeOwner                Module
+	StartingState               StateLineage
+	TargetStateSHA256           string
+	Plan                        PlanBinding
+	PreparedState               PreparedStateCommit
+	TypedRemovalConfirmation    TypedRemovalConfirmation
+	PermanentRemovalSelection   PermanentRemovalSelection
+	CloudflareSetupConfirmation CloudflareSetupConfirmation
+	Reclamation                 ReclamationAuthority
+	SSHPreservation             SSHPreservationAuthority
+	sshPreservationSHA256       string
+	Steps                       []Step
+	Checks                      []Check
+	Timeouts                    Timeouts
+	Disk                        DiskRequirement
 }
+
+type CloudflareSetupConfirmationRequest struct {
+	ChangeSet        string
+	StartingRevision uint64
+}
+
+// CloudflareSetupConfirmation is called only after durable reversible
+// preparation and immediately before the irreversible setup checkpoint.
+type CloudflareSetupConfirmation func(CloudflareSetupConfirmationRequest) bool
 
 type ChangeSet struct {
 	spec ChangeSetSpec
@@ -1379,7 +1390,7 @@ func NewChangeSet(spec ChangeSetSpec) (*ChangeSet, error) {
 	confirmedRemoval := spec.Mutation == CompleteRemovalMutation && typed && selected && confirmationReview == selectionReview
 	validRemoval := validRemovalSteps(spec.Steps)
 	reclamation := spec.Reclamation != nil && trustedAuthority(spec.Reclamation, "github.com/albertloky/SBXR/internal/networkpolicy", "ReclamationAuthority")
-	if !safeIdentity(spec.Identity) || !validMutation(spec.Mutation) || !validModule(spec.OutcomeOwner) || !validStartingState(spec.StartingState, spec.Mutation) || !validTargetState(spec) || !safeIdentity(spec.Plan.Identity) || !validSHA256(spec.Plan.SHA256) || !validSHA256(spec.Plan.VolatileSHA256) || spec.PreparedState == nil || len(spec.Steps) == 0 || len(spec.Checks) == 0 || spec.Timeouts.Step <= 0 || spec.Timeouts.Step > maxStepTimeout || spec.Timeouts.Check <= 0 || spec.Timeouts.Check > maxCheckTimeout || spec.Disk.PreparationBytes == 0 || spec.Disk.TemporaryBytes == 0 || spec.Disk.SnapshotBytes == 0 || spec.Disk.JournalBytes == 0 || spec.Disk.RollbackBytes == 0 || spec.Disk.OverheadBytes == 0 || !diskValid || reserved > ^uint64(0)-largestFloor || spec.Mutation == CompleteRemovalMutation != confirmedRemoval || spec.Mutation == CompleteRemovalMutation != validRemoval || spec.Mutation == CompleteRemovalMutation && !removalStepsMatchReview(spec.Steps, selectionReview) || spec.Mutation != CompleteRemovalMutation && (spec.TypedRemovalConfirmation != nil || spec.PermanentRemovalSelection != nil) || spec.Reclamation != nil && (!reclamation || spec.Mutation != InstallationMutation || spec.StartingState.Status != NotInstalled) {
+	if !safeIdentity(spec.Identity) || !validMutation(spec.Mutation) || !validModule(spec.OutcomeOwner) || !validStartingState(spec.StartingState, spec.Mutation) || !validTargetState(spec) || !safeIdentity(spec.Plan.Identity) || !validSHA256(spec.Plan.SHA256) || !validSHA256(spec.Plan.VolatileSHA256) || spec.PreparedState == nil || len(spec.Steps) == 0 || len(spec.Checks) == 0 || spec.Timeouts.Step <= 0 || spec.Timeouts.Step > maxStepTimeout || spec.Timeouts.Check <= 0 || spec.Timeouts.Check > maxCheckTimeout || spec.Disk.PreparationBytes == 0 || spec.Disk.TemporaryBytes == 0 || spec.Disk.SnapshotBytes == 0 || spec.Disk.JournalBytes == 0 || spec.Disk.RollbackBytes == 0 || spec.Disk.OverheadBytes == 0 || !diskValid || reserved > ^uint64(0)-largestFloor || spec.Mutation == CompleteRemovalMutation != confirmedRemoval || spec.Mutation == CompleteRemovalMutation != validRemoval || spec.Mutation == CompleteRemovalMutation && !removalStepsMatchReview(spec.Steps, selectionReview) || spec.Mutation != CompleteRemovalMutation && (spec.TypedRemovalConfirmation != nil || spec.PermanentRemovalSelection != nil) || (spec.Mutation == CloudflareProfileSetupMutation) != (spec.CloudflareSetupConfirmation != nil) || spec.Reclamation != nil && (!reclamation || spec.Mutation != InstallationMutation || spec.StartingState.Status != NotInstalled) {
 		return nil, &Finding{Code: "SYSTEM-CHANGES-CHANGE-SET-INVALID", Problem: "The Change Set is incomplete or untyped", Found: "a missing or invalid typed transaction input", Required: "one opaque prepared State commit, exact lineage and Plan checksums, typed steps and rollback, checks, disk reservation, and bounded timeouts", WhyStopped: "System Changes never accepts an arbitrary mutation surface", NextAction: "Rebuild and review the Change Set through its owning Module."}
 	}
 	for _, step := range spec.Steps {
@@ -1608,7 +1619,7 @@ func validTargetState(spec ChangeSetSpec) bool {
 
 func validMutation(mutation MutationClass) bool {
 	switch mutation {
-	case InstallationMutation, RepairMutation, SettingChangeMutation, RotationMutation, CertificateChangeMutation, UpdateMutation, CertificateRenewalMutation, CompleteRemovalMutation:
+	case InstallationMutation, RepairMutation, SettingChangeMutation, RotationMutation, CertificateChangeMutation, UpdateMutation, CertificateRenewalMutation, CloudflareProfileSetupMutation, CompleteRemovalMutation:
 		return true
 	}
 	return false

@@ -31,4 +31,9 @@
 // and continues only through the fixed deletion order until exact Not installed
 // and final recovery-material absence are proven. Before that checkpoint,
 // failure and restart still reverse to an exactly proven earlier baseline.
+// Cloudflare Profile Setup uses the same transaction path with one final
+// confirmation after durable preparation. Before durable Irreversible
+// Cloudflare setup started it restores the exact Managed revision; afterward
+// it proves Rollback Snapshot deletion and resumes only forward to the
+// candidate revision or Recovery Required.
 package systemchanges

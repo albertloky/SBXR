@@ -22,6 +22,7 @@ func TestPendingChangeSetReportsEverySupportedMutationKind(t *testing.T) {
 		{systemchanges.CertificateChangeMutation, systemchanges.CertificateModule},
 		{systemchanges.UpdateMutation, systemchanges.SoftwareModule},
 		{systemchanges.CertificateRenewalMutation, systemchanges.CertificateModule},
+		{systemchanges.CloudflareProfileSetupMutation, systemchanges.CloudflareModule},
 		{systemchanges.CompleteRemovalMutation, systemchanges.SoftwareModule},
 	}
 	for _, test := range tests {

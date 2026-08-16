@@ -273,6 +273,17 @@ func (transaction *TransactionMaterial) SystemChangesPublish(lease any) (any, er
 	return transaction.Publish()
 }
 
+func (transaction *TransactionMaterial) SystemChangesPublishedAgreement(lease any) (any, error) {
+	if !validSystemChangesLease(lease) || transaction == nil || !transaction.forwardRecovery {
+		return nil, finding("STATE-TRANSACTION-LEASE", "published Desired State agreement", "no authorized forward recovery", "the one active System Changes recovery lease", "State cannot invent publication evidence", "continue the active recovery runner")
+	}
+	current, err := transaction.storage.Read()
+	if err != nil || !bytes.Equal(current, transaction.preparedState) {
+		return nil, finding("STATE-PUBLICATION-LINEAGE", "published Desired State agreement", "current State is not the transaction candidate", "the exact published candidate revision", "forward recovery cannot accept another State lineage", "use Recovery Required")
+	}
+	return transaction.publicationAgreement()
+}
+
 type systemChangesRollbackAgreement struct {
 	Status   InstallationStatus `json:"status"`
 	Revision uint64             `json:"revision"`
@@ -447,9 +458,9 @@ func (i Interface) systemChangesLoadForwardState(lease any, bindingJSON []byte, 
 	return &TransactionMaterial{startingRevision: binding.StartingRevision, candidateRevision: binding.CandidateRevision, startingChecksum: binding.StartingSHA256, candidateChecksum: binding.CandidateSHA256, manifestChecksum: binding.PreparedManifestSHA256, preparedChecksum: binding.PreparedStateSHA256, changeSet: binding.ChangeSet, priorState: prior, preparedState: candidateBytes, serviceCopies: copies, storage: i.implementation.storage, publication: &publicationAuthority{}, startingRelease: binding.StartingRelease, candidateRelease: binding.CandidateRelease, forwardRecovery: true}, nil
 }
 
-// SystemChangesLoadForwardInstallation reconstructs the already prepared
-// revision-one publication authority after irreversible reclamation.
-func (i Interface) SystemChangesLoadForwardInstallation(lease any, bindingJSON []byte, candidateSource, manifestsSource io.Reader) (any, error) {
+// SystemChangesLoadForwardChange reconstructs an already prepared publication
+// authority for an irreversible forward-only change.
+func (i Interface) SystemChangesLoadForwardChange(lease any, bindingJSON []byte, candidateSource, manifestsSource io.Reader) (any, error) {
 	return i.systemChangesLoadForwardState(lease, bindingJSON, candidateSource, manifestsSource, true)
 }
 

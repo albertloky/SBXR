@@ -226,6 +226,9 @@ func (a *systemChangesAdapter) Record(_ systemchanges.ExecutionLease, record sys
 		if record.Checkpoint == systemchanges.IrreversibleReclamationStarted {
 			a.recovery.IrreversibleReclamationStarted = true
 		}
+		if record.Checkpoint == systemchanges.IrreversibleCloudflareSetupStarted {
+			a.recovery.IrreversibleCloudflareSetupStarted = true
+		}
 		switch record.Checkpoint {
 		case systemchanges.StepStarted:
 			if record.Step > a.recovery.AttemptedSteps {
@@ -248,6 +251,16 @@ func (a *systemChangesAdapter) Record(_ systemchanges.ExecutionLease, record sys
 	if a.crashAfter == record.Checkpoint && (a.crashStep == 0 || a.crashStep == record.Step) && !a.crashed {
 		a.crashed = true
 		panic("controlled worker death")
+	}
+	return nil
+}
+
+func (a *systemChangesAdapter) DeleteCloudflareSetupRollback(systemchanges.ExecutionLease, string) error {
+	a.events = append(a.events, "delete Cloudflare setup Rollback Snapshot")
+	for name := range a.artifacts {
+		if name == "snapshot/prior-state.json" || strings.HasPrefix(name, "snapshot/step-") {
+			delete(a.artifacts, name)
+		}
 	}
 	return nil
 }
@@ -295,12 +308,12 @@ func (a *systemChangesAdapter) LoadRunTokenRotationState(lease systemchanges.Exe
 	return a.stateRecovery.SystemChangesLoadRunTokenRotation(lease, binding, bytes.NewReader(a.artifacts["prepared/state.json"]), bytes.NewReader(a.artifacts["prepared/manifests.json"]))
 }
 
-func (a *systemChangesAdapter) LoadForwardInstallationState(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction) (any, error) {
+func (a *systemChangesAdapter) LoadForwardChangeState(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction) (any, error) {
 	binding, _ := json.Marshal(recovery.State)
-	return a.stateRecovery.SystemChangesLoadForwardInstallation(lease, binding, bytes.NewReader(a.artifacts["prepared/state.json"]), bytes.NewReader(a.artifacts["prepared/manifests.json"]))
+	return a.stateRecovery.SystemChangesLoadForwardChange(lease, binding, bytes.NewReader(a.artifacts["prepared/state.json"]), bytes.NewReader(a.artifacts["prepared/manifests.json"]))
 }
 
-func (a *systemChangesAdapter) LoadForwardInstallationEvidence(systemchanges.ExecutionLease, systemchanges.RecoveryTransaction) ([]systemchanges.StepEvidence, error) {
+func (a *systemChangesAdapter) LoadForwardChangeEvidence(systemchanges.ExecutionLease, systemchanges.RecoveryTransaction) ([]systemchanges.StepEvidence, error) {
 	evidence := make([]systemchanges.StepEvidence, len(a.recovery.Steps))
 	for index := 0; index < a.recovery.AttemptedSteps && index < len(evidence); index++ {
 		evidence[index] = systemchanges.StepEvidence{Code: "step-ok", SHA256: testSHA('a')}
@@ -1811,21 +1824,22 @@ func preparedSystemChangeForMutation(t *testing.T, mutation systemchanges.Mutati
 }
 
 type systemChangeTestOptions struct {
-	extraSteps         []systemchanges.Step
-	steps              []systemchanges.Step
-	stepTimeout        time.Duration
-	identity           string
-	startingStatus     systemchanges.InstallationStatus
-	publishBeforeError bool
-	publishAfterError  bool
-	nativeXray         []byte
-	nativeSingBox      []byte
-	candidateEdit      func(*DesiredState)
-	subscription       bool
-	subscriptionBundle []byte
-	reclamation        systemchanges.ReclamationAuthority
-	sshPreservation    systemchanges.SSHPreservationAuthority
-	withoutSSH         bool
+	extraSteps                  []systemchanges.Step
+	steps                       []systemchanges.Step
+	stepTimeout                 time.Duration
+	identity                    string
+	startingStatus              systemchanges.InstallationStatus
+	publishBeforeError          bool
+	publishAfterError           bool
+	nativeXray                  []byte
+	nativeSingBox               []byte
+	candidateEdit               func(*DesiredState)
+	subscription                bool
+	subscriptionBundle          []byte
+	reclamation                 systemchanges.ReclamationAuthority
+	sshPreservation             systemchanges.SSHPreservationAuthority
+	withoutSSH                  bool
+	cloudflareSetupConfirmation systemchanges.CloudflareSetupConfirmation
 }
 
 func preparedSystemChangeWithOptions(t *testing.T, mutation systemchanges.MutationClass, check systemchanges.Check, options systemChangeTestOptions) (Interface, *systemchanges.ChangeSet, *systemchanges.ChangeSet, systemchanges.Observation) {
@@ -1968,7 +1982,7 @@ func preparedSystemChangeWithOptions(t *testing.T, mutation systemchanges.Mutati
 		Identity: identity, Mutation: mutation, OutcomeOwner: owner,
 		StartingState: starting, TargetStateSHA256: target,
 		Plan:          systemchanges.PlanBinding{Identity: planIdentity, SHA256: planSHA256, VolatileSHA256: testSHA('2')},
-		PreparedState: prepared, TypedRemovalConfirmation: typedRemoval, PermanentRemovalSelection: permanentRemoval, Steps: steps,
+		PreparedState: prepared, TypedRemovalConfirmation: typedRemoval, PermanentRemovalSelection: permanentRemoval, CloudflareSetupConfirmation: options.cloudflareSetupConfirmation, Steps: steps,
 		Reclamation:     options.reclamation,
 		SSHPreservation: options.sshPreservation,
 		Checks: func() []systemchanges.Check {
@@ -1998,6 +2012,173 @@ func preparedSystemChangeWithOptions(t *testing.T, mutation systemchanges.Mutati
 		t.Fatal(err)
 	}
 	return module, changeSet, duplicate, observed
+}
+
+func TestCloudflareProfileSetupCrossesIrreversibleBoundaryBeforeFirstWrite(t *testing.T) {
+	confirmations := 0
+	confirmation := systemchanges.CloudflareSetupConfirmation(func(request systemchanges.CloudflareSetupConfirmationRequest) bool {
+		confirmations++
+		return request.ChangeSet == "change-0008" && request.StartingRevision == 7
+	})
+	_, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.CloudflareProfileSetupMutation, systemchanges.Check{Owner: systemchanges.CloudflareModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CLOUDFLARE-SETUP-GATE"}, systemChangeTestOptions{stepTimeout: 30 * time.Second, cloudflareSetupConfirmation: confirmation})
+	adapter := &systemChangesAdapter{observation: observed}
+
+	result := systemchanges.New(adapter).Apply(changeSet)
+	joined := strings.Join(adapter.events, "|")
+	boundary := strings.Index(joined, string(systemchanges.IrreversibleCloudflareSetupStarted))
+	deleted := strings.Index(joined, string(systemchanges.CloudflareSetupRollbackDeleted))
+	firstWrite := strings.Index(joined, "execute ")
+	if result.Outcome != systemchanges.Completed || confirmations != 1 || boundary < 0 || deleted < boundary || firstWrite < deleted || adapter.artifacts["snapshot/prior-state.json"] != nil {
+		t.Fatalf("Cloudflare Profile Setup = %+v; confirmations=%d events=%v artifacts=%v", result, confirmations, adapter.events, adapter.artifacts)
+	}
+}
+
+func TestCloudflareProfileSetupCancellationBeforeCheckpointRestoresStartingRevision(t *testing.T) {
+	confirmation := systemchanges.CloudflareSetupConfirmation(func(systemchanges.CloudflareSetupConfirmationRequest) bool { return false })
+	_, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.CloudflareProfileSetupMutation, systemchanges.Check{Owner: systemchanges.CloudflareModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CLOUDFLARE-SETUP-GATE"}, systemChangeTestOptions{stepTimeout: 30 * time.Second, cloudflareSetupConfirmation: confirmation})
+	adapter := &systemChangesAdapter{observation: observed}
+
+	result := systemchanges.New(adapter).Apply(changeSet)
+	if result.Outcome != systemchanges.RollbackSucceeded || result.RestoredStatus != systemchanges.Managed || adapter.executeCount != 0 || slices.Contains(adapter.events, string(systemchanges.IrreversibleCloudflareSetupStarted)) {
+		t.Fatalf("cancelled Cloudflare Profile Setup = %+v; events=%v", result, adapter.events)
+	}
+}
+
+func TestCloudflareProfileSetupFailureAfterCheckpointNeverRollsBack(t *testing.T) {
+	confirmation := systemchanges.CloudflareSetupConfirmation(func(systemchanges.CloudflareSetupConfirmationRequest) bool { return true })
+	_, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.CloudflareProfileSetupMutation, systemchanges.Check{Owner: systemchanges.CloudflareModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CLOUDFLARE-SETUP-GATE"}, systemChangeTestOptions{stepTimeout: 30 * time.Second, cloudflareSetupConfirmation: confirmation})
+	adapter := &systemChangesAdapter{observation: observed, failStep: 1}
+
+	result := systemchanges.New(adapter).ApplyWithCancellation(changeSet, systemchanges.NewCancellation())
+	rolledBack := slices.ContainsFunc(adapter.events, func(event string) bool {
+		return strings.HasPrefix(event, "Rollback") || strings.HasPrefix(event, "reverse ")
+	})
+	if result.Outcome != systemchanges.RecoveryRequiredOutcome || result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-FORWARD-CLOUDFLARE-SETUP" || rolledBack {
+		t.Fatalf("post-checkpoint failure = %+v; events=%v", result, adapter.events)
+	}
+}
+
+func TestCloudflareProfileSetupRestartIsReversibleBeforeAndForwardOnlyAfterCheckpoint(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		crashBefore systemchanges.DurableCheckpoint
+		crashAfter  systemchanges.DurableCheckpoint
+		want        systemchanges.ApplyOutcome
+		forward     bool
+	}{
+		{name: "before", crashBefore: systemchanges.IrreversibleCloudflareSetupStarted, want: systemchanges.RollbackSucceeded},
+		{name: "after", crashAfter: systemchanges.IrreversibleCloudflareSetupStarted, want: systemchanges.Completed, forward: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			confirmation := systemchanges.CloudflareSetupConfirmation(func(systemchanges.CloudflareSetupConfirmationRequest) bool { return true })
+			stateModule, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.CloudflareProfileSetupMutation, systemchanges.Check{Owner: systemchanges.CloudflareModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CLOUDFLARE-SETUP-GATE"}, systemChangeTestOptions{stepTimeout: 30 * time.Second, cloudflareSetupConfirmation: confirmation})
+			adapter := &systemChangesAdapter{observation: observed, stateRecovery: stateModule, crashBefore: test.crashBefore, crashAfter: test.crashAfter}
+			func() {
+				defer func() { _ = recover() }()
+				systemchanges.New(adapter).Apply(changeSet)
+			}()
+			adapter.crashBefore, adapter.crashAfter = "", ""
+			if test.forward {
+				adapter.crashed = false
+				adapter.crashAfter = systemchanges.StepStarted
+				func() {
+					defer func() { _ = recover() }()
+					_ = systemchanges.New(adapter).Recover()
+				}()
+				adapter.crashAfter = ""
+				adapter.crashed = false
+			}
+			result := systemchanges.New(adapter).Recover()
+			reversed := slices.ContainsFunc(adapter.events, func(event string) bool { return strings.HasPrefix(event, "reverse ") })
+			if result.Outcome != test.want || test.forward && reversed {
+				t.Fatalf("%s checkpoint recovery = %+v; events=%v", test.name, result, adapter.events)
+			}
+		})
+	}
+}
+
+func TestCloudflareProfileSetupRecoveryRejectsWrongProviderIdentity(t *testing.T) {
+	step, err := systemchanges.NewCloudflareStep(systemchanges.CloudflareChange{Action: systemchanges.CloudflareTunnelCreate, AccountID: "account-123", TunnelName: "sbxr-main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmation := systemchanges.CloudflareSetupConfirmation(func(systemchanges.CloudflareSetupConfirmationRequest) bool { return true })
+	stateModule, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.CloudflareProfileSetupMutation, systemchanges.Check{Owner: systemchanges.CloudflareModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CLOUDFLARE-SETUP-GATE"}, systemChangeTestOptions{stepTimeout: time.Second, cloudflareSetupConfirmation: confirmation, steps: []systemchanges.Step{step}})
+	adapter := &systemChangesAdapter{observation: observed, stateRecovery: stateModule, crashAfter: systemchanges.IrreversibleCloudflareSetupStarted}
+	func() {
+		defer func() { _ = recover() }()
+		_ = systemchanges.New(adapter).Apply(changeSet)
+	}()
+	adapter.crashAfter = ""
+	adapter.crashed = false
+	adapter.stepEvidence = &systemchanges.StepEvidence{Code: "step-ok", SHA256: testSHA('a'), ResourceType: string(systemchanges.CloudflareDNSRecordResource), ResourceID: "wrong-resource"}
+	result := systemchanges.New(adapter).Recover()
+	if result.Outcome != systemchanges.RecoveryRequiredOutcome || result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-FORWARD-CLOUDFLARE-SETUP" || slices.Contains(adapter.events, string(systemchanges.StepCompleted)) {
+		t.Fatalf("wrong provider identity recovery = %+v; events=%v", result, adapter.events)
+	}
+}
+
+func TestUbuntuCloudflareProfileSetupDeletesRollbackSnapshotAndRecoversForwardAfterDeath(t *testing.T) {
+	confirmation := systemchanges.CloudflareSetupConfirmation(func(systemchanges.CloudflareSetupConfirmationRequest) bool { return true })
+	stateModule, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.CloudflareProfileSetupMutation, systemchanges.Check{Owner: systemchanges.CloudflareModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CLOUDFLARE-SETUP-GATE"}, systemChangeTestOptions{stepTimeout: time.Second, cloudflareSetupConfirmation: confirmation})
+	root := t.TempDir()
+	prepareLock(t, root)
+	if err := os.MkdirAll(filepath.Join(root, "run/sbxr"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	host := &controlledUbuntuHost{root: root, expectedMutation: systemchanges.CloudflareProfileSetupMutation}
+	base := ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return observed, nil }, host, stateModule)
+	crashing := &checkpointCrashingUbuntuAdapter{Adapter: base, checkpoint: systemchanges.IrreversibleCloudflareSetupStarted, after: true}
+	func() {
+		defer func() { _ = recover() }()
+		_ = systemchanges.New(crashing).Apply(changeSet)
+	}()
+	if crashing.lock != nil {
+		_ = crashing.lock.Close()
+	}
+	if !crashing.crashed {
+		t.Fatal("controlled worker did not die after the Cloudflare setup checkpoint")
+	}
+	if err := os.Remove(filepath.Join(root, "var/lib/sbxr/transactions/change-0008/snapshot/prior-state.json")); err != nil {
+		t.Fatal(err)
+	}
+	observed.Status, observed.CurrentChangeSet, observed.Checkpoint, observed.TotalSteps, observed.RollbackAvailable = systemchanges.ChangeInProgress, "change-0008", systemchanges.PreparedCheckpoint, 1, false
+	result := systemchanges.New(ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return observed, nil }, host, stateModule)).Recover()
+	_, journalErr := os.ReadFile(filepath.Join(root, "var/lib/sbxr/transactions/change-0008/journal.jsonl"))
+	if result.Outcome != systemchanges.Completed || !errors.Is(journalErr, os.ErrNotExist) || host.executed != 1 {
+		t.Fatalf("forward recovery = %+v; executed=%d journal_err=%v", result, host.executed, journalErr)
+	}
+}
+
+func TestUbuntuCloudflareProfileSetupRestartAfterPublicationDoesNotWriteAgain(t *testing.T) {
+	confirmation := systemchanges.CloudflareSetupConfirmation(func(systemchanges.CloudflareSetupConfirmationRequest) bool { return true })
+	stateModule, changeSet, _, observed := preparedSystemChangeWithOptions(t, systemchanges.CloudflareProfileSetupMutation, systemchanges.Check{Owner: systemchanges.CloudflareModule, Scope: systemchanges.ServerSideCheck, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CLOUDFLARE-SETUP-GATE"}, systemChangeTestOptions{stepTimeout: time.Second, cloudflareSetupConfirmation: confirmation})
+	root := t.TempDir()
+	prepareLock(t, root)
+	if err := os.MkdirAll(filepath.Join(root, "run/sbxr"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	host := &controlledUbuntuHost{root: root, expectedMutation: systemchanges.CloudflareProfileSetupMutation}
+	base := ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return observed, nil }, host, stateModule)
+	crashing := &checkpointCrashingUbuntuAdapter{Adapter: base, checkpoint: systemchanges.StatePublished, after: true}
+	func() {
+		defer func() { _ = recover() }()
+		_ = systemchanges.New(crashing).Apply(changeSet)
+	}()
+	if crashing.lock != nil {
+		_ = crashing.lock.Close()
+	}
+	loaded, err := stateModule.Load(intentManagedRequestForRevision(8, "change-0008"))
+	if err != nil || loaded.loaded == nil || !crashing.crashed {
+		t.Fatalf("published setup State = (%+v, %v); crashed=%t", loaded, err, crashing.crashed)
+	}
+	observed.Status, observed.CurrentChangeSet, observed.LastChangeSet = systemchanges.Managed, "", "change-0008"
+	observed.StateRevision, observed.StateSHA256 = 8, loaded.loaded.payloadChecksum
+	result := systemchanges.New(ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return observed, nil }, host, stateModule)).Recover()
+	_, journalErr := os.ReadFile(filepath.Join(root, "var/lib/sbxr/transactions/change-0008/journal.jsonl"))
+	if result.Outcome != systemchanges.Completed || host.executed != 1 || !errors.Is(journalErr, os.ErrNotExist) {
+		t.Fatalf("post-publication recovery = %+v; executed=%d journal_err=%v", result, host.executed, journalErr)
+	}
 }
 
 func testSSHPreservationAuthority(t *testing.T) systemchanges.SSHPreservationAuthority {
@@ -2802,7 +2983,11 @@ func (host *controlledUbuntuHost) Execute(step systemchanges.Step, timeout time.
 	if wantMutation == "" {
 		wantMutation = systemchanges.SettingChangeMutation
 	}
-	if json.Unmarshal(manifestBytes, &manifest) != nil || manifest.SchemaVersion != 1 || manifest.Release != wantRelease || manifest.Reason != wantMutation || len(manifest.Files) < 3 {
+	minimumFiles := 3
+	if wantMutation == systemchanges.CloudflareProfileSetupMutation {
+		minimumFiles = 2
+	}
+	if json.Unmarshal(manifestBytes, &manifest) != nil || manifest.SchemaVersion != 1 || manifest.Release != wantRelease || manifest.Reason != wantMutation || len(manifest.Files) < minimumFiles {
 		return systemchanges.StepEvidence{}, errors.New("snapshot manifest binding is incomplete")
 	}
 	journalBytes, err := os.ReadFile(filepath.Join(transaction, "journal.jsonl"))

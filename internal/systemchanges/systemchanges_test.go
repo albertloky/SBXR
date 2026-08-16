@@ -468,6 +468,22 @@ func TestChangeSetRejectsUntypedMutationSurfaces(t *testing.T) {
 	}
 }
 
+func TestCloudflareProfileSetupConfirmationCannotBeMissingOrAttachedElsewhere(t *testing.T) {
+	setup := completeSpec(t, systemchanges.CloudflareProfileSetupMutation)
+	if _, err := systemchanges.NewChangeSet(setup); err == nil {
+		t.Fatal("Cloudflare Profile Setup without final confirmation was accepted")
+	}
+	setup.CloudflareSetupConfirmation = func(systemchanges.CloudflareSetupConfirmationRequest) bool { return true }
+	if _, err := systemchanges.NewChangeSet(setup); err != nil {
+		t.Fatalf("Cloudflare Profile Setup confirmation was refused: %v", err)
+	}
+	ordinary := completeSpec(t, systemchanges.SettingChangeMutation)
+	ordinary.CloudflareSetupConfirmation = setup.CloudflareSetupConfirmation
+	if _, err := systemchanges.NewChangeSet(ordinary); err == nil {
+		t.Fatal("Cloudflare Profile Setup confirmation escaped its mutation boundary")
+	}
+}
+
 func TestNetworkPolicyStepsAcceptOnlyTheExactFirewallContract(t *testing.T) {
 	base := `table inet sbxr {
 	chain input {

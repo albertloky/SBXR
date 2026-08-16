@@ -27,6 +27,8 @@ const (
 	OwnedDNSRecordsDeleted                DurableCheckpoint = "Owned Cloudflare DNS records deleted"
 	OwnedTunnelDeleted                    DurableCheckpoint = "Owned Cloudflare Tunnel deleted"
 	IrreversibleRunTokenRotationStarted   DurableCheckpoint = "Irreversible run-token rotation started"
+	IrreversibleCloudflareSetupStarted    DurableCheckpoint = "Irreversible Cloudflare setup started"
+	CloudflareSetupRollbackDeleted        DurableCheckpoint = "Cloudflare setup Rollback Snapshot deleted"
 	IrreversibleReclamationStarted        DurableCheckpoint = "Irreversible reclamation started"
 	ReclamationProcessStopped             DurableCheckpoint = "Reclamation process stopped"
 	ReclamationTargetDeleted              DurableCheckpoint = "Reclamation target deleted"
@@ -221,25 +223,26 @@ var irreversibleRemoteRemovalPhases = []struct {
 // RecoveryTransaction is the secret-safe durable authority for one interrupted
 // ordinary Change Set. Snapshot contents remain inside the Adapter.
 type RecoveryTransaction struct {
-	ChangeSet                      string
-	Mutation                       MutationClass
-	Starting                       StateLineage
-	StartingRelease                ReleaseBinding
-	Candidate                      StateLineage
-	CandidateRelease               ReleaseBinding
-	State                          StateTransactionBinding
-	OutcomeOwner                   Module
-	Steps                          []Step
-	Checks                         []Check
-	AttemptedSteps                 int
-	RollbackStep                   int
-	LastCheckpoint                 DurableCheckpoint
-	Timeouts                       Timeouts
-	PriorRunTokenSHA256            string
-	IrreversibleRemovalStarted     bool
-	IrreversibleReclamationStarted bool
-	Reclamation                    *ReclamationTarget
-	SSHPreservationSHA256          string
+	ChangeSet                          string
+	Mutation                           MutationClass
+	Starting                           StateLineage
+	StartingRelease                    ReleaseBinding
+	Candidate                          StateLineage
+	CandidateRelease                   ReleaseBinding
+	State                              StateTransactionBinding
+	OutcomeOwner                       Module
+	Steps                              []Step
+	Checks                             []Check
+	AttemptedSteps                     int
+	RollbackStep                       int
+	LastCheckpoint                     DurableCheckpoint
+	Timeouts                           Timeouts
+	PriorRunTokenSHA256                string
+	IrreversibleRemovalStarted         bool
+	IrreversibleReclamationStarted     bool
+	IrreversibleCloudflareSetupStarted bool
+	Reclamation                        *ReclamationTarget
+	SSHPreservationSHA256              string
 }
 
 // PendingChangeSet is the secret-safe identity needed to select one recovery
@@ -353,12 +356,21 @@ type RunTokenRotationAdapter interface {
 }
 
 type ForwardReclamationAdapter interface {
+	ForwardChangeAdapter
 	VerifyReclamationReady(ExecutionLease, string, ReclamationTarget, time.Duration) error
 	StopReclamationProcess(ExecutionLease, ReclamationTarget, time.Duration) (StepEvidence, error)
 	DeleteReclamationTarget(ExecutionLease, string, ReclamationTarget, time.Duration) (StepEvidence, error)
 	InspectReclamationTarget(ExecutionLease, string, ReclamationTarget, time.Duration) (StepEffect, error)
-	LoadForwardInstallationState(ExecutionLease, RecoveryTransaction) (any, error)
-	LoadForwardInstallationEvidence(ExecutionLease, RecoveryTransaction) ([]StepEvidence, error)
+}
+
+type ForwardChangeAdapter interface {
+	LoadForwardChangeState(ExecutionLease, RecoveryTransaction) (any, error)
+	LoadForwardChangeEvidence(ExecutionLease, RecoveryTransaction) ([]StepEvidence, error)
+}
+
+type CloudflareSetupBoundaryAdapter interface {
+	ForwardChangeAdapter
+	DeleteCloudflareSetupRollback(ExecutionLease, string) error
 }
 
 type OrphanedRemovalAdapter interface {
@@ -369,7 +381,7 @@ type StateRecovery interface {
 	SystemChangesRestoreDurable(lease any, binding []byte, prior, candidate io.Reader) ([]byte, error)
 	SystemChangesFinalizeRunTokenRotation(lease any, binding []byte, candidate io.Reader, source any) (any, error)
 	SystemChangesLoadRunTokenRotation(lease any, binding []byte, candidate, manifests io.Reader) (any, error)
-	SystemChangesLoadForwardInstallation(lease any, binding []byte, candidate, manifests io.Reader) (any, error)
+	SystemChangesLoadForwardChange(lease any, binding []byte, candidate, manifests io.Reader) (any, error)
 }
 
 var ErrNoRecoveryTransaction = errors.New("no unfinished recovery transaction")
@@ -382,6 +394,7 @@ type stateTransaction interface {
 	SystemChangesBindings(lease any) ([]byte, error)
 	SystemChangesWriteArtifacts(lease any, write func(name string, mode uint32, source io.Reader) error) error
 	SystemChangesPublish(lease any) (any, error)
+	SystemChangesPublishedAgreement(lease any) (any, error)
 	SystemChangesRestore(lease any) ([]byte, error)
 	SystemChangesDeferred(lease any) bool
 	SystemChangesFinalizeCloudflare(lease any, evidence []byte) ([]byte, error)
@@ -500,12 +513,25 @@ func (i Interface) recover(identityAuthority RecoverySSHIdentityAuthority, autho
 		}
 		return finish(lock, continueRunTokenRotation(lease, adapter, rotationAdapter, recovery, spec))
 	}
+	if recovery.Mutation == CloudflareProfileSetupMutation && recovery.IrreversibleCloudflareSetupStarted {
+		boundary, ok := i.adapter.(CloudflareSetupBoundaryAdapter)
+		if !ok {
+			return finish(lock, forwardCloudflareSetupRequired(spec, "SYSTEM-CHANGES-CLOUDFLARE-SETUP-ADAPTER", recovery.LastCheckpoint))
+		}
+		if recovery.LastCheckpoint == IrreversibleCloudflareSetupStarted {
+			if boundary.DeleteCloudflareSetupRollback(lease, recovery.ChangeSet) != nil || adapter.Record(lease, CheckpointRecord{ChangeSet: recovery.ChangeSet, Checkpoint: CloudflareSetupRollbackDeleted}) != nil {
+				return finish(lock, forwardCloudflareSetupRequired(spec, "SYSTEM-CHANGES-CLOUDFLARE-SETUP-SNAPSHOT", IrreversibleCloudflareSetupStarted))
+			}
+			recovery.LastCheckpoint = CloudflareSetupRollbackDeleted
+		}
+		return finish(lock, continueForwardChange(lease, adapter, boundary, recovery, spec, freshSSH))
+	}
 	if recovery.Reclamation != nil && recovery.IrreversibleReclamationStarted {
 		forward, ok := i.adapter.(ForwardReclamationAdapter)
 		if !ok {
 			return finish(lock, forwardReclamationRequired(spec, "SYSTEM-CHANGES-RECLAMATION-ADAPTER", recovery.LastCheckpoint))
 		}
-		return finish(lock, continueReclamationInstallation(lease, adapter, forward, recovery, spec, freshSSH))
+		return finish(lock, continueForwardChange(lease, adapter, forward, recovery, spec, freshSSH))
 	}
 	if err := recoveryAdapter.AllowProvenServices(lease, recovery, recovery.Timeouts.Check); err != nil {
 		return finish(lock, recoveryRequired(spec, "SYSTEM-CHANGES-SERVICE-HOLDBACK", recovery.LastCheckpoint))
@@ -576,6 +602,22 @@ func validRecoveryTransaction(recovery RecoveryTransaction) bool {
 		first := firstIrreversibleRemoteRemovalStep(recovery.Steps)
 		return recovery.Mutation == CompleteRemovalMutation && first >= 0 && recovery.AttemptedSteps == first && recovery.RollbackStep == 0 && IsIrreversibleRemovalCheckpoint(recovery.LastCheckpoint)
 	}
+	if recovery.IrreversibleCloudflareSetupStarted {
+		if recovery.Mutation != CloudflareProfileSetupMutation || recovery.RollbackStep != 0 || !irreversibleCloudflareSetupCheckpoint(recovery.LastCheckpoint) {
+			return false
+		}
+		switch recovery.LastCheckpoint {
+		case IrreversibleCloudflareSetupStarted, CloudflareSetupRollbackDeleted:
+			return recovery.AttemptedSteps == 0
+		case StateFinalized:
+			return recovery.AttemptedSteps >= 0 && recovery.AttemptedSteps <= len(recovery.Steps)
+		case StepStarted, StepCompleted, PrePublicationHealthPassed, StatePublicationStarted, StatePublished, PostPublicationHealthPassed:
+			return recovery.AttemptedSteps > 0
+		case Complete:
+			return recovery.AttemptedSteps == len(recovery.Steps)
+		}
+		return false
+	}
 	switch recovery.LastCheckpoint {
 	case Prepared:
 		return recovery.AttemptedSteps == 0
@@ -597,6 +639,14 @@ func validRecoveryTransaction(recovery RecoveryTransaction) bool {
 		return recovery.RollbackStep == 0
 	case Complete:
 		return recovery.RollbackStep == 0 && recovery.Candidate.Status == Managed && recovery.Candidate.Revision == recovery.Starting.Revision+1 && validSHA256(recovery.Candidate.SHA256) && recovery.CandidateRelease != (ReleaseBinding{})
+	}
+	return false
+}
+
+func irreversibleCloudflareSetupCheckpoint(checkpoint DurableCheckpoint) bool {
+	switch checkpoint {
+	case IrreversibleCloudflareSetupStarted, CloudflareSetupRollbackDeleted, StateFinalized, StepStarted, StepCompleted, PrePublicationHealthPassed, StatePublicationStarted, StatePublished, PostPublicationHealthPassed, Complete:
+		return true
 	}
 	return false
 }
@@ -746,40 +796,85 @@ func reclamationPreludeSteps(steps []Step) int {
 	return count
 }
 
-func continueReclamationInstallation(lease ExecutionLease, adapter TransactionAdapter, forward ForwardReclamationAdapter, recovery RecoveryTransaction, spec ChangeSetSpec, freshSSH bool) ApplyResult {
+func finalizeDeferredState(lease ExecutionLease, adapter TransactionAdapter, transaction stateTransaction, changeSet string, binding StateTransactionBinding, evidence []StepEvidence, attempted int) (StateTransactionBinding, string, DurableCheckpoint, bool) {
+	deferred, ok := adapter.(DeferredStateAdapter)
+	evidenceJSON, marshalErr := json.Marshal(evidence)
+	bindingJSON, finalizeErr := transaction.SystemChangesFinalizeCloudflare(lease, evidenceJSON)
+	var final StateTransactionBinding
+	if !ok || marshalErr != nil || finalizeErr != nil || json.Unmarshal(bindingJSON, &final) != nil || final.ChangeSet != binding.ChangeSet || final.StartingRevision != binding.StartingRevision || final.CandidateRevision != binding.CandidateRevision || final.StartingSHA256 != binding.StartingSHA256 {
+		return StateTransactionBinding{}, "SYSTEM-CHANGES-STATE-FINALIZATION", StepCompleted, false
+	}
+	if deferred.ReplaceStateArtifacts(lease, changeSet, final, func(write func(name string, mode uint32, source io.Reader) error) error {
+		return transaction.SystemChangesWriteArtifacts(lease, write)
+	}) != nil {
+		return StateTransactionBinding{}, "SYSTEM-CHANGES-STATE-FINALIZATION", StepCompleted, false
+	}
+	if adapter.Record(lease, CheckpointRecord{ChangeSet: changeSet, Checkpoint: StateFinalized, Step: attempted, State: &final}) != nil {
+		return StateTransactionBinding{}, "SYSTEM-CHANGES-JOURNAL", StateFinalized, false
+	}
+	return final, "", "", true
+}
+
+func continueForwardChange(lease ExecutionLease, adapter TransactionAdapter, forward ForwardChangeAdapter, recovery RecoveryTransaction, spec ChangeSetSpec, freshSSH bool) ApplyResult {
+	failure := func(cause string, checkpoint DurableCheckpoint) ApplyResult {
+		if recovery.Mutation == CloudflareProfileSetupMutation {
+			return forwardCloudflareSetupRequired(spec, cause, checkpoint)
+		}
+		return forwardReclamationRequired(spec, cause, checkpoint)
+	}
 	record := func(point DurableCheckpoint, step int, evidence *StepEvidence) bool {
 		return adapter.Record(lease, CheckpointRecord{ChangeSet: recovery.ChangeSet, Checkpoint: point, Step: step, Evidence: evidence}) == nil
 	}
 	if recovery.LastCheckpoint == Complete {
 		if adapter.Cleanup(lease, recovery.ChangeSet) != nil {
-			return forwardReclamationRequired(spec, "SYSTEM-CHANGES-CLEANUP", Complete)
+			return failure("SYSTEM-CHANGES-CLEANUP", Complete)
 		}
 		return ApplyResult{Outcome: Completed, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence()}
 	}
-	material, err := forward.LoadForwardInstallationState(lease, recovery)
+	material, err := forward.LoadForwardChangeState(lease, recovery)
 	transaction, ok := material.(stateTransaction)
 	if err != nil || !ok {
-		return forwardReclamationRequired(spec, "SYSTEM-CHANGES-RECLAMATION-STATE", recovery.LastCheckpoint)
+		return failure("SYSTEM-CHANGES-FORWARD-STATE", recovery.LastCheckpoint)
 	}
-	evidenceByStep, err := forward.LoadForwardInstallationEvidence(lease, recovery)
+	evidenceByStep, err := forward.LoadForwardChangeEvidence(lease, recovery)
 	if err != nil || len(evidenceByStep) != len(recovery.Steps) {
-		return forwardReclamationRequired(spec, "SYSTEM-CHANGES-RECLAMATION-EVIDENCE", recovery.LastCheckpoint)
+		return failure("SYSTEM-CHANGES-FORWARD-EVIDENCE", recovery.LastCheckpoint)
+	}
+	finalizeState := func(attempted int) *ApplyResult {
+		if !transaction.SystemChangesDeferred(lease) || recovery.LastCheckpoint == StateFinalized {
+			return nil
+		}
+		binding, cause, checkpoint, ok := finalizeDeferredState(lease, adapter, transaction, recovery.ChangeSet, recovery.State, evidenceByStep, attempted)
+		if !ok {
+			result := failure(cause, checkpoint)
+			return &result
+		}
+		recovery.State, recovery.LastCheckpoint = binding, StateFinalized
+		return nil
 	}
 	if recovery.LastCheckpoint == IrreversibleReclamationStarted {
-		evidence, err := forward.StopReclamationProcess(lease, *recovery.Reclamation, recovery.Timeouts.Step)
+		reclamation, ok := forward.(ForwardReclamationAdapter)
+		if !ok {
+			return failure("SYSTEM-CHANGES-RECLAMATION-ADAPTER", recovery.LastCheckpoint)
+		}
+		evidence, err := reclamation.StopReclamationProcess(lease, *recovery.Reclamation, recovery.Timeouts.Step)
 		if err != nil || !safeIdentity(evidence.Code) || !validSHA256(evidence.SHA256) || !record(ReclamationProcessStopped, recovery.AttemptedSteps, &evidence) {
-			return forwardReclamationRequired(spec, "SYSTEM-CHANGES-RECLAMATION-PROCESS", IrreversibleReclamationStarted)
+			return failure("SYSTEM-CHANGES-RECLAMATION-PROCESS", IrreversibleReclamationStarted)
 		}
 		recovery.LastCheckpoint = ReclamationProcessStopped
 	}
 	if recovery.LastCheckpoint == ReclamationProcessStopped {
-		effect, err := forward.InspectReclamationTarget(lease, recovery.ChangeSet, *recovery.Reclamation, recovery.Timeouts.Check)
+		reclamation, ok := forward.(ForwardReclamationAdapter)
+		if !ok {
+			return failure("SYSTEM-CHANGES-RECLAMATION-ADAPTER", recovery.LastCheckpoint)
+		}
+		effect, err := reclamation.InspectReclamationTarget(lease, recovery.ChangeSet, *recovery.Reclamation, recovery.Timeouts.Check)
 		if err != nil {
-			return forwardReclamationRequired(spec, "SYSTEM-CHANGES-RECLAMATION-INSPECTION", ReclamationProcessStopped)
+			return failure("SYSTEM-CHANGES-RECLAMATION-INSPECTION", ReclamationProcessStopped)
 		}
 		var evidence StepEvidence
 		if effect == StepEffectPresent {
-			evidence, err = forward.DeleteReclamationTarget(lease, recovery.ChangeSet, *recovery.Reclamation, recovery.Timeouts.Step)
+			evidence, err = reclamation.DeleteReclamationTarget(lease, recovery.ChangeSet, *recovery.Reclamation, recovery.Timeouts.Step)
 		} else if effect == StepEffectAbsent {
 			digest := sha256.Sum256([]byte(recovery.Reclamation.Kind + "\x00" + recovery.Reclamation.Path + "\x00" + recovery.Reclamation.SHA256))
 			evidence = StepEvidence{Code: "reclamation-target-deleted", SHA256: hex.EncodeToString(digest[:])}
@@ -787,67 +882,80 @@ func continueReclamationInstallation(lease ExecutionLease, adapter TransactionAd
 			err = errors.New("unknown reclamation target effect")
 		}
 		if err != nil || !record(ReclamationTargetDeleted, recovery.AttemptedSteps, &evidence) {
-			return forwardReclamationRequired(spec, "SYSTEM-CHANGES-RECLAMATION-DELETE", IrreversibleReclamationStarted)
+			return failure("SYSTEM-CHANGES-RECLAMATION-DELETE", IrreversibleReclamationStarted)
 		}
 		recovery.LastCheckpoint = ReclamationTargetDeleted
 	}
-	if recovery.LastCheckpoint == ReclamationTargetDeleted || recovery.LastCheckpoint == StepStarted || recovery.LastCheckpoint == StepCompleted || recovery.LastCheckpoint == StateFinalized {
+	if recovery.LastCheckpoint == ReclamationTargetDeleted || recovery.LastCheckpoint == CloudflareSetupRollbackDeleted || recovery.LastCheckpoint == StepStarted || recovery.LastCheckpoint == StepCompleted || recovery.LastCheckpoint == StateFinalized {
 		next := recovery.AttemptedSteps + 1
 		if recovery.LastCheckpoint == StepStarted {
 			next = recovery.AttemptedSteps
 		}
 		for number := next; number <= len(recovery.Steps); number++ {
 			step := recovery.Steps[number-1]
+			if step.Owner() == CloudflareModule && step.Forward() == ActivatePreparedConfiguration {
+				if result := finalizeState(number - 1); result != nil {
+					return *result
+				}
+			}
 			sshAdapter, hasSSHAdapter := adapter.(SSHPreservationAdapter)
 			if isFirewallReplacement(step) && (!freshSSH || !hasSSHAdapter || sshAdapter.VerifySSHPreservation(lease, recovery.ChangeSet, recovery.SSHPreservationSHA256, BeforeFirewallReplacement, recovery.Timeouts.Check) != nil) {
-				return forwardReclamationRequired(spec, "SYSTEM-CHANGES-SSH-PRESERVATION", recovery.LastCheckpoint)
+				return failure("SYSTEM-CHANGES-SSH-PRESERVATION", recovery.LastCheckpoint)
 			}
 			if !(recovery.LastCheckpoint == StepStarted && number == recovery.AttemptedSteps) && !record(StepStarted, number, nil) {
-				return forwardReclamationRequired(spec, "SYSTEM-CHANGES-JOURNAL", StepStarted)
+				return failure("SYSTEM-CHANGES-JOURNAL", StepStarted)
 			}
 			evidence, err := adapter.Execute(lease, recovery.ChangeSet, number, step, recovery.Timeouts.Step, nil)
 			if err == nil && isFirewallReplacement(step) {
 				err = sshAdapter.VerifySSHPreservation(lease, recovery.ChangeSet, recovery.SSHPreservationSHA256, AfterFirewallReplacement, recovery.Timeouts.Check)
 			}
-			if err != nil || !safeIdentity(evidence.Code) || !validSHA256(evidence.SHA256) || adapter.Record(lease, CheckpointRecord{ChangeSet: recovery.ChangeSet, Checkpoint: StepCompleted, Step: number, Evidence: &evidence, CompletedStep: &step}) != nil {
-				return forwardReclamationRequired(spec, "SYSTEM-CHANGES-INSTALL-FORWARD", StepStarted)
+			if err != nil || !safeIdentity(evidence.Code) || !validSHA256(evidence.SHA256) || !validCloudflareEvidence(step, number, evidence, evidenceByStep) || adapter.Record(lease, CheckpointRecord{ChangeSet: recovery.ChangeSet, Checkpoint: StepCompleted, Step: number, Evidence: &evidence, CompletedStep: &step}) != nil {
+				return failure("SYSTEM-CHANGES-FORWARD-STEP", StepStarted)
 			}
 			evidenceByStep[number-1] = evidence
 			recovery.LastCheckpoint, recovery.AttemptedSteps = StepCompleted, number
 		}
+		if result := finalizeState(len(recovery.Steps)); result != nil {
+			return *result
+		}
 		if !gatePassed(lease, adapter, recovery.Checks, PrePublication, recovery.Timeouts.Check) || !record(PrePublicationHealthPassed, 0, nil) {
-			return forwardReclamationRequired(spec, "SYSTEM-CHANGES-INSTALL-HEALTH", StepCompleted)
+			return failure("SYSTEM-CHANGES-FORWARD-HEALTH", StepCompleted)
 		}
 		recovery.LastCheckpoint = PrePublicationHealthPassed
 	}
 	if recovery.LastCheckpoint == PrePublicationHealthPassed {
 		if !record(StatePublicationStarted, 0, nil) {
-			return forwardReclamationRequired(spec, "SYSTEM-CHANGES-JOURNAL", PrePublicationHealthPassed)
+			return failure("SYSTEM-CHANGES-JOURNAL", PrePublicationHealthPassed)
 		}
 		recovery.LastCheckpoint = StatePublicationStarted
 	}
-	published, err := transaction.SystemChangesPublish(lease)
+	var published any
+	if recovery.LastCheckpoint == StatePublicationStarted {
+		published, err = transaction.SystemChangesPublish(lease)
+	} else {
+		published, err = transaction.SystemChangesPublishedAgreement(lease)
+	}
 	agreement, agreementOK := validatedAgreement(lease, published, recovery.State)
 	if err != nil || !agreementOK {
-		return forwardReclamationRequired(spec, "SYSTEM-CHANGES-INSTALL-PUBLICATION", recovery.LastCheckpoint)
+		return failure("SYSTEM-CHANGES-FORWARD-PUBLICATION", recovery.LastCheckpoint)
 	}
 	if recovery.LastCheckpoint == StatePublicationStarted {
 		if !record(StatePublished, 0, nil) {
-			return forwardReclamationRequired(spec, "SYSTEM-CHANGES-JOURNAL", StatePublicationStarted)
+			return failure("SYSTEM-CHANGES-JOURNAL", StatePublicationStarted)
 		}
 		recovery.LastCheckpoint = StatePublished
 	}
 	if recovery.LastCheckpoint == StatePublished {
 		if !gatePassed(lease, adapter, recovery.Checks, PostPublication, recovery.Timeouts.Check) || adapter.VerifyAgreement(lease, agreement, recovery.Timeouts.Check) != nil || !record(PostPublicationHealthPassed, 0, nil) {
-			return forwardReclamationRequired(spec, "SYSTEM-CHANGES-INSTALL-AGREEMENT", StatePublished)
+			return failure("SYSTEM-CHANGES-FORWARD-AGREEMENT", StatePublished)
 		}
 		recovery.LastCheckpoint = PostPublicationHealthPassed
 	}
 	if recovery.LastCheckpoint == PostPublicationHealthPassed && !record(Complete, 0, nil) {
-		return forwardReclamationRequired(spec, "SYSTEM-CHANGES-JOURNAL", PostPublicationHealthPassed)
+		return failure("SYSTEM-CHANGES-JOURNAL", PostPublicationHealthPassed)
 	}
 	if adapter.Cleanup(lease, recovery.ChangeSet) != nil {
-		return forwardReclamationRequired(spec, "SYSTEM-CHANGES-CLEANUP", Complete)
+		return failure("SYSTEM-CHANGES-CLEANUP", Complete)
 	}
 	return ApplyResult{Outcome: Completed, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(), SSHPreservationSHA256: recovery.SSHPreservationSHA256}
 }
@@ -1052,7 +1160,7 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 	}
 	sshIdentity, sshSHA256, sshProtected := spec.SSHPreservation.consume()
 	spec.sshPreservationSHA256 = sshSHA256
-	needsSSHProtection := (spec.Mutation == InstallationMutation || spec.Mutation == SettingChangeMutation) && containsFirewallStep(spec.Steps)
+	needsSSHProtection := (spec.Mutation == InstallationMutation || spec.Mutation == SettingChangeMutation || spec.Mutation == CloudflareProfileSetupMutation) && containsFirewallStep(spec.Steps)
 	sshAdapter, hasSSHAdapter := adapter.(SSHPreservationAdapter)
 	if needsSSHProtection && (!sshProtected || !hasSSHAdapter) {
 		return finish(lock, nothingChanged(spec, "SYSTEM-CHANGES-SSH-PRESERVATION", Prepared))
@@ -1189,6 +1297,7 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 		return finish(lock, nothingChanged(spec, "SYSTEM-CHANGES-PREPARATION", Prepared))
 	}
 	irreversibleReclamation := false
+	irreversibleCloudflareSetup := false
 	var reclamationForward ForwardReclamationAdapter
 	if reclamation != nil {
 		var ok bool
@@ -1214,43 +1323,49 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 		}
 		return finish(lock, ApplyResult{Outcome: AwaitingRunTokenRotation, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence()}, spec.OutcomeOwner)
 	}
+	if spec.Mutation == CloudflareProfileSetupMutation {
+		boundary, ok := adapter.(CloudflareSetupBoundaryAdapter)
+		if !ok {
+			return finish(lock, rollbackChange(lease, adapter, transaction, spec, 0, "SYSTEM-CHANGES-CLOUDFLARE-SETUP-ADAPTER", Prepared))
+		}
+		confirmed := spec.CloudflareSetupConfirmation(CloudflareSetupConfirmationRequest{ChangeSet: spec.Identity, StartingRevision: spec.StartingState.Revision})
+		if cancellation.Requested() || !confirmed {
+			return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, 0))
+		}
+		if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: IrreversibleCloudflareSetupStarted}); err != nil {
+			return finish(lock, rollbackChange(lease, adapter, transaction, spec, 0, "SYSTEM-CHANGES-CLOUDFLARE-SETUP-CHECKPOINT", Prepared))
+		}
+		irreversibleCloudflareSetup = true
+		if boundary.DeleteCloudflareSetupRollback(lease, spec.Identity) != nil {
+			return finish(lock, forwardCloudflareSetupRequired(spec, "SYSTEM-CHANGES-CLOUDFLARE-SETUP-SNAPSHOT", IrreversibleCloudflareSetupStarted))
+		}
+		if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: CloudflareSetupRollbackDeleted}); err != nil {
+			return finish(lock, forwardCloudflareSetupRequired(spec, "SYSTEM-CHANGES-CLOUDFLARE-SETUP-JOURNAL", IrreversibleCloudflareSetupStarted))
+		}
+	}
+	forwardOnly := func() bool { return irreversibleReclamation || irreversibleCloudflareSetup }
+	forwardFailure := func(cause string, checkpoint DurableCheckpoint) ApplyResult {
+		if irreversibleCloudflareSetup {
+			return forwardCloudflareSetupRequired(spec, cause, checkpoint)
+		}
+		return forwardReclamationRequired(spec, cause, checkpoint)
+	}
 	evidenceByStep := make([]StepEvidence, len(spec.Steps))
 	finalized := false
-	finalizeDeferredState := func(attempted int) *ApplyResult {
+	finalizeState := func(attempted int) *ApplyResult {
 		if finalized || !transaction.SystemChangesDeferred(lease) {
 			return nil
 		}
-		deferredAdapter, ok := adapter.(DeferredStateAdapter)
-		evidenceJSON, marshalErr := json.Marshal(evidenceByStep)
-		finalBindingJSON, finalizeErr := transaction.SystemChangesFinalizeCloudflare(lease, evidenceJSON)
-		var finalBinding StateTransactionBinding
-		if !ok || marshalErr != nil || finalizeErr != nil || json.Unmarshal(finalBindingJSON, &finalBinding) != nil || finalBinding.ChangeSet != binding.ChangeSet || finalBinding.StartingRevision != binding.StartingRevision || finalBinding.CandidateRevision != binding.CandidateRevision || finalBinding.StartingSHA256 != binding.StartingSHA256 {
-			if irreversibleReclamation {
-				result := finish(lock, forwardReclamationRequired(spec, "SYSTEM-CHANGES-STATE-FINALIZATION", StepCompleted))
+		finalBinding, cause, checkpoint, ok := finalizeDeferredState(lease, adapter, transaction, spec.Identity, binding, evidenceByStep, attempted)
+		if !ok {
+			if forwardOnly() {
+				result := finish(lock, forwardFailure(cause, checkpoint))
 				return &result
 			}
-			result := finish(lock, rollbackChange(lease, adapter, transaction, spec, attempted, "SYSTEM-CHANGES-STATE-FINALIZATION", StepCompleted))
-			return &result
-		}
-		if err := deferredAdapter.ReplaceStateArtifacts(lease, spec.Identity, finalBinding, func(write func(name string, mode uint32, source io.Reader) error) error {
-			return transaction.SystemChangesWriteArtifacts(lease, write)
-		}); err != nil {
-			if irreversibleReclamation {
-				result := finish(lock, forwardReclamationRequired(spec, "SYSTEM-CHANGES-STATE-FINALIZATION", StepCompleted))
-				return &result
-			}
-			result := finish(lock, rollbackChange(lease, adapter, transaction, spec, attempted, "SYSTEM-CHANGES-STATE-FINALIZATION", StepCompleted))
+			result := finish(lock, rollbackChange(lease, adapter, transaction, spec, attempted, cause, checkpoint))
 			return &result
 		}
 		binding = finalBinding
-		if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: StateFinalized, Step: attempted, State: &binding}); err != nil {
-			if irreversibleReclamation {
-				result := finish(lock, forwardReclamationRequired(spec, "SYSTEM-CHANGES-JOURNAL", StateFinalized))
-				return &result
-			}
-			result := finish(lock, rollbackChange(lease, adapter, transaction, spec, attempted, "SYSTEM-CHANGES-JOURNAL", StateFinalized))
-			return &result
-		}
 		finalized = true
 		return nil
 	}
@@ -1273,12 +1388,12 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 		}
 	}
 	for index, step := range spec.Steps[:attemptedSteps] {
-		if cancellation.Requested() && !irreversibleRemoval && !irreversibleReclamation {
+		if cancellation.Requested() && !irreversibleRemoval && !forwardOnly() {
 			return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, index))
 		}
 		if reclamation != nil && index == reclamationBoundary {
 			if reclamation.Kind != "cloudflare" {
-				if result := finalizeDeferredState(index); result != nil {
+				if result := finalizeState(index); result != nil {
 					return *result
 				}
 			}
@@ -1303,13 +1418,13 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 		}
 		number := index + 1
 		if step.Owner() == CloudflareModule && step.Forward() == ActivatePreparedConfiguration {
-			if result := finalizeDeferredState(index); result != nil {
+			if result := finalizeState(index); result != nil {
 				return *result
 			}
 		}
 		if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: StepStarted, Step: number}); err != nil {
-			if irreversibleReclamation {
-				return finish(lock, forwardReclamationRequired(spec, "SYSTEM-CHANGES-JOURNAL", StepStarted))
+			if forwardOnly() {
+				return finish(lock, forwardFailure("SYSTEM-CHANGES-JOURNAL", StepStarted))
 			}
 			if irreversibleRemoval {
 				return finish(lock, forwardRemovalRequired(spec, "SYSTEM-CHANGES-JOURNAL", StepStarted))
@@ -1317,10 +1432,13 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 			return finish(lock, nothingChanged(spec, "SYSTEM-CHANGES-JOURNAL", StepStarted))
 		}
 		if isFirewallReplacement(step) && needsSSHProtection && sshAdapter.VerifySSHPreservation(lease, spec.Identity, sshSHA256, BeforeFirewallReplacement, spec.Timeouts.Check) != nil {
+			if forwardOnly() {
+				return finish(lock, forwardFailure("SYSTEM-CHANGES-SSH-PRESERVATION", StepStarted))
+			}
 			return finish(lock, rollbackChange(lease, adapter, transaction, spec, index, "SYSTEM-CHANGES-SSH-PRESERVATION", StepStarted))
 		}
 		executionCancellation := cancellation
-		if irreversibleReclamation {
+		if forwardOnly() {
 			executionCancellation = nil
 		}
 		evidence, err := adapter.Execute(lease, spec.Identity, number, step, spec.Timeouts.Step, executionCancellation)
@@ -1330,9 +1448,9 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 			}
 		}
 		if err != nil || !safeIdentity(evidence.Code) || !validSHA256(evidence.SHA256) || !validCloudflareEvidence(step, number, evidence, evidenceByStep) {
-			if irreversibleRemoval || irreversibleReclamation {
-				if irreversibleReclamation {
-					return finish(lock, forwardReclamationRequired(spec, "SYSTEM-CHANGES-INSTALL-FORWARD", StepStarted))
+			if irreversibleRemoval || forwardOnly() {
+				if forwardOnly() {
+					return finish(lock, forwardFailure("SYSTEM-CHANGES-FORWARD-STEP", StepStarted))
 				}
 				return finish(lock, forwardRemovalRequired(spec, "SYSTEM-CHANGES-CLOUDFLARE-DELETION", StepStarted))
 			}
@@ -1342,40 +1460,40 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 			return finish(lock, rollbackChange(lease, adapter, transaction, spec, number, "SYSTEM-CHANGES-STEP", StepStarted))
 		}
 		if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: StepCompleted, Step: number, Evidence: &evidence, CompletedStep: &step}); err != nil {
-			if irreversibleRemoval || irreversibleReclamation {
-				if irreversibleReclamation {
-					return finish(lock, forwardReclamationRequired(spec, "SYSTEM-CHANGES-JOURNAL", StepCompleted))
+			if irreversibleRemoval || forwardOnly() {
+				if forwardOnly() {
+					return finish(lock, forwardFailure("SYSTEM-CHANGES-JOURNAL", StepCompleted))
 				}
 				return finish(lock, forwardRemovalRequired(spec, "SYSTEM-CHANGES-JOURNAL", StepCompleted))
 			}
 			return finish(lock, rollbackChange(lease, adapter, transaction, spec, number, "SYSTEM-CHANGES-JOURNAL", StepStarted))
 		}
 		evidenceByStep[index] = evidence
-		if cancellation.Requested() && !irreversibleRemoval && !irreversibleReclamation {
+		if cancellation.Requested() && !irreversibleRemoval && !forwardOnly() {
 			return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, number))
 		}
 	}
-	if cancellation.Requested() && !irreversibleRemoval && !irreversibleReclamation {
+	if cancellation.Requested() && !irreversibleRemoval && !forwardOnly() {
 		return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, attemptedSteps))
 	}
-	if result := finalizeDeferredState(attemptedSteps); result != nil {
+	if result := finalizeState(attemptedSteps); result != nil {
 		return *result
 	}
 	if !gatePassed(lease, adapter, spec.Checks, PrePublication, spec.Timeouts.Check) {
-		if irreversibleReclamation {
-			return finish(lock, forwardReclamationRequired(spec, "SYSTEM-CHANGES-INSTALL-HEALTH", StepCompleted))
+		if forwardOnly() {
+			return finish(lock, forwardFailure("SYSTEM-CHANGES-FORWARD-HEALTH", StepCompleted))
 		}
 		if irreversibleRemoval {
 			return finish(lock, forwardRemovalRequired(spec, "SYSTEM-CHANGES-REMOVAL-HEALTH", StepCompleted))
 		}
 		return finish(lock, rollbackChange(lease, adapter, transaction, spec, attemptedSteps, "SYSTEM-CHANGES-HEALTH", DurableCheckpoint(PrePublication+" health")))
 	}
-	if cancellation.Requested() && !irreversibleRemoval && !irreversibleReclamation {
+	if cancellation.Requested() && !irreversibleRemoval && !forwardOnly() {
 		return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, attemptedSteps))
 	}
 	if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: PrePublicationHealthPassed}); err != nil {
-		if irreversibleReclamation {
-			return finish(lock, forwardReclamationRequired(spec, "SYSTEM-CHANGES-JOURNAL", PrePublicationHealthPassed))
+		if forwardOnly() {
+			return finish(lock, forwardFailure("SYSTEM-CHANGES-JOURNAL", PrePublicationHealthPassed))
 		}
 		if irreversibleRemoval {
 			return finish(lock, forwardRemovalRequired(spec, "SYSTEM-CHANGES-JOURNAL", PrePublicationHealthPassed))
@@ -1398,70 +1516,70 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 		return finish(lock, continueIrreversibleRemoval(lease, adapter, removal, recovery, spec), spec.OutcomeOwner)
 	}
 	if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: StatePublicationStarted}); err != nil {
-		if irreversibleReclamation {
-			return finish(lock, forwardReclamationRequired(spec, "SYSTEM-CHANGES-JOURNAL", PrePublicationHealthPassed))
+		if forwardOnly() {
+			return finish(lock, forwardFailure("SYSTEM-CHANGES-JOURNAL", PrePublicationHealthPassed))
 		}
 		return finish(lock, rollbackChange(lease, adapter, transaction, spec, len(spec.Steps), "SYSTEM-CHANGES-JOURNAL", PrePublicationHealthPassed))
 	}
-	if cancellation.Requested() && !irreversibleReclamation {
+	if cancellation.Requested() && !forwardOnly() {
 		return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, len(spec.Steps)))
 	}
 	published, err := transaction.SystemChangesPublish(lease)
 	if err != nil {
-		if irreversibleReclamation {
-			return finish(lock, forwardReclamationRequired(spec, "SYSTEM-CHANGES-INSTALL-PUBLICATION", StatePublicationStarted))
+		if forwardOnly() {
+			return finish(lock, forwardFailure("SYSTEM-CHANGES-FORWARD-PUBLICATION", StatePublicationStarted))
 		}
 		return finish(lock, rollbackChange(lease, adapter, transaction, spec, len(spec.Steps), "SYSTEM-CHANGES-PUBLICATION", StatePublicationStarted))
 	}
 	agreement, ok := validatedAgreement(lease, published, binding)
 	if !ok {
-		if irreversibleReclamation {
-			return finish(lock, forwardReclamationRequired(spec, "SYSTEM-CHANGES-INSTALL-PUBLICATION", StatePublicationStarted))
+		if forwardOnly() {
+			return finish(lock, forwardFailure("SYSTEM-CHANGES-FORWARD-PUBLICATION", StatePublicationStarted))
 		}
 		return finish(lock, rollbackChange(lease, adapter, transaction, spec, len(spec.Steps), "SYSTEM-CHANGES-PUBLICATION", StatePublicationStarted))
 	}
 	if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: StatePublished}); err != nil {
-		if irreversibleReclamation {
-			return finish(lock, forwardReclamationRequired(spec, "SYSTEM-CHANGES-JOURNAL", StatePublicationStarted))
+		if forwardOnly() {
+			return finish(lock, forwardFailure("SYSTEM-CHANGES-JOURNAL", StatePublicationStarted))
 		}
 		return finish(lock, rollbackChange(lease, adapter, transaction, spec, len(spec.Steps), "SYSTEM-CHANGES-JOURNAL", StatePublicationStarted))
 	}
-	if cancellation.Requested() && !irreversibleReclamation {
+	if cancellation.Requested() && !forwardOnly() {
 		return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, len(spec.Steps)))
 	}
 	if !gatePassed(lease, adapter, spec.Checks, PostPublication, spec.Timeouts.Check) {
-		if irreversibleReclamation {
-			return finish(lock, forwardReclamationRequired(spec, "SYSTEM-CHANGES-INSTALL-HEALTH", StatePublished))
+		if forwardOnly() {
+			return finish(lock, forwardFailure("SYSTEM-CHANGES-FORWARD-HEALTH", StatePublished))
 		}
 		return finish(lock, rollbackChange(lease, adapter, transaction, spec, len(spec.Steps), "SYSTEM-CHANGES-HEALTH", DurableCheckpoint(PostPublication+" health")))
 	}
-	if cancellation.Requested() && !irreversibleReclamation {
+	if cancellation.Requested() && !forwardOnly() {
 		return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, len(spec.Steps)))
 	}
 	if err := adapter.VerifyAgreement(lease, agreement, spec.Timeouts.Check); err != nil {
-		if irreversibleReclamation {
-			return finish(lock, forwardReclamationRequired(spec, "SYSTEM-CHANGES-INSTALL-AGREEMENT", StatePublished))
+		if forwardOnly() {
+			return finish(lock, forwardFailure("SYSTEM-CHANGES-FORWARD-AGREEMENT", StatePublished))
 		}
 		return finish(lock, rollbackChange(lease, adapter, transaction, spec, len(spec.Steps), "SYSTEM-CHANGES-AGREEMENT", StatePublished))
 	}
 	if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: PostPublicationHealthPassed}); err != nil {
-		if irreversibleReclamation {
-			return finish(lock, forwardReclamationRequired(spec, "SYSTEM-CHANGES-JOURNAL", StatePublished))
+		if forwardOnly() {
+			return finish(lock, forwardFailure("SYSTEM-CHANGES-JOURNAL", StatePublished))
 		}
 		return finish(lock, rollbackChange(lease, adapter, transaction, spec, len(spec.Steps), "SYSTEM-CHANGES-JOURNAL", StatePublished))
 	}
-	if cancellation.Requested() && !irreversibleReclamation {
+	if cancellation.Requested() && !forwardOnly() {
 		return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, len(spec.Steps)))
 	}
 	if err := adapter.Record(lease, CheckpointRecord{ChangeSet: spec.Identity, Checkpoint: Complete}); err != nil {
-		if irreversibleReclamation {
-			return finish(lock, forwardReclamationRequired(spec, "SYSTEM-CHANGES-JOURNAL", PostPublicationHealthPassed))
+		if forwardOnly() {
+			return finish(lock, forwardFailure("SYSTEM-CHANGES-JOURNAL", PostPublicationHealthPassed))
 		}
 		return finish(lock, rollbackChange(lease, adapter, transaction, spec, len(spec.Steps), "SYSTEM-CHANGES-JOURNAL", PostPublicationHealthPassed))
 	}
 	if err := adapter.Cleanup(lease, spec.Identity); err != nil {
-		if irreversibleReclamation {
-			return finish(lock, forwardReclamationRequired(spec, "SYSTEM-CHANGES-CLEANUP", Complete))
+		if forwardOnly() {
+			return finish(lock, forwardFailure("SYSTEM-CHANGES-CLEANUP", Complete))
 		}
 		return finish(lock, recoveryRequired(spec, "SYSTEM-CHANGES-CLEANUP", Complete))
 	}
@@ -1484,6 +1602,10 @@ func isFirewallReplacement(step Step) bool {
 
 func forwardReclamationRequired(spec ChangeSetSpec, cause string, checkpoint DurableCheckpoint) ApplyResult {
 	return ApplyResult{Outcome: RecoveryRequiredOutcome, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(), Finding: &Finding{Code: "SYSTEM-CHANGES-FORWARD-RECLAMATION", Owner: spec.OutcomeOwner, Problem: "Irreversible reclamation must continue forward to Managed", Found: string(checkpoint), Required: "resume the exact next unproved installation effect from protected evidence", WhyStopped: cause, NextAction: "Keep affected services stopped and retry the private recovery runner."}}
+}
+
+func forwardCloudflareSetupRequired(spec ChangeSetSpec, cause string, checkpoint DurableCheckpoint) ApplyResult {
+	return ApplyResult{Outcome: RecoveryRequiredOutcome, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(), Finding: &Finding{Code: "SYSTEM-CHANGES-FORWARD-CLOUDFLARE-SETUP", Owner: spec.OutcomeOwner, Problem: "Irreversible Cloudflare Profile Setup must continue forward to Managed", Found: string(checkpoint), Required: "resume the exact next unproved setup effect from protected evidence", WhyStopped: cause, NextAction: "Keep affected services stopped and retry the private recovery runner."}}
 }
 
 func runTokenRotationChange(spec ChangeSetSpec) bool {

@@ -400,6 +400,13 @@ func (a Adapter) StartRunTokenRotation(lease systemchanges.ExecutionLease, chang
 	return true, verifyTransaction(root, target, a.uid)
 }
 
+type rollbackArtifactPolicy uint8
+
+const (
+	discardAllRollbackArtifacts rollbackArtifactPolicy = iota
+	preserveSSHPreservationEvidence
+)
+
 func (a Adapter) discardRunTokenRollback(root *os.Root, target string) error {
 	if a.cloudflare == nil {
 		return errors.New("Cloudflare run-token cleanup unavailable")
@@ -407,12 +414,48 @@ func (a Adapter) discardRunTokenRollback(root *os.Root, target string) error {
 	if err := a.cloudflare.RemoveRunToken(a.root); err != nil {
 		return err
 	}
+	return a.discardRollbackArtifacts(root, target, discardAllRollbackArtifacts)
+}
+
+func (a Adapter) DeleteCloudflareSetupRollback(lease systemchanges.ExecutionLease, changeSet string) error {
+	if !lease.Authorized() || !safeName(changeSet) {
+		return errors.New("Cloudflare setup rollback deletion unavailable")
+	}
+	root, err := os.OpenRoot(a.root)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	target := path.Join(transactionDirectory, changeSet)
+	journal, err := readJournal(root, path.Join(target, "journal.jsonl"))
+	if err != nil || !validJournal(journal) || journal[0].Mutation != systemchanges.CloudflareProfileSetupMutation || journal[len(journal)-1].Checkpoint != systemchanges.IrreversibleCloudflareSetupStarted && journal[len(journal)-1].Checkpoint != systemchanges.CloudflareSetupRollbackDeleted {
+		return errors.New("Cloudflare setup irreversible checkpoint is unproved")
+	}
+	if err := a.discardRollbackArtifacts(root, target, preserveSSHPreservationEvidence); err != nil {
+		return err
+	}
+	manifest, err := verifyTransactionManifest(root, target, a.uid)
+	if err != nil {
+		return err
+	}
+	for name := range manifest.Files {
+		if name == "snapshot/prior-state.json" || strings.HasPrefix(name, "snapshot/step-") {
+			return errors.New("Cloudflare setup Rollback Snapshot deletion is unproved")
+		}
+	}
+	return nil
+}
+
+func (a Adapter) discardRollbackArtifacts(root *os.Root, target string, policy rollbackArtifactPolicy) error {
 	manifest, err := readSnapshotManifest(root, target, a.uid)
 	if err != nil {
 		return err
 	}
 	for name := range manifest.Files {
 		if !strings.HasPrefix(name, "snapshot/") {
+			continue
+		}
+		if policy == preserveSSHPreservationEvidence && strings.Contains(name, "ssh-preservation") {
 			continue
 		}
 		if err := root.Remove(path.Join(target, name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -556,7 +599,7 @@ func (a Adapter) LoadRunTokenRotationState(lease systemchanges.ExecutionLease, r
 	return a.state.SystemChangesLoadRunTokenRotation(lease, bindingJSON, bytes.NewReader(candidate), bytes.NewReader(manifests))
 }
 
-func (a Adapter) LoadForwardInstallationState(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction) (any, error) {
+func (a Adapter) LoadForwardChangeState(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction) (any, error) {
 	candidate, err := a.recoveryArtifact(lease, recovery.ChangeSet, "prepared/state.json")
 	if err != nil {
 		return nil, err
@@ -569,12 +612,12 @@ func (a Adapter) LoadForwardInstallationState(lease systemchanges.ExecutionLease
 	if err != nil {
 		return nil, err
 	}
-	return a.state.SystemChangesLoadForwardInstallation(lease, bindingJSON, bytes.NewReader(candidate), bytes.NewReader(manifests))
+	return a.state.SystemChangesLoadForwardChange(lease, bindingJSON, bytes.NewReader(candidate), bytes.NewReader(manifests))
 }
 
-func (a Adapter) LoadForwardInstallationEvidence(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction) ([]systemchanges.StepEvidence, error) {
+func (a Adapter) LoadForwardChangeEvidence(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction) ([]systemchanges.StepEvidence, error) {
 	if !lease.RecoveryAuthorized() || !safeName(recovery.ChangeSet) {
-		return nil, errors.New("forward installation evidence unavailable")
+		return nil, errors.New("forward change evidence unavailable")
 	}
 	root, err := os.OpenRoot(a.root)
 	if err != nil {
@@ -583,7 +626,7 @@ func (a Adapter) LoadForwardInstallationEvidence(lease systemchanges.ExecutionLe
 	defer root.Close()
 	entries, err := readJournal(root, path.Join(transactionDirectory, recovery.ChangeSet, "journal.jsonl"))
 	if err != nil || !validJournal(entries) {
-		return nil, errors.New("forward installation journal invalid")
+		return nil, errors.New("forward change journal invalid")
 	}
 	evidence := make([]systemchanges.StepEvidence, len(recovery.Steps))
 	for _, entry := range entries {
@@ -1991,6 +2034,11 @@ func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges
 	if err != nil || !validJournal(journal) {
 		return systemchanges.RecoveryTransaction{}, errors.New("recovery journal is invalid")
 	}
+	if journal[0].Mutation == systemchanges.CloudflareProfileSetupMutation && journalHasCheckpoint(journal, systemchanges.IrreversibleCloudflareSetupStarted) && !journalHasCheckpoint(journal, systemchanges.CloudflareSetupRollbackDeleted) {
+		if err := a.discardRollbackArtifacts(root, directory, preserveSSHPreservationEvidence); err != nil {
+			return systemchanges.RecoveryTransaction{}, errors.New("Cloudflare setup Rollback Snapshot deletion is unprovable")
+		}
+	}
 	if journal[len(journal)-1].Checkpoint == systemchanges.IrreversibleRunTokenRotationStarted {
 		if err := a.discardRunTokenRollback(root, directory); err != nil {
 			return systemchanges.RecoveryTransaction{}, errors.New("run-token rollback cleanup is unprovable")
@@ -2006,6 +2054,7 @@ func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges
 		}
 	}
 	irreversible := prepared.Mutation == systemchanges.CompleteRemovalMutation && journalHasCheckpoint(journal, systemchanges.IrreversibleRemovalStarted)
+	irreversibleCloudflareSetup := prepared.Mutation == systemchanges.CloudflareProfileSetupMutation && journalHasCheckpoint(journal, systemchanges.IrreversibleCloudflareSetupStarted)
 	irreversibleReclamation := prepared.Reclamation != nil && journalHasCheckpoint(journal, systemchanges.IrreversibleReclamationStarted)
 	removalSnapshotDeleted := prepared.Mutation == systemchanges.CompleteRemovalMutation && journalHasCheckpoint(journal, systemchanges.TransactionMaterialDeletionAuthorized)
 	irreversibleRotation := prepared.Mutation == systemchanges.RotationMutation && runTokenFingerprint(journal) != ""
@@ -2014,7 +2063,7 @@ func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges
 	}
 	if !removalSnapshotDeleted {
 		manifest, err := verifyTransactionManifest(root, directory, a.uid)
-		if err != nil || manifest.Reason != prepared.Mutation || !validRecoveryBinding(prepared, manifest, irreversibleRotation) {
+		if err != nil || manifest.Reason != prepared.Mutation || !validRecoveryBinding(prepared, manifest, irreversibleRotation || irreversibleCloudflareSetup) {
 			return systemchanges.RecoveryTransaction{}, errors.New("recovery transaction lineage is invalid")
 		}
 	}
@@ -2058,14 +2107,14 @@ func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges
 	complete := last.Checkpoint == systemchanges.Complete && observed.Status == systemchanges.Managed && observed.LastChangeSet == changeSet && candidateState
 	unfinished := observed.Status == systemchanges.ChangeInProgress && observed.CurrentChangeSet == changeSet && (startingState || candidateState) && (last.Checkpoint != systemchanges.RolledBack || startingState)
 	irreversibleRemoval := irreversible && (observed.Status == systemchanges.ChangeInProgress && observed.CurrentChangeSet == changeSet || observed.Status == systemchanges.NotInstalled)
-	forwardInstall := irreversibleReclamation && (observed.Status == systemchanges.ChangeInProgress && observed.CurrentChangeSet == changeSet || observed.Status == systemchanges.Managed && observed.LastChangeSet == changeSet)
-	if err != nil || !complete && !unfinished && !irreversibleRemoval && !forwardInstall {
+	forwardChange := (irreversibleReclamation || irreversibleCloudflareSetup) && (observed.Status == systemchanges.ChangeInProgress && observed.CurrentChangeSet == changeSet || observed.Status == systemchanges.Managed && observed.LastChangeSet == changeSet)
+	if err != nil || !complete && !unfinished && !irreversibleRemoval && !forwardChange {
 		return systemchanges.RecoveryTransaction{}, errors.New("current State does not match the recovery transaction")
 	}
 	return systemchanges.RecoveryTransaction{
 		ChangeSet: changeSet, Mutation: prepared.Mutation, Starting: prepared.Starting, StartingRelease: prepared.State.StartingRelease,
 		Candidate: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: prepared.State.CandidateRevision, SHA256: prepared.State.CandidateSHA256}, CandidateRelease: prepared.State.CandidateRelease,
-		OutcomeOwner: prepared.OutcomeOwner, State: *prepared.State, Steps: steps, Checks: append([]systemchanges.Check(nil), prepared.Checks...), AttemptedSteps: highestStartedStep(journal), RollbackStep: rollbackResumeStep(journal), LastCheckpoint: last.Checkpoint, Timeouts: prepared.Timeouts, PriorRunTokenSHA256: runTokenFingerprint(journal), IrreversibleRemovalStarted: irreversible, IrreversibleReclamationStarted: irreversibleReclamation, Reclamation: prepared.Reclamation, SSHPreservationSHA256: prepared.SSHAgreementSHA256,
+		OutcomeOwner: prepared.OutcomeOwner, State: *prepared.State, Steps: steps, Checks: append([]systemchanges.Check(nil), prepared.Checks...), AttemptedSteps: highestStartedStep(journal), RollbackStep: rollbackResumeStep(journal), LastCheckpoint: last.Checkpoint, Timeouts: prepared.Timeouts, PriorRunTokenSHA256: runTokenFingerprint(journal), IrreversibleRemovalStarted: irreversible, IrreversibleReclamationStarted: irreversibleReclamation, IrreversibleCloudflareSetupStarted: irreversibleCloudflareSetup, Reclamation: prepared.Reclamation, SSHPreservationSHA256: prepared.SSHAgreementSHA256,
 	}, nil
 }
 
@@ -2520,7 +2569,7 @@ func recoveryRelease(binding systemchanges.StateTransactionBinding) systemchange
 	return binding.CandidateRelease
 }
 
-func validRecoveryBinding(prepared journalEntry, manifest snapshotManifest, forwardRotation ...bool) bool {
+func validRecoveryBinding(prepared journalEntry, manifest snapshotManifest, forwardOnly ...bool) bool {
 	binding := *prepared.State
 	if !validRecoveryJournalBinding(prepared) || manifest.Release != recoveryRelease(binding) || manifest.Files["prepared/state.json"] != binding.PreparedStateSHA256 || manifest.Files["prepared/manifests.json"] != binding.PreparedManifestSHA256 {
 		return false
@@ -2530,7 +2579,7 @@ func validRecoveryBinding(prepared journalEntry, manifest snapshotManifest, forw
 		return prior == "" || prior == binding.PreparedStateSHA256
 	}
 	if prepared.Starting.Status == systemchanges.Managed || prepared.Starting.Status == systemchanges.RecoveryRequired && binding.StartingRevision > 0 {
-		return binding.StartingRelease != (systemchanges.ReleaseBinding{}) && (len(forwardRotation) == 1 && forwardRotation[0] && manifest.Files["snapshot/prior-state.json"] == "" || manifest.Files["snapshot/prior-state.json"] != "")
+		return binding.StartingRelease != (systemchanges.ReleaseBinding{}) && (len(forwardOnly) == 1 && forwardOnly[0] && manifest.Files["snapshot/prior-state.json"] == "" || manifest.Files["snapshot/prior-state.json"] != "")
 	}
 	return prepared.Starting.Status == systemchanges.NotInstalled && binding.StartingRevision == 0 && binding.StartingSHA256 == "" && binding.StartingRelease == (systemchanges.ReleaseBinding{}) && manifest.Files["snapshot/prior-state.json"] == ""
 }
@@ -2601,7 +2650,7 @@ func verifyFinalizingPendingChangeSet(root *os.Root, uid int) error {
 
 func validPendingOwnership(kind systemchanges.MutationClass, owner systemchanges.Module, starting systemchanges.InstallationStatus) bool {
 	switch kind {
-	case systemchanges.InstallationMutation, systemchanges.RepairMutation, systemchanges.SettingChangeMutation, systemchanges.RotationMutation, systemchanges.CertificateChangeMutation, systemchanges.UpdateMutation, systemchanges.CertificateRenewalMutation, systemchanges.CompleteRemovalMutation:
+	case systemchanges.InstallationMutation, systemchanges.RepairMutation, systemchanges.SettingChangeMutation, systemchanges.RotationMutation, systemchanges.CertificateChangeMutation, systemchanges.UpdateMutation, systemchanges.CertificateRenewalMutation, systemchanges.CloudflareProfileSetupMutation, systemchanges.CompleteRemovalMutation:
 	default:
 		return false
 	}
@@ -2635,17 +2684,18 @@ func readRecoveryTransactionIdentity(rootPath string) (recoveryTransactionIdenti
 		return recoveryTransactionIdentity{}, errors.New("recovery transaction lineage is invalid")
 	}
 	irreversibleRemoval := journal[0].Mutation == systemchanges.CompleteRemovalMutation && journalHasCheckpoint(journal, systemchanges.IrreversibleRemovalStarted)
+	irreversibleCloudflareSetup := journal[0].Mutation == systemchanges.CloudflareProfileSetupMutation && journalHasCheckpoint(journal, systemchanges.IrreversibleCloudflareSetupStarted)
 	removalSnapshotDeleted := journal[0].Mutation == systemchanges.CompleteRemovalMutation && journalHasCheckpoint(journal, systemchanges.TransactionMaterialDeletionAuthorized)
 	if !removalSnapshotDeleted {
 		manifest, manifestErr := verifyTransactionManifest(root, directory, uid)
-		if manifestErr != nil || manifest.Reason != journal[0].Mutation || !validRecoveryBinding(journal[0], manifest, journal[0].Mutation == systemchanges.RotationMutation && runTokenFingerprint(journal) != "") {
+		if manifestErr != nil || manifest.Reason != journal[0].Mutation || !validRecoveryBinding(journal[0], manifest, journal[0].Mutation == systemchanges.RotationMutation && runTokenFingerprint(journal) != "" || irreversibleCloudflareSetup) {
 			return recoveryTransactionIdentity{}, errors.New("recovery transaction lineage is invalid")
 		}
 	}
 	if journal[0].Starting.Status != systemchanges.Managed && journal[0].Starting.Status != systemchanges.NotInstalled && (journal[0].Starting.Status != systemchanges.RecoveryRequired || journal[0].Mutation != systemchanges.CompleteRemovalMutation) {
 		return recoveryTransactionIdentity{}, errors.New("recovery starting baseline is unsupported")
 	}
-	forwardOnly := journal[0].Mutation == systemchanges.RotationMutation && runTokenFingerprint(journal) != "" || irreversibleRemoval || journal[0].Reclamation != nil && journalHasCheckpoint(journal, systemchanges.IrreversibleReclamationStarted)
+	forwardOnly := journal[0].Mutation == systemchanges.RotationMutation && runTokenFingerprint(journal) != "" || irreversibleRemoval || irreversibleCloudflareSetup || journal[0].Reclamation != nil && journalHasCheckpoint(journal, systemchanges.IrreversibleReclamationStarted)
 	completed := highestCompletedStep(journal)
 	forwardFirewallPending := false
 	if forwardOnly {
@@ -2704,12 +2754,13 @@ func RecoveryHealthObservation(rootPath string, source ObservationSource) (syste
 	irreversibleRemoval := prepared.Mutation == systemchanges.CompleteRemovalMutation && journalHasCheckpoint(journal, systemchanges.IrreversibleRemovalStarted)
 	removalSnapshotDeleted := prepared.Mutation == systemchanges.CompleteRemovalMutation && journalHasCheckpoint(journal, systemchanges.TransactionMaterialDeletionAuthorized)
 	irreversibleRotation := prepared.Mutation == systemchanges.RotationMutation && runTokenFingerprint(journal) != ""
+	irreversibleCloudflareSetup := prepared.Mutation == systemchanges.CloudflareProfileSetupMutation && journalHasCheckpoint(journal, systemchanges.IrreversibleCloudflareSetupStarted)
 	if prepared.ChangeSet != changeSet || !validRecoveryJournalBinding(prepared) {
 		return healthRecoveryRequired(systemchanges.JournalUnprovable), nil
 	}
 	if !removalSnapshotDeleted {
 		manifest, manifestErr := verifyTransactionManifest(root, directory, uid)
-		if manifestErr != nil || manifest.Reason != prepared.Mutation || !validRecoveryBinding(prepared, manifest, irreversibleRotation) {
+		if manifestErr != nil || manifest.Reason != prepared.Mutation || !validRecoveryBinding(prepared, manifest, irreversibleRotation || irreversibleCloudflareSetup) {
 			return healthRecoveryRequired(systemchanges.SnapshotUnprovable), nil
 		}
 	}
@@ -2719,7 +2770,7 @@ func RecoveryHealthObservation(rootPath string, source ObservationSource) (syste
 	candidate := base.Status == systemchanges.Managed && base.StateRevision == prepared.State.CandidateRevision && base.StateSHA256 == prepared.State.CandidateSHA256
 	removed := irreversibleRemoval && base.Status == systemchanges.NotInstalled
 	irreversibleReclamation := prepared.Reclamation != nil && journalHasCheckpoint(journal, systemchanges.IrreversibleReclamationStarted)
-	rollback := !irreversibleRemoval && !irreversibleRotation && !irreversibleReclamation && last != systemchanges.Complete && last != systemchanges.RolledBack
+	rollback := !irreversibleRemoval && !irreversibleRotation && !irreversibleReclamation && !irreversibleCloudflareSetup && last != systemchanges.Complete && last != systemchanges.RolledBack
 	completed := highestCompletedStep(journal)
 	if last == systemchanges.Complete {
 		completed = total
@@ -3371,9 +3422,14 @@ func validNextCheckpoint(entries []journalEntry, next journalEntry) bool {
 	}
 	irreversibleRemoval := entries[0].Mutation == systemchanges.CompleteRemovalMutation && journalHasCheckpoint(entries, systemchanges.IrreversibleRemovalStarted)
 	irreversibleReclamation := entries[0].Reclamation != nil && journalHasCheckpoint(entries, systemchanges.IrreversibleReclamationStarted)
+	irreversibleCloudflareSetup := entries[0].Mutation == systemchanges.CloudflareProfileSetupMutation && journalHasCheckpoint(entries, systemchanges.IrreversibleCloudflareSetupStarted)
 	switch last.Checkpoint {
 	case systemchanges.Prepared:
-		return next.Checkpoint == systemchanges.StepStarted && next.Step == 1 || next.Checkpoint == systemchanges.IrreversibleRunTokenRotationStarted && next.Step == 0 && entries[0].Mutation == systemchanges.RotationMutation && validEvidence(next.Evidence) || next.Checkpoint == systemchanges.CancellationRequested && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0
+		return next.Checkpoint == systemchanges.StepStarted && next.Step == 1 || next.Checkpoint == systemchanges.IrreversibleRunTokenRotationStarted && next.Step == 0 && entries[0].Mutation == systemchanges.RotationMutation && validEvidence(next.Evidence) || next.Checkpoint == systemchanges.IrreversibleCloudflareSetupStarted && next.Step == 0 && entries[0].Mutation == systemchanges.CloudflareProfileSetupMutation || next.Checkpoint == systemchanges.CancellationRequested && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0
+	case systemchanges.IrreversibleCloudflareSetupStarted:
+		return next.Checkpoint == systemchanges.CloudflareSetupRollbackDeleted && next.Step == 0
+	case systemchanges.CloudflareSetupRollbackDeleted:
+		return next.Checkpoint == systemchanges.StepStarted && next.Step == 1
 	case systemchanges.IrreversibleReclamationStarted:
 		return next.Checkpoint == systemchanges.ReclamationProcessStopped && next.Step == last.Step && validEvidence(next.Evidence)
 	case systemchanges.ReclamationProcessStopped:
@@ -3383,31 +3439,31 @@ func validNextCheckpoint(entries []journalEntry, next journalEntry) bool {
 	case systemchanges.IrreversibleRunTokenRotationStarted:
 		return next.Checkpoint == systemchanges.StateFinalized && next.Step == 0 && next.State != nil
 	case systemchanges.StepStarted:
-		if irreversibleRemoval || irreversibleReclamation {
+		if irreversibleRemoval || irreversibleReclamation || irreversibleCloudflareSetup {
 			return next.Checkpoint == systemchanges.StepCompleted && next.Step == last.Step && validEvidence(next.Evidence)
 		}
 		return next.Checkpoint == systemchanges.StepCompleted && next.Step == last.Step && validEvidence(next.Evidence) || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
 	case systemchanges.StepCompleted:
 		if last.Step < rollbackCapable {
-			if irreversibleRemoval || irreversibleReclamation {
-				return next.Checkpoint == systemchanges.StepStarted && next.Step == last.Step+1
+			if irreversibleRemoval || irreversibleReclamation || irreversibleCloudflareSetup {
+				return irreversibleCloudflareSetup && next.Checkpoint == systemchanges.StateFinalized && next.Step == last.Step && next.State != nil || next.Checkpoint == systemchanges.StepStarted && next.Step == last.Step+1
 			}
 			return next.Checkpoint == systemchanges.StateFinalized && next.Step == last.Step && next.State != nil || entries[0].Reclamation != nil && last.Step == reclamationPreludeJournalSteps(entries[0].Steps) && next.Checkpoint == systemchanges.IrreversibleReclamationStarted && next.Step == last.Step || next.Checkpoint == systemchanges.StepStarted && next.Step == last.Step+1 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
 		}
 		if irreversibleRemoval {
 			return next.Checkpoint == systemchanges.PrePublicationHealthPassed && next.Step == 0
 		}
-		return next.Checkpoint == systemchanges.StateFinalized && next.Step == 0 && next.State != nil || next.Checkpoint == systemchanges.PrePublicationHealthPassed && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
+		return next.Checkpoint == systemchanges.StateFinalized && next.State != nil && (next.Step == 0 || irreversibleCloudflareSetup && next.Step == last.Step) || next.Checkpoint == systemchanges.PrePublicationHealthPassed && next.Step == 0 || !irreversibleCloudflareSetup && (next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step)
 	case systemchanges.StateFinalized:
 		if entries[0].Reclamation != nil && !irreversibleReclamation && last.Step == reclamationPreludeJournalSteps(entries[0].Steps) {
 			return next.Checkpoint == systemchanges.IrreversibleReclamationStarted && next.Step == last.Step
 		}
-		return next.Checkpoint == systemchanges.StepStarted && next.Step == last.Step+1 || next.Checkpoint == systemchanges.PrePublicationHealthPassed && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
+		return next.Checkpoint == systemchanges.StepStarted && next.Step == last.Step+1 || next.Checkpoint == systemchanges.PrePublicationHealthPassed && next.Step == 0 || !irreversibleCloudflareSetup && (next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step)
 	case systemchanges.PrePublicationHealthPassed:
 		if entries[0].Mutation == systemchanges.CompleteRemovalMutation {
 			return next.Checkpoint == systemchanges.IrreversibleRemovalStarted && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == rollbackCapable
 		}
-		return next.Checkpoint == systemchanges.StatePublicationStarted && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total
+		return next.Checkpoint == systemchanges.StatePublicationStarted && next.Step == 0 || !irreversibleCloudflareSetup && (next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total)
 	case systemchanges.OwnedExternalDeletionVerified:
 		return next.Checkpoint == systemchanges.TokenRevocationVerified && next.Step == 0 && next.Evidence == nil
 	case systemchanges.IrreversibleRemovalStarted:
@@ -3417,11 +3473,11 @@ func validNextCheckpoint(entries []journalEntry, next journalEntry) bool {
 	case systemchanges.OwnedTunnelDeleted:
 		return next.Checkpoint == systemchanges.OwnedExternalDeletionVerified && next.Step == 0 && next.Evidence == nil
 	case systemchanges.StatePublicationStarted:
-		return next.Checkpoint == systemchanges.StatePublished && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total
+		return next.Checkpoint == systemchanges.StatePublished && next.Step == 0 || !irreversibleCloudflareSetup && (next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total)
 	case systemchanges.StatePublished:
-		return next.Checkpoint == systemchanges.PostPublicationHealthPassed && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total
+		return next.Checkpoint == systemchanges.PostPublicationHealthPassed && next.Step == 0 || !irreversibleCloudflareSetup && (next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total)
 	case systemchanges.PostPublicationHealthPassed:
-		return next.Checkpoint == systemchanges.Complete && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total
+		return next.Checkpoint == systemchanges.Complete && next.Step == 0 || !irreversibleCloudflareSetup && (next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total)
 	case systemchanges.CancellationRequested:
 		return next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0
 	case systemchanges.RollbackStarted:
