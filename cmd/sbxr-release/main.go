@@ -243,7 +243,7 @@ func buildCompleteRelease(ctx context.Context, options buildOptions, verifySourc
 }
 
 func buildApplicationArchive(ctx context.Context, options buildOptions, verifySource sourceVerifier) ([]byte, softwarelifecycle.PayloadMetadata, error) {
-	if ctx == nil || verifySource == nil || runtime.Version() != "go1.26.5" || options.output == "" || options.architecture != softwarelifecycle.AMD64 && options.architecture != softwarelifecycle.ARM64 {
+	if ctx == nil || verifySource == nil || runtime.Version() != "go1.26.6" || options.output == "" || options.architecture != softwarelifecycle.AMD64 && options.architecture != softwarelifecycle.ARM64 {
 		return nil, softwarelifecycle.PayloadMetadata{}, errors.New("release build refused")
 	}
 	directory, err := os.MkdirTemp("", "sbxr-release-build-")

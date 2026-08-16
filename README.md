@@ -154,7 +154,7 @@ go run ./cmd/sbxr-release bootstrap \
   -output <install.sh>
 ```
 
-Build one application archive and its matching component archive from a clean exact commit using Go `1.26.5`:
+Build one application archive and its matching component archive from a clean exact commit using Go `1.26.6`:
 
 ```sh
 go run ./cmd/sbxr-release \

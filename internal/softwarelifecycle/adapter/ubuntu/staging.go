@@ -135,7 +135,7 @@ func validateELF(path string, architecture softwarelifecycle.Architecture) error
 		return errors.New("native runtime dependency")
 	}
 	info, err := buildinfo.ReadFile(path)
-	if err != nil || info.GoVersion != "go1.26.5" {
+	if err != nil || info.GoVersion != "go1.26.6" {
 		return errors.New("wrong Go toolchain")
 	}
 	settings := map[string]string{}
