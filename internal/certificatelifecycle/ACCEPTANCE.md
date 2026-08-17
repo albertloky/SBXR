@@ -8,10 +8,20 @@ Run:
 go test ./internal/certificatelifecycle/... ./internal/connectionprofiles/...
 ```
 
+Run the smallest complete staged-lineage checks through `View`, `Plan`, and `Apply`:
+
+```sh
+go test ./internal/certificatelifecycle -run 'Test(FreshInstallContributionContainsOnlyIP|RevisionOneViewKeepsDomainFactsAbsent|RevisionOneSchedulerChecksOnlyTheIPLineage|ViewAndPlanProveBothLineagesAndOrderOnlyTheSelectedLineage|IPPlanApplyBuildsOneRevisionBoundChangeSet|StateProfileSetupCertificateIsExactAndOneUse|DomainSetupPlanApplyBuildsOneRevisionBoundChangeSet|StandingDomainRenewalRequiresARIAndNarrowState)$' -count=1
+go test ./internal/certificatelifecycle/adapter/ubuntu -run 'Test(TransactionExecutor|Validate|Arguments|Observe)' -count=1
+go test ./internal/connectionprofiles/adapter/ubuntu -run 'TestRuntimeExecutor(ValidatesRestartsAndProvesEachConsumer|SkipsDisabledDirectTLSConsumer)$' -count=1
+```
+
+These checks cover controlled certificate and private-key agreement, exact temporary HTTP exposure and cleanup, normal HTTP/TLS proof seams, and the existing System Changes rollback and recovery authority. They do not run real ACME, VPS, Cloudflare, outside-client, maintained-client, Owner, or Release Qualification acceptance.
+
 Stable checks:
 
-- `CERTIFICATE-PREREQUISITES`: healthy and fail-closed `View` coverage for issuer, registration inputs, both lineages, DNS, effective CAA, HTTP-01 prerequisites, scheduler reporting, due facts, and marker safety.
-- `CERTIFICATE-PLAN`: deterministic one-use Plan coverage for the reviewed Owner email and agreement, fixed `sbxr-ip` and `sbxr-domain` identities, typed staging-before-production order, forbidden raw command arguments, and isolated staging material.
+- `CERTIFICATE-PREREQUISITES`: healthy and fail-closed `View` coverage for issuer, registration inputs, revision `1` IP-only absence, later domain facts, DNS, effective CAA, HTTP-01 prerequisites, scheduler reporting, due facts, and marker safety.
+- `CERTIFICATE-PLAN`: deterministic one-use Plan coverage for the reviewed Owner email and agreement, only the selected fixed `sbxr-ip` or `sbxr-domain` identity, typed staging-before-production order, forbidden raw command arguments, and isolated staging material.
 - `CERTIFICATE-CERTBOT-SEAM`: bounded official-shape `certbot --version` and `certbot certonly --help all` coverage, supported Snap and pip-virtual-environment detection, exact `--required-profile shortlived` and `--required-profile tlsserver` command construction, anchored active-certificate observation, RFC 9773 certificate-identifier construction, bounded same-origin ACME Renewal Information, explicit unavailable fallback, malformed/timeout/contradictory handling, forbidden `--preferred-profile`, and raw-output redaction.
 - `CERTIFICATE-IP-TRANSACTION`: exact IPv4 and IPv6 selection, one temporary HTTP-01 open and close, staging-before-production ordering, fixed Subscription Serving activation, Required pre- and post-publication checks, and no Xray step.
 - `CERTIFICATE-IP-CANDIDATE`: exact IP SAN, key match, trusted complete chain, current 150-to-170-hour lifetime, server usage, root ownership, `0700`/`0600` regular non-symlink candidate material, and marker-safe failures.
@@ -22,7 +32,7 @@ Stable checks:
 - `CERTIFICATE-RENEWAL-POLICY`: `go test ./internal/certificatelifecycle -run 'Test(IPRenewalPolicyControlsDueAndRetryWindows|DomainRenewalPolicyUsesARIOrFifteenDayFallback|StandingIPPolicyPersistsFailureAcrossSchedulerProcesses|StandingPolicyPersistsDomainFailureSeparately)'` covers the 72-hour IP point, 24-hour warning, valid ARI window, explicit 15-day fallback, malformed-ARI refusal, and cross-process bounded retry for both lineages.
 - `CERTIFICATE-RENEWAL-HISTORY`: `go test ./internal/certificatelifecycle/adapter/ubuntu -run TestRenewalAttemptStore` covers separate atomic root-only IP/domain persistence, restart reload, lineage-specific cleanup, and malformed or symlinked-history refusal.
 - `CERTIFICATE-RENEWAL-STATE`: `go test ./internal/state -run 'Test(PrepareIPCertificateRenewalCommitAllowsOnlyStandingScope|PrepareDomainCertificateRenewalCommitAllowsOnlyStandingScope|CertificateRenewalSchedulerUsesRealOneUseSystemChangesLock)'` covers unchanged logical certificate identifiers and pointer paths, separate planning after the real System Changes lock, serial IP-then-domain execution, one publication per success, durable Complete, cleanup, and both five-step transactions.
-- `CERTIFICATE-RENEWAL-SCHEDULER`: `go test ./internal/certificatelifecycle -run 'Test(SystemdUnitsOwnOnePersistentRandomizedTwiceDailyRenewal|SchedulerRunsOnlyOneFreshIPAttemptPerEvaluation|SchedulerEvaluatesBothDueLineagesSerially|StandingDomainRenewalRequiresARIAndNarrowState)'` covers the one service/timer pair, persistent randomized evaluation, branch isolation, fixed serial order, separate locks, and one-use narrow Plans without separate lineage or Certbot-owned units.
+- `CERTIFICATE-RENEWAL-SCHEDULER`: `go test ./internal/certificatelifecycle -run 'Test(SystemdUnitsOwnOnePersistentRandomizedTwiceDailyRenewal|RevisionOneSchedulerChecksOnlyTheIPLineage|SchedulerRunsOnlyOneFreshIPAttemptPerEvaluation|SchedulerEvaluatesBothDueLineagesSerially|StandingDomainRenewalRequiresARIAndNarrowState)'` covers the one service/timer pair, revision `1` IP-only evaluation, later fixed serial order, branch isolation, separate locks, and one-use narrow Plans without separate lineage or Certbot-owned units.
 
 The automated result may say only that the controlled Module and Ubuntu seam passed. It does not prove real ACME registration, real staging or production issuance, public reachability, live activation, real renewal, outside-VPS HTTPS, or Release Qualification.
 
@@ -32,7 +42,7 @@ On one explicitly approved Acceptance VPS and exact Release Identity:
 
 1. Confirm `/snap/bin/certbot` is version `5.4` or newer and exposes `--ip-address` and `--required-profile`. Record only the version, source class, capability booleans, stable check code, and pass/fail result.
 2. Review the Owner email and subscriber agreement without copying the email into evidence.
-3. Recheck the selected IP, committed Direct TLS Hostname, exact DNS-only A/AAAA set, effective CAA, public route, time synchronization, unrelated port-80 ownership, and SBXR firewall authority.
+3. Recheck the selected IP, public route, time synchronization, unrelated port-80 ownership, and SBXR firewall authority. Prove that Direct TLS Hostname, domain DNS, CAA, and `sbxr-domain` facts are absent from revision `1`.
 4. Identify any unrelated port-80 listener and leave it running. Refuse the order until port 80 is safely available; never stop or adopt that listener.
 5. Record that Xray and REALITY on port 443 remain running before, during, and after the IP branch.
 6. Run the isolated `sbxr-ip` staging order, then its exact production order, only in ticket #95's approved Change Set. On success, interruption, timeout, order failure, activation rollback, and restart recovery, prove the exact recorded HTTP-01 rule handle is absent without flushing unrelated rules.
@@ -84,13 +94,13 @@ On the same explicitly approved Acceptance VPS and exact Release Identity:
 
 | Stage | Owner | Status | Evidence |
 |---|---|---|---|
-| Module Verification | Codex | Passed for prerequisites, IP issuance and activation, domain issuance and activation, IP renewal, and serial IP-then-domain renewal | `CERTIFICATE-PREREQUISITES`, `CERTIFICATE-PLAN`, both candidate and transaction branches, both activation and rollback branches, renewal policy/history/State, and the one serial scheduler pass with marker-safe results. Real issuance and renewal remain Pending. |
+| Module Verification | Codex | Passed for revision `1` IP-only facts, later domain planning, IP issuance and activation, domain issuance and activation, IP renewal, and later serial IP-then-domain renewal | `CERTIFICATE-PREREQUISITES`, `CERTIFICATE-PLAN`, both candidate and transaction branches, both activation and rollback branches, renewal policy/history/State, revision `1` scheduler isolation, and the later serial scheduler pass with marker-safe results. Real issuance and renewal remain Pending. |
 | Seam Verification — controlled Ubuntu fixtures | Codex | Passed | Official-shape Certbot capability and invocation, anchored public-certificate observation, bounded same-origin ACME Renewal Information, exact temporary HTTP-01 authority, filesystem ownership and modes, atomic pointers, fixed service activation, normal-verification IP HTTPS, and separate Hysteria2, TUIC, and AnyTLS checks pass without an Owner credential or public ACME order. |
 | Integrated Verification | Integrated release runner | Pending — integrated release | The complete executable still needs all-Module wiring, private-command and systemd installation, real service coordination, and one exact Release Identity. |
 | Codex Live Acceptance | Codex, only during an approved Acceptance Run | Pending — approved Acceptance Run | No Acceptance VPS, public ACME order, real certificate, real renewal, or outside Acceptance Client was used. |
 | Owner Acceptance | Albert | Pending if the first release or an affected maintained-client surface requires it | Automation cannot claim Albert's maintained client, device, network, or workflow acceptance. |
 
-Module accepted; Release Qualification pending. The fixed `sbxr-ip` and `sbxr-domain` lineages, qualified standalone HTTP-01 boundary, isolated staging, strict candidate checks, atomic serving pointers, checked rollback, narrow standing renewal policy, and one persistent randomized serial scheduler are verified locally. Real `sbxr-ip` staging, production, and renewal; real `sbxr-domain` staging, staging renewal, production, and production renewal; public reachability; outside-VPS normal-verification checks; Integrated Verification; Codex Live Acceptance; required Owner Acceptance; and Release Qualification remain Pending. Unperformed rows stay Pending.
+Module accepted; Release Qualification pending. Revision `1` IP-only absence, the later revision-bound `sbxr-domain` contribution, qualified standalone HTTP-01 boundary, isolated staging, strict candidate checks, atomic serving pointers, checked rollback, narrow standing renewal policy, and staged scheduler behavior are verified locally. Real `sbxr-ip` staging, production, and renewal; real `sbxr-domain` staging, staging renewal, production, and production renewal; public reachability; outside-VPS normal-verification checks; Integrated Verification; Codex Live Acceptance; required Owner Acceptance; and Release Qualification remain Pending. Unperformed rows stay Pending.
 
 Require current email and agreement guidance plus exact field boundaries with:
 

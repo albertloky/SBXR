@@ -61,6 +61,7 @@ type RenewalInformation struct {
 }
 
 type DomainRenewalFacts struct {
+	LineageExists          bool
 	StandingPolicyApproved bool
 	Now, NotAfter          time.Time
 	RenewalInformation     RenewalInformation
@@ -92,20 +93,23 @@ type standingLineagePolicy struct {
 }
 
 func NewStandingPolicy(ip IPRenewalFacts, domain DomainRenewalFacts, history AttemptHistory) *StandingPolicy {
-	return &StandingPolicy{history: history, lineages: map[Lineage]*standingLineagePolicy{
+	policy := &StandingPolicy{history: history, lineages: map[Lineage]*standingLineagePolicy{
 		IPLineage: {now: ip.Now, evaluate: func(last time.Time, outcome RenewalAttempt, found bool) RenewalDecision {
 			if found {
 				ip.LastAttempt, ip.LastOutcome = last, outcome
 			}
 			return EvaluateIPRenewal(ip)
 		}},
-		DomainLineage: {now: domain.Now, evaluate: func(last time.Time, outcome RenewalAttempt, found bool) RenewalDecision {
+	}}
+	if domain.LineageExists {
+		policy.lineages[DomainLineage] = &standingLineagePolicy{now: domain.Now, evaluate: func(last time.Time, outcome RenewalAttempt, found bool) RenewalDecision {
 			if found {
 				domain.LastAttempt, domain.LastOutcome = last, outcome
 			}
 			return EvaluateDomainRenewal(domain)
-		}},
-	}}
+		}}
+	}
+	return policy
 }
 
 func (policy *StandingPolicy) Due(lineage Lineage) bool {

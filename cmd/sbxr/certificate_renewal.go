@@ -75,7 +75,7 @@ func runCertificateRenewal(ctx context.Context) error {
 	now := time.Now().UTC()
 	policy := certificatelifecycle.NewStandingPolicy(
 		certificatelifecycle.IPRenewalFacts{StandingPolicyApproved: desired.Certificates.RenewalPolicy, Now: now, NotAfter: observation.IP.NotAfter},
-		certificatelifecycle.DomainRenewalFacts{StandingPolicyApproved: desired.Certificates.RenewalPolicy, Now: now, NotAfter: observation.Domain.NotAfter, RenewalInformation: observation.Domain.RenewalInformation},
+		certificatelifecycle.DomainRenewalFacts{LineageExists: desired.Certificates.DomainCertificateID != "", StandingPolicyApproved: desired.Certificates.RenewalPolicy, Now: now, NotAfter: observation.Domain.NotAfter, RenewalInformation: observation.Domain.RenewalInformation},
 		certificateubuntu.NewRenewalAttemptStore(),
 	)
 	adapter := systemubuntu.NewAt("/", installRecoveryObservation, nil)

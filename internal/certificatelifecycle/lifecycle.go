@@ -319,7 +319,8 @@ func (module Interface) View(ctx context.Context, request ViewRequest) ViewResul
 		result.Health.NextActions = []string{"Choose one qualified subscription IP", "Check again", "Back"}
 		return result
 	}
-	if len(request.DirectHostname) > 253 || !hostname.MatchString(request.DirectHostname) {
+	domainConfigured := request.DirectHostname != ""
+	if domainConfigured && (len(request.DirectHostname) > 253 || !hostname.MatchString(request.DirectHostname)) {
 		result.Health = health(now, Failed, "CERTIFICATE-DOMAIN-IDENTITY", "The Direct TLS Hostname is invalid", "the committed value is not one supported DNS hostname", "the exact committed Direct TLS Hostname")
 		result.Health.NextActions = []string{"Correct the Direct TLS Hostname through Cloudflare Tunnel", "Check again", "Back"}
 		return result
@@ -331,6 +332,11 @@ func (module Interface) View(ctx context.Context, request ViewRequest) ViewResul
 		return result
 	}
 	result.observation = observed
+	if !domainConfigured && (observed.Domain != (CertificateObservation{}) || domainRequestFactsPresent(request)) {
+		result.Health = health(now, Failed, "CERTIFICATE-DOMAIN-RESIDUE", "Domain-certificate facts exist before Cloudflare Profile Setup", "sbxr-domain, DNS, or CAA facts are present without a committed Direct TLS Hostname", "complete absence of every deferred domain-certificate fact")
+		result.Health.NextActions = []string{"Inspect and remove the unexpected domain-certificate residue", "Check again", "Back"}
+		return result
+	}
 	result.Issuer = IssuerStatus{Name: "unsupported", CertbotVersion: "unsupported", Distribution: "unsupported"}
 	if observed.Issuer.Name == "Let's Encrypt" {
 		result.Issuer.Name = observed.Issuer.Name
@@ -343,12 +349,17 @@ func (module Interface) View(ctx context.Context, request ViewRequest) ViewResul
 	}
 	result.Issuer.Qualified = observed.Issuer.Name == "Let's Encrypt" && versionAtLeast(observed.Issuer.CertbotVersion, 5, 4) && observed.Issuer.SupportedDistribution && observed.Issuer.RequiredProfile && observed.Issuer.IPAddress && observed.Issuer.Staging
 	result.IP = lineageStatus(IPLineage, request.SelectedIP, ipProfile, observed.IP, now)
-	result.Domain = lineageStatus(DomainLineage, request.DirectHostname, domainProfile, observed.Domain, now)
+	if domainConfigured {
+		result.Domain = lineageStatus(DomainLineage, request.DirectHostname, domainProfile, observed.Domain, now)
+	}
 	result.Scheduler = SchedulerStatus{Enabled: observed.Scheduler.Enabled, Persistent: observed.Scheduler.Persistent, Serial: observed.Scheduler.Serial, ExactUnitPair: observed.Scheduler.ExactUnitPair, Randomized: observed.Scheduler.Randomized, NoCompetingScheduler: observed.Scheduler.NoCompetingScheduler, RunsPerDay: observed.Scheduler.RunsPerDay}
 	result.Scheduler.Qualified = result.Scheduler.Enabled && result.Scheduler.Persistent && result.Scheduler.Serial && result.Scheduler.ExactUnitPair && result.Scheduler.Randomized && result.Scheduler.NoCompetingScheduler && result.Scheduler.RunsPerDay >= 2
-	dns := assessDNS(request)
-	caa := assessCAA(request.CAA)
-	result.Prerequisites = PrerequisiteStatus{SelectedIP: request.SelectedIP, DirectHostname: request.DirectHostname, HTTP01: request.HTTP01, DNS: dns.allowed, CAA: caa.allowed, IgnoredChallengeRecords: len(request.DNS.ChallengeRecords)}
+	dns, caa := dnsAssessment{allowed: true}, caaAssessment{allowed: true}
+	if domainConfigured {
+		dns = assessDNS(request)
+		caa = assessCAA(request.CAA)
+	}
+	result.Prerequisites = PrerequisiteStatus{SelectedIP: request.SelectedIP, DirectHostname: request.DirectHostname, HTTP01: request.HTTP01, DNS: domainConfigured && dns.allowed, CAA: domainConfigured && caa.allowed, IgnoredChallengeRecords: len(request.DNS.ChallengeRecords)}
 
 	switch {
 	case !result.Issuer.Qualified:
@@ -370,13 +381,13 @@ func (module Interface) View(ctx context.Context, request ViewRequest) ViewResul
 	case !validCertificate(observed.IP, request.SelectedIP, ipProfile, now, 150*time.Hour, 170*time.Hour):
 		result.Health = health(now, Failed, "CERTIFICATE-IP-LINEAGE", "The IP certificate lineage is implausible", "the typed IP identity, profile, validity, or serving identifier disagrees", "the exact selected IP with the shortlived profile and a roughly 160-hour lifetime")
 		result.Health.NextActions = []string{"Keep the current serving certificate and inspect sbxr-ip", "Check again", "Back"}
-	case !observed.Domain.NotAfter.IsZero() && !now.Before(observed.Domain.NotAfter):
+	case domainConfigured && !observed.Domain.NotAfter.IsZero() && !now.Before(observed.Domain.NotAfter):
 		result.Health = health(now, Failed, "CERTIFICATE-DOMAIN-EXPIRED", "The Direct TLS certificate is expired", "Hysteria2, TUIC, and AnyTLS cannot prove a current shared domain certificate", "a current publicly trusted domain certificate with normal name and chain validation")
 		result.Health.NextActions = []string{"Renew sbxr-domain without weakening TLS verification", "Check again", "Back"}
-	case !observed.Domain.NotAfter.IsZero() && !validDomainRenewalInformation(observed.Domain.RenewalInformation):
+	case domainConfigured && !observed.Domain.NotAfter.IsZero() && !validDomainRenewalInformation(observed.Domain.RenewalInformation):
 		result.Health = health(now, Unknown, "CERTIFICATE-DOMAIN-ARI", "ACME Renewal Information is malformed or unavailable to prove", "the suggested domain renewal window is missing, contradictory, or incomplete", "one valid suggested window, or an explicit unavailable result for the 15-day fallback")
 		result.Health.NextActions = []string{"Check ACME Renewal Information again", "Back"}
-	case !validCertificate(observed.Domain, request.DirectHostname, domainProfile, now, 40*24*time.Hour, 50*24*time.Hour):
+	case domainConfigured && !validCertificate(observed.Domain, request.DirectHostname, domainProfile, now, 40*24*time.Hour, 50*24*time.Hour):
 		result.Health = health(now, Failed, "CERTIFICATE-DOMAIN-LINEAGE", "The domain certificate lineage is implausible", "the typed DNS identity, profile, validity, or serving identifier disagrees", "the exact Direct TLS Hostname with the tlsserver profile and an approximately 45-day lifetime")
 		result.Health.NextActions = []string{"Keep the current serving certificate and inspect sbxr-domain", "Check again", "Back"}
 	case !allHTTP01(request.HTTP01):
@@ -389,9 +400,17 @@ func (module Interface) View(ctx context.Context, request ViewRequest) ViewResul
 		result.Health = health(now, Failed, caa.code, "Effective CAA does not permit the approved issuer and method", caa.found, "effective CAA allowing letsencrypt.org without a method restriction or with validationmethods=http-01")
 		result.Health.NextActions = caa.actions
 	default:
-		result.Health = Health{Time: now, Module: "Certificate Lifecycle", Outcome: Healthy, Code: "CERTIFICATE-PREREQUISITES-VERIFIED", NextActions: []string{"Create Plan", "Check again", "Back"}}
+		code := "CERTIFICATE-PREREQUISITES-VERIFIED"
+		if !domainConfigured {
+			code = "CERTIFICATE-IP-ONLY-VERIFIED"
+		}
+		result.Health = Health{Time: now, Module: "Certificate Lifecycle", Outcome: Healthy, Code: code, NextActions: []string{"Create Plan", "Check again", "Back"}}
 	}
 	return result
+}
+
+func domainRequestFactsPresent(request ViewRequest) bool {
+	return request.DNS.Status != "" || request.DNS.Hostname != "" || len(request.DNS.Addresses) != 0 || request.DNS.DNSOnly || len(request.DNS.ChallengeRecords) != 0 || request.CAA.Status != "" || len(request.CAA.Records) != 0
 }
 
 func health(now time.Time, outcome Outcome, code, problem, found, required string) Health {
@@ -681,7 +700,11 @@ func (plan *Plan) MatchesDesiredState(renewalPolicy bool, ownerEmail, acmeAccoun
 	if plan == nil {
 		return false
 	}
-	return renewalPolicy && ownerEmail == plan.request.OwnerEmail && acmeAccountID == "letsencrypt" && ipCertificateID == ipCertName && ipServingPointer == "/var/lib/sbxr/certificates/ip/current" && domainCertificateID == domainCertName && domainServingPointer == "/var/lib/sbxr/certificates/domain/current" && domainHostname == plan.request.View.DirectHostname
+	base := renewalPolicy && ownerEmail == plan.request.OwnerEmail && acmeAccountID == "letsencrypt" && ipCertificateID == ipCertName && ipServingPointer == "/var/lib/sbxr/certificates/ip/current"
+	if plan.request.View.DirectHostname == "" {
+		return base && domainCertificateID == "" && domainServingPointer == "" && domainHostname == ""
+	}
+	return base && domainCertificateID == domainCertName && domainServingPointer == "/var/lib/sbxr/certificates/domain/current" && domainHostname == plan.request.View.DirectHostname
 }
 
 // StateProfileSetupCertificate binds the domain-certificate contribution to
@@ -710,8 +733,19 @@ type FreshInstallContribution struct {
 	proof lifecyclecontract.InstallContribution
 }
 
-func NewFreshInstallContribution(ip, domain *Plan) (FreshInstallContribution, bool) {
-	ipProof, domainProof := ip.SoftwareLifecycleInstallContribution(), domain.SoftwareLifecycleInstallContribution()
+func NewFreshInstallContribution(ip *Plan, domain ...*Plan) (FreshInstallContribution, bool) {
+	ipProof := ip.SoftwareLifecycleInstallContribution()
+	if len(domain) == 0 {
+		if ipProof.Name != "Certificate Lifecycle IP" {
+			return FreshInstallContribution{}, false
+		}
+		ipProof.Name = "Certificate Lifecycle"
+		return FreshInstallContribution{proof: ipProof}, true
+	}
+	if len(domain) != 1 {
+		return FreshInstallContribution{}, false
+	}
+	domainProof := domain[0].SoftwareLifecycleInstallContribution()
 	if ipProof.Name != "Certificate Lifecycle IP" || domainProof.Name != "Certificate Lifecycle domain" || ipProof.ChangeSet != domainProof.ChangeSet || ipProof.DesiredStateSHA256 != domainProof.DesiredStateSHA256 {
 		return FreshInstallContribution{}, false
 	}
@@ -794,8 +828,12 @@ func (module Interface) Plan(ctx context.Context, request PlanRequest) PlanResul
 	orders := []OrderContract{
 		stagingOrder(IPLineage, ipProfile, request.View.SelectedIP, ipCertName, request.OwnerEmail),
 		{Lineage: IPLineage, RequiredProfile: ipProfile, Identity: request.View.SelectedIP, CertName: ipCertName, OwnerEmail: request.OwnerEmail, ConfigDirectory: "/var/lib/sbxr/certbot/production", Account: "production"},
-		stagingOrder(DomainLineage, domainProfile, request.View.DirectHostname, domainCertName, request.OwnerEmail),
-		{Lineage: DomainLineage, RequiredProfile: domainProfile, Identity: request.View.DirectHostname, CertName: domainCertName, OwnerEmail: request.OwnerEmail, ConfigDirectory: "/var/lib/sbxr/certbot/production", Account: "production"},
+	}
+	if lineage == DomainLineage {
+		orders = []OrderContract{
+			stagingOrder(DomainLineage, domainProfile, request.View.DirectHostname, domainCertName, request.OwnerEmail),
+			{Lineage: DomainLineage, RequiredProfile: domainProfile, Identity: request.View.DirectHostname, CertName: domainCertName, OwnerEmail: request.OwnerEmail, ConfigDirectory: "/var/lib/sbxr/certbot/production", Account: "production"},
+		}
 	}
 	var steps []systemchanges.Step
 	var stepErr error
@@ -806,7 +844,7 @@ func (module Interface) Plan(ctx context.Context, request PlanRequest) PlanResul
 	}
 	identityPrefix := "certificate-ip-"
 	if lineage == IPLineage {
-		steps, stepErr = certificateTransactionSteps(open, close, orders[:2], request.View.SelectedIP, 0, "")
+		steps, stepErr = certificateTransactionSteps(open, close, orders, request.View.SelectedIP, 0, "")
 	} else if lineage == DomainLineage {
 		var directTLSRevision uint64
 		var destinationIP, hostname string
@@ -816,7 +854,7 @@ func (module Interface) Plan(ctx context.Context, request PlanRequest) PlanResul
 			stepErr = errors.New("stale Connection Profiles Direct TLS contribution")
 		}
 		if stepErr == nil {
-			steps, stepErr = certificateTransactionSteps(open, close, orders[2:], destinationIP, directTLSRevision, directTLSDigest)
+			steps, stepErr = certificateTransactionSteps(open, close, orders, destinationIP, directTLSRevision, directTLSDigest)
 		}
 		identityPrefix = "certificate-domain-"
 		checks = append([]systemchanges.Check{

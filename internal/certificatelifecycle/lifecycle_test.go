@@ -81,7 +81,7 @@ func (issuer staticIssuer) Observe(context.Context) (certificatelifecycle.Observ
 	return issuer.observation, issuer.err
 }
 
-func TestViewAndPlanProveBothLineagesBeforeOrdering(t *testing.T) {
+func TestViewAndPlanProveBothLineagesAndOrderOnlyTheSelectedLineage(t *testing.T) {
 	now := time.Date(2026, time.August, 7, 12, 0, 0, 0, time.UTC)
 	observation := certificatelifecycle.Observation{
 		Issuer: certificatelifecycle.IssuerObservation{
@@ -125,13 +125,13 @@ func TestViewAndPlanProveBothLineagesBeforeOrdering(t *testing.T) {
 		t.Fatalf("deterministic Plan = first %+v second %+v", first, second)
 	}
 	orders := first.Plan.Orders()
-	if len(orders) != 4 {
+	if len(orders) != 2 {
 		t.Fatalf("orders = %#v", orders)
 	}
-	if !orders[0].Staging || orders[1].Staging || !orders[2].Staging || orders[3].Staging || orders[0].Lineage != certificatelifecycle.IPLineage || orders[2].Lineage != certificatelifecycle.DomainLineage {
+	if !orders[0].Staging || orders[1].Staging || orders[0].Lineage != certificatelifecycle.IPLineage || orders[1].Lineage != certificatelifecycle.IPLineage {
 		t.Fatalf("staging-before-production orders = %#v", orders)
 	}
-	for _, staging := range []certificatelifecycle.OrderContract{orders[0], orders[2]} {
+	for _, staging := range []certificatelifecycle.OrderContract{orders[0]} {
 		if staging.ConfigDirectory == "" || staging.ConfigDirectory == orders[1].ConfigDirectory || staging.Account == "" || staging.CertName == "" || staging.OwnerEmail != "owner@example.com" {
 			t.Fatalf("staging isolation = %#v", staging)
 		}
@@ -309,6 +309,55 @@ func TestViewAndPlanFailClosedWithoutLeakingTypedOrToolFacts(t *testing.T) {
 	}
 }
 
+func TestRevisionOneViewKeepsDomainFactsAbsent(t *testing.T) {
+	now := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
+	request := completeViewRequest()
+	request.DirectHostname = ""
+	request.DNS = certificatelifecycle.DNSFacts{}
+	request.CAA = certificatelifecycle.CAAFacts{}
+	result := certificatelifecycle.New(staticIssuer{observation: certificatelifecycle.Observation{
+		Issuer:    certificatelifecycle.IssuerObservation{Name: "Let's Encrypt", CertbotVersion: "5.4.0", Distribution: "snap", SupportedDistribution: true, RequiredProfile: true, IPAddress: true, Staging: true},
+		Scheduler: certificatelifecycle.SchedulerObservation{Enabled: true, Persistent: true, Serial: true, ExactUnitPair: true, Randomized: true, NoCompetingScheduler: true, RunsPerDay: 2},
+	}}, fixedClock{now: now}).View(t.Context(), request)
+	if result.Health.Outcome != certificatelifecycle.Healthy || result.Health.Code != "CERTIFICATE-IP-ONLY-VERIFIED" || result.Domain != (certificatelifecycle.LineageStatus{}) || result.Prerequisites.DirectHostname != "" || result.Prerequisites.DNS || result.Prerequisites.CAA {
+		t.Fatalf("revision 1 View = %+v", result)
+	}
+	planRequest := completePlanRequest()
+	planRequest.View = request
+	plan := certificatelifecycle.New(staticIssuer{observation: certificatelifecycle.Observation{
+		Issuer:    certificatelifecycle.IssuerObservation{Name: "Let's Encrypt", CertbotVersion: "5.4.0", Distribution: "snap", SupportedDistribution: true, RequiredProfile: true, IPAddress: true, Staging: true},
+		Scheduler: certificatelifecycle.SchedulerObservation{Enabled: true, Persistent: true, Serial: true, ExactUnitPair: true, Randomized: true, NoCompetingScheduler: true, RunsPerDay: 2},
+	}}, fixedClock{now: now}).Plan(t.Context(), planRequest).Plan
+	if plan == nil || len(plan.Orders()) != 2 || plan.Orders()[0].Lineage != certificatelifecycle.IPLineage || plan.Orders()[1].Lineage != certificatelifecycle.IPLineage || !plan.MatchesDesiredState(true, "owner@example.com", "letsencrypt", "sbxr-ip", "/var/lib/sbxr/certificates/ip/current", "", "", "") {
+		t.Fatalf("revision 1 Plan = %+v", plan)
+	}
+	for _, residue := range []struct {
+		name        string
+		observation certificatelifecycle.Observation
+		request     certificatelifecycle.ViewRequest
+	}{
+		{name: "active domain certificate", observation: certificatelifecycle.Observation{Domain: certificatelifecycle.CertificateObservation{Identity: "direct.example.com", NotAfter: now.Add(24 * time.Hour)}}, request: request},
+		{name: "domain DNS facts", request: func() certificatelifecycle.ViewRequest {
+			changed := request
+			changed.DNS = certificatelifecycle.DNSFacts{Status: certificatelifecycle.DNSAvailable, Hostname: "direct.example.com"}
+			return changed
+		}()},
+		{name: "domain CAA facts", request: func() certificatelifecycle.ViewRequest {
+			changed := request
+			changed.CAA = certificatelifecycle.CAAFacts{Status: certificatelifecycle.CAAAvailable}
+			return changed
+		}()},
+	} {
+		observation := residue.observation
+		observation.Issuer = certificatelifecycle.IssuerObservation{Name: "Let's Encrypt", CertbotVersion: "5.4.0", Distribution: "snap", SupportedDistribution: true, RequiredProfile: true, IPAddress: true, Staging: true}
+		observation.Scheduler = certificatelifecycle.SchedulerObservation{Enabled: true, Persistent: true, Serial: true, ExactUnitPair: true, Randomized: true, NoCompetingScheduler: true, RunsPerDay: 2}
+		got := certificatelifecycle.New(staticIssuer{observation: observation}, fixedClock{now: now}).View(t.Context(), residue.request)
+		if got.Health.Code != "CERTIFICATE-DOMAIN-RESIDUE" {
+			t.Fatalf("%s View = %+v", residue.name, got)
+		}
+	}
+}
+
 func TestPlanRequiresReviewedOwnerIdentityAndAgreement(t *testing.T) {
 	module := certificatelifecycle.New(staticIssuer{observation: certificatelifecycle.Observation{
 		Issuer:    certificatelifecycle.IssuerObservation{Name: "Let's Encrypt", CertbotVersion: "5.4.0", Distribution: "snap", SupportedDistribution: true, RequiredProfile: true, IPAddress: true, Staging: true},
@@ -356,6 +405,21 @@ func TestIPPlanApplyBuildsOneRevisionBoundChangeSet(t *testing.T) {
 	}
 	if repeated := plan.Apply(systemchanges.New(nil), prepared, systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 1, SHA256: request.StartingStateSHA256}, strings.Repeat("c", 64), systemchanges.DiskRequirement{}); repeated.Finding == nil || repeated.Finding.Code != "SYSTEM-CHANGES-CHANGE-SET-REQUIRED" {
 		t.Fatalf("repeated Apply = %+v", repeated)
+	}
+}
+
+func TestDomainSetupPlanApplyBuildsOneRevisionBoundChangeSet(t *testing.T) {
+	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	module := certificatelifecycle.New(staticIssuer{observation: certificatelifecycle.Observation{Issuer: certificatelifecycle.IssuerObservation{Name: "Let's Encrypt", CertbotVersion: "5.4.0", Distribution: "snap", SupportedDistribution: true, RequiredProfile: true, IPAddress: true, Staging: true}, Scheduler: certificatelifecycle.SchedulerObservation{Enabled: true, Persistent: true, Serial: true, ExactUnitPair: true, Randomized: true, NoCompetingScheduler: true, RunsPerDay: 2}}}, fixedClock{now: now})
+	request := completePlanRequest()
+	request.Lineage = certificatelifecycle.DomainLineage
+	request.ChangeSet = "cloudflare-profile-setup-2"
+	request.DirectTLS = testDirectTLSContribution(1)
+	plan := module.Plan(t.Context(), request).Plan
+	prepared := &preparedCertificateState{changeSet: request.ChangeSet, revision: 2, starting: request.StartingStateSHA256, candidate: request.DesiredStateSHA256, planID: plan.Identity(), planSHA: plan.SHA256()}
+	result := plan.Apply(systemchanges.New(nil), prepared, systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 1, SHA256: request.StartingStateSHA256}, strings.Repeat("c", 64), systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1})
+	if result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-ADAPTER-UNAVAILABLE" || !result.PlanConsumed {
+		t.Fatalf("domain setup Apply = %+v", result)
 	}
 }
 

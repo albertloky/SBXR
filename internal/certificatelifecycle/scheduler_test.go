@@ -28,13 +28,29 @@ type memoryAttemptHistory struct {
 	at      time.Time
 	outcome certificatelifecycle.RenewalAttempt
 	found   bool
+	loads   []certificatelifecycle.Lineage
 }
 
 func (history *memoryAttemptHistory) LoadAttempt(lineage certificatelifecycle.Lineage) (time.Time, certificatelifecycle.RenewalAttempt, bool, error) {
+	history.loads = append(history.loads, lineage)
 	if history.lineage != lineage {
 		return time.Time{}, "", false, nil
 	}
 	return history.at, history.outcome, history.found, nil
+}
+
+func TestRevisionOneSchedulerChecksOnlyTheIPLineage(t *testing.T) {
+	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	history := &memoryAttemptHistory{}
+	policy := certificatelifecycle.NewStandingPolicy(
+		certificatelifecycle.IPRenewalFacts{StandingPolicyApproved: true, Now: now, NotAfter: now.Add(100 * time.Hour)},
+		certificatelifecycle.DomainRenewalFacts{StandingPolicyApproved: true, Now: now, NotAfter: now.Add(24 * time.Hour), RenewalInformation: certificatelifecycle.RenewalInformation{Status: certificatelifecycle.RenewalInformationUnavailable}},
+		history,
+	)
+	results := certificatelifecycle.NewScheduler(policy, serialPlanner{events: &[]string{}}, failedSystemChanges{}).Run()
+	if len(results) != 0 || fmt.Sprint(history.loads) != fmt.Sprint([]certificatelifecycle.Lineage{certificatelifecycle.IPLineage}) {
+		t.Fatalf("revision 1 renewal = results %+v checks %v", results, history.loads)
+	}
 }
 func (history *memoryAttemptHistory) StoreAttempt(lineage certificatelifecycle.Lineage, at time.Time, outcome certificatelifecycle.RenewalAttempt) error {
 	history.lineage, history.at, history.outcome, history.found = lineage, at, outcome, true
@@ -217,7 +233,7 @@ func TestStandingIPPolicyPersistsFailureAcrossSchedulerProcesses(t *testing.T) {
 func TestStandingPolicyPersistsDomainFailureSeparately(t *testing.T) {
 	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
 	history := &memoryAttemptHistory{}
-	domainFacts := certificatelifecycle.DomainRenewalFacts{StandingPolicyApproved: true, Now: now, NotAfter: now.Add(20 * 24 * time.Hour), RenewalInformation: certificatelifecycle.RenewalInformation{Status: certificatelifecycle.RenewalInformationAvailable, WindowStart: now.Add(-time.Hour), WindowEnd: now.Add(time.Hour)}}
+	domainFacts := certificatelifecycle.DomainRenewalFacts{LineageExists: true, StandingPolicyApproved: true, Now: now, NotAfter: now.Add(20 * 24 * time.Hour), RenewalInformation: certificatelifecycle.RenewalInformation{Status: certificatelifecycle.RenewalInformationAvailable, WindowStart: now.Add(-time.Hour), WindowEnd: now.Add(time.Hour)}}
 	first := certificatelifecycle.NewStandingPolicy(certificatelifecycle.IPRenewalFacts{StandingPolicyApproved: true, Now: now, NotAfter: now.Add(100 * time.Hour)}, domainFacts, history)
 	results := certificatelifecycle.NewScheduler(first, serialPlanner{events: &[]string{}}, failedSystemChanges{}).Run()
 	if len(results) != 1 || results[0].Lineage != certificatelifecycle.DomainLineage || history.lineage != certificatelifecycle.DomainLineage || history.outcome != certificatelifecycle.RenewalFailed {
