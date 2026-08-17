@@ -29,6 +29,19 @@ const (
 	ServicesDiagnosticsScreen
 	SecurityScreen
 	LiveProfileCheckScreen
+	InstallationComplete
+	CloudflareSetupEntry
+	CloudflareSetupToken
+	CloudflareSetupPlan
+	CloudflareSetupConfirmation
+	CloudflareSetupRecovery
+	CloudflareSetupComplete
+	CloudflareSetupGuideOne
+	CloudflareSetupGuideTwo
+	CloudflareSetupZone
+	CloudflareSetupFields
+	CloudflareSetupProgress
+	CloudflareSetupRollback
 )
 
 type navigationID uint8
@@ -200,6 +213,47 @@ var scenarioFixtures = map[Scenario]fixture{
 		title: "LIVE PROFILE CHECK", navigation: subscriptionNavigation, allowsBack: true,
 		lines:   []string{"Session-only Live Profile Check is waiting for typed facts.", "", "> Back"},
 		details: []string{"MEMORY ONLY", "", "No traffic history is retained."},
+	},
+	InstallationComplete: {
+		header: "Managed - rev 1 - authenticated", title: "INSTALLATION COMPLETE", navigation: overviewNavigation,
+		lines:   []string{"Desired State revision 1 is durable and proven.", "", "Profiles 1 of 6 set up", "VLESS REALITY Vision Enabled", "XHTTP, WebSocket, Hysteria2, TUIC, AnyTLS Not set up", "Cloudflare Not required for first Installation", "Subscription 1 profile; five exact omissions", "", "This is a complete Managed result.", "", "> Continue to Overview"},
+		details: []string{"FIRST INSTALLATION", "", "Managed is proven.", "Cloudflare-free is expected.", "No fake profile entries."},
+	},
+	CloudflareSetupEntry: {
+		header: "Managed - rev 1 - authenticated", title: "SET UP CLOUDFLARE PROFILES", navigation: cloudflareNavigation, allowsBack: true,
+	},
+	CloudflareSetupToken: {
+		header: "Managed - rev 1 - authenticated", title: "ENTER MANAGEMENT TOKEN", navigation: cloudflareNavigation, allowsBack: true, acceptsInput: true,
+	},
+	CloudflareSetupPlan: {
+		header: "Managed - rev 1 - authenticated", title: "REVIEW CLOUDFLARE PROFILE SETUP PLAN", navigation: cloudflareNavigation, allowsBack: true,
+	},
+	CloudflareSetupConfirmation: {
+		header: "Change in progress - rev 1 - authenticated", title: "FINAL CONFIRMATION - IRREVERSIBLE", navigation: cloudflareNavigation,
+	},
+	CloudflareSetupRecovery: {
+		header: "Recovery Required - rev 1 - authenticated", title: "CLOUDFLARE PROFILE SETUP - UNRESOLVED", navigation: servicesNavigation,
+	},
+	CloudflareSetupComplete: {
+		header: "Managed - rev 2 - authenticated", title: "CLOUDFLARE PROFILE SETUP COMPLETE", navigation: cloudflareNavigation,
+	},
+	CloudflareSetupGuideOne: {
+		header: "Managed - rev 1 - authenticated", title: "TOKEN GUIDE - 1 OF 2", navigation: cloudflareNavigation, allowsBack: true,
+	},
+	CloudflareSetupGuideTwo: {
+		header: "Managed - rev 1 - authenticated", title: "TOKEN GUIDE - 2 OF 2", navigation: cloudflareNavigation, allowsBack: true,
+	},
+	CloudflareSetupZone: {
+		header: "Managed - rev 1 - authenticated", title: "SELECT ACTIVE ZONE", navigation: cloudflareNavigation, allowsBack: true,
+	},
+	CloudflareSetupFields: {
+		header: "Managed - rev 1 - authenticated", title: "REVIEW NAMES AND PORTS", navigation: cloudflareNavigation, allowsBack: true,
+	},
+	CloudflareSetupProgress: {
+		header: "Change in progress - rev 1 - authenticated", title: "IRREVERSIBLE SETUP IN PROGRESS", navigation: cloudflareNavigation,
+	},
+	CloudflareSetupRollback: {
+		header: "Managed - rev 1 - authenticated", title: "SETUP ROLLED BACK", navigation: cloudflareNavigation,
 	},
 }
 

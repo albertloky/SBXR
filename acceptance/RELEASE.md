@@ -60,6 +60,18 @@ This procedure has no result in this file. Record results only against one exact
 
 Stable evidence codes for this procedure are `RELEASE-STAGED-INSTALL-REVISION-1`, `RELEASE-INSTALL-STALE-PLAN`, `RELEASE-INSTALL-PRE-PUBLICATION-ROLLBACK`, `RELEASE-INSTALL-POST-PUBLICATION-ROLLBACK`, `RELEASE-INSTALL-CANCELLATION`, `RELEASE-INSTALL-RESTART`, `RELEASE-INSTALL-CLEANUP`, and `RELEASE-INSTALL-SECRET-SCAN`.
 
+## `RELEASE-STAGED-ONBOARDING-TERMINAL` — Seam Verification — Codex
+
+Through `ownerconsole.Run` and the real Bubble Tea event loop, verify the exact `80 × 24` and `120 × 36` `INSTALLATION COMPLETE`, setup entry, masked token, Plan review, irreversible confirmation, Recovery Required, and `CLOUDFLARE PROFILE SETUP COMPLETE` screens. Require revision `1` to show one of six profiles set up, five exact `Not set up` profiles, one-profile publication, and no Cloudflare requirement. Require completed setup to show six Enabled profiles, no setup action, and no Client Access Value. Keep all generic terminal, keyboard, paste, resize, masking, focus, and restoration checks in `internal/ownerconsole/ACCEPTANCE.md`.
+
+Run:
+
+```sh
+go test ./internal/ownerconsole -run '^TestRun(DrivesOneTypedCloudflareProfileSetupJourney|ShowsStagedOnboardingDecisionScreensAtExactTerminalSizes|ShowsTypedCloudflareSetupTerminalResultsAtExactSizes|OverviewShowsOnlyTheCurrentStagedCapability|RoutesNotSetUpProfilesOnlyToCollectiveCloudflareSetup|ResizeRemasksInitialAndManagedCloudflareTokens)$' -count=1
+```
+
+Record Module and Seam Verification only. Real Cloudflare, provider mutation, live VPS, outside-client, maintained-client, current-documentation, Codex Live Acceptance, Owner Acceptance, and Release Qualification are not performed by this procedure.
+
 ## `RELEASE-CLIENT-ACCESS-N-TO-N+1` — Integrated Verification — Codex
 
 This procedure has no live or Owner result in this file. Record results only against one exact Release Identity in its redacted Acceptance Record. Unperformed VPS, provider, client, and Owner checks remain Pending.

@@ -36,7 +36,7 @@ func (health ProfileHealth) String() string {
 
 type ProfilePresentation struct {
 	ID                  AccessProfileID
-	Enabled             bool
+	Lifecycle           ProfileLifecycle
 	Service, Listener   ProfileHealth
 	Address             string
 	Port                uint16
@@ -45,9 +45,45 @@ type ProfilePresentation struct {
 	CredentialRetained  bool
 }
 
+type ProfileLifecycle uint8
+
+const (
+	ProfileSetUpEnabled ProfileLifecycle = iota + 1
+	ProfileSetUpDisabled
+	ProfileNotSetUp
+)
+
+func (profile ProfilePresentation) enabled() bool { return profile.Lifecycle == ProfileSetUpEnabled }
+
 type ProfilesPresentation struct {
 	Managed  bool
 	Profiles [6]ProfilePresentation
+}
+
+type ProfileCapability uint8
+
+const (
+	ProfileCapabilityUnknown ProfileCapability = iota
+	ProfileCapabilityRevisionOne
+	ProfileCapabilityComplete
+)
+
+func (presentation ProfilesPresentation) Capability() ProfileCapability {
+	if !presentation.Managed || presentation.Profiles[0].Lifecycle != ProfileSetUpEnabled {
+		return ProfileCapabilityUnknown
+	}
+	deferred, complete := true, true
+	for _, profile := range presentation.Profiles[1:] {
+		deferred = deferred && profile.Lifecycle == ProfileNotSetUp
+		complete = complete && profile.Lifecycle == ProfileSetUpEnabled
+	}
+	if deferred {
+		return ProfileCapabilityRevisionOne
+	}
+	if complete {
+		return ProfileCapabilityComplete
+	}
+	return ProfileCapabilityUnknown
 }
 
 type ProfileChange uint8
@@ -159,10 +195,19 @@ func validatedProfiles(presentation ProfilesPresentation) (ProfilesPresentation,
 		return ProfilesPresentation{}, false
 	}
 	for index, profile := range presentation.Profiles {
-		if profile.ID != AccessProfileID(index+1) || profile.Service.String() == "" || profile.Listener.String() == "" || profile.Port == 0 || !shortSafeLine(profile.Address, 48) || !shortSafeLine(profile.Transport, 32) || !shortSafeLine(profile.Settings, 48) {
+		if profile.ID != AccessProfileID(index+1) || profile.Lifecycle < ProfileSetUpEnabled || profile.Lifecycle > ProfileNotSetUp {
 			return ProfilesPresentation{}, false
 		}
-		if profile.Enabled {
+		if profile.Lifecycle == ProfileNotSetUp {
+			if profile.Service != 0 || profile.Listener != 0 || profile.Port != 0 || profile.Address != "" || profile.Settings != "" || profile.Exposed || profile.Published || profile.CredentialRetained {
+				return ProfilesPresentation{}, false
+			}
+			continue
+		}
+		if profile.Service.String() == "" || profile.Listener.String() == "" || profile.Port == 0 || !shortSafeLine(profile.Address, 48) || !shortSafeLine(profile.Transport, 32) || !shortSafeLine(profile.Settings, 48) {
+			return ProfilesPresentation{}, false
+		}
+		if profile.enabled() {
 			if profile.Service == ProfileDisabled || profile.Listener == ProfileDisabled || !profile.Exposed || !profile.Published {
 				return ProfilesPresentation{}, false
 			}
@@ -178,8 +223,11 @@ func shortSafeLine(value string, maximum int) bool {
 }
 
 func profileLines(profile ProfilePresentation, selectedAction int) []string {
+	if profile.Lifecycle == ProfileNotSetUp {
+		return []string{"Connection Profile " + profile.ID.String(), "[NOT SET UP] " + profile.ID.String(), "No settings, credential, listener, exposure, or publication exists.", "Cloudflare Profile Setup is required.", "", "> Set up Cloudflare profiles"}
+	}
 	state := "ENABLED"
-	if !profile.Enabled {
+	if !profile.enabled() {
 		state = "DISABLED"
 	}
 	lines := []string{
@@ -190,13 +238,13 @@ func profileLines(profile ProfilePresentation, selectedAction int) []string {
 		fmt.Sprintf("Selected port and transport %d - %s", profile.Port, profile.Transport),
 		"Settings " + profile.Settings,
 	}
-	if profile.Enabled {
+	if profile.enabled() {
 		lines = append(lines, "Exposure OPEN - Publication INCLUDED")
 	} else {
 		lines = append(lines, "Settings and credential retained", "Exposure CLOSED - Publication OMITTED")
 	}
 	lines = append(lines, "")
-	for index, action := range profileActions(profile.Enabled) {
+	for index, action := range profileActions(profile) {
 		prefix := "  "
 		if index == selectedAction {
 			prefix = "> "
@@ -214,6 +262,7 @@ const (
 	validateProfileAction
 	reviewClientAccessChangeAction
 	runLiveProfileCheckAction
+	openCloudflareSetupAction
 )
 
 type profileAction struct {
@@ -222,10 +271,13 @@ type profileAction struct {
 	change ProfileChange
 }
 
-func profileActions(enabled bool) []profileAction {
+func profileActions(profile ProfilePresentation) []profileAction {
+	if profile.Lifecycle == ProfileNotSetUp {
+		return []profileAction{{label: "Set up Cloudflare profiles", kind: openCloudflareSetupAction}}
+	}
 	toggle := "Disable"
 	toggleChange := DisableProfile
-	if !enabled {
+	if !profile.enabled() {
 		toggle = "Enable"
 		toggleChange = EnableProfile
 	}

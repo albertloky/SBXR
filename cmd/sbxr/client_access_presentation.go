@@ -209,8 +209,13 @@ func ownerProfilesPresentation(desired state.DesiredState, observed []connection
 	result := ownerconsole.ProfilesPresentation{Managed: true}
 	for index, expected := range profiles {
 		profile := observed[index]
+		lifecycle := map[state.ProfileLifecycle]ownerconsole.ProfileLifecycle{state.ProfileEnabled: ownerconsole.ProfileSetUpEnabled, state.ProfileDisabled: ownerconsole.ProfileSetUpDisabled, state.ProfileNotSetUp: ownerconsole.ProfileNotSetUp}[profile.Lifecycle]
+		if lifecycle == ownerconsole.ProfileNotSetUp {
+			result.Profiles[index] = ownerconsole.ProfilePresentation{ID: ownerconsole.AccessProfileID(index + 1), Lifecycle: lifecycle, Transport: expected.transport}
+			continue
+		}
 		health := ownerProfileHealth(profile.Health.Outcome)
-		result.Profiles[index] = ownerconsole.ProfilePresentation{ID: ownerconsole.AccessProfileID(index + 1), Enabled: profile.Enabled, Service: health, Listener: health, Address: expected.address, Port: expected.port, Transport: expected.transport, Settings: expected.settings, Exposed: profile.Enabled && profile.SelectedListener.Port != 0, Published: profile.Enabled, CredentialRetained: !profile.Enabled}
+		result.Profiles[index] = ownerconsole.ProfilePresentation{ID: ownerconsole.AccessProfileID(index + 1), Lifecycle: lifecycle, Service: health, Listener: health, Address: expected.address, Port: expected.port, Transport: expected.transport, Settings: expected.settings, Exposed: profile.Enabled && profile.SelectedListener.Port != 0, Published: profile.Enabled, CredentialRetained: !profile.Enabled}
 		if profile.ID != expected.id {
 			return ownerconsole.ProfilesPresentation{}
 		}

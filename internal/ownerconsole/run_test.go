@@ -320,6 +320,243 @@ func TestRunRendersCanonicalStyleAFixturesAtBothApprovedSizes(t *testing.T) {
 	}
 }
 
+func TestRunShowsStagedOnboardingDecisionScreensAtExactTerminalSizes(t *testing.T) {
+	screens := []struct {
+		scenario Scenario
+		want     []string
+	}{
+		{InstallationComplete, []string{"INSTALLATION COMPLETE", "Profiles 1 of 6 set up", "VLESS REALITY Vision Enabled", "Cloudflare Not required", "Continue to Overview"}},
+	}
+	for _, size := range [][2]int{{80, 24}, {120, 36}} {
+		for _, screen := range screens {
+			got := runTranscript(t, Session{Scenario: screen.scenario}, size[0], size[1], "\x03\r")
+			for _, want := range screen.want {
+				if !strings.Contains(got, want) {
+					t.Fatalf("%s at %dx%d omitted %q\n%s", scenarioFixture(screen.scenario).title, size[0], size[1], want, got)
+				}
+			}
+		}
+	}
+}
+
+type profileSetupStub struct {
+	*outcomeStub
+	mu       sync.Mutex
+	requests []ProfileSetupRequest
+	terminal ProfileSetupKind
+	inspects int
+	initial  *ProfileSetupPresentation
+}
+
+func newProfileSetupStub() *profileSetupStub {
+	return &profileSetupStub{outcomeStub: &outcomeStub{applyResults: []ChangeResult{{Kind: ChangeStarted, OperationID: "cloudflare-setup-change"}}}}
+}
+
+func (stub *profileSetupStub) ViewProfileSetup(context.Context) ProfileSetupPresentation {
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	if stub.initial != nil {
+		return *stub.initial
+	}
+	if stub.inspects > 1 {
+		switch stub.terminal {
+		case ProfileSetupRolledBack:
+			return ProfileSetupPresentation{Kind: ProfileSetupRolledBack, Revision: 1}
+		case ProfileSetupRecoveryRequired:
+			return ProfileSetupPresentation{Kind: ProfileSetupRecoveryRequired, Revision: 1, Checkpoint: "Irreversible boundary crossed", Candidate: "Protected revision 2 candidate", Evidence: "Durable setup journal"}
+		default:
+			return ProfileSetupPresentation{Kind: ProfileSetupComplete, Revision: 2}
+		}
+	}
+	return ProfileSetupPresentation{Kind: ProfileSetupEntry, Revision: 1}
+}
+
+func (stub *profileSetupStub) Inspect(context.Context) DurableChangeSet {
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	stub.inspects++
+	if stub.inspects == 1 {
+		return DurableChangeSet{Kind: ChangeSetActive, OperationID: "cloudflare-setup-change", CompletedSteps: 0, TotalSteps: 8, Checkpoint: "Prepare"}
+	}
+	kind := ChangeSetSucceeded
+	if stub.terminal == ProfileSetupRolledBack {
+		kind = ChangeSetRolledBack
+	}
+	if stub.terminal == ProfileSetupRecoveryRequired {
+		kind = ChangeSetRecoveryRequired
+	}
+	return DurableChangeSet{Kind: kind, OperationID: "cloudflare-setup-change", CompletedSteps: 8, TotalSteps: 8, Checkpoint: "Terminal"}
+}
+
+func (stub *profileSetupStub) ActProfileSetup(_ context.Context, request ProfileSetupRequest) ProfileSetupResponse {
+	stub.mu.Lock()
+	stub.requests = append(stub.requests, request)
+	stub.mu.Unlock()
+	view := ProfileSetupPresentation{Revision: 1}
+	switch request.Action {
+	case BeginProfileSetup:
+		view.Kind = ProfileSetupGuideOne
+	case NextProfileSetupGuide:
+		view.Kind = ProfileSetupGuideTwo
+	case AcceptProfileSetupAuthority:
+		view.Kind = ProfileSetupTokenEntry
+	case SubmitProfileSetupToken:
+		view.Kind, view.Zones = ProfileSetupZoneSelection, []ProfileSetupZone{{Account: "Primary account", Name: "example.test"}, {Account: "Secondary account", Name: "example.net"}}
+	case SelectProfileSetupZone:
+		view.Kind, view.SelectedZone = ProfileSetupFieldsReview, request.Zone
+		view.Hostnames, view.Ports = [3]string{"xhttp.example.test", "ws.example.test", "direct.example.test"}, []uint16{443, 8443, 9443}
+	case BuildProfileSetupPlan:
+		plan := ProfileSetupPlan{Plan: *completePlan("cloudflare-setup-plan").Plan}
+		for index, name := range profileSetupSectionNames {
+			plan.Sections[index] = ProfileSetupPlanSection{Name: name, Facts: []string{"Exact typed " + name + " fact"}}
+		}
+		return ProfileSetupResponse{Review: &plan}
+	case PrepareProfileSetup:
+		view.Kind = ProfileSetupFinalConfirmation
+	case StartIrreversibleProfileSetup:
+		view.Kind = ProfileSetupProgress
+	case CancelPreparedProfileSetup:
+		view.Kind, view.SelectedZone = ProfileSetupFieldsReview, "example.test"
+		view.Hostnames, view.Ports = [3]string{"xhttp.example.test", "ws.example.test", "direct.example.test"}, []uint16{443, 8443, 9443}
+	case BackProfileSetup:
+		switch request.From {
+		case ProfileSetupGuideTwo:
+			view.Kind = ProfileSetupGuideOne
+		case ProfileSetupTokenEntry:
+			view.Kind = ProfileSetupGuideTwo
+		case ProfileSetupZoneSelection:
+			view.Kind = ProfileSetupTokenEntry
+		case ProfileSetupFieldsReview, ProfileSetupPlanReviewScreen:
+			view.Kind, view.Zones = ProfileSetupZoneSelection, []ProfileSetupZone{{Account: "Primary account", Name: "example.test"}, {Account: "Secondary account", Name: "example.net"}}
+		default:
+			view.Kind = ProfileSetupEntry
+		}
+	}
+	return ProfileSetupResponse{Presentation: &view}
+}
+
+func TestRunDrivesOneTypedCloudflareProfileSetupJourney(t *testing.T) {
+	for _, size := range [][2]int{{80, 24}, {120, 36}} {
+		t.Run(fmt.Sprintf("%dx%d", size[0], size[1]), func(t *testing.T) {
+			stub := newProfileSetupStub()
+			steps := []string{"", "\r", "", "\r", "", "\r", "", "TOP-SECRET-TOKEN", "\t", "", "\x1b[Z", "", "\x12", "", "\x12", "\r", "", "\r", "", "\r", ""}
+			for range 8 {
+				steps = append(steps, "\r", "")
+			}
+			steps = append(steps, "", "\r", "", "", "\x03\r")
+			got := runTranscriptSteps(t, Session{Scenario: CloudflareSetupEntry, ProfileSetup: stub}, size[0], size[1], steps...)
+			for _, want := range []string{"TOKEN GUIDE - 1 OF 2", "User API Tokens Edit", "Global API Key REJECTED", "SELECT ACTIVE ZONE", "example.test", "REVIEW NAMES AND PORTS", "direct.example.test", "8 OF 8 - Interruption and recovery", "FINAL CONFIRMATION - IRREVERSIBLE", "IRREVERSIBLE SETUP IN PROGRESS", "1. Prepare", "8. Publish, prove, and Complete", "CLOUDFLARE PROFILE SETUP COMPLETE", "Profiles 6 of 6 set up"} {
+				if !strings.Contains(got, want) {
+					t.Fatalf("typed journey omitted %q\n%s", want, got)
+				}
+			}
+			if strings.Count(got, "TOP-SECRET-TOKEN") != 1 {
+				t.Fatalf("token reveal count = %d, want 1", strings.Count(got, "TOP-SECRET-TOKEN"))
+			}
+			if !strings.Contains(got, "\x1b[5 q") {
+				t.Fatal("token field did not use the native blinking bar cursor")
+			}
+			stub.mu.Lock()
+			requests := append([]ProfileSetupRequest(nil), stub.requests...)
+			stub.mu.Unlock()
+			if !slices.ContainsFunc(requests, func(request ProfileSetupRequest) bool {
+				return request.Action == SubmitProfileSetupToken && request.Token == "TOP-SECRET-TOKEN"
+			}) {
+				t.Fatal("typed token did not reach the setup Module")
+			}
+			if !slices.ContainsFunc(requests, func(request ProfileSetupRequest) bool {
+				return request.Action == PrepareProfileSetup && request.Plan == "cloudflare-setup-plan"
+			}) || !slices.ContainsFunc(requests, func(request ProfileSetupRequest) bool {
+				return request.Action == StartIrreversibleProfileSetup && request.Plan == "cloudflare-setup-plan"
+			}) || len(stub.applyPlans) != 0 {
+				t.Fatalf("prepare/start requests = %+v; direct Apply = %v", requests, stub.applyPlans)
+			}
+		})
+	}
+}
+
+func TestRunNeverInventsCloudflareSetupAuthorityWithoutModule(t *testing.T) {
+	got := runTranscript(t, Session{Scenario: CloudflareSetupPlan}, 80, 24, "\x03\r")
+	if !strings.Contains(got, "facts are unavailable") || strings.Contains(got, "Apply this exact Plan") {
+		t.Fatalf("fixture invented setup authority\n%s", got)
+	}
+}
+
+func TestRunSubmitsTypedSetupCorrectionInputAndSelection(t *testing.T) {
+	stub := newProfileSetupStub()
+	stub.initial = &ProfileSetupPresentation{Kind: ProfileSetupCorrection, Revision: 7, Correction: &CorrectionPresentation{Problem: "Port collision", Found: "9443 occupied", Required: "one reviewed port", WhyStopped: "no adoption", FixWithSBXR: true, InputLabel: "Replacement port", Selections: []CorrectionSelection{{Identity: "first", Label: "First candidate"}, {Identity: "second", Label: "Second candidate"}}, Evidence: "NETWORK-SETUP-PORT-COLLISION"}}
+	got := runTranscriptSteps(t, Session{Scenario: CorrectionFlow, ProfileSetup: stub}, 80, 24, "", "9555", "\t", "\x1b[C", "\r", "", "\x03\r")
+	stub.mu.Lock()
+	requests := append([]ProfileSetupRequest(nil), stub.requests...)
+	stub.mu.Unlock()
+	if !slices.ContainsFunc(requests, func(request ProfileSetupRequest) bool {
+		return request.Action == FixProfileSetup && request.Text == "9555" && request.Selection == "second"
+	}) || !strings.Contains(got, "NETWORK-SETUP-PORT-COLLISION") || !strings.Contains(got, "\x1b[5 q") {
+		t.Fatalf("typed correction was not submitted: %+v\n%s", requests, got)
+	}
+}
+
+func TestRunShowsTypedCloudflareSetupTerminalResultsAtExactSizes(t *testing.T) {
+	for _, size := range [][2]int{{80, 24}, {120, 36}} {
+		for _, test := range []struct {
+			kind ProfileSetupKind
+			want []string
+		}{
+			{ProfileSetupRolledBack, []string{"SETUP ROLLED BACK", "Rolled back", "Revision 1 remains"}},
+			{ProfileSetupRecoveryRequired, []string{"CLOUDFLARE PROFILE SETUP - UNRESOLVED", "Recovery Required", "Retry Cloudflare Profile Setup recovery", "Complete removal"}},
+			{ProfileSetupComplete, []string{"CLOUDFLARE PROFILE SETUP COMPLETE", "Profiles 6 of 6 set up", "Open Access"}},
+		} {
+			t.Run(fmt.Sprintf("%d/%dx%d", test.kind, size[0], size[1]), func(t *testing.T) {
+				stub := newProfileSetupStub()
+				stub.terminal, stub.inspects = test.kind, 2
+				got := runTranscriptSteps(t, Session{Scenario: profileSetupScenario(test.kind), ProfileSetup: stub}, size[0], size[1], "", "\x03\r")
+				for _, want := range test.want {
+					if !strings.Contains(got, want) {
+						t.Fatalf("terminal result omitted %q\n%s", want, got)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestRunOverviewShowsOnlyTheCurrentStagedCapability(t *testing.T) {
+	revisionOne := runTranscript(t, Session{Scenario: AuthenticatedOverview, ProfileCapability: ProfileCapabilityRevisionOne}, 80, 24, "\x03\r")
+	for _, want := range []string{"Profiles 1 of 6 set up", "Five Cloudflare profiles Not set up", "Set up Cloudflare profiles", "Optional"} {
+		if !strings.Contains(revisionOne, want) {
+			t.Fatalf("revision 1 Overview omitted %q\n%s", want, revisionOne)
+		}
+	}
+	if strings.Contains(revisionOne, "completion percentage") || strings.Contains(revisionOne, "degraded") {
+		t.Fatalf("revision 1 Overview mislabeled accepted absence\n%s", revisionOne)
+	}
+
+	complete := runTranscript(t, Session{Scenario: AuthenticatedOverview, ProfileCapability: ProfileCapabilityComplete}, 80, 24, "\x03\r")
+	if !strings.Contains(complete, "Profiles 6 of 6 set up") || strings.Contains(complete, "Set up Cloudflare profiles") {
+		t.Fatalf("complete Overview retained the setup action\n%s", complete)
+	}
+
+	for name, keys := range map[string][]string{"Overview action": {"\r"}, "Cloudflare action": {"\x1b[B\x1b[B\x1b[B\r"}} {
+		t.Run(name, func(t *testing.T) {
+			got := runTranscriptSteps(t, Session{Scenario: AuthenticatedOverview, ProfileCapability: ProfileCapabilityRevisionOne, ProfileSetup: newProfileSetupStub()}, 80, 24, append(keys, "", "\x03\r")...)
+			if !strings.Contains(got, "SET UP CLOUDFLARE PROFILES") || !strings.Contains(got, "Optional collective setup") {
+				t.Fatalf("setup action did not open the typed journey\n%s", got)
+			}
+		})
+	}
+}
+
+func TestRunBackMovesOneTypedSetupScreenWithoutApply(t *testing.T) {
+	stub := newProfileSetupStub()
+	got := runTranscriptSteps(t, Session{Scenario: CloudflareSetupEntry, ProfileSetup: stub}, 80, 24, "", "\r", "", "\r", "", "\x1b[B", "\r", "", "\x03\r")
+	stub.mu.Lock()
+	requests := append([]ProfileSetupRequest(nil), stub.requests...)
+	stub.mu.Unlock()
+	if len(requests) < 3 || requests[len(requests)-1].Action != BackProfileSetup || requests[len(requests)-1].From != ProfileSetupGuideTwo || len(stub.applyPlans) != 0 || !strings.Contains(got, "TOKEN GUIDE - 1 OF 2") {
+		t.Fatalf("Back did not move Guide 2 to Guide 1 without Apply: requests=%+v apply=%v\n%s", requests, stub.applyPlans, got)
+	}
+}
+
 func TestInstallationReviewOffersNoPersistentDraftAction(t *testing.T) {
 	got := runTranscript(t, Session{Scenario: InstallationReview}, 80, 24, "\x03\r")
 	if strings.Contains(got, "Save non-secret draft") {

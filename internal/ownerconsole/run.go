@@ -57,6 +57,7 @@ type Session struct {
 	Environment             []string
 	Capabilities            *Capabilities
 	Scenario                Scenario
+	ProfileCapability       ProfileCapability
 	Updates                 <-chan PresentationUpdate
 	Access                  AccessPresentation
 	AccessProvider          func(context.Context) AccessPresentation
@@ -65,6 +66,7 @@ type Session struct {
 	Outcome                 OutcomeModule
 	Profiles                ProfilesModule
 	ProfileOutcomes         OutcomeModule
+	ProfileSetup            ProfileSetupModule
 	Cloudflare              CloudflareModule
 	CloudflareOutcomes      OutcomeModule
 	Certificates            CertificatesModule
@@ -121,7 +123,7 @@ func Run(ctx context.Context, session Session) error {
 	fixture := scenarioFixture(session.Scenario)
 	accessCatalog := session.Access.catalog()
 	program := tea.NewProgram(
-		model{width: c.Width, height: c.Height, scenario: session.Scenario, selected: selectedNavigation(session.Scenario), unicode: c.Unicode, noColor: noColor, initialModes: initialModes, drawingModeProbeRequired: c.DrawingModeProbeRequired, inputFocused: fixture.acceptsInput, progressExpected: session.Updates != nil, runContext: runContext, accessCatalog: accessCatalog, accessProvider: session.AccessProvider, startupProvider: session.StartupProvider, clipboard: session.Clipboard, outcome: session.Outcome, defaultOutcome: session.Outcome, profiles: session.Profiles, profileOutcomes: session.ProfileOutcomes, profileViewGeneration: 1, cloudflare: session.Cloudflare, cloudflareOutcomes: session.CloudflareOutcomes, cloudflareGeneration: 1, certificates: session.Certificates, certificateOutcomes: session.CertificateOutcomes, certificateGeneration: 1, diagnostics: session.Diagnostics, diagnosticsScreen: diagnosticsScreenState{generation: 1}, lifecycle: session.Lifecycle, lifecycleOutcomes: session.LifecycleOutcomes, lifecycleScreen: lifecycleScreenState{generation: 1}, recovery: session.Recovery, recoveryOutcomes: session.RecoveryOutcomes, recoveryScreen: recoveryScreenState{generation: 1}, completeRemoval: session.CompleteRemoval, completeRemovalOutcomes: session.CompleteRemovalOutcomes, completeRemovalScreen: completeRemovalScreenState{generation: 1, action: 1, forwardOnly: session.Scenario == ForwardOnlyRemoval}},
+		model{width: c.Width, height: c.Height, scenario: session.Scenario, profileCapability: session.ProfileCapability, selected: selectedNavigation(session.Scenario), unicode: c.Unicode, noColor: noColor, initialModes: initialModes, drawingModeProbeRequired: c.DrawingModeProbeRequired, inputFocused: fixture.acceptsInput && (!isProfileSetupScenario(session.Scenario) || session.ProfileSetup != nil), progressExpected: session.Updates != nil, runContext: runContext, accessCatalog: accessCatalog, accessProvider: session.AccessProvider, startupProvider: session.StartupProvider, clipboard: session.Clipboard, outcome: session.Outcome, defaultOutcome: session.Outcome, profiles: session.Profiles, profileOutcomes: session.ProfileOutcomes, profileSetup: session.ProfileSetup, profileViewGeneration: 1, cloudflare: session.Cloudflare, cloudflareOutcomes: session.CloudflareOutcomes, cloudflareGeneration: 1, certificates: session.Certificates, certificateOutcomes: session.CertificateOutcomes, certificateGeneration: 1, diagnostics: session.Diagnostics, diagnosticsScreen: diagnosticsScreenState{generation: 1}, lifecycle: session.Lifecycle, lifecycleOutcomes: session.LifecycleOutcomes, lifecycleScreen: lifecycleScreenState{generation: 1}, recovery: session.Recovery, recoveryOutcomes: session.RecoveryOutcomes, recoveryScreen: recoveryScreenState{generation: 1}, completeRemoval: session.CompleteRemoval, completeRemovalOutcomes: session.CompleteRemovalOutcomes, completeRemovalScreen: completeRemovalScreenState{generation: 1, action: 1, forwardOnly: session.Scenario == ForwardOnlyRemoval}},
 		tea.WithContext(runContext),
 		tea.WithInput(session.Input),
 		tea.WithOutput(session.Output),
@@ -204,6 +206,7 @@ type model struct {
 	width, height              int
 	exitConfirm                bool
 	scenario                   Scenario
+	profileCapability          ProfileCapability
 	selected                   int
 	unicode                    bool
 	noColor                    bool
@@ -253,6 +256,12 @@ type model struct {
 	planPage                   int
 	profiles                   ProfilesModule
 	profileOutcomes            OutcomeModule
+	profileSetup               ProfileSetupModule
+	profileSetupView           ProfileSetupPresentation
+	profileSetupAvailable      bool
+	profileSetupPlan           ProfileSetupPlan
+	profileSetupPlanAvailable  bool
+	profileSetupAction         int
 	changeOrigin               Scenario
 	hasChangeOrigin            bool
 	profilesView               ProfilesPresentation
@@ -364,6 +373,9 @@ type changeReviewMsg struct{ review ChangeReview }
 type changeResultMsg struct{ result ChangeResult }
 type changeSetUpdateMsg struct{ change DurableChangeSet }
 type changeBackMsg struct{ review ChangeReview }
+type profileSetupViewMsg struct{ view ProfileSetupPresentation }
+type profileSetupResponseMsg struct{ response ProfileSetupResponse }
+type profileSetupInspectMsg struct{ change DurableChangeSet }
 type asyncRequestIdentity struct {
 	generation uint64
 	origin     Scenario
@@ -509,6 +521,9 @@ func (m model) Init() tea.Cmd {
 	if m.profiles != nil && (m.scenario == ConnectionProfilesScreen || m.scenario == SubscriptionScreen) {
 		commands = append(commands, m.viewProfilesCommand())
 	}
+	if m.profileSetup != nil && (isProfileSetupScenario(m.scenario) || m.scenario == CorrectionFlow) {
+		commands = append(commands, m.viewProfileSetupCommand())
+	}
 	if m.cloudflare != nil && m.scenario == CloudflareWalkthrough {
 		commands = append(commands, m.viewCloudflareCommand())
 	}
@@ -537,9 +552,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := message.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = message.Width, message.Height
-		if m.width < minimumWidth || m.height < minimumHeight {
-			m.tokenRevealed = false
-		}
+		m.tokenRevealed = false
 	case tea.BackgroundColorMsg:
 		m.dark = message.IsDark()
 		m.appearanceKnown = true
@@ -581,6 +594,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 	case presentationUpdateMsg:
+		if m.scenario == CloudflareSetupProgress && message.Progress.Kind == MixedStepProgress && message.Progress.TotalSteps == uint16(len(profileSetupProgressStages)) && message.Progress.CurrentStep > 0 && message.Progress.CurrentStep <= message.Progress.TotalSteps {
+			m.profileSetupAction = int(message.Progress.CurrentStep - 1)
+		}
 		if m.exitConfirm {
 			update := message.PresentationUpdate
 			m.pendingUpdate = &update
@@ -633,6 +649,36 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		default:
 			m.scenario, m.selected = RecoveryWithoutRecovery, selectedNavigation(RecoveryWithoutRecovery)
 		}
+	case profileSetupViewMsg:
+		m.setProfileSetupView(message.view)
+	case profileSetupResponseMsg:
+		if message.response.Presentation != nil && message.response.Review == nil {
+			m.setProfileSetupView(*message.response.Presentation)
+			if m.profileSetupAvailable && m.profileSetupView.Kind == ProfileSetupProgress {
+				return m, m.inspectProfileSetupCommand()
+			}
+		}
+		if message.response.Review != nil && message.response.Presentation == nil {
+			m.profileSetupPlan, m.profileSetupPlanAvailable = validatedProfileSetupPlan(*message.response.Review)
+			if m.profileSetupPlanAvailable {
+				m.scenario, m.planPage, m.profileSetupAction = CloudflareSetupPlan, 0, 0
+			}
+		}
+	case profileSetupInspectMsg:
+		if m.scenario != CloudflareSetupProgress {
+			return m, nil
+		}
+		change := validatedDurableChangeSet(message.change)
+		switch change.Kind {
+		case ChangeSetActive:
+			if change.TotalSteps == uint16(len(profileSetupProgressStages)) && change.CompletedSteps < change.TotalSteps {
+				m.profileSetupAction = int(change.CompletedSteps)
+			}
+			return m, tea.Tick(20*time.Millisecond, func(time.Time) tea.Msg { return profileSetupInspectMsg{change: m.profileSetup.Inspect(m.runContext)} })
+		case ChangeSetSucceeded, ChangeSetRolledBack, ChangeSetRecoveryRequired:
+			return m, m.viewProfileSetupCommand()
+		}
+		m.profileSetupAvailable = false
 	case copyFinishedMsg:
 		switch message.result {
 		case CopyConfirmed:
@@ -1012,6 +1058,11 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.exitConfirm = true
 			return m, nil
 		}
+		if m.profileSetupScreen() {
+			if handled, command := m.updateProfileSetupKey(message); handled {
+				return m, command
+			}
+		}
 		if m.scenario == InstallationReview && m.outcome != nil {
 			if m.confirmationHelpOpen {
 				if message.String() == "esc" {
@@ -1197,7 +1248,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			actions := profileActions(m.profilesView.Profiles[m.profileSelection].Enabled)
+			actions := profileActions(m.profilesView.Profiles[m.profileSelection])
 			switch message.String() {
 			case "up", "shift+tab":
 				m.actionGeneration++
@@ -1402,6 +1453,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			if item.exit {
 				m.exitConfirm = true
 			} else {
+				if m.profileSetup != nil && m.profileCapability == ProfileCapabilityRevisionOne && ((m.scenario == AuthenticatedOverview && item.id == overviewNavigation) || item.id == cloudflareNavigation) {
+					return m, m.viewProfileSetupCommand()
+				}
 				m.scenario = item.scenario
 				m.inputFocused = scenarioFixture(item.scenario).acceptsInput
 				m.accessFocused = item.scenario == DedicatedAccess && m.accessUnlocked
@@ -1820,6 +1874,273 @@ func (m model) viewProfilesCommand() tea.Cmd {
 	}
 }
 
+func (m model) viewProfileSetupCommand() tea.Cmd {
+	return func() tea.Msg { return profileSetupViewMsg{view: m.profileSetup.ViewProfileSetup(m.runContext)} }
+}
+
+func (m model) actProfileSetupCommand(request ProfileSetupRequest) tea.Cmd {
+	if request.From == 0 {
+		request.From = m.profileSetupView.Kind
+	}
+	return func() tea.Msg {
+		return profileSetupResponseMsg{response: m.profileSetup.ActProfileSetup(m.runContext, request)}
+	}
+}
+
+func (m *model) setProfileSetupView(view ProfileSetupPresentation) {
+	m.profileSetupView, m.profileSetupAvailable = validatedProfileSetup(view)
+	if !m.profileSetupAvailable || (m.profileSetupView.Kind != ProfileSetupFinalConfirmation && m.profileSetupView.Kind != ProfileSetupProgress) {
+		m.profileSetupPlan, m.profileSetupPlanAvailable = ProfileSetupPlan{}, false
+	}
+	m.planPage, m.profileSetupAction = 0, 0
+	m.discardInput()
+	if m.profileSetupAvailable {
+		m.scenario = profileSetupScenario(m.profileSetupView.Kind)
+		m.inputFocused = m.profileSetupView.Kind == ProfileSetupTokenEntry || m.profileSetupView.Kind == ProfileSetupCorrection && m.profileSetupView.Correction.InputLabel != ""
+	}
+}
+
+func (m *model) updateProfileSetupKey(message tea.KeyPressMsg) (bool, tea.Cmd) {
+	key := message.String()
+	if m.scenario == CloudflareSetupProgress {
+		return true, nil
+	}
+	if m.scenario == CorrectionFlow && m.inputFocused {
+		switch key {
+		case "tab":
+			m.inputFocused = false
+		case "enter":
+			return true, m.fixProfileSetupCommand()
+		case "esc":
+			m.discardInput()
+			return true, m.actProfileSetupCommand(ProfileSetupRequest{Action: BackProfileSetup})
+		default:
+			m.editFocusedInput(message)
+		}
+		return true, nil
+	}
+	if m.scenario == CorrectionFlow && key == "shift+tab" && m.profileSetupView.Correction.InputLabel != "" {
+		m.inputFocused = true
+		return true, nil
+	}
+	if m.scenario == CorrectionFlow && (key == "left" || key == "right") && len(m.profileSetupView.Correction.Selections) > 0 {
+		delta := 1
+		if key == "left" {
+			delta = len(m.profileSetupView.Correction.Selections) - 1
+		}
+		m.correctionSelection = (m.correctionSelection + delta) % len(m.profileSetupView.Correction.Selections)
+		return true, nil
+	}
+	if m.scenario == CloudflareSetupToken && m.inputFocused {
+		switch key {
+		case "ctrl+r":
+			m.tokenRevealed = !m.tokenRevealed
+		case "enter":
+			token := m.input
+			m.discardInput()
+			return true, m.actProfileSetupCommand(ProfileSetupRequest{Action: SubmitProfileSetupToken, Token: token})
+		case "esc":
+			m.discardInput()
+			return true, m.actProfileSetupCommand(ProfileSetupRequest{Action: BackProfileSetup})
+		default:
+			m.editFocusedInput(message)
+		}
+		return true, nil
+	}
+	if m.scenario == CloudflareSetupToken {
+		switch key {
+		case "shift+tab":
+			m.inputFocused, m.tokenRevealed = true, false
+		case "up", "down", "left", "right", "tab":
+			m.profileSetupAction = 1 - m.profileSetupAction
+		case "enter", "space":
+			if m.profileSetupAction == 1 {
+				m.discardInput()
+				return true, m.actProfileSetupCommand(ProfileSetupRequest{Action: BackProfileSetup})
+			}
+			token := m.input
+			m.discardInput()
+			return true, m.actProfileSetupCommand(ProfileSetupRequest{Action: SubmitProfileSetupToken, Token: token})
+		case "esc":
+			m.discardInput()
+			return true, m.actProfileSetupCommand(ProfileSetupRequest{Action: BackProfileSetup})
+		}
+		return true, nil
+	}
+	if key == "esc" {
+		m.discardInput()
+		return true, m.actProfileSetupCommand(ProfileSetupRequest{Action: BackProfileSetup})
+	}
+	if m.scenario == CloudflareSetupEntry && (key == "up" || key == "down" || key == "left" || key == "right" || key == "tab") {
+		m.profileSetupAction = 1 - m.profileSetupAction
+		return true, nil
+	}
+	if m.scenario == CloudflareSetupConfirmation && (key == "up" || key == "down" || key == "left" || key == "right" || key == "tab") {
+		m.profileSetupAction = 1 - m.profileSetupAction
+		return true, nil
+	}
+	if (m.scenario == CloudflareSetupGuideOne || m.scenario == CloudflareSetupGuideTwo || m.scenario == CloudflareSetupFields || m.scenario == CloudflareSetupPlan) && (key == "up" || key == "down" || key == "left" || key == "right" || key == "tab") {
+		count := 2
+		if m.scenario == CloudflareSetupPlan {
+			count = 3
+		}
+		delta := 1
+		if key == "up" || key == "left" {
+			delta = count - 1
+		}
+		m.profileSetupAction = (m.profileSetupAction + delta) % count
+		return true, nil
+	}
+	if (m.scenario == CloudflareSetupRecovery || m.scenario == CloudflareSetupComplete) && (key == "up" || key == "down") {
+		count := 4
+		if m.scenario == CloudflareSetupComplete {
+			count = 3
+		}
+		delta := 1
+		if key == "up" {
+			delta = count - 1
+		}
+		m.profileSetupAction = (m.profileSetupAction + delta) % count
+		return true, nil
+	}
+	if m.scenario == CorrectionFlow && (key == "up" || key == "down") {
+		count := 1
+		if m.profileSetupView.Correction.FixWithSBXR {
+			count++
+		}
+		if !m.profileSetupView.Correction.HideCheckAgain {
+			count++
+		}
+		delta := 1
+		if key == "up" {
+			delta = count - 1
+		}
+		m.profileSetupAction = (m.profileSetupAction + delta) % count
+		return true, nil
+	}
+	if m.scenario == CloudflareSetupZone && (key == "up" || key == "down") && len(m.profileSetupView.Zones) > 0 {
+		count := len(m.profileSetupView.Zones) + 1
+		delta := 1
+		if key == "up" {
+			delta = count - 1
+		}
+		m.profileSetupAction = (m.profileSetupAction + delta) % count
+		return true, nil
+	}
+	if key != "enter" && key != "space" {
+		return true, nil
+	}
+	switch m.scenario {
+	case CloudflareSetupEntry:
+		if m.profileSetupAction == 1 {
+			m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+			return true, nil
+		}
+		return true, m.actProfileSetupCommand(ProfileSetupRequest{Action: BeginProfileSetup})
+	case CloudflareSetupGuideOne:
+		if m.profileSetupAction == 1 {
+			return true, m.actProfileSetupCommand(ProfileSetupRequest{Action: BackProfileSetup})
+		}
+		return true, m.actProfileSetupCommand(ProfileSetupRequest{Action: NextProfileSetupGuide})
+	case CloudflareSetupGuideTwo:
+		if m.profileSetupAction == 1 {
+			return true, m.actProfileSetupCommand(ProfileSetupRequest{Action: BackProfileSetup})
+		}
+		return true, m.actProfileSetupCommand(ProfileSetupRequest{Action: AcceptProfileSetupAuthority})
+	case CloudflareSetupZone:
+		if m.profileSetupAction == len(m.profileSetupView.Zones) {
+			return true, m.actProfileSetupCommand(ProfileSetupRequest{Action: BackProfileSetup})
+		}
+		return true, m.actProfileSetupCommand(ProfileSetupRequest{Action: SelectProfileSetupZone, Zone: m.profileSetupView.Zones[m.profileSetupAction].Name})
+	case CloudflareSetupFields:
+		if m.profileSetupAction == 1 {
+			return true, m.actProfileSetupCommand(ProfileSetupRequest{Action: BackProfileSetup})
+		}
+		return true, m.actProfileSetupCommand(ProfileSetupRequest{Action: BuildProfileSetupPlan})
+	case CloudflareSetupPlan:
+		if m.profileSetupAction == 2 {
+			return true, m.actProfileSetupCommand(ProfileSetupRequest{Action: BackProfileSetup})
+		}
+		if m.profileSetupAction == 1 {
+			m.planPage, m.profileSetupAction = 0, 0
+			return true, nil
+		}
+		if m.planPage+1 < m.profileSetupPlanPageCount() {
+			m.planPage++
+			m.profileSetupAction = 0
+			return true, nil
+		}
+		return true, m.actProfileSetupCommand(ProfileSetupRequest{Action: PrepareProfileSetup, Plan: m.profileSetupPlan.Plan.Identity})
+	case CloudflareSetupConfirmation:
+		if m.profileSetupAction == 1 {
+			return true, m.actProfileSetupCommand(ProfileSetupRequest{Action: CancelPreparedProfileSetup, Plan: m.profileSetupPlan.Plan.Identity})
+		}
+		return true, m.actProfileSetupCommand(ProfileSetupRequest{Action: StartIrreversibleProfileSetup, Plan: m.profileSetupPlan.Plan.Identity})
+	case CorrectionFlow:
+		correction := m.profileSetupView.Correction
+		fixIndex, checkIndex := -1, -1
+		next := 0
+		if correction.FixWithSBXR {
+			fixIndex, next = next, next+1
+		}
+		if !correction.HideCheckAgain {
+			checkIndex, next = next, next+1
+		}
+		if m.profileSetupAction == fixIndex {
+			return true, m.fixProfileSetupCommand()
+		}
+		if m.profileSetupAction == checkIndex {
+			return true, m.actProfileSetupCommand(ProfileSetupRequest{Action: CheckProfileSetupAgain})
+		}
+		return true, m.actProfileSetupCommand(ProfileSetupRequest{Action: BackProfileSetup})
+	case CloudflareSetupRecovery:
+		switch m.profileSetupAction {
+		case 0:
+			return true, m.actProfileSetupCommand(ProfileSetupRequest{Action: RetryProfileSetupRecovery})
+		case 2:
+			return true, m.actProfileSetupCommand(ProfileSetupRequest{Action: CheckProfileSetupAgain})
+		case 1:
+			return true, m.actProfileSetupCommand(ProfileSetupRequest{Action: ViewProfileSetupEvidence})
+		case 3:
+			m.scenario, m.selected = CompleteRemovalConfirmation, selectedNavigation(CompleteRemovalConfirmation)
+		}
+		return true, nil
+	case CloudflareSetupRollback:
+		m.scenario, m.selected = AuthenticatedOverview, selectedNavigation(AuthenticatedOverview)
+		return true, nil
+	case CloudflareSetupComplete:
+		switch m.profileSetupAction {
+		case 0:
+			m.scenario, m.selected = DedicatedAccess, selectedNavigation(DedicatedAccess)
+		case 1:
+			m.scenario, m.selected = LiveProfileCheckScreen, selectedNavigation(SubscriptionScreen)
+		case 2:
+			m.scenario, m.selected = CloudflareWalkthrough, selectedNavigation(CloudflareWalkthrough)
+		}
+		return true, nil
+	}
+	return true, nil
+}
+
+func (m model) fixProfileSetupCommand() tea.Cmd {
+	request := ProfileSetupRequest{Action: FixProfileSetup, Text: m.input}
+	if correction := m.profileSetupView.Correction; correction != nil && m.correctionSelection < len(correction.Selections) {
+		request.Selection = correction.Selections[m.correctionSelection].Identity
+	}
+	return m.actProfileSetupCommand(request)
+}
+
+func (m model) profileSetupPlanPageCount() int {
+	if !m.profileSetupPlanAvailable {
+		return 1
+	}
+	return providerPageCount(profileSetupAllPlanLines(m.profileSetupPlan, m.profileSetupAction), 3, m.width, m.height)
+}
+
+func (m model) inspectProfileSetupCommand() tea.Cmd {
+	return func() tea.Msg { return profileSetupInspectMsg{change: m.profileSetup.Inspect(m.runContext)} }
+}
+
 func (m *model) refreshProfilesCommand() tea.Cmd {
 	m.profileViewGeneration++
 	return m.viewProfilesCommand()
@@ -2034,10 +2355,16 @@ func (m model) completeRemovalPageCount() int {
 
 func (m *model) activateProfileAction() tea.Cmd {
 	profile := m.profilesView.Profiles[m.profileSelection]
-	action := profileActions(profile.Enabled)[m.profileAction]
+	action := profileActions(profile)[m.profileAction]
 	m.actionGeneration++
 	identity := asyncRequestIdentity{generation: m.actionGeneration, origin: m.scenario}
 	switch action.kind {
+	case openCloudflareSetupAction:
+		m.scenario, m.selected = CloudflareSetupEntry, selectedNavigation(CloudflareSetupEntry)
+		if m.profileSetup != nil {
+			return m.viewProfileSetupCommand()
+		}
+		return nil
 	case openAccessAction:
 		if selection, ok := m.accessCatalog.profileFocus(profile.ID); m.accessUnlocked && ok {
 			return func() tea.Msg { return openAccessMsg{identity: identity, selection: selection} }
@@ -2372,6 +2699,32 @@ func (m model) View() tea.View {
 }
 
 func (m model) focusCursor(frame string) *tea.Cursor {
+	if !m.exitConfirm && m.width >= minimumWidth && m.height >= minimumHeight && m.scenario == CorrectionFlow && m.profileSetupScreen() && m.inputFocused && m.profileSetupView.Correction.InputLabel != "" {
+		value := "-"
+		if m.input != "" {
+			value = strconv.QuoteToGraphic(m.input)
+		}
+		needle := "> " + m.profileSetupView.Correction.InputLabel + ": " + value
+		for y, line := range strings.Split(frame, "\n") {
+			if index := strings.Index(line, needle); index >= 0 {
+				cursor := tea.NewCursor(lipgloss.Width(line[:index])+lipgloss.Width(needle), y)
+				cursor.Shape = tea.CursorBar
+				return cursor
+			}
+		}
+		return nil
+	}
+	if !m.exitConfirm && m.width >= minimumWidth && m.height >= minimumHeight && m.scenario == CloudflareSetupToken && m.profileSetup != nil && m.inputFocused {
+		needle := "> Token " + m.visibleProfileSetupToken()
+		for y, line := range strings.Split(frame, "\n") {
+			if index := strings.Index(line, needle); index >= 0 {
+				cursor := tea.NewCursor(lipgloss.Width(line[:index])+lipgloss.Width(needle), y)
+				cursor.Shape = tea.CursorBar
+				return cursor
+			}
+		}
+		return nil
+	}
 	if m.exitConfirm || m.editingHelpOpen || m.width < minimumWidth || m.height < minimumHeight || m.scenario != InstallationReview || m.outcome == nil || m.changeReview.Editing == nil {
 		return nil
 	}
@@ -2407,6 +2760,16 @@ func (m model) focusCursor(frame string) *tea.Cursor {
 		}
 	}
 	return nil
+}
+
+func (m model) visibleProfileSetupToken() string {
+	if m.tokenRevealed {
+		return m.input
+	}
+	if m.input == "" {
+		return "-"
+	}
+	return strings.Repeat("*", len([]rune(m.input)))
 }
 
 func (m model) frame() string {
@@ -2513,6 +2876,16 @@ func (m model) frame() string {
 }
 
 func (m model) frameIdentity(current fixture) (string, string) {
+	if m.profileSetupScreen() {
+		status := "Managed"
+		if m.scenario == CloudflareSetupProgress || m.scenario == CloudflareSetupConfirmation {
+			status = "Change in progress"
+		}
+		if m.scenario == CloudflareSetupRecovery {
+			status = "Recovery Required"
+		}
+		return fmt.Sprintf("%s - rev %d - authenticated", status, m.profileSetupView.Revision), current.title
+	}
 	if m.scenario == InstallationReview && m.hasChangeOrigin && m.changeOrigin == CompleteRemovalConfirmation {
 		status := m.completeRemovalScreen.view.StartingStatus.String()
 		if status == "" {
@@ -2594,6 +2967,15 @@ func (m model) scenarioDetails(current fixture) []string {
 }
 
 func (m model) scenarioLines(current fixture) []string {
+	if isProfileSetupScenario(m.scenario) || m.profileSetupScreen() {
+		return profileSetupLines(m.profileSetupView, m.profileSetupAvailable, m.profileSetupPlan, m.profileSetupPlanAvailable, m.scenario, m.input, m.inputFocused, m.tokenRevealed, m.profileSetupAction, m.correctionSelection, m.planPage, m.width, m.height)
+	}
+	if m.scenario == AuthenticatedOverview && m.profileCapability == ProfileCapabilityRevisionOne {
+		return []string{"Installation Managed", "Profiles 1 of 6 set up", "VLESS REALITY Vision Enabled", "Five Cloudflare profiles Not set up", "", "Not set up is accepted and is not unhealthy.", "", "> Set up Cloudflare profiles Optional", "  Run Live Profile Check", "  Open Access"}
+	}
+	if m.scenario == AuthenticatedOverview && m.profileCapability == ProfileCapabilityComplete {
+		return []string{"Installation Managed", "Profiles 6 of 6 set up", "Enabled 6", "", "All six Connection Profiles are available.", "", "> Run Live Profile Check", "  Open Access", "  Manage Cloudflare"}
+	}
 	if (m.scenario == CompleteRemovalConfirmation || m.scenario == ForwardOnlyRemoval) && m.completeRemoval != nil {
 		if m.confirmationHelpOpen && validConfirmationHelp(m.completeRemovalScreen.view.ConfirmationHelp) {
 			return confirmationHelpLines(m.completeRemovalScreen.view.ConfirmationHelp)
@@ -2993,6 +3375,13 @@ func (m model) shortcuts() [2]string {
 		return [2]string{" Ctrl+C Exit confirmation", " Q is never Exit"}
 	}
 	if m.inputFocused {
+		if m.scenario == CloudflareSetupToken && m.profileSetup != nil {
+			action := "Reveal"
+			if m.tokenRevealed {
+				action = "Mask"
+			}
+			return [2]string{" Enter Verify  Ctrl+R " + action + " token", " Esc Back  Ctrl+C Exit confirmation"}
+		}
 		if m.scenario == InstallationReview && m.outcome != nil && m.changeReview.Editing != nil {
 			if m.installationSecretInput() {
 				action := "Reveal"
@@ -3011,6 +3400,9 @@ func (m model) shortcuts() [2]string {
 			return [2]string{" Type or paste masked token  Tab Actions  Ctrl+R " + action + " token", " Esc Back  Ctrl+C Exit confirmation"}
 		}
 		return [2]string{" Type or paste input  Tab Navigation", " Q is input data  Ctrl+C Exit confirmation  Esc Back"}
+	}
+	if m.profileSetupScreen() {
+		return [2]string{" Up/Down Choose  Enter/Space Select", " Esc Back  Ctrl+C Exit confirmation"}
 	}
 	if m.scenario == PrivacyChoice {
 		return [2]string{" Up/Down Choose  Enter/Space Continue", " Ctrl+C Exit confirmation  Q is never Exit"}
@@ -3113,6 +3505,10 @@ func (m model) shortcuts() [2]string {
 		second = " Esc Back " + second
 	}
 	return [2]string{" Up/Down Navigate  Tab/Shift+Tab Move  Enter/Space Select", second}
+}
+
+func (m model) profileSetupScreen() bool {
+	return m.profileSetup != nil && (isProfileSetupScenario(m.scenario) || m.scenario == CorrectionFlow && m.profileSetupAvailable && m.profileSetupView.Kind == ProfileSetupCorrection)
 }
 
 func (m model) title(value string) string {

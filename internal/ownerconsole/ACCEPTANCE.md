@@ -1,5 +1,19 @@
 # Owner Console acceptance
 
+### OC-STAGED-01 — Guided staged onboarding
+
+Authority: OWNER-CONSOLE-001–014, PROFILE-005–010, CLOUDFLARE-AUTH-001–007, CLOUDFLARE-SETUP-010–017, TEST-010–012, and TEST-015.
+
+Run:
+
+```sh
+go test ./internal/ownerconsole -run '^TestRun(DrivesOneTypedCloudflareProfileSetupJourney|BackMovesOneTypedSetupScreenWithoutApply|SubmitsTypedSetupCorrectionInputAndSelection|NeverInventsCloudflareSetupAuthorityWithoutModule|ShowsStagedOnboardingDecisionScreensAtExactTerminalSizes|ShowsTypedCloudflareSetupTerminalResultsAtExactSizes|OverviewShowsOnlyTheCurrentStagedCapability|RoutesNotSetUpProfilesOnlyToCollectiveCloudflareSetup)$' -count=1
+```
+
+Require `Run` through the real Bubble Tea event loop to show `INSTALLATION COMPLETE`, optional setup entry, masked broad-token guidance, exact Plan review, the separate irreversible confirmation, Recovery Required, and `CLOUDFLARE PROFILE SETUP COMPLETE` at `80×24` and `120×36`. Require revision `1` to show one of six set up and five exact `Not set up` profiles without a warning, degraded state, or percentage. Require a `Not set up` profile to expose only collective Cloudflare Profile Setup. Require completed setup to show six Enabled profiles, no Client Access Value, and no setup action.
+
+These checks record Module acceptance only. They do not perform or claim human usability, real Cloudflare, provider mutation, live VPS, maintained-client, Owner Acceptance, or Release Qualification.
+
 This file defines stable checks for issues #135 through #142. It contains no run results, Client Access Values, Infrastructure Secrets, raw terminal contents from an Owner session, or claim of Integrated, Live, Owner, or Release acceptance.
 
 ## Module Verification

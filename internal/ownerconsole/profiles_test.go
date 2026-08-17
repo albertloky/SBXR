@@ -8,6 +8,26 @@ import (
 	"time"
 )
 
+func TestProfilesCapabilityRequiresExactLifecycleState(t *testing.T) {
+	presentation := ProfilesPresentation{Managed: true}
+	for index := range presentation.Profiles {
+		presentation.Profiles[index] = ProfilePresentation{ID: AccessProfileID(index + 1), Lifecycle: ProfileSetUpEnabled}
+	}
+	if presentation.Capability() != ProfileCapabilityComplete {
+		t.Fatal("six Enabled profiles were not complete")
+	}
+	presentation.Profiles[2].Lifecycle = ProfileSetUpDisabled
+	if presentation.Capability() != ProfileCapabilityUnknown {
+		t.Fatal("a Disabled profile was presented as six Enabled")
+	}
+	for index := 1; index < len(presentation.Profiles); index++ {
+		presentation.Profiles[index].Lifecycle = ProfileNotSetUp
+	}
+	if presentation.Capability() != ProfileCapabilityRevisionOne {
+		t.Fatal("one Enabled and five Not set up profiles were not revision-one capability")
+	}
+}
+
 type profilesStub struct {
 	outcomeStub
 	view               ProfilesPresentation
@@ -467,13 +487,13 @@ func completeProfilesPresentation() ProfilesPresentation {
 	var profiles [6]ProfilePresentation
 	for index := range profiles {
 		profiles[index] = ProfilePresentation{
-			ID: AccessProfileID(index + 1), Enabled: true,
+			ID: AccessProfileID(index + 1), Lifecycle: ProfileSetUpEnabled,
 			Service: ProfileHealthy, Listener: ProfileHealthy,
 			Address: fmt.Sprintf("profile-%d.example.test", index+1), Port: ports[index], Transport: transports[index],
 			Settings: "native settings reviewed",
 		}
 	}
-	profiles[5].Enabled = false
+	profiles[5].Lifecycle = ProfileSetUpDisabled
 	profiles[5].Service, profiles[5].Listener = ProfileDisabled, ProfileDisabled
 	profiles[5].Published, profiles[5].Exposed = false, false
 	profiles[5].CredentialRetained = true
@@ -481,6 +501,24 @@ func completeProfilesPresentation() ProfilesPresentation {
 		profiles[index].Published, profiles[index].Exposed = true, true
 	}
 	return ProfilesPresentation{Managed: true, Profiles: profiles}
+}
+
+func TestRunRoutesNotSetUpProfilesOnlyToCollectiveCloudflareSetup(t *testing.T) {
+	view := completeProfilesPresentation()
+	for index := 1; index < len(view.Profiles); index++ {
+		view.Profiles[index] = ProfilePresentation{ID: AccessProfileID(index + 1), Lifecycle: ProfileNotSetUp, Transport: "deferred"}
+	}
+	stub := &profilesStub{view: view}
+	got := runTranscriptSteps(t, Session{Scenario: ConnectionProfilesScreen, Profiles: stub, ProfileOutcomes: stub}, 80, 24, "", "\x1b[B", "", "\x03\r")
+	for _, want := range []string{"NOT SET UP] XHTTP", "No settings, credential, listener, exposure, or", "Cloudflare Profile Setup is required", "Set up Cloudflare profiles"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Not set up presentation omitted %q\n%s", want, got)
+		}
+	}
+	actions := profileActions(view.Profiles[1])
+	if len(actions) != 1 || actions[0].kind != openCloudflareSetupAction || actions[0].label != "Set up Cloudflare profiles" {
+		t.Fatalf("Not set up actions = %#v", actions)
+	}
 }
 
 func profileClientAccessPresentation() AccessPresentation {
