@@ -821,7 +821,8 @@ func (module Interface) Plan(ctx context.Context, request PlanRequest) PlanResul
 		return PlanResult{Health: finding}
 	}
 	open, close, selectedIP, http01Digest, networkRevision, http01Err := systemchanges.NewHTTP01Steps(request.HTTP01)
-	if http01Err != nil || selectedIP != request.View.SelectedIP || networkRevision != request.StartingRevision {
+	contributionRevision := networkContributionRevision(request, freshInstallation)
+	if http01Err != nil || selectedIP != request.View.SelectedIP || networkRevision != contributionRevision {
 		finding := health(view.Health.Time, Failed, "CERTIFICATE-PLAN-NETWORK-POLICY", "The HTTP-01 Network Policy contribution is invalid", "no exact fresh Network Policy authority for the selected IP", "one Network Policy-produced temporary port-80 contribution")
 		return PlanResult{Health: finding}
 	}
@@ -850,7 +851,7 @@ func (module Interface) Plan(ctx context.Context, request PlanRequest) PlanResul
 		var destinationIP, hostname string
 		var directTLSChecks []systemchanges.Check
 		directTLSRevision, destinationIP, hostname, directTLSDigest, directTLSChecks, stepErr = systemchanges.NewDirectTLSChecks(request.DirectTLS)
-		if stepErr == nil && (directTLSRevision != request.StartingRevision || destinationIP != request.View.SelectedIP || hostname != request.View.DirectHostname) {
+		if stepErr == nil && (directTLSRevision != contributionRevision || destinationIP != request.View.SelectedIP || hostname != request.View.DirectHostname) {
 			stepErr = errors.New("stale Connection Profiles Direct TLS contribution")
 		}
 		if stepErr == nil {
@@ -885,6 +886,13 @@ func (module Interface) Plan(ctx context.Context, request PlanRequest) PlanResul
 	sha := hex.EncodeToString(digest[:])
 	plan := &Plan{identity: identityPrefix + sha[:12], sha256: sha, request: request, orders: orders, steps: steps, checks: checks, used: &atomic.Bool{}, stateUsed: &atomic.Bool{}}
 	return PlanResult{Plan: plan, Health: Health{Time: view.Health.Time, Module: "Certificate Lifecycle", Outcome: Healthy, Code: "CERTIFICATE-PLAN-READY", NextActions: []string{"Review Plan", "Back"}}}
+}
+
+func networkContributionRevision(request PlanRequest, freshInstallation bool) uint64 {
+	if !freshInstallation && request.FreshDNS.cell != nil && request.Lineage == DomainLineage {
+		return request.StartingRevision + 1
+	}
+	return request.StartingRevision
 }
 
 func (plan *Plan) Apply(module systemchanges.Interface, prepared systemchanges.PreparedStateCommit, starting systemchanges.StateLineage, volatileSHA256 string, disk systemchanges.DiskRequirement) systemchanges.ApplyResult {
