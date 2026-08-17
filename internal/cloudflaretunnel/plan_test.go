@@ -53,10 +53,29 @@ func TestFreshCloudflarePlanSuppliesOnlyTheExactPendingCertificateDNS(t *testing
 }
 
 func TestManagedSetupPlanSuppliesTheBoundCertificateDNS(t *testing.T) {
-	plan := &Plan{identity: "setup-cloudflare-plan", sha256: strings.Repeat("a", 64), request: PlanRequest{Authority: ViewRequest{ZoneName: "example.com"}, ChangeSet: "setup-cloudflare", StartingRevision: 7, StartingStateSHA256: strings.Repeat("c", 64), DesiredStateSHA256: strings.Repeat("b", 64), TunnelName: "sbxr-main", XHTTPHostname: "xhttp.example.com", WebSocketHostname: "ws.example.com", DirectHostname: "direct.example.com", PublicIPv4: "192.0.2.10", CloudflaredVersion: qualifiedCloudflaredVersion}}
+	plan := &Plan{identity: "setup-cloudflare-plan", sha256: strings.Repeat("a", 64), request: PlanRequest{Authority: ViewRequest{AccountID: testAccountID, ZoneID: testZoneID, ZoneName: "example.com"}, ChangeSet: "setup-cloudflare", StartingRevision: 7, StartingStateSHA256: strings.Repeat("c", 64), DesiredStateSHA256: strings.Repeat("b", 64), TunnelName: "sbxr-main", XHTTPHostname: "xhttp.example.com", WebSocketHostname: "ws.example.com", DirectHostname: "direct.example.com", PublicIPv4: "192.0.2.10", CloudflaredVersion: qualifiedCloudflaredVersion}}
 	hostname, ipv4, ipv6, desired, valid := plan.CertificateLifecycleFreshDNSPlan()
 	if !valid || hostname != "direct.example.com" || ipv4 != "192.0.2.10" || ipv6 != "" || desired != strings.Repeat("b", 64) {
 		t.Fatalf("managed setup DNS = (%q, %q, %q, %q, %t)", hostname, ipv4, ipv6, desired, valid)
+	}
+	steps, binding, err := installationSteps(plan.request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.steps, plan.binding = steps, binding
+	tunnel, service, directDNS, publicRoutes, valid := plan.ProfileSetupSteps()
+	if !valid || len(tunnel) != 1 || len(service) != 1 || len(directDNS) != 1 || len(publicRoutes) != 3 {
+		t.Fatalf("setup step groups = tunnel %d service %d direct %d public %d valid %t", len(tunnel), len(service), len(directDNS), len(publicRoutes), valid)
+	}
+	origin, _ := systemchanges.NewStep(systemchanges.ConnectionProfilesModule, systemchanges.ActivatePreparedOrigins, systemchanges.RestorePriorOrigins)
+	ordered := append(append(append(append([]systemchanges.Step{}, tunnel...), origin), service...), directDNS...)
+	ordered = append(ordered, publicRoutes...)
+	if !plan.BindProfileSetupEvidence(ordered) || plan.binding.tunnel != 1 || plan.binding.directIPv4 != 4 || plan.binding.xhttp != 6 || plan.binding.websocket != 7 {
+		t.Fatalf("reordered evidence binding = %+v", plan.binding)
+	}
+	plan.request.Reclamation = []ReclamationConflict{{Kind: ReclamationDNS, ID: testDNSID, Name: plan.request.XHTTPHostname}}
+	if _, _, _, _, accepted := plan.ProfileSetupSteps(); accepted {
+		t.Fatal("Cloudflare Profile Setup accepted resource reclamation")
 	}
 }
 

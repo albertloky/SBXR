@@ -245,6 +245,39 @@ func unsafe() { _ = syscall.Unlink("/tmp/unsafe") }
 	}
 }
 
+func TestCloudflareProfileSetupCompositionBoundary(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateCloudflareProfileSetupComposition(root); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct{ name, source string }{
+		{"host mutation", `package cloudflareprofilesetup
+import "os"
+func unsafe() { _ = os.WriteFile("/tmp/unsafe", nil, 0o600) }
+`},
+		{"arbitrary command", `package cloudflareprofilesetup
+import "os/exec"
+func unsafe() { _ = exec.Command("unsafe") }
+`},
+		{"provider mutation", `package cloudflareprofilesetup
+import "net/http"
+func unsafe() { _, _ = http.Post("https://example.com", "", nil) }
+`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			directory := t.TempDir()
+			mustWriteArchitectureFile(t, directory, "internal/cloudflareprofilesetup/unsafe.go", test.source)
+			if err := validateCloudflareProfileSetupComposition(directory); err == nil || !strings.Contains(err.Error(), "composition-only") {
+				t.Fatalf("validateCloudflareProfileSetupComposition() = %v", err)
+			}
+		})
+	}
+}
+
 func TestHealthDiagnosticsReadOnlyBoundary(t *testing.T) {
 	root, err := os.Getwd()
 	if err != nil {
@@ -369,6 +402,31 @@ func validateSoftwareLifecycleVerification(root string) error {
 		}
 	}
 	return nil
+}
+
+func validateCloudflareProfileSetupComposition(root string) error {
+	allowed := map[string]bool{
+		"context": true, "crypto/sha256": true, "encoding/hex": true, "encoding/json": true, "errors": true, "fmt": true, "strings": true, "sync/atomic": true, "time": true,
+		modulePath + "/internal/certificatelifecycle":    true,
+		modulePath + "/internal/cloudflaretunnel":        true,
+		modulePath + "/internal/connectionprofiles":      true,
+		modulePath + "/internal/networkpolicy":           true,
+		modulePath + "/internal/state":                   true,
+		modulePath + "/internal/subscriptionpublication": true,
+		modulePath + "/internal/systemchanges":           true,
+	}
+	return walkProductionGoFiles(root, func(relative string, source *ast.File) error {
+		if filepath.ToSlash(filepath.Dir(relative)) != "internal/cloudflareprofilesetup" {
+			return nil
+		}
+		for _, imported := range source.Imports {
+			importPath, err := strconv.Unquote(imported.Path.Value)
+			if err != nil || !allowed[importPath] {
+				return fmt.Errorf("Cloudflare Profile Setup must remain composition-only: %s imports %s", relative, importPath)
+			}
+		}
+		return nil
+	})
 }
 
 func validateSubscriptionServingMutation(root string) error {

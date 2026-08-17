@@ -95,6 +95,10 @@ func TestCloudflareSetupPlanCreatesAllFiveDeferredProfilesAtomically(t *testing.
 	if !valid || start != 7 || next != 8 || gotStarting != starting || gotDesired != desired || gotChangeSet != changeSet {
 		t.Fatalf("setup contribution = (%d, %d, %q, %q, %q, %t)", start, next, gotStarting, gotDesired, gotChangeSet, valid)
 	}
+	origins := result.Plan.ProfileSetupSteps()
+	if len(origins) != 1 || origins[0].Forward() != systemchanges.ActivatePreparedOrigins || origins[0].Rollback() != systemchanges.RestorePriorOrigins {
+		t.Fatalf("setup origins = %+v", origins)
+	}
 	if _, _, _, _, _, reused := result.Plan.StateProfileSetupConnectionProfiles(); reused {
 		t.Fatal("setup contribution was reusable")
 	}

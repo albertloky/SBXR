@@ -23,7 +23,15 @@ type StateDependency struct {
 
 type SystemChangesDependency struct {
 	Inspect func() systemchanges.Inspection
-	Apply   func(*systemchanges.ChangeSet) systemchanges.ApplyResult
+	Apply   func(*systemchanges.ChangeSet, Execution) systemchanges.ApplyResult
+}
+
+// Execution contains the reviewed facts needed to construct the production
+// System Changes executors for this one Plan.
+type Execution struct {
+	Cloudflare       *cloudflaretunnel.Plan
+	ReleaseTag       string
+	SubscriptionPort uint16
 }
 
 // Dependencies is the one permitted dependency set. Each field is one owning
@@ -128,11 +136,29 @@ func (module *Interface) View(request ViewRequest) ViewResult {
 }
 
 func allDeferred(profiles state.ConnectionProfiles) bool {
-	return profiles.VLESSRealityVision.Lifecycle == state.ProfileEnabled && profiles.VLESSXHTTP.Lifecycle == state.ProfileNotSetUp && profiles.VLESSWebSocket.Lifecycle == state.ProfileNotSetUp && profiles.Hysteria2.Lifecycle == state.ProfileNotSetUp && profiles.TUIC.Lifecycle == state.ProfileNotSetUp && profiles.AnyTLS.Lifecycle == state.ProfileNotSetUp
+	lifecycles := profileLifecycles(profiles)
+	if lifecycles[0] != state.ProfileEnabled {
+		return false
+	}
+	for _, lifecycle := range lifecycles[1:] {
+		if lifecycle != state.ProfileNotSetUp {
+			return false
+		}
+	}
+	return true
 }
 
 func allSetUp(profiles state.ConnectionProfiles) bool {
-	return profiles.VLESSRealityVision.Lifecycle != state.ProfileNotSetUp && profiles.VLESSXHTTP.Lifecycle != state.ProfileNotSetUp && profiles.VLESSWebSocket.Lifecycle != state.ProfileNotSetUp && profiles.Hysteria2.Lifecycle != state.ProfileNotSetUp && profiles.TUIC.Lifecycle != state.ProfileNotSetUp && profiles.AnyTLS.Lifecycle != state.ProfileNotSetUp
+	for _, lifecycle := range profileLifecycles(profiles) {
+		if lifecycle != state.ProfileEnabled && lifecycle != state.ProfileDisabled {
+			return false
+		}
+	}
+	return true
+}
+
+func profileLifecycles(profiles state.ConnectionProfiles) [6]state.ProfileLifecycle {
+	return [6]state.ProfileLifecycle{profiles.VLESSRealityVision.Lifecycle, profiles.VLESSXHTTP.Lifecycle, profiles.VLESSWebSocket.Lifecycle, profiles.Hysteria2.Lifecycle, profiles.TUIC.Lifecycle, profiles.AnyTLS.Lifecycle}
 }
 
 func blocked(code, problem, found, required, why, next string) ViewResult {

@@ -60,7 +60,11 @@ func (host InstallHost) CaptureRollback(step systemchanges.Step, write func(io.R
 	if host.managed {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		for _, unit := range []string{"xray.service", "sing-box.service"} {
+		units := []string{"xray.service", "sing-box.service"}
+		if connectionProfilesOriginsStep(step) {
+			units = units[:1]
+		}
+		for _, unit := range units {
 			if host.command(ctx, "systemctl", "is-active", unit) != nil {
 				return errors.New("managed service rollback state unavailable")
 			}
@@ -96,6 +100,7 @@ func (host InstallHost) Execute(step systemchanges.Step, timeout time.Duration, 
 		return systemchanges.StepEvidence{}, err
 	}
 	restart := make([]string, 0, 2)
+	originsOnly := connectionProfilesOriginsStep(step)
 	if host.managed {
 		for name, unit := range map[string]string{"etc/sbxr/xray/config.json": "xray.service", "etc/sbxr/sing-box/config.json": "sing-box.service"} {
 			artifact := prepared[name]
@@ -103,7 +108,7 @@ func (host InstallHost) Execute(step systemchanges.Step, timeout time.Duration, 
 			if readErr != nil {
 				return systemchanges.StepEvidence{}, readErr
 			}
-			if !bytes.Equal(current, artifact.body) {
+			if !bytes.Equal(current, artifact.body) && (!originsOnly || unit == "xray.service") {
 				restart = append(restart, unit)
 			}
 		}
@@ -120,7 +125,9 @@ func (host InstallHost) Execute(step systemchanges.Step, timeout time.Duration, 
 	if !slices.Equal(host.units, fixedInstallUnits) || host.command(ctx, "systemctl", "daemon-reload") != nil {
 		return systemchanges.StepEvidence{}, errors.New("managed service activation failed")
 	}
-	if host.managed {
+	if originsOnly {
+		err = host.command(ctx, "systemctl", "enable", "--now", "xray.service")
+	} else if host.managed {
 		err = host.command(ctx, "systemctl", append([]string{"enable"}, host.activeUnits()...)...)
 	} else if host.command(ctx, "systemctl", append([]string{"disable", "--now"}, revisionOneInactiveUnits...)...) != nil {
 		err = errors.New("managed service activation failed")
@@ -161,7 +168,7 @@ func (host InstallHost) Reverse(step systemchanges.Step, snapshot io.Reader, tim
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		if host.command(ctx, "systemctl", "restart", "xray.service") != nil || host.command(ctx, "systemctl", "restart", "sing-box.service") != nil {
+		if host.command(ctx, "systemctl", "restart", "xray.service") != nil || connectionProfilesOriginsStep(step) && host.command(ctx, "systemctl", "disable", "--now", "sing-box.service") != nil || !connectionProfilesOriginsStep(step) && host.command(ctx, "systemctl", "restart", "sing-box.service") != nil {
 			return systemchanges.StepEvidence{}, errors.New("managed service rollback failed")
 		}
 		digest := sha256.Sum256(body)
@@ -496,7 +503,11 @@ func (host InstallHost) command(ctx context.Context, name string, arguments ...s
 }
 
 func connectionProfilesInstallStep(step systemchanges.Step) bool {
-	return step.Owner() == systemchanges.ConnectionProfilesModule && step.Forward() == systemchanges.ActivatePreparedConfiguration && step.Rollback() == systemchanges.RestorePriorConfiguration
+	return step.Owner() == systemchanges.ConnectionProfilesModule && (step.Forward() == systemchanges.ActivatePreparedConfiguration && step.Rollback() == systemchanges.RestorePriorConfiguration || connectionProfilesOriginsStep(step))
+}
+
+func connectionProfilesOriginsStep(step systemchanges.Step) bool {
+	return step.Owner() == systemchanges.ConnectionProfilesModule && step.Forward() == systemchanges.ActivatePreparedOrigins && step.Rollback() == systemchanges.RestorePriorOrigins
 }
 
 func installConfigurationPaths() []string {

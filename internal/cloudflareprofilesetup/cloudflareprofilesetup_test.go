@@ -1,11 +1,17 @@
 package cloudflareprofilesetup
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
 
+	"github.com/albertloky/SBXR/internal/certificatelifecycle"
+	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
+	"github.com/albertloky/SBXR/internal/connectionprofiles"
+	"github.com/albertloky/SBXR/internal/networkpolicy"
 	"github.com/albertloky/SBXR/internal/state"
+	"github.com/albertloky/SBXR/internal/subscriptionpublication"
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
 
@@ -67,7 +73,7 @@ func TestApplyCallsSystemChangesExactlyOnceAndConsumesApproval(t *testing.T) {
 		want    ApplyKind
 	}{{systemchanges.Completed, ApplyComplete}, {systemchanges.RollbackSucceeded, ApplyRolledBack}, {systemchanges.RecoveryRequiredOutcome, ApplyRecoveryRequired}} {
 		calls := 0
-		module := &Interface{dependencies: Dependencies{SystemChanges: SystemChangesDependency{Apply: func(change *systemchanges.ChangeSet) systemchanges.ApplyResult {
+		module := &Interface{dependencies: Dependencies{SystemChanges: SystemChangesDependency{Apply: func(change *systemchanges.ChangeSet, _ Execution) systemchanges.ApplyResult {
 			calls++
 			if change == nil || change.Identity() != prepared.changeSet {
 				t.Fatalf("Change Set = %+v", change)
@@ -91,6 +97,72 @@ func TestApplyCallsSystemChangesExactlyOnceAndConsumesApproval(t *testing.T) {
 		if reused := module.Apply(approval); reused.Kind != ApplyRefused || calls != 1 {
 			t.Fatalf("reused Apply = %+v calls=%d", reused, calls)
 		}
+	}
+}
+
+func TestPlanRejectsMismatchedLineageBeforeCallingOwningPlanners(t *testing.T) {
+	plannerCalls := 0
+	module, err := New(Dependencies{
+		NetworkPolicy: func(networkpolicy.Request) networkpolicy.Result { plannerCalls++; return networkpolicy.Result{} },
+		CloudflareTunnel: func(context.Context, cloudflaretunnel.PlanRequest) cloudflaretunnel.PlanResult {
+			plannerCalls++
+			return cloudflaretunnel.PlanResult{}
+		},
+		CertificateLifecycle: func(context.Context, certificatelifecycle.PlanRequest) certificatelifecycle.PlanResult {
+			plannerCalls++
+			return certificatelifecycle.PlanResult{}
+		},
+		ConnectionProfiles: func(context.Context, connectionprofiles.RegistryPlanRequest) connectionprofiles.PlanResult {
+			plannerCalls++
+			return connectionprofiles.PlanResult{}
+		},
+		SubscriptionPublication: func(context.Context, subscriptionpublication.PlanRequest) subscriptionpublication.PlanResult {
+			plannerCalls++
+			return subscriptionpublication.PlanResult{}
+		},
+		State: StateDependency{
+			Load: func(state.LoadRequest) (state.Result, error) {
+				return state.Result{Status: state.Managed, Snapshot: &state.Snapshot{Revision: 7, DesiredState: revisionOneProfiles()}}, nil
+			},
+			Prepare: func(state.PrepareRequest, state.DeferredCloudflareAuthority) (*state.PreparedCommit, error) {
+				plannerCalls++
+				return nil, errors.New("unexpected Prepare")
+			},
+		},
+		SystemChanges: SystemChangesDependency{Inspect: func() systemchanges.Inspection {
+			return systemchanges.Inspection{Status: systemchanges.Managed, Lock: systemchanges.LockReleased}
+		}, Apply: func(*systemchanges.ChangeSet, Execution) systemchanges.ApplyResult {
+			plannerCalls++
+			return systemchanges.ApplyResult{}
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := module.Plan(t.Context(), PlanRequest{SoftwareLifecycleSHA256: strings.Repeat("a", 64)})
+	if result.Plan != nil || result.Correction == nil || result.Correction.Code != "CLOUDFLARE-SETUP-BINDING" || plannerCalls != 0 {
+		t.Fatalf("mismatched Plan = %+v, planner calls %d", result, plannerCalls)
+	}
+}
+
+func TestSetupCannotOwnDependencyStepsOrChecks(t *testing.T) {
+	if _, err := systemchanges.NewStep(systemchanges.CloudflareProfileSetupModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration); err == nil {
+		t.Fatal("Cloudflare Profile Setup owned a dependency step")
+	}
+	step, err := systemchanges.NewStep(systemchanges.ConnectionProfilesModule, systemchanges.ActivatePreparedOrigins, systemchanges.RestorePriorOrigins)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared := preparedSetup{changeSet: "setup-owner-check", revision: 8, starting: strings.Repeat("a", 64), candidate: strings.Repeat("b", 64), identity: "cloudflare-setup-0123456789abcdef01234567", sha256: strings.Repeat("c", 64)}
+	_, err = systemchanges.NewChangeSet(systemchanges.ChangeSetSpec{
+		Identity: "setup-owner-check", Mutation: systemchanges.CloudflareProfileSetupMutation, OutcomeOwner: systemchanges.CloudflareProfileSetupModule,
+		StartingState: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: prepared.starting}, TargetStateSHA256: prepared.candidate,
+		Plan: systemchanges.PlanBinding{Identity: prepared.identity, SHA256: prepared.sha256, VolatileSHA256: strings.Repeat("d", 64)}, PreparedState: prepared,
+		Steps: []systemchanges.Step{step}, Checks: []systemchanges.Check{{Owner: systemchanges.CloudflareProfileSetupModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "SETUP-OWNED"}},
+		Timeouts: systemchanges.Timeouts{Step: 1, Check: 1}, Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1},
+	})
+	if err == nil {
+		t.Fatal("Cloudflare Profile Setup owned a dependency check")
 	}
 }
 

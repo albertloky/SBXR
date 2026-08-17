@@ -210,6 +210,63 @@ func (plan *Plan) Steps() []systemchanges.Step {
 	}
 	return append([]systemchanges.Step(nil), plan.steps...)
 }
+
+// ProfileSetupSteps separates the owned provider and service operations so
+// the setup compositor can place them around certificate and firewall gates.
+func (plan *Plan) ProfileSetupSteps() (tunnel, service, directDNS, publicRoutes []systemchanges.Step, valid bool) {
+	if plan == nil || plan.request.StartingRevision == 0 || len(plan.request.Reclamation) != 0 || plan.request.ManagementToken.Action != "" || plan.request.RunTokenRotation.TunnelID != "" || plan.request.ManagedRepair.TunnelID != "" {
+		return nil, nil, nil, nil, false
+	}
+	for _, step := range plan.steps {
+		change, provider := step.CloudflareChange()
+		if !provider {
+			service = append(service, step)
+			continue
+		}
+		switch {
+		case change.Action == systemchanges.CloudflareDNSCreate && change.Hostname == plan.request.DirectHostname:
+			directDNS = append(directDNS, step)
+		case change.Action == systemchanges.CloudflareRoutesPut || change.Action == systemchanges.CloudflareDNSCreate:
+			publicRoutes = append(publicRoutes, step)
+		default:
+			tunnel = append(tunnel, step)
+		}
+	}
+	return tunnel, service, directDNS, publicRoutes, len(tunnel) > 0 && len(service) == 1 && len(directDNS) > 0 && len(publicRoutes) == 3
+}
+
+// BindProfileSetupEvidence updates only Cloudflare's private evidence map
+// after the compositor has fixed the final transaction order.
+func (plan *Plan) BindProfileSetupEvidence(steps []systemchanges.Step) bool {
+	if plan == nil {
+		return false
+	}
+	binding := cloudflareEvidenceBinding{}
+	for index, step := range steps {
+		change, ok := step.CloudflareChange()
+		if !ok {
+			continue
+		}
+		number := index + 1
+		switch {
+		case change.Action == systemchanges.CloudflareTunnelCreate && change.TunnelName == plan.request.TunnelName:
+			binding.tunnel = number
+		case change.Action == systemchanges.CloudflareDNSCreate && change.Hostname == plan.request.XHTTPHostname:
+			binding.xhttp = number
+		case change.Action == systemchanges.CloudflareDNSCreate && change.Hostname == plan.request.WebSocketHostname:
+			binding.websocket = number
+		case change.Action == systemchanges.CloudflareDNSCreate && change.Hostname == plan.request.DirectHostname && change.RecordType == "A":
+			binding.directIPv4 = number
+		case change.Action == systemchanges.CloudflareDNSCreate && change.Hostname == plan.request.DirectHostname && change.RecordType == "AAAA":
+			binding.directIPv6 = number
+		}
+	}
+	if binding.tunnel < 1 || binding.xhttp < 1 || binding.websocket < 1 || plan.request.PublicIPv4 != "" && binding.directIPv4 < 1 || plan.request.PublicIPv6 != "" && binding.directIPv6 < 1 {
+		return false
+	}
+	plan.binding = binding
+	return true
+}
 func (plan *Plan) Checks() []systemchanges.Check {
 	if plan == nil {
 		return nil

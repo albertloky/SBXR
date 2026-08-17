@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/albertloky/SBXR/internal/certificatelifecycle"
+	"github.com/albertloky/SBXR/internal/cloudflareprofilesetup"
 	"github.com/albertloky/SBXR/internal/connectionprofiles"
 	"github.com/albertloky/SBXR/internal/networkpolicy"
 	"github.com/albertloky/SBXR/internal/ownerconsole"
@@ -20,6 +21,7 @@ import (
 
 type clientAccessOutcome struct {
 	mu                                     sync.Mutex
+	setup                                  *cloudflareprofilesetup.Interface
 	session                                *clientAccessHandoffSession
 	request                                clientAccessHandoffRequest
 	change                                 ownerconsole.DurableChangeSet

@@ -730,6 +730,22 @@ func NewListenerContribution(result Result) ListenerContribution {
 	return listenerContribution(result.Binding)
 }
 
+// NewCloudflareProfileSetupListenerContribution exposes the approved N+1
+// candidate listeners, not the still-active N listeners.
+func NewCloudflareProfileSetupListenerContribution(result Result) ListenerContribution {
+	plan := result.CloudflareProfileSetup
+	if plan == nil || !plan.approved || len(plan.Collisions) != 0 || plan.Binding.CandidateRevision == 0 {
+		return ListenerContribution{}
+	}
+	encoded, _ := json.Marshal(struct {
+		Binding ChangeSetBinding
+		Policy  Policy
+	}{plan.Binding, plan.CandidatePolicy})
+	digest := sha256.Sum256(encoded)
+	checksum := hex.EncodeToString(digest[:])
+	return listenerContribution(Binding{Digest: checksum, policy: plan.CandidatePolicy, baseline: Managed, revision: plan.Binding.CandidateRevision, digest: checksum, approved: true})
+}
+
 // NewRevisionOneListenerContribution exposes only the proved local listener
 // binding when provider absence is the sole unproved revision 1 fact.
 func NewRevisionOneListenerContribution(result Result) ListenerContribution {

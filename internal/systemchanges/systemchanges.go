@@ -832,6 +832,8 @@ const InspectBeforeIdempotentReverse InspectionContract = "Inspect effect before
 const (
 	ActivatePreparedConfiguration         OperationKind = "Activate prepared configuration"
 	RestorePriorConfiguration             OperationKind = "Restore prior configuration"
+	ActivatePreparedOrigins               OperationKind = "Activate prepared origins"
+	RestorePriorOrigins                   OperationKind = "Restore prior origins"
 	RecordManagementTokenChange           OperationKind = "Record management token change"
 	RestoreManagementTokenRecord          OperationKind = "Restore management token record"
 	ApplyApprovedNetworkPolicy            OperationKind = "Apply approved Network Policy"
@@ -1395,7 +1397,7 @@ func NewChangeSet(spec ChangeSetSpec) (*ChangeSet, error) {
 	confirmedRemoval := spec.Mutation == CompleteRemovalMutation && typed && selected && confirmationReview == selectionReview
 	validRemoval := validRemovalSteps(spec.Steps)
 	reclamation := spec.Reclamation != nil && trustedAuthority(spec.Reclamation, "github.com/albertloky/SBXR/internal/networkpolicy", "ReclamationAuthority")
-	if !safeIdentity(spec.Identity) || !validMutation(spec.Mutation) || !validModule(spec.OutcomeOwner) || !validStartingState(spec.StartingState, spec.Mutation) || !validTargetState(spec) || !safeIdentity(spec.Plan.Identity) || !validSHA256(spec.Plan.SHA256) || !validSHA256(spec.Plan.VolatileSHA256) || spec.PreparedState == nil || len(spec.Steps) == 0 || len(spec.Checks) == 0 || spec.Timeouts.Step <= 0 || spec.Timeouts.Step > maxStepTimeout || spec.Timeouts.Check <= 0 || spec.Timeouts.Check > maxCheckTimeout || spec.Disk.PreparationBytes == 0 || spec.Disk.TemporaryBytes == 0 || spec.Disk.SnapshotBytes == 0 || spec.Disk.JournalBytes == 0 || spec.Disk.RollbackBytes == 0 || spec.Disk.OverheadBytes == 0 || !diskValid || reserved > ^uint64(0)-largestFloor || spec.Mutation == CompleteRemovalMutation != confirmedRemoval || spec.Mutation == CompleteRemovalMutation != validRemoval || spec.Mutation == CompleteRemovalMutation && !removalStepsMatchReview(spec.Steps, selectionReview) || spec.Mutation != CompleteRemovalMutation && (spec.TypedRemovalConfirmation != nil || spec.PermanentRemovalSelection != nil) || (spec.Mutation == CloudflareProfileSetupMutation) != (spec.CloudflareSetupConfirmation != nil) || spec.Reclamation != nil && (!reclamation || spec.Mutation != InstallationMutation || spec.StartingState.Status != NotInstalled) {
+	if !safeIdentity(spec.Identity) || !validMutation(spec.Mutation) || !validOutcomeOwner(spec.OutcomeOwner) || !validStartingState(spec.StartingState, spec.Mutation) || !validTargetState(spec) || !safeIdentity(spec.Plan.Identity) || !validSHA256(spec.Plan.SHA256) || !validSHA256(spec.Plan.VolatileSHA256) || spec.PreparedState == nil || len(spec.Steps) == 0 || len(spec.Checks) == 0 || spec.Timeouts.Step <= 0 || spec.Timeouts.Step > maxStepTimeout || spec.Timeouts.Check <= 0 || spec.Timeouts.Check > maxCheckTimeout || spec.Disk.PreparationBytes == 0 || spec.Disk.TemporaryBytes == 0 || spec.Disk.SnapshotBytes == 0 || spec.Disk.JournalBytes == 0 || spec.Disk.RollbackBytes == 0 || spec.Disk.OverheadBytes == 0 || !diskValid || reserved > ^uint64(0)-largestFloor || spec.Mutation == CompleteRemovalMutation != confirmedRemoval || spec.Mutation == CompleteRemovalMutation != validRemoval || spec.Mutation == CompleteRemovalMutation && !removalStepsMatchReview(spec.Steps, selectionReview) || spec.Mutation != CompleteRemovalMutation && (spec.TypedRemovalConfirmation != nil || spec.PermanentRemovalSelection != nil) || (spec.Mutation == CloudflareProfileSetupMutation) != (spec.CloudflareSetupConfirmation != nil) || spec.Reclamation != nil && (!reclamation || spec.Mutation != InstallationMutation || spec.StartingState.Status != NotInstalled) {
 		return nil, &Finding{Code: "SYSTEM-CHANGES-CHANGE-SET-INVALID", Problem: "The Change Set is incomplete or untyped", Found: "a missing or invalid typed transaction input", Required: "one opaque prepared State commit, exact lineage and Plan checksums, typed steps and rollback, checks, disk reservation, and bounded timeouts", WhyStopped: "System Changes never accepts an arbitrary mutation surface", NextAction: "Rebuild and review the Change Set through its owning Module."}
 	}
 	for _, step := range spec.Steps {
@@ -1632,15 +1634,19 @@ func validMutation(mutation MutationClass) bool {
 
 func validModule(module Module) bool {
 	switch module {
-	case ConnectionProfilesModule, SubscriptionModule, CloudflareModule, CertificateModule, SoftwareModule, NetworkPolicyModule, HealthDiagnosticsModule, StateModule, CloudflareProfileSetupModule:
+	case ConnectionProfilesModule, SubscriptionModule, CloudflareModule, CertificateModule, SoftwareModule, NetworkPolicyModule, HealthDiagnosticsModule, StateModule:
 		return true
 	}
 	return false
 }
 
+func validOutcomeOwner(module Module) bool {
+	return validModule(module) || module == CloudflareProfileSetupModule
+}
+
 func validOperation(operation OperationKind) bool {
 	switch operation {
-	case ActivatePreparedConfiguration, RestorePriorConfiguration, RecordManagementTokenChange, RestoreManagementTokenRecord, ApplyApprovedNetworkPolicy, OpenApprovedHTTP01, CloseRecordedHTTP01, RestorePriorNetworkPolicy, RemoveOwnedPublicExposure, RestoreOwnedPublicExposure, DeleteOwnedCloudflareResource, RestoreOwnedCloudflareResource, DeleteConflictingCloudflareResource, PreserveConflictingCloudflareResource, CreateCloudflareResource, DeleteCreatedCloudflareResource, ConfigureCloudflareTunnel, RestoreCloudflareTunnel, ConfigureCloudflareDNS, RestoreCloudflareDNS, ActivateCloudflaredService, RotateCloudflaredRunToken, RestoreCloudflaredService, StageCertificateCandidate, DiscardCertificateCandidate, OrderCertificateCandidate, PreserveCertificateLineage, ActivateCertificateServingPair, RestoreCertificateServingPair:
+	case ActivatePreparedConfiguration, RestorePriorConfiguration, ActivatePreparedOrigins, RestorePriorOrigins, RecordManagementTokenChange, RestoreManagementTokenRecord, ApplyApprovedNetworkPolicy, OpenApprovedHTTP01, CloseRecordedHTTP01, RestorePriorNetworkPolicy, RemoveOwnedPublicExposure, RestoreOwnedPublicExposure, DeleteOwnedCloudflareResource, RestoreOwnedCloudflareResource, DeleteConflictingCloudflareResource, PreserveConflictingCloudflareResource, CreateCloudflareResource, DeleteCreatedCloudflareResource, ConfigureCloudflareTunnel, RestoreCloudflareTunnel, ConfigureCloudflareDNS, RestoreCloudflareDNS, ActivateCloudflaredService, RotateCloudflaredRunToken, RestoreCloudflaredService, StageCertificateCandidate, DiscardCertificateCandidate, OrderCertificateCandidate, PreserveCertificateLineage, ActivateCertificateServingPair, RestoreCertificateServingPair:
 		return true
 	}
 	return false

@@ -11,15 +11,38 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/albertloky/SBXR/internal/certificatelifecycle"
+	"github.com/albertloky/SBXR/internal/cloudflareprofilesetup"
+	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
+	"github.com/albertloky/SBXR/internal/connectionprofiles"
 	"github.com/albertloky/SBXR/internal/healthdiagnostics"
 	"github.com/albertloky/SBXR/internal/installation"
 	"github.com/albertloky/SBXR/internal/networkpolicy"
 	"github.com/albertloky/SBXR/internal/ownerconsole"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
+	"github.com/albertloky/SBXR/internal/state"
+	"github.com/albertloky/SBXR/internal/subscriptionpublication"
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
 
 var _ ownerconsole.CloudflareModule = (*clientAccessOutcome)(nil)
+
+func TestProductionConstructsOneCloudflareProfileSetupInterface(t *testing.T) {
+	changes := systemchanges.Interface{}
+	module, err := newCloudflareProfileSetupModule(networkpolicy.Interface{}, cloudflaretunnel.Interface{}, certificatelifecycle.Interface{}, connectionprofiles.Interface{}, subscriptionpublication.Interface{}, state.Interface{}, changes.Inspect, func(*systemchanges.ChangeSet, cloudflareprofilesetup.Execution) systemchanges.ApplyResult {
+		return systemchanges.ApplyResult{}
+	})
+	if err != nil || module == nil {
+		t.Fatalf("Cloudflare Profile Setup construction = %v, %v", module, err)
+	}
+}
+
+func TestManagedProductionConstructsCloudflareProfileSetup(t *testing.T) {
+	module, err := newProductionCloudflareProfileSetupModule()
+	if err != nil || module == nil {
+		t.Fatalf("production Cloudflare Profile Setup = %v, %v", module, err)
+	}
+}
 
 func TestProductionConsequentialConfirmationHelpCrossesTypedBoundaries(t *testing.T) {
 	reclamation := ownerPlan(&installation.Plan{ReclamationDigest: strings.Repeat("a", 64), ConfirmationHelp: installation.ReclamationConfirmationGuidance()})

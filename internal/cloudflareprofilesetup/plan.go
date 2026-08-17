@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -29,6 +28,7 @@ type PlanRequest struct {
 	SubscriptionPublication subscriptionpublication.PlanRequest
 	StatePrepare            state.PrepareRequest
 	SoftwareLifecycleSHA256 string
+	VolatileSHA256          string
 	Disk                    systemchanges.DiskRequirement
 	Confirmation            systemchanges.CloudflareSetupConfirmation
 }
@@ -49,6 +49,7 @@ type Plan struct {
 	disk                             systemchanges.DiskRequirement
 	confirmation                     systemchanges.CloudflareSetupConfirmation
 	review                           []string
+	execution                        Execution
 	used                             atomic.Bool
 }
 
@@ -141,7 +142,7 @@ func (module *Interface) Plan(ctx context.Context, request PlanRequest) PlanResu
 		return refusedPlan("CLOUDFLARE-SETUP-CERTIFICATE", "Certificate Lifecycle refused sbxr-domain setup")
 	}
 
-	request.ConnectionProfiles.Candidate.Exposure = networkpolicy.NewListenerContribution(network)
+	request.ConnectionProfiles.Candidate.Exposure = networkpolicy.NewCloudflareProfileSetupListenerContribution(network)
 	profiles := module.dependencies.ConnectionProfiles(ctx, request.ConnectionProfiles)
 	if profiles.Plan == nil || profiles.Health.Outcome != connectionprofiles.Healthy {
 		return refusedPlan("CLOUDFLARE-SETUP-PROFILES", "Connection Profiles refused the atomic five-profile candidate")
@@ -185,7 +186,7 @@ func (module *Interface) Plan(ctx context.Context, request PlanRequest) PlanResu
 
 func validRequestBinding(request PlanRequest, revision uint64, desiredSHA string) bool {
 	changeSet := request.CloudflareTunnel.ChangeSet
-	return changeSet != "" && request.CloudflareTunnel.StartingRevision == revision && request.CloudflareTunnel.StartingStateSHA256 != "" && request.CloudflareTunnel.DesiredStateSHA256 == desiredSHA &&
+	return changeSet != "" && validSHA256(request.VolatileSHA256) && len(request.CloudflareTunnel.Reclamation) == 0 && request.CloudflareTunnel.StartingRevision == revision && request.CloudflareTunnel.StartingStateSHA256 != "" && request.CloudflareTunnel.DesiredStateSHA256 == desiredSHA &&
 		request.CertificateLifecycle.ChangeSet == changeSet && request.CertificateLifecycle.StartingRevision == revision && request.CertificateLifecycle.StartingStateSHA256 == request.CloudflareTunnel.StartingStateSHA256 && request.CertificateLifecycle.DesiredStateSHA256 == desiredSHA &&
 		request.ConnectionProfiles.ChangeSet == changeSet && request.ConnectionProfiles.StartingStateSHA256 == request.CloudflareTunnel.StartingStateSHA256 && request.ConnectionProfiles.DesiredStateSHA256 == desiredSHA &&
 		request.SubscriptionPublication.ChangeSet == changeSet && request.SubscriptionPublication.StartingState.Status == systemchanges.Managed && request.SubscriptionPublication.StartingState.Revision == revision && request.SubscriptionPublication.StartingState.SHA256 == request.CloudflareTunnel.StartingStateSHA256 && request.SubscriptionPublication.DesiredStateRevision == revision+1 && request.SubscriptionPublication.DesiredStateSHA256 == desiredSHA &&
@@ -248,6 +249,7 @@ func (w *setupWiring) ValidateSoftwareLifecycle(value state.SoftwareLifecycleInt
 }
 
 func composePlan(request PlanRequest, loaded state.Result, network networkpolicy.Result, cloudflare *cloudflaretunnel.Plan, certificate *certificatelifecycle.Plan, profiles *connectionprofiles.Plan, publication *subscriptionpublication.Plan) (*Plan, *setupWiring, error) {
+	publicationSummary := publication.Summary()
 	networkBytes, err := json.Marshal(network.CloudflareProfileSetup)
 	if err != nil {
 		return nil, nil, err
@@ -270,26 +272,46 @@ func composePlan(request PlanRequest, loaded state.Result, network networkpolicy
 	}
 	digest := sha256.Sum256(encoded)
 	sha := hex.EncodeToString(digest[:])
-	volatile := sha256.Sum256([]byte(strings.Join([]string{profiles.VolatileSHA256(), publication.VolatileSHA256(), hex.EncodeToString(networkDigest[:])}, "\n")))
-	steps := append([]systemchanges.Step(nil), cloudflare.Steps()...)
+	tunnel, service, directDNS, publicRoutes, valid := cloudflare.ProfileSetupSteps()
+	profileOrigins := profiles.ProfileSetupSteps()
+	if !valid || len(profileOrigins) != 1 {
+		return nil, nil, errors.New("ordered setup contributions unavailable")
+	}
+	steps := append([]systemchanges.Step(nil), tunnel...)
+	steps = append(steps, profileOrigins...)
+	steps = append(steps, service...)
+	steps = append(steps, directDNS...)
 	steps = append(steps, certificate.Steps()...)
-	steps = append(steps, profiles.Steps()...)
 	firewall, err := systemchanges.NewFirewallPolicyStep(network.CloudflareProfileSetup.CandidatePolicy.Nftables, request.StatePrepare.Candidate.NetworkPolicy.SSHPort)
 	if err != nil {
 		return nil, nil, err
 	}
 	steps = append(steps, firewall)
+	steps = append(steps, publicRoutes...)
 	steps = append(steps, publication.Steps()...)
+	if !cloudflare.BindProfileSetupEvidence(steps) {
+		return nil, nil, errors.New("Cloudflare evidence order unavailable")
+	}
 	checks := append([]systemchanges.Check(nil), cloudflare.Checks()...)
 	checks = append(checks, certificate.Checks()...)
 	checks = append(checks, profiles.Checks()...)
 	checks = append(checks, publication.Checks()...)
 	plan := &Plan{
-		identity: "cloudflare-setup-" + sha[:24], sha256: sha, volatileSHA256: hex.EncodeToString(volatile[:]), changeSet: request.CloudflareTunnel.ChangeSet,
+		identity: "cloudflare-setup-" + sha[:24], sha256: sha, volatileSHA256: request.VolatileSHA256, changeSet: request.CloudflareTunnel.ChangeSet,
 		starting: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: loaded.Snapshot.Revision, SHA256: request.CloudflareTunnel.StartingStateSHA256},
 		steps:    steps, checks: checks, disk: request.Disk, confirmation: request.Confirmation,
-		review: []string{"Starting authority and Release Identity", "selected provider authority and immutable ownership", "domain, three hostnames, ports, address families, and collisions", "one Tunnel, two routes, DNS-only records, and temporary TCP 80", "sbxr-domain, local services, artifacts, exposure, and gates", "five profile credential categories and six-profile publication", "interruptions, residue, reversible outcome, and forward-only outcome", "Irreversible Cloudflare setup started; Complete, Rolled back, or Recovery Required"},
+		review: []string{
+			fmt.Sprintf("Starting authority: Managed revision %d, State SHA-256 %s, Release Identity %s", loaded.Snapshot.Revision, request.CloudflareTunnel.StartingStateSHA256, request.SubscriptionPublication.ReleaseIdentity.Tag),
+			fmt.Sprintf("Provider authority: account %s, zone %s (%s), Tunnel %s", request.CloudflareTunnel.Authority.AccountID, request.CloudflareTunnel.Authority.ZoneName, request.CloudflareTunnel.Authority.ZoneID, request.CloudflareTunnel.TunnelName),
+			fmt.Sprintf("Hostnames: XHTTP %s, WebSocket %s, Direct TLS %s; addresses IPv4 %s, IPv6 %s", request.CloudflareTunnel.XHTTPHostname, request.CloudflareTunnel.WebSocketHostname, request.CloudflareTunnel.DirectHostname, request.CloudflareTunnel.PublicIPv4, request.CloudflareTunnel.PublicIPv6),
+			fmt.Sprintf("Network Policy: SSH %d/TCP; temporary HTTP-01 80/TCP; candidate firewall SHA-256 %x", request.StatePrepare.Candidate.NetworkPolicy.SSHPort, sha256.Sum256([]byte(network.CloudflareProfileSetup.CandidatePolicy.Nftables))),
+			"Ordered gates: create and journal Tunnel; start and prove local Xray origins; start and prove cloudflared; create DNS-only Direct records; obtain and activate sbxr-domain; open Direct ports; publish XHTTP and WebSocket routes; publish subscriptions; publish State",
+			fmt.Sprintf("Publication: Change Set %s, revision %d, exactly %d profiles, selected address %s", request.CloudflareTunnel.ChangeSet, publicationSummary.DesiredStateRevision, publicationSummary.ProfileCount, publicationSummary.SelectedAddress),
+			"Interruption and residue: cancellation is safe before Irreversible Cloudflare setup started; later failure is forward-only; rollback removes only journaled setup resources",
+			"Exact outcomes: Complete, Rolled back, or Recovery Required",
+		},
 	}
+	plan.execution = Execution{Cloudflare: cloudflare, ReleaseTag: request.SubscriptionPublication.ReleaseIdentity.Tag, SubscriptionPort: request.StatePrepare.Candidate.Subscription.ListenPort}
 	wiring := &setupWiring{identity: plan.identity, sha256: plan.sha256, current: loaded.Snapshot.DesiredState, candidate: request.StatePrepare.Candidate, network: network, cloudflare: cloudflare, certificate: certificate, profiles: profiles, publication: publication, managed: managed}
 	return plan, wiring, nil
 }
@@ -321,7 +343,7 @@ func (module *Interface) Apply(approval Approval) ApplyResult {
 	if err != nil {
 		return ApplyResult{Kind: ApplyRefused, Operation: plan.changeSet, Correction: refusedPlan("CLOUDFLARE-SETUP-CHANGE-SET", "System Changes refused the composed Change Set").Correction}
 	}
-	result := module.dependencies.SystemChanges.Apply(changeSet)
+	result := module.dependencies.SystemChanges.Apply(changeSet, plan.execution)
 	output := ApplyResult{Operation: plan.changeSet}
 	switch result.Outcome {
 	case systemchanges.Completed:

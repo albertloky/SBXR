@@ -504,6 +504,19 @@ func (plan *Plan) Steps() []systemchanges.Step {
 	}
 	return append([]systemchanges.Step(nil), plan.steps...)
 }
+
+// ProfileSetupSteps keeps the Direct TLS services stopped until Certificate
+// Lifecycle has installed and proved the reviewed sbxr-domain certificate.
+func (plan *Plan) ProfileSetupSteps() []systemchanges.Step {
+	if plan == nil || plan.mutation != systemchanges.CloudflareProfileSetupMutation {
+		return nil
+	}
+	step, err := systemchanges.NewStep(systemchanges.ConnectionProfilesModule, systemchanges.ActivatePreparedOrigins, systemchanges.RestorePriorOrigins)
+	if err != nil {
+		return nil
+	}
+	return []systemchanges.Step{step}
+}
 func (plan *Plan) Checks() []systemchanges.Check {
 	if plan == nil {
 		return nil

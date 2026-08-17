@@ -619,7 +619,7 @@ func (i Interface) recover(identityAuthority RecoverySSHIdentityAuthority, autho
 }
 
 func validRecoveryTransaction(recovery RecoveryTransaction) bool {
-	if !safeIdentity(recovery.ChangeSet) || !validMutation(recovery.Mutation) || !validModule(recovery.OutcomeOwner) || len(recovery.Steps) == 0 || recovery.AttemptedSteps < 0 || recovery.AttemptedSteps > len(recovery.Steps) || recovery.Timeouts.Step <= 0 || recovery.Timeouts.Step > maxStepTimeout || recovery.Timeouts.Check <= 0 || recovery.Timeouts.Check > maxCheckTimeout {
+	if !safeIdentity(recovery.ChangeSet) || !validMutation(recovery.Mutation) || !validOutcomeOwner(recovery.OutcomeOwner) || len(recovery.Steps) == 0 || recovery.AttemptedSteps < 0 || recovery.AttemptedSteps > len(recovery.Steps) || recovery.Timeouts.Step <= 0 || recovery.Timeouts.Step > maxStepTimeout || recovery.Timeouts.Check <= 0 || recovery.Timeouts.Check > maxCheckTimeout {
 		return false
 	}
 	unprovenRemoval := recovery.State.LineageUnavailable

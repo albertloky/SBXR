@@ -68,6 +68,49 @@ func TestInstallHostActivatesAndReversesOnlyPreparedProxyConfigurations(t *testi
 	}
 }
 
+func TestProfileSetupActivatesOnlyPreparedOriginsBeforeCertificate(t *testing.T) {
+	root := t.TempDir()
+	prepared := filepath.Join(root, transactionDirectory, "profile-setup-0002", "prepared")
+	if err := os.MkdirAll(prepared, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writePreparedInstall(t, prepared, []byte(`{"xray":"candidate"}`), []byte(`{"sing-box":"candidate"}`))
+	for name, body := range map[string][]byte{
+		"etc/sbxr/xray/config.json":     []byte(`{"xray":"prior"}`),
+		"etc/sbxr/sing-box/config.json": []byte(`{"sing-box":"prior"}`),
+	} {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil || os.WriteFile(path, body, 0o644) != nil {
+			t.Fatal("write prior configuration")
+		}
+	}
+	var commands []string
+	host := InstallHost{root: root, uid: os.Geteuid(), rootGID: os.Getegid(), units: append([]string(nil), fixedInstallUnits...), managed: true, run: func(_ context.Context, name string, arguments ...string) error {
+		commands = append(commands, name+" "+strings.Join(arguments, " "))
+		return nil
+	}}
+	step, err := systemchanges.NewStep(systemchanges.ConnectionProfilesModule, systemchanges.ActivatePreparedOrigins, systemchanges.RestorePriorOrigins)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot []byte
+	if err := host.CaptureRollback(step, func(source io.Reader) error { snapshot, err = io.ReadAll(source); return err }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := host.Execute(step, time.Second, systemchanges.NewCancellation()); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(commands, "systemctl enable --now xray.service") || slices.ContainsFunc(commands, func(command string) bool { return strings.Contains(command, "sing-box.service") }) {
+		t.Fatalf("pre-certificate services = %v", commands)
+	}
+	if _, err := host.Reverse(step, bytes.NewReader(snapshot), time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(commands, "systemctl disable --now sing-box.service") {
+		t.Fatalf("profile setup rollback = %v", commands)
+	}
+}
+
 func TestFreshInstallAgreementRequiresDeferredServicesInactiveAndDisabled(t *testing.T) {
 	deferredActive, xrayDisabled := false, false
 	host := InstallHost{run: func(_ context.Context, name string, arguments ...string) error {
