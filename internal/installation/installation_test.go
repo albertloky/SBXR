@@ -633,7 +633,7 @@ func TestComposedInstallRefusesAnIncompleteReclaimableInventory(t *testing.T) {
 }
 
 func TestReclamationInventoryBindsExactCloudflareConflictIdentifiers(t *testing.T) {
-	token, err := cloudflaretunnel.NewManagementToken("cfat_COMPOSED-INSTALL-SECRET-MARKER-000000000")
+	token, err := cloudflaretunnel.NewManagementToken("sbxr_COMPOSED-INSTALL-SECRET-MARKER-000000000")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -694,13 +694,13 @@ func TestInstallationReviewGuidesEveryFirstInstallationFieldAndRejectsTutorialVa
 		"subscription-port":  {"Subscription HTTPS", "not-a-port", "10448", "https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml", PublicInformation},
 		"cloudflare-account": {"Cloudflare account", "not-an-id", "11111111111111111111111111111111", "https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/", PublicInformation},
 		"cloudflare-zone":    {"Cloudflare domain", "not-an-id", "22222222222222222222222222222222", "https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/", PublicInformation},
-		"cloudflare-token":   {"Cloudflare work", "user-token", "", "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/", InfrastructureSecret},
+		"cloudflare-token":   {"Cloudflare work", "user-token", "", "https://developers.cloudflare.com/fundamentals/api/get-started/create-token/", InfrastructureSecret},
 		"reality-target":     {"REALITY Vision", "https://bad", "target.example", "https://xtls.github.io/en/config/transport.html#realityobject", PublicInformation},
 	}
 	placeholder := map[string]string{
 		"domain":           "placeholder",
 		"owner-email":      "owner@your-domain",
-		"cloudflare-token": "cfat_placeholder________________________________",
+		"cloudflare-token": "sbxr_placeholder________________________________",
 		"reality-target":   "your-hostname",
 	}
 	steps := []struct{ field, valid string }{
@@ -1332,7 +1332,7 @@ func composedInstallRequest(t *testing.T) softwareubuntu.InstallHandoffRequest {
 	return softwareubuntu.InstallHandoffRequest{
 		Schema: 1, Session: strings.Repeat("a", 64), Tag: identity.Tag, Architecture: softwarelifecycle.AMD64,
 		Draft:               softwarelifecycle.InstallationDraft{Domain: "example.com", OwnerEmail: "owner@example.com", PublicIPv4: "8.8.8.8", PrimaryAddress: "8.8.8.8", SSHPort: 22, RealityPort: 443, Hysteria2Port: 443, TUICPort: 8443, AnyTLSPort: 9443, SubscriptionPort: 10443},
-		CloudflareAccountID: strings.Repeat("b", 32), CloudflareZoneID: strings.Repeat("c", 32), CloudflareToken: "cfat_COMPOSED-INSTALL-SECRET-MARKER-000000000", RealityTarget: "www.microsoft.com:443", RealityServerName: "www.microsoft.com", Entropy: bytes.Repeat([]byte{0x42}, 32),
+		CloudflareAccountID: strings.Repeat("b", 32), CloudflareZoneID: strings.Repeat("c", 32), CloudflareToken: "sbxr_COMPOSED-INSTALL-SECRET-MARKER-000000000", RealityTarget: "www.microsoft.com:443", RealityServerName: "www.microsoft.com", Entropy: bytes.Repeat([]byte{0x42}, 32),
 		Candidate: softwarelifecycle.InstallCandidateHandoff{Verified: verified, Staged: staged, ApplicationAsset: applicationAsset, ComponentAsset: componentAsset, ApplicationArchive: application, ComponentArchive: components},
 	}
 }
@@ -1475,7 +1475,7 @@ type composedCloudflareAPI struct{}
 
 func (composedCloudflareAPI) Observe(context.Context, cloudflaretunnel.ObservationRequest) (cloudflaretunnel.Observation, error) {
 	account, zone := strings.Repeat("b", 32), strings.Repeat("c", 32)
-	return cloudflaretunnel.Observation{Account: cloudflaretunnel.AccountObservation{ID: account}, Zone: cloudflaretunnel.ZoneObservation{ID: zone, AccountID: account, Name: "example.com", Status: "active", AssignedNameServers: []string{"a.ns.cloudflare.com"}, ObservedNameServers: []string{"a.ns.cloudflare.com"}}, Token: cloudflaretunnel.TokenObservation{ID: strings.Repeat("d", 32), Status: "active"}, Policies: []cloudflaretunnel.TokenPolicy{{Effect: "allow", PermissionGroups: []string{"Account API Tokens Read", "Cloudflare Tunnel Edit"}, Resources: map[string]string{"com.cloudflare.api.account." + account: "*"}}, {Effect: "allow", PermissionGroups: []string{"DNS Write"}, Resources: map[string]string{"com.cloudflare.api.account.zone." + zone: "*"}}}}, nil
+	return cloudflaretunnel.Observation{Account: cloudflaretunnel.AccountObservation{ID: account}, Zone: cloudflaretunnel.ZoneObservation{ID: zone, AccountID: account, Name: "example.com", Status: "active", AssignedNameServers: []string{"a.ns.cloudflare.com"}, ObservedNameServers: []string{"a.ns.cloudflare.com"}}, Token: cloudflaretunnel.TokenObservation{ID: strings.Repeat("d", 32), Status: "active"}, DNSListProven: true, TunnelListProven: true}, nil
 }
 
 func (composedCloudflareAPI) ObserveMutation(context.Context, cloudflaretunnel.MutationRequest) (cloudflaretunnel.MutationObservation, error) {

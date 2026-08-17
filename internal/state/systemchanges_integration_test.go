@@ -312,6 +312,74 @@ func (a *systemChangesAdapter) LoadRunTokenRotationState(lease systemchanges.Exe
 	return a.stateRecovery.SystemChangesLoadRunTokenRotation(lease, binding, bytes.NewReader(a.artifacts["prepared/state.json"]), bytes.NewReader(a.artifacts["prepared/manifests.json"]))
 }
 
+func (a *systemChangesAdapter) StartManagementTokenRotation(lease systemchanges.ExecutionLease, changeSet string, _ time.Duration) (bool, error) {
+	if a.recovery == nil {
+		return false, errors.New("management-token recovery unavailable")
+	}
+	if err := a.Record(lease, systemchanges.CheckpointRecord{ChangeSet: changeSet, Checkpoint: systemchanges.IrreversibleManagementTokenReplacementStarted}); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (a *systemChangesAdapter) PrepareManagementTokenRotation(lease systemchanges.ExecutionLease, changeSet string, _ time.Duration) (bool, error) {
+	a.events = append(a.events, "create and prove management-token candidate")
+	if a.recovery == nil {
+		return false, errors.New("management-token recovery unavailable")
+	}
+	if a.recovery.LastCheckpoint == systemchanges.Prepared {
+		if err := a.Record(lease, systemchanges.CheckpointRecord{ChangeSet: changeSet, Checkpoint: systemchanges.ManagementTokenCandidateIntentPrepared}); err != nil {
+			return false, err
+		}
+	}
+	return false, a.Record(lease, systemchanges.CheckpointRecord{ChangeSet: changeSet, Checkpoint: systemchanges.ManagementTokenCandidatePrepared})
+}
+
+func (a *systemChangesAdapter) CleanupManagementTokenCandidate(systemchanges.ExecutionLease, string, time.Duration) error {
+	a.events = append(a.events, "delete management-token candidate")
+	return nil
+}
+
+func (a *systemChangesAdapter) RequireManagementTokenCandidateCleanup(lease systemchanges.ExecutionLease, changeSet string) error {
+	return a.Record(lease, systemchanges.CheckpointRecord{ChangeSet: changeSet, Checkpoint: systemchanges.ManagementTokenCandidateCleanupRequired})
+}
+
+func (a *systemChangesAdapter) DeleteManagementTokenRollback(_ systemchanges.ExecutionLease, _ string) error {
+	a.events = append(a.events, "delete management-token rollback")
+	delete(a.artifacts, "snapshot/step-001.rollback")
+	return nil
+}
+
+func (a *systemChangesAdapter) FinalizeManagementTokenRotation(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction, _ time.Duration) (any, systemchanges.StateTransactionBinding, systemchanges.StepEvidence, error) {
+	a.events = append(a.events, "revoke and disprove old management token")
+	binding, _ := json.Marshal(recovery.State)
+	material, err := a.stateRecovery.SystemChangesFinalizeManagementTokenRotation(lease, binding, bytes.NewReader(a.artifacts["prepared/state.json"]), &controlledInfrastructureSecret{value: "CLOUDFLARE-ROTATED-MANAGEMENT-TOKEN-MARKER"})
+	stateMaterial, ok := material.(interface {
+		SystemChangesBindings(any) ([]byte, error)
+		SystemChangesWriteArtifacts(any, func(string, uint32, io.Reader) error) error
+	})
+	if err != nil || !ok {
+		return nil, systemchanges.StateTransactionBinding{}, systemchanges.StepEvidence{}, err
+	}
+	finalJSON, err := stateMaterial.SystemChangesBindings(lease)
+	var final systemchanges.StateTransactionBinding
+	if err != nil || json.Unmarshal(finalJSON, &final) != nil {
+		return nil, systemchanges.StateTransactionBinding{}, systemchanges.StepEvidence{}, errors.New("final binding unavailable")
+	}
+	if err := a.ReplaceStateArtifacts(lease, recovery.ChangeSet, final, func(write func(string, uint32, io.Reader) error) error {
+		return stateMaterial.SystemChangesWriteArtifacts(lease, write)
+	}); err != nil {
+		return nil, systemchanges.StateTransactionBinding{}, systemchanges.StepEvidence{}, err
+	}
+	change, _ := recovery.Steps[0].CloudflareChange()
+	return material, final, systemchanges.StepEvidence{Code: "cloudflare-management-token-revoked", SHA256: testSHA('8'), ResourceID: change.ManagementTokenID}, nil
+}
+
+func (a *systemChangesAdapter) LoadManagementTokenRotationState(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction) (any, error) {
+	binding, _ := json.Marshal(recovery.State)
+	return a.stateRecovery.SystemChangesLoadManagementTokenRotation(lease, binding, bytes.NewReader(a.artifacts["prepared/state.json"]), bytes.NewReader(a.artifacts["prepared/manifests.json"]))
+}
+
 func (a *systemChangesAdapter) LoadForwardChangeState(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction) (any, error) {
 	binding, _ := json.Marshal(recovery.State)
 	return a.stateRecovery.SystemChangesLoadForwardChange(lease, binding, bytes.NewReader(a.artifacts["prepared/state.json"]), bytes.NewReader(a.artifacts["prepared/manifests.json"]))
@@ -1386,14 +1454,14 @@ func TestDeferredCloudflareFinalizationCannotPublishProviderValuesInRevisionOne(
 	}
 	digest := sha256.Sum256(template)
 	templateSHA := fmt.Sprintf("%x", digest)
-	managementToken, err := cloudflaretunnel.NewManagementToken("cfat_" + strings.Repeat("a", 40))
+	managementToken, err := cloudflaretunnel.NewManagementToken("sbxr_" + strings.Repeat("a", 40))
 	if err != nil {
 		t.Fatal(err)
 	}
 	provider := &deferredCloudflareAPI{}
 	module := newCloudflareTestModule(provider, cloudflaretunnel.SystemClock{})
 	planResult := module.Plan(t.Context(), cloudflaretunnel.PlanRequest{
-		Authority: cloudflaretunnel.ViewRequest{AccountID: candidate.Cloudflare.AccountID, ZoneID: candidate.Cloudflare.ZoneID, ZoneName: candidate.Cloudflare.ZoneName, Token: managementToken, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
+		Authority: cloudflaretunnel.ViewRequest{AccountID: candidate.Cloudflare.AccountID, ZoneID: candidate.Cloudflare.ZoneID, ZoneName: candidate.Cloudflare.ZoneName, Token: managementToken, DedicatedBroadPolicyConfirmed: true, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
 		ChangeSet: "cloudflare-change-0001", DesiredStateSHA256: templateSHA, TunnelName: candidate.Cloudflare.TunnelName,
 		XHTTPHostname: candidate.Cloudflare.XHTTPHostname, WebSocketHostname: candidate.Cloudflare.WebSocketHostname,
 		DirectHostname: candidate.Cloudflare.DirectHostname, PublicIPv4: candidate.NetworkPolicy.PublicIPv4,
@@ -1441,10 +1509,10 @@ func TestOwnerAssistedRunTokenRotationPausesThenRecoversForwardWithBothRoutes(t 
 	}
 	template, _ := marshalProtectedJSON(starting)
 	templateDigest := sha256.Sum256(template)
-	managementToken, _ := cloudflaretunnel.NewManagementToken("cfat_ROTATION-MANAGEMENT-TOKEN-MARKER-0000")
+	managementToken, _ := cloudflaretunnel.NewManagementToken("sbxr_ROTATION-MANAGEMENT-TOKEN-MARKER-0000")
 	provider := &deferredCloudflareAPI{}
 	planResult := newCloudflareTestModule(provider, cloudflaretunnel.SystemClock{}).Plan(t.Context(), cloudflaretunnel.PlanRequest{
-		Authority: cloudflaretunnel.ViewRequest{AccountID: starting.Cloudflare.AccountID, ZoneID: starting.Cloudflare.ZoneID, ZoneName: starting.Cloudflare.ZoneName, Token: managementToken, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
+		Authority: cloudflaretunnel.ViewRequest{AccountID: starting.Cloudflare.AccountID, ZoneID: starting.Cloudflare.ZoneID, ZoneName: starting.Cloudflare.ZoneName, Token: managementToken, DedicatedBroadPolicyConfirmed: true, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
 		ChangeSet: "cloudflare-run-token-rotation-integration", StartingRevision: 7, StartingStateSHA256: loaded.loaded.payloadChecksum, DesiredStateSHA256: fmt.Sprintf("%x", templateDigest),
 		XHTTPHostname: starting.Cloudflare.XHTTPHostname, WebSocketHostname: starting.Cloudflare.WebSocketHostname, DirectHostname: starting.Cloudflare.DirectHostname, PublicIPv4: starting.NetworkPolicy.PublicIPv4, CloudflaredVersion: starting.Software.CloudflaredVersion,
 		RunTokenRotation: cloudflaretunnel.RunTokenRotation{TunnelID: starting.Cloudflare.TunnelID, XHTTPDNSRecordID: starting.Cloudflare.XHTTPDNSRecordID, WebSocketDNSRecordID: starting.Cloudflare.WebSocketDNSRecordID, DirectIPv4RecordID: starting.Cloudflare.DirectIPv4RecordID},
@@ -1506,6 +1574,84 @@ func TestOwnerAssistedRunTokenRotationPausesThenRecoversForwardWithBothRoutes(t 
 	}
 }
 
+func TestHealthyManagementTokenRotationUsesPublicPlanAndApplyBeforePublishing(t *testing.T) {
+	stateModule, plan, prepared, observed, storage := preparedManagementTokenRotation(t, "integration")
+	adapter := &systemChangesAdapter{observation: observed, stateRecovery: stateModule}
+	result := plan.Apply(systemchanges.New(adapter), prepared, systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: observed.StateSHA256}, observed.VolatileSHA256, tokenChangeDisk())
+	if result.Outcome != systemchanges.Completed {
+		t.Fatalf("management-token rotation = %+v; events=%v", result, adapter.events)
+	}
+	created := slices.Index(adapter.events, "create and prove management-token candidate")
+	checkpoint := slices.Index(adapter.events, string(systemchanges.IrreversibleManagementTokenReplacementStarted))
+	revoked := slices.Index(adapter.events, "revoke and disprove old management token")
+	rollbackDeleted := slices.Index(adapter.events, string(systemchanges.ManagementTokenRollbackDeleted))
+	prePublication := slices.IndexFunc(adapter.events, func(event string) bool { return strings.HasPrefix(event, "check Pre-publication") })
+	if created < 0 || checkpoint <= created || revoked <= checkpoint || rollbackDeleted <= revoked || prePublication <= rollbackDeleted || adapter.artifacts["snapshot/step-001.rollback"] != nil {
+		t.Fatalf("unsafe management-token order: %v", adapter.events)
+	}
+	document := string(storage.document)
+	if !strings.Contains(document, "CLOUDFLARE-ROTATED-MANAGEMENT-TOKEN-MARKER") || strings.Contains(document, "CLOUDFLARE-MANAGEMENT-SECRET-MARKER") {
+		t.Fatalf("published management-token State = %s", document)
+	}
+}
+
+func preparedManagementTokenRotation(t *testing.T, suffix string) (Interface, *cloudflaretunnel.Plan, *PreparedCommit, systemchanges.Observation, *mutableStateStorage) {
+	t.Helper()
+	starting := completeDesiredState()
+	starting.Cloudflare.AccountID = strings.Repeat("1", 32)
+	starting.Cloudflare.ZoneID = strings.Repeat("2", 32)
+	starting.Cloudflare.DedicatedBroadPolicyConfirmed = true
+	storage := &mutableStateStorage{document: documentFor(t, starting)}
+	stateModule := New(storage)
+	loaded, err := stateModule.Load(intentManagedRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	template, _ := marshalProtectedJSON(starting)
+	digest := sha256.Sum256(template)
+	managementToken, _ := cloudflaretunnel.NewManagementToken("sbxr_ROTATION-MANAGEMENT-TOKEN-MARKER-0000")
+	planResult := newCloudflareTestModule(&deferredCloudflareAPI{}, cloudflaretunnel.SystemClock{}).Plan(t.Context(), cloudflaretunnel.PlanRequest{
+		Authority: cloudflaretunnel.ViewRequest{AccountID: starting.Cloudflare.AccountID, ZoneID: starting.Cloudflare.ZoneID, ZoneName: starting.Cloudflare.ZoneName, Token: managementToken, DedicatedBroadPolicyConfirmed: true, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
+		ChangeSet: "cloudflare-management-token-rotation-" + suffix, StartingRevision: 7, StartingStateSHA256: loaded.loaded.payloadChecksum, DesiredStateSHA256: fmt.Sprintf("%x", digest), ManagementToken: cloudflaretunnel.ManagementTokenChange{Action: cloudflaretunnel.ManagementTokenRotate, CurrentTokenID: strings.Repeat("6", 32)},
+	})
+	if planResult.Plan == nil {
+		t.Fatalf("rotation Plan = %+v", planResult.Health)
+	}
+	request := preparedRequest(t, loaded, starting, ChangeSetIdentity("cloudflare-management-token-rotation-"+suffix))
+	request.ReviewedInputs, err = NewReviewedInputs(PlanIdentity(planResult.Plan.Identity()), planResult.Plan.SHA256(), request.ReviewedInputs.managed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := stateModule.PrepareManagementTokenRotationCommit(request, planResult.Plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed := systemchanges.Observation{Status: systemchanges.Managed, LastChangeSet: "change-0007", StateRevision: 7, StateSHA256: loaded.loaded.payloadChecksum, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, VolatileSHA256: testSHA('2'), FilesystemBytes: 20 << 30, AvailableBytes: 5 << 30, WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}
+	return stateModule, planResult.Plan, prepared, observed, storage
+}
+
+func TestManagementTokenRotationRestartsAcrossDurableSecretBoundaries(t *testing.T) {
+	checkpoints := []systemchanges.DurableCheckpoint{systemchanges.ManagementTokenCandidateIntentPrepared, systemchanges.ManagementTokenCandidatePrepared, systemchanges.IrreversibleManagementTokenReplacementStarted, systemchanges.StepCompleted, systemchanges.ManagementTokenRollbackDeleted}
+	for index, checkpoint := range checkpoints {
+		t.Run(string(checkpoint), func(t *testing.T) {
+			stateModule, plan, prepared, observed, _ := preparedManagementTokenRotation(t, fmt.Sprintf("restart-%d", index))
+			adapter := &systemChangesAdapter{observation: observed, stateRecovery: stateModule, crashAfter: checkpoint}
+			func() {
+				defer func() { _ = recover() }()
+				_ = plan.Apply(systemchanges.New(adapter), prepared, systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: observed.StateSHA256}, observed.VolatileSHA256, tokenChangeDisk())
+			}()
+			if !adapter.crashed {
+				t.Fatal("controlled management-token worker did not stop")
+			}
+			adapter.crashAfter, adapter.crashed = "", false
+			result := systemchanges.New(adapter).Recover()
+			if result.Outcome != systemchanges.Completed || adapter.recovery != nil || adapter.artifacts["snapshot/step-001.rollback"] != nil {
+				t.Fatalf("recovery after %s = %+v events=%v", checkpoint, result, adapter.events)
+			}
+		})
+	}
+}
+
 func TestManagedCloudflareRepairUsesOneReviewedTransactionAndPublishesTheUnchangedIntent(t *testing.T) {
 	starting := completeDesiredState()
 	starting.Cloudflare.AccountID = strings.Repeat("1", 32)
@@ -1523,7 +1669,7 @@ func TestManagedCloudflareRepairUsesOneReviewedTransactionAndPublishesTheUnchang
 	}
 	template, _ := marshalProtectedJSON(starting)
 	digest := sha256.Sum256(template)
-	token, _ := cloudflaretunnel.NewManagementToken("cfat_REPAIR-MANAGEMENT-TOKEN-MARKER-000000")
+	token, _ := cloudflaretunnel.NewManagementToken("sbxr_REPAIR-MANAGEMENT-TOKEN-MARKER-000000")
 	provider := &deferredCloudflareAPI{repair: true, whole: cloudflaretunnel.WholeTunnelObservation{
 		TunnelID: starting.Cloudflare.TunnelID, Connected: false,
 		Routes: []cloudflaretunnel.Route{{Hostname: starting.Cloudflare.XHTTPHostname, Service: "https://wrong.example"}},
@@ -1534,7 +1680,7 @@ func TestManagedCloudflareRepairUsesOneReviewedTransactionAndPublishesTheUnchang
 		}, XHTTPOriginReachable: true, WebSocketOriginReachable: true,
 	}}
 	request := cloudflaretunnel.PlanRequest{
-		Authority: cloudflaretunnel.ViewRequest{AccountID: starting.Cloudflare.AccountID, ZoneID: starting.Cloudflare.ZoneID, ZoneName: starting.Cloudflare.ZoneName, Token: token, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
+		Authority: cloudflaretunnel.ViewRequest{AccountID: starting.Cloudflare.AccountID, ZoneID: starting.Cloudflare.ZoneID, ZoneName: starting.Cloudflare.ZoneName, Token: token, DedicatedBroadPolicyConfirmed: true, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
 		ChangeSet: "cloudflare-managed-repair-integration", StartingRevision: 7, StartingStateSHA256: loaded.loaded.payloadChecksum, DesiredStateSHA256: fmt.Sprintf("%x", digest), TunnelName: starting.Cloudflare.TunnelName,
 		XHTTPHostname: starting.Cloudflare.XHTTPHostname, WebSocketHostname: starting.Cloudflare.WebSocketHostname, DirectHostname: starting.Cloudflare.DirectHostname, PublicIPv4: starting.NetworkPolicy.PublicIPv4, CloudflaredVersion: starting.Software.CloudflaredVersion,
 		ManagedRepair: cloudflaretunnel.RunTokenRotation{TunnelID: starting.Cloudflare.TunnelID, XHTTPDNSRecordID: starting.Cloudflare.XHTTPDNSRecordID, WebSocketDNSRecordID: starting.Cloudflare.WebSocketDNSRecordID, DirectIPv4RecordID: starting.Cloudflare.DirectIPv4RecordID},
@@ -1592,7 +1738,7 @@ func TestManagementTokenChangePublishesOnceWithoutExposingEitherToken(t *testing
 				t.Fatalf("published token State = (%+v, %v)", loaded, err)
 			}
 			cloudflare := loaded.Snapshot.DesiredState.Cloudflare
-			if action == cloudflaretunnel.ManagementTokenReplace && (cloudflare.ManagementTokenRemoved || cloudflare.ManagementTokenState != "" || cloudflare.ManagementToken.value != "cfat_REPLACEMENT-TOKEN-SECRET-MARKER-000000") || action == cloudflaretunnel.ManagementTokenRemove && (!cloudflare.ManagementTokenRemoved || cloudflare.ManagementTokenState != CloudflareManagementUnmanaged || cloudflare.ManagementToken.isSet()) {
+			if action == cloudflaretunnel.ManagementTokenReplace && (cloudflare.ManagementTokenRemoved || cloudflare.ManagementTokenState != "" || cloudflare.ManagementToken.value != "sbxr_REPLACEMENT-TOKEN-SECRET-MARKER-000000") || action == cloudflaretunnel.ManagementTokenRemove && (!cloudflare.ManagementTokenRemoved || cloudflare.ManagementTokenState != CloudflareManagementUnmanaged || cloudflare.ManagementToken.isSet()) {
 				t.Fatalf("published token facts = %+v", cloudflare)
 			}
 			rendered := strings.Join(adapter.events, "\n") + fmt.Sprintf("%+v", result)
@@ -1667,11 +1813,11 @@ func preparedManagementTokenChange(t *testing.T, action cloudflaretunnel.Managem
 	managementToken := cloudflaretunnel.ManagementToken{}
 	final := template
 	if action == cloudflaretunnel.ManagementTokenReplace {
-		managementToken, err = cloudflaretunnel.NewManagementToken("cfat_REPLACEMENT-TOKEN-SECRET-MARKER-000000")
+		managementToken, err = cloudflaretunnel.NewManagementToken("sbxr_REPLACEMENT-TOKEN-SECRET-MARKER-000000")
 		if err != nil {
 			t.Fatal(err)
 		}
-		final.Cloudflare.ManagementToken = NewInfrastructureSecret("cfat_REPLACEMENT-TOKEN-SECRET-MARKER-000000")
+		final.Cloudflare.ManagementToken = NewInfrastructureSecret("sbxr_REPLACEMENT-TOKEN-SECRET-MARKER-000000")
 	}
 	provider := &deferredCloudflareAPI{}
 	var inventory cloudflaretunnel.ManagementTokenInventoryAuthority
@@ -1682,7 +1828,7 @@ func preparedManagementTokenChange(t *testing.T, action cloudflaretunnel.Managem
 		}
 	}
 	planResult := newCloudflareTestModule(provider, cloudflaretunnel.SystemClock{}).Plan(t.Context(), cloudflaretunnel.PlanRequest{
-		Authority: cloudflaretunnel.ViewRequest{AccountID: starting.Cloudflare.AccountID, ZoneID: starting.Cloudflare.ZoneID, ZoneName: starting.Cloudflare.ZoneName, Token: managementToken, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
+		Authority: cloudflaretunnel.ViewRequest{AccountID: starting.Cloudflare.AccountID, ZoneID: starting.Cloudflare.ZoneID, ZoneName: starting.Cloudflare.ZoneName, Token: managementToken, DedicatedBroadPolicyConfirmed: true, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
 		ChangeSet: changeSet, StartingRevision: 7, StartingStateSHA256: loaded.loaded.payloadChecksum, DesiredStateSHA256: fmt.Sprintf("%x", digest), ManagementToken: stateTestManagementTokenChange(action, inventory),
 	})
 	if planResult.Plan == nil {
@@ -1723,7 +1869,7 @@ func (api *deferredCloudflareAPI) GetTunnel(context.Context, cloudflaretunnel.Ge
 }
 
 func (api *deferredCloudflareAPI) Observe(context.Context, cloudflaretunnel.ObservationRequest) (cloudflaretunnel.Observation, error) {
-	return cloudflaretunnel.Observation{Account: cloudflaretunnel.AccountObservation{ID: strings.Repeat("1", 32)}, Zone: cloudflaretunnel.ZoneObservation{ID: strings.Repeat("2", 32), AccountID: strings.Repeat("1", 32), Name: "example.com", Status: "active", AssignedNameServers: []string{"a.ns.cloudflare.com"}, ObservedNameServers: []string{"a.ns.cloudflare.com"}}, Token: cloudflaretunnel.TokenObservation{ID: strings.Repeat("6", 32), Status: "active"}, Policies: []cloudflaretunnel.TokenPolicy{{Effect: "allow", PermissionGroups: []string{"Account API Tokens Read", "Cloudflare Tunnel Edit"}, Resources: map[string]string{"com.cloudflare.api.account." + strings.Repeat("1", 32): "*"}}, {Effect: "allow", PermissionGroups: []string{"DNS Write"}, Resources: map[string]string{"com.cloudflare.api.account.zone." + strings.Repeat("2", 32): "*"}}}}, nil
+	return cloudflaretunnel.Observation{Account: cloudflaretunnel.AccountObservation{ID: strings.Repeat("1", 32)}, Zone: cloudflaretunnel.ZoneObservation{ID: strings.Repeat("2", 32), AccountID: strings.Repeat("1", 32), Name: "example.com", Status: "active", AssignedNameServers: []string{"a.ns.cloudflare.com"}, ObservedNameServers: []string{"a.ns.cloudflare.com"}}, Token: cloudflaretunnel.TokenObservation{ID: strings.Repeat("6", 32), Status: "active"}, DNSListProven: true, TunnelListProven: true}, nil
 }
 func (api *deferredCloudflareAPI) ObserveMutation(_ context.Context, request cloudflaretunnel.MutationRequest) (cloudflaretunnel.MutationObservation, error) {
 	if api.repair {
@@ -2907,7 +3053,7 @@ func (adapter *checkpointCrashingUbuntuAdapter) Record(lease systemchanges.Execu
 
 func (host *controlledUbuntuHost) CaptureRollback(step systemchanges.Step, write func(io.Reader) error) error {
 	if removal, ok := step.RemovalChange(); ok && removal.Resource == systemchanges.CloudflareRouteResource {
-		token, err := cloudflaretunnel.NewManagementToken("cfat_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+		token, err := cloudflaretunnel.NewManagementToken("sbxr_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 		if err != nil {
 			return err
 		}

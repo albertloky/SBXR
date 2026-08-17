@@ -214,7 +214,7 @@ var completeRemovalDefinitions = [...]completeRemovalDefinition{
 		valid: func(p CompleteRemovalPresentation) bool {
 			guidanceValid := emptyCloudflareExternalGuidance(p.ManagementTokenRevocation)
 			if p.TokenPhase == RemovalTokenAwaitingOwnerRevocation {
-				guidanceValid = validCloudflareExternalGuidance(p.ManagementTokenRevocation, "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/")
+				guidanceValid = validCloudflareExternalGuidance(p.ManagementTokenRevocation, "https://developers.cloudflare.com/fundamentals/api/get-started/create-token/")
 			}
 			return validRemovalStart(p) && validRemovalProgress(p.Progress) && p.FinalStatus == 0 && p.RestoredStatus == 0 && p.RestoredRevision == 0 && p.CancellationProof == 0 && p.Checkpoint == RemovalIrreversibleStarted && p.TokenPhase >= RemovalProviderDeletionInProgress && p.TokenPhase <= RemovalLocalTokenDeleted && guidanceValid && !p.NoRecoveryMaterial
 		},

@@ -13,12 +13,12 @@ import (
 	"github.com/albertloky/SBXR/internal/networkpolicy"
 )
 
-const qualifiedOn = "2026-08-15"
+const qualifiedOn = "2026-08-17"
 
 var (
-	immutableID  = regexp.MustCompile(`^[0-9a-f]{32}$`)
-	accountToken = regexp.MustCompile(`^cfat_[A-Za-z0-9_-]{35,75}$`)
-	zoneName     = regexp.MustCompile(`(?i)^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$`)
+	immutableID = regexp.MustCompile(`^[0-9a-f]{32}$`)
+	userToken   = regexp.MustCompile(`^[A-Za-z0-9_-]{40,80}$`)
+	zoneName    = regexp.MustCompile(`(?i)^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$`)
 )
 
 type Outcome string
@@ -34,8 +34,8 @@ type ManagementToken struct{ value string }
 
 func NewManagementToken(value string) (ManagementToken, error) {
 	lower := strings.ToLower(value)
-	if !accountToken.MatchString(value) || strings.Contains(lower, "placeholder") || strings.Contains(lower, "your_token") {
-		return ManagementToken{}, errors.New("Cloudflare account API token required")
+	if !userToken.MatchString(value) || strings.HasPrefix(value, "cfat_") || strings.Contains(lower, "placeholder") || strings.Contains(lower, "your_token") {
+		return ManagementToken{}, errors.New("Dedicated Broad Cloudflare User API Token required")
 	}
 	return ManagementToken{value: value}, nil
 }
@@ -97,6 +97,7 @@ const (
 	APIMalformed    APIErrorKind = "malformed"
 	APIAmbiguous    APIErrorKind = "ambiguous"
 	APIPermanent    APIErrorKind = "permanent"
+	APILimit        APIErrorKind = "limit"
 )
 
 // APIError deliberately drops provider text at the Module boundary.
@@ -150,7 +151,7 @@ func (i Interface) DeleteAndVerifyManagementToken(ctx context.Context, request O
 	if err != nil || observed.Account.ID != request.AccountID || observed.Zone.ID != request.ZoneID || observed.Token.ID != tokenID || observed.Token.Status != "active" {
 		return errors.New("Cloudflare token identity is unproved")
 	}
-	if err := api.DeleteManagementToken(ctx, DeleteManagementTokenRequest{AccountID: request.AccountID, ID: tokenID, Token: request.Token}); err != nil {
+	if err := api.DeleteManagementToken(ctx, DeleteManagementTokenRequest{ID: tokenID, Token: request.Token}); err != nil {
 		return errors.New("Cloudflare token deletion failed")
 	}
 	if _, err := i.api.Observe(ctx, request); !apiErrorIs(err, APIUnauthorized) {
@@ -173,10 +174,11 @@ func (request ObservationRequest) String() string {
 func (request ObservationRequest) GoString() string { return request.String() }
 
 type Observation struct {
-	Account  AccountObservation
-	Zone     ZoneObservation
-	Token    TokenObservation
-	Policies []TokenPolicy
+	Account          AccountObservation
+	Zone             ZoneObservation
+	Token            TokenObservation
+	DNSListProven    bool
+	TunnelListProven bool
 }
 
 type AccountObservation struct {
@@ -199,20 +201,15 @@ type TokenObservation struct {
 	ExpiresOn *time.Time
 }
 
-type TokenPolicy struct {
-	Effect           string
-	PermissionGroups []string
-	Resources        map[string]string
-}
-
 type ViewRequest struct {
-	AccountID        string
-	ZoneID           string
-	ZoneName         string
-	Token            ManagementToken
-	TokenRemoved     bool
-	NetworkPath      networkpolicy.CloudflareTunnelPath
-	CredentialDetail bool
+	AccountID                     string
+	ZoneID                        string
+	ZoneName                      string
+	Token                         ManagementToken
+	TokenRemoved                  bool
+	NetworkPath                   networkpolicy.CloudflareTunnelPath
+	CredentialDetail              bool
+	DedicatedBroadPolicyConfirmed bool
 }
 
 func (request ViewRequest) String() string {
@@ -244,9 +241,10 @@ type PermissionCorrection struct {
 type PermissionKind uint8
 
 const (
-	AccountAPITokensReadPermission PermissionKind = iota + 1
+	UserAPITokensEditPermission PermissionKind = iota + 1
 	CloudflareTunnelEditPermission
-	DNSWritePermission
+	DNSEditPermission
+	ZoneReadPermission
 )
 
 func (result ViewResult) String() string {
@@ -309,9 +307,9 @@ type Walkthrough struct {
 type CredentialInput string
 
 const (
-	AccountIDInput    CredentialInput = "account-id"
-	ZoneIDInput       CredentialInput = "zone-id"
-	AccountTokenInput CredentialInput = "account-token"
+	AccountIDInput CredentialInput = "account-id"
+	ZoneIDInput    CredentialInput = "zone-id"
+	UserTokenInput CredentialInput = "user-token"
 )
 
 type CredentialHelp struct {
@@ -342,17 +340,18 @@ func CredentialGuidance(input CredentialInput) (CredentialHelp, bool) {
 			Example:        "22222222222222222222222222222222",
 			URL:            "https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/",
 		}, true
-	case AccountTokenInput:
+	case UserTokenInput:
 		return CredentialHelp{
 			Purpose: "Authorize only SBXR's Cloudflare work.",
 			Instructions: []string{
-				"Open Manage Account > Account API Tokens; Create Token.",
-				"Add Account > Account API Tokens > Read and Account > Cloudflare Tunnel > Edit for the selected account; add Zone > DNS > Edit for the selected zone.",
+				"Open My Profile > API Tokens; Create Token.",
+				"Add User > API Tokens > Edit, Account > Cloudflare Tunnel > Edit for all accounts, Zone > DNS > Edit for all zones, and Zone > Zone > Read for all zones.",
+				"Set no expiry and no client-IP restriction. Confirm that SBXR will restrict use to the selected account, selected zone, current and candidate token IDs, and exact immutable-ID-owned resources.",
 			},
-			AcceptedFormat:       "cfat_ plus 35 to 75 letters, digits, _ or -.",
-			CommonMistakes:       []string{"No Global API Key, user API token, Write, wildcard, or unrelated permission."},
-			Recovery:             "Create or correct the exact scoped Account API Token.",
-			URL:                  "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/",
+			AcceptedFormat:       "40 to 80 letters, digits, _ or -; no cfat_ prefix.",
+			CommonMistakes:       []string{"No Global API Key, Account API Token, expiry, client-IP restriction, narrow account scope, or narrow zone scope."},
+			Recovery:             "Create or correct the Dedicated Broad Cloudflare User API Token.",
+			URL:                  "https://developers.cloudflare.com/fundamentals/api/get-started/create-token/",
 			InfrastructureSecret: true,
 		}, true
 	default:
@@ -388,18 +387,18 @@ func ExternalCorrectionGuidance(correction ExternalCorrection) (ExternalCorrecti
 	case ManagementTokenRevocation:
 		help = ExternalCorrectionHelp{
 			Instructions: []string{
-				"Open Manage Account > Account API Tokens in the selected account.",
-				"Find the Account API Token named SBXR - selected account / selected zone and revoke only that Account API Token.",
-				"Do not revoke a Global API Key, user API token, Tunnel run token, or any unrelated account token. Return to SBXR and select Check again.",
+				"Open My Profile > API Tokens.",
+				"Find the exact Dedicated Broad Cloudflare User API Token ID recorded by SBXR and revoke only that token.",
+				"Do not revoke a Global API Key, Account API Token, Tunnel run token, or any unrelated user token. Return to SBXR and select Check again.",
 			},
-			URL: "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/",
+			URL: "https://developers.cloudflare.com/fundamentals/api/get-started/create-token/",
 		}
 	case TunnelRunTokenRotation:
 		help = ExternalCorrectionHelp{
 			Instructions: []string{
 				"Open the Cloudflare dashboard > Networking > Tunnels and select the committed SBXR Tunnel.",
 				"Select Rotate token for only that Tunnel run token, then return to SBXR forward recovery.",
-				"Do not rotate another Tunnel or the management Account API Token.",
+				"Do not rotate another Tunnel or the Dedicated Broad Cloudflare User API Token.",
 			},
 			URL: "https://developers.cloudflare.com/tunnel/advanced/tunnel-tokens/",
 		}
@@ -461,12 +460,12 @@ func (i Interface) View(ctx context.Context, request ViewRequest) ViewResult {
 		result.Credential.FirstFour = request.Token.value[:4]
 		result.Credential.LastFour = request.Token.value[len(request.Token.value)-4:]
 	}
-	valid, found, effective, unapproved := validAuthority(request, observed)
-	if valid && observed.Token.ExpiresOn != nil && !observed.Token.ExpiresOn.After(result.LastCheck) {
-		valid = false
-		found = "token expiry is not after the last check"
+	valid, found := validAuthority(request, observed)
+	effective := []string(nil)
+	if request.DedicatedBroadPolicyConfirmed {
+		effective = requiredPermissions()
 	}
-	result.Capability = CapabilityStatus{RequiredPermissions: requiredPermissions(), EffectivePermissions: effective, UnapprovedPermissions: unapproved, AccountID: request.AccountID, ZoneID: request.ZoneID, ReadsVerified: valid, Exact: valid}
+	result.Capability = CapabilityStatus{RequiredPermissions: requiredPermissions(), EffectivePermissions: effective, AccountID: request.AccountID, ZoneID: request.ZoneID, ReadsVerified: valid, Exact: valid}
 	if !result.Capability.ReadsVerified {
 		result.Health = missingPermissionHealth(found)
 		result.PermissionCorrection = permissionCorrection(request, found, permissionFromFinding(found))
@@ -478,7 +477,7 @@ func (i Interface) View(ctx context.Context, request ViewRequest) ViewResult {
 	}
 	result.verifiedManagementToken = VerifiedManagementToken{value: request.Token.value, used: &atomic.Bool{}}
 	result.tokenVerified = true
-	result.Health = Health{Outcome: Healthy, Code: "CLOUDFLARE-AUTHORITY-VERIFIED", Explanation: "The scoped account, zone, token capability, delegation, and Network Policy path are verified.", NextActions: []string{"Check now", "Replace token", "Remove from SBXR"}}
+	result.Health = Health{Outcome: Healthy, Code: "CLOUDFLARE-AUTHORITY-VERIFIED", Explanation: "The Owner-confirmed broad policy, active token, selected account and zone, exact read probes, delegation, and Network Policy path are verified. Provider reads do not prove write authority.", NextActions: []string{"Check now", "Replace token", "Remove from SBXR", "Rotate genuine Tunnel run token", "Rotate management token"}}
 	return finish(result)
 }
 
@@ -527,95 +526,37 @@ func (i Interface) observe(ctx context.Context, request ObservationRequest) (Obs
 
 func validViewRequest(request ViewRequest) bool {
 	tokenValid := request.TokenRemoved && request.Token.value == "" && !request.CredentialDetail || !request.TokenRemoved && request.Token.value != ""
-	return immutableID.MatchString(request.AccountID) && immutableID.MatchString(request.ZoneID) && validZoneName(request.ZoneName) && tokenValid
+	return immutableID.MatchString(request.AccountID) && immutableID.MatchString(request.ZoneID) && validZoneName(request.ZoneName) && tokenValid && (request.TokenRemoved || request.DedicatedBroadPolicyConfirmed)
 }
 
 func validZoneName(name string) bool { return len(name) <= 253 && zoneName.MatchString(name) }
 
-func validAuthority(request ViewRequest, observed Observation) (bool, string, []string, int) {
-	effective, unapproved, policyProblem := assessPolicies(request, observed.Policies)
+func validAuthority(request ViewRequest, observed Observation) (bool, string) {
 	if observed.Account.ID != request.AccountID {
-		return false, "account ID does not match the selected account", effective, unapproved
+		return false, "account ID does not match the selected account"
 	}
 	if observed.Zone.ID != request.ZoneID || observed.Zone.Name != request.ZoneName {
-		return false, "zone identity does not match the selected zone", effective, unapproved
+		return false, "zone identity does not match the selected zone"
 	}
 	if observed.Zone.AccountID != request.AccountID {
-		return false, "zone account does not match the selected account", effective, unapproved
+		return false, "zone account does not match the selected account"
 	}
 	if observed.Token.Status != "active" {
 		if observed.Token.Status == "disabled" || observed.Token.Status == "expired" {
-			return false, "token status is " + observed.Token.Status, effective, unapproved
+			return false, "token status is " + observed.Token.Status
 		}
-		return false, "token status is unsupported", effective, unapproved
+		return false, "token status is unsupported"
 	}
 	if !immutableID.MatchString(observed.Token.ID) {
-		return false, "token identifier is malformed", effective, unapproved
+		return false, "token identifier is malformed"
 	}
-	if policyProblem != "" {
-		return false, policyProblem, effective, unapproved
+	if observed.Token.ExpiresOn != nil {
+		return false, "token has an expiry"
 	}
-	return true, "exact selected account, zone, permissions, and resources", effective, unapproved
-}
-
-func assessPolicies(request ViewRequest, policies []TokenPolicy) ([]string, int, string) {
-	want := map[string]string{
-		"Account API Tokens Read": "com.cloudflare.api.account." + request.AccountID,
-		"Cloudflare Tunnel Edit":  "com.cloudflare.api.account." + request.AccountID,
-		"DNS Write":               "com.cloudflare.api.account.zone." + request.ZoneID,
+	if !observed.DNSListProven || !observed.TunnelListProven {
+		return false, "selected DNS and Tunnel probes are unproved"
 	}
-	seen := make(map[string]bool, len(want))
-	unapproved := 0
-	problem := ""
-	for _, policy := range policies {
-		if policy.Effect != "allow" {
-			if problem == "" {
-				if policy.Effect == "deny" {
-					problem = "policy effect is deny"
-				} else {
-					problem = "policy effect is unsupported"
-				}
-			}
-		}
-		if len(policy.Resources) != 1 && problem == "" {
-			problem = fmt.Sprintf("policy has %d resources", len(policy.Resources))
-		}
-		if len(policy.PermissionGroups) == 0 && problem == "" {
-			problem = "policy has no permission group"
-		}
-		for _, permission := range policy.PermissionGroups {
-			resource, known := want[permission]
-			if !known {
-				unapproved++
-				if problem == "" {
-					problem = "token includes an unapproved permission"
-				}
-				continue
-			}
-			if seen[permission] {
-				if problem == "" {
-					problem = "token repeats " + permission
-				}
-				continue
-			}
-			if policy.Effect != "allow" || len(policy.Resources) != 1 || policy.Resources[resource] != "*" {
-				if problem == "" {
-					problem = "token has an unexpected resource for " + permission
-				}
-				continue
-			}
-			seen[permission] = true
-		}
-	}
-	effective := make([]string, 0, len(seen))
-	for _, permission := range requiredPermissions() {
-		if seen[permission] {
-			effective = append(effective, permission)
-		} else if problem == "" {
-			problem = "token is missing " + permission
-		}
-	}
-	return effective, unapproved, problem
+	return true, "Owner-confirmed broad policy and exact selected provider probes"
 }
 
 func safeZoneStatus(status string) string {
@@ -638,18 +579,18 @@ func sameNameservers(assigned, observed []string) bool {
 }
 
 func requiredPermissions() []string {
-	return []string{"Account API Tokens Read", "Cloudflare Tunnel Edit", "DNS Write"}
+	return []string{"User API Tokens Edit", "Cloudflare Tunnel Edit", "DNS Edit", "Zone Read"}
 }
 
 func walkthrough(request ViewRequest) Walkthrough {
 	return Walkthrough{
 		QualifiedOn:   qualifiedOn,
 		DashboardURL:  "https://dash.cloudflare.com/",
-		AccountTokens: "Manage Account > Account API Tokens",
+		AccountTokens: "My Profile > API Tokens",
 		DNSRecords:    "selected domain > DNS > Records",
 		Tunnels:       "Cloudflare One > Networks > Tunnels & Mesh",
-		Permissions:   []string{"Account > Account API Tokens > Read", "Account > Cloudflare Tunnel > Edit", "Zone > DNS > Edit"},
-		Resources:     []string{"only account " + request.AccountID, "only zone " + request.ZoneID},
+		Permissions:   []string{"User > API Tokens > Edit", "Account > Cloudflare Tunnel > Edit", "Zone > DNS > Edit", "Zone > Zone > Read"},
+		Resources:     []string{"all accounts and all zones at the provider", "SBXR use restricted to account " + request.AccountID, "SBXR use restricted to zone " + request.ZoneID},
 	}
 }
 
@@ -658,29 +599,29 @@ func missingPermissionHealth(found ...string) Health {
 	if len(found) > 0 && found[0] != "" {
 		fact = found[0]
 	}
-	return Health{Outcome: Failed, Code: "CLOUDFLARE-TOKEN-PERMISSION", Found: fact, Explanation: "The token's active status, selected binding, exact capabilities, or resource scope could not be proved.", NextActions: []string{"Check current token again", "Enter replacement token", "Verify replacement", "Back"}}
+	return Health{Outcome: NeedsAttention, Code: "CLOUDFLARE-TOKEN-PERMISSION", Found: fact, Explanation: "The active Dedicated Broad Cloudflare User API Token or one selected-resource probe could not be proved.", NextActions: []string{"Check current token again", "Enter replacement token", "Verify replacement", "Back"}}
 }
 
 func permissionCorrection(request ViewRequest, found string, permission PermissionKind) PermissionCorrection {
 	label := permission.dashboardLabel()
 	if label == "" {
-		label = "exact selected Cloudflare Account API Token authority"
+		label = "exact Dedicated Broad Cloudflare User API Token authority"
 	}
 	scope := "selected account " + request.AccountID
-	if permission == DNSWritePermission {
+	if permission == DNSEditPermission || permission == ZoneReadPermission {
 		scope = "selected zone " + request.ZoneID
 	}
 	required := label + " on " + scope
 	return PermissionCorrection{
-		Capability: "Required Cloudflare Account API Token authority", AccountID: request.AccountID, ZoneID: request.ZoneID, ZoneName: request.ZoneName,
+		Capability: "Required Dedicated Broad Cloudflare User API Token authority", AccountID: request.AccountID, ZoneID: request.ZoneID, ZoneName: request.ZoneName,
 		Found: found, Required: required, WhyStopped: "SBXR does not bypass required Cloudflare authority", Evidence: "copyable redacted CLOUDFLARE-TOKEN-PERMISSION result",
-		DashboardSteps: []string{"Open Manage Account > Account API Tokens in the selected account.", "Edit the SBXR - selected account / selected zone token; require " + required + ".", "Save the token, return to SBXR, and select Check current token again."},
-		URL:            "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/",
+		DashboardSteps: []string{"Open My Profile > API Tokens.", "Edit the SBXR Dedicated Broad Cloudflare User API Token; require " + required + ".", "Keep all-account and all-zone scopes, no expiry, and no client-IP restriction; return to SBXR and select Check current token again."},
+		URL:            "https://developers.cloudflare.com/fundamentals/api/get-started/create-token/",
 	}
 }
 
 func permissionFromFinding(found string) PermissionKind {
-	for _, permission := range []PermissionKind{AccountAPITokensReadPermission, CloudflareTunnelEditPermission, DNSWritePermission} {
+	for _, permission := range []PermissionKind{UserAPITokensEditPermission, CloudflareTunnelEditPermission, DNSEditPermission, ZoneReadPermission} {
 		if strings.Contains(found, permission.apiName()) {
 			return permission
 		}
@@ -698,12 +639,14 @@ func apiRequiredPermission(err error) PermissionKind {
 
 func (permission PermissionKind) apiName() string {
 	switch permission {
-	case AccountAPITokensReadPermission:
-		return "Account API Tokens Read"
+	case UserAPITokensEditPermission:
+		return "User API Tokens Edit"
 	case CloudflareTunnelEditPermission:
 		return "Cloudflare Tunnel Edit"
-	case DNSWritePermission:
-		return "DNS Write"
+	case DNSEditPermission:
+		return "DNS Edit"
+	case ZoneReadPermission:
+		return "Zone Read"
 	default:
 		return ""
 	}
@@ -711,12 +654,14 @@ func (permission PermissionKind) apiName() string {
 
 func (permission PermissionKind) dashboardLabel() string {
 	switch permission {
-	case AccountAPITokensReadPermission:
-		return "Account > Account API Tokens > Read"
+	case UserAPITokensEditPermission:
+		return "User > API Tokens > Edit"
 	case CloudflareTunnelEditPermission:
 		return "Account > Cloudflare Tunnel > Edit"
-	case DNSWritePermission:
+	case DNSEditPermission:
 		return "Zone > DNS > Edit"
+	case ZoneReadPermission:
+		return "Zone > Zone > Read"
 	default:
 		return ""
 	}
@@ -726,8 +671,10 @@ func safeAPIHealth(err error) Health {
 	switch {
 	case apiErrorIs(err, APIUnauthorized), apiErrorIs(err, APIForbidden):
 		return missingPermissionHealth("Cloudflare refused authorization")
+	case apiErrorIs(err, APILimit):
+		return Health{Outcome: NeedsAttention, Code: "CLOUDFLARE-ZONE-LIST-LIMIT", Found: "more than 500 active zones are visible to the token", Required: "at most 500 active zones for bounded discovery", Explanation: "Cloudflare active-zone discovery exceeded the documented safe bound.", NextActions: []string{"Reduce the visible active-zone set", "Check again", "Back"}}
 	case apiErrorIs(err, APIMalformed), apiErrorIs(err, APIAmbiguous), apiErrorIs(err, APIPermanent):
-		return Health{Outcome: Failed, Code: "CLOUDFLARE-API-REFUSED", Explanation: "Cloudflare returned no unambiguous supported observation.", NextActions: []string{"Check again", "Back"}}
+		return Health{Outcome: Unknown, Code: "CLOUDFLARE-API-REFUSED", Explanation: "Cloudflare returned no unambiguous supported observation.", NextActions: []string{"Check again", "Back"}}
 	default:
 		return Health{Outcome: Unknown, Code: "CLOUDFLARE-API-TEMPORARY", Explanation: "Cloudflare is temporarily unavailable or the check was interrupted.", NextActions: []string{"Check again", "Back"}}
 	}

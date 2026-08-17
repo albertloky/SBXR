@@ -400,6 +400,10 @@ type RunTokenRotationAuthority interface {
 	StateRunTokenRotation() (source any, bindingJSON []byte, templateSHA256 string, valid bool)
 }
 
+type ManagementTokenRotationAuthority interface {
+	StateManagementTokenRotation() (bindingJSON []byte, templateSHA256 string, valid bool)
+}
+
 type CloudflareRepairAuthority interface {
 	StateCloudflareRepair() (source any, bindingJSON []byte, templateSHA256 string, valid bool)
 }
@@ -422,13 +426,14 @@ type ConnectionProfilesRepairAuthority interface {
 }
 
 type deferredCloudflare struct {
-	candidate  DesiredState
-	validators SemanticValidators
-	materials  ServiceMaterials
-	runToken   VerifiedInfrastructureSecret
-	binding    CloudflareEvidenceBinding
-	rotation   bool
-	used       atomic.Bool
+	candidate          DesiredState
+	validators         SemanticValidators
+	materials          ServiceMaterials
+	runToken           VerifiedInfrastructureSecret
+	binding            CloudflareEvidenceBinding
+	rotation           bool
+	managementRotation bool
+	used               atomic.Bool
 }
 
 type managementTokenChange struct{}
@@ -690,7 +695,7 @@ func (i Interface) PrepareManagementTokenCommit(request PrepareRequest, authorit
 	switch binding.Action {
 	case "replace":
 		verified, ok := source.(VerifiedInfrastructureSecret)
-		if !ok || request.Candidate.Cloudflare.ManagementToken.isSet() || request.Candidate.Cloudflare.ManagementTokenRemoved || request.Candidate.Cloudflare.ManagementTokenState != "" {
+		if !ok || request.Candidate.Cloudflare.ManagementToken.isSet() || request.Candidate.Cloudflare.ManagementTokenRemoved || request.Candidate.Cloudflare.ManagementTokenState != "" || !request.Candidate.Cloudflare.DedicatedBroadPolicyConfirmed {
 			return nil, finding("STATE-CLOUDFLARE-TOKEN-PLAN", "Cloudflare management-token replacement", "the protected replacement slot is not empty", "one empty slot filled only from the verified Cloudflare handoff", "a caller-supplied token cannot become Desired State", "rebuild the replacement Plan")
 		}
 		request.Candidate.Cloudflare.ManagementToken, ok = NewInfrastructureSecretFrom(verified)
@@ -818,6 +823,35 @@ func (i Interface) PrepareRunTokenRotationCommit(request PrepareRequest, authori
 	return commit, err
 }
 
+// PrepareManagementTokenRotationCommit reserves only the management-token
+// slot. Cloudflare creates and proves its value after Apply starts.
+func (i Interface) PrepareManagementTokenRotationCommit(request PrepareRequest, authority ManagementTokenRotationAuthority) (*PreparedCommit, error) {
+	typeOf := reflect.TypeOf(authority)
+	if typeOf == nil || typeOf.Kind() != reflect.Pointer || typeOf.Elem().PkgPath() != "github.com/albertloky/SBXR/internal/cloudflaretunnel" || typeOf.Elem().Name() != "Plan" {
+		return nil, finding("STATE-CLOUDFLARE-MANAGEMENT-TOKEN-ROTATION-PLAN", "management-token rotation", "the authority did not come from Cloudflare Tunnel", "one exact reviewed healthy-rotation Plan", "caller-made secret handoffs cannot authorize State", "rebuild the rotation Plan")
+	}
+	bindingJSON, templateSHA256, valid := authority.StateManagementTokenRotation()
+	var planned struct{ AccountID, ZoneID, ZoneName, CurrentTokenID string }
+	bindingErr := json.Unmarshal(bindingJSON, &planned)
+	tokenID, tokenIDErr := hex.DecodeString(planned.CurrentTokenID)
+	template, templateErr := marshalProtectedJSON(request.Candidate)
+	templateDigest := sha256.Sum256(template)
+	cloudflare := request.Candidate.Cloudflare
+	loaded := request.Loaded.Snapshot
+	fixed := loaded != nil && reflect.DeepEqual(loaded.DesiredState, request.Candidate) && planned.AccountID == cloudflare.AccountID && planned.ZoneID == cloudflare.ZoneID && planned.ZoneName == cloudflare.ZoneName && planned.AccountID == loaded.DesiredState.Cloudflare.AccountID && planned.ZoneID == loaded.DesiredState.Cloudflare.ZoneID && planned.ZoneName == loaded.DesiredState.Cloudflare.ZoneName
+	if !valid || bindingErr != nil || tokenIDErr != nil || len(tokenID) != 16 || !fixed || templateErr != nil || hex.EncodeToString(templateDigest[:]) != templateSHA256 || !cloudflare.ManagementToken.isSet() || !cloudflare.DedicatedBroadPolicyConfirmed || !validateSemantics(request.Candidate, request.SemanticValidators) {
+		return nil, finding("STATE-CLOUDFLARE-MANAGEMENT-TOKEN-ROTATION-PLAN", "management-token rotation", "the reviewed current authority or deferred slot is incomplete", "one exact unchanged current State and one reviewed provider token identity", "State never guesses provider authority or credentials", "rebuild the rotation Plan")
+	}
+	original := request.Candidate
+	request.Candidate.Cloudflare.ManagementToken = NewInfrastructureSecret("deferred-cloudflare-management-token")
+	metadata := &deferredCloudflare{candidate: original, validators: request.SemanticValidators, materials: request.ServiceMaterials, managementRotation: true}
+	commit, err := i.prepareCommit(request, metadata, nil, false)
+	if err == nil {
+		commit.candidateSHA256 = templateSHA256
+	}
+	return commit, err
+}
+
 // PrepareCloudflareRepairCommit admits an unchanged Desired State revision only
 // when Cloudflare bound every repair target to the currently loaded ownership.
 func (i Interface) PrepareCloudflareRepairCommit(request PrepareRequest, authority CloudflareRepairAuthority) (*PreparedCommit, error) {
@@ -876,7 +910,7 @@ func (i Interface) prepareCommit(request PrepareRequest, deferred *deferredCloud
 			}
 		}
 		changed := problem == nil && (prior.desiredState.Cloudflare.ManagementToken.value != request.Candidate.Cloudflare.ManagementToken.value || prior.desiredState.Cloudflare.ManagementTokenRemoved != request.Candidate.Cloudflare.ManagementTokenRemoved || prior.desiredState.Cloudflare.ManagementTokenState != request.Candidate.Cloudflare.ManagementTokenState)
-		authorizedTokenChange := tokenChange != nil || deferred != nil && !deferred.rotation
+		authorizedTokenChange := tokenChange != nil || deferred != nil && (!deferred.rotation || deferred.managementRotation)
 		if request.Loaded.loaded.status != NotInstalled && changed != authorizedTokenChange {
 			return nil, finding("STATE-CLOUDFLARE-TOKEN-PLAN", "Cloudflare management-token change", "the candidate token state does not match its reviewed authority", "every replacement or removal to use one Cloudflare-owned Plan", "generic setting Plans cannot change Infrastructure Secrets", "rebuild the management-token Plan")
 		}
@@ -915,7 +949,7 @@ func (i Interface) prepareCommit(request PrepareRequest, deferred *deferredCloud
 		return nil, finding("STATE-CANDIDATE-SEMANTIC", "Module-owned semantic validation", "an owning validator is missing or refused its typed section", "successful validation by every owning Module", "State cannot replace operational ownership or accept caller-made validation claims", "correct the candidate through the owning Module and review again")
 	}
 	expectedMaterials := expectedServiceMaterials(request.Candidate)
-	if deferred != nil {
+	if deferred != nil && !deferred.managementRotation {
 		expectedMaterials.Cloudflared = nil
 	}
 	if !reflect.DeepEqual(request.ServiceMaterials, expectedMaterials) {

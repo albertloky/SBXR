@@ -16,7 +16,7 @@ func (observer fixedRemovalObserver) ObserveRemovalResource(string, string, stri
 }
 
 func TestRemovalRecoveryAuthorityRoundTripsOnlyThroughProtectedSnapshot(t *testing.T) {
-	secret := "cfat_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	secret := "sbxr_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	token, err := NewManagementToken(secret)
 	if err != nil {
 		t.Fatal(err)

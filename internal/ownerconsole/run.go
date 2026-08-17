@@ -1874,6 +1874,9 @@ func (m *model) activateCloudflareAction() tea.Cmd {
 		if action.request == VerifyInitialManagementToken || action.request == VerifyReplacementManagementToken {
 			request.Token = m.input
 		}
+		if action.request == VerifyInitialManagementToken || action.request == VerifyReplacementManagementToken {
+			request.DedicatedBroadPolicyConfirmed = true
+		}
 		m.actionGeneration++
 		identity := asyncRequestIdentity{generation: m.actionGeneration, origin: m.scenario}
 		requestContext, cancel := context.WithCancel(m.runContext)

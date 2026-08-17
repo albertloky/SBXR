@@ -17,46 +17,51 @@ import (
 type DurableCheckpoint string
 
 const (
-	Prepared                              DurableCheckpoint = "Prepared"
-	StepStarted                           DurableCheckpoint = "Step started"
-	StepCompleted                         DurableCheckpoint = "Step completed"
-	StateFinalized                        DurableCheckpoint = "Deferred State finalized"
-	PrePublicationHealthPassed            DurableCheckpoint = "Pre-publication health passed"
-	OwnedExternalDeletionVerified         DurableCheckpoint = "Owned external deletion verified"
-	IrreversibleRemovalStarted            DurableCheckpoint = "Irreversible removal started"
-	OwnedDNSRecordsDeleted                DurableCheckpoint = "Owned Cloudflare DNS records deleted"
-	OwnedTunnelDeleted                    DurableCheckpoint = "Owned Cloudflare Tunnel deleted"
-	ManagementTokenDeletionStarted        DurableCheckpoint = "Cloudflare management token deletion started"
-	IrreversibleRunTokenRotationStarted   DurableCheckpoint = "Irreversible run-token rotation started"
-	IrreversibleCloudflareSetupStarted    DurableCheckpoint = "Irreversible Cloudflare setup started"
-	CloudflareSetupRollbackDeleted        DurableCheckpoint = "Cloudflare setup Rollback Snapshot deleted"
-	IrreversibleReclamationStarted        DurableCheckpoint = "Irreversible reclamation started"
-	ReclamationProcessStopped             DurableCheckpoint = "Reclamation process stopped"
-	ReclamationTargetDeleted              DurableCheckpoint = "Reclamation target deleted"
-	PackageHoldsRemoved                   DurableCheckpoint = "SBXR package holds removed"
-	TokenRevocationVerified               DurableCheckpoint = "Cloudflare management token deletion verified"
-	LocalStateDeleted                     DurableCheckpoint = "Local State deleted"
-	SecretsDeleted                        DurableCheckpoint = "Infrastructure Secrets deleted"
-	CertificatesDeleted                   DurableCheckpoint = "Certificates deleted"
-	TransactionMaterialDeletionAuthorized DurableCheckpoint = "Transaction material deletion authorized"
-	TransactionMaterialDeleted            DurableCheckpoint = "Transaction material deleted"
-	ReleasesDeleted                       DurableCheckpoint = "Releases deleted"
-	UnitsDeleted                          DurableCheckpoint = "Units deleted"
-	IdentitiesDeleted                     DurableCheckpoint = "Identities deleted"
-	ListenersDeleted                      DurableCheckpoint = "Listeners deleted"
-	PreparedArtifactsDeleted              DurableCheckpoint = "Prepared artifacts deleted"
-	OwnedFirewallStateDeleted             DurableCheckpoint = "Owned firewall state deleted"
-	FinalRemovalAbsenceVerified           DurableCheckpoint = "Final removal absence verified"
-	StatePublicationStarted               DurableCheckpoint = "Desired State publication started"
-	StatePublished                        DurableCheckpoint = "Desired State published"
-	PostPublicationHealthPassed           DurableCheckpoint = "Post-publication health passed"
-	Complete                              DurableCheckpoint = "Complete"
-	CancellationRequested                 DurableCheckpoint = "Cancellation requested"
-	RollbackStarted                       DurableCheckpoint = "Rollback started"
-	RollbackStepStarted                   DurableCheckpoint = "Rollback step started"
-	RollbackStepCompleted                 DurableCheckpoint = "Rollback step completed"
-	RollbackVerified                      DurableCheckpoint = "Rollback verified"
-	RolledBack                            DurableCheckpoint = "Rolled back"
+	Prepared                                      DurableCheckpoint = "Prepared"
+	StepStarted                                   DurableCheckpoint = "Step started"
+	StepCompleted                                 DurableCheckpoint = "Step completed"
+	StateFinalized                                DurableCheckpoint = "Deferred State finalized"
+	PrePublicationHealthPassed                    DurableCheckpoint = "Pre-publication health passed"
+	OwnedExternalDeletionVerified                 DurableCheckpoint = "Owned external deletion verified"
+	IrreversibleRemovalStarted                    DurableCheckpoint = "Irreversible removal started"
+	OwnedDNSRecordsDeleted                        DurableCheckpoint = "Owned Cloudflare DNS records deleted"
+	OwnedTunnelDeleted                            DurableCheckpoint = "Owned Cloudflare Tunnel deleted"
+	ManagementTokenDeletionStarted                DurableCheckpoint = "Cloudflare management token deletion started"
+	IrreversibleRunTokenRotationStarted           DurableCheckpoint = "Irreversible run-token rotation started"
+	ManagementTokenCandidateIntentPrepared        DurableCheckpoint = "Management-token candidate intent prepared"
+	ManagementTokenCandidatePrepared              DurableCheckpoint = "Management-token candidate prepared"
+	ManagementTokenCandidateCleanupRequired       DurableCheckpoint = "Management-token candidate cleanup required"
+	IrreversibleManagementTokenReplacementStarted DurableCheckpoint = "Irreversible management-token replacement started"
+	ManagementTokenRollbackDeleted                DurableCheckpoint = "Management-token Rollback Snapshot deleted"
+	IrreversibleCloudflareSetupStarted            DurableCheckpoint = "Irreversible Cloudflare setup started"
+	CloudflareSetupRollbackDeleted                DurableCheckpoint = "Cloudflare setup Rollback Snapshot deleted"
+	IrreversibleReclamationStarted                DurableCheckpoint = "Irreversible reclamation started"
+	ReclamationProcessStopped                     DurableCheckpoint = "Reclamation process stopped"
+	ReclamationTargetDeleted                      DurableCheckpoint = "Reclamation target deleted"
+	PackageHoldsRemoved                           DurableCheckpoint = "SBXR package holds removed"
+	TokenRevocationVerified                       DurableCheckpoint = "Cloudflare management token deletion verified"
+	LocalStateDeleted                             DurableCheckpoint = "Local State deleted"
+	SecretsDeleted                                DurableCheckpoint = "Infrastructure Secrets deleted"
+	CertificatesDeleted                           DurableCheckpoint = "Certificates deleted"
+	TransactionMaterialDeletionAuthorized         DurableCheckpoint = "Transaction material deletion authorized"
+	TransactionMaterialDeleted                    DurableCheckpoint = "Transaction material deleted"
+	ReleasesDeleted                               DurableCheckpoint = "Releases deleted"
+	UnitsDeleted                                  DurableCheckpoint = "Units deleted"
+	IdentitiesDeleted                             DurableCheckpoint = "Identities deleted"
+	ListenersDeleted                              DurableCheckpoint = "Listeners deleted"
+	PreparedArtifactsDeleted                      DurableCheckpoint = "Prepared artifacts deleted"
+	OwnedFirewallStateDeleted                     DurableCheckpoint = "Owned firewall state deleted"
+	FinalRemovalAbsenceVerified                   DurableCheckpoint = "Final removal absence verified"
+	StatePublicationStarted                       DurableCheckpoint = "Desired State publication started"
+	StatePublished                                DurableCheckpoint = "Desired State published"
+	PostPublicationHealthPassed                   DurableCheckpoint = "Post-publication health passed"
+	Complete                                      DurableCheckpoint = "Complete"
+	CancellationRequested                         DurableCheckpoint = "Cancellation requested"
+	RollbackStarted                               DurableCheckpoint = "Rollback started"
+	RollbackStepStarted                           DurableCheckpoint = "Rollback step started"
+	RollbackStepCompleted                         DurableCheckpoint = "Rollback step completed"
+	RollbackVerified                              DurableCheckpoint = "Rollback verified"
+	RolledBack                                    DurableCheckpoint = "Rolled back"
 )
 
 type CheckpointRecord struct {
@@ -358,6 +363,16 @@ type RunTokenRotationAdapter interface {
 	LoadRunTokenRotationState(ExecutionLease, RecoveryTransaction) (any, error)
 }
 
+type ManagementTokenRotationAdapter interface {
+	PrepareManagementTokenRotation(ExecutionLease, string, time.Duration) (cleanupRequired bool, err error)
+	RequireManagementTokenCandidateCleanup(ExecutionLease, string) error
+	CleanupManagementTokenCandidate(ExecutionLease, string, time.Duration) error
+	StartManagementTokenRotation(ExecutionLease, string, time.Duration) (checkpointCrossed bool, err error)
+	DeleteManagementTokenRollback(ExecutionLease, string) error
+	FinalizeManagementTokenRotation(ExecutionLease, RecoveryTransaction, time.Duration) (material any, binding StateTransactionBinding, evidence StepEvidence, err error)
+	LoadManagementTokenRotationState(ExecutionLease, RecoveryTransaction) (any, error)
+}
+
 type ForwardReclamationAdapter interface {
 	ForwardChangeAdapter
 	VerifyReclamationReady(ExecutionLease, string, ReclamationTarget, time.Duration) error
@@ -384,6 +399,8 @@ type StateRecovery interface {
 	SystemChangesRestoreDurable(lease any, binding []byte, prior, candidate io.Reader) ([]byte, error)
 	SystemChangesFinalizeRunTokenRotation(lease any, binding []byte, candidate io.Reader, source any) (any, error)
 	SystemChangesLoadRunTokenRotation(lease any, binding []byte, candidate, manifests io.Reader) (any, error)
+	SystemChangesFinalizeManagementTokenRotation(lease any, binding []byte, candidate io.Reader, source any) (any, error)
+	SystemChangesLoadManagementTokenRotation(lease any, binding []byte, candidate, manifests io.Reader) (any, error)
 	SystemChangesLoadForwardChange(lease any, binding []byte, candidate, manifests io.Reader) (any, error)
 }
 
@@ -509,7 +526,43 @@ func (i Interface) recover(identityAuthority RecoverySSHIdentityAuthority, autho
 		}
 		return finish(lock, continueIrreversibleRemoval(lease, adapter, removalAdapter, recovery, spec))
 	}
-	if recovery.Mutation == RotationMutation && runTokenRotationCheckpoint(recovery.LastCheckpoint) {
+	if recovery.Mutation == RotationMutation && (runTokenRotationCheckpoint(recovery.LastCheckpoint) || managementTokenRotationChange(spec) && (recovery.LastCheckpoint == Prepared || recovery.LastCheckpoint == ManagementTokenCandidateIntentPrepared || recovery.LastCheckpoint == ManagementTokenCandidatePrepared || recovery.LastCheckpoint == ManagementTokenCandidateCleanupRequired)) {
+		if managementTokenRotationChange(spec) {
+			rotationAdapter, ok := i.adapter.(ManagementTokenRotationAdapter)
+			if !ok {
+				return finish(lock, forwardManagementTokenRotationRequired(spec, "SYSTEM-CHANGES-MANAGEMENT-TOKEN-ADAPTER", recovery.LastCheckpoint))
+			}
+			if recovery.LastCheckpoint == Prepared || recovery.LastCheckpoint == ManagementTokenCandidateIntentPrepared {
+				cleanup, err := rotationAdapter.PrepareManagementTokenRotation(lease, recovery.ChangeSet, recovery.Timeouts.Step)
+				if cleanup {
+					return finish(lock, forwardManagementTokenRotationRequired(spec, "SYSTEM-CHANGES-MANAGEMENT-TOKEN-CLEANUP", ManagementTokenCandidateCleanupRequired))
+				}
+				if err != nil {
+					return finish(lock, rollbackRecovered(lease, adapter, recoveryAdapter, recovery, spec))
+				}
+				recovery.LastCheckpoint = ManagementTokenCandidatePrepared
+			}
+			if recovery.LastCheckpoint == ManagementTokenCandidateCleanupRequired {
+				if rotationAdapter.CleanupManagementTokenCandidate(lease, recovery.ChangeSet, recovery.Timeouts.Step) != nil {
+					return finish(lock, forwardManagementTokenRotationRequired(spec, "SYSTEM-CHANGES-MANAGEMENT-TOKEN-CLEANUP", recovery.LastCheckpoint))
+				}
+				return finish(lock, rollbackRecovered(lease, adapter, recoveryAdapter, recovery, spec))
+			}
+			if recovery.LastCheckpoint == ManagementTokenCandidatePrepared {
+				crossed, err := rotationAdapter.StartManagementTokenRotation(lease, recovery.ChangeSet, recovery.Timeouts.Step)
+				if err != nil {
+					if crossed {
+						return finish(lock, forwardManagementTokenRotationRequired(spec, "SYSTEM-CHANGES-MANAGEMENT-TOKEN-CHECKPOINT", IrreversibleManagementTokenReplacementStarted))
+					}
+					if rotationAdapter.RequireManagementTokenCandidateCleanup(lease, recovery.ChangeSet) != nil || rotationAdapter.CleanupManagementTokenCandidate(lease, recovery.ChangeSet, recovery.Timeouts.Step) != nil {
+						return finish(lock, forwardManagementTokenRotationRequired(spec, "SYSTEM-CHANGES-MANAGEMENT-TOKEN-CLEANUP", ManagementTokenCandidateCleanupRequired))
+					}
+					return finish(lock, rollbackRecovered(lease, adapter, recoveryAdapter, recovery, spec))
+				}
+				recovery.LastCheckpoint = IrreversibleManagementTokenReplacementStarted
+			}
+			return finish(lock, continueManagementTokenRotation(lease, adapter, rotationAdapter, recovery, spec))
+		}
 		rotationAdapter, ok := i.adapter.(RunTokenRotationAdapter)
 		if !ok {
 			return finish(lock, forwardRunTokenRotationRequired(spec, "SYSTEM-CHANGES-RUN-TOKEN-ADAPTER", recovery.LastCheckpoint))
@@ -586,8 +639,15 @@ func validRecoveryTransaction(recovery RecoveryTransaction) bool {
 	if recovery.Mutation == CompleteRemovalMutation != removal || removal && !validRemovalSteps(recovery.Steps) {
 		return false
 	}
-	if recovery.Mutation == RotationMutation && runTokenRotationCheckpoint(recovery.LastCheckpoint) && !validRunTokenRecoveryChecks(recovery.Checks) {
-		return false
+	if recovery.Mutation == RotationMutation && runTokenRotationCheckpoint(recovery.LastCheckpoint) {
+		spec := ChangeSetSpec{Mutation: recovery.Mutation, Steps: recovery.Steps}
+		if managementTokenRotationChange(spec) {
+			if !validManagementTokenRotationChecks(recovery.Checks) {
+				return false
+			}
+		} else if !validRunTokenRecoveryChecks(recovery.Checks) {
+			return false
+		}
 	}
 	if recovery.Reclamation != nil && (recovery.Mutation != InstallationMutation || recovery.Starting.Status != NotInstalled || !validReclamationTarget(*recovery.Reclamation) || recovery.RollbackStep != 0) {
 		return false
@@ -630,6 +690,12 @@ func validRecoveryTransaction(recovery RecoveryTransaction) bool {
 		return recovery.AttemptedSteps == 0
 	case IrreversibleRunTokenRotationStarted:
 		return recovery.Mutation == RotationMutation && recovery.AttemptedSteps == 0 && validSHA256(recovery.PriorRunTokenSHA256)
+	case ManagementTokenCandidateIntentPrepared, ManagementTokenCandidatePrepared, ManagementTokenCandidateCleanupRequired:
+		return recovery.Mutation == RotationMutation && recovery.AttemptedSteps == 0 && managementTokenRotationChange(ChangeSetSpec{Mutation: recovery.Mutation, Steps: recovery.Steps})
+	case IrreversibleManagementTokenReplacementStarted:
+		return recovery.Mutation == RotationMutation && recovery.AttemptedSteps == 0 && managementTokenRotationChange(ChangeSetSpec{Mutation: recovery.Mutation, Steps: recovery.Steps})
+	case ManagementTokenRollbackDeleted:
+		return recovery.Mutation == RotationMutation && recovery.AttemptedSteps == 1 && managementTokenRotationChange(ChangeSetSpec{Mutation: recovery.Mutation, Steps: recovery.Steps})
 	case IrreversibleReclamationStarted, ReclamationProcessStopped, ReclamationTargetDeleted:
 		return recovery.IrreversibleReclamationStarted
 	case StateFinalized:
@@ -682,12 +748,119 @@ func validRunTokenRecoveryChecks(checks []Check) bool {
 	return true
 }
 
+func validManagementTokenRotationChecks(checks []Check) bool {
+	if len(checks) != 2 {
+		return false
+	}
+	for index, phase := range []GatePhase{PrePublication, PostPublication} {
+		check := checks[index]
+		if !validCheck(check) || check.Owner != CloudflareModule || check.Phase != phase || check.Classification != Required || check.Status != Healthy || check.Code != "CLOUDFLARE-MANAGEMENT-TOKEN-REPLACED" {
+			return false
+		}
+	}
+	return true
+}
+
 func runTokenRotationCheckpoint(checkpoint DurableCheckpoint) bool {
 	switch checkpoint {
-	case IrreversibleRunTokenRotationStarted, StateFinalized, StepStarted, StepCompleted, PrePublicationHealthPassed, StatePublicationStarted, StatePublished, PostPublicationHealthPassed, Complete:
+	case IrreversibleRunTokenRotationStarted, ManagementTokenCandidatePrepared, ManagementTokenCandidateCleanupRequired, IrreversibleManagementTokenReplacementStarted, ManagementTokenRollbackDeleted, StateFinalized, StepStarted, StepCompleted, PrePublicationHealthPassed, StatePublicationStarted, StatePublished, PostPublicationHealthPassed, Complete:
 		return true
 	}
 	return false
+}
+
+func managementTokenRotationChange(spec ChangeSetSpec) bool {
+	if spec.Mutation != RotationMutation || len(spec.Steps) != 1 {
+		return false
+	}
+	change, ok := spec.Steps[0].CloudflareChange()
+	return ok && change.Action == CloudflareManagementTokenActivate
+}
+
+func continueManagementTokenRotation(lease ExecutionLease, adapter TransactionAdapter, rotation ManagementTokenRotationAdapter, recovery RecoveryTransaction, spec ChangeSetSpec) ApplyResult {
+	record := func(point DurableCheckpoint, step int, evidence *StepEvidence, binding *StateTransactionBinding) bool {
+		return adapter.Record(lease, CheckpointRecord{ChangeSet: recovery.ChangeSet, Checkpoint: point, Step: step, Evidence: evidence, State: binding}) == nil
+	}
+	var transaction stateTransaction
+	if recovery.LastCheckpoint == Complete {
+		if adapter.Cleanup(lease, recovery.ChangeSet) != nil {
+			return forwardManagementTokenRotationRequired(spec, "SYSTEM-CHANGES-CLEANUP", Complete)
+		}
+		return ApplyResult{Outcome: Completed, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence()}
+	}
+	if recovery.LastCheckpoint == IrreversibleManagementTokenReplacementStarted {
+		material, binding, evidence, err := rotation.FinalizeManagementTokenRotation(lease, recovery, recovery.Timeouts.Step)
+		var ok bool
+		transaction, ok = material.(stateTransaction)
+		if err != nil || !ok || binding.ChangeSet != recovery.ChangeSet || binding.StartingRevision != recovery.Starting.Revision || binding.CandidateRevision != recovery.Candidate.Revision || !safeIdentity(evidence.Code) || !validSHA256(evidence.SHA256) || !record(StateFinalized, 0, nil, &binding) || !record(StepStarted, 1, nil, nil) || !record(StepCompleted, 1, &evidence, nil) {
+			return forwardManagementTokenRotationRequired(spec, "SYSTEM-CHANGES-MANAGEMENT-TOKEN-FINALIZE", recovery.LastCheckpoint)
+		}
+		recovery.LastCheckpoint = StepCompleted
+		recovery.Candidate.SHA256 = binding.CandidateSHA256
+		recovery.State = binding
+	} else {
+		material, err := rotation.LoadManagementTokenRotationState(lease, recovery)
+		var ok bool
+		transaction, ok = material.(stateTransaction)
+		if err != nil || !ok {
+			return forwardManagementTokenRotationRequired(spec, "SYSTEM-CHANGES-MANAGEMENT-TOKEN-STATE", recovery.LastCheckpoint)
+		}
+	}
+	if recovery.LastCheckpoint == StateFinalized {
+		change, _ := recovery.Steps[0].CloudflareChange()
+		digest := sha256.Sum256([]byte("management-token-revoked\x00" + change.ManagementTokenID))
+		evidence := StepEvidence{Code: "cloudflare-management-token-revoked", SHA256: hex.EncodeToString(digest[:]), ResourceID: change.ManagementTokenID}
+		if !record(StepStarted, 1, nil, nil) || !record(StepCompleted, 1, &evidence, nil) {
+			return forwardManagementTokenRotationRequired(spec, "SYSTEM-CHANGES-MANAGEMENT-TOKEN-JOURNAL", StateFinalized)
+		}
+		recovery.LastCheckpoint = StepCompleted
+	}
+	if recovery.LastCheckpoint == StepCompleted {
+		if rotation.DeleteManagementTokenRollback(lease, recovery.ChangeSet) != nil || !record(ManagementTokenRollbackDeleted, 0, nil, nil) {
+			return forwardManagementTokenRotationRequired(spec, "SYSTEM-CHANGES-MANAGEMENT-TOKEN-SNAPSHOT", StepCompleted)
+		}
+		recovery.LastCheckpoint = ManagementTokenRollbackDeleted
+	}
+	if recovery.LastCheckpoint == ManagementTokenRollbackDeleted {
+		if !gatePassed(lease, adapter, spec.Checks, PrePublication, recovery.Timeouts.Check) || !record(PrePublicationHealthPassed, 0, nil, nil) {
+			return forwardManagementTokenRotationRequired(spec, "SYSTEM-CHANGES-MANAGEMENT-TOKEN-HEALTH", StepCompleted)
+		}
+		recovery.LastCheckpoint = PrePublicationHealthPassed
+	}
+	if recovery.LastCheckpoint == PrePublicationHealthPassed {
+		if !record(StatePublicationStarted, 0, nil, nil) {
+			return forwardManagementTokenRotationRequired(spec, "SYSTEM-CHANGES-JOURNAL", PrePublicationHealthPassed)
+		}
+		recovery.LastCheckpoint = StatePublicationStarted
+	}
+	published, err := transaction.SystemChangesPublish(lease)
+	agreement, ok := validatedAgreement(lease, published, recovery.State)
+	if err != nil || !ok {
+		return forwardManagementTokenRotationRequired(spec, "SYSTEM-CHANGES-MANAGEMENT-TOKEN-PUBLICATION", recovery.LastCheckpoint)
+	}
+	if recovery.LastCheckpoint == StatePublicationStarted {
+		if !record(StatePublished, 0, nil, nil) {
+			return forwardManagementTokenRotationRequired(spec, "SYSTEM-CHANGES-JOURNAL", StatePublicationStarted)
+		}
+		recovery.LastCheckpoint = StatePublished
+	}
+	if recovery.LastCheckpoint == StatePublished {
+		if !gatePassed(lease, adapter, spec.Checks, PostPublication, recovery.Timeouts.Check) || adapter.VerifyAgreement(lease, agreement, recovery.Timeouts.Check) != nil || !record(PostPublicationHealthPassed, 0, nil, nil) {
+			return forwardManagementTokenRotationRequired(spec, "SYSTEM-CHANGES-MANAGEMENT-TOKEN-AGREEMENT", StatePublished)
+		}
+		recovery.LastCheckpoint = PostPublicationHealthPassed
+	}
+	if recovery.LastCheckpoint == PostPublicationHealthPassed && !record(Complete, 0, nil, nil) {
+		return forwardManagementTokenRotationRequired(spec, "SYSTEM-CHANGES-JOURNAL", PostPublicationHealthPassed)
+	}
+	if adapter.Cleanup(lease, recovery.ChangeSet) != nil {
+		return forwardManagementTokenRotationRequired(spec, "SYSTEM-CHANGES-CLEANUP", Complete)
+	}
+	return ApplyResult{Outcome: Completed, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence()}
+}
+
+func forwardManagementTokenRotationRequired(spec ChangeSetSpec, cause string, checkpoint DurableCheckpoint) ApplyResult {
+	return ApplyResult{Outcome: RecoveryRequiredOutcome, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(), Finding: &Finding{Code: "SYSTEM-CHANGES-FORWARD-MANAGEMENT-TOKEN-ROTATION", Owner: spec.OutcomeOwner, Problem: "management-token rotation must continue forward", Found: string(checkpoint), Required: "resume the exact candidate and publish its protected authority", WhyStopped: cause, NextAction: "Retry the private recovery runner."}}
 }
 
 func continueRunTokenRotation(lease ExecutionLease, adapter TransactionAdapter, rotation RunTokenRotationAdapter, recovery RecoveryTransaction, spec ChangeSetSpec) ApplyResult {
@@ -1327,6 +1500,47 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 			return finish(lock, rollbackChange(lease, adapter, transaction, spec, 0, "SYSTEM-CHANGES-RECLAMATION-ADAPTER", Prepared))
 		}
 	}
+	if managementTokenRotationChange(spec) {
+		rotation, ok := adapter.(ManagementTokenRotationAdapter)
+		if !ok {
+			return finish(lock, rollbackChange(lease, adapter, transaction, spec, 0, "SYSTEM-CHANGES-MANAGEMENT-TOKEN-ADAPTER", Prepared))
+		}
+		cleanup, err := rotation.PrepareManagementTokenRotation(lease, spec.Identity, spec.Timeouts.Step)
+		if cleanup {
+			return finish(lock, forwardManagementTokenRotationRequired(spec, "SYSTEM-CHANGES-MANAGEMENT-TOKEN-CLEANUP", ManagementTokenCandidateCleanupRequired))
+		}
+		if err != nil {
+			return finish(lock, rollbackChange(lease, adapter, transaction, spec, 0, "SYSTEM-CHANGES-MANAGEMENT-TOKEN-PREPARATION", Prepared))
+		}
+		if cancellation.Requested() {
+			if rotation.RequireManagementTokenCandidateCleanup(lease, spec.Identity) != nil {
+				return finish(lock, forwardManagementTokenRotationRequired(spec, "SYSTEM-CHANGES-MANAGEMENT-TOKEN-CLEANUP-CHECKPOINT", ManagementTokenCandidatePrepared))
+			}
+			if rotation.CleanupManagementTokenCandidate(lease, spec.Identity, spec.Timeouts.Step) != nil {
+				return finish(lock, forwardManagementTokenRotationRequired(spec, "SYSTEM-CHANGES-MANAGEMENT-TOKEN-CLEANUP", ManagementTokenCandidateCleanupRequired))
+			}
+			return finish(lock, cancelAndRollback(lease, adapter, transaction, spec, 0))
+		}
+		crossed, err := rotation.StartManagementTokenRotation(lease, spec.Identity, spec.Timeouts.Step)
+		if err != nil {
+			if crossed {
+				return finish(lock, forwardManagementTokenRotationRequired(spec, "SYSTEM-CHANGES-MANAGEMENT-TOKEN-CHECKPOINT", IrreversibleManagementTokenReplacementStarted))
+			}
+			if rotation.RequireManagementTokenCandidateCleanup(lease, spec.Identity) != nil || rotation.CleanupManagementTokenCandidate(lease, spec.Identity, spec.Timeouts.Step) != nil {
+				return finish(lock, forwardManagementTokenRotationRequired(spec, "SYSTEM-CHANGES-MANAGEMENT-TOKEN-CLEANUP", ManagementTokenCandidateCleanupRequired))
+			}
+			return finish(lock, rollbackChange(lease, adapter, transaction, spec, 0, "SYSTEM-CHANGES-MANAGEMENT-TOKEN-CHECKPOINT", Prepared))
+		}
+		recoveryAdapter, ok := adapter.(RecoveryAdapter)
+		if !ok {
+			return finish(lock, forwardManagementTokenRotationRequired(spec, "SYSTEM-CHANGES-MANAGEMENT-TOKEN-RECOVERY", IrreversibleManagementTokenReplacementStarted))
+		}
+		recovery, err := recoveryAdapter.LoadRecovery(lease)
+		if err != nil || !validRecoveryTransaction(recovery) {
+			return finish(lock, forwardManagementTokenRotationRequired(spec, "SYSTEM-CHANGES-MANAGEMENT-TOKEN-RECOVERY", IrreversibleManagementTokenReplacementStarted))
+		}
+		return finish(lock, continueManagementTokenRotation(lease, adapter, rotation, recovery, spec), spec.OutcomeOwner)
+	}
 	if runTokenRotationChange(spec) {
 		rotation, ok := adapter.(RunTokenRotationAdapter)
 		if !ok {
@@ -1664,6 +1878,8 @@ func validCloudflareEvidence(step Step, number int, evidence StepEvidence, prior
 		return evidence.ResourceType == "" && evidence.ResourceID == ""
 	case CloudflareRunTokenActivate:
 		return evidence.ResourceType == "" && evidence.ResourceID == ""
+	case CloudflareManagementTokenActivate:
+		return evidence.ResourceType == "" && evidence.ResourceID == change.ManagementTokenID
 	}
 	return false
 }

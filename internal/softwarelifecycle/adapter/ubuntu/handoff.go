@@ -33,7 +33,7 @@ const (
 var (
 	handoffTag        = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$`)
 	handoffCloudflare = regexp.MustCompile(`^[0-9a-f]{32}$`)
-	handoffToken      = regexp.MustCompile(`^cfat_[A-Za-z0-9_-]{35,75}$`)
+	handoffToken      = regexp.MustCompile(`^[A-Za-z0-9_-]{40,80}$`)
 	handoffHostname   = regexp.MustCompile(`(?i)^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$`)
 )
 
@@ -79,7 +79,7 @@ func validInstallHandoffRequest(request InstallHandoffRequest) bool {
 	host, port, err := net.SplitHostPort(request.RealityTarget)
 	return request.Schema == 1 && validLowerHex(request.Session, 64) && handoffTag.MatchString(request.Tag) &&
 		(request.Architecture == softwarelifecycle.AMD64 || request.Architecture == softwarelifecycle.ARM64) && request.Draft.Valid() &&
-		handoffCloudflare.MatchString(request.CloudflareAccountID) && handoffCloudflare.MatchString(request.CloudflareZoneID) && handoffToken.MatchString(request.CloudflareToken) &&
+		handoffCloudflare.MatchString(request.CloudflareAccountID) && handoffCloudflare.MatchString(request.CloudflareZoneID) && handoffToken.MatchString(request.CloudflareToken) && !bytes.HasPrefix([]byte(request.CloudflareToken), []byte("cfat_")) &&
 		err == nil && port == "443" && host == request.RealityServerName && handoffHostname.MatchString(host) && validLowerHex(request.ReviewedPlanSHA256, 64) &&
 		(request.ReviewedReclamationSHA256 == "" || validLowerHex(request.ReviewedReclamationSHA256, 64)) &&
 		len(request.Entropy) == 32 && !bytes.Equal(request.Entropy, make([]byte, 32)) &&

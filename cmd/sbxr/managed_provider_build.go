@@ -23,16 +23,17 @@ import (
 type managedProviderAction string
 
 const (
-	managedCloudflareReplace managedProviderAction = "cloudflare-replace-token"
-	managedCloudflareRemove  managedProviderAction = "cloudflare-remove-token"
-	managedCloudflareRotate  managedProviderAction = "cloudflare-rotate-run-token"
-	managedCertificateIP     managedProviderAction = "certificate-ip"
-	managedCertificateDomain managedProviderAction = "certificate-domain"
+	managedCloudflareReplace          managedProviderAction = "cloudflare-replace-token"
+	managedCloudflareRotateManagement managedProviderAction = "cloudflare-rotate-management-token"
+	managedCloudflareRemove           managedProviderAction = "cloudflare-remove-token"
+	managedCloudflareRotate           managedProviderAction = "cloudflare-rotate-run-token"
+	managedCertificateIP              managedProviderAction = "certificate-ip"
+	managedCertificateDomain          managedProviderAction = "certificate-domain"
 )
 
 func validManagedProviderAction(action managedProviderAction) bool {
 	switch action {
-	case managedCloudflareReplace, managedCloudflareRemove, managedCloudflareRotate, managedCertificateIP, managedCertificateDomain:
+	case managedCloudflareReplace, managedCloudflareRotateManagement, managedCloudflareRemove, managedCloudflareRotate, managedCertificateIP, managedCertificateDomain:
 		return true
 	default:
 		return false
@@ -40,12 +41,13 @@ func validManagedProviderAction(action managedProviderAction) bool {
 }
 
 type managedProviderBuildRequest struct {
-	Action            managedProviderAction
-	ChangeSet         string
-	Token, OwnerEmail string
-	Agreement         bool
-	StandingRenewal   bool
-	Disk              systemchanges.DiskRequirement
+	Action                        managedProviderAction
+	ChangeSet                     string
+	Token, OwnerEmail             string
+	Agreement                     bool
+	StandingRenewal               bool
+	DedicatedBroadPolicyConfirmed bool
+	Disk                          systemchanges.DiskRequirement
 }
 
 type providerPlan interface {
@@ -274,7 +276,7 @@ func buildManagedCloudflare(ctx context.Context, module state.Interface, loaded 
 	}
 	currentView := cloudflaretunnel.ViewResult{}
 	if !desired.Cloudflare.ManagementTokenRemoved {
-		currentView = cloudflareModule.View(ctx, cloudflaretunnel.ViewRequest{AccountID: desired.Cloudflare.AccountID, ZoneID: desired.Cloudflare.ZoneID, ZoneName: desired.Cloudflare.ZoneName, Token: currentToken, NetworkPath: network.CloudflareTunnelPath})
+		currentView = cloudflareModule.View(ctx, cloudflaretunnel.ViewRequest{AccountID: desired.Cloudflare.AccountID, ZoneID: desired.Cloudflare.ZoneID, ZoneName: desired.Cloudflare.ZoneName, Token: currentToken, DedicatedBroadPolicyConfirmed: desired.Cloudflare.DedicatedBroadPolicyConfirmed, NetworkPath: network.CloudflareTunnelPath})
 		if currentView.Health.Outcome != cloudflaretunnel.Healthy {
 			return nil, fmt.Errorf("current Cloudflare authority refused: %s", currentView.Health.Code)
 		}
@@ -289,12 +291,16 @@ func buildManagedCloudflare(ctx context.Context, module state.Interface, loaded 
 			return nil, tokenErr
 		}
 		candidate.Cloudflare.ManagementToken = state.InfrastructureSecret{}
+		candidate.Cloudflare.DedicatedBroadPolicyConfirmed = request.DedicatedBroadPolicyConfirmed
 		candidate.Cloudflare.ManagementTokenRemoved = false
 		candidate.Cloudflare.ManagementTokenState = ""
 		final = candidate
 		final.Cloudflare.ManagementToken = state.NewInfrastructureSecret(request.Token)
-		planRequest.Authority = cloudflaretunnel.ViewRequest{AccountID: desired.Cloudflare.AccountID, ZoneID: desired.Cloudflare.ZoneID, ZoneName: desired.Cloudflare.ZoneName, Token: replacement, NetworkPath: network.CloudflareTunnelPath}
+		planRequest.Authority = cloudflaretunnel.ViewRequest{AccountID: desired.Cloudflare.AccountID, ZoneID: desired.Cloudflare.ZoneID, ZoneName: desired.Cloudflare.ZoneName, Token: replacement, DedicatedBroadPolicyConfirmed: request.DedicatedBroadPolicyConfirmed, NetworkPath: network.CloudflareTunnelPath}
 		planRequest.ManagementToken = cloudflaretunnel.ManagementTokenChange{Action: cloudflaretunnel.ManagementTokenReplace, CurrentTokenID: currentView.Credential.ID, StartingTokenRemoved: desired.Cloudflare.ManagementTokenRemoved}
+	case managedCloudflareRotateManagement:
+		planRequest.Authority = cloudflaretunnel.ViewRequest{AccountID: desired.Cloudflare.AccountID, ZoneID: desired.Cloudflare.ZoneID, ZoneName: desired.Cloudflare.ZoneName, Token: currentToken, DedicatedBroadPolicyConfirmed: desired.Cloudflare.DedicatedBroadPolicyConfirmed, NetworkPath: network.CloudflareTunnelPath}
+		planRequest.ManagementToken = cloudflaretunnel.ManagementTokenChange{Action: cloudflaretunnel.ManagementTokenRotate, CurrentTokenID: currentView.Credential.ID}
 	case managedCloudflareRemove:
 		inventory, inventoryErr := module.ManagementTokenInventory(loaded)
 		if inventoryErr != nil {
@@ -307,7 +313,7 @@ func buildManagedCloudflare(ctx context.Context, module state.Interface, loaded 
 		planRequest.Authority = cloudflaretunnel.ViewRequest{AccountID: desired.Cloudflare.AccountID, ZoneID: desired.Cloudflare.ZoneID, ZoneName: desired.Cloudflare.ZoneName}
 		planRequest.ManagementToken = cloudflaretunnel.ManagementTokenChange{Action: cloudflaretunnel.ManagementTokenRemove, CurrentTokenID: currentView.Credential.ID, Inventory: inventory, Resolution: cloudflaretunnel.MarkDependenciesUnmanaged}
 	case managedCloudflareRotate:
-		planRequest.Authority = cloudflaretunnel.ViewRequest{AccountID: desired.Cloudflare.AccountID, ZoneID: desired.Cloudflare.ZoneID, ZoneName: desired.Cloudflare.ZoneName, Token: currentToken, NetworkPath: network.CloudflareTunnelPath}
+		planRequest.Authority = cloudflaretunnel.ViewRequest{AccountID: desired.Cloudflare.AccountID, ZoneID: desired.Cloudflare.ZoneID, ZoneName: desired.Cloudflare.ZoneName, Token: currentToken, DedicatedBroadPolicyConfirmed: desired.Cloudflare.DedicatedBroadPolicyConfirmed, NetworkPath: network.CloudflareTunnelPath}
 		planRequest.RunTokenRotation = cloudflaretunnel.OwnedTunnelBinding{TunnelID: desired.Cloudflare.TunnelID, XHTTPDNSRecordID: desired.Cloudflare.XHTTPDNSRecordID, WebSocketDNSRecordID: desired.Cloudflare.WebSocketDNSRecordID, DirectIPv4RecordID: desired.Cloudflare.DirectIPv4RecordID, DirectIPv6RecordID: desired.Cloudflare.DirectIPv6RecordID}
 	default:
 		return nil, errors.New("unsupported Cloudflare action")
@@ -336,6 +342,8 @@ func buildManagedCloudflare(ctx context.Context, module state.Interface, loaded 
 	var prepared *state.PreparedCommit
 	if request.Action == managedCloudflareRotate {
 		prepared, err = module.PrepareRunTokenRotationCommit(preparedRequest, planResult.Plan)
+	} else if request.Action == managedCloudflareRotateManagement {
+		prepared, err = module.PrepareManagementTokenRotationCommit(preparedRequest, planResult.Plan)
 	} else {
 		prepared, err = module.PrepareManagementTokenCommit(preparedRequest, planResult.Plan)
 	}
@@ -343,7 +351,7 @@ func buildManagedCloudflare(ctx context.Context, module state.Interface, loaded 
 		return nil, err
 	}
 	var executor cloudflaretunnel.Executor
-	if request.Action == managedCloudflareRotate {
+	if request.Action == managedCloudflareRotate || request.Action == managedCloudflareRotateManagement {
 		executor, err = planResult.Plan.Executor(api)
 		if err != nil {
 			return nil, err

@@ -382,6 +382,44 @@ func (i Interface) SystemChangesFinalizeRunTokenRotation(lease any, bindingJSON 
 	return i.forwardRunTokenMaterial(binding, document.desiredState)
 }
 
+// SystemChangesFinalizeManagementTokenRotation replaces only the deferred
+// management-token slot after the old provider token is durably revoked.
+func (i Interface) SystemChangesFinalizeManagementTokenRotation(lease any, bindingJSON []byte, candidateSource io.Reader, source any) (any, error) {
+	if !validSystemChangesLease(lease) || i.implementation == nil || i.implementation.storage == nil || candidateSource == nil {
+		return nil, finding("STATE-MANAGEMENT-TOKEN-RECOVERY", "management-token recovery", "no authorized protected handoff", "the active System Changes recovery lease", "State cannot accept a token outside forward recovery", "use Recovery Required")
+	}
+	secret, ok := source.(VerifiedInfrastructureSecret)
+	if !ok || secret == nil {
+		return nil, finding("STATE-MANAGEMENT-TOKEN-RECOVERY", "management-token recovery", "the Cloudflare token handoff is invalid", "one opaque one-use Infrastructure Secret", "callers cannot supply token text", "check Cloudflare again")
+	}
+	var binding systemChangesTransactionBinding
+	if json.Unmarshal(bindingJSON, &binding) != nil || binding.CandidateRevision != binding.StartingRevision+1 || !validSHA256(binding.PreparedStateSHA256) {
+		return nil, finding("STATE-MANAGEMENT-TOKEN-BINDING", "management-token recovery", "the durable State binding is invalid", "the exact active transaction lineage", "State never guesses recovery lineage", "use Recovery Required")
+	}
+	candidateBytes, err := readRecoveryStateArtifact(candidateSource)
+	if err != nil {
+		return nil, err
+	}
+	digest := sha256.Sum256(candidateBytes)
+	document, problem := decode(candidateBytes)
+	if problem != nil || hex.EncodeToString(digest[:]) != binding.PreparedStateSHA256 || document.Revision != binding.CandidateRevision || document.LastCompletedChangeSet != ChangeSetIdentity(binding.ChangeSet) || document.desiredState.Cloudflare.ManagementToken.value != "deferred-cloudflare-management-token" {
+		return nil, finding("STATE-MANAGEMENT-TOKEN-CANDIDATE", "management-token recovery", "the deferred candidate is invalid", "one transaction-bound deferred token slot", "the old token cannot be reused", "use Recovery Required")
+	}
+	newToken, consumed := NewInfrastructureSecretFrom(secret)
+	if !consumed {
+		return nil, finding("STATE-MANAGEMENT-TOKEN-CANDIDATE", "management-token recovery", "the new token was unavailable or already used", "one fresh Cloudflare token", "State accepts no replayed credential", "check Cloudflare again")
+	}
+	document.desiredState.Cloudflare.ManagementToken = newToken
+	if problem := validateDesiredState(document.desiredState); problem != nil {
+		return nil, problem
+	}
+	return i.forwardRunTokenMaterial(binding, document.desiredState)
+}
+
+func (i Interface) SystemChangesLoadManagementTokenRotation(lease any, bindingJSON []byte, candidateSource, manifestsSource io.Reader) (any, error) {
+	return i.systemChangesLoadForwardState(lease, bindingJSON, candidateSource, manifestsSource, false)
+}
+
 func (i Interface) forwardRunTokenMaterial(binding systemChangesTransactionBinding, candidate DesiredState) (*TransactionMaterial, error) {
 	copies, err := prepareServiceCopies(binding.CandidateRevision, binding.ChangeSet, expectedServiceMaterials(candidate))
 	if err != nil {

@@ -5,10 +5,90 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"sync/atomic"
+	"time"
 
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
+
+type managementTokenLifecycleAPI interface {
+	API
+	PrepareManagementTokenCandidate(context.Context, ManagementToken, string, time.Time, time.Time) (CreateManagementTokenCandidateRequest, error)
+	CreateManagementTokenCandidate(context.Context, CreateManagementTokenCandidateRequest) (ManagementTokenCandidate, error)
+	ReconcileManagementTokenCandidate(context.Context, ReconcileManagementTokenCandidateRequest) (ManagementTokenCandidate, error)
+	VerifyManagementTokenCandidateAbsent(context.Context, ReconcileManagementTokenCandidateRequest) error
+	DeleteManagementToken(context.Context, DeleteManagementTokenRequest) error
+}
+
+type preparedManagementTokenRotation struct {
+	api       managementTokenLifecycleAPI
+	request   ObservationRequest
+	currentID string
+	candidate ManagementTokenCandidate
+}
+
+type ManagementTokenCandidateCleanupError struct{ candidateID string }
+
+func (err ManagementTokenCandidateCleanupError) Error() string {
+	return "Cloudflare management-token candidate cleanup requires forward recovery"
+}
+func (err ManagementTokenCandidateCleanupError) CandidateID() string { return err.candidateID }
+
+func prepareManagementTokenRotation(ctx context.Context, api managementTokenLifecycleAPI, request ObservationRequest, currentID string, candidateRequestIntent CreateManagementTokenCandidateRequest) (*preparedManagementTokenRotation, error) {
+	if api == nil || !immutableID.MatchString(currentID) {
+		return nil, errors.New("Cloudflare management-token rotation unavailable")
+	}
+	candidate, err := api.CreateManagementTokenCandidate(ctx, candidateRequestIntent)
+	if err != nil {
+		var cleanup ManagementTokenCandidateCleanupError
+		if errors.As(err, &cleanup) {
+			return nil, cleanup
+		}
+		return nil, errors.New("Cloudflare management-token candidate creation failed")
+	}
+	candidateRequest := request
+	candidateRequest.Token = candidate.token
+	observed, err := api.Observe(ctx, candidateRequest)
+	if err != nil || observed.Token.ID != candidate.id || observed.Token.Status != "active" || observed.Account.ID != request.AccountID || observed.Zone.ID != request.ZoneID || !observed.DNSListProven || !observed.TunnelListProven {
+		if deleteErr := api.DeleteManagementToken(ctx, DeleteManagementTokenRequest{ID: candidate.id, Token: request.Token}); deleteErr != nil {
+			return nil, ManagementTokenCandidateCleanupError{candidateID: candidate.id}
+		}
+		if _, cleanupErr := api.Observe(ctx, candidateRequest); !apiErrorIs(cleanupErr, APIUnauthorized) {
+			return nil, ManagementTokenCandidateCleanupError{candidateID: candidate.id}
+		}
+		return nil, errors.New("Cloudflare management-token candidate verification failed")
+	}
+	return &preparedManagementTokenRotation{api: api, request: request, currentID: currentID, candidate: candidate}, nil
+}
+
+func (rotation *preparedManagementTokenRotation) rollback(ctx context.Context) error {
+	if rotation == nil || rotation.api == nil || rotation.candidate.id == "" {
+		return errors.New("Cloudflare management-token rollback unavailable")
+	}
+	if err := rotation.api.DeleteManagementToken(ctx, DeleteManagementTokenRequest{ID: rotation.candidate.id, Token: rotation.request.Token}); err != nil {
+		return errors.New("Cloudflare management-token candidate cleanup failed")
+	}
+	candidateRequest := rotation.request
+	candidateRequest.Token = rotation.candidate.token
+	if _, err := rotation.api.Observe(ctx, candidateRequest); !apiErrorIs(err, APIUnauthorized) {
+		return errors.New("Cloudflare management-token candidate cleanup is unproved")
+	}
+	return nil
+}
+
+func (rotation *preparedManagementTokenRotation) completeForward(ctx context.Context) (ManagementTokenCandidate, error) {
+	if rotation == nil || rotation.api == nil || rotation.candidate.token.value == "" {
+		return ManagementTokenCandidate{}, errors.New("Cloudflare management-token forward completion unavailable")
+	}
+	if err := rotation.api.DeleteManagementToken(ctx, DeleteManagementTokenRequest{ID: rotation.currentID, Token: rotation.candidate.token}); err != nil && !apiErrorIs(err, APINotFound) {
+		return ManagementTokenCandidate{}, errors.New("Cloudflare old management-token deletion failed; continue forward")
+	}
+	if _, err := rotation.api.Observe(ctx, rotation.request); !apiErrorIs(err, APIUnauthorized) {
+		return ManagementTokenCandidate{}, errors.New("Cloudflare old management-token deletion is unproved; continue forward")
+	}
+	return rotation.candidate, nil
+}
 
 // OwnedTunnelBinding names the committed provider resources used by repair and
 // run-token rotation. It contains no credential value.

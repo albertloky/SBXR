@@ -314,8 +314,8 @@ func validStateSchema(document []byte, schema uint64) bool {
 }
 
 var qualifiedStateSchemaSHA256 = map[uint64]string{
-	1: "3e1488c7c2a999883a878aa03091db89f6abe9ae32bf0739d9ebf604f3ff2edf",
-	2: "df96e3a3e4616a49a121f734177f2207f828c6a678fb8fb6922c4eaaf5c687ea",
+	1: "ba70ca0fec232e3eb37985894b911dc4d183c6f2df7173835ef900c9b4632ce6",
+	2: "8a1ba2dc59798c9c7c82c13cf2eb060719517da9b8398a6a92b5e806b4807db7",
 }
 
 const qualifiedMigrationSHA256 = "1d2527a35e0a5869af2668f2c693a3c56c5e13e51fd39c2090b7f0ac9ad069d4"

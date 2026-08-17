@@ -585,7 +585,7 @@ var installationFieldHelp = map[string]FieldHelp{
 var cloudflareCredentialInputs = map[string]cloudflaretunnel.CredentialInput{
 	"cloudflare-account": cloudflaretunnel.AccountIDInput,
 	"cloudflare-zone":    cloudflaretunnel.ZoneIDInput,
-	"cloudflare-token":   cloudflaretunnel.AccountTokenInput,
+	"cloudflare-token":   cloudflaretunnel.UserTokenInput,
 }
 
 func portFieldHelp(profile, transport, example string) FieldHelp {
@@ -731,7 +731,7 @@ func validateDraftField(draft Draft, field string) *InvalidInput {
 		}
 	case "cloudflare-token":
 		if _, err := cloudflaretunnel.NewManagementToken(value); err != nil {
-			return invalid("The Cloudflare Account API Token is invalid.")
+			return invalid("The Dedicated Broad Cloudflare User API Token is invalid.")
 		}
 	case "reality-target":
 		if !validDraftHostname(value) {

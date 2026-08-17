@@ -159,7 +159,7 @@ func (outcome *clientAccessOutcome) advanceCompleteRemoval(ctx context.Context, 
 	case systemchanges.Managed:
 		outcome.change = ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetRolledBack, OperationID: presentation.Progress.OperationID, Checkpoint: "Rolled back", Explanation: "Automatic recovery restored the exact Managed starting revision."}
 	case "":
-		outcome.change = ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetRecoveryRequired, OperationID: presentation.Progress.OperationID, CompletedSteps: 7, TotalSteps: presentation.Progress.TotalSteps, Checkpoint: "Awaiting Owner token revocation", Explanation: "Cloudflare resources are deleted. Revoke the scoped token, then continue the exact forward-only Complete removal."}
+		outcome.change = ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetRecoveryRequired, OperationID: presentation.Progress.OperationID, CompletedSteps: 7, TotalSteps: presentation.Progress.TotalSteps, Checkpoint: "Awaiting Owner token revocation", Explanation: "Cloudflare resources are deleted. Revoke the exact Dedicated Broad User API Token, then continue the exact forward-only Complete removal."}
 	}
 }
 
@@ -184,7 +184,7 @@ func (outcome *clientAccessOutcome) ReviewCompleteRemoval(ctx context.Context, a
 			return ownerconsole.ChangeReview{Correction: &ownerconsole.CorrectionPresentation{
 				Problem:    "Complete removal cannot prove the Cloudflare resources owned by this installation",
 				Found:      "Desired State lineage or scoped Cloudflare authority is unavailable",
-				Required:   "Exact immutable Tunnel and DNS record IDs plus the active scoped token",
+				Required:   "Exact immutable Tunnel and DNS record IDs plus the active Dedicated Broad User API Token",
 				WhyStopped: "SBXR will not treat corrupt raw State or same-named provider resources as ownership proof",
 				OwnerSteps: []string{"Use Diagnostics to preserve safe evidence", "Remove only independently verified provider resources", "Rebuild SBXR on a clean VPS"},
 				Selections: []ownerconsole.CorrectionSelection{{Identity: "back", Label: "Back"}},
@@ -432,6 +432,9 @@ func (outcome *clientAccessOutcome) reviewSoftwareChange(ctx context.Context, ac
 }
 
 func (outcome *clientAccessOutcome) ActOnCloudflare(ctx context.Context, request ownerconsole.CloudflareRequest) ownerconsole.CloudflareResponse {
+	if request.Action == ownerconsole.VerifyInitialManagementToken && !request.DedicatedBroadPolicyConfirmed {
+		return ownerconsole.CloudflareResponse{}
+	}
 	if request.Action == ownerconsole.CheckCurrentManagementToken || request.Action == ownerconsole.WaitAnotherTenMinutes {
 		outcome.mu.Lock()
 		outcome.loaded = false
@@ -443,6 +446,7 @@ func (outcome *clientAccessOutcome) ActOnCloudflare(ctx context.Context, request
 		ownerconsole.VerifyInitialManagementToken:     managedCloudflareReplace,
 		ownerconsole.VerifyReplacementManagementToken: managedCloudflareReplace,
 		ownerconsole.ReviewManagementTokenRemoval:     managedCloudflareRemove,
+		ownerconsole.ReviewManagementTokenRotation:    managedCloudflareRotateManagement,
 		ownerconsole.ReviewTunnelRunTokenRotation:     managedCloudflareRotate,
 	}[request.Action]
 	if action == "" {
@@ -452,7 +456,7 @@ func (outcome *clientAccessOutcome) ActOnCloudflare(ctx context.Context, request
 	outcome.providerAction = action
 	outcome.providerEmail, outcome.providerAgree = "", false
 	outcome.mu.Unlock()
-	review := outcome.reviewProviderAction(ctx, action, request.Token, "", false)
+	review := outcome.reviewProviderAction(ctx, action, request.Token, "", false, request.DedicatedBroadPolicyConfirmed)
 	return ownerconsole.CloudflareResponse{Review: &review}
 }
 
@@ -542,12 +546,12 @@ func (outcome *clientAccessOutcome) reviewAction(ctx context.Context, action cli
 	}}
 }
 
-func (outcome *clientAccessOutcome) reviewProviderAction(ctx context.Context, action managedProviderAction, token, email string, agreement bool) ownerconsole.ChangeReview {
+func (outcome *clientAccessOutcome) reviewProviderAction(ctx context.Context, action managedProviderAction, token, email string, agreement, broadPolicyConfirmed bool) ownerconsole.ChangeReview {
 	identity := make([]byte, 12)
 	if _, err := rand.Read(identity); err != nil {
 		return clientAccessCorrection("Change Set identity generation failed")
 	}
-	request := clientAccessHandoffRequest{Schema: 1, Mode: "provider", ProviderAction: action, ChangeSet: "provider-" + hex.EncodeToString(identity), Token: token, OwnerEmail: email, Agreement: agreement}
+	request := clientAccessHandoffRequest{Schema: 1, Mode: "provider", ProviderAction: action, ChangeSet: "provider-" + hex.EncodeToString(identity), Token: token, OwnerEmail: email, Agreement: agreement, DedicatedBroadPolicyConfirmed: broadPolicyConfirmed}
 	launch := outcome.providerLaunch
 	if launch == nil {
 		launch = launchClientAccessReview
@@ -584,6 +588,8 @@ func providerEffects(action managedProviderAction) []string {
 	switch action {
 	case managedCloudflareReplace:
 		return []string{"Replace only the stored Cloudflare management token at publication", "Keep provider resources and the prior token active until publication"}
+	case managedCloudflareRotateManagement:
+		return []string{"Create and prove one transaction-bound management-token candidate", "Revoke the old token only after the durable irreversible checkpoint"}
 	case managedCloudflareRemove:
 		return []string{"Deliberately remove Cloudflare management authority", "Mark every dependent provider behavior unmanaged"}
 	case managedCloudflareRotate:
@@ -603,7 +609,7 @@ func (outcome *clientAccessOutcome) Review(ctx context.Context) ownerconsole.Cha
 		return unsupportedClientAccessReview()
 	}
 	if request.Mode == "provider" {
-		return outcome.reviewProviderAction(ctx, request.ProviderAction, request.Token, request.OwnerEmail, request.Agreement)
+		return outcome.reviewProviderAction(ctx, request.ProviderAction, request.Token, request.OwnerEmail, request.Agreement, request.DedicatedBroadPolicyConfirmed)
 	}
 	if (request.Mode == "software-review" || request.Mode == "software-apply") && request.SoftwareAction != "view" {
 		if request.SoftwareAction == "repair" {
@@ -729,9 +735,9 @@ func (outcome *clientAccessOutcome) Apply(ctx context.Context, identity ownercon
 			outcome.change = ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetRecoveryRequired, OperationID: operation, TotalSteps: total, Checkpoint: "Awaiting Owner Rotate token", Explanation: "Select Rotate token for the committed Tunnel in Cloudflare, then continue the exact forward-only recovery. Rollback is no longer available."}
 			outcome.loaded = false
 		case err == nil && terminal == 'D':
-			outcome.change = ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetRecoveryRequired, OperationID: operation, TotalSteps: total, Checkpoint: "Awaiting Owner token revocation", Explanation: "Cloudflare resources are deleted. Revoke the scoped token, then continue the exact forward-only Complete removal. Back and Cancel are unavailable."}
+			outcome.change = ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetRecoveryRequired, OperationID: operation, TotalSteps: total, Checkpoint: "Awaiting Owner token revocation", Explanation: "Cloudflare resources are deleted. Revoke the exact Dedicated Broad User API Token, then continue the exact forward-only Complete removal. Back and Cancel are unavailable."}
 		case err == nil && terminal == 'P':
-			outcome.change = ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetRecoveryRequired, OperationID: operation, TotalSteps: total, Checkpoint: "Provider deletion in progress", Explanation: "Complete removal is forward-only. Keep the scoped token active while SBXR retries the exact next Cloudflare deletion."}
+			outcome.change = ownerconsole.DurableChangeSet{Kind: ownerconsole.ChangeSetRecoveryRequired, OperationID: operation, TotalSteps: total, Checkpoint: "Provider deletion in progress", Explanation: "Complete removal is forward-only. Keep the Dedicated Broad User API Token active while SBXR retries the exact next Cloudflare deletion."}
 		default:
 			outcome.loaded = false
 			outcome.change = ownerconsole.DurableChangeSet{}
@@ -793,7 +799,7 @@ func (outcome *clientAccessOutcome) Edit(ctx context.Context, input ownerconsole
 		if !agreed {
 			return certificateEditing("subscriber-agreement", input.Text, "Type exact uppercase AGREE only after you review the current agreement.")
 		}
-		return outcome.reviewProviderAction(ctx, action, "", email, true)
+		return outcome.reviewProviderAction(ctx, action, "", email, true, false)
 	default:
 		outcome.mu.Unlock()
 		return unsupportedClientAccessReview()

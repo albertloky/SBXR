@@ -21,13 +21,13 @@ type completeRemovalStub struct {
 	checkResult   *CompleteRemovalPresentation
 }
 
-func TestRunCompleteRemovalAwaitingRevocationShowsExactAccountTokenHelpBeforeCheckAgain(t *testing.T) {
+func TestRunCompleteRemovalAwaitingRevocationShowsExactUserTokenHelpBeforeCheckAgain(t *testing.T) {
 	view := CompleteRemovalPresentation{
 		Kind: CompleteRemovalForwardOnly, StartingStatus: InstallationManaged, StartingRevision: 42,
 		Progress: CompleteRemovalProgress{OperationID: "complete-removal-operation", CompletedSteps: 7, TotalSteps: 10}, Checkpoint: RemovalIrreversibleStarted, TokenPhase: RemovalTokenAwaitingOwnerRevocation,
 		ManagementTokenRevocation: CloudflareExternalGuidance{
-			Instructions: [3]string{"Open Manage Account > Account API Tokens in the selected account.", "Find the Account API Token named SBXR - selected account / selected zone and revoke only that Account API Token.", "Do not revoke a Global API Key, user API token, Tunnel run token, or any unrelated account token. Return to SBXR and select Check again."},
-			HelpURL:      "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/",
+			Instructions: [3]string{"Open My Profile > API Tokens.", "Find the exact Dedicated Broad Cloudflare User API Token ID recorded by SBXR and revoke only that token.", "Do not revoke a Global API Key, Account API Token, Tunnel run token, or any unrelated user token. Return to SBXR and select Check again."},
+			HelpURL:      "https://developers.cloudflare.com/fundamentals/api/get-started/create-token/",
 		},
 	}
 	checked := view
@@ -37,12 +37,12 @@ func TestRunCompleteRemovalAwaitingRevocationShowsExactAccountTokenHelpBeforeChe
 	stub := &completeRemovalStub{view: view, updates: make(chan CompleteRemovalPresentation), checkResult: &checked}
 	steps := append(sectionTraversalSteps(providerPageCount(completeRemovalLines(view, true, "", 0), 1, 80, 24)), "\r", "", "\x03\r")
 	got := runTranscriptSteps(t, Session{Scenario: ForwardOnlyRemoval, CompleteRemoval: stub}, 80, 24, steps...)
-	for _, want := range []string{"Manage Account > Account API Tokens", "SBXR - selected account", "selected zone and revoke only that Account API Token", "Global API Key", "user API token", "Tunnel run", "developers.cloudflare.com/fundamentals/api/get-sta", "Check again", "Cloudflare token revocation - verified"} {
+	for _, want := range []string{"My Profile > API Tokens", "Dedicated Broad Cloudflare User API Token", "ID recorded by SBXR", "revoke only that token", "Global API Key", "Account API Token", "Tunnel", "developers.cloudflare.com/fundamentals/api/get-sta", "Check again", "Cloudflare token revocation - verified"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("awaiting-revocation Help omitted %q\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "My Profile > API Tokens") || len(stub.checks) != 1 || stub.checks[0] != "complete-removal-operation" || stub.reviews != 0 {
+	if len(stub.checks) != 1 || stub.checks[0] != "complete-removal-operation" || stub.reviews != 0 {
 		t.Fatalf("awaiting-revocation Help bypassed or misrouted the typed check: checks=%#v reviews=%d\n%s", stub.checks, stub.reviews, got)
 	}
 }

@@ -111,7 +111,7 @@ func inspectSoftwareRepair(ctx context.Context) (systemchanges.Observation, erro
 
 func managedCloudflareRepairRequest(desired state.DesiredState, network networkpolicy.Result, token cloudflaretunnel.ManagementToken, revision uint64, stateSHA, changeSet string) cloudflaretunnel.PlanRequest {
 	return cloudflaretunnel.PlanRequest{
-		Authority: cloudflaretunnel.ViewRequest{AccountID: desired.Cloudflare.AccountID, ZoneID: desired.Cloudflare.ZoneID, ZoneName: desired.Cloudflare.ZoneName, Token: token, NetworkPath: network.CloudflareTunnelPath},
+		Authority: cloudflaretunnel.ViewRequest{AccountID: desired.Cloudflare.AccountID, ZoneID: desired.Cloudflare.ZoneID, ZoneName: desired.Cloudflare.ZoneName, Token: token, DedicatedBroadPolicyConfirmed: desired.Cloudflare.DedicatedBroadPolicyConfirmed, NetworkPath: network.CloudflareTunnelPath},
 		ChangeSet: changeSet, StartingRevision: revision, StartingStateSHA256: stateSHA, DesiredStateSHA256: stateSHA,
 		TunnelName: desired.Cloudflare.TunnelName, XHTTPHostname: desired.Cloudflare.XHTTPHostname, WebSocketHostname: desired.Cloudflare.WebSocketHostname, DirectHostname: desired.Cloudflare.DirectHostname,
 		PublicIPv4: desired.NetworkPolicy.PublicIPv4, PublicIPv6: desired.NetworkPolicy.PublicIPv6, CloudflaredVersion: trimVersion(desired.Software.CloudflaredVersion),

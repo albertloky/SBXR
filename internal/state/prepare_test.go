@@ -128,7 +128,7 @@ func TestPrepareCommitRequiresTypedCloudflareAuthorityForCompleteProfileSetup(t 
 		t.Fatal(marshalErr)
 	}
 	digest := sha256.Sum256(template)
-	managementTokenText := "cfat_" + strings.Repeat("a", 40)
+	managementTokenText := "sbxr_" + strings.Repeat("a", 40)
 	candidate.Cloudflare.ManagementToken = NewInfrastructureSecret(managementTokenText)
 	template, marshalErr = marshalProtectedJSON(candidate)
 	if marshalErr != nil {
@@ -140,7 +140,7 @@ func TestPrepareCommitRequiresTypedCloudflareAuthorityForCompleteProfileSetup(t 
 		t.Fatal(tokenErr)
 	}
 	planResult := newCloudflareTestModule(&deferredCloudflareAPI{}, cloudflaretunnel.SystemClock{}).Plan(t.Context(), cloudflaretunnel.PlanRequest{
-		Authority: cloudflaretunnel.ViewRequest{AccountID: candidate.Cloudflare.AccountID, ZoneID: candidate.Cloudflare.ZoneID, ZoneName: candidate.Cloudflare.ZoneName, Token: managementToken, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
+		Authority: cloudflaretunnel.ViewRequest{AccountID: candidate.Cloudflare.AccountID, ZoneID: candidate.Cloudflare.ZoneID, ZoneName: candidate.Cloudflare.ZoneName, Token: managementToken, DedicatedBroadPolicyConfirmed: true, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
 		ChangeSet: "change-0008", StartingRevision: 7, StartingStateSHA256: loaded.loaded.payloadChecksum, DesiredStateSHA256: fmt.Sprintf("%x", digest), TunnelName: candidate.Cloudflare.TunnelName,
 		XHTTPHostname: candidate.Cloudflare.XHTTPHostname, WebSocketHostname: candidate.Cloudflare.WebSocketHostname, DirectHostname: candidate.Cloudflare.DirectHostname, PublicIPv4: candidate.NetworkPolicy.PublicIPv4,
 		CloudflaredVersion: candidate.Software.CloudflaredVersion,
@@ -322,11 +322,11 @@ func TestPrepareManagementTokenChangeAcceptsOnlyTheReviewedCloudflarePlan(t *tes
 			token := cloudflaretunnel.ManagementToken{}
 			final := template
 			if action == cloudflaretunnel.ManagementTokenReplace {
-				token, err = cloudflaretunnel.NewManagementToken("cfat_REPLACEMENT-TOKEN-SECRET-MARKER-000000")
+				token, err = cloudflaretunnel.NewManagementToken("sbxr_REPLACEMENT-TOKEN-SECRET-MARKER-000000")
 				if err != nil {
 					t.Fatal(err)
 				}
-				final.Cloudflare.ManagementToken = NewInfrastructureSecret("cfat_REPLACEMENT-TOKEN-SECRET-MARKER-000000")
+				final.Cloudflare.ManagementToken = NewInfrastructureSecret("sbxr_REPLACEMENT-TOKEN-SECRET-MARKER-000000")
 			}
 			provider := &deferredCloudflareAPI{}
 			var inventory cloudflaretunnel.ManagementTokenInventoryAuthority
@@ -337,7 +337,7 @@ func TestPrepareManagementTokenChangeAcceptsOnlyTheReviewedCloudflarePlan(t *tes
 				}
 			}
 			planResult := newCloudflareTestModule(provider, cloudflaretunnel.SystemClock{}).Plan(context.Background(), cloudflaretunnel.PlanRequest{
-				Authority: cloudflaretunnel.ViewRequest{AccountID: starting.Cloudflare.AccountID, ZoneID: starting.Cloudflare.ZoneID, ZoneName: starting.Cloudflare.ZoneName, Token: token, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
+				Authority: cloudflaretunnel.ViewRequest{AccountID: starting.Cloudflare.AccountID, ZoneID: starting.Cloudflare.ZoneID, ZoneName: starting.Cloudflare.ZoneName, Token: token, DedicatedBroadPolicyConfirmed: true, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
 				ChangeSet: "cloudflare-token-change", StartingRevision: 7, StartingStateSHA256: loaded.loaded.payloadChecksum, DesiredStateSHA256: templateSHA,
 				ManagementToken: stateTestManagementTokenChange(action, inventory, test.removed),
 			})
@@ -391,13 +391,13 @@ func TestPrepareRunTokenRotationKeepsTheOldTokenOnlyInRollbackMaterial(t *testin
 		t.Fatal(err)
 	}
 	templateDigest := sha256.Sum256(template)
-	managementToken, err := cloudflaretunnel.NewManagementToken("cfat_ROTATION-MANAGEMENT-TOKEN-MARKER-0000")
+	managementToken, err := cloudflaretunnel.NewManagementToken("sbxr_ROTATION-MANAGEMENT-TOKEN-MARKER-0000")
 	if err != nil {
 		t.Fatal(err)
 	}
 	provider := &deferredCloudflareAPI{}
 	planResult := newCloudflareTestModule(provider, cloudflaretunnel.SystemClock{}).Plan(t.Context(), cloudflaretunnel.PlanRequest{
-		Authority: cloudflaretunnel.ViewRequest{AccountID: starting.Cloudflare.AccountID, ZoneID: starting.Cloudflare.ZoneID, ZoneName: starting.Cloudflare.ZoneName, Token: managementToken, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
+		Authority: cloudflaretunnel.ViewRequest{AccountID: starting.Cloudflare.AccountID, ZoneID: starting.Cloudflare.ZoneID, ZoneName: starting.Cloudflare.ZoneName, Token: managementToken, DedicatedBroadPolicyConfirmed: true, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
 		ChangeSet: "cloudflare-run-token-rotation-prepare", StartingRevision: 7, StartingStateSHA256: loaded.loaded.payloadChecksum, DesiredStateSHA256: hex.EncodeToString(templateDigest[:]),
 		XHTTPHostname: starting.Cloudflare.XHTTPHostname, WebSocketHostname: starting.Cloudflare.WebSocketHostname, DirectHostname: starting.Cloudflare.DirectHostname,
 		PublicIPv4: starting.NetworkPolicy.PublicIPv4, CloudflaredVersion: starting.Software.CloudflaredVersion,
@@ -420,6 +420,46 @@ func TestPrepareRunTokenRotationKeepsTheOldTokenOnlyInRollbackMaterial(t *testin
 	}
 	if prepared.deferred == nil || prepared.serviceCopies.Cloudflared != nil || strings.Contains(string(prepared.preparedState), "CLOUDFLARE-RUN-SECRET-MARKER-00001") || !strings.Contains(string(prepared.starting.bytes), "CLOUDFLARE-RUN-SECRET-MARKER-00001") {
 		t.Fatal("old run token was not confined to pre-checkpoint rollback material")
+	}
+}
+
+func TestPrepareManagementTokenRotationDefersOnlyTheNewProviderSecret(t *testing.T) {
+	starting := completeDesiredState()
+	starting.Cloudflare.AccountID = strings.Repeat("1", 32)
+	starting.Cloudflare.ZoneID = strings.Repeat("2", 32)
+	starting.Cloudflare.DedicatedBroadPolicyConfirmed = true
+	storage := &mutableStateStorage{document: documentFor(t, starting)}
+	stateModule := New(storage)
+	loaded, err := stateModule.Load(intentManagedRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	template, _ := marshalProtectedJSON(starting)
+	digest := sha256.Sum256(template)
+	managementToken, err := cloudflaretunnel.NewManagementToken("sbxr_ROTATION-MANAGEMENT-TOKEN-MARKER-0000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	planResult := newCloudflareTestModule(&deferredCloudflareAPI{}, cloudflaretunnel.SystemClock{}).Plan(t.Context(), cloudflaretunnel.PlanRequest{
+		Authority: cloudflaretunnel.ViewRequest{AccountID: starting.Cloudflare.AccountID, ZoneID: starting.Cloudflare.ZoneID, ZoneName: starting.Cloudflare.ZoneName, Token: managementToken, DedicatedBroadPolicyConfirmed: true, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
+		ChangeSet: "cloudflare-management-token-rotation-prepare", StartingRevision: 7, StartingStateSHA256: loaded.loaded.payloadChecksum, DesiredStateSHA256: hex.EncodeToString(digest[:]), ManagementToken: cloudflaretunnel.ManagementTokenChange{Action: cloudflaretunnel.ManagementTokenRotate, CurrentTokenID: strings.Repeat("6", 32)},
+	})
+	if planResult.Plan == nil {
+		t.Fatalf("rotation Plan = %+v", planResult.Health)
+	}
+	request := preparedRequest(t, loaded, starting, "cloudflare-management-token-rotation-prepare")
+	request.SemanticValidators.Cloudflare.(*validatingSeams).want = starting
+	request.ServiceMaterials = serviceMaterialsFor(starting)
+	request.ReviewedInputs, err = NewReviewedInputs(PlanIdentity(planResult.Plan.Identity()), planResult.Plan.SHA256(), request.ReviewedInputs.managed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := stateModule.PrepareManagementTokenRotationCommit(request, planResult.Plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.deferred == nil || !prepared.deferred.managementRotation || strings.Contains(string(prepared.preparedState), "CLOUDFLARE-MANAGEMENT-SECRET-MARKER") || !strings.Contains(string(prepared.starting.bytes), "CLOUDFLARE-MANAGEMENT-SECRET-MARKER") {
+		t.Fatal("old management token was not confined to rollback material")
 	}
 }
 
@@ -446,12 +486,12 @@ func TestPrepareManagementTokenReplacementRejectsDifferentSelectedAuthority(t *t
 		t.Fatal(err)
 	}
 	digest := sha256.Sum256(template)
-	token, err := cloudflaretunnel.NewManagementToken("cfat_MISMATCHED-AUTHORITY-SECRET-MARKER-000000")
+	token, err := cloudflaretunnel.NewManagementToken("sbxr_MISMATCHED-AUTHORITY-SECRET-MARKER-000000")
 	if err != nil {
 		t.Fatal(err)
 	}
 	plan := newCloudflareTestModule(&deferredCloudflareAPI{}, cloudflaretunnel.SystemClock{}).Plan(context.Background(), cloudflaretunnel.PlanRequest{
-		Authority: cloudflaretunnel.ViewRequest{AccountID: starting.Cloudflare.AccountID, ZoneID: starting.Cloudflare.ZoneID, ZoneName: starting.Cloudflare.ZoneName, Token: token, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
+		Authority: cloudflaretunnel.ViewRequest{AccountID: starting.Cloudflare.AccountID, ZoneID: starting.Cloudflare.ZoneID, ZoneName: starting.Cloudflare.ZoneName, Token: token, DedicatedBroadPolicyConfirmed: true, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}},
 		ChangeSet: "cloudflare-token-authority-mismatch", StartingRevision: 7, StartingStateSHA256: loaded.loaded.payloadChecksum, DesiredStateSHA256: hex.EncodeToString(digest[:]),
 		ManagementToken: cloudflaretunnel.ManagementTokenChange{Action: cloudflaretunnel.ManagementTokenReplace, CurrentTokenID: strings.Repeat("5", 32)},
 	})

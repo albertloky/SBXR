@@ -17,7 +17,7 @@ const (
 	accountID = "11111111111111111111111111111111"
 	zoneID    = "22222222222222222222222222222222"
 	tokenID   = "33333333333333333333333333333333"
-	token     = "cfat_MANAGEMENT-TOKEN-MARKER-00000000abcd"
+	token     = "SBXR_USER_TOKEN_MARKER_00000000000000abcd"
 )
 
 type staticAPI struct {
@@ -71,7 +71,7 @@ func TestManagementTokenDeletionUsesObservedExactIDAndProvesUnauthorized(t *test
 	if err := module.DeleteAndVerifyManagementToken(t.Context(), request, observedID); err != nil {
 		t.Fatal(err)
 	}
-	if api.deleted.AccountID != accountID || api.deleted.ID != tokenID || api.calls != 3 {
+	if api.deleted.ID != tokenID || api.calls != 3 {
 		t.Fatalf("automatic token deletion = %+v, observations=%d", api.deleted, api.calls)
 	}
 }
@@ -97,7 +97,7 @@ func TestManagementTokenDeletionRecoversAfterDeleteBeforeCheckpoint(t *testing.T
 	}
 }
 
-func TestViewVerifiesOneScopedCloudflareAuthority(t *testing.T) {
+func TestViewVerifiesOneDedicatedBroadUserTokenAuthority(t *testing.T) {
 	managementToken, err := cloudflaretunnel.NewManagementToken(token)
 	if err != nil {
 		t.Fatal(err)
@@ -105,12 +105,13 @@ func TestViewVerifiesOneScopedCloudflareAuthority(t *testing.T) {
 	checkedAt := time.Date(2026, time.August, 7, 12, 0, 0, 0, time.UTC)
 	api := &staticAPI{observation: completeObservation()}
 	result := cloudflaretunnel.New(api, &controlledClock{now: checkedAt}).View(context.Background(), cloudflaretunnel.ViewRequest{
-		AccountID:        accountID,
-		ZoneID:           zoneID,
-		ZoneName:         "example.com",
-		Token:            managementToken,
-		NetworkPath:      networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed},
-		CredentialDetail: true,
+		AccountID:                     accountID,
+		ZoneID:                        zoneID,
+		ZoneName:                      "example.com",
+		Token:                         managementToken,
+		DedicatedBroadPolicyConfirmed: true,
+		NetworkPath:                   networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed},
+		CredentialDetail:              true,
 	})
 
 	if result.Health.Outcome != cloudflaretunnel.Healthy || result.Health.Code != "CLOUDFLARE-AUTHORITY-VERIFIED" {
@@ -122,10 +123,10 @@ func TestViewVerifiesOneScopedCloudflareAuthority(t *testing.T) {
 	if result.Account.ID != accountID || result.Account.Name != "Selected account" || result.Zone.ID != zoneID || result.Zone.Name != "example.com" || !result.Zone.Active || !result.Zone.Delegated {
 		t.Fatalf("View() binding = account %+v zone %+v", result.Account, result.Zone)
 	}
-	if result.Credential.Status != "active" || result.Credential.FirstFour != "cfat" || result.Credential.LastFour != "abcd" || result.Credential.ExpiresOn == nil || !result.Capability.ReadsVerified || result.Capability.WritesProven {
+	if result.Credential.Status != "active" || result.Credential.FirstFour != "SBXR" || result.Credential.LastFour != "abcd" || result.Credential.ExpiresOn != nil || !result.Capability.ReadsVerified || result.Capability.WritesProven {
 		t.Fatalf("View() credential = %+v capability %+v", result.Credential, result.Capability)
 	}
-	if strings.Join(result.Capability.EffectivePermissions, ",") != "Account API Tokens Read,Cloudflare Tunnel Edit,DNS Write" || !result.Capability.Exact || result.Capability.UnapprovedPermissions != 0 {
+	if strings.Join(result.Capability.EffectivePermissions, ",") != "User API Tokens Edit,Cloudflare Tunnel Edit,DNS Edit,Zone Read" || !result.Capability.Exact || result.Capability.UnapprovedPermissions != 0 {
 		t.Fatalf("View() effective capability = %+v", result.Capability)
 	}
 	verifiedToken, verified := result.VerifiedManagementToken()
@@ -142,10 +143,10 @@ func TestViewVerifiesOneScopedCloudflareAuthority(t *testing.T) {
 	if result.LastCheck != checkedAt || result.NetworkPath.HTTPS != networkpolicy.ProofPassed || result.NetworkPath.TCP7844 != networkpolicy.ProofPassed || result.NetworkPath.UDP7844 != networkpolicy.ProofPassed {
 		t.Fatalf("View() freshness = %v path %+v", result.LastCheck, result.NetworkPath)
 	}
-	if result.Walkthrough.DashboardURL != "https://dash.cloudflare.com/" || result.Walkthrough.AccountTokens != "Manage Account > Account API Tokens" || result.Walkthrough.DNSRecords != "selected domain > DNS > Records" || result.Walkthrough.Tunnels != "Cloudflare One > Networks > Tunnels & Mesh" {
+	if result.Walkthrough.DashboardURL != "https://dash.cloudflare.com/" || result.Walkthrough.AccountTokens != "My Profile > API Tokens" || result.Walkthrough.DNSRecords != "selected domain > DNS > Records" || result.Walkthrough.Tunnels != "Cloudflare One > Networks > Tunnels & Mesh" {
 		t.Fatalf("View() walkthrough = %+v", result.Walkthrough)
 	}
-	if strings.Join(result.Walkthrough.Permissions, ",") != "Account > Account API Tokens > Read,Account > Cloudflare Tunnel > Edit,Zone > DNS > Edit" {
+	if strings.Join(result.Walkthrough.Permissions, ",") != "User > API Tokens > Edit,Account > Cloudflare Tunnel > Edit,Zone > DNS > Edit,Zone > Zone > Read" {
 		t.Fatalf("View() permission labels = %+v", result.Walkthrough.Permissions)
 	}
 	if rendered := result.String(); strings.Contains(rendered, token) || strings.Contains(rendered, "MANAGEMENT-TOKEN-MARKER") {
@@ -156,14 +157,14 @@ func TestViewVerifiesOneScopedCloudflareAuthority(t *testing.T) {
 	}
 }
 
-func TestCredentialGuidanceUsesCurrentAccountTokenPathAndMinimumAuthority(t *testing.T) {
+func TestCredentialGuidanceUsesDedicatedBroadUserTokenPathAndAuthority(t *testing.T) {
 	want := map[cloudflaretunnel.CredentialInput]struct {
 		example, url string
 		secret       bool
 	}{
-		cloudflaretunnel.AccountIDInput:    {"11111111111111111111111111111111", "https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/", false},
-		cloudflaretunnel.ZoneIDInput:       {"22222222222222222222222222222222", "https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/", false},
-		cloudflaretunnel.AccountTokenInput: {"", "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/", true},
+		cloudflaretunnel.AccountIDInput: {"11111111111111111111111111111111", "https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/", false},
+		cloudflaretunnel.ZoneIDInput:    {"22222222222222222222222222222222", "https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/", false},
+		cloudflaretunnel.UserTokenInput: {"", "https://developers.cloudflare.com/fundamentals/api/get-started/create-token/", true},
 	}
 	for input, expected := range want {
 		help, ok := cloudflaretunnel.CredentialGuidance(input)
@@ -176,14 +177,14 @@ func TestCredentialGuidanceUsesCurrentAccountTokenPathAndMinimumAuthority(t *tes
 	if !slices.Equal(account.Instructions, []string{"Open Account home; use Search or CMD/CTRL+K, find the account, and select Copy account ID."}) || !slices.Equal(zone.Instructions, []string{"Select the domain; open domain Overview; in API, copy the Zone ID."}) {
 		t.Fatalf("current account and zone ID paths = account %q zone %q", account.Instructions, zone.Instructions)
 	}
-	tokenHelp, _ := cloudflaretunnel.CredentialGuidance(cloudflaretunnel.AccountTokenInput)
+	tokenHelp, _ := cloudflaretunnel.CredentialGuidance(cloudflaretunnel.UserTokenInput)
 	joined := strings.Join(append(append([]string{}, tokenHelp.Instructions...), tokenHelp.CommonMistakes...), " ")
-	for _, want := range []string{"Manage Account > Account API Tokens", "Account > Account API Tokens > Read", "Account > Cloudflare Tunnel > Edit", "Zone > DNS > Edit", "selected account", "selected zone", "Global API Key", "user API token", "Write", "wildcard", "unrelated permission"} {
+	for _, want := range []string{"My Profile > API Tokens", "User > API Tokens > Edit", "Account > Cloudflare Tunnel > Edit", "Zone > DNS > Edit", "Zone > Zone > Read", "all accounts", "all zones", "Global API Key", "Account API Token", "no expiry", "no client-IP restriction"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("Account API Token guidance omitted %q: %+v", want, tokenHelp)
 		}
 	}
-	for _, placeholder := range []string{"cfat_placeholder________________________________", "cfat_your_token_________________________________"} {
+	for _, placeholder := range []string{"sbxr_placeholder________________________________", "sbxr_your_token_________________________________", "cfat_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"} {
 		if _, err := cloudflaretunnel.NewManagementToken(placeholder); err == nil {
 			t.Fatalf("placeholder token %q was accepted", placeholder)
 		}
@@ -200,18 +201,18 @@ func TestExternalCorrectionGuidanceUsesCurrentOfficialPathsAndExactCredentialAct
 			content: []string{"domain Overview", "assigned Cloudflare nameservers", "registrar or reseller", "Check again"},
 		},
 		cloudflaretunnel.ManagementTokenRevocation: {
-			url:     "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/",
-			content: []string{"Manage Account > Account API Tokens", "SBXR - selected account / selected zone", "only that Account API Token", "Global API Key", "user API token", "Tunnel run token", "Check again"},
+			url:     "https://developers.cloudflare.com/fundamentals/api/get-started/create-token/",
+			content: []string{"My Profile > API Tokens", "exact Dedicated Broad Cloudflare User API Token ID", "only that token", "Global API Key", "Account API Token", "Tunnel run token", "Check again"},
 		},
 		cloudflaretunnel.TunnelRunTokenRotation: {
 			url:     "https://developers.cloudflare.com/tunnel/advanced/tunnel-tokens/",
-			content: []string{"Networking > Tunnels", "committed SBXR Tunnel", "Rotate token", "only that Tunnel run token", "management Account API Token"},
+			content: []string{"Networking > Tunnels", "committed SBXR Tunnel", "Rotate token", "only that Tunnel run token", "Dedicated Broad Cloudflare User API Token"},
 		},
 	}
 	for correction, expected := range want {
 		help, ok := cloudflaretunnel.ExternalCorrectionGuidance(correction)
 		joined := strings.Join(help.Instructions, " ")
-		if !ok || help.URL != expected.url || len(help.Instructions) == 0 || strings.Contains(joined, "My Profile > API Tokens") {
+		if !ok || help.URL != expected.url || len(help.Instructions) == 0 {
 			t.Fatalf("%v correction guidance = %+v, ok=%t", correction, help, ok)
 		}
 		for _, content := range expected.content {
@@ -248,7 +249,7 @@ func TestViewFailsClosedWithoutLeakingAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	healthyPath := networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}
-	request := cloudflaretunnel.ViewRequest{AccountID: accountID, ZoneID: zoneID, ZoneName: "example.com", Token: managementToken, NetworkPath: healthyPath}
+	request := cloudflaretunnel.ViewRequest{AccountID: accountID, ZoneID: zoneID, ZoneName: "example.com", Token: managementToken, NetworkPath: healthyPath, DedicatedBroadPolicyConfirmed: true}
 
 	t.Run("general View hides token markers", func(t *testing.T) {
 		result := cloudflaretunnel.New(&staticAPI{observation: completeObservation()}, &controlledClock{}).View(context.Background(), request)
@@ -263,9 +264,16 @@ func TestViewFailsClosedWithoutLeakingAuthority(t *testing.T) {
 	})
 
 	t.Run("authorization refusal retains only the configured correction scope", func(t *testing.T) {
-		result := cloudflaretunnel.New(&staticAPI{err: cloudflaretunnel.APIError{Kind: cloudflaretunnel.APIForbidden, RequiredPermission: cloudflaretunnel.DNSWritePermission}}, &controlledClock{}).View(context.Background(), request)
+		result := cloudflaretunnel.New(&staticAPI{err: cloudflaretunnel.APIError{Kind: cloudflaretunnel.APIForbidden, RequiredPermission: cloudflaretunnel.DNSEditPermission}}, &controlledClock{}).View(context.Background(), request)
 		if result.Health.Code != "CLOUDFLARE-TOKEN-PERMISSION" || result.Account.ID != accountID || result.Zone.ID != zoneID || result.Zone.Name != "example.com" || result.PermissionCorrection.Required != "Zone > DNS > Edit on selected zone "+zoneID || !strings.Contains(strings.Join(result.PermissionCorrection.DashboardSteps, " "), "Check current token again") {
 			t.Fatalf("authorization correction scope = account %+v zone %+v health %+v", result.Account, result.Zone, result.Health)
+		}
+	})
+
+	t.Run("active-zone listing limit opens a Correction Flow", func(t *testing.T) {
+		result := cloudflaretunnel.New(&staticAPI{err: cloudflaretunnel.APIError{Kind: cloudflaretunnel.APILimit}}, &controlledClock{}).View(context.Background(), request)
+		if result.Health.Outcome != cloudflaretunnel.NeedsAttention || result.Health.Code != "CLOUDFLARE-ZONE-LIST-LIMIT" || !strings.Contains(strings.Join(result.Health.NextActions, " "), "Reduce the visible active-zone set") {
+			t.Fatalf("zone listing limit = %+v", result.Health)
 		}
 	})
 
@@ -324,59 +332,32 @@ func TestViewFailsClosedWithoutLeakingAuthority(t *testing.T) {
 		{name: "wrong account", change: func(observation *cloudflaretunnel.Observation) {
 			observation.Zone.AccountID = "44444444444444444444444444444444"
 		}, found: "zone account"},
-		{name: "missing capability", change: func(observation *cloudflaretunnel.Observation) {
-			observation.Policies[0].PermissionGroups = []string{"Account API Tokens Read"}
-		}, found: "missing Cloudflare Tunnel Edit"},
-		{name: "overbroad capability", change: func(observation *cloudflaretunnel.Observation) {
-			observation.Policies[0].PermissionGroups = append(observation.Policies[0].PermissionGroups, "Billing Read")
-		}, found: "unapproved permission"},
-		{name: "unexpected permission marker", change: func(observation *cloudflaretunnel.Observation) {
-			observation.Policies[0].PermissionGroups = append(observation.Policies[0].PermissionGroups, "PROVIDER-FIELD-MARKER "+token)
-		}, found: "unapproved permission"},
-		{name: "all-zone scope", change: func(observation *cloudflaretunnel.Observation) {
-			observation.Policies[1].Resources = map[string]string{"com.cloudflare.api.account.zone.*": "*"}
-		}, found: "unexpected resource"},
-		{name: "ambiguous extra scope", change: func(observation *cloudflaretunnel.Observation) {
-			observation.Policies[1].Resources["com.cloudflare.api.account.zone.44444444444444444444444444444444"] = "*"
-		}, found: "2 resources"},
-		{name: "denied permission is not effective", change: func(observation *cloudflaretunnel.Observation) {
-			observation.Policies[1].Effect = "deny"
-		}, found: "deny"},
+		{name: "expiry is refused", change: func(observation *cloudflaretunnel.Observation) {
+			expires := time.Now().Add(time.Hour)
+			observation.Token.ExpiresOn = &expires
+		}, found: "expiry"},
+		{name: "DNS probe missing", change: func(observation *cloudflaretunnel.Observation) { observation.DNSListProven = false }, found: "probes"},
+		{name: "Tunnel probe missing", change: func(observation *cloudflaretunnel.Observation) { observation.TunnelListProven = false }, found: "probes"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			observation := completeObservation()
 			test.change(&observation)
 			result := cloudflaretunnel.New(&staticAPI{observation: observation}, &controlledClock{}).View(context.Background(), request)
 			wantActions := []string{"Check current token again", "Enter replacement token", "Verify replacement", "Back"}
-			if result.Health.Outcome != cloudflaretunnel.Failed || result.Health.Code != "CLOUDFLARE-TOKEN-PERMISSION" || strings.Join(result.Health.NextActions, ",") != strings.Join(wantActions, ",") {
+			if result.Health.Outcome != cloudflaretunnel.NeedsAttention || result.Health.Code != "CLOUDFLARE-TOKEN-PERMISSION" || strings.Join(result.Health.NextActions, ",") != strings.Join(wantActions, ",") {
 				t.Fatalf("unsafe authority health = %+v", result.Health)
 			}
 			if result.Capability.Exact {
 				t.Fatalf("unsafe authority reported exact capability: %+v", result.Capability)
 			}
-			if test.name == "all-zone scope" || test.name == "ambiguous extra scope" || test.name == "denied permission is not effective" {
-				if slices.Contains(result.Capability.EffectivePermissions, "DNS Write") {
-					t.Fatalf("unsafe DNS Write reported effective: %+v", result.Capability)
-				}
-			}
 			if result.Health.Problem == "" || !strings.Contains(result.Health.Found, test.found) || result.Health.Required == "" || result.Health.WhyStopped == "" || result.Health.Evidence == "" || strings.Contains(strings.Join(result.Health.NextActions, " "), "Continue anyway") {
 				t.Fatalf("unsafe authority omitted Correction Flow facts: %+v", result.Health)
-			}
-			if test.name == "missing capability" && result.PermissionCorrection.Required != "Account > Cloudflare Tunnel > Edit on selected account "+accountID {
-				t.Fatalf("missing capability correction = %+v", result.PermissionCorrection)
 			}
 			if rendered := result.String() + result.Health.Found; strings.Contains(rendered, "PROVIDER-FIELD-MARKER") || strings.Contains(rendered, token) {
 				t.Fatalf("unsafe authority leaked provider material: %s", rendered)
 			}
 		})
 	}
-
-	t.Run("expired token is not accepted as active authority", func(t *testing.T) {
-		result := cloudflaretunnel.New(&staticAPI{observation: completeObservation()}, &controlledClock{now: time.Date(2028, time.August, 7, 0, 0, 0, 0, time.UTC)}).View(context.Background(), request)
-		if result.Health.Code != "CLOUDFLARE-TOKEN-PERMISSION" {
-			t.Fatalf("expired token health = %+v", result.Health)
-		}
-	})
 
 	t.Run("pending delegation has bounded exact actions", func(t *testing.T) {
 		observation := completeObservation()
@@ -409,14 +390,13 @@ func TestViewFailsClosedWithoutLeakingAuthority(t *testing.T) {
 		api := &staticAPI{err: fmt.Errorf("PROVIDER-ERROR-MARKER %s: %w", token, cloudflaretunnel.APIError{Kind: cloudflaretunnel.APIForbidden})}
 		result := cloudflaretunnel.New(api, &controlledClock{}).View(context.Background(), request)
 		rendered := result.String() + result.Health.Explanation + strings.Join(result.Health.NextActions, " ")
-		if result.Health.Outcome != cloudflaretunnel.Failed || result.Health.Code != "CLOUDFLARE-TOKEN-PERMISSION" || strings.Contains(rendered, "PROVIDER-ERROR-MARKER") || strings.Contains(rendered, token) {
+		if result.Health.Outcome != cloudflaretunnel.NeedsAttention || result.Health.Code != "CLOUDFLARE-TOKEN-PERMISSION" || strings.Contains(rendered, "PROVIDER-ERROR-MARKER") || strings.Contains(rendered, token) {
 			t.Fatalf("provider refusal = %+v", result.Health)
 		}
 	})
 }
 
 func completeObservation() cloudflaretunnel.Observation {
-	expires := time.Date(2027, time.August, 7, 0, 0, 0, 0, time.UTC)
 	return cloudflaretunnel.Observation{
 		Account: cloudflaretunnel.AccountObservation{ID: accountID, Name: "Selected account"},
 		Zone: cloudflaretunnel.ZoneObservation{
@@ -427,10 +407,8 @@ func completeObservation() cloudflaretunnel.Observation {
 			AssignedNameServers: []string{"ada.ns.cloudflare.com", "bob.ns.cloudflare.com"},
 			ObservedNameServers: []string{"bob.ns.cloudflare.com", "ada.ns.cloudflare.com"},
 		},
-		Token: cloudflaretunnel.TokenObservation{ID: tokenID, Status: "active", ExpiresOn: &expires},
-		Policies: []cloudflaretunnel.TokenPolicy{
-			{Effect: "allow", PermissionGroups: []string{"Account API Tokens Read", "Cloudflare Tunnel Edit"}, Resources: map[string]string{"com.cloudflare.api.account." + accountID: "*"}},
-			{Effect: "allow", PermissionGroups: []string{"DNS Write"}, Resources: map[string]string{"com.cloudflare.api.account.zone." + zoneID: "*"}},
-		},
+		Token:            cloudflaretunnel.TokenObservation{ID: tokenID, Status: "active"},
+		DNSListProven:    true,
+		TunnelListProven: true,
 	}
 }

@@ -95,6 +95,9 @@ type CloudflareExecutor interface {
 	RemoveRunToken(string) error
 	RetrieveRunToken(systemchanges.CloudflareChange, string, time.Duration) (any, bool, error)
 	RotateService(string, io.Reader, time.Duration) (systemchanges.StepEvidence, error)
+	PrepareManagementTokenRotation(io.Reader, time.Duration, func([]byte) error) ([]byte, string, error)
+	CleanupManagementTokenCandidate(io.Reader, time.Duration) error
+	CompleteManagementTokenRotation(io.Reader, time.Duration) (any, error)
 }
 
 type CertificateExecutor interface {
@@ -361,6 +364,9 @@ func (a Adapter) Record(lease systemchanges.ExecutionLease, record systemchanges
 	if record.Checkpoint == systemchanges.StateFinalized {
 		return discardDeferredPrevious(root, target)
 	}
+	if record.Checkpoint == systemchanges.ManagementTokenRollbackDeleted {
+		return discardManagementTokenRollbackPrevious(root, target)
+	}
 	if record.Checkpoint == systemchanges.StepCompleted && record.CompletedStep != nil {
 		if _, ok := record.CompletedStep.FirewallChange(); ok && a.firewall != nil {
 			if record.Evidence == nil {
@@ -399,6 +405,233 @@ func (a Adapter) StartRunTokenRotation(lease systemchanges.ExecutionLease, chang
 		return true, err
 	}
 	return true, verifyTransaction(root, target, a.uid)
+}
+
+func (a Adapter) StartManagementTokenRotation(lease systemchanges.ExecutionLease, changeSet string, _ time.Duration) (bool, error) {
+	if !lease.Authorized() || a.cloudflare == nil || !safeName(changeSet) {
+		return false, errors.New("management-token rotation checkpoint unavailable")
+	}
+	root, err := os.OpenRoot(a.root)
+	if err != nil {
+		return false, err
+	}
+	defer root.Close()
+	target := path.Join(transactionDirectory, changeSet)
+	journalName := path.Join(target, "journal.jsonl")
+	journal, err := readJournal(root, journalName)
+	if err != nil || !validJournal(journal) || journal[len(journal)-1].Checkpoint != systemchanges.ManagementTokenCandidatePrepared || journal[0].Mutation != systemchanges.RotationMutation || len(journal[0].Steps) != 1 || journal[0].Steps[0].Cloudflare == nil || journal[0].Steps[0].Cloudflare.Action != systemchanges.CloudflareManagementTokenActivate {
+		return false, errors.New("management-token rotation preparation is unproved")
+	}
+	if err := appendJournal(root, journalName, journalEntry{Checkpoint: systemchanges.IrreversibleManagementTokenReplacementStarted}, a.uid); err != nil {
+		return false, err
+	}
+	if err := a.discardPriorStateRollback(root, target); err != nil {
+		return true, err
+	}
+	return true, verifyTransaction(root, target, a.uid)
+}
+
+func (a Adapter) PrepareManagementTokenRotation(lease systemchanges.ExecutionLease, changeSet string, timeout time.Duration) (bool, error) {
+	if !lease.Authorized() || a.cloudflare == nil || !safeName(changeSet) {
+		return false, errors.New("management-token candidate preparation unavailable")
+	}
+	root, err := os.OpenRoot(a.root)
+	if err != nil {
+		return false, err
+	}
+	defer root.Close()
+	target := path.Join(transactionDirectory, changeSet)
+	journalName := path.Join(target, "journal.jsonl")
+	journal, err := readJournal(root, journalName)
+	if err != nil || !validJournal(journal) || journal[len(journal)-1].Checkpoint != systemchanges.Prepared && journal[len(journal)-1].Checkpoint != systemchanges.ManagementTokenCandidateIntentPrepared {
+		return false, errors.New("management-token durable intent is unproved")
+	}
+	snapshot, err := a.recoveryArtifact(lease, changeSet, "snapshot/step-001.rollback")
+	if err != nil {
+		return false, err
+	}
+	updated, candidateID, prepareErr := a.cloudflare.PrepareManagementTokenRotation(bytes.NewReader(snapshot), timeout, func(intent []byte) error {
+		if err := a.replaceManagementTokenSnapshot(root, target, intent); err != nil {
+			return err
+		}
+		if err := appendJournal(root, journalName, journalEntry{Checkpoint: systemchanges.ManagementTokenCandidateIntentPrepared}, a.uid); err != nil {
+			return err
+		}
+		return discardManagementTokenSnapshotPrevious(root, target)
+	})
+	if len(updated) != 0 {
+		if err := a.replaceManagementTokenSnapshot(root, target, updated); err != nil {
+			if candidateID != "" {
+				evidence := managementTokenCandidateCleanupEvidence(candidateID)
+				if appendJournal(root, journalName, journalEntry{Checkpoint: systemchanges.ManagementTokenCandidateCleanupRequired, Evidence: &evidence}, a.uid) == nil {
+					return true, err
+				}
+			}
+			return true, err
+		}
+	}
+	if prepareErr != nil && len(updated) != 0 {
+		evidence := managementTokenCandidateCleanupEvidence(candidateID)
+		if appendJournal(root, journalName, journalEntry{Checkpoint: systemchanges.ManagementTokenCandidateCleanupRequired, Evidence: &evidence}, a.uid) != nil {
+			return true, errors.New("management-token cleanup checkpoint unavailable")
+		}
+		if err := discardManagementTokenSnapshotPrevious(root, target); err != nil {
+			return true, err
+		}
+		return true, prepareErr
+	}
+	if prepareErr != nil {
+		return false, prepareErr
+	}
+	if err := appendJournal(root, journalName, journalEntry{Checkpoint: systemchanges.ManagementTokenCandidatePrepared}, a.uid); err != nil {
+		return true, err
+	}
+	if err := discardManagementTokenSnapshotPrevious(root, target); err != nil {
+		return true, err
+	}
+	return false, verifyTransaction(root, target, a.uid)
+}
+
+func managementTokenCandidateCleanupEvidence(candidateID string) systemchanges.StepEvidence {
+	if candidateID == "" {
+		digest := sha256.Sum256([]byte("management-token-candidate-intent"))
+		return systemchanges.StepEvidence{Code: "cloudflare-management-token-candidate-cleanup", SHA256: hex.EncodeToString(digest[:])}
+	}
+	digest := sha256.Sum256([]byte(candidateID))
+	return systemchanges.StepEvidence{Code: "cloudflare-management-token-candidate-cleanup", SHA256: hex.EncodeToString(digest[:]), ResourceType: "cloudflare-management-token", ResourceID: candidateID}
+}
+
+func (a Adapter) RequireManagementTokenCandidateCleanup(lease systemchanges.ExecutionLease, changeSet string) error {
+	if !lease.Authorized() || !safeName(changeSet) {
+		return errors.New("management-token cleanup checkpoint unavailable")
+	}
+	root, err := os.OpenRoot(a.root)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	target := path.Join(transactionDirectory, changeSet)
+	journalName := path.Join(target, "journal.jsonl")
+	journal, err := readJournal(root, journalName)
+	if err != nil || !validJournal(journal) {
+		return errors.New("management-token candidate preparation is unproved")
+	}
+	if journal[len(journal)-1].Checkpoint == systemchanges.ManagementTokenCandidateCleanupRequired {
+		return nil
+	}
+	if journal[len(journal)-1].Checkpoint != systemchanges.ManagementTokenCandidatePrepared {
+		return errors.New("management-token candidate preparation is unproved")
+	}
+	snapshot, err := a.recoveryArtifact(lease, changeSet, "snapshot/step-001.rollback")
+	var record struct {
+		CandidateID string `json:"candidate_id"`
+	}
+	if err != nil || json.Unmarshal(snapshot, &record) != nil || !safeName(record.CandidateID) {
+		return errors.New("management-token candidate identity unavailable")
+	}
+	evidence := managementTokenCandidateCleanupEvidence(record.CandidateID)
+	return appendJournal(root, journalName, journalEntry{Checkpoint: systemchanges.ManagementTokenCandidateCleanupRequired, Evidence: &evidence}, a.uid)
+}
+
+func (a Adapter) CleanupManagementTokenCandidate(lease systemchanges.ExecutionLease, changeSet string, timeout time.Duration) error {
+	if !lease.Authorized() || a.cloudflare == nil || !safeName(changeSet) {
+		return errors.New("management-token candidate cleanup unavailable")
+	}
+	snapshot, err := a.recoveryArtifact(lease, changeSet, "snapshot/step-001.rollback")
+	if err != nil {
+		return err
+	}
+	return a.cloudflare.CleanupManagementTokenCandidate(bytes.NewReader(snapshot), timeout)
+}
+
+func (a Adapter) replaceManagementTokenSnapshot(root *os.Root, target string, content []byte) error {
+	manifest, err := verifyTransactionManifest(root, target, a.uid)
+	if err != nil || manifest.Files["snapshot/step-001.rollback"] == "" {
+		return errors.New("management-token intent snapshot unavailable")
+	}
+	next := path.Join(target, "snapshot/step-001.finalizing")
+	previous := path.Join(target, "snapshot/step-001.previous")
+	checksum, err := writeProtected(root, next, bytes.NewReader(content), a.uid)
+	if err != nil {
+		return err
+	}
+	manifest.Files["snapshot/step-001.rollback"] = checksum
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		return err
+	}
+	nextManifest := path.Join(target, "manifest.token-finalizing")
+	oldManifest := path.Join(target, "manifest.token-previous")
+	if _, err := writeProtected(root, nextManifest, bytes.NewReader(manifestBytes), a.uid); err != nil {
+		return err
+	}
+	if root.Rename(path.Join(target, "snapshot/step-001.rollback"), previous) != nil || root.Rename(next, path.Join(target, "snapshot/step-001.rollback")) != nil || root.Rename(path.Join(target, "manifest.json"), oldManifest) != nil || root.Rename(nextManifest, path.Join(target, "manifest.json")) != nil || syncDirectory(root, target) != nil {
+		return errors.New("management-token snapshot replacement was interrupted")
+	}
+	return verifyTransaction(root, target, a.uid)
+}
+
+func (a Adapter) DeleteManagementTokenRollback(lease systemchanges.ExecutionLease, changeSet string) error {
+	if !lease.Authorized() || !safeName(changeSet) {
+		return errors.New("management-token Rollback Snapshot deletion unavailable")
+	}
+	root, err := os.OpenRoot(a.root)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	target := path.Join(transactionDirectory, changeSet)
+	manifest, err := verifyTransactionManifest(root, target, a.uid)
+	if err != nil {
+		return err
+	}
+	for name := range manifest.Files {
+		if strings.HasPrefix(name, "snapshot/") {
+			delete(manifest.Files, name)
+		}
+	}
+	nextSnapshot := path.Join(target, "snapshot.rollback-finalizing")
+	previousSnapshot := path.Join(target, "snapshot.rollback-previous")
+	if err := root.Mkdir(nextSnapshot, 0o700); err != nil {
+		return err
+	}
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		return err
+	}
+	nextManifest := path.Join(target, "manifest.rollback-finalizing")
+	previousManifest := path.Join(target, "manifest.rollback-previous")
+	if _, err := writeProtected(root, nextManifest, bytes.NewReader(manifestBytes), a.uid); err != nil {
+		return err
+	}
+	if root.Rename(path.Join(target, "snapshot"), previousSnapshot) != nil || root.Rename(nextSnapshot, path.Join(target, "snapshot")) != nil || root.Rename(path.Join(target, "manifest.json"), previousManifest) != nil || root.Rename(nextManifest, path.Join(target, "manifest.json")) != nil || syncDirectory(root, target) != nil {
+		return errors.New("management-token Rollback Snapshot deletion was interrupted")
+	}
+	return verifyTransaction(root, target, a.uid)
+}
+
+func (a Adapter) discardPriorStateRollback(root *os.Root, target string) error {
+	manifest, err := readSnapshotManifest(root, target, a.uid)
+	if err != nil || manifest.Files["snapshot/prior-state.json"] == "" {
+		return errors.New("management-token prior State rollback unavailable")
+	}
+	if err := root.Remove(path.Join(target, "snapshot/prior-state.json")); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	delete(manifest.Files, "snapshot/prior-state.json")
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		return err
+	}
+	temporary := path.Join(target, "manifest.management-token")
+	_ = root.Remove(temporary)
+	if _, err := writeProtected(root, temporary, bytes.NewReader(data), a.uid); err != nil {
+		return err
+	}
+	if err := root.Rename(temporary, path.Join(target, "manifest.json")); err != nil {
+		return err
+	}
+	return syncDirectory(root, target)
 }
 
 type rollbackArtifactPolicy uint8
@@ -598,6 +831,69 @@ func (a Adapter) LoadRunTokenRotationState(lease systemchanges.ExecutionLease, r
 		return nil, err
 	}
 	return a.state.SystemChangesLoadRunTokenRotation(lease, bindingJSON, bytes.NewReader(candidate), bytes.NewReader(manifests))
+}
+
+func (a Adapter) FinalizeManagementTokenRotation(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction, timeout time.Duration) (any, systemchanges.StateTransactionBinding, systemchanges.StepEvidence, error) {
+	if !lease.Authorized() || a.cloudflare == nil || a.state == nil || recovery.LastCheckpoint != systemchanges.IrreversibleManagementTokenReplacementStarted || len(recovery.Steps) != 1 {
+		return nil, systemchanges.StateTransactionBinding{}, systemchanges.StepEvidence{}, errors.New("management-token State finalization unavailable")
+	}
+	change, ok := recovery.Steps[0].CloudflareChange()
+	if !ok || change.Action != systemchanges.CloudflareManagementTokenActivate {
+		return nil, systemchanges.StateTransactionBinding{}, systemchanges.StepEvidence{}, errors.New("management-token provider binding unavailable")
+	}
+	snapshot, err := a.recoveryArtifact(lease, recovery.ChangeSet, "snapshot/step-001.rollback")
+	if err != nil {
+		return nil, systemchanges.StateTransactionBinding{}, systemchanges.StepEvidence{}, err
+	}
+	source, err := a.cloudflare.CompleteManagementTokenRotation(bytes.NewReader(snapshot), timeout)
+	if err != nil {
+		return nil, systemchanges.StateTransactionBinding{}, systemchanges.StepEvidence{}, err
+	}
+	candidate, err := a.recoveryArtifact(lease, recovery.ChangeSet, "prepared/state.json")
+	if err != nil {
+		return nil, systemchanges.StateTransactionBinding{}, systemchanges.StepEvidence{}, err
+	}
+	bindingJSON, err := json.Marshal(recovery.State)
+	if err != nil {
+		return nil, systemchanges.StateTransactionBinding{}, systemchanges.StepEvidence{}, err
+	}
+	material, err := a.state.SystemChangesFinalizeManagementTokenRotation(lease, bindingJSON, bytes.NewReader(candidate), source)
+	stateMaterial, ok := material.(runTokenStateMaterial)
+	if err != nil || !ok {
+		return nil, systemchanges.StateTransactionBinding{}, systemchanges.StepEvidence{}, errors.New("State refused the rotated management token")
+	}
+	finalBindingJSON, err := stateMaterial.SystemChangesBindings(lease)
+	var finalBinding systemchanges.StateTransactionBinding
+	if err != nil || json.Unmarshal(finalBindingJSON, &finalBinding) != nil {
+		return nil, systemchanges.StateTransactionBinding{}, systemchanges.StepEvidence{}, errors.New("final management-token State binding unavailable")
+	}
+	if err := a.ReplaceStateArtifacts(lease, recovery.ChangeSet, finalBinding, func(write func(string, uint32, io.Reader) error) error {
+		return stateMaterial.SystemChangesWriteArtifacts(lease, write)
+	}); err != nil {
+		return nil, systemchanges.StateTransactionBinding{}, systemchanges.StepEvidence{}, err
+	}
+	digest := sha256.Sum256([]byte("management-token-revoked\x00" + change.ManagementTokenID))
+	evidence := systemchanges.StepEvidence{Code: "cloudflare-management-token-revoked", SHA256: hex.EncodeToString(digest[:]), ResourceID: change.ManagementTokenID}
+	return material, finalBinding, evidence, nil
+}
+
+func (a Adapter) LoadManagementTokenRotationState(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction) (any, error) {
+	if !lease.RecoveryAuthorized() || a.state == nil || recovery.LastCheckpoint == systemchanges.IrreversibleManagementTokenReplacementStarted {
+		return nil, errors.New("finalized management-token State unavailable")
+	}
+	candidate, err := a.recoveryArtifact(lease, recovery.ChangeSet, "prepared/state.json")
+	if err != nil {
+		return nil, err
+	}
+	manifests, err := a.recoveryArtifact(lease, recovery.ChangeSet, "prepared/manifests.json")
+	if err != nil {
+		return nil, err
+	}
+	bindingJSON, err := json.Marshal(recovery.State)
+	if err != nil {
+		return nil, err
+	}
+	return a.state.SystemChangesLoadManagementTokenRotation(lease, bindingJSON, bytes.NewReader(candidate), bytes.NewReader(manifests))
 }
 
 func (a Adapter) LoadForwardChangeState(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction) (any, error) {
@@ -2045,6 +2341,21 @@ func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges
 			return systemchanges.RecoveryTransaction{}, errors.New("run-token rollback cleanup is unprovable")
 		}
 	}
+	if err := reconcileManagementTokenSnapshot(root, directory, journal); err != nil {
+		return systemchanges.RecoveryTransaction{}, errors.New("management-token intent replacement is unprovable")
+	}
+	if err := reconcileManagementTokenRollbackDeletion(root, directory, journal); err != nil {
+		return systemchanges.RecoveryTransaction{}, errors.New("management-token Rollback Snapshot deletion is unprovable")
+	}
+	if journalHasCheckpoint(journal, systemchanges.IrreversibleManagementTokenReplacementStarted) {
+		manifest, manifestErr := readSnapshotManifest(root, directory, a.uid)
+		if manifestErr != nil {
+			return systemchanges.RecoveryTransaction{}, errors.New("management-token rollback cleanup is unprovable")
+		}
+		if manifest.Files["snapshot/prior-state.json"] != "" && a.discardPriorStateRollback(root, directory) != nil {
+			return systemchanges.RecoveryTransaction{}, errors.New("management-token rollback cleanup is unprovable")
+		}
+	}
 	if err := reconcileDeferredReplacement(root, directory, journal); err != nil {
 		return systemchanges.RecoveryTransaction{}, errors.New("deferred State replacement is unprovable")
 	}
@@ -2058,7 +2369,7 @@ func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges
 	irreversibleCloudflareSetup := prepared.Mutation == systemchanges.CloudflareProfileSetupMutation && journalHasCheckpoint(journal, systemchanges.IrreversibleCloudflareSetupStarted)
 	irreversibleReclamation := prepared.Reclamation != nil && journalHasCheckpoint(journal, systemchanges.IrreversibleReclamationStarted)
 	removalSnapshotDeleted := prepared.Mutation == systemchanges.CompleteRemovalMutation && journalHasCheckpoint(journal, systemchanges.TransactionMaterialDeletionAuthorized)
-	irreversibleRotation := prepared.Mutation == systemchanges.RotationMutation && runTokenFingerprint(journal) != ""
+	irreversibleRotation := prepared.Mutation == systemchanges.RotationMutation && (runTokenFingerprint(journal) != "" || journalHasCheckpoint(journal, systemchanges.IrreversibleManagementTokenReplacementStarted))
 	if prepared.State == nil || prepared.ChangeSet != changeSet || !validRecoveryJournalBinding(prepared) {
 		return systemchanges.RecoveryTransaction{}, errors.New("recovery transaction lineage is invalid")
 	}
@@ -2135,6 +2446,10 @@ func runTokenFingerprint(entries []journalEntry) string {
 		}
 	}
 	return ""
+}
+
+func irreversibleRotationStarted(entries []journalEntry) bool {
+	return entries[0].Mutation == systemchanges.RotationMutation && (runTokenFingerprint(entries) != "" || journalHasCheckpoint(entries, systemchanges.IrreversibleManagementTokenReplacementStarted))
 }
 
 func rollbackResumeStep(entries []journalEntry) int {
@@ -2222,7 +2537,8 @@ func cloudflaredActivation(step systemchanges.Step) bool {
 }
 
 func managementTokenStateChange(step systemchanges.Step) bool {
-	return step.Owner() == systemchanges.CloudflareModule && step.Forward() == systemchanges.RecordManagementTokenChange && step.Rollback() == systemchanges.RestoreManagementTokenRecord
+	change, providerChange := step.CloudflareChange()
+	return (!providerChange || change.Action == "") && step.Owner() == systemchanges.CloudflareModule && step.Forward() == systemchanges.RecordManagementTokenChange && step.Rollback() == systemchanges.RestoreManagementTokenRecord
 }
 
 func managementTokenStateEvidence() systemchanges.StepEvidence {
@@ -2714,14 +3030,14 @@ func readRecoveryTransactionIdentity(rootPath string) (recoveryTransactionIdenti
 	removalSnapshotDeleted := journal[0].Mutation == systemchanges.CompleteRemovalMutation && journalHasCheckpoint(journal, systemchanges.TransactionMaterialDeletionAuthorized)
 	if !removalSnapshotDeleted {
 		manifest, manifestErr := verifyTransactionManifest(root, directory, uid)
-		if manifestErr != nil || manifest.Reason != journal[0].Mutation || !validRecoveryBinding(journal[0], manifest, journal[0].Mutation == systemchanges.RotationMutation && runTokenFingerprint(journal) != "" || irreversibleCloudflareSetup) {
+		if manifestErr != nil || manifest.Reason != journal[0].Mutation || !validRecoveryBinding(journal[0], manifest, irreversibleRotationStarted(journal) || irreversibleCloudflareSetup) {
 			return recoveryTransactionIdentity{}, errors.New("recovery transaction lineage is invalid")
 		}
 	}
 	if journal[0].Starting.Status != systemchanges.Managed && journal[0].Starting.Status != systemchanges.NotInstalled && (journal[0].Starting.Status != systemchanges.RecoveryRequired || journal[0].Mutation != systemchanges.CompleteRemovalMutation) {
 		return recoveryTransactionIdentity{}, errors.New("recovery starting baseline is unsupported")
 	}
-	forwardOnly := journal[0].Mutation == systemchanges.RotationMutation && runTokenFingerprint(journal) != "" || irreversibleRemoval || irreversibleCloudflareSetup || journal[0].Reclamation != nil && journalHasCheckpoint(journal, systemchanges.IrreversibleReclamationStarted)
+	forwardOnly := irreversibleRotationStarted(journal) || irreversibleRemoval || irreversibleCloudflareSetup || journal[0].Reclamation != nil && journalHasCheckpoint(journal, systemchanges.IrreversibleReclamationStarted)
 	completed := highestCompletedStep(journal)
 	forwardFirewallPending := false
 	if forwardOnly {
@@ -2779,7 +3095,7 @@ func RecoveryHealthObservation(rootPath string, source ObservationSource) (syste
 	}
 	irreversibleRemoval := prepared.Mutation == systemchanges.CompleteRemovalMutation && journalHasCheckpoint(journal, systemchanges.IrreversibleRemovalStarted)
 	removalSnapshotDeleted := prepared.Mutation == systemchanges.CompleteRemovalMutation && journalHasCheckpoint(journal, systemchanges.TransactionMaterialDeletionAuthorized)
-	irreversibleRotation := prepared.Mutation == systemchanges.RotationMutation && runTokenFingerprint(journal) != ""
+	irreversibleRotation := irreversibleRotationStarted(journal)
 	irreversibleCloudflareSetup := prepared.Mutation == systemchanges.CloudflareProfileSetupMutation && journalHasCheckpoint(journal, systemchanges.IrreversibleCloudflareSetupStarted)
 	if prepared.ChangeSet != changeSet || !validRecoveryJournalBinding(prepared) {
 		return healthRecoveryRequired(systemchanges.JournalUnprovable), nil
@@ -3453,9 +3769,16 @@ func validNextCheckpoint(entries []journalEntry, next journalEntry) bool {
 	irreversibleRemoval := entries[0].Mutation == systemchanges.CompleteRemovalMutation && journalHasCheckpoint(entries, systemchanges.IrreversibleRemovalStarted)
 	irreversibleReclamation := entries[0].Reclamation != nil && journalHasCheckpoint(entries, systemchanges.IrreversibleReclamationStarted)
 	irreversibleCloudflareSetup := entries[0].Mutation == systemchanges.CloudflareProfileSetupMutation && journalHasCheckpoint(entries, systemchanges.IrreversibleCloudflareSetupStarted)
+	irreversibleManagementTokenRotation := entries[0].Mutation == systemchanges.RotationMutation && journalHasCheckpoint(entries, systemchanges.IrreversibleManagementTokenReplacementStarted)
 	switch last.Checkpoint {
 	case systemchanges.Prepared:
-		return next.Checkpoint == systemchanges.StepStarted && next.Step == 1 || next.Checkpoint == systemchanges.IrreversibleRunTokenRotationStarted && next.Step == 0 && entries[0].Mutation == systemchanges.RotationMutation && validEvidence(next.Evidence) || next.Checkpoint == systemchanges.IrreversibleCloudflareSetupStarted && next.Step == 0 && entries[0].Mutation == systemchanges.CloudflareProfileSetupMutation || next.Checkpoint == systemchanges.CancellationRequested && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0
+		return next.Checkpoint == systemchanges.StepStarted && next.Step == 1 || next.Checkpoint == systemchanges.IrreversibleRunTokenRotationStarted && next.Step == 0 && entries[0].Mutation == systemchanges.RotationMutation && validEvidence(next.Evidence) || next.Checkpoint == systemchanges.ManagementTokenCandidateIntentPrepared && next.Step == 0 && entries[0].Mutation == systemchanges.RotationMutation && next.Evidence == nil || next.Checkpoint == systemchanges.IrreversibleCloudflareSetupStarted && next.Step == 0 && entries[0].Mutation == systemchanges.CloudflareProfileSetupMutation || next.Checkpoint == systemchanges.CancellationRequested && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0
+	case systemchanges.ManagementTokenCandidateIntentPrepared:
+		return next.Checkpoint == systemchanges.ManagementTokenCandidatePrepared && next.Step == 0 && next.Evidence == nil || next.Checkpoint == systemchanges.ManagementTokenCandidateCleanupRequired && next.Step == 0 && validEvidence(next.Evidence) || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0
+	case systemchanges.ManagementTokenCandidatePrepared:
+		return next.Checkpoint == systemchanges.IrreversibleManagementTokenReplacementStarted && next.Step == 0 && next.Evidence == nil || next.Checkpoint == systemchanges.ManagementTokenCandidateCleanupRequired && next.Step == 0 && validEvidence(next.Evidence)
+	case systemchanges.ManagementTokenCandidateCleanupRequired:
+		return next.Checkpoint == systemchanges.CancellationRequested && next.Step == 0 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0
 	case systemchanges.IrreversibleCloudflareSetupStarted:
 		return next.Checkpoint == systemchanges.CloudflareSetupRollbackDeleted && next.Step == 0
 	case systemchanges.CloudflareSetupRollbackDeleted:
@@ -3468,14 +3791,16 @@ func validNextCheckpoint(entries []journalEntry, next journalEntry) bool {
 		return next.Checkpoint == systemchanges.StepStarted && next.Step == last.Step+1
 	case systemchanges.IrreversibleRunTokenRotationStarted:
 		return next.Checkpoint == systemchanges.StateFinalized && next.Step == 0 && next.State != nil
+	case systemchanges.IrreversibleManagementTokenReplacementStarted:
+		return next.Checkpoint == systemchanges.StateFinalized && next.Step == 0 && next.State != nil
 	case systemchanges.StepStarted:
-		if irreversibleRemoval || irreversibleReclamation || irreversibleCloudflareSetup {
+		if irreversibleRemoval || irreversibleReclamation || irreversibleCloudflareSetup || irreversibleManagementTokenRotation {
 			return next.Checkpoint == systemchanges.StepCompleted && next.Step == last.Step && validEvidence(next.Evidence)
 		}
 		return next.Checkpoint == systemchanges.StepCompleted && next.Step == last.Step && validEvidence(next.Evidence) || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
 	case systemchanges.StepCompleted:
 		if last.Step < rollbackCapable {
-			if irreversibleRemoval || irreversibleReclamation || irreversibleCloudflareSetup {
+			if irreversibleRemoval || irreversibleReclamation || irreversibleCloudflareSetup || irreversibleManagementTokenRotation {
 				return irreversibleCloudflareSetup && next.Checkpoint == systemchanges.StateFinalized && next.Step == last.Step && next.State != nil || next.Checkpoint == systemchanges.StepStarted && next.Step == last.Step+1
 			}
 			return next.Checkpoint == systemchanges.StateFinalized && next.Step == last.Step && next.State != nil || entries[0].Reclamation != nil && last.Step == reclamationPreludeJournalSteps(entries[0].Steps) && next.Checkpoint == systemchanges.IrreversibleReclamationStarted && next.Step == last.Step || next.Checkpoint == systemchanges.StepStarted && next.Step == last.Step+1 || next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step
@@ -3483,7 +3808,9 @@ func validNextCheckpoint(entries []journalEntry, next journalEntry) bool {
 		if irreversibleRemoval {
 			return next.Checkpoint == systemchanges.PrePublicationHealthPassed && next.Step == 0
 		}
-		return next.Checkpoint == systemchanges.StateFinalized && next.State != nil && (next.Step == 0 || irreversibleCloudflareSetup && next.Step == last.Step) || next.Checkpoint == systemchanges.PrePublicationHealthPassed && next.Step == 0 || !irreversibleCloudflareSetup && (next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step)
+		return next.Checkpoint == systemchanges.ManagementTokenRollbackDeleted && next.Step == 0 && irreversibleManagementTokenRotation || next.Checkpoint == systemchanges.StateFinalized && next.State != nil && (next.Step == 0 || irreversibleCloudflareSetup && next.Step == last.Step) || next.Checkpoint == systemchanges.PrePublicationHealthPassed && next.Step == 0 && !irreversibleManagementTokenRotation || !irreversibleCloudflareSetup && !irreversibleManagementTokenRotation && (next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == last.Step)
+	case systemchanges.ManagementTokenRollbackDeleted:
+		return next.Checkpoint == systemchanges.PrePublicationHealthPassed && next.Step == 0
 	case systemchanges.StateFinalized:
 		if entries[0].Reclamation != nil && !irreversibleReclamation && last.Step == reclamationPreludeJournalSteps(entries[0].Steps) {
 			return next.Checkpoint == systemchanges.IrreversibleReclamationStarted && next.Step == last.Step
@@ -3661,6 +3988,104 @@ func reconcileDeferredReplacement(root *os.Root, directory string, journal []jou
 	return syncDirectory(root, directory)
 }
 
+func reconcileManagementTokenSnapshot(root *os.Root, directory string, journal []journalEntry) error {
+	previous := path.Join(directory, "snapshot/step-001.previous")
+	oldManifest := path.Join(directory, "manifest.token-previous")
+	next := path.Join(directory, "snapshot/step-001.finalizing")
+	nextManifest := path.Join(directory, "manifest.token-finalizing")
+	if !pathExists(root, previous) && !pathExists(root, oldManifest) && !pathExists(root, next) && !pathExists(root, nextManifest) {
+		return nil
+	}
+	committed := journalHasCheckpoint(journal, systemchanges.ManagementTokenCandidatePrepared) && !journalHasCheckpoint(journal, systemchanges.ManagementTokenCandidateCleanupRequired)
+	if committed {
+		return discardManagementTokenSnapshotPrevious(root, directory)
+	}
+	if pathExists(root, previous) {
+		_ = root.Remove(path.Join(directory, "snapshot/step-001.rollback"))
+		if err := root.Rename(previous, path.Join(directory, "snapshot/step-001.rollback")); err != nil {
+			return err
+		}
+	}
+	if pathExists(root, oldManifest) {
+		_ = root.Remove(path.Join(directory, "manifest.json"))
+		if err := root.Rename(oldManifest, path.Join(directory, "manifest.json")); err != nil {
+			return err
+		}
+	}
+	for _, name := range []string{next, nextManifest} {
+		if pathExists(root, name) && root.Remove(name) != nil {
+			return errors.New("management-token temporary snapshot cleanup failed")
+		}
+	}
+	return syncDirectory(root, directory)
+}
+
+func discardManagementTokenSnapshotPrevious(root *os.Root, directory string) error {
+	for _, name := range []string{"snapshot/step-001.previous", "snapshot/step-001.finalizing", "manifest.token-previous", "manifest.token-finalizing"} {
+		candidate := path.Join(directory, name)
+		if pathExists(root, candidate) && root.Remove(candidate) != nil {
+			return errors.New("management-token prior snapshot cleanup failed")
+		}
+	}
+	return syncDirectory(root, directory)
+}
+
+func reconcileManagementTokenRollbackDeletion(root *os.Root, directory string, journal []journalEntry) error {
+	previousSnapshot := path.Join(directory, "snapshot.rollback-previous")
+	previousManifest := path.Join(directory, "manifest.rollback-previous")
+	nextSnapshot := path.Join(directory, "snapshot.rollback-finalizing")
+	nextManifest := path.Join(directory, "manifest.rollback-finalizing")
+	if !pathExists(root, previousSnapshot) && !pathExists(root, previousManifest) && !pathExists(root, nextSnapshot) && !pathExists(root, nextManifest) {
+		return nil
+	}
+	if journalHasCheckpoint(journal, systemchanges.ManagementTokenRollbackDeleted) {
+		return discardManagementTokenRollbackPrevious(root, directory)
+	}
+	if pathExists(root, previousSnapshot) {
+		if pathExists(root, path.Join(directory, "snapshot")) && removeFlatDirectory(root, path.Join(directory, "snapshot")) != nil {
+			return errors.New("management-token empty snapshot cleanup failed")
+		}
+		if root.Rename(previousSnapshot, path.Join(directory, "snapshot")) != nil {
+			return errors.New("management-token Rollback Snapshot restore failed")
+		}
+	}
+	if pathExists(root, previousManifest) {
+		_ = root.Remove(path.Join(directory, "manifest.json"))
+		if root.Rename(previousManifest, path.Join(directory, "manifest.json")) != nil {
+			return errors.New("management-token rollback manifest restore failed")
+		}
+	}
+	for _, name := range []string{nextSnapshot, nextManifest} {
+		if !pathExists(root, name) {
+			continue
+		}
+		if strings.Contains(name, "snapshot") {
+			if removeFlatDirectory(root, name) != nil {
+				return errors.New("management-token temporary rollback cleanup failed")
+			}
+		} else if root.Remove(name) != nil {
+			return errors.New("management-token temporary rollback cleanup failed")
+		}
+	}
+	return syncDirectory(root, directory)
+}
+
+func discardManagementTokenRollbackPrevious(root *os.Root, directory string) error {
+	for _, name := range []string{"snapshot.rollback-previous", "snapshot.rollback-finalizing"} {
+		candidate := path.Join(directory, name)
+		if pathExists(root, candidate) && removeFlatDirectory(root, candidate) != nil {
+			return errors.New("management-token old Rollback Snapshot cleanup failed")
+		}
+	}
+	for _, name := range []string{"manifest.rollback-previous", "manifest.rollback-finalizing"} {
+		candidate := path.Join(directory, name)
+		if pathExists(root, candidate) && root.Remove(candidate) != nil {
+			return errors.New("management-token old rollback manifest cleanup failed")
+		}
+	}
+	return syncDirectory(root, directory)
+}
+
 func discardDeferredPrevious(root *os.Root, directory string) error {
 	previous := path.Join(directory, "prepared.previous")
 	if pathExists(root, previous) {
@@ -3748,6 +4173,15 @@ func verifyTransactionManifest(root *os.Root, directory string, uid int) (snapsh
 			return nil
 		}
 		relative := strings.TrimPrefix(name, directory+"/")
+		if managementTokenRollbackGenerationArtifact(relative) {
+			if entry.IsDir() {
+				if relative != "snapshot.rollback-previous" && relative != "snapshot.rollback-finalizing" {
+					return errors.New("nested management-token rollback artifact")
+				}
+				return verifyDirectory(root, name, uid)
+			}
+			return verifyFile(root, name, uid)
+		}
 		if !want[relative] && !recoverySSHIdentityArtifact(relative) {
 			return fmt.Errorf("unexpected transaction artifact %s", relative)
 		}
@@ -3757,6 +4191,13 @@ func verifyTransactionManifest(root *os.Root, directory string, uid int) (snapsh
 		return nil
 	})
 	return manifest, err
+}
+
+func managementTokenRollbackGenerationArtifact(name string) bool {
+	if name == "snapshot.rollback-previous" || name == "snapshot.rollback-finalizing" || name == "manifest.rollback-previous" || name == "manifest.rollback-finalizing" {
+		return true
+	}
+	return strings.HasPrefix(name, "snapshot.rollback-previous/") || strings.HasPrefix(name, "snapshot.rollback-finalizing/")
 }
 
 func recoverySSHIdentityArtifact(name string) bool {

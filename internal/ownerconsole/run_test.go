@@ -367,7 +367,7 @@ func TestCanonicalFramesRemainExact(t *testing.T) {
 			fmt.Fprintf(&frames, "%d/%d/%d\n%s\n", scenario, size[0], size[1], frame)
 		}
 	}
-	want := "bdc20b8586ce07fa8d2da5e767c3104159b3d2cda57db56dfdbc3e36daeffa5c"
+	want := "e5689bddcf3014741840eeeb5c704263a8e0f1c6a5923c893e627ee596595726"
 	if got := fmt.Sprintf("%x", sha256.Sum256([]byte(frames.String()))); got != want {
 		t.Fatalf("canonical frame snapshot = %s, want %s", got, want)
 	}

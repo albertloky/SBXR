@@ -440,6 +440,27 @@ func TestPlanReviewsManagementTokenReplacementWithoutChangingProviderAuthority(t
 	}
 }
 
+func TestPlanBindsHealthyManagementTokenRotationToPublicApply(t *testing.T) {
+	module, request := managedTokenPlanRequest(t, ManagementTokenRotate)
+	request.ManagementToken.CurrentTokenID = healthyAuthorityObservation().Token.ID
+	result := module.Plan(t.Context(), request)
+	if result.Plan == nil || result.Health.Code != "CLOUDFLARE-MANAGEMENT-TOKEN-READY" || len(result.Plan.Steps()) != 1 {
+		t.Fatalf("healthy rotation Plan = %+v", result)
+	}
+	change, ok := result.Plan.Steps()[0].CloudflareChange()
+	if !ok || change.Action != systemchanges.CloudflareManagementTokenActivate || change.ManagementTokenID != request.ManagementToken.CurrentTokenID {
+		t.Fatalf("healthy rotation step = %#v", result.Plan.Steps())
+	}
+	if binding, templateSHA, valid := result.Plan.StateManagementTokenRotation(); !valid || len(binding) == 0 || templateSHA != request.DesiredStateSHA256 {
+		t.Fatal("healthy rotation omitted its deferred State binding")
+	}
+	prepared := &tokenPreparedState{changeSet: request.ChangeSet, revision: 8, starting: request.StartingStateSHA256, candidate: strings.Repeat("d", 64), planIdentity: result.Plan.Identity(), planSHA: result.Plan.SHA256()}
+	apply := result.Plan.Apply(systemchanges.Interface{}, prepared, systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: request.StartingStateSHA256}, strings.Repeat("e", 64), systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1})
+	if apply.Finding == nil || apply.Finding.Code != "SYSTEM-CHANGES-ADAPTER-UNAVAILABLE" || !apply.PlanConsumed {
+		t.Fatalf("healthy rotation Apply = %+v", apply)
+	}
+}
+
 func TestPlanReplacesADeliberatelyRemovedManagementToken(t *testing.T) {
 	module, request := managedTokenPlanRequest(t, ManagementTokenReplace)
 	request.ManagementToken.CurrentTokenID = ""
@@ -498,12 +519,12 @@ func managedTokenPlanRequest(t *testing.T, action ManagementTokenAction) (Interf
 
 func plannedModule(t *testing.T) (Interface, PlanRequest) {
 	t.Helper()
-	token, err := NewManagementToken("cfat_PLAN-SECRET-MARKER-000000000000000000000")
+	token, err := NewManagementToken("sbxr_PLAN-SECRET-MARKER-000000000000000000000")
 	if err != nil {
 		t.Fatal(err)
 	}
 	api := &planningAPI{observation: healthyAuthorityObservation(), mutation: MutationObservation{Digest: strings.Repeat("a", 64)}}
-	request := PlanRequest{Authority: ViewRequest{AccountID: testAccountID, ZoneID: testZoneID, ZoneName: "example.com", Token: token, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}}, ChangeSet: "cloudflare-change-0001", DesiredStateSHA256: strings.Repeat("b", 64), TunnelName: "sbxr-main", XHTTPHostname: "xhttp.example.com", WebSocketHostname: "ws.example.com", DirectHostname: "direct.example.com", PublicIPv4: "192.0.2.10", PublicIPv6: "2001:db8::10", CloudflaredVersion: qualifiedCloudflaredVersion}
+	request := PlanRequest{Authority: ViewRequest{AccountID: testAccountID, ZoneID: testZoneID, ZoneName: "example.com", Token: token, NetworkPath: networkpolicy.CloudflareTunnelPath{HTTPS: networkpolicy.ProofPassed, TCP7844: networkpolicy.ProofPassed, UDP7844: networkpolicy.ProofPassed}, DedicatedBroadPolicyConfirmed: true}, ChangeSet: "cloudflare-change-0001", DesiredStateSHA256: strings.Repeat("b", 64), TunnelName: "sbxr-main", XHTTPHostname: "xhttp.example.com", WebSocketHostname: "ws.example.com", DirectHostname: "direct.example.com", PublicIPv4: "192.0.2.10", PublicIPv6: "2001:db8::10", CloudflaredVersion: qualifiedCloudflaredVersion}
 	return newPlanningInterface(api), request
 }
 
@@ -594,7 +615,7 @@ func (clock *planClock) Sleep(_ context.Context, duration time.Duration) error {
 }
 
 func healthyAuthorityObservation() Observation {
-	return Observation{Account: AccountObservation{ID: testAccountID}, Zone: ZoneObservation{ID: testZoneID, AccountID: testAccountID, Name: "example.com", Status: "active", AssignedNameServers: []string{"a.ns.cloudflare.com"}, ObservedNameServers: []string{"a.ns.cloudflare.com"}}, Token: TokenObservation{ID: "44444444444444444444444444444444", Status: "active"}, Policies: []TokenPolicy{{Effect: "allow", PermissionGroups: []string{"Account API Tokens Read", "Cloudflare Tunnel Edit"}, Resources: map[string]string{"com.cloudflare.api.account." + testAccountID: "*"}}, {Effect: "allow", PermissionGroups: []string{"DNS Write"}, Resources: map[string]string{"com.cloudflare.api.account.zone." + testZoneID: "*"}}}}
+	return Observation{Account: AccountObservation{ID: testAccountID}, Zone: ZoneObservation{ID: testZoneID, AccountID: testAccountID, Name: "example.com", Status: "active", AssignedNameServers: []string{"a.ns.cloudflare.com"}, ObservedNameServers: []string{"a.ns.cloudflare.com"}}, Token: TokenObservation{ID: "44444444444444444444444444444444", Status: "active"}, DNSListProven: true, TunnelListProven: true}
 }
 
 var _ systemchanges.PreparedStateCommit = (*fakePreparedState)(nil)

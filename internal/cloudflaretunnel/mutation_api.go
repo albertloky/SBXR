@@ -9,9 +9,330 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"reflect"
+	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
+	"time"
 )
+
+var managementTokenCandidateName = regexp.MustCompile(`^sbxr-rotation-[0-9a-f]{32}$`)
+
+type CreateManagementTokenCandidateRequest struct {
+	Current       ManagementToken
+	Name          string
+	RequestSHA256 string
+	CanonicalBody json.RawMessage
+	NotBefore     time.Time
+	NotAfter      time.Time
+}
+
+func (api *httpAPI) PrepareManagementTokenCandidate(ctx context.Context, current ManagementToken, name string, notBefore, notAfter time.Time) (CreateManagementTokenCandidateRequest, error) {
+	request := CreateManagementTokenCandidateRequest{Current: current, Name: name, NotBefore: notBefore, NotAfter: notAfter}
+	groups, err := api.managementTokenPermissionGroups(ctx, request)
+	if err != nil {
+		return CreateManagementTokenCandidateRequest{}, err
+	}
+	body, err := json.Marshal(managementTokenCandidateBody{Name: name, Policies: broadManagementTokenPolicies(groups)})
+	if err != nil {
+		return CreateManagementTokenCandidateRequest{}, APIError{Kind: APIMalformed}
+	}
+	digest := sha256.Sum256(body)
+	request.RequestSHA256 = hex.EncodeToString(digest[:])
+	request.CanonicalBody = body
+	return request, nil
+}
+
+type ReconcileManagementTokenCandidateRequest = CreateManagementTokenCandidateRequest
+
+type ManagementTokenCandidate struct {
+	id, name, requestSHA256 string
+	issuedOn                time.Time
+	token                   ManagementToken
+	used                    *atomic.Bool
+}
+
+func (candidate ManagementTokenCandidate) ID() string            { return candidate.id }
+func (candidate ManagementTokenCandidate) RequestSHA256() string { return candidate.requestSHA256 }
+func (candidate ManagementTokenCandidate) String() string {
+	return "Cloudflare management-token candidate: redacted"
+}
+func (candidate ManagementTokenCandidate) GoString() string { return candidate.String() }
+func (candidate ManagementTokenCandidate) ConsumeInfrastructureSecret() (string, bool) {
+	if candidate.token.value == "" || candidate.used == nil || !candidate.used.CompareAndSwap(false, true) {
+		return "", false
+	}
+	return candidate.token.value, true
+}
+
+func (api *httpAPI) CreateManagementTokenCandidate(ctx context.Context, request CreateManagementTokenCandidateRequest) (ManagementTokenCandidate, error) {
+	prior, err := api.managementTokenCandidateMatches(ctx, request)
+	if err != nil {
+		if len(request.CanonicalBody) != 0 {
+			return ManagementTokenCandidate{}, ManagementTokenCandidateCleanupError{}
+		}
+		return ManagementTokenCandidate{}, err
+	}
+	if len(prior) > 1 {
+		if len(request.CanonicalBody) != 0 {
+			return ManagementTokenCandidate{}, ManagementTokenCandidateCleanupError{}
+		}
+		return ManagementTokenCandidate{}, APIError{Kind: APIAmbiguous}
+	}
+	if len(prior) == 1 {
+		candidateID := prior[0].id
+		if err := api.DeleteManagementToken(ctx, DeleteManagementTokenRequest{ID: candidateID, Token: request.Current}); err != nil {
+			return ManagementTokenCandidate{}, ManagementTokenCandidateCleanupError{candidateID: candidateID}
+		}
+		remaining, cleanupErr := api.managementTokenCandidateMatches(ctx, request)
+		if cleanupErr != nil || len(remaining) != 0 {
+			return ManagementTokenCandidate{}, ManagementTokenCandidateCleanupError{candidateID: candidateID}
+		}
+	}
+	if len(request.CanonicalBody) != 0 && time.Now().UTC().After(request.NotAfter) {
+		return ManagementTokenCandidate{}, APIError{Kind: APIAmbiguous}
+	}
+	var body managementTokenCandidateBody
+	if len(request.CanonicalBody) == 0 {
+		groups, groupErr := api.managementTokenPermissionGroups(ctx, request)
+		if groupErr != nil {
+			return ManagementTokenCandidate{}, groupErr
+		}
+		body = managementTokenCandidateBody{Name: request.Name, Policies: broadManagementTokenPolicies(groups)}
+	} else {
+		body, err = managementTokenBody(request)
+		if err != nil {
+			return ManagementTokenCandidate{}, err
+		}
+	}
+	var envelope struct {
+		Result struct {
+			ID       string `json:"id"`
+			Name     string `json:"name"`
+			Status   string `json:"status"`
+			IssuedOn string `json:"issued_on"`
+			Value    string `json:"value"`
+		} `json:"result"`
+	}
+	if err := api.request(ctx, http.MethodPost, "/user/tokens", nil, request.Current, body, &envelope); err != nil {
+		if !apiErrorIs(err, APITemporary) && !apiErrorIs(err, APIAmbiguous) {
+			return ManagementTokenCandidate{}, err
+		}
+		matches, reconcileErr := api.managementTokenCandidateMatches(ctx, request)
+		if reconcileErr != nil || len(matches) != 1 {
+			if len(request.CanonicalBody) != 0 {
+				return ManagementTokenCandidate{}, ManagementTokenCandidateCleanupError{}
+			}
+			return ManagementTokenCandidate{}, APIError{Kind: APIAmbiguous}
+		}
+		candidateID := matches[0].id
+		if deleteErr := api.DeleteManagementToken(ctx, DeleteManagementTokenRequest{ID: candidateID, Token: request.Current}); deleteErr != nil {
+			return ManagementTokenCandidate{}, ManagementTokenCandidateCleanupError{candidateID: candidateID}
+		}
+		remaining, cleanupErr := api.managementTokenCandidateMatches(ctx, request)
+		if cleanupErr != nil || len(remaining) != 0 {
+			return ManagementTokenCandidate{}, ManagementTokenCandidateCleanupError{candidateID: candidateID}
+		}
+		return ManagementTokenCandidate{}, APIError{Kind: APIAmbiguous}
+	}
+	candidate, candidateErr := newManagementTokenCandidate(envelope.Result.ID, envelope.Result.Name, envelope.Result.Status, envelope.Result.IssuedOn, envelope.Result.Value, request)
+	if candidateErr == nil {
+		return candidate, nil
+	}
+	if immutableID.MatchString(envelope.Result.ID) {
+		if deleteErr := api.DeleteManagementToken(ctx, DeleteManagementTokenRequest{ID: envelope.Result.ID, Token: request.Current}); deleteErr != nil && !apiErrorIs(deleteErr, APINotFound) {
+			return ManagementTokenCandidate{}, ManagementTokenCandidateCleanupError{candidateID: envelope.Result.ID}
+		}
+		if absentErr := api.VerifyManagementTokenCandidateAbsent(ctx, request); absentErr != nil {
+			return ManagementTokenCandidate{}, ManagementTokenCandidateCleanupError{candidateID: envelope.Result.ID}
+		}
+	} else {
+		matches, reconcileErr := api.managementTokenCandidateMatches(ctx, request)
+		if reconcileErr != nil || len(matches) != 1 {
+			return ManagementTokenCandidate{}, ManagementTokenCandidateCleanupError{}
+		}
+		candidateID := matches[0].id
+		if deleteErr := api.DeleteManagementToken(ctx, DeleteManagementTokenRequest{ID: candidateID, Token: request.Current}); deleteErr != nil && !apiErrorIs(deleteErr, APINotFound) {
+			return ManagementTokenCandidate{}, ManagementTokenCandidateCleanupError{candidateID: candidateID}
+		}
+		if absentErr := api.VerifyManagementTokenCandidateAbsent(ctx, request); absentErr != nil {
+			return ManagementTokenCandidate{}, ManagementTokenCandidateCleanupError{candidateID: candidateID}
+		}
+	}
+	return ManagementTokenCandidate{}, candidateErr
+}
+
+func (api *httpAPI) ReconcileManagementTokenCandidate(ctx context.Context, request ReconcileManagementTokenCandidateRequest) (ManagementTokenCandidate, error) {
+	matches, err := api.managementTokenCandidateMatches(ctx, request)
+	if err != nil || len(matches) != 1 {
+		if err != nil {
+			return ManagementTokenCandidate{}, err
+		}
+		return ManagementTokenCandidate{}, APIError{Kind: APIAmbiguous}
+	}
+	return matches[0], nil
+}
+
+func (api *httpAPI) VerifyManagementTokenCandidateAbsent(ctx context.Context, request ReconcileManagementTokenCandidateRequest) error {
+	matches, err := api.managementTokenCandidateMatches(ctx, request)
+	if err != nil || len(matches) != 0 {
+		return APIError{Kind: APIAmbiguous}
+	}
+	return nil
+}
+
+func (api *httpAPI) managementTokenCandidateMatches(ctx context.Context, request ReconcileManagementTokenCandidateRequest) ([]ManagementTokenCandidate, error) {
+	if !validManagementTokenCandidateRequest(request) {
+		return nil, APIError{Kind: APIMalformed}
+	}
+	var body managementTokenCandidateBody
+	if len(request.CanonicalBody) == 0 {
+		groups, groupErr := api.managementTokenPermissionGroups(ctx, request)
+		if groupErr != nil {
+			return nil, groupErr
+		}
+		body = managementTokenCandidateBody{Name: request.Name, Policies: broadManagementTokenPolicies(groups)}
+	} else {
+		var err error
+		body, err = managementTokenBody(request)
+		if err != nil {
+			return nil, err
+		}
+	}
+	wantPolicies := body.Policies
+	var matches []ManagementTokenCandidate
+	for page := 1; page <= maxActiveZonePages; page++ {
+		var envelope struct {
+			Result     []managementTokenCandidateRecord `json:"result"`
+			ResultInfo struct {
+				Page       int `json:"page"`
+				PerPage    int `json:"per_page"`
+				TotalPages int `json:"total_pages"`
+				Count      int `json:"count"`
+			} `json:"result_info"`
+		}
+		query := url.Values{"name": {request.Name}, "page": {fmt.Sprint(page)}, "per_page": {"50"}}
+		if err := api.get(ctx, "/user/tokens", query, request.Current, &envelope); err != nil {
+			return nil, err
+		}
+		info := envelope.ResultInfo
+		if info.TotalPages > maxActiveZonePages {
+			return nil, APIError{Kind: APIAmbiguous}
+		}
+		if info.Page != page || info.PerPage != 50 || info.TotalPages < page || info.Count != len(envelope.Result) {
+			return nil, APIError{Kind: APIMalformed}
+		}
+		for _, result := range envelope.Result {
+			issued, parseErr := time.Parse(time.RFC3339, result.IssuedOn)
+			if parseErr != nil || result.Name != request.Name || result.Status != "active" || issued.Before(request.NotBefore) || issued.After(request.NotAfter) || string(result.ExpiresOn) != "null" || string(result.Condition) != "null" || !reflect.DeepEqual(result.Policies, wantPolicies) {
+				return nil, APIError{Kind: APIAmbiguous}
+			}
+			candidate, candidateErr := newManagementTokenCandidate(result.ID, result.Name, result.Status, result.IssuedOn, "", request)
+			if candidateErr != nil {
+				return nil, candidateErr
+			}
+			matches = append(matches, candidate)
+		}
+		if page == info.TotalPages {
+			break
+		}
+	}
+	return matches, nil
+}
+
+type managementTokenPolicy struct {
+	Effect           string              `json:"effect"`
+	PermissionGroups []map[string]string `json:"permission_groups"`
+	Resources        map[string]string   `json:"resources"`
+}
+
+type managementTokenCandidateBody struct {
+	Name      string                  `json:"name"`
+	Policies  []managementTokenPolicy `json:"policies"`
+	ExpiresOn any                     `json:"expires_on"`
+	Condition any                     `json:"condition"`
+}
+
+type managementTokenCandidateRecord struct {
+	ID        string                  `json:"id"`
+	Name      string                  `json:"name"`
+	Status    string                  `json:"status"`
+	IssuedOn  string                  `json:"issued_on"`
+	Policies  []managementTokenPolicy `json:"policies"`
+	ExpiresOn json.RawMessage         `json:"expires_on"`
+	Condition json.RawMessage         `json:"condition"`
+}
+
+func broadManagementTokenPolicies(groups map[string]string) []managementTokenPolicy {
+	return []managementTokenPolicy{
+		{Effect: "allow", PermissionGroups: []map[string]string{{"id": groups["User API Tokens Edit"]}}, Resources: map[string]string{"com.cloudflare.api.user.*": "*"}},
+		{Effect: "allow", PermissionGroups: []map[string]string{{"id": groups["Cloudflare Tunnel Edit"]}}, Resources: map[string]string{"com.cloudflare.api.account.*": "*"}},
+		{Effect: "allow", PermissionGroups: []map[string]string{{"id": groups["DNS Edit"]}, {"id": groups["Zone Read"]}}, Resources: map[string]string{"com.cloudflare.api.account.zone.*": "*"}},
+	}
+}
+
+func (api *httpAPI) managementTokenPermissionGroups(ctx context.Context, request CreateManagementTokenCandidateRequest) (map[string]string, error) {
+	if request.Current.value == "" || !managementTokenCandidateName.MatchString(request.Name) || request.NotBefore.IsZero() || request.NotAfter.Before(request.NotBefore) || request.NotAfter.Sub(request.NotBefore) > 5*time.Minute {
+		return nil, APIError{Kind: APIMalformed}
+	}
+	var envelope struct {
+		Result []struct{ ID, Name string } `json:"result"`
+	}
+	if err := api.get(ctx, "/user/tokens/permission_groups", nil, request.Current, &envelope); err != nil {
+		return nil, err
+	}
+	want := map[string]string{"User API Tokens Edit": "", "Cloudflare Tunnel Edit": "", "DNS Edit": "", "Zone Read": ""}
+	for _, group := range envelope.Result {
+		if _, ok := want[group.Name]; ok && group.ID != "" {
+			if want[group.Name] != "" {
+				return nil, APIError{Kind: APIAmbiguous}
+			}
+			want[group.Name] = group.ID
+		}
+	}
+	for _, id := range want {
+		if id == "" {
+			return nil, APIError{Kind: APIMalformed}
+		}
+	}
+	return want, nil
+}
+
+func validManagementTokenCandidateRequest(request CreateManagementTokenCandidateRequest) bool {
+	return request.Current.value != "" && managementTokenCandidateName.MatchString(request.Name) && sha256Text.MatchString(request.RequestSHA256) && !request.NotBefore.IsZero() && !request.NotAfter.Before(request.NotBefore) && request.NotAfter.Sub(request.NotBefore) <= 5*time.Minute
+}
+
+func managementTokenBody(request CreateManagementTokenCandidateRequest) (managementTokenCandidateBody, error) {
+	if !validManagementTokenCandidateRequest(request) {
+		return managementTokenCandidateBody{}, APIError{Kind: APIMalformed}
+	}
+	var body managementTokenCandidateBody
+	if len(request.CanonicalBody) == 0 || json.Unmarshal(request.CanonicalBody, &body) != nil || body.Name != request.Name || body.ExpiresOn != nil || body.Condition != nil {
+		return managementTokenCandidateBody{}, APIError{Kind: APIMalformed}
+	}
+	canonical, err := json.Marshal(body)
+	digest := sha256.Sum256(canonical)
+	if err != nil || hex.EncodeToString(digest[:]) != request.RequestSHA256 {
+		return managementTokenCandidateBody{}, APIError{Kind: APIMalformed}
+	}
+	return body, nil
+}
+
+func newManagementTokenCandidate(id, name, status, issuedOn, value string, request CreateManagementTokenCandidateRequest) (ManagementTokenCandidate, error) {
+	issued, err := time.Parse(time.RFC3339, issuedOn)
+	if err != nil || !immutableID.MatchString(id) || name != request.Name || status != "active" || issued.Before(request.NotBefore) || issued.After(request.NotAfter) {
+		return ManagementTokenCandidate{}, APIError{Kind: APIAmbiguous}
+	}
+	var token ManagementToken
+	if value != "" {
+		token, err = NewManagementToken(value)
+		if err != nil {
+			return ManagementTokenCandidate{}, APIError{Kind: APIMalformed}
+		}
+	}
+	return ManagementTokenCandidate{id: id, name: name, requestSHA256: request.RequestSHA256, issuedOn: issued, token: token, used: &atomic.Bool{}}, nil
+}
 
 type certificateDNSRecord struct {
 	ID, Name, Type, Content string
@@ -452,16 +773,15 @@ func (api *httpAPI) DeleteTunnel(ctx context.Context, request DeleteTunnelReques
 }
 
 type DeleteManagementTokenRequest struct {
-	AccountID string
-	ID        string
-	Token     ManagementToken
+	ID    string
+	Token ManagementToken
 }
 
 func (api *httpAPI) DeleteManagementToken(ctx context.Context, request DeleteManagementTokenRequest) error {
-	if !immutableID.MatchString(request.AccountID) || !immutableID.MatchString(request.ID) || request.Token.value == "" {
+	if !immutableID.MatchString(request.ID) || request.Token.value == "" {
 		return APIError{Kind: APIMalformed}
 	}
-	return api.request(ctx, http.MethodDelete, "/accounts/"+request.AccountID+"/tokens/"+request.ID, nil, request.Token, nil, nil)
+	return api.request(ctx, http.MethodDelete, "/user/tokens/"+request.ID, nil, request.Token, nil, nil)
 }
 
 func (api *httpAPI) GetTunnel(ctx context.Context, request GetTunnelRequest) (OwnedResource, error) {

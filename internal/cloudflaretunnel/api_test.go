@@ -39,12 +39,10 @@ func TestHTTPAPIParsesOfficialShapesWithScopedAuthenticationAndPagination(t *tes
 		}
 		response.Header().Set("Content-Type", "application/json")
 		switch request.URL.Path {
-		case "/accounts/" + accountID + "/tokens/verify":
-			fmt.Fprint(response, `{"success":true,"errors":[],"messages":[],"result":{"id":"`+tokenID+`","status":"active","expires_on":"2027-08-07T00:00:00Z","unexpected":"PROVIDER-FIELD-MARKER"}}`)
-		case "/accounts/" + accountID + "/tokens/" + tokenID:
-			fmt.Fprint(response, `{"success":true,"errors":[],"messages":[],"result":{"id":"`+tokenID+`","status":"active","policies":[{"effect":"allow","permission_groups":[{"id":"a","name":"Account API Tokens Read"},{"id":"b","name":"Cloudflare Tunnel Edit"}],"resources":{"com.cloudflare.api.account.`+accountID+`":"*"}},{"effect":"allow","permission_groups":[{"id":"c","name":"DNS Write"}],"resources":{"com.cloudflare.api.account.zone.`+zoneID+`":"*"}}]}}`)
+		case "/user/tokens/verify":
+			fmt.Fprint(response, `{"success":true,"errors":[],"messages":[],"result":{"id":"`+tokenID+`","status":"active","unexpected":"PROVIDER-FIELD-MARKER"}}`)
 		case "/zones":
-			if request.URL.Query().Get("account.id") != accountID || request.URL.Query().Get("name") != "example.com" || request.URL.Query().Get("per_page") != "50" {
+			if request.URL.Query().Get("status") != "active" || request.URL.Query().Get("per_page") != "50" || request.URL.Query().Has("account.id") || request.URL.Query().Has("name") {
 				t.Errorf("zone scope query = %s", request.URL.RawQuery)
 			}
 			if request.URL.Query().Get("page") == "1" {
@@ -52,6 +50,10 @@ func TestHTTPAPIParsesOfficialShapesWithScopedAuthenticationAndPagination(t *tes
 				return
 			}
 			fmt.Fprint(response, `{"success":true,"errors":[],"messages":[],"result":[{"id":"`+zoneID+`","name":"example.com","status":"active","name_servers":["ada.ns.cloudflare.com","bob.ns.cloudflare.com"],"account":{"id":"`+accountID+`","name":"Selected account"}}],"result_info":{"page":2,"per_page":50,"total_pages":2,"count":1,"total_count":1}}`)
+		case "/zones/" + zoneID + "/dns_records":
+			fmt.Fprint(response, `{"success":true,"errors":[],"messages":[],"result":[],"result_info":{"page":1,"per_page":1,"total_pages":0,"count":0,"total_count":0}}`)
+		case "/accounts/" + accountID + "/cfd_tunnel":
+			fmt.Fprint(response, `{"success":true,"errors":[],"messages":[],"result":[],"result_info":{"page":1,"per_page":1,"total_pages":0,"count":0,"total_count":0}}`)
 		default:
 			http.NotFound(response, request)
 		}
@@ -63,14 +65,15 @@ func TestHTTPAPIParsesOfficialShapesWithScopedAuthenticationAndPagination(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if observed.Account.ID != accountID || observed.Account.Name != "Selected account" || observed.Zone.ID != zoneID || observed.Token.ID != tokenID || observed.Token.Status != "active" || observed.Token.ExpiresOn == nil || len(observed.Policies) != 2 || len(observed.Zone.ObservedNameServers) != 2 {
+	if observed.Account.ID != accountID || observed.Account.Name != "Selected account" || observed.Zone.ID != zoneID || observed.Token.ID != tokenID || observed.Token.Status != "active" || observed.Token.ExpiresOn != nil || len(observed.Zone.ObservedNameServers) != 2 || !observed.DNSListProven || !observed.TunnelListProven {
 		t.Fatalf("Observe() = %+v", observed)
 	}
 	wantRequests := []string{
-		"/accounts/" + accountID + "/tokens/verify",
-		"/accounts/" + accountID + "/tokens/" + tokenID,
-		"/zones?account.id=" + accountID + "&name=example.com&page=1&per_page=50",
-		"/zones?account.id=" + accountID + "&name=example.com&page=2&per_page=50",
+		"/user/tokens/verify",
+		"/zones?page=1&per_page=50&status=active",
+		"/zones?page=2&per_page=50&status=active",
+		"/zones/" + zoneID + "/dns_records?page=1&per_page=1",
+		"/accounts/" + accountID + "/cfd_tunnel?is_deleted=false&page=1&per_page=1",
 	}
 	for index, want := range wantRequests {
 		got, parseErr := url.QueryUnescape(requests[index])
@@ -111,7 +114,7 @@ func TestHTTPAPIRefusesMalformedAmbiguousAndUnsafeResponses(t *testing.T) {
 			_, gotErr := api.Observe(context.Background(), request)
 			assertAPIError(t, gotErr, test.kind)
 			var apiError cloudflaretunnel.APIError
-			if (test.kind == cloudflaretunnel.APIUnauthorized || test.kind == cloudflaretunnel.APIForbidden) && (!errors.As(gotErr, &apiError) || apiError.RequiredPermission != cloudflaretunnel.AccountAPITokensReadPermission) {
+			if (test.kind == cloudflaretunnel.APIUnauthorized || test.kind == cloudflaretunnel.APIForbidden) && (!errors.As(gotErr, &apiError) || apiError.RequiredPermission != cloudflaretunnel.UserAPITokensEditPermission) {
 				t.Fatalf("authorization refusal required permission = %+v", gotErr)
 			}
 			if strings.Contains(gotErr.Error(), "PROVIDER-ERROR-MARKER") || strings.Contains(gotErr.Error(), token) {
@@ -143,15 +146,7 @@ func TestHTTPAPIRefusesMalformedAmbiguousAndUnsafeResponses(t *testing.T) {
 		defer server.Close()
 		api := cloudflaretunnel.NewFixtureHTTPAPI(server.Client(), server.URL, staticResolver{})
 		_, gotErr := api.Observe(context.Background(), request)
-		assertAPIError(t, gotErr, cloudflaretunnel.APIMalformed)
-	})
-
-	t.Run("contradictory token statuses are refused", func(t *testing.T) {
-		server := officialShapeServerWithResultInfo(t, `[{"id":"`+zoneID+`","name":"example.com","status":"active","name_servers":["ada.ns.cloudflare.com"],"account":{"id":"`+accountID+`","name":"Selected account"}}]`, 1, `{"page":1,"per_page":50,"total_pages":1,"count":1,"total_count":1}`, "disabled")
-		defer server.Close()
-		api := cloudflaretunnel.NewFixtureHTTPAPI(server.Client(), server.URL, staticResolver{names: []*net.NS{{Host: "ada.ns.cloudflare.com."}}})
-		_, gotErr := api.Observe(context.Background(), request)
-		assertAPIError(t, gotErr, cloudflaretunnel.APIAmbiguous)
+		assertAPIError(t, gotErr, cloudflaretunnel.APILimit)
 	})
 
 	t.Run("DNS lookup failure is temporary", func(t *testing.T) {
@@ -170,10 +165,8 @@ func TestHTTPAPIAttributesSelectedZoneRefusalToDNSWrite(t *testing.T) {
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
-		case "/accounts/" + accountID + "/tokens/verify":
+		case "/user/tokens/verify":
 			fmt.Fprint(response, `{"success":true,"result":{"id":"`+tokenID+`","status":"active"}}`)
-		case "/accounts/" + accountID + "/tokens/" + tokenID:
-			fmt.Fprint(response, `{"success":true,"result":{"id":"`+tokenID+`","status":"active","policies":[{"effect":"allow","permission_groups":[{"id":"a","name":"Account API Tokens Read"}],"resources":{"com.cloudflare.api.account.`+accountID+`":"*"}}]}}`)
 		case "/zones":
 			response.WriteHeader(http.StatusForbidden)
 			fmt.Fprint(response, `{"success":false}`)
@@ -185,7 +178,7 @@ func TestHTTPAPIAttributesSelectedZoneRefusalToDNSWrite(t *testing.T) {
 	api := cloudflaretunnel.NewFixtureHTTPAPI(server.Client(), server.URL, staticResolver{})
 	_, gotErr := api.Observe(context.Background(), cloudflaretunnel.ObservationRequest{AccountID: accountID, ZoneID: zoneID, ZoneName: "example.com", Token: managementToken})
 	var apiError cloudflaretunnel.APIError
-	if !errors.As(gotErr, &apiError) || apiError.Kind != cloudflaretunnel.APIForbidden || apiError.RequiredPermission != cloudflaretunnel.DNSWritePermission {
+	if !errors.As(gotErr, &apiError) || apiError.Kind != cloudflaretunnel.APIForbidden || apiError.RequiredPermission != cloudflaretunnel.ZoneReadPermission {
 		t.Fatalf("selected-zone authorization refusal = %+v", gotErr)
 	}
 }
@@ -204,12 +197,12 @@ func officialShapeServerWithResultInfo(t *testing.T, zones string, count int, re
 	return httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Content-Type", "application/json")
 		switch request.URL.Path {
-		case "/accounts/" + accountID + "/tokens/verify":
+		case "/user/tokens/verify":
 			fmt.Fprint(response, `{"success":true,"errors":[],"messages":[],"result":{"id":"`+tokenID+`","status":"active"}}`)
-		case "/accounts/" + accountID + "/tokens/" + tokenID:
-			fmt.Fprint(response, `{"success":true,"errors":[],"messages":[],"result":{"id":"`+tokenID+`","status":"`+detailStatus+`","policies":[{"effect":"allow","permission_groups":[{"id":"a","name":"Account API Tokens Read"}],"resources":{"com.cloudflare.api.account.`+accountID+`":"*"}}]}}`)
 		case "/zones":
 			fmt.Fprintf(response, `{"success":true,"errors":[],"messages":[],"result":%s,"result_info":%s}`, zones, resultInfo)
+		case "/zones/" + zoneID + "/dns_records", "/accounts/" + accountID + "/cfd_tunnel":
+			fmt.Fprint(response, `{"success":true,"result":[],"result_info":{"page":1,"per_page":1,"total_pages":0,"count":0,"total_count":0}}`)
 		default:
 			http.NotFound(response, request)
 		}

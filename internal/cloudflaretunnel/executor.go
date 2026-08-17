@@ -16,6 +16,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/albertloky/SBXR/internal/systemchanges"
@@ -178,28 +179,41 @@ type CertificateDNSFacts struct {
 }
 
 type rollbackRecord struct {
-	Token         string          `json:"management_token"`
-	Configuration *Configuration  `json:"configuration,omitempty"`
-	DNS           *DNSObservation `json:"dns,omitempty"`
+	Token          string          `json:"management_token"`
+	Configuration  *Configuration  `json:"configuration,omitempty"`
+	DNS            *DNSObservation `json:"dns,omitempty"`
+	CandidateID    string          `json:"candidate_id,omitempty"`
+	CandidateName  string          `json:"candidate_name,omitempty"`
+	CandidateSHA   string          `json:"candidate_request_sha256,omitempty"`
+	CandidateBody  json.RawMessage `json:"candidate_request,omitempty"`
+	CandidateAfter time.Time       `json:"candidate_not_before,omitempty"`
+	CandidateUntil time.Time       `json:"candidate_not_after,omitempty"`
+	PlanSHA        string          `json:"plan_sha256,omitempty"`
+	CandidateToken string          `json:"candidate_token,omitempty"`
+	AccountID      string          `json:"account_id,omitempty"`
+	ZoneID         string          `json:"zone_id,omitempty"`
+	ZoneName       string          `json:"zone_name,omitempty"`
+	CurrentTokenID string          `json:"current_token_id,omitempty"`
 }
 
 // Executor is the Cloudflare Adapter used only by the System Changes Ubuntu
 // transaction host. Every call executes one typed provider mutation.
 type Executor struct {
-	api                MutationAPI
-	token              ManagementToken
-	runToken           TunnelRunToken
-	request            PlanRequest
-	observation        string
-	tokenID            string
-	binding            cloudflareEvidenceBinding
-	serviceIdentity    func() (int, int, error)
-	command            func(context.Context, string, ...string) ([]byte, error)
-	clock              Clock
-	releaseUpdate      bool
-	clientAccess       *systemchanges.CloudflareChange
-	clientAccessHealth *clientAccessRouteHealth
-	clientAccessPrior  []Route
+	api                     MutationAPI
+	token                   ManagementToken
+	runToken                TunnelRunToken
+	request                 PlanRequest
+	observation             string
+	tokenID                 string
+	binding                 cloudflareEvidenceBinding
+	serviceIdentity         func() (int, int, error)
+	command                 func(context.Context, string, ...string) ([]byte, error)
+	clock                   Clock
+	releaseUpdate           bool
+	clientAccess            *systemchanges.CloudflareChange
+	clientAccessHealth      *clientAccessRouteHealth
+	clientAccessPrior       []Route
+	managementRequestSHA256 string
 }
 
 type clientAccessRouteHealth struct {
@@ -209,14 +223,19 @@ type clientAccessRouteHealth struct {
 }
 
 func (plan *Plan) Executor(api MutationAPI) (Executor, error) {
-	if plan == nil || api == nil || plan.runToken.cell == nil && plan.request.ManagedRepair.TunnelID == "" || plan.request.Authority.Token.value == "" {
+	if plan == nil || api == nil || plan.runToken.cell == nil && plan.request.ManagedRepair.TunnelID == "" && !plan.managementRotation || plan.request.Authority.Token.value == "" {
 		return Executor{}, errors.New("Cloudflare executor unavailable")
+	}
+	if plan.managementRotation {
+		if _, ok := api.(managementTokenLifecycleAPI); !ok {
+			return Executor{}, errors.New("Cloudflare management-token lifecycle API unavailable")
+		}
 	}
 	view := Interface{api: api, clock: SystemClock{}}.View(context.Background(), plan.request.Authority)
 	if view.Health.Outcome != Healthy {
 		return Executor{}, errors.New("Cloudflare executor authority unavailable")
 	}
-	return Executor{api: api, token: plan.request.Authority.Token, runToken: plan.runToken, request: plan.request, observation: plan.observation, tokenID: view.Credential.ID, binding: plan.binding, serviceIdentity: cloudflaredIdentity, command: runCommand, clock: SystemClock{}, releaseUpdate: plan.releaseUpdate}, nil
+	return Executor{api: api, token: plan.request.Authority.Token, runToken: plan.runToken, request: plan.request, observation: plan.observation, tokenID: view.Credential.ID, binding: plan.binding, serviceIdentity: cloudflaredIdentity, command: runCommand, clock: SystemClock{}, releaseUpdate: plan.releaseUpdate, managementRequestSHA256: plan.sha256}, nil
 }
 
 func (executor Executor) CaptureRollback(step systemchanges.Step, write func(io.Reader) error) error {
@@ -224,6 +243,17 @@ func (executor Executor) CaptureRollback(step systemchanges.Step, write func(io.
 		return errors.New("Cloudflare rollback capture unavailable")
 	}
 	change, _ := step.CloudflareChange()
+	if change.Action == systemchanges.CloudflareManagementTokenActivate {
+		if _, ok := executor.api.(managementTokenLifecycleAPI); !ok || change.ManagementTokenID != executor.tokenID || !sha256Text.MatchString(executor.managementRequestSHA256) {
+			return errors.New("Cloudflare management-token rotation unavailable")
+		}
+		record := rollbackRecord{Token: executor.token.value, CandidateName: "sbxr-rotation-" + executor.managementRequestSHA256[:32], PlanSHA: executor.managementRequestSHA256, AccountID: executor.request.Authority.AccountID, ZoneID: executor.request.Authority.ZoneID, ZoneName: executor.request.Authority.ZoneName, CurrentTokenID: change.ManagementTokenID}
+		data, marshalErr := json.Marshal(record)
+		if marshalErr != nil {
+			return errors.New("Cloudflare management-token rotation snapshot unavailable")
+		}
+		return write(bytes.NewReader(data))
+	}
 	if change.Action == systemchanges.CloudflareDNSDelete || change.Action == systemchanges.CloudflareRoutesDelete || change.Action == systemchanges.CloudflareTunnelDelete {
 		return write(strings.NewReader(`{"irreversible_cloudflare_reclamation":true}`))
 	}
@@ -267,6 +297,102 @@ func (executor Executor) CaptureRollback(step systemchanges.Step, write func(io.
 		return err
 	}
 	return write(strings.NewReader(string(data)))
+}
+
+func (executor Executor) PrepareManagementTokenRotation(snapshot io.Reader, timeout time.Duration, persist func([]byte) error) ([]byte, string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	var rollback rollbackRecord
+	if snapshot == nil || json.NewDecoder(io.LimitReader(snapshot, 64<<10)).Decode(&rollback) != nil || rollback.CandidateID != "" || rollback.CandidateToken != "" {
+		return nil, "", errors.New("Cloudflare management-token rotation intent unavailable")
+	}
+	lifecycle, ok := executor.api.(managementTokenLifecycleAPI)
+	oldToken, tokenErr := NewManagementToken(rollback.Token)
+	if !ok || tokenErr != nil || persist == nil || !immutableID.MatchString(rollback.CurrentTokenID) || !managementTokenCandidateName.MatchString(rollback.CandidateName) || !sha256Text.MatchString(rollback.PlanSHA) || rollback.CandidateName != "sbxr-rotation-"+rollback.PlanSHA[:32] {
+		return nil, "", errors.New("Cloudflare management-token rotation intent unavailable")
+	}
+	intent := CreateManagementTokenCandidateRequest{Current: oldToken, Name: rollback.CandidateName, RequestSHA256: rollback.CandidateSHA, CanonicalBody: rollback.CandidateBody, NotBefore: rollback.CandidateAfter, NotAfter: rollback.CandidateUntil}
+	if len(rollback.CandidateBody) == 0 {
+		now := time.Now().UTC()
+		var err error
+		intent, err = lifecycle.PrepareManagementTokenCandidate(ctx, oldToken, rollback.CandidateName, now.Add(-time.Minute), now.Add(4*time.Minute))
+		if err != nil {
+			return nil, "", errors.New("Cloudflare management-token candidate intent unavailable")
+		}
+		rollback.CandidateSHA, rollback.CandidateBody = intent.RequestSHA256, append(json.RawMessage(nil), intent.CanonicalBody...)
+		rollback.CandidateAfter, rollback.CandidateUntil = intent.NotBefore, intent.NotAfter
+		intentBytes, err := json.Marshal(rollback)
+		if err != nil || persist(intentBytes) != nil {
+			return nil, "", errors.New("Cloudflare management-token candidate intent is not durable")
+		}
+	} else if _, err := managementTokenBody(intent); err != nil {
+		return nil, "", errors.New("Cloudflare management-token candidate intent unavailable")
+	}
+	rotation, err := prepareManagementTokenRotation(ctx, lifecycle, ObservationRequest{AccountID: rollback.AccountID, ZoneID: rollback.ZoneID, ZoneName: rollback.ZoneName, Token: oldToken}, rollback.CurrentTokenID, intent)
+	if err != nil {
+		var cleanup ManagementTokenCandidateCleanupError
+		if errors.As(err, &cleanup) {
+			rollback.CandidateID = cleanup.CandidateID()
+			data, marshalErr := json.Marshal(rollback)
+			if marshalErr != nil {
+				return nil, cleanup.CandidateID(), err
+			}
+			return data, cleanup.CandidateID(), err
+		}
+		return nil, "", err
+	}
+	rollback.CandidateID = rotation.candidate.id
+	rollback.CandidateName = rotation.candidate.name
+	rollback.CandidateSHA = rotation.candidate.requestSHA256
+	rollback.CandidateToken = rotation.candidate.token.value
+	data, err := json.Marshal(rollback)
+	return data, rotation.candidate.id, err
+}
+
+func (executor Executor) CleanupManagementTokenCandidate(snapshot io.Reader, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	var rollback rollbackRecord
+	if snapshot == nil || json.NewDecoder(io.LimitReader(snapshot, 64<<10)).Decode(&rollback) != nil {
+		return errors.New("Cloudflare management-token candidate cleanup unavailable")
+	}
+	lifecycle, ok := executor.api.(managementTokenLifecycleAPI)
+	oldToken, err := NewManagementToken(rollback.Token)
+	if !ok || err != nil {
+		return errors.New("Cloudflare management-token candidate cleanup unavailable")
+	}
+	intent := CreateManagementTokenCandidateRequest{Current: oldToken, Name: rollback.CandidateName, RequestSHA256: rollback.CandidateSHA, CanonicalBody: rollback.CandidateBody, NotBefore: rollback.CandidateAfter, NotAfter: rollback.CandidateUntil}
+	candidateID := rollback.CandidateID
+	if candidateID == "" {
+		if lifecycle.VerifyManagementTokenCandidateAbsent(ctx, intent) == nil {
+			return nil
+		}
+		candidate, reconcileErr := lifecycle.ReconcileManagementTokenCandidate(ctx, intent)
+		if reconcileErr != nil {
+			return errors.New("Cloudflare management-token candidate cleanup is unproved")
+		}
+		candidateID = candidate.id
+	}
+	if !immutableID.MatchString(candidateID) {
+		return errors.New("Cloudflare management-token candidate cleanup unavailable")
+	}
+	if err := lifecycle.DeleteManagementToken(ctx, DeleteManagementTokenRequest{ID: candidateID, Token: oldToken}); err != nil && !apiErrorIs(err, APINotFound) {
+		return errors.New("Cloudflare management-token candidate cleanup failed")
+	}
+	if lifecycle.VerifyManagementTokenCandidateAbsent(ctx, intent) != nil {
+		return errors.New("Cloudflare management-token candidate cleanup is unproved")
+	}
+	if rollback.CandidateToken != "" {
+		candidate, err := NewManagementToken(rollback.CandidateToken)
+		if err != nil {
+			return errors.New("Cloudflare management-token candidate cleanup unavailable")
+		}
+		request := ObservationRequest{AccountID: rollback.AccountID, ZoneID: rollback.ZoneID, ZoneName: rollback.ZoneName, Token: candidate}
+		if _, err := lifecycle.Observe(ctx, request); !apiErrorIs(err, APIUnauthorized) {
+			return errors.New("Cloudflare management-token candidate cleanup is unproved")
+		}
+	}
+	return nil
 }
 
 func (executor Executor) Execute(step systemchanges.Step, resolvedTunnelID string, timeout time.Duration) (systemchanges.StepEvidence, error) {
@@ -381,6 +507,8 @@ func (executor Executor) Execute(step systemchanges.Step, resolvedTunnelID strin
 			return systemchanges.StepEvidence{}, errors.New("cloudflared activation unavailable")
 		}
 		return providerEvidence("cloudflared-activated", "", ""), nil
+	case systemchanges.CloudflareManagementTokenActivate:
+		return systemchanges.StepEvidence{}, errors.New("management-token rotation requires the irreversible transaction seam")
 	}
 	return systemchanges.StepEvidence{}, errors.New("unsupported Cloudflare step")
 }
@@ -482,6 +610,15 @@ func (executor Executor) Reverse(step systemchanges.Step, evidence systemchanges
 	}
 	var err error
 	switch change.Action {
+	case systemchanges.CloudflareManagementTokenActivate:
+		rotation, err := executor.managementTokenRotationFromRollback(rollback)
+		if err != nil {
+			return systemchanges.StepEvidence{}, err
+		}
+		if err := rotation.rollback(ctx); err != nil {
+			return systemchanges.StepEvidence{}, err
+		}
+		return providerEvidence("cloudflare-management-token-candidate-deleted", "", rollback.CandidateID), nil
 	case systemchanges.CloudflareTunnelCreate:
 		if evidence.ResourceType != string(systemchanges.CloudflareTunnelResource) || !tunnelUUID.MatchString(evidence.ResourceID) {
 			return systemchanges.StepEvidence{}, errors.New("journaled Cloudflare Tunnel identifier unavailable")
@@ -513,6 +650,42 @@ func (executor Executor) Reverse(step systemchanges.Step, evidence systemchanges
 		return systemchanges.StepEvidence{}, err
 	}
 	return providerEvidence("cloudflare-rollback-proved", "", ""), nil
+}
+
+func (executor Executor) CompleteManagementTokenRotation(snapshot io.Reader, timeout time.Duration) (any, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	var rollback rollbackRecord
+	if snapshot == nil || json.NewDecoder(io.LimitReader(snapshot, 64<<10)).Decode(&rollback) != nil {
+		return nil, errors.New("Cloudflare management-token rotation snapshot unavailable")
+	}
+	rotation, err := executor.managementTokenRotationFromRollback(rollback)
+	if err != nil {
+		return nil, err
+	}
+	return rotation.completeForward(ctx)
+}
+
+func (executor Executor) managementTokenRotationFromRollback(rollback rollbackRecord) (*preparedManagementTokenRotation, error) {
+	lifecycle, ok := executor.api.(managementTokenLifecycleAPI)
+	if !ok || rollback.Token == "" || !immutableID.MatchString(rollback.CandidateID) || !managementTokenCandidateName.MatchString(rollback.CandidateName) || !sha256Text.MatchString(rollback.CandidateSHA) || !sha256Text.MatchString(rollback.PlanSHA) || rollback.CandidateName != "sbxr-rotation-"+rollback.PlanSHA[:32] || len(rollback.CandidateBody) == 0 || rollback.CandidateToken == "" || !immutableID.MatchString(rollback.AccountID) || !immutableID.MatchString(rollback.ZoneID) || !validZoneName(rollback.ZoneName) || !immutableID.MatchString(rollback.CurrentTokenID) {
+		return nil, errors.New("Cloudflare management-token rotation authority unavailable")
+	}
+	oldToken, err := NewManagementToken(rollback.Token)
+	if err != nil {
+		return nil, errors.New("Cloudflare management-token rotation authority unavailable")
+	}
+	candidateToken, err := NewManagementToken(rollback.CandidateToken)
+	if err != nil {
+		return nil, errors.New("Cloudflare management-token candidate unavailable")
+	}
+	intent := CreateManagementTokenCandidateRequest{Current: oldToken, Name: rollback.CandidateName, RequestSHA256: rollback.CandidateSHA, CanonicalBody: rollback.CandidateBody, NotBefore: rollback.CandidateAfter, NotAfter: rollback.CandidateUntil}
+	if _, err := managementTokenBody(intent); err != nil {
+		return nil, errors.New("Cloudflare management-token candidate request unavailable")
+	}
+	request := ObservationRequest{AccountID: rollback.AccountID, ZoneID: rollback.ZoneID, ZoneName: rollback.ZoneName, Token: oldToken}
+	candidate := ManagementTokenCandidate{id: rollback.CandidateID, name: rollback.CandidateName, requestSHA256: rollback.CandidateSHA, token: candidateToken, used: &atomic.Bool{}}
+	return &preparedManagementTokenRotation{api: lifecycle, request: request, currentID: rollback.CurrentTokenID, candidate: candidate}, nil
 }
 
 func (executor Executor) InspectRepair(step systemchanges.Step, snapshot io.Reader, timeout time.Duration) (systemchanges.StepEffect, error) {

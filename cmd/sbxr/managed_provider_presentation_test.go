@@ -14,21 +14,21 @@ func TestManagedProviderPresentationKeepsTypedCloudflareAndCertificateFacts(t *t
 	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	cloudflare := ownerCloudflarePresentation(cloudflaretunnel.ViewResult{
 		Account: cloudflaretunnel.AccountStatus{ID: "11111111111111111111111111111111"}, Zone: cloudflaretunnel.ZoneStatus{Name: "example.com"},
-		Credential: cloudflaretunnel.CredentialStatus{Status: "active", FirstFour: "cfat", LastFour: "last", Uses: []string{"manage one Tunnel"}},
+		Credential: cloudflaretunnel.CredentialStatus{Status: "active", FirstFour: "sbxr", LastFour: "last", Uses: []string{"manage one Tunnel"}},
 		Health:     cloudflaretunnel.Health{Outcome: cloudflaretunnel.Healthy}, LastCheck: now,
 	})
-	if cloudflare.Kind != ownerconsole.CloudflareCredentialPresentation || cloudflare.Credential.Status != ownerconsole.CloudflareTokenActive || cloudflare.Credential.LastVerification != now.Format(time.RFC3339) || len(cloudflare.Credential.Guidance) != 2 || cloudflare.Credential.HelpURL != "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/" {
+	if cloudflare.Kind != ownerconsole.CloudflareCredentialPresentation || cloudflare.Credential.Status != ownerconsole.CloudflareTokenActive || cloudflare.Credential.LastVerification != now.Format(time.RFC3339) || len(cloudflare.Credential.Guidance) != 3 || cloudflare.Credential.HelpURL != "https://developers.cloudflare.com/fundamentals/api/get-started/create-token/" {
 		t.Fatalf("Cloudflare presentation = %+v", cloudflare)
 	}
 
 	missing := ownerCloudflarePresentation(cloudflaretunnel.ViewResult{
 		Health: cloudflaretunnel.Health{Outcome: cloudflaretunnel.Failed, Code: "CLOUDFLARE-TOKEN-PERMISSION", Found: "token is missing DNS Write"},
 		PermissionCorrection: cloudflaretunnel.PermissionCorrection{
-			Capability: "Required Cloudflare Account API Token authority", AccountID: "11111111111111111111111111111111", ZoneID: "22222222222222222222222222222222", ZoneName: "example.com", Found: "token is missing DNS Write", Required: "Zone > DNS > Edit on selected zone 22222222222222222222222222222222", WhyStopped: "SBXR does not bypass required Cloudflare authority", Evidence: "copyable redacted CLOUDFLARE-TOKEN-PERMISSION result",
-			DashboardSteps: []string{"Open Manage Account > Account API Tokens in the selected account.", "Edit the exact token permission.", "Return to SBXR and select Check current token again."}, URL: "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/",
+			Capability: "Dedicated Broad Cloudflare User API Token authority", AccountID: "11111111111111111111111111111111", ZoneID: "22222222222222222222222222222222", ZoneName: "example.com", Found: "selected-zone DNS read is unproved", Required: "DNS Edit and Zone Read for all zones", WhyStopped: "SBXR does not bypass required Cloudflare authority", Evidence: "copyable redacted CLOUDFLARE-TOKEN-PERMISSION result",
+			DashboardSteps: []string{"Open My Profile > API Tokens.", "Edit the exact Dedicated Broad User API Token.", "Return to SBXR and select Check current token again."}, URL: "https://developers.cloudflare.com/fundamentals/api/get-started/create-token/",
 		},
 	})
-	if missing.Kind != ownerconsole.CloudflareMissingPermissionPresentation || missing.MissingPermission.Account != "11111111111111111111111111111111" || missing.MissingPermission.Zone != "22222222222222222222222222222222 (example.com)" || missing.MissingPermission.Required != "Zone > DNS > Edit on selected zone 22222222222222222222222222222222" {
+	if missing.Kind != ownerconsole.CloudflareMissingPermissionPresentation || missing.MissingPermission.Account != "11111111111111111111111111111111" || missing.MissingPermission.Zone != "22222222222222222222222222222222 (example.com)" || missing.MissingPermission.Required != "DNS Edit and Zone Read for all zones" {
 		t.Fatalf("missing-permission presentation = %+v", missing)
 	}
 

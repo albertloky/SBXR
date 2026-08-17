@@ -890,15 +890,16 @@ type CertificateChange struct {
 type CloudflareAction string
 
 const (
-	CloudflareTunnelCreate     CloudflareAction = "tunnel-create"
-	CloudflareRoutesPut        CloudflareAction = "routes-put"
-	CloudflareDNSCreate        CloudflareAction = "dns-create"
-	CloudflareDNSRepair        CloudflareAction = "dns-repair"
-	CloudflareDNSDelete        CloudflareAction = "dns-delete"
-	CloudflareRoutesDelete     CloudflareAction = "routes-delete"
-	CloudflareTunnelDelete     CloudflareAction = "tunnel-delete"
-	CloudflaredActivate        CloudflareAction = "service-activate"
-	CloudflareRunTokenActivate CloudflareAction = "run-token-activate"
+	CloudflareTunnelCreate            CloudflareAction = "tunnel-create"
+	CloudflareRoutesPut               CloudflareAction = "routes-put"
+	CloudflareDNSCreate               CloudflareAction = "dns-create"
+	CloudflareDNSRepair               CloudflareAction = "dns-repair"
+	CloudflareDNSDelete               CloudflareAction = "dns-delete"
+	CloudflareRoutesDelete            CloudflareAction = "routes-delete"
+	CloudflareTunnelDelete            CloudflareAction = "tunnel-delete"
+	CloudflaredActivate               CloudflareAction = "service-activate"
+	CloudflareRunTokenActivate        CloudflareAction = "run-token-activate"
+	CloudflareManagementTokenActivate CloudflareAction = "management-token-activate"
 )
 
 type CloudflareRoute struct {
@@ -924,6 +925,7 @@ type CloudflareChange struct {
 	WebSocketDNSRecordID string            `json:"websocket_dns_record_id,omitempty"`
 	DirectIPv4RecordID   string            `json:"direct_ipv4_record_id,omitempty"`
 	DirectIPv6RecordID   string            `json:"direct_ipv6_record_id,omitempty"`
+	ManagementTokenID    string            `json:"management_token_id,omitempty"`
 	DirectHostname       string            `json:"direct_hostname,omitempty"`
 	PublicIPv4           string            `json:"public_ipv4,omitempty"`
 	PublicIPv6           string            `json:"public_ipv6,omitempty"`
@@ -1051,6 +1053,8 @@ func NewCloudflareStep(change CloudflareChange) (Step, error) {
 		forward, rollback = ActivateCloudflaredService, RestoreCloudflaredService
 	case CloudflareRunTokenActivate:
 		forward, rollback = RotateCloudflaredRunToken, RestoreCloudflaredService
+	case CloudflareManagementTokenActivate:
+		forward, rollback = RecordManagementTokenChange, RestoreManagementTokenRecord
 	}
 	step := Step{owner: CloudflareModule, forward: forward, rollback: rollback, cancel: SafeCheckpointCancellation, inspect: InspectBeforeIdempotentReverse, cloudflare: change}
 	if !validStep(step) {
@@ -1751,6 +1755,8 @@ func validCloudflareContract(step Step) bool {
 			return false
 		}
 		return (change.DirectIPv4RecordID == "") == (change.PublicIPv4 == "") && (change.DirectIPv6RecordID == "") == (change.PublicIPv6 == "") && (change.DirectIPv4RecordID == "" || safeIdentity(change.DirectIPv4RecordID)) && (change.DirectIPv6RecordID == "" || safeIdentity(change.DirectIPv6RecordID))
+	case CloudflareManagementTokenActivate:
+		return step.forward == RecordManagementTokenChange && step.rollback == RestoreManagementTokenRecord && safeIdentity(change.ZoneID) && safeIdentity(change.ManagementTokenID) && change.TunnelID == "" && len(change.Routes) == 0
 	}
 	return false
 }

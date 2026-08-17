@@ -144,7 +144,7 @@ func TestManagementTokenTemplateSHA256AcceptsOnlyTheReviewedEmptySlot(t *testing
 	if err != nil || len(removal) != 64 || removal == replacement {
 		t.Fatalf("removal template = (%q, %v)", removal, err)
 	}
-	candidate.Cloudflare.ManagementToken = NewInfrastructureSecret("cfat_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	candidate.Cloudflare.ManagementToken = NewInfrastructureSecret("sbxr_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	if _, err := ManagementTokenTemplateSHA256(candidate); err == nil {
 		t.Fatal("caller-supplied management token was accepted as an empty template")
 	}
@@ -364,19 +364,20 @@ func completeDesiredState() DesiredState {
 			CertificateID: "ip-certificate",
 		},
 		Cloudflare: CloudflareSettings{
-			AccountID:            "cloudflare-account",
-			ZoneID:               "cloudflare-zone",
-			ZoneName:             "example.com",
-			TunnelID:             "cloudflare-tunnel-id",
-			TunnelName:           "sbxr",
-			ManagementToken:      NewInfrastructureSecret("CLOUDFLARE-MANAGEMENT-SECRET-MARKER"),
-			TunnelRunToken:       NewInfrastructureSecret("CLOUDFLARE-RUN-SECRET-MARKER-00001"),
-			XHTTPHostname:        "xhttp.example.com",
-			WebSocketHostname:    "ws.example.com",
-			DirectHostname:       "direct.example.com",
-			XHTTPDNSRecordID:     "dns-xhttp",
-			WebSocketDNSRecordID: "dns-websocket",
-			DirectIPv4RecordID:   "dns-direct-ipv4",
+			DedicatedBroadPolicyConfirmed: true,
+			AccountID:                     "cloudflare-account",
+			ZoneID:                        "cloudflare-zone",
+			ZoneName:                      "example.com",
+			TunnelID:                      "cloudflare-tunnel-id",
+			TunnelName:                    "sbxr",
+			ManagementToken:               NewInfrastructureSecret("CLOUDFLARE-MANAGEMENT-SECRET-MARKER"),
+			TunnelRunToken:                NewInfrastructureSecret("CLOUDFLARE-RUN-SECRET-MARKER-00001"),
+			XHTTPHostname:                 "xhttp.example.com",
+			WebSocketHostname:             "ws.example.com",
+			DirectHostname:                "direct.example.com",
+			XHTTPDNSRecordID:              "dns-xhttp",
+			WebSocketDNSRecordID:          "dns-websocket",
+			DirectIPv4RecordID:            "dns-direct-ipv4",
 		},
 		Certificates: CertificateSettings{
 			RenewalPolicy:        true,

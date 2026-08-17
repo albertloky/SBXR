@@ -168,7 +168,7 @@ func buildSoftwareChange(ctx context.Context, module state.Interface, loaded sta
 	api := cloudflaretunnel.NewProductionAPI()
 	cloudflareModule := cloudflaretunnel.New(api, cloudflaretunnel.SystemClock{})
 	cloudflareResult := cloudflareModule.Plan(ctx, cloudflaretunnel.PlanRequest{
-		Authority: cloudflaretunnel.ViewRequest{AccountID: desired.Cloudflare.AccountID, ZoneID: desired.Cloudflare.ZoneID, ZoneName: desired.Cloudflare.ZoneName, Token: token, NetworkPath: network.CloudflareTunnelPath},
+		Authority: cloudflaretunnel.ViewRequest{AccountID: desired.Cloudflare.AccountID, ZoneID: desired.Cloudflare.ZoneID, ZoneName: desired.Cloudflare.ZoneName, Token: token, DedicatedBroadPolicyConfirmed: desired.Cloudflare.DedicatedBroadPolicyConfirmed, NetworkPath: network.CloudflareTunnelPath},
 		ChangeSet: changeSet, StartingRevision: snapshot.Revision, StartingStateSHA256: desiredSHA, DesiredStateSHA256: desiredSHA,
 		TunnelName: desired.Cloudflare.TunnelName, XHTTPHostname: desired.Cloudflare.XHTTPHostname, WebSocketHostname: desired.Cloudflare.WebSocketHostname, DirectHostname: desired.Cloudflare.DirectHostname,
 		PublicIPv4: desired.NetworkPolicy.PublicIPv4, PublicIPv6: desired.NetworkPolicy.PublicIPv6, CloudflaredVersion: trimVersion(desired.Software.CloudflaredVersion),

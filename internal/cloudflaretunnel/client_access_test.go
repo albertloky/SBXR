@@ -51,7 +51,7 @@ func TestClientAccessRoutesBindsRollbackAndHealthToTheReviewedRoutes(t *testing.
 	}
 	prior := clientAccessRoutes(ClientAccessRoutesRequest{CandidateXHTTP: true, CandidateWebSocket: true, XHTTPHostname: request.XHTTPHostname, WebSocketHostname: request.WebSocketHostname})
 	api := &executorFixture{priorConfiguration: Configuration{TunnelID: request.TunnelID, Version: 1, Routes: prior}}
-	token, _ := NewManagementToken("cfat_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	token, _ := NewManagementToken("sbxr_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	executor, err := plan.Executor(api, token)
 	if err != nil {
 		t.Fatal(err)

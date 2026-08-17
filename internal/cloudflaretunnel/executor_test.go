@@ -3,14 +3,189 @@ package cloudflaretunnel
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/netip"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
+
+type managementRotationAPI struct {
+	MutationAPI
+	current, candidate     ManagementToken
+	currentID, candidateID string
+	deleted                []string
+	oldUnauthorized        bool
+	candidateUnauthorized  bool
+	candidateInvalid       bool
+	deleteCandidateErr     bool
+}
+
+func (api *managementRotationAPI) Observe(_ context.Context, request ObservationRequest) (Observation, error) {
+	switch request.Token.value {
+	case api.current.value:
+		if api.oldUnauthorized {
+			return Observation{}, APIError{Kind: APIUnauthorized}
+		}
+		return rotationObservation(request, api.currentID), nil
+	case api.candidate.value:
+		if api.candidateUnauthorized {
+			return Observation{}, APIError{Kind: APIUnauthorized}
+		}
+		observed := rotationObservation(request, api.candidateID)
+		if api.candidateInvalid {
+			observed.DNSListProven = false
+		}
+		return observed, nil
+	default:
+		return Observation{}, APIError{Kind: APIUnauthorized}
+	}
+}
+
+func (api *managementRotationAPI) CreateManagementTokenCandidate(_ context.Context, request CreateManagementTokenCandidateRequest) (ManagementTokenCandidate, error) {
+	if request.Current.value != api.current.value {
+		return ManagementTokenCandidate{}, APIError{Kind: APIUnauthorized}
+	}
+	return ManagementTokenCandidate{id: api.candidateID, name: request.Name, requestSHA256: request.RequestSHA256, issuedOn: time.Now(), token: api.candidate, used: &atomic.Bool{}}, nil
+}
+
+func (api *managementRotationAPI) PrepareManagementTokenCandidate(_ context.Context, current ManagementToken, name string, notBefore, notAfter time.Time) (CreateManagementTokenCandidateRequest, error) {
+	body := json.RawMessage(`{"name":"` + name + `","policies":[],"expires_on":null,"condition":null}`)
+	digest := sha256.Sum256(body)
+	return CreateManagementTokenCandidateRequest{Current: current, Name: name, RequestSHA256: hex.EncodeToString(digest[:]), CanonicalBody: body, NotBefore: notBefore, NotAfter: notAfter}, nil
+}
+
+func (api *managementRotationAPI) VerifyManagementTokenCandidateAbsent(_ context.Context, _ ReconcileManagementTokenCandidateRequest) error {
+	if slices.Contains(api.deleted, api.candidateID) {
+		return nil
+	}
+	return APIError{Kind: APIAmbiguous}
+}
+
+func (api *managementRotationAPI) ReconcileManagementTokenCandidate(_ context.Context, request ReconcileManagementTokenCandidateRequest) (ManagementTokenCandidate, error) {
+	if slices.Contains(api.deleted, api.candidateID) {
+		return ManagementTokenCandidate{}, APIError{Kind: APIAmbiguous}
+	}
+	return ManagementTokenCandidate{id: api.candidateID, name: request.Name, requestSHA256: request.RequestSHA256, issuedOn: time.Now(), used: &atomic.Bool{}}, nil
+}
+
+func (api *managementRotationAPI) DeleteManagementToken(_ context.Context, request DeleteManagementTokenRequest) error {
+	api.deleted = append(api.deleted, request.ID)
+	switch request.ID {
+	case api.currentID:
+		if request.Token.value != api.candidate.value {
+			return APIError{Kind: APIForbidden}
+		}
+		api.oldUnauthorized = true
+	case api.candidateID:
+		if api.deleteCandidateErr {
+			return APIError{Kind: APITemporary}
+		}
+		if request.Token.value != api.current.value {
+			return APIError{Kind: APIForbidden}
+		}
+		api.candidateUnauthorized = true
+	default:
+		return APIError{Kind: APIAmbiguous}
+	}
+	return nil
+}
+
+func rotationObservation(request ObservationRequest, id string) Observation {
+	return Observation{Account: AccountObservation{ID: request.AccountID}, Zone: ZoneObservation{ID: request.ZoneID, AccountID: request.AccountID, Name: request.ZoneName, Status: "active"}, Token: TokenObservation{ID: id, Status: "active"}, DNSListProven: true, TunnelListProven: true}
+}
+
+func TestManagementTokenRotationCreatesAndProvesCandidateBeforeDeletingOldToken(t *testing.T) {
+	current, _ := NewManagementToken("CURRENT_USER_TOKEN_MARKER_000000000000000000")
+	candidate, _ := NewManagementToken("CANDIDATE_USER_TOKEN_MARKER_0000000000000000")
+	api := &managementRotationAPI{current: current, candidate: candidate, currentID: strings.Repeat("1", 32), candidateID: strings.Repeat("2", 32)}
+	request := ObservationRequest{AccountID: strings.Repeat("a", 32), ZoneID: strings.Repeat("b", 32), ZoneName: "example.com", Token: current}
+	intent, _ := api.PrepareManagementTokenCandidate(t.Context(), current, "sbxr-rotation-"+strings.Repeat("c", 32), time.Now().Add(-time.Minute), time.Now().Add(time.Minute))
+	rotation, err := prepareManagementTokenRotation(t.Context(), api, request, api.currentID, intent)
+	if err != nil || len(api.deleted) != 0 {
+		t.Fatalf("prepare = (%+v, %v), deletions=%v", rotation, err, api.deleted)
+	}
+	created, err := rotation.completeForward(t.Context())
+	if err != nil || created.id != api.candidateID || !api.oldUnauthorized || !slices.Equal(api.deleted, []string{api.currentID}) {
+		t.Fatalf("complete = (%+v, %v), deletions=%v", created, err, api.deleted)
+	}
+	secret, ok := created.ConsumeInfrastructureSecret()
+	if !ok || secret != candidate.value {
+		t.Fatal("candidate State handoff was unavailable")
+	}
+	if _, reused := created.ConsumeInfrastructureSecret(); reused {
+		t.Fatal("candidate State handoff was reusable")
+	}
+}
+
+func TestManagementTokenRotationRollbackDeletesOnlyTheCandidate(t *testing.T) {
+	current, _ := NewManagementToken("CURRENT_USER_TOKEN_MARKER_000000000000000000")
+	candidate, _ := NewManagementToken("CANDIDATE_USER_TOKEN_MARKER_0000000000000000")
+	api := &managementRotationAPI{current: current, candidate: candidate, currentID: strings.Repeat("1", 32), candidateID: strings.Repeat("2", 32)}
+	request := ObservationRequest{AccountID: strings.Repeat("a", 32), ZoneID: strings.Repeat("b", 32), ZoneName: "example.com", Token: current}
+	intent, _ := api.PrepareManagementTokenCandidate(t.Context(), current, "sbxr-rotation-"+strings.Repeat("c", 32), time.Now().Add(-time.Minute), time.Now().Add(time.Minute))
+	rotation, err := prepareManagementTokenRotation(t.Context(), api, request, api.currentID, intent)
+	if err != nil || rotation.rollback(t.Context()) != nil || !api.candidateUnauthorized || api.oldUnauthorized || !slices.Equal(api.deleted, []string{api.candidateID}) {
+		t.Fatalf("rollback = %v, deletions=%v", err, api.deleted)
+	}
+}
+
+func TestManagementTokenRotationExecutorPersistsCandidateBeforeRevokingOld(t *testing.T) {
+	current, _ := NewManagementToken("CURRENT_USER_TOKEN_MARKER_000000000000000000")
+	candidate, _ := NewManagementToken("CANDIDATE_USER_TOKEN_MARKER_0000000000000000")
+	api := &managementRotationAPI{current: current, candidate: candidate, currentID: strings.Repeat("1", 32), candidateID: strings.Repeat("2", 32)}
+	requestSHA := strings.Repeat("c", 64)
+	executor := Executor{api: api, token: current, tokenID: api.currentID, request: PlanRequest{Authority: ViewRequest{AccountID: strings.Repeat("a", 32), ZoneID: strings.Repeat("b", 32), ZoneName: "example.com"}, ManagementToken: ManagementTokenChange{Action: ManagementTokenRotate, CurrentTokenID: api.currentID}}, managementRequestSHA256: requestSHA}
+	step, err := systemchanges.NewCloudflareStep(systemchanges.CloudflareChange{Action: systemchanges.CloudflareManagementTokenActivate, AccountID: strings.Repeat("a", 32), ZoneID: strings.Repeat("b", 32), ManagementTokenID: api.currentID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot []byte
+	err = executor.CaptureRollback(step, func(source io.Reader) error {
+		var readErr error
+		snapshot, readErr = io.ReadAll(source)
+		return readErr
+	})
+	if err != nil || len(snapshot) == 0 || len(api.deleted) != 0 {
+		t.Fatalf("capture = (%d bytes, %v), deletions=%v", len(snapshot), err, api.deleted)
+	}
+	var intentSnapshot []byte
+	snapshot, cleanupID, err := executor.PrepareManagementTokenRotation(bytes.NewReader(snapshot), time.Minute, func(intent []byte) error { intentSnapshot = append([]byte(nil), intent...); return nil })
+	if err != nil || cleanupID != api.candidateID {
+		t.Fatalf("prepare = (%v, %q)", err, cleanupID)
+	}
+	var durableIntent rollbackRecord
+	if json.Unmarshal(intentSnapshot, &durableIntent) != nil || len(durableIntent.CandidateBody) == 0 || durableIntent.CandidateSHA == requestSHA || durableIntent.CandidateSHA != fmt.Sprintf("%x", sha256.Sum256(durableIntent.CandidateBody)) {
+		t.Fatalf("durable provider request intent = %+v", durableIntent)
+	}
+	source, err := executor.CompleteManagementTokenRotation(bytes.NewReader(snapshot), time.Minute)
+	secret, ok := source.(ManagementTokenCandidate).ConsumeInfrastructureSecret()
+	if err != nil || !ok || secret != candidate.value || !api.oldUnauthorized || !slices.Equal(api.deleted, []string{api.currentID}) {
+		t.Fatalf("complete = (%T, %v), deletions=%v", source, err, api.deleted)
+	}
+}
+
+func TestManagementTokenRotationRetainsCandidateIdentityWhenFailedVerificationCleanupIsUncertain(t *testing.T) {
+	current, _ := NewManagementToken("CURRENT_USER_TOKEN_MARKER_000000000000000000")
+	candidate, _ := NewManagementToken("CANDIDATE_USER_TOKEN_MARKER_0000000000000000")
+	api := &managementRotationAPI{current: current, candidate: candidate, currentID: strings.Repeat("1", 32), candidateID: strings.Repeat("2", 32), candidateInvalid: true, deleteCandidateErr: true}
+	request := ObservationRequest{AccountID: strings.Repeat("a", 32), ZoneID: strings.Repeat("b", 32), ZoneName: "example.com", Token: current}
+	intent, _ := api.PrepareManagementTokenCandidate(t.Context(), current, "sbxr-rotation-"+strings.Repeat("c", 32), time.Now().Add(-time.Minute), time.Now().Add(time.Minute))
+	_, err := prepareManagementTokenRotation(t.Context(), api, request, api.currentID, intent)
+	var cleanup ManagementTokenCandidateCleanupError
+	if !errors.As(err, &cleanup) || cleanup.CandidateID() != api.candidateID || api.oldUnauthorized {
+		t.Fatalf("uncertain cleanup = %v, deletions=%v", err, api.deleted)
+	}
+}
 
 func TestManagedRepairCapturesAndRestoresExactProviderPreImages(t *testing.T) {
 	module, request := managedRepairRequest(t)
@@ -119,7 +294,7 @@ func TestExecutorRechecksPlanAndNeverDeletesWithoutJournaledID(t *testing.T) {
 	}
 	api.mutation.Digest = strings.Repeat("a", 64)
 	step := result.Plan.Steps()[0]
-	if _, err := executor.Reverse(step, systemchanges.StepEvidence{}, strings.NewReader(`{"management_token":"cfat_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`), time.Minute); err == nil || api.deletedTunnel != "" {
+	if _, err := executor.Reverse(step, systemchanges.StepEvidence{}, strings.NewReader(`{"management_token":"sbxr_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`), time.Minute); err == nil || api.deletedTunnel != "" {
 		t.Fatal("rollback deleted by name without journaled ownership")
 	}
 }

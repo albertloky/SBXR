@@ -315,7 +315,7 @@ func TestCompleteRemovalPreparesOnlyUnchangedCurrentStateForRollback(t *testing.
 		t.Fatalf("Load() = (%+v, %v)", loaded, err)
 	}
 	capability := stateModule.SoftwareLifecycleCapability(loaded)
-	stateSHA, volatileSHA := "47c176e0230ce70ce742a55d2f8956331b97a43e7791cda080a269f9c4e4f412", strings.Repeat("b", 64)
+	stateSHA, volatileSHA := "ab76945ea6e878e5be9f97f79a293000c8334ea709bbd3659d1db79cecc4261a", strings.Repeat("b", 64)
 	observation := systemchanges.Observation{Status: systemchanges.Managed, LastChangeSet: "change-0007", Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, StateRevision: 7, StateSHA256: stateSHA, VolatileSHA256: volatileSHA}
 	changes := systemchanges.New(removalStatusAdapter{observation})
 	view := (softwarelifecycle.Interface{}).ViewCompleteRemoval(changes)

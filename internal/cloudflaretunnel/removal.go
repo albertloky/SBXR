@@ -1,4 +1,4 @@
-// Package cloudflaretunnel owns Cloudflare inventory and scoped-token observations.
+// Package cloudflaretunnel owns Cloudflare inventory and user-token observations.
 package cloudflaretunnel
 
 import (
@@ -21,7 +21,7 @@ type removalRecoveryRecord struct {
 	Token     string                   `json:"token"`
 }
 
-// WriteRemovalRecovery keeps the scoped token inside the protected transaction snapshot.
+// WriteRemovalRecovery keeps the user token inside the protected transaction snapshot.
 func WriteRemovalRecovery(token ManagementToken, authority RemovalRecoveryAuthority, write func(io.Reader) error) error {
 	if write == nil || token.value == "" || !validRemovalRecoveryAuthority(authority) {
 		return errors.New("Cloudflare removal recovery authority unavailable")
@@ -90,7 +90,7 @@ func (i RemovalInterface) ProveRemovalResource(reviewID, resource, immutableID s
 	}
 	observed, err := i.observer.ObserveRemovalResource(reviewID, resource, immutableID)
 	if err != nil || observed.ReviewID != reviewID || observed.Resource != resource || observed.ImmutableID != immutableID || !observed.OwnedBySBXR || !observed.TokenActive || !observed.TokenAvailableLocally {
-		return RemovalAuthority{}, errors.New("Cloudflare ownership or scoped-token authority is unproved")
+		return RemovalAuthority{}, errors.New("Cloudflare ownership or Dedicated Broad user-token authority is unproved")
 	}
 	observed.Inventory = copyInventory(observed.Inventory)
 	return RemovalAuthority{observation: observed}, nil

@@ -42,7 +42,7 @@ func (stub *cloudflareStub) ActOnCloudflare(_ context.Context, request Cloudflar
 	return stub.responses[request.Action]
 }
 
-func TestRunCloudflareWalkthroughUsesCurrentAccountTokenPathAndMasksByDefault(t *testing.T) {
+func TestRunCloudflareWalkthroughUsesDedicatedBroadUserTokenPathAndMasksByDefault(t *testing.T) {
 	walkthrough := completeCloudflareWalkthrough()
 	const token = "CLOUDFLARE-INFRASTRUCTURE-SECRET-COMPLETE-TOKEN"
 	for _, size := range []struct{ width, height int }{{80, 24}, {120, 36}} {
@@ -52,12 +52,12 @@ func TestRunCloudflareWalkthroughUsesCurrentAccountTokenPathAndMasksByDefault(t 
 			}}
 			steps := append(cloudflareTraversalSteps(walkthrough, size.width, size.height), token, "\t", "\r", "", "\x03\r")
 			got := runTranscriptSteps(t, Session{Scenario: CloudflareWalkthrough, Cloudflare: stub}, size.width, size.height, steps...)
-			for _, want := range []string{"https://dash.cloudflare.com/", "Manage Account > Account API Tokens", "Create Token", "selected domain > DNS > Records", "Cloudflare One > Networks > Tunnels & Mesh", "Account API Tokens >", "Read;", "Cloudflare Tunnel > Edit", "Zone > DNS > Edit", "Specific account", "Specific zone", "Do not use a Global API Key", "Account API Tokens Write is not requested", "Broad unrelated authority is rejected", "Verify token", "abcd...wxyz", "Ctrl+R Reveal token"} {
+			for _, want := range []string{"https://dash.cloudflare.com/", "My Profile > API Tokens", "Create Token", "selected domain > DNS > Records", "Cloudflare One > Networks > Tunnels & Mesh", "User > API Tokens > Edit", "Cloudflare Tunnel > Edit", "Zone > DNS > Edit", "Zone > Zone >", "All accounts", "All zones", "Do not use a Global API Key", "Do not use an Account API Token", "no expiry", "no client-IP restriction", "I understand; enter the token", "abcd...wxyz", "Ctrl+R Reveal token"} {
 				if !strings.Contains(got, want) {
 					t.Fatalf("Cloudflare walkthrough omitted %q\n%s", want, got)
 				}
 			}
-			if strings.Contains(got, token) || len(stub.requests) != 1 || stub.requests[0] != (CloudflareRequest{Action: VerifyInitialManagementToken, Token: token}) {
+			if strings.Contains(got, token) || len(stub.requests) != 1 || stub.requests[0] != (CloudflareRequest{Action: VerifyInitialManagementToken, Token: token, DedicatedBroadPolicyConfirmed: true}) {
 				t.Fatalf("Cloudflare token was rendered or did not cross only as masked input: requests=%#v\n%s", stub.requests, got)
 			}
 		})
@@ -66,20 +66,22 @@ func TestRunCloudflareWalkthroughUsesCurrentAccountTokenPathAndMasksByDefault(t 
 
 func completeCloudflareWalkthrough() CloudflarePresentation {
 	return CloudflarePresentation{Kind: CloudflareWalkthroughPresentation, Walkthrough: CloudflareWalkthroughFacts{
-		DashboardURL:          "https://dash.cloudflare.com/",
-		AccountTokensPage:     "Manage Account > Account API Tokens",
-		CreateControl:         "Create Token",
-		TokenName:             "SBXR - selected account / selected zone",
-		DNSRecordsPage:        "selected domain > DNS > Records",
-		TunnelsPage:           "Cloudflare One > Networks > Tunnels & Mesh",
-		AccountControl:        "Permissions > Account > Account API Tokens > Read; Cloudflare Tunnel > Edit",
-		ZoneControl:           "Permissions > Zone > DNS > Edit",
-		AccountResource:       "Account Resources > Include > Specific account > selected account",
-		ZoneResource:          "Zone Resources > Include > Specific zone > selected zone",
-		SummaryControl:        "Continue to summary > Create Token > copy once",
-		RejectsGlobalAPIKey:   true,
-		RejectsBroadAuthority: true,
-		RejectsAPITokensWrite: true,
+		DashboardURL:            "https://dash.cloudflare.com/",
+		AccountTokensPage:       "My Profile > API Tokens",
+		CreateControl:           "Create Token",
+		TokenName:               "SBXR dedicated broad management",
+		DNSRecordsPage:          "selected domain > DNS > Records",
+		TunnelsPage:             "Cloudflare One > Networks > Tunnels & Mesh",
+		AccountControl:          "Permissions > User > API Tokens > Edit; Account > Cloudflare Tunnel > Edit",
+		ZoneControl:             "Permissions > Zone > DNS > Edit; Zone > Zone > Read",
+		AccountResource:         "Account Resources > Include > All accounts",
+		ZoneResource:            "Zone Resources > Include > All zones",
+		SummaryControl:          "Continue to summary > Create Token > copy once",
+		RejectsGlobalAPIKey:     true,
+		RejectsAccountAPIToken:  true,
+		RequiresBroadAuthority:  true,
+		RequiresNoExpiry:        true,
+		RequiresNoIPRestriction: true,
 	}}
 }
 
@@ -87,18 +89,18 @@ func completeCloudflareCredential() CloudflareCredential {
 	return CloudflareCredential{
 		Status: CloudflareTokenActive, FirstFour: "abcd", LastFour: "wxyz",
 		Account: "selected account", Zone: "example.test",
-		LastVerification: "2026-08-09 12:00 UTC", Expiry: "2026-12-31 23:59 UTC",
-		Uses: []string{"one Tunnel", "two hostname routes", "three DNS records", "certificate prerequisites", "managed repair", "Complete removal"},
+		LastVerification: "2026-08-09 12:00 UTC",
+		Uses:             []string{"one Tunnel", "two hostname routes", "three DNS records", "certificate prerequisites", "managed repair", "Complete removal"},
 		Guidance: []string{
-			"Open Manage Account > Account API Tokens; Create Token.",
-			"Add Account API Tokens Read and Cloudflare Tunnel Edit for the selected account.",
-			"Add DNS Edit for the selected zone; reject Write, wildcard, or unrelated permissions.",
+			"Open My Profile > API Tokens; Create Token.",
+			"Add User API Tokens Edit, Cloudflare Tunnel Edit, DNS Edit, and Zone Read with broad scopes.",
+			"Use no expiry and no client-IP restriction.",
 		},
-		HelpURL: "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/",
+		HelpURL: "https://developers.cloudflare.com/fundamentals/api/get-started/create-token/",
 	}
 }
 
-func TestRunCloudflareCredentialOffersOnlyTheFourExactActions(t *testing.T) {
+func TestRunCloudflareCredentialOffersOnlyTheFiveExactActions(t *testing.T) {
 	for _, test := range []struct {
 		name, plan  string
 		action      int
@@ -108,6 +110,7 @@ func TestRunCloudflareCredentialOffersOnlyTheFourExactActions(t *testing.T) {
 	}{
 		{name: "remove management token", plan: "remove-cloudflare-token", action: 2, request: ReviewManagementTokenRemoval, effects: []string{"Resolve every Tunnel, DNS, certificate, profile, repair, and update dependency", "Mark dependent provider and certificate health Unknown until rechecked"}, wantEffects: []string{"Resolve every Tunnel, DNS, certificate,", "Mark dependent provider and certificate health"}},
 		{name: "rotate genuine run token", plan: "rotate-tunnel-run-token", action: 3, request: ReviewTunnelRunTokenRotation, effects: []string{"Verify the candidate through controlled cloudflared restart and both routes", "Keep the old run token as rollback material until durable Complete"}, wantEffects: []string{"Verify the candidate through controlled", "Keep the old run token as rollback material"}},
+		{name: "rotate management token", plan: "rotate-management-token", action: 4, request: ReviewManagementTokenRotation, effects: []string{"Create and prove one transaction-bound candidate before the irreversible checkpoint", "Revoke and disprove only the old management token"}, wantEffects: []string{"Create and prove one transaction-bound", "Revoke and disprove only the old"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			review := completePlan(PlanIdentity(test.plan))
@@ -117,7 +120,7 @@ func TestRunCloudflareCredentialOffersOnlyTheFourExactActions(t *testing.T) {
 			outcomes := &outcomeStub{}
 			steps := append(cloudflareTraversalSteps(presentation, 120, 36), strings.Repeat("\x1b[B", test.action)+"\r", "", "\x03\r")
 			got := runTranscriptSteps(t, Session{Scenario: CloudflareWalkthrough, Cloudflare: stub, CloudflareOutcomes: outcomes}, 120, 36, steps...)
-			for _, want := range []string{"Check now", "Replace token", "Remove from SBXR", "Rotate genuine Tunnel run token", test.plan} {
+			for _, want := range []string{"Check now", "Replace token", "Remove from SBXR", "Rotate genuine Tunnel run token", "Rotate management token", test.plan} {
 				if !strings.Contains(got, want) {
 					t.Fatalf("credential journey omitted %q\n%s", want, got)
 				}
@@ -150,10 +153,10 @@ func TestRunCloudflareReplacementKeepsTheOldTokenUntilCandidateReview(t *testing
 	steps = append(steps, cloudflareReplacingTraversalSteps(presentation, 120, 36)...)
 	steps = append(steps, candidate, "\t\r", "", "\x03\r")
 	got := runTranscriptSteps(t, Session{Scenario: CloudflareWalkthrough, Cloudflare: stub, CloudflareOutcomes: outcomes}, 120, 36, steps...)
-	if strings.Contains(got, candidate) || !strings.Contains(got, "Current token stays active") || !strings.Contains(got, "Manage Account > Account API Tokens") || !strings.Contains(got, "Account API Tokens Read") || !strings.Contains(got, "Tunnel Edit") || !strings.Contains(got, "DNS Edit") || !strings.Contains(got, "replace-cloudflare-token") {
+	if strings.Contains(got, candidate) || !strings.Contains(got, "Current token stays active") || !strings.Contains(got, "My Profile > API Tokens") || !strings.Contains(got, "User API Tokens Edit") || !strings.Contains(got, "Cloudflare Tunnel") || !strings.Contains(got, "DNS Edit") || !strings.Contains(got, "Zone Read") || !strings.Contains(got, "replace-cloudflare-token") {
 		t.Fatalf("replacement did not remain masked, active, and review-first\n%s", got)
 	}
-	if len(stub.requests) != 1 || stub.requests[0] != (CloudflareRequest{Action: VerifyReplacementManagementToken, Token: candidate}) || len(outcomes.applyPlans) != 0 {
+	if len(stub.requests) != 1 || stub.requests[0] != (CloudflareRequest{Action: VerifyReplacementManagementToken, Token: candidate, DedicatedBroadPolicyConfirmed: true}) || len(outcomes.applyPlans) != 0 {
 		t.Fatalf("replacement bypassed candidate verification or exact review: requests=%#v applies=%#v", stub.requests, outcomes.applyPlans)
 	}
 }
@@ -162,15 +165,15 @@ func TestRunCloudflareReplacementRevealIsFocusedAndRemasks(t *testing.T) {
 	review := completePlan("replace-cloudflare-token")
 	presentation := CloudflarePresentation{Kind: CloudflareCredentialPresentation, Credential: completeCloudflareCredential()}
 	stub := &cloudflareStub{view: presentation, responses: map[CloudflareAction]CloudflareResponse{VerifyReplacementManagementToken: {Review: &review}}}
-	const candidate = "cfat_MANAGED-SECRET-MARKER-012345678901234567890"
+	const candidate = "sbxr_MANAGED-SECRET-MARKER-012345678901234567890"
 	steps := append(cloudflareTraversalSteps(presentation, 120, 36), "\x1b[B\r", "")
 	steps = append(steps, cloudflareReplacingTraversalSteps(presentation, 120, 36)...)
 	steps = append(steps, candidate, "\x12", "", "\t", "", "\x1b[Z", "\t\r", "", "\x03\r")
 	got := runTranscriptSteps(t, Session{Scenario: CloudflareWalkthrough, Cloudflare: stub, CloudflareOutcomes: &outcomeStub{}}, 120, 36, steps...)
-	if len(stub.requests) != 1 || stub.requests[0] != (CloudflareRequest{Action: VerifyReplacementManagementToken, Token: candidate}) {
+	if len(stub.requests) != 1 || stub.requests[0] != (CloudflareRequest{Action: VerifyReplacementManagementToken, Token: candidate, DedicatedBroadPolicyConfirmed: true}) {
 		t.Fatalf("managed replacement request = %#v", stub.requests)
 	}
-	for _, want := range []string{"cfat_MANAGED-SECRET-MARKER-01234567890123456789", "TOKEN REVEALED", "Mask ", "Ctrl+R Reveal token", "replace-cloudflare-token"} {
+	for _, want := range []string{"sbxr_MANAGED-SECRET-MARKER-01234567890123456789", "TOKEN REVEALED", "Mask ", "Ctrl+R Reveal token", "replace-cloudflare-token"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("managed Reveal omitted %q\n%s", want, got)
 		}
@@ -178,7 +181,7 @@ func TestRunCloudflareReplacementRevealIsFocusedAndRemasks(t *testing.T) {
 	if revealed := cloudflareLines(CloudflarePresentation{Kind: CloudflareCredentialPresentation, Credential: completeCloudflareCredential()}, true, candidate, 0, true, true); !strings.Contains(strings.Join(revealed, "\n"), candidate) {
 		t.Fatal("controlled Reveal frame omitted the complete token")
 	}
-	if lastSecret, remasked := strings.LastIndex(got, "cfat_MANAGED-SECRET-MARKER"), strings.LastIndex(got, "Ctrl+R Reveal token"); remasked < lastSecret {
+	if lastSecret, remasked := strings.LastIndex(got, "sbxr_MANAGED-SECRET-MARKER"), strings.LastIndex(got, "Ctrl+R Reveal token"); remasked < lastSecret {
 		t.Fatalf("managed focus loss did not remask\n%s", got)
 	}
 }
@@ -227,7 +230,7 @@ func TestRunCloudflareActionsShowWaitingStateAndQueueExitResult(t *testing.T) {
 		delay        time.Duration
 	}{
 		{name: "Check now", presentation: CloudflarePresentation{Kind: CloudflareCredentialPresentation, Credential: completeCloudflareCredential()}, action: CheckCurrentManagementToken, start: []string{"\r"}, response: checked, label: "Check now", delay: 1100 * time.Millisecond},
-		{name: "Verify token", presentation: completeCloudflareWalkthrough(), action: VerifyInitialManagementToken, start: []string{"WAITING-TOKEN", "\t\r"}, response: checked, label: "Verify token", delay: 180 * time.Millisecond},
+		{name: "Verify token", presentation: completeCloudflareWalkthrough(), action: VerifyInitialManagementToken, start: []string{"WAITING-TOKEN", "\t\r"}, response: checked, label: "I understand; enter the token", delay: 180 * time.Millisecond},
 		{name: "Wait another 10 minutes", presentation: pending, action: WaitAnotherTenMinutes, start: []string{"\x1b[B\r"}, response: pending, label: "Wait another 10 minutes", delay: 180 * time.Millisecond},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -308,24 +311,21 @@ func TestRunCloudflareRemovalRefusesWhileDependentsRemain(t *testing.T) {
 func TestRunCloudflareMissingPermissionAndPendingZoneHaveExactCorrectionActions(t *testing.T) {
 	t.Run("missing permission", func(t *testing.T) {
 		missing := CloudflarePresentation{Kind: CloudflareMissingPermissionPresentation, MissingPermission: CloudflareMissingPermission{
-			Capability: "Cloudflare Tunnel Edit", Account: "selected account", Zone: "example.test",
-			Found: "token lacks Cloudflare Tunnel Edit", Required: "one selected-account Cloudflare Tunnel Edit permission",
-			WhyStopped: "SBXR cannot manage its one owned Tunnel without this permission", Evidence: "CLOUDFLARE-PERMISSION-REDacted",
-			DashboardSteps: []string{"Open Manage Account > Account API Tokens; Create Token.", "Add Account > Account API Tokens > Read and Account > Cloudflare Tunnel > Edit for the selected account; add Zone > DNS > Edit for the selected zone."},
-			HelpURL:        "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/",
+			Capability: "Dedicated Broad Cloudflare User API Token authority", Account: "selected account", Zone: "selected zone",
+			Found: "selected-account Tunnel read is unproved", Required: "Cloudflare Tunnel Edit for all accounts",
+			WhyStopped: "SBXR cannot prove its selected account read", Evidence: "CLOUDFLARE-PERMISSION-REDACTED",
+			DashboardSteps: []string{"Open My Profile > API Tokens; Create Token.", "Add User API Tokens Edit, Cloudflare Tunnel Edit, DNS Edit, and Zone Read with all-account and all-zone resources."},
+			HelpURL:        "https://developers.cloudflare.com/fundamentals/api/get-started/create-token/",
 		}}
 		review := completePlan("verify-cloudflare-replacement")
 		stub := &cloudflareStub{view: missing, responses: map[CloudflareAction]CloudflareResponse{VerifyReplacementManagementToken: {Review: &review}}}
 		const candidate = "REPLACEMENT-INFRASTRUCTURE-SECRET-COMPLETE-TOKEN"
 		steps := append(cloudflareTraversalSteps(missing, 80, 24), "\t\x1b[B\r", "\r", candidate, "\t\r", "", "\x03\r")
 		got := runTranscriptSteps(t, Session{Scenario: CloudflareWalkthrough, Cloudflare: stub, CloudflareOutcomes: &outcomeStub{}}, 80, 24, steps...)
-		for _, want := range []string{"Problem", "Cloudflare Tunnel Edit", "selected account", "selected zone", "Manage Account > Account API Tokens", "Account API Tokens > Read", "DNS > Edit", "developers.cloudflare.com/fundamentals/api/get-sta", "token again", "placement token", "Verify replacement", "Back"} {
+		for _, want := range []string{"Problem", "Cloudflare Tunnel Edit", "selected account", "selected zone", "My Profile > API Tokens", "User API Tokens Edit", "DNS", "Edit, and Zone Read", "developers.cloudflare.com/fundamentals/api/get-sta", "token again", "placement token", "Verify replacement", "Back"} {
 			if !strings.Contains(got, want) {
 				t.Fatalf("missing-permission flow omitted %q\n%s", want, got)
 			}
-		}
-		if strings.Contains(got, "My Profile > API Tokens") {
-			t.Fatalf("missing-permission flow rendered stale user-token guidance\n%s", got)
 		}
 		if strings.Contains(got, candidate) || len(stub.requests) != 1 || stub.requests[0].Action != VerifyReplacementManagementToken || stub.requests[0].Token != candidate {
 			t.Fatalf("missing-permission replacement was exposed or misrouted: requests=%#v\n%s", stub.requests, got)
@@ -453,8 +453,8 @@ func TestRunProviderPlansBackRestoreTheirOriginAndUnsafeFactsNeverRender(t *test
 			mutate func(*CloudflareWalkthroughFacts)
 		}{
 			{name: "Global API Key", mutate: func(facts *CloudflareWalkthroughFacts) { facts.RejectsGlobalAPIKey = false }},
-			{name: "broad authority", mutate: func(facts *CloudflareWalkthroughFacts) { facts.RejectsBroadAuthority = false }},
-			{name: "API Tokens Write", mutate: func(facts *CloudflareWalkthroughFacts) { facts.RejectsAPITokensWrite = false }},
+			{name: "Account API Token", mutate: func(facts *CloudflareWalkthroughFacts) { facts.RejectsAccountAPIToken = false }},
+			{name: "broad authority", mutate: func(facts *CloudflareWalkthroughFacts) { facts.RequiresBroadAuthority = false }},
 			{name: "changed dashboard path", mutate: func(facts *CloudflareWalkthroughFacts) { facts.TunnelsPage = "Workers & Pages" }},
 		} {
 			t.Run(test.name, func(t *testing.T) {

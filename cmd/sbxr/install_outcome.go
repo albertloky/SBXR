@@ -53,7 +53,7 @@ var installFields = []ownerconsole.EditingField{
 	{Identity: "subscription-port", Label: "Subscription HTTPS port", Required: true},
 	{Identity: "cloudflare-account", Label: "Cloudflare account ID", Required: true},
 	{Identity: "cloudflare-zone", Label: "Cloudflare zone ID", Required: true},
-	{Identity: "cloudflare-token", Label: "Cloudflare scoped token", Required: true},
+	{Identity: "cloudflare-token", Label: "Dedicated Broad Cloudflare User API Token", Required: true},
 	{Identity: "reality-target", Label: "REALITY target hostname", Required: true},
 }
 

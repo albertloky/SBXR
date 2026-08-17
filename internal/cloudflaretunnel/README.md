@@ -1,6 +1,6 @@
 # Cloudflare Tunnel
 
-This Module owns Cloudflare meaning. `View` verifies one least-authority account token and the selected account, zone, delegation, and Network Policy path. The installation `Plan` contributes typed, secret-free Tunnel, route, DNS, and protected-service steps to the one System Changes transaction; it owns no second lock, journal, rollback store, or State publisher.
+This Module owns Cloudflare meaning. `View` verifies one Dedicated Broad Cloudflare User API Token and the selected account, zone, delegation, and Network Policy path. The installation `Plan` contributes typed, secret-free Tunnel, route, DNS, and protected-service steps to the one System Changes transaction; it owns no second lock, journal, rollback store, or State publisher.
 
 ## Installation Plan and Apply
 
@@ -18,38 +18,42 @@ After those owned records converge, the Executor binds its observation to the jo
 
 ## View
 
-`View` accepts one selected account ID, zone ID, zone name, memory-only Cloudflare account API token, and the typed Cloudflare Tunnel path from Network Policy. It returns only allowlisted account, zone, delegation, activation, credential, capability, expiry, last-check, walkthrough, and Health facts.
+`View` accepts one selected account ID, zone ID, zone name, memory-only Dedicated Broad Cloudflare User API Token, the Owner's broad-policy confirmation, and the typed Cloudflare Tunnel path from Network Policy. It returns only allowlisted account, zone, delegation, activation, credential, capability, expiry, last-check, walkthrough, and Health facts.
 
-The token must use Cloudflare's current `cfat_` account-token format. The exact accepted policy is:
+The token must be a user token. A Global API Key, Account API Token, email-plus-key credential, placeholder, narrow resource policy, expiry, or client-IP restriction is refused. The exact required policy is:
 
 | Permission | Resource |
 |---|---|
-| `Account API Tokens Read` | only the selected account |
-| `Cloudflare Tunnel Edit` | only the selected account |
-| `DNS Write` | only the selected zone |
+| `User API Tokens Edit` | all users |
+| `Cloudflare Tunnel Edit` | all accounts |
+| `DNS Edit` | all zones |
+| `Zone Read` | all zones |
 
-The current dashboard renders those as `Account > Account API Tokens > Read`, `Account > Cloudflare Tunnel > Edit`, and `Zone > DNS > Edit`.
+The current dashboard renders those as `User > API Tokens > Edit`, `Account > Cloudflare Tunnel > Edit`, `Zone > DNS > Edit`, and `Zone > Zone > Read`.
 
-`Account API Tokens Read` lets SBXR read the presented token's policy and reject extra permissions or wildcard resources. SBXR does not request `Account API Tokens Write`, cannot create or revoke tokens, and accepts no unrelated permission. `Cloudflare Tunnel Edit` and `DNS Write` include the reads needed by `View`; their effective write behavior remains unproved until a later approved transaction performs and health-checks the real changes.
+Cloudflare does not expose the full token policy through token verification. SBXR therefore requires deliberate Owner confirmation of the exact broad policy. It then proves the token is active, discovers the selected account through paginated active zones, and probes selected-zone DNS and selected-account Tunnel reads. These reads do not prove writes.
 
 The production Adapter uses only Bearer authentication and the selected resource paths:
 
-- `GET /accounts/{account_id}/tokens/verify`
-- `GET /accounts/{account_id}/tokens/{token_id}`
-- paginated `GET /zones?account.id={account_id}&name={zone_name}`
+- `GET /user/tokens/verify`
+- paginated `GET /zones?status=active&page={page}&per_page=50`
+- `GET /zones/{zone_id}/dns_records?page=1&per_page=1`
+- `GET /accounts/{account_id}/cfd_tunnel?is_deleted=false&page=1&per_page=1`
 - public DNS nameserver lookup for the selected zone
 
-Provider response text and unknown fields do not cross the Module Interface. Malformed, ambiguous, unauthorized, forbidden, permanent, and temporary failures become stable typed Health results. Temporary checks stop after three attempts and two 30-second waits inside one 60-second bound.
+There is no `List Accounts` call. Product use is restricted to the selected account, selected zone, current and candidate token IDs, and exact immutable-ID-owned resources. Provider response text and unknown fields do not cross the Module Interface. Malformed, ambiguous, unauthorized, forbidden, permanent, and temporary failures become stable typed Health results. Temporary checks stop after three attempts and two 30-second waits inside one 60-second bound.
 
 ## Management token lifecycle
 
-The Owner-facing actions are exactly `Check now`, `Replace token`, and `Remove from SBXR`.
+The Owner-facing actions are `Check now`, `Replace token`, `Remove from SBXR`, `Rotate management token`, and the separate genuine Tunnel run-token rotation. `Enter replacement token` appears only in the unavailable-token Correction Flow.
+
+Healthy rotation runs through public `Plan` and `Apply`. Apply creates and proves one policy-bound, transaction-named candidate before System Changes records `Irreversible management-token replacement started`. It then revokes and disproves only the old token, finalizes the deferred protected State slot, and publishes. A failure before the checkpoint deletes only the candidate. A failure after the checkpoint is forward-only. Candidate creation can reconcile only one exact active candidate by immutable ID, high-entropy request name, exact creation window, broad policies, and absent expiry and client-IP conditions. Zero, multiple, or contradictory matches stop safely. A lost create response cleans one exact reconciled candidate because Cloudflare cannot return its secret again. The candidate secret has one memory-only handoff before Apply and one root-only transaction snapshot after Apply starts.
 
 Replacement verifies the proposed token against the selected account and zone and proves all required reads before a Change Set exists. This preflight does not prove writes. The old stored token remains active until the one State publication step commits the verified replacement; any earlier failure rolls back to the old token.
 
 Removal is also one reviewed Change Set. State derives a protected inventory from the exact loaded revision and checksum; callers cannot write or substitute that list. The Plan shows the resulting state for Tunnel, DNS, certificate, profile, repair, and update behavior and must either find no dependency or apply one consistent reviewed result to all six. An unresolved or partial inventory stops before mutation. State records both deliberate token absence and the shared `Unmanaged` outcome explicitly, so a missing secret cannot be mistaken for an approved removal. After publication, provider authority and every authority-dependent health fact are `Unknown`, while repair and update stay blocked; no dependent fact may remain falsely Managed or Healthy.
 
-SBXR never requests `Account API Tokens Write`, revokes the old provider token, or claims the replacement preflight proved provider writes. Provider revocation, if wanted, remains an Owner action after the Change Set is complete.
+SBXR does not claim that replacement preflight proves provider writes.
 
 ## Managed repair
 
@@ -67,21 +71,21 @@ State alone consumes the changed opaque token, rebuilds the candidate State and 
 
 The reviewed Complete-removal Plan names every committed Cloudflare DNS record ID, the committed Tunnel route identity, the committed Tunnel ID, the required absence gate, the rollback boundary, and the final `Not installed` outcome. It contains no token value. A missing ID, a same-named different ID, a changed inventory, or unavailable scoped authority stops before mutation; SBXR never deletes by name or adopts a replacement resource.
 
-Owned public exposure and the exact owned Tunnel routes are removed while rollback is still possible and the scoped token remains active locally. System Changes then records `Irreversible removal started`. From that record onward, cancellation and rollback are unavailable: SBXR deletes only the exact immutable-ID DNS records and Tunnel, records `Owned external deletion verified`, asks the Owner to revoke the scoped token, proves explicit rejection, removes the local copy, and continues the fixed cleanup to `Not installed`. Cloudflare has no documented same-ID Tunnel restoration operation, so permanent provider deletion never occurs before the irreversible checkpoint.
+Owned public exposure and the exact owned Tunnel routes are removed while rollback is still possible and the Dedicated Broad User API Token remains active locally. System Changes then records `Irreversible removal started`. From that record onward, cancellation and rollback are unavailable: SBXR deletes only the exact immutable-ID DNS records and Tunnel, records `Owned external deletion verified`, asks the Owner to revoke the exact recorded user token, proves explicit rejection, removes the local copy, and continues the fixed cleanup to `Not installed`. Cloudflare has no documented same-ID Tunnel restoration operation, so permanent provider deletion never occurs before the irreversible checkpoint.
 
 The final result always says that Certificate Transparency entries and provider DNS caches cannot be erased. Controlled fixtures prove the boundary and restart rules; destructive deletion and token revocation against a real Cloudflare account remain Pending until an exact approved Acceptance Run.
 
 ## Current onboarding labels
 
-The walkthrough was qualified on `2026-08-15` against these Cloudflare dashboard labels:
+The walkthrough was qualified on `2026-08-17` against these Cloudflare dashboard labels:
 
-- `Manage Account > Account API Tokens`
+- `My Profile > API Tokens`
 - `selected domain > DNS > Records`
 - `Cloudflare One > Networks > Tunnels & Mesh`
 
 Every release containing onboarding changes must requalify these labels. The fixed resource boundary and permissions do not change merely because Cloudflare renames a page.
 
-The current sources are Cloudflare's [Account API tokens](https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/), [account and zone IDs](https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/), [API token permissions](https://developers.cloudflare.com/fundamentals/api/reference/permissions/), [nameserver update](https://developers.cloudflare.com/dns/nameservers/update-nameservers/), and [Tunnel-token rotation](https://developers.cloudflare.com/tunnel/advanced/tunnel-tokens/).
+The current sources are Cloudflare's [API token creation](https://developers.cloudflare.com/fundamentals/api/get-started/create-token/), [account and zone IDs](https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/), [API token permissions](https://developers.cloudflare.com/fundamentals/api/reference/permissions/), [nameserver update](https://developers.cloudflare.com/dns/nameservers/update-nameservers/), and [Tunnel-token rotation](https://developers.cloudflare.com/tunnel/advanced/tunnel-tokens/).
 
 ## Secret and network boundary
 
@@ -93,11 +97,11 @@ Cloudflare Tunnel consumes Network Policy's typed proof for verified Cloudflare 
 
 ## Correction Flow
 
-Missing or broader permission, wildcard or changed scope, inactive status, and unproved binding return exactly:
+Missing Owner confirmation, inactive status, failed selected-resource probes, and unproved binding return exactly:
 
 1. `Check current token again`
 2. `Enter replacement token`
 3. `Verify replacement`
 4. `Back`
 
-There is no `Continue anyway` path. Missing-permission Help names the exact selected account or zone scope, exact failed permission, `Manage Account > Account API Tokens`, and safe recheck. A pending zone instead offers `Check again`, `Wait another 10 minutes`, and `Back and continue later` with assigned and publicly observed nameserver facts, the selected-domain Overview steps, provider-neutral registrar or reseller instructions, the official Cloudflare nameserver source, and no guessed registrar link. Only after `Irreversible run-token rotation started` does token-rotation Help name `Networking > Tunnels > selected committed SBXR Tunnel > Rotate token`. Complete removal durably records and deletes only the freshly observed management Account API Token ID after provider deletion is proved, then requires an explicit unauthorized result before local cleanup continues. It does not delete the Global API Key, user API tokens, Tunnel run tokens, or unrelated account tokens. All links are fixed allowlisted HTTPS text. Guidance never replaces provider verification, Check again, Plan review, or approval.
+There is no `Continue anyway` path. Missing-permission Help names the exact failed requirement, `My Profile > API Tokens`, and safe recheck. A pending zone instead offers `Check again`, `Wait another 10 minutes`, and `Back and continue later` with assigned and publicly observed nameserver facts, the selected-domain Overview steps, provider-neutral registrar or reseller instructions, the official Cloudflare nameserver source, and no guessed registrar link. Only after `Irreversible run-token rotation started` does token-rotation Help name `Networking > Tunnels > selected committed SBXR Tunnel > Rotate token`. Complete removal deletes only the exact recorded Dedicated Broad User API Token ID and requires explicit unauthorized proof before local cleanup continues. It does not delete a Global API Key, Account API Token, Tunnel run token, or unrelated user token. All links are fixed allowlisted HTTPS text. Guidance never replaces provider verification, Check again, Plan review, or approval.

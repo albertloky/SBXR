@@ -26,21 +26,22 @@ import (
 const maxClientAccessHandoffBytes = 16 << 10
 
 type clientAccessHandoffRequest struct {
-	Schema               int                            `json:"schema"`
-	Mode                 string                         `json:"mode"`
-	Action               clientAccessAction             `json:"action,omitempty"`
-	ProviderAction       managedProviderAction          `json:"provider_action,omitempty"`
-	Profile              string                         `json:"profile,omitempty"`
-	ChangeSet            string                         `json:"change_set"`
-	Token                string                         `json:"token,omitempty"`
-	OwnerEmail           string                         `json:"owner_email,omitempty"`
-	Agreement            bool                           `json:"agreement,omitempty"`
-	DiagnosticsAction    string                         `json:"diagnostics_action,omitempty"`
-	SoftwareAction       string                         `json:"software_action,omitempty"`
-	ReleaseTag           string                         `json:"release_tag,omitempty"`
-	ReviewedPlanIdentity string                         `json:"reviewed_plan_identity,omitempty"`
-	ReviewedPlanSHA256   string                         `json:"reviewed_plan_sha256,omitempty"`
-	BundleReplacement    ownerconsole.BundleReplacement `json:"bundle_replacement,omitempty"`
+	Schema                        int                            `json:"schema"`
+	Mode                          string                         `json:"mode"`
+	Action                        clientAccessAction             `json:"action,omitempty"`
+	ProviderAction                managedProviderAction          `json:"provider_action,omitempty"`
+	Profile                       string                         `json:"profile,omitempty"`
+	ChangeSet                     string                         `json:"change_set"`
+	Token                         string                         `json:"token,omitempty"`
+	OwnerEmail                    string                         `json:"owner_email,omitempty"`
+	Agreement                     bool                           `json:"agreement,omitempty"`
+	DedicatedBroadPolicyConfirmed bool                           `json:"dedicated_broad_policy_confirmed,omitempty"`
+	DiagnosticsAction             string                         `json:"diagnostics_action,omitempty"`
+	SoftwareAction                string                         `json:"software_action,omitempty"`
+	ReleaseTag                    string                         `json:"release_tag,omitempty"`
+	ReviewedPlanIdentity          string                         `json:"reviewed_plan_identity,omitempty"`
+	ReviewedPlanSHA256            string                         `json:"reviewed_plan_sha256,omitempty"`
+	BundleReplacement             ownerconsole.BundleReplacement `json:"bundle_replacement,omitempty"`
 }
 
 func (clientAccessHandoffRequest) String() string { return "Client Access handoff request: protected" }
@@ -80,6 +81,9 @@ type clientAccessHandoffSession struct {
 
 func validClientAccessHandoff(request clientAccessHandoffRequest) bool {
 	if request.Schema != 1 || request.Mode != "change" && request.Mode != "provider" && request.Mode != "view" && request.Mode != "recover" && request.Mode != "diagnostics" && request.Mode != "software-review" && request.Mode != "software-apply" && request.Mode != "removal-review" && request.Mode != "removal-apply" {
+		return false
+	}
+	if request.Mode != "provider" && request.DedicatedBroadPolicyConfirmed {
 		return false
 	}
 	removal := request.Mode == "removal-review" || request.Mode == "removal-apply"
@@ -143,11 +147,11 @@ func validClientAccessHandoff(request clientAccessHandoffRequest) bool {
 		switch request.ProviderAction {
 		case managedCloudflareReplace:
 			_, err := cloudflaretunnel.NewManagementToken(request.Token)
-			return err == nil && request.OwnerEmail == "" && !request.Agreement
-		case managedCloudflareRemove, managedCloudflareRotate:
-			return request.Token == "" && request.OwnerEmail == "" && !request.Agreement
+			return err == nil && request.OwnerEmail == "" && !request.Agreement && request.DedicatedBroadPolicyConfirmed
+		case managedCloudflareRemove, managedCloudflareRotate, managedCloudflareRotateManagement:
+			return request.Token == "" && request.OwnerEmail == "" && !request.Agreement && !request.DedicatedBroadPolicyConfirmed
 		case managedCertificateIP, managedCertificateDomain:
-			return request.Token == "" && request.Agreement && certificatelifecycle.ValidOwnerEmail(request.OwnerEmail)
+			return request.Token == "" && request.Agreement && !request.DedicatedBroadPolicyConfirmed && certificatelifecycle.ValidOwnerEmail(request.OwnerEmail)
 		}
 	}
 	if !validClientAccessAction(request.Action) {
@@ -441,7 +445,7 @@ func serveClientAccess(ctx context.Context, socket, executable *os.File, verify 
 	}
 	if request.Mode == "provider" {
 		disk := systemchanges.DiskRequirement{PreparationBytes: 8 << 20, TemporaryBytes: 8 << 20, SnapshotBytes: 32 << 20, JournalBytes: 8 << 20, RollbackBytes: 8 << 20, OverheadBytes: 256 << 20}
-		built, module, err := prepareManagedProvider(ctx, managedProviderBuildRequest{Action: request.ProviderAction, ChangeSet: request.ChangeSet, Token: request.Token, OwnerEmail: request.OwnerEmail, Agreement: request.Agreement, Disk: disk})
+		built, module, err := prepareManagedProvider(ctx, managedProviderBuildRequest{Action: request.ProviderAction, ChangeSet: request.ChangeSet, Token: request.Token, OwnerEmail: request.OwnerEmail, Agreement: request.Agreement, DedicatedBroadPolicyConfirmed: request.DedicatedBroadPolicyConfirmed, Disk: disk})
 		if err != nil {
 			return err
 		}

@@ -677,13 +677,13 @@ func TestRunFieldChangeClearsEditingStateThroughThePublicOutcome(t *testing.T) {
 }
 
 func TestRunMasksAndRevealsOnlyTheFocusedInstallationInfrastructureSecret(t *testing.T) {
-	const secret = "cfat_INITIAL-SECRET-MARKER-012345678901234567890"
+	const secret = "sbxr_INITIAL-SECRET-MARKER-012345678901234567890"
 	help := EditingHelp{
-		Purpose: "Authorize only SBXR's Cloudflare work.", Instructions: []string{"Open Manage Account > Account API Tokens; Create Token."},
-		AcceptedFormat: "cfat_ plus 35 to 75 letters, digits, _ or -.", CommonMistakes: []string{"No Global API Key or broad authority."},
-		Recovery: "Create the exact scoped Account API Token.", URL: "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/", Sensitivity: InfrastructureSecret,
+		Purpose: "Authorize only SBXR's Cloudflare work.", Instructions: []string{"Open My Profile > API Tokens; Create Token."},
+		AcceptedFormat: "sbxr_ plus 35 to 75 letters, digits, _ or -.", CommonMistakes: []string{"No Global API Key or broad authority."},
+		Recovery: "Create the Dedicated Broad Cloudflare User API Token.", URL: "https://developers.cloudflare.com/fundamentals/api/get-started/create-token/", Sensitivity: InfrastructureSecret,
 	}
-	token := ChangeReview{Editing: &EditingPresentation{Title: "Clean VPS installation", Field: EditingField{Identity: "cloudflare-token", Label: "Cloudflare Account API Token", Required: true}, Help: help}}
+	token := ChangeReview{Editing: &EditingPresentation{Title: "Clean VPS installation", Field: EditingField{Identity: "cloudflare-token", Label: "Dedicated Broad Cloudflare User API Token", Required: true}, Help: help}}
 	domain := ChangeReview{Editing: &EditingPresentation{Title: "Clean VPS installation", Field: EditingField{Identity: "reality-target", Label: "REALITY target hostname", Required: true}}}
 
 	t.Run("masked by default", func(t *testing.T) {
@@ -700,7 +700,7 @@ func TestRunMasksAndRevealsOnlyTheFocusedInstallationInfrastructureSecret(t *tes
 				steps = []string{"", "\t", "\x1b[B", "\r", "", "\x03\r"}
 			}
 			got := runPseudoTerminalTranscriptSteps(t, Session{Scenario: InstallationReview, Outcome: &outcomeStub{reviews: []ChangeReview{token}}}, size.width, size.height, steps...)
-			for _, want := range []string{"CLOUDFLARE ACCOUNT API TOKEN HELP", "Manage Account > Account API", "Tokens;", "cfat_ plus 35 to 75", "No Global API Key", "Infrastructure Secret", "account-owned-tokens/", "Esc Return to field"} {
+			for _, want := range []string{"DEDICATED BROAD CLOUDFLARE USER API", "My Profile > API Tokens", "sbxr_ plus 35 to 75", "No Global API Key", "Infrastructure Secret", "create-token/", "Esc Return to field"} {
 				if !strings.Contains(got, want) {
 					t.Fatalf("%dx%d token Help omitted %q\n%s", size.width, size.height, want, got)
 				}

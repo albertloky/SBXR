@@ -68,7 +68,7 @@ var allowedHelpURLs = map[string]bool{
 	"https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml": true,
 	"https://xtls.github.io/en/config/transport.html#realityobject":                                true,
 	"https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/":            true,
-	"https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/":         true,
+	"https://developers.cloudflare.com/fundamentals/api/get-started/create-token/":                 true,
 	"https://github.com/albertloky/SBXR/releases":                                                  true,
 	"https://letsencrypt.org/docs/expiration-emails/":                                              true,
 	"https://letsencrypt.org/repository/":                                                          true,

@@ -16,6 +16,7 @@ import (
 const (
 	cloudflareAPIURL          = "https://api.cloudflare.com/client/v4"
 	maxCloudflareResponseSize = 1 << 20 // ponytail: raise only if an official response shape exceeds 1 MiB.
+	maxActiveZonePages        = 10      // ponytail: 500 active zones; add filtered discovery only if the API gains a safe exact filter.
 	maxZonePages              = 100     // ponytail: replace with a cursor if Cloudflare removes bounded pages.
 )
 
@@ -67,15 +68,17 @@ func (api *httpAPI) Observe(ctx context.Context, request ObservationRequest) (Ob
 	}
 	token, err := api.verifyToken(ctx, request)
 	if err != nil {
-		return Observation{}, requiringPermission(err, AccountAPITokensReadPermission)
-	}
-	policies, err := api.tokenPolicies(ctx, request, token.ID, token.Status)
-	if err != nil {
-		return Observation{}, requiringPermission(err, AccountAPITokensReadPermission)
+		return Observation{}, requiringPermission(err, UserAPITokensEditPermission)
 	}
 	account, zone, err := api.selectedZone(ctx, request)
 	if err != nil {
-		return Observation{}, requiringPermission(err, DNSWritePermission)
+		return Observation{}, requiringPermission(err, ZoneReadPermission)
+	}
+	if err := api.probeList(ctx, "/zones/"+request.ZoneID+"/dns_records", url.Values{"page": {"1"}, "per_page": {"1"}}, request.Token); err != nil {
+		return Observation{}, requiringPermission(err, DNSEditPermission)
+	}
+	if err := api.probeList(ctx, "/accounts/"+request.AccountID+"/cfd_tunnel", url.Values{"is_deleted": {"false"}, "page": {"1"}, "per_page": {"1"}}, request.Token); err != nil {
+		return Observation{}, requiringPermission(err, CloudflareTunnelEditPermission)
 	}
 	nameservers, err := api.resolver.LookupNS(ctx, request.ZoneName)
 	if err != nil {
@@ -88,7 +91,7 @@ func (api *httpAPI) Observe(ctx context.Context, request ObservationRequest) (Ob
 		}
 		zone.ObservedNameServers[index] = nameserver.Host
 	}
-	return Observation{Account: account, Zone: zone, Token: token, Policies: policies}, nil
+	return Observation{Account: account, Zone: zone, Token: token, DNSListProven: true, TunnelListProven: true}, nil
 }
 
 func requiringPermission(err error, permission PermissionKind) error {
@@ -108,7 +111,7 @@ func (api *httpAPI) verifyToken(ctx context.Context, request ObservationRequest)
 			ExpiresOn string `json:"expires_on"`
 		} `json:"result"`
 	}
-	if err := api.get(ctx, "/accounts/"+request.AccountID+"/tokens/verify", nil, request.Token, &envelope); err != nil {
+	if err := api.get(ctx, "/user/tokens/verify", nil, request.Token, &envelope); err != nil {
 		return TokenObservation{}, err
 	}
 	if !immutableID.MatchString(envelope.Result.ID) || !validTokenStatus(envelope.Result.Status) {
@@ -125,58 +128,11 @@ func (api *httpAPI) verifyToken(ctx context.Context, request ObservationRequest)
 	return token, nil
 }
 
-func (api *httpAPI) tokenPolicies(ctx context.Context, request ObservationRequest, tokenID, tokenStatus string) ([]TokenPolicy, error) {
-	var envelope struct {
-		Result struct {
-			ID       string `json:"id"`
-			Status   string `json:"status"`
-			Policies []struct {
-				Effect           string `json:"effect"`
-				PermissionGroups []struct {
-					ID   string `json:"id"`
-					Name string `json:"name"`
-				} `json:"permission_groups"`
-				Resources map[string]string `json:"resources"`
-			} `json:"policies"`
-		} `json:"result"`
-	}
-	if err := api.get(ctx, "/accounts/"+request.AccountID+"/tokens/"+tokenID, nil, request.Token, &envelope); err != nil {
-		return nil, err
-	}
-	if envelope.Result.ID != tokenID || envelope.Result.Status != tokenStatus {
-		return nil, APIError{Kind: APIAmbiguous}
-	}
-	if !validTokenStatus(envelope.Result.Status) || len(envelope.Result.Policies) == 0 {
-		return nil, APIError{Kind: APIMalformed}
-	}
-	policies := make([]TokenPolicy, len(envelope.Result.Policies))
-	for policyIndex, source := range envelope.Result.Policies {
-		if source.Effect == "" || len(source.PermissionGroups) == 0 || len(source.Resources) == 0 {
-			return nil, APIError{Kind: APIMalformed}
-		}
-		policy := TokenPolicy{Effect: source.Effect, PermissionGroups: make([]string, len(source.PermissionGroups)), Resources: make(map[string]string, len(source.Resources))}
-		for permissionIndex, group := range source.PermissionGroups {
-			if group.ID == "" || group.Name == "" {
-				return nil, APIError{Kind: APIMalformed}
-			}
-			policy.PermissionGroups[permissionIndex] = group.Name
-		}
-		for resource, value := range source.Resources {
-			if resource == "" || value == "" {
-				return nil, APIError{Kind: APIMalformed}
-			}
-			policy.Resources[resource] = value
-		}
-		policies[policyIndex] = policy
-	}
-	return policies, nil
-}
-
 func (api *httpAPI) selectedZone(ctx context.Context, request ObservationRequest) (AccountObservation, ZoneObservation, error) {
 	var matches []ZoneObservation
 	account := AccountObservation{}
-	for page := 1; page <= maxZonePages; page++ {
-		query := url.Values{"account.id": {request.AccountID}, "name": {request.ZoneName}, "page": {strconv.Itoa(page)}, "per_page": {"50"}}
+	for page := 1; page <= maxActiveZonePages; page++ {
+		query := url.Values{"status": {"active"}, "page": {strconv.Itoa(page)}, "per_page": {"50"}}
 		var envelope struct {
 			Result []struct {
 				ID          string   `json:"id"`
@@ -199,15 +155,20 @@ func (api *httpAPI) selectedZone(ctx context.Context, request ObservationRequest
 			return AccountObservation{}, ZoneObservation{}, err
 		}
 		info := envelope.ResultInfo
-		if info.Page != page || info.PerPage != 50 || info.TotalPages < page || info.TotalPages > maxZonePages || info.Count != len(envelope.Result) {
+		if info.TotalPages > maxActiveZonePages {
+			return AccountObservation{}, ZoneObservation{}, APIError{Kind: APILimit}
+		}
+		if info.Page != page || info.PerPage != 50 || info.TotalPages < page || info.Count != len(envelope.Result) {
 			return AccountObservation{}, ZoneObservation{}, APIError{Kind: APIMalformed}
 		}
 		for _, source := range envelope.Result {
-			if source.ID != request.ZoneID || source.Name != request.ZoneName || source.Account.ID != request.AccountID || source.Account.Name == "" || !validZoneStatus(source.Status) || len(source.NameServers) == 0 {
-				return AccountObservation{}, ZoneObservation{}, APIError{Kind: APIAmbiguous}
+			if !immutableID.MatchString(source.ID) || !validZoneName(source.Name) || !immutableID.MatchString(source.Account.ID) || source.Account.Name == "" || source.Status != "active" || len(source.NameServers) == 0 {
+				return AccountObservation{}, ZoneObservation{}, APIError{Kind: APIMalformed}
 			}
-			account = AccountObservation{ID: source.Account.ID, Name: source.Account.Name}
-			matches = append(matches, ZoneObservation{ID: source.ID, AccountID: source.Account.ID, Name: source.Name, Status: source.Status, AssignedNameServers: append([]string(nil), source.NameServers...)})
+			if source.ID == request.ZoneID && source.Name == request.ZoneName && source.Account.ID == request.AccountID {
+				account = AccountObservation{ID: source.Account.ID, Name: source.Account.Name}
+				matches = append(matches, ZoneObservation{ID: source.ID, AccountID: source.Account.ID, Name: source.Name, Status: source.Status, AssignedNameServers: append([]string(nil), source.NameServers...)})
+			}
 		}
 		if page == info.TotalPages {
 			break
@@ -217,6 +178,24 @@ func (api *httpAPI) selectedZone(ctx context.Context, request ObservationRequest
 		return AccountObservation{}, ZoneObservation{}, APIError{Kind: APIAmbiguous}
 	}
 	return account, matches[0], nil
+}
+
+func (api *httpAPI) probeList(ctx context.Context, path string, query url.Values, token ManagementToken) error {
+	var envelope struct {
+		Result     []json.RawMessage `json:"result"`
+		ResultInfo struct {
+			Page    int `json:"page"`
+			PerPage int `json:"per_page"`
+			Count   int `json:"count"`
+		} `json:"result_info"`
+	}
+	if err := api.get(ctx, path, query, token, &envelope); err != nil {
+		return err
+	}
+	if envelope.ResultInfo.Page != 1 || envelope.ResultInfo.PerPage != 1 || envelope.ResultInfo.Count != len(envelope.Result) || len(envelope.Result) > 1 {
+		return APIError{Kind: APIMalformed}
+	}
+	return nil
 }
 
 func (api *httpAPI) get(ctx context.Context, path string, query url.Values, token ManagementToken, target any) error {

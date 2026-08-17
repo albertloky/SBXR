@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
 )
@@ -41,20 +42,137 @@ func TestRemovalDeletesAreRestartIdempotentOnlyForNotFound(t *testing.T) {
 	}
 }
 
-func TestManagementTokenDeletionUsesTheExactAccountAndTokenIDs(t *testing.T) {
+func TestManagementTokenDeletionUsesTheExactUserTokenID(t *testing.T) {
 	managementToken, err := cloudflaretunnel.NewManagementToken(token)
 	if err != nil {
 		t.Fatal(err)
 	}
 	called := false
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		called = request.Method == http.MethodDelete && request.URL.Path == "/accounts/"+accountID+"/tokens/"+tokenID
+		called = request.Method == http.MethodDelete && request.URL.Path == "/user/tokens/"+tokenID
 		fmt.Fprint(response, `{"success":true,"errors":[],"messages":[],"result":{}}`)
 	}))
 	defer server.Close()
 	api := cloudflaretunnel.NewFixtureMutationAPI(server.Client(), server.URL, staticResolver{}, &reachableOrigins{})
-	if err := api.DeleteManagementToken(t.Context(), cloudflaretunnel.DeleteManagementTokenRequest{AccountID: accountID, ID: tokenID, Token: managementToken}); err != nil || !called {
+	if err := api.DeleteManagementToken(t.Context(), cloudflaretunnel.DeleteManagementTokenRequest{ID: tokenID, Token: managementToken}); err != nil || !called {
 		t.Fatalf("DeleteManagementToken() = %v, called=%t", err, called)
+	}
+}
+
+func TestHTTPMutationAPICreatesOnlyTheBoundBroadUserTokenCandidate(t *testing.T) {
+	managementToken, err := cloudflaretunnel.NewManagementToken(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const candidateSecret = "CANDIDATE_USER_TOKEN_MARKER_0000000000000000"
+	const candidateName = "sbxr-rotation-7f3a91c27f3a91c27f3a91c27f3a91c2"
+	requestSHA := "7f3a91c27f3a91c27f3a91c27f3a91c2" + strings.Repeat("a", 32)
+	notBefore := time.Date(2026, 8, 17, 0, 0, 0, 0, time.UTC)
+	var created map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		switch request.Method + " " + request.URL.Path {
+		case "GET /user/tokens/permission_groups":
+			fmt.Fprint(response, `{"success":true,"result":[{"id":"p1","name":"User API Tokens Edit"},{"id":"p2","name":"Cloudflare Tunnel Edit"},{"id":"p3","name":"DNS Edit"},{"id":"p4","name":"Zone Read"}]}`)
+		case "GET /user/tokens":
+			fmt.Fprint(response, `{"success":true,"result":[],"result_info":{"page":1,"per_page":50,"total_pages":1,"count":0}}`)
+		case "POST /user/tokens":
+			if request.Header.Get("Authorization") != "Bearer "+token || json.NewDecoder(request.Body).Decode(&created) != nil {
+				t.Fatal("candidate request was not authenticated or valid JSON")
+			}
+			fmt.Fprint(response, `{"success":true,"result":{"id":"44444444444444444444444444444444","name":"`+candidateName+`","status":"active","issued_on":"2026-08-17T00:00:00Z","value":"`+candidateSecret+`"}}`)
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer server.Close()
+	api := cloudflaretunnel.NewFixtureMutationAPI(server.Client(), server.URL, staticResolver{}, &reachableOrigins{})
+	candidate, err := api.CreateManagementTokenCandidate(t.Context(), cloudflaretunnel.CreateManagementTokenCandidateRequest{Current: managementToken, Name: candidateName, RequestSHA256: requestSHA, NotBefore: notBefore, NotAfter: notBefore.Add(time.Minute)})
+	if err != nil || candidate.ID() != "44444444444444444444444444444444" || candidate.RequestSHA256() != requestSHA {
+		t.Fatalf("candidate = (%+v, %v)", candidate, err)
+	}
+	rendered := fmt.Sprintf("%v %#v", candidate, candidate)
+	if strings.Contains(rendered, candidateSecret) || strings.Contains(rendered, token) {
+		t.Fatalf("candidate leaked a token: %s", rendered)
+	}
+	policies, _ := created["policies"].([]any)
+	if created["name"] != candidateName || len(policies) != 3 || created["expires_on"] != nil || created["condition"] != nil || strings.Contains(fmt.Sprint(created), candidateSecret) {
+		t.Fatalf("candidate request = %#v", created)
+	}
+}
+
+func TestHTTPMutationAPIReconcilesExactlyOneBoundCandidate(t *testing.T) {
+	managementToken, _ := cloudflaretunnel.NewManagementToken(token)
+	requestSHA := strings.Repeat("b", 64)
+	candidateName := "sbxr-rotation-" + strings.Repeat("b", 32)
+	notBefore := time.Date(2026, 8, 17, 0, 0, 0, 0, time.UTC)
+	policies := `"policies":[{"effect":"allow","permission_groups":[{"id":"p1"}],"resources":{"com.cloudflare.api.user.*":"*"}},{"effect":"allow","permission_groups":[{"id":"p2"}],"resources":{"com.cloudflare.api.account.*":"*"}},{"effect":"allow","permission_groups":[{"id":"p3"},{"id":"p4"}],"resources":{"com.cloudflare.api.account.zone.*":"*"}}],"expires_on":null,"condition":null`
+	for _, test := range []struct {
+		name, result string
+		want         bool
+	}{
+		{"one exact", `[{"id":"44444444444444444444444444444444","name":"` + candidateName + `","status":"active","issued_on":"2026-08-17T00:00:00Z",` + policies + `}]`, true},
+		{"zero", `[]`, false},
+		{"multiple", `[{"id":"44444444444444444444444444444444","name":"` + candidateName + `","status":"active","issued_on":"2026-08-17T00:00:00Z",` + policies + `},{"id":"55555555555555555555555555555555","name":"` + candidateName + `","status":"active","issued_on":"2026-08-17T00:00:00Z",` + policies + `}]`, false},
+		{"contradictory", `[{"id":"44444444444444444444444444444444","name":"` + candidateName + `","status":"disabled","issued_on":"2026-08-17T00:00:00Z",` + policies + `}]`, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				switch request.URL.Path {
+				case "/user/tokens/permission_groups":
+					fmt.Fprint(response, `{"success":true,"result":[{"id":"p1","name":"User API Tokens Edit"},{"id":"p2","name":"Cloudflare Tunnel Edit"},{"id":"p3","name":"DNS Edit"},{"id":"p4","name":"Zone Read"}]}`)
+				case "/user/tokens":
+					if request.URL.Query().Get("name") != candidateName || request.URL.Query().Get("page") != "1" || request.URL.Query().Get("per_page") != "50" {
+						t.Fatalf("candidate reconciliation request = %s", request.URL)
+					}
+					fmt.Fprint(response, `{"success":true,"result":`+test.result+`,"result_info":{"page":1,"per_page":50,"total_pages":1,"count":`+fmt.Sprint(strings.Count(test.result, `"id"`)/5)+`}}`)
+				default:
+					http.NotFound(response, request)
+				}
+			}))
+			defer server.Close()
+			api := cloudflaretunnel.NewFixtureMutationAPI(server.Client(), server.URL, staticResolver{}, &reachableOrigins{})
+			candidate, err := api.ReconcileManagementTokenCandidate(t.Context(), cloudflaretunnel.ReconcileManagementTokenCandidateRequest{Current: managementToken, Name: candidateName, RequestSHA256: requestSHA, NotBefore: notBefore, NotAfter: notBefore.Add(time.Minute)})
+			if (err == nil) != test.want || test.want && candidate.ID() != "44444444444444444444444444444444" {
+				t.Fatalf("reconcile = (%+v, %v), want success=%t", candidate, err, test.want)
+			}
+		})
+	}
+}
+
+func TestHTTPMutationAPICleansAnExactCandidateAfterALostCreateResponse(t *testing.T) {
+	managementToken, _ := cloudflaretunnel.NewManagementToken(token)
+	requestSHA := strings.Repeat("d", 64)
+	candidateName := "sbxr-rotation-" + strings.Repeat("d", 32)
+	notBefore := time.Date(2026, 8, 17, 0, 0, 0, 0, time.UTC)
+	deleted := false
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.Method + " " + request.URL.Path {
+		case "GET /user/tokens/permission_groups":
+			fmt.Fprint(response, `{"success":true,"result":[{"id":"p1","name":"User API Tokens Edit"},{"id":"p2","name":"Cloudflare Tunnel Edit"},{"id":"p3","name":"DNS Edit"},{"id":"p4","name":"Zone Read"}]}`)
+		case "POST /user/tokens":
+			response.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprint(response, `{"success":false,"errors":[{"code":10000,"message":"temporary"}]}`)
+		case "GET /user/tokens":
+			result := `[]`
+			count := 0
+			if !deleted {
+				result = `[{"id":"44444444444444444444444444444444","name":"` + candidateName + `","status":"active","issued_on":"2026-08-17T00:00:00Z","policies":[{"effect":"allow","permission_groups":[{"id":"p1"}],"resources":{"com.cloudflare.api.user.*":"*"}},{"effect":"allow","permission_groups":[{"id":"p2"}],"resources":{"com.cloudflare.api.account.*":"*"}},{"effect":"allow","permission_groups":[{"id":"p3"},{"id":"p4"}],"resources":{"com.cloudflare.api.account.zone.*":"*"}}],"expires_on":null,"condition":null}]`
+				count = 1
+			}
+			fmt.Fprintf(response, `{"success":true,"result":%s,"result_info":{"page":1,"per_page":50,"total_pages":1,"count":%d}}`, result, count)
+		case "DELETE /user/tokens/44444444444444444444444444444444":
+			deleted = true
+			fmt.Fprint(response, `{"success":true,"result":{}}`)
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer server.Close()
+	api := cloudflaretunnel.NewFixtureMutationAPI(server.Client(), server.URL, staticResolver{}, &reachableOrigins{})
+	_, err := api.CreateManagementTokenCandidate(t.Context(), cloudflaretunnel.CreateManagementTokenCandidateRequest{Current: managementToken, Name: candidateName, RequestSHA256: requestSHA, NotBefore: notBefore, NotAfter: notBefore.Add(time.Minute)})
+	if err == nil || !deleted {
+		t.Fatalf("lost create = %v, deleted=%t", err, deleted)
 	}
 }
 

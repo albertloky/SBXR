@@ -204,12 +204,12 @@ type CloudflarePresentation struct {
 }
 
 type CloudflareWalkthroughFacts struct {
-	DashboardURL, AccountTokensPage, CreateControl, TokenName string
-	DNSRecordsPage, TunnelsPage                               string
-	AccountControl, ZoneControl                               string
-	AccountResource, ZoneResource, SummaryControl             string
-	RejectsGlobalAPIKey, RejectsBroadAuthority                bool
-	RejectsAPITokensWrite                                     bool
+	DashboardURL, AccountTokensPage, CreateControl, TokenName         string
+	DNSRecordsPage, TunnelsPage                                       string
+	AccountControl, ZoneControl                                       string
+	AccountResource, ZoneResource, SummaryControl                     string
+	RejectsGlobalAPIKey, RejectsAccountAPIToken                       bool
+	RequiresBroadAuthority, RequiresNoExpiry, RequiresNoIPRestriction bool
 }
 
 type CloudflareCredential struct {
@@ -268,13 +268,15 @@ const (
 	CheckCurrentManagementToken
 	VerifyReplacementManagementToken
 	ReviewManagementTokenRemoval
+	ReviewManagementTokenRotation
 	ReviewTunnelRunTokenRotation
 	WaitAnotherTenMinutes
 )
 
 type CloudflareRequest struct {
-	Action CloudflareAction
-	Token  string
+	Action                        CloudflareAction
+	Token                         string
+	DedicatedBroadPolicyConfirmed bool
 }
 
 type CloudflareResponse struct {
@@ -293,24 +295,24 @@ func validatedCloudflarePresentation(presentation CloudflarePresentation) (Cloud
 func validateCloudflareWalkthrough(presentation CloudflarePresentation) (CloudflarePresentation, bool) {
 	facts := presentation.Walkthrough
 	valid := facts.DashboardURL == "https://dash.cloudflare.com/" &&
-		facts.AccountTokensPage == "Manage Account > Account API Tokens" &&
+		facts.AccountTokensPage == "My Profile > API Tokens" &&
 		facts.CreateControl == "Create Token" &&
-		facts.TokenName == "SBXR - selected account / selected zone" &&
+		facts.TokenName == "SBXR dedicated broad management" &&
 		facts.DNSRecordsPage == "selected domain > DNS > Records" &&
 		facts.TunnelsPage == "Cloudflare One > Networks > Tunnels & Mesh" &&
-		facts.AccountControl == "Permissions > Account > Account API Tokens > Read; Cloudflare Tunnel > Edit" &&
-		facts.ZoneControl == "Permissions > Zone > DNS > Edit" &&
-		facts.AccountResource == "Account Resources > Include > Specific account > selected account" &&
-		facts.ZoneResource == "Zone Resources > Include > Specific zone > selected zone" &&
+		facts.AccountControl == "Permissions > User > API Tokens > Edit; Account > Cloudflare Tunnel > Edit" &&
+		facts.ZoneControl == "Permissions > Zone > DNS > Edit; Zone > Zone > Read" &&
+		facts.AccountResource == "Account Resources > Include > All accounts" &&
+		facts.ZoneResource == "Zone Resources > Include > All zones" &&
 		facts.SummaryControl == "Continue to summary > Create Token > copy once" &&
-		facts.RejectsGlobalAPIKey && facts.RejectsBroadAuthority && facts.RejectsAPITokensWrite && emptyCloudflareCredential(presentation.Credential) && emptyMissingPermission(presentation.MissingPermission) && emptyPendingZone(presentation.PendingZone)
+		facts.RejectsGlobalAPIKey && facts.RejectsAccountAPIToken && facts.RequiresBroadAuthority && facts.RequiresNoExpiry && facts.RequiresNoIPRestriction && emptyCloudflareCredential(presentation.Credential) && emptyMissingPermission(presentation.MissingPermission) && emptyPendingZone(presentation.PendingZone)
 	return presentation, valid
 }
 
 func validateCloudflareCredential(presentation CloudflarePresentation) (CloudflarePresentation, bool) {
 	credential := presentation.Credential
 	valid := credential.Status.String() != "" && safeProviderLines([]string{credential.FirstFour, credential.LastFour, credential.Account, credential.Zone, credential.LastVerification}, 5) &&
-		len([]rune(credential.FirstFour)) == 4 && len([]rune(credential.LastFour)) == 4 && safeOptionalLine(credential.Expiry) && completeStrings(credential.Uses, 16) && completeStrings(credential.Guidance, 8) && credential.HelpURL == "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/" &&
+		len([]rune(credential.FirstFour)) == 4 && len([]rune(credential.LastFour)) == 4 && credential.Expiry == "" && completeStrings(credential.Uses, 16) && completeStrings(credential.Guidance, 8) && credential.HelpURL == "https://developers.cloudflare.com/fundamentals/api/get-started/create-token/" &&
 		presentation.Walkthrough == (CloudflareWalkthroughFacts{}) && emptyMissingPermission(presentation.MissingPermission) && emptyPendingZone(presentation.PendingZone)
 	if !valid {
 		return CloudflarePresentation{}, false
@@ -322,7 +324,7 @@ func validateCloudflareCredential(presentation CloudflarePresentation) (Cloudfla
 
 func validateCloudflareMissingPermission(presentation CloudflarePresentation) (CloudflarePresentation, bool) {
 	missing := presentation.MissingPermission
-	valid := safeProviderLines([]string{missing.Capability, missing.Account, missing.Zone, missing.Found, missing.Required, missing.WhyStopped, missing.Evidence}, 7) && completeStrings(missing.DashboardSteps, 8) && missing.HelpURL == "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/" && presentation.Walkthrough == (CloudflareWalkthroughFacts{}) && emptyCloudflareCredential(presentation.Credential) && emptyPendingZone(presentation.PendingZone)
+	valid := safeProviderLines([]string{missing.Capability, missing.Account, missing.Zone, missing.Found, missing.Required, missing.WhyStopped, missing.Evidence}, 7) && completeStrings(missing.DashboardSteps, 8) && missing.HelpURL == "https://developers.cloudflare.com/fundamentals/api/get-started/create-token/" && presentation.Walkthrough == (CloudflareWalkthroughFacts{}) && emptyCloudflareCredential(presentation.Credential) && emptyPendingZone(presentation.PendingZone)
 	if !valid {
 		return CloudflarePresentation{}, false
 	}
@@ -391,7 +393,7 @@ var cloudflarePresentationDefinitions = map[CloudflarePresentationKind]cloudflar
 		validate: validateCloudflareWalkthrough,
 		actions: func(bool) []cloudflareActionDefinition {
 			return []cloudflareActionDefinition{
-				{label: "Verify token", kind: cloudflareModuleAction, request: VerifyInitialManagementToken},
+				{label: "I understand; enter the token", kind: cloudflareModuleAction, request: VerifyInitialManagementToken},
 				{label: "Back and continue later", kind: cloudflareBack},
 			}
 		},
@@ -411,6 +413,7 @@ var cloudflarePresentationDefinitions = map[CloudflarePresentationKind]cloudflar
 				{label: "Replace token", kind: cloudflareBeginReplacement},
 				{label: "Remove from SBXR", kind: cloudflareModuleAction, request: ReviewManagementTokenRemoval},
 				{label: "Rotate genuine Tunnel run token", kind: cloudflareModuleAction, request: ReviewTunnelRunTokenRotation},
+				{label: "Rotate management token", kind: cloudflareModuleAction, request: ReviewManagementTokenRotation},
 			}
 		},
 		lines: cloudflareCredentialLines,
@@ -482,9 +485,11 @@ func cloudflareWalkthroughLines(presentation CloudflarePresentation, input strin
 		facts.ZoneResource,
 		facts.SummaryControl,
 		"Do not use a Global API Key.",
-		"Account API Tokens Write is not requested.",
-		"Broad unrelated authority is rejected.",
-		"Scoped token - masked and memory-only: " + input,
+		"Do not use an Account API Token.",
+		"Broad authority is required: all accounts and all zones.",
+		"Use no expiry and no client-IP restriction.",
+		"SBXR restricts use to the selected account, selected zone, current and candidate token IDs, and exact immutable-ID-owned resources.",
+		"Dedicated Broad Cloudflare User API Token - masked and memory-only: " + input,
 		"",
 	}
 	return lines
@@ -507,7 +512,7 @@ func cloudflareCredentialLines(presentation CloudflarePresentation, input string
 	}
 	lines = append(lines, "")
 	if replacing {
-		lines = append(lines, "Create the replacement Account API Token")
+		lines = append(lines, "Create the replacement Dedicated Broad Cloudflare User API Token")
 		lines = append(lines, credential.Guidance...)
 		lines = append(lines, terminalHyperlinkLines(credential.HelpURL, 58)...)
 		lines = append(lines, "Current token stays active until the candidate verifies and its exact Plan is approved.", "")

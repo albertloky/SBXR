@@ -23,7 +23,7 @@ type managedProviderPresentation struct {
 
 func managedProviderPresentations(ctx context.Context, snapshot state.Snapshot, secrets state.InfrastructureSecretReader, network networkpolicy.Result) managedProviderPresentation {
 	desired := snapshot.DesiredState
-	viewRequest := cloudflaretunnel.ViewRequest{AccountID: desired.Cloudflare.AccountID, ZoneID: desired.Cloudflare.ZoneID, ZoneName: desired.Cloudflare.ZoneName, TokenRemoved: desired.Cloudflare.ManagementTokenRemoved, NetworkPath: network.CloudflareTunnelPath, CredentialDetail: true}
+	viewRequest := cloudflaretunnel.ViewRequest{AccountID: desired.Cloudflare.AccountID, ZoneID: desired.Cloudflare.ZoneID, ZoneName: desired.Cloudflare.ZoneName, TokenRemoved: desired.Cloudflare.ManagementTokenRemoved, NetworkPath: network.CloudflareTunnelPath, CredentialDetail: true, DedicatedBroadPolicyConfirmed: desired.Cloudflare.DedicatedBroadPolicyConfirmed}
 	api := cloudflaretunnel.NewProductionAPI()
 	if !viewRequest.TokenRemoved {
 		token, err := cloudflaretunnel.NewManagementToken(secrets.ReadInfrastructureSecret(desired.Cloudflare.ManagementToken))
@@ -58,7 +58,7 @@ func ownerCloudflarePresentation(view cloudflaretunnel.ViewResult) ownerconsole.
 		return ownerconsole.CloudflarePresentation{Kind: ownerconsole.CloudflarePendingZonePresentation, PendingZone: ownerconsole.CloudflarePendingZone{Zone: view.Zone.Name, AssignedNameServers: view.Zone.AssignedNameServers, ObservedNameServers: view.Zone.ObservedNameServers, RegistrarSteps: guidance.Instructions, Evidence: view.Health.Code, HelpURL: guidance.URL}}
 	}
 	if view.Health.Outcome == cloudflaretunnel.Healthy || view.Credential.Status == "removed" {
-		tokenHelp, _ := cloudflaretunnel.CredentialGuidance(cloudflaretunnel.AccountTokenInput)
+		tokenHelp, _ := cloudflaretunnel.CredentialGuidance(cloudflaretunnel.UserTokenInput)
 		first, last := view.Credential.FirstFour, view.Credential.LastFour
 		status := ownerconsole.CloudflareTokenActive
 		if view.Credential.Status == "removed" {
@@ -100,10 +100,10 @@ func ownerCompleteRemovalPresentation(presentation ownerconsole.CompleteRemovalP
 
 func unavailableCloudflare(found string) ownerconsole.CloudflarePresentation {
 	if found == "" {
-		found = "the scoped Cloudflare authority could not be proved"
+		found = "the Dedicated Broad Cloudflare User API Token authority could not be proved"
 	}
-	tokenHelp, _ := cloudflaretunnel.CredentialGuidance(cloudflaretunnel.AccountTokenInput)
-	return ownerconsole.CloudflarePresentation{Kind: ownerconsole.CloudflareMissingPermissionPresentation, MissingPermission: ownerconsole.CloudflareMissingPermission{Capability: "Scoped Cloudflare account and zone authority", Account: "selected account", Zone: "selected zone", Found: found, Required: "Account API Tokens Read, Cloudflare Tunnel Edit, and DNS Edit", WhyStopped: "SBXR does not bypass provider ownership", Evidence: "CLOUDFLARE-AUTHORITY-UNPROVED", DashboardSteps: tokenHelp.Instructions, HelpURL: tokenHelp.URL}}
+	tokenHelp, _ := cloudflaretunnel.CredentialGuidance(cloudflaretunnel.UserTokenInput)
+	return ownerconsole.CloudflarePresentation{Kind: ownerconsole.CloudflareMissingPermissionPresentation, MissingPermission: ownerconsole.CloudflareMissingPermission{Capability: "Dedicated Broad Cloudflare User API Token authority", Account: "selected account", Zone: "selected zone", Found: found, Required: "User API Tokens Edit, Cloudflare Tunnel Edit, DNS Edit, and Zone Read", WhyStopped: "SBXR does not bypass provider ownership", Evidence: "CLOUDFLARE-AUTHORITY-UNPROVED", DashboardSteps: tokenHelp.Instructions, HelpURL: tokenHelp.URL}}
 }
 
 func certificateViewRequest(desired state.DesiredState, network networkpolicy.Result, dns cloudflaretunnel.CertificateDNSFacts) certificatelifecycle.ViewRequest {

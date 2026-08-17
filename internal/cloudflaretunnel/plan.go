@@ -147,6 +147,7 @@ type ManagementTokenAction string
 
 const (
 	ManagementTokenReplace ManagementTokenAction = "replace"
+	ManagementTokenRotate  ManagementTokenAction = "rotate"
 	ManagementTokenRemove  ManagementTokenAction = "remove"
 )
 
@@ -187,6 +188,7 @@ type Plan struct {
 	managementToken               VerifiedManagementToken
 	releaseUpdate                 bool
 	managedRepair                 bool
+	managementRotation            bool
 	used                          *atomic.Bool
 }
 
@@ -490,6 +492,18 @@ func (i Interface) planManagementToken(ctx context.Context, request PlanRequest)
 	candidateTokenID := ""
 	resultingState := []string{}
 	switch change.Action {
+	case ManagementTokenRotate:
+		if change.Inventory != nil || change.Resolution != "" || change.StartingTokenRemoved {
+			return failed("CLOUDFLARE-MANAGEMENT-TOKEN-REFUSED", "Healthy rotation requires the current available token and no replacement input.", nil)
+		}
+		view := i.View(ctx, request.Authority)
+		if view.Health.Outcome != Healthy {
+			return PlanResult{Health: view.Health}
+		}
+		if view.Credential.ID != change.CurrentTokenID {
+			return failed("CLOUDFLARE-MANAGEMENT-TOKEN-STALE", "The current management-token identity changed before review.", nil)
+		}
+		resultingState = []string{"one transaction-bound candidate is created and proved before the irreversible checkpoint", "the old token is revoked after the irreversible checkpoint", "stored management token changes only at State publication", "resources remain unchanged"}
 	case ManagementTokenReplace:
 		if change.Inventory != nil || change.Resolution != "" {
 			return failed("CLOUDFLARE-MANAGEMENT-TOKEN-REFUSED", "Replacement does not accept a removal dependency outcome.", nil)
@@ -528,7 +542,7 @@ func (i Interface) planManagementToken(ctx context.Context, request PlanRequest)
 	default:
 		return failed("CLOUDFLARE-MANAGEMENT-TOKEN-REFUSED", "The management-token action is unsupported.", dependencies)
 	}
-	steps, err := tokenLifecycleSteps()
+	steps, err := tokenLifecycleSteps(change.Action, request)
 	if err != nil {
 		return failed("CLOUDFLARE-MANAGEMENT-TOKEN-REFUSED", "The management-token transaction could not be built.", dependencies)
 	}
@@ -544,7 +558,7 @@ func (i Interface) planManagementToken(ctx context.Context, request PlanRequest)
 	checksum := hex.EncodeToString(digest[:])
 	identity := request.ChangeSet + "-plan-" + checksum[:12]
 	use, _ := planUses.LoadOrStore(identity, &atomic.Bool{})
-	plan := &Plan{identity: identity, sha256: checksum, request: request, steps: steps, checks: tokenLifecycleChecks(change.Action), managementToken: replacement, used: use.(*atomic.Bool)}
+	plan := &Plan{identity: identity, sha256: checksum, request: request, steps: steps, checks: tokenLifecycleChecks(change.Action), managementToken: replacement, managementRotation: change.Action == ManagementTokenRotate, used: use.(*atomic.Bool)}
 	health := finish(healthResult(i, Health{Module: "Cloudflare Tunnel", Outcome: Healthy, Code: "CLOUDFLARE-MANAGEMENT-TOKEN-READY", Explanation: "The reviewed management-token change is ready for the State and System Changes transaction."})).Health
 	return PlanResult{Plan: plan, Health: health, Dependencies: append([]ManagementTokenDependency(nil), dependencies...), ResultingState: resultingState}
 }
@@ -582,7 +596,11 @@ func validTokenDependencies(dependencies []ManagementTokenDependency) bool {
 	return true
 }
 
-func tokenLifecycleSteps() ([]systemchanges.Step, error) {
+func tokenLifecycleSteps(action ManagementTokenAction, request PlanRequest) ([]systemchanges.Step, error) {
+	if action == ManagementTokenRotate {
+		step, err := systemchanges.NewCloudflareStep(systemchanges.CloudflareChange{Action: systemchanges.CloudflareManagementTokenActivate, AccountID: request.Authority.AccountID, ZoneID: request.Authority.ZoneID, ManagementTokenID: request.ManagementToken.CurrentTokenID})
+		return []systemchanges.Step{step}, err
+	}
 	step, err := systemchanges.NewStep(systemchanges.CloudflareModule, systemchanges.RecordManagementTokenChange, systemchanges.RestoreManagementTokenRecord)
 	if err != nil {
 		return nil, err
@@ -602,7 +620,7 @@ func tokenLifecycleChecks(action ManagementTokenAction) []systemchanges.Check {
 }
 
 func (plan *Plan) StateManagementTokenChange() (source any, bindingJSON []byte, templateSHA256 string, valid bool) {
-	if plan == nil || plan.request.ManagementToken.Action == "" || plan.used == nil {
+	if plan == nil || plan.request.ManagementToken.Action == "" || plan.request.ManagementToken.Action == ManagementTokenRotate || plan.used == nil {
 		return nil, nil, "", false
 	}
 	change := plan.request.ManagementToken
@@ -620,6 +638,19 @@ func (plan *Plan) StateManagementTokenChange() (source any, bindingJSON []byte, 
 		source = plan.managementToken
 	}
 	return source, bindingJSON, plan.request.DesiredStateSHA256, err == nil
+}
+
+// StateManagementTokenRotation binds a deferred candidate slot to one reviewed
+// healthy rotation. The provider creates the candidate only after Apply starts.
+func (plan *Plan) StateManagementTokenRotation() (bindingJSON []byte, templateSHA256 string, valid bool) {
+	if plan == nil || !plan.managementRotation || plan.used == nil {
+		return nil, "", false
+	}
+	change := plan.request.ManagementToken
+	bindingJSON, err := json.Marshal(struct {
+		AccountID, ZoneID, ZoneName, CurrentTokenID string
+	}{plan.request.Authority.AccountID, plan.request.Authority.ZoneID, plan.request.Authority.ZoneName, change.CurrentTokenID})
+	return bindingJSON, plan.request.DesiredStateSHA256, err == nil
 }
 
 func planDependencies(plan *Plan) []ManagementTokenDependency {
@@ -677,7 +708,7 @@ func (plan *Plan) Apply(module systemchanges.Interface, prepared systemchanges.P
 			return module.Apply(nil)
 		}
 		mutation = systemchanges.SettingChangeMutation
-		if plan.request.RunTokenRotation.TunnelID != "" {
+		if plan.request.RunTokenRotation.TunnelID != "" || plan.request.ManagementToken.Action == ManagementTokenRotate {
 			mutation = systemchanges.RotationMutation
 		} else if plan.request.ManagedRepair.TunnelID != "" {
 			mutation = systemchanges.RepairMutation

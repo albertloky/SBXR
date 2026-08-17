@@ -320,7 +320,7 @@ func installHandoffFixture() InstallHandoffRequest {
 	return InstallHandoffRequest{
 		Schema: 1, Session: strings.Repeat("a", 64), Tag: "v1.0.0", Architecture: softwarelifecycle.AMD64,
 		Draft:               softwarelifecycle.InstallationDraft{Domain: "example.com", OwnerEmail: "owner@example.com", PublicIPv4: "192.0.2.10", PrimaryAddress: "192.0.2.10", SSHPort: 22, RealityPort: 443, Hysteria2Port: 443, TUICPort: 8443, AnyTLSPort: 9443, SubscriptionPort: 10443},
-		CloudflareAccountID: strings.Repeat("b", 32), CloudflareZoneID: strings.Repeat("c", 32), CloudflareToken: "cfat_" + strings.Repeat("d", 40),
+		CloudflareAccountID: strings.Repeat("b", 32), CloudflareZoneID: strings.Repeat("c", 32), CloudflareToken: "sbxr_" + strings.Repeat("d", 40),
 		Entropy:       bytes.Repeat([]byte{0x42}, 32),
 		RealityTarget: "www.example.net:443", RealityServerName: "www.example.net", ReviewedPlanSHA256: strings.Repeat("e", 64),
 		Candidate: softwarelifecycle.InstallCandidateHandoff{Verified: verified, Staged: staged, ApplicationAsset: applicationAsset, ComponentAsset: componentAsset, ApplicationArchive: application, ComponentArchive: components},

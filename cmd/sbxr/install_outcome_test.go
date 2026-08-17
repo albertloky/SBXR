@@ -110,7 +110,7 @@ func TestProductionInstallationJourneyCarriesCloudflareOwnedTokenHelp(t *testing
 		}
 	}
 	review := outcome.Review(t.Context())
-	if review.Editing == nil || review.Editing.Field.Identity != "cloudflare-token" || review.Editing.Help.Sensitivity != ownerconsole.InfrastructureSecret || review.Editing.Help.Example != "" || review.Editing.Help.URL != "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/" {
+	if review.Editing == nil || review.Editing.Field.Identity != "cloudflare-token" || review.Editing.Help.Sensitivity != ownerconsole.InfrastructureSecret || review.Editing.Help.Example != "" || review.Editing.Help.URL != "https://developers.cloudflare.com/fundamentals/api/get-started/create-token/" {
 		t.Fatalf("Cloudflare token Help did not cross the production presentation boundary: %+v", review)
 	}
 }

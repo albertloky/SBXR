@@ -282,13 +282,13 @@ func TestRunAllowsSafeExitWhileUndersized(t *testing.T) {
 }
 
 func TestRunResizeRemasksInitialAndManagedCloudflareTokens(t *testing.T) {
-	const secret = "cfat_RESIZE-SECRET-MARKER-012345678901234567890"
+	const secret = "sbxr_RESIZE-SECRET-MARKER-012345678901234567890"
 	help := EditingHelp{
-		Purpose: "Authorize only SBXR's Cloudflare work.", Instructions: []string{"Open Manage Account > Account API Tokens; Create Token."},
-		AcceptedFormat: "cfat_ plus 35 to 75 letters, digits, _ or -.", CommonMistakes: []string{"No Global API Key or broad authority."},
-		Recovery: "Create the exact scoped Account API Token.", URL: "https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/", Sensitivity: InfrastructureSecret,
+		Purpose: "Authorize only SBXR's Cloudflare work.", Instructions: []string{"Open My Profile > API Tokens; Create Token."},
+		AcceptedFormat: "sbxr_ plus 35 to 75 letters, digits, _ or -.", CommonMistakes: []string{"No Global API Key or broad authority."},
+		Recovery: "Create the Dedicated Broad Cloudflare User API Token.", URL: "https://developers.cloudflare.com/fundamentals/api/get-started/create-token/", Sensitivity: InfrastructureSecret,
 	}
-	initial := ChangeReview{Editing: &EditingPresentation{Title: "Clean VPS installation", Field: EditingField{Identity: "cloudflare-token", Label: "Cloudflare Account API Token", Required: true}, Help: help}}
+	initial := ChangeReview{Editing: &EditingPresentation{Title: "Clean VPS installation", Field: EditingField{Identity: "cloudflare-token", Label: "Dedicated Broad Cloudflare User API Token", Required: true}, Help: help}}
 	credential := CloudflarePresentation{Kind: CloudflareCredentialPresentation, Credential: completeCloudflareCredential()}
 	managedSetup := append(cloudflareTraversalSteps(credential, 120, 36), "\x1b[B\r", "")
 	managedSetup = append(managedSetup, cloudflareReplacingTraversalSteps(credential, 120, 36)...)
@@ -303,7 +303,7 @@ func TestRunResizeRemasksInitialAndManagedCloudflareTokens(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got := runRevealedResizePseudoTerminal(t, test.session, test.setup)
-			if strings.Count(got, "cfat_RESIZE-SECRET-MARKER") != 1 || !strings.Contains(got, "TOKEN REVEALED") || !strings.Contains(got, "TERMINAL IS TOO SMALL") || !strings.Contains(got, "Ctrl+R Reveal token") {
+			if strings.Count(got, "sbxr_RESIZE-SECRET-MARKER") != 1 || !strings.Contains(got, "TOKEN REVEALED") || !strings.Contains(got, "TERMINAL IS TOO SMALL") || !strings.Contains(got, "Ctrl+R Reveal token") {
 				t.Fatalf("resize did not remask the controlled Reveal\n%s", got)
 			}
 		})

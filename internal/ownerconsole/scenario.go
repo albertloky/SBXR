@@ -103,7 +103,7 @@ var scenarioFixtures = map[Scenario]fixture{
 	},
 	CloudflareWalkthrough: {
 		header: "Not installed - authenticated", title: "CLOUDFLARE TOKEN - STEP 3 OF 5", navigation: cloudflareNavigation, allowsBack: true,
-		lines:   []string{"https://dash.cloudflare.com/", "Manage Account > Account API Tokens", "> Create Token", "", "Name       SBXR - selected account / selected zone", "Account    API Tokens Read; Tunnel Edit", "Zone       DNS                               Edit", "Resources  Include > Specific account > selected", "           Include > Specific zone > selected", "", "Continue to summary > Create Token > copy once", "", "Scoped token (masked, memory-only):", "> ********", "", "> Verify token", "  Back and continue later"},
+		lines:   []string{"https://dash.cloudflare.com/", "My Profile > API Tokens", "> Create Token", "", "Name      SBXR dedicated broad", "User      API Tokens Edit", "Account   Cloudflare Tunnel Edit", "Zone      DNS Edit; Zone Read", "Resources All accounts; all zones", "No expiry or client-IP restriction", "Continue to summary > Create Token > copy once", "", "Dedicated Broad User API Token (masked):", "> ********", "", "> I understand; enter the token", "  Back and continue later"},
 		details: []string{"MINIMUM AUTHORITY", "", "Specific account", "Specific zone", "No Global API Key", "Token remains memory-only"},
 	},
 	CorrectionFlow: {
