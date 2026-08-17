@@ -273,10 +273,13 @@ func controlledInstalledCandidate(installed VerifiedRelease) InstallCandidate {
 func controlledUpdateContributions(t *testing.T, changeSet, desired string) []UpdateContribution {
 	t.Helper()
 	all := controlledInstallContributions(t, changeSet, desired)
-	result := make([]UpdateContribution, 0, 3)
-	for _, index := range []int{1, 2, 4} {
-		result = append(result, all[index].(UpdateContribution))
+	result := []UpdateContribution{all[1].(UpdateContribution)}
+	step, err := systemchanges.NewStep(systemchanges.CloudflareModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
+	if err != nil {
+		t.Fatal(err)
 	}
+	result = append(result, controlledInstallContribution{InstallContributionProof{Name: string(CloudflareInstallContribution), Owner: systemchanges.CloudflareModule, Identity: "component-plan-cloudflare", SHA256: strings.Repeat("5", 64), StableSHA256: strings.Repeat("a", 64), ChangeSet: changeSet, DesiredStateSHA256: desired, Steps: []systemchanges.Step{step}, Checks: []systemchanges.Check{{Owner: systemchanges.CloudflareModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "UPDATE-CLOUDFLARE-PRE"}, {Owner: systemchanges.CloudflareModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PostPublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "UPDATE-CLOUDFLARE-POST"}}, Details: []string{"Cloudflare Tunnel exact update effects"}}})
+	result = append(result, all[3].(UpdateContribution))
 	return result
 }
 

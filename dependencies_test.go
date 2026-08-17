@@ -45,7 +45,7 @@ var approvedModuleDependencies = map[string]map[string]bool{
 	"cloudflaretunnel":        {"networkpolicy": true, "softwarelifecycle": true, "systemchanges": true},
 	"connectionprofiles":      {"cloudflaretunnel": true, "softwarelifecycle": true, "state": true, "systemchanges": true},
 	"healthdiagnostics":       {"systemchanges": true},
-	"installation":            {"certificatelifecycle": true, "cloudflaretunnel": true, "connectionprofiles": true, "healthdiagnostics": true, "networkpolicy": true, "softwarelifecycle": true, "state": true, "subscriptionpublication": true, "systemchanges": true},
+	"installation":            {"certificatelifecycle": true, "connectionprofiles": true, "healthdiagnostics": true, "networkpolicy": true, "softwarelifecycle": true, "state": true, "subscriptionpublication": true, "systemchanges": true},
 	"softwarelifecycle":       {"networkpolicy": true, "systemchanges": true},
 	"subscriptionpublication": {"connectionprofiles": true, "softwarelifecycle": true, "state": true, "systemchanges": true},
 }

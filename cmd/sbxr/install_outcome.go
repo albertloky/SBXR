@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
 	"github.com/albertloky/SBXR/internal/connectionprofiles"
 	profilesubuntu "github.com/albertloky/SBXR/internal/connectionprofiles/adapter/ubuntu"
 	"github.com/albertloky/SBXR/internal/healthdiagnostics"
@@ -43,17 +42,11 @@ func (*installOutcome) String() string   { return "Clean VPS installation outcom
 func (*installOutcome) GoString() string { return "Clean VPS installation outcome: protected" }
 
 var installFields = []ownerconsole.EditingField{
-	{Identity: "domain", Label: "Domain", Required: true},
 	{Identity: "owner-email", Label: "Owner email", Required: true},
-	{Identity: "public-ipv4", Label: "Public IPv4", Required: true},
+	{Identity: "subscriber-agreement", Label: "ACME subscriber agreement", Required: true},
+	{Identity: "primary-address", Label: "Primary subscription address", Required: true},
 	{Identity: "reality-port", Label: "REALITY port", Required: true},
-	{Identity: "hysteria2-port", Label: "Hysteria2 port", Required: true},
-	{Identity: "tuic-port", Label: "TUIC port", Required: true},
-	{Identity: "anytls-port", Label: "AnyTLS port", Required: true},
 	{Identity: "subscription-port", Label: "Subscription HTTPS port", Required: true},
-	{Identity: "cloudflare-account", Label: "Cloudflare account ID", Required: true},
-	{Identity: "cloudflare-zone", Label: "Cloudflare zone ID", Required: true},
-	{Identity: "cloudflare-token", Label: "Dedicated Broad Cloudflare User API Token", Required: true},
 	{Identity: "reality-target", Label: "REALITY target hostname", Required: true},
 }
 
@@ -75,8 +68,6 @@ func newInstallationModuleWith(releaseSource func() (versionReport, error), pref
 			return network.InstallationPreflight(os.Getenv("SBXR_SSH_CONNECTION"))
 		}
 	}
-	api := cloudflaretunnel.NewProductionAPI()
-	cloudflare := cloudflaretunnel.New(api, cloudflaretunnel.SystemClock{})
 	releaseCandidate := func(ctx context.Context, tag string, architecture softwarelifecycle.Architecture) (softwarelifecycle.InstallCandidateHandoff, error) {
 		view := lifecycle.View(ctx, softwarelifecycle.ViewRequest{Tag: tag, Architecture: architecture, InstallationStatus: softwarelifecycle.NotInstalled})
 		candidate := view.InstallCandidate()
@@ -87,7 +78,7 @@ func newInstallationModuleWith(releaseSource func() (versionReport, error), pref
 		return handoff, nil
 	}
 	return installation.New(installation.Dependencies{
-		Preflight: preflightSource,
+		Preflight: preflightSource, RecommendedRealityTarget: "www.microsoft.com",
 		ReviewRealityTarget: func(ctx context.Context, target connectionprofiles.RealityTarget) connectionprofiles.RealityTargetReview {
 			unavailable := func() connectionprofiles.RealityTargetReview {
 				return connectionprofiles.RealityTargetReview{Target: target, Health: connectionprofiles.Health{Module: "Connection Profiles", Profile: "VLESS REALITY Vision", Outcome: connectionprofiles.Failed, Code: "CONNECTION-PROFILES-REALITY-HOST", Problem: "The authenticated Xray target probe is unavailable", Found: "the exact running release candidate could not supply Xray", Required: "one authenticated staged Xray candidate", WhyStopped: "Connection Profiles never substitutes an unrelated system Xray", NextActions: []string{"Check again", "Back"}, BlockerOwner: connectionprofiles.SBXROwnedBlocker, BlockerAction: "Check the release connection, then submit this hostname again."}}
@@ -114,7 +105,7 @@ func newInstallationModuleWith(releaseSource func() (versionReport, error), pref
 			report, err := releaseSource()
 			return installation.RunningRelease{Tag: report.Build.Tag, Architecture: report.Architecture}, err
 		},
-		ReleaseCandidate: releaseCandidate, Stage: stager.Stage, Network: network.Evaluate, Cloudflare: cloudflare.Plan, CloudflareAPI: api, Inventory: api,
+		ReleaseCandidate: releaseCandidate, Stage: stager.Stage, Network: network.Evaluate,
 		Entropy: installation.DefaultEntropy(), Launch: softwareubuntu.LaunchInstallApplyWithCancellation,
 		Recover: func(_ context.Context, pending systemchanges.PendingChangeSet) error {
 			return runProvenRecovery(pending)

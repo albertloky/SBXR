@@ -183,6 +183,13 @@ func GenerateRealityCredentials() (RealityCredentials, error) {
 	return generateRealityCredentials(rand.Reader)
 }
 
+func GenerateRealityCredentialsFrom(random io.Reader) (RealityCredentials, error) {
+	if random == nil {
+		return RealityCredentials{}, errors.New("credential entropy unavailable")
+	}
+	return generateRealityCredentials(random)
+}
+
 func generateRealityCredentials(random io.Reader) (RealityCredentials, error) {
 	privateBytes := make([]byte, 32)
 	if _, err := io.ReadFull(random, privateBytes); err != nil {

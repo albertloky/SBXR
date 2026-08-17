@@ -31,31 +31,37 @@ func newCloudflareTestModule(api cloudflaretunnel.API, clock cloudflaretunnel.Cl
 
 func TestComposedInstallBuildsAndPreparesTheCompleteRevisionOnePlan(t *testing.T) {
 	request := composedInstallRequest(t)
-	cloudflareAPI := composedCloudflareAPI{}
-	cloudflareModule := newCloudflareTestModule(cloudflareAPI, composedClock{})
 	networkModule := networkpolicy.New(composedNetworkObserver{})
 	built, err := buildInstallWith(t.Context(), request, buildDependencies{
 		stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
 			return request.Candidate.Staged, nil
 		},
-		network:    networkModule.Evaluate,
-		cloudflare: cloudflareModule.Plan,
-		random:     newInstallEntropyReader(request.Entropy),
-		inventory:  cloudflareAPI,
+		network: networkModule.Evaluate,
+		random:  newInstallEntropyReader(request.Entropy),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	summary := built.plan.Summary()
-	if summary.Revision != 1 || summary.InstallationStatus != softwarelifecycle.NotInstalled || summary.Result != softwarelifecycle.Managed || len(summary.Units) != 11 || len(summary.Profiles) != 6 || len(summary.SubscriptionRepresentations) != 7 || len(summary.Certificates) != 2 {
+	if summary.Revision != 1 || summary.InstallationStatus != softwarelifecycle.NotInstalled || summary.Result != softwarelifecycle.Managed || len(summary.Units) != 11 || len(summary.Profiles) != 6 || len(summary.SubscriptionRepresentations) != 7 || len(summary.Certificates) != 1 || len(summary.Cloudflare) != 1 {
 		t.Fatalf("incomplete composed install summary: %+v", summary)
+	}
+	if built.desired.Cloudflare != (state.CloudflareSettings{}) || built.desired.Certificates.DomainCertificateID != "" || built.desired.ConnectionProfiles.VLESSRealityVision.Lifecycle != state.ProfileEnabled || built.desired.ConnectionProfiles.VLESSXHTTP != (state.VLESSXHTTP{Lifecycle: state.ProfileNotSetUp}) || built.desired.ConnectionProfiles.AnyTLS != (state.AnyTLS{Lifecycle: state.ProfileNotSetUp}) {
+		t.Fatalf("revision 1 contains deferred provider or profile facts: %+v", built.desired)
+	}
+	var contributionOrder []string
+	for _, contribution := range built.contributions {
+		contributionOrder = append(contributionOrder, contribution.SoftwareLifecycleInstallContribution().Name)
+	}
+	if got, want := strings.Join(contributionOrder, ","), "Network Policy,Connection Profiles,Subscription Publication,Certificate Lifecycle"; got != want {
+		t.Fatalf("install contribution order = %s, want %s", got, want)
 	}
 	prepared, err := built.prepareState(state.New(absentInstallState{}))
 	if err != nil || prepared == nil {
 		t.Fatalf("prepareState() = (%+v, %v)", prepared, err)
 	}
 	rendered := fmt.Sprintf("%+v %+v %+v", built.plan, built.wiring, prepared)
-	for _, marker := range []string{request.CloudflareToken, hex.EncodeToString(request.Entropy), "COMPOSED-INSTALL-SECRET-MARKER"} {
+	for _, marker := range []string{hex.EncodeToString(request.Entropy), "COMPOSED-INSTALL-SECRET-MARKER"} {
 		if strings.Contains(rendered, marker) {
 			t.Fatalf("composed installation evidence exposed protected marker %q", marker)
 		}
@@ -86,13 +92,12 @@ func TestInstallationInterfaceOwnsRootRuntimeTransactionOutcomes(t *testing.T) {
 			var launchErr error
 			var transaction systemchanges.ApplyResult
 			module := newTestInstallation(t, composedNetworkObserver{}, func(ctx context.Context, request softwareubuntu.InstallHandoffRequest, _ <-chan struct{}) (softwareubuntu.InstallApplyOutcome, error) {
-				api := runtimeCloudflareAPI{}
 				built, err := buildInstallWith(ctx, request, buildDependencies{
 					stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
 						return request.Candidate.Staged, nil
 					},
-					network: networkpolicy.New(composedNetworkObserver{}).Evaluate, cloudflare: newCloudflareTestModule(api, composedClock{}).Plan,
-					random: newInstallEntropyReader(request.Entropy), cloudflareAPI: api, inventory: api, sshProof: composedSSHProof(t),
+					network: networkpolicy.New(composedNetworkObserver{}).Evaluate,
+					random:  newInstallEntropyReader(request.Entropy), sshProof: composedSSHProof(t),
 				})
 				if err != nil {
 					launchErr = err
@@ -108,12 +113,7 @@ func TestInstallationInterfaceOwnsRootRuntimeTransactionOutcomes(t *testing.T) {
 					launchErr = err
 					return 0, err
 				}
-				cloudflareExecutor, err := built.cloudflare.Executor(api)
-				if err != nil {
-					launchErr = err
-					return 0, err
-				}
-				adapter = &runtimeArtifactTransactionAdapter{cloudflare: &cloudflareExecutor, failPost: test.failPost, failReverse: test.failReverse, observation: systemchanges.Observation{Status: systemchanges.NotInstalled, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, VolatileSHA256: volatile, FilesystemBytes: 20 << 30, AvailableBytes: 5 << 30, WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}}
+				adapter = &runtimeArtifactTransactionAdapter{failPost: test.failPost, failReverse: test.failReverse, observation: systemchanges.Observation{Status: systemchanges.NotInstalled, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, VolatileSHA256: volatile, FilesystemBytes: 20 << 30, AvailableBytes: 5 << 30, WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}}
 				result := built.plan.Apply(ctx, softwarelifecycle.InstallApplyRequest{Approval: rootRuntimeInstallApproval{recheck: recheck}, PreparedState: prepared, SystemChanges: systemchanges.New(adapter)})
 				transaction = result
 				switch result.Outcome {
@@ -144,7 +144,7 @@ func TestInstallationInterfaceOwnsRootRuntimeTransactionOutcomes(t *testing.T) {
 						t.Fatalf("Installation outcome = %+v, adapter=%t, reversed=%d, executed=%v, launch error=%v, transaction=%+v", operation, adapter != nil, reversed, executed, launchErr, transaction)
 					}
 					if test.want == Completed {
-						for _, owner := range []systemchanges.Module{systemchanges.SoftwareModule, systemchanges.NetworkPolicyModule, systemchanges.ConnectionProfilesModule, systemchanges.CloudflareModule, systemchanges.CertificateModule, systemchanges.SubscriptionModule} {
+						for _, owner := range []systemchanges.Module{systemchanges.SoftwareModule, systemchanges.NetworkPolicyModule, systemchanges.ConnectionProfilesModule, systemchanges.CertificateModule, systemchanges.SubscriptionModule} {
 							if !adapter.checked[owner][systemchanges.PrePublication] || !adapter.checked[owner][systemchanges.PostPublication] {
 								t.Fatalf("Managed omitted Required %s gates: %+v", owner, adapter.checked)
 							}
@@ -238,8 +238,6 @@ func (*runtimeArtifactTransactionAdapter) Record(systemchanges.ExecutionLease, s
 func (adapter *runtimeArtifactTransactionAdapter) Execute(_ systemchanges.ExecutionLease, _ string, number int, step systemchanges.Step, _ time.Duration, _ *systemchanges.Cancellation) (systemchanges.StepEvidence, error) {
 	adapter.executed = append(adapter.executed, fmt.Sprintf("%d:%s:%s", number, step.Owner(), step.Forward()))
 	adapter.artifacts["active/xray.json"] = append([]byte(nil), adapter.artifacts["prepared/xray.json"]...)
-	adapter.artifacts["active/sing-box.json"] = append([]byte(nil), adapter.artifacts["prepared/sing-box.json"]...)
-	adapter.artifacts["active/cloudflared.json"] = append([]byte(nil), adapter.artifacts["prepared/cloudflared.json"]...)
 	adapter.artifacts["active/subscription.json"] = append([]byte(nil), adapter.artifacts["prepared/subscription.json"]...)
 	if change, ok := step.CloudflareChange(); ok && adapter.cloudflare != nil {
 		resolved := ""
@@ -286,7 +284,7 @@ func (adapter *runtimeArtifactTransactionAdapter) Check(_ systemchanges.Executio
 		adapter.checked[check.Owner][phase] = true
 	}
 	if adapter.failPost && phase == systemchanges.PostPublication {
-		adapter.artifacts["active/cloudflared.json"] = []byte(`{"routes":[]}`)
+		adapter.artifacts["active/subscription.json"] = []byte(`{"profiles":[]}`)
 	}
 	var manifests struct {
 		Xray         *state.ServiceManifest `json:"xray"`
@@ -294,15 +292,15 @@ func (adapter *runtimeArtifactTransactionAdapter) Check(_ systemchanges.Executio
 		Cloudflared  *state.ServiceManifest `json:"cloudflared"`
 		Subscription *state.ServiceManifest `json:"subscription"`
 	}
-	if err := json.Unmarshal(adapter.artifacts["prepared/manifests.json"], &manifests); err != nil || manifests.Xray == nil || manifests.SingBox == nil || manifests.Cloudflared == nil || manifests.Subscription == nil {
+	if err := json.Unmarshal(adapter.artifacts["prepared/manifests.json"], &manifests); err != nil || manifests.Xray == nil || manifests.SingBox != nil || manifests.Cloudflared != nil || manifests.Subscription == nil {
 		return systemchanges.Unknown, err
 	}
-	for _, manifest := range []*state.ServiceManifest{manifests.Xray, manifests.SingBox, manifests.Cloudflared, manifests.Subscription} {
+	for _, manifest := range []*state.ServiceManifest{manifests.Xray, manifests.Subscription} {
 		if manifest.Owner != "root" || manifest.Group != "root" || manifest.DirectoryMode != 0o755 || manifest.FileMode != 0o644 {
 			return systemchanges.Failed, nil
 		}
 	}
-	for name, expected := range map[string]string{"active/xray.json": manifests.Xray.SHA256, "active/sing-box.json": manifests.SingBox.SHA256, "active/cloudflared.json": manifests.Cloudflared.SHA256, "active/subscription.json": manifests.Subscription.SHA256} {
+	for name, expected := range map[string]string{"active/xray.json": manifests.Xray.SHA256, "active/subscription.json": manifests.Subscription.SHA256} {
 		digest := sha256.Sum256(adapter.artifacts[name])
 		if hex.EncodeToString(digest[:]) != expected {
 			return systemchanges.Failed, nil
@@ -329,15 +327,12 @@ func (*runtimeArtifactTransactionAdapter) Cleanup(systemchanges.ExecutionLease, 
 
 func TestDestructiveReclamationCompositionBindsAllOwningModulesToOneChangeSet(t *testing.T) {
 	request := composedInstallRequest(t)
-	cloudflareAPI := composedCloudflareAPI{}
 	built, err := buildInstallWith(t.Context(), request, buildDependencies{
 		stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
 			return request.Candidate.Staged, nil
 		},
-		network:    networkpolicy.New(composedNetworkObserver{}).Evaluate,
-		cloudflare: newCloudflareTestModule(cloudflareAPI, composedClock{}).Plan,
-		random:     newInstallEntropyReader(request.Entropy),
-		inventory:  cloudflareAPI,
+		network: networkpolicy.New(composedNetworkObserver{}).Evaluate,
+		random:  newInstallEntropyReader(request.Entropy),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -345,7 +340,6 @@ func TestDestructiveReclamationCompositionBindsAllOwningModulesToOneChangeSet(t 
 	want := map[string]bool{
 		string(softwarelifecycle.NetworkInstallContribution):      true,
 		string(softwarelifecycle.ProfilesInstallContribution):     true,
-		string(softwarelifecycle.CloudflareInstallContribution):   true,
 		"Certificate Lifecycle":                                   true,
 		string(softwarelifecycle.SubscriptionInstallContribution): true,
 	}
@@ -365,7 +359,6 @@ func TestDestructiveReclamationCompositionBindsAllOwningModulesToOneChangeSet(t 
 func TestComposedInstallRoutesAReclaimableVPSToReviewBeforeProviderPlanning(t *testing.T) {
 	request := composedInstallRequest(t)
 	plan := &networkpolicy.ReclamationPlan{Digest: strings.Repeat("f", 64), Targets: []string{"executable /usr/local/bin/xray"}}
-	providerCalled := false
 	_, err := buildInstallWith(t.Context(), request, buildDependencies{
 		stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
 			return request.Candidate.Staged, nil
@@ -373,27 +366,20 @@ func TestComposedInstallRoutesAReclaimableVPSToReviewBeforeProviderPlanning(t *t
 		network: func(networkpolicy.Request) networkpolicy.Result {
 			return networkpolicy.Result{InstallationClass: networkpolicy.ReclaimableVPS, Reclamation: plan}
 		},
-		cloudflare: func(context.Context, cloudflaretunnel.PlanRequest) cloudflaretunnel.PlanResult {
-			providerCalled = true
-			return cloudflaretunnel.PlanResult{}
-		},
-		random:    newInstallEntropyReader(request.Entropy),
-		inventory: composedCloudflareAPI{},
+		random: newInstallEntropyReader(request.Entropy),
 	})
 	var review *reclamationReviewError
-	if !errors.As(err, &review) || review.plan != plan || providerCalled {
-		t.Fatalf("reclaimable routing = error %v review %+v provider-called %t", err, review, providerCalled)
+	if !errors.As(err, &review) || review.plan != plan {
+		t.Fatalf("reclaimable routing = error %v review %+v", err, review)
 	}
 }
 
 func TestComposedInstallCarriesTheExactReviewedStandaloneTargetIntoOneInstallPlan(t *testing.T) {
 	request := composedInstallRequest(t)
-	cloudflareAPI := composedCloudflareAPI{}
-	cloudflareModule := newCloudflareTestModule(cloudflareAPI, composedClock{})
 	networkModule := networkpolicy.New(composedReclamationObserver{})
 	dependencies := buildDependencies{stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
 		return request.Candidate.Staged, nil
-	}, network: networkModule.Evaluate, cloudflare: cloudflareModule.Plan, random: newInstallEntropyReader(request.Entropy), inventory: cloudflareAPI}
+	}, network: networkModule.Evaluate, random: newInstallEntropyReader(request.Entropy)}
 	_, err := buildInstallWith(t.Context(), request, dependencies)
 	var review *reclamationReviewError
 	if !errors.As(err, &review) || review.plan == nil {
@@ -416,12 +402,10 @@ func TestComposedInstallCarriesTheExactReviewedStandaloneTargetIntoOneInstallPla
 
 func TestDestructiveReclamationCompositionKeepsTheExactFactsInTheConfirmedPlan(t *testing.T) {
 	request := composedInstallRequest(t)
-	cloudflareAPI := composedCloudflareAPI{}
-	cloudflareModule := newCloudflareTestModule(cloudflareAPI, composedClock{})
 	networkModule := networkpolicy.New(composedReclamationObserver{})
 	dependencies := buildDependencies{stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
 		return request.Candidate.Staged, nil
-	}, network: networkModule.Evaluate, cloudflare: cloudflareModule.Plan, random: newInstallEntropyReader(request.Entropy), inventory: cloudflareAPI}
+	}, network: networkModule.Evaluate, random: newInstallEntropyReader(request.Entropy)}
 	_, err := buildInstallWith(t.Context(), request, dependencies)
 	var review *reclamationReviewError
 	if !errors.As(err, &review) || review.plan == nil {
@@ -435,6 +419,9 @@ func TestDestructiveReclamationCompositionKeepsTheExactFactsInTheConfirmedPlan(t
 	confirmed := finalPlan(built, request, review.plan)
 	if confirmed == nil || !slices.Contains(confirmed.Effects, "executable /opt/standalone/proxy sha256 "+strings.Repeat("9", 64)) || !slices.Contains(confirmed.Effects, "identity proxy kind service user exclusive true") {
 		t.Fatalf("confirmed reclamation Plan lost exact effects: %+v", confirmed)
+	}
+	if !slices.Contains(confirmed.VerifiedExternalInputs, "Direct SSH Preservation Proof") || !slices.Contains(confirmed.RequiredChecks, "Post-publication VLESS REALITY Vision, sbxr-ip, Subscription HTTPS, nftables, temporary TCP 80 cleanup, unit, timer, and permission agreement") {
+		t.Fatalf("confirmed reclamation Plan lost installation safety proof: %+v", confirmed)
 	}
 	for _, effect := range installPlanEffects() {
 		if !slices.Contains(confirmed.Effects, effect) {
@@ -460,14 +447,14 @@ type composedPlanAPI interface {
 	cloudflaretunnel.MutationPlanner
 }
 
-func composedBuiltInstall(t *testing.T, request softwareubuntu.InstallHandoffRequest, observer networkpolicy.Adapter, api composedPlanAPI) *builtInstall {
+func composedBuiltInstall(t *testing.T, request softwareubuntu.InstallHandoffRequest, observer networkpolicy.Adapter, _ composedPlanAPI) *builtInstall {
 	t.Helper()
 	built, err := buildInstallWith(t.Context(), request, buildDependencies{
 		stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
 			return request.Candidate.Staged, nil
 		},
-		network: networkpolicy.New(observer).Evaluate, cloudflare: newCloudflareTestModule(api, composedClock{}).Plan,
-		random: newInstallEntropyReader(request.Entropy), inventory: api,
+		network: networkpolicy.New(observer).Evaluate,
+		random:  newInstallEntropyReader(request.Entropy),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -496,7 +483,6 @@ func TestDestructiveReclamationCompositionCarriesEveryApprovedEffectThroughPrivi
 		}},
 		{name: "Docker and preserved data", observer: composedDockerObserver{}, api: composedCloudflareAPI{}, verify: verifyDockerAuthority},
 		{name: "firewall and SSH", observer: composedFirewallObserver{}, api: composedCloudflareAPI{}, verify: verifyFirewallAuthority},
-		{name: "Cloudflare DNS routes and Tunnel", observer: composedNetworkObserver{}, api: composedConflictAPI{}, verify: verifyCloudflareAuthority},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -521,13 +507,13 @@ func TestDestructiveReclamationCompositionCarriesEveryApprovedEffectThroughPrivi
 	}
 }
 
-func composedInstallDependencies(request softwareubuntu.InstallHandoffRequest, observer networkpolicy.Adapter, api composedPlanAPI) buildDependencies {
+func composedInstallDependencies(request softwareubuntu.InstallHandoffRequest, observer networkpolicy.Adapter, _ composedPlanAPI) buildDependencies {
 	return buildDependencies{
 		stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
 			return request.Candidate.Staged, nil
 		},
-		network: networkpolicy.New(observer).Evaluate, cloudflare: newCloudflareTestModule(api, composedClock{}).Plan,
-		random: newInstallEntropyReader(request.Entropy), inventory: api,
+		network: networkpolicy.New(observer).Evaluate,
+		random:  newInstallEntropyReader(request.Entropy),
 	}
 }
 
@@ -593,12 +579,10 @@ func verifyCloudflareAuthority(t *testing.T, value any) {
 
 func TestComposedInstallPersistsOnlyTheReviewedHeldPackagePolicy(t *testing.T) {
 	request := composedInstallRequest(t)
-	cloudflareAPI := composedCloudflareAPI{}
-	cloudflareModule := newCloudflareTestModule(cloudflareAPI, composedClock{})
 	networkModule := networkpolicy.New(composedHeldPackageObserver{})
 	dependencies := buildDependencies{stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
 		return request.Candidate.Staged, nil
-	}, network: networkModule.Evaluate, cloudflare: cloudflareModule.Plan, random: newInstallEntropyReader(request.Entropy), inventory: cloudflareAPI}
+	}, network: networkModule.Evaluate, random: newInstallEntropyReader(request.Entropy)}
 	_, err := buildInstallWith(t.Context(), request, dependencies)
 	var review *reclamationReviewError
 	if !errors.As(err, &review) || review.plan == nil {
@@ -614,32 +598,16 @@ func TestComposedInstallPersistsOnlyTheReviewedHeldPackagePolicy(t *testing.T) {
 
 func TestComposedInstallRefusesAnIncompleteReclaimableInventory(t *testing.T) {
 	request := composedInstallRequest(t)
-	providerCalled := false
 	module := networkpolicy.New(incompleteReclamationObserver{})
 	_, err := buildInstallWith(t.Context(), request, buildDependencies{
 		stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
 			return request.Candidate.Staged, nil
 		},
 		network: module.Evaluate,
-		cloudflare: func(context.Context, cloudflaretunnel.PlanRequest) cloudflaretunnel.PlanResult {
-			providerCalled = true
-			return cloudflaretunnel.PlanResult{}
-		},
-		random: newInstallEntropyReader(request.Entropy), inventory: composedCloudflareAPI{},
+		random:  newInstallEntropyReader(request.Entropy),
 	})
-	if err == nil || providerCalled {
-		t.Fatalf("incomplete reclamation inventory continued: error %v provider-called %t", err, providerCalled)
-	}
-}
-
-func TestReclamationInventoryBindsExactCloudflareConflictIdentifiers(t *testing.T) {
-	token, err := cloudflaretunnel.NewManagementToken("sbxr_COMPOSED-INSTALL-SECRET-MARKER-000000000")
-	if err != nil {
-		t.Fatal(err)
-	}
-	facts, _, err := observeReclamationCloudflare(t.Context(), conflictInventoryAPI{}, strings.Repeat("a", 32), strings.Repeat("b", 32), token, "sbxr-main", []string{"xhttp.example.com", "ws.example.com"})
-	if err != nil || len(facts.Conflicts) != 4 {
-		t.Fatalf("Cloudflare reclamation facts = %+v error %v", facts, err)
+	if err == nil {
+		t.Fatalf("incomplete reclamation inventory continued: error %v", err)
 	}
 }
 
@@ -649,110 +617,49 @@ func TestInstallationInterfaceValidatesDependenciesAndTypedDraft(t *testing.T) {
 	}
 	module := newTestInstallation(t, composedNetworkObserver{}, nil)
 	result := module.Review(t.Context(), Draft{})
-	if result.Invalid == nil || result.Invalid.Field != "domain" || result.Plan != nil || result.Reclamation != nil {
+	if result.Invalid == nil || result.Invalid.Field != "owner-email" || result.Plan != nil || result.Reclamation != nil {
 		t.Fatalf("invalid Draft = %+v", result)
 	}
 }
 
-func TestInstallationReviewSuppliesDomainHelpAndRejectsItsExample(t *testing.T) {
+func TestInstallationReviewSuppliesACMEHelpAndRequiresAgreement(t *testing.T) {
 	module := newTestInstallation(t, composedNetworkObserver{}, nil)
 	review := module.Review(t.Context(), Draft{})
 	want := FieldHelp{
-		Purpose:        "Choose SBXR's public domain.",
-		Instructions:   []string{"Enter your Cloudflare domain."},
-		AcceptedFormat: "Lowercase DNS name only.",
-		CommonMistakes: []string{"No URL, port, or final dot."},
+		Purpose:        "Register and recover the ACME account.",
+		Instructions:   []string{"Enter one address you monitor."},
+		AcceptedFormat: "local-part@domain; no spaces.",
+		CommonMistakes: []string{"No name or multiple addresses."},
 		Recovery:       "Correct it; prior values remain.",
-		Example:        "vpn.example",
-		URL:            "https://developers.cloudflare.com/fundamentals/manage-domains/add-site/",
-		Sensitivity:    PublicInformation,
+		Example:        "owner@sbxr.example",
+		URL:            "https://eff-certbot.readthedocs.io/en/stable/using.html#certbot-command-line-options",
+		Sensitivity:    PersonalInformation,
 	}
 	if review.Invalid == nil || !reflect.DeepEqual(review.Invalid.Help, want) {
-		t.Fatalf("Domain Help = %+v", review.Invalid)
+		t.Fatalf("Owner email Help = %+v", review.Invalid)
 	}
-	review = module.Review(t.Context(), Draft{SubmittedField: "domain", SubmittedValue: want.Example})
-	if review.Invalid == nil || review.Invalid.Field != "domain" || review.Plan != nil || !strings.Contains(review.Invalid.Problem, "tutorial") {
-		t.Fatalf("tutorial Domain Review = %+v", review)
+	review = module.Review(t.Context(), Draft{SubmittedField: "owner-email", SubmittedValue: "owner@example.com"})
+	if review.Invalid == nil || review.Invalid.Field != "subscriber-agreement" || review.Plan != nil {
+		t.Fatalf("ACME agreement Review = %+v", review)
+	}
+	review = module.Review(t.Context(), Draft{SubmittedField: "subscriber-agreement", SubmittedValue: "yes"})
+	if review.Invalid == nil || review.Invalid.Field != "subscriber-agreement" || review.Plan != nil {
+		t.Fatalf("unreviewed ACME agreement = %+v", review)
 	}
 }
 
 func TestInstallationReviewGuidesEveryFirstInstallationFieldAndRejectsTutorialValues(t *testing.T) {
 	module := newTestInstallation(t, composedNetworkObserver{}, nil)
 	complete := composedDraft(t)
-	type expectedHelp struct {
-		purpose, malformed, example, url string
-		sensitivity                      FieldSensitivity
-	}
-	want := map[string]expectedHelp{
-		"domain":             {"public domain", "https://bad", "vpn.example", "https://developers.cloudflare.com/fundamentals/manage-domains/add-site/", PublicInformation},
-		"owner-email":        {"ACME account", "owner", "owner@sbxr.example", "https://eff-certbot.readthedocs.io/en/stable/using.html#certbot-command-line-options", PersonalInformation},
-		"public-ipv4":        {"public IPv4", "999.1.1.1", "192.0.2.10", "https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml", PublicInformation},
-		"reality-port":       {"REALITY", "not-a-port", "10444", "https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml", PublicInformation},
-		"hysteria2-port":     {"Hysteria2", "not-a-port", "10445", "https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml", PublicInformation},
-		"tuic-port":          {"TUIC", "not-a-port", "10446", "https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml", PublicInformation},
-		"anytls-port":        {"AnyTLS", "not-a-port", "10447", "https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml", PublicInformation},
-		"subscription-port":  {"Subscription HTTPS", "not-a-port", "10448", "https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml", PublicInformation},
-		"cloudflare-account": {"Cloudflare account", "not-an-id", "11111111111111111111111111111111", "https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/", PublicInformation},
-		"cloudflare-zone":    {"Cloudflare domain", "not-an-id", "22222222222222222222222222222222", "https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/", PublicInformation},
-		"cloudflare-token":   {"Cloudflare work", "user-token", "", "https://developers.cloudflare.com/fundamentals/api/get-started/create-token/", InfrastructureSecret},
-		"reality-target":     {"REALITY Vision", "https://bad", "target.example", "https://xtls.github.io/en/config/transport.html#realityobject", PublicInformation},
-	}
-	placeholder := map[string]string{
-		"domain":           "placeholder",
-		"owner-email":      "owner@your-domain",
-		"cloudflare-token": "sbxr_placeholder________________________________",
-		"reality-target":   "your-hostname",
-	}
-	steps := []struct{ field, valid string }{
-		{"domain", complete.Installation.Domain},
-		{"owner-email", complete.Installation.OwnerEmail},
-		{"public-ipv4", complete.Installation.PublicIPv4},
-		{"reality-port", "443"},
-		{"hysteria2-port", "443"},
-		{"tuic-port", "8443"},
-		{"anytls-port", "9443"},
-		{"subscription-port", "10443"},
-		{"cloudflare-account", complete.CloudflareAccountID},
-		{"cloudflare-zone", complete.CloudflareZoneID},
-		{"cloudflare-token", complete.CloudflareToken},
-		{"reality-target", complete.RealityServerName},
-	}
+	steps := []struct{ field, valid string }{{"owner-email", complete.Installation.OwnerEmail}, {"subscriber-agreement", "accepted"}, {"reality-target", complete.RealityServerName}}
 	for _, step := range steps {
 		review := module.Review(t.Context(), Draft{})
 		if review.Invalid == nil || review.Invalid.Field != step.field {
 			t.Fatalf("%s initial Review = %+v", step.field, review)
 		}
-		expected, guided := want[step.field]
-		if guided {
-			help := review.Invalid.Help
-			if !strings.Contains(help.Purpose, expected.purpose) || len(help.Instructions) == 0 || help.AcceptedFormat == "" || len(help.CommonMistakes) == 0 || help.Recovery == "" || help.Example != expected.example || help.URL != expected.url || help.Sensitivity != expected.sensitivity {
-				t.Fatalf("%s Help = %+v", step.field, help)
-			}
-			for _, submitted := range []string{expected.malformed, expected.example} {
-				if submitted == "" {
-					continue
-				}
-				rejected := module.Review(t.Context(), Draft{SubmittedField: step.field, SubmittedValue: submitted})
-				if rejected.Invalid == nil || rejected.Invalid.Field != step.field || rejected.Plan != nil || rejected.Invalid.Help.Recovery == "" {
-					t.Fatalf("%s accepted %q or lost field Help: %+v", step.field, submitted, rejected)
-				}
-				if submitted == expected.example && !strings.Contains(rejected.Invalid.Problem, "tutorial") {
-					t.Fatalf("%s tutorial rejection = %+v", step.field, rejected.Invalid)
-				}
-			}
-			if submitted := placeholder[step.field]; submitted != "" {
-				rejected := module.Review(t.Context(), Draft{SubmittedField: step.field, SubmittedValue: submitted})
-				if rejected.Invalid == nil || rejected.Invalid.Field != step.field || rejected.Plan != nil {
-					t.Fatalf("%s placeholder rejection = %+v", step.field, rejected)
-				}
-			}
-			if step.field == "hysteria2-port" {
-				if !slices.ContainsFunc(review.Invalid.Facts, func(fact ReviewFact) bool {
-					return fact.Label == "Primary subscription address" && fact.Value == complete.Installation.PublicIPv4
-				}) {
-					t.Fatalf("derived Primary subscription address is not a read-only fact: %+v", review.Invalid.Facts)
-				}
-			}
+		help := review.Invalid.Help
+		if help.Purpose == "" || len(help.Instructions) == 0 || help.AcceptedFormat == "" || len(help.CommonMistakes) == 0 || help.Recovery == "" || help.URL == "" {
+			t.Fatalf("%s Help = %+v", step.field, help)
 		}
 		review = module.Review(t.Context(), Draft{SubmittedField: step.field, SubmittedValue: step.valid})
 		if step.field == "reality-target" && review.Plan == nil {
@@ -768,13 +675,13 @@ func TestInstallationReviewGuidesEveryFirstInstallationFieldAndRejectsTutorialVa
 
 func TestInstallationInterfaceOwnsPartialDraftUntilDiscard(t *testing.T) {
 	module := newTestInstallation(t, composedNetworkObserver{}, nil)
-	if result := module.Review(t.Context(), Draft{Tag: "v1.0.0"}); result.Invalid == nil || result.Invalid.Field != "domain" {
+	if result := module.Review(t.Context(), Draft{Tag: "v1.0.0"}); result.Invalid == nil || result.Invalid.Field != "owner-email" {
 		t.Fatalf("partial draft = %+v", result)
 	}
-	if result := module.Review(t.Context(), Draft{}); result.Invalid == nil || result.Invalid.Field != "domain" {
+	if result := module.Review(t.Context(), Draft{}); result.Invalid == nil || result.Invalid.Field != "owner-email" {
 		t.Fatalf("active process forgot partial draft = %+v", result)
 	}
-	if result := module.Review(t.Context(), DiscardDraft()); result.Invalid == nil || result.Invalid.Field != "domain" {
+	if result := module.Review(t.Context(), DiscardDraft()); result.Invalid == nil || result.Invalid.Field != "owner-email" {
 		t.Fatalf("discard retained partial draft = %+v", result)
 	}
 }
@@ -787,17 +694,8 @@ func TestInstallationReviewOwnsFirstDraftDefaultsAndProgression(t *testing.T) {
 		update   Draft
 		want     string
 	}{
-		{"domain", Draft{SubmittedField: "domain", Installation: softwarelifecycle.InstallationDraft{Domain: complete.Installation.Domain}}, ""},
 		{"owner-email", Draft{SubmittedField: "owner-email", Installation: softwarelifecycle.InstallationDraft{OwnerEmail: complete.Installation.OwnerEmail}}, ""},
-		{"public-ipv4", Draft{SubmittedField: "public-ipv4", Installation: softwarelifecycle.InstallationDraft{PublicIPv4: complete.Installation.PublicIPv4}}, complete.Installation.PublicIPv4},
-		{"reality-port", Draft{SubmittedField: "reality-port", Installation: softwarelifecycle.InstallationDraft{RealityPort: 443}}, "443"},
-		{"hysteria2-port", Draft{SubmittedField: "hysteria2-port", Installation: softwarelifecycle.InstallationDraft{Hysteria2Port: 443}}, "443"},
-		{"tuic-port", Draft{SubmittedField: "tuic-port", Installation: softwarelifecycle.InstallationDraft{TUICPort: 8443}}, "8443"},
-		{"anytls-port", Draft{SubmittedField: "anytls-port", Installation: softwarelifecycle.InstallationDraft{AnyTLSPort: 9443}}, "9443"},
-		{"subscription-port", Draft{SubmittedField: "subscription-port", Installation: softwarelifecycle.InstallationDraft{SubscriptionPort: 10443}}, "10443"},
-		{"cloudflare-account", Draft{SubmittedField: "cloudflare-account", CloudflareAccountID: complete.CloudflareAccountID}, ""},
-		{"cloudflare-zone", Draft{SubmittedField: "cloudflare-zone", CloudflareZoneID: complete.CloudflareZoneID}, ""},
-		{"cloudflare-token", Draft{SubmittedField: "cloudflare-token", CloudflareToken: complete.CloudflareToken}, ""},
+		{"subscriber-agreement", Draft{SubmittedField: "subscriber-agreement", SubmittedValue: "accepted"}, ""},
 		{"reality-target", Draft{SubmittedField: "reality-target", SubmittedValue: complete.RealityServerName}, ""},
 	}
 	for _, field := range fields {
@@ -807,9 +705,6 @@ func TestInstallationReviewOwnsFirstDraftDefaultsAndProgression(t *testing.T) {
 		}
 		if len(review.Invalid.Facts) < 2 || review.Invalid.Facts[0] != (ReviewFact{Label: "Running release tag", Value: complete.Tag}) || review.Invalid.Facts[1] != (ReviewFact{Label: "Active SSH port", Value: "22"}) {
 			t.Fatalf("read-only Installation facts = %+v", review.Invalid.Facts)
-		}
-		if field.identity == "public-ipv4" && !review.Invalid.Detected {
-			t.Fatalf("proven Public IPv4 was not marked detected: %+v", review.Invalid)
 		}
 		review = module.Review(t.Context(), field.update)
 		if field.identity == "reality-target" && review.Plan == nil {
@@ -822,26 +717,14 @@ func TestInstallationReviewGuidesUnprovedAndAmbiguousNetworkFacts(t *testing.T) 
 	for _, test := range []struct {
 		name      string
 		preflight networkpolicy.InstallationPreflightResult
-		wantValue string
 	}{
 		{name: "zero public IPv4 candidates", preflight: networkpolicy.InstallationPreflightResult{ActiveSSHPort: 2222}},
 		{name: "multiple public IPv4 candidates", preflight: networkpolicy.InstallationPreflightResult{ActiveSSHPort: 2222, UsablePublicIPv4: []string{"1.1.1.1", "9.9.9.9"}}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			module := newTestInstallationWithPreflight(t, composedNetworkObserver{}, test.preflight)
-			if review := module.Review(t.Context(), Draft{}); review.Invalid == nil || review.Invalid.Field != "domain" || len(review.Invalid.Facts) < 2 || review.Invalid.Facts[1] != (ReviewFact{Label: "Active SSH port", Value: "2222"}) {
+			if review := module.Review(t.Context(), Draft{}); review.Correction == nil || review.Correction.Evidence != "INSTALL-PUBLIC-ADDRESS-AMBIGUOUS" {
 				t.Fatalf("initial Review = %+v", review)
-			}
-			if review := module.Review(t.Context(), Draft{SubmittedField: "domain", SubmittedValue: "example.com"}); review.Invalid == nil || review.Invalid.Field != "owner-email" {
-				t.Fatalf("Domain Review = %+v", review)
-			}
-			review := module.Review(t.Context(), Draft{SubmittedField: "owner-email", SubmittedValue: "owner@example.com"})
-			if review.Invalid == nil || review.Invalid.Field != "public-ipv4" || review.Invalid.Value != test.wantValue || review.Invalid.Detected || len(review.Invalid.Facts) < 3 || review.Invalid.Facts[2].Label != "Public IPv4 guidance" {
-				t.Fatalf("guided Public IPv4 Review = %+v", review)
-			}
-			module.Review(t.Context(), Draft{SubmittedField: "public-ipv4", SubmittedValue: "8.8.8.8"})
-			if module.draft.Installation.PublicIPv4 != "8.8.8.8" || module.draft.Installation.PrimaryAddress != "8.8.8.8" || module.draft.Installation.SSHPort != 2222 {
-				t.Fatalf("derived Installation network facts = %+v", module.draft.Installation)
 			}
 		})
 	}
@@ -862,17 +745,8 @@ func TestInstallationReviewDerivesAndImmediatelyChecksOneRealityHostname(t *test
 	module := newTestInstallation(t, composedNetworkObserver{}, nil)
 	complete := composedDraft(t)
 	for _, input := range []Draft{
-		{SubmittedField: "domain", SubmittedValue: complete.Installation.Domain},
 		{SubmittedField: "owner-email", SubmittedValue: complete.Installation.OwnerEmail},
-		{SubmittedField: "public-ipv4", SubmittedValue: complete.Installation.PublicIPv4},
-		{SubmittedField: "reality-port", SubmittedValue: "443"},
-		{SubmittedField: "hysteria2-port", SubmittedValue: "443"},
-		{SubmittedField: "tuic-port", SubmittedValue: "8443"},
-		{SubmittedField: "anytls-port", SubmittedValue: "9443"},
-		{SubmittedField: "subscription-port", SubmittedValue: "10443"},
-		{SubmittedField: "cloudflare-account", SubmittedValue: complete.CloudflareAccountID},
-		{SubmittedField: "cloudflare-zone", SubmittedValue: complete.CloudflareZoneID},
-		{SubmittedField: "cloudflare-token", SubmittedValue: complete.CloudflareToken},
+		{SubmittedField: "subscriber-agreement", SubmittedValue: "accepted"},
 	} {
 		module.Review(t.Context(), input)
 	}
@@ -893,7 +767,7 @@ func TestInstallationReviewDerivesAndImmediatelyChecksOneRealityHostname(t *test
 			return connectionprofiles.RealityTargetReview{Target: reviewed, Health: connectionprofiles.Health{Outcome: connectionprofiles.Failed, Code: test.code, Problem: "The REALITY target is unsafe", Found: test.found, Required: "one ordinary target", WhyStopped: "Connection Profiles fails closed", BlockerOwner: connectionprofiles.ExternalBlocker, BlockerAction: "Enter one ordinary hostname, then Check again."}}
 		}
 		review := module.Review(t.Context(), Draft{SubmittedField: "reality-target", SubmittedValue: "edge.example.net"})
-		if review.Invalid == nil || review.Invalid.Field != "reality-target" || review.Invalid.Value != "edge.example.net" || target.Address != "edge.example.net:443" || target.ServerName != "edge.example.net" || module.nextField != len(draftFields)-1 || module.draft.RealityTarget != "" || len(review.Invalid.Facts) < 4 || review.Invalid.Facts[len(review.Invalid.Facts)-2].Value != "Enter one ordinary hostname, then Check again." || !strings.Contains(review.Invalid.Facts[len(review.Invalid.Facts)-1].Value, test.code) {
+		if review.Invalid == nil || review.Invalid.Field != "reality-target" || review.Invalid.Value != "edge.example.net" || target.Address != "edge.example.net:443" || target.ServerName != "edge.example.net" || module.nextField != len(module.fields)-1 || module.draft.RealityTarget != "" || len(review.Invalid.Facts) < 4 || review.Invalid.Facts[len(review.Invalid.Facts)-2].Value != "Enter one ordinary hostname, then Check again." || !strings.Contains(review.Invalid.Facts[len(review.Invalid.Facts)-1].Value, test.code) {
 			t.Fatalf("%s REALITY target Review = %+v, target = %+v, draft = %+v", test.name, review, target, module.draft)
 		}
 	}
@@ -907,38 +781,102 @@ func TestInstallationReviewDerivesAndImmediatelyChecksOneRealityHostname(t *test
 	}
 }
 
-func TestInstallationReviewRejectsSpecialUseIPv4AndDerivesTheBatchPrimaryAddress(t *testing.T) {
-	module := newTestInstallationWithPreflight(t, composedNetworkObserver{}, networkpolicy.InstallationPreflightResult{ActiveSSHPort: 22})
-	module.Review(t.Context(), Draft{SubmittedField: "domain", SubmittedValue: "example.com"})
+func TestInstallationReviewAsksForPrimaryAddressOnlyWhenBothFamiliesQualify(t *testing.T) {
+	module := newTestInstallationWithPreflight(t, composedNetworkObserver{}, networkpolicy.InstallationPreflightResult{ActiveSSHPort: 22, UsablePublicIPv4: []string{"8.8.8.8"}, UsablePublicIPv6: []string{"2606:4700:4700::1111"}})
 	module.Review(t.Context(), Draft{SubmittedField: "owner-email", SubmittedValue: "owner@example.com"})
-	review := module.Review(t.Context(), Draft{SubmittedField: "public-ipv4", SubmittedValue: "10.0.0.1"})
-	if review.Invalid == nil || review.Invalid.Field != "public-ipv4" || module.draft.Installation.PrimaryAddress != "" {
-		t.Fatalf("special-use Public IPv4 Review = %+v, draft = %+v", review, module.draft.Installation)
+	module.Review(t.Context(), Draft{SubmittedField: "subscriber-agreement", SubmittedValue: "accepted"})
+	review := module.Review(t.Context(), Draft{SubmittedField: "primary-address", SubmittedValue: "10.0.0.1"})
+	if review.Invalid == nil || review.Invalid.Field != "primary-address" || module.draft.Installation.PrimaryAddress != "" {
+		t.Fatalf("special-use primary-address Review = %+v, draft = %+v", review, module.draft.Installation)
 	}
-
-	module = newTestInstallationWithPreflight(t, composedNetworkObserver{}, networkpolicy.InstallationPreflightResult{ActiveSSHPort: 22, UsablePublicIPv4: []string{"1.1.1.1"}})
-	review = module.Review(t.Context(), composedDraft(t))
-	if review.Plan == nil || module.draft.Installation.PublicIPv4 != "8.8.8.8" || module.draft.Installation.PrimaryAddress != "8.8.8.8" {
-		t.Fatalf("batch-derived Primary subscription address = %+v, draft = %+v", review, module.draft.Installation)
+	review = module.Review(t.Context(), Draft{SubmittedField: "primary-address", SubmittedValue: "2606:4700:4700::1111"})
+	if review.Invalid == nil || review.Invalid.Field != "reality-target" || module.draft.Installation.PrimaryAddress != "2606:4700:4700::1111" {
+		t.Fatalf("selected primary-address = %+v, draft = %+v", review, module.draft.Installation)
 	}
 }
 
 func TestInstallationReviewShowsEveryExplicitPortReplacementInThePlan(t *testing.T) {
-	module := newTestInstallationWithPreflight(t, replacementPortObserver{}, networkpolicy.InstallationPreflightResult{ActiveSSHPort: 2222, UsablePublicIPv4: []string{"8.8.8.8"}})
+	module := newTestInstallationWithPreflight(t, replacementPortObserver{}, networkpolicy.InstallationPreflightResult{ActiveSSHPort: 2222, UsablePublicIPv4: []string{"8.8.8.8"}, RealityPortReplacementRequired: true, SubscriptionReplacementRequired: true})
 	draft := composedDraft(t)
 	draft.Installation.SSHPort = 2222
 	draft.Installation.RealityPort = 1443
-	draft.Installation.Hysteria2Port = 2443
-	draft.Installation.TUICPort = 38443
-	draft.Installation.AnyTLSPort = 39443
 	draft.Installation.SubscriptionPort = 40443
 	review := module.Review(t.Context(), draft)
 	if review.Plan == nil {
 		t.Fatalf("replacement Review = %+v", review)
 	}
-	want := "Use SSH 2222/TCP, REALITY 1443/TCP, Hysteria2 2443/UDP, TUIC 38443/UDP, AnyTLS 39443/TCP, and Subscription HTTPS 40443/TCP"
+	want := "Use SSH 2222/TCP, VLESS REALITY Vision 1443/TCP, and Subscription HTTPS 40443/TCP"
 	if !slices.Contains(review.Plan.Effects, want) {
 		t.Fatalf("reviewed Plan omitted explicit replacements: %+v", review.Plan.Effects)
+	}
+}
+
+func TestInstallationReviewUsesSafeRecommendationAndAsksOnlyForRequiredPortReplacements(t *testing.T) {
+	module := newTestInstallationWithPreflight(t, replacementPortObserver{}, networkpolicy.InstallationPreflightResult{ActiveSSHPort: 2222, UsablePublicIPv4: []string{"8.8.8.8"}, RealityPortReplacementRequired: true, SubscriptionReplacementRequired: true})
+	module.dependencies.RecommendedRealityTarget = "www.microsoft.com"
+	for _, step := range []struct{ field, value, next string }{
+		{"owner-email", "owner@example.com", "subscriber-agreement"},
+		{"subscriber-agreement", "accepted", "reality-port"},
+		{"reality-port", "1443", "subscription-port"},
+		{"subscription-port", "40443", ""},
+	} {
+		review := module.Review(t.Context(), Draft{SubmittedField: step.field, SubmittedValue: step.value})
+		if step.next != "" && (review.Invalid == nil || review.Invalid.Field != step.next) || step.next == "" && review.Plan == nil {
+			t.Fatalf("%s Review = %+v", step.field, review)
+		}
+	}
+	if module.draft.RealityServerName != "www.microsoft.com" {
+		t.Fatalf("recommended REALITY target = %+v", module.draft)
+	}
+}
+
+func TestInstallationReviewReturnsAFullDraftFailureToTheActiveConditionalField(t *testing.T) {
+	module := newTestInstallationWithPreflight(t, replacementPortObserver{}, networkpolicy.InstallationPreflightResult{ActiveSSHPort: 2222, UsablePublicIPv4: []string{"8.8.8.8"}, RealityPortReplacementRequired: true})
+	module.dependencies.ReviewRealityTarget = func(_ context.Context, target connectionprofiles.RealityTarget) connectionprofiles.RealityTargetReview {
+		return connectionprofiles.RealityTargetReview{Target: target, Health: connectionprofiles.Health{Outcome: connectionprofiles.Failed}}
+	}
+	draft := composedDraft(t)
+	draft.Installation.SSHPort = 2222
+	draft.RealityTarget, draft.RealityServerName = "bad target:443", "bad target"
+	review := module.Review(t.Context(), draft)
+	if review.Invalid == nil || review.Invalid.Field != "reality-target" || module.nextField != 3 {
+		t.Fatalf("conditional full-draft correction = %+v, next field = %d", review, module.nextField)
+	}
+}
+
+func TestInstallationReviewAddsAnInvalidOmittedDefaultToTheCorrectionJourney(t *testing.T) {
+	module := newTestInstallationWithPreflight(t, composedNetworkObserver{}, networkpolicy.InstallationPreflightResult{ActiveSSHPort: 22, UsablePublicIPv4: []string{"8.8.8.8"}})
+	module.dependencies.RecommendedRealityTarget = "www.microsoft.com"
+	draft := composedDraft(t)
+	draft.RealityTarget, draft.RealityServerName = "bad target:443", "bad target"
+	review := module.Review(t.Context(), draft)
+	if review.Invalid == nil || review.Invalid.Field != "reality-target" || module.nextField != len(module.fields)-1 || module.fields[module.nextField] != "reality-target" {
+		t.Fatalf("omitted default correction = %+v, fields = %v, next field = %d", review, module.fields, module.nextField)
+	}
+}
+
+func TestInstallationReviewRoutesMultipleFullDraftFailuresThroughTheCorrectionJourney(t *testing.T) {
+	module := newTestInstallationWithPreflight(t, composedNetworkObserver{}, networkpolicy.InstallationPreflightResult{ActiveSSHPort: 22, UsablePublicIPv4: []string{"8.8.8.8"}})
+	module.dependencies.RecommendedRealityTarget = "www.microsoft.com"
+	module.dependencies.ReviewRealityTarget = func(_ context.Context, target connectionprofiles.RealityTarget) connectionprofiles.RealityTargetReview {
+		outcome := connectionprofiles.Healthy
+		if target.ServerName == "blocked.test.net" {
+			outcome = connectionprofiles.Failed
+		}
+		return connectionprofiles.RealityTargetReview{Target: target, Health: connectionprofiles.Health{Outcome: outcome, Code: "CONNECTION-PROFILES-REALITY-PROBE"}}
+	}
+	draft := composedDraft(t)
+	draft.Installation.OwnerEmail = "invalid"
+	draft.RealityTarget, draft.RealityServerName = "blocked.test.net:443", "blocked.test.net"
+	if review := module.Review(t.Context(), draft); review.Invalid == nil || review.Invalid.Field != "owner-email" {
+		t.Fatalf("first full-draft correction = %+v", review)
+	}
+	if review := module.Review(t.Context(), Draft{SubmittedField: "owner-email", SubmittedValue: "owner@example.com"}); review.Invalid == nil || review.Invalid.Field != "subscriber-agreement" {
+		t.Fatalf("agreement correction = %+v", review)
+	}
+	review := module.Review(t.Context(), Draft{SubmittedField: "subscriber-agreement", SubmittedValue: "accepted"})
+	if review.Invalid == nil || review.Invalid.Field != "reality-target" || module.nextField != len(module.fields)-1 {
+		t.Fatalf("later target correction = %+v, fields = %v", review, module.fields)
 	}
 }
 
@@ -983,7 +921,7 @@ func TestInstallationInterfaceCancellationBeforeApplyDiscardsDraftAndApproval(t 
 	if result := module.Apply(t.Context(), review.Approval); result.Kind != ApplyRefused {
 		t.Fatalf("cancelled Approval remained usable: %+v", result)
 	}
-	if fresh := module.Review(t.Context(), Draft{}); fresh.Invalid == nil || fresh.Invalid.Field != "domain" {
+	if fresh := module.Review(t.Context(), Draft{}); fresh.Invalid == nil || fresh.Invalid.Field != "owner-email" {
 		t.Fatalf("cancelled draft remained available: %+v", fresh)
 	}
 }
@@ -996,13 +934,10 @@ func TestInstallationInterfaceReviewsCleanVPSAndKeepsOneUseApprovalMemoryOnly(t 
 		t.Fatalf("clean VPS Review = %+v", review)
 	}
 	for _, effect := range []string{
-		"Run xray.service, sing-box.service, cloudflared.service, and sbxr-subscription.service as root:root without separate Linux identities",
-		"Retain NoNewPrivileges=true, ProtectHome=true, ProtectSystem=strict, AmbientCapabilities=CAP_NET_BIND_SERVICE, and CapabilityBoundingSet=CAP_NET_BIND_SERVICE for Xray and sing-box",
-		"Retain NoNewPrivileges=true, ProtectHome=true, ProtectSystem=strict, and PrivateTmp=true for cloudflared",
-		"Retain UMask=0027, NoNewPrivileges=true, PrivateTmp=true, ProtectHome=true, ProtectSystem=strict, PrivateDevices=true, ProtectControlGroups=true, ProtectKernelModules=true, ProtectKernelTunables=true, ProtectProc=invisible, and ProcSubset=pid for Subscription Serving",
-		"Retain RestrictAddressFamilies=AF_INET AF_INET6, RestrictSUIDSGID=true, LockPersonality=true, MemoryDenyWriteExecute=true, LimitCORE=0, TemporaryFileSystem=/:ro, BindReadOnlyPaths=/usr/local/bin/sbxr, BindReadOnlyPaths=/var/lib/sbxr/subscriptions/current, BindReadOnlyPaths=/var/lib/sbxr/certificates/ip/current, and BindReadOnlyPaths=/etc/ssl/certs/ca-certificates.crt for Subscription Serving",
-		"Store runtime service configuration, proxy credentials, subscription material, the Cloudflare Tunnel run token, and TLS private keys as root:root 0644",
-		"Every local Linux identity can read the runtime proxy credentials, subscription material, Cloudflare Tunnel run token, and TLS private keys",
+		"Run only xray.service and sbxr-subscription.service; keep sing-box.service and cloudflared.service disabled and inactive",
+		"Create VLESS REALITY Vision Enabled and keep the other five Connection Profiles Not set up without placeholders",
+		"Issue and activate only the sbxr-ip certificate lineage and remove the exact temporary TCP 80 rule on every outcome",
+		"Leave all Cloudflare credentials, identifiers, resources, routes, DNS, Tunnel, and domain-certificate facts unchanged and absent",
 	} {
 		if !slices.Contains(review.Plan.Effects, effect) {
 			t.Fatalf("root-runtime Plan omitted %q: %+v", effect, review.Plan.Effects)
@@ -1157,7 +1092,6 @@ func TestInstallationPrivilegedBoundaryRefusesChangedFactsBeforeMutation(t *test
 				return softwarelifecycle.StagedRelease{}, errors.New("changed release")
 			}
 		}},
-		{name: "provider", change: func(module *Interface) { module.dependencies.Inventory = composedConflictAPI{} }},
 		{name: "Network Policy", change: func(module *Interface) {
 			module.dependencies.Network = func(networkpolicy.Request) networkpolicy.Result {
 				return networkpolicy.Result{Outcome: networkpolicy.Failed}
@@ -1203,7 +1137,7 @@ func (reader pendingReaderStub) PendingChangeSet() (systemchanges.PendingChangeS
 
 func composedDraft(t *testing.T) Draft {
 	request := composedInstallRequest(t)
-	return Draft{Tag: request.Tag, Architecture: request.Architecture, Installation: request.Draft, CloudflareAccountID: request.CloudflareAccountID, CloudflareZoneID: request.CloudflareZoneID, CloudflareToken: request.CloudflareToken, RealityTarget: request.RealityTarget, RealityServerName: request.RealityServerName}
+	return Draft{Tag: request.Tag, Architecture: request.Architecture, Installation: request.Draft, RealityTarget: request.RealityTarget, RealityServerName: request.RealityServerName}
 }
 
 func newTestInstallation(t *testing.T, observer networkpolicy.Adapter, launch func(context.Context, softwareubuntu.InstallHandoffRequest, <-chan struct{}) (softwareubuntu.InstallApplyOutcome, error)) *Interface {
@@ -1218,8 +1152,6 @@ func newTestInstallationWithPreflight(t *testing.T, observer networkpolicy.Adapt
 func newTestInstallationWith(t *testing.T, observer networkpolicy.Adapter, launch func(context.Context, softwareubuntu.InstallHandoffRequest, <-chan struct{}) (softwareubuntu.InstallApplyOutcome, error), preflight networkpolicy.InstallationPreflightResult) *Interface {
 	t.Helper()
 	request := composedInstallRequest(t)
-	api := interfaceTestAPI{}
-	cloudflare := newCloudflareTestModule(api, composedClock{})
 	if launch == nil {
 		launch = func(context.Context, softwareubuntu.InstallHandoffRequest, <-chan struct{}) (softwareubuntu.InstallApplyOutcome, error) {
 			return softwareubuntu.InstallCompleted, nil
@@ -1239,7 +1171,7 @@ func newTestInstallationWith(t *testing.T, observer networkpolicy.Adapter, launc
 		Stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
 			return request.Candidate.Staged, nil
 		},
-		Network: networkpolicy.New(observer).Evaluate, Cloudflare: cloudflare.Plan, CloudflareAPI: api, Inventory: api, Entropy: bytes.NewReader(bytes.Repeat([]byte{0x42}, 4096)), Launch: launch,
+		Network: networkpolicy.New(observer).Evaluate, Entropy: bytes.NewReader(bytes.Repeat([]byte{0x42}, 4096)), Launch: launch,
 		Recover: func(context.Context, systemchanges.PendingChangeSet) error { return nil }, Pending: pendingReaderStub{}, WriteReceipt: func(string, softwarelifecycle.ReleaseIdentity, string) error { return nil }, RemoveReceipt: func() error { return nil }, ObserveState: func() (systemchanges.Observation, error) {
 			return systemchanges.Observation{Status: systemchanges.NotInstalled}, nil
 		}, LoadManaged: func() (systemchanges.Observation, state.ReleaseIdentity, error) {
@@ -1331,8 +1263,8 @@ func composedInstallRequest(t *testing.T) softwareubuntu.InstallHandoffRequest {
 	staged := softwarelifecycle.StagedRelease{Identity: identity, Build: softwarelifecycle.EmbeddedBuildIdentity{Repository: identity.Repository, Tag: identity.Tag, Commit: identity.Commit, PayloadSHA256: strings.Repeat("3", 64)}, Architecture: softwarelifecycle.AMD64, ExecutableSHA256: strings.Repeat("4", 64), ComponentsSHA256: componentAsset.SHA256, InstallPath: softwarelifecycle.ReleaseInstallPath(identity), StateSchema: 2}
 	return softwareubuntu.InstallHandoffRequest{
 		Schema: 1, Session: strings.Repeat("a", 64), Tag: identity.Tag, Architecture: softwarelifecycle.AMD64,
-		Draft:               softwarelifecycle.InstallationDraft{Domain: "example.com", OwnerEmail: "owner@example.com", PublicIPv4: "8.8.8.8", PrimaryAddress: "8.8.8.8", SSHPort: 22, RealityPort: 443, Hysteria2Port: 443, TUICPort: 8443, AnyTLSPort: 9443, SubscriptionPort: 10443},
-		CloudflareAccountID: strings.Repeat("b", 32), CloudflareZoneID: strings.Repeat("c", 32), CloudflareToken: "sbxr_COMPOSED-INSTALL-SECRET-MARKER-000000000", RealityTarget: "www.microsoft.com:443", RealityServerName: "www.microsoft.com", Entropy: bytes.Repeat([]byte{0x42}, 32),
+		Draft:         softwarelifecycle.InstallationDraft{OwnerEmail: "owner@example.com", SubscriberAgreementReviewed: true, PublicIPv4: "8.8.8.8", PrimaryAddress: "8.8.8.8", SSHPort: 22, RealityPort: 443, SubscriptionPort: 10443},
+		RealityTarget: "www.microsoft.com:443", RealityServerName: "www.microsoft.com", Entropy: bytes.Repeat([]byte{0x42}, 32),
 		Candidate: softwarelifecycle.InstallCandidateHandoff{Verified: verified, Staged: staged, ApplicationAsset: applicationAsset, ComponentAsset: componentAsset, ApplicationArchive: application, ComponentArchive: components},
 	}
 }

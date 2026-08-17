@@ -1253,11 +1253,14 @@ func canonicalSSHIdentity(identity string) (string, string, *SSHPreservationFail
 }
 
 type InstallationPreflightResult struct {
-	ActiveSSHPort    uint16
-	UsablePublicIPv4 []string
-	Failure          *Finding
-	SSHFailureCause  SSHPreservationFailureCause
-	sshProof         SSHPreservationProof
+	ActiveSSHPort                   uint16
+	UsablePublicIPv4                []string
+	UsablePublicIPv6                []string
+	RealityPortReplacementRequired  bool
+	SubscriptionReplacementRequired bool
+	Failure                         *Finding
+	SSHFailureCause                 SSHPreservationFailureCause
+	sshProof                        SSHPreservationProof
 }
 
 func (result InstallationPreflightResult) SSHPreservationProof() SSHPreservationProof {
@@ -1276,14 +1279,18 @@ func (i Interface) InstallationPreflight(identity string) InstallationPreflightR
 		finding := requiredFailure("NETWORK-INSTALLATION-SSH-UNPROVED", "The active SSH session could not be proved", found, "fresh SSH Preservation Proof for the exact launch session", "Installation cannot preserve a different or unproved SSH session", Fix{OwnerChecklist: steps})
 		return InstallationPreflightResult{Failure: &finding, SSHFailureCause: proofFailure.Cause}
 	}
-	addresses := slices.Clone(observed.PublicIPv4)
-	slices.Sort(addresses)
-	addresses = slices.Compact(addresses)
-	if slices.IndexFunc(addresses, func(value string) bool { return !UsablePublicAddress(value) }) != -1 {
+	ipv4, ipv6 := slices.Clone(observed.PublicIPv4), slices.Clone(observed.PublicIPv6)
+	slices.Sort(ipv4)
+	slices.Sort(ipv6)
+	ipv4, ipv6 = slices.Compact(ipv4), slices.Compact(ipv6)
+	if slices.IndexFunc(ipv4, func(value string) bool { return !UsablePublicAddress(value) }) != -1 || slices.IndexFunc(ipv6, func(value string) bool { return !UsablePublicAddress(value) }) != -1 {
 		finding := requiredFailure("NETWORK-INSTALLATION-SSH-UNPROVED", "The active SSH session could not be proved", "the local interface observation included an unusable public-address candidate", "only usable public-address candidates", "Installation cannot continue from contradictory local facts", Fix{OwnerChecklist: []string{"Use Check again for a fresh read-only observation, or return to a safe Owner Console screen."}})
 		return InstallationPreflightResult{Failure: &finding, SSHFailureCause: SSHObservationUnavailable}
 	}
-	return InstallationPreflightResult{ActiveSSHPort: proof.ServerPort(), UsablePublicIPv4: addresses, sshProof: proof}
+	occupied := func(port uint16) bool {
+		return slices.ContainsFunc(observed.Listeners, func(listener Listener) bool { return listener.Protocol == TCP && listener.Port == port })
+	}
+	return InstallationPreflightResult{ActiveSSHPort: proof.ServerPort(), UsablePublicIPv4: ipv4, UsablePublicIPv6: ipv6, RealityPortReplacementRequired: occupied(443), SubscriptionReplacementRequired: occupied(10443), sshProof: proof}
 }
 
 func UsablePublicAddress(value string) bool {

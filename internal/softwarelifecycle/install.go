@@ -237,18 +237,16 @@ func PlanInstall(request InstallPlanRequest) (*InstallPlan, *InstallFinding) {
 	}
 	want := map[InstallContributionName]systemchanges.Module{
 		NetworkInstallContribution: systemchanges.NetworkPolicyModule, ProfilesInstallContribution: systemchanges.ConnectionProfilesModule,
-		CloudflareInstallContribution: systemchanges.CloudflareModule, CertificateInstallContribution: systemchanges.CertificateModule,
-		SubscriptionInstallContribution: systemchanges.SubscriptionModule,
+		CertificateInstallContribution: systemchanges.CertificateModule, SubscriptionInstallContribution: systemchanges.SubscriptionModule,
 	}
 	proofs := make([]InstallContributionProof, 0, len(request.Contributions))
 	seen := map[InstallContributionName]bool{}
 	var steps []systemchanges.Step
-	var cloudflarePrelude []systemchanges.Step
 	var checks []systemchanges.Check
 	var ports []string
 	var firewall string
 	stable := ""
-	var cloudflare, certificates []string
+	var certificates []string
 	for _, contribution := range request.Contributions {
 		if contribution == nil {
 			return refuse()
@@ -261,24 +259,11 @@ func PlanInstall(request InstallPlanRequest) (*InstallPlan, *InstallFinding) {
 		}
 		seen[name] = true
 		proofs = append(proofs, proof)
-		if name == CloudflareInstallContribution {
-			for _, step := range proof.Steps {
-				if step.Forward() == systemchanges.ActivatePreparedConfiguration {
-					steps = append(steps, step)
-				} else {
-					cloudflarePrelude = append(cloudflarePrelude, step)
-				}
-			}
-		} else {
-			steps = append(steps, proof.Steps...)
-		}
+		steps = append(steps, proof.Steps...)
 		checks = append(checks, proof.Checks...)
 		stable += proof.StableSHA256
 		if name == NetworkInstallContribution {
 			ports, firewall = append([]string(nil), proof.Ports...), proof.Firewall
-		}
-		if name == CloudflareInstallContribution {
-			cloudflare = append(cloudflare, proof.Details...)
 		}
 		if name == CertificateInstallContribution {
 			certificates = append(certificates, proof.Details...)
@@ -291,7 +276,7 @@ func PlanInstall(request InstallPlanRequest) (*InstallPlan, *InstallFinding) {
 	if err != nil {
 		return refuse()
 	}
-	steps = append(cloudflarePrelude, append([]systemchanges.Step{softwareStep}, steps...)...)
+	steps = append([]systemchanges.Step{softwareStep}, steps...)
 	softwareChecks := []systemchanges.Check{
 		{Owner: systemchanges.SoftwareModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "SOFTWARE-LIFECYCLE-INSTALL-STAGED"},
 		{Owner: systemchanges.SoftwareModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PostPublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "SOFTWARE-LIFECYCLE-INSTALL-AGREEMENT"},
@@ -324,9 +309,9 @@ func PlanInstall(request InstallPlanRequest) (*InstallPlan, *InstallFinding) {
 		ReleaseIdentity: staged.Identity, Revision: 1, InstallationStatus: NotInstalled, Result: Managed, RollbackResult: NotInstalled,
 		Files: []string{staged.InstallPath, "/usr/local/bin/sbxr", "/var/lib/sbxr", "/etc/sbxr", "/etc/systemd/system"}, Units: unitNames,
 		Ownership:                   []string{"release executable and systemd units: root:root", "generated State: root-only", "runtime service material: root:root 0644"},
-		Profiles:                    []string{"VLESS REALITY Vision", "VLESS XHTTP", "VLESS WebSocket", "Hysteria2", "TUIC", "AnyTLS"},
+		Profiles:                    []string{"VLESS REALITY Vision — Enabled", "VLESS XHTTP — Not set up", "VLESS WebSocket — Not set up", "Hysteria2 — Not set up", "TUIC — Not set up", "AnyTLS — Not set up"},
 		SubscriptionRepresentations: []string{"raw", "base64", "v2rayN", "Shadowrocket", "Karing", "Mihomo", "sing-box"},
-		Cloudflare:                  cloudflare, Certificates: certificates, Ports: ports, Firewall: firewall, Disk: request.Disk, Checks: checkNames,
+		Cloudflare:                  []string{"No Cloudflare credential, provider inspection, resource, or placeholder"}, Certificates: certificates, Ports: ports, Firewall: firewall, Disk: request.Disk, Checks: checkNames,
 		Interruption:      "no managed service exists before Apply; failed Apply rolls back all SBXR-owned additions",
 		Cancellation:      "Back before Apply changes nothing; cancellation after start waits for a safe checkpoint and rolls back",
 		Rollback:          "remove only additions recorded by this Change Set and prove Not installed",
@@ -492,7 +477,7 @@ func (plan *InstallPlan) String() string {
 	if plan == nil {
 		return "Software Lifecycle install Plan: unavailable"
 	}
-	return fmt.Sprintf("Software Lifecycle install Plan %s: revision 1, %s, %d files/categories, %d units, 6 Connection Profiles, 7 subscription representations, root Apply after approval, rollback to Not installed", plan.identity, plan.summary.ReleaseIdentity.Tag, len(plan.summary.Files), len(plan.summary.Units))
+	return fmt.Sprintf("Software Lifecycle install Plan %s: revision 1, %s, %d files/categories, %d units, 1 of 6 Connection Profiles set up, 7 subscription representations, root Apply after approval, rollback to Not installed", plan.identity, plan.summary.ReleaseIdentity.Tag, len(plan.summary.Files), len(plan.summary.Units))
 }
 func (plan *InstallPlan) GoString() string { return plan.String() }
 

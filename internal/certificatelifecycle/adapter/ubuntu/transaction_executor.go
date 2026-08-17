@@ -171,11 +171,13 @@ func (executor TransactionExecutor) Reverse(root string, step systemchanges.Step
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		if change.Action == systemchanges.CertificateIPActivate {
-			if executor.command(ctx, "systemctl", "reload-or-restart", change.SubscriptionUnit) != nil {
-				return systemchanges.StepEvidence{}, errors.New("prior Subscription Serving restart failed")
-			}
-			if prior.Target != "" && executor.proof(ctx, change.Identity) != nil {
-				return systemchanges.StepEvidence{}, errors.New("prior Subscription Serving proof failed")
+			if prior.Target != "" {
+				if executor.command(ctx, "systemctl", "reload-or-restart", change.SubscriptionUnit) != nil {
+					return systemchanges.StepEvidence{}, errors.New("prior Subscription Serving restart failed")
+				}
+				if executor.proof(ctx, change.Identity) != nil {
+					return systemchanges.StepEvidence{}, errors.New("prior Subscription Serving proof failed")
+				}
 			}
 		}
 		if candidate != "" && candidate != prior.Target {

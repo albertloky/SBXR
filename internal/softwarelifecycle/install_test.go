@@ -94,7 +94,7 @@ func TestPlanInstallDisclosesTheCompleteReviewedFreshInstallation(t *testing.T) 
 	if !reflect.DeepEqual(summary.Files, []string{"/opt/sbxr/releases/v1.0.0-0123456789abcdef0123456789abcdef01234567-" + strings.Repeat("b", 64) + "/sbxr", "/usr/local/bin/sbxr", "/var/lib/sbxr", "/etc/sbxr", "/etc/systemd/system"}) {
 		t.Fatalf("files = %#v", summary.Files)
 	}
-	if len(summary.Units) != 11 || len(summary.Profiles) != 6 || len(summary.SubscriptionRepresentations) != 7 || len(summary.Ports) == 0 || len(summary.Checks) == 0 || len(summary.Ownership) != 3 || len(summary.Cloudflare) != 1 || len(summary.Certificates) != 2 || summary.Interruption == "" || summary.Cancellation == "" || summary.Rollback == "" {
+	if len(summary.Units) != 11 || len(summary.Profiles) != 6 || len(summary.SubscriptionRepresentations) != 7 || len(summary.Ports) == 0 || len(summary.Checks) == 0 || len(summary.Ownership) != 3 || len(summary.Cloudflare) != 1 || len(summary.Certificates) != 1 || summary.Interruption == "" || summary.Cancellation == "" || summary.Rollback == "" {
 		t.Fatalf("incomplete review = %+v", summary)
 	}
 	rendered := fmt.Sprintf("%s %+v %#v", plan, plan, summary)
@@ -103,37 +103,21 @@ func TestPlanInstallDisclosesTheCompleteReviewedFreshInstallation(t *testing.T) 
 	}
 }
 
-func TestPlanInstallPlacesOnlyReversibleProviderCreationBeforeReclamation(t *testing.T) {
+func TestPlanInstallRejectsCloudflareWorkInRevisionOne(t *testing.T) {
 	desired := strings.Repeat("a", 64)
 	contributions := controlledInstallContributions(t, "install-revision-1", desired)
-	for index, contribution := range contributions {
-		controlled := contribution.(controlledInstallContribution)
-		if InstallContributionName(controlled.proof.Name) != CloudflareInstallContribution {
-			continue
-		}
-		create, err := systemchanges.NewCloudflareStep(systemchanges.CloudflareChange{Action: systemchanges.CloudflareTunnelCreate, AccountID: "account-123", TunnelName: "sbxr-main"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		activate, err := systemchanges.NewStep(systemchanges.CloudflareModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
-		if err != nil {
-			t.Fatal(err)
-		}
-		controlled.proof.Steps = []systemchanges.Step{create, activate}
-		contributions[index] = controlled
+	step, err := systemchanges.NewStep(systemchanges.CloudflareModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
+	if err != nil {
+		t.Fatal(err)
 	}
+	contributions = append(contributions, controlledInstallContribution{InstallContributionProof{Name: string(CloudflareInstallContribution), Owner: systemchanges.CloudflareModule, Identity: "cloudflare-plan", SHA256: strings.Repeat("e", 64), StableSHA256: strings.Repeat("f", 64), ChangeSet: "install-revision-1", DesiredStateSHA256: desired, Steps: []systemchanges.Step{step}, Checks: []systemchanges.Check{{Owner: systemchanges.CloudflareModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CLOUDFLARE-PRE"}, {Owner: systemchanges.CloudflareModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PostPublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "CLOUDFLARE-POST"}}, Details: []string{"provider work"}}})
 	plan, finding := PlanInstall(InstallPlanRequest{
 		Candidate: controlledInstallCandidate(), ChangeSet: "install-revision-1", DesiredStateSHA256: desired,
 		Contributions: contributions, ReviewedReclamationSHA256: strings.Repeat("f", 64),
 		Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1},
 	})
-	if finding != nil || plan == nil || len(plan.steps) < 3 || plan.steps[0].Forward() != systemchanges.CreateCloudflareResource || plan.steps[1].Owner() != systemchanges.SoftwareModule {
-		t.Fatalf("reclamation install order = (%+v, %+v)", plan, finding)
-	}
-	for index, step := range plan.steps {
-		if step.Owner() == systemchanges.CloudflareModule && step.Forward() == systemchanges.ActivatePreparedConfiguration && index < 2 {
-			t.Fatalf("cloudflared activation crossed the reclamation boundary at step %d", index+1)
-		}
+	if finding == nil || plan != nil {
+		t.Fatalf("revision 1 accepted Cloudflare work = (%+v, %+v)", plan, finding)
 	}
 }
 
@@ -182,8 +166,8 @@ func TestPlanInstallRefusesMissingChangedOrCallerInventedInputs(t *testing.T) {
 		{"wrong change set", func(r *InstallPlanRequest) { r.ChangeSet = "../unsafe" }},
 		{"wrong state checksum", func(r *InstallPlanRequest) { r.DesiredStateSHA256 = strings.Repeat("A", 64) }},
 		{"missing disk category", func(r *InstallPlanRequest) { r.Disk.RollbackBytes = 0 }},
-		{"missing contribution", func(r *InstallPlanRequest) { r.Contributions = r.Contributions[:4] }},
-		{"duplicate contribution", func(r *InstallPlanRequest) { r.Contributions[4] = r.Contributions[0] }},
+		{"missing contribution", func(r *InstallPlanRequest) { r.Contributions = r.Contributions[:3] }},
+		{"duplicate contribution", func(r *InstallPlanRequest) { r.Contributions[3] = r.Contributions[0] }},
 		{"changed contribution state", func(r *InstallPlanRequest) {
 			proof := installContributionProof(r.Contributions[0])
 			proof.DesiredStateSHA256 = strings.Repeat("c", 64)
@@ -311,7 +295,6 @@ func controlledInstallContributions(t *testing.T, changeSet, desired string) []I
 	}{
 		{NetworkInstallContribution, systemchanges.NetworkPolicyModule},
 		{ProfilesInstallContribution, systemchanges.ConnectionProfilesModule},
-		{CloudflareInstallContribution, systemchanges.CloudflareModule},
 		{CertificateInstallContribution, systemchanges.CertificateModule},
 		{SubscriptionInstallContribution, systemchanges.SubscriptionModule},
 	}
@@ -330,7 +313,7 @@ func controlledInstallContributions(t *testing.T, changeSet, desired string) []I
 		}
 		proof := InstallContributionProof{Name: string(value.name), Owner: value.owner, Identity: fmt.Sprintf("component-plan-%d", index), SHA256: strings.Repeat(fmt.Sprintf("%x", index+1), 64), StableSHA256: strings.Repeat(fmt.Sprintf("%x", index+6), 64), ChangeSet: changeSet, DesiredStateSHA256: desired, Steps: []systemchanges.Step{step}, Checks: checks, Details: []string{string(value.name) + " exact install effects"}}
 		if value.name == CertificateInstallContribution {
-			proof.Details = []string{"Certificate Lifecycle IP exact install effects", "Certificate Lifecycle domain exact install effects"}
+			proof.Details = []string{"Certificate Lifecycle IP exact install effects"}
 		}
 		if value.owner == systemchanges.NetworkPolicyModule {
 			proof.Ports = []string{"SSH preservation: public 2222/TCP", "VLESS REALITY Vision: public 443/TCP"}

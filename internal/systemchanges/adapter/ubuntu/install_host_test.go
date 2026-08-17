@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -26,8 +27,8 @@ func TestInstallHostActivatesAndReversesOnlyPreparedProxyConfigurations(t *testi
 	if err := os.MkdirAll(filepath.Join(root, "etc/sbxr"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	xray, singBox := []byte(`{"inbounds":[{"tag":"xray"}]}`), []byte(`{"inbounds":[{"tag":"sing-box"}]}`)
-	writePreparedInstall(t, prepared, xray, singBox)
+	xray := []byte(`{"inbounds":[{"tag":"xray"}]}`)
+	writePreparedRealityInstall(t, prepared, xray)
 	var commands []string
 	host := InstallHost{root: root, uid: os.Geteuid(), rootGID: os.Getegid(), units: append([]string(nil), fixedInstallUnits...), run: func(_ context.Context, name string, arguments ...string) error {
 		commands = append(commands, name+" "+strings.Join(arguments, " "))
@@ -44,7 +45,7 @@ func TestInstallHostActivatesAndReversesOnlyPreparedProxyConfigurations(t *testi
 	if _, err := host.Execute(step, time.Second, systemchanges.NewCancellation()); err != nil {
 		t.Fatal(err)
 	}
-	for name, want := range map[string][]byte{"etc/sbxr/xray/config.json": xray, "etc/sbxr/sing-box/config.json": singBox} {
+	for name, want := range map[string][]byte{"etc/sbxr/xray/config.json": xray} {
 		got, err := os.ReadFile(filepath.Join(root, name))
 		if err != nil || !bytes.Equal(got, want) {
 			t.Fatalf("%s = %q, %v", name, got, err)
@@ -62,6 +63,56 @@ func TestInstallHostActivatesAndReversesOnlyPreparedProxyConfigurations(t *testi
 	if len(commands) < 3 {
 		t.Fatalf("managed systemd lifecycle was not invoked: %v", commands)
 	}
+	if !slices.Contains(commands, "systemctl disable --now cloudflared.service sing-box.service") || !slices.Contains(commands, "systemctl enable --now xray.service") || slices.Contains(commands, "systemctl enable --now sbxr-cert-renew.timer sbxr-health-check.timer sbxr-subscription.service sbxr-update-check.timer xray.service") || slices.Contains(commands, "systemctl restart sing-box.service") {
+		t.Fatalf("revision 1 service state = %v", commands)
+	}
+}
+
+func TestFreshInstallAgreementRequiresDeferredServicesInactiveAndDisabled(t *testing.T) {
+	deferredActive, xrayDisabled := false, false
+	host := InstallHost{run: func(_ context.Context, name string, arguments ...string) error {
+		if name == "systemctl" && len(arguments) == 2 && arguments[0] == "is-enabled" && arguments[1] == "xray.service" && xrayDisabled {
+			return fmt.Errorf("xray is disabled")
+		}
+		if name == "systemctl" && len(arguments) == 2 && slices.Contains(revisionOneInactiveUnits, arguments[1]) && (arguments[0] == "is-active" || arguments[0] == "is-enabled") && !deferredActive {
+			return fmt.Errorf("%s is inactive", arguments[1])
+		}
+		return nil
+	}}
+	agreement := systemchanges.Agreement{Revision: 1, ChangeSet: "install-revision-1", CandidateSHA256: strings.Repeat("a", 64), PublishedStateSHA256: strings.Repeat("b", 64), PreparedManifestSHA256: strings.Repeat("c", 64)}
+	if err := host.VerifyAgreement(agreement, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	deferredActive = true
+	if err := host.VerifyAgreement(agreement, time.Second); err == nil {
+		t.Fatal("fresh install accepted an active deferred service")
+	}
+	deferredActive, xrayDisabled = false, true
+	if err := host.VerifyAgreement(agreement, time.Second); err == nil {
+		t.Fatal("fresh install accepted a disabled active service")
+	}
+}
+
+func TestFreshInstallHostActivatesInspectsAndReversesPostCertificateUnits(t *testing.T) {
+	var commands []string
+	healthy := true
+	host := InstallHost{run: func(_ context.Context, name string, arguments ...string) error {
+		commands = append(commands, name+" "+strings.Join(arguments, " "))
+		if !healthy && len(arguments) == 2 && (arguments[0] == "is-active" || arguments[0] == "is-enabled") {
+			return errors.New("unit unavailable")
+		}
+		return nil
+	}}
+	if err := host.activatePostCertificateUnits(time.Second); err != nil || host.inspectPostCertificateUnits(time.Second) != nil || host.reversePostCertificateUnits(time.Second) != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(commands, "systemctl enable --now sbxr-cert-renew.timer sbxr-health-check.timer sbxr-subscription.service sbxr-update-check.timer") || !slices.Contains(commands, "systemctl disable --now sbxr-cert-renew.timer sbxr-health-check.timer sbxr-subscription.service sbxr-update-check.timer") {
+		t.Fatalf("post-certificate lifecycle = %v", commands)
+	}
+	healthy = false
+	if host.inspectPostCertificateUnits(time.Second) == nil {
+		t.Fatal("post-certificate inspection accepted an unavailable unit")
+	}
 }
 
 func TestInstallHostEnforcesRootRuntimeManifest(t *testing.T) {
@@ -73,14 +124,14 @@ func TestInstallHostEnforcesRootRuntimeManifest(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "etc/sbxr"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	xray, singBox := []byte(`{"inbounds":[{"tag":"xray"}]}`), []byte(`{"inbounds":[{"tag":"sing-box"}]}`)
-	writePreparedInstall(t, prepared, xray, singBox)
+	xray := []byte(`{"inbounds":[{"tag":"xray"}]}`)
+	writePreparedRealityInstall(t, prepared, xray)
 	host := InstallHost{root: root, uid: os.Geteuid(), rootGID: os.Getegid(), units: append([]string(nil), fixedInstallUnits...), run: func(context.Context, string, ...string) error { return nil }}
 	step, _ := systemchanges.NewStep(systemchanges.ConnectionProfilesModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
 	if _, err := host.Execute(step, time.Second, systemchanges.NewCancellation()); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range installConfigurationPaths() {
+	for _, name := range []string{"etc/sbxr/xray/config.json"} {
 		path := filepath.Join(root, name)
 		info, err := os.Lstat(path)
 		stat, ok := info.Sys().(*syscall.Stat_t)
@@ -99,7 +150,7 @@ func TestInstallHostRefusesLegacyServiceIdentityManifest(t *testing.T) {
 	if err := os.MkdirAll(prepared, 0o700); err != nil || os.MkdirAll(filepath.Join(root, "etc/sbxr"), 0o755) != nil {
 		t.Fatal("prepare test root")
 	}
-	writePreparedInstall(t, prepared, []byte(`{"xray":true}`), []byte(`{"sing_box":true}`))
+	writePreparedRealityInstall(t, prepared, []byte(`{"xray":true}`))
 	manifestPath := filepath.Join(prepared, "manifests.json")
 	manifests, err := os.ReadFile(manifestPath)
 	if err != nil {
@@ -145,7 +196,7 @@ func TestInstallHostRefusesChangedDigestAndLinkedReplacement(t *testing.T) {
 			if err := os.MkdirAll(prepared, 0o700); err != nil || os.MkdirAll(filepath.Join(root, "etc/sbxr"), 0o755) != nil {
 				t.Fatal("prepare test root")
 			}
-			writePreparedInstall(t, prepared, []byte(`{"xray":true}`), []byte(`{"sing_box":true}`))
+			writePreparedRealityInstall(t, prepared, []byte(`{"xray":true}`))
 			if err := test.change(root, prepared); err != nil {
 				t.Fatal(err)
 			}
@@ -161,16 +212,16 @@ func TestInstallHostRefusesChangedDigestAndLinkedReplacement(t *testing.T) {
 func TestInstallHostReconcilesSafeTemporaryAfterRestart(t *testing.T) {
 	root := t.TempDir()
 	prepared := filepath.Join(root, transactionDirectory, "root-runtime-restart", "prepared")
-	if err := os.MkdirAll(prepared, 0o700); err != nil || os.MkdirAll(filepath.Join(root, "etc/sbxr/xray"), 0o755) != nil || os.MkdirAll(filepath.Join(root, "etc/sbxr/sing-box"), 0o755) != nil {
+	if err := os.MkdirAll(prepared, 0o700); err != nil || os.MkdirAll(filepath.Join(root, "etc/sbxr/xray"), 0o755) != nil {
 		t.Fatal("prepare test root")
 	}
-	writePreparedInstall(t, prepared, []byte(`{"xray":true}`), []byte(`{"sing_box":true}`))
-	for _, name := range installConfigurationPaths() {
+	writePreparedRealityInstall(t, prepared, []byte(`{"xray":true}`))
+	host := InstallHost{root: root, uid: os.Geteuid(), rootGID: os.Getegid(), units: append([]string(nil), fixedInstallUnits...), run: func(context.Context, string, ...string) error { return nil }}
+	for _, name := range []string{"etc/sbxr/xray/config.json"} {
 		if err := os.WriteFile(filepath.Join(root, name+".preparing"), []byte("interrupted"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	host := InstallHost{root: root, uid: os.Geteuid(), rootGID: os.Getegid(), units: append([]string(nil), fixedInstallUnits...), run: func(context.Context, string, ...string) error { return nil }}
 	step, _ := systemchanges.NewStep(systemchanges.ConnectionProfilesModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
 	if _, err := host.Execute(step, time.Second, systemchanges.NewCancellation()); err != nil {
 		t.Fatal(err)
@@ -194,7 +245,7 @@ func TestInstallHostProvesEverySelectedClientAccessListener(t *testing.T) {
 	}
 	writePreparedInstall(t, prepared, []byte(`{"inbounds":[{"listen":"127.0.0.1","port":11080}]}`), []byte(`{"inbounds":[{"type":"tuic","listen":"0.0.0.0","listen_port":8443}]}`))
 	listeners := []byte("tcp LISTEN 0 4096 127.0.0.1:11080 0.0.0.0:* users:((\"xray\",pid=1,fd=1))\nudp UNCONN 0 0 0.0.0.0:8443 0.0.0.0:* users:((\"sing-box\",pid=2,fd=2))\n")
-	host := InstallHost{root: root, output: func(context.Context, string, ...string) ([]byte, error) { return listeners, nil }}
+	host := InstallHost{root: root, managed: true, output: func(context.Context, string, ...string) ([]byte, error) { return listeners, nil }}
 	check := systemchanges.Check{Owner: systemchanges.ConnectionProfilesModule, Code: "CONNECTION-PROFILES-CLIENT-ACCESS-LISTENERS"}
 	if status, err := host.Check(check, systemchanges.PostPublication, time.Second); err != nil || status != systemchanges.Healthy {
 		t.Fatalf("listener health = %s, %v", status, err)
@@ -264,6 +315,17 @@ func writePreparedInstall(t *testing.T, prepared string, xray, singBox []byte) {
 	xrayDigest, singDigest := sha256.Sum256(xray), sha256.Sum256(singBox)
 	manifests := fmt.Sprintf(`{"xray":{"Service":"xray.service","OwningModule":"connectionprofiles","CandidateRevision":8,"ChangeSet":"change-0008","Owner":"root","Group":"root","DirectoryMode":493,"FileMode":420,"SHA256":"%x"},"sing_box":{"Service":"sing-box.service","OwningModule":"connectionprofiles","CandidateRevision":8,"ChangeSet":"change-0008","Owner":"root","Group":"root","DirectoryMode":493,"FileMode":420,"SHA256":"%x"}}`, xrayDigest, singDigest)
 	for name, body := range map[string][]byte{"xray.json": xray, "sing-box.json": singBox, "manifests.json": []byte(manifests)} {
+		if err := os.WriteFile(filepath.Join(prepared, name), body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func writePreparedRealityInstall(t *testing.T, prepared string, xray []byte) {
+	t.Helper()
+	digest := sha256.Sum256(xray)
+	manifests := fmt.Sprintf(`{"xray":{"Service":"xray.service","OwningModule":"connectionprofiles","CandidateRevision":1,"ChangeSet":"install-revision-1","Owner":"root","Group":"root","DirectoryMode":493,"FileMode":420,"SHA256":"%x"}}`, digest)
+	for name, body := range map[string][]byte{"xray.json": xray, "manifests.json": []byte(manifests)} {
 		if err := os.WriteFile(filepath.Join(prepared, name), body, 0o600); err != nil {
 			t.Fatal(err)
 		}

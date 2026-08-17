@@ -43,74 +43,55 @@ func newTestInstallOutcome(t *testing.T) *installOutcome {
 
 func TestInstallationBackDiscardsUnfinishedInput(t *testing.T) {
 	var outcome ownerconsole.OutcomeModule = newTestInstallOutcome(t)
-	if review := outcome.Review(t.Context()); review.Editing == nil || review.Editing.Field.Identity != "domain" || review.Editing.Help.Purpose == "" || review.Editing.Help.URL != "https://developers.cloudflare.com/fundamentals/manage-domains/add-site/" {
-		t.Fatalf("Domain Help did not cross the Installation presentation boundary: %+v", review)
+	if review := outcome.Review(t.Context()); review.Editing == nil || review.Editing.Field.Identity != "owner-email" || review.Editing.Help.Purpose == "" || review.Editing.Help.URL != "https://eff-certbot.readthedocs.io/en/stable/using.html#certbot-command-line-options" {
+		t.Fatalf("Owner email Help did not cross the Installation presentation boundary: %+v", review)
 	}
-	if review := outcome.Edit(t.Context(), ownerconsole.EditingInput{Field: "domain", Text: "example.com"}); review.Editing == nil || review.Editing.Field.Identity != "owner-email" || review.Editing.Help.Recovery == "" || review.Editing.Help.Sensitivity != ownerconsole.PersonalInformation || review.Editing.Help.URL != "https://eff-certbot.readthedocs.io/en/stable/using.html#certbot-command-line-options" {
+	if review := outcome.Edit(t.Context(), ownerconsole.EditingInput{Field: "owner-email", Text: "owner@example.net"}); review.Editing == nil || review.Editing.Field.Identity != "subscriber-agreement" || review.Editing.Help.Recovery == "" {
 		t.Fatalf("edited Installation input = %+v", review)
 	}
-	if review := outcome.Back(t.Context()); review.Editing == nil || review.Editing.Field.Identity != "domain" || review.Editing.Field.Value != "" {
+	if review := outcome.Back(t.Context()); review.Editing == nil || review.Editing.Field.Identity != "owner-email" || review.Editing.Field.Value != "" {
 		t.Fatalf("Back retained unfinished Installation input: %+v", review)
 	}
-	if review := outcome.Review(t.Context()); review.Editing == nil || review.Editing.Field.Identity != "domain" || review.Editing.Field.Value != "" {
+	if review := outcome.Review(t.Context()); review.Editing == nil || review.Editing.Field.Identity != "owner-email" || review.Editing.Field.Value != "" {
 		t.Fatalf("Installation Review restored unfinished input: %+v", review)
 	}
 }
 
 func TestLaterProcessStartsWithFreshInstallationInput(t *testing.T) {
 	abandoned := newTestInstallOutcome(t)
-	if review := abandoned.Edit(t.Context(), ownerconsole.EditingInput{Field: "domain", Text: "example.com"}); review.Editing == nil || review.Editing.Field.Identity != "owner-email" {
+	if review := abandoned.Edit(t.Context(), ownerconsole.EditingInput{Field: "owner-email", Text: "owner@example.net"}); review.Editing == nil || review.Editing.Field.Identity != "subscriber-agreement" {
 		t.Fatalf("abandoned process input = %+v", review)
 	}
 
 	later := newTestInstallOutcome(t)
-	if review := later.Review(t.Context()); review.Editing == nil || review.Editing.Field.Identity != "domain" || review.Editing.Field.Value != "" {
+	if review := later.Review(t.Context()); review.Editing == nil || review.Editing.Field.Identity != "owner-email" || review.Editing.Field.Value != "" {
 		t.Fatalf("later process restored abandoned input: %+v", review)
 	}
 }
 
-func TestProductionInstallationJourneyReturnsAnInvalidPortToItsExactField(t *testing.T) {
+func TestProductionInstallationJourneyReturnsInvalidAgreementToItsExactField(t *testing.T) {
 	outcome := newTestInstallOutcome(t)
-	steps := []ownerconsole.EditingInput{
-		{Field: "domain", Text: "example.com"},
-		{Field: "owner-email", Text: "owner@example.com"},
-		{Field: "public-ipv4", Text: "8.8.8.8"},
+	if review := outcome.Edit(t.Context(), ownerconsole.EditingInput{Field: "owner-email", Text: "owner@example.net"}); review.Editing == nil {
+		t.Fatalf("owner-email did not continue field-local editing: %+v", review)
 	}
-	for _, step := range steps {
-		if review := outcome.Edit(t.Context(), step); review.Editing == nil {
-			t.Fatalf("%s did not continue field-local editing: %+v", step.Field, review)
-		}
+	review := outcome.Edit(t.Context(), ownerconsole.EditingInput{Field: "subscriber-agreement", Text: "agree"})
+	if review.Editing == nil || review.Editing.Field.Identity != "subscriber-agreement" || review.Editing.Field.Value != "agree" {
+		t.Fatalf("invalid agreement did not return to its field: %+v", review)
 	}
-	review := outcome.Edit(t.Context(), ownerconsole.EditingInput{Field: "reality-port", Text: "invalid"})
-	if review.Editing == nil || review.Editing.Field.Identity != "reality-port" || review.Editing.Field.Value != "invalid" {
-		t.Fatalf("invalid REALITY port did not return to its field: %+v", review)
-	}
-	review = outcome.Edit(t.Context(), ownerconsole.EditingInput{Field: "reality-port", Text: "1443"})
-	if review.Editing == nil || review.Editing.Field.Identity != "hysteria2-port" || review.Editing.Field.Value != "443" {
-		t.Fatalf("corrected REALITY port lost earlier input or the next default: %+v", review)
+	review = outcome.Edit(t.Context(), ownerconsole.EditingInput{Field: "subscriber-agreement", Text: "accepted"})
+	if review.Editing == nil || review.Editing.Field.Identity != "reality-target" {
+		t.Fatalf("accepted agreement did not advance to REALITY target: %+v", review)
 	}
 }
 
-func TestProductionInstallationJourneyCarriesCloudflareOwnedTokenHelp(t *testing.T) {
-	outcome := newTestInstallOutcome(t)
-	for _, input := range []ownerconsole.EditingInput{
-		{Field: "domain", Text: "example.com"},
-		{Field: "owner-email", Text: "owner@example.com"},
-		{Field: "public-ipv4", Text: "8.8.8.8"},
-		{Field: "reality-port", Text: "443"},
-		{Field: "hysteria2-port", Text: "443"},
-		{Field: "tuic-port", Text: "8443"},
-		{Field: "anytls-port", Text: "9443"},
-		{Field: "subscription-port", Text: "10443"},
-		{Field: "cloudflare-account", Text: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-		{Field: "cloudflare-zone", Text: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
-	} {
-		if review := outcome.Edit(t.Context(), input); review.Editing == nil {
-			t.Fatalf("%s did not continue field-local editing: %+v", input.Field, review)
-		}
+func TestProductionInstallationJourneyHasNoCloudflareInput(t *testing.T) {
+	want := []string{"owner-email", "subscriber-agreement", "primary-address", "reality-port", "subscription-port", "reality-target"}
+	if len(installFields) != len(want) {
+		t.Fatalf("installation fields = %+v", installFields)
 	}
-	review := outcome.Review(t.Context())
-	if review.Editing == nil || review.Editing.Field.Identity != "cloudflare-token" || review.Editing.Help.Sensitivity != ownerconsole.InfrastructureSecret || review.Editing.Help.Example != "" || review.Editing.Help.URL != "https://developers.cloudflare.com/fundamentals/api/get-started/create-token/" {
-		t.Fatalf("Cloudflare token Help did not cross the production presentation boundary: %+v", review)
+	for index, field := range installFields {
+		if field.Identity != want[index] {
+			t.Fatalf("installation field %d = %q, want %q", index, field.Identity, want[index])
+		}
 	}
 }

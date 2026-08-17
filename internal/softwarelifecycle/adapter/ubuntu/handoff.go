@@ -31,10 +31,8 @@ const (
 )
 
 var (
-	handoffTag        = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$`)
-	handoffCloudflare = regexp.MustCompile(`^[0-9a-f]{32}$`)
-	handoffToken      = regexp.MustCompile(`^[A-Za-z0-9_-]{40,80}$`)
-	handoffHostname   = regexp.MustCompile(`(?i)^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$`)
+	handoffTag      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$`)
+	handoffHostname = regexp.MustCompile(`(?i)^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$`)
 )
 
 // InstallHandoffRequest is the one typed request allowed across the private
@@ -45,9 +43,6 @@ type InstallHandoffRequest struct {
 	Tag                       string                                    `json:"tag"`
 	Architecture              softwarelifecycle.Architecture            `json:"architecture"`
 	Draft                     softwarelifecycle.InstallationDraft       `json:"draft"`
-	CloudflareAccountID       string                                    `json:"cloudflare_account_id"`
-	CloudflareZoneID          string                                    `json:"cloudflare_zone_id"`
-	CloudflareToken           string                                    `json:"cloudflare_token"`
 	RealityTarget             string                                    `json:"reality_target"`
 	RealityServerName         string                                    `json:"reality_server_name"`
 	ReviewedPlanSHA256        string                                    `json:"reviewed_plan_sha256"`
@@ -79,7 +74,6 @@ func validInstallHandoffRequest(request InstallHandoffRequest) bool {
 	host, port, err := net.SplitHostPort(request.RealityTarget)
 	return request.Schema == 1 && validLowerHex(request.Session, 64) && handoffTag.MatchString(request.Tag) &&
 		(request.Architecture == softwarelifecycle.AMD64 || request.Architecture == softwarelifecycle.ARM64) && request.Draft.Valid() &&
-		handoffCloudflare.MatchString(request.CloudflareAccountID) && handoffCloudflare.MatchString(request.CloudflareZoneID) && handoffToken.MatchString(request.CloudflareToken) && !bytes.HasPrefix([]byte(request.CloudflareToken), []byte("cfat_")) &&
 		err == nil && port == "443" && host == request.RealityServerName && handoffHostname.MatchString(host) && validLowerHex(request.ReviewedPlanSHA256, 64) &&
 		(request.ReviewedReclamationSHA256 == "" || validLowerHex(request.ReviewedReclamationSHA256, 64)) &&
 		len(request.Entropy) == 32 && !bytes.Equal(request.Entropy, make([]byte, 32)) &&

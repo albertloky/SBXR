@@ -125,7 +125,7 @@ func lifecycleContributions(t *testing.T, changeSet, desired string) []softwarel
 		name  string
 		owner systemchanges.Module
 	}{
-		{"Network Policy", systemchanges.NetworkPolicyModule}, {"Connection Profiles", systemchanges.ConnectionProfilesModule}, {"Cloudflare Tunnel", systemchanges.CloudflareModule},
+		{"Network Policy", systemchanges.NetworkPolicyModule}, {"Connection Profiles", systemchanges.ConnectionProfilesModule},
 		{"Certificate Lifecycle", systemchanges.CertificateModule}, {"Subscription Publication", systemchanges.SubscriptionModule},
 	}
 	result := make([]softwarelifecycle.InstallContribution, 0, len(definitions))

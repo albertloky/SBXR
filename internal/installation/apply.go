@@ -10,7 +10,6 @@ import (
 	"sync"
 
 	certificateubuntu "github.com/albertloky/SBXR/internal/certificatelifecycle/adapter/ubuntu"
-	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
 	profilesubuntu "github.com/albertloky/SBXR/internal/connectionprofiles/adapter/ubuntu"
 	"github.com/albertloky/SBXR/internal/networkpolicy"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
@@ -44,15 +43,11 @@ func PreparePrivilegedApply(module *Interface, ctx context.Context, request soft
 		return nil, errors.New("fresh SSH Preservation Proof refused")
 	}
 	built, err := module.build(ctx, request, preflight.SSHPreservationProof())
-	if err != nil || built.cloudflareAPI == nil || built.network == nil {
+	if err != nil || built.network == nil {
 		return nil, errors.New("complete install composition refused")
 	}
 	stateModule := statefilesystem.New()
 	prepared, err := built.prepareState(stateModule)
-	if err != nil {
-		return nil, err
-	}
-	cloudflareExecutor, err := built.cloudflare.Executor(built.cloudflareAPI)
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +94,7 @@ func PreparePrivilegedApply(module *Interface, ctx context.Context, request soft
 		return recheck, nil
 	})
 
-	adapter := systemubuntu.NewAtForInstall("/", observation, installHost, systemchanges.NewFreshInstallationAuthority(built.wiring.network.FreshInstallationProof()), systemubuntu.NewNativeFirewall(), cloudflareExecutor, certificateExecutor, profilesubuntu.NewRuntimeExecutor(), subscriptionExecutor, softwareExecutor, stateModule)
+	adapter := systemubuntu.NewAtForInstall("/", observation, installHost, systemchanges.NewFreshInstallationAuthority(built.wiring.network.FreshInstallationProof()), systemubuntu.NewNativeFirewall(), nil, certificateExecutor, profilesubuntu.NewRuntimeExecutor(), subscriptionExecutor, softwareExecutor, stateModule)
 	changes := systemchanges.New(adapter)
 	cancellation := systemchanges.NewCancellation()
 	go func() {
@@ -129,18 +124,7 @@ func PreparePrivilegedApply(module *Interface, ctx context.Context, request soft
 }
 
 func recheckInstall(ctx context.Context, request softwareubuntu.InstallHandoffRequest, built *builtInstall) (softwarelifecycle.InstallRecheck, string, error) {
-	ownerFacts := networkpolicy.OwnerFacts{}
-	if request.ReviewedReclamationSHA256 != "" {
-		token, err := cloudflaretunnel.NewManagementToken(request.CloudflareToken)
-		if err != nil {
-			return softwarelifecycle.InstallRecheck{}, "", errors.New("Cloudflare management token refused")
-		}
-		ownerFacts, _, err = observeReclamationCloudflare(ctx, built.inventory, request.CloudflareAccountID, request.CloudflareZoneID, token, "sbxr-main", []string{"xhttp." + request.Draft.Domain, "ws." + request.Draft.Domain, "direct." + request.Draft.Domain})
-		if err != nil {
-			return softwarelifecycle.InstallRecheck{}, "", errors.New("Cloudflare conflict inventory failed")
-		}
-	}
-	fresh := built.network(networkpolicy.Request{Intent: built.networkIntent, Stage: networkpolicy.PostApproval, OwnerFacts: ownerFacts, ReclamationReview: request.ReviewedReclamationSHA256 != "", ReviewedReclamationSHA256: request.ReviewedReclamationSHA256})
+	fresh := built.network(networkpolicy.Request{Intent: built.networkIntent, Stage: networkpolicy.PostApproval, ReclamationReview: request.ReviewedReclamationSHA256 != "", ReviewedReclamationSHA256: request.ReviewedReclamationSHA256})
 	if fresh.Outcome == networkpolicy.Failed || fresh.Outcome == networkpolicy.Unknown {
 		return softwarelifecycle.InstallRecheck{}, "", errors.New("privileged Network Policy recheck failed")
 	}

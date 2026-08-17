@@ -24,6 +24,9 @@ import (
 )
 
 var fixedInstallUnits = []string{"cloudflared.service", "sbxr-cert-renew.service", "sbxr-cert-renew.timer", "sbxr-health-check.service", "sbxr-health-check.timer", "sbxr-recovery.service", "sbxr-subscription.service", "sbxr-update-check.service", "sbxr-update-check.timer", "sing-box.service", "xray.service"}
+var revisionOneActiveUnits = []string{"sbxr-cert-renew.timer", "sbxr-health-check.timer", "sbxr-subscription.service", "sbxr-update-check.timer", "xray.service"}
+var revisionOneInactiveUnits = []string{"cloudflared.service", "sing-box.service"}
+var revisionOnePostCertificateUnits = []string{"sbxr-cert-renew.timer", "sbxr-health-check.timer", "sbxr-subscription.service", "sbxr-update-check.timer"}
 
 // InstallHost owns the remaining fixed Ubuntu effects for the first install:
 // activating the prepared proxy-core configurations and systemd lifecycle.
@@ -105,7 +108,7 @@ func (host InstallHost) Execute(step systemchanges.Step, timeout time.Duration, 
 			}
 		}
 	} else {
-		restart = append(restart, "xray.service", "sing-box.service")
+		restart = append(restart, "xray.service")
 	}
 	for name, artifact := range prepared {
 		if err := writeInstallConfiguration(host.root, name, artifact, host.uid, host.rootGID); err != nil {
@@ -114,7 +117,17 @@ func (host InstallHost) Execute(step systemchanges.Step, timeout time.Duration, 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	if !slices.Equal(host.units, fixedInstallUnits) || host.command(ctx, "systemctl", "daemon-reload") != nil || host.command(ctx, "systemctl", append([]string{"enable"}, host.activeUnits()...)...) != nil {
+	if !slices.Equal(host.units, fixedInstallUnits) || host.command(ctx, "systemctl", "daemon-reload") != nil {
+		return systemchanges.StepEvidence{}, errors.New("managed service activation failed")
+	}
+	if host.managed {
+		err = host.command(ctx, "systemctl", append([]string{"enable"}, host.activeUnits()...)...)
+	} else if host.command(ctx, "systemctl", append([]string{"disable", "--now"}, revisionOneInactiveUnits...)...) != nil {
+		err = errors.New("managed service activation failed")
+	} else {
+		err = host.command(ctx, "systemctl", "enable", "--now", "xray.service")
+	}
+	if err != nil {
 		return systemchanges.StepEvidence{}, errors.New("managed service activation failed")
 	}
 	for _, unit := range restart {
@@ -160,6 +173,9 @@ func (host InstallHost) Reverse(step systemchanges.Step, snapshot io.Reader, tim
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	active := host.activeUnits()
+	if !host.managed {
+		active = []string{"xray.service"}
+	}
 	if !slices.Equal(host.units, fixedInstallUnits) || host.command(ctx, "systemctl", append([]string{"disable", "--now"}, active...)...) != nil {
 		return systemchanges.StepEvidence{}, errors.New("managed service rollback failed")
 	}
@@ -193,7 +209,42 @@ func (host InstallHost) AllowProvenServices(recovery systemchanges.RecoveryTrans
 	return host.command(ctx, "systemctl", append([]string{"start"}, host.activeUnits()...)...)
 }
 
+func (host InstallHost) activatePostCertificateUnits(timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if host.managed || host.command(ctx, "systemctl", append([]string{"enable", "--now"}, revisionOnePostCertificateUnits...)...) != nil {
+		return errors.New("fresh post-certificate unit activation failed")
+	}
+	return nil
+}
+
+func (host InstallHost) reversePostCertificateUnits(timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if host.managed || host.command(ctx, "systemctl", append([]string{"disable", "--now"}, revisionOnePostCertificateUnits...)...) != nil {
+		return errors.New("fresh post-certificate unit rollback failed")
+	}
+	return nil
+}
+
+func (host InstallHost) inspectPostCertificateUnits(timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if host.managed {
+		return errors.New("fresh post-certificate unit inspection unavailable")
+	}
+	for _, unit := range revisionOnePostCertificateUnits {
+		if host.command(ctx, "systemctl", "is-active", unit) != nil || host.command(ctx, "systemctl", "is-enabled", unit) != nil {
+			return errors.New("fresh post-certificate unit agreement failed")
+		}
+	}
+	return nil
+}
+
 func (host InstallHost) activeUnits() []string {
+	if !host.managed {
+		return append([]string(nil), revisionOneActiveUnits...)
+	}
 	result := make([]string, 0, len(host.units))
 	for _, unit := range host.units {
 		if unit != "sbxr-recovery.service" {
@@ -232,18 +283,28 @@ func (host InstallHost) InspectStep(step systemchanges.Step, snapshot io.Reader,
 	if string(body) != `{"absent":true}` {
 		return "", errors.New("install host inspection refused")
 	}
-	present := 0
+	present := map[string]bool{}
 	for _, name := range installConfigurationPaths() {
 		if _, err := os.Lstat(filepath.Join(host.root, name)); err == nil {
-			present++
+			present[name] = true
 		} else if !errors.Is(err, fs.ErrNotExist) {
 			return "", err
 		}
 	}
-	if present == 0 {
+	if !host.managed {
+		xray, singBox := present["etc/sbxr/xray/config.json"], present["etc/sbxr/sing-box/config.json"]
+		if !xray && !singBox {
+			return systemchanges.StepEffectAbsent, nil
+		}
+		if xray && !singBox {
+			return systemchanges.StepEffectPresent, nil
+		}
+		return "", errors.New("partial Connection Profiles activation")
+	}
+	if len(present) == 0 {
 		return systemchanges.StepEffectAbsent, nil
 	}
-	if present == len(installConfigurationPaths()) {
+	if len(present) == len(installConfigurationPaths()) {
 		return systemchanges.StepEffectPresent, nil
 	}
 	return "", errors.New("partial Connection Profiles activation")
@@ -318,7 +379,7 @@ func (host InstallHost) Check(check systemchanges.Check, _ systemchanges.GatePha
 			}
 			return systemchanges.Failed, nil
 		}
-		if host.command(ctx, "systemctl", "is-active", "xray.service") == nil && host.command(ctx, "systemctl", "is-active", "sing-box.service") == nil {
+		if host.command(ctx, "systemctl", "is-active", "xray.service") == nil && (!host.managed || host.command(ctx, "systemctl", "is-active", "sing-box.service") == nil) {
 			return systemchanges.Healthy, nil
 		}
 	case systemchanges.NetworkPolicyModule:
@@ -337,9 +398,20 @@ func (host InstallHost) VerifyAgreement(agreement systemchanges.Agreement, timeo
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	for _, unit := range []string{"xray.service", "sing-box.service", "cloudflared.service", "sbxr-subscription.service", "sbxr-cert-renew.timer", "sbxr-health-check.timer", "sbxr-update-check.timer"} {
-		if host.command(ctx, "systemctl", "is-active", unit) != nil {
+	units := []string{"xray.service", "sing-box.service", "cloudflared.service", "sbxr-subscription.service", "sbxr-cert-renew.timer", "sbxr-health-check.timer", "sbxr-update-check.timer"}
+	if !host.managed {
+		units = revisionOneActiveUnits
+	}
+	for _, unit := range units {
+		if host.command(ctx, "systemctl", "is-active", unit) != nil || host.command(ctx, "systemctl", "is-enabled", unit) != nil {
 			return errors.New("managed unit agreement failed")
+		}
+	}
+	if !host.managed {
+		for _, unit := range revisionOneInactiveUnits {
+			if host.command(ctx, "systemctl", "is-active", unit) == nil || host.command(ctx, "systemctl", "is-enabled", unit) == nil {
+				return errors.New("inactive managed unit agreement failed")
+			}
 		}
 	}
 	return nil
@@ -393,6 +465,12 @@ func (host InstallHost) preparedConfigurations() (map[string]preparedInstallConf
 		"xray.json":     {"etc/sbxr/xray/config.json", manifests.Xray, "xray.service"},
 		"sing-box.json": {"etc/sbxr/sing-box/config.json", manifests.SingBox, "sing-box.service"},
 	} {
+		if !host.managed && target.service == "sing-box.service" {
+			if target.manifest != nil {
+				return nil, errors.New("revision 1 prepared a disabled Connection Profile")
+			}
+			continue
+		}
 		body, err := os.ReadFile(filepath.Join(base, source))
 		if err != nil || !validInstallManifest(target.manifest, target.service, body) {
 			return nil, errors.New("prepared Connection Profiles configuration unavailable")

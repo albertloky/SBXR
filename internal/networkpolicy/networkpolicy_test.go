@@ -85,6 +85,17 @@ func TestInstallationPreflightReturnsOnlyProvenLocalNetworkFacts(t *testing.T) {
 	}
 }
 
+func TestInstallationPreflightReportsOnlyConditionalInstallInputs(t *testing.T) {
+	identity := "203.0.113.9 50000 203.0.113.10 2222"
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(identity)))
+	ssh := networkpolicy.SSHFacts{DetectedPort: 2222, ServerAddress: "203.0.113.10", CurrentSessions: []string{digest}, SessionsComplete: true, Service: "ssh.service", Listener: "0.0.0.0:2222/tcp"}
+	observed := networkpolicy.Observations{SSH: ssh, PublicIPv4: []string{"8.8.8.8"}, PublicIPv6: []string{"2606:4700:4700::1111"}, Listeners: []networkpolicy.Listener{{Address: "0.0.0.0", Port: 2222, Protocol: networkpolicy.TCP, Process: "sshd", Service: "ssh.service"}, {Address: "0.0.0.0", Port: 443, Protocol: networkpolicy.TCP, Process: "other"}, {Address: "::", Port: 10443, Protocol: networkpolicy.TCP, Process: "other"}}}
+	result := networkpolicy.New(&stagedAdapter{observed: observed}).InstallationPreflight(identity)
+	if result.Failure != nil || !slices.Equal(result.UsablePublicIPv4, []string{"8.8.8.8"}) || !slices.Equal(result.UsablePublicIPv6, []string{"2606:4700:4700::1111"}) || !result.RealityPortReplacementRequired || !result.SubscriptionReplacementRequired {
+		t.Fatalf("conditional Installation preflight = %+v", result)
+	}
+}
+
 func TestSSHPreservationProofRejectsEveryUnprovedCauseWithoutRawIdentity(t *testing.T) {
 	identity := "203.0.113.9 50000 203.0.113.10 2222"
 	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(identity)))

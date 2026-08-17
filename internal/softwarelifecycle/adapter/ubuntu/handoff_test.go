@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"reflect"
@@ -319,11 +320,27 @@ func installHandoffFixture() InstallHandoffRequest {
 	staged := softwarelifecycle.StagedRelease{Identity: identity, Build: softwarelifecycle.EmbeddedBuildIdentity{Repository: softwarelifecycle.Repository, Tag: identity.Tag, Commit: identity.Commit, PayloadSHA256: strings.Repeat("3", 64)}, Architecture: softwarelifecycle.AMD64, ExecutableSHA256: strings.Repeat("4", 64), ComponentsSHA256: componentAsset.SHA256, InstallPath: softwarelifecycle.ReleaseInstallPath(identity), StateSchema: 2}
 	return InstallHandoffRequest{
 		Schema: 1, Session: strings.Repeat("a", 64), Tag: "v1.0.0", Architecture: softwarelifecycle.AMD64,
-		Draft:               softwarelifecycle.InstallationDraft{Domain: "example.com", OwnerEmail: "owner@example.com", PublicIPv4: "192.0.2.10", PrimaryAddress: "192.0.2.10", SSHPort: 22, RealityPort: 443, Hysteria2Port: 443, TUICPort: 8443, AnyTLSPort: 9443, SubscriptionPort: 10443},
-		CloudflareAccountID: strings.Repeat("b", 32), CloudflareZoneID: strings.Repeat("c", 32), CloudflareToken: "sbxr_" + strings.Repeat("d", 40),
+		Draft:         softwarelifecycle.InstallationDraft{OwnerEmail: "owner@example.com", SubscriberAgreementReviewed: true, PublicIPv4: "192.0.2.10", PrimaryAddress: "192.0.2.10", SSHPort: 22, RealityPort: 443, SubscriptionPort: 10443},
 		Entropy:       bytes.Repeat([]byte{0x42}, 32),
 		RealityTarget: "www.example.net:443", RealityServerName: "www.example.net", ReviewedPlanSHA256: strings.Repeat("e", 64),
 		Candidate: softwarelifecycle.InstallCandidateHandoff{Verified: verified, Staged: staged, ApplicationAsset: applicationAsset, ComponentAsset: componentAsset, ApplicationArchive: application, ComponentArchive: components},
+	}
+}
+
+func TestInstallHandoffRejectsCloudflareInput(t *testing.T) {
+	request := installHandoffFixture()
+	body, err := encodeInstallHandoffRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if json.Unmarshal(body, &document) != nil {
+		t.Fatal("decode fixture")
+	}
+	document["cloudflare_token"] = "sbxr_" + strings.Repeat("d", 40)
+	body, _ = json.Marshal(document)
+	if _, err := decodeInstallHandoffRequest(body); err == nil {
+		t.Fatal("revision 1 accepted Cloudflare input")
 	}
 }
 

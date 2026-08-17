@@ -17,7 +17,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
 	"github.com/albertloky/SBXR/internal/connectionprofiles"
 	"github.com/albertloky/SBXR/internal/healthdiagnostics"
 	"github.com/albertloky/SBXR/internal/networkpolicy"
@@ -46,39 +45,37 @@ func ReclamationConfirmationGuidance() ConfirmationGuidance {
 }
 
 type Draft struct {
-	SubmittedField, SubmittedValue                              string
-	Tag, CloudflareAccountID, CloudflareZoneID, CloudflareToken string
-	RealityTarget, RealityServerName                            string
-	Architecture                                                softwarelifecycle.Architecture
-	Installation                                                softwarelifecycle.InstallationDraft
-	discard                                                     bool
+	SubmittedField, SubmittedValue   string
+	Tag                              string
+	RealityTarget, RealityServerName string
+	Architecture                     softwarelifecycle.Architecture
+	Installation                     softwarelifecycle.InstallationDraft
+	discard                          bool
 }
 
 func DiscardDraft() Draft { return Draft{discard: true} }
 
 type Dependencies struct {
-	Preflight           func() networkpolicy.InstallationPreflightResult
-	RunningRelease      func() (RunningRelease, error)
-	ReviewRealityTarget func(context.Context, connectionprofiles.RealityTarget) connectionprofiles.RealityTargetReview
-	ReleaseCandidate    func(context.Context, string, softwarelifecycle.Architecture) (softwarelifecycle.InstallCandidateHandoff, error)
-	Stage               func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error)
-	Network             func(networkpolicy.Request) networkpolicy.Result
-	Cloudflare          func(context.Context, cloudflaretunnel.PlanRequest) cloudflaretunnel.PlanResult
-	CloudflareAPI       cloudflaretunnel.MutationAPI
-	Inventory           cloudflaretunnel.MutationPlanner
-	Entropy             io.Reader
-	Launch              func(context.Context, softwareubuntu.InstallHandoffRequest, <-chan struct{}) (softwareubuntu.InstallApplyOutcome, error)
-	Recover             func(context.Context, systemchanges.PendingChangeSet) error
-	Pending             systemchanges.PendingChangeSetReader
-	WriteReceipt        func(string, softwarelifecycle.ReleaseIdentity, string) error
-	RemoveReceipt       func() error
-	ObserveState        func() (systemchanges.Observation, error)
-	LoadManaged         func() (systemchanges.Observation, state.ReleaseIdentity, error)
-	ProveSubscription   func(context.Context, string, uint16) error
+	Preflight                func() networkpolicy.InstallationPreflightResult
+	RunningRelease           func() (RunningRelease, error)
+	RecommendedRealityTarget string
+	ReviewRealityTarget      func(context.Context, connectionprofiles.RealityTarget) connectionprofiles.RealityTargetReview
+	ReleaseCandidate         func(context.Context, string, softwarelifecycle.Architecture) (softwarelifecycle.InstallCandidateHandoff, error)
+	Stage                    func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error)
+	Network                  func(networkpolicy.Request) networkpolicy.Result
+	Entropy                  io.Reader
+	Launch                   func(context.Context, softwareubuntu.InstallHandoffRequest, <-chan struct{}) (softwareubuntu.InstallApplyOutcome, error)
+	Recover                  func(context.Context, systemchanges.PendingChangeSet) error
+	Pending                  systemchanges.PendingChangeSetReader
+	WriteReceipt             func(string, softwarelifecycle.ReleaseIdentity, string) error
+	RemoveReceipt            func() error
+	ObserveState             func() (systemchanges.Observation, error)
+	LoadManaged              func() (systemchanges.Observation, state.ReleaseIdentity, error)
+	ProveSubscription        func(context.Context, string, uint16) error
 }
 
 func (dependencies Dependencies) validate() error {
-	if dependencies.Preflight == nil || dependencies.RunningRelease == nil || dependencies.ReviewRealityTarget == nil || dependencies.ReleaseCandidate == nil || dependencies.Stage == nil || dependencies.Network == nil || dependencies.Cloudflare == nil || dependencies.CloudflareAPI == nil || dependencies.Inventory == nil || dependencies.Entropy == nil || dependencies.Launch == nil || dependencies.Recover == nil || dependencies.Pending == nil || dependencies.WriteReceipt == nil || dependencies.RemoveReceipt == nil || dependencies.ObserveState == nil || dependencies.LoadManaged == nil || dependencies.ProveSubscription == nil {
+	if dependencies.Preflight == nil || dependencies.RunningRelease == nil || dependencies.ReviewRealityTarget == nil || dependencies.ReleaseCandidate == nil || dependencies.Stage == nil || dependencies.Network == nil || dependencies.Entropy == nil || dependencies.Launch == nil || dependencies.Recover == nil || dependencies.Pending == nil || dependencies.WriteReceipt == nil || dependencies.RemoveReceipt == nil || dependencies.ObserveState == nil || dependencies.LoadManaged == nil || dependencies.ProveSubscription == nil {
 		return errors.New("Installation dependencies unavailable")
 	}
 	return nil
@@ -205,10 +202,11 @@ type Interface struct {
 	cancel              chan struct{}
 	cancelled           bool
 	nextField           int
+	fields              []string
 	initialized         bool
 	reviewFacts         []ReviewFact
-	detectedIPv4        bool
 	ipv4Candidates      []string
+	ipv6Candidates      []string
 	sshProof            networkpolicy.SSHPreservationProof
 	reclamationSSHProof networkpolicy.SSHPreservationProof
 }
@@ -225,18 +223,19 @@ func (*Interface) GoString() string { return "Installation Module: protected" }
 
 func (module *Interface) Review(ctx context.Context, draft Draft) ReviewResult {
 	module.mu.Lock()
+	realityReviewed := false
 	if draft.discard {
 		module.resetDraft()
 	}
 	if !module.initialized {
-		if correction := module.initializeDraft(); correction != nil {
+		if correction := module.initializeDraft(ctx); correction != nil {
 			module.mu.Unlock()
 			return ReviewResult{Correction: correction}
 		}
 	}
 	if draft.SubmittedField != "" {
-		if module.nextField >= len(draftFields) || draft.SubmittedField != draftFields[module.nextField] {
-			field := draftFields[min(module.nextField, len(draftFields)-1)]
+		if module.nextField >= len(module.fields) || draft.SubmittedField != module.fields[module.nextField] {
+			field := module.fields[min(module.nextField, len(module.fields)-1)]
 			result := module.invalidDraftField(module.draft, field, "Submit the current Installation field before continuing.")
 			module.mu.Unlock()
 			return ReviewResult{Invalid: result}
@@ -268,37 +267,40 @@ func (module *Interface) Review(ctx context.Context, draft Draft) ReviewResult {
 				module.mu.Unlock()
 				return ReviewResult{Invalid: invalid}
 			}
+			realityReviewed = true
 		}
 		module.draft, module.nextField = candidate, module.nextField+1
-		if validateDraft(candidate) == nil {
-			module.nextField = len(draftFields)
-		}
 	} else if draft != (Draft{}) {
 		module.draft = mergeDraft(module.draft, draft)
 		if invalid := validateDraft(module.draft); invalid != nil {
-			module.nextField = draftFieldIndex(invalid.Field)
-		} else if invalid := module.reviewRealityTarget(ctx, module.draft); invalid != nil {
-			module.nextField = draftFieldIndex(invalid.Field)
+			module.nextField = module.draftFieldIndex(invalid.Field)
+		} else {
+			module.nextField = len(module.fields)
+		}
+	}
+	if module.nextField >= len(module.fields) {
+		if invalid := validateDraft(module.draft); invalid != nil {
+			module.nextField = module.draftFieldIndex(invalid.Field)
+			module.attachReviewFacts(invalid)
 			module.mu.Unlock()
 			return ReviewResult{Invalid: invalid}
-		} else {
-			module.nextField = len(draftFields)
+		}
+		if !realityReviewed {
+			if invalid := module.reviewRealityTarget(ctx, module.draft); invalid != nil {
+				module.nextField = module.draftFieldIndex(invalid.Field)
+				module.mu.Unlock()
+				return ReviewResult{Invalid: invalid}
+			}
 		}
 	}
 	draft, sshProof := module.draft, module.sshProof
 	module.approval, module.reclamation, module.request = nil, nil, softwareubuntu.InstallHandoffRequest{}
-	if module.nextField < len(draftFields) {
-		invalid := module.invalidDraftField(draft, draftFields[module.nextField], "Submit this Installation field to continue.")
+	if module.nextField < len(module.fields) {
+		invalid := module.invalidDraftField(draft, module.fields[module.nextField], "Submit this Installation field to continue.")
 		module.mu.Unlock()
 		return ReviewResult{Invalid: invalid}
 	}
 	module.mu.Unlock()
-	if invalid := validateDraft(draft); invalid != nil {
-		module.mu.Lock()
-		module.attachReviewFacts(invalid)
-		module.mu.Unlock()
-		return ReviewResult{Invalid: invalid}
-	}
 	handoff, err := module.dependencies.ReleaseCandidate(ctx, draft.Tag, draft.Architecture)
 	if err != nil {
 		return ReviewResult{Correction: &Correction{Problem: "The verified running release could not be staged", Found: "the running Release Identity is no longer available as the exact Installation candidate", Required: "the same verified running release must remain available", WhyStopped: "Installation never asks the Owner to replace the running Release Identity", OwnerSteps: []string{"Check the release connection, then check again. If the exact release is unavailable, restart through the current qualified Pasteable Install Command."}, Evidence: "INSTALL-RUNNING-RELEASE-UNAVAILABLE"}}
@@ -310,7 +312,7 @@ func (module *Interface) Review(ctx context.Context, draft Draft) ReviewResult {
 	if _, err := io.ReadFull(module.dependencies.Entropy, entropy); err != nil {
 		return correction(errors.New("installation entropy generation failed"))
 	}
-	request := softwareubuntu.InstallHandoffRequest{Schema: 1, Session: hex.EncodeToString(session), Tag: draft.Tag, Architecture: draft.Architecture, Draft: draft.Installation, CloudflareAccountID: draft.CloudflareAccountID, CloudflareZoneID: draft.CloudflareZoneID, CloudflareToken: draft.CloudflareToken, RealityTarget: draft.RealityTarget, RealityServerName: draft.RealityServerName, Entropy: entropy, Candidate: handoff}
+	request := softwareubuntu.InstallHandoffRequest{Schema: 1, Session: hex.EncodeToString(session), Tag: draft.Tag, Architecture: draft.Architecture, Draft: draft.Installation, RealityTarget: draft.RealityTarget, RealityServerName: draft.RealityServerName, Entropy: entropy, Candidate: handoff}
 	built, err := module.build(ctx, request, sshProof)
 	if err != nil {
 		var reclaim *reclamationReviewError
@@ -332,7 +334,7 @@ func (module *Interface) Review(ctx context.Context, draft Draft) ReviewResult {
 	return module.finalReview(built, request, nil)
 }
 
-func (module *Interface) initializeDraft() *Correction {
+func (module *Interface) initializeDraft(ctx context.Context) *Correction {
 	preflight := module.dependencies.Preflight()
 	if preflight.Failure != nil {
 		failure := preflight.Failure
@@ -345,19 +347,50 @@ func (module *Interface) initializeDraft() *Correction {
 	module.draft.Tag, module.draft.Architecture, module.draft.Installation.SSHPort = release.Tag, release.Architecture, preflight.ActiveSSHPort
 	module.sshProof = preflight.SSHPreservationProof()
 	module.ipv4Candidates = append([]string(nil), preflight.UsablePublicIPv4...)
+	module.ipv6Candidates = append([]string(nil), preflight.UsablePublicIPv6...)
+	if len(preflight.UsablePublicIPv4) > 1 || len(preflight.UsablePublicIPv6) > 1 || len(preflight.UsablePublicIPv4)+len(preflight.UsablePublicIPv6) == 0 {
+		return &Correction{Problem: "The public address selection is ambiguous", Found: "Installation did not prove exactly zero or one usable address in each family", Required: "one usable public IPv4, one usable public IPv6, or one of each", WhyStopped: "Installation cannot ask for an address outside the conditional primary-address contract", OwnerSteps: []string{"Remove unused public addresses or correct the VPS network assignment, then use Check again."}, Evidence: "INSTALL-PUBLIC-ADDRESS-AMBIGUOUS"}
+	}
 	if len(preflight.UsablePublicIPv4) == 1 {
 		module.draft.Installation.PublicIPv4 = preflight.UsablePublicIPv4[0]
-		module.draft.Installation.PrimaryAddress = preflight.UsablePublicIPv4[0]
-		module.detectedIPv4 = true
+	}
+	if len(preflight.UsablePublicIPv6) == 1 {
+		module.draft.Installation.PublicIPv6 = preflight.UsablePublicIPv6[0]
 	}
 	module.reviewFacts = []ReviewFact{{Label: "Running release tag", Value: release.Tag}, {Label: "Active SSH port", Value: fmt.Sprint(preflight.ActiveSSHPort)}}
+	module.fields = []string{"owner-email", "subscriber-agreement"}
+	if module.draft.Installation.PublicIPv4 != "" && module.draft.Installation.PublicIPv6 != "" {
+		module.fields = append(module.fields, "primary-address")
+	} else if module.draft.Installation.PublicIPv4 != "" {
+		module.draft.Installation.PrimaryAddress = module.draft.Installation.PublicIPv4
+	} else {
+		module.draft.Installation.PrimaryAddress = module.draft.Installation.PublicIPv6
+	}
+	if preflight.RealityPortReplacementRequired {
+		module.fields = append(module.fields, "reality-port")
+	}
+	if preflight.SubscriptionReplacementRequired {
+		module.fields = append(module.fields, "subscription-port")
+	}
+	if recommended := module.dependencies.RecommendedRealityTarget; recommended != "" {
+		target := connectionprofiles.RealityTarget{Address: net.JoinHostPort(recommended, "443"), ServerName: recommended}
+		review := module.dependencies.ReviewRealityTarget(ctx, target)
+		if review.Target.Address == target.Address && review.Target.ServerName == target.ServerName && review.Health.Outcome == connectionprofiles.Healthy {
+			module.draft.RealityTarget, module.draft.RealityServerName = target.Address, target.ServerName
+		} else {
+			module.fields = append(module.fields, "reality-target")
+		}
+	} else {
+		module.fields = append(module.fields, "reality-target")
+	}
 	module.initialized = true
 	return nil
 }
 
 func (module *Interface) resetDraft() {
 	module.draft, module.nextField, module.initialized = initialDraft(), 0, false
-	module.reviewFacts, module.detectedIPv4, module.ipv4Candidates = nil, false, nil
+	module.reviewFacts, module.ipv4Candidates, module.ipv6Candidates = nil, nil, nil
+	module.fields = nil
 	module.sshProof = networkpolicy.SSHPreservationProof{}
 	module.reclamationSSHProof = networkpolicy.SSHPreservationProof{}
 }
@@ -383,7 +416,7 @@ func (module *Interface) ConfirmReclamation(ctx context.Context, confirmation Re
 }
 
 func (module *Interface) build(ctx context.Context, request softwareubuntu.InstallHandoffRequest, sshProof networkpolicy.SSHPreservationProof) (*builtInstall, error) {
-	return buildInstallWith(ctx, request, buildDependencies{stage: module.dependencies.Stage, network: module.dependencies.Network, cloudflare: module.dependencies.Cloudflare, random: newInstallEntropyReader(request.Entropy), cloudflareAPI: module.dependencies.CloudflareAPI, inventory: module.dependencies.Inventory, sshProof: sshProof})
+	return buildInstallWith(ctx, request, buildDependencies{stage: module.dependencies.Stage, network: module.dependencies.Network, random: newInstallEntropyReader(request.Entropy), sshProof: sshProof})
 }
 
 func (module *Interface) finalReview(built *builtInstall, request softwareubuntu.InstallHandoffRequest, reclamation *networkpolicy.ReclamationPlan) ReviewResult {
@@ -461,10 +494,6 @@ func mergeDraft(current, update Draft) Draft {
 		}
 	}
 	for target, value := range map[*string]string{
-		&current.CloudflareAccountID:     update.CloudflareAccountID,
-		&current.CloudflareZoneID:        update.CloudflareZoneID,
-		&current.CloudflareToken:         update.CloudflareToken,
-		&current.Installation.Domain:     update.Installation.Domain,
 		&current.Installation.OwnerEmail: update.Installation.OwnerEmail,
 		&current.Installation.PublicIPv6: update.Installation.PublicIPv6,
 	} {
@@ -474,15 +503,13 @@ func mergeDraft(current, update Draft) Draft {
 	}
 	for target, value := range map[*uint16]uint16{
 		&current.Installation.RealityPort:      update.Installation.RealityPort,
-		&current.Installation.Hysteria2Port:    update.Installation.Hysteria2Port,
-		&current.Installation.TUICPort:         update.Installation.TUICPort,
-		&current.Installation.AnyTLSPort:       update.Installation.AnyTLSPort,
 		&current.Installation.SubscriptionPort: update.Installation.SubscriptionPort,
 	} {
 		if value != 0 {
 			*target = value
 		}
 	}
+	current.Installation.SubscriberAgreementReviewed = current.Installation.SubscriberAgreementReviewed || update.Installation.SubscriberAgreementReviewed
 	return current
 }
 
@@ -496,29 +523,19 @@ func updateDraftField(current Draft, field, value string) (Draft, error) {
 	}
 	var err error
 	switch field {
-	case "domain":
-		current.Installation.Domain = value
 	case "owner-email":
 		current.Installation.OwnerEmail = value
-	case "public-ipv4":
-		current.Installation.PublicIPv4 = value
+	case "subscriber-agreement":
+		if value != "accepted" {
+			return current, errors.New("The ACME subscriber agreement must be accepted.")
+		}
+		current.Installation.SubscriberAgreementReviewed = true
+	case "primary-address":
 		current.Installation.PrimaryAddress = value
 	case "reality-port":
 		current.Installation.RealityPort, err = port()
-	case "hysteria2-port":
-		current.Installation.Hysteria2Port, err = port()
-	case "tuic-port":
-		current.Installation.TUICPort, err = port()
-	case "anytls-port":
-		current.Installation.AnyTLSPort, err = port()
 	case "subscription-port":
 		current.Installation.SubscriptionPort, err = port()
-	case "cloudflare-account":
-		current.CloudflareAccountID = value
-	case "cloudflare-zone":
-		current.CloudflareZoneID = value
-	case "cloudflare-token":
-		current.CloudflareToken = value
 	case "reality-target":
 		current.RealityTarget, current.RealityServerName = net.JoinHostPort(value, "443"), value
 	default:
@@ -528,23 +545,12 @@ func updateDraftField(current Draft, field, value string) (Draft, error) {
 }
 
 var (
-	draftFields = []string{"domain", "owner-email", "public-ipv4", "reality-port", "hysteria2-port", "tuic-port", "anytls-port", "subscription-port", "cloudflare-account", "cloudflare-zone", "cloudflare-token", "reality-target"}
-	draftDomain = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$`)
-	draftID     = regexp.MustCompile(`^[0-9a-f]{32}$`)
-	draftTag    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$`)
+	revisionOneDraftFields = []string{"owner-email", "subscriber-agreement", "primary-address", "reality-port", "subscription-port", "reality-target"}
+	draftDomain            = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$`)
+	draftTag               = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$`)
 )
 
 var installationFieldHelp = map[string]FieldHelp{
-	"domain": {
-		Purpose:        "Choose SBXR's public domain.",
-		Instructions:   []string{"Enter your Cloudflare domain."},
-		AcceptedFormat: "Lowercase DNS name only.",
-		CommonMistakes: []string{"No URL, port, or final dot."},
-		Recovery:       "Correct it; prior values remain.",
-		Example:        "vpn.example",
-		URL:            "https://developers.cloudflare.com/fundamentals/manage-domains/add-site/",
-		Sensitivity:    PublicInformation,
-	},
 	"owner-email": {
 		Purpose:        "Register and recover the ACME account.",
 		Instructions:   []string{"Enter one address you monitor."},
@@ -555,20 +561,26 @@ var installationFieldHelp = map[string]FieldHelp{
 		URL:            "https://eff-certbot.readthedocs.io/en/stable/using.html#certbot-command-line-options",
 		Sensitivity:    PersonalInformation,
 	},
-	"public-ipv4": {
-		Purpose:        "Select the direct-service public IPv4.",
-		Instructions:   []string{"Use the VPS network details."},
-		AcceptedFormat: "Public dotted-decimal IPv4.",
-		CommonMistakes: []string{"No private or special-use IP."},
-		Recovery:       "Use the VPS provider's usable IPv4.",
+	"subscriber-agreement": {
+		Purpose:        "Record acceptance of the ACME subscriber agreement.",
+		Instructions:   []string{"Enter accepted only after you review the agreement."},
+		AcceptedFormat: "accepted",
+		CommonMistakes: []string{"Do not continue before review."},
+		Recovery:       "Review the agreement, then enter accepted.",
+		URL:            "https://letsencrypt.org/repository/",
+		Sensitivity:    PublicInformation,
+	},
+	"primary-address": {
+		Purpose:        "Select the primary subscription address when both public address families are available.",
+		Instructions:   []string{"Enter one of the two detected public addresses."},
+		AcceptedFormat: "The detected public IPv4 or IPv6 address.",
+		CommonMistakes: []string{"No private, special-use, or different address."},
+		Recovery:       "Use one exact detected public address.",
 		Example:        "192.0.2.10",
 		URL:            "https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml",
 		Sensitivity:    PublicInformation,
 	},
 	"reality-port":      portFieldHelp("REALITY", "TCP", "10444"),
-	"hysteria2-port":    portFieldHelp("Hysteria2", "UDP", "10445"),
-	"tuic-port":         portFieldHelp("TUIC", "UDP", "10446"),
-	"anytls-port":       portFieldHelp("AnyTLS", "TCP", "10447"),
 	"subscription-port": portFieldHelp("Subscription HTTPS", "TCP", "10448"),
 	"reality-target": {
 		Purpose:        "Choose the REALITY Vision HTTPS target.",
@@ -580,12 +592,6 @@ var installationFieldHelp = map[string]FieldHelp{
 		URL:            "https://xtls.github.io/en/config/transport.html#realityobject",
 		Sensitivity:    PublicInformation,
 	},
-}
-
-var cloudflareCredentialInputs = map[string]cloudflaretunnel.CredentialInput{
-	"cloudflare-account": cloudflaretunnel.AccountIDInput,
-	"cloudflare-zone":    cloudflaretunnel.ZoneIDInput,
-	"cloudflare-token":   cloudflaretunnel.UserTokenInput,
 }
 
 func portFieldHelp(profile, transport, example string) FieldHelp {
@@ -602,16 +608,17 @@ func portFieldHelp(profile, transport, example string) FieldHelp {
 }
 
 func initialDraft() Draft {
-	return Draft{Installation: softwarelifecycle.InstallationDraft{RealityPort: 443, Hysteria2Port: 443, TUICPort: 8443, AnyTLSPort: 9443, SubscriptionPort: 10443}}
+	return Draft{Installation: softwarelifecycle.InstallationDraft{RealityPort: 443, SubscriptionPort: 10443}}
 }
 
-func draftFieldIndex(field string) int {
-	for index, candidate := range draftFields {
+func (module *Interface) draftFieldIndex(field string) int {
+	for index, candidate := range module.fields {
 		if candidate == field {
 			return index
 		}
 	}
-	return 0
+	module.fields = append(module.fields, field)
+	return len(module.fields) - 1
 }
 
 func (module *Interface) invalidDraftField(draft Draft, field, problem string) *InvalidInput {
@@ -633,60 +640,32 @@ func (module *Interface) attachReviewFacts(invalid *InvalidInput) {
 		invalid.Help.Instructions = append([]string(nil), help.Instructions...)
 		invalid.Help.CommonMistakes = append([]string(nil), help.CommonMistakes...)
 	}
-	if invalid.Field == "public-ipv4" {
-		invalid.Detected = module.detectedIPv4
-		if !module.detectedIPv4 {
-			invalid.Facts = append(invalid.Facts, ReviewFact{Label: "Public IPv4 guidance", Value: "Find the public IPv4 in the VPS provider network details, then enter the final address here."})
-			if len(module.ipv4Candidates) > 1 {
-				invalid.Facts = append(invalid.Facts, ReviewFact{Label: "Detected Public IPv4 candidates", Value: strings.Join(module.ipv4Candidates, ", ")})
-			}
-		}
+	if invalid.Field == "primary-address" {
+		candidates := append(append([]string(nil), module.ipv4Candidates...), module.ipv6Candidates...)
+		invalid.Facts = append(invalid.Facts, ReviewFact{Label: "Detected primary-address candidates", Value: strings.Join(candidates, ", ")})
 	}
 }
 
 func fieldHelp(field string) (FieldHelp, bool) {
-	if help, ok := installationFieldHelp[field]; ok {
-		return help, true
-	}
-	input, ok := cloudflareCredentialInputs[field]
-	if !ok {
-		return FieldHelp{}, false
-	}
-	help, ok := cloudflaretunnel.CredentialGuidance(input)
-	if !ok {
-		return FieldHelp{}, false
-	}
-	sensitivity := PublicInformation
-	if help.InfrastructureSecret {
-		sensitivity = InfrastructureSecret
-	}
-	return FieldHelp{Purpose: help.Purpose, Instructions: append([]string(nil), help.Instructions...), AcceptedFormat: help.AcceptedFormat, CommonMistakes: append([]string(nil), help.CommonMistakes...), Recovery: help.Recovery, Example: help.Example, URL: help.URL, Sensitivity: sensitivity}, true
+	help, ok := installationFieldHelp[field]
+	return help, ok
 }
 
 func draftFieldValue(draft Draft, field string) string {
 	switch field {
-	case "domain":
-		return draft.Installation.Domain
 	case "owner-email":
 		return draft.Installation.OwnerEmail
-	case "public-ipv4":
-		return draft.Installation.PublicIPv4
+	case "subscriber-agreement":
+		if draft.Installation.SubscriberAgreementReviewed {
+			return "accepted"
+		}
+		return ""
+	case "primary-address":
+		return draft.Installation.PrimaryAddress
 	case "reality-port":
 		return portText(draft.Installation.RealityPort)
-	case "hysteria2-port":
-		return portText(draft.Installation.Hysteria2Port)
-	case "tuic-port":
-		return portText(draft.Installation.TUICPort)
-	case "anytls-port":
-		return portText(draft.Installation.AnyTLSPort)
 	case "subscription-port":
 		return portText(draft.Installation.SubscriptionPort)
-	case "cloudflare-account":
-		return draft.CloudflareAccountID
-	case "cloudflare-zone":
-		return draft.CloudflareZoneID
-	case "cloudflare-token":
-		return draft.CloudflareToken
 	case "reality-target":
 		return draft.RealityServerName
 	default:
@@ -711,27 +690,19 @@ func validateDraftField(draft Draft, field string) *InvalidInput {
 		return invalid("The submitted value is a tutorial example and cannot become Desired State.")
 	}
 	switch field {
-	case "domain":
-		if !validDraftHostname(value) {
-			return invalid("The Domain is invalid.")
-		}
 	case "owner-email":
 		address, err := mail.ParseAddress(value)
 		if err != nil || address.Name != "" || address.Address != value {
 			return invalid("The Owner email is invalid.")
 		}
-	case "public-ipv4":
-		address, err := netip.ParseAddr(value)
-		if err != nil || !address.Is4() || !networkpolicy.UsablePublicAddress(value) {
-			return invalid("The Public IPv4 is invalid.")
+	case "primary-address":
+		_, err := netip.ParseAddr(value)
+		if err != nil || !networkpolicy.UsablePublicAddress(value) || value != draft.Installation.PublicIPv4 && value != draft.Installation.PublicIPv6 {
+			return invalid("The primary subscription address is invalid.")
 		}
-	case "cloudflare-account", "cloudflare-zone":
-		if !draftID.MatchString(value) {
-			return invalid("The Cloudflare identifier is invalid.")
-		}
-	case "cloudflare-token":
-		if _, err := cloudflaretunnel.NewManagementToken(value); err != nil {
-			return invalid("The Dedicated Broad Cloudflare User API Token is invalid.")
+	case "subscriber-agreement":
+		if value != "accepted" {
+			return invalid("The ACME subscriber agreement must be accepted.")
 		}
 	case "reality-target":
 		if !validDraftHostname(value) {
@@ -748,19 +719,13 @@ func nonProductionExampleValue(field, value string) bool {
 			return true
 		}
 	}
-	for helpField := range cloudflareCredentialInputs {
-		help, _ := fieldHelp(helpField)
-		if help.Example != "" && value == help.Example {
-			return true
-		}
-	}
 	name := value
 	if field == "owner-email" {
 		if at := strings.LastIndexByte(value, '@'); at >= 0 {
 			name = value[at+1:]
 		}
 	}
-	if field != "domain" && field != "owner-email" && field != "reality-target" {
+	if field != "owner-email" && field != "reality-target" {
 		return false
 	}
 	name = strings.ToLower(name)
@@ -837,9 +802,9 @@ func (module *Interface) Recover(ctx context.Context, pending systemchanges.Pend
 
 func validateDraft(draft Draft) *InvalidInput {
 	if !draftTag.MatchString(draft.Tag) || draft.Architecture == "" || draft.Installation.SSHPort == 0 {
-		return &InvalidInput{Field: "domain", Problem: "The verified running Release Identity or active SSH port is invalid."}
+		return &InvalidInput{Field: "owner-email", Problem: "The verified running Release Identity or active SSH port is invalid."}
 	}
-	for _, field := range draftFields {
+	for _, field := range revisionOneDraftFields {
 		if invalid := validateDraftField(draft, field); invalid != nil {
 			return invalid
 		}
@@ -848,7 +813,7 @@ func validateDraft(draft Draft) *InvalidInput {
 }
 
 func correction(err error) ReviewResult {
-	return ReviewResult{Correction: &Correction{Problem: "The installation Plan could not be built", Found: "One required release, provider, network, or installation input did not pass", Required: "Correct the named input or external fact, then check again", WhyStopped: "SBXR never continues with an incomplete or changed installation Plan", OwnerSteps: []string{"Restore the required external fact, then use Check again for a fresh Installation review."}, Evidence: "INSTALL-PLAN-REFUSED: " + err.Error()}}
+	return ReviewResult{Correction: &Correction{Problem: "The installation Plan could not be built", Found: "One required release, network, or installation input did not pass", Required: "Correct the named input or external fact, then check again", WhyStopped: "SBXR never continues with an incomplete or changed installation Plan", OwnerSteps: []string{"Restore the required external fact, then use Check again for a fresh Installation review."}, Evidence: "INSTALL-PLAN-REFUSED: " + err.Error()}}
 }
 
 func reclamationCorrection() ReviewResult {
@@ -857,9 +822,9 @@ func reclamationCorrection() ReviewResult {
 
 func finalPlan(built *builtInstall, request softwareubuntu.InstallHandoffRequest, reclamation *networkpolicy.ReclamationPlan) *Plan {
 	summary := built.plan.Summary()
-	plan := &Plan{Identity: built.plan.Identity(), DesiredStateRevision: 1, DesiredStateSHA256: built.desiredSHA256, RelevantChecksums: []string{"Plan SHA-256 " + built.plan.SHA256()}, ObservedState: "Proven Clean VPS baseline: Not installed", VerifiedExternalInputs: []string{"Verified release " + summary.ReleaseIdentity.Tag, "Scoped Cloudflare account and zone authority", "Fresh Network Policy observations"}, Effects: installPlanEffects(), RequiredChecks: []string{"Pre-publication module health", "Desired State agreement", "Post-publication HTTPS, Tunnel, certificate, profile, unit, timer, and permission agreement"}, AdvisoryChecks: []string{"Direct DNS is pending only until the reviewed Cloudflare steps create it"}, Interruption: summary.Interruption, Cancellation: summary.Cancellation, Rollback: summary.Rollback}
-	plan.Effects = append(plan.Effects, fmt.Sprintf("Use SSH %d/TCP, REALITY %d/TCP, Hysteria2 %d/UDP, TUIC %d/UDP, AnyTLS %d/TCP, and Subscription HTTPS %d/TCP", request.Draft.SSHPort, request.Draft.RealityPort, request.Draft.Hysteria2Port, request.Draft.TUICPort, request.Draft.AnyTLSPort, request.Draft.SubscriptionPort))
-	plan.Effects = append(plan.Effects, fmt.Sprintf("Use public IPv4 %s as the Primary subscription address and REALITY target %s with server name %s", request.Draft.PrimaryAddress, request.RealityTarget, request.RealityServerName))
+	plan := &Plan{Identity: built.plan.Identity(), DesiredStateRevision: 1, DesiredStateSHA256: built.desiredSHA256, RelevantChecksums: []string{"Plan SHA-256 " + built.plan.SHA256()}, ObservedState: "Proven Clean VPS baseline: Not installed", VerifiedExternalInputs: []string{"Verified release " + summary.ReleaseIdentity.Tag, "Direct SSH Preservation Proof", "Fresh Network Policy observations"}, Effects: installPlanEffects(), RequiredChecks: []string{"Pre-publication Module health", "Desired State agreement", "Post-publication VLESS REALITY Vision, sbxr-ip, Subscription HTTPS, nftables, temporary TCP 80 cleanup, unit, timer, and permission agreement"}, Interruption: summary.Interruption, Cancellation: summary.Cancellation, Rollback: summary.Rollback}
+	plan.Effects = append(plan.Effects, fmt.Sprintf("Use SSH %d/TCP, VLESS REALITY Vision %d/TCP, and Subscription HTTPS %d/TCP", request.Draft.SSHPort, request.Draft.RealityPort, request.Draft.SubscriptionPort))
+	plan.Effects = append(plan.Effects, fmt.Sprintf("Use %s as the Primary subscription address and REALITY target %s with server name %s", request.Draft.PrimaryAddress, request.RealityTarget, request.RealityServerName))
 	if reclamation == nil {
 		return plan
 	}
@@ -869,9 +834,9 @@ func finalPlan(built *builtInstall, request softwareubuntu.InstallHandoffRequest
 	}
 	plan.RelevantChecksums = []string{"Plan SHA-256 " + built.plan.SHA256(), "Reclamation facts SHA-256 " + reclamation.Digest}
 	plan.ObservedState = "Reclaimable VPS: exact reviewed conflict followed by revision-one installation"
-	plan.VerifiedExternalInputs = []string{"Verified release " + summary.ReleaseIdentity.Tag, "Fresh Network Policy reclamation review"}
+	plan.VerifiedExternalInputs = append(plan.VerifiedExternalInputs, "Fresh Network Policy reclamation review")
 	plan.Effects = append(effects, plan.Effects...)
-	plan.RequiredChecks = []string{"Fresh privileged reclamation proof", "Managed State and exact candidate agreement"}
+	plan.RequiredChecks = append([]string{"Fresh privileged reclamation proof"}, plan.RequiredChecks...)
 	plan.AdvisoryChecks = nil
 	plan.Interruption = "Before Irreversible reclamation started, cancellation rolls back; afterward recovery continues forward to Managed"
 	plan.Cancellation = "Unavailable after Irreversible reclamation started"
@@ -896,17 +861,17 @@ func reclamationPlan(plan *networkpolicy.ReclamationPlan, confirmed bool) *Plan 
 
 func installPlanEffects() []string {
 	return []string{
-		"Install the exact verified release and managed units",
-		"Run xray.service, sing-box.service, cloudflared.service, and sbxr-subscription.service as root:root without separate Linux identities",
-		"Retain NoNewPrivileges=true, ProtectHome=true, ProtectSystem=strict, AmbientCapabilities=CAP_NET_BIND_SERVICE, and CapabilityBoundingSet=CAP_NET_BIND_SERVICE for Xray and sing-box",
-		"Retain NoNewPrivileges=true, ProtectHome=true, ProtectSystem=strict, and PrivateTmp=true for cloudflared",
+		"Install the exact verified release and complete managed unit set",
+		"Run only xray.service and sbxr-subscription.service; keep sing-box.service and cloudflared.service disabled and inactive",
+		"Enable sbxr-recovery.service and the certificate-renewal, health-check, and update-check timers",
+		"Retain NoNewPrivileges=true, ProtectHome=true, ProtectSystem=strict, AmbientCapabilities=CAP_NET_BIND_SERVICE, and CapabilityBoundingSet=CAP_NET_BIND_SERVICE for Xray",
 		"Retain UMask=0027, NoNewPrivileges=true, PrivateTmp=true, ProtectHome=true, ProtectSystem=strict, PrivateDevices=true, ProtectControlGroups=true, ProtectKernelModules=true, ProtectKernelTunables=true, ProtectProc=invisible, and ProcSubset=pid for Subscription Serving",
 		"Retain RestrictAddressFamilies=AF_INET AF_INET6, RestrictSUIDSGID=true, LockPersonality=true, MemoryDenyWriteExecute=true, LimitCORE=0, TemporaryFileSystem=/:ro, BindReadOnlyPaths=/usr/local/bin/sbxr, BindReadOnlyPaths=/var/lib/sbxr/subscriptions/current, BindReadOnlyPaths=/var/lib/sbxr/certificates/ip/current, and BindReadOnlyPaths=/etc/ssl/certs/ca-certificates.crt for Subscription Serving",
-		"Store runtime service configuration, proxy credentials, subscription material, the Cloudflare Tunnel run token, and TLS private keys as root:root 0644",
-		"Every local Linux identity can read the runtime proxy credentials, subscription material, Cloudflare Tunnel run token, and TLS private keys",
-		"Create six Connection Profiles and one HTTPS subscription",
-		"Create one Cloudflare Tunnel and exact DNS records",
-		"Issue and activate the IP and domain certificate lineages",
+		"Store runtime service configuration, VLESS REALITY Vision credentials, subscription material, and the IP TLS private key under the fixed root-owned runtime paths",
+		"Create VLESS REALITY Vision Enabled and keep the other five Connection Profiles Not set up without placeholders",
+		"Publish exactly VLESS REALITY Vision where compatible and name all five omitted Not set up profiles",
+		"Issue and activate only the sbxr-ip certificate lineage and remove the exact temporary TCP 80 rule on every outcome",
+		"Leave all Cloudflare credentials, identifiers, resources, routes, DNS, Tunnel, and domain-certificate facts unchanged and absent",
 		"Publish Desired State revision 1 exactly once",
 	}
 }

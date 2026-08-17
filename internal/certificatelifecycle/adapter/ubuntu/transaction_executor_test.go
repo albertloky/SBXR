@@ -169,10 +169,14 @@ func TestIPActivationRestartInspectionAndCompleteCleanup(t *testing.T) {
 func TestIPRollbackAcceptsNoPriorPointer(t *testing.T) {
 	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
 	root, roots := writeCandidate(t, now, "192.0.2.10", false)
-	executor := TransactionExecutor{now: func() time.Time { return now }, roots: roots, uid: os.Geteuid(), gid: os.Getegid(), run: func(context.Context, string, ...string) error { return nil }, prove: func(context.Context, string) error { return nil }}
+	called := false
+	executor := TransactionExecutor{now: func() time.Time { return now }, roots: roots, uid: os.Geteuid(), gid: os.Getegid(), run: func(context.Context, string, ...string) error { called = true; return nil }, prove: func(context.Context, string) error { called = true; return nil }}
 	step, _ := systemchanges.NewCertificateStep(systemchanges.CertificateChange{Action: systemchanges.CertificateIPActivate, Identity: "192.0.2.10", RequiredProfile: "shortlived", CertName: "sbxr-ip", SubscriptionUnit: "sbxr-subscription.service"})
 	if _, err := executor.Reverse(root, step, strings.NewReader(`{}`), time.Minute); err != nil {
 		t.Fatalf("no-prior rollback = %v", err)
+	}
+	if called {
+		t.Fatal("no-prior rollback restarted Subscription Serving")
 	}
 }
 

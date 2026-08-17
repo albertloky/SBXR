@@ -4,7 +4,6 @@ import (
 	"errors"
 
 	"github.com/albertloky/SBXR/internal/certificatelifecycle"
-	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
 	"github.com/albertloky/SBXR/internal/connectionprofiles"
 	"github.com/albertloky/SBXR/internal/networkpolicy"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
@@ -18,8 +17,7 @@ type installWiring struct {
 	install      *softwarelifecycle.InstallPlan
 	profiles     *connectionprofiles.Plan
 	subscription *subscriptionpublication.Plan
-	cloudflare   *cloudflaretunnel.Plan
-	ip, domain   *certificatelifecycle.Plan
+	ip           *certificatelifecycle.Plan
 	network      networkpolicy.Result
 	networkState state.NetworkPolicyInputs
 }
@@ -55,16 +53,9 @@ func (w *installWiring) PrepareSubscriptionPublication() ([]byte, error) {
 	return w.subscription.PrepareSubscriptionPublication()
 }
 
-func (w *installWiring) ValidateCloudflare(settings state.CloudflareSettings, secrets state.InfrastructureSecretReader) error {
-	if w == nil || w.cloudflare == nil || secrets == nil || !w.cloudflare.MatchesDesiredState(settings.AccountID, settings.ZoneID, settings.ZoneName, settings.TunnelName, settings.XHTTPHostname, settings.WebSocketHostname, settings.DirectHostname, w.networkState.PublicIPv4, w.networkState.PublicIPv6, secrets.ReadInfrastructureSecret(settings.ManagementToken)) {
-		return errors.New("Cloudflare install Plan does not match Desired State")
-	}
-	return nil
-}
-
 func (w *installWiring) ValidateCertificates(settings state.CertificateSettings) error {
-	if w == nil || w.ip == nil || w.domain == nil || !w.ip.MatchesDesiredState(settings.RenewalPolicy, settings.OwnerEmail, settings.ACMEAccountID, settings.IPCertificateID, settings.IPServingPointer, settings.DomainCertificateID, settings.DomainServingPointer, settings.DomainHostname) || !w.domain.MatchesDesiredState(settings.RenewalPolicy, settings.OwnerEmail, settings.ACMEAccountID, settings.IPCertificateID, settings.IPServingPointer, settings.DomainCertificateID, settings.DomainServingPointer, settings.DomainHostname) {
-		return errors.New("Certificate Lifecycle install Plans do not match Desired State")
+	if w == nil || w.ip == nil || !w.ip.MatchesDesiredState(settings.RenewalPolicy, settings.OwnerEmail, settings.ACMEAccountID, settings.IPCertificateID, settings.IPServingPointer, "", "", "") {
+		return errors.New("Certificate Lifecycle install Plan does not match Desired State")
 	}
 	return nil
 }

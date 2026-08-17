@@ -63,6 +63,12 @@ type removalRecoveryHost interface {
 	LoadRemovalRecovery(io.Reader) error
 }
 
+type freshInstallLifecycleHost interface {
+	activatePostCertificateUnits(time.Duration) error
+	reversePostCertificateUnits(time.Duration) error
+	inspectPostCertificateUnits(time.Duration) error
+}
+
 // FirewallExecutor is the narrow native seam for approved inet sbxr changes.
 type FirewallExecutor interface {
 	CaptureRollback(systemchanges.Step, func(source io.Reader) error) error
@@ -2040,7 +2046,15 @@ func (a Adapter) Execute(lease systemchanges.ExecutionLease, changeSet string, n
 			}
 			return executeDomainCertificateActivation(a.root, a.certificate, a.profiles, binding.ConnectionProfiles, step, timeout, cancellation)
 		}
-		return a.certificate.Execute(a.root, step, timeout, cancellation)
+		evidence, err := a.certificate.Execute(a.root, step, timeout, cancellation)
+		if err != nil || !a.freshLock || change.Action != systemchanges.CertificateIPActivate {
+			return evidence, err
+		}
+		host, ok := a.host.(freshInstallLifecycleHost)
+		if !ok || host.activatePostCertificateUnits(timeout) != nil {
+			return systemchanges.StepEvidence{}, errors.New("fresh post-certificate unit activation failed")
+		}
+		return evidence, nil
 	}
 	if subscriptionActivation(step) {
 		if a.subscription == nil || !safeName(changeSet) || number < 1 {
@@ -2233,6 +2247,12 @@ func (a Adapter) Reverse(lease systemchanges.ExecutionLease, changeSet string, n
 				return systemchanges.StepEvidence{}, err
 			}
 			return reverseDomainCertificateActivation(a.root, a.certificate, a.profiles, binding.ConnectionProfiles, step, bytes.NewReader(content), timeout)
+		}
+		if a.freshLock && change.Action == systemchanges.CertificateIPActivate {
+			host, ok := a.host.(freshInstallLifecycleHost)
+			if !ok || host.reversePostCertificateUnits(timeout) != nil {
+				return systemchanges.StepEvidence{}, errors.New("fresh post-certificate unit rollback failed")
+			}
 		}
 		return a.certificate.Reverse(a.root, step, bytes.NewReader(content), timeout)
 	}
@@ -2521,7 +2541,15 @@ func (a Adapter) InspectStep(lease systemchanges.ExecutionLease, recovery system
 		if a.certificate == nil {
 			return "", errors.New("Certificate Lifecycle recovery executor unavailable")
 		}
-		return a.certificate.Inspect(a.root, step, bytes.NewReader(content), timeout)
+		effect, err := a.certificate.Inspect(a.root, step, bytes.NewReader(content), timeout)
+		change, _ := step.CertificateChange()
+		if err == nil && effect == systemchanges.StepEffectPresent && a.freshLock && change.Action == systemchanges.CertificateIPActivate {
+			host, ok := a.host.(freshInstallLifecycleHost)
+			if !ok || host.inspectPostCertificateUnits(timeout) != nil {
+				return systemchanges.StepEffectAbsent, nil
+			}
+		}
+		return effect, err
 	}
 	if subscriptionActivation(step) {
 		if a.subscription == nil {
