@@ -218,9 +218,9 @@ func (plan *Plan) Checks() []systemchanges.Check {
 }
 
 // CertificateLifecycleFreshDNSPlan exposes only the exact Direct DNS records
-// contained in a reviewed fresh-install Plan.
+// contained in the reviewed transaction Plan.
 func (plan *Plan) CertificateLifecycleFreshDNSPlan() (hostname, ipv4, ipv6, desiredStateSHA256 string, valid bool) {
-	if plan == nil || plan.request.StartingRevision != 0 || !validPlanRequest(plan.request) || plan.identity == "" || plan.sha256 == "" {
+	if plan == nil || !validPlanRequest(plan.request) || plan.identity == "" || plan.sha256 == "" {
 		return "", "", "", "", false
 	}
 	return plan.request.DirectHostname, plan.request.PublicIPv4, plan.request.PublicIPv6, plan.request.DesiredStateSHA256, true

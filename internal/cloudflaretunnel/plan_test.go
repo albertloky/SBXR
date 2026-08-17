@@ -52,6 +52,14 @@ func TestFreshCloudflarePlanSuppliesOnlyTheExactPendingCertificateDNS(t *testing
 	}
 }
 
+func TestManagedSetupPlanSuppliesTheBoundCertificateDNS(t *testing.T) {
+	plan := &Plan{identity: "setup-cloudflare-plan", sha256: strings.Repeat("a", 64), request: PlanRequest{Authority: ViewRequest{ZoneName: "example.com"}, ChangeSet: "setup-cloudflare", StartingRevision: 7, StartingStateSHA256: strings.Repeat("c", 64), DesiredStateSHA256: strings.Repeat("b", 64), TunnelName: "sbxr-main", XHTTPHostname: "xhttp.example.com", WebSocketHostname: "ws.example.com", DirectHostname: "direct.example.com", PublicIPv4: "192.0.2.10", CloudflaredVersion: qualifiedCloudflaredVersion}}
+	hostname, ipv4, ipv6, desired, valid := plan.CertificateLifecycleFreshDNSPlan()
+	if !valid || hostname != "direct.example.com" || ipv4 != "192.0.2.10" || ipv6 != "" || desired != strings.Repeat("b", 64) {
+		t.Fatalf("managed setup DNS = (%q, %q, %q, %q, %t)", hostname, ipv4, ipv6, desired, valid)
+	}
+}
+
 const (
 	testAccountID = "11111111111111111111111111111111"
 	testZoneID    = "22222222222222222222222222222222"

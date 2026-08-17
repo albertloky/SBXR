@@ -810,14 +810,15 @@ func validReclamationProcessID(value string) bool {
 type Module string
 
 const (
-	ConnectionProfilesModule Module = "Connection Profiles"
-	SubscriptionModule       Module = "Subscription Publication"
-	CloudflareModule         Module = "Cloudflare Tunnel"
-	CertificateModule        Module = "Certificate Lifecycle"
-	SoftwareModule           Module = "Software Lifecycle"
-	NetworkPolicyModule      Module = "Network Policy"
-	HealthDiagnosticsModule  Module = "Health and Diagnostics"
-	StateModule              Module = "State"
+	ConnectionProfilesModule     Module = "Connection Profiles"
+	SubscriptionModule           Module = "Subscription Publication"
+	CloudflareModule             Module = "Cloudflare Tunnel"
+	CertificateModule            Module = "Certificate Lifecycle"
+	SoftwareModule               Module = "Software Lifecycle"
+	NetworkPolicyModule          Module = "Network Policy"
+	HealthDiagnosticsModule      Module = "Health and Diagnostics"
+	StateModule                  Module = "State"
+	CloudflareProfileSetupModule Module = "Cloudflare Profile Setup"
 )
 
 type OperationKind string
@@ -1631,7 +1632,7 @@ func validMutation(mutation MutationClass) bool {
 
 func validModule(module Module) bool {
 	switch module {
-	case ConnectionProfilesModule, SubscriptionModule, CloudflareModule, CertificateModule, SoftwareModule, NetworkPolicyModule, HealthDiagnosticsModule, StateModule:
+	case ConnectionProfilesModule, SubscriptionModule, CloudflareModule, CertificateModule, SoftwareModule, NetworkPolicyModule, HealthDiagnosticsModule, StateModule, CloudflareProfileSetupModule:
 		return true
 	}
 	return false

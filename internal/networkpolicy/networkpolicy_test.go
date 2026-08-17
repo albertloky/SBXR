@@ -901,6 +901,14 @@ func TestEvaluatePlansOneBoundCloudflareProfileSetupWithoutMutation(t *testing.T
 	if plan.TemporaryHTTP.Lineage != networkpolicy.SBXRDomain || plan.TemporaryHTTP.Exposure.Port != 80 || len(plan.Collisions) != 0 || plan.CandidatePolicy.Nftables == "" || plan.SSHPreservation.Code != "NETWORK-SSH-PRESERVED" || !available || !valid || revision != 2 || !strings.Contains(httpCandidate, `comment "sbxr:acme-http-01"`) || strings.Contains(httpCandidate, "udp dport") || strings.Contains(httpCandidate, "9443") {
 		t.Fatalf("setup authority = %+v", plan)
 	}
+	hostname, addresses, dnsAvailable := result.CertificateLifecycleFreshDNSPrerequisites()
+	wantAddresses := []string{candidate.PublicIPv4}
+	if candidate.PublicIPv6 != "" {
+		wantAddresses = append(wantAddresses, candidate.PublicIPv6)
+	}
+	if !dnsAvailable || hostname != candidate.CertificateHostname || !slices.Equal(addresses, wantAddresses) {
+		t.Fatalf("setup certificate DNS prerequisites = (%q, %v, %t)", hostname, addresses, dnsAvailable)
+	}
 
 	changed := request
 	changed.CloudflareProfileSetup = &networkpolicy.CloudflareProfileSetupRequest{Candidate: candidate, Binding: binding}

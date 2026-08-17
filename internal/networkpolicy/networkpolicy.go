@@ -644,10 +644,16 @@ func (authority ReclamationAuthority) SystemChangesCloudflareReclamationAvailabl
 	return authority.cell != nil && authority.cell.contract.Cloudflare != nil
 }
 
-// CertificateLifecycleFreshDNSPrerequisites exposes only the exact Clean VPS
-// hostname, addresses, and already-approved CAA method awaiting Cloudflare.
+// CertificateLifecycleFreshDNSPrerequisites exposes only the exact approved
+// hostname and addresses whose DNS records are part of the same Change Set.
 func (result Result) CertificateLifecycleFreshDNSPrerequisites() (string, []string, bool) {
-	if result.freshDNSHostname == "" || !cleanVPSAuthorityEligible(result) {
+	hostname := result.freshDNSHostname
+	valid := hostname != "" && cleanVPSAuthorityEligible(result)
+	if result.CloudflareProfileSetup != nil && result.CloudflareProfileSetup.approved {
+		hostname = result.CloudflareProfileSetup.CertificateHostname
+		valid = hostname != "" && result.Outcome == Healthy
+	}
+	if !valid {
 		return "", nil, false
 	}
 	addresses := make([]string, 0, 2)
@@ -657,7 +663,7 @@ func (result Result) CertificateLifecycleFreshDNSPrerequisites() (string, []stri
 	if result.Policy.PublicIPv6 != "" {
 		addresses = append(addresses, result.Policy.PublicIPv6)
 	}
-	return result.freshDNSHostname, addresses, len(addresses) > 0
+	return hostname, addresses, len(addresses) > 0
 }
 
 func (result Result) MatchesDesiredState(sshPort uint16, publicIPv4, publicIPv6, primaryAddress string) bool {
@@ -980,20 +986,21 @@ type RouteAdmission struct {
 }
 
 type CloudflareProfileSetupPlan struct {
-	Binding          ChangeSetBinding
-	ReviewedPorts    []Exposure
-	LoopbackOrigins  []Exposure
-	PublicRoutes     []CloudflareRoute
-	DirectListeners  []Exposure
-	TemporaryHTTP    TemporaryHTTPPolicy
-	CandidatePolicy  Policy
-	Collisions       []CollisionFinding
-	DirectAdmissions []DirectAdmission
-	RouteAdmissions  []RouteAdmission
-	SSHSafety        SSHSafety
-	SSHPreservation  Gate
-	http01           HTTP01Contribution
-	approved         bool
+	Binding             ChangeSetBinding
+	CertificateHostname string
+	ReviewedPorts       []Exposure
+	LoopbackOrigins     []Exposure
+	PublicRoutes        []CloudflareRoute
+	DirectListeners     []Exposure
+	TemporaryHTTP       TemporaryHTTPPolicy
+	CandidatePolicy     Policy
+	Collisions          []CollisionFinding
+	DirectAdmissions    []DirectAdmission
+	RouteAdmissions     []RouteAdmission
+	SSHSafety           SSHSafety
+	SSHPreservation     Gate
+	http01              HTTP01Contribution
+	approved            bool
 }
 
 func (plan CloudflareProfileSetupPlan) HTTP01Contribution() (HTTP01Contribution, bool) {
@@ -1473,11 +1480,12 @@ func evaluateCloudflareProfileSetup(result *Result, request Request, observed Ob
 	}{setup.Binding, httpPolicy})
 	httpDigest := sha256.Sum256(encoded)
 	plan := CloudflareProfileSetupPlan{
-		Binding:         setup.Binding,
-		CandidatePolicy: candidate,
-		TemporaryHTTP:   *httpPolicy.TemporaryHTTP,
-		SSHSafety:       result.SSHSafety,
-		SSHPreservation: Gate{Code: "NETWORK-SSH-PRESERVED", Required: "fresh SSH Preservation Proof for the bound Change Set before and after public exposure changes"},
+		Binding:             setup.Binding,
+		CertificateHostname: setup.Candidate.CertificateHostname,
+		CandidatePolicy:     candidate,
+		TemporaryHTTP:       *httpPolicy.TemporaryHTTP,
+		SSHSafety:           result.SSHSafety,
+		SSHPreservation:     Gate{Code: "NETWORK-SSH-PRESERVED", Required: "fresh SSH Preservation Proof for the bound Change Set before and after public exposure changes"},
 		http01: HTTP01Contribution{
 			candidate: httpPolicy.Nftables,
 			sshPort:   setup.Candidate.SSHPort, revision: setup.Candidate.Revision,
