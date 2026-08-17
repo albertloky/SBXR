@@ -1219,15 +1219,15 @@ func transactionServeProof(t *testing.T) (*transactionServingFixture, context.Ca
 			"schema": "sbxr-subscription-artifact-set-v1", "change_set": "transaction-proof", "selected_address": "192.0.2.10", "desired_state_sha256": strings.Repeat("d", 64), "managed_inputs_sha256": strings.Repeat("e", 64),
 			"relevant_checksums": map[string]string{"connection_profiles": strings.Repeat("f", 64), "subscription": strings.Repeat("1", 64)}, "compatibility_definition": "sbxr-subscription-representations-v1", "desired_state_revision": 8,
 			"release_identity": map[string]string{"repository": "github.com/albertloky/SBXR", "tag": "v1.0.0", "commit": strings.Repeat("a", 40), "release_index_sha256": strings.Repeat("b", 64)}, "representations": []string{"base64", "raw", "v2rayn", "shadowrocket", "karing", "mihomo", "sing-box"},
-			"artifact_sha256": digests, "profile_count": 1, "omissions": []map[string]string{{"id": "vless-xhttp"}, {"id": "vless-websocket"}, {"id": "hysteria2"}, {"id": "tuic"}, {"id": "anytls"}}, "validation_complete": true,
+			"artifact_sha256": digests, "profile_count": 1, "omissions": []map[string]string{{"id": "vless-xhttp", "name": "VLESS XHTTP", "lifecycle": "Not set up"}, {"id": "vless-websocket", "name": "VLESS WebSocket", "lifecycle": "Not set up"}, {"id": "hysteria2", "name": "Hysteria2", "lifecycle": "Not set up"}, {"id": "tuic", "name": "TUIC", "lifecycle": "Not set up"}, {"id": "anytls", "name": "AnyTLS", "lifecycle": "Not set up"}}, "validation_complete": true,
 		})
 		return bodies
 	}
-	prior := artifactSet([]byte("vless://transaction-prior"))
+	prior := artifactSet([]byte("vless://transaction-prior@198.51.100.10:443?type=tcp"))
 	for name, body := range prior {
 		write("var/lib/sbxr/subscriptions/current/"+name, body)
 	}
-	candidate := artifactSet([]byte("vless://transaction-candidate"))
+	candidate := artifactSet([]byte("vless://transaction-candidate@198.51.100.10:443?type=tcp"))
 	var bundle bytes.Buffer
 	writer := tar.NewWriter(&bundle)
 	for _, name := range []string{"base64", "raw", "v2rayn", "shadowrocket", "karing", "mihomo", "sing-box", "metadata"} {

@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
@@ -323,14 +324,15 @@ func testServer(t *testing.T, address string) (Server, *x509.CertPool, string, s
 		tokenBytes[index] = byte(index + 1)
 	}
 	token := hex.EncodeToString(tokenBytes)
-	body := "dmxlc3M6Ly9leGFtcGxl"
+	raw := []byte("vless://example@198.51.100.10:443?type=tcp")
+	body := base64.StdEncoding.EncodeToString(raw)
 	mustDirectory(t, root, "var/lib/sbxr", 0o755)
 	mustDirectory(t, root, "var/lib/sbxr/subscriptions", 0o755)
 	mustDirectory(t, root, "var/lib/sbxr/subscriptions/current", 0o755)
 	configuration, _ := json.Marshal(map[string]any{"token": token, "listen_port": 10443, "certificate_pointer": "/var/lib/sbxr/certificates/ip/current", "primary_address": address})
 	mustFile(t, root, configurationPath, configuration, 0o644)
 	contents := map[string][]byte{
-		"base64": []byte(body), "raw": []byte("vless://example"), "v2rayn": []byte(body), "shadowrocket": []byte(body),
+		"base64": []byte(body), "raw": raw, "v2rayn": []byte(body), "shadowrocket": []byte(body),
 		"karing": []byte("{}"), "mihomo": []byte("proxies: []\n"), "sing-box": []byte("{}"),
 	}
 	digests := map[string]string{}
@@ -343,7 +345,7 @@ func testServer(t *testing.T, address string) (Server, *x509.CertPool, string, s
 		"desired_state_sha256": strings.Repeat("d", 64), "managed_inputs_sha256": strings.Repeat("e", 64), "relevant_checksums": map[string]string{"connection_profiles": strings.Repeat("f", 64), "subscription": strings.Repeat("1", 64)},
 		"compatibility_definition": "sbxr-subscription-representations-v1", "desired_state_revision": 2, "release_identity": map[string]string{"repository": "github.com/albertloky/SBXR", "tag": "v1.0.0", "commit": strings.Repeat("a", 40), "release_index_sha256": strings.Repeat("b", 64)},
 		"representations": []string{"base64", "raw", "v2rayn", "shadowrocket", "karing", "mihomo", "sing-box"}, "artifact_sha256": digests,
-		"profile_count": 1, "omissions": []map[string]string{{"id": "vless-xhttp"}, {"id": "vless-websocket"}, {"id": "hysteria2"}, {"id": "tuic"}, {"id": "anytls"}}, "validation_complete": true,
+		"profile_count": 1, "omissions": []map[string]string{{"id": "vless-xhttp", "name": "VLESS XHTTP", "lifecycle": "Not set up"}, {"id": "vless-websocket", "name": "VLESS WebSocket", "lifecycle": "Not set up"}, {"id": "hysteria2", "name": "Hysteria2", "lifecycle": "Not set up"}, {"id": "tuic", "name": "TUIC", "lifecycle": "Not set up"}, {"id": "anytls", "name": "AnyTLS", "lifecycle": "Not set up"}}, "validation_complete": true,
 	})
 	for _, name := range []string{"base64", "raw", "v2rayn", "shadowrocket", "karing", "mihomo", "sing-box", "metadata"} {
 		mustFile(t, root, "var/lib/sbxr/subscriptions/current/"+name, contents[name], 0o644)

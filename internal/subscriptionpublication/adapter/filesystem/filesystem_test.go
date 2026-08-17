@@ -303,7 +303,14 @@ func preparedSet(t *testing.T, root string, revision uint64, digest, marker stri
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	raw := []byte(strings.Join([]string{marker + "-1", marker + "-2", marker + "-3", marker + "-4", marker + "-5", marker + "-6"}, "\n"))
+	raw := []byte(strings.Join([]string{
+		"vless://one@198.51.100.10:443?type=tcp#" + marker + "-1",
+		"vless://two@xhttp.example.com:443?type=xhttp#" + marker + "-2",
+		"vless://three@ws.example.com:443?type=ws#" + marker + "-3",
+		"hysteria2://four@198.51.100.10:4443#" + marker + "-4",
+		"tuic://five:six@198.51.100.10:8443#" + marker + "-5",
+		"anytls://seven@198.51.100.10:9443#" + marker + "-6",
+	}, "\n"))
 	base64Body := []byte(base64.StdEncoding.EncodeToString(raw))
 	bodies := map[string][]byte{"raw": raw, "base64": base64Body, "v2rayn": base64Body, "shadowrocket": base64Body, "mihomo": []byte("proxies: []\n"), "sing-box": []byte(`{"outbounds":[]}`), "karing": []byte(`{"outbounds":[]}`)}
 	names := subscriptionpublication.Names()

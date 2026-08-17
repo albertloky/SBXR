@@ -169,7 +169,7 @@ func clientAccessPublicationSource(t *testing.T, desired state.DesiredState, add
 		if item.enabled {
 			enabled = append(enabled, item.profile)
 		} else {
-			omissions = append(omissions, connectionprofiles.PublicationOmission{ID: item.profile.ID})
+			omissions = append(omissions, connectionprofiles.PublicationOmission{ID: item.profile.ID, Name: item.profile.Name, Lifecycle: state.ProfileDisabled})
 		}
 	}
 	source, err := connectionprofiles.NewPublicationSource(enabled, omissions)

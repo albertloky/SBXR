@@ -66,10 +66,12 @@ type Availability string
 const (
 	NotOffered Availability = "Not offered"
 	Disabled   Availability = "Disabled"
+	NotSetUp   Availability = "Not set up"
 )
 
 type RepresentationOmission struct {
 	ID     connectionprofiles.ProfileID
+	Name   string
 	Status Availability
 	Reason string
 }
@@ -149,25 +151,32 @@ func (module Interface) Render(ctx context.Context, source connectionprofiles.Pu
 	}, nil
 }
 
-func representation(body []byte, count int, disabled []connectionprofiles.PublicationOmission, xhttpReason string) Representation {
-	return Representation{Body: append([]byte(nil), body...), ProfileCount: count, Omissions: representationOmissions(disabled, xhttpReason)}
+func representation(body []byte, count int, omissions []connectionprofiles.PublicationOmission, xhttpReason string) Representation {
+	return Representation{Body: append([]byte(nil), body...), ProfileCount: count, Omissions: representationOmissions(omissions, xhttpReason)}
 }
 
-func representationOmissions(disabled []connectionprofiles.PublicationOmission, xhttpReason string) []RepresentationOmission {
-	xhttp := RepresentationOmission{ID: connectionprofiles.VLESSXHTTPProfileID, Status: NotOffered, Reason: xhttpReason}
-	for _, omission := range disabled {
+func representationOmissions(source []connectionprofiles.PublicationOmission, xhttpReason string) []RepresentationOmission {
+	xhttp := RepresentationOmission{ID: connectionprofiles.VLESSXHTTPProfileID, Name: "VLESS XHTTP", Status: NotOffered, Reason: xhttpReason}
+	for _, omission := range source {
 		if omission.ID == connectionprofiles.VLESSXHTTPProfileID {
-			xhttp.Status, xhttp.Reason = Disabled, "The Connection Profile is deliberately disabled"
+			xhttp = representationOmission(omission)
 			break
 		}
 	}
 	omissions := []RepresentationOmission{xhttp}
-	for _, omission := range disabled {
+	for _, omission := range source {
 		if omission.ID != connectionprofiles.VLESSXHTTPProfileID {
-			omissions = append(omissions, RepresentationOmission{ID: omission.ID, Status: Disabled, Reason: "The Connection Profile is deliberately disabled"})
+			omissions = append(omissions, representationOmission(omission))
 		}
 	}
 	return omissions
+}
+
+func representationOmission(omission connectionprofiles.PublicationOmission) RepresentationOmission {
+	if omission.Lifecycle == state.ProfileNotSetUp {
+		return RepresentationOmission{ID: omission.ID, Name: omission.Name, Status: NotSetUp, Reason: "The Connection Profile is not set up"}
+	}
+	return RepresentationOmission{ID: omission.ID, Name: omission.Name, Status: Disabled, Reason: "The Connection Profile is deliberately disabled"}
 }
 
 func renderSingBox(profiles []connectionprofiles.PublicationProfile, secrets state.ClientAccessReader) ([]byte, int, bool) {

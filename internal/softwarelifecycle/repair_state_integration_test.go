@@ -158,7 +158,7 @@ func TestSoftwareRepairPreparesOnlyTheExactUnchangedCurrentDesiredState(t *testi
 	observation := systemchanges.Observation{Status: systemchanges.RecoveryRequired, LastChangeSet: "change-0007", Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, ForwardRepairAvailable: true, RecoveryCause: systemchanges.CurrentStateDrift, StateRevision: 7, StateSHA256: stateSHA, VolatileSHA256: volatileSHA}
 	changes := systemchanges.New(repairObservationAdapter{observation})
 	view := (softwarelifecycle.Interface{}).ViewRepair(changes)
-	omissions := []connectionprofiles.PublicationOmission{{ID: connectionprofiles.VLESSRealityVisionProfileID}, {ID: connectionprofiles.VLESSXHTTPProfileID}, {ID: connectionprofiles.VLESSWebSocketProfileID}, {ID: connectionprofiles.Hysteria2ProfileID}, {ID: connectionprofiles.TUICProfileID}, {ID: connectionprofiles.AnyTLSProfileID}}
+	omissions := []connectionprofiles.PublicationOmission{{ID: connectionprofiles.VLESSRealityVisionProfileID, Name: "VLESS REALITY Vision", Lifecycle: state.ProfileDisabled}, {ID: connectionprofiles.VLESSXHTTPProfileID, Name: "VLESS XHTTP", Lifecycle: state.ProfileDisabled}, {ID: connectionprofiles.VLESSWebSocketProfileID, Name: "VLESS WebSocket", Lifecycle: state.ProfileDisabled}, {ID: connectionprofiles.Hysteria2ProfileID, Name: "Hysteria2", Lifecycle: state.ProfileDisabled}, {ID: connectionprofiles.TUICProfileID, Name: "TUIC", Lifecycle: state.ProfileDisabled}, {ID: connectionprofiles.AnyTLSProfileID, Name: "AnyTLS", Lifecycle: state.ProfileDisabled}}
 	source, err := connectionprofiles.NewPublicationSource(nil, omissions)
 	if err != nil {
 		t.Fatal(err)

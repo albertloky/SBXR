@@ -87,8 +87,8 @@ func (artifacts Artifacts) RepresentationBody(identity RepresentationIdentity) (
 
 // View returns the token-free publication status and named representation catalog.
 func (Interface) View(request ViewRequest) ViewResult {
-	profiles, disabled := request.Source.Profiles(), request.Source.Omissions()
-	if len(profiles)+len(disabled) != 6 || !validSubscriptionAddress(request.SubscriptionAddress) || request.DesiredStateRevision == 0 || !validDigest(request.DesiredStateSHA256) {
+	profiles, omissions := request.Source.Profiles(), request.Source.Omissions()
+	if len(profiles)+len(omissions) != 6 || !validSubscriptionAddress(request.SubscriptionAddress) || request.DesiredStateRevision == 0 || !validDigest(request.DesiredStateSHA256) {
 		return ViewResult{Status: PublicationUnavailable}
 	}
 	enabledIDs := make([]connectionprofiles.ProfileID, 0, len(profiles))
@@ -99,9 +99,9 @@ func (Interface) View(request ViewRequest) ViewResult {
 			supportedIDs = append(supportedIDs, profile.ID)
 		}
 	}
-	allOmissions := disabledOmissions(disabled)
-	singBoxOmissions := representationOmissions(disabled, singBoxXHTTPReason)
-	karingOmissions := representationOmissions(disabled, karingXHTTPReason)
+	allOmissions := publicationOmissions(omissions)
+	singBoxOmissions := representationOmissions(omissions, singBoxXHTTPReason)
+	karingOmissions := representationOmissions(omissions, karingXHTTPReason)
 	result := ViewResult{
 		Status:                      PublicationNeedsRegeneration,
 		SubscriptionAddress:         request.SubscriptionAddress,
@@ -126,10 +126,10 @@ func (Interface) View(request ViewRequest) ViewResult {
 	return result
 }
 
-func disabledOmissions(disabled []connectionprofiles.PublicationOmission) []RepresentationOmission {
-	omissions := make([]RepresentationOmission, 0, len(disabled))
-	for _, omission := range disabled {
-		omissions = append(omissions, RepresentationOmission{ID: omission.ID, Status: Disabled, Reason: "The Connection Profile is deliberately disabled"})
+func publicationOmissions(source []connectionprofiles.PublicationOmission) []RepresentationOmission {
+	omissions := make([]RepresentationOmission, 0, len(source))
+	for _, omission := range source {
+		omissions = append(omissions, representationOmission(omission))
 	}
 	return omissions
 }

@@ -123,7 +123,7 @@ func (module Interface) Plan(ctx context.Context, request PlanRequest) PlanResul
 	}
 	omissions := make([]Omission, len(rendered.Omissions))
 	for index, omission := range rendered.Omissions {
-		omissions[index] = Omission{ID: string(omission.ID)}
+		omissions[index] = Omission{ID: string(omission.ID), Name: omission.Name, Lifecycle: omission.Lifecycle}
 	}
 	names := Names()
 	metadata := Metadata{Schema: "sbxr-subscription-artifact-set-v1", ChangeSet: request.ChangeSet, SelectedAddress: request.SelectedAddress, DesiredStateSHA256: request.DesiredStateSHA256, ManagedInputsSHA256: request.ManagedInputsSHA256, RelevantChecksums: request.RelevantChecksums, Compatibility: string(request.CompatibilityDefinition), DesiredStateRevision: request.DesiredStateRevision, ReleaseIdentity: request.ReleaseIdentity, ClientAccessAction: action, Representations: names[:7], ProfileCount: rendered.ProfileCount, Omissions: omissions, ValidationComplete: true}

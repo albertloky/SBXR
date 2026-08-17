@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/albertloky/SBXR/internal/connectionprofiles"
+	"github.com/albertloky/SBXR/internal/state"
 	"github.com/albertloky/SBXR/internal/subscriptionpublication"
 )
 
@@ -125,7 +126,7 @@ func TestViewReturnsSecretSafeRepresentationCatalog(t *testing.T) {
 func TestViewReportsDisabledConnectionProfileWithoutSubstitution(t *testing.T) {
 	source, reader := sixProfileSource(t, "198.51.100.10")
 	profiles := slices.Delete(source.Profiles(), 2, 3)
-	source, err := connectionprofiles.NewPublicationSource(profiles, []connectionprofiles.PublicationOmission{{ID: connectionprofiles.VLESSWebSocketProfileID}})
+	source, err := connectionprofiles.NewPublicationSource(profiles, []connectionprofiles.PublicationOmission{{ID: connectionprofiles.VLESSWebSocketProfileID, Name: "VLESS WebSocket", Lifecycle: state.ProfileDisabled}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +154,7 @@ func TestViewReportsDisabledConnectionProfileWithoutSubstitution(t *testing.T) {
 func TestViewReportsDisabledXHTTPAsDisabledInEveryRepresentation(t *testing.T) {
 	source, _ := sixProfileSource(t, "198.51.100.10")
 	profiles := slices.Delete(source.Profiles(), 1, 2)
-	source, err := connectionprofiles.NewPublicationSource(profiles, []connectionprofiles.PublicationOmission{{ID: connectionprofiles.VLESSXHTTPProfileID}})
+	source, err := connectionprofiles.NewPublicationSource(profiles, []connectionprofiles.PublicationOmission{{ID: connectionprofiles.VLESSXHTTPProfileID, Name: "VLESS XHTTP", Lifecycle: state.ProfileDisabled}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,16 +1,16 @@
 # Subscription Publication
 
-Subscription Publication turns one complete typed `connectionprofiles.PublicationSource` into client artifacts. The current slices own seven representations:
+Subscription Publication turns one complete typed `connectionprofiles.PublicationSource` into client artifacts. Revision `1` contains only VLESS REALITY Vision and five exact `Not set up` omissions. After Cloudflare Profile Setup, the source contains all six Connection Profiles. Disabled and `Not set up` profiles never enter a client body. Their exact fixed name and lifecycle remain in secret-safe summaries and protected artifact metadata. The current slices own seven representations:
 
-- `Raw`: UTF-8 URI text in canonical Connection Profile order, with one URI per line and LF separators.
+- `Raw`: UTF-8 URI text in canonical Enabled Connection Profile order, with one URI per line and LF separators.
 - `Base64`: standard padded base64 of the exact `Raw` bytes, with no wrapper or explanatory text.
-- `V2RayN`: the same six-Connection-Profile base64 URI list as `Base64`.
-- `Shadowrocket`: the same six-URI base64 body as a candidate only; every rendered Connection Profile remains pending Albert's Owner Acceptance in the exact pinned maintained app.
+- `V2RayN`: the same complete Enabled-profile base64 URI list as `Base64`.
+- `Shadowrocket`: the same complete Enabled-profile base64 body as a candidate only; every rendered Connection Profile remains pending Albert's Owner Acceptance in the exact pinned maintained app.
 - `Mihomo`: one deterministic YAML document containing every enabled Connection Profile, one `SBXR` select group that names only those Connection Profiles, and the final rule `MATCH,SBXR`.
 - `SingBox`: one complete deterministic JSON client configuration with a local `mixed` inbound on `127.0.0.1:2080`, local DNS, route, `SBXR` final selector, and every enabled supported Connection Profile.
 - `Karing`: the same validated sing-box JSON bytes, with metadata that reports enabled VLESS XHTTP as `Not offered` because it is unavailable in the Karing core; deliberate disablement is instead reported as `Disabled`.
 
-`Render` omits a disabled Connection Profile only when the typed source contains its exact omission fact. It preserves the selected address, port, independent Client Access Values, path, TLS name, REALITY fields, transport fields, normal TLS verification, and TUIC congestion choice. Go's standard `net/url` and `net.JoinHostPort` provide component escaping and bracketed IPv6 syntax; no converter, template system, or format plugin exists.
+`Render` omits a `Not set up` or Disabled Connection Profile only when the typed source contains its exact fixed name and lifecycle. Revision `1` therefore renders exactly VLESS REALITY Vision in the universal output and `/sing-box`; the other five profiles leave no placeholder, credential, comment, or client node. It preserves the selected address, port, independent Client Access Values, path, TLS name, REALITY fields, transport fields, normal TLS verification, and TUIC congestion choice. Go's standard `net/url` and `net.JoinHostPort` provide component escaping and bracketed IPv6 syntax; no converter, template system, or format plugin exists.
 
 The six fixed URI contracts are:
 

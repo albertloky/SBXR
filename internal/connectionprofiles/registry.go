@@ -302,7 +302,7 @@ func PublicationSourceFor(address string, profiles state.ConnectionProfiles) (Pu
 		if item.enabled {
 			source.profiles = append(source.profiles, item.profile)
 		} else {
-			source.omissions = append(source.omissions, PublicationOmission{ID: item.profile.ID})
+			source.omissions = append(source.omissions, publicationOmission(item.profile.ID, publicationLifecycle(profiles, item.profile.ID)))
 		}
 	}
 	if !PublicationInputsMatch(source, profiles) {
@@ -789,7 +789,11 @@ type PublicationProfile struct {
 	XHTTPServerMode                                          state.XHTTPMode
 }
 
-type PublicationOmission struct{ ID ProfileID }
+type PublicationOmission struct {
+	ID        ProfileID
+	Name      string
+	Lifecycle state.ProfileLifecycle
+}
 
 type PublicationSource struct {
 	profiles  []PublicationProfile
@@ -805,7 +809,7 @@ func NewPublicationSource(profiles []PublicationProfile, omissions []Publication
 			profileIndex++
 			continue
 		}
-		if omissionIndex < len(omissions) && omissions[omissionIndex].ID == definition.id {
+		if omissionIndex < len(omissions) && omissions[omissionIndex] == publicationOmission(definition.id, omissions[omissionIndex].Lifecycle) && (omissions[omissionIndex].Lifecycle == state.ProfileNotSetUp || omissions[omissionIndex].Lifecycle == state.ProfileDisabled) {
 			omissionIndex++
 			continue
 		}
@@ -834,12 +838,12 @@ func (source PublicationSource) Omissions() []PublicationOmission {
 func PublicationInputsMatch(source PublicationSource, candidate state.ConnectionProfiles) bool {
 	profiles, omissions := source.Profiles(), source.Omissions()
 	profileByID := make(map[ProfileID]PublicationProfile, len(profiles))
-	omitted := make(map[ProfileID]bool, len(omissions))
+	omitted := make(map[ProfileID]PublicationOmission, len(omissions))
 	for _, profile := range profiles {
 		profileByID[profile.ID] = profile
 	}
 	for _, omission := range omissions {
-		omitted[omission.ID] = true
+		omitted[omission.ID] = omission
 	}
 	checks := []struct {
 		id      ProfileID
@@ -867,7 +871,9 @@ func PublicationInputsMatch(source PublicationSource, candidate state.Connection
 	}
 	for _, check := range checks {
 		profile, present := profileByID[check.id]
-		if check.enabled != present || check.enabled && (!check.match(profile) || omitted[check.id]) || !check.enabled && !omitted[check.id] {
+		omission, absent := omitted[check.id]
+		lifecycle := publicationLifecycle(candidate, check.id)
+		if check.enabled != present || check.enabled && (lifecycle != state.ProfileEnabled || !check.match(profile) || absent) || !check.enabled && (!absent || omission != publicationOmission(check.id, lifecycle)) {
 			return false
 		}
 	}
@@ -1759,26 +1765,48 @@ func registryExposureFailure(request RegistryViewRequest) *Health {
 }
 
 func registryPublication(request RegistryViewRequest) PublicationSource {
+	lifecycles := registryLifecycles(request)
 	all := []struct {
-		enabled bool
-		profile PublicationProfile
+		enabled   bool
+		lifecycle state.ProfileLifecycle
+		profile   PublicationProfile
 	}{
-		{request.Reality.Enabled, PublicationProfile{ID: VLESSRealityVisionProfileID, Name: registryDefinitions[0].name, Address: request.ClientAddress, Port: request.Reality.Port, ServerName: request.Reality.Target.ServerName, Transport: "RAW", Security: "REALITY", UUID: state.NewClientAccessValue(request.Reality.Credentials.uuid.value), ShortID: state.NewClientAccessValue(request.Reality.Credentials.shortID.value), PublicKey: request.Reality.Credentials.publicKey.value, Fingerprint: request.Reality.Fingerprint, Flow: "xtls-rprx-vision"}},
-		{request.XHTTP.Enabled, PublicationProfile{ID: VLESSXHTTPProfileID, Name: registryDefinitions[1].name, Address: request.XHTTP.Hostname, Port: 443, Hostname: request.XHTTP.Hostname, Transport: "XHTTP", Security: "TLS", UUID: state.NewClientAccessValue(request.XHTTP.Credentials.uuid.value), Path: state.NewClientAccessValue(request.XHTTP.Credentials.path.value), XHTTPServerMode: request.XHTTP.Mode}},
-		{request.WebSocket.Enabled, PublicationProfile{ID: VLESSWebSocketProfileID, Name: registryDefinitions[2].name, Address: request.WebSocket.Hostname, Port: 443, Hostname: request.WebSocket.Hostname, Transport: "WebSocket", Security: "TLS", UUID: state.NewClientAccessValue(request.WebSocket.Credentials.uuid.value), Path: state.NewClientAccessValue(request.WebSocket.Credentials.path.value), HTTPHost: request.WebSocket.HTTPHost, TLSName: request.WebSocket.TLSName}},
-		{request.Hysteria2.Enabled, PublicationProfile{ID: Hysteria2ProfileID, Name: registryDefinitions[3].name, Address: request.ClientAddress, Port: request.Hysteria2.Port, ServerName: request.Hysteria2.ServerName, Transport: "QUIC", Security: "TLS", Password: state.NewClientAccessValue(request.Hysteria2.Credentials.password.value), Obfuscation: request.Hysteria2.Credentials.obfuscation, ObfuscationSecret: state.NewClientAccessValue(request.Hysteria2.Credentials.obfuscationSecret.value)}},
-		{request.TUIC.Enabled, PublicationProfile{ID: TUICProfileID, Name: registryDefinitions[4].name, Address: request.ClientAddress, Port: request.TUIC.Port, ServerName: request.TUIC.ServerName, Transport: "QUIC", Security: "TLS", UUID: state.NewClientAccessValue(request.TUIC.Credentials.uuid.value), Password: state.NewClientAccessValue(request.TUIC.Credentials.password.value), CongestionControl: request.TUIC.CongestionControl}},
-		{request.AnyTLS.Enabled, PublicationProfile{ID: AnyTLSProfileID, Name: registryDefinitions[5].name, Address: request.ClientAddress, Port: request.AnyTLS.Port, ServerName: request.AnyTLS.ServerName, Transport: "TCP", Security: "TLS", Password: state.NewClientAccessValue(request.AnyTLS.Credentials.password.value)}},
+		{request.Reality.Enabled, lifecycles.Reality, PublicationProfile{ID: VLESSRealityVisionProfileID, Name: registryDefinitions[0].name, Address: request.ClientAddress, Port: request.Reality.Port, ServerName: request.Reality.Target.ServerName, Transport: "RAW", Security: "REALITY", UUID: state.NewClientAccessValue(request.Reality.Credentials.uuid.value), ShortID: state.NewClientAccessValue(request.Reality.Credentials.shortID.value), PublicKey: request.Reality.Credentials.publicKey.value, Fingerprint: request.Reality.Fingerprint, Flow: "xtls-rprx-vision"}},
+		{request.XHTTP.Enabled, lifecycles.XHTTP, PublicationProfile{ID: VLESSXHTTPProfileID, Name: registryDefinitions[1].name, Address: request.XHTTP.Hostname, Port: 443, Hostname: request.XHTTP.Hostname, Transport: "XHTTP", Security: "TLS", UUID: state.NewClientAccessValue(request.XHTTP.Credentials.uuid.value), Path: state.NewClientAccessValue(request.XHTTP.Credentials.path.value), XHTTPServerMode: request.XHTTP.Mode}},
+		{request.WebSocket.Enabled, lifecycles.WebSocket, PublicationProfile{ID: VLESSWebSocketProfileID, Name: registryDefinitions[2].name, Address: request.WebSocket.Hostname, Port: 443, Hostname: request.WebSocket.Hostname, Transport: "WebSocket", Security: "TLS", UUID: state.NewClientAccessValue(request.WebSocket.Credentials.uuid.value), Path: state.NewClientAccessValue(request.WebSocket.Credentials.path.value), HTTPHost: request.WebSocket.HTTPHost, TLSName: request.WebSocket.TLSName}},
+		{request.Hysteria2.Enabled, lifecycles.Hysteria2, PublicationProfile{ID: Hysteria2ProfileID, Name: registryDefinitions[3].name, Address: request.ClientAddress, Port: request.Hysteria2.Port, ServerName: request.Hysteria2.ServerName, Transport: "QUIC", Security: "TLS", Password: state.NewClientAccessValue(request.Hysteria2.Credentials.password.value), Obfuscation: request.Hysteria2.Credentials.obfuscation, ObfuscationSecret: state.NewClientAccessValue(request.Hysteria2.Credentials.obfuscationSecret.value)}},
+		{request.TUIC.Enabled, lifecycles.TUIC, PublicationProfile{ID: TUICProfileID, Name: registryDefinitions[4].name, Address: request.ClientAddress, Port: request.TUIC.Port, ServerName: request.TUIC.ServerName, Transport: "QUIC", Security: "TLS", UUID: state.NewClientAccessValue(request.TUIC.Credentials.uuid.value), Password: state.NewClientAccessValue(request.TUIC.Credentials.password.value), CongestionControl: request.TUIC.CongestionControl}},
+		{request.AnyTLS.Enabled, lifecycles.AnyTLS, PublicationProfile{ID: AnyTLSProfileID, Name: registryDefinitions[5].name, Address: request.ClientAddress, Port: request.AnyTLS.Port, ServerName: request.AnyTLS.ServerName, Transport: "TCP", Security: "TLS", Password: state.NewClientAccessValue(request.AnyTLS.Credentials.password.value)}},
 	}
 	var source PublicationSource
 	for _, item := range all {
 		if item.enabled {
 			source.profiles = append(source.profiles, item.profile)
 		} else {
-			source.omissions = append(source.omissions, PublicationOmission{ID: item.profile.ID})
+			source.omissions = append(source.omissions, publicationOmission(item.profile.ID, item.lifecycle))
 		}
 	}
 	return source
+}
+
+func publicationLifecycle(profiles state.ConnectionProfiles, id ProfileID) state.ProfileLifecycle {
+	lifecycle := profileLifecycle(profiles, id)
+	if lifecycle != "" {
+		return lifecycle
+	}
+	if profileEnabled(profiles, id) {
+		return state.ProfileEnabled
+	}
+	return state.ProfileDisabled
+}
+
+func publicationOmission(id ProfileID, lifecycle state.ProfileLifecycle) PublicationOmission {
+	for _, definition := range registryDefinitions {
+		if definition.id == id {
+			return PublicationOmission{ID: id, Name: definition.name, Lifecycle: lifecycle}
+		}
+	}
+	return PublicationOmission{ID: id, Lifecycle: lifecycle}
 }
 
 func registryHealth(code, found string) Health {

@@ -52,7 +52,7 @@ func TestRenderRefusesUnsupportedMihomoField(t *testing.T) {
 func TestRenderMihomoOmitsDisabledProfileAndPreservesIPv6(t *testing.T) {
 	source, reader := sixProfileSource(t, "2001:db8::10")
 	profiles := slices.Delete(source.Profiles(), 1, 2)
-	source, err := connectionprofiles.NewPublicationSource(profiles, []connectionprofiles.PublicationOmission{{ID: connectionprofiles.VLESSXHTTPProfileID}})
+	source, err := connectionprofiles.NewPublicationSource(profiles, []connectionprofiles.PublicationOmission{{ID: connectionprofiles.VLESSXHTTPProfileID, Name: "VLESS XHTTP", Lifecycle: state.ProfileDisabled}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,12 +138,12 @@ func TestPinnedMihomoAcceptsCompleteDocument(t *testing.T) {
 
 func allPublicationOmissions() []connectionprofiles.PublicationOmission {
 	return []connectionprofiles.PublicationOmission{
-		{ID: connectionprofiles.VLESSRealityVisionProfileID},
-		{ID: connectionprofiles.VLESSXHTTPProfileID},
-		{ID: connectionprofiles.VLESSWebSocketProfileID},
-		{ID: connectionprofiles.Hysteria2ProfileID},
-		{ID: connectionprofiles.TUICProfileID},
-		{ID: connectionprofiles.AnyTLSProfileID},
+		{ID: connectionprofiles.VLESSRealityVisionProfileID, Name: "VLESS REALITY Vision", Lifecycle: state.ProfileDisabled},
+		{ID: connectionprofiles.VLESSXHTTPProfileID, Name: "VLESS XHTTP", Lifecycle: state.ProfileDisabled},
+		{ID: connectionprofiles.VLESSWebSocketProfileID, Name: "VLESS WebSocket", Lifecycle: state.ProfileDisabled},
+		{ID: connectionprofiles.Hysteria2ProfileID, Name: "Hysteria2", Lifecycle: state.ProfileDisabled},
+		{ID: connectionprofiles.TUICProfileID, Name: "TUIC", Lifecycle: state.ProfileDisabled},
+		{ID: connectionprofiles.AnyTLSProfileID, Name: "AnyTLS", Lifecycle: state.ProfileDisabled},
 	}
 }
 

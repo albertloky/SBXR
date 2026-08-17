@@ -330,7 +330,11 @@ func sourceForCandidateProfiles(t *testing.T, template connectionprofiles.Public
 		if enabled {
 			profiles = append(profiles, profile)
 		} else {
-			omissions = append(omissions, connectionprofiles.PublicationOmission{ID: profile.ID})
+			name := profile.Name
+			if profile.ID == connectionprofiles.VLESSXHTTPProfileID {
+				name = "VLESS XHTTP"
+			}
+			omissions = append(omissions, connectionprofiles.PublicationOmission{ID: profile.ID, Name: name, Lifecycle: state.ProfileDisabled})
 		}
 	}
 	source, err := connectionprofiles.NewPublicationSource(profiles, omissions)

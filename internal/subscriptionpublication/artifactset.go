@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -22,7 +23,9 @@ var artifactNames = []string{"base64", "raw", "v2rayn", "shadowrocket", "karing"
 var identityPattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,128}$`)
 
 type Omission struct {
-	ID string `json:"id"`
+	ID        string                 `json:"id"`
+	Name      string                 `json:"name"`
+	Lifecycle state.ProfileLifecycle `json:"lifecycle"`
 }
 
 type Metadata struct {
@@ -131,7 +134,7 @@ func validatePreparedArtifactFiles(files []ArtifactFile) (PreparedArtifactSet, e
 	decodeErr := decoder.Decode(&metadata)
 	address, addressErr := netip.ParseAddr(metadata.SelectedAddress)
 	_, validAction := clientAccessEffect(metadata.ClientAccessAction)
-	if decodeErr != nil || decoder.Decode(&struct{}{}) != io.EOF || metadata.Schema != "sbxr-subscription-artifact-set-v1" || !safePlanIdentity(metadata.ChangeSet) || addressErr != nil || !address.IsGlobalUnicast() || metadata.DesiredStateRevision == 0 || !validPlanSHA(metadata.DesiredStateSHA256) || !validPlanSHA(metadata.ManagedInputsSHA256) || !validPlanSHA(metadata.RelevantChecksums.ConnectionProfiles) || !validPlanSHA(metadata.RelevantChecksums.Subscription) || metadata.Compatibility != string(CurrentCompatibilityDefinition) || metadata.ProfileCount < 0 || metadata.ProfileCount > 6 || strings.Join(metadata.Representations, ",") != strings.Join(artifactNames[:7], ",") || !validRelease(metadata.ReleaseIdentity) || !validAction || !metadata.ValidationComplete || !validArtifactOmissions(metadata.Omissions, metadata.ProfileCount) || !validArtifactSHA256(metadata.ArtifactSHA256, bodies) {
+	if decodeErr != nil || decoder.Decode(&struct{}{}) != io.EOF || metadata.Schema != "sbxr-subscription-artifact-set-v1" || !safePlanIdentity(metadata.ChangeSet) || addressErr != nil || !address.IsGlobalUnicast() || metadata.DesiredStateRevision == 0 || !validPlanSHA(metadata.DesiredStateSHA256) || !validPlanSHA(metadata.ManagedInputsSHA256) || !validPlanSHA(metadata.RelevantChecksums.ConnectionProfiles) || !validPlanSHA(metadata.RelevantChecksums.Subscription) || metadata.Compatibility != string(CurrentCompatibilityDefinition) || metadata.ProfileCount < 0 || metadata.ProfileCount > 6 || strings.Join(metadata.Representations, ",") != strings.Join(artifactNames[:7], ",") || !validRelease(metadata.ReleaseIdentity) || !validAction || !metadata.ValidationComplete || !validArtifactOmissions(metadata.Omissions, metadata.ProfileCount, bodies["raw"]) || !validArtifactSHA256(metadata.ArtifactSHA256, bodies) {
 		return PreparedArtifactSet{}, errors.New("Subscription Publication artifact metadata is invalid")
 	}
 	decoded, err := base64.StdEncoding.DecodeString(string(bodies["base64"]))
@@ -195,16 +198,57 @@ func (set PreparedArtifactSet) AgreesWith(binding systemchanges.StateTransaction
 	return set.metadata.ChangeSet == binding.ChangeSet && set.metadata.DesiredStateRevision == binding.CandidateRevision && set.metadata.DesiredStateSHA256 == binding.CandidateSHA256 && release.Repository == binding.CandidateRelease.Repository && release.Tag == binding.CandidateRelease.Tag && release.Commit == binding.CandidateRelease.Commit && release.ReleaseIndexSHA256 == binding.CandidateRelease.ReleaseIndexSHA256
 }
 
-func validArtifactOmissions(omissions []Omission, profileCount int) bool {
-	valid := map[string]bool{"vless-reality-vision": true, "vless-xhttp": true, "vless-websocket": true, "hysteria2": true, "tuic": true, "anytls": true}
+func validArtifactOmissions(omissions []Omission, profileCount int, raw []byte) bool {
+	valid := map[string]string{"vless-reality-vision": "VLESS REALITY Vision", "vless-xhttp": "VLESS XHTTP", "vless-websocket": "VLESS WebSocket", "hysteria2": "Hysteria2", "tuic": "TUIC", "anytls": "AnyTLS"}
+	emitted, ok := artifactProfileIDs(raw)
+	if !ok || len(emitted) != profileCount {
+		return false
+	}
 	seen := map[string]bool{}
 	for _, omission := range omissions {
-		if !valid[omission.ID] || seen[omission.ID] {
+		if valid[omission.ID] != omission.Name || emitted[omission.ID] || seen[omission.ID] || omission.Lifecycle != state.ProfileNotSetUp && omission.Lifecycle != state.ProfileDisabled {
 			return false
 		}
 		seen[omission.ID] = true
 	}
-	return len(omissions)+profileCount == 6
+	for id := range valid {
+		if emitted[id] == seen[id] {
+			return false
+		}
+	}
+	return true
+}
+
+func artifactProfileIDs(raw []byte) (map[string]bool, bool) {
+	ids := map[string]bool{}
+	if len(raw) == 0 {
+		return ids, true
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		parsed, err := url.Parse(line)
+		if err != nil || parsed == nil {
+			return nil, false
+		}
+		id := ""
+		switch parsed.Scheme {
+		case "vless":
+			switch parsed.Query().Get("type") {
+			case "tcp":
+				id = "vless-reality-vision"
+			case "xhttp":
+				id = "vless-xhttp"
+			case "ws":
+				id = "vless-websocket"
+			}
+		case "hysteria2", "tuic", "anytls":
+			id = parsed.Scheme
+		}
+		if id == "" || ids[id] {
+			return nil, false
+		}
+		ids[id] = true
+	}
+	return ids, true
 }
 
 func artifactSHA256(bodies map[string][]byte) map[string]string {

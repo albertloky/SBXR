@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -430,6 +431,54 @@ func TestServeRejectsEveryUnsafeArtifactSet(t *testing.T) {
 				t.Fatalf("Serve() = %v", err)
 			}
 		})
+	}
+}
+
+func TestServingRefusesMetadataThatMarksAnEmittedProfileOmitted(t *testing.T) {
+	server, _, _, _ := testServer(t, "127.0.0.1")
+	installPublicationFixture(t, server, "2001:db8::10", true)
+	mutateArtifactMetadata(t, server, func(metadata map[string]any) {
+		omission := metadata["omissions"].([]any)[0].(map[string]any)
+		omission["id"], omission["name"] = "vless-reality-vision", "VLESS REALITY Vision"
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	err = server.Serve(ctx, listener)
+	var failure *Failure
+	if !errors.As(err, &failure) || failure.Code != "SUBSCRIPTION-SERVING-ARTIFACT" {
+		t.Fatalf("Serve() = %v", err)
+	}
+}
+
+func TestServingRefusesMalformedRawConnectionProfile(t *testing.T) {
+	server, _, _, _ := testServer(t, "127.0.0.1")
+	raw := []byte("vless://reality\x00")
+	universal := []byte(base64.StdEncoding.EncodeToString(raw))
+	for _, file := range []struct {
+		name string
+		body []byte
+	}{{"raw", raw}, {"base64", universal}, {"v2rayn", universal}, {"shadowrocket", universal}} {
+		mustFile(t, server.root, artifactPath+"/"+file.name, file.body, 0o644)
+		name, body := file.name, file.body
+		mutateArtifactMetadata(t, server, func(metadata map[string]any) {
+			digest := sha256.Sum256(body)
+			metadata["artifact_sha256"].(map[string]any)[name] = hex.EncodeToString(digest[:])
+		})
+	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	err = server.Serve(ctx, listener)
+	var failure *Failure
+	if !errors.As(err, &failure) || failure.Code != "SUBSCRIPTION-SERVING-ARTIFACT" {
+		t.Fatalf("Serve() = %v", err)
 	}
 }
 

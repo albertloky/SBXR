@@ -153,7 +153,7 @@ var publicationFixtureSHA256 = map[bool]map[string]string{
 		"base64": "17aec15e5148867995b6068cc86abba6f669e739dac3d770c6768e1847b68c1d", "raw": "a43d2631593f429c543417b4f5226fa17b755b6b14e3bf5136d1ed144b37f727",
 		"v2rayn": "17aec15e5148867995b6068cc86abba6f669e739dac3d770c6768e1847b68c1d", "shadowrocket": "17aec15e5148867995b6068cc86abba6f669e739dac3d770c6768e1847b68c1d",
 		"karing": "13f2177e1fdb4ce9e8675bcc5c58619c168fc127c94c08cadfb3b127c28db6a6", "mihomo": "345581358d199c2213ef3cd470eaf7017c3335be2507280b07a0f522dbdc793d",
-		"sing-box": "13f2177e1fdb4ce9e8675bcc5c58619c168fc127c94c08cadfb3b127c28db6a6", "metadata": "e83a88751a6f137fe2fead346b6b4ed199d2956348ab2260901fab3874d2aa40",
+		"sing-box": "13f2177e1fdb4ce9e8675bcc5c58619c168fc127c94c08cadfb3b127c28db6a6", "metadata": "e6185b6e8012fa0dc3f487fa917f82af189801169cb4e058b766c569bf002d36",
 	},
 }
 
@@ -171,7 +171,7 @@ func installPublicationFixture(t *testing.T, server Server, address string, disa
 	omissions := []connectionprofiles.PublicationOmission(nil)
 	if disableWebSocket {
 		profiles = append(profiles[:2], profiles[3:]...)
-		omissions = []connectionprofiles.PublicationOmission{{ID: connectionprofiles.VLESSWebSocketProfileID}}
+		omissions = []connectionprofiles.PublicationOmission{{ID: connectionprofiles.VLESSWebSocketProfileID, Name: "VLESS WebSocket", Lifecycle: state.ProfileDisabled}}
 	}
 	source, err := connectionprofiles.NewPublicationSource(profiles, omissions)
 	if err != nil {

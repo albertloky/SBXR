@@ -578,7 +578,9 @@ type artifactMetadata struct {
 	ArtifactSHA256     map[string]string `json:"artifact_sha256"`
 	ProfileCount       int               `json:"profile_count"`
 	Omissions          []struct {
-		ID string `json:"id"`
+		ID        string `json:"id"`
+		Name      string `json:"name"`
+		Lifecycle string `json:"lifecycle"`
 	} `json:"omissions"`
 	ValidationComplete bool `json:"validation_complete"`
 }
@@ -612,15 +614,56 @@ func validArtifactSet(artifacts map[string][]byte, expectedAddress netip.Addr, r
 	if len(artifacts["raw"]) > 0 {
 		profileCount = strings.Count(string(artifacts["raw"]), "\n") + 1
 	}
-	validIDs := map[string]bool{"vless-reality-vision": true, "vless-xhttp": true, "vless-websocket": true, "hysteria2": true, "tuic": true, "anytls": true}
+	validNames := map[string]string{"vless-reality-vision": "VLESS REALITY Vision", "vless-xhttp": "VLESS XHTTP", "vless-websocket": "VLESS WebSocket", "hysteria2": "Hysteria2", "tuic": "TUIC", "anytls": "AnyTLS"}
+	emitted, valid := artifactProfileIDs(artifacts["raw"])
+	if !valid || len(emitted) != profileCount {
+		return false
+	}
 	seen := map[string]bool{}
 	for _, omission := range metadata.Omissions {
-		if !validIDs[omission.ID] || seen[omission.ID] {
+		if validNames[omission.ID] != omission.Name || emitted[omission.ID] || seen[omission.ID] || omission.Lifecycle != "Not set up" && omission.Lifecycle != "Disabled" {
 			return false
 		}
 		seen[omission.ID] = true
 	}
-	return metadata.ProfileCount == profileCount && profileCount+len(metadata.Omissions) == 6
+	for id := range validNames {
+		if emitted[id] == seen[id] {
+			return false
+		}
+	}
+	return metadata.ProfileCount == profileCount
+}
+
+func artifactProfileIDs(raw []byte) (map[string]bool, bool) {
+	ids := map[string]bool{}
+	if len(raw) == 0 {
+		return ids, true
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		parsed, err := url.Parse(line)
+		if err != nil || parsed == nil {
+			return nil, false
+		}
+		id := ""
+		switch parsed.Scheme {
+		case "vless":
+			switch parsed.Query().Get("type") {
+			case "tcp":
+				id = "vless-reality-vision"
+			case "xhttp":
+				id = "vless-xhttp"
+			case "ws":
+				id = "vless-websocket"
+			}
+		case "hysteria2", "tuic", "anytls":
+			id = parsed.Scheme
+		}
+		if id == "" || ids[id] {
+			return nil, false
+		}
+		ids[id] = true
+	}
+	return ids, true
 }
 
 func safeMetadataIdentity(value string) bool {

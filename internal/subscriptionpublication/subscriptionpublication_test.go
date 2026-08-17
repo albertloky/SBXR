@@ -108,7 +108,7 @@ func TestRenderBracketsIPv6AndOmitsDisabledProfile(t *testing.T) {
 	source, reader := sixProfileSource(t, "2001:db8::10")
 	profiles := source.Profiles()
 	profiles = slices.Delete(profiles, 1, 2)
-	source, err := connectionprofiles.NewPublicationSource(profiles, []connectionprofiles.PublicationOmission{{ID: connectionprofiles.VLESSXHTTPProfileID}})
+	source, err := connectionprofiles.NewPublicationSource(profiles, []connectionprofiles.PublicationOmission{{ID: connectionprofiles.VLESSXHTTPProfileID, Name: "VLESS XHTTP", Lifecycle: state.ProfileDisabled}})
 	if err != nil {
 		t.Fatal(err)
 	}

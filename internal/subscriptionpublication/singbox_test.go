@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/albertloky/SBXR/internal/connectionprofiles"
+	"github.com/albertloky/SBXR/internal/state"
 	"github.com/albertloky/SBXR/internal/subscriptionpublication"
 )
 
@@ -177,7 +178,7 @@ func TestRenderProducesValidatedFiveConnectionProfileSingBoxAndKaringDocument(t 
 func TestRenderSingBoxOmitsDisabledConnectionProfileAndPreservesIPv6(t *testing.T) {
 	source, reader := sixProfileSource(t, "2001:db8::10")
 	profiles := slices.Delete(source.Profiles(), 2, 3)
-	source, err := connectionprofiles.NewPublicationSource(profiles, []connectionprofiles.PublicationOmission{{ID: connectionprofiles.VLESSWebSocketProfileID}})
+	source, err := connectionprofiles.NewPublicationSource(profiles, []connectionprofiles.PublicationOmission{{ID: connectionprofiles.VLESSWebSocketProfileID, Name: "VLESS WebSocket", Lifecycle: state.ProfileDisabled}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,14 +224,19 @@ func TestPinnedSingBoxAcceptsCompleteDocument(t *testing.T) {
 		return nil
 	})
 	source, reader := sixProfileSource(t, "198.51.100.10")
-	if result, err := subscriptionpublication.New(mihomoValidatorFunc(func(context.Context, io.Reader) error { return nil }), validator).Render(t.Context(), source, reader); err != nil || result.SingBox.ProfileCount != 5 {
+	module := subscriptionpublication.New(mihomoValidatorFunc(func(context.Context, io.Reader) error { return nil }), validator)
+	if result, err := module.Render(t.Context(), source, reader); err != nil || result.SingBox.ProfileCount != 5 {
 		t.Fatalf("pinned sing-box validation = count %d, error %v", result.SingBox.ProfileCount, err)
+	}
+	revisionOne, _, _ := stagedSources(t, "198.51.100.10")
+	if result, err := module.Render(t.Context(), revisionOne, reader); err != nil || result.SingBox.ProfileCount != 1 {
+		t.Fatalf("pinned revision 1 sing-box validation = count %d, error %v", result.SingBox.ProfileCount, err)
 	}
 	disabled, err := connectionprofiles.NewPublicationSource(nil, allPublicationOmissions())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result, err := subscriptionpublication.New(mihomoValidatorFunc(func(context.Context, io.Reader) error { return nil }), validator).Render(t.Context(), disabled, reader); err != nil || result.SingBox.ProfileCount != 0 {
+	if result, err := module.Render(t.Context(), disabled, reader); err != nil || result.SingBox.ProfileCount != 0 {
 		t.Fatalf("pinned sing-box all-disabled validation = count %d, error %v", result.SingBox.ProfileCount, err)
 	}
 	if err := validator.ValidateSingBox(t.Context(), strings.NewReader("{")); err == nil {

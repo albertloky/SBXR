@@ -33,7 +33,7 @@ func TestServeSwitchesAuthorizationAndCompleteBodiesTogether(t *testing.T) {
 	assertSubscriptionResponse(t, client, endpoint+oldToken, http.StatusOK, oldBody)
 
 	newToken := strings.Repeat("9", 64)
-	newRaw := []byte("vless://candidate")
+	newRaw := []byte("vless://candidate@198.51.100.10:443?type=tcp")
 	newBase64 := []byte(base64.StdEncoding.EncodeToString(newRaw))
 	for _, name := range []string{"base64", "v2rayn", "shadowrocket"} {
 		mustFile(t, server.root, artifactPath+"/"+name, newBase64, 0o644)
@@ -58,7 +58,7 @@ func TestReadOnlyHealthDoesNotAdoptOrRequireTheServiceIdentity(t *testing.T) {
 func TestConcurrentRequestsObserveOnlyOneCompleteServingSnapshot(t *testing.T) {
 	server, roots, oldToken, oldBody := testServer(t, "127.0.0.1")
 	newToken := strings.Repeat("9", 64)
-	newRaw := []byte("vless://candidate")
+	newRaw := []byte("vless://candidate@198.51.100.10:443?type=tcp")
 	newBody := base64.StdEncoding.EncodeToString(newRaw)
 	candidate := filepath.Join(server.root, "var/lib/sbxr/subscriptions/candidate")
 	copyServingSnapshot(t, filepath.Join(server.root, artifactPath), candidate)
@@ -181,7 +181,7 @@ func TestServeKeepsThePreviousProvenHTTPSStateWhenCertificateActivationFails(t *
 func TestServeRestartAndRollbackUseOnlyAProvenCompleteSnapshot(t *testing.T) {
 	server, roots, oldToken, oldBody := testServer(t, "127.0.0.1")
 	newToken := strings.Repeat("9", 64)
-	newRaw := []byte("vless://candidate")
+	newRaw := []byte("vless://candidate@198.51.100.10:443?type=tcp")
 	newBody := base64.StdEncoding.EncodeToString(newRaw)
 	candidate := filepath.Join(server.root, "var/lib/sbxr/subscriptions/candidate-restart")
 	copyServingSnapshot(t, filepath.Join(server.root, artifactPath), candidate)
@@ -224,7 +224,7 @@ func TestPublicationGateAndRollbackPassThroughServe(t *testing.T) {
 	assertSubscriptionResponse(t, client, endpoint+oldToken, http.StatusOK, oldBody)
 
 	newToken := strings.Repeat("9", 64)
-	newRaw := []byte("vless://transaction-candidate")
+	newRaw := []byte("vless://transaction-candidate@198.51.100.10:443?type=tcp")
 	newBody := base64.StdEncoding.EncodeToString(newRaw)
 	prepared, binding, bundleSHA := preparedServingSet(t, server.root, newToken, newRaw)
 	mustDirectory(t, server.root, "var/lib/sbxr/subscriptions/sets", 0o700)
@@ -304,7 +304,7 @@ func preparedServingSet(t *testing.T, root, token string, raw []byte) (string, s
 		Schema: "sbxr-subscription-artifact-set-v1", ChangeSet: "change-0003", SelectedAddress: "198.51.100.10", DesiredStateSHA256: digest,
 		ManagedInputsSHA256: strings.Repeat("e", 64), RelevantChecksums: subscriptionpublication.RelevantChecksums{ConnectionProfiles: strings.Repeat("f", 64), Subscription: strings.Repeat("1", 64)},
 		Compatibility: string(subscriptionpublication.CurrentCompatibilityDefinition), DesiredStateRevision: 3, ReleaseIdentity: release,
-		Representations: subscriptionpublication.Names()[:7], ProfileCount: 1, Omissions: []subscriptionpublication.Omission{{ID: "vless-xhttp"}, {ID: "vless-websocket"}, {ID: "hysteria2"}, {ID: "tuic"}, {ID: "anytls"}}, ValidationComplete: true,
+		Representations: subscriptionpublication.Names()[:7], ProfileCount: 1, Omissions: []subscriptionpublication.Omission{{ID: "vless-xhttp", Name: "VLESS XHTTP", Lifecycle: state.ProfileNotSetUp}, {ID: "vless-websocket", Name: "VLESS WebSocket", Lifecycle: state.ProfileNotSetUp}, {ID: "hysteria2", Name: "Hysteria2", Lifecycle: state.ProfileNotSetUp}, {ID: "tuic", Name: "TUIC", Lifecycle: state.ProfileNotSetUp}, {ID: "anytls", Name: "AnyTLS", Lifecycle: state.ProfileNotSetUp}}, ValidationComplete: true,
 	})
 	if err != nil {
 		t.Fatal(err)
