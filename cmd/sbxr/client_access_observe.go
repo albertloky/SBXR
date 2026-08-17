@@ -83,6 +83,17 @@ func observeManagedClientAccessWithToken(ctx context.Context, snapshot state.Sna
 	return result, xhttp, websocket, nil
 }
 
+func observeRevisionOneClientAccess(snapshot state.Snapshot, disk systemchanges.DiskRequirement) (networkpolicy.Result, error) {
+	intent := clientAccessNetworkIntent(snapshot.DesiredState, snapshot.Revision, disk)
+	adapter := networkubuntu.New()
+	local, err := adapter.Observe(networkpolicy.ObservationRequest{Intent: intent, Stage: networkpolicy.PostApproval, Scope: networkpolicy.LocalObservations})
+	if err != nil {
+		return networkpolicy.Result{}, errors.New("Managed network observation failed")
+	}
+	proof := networkpolicy.ManagedProof{Lineage: networkpolicy.ProvenLineage, NftablesSHA256: local.Checksums["sbxr_nftables"], Listeners: expectedManagedListeners(intent)}
+	return networkpolicy.New(adapter).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval, Managed: proof}), nil
+}
+
 func managedTunnelExpected(desired state.DesiredState) cloudflaretunnel.WholeTunnelExpected {
 	routes := make([]cloudflaretunnel.Route, 0, 3)
 	if desired.ConnectionProfiles.VLESSXHTTP.Enabled {

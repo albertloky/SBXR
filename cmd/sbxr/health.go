@@ -11,8 +11,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
+	"github.com/albertloky/SBXR/internal/connectionprofiles"
+	profilesubuntu "github.com/albertloky/SBXR/internal/connectionprofiles/adapter/ubuntu"
 	"github.com/albertloky/SBXR/internal/healthdiagnostics"
 	healthfilesystem "github.com/albertloky/SBXR/internal/healthdiagnostics/adapter/filesystem"
+	"github.com/albertloky/SBXR/internal/networkpolicy"
 	"github.com/albertloky/SBXR/internal/ownerconsole"
 	ownerubuntu "github.com/albertloky/SBXR/internal/ownerconsole/adapter/ubuntu"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
@@ -37,9 +41,15 @@ func productionHealthInputs(ctx context.Context) (healthdiagnostics.Interface, h
 		facts = systemchanges.InstallationHealthFacts{}
 	}
 	statuses := map[healthdiagnostics.Module]healthdiagnostics.HealthStatus{}
+	capabilities, connectionProfiles, connectionProfilesObserved := productionHealthCapabilities(ctx)
+	if connectionProfilesObserved {
+		statuses[healthdiagnostics.ConnectionProfilesModule] = connectionProfiles
+	}
 	if facts.Status == systemchanges.Managed {
 		if presentation, err := managedClientAccessPresentation(ctx); err == nil {
-			statuses = presentation.health
+			for module, status := range presentation.health {
+				statuses[module] = status
+			}
 		}
 		if finding, err := healthfilesystem.NewSelfInspector().Inspect(); err == nil {
 			statuses[healthdiagnostics.HealthDiagnosticsModule] = finding.Status
@@ -49,7 +59,81 @@ func productionHealthInputs(ctx context.Context) (healthdiagnostics.Interface, h
 		}
 		statuses[healthdiagnostics.OwnerConsoleModule] = healthdiagnostics.HealthStatus(ownerubuntu.Inspect().String())
 	}
-	return healthdiagnostics.New(nil), healthdiagnostics.InstallationSummaryFrom(lineage), scheduledInspections(facts, statuses)
+	return healthdiagnostics.New(nil), healthdiagnostics.InstallationSummaryFrom(lineage), scheduledInspections(facts, statuses, capabilities)
+}
+
+func productionHealthCapabilities(ctx context.Context) (healthdiagnostics.CapabilityInspection, healthdiagnostics.HealthStatus, bool) {
+	observed, release, err := managedLoadEvidence()
+	if err != nil {
+		return healthdiagnostics.CapabilityInspection{}, "", false
+	}
+	module := statefilesystem.New()
+	loaded, err := module.Load(state.LoadRequest{Baseline: state.ManagedEvidence, SupportedRelease: release, Lineage: &state.LineageProof{Revision: observed.StateRevision, LastCompletedChangeSet: state.ChangeSetIdentity(observed.LastChangeSet), ReleaseIdentity: release}})
+	if err != nil || loaded.Snapshot == nil {
+		return healthdiagnostics.CapabilityInspection{}, "", false
+	}
+	capabilities := healthCapabilities(loaded.Snapshot.Revision, loaded.Snapshot.DesiredState.ConnectionProfiles)
+	if !revisionOneConnectionProfiles(loaded.Snapshot.DesiredState.ConnectionProfiles) {
+		return capabilities, "", false
+	}
+	var status healthdiagnostics.HealthStatus
+	err = module.WithManagedConnectionProfileSecrets(loaded, func(snapshot state.Snapshot, secrets state.ConnectionProfileSecretReader) error {
+		disk := systemchanges.DiskRequirement{PreparationBytes: 8 << 20, TemporaryBytes: 8 << 20, SnapshotBytes: 32 << 20, JournalBytes: 8 << 20, RollbackBytes: 8 << 20, OverheadBytes: 256 << 20}
+		network, err := observeRevisionOneClientAccess(snapshot, disk)
+		if err != nil {
+			return err
+		}
+		request, err := clientAccessRegistryRequest(snapshot.DesiredState, snapshot.Revision, secrets, networkpolicy.NewRevisionOneListenerContribution(network), cloudflaretunnel.XHTTPRouteHealth{}, cloudflaretunnel.WebSocketRouteHealth{})
+		if err != nil {
+			return err
+		}
+		registry := connectionprofiles.New(profilesubuntu.NewRealityHost("/")).ViewRegistry(ctx, request)
+		status = healthdiagnostics.HealthStatus(registry.Health.Outcome)
+		return nil
+	})
+	return capabilities, status, err == nil
+}
+
+func healthCapabilitiesFromState(module state.Interface, observed systemchanges.Observation, release state.ReleaseIdentity) healthdiagnostics.CapabilityInspection {
+	loaded, err := module.Load(state.LoadRequest{Baseline: state.ManagedEvidence, SupportedRelease: release, Lineage: &state.LineageProof{Revision: observed.StateRevision, LastCompletedChangeSet: state.ChangeSetIdentity(observed.LastChangeSet), ReleaseIdentity: release}})
+	if err != nil || loaded.Snapshot == nil {
+		return healthdiagnostics.CapabilityInspection{}
+	}
+	return healthCapabilities(loaded.Snapshot.Revision, loaded.Snapshot.DesiredState.ConnectionProfiles)
+}
+
+func healthCapabilities(revision uint64, profiles state.ConnectionProfiles) healthdiagnostics.CapabilityInspection {
+	states := [...]struct {
+		lifecycle state.ProfileLifecycle
+		enabled   bool
+	}{
+		{profiles.VLESSRealityVision.Lifecycle, profiles.VLESSRealityVision.Enabled},
+		{profiles.VLESSXHTTP.Lifecycle, profiles.VLESSXHTTP.Enabled},
+		{profiles.VLESSWebSocket.Lifecycle, profiles.VLESSWebSocket.Enabled},
+		{profiles.Hysteria2.Lifecycle, profiles.Hysteria2.Enabled},
+		{profiles.TUIC.Lifecycle, profiles.TUIC.Enabled},
+		{profiles.AnyTLS.Lifecycle, profiles.AnyTLS.Enabled},
+	}
+	names := [...]healthdiagnostics.ConnectionProfile{
+		healthdiagnostics.VLESSRealityVision, healthdiagnostics.VLESSXHTTP, healthdiagnostics.VLESSWebSocket,
+		healthdiagnostics.Hysteria2, healthdiagnostics.TUIC, healthdiagnostics.AnyTLS,
+	}
+	result := healthdiagnostics.CapabilityInspection{CommittedRevision: revision, CapabilityRows: make([]healthdiagnostics.CapabilityFact, len(states))}
+	for index, profile := range states {
+		lifecycle := profile.lifecycle
+		if lifecycle == "" {
+			lifecycle = state.ProfileDisabled
+			if profile.enabled {
+				lifecycle = state.ProfileEnabled
+			}
+		}
+		result.CapabilityRows[index] = healthdiagnostics.CapabilityFact{Name: names[index], Lifecycle: map[state.ProfileLifecycle]healthdiagnostics.ProfileLifecycle{
+			state.ProfileNotSetUp: healthdiagnostics.ProfileNotSetUp,
+			state.ProfileEnabled:  healthdiagnostics.ProfileEnabled,
+			state.ProfileDisabled: healthdiagnostics.ProfileDisabled,
+		}[lifecycle]}
+	}
+	return result
 }
 
 func healthObservation() (systemchanges.Observation, error) {
@@ -280,7 +364,7 @@ func ownerModuleHealth(status healthdiagnostics.HealthStatus) ownerconsole.Modul
 	}[status]
 }
 
-func scheduledInspections(installation systemchanges.InstallationHealthFacts, statuses map[healthdiagnostics.Module]healthdiagnostics.HealthStatus) []healthdiagnostics.NamedInspection {
+func scheduledInspections(installation systemchanges.InstallationHealthFacts, statuses map[healthdiagnostics.Module]healthdiagnostics.HealthStatus, capabilities healthdiagnostics.CapabilityInspection) []healthdiagnostics.NamedInspection {
 	stateModule := statefilesystem.New()
 	return []healthdiagnostics.NamedInspection{
 		inspection(healthdiagnostics.StateModule, func(context.Context) (healthdiagnostics.HealthStatus, error) {
@@ -304,13 +388,28 @@ func scheduledInspections(installation systemchanges.InstallationHealthFacts, st
 		moduleHealthInspection(healthdiagnostics.NetworkPolicyModule, statuses),
 		moduleHealthInspection(healthdiagnostics.CloudflareTunnelModule, statuses),
 		moduleHealthInspection(healthdiagnostics.CertificateLifecycleModule, statuses),
-		moduleHealthInspection(healthdiagnostics.ConnectionProfilesModule, statuses),
+		connectionProfileHealthInspection(statuses, capabilities),
 		moduleHealthInspection(healthdiagnostics.SubscriptionPublicationModule, statuses),
 		moduleHealthInspection(healthdiagnostics.SubscriptionServingModule, statuses),
 		moduleHealthInspection(healthdiagnostics.HealthDiagnosticsModule, statuses),
 		moduleHealthInspection(healthdiagnostics.SoftwareLifecycleModule, statuses),
 		moduleHealthInspection(healthdiagnostics.OwnerConsoleModule, statuses),
+		moduleHealthInspection(healthdiagnostics.InstallationModule, statuses),
+		moduleHealthInspection(healthdiagnostics.CloudflareProfileSetupModule, statuses),
 	}
+}
+
+func connectionProfileHealthInspection(statuses map[healthdiagnostics.Module]healthdiagnostics.HealthStatus, capabilities healthdiagnostics.CapabilityInspection) healthdiagnostics.NamedInspection {
+	status, available := statuses[healthdiagnostics.ConnectionProfilesModule]
+	if !available && capabilities.CommittedRevision == 0 {
+		return healthdiagnostics.NamedInspection{Module: healthdiagnostics.ConnectionProfilesModule, Role: healthdiagnostics.Required}
+	}
+	if !available {
+		status = healthdiagnostics.Unknown
+	}
+	return healthdiagnostics.NamedInspection{Module: healthdiagnostics.ConnectionProfilesModule, Role: healthdiagnostics.Required, Inspect: func(context.Context) (healthdiagnostics.Finding, error) {
+		return healthdiagnostics.Finding{Status: status, Code: healthdiagnostics.NamedCheckCode(healthdiagnostics.ConnectionProfilesModule, status), Capabilities: capabilities}, nil
+	}}
 }
 
 func moduleHealthInspection(module healthdiagnostics.Module, statuses map[healthdiagnostics.Module]healthdiagnostics.HealthStatus) healthdiagnostics.NamedInspection {

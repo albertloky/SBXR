@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ecdh"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"os"
@@ -10,7 +12,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
 	"github.com/albertloky/SBXR/internal/healthdiagnostics"
+	"github.com/albertloky/SBXR/internal/networkpolicy"
 	"github.com/albertloky/SBXR/internal/state"
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
@@ -38,6 +42,18 @@ type healthEventMemory struct {
 
 type healthStateMemory []byte
 
+type revisionOneProfileSecrets struct {
+	clients        map[state.ClientAccessValue]string
+	infrastructure map[state.InfrastructureSecret]string
+}
+
+func (secrets revisionOneProfileSecrets) ReadClientAccessValue(value state.ClientAccessValue) string {
+	return secrets.clients[value]
+}
+func (secrets revisionOneProfileSecrets) ReadInfrastructureSecret(value state.InfrastructureSecret) string {
+	return secrets.infrastructure[value]
+}
+
 func (memory healthStateMemory) Read() ([]byte, error) { return append([]byte(nil), memory...), nil }
 func (healthStateMemory) Publish([]byte, []byte, string) ([]byte, error) {
 	return nil, errors.New("unused")
@@ -57,12 +73,12 @@ func (memory *healthBundleMemory) Publish(candidate healthdiagnostics.BundleCand
 	return nil
 }
 
-func TestProductionDiagnosticsPresentationUsesTheSameElevenModuleCheck(t *testing.T) {
+func TestProductionDiagnosticsPresentationUsesTheSameThirteenModuleCheck(t *testing.T) {
 	presentation, err := productionDiagnosticsPresentation(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(presentation.Modules) != 11 || len(presentation.Services) != 10 {
+	if len(presentation.Modules) != 13 || len(presentation.Services) != 10 {
 		t.Fatalf("diagnostics counts = %d Modules, %d services", len(presentation.Modules), len(presentation.Services))
 	}
 	if presentation.Retention.EventDays != 30 || presentation.Retention.EventMiB != 50 || presentation.Retention.BundleLimit != 3 {
@@ -125,10 +141,81 @@ func TestScheduledInspectionsUseOwningModuleManagedResults(t *testing.T) {
 		healthdiagnostics.SoftwareLifecycleModule:       healthdiagnostics.Failed,
 		healthdiagnostics.OwnerConsoleModule:            healthdiagnostics.Healthy,
 	}
-	result := healthdiagnostics.New(nil).Check(t.Context(), healthdiagnostics.InstallationSummary{}, scheduledInspections(systemchanges.InstallationHealthFacts{Status: systemchanges.Managed}, statuses)...)
+	result := healthdiagnostics.New(nil).Check(t.Context(), healthdiagnostics.InstallationSummary{}, scheduledInspections(systemchanges.InstallationHealthFacts{Status: systemchanges.Managed}, statuses, healthdiagnostics.CapabilityInspection{})...)
 	for _, checked := range result.Modules {
 		if want, ok := statuses[checked.Module]; ok && checked.Status != want {
 			t.Fatalf("%s health = %s, want %s", checked.Module, checked.Status, want)
+		}
+	}
+}
+
+func TestCommittedStateCapabilityRowsSurviveManagedChangeAndRecoveryPresentation(t *testing.T) {
+	profiles := state.ConnectionProfiles{
+		VLESSRealityVision: state.VLESSRealityVision{Lifecycle: state.ProfileEnabled},
+		VLESSXHTTP:         state.VLESSXHTTP{Lifecycle: state.ProfileNotSetUp},
+		VLESSWebSocket:     state.VLESSWebSocket{Lifecycle: state.ProfileNotSetUp},
+		Hysteria2:          state.Hysteria2{Lifecycle: state.ProfileNotSetUp},
+		TUIC:               state.TUIC{Lifecycle: state.ProfileNotSetUp},
+		AnyTLS:             state.AnyTLS{Lifecycle: state.ProfileNotSetUp},
+	}
+	capabilities := healthCapabilities(1, profiles)
+	for _, installation := range []systemchanges.InstallationStatus{systemchanges.Managed, systemchanges.ChangeInProgress, systemchanges.RecoveryRequired} {
+		statuses := map[healthdiagnostics.Module]healthdiagnostics.HealthStatus{healthdiagnostics.ConnectionProfilesModule: healthdiagnostics.Healthy}
+		result := healthdiagnostics.New(nil).Check(t.Context(), healthdiagnostics.InstallationSummary{}, scheduledInspections(systemchanges.InstallationHealthFacts{Status: installation}, statuses, capabilities)...)
+		var connectionProfiles *healthdiagnostics.ModuleResult
+		for index := range result.Modules {
+			if result.Modules[index].Module == healthdiagnostics.ConnectionProfilesModule {
+				connectionProfiles = &result.Modules[index]
+			}
+		}
+		if connectionProfiles == nil || connectionProfiles.Status != healthdiagnostics.Healthy || connectionProfiles.Capability == nil || connectionProfiles.Capability.CommittedRevision != 1 || len(connectionProfiles.Capability.CapabilityRows) != 6 || connectionProfiles.Capability.CapabilityRows[1].Lifecycle != healthdiagnostics.ProfileNotSetUp {
+			t.Fatalf("%s committed capability = %#v", installation, connectionProfiles)
+		}
+	}
+}
+
+func TestRevisionOneRegistryRequestKeepsTheOwnedNetworkPolicyContribution(t *testing.T) {
+	private, err := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{7}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	uuid, shortID := state.NewClientAccessValue("11111111-1111-4111-8111-111111111111"), state.NewClientAccessValue("0123456789abcdef")
+	privateKey := state.NewInfrastructureSecret(base64.RawURLEncoding.EncodeToString(private.Bytes()))
+	desired := state.DesiredState{
+		NetworkPolicy: state.NetworkPolicyInputs{PrimarySubscriptionAddress: "192.0.2.10"},
+		ConnectionProfiles: state.ConnectionProfiles{
+			VLESSRealityVision: state.VLESSRealityVision{Lifecycle: state.ProfileEnabled, Enabled: true, Port: 443, UUID: uuid, PrivateKey: privateKey, PublicKey: base64.RawURLEncoding.EncodeToString(private.PublicKey().Bytes()), ShortID: shortID, Target: "edge.example.net:443", ServerName: "edge.example.net", Fingerprint: "chrome"},
+			VLESSXHTTP:         state.VLESSXHTTP{Lifecycle: state.ProfileNotSetUp}, VLESSWebSocket: state.VLESSWebSocket{Lifecycle: state.ProfileNotSetUp},
+			Hysteria2: state.Hysteria2{Lifecycle: state.ProfileNotSetUp}, TUIC: state.TUIC{Lifecycle: state.ProfileNotSetUp}, AnyTLS: state.AnyTLS{Lifecycle: state.ProfileNotSetUp},
+		},
+	}
+	exposure := networkpolicy.NewListenerContribution(networkpolicy.Result{})
+	request, err := clientAccessRegistryRequest(desired, 1, revisionOneProfileSecrets{clients: map[state.ClientAccessValue]string{uuid: "11111111-1111-4111-8111-111111111111", shortID: "0123456789abcdef"}, infrastructure: map[state.InfrastructureSecret]string{privateKey: base64.RawURLEncoding.EncodeToString(private.Bytes())}}, exposure, cloudflaretunnel.XHTTPRouteHealth{}, cloudflaretunnel.WebSocketRouteHealth{})
+	if err != nil || request.Exposure == nil {
+		t.Fatalf("revision 1 registry request = exposure %T, error %v", request.Exposure, err)
+	}
+}
+
+func TestHealthCapabilityInspectionComesFromValidatedCommittedState(t *testing.T) {
+	document, err := os.ReadFile("../../internal/state/testdata/complete-state.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope struct {
+		Revision               uint64                  `json:"revision"`
+		ReleaseIdentity        state.ReleaseIdentity   `json:"release_identity"`
+		LastCompletedChangeSet state.ChangeSetIdentity `json:"last_completed_change_set"`
+	}
+	if json.Unmarshal(document, &envelope) != nil {
+		t.Fatal("State fixture was not readable")
+	}
+	capabilities := healthCapabilitiesFromState(state.New(healthStateMemory(document)), systemchanges.Observation{StateRevision: envelope.Revision, LastChangeSet: string(envelope.LastCompletedChangeSet)}, envelope.ReleaseIdentity)
+	if capabilities.CommittedRevision != envelope.Revision || len(capabilities.CapabilityRows) != 6 {
+		t.Fatalf("committed State capability = %#v", capabilities)
+	}
+	for _, row := range capabilities.CapabilityRows {
+		if row.Lifecycle != healthdiagnostics.ProfileEnabled {
+			t.Fatalf("committed State row = %#v", row)
 		}
 	}
 }
@@ -151,7 +238,7 @@ func TestPrivateScheduledHealthCommandCallsScheduledCheck(t *testing.T) {
 	if err := runScheduledHealthCheck(t.Context(), healthdiagnostics.NewEventHistory(memory, nil)); err != nil {
 		t.Fatal(err)
 	}
-	if len(memory.events) != 11 {
+	if len(memory.events) != 13 {
 		t.Fatalf("scheduled health events = %d", len(memory.events))
 	}
 	seen := map[healthdiagnostics.Module]bool{}

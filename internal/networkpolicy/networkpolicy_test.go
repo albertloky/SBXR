@@ -832,6 +832,27 @@ func TestEvaluateRevisionOneExpectedAbsenceIsHealthy(t *testing.T) {
 	assertFinding(t, failed, networkpolicy.Failed, networkpolicy.Required, "NETWORK-DEFERRED-EXPOSURE-ACTIVE")
 }
 
+func TestRevisionOneListenerContributionKeepsProviderAbsenceUnknown(t *testing.T) {
+	intent, observed := managedBaseline()
+	intent = revisionOneIntent(intent)
+	observed.Listeners = []networkpolicy.Listener{observed.Listeners[0], observed.Listeners[4]}
+	observed.LocalProofs = observed.LocalProofs[:1]
+	observed.OwnerFacts = networkpolicy.OwnerFacts{}
+	observed.Certificate = networkpolicy.CertificateFacts{}
+
+	result := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
+	revision, _, valid := networkpolicy.NewRevisionOneListenerContribution(result).ConnectionProfilesRegistryBinding()
+	if result.Outcome != networkpolicy.Unknown || !valid || revision != intent.Revision {
+		t.Fatalf("revision 1 local contribution = outcome %q revision %d valid %t findings %+v", result.Outcome, revision, valid, result.Findings)
+	}
+
+	observed.Listeners = append(observed.Listeners, networkpolicy.Listener{Address: "0.0.0.0", Port: 8443, Protocol: networkpolicy.UDP, Process: "sing-box", Service: "sing-box.service", Ownership: networkpolicy.SBXROwned})
+	failed := networkpolicy.New(staticAdapter{observed: observed}).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
+	if _, _, valid := networkpolicy.NewRevisionOneListenerContribution(failed).ConnectionProfilesRegistryBinding(); valid {
+		t.Fatal("unexpected deferred exposure produced a local listener contribution")
+	}
+}
+
 func TestEvaluatePlansOneBoundCloudflareProfileSetupWithoutMutation(t *testing.T) {
 	current, observed := managedBaseline()
 	current = revisionOneIntent(current)

@@ -34,7 +34,7 @@ Every non-Healthy result contains Problem, exact Found, exact Required, why SBXR
 
 ## Scheduled checks
 
-The Owner Console calls `Check` directly. `sbxr-health-check.timer` invokes `sbxr-health-check.service` weekly through systemd's exact `OnCalendar=weekly` schedule, with `Persistent=true` for a run missed while the VPS was off. The executable's private `health-check` command constructs the production root-only event history, invokes every currently available owning-Module read-only inspection, and passes all eleven named Module results to `ScheduledCheck`. Unavailable owning Adapters become typed `Unknown`; the command never substitutes a synthetic `Healthy` result. `ScheduledCheck` delegates classification to the same `Check` method and then records its opaque safe events. The units and executable dispatch contain no second classifier, repair, mutation, or additional timer trigger.
+The Owner Console calls `Check` directly. `sbxr-health-check.timer` invokes `sbxr-health-check.service` weekly through systemd's exact `OnCalendar=weekly` schedule, with `Persistent=true` for a run missed while the VPS was off. The executable's private `health-check` command constructs the production root-only event history, invokes every currently available owning-Module read-only inspection, and passes all thirteen named Module results to `ScheduledCheck`. Unavailable owning Adapters become typed `Unknown`; the command never substitutes a synthetic `Healthy` result. `ScheduledCheck` delegates classification to the same `Check` method and then records its opaque safe events. The units and executable dispatch contain no second classifier, repair, mutation, or additional timer trigger.
 
 ## Retained events
 

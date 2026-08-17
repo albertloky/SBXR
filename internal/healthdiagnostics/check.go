@@ -75,6 +75,8 @@ const (
 	HealthDiagnosticsModule       Module = "Health and Diagnostics"
 	SoftwareLifecycleModule       Module = "Software Lifecycle"
 	OwnerConsoleModule            Module = "Owner Console"
+	InstallationModule            Module = "Installation"
+	CloudflareProfileSetupModule  Module = "Cloudflare Profile Setup"
 )
 
 type FindingCode string
@@ -93,6 +95,7 @@ type DiagnosticEvent struct {
 	code        FindingCode
 	explanation string
 	outcome     MutationOutcome
+	capability  *CapabilitySummary
 }
 
 type BundleStatus string
@@ -168,8 +171,9 @@ func InstallationSummaryFrom(facts systemchanges.InstallationHealthInspection) I
 }
 
 type Finding struct {
-	Status HealthStatus
-	Code   FindingCode
+	Status       HealthStatus
+	Code         FindingCode
+	Capabilities CapabilityInspection
 }
 
 type Inspection func(context.Context) (Finding, error)
@@ -190,6 +194,7 @@ type ModuleResult struct {
 	Explanation string
 	NextAction  string
 	Correction  CorrectionFlow
+	Capability  *CapabilitySummary
 }
 
 type CheckResult struct {
@@ -258,10 +263,14 @@ func inspect(ctx context.Context, checkedAt time.Time, inspection NamedInspectio
 	if err != nil || ctx.Err() != nil || !validFinding(inspection.Module, finding) {
 		return result
 	}
+	capability := capabilitySummary(finding.Capabilities)
+	if inspection.Module == ConnectionProfilesModule && capability == nil || inspection.Module != ConnectionProfilesModule && capability != nil {
+		return result
+	}
 	result = ModuleResult{
 		CheckedAt: checkedAt, Module: inspection.Module, Status: finding.Status, Code: finding.Code,
 		Role: inspection.Role, Gate: gateDisposition(inspection.Role, finding.Status), Explanation: explanation(inspection.Module, finding.Status),
-		NextAction: nextAction(inspection.Module, finding.Status),
+		NextAction: nextAction(inspection.Module, finding.Status), Capability: capability,
 	}
 	if finding.Status != Healthy {
 		result.Correction = resultCorrection(inspection.Module, inspection.Role, finding.Status, finding.Code)
@@ -382,7 +391,11 @@ func resultCorrection(module Module, role Role, status HealthStatus, code Findin
 		CheckAgain: "Run Check again.",
 		Back:       "Return without changing the installation.",
 	}
-	if status == Unknown {
+	if module == ConnectionProfilesModule && status == NeedsAttention {
+		flow.SBXRCorrection = "Build and review one Connection Profiles repair Plan that removes only exact proved SBXR-owned local residue; do not perform setup or delete provider resources."
+	} else if module == ConnectionProfilesModule && status == Failed {
+		flow.SBXRCorrection = "Build and review one Connection Profiles repair Plan that restores the committed lifecycle state without creating deferred values or adopting provider resources."
+	} else if status == Unknown {
 		flow.OwnerSteps = []string{"Restore " + string(module) + "'s named typed inspection, then run Check again."}
 	} else if correction := moduleDefinitions[module].correction; correction != "" {
 		flow.SBXRCorrection = correction
@@ -563,5 +576,17 @@ var moduleDefinitions = map[Module]moduleDefinition{
 		subject:    "The authenticated Owner Console presentation", required: "The Owner Console must present the complete typed result without exposing protected facts.",
 		nextAction: "Return Back, restore the Owner Console boundary, then Check again.",
 		ownerSteps: []string{"Return Back without changing the installation and restore the Owner Console presentation boundary."},
+	},
+	InstallationModule: {
+		codePrefix: "INSTALLATION-",
+		subject:    "The review-first Installation outcome", required: "Installation must preserve its proven baseline, Plan, Apply, rollback, recovery, and publication-last facts.",
+		nextAction: "Open the Installation Correction Flow, Check again, or return Back.",
+		ownerSteps: []string{"Use the Installation Correction Flow without changing its baseline or transaction evidence."},
+	},
+	CloudflareProfileSetupModule: {
+		codePrefix: "CLOUDFLARE-PROFILE-SETUP-",
+		subject:    "The optional atomic Cloudflare Profile Setup outcome", required: "The committed revision and any active setup transaction must remain separate and proven.",
+		nextAction: "Open the Cloudflare Profile Setup Correction Flow, Check again, or return Back.",
+		ownerSteps: []string{"Preserve the committed revision and protected candidate material, then use the Cloudflare Profile Setup recovery flow."},
 	},
 }

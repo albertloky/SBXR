@@ -20,20 +20,21 @@ const (
 
 // EventRecord is the complete allowlist for one retained diagnostic event.
 type EventRecord struct {
-	Time        time.Time       `json:"time"`
-	Module      Module          `json:"module"`
-	OperationID OperationID     `json:"operation_id"`
-	ChangeSetID ChangeSetID     `json:"change_set_id,omitempty"`
-	Severity    EventSeverity   `json:"severity"`
-	Code        FindingCode     `json:"code"`
-	Explanation string          `json:"explanation"`
-	Outcome     MutationOutcome `json:"outcome,omitempty"`
+	Time        time.Time          `json:"time"`
+	Module      Module             `json:"module"`
+	OperationID OperationID        `json:"operation_id"`
+	ChangeSetID ChangeSetID        `json:"change_set_id,omitempty"`
+	Severity    EventSeverity      `json:"severity"`
+	Code        FindingCode        `json:"code"`
+	Explanation string             `json:"explanation"`
+	Outcome     MutationOutcome    `json:"outcome,omitempty"`
+	Capability  *CapabilitySummary `json:"capability,omitempty"`
 }
 
 func (event DiagnosticEvent) Record() EventRecord {
 	return EventRecord{
 		Time: event.time, Module: event.module, OperationID: event.operation, ChangeSetID: event.changeSet,
-		Severity: event.severity, Code: event.code, Explanation: event.explanation, Outcome: event.outcome,
+		Severity: event.severity, Code: event.code, Explanation: event.explanation, Outcome: event.outcome, Capability: cloneCapability(event.capability),
 	}
 }
 
@@ -42,7 +43,7 @@ func (event DiagnosticEvent) Record() EventRecord {
 func RestoreDiagnosticEvent(record EventRecord) (DiagnosticEvent, error) {
 	event := DiagnosticEvent{
 		time: record.Time, module: record.Module, operation: record.OperationID, changeSet: record.ChangeSetID,
-		severity: record.Severity, code: record.Code, explanation: record.Explanation, outcome: record.Outcome,
+		severity: record.Severity, code: record.Code, explanation: record.Explanation, outcome: record.Outcome, capability: cloneCapability(record.Capability),
 	}
 	if !validDiagnosticEvent(event) {
 		return DiagnosticEvent{}, errors.New("diagnostic event is invalid")
@@ -57,7 +58,7 @@ func (result CheckResult) DiagnosticEvents() []DiagnosticEvent {
 func checkEvent(result ModuleResult) DiagnosticEvent {
 	return DiagnosticEvent{
 		time: result.CheckedAt, module: result.Module, operation: CheckOperation,
-		severity: severity(result.Status), code: result.Code, explanation: result.Explanation,
+		severity: severity(result.Status), code: result.Code, explanation: result.Explanation, capability: cloneCapability(result.Capability),
 	}
 }
 
@@ -73,7 +74,7 @@ func severity(status HealthStatus) EventSeverity {
 }
 
 func validDiagnosticEvent(event DiagnosticEvent) bool {
-	if event.time.IsZero() || event.time.Location() != time.UTC || !knownModule(event.module) {
+	if event.time.IsZero() || event.time.Location() != time.UTC || !knownModule(event.module) || !validCapability(event.capability) || event.capability != nil && event.module != ConnectionProfilesModule {
 		return false
 	}
 	if event.operation != CheckOperation || event.changeSet != "" || event.outcome != "" {

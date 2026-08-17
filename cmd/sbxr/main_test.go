@@ -217,7 +217,7 @@ func TestPreactivationRecoveryReceiptBindsTheAuthenticatedExecutable(t *testing.
 
 func TestPreinstallOutcomeProvidesRestrictedFailSafeDiagnostics(t *testing.T) {
 	presentation := newInstallOutcome().ViewDiagnostics(t.Context())
-	if presentation.Installation != ownerconsole.InstallationRecoveryRequired || len(presentation.Modules) != 11 || len(presentation.Services) != 10 || len(presentation.Bundles) != 0 {
+	if presentation.Installation != ownerconsole.InstallationRecoveryRequired || len(presentation.Modules) != 13 || len(presentation.Services) != 10 || len(presentation.Bundles) != 0 {
 		t.Fatalf("preinstall diagnostics = %+v", presentation)
 	}
 }

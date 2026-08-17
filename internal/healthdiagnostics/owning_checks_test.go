@@ -61,6 +61,8 @@ func TestCheckConsumesEveryAvailableOwningModuleInspection(t *testing.T) {
 		{healthdiagnostics.HealthDiagnosticsModule, func() healthdiagnostics.HealthStatus { return healthdiagnostics.Healthy }},
 		{healthdiagnostics.SoftwareLifecycleModule, func() healthdiagnostics.HealthStatus { return healthdiagnostics.Unknown }},
 		{healthdiagnostics.OwnerConsoleModule, func() healthdiagnostics.HealthStatus { return healthdiagnostics.Unknown }},
+		{healthdiagnostics.InstallationModule, func() healthdiagnostics.HealthStatus { return healthdiagnostics.Unknown }},
+		{healthdiagnostics.CloudflareProfileSetupModule, func() healthdiagnostics.HealthStatus { return healthdiagnostics.Unknown }},
 	}
 	inspections := make([]healthdiagnostics.NamedInspection, 0, len(checks))
 	for _, check := range checks {

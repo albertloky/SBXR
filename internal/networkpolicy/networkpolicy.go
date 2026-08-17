@@ -724,6 +724,17 @@ func NewListenerContribution(result Result) ListenerContribution {
 	return listenerContribution(result.Binding)
 }
 
+// NewRevisionOneListenerContribution exposes only the proved local listener
+// binding when provider absence is the sole unproved revision 1 fact.
+func NewRevisionOneListenerContribution(result Result) ListenerContribution {
+	if result.Baseline != Managed || result.Outcome != Unknown || len(result.Findings) != 1 || result.Findings[0].Code != "NETWORK-DEFERRED-EXPOSURE-UNKNOWN" || result.Findings[0].Outcome != Unknown {
+		return ListenerContribution{}
+	}
+	binding := result.Binding
+	binding.approved = true
+	return listenerContribution(binding)
+}
+
 // PrepareProfileEnablement derives one candidate listener authority from a
 // freshly healthy Managed result. Only one enablement bit may change; ports,
 // addresses, SSH preservation, certificates, and every other intent stay fixed.

@@ -9,11 +9,21 @@ import (
 )
 
 func clientAccessRegistryRequest(desired state.DesiredState, revision uint64, secrets state.ConnectionProfileSecretReader, exposure connectionprofiles.RegistryExposureAuthority, xhttp cloudflaretunnel.XHTTPRouteHealth, websocket cloudflaretunnel.WebSocketRouteHealth) (connectionprofiles.RegistryViewRequest, error) {
-	if revision == 0 || secrets == nil || exposure == nil {
+	if revision == 0 || secrets == nil {
 		return connectionprofiles.RegistryViewRequest{}, errors.New("Managed Connection Profile inputs are unavailable")
 	}
 	profiles := desired.ConnectionProfiles
 	reality, realityErr := connectionprofiles.NewRealityCredentials(secrets.ReadClientAccessValue(profiles.VLESSRealityVision.UUID), secrets.ReadInfrastructureSecret(profiles.VLESSRealityVision.PrivateKey), profiles.VLESSRealityVision.PublicKey, secrets.ReadClientAccessValue(profiles.VLESSRealityVision.ShortID))
+	request := connectionprofiles.RegistryViewRequest{ClientAddress: desired.NetworkPolicy.PrimarySubscriptionAddress, Reality: connectionprofiles.ViewRequest{Revision: revision, Enabled: profiles.VLESSRealityVision.Enabled, Port: profiles.VLESSRealityVision.Port, Target: connectionprofiles.RealityTarget{Address: profiles.VLESSRealityVision.Target, ServerName: profiles.VLESSRealityVision.ServerName}, Fingerprint: profiles.VLESSRealityVision.Fingerprint, XrayVersion: desired.Software.XrayVersion}}
+	if revisionOneConnectionProfiles(profiles) {
+		request.Reality.Credentials = reality
+		request, err := connectionprofiles.NewRevisionOneRegistry(request, reality)
+		request.Exposure = exposure
+		return request, err
+	}
+	if exposure == nil {
+		return connectionprofiles.RegistryViewRequest{}, errors.New("Managed Connection Profile inputs are unavailable")
+	}
 	xhttpCredentials, xhttpErr := connectionprofiles.NewXHTTPCredentials(secrets.ReadClientAccessValue(profiles.VLESSXHTTP.UUID), secrets.ReadClientAccessValue(profiles.VLESSXHTTP.Path))
 	websocketCredentials, websocketErr := connectionprofiles.NewWebSocketCredentials(secrets.ReadClientAccessValue(profiles.VLESSWebSocket.UUID), secrets.ReadClientAccessValue(profiles.VLESSWebSocket.Path))
 	var hysteria2 connectionprofiles.Hysteria2Credentials
@@ -44,4 +54,10 @@ func clientAccessRegistryRequest(desired state.DesiredState, revision uint64, se
 		AnyTLS:        connectionprofiles.AnyTLSViewRequest{Revision: revision, Enabled: profiles.AnyTLS.Enabled, DestinationIP: desired.NetworkPolicy.PrimarySubscriptionAddress, Port: profiles.AnyTLS.Port, ServerName: profiles.AnyTLS.ServerName, CertificateID: profiles.AnyTLS.CertificateID, CertificatePointer: desired.Certificates.DomainServingPointer, MinimumSingBoxVersion: "1.12.0", SingBoxVersion: trimVersion(desired.Software.SingBoxVersion), UseCorePadding: profiles.AnyTLS.PaddingScheme == "upstream-default", Credentials: anyTLS, DirectTLS: directTLS},
 		Exposure:      exposure,
 	}, nil
+}
+
+func revisionOneConnectionProfiles(profiles state.ConnectionProfiles) bool {
+	return profiles.VLESSRealityVision.Lifecycle == state.ProfileEnabled && profiles.VLESSRealityVision.Enabled &&
+		profiles.VLESSXHTTP.Lifecycle == state.ProfileNotSetUp && profiles.VLESSWebSocket.Lifecycle == state.ProfileNotSetUp &&
+		profiles.Hysteria2.Lifecycle == state.ProfileNotSetUp && profiles.TUIC.Lifecycle == state.ProfileNotSetUp && profiles.AnyTLS.Lifecycle == state.ProfileNotSetUp
 }

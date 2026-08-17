@@ -2,6 +2,19 @@
 
 This file defines procedures for typed checks, retained diagnostic events, and support bundles. Record run results, commit, runner, time, software versions, stable codes, and redacted evidence in the issue tracker. Never record raw external output, Client Access Values, Infrastructure Secrets, generated configurations, transaction evidence, client IPs, destinations, or traffic facts.
 
+### HD-CAPABILITY-01 — Committed Connection Profile capability and expected absence
+
+Run:
+
+```sh
+go test ./internal/healthdiagnostics -run '^Test(CheckReportsCommittedConnectionProfileCapabilityWithoutIndividualNotSetUpHealth|CheckKeepsCapabilityLifecycleSeparateFromExpectedAbsenceHealth|CheckRejectsMalformedOrCandidateConnectionProfileCapability|BuildSupportBundleIncludesOnlyTypedCapabilityAndOmissionFacts)$' -count=1
+go test ./cmd/sbxr -run '^Test(ProductionDiagnosticsPresentationUsesTheSameThirteenModuleCheck|PrivateScheduledHealthCommandCallsScheduledCheck|CommittedStateCapabilityRowsSurviveManagedChangeAndRecoveryPresentation|HealthCapabilityInspectionComesFromValidatedCommittedState)$' -count=1
+```
+
+Require one Connection Profiles Module Health Result and six fixed capability rows from the last committed revision. Lifecycle is exactly `Not set up`, `Enabled`, or `Disabled`. A `Not set up` row has no individual Health Result, is omitted from publication, and states that Cloudflare Profile Setup is required. Expected absence can be Healthy; exact inert owned residue is Needs attention; active exposure or credential-bearing configuration is Failed; unproved meaning or ownership is Unknown. Repair guidance can remove only exact proved SBXR-owned local residue. It cannot perform setup, create deferred values, adopt provider resources, or delete unproved provider resources.
+
+Require Change in progress and Recovery Required to label these rows with the last committed revision. Candidate settings, credentials, Client Access Values, URLs, provider identifiers, raw responses, and transaction secrets cannot enter `Check`, events, or support bundles. Invalid capability facts fail closed to one `Unknown` Connection Profiles result with no capability rows.
+
 ## Module Verification
 
 ### HD-CHECK-01 — Exact installation and health matrix
@@ -12,7 +25,7 @@ Run:
 go test ./internal/healthdiagnostics -run '^TestCheckReportsEveryInstallationAndModuleHealthCombination$' -count=1
 ```
 
-Require all four installation statuses independently from all four health results across all eleven named Modules. Installation facts must come from System Changes' opaque validated `InstallationHealthInspection`; malformed or contradictory lineage must become `Recovery Required`. Require the UTC check time, owning Module, stable code, role, safe explanation, next action, and complete Correction Flow facts without a fifth status or result.
+Require all four installation statuses independently from all four health results across all thirteen named Modules. Installation facts must come from System Changes' opaque validated `InstallationHealthInspection`; malformed or contradictory lineage must become `Recovery Required`. Require the UTC check time, owning Module, stable code, role, safe explanation, next action, and complete Correction Flow facts without a fifth status or result.
 
 ### HD-CHECK-02 — Fail-closed typed boundary
 
@@ -54,7 +67,7 @@ Run:
 go test ./internal/healthdiagnostics -run '^TestCheckConsumesEveryAvailableOwningModuleInspection$' -count=1
 ```
 
-Require the current State, Network Policy, System Changes, Cloudflare Tunnel, Certificate Lifecycle, Connection Profiles, Subscription Publication, and Subscription Serving Interfaces to reduce their typed results to the exact allowlisted Module-and-result code before `Check`. Health and Diagnostics self-checks through the same seam. Software Lifecycle and Owner Console must remain typed `Unknown` until those later Modules supply their named checks. No raw owning-Module error may cross the Interface.
+Require the current State, Network Policy, System Changes, Cloudflare Tunnel, Certificate Lifecycle, Connection Profiles, Subscription Publication, and Subscription Serving Interfaces to reduce their typed results to the exact allowlisted Module-and-result code before `Check`. Health and Diagnostics self-checks through the same seam. Software Lifecycle, Owner Console, Installation, and Cloudflare Profile Setup must remain typed `Unknown` until those Modules supply their named checks. No raw owning-Module error may cross the Interface.
 
 ### HD-CHECK-06 — Read-only architecture
 
@@ -74,7 +87,7 @@ Run:
 go test ./internal/healthdiagnostics -run '^TestEventHistoryRetainsOnlyAllowlistedCheckFacts$' -count=1
 ```
 
-Require retained Check events to contain only time, Module, `Check` operation ID, severity, exact stable code, and fixed safe explanation. Change Set ID and mutation outcome must be absent for read-only checks. Persisted input containing either field must be rejected until System Changes supplies an opaque typed event proof. Inject unique markers representing every forbidden secret, traffic, Live Profile Check, raw output, environment, argument, journal, and Rollback Snapshot category through owning-inspection failures. Require all markers to be discarded. A caller-forged `CheckResult` must create no event.
+Require retained Check events to contain only time, Module, `Check` operation ID, severity, exact stable code, fixed safe explanation, and the fixed typed Connection Profile capability and omission rows from the last committed revision when the event belongs to Connection Profiles. Change Set ID and mutation outcome must be absent for read-only checks. Capability rows are invalid for every other Module. Persisted input containing an arbitrary capability name, lifecycle, explanation, candidate fact, Change Set ID, or mutation outcome must be rejected. Inject unique markers representing every forbidden secret, traffic, Live Profile Check, raw output, environment, argument, journal, and Rollback Snapshot category through owning-inspection failures. Require all markers to be discarded. A caller-forged `CheckResult` must create no event.
 
 ### HD-EVENT-02 — Exact bounded deterministic retention
 
@@ -106,7 +119,7 @@ go test ./internal/healthdiagnostics -run '^Test(ScheduledCheckUsesTheSameCheckI
 go test ./cmd/sbxr -run '^TestPrivateScheduledHealthCommandCallsScheduledCheck$' -count=1
 ```
 
-Require `ScheduledCheck` to return the same typed Module result and classification as `Check`, then retain the event produced by that call. Require `sbxr-health-check.timer` to contain exactly `OnCalendar=weekly`, `Persistent=true`, and `Unit=sbxr-health-check.service`. Require the service to invoke only `/usr/local/bin/sbxr private health-check`, and require that executable path to construct the production root-only history, invoke all currently available owning-Module inspections, represent unavailable owning Adapters as typed `Unknown`, pass all eleven named Modules to `ScheduledCheck`, and retain eleven safe events. No competing pre-command, post-command, classifier, repair, mutation, synthetic `Healthy`, or second timer trigger may exist.
+Require `ScheduledCheck` to return the same typed Module result and classification as `Check`, then retain the event produced by that call. Require `sbxr-health-check.timer` to contain exactly `OnCalendar=weekly`, `Persistent=true`, and `Unit=sbxr-health-check.service`. Require the service to invoke only `/usr/local/bin/sbxr private health-check`, and require that executable path to construct the production root-only history, invoke all currently available owning-Module inspections, represent unavailable owning Adapters as typed `Unknown`, pass all thirteen named Modules to `ScheduledCheck`, and retain thirteen safe events. No competing pre-command, post-command, classifier, repair, mutation, synthetic `Healthy`, or second timer trigger may exist.
 
 ### HD-BUNDLE-01 — Exact allowlist and equivalent views
 

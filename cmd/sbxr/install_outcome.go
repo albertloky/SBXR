@@ -135,7 +135,7 @@ func (outcome *installOutcome) ViewDiagnostics(ctx context.Context) ownerconsole
 		statuses[healthdiagnostics.NetworkPolicyModule] = outcome.reviewedHealth.Network
 	}
 	outcome.mu.Unlock()
-	result := healthdiagnostics.New(nil).Check(ctx, installationSummary, scheduledInspections(facts, statuses)...)
+	result := healthdiagnostics.New(nil).Check(ctx, installationSummary, scheduledInspections(facts, statuses, healthdiagnostics.CapabilityInspection{})...)
 	services := make([]ownerconsole.ServiceHealthPresentation, 0, 10)
 	for _, unit := range healthDiagnosticUnits() {
 		services = append(services, ownerconsole.ServiceHealthPresentation{Service: unit, Status: ownerconsole.HealthUnknown})

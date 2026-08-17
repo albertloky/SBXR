@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -249,7 +250,14 @@ func plainBundle(facts bundleFacts) []byte {
 }
 
 func plainEvent(event EventRecord) string {
-	return "- " + event.Time.Format(time.RFC3339) + " | " + string(event.Module) + " | " + string(event.OperationID) + " | " + string(event.ChangeSetID) + " | " + string(event.Severity) + " | " + string(event.Code) + " | " + event.Explanation + " | " + string(event.Outcome) + "\n"
+	result := "- " + event.Time.Format(time.RFC3339) + " | " + string(event.Module) + " | " + string(event.OperationID) + " | " + string(event.ChangeSetID) + " | " + string(event.Severity) + " | " + string(event.Code) + " | " + event.Explanation + " | " + string(event.Outcome) + "\n"
+	if event.Capability != nil {
+		result += "  Committed revision: " + strconv.FormatUint(event.Capability.CommittedRevision, 10) + "\n"
+		for _, profile := range event.Capability.CapabilityRows {
+			result += "  - " + string(profile.Name) + " | " + string(profile.Lifecycle) + " | " + profile.Explanation + "\n"
+		}
+	}
+	return result
 }
 
 func compressBundle(items map[string][]byte, createdAt time.Time) ([]byte, error) {

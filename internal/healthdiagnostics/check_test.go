@@ -39,6 +39,8 @@ func TestCheckReportsEveryInstallationAndModuleHealthCombination(t *testing.T) {
 		healthdiagnostics.HealthDiagnosticsModule,
 		healthdiagnostics.SoftwareLifecycleModule,
 		healthdiagnostics.OwnerConsoleModule,
+		healthdiagnostics.InstallationModule,
+		healthdiagnostics.CloudflareProfileSetupModule,
 	}
 	module := healthdiagnostics.New(func() time.Time { return checkedAt })
 
@@ -203,7 +205,18 @@ func TestCheckReturnsOneUnknownResultForAContradictoryDuplicateInspection(t *tes
 }
 
 func finding(module healthdiagnostics.Module, status healthdiagnostics.HealthStatus) healthdiagnostics.Finding {
-	return healthdiagnostics.Finding{Status: status, Code: healthdiagnostics.NamedCheckCode(module, status)}
+	result := healthdiagnostics.Finding{Status: status, Code: healthdiagnostics.NamedCheckCode(module, status)}
+	if module == healthdiagnostics.ConnectionProfilesModule {
+		result.Capabilities = healthdiagnostics.CapabilityInspection{CommittedRevision: 1, CapabilityRows: []healthdiagnostics.CapabilityFact{
+			{Name: healthdiagnostics.VLESSRealityVision, Lifecycle: healthdiagnostics.ProfileEnabled},
+			{Name: healthdiagnostics.VLESSXHTTP, Lifecycle: healthdiagnostics.ProfileNotSetUp},
+			{Name: healthdiagnostics.VLESSWebSocket, Lifecycle: healthdiagnostics.ProfileNotSetUp},
+			{Name: healthdiagnostics.Hysteria2, Lifecycle: healthdiagnostics.ProfileNotSetUp},
+			{Name: healthdiagnostics.TUIC, Lifecycle: healthdiagnostics.ProfileNotSetUp},
+			{Name: healthdiagnostics.AnyTLS, Lifecycle: healthdiagnostics.ProfileNotSetUp},
+		}}
+	}
+	return result
 }
 
 type installationAdapter struct{ observation systemchanges.Observation }
