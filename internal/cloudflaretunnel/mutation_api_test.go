@@ -41,6 +41,23 @@ func TestRemovalDeletesAreRestartIdempotentOnlyForNotFound(t *testing.T) {
 	}
 }
 
+func TestManagementTokenDeletionUsesTheExactAccountAndTokenIDs(t *testing.T) {
+	managementToken, err := cloudflaretunnel.NewManagementToken(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		called = request.Method == http.MethodDelete && request.URL.Path == "/accounts/"+accountID+"/tokens/"+tokenID
+		fmt.Fprint(response, `{"success":true,"errors":[],"messages":[],"result":{}}`)
+	}))
+	defer server.Close()
+	api := cloudflaretunnel.NewFixtureMutationAPI(server.Client(), server.URL, staticResolver{}, &reachableOrigins{})
+	if err := api.DeleteManagementToken(t.Context(), cloudflaretunnel.DeleteManagementTokenRequest{AccountID: accountID, ID: tokenID, Token: managementToken}); err != nil || !called {
+		t.Fatalf("DeleteManagementToken() = %v, called=%t", err, called)
+	}
+}
+
 func TestHTTPMutationAPIExposesSecretFreeAuthoritativeDNSAndEffectiveCAA(t *testing.T) {
 	managementToken, err := cloudflaretunnel.NewManagementToken(token)
 	if err != nil {

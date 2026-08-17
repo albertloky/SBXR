@@ -51,7 +51,8 @@ type Host interface {
 
 type IrreversibleRemovalHost interface {
 	VerifyIrreversibleRemovalReady(time.Duration) error
-	VerifyCloudflareTokenRevoked(time.Duration) (bool, error)
+	ObserveCloudflareManagementTokenID(time.Duration) (string, error)
+	DeleteAndVerifyCloudflareManagementToken(string, time.Duration) error
 	DeleteIrreversibleRemovalPhase(systemchanges.IrreversibleRemovalPhase, time.Duration) (systemchanges.StepEvidence, error)
 	VerifyFinalRemovalAbsence(time.Duration) (bool, error)
 	PrepareRemovalFinalization(time.Duration) error
@@ -2114,8 +2115,17 @@ func (a Adapter) LoadRecovery(lease systemchanges.ExecutionLease) (systemchanges
 	return systemchanges.RecoveryTransaction{
 		ChangeSet: changeSet, Mutation: prepared.Mutation, Starting: prepared.Starting, StartingRelease: prepared.State.StartingRelease,
 		Candidate: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: prepared.State.CandidateRevision, SHA256: prepared.State.CandidateSHA256}, CandidateRelease: prepared.State.CandidateRelease,
-		OutcomeOwner: prepared.OutcomeOwner, State: *prepared.State, Steps: steps, Checks: append([]systemchanges.Check(nil), prepared.Checks...), AttemptedSteps: highestStartedStep(journal), RollbackStep: rollbackResumeStep(journal), LastCheckpoint: last.Checkpoint, Timeouts: prepared.Timeouts, PriorRunTokenSHA256: runTokenFingerprint(journal), IrreversibleRemovalStarted: irreversible, IrreversibleReclamationStarted: irreversibleReclamation, IrreversibleCloudflareSetupStarted: irreversibleCloudflareSetup, Reclamation: prepared.Reclamation, SSHPreservationSHA256: prepared.SSHAgreementSHA256,
+		OutcomeOwner: prepared.OutcomeOwner, State: *prepared.State, Steps: steps, Checks: append([]systemchanges.Check(nil), prepared.Checks...), AttemptedSteps: highestStartedStep(journal), RollbackStep: rollbackResumeStep(journal), LastCheckpoint: last.Checkpoint, Timeouts: prepared.Timeouts, PriorRunTokenSHA256: runTokenFingerprint(journal), IrreversibleRemovalStarted: irreversible, IrreversibleReclamationStarted: irreversibleReclamation, IrreversibleCloudflareSetupStarted: irreversibleCloudflareSetup, Reclamation: prepared.Reclamation, SSHPreservationSHA256: prepared.SSHAgreementSHA256, ManagementTokenID: managementTokenDeletionID(journal),
 	}, nil
+}
+
+func managementTokenDeletionID(entries []journalEntry) string {
+	for _, entry := range entries {
+		if entry.Checkpoint == systemchanges.ManagementTokenDeletionStarted && entry.Evidence != nil {
+			return entry.Evidence.ResourceID
+		}
+	}
+	return ""
 }
 
 func runTokenFingerprint(entries []journalEntry) string {
@@ -2289,15 +2299,31 @@ func (a Adapter) VerifyIrreversibleRemovalReady(lease systemchanges.ExecutionLea
 	return host.VerifyIrreversibleRemovalReady(timeout)
 }
 
-func (a Adapter) VerifyCloudflareTokenRevoked(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction, timeout time.Duration) (bool, error) {
+func (a Adapter) PrepareCloudflareManagementTokenDeletion(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction, timeout time.Duration) (systemchanges.StepEvidence, error) {
 	host, ok := a.host.(IrreversibleRemovalHost)
 	if !lease.Authorized() || !ok {
-		return false, errors.New("irreversible removal host unavailable")
+		return systemchanges.StepEvidence{}, errors.New("irreversible removal host unavailable")
 	}
 	if err := a.loadRemovalRecovery(lease, recovery); err != nil {
-		return false, err
+		return systemchanges.StepEvidence{}, err
 	}
-	return host.VerifyCloudflareTokenRevoked(timeout)
+	id, err := host.ObserveCloudflareManagementTokenID(timeout)
+	if err != nil || !safeName(id) {
+		return systemchanges.StepEvidence{}, errors.New("Cloudflare management token identity is unproved")
+	}
+	digest := sha256.Sum256([]byte(id))
+	return systemchanges.StepEvidence{Code: "cloudflare-management-token-deletion-started", SHA256: hex.EncodeToString(digest[:]), ResourceType: "cloudflare-management-token", ResourceID: id}, nil
+}
+
+func (a Adapter) DeleteAndVerifyCloudflareManagementToken(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction, timeout time.Duration) error {
+	host, ok := a.host.(IrreversibleRemovalHost)
+	if !lease.Authorized() || !ok || !safeName(recovery.ManagementTokenID) {
+		return errors.New("irreversible removal host unavailable")
+	}
+	if err := a.loadRemovalRecovery(lease, recovery); err != nil {
+		return err
+	}
+	return host.DeleteAndVerifyCloudflareManagementToken(recovery.ManagementTokenID, timeout)
 }
 
 func (a Adapter) DeleteIrreversibleRemovalPhase(lease systemchanges.ExecutionLease, recovery systemchanges.RecoveryTransaction, phase systemchanges.IrreversibleRemovalPhase, timeout time.Duration) (systemchanges.StepEvidence, error) {
@@ -3414,9 +3440,13 @@ func validNextCheckpoint(entries []journalEntry, next journalEntry) bool {
 	}
 	last, total := entries[len(entries)-1], len(entries[0].Steps)
 	rollbackCapable := total
+	localOnlyRemoval := false
 	if entries[0].Mutation == systemchanges.CompleteRemovalMutation {
 		rollbackCapable = firstIrreversibleJournalStep(entries[0].Steps)
-		if rollbackCapable < 1 {
+		localOnlyRemoval = rollbackCapable < 0
+		if localOnlyRemoval {
+			rollbackCapable = total
+		} else if rollbackCapable < 1 {
 			return false
 		}
 	}
@@ -3465,8 +3495,13 @@ func validNextCheckpoint(entries []journalEntry, next journalEntry) bool {
 		}
 		return next.Checkpoint == systemchanges.StatePublicationStarted && next.Step == 0 || !irreversibleCloudflareSetup && (next.Checkpoint == systemchanges.RollbackStarted && next.Step == 0 || next.Checkpoint == systemchanges.CancellationRequested && next.Step == total)
 	case systemchanges.OwnedExternalDeletionVerified:
+		return next.Checkpoint == systemchanges.ManagementTokenDeletionStarted && next.Step == 0 && validManagementTokenDeletionEvidence(next.Evidence)
+	case systemchanges.ManagementTokenDeletionStarted:
 		return next.Checkpoint == systemchanges.TokenRevocationVerified && next.Step == 0 && next.Evidence == nil
 	case systemchanges.IrreversibleRemovalStarted:
+		if localOnlyRemoval {
+			return next.Checkpoint == systemchanges.PackageHoldsRemoved && next.Step == 0 && validEvidence(next.Evidence)
+		}
 		return next.Checkpoint == systemchanges.OwnedDNSRecordsDeleted && next.Step == 0 && validEvidence(next.Evidence)
 	case systemchanges.OwnedDNSRecordsDeleted:
 		return next.Checkpoint == systemchanges.OwnedTunnelDeleted && next.Step == 0 && validEvidence(next.Evidence)
@@ -3546,6 +3581,14 @@ func validEvidence(evidence *systemchanges.StepEvidence) bool {
 	}
 	_, err := hex.DecodeString(evidence.SHA256)
 	return err == nil
+}
+
+func validManagementTokenDeletionEvidence(evidence *systemchanges.StepEvidence) bool {
+	if !validEvidence(evidence) || evidence.ResourceType != "cloudflare-management-token" {
+		return false
+	}
+	digest := sha256.Sum256([]byte(evidence.ResourceID))
+	return evidence.SHA256 == hex.EncodeToString(digest[:])
 }
 
 func verifyTransaction(root *os.Root, directory string, uid int) error {

@@ -26,7 +26,7 @@ func (approval *softwareChangeApproval) AuthorizeAndRecheck(ctx context.Context)
 		return softwarelifecycle.UpdateRecheck{}, err
 	}
 	approval.fresh = rebuilt.plan.VolatileSHA256()
-	return softwarelifecycle.UpdateRecheck{Installed: rebuilt.installed, InstalledCandidate: rebuilt.installedCandidate, Candidate: rebuilt.next, StartingRevision: rebuilt.starting.Revision, StartingStateSHA256: rebuilt.starting.SHA256, Contributions: rebuilt.contributions}, nil
+	return softwarelifecycle.UpdateRecheck{Installed: rebuilt.installed, InstalledCandidate: rebuilt.installedCandidate, Candidate: rebuilt.next, StartingRevision: rebuilt.starting.Revision, StartingStateSHA256: rebuilt.starting.SHA256, Contributions: rebuilt.contributions, Capability: rebuilt.capability}, nil
 }
 
 func applySoftwareChange(ctx context.Context, built *builtSoftwareChange, cancellation *systemchanges.Cancellation) systemchanges.ApplyResult {
@@ -44,10 +44,14 @@ func applySoftwareChange(ctx context.Context, built *builtSoftwareChange, cancel
 		return systemchanges.Interface{}.Apply(nil)
 	}
 	var software softwareubuntu.Updater
+	_, _, cloudflareProfilesSetUp, capabilityValid := built.capability.SoftwareLifecycleManagedCapability()
+	if !capabilityValid {
+		return systemchanges.Interface{}.Apply(nil)
+	}
 	if built.action == softwareDowngrade {
-		software, err = softwareubuntu.NewDowngrader(built.next, built.installedCandidate)
+		software, err = softwareubuntu.NewStagedDowngrader(built.next, built.installedCandidate, cloudflareProfilesSetUp)
 	} else {
-		software, err = softwareubuntu.NewUpdater(built.next, built.installedCandidate)
+		software, err = softwareubuntu.NewStagedUpdater(built.next, built.installedCandidate, cloudflareProfilesSetUp)
 	}
 	if err != nil {
 		return systemchanges.Interface{}.Apply(nil)

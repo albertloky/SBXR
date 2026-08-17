@@ -86,12 +86,14 @@ func TestPayloadMetadataRejectsTamperingAmbiguityAndIncompleteReleaseMaterial(t 
 func TestPayloadMetadataAcceptsOnlyCompleteSequentialNoNetworkMigrationMaterial(t *testing.T) {
 	valid := payloadMetadata()
 	valid.StateSchema = 2
-	valid.Schemas["desired-state-v2.schema.json"] = []byte(`{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"SBXR Desired State v2","type":"object"}`)
 	valid.Migrations = []softwarelifecycle.EmbeddedMigration{{Name: "state-v1-to-v2.json", From: 1, To: 2, Document: state.ReleaseMigrations()["state-v1-to-v2.json"]}}
 	if _, err := softwarelifecycle.StampPayload([]byte("executable"), valid); err != nil {
 		t.Fatalf("complete forward migration refused: %v", err)
 	}
 	for _, change := range []func(*softwarelifecycle.PayloadMetadata){
+		func(value *softwarelifecycle.PayloadMetadata) {
+			value.Schemas["desired-state-v2.schema.json"] = []byte(`{"type":"object"}`)
+		},
 		func(value *softwarelifecycle.PayloadMetadata) { value.Migrations = nil },
 		func(value *softwarelifecycle.PayloadMetadata) { value.Migrations[0].From = 0 },
 		func(value *softwarelifecycle.PayloadMetadata) { value.Migrations[0].To = 3 },

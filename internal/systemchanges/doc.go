@@ -25,9 +25,9 @@
 // Complete removal additionally requires both exact Owner confirmations. Its
 // reversible prefix removes only typed owned public exposure and immutable-ID
 // Cloudflare resources while the token remains available, then durably stops at
-// owned external deletion proof. It then durably crosses its irreversible
-// checkpoint before asking for scoped-token revocation. Recovery verifies that
-// revocation before deleting the local token copy, refuses rollback and restore,
+// owned external deletion proof. It then durably records the freshly observed
+// management-token ID before automatic exact-ID deletion. Recovery
+// proves the token unauthorized before deleting the local copy, refuses rollback and restore,
 // and continues only through the fixed deletion order until exact Not installed
 // and final recovery-material absence are proven. Before that checkpoint,
 // failure and restart still reverse to an exactly proven earlier baseline.

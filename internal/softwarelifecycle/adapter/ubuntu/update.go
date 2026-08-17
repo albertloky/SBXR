@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -36,14 +37,27 @@ type Updater struct {
 	installed softwarelifecycle.VerifiedRelease
 	command   func(context.Context, string, ...string) ([]byte, error)
 	expected  softwarelifecycle.ReleaseIdentity
+	services  []string
 }
 
 func NewUpdater(candidate, installedCandidate softwarelifecycle.InstallCandidate) (Updater, error) {
 	return newReleaseChanger(candidate, installedCandidate, false)
 }
 
+func NewStagedUpdater(candidate, installedCandidate softwarelifecycle.InstallCandidate, cloudflareProfilesSetUp bool) (Updater, error) {
+	updater, err := NewUpdater(candidate, installedCandidate)
+	updater.services = updateServices(cloudflareProfilesSetUp)
+	return updater, err
+}
+
 func NewDowngrader(candidate, installedCandidate softwarelifecycle.InstallCandidate) (Updater, error) {
 	return newReleaseChanger(candidate, installedCandidate, true)
+}
+
+func NewStagedDowngrader(candidate, installedCandidate softwarelifecycle.InstallCandidate, cloudflareProfilesSetUp bool) (Updater, error) {
+	updater, err := NewDowngrader(candidate, installedCandidate)
+	updater.services = updateServices(cloudflareProfilesSetUp)
+	return updater, err
 }
 
 // NewRecoveryUpdater constructs the rollback-only executor for one validated
@@ -115,7 +129,18 @@ func newUpdater(candidate, prior Installer, installed softwarelifecycle.Verified
 	if !validUpdaterInstalled(installed) || installed.Identity != prior.staged.Identity || installed.StateSchema != prior.staged.StateSchema || installed.Identity == candidate.staged.Identity {
 		return Updater{}, errors.New("installed release unavailable")
 	}
-	return Updater{candidate: candidate, prior: prior, installed: installed}, nil
+	return Updater{candidate: candidate, prior: prior, installed: installed, services: updateServices(true)}, nil
+}
+
+func updateServices(cloudflareProfilesSetUp bool) []string {
+	if !cloudflareProfilesSetUp {
+		return []string{"sbxr-subscription.service", "xray.service"}
+	}
+	return []string{"cloudflared.service", "sbxr-subscription.service", "sing-box.service", "xray.service"}
+}
+
+func validUpdateServices(services []string) bool {
+	return slices.Equal(services, updateServices(false)) || slices.Equal(services, updateServices(true))
 }
 
 func validUpdaterInstalled(installed softwarelifecycle.VerifiedRelease) bool {
@@ -139,6 +164,7 @@ type updateSnapshotHeader struct {
 	Schema    int                               `json:"schema"`
 	Release   softwarelifecycle.ReleaseIdentity `json:"release"`
 	Candidate softwarelifecycle.StagedRelease   `json:"candidate"`
+	Services  []string                          `json:"services"`
 }
 
 type updateSnapshotEntry struct {
@@ -162,7 +188,7 @@ func (updater Updater) CaptureRollback(rootPath string, step systemchanges.Step,
 	}
 	var snapshot bytes.Buffer
 	archive := tar.NewWriter(&snapshot)
-	header, _ := json.Marshal(updateSnapshotHeader{Schema: 2, Release: updater.installed.Identity, Candidate: updater.candidate.staged})
+	header, _ := json.Marshal(updateSnapshotHeader{Schema: 3, Release: updater.installed.Identity, Candidate: updater.candidate.staged, Services: updater.services})
 	if err := writeUpdateSnapshotEntry(archive, updateSnapshotEntry{name: "snapshot.json", mode: 0o600, typeflag: tar.TypeReg, body: header}); err != nil {
 		return err
 	}
@@ -354,7 +380,7 @@ func (updater Updater) Reverse(rootPath string, step systemchanges.Step, source 
 		if _, err := updater.command(ctx, "/usr/bin/systemctl", "daemon-reload"); err != nil {
 			return systemchanges.StepEvidence{}, errors.New("prior service reload failed")
 		}
-		if _, err := updater.command(ctx, "/usr/bin/systemctl", "restart", "cloudflared.service", "sbxr-subscription.service", "sing-box.service", "xray.service"); err != nil {
+		if _, err := updater.command(ctx, "/usr/bin/systemctl", append([]string{"restart"}, updater.services...)...); err != nil {
 			return systemchanges.StepEvidence{}, errors.New("prior service restart failed")
 		}
 	}
@@ -626,7 +652,7 @@ func (updater Updater) verifyPrior(root *os.Root) error {
 	return nil
 }
 
-func (updater Updater) readSnapshot(source io.Reader) ([]updateSnapshotEntry, Installer, error) {
+func (updater *Updater) readSnapshot(source io.Reader) ([]updateSnapshotEntry, Installer, error) {
 	raw, err := io.ReadAll(io.LimitReader(source, maxUpdateSnapshot+1))
 	if err != nil || len(raw) > maxUpdateSnapshot || !exactTarBoundary(raw) {
 		return nil, Installer{}, errors.New("update snapshot boundary invalid")
@@ -640,9 +666,13 @@ func (updater Updater) readSnapshot(source io.Reader) ([]updateSnapshotEntry, In
 	var metadata updateSnapshotHeader
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
-	if err != nil || int64(len(body)) != header.Size || decoder.Decode(&metadata) != nil || decoder.Decode(&struct{}{}) != io.EOF || metadata.Schema != 2 || metadata.Release != updater.installed.Identity {
+	if err != nil || int64(len(body)) != header.Size || decoder.Decode(&metadata) != nil || decoder.Decode(&struct{}{}) != io.EOF || metadata.Release != updater.installed.Identity || metadata.Schema != 2 && metadata.Schema != 3 || metadata.Schema == 2 && len(metadata.Services) != 0 || metadata.Schema == 3 && !validUpdateServices(metadata.Services) {
 		return nil, Installer{}, errors.New("update snapshot identity invalid")
 	}
+	if metadata.Schema == 2 {
+		metadata.Services = updateServices(true)
+	}
+	updater.services = append([]string(nil), metadata.Services...)
 	candidateMaterial := make(map[string][]byte, 2)
 	for _, name := range []string{updateCandidateArchive, updateCandidateComponents} {
 		header, err = archive.Next()

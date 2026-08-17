@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -16,6 +17,33 @@ import (
 )
 
 type repairStatusAdapter struct{ observation systemchanges.Observation }
+
+type capabilityStorage struct{ document []byte }
+
+func (storage capabilityStorage) Read() ([]byte, error) { return storage.document, nil }
+func (capabilityStorage) Publish([]byte, []byte, string) ([]byte, error) {
+	return nil, errors.New("not used")
+}
+
+func softwareLifecycleCapability(t *testing.T) (*state.SoftwareLifecycleCapability, string) {
+	t.Helper()
+	document, err := os.ReadFile("../state/testdata/complete-state.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := state.ReleaseIdentity{Repository: "https://github.com/albertloky/SBXR", Tag: "v1.0.0", Commit: "0123456789abcdef0123456789abcdef01234567", ReleaseIndexSHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
+	module := state.New(capabilityStorage{document})
+	loaded, err := module.Load(state.LoadRequest{Baseline: state.ManagedEvidence, SupportedRelease: release, Lineage: &state.LineageProof{Revision: 7, LastCompletedChangeSet: "change-0007", ReleaseIdentity: release}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	capability := module.SoftwareLifecycleCapability(loaded)
+	_, stateSHA256, _, valid := capability.SoftwareLifecycleManagedCapability()
+	if !valid {
+		t.Fatal("managed capability unavailable")
+	}
+	return capability, stateSHA256
+}
 
 func (adapter repairStatusAdapter) Observe() (systemchanges.Observation, error) {
 	return adapter.observation, nil
@@ -72,10 +100,11 @@ func TestPlanBindsOneCompleteValidatedArtifactSetWithoutRenderingSecrets(t *test
 }
 
 func TestPlanContributesOnlyAnExplicitCurrentStateRepair(t *testing.T) {
+	capability, stateSHA256 := softwareLifecycleCapability(t)
 	source, reader := sixProfileSource(t, "198.51.100.10")
 	request := subscriptionpublication.PlanRequest{
 		Source: source, Secrets: reader, Subscription: state.SubscriptionSettings{Token: access(reader, "SUBSCRIPTION-REPAIR-MARKER"), ListenPort: 10443, CertificateID: "ip-certificate"},
-		ChangeSet: "subscriptions-current-state-repair", StartingState: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: strings.Repeat("c", 64)},
+		ChangeSet: "subscriptions-current-state-repair", StartingState: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: stateSHA256},
 		DesiredStateRevision: 8, DesiredStateSHA256: strings.Repeat("d", 64), ManagedInputsSHA256: strings.Repeat("e", 64), Repair: true,
 		RelevantChecksums: subscriptionpublication.RelevantChecksums{ConnectionProfiles: strings.Repeat("f", 64), Subscription: strings.Repeat("1", 64)}, CompatibilityDefinition: subscriptionpublication.CurrentCompatibilityDefinition,
 		SelectedAddress: "198.51.100.10", ReleaseIdentity: state.ReleaseIdentity{Repository: "github.com/albertloky/SBXR", Tag: "v1.0.0", Commit: strings.Repeat("a", 40), ReleaseIndexSHA256: strings.Repeat("b", 64)},
@@ -93,7 +122,7 @@ func TestPlanContributesOnlyAnExplicitCurrentStateRepair(t *testing.T) {
 	}
 	observation := systemchanges.Observation{Status: systemchanges.RecoveryRequired, LastChangeSet: "change-0007", Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, ForwardRepairAvailable: true, RecoveryCause: systemchanges.CurrentStateDrift, StateRevision: 7, StateSHA256: request.StartingState.SHA256, VolatileSHA256: request.ManagedInputsSHA256}
 	view := (softwarelifecycle.Interface{}).ViewRepair(systemchanges.New(repairStatusAdapter{observation}))
-	repair, finding := softwarelifecycle.PlanRepair(softwarelifecycle.RepairPlanRequest{Candidate: view.RepairCandidate(), Contribution: result.Plan, ChangeSet: request.ChangeSet, Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}})
+	repair, finding := softwarelifecycle.PlanRepair(softwarelifecycle.RepairPlanRequest{Candidate: view.RepairCandidate(), Contribution: result.Plan, ChangeSet: request.ChangeSet, Capability: capability, Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}})
 	if finding != nil || repair == nil {
 		t.Fatalf("Software Lifecycle PlanRepair() = (%+v, %+v)", repair, finding)
 	}

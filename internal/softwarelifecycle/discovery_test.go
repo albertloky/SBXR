@@ -299,7 +299,6 @@ func updateEvidenceWithMigration(sequence uint64, tag, commit string) softwareli
 		metadata := payloadMetadata()
 		metadata.Build.Tag, metadata.Build.Commit, metadata.Architecture = tag, commit, architecture
 		metadata.StateSchema = 2
-		metadata.Schemas["desired-state-v2.schema.json"] = []byte(`{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"SBXR Desired State v2","type":"object"}`)
 		metadata.Migrations = []softwarelifecycle.EmbeddedMigration{{Name: "state-v1-to-v2.json", From: 1, To: 2, Document: state.ReleaseMigrations()["state-v1-to-v2.json"]}}
 		stamped, err := softwarelifecycle.StampPayload([]byte("qualified executable"), metadata)
 		if err != nil {

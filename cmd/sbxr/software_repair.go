@@ -38,6 +38,7 @@ type builtSoftwareRepair struct {
 	publication   *subscriptionpublication.Plan
 	cloudflare    cloudflaretunnel.Executor
 	inspection    systemchanges.Observation
+	capability    *state.SoftwareLifecycleCapability
 }
 
 func inspectSoftwareRepair(ctx context.Context) (systemchanges.Observation, error) {
@@ -157,6 +158,7 @@ func prepareSoftwareRepairBuild(ctx context.Context, changeSet string, prepareSt
 }
 
 func buildSoftwareRepair(ctx context.Context, module state.Interface, loaded state.Result, snapshot state.Snapshot, profileSecrets state.ConnectionProfileSecretReader, publicationSecrets state.ClientAccessReader, cloudflareSecrets state.InfrastructureSecretReader, changeSet string, disk systemchanges.DiskRequirement, prepareState bool) (*builtSoftwareRepair, error) {
+	capability := module.SoftwareLifecycleCapability(loaded)
 	desired := snapshot.DesiredState
 	stateSHA, err := state.CandidateSHA256(desired)
 	if err != nil {
@@ -234,7 +236,7 @@ func buildSoftwareRepair(ctx context.Context, module state.Interface, loaded sta
 	}
 	changes := repairChanges(inspection)
 	repairView := (softwarelifecycle.Interface{}).ViewRepair(changes)
-	plan, finding := softwarelifecycle.PlanRepair(softwarelifecycle.RepairPlanRequest{Candidate: repairView.RepairCandidate(), Contribution: contribution, ChangeSet: changeSet, Disk: disk})
+	plan, finding := softwarelifecycle.PlanRepair(softwarelifecycle.RepairPlanRequest{Candidate: repairView.RepairCandidate(), Contribution: contribution, ChangeSet: changeSet, Capability: capability, Disk: disk})
 	if finding != nil || plan == nil {
 		return nil, errors.New("Software Lifecycle current-State repair Plan refused")
 	}
@@ -266,7 +268,7 @@ func buildSoftwareRepair(ctx context.Context, module state.Interface, loaded sta
 		}
 	}
 	freshCandidate := (softwarelifecycle.Interface{}).ViewRepair(changes).RepairCandidate()
-	built := &builtSoftwareRepair{changeSet: changeSet, lastChangeSet: string(snapshot.LastCompletedChangeSet), plan: plan, contribution: contribution, candidate: freshCandidate, starting: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: snapshot.Revision, SHA256: stateSHA}, desired: desired, disk: disk, module: module, profiles: profilePlan, publication: publicationPlan, cloudflare: cloudflareExecutor, inspection: inspection}
+	built := &builtSoftwareRepair{changeSet: changeSet, lastChangeSet: string(snapshot.LastCompletedChangeSet), plan: plan, contribution: contribution, candidate: freshCandidate, starting: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: snapshot.Revision, SHA256: stateSHA}, desired: desired, disk: disk, module: module, profiles: profilePlan, publication: publicationPlan, cloudflare: cloudflareExecutor, inspection: inspection, capability: capability}
 	if !prepareState {
 		return built, nil
 	}
@@ -359,7 +361,7 @@ func (approval *softwareRepairApproval) AuthorizeAndRecheck(ctx context.Context)
 		return softwarelifecycle.RepairRecheck{}, err
 	}
 	approval.fresh = rebuilt.inspection
-	return softwarelifecycle.RepairRecheck{Candidate: rebuilt.candidate, Contribution: rebuilt.contribution}, nil
+	return softwarelifecycle.RepairRecheck{Candidate: rebuilt.candidate, Contribution: rebuilt.contribution, Capability: rebuilt.capability}, nil
 }
 
 func applySoftwareRepair(ctx context.Context, built *builtSoftwareRepair, cancellation *systemchanges.Cancellation) systemchanges.ApplyResult {

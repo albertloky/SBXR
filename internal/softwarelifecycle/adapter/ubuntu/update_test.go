@@ -154,6 +154,7 @@ func TestUpdaterSwitchesAndRestoresTheExactReleaseFromOneSnapshot(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	updater.services = updateServices(false)
 	var commands []string
 	updater.command = func(_ context.Context, name string, arguments ...string) ([]byte, error) {
 		commands = append(commands, name+" "+strings.Join(arguments, " "))
@@ -204,7 +205,7 @@ func TestUpdaterSwitchesAndRestoresTheExactReleaseFromOneSnapshot(t *testing.T) 
 	if _, err := recovery.Reverse(root, step, bytes.NewReader(rollback), time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(commands, []string{"/usr/bin/systemctl daemon-reload", "/usr/bin/systemctl restart cloudflared.service sbxr-subscription.service sing-box.service xray.service"}) {
+	if !reflect.DeepEqual(commands, []string{"/usr/bin/systemctl daemon-reload", "/usr/bin/systemctl restart sbxr-subscription.service xray.service"}) {
 		t.Fatalf("rollback commands = %v", commands)
 	}
 	active, _ = os.Readlink(filepath.Join(root, "usr/local/bin/sbxr"))

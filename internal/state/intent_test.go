@@ -241,6 +241,42 @@ func TestLoadKeepsExistingSchemaTwoProfilesValidWithoutLifecycleFields(t *testin
 	}
 }
 
+func TestSoftwareLifecycleCapabilityProvesBothManagedProfileStates(t *testing.T) {
+	for _, test := range []struct {
+		name                 string
+		desired              DesiredState
+		cloudflareProfilesUp bool
+	}{
+		{name: "VLESS REALITY Vision only", desired: realityOnlyDesiredState()},
+		{name: "all profiles set up", desired: completeDesiredState(), cloudflareProfilesUp: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			module := New(intentStorage{document: documentFor(t, test.desired)})
+			result, err := module.Load(intentManagedRequest())
+			if err != nil {
+				t.Fatal(err)
+			}
+			capability := module.SoftwareLifecycleCapability(result)
+			revision, stateSHA256, cloudflareProfilesUp, valid := capability.SoftwareLifecycleManagedCapability()
+			if !valid || revision != 7 || stateSHA256 == "" || cloudflareProfilesUp != test.cloudflareProfilesUp {
+				t.Fatalf("SoftwareLifecycleManagedCapability() = (%d, %q, %t, %t)", revision, stateSHA256, cloudflareProfilesUp, valid)
+			}
+		})
+	}
+
+	module := New(intentStorage{document: documentFor(t, completeDesiredState())})
+	request := intentManagedRequest()
+	request.Lineage.ActiveChangeSet = "change-0008"
+	result, err := module.Load(request)
+	if err != nil || result.Status != ChangeInProgress {
+		t.Fatalf("Load() = (%+v, %v), want Change in progress", result, err)
+	}
+	result.Status = Managed
+	if capability := module.SoftwareLifecycleCapability(result); capability != nil {
+		t.Fatalf("SoftwareLifecycleCapability() trusted a caller-relabeled Change in progress result: %v", capability)
+	}
+}
+
 func TestLoadAllowsPortReuseByDisabledProfiles(t *testing.T) {
 	desired := completeDesiredState()
 	desired.ConnectionProfiles.VLESSRealityVision.Enabled = false

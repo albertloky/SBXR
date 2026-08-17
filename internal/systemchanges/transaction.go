@@ -26,6 +26,7 @@ const (
 	IrreversibleRemovalStarted            DurableCheckpoint = "Irreversible removal started"
 	OwnedDNSRecordsDeleted                DurableCheckpoint = "Owned Cloudflare DNS records deleted"
 	OwnedTunnelDeleted                    DurableCheckpoint = "Owned Cloudflare Tunnel deleted"
+	ManagementTokenDeletionStarted        DurableCheckpoint = "Cloudflare management token deletion started"
 	IrreversibleRunTokenRotationStarted   DurableCheckpoint = "Irreversible run-token rotation started"
 	IrreversibleCloudflareSetupStarted    DurableCheckpoint = "Irreversible Cloudflare setup started"
 	CloudflareSetupRollbackDeleted        DurableCheckpoint = "Cloudflare setup Rollback Snapshot deleted"
@@ -33,7 +34,7 @@ const (
 	ReclamationProcessStopped             DurableCheckpoint = "Reclamation process stopped"
 	ReclamationTargetDeleted              DurableCheckpoint = "Reclamation target deleted"
 	PackageHoldsRemoved                   DurableCheckpoint = "SBXR package holds removed"
-	TokenRevocationVerified               DurableCheckpoint = "Cloudflare token revocation verified"
+	TokenRevocationVerified               DurableCheckpoint = "Cloudflare management token deletion verified"
 	LocalStateDeleted                     DurableCheckpoint = "Local State deleted"
 	SecretsDeleted                        DurableCheckpoint = "Infrastructure Secrets deleted"
 	CertificatesDeleted                   DurableCheckpoint = "Certificates deleted"
@@ -243,6 +244,7 @@ type RecoveryTransaction struct {
 	IrreversibleCloudflareSetupStarted bool
 	Reclamation                        *ReclamationTarget
 	SSHPreservationSHA256              string
+	ManagementTokenID                  string
 }
 
 // PendingChangeSet is the secret-safe identity needed to select one recovery
@@ -341,7 +343,8 @@ type RecoveryAdapter interface {
 
 type IrreversibleRemovalAdapter interface {
 	VerifyIrreversibleRemovalReady(ExecutionLease, string, time.Duration) error
-	VerifyCloudflareTokenRevoked(ExecutionLease, RecoveryTransaction, time.Duration) (bool, error)
+	PrepareCloudflareManagementTokenDeletion(ExecutionLease, RecoveryTransaction, time.Duration) (StepEvidence, error)
+	DeleteAndVerifyCloudflareManagementToken(ExecutionLease, RecoveryTransaction, time.Duration) error
 	DeleteIrreversibleRemovalPhase(ExecutionLease, RecoveryTransaction, IrreversibleRemovalPhase, time.Duration) (StepEvidence, error)
 	VerifyFinalRemovalAbsence(ExecutionLease, RecoveryTransaction, time.Duration) (Observation, error)
 	FinalizeRemoval(ExecutionLease, RecoveryTransaction, time.Duration) error
@@ -600,7 +603,11 @@ func validRecoveryTransaction(recovery RecoveryTransaction) bool {
 	}
 	if recovery.IrreversibleRemovalStarted {
 		first := firstIrreversibleRemoteRemovalStep(recovery.Steps)
-		return recovery.Mutation == CompleteRemovalMutation && first >= 0 && recovery.AttemptedSteps == first && recovery.RollbackStep == 0 && IsIrreversibleRemovalCheckpoint(recovery.LastCheckpoint)
+		attempted := first
+		if first < 0 {
+			attempted = len(recovery.Steps)
+		}
+		return recovery.Mutation == CompleteRemovalMutation && first != 0 && recovery.AttemptedSteps == attempted && recovery.RollbackStep == 0 && IsIrreversibleRemovalCheckpoint(recovery.LastCheckpoint)
 	}
 	if recovery.IrreversibleCloudflareSetupStarted {
 		if recovery.Mutation != CloudflareProfileSetupMutation || recovery.RollbackStep != 0 || !irreversibleCloudflareSetupCheckpoint(recovery.LastCheckpoint) {
@@ -971,6 +978,9 @@ func NextIrreversibleRemovalCheckpoint(checkpoint DurableCheckpoint) (DurableChe
 		return OwnedExternalDeletionVerified, true
 	}
 	if checkpoint == OwnedExternalDeletionVerified {
+		return ManagementTokenDeletionStarted, true
+	}
+	if checkpoint == ManagementTokenDeletionStarted {
 		return TokenRevocationVerified, true
 	}
 	if checkpoint == TokenRevocationVerified {
@@ -1001,43 +1011,49 @@ func continueIrreversibleRemoval(lease ExecutionLease, adapter TransactionAdapte
 		return adapter.Record(lease, CheckpointRecord{ChangeSet: recovery.ChangeSet, Checkpoint: checkpoint, Step: step, Evidence: evidence}) == nil
 	}
 	first := firstIrreversibleRemoteRemovalStep(recovery.Steps)
-	if first < 0 {
-		return forwardRemovalRequired(spec, "SYSTEM-CHANGES-REMOVAL-STEPS", recovery.LastCheckpoint)
-	}
-	remoteStart := 0
-	for index, item := range irreversibleRemoteRemovalPhases {
-		if recovery.LastCheckpoint == item.checkpoint {
-			remoteStart = index + 1
-		}
-	}
-	if recovery.LastCheckpoint != OwnedExternalDeletionVerified && recovery.LastCheckpoint != TokenRevocationVerified && !slicesContainRemovalCheckpoint(irreversibleRemovalPhases, recovery.LastCheckpoint) && recovery.LastCheckpoint != FinalRemovalAbsenceVerified {
-		for _, item := range irreversibleRemoteRemovalPhases[remoteStart:] {
-			evidence, err := removal.DeleteIrreversibleRemovalPhase(lease, recovery, item.phase, recovery.Timeouts.Step)
-			if err != nil || !safeIdentity(evidence.Code) || !validSHA256(evidence.SHA256) {
-				return forwardRemovalRequired(spec, "SYSTEM-CHANGES-REMOVAL-FORWARD", recovery.LastCheckpoint)
+	if first >= 0 {
+		remoteStart := 0
+		for index, item := range irreversibleRemoteRemovalPhases {
+			if recovery.LastCheckpoint == item.checkpoint {
+				remoteStart = index + 1
 			}
-			if !record(item.checkpoint, 0, &evidence) {
+		}
+		if recovery.LastCheckpoint != OwnedExternalDeletionVerified && recovery.LastCheckpoint != ManagementTokenDeletionStarted && recovery.LastCheckpoint != TokenRevocationVerified && !slicesContainRemovalCheckpoint(irreversibleRemovalPhases, recovery.LastCheckpoint) && recovery.LastCheckpoint != FinalRemovalAbsenceVerified {
+			for _, item := range irreversibleRemoteRemovalPhases[remoteStart:] {
+				evidence, err := removal.DeleteIrreversibleRemovalPhase(lease, recovery, item.phase, recovery.Timeouts.Step)
+				if err != nil || !safeIdentity(evidence.Code) || !validSHA256(evidence.SHA256) {
+					return forwardRemovalRequired(spec, "SYSTEM-CHANGES-REMOVAL-FORWARD", recovery.LastCheckpoint)
+				}
+				if !record(item.checkpoint, 0, &evidence) {
+					return forwardRemovalRequired(spec, "SYSTEM-CHANGES-JOURNAL", recovery.LastCheckpoint)
+				}
+				recovery.LastCheckpoint = item.checkpoint
+			}
+			if !record(OwnedExternalDeletionVerified, 0, nil) {
 				return forwardRemovalRequired(spec, "SYSTEM-CHANGES-JOURNAL", recovery.LastCheckpoint)
 			}
-			recovery.LastCheckpoint = item.checkpoint
+			recovery.LastCheckpoint = OwnedExternalDeletionVerified
 		}
-		if !record(OwnedExternalDeletionVerified, 0, nil) {
-			return forwardRemovalRequired(spec, "SYSTEM-CHANGES-JOURNAL", recovery.LastCheckpoint)
+		if recovery.LastCheckpoint == OwnedExternalDeletionVerified {
+			evidence, err := removal.PrepareCloudflareManagementTokenDeletion(lease, recovery, recovery.Timeouts.Check)
+			if err != nil || !validManagementTokenDeletionEvidence(evidence) {
+				return forwardRemovalRequired(spec, "SYSTEM-CHANGES-TOKEN-IDENTITY", IrreversibleRemovalStarted)
+			}
+			if !record(ManagementTokenDeletionStarted, 0, &evidence) {
+				return forwardRemovalRequired(spec, "SYSTEM-CHANGES-JOURNAL", IrreversibleRemovalStarted)
+			}
+			recovery.LastCheckpoint = ManagementTokenDeletionStarted
+			recovery.ManagementTokenID = evidence.ResourceID
 		}
-		recovery.LastCheckpoint = OwnedExternalDeletionVerified
-	}
-	if recovery.LastCheckpoint == OwnedExternalDeletionVerified {
-		revoked, err := removal.VerifyCloudflareTokenRevoked(lease, recovery, recovery.Timeouts.Check)
-		if err != nil {
-			return forwardRemovalRequired(spec, "SYSTEM-CHANGES-TOKEN-REVOCATION", IrreversibleRemovalStarted)
+		if recovery.LastCheckpoint == ManagementTokenDeletionStarted {
+			if err := removal.DeleteAndVerifyCloudflareManagementToken(lease, recovery, recovery.Timeouts.Check); err != nil {
+				return forwardRemovalRequired(spec, "SYSTEM-CHANGES-TOKEN-DELETION", IrreversibleRemovalStarted)
+			}
+			if !record(TokenRevocationVerified, 0, nil) {
+				return forwardRemovalRequired(spec, "SYSTEM-CHANGES-JOURNAL", IrreversibleRemovalStarted)
+			}
+			recovery.LastCheckpoint = TokenRevocationVerified
 		}
-		if !revoked {
-			return ApplyResult{Outcome: AwaitingTokenRevocation, PlanConsumed: true, UsesMonotonicDurations: true, Evidence: safeEvidence(), UnremovableTraces: removalLimits()}
-		}
-		if !record(TokenRevocationVerified, 0, nil) {
-			return forwardRemovalRequired(spec, "SYSTEM-CHANGES-JOURNAL", IrreversibleRemovalStarted)
-		}
-		recovery.LastCheckpoint = TokenRevocationVerified
 	}
 	start := 0
 	for index, item := range irreversibleRemovalPhases {
@@ -1095,6 +1111,11 @@ func slicesContainRemovalCheckpoint(phases []struct {
 		}
 	}
 	return false
+}
+
+func validManagementTokenDeletionEvidence(evidence StepEvidence) bool {
+	digest := sha256.Sum256([]byte(evidence.ResourceID))
+	return safeIdentity(evidence.Code) && validSHA256(evidence.SHA256) && evidence.ResourceType == "cloudflare-management-token" && safeIdentity(evidence.ResourceID) && evidence.SHA256 == hex.EncodeToString(digest[:])
 }
 
 func forwardRemovalRequired(spec ChangeSetSpec, cause string, checkpoint DurableCheckpoint) ApplyResult {
@@ -1382,9 +1403,12 @@ func (i Interface) applyPrepared(lock Lock, spec ChangeSetSpec, cancellation *Ca
 		}
 	}
 	if spec.Mutation == CompleteRemovalMutation {
-		attemptedSteps = firstIrreversibleRemoteRemovalStep(spec.Steps)
-		if attemptedSteps < 1 {
+		firstRemote := firstIrreversibleRemoteRemovalStep(spec.Steps)
+		if firstRemote == 0 {
 			return finish(lock, rollbackChange(lease, adapter, transaction, spec, 0, "SYSTEM-CHANGES-REMOVAL-STEPS", Prepared))
+		}
+		if firstRemote > 0 {
+			attemptedSteps = firstRemote
 		}
 	}
 	for index, step := range spec.Steps[:attemptedSteps] {

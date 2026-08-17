@@ -125,20 +125,38 @@ func New(api API, clock Clock, validators ...NativeIngressValidator) Interface {
 
 func NewProduction() Interface { return New(NewProductionAPI(), SystemClock{}) }
 
-// VerifyManagementTokenRevoked accepts only Cloudflare's explicit
-// unauthorized response. Outages and changed permissions remain unproved.
-func (i Interface) VerifyManagementTokenRevoked(ctx context.Context, request ObservationRequest) (bool, error) {
+func (i Interface) ObserveManagementTokenID(ctx context.Context, request ObservationRequest) (string, error) {
 	if i.api == nil {
-		return false, errors.New("Cloudflare token observer unavailable")
+		return "", errors.New("Cloudflare token observer unavailable")
 	}
-	_, err := i.api.Observe(ctx, request)
+	observed, err := i.api.Observe(ctx, request)
+	if err != nil || observed.Account.ID != request.AccountID || observed.Zone.ID != request.ZoneID || !immutableID.MatchString(observed.Token.ID) || observed.Token.Status != "active" {
+		return "", errors.New("Cloudflare token identity is unproved")
+	}
+	return observed.Token.ID, nil
+}
+
+func (i Interface) DeleteAndVerifyManagementToken(ctx context.Context, request ObservationRequest, tokenID string) error {
+	api, ok := i.api.(interface {
+		DeleteManagementToken(context.Context, DeleteManagementTokenRequest) error
+	})
+	if !ok || !immutableID.MatchString(tokenID) {
+		return errors.New("Cloudflare token deletion unavailable")
+	}
+	observed, err := i.api.Observe(ctx, request)
 	if apiErrorIs(err, APIUnauthorized) {
-		return true, nil
+		return nil
 	}
-	if err != nil {
-		return false, err
+	if err != nil || observed.Account.ID != request.AccountID || observed.Zone.ID != request.ZoneID || observed.Token.ID != tokenID || observed.Token.Status != "active" {
+		return errors.New("Cloudflare token identity is unproved")
 	}
-	return false, nil
+	if err := api.DeleteManagementToken(ctx, DeleteManagementTokenRequest{AccountID: request.AccountID, ID: tokenID, Token: request.Token}); err != nil {
+		return errors.New("Cloudflare token deletion failed")
+	}
+	if _, err := i.api.Observe(ctx, request); !apiErrorIs(err, APIUnauthorized) {
+		return errors.New("Cloudflare token deletion is unproved")
+	}
+	return nil
 }
 
 type ObservationRequest struct {

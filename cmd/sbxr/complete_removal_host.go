@@ -28,13 +28,14 @@ import (
 var removalPublicUnits = []string{"cloudflared.service", "sbxr-subscription.service", "sing-box.service", "xray.service"}
 
 type completeRemovalHost struct {
-	base     systemubuntu.InstallHost
-	root     string
-	desired  state.DesiredState
-	api      cloudflaretunnel.MutationAPI
-	token    cloudflaretunnel.ManagementToken
-	recovery cloudflaretunnel.RemovalRecoveryAuthority
-	run      func(context.Context, []byte, string, ...string) ([]byte, error)
+	base        systemubuntu.InstallHost
+	root        string
+	desired     state.DesiredState
+	api         cloudflaretunnel.MutationAPI
+	token       cloudflaretunnel.ManagementToken
+	recovery    cloudflaretunnel.RemovalRecoveryAuthority
+	publicUnits []string
+	run         func(context.Context, []byte, string, ...string) ([]byte, error)
 }
 
 type completeRemovalRollback struct {
@@ -44,7 +45,11 @@ type completeRemovalRollback struct {
 }
 
 func newCompleteRemovalHost(base systemubuntu.InstallHost, desired state.DesiredState, api cloudflaretunnel.MutationAPI, token cloudflaretunnel.ManagementToken) *completeRemovalHost {
-	return &completeRemovalHost{base: base, root: "/", desired: desired, api: api, token: token, run: runCompleteRemovalCommand}
+	publicUnits := removalPublicUnits
+	if desired.ConnectionProfiles.VLESSXHTTP.Lifecycle == state.ProfileNotSetUp {
+		publicUnits = []string{"sbxr-subscription.service", "xray.service"}
+	}
+	return &completeRemovalHost{base: base, root: "/", desired: desired, api: api, token: token, publicUnits: publicUnits, run: runCompleteRemovalCommand}
 }
 
 func runCompleteRemovalCommand(ctx context.Context, input []byte, name string, args ...string) ([]byte, error) {
@@ -110,9 +115,9 @@ func (host completeRemovalHost) Execute(step systemchanges.Step, timeout time.Du
 	case systemchanges.FirewallTableResource:
 		_, err = host.run(ctx, nil, "nft", "delete", "table", "inet", "sbxr")
 	case systemchanges.PublicListenerResource:
-		_, err = host.run(ctx, nil, "systemctl", append([]string{"stop"}, removalPublicUnits...)...)
+		_, err = host.run(ctx, nil, "systemctl", append([]string{"stop"}, host.publicUnits...)...)
 	case systemchanges.PublicServiceResource:
-		_, err = host.run(ctx, nil, "systemctl", append([]string{"disable"}, removalPublicUnits...)...)
+		_, err = host.run(ctx, nil, "systemctl", append([]string{"disable"}, host.publicUnits...)...)
 	case systemchanges.CloudflareRouteResource:
 		_, err = host.api.PutConfiguration(ctx, cloudflaretunnel.PutConfigurationRequest{AccountID: host.desired.Cloudflare.AccountID, TunnelID: host.desired.Cloudflare.TunnelID, Routes: removedTunnelRoutes(), Token: host.token})
 	case systemchanges.CloudflareDNSRecordResource:
@@ -170,9 +175,9 @@ func (host completeRemovalHost) Reverse(step systemchanges.Step, snapshot io.Rea
 		}
 		_, err = host.run(ctx, prior.Firewall, "nft", "-j", "-f", "-")
 	case systemchanges.PublicListenerResource:
-		_, err = host.run(ctx, nil, "systemctl", append([]string{"start"}, removalPublicUnits...)...)
+		_, err = host.run(ctx, nil, "systemctl", append([]string{"start"}, host.publicUnits...)...)
 	case systemchanges.PublicServiceResource:
-		_, err = host.run(ctx, nil, "systemctl", append([]string{"enable"}, removalPublicUnits...)...)
+		_, err = host.run(ctx, nil, "systemctl", append([]string{"enable"}, host.publicUnits...)...)
 	case systemchanges.CloudflareRouteResource:
 		if !reflect.DeepEqual(prior.Routes, host.managedRoutes()) {
 			return systemchanges.StepEvidence{}, errors.New("owned Tunnel route rollback changed")
@@ -248,7 +253,8 @@ func (host completeRemovalHost) InspectStep(step systemchanges.Step, snapshot io
 }
 
 func (host completeRemovalHost) Check(check systemchanges.Check, phase systemchanges.GatePhase, timeout time.Duration) (systemchanges.HealthStatus, error) {
-	if check.Code != "SOFTWARE-LIFECYCLE-REMOVAL-EXTERNAL-ABSENT" || phase != systemchanges.PrePublication {
+	localOnly := check.Code == "SOFTWARE-LIFECYCLE-REMOVAL-LOCAL-ABSENT"
+	if !localOnly && check.Code != "SOFTWARE-LIFECYCLE-REMOVAL-EXTERNAL-ABSENT" || phase != systemchanges.PrePublication {
 		return host.base.Check(check, phase, timeout)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -258,6 +264,9 @@ func (host completeRemovalHost) Check(check systemchanges.Check, phase systemcha
 	}
 	if _, err := host.run(ctx, nil, "nft", "list", "table", "inet", "sbxr"); err == nil {
 		return systemchanges.Failed, nil
+	}
+	if localOnly {
+		return systemchanges.Healthy, nil
 	}
 	observed, err := host.observeTunnel(ctx)
 	if err != nil || !reflect.DeepEqual(observed.Routes, removedTunnelRoutes()) {
@@ -274,17 +283,25 @@ func (host completeRemovalHost) VerifyIrreversibleRemovalReady(timeout time.Dura
 			return errors.New("final removal prerequisites unavailable")
 		}
 	}
-	observed, err := host.observeTunnel(ctx)
-	if err != nil || !reflect.DeepEqual(observed.Routes, removedTunnelRoutes()) {
-		return errors.New("rollback-capable exposure removal is unproved")
+	if host.desired.ConnectionProfiles.VLESSXHTTP.Lifecycle != state.ProfileNotSetUp {
+		observed, err := host.observeTunnel(ctx)
+		if err != nil || !reflect.DeepEqual(observed.Routes, removedTunnelRoutes()) {
+			return errors.New("rollback-capable exposure removal is unproved")
+		}
 	}
 	return nil
 }
 
-func (host completeRemovalHost) VerifyCloudflareTokenRevoked(timeout time.Duration) (bool, error) {
+func (host completeRemovalHost) ObserveCloudflareManagementTokenID(timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	return cloudflaretunnel.New(host.api, cloudflaretunnel.SystemClock{}).VerifyManagementTokenRevoked(ctx, cloudflaretunnel.ObservationRequest{AccountID: host.desired.Cloudflare.AccountID, ZoneID: host.desired.Cloudflare.ZoneID, ZoneName: host.desired.Cloudflare.ZoneName, Token: host.token})
+	return cloudflaretunnel.New(host.api, cloudflaretunnel.SystemClock{}).ObserveManagementTokenID(ctx, cloudflaretunnel.ObservationRequest{AccountID: host.desired.Cloudflare.AccountID, ZoneID: host.desired.Cloudflare.ZoneID, ZoneName: host.desired.Cloudflare.ZoneName, Token: host.token})
+}
+
+func (host completeRemovalHost) DeleteAndVerifyCloudflareManagementToken(tokenID string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return cloudflaretunnel.New(host.api, cloudflaretunnel.SystemClock{}).DeleteAndVerifyManagementToken(ctx, cloudflaretunnel.ObservationRequest{AccountID: host.desired.Cloudflare.AccountID, ZoneID: host.desired.Cloudflare.ZoneID, ZoneName: host.desired.Cloudflare.ZoneName, Token: host.token}, tokenID)
 }
 
 func (host completeRemovalHost) DeleteIrreversibleRemovalPhase(phase systemchanges.IrreversibleRemovalPhase, timeout time.Duration) (systemchanges.StepEvidence, error) {
@@ -500,7 +517,7 @@ func irreversibleProviderResource(resource systemchanges.RemovalResource) bool {
 }
 
 func (host completeRemovalHost) allUnits(ctx context.Context, action string) bool {
-	for _, unit := range removalPublicUnits {
+	for _, unit := range host.publicUnits {
 		if _, err := host.run(ctx, nil, "systemctl", action, unit); err != nil {
 			return false
 		}
@@ -509,7 +526,7 @@ func (host completeRemovalHost) allUnits(ctx context.Context, action string) boo
 }
 
 func (host completeRemovalHost) anyUnit(ctx context.Context, action string) bool {
-	for _, unit := range removalPublicUnits {
+	for _, unit := range host.publicUnits {
 		if _, err := host.run(ctx, nil, "systemctl", action, unit); err == nil {
 			return true
 		}

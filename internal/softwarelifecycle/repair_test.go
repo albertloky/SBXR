@@ -95,11 +95,11 @@ func repairObservation(cause systemchanges.RecoveryCause, stateSHA string) syste
 }
 
 func TestPlanRepairDisclosesOneCurrentStateForwardRepair(t *testing.T) {
-	stateSHA := strings.Repeat("a", 64)
+	capability, stateSHA := controlledManagedCapability(t, true)
 	view := (Interface{}).ViewRepair(systemchanges.New(&repairObservationAdapter{observation: repairObservation(systemchanges.CurrentStateDrift, stateSHA)}))
 	contribution := controlledRepairProof(t, "repair-revision-8", 7, stateSHA)
 	disk := systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 2, SnapshotBytes: 3, JournalBytes: 4, RollbackBytes: 5, OverheadBytes: 6}
-	plan, finding := controlledPlanRepair(RepairPlanRequest{Candidate: view.RepairCandidate(), Contribution: controlledRepairContribution{contribution}, ChangeSet: "repair-revision-8", Disk: disk})
+	plan, finding := controlledPlanRepair(RepairPlanRequest{Candidate: view.RepairCandidate(), Contribution: controlledRepairContribution{contribution}, ChangeSet: "repair-revision-8", Capability: capability, Disk: disk})
 	if finding != nil || plan == nil {
 		t.Fatalf("PlanRepair() = (%+v, %+v)", plan, finding)
 	}
@@ -110,28 +110,60 @@ func TestPlanRepairDisclosesOneCurrentStateForwardRepair(t *testing.T) {
 	if _, err := json.Marshal(plan); err == nil || strings.Contains(fmt.Sprintf("%#v", plan), "OWNER-SECRET") {
 		t.Fatalf("repair Plan rendered protected material: %#v", plan)
 	}
-	if repeated, finding := controlledPlanRepair(RepairPlanRequest{Candidate: view.RepairCandidate(), Contribution: controlledRepairContribution{contribution}, ChangeSet: "repair-revision-8", Disk: disk}); repeated != nil || finding == nil {
+	if repeated, finding := controlledPlanRepair(RepairPlanRequest{Candidate: view.RepairCandidate(), Contribution: controlledRepairContribution{contribution}, ChangeSet: "repair-revision-8", Capability: capability, Disk: disk}); repeated != nil || finding == nil {
 		t.Fatalf("reused repair candidate = (%+v, %+v)", repeated, finding)
 	}
 }
 
+func TestPlanRepairPreservesRealityOnlyCapabilityWithoutProviderWork(t *testing.T) {
+	capability, stateSHA := controlledManagedCapability(t, false)
+	view := (Interface{}).ViewRepair(systemchanges.New(&repairObservationAdapter{observation: repairObservation(systemchanges.CurrentStateDrift, stateSHA)}))
+	proof := controlledRepairProof(t, "repair-reality-only", 7, stateSHA)
+	request := RepairPlanRequest{Candidate: view.RepairCandidate(), Contribution: controlledRepairContribution{proof}, ChangeSet: proof.ChangeSet, Capability: capability, Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}}
+	plan, finding := controlledPlanRepair(request)
+	if finding != nil || plan == nil || plan.Summary().OwningModule != systemchanges.ConnectionProfilesModule {
+		t.Fatalf("reality-only PlanRepair() = (%+v, %+v)", plan, finding)
+	}
+	rechecked := (Interface{}).ViewRepair(systemchanges.New(&repairObservationAdapter{observation: repairObservation(systemchanges.CurrentStateDrift, stateSHA)})).RepairCandidate()
+	approval := &controlledRepairApproval{recheck: RepairRecheck{Candidate: rechecked, Contribution: controlledRepairContribution{proof}, Capability: capability}}
+	prepared := controlledRepairPrepared{changeSet: proof.ChangeSet, revision: 8, starting: stateSHA, candidate: strings.Repeat("d", 64), planIdentity: plan.Identity(), planSHA256: plan.SHA256()}
+	result := plan.Apply(t.Context(), RepairApplyRequest{Approval: approval, PreparedState: prepared, SystemChanges: systemchanges.New(nil)})
+	if result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-ADAPTER-UNAVAILABLE" || approval.calls != 1 {
+		t.Fatalf("reality-only ApplyRepair() = %+v; calls=%d", result, approval.calls)
+	}
+
+	cloudflareStep, err := systemchanges.NewStep(systemchanges.CloudflareModule, systemchanges.ActivatePreparedConfiguration, systemchanges.RestorePriorConfiguration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof.Name, proof.Owner, proof.Steps = "Cloudflare Tunnel", systemchanges.CloudflareModule, []systemchanges.Step{cloudflareStep}
+	for index := range proof.Checks {
+		proof.Checks[index].Owner = systemchanges.CloudflareModule
+	}
+	request.Candidate = (Interface{}).ViewRepair(systemchanges.New(&repairObservationAdapter{observation: repairObservation(systemchanges.CurrentStateDrift, stateSHA)})).RepairCandidate()
+	request.Contribution = controlledRepairContribution{proof}
+	if plan, finding := controlledPlanRepair(request); plan != nil || finding == nil {
+		t.Fatalf("reality-only provider repair = (%+v, %+v)", plan, finding)
+	}
+}
+
 func TestPlanRepairRejectsObservationChangedAfterView(t *testing.T) {
-	stateSHA := strings.Repeat("a", 64)
+	capability, stateSHA := controlledManagedCapability(t, true)
 	adapter := &repairObservationAdapter{observation: repairObservation(systemchanges.CurrentStateDrift, stateSHA)}
 	view := (Interface{}).ViewRepair(systemchanges.New(adapter))
 	proof := controlledRepairProof(t, "repair-revision-8-changed", 7, stateSHA)
 	adapter.observation.VolatileSHA256 = strings.Repeat("e", 64)
-	plan, finding := controlledPlanRepair(RepairPlanRequest{Candidate: view.RepairCandidate(), Contribution: controlledRepairContribution{proof}, ChangeSet: proof.ChangeSet, Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}})
+	plan, finding := controlledPlanRepair(RepairPlanRequest{Candidate: view.RepairCandidate(), Contribution: controlledRepairContribution{proof}, ChangeSet: proof.ChangeSet, Capability: capability, Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}})
 	if plan != nil || finding == nil {
 		t.Fatalf("changed observation PlanRepair() = (%+v, %+v)", plan, finding)
 	}
 }
 
 func TestPlanRepairRejectsCallerAuthoredContributions(t *testing.T) {
-	stateSHA := strings.Repeat("a", 64)
+	capability, stateSHA := controlledManagedCapability(t, true)
 	view := (Interface{}).ViewRepair(systemchanges.New(&repairObservationAdapter{observation: repairObservation(systemchanges.CurrentStateDrift, stateSHA)}))
 	proof := controlledRepairProof(t, "repair-forged-contribution", 7, stateSHA)
-	plan, finding := PlanRepair(RepairPlanRequest{Candidate: view.RepairCandidate(), Contribution: controlledRepairContribution{proof}, ChangeSet: proof.ChangeSet, Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}})
+	plan, finding := PlanRepair(RepairPlanRequest{Candidate: view.RepairCandidate(), Contribution: controlledRepairContribution{proof}, ChangeSet: proof.ChangeSet, Capability: capability, Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}})
 	if plan != nil || finding == nil {
 		t.Fatalf("caller-authored contribution = (%+v, %+v)", plan, finding)
 	}
@@ -163,16 +195,17 @@ func controlledRepairProof(t *testing.T, changeSet string, revision uint64, stat
 }
 
 func TestApplyRepairRechecksAndHandsOneRepairChangeSetToSystemChanges(t *testing.T) {
-	stateSHA, candidateSHA := strings.Repeat("a", 64), strings.Repeat("d", 64)
+	capability, stateSHA := controlledManagedCapability(t, true)
+	candidateSHA := strings.Repeat("d", 64)
 	changes := systemchanges.New(&repairObservationAdapter{observation: repairObservation(systemchanges.CurrentStateDrift, stateSHA)})
 	view := (Interface{}).ViewRepair(changes)
 	proof := controlledRepairProof(t, "repair-revision-8-apply", 7, stateSHA)
-	plan, finding := controlledPlanRepair(RepairPlanRequest{Candidate: view.RepairCandidate(), Contribution: controlledRepairContribution{proof}, ChangeSet: proof.ChangeSet, Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}})
+	plan, finding := controlledPlanRepair(RepairPlanRequest{Candidate: view.RepairCandidate(), Contribution: controlledRepairContribution{proof}, ChangeSet: proof.ChangeSet, Capability: capability, Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}})
 	if finding != nil {
 		t.Fatal(finding)
 	}
 	rechecked := (Interface{}).ViewRepair(changes).RepairCandidate()
-	approval := &controlledRepairApproval{recheck: RepairRecheck{Candidate: rechecked, Contribution: controlledRepairContribution{proof}}}
+	approval := &controlledRepairApproval{recheck: RepairRecheck{Candidate: rechecked, Contribution: controlledRepairContribution{proof}, Capability: capability}}
 	prepared := controlledRepairPrepared{changeSet: proof.ChangeSet, revision: 8, starting: stateSHA, candidate: candidateSHA, planIdentity: plan.Identity(), planSHA256: plan.SHA256()}
 	result := plan.Apply(t.Context(), RepairApplyRequest{Approval: approval, PreparedState: prepared, SystemChanges: systemchanges.New(nil)})
 	if result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-ADAPTER-UNAVAILABLE" || approval.calls != 1 {
@@ -184,17 +217,17 @@ func TestApplyRepairRechecksAndHandsOneRepairChangeSetToSystemChanges(t *testing
 }
 
 func TestApplyRepairRejectsAStaleObservedState(t *testing.T) {
-	stateSHA := strings.Repeat("a", 64)
+	capability, stateSHA := controlledManagedCapability(t, true)
 	view := (Interface{}).ViewRepair(systemchanges.New(&repairObservationAdapter{observation: repairObservation(systemchanges.CurrentStateDrift, stateSHA)}))
 	proof := controlledRepairProof(t, "repair-revision-8-stale", 7, stateSHA)
-	plan, finding := controlledPlanRepair(RepairPlanRequest{Candidate: view.RepairCandidate(), Contribution: controlledRepairContribution{proof}, ChangeSet: proof.ChangeSet, Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}})
+	plan, finding := controlledPlanRepair(RepairPlanRequest{Candidate: view.RepairCandidate(), Contribution: controlledRepairContribution{proof}, ChangeSet: proof.ChangeSet, Capability: capability, Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}})
 	if finding != nil {
 		t.Fatal(finding)
 	}
 	changed := repairObservation(systemchanges.CurrentStateDrift, stateSHA)
 	changed.VolatileSHA256 = strings.Repeat("e", 64)
 	rechecked := (Interface{}).ViewRepair(systemchanges.New(&repairObservationAdapter{observation: changed})).RepairCandidate()
-	approval := &controlledRepairApproval{recheck: RepairRecheck{Candidate: rechecked, Contribution: controlledRepairContribution{proof}}}
+	approval := &controlledRepairApproval{recheck: RepairRecheck{Candidate: rechecked, Contribution: controlledRepairContribution{proof}, Capability: capability}}
 	result := plan.Apply(t.Context(), RepairApplyRequest{Approval: approval})
 	if result.Finding == nil || result.Finding.Code != "SOFTWARE-LIFECYCLE-REPAIR-STALE" || !result.NothingChanged {
 		t.Fatalf("stale Apply() = %+v", result)

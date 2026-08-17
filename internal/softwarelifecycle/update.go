@@ -27,6 +27,7 @@ type UpdatePlanRequest struct {
 	ChangeSet           string
 	DesiredStateSHA256  string
 	Contributions       []UpdateContribution
+	Capability          ManagedCapability
 	Disk                systemchanges.DiskRequirement
 }
 
@@ -39,6 +40,7 @@ type UpdateRecheck struct {
 	StartingRevision    uint64
 	StartingStateSHA256 string
 	Contributions       []UpdateContribution
+	Capability          ManagedCapability
 }
 
 type UpdateApproval interface {
@@ -71,10 +73,15 @@ type UpdatePlan struct {
 	checks                           []systemchanges.Check
 	summary                          UpdateSummary
 	used                             *atomic.Bool
+	cloudflareProfilesSetUp          bool
 }
 
 type UpdateContribution interface {
 	SoftwareLifecycleUpdateContribution() InstallContributionProof
+}
+
+type ManagedCapability interface {
+	SoftwareLifecycleManagedCapability() (revision uint64, stateSHA256 string, cloudflareProfilesSetUp bool, valid bool)
 }
 
 func PlanUpdate(request UpdatePlanRequest) (*UpdatePlan, *InstallFinding) {
@@ -97,10 +104,14 @@ func planReleaseChange(request UpdatePlanRequest, operation Action) (*UpdatePlan
 	refuse := func() (*UpdatePlan, *InstallFinding) {
 		return nil, &InstallFinding{Code: code, Problem: problem, NextAction: next}
 	}
-	if !validInstalled(request.Installed) || !validInstallCandidate(request.InstalledCandidate) || !reflect.DeepEqual(request.InstalledCandidate.cell.verified, request.Installed) || request.InstalledCandidate.cell.staged.Identity != request.Installed.Identity || !validInstallCandidate(request.Candidate) || !eligible(request.Installed, request.Candidate.cell.verified) || request.StartingRevision == 0 || !hashPattern.MatchString(request.StartingStateSHA256) || !installIdentityPattern.MatchString(request.ChangeSet) || !hashPattern.MatchString(request.DesiredStateSHA256) || !validInstallDisk(request.Disk) {
+	cloudflareProfilesSetUp, capabilityValid := consumeManagedCapability(request.Capability, request.StartingRevision, request.StartingStateSHA256)
+	if !validInstalled(request.Installed) || !validInstallCandidate(request.InstalledCandidate) || !reflect.DeepEqual(request.InstalledCandidate.cell.verified, request.Installed) || request.InstalledCandidate.cell.staged.Identity != request.Installed.Identity || !validInstallCandidate(request.Candidate) || !eligible(request.Installed, request.Candidate.cell.verified) || request.StartingRevision == 0 || !hashPattern.MatchString(request.StartingStateSHA256) || !installIdentityPattern.MatchString(request.ChangeSet) || !hashPattern.MatchString(request.DesiredStateSHA256) || !capabilityValid || !validInstallDisk(request.Disk) {
 		return refuse()
 	}
-	want := map[InstallContributionName]systemchanges.Module{ProfilesInstallContribution: systemchanges.ConnectionProfilesModule, CloudflareInstallContribution: systemchanges.CloudflareModule, SubscriptionInstallContribution: systemchanges.SubscriptionModule}
+	want := map[InstallContributionName]systemchanges.Module{ProfilesInstallContribution: systemchanges.ConnectionProfilesModule, SubscriptionInstallContribution: systemchanges.SubscriptionModule}
+	if cloudflareProfilesSetUp {
+		want[CloudflareInstallContribution] = systemchanges.CloudflareModule
+	}
 	proofs := make([]InstallContributionProof, 0, len(want))
 	seen := map[InstallContributionName]bool{}
 	var steps []systemchanges.Step
@@ -142,8 +153,9 @@ func planReleaseChange(request UpdatePlanRequest, operation Action) (*UpdatePlan
 		StartingRevision                                  uint64
 		StartingState, ChangeSet, DesiredState            string
 		Proofs                                            []InstallContributionProof
+		CloudflareProfilesSetUp                           bool
 		Disk                                              systemchanges.DiskRequirement
-	}{request.Installed, request.InstalledCandidate.cell.staged, sha256Hex(request.InstalledCandidate.cell.archive), sha256Hex(request.InstalledCandidate.cell.components), request.Candidate.cell.verified, request.StartingRevision, request.StartingStateSHA256, request.ChangeSet, request.DesiredStateSHA256, proofs, request.Disk}
+	}{request.Installed, request.InstalledCandidate.cell.staged, sha256Hex(request.InstalledCandidate.cell.archive), sha256Hex(request.InstalledCandidate.cell.components), request.Candidate.cell.verified, request.StartingRevision, request.StartingStateSHA256, request.ChangeSet, request.DesiredStateSHA256, proofs, cloudflareProfilesSetUp, request.Disk}
 	encoded, err := json.Marshal(bound)
 	if err != nil {
 		return refuse()
@@ -155,15 +167,21 @@ func planReleaseChange(request UpdatePlanRequest, operation Action) (*UpdatePlan
 		checkNames[index] = checks[index].Code
 	}
 	sort.Strings(checkNames)
+	affectedServices := []string{"sbxr-subscription.service", "xray.service"}
+	interruption := "restart Xray and subscription serving after their prepared replacements validate"
+	if cloudflareProfilesSetUp {
+		affectedServices = []string{"cloudflared.service", "sbxr-subscription.service", "sing-box.service", "xray.service"}
+		interruption = "restart only cloudflared, Xray, sing-box, and subscription serving after their prepared replacements validate"
+	}
 	summary := UpdateSummary{
 		Operation:      operation,
 		CurrentRelease: request.Installed.Identity, CandidateRelease: request.Candidate.cell.staged.Identity,
 		CurrentRevision: request.StartingRevision, CandidateRevision: request.StartingRevision + 1,
 		MigrationPath:               updateMigrationPath(request.Installed.StateSchema, request.Candidate.cell.verified.StateSchema),
-		AffectedServices:            []string{"cloudflared.service", "sbxr-subscription.service", "sing-box.service", "xray.service"},
+		AffectedServices:            affectedServices,
 		SubscriptionRepresentations: []string{"raw", "base64", "v2rayN", "Shadowrocket", "Karing", "Mihomo", "sing-box"},
 		Checks:                      checkNames, Disk: request.Disk,
-		Interruption:                    "restart only cloudflared, Xray, sing-box, and subscription serving after their prepared replacements validate",
+		Interruption:                    interruption,
 		Cancellation:                    "Back before Apply changes nothing; cancellation after start waits for a safe checkpoint and restores the prior release and State",
 		Rollback:                        "restore the exact prior release, service material, subscriptions, units, and Desired State from the one transaction snapshot",
 		PrivilegedMutationAfterApproval: true, OneUse: true,
@@ -173,7 +191,16 @@ func planReleaseChange(request UpdatePlanRequest, operation Action) (*UpdatePlan
 		summary.Compatibility = fmt.Sprintf("Current Desired State schema %d is supported by the selected release", request.Installed.StateSchema)
 	}
 	checksum := hex.EncodeToString(digest[:])
-	return &UpdatePlan{identity: request.ChangeSet + "-plan-" + checksum[:12], sha256: checksum, volatileSHA256: hex.EncodeToString(volatile[:]), request: request, proofs: proofs, steps: steps, checks: checks, summary: summary, used: &atomic.Bool{}}, nil
+	return &UpdatePlan{identity: request.ChangeSet + "-plan-" + checksum[:12], sha256: checksum, volatileSHA256: hex.EncodeToString(volatile[:]), request: request, proofs: proofs, steps: steps, checks: checks, summary: summary, used: &atomic.Bool{}, cloudflareProfilesSetUp: cloudflareProfilesSetUp}, nil
+}
+
+func consumeManagedCapability(capability ManagedCapability, revision uint64, stateSHA256 string) (bool, bool) {
+	typeOf := reflect.TypeOf(capability)
+	if typeOf == nil || typeOf.Kind() != reflect.Pointer || typeOf.Elem().PkgPath() != "github.com/albertloky/SBXR/internal/state" || typeOf.Elem().Name() != "SoftwareLifecycleCapability" {
+		return false, false
+	}
+	gotRevision, gotSHA256, cloudflareProfilesSetUp, valid := capability.SoftwareLifecycleManagedCapability()
+	return cloudflareProfilesSetUp, valid && gotRevision == revision && gotSHA256 == stateSHA256
 }
 
 func sha256Hex(value []byte) string {
@@ -201,7 +228,8 @@ func (plan *UpdatePlan) Apply(ctx context.Context, request UpdateApplyRequest) s
 		return updateRefused("SOFTWARE-LIFECYCLE-UPDATE-APPROVAL", "Ordinary system sudo was denied, cancelled, or expired")
 	}
 	freshSHA256, stableSHA256, contributionsMatch := sameUpdateContributions(plan.proofs, rechecked.Contributions)
-	if !reflect.DeepEqual(rechecked.Installed, plan.request.Installed) || !sameInstallCandidate(rechecked.InstalledCandidate, plan.request.InstalledCandidate) || !sameInstallCandidate(rechecked.Candidate, plan.request.Candidate) || rechecked.StartingRevision != plan.request.StartingRevision || rechecked.StartingStateSHA256 != plan.request.StartingStateSHA256 || !contributionsMatch || stableSHA256 != plan.volatileSHA256 {
+	cloudflareProfilesSetUp, capabilityValid := consumeManagedCapability(rechecked.Capability, rechecked.StartingRevision, rechecked.StartingStateSHA256)
+	if !reflect.DeepEqual(rechecked.Installed, plan.request.Installed) || !sameInstallCandidate(rechecked.InstalledCandidate, plan.request.InstalledCandidate) || !sameInstallCandidate(rechecked.Candidate, plan.request.Candidate) || rechecked.StartingRevision != plan.request.StartingRevision || rechecked.StartingStateSHA256 != plan.request.StartingStateSHA256 || !capabilityValid || cloudflareProfilesSetUp != plan.cloudflareProfilesSetUp || !contributionsMatch || stableSHA256 != plan.volatileSHA256 {
 		return updateRefused("SOFTWARE-LIFECYCLE-UPDATE-STALE", "The installed release, State, candidate, or prepared Module facts changed after approval")
 	}
 	prepared, ok := request.PreparedState.(interface {

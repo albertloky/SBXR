@@ -86,6 +86,7 @@ type RepairPlanRequest struct {
 	Candidate    RepairCandidate
 	Contribution RepairContribution
 	ChangeSet    string
+	Capability   ManagedCapability
 	Disk         systemchanges.DiskRequirement
 }
 
@@ -100,16 +101,17 @@ type RepairSummary struct {
 }
 
 type RepairPlan struct {
-	identity, sha256 string
-	revision         uint64
-	stateSHA256      string
-	proof            RepairContributionProof
-	contribution     RepairContribution
-	contributorType  reflect.Type
-	volatileSHA256   string
-	disk             systemchanges.DiskRequirement
-	summary          RepairSummary
-	used             *atomic.Bool
+	identity, sha256        string
+	revision                uint64
+	stateSHA256             string
+	proof                   RepairContributionProof
+	contribution            RepairContribution
+	contributorType         reflect.Type
+	volatileSHA256          string
+	disk                    systemchanges.DiskRequirement
+	summary                 RepairSummary
+	used                    *atomic.Bool
+	cloudflareProfilesSetUp bool
 }
 
 func PlanRepair(request RepairPlanRequest) (*RepairPlan, *InstallFinding) {
@@ -121,7 +123,8 @@ func PlanRepair(request RepairPlanRequest) (*RepairPlan, *InstallFinding) {
 	}
 	revision, stateSHA256, volatileSHA256, valid := consumeRepairCandidate(request.Candidate)
 	proof := request.Contribution.SoftwareLifecycleRepairContribution()
-	if !valid || !validRepairProof(proof) || proof.ChangeSet != request.ChangeSet || proof.CurrentRevision != revision || proof.CurrentStateSHA256 != stateSHA256 || proof.StableSHA256 != volatileSHA256 {
+	cloudflareProfilesSetUp, capabilityValid := consumeManagedCapability(request.Capability, revision, stateSHA256)
+	if !valid || !capabilityValid || !cloudflareProfilesSetUp && proof.Owner == systemchanges.CloudflareModule || !validRepairProof(proof) || proof.ChangeSet != request.ChangeSet || proof.CurrentRevision != revision || proof.CurrentStateSHA256 != stateSHA256 || proof.StableSHA256 != volatileSHA256 {
 		return refuse()
 	}
 	return buildRepairPlan(request, proof, revision, stateSHA256, volatileSHA256)
@@ -131,15 +134,17 @@ func buildRepairPlan(request RepairPlanRequest, proof RepairContributionProof, r
 	refuse := func() (*RepairPlan, *InstallFinding) {
 		return nil, &InstallFinding{Code: RepairPlanRefused, Problem: "The reviewed current-State repair Plan is incomplete or stale", NextAction: "Check again and build one fresh repair Plan"}
 	}
-	if request.Contribution == nil || !validRepairProof(proof) || proof.ChangeSet != request.ChangeSet || proof.CurrentRevision != revision || proof.CurrentStateSHA256 != stateSHA256 || proof.StableSHA256 != volatileSHA256 || !installIdentityPattern.MatchString(request.ChangeSet) || !validInstallDisk(request.Disk) {
+	cloudflareProfilesSetUp, capabilityValid := consumeManagedCapability(request.Capability, revision, stateSHA256)
+	if request.Contribution == nil || !capabilityValid || !cloudflareProfilesSetUp && proof.Owner == systemchanges.CloudflareModule || !validRepairProof(proof) || proof.ChangeSet != request.ChangeSet || proof.CurrentRevision != revision || proof.CurrentStateSHA256 != stateSHA256 || proof.StableSHA256 != volatileSHA256 || !installIdentityPattern.MatchString(request.ChangeSet) || !validInstallDisk(request.Disk) {
 		return refuse()
 	}
 	bound := struct {
-		Revision    uint64
-		StateSHA256 string
-		Proof       RepairContributionProof
-		Disk        systemchanges.DiskRequirement
-	}{revision, stateSHA256, proof, request.Disk}
+		Revision                uint64
+		StateSHA256             string
+		Proof                   RepairContributionProof
+		CloudflareProfilesSetUp bool
+		Disk                    systemchanges.DiskRequirement
+	}{revision, stateSHA256, proof, cloudflareProfilesSetUp, request.Disk}
 	encoded, err := json.Marshal(bound)
 	if err != nil {
 		return refuse()
@@ -161,7 +166,7 @@ func buildRepairPlan(request RepairPlanRequest, proof RepairContributionProof, r
 		Rollback:                        "restore the exact pre-repair managed resources and current Desired State from the one transaction Rollback Snapshot",
 		PrivilegedMutationAfterApproval: true, OneUse: true,
 	}
-	return &RepairPlan{identity: request.ChangeSet + "-plan-" + checksum[:12], sha256: checksum, revision: revision, stateSHA256: stateSHA256, proof: proof, contribution: request.Contribution, contributorType: reflect.TypeOf(request.Contribution), volatileSHA256: volatileSHA256, disk: request.Disk, summary: summary, used: &atomic.Bool{}}, nil
+	return &RepairPlan{identity: request.ChangeSet + "-plan-" + checksum[:12], sha256: checksum, revision: revision, stateSHA256: stateSHA256, proof: proof, contribution: request.Contribution, contributorType: reflect.TypeOf(request.Contribution), volatileSHA256: volatileSHA256, disk: request.Disk, summary: summary, used: &atomic.Bool{}, cloudflareProfilesSetUp: cloudflareProfilesSetUp}, nil
 }
 
 func validRepairContributor(contribution RepairContribution) bool {
@@ -271,6 +276,7 @@ func (plan *RepairPlan) PrepareSubscriptionPublication() ([]byte, error) {
 type RepairRecheck struct {
 	Candidate    RepairCandidate
 	Contribution RepairContribution
+	Capability   ManagedCapability
 }
 
 type RepairApproval interface {
@@ -296,7 +302,8 @@ func (plan *RepairPlan) Apply(ctx context.Context, request RepairApplyRequest) s
 		return repairRefused("SOFTWARE-LIFECYCLE-REPAIR-APPROVAL", "Ordinary system sudo was denied, cancelled, or expired")
 	}
 	revision, stateSHA256, volatileSHA256, valid := consumeRepairCandidate(rechecked.Candidate)
-	if !valid || revision != plan.revision || stateSHA256 != plan.stateSHA256 || volatileSHA256 != plan.volatileSHA256 || rechecked.Contribution == nil || reflect.TypeOf(rechecked.Contribution) != plan.contributorType || !reflect.DeepEqual(rechecked.Contribution.SoftwareLifecycleRepairContribution(), plan.proof) {
+	cloudflareProfilesSetUp, capabilityValid := consumeManagedCapability(rechecked.Capability, revision, stateSHA256)
+	if !valid || !capabilityValid || cloudflareProfilesSetUp != plan.cloudflareProfilesSetUp || revision != plan.revision || stateSHA256 != plan.stateSHA256 || volatileSHA256 != plan.volatileSHA256 || rechecked.Contribution == nil || reflect.TypeOf(rechecked.Contribution) != plan.contributorType || !reflect.DeepEqual(rechecked.Contribution.SoftwareLifecycleRepairContribution(), plan.proof) {
 		return repairRefused("SOFTWARE-LIFECYCLE-REPAIR-STALE", "The current Desired State, Observed State, or owning Module repair changed after approval")
 	}
 	prepared, ok := request.PreparedState.(interface {

@@ -69,6 +69,24 @@ func TestPendingChangeSetReportsFinalizingCompleteRemoval(t *testing.T) {
 	}
 }
 
+func TestLocalOnlyCompleteRemovalJournalAcceptsFirstForwardCheckpoint(t *testing.T) {
+	digest := testDigest([]byte("proof"))
+	state := &systemchanges.StateTransactionBinding{CandidateRevision: 8, CandidateSHA256: digest}
+	step := journalStep{Owner: systemchanges.NetworkPolicyModule, Forward: systemchanges.RemoveOwnedPublicExposure, Rollback: systemchanges.RestoreOwnedPublicExposure, Cancellation: systemchanges.SafeCheckpointCancellation, Inspection: systemchanges.InspectBeforeIdempotentReverse, Removal: &systemchanges.RemovalChange{Action: systemchanges.PublicExposureRemoval, Resource: systemchanges.FirewallTableResource, ImmutableID: "inet-sbxr"}}
+	evidence := &systemchanges.StepEvidence{Code: "local-removal-absent", SHA256: digest}
+	entries := []journalEntry{
+		{Checkpoint: systemchanges.Prepared, ChangeSet: "change-0008", Mutation: systemchanges.CompleteRemovalMutation, Starting: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: 7, SHA256: digest}, OutcomeOwner: systemchanges.SoftwareModule, PlanSHA256: digest, State: state, Steps: []journalStep{step}, Checks: []systemchanges.Check{{Owner: systemchanges.SoftwareModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "REMOVAL-LOCAL-ABSENT"}}, Timeouts: systemchanges.Timeouts{Step: time.Minute, Check: time.Minute}},
+		{Checkpoint: systemchanges.StepStarted, Step: 1},
+		{Checkpoint: systemchanges.StepCompleted, Step: 1, Evidence: evidence},
+		{Checkpoint: systemchanges.PrePublicationHealthPassed},
+		{Checkpoint: systemchanges.IrreversibleRemovalStarted},
+		{Checkpoint: systemchanges.PackageHoldsRemoved, Evidence: evidence},
+	}
+	if !validJournal(entries) {
+		t.Fatal("local-only Complete removal journal was refused after the irreversible checkpoint")
+	}
+}
+
 func TestPendingChangeSetFailsClosedForUnprovedDurableMaterial(t *testing.T) {
 	tests := []struct {
 		name   string

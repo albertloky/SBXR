@@ -269,7 +269,7 @@ func validEmbeddedStateMaterial(value PayloadMetadata) bool {
 	for schema := uint64(1); schema <= value.StateSchema; schema++ {
 		name := "desired-state-v" + strconv.FormatUint(schema, 10) + ".schema.json"
 		document := value.Schemas[name]
-		if len(document) == 0 || len(document) > MaxIndexBytes || ValidateUniqueJSON(document) != nil || !json.Valid(document) || schema == 1 && !validStateSchema(document) {
+		if len(document) == 0 || len(document) > MaxIndexBytes || ValidateUniqueJSON(document) != nil || !json.Valid(document) || !validStateSchema(document, schema) {
 			return false
 		}
 	}
@@ -308,12 +308,16 @@ var managedServiceCommands = map[string]string{
 	"xray.service":              releaseDirectoryToken + "/xray run -config /etc/sbxr/xray/config.json",
 }
 
-func validStateSchema(document []byte) bool {
+func validStateSchema(document []byte, schema uint64) bool {
 	digest := sha256.Sum256(document)
-	return ValidateUniqueJSON(document) == nil && hex.EncodeToString(digest[:]) == qualifiedStateSchemaSHA256
+	return ValidateUniqueJSON(document) == nil && hex.EncodeToString(digest[:]) == qualifiedStateSchemaSHA256[schema]
 }
 
-const qualifiedStateSchemaSHA256 = "3e1488c7c2a999883a878aa03091db89f6abe9ae32bf0739d9ebf604f3ff2edf"
+var qualifiedStateSchemaSHA256 = map[uint64]string{
+	1: "3e1488c7c2a999883a878aa03091db89f6abe9ae32bf0739d9ebf604f3ff2edf",
+	2: "df96e3a3e4616a49a121f734177f2207f828c6a678fb8fb6922c4eaaf5c687ea",
+}
+
 const qualifiedMigrationSHA256 = "1d2527a35e0a5869af2668f2c693a3c56c5e13e51fd39c2090b7f0ac9ad069d4"
 
 var qualifiedArtifactSHA256 = map[string]string{

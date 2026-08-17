@@ -2,6 +2,9 @@ package softwarelifecycle_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"strings"
@@ -13,6 +16,73 @@ import (
 	"github.com/albertloky/SBXR/internal/subscriptionpublication"
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
+
+func managedCapability(t *testing.T, cloudflareProfilesSetUp bool) (*state.SoftwareLifecycleCapability, string) {
+	t.Helper()
+	document := []byte(repairStateDocument)
+	if !cloudflareProfilesSetUp {
+		var envelope map[string]any
+		if err := json.Unmarshal(document, &envelope); err != nil {
+			t.Fatal(err)
+		}
+		payload := envelope["payload"].(map[string]any)
+		payload["installation"].(map[string]any)["domain"] = ""
+		profiles := payload["connection_profiles"].(map[string]any)
+		for name, value := range profiles {
+			profile := value.(map[string]any)
+			if name == "vless_reality_vision" {
+				profile["lifecycle"] = "Enabled"
+				continue
+			}
+			for field, current := range profile {
+				switch current.(type) {
+				case string:
+					profile[field] = ""
+				case bool:
+					profile[field] = false
+				case float64:
+					profile[field] = float64(0)
+				}
+			}
+			profile["lifecycle"] = "Not set up"
+		}
+		for field, current := range payload["cloudflare"].(map[string]any) {
+			switch current.(type) {
+			case string:
+				payload["cloudflare"].(map[string]any)[field] = ""
+			case bool:
+				payload["cloudflare"].(map[string]any)[field] = false
+			}
+		}
+		certificates := payload["certificates"].(map[string]any)
+		for _, field := range []string{"domain_certificate_id", "domain_serving_pointer", "domain_hostname"} {
+			certificates[field] = ""
+		}
+		envelope["schema_version"] = float64(2)
+		encodedPayload, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(encodedPayload)
+		envelope["checksum"] = hex.EncodeToString(digest[:])
+		document, err = json.Marshal(envelope)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	release := state.ReleaseIdentity{Repository: "https://github.com/albertloky/SBXR", Tag: "v1.0.0", Commit: "0123456789abcdef0123456789abcdef01234567", ReleaseIndexSHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
+	module := state.New(&repairStorage{document: document})
+	loaded, err := module.Load(state.LoadRequest{Baseline: state.ManagedEvidence, SupportedRelease: release, Lineage: &state.LineageProof{Revision: 7, LastCompletedChangeSet: "change-0007", ReleaseIdentity: release}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	capability := module.SoftwareLifecycleCapability(loaded)
+	_, stateSHA256, _, valid := capability.SoftwareLifecycleManagedCapability()
+	if !valid {
+		t.Fatal("managed capability unavailable")
+	}
+	return capability, stateSHA256
+}
 
 const repairStateDocument = `{"schema_version":1,"revision":7,"release_identity":{"repository":"https://github.com/albertloky/SBXR","tag":"v1.0.0","commit":"0123456789abcdef0123456789abcdef01234567","release_index_sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},"last_completed_change_set":"change-0007","payload":{"certificates":{"acme_account_id":"acme-account","domain_certificate_id":"domain-certificate","domain_hostname":"direct.example.com","domain_serving_pointer":"/var/lib/sbxr/certificates/domain/current","ip_certificate_id":"ip-certificate","ip_serving_pointer":"/var/lib/sbxr/certificates/ip/current","renewal_policy":true},"cloudflare":{"account_id":"cloudflare-account","direct_hostname":"direct.example.com","direct_ipv4_record_id":"dns-direct-ipv4","direct_ipv6_record_id":"","management_token":"CLOUDFLARE-MANAGEMENT-SECRET-MARKER","tunnel_id":"cloudflare-tunnel-id","tunnel_name":"sbxr","tunnel_run_token":"CLOUDFLARE-RUN-SECRET-MARKER-00001","websocket_dns_record_id":"dns-websocket","websocket_hostname":"ws.example.com","xhttp_dns_record_id":"dns-xhttp","xhttp_hostname":"xhttp.example.com","zone_id":"cloudflare-zone","zone_name":"example.com"},"connection_profiles":{"anytls":{"certificate_id":"domain-certificate","enabled":true,"padding_scheme":"stop=8","password":"ANYTLS-PASSWORD-SECRET-MARKER-01","port":9443,"server_name":"direct.example.com"},"hysteria2":{"certificate_id":"domain-certificate","enabled":true,"masquerade_url":"https://example.com/","obfuscation":false,"obfuscation_secret":"","password":"HYSTERIA2-SECRET-MARKER-00000001","port":443,"server_name":"direct.example.com"},"tuic":{"certificate_id":"domain-certificate","congestion_control":"bbr","enabled":true,"password":"TUIC-PASSWORD-SECRET-MARKER-00001","port":8443,"server_name":"direct.example.com","uuid":"55555555-5555-4555-8555-555555555555","zero_rtt":false},"vless_reality_vision":{"enabled":true,"fingerprint":"chrome","port":443,"private_key":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","public_key":"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB","server_name":"www.microsoft.com","short_id":"1111111111111111","target":"www.microsoft.com:443","uuid":"11111111-1111-4111-8111-111111111111"},"vless_websocket":{"enabled":true,"hostname":"ws.example.com","origin_address":"127.0.0.1","origin_port":11081,"path":"/4444444444444444444444444444444444444444444444444444444444444444","uuid":"33333333-3333-4333-8333-333333333333"},"vless_xhttp":{"enabled":true,"hostname":"xhttp.example.com","mode":"packet-up","origin_address":"127.0.0.1","origin_port":11080,"path":"/2222222222222222222222222222222222222222222222222222222222222222","uuid":"22222222-2222-4222-8222-222222222222"}},"installation":{"domain":"example.com","id":"550e8400-e29b-41d4-a716-446655440000"},"network_policy":{"primary_subscription_address":"192.0.2.10","public_ipv4":"192.0.2.10","public_ipv6":"","ssh_port":22},"software":{"automatic_update_discovery":true,"certbot_version":"5.4.0","cloudflared_version":"2026.7.0","sing_box_version":"1.12.0","xray_version":"25.8.3"},"subscription":{"certificate_id":"ip-certificate","listen_port":10443,"token":"6666666666666666666666666666666666666666666666666666666666666666"}},"checksum":"47c176e0230ce70ce742a55d2f8956331b97a43e7791cda080a269f9c4e4f412"}`
 
@@ -83,6 +153,7 @@ func TestSoftwareRepairPreparesOnlyTheExactUnchangedCurrentDesiredState(t *testi
 	if err != nil || loaded.Snapshot == nil {
 		t.Fatalf("Load() = (%+v, %v)", loaded, err)
 	}
+	capability := stateModule.SoftwareLifecycleCapability(loaded)
 	stateSHA, volatileSHA := "47c176e0230ce70ce742a55d2f8956331b97a43e7791cda080a269f9c4e4f412", strings.Repeat("c", 64)
 	observation := systemchanges.Observation{Status: systemchanges.RecoveryRequired, LastChangeSet: "change-0007", Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, ForwardRepairAvailable: true, RecoveryCause: systemchanges.CurrentStateDrift, StateRevision: 7, StateSHA256: stateSHA, VolatileSHA256: volatileSHA}
 	changes := systemchanges.New(repairObservationAdapter{observation})
@@ -99,7 +170,7 @@ func TestSoftwareRepairPreparesOnlyTheExactUnchangedCurrentDesiredState(t *testi
 	if publication.Plan == nil || publication.Finding != nil {
 		t.Fatalf("publication Plan = %+v", publication)
 	}
-	plan, finding := softwarelifecycle.PlanRepair(softwarelifecycle.RepairPlanRequest{Candidate: view.RepairCandidate(), Contribution: publication.Plan, ChangeSet: "software-repair-revision-8", Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}})
+	plan, finding := softwarelifecycle.PlanRepair(softwarelifecycle.RepairPlanRequest{Candidate: view.RepairCandidate(), Contribution: publication.Plan, ChangeSet: "software-repair-revision-8", Capability: capability, Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}})
 	if finding != nil {
 		t.Fatal(finding)
 	}
@@ -130,7 +201,7 @@ func TestSoftwareRepairPreparesOnlyTheExactUnchangedCurrentDesiredState(t *testi
 		t.Fatalf("PrepareSoftwareRepairCommit() = (%+v, %v)", prepared, err)
 	}
 	rechecked := (softwarelifecycle.Interface{}).ViewRepair(changes).RepairCandidate()
-	result := plan.Apply(t.Context(), softwarelifecycle.RepairApplyRequest{Approval: repairApproval{softwarelifecycle.RepairRecheck{Candidate: rechecked, Contribution: publication.Plan}}, PreparedState: prepared, SystemChanges: systemchanges.New(nil)})
+	result := plan.Apply(t.Context(), softwarelifecycle.RepairApplyRequest{Approval: repairApproval{softwarelifecycle.RepairRecheck{Candidate: rechecked, Contribution: publication.Plan, Capability: capability}}, PreparedState: prepared, SystemChanges: systemchanges.New(nil)})
 	if result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-ADAPTER-UNAVAILABLE" {
 		t.Fatalf("Apply handoff = %+v", result)
 	}

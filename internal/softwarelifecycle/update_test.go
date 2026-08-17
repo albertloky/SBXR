@@ -2,6 +2,11 @@ package softwarelifecycle
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -45,10 +50,11 @@ func (approval *controlledUpdateApproval) AuthorizeAndRecheck(context.Context) (
 
 func TestPlanUpdateDisclosesOneCompleteManagedToManagedTransaction(t *testing.T) {
 	installed, candidate := controlledUpdateReleases()
+	capability, startingStateSHA256 := controlledManagedCapability(t, true)
 	disk := systemchanges.DiskRequirement{PreparationBytes: 10, TemporaryBytes: 20, SnapshotBytes: 30, JournalBytes: 40, RollbackBytes: 50, OverheadBytes: 60}
 	plan, finding := PlanUpdate(UpdatePlanRequest{
-		Installed: installed, InstalledCandidate: controlledInstalledCandidate(installed), Candidate: candidate, StartingRevision: 7, StartingStateSHA256: strings.Repeat("a", 64),
-		ChangeSet: "update-revision-8", DesiredStateSHA256: strings.Repeat("b", 64), Contributions: controlledUpdateContributions(t, "update-revision-8", strings.Repeat("b", 64)), Disk: disk,
+		Installed: installed, InstalledCandidate: controlledInstalledCandidate(installed), Candidate: candidate, StartingRevision: 7, StartingStateSHA256: startingStateSHA256,
+		ChangeSet: "update-revision-8", DesiredStateSHA256: strings.Repeat("b", 64), Contributions: controlledUpdateContributions(t, "update-revision-8", strings.Repeat("b", 64)), Capability: capability, Disk: disk,
 	})
 	if finding != nil || plan == nil {
 		t.Fatalf("PlanUpdate() = (%+v, %+v)", plan, finding)
@@ -62,6 +68,110 @@ func TestPlanUpdateDisclosesOneCompleteManagedToManagedTransaction(t *testing.T)
 	}
 }
 
+func TestPlanUpdatePreservesRealityOnlyCapabilityWithoutCloudflareWork(t *testing.T) {
+	installed, candidate := controlledUpdateReleases()
+	installed.StateSchema, candidate.cell.verified.StateSchema, candidate.cell.verified.Migrations = 2, 2, nil
+	capability, stateSHA256 := controlledManagedCapability(t, false)
+	desired := strings.Repeat("b", 64)
+	contributions := controlledUpdateContributions(t, "update-reality-only", desired)
+	plan, finding := PlanUpdate(UpdatePlanRequest{
+		Installed: installed, InstalledCandidate: controlledInstalledCandidate(installed), Candidate: candidate,
+		StartingRevision: 7, StartingStateSHA256: stateSHA256, ChangeSet: "update-reality-only", DesiredStateSHA256: desired,
+		Contributions: []UpdateContribution{contributions[0], contributions[2]}, Capability: capability,
+		Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1},
+	})
+	if finding != nil || plan == nil {
+		t.Fatalf("PlanUpdate() = (%+v, %+v)", plan, finding)
+	}
+	if got := plan.Summary().AffectedServices; !reflect.DeepEqual(got, []string{"sbxr-subscription.service", "xray.service"}) {
+		t.Fatalf("AffectedServices = %v", got)
+	}
+	prepared := controlledUpdatePrepared{changeSet: "update-reality-only", revision: 8, starting: stateSHA256, candidate: desired, planIdentity: plan.Identity(), planSHA256: plan.SHA256(), release: candidate.cell.staged.Identity, from: 2, to: 2}
+	realityOnly := []UpdateContribution{contributions[0], contributions[2]}
+	approval := &controlledUpdateApproval{recheck: UpdateRecheck{Installed: installed, InstalledCandidate: controlledInstalledCandidate(installed), Candidate: candidate, StartingRevision: 7, StartingStateSHA256: stateSHA256, Contributions: realityOnly, Capability: capability}}
+	result := plan.Apply(t.Context(), UpdateApplyRequest{Approval: approval, PreparedState: prepared, SystemChanges: systemchanges.New(nil)})
+	if result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-ADAPTER-UNAVAILABLE" || approval.calls != 1 {
+		t.Fatalf("reality-only Apply() = %+v; calls=%d", result, approval.calls)
+	}
+}
+
+type capabilityStorage struct{ document []byte }
+
+func (storage capabilityStorage) Read() ([]byte, error) { return storage.document, nil }
+func (capabilityStorage) Publish([]byte, []byte, string) ([]byte, error) {
+	return nil, errors.New("not used")
+}
+
+func controlledManagedCapability(t *testing.T, cloudflareProfilesSetUp bool) (*state.SoftwareLifecycleCapability, string) {
+	t.Helper()
+	document, err := os.ReadFile("../state/testdata/complete-state.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cloudflareProfilesSetUp {
+		var envelope map[string]any
+		if err := json.Unmarshal(document, &envelope); err != nil {
+			t.Fatal(err)
+		}
+		payload := envelope["payload"].(map[string]any)
+		payload["installation"].(map[string]any)["domain"] = ""
+		profiles := payload["connection_profiles"].(map[string]any)
+		for name, value := range profiles {
+			profile := value.(map[string]any)
+			if name == "vless_reality_vision" {
+				profile["lifecycle"] = "Enabled"
+				continue
+			}
+			for field, current := range profile {
+				switch current.(type) {
+				case string:
+					profile[field] = ""
+				case bool:
+					profile[field] = false
+				case float64:
+					profile[field] = float64(0)
+				}
+			}
+			profile["lifecycle"] = "Not set up"
+		}
+		for field, current := range payload["cloudflare"].(map[string]any) {
+			switch current.(type) {
+			case string:
+				payload["cloudflare"].(map[string]any)[field] = ""
+			case bool:
+				payload["cloudflare"].(map[string]any)[field] = false
+			}
+		}
+		certificates := payload["certificates"].(map[string]any)
+		for _, field := range []string{"domain_certificate_id", "domain_serving_pointer", "domain_hostname"} {
+			certificates[field] = ""
+		}
+		envelope["schema_version"] = float64(2)
+		encodedPayload, marshalErr := json.Marshal(payload)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		digest := sha256.Sum256(encodedPayload)
+		envelope["checksum"] = hex.EncodeToString(digest[:])
+		document, err = json.Marshal(envelope)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	release := state.ReleaseIdentity{Repository: "https://github.com/albertloky/SBXR", Tag: "v1.0.0", Commit: "0123456789abcdef0123456789abcdef01234567", ReleaseIndexSHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
+	module := state.New(capabilityStorage{document: document})
+	result, err := module.Load(state.LoadRequest{Baseline: state.ManagedEvidence, SupportedRelease: release, Lineage: &state.LineageProof{Revision: 7, LastCompletedChangeSet: "change-0007", ReleaseIdentity: release}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	capability := module.SoftwareLifecycleCapability(result)
+	_, stateSHA256, _, valid := capability.SoftwareLifecycleManagedCapability()
+	if !valid {
+		t.Fatal("managed capability unavailable")
+	}
+	return capability, stateSHA256
+}
+
 func TestPlanDowngradeDisclosesAndReusesTheManagedTransaction(t *testing.T) {
 	installed, candidate := controlledUpdateReleases()
 	installed.Sequence, installed.StateSchema = 2, 2
@@ -70,9 +180,10 @@ func TestPlanDowngradeDisclosesAndReusesTheManagedTransaction(t *testing.T) {
 	candidate.cell.verified.Sequence = 1
 	candidate.cell.verified.StateSchema = 2
 	candidate.cell.verified.Migrations = nil
+	capability, startingStateSHA256 := controlledManagedCapability(t, true)
 	request := DowngradePlanRequest(UpdatePlanRequest{
-		Installed: installed, InstalledCandidate: installedCandidate, Candidate: candidate, StartingRevision: 7, StartingStateSHA256: strings.Repeat("a", 64),
-		ChangeSet: "downgrade-revision-8", DesiredStateSHA256: strings.Repeat("b", 64), Contributions: controlledUpdateContributions(t, "downgrade-revision-8", strings.Repeat("b", 64)), Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1},
+		Installed: installed, InstalledCandidate: installedCandidate, Candidate: candidate, StartingRevision: 7, StartingStateSHA256: startingStateSHA256,
+		ChangeSet: "downgrade-revision-8", DesiredStateSHA256: strings.Repeat("b", 64), Contributions: controlledUpdateContributions(t, "downgrade-revision-8", strings.Repeat("b", 64)), Capability: capability, Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1},
 	})
 	plan, finding := PlanDowngrade(request)
 	if finding != nil || plan == nil {
@@ -101,14 +212,17 @@ func TestApplyDowngradeHandsOneExactlyBoundChangeSetToSystemChanges(t *testing.T
 	installed.Sequence, installed.StateSchema, installed.Identity.Tag = 2, 2, "v2.0.0"
 	installedCandidate := controlledInstalledCandidate(installed)
 	candidate.cell.verified.Sequence, candidate.cell.verified.StateSchema, candidate.cell.verified.Migrations = 1, 2, nil
-	starting, desired := strings.Repeat("a", 64), strings.Repeat("b", 64)
-	request := DowngradePlanRequest(UpdatePlanRequest{Installed: installed, InstalledCandidate: installedCandidate, Candidate: candidate, StartingRevision: 7, StartingStateSHA256: starting, ChangeSet: "downgrade-revision-8-success", DesiredStateSHA256: desired, Contributions: controlledUpdateContributions(t, "downgrade-revision-8-success", desired), Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}})
+	capability, starting := controlledManagedCapability(t, false)
+	desired := strings.Repeat("b", 64)
+	contributions := controlledUpdateContributions(t, "downgrade-revision-8-success", desired)
+	realityOnly := []UpdateContribution{contributions[0], contributions[2]}
+	request := DowngradePlanRequest(UpdatePlanRequest{Installed: installed, InstalledCandidate: installedCandidate, Candidate: candidate, StartingRevision: 7, StartingStateSHA256: starting, ChangeSet: "downgrade-revision-8-success", DesiredStateSHA256: desired, Contributions: realityOnly, Capability: capability, Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}})
 	plan, finding := PlanDowngrade(request)
 	if finding != nil {
 		t.Fatal(finding)
 	}
 	prepared := controlledUpdatePrepared{changeSet: request.ChangeSet, revision: 8, starting: starting, candidate: desired, planIdentity: plan.Identity(), planSHA256: plan.SHA256(), release: candidate.cell.staged.Identity, from: 2, to: 2}
-	approval := &controlledUpdateApproval{recheck: UpdateRecheck{Installed: installed, InstalledCandidate: installedCandidate, Candidate: candidate, StartingRevision: 7, StartingStateSHA256: starting, Contributions: controlledUpdateContributions(t, request.ChangeSet, desired)}}
+	approval := &controlledUpdateApproval{recheck: UpdateRecheck{Installed: installed, InstalledCandidate: installedCandidate, Candidate: candidate, StartingRevision: 7, StartingStateSHA256: starting, Contributions: realityOnly, Capability: capability}}
 	result := plan.Apply(t.Context(), UpdateApplyRequest{Approval: approval, PreparedState: prepared, SystemChanges: systemchanges.New(nil)})
 	if result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-ADAPTER-UNAVAILABLE" || approval.calls != 1 {
 		t.Fatalf("Apply() = %+v; calls=%d", result, approval.calls)
@@ -121,12 +235,13 @@ func TestApplyDowngradeRejectsStaleFactsAndReuse(t *testing.T) {
 	installedCandidate := controlledInstalledCandidate(installed)
 	candidate.cell.verified.Sequence, candidate.cell.verified.StateSchema, candidate.cell.verified.Migrations = 1, 2, nil
 	desired := strings.Repeat("b", 64)
-	request := DowngradePlanRequest(UpdatePlanRequest{Installed: installed, InstalledCandidate: installedCandidate, Candidate: candidate, StartingRevision: 7, StartingStateSHA256: strings.Repeat("a", 64), ChangeSet: "downgrade-revision-8-stale", DesiredStateSHA256: desired, Contributions: controlledUpdateContributions(t, "downgrade-revision-8-stale", desired), Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}})
+	capability, starting := controlledManagedCapability(t, true)
+	request := DowngradePlanRequest(UpdatePlanRequest{Installed: installed, InstalledCandidate: installedCandidate, Candidate: candidate, StartingRevision: 7, StartingStateSHA256: starting, ChangeSet: "downgrade-revision-8-stale", DesiredStateSHA256: desired, Contributions: controlledUpdateContributions(t, "downgrade-revision-8-stale", desired), Capability: capability, Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}})
 	plan, finding := PlanDowngrade(request)
 	if finding != nil {
 		t.Fatal(finding)
 	}
-	approval := &controlledUpdateApproval{recheck: UpdateRecheck{Installed: installed, InstalledCandidate: installedCandidate, Candidate: candidate, StartingRevision: 8, StartingStateSHA256: request.StartingStateSHA256, Contributions: request.Contributions}}
+	approval := &controlledUpdateApproval{recheck: UpdateRecheck{Installed: installed, InstalledCandidate: installedCandidate, Candidate: candidate, StartingRevision: 8, StartingStateSHA256: request.StartingStateSHA256, Contributions: request.Contributions, Capability: capability}}
 	result := plan.Apply(t.Context(), UpdateApplyRequest{Approval: approval})
 	if result.Finding == nil || result.Finding.Code != "SOFTWARE-LIFECYCLE-UPDATE-STALE" || !result.NothingChanged {
 		t.Fatalf("stale Apply() = %+v", result)
@@ -169,7 +284,8 @@ func TestApplyUpdateRejectsAChangedOrReusedReviewedPlan(t *testing.T) {
 	installed, candidate := controlledUpdateReleases()
 	desired := strings.Repeat("b", 64)
 	installedCandidate := controlledInstalledCandidate(installed)
-	request := UpdatePlanRequest{Installed: installed, InstalledCandidate: installedCandidate, Candidate: candidate, StartingRevision: 7, StartingStateSHA256: strings.Repeat("a", 64), ChangeSet: "update-revision-8", DesiredStateSHA256: desired, Contributions: controlledUpdateContributions(t, "update-revision-8", desired), Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}}
+	capability, starting := controlledManagedCapability(t, true)
+	request := UpdatePlanRequest{Installed: installed, InstalledCandidate: installedCandidate, Candidate: candidate, StartingRevision: 7, StartingStateSHA256: starting, ChangeSet: "update-revision-8", DesiredStateSHA256: desired, Contributions: controlledUpdateContributions(t, "update-revision-8", desired), Capability: capability, Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}}
 	plan, finding := PlanUpdate(request)
 	if finding != nil {
 		t.Fatal(finding)
@@ -178,7 +294,7 @@ func TestApplyUpdateRejectsAChangedOrReusedReviewedPlan(t *testing.T) {
 	proof := changed[0].SoftwareLifecycleUpdateContribution()
 	proof.StableSHA256 = strings.Repeat("e", 64)
 	changed[0] = controlledInstallContribution{proof}
-	approval := &controlledUpdateApproval{recheck: UpdateRecheck{Installed: installed, InstalledCandidate: installedCandidate, Candidate: candidate, StartingRevision: 7, StartingStateSHA256: request.StartingStateSHA256, Contributions: changed}}
+	approval := &controlledUpdateApproval{recheck: UpdateRecheck{Installed: installed, InstalledCandidate: installedCandidate, Candidate: candidate, StartingRevision: 7, StartingStateSHA256: request.StartingStateSHA256, Contributions: changed, Capability: capability}}
 	result := plan.Apply(t.Context(), UpdateApplyRequest{Approval: approval})
 	if approval.calls != 1 || result.Finding == nil || result.Finding.Code != "SOFTWARE-LIFECYCLE-UPDATE-STALE" || !result.NothingChanged {
 		t.Fatalf("Apply() = %+v; calls=%d", result, approval.calls)
@@ -190,15 +306,16 @@ func TestApplyUpdateRejectsAChangedOrReusedReviewedPlan(t *testing.T) {
 
 func TestApplyUpdateHandsOneExactlyBoundChangeSetToSystemChanges(t *testing.T) {
 	installed, candidate := controlledUpdateReleases()
-	starting, desired := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	capability, starting := controlledManagedCapability(t, true)
+	desired := strings.Repeat("b", 64)
 	installedCandidate := controlledInstalledCandidate(installed)
-	request := UpdatePlanRequest{Installed: installed, InstalledCandidate: installedCandidate, Candidate: candidate, StartingRevision: 7, StartingStateSHA256: starting, ChangeSet: "update-revision-8-success", DesiredStateSHA256: desired, Contributions: controlledUpdateContributions(t, "update-revision-8-success", desired), Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}}
+	request := UpdatePlanRequest{Installed: installed, InstalledCandidate: installedCandidate, Candidate: candidate, StartingRevision: 7, StartingStateSHA256: starting, ChangeSet: "update-revision-8-success", DesiredStateSHA256: desired, Contributions: controlledUpdateContributions(t, "update-revision-8-success", desired), Capability: capability, Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}}
 	plan, finding := PlanUpdate(request)
 	if finding != nil {
 		t.Fatal(finding)
 	}
 	prepared := controlledUpdatePrepared{changeSet: request.ChangeSet, revision: 8, starting: starting, candidate: desired, planIdentity: plan.Identity(), planSHA256: plan.SHA256(), release: candidate.cell.staged.Identity, from: 1, to: 2, steps: 1}
-	approval := &controlledUpdateApproval{recheck: UpdateRecheck{Installed: installed, InstalledCandidate: installedCandidate, Candidate: candidate, StartingRevision: 7, StartingStateSHA256: starting, Contributions: controlledUpdateContributions(t, request.ChangeSet, desired)}}
+	approval := &controlledUpdateApproval{recheck: UpdateRecheck{Installed: installed, InstalledCandidate: installedCandidate, Candidate: candidate, StartingRevision: 7, StartingStateSHA256: starting, Contributions: controlledUpdateContributions(t, request.ChangeSet, desired), Capability: capability}}
 	result := plan.Apply(t.Context(), UpdateApplyRequest{Approval: approval, PreparedState: prepared, SystemChanges: systemchanges.New(nil)})
 	if result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-ADAPTER-UNAVAILABLE" || approval.calls != 1 {
 		t.Fatalf("Apply() = %+v; calls=%d", result, approval.calls)

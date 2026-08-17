@@ -25,6 +25,7 @@ type staticAPI struct {
 	err         error
 	errors      []error
 	calls       int
+	deleted     cloudflaretunnel.DeleteManagementTokenRequest
 }
 
 func (api *staticAPI) Observe(context.Context, cloudflaretunnel.ObservationRequest) (cloudflaretunnel.Observation, error) {
@@ -35,6 +36,12 @@ func (api *staticAPI) Observe(context.Context, cloudflaretunnel.ObservationReque
 		return api.observation, err
 	}
 	return api.observation, api.err
+}
+
+func (api *staticAPI) DeleteManagementToken(_ context.Context, request cloudflaretunnel.DeleteManagementTokenRequest) error {
+	api.deleted = request
+	api.errors = append(api.errors, cloudflaretunnel.APIError{Kind: cloudflaretunnel.APIUnauthorized})
+	return nil
 }
 
 type controlledClock struct {
@@ -49,24 +56,44 @@ func (clock *controlledClock) Sleep(_ context.Context, duration time.Duration) e
 	return nil
 }
 
-func TestRevocationProofAcceptsOnlyExplicitUnauthorized(t *testing.T) {
-	for _, test := range []struct {
-		name    string
-		err     error
-		revoked bool
-		wantErr bool
-	}{
-		{"unauthorized", cloudflaretunnel.APIError{Kind: cloudflaretunnel.APIUnauthorized}, true, false},
-		{"forbidden", cloudflaretunnel.APIError{Kind: cloudflaretunnel.APIForbidden}, false, true},
-		{"temporary", cloudflaretunnel.APIError{Kind: cloudflaretunnel.APITemporary}, false, true},
-		{"still active", nil, false, false},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			got, err := cloudflaretunnel.New(&staticAPI{err: test.err}, &controlledClock{}).VerifyManagementTokenRevoked(context.Background(), cloudflaretunnel.ObservationRequest{})
-			if got != test.revoked || (err != nil) != test.wantErr {
-				t.Fatalf("VerifyManagementTokenRevoked() = (%t, %v)", got, err)
-			}
-		})
+func TestManagementTokenDeletionUsesObservedExactIDAndProvesUnauthorized(t *testing.T) {
+	managementToken, err := cloudflaretunnel.NewManagementToken(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := &staticAPI{observation: completeObservation()}
+	request := cloudflaretunnel.ObservationRequest{AccountID: accountID, ZoneID: zoneID, ZoneName: "example.com", Token: managementToken}
+	module := cloudflaretunnel.New(api, &controlledClock{})
+	observedID, err := module.ObserveManagementTokenID(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := module.DeleteAndVerifyManagementToken(t.Context(), request, observedID); err != nil {
+		t.Fatal(err)
+	}
+	if api.deleted.AccountID != accountID || api.deleted.ID != tokenID || api.calls != 3 {
+		t.Fatalf("automatic token deletion = %+v, observations=%d", api.deleted, api.calls)
+	}
+}
+
+func TestManagementTokenDeletionRecoversAfterDeleteBeforeCheckpoint(t *testing.T) {
+	managementToken, err := cloudflaretunnel.NewManagementToken(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := &staticAPI{observation: completeObservation()}
+	request := cloudflaretunnel.ObservationRequest{AccountID: accountID, ZoneID: zoneID, ZoneName: "example.com", Token: managementToken}
+	module := cloudflaretunnel.New(api, &controlledClock{})
+	observedID, err := module.ObserveManagementTokenID(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api.errors = []error{cloudflaretunnel.APIError{Kind: cloudflaretunnel.APIUnauthorized}}
+	if err := module.DeleteAndVerifyManagementToken(t.Context(), request, observedID); err != nil {
+		t.Fatal(err)
+	}
+	if api.deleted.ID != "" {
+		t.Fatalf("recovery repeated deletion for %q", api.deleted.ID)
 	}
 }
 

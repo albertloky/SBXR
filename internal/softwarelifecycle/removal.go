@@ -24,9 +24,9 @@ type ConfirmationGuidance struct {
 
 func CompleteRemovalConfirmationGuidance() ConfirmationGuidance {
 	return ConfirmationGuidance{Title: "COMPLETE REMOVAL HELP", Lines: []string{
-		"COMPLETE REMOVAL authorizes deletion only of the exact owned local and Cloudflare resources in the reviewed Plan.",
-		"Owned deletion includes State, access values, secrets, certificates, transaction and release material, runtime, firewall, DNS, routes, and Tunnel.",
-		"Before Irreversible removal started, Back or Cancel restores the proven start; after it, removal is forward-only.",
+		"COMPLETE REMOVAL authorizes deletion only of the exact owned local resources and any proved Cloudflare resources in the reviewed Plan.",
+		"Owned deletion includes SBXR local resources. Cloudflare DNS, routes, Tunnel, and automatic management-token deletion appear only after Cloudflare Profile Setup.",
+		"Before Irreversible removal started, Back restores the start. After it, removal is forward-only.",
 		"Certificate Transparency, DNS caches, copied clients, and physical VPS media can remain outside SBXR authority.",
 		"Help does not type COMPLETE REMOVAL, select Permanently remove SBXR, approve the reviewed Plan, or start Apply.",
 	}}
@@ -74,6 +74,7 @@ type CompleteRemovalPlanRequest struct {
 	Candidate             CompleteRemovalCandidate
 	Review                CompleteRemovalReview
 	ChangeSet             string
+	Capability            ManagedCapability
 	PublicAuthorities     []systemchanges.PublicRemovalAuthority
 	CloudflareAuthorities []systemchanges.CloudflareRemovalAuthority
 	Disk                  systemchanges.DiskRequirement
@@ -109,12 +110,14 @@ type CompleteRemovalPlan struct {
 	proof                                                    removalProof
 	disk                                                     systemchanges.DiskRequirement
 	summary                                                  CompleteRemovalSummary
+	cloudflareProfilesSetUp                                  bool
 	used                                                     atomic.Bool
 }
 
 type CompleteRemovalRecheck struct {
 	Candidate             CompleteRemovalCandidate
 	Review                CompleteRemovalReview
+	Capability            ManagedCapability
 	PublicAuthorities     []systemchanges.PublicRemovalAuthority
 	CloudflareAuthorities []systemchanges.CloudflareRemovalAuthority
 	TypedConfirmation     systemchanges.TypedRemovalConfirmation
@@ -144,8 +147,12 @@ func PlanCompleteRemoval(request CompleteRemovalPlanRequest) (*CompleteRemovalPl
 	if !valid || !trustedRemovalValue(request.Review, "github.com/albertloky/SBXR/internal/ownerconsole", "RemovalReview") || !reviewValid || !installIdentityPattern.MatchString(reviewID) {
 		return refuse()
 	}
-	proof, valid := removalPlanProof(reviewID, request.PublicAuthorities, request.CloudflareAuthorities)
-	if !valid {
+	cloudflareProfilesSetUp, capabilityValid := consumeManagedCapability(request.Capability, revision, stateSHA256)
+	if status == systemchanges.RecoveryRequired && request.Capability == nil {
+		cloudflareProfilesSetUp, capabilityValid = true, true
+	}
+	proof, valid := removalPlanProof(reviewID, request.PublicAuthorities, request.CloudflareAuthorities, cloudflareProfilesSetUp)
+	if !capabilityValid || !valid {
 		return refuse()
 	}
 	bound := struct {
@@ -153,8 +160,9 @@ func PlanCompleteRemoval(request CompleteRemovalPlanRequest) (*CompleteRemovalPl
 		Revision                               uint64
 		StateSHA256, VolatileSHA256, ChangeSet string
 		Proof                                  removalProof
+		CloudflareProfilesSetUp                bool
 		Disk                                   systemchanges.DiskRequirement
-	}{status, revision, stateSHA256, volatileSHA256, request.ChangeSet, proof, request.Disk}
+	}{status, revision, stateSHA256, volatileSHA256, request.ChangeSet, proof, cloudflareProfilesSetUp, request.Disk}
 	encoded, err := json.Marshal(bound)
 	if err != nil {
 		return refuse()
@@ -167,15 +175,18 @@ func PlanCompleteRemoval(request CompleteRemovalPlanRequest) (*CompleteRemovalPl
 	}
 	summary := CompleteRemovalSummary{
 		StartingStatus: InstallationStatus(status), StateRevision: revision,
-		OwnedLocalCategories:          []string{"Desired State", "Client Access Values", "Infrastructure Secrets", "certificates and ACME material", "transaction journal", "Rollback Snapshot", "installed release", "verified update candidate", "services and timers", "service identities", "prepared artifacts", "Subscription Publication artifacts", "SBXR-owned firewall table", "public listeners", "public services", "removal journal", "recovery runner"},
-		CloudflareCategories:          []string{"Tunnel routes before the checkpoint", "DNS records and Tunnel after the checkpoint"},
-		IrreversibleRemnants:          []string{"Certificate Transparency entries cannot be erased", "DNS caches cannot be erased"},
-		CancellationBoundary:          "Back or cancel restores the exact proven starting status until Irreversible removal started is durable; cancellation is impossible afterward",
-		TokenRevocationResponsibility: "Albert revokes the scoped Cloudflare token only after owned remote cleanup is verified; SBXR verifies revocation before deleting the local copy",
-		Rollback:                      "restore every changed exposure and Tunnel route from the one transaction Rollback Snapshot before the checkpoint to " + rollbackStatus,
-		FinalProof:                    "Not installed with no retained SBXR recovery material", Disk: request.Disk, SudoAfterApproval: true, OneUse: true,
+		OwnedLocalCategories: []string{"Desired State", "Client Access Values", "Infrastructure Secrets", "certificates and ACME material", "transaction journal", "Rollback Snapshot", "installed release", "verified update candidate", "services and timers", "service identities", "prepared artifacts", "Subscription Publication artifacts", "SBXR-owned firewall table", "public listeners", "public services", "removal journal", "recovery runner"},
+		IrreversibleRemnants: []string{"Certificate Transparency entries cannot be erased", "DNS caches cannot be erased"},
+		CancellationBoundary: "Back or cancel restores the exact proven starting status until Irreversible removal started is durable; cancellation is impossible afterward",
+		Rollback:             "restore every changed public exposure from the one transaction Rollback Snapshot before the checkpoint to " + rollbackStatus,
+		FinalProof:           "Not installed with no retained SBXR recovery material", Disk: request.Disk, SudoAfterApproval: true, OneUse: true,
 	}
-	return &CompleteRemovalPlan{identity: request.ChangeSet + "-plan-" + checksum[:12], sha256: checksum, changeSet: request.ChangeSet, stateSHA256: stateSHA256, volatileSHA256: volatileSHA256, revision: revision, status: status, proof: proof, disk: request.Disk, summary: summary}, nil
+	if cloudflareProfilesSetUp {
+		summary.CloudflareCategories = []string{"Tunnel routes before the checkpoint", "DNS records and Tunnel after the checkpoint"}
+		summary.TokenRevocationResponsibility = "After owned remote cleanup is verified, SBXR deletes the exact observed management-token ID and proves the token unauthorized before deleting the local copy"
+		summary.Rollback = "restore every changed public exposure and Tunnel route from the one transaction Rollback Snapshot before the checkpoint to " + rollbackStatus
+	}
+	return &CompleteRemovalPlan{identity: request.ChangeSet + "-plan-" + checksum[:12], sha256: checksum, changeSet: request.ChangeSet, stateSHA256: stateSHA256, volatileSHA256: volatileSHA256, revision: revision, status: status, proof: proof, disk: request.Disk, summary: summary, cloudflareProfilesSetUp: cloudflareProfilesSetUp}, nil
 }
 
 func consumeCompleteRemovalCandidate(candidate CompleteRemovalCandidate) (systemchanges.InstallationStatus, uint64, string, string, bool) {
@@ -186,7 +197,7 @@ func consumeCompleteRemovalCandidate(candidate CompleteRemovalCandidate) (system
 	return status, revision, stateSHA256, volatileSHA256, valid && status == candidate.cell.status && revision == candidate.cell.revision && stateSHA256 == candidate.cell.sha256 && volatileSHA256 == candidate.cell.volatileSHA256
 }
 
-func removalPlanProof(reviewID string, public []systemchanges.PublicRemovalAuthority, cloudflare []systemchanges.CloudflareRemovalAuthority) (removalProof, bool) {
+func removalPlanProof(reviewID string, public []systemchanges.PublicRemovalAuthority, cloudflare []systemchanges.CloudflareRemovalAuthority, cloudflareProfilesSetUp bool) (removalProof, bool) {
 	proof := removalProof{ReviewID: reviewID}
 	publicInventory, cloudflareInventory := map[string][]string(nil), map[string][]string(nil)
 	for _, authority := range public {
@@ -200,6 +211,9 @@ func removalPlanProof(reviewID string, public []systemchanges.PublicRemovalAutho
 		publicInventory = inventory
 		proof.Public = append(proof.Public, removalResourceProof{Resource: resource, ImmutableID: immutableID, InventorySHA256: inventorySHA256(inventory)})
 	}
+	if !cloudflareProfilesSetUp && len(cloudflare) != 0 {
+		return removalProof{}, false
+	}
 	for _, authority := range cloudflare {
 		if !trustedRemovalValue(authority, "github.com/albertloky/SBXR/internal/cloudflaretunnel", "RemovalAuthority") {
 			return removalProof{}, false
@@ -211,7 +225,7 @@ func removalPlanProof(reviewID string, public []systemchanges.PublicRemovalAutho
 		cloudflareInventory = value.Inventory
 		proof.Cloudflare = append(proof.Cloudflare, removalResourceProof{Resource: string(value.Resource), ImmutableID: value.ImmutableID, InventorySHA256: inventorySHA256(value.Inventory), TokenActive: value.TokenActive, TokenAvailable: value.TokenAvailable})
 	}
-	if !proofCoversInventory(proof.Public, publicInventory, []string{"firewall-table", "public-listener", "public-service"}) || !proofCoversInventory(proof.Cloudflare, cloudflareInventory, []string{"cloudflare-dns-record", "cloudflare-route", "cloudflare-tunnel"}) {
+	if !proofCoversInventory(proof.Public, publicInventory, []string{"firewall-table", "public-listener", "public-service"}) || cloudflareProfilesSetUp && !proofCoversInventory(proof.Cloudflare, cloudflareInventory, []string{"cloudflare-dns-record", "cloudflare-route", "cloudflare-tunnel"}) {
 		return removalProof{}, false
 	}
 	sort.Slice(proof.Public, func(i, j int) bool {
@@ -336,8 +350,12 @@ func (plan *CompleteRemovalPlan) Apply(ctx context.Context, request CompleteRemo
 	}
 	status, revision, stateSHA256, volatileSHA256, valid := consumeCompleteRemovalCandidate(rechecked.Candidate)
 	reviewID, reviewValid := rechecked.Review.SoftwareLifecycleCompleteRemovalReview()
-	proof, proofValid := removalPlanProof(reviewID, rechecked.PublicAuthorities, rechecked.CloudflareAuthorities)
-	if !valid || status != plan.status || revision != plan.revision || stateSHA256 != plan.stateSHA256 || volatileSHA256 != plan.volatileSHA256 || !trustedRemovalValue(rechecked.Review, "github.com/albertloky/SBXR/internal/ownerconsole", "RemovalReview") || !reviewValid || !proofValid || !reflect.DeepEqual(proof, plan.proof) {
+	cloudflareProfilesSetUp, capabilityValid := consumeManagedCapability(rechecked.Capability, revision, stateSHA256)
+	if status == systemchanges.RecoveryRequired && rechecked.Capability == nil {
+		cloudflareProfilesSetUp, capabilityValid = true, true
+	}
+	proof, proofValid := removalPlanProof(reviewID, rechecked.PublicAuthorities, rechecked.CloudflareAuthorities, cloudflareProfilesSetUp)
+	if !valid || !capabilityValid || cloudflareProfilesSetUp != plan.cloudflareProfilesSetUp || status != plan.status || revision != plan.revision || stateSHA256 != plan.stateSHA256 || volatileSHA256 != plan.volatileSHA256 || !trustedRemovalValue(rechecked.Review, "github.com/albertloky/SBXR/internal/ownerconsole", "RemovalReview") || !reviewValid || !proofValid || !reflect.DeepEqual(proof, plan.proof) {
 		return completeRemovalRefused("SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-STALE", "State, ownership, token availability, or reviewed removal categories changed after approval")
 	}
 	prepared, ok := request.PreparedState.(interface {
@@ -356,8 +374,12 @@ func (plan *CompleteRemovalPlan) Apply(ctx context.Context, request CompleteRemo
 	if stepErr != nil {
 		return completeRemovalRefused("SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-AUTHORIZATION", "The exact typed confirmation, permanent selection, or owning resource proof was refused")
 	}
+	absenceCode := "SOFTWARE-LIFECYCLE-REMOVAL-LOCAL-ABSENT"
+	if plan.cloudflareProfilesSetUp {
+		absenceCode = "SOFTWARE-LIFECYCLE-REMOVAL-EXTERNAL-ABSENT"
+	}
 	checks := []systemchanges.Check{
-		{Owner: systemchanges.SoftwareModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "SOFTWARE-LIFECYCLE-REMOVAL-EXTERNAL-ABSENT"},
+		{Owner: systemchanges.SoftwareModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PrePublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: absenceCode},
 		{Owner: systemchanges.SoftwareModule, Scope: systemchanges.ServerSideCheck, Phase: systemchanges.PostPublication, Classification: systemchanges.Required, Status: systemchanges.Healthy, Code: "SOFTWARE-LIFECYCLE-REMOVAL-NOT-INSTALLED"},
 	}
 	change, err := systemchanges.NewChangeSet(systemchanges.ChangeSetSpec{

@@ -451,6 +451,19 @@ func (api *httpAPI) DeleteTunnel(ctx context.Context, request DeleteTunnelReques
 	return err
 }
 
+type DeleteManagementTokenRequest struct {
+	AccountID string
+	ID        string
+	Token     ManagementToken
+}
+
+func (api *httpAPI) DeleteManagementToken(ctx context.Context, request DeleteManagementTokenRequest) error {
+	if !immutableID.MatchString(request.AccountID) || !immutableID.MatchString(request.ID) || request.Token.value == "" {
+		return APIError{Kind: APIMalformed}
+	}
+	return api.request(ctx, http.MethodDelete, "/accounts/"+request.AccountID+"/tokens/"+request.ID, nil, request.Token, nil, nil)
+}
+
 func (api *httpAPI) GetTunnel(ctx context.Context, request GetTunnelRequest) (OwnedResource, error) {
 	if !immutableID.MatchString(request.AccountID) || !tunnelUUID.MatchString(request.ID) || request.Token.value == "" {
 		return OwnedResource{}, APIError{Kind: APIMalformed}

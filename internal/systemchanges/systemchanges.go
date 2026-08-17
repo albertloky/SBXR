@@ -1807,7 +1807,11 @@ func validRemovalSteps(steps []Step) bool {
 	}
 	actualPublic, publicValid := removalInventoryDigest(publicInventory, publicRemovalCategories)
 	actualCloudflare, cloudflareValid := removalInventoryDigest(cloudflareInventory, cloudflareRemovalCategories)
-	return publicValid && cloudflareValid && publicDigest != "" && cloudflareDigest != "" && actualPublic == publicDigest && actualCloudflare == cloudflareDigest
+	cloudflareAbsent := cloudflareDigest == ""
+	for _, identities := range cloudflareInventory {
+		cloudflareAbsent = cloudflareAbsent && len(identities) == 0
+	}
+	return publicValid && cloudflareValid && publicDigest != "" && actualPublic == publicDigest && (cloudflareAbsent || cloudflareDigest != "" && actualCloudflare == cloudflareDigest)
 }
 
 func networkOperation(operation OperationKind) bool {

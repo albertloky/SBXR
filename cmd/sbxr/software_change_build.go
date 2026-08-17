@@ -46,6 +46,7 @@ type builtSoftwareChange struct {
 	profilePlan              *connectionprofiles.Plan
 	publication              *subscriptionpublication.Plan
 	module                   state.Interface
+	capability               *state.SoftwareLifecycleCapability
 }
 
 type softwareChangeProfileHost struct {
@@ -132,6 +133,7 @@ func verifiedSoftwareChangeCandidates(ctx context.Context, release state.Release
 }
 
 func buildSoftwareChange(ctx context.Context, module state.Interface, loaded state.Result, snapshot state.Snapshot, profileSecrets state.ConnectionProfileSecretReader, publicationSecrets state.ClientAccessReader, cloudflareSecrets state.InfrastructureSecretReader, action softwareChangeAction, changeSet string, disk systemchanges.DiskRequirement, installed softwarelifecycle.VerifiedRelease, installedCandidate softwarelifecycle.InstallCandidate, candidate softwarelifecycle.VerifiedRelease, next softwarelifecycle.InstallCandidate) (*builtSoftwareChange, error) {
+	capability := module.SoftwareLifecycleCapability(loaded)
 	desired := snapshot.DesiredState
 	desiredSHA, err := state.CandidateSHA256(desired)
 	if err != nil {
@@ -193,7 +195,7 @@ func buildSoftwareChange(ctx context.Context, module state.Interface, loaded sta
 		return nil, errors.New("Subscription Publication release update refused")
 	}
 	contributions := []softwarelifecycle.UpdateContribution{profiles.Plan, cloudflareResult.Plan, publication.Plan}
-	request := softwarelifecycle.UpdatePlanRequest{Installed: installed, InstalledCandidate: installedCandidate, Candidate: next, StartingRevision: snapshot.Revision, StartingStateSHA256: desiredSHA, ChangeSet: changeSet, DesiredStateSHA256: desiredSHA, Contributions: contributions, Disk: disk}
+	request := softwarelifecycle.UpdatePlanRequest{Installed: installed, InstalledCandidate: installedCandidate, Candidate: next, StartingRevision: snapshot.Revision, StartingStateSHA256: desiredSHA, ChangeSet: changeSet, DesiredStateSHA256: desiredSHA, Contributions: contributions, Capability: capability, Disk: disk}
 	var plan *softwarelifecycle.UpdatePlan
 	if action == softwareDowngrade {
 		plan, _ = softwarelifecycle.PlanDowngrade(softwarelifecycle.DowngradePlanRequest(request))
@@ -227,7 +229,7 @@ func buildSoftwareChange(ctx context.Context, module state.Interface, loaded sta
 	for _, contribution := range contributions {
 		total += len(contribution.SoftwareLifecycleUpdateContribution().Steps)
 	}
-	return &builtSoftwareChange{action: action, changeSet: changeSet, plan: plan, prepared: prepared, installed: installed, candidate: candidate, installedCandidate: installedCandidate, next: next, contributions: contributions, starting: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: snapshot.Revision, SHA256: desiredSHA}, desired: desired, disk: disk, totalSteps: total, cloudflare: cloudflareExecutor, profilePlan: profiles.Plan, publication: publication.Plan, module: module}, nil
+	return &builtSoftwareChange{action: action, changeSet: changeSet, plan: plan, prepared: prepared, installed: installed, candidate: candidate, installedCandidate: installedCandidate, next: next, contributions: contributions, starting: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: snapshot.Revision, SHA256: desiredSHA}, desired: desired, disk: disk, totalSteps: total, cloudflare: cloudflareExecutor, profilePlan: profiles.Plan, publication: publication.Plan, module: module, capability: capability}, nil
 }
 
 type softwareChangeWiring struct {

@@ -187,6 +187,43 @@ func (i Interface) WithManagedCloudflareSecrets(result Result, use func(Snapshot
 	return use(*result.Snapshot, &infrastructureSecretReader{lease: lease})
 }
 
+// SoftwareLifecycleCapability is State's secret-free proof of the current
+// Managed Connection Profile capability state.
+type SoftwareLifecycleCapability struct {
+	revision                uint64
+	stateSHA256             string
+	cloudflareProfilesSetUp bool
+}
+
+func (*SoftwareLifecycleCapability) String() string {
+	return "Software Lifecycle capability: protected"
+}
+func (*SoftwareLifecycleCapability) GoString() string {
+	return "Software Lifecycle capability: protected"
+}
+func (*SoftwareLifecycleCapability) MarshalJSON() ([]byte, error) {
+	return nil, errProtectedValueRendering
+}
+
+func (capability *SoftwareLifecycleCapability) SoftwareLifecycleManagedCapability() (revision uint64, stateSHA256 string, cloudflareProfilesSetUp bool, valid bool) {
+	if capability == nil || capability.revision == 0 || !validSHA256(capability.stateSHA256) {
+		return 0, "", false, false
+	}
+	return capability.revision, capability.stateSHA256, capability.cloudflareProfilesSetUp, true
+}
+
+func (i Interface) SoftwareLifecycleCapability(result Result) *SoftwareLifecycleCapability {
+	if i.implementation == nil || result.loaded == nil || result.loaded.owner != i.implementation || result.loaded.status != Managed || result.Status != Managed || result.Snapshot == nil || result.Snapshot.Revision != result.loaded.revision {
+		return nil
+	}
+	document, problem := decode(result.loaded.bytes)
+	realityOnly, lifecycleFinding := validateProfileLifecycles(document.desiredState.ConnectionProfiles, document.SchemaVersion == 1)
+	if problem != nil || lifecycleFinding != nil || document.Revision != result.loaded.revision || document.Checksum != result.loaded.payloadChecksum {
+		return nil
+	}
+	return &SoftwareLifecycleCapability{revision: document.Revision, stateSHA256: document.Checksum, cloudflareProfilesSetUp: !realityOnly}
+}
+
 // ManagementTokenInventory is State's secret-free proof of the current
 // behaviors that depend on Cloudflare management authority.
 type ManagementTokenInventory struct {

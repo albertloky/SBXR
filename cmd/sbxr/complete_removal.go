@@ -32,6 +32,8 @@ type builtCompleteRemoval struct {
 	desired                           state.DesiredState
 	token                             cloudflaretunnel.ManagementToken
 	module                            state.Interface
+	capability                        *state.SoftwareLifecycleCapability
+	cloudflareProfilesSetUp           bool
 	starting                          systemchanges.Observation
 	disk                              systemchanges.DiskRequirement
 	typedConfirmed, permanentSelected bool
@@ -86,14 +88,24 @@ func buildCompleteRemoval(ctx context.Context, changeSet string, prepareState bo
 		return nil, errors.New("current proven State is unavailable")
 	}
 	built := &builtCompleteRemoval{changeSet: changeSet, module: module, desired: loaded.Snapshot.DesiredState, starting: observed, disk: completeRemovalDisk}
-	err = module.WithManagedCloudflareSecrets(loaded, func(snapshot state.Snapshot, secrets state.InfrastructureSecretReader) error {
-		token, tokenErr := cloudflaretunnel.NewManagementToken(secrets.ReadInfrastructureSecret(snapshot.DesiredState.Cloudflare.ManagementToken))
-		if tokenErr != nil {
-			return tokenErr
-		}
-		built.token = token
-		return built.planRemoval(ctx, changeSet)
-	})
+	built.capability = module.SoftwareLifecycleCapability(loaded)
+	_, _, cloudflareProfilesSetUp, valid := built.capability.SoftwareLifecycleManagedCapability()
+	built.cloudflareProfilesSetUp = cloudflareProfilesSetUp
+	if !valid {
+		return nil, errors.New("current Managed capability is unavailable")
+	}
+	if built.cloudflareProfilesSetUp {
+		err = module.WithManagedCloudflareSecrets(loaded, func(snapshot state.Snapshot, secrets state.InfrastructureSecretReader) error {
+			token, tokenErr := cloudflaretunnel.NewManagementToken(secrets.ReadInfrastructureSecret(snapshot.DesiredState.Cloudflare.ManagementToken))
+			if tokenErr != nil {
+				return tokenErr
+			}
+			built.token = token
+			return built.planRemoval(ctx, changeSet)
+		})
+	} else {
+		err = built.planRemoval(ctx, changeSet)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -115,9 +127,11 @@ func (built *builtCompleteRemoval) planRemoval(ctx context.Context, changeSet st
 	if body, commandErr := host.run(ctx, nil, "nft", "-j", "list", "table", "inet", "sbxr"); commandErr != nil || len(body) == 0 {
 		return errors.New("owned firewall table is unavailable")
 	}
-	provider, err := host.observeTunnel(ctx)
-	if err != nil || provider.TunnelID != built.desired.Cloudflare.TunnelID || !reflect.DeepEqual(provider.Routes, host.managedRoutes()) || !managedDNSMatches(provider.DNSRecords, managedTunnelExpected(built.desired).DNSRecords) {
-		return errors.New("owned Cloudflare inventory differs from Desired State")
+	if built.cloudflareProfilesSetUp {
+		provider, err := host.observeTunnel(ctx)
+		if err != nil || provider.TunnelID != built.desired.Cloudflare.TunnelID || !reflect.DeepEqual(provider.Routes, host.managedRoutes()) || !managedDNSMatches(provider.DNSRecords, managedTunnelExpected(built.desired).DNSRecords) {
+			return errors.New("owned Cloudflare inventory differs from Desired State")
+		}
 	}
 	observation := built.starting
 	changes := systemchanges.New(systemubuntu.NewAt("/", func() (systemchanges.Observation, error) { return observation, nil }, nil))
@@ -141,25 +155,27 @@ func (built *builtCompleteRemoval) planRemoval(ctx context.Context, changeSet st
 			built.public = append(built.public, authority)
 		}
 	}
-	dns := []string{built.desired.Cloudflare.XHTTPDNSRecordID, built.desired.Cloudflare.WebSocketDNSRecordID}
-	if built.desired.Cloudflare.DirectIPv4RecordID != "" {
-		dns = append(dns, built.desired.Cloudflare.DirectIPv4RecordID)
-	}
-	if built.desired.Cloudflare.DirectIPv6RecordID != "" {
-		dns = append(dns, built.desired.Cloudflare.DirectIPv6RecordID)
-	}
-	cloudflareInventory := map[string][]string{"cloudflare-dns-record": dns, "cloudflare-route": {built.desired.Cloudflare.TunnelID + "-routes"}, "cloudflare-tunnel": {built.desired.Cloudflare.TunnelID}}
-	cloudflareModule := cloudflaretunnel.NewRemoval(completeCloudflareRemovalObserver{cloudflaretunnel.RemovalObservation{OwnedBySBXR: true, TokenActive: true, TokenAvailableLocally: true, Inventory: cloudflareInventory}})
-	for resource, identities := range cloudflareInventory {
-		for _, identity := range identities {
-			authority, proofErr := cloudflareModule.ProveRemovalResource(changeSet, resource, identity)
-			if proofErr != nil {
-				return proofErr
+	if built.cloudflareProfilesSetUp {
+		dns := []string{built.desired.Cloudflare.XHTTPDNSRecordID, built.desired.Cloudflare.WebSocketDNSRecordID}
+		if built.desired.Cloudflare.DirectIPv4RecordID != "" {
+			dns = append(dns, built.desired.Cloudflare.DirectIPv4RecordID)
+		}
+		if built.desired.Cloudflare.DirectIPv6RecordID != "" {
+			dns = append(dns, built.desired.Cloudflare.DirectIPv6RecordID)
+		}
+		cloudflareInventory := map[string][]string{"cloudflare-dns-record": dns, "cloudflare-route": {built.desired.Cloudflare.TunnelID + "-routes"}, "cloudflare-tunnel": {built.desired.Cloudflare.TunnelID}}
+		cloudflareModule := cloudflaretunnel.NewRemoval(completeCloudflareRemovalObserver{cloudflaretunnel.RemovalObservation{OwnedBySBXR: true, TokenActive: true, TokenAvailableLocally: true, Inventory: cloudflareInventory}})
+		for resource, identities := range cloudflareInventory {
+			for _, identity := range identities {
+				authority, proofErr := cloudflareModule.ProveRemovalResource(changeSet, resource, identity)
+				if proofErr != nil {
+					return proofErr
+				}
+				built.cloudflare = append(built.cloudflare, authority)
 			}
-			built.cloudflare = append(built.cloudflare, authority)
 		}
 	}
-	plan, finding := softwarelifecycle.PlanCompleteRemoval(softwarelifecycle.CompleteRemovalPlanRequest{Candidate: view.Candidate(), Review: review, ChangeSet: changeSet, PublicAuthorities: built.public, CloudflareAuthorities: built.cloudflare, Disk: built.disk})
+	plan, finding := softwarelifecycle.PlanCompleteRemoval(softwarelifecycle.CompleteRemovalPlanRequest{Candidate: view.Candidate(), Review: review, ChangeSet: changeSet, Capability: built.capability, PublicAuthorities: built.public, CloudflareAuthorities: built.cloudflare, Disk: built.disk})
 	if finding != nil || plan == nil {
 		return errors.New("Complete removal Plan refused")
 	}
@@ -186,7 +202,7 @@ func (approval completeRemovalApproval) AuthorizeAndRecheck(ctx context.Context)
 		return softwarelifecycle.CompleteRemovalRecheck{}, err
 	}
 	selection, err := console.SelectPermanentRemoval(rechecked.review, typed)
-	return softwarelifecycle.CompleteRemovalRecheck{Candidate: rechecked.candidate, Review: rechecked.review, PublicAuthorities: rechecked.public, CloudflareAuthorities: rechecked.cloudflare, TypedConfirmation: typed, PermanentSelection: selection}, err
+	return softwarelifecycle.CompleteRemovalRecheck{Candidate: rechecked.candidate, Review: rechecked.review, Capability: rechecked.capability, PublicAuthorities: rechecked.public, CloudflareAuthorities: rechecked.cloudflare, TypedConfirmation: typed, PermanentSelection: selection}, err
 }
 
 func applyCompleteRemoval(ctx context.Context, built *builtCompleteRemoval, cancellation *systemchanges.Cancellation) systemchanges.ApplyResult {
