@@ -21,6 +21,7 @@ type anyTLSHost struct {
 	*tuicHost
 	observation      connectionprofiles.AnyTLSObservation
 	coreCapabilities connectionprofiles.CoreCapabilityObservation
+	deferred         connectionprofiles.DeferredRegistryObservation
 }
 
 func (host *anyTLSHost) ObserveAnyTLS(context.Context, connectionprofiles.Hysteria2ViewRequest, connectionprofiles.TUICViewRequest, connectionprofiles.AnyTLSViewRequest) connectionprofiles.AnyTLSObservation {
@@ -29,6 +30,10 @@ func (host *anyTLSHost) ObserveAnyTLS(context.Context, connectionprofiles.Hyster
 
 func (host *anyTLSHost) ObserveCoreCapabilities(context.Context) connectionprofiles.CoreCapabilityObservation {
 	return host.coreCapabilities
+}
+
+func (host *anyTLSHost) ObserveDeferredRegistry(context.Context) connectionprofiles.DeferredRegistryObservation {
+	return host.deferred
 }
 
 func TestAnyTLSViewRequiresVersionFloorCorePaddingDirectTLSAndTCP(t *testing.T) {

@@ -55,6 +55,14 @@ type RegistryCredentials struct {
 	AnyTLS    AnyTLSCredentials
 }
 
+type DeferredRegistryCredentials struct {
+	XHTTP     XHTTPCredentials
+	WebSocket WebSocketCredentials
+	Hysteria2 Hysteria2Credentials
+	TUIC      TUICCredentials
+	AnyTLS    AnyTLSCredentials
+}
+
 func (RegistryCredentials) String() string {
 	return "six independent Connection Profile credentials: ready"
 }
@@ -81,6 +89,45 @@ func GenerateRegistryCredentialsFrom(random io.Reader) (RegistryCredentials, err
 		return RegistryCredentials{}, errors.New("six independent Connection Profile credentials could not be generated")
 	}
 	return credentials, nil
+}
+
+func GenerateDeferredRegistryCredentials() (DeferredRegistryCredentials, error) {
+	return GenerateDeferredRegistryCredentialsFrom(rand.Reader)
+}
+
+func GenerateDeferredRegistryCredentialsFrom(random io.Reader) (DeferredRegistryCredentials, error) {
+	if random == nil {
+		return DeferredRegistryCredentials{}, errors.New("credential entropy unavailable")
+	}
+	xhttp, xhttpErr := generateXHTTPCredentials(random)
+	websocket, websocketErr := generateWebSocketCredentials(random)
+	hysteria2, hysteria2Err := generateHysteria2Credentials(random)
+	tuic, tuicErr := generateTUICCredentials(random)
+	anyTLS, anyTLSErr := generateAnyTLSCredentials(random)
+	credentials := DeferredRegistryCredentials{xhttp, websocket, hysteria2, tuic, anyTLS}
+	if errors.Join(xhttpErr, websocketErr, hysteria2Err, tuicErr, anyTLSErr) != nil || !credentials.ready() {
+		return DeferredRegistryCredentials{}, errors.New("five deferred Connection Profile credentials could not be generated")
+	}
+	return credentials, nil
+}
+
+func (credentials DeferredRegistryCredentials) ready() bool {
+	return credentials.XHTTP.valid() && credentials.WebSocket.valid() && credentials.Hysteria2.valid() && credentials.TUIC.valid() && credentials.AnyTLS.valid()
+}
+
+func (credentials DeferredRegistryCredentials) independent(reality RealityCredentials) bool {
+	if !credentials.ready() || !reality.valid() {
+		return false
+	}
+	values := []string{reality.uuid.value, credentials.XHTTP.uuid.value, credentials.WebSocket.uuid.value, credentials.Hysteria2.password.value, credentials.TUIC.uuid.value, credentials.TUIC.password.value, credentials.AnyTLS.password.value, credentials.XHTTP.path.value, credentials.WebSocket.path.value}
+	seen := make(map[string]bool, len(values))
+	for _, value := range values {
+		if seen[value] {
+			return false
+		}
+		seen[value] = true
+	}
+	return true
 }
 
 // RegistryRotation is a one-use, redacted handoff containing candidate
@@ -193,6 +240,9 @@ func RotateRegistryCredentials(profiles state.ConnectionProfiles, source Publica
 	if !PublicationInputsMatch(source, profiles) {
 		return nil, errors.New("Connection Profile publication source does not match current settings")
 	}
+	if hasNotSetUpProfile(profiles) {
+		return nil, errors.New("Not set up profiles cannot rotate credentials")
+	}
 	credentials, err := GenerateRegistryCredentials()
 	if err != nil {
 		return nil, err
@@ -276,6 +326,9 @@ func PrepareRegistryMutation(action RegistryMutationAction, profile ProfileID, a
 	if !knownProfile(profile) {
 		return nil, errors.New("Connection Profile selection is invalid")
 	}
+	if profileLifecycle(profiles, profile) == state.ProfileNotSetUp {
+		return nil, errors.New("Not set up profiles do not have individual actions")
+	}
 	secrets := registryCredentialReader{}
 	protect := func(value string) state.ClientAccessValue {
 		protected := state.NewClientAccessValue(value)
@@ -312,6 +365,34 @@ func knownProfile(profile ProfileID) bool {
 	return false
 }
 
+func profileLifecycle(profiles state.ConnectionProfiles, profile ProfileID) state.ProfileLifecycle {
+	switch profile {
+	case VLESSRealityVisionProfileID:
+		return profiles.VLESSRealityVision.Lifecycle
+	case VLESSXHTTPProfileID:
+		return profiles.VLESSXHTTP.Lifecycle
+	case VLESSWebSocketProfileID:
+		return profiles.VLESSWebSocket.Lifecycle
+	case Hysteria2ProfileID:
+		return profiles.Hysteria2.Lifecycle
+	case TUICProfileID:
+		return profiles.TUIC.Lifecycle
+	case AnyTLSProfileID:
+		return profiles.AnyTLS.Lifecycle
+	default:
+		return ""
+	}
+}
+
+func hasNotSetUpProfile(profiles state.ConnectionProfiles) bool {
+	for _, profile := range registryDefinitions {
+		if profileLifecycle(profiles, profile.id) == state.ProfileNotSetUp {
+			return true
+		}
+	}
+	return false
+}
+
 func profileEnabled(profiles state.ConnectionProfiles, profile ProfileID) bool {
 	switch profile {
 	case VLESSRealityVisionProfileID:
@@ -332,19 +413,29 @@ func profileEnabled(profiles state.ConnectionProfiles, profile ProfileID) bool {
 }
 
 func setProfileEnabled(profiles *state.ConnectionProfiles, profile ProfileID, enabled bool) {
+	lifecycle := state.ProfileDisabled
+	if enabled {
+		lifecycle = state.ProfileEnabled
+	}
 	switch profile {
 	case VLESSRealityVisionProfileID:
 		profiles.VLESSRealityVision.Enabled = enabled
+		profiles.VLESSRealityVision.Lifecycle = lifecycle
 	case VLESSXHTTPProfileID:
 		profiles.VLESSXHTTP.Enabled = enabled
+		profiles.VLESSXHTTP.Lifecycle = lifecycle
 	case VLESSWebSocketProfileID:
 		profiles.VLESSWebSocket.Enabled = enabled
+		profiles.VLESSWebSocket.Lifecycle = lifecycle
 	case Hysteria2ProfileID:
 		profiles.Hysteria2.Enabled = enabled
+		profiles.Hysteria2.Lifecycle = lifecycle
 	case TUICProfileID:
 		profiles.TUIC.Enabled = enabled
+		profiles.TUIC.Lifecycle = lifecycle
 	case AnyTLSProfileID:
 		profiles.AnyTLS.Enabled = enabled
+		profiles.AnyTLS.Lifecycle = lifecycle
 	}
 }
 
@@ -443,22 +534,74 @@ func NewFreshRegistry(request RegistryViewRequest, credentials RegistryCredentia
 	request.Hysteria2.Credentials, request.TUIC.Credentials, request.AnyTLS.Credentials = credentials.Hysteria2, credentials.TUIC, credentials.AnyTLS
 	request.Reality.Enabled, request.XHTTP.Enabled, request.WebSocket.Enabled = true, true, true
 	request.Hysteria2.Enabled, request.TUIC.Enabled, request.AnyTLS.Enabled = true, true, true
+	request.Lifecycles = enabledRegistryLifecycles()
+	return request, nil
+}
+
+// NewRevisionOneRegistry prepares the only supported first-Installation
+// registry: VLESS REALITY Vision Enabled and every Cloudflare profile absent.
+func NewRevisionOneRegistry(request RegistryViewRequest, credentials RealityCredentials) (RegistryViewRequest, error) {
+	if !credentials.valid() || request.Reality.Revision == 0 {
+		return RegistryViewRequest{}, errors.New("revision 1 registry inputs are invalid")
+	}
+	revision := request.Reality.Revision
+	request.Reality.Credentials, request.Reality.Enabled = credentials, true
+	request.XHTTP = XHTTPViewRequest{Revision: revision}
+	request.WebSocket = WebSocketViewRequest{Revision: revision}
+	request.Hysteria2 = Hysteria2ViewRequest{Revision: revision}
+	request.TUIC = TUICViewRequest{Revision: revision}
+	request.AnyTLS = AnyTLSViewRequest{Revision: revision}
+	request.Lifecycles = revisionOneRegistryLifecycles()
+	request.Exposure = nil
+	return request, nil
+}
+
+// NewDeferredRegistry fills every deferred credential slot in one candidate.
+// It cannot create a supported partial setup.
+func NewDeferredRegistry(request RegistryViewRequest, credentials DeferredRegistryCredentials) (RegistryViewRequest, error) {
+	if !credentials.independent(request.Reality.Credentials) {
+		return RegistryViewRequest{}, errors.New("deferred registry credentials are not independent")
+	}
+	request.XHTTP.Credentials = credentials.XHTTP
+	request.WebSocket.Credentials = credentials.WebSocket
+	request.Hysteria2.Credentials = credentials.Hysteria2
+	request.TUIC.Credentials = credentials.TUIC
+	request.AnyTLS.Credentials = credentials.AnyTLS
+	request.XHTTP.Enabled, request.WebSocket.Enabled, request.Hysteria2.Enabled, request.TUIC.Enabled, request.AnyTLS.Enabled = true, true, true, true, true
+	request.Reality.Enabled = true
+	request.Lifecycles = enabledRegistryLifecycles()
+	request.Exposure = nil
 	return request, nil
 }
 
 // DesiredProfiles protects the exact reviewed registry credentials for State.
 func DesiredProfiles(request RegistryViewRequest) (state.ConnectionProfiles, bool) {
+	if revisionOneRegistry(request) {
+		if validateRevisionOneRegistry(request) != nil {
+			return state.ConnectionProfiles{}, false
+		}
+		protect := state.NewClientAccessValue
+		return state.ConnectionProfiles{
+			VLESSRealityVision: state.VLESSRealityVision{Lifecycle: state.ProfileEnabled, Enabled: true, Port: request.Reality.Port, UUID: protect(request.Reality.Credentials.uuid.value), PrivateKey: state.NewInfrastructureSecret(request.Reality.Credentials.privateKey.value), PublicKey: request.Reality.Credentials.publicKey.value, ShortID: protect(request.Reality.Credentials.shortID.value), Target: request.Reality.Target.Address, ServerName: request.Reality.Target.ServerName, Fingerprint: request.Reality.Fingerprint},
+			VLESSXHTTP:         state.VLESSXHTTP{Lifecycle: state.ProfileNotSetUp},
+			VLESSWebSocket:     state.VLESSWebSocket{Lifecycle: state.ProfileNotSetUp},
+			Hysteria2:          state.Hysteria2{Lifecycle: state.ProfileNotSetUp},
+			TUIC:               state.TUIC{Lifecycle: state.ProfileNotSetUp},
+			AnyTLS:             state.AnyTLS{Lifecycle: state.ProfileNotSetUp},
+		}, true
+	}
 	if validateRegistryCandidate(request) != nil {
 		return state.ConnectionProfiles{}, false
 	}
+	lifecycles := registryLifecycles(request)
 	protect := state.NewClientAccessValue
 	return state.ConnectionProfiles{
-		VLESSRealityVision: state.VLESSRealityVision{Enabled: request.Reality.Enabled, Port: request.Reality.Port, UUID: protect(request.Reality.Credentials.uuid.value), PrivateKey: state.NewInfrastructureSecret(request.Reality.Credentials.privateKey.value), PublicKey: request.Reality.Credentials.publicKey.value, ShortID: protect(request.Reality.Credentials.shortID.value), Target: request.Reality.Target.Address, ServerName: request.Reality.Target.ServerName, Fingerprint: request.Reality.Fingerprint},
-		VLESSXHTTP:         state.VLESSXHTTP{Enabled: request.XHTTP.Enabled, UUID: protect(request.XHTTP.Credentials.uuid.value), Path: protect(request.XHTTP.Credentials.path.value), Hostname: request.XHTTP.Hostname, OriginAddress: request.XHTTP.OriginAddress, OriginPort: request.XHTTP.OriginPort, Mode: request.XHTTP.Mode},
-		VLESSWebSocket:     state.VLESSWebSocket{Enabled: request.WebSocket.Enabled, UUID: protect(request.WebSocket.Credentials.uuid.value), Hostname: request.WebSocket.Hostname, OriginAddress: request.WebSocket.OriginAddress, OriginPort: request.WebSocket.OriginPort, Path: protect(request.WebSocket.Credentials.path.value)},
-		Hysteria2:          state.Hysteria2{Enabled: request.Hysteria2.Enabled, Port: request.Hysteria2.Port, Password: protect(request.Hysteria2.Credentials.password.value), ServerName: request.Hysteria2.ServerName, CertificateID: request.Hysteria2.CertificateID, MasqueradeURL: "https://example.com/", Obfuscation: request.Hysteria2.Credentials.obfuscation, ObfuscationSecret: protect(request.Hysteria2.Credentials.obfuscationSecret.value)},
-		TUIC:               state.TUIC{Enabled: request.TUIC.Enabled, Port: request.TUIC.Port, UUID: protect(request.TUIC.Credentials.uuid.value), Password: protect(request.TUIC.Credentials.password.value), ServerName: request.TUIC.ServerName, CertificateID: request.TUIC.CertificateID, CongestionControl: request.TUIC.CongestionControl, ZeroRTT: request.TUIC.ZeroRTT},
-		AnyTLS:             state.AnyTLS{Enabled: request.AnyTLS.Enabled, Port: request.AnyTLS.Port, Password: protect(request.AnyTLS.Credentials.password.value), ServerName: request.AnyTLS.ServerName, CertificateID: request.AnyTLS.CertificateID, PaddingScheme: "upstream-default"},
+		VLESSRealityVision: state.VLESSRealityVision{Lifecycle: lifecycles.Reality, Enabled: request.Reality.Enabled, Port: request.Reality.Port, UUID: protect(request.Reality.Credentials.uuid.value), PrivateKey: state.NewInfrastructureSecret(request.Reality.Credentials.privateKey.value), PublicKey: request.Reality.Credentials.publicKey.value, ShortID: protect(request.Reality.Credentials.shortID.value), Target: request.Reality.Target.Address, ServerName: request.Reality.Target.ServerName, Fingerprint: request.Reality.Fingerprint},
+		VLESSXHTTP:         state.VLESSXHTTP{Lifecycle: lifecycles.XHTTP, Enabled: request.XHTTP.Enabled, UUID: protect(request.XHTTP.Credentials.uuid.value), Path: protect(request.XHTTP.Credentials.path.value), Hostname: request.XHTTP.Hostname, OriginAddress: request.XHTTP.OriginAddress, OriginPort: request.XHTTP.OriginPort, Mode: request.XHTTP.Mode},
+		VLESSWebSocket:     state.VLESSWebSocket{Lifecycle: lifecycles.WebSocket, Enabled: request.WebSocket.Enabled, UUID: protect(request.WebSocket.Credentials.uuid.value), Hostname: request.WebSocket.Hostname, OriginAddress: request.WebSocket.OriginAddress, OriginPort: request.WebSocket.OriginPort, Path: protect(request.WebSocket.Credentials.path.value)},
+		Hysteria2:          state.Hysteria2{Lifecycle: lifecycles.Hysteria2, Enabled: request.Hysteria2.Enabled, Port: request.Hysteria2.Port, Password: protect(request.Hysteria2.Credentials.password.value), ServerName: request.Hysteria2.ServerName, CertificateID: request.Hysteria2.CertificateID, MasqueradeURL: "https://example.com/", Obfuscation: request.Hysteria2.Credentials.obfuscation, ObfuscationSecret: protect(request.Hysteria2.Credentials.obfuscationSecret.value)},
+		TUIC:               state.TUIC{Lifecycle: lifecycles.TUIC, Enabled: request.TUIC.Enabled, Port: request.TUIC.Port, UUID: protect(request.TUIC.Credentials.uuid.value), Password: protect(request.TUIC.Credentials.password.value), ServerName: request.TUIC.ServerName, CertificateID: request.TUIC.CertificateID, CongestionControl: request.TUIC.CongestionControl, ZeroRTT: request.TUIC.ZeroRTT},
+		AnyTLS:             state.AnyTLS{Lifecycle: lifecycles.AnyTLS, Enabled: request.AnyTLS.Enabled, Port: request.AnyTLS.Port, Password: protect(request.AnyTLS.Credentials.password.value), ServerName: request.AnyTLS.ServerName, CertificateID: request.AnyTLS.CertificateID, PaddingScheme: "upstream-default"},
 	}, true
 }
 
@@ -488,6 +631,18 @@ type CoreCapabilityObservation struct {
 
 type RegistryCapabilityHost interface {
 	ObserveCoreCapabilities(context.Context) CoreCapabilityObservation
+}
+
+type DeferredRegistryObservation struct {
+	CheckedAt                  time.Time
+	XrayRealityOnly            bool
+	SingBoxConfigurationAbsent bool
+	SingBoxServiceDisabled     bool
+	SingBoxServiceInactive     bool
+}
+
+type DeferredRegistryHost interface {
+	ObserveDeferredRegistry(context.Context) DeferredRegistryObservation
 }
 
 type registryCorrectionHost struct {
@@ -581,6 +736,36 @@ type RegistryViewRequest struct {
 	TUIC          TUICViewRequest
 	AnyTLS        AnyTLSViewRequest
 	Exposure      RegistryExposureAuthority
+	Lifecycles    RegistryLifecycles
+}
+
+type RegistryLifecycles struct {
+	Reality, XHTTP, WebSocket, Hysteria2, TUIC, AnyTLS state.ProfileLifecycle
+}
+
+func enabledRegistryLifecycles() RegistryLifecycles {
+	return RegistryLifecycles{state.ProfileEnabled, state.ProfileEnabled, state.ProfileEnabled, state.ProfileEnabled, state.ProfileEnabled, state.ProfileEnabled}
+}
+
+func revisionOneRegistryLifecycles() RegistryLifecycles {
+	return RegistryLifecycles{state.ProfileEnabled, state.ProfileNotSetUp, state.ProfileNotSetUp, state.ProfileNotSetUp, state.ProfileNotSetUp, state.ProfileNotSetUp}
+}
+
+func registryLifecycles(request RegistryViewRequest) RegistryLifecycles {
+	if request.Lifecycles != (RegistryLifecycles{}) {
+		return request.Lifecycles
+	}
+	stateFor := func(enabled bool) state.ProfileLifecycle {
+		if enabled {
+			return state.ProfileEnabled
+		}
+		return state.ProfileDisabled
+	}
+	return RegistryLifecycles{stateFor(request.Reality.Enabled), stateFor(request.XHTTP.Enabled), stateFor(request.WebSocket.Enabled), stateFor(request.Hysteria2.Enabled), stateFor(request.TUIC.Enabled), stateFor(request.AnyTLS.Enabled)}
+}
+
+func revisionOneRegistry(request RegistryViewRequest) bool {
+	return registryLifecycles(request) == revisionOneRegistryLifecycles()
 }
 
 type RegistryProfile struct {
@@ -589,6 +774,7 @@ type RegistryProfile struct {
 	Enabled, DefaultEnabled, CredentialsReady bool
 	SelectedListener, Listener                Listener
 	Health                                    Health
+	Lifecycle                                 state.ProfileLifecycle
 }
 
 type PublicationProfile struct {
@@ -754,7 +940,14 @@ func (module Interface) viewRegistry(ctx context.Context, request RegistryViewRe
 	if failure := registryExposureFailure(request); failure != nil {
 		return registryInvalidResult(request, *failure)
 	}
+	if revisionOneRegistry(request) {
+		return module.viewRevisionOneRegistry(ctx, request)
+	}
+	if failure := validateRegistryLifecycles(request); failure != nil {
+		return registryInvalidResult(request, *failure)
+	}
 	request = reviewedRegistryRequest(request)
+	lifecycles := registryLifecycles(request)
 
 	profiles := SingBoxProfileSet{}
 	if request.TUIC.Enabled {
@@ -770,6 +963,20 @@ func (module Interface) viewRegistry(ctx context.Context, request RegistryViewRe
 	volatile := networkDigest
 	var firstFailure *Health
 	appendProfile := func(profile RegistryProfile, digest string) {
+		switch profile.ID {
+		case VLESSRealityVisionProfileID:
+			profile.Lifecycle = lifecycles.Reality
+		case VLESSXHTTPProfileID:
+			profile.Lifecycle = lifecycles.XHTTP
+		case VLESSWebSocketProfileID:
+			profile.Lifecycle = lifecycles.WebSocket
+		case Hysteria2ProfileID:
+			profile.Lifecycle = lifecycles.Hysteria2
+		case TUICProfileID:
+			profile.Lifecycle = lifecycles.TUIC
+		case AnyTLSProfileID:
+			profile.Lifecycle = lifecycles.AnyTLS
+		}
 		results = append(results, profile)
 		volatile += digest
 		if profile.Health.Outcome != Healthy && profile.Health.Outcome != Disabled && firstFailure == nil {
@@ -786,7 +993,7 @@ func (module Interface) viewRegistry(ctx context.Context, request RegistryViewRe
 		appendProfile(profile, digest)
 	} else {
 		reality := module.View(ctx, request.Reality)
-		appendProfile(RegistryProfile{ID: VLESSRealityVisionProfileID, Name: reality.Profile.Name, QualifiedVersion: reality.Profile.XrayVersion, Enabled: true, DefaultEnabled: true, CredentialsReady: reality.Profile.CredentialsReady, SelectedListener: selectedRegistryListener(request, VLESSRealityVisionProfileID), Listener: reality.Profile.Listener, Health: reality.Health}, reality.VolatileSHA256)
+		appendProfile(RegistryProfile{ID: VLESSRealityVisionProfileID, Name: reality.Profile.Name, QualifiedVersion: reality.Profile.XrayVersion, Enabled: true, DefaultEnabled: true, CredentialsReady: reality.Profile.CredentialsReady, SelectedListener: selectedRegistryListener(request, VLESSRealityVisionProfileID), Listener: reality.Profile.Listener, Health: reality.Health, Lifecycle: lifecycles.Reality}, reality.VolatileSHA256)
 	}
 	if !request.XHTTP.Enabled {
 		profile, digest, health := disabledXHTTPProfile(request.XHTTP)
@@ -802,7 +1009,7 @@ func (module Interface) viewRegistry(ctx context.Context, request RegistryViewRe
 		if xhttp.Health.Outcome == Healthy && !request.Reality.Enabled && !xhttp.observation.NoCapabilities {
 			xhttp.Health = registryCapabilityFailure("Xray", "REALITY is disabled but xray.service still has capabilities")
 		}
-		appendProfile(RegistryProfile{ID: VLESSXHTTPProfileID, Name: xhttp.Profile.Name, Hostname: xhttp.Profile.Hostname, QualifiedVersion: xhttp.Profile.XrayVersion, Enabled: true, DefaultEnabled: true, CredentialsReady: xhttp.Profile.CredentialsReady, SelectedListener: selectedRegistryListener(request, VLESSXHTTPProfileID), Listener: xhttp.Profile.Listener, Health: xhttp.Health}, xhttp.VolatileSHA256)
+		appendProfile(RegistryProfile{ID: VLESSXHTTPProfileID, Name: xhttp.Profile.Name, Hostname: xhttp.Profile.Hostname, QualifiedVersion: xhttp.Profile.XrayVersion, Enabled: true, DefaultEnabled: true, CredentialsReady: xhttp.Profile.CredentialsReady, SelectedListener: selectedRegistryListener(request, VLESSXHTTPProfileID), Listener: xhttp.Profile.Listener, Health: xhttp.Health, Lifecycle: lifecycles.XHTTP}, xhttp.VolatileSHA256)
 	}
 	if !request.WebSocket.Enabled {
 		profile, digest, health := disabledWebSocketProfile(request.WebSocket)
@@ -818,7 +1025,7 @@ func (module Interface) viewRegistry(ctx context.Context, request RegistryViewRe
 		if websocket.Health.Outcome == Healthy && !request.Reality.Enabled && !websocket.observation.NoCapabilities {
 			websocket.Health = registryCapabilityFailure("Xray", "REALITY is disabled but xray.service still has capabilities")
 		}
-		appendProfile(RegistryProfile{ID: VLESSWebSocketProfileID, Name: websocket.Profile.Name, Hostname: websocket.Profile.Hostname, QualifiedVersion: websocket.Profile.XrayVersion, Enabled: true, DefaultEnabled: true, CredentialsReady: websocket.Profile.CredentialsReady, SelectedListener: selectedRegistryListener(request, VLESSWebSocketProfileID), Listener: websocket.Profile.Listener, Health: websocket.Health}, websocket.VolatileSHA256)
+		appendProfile(RegistryProfile{ID: VLESSWebSocketProfileID, Name: websocket.Profile.Name, Hostname: websocket.Profile.Hostname, QualifiedVersion: websocket.Profile.XrayVersion, Enabled: true, DefaultEnabled: true, CredentialsReady: websocket.Profile.CredentialsReady, SelectedListener: selectedRegistryListener(request, VLESSWebSocketProfileID), Listener: websocket.Profile.Listener, Health: websocket.Health, Lifecycle: lifecycles.WebSocket}, websocket.VolatileSHA256)
 	}
 	if !request.Hysteria2.Enabled {
 		profile, digest, health := disabledHysteria2Profile(request.Hysteria2)
@@ -828,7 +1035,7 @@ func (module Interface) viewRegistry(ctx context.Context, request RegistryViewRe
 		appendProfile(profile, digest)
 	} else {
 		hysteria2 := module.ViewHysteria2(ctx, request.Hysteria2)
-		appendProfile(RegistryProfile{ID: Hysteria2ProfileID, Name: hysteria2.Profile.Name, Hostname: hysteria2.Profile.ServerName, QualifiedVersion: hysteria2.Profile.SingBoxVersion, Enabled: true, DefaultEnabled: true, CredentialsReady: hysteria2.Profile.CredentialsReady, SelectedListener: selectedRegistryListener(request, Hysteria2ProfileID), Listener: hysteria2.Profile.Listener, Health: hysteria2.Health}, hysteria2.VolatileSHA256)
+		appendProfile(RegistryProfile{ID: Hysteria2ProfileID, Name: hysteria2.Profile.Name, Hostname: hysteria2.Profile.ServerName, QualifiedVersion: hysteria2.Profile.SingBoxVersion, Enabled: true, DefaultEnabled: true, CredentialsReady: hysteria2.Profile.CredentialsReady, SelectedListener: selectedRegistryListener(request, Hysteria2ProfileID), Listener: hysteria2.Profile.Listener, Health: hysteria2.Health, Lifecycle: lifecycles.Hysteria2}, hysteria2.VolatileSHA256)
 	}
 	if !request.TUIC.Enabled {
 		profile, digest, health := disabledTUICProfile(request.TUIC)
@@ -838,7 +1045,7 @@ func (module Interface) viewRegistry(ctx context.Context, request RegistryViewRe
 		appendProfile(profile, digest)
 	} else {
 		tuic := module.ViewTUIC(ctx, request.Hysteria2, request.TUIC)
-		appendProfile(RegistryProfile{ID: TUICProfileID, Name: tuic.Profile.Name, Hostname: tuic.Profile.ServerName, QualifiedVersion: tuic.Profile.SingBoxVersion, Enabled: true, DefaultEnabled: true, CredentialsReady: tuic.Profile.CredentialsReady, SelectedListener: selectedRegistryListener(request, TUICProfileID), Listener: tuic.Profile.Listener, Health: tuic.Health}, tuic.VolatileSHA256)
+		appendProfile(RegistryProfile{ID: TUICProfileID, Name: tuic.Profile.Name, Hostname: tuic.Profile.ServerName, QualifiedVersion: tuic.Profile.SingBoxVersion, Enabled: true, DefaultEnabled: true, CredentialsReady: tuic.Profile.CredentialsReady, SelectedListener: selectedRegistryListener(request, TUICProfileID), Listener: tuic.Profile.Listener, Health: tuic.Health, Lifecycle: lifecycles.TUIC}, tuic.VolatileSHA256)
 	}
 	if !request.AnyTLS.Enabled {
 		profile, digest, health := disabledAnyTLSProfile(request.AnyTLS)
@@ -848,7 +1055,7 @@ func (module Interface) viewRegistry(ctx context.Context, request RegistryViewRe
 		appendProfile(profile, digest)
 	} else {
 		anyTLS := module.ViewAnyTLS(ctx, request.Hysteria2, request.TUIC, request.AnyTLS)
-		appendProfile(RegistryProfile{ID: AnyTLSProfileID, Name: anyTLS.Profile.Name, Hostname: anyTLS.Profile.ServerName, QualifiedVersion: anyTLS.Profile.SingBoxVersion, Enabled: true, DefaultEnabled: true, CredentialsReady: anyTLS.Profile.CredentialsReady, SelectedListener: selectedRegistryListener(request, AnyTLSProfileID), Listener: anyTLS.Profile.Listener, Health: anyTLS.Health}, anyTLS.VolatileSHA256)
+		appendProfile(RegistryProfile{ID: AnyTLSProfileID, Name: anyTLS.Profile.Name, Hostname: anyTLS.Profile.ServerName, QualifiedVersion: anyTLS.Profile.SingBoxVersion, Enabled: true, DefaultEnabled: true, CredentialsReady: anyTLS.Profile.CredentialsReady, SelectedListener: selectedRegistryListener(request, AnyTLSProfileID), Listener: anyTLS.Profile.Listener, Health: anyTLS.Health, Lifecycle: lifecycles.AnyTLS}, anyTLS.VolatileSHA256)
 	}
 	allXrayDisabled := !request.Reality.Enabled && !request.XHTTP.Enabled && !request.WebSocket.Enabled
 	allSingBoxDisabled := !request.Hysteria2.Enabled && !request.TUIC.Enabled && !request.AnyTLS.Enabled
@@ -882,6 +1089,33 @@ func (module Interface) viewRegistry(ctx context.Context, request RegistryViewRe
 	return RegistryViewResult{Profiles: results, Publication: registryPublication(request), Health: Health{Module: "Connection Profiles", Profile: "Registry", Outcome: Healthy, Code: "CONNECTION-PROFILES-REGISTRY-HEALTHY", NextActions: []string{"Build Plan", "Back"}}, VolatileSHA256: hex.EncodeToString(digest[:])}
 }
 
+func (module Interface) viewRevisionOneRegistry(ctx context.Context, request RegistryViewRequest) RegistryViewResult {
+	if failure := validateRevisionOneRegistry(request); failure != nil {
+		return registryInvalidResult(request, *failure)
+	}
+	reality := module.View(ctx, request.Reality)
+	if reality.Health.Outcome != Healthy {
+		return registryInvalidResult(request, reality.Health)
+	}
+	host, ok := module.host.(DeferredRegistryHost)
+	observation := DeferredRegistryObservation{}
+	if ok {
+		observation = host.ObserveDeferredRegistry(ctx)
+	}
+	if !ok || !observation.XrayRealityOnly || !observation.SingBoxConfigurationAbsent || !observation.SingBoxServiceDisabled || !observation.SingBoxServiceInactive {
+		health := registryHealth("CONNECTION-PROFILES-REGISTRY-EXPECTED-ABSENCE", "a deferred service configuration, capability, or active process exists or cannot be proved absent")
+		return registryInvalidResult(request, health)
+	}
+	profiles := make([]RegistryProfile, len(registryDefinitions))
+	profiles[0] = RegistryProfile{ID: VLESSRealityVisionProfileID, Name: reality.Profile.Name, QualifiedVersion: reality.Profile.XrayVersion, Enabled: true, DefaultEnabled: true, CredentialsReady: true, SelectedListener: selectedRegistryListener(request, VLESSRealityVisionProfileID), Listener: reality.Profile.Listener, Health: reality.Health, Lifecycle: state.ProfileEnabled}
+	for index, definition := range registryDefinitions[1:] {
+		profiles[index+1] = RegistryProfile{ID: definition.id, Name: definition.name, DefaultEnabled: true, Lifecycle: state.ProfileNotSetUp}
+	}
+	encoded, _ := json.Marshal(observation)
+	digest := sha256.Sum256(append([]byte(reality.VolatileSHA256), encoded...))
+	return RegistryViewResult{Profiles: profiles, Publication: registryPublication(request), Health: Health{Module: "Connection Profiles", Profile: "Registry", Outcome: Healthy, Code: "CONNECTION-PROFILES-REGISTRY-EXPECTED-ABSENCE", NextActions: []string{"Set up Cloudflare profiles", "Back"}}, VolatileSHA256: hex.EncodeToString(digest[:])}
+}
+
 func repairableRegistryCode(code string) bool {
 	for _, suffix := range []string{"-CONFIGURATION", "-SERVICE", "-LISTENER", "-CAPABILITY", "-FUNCTION", "-EXPOSURE"} {
 		if strings.HasSuffix(code, suffix) {
@@ -893,7 +1127,7 @@ func repairableRegistryCode(code string) bool {
 
 func (module Interface) PlanRegistry(ctx context.Context, request RegistryPlanRequest) PlanResult {
 	freshInstallation := request.FreshInstallation.ConnectionProfilesFreshInstallation()
-	freshPorts := freshInstallation && validRegistryExposureAuthority(request.Candidate.Exposure) && request.Candidate.Exposure.ConnectionProfilesFreshPortSelection()
+	freshPorts := freshInstallation && revisionOneRegistry(request.Candidate) && validRegistryExposureAuthority(request.Candidate.Exposure) && request.Candidate.Exposure.ConnectionProfilesFreshPortSelection()
 	correctionPurpose, correctionPort, correctionCandidate, correctionProtocol, correction := registryPortCorrection(request.PortCorrection)
 	correctedPorts := correction && validRegistryExposureAuthority(request.Candidate.Exposure) && request.Candidate.Exposure.ConnectionProfilesManagedPortSelection()
 	current := RegistryViewResult{Health: Health{Outcome: Healthy}, VolatileSHA256: "not-installed"}
@@ -909,16 +1143,38 @@ func (module Interface) PlanRegistry(ctx context.Context, request RegistryPlanRe
 	if !repair && current.Health.Outcome != Healthy {
 		return PlanResult{Health: current.Health}
 	}
-	action, mutation, validChange := registryChange(request.Current, request.Candidate, repair, freshPorts, correctedPorts, request.ReleaseUpdate, correctionPurpose, correctionPort, correctionCandidate, correctionProtocol)
+	profileSetup := registryProfileSetup(request.Current, request.Candidate)
+	action, mutation, validChange := registryChange(request.Current, request.Candidate, repair, freshPorts, correctedPorts, request.ReleaseUpdate, profileSetup, correctionPurpose, correctionPort, correctionCandidate, correctionProtocol)
 	desiredStateValid := sha256Text.MatchString(request.DesiredStateSHA256)
 	stateBindingValid := freshPorts && request.StartingStateSHA256 == "" && desiredStateValid || sha256Text.MatchString(request.StartingStateSHA256) && desiredStateValid && (repair && request.StartingStateSHA256 == request.DesiredStateSHA256 && repairRevision == request.Current.Reality.Revision && repairSHA == request.StartingStateSHA256 || request.ReleaseUpdate && !repair && request.StartingStateSHA256 == request.DesiredStateSHA256 || !repair && request.StartingStateSHA256 != request.DesiredStateSHA256)
 	if !validChange || !registryLifecycleRevisions(request.Current, request.Candidate, freshPorts) || !planName.MatchString(request.ChangeSet) || !stateBindingValid {
 		return PlanResult{Health: registryPlanFailure("STATE", "the request does not contain one exact profile lifecycle change and State binding")}
 	}
-	if failure := validateRegistryCandidate(request.Candidate); failure != nil {
+	if revisionOneRegistry(request.Candidate) {
+		if failure := validateRevisionOneRegistry(request.Candidate); failure != nil {
+			return PlanResult{Health: *failure}
+		}
+	} else if failure := validateRegistryCandidate(request.Candidate); failure != nil {
 		return PlanResult{Health: *failure}
 	}
 	request.Candidate = reviewedRegistryRequest(request.Candidate)
+	if revisionOneRegistry(request.Candidate) {
+		xray, err := realityConfiguration(request.Candidate.Reality)
+		if err != nil {
+			return PlanResult{Health: registryPlanFailure("CONFIGURATION", "the revision 1 Xray configuration is incomplete")}
+		}
+		volatileDigest := sha256.Sum256([]byte(current.VolatileSHA256))
+		plan, failure := module.buildXrayPlan(ctx, xrayPlanSpec{
+			identityPrefix: "profiles-registry-", description: action + "; keep every deferred profile setting, credential, service, listener, route, certificate binding, exposure, and publication entry absent",
+			profile: "Registry", codePrefix: "CONNECTION-PROFILES-REGISTRY", version: request.Candidate.Reality.XrayVersion,
+			revision: request.Candidate.Reality.Revision, changeSet: request.ChangeSet, startingStateSHA256: request.StartingStateSHA256, desiredStateSHA256: request.DesiredStateSHA256,
+			volatileSHA256: hex.EncodeToString(volatileDigest[:]), configuration: xray, request: request, reality: request.Candidate.Reality,
+		})
+		if failure != nil {
+			return PlanResult{Health: *failure}
+		}
+		return PlanResult{Plan: plan, Health: Health{Module: "Connection Profiles", Profile: "Registry", Outcome: Healthy, Code: "CONNECTION-PROFILES-REGISTRY-PLAN-READY", NextActions: []string{"Review Plan", "Back"}}}
+	}
 	xray, singBox, hysteria2 := registryConfigurations(request.Candidate)
 	if len(xray) == 0 || len(singBox) == 0 {
 		return PlanResult{Health: registryPlanFailure("CONFIGURATION", "the enablement change would remove a complete proxy-core configuration")}
@@ -1043,6 +1299,9 @@ func registryLifecycleRevisions(current, candidate RegistryViewRequest, fresh bo
 	if fresh {
 		return all(current, 0) && all(candidate, 1)
 	}
+	if registryProfileSetup(current, candidate) {
+		return all(current, current.Reality.Revision) && all(candidate, current.Reality.Revision+1)
+	}
 	return all(current, current.Reality.Revision) && all(candidate, current.Reality.Revision)
 }
 
@@ -1101,7 +1360,10 @@ func registryEnablementChange(current, candidate RegistryViewRequest) (ProfileID
 	return changed.id, changed.candidate, true
 }
 
-func registryChange(current, candidate RegistryViewRequest, repair, freshInstallation, corrected, releaseUpdate bool, correctionPurpose string, correctionPort, correctionCandidate uint16, correctionProtocol string) (string, systemchanges.MutationClass, bool) {
+func registryChange(current, candidate RegistryViewRequest, repair, freshInstallation, corrected, releaseUpdate, profileSetup bool, correctionPurpose string, correctionPort, correctionCandidate uint16, correctionProtocol string) (string, systemchanges.MutationClass, bool) {
+	if profileSetup && !repair && !freshInstallation && !corrected && !releaseUpdate {
+		return "set up all five deferred profiles together", systemchanges.CloudflareProfileSetupMutation, true
+	}
 	if releaseUpdate && !repair && !freshInstallation && !corrected && reflect.DeepEqual(registryComparable(current), registryComparable(candidate)) {
 		return "regenerate the complete registry for the freshly verified release", systemchanges.UpdateMutation, true
 	}
@@ -1141,6 +1403,15 @@ func registryChange(current, candidate RegistryViewRequest, repair, freshInstall
 		return action, systemchanges.RotationMutation, true
 	}
 	return "", "", false
+}
+
+func registryProfileSetup(current, candidate RegistryViewRequest) bool {
+	if !revisionOneRegistry(current) || registryLifecycles(candidate) != enabledRegistryLifecycles() || candidate.Reality.Revision != current.Reality.Revision+1 || candidate.ClientAddress != current.ClientAddress {
+		return false
+	}
+	currentReality, candidateReality := current.Reality, candidate.Reality
+	currentReality.Revision, candidateReality.Revision = 0, 0
+	return reflect.DeepEqual(currentReality, candidateReality)
 }
 
 func reviewedPortCorrection(current, candidate [6]uint16, purpose string, port, replacement uint16, protocol string) bool {
@@ -1202,6 +1473,9 @@ func clearRegistryCredentials(request *RegistryViewRequest) {
 }
 
 func validateRegistryCandidate(request RegistryViewRequest) *Health {
+	if failure := validateRegistryLifecycles(request); failure != nil {
+		return failure
+	}
 	address, err := netip.ParseAddr(request.ClientAddress)
 	if err != nil || !address.IsGlobalUnicast() || request.Reality.Revision != request.XHTTP.Revision || request.Reality.Revision != request.WebSocket.Revision || request.Reality.Revision != request.Hysteria2.Revision || request.Reality.Revision != request.TUIC.Revision || request.Reality.Revision != request.AnyTLS.Revision || request.Hysteria2.DestinationIP != request.ClientAddress || request.TUIC.DestinationIP != request.ClientAddress || request.AnyTLS.DestinationIP != request.ClientAddress || !validRegistryExposureAuthority(request.Exposure) || !validRegistryExposureBinding(request.Exposure, request.Reality.Revision) {
 		health := registryPlanFailure("INPUT", "the client address, direct destinations, or typed exposure is invalid")
@@ -1257,6 +1531,40 @@ func validateRegistryCandidate(request RegistryViewRequest) *Health {
 	credentials := RegistryCredentials{request.Reality.Credentials, request.XHTTP.Credentials, request.WebSocket.Credentials, request.Hysteria2.Credentials, request.TUIC.Credentials, request.AnyTLS.Credentials}
 	if !credentials.Independent() {
 		health := registryPlanFailure("CREDENTIALS", "the six profile credentials or the two paths are not independent")
+		return &health
+	}
+	return nil
+}
+
+func validateRegistryLifecycles(request RegistryViewRequest) *Health {
+	lifecycles := registryLifecycles(request)
+	checks := []struct {
+		lifecycle state.ProfileLifecycle
+		enabled   bool
+	}{
+		{lifecycles.Reality, request.Reality.Enabled},
+		{lifecycles.XHTTP, request.XHTTP.Enabled},
+		{lifecycles.WebSocket, request.WebSocket.Enabled},
+		{lifecycles.Hysteria2, request.Hysteria2.Enabled},
+		{lifecycles.TUIC, request.TUIC.Enabled},
+		{lifecycles.AnyTLS, request.AnyTLS.Enabled},
+	}
+	for _, check := range checks {
+		if check.lifecycle == state.ProfileNotSetUp || check.lifecycle == state.ProfileEnabled != check.enabled || check.lifecycle != state.ProfileEnabled && check.lifecycle != state.ProfileDisabled {
+			health := registryHealth("CONNECTION-PROFILES-REGISTRY-LIFECYCLE", "a lifecycle state disagrees with profile capability")
+			return &health
+		}
+	}
+	return nil
+}
+
+func validateRevisionOneRegistry(request RegistryViewRequest) *Health {
+	revision := request.Reality.Revision
+	deferredAbsent := reflect.DeepEqual(request.XHTTP, XHTTPViewRequest{Revision: revision}) && reflect.DeepEqual(request.WebSocket, WebSocketViewRequest{Revision: revision}) && reflect.DeepEqual(request.Hysteria2, Hysteria2ViewRequest{Revision: revision}) && reflect.DeepEqual(request.TUIC, TUICViewRequest{Revision: revision}) && reflect.DeepEqual(request.AnyTLS, AnyTLSViewRequest{Revision: revision})
+	host, port, targetErr := net.SplitHostPort(request.Reality.Target.Address)
+	realityValid := request.Reality.Enabled && request.Reality.Port > 0 && targetErr == nil && port == "443" && host == request.Reality.Target.ServerName && validHostname(host) && request.Reality.Fingerprint == "chrome" && request.Reality.XrayVersion == qualifiedXrayVersion && request.Reality.Credentials.valid()
+	if !deferredAbsent || !realityValid || request.Lifecycles != revisionOneRegistryLifecycles() {
+		health := registryHealth("CONNECTION-PROFILES-REGISTRY-EXPECTED-ABSENCE", "revision 1 contains a deferred setting, credential, listener, route, certificate binding, exposure, or publication placeholder")
 		return &health
 	}
 	return nil
@@ -1490,9 +1798,11 @@ func registryInvalidResult(request RegistryViewRequest, health Health) RegistryV
 		{request.AnyTLS.Enabled, request.AnyTLS.Credentials.valid(), request.AnyTLS.ServerName, request.AnyTLS.SingBoxVersion},
 	}
 	profiles := make([]RegistryProfile, len(registryDefinitions))
+	lifecycles := registryLifecycles(request)
+	states := [...]state.ProfileLifecycle{lifecycles.Reality, lifecycles.XHTTP, lifecycles.WebSocket, lifecycles.Hysteria2, lifecycles.TUIC, lifecycles.AnyTLS}
 	for index, definition := range registryDefinitions {
 		facts := definitions[index]
-		profiles[index] = RegistryProfile{ID: definition.id, Name: definition.name, Hostname: facts.hostname, QualifiedVersion: facts.version, Enabled: facts.enabled, DefaultEnabled: true, CredentialsReady: facts.credentials, SelectedListener: selectedRegistryListener(request, definition.id), Health: health}
+		profiles[index] = RegistryProfile{ID: definition.id, Name: definition.name, Hostname: facts.hostname, QualifiedVersion: facts.version, Enabled: facts.enabled, DefaultEnabled: true, CredentialsReady: facts.credentials, SelectedListener: selectedRegistryListener(request, definition.id), Health: health, Lifecycle: states[index]}
 	}
 	return RegistryViewResult{Profiles: profiles, Health: health, Repairable: repairableRegistryCode(health.Code)}
 }

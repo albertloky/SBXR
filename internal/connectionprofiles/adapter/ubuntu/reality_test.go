@@ -56,6 +56,42 @@ func TestObserveCoreCapabilitiesRequiresSuccessfulEmptyServiceSets(t *testing.T)
 	}
 }
 
+func TestObserveDeferredRegistryRequiresRealityOnlyAndInactiveSingBox(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(root, "etc/sbxr/xray")
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "config.json"), []byte(`{"inbounds":[{"tag":"vless-reality-vision"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	host := RealityHost{root: root, now: time.Now, run: func(_ context.Context, _ io.Reader, _ string, arguments ...string) (string, error) {
+		switch arguments[0] {
+		case "show":
+			if arguments[1] == "--property=UnitFileState" {
+				return "disabled\n", nil
+			}
+			if arguments[1] == "--property=ActiveState" {
+				return "inactive\n", nil
+			}
+		}
+		return "", fmt.Errorf("unexpected command %v", arguments)
+	}}
+	observed := host.ObserveDeferredRegistry(t.Context())
+	if !observed.XrayRealityOnly || !observed.SingBoxConfigurationAbsent || !observed.SingBoxServiceDisabled || !observed.SingBoxServiceInactive || observed.CheckedAt.IsZero() {
+		t.Fatalf("deferred registry = %+v", observed)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "etc/sbxr/sing-box"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "etc/sbxr/sing-box/config.json"), []byte(`{"inbounds":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if residue := host.ObserveDeferredRegistry(t.Context()); residue.SingBoxConfigurationAbsent {
+		t.Fatalf("sing-box residue passed: %+v", residue)
+	}
+}
+
 func TestRealityHostReturnsOnlyTypedSafeUbuntuAndXrayFacts(t *testing.T) {
 	root := t.TempDir()
 	directory := filepath.Join(root, "etc/sbxr/xray")

@@ -229,7 +229,7 @@ func (module Interface) PlanTUIC(ctx context.Context, request TUICPlanRequest) P
 }
 
 func tuicProfileInput(profile state.TUIC, secrets state.ConnectionProfileSecretReader) (*TUICViewRequest, error) {
-	if !profile.Enabled && profile == (state.TUIC{}) {
+	if !profile.Enabled && (profile == (state.TUIC{}) || profile == (state.TUIC{Lifecycle: state.ProfileNotSetUp})) {
 		return nil, nil
 	}
 	credentials, err := NewTUICCredentials(secrets.ReadClientAccessValue(profile.UUID), secrets.ReadClientAccessValue(profile.Password))

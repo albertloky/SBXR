@@ -117,7 +117,7 @@ func TestCoreUpdateRequalificationValidatesCompleteCandidateAndResetsAcceptance(
 	}
 }
 
-func TestRegistryPlanPropagatesReviewedAlternativePortsIntoNativeConfigurations(t *testing.T) {
+func TestRegistryPlanRejectsObsoleteAllSixProfileFreshInstallation(t *testing.T) {
 	current, candidate := validRegistryRequest(t), validRegistryRequest(t)
 	setRegistryRevision(&current, 0)
 	setRegistryRevision(&candidate, 1)
@@ -135,30 +135,8 @@ func TestRegistryPlanPropagatesReviewedAlternativePortsIntoNativeConfigurations(
 	}
 	fresh := systemchanges.New(managedStatusAdapter{observation: systemchanges.Observation{Status: systemchanges.NotInstalled, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased}}).FreshInstallationAuthority()
 	result := connectionprofiles.New(cleanHost).PlanRegistry(t.Context(), connectionprofiles.RegistryPlanRequest{Current: current, Candidate: candidate, ChangeSet: "profiles-reviewed-ports", DesiredStateSHA256: strings.Repeat("b", 64), FreshInstallation: fresh})
-	if result.Plan == nil || result.Health.Outcome != connectionprofiles.Healthy || !registryPlanIsReversible(result.Plan) {
-		t.Fatalf("alternative-port Plan = %+v", result)
-	}
-	profiles, secrets := completeProfileStateForAnyTLS()
-	profiles.VLESSRealityVision.Port, profiles.VLESSXHTTP.OriginPort, profiles.VLESSWebSocket.OriginPort = 20000, 20001, 20002
-	profiles.Hysteria2.Port, profiles.TUIC.Port, profiles.AnyTLS.Port = 20003, 20004, 20005
-	xray, singBox, err := result.Plan.PrepareConnectionProfiles(profiles, secrets)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, marker := range []string{`"port":20000`, `"port":20001`, `"port":20002`} {
-		if !bytes.Contains(xray, []byte(marker)) {
-			t.Fatalf("Xray configuration omitted %s: %s", marker, xray)
-		}
-	}
-	for _, marker := range []string{`"listen_port":20003`, `"listen_port":20004`, `"listen_port":20005`} {
-		if !bytes.Contains(singBox, []byte(marker)) {
-			t.Fatalf("sing-box configuration omitted %s: %s", marker, singBox)
-		}
-	}
-	prepared := &realityPreparedState{changeSet: "profiles-reviewed-ports", revision: 1, candidate: strings.Repeat("b", 64), planIdentity: result.Plan.Identity(), planSHA: result.Plan.SHA256()}
-	applied := result.Plan.Apply(systemchanges.Interface{}, prepared, systemchanges.StateLineage{Status: systemchanges.NotInstalled}, result.Plan.VolatileSHA256(), systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1})
-	if applied.Finding == nil || applied.Finding.Code != "SYSTEM-CHANGES-ADAPTER-UNAVAILABLE" {
-		t.Fatalf("fresh alternative-port Apply = %+v", applied)
+	if result.Plan != nil || result.Health.Outcome == connectionprofiles.Healthy {
+		t.Fatalf("obsolete all-six fresh-install Plan = %+v", result)
 	}
 }
 

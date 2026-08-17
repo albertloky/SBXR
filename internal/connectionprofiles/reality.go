@@ -412,6 +412,7 @@ type Plan struct {
 	checks                           []systemchanges.Check
 	mutation                         systemchanges.MutationClass
 	used                             *atomic.Bool
+	stateUsed                        *atomic.Bool
 }
 
 type singBoxPlanSpec struct {
@@ -469,7 +470,7 @@ func (module Interface) buildSingBoxPlan(ctx context.Context, spec singBoxPlanSp
 	if mutation == "" {
 		mutation = systemchanges.SettingChangeMutation
 	}
-	return &Plan{identity: "profiles-" + strings.ToLower(spec.profile) + "-" + sha[:12], sha256: sha, volatileSHA256: volatileSHA, description: spec.description, preparedBinding: preparedBinding, configuration: spec.xray, singBoxConfiguration: spec.singBox, revision: spec.revision, changeSet: spec.changeSet, startingStateSHA256: spec.startingState, desiredStateSHA256: spec.desiredState, realityRequest: spec.reality, xhttpRequest: spec.xhttp, webSocketRequest: spec.websocket, hysteria2Request: spec.hysteria2, tuicRequest: spec.tuic, anyTLSRequest: spec.anyTLS, steps: []systemchanges.Step{step}, checks: checks, mutation: mutation, used: &atomic.Bool{}}, ""
+	return &Plan{identity: "profiles-" + strings.ToLower(spec.profile) + "-" + sha[:12], sha256: sha, volatileSHA256: volatileSHA, description: spec.description, preparedBinding: preparedBinding, configuration: spec.xray, singBoxConfiguration: spec.singBox, revision: spec.revision, changeSet: spec.changeSet, startingStateSHA256: spec.startingState, desiredStateSHA256: spec.desiredState, realityRequest: spec.reality, xhttpRequest: spec.xhttp, webSocketRequest: spec.websocket, hysteria2Request: spec.hysteria2, tuicRequest: spec.tuic, anyTLSRequest: spec.anyTLS, steps: []systemchanges.Step{step}, checks: checks, mutation: mutation, used: &atomic.Bool{}, stateUsed: &atomic.Bool{}}, ""
 }
 
 func (plan *Plan) Identity() string {
@@ -581,7 +582,7 @@ func (module Interface) buildXrayPlan(ctx context.Context, spec xrayPlanSpec) (*
 		identity: spec.identityPrefix + sha[:12], sha256: sha, volatileSHA256: spec.volatileSHA256, description: spec.description,
 		preparedBinding: preparedBinding, configuration: append([]byte(nil), spec.configuration...), revision: spec.revision, changeSet: spec.changeSet,
 		startingStateSHA256: spec.startingStateSHA256, desiredStateSHA256: spec.desiredStateSHA256, realityRequest: spec.reality, xhttpRequest: spec.xhttp, webSocketRequest: spec.websocket,
-		steps: []systemchanges.Step{step}, checks: checks, used: &atomic.Bool{},
+		steps: []systemchanges.Step{step}, checks: checks, used: &atomic.Bool{}, stateUsed: &atomic.Bool{},
 	}, nil
 }
 
@@ -657,7 +658,7 @@ func xrayProfileInputs(profiles state.ConnectionProfiles, secrets state.Connecti
 }
 
 func xhttpProfileInput(profile state.VLESSXHTTP, secrets state.ConnectionProfileSecretReader, realityUUID string) (*XHTTPViewRequest, error) {
-	if !profile.Enabled && profile == (state.VLESSXHTTP{}) {
+	if !profile.Enabled && (profile == (state.VLESSXHTTP{}) || profile == (state.VLESSXHTTP{Lifecycle: state.ProfileNotSetUp})) {
 		return nil, nil
 	}
 	credentials, err := NewXHTTPCredentials(secrets.ReadClientAccessValue(profile.UUID), secrets.ReadClientAccessValue(profile.Path))
@@ -668,7 +669,7 @@ func xhttpProfileInput(profile state.VLESSXHTTP, secrets state.ConnectionProfile
 }
 
 func webSocketProfileInput(profile state.VLESSWebSocket, secrets state.ConnectionProfileSecretReader, realityUUID string, xhttp *XHTTPViewRequest) (*WebSocketViewRequest, error) {
-	if !profile.Enabled && profile == (state.VLESSWebSocket{}) {
+	if !profile.Enabled && (profile == (state.VLESSWebSocket{}) || profile == (state.VLESSWebSocket{Lifecycle: state.ProfileNotSetUp})) {
 		return nil, nil
 	}
 	credentials, err := NewWebSocketCredentials(secrets.ReadClientAccessValue(profile.UUID), secrets.ReadClientAccessValue(profile.Path))
@@ -790,6 +791,15 @@ func (plan *Plan) StateConnectionProfilesRepair() (uint64, string, bool) {
 	return plan.revision, plan.startingStateSHA256, plan.mutation == systemchanges.RepairMutation && plan.startingStateSHA256 == plan.desiredStateSHA256
 }
 
+// StateProfileSetupConnectionProfiles binds the complete five-profile
+// contribution to one exact Managed revision transition.
+func (plan *Plan) StateProfileSetupConnectionProfiles() (startingRevision, candidateRevision uint64, startingStateSHA256, desiredStateSHA256, changeSet string, valid bool) {
+	if plan == nil || plan.mutation != systemchanges.CloudflareProfileSetupMutation || plan.revision < 2 || plan.stateUsed == nil || !plan.stateUsed.CompareAndSwap(false, true) {
+		return 0, 0, "", "", "", false
+	}
+	return plan.revision - 1, plan.revision, plan.startingStateSHA256, plan.desiredStateSHA256, plan.changeSet, true
+}
+
 // ponytail: one process-local HMAC key binds reviewed bytes without retaining or
 // publishing a reusable digest of their secrets; durable Plans need a key store.
 var preparedBindingKey [32]byte
@@ -903,9 +913,9 @@ func realityInbound(request ViewRequest) map[string]any {
 	}
 }
 
-func (plan *Plan) Apply(module systemchanges.Interface, prepared systemchanges.PreparedStateCommit, starting systemchanges.StateLineage, volatileSHA256 string, disk systemchanges.DiskRequirement) systemchanges.ApplyResult {
+func (plan *Plan) Apply(module systemchanges.Interface, prepared systemchanges.PreparedStateCommit, starting systemchanges.StateLineage, volatileSHA256 string, disk systemchanges.DiskRequirement, setupConfirmation ...systemchanges.CloudflareSetupConfirmation) systemchanges.ApplyResult {
 	expectedRevision := starting.Revision
-	if starting.Status == systemchanges.NotInstalled {
+	if starting.Status == systemchanges.NotInstalled || plan != nil && plan.mutation == systemchanges.CloudflareProfileSetupMutation {
 		expectedRevision++
 	}
 	if plan == nil || plan.used == nil || !plan.used.CompareAndSwap(false, true) || prepared == nil || volatileSHA256 != plan.volatileSHA256 || expectedRevision != plan.revision || starting.SHA256 != plan.startingStateSHA256 {
@@ -924,11 +934,17 @@ func (plan *Plan) Apply(module systemchanges.Interface, prepared systemchanges.P
 	} else if starting.Status != systemchanges.Managed {
 		return module.Apply(nil)
 	}
+	var confirmation systemchanges.CloudflareSetupConfirmation
+	if len(setupConfirmation) == 1 {
+		confirmation = setupConfirmation[0]
+	} else if len(setupConfirmation) != 0 {
+		return module.Apply(nil)
+	}
 	change, err := systemchanges.NewChangeSet(systemchanges.ChangeSetSpec{
 		Identity: plan.changeSet, Mutation: mutation, OutcomeOwner: systemchanges.ConnectionProfilesModule,
 		StartingState: starting, TargetStateSHA256: candidateSHA256,
 		Plan: systemchanges.PlanBinding{Identity: plan.identity, SHA256: plan.sha256, VolatileSHA256: volatileSHA256}, PreparedState: prepared,
-		Steps: plan.steps, Checks: plan.checks, Timeouts: systemchanges.Timeouts{Step: time.Minute, Check: time.Minute}, Disk: disk,
+		Steps: plan.steps, Checks: plan.checks, Timeouts: systemchanges.Timeouts{Step: time.Minute, Check: time.Minute}, Disk: disk, CloudflareSetupConfirmation: confirmation,
 	})
 	if err != nil {
 		return module.Apply(nil)

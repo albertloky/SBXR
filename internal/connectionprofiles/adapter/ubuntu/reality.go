@@ -98,6 +98,32 @@ func (host RealityHost) ObserveCoreCapabilities(ctx context.Context) connectionp
 	return connectionprofiles.CoreCapabilityObservation{CheckedAt: host.now().UTC(), XrayNone: withoutCapabilities("xray.service"), SingBoxNone: withoutCapabilities("sing-box.service")}
 }
 
+func (host RealityHost) ObserveDeferredRegistry(ctx context.Context) connectionprofiles.DeferredRegistryObservation {
+	if host.run == nil {
+		host.run = runRealityCommand
+	}
+	if host.now == nil {
+		host.now = time.Now
+	}
+	var xray struct {
+		Inbounds []struct{ Tag string }
+	}
+	xrayConfiguration, xrayErr := os.ReadFile(filepath.Join(host.root, realityConfigurationPath))
+	xrayRealityOnly := xrayErr == nil && json.Unmarshal(xrayConfiguration, &xray) == nil && len(xray.Inbounds) == 1 && xray.Inbounds[0].Tag == "vless-reality-vision"
+	_, singBoxErr := os.Stat(filepath.Join(host.root, singBoxConfigurationPath))
+	unitState := func(property string) string {
+		output, err := host.run(ctx, nil, "systemctl", "show", "--property="+property, "--value", "sing-box.service")
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(output)
+	}
+	return connectionprofiles.DeferredRegistryObservation{
+		CheckedAt: host.now().UTC(), XrayRealityOnly: xrayRealityOnly, SingBoxConfigurationAbsent: os.IsNotExist(singBoxErr),
+		SingBoxServiceDisabled: unitState("UnitFileState") == "disabled", SingBoxServiceInactive: unitState("ActiveState") == "inactive",
+	}
+}
+
 func (host RealityHost) webSocketConfigurationAgreement(expectedPort uint16, expectedHost, expectedPath string) (bool, bool) {
 	content, err := os.ReadFile(filepath.Join(host.root, realityConfigurationPath))
 	if err != nil {

@@ -21,12 +21,12 @@ func TestPrepareRegistryMutationCoversTheFourReviewedProfileChanges(t *testing.T
 		check   func(*testing.T, state.ConnectionProfiles, connectionprofiles.PublicationSource)
 	}{
 		{"disable", connectionprofiles.DisableProfile, connectionprofiles.VLESSXHTTPProfileID, func(t *testing.T, candidate state.ConnectionProfiles, source connectionprofiles.PublicationSource) {
-			if candidate.VLESSXHTTP.Enabled || candidate.VLESSXHTTP.UUID != current.VLESSXHTTP.UUID || len(source.Omissions()) != 1 || source.Omissions()[0].ID != connectionprofiles.VLESSXHTTPProfileID {
+			if candidate.VLESSXHTTP.Enabled || candidate.VLESSXHTTP.Lifecycle != state.ProfileDisabled || candidate.VLESSXHTTP.UUID != current.VLESSXHTTP.UUID || len(source.Omissions()) != 1 || source.Omissions()[0].ID != connectionprofiles.VLESSXHTTPProfileID {
 				t.Fatalf("disabled candidate = %+v omissions=%+v", candidate.VLESSXHTTP, source.Omissions())
 			}
 		}},
 		{"enable", connectionprofiles.EnableProfile, connectionprofiles.VLESSXHTTPProfileID, func(t *testing.T, candidate state.ConnectionProfiles, source connectionprofiles.PublicationSource) {
-			if !candidate.VLESSXHTTP.Enabled || !connectionprofiles.PublicationInputsMatch(source, candidate) {
+			if !candidate.VLESSXHTTP.Enabled || candidate.VLESSXHTTP.Lifecycle != state.ProfileEnabled || !connectionprofiles.PublicationInputsMatch(source, candidate) {
 				t.Fatalf("enabled candidate did not agree with publication")
 			}
 		}},

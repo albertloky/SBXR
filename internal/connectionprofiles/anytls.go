@@ -228,7 +228,7 @@ func (module Interface) PlanAnyTLS(ctx context.Context, request AnyTLSPlanReques
 }
 
 func anyTLSProfileInput(profile state.AnyTLS, secrets state.ConnectionProfileSecretReader) (*AnyTLSViewRequest, error) {
-	if !profile.Enabled && profile == (state.AnyTLS{}) {
+	if !profile.Enabled && (profile == (state.AnyTLS{}) || profile == (state.AnyTLS{Lifecycle: state.ProfileNotSetUp})) {
 		return nil, nil
 	}
 	credentials, err := NewAnyTLSCredentials(secrets.ReadClientAccessValue(profile.Password))

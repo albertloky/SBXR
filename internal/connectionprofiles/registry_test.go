@@ -405,6 +405,7 @@ func validRegistryRequest(t *testing.T) connectionprofiles.RegistryViewRequest {
 
 func healthyRegistryHost(request connectionprofiles.RegistryViewRequest) *anyTLSHost {
 	host := healthyAnyTLSHost()
+	host.deferred = connectionprofiles.DeferredRegistryObservation{XrayRealityOnly: true, SingBoxConfigurationAbsent: true, SingBoxServiceDisabled: true, SingBoxServiceInactive: true}
 	host.coreCapabilities = connectionprofiles.CoreCapabilityObservation{XrayNone: !request.Reality.Enabled && !request.XHTTP.Enabled && !request.WebSocket.Enabled, SingBoxNone: !request.Hysteria2.Enabled && !request.TUIC.Enabled && !request.AnyTLS.Enabled}
 	noXrayCapabilities := !request.Reality.Enabled || request.Reality.Port >= 1024
 	host.webSocketHost.xhttpHost.realityHost.observation.NetBindService = !noXrayCapabilities

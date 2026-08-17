@@ -296,7 +296,7 @@ func (module Interface) PlanHysteria2(ctx context.Context, request Hysteria2Plan
 }
 
 func hysteria2ProfileInput(profile state.Hysteria2, secrets state.ConnectionProfileSecretReader) (*Hysteria2ViewRequest, error) {
-	if !profile.Enabled && profile == (state.Hysteria2{}) {
+	if !profile.Enabled && (profile == (state.Hysteria2{}) || profile == (state.Hysteria2{Lifecycle: state.ProfileNotSetUp})) {
 		return nil, nil
 	}
 	credentials, err := NewHysteria2Credentials(secrets.ReadClientAccessValue(profile.Password))
