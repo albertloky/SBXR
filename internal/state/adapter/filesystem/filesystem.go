@@ -32,6 +32,9 @@ type adapter struct {
 // the State Interface.
 func New() state.Interface { return state.New(newAt(filepath.Dir(StateDirectory), 0)) }
 
+// NewAt wires State to the production filesystem semantics under a controlled root.
+func NewAt(root string) state.Interface { return state.New(newAt(root, os.Geteuid())) }
+
 func newAt(root string, uid int) state.Storage { return adapter{root: root, uid: uid} }
 
 func (a adapter) Read() ([]byte, error) {

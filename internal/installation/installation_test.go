@@ -3,13 +3,11 @@ package installation
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
+	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -22,7 +20,9 @@ import (
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 	softwareubuntu "github.com/albertloky/SBXR/internal/softwarelifecycle/adapter/ubuntu"
 	"github.com/albertloky/SBXR/internal/state"
+	statefilesystem "github.com/albertloky/SBXR/internal/state/adapter/filesystem"
 	"github.com/albertloky/SBXR/internal/systemchanges"
+	systemubuntu "github.com/albertloky/SBXR/internal/systemchanges/adapter/ubuntu"
 )
 
 func newCloudflareTestModule(api cloudflaretunnel.API, clock cloudflaretunnel.Clock) cloudflaretunnel.Interface {
@@ -88,7 +88,7 @@ func TestInstallationInterfaceOwnsRootRuntimeTransactionOutcomes(t *testing.T) {
 		{name: "Recovery Required", failPost: true, failReverse: true, want: RecoveryRequired},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			var adapter *runtimeArtifactTransactionAdapter
+			var adapter *systemubuntu.ControlledInstallationAdapter
 			var launchErr error
 			var transaction systemchanges.ApplyResult
 			module := newTestInstallation(t, composedNetworkObserver{}, func(ctx context.Context, request softwareubuntu.InstallHandoffRequest, _ <-chan struct{}) (softwareubuntu.InstallApplyOutcome, error) {
@@ -103,7 +103,12 @@ func TestInstallationInterfaceOwnsRootRuntimeTransactionOutcomes(t *testing.T) {
 					launchErr = err
 					return 0, err
 				}
-				prepared, err := built.prepareState(state.New(&publishingInstallState{}))
+				root := t.TempDir()
+				if err := os.Chmod(root, 0o700); err != nil {
+					launchErr = err
+					return 0, err
+				}
+				prepared, err := built.prepareState(statefilesystem.NewAt(root))
 				if err != nil {
 					launchErr = err
 					return 0, err
@@ -113,7 +118,7 @@ func TestInstallationInterfaceOwnsRootRuntimeTransactionOutcomes(t *testing.T) {
 					launchErr = err
 					return 0, err
 				}
-				adapter = &runtimeArtifactTransactionAdapter{failPost: test.failPost, failReverse: test.failReverse, observation: systemchanges.Observation{Status: systemchanges.NotInstalled, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, VolatileSHA256: volatile, FilesystemBytes: 20 << 30, AvailableBytes: 5 << 30, WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}}
+				adapter = systemubuntu.NewRefusingControlledInstallationAdapter(systemchanges.Observation{Status: systemchanges.NotInstalled, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, VolatileSHA256: volatile, FilesystemBytes: 20 << 30, AvailableBytes: 5 << 30, WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}, test.failPost, test.failReverse)
 				result := built.plan.Apply(ctx, softwarelifecycle.InstallApplyRequest{Approval: rootRuntimeInstallApproval{recheck: recheck}, PreparedState: prepared, SystemChanges: systemchanges.New(adapter)})
 				transaction = result
 				switch result.Outcome {
@@ -138,15 +143,15 @@ func TestInstallationInterfaceOwnsRootRuntimeTransactionOutcomes(t *testing.T) {
 						reversed := 0
 						var executed []string
 						if adapter != nil {
-							reversed = adapter.reversed
-							executed = adapter.executed
+							reversed = adapter.ReversedSteps()
+							executed = adapter.ExecutedSteps()
 						}
 						t.Fatalf("Installation outcome = %+v, adapter=%t, reversed=%d, executed=%v, launch error=%v, transaction=%+v", operation, adapter != nil, reversed, executed, launchErr, transaction)
 					}
 					if test.want == Completed {
 						for _, owner := range []systemchanges.Module{systemchanges.SoftwareModule, systemchanges.NetworkPolicyModule, systemchanges.ConnectionProfilesModule, systemchanges.CertificateModule, systemchanges.SubscriptionModule} {
-							if !adapter.checked[owner][systemchanges.PrePublication] || !adapter.checked[owner][systemchanges.PostPublication] {
-								t.Fatalf("Managed omitted Required %s gates: %+v", owner, adapter.checked)
+							if !adapter.RequiredGatePassed(owner, systemchanges.PrePublication) || !adapter.RequiredGatePassed(owner, systemchanges.PostPublication) {
+								t.Fatalf("Managed omitted Required %s gates", owner)
 							}
 						}
 					}
@@ -157,172 +162,6 @@ func TestInstallationInterfaceOwnsRootRuntimeTransactionOutcomes(t *testing.T) {
 			t.Fatal("Installation outcome unavailable")
 		})
 	}
-}
-
-type publishingInstallState struct{ document []byte }
-
-func (storage *publishingInstallState) Read() ([]byte, error) {
-	if storage.document == nil {
-		return nil, fs.ErrNotExist
-	}
-	return append([]byte(nil), storage.document...), nil
-}
-func (storage *publishingInstallState) Publish(_ []byte, candidate []byte, _ string) ([]byte, error) {
-	storage.document = append([]byte(nil), candidate...)
-	return append([]byte(nil), candidate...), nil
-}
-func (storage *publishingInstallState) Restore(_ []byte, prior []byte) ([]byte, error) {
-	storage.document = append([]byte(nil), prior...)
-	return append([]byte(nil), prior...), nil
-}
-
-type runtimeArtifactLock struct{}
-
-func (runtimeArtifactLock) Close() error { return nil }
-
-type runtimeArtifactTransactionAdapter struct {
-	observation systemchanges.Observation
-	artifacts   map[string][]byte
-	cloudflare  *cloudflaretunnel.Executor
-	evidence    []systemchanges.StepEvidence
-	checked     map[systemchanges.Module]map[systemchanges.GatePhase]bool
-	failPost    bool
-	failReverse bool
-	reversed    int
-	executed    []string
-}
-
-func (adapter *runtimeArtifactTransactionAdapter) Observe() (systemchanges.Observation, error) {
-	return adapter.observation, nil
-}
-func (*runtimeArtifactTransactionAdapter) TryLock() (systemchanges.Lock, bool, error) {
-	return runtimeArtifactLock{}, true, nil
-}
-func (adapter *runtimeArtifactTransactionAdapter) Prepare(_ systemchanges.ExecutionLease, preparation systemchanges.Preparation) error {
-	adapter.artifacts = map[string][]byte{}
-	if err := preparation.WriteStateArtifacts(func(name string, _ uint32, source io.Reader) error {
-		body, err := io.ReadAll(source)
-		adapter.artifacts[name] = body
-		return err
-	}); err != nil {
-		return err
-	}
-	if preparation.SSHAgreementSHA256 != "" {
-		return preparation.WriteSSHPreservation(func(source io.Reader) error {
-			body, err := io.ReadAll(source)
-			adapter.artifacts["ssh-preservation"] = body
-			return err
-		})
-	}
-	return nil
-}
-func (adapter *runtimeArtifactTransactionAdapter) ReplaceStateArtifacts(_ systemchanges.ExecutionLease, changeSet string, binding systemchanges.StateTransactionBinding, stream func(func(string, uint32, io.Reader) error) error) error {
-	if binding.ChangeSet != changeSet {
-		return errors.New("final State binding mismatch")
-	}
-	for name := range adapter.artifacts {
-		if strings.HasPrefix(name, "prepared/") {
-			delete(adapter.artifacts, name)
-		}
-	}
-	return stream(func(name string, _ uint32, source io.Reader) error {
-		body, err := io.ReadAll(source)
-		adapter.artifacts[name] = body
-		return err
-	})
-}
-func (*runtimeArtifactTransactionAdapter) Record(systemchanges.ExecutionLease, systemchanges.CheckpointRecord) error {
-	return nil
-}
-
-func (adapter *runtimeArtifactTransactionAdapter) Execute(_ systemchanges.ExecutionLease, _ string, number int, step systemchanges.Step, _ time.Duration, _ *systemchanges.Cancellation) (systemchanges.StepEvidence, error) {
-	adapter.executed = append(adapter.executed, fmt.Sprintf("%d:%s:%s", number, step.Owner(), step.Forward()))
-	adapter.artifacts["active/xray.json"] = append([]byte(nil), adapter.artifacts["prepared/xray.json"]...)
-	adapter.artifacts["active/subscription.json"] = append([]byte(nil), adapter.artifacts["prepared/subscription.json"]...)
-	if change, ok := step.CloudflareChange(); ok && adapter.cloudflare != nil {
-		resolved := ""
-		if change.TunnelIDFromStep > 0 && change.TunnelIDFromStep <= len(adapter.evidence) {
-			resolved = adapter.evidence[change.TunnelIDFromStep-1].ResourceID
-		}
-		evidence, err := adapter.cloudflare.Execute(step, resolved, time.Second)
-		adapter.evidence = append(adapter.evidence, evidence)
-		return evidence, err
-	}
-	if change, ok := step.CloudflareChange(); ok {
-		evidence := systemchanges.StepEvidence{Code: "root-runtime-applied", SHA256: strings.Repeat("a", 64), ResourceID: fmt.Sprintf("resource-%d", number)}
-		switch change.Action {
-		case systemchanges.CloudflareTunnelCreate:
-			evidence.ResourceType = string(systemchanges.CloudflareTunnelResource)
-			evidence.ResourceID = "550e8400-e29b-41d4-a716-446655440001"
-		case systemchanges.CloudflareRoutesPut:
-			evidence.ResourceType = string(systemchanges.CloudflareRouteResource)
-		case systemchanges.CloudflareDNSCreate:
-			evidence.ResourceType = string(systemchanges.CloudflareDNSRecordResource)
-		}
-		adapter.evidence = append(adapter.evidence, evidence)
-		return evidence, nil
-	}
-	evidence := systemchanges.StepEvidence{Code: "root-runtime-applied", SHA256: strings.Repeat("a", 64)}
-	adapter.evidence = append(adapter.evidence, evidence)
-	return evidence, nil
-}
-func (adapter *runtimeArtifactTransactionAdapter) Reverse(systemchanges.ExecutionLease, string, int, systemchanges.Step, time.Duration) (systemchanges.StepEvidence, error) {
-	adapter.reversed++
-	if adapter.failReverse {
-		return systemchanges.StepEvidence{}, errors.New("controlled rollback failure")
-	}
-	return systemchanges.StepEvidence{Code: "root-runtime-restored", SHA256: strings.Repeat("b", 64)}, nil
-}
-func (adapter *runtimeArtifactTransactionAdapter) Check(_ systemchanges.ExecutionLease, check systemchanges.Check, phase systemchanges.GatePhase, _ time.Duration) (systemchanges.HealthStatus, error) {
-	if adapter.checked == nil {
-		adapter.checked = map[systemchanges.Module]map[systemchanges.GatePhase]bool{}
-	}
-	if adapter.checked[check.Owner] == nil {
-		adapter.checked[check.Owner] = map[systemchanges.GatePhase]bool{}
-	}
-	if check.Classification == systemchanges.Required {
-		adapter.checked[check.Owner][phase] = true
-	}
-	if adapter.failPost && phase == systemchanges.PostPublication {
-		adapter.artifacts["active/subscription.json"] = []byte(`{"profiles":[]}`)
-	}
-	var manifests struct {
-		Xray         *state.ServiceManifest `json:"xray"`
-		SingBox      *state.ServiceManifest `json:"sing_box"`
-		Cloudflared  *state.ServiceManifest `json:"cloudflared"`
-		Subscription *state.ServiceManifest `json:"subscription"`
-	}
-	if err := json.Unmarshal(adapter.artifacts["prepared/manifests.json"], &manifests); err != nil || manifests.Xray == nil || manifests.SingBox != nil || manifests.Cloudflared != nil || manifests.Subscription == nil {
-		return systemchanges.Unknown, err
-	}
-	for _, manifest := range []*state.ServiceManifest{manifests.Xray, manifests.Subscription} {
-		if manifest.Owner != "root" || manifest.Group != "root" || manifest.DirectoryMode != 0o755 || manifest.FileMode != 0o644 {
-			return systemchanges.Failed, nil
-		}
-	}
-	for name, expected := range map[string]string{"active/xray.json": manifests.Xray.SHA256, "active/subscription.json": manifests.Subscription.SHA256} {
-		digest := sha256.Sum256(adapter.artifacts[name])
-		if hex.EncodeToString(digest[:]) != expected {
-			return systemchanges.Failed, nil
-		}
-	}
-	return systemchanges.Healthy, nil
-}
-func (*runtimeArtifactTransactionAdapter) VerifyAgreement(systemchanges.ExecutionLease, systemchanges.Agreement, time.Duration) error {
-	return nil
-}
-func (*runtimeArtifactTransactionAdapter) VerifyRollback(systemchanges.ExecutionLease, systemchanges.RollbackAgreement, time.Duration) error {
-	return nil
-}
-func (adapter *runtimeArtifactTransactionAdapter) VerifySSHPreservation(_ systemchanges.ExecutionLease, _ string, agreement string, _ systemchanges.SSHPreservationPhase, _ time.Duration) error {
-	digest := sha256.Sum256(adapter.artifacts["ssh-preservation"])
-	if hex.EncodeToString(digest[:]) != agreement {
-		return errors.New("SSH agreement changed")
-	}
-	return nil
-}
-func (*runtimeArtifactTransactionAdapter) Cleanup(systemchanges.ExecutionLease, string) error {
-	return nil
 }
 
 func TestDestructiveReclamationCompositionBindsAllOwningModulesToOneChangeSet(t *testing.T) {
@@ -1241,62 +1080,24 @@ func (conflictInventoryAPI) ObserveMutation(_ context.Context, request cloudflar
 
 func composedInstallRequest(t *testing.T) softwareubuntu.InstallHandoffRequest {
 	t.Helper()
-	application := []byte("authenticated application archive")
-	componentFiles := map[string][]byte{
-		"xray": []byte("#!/bin/sh\nexit 0\n"), "sing-box": []byte("#!/bin/sh\nexit 0\n"), "cloudflared": []byte("#!/bin/sh\nexit 0\n"),
-		"certbot/bin/certbot": softwarelifecycle.ComponentCertbotLauncher(), "certbot/pyvenv.cfg": []byte("home = /usr/bin\nversion = 3.12\n"),
-		"certbot/lib/python3.12/site-packages/certbot/__init__.py": []byte("__version__ = '5.4.0'\n"),
-	}
-	manifest, err := softwarelifecycle.NewComponentManifest(softwarelifecycle.AMD64, "5.4.0", componentFiles)
+	request, err := controlledInstallRequest()
 	if err != nil {
 		t.Fatal(err)
 	}
-	components, err := softwarelifecycle.BuildComponentArchive(manifest, componentFiles)
-	if err != nil {
-		t.Fatal(err)
-	}
-	applicationDigest, componentDigest := sha256.Sum256(application), sha256.Sum256(components)
-	identity := softwarelifecycle.ReleaseIdentity{Repository: softwarelifecycle.Repository, Tag: "v1.0.0", Commit: strings.Repeat("1", 40), IndexSHA256: strings.Repeat("2", 64)}
-	applicationAsset := softwarelifecycle.AssetProof{Role: softwarelifecycle.ApplicationAMD64, Name: "sbxr-linux-amd64.tar.gz", Size: int64(len(application)), SHA256: hex.EncodeToString(applicationDigest[:])}
-	componentAsset := softwarelifecycle.AssetProof{Role: softwarelifecycle.ComponentsAMD64, Name: "sbxr-components-linux-amd64.tar.gz", Size: int64(len(components)), SHA256: hex.EncodeToString(componentDigest[:])}
-	verified := softwarelifecycle.VerifiedRelease{Identity: identity, Version: "1.0.0", Sequence: 1, StateSchema: 2, MinimumUpdaterSchema: 1, Assets: []softwarelifecycle.AssetProof{applicationAsset, componentAsset}}
-	staged := softwarelifecycle.StagedRelease{Identity: identity, Build: softwarelifecycle.EmbeddedBuildIdentity{Repository: identity.Repository, Tag: identity.Tag, Commit: identity.Commit, PayloadSHA256: strings.Repeat("3", 64)}, Architecture: softwarelifecycle.AMD64, ExecutableSHA256: strings.Repeat("4", 64), ComponentsSHA256: componentAsset.SHA256, InstallPath: softwarelifecycle.ReleaseInstallPath(identity), StateSchema: 2}
-	return softwareubuntu.InstallHandoffRequest{
-		Schema: 1, Session: strings.Repeat("a", 64), Tag: identity.Tag, Architecture: softwarelifecycle.AMD64,
-		Draft:         softwarelifecycle.InstallationDraft{OwnerEmail: "owner@example.com", SubscriberAgreementReviewed: true, PublicIPv4: "8.8.8.8", PrimaryAddress: "8.8.8.8", SSHPort: 22, RealityPort: 443, SubscriptionPort: 10443},
-		RealityTarget: "www.microsoft.com:443", RealityServerName: "www.microsoft.com", Entropy: bytes.Repeat([]byte{0x42}, 32),
-		Candidate: softwarelifecycle.InstallCandidateHandoff{Verified: verified, Staged: staged, ApplicationAsset: applicationAsset, ComponentAsset: componentAsset, ApplicationArchive: application, ComponentArchive: components},
-	}
+	return request
 }
 
 type composedNetworkObserver struct{}
 
 func (composedNetworkObserver) Observe(request networkpolicy.ObservationRequest) (networkpolicy.Observations, error) {
-	return networkpolicy.Observations{
-		Host:       networkpolicy.HostFacts{UbuntuVersion: "24.04.3", UbuntuServer: true, Architecture: "amd64", Systemd: true, LogicalCPUs: 1, PhysicalRAM: 1024 << 20},
-		PublicIPv4: []string{"8.8.8.8"}, SSH: networkpolicy.SSHFacts{DetectedPort: 22, ServerAddress: "8.8.8.8", CurrentSessions: []string{strings.Repeat("6", 64)}}, Firewall: networkpolicy.FirewallFacts{SBXRTableState: "absent", RootVerified: request.Stage == networkpolicy.PostApproval}, Routes: networkpolicy.RouteFacts{IPv4: "default via 192.0.2.1"},
-		Outbound: networkpolicy.OutboundFacts{DNS: true, GitHubHTTPS: true, GitHubAttestationHTTPS: true, CloudflareHTTPS: true, ACMEHTTPS: true, CertificateEndpointsHTTPS: true, TimeService: true, TunnelTCP7844: true, TunnelUDP7844: true},
-		Disk:     networkpolicy.DiskFacts{FilesystemBytes: 20 << 30, AvailableBytes: 3 << 30}, Time: networkpolicy.TimeFacts{Synchronized: true, Owner: "systemd-timesyncd"}, OwnerFacts: networkpolicy.OwnerFacts{DNS: "fresh", Tunnel: "fresh"},
-		Certificate: networkpolicy.CertificateFacts{DNS: networkpolicy.DNSFacts{Hostname: "direct.example.com"}, CAA: networkpolicy.CAAFacts{Issuer: "letsencrypt.org", HTTP01Allowed: true}}, Checksums: map[string]string{"sshd_config": "sha256:ssh", "nftables": "sha256:nft"},
-		ReclamationComplete: true,
-	}, nil
-}
-
-type composedSSHObserver struct{ composedNetworkObserver }
-
-func (composedSSHObserver) Observe(request networkpolicy.ObservationRequest) (networkpolicy.Observations, error) {
-	observed, err := (composedNetworkObserver{}).Observe(request)
-	digest := sha256.Sum256([]byte("1.1.1.1 50000 8.8.8.8 22"))
-	observed.SSH = networkpolicy.SSHFacts{DetectedPort: 22, ServerAddress: "8.8.8.8", CurrentSessions: []string{hex.EncodeToString(digest[:])}, SessionsComplete: true, Service: "ssh.service", Listener: "0.0.0.0:22/tcp"}
-	observed.Listeners = []networkpolicy.Listener{{Address: "0.0.0.0", Port: 22, Protocol: networkpolicy.TCP, Process: "sshd", Service: "ssh.service"}}
-	return observed, err
+	return networkpolicy.ControlledInstallationAdapter().Observe(request)
 }
 
 func composedSSHProof(t *testing.T) networkpolicy.SSHPreservationProof {
 	t.Helper()
-	proof, failure := networkpolicy.New(composedSSHObserver{}).ProveSSHPreservation("1.1.1.1 50000 8.8.8.8 22")
-	if failure != nil {
-		t.Fatal(failure)
+	proof, err := networkpolicy.ControlledInstallationSSHPreservationProof()
+	if err != nil {
+		t.Fatal(err)
 	}
 	return proof
 }
