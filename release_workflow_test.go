@@ -85,7 +85,7 @@ func TestCandidateWorkflowQualifiesBothNativePackagesBeforeAggregation(t *testin
 			t.Fatalf("candidate workflow omitted native package qualification contract %q", required)
 		}
 	}
-	if strings.Count(workflow, "go run ./cmd/sbxr-release validate-package-qualification") != 2 {
+	if strings.Count(workflow, "go run ./cmd/sbxr-release validate-package-qualification") < 2 {
 		t.Fatal("candidate workflow must strictly validate Package Qualification evidence before upload and aggregation")
 	}
 	for _, marker := range softwarelifecycle.ControlledStagedOnboardingSecretMarkers() {
@@ -104,6 +104,39 @@ func TestCandidateWorkflowQualifiesBothNativePackagesBeforeAggregation(t *testin
 	releaseArtifact := workflow[strings.Index(workflow, "name: release-candidate"):report]
 	if strings.Contains(releaseArtifact, "package-qualification-") || strings.Count(releaseArtifact, "\n            dist/") != 6 {
 		t.Fatal("Package Qualification JSON entered the six-asset release artifact")
+	}
+}
+
+func TestCandidateWorkflowQualifiesBothPublicNativePackagesBeforeAcceptanceRecord(t *testing.T) {
+	body, err := os.ReadFile(".github/workflows/candidate.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(body)
+	for _, required := range []string{
+		"qualify-public-packages:",
+		"name: Qualify public prerelease packages",
+		"runner: ubuntu-24.04-arm",
+		"releases/download/$RELEASE_TAG/release-index.json",
+		"releases/download/$RELEASE_TAG/sbxr-linux-$architecture.tar.gz",
+		"releases/download/$RELEASE_TAG/sbxr-components-linux-$architecture.tar.gz",
+		"go run ./cmd/sbxr-release verify -tag \"$RELEASE_TAG\"",
+		"inspect/sbxr acceptance staged-onboarding --components \"dist/sbxr-components-linux-$architecture.tar.gz\" --json",
+		"name: public-package-qualification-${{ matrix.architecture }}",
+		"pattern: public-package-qualification-*",
+		"needs: qualify-public-packages",
+		"-qualification-directory qualification",
+		"Packaged executable qualification: amd64 Passed; arm64 Passed.",
+	} {
+		if !strings.Contains(workflow, required) {
+			t.Fatalf("candidate workflow omitted public package qualification contract %q", required)
+		}
+	}
+	publicJob := strings.Index(workflow, "qualify-public-packages:")
+	aggregate := strings.Index(workflow, "  verify-release:")
+	record := strings.Index(workflow, "name: Build the exact redacted automated Acceptance Record")
+	if publicJob < 0 || aggregate <= publicJob || record <= aggregate {
+		t.Fatal("Acceptance Record can run before both public native packages qualify")
 	}
 }
 

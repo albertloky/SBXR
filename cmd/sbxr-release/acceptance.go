@@ -21,8 +21,8 @@ import (
 )
 
 type acceptanceOptions struct {
-	tag, commit, directory, output, evidenceURL string
-	afterAssetRead                              func(string)
+	tag, commit, directory, qualificationDirectory, output, evidenceURL string
+	afterAssetRead                                                      func(string)
 }
 
 type acceptanceIndex struct {
@@ -57,7 +57,7 @@ var (
 )
 
 func writeAutomatedAcceptanceRecord(options acceptanceOptions, recordedAt time.Time) error {
-	if options.directory == "" || options.output == "" || !acceptanceCommit.MatchString(options.commit) || !acceptanceEvidenceURL.MatchString(options.evidenceURL) || recordedAt.IsZero() {
+	if options.directory == "" || options.qualificationDirectory == "" || options.output == "" || !acceptanceCommit.MatchString(options.commit) || !acceptanceEvidenceURL.MatchString(options.evidenceURL) || recordedAt.IsZero() {
 		return errors.New("acceptance record refused")
 	}
 	rootPath, rootErr := filepath.Abs(options.directory)
@@ -142,6 +142,15 @@ func writeAutomatedAcceptanceRecord(options acceptanceOptions, recordedAt time.T
 			return errors.New("acceptance index agreement refused")
 		}
 	}
+	if err := validateAcceptancePackageQualifications(root, options.qualificationDirectory, identities, options.tag, options.commit); err != nil {
+		return err
+	}
+	for _, name := range names {
+		current, statErr := root.Lstat(name)
+		if statErr != nil || !unchangedFile(identities[name], current) {
+			return errors.New("acceptance asset changed")
+		}
+	}
 	var record strings.Builder
 	fmt.Fprintln(&record, "# SBXR automated Acceptance Record")
 	fmt.Fprintln(&record)
@@ -156,6 +165,7 @@ func writeAutomatedAcceptanceRecord(options acceptanceOptions, recordedAt time.T
 	fmt.Fprintf(&record, "Public verifier: %s %s\n", githubadapter.Version, githubadapter.SigningFingerprint)
 	fmt.Fprintln(&record, "Stable result code: RELEASE-STAGED-ONBOARDING-PACKAGE-QUALIFICATION")
 	fmt.Fprintln(&record, "Qualified procedures: RELEASE-STAGED-INSTALL-REVISION-1, RELEASE-CLOUDFLARE-PROFILE-SETUP-N-TO-N+1, RELEASE-STAGED-ONBOARDING-CHAIN, RELEASE-STAGED-ONBOARDING-SECRET-SCAN, RELEASE-STAGED-ONBOARDING-CLIENT-OUTPUT, RELEASE-STAGED-ONBOARDING-TERMINAL, RELEASE-STAGED-ONBOARDING-GUIDE-TEXT")
+	fmt.Fprintln(&record, "Packaged executable qualification: amd64 Passed; arm64 Passed.")
 	fmt.Fprintln(&record)
 	fmt.Fprintln(&record, "| Stage | Status | Evidence |")
 	fmt.Fprintln(&record, "|---|---|---|")
@@ -184,6 +194,60 @@ func writeAutomatedAcceptanceRecord(options acceptanceOptions, recordedAt time.T
 	fmt.Fprintln(&record)
 	fmt.Fprintln(&record, "Any changed asset, commit, tag, release-index digest, procedure, guide text, selected output, or required test resets its affected result.")
 	return writeExclusive(options.output, []byte(record.String()))
+}
+
+func validateAcceptancePackageQualifications(assetRoot *os.Root, qualificationDirectory string, identities map[string]fs.FileInfo, tag, commit string) error {
+	qualificationRoot, err := os.OpenRoot(qualificationDirectory)
+	if err != nil {
+		return errors.New("acceptance package evidence unavailable")
+	}
+	defer qualificationRoot.Close()
+	entries, err := fs.ReadDir(qualificationRoot.FS(), ".")
+	if err != nil || len(entries) != 2 {
+		return errors.New("acceptance package evidence refused")
+	}
+	for _, architecture := range []softwarelifecycle.Architecture{softwarelifecycle.AMD64, softwarelifecycle.ARM64} {
+		applicationName := "sbxr-linux-" + string(architecture) + ".tar.gz"
+		componentName := "sbxr-components-linux-" + string(architecture) + ".tar.gz"
+		evidenceName := "package-qualification-" + string(architecture) + ".json"
+		application, err := readAcceptanceRootFile(assetRoot, applicationName, softwarelifecycle.MaxAssetBytes, identities[applicationName])
+		if err != nil {
+			return err
+		}
+		components, err := readAcceptanceRootFile(assetRoot, componentName, softwarelifecycle.MaxAssetBytes, identities[componentName])
+		if err != nil {
+			return err
+		}
+		evidence, err := readAcceptanceRootFile(qualificationRoot, evidenceName, softwarelifecycle.MaxPackageQualificationEvidenceBytes, nil)
+		if err != nil {
+			return err
+		}
+		build, gotArchitecture, validationErr := softwarelifecycle.ValidatePackagedQualificationEvidence(application, components, evidence)
+		if validationErr != nil || gotArchitecture != architecture || build.Repository != softwarelifecycle.Repository || build.Tag != tag || build.Commit != commit {
+			return errors.New("acceptance package evidence refused")
+		}
+	}
+	return nil
+}
+
+func readAcceptanceRootFile(root *os.Root, name string, limit int, expected fs.FileInfo) ([]byte, error) {
+	info, err := root.Lstat(name)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() <= 0 || info.Size() > int64(limit) || expected != nil && !unchangedFile(expected, info) {
+		return nil, errors.New("acceptance package input refused")
+	}
+	file, err := root.Open(name)
+	if err != nil {
+		return nil, errors.New("acceptance package input unavailable")
+	}
+	opened, statErr := file.Stat()
+	body, readErr := io.ReadAll(io.LimitReader(file, int64(limit)+1))
+	after, afterErr := file.Stat()
+	closeErr := file.Close()
+	pathAfter, pathErr := root.Lstat(name)
+	if statErr != nil || readErr != nil || afterErr != nil || closeErr != nil || pathErr != nil || !unchangedFile(info, opened) || !unchangedFile(opened, after) || !unchangedFile(opened, pathAfter) || int64(len(body)) != info.Size() {
+		return nil, errors.New("acceptance package input changed")
+	}
+	return body, nil
 }
 
 func decodeAcceptanceIndex(body []byte) (acceptanceIndex, error) {

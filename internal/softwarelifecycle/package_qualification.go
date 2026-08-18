@@ -81,22 +81,25 @@ func ValidatePackageQualificationEvidence(document []byte, build EmbeddedBuildId
 
 // ValidatePackagedQualificationEvidence binds strict evidence to one exact
 // application archive, matching component archive, and canonical secret scan.
-func ValidatePackagedQualificationEvidence(applicationArchive, componentArchive, document []byte) error {
+func ValidatePackagedQualificationEvidence(applicationArchive, componentArchive, document []byte) (EmbeddedBuildIdentity, Architecture, error) {
 	executable, ok := executableArchiveBytes(applicationArchive)
 	if !ok {
-		return errors.New("packaged qualification application refused")
+		return EmbeddedBuildIdentity{}, "", errors.New("packaged qualification application refused")
 	}
 	metadata, _, err := ReadPayloadMetadata(bytes.NewReader(executable), int64(len(executable)))
 	if err != nil {
-		return errors.New("packaged qualification application refused")
+		return EmbeddedBuildIdentity{}, "", errors.New("packaged qualification application refused")
 	}
 	manifest, err := ValidateComponentArchive(componentArchive, metadata.Architecture)
 	digest := sha256.Sum256(componentArchive)
 	archiveSHA256 := hex.EncodeToString(digest[:])
 	if err != nil || metadata.ComponentsSHA256 != archiveSHA256 || ValidatePackageQualificationEvidence(document, metadata.Build, metadata.Architecture, manifest, archiveSHA256) != nil {
-		return errors.New("packaged qualification evidence refused")
+		return EmbeddedBuildIdentity{}, "", errors.New("packaged qualification evidence refused")
 	}
-	return QualifyControlledStagedOnboardingSurfaces(map[string][]byte{"evidence": document}, []string{"evidence"})
+	if err := QualifyControlledStagedOnboardingSurfaces(map[string][]byte{"evidence": document}, []string{"evidence"}); err != nil {
+		return EmbeddedBuildIdentity{}, "", err
+	}
+	return metadata.Build, metadata.Architecture, nil
 }
 
 func packageQualificationReport(build EmbeddedBuildIdentity, architecture Architecture, manifest ComponentManifest, archiveSHA256 string) (PackageQualificationEvidence, error) {

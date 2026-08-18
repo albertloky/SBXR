@@ -106,12 +106,35 @@ func TestVerifyCandidateRefusesInvalidTagBeforeExternalVerification(t *testing.T
 }
 
 func TestValidatePackageQualificationFilesUsesStrictEvidenceAndCanonicalSecretMarkers(t *testing.T) {
-	build := softwarelifecycle.EmbeddedBuildIdentity{Repository: softwarelifecycle.Repository, Tag: "v1.0.0", Commit: strings.Repeat("a", 40)}
-	metadata, err := releaseMetadata(build, softwarelifecycle.AMD64)
+	fixture := packageQualificationReleaseFixture(t, "v1.0.0", strings.Repeat("a", 40), softwarelifecycle.AMD64)
+	root := t.TempDir()
+	options := packageQualificationValidationOptions{application: filepath.Join(root, "application.tar.gz"), components: filepath.Join(root, "components.tar.gz"), evidence: filepath.Join(root, "evidence.json")}
+	for name, body := range map[string][]byte{options.application: fixture.application, options.components: fixture.components, options.evidence: fixture.evidence} {
+		if err := os.WriteFile(name, body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := validatePackageQualificationFiles(options); err != nil {
+		t.Fatal(err)
+	}
+	duplicate := bytes.Replace(fixture.evidence, []byte(`{"schema":1`), []byte(`{"schema":1,"schema":1`), 1)
+	if err := os.WriteFile(options.evidence, duplicate, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if validatePackageQualificationFiles(options) == nil {
+		t.Fatal("duplicate package qualification evidence accepted")
+	}
+}
+
+type packageQualificationRelease struct{ application, components, evidence []byte }
+
+func packageQualificationReleaseFixture(t *testing.T, tag, commit string, architecture softwarelifecycle.Architecture) packageQualificationRelease {
+	t.Helper()
+	metadata, err := releaseMetadata(softwarelifecycle.EmbeddedBuildIdentity{Repository: softwarelifecycle.Repository, Tag: tag, Commit: commit}, architecture)
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw := []byte("qualified executable")
+	raw := []byte("qualified executable " + architecture)
 	stamped, err := softwarelifecycle.StampPayload(raw, metadata)
 	if err != nil {
 		t.Fatal(err)
@@ -128,7 +151,7 @@ func TestValidatePackageQualificationFilesUsesStrictEvidenceAndCanonicalSecretMa
 		"certbot/pyvenv.cfg":  []byte("home = /usr/bin\nversion = 3.12\n"),
 		"certbot/lib/python3.12/site-packages/certbot/__init__.py": []byte("__version__ = '5.4.0'\n"),
 	}
-	manifest, err := softwarelifecycle.NewBoundComponentManifest(softwarelifecycle.AMD64, metadata.Build, "5.4.0", files)
+	manifest, err := softwarelifecycle.NewBoundComponentManifest(architecture, metadata.Build, "5.4.0", files)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,8 +159,8 @@ func TestValidatePackageQualificationFilesUsesStrictEvidenceAndCanonicalSecretMa
 	if err != nil {
 		t.Fatal(err)
 	}
-	componentDigest := sha256.Sum256(components)
-	componentSHA256 := fmt.Sprintf("%x", componentDigest)
+	digest := sha256.Sum256(components)
+	componentSHA256 := fmt.Sprintf("%x", digest)
 	metadata.ComponentsSHA256 = componentSHA256
 	stamped, err = softwarelifecycle.StampPayload(raw, metadata)
 	if err != nil {
@@ -147,42 +170,44 @@ func TestValidatePackageQualificationFilesUsesStrictEvidenceAndCanonicalSecretMa
 	if err != nil {
 		t.Fatal(err)
 	}
-	evidence, err := softwarelifecycle.BuildPackageQualificationEvidence(metadata.Build, softwarelifecycle.AMD64, manifest, componentSHA256, softwarelifecycle.PackageQualificationProcedureCodes)
+	evidence, err := softwarelifecycle.BuildPackageQualificationEvidence(metadata.Build, architecture, manifest, componentSHA256, softwarelifecycle.PackageQualificationProcedureCodes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	root := t.TempDir()
-	options := packageQualificationValidationOptions{application: filepath.Join(root, "application.tar.gz"), components: filepath.Join(root, "components.tar.gz"), evidence: filepath.Join(root, "evidence.json")}
-	for name, body := range map[string][]byte{options.application: application, options.components: components, options.evidence: evidence} {
-		if err := os.WriteFile(name, body, 0o600); err != nil {
-			t.Fatal(err)
+	return packageQualificationRelease{application: application, components: components, evidence: evidence}
+}
+
+type acceptanceRecordFixture struct{ root, qualifications, tag, commit string }
+
+func newAcceptanceRecordFixture(t *testing.T) acceptanceRecordFixture {
+	t.Helper()
+	fixture := acceptanceRecordFixture{root: t.TempDir(), qualifications: t.TempDir(), tag: "v1.0.2", commit: strings.Repeat("a", 40)}
+	if err := buildBootstrapFile(bootstrapOptions{version: "1.0.2", sequence: 3, tag: fixture.tag, commit: fixture.commit, output: filepath.Join(fixture.root, "install.sh")}); err != nil {
+		t.Fatal(err)
+	}
+	for _, architecture := range []softwarelifecycle.Architecture{softwarelifecycle.AMD64, softwarelifecycle.ARM64} {
+		qualification := packageQualificationReleaseFixture(t, fixture.tag, fixture.commit, architecture)
+		for name, body := range map[string][]byte{
+			filepath.Join(fixture.root, "sbxr-linux-"+string(architecture)+".tar.gz"):                    qualification.application,
+			filepath.Join(fixture.root, "sbxr-components-linux-"+string(architecture)+".tar.gz"):         qualification.components,
+			filepath.Join(fixture.qualifications, "package-qualification-"+string(architecture)+".json"): qualification.evidence,
+		} {
+			if err := os.WriteFile(name, body, 0o600); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
-	if err := validatePackageQualificationFiles(options); err != nil {
+	if err := buildReleaseIndexFile(indexOptions{version: "1.0.2", sequence: 3, tag: fixture.tag, commit: fixture.commit, directory: fixture.root, output: filepath.Join(fixture.root, "release-index.json")}); err != nil {
 		t.Fatal(err)
 	}
-	duplicate := bytes.Replace(evidence, []byte(`{"schema":1`), []byte(`{"schema":1,"schema":1`), 1)
-	if err := os.WriteFile(options.evidence, duplicate, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if validatePackageQualificationFiles(options) == nil {
-		t.Fatal("duplicate package qualification evidence accepted")
-	}
+	return fixture
 }
 
 func TestAutomatedAcceptanceRecordBindsOneExactStagedOnboardingRelease(t *testing.T) {
-	root := t.TempDir()
-	for _, name := range []string{"install.sh", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz", "sbxr-components-linux-amd64.tar.gz", "sbxr-components-linux-arm64.tar.gz"} {
-		if err := os.WriteFile(filepath.Join(root, name), []byte("qualified "+name), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	tag, commit := "v1.0.2", strings.Repeat("a", 40)
-	if err := buildReleaseIndexFile(indexOptions{version: "1.0.2", sequence: 3, tag: tag, commit: commit, directory: root, output: filepath.Join(root, "release-index.json")}); err != nil {
-		t.Fatal(err)
-	}
+	fixture := newAcceptanceRecordFixture(t)
+	commit := fixture.commit
 	output := filepath.Join(t.TempDir(), "acceptance-record.md")
-	err := writeAutomatedAcceptanceRecord(acceptanceOptions{tag: tag, commit: commit, directory: root, output: output, evidenceURL: "https://github.com/albertloky/SBXR/actions/runs/123456789"}, time.Date(2026, 8, 13, 3, 4, 5, 0, time.UTC))
+	err := writeAutomatedAcceptanceRecord(acceptanceOptions{tag: fixture.tag, commit: fixture.commit, directory: fixture.root, qualificationDirectory: fixture.qualifications, output: output, evidenceURL: "https://github.com/albertloky/SBXR/actions/runs/123456789"}, time.Date(2026, 8, 13, 3, 4, 5, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +216,7 @@ func TestAutomatedAcceptanceRecordBindsOneExactStagedOnboardingRelease(t *testin
 		t.Fatal(err)
 	}
 	text := string(body)
-	for _, want := range []string{"# SBXR automated Acceptance Record", "Status: Qualified - staged-onboarding package policy", "Repository: albertloky/SBXR", "Tag: v1.0.2", "Commit: " + commit, "Recorded at: 2026-08-13T03:04:05Z", "Runner: GitHub Actions ubuntu-24.04", "Go toolchain: go1.26.6", "Public verifier: 1.3.0", "Stable result code: RELEASE-STAGED-ONBOARDING-PACKAGE-QUALIFICATION", "RELEASE-STAGED-INSTALL-REVISION-1", "RELEASE-CLOUDFLARE-PROFILE-SETUP-N-TO-N+1", "RELEASE-STAGED-ONBOARDING-CHAIN", "RELEASE-STAGED-ONBOARDING-SECRET-SCAN", "RELEASE-STAGED-ONBOARDING-CLIENT-OUTPUT", "RELEASE-STAGED-ONBOARDING-TERMINAL", "RELEASE-STAGED-ONBOARDING-GUIDE-TEXT", "| Module Verification | Passed |", "| Seam Verification | Passed |", "| Integrated Verification | Passed | Staged Installation, Cloudflare Profile Setup, and chained package composition |", "Codex Live Acceptance: Not required — staged-onboarding package and controlled-seam qualification scope.", "Owner Acceptance: Not required — staged-onboarding package and controlled-terminal qualification scope.", "No live VPS, real Cloudflare, ACME, outside-client, maintained-client, current-documentation, provider mutation, or Owner Acceptance was performed.", "install.sh", "release-index.json", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz", "sbxr-components-linux-amd64.tar.gz", "sbxr-components-linux-arm64.tar.gz", "https://github.com/albertloky/SBXR/actions/runs/123456789", "Any changed asset, commit, tag, release-index digest, procedure, guide text, selected output, or required test resets its affected result."} {
+	for _, want := range []string{"# SBXR automated Acceptance Record", "Status: Qualified - staged-onboarding package policy", "Repository: albertloky/SBXR", "Tag: v1.0.2", "Commit: " + commit, "Recorded at: 2026-08-13T03:04:05Z", "Runner: GitHub Actions ubuntu-24.04", "Go toolchain: go1.26.6", "Public verifier: 1.3.0", "Stable result code: RELEASE-STAGED-ONBOARDING-PACKAGE-QUALIFICATION", "RELEASE-STAGED-INSTALL-REVISION-1", "RELEASE-CLOUDFLARE-PROFILE-SETUP-N-TO-N+1", "RELEASE-STAGED-ONBOARDING-CHAIN", "RELEASE-STAGED-ONBOARDING-SECRET-SCAN", "RELEASE-STAGED-ONBOARDING-CLIENT-OUTPUT", "RELEASE-STAGED-ONBOARDING-TERMINAL", "RELEASE-STAGED-ONBOARDING-GUIDE-TEXT", "Packaged executable qualification: amd64 Passed; arm64 Passed.", "| Module Verification | Passed |", "| Seam Verification | Passed |", "| Integrated Verification | Passed | Staged Installation, Cloudflare Profile Setup, and chained package composition |", "Codex Live Acceptance: Not required — staged-onboarding package and controlled-seam qualification scope.", "Owner Acceptance: Not required — staged-onboarding package and controlled-terminal qualification scope.", "No live VPS, real Cloudflare, ACME, outside-client, maintained-client, current-documentation, provider mutation, or Owner Acceptance was performed.", "install.sh", "release-index.json", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz", "sbxr-components-linux-amd64.tar.gz", "sbxr-components-linux-arm64.tar.gz", "https://github.com/albertloky/SBXR/actions/runs/123456789", "Any changed asset, commit, tag, release-index digest, procedure, guide text, selected output, or required test resets its affected result."} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("Acceptance Record omitted %q\n%s", want, text)
 		}
@@ -206,21 +231,67 @@ func TestAutomatedAcceptanceRecordBindsOneExactStagedOnboardingRelease(t *testin
 	}
 }
 
+func TestAutomatedAcceptanceRecordRefusesMissingMismatchedOrExtraPackageEvidence(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		change func(*testing.T, acceptanceRecordFixture)
+	}{
+		{name: "missing architecture", change: func(t *testing.T, fixture acceptanceRecordFixture) {
+			t.Helper()
+			if err := os.Remove(filepath.Join(fixture.qualifications, "package-qualification-arm64.json")); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "mismatched architecture", change: func(t *testing.T, fixture acceptanceRecordFixture) {
+			t.Helper()
+			body, err := os.ReadFile(filepath.Join(fixture.qualifications, "package-qualification-arm64.json"))
+			if err != nil || os.WriteFile(filepath.Join(fixture.qualifications, "package-qualification-amd64.json"), body, 0o600) != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "extra evidence", change: func(t *testing.T, fixture acceptanceRecordFixture) {
+			t.Helper()
+			if err := os.WriteFile(filepath.Join(fixture.qualifications, "extra.json"), []byte("{}"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "different application build", change: func(t *testing.T, fixture acceptanceRecordFixture) {
+			t.Helper()
+			different := packageQualificationReleaseFixture(t, "v9.0.0", fixture.commit, softwarelifecycle.AMD64)
+			for name, body := range map[string][]byte{
+				filepath.Join(fixture.root, "sbxr-linux-amd64.tar.gz"):                    different.application,
+				filepath.Join(fixture.root, "sbxr-components-linux-amd64.tar.gz"):         different.components,
+				filepath.Join(fixture.qualifications, "package-qualification-amd64.json"): different.evidence,
+			} {
+				if err := os.WriteFile(name, body, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Remove(filepath.Join(fixture.root, "release-index.json")); err != nil {
+				t.Fatal(err)
+			}
+			if err := buildReleaseIndexFile(indexOptions{version: "1.0.2", sequence: 3, tag: fixture.tag, commit: fixture.commit, directory: fixture.root, output: filepath.Join(fixture.root, "release-index.json")}); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newAcceptanceRecordFixture(t)
+			test.change(t, fixture)
+			err := writeAutomatedAcceptanceRecord(acceptanceOptions{tag: fixture.tag, commit: fixture.commit, directory: fixture.root, qualificationDirectory: fixture.qualifications, output: filepath.Join(t.TempDir(), "acceptance-record.md"), evidenceURL: "https://github.com/albertloky/SBXR/actions/runs/123456789"}, time.Now())
+			if err == nil {
+				t.Fatal("invalid public Package Qualification evidence received an Acceptance Record")
+			}
+		})
+	}
+}
+
 func TestControlledStagedOnboardingSecretScanUsesReleaseSurfaces(t *testing.T) {
-	root := t.TempDir()
-	commit := strings.Repeat("a", 40)
-	if err := buildBootstrapFile(bootstrapOptions{version: "1.0.2", sequence: 3, tag: "v1.0.2", commit: commit, output: filepath.Join(root, "install.sh")}); err != nil {
-		t.Fatal(err)
-	}
+	fixture := newAcceptanceRecordFixture(t)
+	root := fixture.root
 	archiveNames := []string{"sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz", "sbxr-components-linux-amd64.tar.gz", "sbxr-components-linux-arm64.tar.gz"}
-	for _, name := range archiveNames {
-		mustWriteArchive(t, filepath.Join(root, name), "qualified/"+strings.TrimSuffix(name, ".tar.gz"), []byte("controlled packaged content"))
-	}
-	if err := buildReleaseIndexFile(indexOptions{version: "1.0.2", sequence: 3, tag: "v1.0.2", commit: commit, directory: root, output: filepath.Join(root, "release-index.json")}); err != nil {
-		t.Fatal(err)
-	}
 	acceptance := filepath.Join(t.TempDir(), "acceptance-record.md")
-	if err := writeAutomatedAcceptanceRecord(acceptanceOptions{tag: "v1.0.2", commit: commit, directory: root, output: acceptance, evidenceURL: "https://github.com/albertloky/SBXR/actions/runs/123456789"}, time.Date(2026, 8, 13, 3, 4, 5, 0, time.UTC)); err != nil {
+	if err := writeAutomatedAcceptanceRecord(acceptanceOptions{tag: fixture.tag, commit: fixture.commit, directory: root, qualificationDirectory: fixture.qualifications, output: acceptance, evidenceURL: "https://github.com/albertloky/SBXR/actions/runs/123456789"}, time.Date(2026, 8, 13, 3, 4, 5, 0, time.UTC)); err != nil {
 		t.Fatal(err)
 	}
 	surfaces := map[string][]byte{}
@@ -252,31 +323,6 @@ func TestControlledStagedOnboardingSecretScanUsesReleaseSurfaces(t *testing.T) {
 	}
 }
 
-func mustWriteArchive(t *testing.T, path, name string, body []byte) {
-	t.Helper()
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	compressed := gzip.NewWriter(file)
-	archive := tar.NewWriter(compressed)
-	if err := archive.WriteHeader(&tar.Header{Name: name, Mode: 0o755, Size: int64(len(body)), Typeflag: tar.TypeReg}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := archive.Write(body); err != nil {
-		t.Fatal(err)
-	}
-	if err := archive.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := compressed.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := file.Close(); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func readControlledArchive(t *testing.T, path string) []byte {
 	t.Helper()
 	file, err := os.Open(path)
@@ -296,8 +342,11 @@ func readControlledArchive(t *testing.T, path string) []byte {
 		if err == io.EOF {
 			break
 		}
-		if err != nil || header.Typeflag != tar.TypeReg {
+		if err != nil || header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeSymlink {
 			t.Fatal("controlled archive surface unavailable")
+		}
+		if header.Typeflag == tar.TypeSymlink {
+			continue
 		}
 		if _, err := io.Copy(&surface, archive); err != nil {
 			t.Fatal(err)
@@ -336,16 +385,9 @@ func TestAutomatedAcceptanceRecordRefusesChangedOrExtraReleaseMaterial(t *testin
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			root := t.TempDir()
-			for _, name := range []string{"install.sh", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz", "sbxr-components-linux-amd64.tar.gz", "sbxr-components-linux-arm64.tar.gz"} {
-				mustWrite(t, filepath.Join(root, name), "qualified "+name)
-			}
-			commit := strings.Repeat("a", 40)
-			if err := buildReleaseIndexFile(indexOptions{version: "1.0.2", sequence: 3, tag: "v1.0.2", commit: commit, directory: root, output: filepath.Join(root, "release-index.json")}); err != nil {
-				t.Fatal(err)
-			}
-			test.change(t, root)
-			err := writeAutomatedAcceptanceRecord(acceptanceOptions{tag: "v1.0.2", commit: commit, directory: root, output: filepath.Join(t.TempDir(), "acceptance-record.md"), evidenceURL: "https://github.com/albertloky/SBXR/actions/runs/123456789"}, time.Now())
+			fixture := newAcceptanceRecordFixture(t)
+			test.change(t, fixture.root)
+			err := writeAutomatedAcceptanceRecord(acceptanceOptions{tag: fixture.tag, commit: fixture.commit, directory: fixture.root, qualificationDirectory: fixture.qualifications, output: filepath.Join(t.TempDir(), "acceptance-record.md"), evidenceURL: "https://github.com/albertloky/SBXR/actions/runs/123456789"}, time.Now())
 			if err == nil {
 				t.Fatal("changed release material received an Acceptance Record")
 			}
@@ -354,16 +396,10 @@ func TestAutomatedAcceptanceRecordRefusesChangedOrExtraReleaseMaterial(t *testin
 }
 
 func TestAutomatedAcceptanceRecordRefusesAnEarlierAssetReplacedAfterItsRead(t *testing.T) {
-	root := t.TempDir()
-	for _, name := range []string{"install.sh", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz", "sbxr-components-linux-amd64.tar.gz", "sbxr-components-linux-arm64.tar.gz"} {
-		mustWrite(t, filepath.Join(root, name), "qualified "+name)
-	}
-	commit := strings.Repeat("a", 40)
-	if err := buildReleaseIndexFile(indexOptions{version: "1.0.2", sequence: 3, tag: "v1.0.2", commit: commit, directory: root, output: filepath.Join(root, "release-index.json")}); err != nil {
-		t.Fatal(err)
-	}
+	fixture := newAcceptanceRecordFixture(t)
+	root := fixture.root
 	replaced := false
-	err := writeAutomatedAcceptanceRecord(acceptanceOptions{tag: "v1.0.2", commit: commit, directory: root, output: filepath.Join(t.TempDir(), "acceptance-record.md"), evidenceURL: "https://github.com/albertloky/SBXR/actions/runs/123456789", afterAssetRead: func(name string) {
+	err := writeAutomatedAcceptanceRecord(acceptanceOptions{tag: fixture.tag, commit: fixture.commit, directory: root, qualificationDirectory: fixture.qualifications, output: filepath.Join(t.TempDir(), "acceptance-record.md"), evidenceURL: "https://github.com/albertloky/SBXR/actions/runs/123456789", afterAssetRead: func(name string) {
 		if name == "release-index.json" && !replaced {
 			replaced = true
 			replacement := filepath.Join(t.TempDir(), "replacement")

@@ -79,6 +79,7 @@ func main() {
 		flags.StringVar(&options.tag, "tag", "", "immutable release tag")
 		flags.StringVar(&options.commit, "commit", "", "40-character commit SHA")
 		flags.StringVar(&options.directory, "directory", "", "directory containing the exact six release assets")
+		flags.StringVar(&options.qualificationDirectory, "qualification-directory", "", "directory containing both strict Package Qualification results")
 		flags.StringVar(&options.output, "output", "", "redacted Acceptance Record output path")
 		flags.StringVar(&options.evidenceURL, "evidence-url", "", "GitHub Actions evidence URL")
 		if flags.Parse(os.Args[2:]) != nil || flags.NArg() != 0 || writeAutomatedAcceptanceRecord(options, time.Now()) != nil {
@@ -154,7 +155,8 @@ func validatePackageQualificationFiles(options packageQualificationValidationOpt
 	if err != nil {
 		return err
 	}
-	return softwarelifecycle.ValidatePackagedQualificationEvidence(application, components, evidence)
+	_, _, err = softwarelifecycle.ValidatePackagedQualificationEvidence(application, components, evidence)
+	return err
 }
 
 func readQualificationFile(name string, maximum int) ([]byte, error) {

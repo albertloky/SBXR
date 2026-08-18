@@ -231,10 +231,82 @@ jobs:
           pattern="$SECRET_PATTERN"
           test -z "$(rg -a -l "$pattern" "$GITHUB_STEP_SUMMARY")"
 
+  qualify-public-packages:
+    name: Qualify public prerelease packages
+    if: github.event_name == 'release' && github.event.release.prerelease && !github.event.release.draft
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - architecture: amd64
+            runner: ubuntu-24.04
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      attestations: read
+      contents: read
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+      RELEASE_COMMIT: ${{ github.event.release.target_commitish }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Verify and run the exact public native package
+        run: |
+          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
+          verified=false
+          for attempt in {1..12}; do
+            if go run ./cmd/sbxr-release verify -tag "$RELEASE_TAG"; then
+              verified=true
+              break
+            fi
+            sleep 10
+          done
+          test "$verified" = true
+          architecture='${{ matrix.architecture }}'
+          mkdir -m 0700 dist inspect
+          curl -fsSL "https://github.com/albertloky/SBXR/releases/download/$RELEASE_TAG/release-index.json" -o dist/release-index.json
+          curl -fsSL "https://github.com/albertloky/SBXR/releases/download/$RELEASE_TAG/sbxr-linux-$architecture.tar.gz" -o "dist/sbxr-linux-$architecture.tar.gz"
+          curl -fsSL "https://github.com/albertloky/SBXR/releases/download/$RELEASE_TAG/sbxr-components-linux-$architecture.tar.gz" -o "dist/sbxr-components-linux-$architecture.tar.gz"
+          jq -e --arg tag "$RELEASE_TAG" --arg commit "$RELEASE_COMMIT" '.repository == "albertloky/SBXR" and .tag == $tag and .commit == $commit and (.assets | length) == 5' dist/release-index.json
+          for name in "sbxr-linux-$architecture.tar.gz" "sbxr-components-linux-$architecture.tar.gz"; do
+            size="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .size' dist/release-index.json)"
+            sha256="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .sha256' dist/release-index.json)"
+            test "$(stat -c '%s' "dist/$name")" = "$size"
+            test "$(sha256sum "dist/$name" | cut -d ' ' -f 1)" = "$sha256"
+          done
+          test "$(tar -tzf "dist/sbxr-linux-$architecture.tar.gz")" = sbxr
+          tar -xzf "dist/sbxr-linux-$architecture.tar.gz" -C inspect
+          inspect/sbxr version --json > version.json
+          jq -e --arg tag "$RELEASE_TAG" --arg commit "$RELEASE_COMMIT" --arg architecture "$architecture" '.build.repository == "albertloky/SBXR" and .build.tag == $tag and .build.commit == $commit and .architecture == $architecture' version.json
+          evidence="package-qualification-$architecture.json"
+          inspect/sbxr acceptance staged-onboarding --components "dist/sbxr-components-linux-$architecture.tar.gz" --json > "$evidence"
+          go run ./cmd/sbxr-release validate-package-qualification \
+            -application "dist/sbxr-linux-$architecture.tar.gz" \
+            -components "dist/sbxr-components-linux-$architecture.tar.gz" \
+            -evidence "$evidence"
+          pattern="$SECRET_PATTERN"
+          test -z "$(rg -a -l "$pattern" "$evidence")"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: public-package-qualification-${{ matrix.architecture }}
+          path: package-qualification-${{ matrix.architecture }}.json
+          if-no-files-found: error
+          retention-days: 90
+
   verify-release:
     if: github.event_name == 'release' && github.event.release.prerelease && !github.event.release.draft
+    needs: qualify-public-packages
     runs-on: ubuntu-24.04
     permissions:
+      actions: read
       attestations: read
       contents: write
     env:
@@ -249,6 +321,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: public-package-qualification-*
+          path: qualification
+          merge-multiple: true
       - name: Verify the immutable exact six-asset release through public HTTPS
         run: |
           test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
@@ -284,12 +361,15 @@ jobs:
           sudo env "PATH=$PATH" SBXR_CONTROLLED_FIREWALL_SEAM=1 go test ./internal/systemchanges/adapter/ubuntu -run TestProductionFirewallSeam -count=1
       - name: Build the exact redacted automated Acceptance Record
         run: |
+          test "$(find qualification -maxdepth 1 -type f -printf '%f\n' | sort)" = "$(printf '%s\n' package-qualification-amd64.json package-qualification-arm64.json | sort)"
           go run ./cmd/sbxr-release acceptance \
             -tag "$RELEASE_TAG" \
             -commit "$RELEASE_COMMIT" \
             -directory dist \
+            -qualification-directory qualification \
             -output acceptance-record.md \
             -evidence-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          grep -Fx 'Packaged executable qualification: amd64 Passed; arm64 Passed.' acceptance-record.md
           pattern="$SECRET_PATTERN"
           test -z "$(rg -a -l "$pattern" acceptance-record.md)"
           cat acceptance-record.md >> "$GITHUB_STEP_SUMMARY"
