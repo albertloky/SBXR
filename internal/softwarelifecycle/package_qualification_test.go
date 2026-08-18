@@ -69,3 +69,21 @@ func TestPackageQualificationEvidenceIsStrictOrderedAndIdentityBound(t *testing.
 		}
 	}
 }
+
+func TestControlledSecretScanDoesNotTreatDependencyConstantsAsPrivateKeys(t *testing.T) {
+	surfaces := map[string][]byte{"decompressed-component": []byte("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA -----BEGIN PRIVATE KEY-----")}
+	if err := QualifyControlledStagedOnboardingSurfaces(surfaces, []string{"decompressed-component"}); err != nil {
+		t.Fatalf("non-secret dependency constants were treated as a controlled secret: %v", err)
+	}
+	for _, marker := range ControlledStagedOnboardingSecretMarkers() {
+		if marker.Class != "private keys" {
+			continue
+		}
+		surfaces["decompressed-component"] = append(surfaces["decompressed-component"], marker.Value...)
+		if QualifyControlledStagedOnboardingSurfaces(surfaces, []string{"decompressed-component"}) == nil {
+			t.Fatal("controlled private-key marker was accepted on a public component surface")
+		}
+		return
+	}
+	t.Fatal("controlled private-key marker is unavailable")
+}

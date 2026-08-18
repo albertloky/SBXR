@@ -14,7 +14,8 @@ permissions:
   contents: read
 
 env:
-  SECRET_PATTERN: 'SBXR_USER_TOKEN_MARKER_00000000000000abcd|9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f|CLOUDFLARE-ROTATED-RUN-TOKEN-MARKER|profile-secret-marker|subscription-secret-marker|COMPLETE-SUBSCRIPTION-URL-MARKER|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA|QUALIFICATION-SETUP-ENTROPY-00000000000000000008|QUALIFICATION-SETUP-APPROVAL-00000000000000000009|PROVIDER-FIELD-MARKER|PROVIDER-ERROR-MARKER|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer '
+  SECRET_PATTERN: 'SBXR_USER_TOKEN_MARKER_00000000000000abcd|9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f|CLOUDFLARE-ROTATED-RUN-TOKEN-MARKER|profile-secret-marker|subscription-secret-marker|COMPLETE-SUBSCRIPTION-URL-MARKER|U0JYUi1RVUFMSUZZLVBSSVZBVEUtS0VZLTAwMDAwMDc|QUALIFICATION-SETUP-ENTROPY-00000000000000000008|QUALIFICATION-SETUP-APPROVAL-00000000000000000009|PROVIDER-FIELD-MARKER|PROVIDER-ERROR-MARKER'
+  TEXT_SECRET_PATTERN: 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer '
 
 jobs:
   qualify-stable-packages:
@@ -68,7 +69,7 @@ jobs:
             -application "dist/sbxr-linux-$architecture.tar.gz" \
             -components "dist/sbxr-components-linux-$architecture.tar.gz" \
             -evidence qualification.json
-          test -z "$(rg -a -l "$SECRET_PATTERN" qualification.json)"
+          test -z "$(rg -a -l "$SECRET_PATTERN|$TEXT_SECRET_PATTERN" qualification.json)"
 
   verify-stable:
     needs: qualify-stable-packages
@@ -128,8 +129,8 @@ jobs:
           jq -e --arg tag "$RELEASE_TAG" --arg commit "$commit" '.repository == "albertloky/SBXR" and .tag == $tag and .commit == $commit' dist/release-index.json
           index_sha256="$(sha256sum dist/release-index.json | cut -d ' ' -f 1)"
           grep -Fx "Release index SHA-256: $index_sha256" acceptance-record.md
+          test -z "$(rg -a -l "$SECRET_PATTERN|$TEXT_SECRET_PATTERN" dist/install.sh dist/release-index.json acceptance-record.md)"
           pattern="$SECRET_PATTERN"
-          test -z "$(rg -a -l "$pattern" dist/install.sh dist/release-index.json acceptance-record.md)"
           for archive in dist/sbxr-linux-amd64.tar.gz dist/sbxr-linux-arm64.tar.gz dist/sbxr-components-linux-amd64.tar.gz dist/sbxr-components-linux-arm64.tar.gz; do
             test -z "$(tar -xOzf "$archive" | rg -a -l "$pattern" -)"
           done
@@ -155,5 +156,5 @@ jobs:
             echo 'Owner Acceptance: Not required'
             echo 'Cloudflare/provider evidence: Not performed'
           } >> "$GITHUB_STEP_SUMMARY"
-          pattern="$SECRET_PATTERN"
+          pattern="$SECRET_PATTERN|$TEXT_SECRET_PATTERN"
           test -z "$(rg -a -l "$pattern" "$GITHUB_STEP_SUMMARY")"

@@ -96,6 +96,14 @@ func TestCandidateWorkflowQualifiesBothNativePackagesBeforeAggregation(t *testin
 	if strings.Contains(workflow, "pattern='MARKER|") {
 		t.Fatal("candidate workflow retained the overbroad MARKER asset scan")
 	}
+	if !strings.Contains(workflow, "TEXT_SECRET_PATTERN: 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer '") || !strings.Contains(workflow, "pattern=\"$SECRET_PATTERN|$TEXT_SECRET_PATTERN\"") {
+		t.Fatal("candidate workflow omitted private-key and authorization checks on text evidence")
+	}
+	secretLine := workflow[strings.Index(workflow, "  SECRET_PATTERN:"):]
+	secretLine = secretLine[:strings.IndexByte(secretLine, '\n')]
+	if strings.Contains(secretLine, "BEGIN") || strings.Contains(secretLine, "Authorization") {
+		t.Fatal("candidate workflow applies text-only patterns to dependency binaries")
+	}
 	aggregate := strings.Index(workflow, "name: Require both native Package Qualification results")
 	report := strings.Index(workflow, "name: Record prepublication stage matrix")
 	if aggregate < 0 || report < 0 || aggregate >= report {
@@ -180,6 +188,19 @@ func TestStableWorkflowReverifiesTheExactPublicInstallerBeforeREADMEActivation(t
 	if strings.Contains(workflow, "pattern='MARKER|") {
 		t.Fatal("stable workflow retained the overbroad MARKER secret scan")
 	}
+	for _, marker := range softwarelifecycle.ControlledStagedOnboardingSecretMarkers() {
+		if !strings.Contains(workflow, string(marker.Value)) {
+			t.Fatalf("stable workflow omitted canonical secret marker %q", marker.Class)
+		}
+	}
+	if !strings.Contains(workflow, "TEXT_SECRET_PATTERN: 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer '") || !strings.Contains(workflow, "pattern=\"$SECRET_PATTERN|$TEXT_SECRET_PATTERN\"") {
+		t.Fatal("stable workflow omitted private-key and authorization checks on text evidence")
+	}
+	secretLine := workflow[strings.Index(workflow, "  SECRET_PATTERN:"):]
+	secretLine = secretLine[:strings.IndexByte(secretLine, '\n')]
+	if strings.Contains(secretLine, "BEGIN") || strings.Contains(secretLine, "Authorization") {
+		t.Fatal("stable workflow applies text-only patterns to dependency binaries")
+	}
 	if strings.Contains(workflow, "stable_bootstrap.py") || strings.Contains(workflow, "Supported Ubuntu Owner Console launch: Passed") {
 		t.Fatal("stable workflow claimed an automated Ubuntu launch")
 	}
@@ -199,7 +220,7 @@ func TestStableWorkflowRequalifiesBothNativePublicPackagesBeforeStableVerificati
 		"releases/download/$RELEASE_TAG/sbxr-components-linux-$architecture.tar.gz",
 		"inspect/sbxr acceptance staged-onboarding --components \"dist/sbxr-components-linux-$architecture.tar.gz\" --json",
 		"go run ./cmd/sbxr-release validate-package-qualification",
-		`rg -a -l "$SECRET_PATTERN" qualification.json`,
+		`rg -a -l "$SECRET_PATTERN|$TEXT_SECRET_PATTERN" qualification.json`,
 		"needs: qualify-stable-packages",
 	} {
 		if !strings.Contains(workflow, required) {

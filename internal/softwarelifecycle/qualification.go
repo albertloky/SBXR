@@ -28,7 +28,7 @@ func ControlledStagedOnboardingSecretMarkers() []ControlledSecretMarker {
 		{Class: "profile credentials", Owner: "protected/state/profile-credentials", Value: controlledSecretMarker("profile-secret-", "marker"), Proof: "RELEASE-STAGED-ONBOARDING-MARKER-PROFILE-CREDENTIALS"},
 		{Class: "subscription token", Owner: "protected/state/subscription-token", Value: controlledSecretMarker("subscription-secret-", "marker"), Proof: "RELEASE-STAGED-ONBOARDING-MARKER-SUBSCRIPTION-TOKEN"},
 		{Class: "complete subscription URLs", Owner: "protected/subscription/complete-url", Value: controlledSecretMarker("COMPLETE-SUBSCRIPTION-", "URL-MARKER"), Proof: "RELEASE-STAGED-ONBOARDING-MARKER-COMPLETE-URL"},
-		{Class: "private keys", Owner: "protected/service/private-key", Value: []byte(strings.Repeat("A", 43)), Proof: "RELEASE-STAGED-ONBOARDING-MARKER-PRIVATE-KEY"},
+		{Class: "private keys", Owner: "protected/service/private-key", Value: controlledSecretMarker("U0JYUi1RVUFMSUZZLVBSSVZBVEUt", "S0VZLTAwMDAwMDc"), Proof: "RELEASE-STAGED-ONBOARDING-MARKER-PRIVATE-KEY"},
 		{Class: "setup entropy", Owner: "protected/transaction/setup-entropy", Value: controlledSecretMarker("QUALIFICATION-SETUP-ENTROPY-", "00000000000000000008"), Proof: "RELEASE-STAGED-ONBOARDING-MARKER-SETUP-ENTROPY"},
 		{Class: "setup approval", Owner: "protected/transaction/setup-approval", Value: controlledSecretMarker("QUALIFICATION-SETUP-APPROVAL-", "00000000000000000009"), Proof: "RELEASE-STAGED-ONBOARDING-MARKER-SETUP-APPROVAL"},
 		{Class: "raw provider responses", Owner: "protected/transaction/provider-response", Value: controlledSecretMarker("PROVIDER-FIELD-", "MARKER"), Proof: "RELEASE-STAGED-ONBOARDING-MARKER-PROVIDER-RESPONSE"},

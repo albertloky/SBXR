@@ -24,6 +24,7 @@ func newCloudflareTestModule(api cloudflaretunnel.API, clock cloudflaretunnel.Cl
 
 func TestPrepareCommitValidatesCandidateAndSerializesLeastPrivilegeMaterial(t *testing.T) {
 	candidate := completeDesiredState()
+	candidate.ConnectionProfiles.VLESSRealityVision.PrivateKey = NewInfrastructureSecret("U0JYUi1RVUFMSUZZLVBSSVZBVEUtS0VZLTAwMDAwMDc")
 	stateModule, request, validators := managedPrepareRequest(t, candidate)
 	preparation, err := stateModule.PrepareCommit(request)
 	if err != nil {
@@ -49,7 +50,7 @@ func TestPrepareCommitValidatesCandidateAndSerializesLeastPrivilegeMaterial(t *t
 		mustHave    []string
 		mustNotHave []string
 	}{
-		{copy: preparation.serviceCopies.Xray, service: "xray.service", module: "connectionprofiles", want: serviceMaterialsFor(candidate).Xray, mustHave: []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}, mustNotHave: []string{"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "xhttp.example.com", "ws.example.com", "HYSTERIA2-SECRET-MARKER-00000001", "CLOUDFLARE-MANAGEMENT-SECRET-MARKER", "CLOUDFLARE-RUN-SECRET-MARKER-00001", "6666666666666666666666666666666666666666666666666666666666666666"}},
+		{copy: preparation.serviceCopies.Xray, service: "xray.service", module: "connectionprofiles", want: serviceMaterialsFor(candidate).Xray, mustHave: []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333", "U0JYUi1RVUFMSUZZLVBSSVZBVEUtS0VZLTAwMDAwMDc"}, mustNotHave: []string{"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "xhttp.example.com", "ws.example.com", "HYSTERIA2-SECRET-MARKER-00000001", "CLOUDFLARE-MANAGEMENT-SECRET-MARKER", "CLOUDFLARE-RUN-SECRET-MARKER-00001", "6666666666666666666666666666666666666666666666666666666666666666"}},
 		{copy: preparation.serviceCopies.SingBox, service: "sing-box.service", module: "connectionprofiles", want: serviceMaterialsFor(candidate).SingBox, mustHave: []string{"HYSTERIA2-SECRET-MARKER-00000001", "TUIC-PASSWORD-SECRET-MARKER-00001", "ANYTLS-PASSWORD-SECRET-MARKER-01", "/var/lib/sbxr/certificates/domain/current"}, mustNotHave: []string{"domain-certificate", "11111111-1111-4111-8111-111111111111", "CLOUDFLARE-MANAGEMENT-SECRET-MARKER", "CLOUDFLARE-RUN-SECRET-MARKER-00001", "6666666666666666666666666666666666666666666666666666666666666666"}},
 		{copy: preparation.serviceCopies.Cloudflared, service: "cloudflared.service", module: "cloudflaretunnel", want: serviceMaterialsFor(candidate).Cloudflared, mustHave: []string{"CLOUDFLARE-RUN-SECRET-MARKER-00001"}, mustNotHave: []string{"CLOUDFLARE-MANAGEMENT-SECRET-MARKER", "11111111-1111-4111-8111-111111111111", "HYSTERIA2-SECRET-MARKER-00000001", "6666666666666666666666666666666666666666666666666666666666666666"}},
 		{copy: preparation.serviceCopies.Subscription, service: "sbxr-subscription.service", module: "subscriptionserving", want: serviceMaterialsFor(candidate).Subscription, mustHave: []string{"6666666666666666666666666666666666666666666666666666666666666666", "/var/lib/sbxr/certificates/ip/current"}, mustNotHave: []string{"ip-certificate", "CLOUDFLARE-MANAGEMENT-SECRET-MARKER", "CLOUDFLARE-RUN-SECRET-MARKER-00001", "11111111-1111-4111-8111-111111111111", "HYSTERIA2-SECRET-MARKER-00000001"}},
