@@ -100,6 +100,14 @@ _Avoid_: Inferred acceptance, Codex acceptance
 Proof that one exact Release Identity has every required acceptance stage marked Passed or Not required with redacted evidence; only a qualified release may become stable or enter automatic-update discovery.
 _Avoid_: Tests passed, release candidate exists, acceptance pending
 
+**Package Qualification Command**:
+A public, documented, offline command that runs required controlled procedures through the exact packaged executable by reusing production Module Interfaces and transaction paths without live provider effects.
+_Avoid_: Hidden test mode, second transaction harness, source-tree evidence
+
+**Packaged Qualification Run**:
+One no-live execution of the Package Qualification Command, bound to one exact application payload and its matching component archive.
+_Avoid_: Acceptance Run, Owner Acceptance, live acceptance
+
 **Release Identity**:
 The exact repository, immutable tag, commit SHA, and release-index SHA-256 that together identify the release artifacts being accepted.
 _Avoid_: Version number, tag name alone

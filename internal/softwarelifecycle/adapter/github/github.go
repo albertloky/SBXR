@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
@@ -200,30 +201,78 @@ func acceptanceRecordIndexSHA256(body, tag, commit string) (string, bool) {
 	}
 	required := []string{
 		"# SBXR automated Acceptance Record",
-		"Status: Qualified - root-runtime package policy",
 		"Repository: " + softwarelifecycle.Repository,
 		"Tag: " + tag,
 		"Commit: " + commit,
-		"Stable result code: RELEASE-ROOT-RUNTIME-PACKAGE-QUALIFICATION",
-		"Integrated Ubuntu Verification: Not required - ADR-0010 root-runtime package and public-seam scope; no automated Ubuntu integration evidence claimed.",
-		"| Codex Live Acceptance | Not required | ADR-0010 root-runtime package and public-seam scope; no live VPS evidence claimed |",
-		"| Owner Acceptance | Not required | ADR-0010 root-runtime package and public-seam scope; no maintained-client evidence claimed |",
-		"No Integrated Ubuntu Verification, live VPS, provider, maintained-client, or Owner evidence was performed.",
-		"Any asset, attestation, repository, tag, commit, release-index digest, qualification scope, required check, or client-facing change invalidates this record.",
 	}
 	for _, line := range required {
 		if strings.Count(body, line+"\n") != 1 {
 			return "", false
 		}
 	}
-	for _, stage := range []string{"Module Verification", "Seam Verification", "Integrated Verification", "Codex Live Acceptance", "Owner Acceptance"} {
-		status := "Passed"
-		if stage == "Codex Live Acceptance" || stage == "Owner Acceptance" {
-			status = "Not required"
-		}
-		if strings.Count(body, "| "+stage+" | "+status+" |") != 1 {
+	rootRuntime := []string{
+		"Status: Qualified - root-runtime package policy",
+		"Stable result code: RELEASE-ROOT-RUNTIME-PACKAGE-QUALIFICATION",
+		"| Module Verification | Passed | Package suites at the Pasteable Install Command and owning Module Interfaces |",
+		"| Seam Verification | Passed | Exact public HTTPS release verification, Sigstore attestations, and package seam checks |",
+		"| Integrated Verification | Passed | Package composition through existing product Interfaces |",
+		"Integrated Ubuntu Verification: Not required - ADR-0010 root-runtime package and public-seam scope; no automated Ubuntu integration evidence claimed.",
+		"| Codex Live Acceptance | Not required | ADR-0010 root-runtime package and public-seam scope; no live VPS evidence claimed |",
+		"| Owner Acceptance | Not required | ADR-0010 root-runtime package and public-seam scope; no maintained-client evidence claimed |",
+		"No Integrated Ubuntu Verification, live VPS, provider, maintained-client, or Owner evidence was performed.",
+		"Any asset, attestation, repository, tag, commit, release-index digest, qualification scope, required check, or client-facing change invalidates this record.",
+	}
+	stagedOnboarding := []string{
+		"Status: Qualified - staged-onboarding package policy",
+		"Stable result code: RELEASE-STAGED-ONBOARDING-PACKAGE-QUALIFICATION",
+		"Qualified procedures: RELEASE-STAGED-INSTALL-REVISION-1, RELEASE-CLOUDFLARE-PROFILE-SETUP-N-TO-N+1, RELEASE-STAGED-ONBOARDING-CHAIN, RELEASE-STAGED-ONBOARDING-SECRET-SCAN, RELEASE-STAGED-ONBOARDING-CLIENT-OUTPUT, RELEASE-STAGED-ONBOARDING-TERMINAL, RELEASE-STAGED-ONBOARDING-GUIDE-TEXT",
+		"Packaged executable qualification: amd64 Passed; arm64 Passed.",
+		"| Module Verification | Passed | Package suites at the Pasteable Install Command and owning Module Interfaces |",
+		"| Seam Verification | Passed | Exact public HTTPS release verification, Sigstore attestations, and package seam checks |",
+		"| Integrated Verification | Passed | Staged Installation, Cloudflare Profile Setup, and chained package composition |",
+		"| Codex Live Acceptance | Not required — staged-onboarding package and controlled-seam qualification scope |",
+		"| Real VPS | Not required — staged-onboarding package and controlled-seam qualification scope |",
+		"| Real Cloudflare | Not required — staged-onboarding package and controlled-seam qualification scope |",
+		"| ACME | Not required — staged-onboarding package and controlled-seam qualification scope |",
+		"| Outside-client | Not required — staged-onboarding package and controlled-seam qualification scope |",
+		"| Maintained-client | Not required — staged-onboarding package and controlled-seam qualification scope |",
+		"| Current-documentation | Not required — staged-onboarding package and controlled-seam qualification scope |",
+		"| Provider mutation | Not required — staged-onboarding package and controlled-seam qualification scope |",
+		"| Owner Acceptance | Not required — staged-onboarding package and controlled-terminal qualification scope |",
+		"Codex Live Acceptance: Not required — staged-onboarding package and controlled-seam qualification scope.",
+		"Owner Acceptance: Not required — staged-onboarding package and controlled-terminal qualification scope.",
+		"No live VPS, real Cloudflare, ACME, outside-client, maintained-client, current-documentation, provider mutation, or Owner Acceptance was performed.",
+		"Any changed asset, commit, tag, release-index digest, procedure, guide text, selected output, or required test resets its affected result.",
+	}
+	policy := rootRuntime
+	forbiddenPolicyLines := stagedOnboarding[:4]
+	if strings.Count(body, stagedOnboarding[0]+"\n") == 1 {
+		policy, forbiddenPolicyLines = stagedOnboarding, rootRuntime[:2]
+	}
+	for _, line := range policy {
+		if strings.Count(body, line+"\n") != 1 {
 			return "", false
 		}
+	}
+	for _, line := range forbiddenPolicyLines {
+		if strings.Contains(body, line) {
+			return "", false
+		}
+	}
+	if !strings.HasSuffix(body, policy[len(policy)-1]+"\n") {
+		return "", false
+	}
+	known := append(append([]string{}, required...), policy...)
+	known = append(known, "| Stage | Status | Evidence |", "|---|---|---|", "| External check | Status |", "|---|---|", "| Exact asset | Bytes | SHA-256 |", "|---|---:|---|")
+	seen := make(map[string]bool)
+	for _, line := range strings.Split(strings.TrimSuffix(body, "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		if seen[line] || !slices.Contains(known, line) && !acceptanceRecordVariableLinePattern.MatchString(line) {
+			return "", false
+		}
+		seen[line] = true
 	}
 	prefix := "Release index SHA-256: "
 	var digest string
@@ -451,9 +500,10 @@ func (source Source) get(ctx context.Context, address string, limit int64, accep
 }
 
 var (
-	commitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	hashPattern   = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	tagPattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$`)
+	commitPattern                       = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	hashPattern                         = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	tagPattern                          = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$`)
+	acceptanceRecordVariableLinePattern = regexp.MustCompile(`^(Release index SHA-256: [0-9a-f]{64}|Recorded at: [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z|Runner: GitHub Actions ubuntu-24\.04 linux/(amd64|arm64)|Go toolchain: go[0-9]+\.[0-9]+\.[0-9]+|Public verifier: [0-9]+\.[0-9]+\.[0-9]+ [A-F0-9]{64}|Workflow evidence: https://github\.com/albertloky/SBXR/actions/runs/[1-9][0-9]*|\| (install\.sh|release-index\.json|sbxr-linux-amd64\.tar\.gz|sbxr-linux-arm64\.tar\.gz|sbxr-components-linux-amd64\.tar\.gz|sbxr-components-linux-arm64\.tar\.gz) \| [1-9][0-9]* \| [0-9a-f]{64} \|)$`)
 )
 
 func safeTag(tag string) bool { return tagPattern.MatchString(tag) }

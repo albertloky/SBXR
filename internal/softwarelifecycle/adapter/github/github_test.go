@@ -134,6 +134,55 @@ func TestSourceRefusesAutomaticStableDiscoveryUntilTheAcceptanceRecordAgrees(t *
 	}
 }
 
+func TestSourceAcceptsOnlyOneExactStableAcceptanceRecordPolicy(t *testing.T) {
+	for _, record := range []func(string) string{stableAcceptanceFixture, stagedAcceptanceFixture} {
+		fixture := newReleaseFixture(t)
+		fixture.release.Body = record(fixture.attested["release-index.json"])
+		source := NewWithEndpoint(fixture.server.Client(), fixture.server.URL, fixture.verifier)
+		if got, err := source.Discover(t.Context(), ""); err != nil || got.Tag != "v1.0.0" {
+			t.Fatalf("Discover() = %#v, %v", got, err)
+		}
+	}
+
+	for _, change := range []func(string) string{
+		func(body string) string {
+			return strings.Replace(body, "Packaged executable qualification: amd64 Passed; arm64 Passed.\n", "", 1)
+		},
+		func(body string) string {
+			return strings.Replace(body, "Packaged executable qualification: ", "Packaged executable qualification: amd64 Passed; arm64 Passed.\nPackaged executable qualification: ", 1)
+		},
+		func(body string) string {
+			return strings.Replace(body, "Packaged executable qualification: amd64 Passed; arm64 Passed.", "Packaged executable qualification: amd64 Passed; arm64 Pending.", 1)
+		},
+		func(body string) string {
+			return strings.Replace(body, "Status: Qualified - staged-onboarding package policy\n", "Status: Qualified - staged-onboarding package policy\nStatus: Qualified - root-runtime package policy\n", 1)
+		},
+		func(body string) string {
+			return strings.Replace(body, "RELEASE-STAGED-ONBOARDING-PACKAGE-QUALIFICATION", "RELEASE-ROOT-RUNTIME-PACKAGE-QUALIFICATION", 1)
+		},
+		func(body string) string {
+			return strings.Replace(body, "Repository: ", "Repository: "+softwarelifecycle.Repository+"\nRepository: ", 1)
+		},
+		func(body string) string {
+			return strings.Replace(body, "| External check | Status |\n", "| External check | Status |\n| External check | Status |\n", 1)
+		},
+		func(body string) string { return strings.Replace(body, "\n\n", "\r\n", 1) },
+		func(body string) string { return strings.Replace(body, "\n\n", "\x00\n", 1) },
+		func(body string) string {
+			return strings.Replace(body, "Any changed asset", "hostile line\nAny changed asset", 1)
+		},
+		func(body string) string { return body + "hostile trailing line\n" },
+		func(body string) string { return body + strings.Repeat("x", 64<<10) },
+	} {
+		fixture := newReleaseFixture(t)
+		fixture.release.Body = change(stagedAcceptanceFixture(fixture.attested["release-index.json"]))
+		source := NewWithEndpoint(fixture.server.Client(), fixture.server.URL, fixture.verifier)
+		if got, err := source.Discover(t.Context(), ""); err == nil || got.Tag != "" {
+			t.Fatalf("Discover() = %#v, %v", got, err)
+		}
+	}
+}
+
 func TestSourceBindsAStableAcceptanceRecordToTheDownloadedIndex(t *testing.T) {
 	fixture := newReleaseFixture(t)
 	fixture.release.Body = strings.Replace(fixture.release.Body, fixture.attested["release-index.json"], strings.Repeat("b", 64), 1)
@@ -223,14 +272,44 @@ func stableAcceptanceFixture(indexSHA256 string) string {
 		"Commit: " + fixtureCommit + "\n" +
 		"Release index SHA-256: " + indexSHA256 + "\n" +
 		"Stable result code: RELEASE-ROOT-RUNTIME-PACKAGE-QUALIFICATION\n\n" +
-		"| Module Verification | Passed | exact |\n" +
-		"| Seam Verification | Passed | exact |\n" +
-		"| Integrated Verification | Passed | exact |\n" +
+		"| Module Verification | Passed | Package suites at the Pasteable Install Command and owning Module Interfaces |\n" +
+		"| Seam Verification | Passed | Exact public HTTPS release verification, Sigstore attestations, and package seam checks |\n" +
+		"| Integrated Verification | Passed | Package composition through existing product Interfaces |\n" +
 		"| Codex Live Acceptance | Not required | ADR-0010 root-runtime package and public-seam scope; no live VPS evidence claimed |\n" +
 		"| Owner Acceptance | Not required | ADR-0010 root-runtime package and public-seam scope; no maintained-client evidence claimed |\n\n" +
 		"Integrated Ubuntu Verification: Not required - ADR-0010 root-runtime package and public-seam scope; no automated Ubuntu integration evidence claimed.\n" +
 		"No Integrated Ubuntu Verification, live VPS, provider, maintained-client, or Owner evidence was performed.\n\n" +
 		"Any asset, attestation, repository, tag, commit, release-index digest, qualification scope, required check, or client-facing change invalidates this record.\n"
+}
+
+func stagedAcceptanceFixture(indexSHA256 string) string {
+	return "# SBXR automated Acceptance Record\n\n" +
+		"Status: Qualified - staged-onboarding package policy\n" +
+		"Repository: " + softwarelifecycle.Repository + "\n" +
+		"Tag: v1.0.0\n" +
+		"Commit: " + fixtureCommit + "\n" +
+		"Release index SHA-256: " + indexSHA256 + "\n" +
+		"Stable result code: RELEASE-STAGED-ONBOARDING-PACKAGE-QUALIFICATION\n" +
+		"Qualified procedures: RELEASE-STAGED-INSTALL-REVISION-1, RELEASE-CLOUDFLARE-PROFILE-SETUP-N-TO-N+1, RELEASE-STAGED-ONBOARDING-CHAIN, RELEASE-STAGED-ONBOARDING-SECRET-SCAN, RELEASE-STAGED-ONBOARDING-CLIENT-OUTPUT, RELEASE-STAGED-ONBOARDING-TERMINAL, RELEASE-STAGED-ONBOARDING-GUIDE-TEXT\n" +
+		"Packaged executable qualification: amd64 Passed; arm64 Passed.\n\n" +
+		"| Module Verification | Passed | Package suites at the Pasteable Install Command and owning Module Interfaces |\n" +
+		"| Seam Verification | Passed | Exact public HTTPS release verification, Sigstore attestations, and package seam checks |\n" +
+		"| Integrated Verification | Passed | Staged Installation, Cloudflare Profile Setup, and chained package composition |\n" +
+		"| External check | Status |\n" +
+		"|---|---|\n" +
+		"| Codex Live Acceptance | Not required — staged-onboarding package and controlled-seam qualification scope |\n" +
+		"| Real VPS | Not required — staged-onboarding package and controlled-seam qualification scope |\n" +
+		"| Real Cloudflare | Not required — staged-onboarding package and controlled-seam qualification scope |\n" +
+		"| ACME | Not required — staged-onboarding package and controlled-seam qualification scope |\n" +
+		"| Outside-client | Not required — staged-onboarding package and controlled-seam qualification scope |\n" +
+		"| Maintained-client | Not required — staged-onboarding package and controlled-seam qualification scope |\n" +
+		"| Current-documentation | Not required — staged-onboarding package and controlled-seam qualification scope |\n" +
+		"| Provider mutation | Not required — staged-onboarding package and controlled-seam qualification scope |\n" +
+		"| Owner Acceptance | Not required — staged-onboarding package and controlled-terminal qualification scope |\n\n" +
+		"Codex Live Acceptance: Not required — staged-onboarding package and controlled-seam qualification scope.\n" +
+		"Owner Acceptance: Not required — staged-onboarding package and controlled-terminal qualification scope.\n" +
+		"No live VPS, real Cloudflare, ACME, outside-client, maintained-client, current-documentation, provider mutation, or Owner Acceptance was performed.\n\n" +
+		"Any changed asset, commit, tag, release-index digest, procedure, guide text, selected output, or required test resets its affected result.\n"
 }
 
 func (fixture *releaseFixture) verifier(body []byte, algorithm, digest string) ([]byte, error) {
