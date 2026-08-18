@@ -22,19 +22,21 @@ type ControlledSecretMarker struct {
 // required protected value class.
 func ControlledStagedOnboardingSecretMarkers() []ControlledSecretMarker {
 	return []ControlledSecretMarker{
-		{Class: "management token", Owner: "protected/state/cloudflare-management-token", Value: []byte("SBXR_USER_TOKEN_MARKER_00000000000000abcd"), Proof: "RELEASE-STAGED-ONBOARDING-MARKER-MANAGEMENT-TOKEN"},
-		{Class: "token identifiers", Owner: "protected/state/cloudflare-token-identifiers", Value: []byte("9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f"), Proof: "RELEASE-STAGED-ONBOARDING-MARKER-TOKEN-IDENTIFIERS"},
-		{Class: "Tunnel run token", Owner: "protected/cloudflared/run-token", Value: []byte("CLOUDFLARE-ROTATED-RUN-TOKEN-MARKER"), Proof: "RELEASE-STAGED-ONBOARDING-MARKER-TUNNEL-RUN-TOKEN"},
-		{Class: "profile credentials", Owner: "protected/state/profile-credentials", Value: []byte("profile-secret-marker"), Proof: "RELEASE-STAGED-ONBOARDING-MARKER-PROFILE-CREDENTIALS"},
-		{Class: "subscription token", Owner: "protected/state/subscription-token", Value: []byte("subscription-secret-marker"), Proof: "RELEASE-STAGED-ONBOARDING-MARKER-SUBSCRIPTION-TOKEN"},
-		{Class: "complete subscription URLs", Owner: "protected/subscription/complete-url", Value: []byte("COMPLETE-SUBSCRIPTION-URL-MARKER"), Proof: "RELEASE-STAGED-ONBOARDING-MARKER-COMPLETE-URL"},
-		{Class: "private keys", Owner: "protected/service/private-key", Value: []byte("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"), Proof: "RELEASE-STAGED-ONBOARDING-MARKER-PRIVATE-KEY"},
-		{Class: "setup entropy", Owner: "protected/transaction/setup-entropy", Value: []byte("QUALIFICATION-SETUP-ENTROPY-00000000000000000008"), Proof: "RELEASE-STAGED-ONBOARDING-MARKER-SETUP-ENTROPY"},
-		{Class: "setup approval", Owner: "protected/transaction/setup-approval", Value: []byte("QUALIFICATION-SETUP-APPROVAL-00000000000000000009"), Proof: "RELEASE-STAGED-ONBOARDING-MARKER-SETUP-APPROVAL"},
-		{Class: "raw provider responses", Owner: "protected/transaction/provider-response", Value: []byte("PROVIDER-FIELD-MARKER"), Proof: "RELEASE-STAGED-ONBOARDING-MARKER-PROVIDER-RESPONSE"},
-		{Class: "external errors", Owner: "protected/transaction/external-error", Value: []byte("PROVIDER-ERROR-MARKER"), Proof: "RELEASE-STAGED-ONBOARDING-MARKER-EXTERNAL-ERROR"},
+		{Class: "management token", Owner: "protected/state/cloudflare-management-token", Value: controlledSecretMarker("SBXR_USER_TOKEN_", "MARKER_00000000000000abcd"), Proof: "RELEASE-STAGED-ONBOARDING-MARKER-MANAGEMENT-TOKEN"},
+		{Class: "token identifiers", Owner: "protected/state/cloudflare-token-identifiers", Value: []byte(strings.Repeat("9f", 16)), Proof: "RELEASE-STAGED-ONBOARDING-MARKER-TOKEN-IDENTIFIERS"},
+		{Class: "Tunnel run token", Owner: "protected/cloudflared/run-token", Value: controlledSecretMarker("CLOUDFLARE-ROTATED-RUN-", "TOKEN-MARKER"), Proof: "RELEASE-STAGED-ONBOARDING-MARKER-TUNNEL-RUN-TOKEN"},
+		{Class: "profile credentials", Owner: "protected/state/profile-credentials", Value: controlledSecretMarker("profile-secret-", "marker"), Proof: "RELEASE-STAGED-ONBOARDING-MARKER-PROFILE-CREDENTIALS"},
+		{Class: "subscription token", Owner: "protected/state/subscription-token", Value: controlledSecretMarker("subscription-secret-", "marker"), Proof: "RELEASE-STAGED-ONBOARDING-MARKER-SUBSCRIPTION-TOKEN"},
+		{Class: "complete subscription URLs", Owner: "protected/subscription/complete-url", Value: controlledSecretMarker("COMPLETE-SUBSCRIPTION-", "URL-MARKER"), Proof: "RELEASE-STAGED-ONBOARDING-MARKER-COMPLETE-URL"},
+		{Class: "private keys", Owner: "protected/service/private-key", Value: []byte(strings.Repeat("A", 43)), Proof: "RELEASE-STAGED-ONBOARDING-MARKER-PRIVATE-KEY"},
+		{Class: "setup entropy", Owner: "protected/transaction/setup-entropy", Value: controlledSecretMarker("QUALIFICATION-SETUP-ENTROPY-", "00000000000000000008"), Proof: "RELEASE-STAGED-ONBOARDING-MARKER-SETUP-ENTROPY"},
+		{Class: "setup approval", Owner: "protected/transaction/setup-approval", Value: controlledSecretMarker("QUALIFICATION-SETUP-APPROVAL-", "00000000000000000009"), Proof: "RELEASE-STAGED-ONBOARDING-MARKER-SETUP-APPROVAL"},
+		{Class: "raw provider responses", Owner: "protected/transaction/provider-response", Value: controlledSecretMarker("PROVIDER-FIELD-", "MARKER"), Proof: "RELEASE-STAGED-ONBOARDING-MARKER-PROVIDER-RESPONSE"},
+		{Class: "external errors", Owner: "protected/transaction/external-error", Value: controlledSecretMarker("PROVIDER-ERROR-", "MARKER"), Proof: "RELEASE-STAGED-ONBOARDING-MARKER-EXTERNAL-ERROR"},
 	}
 }
+
+func controlledSecretMarker(parts ...string) []byte { return []byte(strings.Join(parts, "")) }
 
 // QualifyControlledStagedOnboardingSurfaces rejects a marker on every named
 // output surface. It returns only fixed errors and no scanned bytes.

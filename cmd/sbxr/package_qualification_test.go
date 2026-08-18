@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
@@ -16,6 +17,15 @@ import (
 
 func TestPackagedExecutableRunsTheStrictOfflineStagedOnboardingQualification(t *testing.T) {
 	binary, components, metadata, manifest, componentSHA256 := packagedQualificationFixture(t)
+	packaged, err := os.ReadFile(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, marker := range softwarelifecycle.ControlledStagedOnboardingSecretMarkers() {
+		if bytes.Contains(packaged, marker.Value) {
+			t.Fatalf("packaged executable contains controlled secret marker %q", marker.Class)
+		}
+	}
 	temporaryRoot := t.TempDir()
 	command := exec.Command(binary, "acceptance", "staged-onboarding", "--components", components, "--json")
 	command.Env = append(os.Environ(), "TMPDIR="+temporaryRoot)

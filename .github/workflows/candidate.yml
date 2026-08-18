@@ -26,6 +26,7 @@ env:
   CANDIDATE_TAG: ${{ inputs.tag }}
   CANDIDATE_VERSION: ${{ inputs.version }}
   CANDIDATE_SEQUENCE: ${{ inputs.sequence }}
+  SECRET_PATTERN: 'SBXR_USER_TOKEN_MARKER_00000000000000abcd|9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f|CLOUDFLARE-ROTATED-RUN-TOKEN-MARKER|profile-secret-marker|subscription-secret-marker|COMPLETE-SUBSCRIPTION-URL-MARKER|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA|QUALIFICATION-SETUP-ENTROPY-00000000000000000008|QUALIFICATION-SETUP-APPROVAL-00000000000000000009|PROVIDER-FIELD-MARKER|PROVIDER-ERROR-MARKER|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer '
 
 concurrency:
   group: candidate-${{ inputs.tag }}
@@ -89,7 +90,7 @@ jobs:
              all(.procedures[]; keys == ["code", "status"] and .status == "Passed") and
              (.procedures | map(.code)) == ["RELEASE-STAGED-INSTALL-REVISION-1", "RELEASE-CLOUDFLARE-PROFILE-SETUP-N-TO-N+1", "RELEASE-STAGED-ONBOARDING-CHAIN", "RELEASE-STAGED-ONBOARDING-SECRET-SCAN", "RELEASE-STAGED-ONBOARDING-CLIENT-OUTPUT", "RELEASE-STAGED-ONBOARDING-TERMINAL", "RELEASE-STAGED-ONBOARDING-GUIDE-TEXT"]' \
             "$qualification"
-          pattern='MARKER|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer '
+          pattern="$SECRET_PATTERN"
           test -z "$(rg -a -l "$pattern" "$qualification")"
       - uses: actions/upload-artifact@v4
         with:
@@ -167,7 +168,7 @@ jobs:
           sudo env "PATH=$PATH" SBXR_CONTROLLED_FIREWALL_SEAM=1 go test ./internal/systemchanges/adapter/ubuntu -run TestProductionFirewallSeam -count=1
       - name: Refuse secret markers in release assets
         run: |
-          pattern='MARKER|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer '
+          pattern="$SECRET_PATTERN"
           test -z "$(rg -a -l "$pattern" dist/install.sh dist/release-index.json)"
           for archive in dist/sbxr-linux-amd64.tar.gz dist/sbxr-linux-arm64.tar.gz dist/sbxr-components-linux-amd64.tar.gz dist/sbxr-components-linux-arm64.tar.gz; do
             test -z "$(tar -xOzf "$archive" | rg -a -l "$pattern" -)"
@@ -194,7 +195,7 @@ jobs:
                all(.procedures[]; .status == "Passed")' \
               "$evidence"
           done
-          pattern='MARKER|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer '
+          pattern="$SECRET_PATTERN"
           test -z "$(rg -a -l "$pattern" qualification)"
       - uses: actions/upload-artifact@v4
         with:
@@ -227,7 +228,7 @@ jobs:
             echo
             echo "Release Identity: albertloky/SBXR $CANDIDATE_TAG $GITHUB_SHA $index_sha256"
           } >> "$GITHUB_STEP_SUMMARY"
-          pattern='MARKER|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer '
+          pattern="$SECRET_PATTERN"
           test -z "$(rg -a -l "$pattern" "$GITHUB_STEP_SUMMARY")"
 
   verify-release:
@@ -267,7 +268,7 @@ jobs:
             curl -fsSL "https://github.com/albertloky/SBXR/releases/download/$RELEASE_TAG/$asset" -o "dist/$asset"
           done
           test "$(find dist -type f | wc -l)" -eq 6
-          pattern='MARKER|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer '
+          pattern="$SECRET_PATTERN"
           test -z "$(rg -a -l "$pattern" dist/install.sh dist/release-index.json)"
           for archive in dist/sbxr-linux-amd64.tar.gz dist/sbxr-linux-arm64.tar.gz dist/sbxr-components-linux-amd64.tar.gz dist/sbxr-components-linux-arm64.tar.gz; do
             test -z "$(tar -xOzf "$archive" | rg -a -l "$pattern" -)"
@@ -289,7 +290,7 @@ jobs:
             -directory dist \
             -output acceptance-record.md \
             -evidence-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          pattern='MARKER|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer '
+          pattern="$SECRET_PATTERN"
           test -z "$(rg -a -l "$pattern" acceptance-record.md)"
           cat acceptance-record.md >> "$GITHUB_STEP_SUMMARY"
           test -z "$(rg -a -l "$pattern" "$GITHUB_STEP_SUMMARY")"

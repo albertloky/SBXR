@@ -4,6 +4,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 )
 
 func TestCandidateWorkflowPublishesOnlyAQualifiedStagedOnboardingAcceptanceRecord(t *testing.T) {
@@ -85,6 +87,14 @@ func TestCandidateWorkflowQualifiesBothNativePackagesBeforeAggregation(t *testin
 	}
 	if strings.Count(workflow, "go run ./cmd/sbxr-release validate-package-qualification") != 2 {
 		t.Fatal("candidate workflow must strictly validate Package Qualification evidence before upload and aggregation")
+	}
+	for _, marker := range softwarelifecycle.ControlledStagedOnboardingSecretMarkers() {
+		if !strings.Contains(workflow, string(marker.Value)) {
+			t.Fatalf("candidate workflow omitted canonical secret marker %q", marker.Class)
+		}
+	}
+	if strings.Contains(workflow, "pattern='MARKER|") {
+		t.Fatal("candidate workflow retained the overbroad MARKER asset scan")
 	}
 	aggregate := strings.Index(workflow, "name: Require both native Package Qualification results")
 	report := strings.Index(workflow, "name: Record prepublication stage matrix")

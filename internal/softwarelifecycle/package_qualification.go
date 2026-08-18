@@ -54,14 +54,14 @@ func BuildPackageQualificationEvidence(build EmbeddedBuildIdentity, architecture
 		return nil, err
 	}
 	document, err := json.Marshal(report)
-	if err != nil || len(document) > MaxPackageQualificationEvidenceBytes {
+	if err != nil || len(document)+1 > MaxPackageQualificationEvidenceBytes {
 		return nil, errors.New("package qualification evidence unavailable")
 	}
-	return document, nil
+	return append(document, '\n'), nil
 }
 
 func ValidatePackageQualificationEvidence(document []byte, build EmbeddedBuildIdentity, architecture Architecture, manifest ComponentManifest, archiveSHA256 string) error {
-	if len(document) == 0 || len(document) > MaxPackageQualificationEvidenceBytes || bytes.ContainsAny(document, "\r\x00") || ValidateUniqueJSON(document) != nil {
+	if len(document) < 2 || len(document) > MaxPackageQualificationEvidenceBytes || document[len(document)-1] != '\n' || bytes.ContainsAny(document, "\r\x00") || ValidateUniqueJSON(document) != nil {
 		return errors.New("package qualification evidence refused")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(document))
@@ -72,6 +72,7 @@ func ValidatePackageQualificationEvidence(document []byte, build EmbeddedBuildId
 	}
 	want, err := packageQualificationReport(build, architecture, manifest, archiveSHA256)
 	canonical, marshalErr := json.Marshal(got)
+	canonical = append(canonical, '\n')
 	if err != nil || marshalErr != nil || !bytes.Equal(canonical, document) || !reflect.DeepEqual(got, want) {
 		return errors.New("package qualification evidence refused")
 	}

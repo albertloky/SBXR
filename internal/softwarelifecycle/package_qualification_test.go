@@ -19,6 +19,9 @@ func TestPackageQualificationEvidenceIsStrictOrderedAndIdentityBound(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(document) == 0 || document[len(document)-1] != '\n' || ValidatePackageQualificationEvidence(document[:len(document)-1], build, AMD64, component, hex.EncodeToString(digest[:])) == nil {
+		t.Fatal("package qualification evidence did not require one trailing newline")
+	}
 	if _, err := BuildPackageQualificationEvidence(build, AMD64, component, hex.EncodeToString(digest[:]), PackageQualificationProcedureCodes[:6]); err == nil {
 		t.Fatal("incomplete package qualification procedures accepted")
 	}
