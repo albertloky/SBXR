@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/albertloky/SBXR/internal/installation"
+	"github.com/albertloky/SBXR/internal/ownerconsole"
+	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 	"github.com/albertloky/SBXR/internal/state"
 	statefilesystem "github.com/albertloky/SBXR/internal/state/adapter/filesystem"
 	"github.com/albertloky/SBXR/internal/systemchanges"
@@ -81,27 +83,48 @@ func TestControlledStagedOnboardingChainsRevisionOneToTwo(t *testing.T) {
 }
 
 func TestControlledStagedOnboardingSecretScanKeepsMarkersOnlyInOwningArtifacts(t *testing.T) {
-	markers := controlledStagedOnboardingSecretMarkers()
+	markers := softwarelifecycle.ControlledStagedOnboardingSecretMarkers()
+	markerText := make([]string, len(markers))
 	protected := make(map[string][]byte, len(markers))
-	for _, marker := range markers {
-		protected[marker.owner] = append(protected[marker.owner], marker.value...)
+	for index, marker := range markers {
+		markerText[index] = string(marker.Value)
+		protected[marker.Owner] = append(protected[marker.Owner], marker.Value...)
 	}
-	public := map[string][]byte{}
-	for _, surface := range controlledStagedOnboardingPublicSurfaces() {
-		public[surface] = []byte("fixed secret-safe qualification output")
+	if err := softwarelifecycle.QualifyControlledStagedOnboardingOwners(protected); err != nil {
+		t.Fatal(err)
 	}
-	if err := qualifyControlledStagedOnboardingSecretScan(public, protected); err != nil {
+	if err := ownerconsole.QualifyControlledStagedOnboardingTerminalSecretSafe(t.Context(), markerText); err != nil {
+		t.Fatal(err)
+	}
+	root, load := controlledRevisionOneCopy(t)
+	surfaces := map[string][]byte{}
+	options := controlledSetupOptions{confirm: true, scanSurface: func(name string, body []byte) error {
+		surfaces[name] = append(surfaces[name], body...)
+		return nil
+	}}
+	if err := runControlledCloudflareProfileSetupWithOptions(t.Context(), root, load, options); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.CommandContext(t.Context(), "go", "test", "./internal/ownerconsole", "-run", "^TestRunCloudflareWalkthroughUsesDedicatedBroadUserTokenPathAndMasksByDefault$", "-count=1")
+	command.Dir = filepath.Clean(filepath.Join("..", ".."))
+	testOutput, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatal("controlled test-output surface unavailable")
+	}
+	surfaces["test"] = testOutput
+	required := []string{"transaction", "diagnostic", "http", "test"}
+	if err := softwarelifecycle.QualifyControlledStagedOnboardingSurfaces(surfaces, required); err != nil {
 		t.Fatal(err)
 	}
 	for _, marker := range markers {
-		for _, surface := range controlledStagedOnboardingPublicSurfaces() {
-			leaked := make(map[string][]byte, len(public))
-			for name, body := range public {
+		for _, surface := range required {
+			leaked := make(map[string][]byte, len(surfaces))
+			for name, body := range surfaces {
 				leaked[name] = append([]byte(nil), body...)
 			}
-			leaked[surface] = append(leaked[surface], marker.value...)
-			if err := qualifyControlledStagedOnboardingSecretScan(leaked, protected); err == nil {
-				t.Fatalf("%s marker was accepted on %s", marker.class, surface)
+			leaked[surface] = append(leaked[surface], marker.Value...)
+			if err := softwarelifecycle.QualifyControlledStagedOnboardingSurfaces(leaked, required); err == nil {
+				t.Fatalf("%s marker was accepted on %s", marker.Class, surface)
 			}
 		}
 	}
@@ -109,8 +132,8 @@ func TestControlledStagedOnboardingSecretScanKeepsMarkersOnlyInOwningArtifacts(t
 	for owner, body := range protected {
 		wrongOwner[owner] = append([]byte(nil), body...)
 	}
-	wrongOwner[markers[1].owner] = append(wrongOwner[markers[1].owner], markers[0].value...)
-	if err := qualifyControlledStagedOnboardingSecretScan(public, wrongOwner); err == nil {
+	wrongOwner[markers[1].Owner] = append(wrongOwner[markers[1].Owner], markers[0].Value...)
+	if err := softwarelifecycle.QualifyControlledStagedOnboardingOwners(wrongOwner); err == nil {
 		t.Fatal("marker was accepted outside its protected owning artifact")
 	}
 }

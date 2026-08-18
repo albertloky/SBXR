@@ -1,12 +1,80 @@
 package softwarelifecycle
 
 import (
+	"bytes"
 	"errors"
 	"strings"
 
 	lifecyclecontract "github.com/albertloky/SBXR/internal/softwarelifecycle/contract"
 	"github.com/albertloky/SBXR/internal/systemchanges"
 )
+
+// ControlledSecretMarker identifies one staged-onboarding protected value and
+// its exact controlled owning artifact.
+type ControlledSecretMarker struct {
+	Class string
+	Owner string
+	Value []byte
+}
+
+// ControlledStagedOnboardingSecretMarkers returns one unique marker per
+// required protected value class.
+func ControlledStagedOnboardingSecretMarkers() []ControlledSecretMarker {
+	return []ControlledSecretMarker{
+		{Class: "management token", Owner: "protected/state/cloudflare-management-token", Value: []byte("sbxr_QUALIFICATION-MANAGEMENT-TOKEN-00000000000000000001")},
+		{Class: "token identifiers", Owner: "protected/state/cloudflare-token-identifiers", Value: []byte("QUALIFICATION-TOKEN-IDENTIFIERS-00000000000000000002")},
+		{Class: "Tunnel run token", Owner: "protected/cloudflared/run-token", Value: []byte("QUALIFICATION-TUNNEL-RUN-TOKEN-00000000000000000003")},
+		{Class: "profile credentials", Owner: "protected/state/profile-credentials", Value: []byte("QUALIFICATION-PROFILE-CREDENTIAL-00000000000000000004")},
+		{Class: "subscription token", Owner: "protected/state/subscription-token", Value: []byte("QUALIFICATION-SUBSCRIPTION-TOKEN-00000000000000000005")},
+		{Class: "complete subscription URLs", Owner: "protected/subscription/complete-url", Value: []byte("QUALIFICATION-COMPLETE-SUBSCRIPTION-URL-00000000000000000006")},
+		{Class: "private keys", Owner: "protected/service/private-key", Value: []byte("QUALIFICATION-PRIVATE-KEY-00000000000000000007")},
+		{Class: "setup entropy", Owner: "protected/transaction/setup-entropy", Value: []byte("QUALIFICATION-SETUP-ENTROPY-00000000000000000008")},
+		{Class: "setup approval", Owner: "protected/transaction/setup-approval", Value: []byte("QUALIFICATION-SETUP-APPROVAL-00000000000000000009")},
+		{Class: "raw provider responses", Owner: "protected/transaction/provider-response", Value: []byte("QUALIFICATION-RAW-PROVIDER-RESPONSE-00000000000000000010")},
+		{Class: "external errors", Owner: "protected/transaction/external-error", Value: []byte("QUALIFICATION-EXTERNAL-ERROR-00000000000000000011")},
+	}
+}
+
+// QualifyControlledStagedOnboardingSurfaces rejects a marker on every named
+// output surface. It returns only fixed errors and no scanned bytes.
+func QualifyControlledStagedOnboardingSurfaces(surfaces map[string][]byte, required []string) error {
+	if len(surfaces) != len(required) {
+		return errors.New("controlled staged-onboarding secret scan is incomplete")
+	}
+	for _, name := range required {
+		body, ok := surfaces[name]
+		if !ok {
+			return errors.New("controlled staged-onboarding secret scan is incomplete")
+		}
+		for _, marker := range ControlledStagedOnboardingSecretMarkers() {
+			if bytes.Contains(body, marker.Value) {
+				return errors.New("controlled staged-onboarding secret scan found a marker")
+			}
+		}
+	}
+	return nil
+}
+
+// QualifyControlledStagedOnboardingOwners requires every marker exactly once
+// in its exact protected owning artifact and nowhere else.
+func QualifyControlledStagedOnboardingOwners(artifacts map[string][]byte) error {
+	markers := ControlledStagedOnboardingSecretMarkers()
+	if len(artifacts) != len(markers) {
+		return errors.New("controlled staged-onboarding marker ownership is incomplete")
+	}
+	for _, marker := range markers {
+		owner, ok := artifacts[marker.Owner]
+		if !ok || bytes.Count(owner, marker.Value) != 1 {
+			return errors.New("controlled staged-onboarding marker ownership disagrees")
+		}
+		for name, body := range artifacts {
+			if name != marker.Owner && bytes.Contains(body, marker.Value) {
+				return errors.New("controlled staged-onboarding marker ownership disagrees")
+			}
+		}
+	}
+	return nil
+}
 
 type controlledQualificationContribution struct{ proof InstallContributionProof }
 

@@ -101,10 +101,12 @@ type qualificationTerminal struct {
 	ctx      context.Context
 	steps    []qualificationStep
 	requests chan any
+	stop     chan struct{}
+	done     chan struct{}
 }
 
 func newQualificationTerminal(ctx context.Context, steps []qualificationStep) *qualificationTerminal {
-	terminal := &qualificationTerminal{ctx: ctx, steps: steps, requests: make(chan any)}
+	terminal := &qualificationTerminal{ctx: ctx, steps: steps, requests: make(chan any), stop: make(chan struct{}), done: make(chan struct{})}
 	go terminal.serve()
 	return terminal
 }
@@ -127,6 +129,7 @@ type qualificationWrite struct {
 type qualificationTranscript struct{ result chan string }
 
 func (terminal *qualificationTerminal) serve() {
+	defer close(terminal.done)
 	var body strings.Builder
 	var pending *qualificationRead
 	next := 0
@@ -148,9 +151,9 @@ func (terminal *qualificationTerminal) serve() {
 	}
 	for {
 		select {
-		case <-terminal.ctx.Done():
+		case <-terminal.stop:
 			if pending != nil {
-				pending.result <- qualificationReadResult{err: terminal.ctx.Err()}
+				pending.result <- qualificationReadResult{err: io.EOF}
 			}
 			return
 		case request := <-terminal.requests:
@@ -176,8 +179,12 @@ func (terminal *qualificationTerminal) Read(destination []byte) (int, error) {
 	case <-terminal.ctx.Done():
 		return 0, terminal.ctx.Err()
 	}
-	response := <-result
-	return response.written, response.err
+	select {
+	case response := <-result:
+		return response.written, response.err
+	case <-terminal.ctx.Done():
+		return 0, terminal.ctx.Err()
+	}
 }
 
 func (terminal *qualificationTerminal) Write(source []byte) (int, error) {
@@ -187,18 +194,32 @@ func (terminal *qualificationTerminal) Write(source []byte) (int, error) {
 	case <-terminal.ctx.Done():
 		return 0, terminal.ctx.Err()
 	}
-	response := <-result
-	return response.written, response.err
+	select {
+	case response := <-result:
+		return response.written, response.err
+	case <-terminal.ctx.Done():
+		return 0, terminal.ctx.Err()
+	}
 }
 
 func (terminal *qualificationTerminal) transcript() string {
 	result := make(chan string, 1)
 	select {
 	case terminal.requests <- qualificationTranscript{result: result}:
-		return <-result
+		select {
+		case transcript := <-result:
+			return transcript
+		case <-terminal.ctx.Done():
+			return ""
+		}
 	case <-terminal.ctx.Done():
 		return ""
 	}
+}
+
+func (terminal *qualificationTerminal) close() {
+	close(terminal.stop)
+	<-terminal.done
 }
 
 type controlledTerminalScreen struct {
@@ -206,12 +227,28 @@ type controlledTerminalScreen struct {
 	initial  ProfileSetupPresentation
 	steps    []qualificationStep
 	want     []string
+	forbid   []string
 }
 
 // QualifyControlledStagedOnboardingTerminal runs the seven decision-critical
 // screens through Run at both approved terminal sizes and returns no transcript.
 func QualifyControlledStagedOnboardingTerminal(ctx context.Context) error {
-	const marker = "sbxr_QUALIFICATION-MANAGEMENT-TOKEN-01234567890123456789"
+	return qualifyControlledStagedOnboardingTerminal(ctx, nil)
+}
+
+// QualifyControlledStagedOnboardingTerminalSecretSafe keeps the transcript
+// inside Owner Console while checking controlled secret markers.
+func QualifyControlledStagedOnboardingTerminalSecretSafe(ctx context.Context, markers []string) error {
+	return qualifyControlledStagedOnboardingTerminal(ctx, markers)
+}
+
+func qualifyControlledStagedOnboardingTerminal(ctx context.Context, markers []string) error {
+	inputMarker := "sbxr_QUALIFICATION-MANAGEMENT-TOKEN-01234567890123456789"
+	if len(markers) > 0 {
+		inputMarker = markers[0]
+	} else {
+		markers = []string{inputMarker}
+	}
 	installation := strings.Join(scenarioFixture(InstallationComplete).lines, "\n")
 	if !strings.Contains(installation, "XHTTP, WebSocket, Hysteria2, TUIC, AnyTLS Not set up") {
 		return errors.New("controlled Owner Console terminal qualification disagrees")
@@ -219,15 +256,15 @@ func QualifyControlledStagedOnboardingTerminal(ctx context.Context) error {
 	screens := []controlledTerminalScreen{
 		{scenario: InstallationComplete, steps: []qualificationStep{{wait: "Subscription 1 profile", send: "\x03\r"}}, want: []string{"Profiles 1 of 6 set up", "VLESS REALITY Vision Enabled", "Cloudflare Not required for first Installation", "Subscription 1 profile", "five exact omissions"}},
 		{scenario: CloudflareSetupEntry, initial: ProfileSetupPresentation{Kind: ProfileSetupEntry, Revision: 1}, steps: []qualificationStep{{wait: "Optional collective setup for five profiles", send: "\x03\r"}}, want: []string{"Optional collective setup for five profiles", "Five Cloudflare profiles Not set up"}},
-		{scenario: CloudflareSetupToken, initial: ProfileSetupPresentation{Kind: ProfileSetupTokenEntry, Revision: 1}, steps: []qualificationStep{{wait: "Dedicated Broad Cloudflare User API Token", send: marker}, {wait: "********", send: "\x03\r"}}, want: []string{"Dedicated Broad Cloudflare User API Token", "masked and memory-only"}},
+		{scenario: CloudflareSetupToken, initial: ProfileSetupPresentation{Kind: ProfileSetupTokenEntry, Revision: 1}, steps: []qualificationStep{{wait: "Dedicated Broad Cloudflare User API Token", send: inputMarker}, {wait: "********", send: "\x03\r"}}, want: []string{"Dedicated Broad Cloudflare User API Token", "masked and memory-only"}},
 		{scenario: CloudflareSetupFields, initial: ProfileSetupPresentation{Kind: ProfileSetupFieldsReview, Revision: 1, SelectedZone: "example.test", Hostnames: [3]string{"xhttp.example.test", "ws.example.test", "direct.example.test"}, Ports: []uint16{443, 8443, 9443}}, steps: []qualificationStep{{wait: "Zone example.test", send: "\r"}, {wait: "controlled-cloudflare-profile-setup", send: "\x03\r"}}, want: []string{"controlled-cloudflare-profile-setup", "Starting authority", "Managed revision 1 proved"}},
 		{scenario: CloudflareSetupConfirmation, initial: ProfileSetupPresentation{Kind: ProfileSetupFinalConfirmation, Revision: 1}, steps: []qualificationStep{{wait: "Preparation is complete", send: "\x03\r"}}, want: []string{"Only the selected action crosses", "setup started", "Cancel and restore revision 1"}},
 		{scenario: CloudflareSetupRecovery, initial: ProfileSetupPresentation{Kind: ProfileSetupRecoveryRequired, Revision: 1, Checkpoint: "Irreversible boundary crossed", Candidate: "Protected revision 2 candidate", Evidence: "Durable setup journal"}, steps: []qualificationStep{{wait: "Last committed revision 1", send: "\x03\r"}}, want: []string{"Recovery Required", "Retry Cloudflare Profile Setup recovery", "Complete removal"}},
-		{scenario: CloudflareSetupComplete, initial: ProfileSetupPresentation{Kind: ProfileSetupComplete, Revision: 2}, steps: []qualificationStep{{wait: "Desired State revision 2", send: "\x03\r"}}, want: []string{"Profiles 6 of 6 set up", "VLESS XHTTP Enabled", "AnyTLS Enabled", "No Client Access Value appears here"}},
+		{scenario: CloudflareSetupComplete, initial: ProfileSetupPresentation{Kind: ProfileSetupComplete, Revision: 2}, steps: []qualificationStep{{wait: "Desired State revision 2", send: "\x03\r"}}, want: []string{"Profiles 6 of 6 set up", "VLESS XHTTP Enabled", "AnyTLS Enabled", "No Client Access Value appears here"}, forbid: []string{"Set up Cloudflare profiles", "vless://", "hysteria2://", "tuic://", "anytls://"}},
 	}
 	for _, size := range [][2]int{{80, 24}, {120, 36}} {
 		for _, screen := range screens {
-			if err := runControlledTerminalScreen(ctx, size, screen, marker); err != nil {
+			if err := runControlledTerminalScreen(ctx, size, screen, markers); err != nil {
 				return err
 			}
 		}
@@ -254,7 +291,7 @@ func QualifyControlledStagedOnboardingGuideText(ctx context.Context) error {
 	}
 	for _, size := range [][2]int{{80, 24}, {120, 36}} {
 		for _, screen := range screens {
-			if err := runControlledTerminalScreen(ctx, size, screen, ""); err != nil {
+			if err := runControlledTerminalScreen(ctx, size, screen, nil); err != nil {
 				return err
 			}
 		}
@@ -262,8 +299,9 @@ func QualifyControlledStagedOnboardingGuideText(ctx context.Context) error {
 	return nil
 }
 
-func runControlledTerminalScreen(ctx context.Context, size [2]int, screen controlledTerminalScreen, secret string) error {
+func runControlledTerminalScreen(ctx context.Context, size [2]int, screen controlledTerminalScreen, markers []string) error {
 	terminal := newQualificationTerminal(ctx, screen.steps)
+	defer terminal.close()
 	capabilities := Capabilities{InteractiveInput: true, InteractiveOutput: true, AlternateScreen: true, CursorAddressing: true, ReadableEncoding: true, KeyboardInput: true, Unicode: true, Width: size[0], Height: size[1]}
 	session := Session{Input: terminal, Output: terminal, Environment: []string{"TERM=xterm-256color", "LANG=C.UTF-8", "NO_COLOR=1"}, Capabilities: &capabilities, Scenario: screen.scenario}
 	if screen.initial.Kind != 0 {
@@ -278,8 +316,10 @@ func runControlledTerminalScreen(ctx context.Context, size [2]int, screen contro
 			return errors.New("controlled Owner Console terminal qualification disagrees")
 		}
 	}
-	if secret != "" && strings.Contains(transcript, secret) {
-		return errors.New("controlled Owner Console terminal qualification exposed a marker")
+	for _, forbidden := range append(append([]string(nil), screen.forbid...), markers...) {
+		if forbidden != "" && strings.Contains(transcript, forbidden) {
+			return errors.New("controlled Owner Console terminal qualification exposed a marker or forbidden action")
+		}
 	}
 	return nil
 }

@@ -119,6 +119,106 @@ func TestAutomatedAcceptanceRecordBindsOneExactStagedOnboardingRelease(t *testin
 	}
 }
 
+func TestControlledStagedOnboardingSecretScanUsesReleaseSurfaces(t *testing.T) {
+	root := t.TempDir()
+	commit := strings.Repeat("a", 40)
+	if err := buildBootstrapFile(bootstrapOptions{version: "1.0.2", sequence: 3, tag: "v1.0.2", commit: commit, output: filepath.Join(root, "install.sh")}); err != nil {
+		t.Fatal(err)
+	}
+	archiveNames := []string{"sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz", "sbxr-components-linux-amd64.tar.gz", "sbxr-components-linux-arm64.tar.gz"}
+	for _, name := range archiveNames {
+		mustWriteArchive(t, filepath.Join(root, name), "qualified/"+strings.TrimSuffix(name, ".tar.gz"), []byte("controlled packaged content"))
+	}
+	if err := buildReleaseIndexFile(indexOptions{version: "1.0.2", sequence: 3, tag: "v1.0.2", commit: commit, directory: root, output: filepath.Join(root, "release-index.json")}); err != nil {
+		t.Fatal(err)
+	}
+	acceptance := filepath.Join(t.TempDir(), "acceptance-record.md")
+	if err := writeAutomatedAcceptanceRecord(acceptanceOptions{tag: "v1.0.2", commit: commit, directory: root, output: acceptance, evidenceURL: "https://github.com/albertloky/SBXR/actions/runs/123456789"}, time.Date(2026, 8, 13, 3, 4, 5, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	surfaces := map[string][]byte{}
+	for name, path := range map[string]string{"acceptance": acceptance, "bootstrap": filepath.Join(root, "install.sh"), "index": filepath.Join(root, "release-index.json")} {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		surfaces[name] = body
+	}
+	for _, name := range archiveNames {
+		surfaces["decompressed-"+name] = readControlledArchive(t, filepath.Join(root, name))
+	}
+	required := []string{"acceptance", "bootstrap", "index", "decompressed-sbxr-linux-amd64.tar.gz", "decompressed-sbxr-linux-arm64.tar.gz", "decompressed-sbxr-components-linux-amd64.tar.gz", "decompressed-sbxr-components-linux-arm64.tar.gz"}
+	if err := softwarelifecycle.QualifyControlledStagedOnboardingSurfaces(surfaces, required); err != nil {
+		t.Fatal(err)
+	}
+	for _, marker := range softwarelifecycle.ControlledStagedOnboardingSecretMarkers() {
+		for _, name := range required {
+			leaked := make(map[string][]byte, len(surfaces))
+			for surface, body := range surfaces {
+				leaked[surface] = append([]byte(nil), body...)
+			}
+			leaked[name] = append(leaked[name], marker.Value...)
+			if err := softwarelifecycle.QualifyControlledStagedOnboardingSurfaces(leaked, required); err == nil {
+				t.Fatalf("%s marker was accepted on %s", marker.Class, name)
+			}
+		}
+	}
+}
+
+func mustWriteArchive(t *testing.T, path, name string, body []byte) {
+	t.Helper()
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compressed := gzip.NewWriter(file)
+	archive := tar.NewWriter(compressed)
+	if err := archive.WriteHeader(&tar.Header{Name: name, Mode: 0o755, Size: int64(len(body)), Typeflag: tar.TypeReg}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := archive.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := compressed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readControlledArchive(t *testing.T, path string) []byte {
+	t.Helper()
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	compressed, err := gzip.NewReader(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer compressed.Close()
+	archive := tar.NewReader(compressed)
+	var surface bytes.Buffer
+	for {
+		header, err := archive.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil || header.Typeflag != tar.TypeReg {
+			t.Fatal("controlled archive surface unavailable")
+		}
+		if _, err := io.Copy(&surface, archive); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return surface.Bytes()
+}
+
 func TestAutomatedAcceptanceRecordRefusesChangedOrExtraReleaseMaterial(t *testing.T) {
 	for _, test := range []struct {
 		name   string

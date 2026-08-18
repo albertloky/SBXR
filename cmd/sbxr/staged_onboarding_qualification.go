@@ -40,6 +40,7 @@ type controlledSetupOptions struct {
 	crashAt          systemchanges.DurableCheckpoint
 	crashAfter       bool
 	singBoxValidator subscriptionpublication.SingBoxValidator
+	scanSurface      func(string, []byte) error
 }
 
 type controlledSetupApplyError struct {
@@ -172,7 +173,7 @@ func runControlledCloudflareProfileSetupWithOptions(ctx context.Context, root st
 	}
 	qualifiedCurrent := current
 	qualifiedCurrent.Exposure = controlledRevisionOneExposure(networkRequest.Intent)
-	if err := qualifyControlledManagedCapability(ctx, stateModule, loaded, qualifiedCurrent, false, singBoxValidator); err != nil {
+	if err := qualifyControlledManagedCapability(ctx, stateModule, loaded, qualifiedCurrent, false, singBoxValidator, options.scanSurface); err != nil {
 		return fmt.Errorf("controlled revision 1 capability: %w", err)
 	}
 	var transactionAdapter systemchanges.Adapter = adapter
@@ -216,6 +217,12 @@ func runControlledCloudflareProfileSetupWithOptions(ctx context.Context, root st
 	if result.Plan == nil {
 		return fmt.Errorf("controlled Cloudflare Profile Setup Plan refused: %+v: %v", result.Correction, prepareErr)
 	}
+	if options.scanSurface != nil {
+		transactionSurface := []byte(result.Plan.String() + strings.Join(result.Plan.Review(), "\n"))
+		if err := options.scanSurface("transaction", transactionSurface); err != nil {
+			return err
+		}
+	}
 	applied := module.Apply(result.Approval)
 	if applied.Kind != cloudflareprofilesetup.ApplyComplete {
 		return &controlledSetupApplyError{correction: applied.Correction, transaction: transaction}
@@ -230,7 +237,7 @@ func runControlledCloudflareProfileSetupWithOptions(ctx context.Context, root st
 	qualifiedCandidate.Hysteria2.Network = qualifiedCandidate.Exposure
 	qualifiedCandidate.TUIC.Network = qualifiedCandidate.Exposure
 	qualifiedCandidate.AnyTLS.Network = qualifiedCandidate.Exposure
-	if err := qualifyControlledManagedCapability(ctx, stateModule, final, qualifiedCandidate, true, singBoxValidator); err != nil {
+	if err := qualifyControlledManagedCapability(ctx, stateModule, final, qualifiedCandidate, true, singBoxValidator, options.scanSurface); err != nil {
 		return fmt.Errorf("controlled revision 2 capability: %w", err)
 	}
 	return nil
@@ -254,7 +261,7 @@ func (controlledManagedObservation) TryLock() (systemchanges.Lock, bool, error) 
 	return nil, false, nil
 }
 
-func qualifyControlledManagedCapability(ctx context.Context, stateModule state.Interface, loaded state.Result, registry connectionprofiles.RegistryViewRequest, cloudflareProfilesSetUp bool, singBoxValidator subscriptionpublication.SingBoxValidator) error {
+func qualifyControlledManagedCapability(ctx context.Context, stateModule state.Interface, loaded state.Result, registry connectionprofiles.RegistryViewRequest, cloudflareProfilesSetUp bool, singBoxValidator subscriptionpublication.SingBoxValidator, scanSurface func(string, []byte) error) error {
 	if loaded.Snapshot == nil {
 		return errors.New("controlled Managed capability unavailable")
 	}
@@ -275,6 +282,12 @@ func qualifyControlledManagedCapability(ctx context.Context, stateModule state.I
 	}
 	capabilities := healthCapabilities(revision, loaded.Snapshot.DesiredState.ConnectionProfiles)
 	diagnostics := healthdiagnostics.New(nil).Check(ctx, healthdiagnostics.InstallationSummaryFrom(changes.InstallationHealthInspection()), connectionProfileHealthInspection(map[healthdiagnostics.Module]healthdiagnostics.HealthStatus{healthdiagnostics.ConnectionProfilesModule: healthdiagnostics.Healthy}, capabilities))
+	if scanSurface != nil {
+		body, err := json.Marshal(diagnostics)
+		if err != nil || scanSurface("diagnostic", body) != nil {
+			return errors.New("controlled diagnostic secret scan failed")
+		}
+	}
 	if len(diagnostics.Modules) != 1 || diagnostics.Modules[0].Capability == nil || diagnostics.Modules[0].Capability.CommittedRevision != revision || len(diagnostics.Modules[0].Capability.CapabilityRows) != 6 {
 		return errors.New("controlled diagnostics capability disagrees")
 	}
@@ -363,6 +376,12 @@ func qualifyControlledManagedCapability(ctx context.Context, stateModule state.I
 			if err != nil {
 				return err
 			}
+			if scanSurface != nil {
+				body := append(append([]byte(nil), artifacts.Raw...), artifacts.SingBox.Body...)
+				if err := scanSurface("http", body); err != nil {
+					return err
+				}
+			}
 			decoded, decodeErr := base64.StdEncoding.DecodeString(string(artifacts.Base64))
 			wantProfiles, wantSingBox := 1, 1
 			if cloudflareProfilesSetUp {
@@ -443,62 +462,6 @@ func (controlledPublicationValidator) ValidateSingBox(_ context.Context, documen
 	body, err := io.ReadAll(io.LimitReader(document, 1<<20+1))
 	if err != nil || len(body) == 0 || len(body) > 1<<20 || !json.Valid(body) || !bytes.Contains(body, []byte(`"outbounds"`)) {
 		return errors.New("controlled sing-box document validation failed")
-	}
-	return nil
-}
-
-type controlledStagedOnboardingSecretMarker struct {
-	class string
-	owner string
-	value []byte
-}
-
-func controlledStagedOnboardingSecretMarkers() []controlledStagedOnboardingSecretMarker {
-	return []controlledStagedOnboardingSecretMarker{
-		{class: "management token", owner: "protected-state-cloudflare-management-token", value: []byte("sbxr_QUALIFICATION-MANAGEMENT-TOKEN-00000000000000000001")},
-		{class: "token identifiers", owner: "protected-state-cloudflare-token-identifiers", value: []byte("QUALIFICATION-TOKEN-IDENTIFIERS-00000000000000000002")},
-		{class: "Tunnel run token", owner: "protected-cloudflared-run-token", value: []byte("QUALIFICATION-TUNNEL-RUN-TOKEN-00000000000000000003")},
-		{class: "profile credentials", owner: "protected-state-profile-credentials", value: []byte("QUALIFICATION-PROFILE-CREDENTIAL-00000000000000000004")},
-		{class: "subscription token", owner: "protected-state-subscription-token", value: []byte("QUALIFICATION-SUBSCRIPTION-TOKEN-00000000000000000005")},
-		{class: "complete subscription URLs", owner: "protected-subscription-artifact", value: []byte("QUALIFICATION-COMPLETE-SUBSCRIPTION-URL-00000000000000000006")},
-		{class: "private keys", owner: "protected-service-private-key", value: []byte("QUALIFICATION-PRIVATE-KEY-00000000000000000007")},
-		{class: "setup entropy", owner: "protected-transaction-setup-entropy", value: []byte("QUALIFICATION-SETUP-ENTROPY-00000000000000000008")},
-		{class: "setup approval", owner: "protected-transaction-setup-approval", value: []byte("QUALIFICATION-SETUP-APPROVAL-00000000000000000009")},
-		{class: "raw provider responses", owner: "protected-transaction-provider-response", value: []byte("QUALIFICATION-RAW-PROVIDER-RESPONSE-00000000000000000010")},
-		{class: "external errors", owner: "protected-transaction-external-error", value: []byte("QUALIFICATION-EXTERNAL-ERROR-00000000000000000011")},
-	}
-}
-
-func controlledStagedOnboardingPublicSurfaces() []string {
-	return []string{"presentation", "transaction-evidence", "diagnostic", "http", "test-output", "acceptance-record", "bootstrap", "release-index", "application-archive", "component-archive"}
-}
-
-func qualifyControlledStagedOnboardingSecretScan(public, protected map[string][]byte) error {
-	markers := controlledStagedOnboardingSecretMarkers()
-	surfaces := controlledStagedOnboardingPublicSurfaces()
-	if len(public) != len(surfaces) || len(protected) != len(markers) {
-		return errors.New("controlled staged-onboarding secret scan is incomplete")
-	}
-	for _, surface := range surfaces {
-		if _, ok := public[surface]; !ok {
-			return errors.New("controlled staged-onboarding secret scan is incomplete")
-		}
-	}
-	for _, marker := range markers {
-		owner, ok := protected[marker.owner]
-		if !ok || bytes.Count(owner, marker.value) != 1 {
-			return errors.New("controlled staged-onboarding marker ownership disagrees")
-		}
-		for name, body := range protected {
-			if name != marker.owner && bytes.Contains(body, marker.value) {
-				return errors.New("controlled staged-onboarding marker ownership disagrees")
-			}
-		}
-		for _, body := range public {
-			if bytes.Contains(body, marker.value) {
-				return errors.New("controlled staged-onboarding secret scan found a marker")
-			}
-		}
 	}
 	return nil
 }
