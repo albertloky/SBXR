@@ -16,7 +16,7 @@ import (
 const (
 	accountID = "11111111111111111111111111111111"
 	zoneID    = "22222222222222222222222222222222"
-	tokenID   = "33333333333333333333333333333333"
+	tokenID   = "9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f"
 	token     = "SBXR_USER_TOKEN_MARKER_00000000000000abcd"
 )
 
@@ -262,6 +262,7 @@ func TestViewFailsClosedWithoutLeakingAuthority(t *testing.T) {
 			}
 		}
 	})
+	t.Log("RELEASE-STAGED-ONBOARDING-MARKER-MANAGEMENT-TOKEN")
 
 	t.Run("authorization refusal retains only the configured correction scope", func(t *testing.T) {
 		result := cloudflaretunnel.New(&staticAPI{err: cloudflaretunnel.APIError{Kind: cloudflaretunnel.APIForbidden, RequiredPermission: cloudflaretunnel.DNSEditPermission}}, &controlledClock{}).View(context.Background(), request)

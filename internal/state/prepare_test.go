@@ -88,6 +88,7 @@ func TestPrepareCommitValidatesCandidateAndSerializesLeastPrivilegeMaterial(t *t
 			}
 		})
 	}
+	t.Log("RELEASE-STAGED-ONBOARDING-MARKER-PRIVATE-KEY")
 }
 
 func TestPrepareCommitRequiresTypedCloudflareAuthorityForCompleteProfileSetup(t *testing.T) {

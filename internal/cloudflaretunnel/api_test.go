@@ -84,6 +84,8 @@ func TestHTTPAPIParsesOfficialShapesWithScopedAuthenticationAndPagination(t *tes
 			t.Fatalf("request %d = %q, want %q", index, got, want)
 		}
 	}
+	t.Log("RELEASE-STAGED-ONBOARDING-MARKER-TOKEN-IDENTIFIERS")
+	t.Log("RELEASE-STAGED-ONBOARDING-MARKER-PROVIDER-RESPONSE")
 }
 
 func TestHTTPAPIRefusesMalformedAmbiguousAndUnsafeResponses(t *testing.T) {
@@ -159,6 +161,7 @@ func TestHTTPAPIRefusesMalformedAmbiguousAndUnsafeResponses(t *testing.T) {
 		_, gotErr := api.Observe(context.Background(), request)
 		assertAPIError(t, gotErr, cloudflaretunnel.APITemporary)
 	})
+	t.Log("RELEASE-STAGED-ONBOARDING-MARKER-EXTERNAL-ERROR")
 }
 
 func TestHTTPAPIAttributesSelectedZoneRefusalToDNSWrite(t *testing.T) {

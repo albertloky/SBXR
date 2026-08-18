@@ -68,6 +68,8 @@ func TestPlanComposesSevenFreshOwningModuleResults(t *testing.T) {
 			t.Fatalf("Plan leaked %q", marker)
 		}
 	}
+	t.Log("RELEASE-STAGED-ONBOARDING-MARKER-PROFILE-CREDENTIALS")
+	t.Log("RELEASE-STAGED-ONBOARDING-MARKER-SUBSCRIPTION-TOKEN")
 	reused := module.Plan(t.Context(), fixture.request)
 	if reused.Plan != nil || reused.Correction == nil || reused.Correction.Code != "CLOUDFLARE-SETUP-CONTRIBUTION" {
 		t.Fatalf("reused owning contribution = %+v", reused)

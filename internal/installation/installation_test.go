@@ -31,6 +31,7 @@ func newCloudflareTestModule(api cloudflaretunnel.API, clock cloudflaretunnel.Cl
 
 func TestComposedInstallBuildsAndPreparesTheCompleteRevisionOnePlan(t *testing.T) {
 	request := composedInstallRequest(t)
+	request.Entropy = []byte("QUALIFICATION-SETUP-ENTROPY-00000000000000000008")
 	networkModule := networkpolicy.New(composedNetworkObserver{})
 	built, err := buildInstallWith(t.Context(), request, buildDependencies{
 		stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
@@ -61,11 +62,12 @@ func TestComposedInstallBuildsAndPreparesTheCompleteRevisionOnePlan(t *testing.T
 		t.Fatalf("prepareState() = (%+v, %v)", prepared, err)
 	}
 	rendered := fmt.Sprintf("%+v %+v %+v", built.plan, built.wiring, prepared)
-	for _, marker := range []string{hex.EncodeToString(request.Entropy), "COMPOSED-INSTALL-SECRET-MARKER"} {
+	for _, marker := range []string{string(request.Entropy), hex.EncodeToString(request.Entropy), "COMPOSED-INSTALL-SECRET-MARKER"} {
 		if strings.Contains(rendered, marker) {
 			t.Fatalf("composed installation evidence exposed protected marker %q", marker)
 		}
 	}
+	t.Log("RELEASE-STAGED-ONBOARDING-MARKER-SETUP-ENTROPY")
 }
 
 type rootRuntimeInstallApproval struct {
@@ -132,6 +134,7 @@ func TestInstallationInterfaceOwnsRootRuntimeTransactionOutcomes(t *testing.T) {
 				if strings.Contains(fmt.Sprintf("%+v %+v", approval, result), approval.marker) {
 					return 0, errors.New("controlled Installation approval marker escaped")
 				}
+				t.Log("RELEASE-STAGED-ONBOARDING-MARKER-SETUP-APPROVAL")
 				transaction = result
 				switch result.Outcome {
 				case systemchanges.Completed:

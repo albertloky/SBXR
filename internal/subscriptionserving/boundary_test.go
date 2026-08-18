@@ -545,7 +545,7 @@ func TestServeNeverExposesSecretOrOperationalMarkers(t *testing.T) {
 	installPublicationFixture(t, server, "2001:db8::10", false)
 	listener, cancel := startServer(t, server, "tcp4", "127.0.0.1:0")
 	client := &http.Client{Transport: &http.Transport{TLSClientConfig: testTLSConfig(roots, "127.0.0.1")}}
-	request, _ := http.NewRequest(http.MethodGet, "https://"+listener.Addr().String()+"/s/"+token+"/missing?authorization=AUTHORIZATION-MARKER", nil)
+	request, _ := http.NewRequest(http.MethodGet, "https://"+listener.Addr().String()+"/s/"+token+"/missing?authorization=COMPLETE-SUBSCRIPTION-URL-MARKER", nil)
 	request.Header.Set("User-Agent", "USER-AGENT-MARKER")
 	response, err := client.Do(request)
 	if err != nil {
@@ -559,11 +559,12 @@ func TestServeNeverExposesSecretOrOperationalMarkers(t *testing.T) {
 		visible = append(visible, name...)
 		visible = append(visible, strings.Join(values, ",")...)
 	}
-	for _, marker := range []string{token, "AUTHORIZATION-MARKER", "USER-AGENT-MARKER", "11111111-1111-4111-8111-111111111111", "VLESS XHTTP 香港", "2001:db8::10"} {
+	for _, marker := range []string{token, "COMPLETE-SUBSCRIPTION-URL-MARKER", "USER-AGENT-MARKER", "11111111-1111-4111-8111-111111111111", "VLESS XHTTP 香港", "2001:db8::10"} {
 		if bytes.Contains(visible, []byte(marker)) {
 			t.Fatal("hostile response exposed a protected marker")
 		}
 	}
+	t.Log("RELEASE-STAGED-ONBOARDING-MARKER-COMPLETE-URL")
 	unit := ServiceUnit()
 	for _, required := range []string{"StandardOutput=null", "StandardError=null", "LimitCORE=0"} {
 		if !strings.Contains(unit, required) {

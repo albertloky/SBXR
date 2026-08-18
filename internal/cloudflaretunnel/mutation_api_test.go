@@ -405,4 +405,5 @@ func TestHTTPMutationAPIRetrievesTheCurrentTunnelTokenOnlyThroughTheDocumentedEn
 	if rendered := fmt.Sprintf("%+v %#v %s", result, result, result); strings.Contains(rendered, runToken) {
 		t.Fatalf("run token escaped opaque result: %s", rendered)
 	}
+	t.Log("RELEASE-STAGED-ONBOARDING-MARKER-TUNNEL-RUN-TOKEN")
 }

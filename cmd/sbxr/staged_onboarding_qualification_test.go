@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -145,34 +146,35 @@ func TestControlledStagedOnboardingSecretScanKeepsMarkersOnlyInOwningArtifacts(t
 	ownerChecks := []struct {
 		path    string
 		pattern string
-		classes []string
 	}{
-		{path: "./internal/installation", pattern: "^TestComposedInstallBuildsAndPreparesTheCompleteRevisionOnePlan$", classes: []string{"setup entropy"}},
-		{path: "./internal/installation", pattern: "^TestInstallationInterfaceOwnsRootRuntimeTransactionOutcomes$", classes: []string{"setup approval"}},
-		{path: "./internal/cloudflaretunnel", pattern: "^(TestHTTPAPIParsesOfficialShapesWithScopedAuthenticationAndPagination|TestHTTPAPIRefusesMalformedAmbiguousAndUnsafeResponses|TestHTTPMutationAPIRetrievesTheCurrentTunnelTokenOnlyThroughTheDocumentedEndpoint|TestViewFailsClosedWithoutLeakingAuthority)$", classes: []string{"management token", "token identifiers", "Tunnel run token", "raw provider responses", "external errors"}},
-		{path: "./internal/cloudflareprofilesetup", pattern: "^TestPlanComposesSevenFreshOwningModuleResults$", classes: []string{"profile credentials", "subscription token"}},
-		{path: "./internal/state", pattern: "^(TestManagedClientAccessLeaseIsExactOneUseAndRevokedAfterTheCallback|TestPrepareCommitValidatesCandidateAndSerializesLeastPrivilegeMaterial)$", classes: []string{"private keys"}},
-		{path: "./internal/subscriptionserving", pattern: "^TestServeNeverExposesSecretOrOperationalMarkers$", classes: []string{"complete subscription URLs"}},
+		{path: "./internal/installation", pattern: "^(TestComposedInstallBuildsAndPreparesTheCompleteRevisionOnePlan|TestInstallationInterfaceOwnsRootRuntimeTransactionOutcomes)$"},
+		{path: "./internal/cloudflaretunnel", pattern: "^(TestHTTPAPIParsesOfficialShapesWithScopedAuthenticationAndPagination|TestHTTPAPIRefusesMalformedAmbiguousAndUnsafeResponses|TestHTTPMutationAPIRetrievesTheCurrentTunnelTokenOnlyThroughTheDocumentedEndpoint|TestViewFailsClosedWithoutLeakingAuthority)$"},
+		{path: "./internal/cloudflareprofilesetup", pattern: "^TestPlanComposesSevenFreshOwningModuleResults$"},
+		{path: "./internal/state", pattern: "^TestPrepareCommitValidatesCandidateAndSerializesLeastPrivilegeMaterial$"},
+		{path: "./internal/subscriptionserving", pattern: "^TestServeNeverExposesSecretOrOperationalMarkers$"},
 	}
-	covered := map[string]bool{}
 	for _, check := range ownerChecks {
-		command := exec.CommandContext(t.Context(), "go", "test", check.path, "-run", check.pattern, "-count=1")
+		command := exec.CommandContext(t.Context(), "go", "test", check.path, "-run", check.pattern, "-count=1", "-v")
 		command.Dir = filepath.Clean(filepath.Join("..", ".."))
 		output, err := command.CombinedOutput()
 		if err != nil {
 			t.Fatal("controlled owning-Module marker check unavailable")
 		}
 		surfaces["test"] = append(surfaces["test"], output...)
-		for _, class := range check.classes {
-			covered[class] = true
-		}
 	}
 	for _, marker := range markers {
-		if !covered[marker.Class] {
+		if bytes.Count(surfaces["test"], []byte(marker.Proof)) == 0 {
 			t.Fatal("controlled owning-Module marker class is unproved")
 		}
 	}
 	required := []string{"transaction", "diagnostic", "http", "apply", "typed-error", "journal", "inspect", "recovery", "test"}
+	for _, name := range required {
+		for _, marker := range markers {
+			if bytes.Contains(surfaces[name], marker.Value) {
+				t.Fatalf("controlled %s surface exposed %s", name, marker.Class)
+			}
+		}
+	}
 	if err := softwarelifecycle.QualifyControlledStagedOnboardingSurfaces(surfaces, required); err != nil {
 		t.Fatal(err)
 	}
