@@ -274,6 +274,10 @@ func buildApplicationArchive(ctx context.Context, options buildOptions, verifySo
 	if err != nil {
 		return nil, softwarelifecycle.PayloadMetadata{}, err
 	}
+	metadata, _, err = softwarelifecycle.ReadPayloadMetadata(bytes.NewReader(stamped), int64(len(stamped)))
+	if err != nil {
+		return nil, softwarelifecycle.PayloadMetadata{}, errors.New("release payload identity unavailable")
+	}
 	archive, err := oneFileArchive(stamped)
 	if err != nil || len(archive) > softwarelifecycle.MaxAssetBytes {
 		return nil, softwarelifecycle.PayloadMetadata{}, errors.New("release archive refused")

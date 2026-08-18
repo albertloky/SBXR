@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -53,7 +54,8 @@ func TestComponentCertbotLauncherUsesOnlyTheBundledWheelDirectory(t *testing.T) 
 
 func TestComponentArchiveIsExactOfflineAndArchitectureBound(t *testing.T) {
 	files := componentFixtureFiles()
-	manifest, err := NewComponentManifest(AMD64, "5.4.0", files)
+	build := EmbeddedBuildIdentity{Repository: Repository, Tag: "v1.0.0", Commit: strings.Repeat("a", 40), PayloadSHA256: strings.Repeat("b", 64)}
+	manifest, err := NewBoundComponentManifest(AMD64, build, "5.4.0", files)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +64,7 @@ func TestComponentArchiveIsExactOfflineAndArchitectureBound(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := ValidateComponentArchive(archive, AMD64)
-	if err != nil || got.Architecture != AMD64 || got.Xray != "v26.3.27" || got.SingBox != "v1.13.16" || got.Cloudflared != "2026.7.3" || got.Certbot != "5.4.0" || len(got.Files) != 7 {
+	if err != nil || got.Architecture != AMD64 || got.Build != build || got.Xray != "v26.3.27" || got.SingBox != "v1.13.16" || got.Cloudflared != "2026.7.3" || got.Certbot != "5.4.0" || len(got.Files) != 7 {
 		t.Fatalf("ValidateComponentArchive() = (%+v, %v)", got, err)
 	}
 	if _, err := ValidateComponentArchive(archive, ARM64); err == nil {

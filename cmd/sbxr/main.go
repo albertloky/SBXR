@@ -89,6 +89,13 @@ func applyProductionCloudflareProfileSetup(change *systemchanges.ChangeSet, exec
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "acceptance" {
+		if runPackageQualification(context.Background(), os.Args[1:], os.Stdout) != nil {
+			_, _ = os.Stderr.WriteString(packageQualificationRefusal + "\n")
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) == 2 && os.Args[1] == "version" {
 		if writeVersion(os.Stdout, false) != nil {
 			os.Exit(1)

@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -32,6 +34,56 @@ import (
 // Cloudflare Profile Setup Plan and real State and System Changes interfaces.
 func runControlledCloudflareProfileSetup(ctx context.Context, root string, load state.LoadRequest) error {
 	return runControlledCloudflareProfileSetupWithOptions(ctx, root, load, controlledSetupOptions{confirm: true})
+}
+
+func qualifyControlledCloudflareProfileSetupFailure(ctx context.Context, root string, load state.LoadRequest, options controlledSetupOptions, wantJournal bool) error {
+	setupErr := runControlledCloudflareProfileSetupWithOptions(ctx, root, load, options)
+	if setupErr == nil {
+		return errors.New("controlled setup failure was not reported")
+	}
+	if wantJournal {
+		var applyErr *controlledSetupApplyError
+		if !errors.As(setupErr, &applyErr) || applyErr.transaction.Outcome != systemchanges.RecoveryRequiredOutcome {
+			return errors.New("controlled post-checkpoint outcome was not Recovery Required")
+		}
+	}
+	loaded, err := statefilesystem.NewAt(root).Load(load)
+	if err != nil || loaded.Snapshot == nil || loaded.Snapshot.Revision != 1 {
+		return errors.New("controlled setup did not preserve revision 1")
+	}
+	_, journalErr := os.Stat(filepath.Join(root, "var/lib/sbxr/transactions/cloudflare-profile-setup-0002/journal.jsonl"))
+	if wantJournal == errors.Is(journalErr, os.ErrNotExist) {
+		return errors.New("controlled setup journal state disagrees")
+	}
+	return nil
+}
+
+func qualifyControlledCloudflareProfileSetupRestart(ctx context.Context, root string, load state.LoadRequest) error {
+	func() {
+		defer func() { _ = recover() }()
+		_ = runControlledCloudflareProfileSetupWithOptions(ctx, root, load, controlledSetupOptions{confirm: true, crashAt: systemchanges.StatePublished, crashAfter: true})
+	}()
+	stateModule := statefilesystem.NewAt(root)
+	finalLoad := state.LoadRequest{Baseline: state.ManagedEvidence, SupportedRelease: load.SupportedRelease, Lineage: &state.LineageProof{Revision: 2, LastCompletedChangeSet: "cloudflare-profile-setup-0002", ReleaseIdentity: load.SupportedRelease}}
+	loaded, err := stateModule.Load(finalLoad)
+	if err != nil || loaded.Snapshot == nil {
+		return errors.New("controlled setup published revision 2 unavailable")
+	}
+	_, finalSHA, _, _, valid := stateModule.SystemChangesLineageInspection(loaded).SystemChangesStateLineageFacts()
+	if !valid {
+		return errors.New("controlled setup revision 2 lineage unavailable")
+	}
+	observation := systemchanges.Observation{Status: systemchanges.Managed, StateRevision: 2, StateSHA256: finalSHA, LastChangeSet: "cloudflare-profile-setup-0002", Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, VolatileSHA256: strings.Repeat("9", 64), WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}
+	adapter, err := systemubuntu.NewControlledManagedProviderAdapter(root, observation, stateModule, func(systemchanges.Step, string, time.Duration) (systemchanges.StepEvidence, error) {
+		return systemchanges.StepEvidence{}, errors.New("provider effect must not repeat after restart")
+	})
+	if err != nil {
+		return err
+	}
+	if result := systemchanges.New(adapter).Recover(); result.Outcome != systemchanges.Completed {
+		return errors.New("controlled setup fresh recovery refused")
+	}
+	return nil
 }
 
 type controlledSetupOptions struct {

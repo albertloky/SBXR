@@ -218,23 +218,8 @@ func TestControlledCloudflareProfileSetupFailureBoundaries(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			root, load := controlledRevisionOneCopy(t)
-			setupErr := runControlledCloudflareProfileSetupWithOptions(t.Context(), root, load, test.options)
-			if setupErr == nil {
-				t.Fatal("controlled setup failure was not reported")
-			}
-			if test.journal {
-				var applyErr *controlledSetupApplyError
-				if !errors.As(setupErr, &applyErr) || applyErr.transaction.Outcome != systemchanges.RecoveryRequiredOutcome {
-					t.Fatalf("post-checkpoint outcome = %v", setupErr)
-				}
-			}
-			loaded, err := statefilesystem.NewAt(root).Load(load)
-			if err != nil || loaded.Snapshot == nil || loaded.Snapshot.Revision != 1 {
-				t.Fatalf("revision 1 rollback = (%+v, %v)", loaded, err)
-			}
-			_, journalErr := os.Stat(filepath.Join(root, "var/lib/sbxr/transactions/cloudflare-profile-setup-0002/journal.jsonl"))
-			if test.journal == errors.Is(journalErr, os.ErrNotExist) {
-				t.Fatalf("durable recovery journal error = %v", journalErr)
+			if err := qualifyControlledCloudflareProfileSetupFailure(t.Context(), root, load, test.options, test.journal); err != nil {
+				t.Fatal(err)
 			}
 		})
 	}
@@ -250,28 +235,7 @@ func TestControlledFirstInstallationSurvivesFreshProcessLoad(t *testing.T) {
 
 func TestControlledCloudflareProfileSetupDeathRestartsForward(t *testing.T) {
 	root, load := controlledRevisionOneCopy(t)
-	func() {
-		defer func() { _ = recover() }()
-		_ = runControlledCloudflareProfileSetupWithOptions(t.Context(), root, load, controlledSetupOptions{confirm: true, crashAt: systemchanges.StatePublished, crashAfter: true})
-	}()
-	stateModule := statefilesystem.NewAt(root)
-	finalLoad := state.LoadRequest{Baseline: state.ManagedEvidence, SupportedRelease: load.SupportedRelease, Lineage: &state.LineageProof{Revision: 2, LastCompletedChangeSet: "cloudflare-profile-setup-0002", ReleaseIdentity: load.SupportedRelease}}
-	loaded, err := stateModule.Load(finalLoad)
-	if err != nil || loaded.Snapshot == nil {
-		t.Fatalf("published revision 2 = (%+v, %v)", loaded, err)
-	}
-	_, finalSHA, _, _, valid := stateModule.SystemChangesLineageInspection(loaded).SystemChangesStateLineageFacts()
-	if !valid {
-		t.Fatal("published revision 2 lineage unavailable")
-	}
-	observation := systemchanges.Observation{Status: systemchanges.Managed, StateRevision: 2, StateSHA256: finalSHA, LastChangeSet: "cloudflare-profile-setup-0002", Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, VolatileSHA256: strings.Repeat("9", 64), WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}
-	adapter, err := systemubuntu.NewControlledManagedProviderAdapter(root, observation, stateModule, func(systemchanges.Step, string, time.Duration) (systemchanges.StepEvidence, error) {
-		return systemchanges.StepEvidence{}, errors.New("provider effect must not repeat after restart")
-	})
-	if err != nil {
+	if err := qualifyControlledCloudflareProfileSetupRestart(t.Context(), root, load); err != nil {
 		t.Fatal(err)
-	}
-	if result := systemchanges.New(adapter).Recover(); result.Outcome != systemchanges.Completed {
-		t.Fatalf("fresh-process setup recovery = %+v", result)
 	}
 }

@@ -244,7 +244,7 @@ func assembleReleaseComponents(ctx context.Context, sources architectureSources,
 		return nil, err
 	}
 	delete(files, "mihomo")
-	manifest, err := softwarelifecycle.NewComponentManifest(sources.Architecture, "5.4.0", files)
+	manifest, err := softwarelifecycle.NewBoundComponentManifest(sources.Architecture, metadata.Build, "5.4.0", files)
 	if err != nil {
 		return nil, err
 	}

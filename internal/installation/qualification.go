@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -102,6 +103,44 @@ func RunControlledInstallationAt(ctx context.Context, root string) (state.LoadRe
 		case <-time.After(time.Millisecond):
 		}
 	}
+}
+
+// QualifyControlledInstallationRestart proves durable State publication and
+// recovery through a fresh System Changes adapter after controlled worker death.
+func QualifyControlledInstallationRestart(ctx context.Context, root string) error {
+	request, err := controlledInstallRequest()
+	if err != nil {
+		return err
+	}
+	if _, err := applyControlledInstallationWithDeath(ctx, root, request, systemchanges.StatePublished); err == nil || err.Error() != "controlled Installation worker death" {
+		return errors.New("controlled Installation death was not proved")
+	}
+	identity := request.Candidate.Verified.Identity
+	release := state.ReleaseIdentity{Repository: identity.Repository, Tag: identity.Tag, Commit: identity.Commit, ReleaseIndexSHA256: identity.IndexSHA256}
+	load := state.LoadRequest{Baseline: state.ManagedEvidence, SupportedRelease: release, Lineage: &state.LineageProof{Revision: 1, LastCompletedChangeSet: requestChangeSet(request), ReleaseIdentity: release}}
+	stateModule := statefilesystem.NewAt(root)
+	loaded, err := stateModule.Load(load)
+	if err != nil || loaded.Snapshot == nil {
+		return errors.New("controlled Installation published State unavailable")
+	}
+	_, sha, _, _, valid := stateModule.SystemChangesLineageInspection(loaded).SystemChangesStateLineageFacts()
+	if !valid {
+		return errors.New("controlled Installation lineage unavailable")
+	}
+	observation := systemchanges.Observation{Status: systemchanges.Managed, StateRevision: 1, StateSHA256: sha, LastChangeSet: string(requestChangeSet(request)), Lock: systemchanges.LockReleased, VolatileSHA256: strings.Repeat("9", 64), WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}
+	adapter, err := systemubuntu.NewControlledInstallRecoveryAdapter(root, observation, stateModule)
+	if err != nil {
+		return err
+	}
+	result := systemchanges.New(adapter).Recover()
+	if result.Outcome != systemchanges.Completed && result.Outcome != systemchanges.RecoveryRequiredOutcome {
+		return errors.New("controlled Installation recovery refused")
+	}
+	journal := filepath.Join(root, "var/lib/sbxr/transactions", string(requestChangeSet(request)), "journal.jsonl")
+	if _, err := os.Stat(journal); result.Outcome == systemchanges.Completed && !errors.Is(err, os.ErrNotExist) {
+		return errors.New("controlled Installation completed recovery retained journal")
+	}
+	return nil
 }
 
 func applyControlledInstallation(ctx context.Context, root string, request softwareubuntu.InstallHandoffRequest) (softwareubuntu.InstallApplyOutcome, error) {

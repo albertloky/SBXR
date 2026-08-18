@@ -16,24 +16,32 @@ type versionReport struct {
 }
 
 func readOwnVersion() (versionReport, error) {
-	path, err := os.Executable()
-	if err != nil {
-		return versionReport{}, err
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return versionReport{}, err
-	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return versionReport{}, err
-	}
-	metadata, _, err := softwarelifecycle.ReadPayloadMetadata(file, info.Size())
+	metadata, err := readOwnPayloadMetadata()
 	if err != nil {
 		return versionReport{}, err
 	}
 	return versionReport{Build: metadata.Build, Architecture: metadata.Architecture, StateSchema: metadata.StateSchema}, nil
+}
+
+func readOwnPayloadMetadata() (softwarelifecycle.PayloadMetadata, error) {
+	path, err := os.Executable()
+	if err != nil {
+		return softwarelifecycle.PayloadMetadata{}, err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return softwarelifecycle.PayloadMetadata{}, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return softwarelifecycle.PayloadMetadata{}, err
+	}
+	metadata, _, err := softwarelifecycle.ReadPayloadMetadata(file, info.Size())
+	if err != nil {
+		return softwarelifecycle.PayloadMetadata{}, err
+	}
+	return metadata, nil
 }
 
 func writeVersion(output io.Writer, jsonOutput bool) error {

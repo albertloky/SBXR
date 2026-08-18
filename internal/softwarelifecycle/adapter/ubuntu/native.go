@@ -122,6 +122,47 @@ func (validator NativeValidator) Validate(ctx context.Context, metadata software
 	return nil
 }
 
+// ValidatePackageQualificationCores runs the matching archived Xray and
+// sing-box programs against the controlled generated service configurations.
+func ValidatePackageQualificationCores(ctx context.Context, xray, singBox string, metadata softwarelifecycle.PayloadMetadata) error {
+	if ctx == nil || xray == "" || singBox == "" || !validSubscriptions(metadata.Artifacts) {
+		return errors.New("package qualification core validation refused")
+	}
+	directory, err := os.MkdirTemp("", "sbxr-package-core-qualification-")
+	if err != nil {
+		return errors.New("package qualification core validation unavailable")
+	}
+	defer os.RemoveAll(directory)
+	certificate, key, err := qualificationCertificate()
+	if err != nil {
+		return errors.New("package qualification core validation unavailable")
+	}
+	certificatePath, keyPath := filepath.Join(directory, "fullchain.pem"), filepath.Join(directory, "privkey.pem")
+	xrayPath, singBoxPath := filepath.Join(directory, "xray.json"), filepath.Join(directory, "sing-box.json")
+	controlledSingBox := bytes.ReplaceAll(metadata.Artifacts["sing-box.json"], []byte("/var/lib/sbxr/certificates/domain/current/fullchain.pem"), []byte(certificatePath))
+	controlledSingBox = bytes.ReplaceAll(controlledSingBox, []byte("/var/lib/sbxr/certificates/domain/current/privkey.pem"), []byte(keyPath))
+	if bytes.Equal(controlledSingBox, metadata.Artifacts["sing-box.json"]) || os.WriteFile(certificatePath, certificate, 0o600) != nil || os.WriteFile(keyPath, key, 0o600) != nil || os.WriteFile(xrayPath, metadata.Artifacts["xray.json"], 0o600) != nil || os.WriteFile(singBoxPath, controlledSingBox, 0o600) != nil {
+		return errors.New("package qualification core validation unavailable")
+	}
+	checks := []struct {
+		name string
+		args []string
+		ok   func(string) bool
+	}{
+		{xray, []string{"version"}, func(value string) bool { return versionFields(value, "Xray", "26.3.27") }},
+		{xray, []string{"run", "-test", "-config", xrayPath}, exitSuccess},
+		{singBox, []string{"version"}, func(value string) bool { return versionFields(value, "sing-box", "version", "1.13.16") }},
+		{singBox, []string{"check", "-c", singBoxPath}, exitSuccess},
+	}
+	for _, check := range checks {
+		output, err := runNative(ctx, check.name, check.args, 1<<20)
+		if err != nil || !check.ok(string(output)) {
+			return errors.New("package qualification core validation refused")
+		}
+	}
+	return nil
+}
+
 func qualificationCertificate() ([]byte, []byte, error) {
 	public, private, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {

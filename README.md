@@ -46,6 +46,9 @@ The installed executable is `/usr/local/bin/sbxr` and is normally available as `
 | `sbxr` | Open the Owner Console. On a clean VPS it starts installation review; on an installed VPS it opens the Managed dashboard or exact recovery view. |
 | `sbxr version` | Print the embedded release identity in a short human-readable form. |
 | `sbxr version --json` | Print the embedded repository, tag, commit, architecture, payload SHA-256, and State schema as JSON. |
+| `sbxr acceptance staged-onboarding --components <path-to-sbxr-components-linux-ARCH.tar.gz> --json` | Run the seven fixed staged-onboarding procedures offline through this exact packaged executable and its matching component archive. |
+
+The Package Qualification Command requires the component archive from the same release and architecture. It checks the application repository, tag, commit, payload SHA-256, component manifest, component archive SHA-256, component versions, and native Xray and sing-box configuration. Success writes one strict schema `1` JSON document. Failure writes only `RELEASE-STAGED-ONBOARDING-PACKAGE-REFUSED` to standard error and exits nonzero. The command uses an isolated temporary root. It does not use live adapters, change managed paths, call Cloudflare, or change the Owner Console.
 
 There is no public `--help` command and no other public command mode. Unknown arguments do not create extra management authority.
 

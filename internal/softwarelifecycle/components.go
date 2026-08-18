@@ -32,14 +32,15 @@ type ComponentFile struct {
 }
 
 type ComponentManifest struct {
-	Schema       int             `json:"schema"`
-	Architecture Architecture    `json:"architecture"`
-	Xray         string          `json:"xray"`
-	SingBox      string          `json:"sing_box"`
-	Cloudflared  string          `json:"cloudflared"`
-	Certbot      string          `json:"certbot"`
-	Python       string          `json:"python"`
-	Files        []ComponentFile `json:"files"`
+	Schema       int                   `json:"schema"`
+	Architecture Architecture          `json:"architecture"`
+	Build        EmbeddedBuildIdentity `json:"build"`
+	Xray         string                `json:"xray"`
+	SingBox      string                `json:"sing_box"`
+	Cloudflared  string                `json:"cloudflared"`
+	Certbot      string                `json:"certbot"`
+	Python       string                `json:"python"`
+	Files        []ComponentFile       `json:"files"`
 }
 
 var componentCertbotVersion = regexp.MustCompile(`^([0-9]+)\.([0-9]+)(?:\.[0-9]+)?$`)
@@ -135,8 +136,16 @@ func qualifiedComponent(body []byte, architecture Architecture, name string) ([]
 	}
 }
 
+// QualificationComponent returns one validated core from an exact component archive.
+func QualificationComponent(body []byte, architecture Architecture, name string) ([]byte, string, bool) {
+	return qualifiedComponent(body, architecture, name)
+}
+
 func validComponentManifest(manifest ComponentManifest, architecture Architecture) bool {
 	if manifest.Schema != 1 || manifest.Architecture != architecture || manifest.Xray != "v26.3.27" || manifest.SingBox != "v1.13.16" || manifest.Cloudflared != "2026.7.3" || manifest.Python != "3.12" || !certbotAtLeast54(manifest.Certbot) || len(manifest.Files) < 7 {
+		return false
+	}
+	if manifest.Build != (EmbeddedBuildIdentity{}) && !validEmbeddedBuildIdentity(manifest.Build) {
 		return false
 	}
 	required := map[string]bool{"xray": false, "sing-box": false, "cloudflared": false, "certbot/bin/certbot": false, "certbot/bin/python3": false, "certbot/pyvenv.cfg": false}
@@ -227,6 +236,18 @@ func BuildComponentArchive(manifest ComponentManifest, files map[string][]byte) 
 }
 
 func NewComponentManifest(architecture Architecture, certbot string, files map[string][]byte) (ComponentManifest, error) {
+	return newComponentManifest(architecture, EmbeddedBuildIdentity{}, certbot, files)
+}
+
+// NewBoundComponentManifest binds the component archive to one exact packaged application.
+func NewBoundComponentManifest(architecture Architecture, build EmbeddedBuildIdentity, certbot string, files map[string][]byte) (ComponentManifest, error) {
+	if !validEmbeddedBuildIdentity(build) {
+		return ComponentManifest{}, errors.New("component build identity refused")
+	}
+	return newComponentManifest(architecture, build, certbot, files)
+}
+
+func newComponentManifest(architecture Architecture, build EmbeddedBuildIdentity, certbot string, files map[string][]byte) (ComponentManifest, error) {
 	if !bytes.Equal(files["certbot/bin/certbot"], componentCertbotLauncher) {
 		return ComponentManifest{}, errors.New("component Certbot launcher refused")
 	}
@@ -236,7 +257,7 @@ func NewComponentManifest(architecture Architecture, certbot string, files map[s
 	}
 	names = append(names, "certbot/bin/python3")
 	sort.Strings(names)
-	manifest := ComponentManifest{Schema: 1, Architecture: architecture, Xray: "v26.3.27", SingBox: "v1.13.16", Cloudflared: "2026.7.3", Certbot: certbot, Python: "3.12"}
+	manifest := ComponentManifest{Schema: 1, Architecture: architecture, Build: build, Xray: "v26.3.27", SingBox: "v1.13.16", Cloudflared: "2026.7.3", Certbot: certbot, Python: "3.12"}
 	for _, name := range names {
 		if name == "certbot/bin/python3" {
 			manifest.Files = append(manifest.Files, ComponentFile{Path: name, Type: "symlink", Target: "/usr/bin/python3", Mode: 0o777})
@@ -254,4 +275,8 @@ func NewComponentManifest(architecture Architecture, certbot string, files map[s
 		return ComponentManifest{}, errors.New("component inputs refused")
 	}
 	return manifest, nil
+}
+
+func validEmbeddedBuildIdentity(build EmbeddedBuildIdentity) bool {
+	return build.Repository == Repository && safeTag(build.Tag) && commitPattern.MatchString(build.Commit) && hashPattern.MatchString(build.PayloadSHA256)
 }

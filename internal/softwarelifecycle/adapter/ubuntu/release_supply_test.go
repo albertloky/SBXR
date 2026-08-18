@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
@@ -67,7 +68,7 @@ func TestAssembleReleaseComponentsUsesOnlyVerifiedSourceBytes(t *testing.T) {
 			}
 		}
 		return nil
-	}, softwarelifecycle.PayloadMetadata{})
+	}, softwarelifecycle.PayloadMetadata{Build: softwarelifecycle.EmbeddedBuildIdentity{Repository: softwarelifecycle.Repository, Tag: "v1.0.0", Commit: strings.Repeat("a", 40), PayloadSHA256: strings.Repeat("b", 64)}})
 	if err != nil || !qualified {
 		t.Fatalf("assembleReleaseComponents() = %v, qualified=%v", err, qualified)
 	}
