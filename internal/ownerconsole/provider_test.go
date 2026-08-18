@@ -65,24 +65,7 @@ func TestRunCloudflareWalkthroughUsesDedicatedBroadUserTokenPathAndMasksByDefaul
 }
 
 func completeCloudflareWalkthrough() CloudflarePresentation {
-	return CloudflarePresentation{Kind: CloudflareWalkthroughPresentation, Walkthrough: CloudflareWalkthroughFacts{
-		DashboardURL:            "https://dash.cloudflare.com/",
-		AccountTokensPage:       "My Profile > API Tokens",
-		CreateControl:           "Create Token",
-		TokenName:               "SBXR dedicated broad management",
-		DNSRecordsPage:          "selected domain > DNS > Records",
-		TunnelsPage:             "Cloudflare One > Networks > Tunnels & Mesh",
-		AccountControl:          "Permissions > User > API Tokens > Edit; Account > Cloudflare Tunnel > Edit",
-		ZoneControl:             "Permissions > Zone > DNS > Edit; Zone > Zone > Read",
-		AccountResource:         "Account Resources > Include > All accounts",
-		ZoneResource:            "Zone Resources > Include > All zones",
-		SummaryControl:          "Continue to summary > Create Token > copy once",
-		RejectsGlobalAPIKey:     true,
-		RejectsAccountAPIToken:  true,
-		RequiresBroadAuthority:  true,
-		RequiresNoExpiry:        true,
-		RequiresNoIPRestriction: true,
-	}}
+	return ControlledCloudflareWalkthrough()
 }
 
 func completeCloudflareCredential() CloudflareCredential {

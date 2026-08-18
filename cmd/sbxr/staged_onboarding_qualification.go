@@ -447,6 +447,62 @@ func (controlledPublicationValidator) ValidateSingBox(_ context.Context, documen
 	return nil
 }
 
+type controlledStagedOnboardingSecretMarker struct {
+	class string
+	owner string
+	value []byte
+}
+
+func controlledStagedOnboardingSecretMarkers() []controlledStagedOnboardingSecretMarker {
+	return []controlledStagedOnboardingSecretMarker{
+		{class: "management token", owner: "protected-state-cloudflare-management-token", value: []byte("sbxr_QUALIFICATION-MANAGEMENT-TOKEN-00000000000000000001")},
+		{class: "token identifiers", owner: "protected-state-cloudflare-token-identifiers", value: []byte("QUALIFICATION-TOKEN-IDENTIFIERS-00000000000000000002")},
+		{class: "Tunnel run token", owner: "protected-cloudflared-run-token", value: []byte("QUALIFICATION-TUNNEL-RUN-TOKEN-00000000000000000003")},
+		{class: "profile credentials", owner: "protected-state-profile-credentials", value: []byte("QUALIFICATION-PROFILE-CREDENTIAL-00000000000000000004")},
+		{class: "subscription token", owner: "protected-state-subscription-token", value: []byte("QUALIFICATION-SUBSCRIPTION-TOKEN-00000000000000000005")},
+		{class: "complete subscription URLs", owner: "protected-subscription-artifact", value: []byte("QUALIFICATION-COMPLETE-SUBSCRIPTION-URL-00000000000000000006")},
+		{class: "private keys", owner: "protected-service-private-key", value: []byte("QUALIFICATION-PRIVATE-KEY-00000000000000000007")},
+		{class: "setup entropy", owner: "protected-transaction-setup-entropy", value: []byte("QUALIFICATION-SETUP-ENTROPY-00000000000000000008")},
+		{class: "setup approval", owner: "protected-transaction-setup-approval", value: []byte("QUALIFICATION-SETUP-APPROVAL-00000000000000000009")},
+		{class: "raw provider responses", owner: "protected-transaction-provider-response", value: []byte("QUALIFICATION-RAW-PROVIDER-RESPONSE-00000000000000000010")},
+		{class: "external errors", owner: "protected-transaction-external-error", value: []byte("QUALIFICATION-EXTERNAL-ERROR-00000000000000000011")},
+	}
+}
+
+func controlledStagedOnboardingPublicSurfaces() []string {
+	return []string{"presentation", "transaction-evidence", "diagnostic", "http", "test-output", "acceptance-record", "bootstrap", "release-index", "application-archive", "component-archive"}
+}
+
+func qualifyControlledStagedOnboardingSecretScan(public, protected map[string][]byte) error {
+	markers := controlledStagedOnboardingSecretMarkers()
+	surfaces := controlledStagedOnboardingPublicSurfaces()
+	if len(public) != len(surfaces) || len(protected) != len(markers) {
+		return errors.New("controlled staged-onboarding secret scan is incomplete")
+	}
+	for _, surface := range surfaces {
+		if _, ok := public[surface]; !ok {
+			return errors.New("controlled staged-onboarding secret scan is incomplete")
+		}
+	}
+	for _, marker := range markers {
+		owner, ok := protected[marker.owner]
+		if !ok || bytes.Count(owner, marker.value) != 1 {
+			return errors.New("controlled staged-onboarding marker ownership disagrees")
+		}
+		for name, body := range protected {
+			if name != marker.owner && bytes.Contains(body, marker.value) {
+				return errors.New("controlled staged-onboarding marker ownership disagrees")
+			}
+		}
+		for _, body := range public {
+			if bytes.Contains(body, marker.value) {
+				return errors.New("controlled staged-onboarding secret scan found a marker")
+			}
+		}
+	}
+	return nil
+}
+
 type controlledSetupAPI struct{ dns atomic.Uint32 }
 
 func (*controlledSetupAPI) Observe(context.Context, cloudflaretunnel.ObservationRequest) (cloudflaretunnel.Observation, error) {

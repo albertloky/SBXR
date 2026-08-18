@@ -80,6 +80,41 @@ func TestControlledStagedOnboardingChainsRevisionOneToTwo(t *testing.T) {
 	}
 }
 
+func TestControlledStagedOnboardingSecretScanKeepsMarkersOnlyInOwningArtifacts(t *testing.T) {
+	markers := controlledStagedOnboardingSecretMarkers()
+	protected := make(map[string][]byte, len(markers))
+	for _, marker := range markers {
+		protected[marker.owner] = append(protected[marker.owner], marker.value...)
+	}
+	public := map[string][]byte{}
+	for _, surface := range controlledStagedOnboardingPublicSurfaces() {
+		public[surface] = []byte("fixed secret-safe qualification output")
+	}
+	if err := qualifyControlledStagedOnboardingSecretScan(public, protected); err != nil {
+		t.Fatal(err)
+	}
+	for _, marker := range markers {
+		for _, surface := range controlledStagedOnboardingPublicSurfaces() {
+			leaked := make(map[string][]byte, len(public))
+			for name, body := range public {
+				leaked[name] = append([]byte(nil), body...)
+			}
+			leaked[surface] = append(leaked[surface], marker.value...)
+			if err := qualifyControlledStagedOnboardingSecretScan(leaked, protected); err == nil {
+				t.Fatalf("%s marker was accepted on %s", marker.class, surface)
+			}
+		}
+	}
+	wrongOwner := make(map[string][]byte, len(protected))
+	for owner, body := range protected {
+		wrongOwner[owner] = append([]byte(nil), body...)
+	}
+	wrongOwner[markers[1].owner] = append(wrongOwner[markers[1].owner], markers[0].value...)
+	if err := qualifyControlledStagedOnboardingSecretScan(public, wrongOwner); err == nil {
+		t.Fatal("marker was accepted outside its protected owning artifact")
+	}
+}
+
 func TestControlledStagedOnboardingPassesPinnedNativeSingBox(t *testing.T) {
 	binary, version := os.Getenv("SBXR_SING_BOX_BIN"), os.Getenv("SBXR_SING_BOX_VERSION")
 	if binary == "" || version == "" {

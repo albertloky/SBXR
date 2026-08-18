@@ -406,10 +406,7 @@ func (stub *profileSetupStub) ActProfileSetup(_ context.Context, request Profile
 		view.Kind, view.SelectedZone = ProfileSetupFieldsReview, request.Zone
 		view.Hostnames, view.Ports = [3]string{"xhttp.example.test", "ws.example.test", "direct.example.test"}, []uint16{443, 8443, 9443}
 	case BuildProfileSetupPlan:
-		plan := ProfileSetupPlan{Plan: *completePlan("cloudflare-setup-plan").Plan}
-		for index, name := range profileSetupSectionNames {
-			plan.Sections[index] = ProfileSetupPlanSection{Name: name, Facts: []string{"Exact typed " + name + " fact"}}
-		}
+		plan := controlledProfileSetupPlan("cloudflare-setup-plan")
 		return ProfileSetupResponse{Review: &plan}
 	case PrepareProfileSetup:
 		view.Kind = ProfileSetupFinalConfirmation
