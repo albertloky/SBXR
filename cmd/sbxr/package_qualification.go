@@ -1,9 +1,6 @@
 package main
 
 import (
-	"archive/tar"
-	"bytes"
-	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -60,7 +57,7 @@ func executePackageQualification(ctx context.Context, metadata softwarelifecycle
 	xray, _, xrayOK := softwarelifecycle.QualificationComponent(componentArchive, metadata.Architecture, "xray")
 	singBox, _, singBoxOK := softwarelifecycle.QualificationComponent(componentArchive, metadata.Architecture, "sing-box")
 	xrayPath, singBoxPath := filepath.Join(root, "xray"), filepath.Join(root, "sing-box")
-	if !xrayOK || !singBoxOK || os.WriteFile(xrayPath, xray, 0o700) != nil || os.WriteFile(singBoxPath, singBox, 0o700) != nil || softwareubuntu.ValidatePackageQualificationCores(ctx, xrayPath, singBoxPath, metadata) != nil {
+	if !xrayOK || !singBoxOK || os.WriteFile(xrayPath, xray, 0o700) != nil || os.WriteFile(singBoxPath, singBox, 0o700) != nil || softwareubuntu.ValidatePackageQualificationCores(ctx, root, xrayPath, singBoxPath, metadata) != nil {
 		return errors.New("package qualification native validation refused")
 	}
 	controlledRoot := filepath.Join(root, "controlled")
@@ -115,7 +112,7 @@ func executePackageQualification(ctx context.Context, metadata softwarelifecycle
 	if qualifyControlledCloudflareProfileSetupRestart(ctx, restartRoot, load) != nil {
 		return errors.New("package qualification setup restart refused")
 	}
-	componentSurface, err := decompressedPackageQualificationComponentSurface(componentArchive)
+	componentSurface, err := softwarelifecycle.QualificationComponentSurface(componentArchive, metadata.Architecture)
 	if err != nil {
 		return err
 	}
@@ -170,30 +167,6 @@ func executePackageQualification(ctx context.Context, metadata softwarelifecycle
 		return errors.New("package qualification output unavailable")
 	}
 	return nil
-}
-
-func decompressedPackageQualificationComponentSurface(body []byte) ([]byte, error) {
-	compressed, err := gzip.NewReader(bytes.NewReader(body))
-	if err != nil {
-		return nil, errors.New("package qualification component surface unavailable")
-	}
-	defer compressed.Close()
-	archive := tar.NewReader(compressed)
-	var surface bytes.Buffer
-	for {
-		header, err := archive.Next()
-		if err == io.EOF {
-			return surface.Bytes(), nil
-		}
-		if err != nil || surface.Len()+int(header.Size) > softwarelifecycle.MaxAssetBytes {
-			return nil, errors.New("package qualification component surface unavailable")
-		}
-		surface.WriteString(header.Name)
-		surface.WriteByte('\n')
-		if _, err := io.Copy(&surface, archive); err != nil {
-			return nil, errors.New("package qualification component surface unavailable")
-		}
-	}
 }
 
 func copyPackageQualificationRoot(source, target string) error {

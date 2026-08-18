@@ -106,11 +106,11 @@ func (validator NativeValidator) Validate(ctx context.Context, metadata software
 
 // ValidatePackageQualificationCores runs the matching archived Xray and
 // sing-box programs against the controlled generated service configurations.
-func ValidatePackageQualificationCores(ctx context.Context, xray, singBox string, metadata softwarelifecycle.PayloadMetadata) error {
-	if ctx == nil || xray == "" || singBox == "" || !validSubscriptions(metadata.Artifacts) {
+func ValidatePackageQualificationCores(ctx context.Context, parent, xray, singBox string, metadata softwarelifecycle.PayloadMetadata) error {
+	if ctx == nil || parent == "" || xray == "" || singBox == "" || !validSubscriptions(metadata.Artifacts) {
 		return errors.New("package qualification core validation refused")
 	}
-	directory, err := os.MkdirTemp("", "sbxr-package-core-qualification-")
+	directory, err := os.MkdirTemp(parent, "core-qualification-")
 	if err != nil {
 		return errors.New("package qualification core validation unavailable")
 	}

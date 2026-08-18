@@ -137,6 +137,35 @@ func QualificationComponent(body []byte, architecture Architecture, name string)
 	}
 }
 
+// QualificationComponentSurface returns the validated decompressed archive
+// surface for secret scanning.
+func QualificationComponentSurface(body []byte, architecture Architecture) ([]byte, error) {
+	if _, err := ValidateComponentArchive(body, architecture); err != nil {
+		return nil, errors.New("component surface refused")
+	}
+	compressed, err := gzip.NewReader(bytes.NewReader(body))
+	if err != nil {
+		return nil, errors.New("component surface refused")
+	}
+	defer compressed.Close()
+	archive := tar.NewReader(compressed)
+	var surface bytes.Buffer
+	for {
+		header, err := archive.Next()
+		if err == io.EOF {
+			return surface.Bytes(), nil
+		}
+		if err != nil || surface.Len()+len(header.Name)+1+int(header.Size) > MaxAssetBytes {
+			return nil, errors.New("component surface refused")
+		}
+		surface.WriteString(header.Name)
+		surface.WriteByte('\n')
+		if _, err := io.Copy(&surface, archive); err != nil {
+			return nil, errors.New("component surface refused")
+		}
+	}
+}
+
 func validComponentManifest(manifest ComponentManifest, architecture Architecture) bool {
 	if manifest.Schema != 1 || manifest.Architecture != architecture || manifest.Xray != "v26.3.27" || manifest.SingBox != "v1.13.16" || manifest.Cloudflared != "2026.7.3" || manifest.Python != "3.12" || !certbotAtLeast54(manifest.Certbot) || len(manifest.Files) < 7 {
 		return false

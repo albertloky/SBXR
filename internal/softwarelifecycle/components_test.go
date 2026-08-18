@@ -70,6 +70,10 @@ func TestComponentArchiveIsExactOfflineAndArchitectureBound(t *testing.T) {
 	if _, err := ValidateComponentArchive(archive, ARM64); err == nil {
 		t.Fatal("wrong architecture accepted")
 	}
+	surface, err := QualificationComponentSurface(archive, AMD64)
+	if err != nil || !bytes.Contains(surface, []byte("cloudflared\nqualified cloudflared")) {
+		t.Fatalf("QualificationComponentSurface() = (%q, %v)", surface, err)
+	}
 	changed := append([]byte(nil), archive...)
 	changed[len(changed)/2] ^= 1
 	if _, err := ValidateComponentArchive(changed, AMD64); err == nil {
