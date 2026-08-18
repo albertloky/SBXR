@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -18,6 +19,8 @@ import (
 	"github.com/albertloky/SBXR/internal/connectionprofiles"
 	"github.com/albertloky/SBXR/internal/healthdiagnostics"
 	"github.com/albertloky/SBXR/internal/networkpolicy"
+	"github.com/albertloky/SBXR/internal/ownerconsole"
+	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 	"github.com/albertloky/SBXR/internal/state"
 	statefilesystem "github.com/albertloky/SBXR/internal/state/adapter/filesystem"
 	"github.com/albertloky/SBXR/internal/subscriptionpublication"
@@ -32,10 +35,11 @@ func runControlledCloudflareProfileSetup(ctx context.Context, root string, load 
 }
 
 type controlledSetupOptions struct {
-	confirm    bool
-	failAction systemchanges.CloudflareAction
-	crashAt    systemchanges.DurableCheckpoint
-	crashAfter bool
+	confirm          bool
+	failAction       systemchanges.CloudflareAction
+	crashAt          systemchanges.DurableCheckpoint
+	crashAfter       bool
+	singBoxValidator subscriptionpublication.SingBoxValidator
 }
 
 type controlledSetupApplyError struct {
@@ -52,6 +56,10 @@ func runControlledCloudflareProfileSetupWithOptions(ctx context.Context, root st
 		return err
 	}
 	stateModule := statefilesystem.NewAt(root)
+	singBoxValidator := options.singBoxValidator
+	if singBoxValidator == nil {
+		singBoxValidator = controlledPublicationValidator{}
+	}
 	loaded, err := stateModule.Load(load)
 	if err != nil || loaded.Snapshot == nil || loaded.Snapshot.Revision != 1 || !controlledAllDeferred(loaded.Snapshot.DesiredState.ConnectionProfiles) {
 		return errors.New("controlled Managed revision 1 unavailable")
@@ -123,7 +131,7 @@ func runControlledCloudflareProfileSetupWithOptions(ctx context.Context, root st
 	if err := stateModule.WithManagedConnectionProfileSecrets(connectionLoaded, func(_ state.Snapshot, connectionReader state.ConnectionProfileSecretReader) error {
 		return stateModule.WithManagedSubscriptionSecrets(subscriptionLoaded, func(_ state.Snapshot, subscriptionReader state.ClientAccessReader) error {
 			publicationRequest.Secrets = controlledSetupSecrets{profiles: profileSecrets, connection: connectionReader, subscription: subscriptionReader}
-			publication = subscriptionpublication.NewIntegrated(controlledPublicationValidator{}).Plan(ctx, publicationRequest)
+			publication = subscriptionpublication.NewIntegrated(singBoxValidator).Plan(ctx, publicationRequest)
 			return nil
 		})
 	}); err != nil {
@@ -164,7 +172,7 @@ func runControlledCloudflareProfileSetupWithOptions(ctx context.Context, root st
 	}
 	qualifiedCurrent := current
 	qualifiedCurrent.Exposure = controlledRevisionOneExposure(networkRequest.Intent)
-	if err := qualifyControlledManagedCapability(ctx, stateModule, loaded, qualifiedCurrent, false); err != nil {
+	if err := qualifyControlledManagedCapability(ctx, stateModule, loaded, qualifiedCurrent, false, singBoxValidator); err != nil {
 		return fmt.Errorf("controlled revision 1 capability: %w", err)
 	}
 	var transactionAdapter systemchanges.Adapter = adapter
@@ -222,7 +230,7 @@ func runControlledCloudflareProfileSetupWithOptions(ctx context.Context, root st
 	qualifiedCandidate.Hysteria2.Network = qualifiedCandidate.Exposure
 	qualifiedCandidate.TUIC.Network = qualifiedCandidate.Exposure
 	qualifiedCandidate.AnyTLS.Network = qualifiedCandidate.Exposure
-	if err := qualifyControlledManagedCapability(ctx, stateModule, final, qualifiedCandidate, true); err != nil {
+	if err := qualifyControlledManagedCapability(ctx, stateModule, final, qualifiedCandidate, true, singBoxValidator); err != nil {
 		return fmt.Errorf("controlled revision 2 capability: %w", err)
 	}
 	return nil
@@ -246,7 +254,7 @@ func (controlledManagedObservation) TryLock() (systemchanges.Lock, bool, error) 
 	return nil, false, nil
 }
 
-func qualifyControlledManagedCapability(ctx context.Context, stateModule state.Interface, loaded state.Result, registry connectionprofiles.RegistryViewRequest, cloudflareProfilesSetUp bool) error {
+func qualifyControlledManagedCapability(ctx context.Context, stateModule state.Interface, loaded state.Result, registry connectionprofiles.RegistryViewRequest, cloudflareProfilesSetUp bool, singBoxValidator subscriptionpublication.SingBoxValidator) error {
 	if loaded.Snapshot == nil {
 		return errors.New("controlled Managed capability unavailable")
 	}
@@ -257,6 +265,14 @@ func qualifyControlledManagedCapability(ctx context.Context, stateModule state.I
 	}
 	observation := systemchanges.Observation{Status: systemchanges.Managed, StateRevision: revision, StateSHA256: stateSHA, LastChangeSet: string(changeSet), Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, VolatileSHA256: strings.Repeat("9", 64), WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}
 	changes := systemchanges.New(controlledManagedObservation{observation: observation})
+	update, downgrade, err := softwarelifecycle.ControlledReleaseChangeSummaries(stateModule.SoftwareLifecycleCapability(loaded))
+	wantServices := []string{"sbxr-subscription.service", "xray.service"}
+	if cloudflareProfilesSetUp {
+		wantServices = []string{"cloudflared.service", "sbxr-subscription.service", "sing-box.service", "xray.service"}
+	}
+	if err != nil || !slices.Equal(update.AffectedServices, wantServices) || !slices.Equal(downgrade.AffectedServices, wantServices) {
+		return errors.New("controlled update or downgrade capability disagrees")
+	}
 	capabilities := healthCapabilities(revision, loaded.Snapshot.DesiredState.ConnectionProfiles)
 	diagnostics := healthdiagnostics.New(nil).Check(ctx, healthdiagnostics.InstallationSummaryFrom(changes.InstallationHealthInspection()), connectionProfileHealthInspection(map[healthdiagnostics.Module]healthdiagnostics.HealthStatus{healthdiagnostics.ConnectionProfilesModule: healthdiagnostics.Healthy}, capabilities))
 	if len(diagnostics.Modules) != 1 || diagnostics.Modules[0].Capability == nil || diagnostics.Modules[0].Capability.CommittedRevision != revision || len(diagnostics.Modules[0].Capability.CapabilityRows) != 6 {
@@ -293,6 +309,44 @@ func qualifyControlledManagedCapability(ctx context.Context, stateModule state.I
 			if !connectionprofiles.PublicationInputsMatch(view.Publication, loaded.Snapshot.DesiredState.ConnectionProfiles) {
 				return errors.New("controlled Access registry publication disagrees")
 			}
+			repairContribution, err := connectionprofiles.ControlledRepairPlan(ctx, registry, "controlled-repair-capability", stateSHA)
+			if err != nil {
+				return err
+			}
+			repairProof := repairContribution.SoftwareLifecycleRepairContribution()
+			repairObservation := observation
+			repairObservation.Status, repairObservation.RecoveryCause, repairObservation.ForwardRepairAvailable, repairObservation.VolatileSHA256 = systemchanges.RecoveryRequired, systemchanges.CurrentStateDrift, true, repairProof.StableSHA256
+			repairChanges := systemchanges.New(controlledManagedObservation{observation: repairObservation})
+			repairView := (softwarelifecycle.Interface{}).ViewRepair(repairChanges)
+			repair, finding := softwarelifecycle.PlanRepair(softwarelifecycle.RepairPlanRequest{Candidate: repairView.RepairCandidate(), Contribution: repairContribution, ChangeSet: repairProof.ChangeSet, Capability: stateModule.SoftwareLifecycleCapability(loaded), Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}})
+			if finding != nil || repair == nil || repair.Summary().OwningModule != systemchanges.ConnectionProfilesModule || repair.Summary().CurrentRevision != revision {
+				return errors.New("controlled repair capability disagrees")
+			}
+			const removalReviewID = "controlled-complete-removal"
+			removalView := (softwarelifecycle.Interface{}).ViewCompleteRemoval(changes)
+			removalReview, err := ownerconsole.ControlledRemovalReview(removalReviewID)
+			if err != nil {
+				return err
+			}
+			publicProofs, err := networkpolicy.ControlledRemovalAuthorities(removalReviewID)
+			if err != nil {
+				return err
+			}
+			publicRemoval := make([]systemchanges.PublicRemovalAuthority, len(publicProofs))
+			for index := range publicProofs {
+				publicRemoval[index] = publicProofs[index]
+			}
+			var providerRemoval []systemchanges.CloudflareRemovalAuthority
+			if cloudflareProfilesSetUp {
+				providerRemoval, err = cloudflaretunnel.ControlledRemovalAuthorities(removalReviewID)
+				if err != nil {
+					return err
+				}
+			}
+			removal, finding := softwarelifecycle.PlanCompleteRemoval(softwarelifecycle.CompleteRemovalPlanRequest{Candidate: removalView.Candidate(), Review: removalReview, ChangeSet: removalReviewID, Capability: stateModule.SoftwareLifecycleCapability(loaded), PublicAuthorities: publicRemoval, CloudflareAuthorities: providerRemoval, Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}})
+			if finding != nil || removal == nil || cloudflareProfilesSetUp != (len(removal.Summary().CloudflareCategories) > 0) || cloudflareProfilesSetUp != (removal.Summary().TokenRevocationResponsibility != "") {
+				return errors.New("controlled Complete removal capability disagrees")
+			}
 			mutation, err := subscriptionpublication.PrepareClientAccessMutation(subscriptionpublication.RotateSubscriptionToken, loaded.Snapshot.DesiredState.NetworkPolicy.PrimarySubscriptionAddress, loaded.Snapshot.DesiredState.Subscription, loaded.Snapshot.DesiredState.ConnectionProfiles, view.Publication)
 			if err != nil {
 				return err
@@ -305,7 +359,7 @@ func qualifyControlledManagedCapability(ctx context.Context, stateModule state.I
 			if err != nil || !strings.HasSuffix(singBoxRoute, "/sing-box") {
 				return errors.New("controlled /sing-box Access route unavailable")
 			}
-			artifacts, err := subscriptionpublication.New(controlledPublicationValidator{}, controlledPublicationValidator{}).Render(ctx, view.Publication, secrets)
+			artifacts, err := subscriptionpublication.NewIntegrated(singBoxValidator).Render(ctx, view.Publication, secrets)
 			if err != nil {
 				return err
 			}
@@ -319,6 +373,9 @@ func qualifyControlledManagedCapability(ctx context.Context, stateModule state.I
 			}
 			if decodeErr != nil || !bytes.Equal(decoded, artifacts.Raw) || artifacts.ProfileCount != wantProfiles || artifacts.SingBox.ProfileCount != wantSingBox || json.Unmarshal(artifacts.SingBox.Body, &singBox) != nil || len(singBox.Outbounds) != wantSingBox+1 {
 				return errors.New("controlled client output disagrees")
+			}
+			if cloudflareProfilesSetUp && (len(artifacts.SingBox.Omissions) != 1 || artifacts.SingBox.Omissions[0].ID != connectionprofiles.VLESSXHTTPProfileID || artifacts.SingBox.Omissions[0].Status != subscriptionpublication.NotOffered || artifacts.SingBox.Omissions[0].Reason != "VLESS XHTTP is unsupported by the sing-box transport contract") {
+				return errors.New("controlled /sing-box XHTTP omission disagrees")
 			}
 			liveSubscription, err := connectionprofiles.NewLiveProfileSubscription(universal)
 			if err != nil {
@@ -382,8 +439,13 @@ func (s controlledSetupSecrets) ReadClientAccessValue(value state.ClientAccessVa
 
 type controlledPublicationValidator struct{}
 
-func (controlledPublicationValidator) ValidateMihomo(context.Context, io.Reader) error  { return nil }
-func (controlledPublicationValidator) ValidateSingBox(context.Context, io.Reader) error { return nil }
+func (controlledPublicationValidator) ValidateSingBox(_ context.Context, document io.Reader) error {
+	body, err := io.ReadAll(io.LimitReader(document, 1<<20+1))
+	if err != nil || len(body) == 0 || len(body) > 1<<20 || !json.Valid(body) || !bytes.Contains(body, []byte(`"outbounds"`)) {
+		return errors.New("controlled sing-box document validation failed")
+	}
+	return nil
+}
 
 type controlledSetupAPI struct{ dns atomic.Uint32 }
 

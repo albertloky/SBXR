@@ -53,6 +53,28 @@ func (controlledInstallationAdapter) Observe(request ObservationRequest) (Observ
 
 type controlledInstallationSSHAdapter struct{ controlledInstallationAdapter }
 
+type controlledRemovalObserver struct{ inventory map[string][]string }
+
+func (observer controlledRemovalObserver) ObserveRemovalResource(review, resource, immutableID string) (RemovalObservation, error) {
+	return RemovalObservation{ReviewID: review, Resource: resource, ImmutableID: immutableID, OwnedBySBXR: true, Inventory: observer.inventory}, nil
+}
+
+// ControlledRemovalAuthorities proves the fixed local/public controlled inventory.
+func ControlledRemovalAuthorities(review string) ([]RemovalAuthority, error) {
+	inventory := map[string][]string{"firewall-table": {"inet-sbxr"}, "public-listener": {"listener-xray"}, "public-service": {"service-xray"}}
+	result := make([]RemovalAuthority, 0, 3)
+	for category, identities := range inventory {
+		for _, identity := range identities {
+			authority, err := NewRemoval(controlledRemovalObserver{inventory: inventory}).ProveRemovalResource(review, category, identity)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, authority)
+		}
+	}
+	return result, nil
+}
+
 func (controlledInstallationSSHAdapter) Observe(request ObservationRequest) (Observations, error) {
 	observed, err := (controlledInstallationAdapter{}).Observe(request)
 	digest := sha256.Sum256([]byte("1.1.1.1 50000 8.8.8.8 22"))

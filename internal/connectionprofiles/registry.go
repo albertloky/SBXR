@@ -1186,6 +1186,7 @@ func (module Interface) PlanRegistry(ctx context.Context, request RegistryPlanRe
 			profile: "Registry", codePrefix: "CONNECTION-PROFILES-REGISTRY", version: request.Candidate.Reality.XrayVersion,
 			revision: request.Candidate.Reality.Revision, changeSet: request.ChangeSet, startingStateSHA256: request.StartingStateSHA256, desiredStateSHA256: request.DesiredStateSHA256,
 			volatileSHA256: hex.EncodeToString(volatileDigest[:]), configuration: xray, request: request, reality: request.Candidate.Reality,
+			mutation: mutation,
 		})
 		if failure != nil {
 			return PlanResult{Health: *failure}

@@ -566,6 +566,7 @@ type xrayPlanSpec struct {
 	xhttp                                                     *XHTTPViewRequest
 	websocket                                                 *WebSocketViewRequest
 	checkedAt                                                 time.Time
+	mutation                                                  systemchanges.MutationClass
 }
 
 func (module Interface) buildXrayPlan(ctx context.Context, spec xrayPlanSpec) (*Plan, *Health) {
@@ -602,7 +603,7 @@ func (module Interface) buildXrayPlan(ctx context.Context, spec xrayPlanSpec) (*
 		identity: spec.identityPrefix + sha[:12], sha256: sha, volatileSHA256: spec.volatileSHA256, description: spec.description,
 		preparedBinding: preparedBinding, configuration: append([]byte(nil), spec.configuration...), revision: spec.revision, changeSet: spec.changeSet,
 		startingStateSHA256: spec.startingStateSHA256, desiredStateSHA256: spec.desiredStateSHA256, realityRequest: spec.reality, xhttpRequest: spec.xhttp, webSocketRequest: spec.websocket,
-		steps: []systemchanges.Step{step}, checks: checks, used: &atomic.Bool{}, stateUsed: &atomic.Bool{},
+		steps: []systemchanges.Step{step}, checks: checks, mutation: spec.mutation, used: &atomic.Bool{}, stateUsed: &atomic.Bool{},
 	}, nil
 }
 

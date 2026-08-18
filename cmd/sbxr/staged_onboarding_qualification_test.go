@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -15,6 +18,14 @@ import (
 	"github.com/albertloky/SBXR/internal/systemchanges"
 	systemubuntu "github.com/albertloky/SBXR/internal/systemchanges/adapter/ubuntu"
 )
+
+type nativeSingBoxQualification struct{ binary string }
+
+func (validator nativeSingBoxQualification) ValidateSingBox(ctx context.Context, document io.Reader) error {
+	command := exec.CommandContext(ctx, validator.binary, "check", "-c", "/dev/stdin")
+	command.Stdin = document
+	return command.Run()
+}
 
 var controlledRevisionOneOnce sync.Once
 var controlledRevisionOneRoot string
@@ -65,6 +76,21 @@ func controlledRevisionOneCopy(t *testing.T) (string, state.LoadRequest) {
 func TestControlledStagedOnboardingChainsRevisionOneToTwo(t *testing.T) {
 	root, load := controlledRevisionOneCopy(t)
 	if err := runControlledCloudflareProfileSetup(t.Context(), root, load); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestControlledStagedOnboardingPassesPinnedNativeSingBox(t *testing.T) {
+	binary, version := os.Getenv("SBXR_SING_BOX_BIN"), os.Getenv("SBXR_SING_BOX_VERSION")
+	if binary == "" || version == "" {
+		t.Skip("set SBXR_SING_BOX_BIN and SBXR_SING_BOX_VERSION to the pinned sing-box validator")
+	}
+	output, err := exec.Command(binary, "version").CombinedOutput()
+	if err != nil || !strings.Contains(string(output), "sing-box version "+version) {
+		t.Fatalf("pinned sing-box version %q is unavailable", version)
+	}
+	root, load := controlledRevisionOneCopy(t)
+	if err := runControlledCloudflareProfileSetupWithOptions(t.Context(), root, load, controlledSetupOptions{confirm: true, singBoxValidator: nativeSingBoxQualification{binary: binary}}); err != nil {
 		t.Fatal(err)
 	}
 }
