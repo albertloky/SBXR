@@ -56,6 +56,43 @@ func TestCandidateWorkflowPublishesOnlyAQualifiedStagedOnboardingAcceptanceRecor
 	}
 }
 
+func TestCandidateWorkflowQualifiesBothNativePackagesBeforeAggregation(t *testing.T) {
+	body, err := os.ReadFile(".github/workflows/candidate.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(body)
+	for _, required := range []string{
+		"runner: ubuntu-24.04",
+		"runner: ubuntu-24.04-arm",
+		"inspect/sbxr acceptance staged-onboarding --components 'dist/sbxr-components-linux-${{ matrix.architecture }}.tar.gz' --json",
+		"package-qualification-${{ matrix.architecture }}.json",
+		"name: prepublication-package-qualification-${{ matrix.architecture }}",
+		"pattern: prepublication-package-qualification-*",
+		"name: Require both native Package Qualification results",
+		"package-qualification-amd64.json",
+		"package-qualification-arm64.json",
+		".build.repository == \"albertloky/SBXR\"",
+		".component.archive_sha256 == $component_sha256",
+		"RELEASE-STAGED-ONBOARDING-GUIDE-TEXT",
+		"| Seam Verification | Pending |",
+		"| Integrated Verification | Pending |",
+	} {
+		if !strings.Contains(workflow, required) {
+			t.Fatalf("candidate workflow omitted native package qualification contract %q", required)
+		}
+	}
+	aggregate := strings.Index(workflow, "name: Require both native Package Qualification results")
+	report := strings.Index(workflow, "name: Record prepublication stage matrix")
+	if aggregate < 0 || report < 0 || aggregate >= report {
+		t.Fatal("candidate workflow reports procedures before both native results pass")
+	}
+	releaseArtifact := workflow[strings.Index(workflow, "name: release-candidate"):report]
+	if strings.Contains(releaseArtifact, "package-qualification-") || strings.Count(releaseArtifact, "\n            dist/") != 6 {
+		t.Fatal("Package Qualification JSON entered the six-asset release artifact")
+	}
+}
+
 func TestStableWorkflowReverifiesTheExactPublicInstallerBeforeREADMEActivation(t *testing.T) {
 	body, err := os.ReadFile(".github/workflows/stable.yml")
 	if err != nil {

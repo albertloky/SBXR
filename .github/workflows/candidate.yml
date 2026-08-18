@@ -70,6 +70,23 @@ jobs:
             --arg architecture '${{ matrix.architecture }}' \
             '.build.repository == "albertloky/SBXR" and .build.tag == $tag and .build.commit == $commit and .architecture == $architecture and .state_schema == 2 and (.build.payload_sha256 | test("^[0-9a-f]{64}$"))' \
             version.json
+          qualification='package-qualification-${{ matrix.architecture }}.json'
+          inspect/sbxr acceptance staged-onboarding --components 'dist/sbxr-components-linux-${{ matrix.architecture }}.tar.gz' --json > "$qualification"
+          component_sha256="$(sha256sum 'dist/sbxr-components-linux-${{ matrix.architecture }}.tar.gz' | cut -d ' ' -f 1)"
+          jq -e \
+            --slurpfile version version.json \
+            --arg component_sha256 "$component_sha256" \
+            'keys == ["architecture", "build", "component", "procedures", "schema"] and
+             .schema == 1 and .build == $version[0].build and .architecture == $version[0].architecture and
+             (.component | keys == ["archive_sha256", "certbot", "cloudflared", "python", "sing_box", "xray"]) and
+             .component.archive_sha256 == $component_sha256 and .component.xray == "v26.3.27" and
+             .component.sing_box == "v1.13.16" and .component.cloudflared == "2026.7.3" and
+             .component.certbot == "5.4.0" and .component.python == "3.12" and
+             all(.procedures[]; keys == ["code", "status"] and .status == "Passed") and
+             (.procedures | map(.code)) == ["RELEASE-STAGED-INSTALL-REVISION-1", "RELEASE-CLOUDFLARE-PROFILE-SETUP-N-TO-N+1", "RELEASE-STAGED-ONBOARDING-CHAIN", "RELEASE-STAGED-ONBOARDING-SECRET-SCAN", "RELEASE-STAGED-ONBOARDING-CLIENT-OUTPUT", "RELEASE-STAGED-ONBOARDING-TERMINAL", "RELEASE-STAGED-ONBOARDING-GUIDE-TEXT"]' \
+            "$qualification"
+          pattern='MARKER|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer '
+          test -z "$(rg -a -l "$pattern" "$qualification")"
       - uses: actions/upload-artifact@v4
         with:
           name: candidate-${{ matrix.architecture }}
@@ -78,6 +95,12 @@ jobs:
             dist/sbxr-components-linux-${{ matrix.architecture }}.tar.gz
           if-no-files-found: error
           retention-days: 1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prepublication-package-qualification-${{ matrix.architecture }}
+          path: package-qualification-${{ matrix.architecture }}.json
+          if-no-files-found: error
+          retention-days: 90
 
   qualify:
     if: github.event_name == 'workflow_dispatch'
@@ -95,6 +118,11 @@ jobs:
         with:
           pattern: candidate-*
           path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: prepublication-package-qualification-*
+          path: qualification
           merge-multiple: true
       - name: Generate the exact release bootstrap
         run: |
@@ -140,6 +168,26 @@ jobs:
           for archive in dist/sbxr-linux-amd64.tar.gz dist/sbxr-linux-arm64.tar.gz dist/sbxr-components-linux-amd64.tar.gz dist/sbxr-components-linux-arm64.tar.gz; do
             test -z "$(tar -xOzf "$archive" | rg -a -l "$pattern" -)"
           done
+      - name: Require both native Package Qualification results
+        run: |
+          test "$(find qualification -maxdepth 1 -type f -printf '%f\n' | sort)" = "$(printf '%s\n' package-qualification-amd64.json package-qualification-arm64.json | sort)"
+          for architecture in amd64 arm64; do
+            evidence="qualification/package-qualification-$architecture.json"
+            component_sha256="$(sha256sum "dist/sbxr-components-linux-$architecture.tar.gz" | cut -d ' ' -f 1)"
+            jq -e \
+              --arg architecture "$architecture" \
+              --arg tag "$CANDIDATE_TAG" \
+              --arg commit "$GITHUB_SHA" \
+              --arg component_sha256 "$component_sha256" \
+              '.schema == 1 and .build.repository == "albertloky/SBXR" and .build.tag == $tag and
+               .build.commit == $commit and .architecture == $architecture and
+               .component.archive_sha256 == $component_sha256 and
+               (.procedures | map(.code)) == ["RELEASE-STAGED-INSTALL-REVISION-1", "RELEASE-CLOUDFLARE-PROFILE-SETUP-N-TO-N+1", "RELEASE-STAGED-ONBOARDING-CHAIN", "RELEASE-STAGED-ONBOARDING-SECRET-SCAN", "RELEASE-STAGED-ONBOARDING-CLIENT-OUTPUT", "RELEASE-STAGED-ONBOARDING-TERMINAL", "RELEASE-STAGED-ONBOARDING-GUIDE-TEXT"] and
+               all(.procedures[]; .status == "Passed")' \
+              "$evidence"
+          done
+          pattern='MARKER|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer '
+          test -z "$(rg -a -l "$pattern" qualification)"
       - uses: actions/upload-artifact@v4
         with:
           name: release-candidate
