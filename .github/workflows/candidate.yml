@@ -72,6 +72,10 @@ jobs:
             version.json
           qualification='package-qualification-${{ matrix.architecture }}.json'
           inspect/sbxr acceptance staged-onboarding --components 'dist/sbxr-components-linux-${{ matrix.architecture }}.tar.gz' --json > "$qualification"
+          go run ./cmd/sbxr-release validate-package-qualification \
+            -application 'dist/sbxr-linux-${{ matrix.architecture }}.tar.gz' \
+            -components 'dist/sbxr-components-linux-${{ matrix.architecture }}.tar.gz' \
+            -evidence "$qualification"
           component_sha256="$(sha256sum 'dist/sbxr-components-linux-${{ matrix.architecture }}.tar.gz' | cut -d ' ' -f 1)"
           jq -e \
             --slurpfile version version.json \
@@ -173,6 +177,10 @@ jobs:
           test "$(find qualification -maxdepth 1 -type f -printf '%f\n' | sort)" = "$(printf '%s\n' package-qualification-amd64.json package-qualification-arm64.json | sort)"
           for architecture in amd64 arm64; do
             evidence="qualification/package-qualification-$architecture.json"
+            go run ./cmd/sbxr-release validate-package-qualification \
+              -application "dist/sbxr-linux-$architecture.tar.gz" \
+              -components "dist/sbxr-components-linux-$architecture.tar.gz" \
+              -evidence "$evidence"
             component_sha256="$(sha256sum "dist/sbxr-components-linux-$architecture.tar.gz" | cut -d ' ' -f 1)"
             jq -e \
               --arg architecture "$architecture" \

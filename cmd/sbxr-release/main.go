@@ -56,7 +56,23 @@ type bootstrapOptions struct {
 	root                         string
 }
 
+type packageQualificationValidationOptions struct {
+	application, components, evidence string
+}
+
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "validate-package-qualification" {
+		flags := flag.NewFlagSet("validate-package-qualification", flag.ContinueOnError)
+		var options packageQualificationValidationOptions
+		flags.StringVar(&options.application, "application", "", "exact application archive")
+		flags.StringVar(&options.components, "components", "", "exact component archive")
+		flags.StringVar(&options.evidence, "evidence", "", "strict package qualification JSON")
+		if flags.Parse(os.Args[2:]) != nil || flags.NArg() != 0 || validatePackageQualificationFiles(options) != nil {
+			fmt.Fprintln(os.Stderr, "sbxr package qualification validation refused")
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "acceptance" {
 		flags := flag.NewFlagSet("acceptance", flag.ContinueOnError)
 		var options acceptanceOptions
@@ -123,6 +139,39 @@ func main() {
 		fmt.Fprintln(os.Stderr, "sbxr release build refused:", err)
 		os.Exit(1)
 	}
+}
+
+func validatePackageQualificationFiles(options packageQualificationValidationOptions) error {
+	application, err := readQualificationFile(options.application, softwarelifecycle.MaxAssetBytes)
+	if err != nil {
+		return err
+	}
+	components, err := readQualificationFile(options.components, softwarelifecycle.MaxAssetBytes)
+	if err != nil {
+		return err
+	}
+	evidence, err := readQualificationFile(options.evidence, softwarelifecycle.MaxPackageQualificationEvidenceBytes)
+	if err != nil {
+		return err
+	}
+	return softwarelifecycle.ValidatePackagedQualificationEvidence(application, components, evidence)
+}
+
+func readQualificationFile(name string, maximum int) ([]byte, error) {
+	file, err := os.Open(name)
+	if err != nil {
+		return nil, errors.New("package qualification input unavailable")
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > int64(maximum) {
+		return nil, errors.New("package qualification input refused")
+	}
+	body, err := io.ReadAll(io.LimitReader(file, int64(maximum)+1))
+	if err != nil || int64(len(body)) != info.Size() {
+		return nil, errors.New("package qualification input unavailable")
+	}
+	return body, nil
 }
 
 func verifyCandidate(ctx context.Context, tag string) error {

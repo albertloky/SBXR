@@ -105,6 +105,71 @@ func TestVerifyCandidateRefusesInvalidTagBeforeExternalVerification(t *testing.T
 	}
 }
 
+func TestValidatePackageQualificationFilesUsesStrictEvidenceAndCanonicalSecretMarkers(t *testing.T) {
+	build := softwarelifecycle.EmbeddedBuildIdentity{Repository: softwarelifecycle.Repository, Tag: "v1.0.0", Commit: strings.Repeat("a", 40)}
+	metadata, err := releaseMetadata(build, softwarelifecycle.AMD64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte("qualified executable")
+	stamped, err := softwarelifecycle.StampPayload(raw, metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, _, err = softwarelifecycle.ReadPayloadMetadata(bytes.NewReader(stamped), int64(len(stamped)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := map[string][]byte{
+		"xray":                []byte("qualified xray"),
+		"sing-box":            []byte("qualified sing-box"),
+		"cloudflared":         []byte("qualified cloudflared"),
+		"certbot/bin/certbot": softwarelifecycle.ComponentCertbotLauncher(),
+		"certbot/pyvenv.cfg":  []byte("home = /usr/bin\nversion = 3.12\n"),
+		"certbot/lib/python3.12/site-packages/certbot/__init__.py": []byte("__version__ = '5.4.0'\n"),
+	}
+	manifest, err := softwarelifecycle.NewBoundComponentManifest(softwarelifecycle.AMD64, metadata.Build, "5.4.0", files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	components, err := softwarelifecycle.BuildComponentArchive(manifest, files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	componentDigest := sha256.Sum256(components)
+	componentSHA256 := fmt.Sprintf("%x", componentDigest)
+	metadata.ComponentsSHA256 = componentSHA256
+	stamped, err = softwarelifecycle.StampPayload(raw, metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	application, err := oneFileArchive(stamped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := softwarelifecycle.BuildPackageQualificationEvidence(metadata.Build, softwarelifecycle.AMD64, manifest, componentSHA256, softwarelifecycle.PackageQualificationProcedureCodes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	options := packageQualificationValidationOptions{application: filepath.Join(root, "application.tar.gz"), components: filepath.Join(root, "components.tar.gz"), evidence: filepath.Join(root, "evidence.json")}
+	for name, body := range map[string][]byte{options.application: application, options.components: components, options.evidence: evidence} {
+		if err := os.WriteFile(name, body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := validatePackageQualificationFiles(options); err != nil {
+		t.Fatal(err)
+	}
+	duplicate := bytes.Replace(evidence, []byte(`{"schema":1`), []byte(`{"schema":1,"schema":1`), 1)
+	if err := os.WriteFile(options.evidence, duplicate, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if validatePackageQualificationFiles(options) == nil {
+		t.Fatal("duplicate package qualification evidence accepted")
+	}
+}
+
 func TestAutomatedAcceptanceRecordBindsOneExactStagedOnboardingRelease(t *testing.T) {
 	root := t.TempDir()
 	for _, name := range []string{"install.sh", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz", "sbxr-components-linux-amd64.tar.gz", "sbxr-components-linux-arm64.tar.gz"} {

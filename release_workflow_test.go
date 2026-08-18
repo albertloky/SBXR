@@ -68,6 +68,7 @@ func TestCandidateWorkflowQualifiesBothNativePackagesBeforeAggregation(t *testin
 		"inspect/sbxr acceptance staged-onboarding --components 'dist/sbxr-components-linux-${{ matrix.architecture }}.tar.gz' --json",
 		"package-qualification-${{ matrix.architecture }}.json",
 		"name: prepublication-package-qualification-${{ matrix.architecture }}",
+		"go run ./cmd/sbxr-release validate-package-qualification",
 		"pattern: prepublication-package-qualification-*",
 		"name: Require both native Package Qualification results",
 		"package-qualification-amd64.json",
@@ -81,6 +82,9 @@ func TestCandidateWorkflowQualifiesBothNativePackagesBeforeAggregation(t *testin
 		if !strings.Contains(workflow, required) {
 			t.Fatalf("candidate workflow omitted native package qualification contract %q", required)
 		}
+	}
+	if strings.Count(workflow, "go run ./cmd/sbxr-release validate-package-qualification") != 2 {
+		t.Fatal("candidate workflow must strictly validate Package Qualification evidence before upload and aggregation")
 	}
 	aggregate := strings.Index(workflow, "name: Require both native Package Qualification results")
 	report := strings.Index(workflow, "name: Record prepublication stage matrix")
