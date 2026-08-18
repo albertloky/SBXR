@@ -55,27 +55,6 @@ func QualifyControlledStagedOnboardingSurfaces(surfaces map[string][]byte, requi
 	return nil
 }
 
-// QualifyControlledStagedOnboardingOwners requires every marker exactly once
-// in its exact protected owning artifact and nowhere else.
-func QualifyControlledStagedOnboardingOwners(artifacts map[string][]byte) error {
-	markers := ControlledStagedOnboardingSecretMarkers()
-	if len(artifacts) != len(markers) {
-		return errors.New("controlled staged-onboarding marker ownership is incomplete")
-	}
-	for _, marker := range markers {
-		owner, ok := artifacts[marker.Owner]
-		if !ok || bytes.Count(owner, marker.Value) != 1 {
-			return errors.New("controlled staged-onboarding marker ownership disagrees")
-		}
-		for name, body := range artifacts {
-			if name != marker.Owner && bytes.Contains(body, marker.Value) {
-				return errors.New("controlled staged-onboarding marker ownership disagrees")
-			}
-		}
-	}
-	return nil
-}
-
 type controlledQualificationContribution struct{ proof InstallContributionProof }
 
 func (contribution controlledQualificationContribution) SoftwareLifecycleUpdateContribution() lifecyclecontract.UpdateContribution {

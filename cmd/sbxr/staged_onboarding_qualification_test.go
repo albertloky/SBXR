@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -85,13 +86,8 @@ func TestControlledStagedOnboardingChainsRevisionOneToTwo(t *testing.T) {
 func TestControlledStagedOnboardingSecretScanKeepsMarkersOnlyInOwningArtifacts(t *testing.T) {
 	markers := softwarelifecycle.ControlledStagedOnboardingSecretMarkers()
 	markerText := make([]string, len(markers))
-	protected := make(map[string][]byte, len(markers))
 	for index, marker := range markers {
 		markerText[index] = string(marker.Value)
-		protected[marker.Owner] = append(protected[marker.Owner], marker.Value...)
-	}
-	if err := softwarelifecycle.QualifyControlledStagedOnboardingOwners(protected); err != nil {
-		t.Fatal(err)
 	}
 	if err := ownerconsole.QualifyControlledStagedOnboardingTerminalSecretSafe(t.Context(), markerText); err != nil {
 		t.Fatal(err)
@@ -105,14 +101,78 @@ func TestControlledStagedOnboardingSecretScanKeepsMarkersOnlyInOwningArtifacts(t
 	if err := runControlledCloudflareProfileSetupWithOptions(t.Context(), root, load, options); err != nil {
 		t.Fatal(err)
 	}
-	command := exec.CommandContext(t.Context(), "go", "test", "./internal/ownerconsole", "-run", "^TestRunCloudflareWalkthroughUsesDedicatedBroadUserTokenPathAndMasksByDefault$", "-count=1")
-	command.Dir = filepath.Clean(filepath.Join("..", ".."))
-	testOutput, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatal("controlled test-output surface unavailable")
+	failureRoot, failureLoad := controlledRevisionOneCopy(t)
+	options.failAction = systemchanges.CloudflareDNSCreate
+	if err := runControlledCloudflareProfileSetupWithOptions(t.Context(), failureRoot, failureLoad, options); err == nil {
+		t.Fatal("controlled post-checkpoint marker scan did not reach failure")
 	}
-	surfaces["test"] = testOutput
-	required := []string{"transaction", "diagnostic", "http", "test"}
+	journalRoot := filepath.Join(failureRoot, "var/lib/sbxr/transactions/cloudflare-profile-setup-0002")
+	if err := filepath.Walk(journalRoot, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil || info.IsDir() {
+			return walkErr
+		}
+		body, err := os.ReadFile(path)
+		if err == nil {
+			surfaces["journal"] = append(surfaces["journal"], body...)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stateModule := statefilesystem.NewAt(failureRoot)
+	loaded, err := stateModule.Load(failureLoad)
+	if err != nil || loaded.Snapshot == nil {
+		t.Fatal("controlled recovery State unavailable")
+	}
+	_, stateSHA, _, _, valid := stateModule.SystemChangesLineageInspection(loaded).SystemChangesStateLineageFacts()
+	if !valid {
+		t.Fatal("controlled recovery lineage unavailable")
+	}
+	base := systemchanges.Observation{Status: systemchanges.Managed, StateRevision: 1, StateSHA256: stateSHA, LastChangeSet: string(loaded.Snapshot.LastCompletedChangeSet), Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, VolatileSHA256: strings.Repeat("9", 64), WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}
+	observed, err := systemubuntu.RecoveryHealthObservation(failureRoot, func() (systemchanges.Observation, error) { return base, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveryAdapter, err := systemubuntu.NewControlledManagedProviderAdapter(failureRoot, observed, stateModule, func(systemchanges.Step, string, time.Duration) (systemchanges.StepEvidence, error) {
+		return systemchanges.StepEvidence{}, errors.New("controlled recovery provider refusal")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery := systemchanges.New(recoveryAdapter)
+	surfaces["inspect"] = []byte(fmt.Sprintf("%+v", recovery.Inspect()))
+	surfaces["recovery"] = []byte(fmt.Sprintf("%+v", recovery.Recover()))
+	ownerChecks := []struct {
+		path    string
+		pattern string
+		classes []string
+	}{
+		{path: "./internal/installation", pattern: "^TestComposedInstallBuildsAndPreparesTheCompleteRevisionOnePlan$", classes: []string{"setup entropy"}},
+		{path: "./internal/installation", pattern: "^TestInstallationInterfaceOwnsRootRuntimeTransactionOutcomes$", classes: []string{"setup approval"}},
+		{path: "./internal/cloudflaretunnel", pattern: "^(TestHTTPAPIParsesOfficialShapesWithScopedAuthenticationAndPagination|TestHTTPAPIRefusesMalformedAmbiguousAndUnsafeResponses|TestHTTPMutationAPIRetrievesTheCurrentTunnelTokenOnlyThroughTheDocumentedEndpoint|TestViewFailsClosedWithoutLeakingAuthority)$", classes: []string{"management token", "token identifiers", "Tunnel run token", "raw provider responses", "external errors"}},
+		{path: "./internal/cloudflareprofilesetup", pattern: "^TestPlanComposesSevenFreshOwningModuleResults$", classes: []string{"profile credentials", "subscription token"}},
+		{path: "./internal/state", pattern: "^(TestManagedClientAccessLeaseIsExactOneUseAndRevokedAfterTheCallback|TestPrepareCommitValidatesCandidateAndSerializesLeastPrivilegeMaterial)$", classes: []string{"private keys"}},
+		{path: "./internal/subscriptionserving", pattern: "^TestServeNeverExposesSecretOrOperationalMarkers$", classes: []string{"complete subscription URLs"}},
+	}
+	covered := map[string]bool{}
+	for _, check := range ownerChecks {
+		command := exec.CommandContext(t.Context(), "go", "test", check.path, "-run", check.pattern, "-count=1")
+		command.Dir = filepath.Clean(filepath.Join("..", ".."))
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatal("controlled owning-Module marker check unavailable")
+		}
+		surfaces["test"] = append(surfaces["test"], output...)
+		for _, class := range check.classes {
+			covered[class] = true
+		}
+	}
+	for _, marker := range markers {
+		if !covered[marker.Class] {
+			t.Fatal("controlled owning-Module marker class is unproved")
+		}
+	}
+	required := []string{"transaction", "diagnostic", "http", "apply", "typed-error", "journal", "inspect", "recovery", "test"}
 	if err := softwarelifecycle.QualifyControlledStagedOnboardingSurfaces(surfaces, required); err != nil {
 		t.Fatal(err)
 	}
@@ -127,14 +187,6 @@ func TestControlledStagedOnboardingSecretScanKeepsMarkersOnlyInOwningArtifacts(t
 				t.Fatalf("%s marker was accepted on %s", marker.Class, surface)
 			}
 		}
-	}
-	wrongOwner := make(map[string][]byte, len(protected))
-	for owner, body := range protected {
-		wrongOwner[owner] = append([]byte(nil), body...)
-	}
-	wrongOwner[markers[1].Owner] = append(wrongOwner[markers[1].Owner], markers[0].Value...)
-	if err := softwarelifecycle.QualifyControlledStagedOnboardingOwners(wrongOwner); err == nil {
-		t.Fatal("marker was accepted outside its protected owning artifact")
 	}
 }
 

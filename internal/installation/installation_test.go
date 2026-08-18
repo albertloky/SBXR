@@ -70,10 +70,18 @@ func TestComposedInstallBuildsAndPreparesTheCompleteRevisionOnePlan(t *testing.T
 
 type rootRuntimeInstallApproval struct {
 	recheck softwarelifecycle.InstallRecheck
+	marker  string
 }
 
 func (approval rootRuntimeInstallApproval) AuthorizeAndRecheck(context.Context) (softwarelifecycle.InstallRecheck, error) {
 	return approval.recheck, nil
+}
+
+func (rootRuntimeInstallApproval) String() string {
+	return "controlled Installation approval: redacted"
+}
+func (rootRuntimeInstallApproval) GoString() string {
+	return "controlled Installation approval: redacted"
 }
 
 func TestInstallationInterfaceOwnsRootRuntimeTransactionOutcomes(t *testing.T) {
@@ -119,7 +127,11 @@ func TestInstallationInterfaceOwnsRootRuntimeTransactionOutcomes(t *testing.T) {
 					return 0, err
 				}
 				adapter = systemubuntu.NewRefusingControlledInstallationAdapter(systemchanges.Observation{Status: systemchanges.NotInstalled, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, VolatileSHA256: volatile, FilesystemBytes: 20 << 30, AvailableBytes: 5 << 30, WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}, test.failPost, test.failReverse)
-				result := built.plan.Apply(ctx, softwarelifecycle.InstallApplyRequest{Approval: rootRuntimeInstallApproval{recheck: recheck}, PreparedState: prepared, SystemChanges: systemchanges.New(adapter)})
+				approval := rootRuntimeInstallApproval{recheck: recheck, marker: "QUALIFICATION-SETUP-APPROVAL-00000000000000000009"}
+				result := built.plan.Apply(ctx, softwarelifecycle.InstallApplyRequest{Approval: approval, PreparedState: prepared, SystemChanges: systemchanges.New(adapter)})
+				if strings.Contains(fmt.Sprintf("%+v %+v", approval, result), approval.marker) {
+					return 0, errors.New("controlled Installation approval marker escaped")
+				}
 				transaction = result
 				switch result.Outcome {
 				case systemchanges.Completed:

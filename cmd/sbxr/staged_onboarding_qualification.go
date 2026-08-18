@@ -224,8 +224,20 @@ func runControlledCloudflareProfileSetupWithOptions(ctx context.Context, root st
 		}
 	}
 	applied := module.Apply(result.Approval)
+	if options.scanSurface != nil {
+		body := []byte(fmt.Sprintf("%+v %+v", applied, transaction))
+		if err := options.scanSurface("apply", body); err != nil {
+			return err
+		}
+	}
 	if applied.Kind != cloudflareprofilesetup.ApplyComplete {
-		return &controlledSetupApplyError{correction: applied.Correction, transaction: transaction}
+		failure := &controlledSetupApplyError{correction: applied.Correction, transaction: transaction}
+		if options.scanSurface != nil {
+			if err := options.scanSurface("typed-error", []byte(failure.Error())); err != nil {
+				return err
+			}
+		}
+		return failure
 	}
 	finalLoad := state.LoadRequest{Baseline: state.ManagedEvidence, SupportedRelease: release, Lineage: &state.LineageProof{Revision: 2, LastCompletedChangeSet: changeSet, ReleaseIdentity: release}}
 	final, err := stateModule.Load(finalLoad)

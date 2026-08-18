@@ -68,6 +68,9 @@ func TestHTTPAPIParsesOfficialShapesWithScopedAuthenticationAndPagination(t *tes
 	if observed.Account.ID != accountID || observed.Account.Name != "Selected account" || observed.Zone.ID != zoneID || observed.Token.ID != tokenID || observed.Token.Status != "active" || observed.Token.ExpiresOn != nil || len(observed.Zone.ObservedNameServers) != 2 || !observed.DNSListProven || !observed.TunnelListProven {
 		t.Fatalf("Observe() = %+v", observed)
 	}
+	if strings.Contains(fmt.Sprintf("%+v", observed), "PROVIDER-FIELD-MARKER") {
+		t.Fatal("raw provider response marker crossed the typed API boundary")
+	}
 	wantRequests := []string{
 		"/user/tokens/verify",
 		"/zones?page=1&per_page=50&status=active",
