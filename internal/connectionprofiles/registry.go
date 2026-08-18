@@ -795,6 +795,17 @@ type PublicationOmission struct {
 	Lifecycle state.ProfileLifecycle
 }
 
+func (omission PublicationOmission) Reason() string {
+	switch omission.Lifecycle {
+	case state.ProfileNotSetUp:
+		return "The Connection Profile is not set up"
+	case state.ProfileDisabled:
+		return "The Connection Profile is deliberately disabled"
+	default:
+		return ""
+	}
+}
+
 type PublicationSource struct {
 	profiles  []PublicationProfile
 	omissions []PublicationOmission

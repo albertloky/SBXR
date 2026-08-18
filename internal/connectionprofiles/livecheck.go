@@ -58,6 +58,11 @@ type LiveProfileEvidence struct {
 	Authenticated, Uplink, Downlink bool
 }
 
+type LiveProfileSkip struct {
+	Profile ProfileID
+	Reason  string
+}
+
 type LiveProfileCheckHost interface {
 	CheckLiveProfiles(context.Context, *LiveProfileSubscription, []ProfileID) []LiveProfileEvidence
 }
@@ -72,6 +77,7 @@ type LiveProfileCheckRequest struct {
 type LiveProfileCheckResult struct {
 	Health   Health
 	evidence []LiveProfileEvidence
+	skips    []LiveProfileSkip
 }
 
 func (LiveProfileCheckResult) String() string {
@@ -85,6 +91,9 @@ func (LiveProfileCheckResult) MarshalJSON() ([]byte, error) {
 }
 func (result LiveProfileCheckResult) Evidence() []LiveProfileEvidence {
 	return append([]LiveProfileEvidence(nil), result.evidence...)
+}
+func (result LiveProfileCheckResult) Skips() []LiveProfileSkip {
+	return append([]LiveProfileSkip(nil), result.skips...)
 }
 
 func (module Interface) RunLiveProfileCheck(ctx context.Context, request LiveProfileCheckRequest) LiveProfileCheckResult {
@@ -118,7 +127,11 @@ func (module Interface) RunLiveProfileCheck(ctx context.Context, request LivePro
 	if !validLiveEvidence(ids, evidence) {
 		return fail("CONNECTION-PROFILES-LIVE-CHECK-EVIDENCE", "Outside authenticated traffic proof is incomplete", "a profile is missing, repeated, unauthenticated, or lacks uplink or downlink", "one authenticated uplink and downlink fact for every selected profile")
 	}
-	return LiveProfileCheckResult{Health: Health{Module: "Connection Profiles", Profile: "Live Profile Check", Outcome: Healthy, Code: "CONNECTION-PROFILES-LIVE-CHECK-PASSED", NextActions: []string{"Back"}}, evidence: append([]LiveProfileEvidence(nil), evidence...)}
+	skips := make([]LiveProfileSkip, 0, len(registry.Publication.Omissions()))
+	for _, omission := range registry.Publication.Omissions() {
+		skips = append(skips, LiveProfileSkip{Profile: omission.ID, Reason: omission.Reason()})
+	}
+	return LiveProfileCheckResult{Health: Health{Module: "Connection Profiles", Profile: "Live Profile Check", Outcome: Healthy, Code: "CONNECTION-PROFILES-LIVE-CHECK-PASSED", NextActions: []string{"Back"}}, evidence: append([]LiveProfileEvidence(nil), evidence...), skips: skips}
 }
 
 func validLiveEvidence(required []ProfileID, evidence []LiveProfileEvidence) bool {

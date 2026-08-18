@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -269,12 +270,14 @@ func withRegistryCredentials(request connectionprofiles.RegistryViewRequest, cre
 
 type liveCheckHost struct {
 	*anyTLSHost
-	calls int
-	seen  bool
+	calls    int
+	seen     bool
+	profiles []connectionprofiles.ProfileID
 }
 
 func (host *liveCheckHost) CheckLiveProfiles(_ context.Context, subscription *connectionprofiles.LiveProfileSubscription, profiles []connectionprofiles.ProfileID) []connectionprofiles.LiveProfileEvidence {
 	host.calls++
+	host.profiles = append([]connectionprofiles.ProfileID(nil), profiles...)
 	value, ok := subscription.Consume()
 	host.seen = ok && value == "https://profiles.example.com/u/LIVE-SUBSCRIPTION-TOKEN-MARKER"
 	result := make([]connectionprofiles.LiveProfileEvidence, len(profiles))
@@ -282,6 +285,72 @@ func (host *liveCheckHost) CheckLiveProfiles(_ context.Context, subscription *co
 		result[index] = connectionprofiles.LiveProfileEvidence{Profile: profile, Authenticated: true, Uplink: true, Downlink: true}
 	}
 	return result
+}
+
+func TestLiveProfileCheckReportsExactSkippedCapabilityReasons(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		request     func(*testing.T) connectionprofiles.RegistryViewRequest
+		wantRun     int
+		wantSkipped map[connectionprofiles.ProfileID]string
+	}{
+		{
+			name: "Not set up",
+			request: func(t *testing.T) connectionprofiles.RegistryViewRequest {
+				request := validRegistryRequest(t)
+				var err error
+				request, err = connectionprofiles.NewRevisionOneRegistry(request, request.Reality.Credentials)
+				if err != nil {
+					t.Fatal(err)
+				}
+				request.Exposure = registryPolicyContribution(request)
+				return request
+			},
+			wantRun: 1,
+			wantSkipped: map[connectionprofiles.ProfileID]string{
+				connectionprofiles.VLESSXHTTPProfileID:     "The Connection Profile is not set up",
+				connectionprofiles.VLESSWebSocketProfileID: "The Connection Profile is not set up",
+				connectionprofiles.Hysteria2ProfileID:      "The Connection Profile is not set up",
+				connectionprofiles.TUICProfileID:           "The Connection Profile is not set up",
+				connectionprofiles.AnyTLSProfileID:         "The Connection Profile is not set up",
+			},
+		},
+		{
+			name: "Disabled",
+			request: func(t *testing.T) connectionprofiles.RegistryViewRequest {
+				request := validRegistryRequest(t)
+				request.AnyTLS.Enabled = false
+				request.Exposure = registryPolicyContribution(request)
+				return request
+			},
+			wantRun: 5,
+			wantSkipped: map[connectionprofiles.ProfileID]string{
+				connectionprofiles.AnyTLSProfileID: "The Connection Profile is deliberately disabled",
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := test.request(t)
+			host := &liveCheckHost{anyTLSHost: healthyRegistryHost(request)}
+			const stateSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+			managed := systemchanges.New(managedStatusAdapter{observation: systemchanges.Observation{Status: systemchanges.Managed, LastChangeSet: "profiles-capability", Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, StateRevision: request.Reality.Revision, StateSHA256: stateSHA}}).ManagedAuthority()
+			subscription, err := connectionprofiles.NewLiveProfileSubscription("https://profiles.example.com/u/LIVE-SUBSCRIPTION-TOKEN-MARKER")
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := connectionprofiles.New(host).RunLiveProfileCheck(t.Context(), connectionprofiles.LiveProfileCheckRequest{Registry: request, Managed: managed, StateSHA256: stateSHA, Subscription: subscription})
+			if result.Health.Outcome != connectionprofiles.Healthy || len(result.Evidence()) != test.wantRun || len(host.profiles) != test.wantRun {
+				t.Fatalf("Live Profile Check = health %+v evidence %+v profiles %+v", result.Health, result.Evidence(), host.profiles)
+			}
+			got := map[connectionprofiles.ProfileID]string{}
+			for _, skipped := range result.Skips() {
+				got[skipped.Profile] = skipped.Reason
+			}
+			if !reflect.DeepEqual(got, test.wantSkipped) {
+				t.Fatalf("Live Profile Check skips = %#v, want %#v", got, test.wantSkipped)
+			}
+		})
+	}
 }
 
 type managedStatusAdapter struct{ observation systemchanges.Observation }

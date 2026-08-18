@@ -174,9 +174,9 @@ func representationOmissions(source []connectionprofiles.PublicationOmission, xh
 
 func representationOmission(omission connectionprofiles.PublicationOmission) RepresentationOmission {
 	if omission.Lifecycle == state.ProfileNotSetUp {
-		return RepresentationOmission{ID: omission.ID, Name: omission.Name, Status: NotSetUp, Reason: "The Connection Profile is not set up"}
+		return RepresentationOmission{ID: omission.ID, Name: omission.Name, Status: NotSetUp, Reason: omission.Reason()}
 	}
-	return RepresentationOmission{ID: omission.ID, Name: omission.Name, Status: Disabled, Reason: "The Connection Profile is deliberately disabled"}
+	return RepresentationOmission{ID: omission.ID, Name: omission.Name, Status: Disabled, Reason: omission.Reason()}
 }
 
 func renderSingBox(profiles []connectionprofiles.PublicationProfile, secrets state.ClientAccessReader) ([]byte, int, bool) {

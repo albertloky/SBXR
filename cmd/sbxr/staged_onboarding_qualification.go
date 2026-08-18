@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +16,7 @@ import (
 	"github.com/albertloky/SBXR/internal/cloudflareprofilesetup"
 	"github.com/albertloky/SBXR/internal/cloudflaretunnel"
 	"github.com/albertloky/SBXR/internal/connectionprofiles"
+	"github.com/albertloky/SBXR/internal/healthdiagnostics"
 	"github.com/albertloky/SBXR/internal/networkpolicy"
 	"github.com/albertloky/SBXR/internal/state"
 	statefilesystem "github.com/albertloky/SBXR/internal/state/adapter/filesystem"
@@ -158,6 +162,11 @@ func runControlledCloudflareProfileSetupWithOptions(ctx context.Context, root st
 	if err != nil {
 		return err
 	}
+	qualifiedCurrent := current
+	qualifiedCurrent.Exposure = controlledRevisionOneExposure(networkRequest.Intent)
+	if err := qualifyControlledManagedCapability(ctx, stateModule, loaded, qualifiedCurrent, false); err != nil {
+		return fmt.Errorf("controlled revision 1 capability: %w", err)
+	}
 	var transactionAdapter systemchanges.Adapter = adapter
 	if options.crashAt != "" {
 		transactionAdapter = &controlledCheckpointCrash{Adapter: adapter, checkpoint: options.crashAt, after: options.crashAfter}
@@ -208,7 +217,125 @@ func runControlledCloudflareProfileSetupWithOptions(ctx context.Context, root st
 	if err != nil || final.Snapshot == nil || !controlledAllEnabled(final.Snapshot.DesiredState.ConnectionProfiles) {
 		return errors.New("controlled Managed revision 2 unavailable")
 	}
+	qualifiedCandidate := candidate
+	qualifiedCandidate.XHTTP.RouteHealth, qualifiedCandidate.WebSocket.RouteHealth = controlledRouteHealth(final.Snapshot.DesiredState)
+	qualifiedCandidate.Hysteria2.Network = qualifiedCandidate.Exposure
+	qualifiedCandidate.TUIC.Network = qualifiedCandidate.Exposure
+	qualifiedCandidate.AnyTLS.Network = qualifiedCandidate.Exposure
+	if err := qualifyControlledManagedCapability(ctx, stateModule, final, qualifiedCandidate, true); err != nil {
+		return fmt.Errorf("controlled revision 2 capability: %w", err)
+	}
 	return nil
+}
+
+func controlledRouteHealth(desired state.DesiredState) (cloudflaretunnel.XHTTPRouteHealth, cloudflaretunnel.WebSocketRouteHealth) {
+	expected := managedTunnelExpected(desired)
+	observed := cloudflaretunnel.WholeTunnelObservation{TunnelID: expected.TunnelID, Connected: true, Routes: append([]cloudflaretunnel.Route(nil), expected.Routes...), XHTTPOriginReachable: true, WebSocketOriginReachable: true}
+	for _, record := range expected.DNSRecords {
+		observed.DNSRecords = append(observed.DNSRecords, cloudflaretunnel.DNSObservation{ID: record.ID, Name: record.Name, Type: record.Type, Content: record.Content, Proxied: record.Proxied})
+	}
+	return cloudflaretunnel.EvaluateXHTTPRouteHealth(observed, expected), cloudflaretunnel.EvaluateWebSocketRouteHealth(observed, expected)
+}
+
+type controlledManagedObservation struct{ observation systemchanges.Observation }
+
+func (adapter controlledManagedObservation) Observe() (systemchanges.Observation, error) {
+	return adapter.observation, nil
+}
+func (controlledManagedObservation) TryLock() (systemchanges.Lock, bool, error) {
+	return nil, false, nil
+}
+
+func qualifyControlledManagedCapability(ctx context.Context, stateModule state.Interface, loaded state.Result, registry connectionprofiles.RegistryViewRequest, cloudflareProfilesSetUp bool) error {
+	if loaded.Snapshot == nil {
+		return errors.New("controlled Managed capability unavailable")
+	}
+	revision, stateSHA, changeSet, _, valid := stateModule.SystemChangesLineageInspection(loaded).SystemChangesStateLineageFacts()
+	capabilityRevision, capabilitySHA, capabilitySetUp, capabilityValid := stateModule.SoftwareLifecycleCapability(loaded).SoftwareLifecycleManagedCapability()
+	if !valid || !capabilityValid || capabilityRevision != revision || capabilitySHA != stateSHA || capabilitySetUp != cloudflareProfilesSetUp {
+		return errors.New("controlled Software Lifecycle capability disagrees")
+	}
+	observation := systemchanges.Observation{Status: systemchanges.Managed, StateRevision: revision, StateSHA256: stateSHA, LastChangeSet: string(changeSet), Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, VolatileSHA256: strings.Repeat("9", 64), WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}
+	changes := systemchanges.New(controlledManagedObservation{observation: observation})
+	capabilities := healthCapabilities(revision, loaded.Snapshot.DesiredState.ConnectionProfiles)
+	diagnostics := healthdiagnostics.New(nil).Check(ctx, healthdiagnostics.InstallationSummaryFrom(changes.InstallationHealthInspection()), connectionProfileHealthInspection(map[healthdiagnostics.Module]healthdiagnostics.HealthStatus{healthdiagnostics.ConnectionProfilesModule: healthdiagnostics.Healthy}, capabilities))
+	if len(diagnostics.Modules) != 1 || diagnostics.Modules[0].Capability == nil || diagnostics.Modules[0].Capability.CommittedRevision != revision || len(diagnostics.Modules[0].Capability.CapabilityRows) != 6 {
+		return errors.New("controlled diagnostics capability disagrees")
+	}
+	for index, profile := range diagnostics.Modules[0].Capability.CapabilityRows {
+		if cloudflareProfilesSetUp {
+			if profile.Lifecycle != healthdiagnostics.ProfileEnabled || profile.HealthResultOmitted || profile.PublicationOmitted || profile.Explanation != "Set up and Enabled." {
+				return errors.New("controlled completed diagnostics capability disagrees")
+			}
+			continue
+		}
+		if index == 0 {
+			if profile.Lifecycle != healthdiagnostics.ProfileEnabled || profile.HealthResultOmitted || profile.PublicationOmitted || profile.Explanation != "Set up and Enabled." {
+				return errors.New("controlled revision 1 diagnostics REALITY capability disagrees")
+			}
+			continue
+		}
+		if profile.Lifecycle != healthdiagnostics.ProfileNotSetUp || !profile.HealthResultOmitted || !profile.PublicationOmitted || profile.Explanation != "No individual Health Result; Cloudflare Profile Setup is required." {
+			return errors.New("controlled revision 1 diagnostics deferred capability disagrees")
+		}
+	}
+	return stateModule.WithManagedConnectionProfileSecrets(loaded, func(_ state.Snapshot, connection state.ConnectionProfileSecretReader) error {
+		subscriptionLoaded, err := stateModule.Load(state.LoadRequest{Baseline: state.ManagedEvidence, SupportedRelease: loaded.Snapshot.ReleaseIdentity, Lineage: &state.LineageProof{Revision: revision, LastCompletedChangeSet: changeSet, ReleaseIdentity: loaded.Snapshot.ReleaseIdentity}})
+		if err != nil {
+			return err
+		}
+		return stateModule.WithManagedSubscriptionSecrets(subscriptionLoaded, func(_ state.Snapshot, subscription state.ClientAccessReader) error {
+			secrets := controlledSetupSecrets{connection: connection, subscription: subscription}
+			view := connectionprofiles.ControlledCloudflareProfileSetupModule().ViewRegistry(ctx, registry)
+			if view.Health.Outcome != connectionprofiles.Healthy {
+				return fmt.Errorf("controlled Access registry health disagrees: %s", view.Health.Code)
+			}
+			if !connectionprofiles.PublicationInputsMatch(view.Publication, loaded.Snapshot.DesiredState.ConnectionProfiles) {
+				return errors.New("controlled Access registry publication disagrees")
+			}
+			mutation, err := subscriptionpublication.PrepareClientAccessMutation(subscriptionpublication.RotateSubscriptionToken, loaded.Snapshot.DesiredState.NetworkPolicy.PrimarySubscriptionAddress, loaded.Snapshot.DesiredState.Subscription, loaded.Snapshot.DesiredState.ConnectionProfiles, view.Publication)
+			if err != nil {
+				return err
+			}
+			universal, err := mutation.Route("")
+			if err != nil || !strings.HasPrefix(universal, "https://") || strings.HasSuffix(universal, "/sing-box") {
+				return errors.New("controlled universal Access route unavailable")
+			}
+			singBoxRoute, err := mutation.Route(string(subscriptionpublication.SingBoxRepresentation))
+			if err != nil || !strings.HasSuffix(singBoxRoute, "/sing-box") {
+				return errors.New("controlled /sing-box Access route unavailable")
+			}
+			artifacts, err := subscriptionpublication.New(controlledPublicationValidator{}, controlledPublicationValidator{}).Render(ctx, view.Publication, secrets)
+			if err != nil {
+				return err
+			}
+			decoded, decodeErr := base64.StdEncoding.DecodeString(string(artifacts.Base64))
+			wantProfiles, wantSingBox := 1, 1
+			if cloudflareProfilesSetUp {
+				wantProfiles, wantSingBox = 6, 5
+			}
+			var singBox struct {
+				Outbounds []json.RawMessage `json:"outbounds"`
+			}
+			if decodeErr != nil || !bytes.Equal(decoded, artifacts.Raw) || artifacts.ProfileCount != wantProfiles || artifacts.SingBox.ProfileCount != wantSingBox || json.Unmarshal(artifacts.SingBox.Body, &singBox) != nil || len(singBox.Outbounds) != wantSingBox+1 {
+				return errors.New("controlled client output disagrees")
+			}
+			liveSubscription, err := connectionprofiles.NewLiveProfileSubscription(universal)
+			if err != nil {
+				return err
+			}
+			live := connectionprofiles.ControlledCloudflareProfileSetupModule().RunLiveProfileCheck(ctx, connectionprofiles.LiveProfileCheckRequest{Registry: registry, Managed: changes.ManagedAuthority(), StateSHA256: stateSHA, Subscription: liveSubscription})
+			if live.Health.Outcome != connectionprofiles.Healthy || len(live.Evidence()) != wantProfiles || len(live.Skips()) != 6-wantProfiles {
+				return errors.New("controlled Live Profile Check capability disagrees")
+			}
+			for _, skipped := range live.Skips() {
+				if skipped.Reason != "The Connection Profile is not set up" && skipped.Reason != "The Connection Profile is deliberately disabled" {
+					return errors.New("controlled Live Profile Check skip reason disagrees")
+				}
+			}
+			return nil
+		})
+	})
 }
 
 func controlledAllEnabled(profiles state.ConnectionProfiles) bool {
@@ -255,6 +382,7 @@ func (s controlledSetupSecrets) ReadClientAccessValue(value state.ClientAccessVa
 
 type controlledPublicationValidator struct{}
 
+func (controlledPublicationValidator) ValidateMihomo(context.Context, io.Reader) error  { return nil }
 func (controlledPublicationValidator) ValidateSingBox(context.Context, io.Reader) error { return nil }
 
 type controlledSetupAPI struct{ dns atomic.Uint32 }
@@ -352,6 +480,11 @@ func controlledSetupNetwork(current state.DesiredState, desiredSHA, changeSet st
 	candidate.Profiles.Hysteria2, candidate.Profiles.TUIC, candidate.Profiles.AnyTLS = networkpolicy.Profile{Enabled: true, Port: 443}, networkpolicy.Profile{Enabled: true, Port: 8443}, networkpolicy.Profile{Enabled: true, Port: 9443}
 	request := networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval, CloudflareProfileSetup: &networkpolicy.CloudflareProfileSetupRequest{Candidate: candidate, Binding: networkpolicy.ChangeSetBinding{StartingRevision: 1, CandidateRevision: 2, ChangeSetID: changeSet, DesiredStateSHA256: desiredSHA}}}
 	return request, networkpolicy.New(networkpolicy.ControlledCloudflareProfileSetupAdapter()).Evaluate(request)
+}
+
+func controlledRevisionOneExposure(intent networkpolicy.Intent) connectionprofiles.RegistryExposureAuthority {
+	result := networkpolicy.New(networkpolicy.ControlledCloudflareProfileSetupAdapter()).Evaluate(networkpolicy.Request{Intent: intent, Stage: networkpolicy.PostApproval})
+	return networkpolicy.NewListenerContribution(result)
 }
 
 func controlledSetupCloudflare(ctx context.Context, current state.DesiredState, desiredSHA, startingSHA, changeSet string, path networkpolicy.CloudflareTunnelPath, api *controlledSetupAPI) (cloudflaretunnel.PlanRequest, cloudflaretunnel.PlanResult) {

@@ -55,6 +55,16 @@ func (controlledProfileSetupHost) ObserveAnyTLS(context.Context, Hysteria2ViewRe
 func (controlledProfileSetupHost) ObserveCoreCapabilities(context.Context) CoreCapabilityObservation {
 	return CoreCapabilityObservation{CheckedAt: time.Now()}
 }
+func (controlledProfileSetupHost) CheckLiveProfiles(_ context.Context, subscription *LiveProfileSubscription, profiles []ProfileID) []LiveProfileEvidence {
+	if _, ok := subscription.Consume(); !ok {
+		return nil
+	}
+	result := make([]LiveProfileEvidence, len(profiles))
+	for index, profile := range profiles {
+		result[index] = LiveProfileEvidence{Profile: profile, Authenticated: true, Uplink: true, Downlink: true}
+	}
+	return result
+}
 func (controlledProfileSetupHost) ObserveDeferredRegistry(context.Context) DeferredRegistryObservation {
 	return DeferredRegistryObservation{CheckedAt: time.Now(), XrayRealityOnly: true, SingBoxConfigurationAbsent: true, SingBoxServiceDisabled: true, SingBoxServiceInactive: true}
 }
