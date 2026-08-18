@@ -13,8 +13,65 @@ permissions:
   attestations: read
   contents: read
 
+env:
+  SECRET_PATTERN: 'SBXR_USER_TOKEN_MARKER_00000000000000abcd|9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f|CLOUDFLARE-ROTATED-RUN-TOKEN-MARKER|profile-secret-marker|subscription-secret-marker|COMPLETE-SUBSCRIPTION-URL-MARKER|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA|QUALIFICATION-SETUP-ENTROPY-00000000000000000008|QUALIFICATION-SETUP-APPROVAL-00000000000000000009|PROVIDER-FIELD-MARKER|PROVIDER-ERROR-MARKER|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer '
+
 jobs:
+  qualify-stable-packages:
+    name: Requalify stable native package
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - architecture: amd64
+            runner: ubuntu-24.04
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Resolve the exact stable release identity
+        id: release
+        run: |
+          commit="$(gh api "repos/albertloky/SBXR/releases/tags/$RELEASE_TAG" --jq .target_commitish)"
+          test "$(printf '%s' "$commit" | wc -c)" -eq 40
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.release.outputs.commit }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Verify and run the exact stable native package
+        run: |
+          test "$(git rev-parse HEAD)" = '${{ steps.release.outputs.commit }}'
+          go run ./cmd/sbxr-release verify -tag "$RELEASE_TAG"
+          architecture='${{ matrix.architecture }}'
+          mkdir -m 0700 dist inspect
+          curl -fsSL "https://github.com/albertloky/SBXR/releases/download/$RELEASE_TAG/release-index.json" -o dist/release-index.json
+          curl -fsSL "https://github.com/albertloky/SBXR/releases/download/$RELEASE_TAG/sbxr-linux-$architecture.tar.gz" -o "dist/sbxr-linux-$architecture.tar.gz"
+          curl -fsSL "https://github.com/albertloky/SBXR/releases/download/$RELEASE_TAG/sbxr-components-linux-$architecture.tar.gz" -o "dist/sbxr-components-linux-$architecture.tar.gz"
+          for name in "sbxr-linux-$architecture.tar.gz" "sbxr-components-linux-$architecture.tar.gz"; do
+            test "$(stat -c '%s' "dist/$name")" = "$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .size' dist/release-index.json)"
+            test "$(sha256sum "dist/$name" | cut -d ' ' -f 1)" = "$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .sha256' dist/release-index.json)"
+          done
+          test "$(tar -tzf "dist/sbxr-linux-$architecture.tar.gz")" = sbxr
+          tar -xzf "dist/sbxr-linux-$architecture.tar.gz" -C inspect
+          inspect/sbxr version --json > version.json
+          jq -e --arg tag "$RELEASE_TAG" --arg commit '${{ steps.release.outputs.commit }}' --arg architecture "$architecture" '.build.repository == "albertloky/SBXR" and .build.tag == $tag and .build.commit == $commit and .architecture == $architecture' version.json
+          inspect/sbxr acceptance staged-onboarding --components "dist/sbxr-components-linux-$architecture.tar.gz" --json > qualification.json
+          go run ./cmd/sbxr-release validate-package-qualification \
+            -application "dist/sbxr-linux-$architecture.tar.gz" \
+            -components "dist/sbxr-components-linux-$architecture.tar.gz" \
+            -evidence qualification.json
+          test -z "$(rg -a -l "$SECRET_PATTERN" qualification.json)"
+
   verify-stable:
+    needs: qualify-stable-packages
     runs-on: ubuntu-24.04
     env:
       RELEASE_TAG: ${{ inputs.tag }}
@@ -71,7 +128,7 @@ jobs:
           jq -e --arg tag "$RELEASE_TAG" --arg commit "$commit" '.repository == "albertloky/SBXR" and .tag == $tag and .commit == $commit' dist/release-index.json
           index_sha256="$(sha256sum dist/release-index.json | cut -d ' ' -f 1)"
           grep -Fx "Release index SHA-256: $index_sha256" acceptance-record.md
-          pattern='MARKER|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer '
+          pattern="$SECRET_PATTERN"
           test -z "$(rg -a -l "$pattern" dist/install.sh dist/release-index.json acceptance-record.md)"
           for archive in dist/sbxr-linux-amd64.tar.gz dist/sbxr-linux-arm64.tar.gz dist/sbxr-components-linux-amd64.tar.gz dist/sbxr-components-linux-arm64.tar.gz; do
             test -z "$(tar -xOzf "$archive" | rg -a -l "$pattern" -)"
@@ -98,5 +155,5 @@ jobs:
             echo 'Owner Acceptance: Not required'
             echo 'Cloudflare/provider evidence: Not performed'
           } >> "$GITHUB_STEP_SUMMARY"
-          pattern='MARKER|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer '
+          pattern="$SECRET_PATTERN"
           test -z "$(rg -a -l "$pattern" "$GITHUB_STEP_SUMMARY")"

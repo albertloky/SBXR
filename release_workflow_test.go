@@ -167,7 +167,7 @@ func TestStableWorkflowReverifiesTheExactPublicInstallerBeforeREADMEActivation(t
 		"Integrated Ubuntu Verification: Not required",
 		"test ! -e /usr/local/bin/sbxr",
 		"test ! -e /var/lib/sbxr",
-		"MARKER|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer ",
+		"pattern=\"$SECRET_PATTERN\"",
 		`rg -a -l "$pattern" "$GITHUB_STEP_SUMMARY"`,
 	} {
 		if !strings.Contains(workflow, required) {
@@ -177,8 +177,39 @@ func TestStableWorkflowReverifiesTheExactPublicInstallerBeforeREADMEActivation(t
 	if strings.Contains(workflow, "jq -r .body release.json > acceptance-record.md") {
 		t.Fatal("stable workflow adds a byte to the retained Acceptance Record")
 	}
+	if strings.Contains(workflow, "pattern='MARKER|") {
+		t.Fatal("stable workflow retained the overbroad MARKER secret scan")
+	}
 	if strings.Contains(workflow, "stable_bootstrap.py") || strings.Contains(workflow, "Supported Ubuntu Owner Console launch: Passed") {
 		t.Fatal("stable workflow claimed an automated Ubuntu launch")
+	}
+}
+
+func TestStableWorkflowRequalifiesBothNativePublicPackagesBeforeStableVerification(t *testing.T) {
+	body, err := os.ReadFile(".github/workflows/stable.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(body)
+	for _, required := range []string{
+		"qualify-stable-packages:",
+		"runner: ubuntu-24.04",
+		"runner: ubuntu-24.04-arm",
+		"releases/download/$RELEASE_TAG/sbxr-linux-$architecture.tar.gz",
+		"releases/download/$RELEASE_TAG/sbxr-components-linux-$architecture.tar.gz",
+		"inspect/sbxr acceptance staged-onboarding --components \"dist/sbxr-components-linux-$architecture.tar.gz\" --json",
+		"go run ./cmd/sbxr-release validate-package-qualification",
+		`rg -a -l "$SECRET_PATTERN" qualification.json`,
+		"needs: qualify-stable-packages",
+	} {
+		if !strings.Contains(workflow, required) {
+			t.Fatalf("stable workflow omitted native package qualification contract %q", required)
+		}
+	}
+	qualification := strings.Index(workflow, "qualify-stable-packages:")
+	stable := strings.Index(workflow, "  verify-stable:")
+	if qualification < 0 || stable <= qualification {
+		t.Fatal("stable verification can run before both native public packages qualify")
 	}
 }
 
