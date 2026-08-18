@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -239,7 +241,41 @@ func buildCompleteRelease(ctx context.Context, options buildOptions, verifySourc
 	if len(components) == 0 || len(components) > softwarelifecycle.MaxAssetBytes {
 		return errors.New("component release qualification refused")
 	}
+	componentDigest := sha256.Sum256(components)
+	metadata.ComponentsSHA256 = hex.EncodeToString(componentDigest[:])
+	application, err = bindApplicationComponents(application, metadata)
+	if err != nil {
+		return err
+	}
 	return writePairExclusive(options.output, application, options.componentOutput, components)
+}
+
+func bindApplicationComponents(application []byte, metadata softwarelifecycle.PayloadMetadata) ([]byte, error) {
+	compressed, err := gzip.NewReader(bytes.NewReader(application))
+	if err != nil {
+		return nil, errors.New("release application archive refused")
+	}
+	archive := tar.NewReader(compressed)
+	header, err := archive.Next()
+	if err != nil || header.Name != "sbxr" || header.Typeflag != tar.TypeReg || header.Size <= 0 || header.Size > softwarelifecycle.MaxAssetBytes {
+		return nil, errors.New("release application archive refused")
+	}
+	stamped, err := io.ReadAll(io.LimitReader(archive, header.Size+1))
+	if err != nil || int64(len(stamped)) != header.Size {
+		return nil, errors.New("release application archive refused")
+	}
+	if _, err := archive.Next(); err != io.EOF || compressed.Close() != nil {
+		return nil, errors.New("release application archive refused")
+	}
+	_, payload, err := softwarelifecycle.ReadPayloadMetadata(bytes.NewReader(stamped), int64(len(stamped)))
+	if err != nil {
+		return nil, errors.New("release application identity refused")
+	}
+	stamped, err = softwarelifecycle.StampPayload(payload, metadata)
+	if err != nil {
+		return nil, err
+	}
+	return oneFileArchive(stamped)
 }
 
 func buildApplicationArchive(ctx context.Context, options buildOptions, verifySource sourceVerifier) ([]byte, softwarelifecycle.PayloadMetadata, error) {

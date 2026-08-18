@@ -102,7 +102,8 @@ func ValidateComponentArchive(body []byte, architecture Architecture) (Component
 	return manifest, nil
 }
 
-func qualifiedComponent(body []byte, architecture Architecture, name string) ([]byte, string, bool) {
+// QualificationComponent returns one validated core from an exact component archive.
+func QualificationComponent(body []byte, architecture Architecture, name string) ([]byte, string, bool) {
 	if name != "xray" && name != "sing-box" {
 		return nil, "", false
 	}
@@ -134,11 +135,6 @@ func qualifiedComponent(body []byte, architecture Architecture, name string) ([]
 		}
 		return content, version, true
 	}
-}
-
-// QualificationComponent returns one validated core from an exact component archive.
-func QualificationComponent(body []byte, architecture Architecture, name string) ([]byte, string, bool) {
-	return qualifiedComponent(body, architecture, name)
 }
 
 func validComponentManifest(manifest ComponentManifest, architecture Architecture) bool {

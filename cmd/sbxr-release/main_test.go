@@ -45,6 +45,28 @@ func TestBuildCompleteReleaseWritesApplicationAndQualifiedComponentsTogether(t *
 	if _, err := os.Stat(application); err != nil {
 		t.Fatal(err)
 	}
+	applicationBody, err := os.ReadFile(application)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compressed, err := gzip.NewReader(bytes.NewReader(applicationBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := tar.NewReader(compressed)
+	header, err := archive.Next()
+	if err != nil || header.Name != "sbxr" {
+		t.Fatal("application executable unavailable")
+	}
+	executable, err := io.ReadAll(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, _, err := softwarelifecycle.ReadPayloadMetadata(bytes.NewReader(executable), int64(len(executable)))
+	digest := sha256.Sum256([]byte("qualified-components"))
+	if err != nil || metadata.ComponentsSHA256 != fmt.Sprintf("%x", digest) {
+		t.Fatalf("bound component digest = %q, %v", metadata.ComponentsSHA256, err)
+	}
 
 	failedApplication := filepath.Join(root, "failed-application.tar.gz")
 	failedComponents := filepath.Join(root, "failed-components.tar.gz")

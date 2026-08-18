@@ -80,29 +80,11 @@ func (validator NativeValidator) Validate(ctx context.Context, metadata software
 		}
 		paths[name] = path
 	}
-	certificate, key, err := qualificationCertificate()
+	paths["xray.json"], paths["sing-box.json"], err = writeCoreQualificationConfigurations(directory, metadata)
 	if err != nil {
 		return errors.New("release qualification unavailable")
 	}
-	certificatePath, keyPath := filepath.Join(directory, "fullchain.pem"), filepath.Join(directory, "privkey.pem")
-	if os.WriteFile(certificatePath, certificate, 0o600) != nil || os.WriteFile(keyPath, key, 0o600) != nil {
-		return errors.New("release qualification unavailable")
-	}
-	singBox := bytes.ReplaceAll(metadata.Artifacts["sing-box.json"], []byte("/var/lib/sbxr/certificates/domain/current/fullchain.pem"), []byte(certificatePath))
-	singBox = bytes.ReplaceAll(singBox, []byte("/var/lib/sbxr/certificates/domain/current/privkey.pem"), []byte(keyPath))
-	if bytes.Equal(singBox, metadata.Artifacts["sing-box.json"]) || os.WriteFile(paths["sing-box.json"], singBox, 0o600) != nil {
-		return errors.New("release qualification unavailable")
-	}
-	checks := []struct {
-		code string
-		name string
-		args []string
-		ok   func(string) bool
-	}{
-		{"xray-version", validator.xray, []string{"version"}, func(value string) bool { return versionFields(value, "Xray", "26.3.27") }},
-		{"xray-config", validator.xray, []string{"run", "-test", "-config", paths["xray.json"]}, exitSuccess},
-		{"sing-box-version", validator.singBox, []string{"version"}, func(value string) bool { return versionFields(value, "sing-box", "version", "1.13.16") }},
-		{"sing-box-config", validator.singBox, []string{"check", "-c", paths["sing-box.json"]}, exitSuccess},
+	checks := append(coreQualificationChecks(validator.xray, validator.singBox, paths["xray.json"], paths["sing-box.json"]), []nativeQualificationCheck{
 		{"sing-box-subscription", validator.singBox, []string{"check", "-c", paths["subscription-sing-box.json"]}, exitSuccess},
 		{"cloudflared-version", validator.cloudflared, []string{"--version"}, func(value string) bool { return strings.HasPrefix(value, "cloudflared version 2026.7.3 ") }},
 		{"cloudflared-config", validator.cloudflared, []string{"--config", paths["cloudflared.yml"], "tunnel", "ingress", "validate"}, exitSuccess},
@@ -112,7 +94,7 @@ func (validator NativeValidator) Validate(ctx context.Context, metadata software
 		}},
 		{"mihomo-version", validator.mihomo, []string{"-v"}, func(value string) bool { return versionFields(value, "Mihomo", "Meta", "v1.19.29") }},
 		{"mihomo-config", validator.mihomo, []string{"-t", "-f", paths["subscription-mihomo.yaml"]}, exitSuccess},
-	}
+	}...)
 	for _, check := range checks {
 		output, err := validator.run(ctx, check.name, check.args, 1<<20)
 		if err != nil || !check.ok(string(output)) {
@@ -133,27 +115,11 @@ func ValidatePackageQualificationCores(ctx context.Context, xray, singBox string
 		return errors.New("package qualification core validation unavailable")
 	}
 	defer os.RemoveAll(directory)
-	certificate, key, err := qualificationCertificate()
+	xrayPath, singBoxPath, err := writeCoreQualificationConfigurations(directory, metadata)
 	if err != nil {
 		return errors.New("package qualification core validation unavailable")
 	}
-	certificatePath, keyPath := filepath.Join(directory, "fullchain.pem"), filepath.Join(directory, "privkey.pem")
-	xrayPath, singBoxPath := filepath.Join(directory, "xray.json"), filepath.Join(directory, "sing-box.json")
-	controlledSingBox := bytes.ReplaceAll(metadata.Artifacts["sing-box.json"], []byte("/var/lib/sbxr/certificates/domain/current/fullchain.pem"), []byte(certificatePath))
-	controlledSingBox = bytes.ReplaceAll(controlledSingBox, []byte("/var/lib/sbxr/certificates/domain/current/privkey.pem"), []byte(keyPath))
-	if bytes.Equal(controlledSingBox, metadata.Artifacts["sing-box.json"]) || os.WriteFile(certificatePath, certificate, 0o600) != nil || os.WriteFile(keyPath, key, 0o600) != nil || os.WriteFile(xrayPath, metadata.Artifacts["xray.json"], 0o600) != nil || os.WriteFile(singBoxPath, controlledSingBox, 0o600) != nil {
-		return errors.New("package qualification core validation unavailable")
-	}
-	checks := []struct {
-		name string
-		args []string
-		ok   func(string) bool
-	}{
-		{xray, []string{"version"}, func(value string) bool { return versionFields(value, "Xray", "26.3.27") }},
-		{xray, []string{"run", "-test", "-config", xrayPath}, exitSuccess},
-		{singBox, []string{"version"}, func(value string) bool { return versionFields(value, "sing-box", "version", "1.13.16") }},
-		{singBox, []string{"check", "-c", singBoxPath}, exitSuccess},
-	}
+	checks := coreQualificationChecks(xray, singBox, xrayPath, singBoxPath)
 	for _, check := range checks {
 		output, err := runNative(ctx, check.name, check.args, 1<<20)
 		if err != nil || !check.ok(string(output)) {
@@ -161,6 +127,37 @@ func ValidatePackageQualificationCores(ctx context.Context, xray, singBox string
 		}
 	}
 	return nil
+}
+
+type nativeQualificationCheck struct {
+	code string
+	name string
+	args []string
+	ok   func(string) bool
+}
+
+func coreQualificationChecks(xray, singBox, xrayConfiguration, singBoxConfiguration string) []nativeQualificationCheck {
+	return []nativeQualificationCheck{
+		{"xray-version", xray, []string{"version"}, func(value string) bool { return versionFields(value, "Xray", "26.3.27") }},
+		{"xray-config", xray, []string{"run", "-test", "-config", xrayConfiguration}, exitSuccess},
+		{"sing-box-version", singBox, []string{"version"}, func(value string) bool { return versionFields(value, "sing-box", "version", "1.13.16") }},
+		{"sing-box-config", singBox, []string{"check", "-c", singBoxConfiguration}, exitSuccess},
+	}
+}
+
+func writeCoreQualificationConfigurations(directory string, metadata softwarelifecycle.PayloadMetadata) (string, string, error) {
+	certificate, key, err := qualificationCertificate()
+	if err != nil {
+		return "", "", err
+	}
+	certificatePath, keyPath := filepath.Join(directory, "fullchain.pem"), filepath.Join(directory, "privkey.pem")
+	xrayPath, singBoxPath := filepath.Join(directory, "xray.json"), filepath.Join(directory, "sing-box.json")
+	controlledSingBox := bytes.ReplaceAll(metadata.Artifacts["sing-box.json"], []byte("/var/lib/sbxr/certificates/domain/current/fullchain.pem"), []byte(certificatePath))
+	controlledSingBox = bytes.ReplaceAll(controlledSingBox, []byte("/var/lib/sbxr/certificates/domain/current/privkey.pem"), []byte(keyPath))
+	if bytes.Equal(controlledSingBox, metadata.Artifacts["sing-box.json"]) || os.WriteFile(certificatePath, certificate, 0o600) != nil || os.WriteFile(keyPath, key, 0o600) != nil || os.WriteFile(xrayPath, metadata.Artifacts["xray.json"], 0o600) != nil || os.WriteFile(singBoxPath, controlledSingBox, 0o600) != nil {
+		return "", "", errors.New("core qualification configuration unavailable")
+	}
+	return xrayPath, singBoxPath, nil
 }
 
 func qualificationCertificate() ([]byte, []byte, error) {

@@ -112,7 +112,7 @@ func QualifyControlledInstallationRestart(ctx context.Context, root string) erro
 	if err != nil {
 		return err
 	}
-	if _, err := applyControlledInstallationWithDeath(ctx, root, request, systemchanges.StatePublished); err == nil || err.Error() != "controlled Installation worker death" {
+	if _, err := applyControlledInstallationWithDeath(ctx, root, request, systemchanges.Complete); err == nil || err.Error() != "controlled Installation worker death" {
 		return errors.New("controlled Installation death was not proved")
 	}
 	identity := request.Candidate.Verified.Identity
@@ -128,17 +128,25 @@ func QualifyControlledInstallationRestart(ctx context.Context, root string) erro
 		return errors.New("controlled Installation lineage unavailable")
 	}
 	observation := systemchanges.Observation{Status: systemchanges.Managed, StateRevision: 1, StateSHA256: sha, LastChangeSet: string(requestChangeSet(request)), Lock: systemchanges.LockReleased, VolatileSHA256: strings.Repeat("9", 64), WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}
+	observation, err = systemubuntu.RecoveryHealthObservation(root, func() (systemchanges.Observation, error) { return observation, nil })
+	if err != nil {
+		return err
+	}
 	adapter, err := systemubuntu.NewControlledInstallRecoveryAdapter(root, observation, stateModule)
 	if err != nil {
 		return err
 	}
 	result := systemchanges.New(adapter).Recover()
-	if result.Outcome != systemchanges.Completed && result.Outcome != systemchanges.RecoveryRequiredOutcome {
-		return errors.New("controlled Installation recovery refused")
+	if result.Outcome != systemchanges.Completed {
+		return fmt.Errorf("controlled Installation recovery refused: %+v", result)
 	}
 	journal := filepath.Join(root, "var/lib/sbxr/transactions", string(requestChangeSet(request)), "journal.jsonl")
-	if _, err := os.Stat(journal); result.Outcome == systemchanges.Completed && !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(journal); !errors.Is(err, os.ErrNotExist) {
 		return errors.New("controlled Installation completed recovery retained journal")
+	}
+	loaded, err = stateModule.Load(load)
+	if err != nil || loaded.Snapshot == nil || loaded.Status != state.Managed || !controlledRevisionOne(loaded.Snapshot.DesiredState) {
+		return errors.New("controlled Installation recovery did not prove Managed revision 1")
 	}
 	return nil
 }

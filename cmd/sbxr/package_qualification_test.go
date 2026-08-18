@@ -96,6 +96,20 @@ func TestPackagedExecutableRefusesArgumentsAndChangedComponentsWithOneSafeCode(t
 	if err := os.WriteFile(badCorePath, badCoreArchive, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	changedValidFiles := packageQualificationComponentFiles()
+	changedValidFiles["cloudflared"] = []byte("different controlled cloudflared")
+	changedValidManifest, err := softwarelifecycle.NewBoundComponentManifest(metadata.Architecture, metadata.Build, "5.4.0", changedValidFiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedValidArchive, err := softwarelifecycle.BuildComponentArchive(changedValidManifest, changedValidFiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedValidPath := filepath.Join(t.TempDir(), "changed-valid-components.tar.gz")
+	if err := os.WriteFile(changedValidPath, changedValidArchive, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	for _, arguments := range [][]string{
 		{"acceptance", "staged-onboarding", "--components", components},
 		{"acceptance", "staged-onboarding", "--components", changed, "--json"},
@@ -103,6 +117,7 @@ func TestPackagedExecutableRefusesArgumentsAndChangedComponentsWithOneSafeCode(t
 		{"acceptance", "staged-onboarding", "--components", wrongBuildPath, "--json"},
 		{"acceptance", "staged-onboarding", "--components", wrongArchitecturePath, "--json"},
 		{"acceptance", "staged-onboarding", "--components", badCorePath, "--json"},
+		{"acceptance", "staged-onboarding", "--components", changedValidPath, "--json"},
 		{"acceptance", "staged-onboarding", "--components", components, "--json", "extra"},
 	} {
 		command := exec.Command(binary, arguments...)
@@ -129,6 +144,19 @@ func packagedQualificationFixture(t *testing.T) (string, string, softwarelifecyc
 	if err != nil {
 		t.Fatal(err)
 	}
+	payloadDigest := sha256.Sum256(body)
+	metadata.Build.PayloadSHA256 = hex.EncodeToString(payloadDigest[:])
+	files := packageQualificationComponentFiles()
+	manifest, err := softwarelifecycle.NewBoundComponentManifest(architecture, metadata.Build, "5.4.0", files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive, err := softwarelifecycle.BuildComponentArchive(manifest, files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(archive)
+	metadata.ComponentsSHA256 = hex.EncodeToString(digest[:])
 	stamped, err := softwarelifecycle.StampPayload(body, metadata)
 	if err != nil || os.WriteFile(binary, stamped, 0o700) != nil {
 		t.Fatal(err)
@@ -142,20 +170,10 @@ func packagedQualificationFixture(t *testing.T) (string, string, softwarelifecyc
 	if err != nil || closeErr != nil {
 		t.Fatal(err)
 	}
-	files := packageQualificationComponentFiles()
-	manifest, err := softwarelifecycle.NewBoundComponentManifest(architecture, metadata.Build, "5.4.0", files)
-	if err != nil {
-		t.Fatal(err)
-	}
-	archive, err := softwarelifecycle.BuildComponentArchive(manifest, files)
-	if err != nil {
-		t.Fatal(err)
-	}
 	components := filepath.Join(t.TempDir(), "sbxr-components-linux-"+runtime.GOARCH+".tar.gz")
 	if err := os.WriteFile(components, archive, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	digest := sha256.Sum256(archive)
 	return binary, components, metadata, manifest, hex.EncodeToString(digest[:])
 }
 

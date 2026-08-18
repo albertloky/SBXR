@@ -55,6 +55,48 @@ func qualifyControlledCloudflareProfileSetupFailure(ctx context.Context, root st
 	if wantJournal == errors.Is(journalErr, os.ErrNotExist) {
 		return errors.New("controlled setup journal state disagrees")
 	}
+	if wantJournal && options.scanSurface != nil {
+		journalRoot := filepath.Join(root, "var/lib/sbxr/transactions/cloudflare-profile-setup-0002")
+		if err := filepath.Walk(journalRoot, func(path string, info os.FileInfo, walkErr error) error {
+			if walkErr != nil || info.IsDir() {
+				return walkErr
+			}
+			body, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			return options.scanSurface("journal", body)
+		}); err != nil {
+			return err
+		}
+		stateModule := statefilesystem.NewAt(root)
+		recoveryLoaded, err := stateModule.Load(load)
+		if err != nil || recoveryLoaded.Snapshot == nil {
+			return errors.New("controlled recovery State unavailable")
+		}
+		_, stateSHA, _, _, valid := stateModule.SystemChangesLineageInspection(recoveryLoaded).SystemChangesStateLineageFacts()
+		if !valid {
+			return errors.New("controlled recovery lineage unavailable")
+		}
+		base := systemchanges.Observation{Status: systemchanges.Managed, StateRevision: 1, StateSHA256: stateSHA, LastChangeSet: string(recoveryLoaded.Snapshot.LastCompletedChangeSet), Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, VolatileSHA256: strings.Repeat("9", 64), WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}
+		observed, err := systemubuntu.RecoveryHealthObservation(root, func() (systemchanges.Observation, error) { return base, nil })
+		if err != nil {
+			return err
+		}
+		recoveryAdapter, err := systemubuntu.NewControlledManagedProviderAdapter(root, observed, stateModule, func(systemchanges.Step, string, time.Duration) (systemchanges.StepEvidence, error) {
+			return systemchanges.StepEvidence{}, errors.New("controlled recovery provider refusal")
+		})
+		if err != nil {
+			return err
+		}
+		recovery := systemchanges.New(recoveryAdapter)
+		if err := options.scanSurface("inspect", []byte(fmt.Sprintf("%+v", recovery.Inspect()))); err != nil {
+			return err
+		}
+		if err := options.scanSurface("recovery", []byte(fmt.Sprintf("%+v", recovery.Recover()))); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

@@ -15,9 +15,12 @@ func TestPackageQualificationEvidenceIsStrictOrderedAndIdentityBound(t *testing.
 		t.Fatal(err)
 	}
 	digest := sha256.Sum256([]byte("components"))
-	document, err := BuildPackageQualificationEvidence(build, AMD64, component, hex.EncodeToString(digest[:]))
+	document, err := BuildPackageQualificationEvidence(build, AMD64, component, hex.EncodeToString(digest[:]), PackageQualificationProcedureCodes)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if _, err := BuildPackageQualificationEvidence(build, AMD64, component, hex.EncodeToString(digest[:]), PackageQualificationProcedureCodes[:6]); err == nil {
+		t.Fatal("incomplete package qualification procedures accepted")
 	}
 	if err := ValidatePackageQualificationEvidence(document, build, AMD64, component, hex.EncodeToString(digest[:])); err != nil {
 		t.Fatal(err)

@@ -1,6 +1,9 @@
 package main
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -9,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 
 	"github.com/albertloky/SBXR/internal/installation"
 	"github.com/albertloky/SBXR/internal/ownerconsole"
@@ -32,11 +36,11 @@ func runPackageQualification(ctx context.Context, arguments []string, output io.
 		return err
 	}
 	manifest, err := softwarelifecycle.ValidateComponentArchive(componentArchive, metadata.Architecture)
-	if err != nil || manifest.Build != metadata.Build {
-		return errors.New("package qualification components refused")
-	}
 	componentDigest := sha256.Sum256(componentArchive)
 	componentSHA256 := hex.EncodeToString(componentDigest[:])
+	if err != nil || manifest.Build != metadata.Build || metadata.ComponentsSHA256 == "" || componentSHA256 != metadata.ComponentsSHA256 {
+		return errors.New("package qualification components refused")
+	}
 	return executePackageQualification(ctx, metadata, componentArchive, manifest, componentSHA256, output)
 }
 
@@ -45,7 +49,11 @@ func executePackageQualification(ctx context.Context, metadata softwarelifecycle
 	if err != nil {
 		return errors.New("package qualification unavailable")
 	}
-	defer func() { resultErr = errors.Join(resultErr, os.RemoveAll(root)) }()
+	defer func() {
+		if root != "" {
+			resultErr = errors.Join(resultErr, os.RemoveAll(root))
+		}
+	}()
 	if os.Chmod(root, 0o700) != nil {
 		return errors.New("package qualification unavailable")
 	}
@@ -63,6 +71,7 @@ func executePackageQualification(ctx context.Context, metadata softwarelifecycle
 	if err != nil {
 		return err
 	}
+	completed := []string{softwarelifecycle.PackageQualificationProcedureCodes[0]}
 	controlledCopies := map[string]string{}
 	for _, name := range []string{"setup-rollback", "setup-recovery-required", "setup-restart"} {
 		copyRoot := filepath.Join(root, name)
@@ -78,9 +87,13 @@ func executePackageQualification(ctx context.Context, metadata softwarelifecycle
 	}}); err != nil {
 		return err
 	}
+	completed = append(completed, softwarelifecycle.PackageQualificationProcedureCodes[1:3]...)
 	installRestartRoot := filepath.Join(root, "install-restart")
-	if os.Mkdir(installRestartRoot, 0o700) != nil || installation.QualifyControlledInstallationRestart(ctx, installRestartRoot) != nil {
-		return errors.New("package qualification Installation restart refused")
+	if os.Mkdir(installRestartRoot, 0o700) != nil {
+		return errors.New("package qualification Installation restart unavailable")
+	}
+	if err := installation.QualifyControlledInstallationRestart(ctx, installRestartRoot); err != nil {
+		return errors.New("package qualification Installation restart refused: " + err.Error())
 	}
 	for _, boundary := range []struct {
 		name        string
@@ -88,7 +101,10 @@ func executePackageQualification(ctx context.Context, metadata softwarelifecycle
 		wantJournal bool
 	}{
 		{name: "setup-rollback", options: controlledSetupOptions{confirm: false}},
-		{name: "setup-recovery-required", options: controlledSetupOptions{confirm: true, failAction: systemchanges.CloudflareDNSCreate}, wantJournal: true},
+		{name: "setup-recovery-required", options: controlledSetupOptions{confirm: true, failAction: systemchanges.CloudflareDNSCreate, scanSurface: func(name string, body []byte) error {
+			surfaces[name] = append(surfaces[name], body...)
+			return nil
+		}}, wantJournal: true},
 	} {
 		boundaryRoot := controlledCopies[boundary.name]
 		if err := qualifyControlledCloudflareProfileSetupFailure(ctx, boundaryRoot, load, boundary.options, boundary.wantJournal); err != nil {
@@ -99,9 +115,26 @@ func executePackageQualification(ctx context.Context, metadata softwarelifecycle
 	if qualifyControlledCloudflareProfileSetupRestart(ctx, restartRoot, load) != nil {
 		return errors.New("package qualification setup restart refused")
 	}
-	if err := softwarelifecycle.QualifyControlledStagedOnboardingSurfaces(surfaces, []string{"transaction", "diagnostic", "http", "apply"}); err != nil {
+	componentSurface, err := decompressedPackageQualificationComponentSurface(componentArchive)
+	if err != nil {
 		return err
 	}
+	surfaces["decompressed-component"] = componentSurface
+	requiredSurfaces := []string{"transaction", "diagnostic", "http", "apply", "typed-error", "journal", "inspect", "recovery", "decompressed-component"}
+	for _, name := range requiredSurfaces {
+		if len(surfaces[name]) == 0 {
+			return errors.New("package qualification surface unavailable: " + name)
+		}
+	}
+	scanNames := make([]string, 0, len(surfaces))
+	for name := range surfaces {
+		scanNames = append(scanNames, name)
+	}
+	sort.Strings(scanNames)
+	if err := softwarelifecycle.QualifyControlledStagedOnboardingSurfaces(surfaces, scanNames); err != nil {
+		return err
+	}
+	completed = append(completed, softwarelifecycle.PackageQualificationProcedureCodes[3:5]...)
 	markers := softwarelifecycle.ControlledStagedOnboardingSecretMarkers()
 	markerText := make([]string, len(markers))
 	for index, marker := range markers {
@@ -110,15 +143,57 @@ func executePackageQualification(ctx context.Context, metadata softwarelifecycle
 	if err := ownerconsole.QualifyControlledStagedOnboardingTerminalSecretSafe(ctx, markerText); err != nil {
 		return err
 	}
+	completed = append(completed, softwarelifecycle.PackageQualificationProcedureCodes[5])
 	if err := ownerconsole.QualifyControlledStagedOnboardingGuideText(ctx); err != nil {
 		return err
 	}
-	evidence, err := softwarelifecycle.BuildPackageQualificationEvidence(metadata.Build, metadata.Architecture, manifest, componentSHA256)
+	completed = append(completed, softwarelifecycle.PackageQualificationProcedureCodes[6])
+	evidence, err := softwarelifecycle.BuildPackageQualificationEvidence(metadata.Build, metadata.Architecture, manifest, componentSHA256, completed)
 	if err != nil || softwarelifecycle.ValidatePackageQualificationEvidence(evidence, metadata.Build, metadata.Architecture, manifest, componentSHA256) != nil {
 		return errors.New("package qualification evidence refused")
 	}
-	_, err = output.Write(evidence)
-	return err
+	surfaces["evidence"] = evidence
+	scanNames = append(scanNames, "evidence")
+	sort.Strings(scanNames)
+	if err := softwarelifecycle.QualifyControlledStagedOnboardingSurfaces(surfaces, scanNames); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(root); err != nil {
+		return errors.New("package qualification cleanup refused")
+	}
+	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+		return errors.New("package qualification cleanup refused")
+	}
+	root = ""
+	written, err := output.Write(evidence)
+	if err != nil || written != len(evidence) {
+		return errors.New("package qualification output unavailable")
+	}
+	return nil
+}
+
+func decompressedPackageQualificationComponentSurface(body []byte) ([]byte, error) {
+	compressed, err := gzip.NewReader(bytes.NewReader(body))
+	if err != nil {
+		return nil, errors.New("package qualification component surface unavailable")
+	}
+	defer compressed.Close()
+	archive := tar.NewReader(compressed)
+	var surface bytes.Buffer
+	for {
+		header, err := archive.Next()
+		if err == io.EOF {
+			return surface.Bytes(), nil
+		}
+		if err != nil || surface.Len()+int(header.Size) > softwarelifecycle.MaxAssetBytes {
+			return nil, errors.New("package qualification component surface unavailable")
+		}
+		surface.WriteString(header.Name)
+		surface.WriteByte('\n')
+		if _, err := io.Copy(&surface, archive); err != nil {
+			return nil, errors.New("package qualification component surface unavailable")
+		}
+	}
 }
 
 func copyPackageQualificationRoot(source, target string) error {

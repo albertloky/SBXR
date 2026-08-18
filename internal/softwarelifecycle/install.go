@@ -79,7 +79,7 @@ func (candidate InstallCandidate) QualifiedComponent(name string) ([]byte, strin
 	if !validInstallCandidate(candidate) {
 		return nil, "", false
 	}
-	return qualifiedComponent(candidate.cell.components, candidate.cell.staged.Architecture, name)
+	return QualificationComponent(candidate.cell.components, candidate.cell.staged.Architecture, name)
 }
 
 // ManagedUnit returns one fixed unit rendered from the authenticated candidate

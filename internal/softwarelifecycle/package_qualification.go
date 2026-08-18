@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"slices"
 )
 
 const MaxPackageQualificationEvidenceBytes = 64 << 10
@@ -42,7 +43,10 @@ type PackageQualificationEvidence struct {
 	Procedures   []PackageQualificationProcedure `json:"procedures"`
 }
 
-func BuildPackageQualificationEvidence(build EmbeddedBuildIdentity, architecture Architecture, manifest ComponentManifest, archiveSHA256 string) ([]byte, error) {
+func BuildPackageQualificationEvidence(build EmbeddedBuildIdentity, architecture Architecture, manifest ComponentManifest, archiveSHA256 string, completed []string) ([]byte, error) {
+	if !slices.Equal(completed, PackageQualificationProcedureCodes) {
+		return nil, errors.New("package qualification procedures refused")
+	}
 	report, err := packageQualificationReport(build, architecture, manifest, archiveSHA256)
 	if err != nil {
 		return nil, err

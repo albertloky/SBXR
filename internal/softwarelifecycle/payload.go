@@ -56,6 +56,7 @@ type PayloadMetadata struct {
 	Schema               int                   `json:"schema"`
 	Build                EmbeddedBuildIdentity `json:"build"`
 	Architecture         Architecture          `json:"architecture"`
+	ComponentsSHA256     string                `json:"components_sha256,omitempty"`
 	StateSchema          uint64                `json:"state_schema"`
 	MinimumUpdaterSchema uint64                `json:"minimum_updater_schema"`
 	Schemas              map[string][]byte     `json:"schemas"`
@@ -225,6 +226,9 @@ func ReadPayloadMetadata(input io.ReaderAt, size int64) (PayloadMetadata, []byte
 
 func validPayloadMetadata(value PayloadMetadata) bool {
 	if value.Schema != payloadMetadataSchema || value.Build.Repository != Repository || !safeTag(value.Build.Tag) || !commitPattern.MatchString(value.Build.Commit) || !hashPattern.MatchString(value.Build.PayloadSHA256) || value.Architecture != AMD64 && value.Architecture != ARM64 || value.StateSchema == 0 || value.StateSchema > 2 || value.MinimumUpdaterSchema != 1 || !reflect.DeepEqual(value.Baselines, QualifiedComponentBaselines()) || !reflect.DeepEqual(value.Paths, QualifiedPaths()) {
+		return false
+	}
+	if value.ComponentsSHA256 != "" && !hashPattern.MatchString(value.ComponentsSHA256) {
 		return false
 	}
 	if !validEmbeddedStateMaterial(value) {
