@@ -172,6 +172,7 @@ func (transaction *TransactionMaterial) SystemChangesFinalizeCloudflare(lease an
 	transaction.preparedChecksum = hex.EncodeToString(preparedDigest[:])
 	transaction.preparedState = preparedState
 	transaction.serviceCopies = copies
+	transaction.forwardRecovery = true
 	transaction.deferred = nil
 	return transaction.SystemChangesBindings(lease)
 }

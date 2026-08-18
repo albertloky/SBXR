@@ -1988,6 +1988,11 @@ func (a Adapter) Execute(lease systemchanges.ExecutionLease, changeSet string, n
 		}
 		name := fmt.Sprintf("snapshot/step-%03d.rollback", number)
 		if _, err := a.recoveryArtifact(lease, changeSet, name); err != nil {
+			if forwardOnly, ok := a.firewall.(interface {
+				ExecuteForwardOnly(systemchanges.Step, time.Duration, *systemchanges.Cancellation) (systemchanges.StepEvidence, error)
+			}); ok {
+				return forwardOnly.ExecuteForwardOnly(step, timeout, cancellation)
+			}
 			return systemchanges.StepEvidence{}, err
 		}
 		agreement, agreementErr := a.sshPreservationAgreement(lease, changeSet)

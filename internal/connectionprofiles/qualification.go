@@ -2,9 +2,14 @@ package connectionprofiles
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdh"
 	"encoding/base64"
 	"errors"
+	"fmt"
+	"io"
+	"strings"
+	"time"
 
 	"github.com/albertloky/SBXR/internal/state"
 )
@@ -13,6 +18,127 @@ type QualificationFixture struct {
 	xray, singBox []byte
 	source        PublicationSource
 	access        map[state.ClientAccessValue]string
+}
+
+// ControlledCloudflareProfileSetupModule uses no native process or network.
+func ControlledCloudflareProfileSetupModule() Interface { return New(controlledProfileSetupHost{}) }
+
+type controlledProfileSetupHost struct{}
+
+func (controlledProfileSetupHost) ValidateReality(context.Context, string, io.Reader) error {
+	return nil
+}
+func (controlledProfileSetupHost) ValidateSingBox(context.Context, string, io.Reader) error {
+	return nil
+}
+func (controlledProfileSetupHost) ObserveReality(context.Context, RealityTarget) RealityObservation {
+	return RealityObservation{CheckedAt: time.Now(), Probe: ProbePassed, Class: OrdinaryTarget, AcceptedNames: []string{"www.microsoft.com"}, RouteVerified: true, ServiceInstalled: true, ServiceUnit: "xray.service", ServiceIdentity: "root", ServiceRunning: true, ServiceContained: true, ConfigurationSafe: true, Listener: Listener{Address: "0.0.0.0", Port: 443, Protocol: "tcp"}, NetBindService: true, ProviderNetwork: true}
+}
+func (controlledProfileSetupHost) ObserveXHTTP(context.Context, uint16) XHTTPObservation {
+	return XHTTPObservation{CheckedAt: time.Now(), ConfigurationSafe: true, ConfigurationValid: true, ServiceUnit: "xray.service", ServiceIdentity: "root", ServiceRunning: true, ServiceContained: true, Listener: Listener{Address: "127.0.0.1", Port: 11080, Protocol: "tcp"}}
+}
+func (controlledProfileSetupHost) ObserveWebSocket(context.Context, uint16, string, string) WebSocketObservation {
+	return WebSocketObservation{CheckedAt: time.Now(), ConfigurationSafe: true, ConfigurationValid: true, ServiceUnit: "xray.service", ServiceIdentity: "root", ServiceRunning: true, ServiceContained: true, Listener: Listener{Address: "127.0.0.1", Port: 11081, Protocol: "tcp"}, HostMatches: true, PathMatches: true}
+}
+func controlledSingBoxObservation(port uint16, protocol string) Hysteria2Observation {
+	return Hysteria2Observation{CheckedAt: time.Now(), ConfigurationSafe: true, ConfigurationValid: true, ConfigurationMatches: true, ServiceUnit: "sing-box.service", ServiceIdentity: "root", ServiceRunning: true, ServiceContained: true, Listener: Listener{Address: "0.0.0.0", Port: port, Protocol: protocol}, NetBindService: true, ServerFunction: ProbePassed}
+}
+func (controlledProfileSetupHost) ObserveHysteria2(context.Context, Hysteria2ViewRequest) Hysteria2Observation {
+	return controlledSingBoxObservation(443, "udp")
+}
+func (controlledProfileSetupHost) ObserveTUIC(context.Context, Hysteria2ViewRequest, TUICViewRequest) TUICObservation {
+	return controlledSingBoxObservation(8443, "udp")
+}
+func (controlledProfileSetupHost) ObserveAnyTLS(context.Context, Hysteria2ViewRequest, TUICViewRequest, AnyTLSViewRequest) AnyTLSObservation {
+	return controlledSingBoxObservation(9443, "tcp")
+}
+func (controlledProfileSetupHost) ObserveCoreCapabilities(context.Context) CoreCapabilityObservation {
+	return CoreCapabilityObservation{CheckedAt: time.Now()}
+}
+func (controlledProfileSetupHost) ObserveDeferredRegistry(context.Context) DeferredRegistryObservation {
+	return DeferredRegistryObservation{CheckedAt: time.Now(), XrayRealityOnly: true, SingBoxConfigurationAbsent: true, SingBoxServiceDisabled: true, SingBoxServiceInactive: true}
+}
+
+// ControlledCloudflareProfileSetup builds the complete later registry from one
+// exact Managed revision-1 State lease.
+func ControlledCloudflareProfileSetup(snapshot state.Snapshot, secrets state.ConnectionProfileSecretReader, exposure RegistryExposureAuthority) (RegistryViewRequest, RegistryViewRequest, QualificationFixture, error) {
+	profiles := snapshot.DesiredState.ConnectionProfiles
+	software := snapshot.DesiredState.Software
+	singBoxVersion := strings.TrimPrefix(software.SingBoxVersion, "v")
+	network := snapshot.DesiredState.NetworkPolicy
+	if snapshot.Revision != 1 || profiles.VLESSRealityVision.Lifecycle != state.ProfileEnabled || secrets == nil {
+		return RegistryViewRequest{}, RegistryViewRequest{}, QualificationFixture{}, errors.New("controlled revision 1 registry unavailable")
+	}
+	reality, err := NewRealityCredentials(secrets.ReadClientAccessValue(profiles.VLESSRealityVision.UUID), secrets.ReadInfrastructureSecret(profiles.VLESSRealityVision.PrivateKey), profiles.VLESSRealityVision.PublicKey, secrets.ReadClientAccessValue(profiles.VLESSRealityVision.ShortID))
+	if err != nil {
+		return RegistryViewRequest{}, RegistryViewRequest{}, QualificationFixture{}, err
+	}
+	current, err := NewRevisionOneRegistry(RegistryViewRequest{ClientAddress: network.PrimarySubscriptionAddress, Reality: ViewRequest{Revision: 1, Port: profiles.VLESSRealityVision.Port, Target: RealityTarget{Address: profiles.VLESSRealityVision.Target, ServerName: profiles.VLESSRealityVision.ServerName}, Fingerprint: profiles.VLESSRealityVision.Fingerprint, XrayVersion: software.XrayVersion}}, reality)
+	if err != nil {
+		return RegistryViewRequest{}, RegistryViewRequest{}, QualificationFixture{}, err
+	}
+	deferred, err := controlledDeferredCredentials()
+	if err != nil {
+		return RegistryViewRequest{}, RegistryViewRequest{}, QualificationFixture{}, err
+	}
+	direct := NewDirectTLSContribution(DirectTLSRequest{Revision: 2, DestinationIP: network.PublicIPv4, Hostname: "direct.example.com", Hysteria2: DirectTLSConsumer{Port: 443, CertificatePointer: "/var/lib/sbxr/certificates/domain/current"}, TUIC: DirectTLSConsumer{Port: 8443, CertificatePointer: "/var/lib/sbxr/certificates/domain/current"}, AnyTLS: DirectTLSConsumer{Port: 9443, CertificatePointer: "/var/lib/sbxr/certificates/domain/current"}})
+	candidate := current
+	candidate.Reality.Revision = 2
+	candidate.XHTTP = XHTTPViewRequest{Revision: 2, Hostname: "xhttp.example.com", OriginAddress: "127.0.0.1", OriginPort: 11080, Mode: state.XHTTPPacketUp, XrayVersion: software.XrayVersion}
+	candidate.WebSocket = WebSocketViewRequest{Revision: 2, Hostname: "ws.example.com", TLSName: "ws.example.com", HTTPHost: "ws.example.com", OriginAddress: "127.0.0.1", OriginPort: 11081, XrayVersion: software.XrayVersion}
+	candidate.Hysteria2 = Hysteria2ViewRequest{Revision: 2, DestinationIP: network.PublicIPv4, Port: 443, ServerName: "direct.example.com", CertificateID: "sbxr-domain", MasqueradeResponse: "Not Found\n", CertificatePointer: "/var/lib/sbxr/certificates/domain/current", SingBoxVersion: singBoxVersion, DirectTLS: direct}
+	candidate.TUIC = TUICViewRequest{Revision: 2, DestinationIP: network.PublicIPv4, Port: 8443, ServerName: "direct.example.com", CertificateID: "sbxr-domain", CertificatePointer: "/var/lib/sbxr/certificates/domain/current", SingBoxVersion: singBoxVersion, CongestionControl: state.CongestionCubic, DirectTLS: direct}
+	candidate.AnyTLS = AnyTLSViewRequest{Revision: 2, DestinationIP: network.PublicIPv4, Port: 9443, ServerName: "direct.example.com", CertificateID: "sbxr-domain", CertificatePointer: "/var/lib/sbxr/certificates/domain/current", MinimumSingBoxVersion: "1.12.0", SingBoxVersion: singBoxVersion, UseCorePadding: true, DirectTLS: direct}
+	candidate, err = NewDeferredRegistry(candidate, deferred)
+	if err != nil {
+		return RegistryViewRequest{}, RegistryViewRequest{}, QualificationFixture{}, err
+	}
+	candidate.Exposure = exposure
+	desired, ok := DesiredProfiles(candidate)
+	if !ok {
+		return RegistryViewRequest{}, RegistryViewRequest{}, QualificationFixture{}, fmt.Errorf("controlled setup registry invalid: %+v", validateRegistryCandidate(candidate))
+	}
+	xray, singBox, _ := registryConfigurations(candidate)
+	access := map[state.ClientAccessValue]string{}
+	for _, value := range []state.ClientAccessValue{desired.VLESSRealityVision.UUID, desired.VLESSRealityVision.ShortID, desired.VLESSXHTTP.UUID, desired.VLESSXHTTP.Path, desired.VLESSWebSocket.UUID, desired.VLESSWebSocket.Path, desired.Hysteria2.Password, desired.Hysteria2.ObfuscationSecret, desired.TUIC.UUID, desired.TUIC.Password, desired.AnyTLS.Password} {
+		if secrets.ReadClientAccessValue(value) != "" {
+			continue
+		}
+		if raw := secretForCandidate(value, candidate, nil); raw != "" {
+			access[value] = raw
+		}
+	}
+	source, err := PublicationSourceFor(network.PrimarySubscriptionAddress, desired)
+	if err != nil {
+		return RegistryViewRequest{}, RegistryViewRequest{}, QualificationFixture{}, err
+	}
+	return current, candidate, QualificationFixture{xray: xray, singBox: singBox, source: source, access: access}, nil
+}
+
+func controlledDeferredCredentials() (DeferredRegistryCredentials, error) {
+	xhttp, e1 := NewXHTTPCredentials("22222222-2222-4222-8222-222222222222", "/2222222222222222222222222222222222222222222222222222222222222222")
+	websocket, e2 := NewWebSocketCredentials("33333333-3333-4333-8333-333333333333", "/3333333333333333333333333333333333333333333333333333333333333333")
+	hysteria2, e3 := NewHysteria2Credentials("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	tuic, e4 := NewTUICCredentials("55555555-5555-4555-8555-555555555555", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	anyTLS, e5 := NewAnyTLSCredentials("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	if err := errors.Join(e1, e2, e3, e4, e5); err != nil {
+		return DeferredRegistryCredentials{}, err
+	}
+	return DeferredRegistryCredentials{XHTTP: xhttp, WebSocket: websocket, Hysteria2: hysteria2, TUIC: tuic, AnyTLS: anyTLS}, nil
+}
+
+func secretForCandidate(value state.ClientAccessValue, candidate RegistryViewRequest, current state.ConnectionProfileSecretReader) string {
+	if current != nil {
+		if raw := current.ReadClientAccessValue(value); raw != "" {
+			return raw
+		}
+	}
+	for _, raw := range []string{candidate.XHTTP.Credentials.uuid.value, candidate.XHTTP.Credentials.path.value, candidate.WebSocket.Credentials.uuid.value, candidate.WebSocket.Credentials.path.value, candidate.Hysteria2.Credentials.password.value, candidate.Hysteria2.Credentials.obfuscationSecret.value, candidate.TUIC.Credentials.uuid.value, candidate.TUIC.Credentials.password.value, candidate.AnyTLS.Credentials.password.value} {
+		if state.NewClientAccessValue(raw) == value {
+			return raw
+		}
+	}
+	return ""
 }
 
 func (QualificationFixture) String() string {

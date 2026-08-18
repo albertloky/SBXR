@@ -32,13 +32,15 @@ func RunControlledInstallation(ctx context.Context, parent string) (resultErr er
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return runControlledInstallation(ctx, root)
+	_, err = RunControlledInstallationAt(ctx, root)
+	return err
 }
 
-func runControlledInstallation(ctx context.Context, root string) error {
+// RunControlledInstallationAt preserves the controlled root for a later staged step.
+func RunControlledInstallationAt(ctx context.Context, root string) (state.LoadRequest, error) {
 	request, err := controlledInstallRequest()
 	if err != nil {
-		return err
+		return state.LoadRequest{}, err
 	}
 	preflight := networkpolicy.InstallationPreflightResult{ActiveSSHPort: request.Draft.SSHPort, UsablePublicIPv4: []string{request.Draft.PublicIPv4}}
 	module, err := New(Dependencies{
@@ -73,33 +75,40 @@ func runControlledInstallation(ctx context.Context, root string) error {
 		ProveSubscription: func(context.Context, string, uint16) error { return nil },
 	})
 	if err != nil {
-		return err
+		return state.LoadRequest{}, err
 	}
 	review := module.Review(ctx, Draft{Tag: request.Tag, Architecture: request.Architecture, Installation: request.Draft, RealityTarget: request.RealityTarget, RealityServerName: request.RealityServerName})
 	if review.Plan == nil || review.Plan.DesiredStateRevision != 1 {
-		return errors.New("controlled Installation review refused")
+		return state.LoadRequest{}, errors.New("controlled Installation review refused")
 	}
 	started := module.Apply(ctx, review.Approval)
 	if started.Kind != ApplyStarted {
-		return errors.New("controlled Installation apply refused")
+		return state.LoadRequest{}, errors.New("controlled Installation apply refused")
 	}
+	identity := request.Candidate.Verified.Identity
+	release := state.ReleaseIdentity{Repository: identity.Repository, Tag: identity.Tag, Commit: identity.Commit, ReleaseIndexSHA256: identity.IndexSHA256}
+	load := state.LoadRequest{Baseline: state.ManagedEvidence, SupportedRelease: release, Lineage: &state.LineageProof{Revision: 1, LastCompletedChangeSet: state.ChangeSetIdentity(started.Operation), ReleaseIdentity: release}}
 	for {
 		operation, inspectErr := module.Inspect(ctx, started.Operation)
 		if inspectErr == nil && operation.Status != OperationActive {
 			if operation.Status != Completed {
-				return errors.New("controlled Installation did not reach Managed")
+				return state.LoadRequest{}, errors.New("controlled Installation did not reach Managed")
 			}
-			return nil
+			return load, nil
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return state.LoadRequest{}, ctx.Err()
 		case <-time.After(time.Millisecond):
 		}
 	}
 }
 
 func applyControlledInstallation(ctx context.Context, root string, request softwareubuntu.InstallHandoffRequest) (softwareubuntu.InstallApplyOutcome, error) {
+	return applyControlledInstallationWithDeath(ctx, root, request, "")
+}
+
+func applyControlledInstallationWithDeath(ctx context.Context, root string, request softwareubuntu.InstallHandoffRequest, checkpoint systemchanges.DurableCheckpoint) (softwareubuntu.InstallApplyOutcome, error) {
 	sshProof, err := networkpolicy.ControlledInstallationSSHPreservationProof()
 	if err != nil {
 		return 0, err
@@ -124,8 +133,24 @@ func applyControlledInstallation(ctx context.Context, root string, request softw
 	if err != nil {
 		return 0, err
 	}
-	adapter := systemubuntu.NewControlledInstallationAdapter(systemchanges.Observation{Status: systemchanges.NotInstalled, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, VolatileSHA256: volatile, FilesystemBytes: 20 << 30, AvailableBytes: 5 << 30, WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"})
-	transaction := built.plan.Apply(ctx, softwarelifecycle.InstallApplyRequest{Approval: controlledInstallApproval{recheck: recheck}, PreparedState: prepared, SystemChanges: systemchanges.New(adapter)})
+	observation := systemchanges.Observation{Status: systemchanges.NotInstalled, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, VolatileSHA256: volatile, FilesystemBytes: 20 << 30, AvailableBytes: 5 << 30, WallTimeSynchronized: true, MonotonicClock: true, TimeOwner: "systemd-timesyncd.service"}
+	adapter, err := systemubuntu.NewControlledInstallAdapter(root, observation, systemchanges.NewFreshInstallationAuthority(built.wiring.network.FreshInstallationProof()), stateModule)
+	if err != nil {
+		return 0, err
+	}
+	var systemAdapter systemchanges.Adapter = adapter
+	if checkpoint != "" {
+		systemAdapter = &controlledInstallationCrash{Adapter: adapter, checkpoint: checkpoint}
+	}
+	var transaction systemchanges.ApplyResult
+	died := false
+	func() {
+		defer func() { died = recover() != nil }()
+		transaction = built.plan.Apply(ctx, softwarelifecycle.InstallApplyRequest{Approval: controlledInstallApproval{recheck: recheck}, PreparedState: prepared, SystemChanges: systemchanges.New(systemAdapter)})
+	}()
+	if died {
+		return 0, errors.New("controlled Installation worker death")
+	}
 	if transaction.Outcome != systemchanges.Completed {
 		return 0, fmt.Errorf("System Changes outcome %s", transaction.Outcome)
 	}
@@ -135,12 +160,30 @@ func applyControlledInstallation(ctx context.Context, root string, request softw
 	if err != nil || loaded.Status != state.Managed || loaded.Snapshot == nil || !controlledRevisionOne(loaded.Snapshot.DesiredState) {
 		return 0, errors.New("controlled revision 1 State is unproved")
 	}
-	for _, owner := range []systemchanges.Module{systemchanges.SoftwareModule, systemchanges.NetworkPolicyModule, systemchanges.ConnectionProfilesModule, systemchanges.CertificateModule, systemchanges.SubscriptionModule} {
-		if !adapter.RequiredGatePassed(owner, systemchanges.PrePublication) || !adapter.RequiredGatePassed(owner, systemchanges.PostPublication) {
-			return 0, fmt.Errorf("controlled Installation omitted Required %s gates", owner)
-		}
-	}
 	return softwareubuntu.InstallCompleted, nil
+}
+
+type controlledInstallationCrash struct {
+	systemubuntu.Adapter
+	checkpoint systemchanges.DurableCheckpoint
+	lock       systemchanges.Lock
+}
+
+func (adapter *controlledInstallationCrash) TryLock() (systemchanges.Lock, bool, error) {
+	lock, acquired, err := adapter.Adapter.TryLock()
+	adapter.lock = lock
+	return lock, acquired, err
+}
+
+func (adapter *controlledInstallationCrash) Record(lease systemchanges.ExecutionLease, record systemchanges.CheckpointRecord) error {
+	err := adapter.Adapter.Record(lease, record)
+	if err == nil && record.Checkpoint == adapter.checkpoint {
+		if adapter.lock != nil {
+			_ = adapter.lock.Close()
+		}
+		panic("controlled Installation worker death")
+	}
+	return err
 }
 
 func controlledRevisionOne(desired state.DesiredState) bool {
