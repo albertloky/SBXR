@@ -50,8 +50,9 @@ jobs:
           mkdir -m 0700 retained-acceptance
           gh run download "$record_run_id" --name "automated-acceptance-record-$RELEASE_TAG" --dir retained-acceptance
           cmp acceptance-record.md retained-acceptance/acceptance-record.md
-          grep -Fx 'Status: Qualified - root-runtime package policy' acceptance-record.md
-          grep -Fx 'No Integrated Ubuntu Verification, live VPS, provider, maintained-client, or Owner evidence was performed.' acceptance-record.md
+          grep -Fx 'Status: Qualified - staged-onboarding package policy' acceptance-record.md
+          grep -Fx 'Stable result code: RELEASE-STAGED-ONBOARDING-PACKAGE-QUALIFICATION' acceptance-record.md
+          grep -Fx 'No live VPS, real Cloudflare, ACME, outside-client, maintained-client, current-documentation, provider mutation, or Owner Acceptance was performed.' acceptance-record.md
           go run ./cmd/sbxr-release verify -tag "$RELEASE_TAG"
       - name: Prove latest and pinned commands select the same exact bootstrap
         run: |
@@ -70,7 +71,7 @@ jobs:
           jq -e --arg tag "$RELEASE_TAG" --arg commit "$commit" '.repository == "albertloky/SBXR" and .tag == $tag and .commit == $commit' dist/release-index.json
           index_sha256="$(sha256sum dist/release-index.json | cut -d ' ' -f 1)"
           grep -Fx "Release index SHA-256: $index_sha256" acceptance-record.md
-          pattern='SECRET-MARKER|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer '
+          pattern='MARKER|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer '
           test -z "$(rg -a -l "$pattern" dist/install.sh dist/release-index.json acceptance-record.md)"
           for archive in dist/sbxr-linux-amd64.tar.gz dist/sbxr-linux-arm64.tar.gz dist/sbxr-components-linux-amd64.tar.gz dist/sbxr-components-linux-arm64.tar.gz; do
             test -z "$(tar -xOzf "$archive" | rg -a -l "$pattern" -)"
@@ -97,3 +98,5 @@ jobs:
             echo 'Owner Acceptance: Not required'
             echo 'Cloudflare/provider evidence: Not performed'
           } >> "$GITHUB_STEP_SUMMARY"
+          pattern='MARKER|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer '
+          test -z "$(rg -a -l "$pattern" "$GITHUB_STEP_SUMMARY")"

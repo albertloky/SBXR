@@ -6,20 +6,24 @@ import (
 	"testing"
 )
 
-func TestCandidateWorkflowPublishesOnlyAQualifiedRootRuntimeAcceptanceRecord(t *testing.T) {
+func TestCandidateWorkflowPublishesOnlyAQualifiedStagedOnboardingAcceptanceRecord(t *testing.T) {
 	body, err := os.ReadFile(".github/workflows/candidate.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	workflow := string(body)
 	for _, required := range []string{
-		"git merge-base --is-ancestor da184b692ba630dc97e8830c0d73785f38d0996a HEAD",
-		"git diff --quiet v1.0.6...HEAD --",
-		"internal/connectionprofiles/registry.go",
-		"internal/subscriptionpublication/render.go",
-		"Integrated Ubuntu Verification: Not required - ADR-0010 root-runtime package and public-seam scope",
-		"Codex Live Acceptance | Not required | ADR-0010 root-runtime package and public-seam scope",
-		"Owner Acceptance | Not required | ADR-0010 root-runtime package and public-seam scope",
+		"git merge-base --is-ancestor b4c2c70 HEAD",
+		"RELEASE-STAGED-INSTALL-REVISION-1",
+		"RELEASE-CLOUDFLARE-PROFILE-SETUP-N-TO-N+1",
+		"RELEASE-STAGED-ONBOARDING-CHAIN",
+		"RELEASE-STAGED-ONBOARDING-SECRET-SCAN",
+		"RELEASE-STAGED-ONBOARDING-CLIENT-OUTPUT",
+		"RELEASE-STAGED-ONBOARDING-TERMINAL",
+		"RELEASE-STAGED-ONBOARDING-GUIDE-TEXT",
+		"Codex Live Acceptance: Not required — staged-onboarding package and controlled-seam qualification scope.",
+		"Owner Acceptance: Not required — staged-onboarding package and controlled-terminal qualification scope.",
+		"Required procedures: RELEASE-STAGED-INSTALL-REVISION-1",
 		"go run ./cmd/sbxr-release acceptance",
 		"-directory dist",
 		"-output acceptance-record.md",
@@ -35,8 +39,8 @@ func TestCandidateWorkflowPublishesOnlyAQualifiedRootRuntimeAcceptanceRecord(t *
 	if strings.Contains(workflow, "gh release upload") {
 		t.Fatal("Acceptance Record became a seventh release asset")
 	}
-	if strings.Contains(workflow, "cmd/sbxr/client_access_outcome.go") {
-		t.Fatal("qualified Client Access changes remained blocked by the root-runtime freeze")
+	if strings.Contains(workflow, "git diff --quiet v1.0.6...HEAD") {
+		t.Fatal("staged Connection Profile and Subscription Publication output remained blocked by the root-runtime freeze")
 	}
 	for _, twice := range []string{
 		"go list ./... | grep -v '/internal/ownerconsole$' | xargs go test -count=1",
@@ -69,7 +73,9 @@ func TestStableWorkflowReverifiesTheExactPublicInstallerBeforeREADMEActivation(t
 		"releases/latest/download/install.sh",
 		"releases/download/$RELEASE_TAG/install.sh",
 		"cmp latest-install.sh pinned-install.sh",
-		"Status: Qualified - root-runtime package policy",
+		"Status: Qualified - staged-onboarding package policy",
+		"Stable result code: RELEASE-STAGED-ONBOARDING-PACKAGE-QUALIFICATION",
+		"No live VPS, real Cloudflare, ACME, outside-client, maintained-client, current-documentation, provider mutation, or Owner Acceptance was performed.",
 		"Release index SHA-256:",
 		"test \"$(jq '.assets | length' release.json)\" = 6",
 		"go test ./cmd/sbxr-release -run '^TestGeneratedBootstrap' -count=1",
@@ -77,7 +83,8 @@ func TestStableWorkflowReverifiesTheExactPublicInstallerBeforeREADMEActivation(t
 		"Integrated Ubuntu Verification: Not required",
 		"test ! -e /usr/local/bin/sbxr",
 		"test ! -e /var/lib/sbxr",
-		"SECRET-MARKER|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer ",
+		"MARKER|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer ",
+		`rg -a -l "$pattern" "$GITHUB_STEP_SUMMARY"`,
 	} {
 		if !strings.Contains(workflow, required) {
 			t.Fatalf("stable workflow omitted %q", required)

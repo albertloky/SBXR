@@ -206,6 +206,69 @@ This procedure has no live or Owner result in this file. Record results only aga
 
 Stable evidence codes are `RELEASE-COMPLETE-REMOVAL`, `RELEASE-REMOVAL-TWO-STEP-CONFIRMATION`, `RELEASE-REMOVAL-PLAN-BINDING`, `RELEASE-REMOVAL-PRE-CHECKPOINT-ROLLBACK`, `RELEASE-REMOVAL-IRREVERSIBLE-STARTED`, `RELEASE-REMOVAL-DNS-DELETED`, `RELEASE-REMOVAL-TUNNEL-DELETED`, `RELEASE-REMOVAL-TOKEN-REVOKED`, `RELEASE-REMOVAL-FORWARD-RESTART`, `RELEASE-REMOVAL-NOT-INSTALLED`, `RELEASE-REMOVAL-RUNNER-LAST`, and `RELEASE-REMOVAL-SECRET-SCAN`.
 
+## `RELEASE-CLOUDFLARE-PROFILE-SETUP-N-TO-N+1` — Integrated Verification — Codex
+
+Through the packaged `sbxr` composition, start from one proven Managed revision `N` with VLESS REALITY Vision Enabled and five profiles `Not set up`. Use only Cloudflare Profile Setup `View`, `Plan`, and `Apply`. Require one fresh contribution from each of Network Policy, Cloudflare Tunnel, Certificate Lifecycle, Connection Profiles, Subscription Publication, State, and System Changes. Reject mismatched lineage, stale or reused authority, partial setup, and caller-made dependency results.
+
+Apply exactly one Change Set. Prepare revision `N+1`, all five profile credentials, `sbxr-domain`, one Tunnel, two routes, DNS records, service artifacts, firewall policy, and publication before provider exposure. Cross `Irreversible Cloudflare setup started` before the first Cloudflare write. Publish revision `N+1` exactly once and last, with all six profiles Enabled. Before the checkpoint, cancellation or failure restores revision `N`. After the checkpoint, recovery continues forward or enters Recovery Required; it never rolls back to revision `N`.
+
+Run:
+
+```sh
+go test ./internal/cloudflareprofilesetup -count=1
+go test ./internal/state -run '^(TestCloudflareProfileSetupCrossesIrreversibleBoundaryBeforeFirstWrite|TestCloudflareProfileSetupCancellationBeforeCheckpointRestoresStartingRevision|TestCloudflareProfileSetupFailureAfterCheckpointNeverRollsBack|TestCloudflareProfileSetupRestartIsReversibleBeforeAndForwardOnlyAfterCheckpoint|TestUbuntuCloudflareProfileSetupDeletesRollbackSnapshotAndRecoversForwardAfterDeath|TestUbuntuCloudflareProfileSetupRestartAfterPublicationDoesNotWriteAgain)$' -count=1
+go test ./internal/networkpolicy ./internal/cloudflaretunnel ./internal/certificatelifecycle ./internal/connectionprofiles ./internal/subscriptionpublication ./internal/state ./internal/systemchanges -count=1
+```
+
+Stable evidence codes are `RELEASE-CLOUDFLARE-PROFILE-SETUP-N-TO-N+1`, `RELEASE-CLOUDFLARE-PROFILE-SETUP-CHECKPOINT`, `RELEASE-CLOUDFLARE-PROFILE-SETUP-PUBLICATION-LAST`, `RELEASE-CLOUDFLARE-PROFILE-SETUP-ROLLBACK`, `RELEASE-CLOUDFLARE-PROFILE-SETUP-FORWARD-RECOVERY`, and `RELEASE-CLOUDFLARE-PROFILE-SETUP-RECOVERY-REQUIRED`.
+
+## `RELEASE-STAGED-ONBOARDING-CHAIN` — Integrated Verification — Codex
+
+Run `RELEASE-STAGED-INSTALL-REVISION-1` and `RELEASE-CLOUDFLARE-PROFILE-SETUP-N-TO-N+1` in order against one exact packaged Release Identity. Prove revision `1` is a complete long-term Managed state before optional setup. Prove one publication per successful Change Set and publication-last order. In both capability states, verify update, downgrade, repair, diagnostics, Access, Live Profile Check skips, and conditional Complete removal. No supported partial Cloudflare setup can appear.
+
+Run all twelve affected Module suites and unchanged Subscription Serving:
+
+```sh
+go test ./internal/installation ./internal/cloudflareprofilesetup ./internal/state ./internal/networkpolicy ./internal/systemchanges/... ./internal/cloudflaretunnel ./internal/certificatelifecycle/... ./internal/connectionprofiles/... ./internal/subscriptionpublication/... ./internal/healthdiagnostics ./internal/softwarelifecycle/... ./internal/ownerconsole ./internal/subscriptionserving -count=1
+go test ./cmd/sbxr -count=1
+```
+
+Stable evidence code is `RELEASE-STAGED-ONBOARDING-CHAIN`.
+
+## `RELEASE-STAGED-ONBOARDING-CLIENT-OUTPUT` — Seam Verification — Codex
+
+Verify the universal route and `/sing-box` at revision `1` and after Cloudflare Profile Setup. Revision `1` publishes only VLESS REALITY Vision. The completed setup publishes every compatible Enabled profile. `/sing-box` keeps the intentional VLESS XHTTP omission and passes the exact sing-box `1.13.16` native check. Refuse placeholders, empty credentials, fake Disabled entries, secret markers, and stale six-profile assumptions.
+
+Run:
+
+```sh
+go test ./internal/subscriptionpublication -run '^(TestRevisionOnePublishesOnlyRealityAndNamesFiveNotSetUpProfiles|TestRevisionOnePlanApplyCompletesAfterAtomicActivationAndStatePublication|TestPinnedSingBoxAcceptsCompleteDocument)$' -count=1
+```
+
+`TestPinnedSingBoxAcceptsCompleteDocument` must run with `SBXR_SING_BOX_BIN` set to the qualified binary and `SBXR_SING_BOX_VERSION=1.13.16`. A skipped native check does not pass this procedure.
+
+Stable evidence code is `RELEASE-STAGED-ONBOARDING-CLIENT-OUTPUT`.
+
+## `RELEASE-STAGED-ONBOARDING-GUIDE-TEXT` — Seam Verification — Codex
+
+Verify the fixed packaged guide names the Dedicated Broad Cloudflare User API Token, User API Tokens Edit, Cloudflare Tunnel Edit, DNS Edit, Zone Read, all-account and all-zone scopes, no expiry, no client-IP restriction, Global API Key refusal, Account API Token refusal, the authority warning, and use restricted to the selected immutable SBXR identifiers. This procedure does not validate current Cloudflare documentation, dashboard labels, paths, or URLs.
+
+Run:
+
+```sh
+go test ./internal/ownerconsole -run '^TestRunCloudflareWalkthroughUsesDedicatedBroadUserTokenPathAndMasksByDefault$' -count=1
+```
+
+Stable evidence code is `RELEASE-STAGED-ONBOARDING-GUIDE-TEXT`.
+
+## `RELEASE-STAGED-ONBOARDING-SECRET-SCAN` — Seam Verification — Codex
+
+Use unique markers for the management token and token IDs, Tunnel run token, profile credentials, subscription token and complete URLs, private keys, setup entropy and approval, raw provider responses, and external errors. Scan presentation, transaction, diagnostic, HTTP, test, acceptance, bootstrap, index, and decompressed archive surfaces. A marker can exist only in its exact protected owning artifact. Any other match fails.
+
+The candidate and stable workflows must scan `install.sh`, `release-index.json`, all four safely streamed archives, the Acceptance Record, and the workflow summary. The focused Module checks must scan typed errors, Plans, journal evidence, terminal output, subscription responses, and recovery results. No raw secret-bearing evidence archive is created.
+
+Stable evidence code is `RELEASE-STAGED-ONBOARDING-SECRET-SCAN`.
+
 ## `RELEASE-IMMUTABLE-CANDIDATE` — Automated Qualification — Codex
 
 This procedure records no result. It mints one acceptance candidate, not a stable, latest, automatically discoverable, live-accepted, Owner-accepted, or qualified release.
@@ -220,17 +283,17 @@ This procedure records no result. It mints one acceptance candidate, not a stabl
 
 Stable evidence codes are `RELEASE-CANDIDATE-SOURCE`, `RELEASE-CANDIDATE-AMD64`, `RELEASE-CANDIDATE-ARM64`, `RELEASE-CANDIDATE-INDEX`, `RELEASE-CANDIDATE-EXACT-SIX-ASSETS`, `RELEASE-CANDIDATE-GITHUB-ATTESTATION`, `RELEASE-CANDIDATE-ASSET-VERIFICATION`, `RELEASE-CANDIDATE-MODULE-VERIFICATION`, `RELEASE-CANDIDATE-SEAM-VERIFICATION`, `RELEASE-CANDIDATE-INTEGRATED-VERIFICATION`, `RELEASE-CANDIDATE-SECRET-SCAN`, and `RELEASE-CANDIDATE-LIVE-PENDING`.
 
-## `RELEASE-ROOT-RUNTIME-PACKAGE-QUALIFICATION` — Release Qualification — Codex
+## `RELEASE-STAGED-ONBOARDING-PACKAGE-QUALIFICATION` — Release Qualification — Codex
 
-This procedure applies only to one exact six-asset root-runtime Release Identity under ADR-0010. It can qualify Owner Console and Client Access control-flow or presentation changes only through the complete package and public-seam tests. It does not qualify changes to the fixed emitted Connection Profile or Subscription Publication payloads.
+This procedure applies only to one exact six-asset staged-onboarding Release Identity. It qualifies the changed Connection Profile, Subscription Publication, Owner Console, and controlled transaction outputs only through the complete package and public-seam tests above.
 
 1. Publish one immutable prerelease with exactly `install.sh`, `release-index.json`, and the four fixed architecture archives. The release event must resolve to one exact 40-character commit.
 2. Verify the public release through `cmd/sbxr-release verify` without GitHub login or a personal token. Require the exact repository, immutable tag, commit, release-index digest, six names, six digests, and six attestations with no extra asset.
-3. Download the six public assets into one private directory. Run the complete package suites at the Pasteable Install Command and owning Module Interfaces, the supported race suite, `go vet ./...`, both native Ubuntu Adapter package seams, hostile fixtures, durable checkpoint death/recovery cases, second-death cases, and simulated reboot cases from the exact release commit.
-4. Compare the exact commit with `v1.0.6` and refuse this qualification policy if the fixed emitted Connection Profile registry or Subscription Publication output files changed. Admit Client Access composition changes only when the complete package and public-seam tests in step 3 pass.
+3. Download the six public assets into one private directory. Run the complete package suites at the Pasteable Install Command and owning Module Interfaces, all twelve affected Module suites, unchanged Subscription Serving, the supported race suite, `go vet ./...`, native amd64 and arm64 runners, native Xray, sing-box `1.13.16`, certificate, HTTP/TLS, nftables, filesystem, systemd, process, restart, controlled Cloudflare fixtures, complete Subscription Publication parsing, the pseudo-terminal seam, hostile fixtures, four representative process-death cases, second-death cases, and simulated reboot cases from the exact release commit.
+4. Require `RELEASE-STAGED-INSTALL-REVISION-1`, `RELEASE-CLOUDFLARE-PROFILE-SETUP-N-TO-N+1`, `RELEASE-STAGED-ONBOARDING-CHAIN`, `RELEASE-STAGED-ONBOARDING-SECRET-SCAN`, `RELEASE-STAGED-ONBOARDING-CLIENT-OUTPUT`, `RELEASE-STAGED-ONBOARDING-TERMINAL`, and `RELEASE-STAGED-ONBOARDING-GUIDE-TEXT` to pass for the exact commit. Do not freeze or compare away the staged Connection Profile or Subscription Publication changes that this policy qualifies.
 5. Scan the exact bootstrap, index, safely streamed archive contents, generated Acceptance Record, and workflow summary for secret markers, private-key blocks, and authorization values.
 6. Run `go run ./cmd/sbxr-release acceptance` only after every required check passes. It must reopen one unchanged directory containing exactly the six regular assets, compare the index identity and every indexed size and digest, and write one exclusive redacted record. Publish that record in the workflow summary, the retained workflow artifact, and the prerelease body without adding a seventh release asset.
-7. Mark Module, Seam, and Integrated Verification `Passed`. Mark Integrated Ubuntu Verification, Codex Live Acceptance, and Owner Acceptance `Not required` under the `ADR-0010 root-runtime package and public-seam scope`. State that no Integrated Ubuntu Verification, live VPS, provider, maintained-client, or Owner evidence was performed.
-8. Any changed asset, attestation, repository, tag, commit, release-index digest, qualification scope, or required check invalidates the record and blocks stable publication. Stable publication must run the package checks from the exact release commit, byte-compare the release body with the retained Acceptance Record, reverify the public bytes, prove latest and pinned `install.sh` equality, scan all six assets, and recheck the generated bootstrap package gates without claiming an automated Ubuntu launch. Automatic stable discovery must require the record repository, tag, commit, qualification results, and release-index digest to agree with the immutable release metadata and downloaded index.
+7. Mark Module, Seam, and Integrated Verification `Passed`. Mark Codex Live Acceptance and each real VPS, Cloudflare, ACME, outside-client, maintained-client, current-documentation, and provider-mutation row exactly `Not required — staged-onboarding package and controlled-seam qualification scope`. Mark Owner Acceptance exactly `Not required — staged-onboarding package and controlled-terminal qualification scope`. State that none of those checks was performed.
+8. Any changed asset, commit, tag, release-index digest, acceptance procedure, guide text, selected output, or required test resets its affected result and blocks stable publication until the new exact Release Identity passes. Stable publication must run the package checks from the exact release commit, byte-compare the release body with the retained Acceptance Record, reverify the public bytes, prove latest and pinned `install.sh` equality, scan all six assets, and recheck the generated bootstrap package gates. Automatic stable discovery must require the record repository, tag, commit, qualification results, and release-index digest to agree with the immutable release metadata and downloaded index. Historical results remain bound to their original Release Identity.
 
-Stable evidence codes are `RELEASE-ROOT-RUNTIME-PACKAGE-QUALIFICATION`, `RELEASE-INSTALLER-EXACT-SIX-ASSETS`, `RELEASE-INSTALLER-PUBLIC-ATTESTATION`, `RELEASE-INSTALLER-MODULE-PASSED`, `RELEASE-INSTALLER-SEAM-PASSED`, `RELEASE-INSTALLER-INTEGRATED-PASSED`, `RELEASE-INSTALLER-SECRET-SCAN`, `RELEASE-INSTALLER-LIVE-NOT-REQUIRED`, and `RELEASE-INSTALLER-OWNER-NOT-REQUIRED`.
+Stable evidence codes are `RELEASE-STAGED-ONBOARDING-PACKAGE-QUALIFICATION`, `RELEASE-INSTALLER-EXACT-SIX-ASSETS`, `RELEASE-INSTALLER-PUBLIC-ATTESTATION`, `RELEASE-INSTALLER-MODULE-PASSED`, `RELEASE-INSTALLER-SEAM-PASSED`, `RELEASE-INSTALLER-INTEGRATED-PASSED`, `RELEASE-STAGED-ONBOARDING-SECRET-SCAN`, `RELEASE-INSTALLER-LIVE-NOT-REQUIRED`, and `RELEASE-INSTALLER-OWNER-NOT-REQUIRED`.
