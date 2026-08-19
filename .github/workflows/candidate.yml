@@ -92,7 +92,11 @@ jobs:
              (.procedures | map(.code)) == ["RELEASE-STAGED-INSTALL-REVISION-1", "RELEASE-CLOUDFLARE-PROFILE-SETUP-N-TO-N+1", "RELEASE-STAGED-ONBOARDING-CHAIN", "RELEASE-STAGED-ONBOARDING-SECRET-SCAN", "RELEASE-STAGED-ONBOARDING-CLIENT-OUTPUT", "RELEASE-STAGED-ONBOARDING-TERMINAL", "RELEASE-STAGED-ONBOARDING-GUIDE-TEXT"]' \
             "$qualification"
           pattern="$SECRET_PATTERN|$TEXT_SECRET_PATTERN"
-          test -z "$(rg -a -l "$pattern" "$qualification")"
+          if grep -aEq "$pattern" "$qualification"; then
+            exit 1
+          elif test $? -ne 1; then
+            exit 1
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: candidate-${{ matrix.architecture }}
@@ -169,10 +173,19 @@ jobs:
           sudo env "PATH=$PATH" SBXR_CONTROLLED_FIREWALL_SEAM=1 go test ./internal/systemchanges/adapter/ubuntu -run TestProductionFirewallSeam -count=1
       - name: Refuse secret markers in release assets
         run: |
-          test -z "$(rg -a -l "$SECRET_PATTERN|$TEXT_SECRET_PATTERN" dist/install.sh dist/release-index.json)"
+          if grep -aEq "$SECRET_PATTERN|$TEXT_SECRET_PATTERN" dist/install.sh dist/release-index.json; then
+            exit 1
+          elif test $? -ne 1; then
+            exit 1
+          fi
           pattern="$SECRET_PATTERN"
           for archive in dist/sbxr-linux-amd64.tar.gz dist/sbxr-linux-arm64.tar.gz dist/sbxr-components-linux-amd64.tar.gz dist/sbxr-components-linux-arm64.tar.gz; do
-            test -z "$(tar -xOzf "$archive" | rg -a -l "$pattern" -)"
+            tar -xOzf "$archive" > archive.contents
+            if grep -aEq "$pattern" archive.contents; then
+              exit 1
+            elif test $? -ne 1; then
+              exit 1
+            fi
           done
       - name: Require both native Package Qualification results
         run: |
@@ -197,7 +210,11 @@ jobs:
               "$evidence"
           done
           pattern="$SECRET_PATTERN|$TEXT_SECRET_PATTERN"
-          test -z "$(rg -a -l "$pattern" qualification)"
+          if grep -aERq "$pattern" qualification; then
+            exit 1
+          elif test $? -ne 1; then
+            exit 1
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: release-candidate
@@ -230,7 +247,11 @@ jobs:
             echo "Release Identity: albertloky/SBXR $CANDIDATE_TAG $GITHUB_SHA $index_sha256"
           } >> "$GITHUB_STEP_SUMMARY"
           pattern="$SECRET_PATTERN|$TEXT_SECRET_PATTERN"
-          test -z "$(rg -a -l "$pattern" "$GITHUB_STEP_SUMMARY")"
+          if grep -aEq "$pattern" "$GITHUB_STEP_SUMMARY"; then
+            exit 1
+          elif test $? -ne 1; then
+            exit 1
+          fi
 
   qualify-public-packages:
     name: Qualify public prerelease packages
@@ -294,7 +315,11 @@ jobs:
             -components "dist/sbxr-components-linux-$architecture.tar.gz" \
             -evidence "$evidence"
           pattern="$SECRET_PATTERN|$TEXT_SECRET_PATTERN"
-          test -z "$(rg -a -l "$pattern" "$evidence")"
+          if grep -aEq "$pattern" "$evidence"; then
+            exit 1
+          elif test $? -ne 1; then
+            exit 1
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: public-package-qualification-${{ matrix.architecture }}
@@ -346,10 +371,19 @@ jobs:
             curl -fsSL "https://github.com/albertloky/SBXR/releases/download/$RELEASE_TAG/$asset" -o "dist/$asset"
           done
           test "$(find dist -type f | wc -l)" -eq 6
-          test -z "$(rg -a -l "$SECRET_PATTERN|$TEXT_SECRET_PATTERN" dist/install.sh dist/release-index.json)"
+          if grep -aEq "$SECRET_PATTERN|$TEXT_SECRET_PATTERN" dist/install.sh dist/release-index.json; then
+            exit 1
+          elif test $? -ne 1; then
+            exit 1
+          fi
           pattern="$SECRET_PATTERN"
           for archive in dist/sbxr-linux-amd64.tar.gz dist/sbxr-linux-arm64.tar.gz dist/sbxr-components-linux-amd64.tar.gz dist/sbxr-components-linux-arm64.tar.gz; do
-            test -z "$(tar -xOzf "$archive" | rg -a -l "$pattern" -)"
+            tar -xOzf "$archive" > archive.contents
+            if grep -aEq "$pattern" archive.contents; then
+              exit 1
+            elif test $? -ne 1; then
+              exit 1
+            fi
           done
       - name: Rerun automated acceptance against the exact release commit
         run: |
@@ -372,9 +406,17 @@ jobs:
             -evidence-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           grep -Fx 'Packaged executable qualification: amd64 Passed; arm64 Passed.' acceptance-record.md
           pattern="$SECRET_PATTERN|$TEXT_SECRET_PATTERN"
-          test -z "$(rg -a -l "$pattern" acceptance-record.md)"
+          if grep -aEq "$pattern" acceptance-record.md; then
+            exit 1
+          elif test $? -ne 1; then
+            exit 1
+          fi
           cat acceptance-record.md >> "$GITHUB_STEP_SUMMARY"
-          test -z "$(rg -a -l "$pattern" "$GITHUB_STEP_SUMMARY")"
+          if grep -aEq "$pattern" "$GITHUB_STEP_SUMMARY"; then
+            exit 1
+          elif test $? -ne 1; then
+            exit 1
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: automated-acceptance-record-${{ github.event.release.tag_name }}

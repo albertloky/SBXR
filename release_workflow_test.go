@@ -30,7 +30,7 @@ func TestCandidateWorkflowPublishesOnlyAQualifiedStagedOnboardingAcceptanceRecor
 		"-directory dist",
 		"-output acceptance-record.md",
 		"cat acceptance-record.md >> \"$GITHUB_STEP_SUMMARY\"",
-		"rg -a -l \"$pattern\" \"$GITHUB_STEP_SUMMARY\"",
+		"grep -aEq \"$pattern\" \"$GITHUB_STEP_SUMMARY\"",
 		"name: automated-acceptance-record-${{ github.event.release.tag_name }}",
 		"gh release edit \"$RELEASE_TAG\" --notes-file acceptance-record.md",
 	} {
@@ -40,6 +40,9 @@ func TestCandidateWorkflowPublishesOnlyAQualifiedStagedOnboardingAcceptanceRecor
 	}
 	if strings.Contains(workflow, "gh release upload") {
 		t.Fatal("Acceptance Record became a seventh release asset")
+	}
+	if strings.Contains(workflow, "rg -a -l") || strings.Count(workflow, "elif test $? -ne 1; then") != 10 {
+		t.Fatal("candidate workflow secret scans do not fail closed")
 	}
 	if strings.Contains(workflow, "git diff --quiet v1.0.6...HEAD") {
 		t.Fatal("staged Connection Profile and Subscription Publication output remained blocked by the root-runtime freeze")
@@ -176,7 +179,7 @@ func TestStableWorkflowReverifiesTheExactPublicInstallerBeforeREADMEActivation(t
 		"test ! -e /usr/local/bin/sbxr",
 		"test ! -e /var/lib/sbxr",
 		"pattern=\"$SECRET_PATTERN\"",
-		`rg -a -l "$pattern" "$GITHUB_STEP_SUMMARY"`,
+		`grep -aEq "$pattern" "$GITHUB_STEP_SUMMARY"`,
 	} {
 		if !strings.Contains(workflow, required) {
 			t.Fatalf("stable workflow omitted %q", required)
@@ -184,6 +187,9 @@ func TestStableWorkflowReverifiesTheExactPublicInstallerBeforeREADMEActivation(t
 	}
 	if strings.Contains(workflow, "jq -r .body release.json > acceptance-record.md") {
 		t.Fatal("stable workflow adds a byte to the retained Acceptance Record")
+	}
+	if strings.Contains(workflow, "rg -a -l") || strings.Count(workflow, "elif test $? -ne 1; then") != 4 {
+		t.Fatal("stable workflow secret scans do not fail closed")
 	}
 	if strings.Contains(workflow, "pattern='MARKER|") {
 		t.Fatal("stable workflow retained the overbroad MARKER secret scan")
@@ -220,7 +226,7 @@ func TestStableWorkflowRequalifiesBothNativePublicPackagesBeforeStableVerificati
 		"releases/download/$RELEASE_TAG/sbxr-components-linux-$architecture.tar.gz",
 		"inspect/sbxr acceptance staged-onboarding --components \"dist/sbxr-components-linux-$architecture.tar.gz\" --json",
 		"go run ./cmd/sbxr-release validate-package-qualification",
-		`rg -a -l "$SECRET_PATTERN|$TEXT_SECRET_PATTERN" qualification.json`,
+		`grep -aEq "$SECRET_PATTERN|$TEXT_SECRET_PATTERN" qualification.json`,
 		"needs: qualify-stable-packages",
 	} {
 		if !strings.Contains(workflow, required) {

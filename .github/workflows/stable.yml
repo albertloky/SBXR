@@ -69,7 +69,11 @@ jobs:
             -application "dist/sbxr-linux-$architecture.tar.gz" \
             -components "dist/sbxr-components-linux-$architecture.tar.gz" \
             -evidence qualification.json
-          test -z "$(rg -a -l "$SECRET_PATTERN|$TEXT_SECRET_PATTERN" qualification.json)"
+          if grep -aEq "$SECRET_PATTERN|$TEXT_SECRET_PATTERN" qualification.json; then
+            exit 1
+          elif test $? -ne 1; then
+            exit 1
+          fi
 
   verify-stable:
     needs: qualify-stable-packages
@@ -129,10 +133,19 @@ jobs:
           jq -e --arg tag "$RELEASE_TAG" --arg commit "$commit" '.repository == "albertloky/SBXR" and .tag == $tag and .commit == $commit' dist/release-index.json
           index_sha256="$(sha256sum dist/release-index.json | cut -d ' ' -f 1)"
           grep -Fx "Release index SHA-256: $index_sha256" acceptance-record.md
-          test -z "$(rg -a -l "$SECRET_PATTERN|$TEXT_SECRET_PATTERN" dist/install.sh dist/release-index.json acceptance-record.md)"
+          if grep -aEq "$SECRET_PATTERN|$TEXT_SECRET_PATTERN" dist/install.sh dist/release-index.json acceptance-record.md; then
+            exit 1
+          elif test $? -ne 1; then
+            exit 1
+          fi
           pattern="$SECRET_PATTERN"
           for archive in dist/sbxr-linux-amd64.tar.gz dist/sbxr-linux-arm64.tar.gz dist/sbxr-components-linux-amd64.tar.gz dist/sbxr-components-linux-arm64.tar.gz; do
-            test -z "$(tar -xOzf "$archive" | rg -a -l "$pattern" -)"
+            tar -xOzf "$archive" > archive.contents
+            if grep -aEq "$pattern" archive.contents; then
+              exit 1
+            elif test $? -ne 1; then
+              exit 1
+            fi
           done
       - name: Recheck the public bootstrap package gates
         run: |
@@ -157,4 +170,8 @@ jobs:
             echo 'Cloudflare/provider evidence: Not performed'
           } >> "$GITHUB_STEP_SUMMARY"
           pattern="$SECRET_PATTERN|$TEXT_SECRET_PATTERN"
-          test -z "$(rg -a -l "$pattern" "$GITHUB_STEP_SUMMARY")"
+          if grep -aEq "$pattern" "$GITHUB_STEP_SUMMARY"; then
+            exit 1
+          elif test $? -ne 1; then
+            exit 1
+          fi
