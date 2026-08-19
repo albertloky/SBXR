@@ -296,7 +296,7 @@ func safeEditingHelp(help EditingHelp) bool {
 		return true
 	}
 	validSensitivity := help.Sensitivity == PublicInformation || help.Sensitivity == PersonalInformation || help.Sensitivity == InfrastructureSecret
-	validExample := help.Sensitivity == InfrastructureSecret && help.Example == "" || help.Sensitivity != InfrastructureSecret && safeLine(help.Example)
+	validExample := help.Sensitivity == InfrastructureSecret && help.Example == "" || help.Sensitivity != InfrastructureSecret && safeOptionalLine(help.Example)
 	return safeLine(help.Purpose) && completeStrings(help.Instructions, 8) && safeLine(help.AcceptedFormat) && completeStrings(help.CommonMistakes, 8) && safeLine(help.Recovery) && validExample && allowedHelpURLs[help.URL] && validSensitivity
 }
 

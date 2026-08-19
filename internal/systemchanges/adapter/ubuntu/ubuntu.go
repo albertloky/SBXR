@@ -159,12 +159,14 @@ func (a Adapter) Observe() (systemchanges.Observation, error) {
 	if err != nil {
 		return systemchanges.Observation{}, err
 	}
-	var filesystem syscall.Statfs_t
-	if err := syscall.Statfs(a.root, &filesystem); err != nil {
-		return systemchanges.Observation{}, err
+	if a.root == "/" || observed.FilesystemBytes == 0 || observed.AvailableBytes == 0 {
+		var filesystem syscall.Statfs_t
+		if err := syscall.Statfs(a.root, &filesystem); err != nil {
+			return systemchanges.Observation{}, err
+		}
+		observed.FilesystemBytes = filesystem.Blocks * uint64(filesystem.Bsize)
+		observed.AvailableBytes = filesystem.Bavail * uint64(filesystem.Bsize)
 	}
-	observed.FilesystemBytes = filesystem.Blocks * uint64(filesystem.Bsize)
-	observed.AvailableBytes = filesystem.Bavail * uint64(filesystem.Bsize)
 	observed.MonotonicClock = true
 	state, err := a.inspectLock()
 	if err != nil {

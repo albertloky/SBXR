@@ -114,7 +114,7 @@ Input is limited to 1,024 characters. When the terminal becomes smaller than `80
 
 | Screen | Controls |
 |---|---|
-| Safe-editing field | `Enter` submits the field. `Space` adds data. `Tab` moves to **Review updated request**, **Help for this field**, and **Back** when typed Help is available. Help gives the purpose, instructions, accepted format, common mistakes, recovery, a marked synthetic example, official source, and sensitivity. `Esc` closes Help without changing the input. |
+| Safe-editing field | `Enter` submits the field. `Space` adds data. `Tab` moves to **Review updated request**, **Help for this field**, and **Back** when typed Help is available. Help gives the purpose, instructions, accepted format, common mistakes, recovery, optional safe example for Public or Personal Information, official source, and sensitivity. Infrastructure Secret Help has no example. `Esc` closes Help without changing the input. |
 | Privacy choice or limited dashboard | `Up` / `Down` or `Tab` / `Shift+Tab` chooses; `Enter` / `Space` continues. |
 | Plan or multi-section review | `Enter` / `Space` advances to the next section and eventually selects the visible Apply action; `Esc` returns one section or goes back. |
 | Correction flow | `Up` / `Down` chooses the action, `Left` / `Right` chooses an offered value, `Tab` focuses input, and `R` runs **Check again**. |

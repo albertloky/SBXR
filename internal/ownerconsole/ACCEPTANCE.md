@@ -117,10 +117,11 @@ Require a real pseudo-terminal to prove that physical `Enter` submits the focuse
 Run:
 
 ```sh
-go test ./internal/ownerconsole -run '^Test(RunShows(TheSameCompleteDomainHelp|EveryInstallationHelpSource)AtExactTerminalSizes|RunFieldChangeClearsEditingStateThroughThePublicOutcome|EditingHelpRefusesANonAllowlistedLink)$' -count=1
+go test ./internal/ownerconsole -run '^Test(RunShows(TheSameCompleteDomainHelp|EveryInstallationHelpSource)AtExactTerminalSizes|RunFieldChangeClearsEditingStateThroughThePublicOutcome|EditingHelp(AcceptsOptionalSafeExamplesAndForbidsSecretExamples|RefusesANonAllowlistedLink))$' -count=1
+go test ./cmd/sbxr -run '^TestProductionInstallationRunAdvancesOwnerEmailToAgreementAtExactSizes$' -count=1
 ```
 
-Require the owning Module's complete Help for every non-Cloudflare first-Installation input at exact `120×36` in the detail column and at exact `80×24` through **Help for this field**. Each Help result includes purpose, instructions, accepted format, common mistakes, field-specific recovery, a marked synthetic example, an allowlisted official HTTPS source, and Public or Personal Information sensitivity. Require `Esc` to return to the unchanged field, exact focus/action activation, the static allowlisted HTTPS terminal hyperlink with its exact plain URL, and refusal of any other link target. A field change clears stale input, feedback, Help selection, and correction state. Owner Console renders bounded typed facts. It does not fetch documentation or execute a browser command.
+Require the owning Module's complete Help for every non-Cloudflare first-Installation input at exact `120×36` in the detail column and at exact `80×24` through **Help for this field**. Each Help result includes purpose, instructions, accepted format, common mistakes, field-specific recovery, an allowlisted official HTTPS source, and Public or Personal Information sensitivity. Public and Personal Information Help can omit an example; each non-empty example must be one safe line. Infrastructure Secret Help must omit its example. Require `Esc` to return to the unchanged field, exact focus/action activation, the static allowlisted HTTPS terminal hyperlink with its exact plain URL, and refusal of any other link target. A field change clears stale input, feedback, Help selection, and correction state. Owner Console renders bounded typed facts. It does not fetch documentation or execute a browser command.
 
 ### OC-ACTIVE-02 — Refresh and confirmation stability
 

@@ -79,6 +79,22 @@ func TestKernelLockIsReadOnlyToInspectAndReleasedByProcessExit(t *testing.T) {
 	}
 }
 
+func TestControlledRootPreservesSuppliedDiskObservation(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "run/sbxr/system-changes.lock")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	want := systemchanges.Observation{FilesystemBytes: 20 << 30, AvailableBytes: 5 << 30}
+	got, err := ubuntu.NewAt(root, func() (systemchanges.Observation, error) { return want, nil }, nil).Observe()
+	if err != nil || got.FilesystemBytes != want.FilesystemBytes || got.AvailableBytes != want.AvailableBytes {
+		t.Fatalf("controlled disk observation = (%d, %d, %v), want (%d, %d)", got.FilesystemBytes, got.AvailableBytes, err, want.FilesystemBytes, want.AvailableBytes)
+	}
+}
+
 func TestKernelLockRejectsUnsafeIdentity(t *testing.T) {
 	for _, test := range []struct {
 		name   string

@@ -1,12 +1,17 @@
 package main
 
 import (
+	"bytes"
+	"io"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/albertloky/SBXR/internal/installation"
 	"github.com/albertloky/SBXR/internal/networkpolicy"
 	"github.com/albertloky/SBXR/internal/ownerconsole"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
+	"github.com/creack/pty"
 )
 
 func TestInstallationSSHFailureCauseSelectsOnlyLegalCorrectionActions(t *testing.T) {
@@ -54,6 +59,66 @@ func TestInstallationBackDiscardsUnfinishedInput(t *testing.T) {
 	}
 	if review := outcome.Review(t.Context()); review.Editing == nil || review.Editing.Field.Identity != "owner-email" || review.Editing.Field.Value != "" {
 		t.Fatalf("Installation Review restored unfinished input: %+v", review)
+	}
+}
+
+func TestProductionInstallationRunAdvancesOwnerEmailToAgreementAtExactSizes(t *testing.T) {
+	for _, size := range []struct{ width, height uint16 }{{80, 24}, {120, 36}} {
+		master, slave, err := pty.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := pty.Setsize(slave, &pty.Winsize{Cols: size.width, Rows: size.height}); err != nil {
+			t.Fatal(err)
+		}
+		var output bytes.Buffer
+		copied := make(chan struct{})
+		go func() { _, _ = io.Copy(&output, master); close(copied) }()
+		capabilities := ownerconsole.Capabilities{InteractiveInput: true, InteractiveOutput: true, AlternateScreen: true, CursorAddressing: true, ReadableEncoding: true, KeyboardInput: true, Width: int(size.width), Height: int(size.height)}
+		outcome := newTestInstallOutcome(t)
+		done := make(chan error, 1)
+		go func() {
+			done <- ownerconsole.Run(t.Context(), ownerconsole.Session{Input: slave, Output: slave, Environment: []string{"TERM=xterm-256color", "COLORTERM=truecolor", "LANG=C.UTF-8"}, Capabilities: &capabilities, Scenario: ownerconsole.InstallationReview, Outcome: outcome})
+		}()
+		time.Sleep(500 * time.Millisecond)
+		for _, input := range []string{"owner@example.net", "\r", "", "\t", "\x1b[B", "\r", "", "\x03\r"} {
+			time.Sleep(80 * time.Millisecond)
+			_, _ = master.Write([]byte(input))
+		}
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("Owner Console Run did not exit")
+		}
+		_ = slave.Close()
+		_ = master.Close()
+		select {
+		case <-copied:
+		case <-time.After(time.Second):
+			t.Fatal("Owner Console transcript did not close")
+		}
+		got := output.String()
+		for _, want := range []string{"ACME subscriber agreement", "No Plan, Change Set, rollback material, or sudo"} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("%dx%d Owner email transition omitted %q\n%s", size.width, size.height, want, got)
+			}
+		}
+		helpStart := strings.LastIndex(got, "ACME SUBSCRIBER AGREEMENT HELP")
+		if helpStart < 0 {
+			t.Fatalf("%dx%d ACME agreement Help was unavailable\n%s", size.width, size.height, got)
+		}
+		help := got[helpStart:]
+		for _, want := range []string{"Purpose: Record acceptance", "Instructions: Enter accepted", "format: accepted", "Common mistakes: Do not continue before review.", "Recovery: Review the agreement", "https://letsencrypt.org/repository/"} {
+			if !strings.Contains(help, want) {
+				t.Fatalf("%dx%d ACME agreement Help omitted %q\n%s", size.width, size.height, want, got)
+			}
+		}
+		if strings.Contains(got, "OWNER-CONSOLE-TYPED-OUTCOME-REFUSED") || strings.Contains(help, "EXAMPLE ONLY") {
+			t.Fatalf("%dx%d Owner email did not advance to the ACME agreement\n%s", size.width, size.height, got)
+		}
 	}
 }
 

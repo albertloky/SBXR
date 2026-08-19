@@ -575,6 +575,25 @@ func TestEditingHelpRefusesANonAllowlistedLink(t *testing.T) {
 	}
 }
 
+func TestEditingHelpAcceptsOptionalSafeExamplesAndForbidsSecretExamples(t *testing.T) {
+	help := EditingHelp{Purpose: "Purpose", Instructions: []string{"Instructions"}, AcceptedFormat: "Format", CommonMistakes: []string{"Mistake"}, Recovery: "Correct the field.", URL: "https://letsencrypt.org/repository/"}
+	for _, sensitivity := range []EditingSensitivity{PublicInformation, PersonalInformation} {
+		help.Sensitivity = sensitivity
+		if review := validatedChangeReview(ChangeReview{Editing: &EditingPresentation{Title: "Installation", Field: EditingField{Identity: "field", Label: "Field"}, Help: help}}); review.Editing == nil {
+			t.Fatalf("empty %s example was refused: %+v", sensitivity, review)
+		}
+		help.Example = "unsafe\nexample"
+		if review := validatedChangeReview(ChangeReview{Editing: &EditingPresentation{Title: "Installation", Field: EditingField{Identity: "field", Label: "Field"}, Help: help}}); review.Correction == nil {
+			t.Fatalf("unsafe %s example was accepted: %+v", sensitivity, review)
+		}
+		help.Example = ""
+	}
+	help.Sensitivity, help.Example = InfrastructureSecret, "secret example"
+	if review := validatedChangeReview(ChangeReview{Editing: &EditingPresentation{Title: "Installation", Field: EditingField{Identity: "field", Label: "Field"}, Help: help}}); review.Correction == nil {
+		t.Fatalf("Infrastructure Secret example was accepted: %+v", review)
+	}
+}
+
 func TestRunShowsEveryInstallationHelpSourceAtExactTerminalSizes(t *testing.T) {
 	tests := []struct {
 		name, label, urlTail string

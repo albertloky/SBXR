@@ -496,6 +496,10 @@ func TestInstallationReviewSuppliesACMEHelpAndRequiresAgreement(t *testing.T) {
 	if review.Invalid == nil || review.Invalid.Field != "subscriber-agreement" || review.Plan != nil {
 		t.Fatalf("ACME agreement Review = %+v", review)
 	}
+	help := review.Invalid.Help
+	if help.Purpose == "" || len(help.Instructions) == 0 || help.AcceptedFormat == "" || len(help.CommonMistakes) == 0 || help.Recovery == "" || help.Example != "" || help.URL != "https://letsencrypt.org/repository/" || help.Sensitivity != PublicInformation {
+		t.Fatalf("ACME agreement Help = %+v", help)
+	}
 	review = module.Review(t.Context(), Draft{SubmittedField: "subscriber-agreement", SubmittedValue: "yes"})
 	if review.Invalid == nil || review.Invalid.Field != "subscriber-agreement" || review.Plan != nil {
 		t.Fatalf("unreviewed ACME agreement = %+v", review)
