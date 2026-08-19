@@ -40,6 +40,10 @@ _Avoid_: Empty VPS, freshly imaged VPS
 A Not installed Ubuntu host where the Owner accepts deletion of every specifically reviewed conflict at SBXR's fixed seams while resources outside those exact conflicts must remain unchanged.
 _Avoid_: Clean VPS, disposable VPS, automatically adopted VPS
 
+**SBXR-owned seam**:
+An exact address, port, protocol, service identity, resource identity, or path that the reviewed SBXR Plan requires SBXR to own. Ordinary software outside those exact boundaries is not an Installation conflict.
+_Avoid_: Every listener, every installed service, dedicated-appliance boundary
+
 **Pasteable Install Command**:
 One command the Owner can paste on a Clean VPS or Reclaimable VPS to fetch the current qualified stable bootstrap, install or repair only fixed prerequisites, and enter review-first installation without itself authorizing Apply or performing Destructive Reclamation.
 _Avoid_: One-line installer, unattended installer

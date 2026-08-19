@@ -57,6 +57,9 @@ func sudoReadOnlyFirewallOutput(command string, arguments ...string) ([]byte, er
 
 func sudoReadOnlyFirewallCommand(command string, arguments ...string) (*exec.Cmd, error) {
 	paths := map[string]string{"nft": "/usr/sbin/nft", "iptables-save": "/usr/sbin/iptables-save", "ip6tables-save": "/usr/sbin/ip6tables-save"}
+	if command == "ufw" && slices.Equal(arguments, []string{"status"}) {
+		return exec.Command("/usr/bin/sudo", "-n", "--", "/usr/bin/env", "LC_ALL=C", "LANG=C", "/usr/sbin/ufw", "status"), nil
+	}
 	path := paths[command]
 	if path == "" {
 		return nil, os.ErrPermission
@@ -109,7 +112,10 @@ func (a Adapter) Observe(request networkpolicy.ObservationRequest) (networkpolic
 	}
 	observed.SSH.Listener = observedSSHListener(observed.Listeners, observed.SSH)
 	if request.ReclamationReview {
-		observed.Reclamation, err = a.reclamationFacts(observed.ResourcePaths, observed.Listeners)
+		collisions := slices.DeleteFunc(append([]networkpolicy.Listener(nil), observed.Listeners...), func(listener networkpolicy.Listener) bool {
+			return !slices.ContainsFunc(request.ListenerSeams, func(seam networkpolicy.ListenerSeam) bool { return seam.Collides(listener) })
+		})
+		observed.Reclamation, err = a.reclamationFacts(observed.ResourcePaths, collisions)
 		if err != nil {
 			return networkpolicy.Observations{}, err
 		}
@@ -126,7 +132,7 @@ func (a Adapter) Observe(request networkpolicy.ObservationRequest) (networkpolic
 		if request.Scope != networkpolicy.LocalObservations {
 			observed.Outbound = outboundFacts(observed.Time.Synchronized, request.Intent)
 		}
-		observed.Firewall.ActiveManager = activeFirewallManager()
+		observed.Firewall.ActiveManager, observed.Firewall.UFWConfiguredState, observed.Firewall.UFWReportedState = a.firewallManagerFacts()
 	}
 	if a.privileged {
 		if rules, commandErr := a.readOnlyFirewallOutput("nft", "-j", "list", "ruleset"); commandErr == nil {
@@ -174,7 +180,7 @@ func (a Adapter) reclamationFacts(paths []string, listeners []networkpolicy.List
 		return networkpolicy.ReclamationFacts{}, err
 	}
 	facts := networkpolicy.ReclamationFacts{ProtectedPaths: shells}
-	processes, scripts, err := a.reclamationProcesses()
+	processes, scripts, err := a.reclamationProcesses(listeners)
 	if err != nil {
 		return networkpolicy.ReclamationFacts{}, err
 	}
@@ -542,9 +548,13 @@ func (a Adapter) currentShells() ([]string, error) {
 	return shells, nil
 }
 
-func (a Adapter) reclamationProcesses() (map[string]socketOwner, []networkpolicy.ScriptConflict, error) {
+func (a Adapter) reclamationProcesses(listeners []networkpolicy.Listener) (map[string]socketOwner, []networkpolicy.ScriptConflict, error) {
 	executables := map[string]socketOwner{}
 	var scripts []networkpolicy.ScriptConflict
+	listenerProcesses := map[string]bool{}
+	for _, listener := range listeners {
+		listenerProcesses[listener.ProcessID] = true
+	}
 	processes, err := os.ReadDir(a.path("/proc"))
 	if err != nil {
 		return nil, nil, err
@@ -567,7 +577,7 @@ func (a Adapter) reclamationProcesses() (map[string]socketOwner, []networkpolicy
 		if err == nil && filepath.IsAbs(executable) {
 			executables[executable] = socketOwner{name, service, executable, process.Name()}
 		}
-		if !slices.Contains([]string{"sh", "bash", "dash", "python", "python3", "perl", "ruby", "node"}, filepath.Base(executable)) {
+		if !listenerProcesses[process.Name()] || !slices.Contains([]string{"sh", "bash", "dash", "python", "python3", "perl", "ruby", "node"}, filepath.Base(executable)) {
 			continue
 		}
 		arguments := strings.Split(readOptional(a.path(filepath.Join(base, "cmdline"))), "\x00")
@@ -676,6 +686,14 @@ func (a Adapter) privilegedOutput(command string, arguments ...string) ([]byte, 
 func (a Adapter) readOnlyFirewallOutput(command string, arguments ...string) ([]byte, error) {
 	if a.firewallOutput != nil {
 		return a.firewallOutput(command, arguments...)
+	}
+	if a.output != nil {
+		return a.privilegedOutput(command, arguments...)
+	}
+	if command == "ufw" && slices.Equal(arguments, []string{"status"}) {
+		cmd := exec.Command("/usr/sbin/ufw", "status")
+		cmd.Env = append(os.Environ(), "LC_ALL=C", "LANG=C")
+		return cmd.Output()
 	}
 	return a.privilegedOutput(command, arguments...)
 }
@@ -1215,13 +1233,62 @@ func activeTimeOwner() string {
 	return ""
 }
 
-func activeFirewallManager() string {
-	for _, service := range []string{"ufw.service", "firewalld.service", "nftables.service", "docker.service"} {
-		if exec.Command("systemctl", "is-active", "--quiet", service).Run() == nil {
-			return service
+func (a Adapter) firewallManagerFacts() (manager string, configured networkpolicy.UFWConfiguredState, reported networkpolicy.UFWReportedState) {
+	_, ufwActiveErr := a.privilegedOutput("systemctl", "is-active", "--quiet", "ufw.service")
+	loaded, loadedErr := a.privilegedOutput("systemctl", "show", "-p", "LoadState", "--value", "ufw.service")
+	_, configErr := os.Stat(a.path("/etc/ufw/ufw.conf"))
+	ufwPresent := ufwActiveErr == nil || loadedErr == nil && strings.TrimSpace(string(loaded)) == "loaded" || configErr == nil || !errors.Is(configErr, os.ErrNotExist)
+	if ufwPresent {
+		manager = "ufw.service"
+		configured = a.ufwConfiguredState()
+		status, err := a.readOnlyFirewallOutput("ufw", "status")
+		switch {
+		case err != nil:
+			reported = networkpolicy.UFWStatusUnavailable
+		case strings.TrimSpace(string(status)) == "Status: inactive":
+			reported = networkpolicy.UFWStatusInactive
+		case strings.HasPrefix(strings.TrimSpace(string(status)), "Status: active"):
+			reported = networkpolicy.UFWStatusActive
+		default:
+			reported = networkpolicy.UFWStatusMalformed
 		}
 	}
-	return ""
+	for _, service := range []string{"firewalld.service", "nftables.service", "docker.service"} {
+		if _, err := a.privilegedOutput("systemctl", "is-active", "--quiet", service); err == nil {
+			return service, configured, reported
+		}
+	}
+	return manager, configured, reported
+}
+
+func (a Adapter) ufwConfiguredState() networkpolicy.UFWConfiguredState {
+	data, err := os.ReadFile(a.path("/etc/ufw/ufw.conf"))
+	if errors.Is(err, os.ErrNotExist) {
+		return networkpolicy.UFWConfigMissing
+	}
+	if err != nil {
+		return networkpolicy.UFWConfigUnreadable
+	}
+	found := false
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "ENABLED=") {
+			if found {
+				return networkpolicy.UFWConfigMalformed
+			}
+			if line == "ENABLED=yes" {
+				return networkpolicy.UFWConfigActive
+			}
+			if line != "ENABLED=no" {
+				return networkpolicy.UFWConfigMalformed
+			}
+			found = true
+		}
+	}
+	if !found {
+		return networkpolicy.UFWConfigMalformed
+	}
+	return networkpolicy.UFWConfigDisabled
 }
 
 func outboundFacts(timeOK bool, intent networkpolicy.Intent) networkpolicy.OutboundFacts {

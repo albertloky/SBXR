@@ -111,6 +111,27 @@ type ObservationRequest struct {
 	Stage             Stage
 	Scope             ObservationScope
 	ReclamationReview bool
+	ListenerSeams     []ListenerSeam
+}
+
+type ListenerSeam struct {
+	Address  string
+	Port     uint16
+	Protocol Protocol
+}
+
+func (seam ListenerSeam) Collides(listener Listener) bool {
+	if listener.Port != seam.Port || listener.Protocol != seam.Protocol {
+		return false
+	}
+	if seam.Address == "0.0.0.0" {
+		return net.ParseIP(listener.Address).To4() != nil
+	}
+	if seam.Address == "::" {
+		address := net.ParseIP(listener.Address)
+		return address != nil && address.To4() == nil
+	}
+	return listener.Address == seam.Address || listener.Address == "::" || listener.Address == "0.0.0.0" && net.ParseIP(seam.Address).To4() != nil
 }
 
 type ObservationScope string
@@ -273,11 +294,32 @@ type SSHFacts struct {
 }
 
 type FirewallFacts struct {
-	ActiveManager  string
-	UnexpectedRule string
-	SBXRTableState string
-	RootVerified   bool
+	ActiveManager      string
+	UnexpectedRule     string
+	SBXRTableState     string
+	UFWConfiguredState UFWConfiguredState
+	UFWReportedState   UFWReportedState
+	RootVerified       bool
 }
+
+type UFWConfiguredState string
+
+const (
+	UFWConfigDisabled   UFWConfiguredState = "disabled"
+	UFWConfigActive     UFWConfiguredState = "active"
+	UFWConfigMissing    UFWConfiguredState = "missing"
+	UFWConfigUnreadable UFWConfiguredState = "unreadable"
+	UFWConfigMalformed  UFWConfiguredState = "malformed"
+)
+
+type UFWReportedState string
+
+const (
+	UFWStatusInactive    UFWReportedState = "inactive"
+	UFWStatusActive      UFWReportedState = "active"
+	UFWStatusMalformed   UFWReportedState = "malformed"
+	UFWStatusUnavailable UFWReportedState = "unavailable"
+)
 
 type RouteFacts struct {
 	IPv4 string
@@ -1358,11 +1400,13 @@ func (i Interface) Evaluate(request Request) Result {
 		result.add(requiredFailure("NETWORK-ADAPTER-UNAVAILABLE", "Ubuntu observations are unavailable", "no Adapter", "one Ubuntu-host Adapter", "SBXR cannot prove the network baseline", Fix{OwnerChecklist: []string{"Restore the Ubuntu-host Adapter."}}))
 		return result
 	}
-	observed, err := i.adapter.Observe(ObservationRequest{Intent: request.Intent, Stage: request.Stage, Scope: LocalObservations, ReclamationReview: request.ReclamationReview})
+	policy := candidatePolicy(request.Intent)
+	observed, err := i.adapter.Observe(ObservationRequest{Intent: request.Intent, Stage: request.Stage, Scope: LocalObservations, ReclamationReview: request.ReclamationReview, ListenerSeams: listenerSeams(policy)})
 	if err != nil {
 		result.add(requiredFailure("NETWORK-OBSERVATION-FAILED", "Ubuntu observation failed", "typed observation unavailable", "fresh typed Ubuntu facts", "SBXR cannot prove the network baseline", Fix{OwnerChecklist: []string{"Correct the observation failure."}}))
 		return result
 	}
+	classifyInactiveUFW(&observed.Firewall)
 	if ownerFactsProvided(request.OwnerFacts) {
 		observed.OwnerFacts = request.OwnerFacts
 	}
@@ -1371,8 +1415,8 @@ func (i Interface) Evaluate(request Request) Result {
 	}
 	observed.Outbound = OutboundFacts{}
 	applyManagedProof(request.Managed, &observed)
-	result.Policy = candidatePolicy(request.Intent)
-	reviewInstallation(&result, observed, request.ReclamationReview)
+	result.Policy = policy
+	reviewInstallation(&result, observed, request.ReclamationReview, policy)
 	if result.Outcome == Failed {
 		return result
 	}
@@ -1639,9 +1683,9 @@ func reviewedReclamationContract(observed Observations, plan *ReclamationPlan, c
 	if observed.Firewall.ActiveManager != "" || observed.Firewall.UnexpectedRule != "" {
 		return reclamationContract{}, false
 	}
-	listeners := slices.DeleteFunc(append([]Listener(nil), observed.Listeners...), func(listener Listener) bool { return !reclaimableListener(listener, observed.SSH) })
+	listeners := slices.DeleteFunc(append([]Listener(nil), observed.Listeners...), func(listener Listener) bool { return !reclaimableListener(listener, observed.SSH, candidate) })
 	if len(observed.Reclamation.Packages) > 0 {
-		if len(observed.Reclamation.Scripts) != 0 || len(observed.Reclamation.Executables) != len(observed.Reclamation.Packages) || len(observed.Reclamation.Identities) != 0 || len(listeners) == 0 {
+		if len(observed.Reclamation.Scripts) != 0 || len(observed.Reclamation.Executables) != len(observed.Reclamation.Packages) || len(observed.Reclamation.Identities) != 0 {
 			return reclamationContract{}, false
 		}
 		unsupported := 0
@@ -1660,7 +1704,7 @@ func reviewedReclamationContract(observed Observations, plan *ReclamationPlan, c
 				return reclamationContract{}, false
 			}
 			file := files[0]
-			valid := filepath.IsAbs(file.Path) && validSHA256(file.SHA256) && file.ProcessID != "" && file.Links == 1 && !file.Mount && pkg.Name != "" && pkg.Version != "" && slices.ContainsFunc(listeners, func(listener Listener) bool {
+			valid := filepath.IsAbs(file.Path) && validSHA256(file.SHA256) && file.ProcessID != "" && file.Links == 1 && !file.Mount && pkg.Name != "" && pkg.Version != "" && slices.ContainsFunc(observed.Listeners, func(listener Listener) bool {
 				return listener.ProcessID == file.ProcessID && listener.Executable == file.Path
 			})
 			if !valid {
@@ -1674,10 +1718,6 @@ func reviewedReclamationContract(observed Observations, plan *ReclamationPlan, c
 		}) || slices.ContainsFunc(observed.ServiceIdentities, func(service string) bool {
 			return !slices.ContainsFunc(contract.Targets, func(target reclamationTarget) bool {
 				return service == target.Package+".service" || service == "process:"+target.Package
-			})
-		}) || slices.ContainsFunc(listeners, func(listener Listener) bool {
-			return !slices.ContainsFunc(contract.Targets, func(target reclamationTarget) bool {
-				return listener.ProcessID == target.ProcessID && listener.Executable == target.Path
 			})
 		}) {
 			return reclamationContract{}, false
@@ -1723,7 +1763,7 @@ func reviewedReclamationContract(observed Observations, plan *ReclamationPlan, c
 	return reclamationContract{}, false
 }
 
-func reviewInstallation(result *Result, observed Observations, required bool) {
+func reviewInstallation(result *Result, observed Observations, required bool, policy Policy) {
 	result.ProtectedFoundation = ProtectedHostFoundation{Version: 1, Paths: []string{"/bin/sh", "/boot", "/etc/apt", "/etc/passwd", "/etc/sbxr", "/etc/shadow", "/etc/ssh", "/lib", "/lib64", "/proc", "/run", "/sbin/init", "/sys", "/usr/bin/apt", "/usr/bin/apt-get", "/usr/bin/dpkg", "/usr/bin/env", "/usr/bin/sudo", "/usr/bin/systemctl", "/usr/lib", "/usr/local/bin/sbxr", "/usr/sbin/sshd", "/var/lib/dpkg", "/var/lib/sbxr"}}
 	result.ProtectedFoundation.Paths = append(result.ProtectedFoundation.Paths, observed.Reclamation.ProtectedPaths...)
 	if required && !observed.ReclamationComplete {
@@ -1736,7 +1776,7 @@ func reviewInstallation(result *Result, observed Observations, required bool) {
 		result.InstallationClass = UnsupportedHost
 	case observed.Lineage == ContradictoryLineage:
 		result.InstallationClass = ContradictoryVPS
-	case hasReclamationConflict(observed):
+	case hasReclamationConflict(observed, policy):
 		result.InstallationClass = ReclaimableVPS
 	default:
 		result.InstallationClass = CleanVPS
@@ -1760,7 +1800,7 @@ func reviewInstallation(result *Result, observed Observations, required bool) {
 		}
 	}
 	for _, listener := range observed.Listeners {
-		if !reclaimableListener(listener, observed.SSH) {
+		if !reclaimableListener(listener, observed.SSH, policy) {
 			continue
 		}
 		if listener.Executable == "" {
@@ -1848,7 +1888,7 @@ func reviewInstallation(result *Result, observed Observations, required bool) {
 		)
 	}
 	for _, listener := range observed.Listeners {
-		if reclaimableListener(listener, observed.SSH) {
+		if reclaimableListener(listener, observed.SSH, policy) {
 			plan.Targets = append(plan.Targets, fmt.Sprintf("listener %s:%d/%s process %s service %s", reviewFact(listener.Address), listener.Port, listener.Protocol, reviewFact(listener.Process), reviewFact(listener.Service)))
 		}
 	}
@@ -1959,7 +1999,7 @@ func reviewFact(value string) string {
 	return value
 }
 
-func hasReclamationConflict(observed Observations) bool {
+func hasReclamationConflict(observed Observations, policy Policy) bool {
 	r := observed.Reclamation
 	if len(r.Packages)+len(r.Identities)+len(r.Executables)+len(r.Scripts)+len(r.UnsafePaths) > 0 || r.Docker != nil || r.Firewall != nil {
 		return true
@@ -1968,11 +2008,20 @@ func hasReclamationConflict(observed Observations) bool {
 		return false
 	}
 	ownerConflict := func(value string) bool { return value != "" && value != "fresh" }
-	return len(observed.ServiceIdentities)+len(observed.ResourcePaths) > 0 || observed.Firewall.ActiveManager != "" || observed.Firewall.UnexpectedRule != "" || observed.Firewall.SBXRTableState != "" && observed.Firewall.SBXRTableState != "absent" || ownerConflict(observed.OwnerFacts.DNS) || ownerConflict(observed.OwnerFacts.Tunnel) || len(observed.OwnerFacts.Routes)+len(observed.OwnerFacts.Conflicts) > 0 || slices.ContainsFunc(observed.Listeners, func(listener Listener) bool { return reclaimableListener(listener, observed.SSH) })
+	return len(observed.ServiceIdentities)+len(observed.ResourcePaths) > 0 || observed.Firewall.ActiveManager != "" || observed.Firewall.UnexpectedRule != "" || observed.Firewall.SBXRTableState != "" && observed.Firewall.SBXRTableState != "absent" || ownerConflict(observed.OwnerFacts.DNS) || ownerConflict(observed.OwnerFacts.Tunnel) || len(observed.OwnerFacts.Routes)+len(observed.OwnerFacts.Conflicts) > 0 || slices.ContainsFunc(observed.Listeners, func(listener Listener) bool { return reclaimableListener(listener, observed.SSH, policy) })
 }
 
-func reclaimableListener(listener Listener, ssh SSHFacts) bool {
-	return listener.Ownership != SBXROwned && (ssh.DetectedPort == 0 || listener.Port != ssh.DetectedPort || listener.Protocol != TCP)
+func reclaimableListener(listener Listener, ssh SSHFacts, policy Policy) bool {
+	if listener.Ownership == SBXROwned || ssh.DetectedPort != 0 && listener.Port == ssh.DetectedPort && listener.Protocol == TCP {
+		return false
+	}
+	return slices.ContainsFunc(listenerSeams(policy), func(seam ListenerSeam) bool { return seam.Collides(listener) })
+}
+
+func classifyInactiveUFW(facts *FirewallFacts) {
+	if facts.ActiveManager == "ufw.service" && facts.UFWConfiguredState == UFWConfigDisabled && facts.UFWReportedState == UFWStatusInactive && facts.RootVerified && facts.UnexpectedRule == "" {
+		facts.ActiveManager = ""
+	}
 }
 
 func protectedPath(path string, protected []string) bool {
@@ -2688,6 +2737,31 @@ func candidatePolicy(intent Intent) Policy {
 		}
 	}
 	return policy
+}
+
+func listenerSeams(policy Policy) []ListenerSeam {
+	var seams []ListenerSeam
+	for _, exposure := range policy.Exposures {
+		if exposure.Purpose != "SSH preservation" && exposure.Purpose != "ACME HTTP-01" {
+			addresses := []string{exposure.Address}
+			if exposure.Address == "public" {
+				addresses = nil
+				if policy.PublicIPv4 != "" {
+					addresses = append(addresses, "0.0.0.0")
+				}
+				if policy.PublicIPv6 != "" {
+					addresses = append(addresses, "::")
+				}
+			}
+			for _, address := range addresses {
+				seam := ListenerSeam{Address: address, Port: exposure.Port, Protocol: exposure.Protocol}
+				if !slices.Contains(seams, seam) {
+					seams = append(seams, seam)
+				}
+			}
+		}
+	}
+	return seams
 }
 
 func renderNftables(policy Policy) string {

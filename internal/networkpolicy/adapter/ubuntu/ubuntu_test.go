@@ -25,9 +25,115 @@ func TestReadOnlyFirewallPlanningUsesOnlyFixedCachedSudoCommands(t *testing.T) {
 			t.Fatalf("%s planning command = %v, %v", command, cmd.Args, err)
 		}
 	}
+	ufw, err := sudoReadOnlyFirewallCommand("ufw", "status")
+	if want := []string{"/usr/bin/sudo", "-n", "--", "/usr/bin/env", "LC_ALL=C", "LANG=C", "/usr/sbin/ufw", "status"}; err != nil || !slices.Equal(ufw.Args, want) {
+		t.Fatalf("UFW planning command = %v, %v", ufw.Args, err)
+	}
 	if _, err := sudoReadOnlyFirewallCommand("systemctl", "stop", "ufw.service"); !errors.Is(err, os.ErrPermission) {
 		t.Fatalf("mutating planning command accepted: %v", err)
 	}
+}
+
+func TestAdapterClassifiesUFWFromConfiguredReportedAndObservedFacts(t *testing.T) {
+	for _, test := range []struct {
+		name, config, status, nft, legacy                        string
+		statusErr, missingConfig, unreadableConfig, inactiveUnit bool
+		otherManager                                             string
+		wantManager                                              string
+	}{
+		{name: "RackNerd-shaped inactive", config: "ENABLED=no\nLOGLEVEL=low\n", status: "Status: inactive\n", nft: `{"nftables":[]}`, wantManager: "ufw.service"},
+		{name: "inactive unit still inspected", config: "ENABLED=no\n", status: "Status: inactive\n", nft: `{"nftables":[]}`, inactiveUnit: true, wantManager: "ufw.service"},
+		{name: "enabled", config: "ENABLED=yes\n", status: "Status: inactive\n", nft: `{"nftables":[]}`, wantManager: "ufw.service"},
+		{name: "active status", config: "ENABLED=no\n", status: "Status: active\n", nft: `{"nftables":[]}`, wantManager: "ufw.service"},
+		{name: "missing config", missingConfig: true, status: "Status: inactive\n", nft: `{"nftables":[]}`, wantManager: "ufw.service"},
+		{name: "inactive unit missing config", missingConfig: true, inactiveUnit: true, status: "Status: inactive\n", nft: `{"nftables":[]}`, wantManager: "ufw.service"},
+		{name: "unreadable config", unreadableConfig: true, status: "Status: inactive\n", nft: `{"nftables":[]}`, wantManager: "ufw.service"},
+		{name: "malformed config", config: "ENABLED=maybe\n", status: "Status: inactive\n", nft: `{"nftables":[]}`, wantManager: "ufw.service"},
+		{name: "status failure", config: "ENABLED=no\n", statusErr: true, nft: `{"nftables":[]}`, wantManager: "ufw.service"},
+		{name: "malformed status", config: "ENABLED=no\n", status: "unexpected output\n", nft: `{"nftables":[]}`, wantManager: "ufw.service"},
+		{name: "unexpected nftables", config: "ENABLED=no\n", status: "Status: inactive\n", nft: `{"nftables":[{"chain":{"family":"inet","table":"filter","name":"input","hook":"input"}}]}`, wantManager: "ufw.service"},
+		{name: "unexpected legacy iptables", config: "ENABLED=no\n", status: "Status: inactive\n", nft: `{"nftables":[]}`, legacy: "*filter\n-A INPUT -j DROP\n", wantManager: "ufw.service"},
+		{name: "later active manager preserved", config: "ENABLED=no\n", status: "Status: inactive\n", nft: `{"nftables":[]}`, otherManager: "firewalld.service", wantManager: "firewalld.service"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := firewallFixture(t)
+			if test.unreadableConfig {
+				if err := os.MkdirAll(filepath.Join(root, "etc/ufw/ufw.conf"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			} else if !test.missingConfig {
+				path := filepath.Join(root, "etc/ufw/ufw.conf")
+				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(test.config), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			adapter := Adapter{root: root, external: true, privileged: true, output: func(command string, arguments ...string) ([]byte, error) {
+				switch command {
+				case "systemctl":
+					if slices.Contains(arguments, "show") && slices.Contains(arguments, "ufw.service") {
+						return []byte("loaded\n"), nil
+					}
+					if slices.Contains(arguments, "ufw.service") && !test.inactiveUnit {
+						return nil, nil
+					}
+					if test.otherManager != "" && slices.Contains(arguments, test.otherManager) {
+						return nil, nil
+					}
+					return nil, os.ErrNotExist
+				case "ufw":
+					if test.statusErr {
+						return nil, os.ErrPermission
+					}
+					return []byte(test.status), nil
+				case "nft":
+					return []byte(test.nft), nil
+				case "iptables-save":
+					return []byte(test.legacy), nil
+				case "ip6tables-save":
+					return nil, nil
+				default:
+					return nil, os.ErrNotExist
+				}
+			}}
+			observed, err := adapter.Observe(networkpolicy.ObservationRequest{Scope: networkpolicy.LocalObservations})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if observed.Firewall.ActiveManager != test.wantManager {
+				t.Fatalf("active manager = %q, want %q; facts %+v", observed.Firewall.ActiveManager, test.wantManager, observed.Firewall)
+			}
+			if test.name == "RackNerd-shaped inactive" && (!observed.Firewall.RootVerified || observed.Firewall.UFWConfiguredState != networkpolicy.UFWConfigDisabled || observed.Firewall.UFWReportedState != networkpolicy.UFWStatusInactive) {
+				t.Fatalf("inactive UFW facts = %+v", observed.Firewall)
+			}
+			if test.unreadableConfig && observed.Firewall.UFWConfiguredState != networkpolicy.UFWConfigUnreadable {
+				t.Fatalf("unreadable UFW config facts = %+v", observed.Firewall)
+			}
+			if test.name == "malformed status" && observed.Firewall.UFWReportedState != networkpolicy.UFWStatusMalformed {
+				t.Fatalf("malformed UFW status facts = %+v", observed.Firewall)
+			}
+		})
+	}
+}
+
+func firewallFixture(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	for name, body := range map[string]string{
+		"etc/os-release": "ID=ubuntu\nVERSION_ID=\"24.04\"\n", "var/lib/dpkg/status": "Package: ubuntu-server\nStatus: install ok installed\n\n", "proc/meminfo": "MemTotal: 1048576 kB\n",
+		"proc/net/tcp": "", "proc/net/tcp6": "", "proc/net/udp": "", "proc/net/udp6": "", "proc/net/route": "", "proc/net/ipv6_route": "",
+	} {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
 }
 
 func TestProductionAdapterKeepsSSHObservationOutsideCachedSudo(t *testing.T) {
@@ -190,7 +296,9 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 			AnyTLS: networkpolicy.Profile{Enabled: true, Port: 9443},
 		},
 	}
-	observed, err := NewAt(root).Observe(networkpolicy.ObservationRequest{Intent: candidateIntent, Stage: networkpolicy.PreApproval, ReclamationReview: true})
+	observed, err := NewAt(root).Observe(networkpolicy.ObservationRequest{Intent: candidateIntent, Stage: networkpolicy.PreApproval, ReclamationReview: true, ListenerSeams: []networkpolicy.ListenerSeam{
+		{Address: "0.0.0.0", Port: 443, Protocol: networkpolicy.TCP},
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,8 +339,8 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 	if len(observed.Reclamation.Executables) != 2 || observed.Reclamation.Executables[0].SHA256 == "" || observed.Reclamation.Executables[0].Package != "xray" || observed.Reclamation.Executables[0].Process != "xray" || observed.Reclamation.Executables[0].Service != "xray.service" || observed.Reclamation.Executables[1].Path != "/usr/sbin/nginx" || observed.Reclamation.Executables[1].SHA256 == "" || observed.Reclamation.Executables[1].Package != "nginx" || observed.Reclamation.Executables[1].Process != "nginx" || len(observed.Reclamation.Packages) != 2 || observed.Reclamation.Packages[0].Version != "1.2.3" || len(observed.Reclamation.Packages[0].OwnedPaths) != 2 || len(observed.Reclamation.Identities) != 0 {
 		t.Fatalf("reclamation facts = %+v", observed.Reclamation)
 	}
-	if len(observed.Reclamation.Scripts) != 1 || observed.Reclamation.Scripts[0].Path != "/opt/app/server.py" || observed.Reclamation.Scripts[0].ProcessID != "125" || observed.Listeners[2].ProcessID != "125" || !slices.Contains(observed.Reclamation.ProtectedPaths, "/opt/shared/python") || !slices.Contains(observed.Reclamation.ProtectedPaths, "/opt/custom/nu") || slices.ContainsFunc(observed.Reclamation.Executables, func(file networkpolicy.FileConflict) bool { return file.Path == "/opt/shared/python" }) {
-		t.Fatalf("script interpreter was not protected: %+v", observed.Reclamation)
+	if len(observed.Reclamation.Scripts) != 0 || observed.Listeners[2].ProcessID != "125" || !slices.Contains(observed.Reclamation.ProtectedPaths, "/opt/custom/nu") || slices.ContainsFunc(observed.Reclamation.Executables, func(file networkpolicy.FileConflict) bool { return file.Path == "/opt/shared/python" }) {
+		t.Fatalf("non-conflicting script entered reclamation inventory: %+v", observed.Reclamation)
 	}
 	if observed.Firewall.RootVerified {
 		t.Fatal("unprivileged fixture observation guessed root-only nftables facts")
@@ -360,6 +468,10 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 	if err := os.WriteFile(parentStat, []byte(parent+" (nu) S 1 0 0 0\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	conflictReview := networkpolicy.ObservationRequest{Stage: networkpolicy.PreApproval, ReclamationReview: true, ListenerSeams: []networkpolicy.ListenerSeam{
+		{Address: "127.0.0.1", Port: 12345, Protocol: networkpolicy.UDP},
+		{Address: "0.0.0.0", Port: 443, Protocol: networkpolicy.TCP},
+	}}
 	script := filepath.Join(root, "opt/app/server.py")
 	if err := os.Remove(script); err != nil {
 		t.Fatal(err)
@@ -367,7 +479,7 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 	if err := os.Symlink("/usr/sbin/nginx", script); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewAt(root).Observe(networkpolicy.ObservationRequest{Stage: networkpolicy.PreApproval, ReclamationReview: true}); err == nil {
+	if _, err := NewAt(root).Observe(conflictReview); err == nil {
 		t.Fatal("symlink script target was accepted")
 	}
 	if err := os.Remove(script); err != nil {
@@ -387,7 +499,7 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 			if err := os.WriteFile(cmdline, []byte(arguments), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			got, err := NewAt(root).Observe(networkpolicy.ObservationRequest{Stage: networkpolicy.PreApproval, ReclamationReview: true})
+			got, err := NewAt(root).Observe(conflictReview)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -402,7 +514,7 @@ func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 	if err := os.Remove(filepath.Join(root, "var/lib/dpkg/info/nginx.list")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewAt(root).Observe(networkpolicy.ObservationRequest{Stage: networkpolicy.PreApproval, ReclamationReview: true}); err == nil {
+	if _, err := NewAt(root).Observe(conflictReview); err == nil {
 		t.Fatal("incomplete package ownership was marked as a complete reclamation inventory")
 	}
 }

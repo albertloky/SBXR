@@ -490,6 +490,42 @@ func TestInstallationReviewDistinguishesCleanContradictoryAndUnsupportedHosts(t 
 	}
 }
 
+func TestEvaluateRequestsOnlyCandidateListenerSeamsAndPreservesOtherListeners(t *testing.T) {
+	adapter := &stagedAdapter{observed: completeObservations()}
+	adapter.observed.ReclamationComplete = true
+	adapter.observed.Firewall.ActiveManager = "ufw.service"
+	adapter.observed.Firewall.UFWConfiguredState = networkpolicy.UFWConfigDisabled
+	adapter.observed.Firewall.UFWReportedState = networkpolicy.UFWStatusInactive
+	adapter.observed.Listeners = []networkpolicy.Listener{
+		{Address: "0.0.0.0", Port: 2222, Protocol: networkpolicy.TCP, Process: "sshd", Service: "ssh.service"},
+		{Address: "127.0.0.53", Port: 53, Protocol: networkpolicy.TCP, Process: "systemd-resolve", Service: "systemd-resolved.service", Executable: "/usr/lib/systemd/systemd-resolved"},
+		{Address: "127.0.0.53", Port: 53, Protocol: networkpolicy.UDP, Process: "systemd-resolve", Service: "systemd-resolved.service", Executable: "/usr/lib/systemd/systemd-resolved"},
+		{Address: "0.0.0.0", Port: 67, Protocol: networkpolicy.UDP, Process: "dhclient"},
+		{Address: "::", Port: 547, Protocol: networkpolicy.UDP, Process: "dhcp6"},
+		{Address: "127.0.0.1", Port: 123, Protocol: networkpolicy.UDP, Process: "chronyd", Service: "chrony.service"},
+		{Address: "0.0.0.0", Port: 5355, Protocol: networkpolicy.UDP, Process: "systemd-resolve", Service: "systemd-resolved.service"},
+		{Address: "0.0.0.0", Port: 5353, Protocol: networkpolicy.UDP, Process: "avahi-daemon", Service: "avahi-daemon.service"},
+		{Address: "127.0.0.1", Port: 3000, Protocol: networkpolicy.TCP, Process: "image-agent", Service: "image-agent.service"},
+	}
+
+	result := networkpolicy.New(adapter).Evaluate(networkpolicy.Request{Intent: completeIntent(), Stage: networkpolicy.PreApproval, ReclamationReview: true})
+	if result.InstallationClass != networkpolicy.CleanVPS || result.Outcome == networkpolicy.Failed {
+		t.Fatalf("ordinary listener classification = %q, findings %+v", result.InstallationClass, result.Findings)
+	}
+	want := []networkpolicy.ListenerSeam{
+		{Address: "0.0.0.0", Port: 443, Protocol: networkpolicy.TCP},
+		{Address: "0.0.0.0", Port: 443, Protocol: networkpolicy.UDP},
+		{Address: "0.0.0.0", Port: 8443, Protocol: networkpolicy.UDP},
+		{Address: "0.0.0.0", Port: 9443, Protocol: networkpolicy.TCP},
+		{Address: "0.0.0.0", Port: 10443, Protocol: networkpolicy.TCP},
+		{Address: "127.0.0.1", Port: 11080, Protocol: networkpolicy.TCP},
+		{Address: "127.0.0.1", Port: 11081, Protocol: networkpolicy.TCP},
+	}
+	if len(adapter.requests) == 0 || !reflect.DeepEqual(adapter.requests[0].ListenerSeams, want) {
+		t.Fatalf("typed listener seams = %+v, want %+v", adapter.requests, want)
+	}
+}
+
 func TestProtectedHostFoundationRefusesAReclamationPlan(t *testing.T) {
 	for name, alter := range map[string]func(*networkpolicy.Observations){
 		"package tool": func(observed *networkpolicy.Observations) {
