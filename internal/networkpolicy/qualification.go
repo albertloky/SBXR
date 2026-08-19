@@ -10,6 +10,11 @@ import (
 // ControlledInstallationAdapter returns deterministic no-live Installation facts.
 func ControlledInstallationAdapter() Adapter { return controlledInstallationAdapter{} }
 
+// ControlledInstallationCollisionAdapter adds one unproved selected-seam holder.
+func ControlledInstallationCollisionAdapter() Adapter {
+	return controlledInstallationAdapter{selectedSeamCollision: true}
+}
+
 // ControlledCloudflareProfileSetupAdapter returns deterministic Managed-host facts.
 func ControlledCloudflareProfileSetupAdapter() Adapter {
 	return controlledCloudflareProfileSetupAdapter{}
@@ -24,7 +29,7 @@ func ControlledInstallationSSHPreservationProof() (SSHPreservationProof, error) 
 	return proof, nil
 }
 
-type controlledInstallationAdapter struct{}
+type controlledInstallationAdapter struct{ selectedSeamCollision bool }
 
 type controlledCloudflareProfileSetupAdapter struct{}
 
@@ -41,14 +46,34 @@ func (controlledCloudflareProfileSetupAdapter) Observe(request ObservationReques
 	}, nil
 }
 
-func (controlledInstallationAdapter) Observe(request ObservationRequest) (Observations, error) {
-	return Observations{
+func (adapter controlledInstallationAdapter) Observe(request ObservationRequest) (Observations, error) {
+	observed := Observations{
 		Host:       HostFacts{UbuntuVersion: "24.04.3", UbuntuServer: true, Architecture: "amd64", Systemd: true, LogicalCPUs: 1, PhysicalRAM: 1024 << 20},
-		PublicIPv4: []string{"8.8.8.8"}, SSH: SSHFacts{DetectedPort: 22, ServerAddress: "8.8.8.8", CurrentSessions: []string{strings.Repeat("6", 64)}}, Firewall: FirewallFacts{SBXRTableState: "absent", RootVerified: request.Stage == PostApproval}, Routes: RouteFacts{IPv4: "default via 192.0.2.1"},
+		PublicIPv4: []string{"8.8.8.8"}, SSH: SSHFacts{DetectedPort: 22, ServerAddress: "8.8.8.8", CurrentSessions: []string{strings.Repeat("6", 64)}}, Firewall: FirewallFacts{ActiveManager: "ufw.service", SBXRTableState: "absent", UFWConfiguredState: UFWConfigDisabled, UFWReportedState: UFWStatusInactive, RootVerified: true}, Routes: RouteFacts{IPv4: "default via 192.0.2.1"},
 		Outbound: OutboundFacts{DNS: true, GitHubHTTPS: true, GitHubAttestationHTTPS: true, CloudflareHTTPS: true, ACMEHTTPS: true, CertificateEndpointsHTTPS: true, TimeService: true, TunnelTCP7844: true, TunnelUDP7844: true},
 		Disk:     DiskFacts{FilesystemBytes: 20 << 30, AvailableBytes: 3 << 30}, Time: TimeFacts{Synchronized: true, Owner: "systemd-timesyncd"}, OwnerFacts: OwnerFacts{DNS: "fresh", Tunnel: "fresh"},
+		Listeners: []Listener{
+			{Address: "0.0.0.0", Port: 22, Protocol: TCP, Process: "sshd", Service: "ssh.service"},
+			{Address: "127.0.0.53", Port: 53, Protocol: TCP, Process: "systemd-resolve", Service: "systemd-resolved.service", Executable: "/usr/lib/systemd/systemd-resolved"},
+			{Address: "127.0.0.53", Port: 53, Protocol: UDP, Process: "systemd-resolve", Service: "systemd-resolved.service", Executable: "/usr/lib/systemd/systemd-resolved"},
+			{Address: "127.0.0.54", Port: 53, Protocol: TCP, Process: "systemd-resolve", Service: "systemd-resolved.service", Executable: "/usr/lib/systemd/systemd-resolved"},
+			{Address: "127.0.0.54", Port: 53, Protocol: UDP, Process: "systemd-resolve", Service: "systemd-resolved.service", Executable: "/usr/lib/systemd/systemd-resolved"},
+			{Address: "0.0.0.0", Port: 67, Protocol: UDP, Process: "dhclient"},
+			{Address: "::", Port: 547, Protocol: UDP, Process: "dhcp6"},
+			{Address: "127.0.0.1", Port: 123, Protocol: UDP, Process: "chronyd", Service: "chrony.service"},
+			{Address: "0.0.0.0", Port: 5355, Protocol: UDP, Process: "systemd-resolve", Service: "systemd-resolved.service"},
+			{Address: "0.0.0.0", Port: 5353, Protocol: UDP, Process: "avahi-daemon", Service: "avahi-daemon.service"},
+		},
 		Certificate: CertificateFacts{DNS: DNSFacts{Hostname: "direct.example.com"}, CAA: CAAFacts{Issuer: "letsencrypt.org", HTTP01Allowed: true}}, Checksums: map[string]string{"sshd_config": "sha256:ssh", "nftables": "sha256:nft"}, ReclamationComplete: true,
-	}, nil
+	}
+	if adapter.selectedSeamCollision {
+		if len(request.ListenerSeams) == 0 {
+			return Observations{}, errors.New("controlled selected listener seam unavailable")
+		}
+		seam := request.ListenerSeams[0]
+		observed.Listeners = append(observed.Listeners, Listener{Address: seam.Address, Port: seam.Port, Protocol: seam.Protocol, Process: "caddy", Service: "caddy.service"})
+	}
+	return observed, nil
 }
 
 type controlledInstallationSSHAdapter struct{ controlledInstallationAdapter }

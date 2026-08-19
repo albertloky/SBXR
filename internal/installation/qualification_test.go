@@ -4,10 +4,21 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 
 	statefilesystem "github.com/albertloky/SBXR/internal/state/adapter/filesystem"
 )
+
+func TestControlledInstallationSelectedSeamCollisionReturnsNestedCorrection(t *testing.T) {
+	correction, err := ControlledInstallationCollisionCorrection(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if correction == nil || !strings.Contains(correction.Evidence, "INSTALL-PLAN-REFUSED; NETWORK-RECLAMATION-UNPROVED") || !strings.Contains(correction.Found, "caddy") {
+		t.Fatalf("selected-seam correction = %+v", correction)
+	}
+}
 
 func TestControlledInstallationRunsThroughRevisionOneAndCleansItsRoot(t *testing.T) {
 	parent := t.TempDir()

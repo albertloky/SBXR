@@ -1252,6 +1252,8 @@ func (composedDockerObserver) Observe(request networkpolicy.ObservationRequest) 
 	observed, err := (composedNetworkObserver{}).Observe(request)
 	observed.Firewall.ActiveManager = "docker.service"
 	observed.Firewall.UnexpectedRule = "Docker FORWARD integration"
+	observed.Firewall.UFWConfiguredState = networkpolicy.UFWConfigMissing
+	observed.Firewall.UFWReportedState = networkpolicy.UFWStatusUnavailable
 	observed.Reclamation.Docker = &networkpolicy.DockerConflict{
 		Service: "docker.service", Status: "active", ServiceExecutable: "/usr/bin/dockerd", ServiceSHA256: strings.Repeat("d", 64), ProcessID: "4242", FirewallSHA256: strings.Repeat("f", 64),
 		Packages:        []networkpolicy.PackageConflict{{Name: "docker.io", Version: "26.1.3", Owns: "/usr/bin/dockerd", ControlSHA256: strings.Repeat("c", 64), OwnedPaths: []string{"/usr/bin/dockerd", "/usr/lib/systemd/system/docker.service"}}},
@@ -1270,6 +1272,8 @@ func (composedFirewallObserver) Observe(request networkpolicy.ObservationRequest
 	observed.Firewall.ActiveManager = "ufw.service"
 	observed.Firewall.RootVerified = true
 	observed.Firewall.UnexpectedRule = `manager "ufw"; table "filter"; chain "input"`
+	observed.Firewall.UFWConfiguredState = networkpolicy.UFWConfigActive
+	observed.Firewall.UFWReportedState = networkpolicy.UFWStatusActive
 	observed.Reclamation.Firewall = &networkpolicy.FirewallConflict{Manager: "ufw.service", SHA256: strings.Repeat("f", 64), OutboundSHA256: strings.Repeat("d", 64), Objects: []string{`{"chain":{"family":"inet","table":"filter","name":"input","hook":"input","prio":0,"policy":"accept"}}`}}
 	observed.SSH.Service = "ssh.service"
 	observed.SSH.Listener = "0.0.0.0:22/tcp"

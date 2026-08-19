@@ -140,6 +140,13 @@ func executePackageQualification(ctx context.Context, metadata softwarelifecycle
 	if err := ownerconsole.QualifyControlledStagedOnboardingTerminalSecretSafe(ctx, markerText); err != nil {
 		return err
 	}
+	correction, err := installation.ControlledInstallationCollisionCorrection(ctx)
+	if err != nil {
+		return errors.New("package qualification Installation collision refused: " + err.Error())
+	}
+	if err := ownerconsole.QualifyControlledInstallationCorrectionTerminal(ctx, ownerCorrection(correction)); err != nil {
+		return errors.New("package qualification Installation correction refused: " + err.Error())
+	}
 	completed = append(completed, softwarelifecycle.PackageQualificationProcedureCodes[5])
 	if err := ownerconsole.QualifyControlledStagedOnboardingGuideText(ctx); err != nil {
 		return err

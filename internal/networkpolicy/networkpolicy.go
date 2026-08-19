@@ -1632,8 +1632,9 @@ func reviewedReclamationContract(observed Observations, plan *ReclamationPlan, c
 	if plan == nil || !validSHA256(plan.Digest) || len(observed.Reclamation.UnsafePaths) != 0 || observed.OwnerFacts.DNS != "fresh" || observed.OwnerFacts.Tunnel != "fresh" {
 		return reclamationContract{}, false
 	}
+	listeners := slices.DeleteFunc(append([]Listener(nil), observed.Listeners...), func(listener Listener) bool { return !reclaimableListener(listener, observed.SSH, candidate) })
 	if len(observed.OwnerFacts.Conflicts) != 0 {
-		if len(observed.OwnerFacts.Routes) != 0 || observed.Reclamation.Docker != nil || observed.Reclamation.Firewall != nil || len(observed.Reclamation.Packages)+len(observed.Reclamation.Identities)+len(observed.Reclamation.Executables)+len(observed.Reclamation.Scripts)+len(observed.Listeners)+len(observed.ServiceIdentities)+len(observed.ResourcePaths) != 0 {
+		if len(observed.OwnerFacts.Routes) != 0 || observed.Reclamation.Docker != nil || observed.Reclamation.Firewall != nil || len(observed.Reclamation.Packages)+len(observed.Reclamation.Identities)+len(observed.Reclamation.Executables)+len(observed.Reclamation.Scripts)+len(listeners)+len(observed.ServiceIdentities)+len(observed.ResourcePaths) != 0 {
 			return reclamationContract{}, false
 		}
 		seen := map[string]bool{}
@@ -1652,7 +1653,7 @@ func reviewedReclamationContract(observed Observations, plan *ReclamationPlan, c
 		return reclamationContract{}, false
 	}
 	if docker := observed.Reclamation.Docker; docker != nil {
-		if len(observed.Reclamation.Packages)+len(observed.Reclamation.Identities)+len(observed.Reclamation.Executables)+len(observed.Reclamation.Scripts) != 0 || len(observed.Listeners)+len(observed.ServiceIdentities)+len(observed.ResourcePaths) != 0 || docker.Service != "docker.service" || docker.Status != "active" || !filepath.IsAbs(docker.ServiceExecutable) || !validSHA256(docker.ServiceSHA256) || !validProcessID(docker.ProcessID) || !validSHA256(docker.FirewallSHA256) || len(docker.FirewallObjects) == 0 || observed.Firewall.ActiveManager != "docker.service" || observed.Firewall.UnexpectedRule == "" || len(docker.Packages) != 1 || len(docker.PreservedData) != 6 || len(docker.PreservedPaths) == 0 || len(docker.PreservedPaths) != len(docker.PreservedSHA256) {
+		if len(observed.Reclamation.Packages)+len(observed.Reclamation.Identities)+len(observed.Reclamation.Executables)+len(observed.Reclamation.Scripts) != 0 || len(listeners)+len(observed.ServiceIdentities)+len(observed.ResourcePaths) != 0 || docker.Service != "docker.service" || docker.Status != "active" || !filepath.IsAbs(docker.ServiceExecutable) || !validSHA256(docker.ServiceSHA256) || !validProcessID(docker.ProcessID) || !validSHA256(docker.FirewallSHA256) || len(docker.FirewallObjects) == 0 || observed.Firewall.ActiveManager != "docker.service" || observed.Firewall.UnexpectedRule == "" || len(docker.Packages) != 1 || len(docker.PreservedData) != 6 || len(docker.PreservedPaths) == 0 || len(docker.PreservedPaths) != len(docker.PreservedSHA256) {
 			return reclamationContract{}, false
 		}
 		for _, pkg := range append(append([]PackageConflict(nil), docker.Packages...), docker.RuntimePackages...) {
@@ -1669,7 +1670,7 @@ func reviewedReclamationContract(observed Observations, plan *ReclamationPlan, c
 		return contract, true
 	}
 	if firewall := observed.Reclamation.Firewall; firewall != nil {
-		if observed.Reclamation.Docker != nil || len(observed.Reclamation.Packages)+len(observed.Reclamation.Identities)+len(observed.Reclamation.Executables)+len(observed.Reclamation.Scripts) != 0 || len(observed.Listeners)+len(observed.ServiceIdentities)+len(observed.ResourcePaths) != 0 || !observed.Firewall.RootVerified || firewall.Manager == "" || firewall.Manager != observed.Firewall.ActiveManager || observed.Firewall.UnexpectedRule == "" || !validSHA256(firewall.SHA256) || !validSHA256(firewall.OutboundSHA256) || len(firewall.Objects) == 0 || observed.SSH.Service == "" || observed.SSH.Listener == "" || !filepath.IsAbs(observed.SSH.AuthorizedKeysPath) || !validSHA256(observed.SSH.AuthorizedKeysSHA256) || observed.SSH.DetectedPort == 0 || len(observed.SSH.CurrentSessions) == 0 {
+		if observed.Reclamation.Docker != nil || len(observed.Reclamation.Packages)+len(observed.Reclamation.Identities)+len(observed.Reclamation.Executables)+len(observed.Reclamation.Scripts) != 0 || len(listeners)+len(observed.ServiceIdentities)+len(observed.ResourcePaths) != 0 || !observed.Firewall.RootVerified || firewall.Manager == "" || firewall.Manager != observed.Firewall.ActiveManager || observed.Firewall.UnexpectedRule == "" || !validSHA256(firewall.SHA256) || !validSHA256(firewall.OutboundSHA256) || len(firewall.Objects) == 0 || observed.SSH.Service == "" || observed.SSH.Listener == "" || !filepath.IsAbs(observed.SSH.AuthorizedKeysPath) || !validSHA256(observed.SSH.AuthorizedKeysSHA256) || observed.SSH.DetectedPort == 0 || len(observed.SSH.CurrentSessions) == 0 {
 			return reclamationContract{}, false
 		}
 		candidate.Nftables = renderNftables(candidate)
@@ -1683,7 +1684,6 @@ func reviewedReclamationContract(observed Observations, plan *ReclamationPlan, c
 	if observed.Firewall.ActiveManager != "" || observed.Firewall.UnexpectedRule != "" {
 		return reclamationContract{}, false
 	}
-	listeners := slices.DeleteFunc(append([]Listener(nil), observed.Listeners...), func(listener Listener) bool { return !reclaimableListener(listener, observed.SSH, candidate) })
 	if len(observed.Reclamation.Packages) > 0 {
 		if len(observed.Reclamation.Scripts) != 0 || len(observed.Reclamation.Executables) != len(observed.Reclamation.Packages) || len(observed.Reclamation.Identities) != 0 {
 			return reclamationContract{}, false

@@ -3,6 +3,7 @@ package ownerconsole
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 )
@@ -45,7 +46,32 @@ func ControlledCloudflareWalkthrough() CloudflarePresentation {
 	}}
 }
 
-type controlledQualificationProfileSetup struct{ initial ProfileSetupPresentation }
+type controlledQualificationNoopOutcome struct{}
+
+func (controlledQualificationNoopOutcome) Fix(context.Context, CorrectionInput) ChangeReview {
+	return ChangeReview{}
+}
+func (controlledQualificationNoopOutcome) CheckAgain(context.Context) ChangeReview {
+	return ChangeReview{}
+}
+func (controlledQualificationNoopOutcome) Back(context.Context) ChangeReview { return ChangeReview{} }
+func (controlledQualificationNoopOutcome) Edit(context.Context, EditingInput) ChangeReview {
+	return ChangeReview{}
+}
+func (controlledQualificationNoopOutcome) Apply(context.Context, PlanIdentity) ChangeResult {
+	return ChangeResult{}
+}
+func (controlledQualificationNoopOutcome) Inspect(context.Context) DurableChangeSet {
+	return DurableChangeSet{}
+}
+func (controlledQualificationNoopOutcome) RequestCancellation(context.Context, OperationIdentity) ChangeResult {
+	return ChangeResult{}
+}
+
+type controlledQualificationProfileSetup struct {
+	controlledQualificationNoopOutcome
+	initial ProfileSetupPresentation
+}
 
 func (module *controlledQualificationProfileSetup) ViewProfileSetup(context.Context) ProfileSetupPresentation {
 	return module.initial
@@ -74,25 +100,6 @@ func controlledProfileSetupPlan(identity PlanIdentity) ProfileSetupPlan {
 
 func (*controlledQualificationProfileSetup) Review(context.Context) ChangeReview {
 	return ChangeReview{}
-}
-func (*controlledQualificationProfileSetup) Fix(context.Context, CorrectionInput) ChangeReview {
-	return ChangeReview{}
-}
-func (*controlledQualificationProfileSetup) CheckAgain(context.Context) ChangeReview {
-	return ChangeReview{}
-}
-func (*controlledQualificationProfileSetup) Back(context.Context) ChangeReview { return ChangeReview{} }
-func (*controlledQualificationProfileSetup) Edit(context.Context, EditingInput) ChangeReview {
-	return ChangeReview{}
-}
-func (*controlledQualificationProfileSetup) Apply(context.Context, PlanIdentity) ChangeResult {
-	return ChangeResult{}
-}
-func (*controlledQualificationProfileSetup) Inspect(context.Context) DurableChangeSet {
-	return DurableChangeSet{}
-}
-func (*controlledQualificationProfileSetup) RequestCancellation(context.Context, OperationIdentity) ChangeResult {
-	return ChangeResult{}
 }
 
 type qualificationStep struct{ wait, send string }
@@ -225,12 +232,22 @@ func (terminal *qualificationTerminal) close() {
 type controlledTerminalScreen struct {
 	scenario Scenario
 	initial  ProfileSetupPresentation
+	review   ChangeReview
 	steps    []qualificationStep
 	want     []string
 	forbid   []string
 }
 
-// QualifyControlledStagedOnboardingTerminal runs the seven decision-critical
+type controlledQualificationOutcome struct {
+	controlledQualificationNoopOutcome
+	review ChangeReview
+}
+
+func (module *controlledQualificationOutcome) Review(context.Context) ChangeReview {
+	return module.review
+}
+
+// QualifyControlledStagedOnboardingTerminal runs the decision-critical
 // screens through Run at both approved terminal sizes and returns no transcript.
 func QualifyControlledStagedOnboardingTerminal(ctx context.Context) error {
 	return qualifyControlledStagedOnboardingTerminal(ctx, nil)
@@ -240,6 +257,21 @@ func QualifyControlledStagedOnboardingTerminal(ctx context.Context) error {
 // inside Owner Console while checking controlled secret markers.
 func QualifyControlledStagedOnboardingTerminalSecretSafe(ctx context.Context, markers []string) error {
 	return qualifyControlledStagedOnboardingTerminal(ctx, markers)
+}
+
+// QualifyControlledInstallationCorrectionTerminal presents one correction
+// supplied through the public Installation outcome handoff at both sizes.
+func QualifyControlledInstallationCorrectionTerminal(ctx context.Context, review ChangeReview) error {
+	if review.Correction == nil {
+		return errors.New("controlled Installation correction unavailable")
+	}
+	screen := controlledTerminalScreen{scenario: InstallationReview, review: review, steps: []qualificationStep{{wait: "A conflicting listener", send: "\r"}, {wait: "NETWORK-RECLAMATION-UNPROVED", send: "\r"}, {wait: "Check again", send: "\x03\r"}}, want: []string{"INSTALL-PLAN-REFUSED", "NETWORK-RECLAMATION-UNPROVED", "A conflicting listener", "caddy", "Check again", "Copy redacted evidence", "Back"}, forbid: []string{"Continue anyway", "Apply exact one-use Plan"}}
+	for _, size := range [][2]int{{80, 24}, {120, 36}} {
+		if err := runControlledTerminalScreen(ctx, size, screen, nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func qualifyControlledStagedOnboardingTerminal(ctx context.Context, markers []string) error {
@@ -307,13 +339,16 @@ func runControlledTerminalScreen(ctx context.Context, size [2]int, screen contro
 	if screen.initial.Kind != 0 {
 		session.ProfileSetup = &controlledQualificationProfileSetup{initial: screen.initial}
 	}
+	if screen.review.Correction != nil {
+		session.Outcome = &controlledQualificationOutcome{review: screen.review}
+	}
 	if err := Run(ctx, session); err != nil {
 		return errors.New("controlled Owner Console terminal qualification failed")
 	}
 	transcript := terminal.transcript()
 	for _, want := range append([]string{scenarioFixture(screen.scenario).title}, screen.want...) {
 		if !strings.Contains(transcript, want) {
-			return errors.New("controlled Owner Console terminal qualification disagrees")
+			return fmt.Errorf("controlled Owner Console terminal qualification omitted %q", want)
 		}
 	}
 	for _, forbidden := range append(append([]string(nil), screen.forbid...), markers...) {

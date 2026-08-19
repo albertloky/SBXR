@@ -43,42 +43,13 @@ func RunControlledInstallationAt(ctx context.Context, root string) (state.LoadRe
 	if err != nil {
 		return state.LoadRequest{}, err
 	}
-	preflight := networkpolicy.InstallationPreflightResult{ActiveSSHPort: request.Draft.SSHPort, UsablePublicIPv4: []string{request.Draft.PublicIPv4}}
-	module, err := New(Dependencies{
-		Preflight: func() networkpolicy.InstallationPreflightResult { return preflight },
-		ReviewRealityTarget: func(_ context.Context, target connectionprofiles.RealityTarget) connectionprofiles.RealityTargetReview {
-			return connectionprofiles.RealityTargetReview{Target: target, Health: connectionprofiles.Health{Outcome: connectionprofiles.Healthy}}
-		},
-		RunningRelease: func() (RunningRelease, error) {
-			return RunningRelease{Tag: request.Tag, Architecture: request.Architecture}, nil
-		},
-		ReleaseCandidate: func(context.Context, string, softwarelifecycle.Architecture) (softwarelifecycle.InstallCandidateHandoff, error) {
-			return request.Candidate, nil
-		},
-		Stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
-			return request.Candidate.Staged, nil
-		},
-		Network: networkpolicy.New(networkpolicy.ControlledInstallationAdapter()).Evaluate,
-		Entropy: bytes.NewReader(bytes.Repeat([]byte{0x42}, 4096)),
-		Launch: func(ctx context.Context, handoff softwareubuntu.InstallHandoffRequest, _ <-chan struct{}) (softwareubuntu.InstallApplyOutcome, error) {
-			return applyControlledInstallation(ctx, root, handoff)
-		},
-		Recover:       func(context.Context, systemchanges.PendingChangeSet) error { return nil },
-		Pending:       controlledPendingReader{},
-		WriteReceipt:  func(string, softwarelifecycle.ReleaseIdentity, string) error { return nil },
-		RemoveReceipt: func() error { return nil },
-		ObserveState: func() (systemchanges.Observation, error) {
-			return systemchanges.Observation{Status: systemchanges.NotInstalled}, nil
-		},
-		LoadManaged: func() (systemchanges.Observation, state.ReleaseIdentity, error) {
-			return systemchanges.Observation{}, state.ReleaseIdentity{}, nil
-		},
-		ProveSubscription: func(context.Context, string, uint16) error { return nil },
+	module, err := controlledInstallationModule(request, networkpolicy.ControlledInstallationAdapter(), func(ctx context.Context, handoff softwareubuntu.InstallHandoffRequest, _ <-chan struct{}) (softwareubuntu.InstallApplyOutcome, error) {
+		return applyControlledInstallation(ctx, root, handoff)
 	})
 	if err != nil {
 		return state.LoadRequest{}, err
 	}
-	review := module.Review(ctx, Draft{Tag: request.Tag, Architecture: request.Architecture, Installation: request.Draft, RealityTarget: request.RealityTarget, RealityServerName: request.RealityServerName})
+	review := module.Review(ctx, controlledInstallationDraft(request))
 	if review.Plan == nil || review.Plan.DesiredStateRevision != 1 {
 		return state.LoadRequest{}, errors.New("controlled Installation review refused")
 	}
@@ -103,6 +74,63 @@ func RunControlledInstallationAt(ctx context.Context, root string) (state.LoadRe
 		case <-time.After(time.Millisecond):
 		}
 	}
+}
+
+func controlledInstallationModule(request softwareubuntu.InstallHandoffRequest, adapter networkpolicy.Adapter, launch func(context.Context, softwareubuntu.InstallHandoffRequest, <-chan struct{}) (softwareubuntu.InstallApplyOutcome, error)) (*Interface, error) {
+	preflight := networkpolicy.InstallationPreflightResult{ActiveSSHPort: request.Draft.SSHPort, UsablePublicIPv4: []string{request.Draft.PublicIPv4}}
+	return New(Dependencies{
+		Preflight: func() networkpolicy.InstallationPreflightResult { return preflight },
+		ReviewRealityTarget: func(_ context.Context, target connectionprofiles.RealityTarget) connectionprofiles.RealityTargetReview {
+			return connectionprofiles.RealityTargetReview{Target: target, Health: connectionprofiles.Health{Outcome: connectionprofiles.Healthy}}
+		},
+		RunningRelease: func() (RunningRelease, error) {
+			return RunningRelease{Tag: request.Tag, Architecture: request.Architecture}, nil
+		},
+		ReleaseCandidate: func(context.Context, string, softwarelifecycle.Architecture) (softwarelifecycle.InstallCandidateHandoff, error) {
+			return request.Candidate, nil
+		},
+		Stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
+			return request.Candidate.Staged, nil
+		},
+		Network:       networkpolicy.New(adapter).Evaluate,
+		Entropy:       bytes.NewReader(bytes.Repeat([]byte{0x42}, 4096)),
+		Launch:        launch,
+		Recover:       func(context.Context, systemchanges.PendingChangeSet) error { return nil },
+		Pending:       controlledPendingReader{},
+		WriteReceipt:  func(string, softwarelifecycle.ReleaseIdentity, string) error { return nil },
+		RemoveReceipt: func() error { return nil },
+		ObserveState: func() (systemchanges.Observation, error) {
+			return systemchanges.Observation{Status: systemchanges.NotInstalled}, nil
+		},
+		LoadManaged: func() (systemchanges.Observation, state.ReleaseIdentity, error) {
+			return systemchanges.Observation{}, state.ReleaseIdentity{}, nil
+		},
+		ProveSubscription: func(context.Context, string, uint16) error { return nil },
+	})
+}
+
+func controlledInstallationDraft(request softwareubuntu.InstallHandoffRequest) Draft {
+	return Draft{Tag: request.Tag, Architecture: request.Architecture, Installation: request.Draft, RealityTarget: request.RealityTarget, RealityServerName: request.RealityServerName}
+}
+
+// ControlledInstallationCollisionCorrection runs a selected listener seam
+// through Network Policy and Installation's typed correction handoff.
+func ControlledInstallationCollisionCorrection(ctx context.Context) (*Correction, error) {
+	request, err := controlledInstallRequest()
+	if err != nil {
+		return nil, err
+	}
+	module, err := controlledInstallationModule(request, networkpolicy.ControlledInstallationCollisionAdapter(), func(context.Context, softwareubuntu.InstallHandoffRequest, <-chan struct{}) (softwareubuntu.InstallApplyOutcome, error) {
+		return 0, errors.New("controlled selected-seam correction cannot Apply")
+	})
+	if err != nil {
+		return nil, err
+	}
+	review := module.Review(ctx, controlledInstallationDraft(request))
+	if review.Correction == nil {
+		return nil, errors.New("controlled selected-seam correction unavailable")
+	}
+	return review.Correction, nil
 }
 
 // QualifyControlledInstallationRestart proves durable State publication and
