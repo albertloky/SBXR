@@ -307,8 +307,8 @@ func (outcome *installOutcome) Back(ctx context.Context) ownerconsole.ChangeRevi
 	return outcome.presentReview(review)
 }
 
-func installCorrection(err error) ownerconsole.ChangeReview {
-	return ownerconsole.ChangeReview{Correction: &ownerconsole.CorrectionPresentation{Problem: "The installation Plan could not be built", Found: "One required release, provider, network, or installation input did not pass", Required: "Correct the named input or external fact, then check again", WhyStopped: "SBXR never continues with an incomplete or changed installation Plan", OwnerSteps: []string{"Restore the required external fact, then use Check again for a fresh Installation review."}, Evidence: "INSTALL-PLAN-REFUSED: " + err.Error()}}
+func installCorrection(_ error) ownerconsole.ChangeReview {
+	return ownerconsole.ChangeReview{Correction: &ownerconsole.CorrectionPresentation{Problem: "The installation Plan could not be built", Found: "One required release, provider, network, or installation input did not pass", Required: "Correct the named input or external fact, then check again", WhyStopped: "SBXR never continues with an incomplete or changed installation Plan", OwnerSteps: []string{"Restore the required external fact, then use Check again for a fresh Installation review."}, Evidence: "INSTALL-PLAN-REFUSED"}}
 }
 
 func proveInstalledSubscription(ctx context.Context, address string, port uint16) error {

@@ -70,6 +70,67 @@ func TestComposedInstallBuildsAndPreparesTheCompleteRevisionOnePlan(t *testing.T
 	t.Log("RELEASE-STAGED-ONBOARDING-MARKER-SETUP-ENTROPY")
 }
 
+func TestInstallationCorrectionCarriesTypedFirewallFinding(t *testing.T) {
+	productionNetwork := networkpolicy.New(composedFirewallObserver{}).Evaluate
+	module := newTestInstallationWithNetwork(t, func(request networkpolicy.Request) networkpolicy.Result {
+		result := productionNetwork(request)
+		for _, finding := range result.Findings {
+			if finding.Code == "NETWORK-FIREWALL-CONFLICT" {
+				return networkpolicy.Result{Outcome: networkpolicy.Failed, Findings: []networkpolicy.Finding{finding}}
+			}
+		}
+		t.Fatal("production-shaped firewall conflict finding unavailable")
+		return networkpolicy.Result{}
+	})
+
+	review := module.Review(t.Context(), composedDraft(t))
+	if review.Correction == nil {
+		t.Fatalf("Installation review = %+v", review)
+	}
+	correction := review.Correction
+	if correction.Problem != "A competing firewall owner or unexpected rule is active" || correction.Required != "no active competing firewall owner and no unexpected base-chain or legacy rule" || correction.WhyStopped != "SBXR never disables another firewall owner or flushes the host ruleset" {
+		t.Fatalf("firewall Correction = %+v", correction)
+	}
+	if len(correction.OwnerSteps) != 1 || correction.OwnerSteps[0] != "Review the named firewall owner and correct it outside SBXR, then check again." {
+		t.Fatalf("firewall correction steps = %+v", correction.OwnerSteps)
+	}
+	for _, want := range []string{"INSTALL-PLAN-REFUSED", "NETWORK-FIREWALL-CONFLICT", correction.Found, correction.Required} {
+		if !strings.Contains(correction.Evidence, want) {
+			t.Fatalf("firewall evidence omitted %q: %q", want, correction.Evidence)
+		}
+	}
+}
+
+func TestInstallationCorrectionCarriesTypedProtectedReclamationFinding(t *testing.T) {
+	observations := 0
+	productionNetwork := networkpolicy.New(protectedPackageObserver{}).Evaluate
+	module := newTestInstallationWithNetwork(t, func(request networkpolicy.Request) networkpolicy.Result {
+		observations++
+		return productionNetwork(request)
+	})
+
+	review := module.Review(t.Context(), composedDraft(t))
+	if review.Correction == nil {
+		t.Fatalf("Installation review = %+v", review)
+	}
+	correction := review.Correction
+	if correction.Problem != "A package conflict owns part of the Protected Host Foundation" || correction.Required != "no package owning SSH, system tools, shared libraries, mounts, or recovery dependencies" || correction.WhyStopped != "SBXR never offers removal of a package that owns the host foundation" {
+		t.Fatalf("protected reclamation Correction = %+v", correction)
+	}
+	if len(correction.OwnerSteps) != 1 || correction.OwnerSteps[0] != "Reimage the VPS or remove the conflict through its proven owner." {
+		t.Fatalf("protected reclamation steps = %+v", correction.OwnerSteps)
+	}
+	for _, want := range []string{"INSTALL-PLAN-REFUSED", "NETWORK-RECLAMATION-PROTECTED", correction.Found, correction.Required} {
+		if !strings.Contains(correction.Evidence, want) {
+			t.Fatalf("protected reclamation evidence omitted %q: %q", want, correction.Evidence)
+		}
+	}
+	before := observations
+	if checked := module.Review(t.Context(), Draft{}); checked.Correction == nil || observations <= before {
+		t.Fatalf("Check again did not repeat production Installation review: observations %d -> %d, review %+v", before, observations, checked)
+	}
+}
+
 type rootRuntimeInstallApproval struct {
 	recheck softwarelifecycle.InstallRecheck
 	marker  string
@@ -1008,6 +1069,15 @@ func newTestInstallationWithPreflight(t *testing.T, observer networkpolicy.Adapt
 }
 
 func newTestInstallationWith(t *testing.T, observer networkpolicy.Adapter, launch func(context.Context, softwareubuntu.InstallHandoffRequest, <-chan struct{}) (softwareubuntu.InstallApplyOutcome, error), preflight networkpolicy.InstallationPreflightResult) *Interface {
+	return newTestInstallationWithDependencies(t, networkpolicy.New(observer).Evaluate, launch, preflight)
+}
+
+func newTestInstallationWithNetwork(t *testing.T, network func(networkpolicy.Request) networkpolicy.Result) *Interface {
+	request := composedInstallRequest(t)
+	return newTestInstallationWithDependencies(t, network, nil, networkpolicy.InstallationPreflightResult{ActiveSSHPort: request.Draft.SSHPort, UsablePublicIPv4: []string{request.Draft.PublicIPv4}})
+}
+
+func newTestInstallationWithDependencies(t *testing.T, network func(networkpolicy.Request) networkpolicy.Result, launch func(context.Context, softwareubuntu.InstallHandoffRequest, <-chan struct{}) (softwareubuntu.InstallApplyOutcome, error), preflight networkpolicy.InstallationPreflightResult) *Interface {
 	t.Helper()
 	request := composedInstallRequest(t)
 	if launch == nil {
@@ -1029,7 +1099,7 @@ func newTestInstallationWith(t *testing.T, observer networkpolicy.Adapter, launc
 		Stage: func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error) {
 			return request.Candidate.Staged, nil
 		},
-		Network: networkpolicy.New(observer).Evaluate, Entropy: bytes.NewReader(bytes.Repeat([]byte{0x42}, 4096)), Launch: launch,
+		Network: network, Entropy: bytes.NewReader(bytes.Repeat([]byte{0x42}, 4096)), Launch: launch,
 		Recover: func(context.Context, systemchanges.PendingChangeSet) error { return nil }, Pending: pendingReaderStub{}, WriteReceipt: func(string, softwarelifecycle.ReleaseIdentity, string) error { return nil }, RemoveReceipt: func() error { return nil }, ObserveState: func() (systemchanges.Observation, error) {
 			return systemchanges.Observation{Status: systemchanges.NotInstalled}, nil
 		}, LoadManaged: func() (systemchanges.Observation, state.ReleaseIdentity, error) {
@@ -1165,6 +1235,14 @@ func (composedPackageObserver) Observe(request networkpolicy.ObservationRequest)
 	observed.ResourcePaths = []string{"/opt/xray/proxy"}
 	observed.Reclamation.Packages = []networkpolicy.PackageConflict{{Name: "xray", Version: "1.2.3", Owns: "/opt/xray/proxy", OwnedPaths: []string{"/opt/xray/proxy"}}}
 	observed.Reclamation.Executables = []networkpolicy.FileConflict{{Path: "/opt/xray/proxy", SHA256: strings.Repeat("7", 64), Process: "xray", Service: "xray.service", ProcessID: "4242", Package: "xray", Mode: 0o755, Links: 1}}
+	return observed, err
+}
+
+type protectedPackageObserver struct{ composedPackageObserver }
+
+func (protectedPackageObserver) Observe(request networkpolicy.ObservationRequest) (networkpolicy.Observations, error) {
+	observed, err := (composedPackageObserver{}).Observe(request)
+	observed.Reclamation.Packages[0].OwnedPaths = append(observed.Reclamation.Packages[0].OwnedPaths, "/usr/lib/libshared.so")
 	return observed, err
 }
 

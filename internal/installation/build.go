@@ -116,6 +116,23 @@ type reclamationReviewError struct {
 
 func (err *reclamationReviewError) Error() string { return "Reclaimable VPS review is required" }
 
+type networkPolicyRefusal struct{ finding networkpolicy.Finding }
+
+func (*networkPolicyRefusal) Error() string {
+	return "Clean VPS Network Policy refused the installation"
+}
+
+func refusedNetworkPolicy(results ...networkpolicy.Result) error {
+	for _, result := range results {
+		for _, finding := range result.Findings {
+			if finding.Classification == networkpolicy.Required && finding.Outcome == networkpolicy.Failed {
+				return &networkPolicyRefusal{finding: finding}
+			}
+		}
+	}
+	return errors.New("Clean VPS Network Policy refused the installation")
+}
+
 type installReleaseStager struct {
 	stage func(context.Context, softwarelifecycle.StageRequest) (softwarelifecycle.StagedRelease, error)
 }
@@ -153,7 +170,7 @@ func buildInstallWith(ctx context.Context, request softwareubuntu.InstallHandoff
 	httpNetwork := dependencies.network(networkpolicy.Request{Intent: httpIntent, Stage: networkpolicy.PreApproval, ReclamationReview: true, ReviewedReclamationSHA256: request.ReviewedReclamationSHA256})
 	http01, postFirewallHTTP := networkpolicy.PrepareHTTP01AfterFirewallReclamation(baseNetwork, intent, httpIntent)
 	if baseNetwork.Outcome == networkpolicy.Failed || httpNetwork.Outcome == networkpolicy.Failed && !postFirewallHTTP {
-		return nil, errors.New("Clean VPS Network Policy refused the installation")
+		return nil, refusedNetworkPolicy(baseNetwork, httpNetwork)
 	}
 	if !postFirewallHTTP {
 		http01, postFirewallHTTP = httpNetwork.HTTP01Contribution()
