@@ -33,6 +33,7 @@ type Adapter struct {
 	root             string
 	external         bool
 	privileged       bool
+	selfProcessID    string
 	output           func(string, ...string) ([]byte, error)
 	firewallOutput   func(string, ...string) ([]byte, error)
 	addresses        func() ([]net.Addr, error)
@@ -40,7 +41,7 @@ type Adapter struct {
 }
 
 func New() Adapter {
-	adapter := Adapter{root: "/", external: true, privileged: true}
+	adapter := Adapter{root: "/", external: true, privileged: true, selfProcessID: strconv.Itoa(os.Getpid())}
 	if os.Geteuid() != 0 {
 		adapter.firewallOutput = sudoReadOnlyFirewallOutput
 	}
@@ -862,6 +863,9 @@ func (a Adapter) serviceIdentities() []string {
 	processes, _ := os.ReadDir(a.path("/proc"))
 	for _, process := range processes {
 		if _, err := strconv.Atoi(process.Name()); err != nil {
+			continue
+		}
+		if process.Name() == a.selfProcessID {
 			continue
 		}
 		name := strings.TrimSpace(readOptional(a.path(filepath.Join("/proc", process.Name(), "comm"))))

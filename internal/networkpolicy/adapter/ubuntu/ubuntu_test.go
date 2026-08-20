@@ -194,6 +194,29 @@ func TestObservedSSHListenerRequiresIndependentSocketOwnership(t *testing.T) {
 	}
 }
 
+func TestServiceIdentitiesExcludeOnlyTheCurrentProcess(t *testing.T) {
+	if got, want := New().selfProcessID, strconv.Itoa(os.Getpid()); got != want {
+		t.Fatalf("production self process ID = %q, want %q", got, want)
+	}
+
+	root := t.TempDir()
+	for process, name := range map[string]string{"100": "sbxr", "101": "sbxr", "102": "sbxr-worker", "103": "xray"} {
+		path := filepath.Join(root, "proc", process, "comm")
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(name+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := (Adapter{root: root, selfProcessID: "100"}).serviceIdentities()
+	want := []string{"process:sbxr", "process:sbxr-worker", "process:xray"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("service identities = %v, want %v", got, want)
+	}
+}
+
 func TestAdapterCollectsTypedFactsWithoutMutation(t *testing.T) {
 	root := t.TempDir()
 	files := map[string]string{
