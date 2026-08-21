@@ -106,7 +106,7 @@ func TestViewAndPlanCompleteRemovalDiscloseTheWholeRollbackSafeJourney(t *testin
 	capability, stateSHA := managedCapability(t, true)
 	volatileSHA := strings.Repeat("b", 64)
 	changes := systemchanges.New(removalStatusAdapter{systemchanges.Observation{Status: systemchanges.Managed, LastChangeSet: "change-0007", Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, StateRevision: 7, StateSHA256: stateSHA, VolatileSHA256: volatileSHA}})
-	view := (softwarelifecycle.Interface{}).ViewCompleteRemoval(changes)
+	view := (softwarelifecycle.LegacyInterface{}).ViewCompleteRemoval(changes)
 	if view.Status != softwarelifecycle.Managed || view.StateRevision != 7 || view.StateSHA256 != stateSHA || !reflect.DeepEqual(view.PermittedActions, []softwarelifecycle.Action{softwarelifecycle.ReviewCompleteRemoval}) || view.Candidate() == (softwarelifecycle.CompleteRemovalCandidate{}) {
 		t.Fatalf("ViewCompleteRemoval() = %+v", view)
 	}
@@ -135,7 +135,7 @@ func TestPlanCompleteRemovalBeforeCloudflareSetupContainsOnlyProvedLocalWork(t *
 	capability, stateSHA := managedCapability(t, false)
 	volatileSHA := strings.Repeat("b", 64)
 	changes := systemchanges.New(removalStatusAdapter{systemchanges.Observation{Status: systemchanges.Managed, LastChangeSet: "change-0007", Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, StateRevision: 7, StateSHA256: stateSHA, VolatileSHA256: volatileSHA}})
-	view := (softwarelifecycle.Interface{}).ViewCompleteRemoval(changes)
+	view := (softwarelifecycle.LegacyInterface{}).ViewCompleteRemoval(changes)
 	console := ownerconsole.New(removalReviewObserver{})
 	review, err := console.StartRemovalReview("complete-removal-reality-only")
 	if err != nil {
@@ -161,7 +161,7 @@ func TestPlanCompleteRemovalBeforeCloudflareSetupContainsOnlyProvedLocalWork(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	rechecked := (softwarelifecycle.Interface{}).ViewCompleteRemoval(changes).Candidate()
+	rechecked := (softwarelifecycle.LegacyInterface{}).ViewCompleteRemoval(changes).Candidate()
 	approval := &completeRemovalApproval{recheck: softwarelifecycle.CompleteRemovalRecheck{Candidate: rechecked, Review: review, Capability: capability, PublicAuthorities: public, TypedConfirmation: typed, PermanentSelection: selected}}
 	prepared := completeRemovalPrepared{changeSet: "complete-removal-reality-only", revision: 8, starting: stateSHA, candidate: stateSHA, planIdentity: plan.Identity(), planSHA256: plan.SHA256()}
 	result := plan.Apply(t.Context(), softwarelifecycle.CompleteRemovalApplyRequest{Approval: approval, PreparedState: prepared, SystemChanges: systemchanges.New(nil)})
@@ -184,20 +184,20 @@ func TestPlanCompleteRemovalRefusesIncompleteCallerMadeAndReusedInputs(t *testin
 	disk := systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}
 	request := softwarelifecycle.CompleteRemovalPlanRequest{Review: review, ChangeSet: "complete-removal-hostile-0007", Capability: capability, PublicAuthorities: public, CloudflareAuthorities: external, Disk: disk}
 
-	request.Candidate = (softwarelifecycle.Interface{}).ViewCompleteRemoval(changes).Candidate()
+	request.Candidate = (softwarelifecycle.LegacyInterface{}).ViewCompleteRemoval(changes).Candidate()
 	request.PublicAuthorities = public[:len(public)-1]
 	if plan, finding := softwarelifecycle.PlanCompleteRemoval(request); plan != nil || finding == nil {
 		t.Fatalf("incomplete public proof = (%+v, %+v)", plan, finding)
 	}
 
-	request.Candidate = (softwarelifecycle.Interface{}).ViewCompleteRemoval(changes).Candidate()
+	request.Candidate = (softwarelifecycle.LegacyInterface{}).ViewCompleteRemoval(changes).Candidate()
 	request.PublicAuthorities = public
 	request.Review = forgedRemovalReview{}
 	if plan, finding := softwarelifecycle.PlanCompleteRemoval(request); plan != nil || finding == nil {
 		t.Fatalf("caller-made review = (%+v, %+v)", plan, finding)
 	}
 
-	request.Candidate = (softwarelifecycle.Interface{}).ViewCompleteRemoval(changes).Candidate()
+	request.Candidate = (softwarelifecycle.LegacyInterface{}).ViewCompleteRemoval(changes).Candidate()
 	request.Review = review
 	if plan, finding := softwarelifecycle.PlanCompleteRemoval(request); plan == nil || finding != nil {
 		t.Fatalf("valid Plan = (%+v, %+v)", plan, finding)
@@ -211,7 +211,7 @@ func TestPlanCompleteRemovalPreservesARecoveryRequiredStart(t *testing.T) {
 	volatileSHA := strings.Repeat("b", 64)
 	observation := systemchanges.Observation{Status: systemchanges.RecoveryRequired, Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, RecoveryCause: systemchanges.StateLineageUnprovable, VolatileSHA256: volatileSHA}
 	changes := systemchanges.New(removalStatusAdapter{observation})
-	view := (softwarelifecycle.Interface{}).ViewCompleteRemoval(changes)
+	view := (softwarelifecycle.LegacyInterface{}).ViewCompleteRemoval(changes)
 	console := ownerconsole.New(removalReviewObserver{})
 	review, err := console.StartRemovalReview("complete-removal-recovery-0007")
 	if err != nil {
@@ -238,7 +238,7 @@ func TestPlanCompleteRemovalPreservesARecoveryRequiredStart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rechecked := (softwarelifecycle.Interface{}).ViewCompleteRemoval(changes).Candidate()
+	rechecked := (softwarelifecycle.LegacyInterface{}).ViewCompleteRemoval(changes).Candidate()
 	approval := &completeRemovalApproval{recheck: softwarelifecycle.CompleteRemovalRecheck{Candidate: rechecked, Review: review, PublicAuthorities: public, CloudflareAuthorities: external, TypedConfirmation: typed, PermanentSelection: selected}}
 	result := plan.Apply(t.Context(), softwarelifecycle.CompleteRemovalApplyRequest{Approval: approval, PreparedState: prepared, SystemChanges: systemchanges.New(nil)})
 	if result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-ADAPTER-UNAVAILABLE" {
@@ -250,7 +250,7 @@ func TestPlanCompleteRemovalPreservesARecoveryRequiredStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	corruptPublic, corruptExternal := completeRemovalAuthorities(t, "complete-removal-corrupt-0007")
-	corruptPlan, corruptFinding := softwarelifecycle.PlanCompleteRemoval(softwarelifecycle.CompleteRemovalPlanRequest{Candidate: (softwarelifecycle.Interface{}).ViewCompleteRemoval(changes).Candidate(), Review: corruptReview, ChangeSet: "complete-removal-corrupt-0007", PublicAuthorities: corruptPublic, CloudflareAuthorities: corruptExternal, Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}})
+	corruptPlan, corruptFinding := softwarelifecycle.PlanCompleteRemoval(softwarelifecycle.CompleteRemovalPlanRequest{Candidate: (softwarelifecycle.LegacyInterface{}).ViewCompleteRemoval(changes).Candidate(), Review: corruptReview, ChangeSet: "complete-removal-corrupt-0007", PublicAuthorities: corruptPublic, CloudflareAuthorities: corruptExternal, Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}})
 	if corruptFinding != nil {
 		t.Fatal(corruptFinding)
 	}
@@ -266,7 +266,7 @@ func TestViewCompleteRemovalRefusesAnUnfinishedRollback(t *testing.T) {
 		TotalSteps: 8, Lock: systemchanges.LockReleased, RollbackAvailable: true, RecoveryCause: systemchanges.ForwardCheckpointUnprovable,
 		StateRevision: 7, StateSHA256: strings.Repeat("a", 64), VolatileSHA256: strings.Repeat("b", 64),
 	}
-	view := (softwarelifecycle.Interface{}).ViewCompleteRemoval(systemchanges.New(removalStatusAdapter{observation}))
+	view := (softwarelifecycle.LegacyInterface{}).ViewCompleteRemoval(systemchanges.New(removalStatusAdapter{observation}))
 	if view.Candidate() != (softwarelifecycle.CompleteRemovalCandidate{}) || len(view.PermittedActions) != 0 {
 		t.Fatalf("unfinished rollback Complete removal View = %+v", view)
 	}
@@ -277,7 +277,7 @@ func TestApplyCompleteRemovalRechecksBothOwnerActsAndHandsOneChangeSetToSystemCh
 	volatileSHA := strings.Repeat("b", 64)
 	observation := systemchanges.Observation{Status: systemchanges.Managed, LastChangeSet: "change-0007", Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, StateRevision: 7, StateSHA256: stateSHA, VolatileSHA256: volatileSHA}
 	changes := systemchanges.New(removalStatusAdapter{observation})
-	view := (softwarelifecycle.Interface{}).ViewCompleteRemoval(changes)
+	view := (softwarelifecycle.LegacyInterface{}).ViewCompleteRemoval(changes)
 	console := ownerconsole.New(removalReviewObserver{})
 	review, err := console.StartRemovalReview("complete-removal-apply-0007")
 	if err != nil {
@@ -294,7 +294,7 @@ func TestApplyCompleteRemovalRechecksBothOwnerActsAndHandsOneChangeSetToSystemCh
 	if typedErr != nil || selectedErr != nil {
 		t.Fatalf("Owner authorization = (%v, %v)", typedErr, selectedErr)
 	}
-	rechecked := (softwarelifecycle.Interface{}).ViewCompleteRemoval(changes).Candidate()
+	rechecked := (softwarelifecycle.LegacyInterface{}).ViewCompleteRemoval(changes).Candidate()
 	approval := &completeRemovalApproval{recheck: softwarelifecycle.CompleteRemovalRecheck{Candidate: rechecked, Review: review, Capability: capability, PublicAuthorities: public, CloudflareAuthorities: external, TypedConfirmation: typed, PermanentSelection: selected}}
 	prepared := completeRemovalPrepared{changeSet: request.ChangeSet, revision: 8, starting: stateSHA, candidate: stateSHA, planIdentity: plan.Identity(), planSHA256: plan.SHA256()}
 	result := plan.Apply(t.Context(), softwarelifecycle.CompleteRemovalApplyRequest{Approval: approval, PreparedState: prepared, SystemChanges: systemchanges.New(nil)})
@@ -318,7 +318,7 @@ func TestCompleteRemovalPreparesOnlyUnchangedCurrentStateForRollback(t *testing.
 	stateSHA, volatileSHA := "ab76945ea6e878e5be9f97f79a293000c8334ea709bbd3659d1db79cecc4261a", strings.Repeat("b", 64)
 	observation := systemchanges.Observation{Status: systemchanges.Managed, LastChangeSet: "change-0007", Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, StateRevision: 7, StateSHA256: stateSHA, VolatileSHA256: volatileSHA}
 	changes := systemchanges.New(removalStatusAdapter{observation})
-	view := (softwarelifecycle.Interface{}).ViewCompleteRemoval(changes)
+	view := (softwarelifecycle.LegacyInterface{}).ViewCompleteRemoval(changes)
 	console := ownerconsole.New(removalReviewObserver{})
 	review, err := console.StartRemovalReview("complete-removal-state-0007")
 	if err != nil {
@@ -357,7 +357,7 @@ func TestCompleteRemovalPreparesOnlyUnchangedCurrentStateForRollback(t *testing.
 	}
 	typed, _ := console.RecordTypedPhrase(review)
 	selected, _ := console.SelectPermanentRemoval(review, typed)
-	rechecked := (softwarelifecycle.Interface{}).ViewCompleteRemoval(changes).Candidate()
+	rechecked := (softwarelifecycle.LegacyInterface{}).ViewCompleteRemoval(changes).Candidate()
 	approval := &completeRemovalApproval{recheck: softwarelifecycle.CompleteRemovalRecheck{Candidate: rechecked, Review: review, Capability: capability, PublicAuthorities: public, CloudflareAuthorities: external, TypedConfirmation: typed, PermanentSelection: selected}}
 	result := plan.Apply(t.Context(), softwarelifecycle.CompleteRemovalApplyRequest{Approval: approval, PreparedState: prepared, SystemChanges: systemchanges.New(nil)})
 	if result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-ADAPTER-UNAVAILABLE" {

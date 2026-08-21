@@ -143,7 +143,9 @@ type VerifierQualification struct {
 	Version, SigningFingerprint string
 }
 
-type Interface struct {
+// LegacyInterface is retained only while the Installer-Updater is assembled on
+// its integration line. The atomic reset removes it before the line reaches main.
+type LegacyInterface struct {
 	source        ReleaseSource
 	discovery     ReleaseDiscovery
 	candidates    CandidateStore
@@ -152,14 +154,14 @@ type Interface struct {
 	now           func() time.Time
 }
 
-func NewWithCandidateRetention(source ReleaseSource, qualification VerifierQualification, now func() time.Time, candidates CandidateStore, stager ...ReleaseStager) Interface {
+func NewWithCandidateRetention(source ReleaseSource, qualification VerifierQualification, now func() time.Time, candidates CandidateStore, stager ...ReleaseStager) LegacyInterface {
 	module := New(source, qualification, now, stager...)
 	module.discovery, _ = source.(ReleaseDiscovery)
 	module.candidates = candidates
 	return module
 }
 
-func New(source ReleaseSource, qualification VerifierQualification, now func() time.Time, stager ...ReleaseStager) Interface {
+func New(source ReleaseSource, qualification VerifierQualification, now func() time.Time, stager ...ReleaseStager) LegacyInterface {
 	if now == nil {
 		now = time.Now
 	}
@@ -167,10 +169,10 @@ func New(source ReleaseSource, qualification VerifierQualification, now func() t
 	if len(stager) == 1 {
 		selected = stager[0]
 	}
-	return Interface{source: source, stager: selected, qualification: qualification, now: now}
+	return LegacyInterface{source: source, stager: selected, qualification: qualification, now: now}
 }
 
-func (module Interface) View(ctx context.Context, request ViewRequest) ViewResult {
+func (module LegacyInterface) View(ctx context.Context, request ViewRequest) ViewResult {
 	result := ViewResult{InstallationStatus: request.InstallationStatus}
 	if request.Installed != nil && validInstalled(*request.Installed) {
 		identity := request.Installed.Identity

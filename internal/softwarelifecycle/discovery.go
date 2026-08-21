@@ -69,7 +69,7 @@ type CandidateStore interface {
 	RetainNewest(CandidateRecord) error
 }
 
-func (module Interface) discoverUpdate(ctx context.Context, request ViewRequest, result ViewResult) ViewResult {
+func (module LegacyInterface) discoverUpdate(ctx context.Context, request ViewRequest, result ViewResult) ViewResult {
 	if module.discovery == nil || module.candidates == nil {
 		return refuse(result)
 	}
@@ -115,7 +115,7 @@ func (module Interface) discoverUpdate(ctx context.Context, request ViewRequest,
 	return reportUpdate(result, newest)
 }
 
-func (module Interface) loadCandidate() (VerifiedRelease, bool, error) {
+func (module LegacyInterface) loadCandidate() (VerifiedRelease, bool, error) {
 	record, err := module.candidates.Load()
 	if errors.Is(err, ErrCandidateNotFound) {
 		return VerifiedRelease{}, false, nil

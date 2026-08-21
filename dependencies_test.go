@@ -396,7 +396,8 @@ func validateSoftwareLifecycleVerification(root string) error {
 			if err != nil {
 				return err
 			}
-			if importPath == "os" || importPath == "os/exec" || importPath == "syscall" || importPath == "unsafe" || strings.HasPrefix(importPath, modulePath+"/internal/") && importPath != modulePath+"/internal/systemchanges" && importPath != modulePath+"/internal/networkpolicy" && importPath != modulePath+"/internal/softwarelifecycle/contract" {
+			hostInspection := file.Name() == "status_local.go" && (importPath == "os" || importPath == "syscall")
+			if !hostInspection && (importPath == "os" || importPath == "os/exec" || importPath == "syscall" || importPath == "unsafe") || strings.HasPrefix(importPath, modulePath+"/internal/") && importPath != modulePath+"/internal/systemchanges" && importPath != modulePath+"/internal/networkpolicy" && importPath != modulePath+"/internal/softwarelifecycle/contract" {
 				return fmt.Errorf("Software Lifecycle core must remain verification-only before staging: %s imports %s", file.Name(), importPath)
 			}
 		}
