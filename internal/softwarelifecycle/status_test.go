@@ -53,7 +53,7 @@ func TestStatusRequiresRecoveryForUnverifiedLocalEvidence(t *testing.T) {
 			record.ExecutableSHA256 = strings.Repeat("c", 64)
 			value.installedRecord, _ = json.Marshal(record)
 		}},
-		{"unsafe", func(value *localInspection) { value.safe = false }},
+		{"unsafe", func(value *localInspection) { value.inspectionValid = false }},
 		{"unfinished", func(value *localInspection) { value.transactionEvidence = true }},
 	}
 	for _, test := range tests {
@@ -112,7 +112,7 @@ func installedEvidence(t *testing.T, identity ReleaseIdentity, sequence uint64, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	return localInspection{safe: true, installedRecord: append(body, '\n'), executable: executable}
+	return localInspection{inspectionValid: true, installedRecord: append(body, '\n'), executable: executable}
 }
 
 func installedExecutableFixture(t *testing.T, payload []byte, identity embeddedIdentity) []byte {

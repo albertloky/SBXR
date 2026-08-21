@@ -82,8 +82,8 @@ type localInspector interface {
 }
 
 type localInspection struct {
-	safe, lockHeld, transactionEvidence bool
-	installedRecord, executable         []byte
+	inspectionValid, lockHeld, transactionEvidence bool
+	installedRecord, executable                    []byte
 }
 
 func NewInstalled() Interface { return newInstalledInterface(newLocalInspector("/", 0)) }
@@ -98,7 +98,7 @@ func (module installedInterface) Status(ctx context.Context) Result {
 	if inspection.lockHeld {
 		return Result{State: UpdateInProgress, Code: StatusUpdateInProgress, Message: "Another Software Lifecycle change is in progress."}
 	}
-	if !inspection.safe || inspection.transactionEvidence {
+	if !inspection.inspectionValid || inspection.transactionEvidence {
 		return recoveryRequiredResult()
 	}
 	identity, ok := verifyInstalledPair(inspection.installedRecord, inspection.executable)

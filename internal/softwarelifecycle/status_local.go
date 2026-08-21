@@ -37,13 +37,13 @@ func (inspector filesystemInspector) inspect(ctx context.Context) localInspectio
 	if ctx.Err() != nil {
 		return localInspection{}
 	}
-	held, safe := inspector.inspectLock()
-	if held || !safe {
-		return localInspection{safe: safe, lockHeld: held}
+	held, inspectionValid := inspector.inspectLock()
+	if held || !inspectionValid {
+		return localInspection{inspectionValid: inspectionValid, lockHeld: held}
 	}
-	transaction, safe := inspector.hasTransactionEvidence()
-	if !safe || transaction {
-		return localInspection{safe: safe, transactionEvidence: transaction}
+	transaction, inspectionValid := inspector.hasTransactionEvidence()
+	if !inspectionValid || transaction {
+		return localInspection{inspectionValid: inspectionValid, transactionEvidence: transaction}
 	}
 	if !inspector.safeDirectory("/var/lib/sbxr", 0o700) {
 		return localInspection{}
@@ -56,12 +56,12 @@ func (inspector filesystemInspector) inspect(ctx context.Context) localInspectio
 	if !ok {
 		return localInspection{}
 	}
-	transaction, safe = inspector.hasTransactionEvidence()
-	if !safe || transaction {
-		return localInspection{safe: safe, transactionEvidence: transaction}
+	transaction, inspectionValid = inspector.hasTransactionEvidence()
+	if !inspectionValid || transaction {
+		return localInspection{inspectionValid: inspectionValid, transactionEvidence: transaction}
 	}
-	held, safe = inspector.inspectLock()
-	return localInspection{safe: safe, lockHeld: held, installedRecord: record, executable: executable}
+	held, inspectionValid = inspector.inspectLock()
+	return localInspection{inspectionValid: inspectionValid, lockHeld: held, installedRecord: record, executable: executable}
 }
 
 func (inspector filesystemInspector) inspectLock() (bool, bool) {
