@@ -1,6 +1,7 @@
 package github
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -106,6 +107,118 @@ func TestSourceDiscoversStableAndReviewedReleasesThroughPublicHTTPS(t *testing.T
 		if err != nil || got != test.want {
 			t.Fatalf("Discover(%q) = %#v, %v", test.reviewed, got, err)
 		}
+	}
+}
+
+func TestSourceChecksOnlyTheQualifiedFourAssetLatestRelease(t *testing.T) {
+	fixture := newLatestReleaseFixture(t)
+	source := NewWithEndpoint(fixture.server.Client(), fixture.server.URL, fixture.verifier)
+
+	got, outcome := source.CheckLatest(t.Context())
+
+	if outcome != softwarelifecycle.LatestReleaseAccepted || got.Sequence != 17 || got.Identity.Repository != softwarelifecycle.Repository || got.Identity.Tag != "v2.0.0" || got.Identity.Commit != fixtureCommit {
+		t.Fatalf("CheckLatest() = %#v, %v", got, outcome)
+	}
+	for _, request := range fixture.requests {
+		if strings.Contains(request.path, "/releases/assets/") && !strings.HasSuffix(request.path, "/2") {
+			t.Fatalf("CheckLatest downloaded non-index asset: %s", request.path)
+		}
+	}
+}
+
+func TestSourceCheckLatestRefusesHostileOrChangedReleaseFacts(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		change func(*releaseFixture)
+	}{
+		{"draft", func(f *releaseFixture) { f.release.Draft = true }},
+		{"prerelease", func(f *releaseFixture) { f.release.Prerelease = true }},
+		{"mutable", func(f *releaseFixture) { f.release.Immutable = false }},
+		{"extra asset", func(f *releaseFixture) { f.release.Assets = append(f.release.Assets, f.release.Assets[0]) }},
+		{"changed metadata digest", func(f *releaseFixture) { f.release.Assets[1].Digest = "sha256:" + strings.Repeat("a", 64) }},
+		{"changed attestation", func(f *releaseFixture) { f.attested["release-index.json"] = strings.Repeat("a", 64) }},
+		{"different acceptance binding", func(f *releaseFixture) {
+			f.release.Body = strings.Replace(f.release.Body, fixtureCommit, strings.Repeat("b", 40), 1)
+		}},
+		{"missing runner facts", func(f *releaseFixture) {
+			f.release.Body = strings.Replace(f.release.Body, "Runner: Ubuntu Server 24.04 linux/amd64\n", "", 1)
+		}},
+		{"changed verifier", func(f *releaseFixture) {
+			f.release.Body = strings.Replace(f.release.Body, SigningFingerprint, strings.Repeat("A", 64), 1)
+		}},
+		{"pending secret scan", func(f *releaseFixture) {
+			f.release.Body = strings.Replace(f.release.Body, "Secret-safe result: Passed", "Secret-safe result: Pending", 1)
+		}},
+		{"rescue without authority", func(f *releaseFixture) {
+			f.release.Body = strings.Replace(f.release.Body, "RELEASE-INSTALLER-UPDATER-TWO-RELEASE-QUALIFICATION", "RELEASE-INSTALLER-UPDATER-RESCUE-QUALIFICATION", 1)
+			f.release.Body = strings.Replace(f.release.Body, "Discovered, installed, recovered, final latest release", "Rescue direct-install and lower-sequence replacement release", 1)
+		}},
+		{"normal code with rescue role", func(f *releaseFixture) {
+			f.release.Body = strings.Replace(f.release.Body, "Discovered, installed, recovered, final latest release", "Rescue direct-install and lower-sequence replacement release", 1)
+		}},
+		{"oversized index", func(f *releaseFixture) { f.release.Assets[1].Size = softwarelifecycle.MaxIndexBytes + 1 }},
+		{"missing index response", func(f *releaseFixture) {
+			f.release.Assets[1].URL = f.server.URL + "/repos/" + softwarelifecycle.Repository + "/releases/assets/999"
+		}},
+		{"unknown index field", func(f *releaseFixture) {
+			rebindLatestIndex(f, bytes.Replace(f.assets["release-index.json"], []byte(`{"schema":1`), []byte(`{"schema":1,"unknown":true`), 1))
+		}},
+		{"duplicate index field", func(f *releaseFixture) {
+			rebindLatestIndex(f, bytes.Replace(f.assets["release-index.json"], []byte(`{"schema":1`), []byte(`{"schema":1,"schema":1`), 1))
+		}},
+		{"zero sequence", func(f *releaseFixture) {
+			rebindLatestIndex(f, bytes.Replace(f.assets["release-index.json"], []byte(`"sequence":17`), []byte(`"sequence":0`), 1))
+		}},
+		{"late index replacement", func(f *releaseFixture) {
+			f.beforeAsset = func(name string) {
+				if name == "release-index.json" {
+					f.assets[name] = append(f.assets[name], '\n')
+				}
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newLatestReleaseFixture(t)
+			test.change(fixture)
+			got, outcome := NewWithEndpoint(fixture.server.Client(), fixture.server.URL, fixture.verifier).CheckLatest(t.Context())
+			if outcome != softwarelifecycle.LatestReleaseRefused || got.Sequence != 0 {
+				t.Fatalf("CheckLatest() = %#v, %v", got, outcome)
+			}
+		})
+	}
+}
+
+func TestSourceCheckLatestReportsTransportFailureAsUnavailable(t *testing.T) {
+	fixture := newLatestReleaseFixture(t)
+	fixture.server.Close()
+	got, outcome := NewWithEndpoint(fixture.server.Client(), fixture.server.URL, fixture.verifier).CheckLatest(t.Context())
+	if outcome != softwarelifecycle.LatestReleaseUnavailable || got.Sequence != 0 {
+		t.Fatalf("CheckLatest() = %#v, %v", got, outcome)
+	}
+}
+
+func TestSourceCheckLatestRefusesUnsafeRedirect(t *testing.T) {
+	fixture := newLatestReleaseFixture(t)
+	fixture.redirectAsset = true
+	client := fixture.server.Client()
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return errRedirectRefused }
+	got, outcome := NewWithEndpoint(client, fixture.server.URL, fixture.verifier).CheckLatest(t.Context())
+	if outcome != softwarelifecycle.LatestReleaseRefused || got.Sequence != 0 {
+		t.Fatalf("CheckLatest() = %#v, %v", got, outcome)
+	}
+}
+
+func TestSourceCheckLatestAcceptsQualifiedRescueRecord(t *testing.T) {
+	fixture := newLatestReleaseFixture(t)
+	fixture.release.Body = strings.Replace(fixture.release.Body, "RELEASE-INSTALLER-UPDATER-TWO-RELEASE-QUALIFICATION", "RELEASE-INSTALLER-UPDATER-RESCUE-QUALIFICATION", 1)
+	fixture.release.Body = strings.Replace(fixture.release.Body, "Discovered, installed, recovered, final latest release", "Rescue direct-install and lower-sequence replacement release", 1)
+	fixture.release.Body += "Rescue defect evidence: https://github.com/albertloky/SBXR/issues/123\n" +
+		"Failed normal run evidence: https://github.com/albertloky/SBXR/actions/runs/122\n" +
+		"Normal journey waiver: Reproducible installed-source defect made the normal menu journey impossible\n"
+
+	got, outcome := NewWithEndpoint(fixture.server.Client(), fixture.server.URL, fixture.verifier).CheckLatest(t.Context())
+	if outcome != softwarelifecycle.LatestReleaseAccepted || got.Sequence != 17 {
+		t.Fatalf("CheckLatest() = %#v, %v", got, outcome)
 	}
 }
 
@@ -230,12 +343,14 @@ type recordedRequest struct {
 }
 
 type releaseFixture struct {
-	server    *httptest.Server
-	release   githubRelease
-	assets    map[string][]byte
-	attested  map[string]string
-	requests  []recordedRequest
-	verifyErr error
+	server        *httptest.Server
+	release       githubRelease
+	assets        map[string][]byte
+	attested      map[string]string
+	requests      []recordedRequest
+	verifyErr     error
+	beforeAsset   func(string)
+	redirectAsset bool
 }
 
 func newReleaseFixture(t *testing.T) *releaseFixture {
@@ -262,6 +377,70 @@ func newReleaseFixture(t *testing.T) *releaseFixture {
 	}
 	fixture.release.Body = stableAcceptanceFixture(fixture.attested["release-index.json"])
 	return fixture
+}
+
+func newLatestReleaseFixture(t *testing.T) *releaseFixture {
+	t.Helper()
+	fixture := newReleaseFixture(t)
+	fixture.release.Tag = "v2.0.0"
+	index := fmt.Sprintf(`{"schema":1,"repository":%q,"tag":"v2.0.0","commit":%q,"sequence":17,"assets":[{"name":"install.sh","size":%d,"sha256":%q},{"name":"sbxr-linux-amd64.tar.gz","size":%d,"sha256":%q},{"name":"sbxr-linux-arm64.tar.gz","size":%d,"sha256":%q}]}`,
+		softwarelifecycle.Repository, fixtureCommit,
+		len(fixture.assets["install.sh"]), fixture.attested["install.sh"],
+		len(fixture.assets["sbxr-linux-amd64.tar.gz"]), fixture.attested["sbxr-linux-amd64.tar.gz"],
+		len(fixture.assets["sbxr-linux-arm64.tar.gz"]), fixture.attested["sbxr-linux-arm64.tar.gz"])
+	fixture.assets["release-index.json"] = []byte(index)
+	names := []string{"install.sh", "release-index.json", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz"}
+	fixture.release.Assets = nil
+	fixture.attested = map[string]string{}
+	for id, name := range names {
+		body := fixture.assets[name]
+		digest := sha256.Sum256(body)
+		fixture.attested[name] = hex.EncodeToString(digest[:])
+		fixture.release.Assets = append(fixture.release.Assets, githubAsset{Name: name, Size: int64(len(body)), Digest: "sha256:" + fixture.attested[name], State: "uploaded", URL: fmt.Sprintf("%s/repos/%s/releases/assets/%d", fixture.server.URL, softwarelifecycle.Repository, id+1)})
+	}
+	fixture.release.Body = latestAcceptanceFixture(fixture)
+	return fixture
+}
+
+func latestAcceptanceFixture(fixture *releaseFixture) string {
+	lines := []string{
+		"# SBXR Installer-Updater Acceptance Record",
+		"Status: Qualified",
+		"Repository: " + softwarelifecycle.Repository,
+		"Tag: v2.0.0",
+		"Commit: " + fixtureCommit,
+		"Release index SHA-256: " + fixture.attested["release-index.json"],
+		"Sequence: 17",
+		"Workflow evidence: https://github.com/albertloky/SBXR/actions/runs/123",
+		"Runner: Ubuntu Server 24.04 linux/amd64",
+		"Go toolchain: go1.26.7",
+		"Public verifier: " + Version + " " + SigningFingerprint,
+		"Secret-safe result: Passed",
+		"Qualification role: Discovered, installed, recovered, final latest release",
+		"Stable result code: RELEASE-INSTALLER-UPDATER-TWO-RELEASE-QUALIFICATION",
+		"Module Verification: Passed",
+		"Seam Verification: Passed",
+		"Integrated Verification: Passed on live Ubuntu Server 24.04 amd64",
+		"Codex Live Acceptance: Passed",
+		"Owner Acceptance: Not required",
+	}
+	for _, asset := range fixture.release.Assets {
+		lines = append(lines, fmt.Sprintf("Asset: %s %d %s", asset.Name, asset.Size, fixture.attested[asset.Name]))
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
+func rebindLatestIndex(fixture *releaseFixture, body []byte) {
+	fixture.assets["release-index.json"] = body
+	digest := sha256.Sum256(body)
+	fixture.attested["release-index.json"] = hex.EncodeToString(digest[:])
+	for index := range fixture.release.Assets {
+		if fixture.release.Assets[index].Name == "release-index.json" {
+			fixture.release.Assets[index].Size = int64(len(body))
+			fixture.release.Assets[index].Digest = "sha256:" + fixture.attested["release-index.json"]
+		}
+	}
+	fixture.release.Body = latestAcceptanceFixture(fixture)
 }
 
 func stableAcceptanceFixture(indexSHA256 string) string {
@@ -319,13 +498,14 @@ func (fixture *releaseFixture) verifier(body []byte, algorithm, digest string) (
 	if string(body) != `{"fixture":true}` || algorithm != "sha1" || digest != fixtureCommit {
 		return nil, errors.New("fixture verifier refused")
 	}
-	subjects := []map[string]any{{"uri": "pkg:github/" + softwarelifecycle.Repository + "@v1.0.0", "digest": map[string]string{"sha1": fixtureCommit}}}
-	for _, name := range fixedAssetNames() {
+	subjects := []map[string]any{{"uri": "pkg:github/" + softwarelifecycle.Repository + "@" + fixture.release.Tag, "digest": map[string]string{"sha1": fixtureCommit}}}
+	for _, asset := range fixture.release.Assets {
+		name := asset.Name
 		subjects = append(subjects, map[string]any{"name": name, "digest": map[string]string{"sha256": fixture.attested[name]}})
 	}
 	return json.Marshal(map[string]any{
 		"_type": "https://in-toto.io/Statement/v1", "predicateType": "https://in-toto.io/attestation/release/v0.2", "subject": subjects,
-		"predicate": map[string]string{"databaseId": "2", "ownerId": "1", "packageId": "4", "purl": "pkg:github/" + softwarelifecycle.Repository + "@v1.0.0", "repository": softwarelifecycle.Repository, "repositoryId": "3", "tag": "v1.0.0"},
+		"predicate": map[string]string{"databaseId": "2", "ownerId": "1", "packageId": "4", "purl": "pkg:github/" + softwarelifecycle.Repository + "@" + fixture.release.Tag, "repository": softwarelifecycle.Repository, "repositoryId": "3", "tag": fixture.release.Tag},
 	})
 }
 
@@ -348,9 +528,16 @@ func (fixture *releaseFixture) serveHTTP(writer http.ResponseWriter, request *ht
 			}
 			var id int
 			_, _ = fmt.Sscanf(strings.TrimPrefix(request.URL.Path, prefix), "%d", &id)
-			names := fixedAssetNames()
-			if id > 0 && id <= len(names) {
-				_, _ = writer.Write(fixture.assets[names[id-1]])
+			if id > 0 && id <= len(fixture.release.Assets) {
+				name := fixture.release.Assets[id-1].Name
+				if fixture.redirectAsset && name == "release-index.json" {
+					http.Redirect(writer, request, "http://example.com/changed", http.StatusFound)
+					return
+				}
+				if fixture.beforeAsset != nil {
+					fixture.beforeAsset(name)
+				}
+				_, _ = writer.Write(fixture.assets[name])
 				return
 			}
 		}

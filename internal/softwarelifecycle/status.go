@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"reflect"
 )
 
 const (
@@ -27,9 +28,15 @@ const (
 type ResultCode string
 
 const (
-	StatusReady            ResultCode = "SOFTWARE-LIFECYCLE-STATUS-READY"
-	StatusUpdateInProgress ResultCode = "SOFTWARE-LIFECYCLE-STATUS-UPDATE-IN-PROGRESS"
-	StatusRecoveryRequired ResultCode = "SOFTWARE-LIFECYCLE-STATUS-RECOVERY-REQUIRED"
+	StatusReady             ResultCode = "SOFTWARE-LIFECYCLE-STATUS-READY"
+	StatusUpdateInProgress  ResultCode = "SOFTWARE-LIFECYCLE-STATUS-UPDATE-IN-PROGRESS"
+	StatusRecoveryRequired  ResultCode = "SOFTWARE-LIFECYCLE-STATUS-RECOVERY-REQUIRED"
+	CheckUpdateAvailable    ResultCode = "SOFTWARE-LIFECYCLE-CHECK-UPDATE-AVAILABLE"
+	CheckAlreadyCurrent     ResultCode = "SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT"
+	CheckReleaseRefused     ResultCode = "SOFTWARE-LIFECYCLE-CHECK-RELEASE-REFUSED"
+	CheckReleaseUnavailable ResultCode = "SOFTWARE-LIFECYCLE-CHECK-RELEASE-UNAVAILABLE"
+	CheckConcurrentChange   ResultCode = "SOFTWARE-LIFECYCLE-CHECK-CONCURRENT-CHANGE"
+	CheckNotReady           ResultCode = "SOFTWARE-LIFECYCLE-CHECK-NOT-READY"
 )
 
 type Result struct {
@@ -66,6 +73,23 @@ type Progress struct {
 
 type ProgressReporter func(Progress)
 
+type LatestRelease struct {
+	Identity ReleaseIdentity
+	Sequence uint64
+}
+
+type LatestReleaseOutcome uint8
+
+const (
+	LatestReleaseAccepted LatestReleaseOutcome = iota + 1
+	LatestReleaseRefused
+	LatestReleaseUnavailable
+)
+
+type LatestReleaseSource interface {
+	CheckLatest(context.Context) (LatestRelease, LatestReleaseOutcome)
+}
+
 // Interface is the complete Owner-facing Software Lifecycle seam.
 type Interface interface {
 	Status(context.Context) Result
@@ -74,7 +98,10 @@ type Interface interface {
 	Recover(context.Context, ProgressReporter) Result
 }
 
-type installedInterface struct{ local localInspector }
+type installedInterface struct {
+	local  localInspector
+	latest LatestReleaseSource
+}
 
 // localInspector is the private Adapter seam behind the Owner-facing Interface.
 type localInspector interface {
@@ -86,15 +113,87 @@ type localInspection struct {
 	installedRecord, executable                    []byte
 }
 
-func NewInstalled() Interface { return newInstalledInterface(newLocalInspector("/", 0)) }
+func NewInstalled(latest LatestReleaseSource) Interface {
+	return newInstalledInterface(newLocalInspector("/", 0), latest)
+}
 
-func newInstalledInterface(local localInspector) Interface { return installedInterface{local: local} }
+func newInstalledInterface(local localInspector, latest LatestReleaseSource) Interface {
+	return installedInterface{local: local, latest: latest}
+}
 
 func (module installedInterface) Status(ctx context.Context) Result {
 	if module.local == nil {
 		return recoveryRequiredResult()
 	}
-	inspection := module.local.inspect(ctx)
+	return statusFromInspection(module.local.inspect(ctx))
+}
+
+func (module installedInterface) Check(ctx context.Context, _ ProgressReporter) Result {
+	if module.local == nil {
+		return checkNotReady(recoveryRequiredResult())
+	}
+	before := module.local.inspect(ctx)
+	status := statusFromInspection(before)
+	if status.State != Ready {
+		return checkNotReady(status)
+	}
+	installed, ok := verifyInstalledRelease(before.installedRecord, before.executable)
+	if !ok {
+		return checkNotReady(recoveryRequiredResult())
+	}
+	if module.latest == nil {
+		return Result{State: Ready, Installed: &installed.identity, Code: CheckReleaseRefused, Message: "The latest SBXR release was refused."}
+	}
+	latest, outcome := module.latest.CheckLatest(ctx)
+	after := module.local.inspect(ctx)
+	if !reflect.DeepEqual(before, after) {
+		result := statusFromInspection(after)
+		result.Code = CheckConcurrentChange
+		result.Message = "Local Software Lifecycle facts changed during the check."
+		result.Latest = nil
+		return result
+	}
+	base := Result{State: Ready, Installed: &installed.identity}
+	switch outcome {
+	case LatestReleaseUnavailable:
+		base.Code = CheckReleaseUnavailable
+		base.Message = "The latest SBXR release is unavailable. Check again later."
+		return base
+	case LatestReleaseAccepted:
+		if !validLatestRelease(latest) {
+			break
+		}
+		if latest.Identity == installed.identity && latest.Sequence == installed.sequence {
+			base.Latest = &latest.Identity
+			base.Code = CheckAlreadyCurrent
+			base.Message = "SBXR is already current."
+			return base
+		}
+		if latest.Identity != installed.identity && latest.Sequence > installed.sequence {
+			base.Latest = &latest.Identity
+			base.Code = CheckUpdateAvailable
+			base.Message = "A newer qualified SBXR release is available."
+			return base
+		}
+	}
+	base.Code = CheckReleaseRefused
+	base.Message = "The latest SBXR release was refused."
+	return base
+}
+
+func (module installedInterface) Update(ctx context.Context, _ ProgressReporter) Result {
+	return module.Status(ctx)
+}
+
+func (module installedInterface) Recover(ctx context.Context, _ ProgressReporter) Result {
+	return module.Status(ctx)
+}
+
+func recoveryRequiredResult() Result {
+	return Result{State: RecoveryRequiredState, Code: StatusRecoveryRequired, Message: "SBXR needs recovery before normal operations can continue."}
+}
+
+func statusFromInspection(inspection localInspection) Result {
 	if inspection.lockHeld {
 		return Result{State: UpdateInProgress, Code: StatusUpdateInProgress, Message: "Another Software Lifecycle change is in progress."}
 	}
@@ -108,22 +207,14 @@ func (module installedInterface) Status(ctx context.Context) Result {
 	return Result{State: Ready, Installed: &identity, Code: StatusReady, Message: "SBXR is ready."}
 }
 
-// Later tickets replace these status-only integration-line results with their
-// specified behavior without changing Interface.
-func (module installedInterface) Check(ctx context.Context, _ ProgressReporter) Result {
-	return module.Status(ctx)
+func checkNotReady(result Result) Result {
+	result.Code = CheckNotReady
+	result.Message = "SBXR is not ready to check for updates."
+	return result
 }
 
-func (module installedInterface) Update(ctx context.Context, _ ProgressReporter) Result {
-	return module.Status(ctx)
-}
-
-func (module installedInterface) Recover(ctx context.Context, _ ProgressReporter) Result {
-	return module.Status(ctx)
-}
-
-func recoveryRequiredResult() Result {
-	return Result{State: RecoveryRequiredState, Code: StatusRecoveryRequired, Message: "SBXR needs recovery before normal operations can continue."}
+func validLatestRelease(release LatestRelease) bool {
+	return release.Sequence > 0 && release.Identity.Repository == Repository && immutableReleaseTag.MatchString(release.Identity.Tag) && commitPattern.MatchString(release.Identity.Commit) && hashPattern.MatchString(release.Identity.IndexSHA256)
 }
 
 type installedRecord struct {
@@ -148,19 +239,29 @@ type embeddedIdentity struct {
 }
 
 func verifyInstalledPair(recordBytes, executable []byte) (ReleaseIdentity, bool) {
+	verified, ok := verifyInstalledRelease(recordBytes, executable)
+	return verified.identity, ok
+}
+
+type installedRelease struct {
+	identity ReleaseIdentity
+	sequence uint64
+}
+
+func verifyInstalledRelease(recordBytes, executable []byte) (installedRelease, bool) {
 	var record installedRecord
 	if !decodeExactObject(recordBytes, &record) || !validInstalledRecord(record) {
-		return ReleaseIdentity{}, false
+		return installedRelease{}, false
 	}
 	embedded, ok := readEmbeddedIdentity(executable)
 	if !ok || embedded.Repository != record.Repository || embedded.Tag != record.Tag || embedded.Commit != record.Commit || embedded.Sequence != record.Sequence || embedded.Architecture != record.Architecture {
-		return ReleaseIdentity{}, false
+		return installedRelease{}, false
 	}
 	digest := sha256.Sum256(executable)
 	if hex.EncodeToString(digest[:]) != record.ExecutableSHA256 {
-		return ReleaseIdentity{}, false
+		return installedRelease{}, false
 	}
-	return ReleaseIdentity{Repository: record.Repository, Tag: record.Tag, Commit: record.Commit, IndexSHA256: record.ReleaseIndexSHA256}, true
+	return installedRelease{identity: ReleaseIdentity{Repository: record.Repository, Tag: record.Tag, Commit: record.Commit, IndexSHA256: record.ReleaseIndexSHA256}, sequence: record.Sequence}, true
 }
 
 func validInstalledRecord(record installedRecord) bool {

@@ -15,7 +15,9 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 	"github.com/klauspost/compress/snappy"
@@ -29,6 +31,11 @@ const (
 	SigningFingerprint = "26B3382D5700AFBCD84F980D1D5B6C52BFF743DC2A8EE86B8B44C8E1245CE485"
 	apiBaseURL         = "https://api.github.com"
 	maxBundleBytes     = 8 << 20
+)
+
+var (
+	errUnavailable     = errors.New("GitHub unavailable")
+	errRedirectRefused = errors.New("release redirect refused")
 )
 
 //go:embed trusted_root.json
@@ -62,11 +69,11 @@ func NewWithEndpoint(client *http.Client, baseURL string, verifier BundleVerifie
 func publicClient() *http.Client {
 	return &http.Client{CheckRedirect: func(request *http.Request, via []*http.Request) error {
 		if len(via) > 4 || request.URL.Scheme != "https" {
-			return errors.New("release redirect refused")
+			return errRedirectRefused
 		}
 		host := request.URL.Hostname()
 		if host != "release-assets.githubusercontent.com" && !strings.HasSuffix(host, ".githubusercontent.com") {
-			return errors.New("release redirect refused")
+			return errRedirectRefused
 		}
 		return nil
 	}}
@@ -92,6 +99,74 @@ func (source Source) Discover(ctx context.Context, reviewedTag string) (software
 		}
 	}
 	return softwarelifecycle.ReleaseListing{Tag: release.Tag, Draft: release.Draft, Prerelease: release.Prerelease}, nil
+}
+
+func (source Source) CheckLatest(ctx context.Context) (softwarelifecycle.LatestRelease, softwarelifecycle.LatestReleaseOutcome) {
+	if source.client == nil || source.verifier == nil || source.baseURL == "" {
+		return softwarelifecycle.LatestRelease{}, softwarelifecycle.LatestReleaseRefused
+	}
+	var release githubRelease
+	if err := source.latestJSON(ctx, source.baseURL+"/repos/"+softwarelifecycle.Repository+"/releases/latest", 1<<20, &release); err != nil {
+		return latestFailure(err)
+	}
+	metadata, err := exactLatestAssets(source.baseURL, release.Assets)
+	if err != nil || release.Draft || release.Prerelease || !release.Immutable || !immutableTagPattern.MatchString(release.Tag) || !commitPattern.MatchString(release.TargetCommitish) {
+		return softwarelifecycle.LatestRelease{}, softwarelifecycle.LatestReleaseRefused
+	}
+	recordIndex, recordSequence, ok := latestAcceptanceRecord(release.Body, release.Tag, release.TargetCommitish, metadata)
+	if !ok {
+		return softwarelifecycle.LatestRelease{}, softwarelifecycle.LatestReleaseRefused
+	}
+	var response attestationResponse
+	attestationURL := source.baseURL + "/repos/" + softwarelifecycle.Repository + "/attestations/sha1:" + release.TargetCommitish + "?predicate_type=release&per_page=100"
+	if err := source.latestJSON(ctx, attestationURL, maxBundleBytes, &response); err != nil {
+		return latestFailure(err)
+	}
+	if len(response.Attestations) != 1 || response.Attestations[0].Initiator != "github" {
+		return softwarelifecycle.LatestRelease{}, softwarelifecycle.LatestReleaseRefused
+	}
+	bundleCtx, cancelBundle := context.WithTimeout(ctx, 30*time.Second)
+	bundleBody, err := source.bundle(bundleCtx, response.Attestations[0])
+	cancelBundle()
+	if err != nil {
+		return latestFailure(err)
+	}
+	statementBody, err := source.verifier(bundleBody, "sha1", release.TargetCommitish)
+	if err != nil {
+		return softwarelifecycle.LatestRelease{}, softwarelifecycle.LatestReleaseRefused
+	}
+	attested, err := parseReleaseStatementWithAssets(statementBody, release.Tag, release.TargetCommitish, 4)
+	if err != nil || !sameAssetDigests(metadata, attested) {
+		return softwarelifecycle.LatestRelease{}, softwarelifecycle.LatestReleaseRefused
+	}
+	indexMetadata := metadata["release-index.json"]
+	indexCtx, cancelIndex := context.WithTimeout(ctx, 30*time.Second)
+	index, err := source.get(indexCtx, indexMetadata.URL, softwarelifecycle.MaxIndexBytes, "application/octet-stream")
+	cancelIndex()
+	if err != nil {
+		return latestFailure(err)
+	}
+	digest := sha256.Sum256(index)
+	if int64(len(index)) != indexMetadata.Size || hex.EncodeToString(digest[:]) != indexMetadata.SHA256 || indexMetadata.SHA256 != recordIndex {
+		return softwarelifecycle.LatestRelease{}, softwarelifecycle.LatestReleaseRefused
+	}
+	proofs := make([]softwarelifecycle.LatestAssetProof, 0, 4)
+	for _, name := range latestAssetNames() {
+		asset := metadata[name]
+		proofs = append(proofs, softwarelifecycle.LatestAssetProof{Name: name, Size: asset.Size, SHA256: asset.SHA256})
+	}
+	latest, valid := softwarelifecycle.VerifyLatestReleaseIndex(softwarelifecycle.Repository, release.Tag, release.TargetCommitish, index, proofs)
+	if !valid || latest.Sequence != recordSequence {
+		return softwarelifecycle.LatestRelease{}, softwarelifecycle.LatestReleaseRefused
+	}
+	return latest, softwarelifecycle.LatestReleaseAccepted
+}
+
+func latestFailure(err error) (softwarelifecycle.LatestRelease, softwarelifecycle.LatestReleaseOutcome) {
+	if errors.Is(err, errUnavailable) {
+		return softwarelifecycle.LatestRelease{}, softwarelifecycle.LatestReleaseUnavailable
+	}
+	return softwarelifecycle.LatestRelease{}, softwarelifecycle.LatestReleaseRefused
 }
 
 func (source Source) Verify(ctx context.Context, tag string) (softwarelifecycle.ReleaseEvidence, error) {
@@ -332,6 +407,114 @@ func exactReleaseAssets(baseURL string, assets []githubAsset) (map[string]assetM
 	return result, nil
 }
 
+func latestAssetNames() []string {
+	return []string{"install.sh", "release-index.json", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz"}
+}
+
+func exactLatestAssets(baseURL string, assets []githubAsset) (map[string]assetMetadata, error) {
+	expected := map[string]bool{}
+	for _, name := range latestAssetNames() {
+		expected[name] = true
+	}
+	result := make(map[string]assetMetadata, len(assets))
+	for _, asset := range assets {
+		digest, ok := strings.CutPrefix(asset.Digest, "sha256:")
+		limit := int64(softwarelifecycle.MaxAssetBytes)
+		if asset.Name == "install.sh" || asset.Name == "release-index.json" {
+			limit = softwarelifecycle.MaxIndexBytes
+		}
+		if !expected[asset.Name] || result[asset.Name].URL != "" || !ok || !hashPattern.MatchString(digest) || asset.State != "uploaded" || asset.Size <= 0 || asset.Size > limit || !validLatestAssetURL(baseURL, asset.URL) {
+			return nil, errors.New("latest release asset refused")
+		}
+		result[asset.Name] = assetMetadata{URL: asset.URL, SHA256: digest, Size: asset.Size}
+	}
+	if len(result) != len(expected) {
+		return nil, errors.New("latest release asset refused")
+	}
+	return result, nil
+}
+
+func validLatestAssetURL(baseURL, address string) bool {
+	base, baseErr := url.Parse(baseURL)
+	parsed, parseErr := url.Parse(address)
+	prefix := "/repos/" + softwarelifecycle.Repository + "/releases/assets/"
+	id := strings.TrimPrefix(parsed.Path, prefix)
+	assetID, idErr := strconv.ParseUint(id, 10, 64)
+	return baseErr == nil && parseErr == nil && parsed.Scheme == base.Scheme && parsed.Host == base.Host && parsed.User == nil && parsed.RawQuery == "" && parsed.Fragment == "" && parsed.Path == parsed.EscapedPath() && idErr == nil && assetID > 0 && strconv.FormatUint(assetID, 10) == id
+}
+
+func latestAcceptanceRecord(body, tag, commit string, assets map[string]assetMetadata) (string, uint64, bool) {
+	if len(body) == 0 || len(body) > 64<<10 || strings.ContainsAny(body, "\r\x00") || !strings.HasSuffix(body, "\n") {
+		return "", 0, false
+	}
+	if strings.Count(body, "# SBXR Installer-Updater Acceptance Record\n") != 1 {
+		return "", 0, false
+	}
+	required := map[string]string{
+		"Status: ":                  "Qualified",
+		"Repository: ":              softwarelifecycle.Repository,
+		"Tag: ":                     tag,
+		"Commit: ":                  commit,
+		"Module Verification: ":     "Passed",
+		"Seam Verification: ":       "Passed",
+		"Integrated Verification: ": "Passed on live Ubuntu Server 24.04 amd64",
+		"Codex Live Acceptance: ":   "Passed",
+		"Owner Acceptance: ":        "Not required",
+	}
+	for prefix, expected := range required {
+		if value, ok := uniqueRecordValue(body, prefix); !ok || value != expected {
+			return "", 0, false
+		}
+	}
+	resultCode, resultOK := uniqueRecordValue(body, "Stable result code: ")
+	workflow, workflowOK := uniqueRecordValue(body, "Workflow evidence: ")
+	runner, runnerOK := uniqueRecordValue(body, "Runner: ")
+	toolchain, toolchainOK := uniqueRecordValue(body, "Go toolchain: ")
+	verifier, verifierOK := uniqueRecordValue(body, "Public verifier: ")
+	secretSafe, secretSafeOK := uniqueRecordValue(body, "Secret-safe result: ")
+	role, roleOK := uniqueRecordValue(body, "Qualification role: ")
+	if !resultOK || resultCode != "RELEASE-INSTALLER-UPDATER-TWO-RELEASE-QUALIFICATION" && resultCode != "RELEASE-INSTALLER-UPDATER-RESCUE-QUALIFICATION" || !workflowOK || !workflowEvidencePattern.MatchString(workflow) || !runnerOK || !acceptanceRunnerPattern.MatchString(runner) || !toolchainOK || !goToolchainPattern.MatchString(toolchain) || !verifierOK || verifier != Version+" "+SigningFingerprint || !secretSafeOK || secretSafe != "Passed" || !roleOK || !qualificationRolePattern.MatchString(role) {
+		return "", 0, false
+	}
+	if resultCode == "RELEASE-INSTALLER-UPDATER-RESCUE-QUALIFICATION" {
+		defect, defectOK := uniqueRecordValue(body, "Rescue defect evidence: ")
+		failedRun, failedRunOK := uniqueRecordValue(body, "Failed normal run evidence: ")
+		waiver, waiverOK := uniqueRecordValue(body, "Normal journey waiver: ")
+		if role != "Rescue direct-install and lower-sequence replacement release" || !defectOK || !issueEvidencePattern.MatchString(defect) || !failedRunOK || !workflowEvidencePattern.MatchString(failedRun) || !waiverOK || waiver != "Reproducible installed-source defect made the normal menu journey impossible" {
+			return "", 0, false
+		}
+	} else if role == "Rescue direct-install and lower-sequence replacement release" {
+		return "", 0, false
+	}
+	for _, name := range latestAssetNames() {
+		asset := assets[name]
+		value, ok := uniqueRecordValue(body, "Asset: "+name+" ")
+		if !ok || value != fmt.Sprintf("%d %s", asset.Size, asset.SHA256) {
+			return "", 0, false
+		}
+	}
+	indexSHA256, ok := uniqueRecordValue(body, "Release index SHA-256: ")
+	if !ok || !hashPattern.MatchString(indexSHA256) || indexSHA256 != assets["release-index.json"].SHA256 {
+		return "", 0, false
+	}
+	sequenceText, ok := uniqueRecordValue(body, "Sequence: ")
+	sequence, parseErr := strconv.ParseUint(sequenceText, 10, 64)
+	return indexSHA256, sequence, ok && parseErr == nil && sequence > 0
+}
+
+func uniqueRecordValue(body, prefix string) (string, bool) {
+	value := ""
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			if value != "" {
+				return "", false
+			}
+			value = strings.TrimPrefix(line, prefix)
+		}
+	}
+	return value, value != ""
+}
+
 func (source Source) bundle(ctx context.Context, attestation githubAttestation) ([]byte, error) {
 	if len(attestation.Bundle) != 0 && string(attestation.Bundle) != "null" {
 		if len(attestation.Bundle) > maxBundleBytes || softwarelifecycle.ValidateUniqueJSON(attestation.Bundle) != nil {
@@ -416,6 +599,10 @@ func (p *releasePredicate) UnmarshalJSON(body []byte) error {
 }
 
 func parseReleaseStatement(body []byte, tag, commit string) (map[string]string, error) {
+	return parseReleaseStatementWithAssets(body, tag, commit, 6)
+}
+
+func parseReleaseStatementWithAssets(body []byte, tag, commit string, assetCount int) (map[string]string, error) {
 	if softwarelifecycle.ValidateUniqueJSON(body) != nil {
 		return nil, errors.New("release statement refused")
 	}
@@ -428,7 +615,7 @@ func parseReleaseStatement(body []byte, tag, commit string) (map[string]string, 
 	purl := "pkg:github/" + softwarelifecycle.Repository + "@" + tag
 	if statement.Type != "https://in-toto.io/Statement/v1" || statement.PredicateType != "https://in-toto.io/attestation/release/v0.2" ||
 		statement.Predicate.DatabaseID == "" || statement.Predicate.OwnerID == "" || statement.Predicate.PackageID == "" || statement.Predicate.RepositoryID == "" ||
-		statement.Predicate.Repository != softwarelifecycle.Repository || statement.Predicate.Tag != tag || statement.Predicate.PURL != purl || len(statement.Subject) != 7 {
+		statement.Predicate.Repository != softwarelifecycle.Repository || statement.Predicate.Tag != tag || statement.Predicate.PURL != purl || len(statement.Subject) != assetCount+1 {
 		return nil, errors.New("release statement refused")
 	}
 	release := statement.Subject[0]
@@ -479,6 +666,19 @@ func (source Source) getJSON(ctx context.Context, address string, limit int64, t
 	return nil
 }
 
+func (source Source) latestJSON(ctx context.Context, address string, limit int64, target any) error {
+	requestCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	body, err := source.get(requestCtx, address, limit, "application/vnd.github+json")
+	if err != nil {
+		return err
+	}
+	if softwarelifecycle.ValidateUniqueJSON(body) != nil || json.Unmarshal(body, target) != nil {
+		return errors.New("GitHub JSON refused")
+	}
+	return nil
+}
+
 func (source Source) get(ctx context.Context, address string, limit int64, accept string) ([]byte, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil {
@@ -489,11 +689,20 @@ func (source Source) get(ctx context.Context, address string, limit int64, accep
 	request.Header.Set("User-Agent", "SBXR/"+Version)
 	response, err := source.client.Do(request)
 	if err != nil {
-		return nil, errors.New("GitHub request failed")
+		if errors.Is(err, errRedirectRefused) {
+			return nil, errors.New("GitHub redirect refused")
+		}
+		return nil, errUnavailable
 	}
 	defer response.Body.Close()
 	body, readErr := io.ReadAll(io.LimitReader(response.Body, limit+1))
-	if readErr != nil || response.StatusCode != http.StatusOK || len(body) == 0 || int64(len(body)) > limit {
+	if readErr != nil || response.StatusCode == http.StatusRequestTimeout || response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= 500 {
+		return nil, errUnavailable
+	}
+	if response.StatusCode != http.StatusOK {
+		return nil, errors.New("GitHub response refused")
+	}
+	if len(body) == 0 || int64(len(body)) > limit {
 		return nil, fmt.Errorf("GitHub response refused")
 	}
 	return body, nil
@@ -504,6 +713,12 @@ var (
 	hashPattern                         = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	tagPattern                          = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$`)
 	acceptanceRecordVariableLinePattern = regexp.MustCompile(`^(Release index SHA-256: [0-9a-f]{64}|Recorded at: [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z|Runner: GitHub Actions ubuntu-24\.04 linux/(amd64|arm64)|Go toolchain: go[0-9]+\.[0-9]+\.[0-9]+|Public verifier: [0-9]+\.[0-9]+\.[0-9]+ [A-F0-9]{64}|Workflow evidence: https://github\.com/albertloky/SBXR/actions/runs/[1-9][0-9]*|\| (install\.sh|release-index\.json|sbxr-linux-amd64\.tar\.gz|sbxr-linux-arm64\.tar\.gz|sbxr-components-linux-amd64\.tar\.gz|sbxr-components-linux-arm64\.tar\.gz) \| [1-9][0-9]* \| [0-9a-f]{64} \|)$`)
+	immutableTagPattern                 = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
+	workflowEvidencePattern             = regexp.MustCompile(`^https://github\.com/albertloky/SBXR/actions/runs/[1-9][0-9]*$`)
+	issueEvidencePattern                = regexp.MustCompile(`^https://github\.com/albertloky/SBXR/issues/[1-9][0-9]*$`)
+	acceptanceRunnerPattern             = regexp.MustCompile(`^Ubuntu Server 24\.04 linux/amd64$`)
+	goToolchainPattern                  = regexp.MustCompile(`^go[0-9]+\.[0-9]+\.[0-9]+$`)
+	qualificationRolePattern            = regexp.MustCompile(`^(Clean-installed source release|Discovered, installed, recovered, final latest release|Rescue direct-install and lower-sequence replacement release)$`)
 )
 
 func safeTag(tag string) bool { return tagPattern.MatchString(tag) }

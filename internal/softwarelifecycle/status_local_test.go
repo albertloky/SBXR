@@ -17,7 +17,7 @@ func TestStatusUsesVerifiedProductionFileAndLockFacts(t *testing.T) {
 	if err := os.Chmod(statusPath(root, "/var/lib/sbxr"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	lifecycle := newInstalledInterface(newLocalInspector(root, uint32(os.Getuid())))
+	lifecycle := newInstalledInterface(newLocalInspector(root, uint32(os.Getuid())), nil)
 
 	if got := lifecycle.Status(context.Background()); got.State != Ready {
 		t.Fatalf("valid Status() = %#v", got)
