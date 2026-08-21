@@ -154,6 +154,8 @@ go run ./cmd/sbxr-release bootstrap \
   -sequence <sequence> \
   -tag <tag> \
   -commit <commit> \
+  -amd64-executable-sha256 <sha256> \
+  -arm64-executable-sha256 <sha256> \
   -output <install.sh>
 ```
 

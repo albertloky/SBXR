@@ -136,17 +136,21 @@ jobs:
           merge-multiple: true
       - name: Generate the exact release bootstrap
         run: |
+          amd64_executable_sha256="$(tar -xOzf dist/sbxr-linux-amd64.tar.gz sbxr | sha256sum | cut -d' ' -f1)"
+          arm64_executable_sha256="$(tar -xOzf dist/sbxr-linux-arm64.tar.gz sbxr | sha256sum | cut -d' ' -f1)"
           go run ./cmd/sbxr-release bootstrap \
             -version "$CANDIDATE_VERSION" \
             -sequence "$CANDIDATE_SEQUENCE" \
             -tag "$CANDIDATE_TAG" \
             -commit "$GITHUB_SHA" \
+            -amd64-executable-sha256 "$amd64_executable_sha256" \
+            -arm64-executable-sha256 "$arm64_executable_sha256" \
             -output dist/install.sh
           test "$(stat -c '%a' dist/install.sh)" = 700
           if dist/install.sh >bootstrap.out 2>&1; then
             exit 1
           fi
-          test "$(cat bootstrap.out)" = SBXR-BOOTSTRAP-REFUSED
+          test "$(cat bootstrap.out)" = SOFTWARE-LIFECYCLE-INSTALL-HOST-REFUSED
       - name: Build strict release index from exact asset bytes
         run: |
           go run ./cmd/sbxr-release index \

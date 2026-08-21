@@ -15,7 +15,8 @@ import (
 var bootstrapValue = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$`)
 
 func buildBootstrapFile(options bootstrapOptions) error {
-	if options.output == "" || !bootstrapValue.MatchString(options.version) || options.tag != "v"+options.version || !bootstrapValue.MatchString(options.tag) || !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(options.commit) || options.sequence == 0 || options.root != "" && (!strings.HasPrefix(options.root, "/") || strings.ContainsAny(options.root, "\n\r'")) {
+	hash := regexp.MustCompile(`^[0-9a-f]{64}$`)
+	if options.output == "" || !bootstrapValue.MatchString(options.version) || options.tag != "v"+options.version || !bootstrapValue.MatchString(options.tag) || !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(options.commit) || !hash.MatchString(options.amd64ExecutableSHA256) || !hash.MatchString(options.arm64ExecutableSHA256) || options.sequence == 0 || options.root != "" && (!strings.HasPrefix(options.root, "/") || strings.ContainsAny(options.root, "\n\r'")) {
 		return errors.New("bootstrap build refused")
 	}
 	var body bytes.Buffer
@@ -23,13 +24,11 @@ func buildBootstrapFile(options bootstrapOptions) error {
 		"Repository": softwarelifecycle.Repository,
 		"Tag":        options.tag, "Commit": options.commit, "Version": options.version,
 		"Sequence": fmt.Sprint(options.sequence), "Root": strings.TrimSuffix(options.root, "/"),
+		"AMD64ExecutableSHA256": options.amd64ExecutableSHA256, "ARM64ExecutableSHA256": options.arm64ExecutableSHA256,
 	}) != nil {
 		return errors.New("bootstrap build refused")
 	}
-	root := strings.TrimSuffix(options.root, "/")
-	cleanBody := "'" + strings.ReplaceAll(body.String(), "'", `'"'"'`) + "'"
-	body.Reset()
-	fmt.Fprintf(&body, "#!/bin/sh\nset -f\nROOT='%s'\nprerequisites_refused() { printf '%%s\\n' 'SBXR-BOOTSTRAP-PREREQUISITES-REFUSED' >&2; exit 1; }\nvalid_ip() { case \"$1\" in *:*) case \"$1\" in *[!0-9A-Fa-f:.]*|*[.:][.:][.:]*) return 1 ;; esac ;; *.*) case \"$1\" in *[!0-9.]*) return 1 ;; esac ;; *) return 1 ;; esac; \"$ROOT/usr/bin/env\" -i PATH=/usr/bin:/bin LC_ALL=C \"$ROOT/usr/bin/getent\" ahosts \"$1\" >/dev/null 2>&1; }\nvalid_ssh_connection() { set -- ${SSH_CONNECTION-}; [ \"$#\" -eq 4 ] || return 1; valid_ip \"$1\" && valid_ip \"$3\" || return 1; case \"$2:$4\" in *[!0-9:]*) return 1 ;; esac; [ \"$2\" -ge 1 ] 2>/dev/null && [ \"$2\" -le 65535 ] && [ \"$4\" -ge 1 ] 2>/dev/null && [ \"$4\" -le 65535 ]; }\n[ -x \"$ROOT/usr/bin/env\" ] && [ -x \"$ROOT/usr/bin/getent\" ] || prerequisites_refused\nssh_connection=''\nif valid_ssh_connection; then ssh_connection=$SSH_CONNECTION; fi\nexec \"$ROOT/usr/bin/env\" -i TERM=\"${TERM-}\" PATH=/usr/bin:/bin LC_ALL=C SBXR_SSH_CONNECTION=\"$ssh_connection\" \"$ROOT/bin/sh\" -c %s sbxr-bootstrap \"$@\"\n", root, cleanBody)
+	body = *bytes.NewBuffer(append([]byte("#!/usr/bin/env bash\n"), body.Bytes()...))
 	file, err := os.OpenFile(options.output, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o700)
 	if err != nil {
 		return errors.New("bootstrap output refused")
@@ -44,239 +43,297 @@ func buildBootstrapFile(options bootstrapOptions) error {
 }
 
 const bootstrapBody = `set -u
+set -f
 umask 077
 PATH='/usr/bin:/bin'
 LC_ALL=C
 export PATH LC_ALL
+unset BASH_ENV ENV CDPATH GLOBIGNORE GREP_OPTIONS TAR_OPTIONS POSIXLY_CORRECT
+IFS=$' \t\n'
 
 REPOSITORY='{{.Repository}}'
 TAG='{{.Tag}}'
 COMMIT='{{.Commit}}'
 VERSION='{{.Version}}'
 SEQUENCE='{{.Sequence}}'
-ARCHITECTURES='amd64 arm64'
-ASSET_NAMES='install.sh release-index.json sbxr-linux-amd64.tar.gz sbxr-linux-arm64.tar.gz sbxr-components-linux-amd64.tar.gz sbxr-components-linux-arm64.tar.gz'
+AMD64_EXECUTABLE_SHA256='{{.AMD64ExecutableSHA256}}'
+ARM64_EXECUTABLE_SHA256='{{.ARM64ExecutableSHA256}}'
 ROOT='{{.Root}}'
 WORK=''
+RECLAIMING=0
+DEFERRED_SIGNAL=0
 
 cleanup() {
   if [ -n "$WORK" ]; then
-	path=$WORK
-	WORK=''
-	"$ROOT/bin/rm" -rf -- "$path" >/dev/null 2>&1 || return 1
-	[ ! -e "$path" ] && [ ! -L "$path" ] || return 1
+    local path=$WORK
+    WORK=''
+    "$ROOT/usr/bin/rm" -rf -- "$path" >/dev/null 2>&1 || return 1
+    [ ! -e "$path" ] && [ ! -L "$path" ]
   fi
 }
-fixed_refusal() {
-	code=$1
-	trap - EXIT
-	if ! cleanup; then
-		printf '%s\n' 'SBXR-BOOTSTRAP-CLEANUP-FAILED' >&2
-		exit 1
-	fi
-	printf '%s\n' "$code" >&2
-	exit 1
+finish() {
+  local code=$1 status=${2:-1}
+  trap - EXIT
+  cleanup || code='SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+  printf '%s\n' "$code"
+  exit "$status"
 }
-refuse() {
-	fixed_refusal 'SBXR-BOOTSTRAP-REFUSED'
+host_refused() { finish 'SOFTWARE-LIFECYCLE-INSTALL-HOST-REFUSED'; }
+release_refused() { finish 'SOFTWARE-LIFECYCLE-INSTALL-RELEASE-REFUSED'; }
+release_unavailable() { finish 'SOFTWARE-LIFECYCLE-INSTALL-RELEASE-UNAVAILABLE'; }
+prerequisite_failed() { finish 'SOFTWARE-LIFECYCLE-INSTALL-PREREQUISITE-FAILED'; }
+path_refused() { finish 'SOFTWARE-LIFECYCLE-INSTALL-PATH-REFUSED'; }
+reclamation_failed() { finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'; }
+single_line() { [ "$("$ROOT/usr/bin/grep" -c '^' "$1" 2>/dev/null)" -eq 1 ] 2>/dev/null; }
+mounted_within() {
+  local target=$1 mount mounts="$WORK/mounts"
+  "$ROOT/usr/bin/findmnt" -rn -o TARGET >"$mounts" 2>/dev/null || return 0
+  while IFS= read -r mount; do
+    case "$mount" in "$target"|"$target"/*) return 0 ;; esac
+  done <"$mounts"
+  return 1
 }
-prerequisites_refused() {
-	fixed_refusal 'SBXR-BOOTSTRAP-PREREQUISITES-REFUSED'
+verify_elf_architecture() {
+  local executable=$1 class endian kind machine expected
+  class=$("$ROOT/usr/bin/head" -c 6 "$executable" | "$ROOT/usr/bin/od" -An -tx1 -v | "$ROOT/usr/bin/tr" -d ' \n') || return 1
+  kind=$("$ROOT/usr/bin/dd" if="$executable" bs=1 skip=16 count=2 2>/dev/null | "$ROOT/usr/bin/od" -An -tx1 -v | "$ROOT/usr/bin/tr" -d ' \n') || return 1
+  machine=$("$ROOT/usr/bin/dd" if="$executable" bs=1 skip=18 count=2 2>/dev/null | "$ROOT/usr/bin/od" -An -tx1 -v | "$ROOT/usr/bin/tr" -d ' \n') || return 1
+  case "$ARCH" in amd64) expected='3e00' ;; arm64) expected='b700' ;; *) return 1 ;; esac
+  [ "$class" = '7f454c460201' ] && { [ "$kind" = '0200' ] || [ "$kind" = '0300' ]; } && [ "$machine" = "$expected" ]
 }
-launch_refused() {
-	fixed_refusal 'SBXR-BOOTSTRAP-LAUNCH-REFUSED'
+verify_executable_identity() {
+  local executable=$1 output=$2 size length identity_bytes document_sha stored_sha payload_sha
+  size=$("$ROOT/usr/bin/wc" -c <"$executable") || return 1
+  [ "$size" -gt 56 ] && [ "$size" -le 268435456 ] 2>/dev/null || return 1
+  [ "$("$ROOT/usr/bin/tail" -c 16 "$executable")" = 'SBXR-IDENTITY-V1' ] || return 1
+  length=$("$ROOT/usr/bin/tail" -c 24 "$executable" | "$ROOT/usr/bin/head" -c 8 | "$ROOT/usr/bin/od" -An -tu8 | "$ROOT/usr/bin/tr" -d ' \n') || return 1
+  case "$length" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$length" -gt 0 ] && [ "$length" -le 4096 ] && [ "$size" -gt $((length + 56)) ] 2>/dev/null || return 1
+  identity_bytes=$((length + 56))
+  "$ROOT/usr/bin/tail" -c "$identity_bytes" "$executable" | "$ROOT/usr/bin/head" -c "$length" >"$output" || return 1
+  document_sha=$("$ROOT/usr/bin/sha256sum" "$output" | "$ROOT/usr/bin/cut" -d' ' -f1) || return 1
+  stored_sha=$("$ROOT/usr/bin/tail" -c 56 "$executable" | "$ROOT/usr/bin/head" -c 32 | "$ROOT/usr/bin/od" -An -tx1 -v | "$ROOT/usr/bin/tr" -d ' \n') || return 1
+  [ "$document_sha" = "$stored_sha" ] || return 1
+  payload_sha=$("$ROOT/usr/bin/head" -c $((size - identity_bytes)) "$executable" | "$ROOT/usr/bin/sha256sum" | "$ROOT/usr/bin/cut" -d' ' -f1) || return 1
+  identity_pattern='^\{"schema":1,"repository":"{{.Repository}}","tag":"v[0-9]+\.[0-9]+\.[0-9]+","commit":"[0-9a-f]{40}","sequence":[1-9][0-9]*,"architecture":"(amd64|arm64)","payload_sha256":"'"$payload_sha"'"\}$'
+  single_line "$output" && "$ROOT/usr/bin/grep" -Eqx "$identity_pattern" "$output"
+}
+successful_finish() {
+  local code=$1
+  trap - EXIT
+  cleanup || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+  "$ROOT/usr/bin/flock" -u 9 || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+  exec 9<&-
+  printf '%s\n' "$code"
+  if [ "$DEFERRED_SIGNAL" -ne 0 ]; then
+    printf 'Installed %s\nRun: sudo sbxr\n' "$TAG"
+    exit 130
+  fi
+  if (: </dev/tty >/dev/tty) 2>/dev/null; then
+    exec "$ROOT/usr/local/bin/sbxr" </dev/tty >/dev/tty 2>/dev/tty
+  fi
+  printf 'Installed %s\nRun: sudo sbxr\n' "$TAG"
+  exit 0
 }
 interrupted() {
-	trap - EXIT
-	if ! cleanup; then
-		printf '%s\n' 'SBXR-BOOTSTRAP-CLEANUP-FAILED' >&2
-		exit 1
-	fi
-  printf '%s\n' 'SBXR-BOOTSTRAP-INTERRUPTED' >&2
-  exit 130
+  if [ "$RECLAIMING" -eq 0 ]; then
+    finish 'SOFTWARE-LIFECYCLE-INSTALL-INTERRUPTED' 130
+  fi
+  DEFERRED_SIGNAL=1
 }
 trap interrupted HUP INT TERM
 trap cleanup EXIT
 
-if [ "$#" -eq 0 ]; then
-  :
-elif [ "$#" -eq 2 ] && [ "$1" = '--tag' ] && [ "$2" = "$TAG" ]; then
-  :
-else
-  refuse
-fi
-
-[ -t 0 ] && [ -t 1 ] || refuse
-case "${TERM-}" in ''|*[!A-Za-z0-9._+-]*) refuse ;; esac
-
-for tool in apt-get cut env getent grep id mktemp readlink stat uname; do
-  [ -x "$ROOT/usr/bin/$tool" ] || prerequisites_refused
-done
-[ -x "$ROOT/bin/chmod" ] && [ -x "$ROOT/bin/rm" ] && [ -x "$ROOT/bin/sh" ] || prerequisites_refused
-launch_uid=$("$ROOT/usr/bin/id" -u 2>/dev/null) || refuse
-case "$launch_uid" in ''|*[!0-9]*) refuse ;; esac
-
-for tool in "$ROOT/usr/bin/apt-get" "$ROOT/usr/bin/cut" "$ROOT/usr/bin/env" "$ROOT/usr/bin/getent" "$ROOT/usr/bin/grep" "$ROOT/usr/bin/id" "$ROOT/usr/bin/mktemp" "$ROOT/usr/bin/readlink" "$ROOT/usr/bin/stat" "$ROOT/usr/bin/uname" "$ROOT/bin/chmod" "$ROOT/bin/rm" "$ROOT/bin/sh"; do
-  [ "$("$ROOT/usr/bin/stat" -Lc '%u:%a:%F' "$tool" 2>/dev/null)" = '0:755:regular file' ] || prerequisites_refused
-done
-if [ "$launch_uid" != '0' ]; then
-  [ -x "$ROOT/usr/bin/sudo" ] || launch_refused
-  case "$("$ROOT/usr/bin/stat" -Lc '%u:%a:%F' "$ROOT/usr/bin/sudo" 2>/dev/null)" in '0:4755:regular file'|'0:755:regular file') : ;; *) launch_refused ;; esac
-fi
-
+[ "$#" -eq 0 ] || host_refused
+[ "$("$ROOT/usr/bin/id" -u 2>/dev/null)" = '0' ] || host_refused
+[ "$("$ROOT/usr/bin/uname" -s 2>/dev/null)" = 'Linux' ] || host_refused
+case "$("$ROOT/usr/bin/uname" -m 2>/dev/null)" in
+  x86_64) ARCH='amd64'; EXPECTED_EXECUTABLE_SHA256=$AMD64_EXECUTABLE_SHA256 ;;
+  aarch64) ARCH='arm64'; EXPECTED_EXECUTABLE_SHA256=$ARM64_EXECUTABLE_SHA256 ;;
+  *) host_refused ;;
+esac
 os_release="$ROOT/etc/os-release"
 if [ -L "$os_release" ]; then
-  [ "$("$ROOT/usr/bin/readlink" "$os_release" 2>/dev/null)" = '../usr/lib/os-release' ] || refuse
+  [ "$("$ROOT/usr/bin/readlink" "$os_release" 2>/dev/null)" = '../usr/lib/os-release' ] || host_refused
   os_release="$ROOT/usr/lib/os-release"
 fi
-[ -f "$os_release" ] && [ ! -L "$os_release" ] || refuse
-"$ROOT/usr/bin/grep" -qx 'ID=ubuntu' "$os_release" >/dev/null 2>&1 || refuse
-"$ROOT/usr/bin/grep" -Eq '^VERSION_ID="?24\.04"?$' "$os_release" >/dev/null 2>&1 || refuse
+[ -f "$os_release" ] && [ ! -L "$os_release" ] || host_refused
+[ "$("$ROOT/usr/bin/grep" -c '^ID=ubuntu$' "$os_release" 2>/dev/null)" = '1' ] || host_refused
+[ "$("$ROOT/usr/bin/grep" -Ec '^VERSION_ID="?24\.04"?$' "$os_release" 2>/dev/null)" = '1' ] || host_refused
 
-machine=$("$ROOT/usr/bin/uname" -m 2>/dev/null) || refuse
-case "$machine" in
-  x86_64) ARCH='amd64' ;;
-  aarch64) ARCH='arm64' ;;
-  *) refuse ;;
-esac
-case " $ARCHITECTURES " in *" $ARCH "*) : ;; *) refuse ;; esac
-
-owner_uid=$launch_uid
-owner_name=$("$ROOT/usr/bin/id" -un 2>/dev/null) || refuse
-owner_home=$("$ROOT/usr/bin/getent" passwd "$owner_uid" 2>/dev/null | "$ROOT/usr/bin/cut" -d: -f6) || refuse
-case "$owner_name:$owner_home" in *[!A-Za-z0-9._+/:@-]*|*:|*:) refuse ;; esac
-[ -d "$owner_home" ] || refuse
-
-printf '%s\n' 'SBXR bootstrap: repairing fixed prerequisites'
-if [ "$owner_uid" = '0' ]; then
-  "$ROOT/usr/bin/apt-get" update >/dev/null 2>&1 || prerequisites_refused
-  "$ROOT/usr/bin/apt-get" install --yes --no-install-recommends --reinstall ca-certificates curl iproute2 nftables iptables sudo >/dev/null 2>&1 || prerequisites_refused
-else
-  "$ROOT/usr/bin/sudo" -- "$ROOT/usr/bin/apt-get" update >/dev/null 2>&1 || launch_refused
-  "$ROOT/usr/bin/sudo" -- "$ROOT/usr/bin/apt-get" install --yes --no-install-recommends --reinstall ca-certificates curl iproute2 nftables iptables sudo >/dev/null 2>&1 || launch_refused
+"$ROOT/usr/bin/mkdir" -p "$ROOT/run/lock" >/dev/null 2>&1 || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+lock="$ROOT/run/lock/sbxr.lock"
+if [ ! -e "$lock" ] && [ ! -L "$lock" ]; then
+  (set -o noclobber; : >"$lock") 2>/dev/null || true
 fi
+[ ! -L "$lock" ] && [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$lock" 2>/dev/null)" = '0:600:1:regular file' ] || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+lock_identity=$("$ROOT/usr/bin/stat" -c '%d:%i' "$lock" 2>/dev/null) || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+exec 9<"$lock" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+[ "$("$ROOT/usr/bin/stat" -Lc '%d:%i' "/proc/$$/fd/9" 2>/dev/null)" = "$lock_identity" ] || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+[ "$("$ROOT/usr/bin/stat" -c '%d:%i' "$lock" 2>/dev/null)" = "$lock_identity" ] || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+"$ROOT/usr/bin/flock" -n 9 || finish 'SOFTWARE-LIFECYCLE-INSTALL-CONCURRENT-MUTATION'
 
-for tool in curl readlink sed sha256sum tar; do
-  [ -x "$ROOT/usr/bin/$tool" ] || prerequisites_refused
-  [ "$("$ROOT/usr/bin/stat" -Lc '%u:%a:%F' "$ROOT/usr/bin/$tool" 2>/dev/null)" = '0:755:regular file' ] || prerequisites_refused
-done
+WORK=$("$ROOT/usr/bin/mktemp" -d "$ROOT/tmp/sbxr-install.XXXXXX" 2>/dev/null) || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+"$ROOT/usr/bin/chmod" 0700 "$WORK" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
 
-WORK=$("$ROOT/usr/bin/mktemp" -d "$ROOT/tmp/sbxr-bootstrap.XXXXXX" 2>/dev/null) || refuse
-"$ROOT/bin/chmod" 0700 "$WORK" >/dev/null 2>&1 || refuse
-[ "$("$ROOT/usr/bin/stat" -c '%u:%a:%F' "$WORK" 2>/dev/null)" = "$owner_uid:700:directory" ] || refuse
-
+# The moving GitHub HTTPS command trusts this script; its embedded identity pins every later download.
 download() {
-  asset=$1
-  destination=$2
-  effective=$3
-  limit=$4
-  url="https://github.com/$REPOSITORY/releases/download/$TAG/$asset"
-  "$ROOT/usr/bin/curl" --fail --silent --show-error --location --max-redirs 4 --max-filesize "$limit" --proto '=https' --proto-redir '=https' --output "$destination" --write-out '%{url_effective}' "$url" >"$effective" 2>"$WORK/private.log" || return 1
-  resolved=$("$ROOT/usr/bin/sed" -n '1p' "$effective" 2>/dev/null) || return 1
-  case "$resolved" in
-    "https://github.com/$REPOSITORY/releases/download/$TAG/$asset"|https://release-assets.githubusercontent.com/*|https://objects.githubusercontent.com/*) : ;;
-    *) return 1 ;;
+  local name=$1 destination=$2 limit=$3 url=${4:-} response status effective http
+  if [ -z "$url" ]; then
+    url="https://github.com/$REPOSITORY/releases/download/$TAG/$name"
+  fi
+  response=$("$ROOT/usr/bin/curl" --fail --silent --show-error --location --max-redirs 4 --max-filesize "$limit" --proto '=https' --proto-redir '=https' --output "$destination" --write-out $'%{url_effective}\n%{http_code}' "$url" 2>/dev/null)
+  status=$?
+  effective=$(printf '%s\n' "$response" | "$ROOT/usr/bin/sed" -n '1p')
+  http=$(printf '%s\n' "$response" | "$ROOT/usr/bin/sed" -n '2p')
+  if [ "$status" -ne 0 ]; then
+    case "$status:$http" in 6:*|7:*|28:*|35:*|60:*|22:5??) return 3 ;; *) return 2 ;; esac
+  fi
+  case "$effective" in
+    "$url") return 0 ;;
+    https://release-assets.githubusercontent.com/*|https://*.githubusercontent.com/*) [ "$url" = "https://github.com/$REPOSITORY/releases/download/$TAG/$name" ] && return 0; return 2 ;;
+    *) return 2 ;;
   esac
-  [ -f "$destination" ] && [ ! -L "$destination" ] || return 1
+}
+download_or_finish() {
+  download "$@"
+  case "$?" in 0) return 0 ;; 3) release_unavailable ;; *) release_refused ;; esac
 }
 
-active="$ROOT/usr/local/bin/sbxr"
-recovery_receipt="$ROOT/var/lib/sbxr-recovery.json"
-reentry=''
-if [ -e "$active" ] || [ -L "$active" ]; then
-  [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%F' "$active" 2>/dev/null)" = '0:777:symbolic link' ] || refuse
-  installed_target=$("$ROOT/usr/bin/readlink" "$active" 2>/dev/null) || refuse
-  case "$installed_target" in /opt/sbxr/releases/*/sbxr) : ;; *) refuse ;; esac
-  executable="$ROOT$installed_target"
-  for directory in "$ROOT/usr/local/bin" "$ROOT/opt" "$ROOT/opt/sbxr" "$ROOT/opt/sbxr/releases" "${executable%/sbxr}"; do
-    [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%F' "$directory" 2>/dev/null)" = '0:755:directory' ] || refuse
-  done
-  [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$executable" 2>/dev/null)" = '0:755:1:regular file' ] || refuse
-  "$executable" version --json >"$WORK/version.json" 2>"$WORK/private.log" || refuse
-  installed_pattern='^\{"build":\{"repository":"{{.Repository}}","tag":"[A-Za-z0-9][A-Za-z0-9._+-]*","commit":"[0-9a-f]{40}","payload_sha256":"[0-9a-f]{64}"\},"architecture":"'$ARCH'","state_schema":[1-9][0-9]*\}$'
-  "$ROOT/usr/bin/grep" -Eq "$installed_pattern" "$WORK/version.json" >/dev/null 2>&1 || refuse
-  installed_tag=$("$ROOT/usr/bin/sed" -n 's|.*"tag":"\([A-Za-z0-9][A-Za-z0-9._+-]*\)","commit".*|\1|p' "$WORK/version.json") || refuse
-  installed_commit=$("$ROOT/usr/bin/sed" -n 's|.*"commit":"\([0-9a-f]\{40\}\)","payload_sha256".*|\1|p' "$WORK/version.json") || refuse
-  installed_prefix="/opt/sbxr/releases/$installed_tag-$installed_commit-"
-  installed_digest=${installed_target#"$installed_prefix"}
-  installed_digest=${installed_digest%/sbxr}
-  case "$installed_digest" in *[!0-9a-f]*|'') refuse ;; esac
-  [ "${#installed_digest}" -eq 64 ] && [ "$installed_target" = "$installed_prefix$installed_digest/sbxr" ] || refuse
-  reentry=1
-  printf '%s\n' 'SBXR bootstrap: re-entering installed Owner Console'
-else
-printf '%s\n' 'SBXR bootstrap: verifying release'
 index="$WORK/release-index.json"
-download 'release-index.json' "$index" "$WORK/index.url" 1048576 || refuse
-[ "$("$ROOT/usr/bin/stat" -c '%u:%a:%F' "$index" 2>/dev/null)" = "$owner_uid:600:regular file" ] || refuse
-[ "$("$ROOT/usr/bin/stat" -c '%s' "$index" 2>/dev/null)" -le 1048576 ] || refuse
-index_sha=$("$ROOT/usr/bin/sha256sum" "$index" 2>/dev/null | "$ROOT/usr/bin/cut" -d' ' -f1) || refuse
-
-if [ -e "$recovery_receipt" ] || [ -L "$recovery_receipt" ]; then
-  [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$recovery_receipt" 2>/dev/null)" = '0:644:1:regular file' ] || refuse
-  receipt_pattern='^\{"schema":1,"change_set":"[a-z0-9][a-z0-9.-]*","repository":"{{.Repository}}","tag":"{{.Tag}}","commit":"{{.Commit}}","release_index_sha256":"'$index_sha'","payload_sha256":"[0-9a-f]{64}"\}$'
-  "$ROOT/usr/bin/grep" -Eq "$receipt_pattern" "$recovery_receipt" >/dev/null 2>&1 || refuse
-  reentry=1
-  printf '%s\n' 'SBXR bootstrap: entering unfinished-install recovery'
-fi
-
-index_pattern='^\{"schema":1,"product":"sbxr","repository":"{{.Repository}}","version":"{{.Version}}","sequence":{{.Sequence}},"tag":"{{.Tag}}","commit":"{{.Commit}}","state_schema":[1-9][0-9]*,"minimum_updater_schema":[1-9][0-9]*,"assets":\[\{"role":"application-linux-amd64","name":"sbxr-linux-amd64.tar.gz","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\},\{"role":"application-linux-arm64","name":"sbxr-linux-arm64.tar.gz","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\},\{"role":"components-linux-amd64","name":"sbxr-components-linux-amd64.tar.gz","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\},\{"role":"components-linux-arm64","name":"sbxr-components-linux-arm64.tar.gz","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\},\{"role":"bootstrap","name":"install.sh","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\}\]\}$'
-"$ROOT/usr/bin/grep" -Eq "$index_pattern" "$index" >/dev/null 2>&1 || refuse
-state_schema=$("$ROOT/usr/bin/sed" -n 's|.*"state_schema":\([0-9][0-9]*\),"minimum_updater_schema".*|\1|p' "$index" 2>/dev/null) || refuse
-case "$state_schema" in ''|*[!0-9]*) refuse ;; esac
-
+download_or_finish 'release-index.json' "$index" 1048576
+[ -f "$index" ] && [ ! -L "$index" ] || release_refused
+[ "$("$ROOT/usr/bin/wc" -c <"$index")" -le 1048576 ] 2>/dev/null || release_refused
+index_pattern='^\{"schema":1,"repository":"{{.Repository}}","tag":"{{.Tag}}","commit":"{{.Commit}}","sequence":{{.Sequence}},"assets":\[\{"name":"install\.sh","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\},\{"name":"sbxr-linux-amd64\.tar\.gz","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\},\{"name":"sbxr-linux-arm64\.tar\.gz","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\}\]\}$'
+single_line "$index" && "$ROOT/usr/bin/grep" -Eqx "$index_pattern" "$index" || release_refused
 archive_name="sbxr-linux-$ARCH.tar.gz"
-archive_fact=$("$ROOT/usr/bin/sed" -n "s|.*\"role\":\"application-linux-$ARCH\",\"name\":\"$archive_name\",\"size\":\([0-9][0-9]*\),\"sha256\":\"\([0-9a-f][0-9a-f]*\)\".*|\1:\2|p" "$index" 2>/dev/null) || refuse
-case "$archive_fact" in *:*) : ;; *) refuse ;; esac
-archive_size=${archive_fact%%:*}
-archive_sha=${archive_fact#*:}
-[ "${#archive_sha}" -eq 64 ] || refuse
+archive_sha=$("$ROOT/usr/bin/sed" -n 's/.*"name":"'"$archive_name"'"[^}]*"sha256":"\([0-9a-f]\{64\}\)".*/\1/p' "$index")
+archive_size=$("$ROOT/usr/bin/sed" -n 's/.*"name":"'"$archive_name"'"[^}]*"size":\([0-9][0-9]*\).*/\1/p' "$index")
+[ "${#archive_sha}" -eq 64 ] && [ "$archive_size" -gt 0 ] 2>/dev/null || release_refused
 
-printf '%s\n' 'SBXR bootstrap: verifying executable'
 archive="$WORK/$archive_name"
-download "$archive_name" "$archive" "$WORK/archive.url" 268435456 || refuse
-[ "$("$ROOT/usr/bin/stat" -c '%s' "$archive" 2>/dev/null)" = "$archive_size" ] || refuse
-[ "$("$ROOT/usr/bin/sha256sum" "$archive" 2>/dev/null | "$ROOT/usr/bin/cut" -d' ' -f1)" = "$archive_sha" ] || refuse
-[ "$("$ROOT/usr/bin/tar" -tzf "$archive" 2>"$WORK/private.log")" = 'sbxr' ] || refuse
-"$ROOT/usr/bin/tar" -xzf "$archive" -C "$WORK" --no-same-owner --no-same-permissions 2>"$WORK/private.log" || refuse
-executable="$WORK/sbxr"
-"$ROOT/bin/chmod" 0700 "$executable" >/dev/null 2>&1 || refuse
-[ "$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$executable" 2>/dev/null)" = "$owner_uid:700:1:regular file" ] || refuse
+download_or_finish "$archive_name" "$archive" 268435456
+[ -f "$archive" ] && [ ! -L "$archive" ] || release_refused
+[ "$("$ROOT/usr/bin/wc" -c <"$archive")" -eq "$archive_size" ] 2>/dev/null || release_refused
+[ "$("$ROOT/usr/bin/sha256sum" "$archive" | "$ROOT/usr/bin/cut" -d' ' -f1)" = "$archive_sha" ] || release_refused
+index_sha=$("$ROOT/usr/bin/sha256sum" "$index" | "$ROOT/usr/bin/cut" -d' ' -f1) || release_refused
 
-"$executable" version --json >"$WORK/version.json" 2>"$WORK/private.log" || refuse
-version_pattern='^\{"build":\{"repository":"{{.Repository}}","tag":"{{.Tag}}","commit":"{{.Commit}}","payload_sha256":"[0-9a-f]{64}"\},"architecture":"'$ARCH'","state_schema":'$state_schema'\}$'
-"$ROOT/usr/bin/grep" -Eq "$version_pattern" "$WORK/version.json" >/dev/null 2>&1 || refuse
-if [ -n "$reentry" ]; then
-  payload_sha=$("$ROOT/usr/bin/sed" -n 's|.*"payload_sha256":"\([0-9a-f]\{64\}\)".*|\1|p' "$WORK/version.json") || refuse
-  "$ROOT/usr/bin/grep" -q '"payload_sha256":"'$payload_sha'"' "$recovery_receipt" >/dev/null 2>&1 || refuse
+active="$ROOT/usr/local/bin/sbxr"
+installed_directory="$ROOT/var/lib/sbxr"
+installed_record="$installed_directory/installed.json"
+if [ -L "$active" ]; then
+  legacy_target=$("$ROOT/usr/bin/readlink" "$active" 2>/dev/null) || path_refused
+  case "$legacy_target" in
+    /opt/sbxr/releases/v1.0.[0-9]-[0-9a-f]*-[0-9a-f]*/sbxr|/opt/sbxr/releases/v1.0.1[0-5]-[0-9a-f]*-[0-9a-f]*/sbxr)
+      legacy="$ROOT$legacy_target"
+      if [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$legacy" 2>/dev/null)" = '0:755:1:regular file' ]; then
+        legacy_sha=$("$ROOT/usr/bin/sha256sum" "$legacy" | "$ROOT/usr/bin/cut" -d' ' -f1)
+        case "$legacy_target" in *-"$legacy_sha"/sbxr) : ;; *) legacy_sha='' ;; esac
+        if [ -n "$legacy_sha" ]; then
+          legacy_identity=$("$legacy" version --json 2>/dev/null) || legacy_identity=''
+          legacy_pattern='^\{"build":\{"repository":"{{.Repository}}","tag":"v1\.0\.([0-9]|1[0-5])","commit":"[0-9a-f]{40}","payload_sha256":"[0-9a-f]{64}"\},"architecture":"(amd64|arm64)","state_schema":[1-9][0-9]*\}$'
+          [ "$(printf '%s\n' "$legacy_identity" | "$ROOT/usr/bin/grep" -c '^')" -eq 1 ] 2>/dev/null && printf '%s\n' "$legacy_identity" | "$ROOT/usr/bin/grep" -Eqx "$legacy_pattern" && finish 'SOFTWARE-LIFECYCLE-INSTALL-LEGACY-REFUSED'
+        fi
+      fi
+      ;;
+  esac
 fi
-fi
-
-launch_tag=$("$ROOT/usr/bin/sed" -n 's|.*"tag":"\([A-Za-z0-9][A-Za-z0-9._+-]*\)","commit".*|\1|p' "$WORK/version.json") || refuse
-launch_commit=$("$ROOT/usr/bin/sed" -n 's|.*"commit":"\([0-9a-f]\{40\}\)","payload_sha256".*|\1|p' "$WORK/version.json") || refuse
-launch_sha=$("$ROOT/usr/bin/sha256sum" "$executable" 2>/dev/null | "$ROOT/usr/bin/cut" -d' ' -f1) || refuse
-case "$launch_tag:$launch_commit:$launch_sha" in *[!A-Za-z0-9._+:-]*|::*|*::) refuse ;; esac
-[ "${#launch_commit}" -eq 40 ] && [ "${#launch_sha}" -eq 64 ] || refuse
-printf '%s\n' 'SBXR bootstrap: launching Owner Console'
-if [ -n "$reentry" ]; then
-  if [ -e "$active" ] || [ -L "$active" ]; then
-    "$ROOT/usr/bin/env" -i HOME="$owner_home" USER="$owner_name" LOGNAME="$owner_name" TERM="$TERM" LANG=C.UTF-8 PATH=/usr/bin:/bin SBXR_INSTALLED_REENTRY=1 SBXR_SSH_CONNECTION="$SBXR_SSH_CONNECTION" SBXR_OWNER_LAUNCH_TAG="$launch_tag" SBXR_OWNER_LAUNCH_COMMIT="$launch_commit" SBXR_OWNER_LAUNCH_SHA256="$launch_sha" "$executable" private owner-launch
-  else
-    "$ROOT/usr/bin/env" -i HOME="$owner_home" USER="$owner_name" LOGNAME="$owner_name" TERM="$TERM" LANG=C.UTF-8 PATH=/usr/bin:/bin SBXR_SSH_CONNECTION="$SBXR_SSH_CONNECTION" SBXR_OWNER_LAUNCH_TAG="$launch_tag" SBXR_OWNER_LAUNCH_COMMIT="$launch_commit" SBXR_OWNER_LAUNCH_SHA256="$launch_sha" "$executable" private owner-launch
+if [ -f "$active" ] && [ ! -L "$active" ] && [ -d "$installed_directory" ] && [ ! -L "$installed_directory" ] && [ -f "$installed_record" ] && [ ! -L "$installed_record" ] \
+  && [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$active" 2>/dev/null)" = '0:755:1:regular file' ] \
+  && [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%F' "$installed_directory" 2>/dev/null)" = '0:700:directory' ] \
+  && [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$installed_record" 2>/dev/null)" = '0:600:1:regular file' ] \
+  && [ "$("$ROOT/usr/bin/wc" -c <"$installed_record")" -le 4096 ] 2>/dev/null; then
+  record_pattern='^\{"schema":1,"repository":"{{.Repository}}","tag":"v[0-9]+\.[0-9]+\.[0-9]+","commit":"[0-9a-f]{40}","release_index_sha256":"[0-9a-f]{64}","sequence":[1-9][0-9]*,"architecture":"(amd64|arm64)","executable_sha256":"[0-9a-f]{64}"\}$'
+  if single_line "$installed_record" && "$ROOT/usr/bin/grep" -Eqx "$record_pattern" "$installed_record" && verify_executable_identity "$active" "$WORK/active-identity.json" && verify_elf_architecture "$active"; then
+    current_tag=$("$ROOT/usr/bin/sed" -n 's/.*"tag":"\([^"]*\)".*/\1/p' "$installed_record")
+    current_commit=$("$ROOT/usr/bin/sed" -n 's/.*"commit":"\([0-9a-f]*\)".*/\1/p' "$installed_record")
+    current_index=$("$ROOT/usr/bin/sed" -n 's/.*"release_index_sha256":"\([0-9a-f]*\)".*/\1/p' "$installed_record")
+    current_sequence=$("$ROOT/usr/bin/sed" -n 's/.*"sequence":\([0-9]*\).*/\1/p' "$installed_record")
+    current_arch=$("$ROOT/usr/bin/sed" -n 's/.*"architecture":"\([^"]*\)".*/\1/p' "$installed_record")
+    current_sha=$("$ROOT/usr/bin/sed" -n 's/.*"executable_sha256":"\([0-9a-f]*\)".*/\1/p' "$installed_record")
+    embedded_tag=$("$ROOT/usr/bin/sed" -n 's/.*"tag":"\([^"]*\)".*/\1/p' "$WORK/active-identity.json")
+    embedded_commit=$("$ROOT/usr/bin/sed" -n 's/.*"commit":"\([0-9a-f]*\)".*/\1/p' "$WORK/active-identity.json")
+    embedded_sequence=$("$ROOT/usr/bin/sed" -n 's/.*"sequence":\([0-9]*\).*/\1/p' "$WORK/active-identity.json")
+    embedded_arch=$("$ROOT/usr/bin/sed" -n 's/.*"architecture":"\([^"]*\)".*/\1/p' "$WORK/active-identity.json")
+    observed_sha=$("$ROOT/usr/bin/sha256sum" "$active" | "$ROOT/usr/bin/cut" -d' ' -f1)
+    if [ "$current_tag:$current_commit:$current_sequence:$current_arch:$current_sha" = "$embedded_tag:$embedded_commit:$embedded_sequence:$embedded_arch:$observed_sha" ]; then
+      if [ "$current_sequence" -gt "$SEQUENCE" ] 2>/dev/null; then
+        finish 'SOFTWARE-LIFECYCLE-INSTALL-DOWNGRADE-REFUSED'
+      fi
+      if [ "$current_tag:$current_commit:$current_index:$current_sequence:$current_arch:$current_sha" = "$TAG:$COMMIT:$index_sha:$SEQUENCE:$ARCH:$EXPECTED_EXECUTABLE_SHA256" ]; then
+        successful_finish 'SOFTWARE-LIFECYCLE-INSTALL-ALREADY-CURRENT'
+      fi
+    fi
   fi
-else
-  "$ROOT/usr/bin/env" -i HOME="$owner_home" USER="$owner_name" LOGNAME="$owner_name" TERM="$TERM" LANG=C.UTF-8 PATH=/usr/bin:/bin SBXR_SSH_CONNECTION="$SBXR_SSH_CONNECTION" SBXR_OWNER_LAUNCH_TAG="$launch_tag" SBXR_OWNER_LAUNCH_COMMIT="$launch_commit" SBXR_OWNER_LAUNCH_SHA256="$launch_sha" "$executable" private owner-launch
 fi
-launch_status=$?
-cleanup
-if [ "$?" -ne 0 ]; then
-	trap - EXIT
-	printf '%s\n' 'SBXR-BOOTSTRAP-CLEANUP-FAILED' >&2
-	exit 1
+if [ ! -x "$ROOT/usr/bin/tar" ]; then
+  "$ROOT/usr/bin/apt-get" install --yes --no-install-recommends tar >/dev/null 2>&1 || prerequisite_failed
+  [ -x "$ROOT/usr/bin/tar" ] || prerequisite_failed
 fi
-trap - EXIT
-if [ "$launch_status" -ne 0 ]; then
-  printf '%s\n' 'SBXR-BOOTSTRAP-LAUNCH-REFUSED' >&2
+[ "$("$ROOT/usr/bin/tar" -tzf "$archive" 2>/dev/null)" = 'sbxr' ] || release_refused
+candidate="$WORK/sbxr"
+(ulimit -f 262144; "$ROOT/usr/bin/tar" -xOzf "$archive" sbxr >"$candidate") 2>/dev/null || release_refused
+[ -f "$candidate" ] && [ ! -L "$candidate" ] || release_refused
+"$ROOT/usr/bin/chmod" 0600 "$candidate" || release_refused
+executable_sha=$("$ROOT/usr/bin/sha256sum" "$candidate" | "$ROOT/usr/bin/cut" -d' ' -f1) || release_refused
+verify_executable_identity "$candidate" "$WORK/candidate-identity.json" || release_refused
+verify_elf_architecture "$candidate" || release_refused
+candidate_identity_pattern='^\{"schema":1,"repository":"{{.Repository}}","tag":"{{.Tag}}","commit":"{{.Commit}}","sequence":{{.Sequence}},"architecture":"'"$ARCH"'","payload_sha256":"[0-9a-f]{64}"\}$'
+single_line "$WORK/candidate-identity.json" && "$ROOT/usr/bin/grep" -Eqx "$candidate_identity_pattern" "$WORK/candidate-identity.json" || release_refused
+[ "$executable_sha" = "$EXPECTED_EXECUTABLE_SHA256" ] || release_refused
+
+active_identity=''
+state_identity=''
+if [ -e "$active" ] || [ -L "$active" ]; then
+  before=$("$ROOT/usr/bin/stat" -c '%d:%i:%F' "$active" 2>/dev/null) || path_refused
+  mounted_within "$active" && path_refused
+  active_identity=$("$ROOT/usr/bin/stat" -c '%d:%i:%F' "$active" 2>/dev/null) || path_refused
+  [ "$before" = "$active_identity" ] || path_refused
 fi
-exit "$launch_status"
+if [ -e "$installed_directory" ] || [ -L "$installed_directory" ]; then
+  before=$("$ROOT/usr/bin/stat" -c '%d:%i:%F' "$installed_directory" 2>/dev/null) || path_refused
+  mounted_within "$installed_directory" && path_refused
+  state_identity=$("$ROOT/usr/bin/stat" -c '%d:%i:%F' "$installed_directory" 2>/dev/null) || path_refused
+  [ "$before" = "$state_identity" ] || path_refused
+fi
+
+RECLAIMING=1
+if [ -n "$active_identity" ]; then
+  mounted_within "$active" && reclamation_failed
+  [ "$("$ROOT/usr/bin/stat" -c '%d:%i:%F' "$active" 2>/dev/null)" = "$active_identity" ] || reclamation_failed
+  "$ROOT/usr/bin/rm" -rf --one-file-system -- "$active" || reclamation_failed
+  [ ! -e "$active" ] && [ ! -L "$active" ] || reclamation_failed
+fi
+if [ -n "$state_identity" ]; then
+  mounted_within "$installed_directory" && reclamation_failed
+  [ "$("$ROOT/usr/bin/stat" -c '%d:%i:%F' "$installed_directory" 2>/dev/null)" = "$state_identity" ] || reclamation_failed
+  "$ROOT/usr/bin/rm" -rf --one-file-system -- "$installed_directory" || reclamation_failed
+  [ ! -e "$installed_directory" ] && [ ! -L "$installed_directory" ] || reclamation_failed
+fi
+"$ROOT/usr/bin/mkdir" "$ROOT/var/lib/sbxr" || reclamation_failed
+"$ROOT/usr/bin/chmod" 0700 "$ROOT/var/lib/sbxr" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+"$ROOT/usr/bin/mv" -n "$candidate" "$ROOT/usr/local/bin/sbxr" || reclamation_failed
+[ ! -e "$candidate" ] || reclamation_failed
+"$ROOT/usr/bin/chmod" 0600 "$ROOT/usr/local/bin/sbxr" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+"$ROOT/usr/bin/sync" "$ROOT/usr/local/bin/sbxr" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+record="$WORK/installed.json"
+printf '{"schema":1,"repository":"%s","tag":"%s","commit":"%s","release_index_sha256":"%s","sequence":%s,"architecture":"%s","executable_sha256":"%s"}\n' "$REPOSITORY" "$TAG" "$COMMIT" "$index_sha" "$SEQUENCE" "$ARCH" "$executable_sha" >"$record" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+"$ROOT/usr/bin/chmod" 0600 "$record" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+"$ROOT/usr/bin/sync" "$record" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+"$ROOT/usr/bin/mv" -n "$record" "$ROOT/var/lib/sbxr/installed.json" || reclamation_failed
+[ ! -e "$record" ] || reclamation_failed
+"$ROOT/usr/bin/sync" "$ROOT/var/lib/sbxr" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+"$ROOT/usr/bin/chmod" 0755 "$ROOT/usr/local/bin/sbxr" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+verify_executable_identity "$ROOT/usr/local/bin/sbxr" "$WORK/final-identity.json" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+verify_elf_architecture "$ROOT/usr/local/bin/sbxr" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+final_record_pattern='^\{"schema":1,"repository":"{{.Repository}}","tag":"{{.Tag}}","commit":"{{.Commit}}","release_index_sha256":"'"$index_sha"'","sequence":{{.Sequence}},"architecture":"'"$ARCH"'","executable_sha256":"'"$executable_sha"'"\}$'
+single_line "$WORK/final-identity.json" && "$ROOT/usr/bin/grep" -Eqx "$candidate_identity_pattern" "$WORK/final-identity.json" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+single_line "$ROOT/var/lib/sbxr/installed.json" && "$ROOT/usr/bin/grep" -Eqx "$final_record_pattern" "$ROOT/var/lib/sbxr/installed.json" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+[ "$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$ROOT/usr/local/bin/sbxr" 2>/dev/null)" = '0:755:1:regular file' ] || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+[ "$("$ROOT/usr/bin/stat" -c '%u:%a:%F' "$ROOT/var/lib/sbxr" 2>/dev/null)" = '0:700:directory' ] || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+[ "$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$ROOT/var/lib/sbxr/installed.json" 2>/dev/null)" = '0:600:1:regular file' ] || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+[ "$("$ROOT/usr/bin/sha256sum" "$ROOT/usr/local/bin/sbxr" | "$ROOT/usr/bin/cut" -d' ' -f1)" = "$executable_sha" ] || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+"$ROOT/usr/bin/sync" "$ROOT/usr/local/bin" "$ROOT/var/lib" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+
+successful_finish 'SOFTWARE-LIFECYCLE-INSTALL-INSTALLED'
 `

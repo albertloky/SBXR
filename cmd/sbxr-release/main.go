@@ -51,9 +51,10 @@ type indexOptions struct {
 }
 
 type bootstrapOptions struct {
-	version, tag, commit, output string
-	sequence                     uint64
-	root                         string
+	version, tag, commit, output                 string
+	amd64ExecutableSHA256, arm64ExecutableSHA256 string
+	sequence                                     uint64
+	root                                         string
 }
 
 type packageQualificationValidationOptions struct {
@@ -119,6 +120,8 @@ func main() {
 		flags.Uint64Var(&options.sequence, "sequence", 0, "release sequence")
 		flags.StringVar(&options.tag, "tag", "", "immutable release tag")
 		flags.StringVar(&options.commit, "commit", "", "40-character commit SHA")
+		flags.StringVar(&options.amd64ExecutableSHA256, "amd64-executable-sha256", "", "amd64 executable SHA-256")
+		flags.StringVar(&options.arm64ExecutableSHA256, "arm64-executable-sha256", "", "arm64 executable SHA-256")
 		flags.StringVar(&options.output, "output", "", "install.sh output path")
 		if flags.Parse(os.Args[2:]) != nil || flags.NArg() != 0 || buildBootstrapFile(options) != nil {
 			fmt.Fprintln(os.Stderr, "sbxr bootstrap build refused")
