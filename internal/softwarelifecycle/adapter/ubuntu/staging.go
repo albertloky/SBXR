@@ -6,8 +6,6 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
-	"debug/buildinfo"
-	"debug/elf"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -36,7 +34,8 @@ func (Stager) Stage(_ context.Context, request softwarelifecycle.StageRequest) (
 	if err := extractExecutable(request.Archive, path); err != nil {
 		return softwarelifecycle.StagedRelease{}, errors.New("release extraction refused")
 	}
-	if err := validateELF(path, request.Architecture); err != nil {
+	executable, err := os.ReadFile(path)
+	if err != nil || !softwarelifecycle.VerifyLinuxExecutable(executable, request.Architecture) {
 		return softwarelifecycle.StagedRelease{}, errors.New("release executable refused")
 	}
 	file, err := os.Open(path)
@@ -52,10 +51,6 @@ func (Stager) Stage(_ context.Context, request softwarelifecycle.StageRequest) (
 	closeErr := file.Close()
 	if metadataErr != nil || closeErr != nil || metadata.Architecture != request.Architecture || metadata.Build.Repository != request.Release.Identity.Repository || metadata.Build.Tag != request.Release.Identity.Tag || metadata.Build.Commit != request.Release.Identity.Commit || metadata.StateSchema != request.Release.StateSchema || metadata.MinimumUpdaterSchema != request.Release.MinimumUpdaterSchema {
 		return softwarelifecycle.StagedRelease{}, errors.New("release metadata refused")
-	}
-	executable, err := os.ReadFile(path)
-	if err != nil {
-		return softwarelifecycle.StagedRelease{}, errors.New("staged executable unavailable")
 	}
 	digest := sha256.Sum256(executable)
 	componentsDigest := sha256.Sum256(request.ComponentArchive)
@@ -108,45 +103,6 @@ func extractExecutable(body []byte, destination string) error {
 	remaining, err := io.Copy(io.Discard, compressed)
 	if err != nil || remaining != 0 || compressed.Close() != nil || input.Len() != 0 {
 		return errors.New("trailing archive content")
-	}
-	return nil
-}
-
-func validateELF(path string, architecture softwarelifecycle.Architecture) error {
-	file, err := elf.Open(path)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	wantMachine := elf.EM_X86_64
-	if architecture == softwarelifecycle.ARM64 {
-		wantMachine = elf.EM_AARCH64
-	}
-	if file.FileHeader.Class != elf.ELFCLASS64 || file.FileHeader.Machine != wantMachine || file.Section(".gopclntab") == nil {
-		return errors.New("wrong executable architecture")
-	}
-	for _, program := range file.Progs {
-		if program.Type == elf.PT_INTERP {
-			return errors.New("language runtime dependency")
-		}
-	}
-	libraries, err := file.ImportedLibraries()
-	if err != nil || len(libraries) != 0 {
-		return errors.New("native runtime dependency")
-	}
-	info, err := buildinfo.ReadFile(path)
-	if err != nil || info.GoVersion != "go1.26.6" {
-		return errors.New("wrong Go toolchain")
-	}
-	settings := map[string]string{}
-	for _, setting := range info.Settings {
-		if _, duplicate := settings[setting.Key]; duplicate {
-			return errors.New("ambiguous Go build setting")
-		}
-		settings[setting.Key] = setting.Value
-	}
-	if settings["GOOS"] != "linux" || settings["GOARCH"] != string(architecture) || settings["CGO_ENABLED"] != "0" {
-		return errors.New("unsafe Go build settings")
 	}
 	return nil
 }

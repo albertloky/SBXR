@@ -1,13 +1,19 @@
 package softwarelifecycle
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"testing"
 )
 
@@ -29,11 +35,205 @@ type controlledLatestSource struct {
 	check   func()
 }
 
+type controlledUpdateSource struct {
+	candidate UpdateCandidate
+	outcome   LatestReleaseOutcome
+	prepare   func()
+	calls     atomic.Int64
+}
+
+func (source *controlledUpdateSource) CheckLatest(context.Context) (LatestRelease, LatestReleaseOutcome) {
+	if source.candidate.cell == nil {
+		return LatestRelease{}, LatestReleaseRefused
+	}
+	return source.candidate.cell.release, LatestReleaseAccepted
+}
+
+func (source *controlledUpdateSource) PrepareLatest(context.Context, Architecture) (UpdateCandidate, LatestReleaseOutcome) {
+	source.calls.Add(1)
+	if source.prepare != nil {
+		source.prepare()
+	}
+	if source.outcome != 0 {
+		return source.candidate, source.outcome
+	}
+	return source.candidate, LatestReleaseAccepted
+}
+
 func (source controlledLatestSource) CheckLatest(context.Context) (LatestRelease, LatestReleaseOutcome) {
 	if source.check != nil {
 		source.check()
 	}
 	return source.result, source.outcome
+}
+
+func TestUpdateReturnsTruthfulEarlyOutcomesWithoutMutation(t *testing.T) {
+	prior := ReleaseIdentity{Repository: Repository, Tag: "v2.0.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}
+	for _, test := range []struct {
+		name      string
+		candidate LatestRelease
+		outcome   LatestReleaseOutcome
+		want      ResultCode
+	}{
+		{"already current", LatestRelease{Identity: prior, Sequence: 17}, LatestReleaseAccepted, UpdateAlreadyCurrent},
+		{"same sequence changed identity", LatestRelease{Identity: ReleaseIdentity{Repository: Repository, Tag: "v2.0.1", Commit: strings.Repeat("c", 40), IndexSHA256: strings.Repeat("d", 64)}, Sequence: 17}, LatestReleaseAccepted, UpdateReleaseRefused},
+		{"release refused", LatestRelease{}, LatestReleaseRefused, UpdateReleaseRefused},
+		{"release unavailable", LatestRelease{}, LatestReleaseUnavailable, UpdateReleaseUnavailable},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			priorEvidence := installedEvidence(t, prior, 17, AMD64)
+			writeInstalledEvidence(t, root, priorEvidence)
+			source := &controlledUpdateSource{outcome: test.outcome}
+			if test.candidate.Sequence != 0 {
+				evidence := installedEvidence(t, test.candidate.Identity, test.candidate.Sequence, AMD64)
+				source.candidate = updateCandidateFromEvidence(t, test.candidate.Identity, test.candidate.Sequence, AMD64, evidence)
+			}
+
+			result := newInstalledInterface(newLocalInspector(root, uint32(os.Getuid())), source).Update(t.Context(), nil)
+
+			if result.State != Ready || result.Code != test.want || result.UpdateInstalled || !activeEvidenceMatches(t, root, priorEvidence) {
+				t.Fatalf("Update() = %#v", result)
+			}
+		})
+	}
+}
+
+func TestUpdateRefusesConcurrentMutationWithoutFreshDiscovery(t *testing.T) {
+	root := t.TempDir()
+	prior := ReleaseIdentity{Repository: Repository, Tag: "v2.0.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}
+	writeInstalledEvidence(t, root, installedEvidence(t, prior, 17, AMD64))
+	lockPath := statusPath(root, mutationLockPath)
+	mustWriteStatusFile(t, lockPath, nil, 0o600)
+	lock, err := os.OpenFile(lockPath, os.O_RDWR, 0)
+	if err != nil || syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	source := &controlledUpdateSource{}
+
+	result := newInstalledInterface(newLocalInspector(root, uint32(os.Getuid())), source).Update(t.Context(), nil)
+
+	if result.State != UpdateInProgress || result.Code != UpdateConcurrentMutation || source.calls.Load() != 0 {
+		t.Fatalf("Update() = %#v, fresh calls = %d", result, source.calls.Load())
+	}
+}
+
+func TestUpdateFailureAfterPreparedRestoresVerifiedPriorPair(t *testing.T) {
+	root := t.TempDir()
+	prior := ReleaseIdentity{Repository: Repository, Tag: "v2.0.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}
+	candidate := ReleaseIdentity{Repository: Repository, Tag: "v2.0.1", Commit: strings.Repeat("c", 40), IndexSHA256: strings.Repeat("d", 64)}
+	priorEvidence := installedEvidence(t, prior, 17, AMD64)
+	candidateEvidence := installedEvidence(t, candidate, 18, AMD64)
+	writeInstalledEvidence(t, root, priorEvidence)
+	source := &controlledUpdateSource{candidate: updateCandidateFromEvidence(t, candidate, 18, AMD64, candidateEvidence)}
+
+	result := newInstalledInterface(newLocalInspector(root, uint32(os.Getuid())), source).Update(t.Context(), func(progress Progress) {
+		if progress.Status == "Activating the verified release" {
+			if err := os.WriteFile(statusPath(root, "/usr/local/bin/.sbxr-update-candidate"), []byte("changed"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+
+	if result.State != Ready || result.Code != UpdatePriorRestored || result.UpdateInstalled || !activeEvidenceMatches(t, root, priorEvidence) {
+		t.Fatalf("Update() = %#v", result)
+	}
+}
+
+func TestUpdateRestoresPriorWhileTheRollbackLinkStillHasTwoLinks(t *testing.T) {
+	root := t.TempDir()
+	prior := ReleaseIdentity{Repository: Repository, Tag: "v2.0.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}
+	candidate := ReleaseIdentity{Repository: Repository, Tag: "v2.0.1", Commit: strings.Repeat("c", 40), IndexSHA256: strings.Repeat("d", 64)}
+	priorEvidence := installedEvidence(t, prior, 17, AMD64)
+	candidateEvidence := installedEvidence(t, candidate, 18, AMD64)
+	writeInstalledEvidence(t, root, priorEvidence)
+	source := &controlledUpdateSource{candidate: updateCandidateFromEvidence(t, candidate, 18, AMD64, candidateEvidence)}
+
+	result := newInstalledInterface(newLocalInspector(root, uint32(os.Getuid())), source).Update(t.Context(), func(progress Progress) {
+		if progress.Status == "Activating the verified release" {
+			if err := os.Remove(statusPath(root, "/var/lib/sbxr/.installed.json.candidate")); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+
+	if result.State != Ready || result.Code != UpdatePriorRestored || !activeEvidenceMatches(t, root, priorEvidence) {
+		t.Fatalf("Update() = %#v", result)
+	}
+}
+
+func TestRollbackRefusesASecondPriorLinkThatIsNotTheActiveExecutable(t *testing.T) {
+	rootPath := t.TempDir()
+	prior := installedEvidence(t, ReleaseIdentity{Repository: Repository, Tag: "v2.0.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}, 17, AMD64)
+	candidate := installedEvidence(t, ReleaseIdentity{Repository: Repository, Tag: "v2.0.1", Commit: strings.Repeat("c", 40), IndexSHA256: strings.Repeat("d", 64)}, 18, AMD64)
+	writeInstalledEvidence(t, rootPath, prior)
+	priorPath := statusPath(rootPath, "/usr/local/bin/.sbxr-update-prior")
+	if err := os.Link(statusPath(rootPath, executablePath), priorPath); err != nil {
+		t.Fatal(err)
+	}
+	candidatePath := statusPath(rootPath, "/usr/local/bin/candidate-replacement")
+	if err := os.WriteFile(candidatePath, candidate.executable, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(candidatePath, statusPath(rootPath, executablePath)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(priorPath, statusPath(rootPath, "/usr/local/bin/unexplained-prior-copy")); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+
+	if _, err := readPriorExecutable(root, digestBytes(prior.executable)); err == nil {
+		t.Fatal("unexplained second prior link accepted")
+	}
+}
+
+func TestUpdateRetainsRecoveryEvidenceWhenPriorAuthorityChangesLate(t *testing.T) {
+	root := t.TempDir()
+	prior := ReleaseIdentity{Repository: Repository, Tag: "v2.0.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}
+	candidate := ReleaseIdentity{Repository: Repository, Tag: "v2.0.1", Commit: strings.Repeat("c", 40), IndexSHA256: strings.Repeat("d", 64)}
+	writeInstalledEvidence(t, root, installedEvidence(t, prior, 17, AMD64))
+	candidateEvidence := installedEvidence(t, candidate, 18, AMD64)
+	source := &controlledUpdateSource{candidate: updateCandidateFromEvidence(t, candidate, 18, AMD64, candidateEvidence)}
+
+	result := newInstalledInterface(newLocalInspector(root, uint32(os.Getuid())), source).Update(t.Context(), func(progress Progress) {
+		if progress.Status == "Activating the verified release" {
+			_ = os.WriteFile(statusPath(root, "/usr/local/bin/.sbxr-update-prior"), []byte("changed prior"), 0o755)
+			_ = os.WriteFile(statusPath(root, "/usr/local/bin/.sbxr-update-candidate"), []byte("changed candidate"), 0o755)
+		}
+	})
+
+	if result.State != RecoveryRequiredState || result.Code != UpdateRecoveryRequired {
+		t.Fatalf("Update() = %#v", result)
+	}
+	if _, err := os.Lstat(statusPath(root, "/var/lib/sbxr/update.json")); err != nil {
+		t.Fatalf("recovery authority removed: %v", err)
+	}
+}
+
+func TestUpdateDefersCancellationAfterPreparedToVerifiedCommit(t *testing.T) {
+	root := t.TempDir()
+	prior := ReleaseIdentity{Repository: Repository, Tag: "v2.0.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}
+	candidate := ReleaseIdentity{Repository: Repository, Tag: "v2.0.1", Commit: strings.Repeat("c", 40), IndexSHA256: strings.Repeat("d", 64)}
+	writeInstalledEvidence(t, root, installedEvidence(t, prior, 17, AMD64))
+	candidateEvidence := installedEvidence(t, candidate, 18, AMD64)
+	source := &controlledUpdateSource{candidate: updateCandidateFromEvidence(t, candidate, 18, AMD64, candidateEvidence)}
+	ctx, cancel := context.WithCancel(t.Context())
+
+	result := newInstalledInterface(newLocalInspector(root, uint32(os.Getuid())), source).Update(ctx, func(progress Progress) {
+		if progress.Status == "Activating the verified release" {
+			cancel()
+		}
+	})
+
+	if result.State != Ready || result.Code != UpdateInstalled || !result.UpdateInstalled {
+		t.Fatalf("Update() = %#v", result)
+	}
 }
 
 func TestStatusReportsReadyFromVerifiedInstalledEvidence(t *testing.T) {
@@ -106,7 +306,6 @@ func TestPendingOperationsReturnVerifiedStatusWithoutInventingAnOutcome(t *testi
 	var lifecycle Interface = newInstalledInterface(controlledLocalInspector{evidence}, nil)
 
 	for name, result := range map[string]Result{
-		"Update":  lifecycle.Update(context.Background(), nil),
 		"Recover": lifecycle.Recover(context.Background(), nil),
 	} {
 		if result.State != Ready || result.Code != StatusReady || result.Message != "SBXR is ready." {
@@ -121,6 +320,40 @@ func TestPendingOperationsReturnVerifiedStatusWithoutInventingAnOutcome(t *testi
 	lifecycle = newInstalledInterface(controlledLocalInspector{evidence}, nil)
 	if result := lifecycle.Recover(context.Background(), nil); result.State != RecoveryRequiredState || result.Code != StatusRecoveryRequired {
 		t.Fatalf("Recover() = %#v", result)
+	}
+}
+
+func TestUpdateInstallsFreshQualifiedHigherSequenceThroughPublicInterface(t *testing.T) {
+	root := t.TempDir()
+	prior := ReleaseIdentity{Repository: Repository, Tag: "v2.0.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}
+	candidate := ReleaseIdentity{Repository: Repository, Tag: "v2.0.1", Commit: strings.Repeat("c", 40), IndexSHA256: strings.Repeat("d", 64)}
+	priorEvidence := installedEvidence(t, prior, 17, AMD64)
+	candidateEvidence := installedEvidence(t, candidate, 18, AMD64)
+	writeInstalledEvidence(t, root, priorEvidence)
+	source := &controlledUpdateSource{candidate: updateCandidateFromEvidence(t, candidate, 18, AMD64, candidateEvidence)}
+	var lifecycle Interface = newInstalledInterface(newLocalInspector(root, uint32(os.Getuid())), source)
+	var preparedRecord []byte
+
+	result := lifecycle.Update(t.Context(), func(progress Progress) {
+		if progress.Status == "Activating the verified release" {
+			preparedRecord, _ = os.ReadFile(statusPath(root, "/var/lib/sbxr/update.json"))
+		}
+	})
+
+	if result.State != Ready || result.Code != UpdateInstalled || !result.UpdateInstalled || result.Installed == nil || *result.Installed != candidate || source.calls.Load() != 1 {
+		t.Fatalf("Update() = %#v, fresh calls = %d", result, source.calls.Load())
+	}
+	if status := lifecycle.Status(t.Context()); status.State != Ready || status.Installed == nil || *status.Installed != candidate {
+		t.Fatalf("Status() = %#v", status)
+	}
+	wantPrepared := fmt.Sprintf("{\"schema\":1,\"checkpoint\":\"Prepared\",\"prior_executable_sha256\":%q,\"prior_installed_record_sha256\":%q,\"candidate_executable_sha256\":%q,\"candidate_installed_record_sha256\":%q}\n", digestBytes(priorEvidence.executable), digestBytes(priorEvidence.installedRecord), digestBytes(candidateEvidence.executable), digestBytes(source.candidate.cell.record))
+	if string(preparedRecord) != wantPrepared {
+		t.Fatalf("Prepared record = %q", preparedRecord)
+	}
+	for _, name := range transactionPaths {
+		if _, err := os.Lstat(statusPath(root, name)); !os.IsNotExist(err) {
+			t.Fatalf("transaction material remains at %s: %v", name, err)
+		}
 	}
 }
 
@@ -227,4 +460,34 @@ func installedExecutableFixture(t *testing.T, payload []byte, identity embeddedI
 	result = append(result, documentDigest[:]...)
 	result = binary.LittleEndian.AppendUint64(result, uint64(len(document)))
 	return append(result, identityMagic...)
+}
+
+func writeInstalledEvidence(t *testing.T, root string, evidence localInspection) {
+	t.Helper()
+	for _, directory := range []string{"usr/local/bin", "var/lib/sbxr", "run/lock"} {
+		if err := os.MkdirAll(filepath.Join(root, directory), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWriteStatusFile(t, statusPath(root, executablePath), evidence.executable, 0o755)
+	mustWriteStatusFile(t, statusPath(root, installedRecordPath), evidence.installedRecord, 0o600)
+	if err := os.Chmod(statusPath(root, "/var/lib/sbxr"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func updateCandidateFromEvidence(t *testing.T, identity ReleaseIdentity, sequence uint64, architecture Architecture, evidence localInspection) UpdateCandidate {
+	t.Helper()
+	candidate, ok := newUpdateCandidate(LatestRelease{Identity: identity, Sequence: sequence}, architecture, evidence.executable)
+	if !ok {
+		t.Fatal("candidate fixture refused")
+	}
+	return candidate
+}
+
+func activeEvidenceMatches(t *testing.T, root string, evidence localInspection) bool {
+	t.Helper()
+	record, recordErr := os.ReadFile(statusPath(root, installedRecordPath))
+	executable, executableErr := os.ReadFile(statusPath(root, executablePath))
+	return recordErr == nil && executableErr == nil && bytes.Equal(record, evidence.installedRecord) && bytes.Equal(executable, evidence.executable)
 }

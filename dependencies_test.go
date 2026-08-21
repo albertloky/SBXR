@@ -396,8 +396,10 @@ func validateSoftwareLifecycleVerification(root string) error {
 			if err != nil {
 				return err
 			}
-			hostInspection := file.Name() == "status_local.go" && (importPath == "os" || importPath == "syscall")
-			if !hostInspection && (importPath == "os" || importPath == "os/exec" || importPath == "syscall" || importPath == "unsafe") || strings.HasPrefix(importPath, modulePath+"/internal/") && importPath != modulePath+"/internal/systemchanges" && importPath != modulePath+"/internal/networkpolicy" && importPath != modulePath+"/internal/softwarelifecycle/contract" {
+			// Issue #256 prepares the replacement Installer-Updater transaction here;
+			// issue #265 must replace the current ADR authority and production wiring atomically.
+			hostOwnership := (file.Name() == "status_local.go" || file.Name() == "update_transaction.go") && (importPath == "os" || importPath == "syscall")
+			if !hostOwnership && (importPath == "os" || importPath == "os/exec" || importPath == "syscall" || importPath == "unsafe") || strings.HasPrefix(importPath, modulePath+"/internal/") && importPath != modulePath+"/internal/systemchanges" && importPath != modulePath+"/internal/networkpolicy" && importPath != modulePath+"/internal/softwarelifecycle/contract" {
 				return fmt.Errorf("Software Lifecycle core must remain verification-only before staging: %s imports %s", file.Name(), importPath)
 			}
 		}

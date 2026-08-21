@@ -102,53 +102,80 @@ func (source Source) Discover(ctx context.Context, reviewedTag string) (software
 }
 
 func (source Source) CheckLatest(ctx context.Context) (softwarelifecycle.LatestRelease, softwarelifecycle.LatestReleaseOutcome) {
+	latest, _, outcome := source.latest(ctx, "")
+	return latest, outcome
+}
+
+func (source Source) PrepareLatest(ctx context.Context, architecture softwarelifecycle.Architecture) (softwarelifecycle.UpdateCandidate, softwarelifecycle.LatestReleaseOutcome) {
+	name := "sbxr-linux-amd64.tar.gz"
+	if architecture == softwarelifecycle.ARM64 {
+		name = "sbxr-linux-arm64.tar.gz"
+	} else if architecture != softwarelifecycle.AMD64 {
+		return softwarelifecycle.UpdateCandidate{}, softwarelifecycle.LatestReleaseRefused
+	}
+	latest, archive, outcome := source.latest(ctx, name)
+	if outcome != softwarelifecycle.LatestReleaseAccepted {
+		return softwarelifecycle.UpdateCandidate{}, outcome
+	}
+	candidate, ok := softwarelifecycle.VerifyLatestUpdateArchive(latest, architecture, archive)
+	if !ok {
+		return softwarelifecycle.UpdateCandidate{}, softwarelifecycle.LatestReleaseRefused
+	}
+	return candidate, softwarelifecycle.LatestReleaseAccepted
+}
+
+func (source Source) latest(ctx context.Context, archiveName string) (softwarelifecycle.LatestRelease, []byte, softwarelifecycle.LatestReleaseOutcome) {
 	if source.client == nil || source.verifier == nil || source.baseURL == "" {
-		return softwarelifecycle.LatestRelease{}, softwarelifecycle.LatestReleaseRefused
+		return softwarelifecycle.LatestRelease{}, nil, softwarelifecycle.LatestReleaseRefused
 	}
 	var release githubRelease
 	if err := source.latestJSON(ctx, source.baseURL+"/repos/"+softwarelifecycle.Repository+"/releases/latest", 1<<20, &release); err != nil {
-		return latestFailure(err)
+		latest, outcome := latestFailure(err)
+		return latest, nil, outcome
 	}
 	metadata, err := exactLatestAssets(source.baseURL, release.Assets)
 	if err != nil || release.Draft || release.Prerelease || !release.Immutable || !immutableTagPattern.MatchString(release.Tag) || !commitPattern.MatchString(release.TargetCommitish) {
-		return softwarelifecycle.LatestRelease{}, softwarelifecycle.LatestReleaseRefused
+		return softwarelifecycle.LatestRelease{}, nil, softwarelifecycle.LatestReleaseRefused
 	}
 	recordIndex, recordSequence, ok := latestAcceptanceRecord(release.Body, release.Tag, release.TargetCommitish, metadata)
 	if !ok {
-		return softwarelifecycle.LatestRelease{}, softwarelifecycle.LatestReleaseRefused
+		return softwarelifecycle.LatestRelease{}, nil, softwarelifecycle.LatestReleaseRefused
 	}
 	var response attestationResponse
 	attestationURL := source.baseURL + "/repos/" + softwarelifecycle.Repository + "/attestations/sha1:" + release.TargetCommitish + "?predicate_type=release&per_page=100"
 	if err := source.latestJSON(ctx, attestationURL, maxBundleBytes, &response); err != nil {
-		return latestFailure(err)
+		latest, outcome := latestFailure(err)
+		return latest, nil, outcome
 	}
 	if len(response.Attestations) != 1 || response.Attestations[0].Initiator != "github" {
-		return softwarelifecycle.LatestRelease{}, softwarelifecycle.LatestReleaseRefused
+		return softwarelifecycle.LatestRelease{}, nil, softwarelifecycle.LatestReleaseRefused
 	}
 	bundleCtx, cancelBundle := context.WithTimeout(ctx, 30*time.Second)
 	bundleBody, err := source.bundle(bundleCtx, response.Attestations[0])
 	cancelBundle()
 	if err != nil {
-		return latestFailure(err)
+		latest, outcome := latestFailure(err)
+		return latest, nil, outcome
 	}
 	statementBody, err := source.verifier(bundleBody, "sha1", release.TargetCommitish)
 	if err != nil {
-		return softwarelifecycle.LatestRelease{}, softwarelifecycle.LatestReleaseRefused
+		return softwarelifecycle.LatestRelease{}, nil, softwarelifecycle.LatestReleaseRefused
 	}
 	attested, err := parseReleaseStatementWithAssets(statementBody, release.Tag, release.TargetCommitish, 4)
 	if err != nil || !sameAssetDigests(metadata, attested) {
-		return softwarelifecycle.LatestRelease{}, softwarelifecycle.LatestReleaseRefused
+		return softwarelifecycle.LatestRelease{}, nil, softwarelifecycle.LatestReleaseRefused
 	}
 	indexMetadata := metadata["release-index.json"]
 	indexCtx, cancelIndex := context.WithTimeout(ctx, 30*time.Second)
 	index, err := source.get(indexCtx, indexMetadata.URL, softwarelifecycle.MaxIndexBytes, "application/octet-stream")
 	cancelIndex()
 	if err != nil {
-		return latestFailure(err)
+		latest, outcome := latestFailure(err)
+		return latest, nil, outcome
 	}
 	digest := sha256.Sum256(index)
 	if int64(len(index)) != indexMetadata.Size || hex.EncodeToString(digest[:]) != indexMetadata.SHA256 || indexMetadata.SHA256 != recordIndex {
-		return softwarelifecycle.LatestRelease{}, softwarelifecycle.LatestReleaseRefused
+		return softwarelifecycle.LatestRelease{}, nil, softwarelifecycle.LatestReleaseRefused
 	}
 	proofs := make([]softwarelifecycle.LatestAssetProof, 0, 4)
 	for _, name := range latestAssetNames() {
@@ -157,9 +184,24 @@ func (source Source) CheckLatest(ctx context.Context) (softwarelifecycle.LatestR
 	}
 	latest, valid := softwarelifecycle.VerifyLatestReleaseIndex(softwarelifecycle.Repository, release.Tag, release.TargetCommitish, index, proofs)
 	if !valid || latest.Sequence != recordSequence {
-		return softwarelifecycle.LatestRelease{}, softwarelifecycle.LatestReleaseRefused
+		return softwarelifecycle.LatestRelease{}, nil, softwarelifecycle.LatestReleaseRefused
 	}
-	return latest, softwarelifecycle.LatestReleaseAccepted
+	if archiveName == "" {
+		return latest, nil, softwarelifecycle.LatestReleaseAccepted
+	}
+	asset := metadata[archiveName]
+	archiveCtx, cancelArchive := context.WithTimeout(ctx, 2*time.Minute)
+	archive, err := source.get(archiveCtx, asset.URL, softwarelifecycle.MaxAssetBytes, "application/octet-stream")
+	cancelArchive()
+	digest = sha256.Sum256(archive)
+	if err != nil {
+		failed, failedOutcome := latestFailure(err)
+		return failed, nil, failedOutcome
+	}
+	if int64(len(archive)) != asset.Size || hex.EncodeToString(digest[:]) != asset.SHA256 {
+		return softwarelifecycle.LatestRelease{}, nil, softwarelifecycle.LatestReleaseRefused
+	}
+	return latest, archive, softwarelifecycle.LatestReleaseAccepted
 }
 
 func latestFailure(err error) (softwarelifecycle.LatestRelease, softwarelifecycle.LatestReleaseOutcome) {

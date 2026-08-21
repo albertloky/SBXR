@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"reflect"
 )
 
@@ -181,8 +182,14 @@ func (module installedInterface) Check(ctx context.Context, _ ProgressReporter) 
 	return base
 }
 
-func (module installedInterface) Update(ctx context.Context, _ ProgressReporter) Result {
-	return module.Status(ctx)
+func (module installedInterface) Update(ctx context.Context, progress ProgressReporter) Result {
+	if updater, ok := module.local.(interface {
+		update(context.Context, LatestReleaseSource, ProgressReporter) Result
+	}); ok {
+		return updater.update(ctx, module.latest, progress)
+	}
+	status := module.Status(ctx)
+	return updateResult(status.State, status.Installed, UpdateNotReady, "SBXR is not ready to update.")
 }
 
 func (module installedInterface) Recover(ctx context.Context, _ ProgressReporter) Result {
@@ -274,7 +281,7 @@ func decodeExactObject(document []byte, target any) bool {
 	}
 	strict := json.NewDecoder(bytes.NewReader(document))
 	strict.DisallowUnknownFields()
-	return strict.Decode(target) == nil
+	return strict.Decode(target) == nil && strict.Decode(&struct{}{}) == io.EOF
 }
 
 func readEmbeddedIdentity(executable []byte) (embeddedIdentity, bool) {
