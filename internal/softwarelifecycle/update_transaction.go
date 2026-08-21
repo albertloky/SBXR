@@ -13,6 +13,8 @@ import (
 	"errors"
 	"io"
 	"os"
+	"runtime"
+	"strings"
 	"syscall"
 )
 
@@ -141,17 +143,296 @@ type updateRecord struct {
 }
 
 const (
-	UpdateInstalled          ResultCode = "SOFTWARE-LIFECYCLE-UPDATE-INSTALLED"
-	UpdateAlreadyCurrent     ResultCode = "SOFTWARE-LIFECYCLE-UPDATE-ALREADY-CURRENT"
-	UpdateReleaseRefused     ResultCode = "SOFTWARE-LIFECYCLE-UPDATE-RELEASE-REFUSED"
-	UpdateReleaseUnavailable ResultCode = "SOFTWARE-LIFECYCLE-UPDATE-RELEASE-UNAVAILABLE"
-	UpdateConcurrentMutation ResultCode = "SOFTWARE-LIFECYCLE-UPDATE-CONCURRENT-MUTATION"
-	UpdateInterrupted        ResultCode = "SOFTWARE-LIFECYCLE-UPDATE-INTERRUPTED"
-	UpdateFailed             ResultCode = "SOFTWARE-LIFECYCLE-UPDATE-FAILED"
-	UpdatePriorRestored      ResultCode = "SOFTWARE-LIFECYCLE-UPDATE-PRIOR-RESTORED"
-	UpdateRecoveryRequired   ResultCode = "SOFTWARE-LIFECYCLE-UPDATE-RECOVERY-REQUIRED"
-	UpdateNotReady           ResultCode = "SOFTWARE-LIFECYCLE-UPDATE-NOT-READY"
+	UpdateInstalled           ResultCode = "SOFTWARE-LIFECYCLE-UPDATE-INSTALLED"
+	UpdateAlreadyCurrent      ResultCode = "SOFTWARE-LIFECYCLE-UPDATE-ALREADY-CURRENT"
+	UpdateReleaseRefused      ResultCode = "SOFTWARE-LIFECYCLE-UPDATE-RELEASE-REFUSED"
+	UpdateReleaseUnavailable  ResultCode = "SOFTWARE-LIFECYCLE-UPDATE-RELEASE-UNAVAILABLE"
+	UpdateConcurrentMutation  ResultCode = "SOFTWARE-LIFECYCLE-UPDATE-CONCURRENT-MUTATION"
+	UpdateInterrupted         ResultCode = "SOFTWARE-LIFECYCLE-UPDATE-INTERRUPTED"
+	UpdateFailed              ResultCode = "SOFTWARE-LIFECYCLE-UPDATE-FAILED"
+	UpdatePriorRestored       ResultCode = "SOFTWARE-LIFECYCLE-UPDATE-PRIOR-RESTORED"
+	UpdateRecoveryRequired    ResultCode = "SOFTWARE-LIFECYCLE-UPDATE-RECOVERY-REQUIRED"
+	UpdateNotReady            ResultCode = "SOFTWARE-LIFECYCLE-UPDATE-NOT-READY"
+	RecoverPriorRestored      ResultCode = "SOFTWARE-LIFECYCLE-RECOVER-PRIOR-RESTORED"
+	RecoverCandidateRetained  ResultCode = "SOFTWARE-LIFECYCLE-RECOVER-CANDIDATE-RETAINED"
+	RecoverRefused            ResultCode = "SOFTWARE-LIFECYCLE-RECOVER-REFUSED"
+	RecoverFailed             ResultCode = "SOFTWARE-LIFECYCLE-RECOVER-FAILED"
+	RecoverConcurrentMutation ResultCode = "SOFTWARE-LIFECYCLE-RECOVER-CONCURRENT-MUTATION"
+	RecoverNotRequired        ResultCode = "SOFTWARE-LIFECYCLE-RECOVER-NOT-REQUIRED"
 )
+
+func (inspector filesystemInspector) recover(ctx context.Context, progress ProgressReporter) Result {
+	root, err := os.OpenRoot(inspector.root)
+	if err != nil {
+		return updateResult(RecoveryRequiredState, nil, RecoverRefused, "SBXR recovery was refused because safe recovery could not be proven.")
+	}
+	defer root.Close()
+	lock, concurrent, lockErr := acquireUpdateLock(root, inspector.uid)
+	if lockErr != nil {
+		if lock != nil {
+			_ = lock.Close()
+		}
+		if concurrent {
+			return updateResult(UpdateInProgress, nil, RecoverConcurrentMutation, "Another Software Lifecycle change is in progress.")
+		}
+		return updateResult(RecoveryRequiredState, nil, RecoverRefused, "SBXR recovery was refused because safe recovery could not be proven.")
+	}
+	defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); _ = lock.Close() }()
+	if mounted, err := inspector.recoveryPathMounted(); err != nil || mounted || !inspector.safeDirectory("/var/lib/sbxr", 0o700) {
+		return updateResult(RecoveryRequiredState, nil, RecoverRefused, "SBXR recovery was refused because safe recovery could not be proven.")
+	}
+
+	record, err := readUpdateRecord(root)
+	if err != nil {
+		status := statusFromInspection(inspector.inspectReadyUnderLock())
+		if status.State == Ready {
+			status.Code = RecoverNotRequired
+			status.Message = "SBXR does not need recovery."
+			return status
+		}
+		return updateResult(RecoveryRequiredState, nil, RecoverRefused, "SBXR recovery was refused because safe recovery could not be proven.")
+	}
+	if ctx.Err() != nil {
+		return updateResult(RecoveryRequiredState, nil, RecoverRefused, "SBXR recovery was refused because safe recovery could not be proven.")
+	}
+	if progress != nil {
+		progress(Progress{Operation: RecoverOperation, Status: "Inspecting recovery evidence", Mode: Spinner})
+	}
+	switch record.Checkpoint {
+	case preparedCheckpoint:
+		priorActive, err := provePreparedRecovery(root, record)
+		if err != nil {
+			return updateResult(RecoveryRequiredState, nil, RecoverRefused, "SBXR recovery was refused because safe recovery could not be proven.")
+		}
+		if inspector.beforeRecoveryMutation != nil {
+			inspector.beforeRecoveryMutation()
+		}
+		if err := func() error {
+			if priorActive {
+				return finishPreparedCleanup(root, record)
+			}
+			return rollbackUpdate(root, record)
+		}(); err != nil {
+			return updateResult(RecoveryRequiredState, nil, RecoverFailed, "SBXR recovery could not reach a verified terminal state.")
+		}
+		status := statusFromInspection(inspector.inspectReadyUnderLock())
+		if status.State != Ready {
+			return updateResult(RecoveryRequiredState, nil, RecoverFailed, "SBXR recovery could not reach a verified terminal state.")
+		}
+		status.Code = RecoverPriorRestored
+		status.Message = "The prior SBXR release was restored."
+		return status
+	case committedCheckpoint:
+		if err := proveCommittedRecovery(root, record); err != nil {
+			return updateResult(RecoveryRequiredState, nil, RecoverRefused, "SBXR recovery was refused because safe recovery could not be proven.")
+		}
+		if inspector.beforeRecoveryMutation != nil {
+			inspector.beforeRecoveryMutation()
+		}
+		if err := cleanupCommitted(root, record); err != nil {
+			return updateResult(RecoveryRequiredState, nil, RecoverFailed, "SBXR recovery could not reach a verified terminal state.")
+		}
+		status := statusFromInspection(inspector.inspectReadyUnderLock())
+		if status.State != Ready {
+			return updateResult(RecoveryRequiredState, nil, RecoverFailed, "SBXR recovery could not reach a verified terminal state.")
+		}
+		status.Code = RecoverCandidateRetained
+		status.Message = "The committed SBXR release was retained."
+		return status
+	default:
+		return updateResult(RecoveryRequiredState, nil, RecoverRefused, "SBXR recovery was refused because safe recovery could not be proven.")
+	}
+}
+
+func (inspector filesystemInspector) recoveryPathMounted() (bool, error) {
+	if runtime.GOOS != "linux" {
+		return false, nil
+	}
+	body, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		return false, err
+	}
+	wanted := map[string]bool{
+		inspector.path(executablePath):      true,
+		inspector.path(installedRecordPath): true,
+		inspector.path(mutationLockPath):    true,
+	}
+	for _, name := range transactionPaths {
+		wanted[inspector.path(name)] = true
+	}
+	for _, line := range strings.Split(string(body), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 4 && wanted[decodeMountPath(fields[4])] {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func decodeMountPath(value string) string {
+	return strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`).Replace(value)
+}
+
+func proveCommittedRecovery(root *os.Root, record updateRecord) error {
+	if current, err := readUpdateRecord(root); err != nil || current != record {
+		return errors.New("update record changed")
+	}
+	activeRecord, err := readBoundFile(root, "var/lib/sbxr/installed.json", 0o600, 1, maxInstalledRecord, record.CandidateInstalledRecordSHA256)
+	if err != nil {
+		return err
+	}
+	activeExecutable, err := readBoundFile(root, "usr/local/bin/sbxr", 0o755, 1, maxInstalledBinary, record.CandidateExecutableSHA256)
+	if err != nil || !activePairBytes(activeRecord, activeExecutable) {
+		return errors.New("committed candidate refused")
+	}
+	for _, material := range []struct {
+		name   string
+		mode   os.FileMode
+		limit  int64
+		digest string
+	}{
+		{"usr/local/bin/.sbxr-update-prior", 0o755, maxInstalledBinary, record.PriorExecutableSHA256},
+		{"var/lib/sbxr/.installed.json.prior", 0o600, maxInstalledRecord, record.PriorInstalledRecordSHA256},
+	} {
+		if _, _, err := readOptionalOneOfBoundFile(root, material.name, material.mode, 1, material.limit, material.digest); err != nil {
+			return err
+		}
+	}
+	for _, name := range []string{"usr/local/bin/.sbxr-update-candidate", "var/lib/sbxr/.installed.json.candidate"} {
+		if _, err := root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
+			return errors.New("unexpected transaction material remains")
+		}
+	}
+	_, _, err = readOptionalOneOfBoundFile(root, "var/lib/sbxr/.update.json.next", 0o600, 1, maxUpdateRecord, digestBytes(updateRecordBytes(bindCheckpoint(record, preparedCheckpoint))), digestBytes(updateRecordBytes(bindCheckpoint(record, committedCheckpoint))))
+	return err
+}
+
+func provePreparedRecovery(root *os.Root, record updateRecord) (bool, error) {
+	if current, err := readUpdateRecord(root); err != nil || current != record {
+		return false, errors.New("update record changed")
+	}
+	activeRecord, err := readOneOfBoundFile(root, "var/lib/sbxr/installed.json", 0o600, 1, maxInstalledRecord, record.PriorInstalledRecordSHA256, record.CandidateInstalledRecordSHA256)
+	if err != nil {
+		return false, err
+	}
+	activeExecutable, err := readActiveRecoveryExecutable(root, record)
+	if err != nil {
+		return false, err
+	}
+	priorActive := digestBytes(activeRecord) == record.PriorInstalledRecordSHA256 && digestBytes(activeExecutable) == record.PriorExecutableSHA256 && activePairBytes(activeRecord, activeExecutable)
+	priorExecutable, executablePriorPresent, err := readOptionalPriorExecutable(root, record.PriorExecutableSHA256)
+	if err != nil || !executablePriorPresent && !priorActive {
+		return false, errors.New("prior recovery authority unavailable")
+	}
+	priorRecord, recordPriorPresent, err := readOptionalOneOfBoundFile(root, "var/lib/sbxr/.installed.json.prior", 0o600, 1, maxInstalledRecord, record.PriorInstalledRecordSHA256)
+	if err != nil || !recordPriorPresent && !priorActive {
+		return false, errors.New("prior recovery authority unavailable")
+	}
+	if !executablePriorPresent {
+		priorExecutable = activeExecutable
+	}
+	if !recordPriorPresent {
+		priorRecord = activeRecord
+	}
+	if !activePairBytes(priorRecord, priorExecutable) {
+		return false, errors.New("prior recovery authority unavailable")
+	}
+	candidateRecord, recordPresent, err := readOptionalOneOfBoundFile(root, "var/lib/sbxr/.installed.json.candidate", 0o600, 1, maxInstalledRecord, record.PriorInstalledRecordSHA256, record.CandidateInstalledRecordSHA256)
+	if err != nil {
+		return false, err
+	}
+	candidateExecutable, executablePresent, err := readOptionalOneOfBoundFile(root, "usr/local/bin/.sbxr-update-candidate", 0o755, 1, maxInstalledBinary, record.PriorExecutableSHA256, record.CandidateExecutableSHA256)
+	if err != nil {
+		return false, err
+	}
+	if _, _, err := readOptionalOneOfBoundFile(root, "var/lib/sbxr/.update.json.next", 0o600, 1, maxUpdateRecord, digestBytes(updateRecordBytes(bindCheckpoint(record, preparedCheckpoint))), digestBytes(updateRecordBytes(bindCheckpoint(record, committedCheckpoint)))); err != nil {
+		return false, errors.New("update publication residue refused")
+	}
+	if digestBytes(activeRecord) == record.CandidateInstalledRecordSHA256 {
+		candidateRecord, recordPresent = activeRecord, true
+	}
+	if digestBytes(activeExecutable) == record.CandidateExecutableSHA256 {
+		candidateExecutable, executablePresent = activeExecutable, true
+	}
+	if recordPresent && executablePresent && !activePairBytes(candidateRecord, candidateExecutable) {
+		return false, errors.New("candidate recovery evidence contradicted")
+	}
+	return priorActive, nil
+}
+
+func finishPreparedCleanup(root *os.Root, record updateRecord) error {
+	if err := removePriorExecutableIfPresent(root, record.PriorExecutableSHA256); err != nil {
+		return err
+	}
+	if err := removeOneOfIfPresent(root, "usr/local/bin/.sbxr-update-candidate", 0o755, 1, maxInstalledBinary, record.PriorExecutableSHA256, record.CandidateExecutableSHA256); err != nil {
+		return err
+	}
+	if err := removeOneOfIfPresent(root, "var/lib/sbxr/.installed.json.candidate", 0o600, 1, maxInstalledRecord, record.PriorInstalledRecordSHA256, record.CandidateInstalledRecordSHA256); err != nil {
+		return err
+	}
+	return cleanupPrepared(root, record)
+}
+
+func removePriorExecutableIfPresent(root *os.Root, digest string) error {
+	if _, err := root.Lstat("usr/local/bin/.sbxr-update-prior"); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	if _, err := readPriorExecutable(root, digest); err != nil {
+		return err
+	}
+	return root.Remove("usr/local/bin/.sbxr-update-prior")
+}
+
+func readOptionalPriorExecutable(root *os.Root, digest string) ([]byte, bool, error) {
+	if _, err := root.Lstat("usr/local/bin/.sbxr-update-prior"); errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil
+	} else if err != nil {
+		return nil, false, err
+	}
+	body, err := readPriorExecutable(root, digest)
+	return body, true, err
+}
+
+func readActiveRecoveryExecutable(root *os.Root, record updateRecord) ([]byte, error) {
+	body, err := readOneOfBoundFile(root, "usr/local/bin/sbxr", 0o755, 1, maxInstalledBinary, record.PriorExecutableSHA256, record.CandidateExecutableSHA256)
+	if err == nil {
+		return body, nil
+	}
+	body, err = readOneOfBoundFile(root, "usr/local/bin/sbxr", 0o755, 2, maxInstalledBinary, record.PriorExecutableSHA256)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := readPriorExecutable(root, record.PriorExecutableSHA256); err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+func readOptionalOneOfBoundFile(root *os.Root, name string, mode os.FileMode, links uint64, limit int64, digests ...string) ([]byte, bool, error) {
+	if _, err := root.Lstat(name); errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil
+	} else if err != nil {
+		return nil, false, err
+	}
+	body, err := readOneOfBoundFile(root, name, mode, links, limit, digests...)
+	return body, true, err
+}
+
+func readOneOfBoundFile(root *os.Root, name string, mode os.FileMode, links uint64, limit int64, digests ...string) ([]byte, error) {
+	body, err := readRootFile(root, name, mode, links, limit)
+	if err != nil {
+		return nil, err
+	}
+	got := digestBytes(body)
+	for _, digest := range digests {
+		if got == digest {
+			return body, nil
+		}
+	}
+	return nil, errors.New("bound update material changed")
+}
 
 func (inspector filesystemInspector) update(ctx context.Context, latest LatestReleaseSource, progress ProgressReporter) Result {
 	root, err := os.OpenRoot(inspector.root)

@@ -25,8 +25,9 @@ var transactionPaths = []string{
 }
 
 type filesystemInspector struct {
-	root string
-	uid  uint32
+	root                   string
+	uid                    uint32
+	beforeRecoveryMutation func()
 }
 
 func newLocalInspector(root string, uid uint32) localInspector {

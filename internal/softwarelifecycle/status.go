@@ -192,8 +192,24 @@ func (module installedInterface) Update(ctx context.Context, progress ProgressRe
 	return updateResult(status.State, status.Installed, UpdateNotReady, "SBXR is not ready to update.")
 }
 
-func (module installedInterface) Recover(ctx context.Context, _ ProgressReporter) Result {
-	return module.Status(ctx)
+func (module installedInterface) Recover(ctx context.Context, progress ProgressReporter) Result {
+	if recovery, ok := module.local.(interface {
+		recover(context.Context, ProgressReporter) Result
+	}); ok {
+		return recovery.recover(ctx, progress)
+	}
+	status := module.Status(ctx)
+	switch status.State {
+	case Ready:
+		status.Code = RecoverNotRequired
+		status.Message = "SBXR does not need recovery."
+	case UpdateInProgress:
+		status.Code = RecoverConcurrentMutation
+	case RecoveryRequiredState:
+		status.Code = RecoverRefused
+		status.Message = "SBXR recovery was refused because safe recovery could not be proven."
+	}
+	return status
 }
 
 func recoveryRequiredResult() Result {

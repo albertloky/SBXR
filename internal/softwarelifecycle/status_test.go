@@ -236,6 +236,370 @@ func TestUpdateDefersCancellationAfterPreparedToVerifiedCommit(t *testing.T) {
 	}
 }
 
+func TestCandidateRecoverUnderstandsPreparedSchemaOneFromThePriorRelease(t *testing.T) {
+	root, priorEvidence, _, candidate := preparedRecoveryFixture(t)
+	activateRecoveryFixture(t, root, candidate, false)
+	prior, _ := verifyInstalledRelease(priorEvidence.installedRecord, priorEvidence.executable)
+
+	var lifecycle Interface = newInstalledInterface(newLocalInspector(root, uint32(os.Getuid())), nil)
+	result := lifecycle.Recover(t.Context(), nil)
+
+	if result.State != Ready || result.Code != RecoverPriorRestored || result.Installed == nil || *result.Installed != prior.identity || !activeEvidenceMatches(t, root, priorEvidence) {
+		t.Fatalf("Recover() = %#v", result)
+	}
+	for _, name := range transactionPaths {
+		if _, err := os.Lstat(statusPath(root, name)); !os.IsNotExist(err) {
+			t.Fatalf("transaction material remains at %s: %v", name, err)
+		}
+	}
+}
+
+func TestRecoverRefusesChangedPreparedEvidenceWithoutMutation(t *testing.T) {
+	root, priorEvidence, _, _ := preparedRecoveryFixture(t)
+	changedPath := statusPath(root, "/usr/local/bin/.sbxr-update-candidate")
+	if err := os.WriteFile(changedPath, []byte("changed candidate"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	result := newInstalledInterface(newLocalInspector(root, uint32(os.Getuid())), nil).Recover(t.Context(), nil)
+
+	changed, err := os.ReadFile(changedPath)
+	if result.State != RecoveryRequiredState || result.Code != RecoverRefused || err != nil || string(changed) != "changed candidate" || !activeEvidenceMatches(t, root, priorEvidence) {
+		t.Fatalf("Recover() = %#v; changed evidence = %q, %v", result, changed, err)
+	}
+}
+
+func TestRecoverCommittedRetainsTheExactCandidatePairThroughPublicInterface(t *testing.T) {
+	root, _, candidateEvidence, candidate := preparedRecoveryFixture(t)
+	activateRecoveryFixture(t, root, candidate, true)
+	installed, _ := verifyInstalledRelease(candidateEvidence.installedRecord, candidateEvidence.executable)
+
+	result := newInstalledInterface(newLocalInspector(root, uint32(os.Getuid())), nil).Recover(t.Context(), nil)
+
+	if result.State != Ready || result.Code != RecoverCandidateRetained || result.Installed == nil || *result.Installed != installed.identity || !activeEvidenceMatches(t, root, candidateEvidence) {
+		t.Fatalf("Recover() = %#v", result)
+	}
+	for _, name := range transactionPaths {
+		if _, err := os.Lstat(statusPath(root, name)); !os.IsNotExist(err) {
+			t.Fatalf("transaction material remains at %s: %v", name, err)
+		}
+	}
+}
+
+func TestRecoverRefusesChangedCommittedCleanupEvidenceWithoutMutation(t *testing.T) {
+	root, _, candidateEvidence, candidate := preparedRecoveryFixture(t)
+	activateRecoveryFixture(t, root, candidate, true)
+	changedPath := statusPath(root, "/var/lib/sbxr/.installed.json.prior")
+	if err := os.WriteFile(changedPath, []byte("changed prior record"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result := newInstalledInterface(newLocalInspector(root, uint32(os.Getuid())), nil).Recover(t.Context(), nil)
+
+	changed, err := os.ReadFile(changedPath)
+	if result.State != RecoveryRequiredState || result.Code != RecoverRefused || err != nil || string(changed) != "changed prior record" || !activeEvidenceMatches(t, root, candidateEvidence) {
+		t.Fatalf("Recover() = %#v; changed evidence = %q, %v", result, changed, err)
+	}
+	if _, err := os.Lstat(statusPath(root, "/usr/local/bin/.sbxr-update-prior")); err != nil {
+		t.Fatalf("prior executable changed before refusal: %v", err)
+	}
+}
+
+func TestRecoverReportsNotRequiredAndConcurrentMutation(t *testing.T) {
+	root := t.TempDir()
+	installed := ReleaseIdentity{Repository: Repository, Tag: "v2.0.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}
+	writeInstalledEvidence(t, root, installedEvidence(t, installed, 17, AMD64))
+	lifecycle := newInstalledInterface(newLocalInspector(root, uint32(os.Getuid())), nil)
+
+	if result := lifecycle.Recover(t.Context(), nil); result.State != Ready || result.Code != RecoverNotRequired || result.Installed == nil || *result.Installed != installed {
+		t.Fatalf("not-required Recover() = %#v", result)
+	}
+	lockPath := statusPath(root, mutationLockPath)
+	lock, err := os.OpenFile(lockPath, os.O_RDWR, 0)
+	if err != nil || syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if result := lifecycle.Recover(t.Context(), nil); result.State != UpdateInProgress || result.Code != RecoverConcurrentMutation {
+		t.Fatalf("concurrent Recover() = %#v", result)
+	}
+}
+
+func TestRecoverReportsFailureAfterAProvenDirectionCannotFinish(t *testing.T) {
+	root, _, _, _ := preparedRecoveryFixture(t)
+	inspector := filesystemInspector{root: root, uid: uint32(os.Getuid()), beforeRecoveryMutation: func() {
+		if err := os.WriteFile(statusPath(root, "/usr/local/bin/.sbxr-update-candidate"), []byte("late I/O failure"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}}
+
+	result := newInstalledInterface(inspector, nil).Recover(t.Context(), nil)
+
+	if result.State != RecoveryRequiredState || result.Code != RecoverFailed {
+		t.Fatalf("Recover() = %#v", result)
+	}
+	if _, err := os.Lstat(statusPath(root, "/var/lib/sbxr/update.json")); err != nil {
+		t.Fatalf("durable recovery authority removed: %v", err)
+	}
+}
+
+func TestRecoverRefusesAnActiveTargetChangedDuringProgress(t *testing.T) {
+	root, _, _, _ := preparedRecoveryFixture(t)
+	changed := []byte("concurrently changed active executable")
+
+	result := newInstalledInterface(newLocalInspector(root, uint32(os.Getuid())), nil).Recover(t.Context(), func(Progress) {
+		if err := os.WriteFile(statusPath(root, executablePath), changed, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	active, err := os.ReadFile(statusPath(root, executablePath))
+	if result.State != RecoveryRequiredState || result.Code != RecoverRefused || err != nil || !bytes.Equal(active, changed) {
+		t.Fatalf("Recover() = %#v; active executable = %q, %v", result, active, err)
+	}
+}
+
+func TestRecoverSafelyRepeatsInterruptedRestorationAndCleanup(t *testing.T) {
+	t.Run("Prepared before activation", func(t *testing.T) {
+		root, prior, _, _ := preparedRecoveryFixture(t)
+
+		result := newInstalledInterface(newLocalInspector(root, uint32(os.Getuid())), nil).Recover(t.Context(), nil)
+		if result.State != Ready || result.Code != RecoverPriorRestored || !activeEvidenceMatches(t, root, prior) {
+			t.Fatalf("Recover() = %#v", result)
+		}
+	})
+
+	t.Run("Prepared restoration", func(t *testing.T) {
+		root, prior, _, candidate := preparedRecoveryFixture(t)
+		updateRoot, err := os.OpenRoot(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := activateCandidate(updateRoot, candidate); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeUpdateFile(updateRoot, "var/lib/sbxr/.installed.json.candidate", prior.installedRecord, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := updateRoot.Rename("var/lib/sbxr/.installed.json.candidate", "var/lib/sbxr/installed.json"); err != nil {
+			t.Fatal(err)
+		}
+		if err := updateRoot.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		result := newInstalledInterface(newLocalInspector(root, uint32(os.Getuid())), nil).Recover(t.Context(), nil)
+		if result.State != Ready || result.Code != RecoverPriorRestored || !activeEvidenceMatches(t, root, prior) {
+			t.Fatalf("Recover() = %#v", result)
+		}
+	})
+
+	t.Run("Prepared cleanup", func(t *testing.T) {
+		root, prior, _, candidate := preparedRecoveryFixture(t)
+		updateRoot, err := os.OpenRoot(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := activateCandidate(updateRoot, candidate); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeUpdateFile(updateRoot, "var/lib/sbxr/.installed.json.candidate", prior.installedRecord, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := updateRoot.Rename("var/lib/sbxr/.installed.json.candidate", "var/lib/sbxr/installed.json"); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeUpdateFile(updateRoot, "usr/local/bin/.sbxr-update-candidate", prior.executable, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := updateRoot.Rename("usr/local/bin/.sbxr-update-candidate", "usr/local/bin/sbxr"); err != nil {
+			t.Fatal(err)
+		}
+		if err := updateRoot.Remove("usr/local/bin/.sbxr-update-prior"); err != nil {
+			t.Fatal(err)
+		}
+		if err := updateRoot.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		result := newInstalledInterface(newLocalInspector(root, uint32(os.Getuid())), nil).Recover(t.Context(), nil)
+		if result.State != Ready || result.Code != RecoverPriorRestored || !activeEvidenceMatches(t, root, prior) {
+			t.Fatalf("Recover() = %#v", result)
+		}
+	})
+
+	t.Run("Committed cleanup", func(t *testing.T) {
+		root, _, candidateEvidence, candidate := preparedRecoveryFixture(t)
+		updateRoot, err := os.OpenRoot(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := activateCandidate(updateRoot, candidate); err != nil {
+			t.Fatal(err)
+		}
+		record, err := readUpdateRecord(updateRoot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		record.Checkpoint = committedCheckpoint
+		if err := publishUpdateRecord(updateRoot, record, preparedCheckpoint); err != nil {
+			t.Fatal(err)
+		}
+		if err := updateRoot.Remove("var/lib/sbxr/.installed.json.prior"); err != nil {
+			t.Fatal(err)
+		}
+		if err := updateRoot.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		result := newInstalledInterface(newLocalInspector(root, uint32(os.Getuid())), nil).Recover(t.Context(), nil)
+		if result.State != Ready || result.Code != RecoverCandidateRetained || !activeEvidenceMatches(t, root, candidateEvidence) {
+			t.Fatalf("Recover() = %#v", result)
+		}
+	})
+}
+
+func TestRecoverStrictEvidenceRefusalsChangeNothing(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		change func(*testing.T, string)
+	}{
+		{"malformed record", func(t *testing.T, root string) {
+			mustWriteStatusFile(t, statusPath(root, "/var/lib/sbxr/update.json"), []byte(`{"schema":1,"checkpoint":"Unknown"}`), 0o600)
+		}},
+		{"oversized record", func(t *testing.T, root string) {
+			mustWriteStatusFile(t, statusPath(root, "/var/lib/sbxr/update.json"), bytes.Repeat([]byte("x"), maxUpdateRecord+1), 0o600)
+		}},
+		{"linked candidate record", func(t *testing.T, root string) {
+			if err := os.Link(statusPath(root, "/var/lib/sbxr/.installed.json.candidate"), statusPath(root, "/var/lib/sbxr/unexpected-link")); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"linked prior record", func(t *testing.T, root string) {
+			path := statusPath(root, "/var/lib/sbxr/.installed.json.prior")
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink("installed.json", path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"changed publication residue", func(t *testing.T, root string) {
+			mustWriteStatusFile(t, statusPath(root, "/var/lib/sbxr/.update.json.next"), []byte("changed"), 0o600)
+		}},
+		{"unsafe state directory", func(t *testing.T, root string) {
+			if err := os.Chmod(statusPath(root, "/var/lib/sbxr"), 0o777); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"contradictory candidate pair", func(t *testing.T, root string) {
+			identity := ReleaseIdentity{Repository: Repository, Tag: "v2.0.2", Commit: strings.Repeat("e", 40), IndexSHA256: strings.Repeat("f", 64)}
+			contradiction := installedEvidence(t, identity, 19, AMD64).installedRecord
+			mustWriteStatusFile(t, statusPath(root, "/var/lib/sbxr/.installed.json.candidate"), contradiction, 0o600)
+			var record updateRecord
+			body, err := os.ReadFile(statusPath(root, "/var/lib/sbxr/update.json"))
+			if err != nil || json.Unmarshal(body, &record) != nil {
+				t.Fatal(err)
+			}
+			record.CandidateInstalledRecordSHA256 = digestBytes(contradiction)
+			mustWriteStatusFile(t, statusPath(root, "/var/lib/sbxr/update.json"), updateRecordBytes(record), 0o600)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root, prior, _, _ := preparedRecoveryFixture(t)
+			test.change(t, root)
+			before := recoverySurface(t, root)
+
+			result := newInstalledInterface(newLocalInspector(root, uint32(os.Getuid())), nil).Recover(t.Context(), nil)
+
+			if result.State != RecoveryRequiredState || result.Code != RecoverRefused || !reflect.DeepEqual(recoverySurface(t, root), before) || !activeEvidenceMatches(t, root, prior) {
+				t.Fatalf("Recover() = %#v", result)
+			}
+		})
+	}
+}
+
+func recoverySurface(t *testing.T, root string) map[string]string {
+	t.Helper()
+	result := map[string]string{}
+	paths := append([]string{executablePath, installedRecordPath, "/var/lib/sbxr/unexpected-link"}, transactionPaths...)
+	for _, name := range paths {
+		path := statusPath(root, name)
+		info, err := os.Lstat(path)
+		if os.IsNotExist(err) {
+			result[name] = "missing"
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		stat := info.Sys().(*syscall.Stat_t)
+		value := fmt.Sprintf("%s:%o:%d:", info.Mode().Type(), info.Mode().Perm(), stat.Nlink)
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result[name] = value + target
+			continue
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result[name] = value + digestBytes(body)
+	}
+	return result
+}
+
+func preparedRecoveryFixture(t *testing.T) (string, localInspection, localInspection, UpdateCandidate) {
+	t.Helper()
+	root := t.TempDir()
+	prior := installedEvidence(t, ReleaseIdentity{Repository: Repository, Tag: "v2.0.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}, 17, AMD64)
+	candidateIdentity := ReleaseIdentity{Repository: Repository, Tag: "v2.0.1", Commit: strings.Repeat("c", 40), IndexSHA256: strings.Repeat("d", 64)}
+	candidateEvidence := installedEvidence(t, candidateIdentity, 18, AMD64)
+	writeInstalledEvidence(t, root, prior)
+	candidate := updateCandidateFromEvidence(t, candidateIdentity, 18, AMD64, candidateEvidence)
+	updateRoot, err := os.OpenRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := bindUpdateRecord(prior, candidate)
+	if err := prepareUpdate(updateRoot, prior, candidate); err != nil {
+		t.Fatal(err)
+	}
+	if err := publishUpdateRecord(updateRoot, record, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := updateRoot.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return root, prior, candidateEvidence, candidate
+}
+
+func activateRecoveryFixture(t *testing.T, root string, candidate UpdateCandidate, committed bool) {
+	t.Helper()
+	updateRoot, err := os.OpenRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer updateRoot.Close()
+	if err := activateCandidate(updateRoot, candidate); err != nil {
+		t.Fatal(err)
+	}
+	if !committed {
+		return
+	}
+	record, err := readUpdateRecord(updateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Checkpoint = committedCheckpoint
+	if err := publishUpdateRecord(updateRoot, record, preparedCheckpoint); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestStatusReportsReadyFromVerifiedInstalledEvidence(t *testing.T) {
 	identity := ReleaseIdentity{Repository: Repository, Tag: "v2.0.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}
 	evidence := installedEvidence(t, identity, 17, AMD64)
@@ -308,7 +672,7 @@ func TestPendingOperationsReturnVerifiedStatusWithoutInventingAnOutcome(t *testi
 	for name, result := range map[string]Result{
 		"Recover": lifecycle.Recover(context.Background(), nil),
 	} {
-		if result.State != Ready || result.Code != StatusReady || result.Message != "SBXR is ready." {
+		if result.State != Ready || result.Code != RecoverNotRequired || result.Message != "SBXR does not need recovery." {
 			t.Fatalf("%s() = %#v", name, result)
 		}
 	}
@@ -318,7 +682,7 @@ func TestPendingOperationsReturnVerifiedStatusWithoutInventingAnOutcome(t *testi
 
 	evidence.transactionEvidence = true
 	lifecycle = newInstalledInterface(controlledLocalInspector{evidence}, nil)
-	if result := lifecycle.Recover(context.Background(), nil); result.State != RecoveryRequiredState || result.Code != StatusRecoveryRequired {
+	if result := lifecycle.Recover(context.Background(), nil); result.State != RecoveryRequiredState || result.Code != RecoverRefused {
 		t.Fatalf("Recover() = %#v", result)
 	}
 }
