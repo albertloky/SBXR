@@ -121,7 +121,7 @@ func TestPlanContributesOnlyAnExplicitCurrentStateRepair(t *testing.T) {
 		t.Fatalf("repair Plan also exposed update authority = %+v", update)
 	}
 	observation := systemchanges.Observation{Status: systemchanges.RecoveryRequired, LastChangeSet: "change-0007", Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, ForwardRepairAvailable: true, RecoveryCause: systemchanges.CurrentStateDrift, StateRevision: 7, StateSHA256: request.StartingState.SHA256, VolatileSHA256: request.ManagedInputsSHA256}
-	view := (softwarelifecycle.LegacyInterface{}).ViewRepair(systemchanges.New(repairStatusAdapter{observation}))
+	view := (softwarelifecycle.FullProductModule{}).ViewRepair(systemchanges.New(repairStatusAdapter{observation}))
 	repair, finding := softwarelifecycle.PlanRepair(softwarelifecycle.RepairPlanRequest{Candidate: view.RepairCandidate(), Contribution: result.Plan, ChangeSet: request.ChangeSet, Capability: capability, Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}})
 	if finding != nil || repair == nil {
 		t.Fatalf("Software Lifecycle PlanRepair() = (%+v, %+v)", repair, finding)

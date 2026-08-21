@@ -135,7 +135,7 @@ func (built *builtCompleteRemoval) planRemoval(ctx context.Context, changeSet st
 	}
 	observation := built.starting
 	changes := systemchanges.New(systemubuntu.NewAt("/", func() (systemchanges.Observation, error) { return observation, nil }, nil))
-	view := (softwarelifecycle.LegacyInterface{}).ViewCompleteRemoval(changes)
+	view := (softwarelifecycle.FullProductModule{}).ViewCompleteRemoval(changes)
 	if view.Candidate() == (softwarelifecycle.CompleteRemovalCandidate{}) {
 		return errors.New("Complete removal candidate unavailable")
 	}

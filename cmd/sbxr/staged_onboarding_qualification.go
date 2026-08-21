@@ -436,13 +436,13 @@ func qualifyControlledManagedCapability(ctx context.Context, stateModule state.I
 			repairObservation := observation
 			repairObservation.Status, repairObservation.RecoveryCause, repairObservation.ForwardRepairAvailable, repairObservation.VolatileSHA256 = systemchanges.RecoveryRequired, systemchanges.CurrentStateDrift, true, repairProof.StableSHA256
 			repairChanges := systemchanges.New(controlledManagedObservation{observation: repairObservation})
-			repairView := (softwarelifecycle.LegacyInterface{}).ViewRepair(repairChanges)
+			repairView := (softwarelifecycle.FullProductModule{}).ViewRepair(repairChanges)
 			repair, finding := softwarelifecycle.PlanRepair(softwarelifecycle.RepairPlanRequest{Candidate: repairView.RepairCandidate(), Contribution: repairContribution, ChangeSet: repairProof.ChangeSet, Capability: stateModule.SoftwareLifecycleCapability(loaded), Disk: systemchanges.DiskRequirement{PreparationBytes: 1, TemporaryBytes: 1, SnapshotBytes: 1, JournalBytes: 1, RollbackBytes: 1, OverheadBytes: 1}})
 			if finding != nil || repair == nil || repair.Summary().OwningModule != systemchanges.ConnectionProfilesModule || repair.Summary().CurrentRevision != revision {
 				return errors.New("controlled repair capability disagrees")
 			}
 			const removalReviewID = "controlled-complete-removal"
-			removalView := (softwarelifecycle.LegacyInterface{}).ViewCompleteRemoval(changes)
+			removalView := (softwarelifecycle.FullProductModule{}).ViewCompleteRemoval(changes)
 			removalReview, err := ownerconsole.ControlledRemovalReview(removalReviewID)
 			if err != nil {
 				return err

@@ -2703,7 +2703,7 @@ func TestLineageUnavailableCompleteRemovalRestoresCorruptRawStateAfterRestart(t 
 	}
 	adapter := &systemChangesAdapter{observation: observation, stateRecovery: stateModule, crashAfter: systemchanges.PrePublicationHealthPassed}
 	changes := systemchanges.New(adapter)
-	view := (softwarelifecycle.LegacyInterface{}).ViewCompleteRemoval(changes)
+	view := (softwarelifecycle.FullProductModule{}).ViewCompleteRemoval(changes)
 	console := ownerconsole.New(controlledOwnerRemovalObserver{})
 	review, err := console.StartRemovalReview("lineage-unavailable-removal-0008")
 	if err != nil {
@@ -2748,7 +2748,7 @@ func TestLineageUnavailableCompleteRemovalRestoresCorruptRawStateAfterRestart(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	rechecked := (softwarelifecycle.LegacyInterface{}).ViewCompleteRemoval(changes).Candidate()
+	rechecked := (softwarelifecycle.FullProductModule{}).ViewCompleteRemoval(changes).Candidate()
 	approval := controlledCompleteRemovalApproval{softwarelifecycle.CompleteRemovalRecheck{Candidate: rechecked, Review: review, PublicAuthorities: public, CloudflareAuthorities: external, TypedConfirmation: typed, PermanentSelection: selected}}
 	func() {
 		defer func() { _ = recover() }()

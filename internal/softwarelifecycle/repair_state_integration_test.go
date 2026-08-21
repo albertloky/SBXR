@@ -157,7 +157,7 @@ func TestSoftwareRepairPreparesOnlyTheExactUnchangedCurrentDesiredState(t *testi
 	stateSHA, volatileSHA := "ab76945ea6e878e5be9f97f79a293000c8334ea709bbd3659d1db79cecc4261a", strings.Repeat("c", 64)
 	observation := systemchanges.Observation{Status: systemchanges.RecoveryRequired, LastChangeSet: "change-0007", Checkpoint: systemchanges.NoCheckpoint, Lock: systemchanges.LockReleased, ForwardRepairAvailable: true, RecoveryCause: systemchanges.CurrentStateDrift, StateRevision: 7, StateSHA256: stateSHA, VolatileSHA256: volatileSHA}
 	changes := systemchanges.New(repairObservationAdapter{observation})
-	view := (softwarelifecycle.LegacyInterface{}).ViewRepair(changes)
+	view := (softwarelifecycle.FullProductModule{}).ViewRepair(changes)
 	omissions := []connectionprofiles.PublicationOmission{{ID: connectionprofiles.VLESSRealityVisionProfileID, Name: "VLESS REALITY Vision", Lifecycle: state.ProfileDisabled}, {ID: connectionprofiles.VLESSXHTTPProfileID, Name: "VLESS XHTTP", Lifecycle: state.ProfileDisabled}, {ID: connectionprofiles.VLESSWebSocketProfileID, Name: "VLESS WebSocket", Lifecycle: state.ProfileDisabled}, {ID: connectionprofiles.Hysteria2ProfileID, Name: "Hysteria2", Lifecycle: state.ProfileDisabled}, {ID: connectionprofiles.TUICProfileID, Name: "TUIC", Lifecycle: state.ProfileDisabled}, {ID: connectionprofiles.AnyTLSProfileID, Name: "AnyTLS", Lifecycle: state.ProfileDisabled}}
 	source, err := connectionprofiles.NewPublicationSource(nil, omissions)
 	if err != nil {
@@ -200,7 +200,7 @@ func TestSoftwareRepairPreparesOnlyTheExactUnchangedCurrentDesiredState(t *testi
 	if err != nil || prepared.Revision() != 8 {
 		t.Fatalf("PrepareSoftwareRepairCommit() = (%+v, %v)", prepared, err)
 	}
-	rechecked := (softwarelifecycle.LegacyInterface{}).ViewRepair(changes).RepairCandidate()
+	rechecked := (softwarelifecycle.FullProductModule{}).ViewRepair(changes).RepairCandidate()
 	result := plan.Apply(t.Context(), softwarelifecycle.RepairApplyRequest{Approval: repairApproval{softwarelifecycle.RepairRecheck{Candidate: rechecked, Contribution: publication.Plan, Capability: capability}}, PreparedState: prepared, SystemChanges: systemchanges.New(nil)})
 	if result.Finding == nil || result.Finding.Code != "SYSTEM-CHANGES-ADAPTER-UNAVAILABLE" {
 		t.Fatalf("Apply handoff = %+v", result)

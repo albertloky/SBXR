@@ -46,7 +46,7 @@ type RepairViewResult struct {
 
 func (result RepairViewResult) RepairCandidate() RepairCandidate { return result.candidate }
 
-func (module LegacyInterface) ViewRepair(changes systemchanges.Interface) RepairViewResult {
+func (module FullProductModule) ViewRepair(changes systemchanges.Interface) RepairViewResult {
 	inspection := changes.Inspect()
 	result := RepairViewResult{Status: InstallationStatus(inspection.Status), Cause: inspection.RecoveryCause}
 	if inspection.Status != systemchanges.RecoveryRequired {

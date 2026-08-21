@@ -57,7 +57,7 @@ type CompleteRemovalViewResult struct {
 
 func (result CompleteRemovalViewResult) Candidate() CompleteRemovalCandidate { return result.candidate }
 
-func (LegacyInterface) ViewCompleteRemoval(changes systemchanges.Interface) CompleteRemovalViewResult {
+func (FullProductModule) ViewCompleteRemoval(changes systemchanges.Interface) CompleteRemovalViewResult {
 	authority := changes.CompleteRemovalAuthority()
 	status, revision, stateSHA256, volatileSHA256, valid := authority.SoftwareLifecycleCompleteRemovalReview()
 	if !valid {

@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
-	"io"
 )
 
 const (
@@ -109,24 +108,18 @@ func (module installedInterface) Status(ctx context.Context) Result {
 	return Result{State: Ready, Installed: &identity, Code: StatusReady, Message: "SBXR is ready."}
 }
 
-// Later tickets replace these safe integration-line refusals with their
+// Later tickets replace these status-only integration-line results with their
 // specified behavior without changing Interface.
 func (module installedInterface) Check(ctx context.Context, _ ProgressReporter) Result {
-	return unavailableOperation(module.Status(ctx), "SOFTWARE-LIFECYCLE-CHECK-NOT-READY")
+	return module.Status(ctx)
 }
 
 func (module installedInterface) Update(ctx context.Context, _ ProgressReporter) Result {
-	return unavailableOperation(module.Status(ctx), "SOFTWARE-LIFECYCLE-UPDATE-NOT-READY")
+	return module.Status(ctx)
 }
 
 func (module installedInterface) Recover(ctx context.Context, _ ProgressReporter) Result {
-	return unavailableOperation(module.Status(ctx), "SOFTWARE-LIFECYCLE-RECOVER-NOT-REQUIRED")
-}
-
-func unavailableOperation(status Result, code ResultCode) Result {
-	status.Code = code
-	status.Message = "This Software Lifecycle operation is not available yet."
-	return status
+	return module.Status(ctx)
 }
 
 func recoveryRequiredResult() Result {
@@ -156,7 +149,7 @@ type embeddedIdentity struct {
 
 func verifyInstalledPair(recordBytes, executable []byte) (ReleaseIdentity, bool) {
 	var record installedRecord
-	if !decodeExactObject(recordBytes, &record, "schema", "repository", "tag", "commit", "release_index_sha256", "sequence", "architecture", "executable_sha256") || !validInstalledRecord(record) {
+	if !decodeExactObject(recordBytes, &record) || !validInstalledRecord(record) {
 		return ReleaseIdentity{}, false
 	}
 	embedded, ok := readEmbeddedIdentity(executable)
@@ -174,37 +167,8 @@ func validInstalledRecord(record installedRecord) bool {
 	return record.Schema == 1 && record.Repository == Repository && immutableReleaseTag.MatchString(record.Tag) && commitPattern.MatchString(record.Commit) && hashPattern.MatchString(record.ReleaseIndexSHA256) && record.Sequence > 0 && (record.Architecture == AMD64 || record.Architecture == ARM64) && hashPattern.MatchString(record.ExecutableSHA256)
 }
 
-func decodeExactObject(document []byte, target any, fields ...string) bool {
-	if len(document) == 0 || bytes.HasPrefix(document, []byte{0xef, 0xbb, 0xbf}) || !json.Valid(document) {
-		return false
-	}
-	decoder := json.NewDecoder(bytes.NewReader(document))
-	opening, err := decoder.Token()
-	if err != nil || opening != json.Delim('{') {
-		return false
-	}
-	want := make(map[string]bool, len(fields))
-	for _, field := range fields {
-		want[field] = true
-	}
-	seen := make(map[string]bool, len(fields))
-	for decoder.More() {
-		token, err := decoder.Token()
-		name, ok := token.(string)
-		if err != nil || !ok || !want[name] || seen[name] {
-			return false
-		}
-		seen[name] = true
-		var value json.RawMessage
-		if decoder.Decode(&value) != nil {
-			return false
-		}
-	}
-	closing, err := decoder.Token()
-	if err != nil || closing != json.Delim('}') || len(seen) != len(want) {
-		return false
-	}
-	if _, err := decoder.Token(); err != io.EOF {
+func decodeExactObject(document []byte, target any) bool {
+	if len(document) == 0 || bytes.HasPrefix(document, []byte{0xef, 0xbb, 0xbf}) || !json.Valid(document) || ValidateUniqueJSON(document) != nil {
 		return false
 	}
 	strict := json.NewDecoder(bytes.NewReader(document))
@@ -229,7 +193,7 @@ func readEmbeddedIdentity(executable []byte) (embeddedIdentity, bool) {
 		return embeddedIdentity{}, false
 	}
 	var identity embeddedIdentity
-	if !decodeExactObject(document, &identity, "schema", "repository", "tag", "commit", "sequence", "architecture", "payload_sha256") || identity.Schema != 1 || identity.Repository != Repository || !immutableReleaseTag.MatchString(identity.Tag) || !commitPattern.MatchString(identity.Commit) || identity.Sequence == 0 || identity.Architecture != AMD64 && identity.Architecture != ARM64 || !hashPattern.MatchString(identity.PayloadSHA256) {
+	if !decodeExactObject(document, &identity) || identity.Schema != 1 || identity.Repository != Repository || !immutableReleaseTag.MatchString(identity.Tag) || !commitPattern.MatchString(identity.Commit) || identity.Sequence == 0 || identity.Architecture != AMD64 && identity.Architecture != ARM64 || !hashPattern.MatchString(identity.PayloadSHA256) {
 		return embeddedIdentity{}, false
 	}
 	payloadDigest := sha256.Sum256(executable[:documentOffset])

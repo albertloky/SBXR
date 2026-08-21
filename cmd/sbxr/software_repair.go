@@ -235,7 +235,7 @@ func buildSoftwareRepair(ctx context.Context, module state.Interface, loaded sta
 		return nil, err
 	}
 	changes := repairChanges(inspection)
-	repairView := (softwarelifecycle.LegacyInterface{}).ViewRepair(changes)
+	repairView := (softwarelifecycle.FullProductModule{}).ViewRepair(changes)
 	plan, finding := softwarelifecycle.PlanRepair(softwarelifecycle.RepairPlanRequest{Candidate: repairView.RepairCandidate(), Contribution: contribution, ChangeSet: changeSet, Capability: capability, Disk: disk})
 	if finding != nil || plan == nil {
 		return nil, errors.New("Software Lifecycle current-State repair Plan refused")
@@ -267,7 +267,7 @@ func buildSoftwareRepair(ctx context.Context, module state.Interface, loaded sta
 			return nil, err
 		}
 	}
-	freshCandidate := (softwarelifecycle.LegacyInterface{}).ViewRepair(changes).RepairCandidate()
+	freshCandidate := (softwarelifecycle.FullProductModule{}).ViewRepair(changes).RepairCandidate()
 	built := &builtSoftwareRepair{changeSet: changeSet, lastChangeSet: string(snapshot.LastCompletedChangeSet), plan: plan, contribution: contribution, candidate: freshCandidate, starting: systemchanges.StateLineage{Status: systemchanges.Managed, Revision: snapshot.Revision, SHA256: stateSHA}, desired: desired, disk: disk, module: module, profiles: profilePlan, publication: publicationPlan, cloudflare: cloudflareExecutor, inspection: inspection, capability: capability}
 	if !prepareState {
 		return built, nil

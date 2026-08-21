@@ -81,6 +81,27 @@ func TestStatusReportsConcurrentUpdateWithoutExposingLockFacts(t *testing.T) {
 	}
 }
 
+func TestPendingOperationsReturnVerifiedStatusWithoutInventingAnOutcome(t *testing.T) {
+	evidence := installedEvidence(t, ReleaseIdentity{Repository: Repository, Tag: "v2.0.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}, 17, AMD64)
+	var lifecycle Interface = newInstalledInterface(controlledLocalInspector{evidence})
+
+	for name, result := range map[string]Result{
+		"Check":   lifecycle.Check(context.Background(), nil),
+		"Update":  lifecycle.Update(context.Background(), nil),
+		"Recover": lifecycle.Recover(context.Background(), nil),
+	} {
+		if result.State != Ready || result.Code != StatusReady || result.Message != "SBXR is ready." {
+			t.Fatalf("%s() = %#v", name, result)
+		}
+	}
+
+	evidence.transactionEvidence = true
+	lifecycle = newInstalledInterface(controlledLocalInspector{evidence})
+	if result := lifecycle.Recover(context.Background(), nil); result.State != RecoveryRequiredState || result.Code != StatusRecoveryRequired {
+		t.Fatalf("Recover() = %#v", result)
+	}
+}
+
 func installedEvidence(t *testing.T, identity ReleaseIdentity, sequence uint64, architecture Architecture) localInspection {
 	t.Helper()
 	payload := []byte("test executable")
