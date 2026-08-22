@@ -28,6 +28,37 @@ func TestSourceChecksOnlyTheQualifiedFourAssetLatestRelease(t *testing.T) {
 	}
 }
 
+func TestSourceChecksTheCandidateFailureStateBoundQualification(t *testing.T) {
+	fixture := newLatestReleaseFixture(t)
+	assets := make([]map[string]any, 0, len(fixture.release.Assets))
+	for _, asset := range fixture.release.Assets {
+		assets = append(assets, map[string]any{"name": asset.Name, "size": asset.Size, "sha256": fixture.digests[asset.Name]})
+	}
+	manifest, err := json.Marshal(map[string]any{
+		"schema": "sbxr-qualification-manifest-v1", "repository": softwarelifecycle.Repository,
+		"approval": map[string]any{}, "mode": "normal", "source_state": "initial-normal",
+		"workflow": map[string]any{"path": ".github/workflows/candidate.yml", "ref": "albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main", "commit": fixtureCommit, "run_id": "123", "run_url": "https://github.com/albertloky/SBXR/actions/runs/123"},
+		"releases": []map[string]any{{"tag": "v2.0.0", "commit": fixtureCommit, "sequence": 17, "release_id": 1, "release_identity": map[string]any{"repository": softwarelifecycle.Repository, "tag": "v2.0.0", "commit": fixtureCommit, "release_index_sha256": fixture.digests["release-index.json"]}, "assets": assets}, {"tag": "v2.0.1", "commit": fixtureCommit, "sequence": 18, "release_id": 2, "release_identity": map[string]any{"repository": softwarelifecycle.Repository, "tag": "v2.0.1", "commit": fixtureCommit, "release_index_sha256": strings.Repeat("a", 64)}, "assets": assets}},
+		"native_evidence": []any{}, "acceptance_vps_checklist_sha256": strings.Repeat("b", 64), "pinned_actions": []string{}, "rescue": nil,
+		"candidate_failure_state_sha256": strings.Repeat("c", 64),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(manifest)
+	fixture.release.Qualification = &qualificationRelease{Manifest: manifest, Bundle: json.RawMessage(`{"fixture":true}`)}
+	verifier := func(body []byte, algorithm, gotDigest string) ([]byte, error) {
+		if string(body) != `{"fixture":true}` || algorithm != "sha256" || gotDigest != hex.EncodeToString(digest[:]) {
+			return nil, fmt.Errorf("fixture verifier refused")
+		}
+		return json.Marshal(map[string]any{"_type": "https://in-toto.io/Statement/v1", "subject": []map[string]any{{"name": "qualification-manifest.json", "digest": map[string]string{"sha256": gotDigest}}}})
+	}
+	got, outcome := NewWithEndpoint(fixture.server.Client(), fixture.server.URL, verifier).CheckLatest(t.Context())
+	if outcome != softwarelifecycle.LatestReleaseAccepted || got.Sequence != 17 {
+		t.Fatalf("CheckLatest() = %#v, %v", got, outcome)
+	}
+}
+
 func TestSourceRefusesChangedLatestReleaseFacts(t *testing.T) {
 	fixture := newLatestReleaseFixture(t)
 	fixture.release.Assets[1].Digest = "sha256:" + strings.Repeat("a", 64)

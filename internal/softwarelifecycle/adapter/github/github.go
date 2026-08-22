@@ -242,6 +242,7 @@ type qualificationManifest struct {
 	}
 	NativeEvidence               json.RawMessage `json:"native_evidence"`
 	AcceptanceVPSChecklistSHA256 string          `json:"acceptance_vps_checklist_sha256"`
+	CandidateFailureStateSHA256  string          `json:"candidate_failure_state_sha256"`
 	PinnedActions                []string        `json:"pinned_actions"`
 	Rescue                       json.RawMessage `json:"rescue"`
 }
@@ -254,7 +255,7 @@ func (source Source) qualificationLatest(release githubRelease, metadata map[str
 	var manifest qualificationManifest
 	decoder := json.NewDecoder(bytes.NewReader(proof.Manifest))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&manifest) != nil || decoder.Decode(&struct{}{}) != io.EOF || manifest.Schema != "sbxr-qualification-manifest-v1" || manifest.Repository != softwarelifecycle.Repository || manifest.Workflow.Path != ".github/workflows/candidate.yml" || manifest.Workflow.Ref != "albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main" || !commitPattern.MatchString(manifest.Workflow.Commit) || !workflowEvidencePattern.MatchString(manifest.Workflow.RunURL) || manifest.Workflow.RunID == "" || !strings.HasSuffix(manifest.Workflow.RunURL, "/"+manifest.Workflow.RunID) || len(manifest.Releases) != 2 {
+	if decoder.Decode(&manifest) != nil || decoder.Decode(&struct{}{}) != io.EOF || manifest.Schema != "sbxr-qualification-manifest-v1" || manifest.Repository != softwarelifecycle.Repository || manifest.Workflow.Path != ".github/workflows/candidate.yml" || manifest.Workflow.Ref != "albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main" || !commitPattern.MatchString(manifest.Workflow.Commit) || !workflowEvidencePattern.MatchString(manifest.Workflow.RunURL) || manifest.Workflow.RunID == "" || !strings.HasSuffix(manifest.Workflow.RunURL, "/"+manifest.Workflow.RunID) || !hashPattern.MatchString(manifest.CandidateFailureStateSHA256) || len(manifest.Releases) != 2 {
 		return "", 0, false
 	}
 	digest := sha256.Sum256(proof.Manifest)
