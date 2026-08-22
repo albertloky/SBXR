@@ -503,7 +503,7 @@ func TestRunShowsOnlyActionsLegalForFreshStatus(t *testing.T) {
 			writePTY(t, master, test.input)
 			if test.action != ExitAction {
 				<-invoked
-				transcript += waitForPTY(t, master, "Use ↑/↓ or a number, then Enter:")
+				transcript += waitForPTY(t, master, "Code: "+string(test.result.Code))
 				writePTY(t, master, "0\r")
 			}
 			got := <-done
