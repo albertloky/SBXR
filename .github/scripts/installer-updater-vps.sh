@@ -138,7 +138,7 @@ else
 
   menu 1 10 | tee check-b.transcript
   grep -F 'Code: SOFTWARE-LIFECYCLE-CHECK-UPDATE-AVAILABLE' check-b.transcript
-  grep -F "Latest stable version: ${B_TAG#v}" check-b.transcript
+  grep -F "Latest stable version: $B_TAG" check-b.transcript
 
   touch "$CONTROL/hold-latest"
   rm -f "$CONTROL/latest-requested"

@@ -194,6 +194,7 @@ func TestCandidateQualifiesTheManifestBoundTwoReleaseJourneyOnTheAcceptanceVPS(t
 		"rm -f /root/sbxr-qualification-gateway",
 		"curl -fsSL https://github.com/albertloky/SBXR/releases/latest/download/install.sh | sudo bash",
 		"SOFTWARE-LIFECYCLE-CHECK-UPDATE-AVAILABLE",
+		"grep -F \"Latest stable version: $B_TAG\" check-b.transcript",
 		"SOFTWARE-LIFECYCLE-INSTALL-CONCURRENT-MUTATION",
 		"SOFTWARE-LIFECYCLE-CHECK-CONCURRENT-CHANGE",
 		"prepared:Prepared:$A_TAG",
