@@ -144,6 +144,8 @@ func TestRunDefersManagedSignalsUntilTheTypedResult(t *testing.T) {
 				action, status := Run(t.Context(), nil, slave, slave, slave, []string{"TERM=xterm", "LANG=C.UTF-8"}, module)
 				done <- runResult{action: action, status: status}
 			}()
+			waitForPTY(t, master, "Use ↑/↓ or a number, then Enter: 1")
+			writePTY(t, master, "\r")
 			waitForPTY(t, master, "Latest stable version: | Checking the qualified latest release")
 			if err := syscall.Kill(os.Getpid(), test.signal); err != nil {
 				t.Fatal(err)

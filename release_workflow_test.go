@@ -209,6 +209,41 @@ func TestCandidateQualifiesTheManifestBoundTwoReleaseJourneyOnTheAcceptanceVPS(t
 	assertActionsPinned(t, acceptanceSources)
 }
 
+func TestCandidatePreservesFailureEvidenceAndAdvancesAfterBurnedInitialPair(t *testing.T) {
+	body, err := os.ReadFile(".github/workflows/candidate.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(body)
+	acceptance := workflow[strings.Index(workflow, "  acceptance-vps:"):strings.Index(workflow, "  cleanup-unqualified:")]
+	checkout := strings.Index(acceptance, "uses: actions/checkout@")
+	initialize := strings.Index(acceptance, "name: Initialize exact candidate failure evidence")
+	if checkout < 0 || initialize < 0 || checkout > initialize {
+		t.Fatal("Acceptance VPS failure evidence is initialized before checkout can clean the workspace")
+	}
+	sequenceExpression := `[$used[].sequence, $burned[].sequence] | max // 16`
+	for _, required := range []string{
+		`highest_sequence="$(jq -n --argjson used "$(cat used-sequences.json)" --argjson burned "$burned" '` + sequenceExpression + `')"`,
+		`test "$A_SEQUENCE" -eq "$((highest_sequence + 1))"`,
+		`test "$B_SEQUENCE" -eq "$((A_SEQUENCE + 1))"`,
+		`if test "$highest_sequence" -eq 16; then`,
+		`test "$A_TAG" = v2.0.0`,
+		`test "$B_TAG" = v2.0.1`,
+	} {
+		if !strings.Contains(workflow, required) {
+			t.Fatalf("candidate.yml omitted failed-initial-pair retry contract %q", required)
+		}
+	}
+	command := exec.Command("jq", "-nr", "--argjson", "used", `[{"sequence":16}]`, "--argjson", "burned", `[{"sequence":17},{"sequence":18}]`, sequenceExpression)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("select highest used or burned sequence: %v\n%s", err, output)
+	}
+	if string(output) != "18\n" {
+		t.Fatalf("highest used or burned sequence = %q, want 18", output)
+	}
+}
+
 func TestStablePublishesOnlyTheSignedQualifiedDraftsAndProvesStableNoUpdate(t *testing.T) {
 	body, err := os.ReadFile(".github/workflows/stable.yml")
 	if err != nil {

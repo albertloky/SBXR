@@ -282,7 +282,8 @@ func readInput(reader inputReader, generation *atomic.Uint64, events chan<- read
 		}
 	}()
 	for {
-		received := readerEvent{generation: generation.Load(), event: reader.next()}
+		received := readerEvent{event: reader.next()}
+		received.generation = generation.Load()
 		select {
 		case events <- received:
 		case <-stop:
@@ -574,6 +575,8 @@ func (reader inputReader) next() inputEvent {
 	switch value {
 	case '\r', '\n':
 		return inputEvent{kind: eventEnter}
+	case 0x04:
+		return inputEvent{kind: eventEOF}
 	case 0x1b:
 		return reader.escape()
 	default:
