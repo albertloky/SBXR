@@ -48,7 +48,27 @@ type packageVerificationOptions struct {
 	architecture softwarelifecycle.Architecture
 }
 
+type gatewayOptions struct {
+	manifest, bundle, assets, certificate, key, listen, control string
+}
+
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "gateway" {
+		flags := flag.NewFlagSet("gateway", flag.ContinueOnError)
+		var options gatewayOptions
+		flags.StringVar(&options.manifest, "manifest", "", "signed qualification manifest")
+		flags.StringVar(&options.bundle, "bundle", "", "qualification attestation bundle")
+		flags.StringVar(&options.assets, "assets", "", "manifest-bound A and B asset directories")
+		flags.StringVar(&options.certificate, "certificate", "", "TLS certificate")
+		flags.StringVar(&options.key, "key", "", "TLS private key")
+		flags.StringVar(&options.listen, "listen", ":443", "TLS listen address")
+		flags.StringVar(&options.control, "control", "", "root-only external timing controls")
+		if flags.Parse(os.Args[2:]) != nil || flags.NArg() != 0 || runQualificationGateway(options) != nil {
+			fmt.Fprintln(os.Stderr, "sbxr qualification gateway refused")
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "index" {
 		flags := flag.NewFlagSet("index", flag.ContinueOnError)
 		var options indexOptions

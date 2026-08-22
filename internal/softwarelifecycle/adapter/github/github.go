@@ -137,33 +137,39 @@ func (source Source) latest(ctx context.Context, archiveName string) (softwareli
 	if err != nil || release.Draft || release.Prerelease || !release.Immutable || !immutableTagPattern.MatchString(release.Tag) || !commitPattern.MatchString(release.TargetCommitish) {
 		return softwarelifecycle.LatestRelease{}, nil, softwarelifecycle.LatestReleaseRefused
 	}
-	recordIndex, recordSequence, ok := latestAcceptanceRecord(release.Body, release.Tag, release.TargetCommitish, metadata)
-	if !ok {
-		return softwarelifecycle.LatestRelease{}, nil, softwarelifecycle.LatestReleaseRefused
-	}
-	var response attestationResponse
-	attestationURL := source.baseURL + "/repos/" + softwarelifecycle.Repository + "/attestations/sha1:" + release.TargetCommitish + "?predicate_type=release&per_page=100"
-	if err := source.latestJSON(ctx, attestationURL, maxBundleBytes, &response); err != nil {
-		latest, outcome := latestFailure(err)
-		return latest, nil, outcome
-	}
-	if len(response.Attestations) != 1 || response.Attestations[0].Initiator != "github" {
-		return softwarelifecycle.LatestRelease{}, nil, softwarelifecycle.LatestReleaseRefused
-	}
-	bundleCtx, cancelBundle := context.WithTimeout(ctx, 30*time.Second)
-	bundleBody, err := source.bundle(bundleCtx, response.Attestations[0])
-	cancelBundle()
-	if err != nil {
-		latest, outcome := latestFailure(err)
-		return latest, nil, outcome
-	}
-	statementBody, err := source.verifier(bundleBody, "sha1", release.TargetCommitish)
-	if err != nil {
-		return softwarelifecycle.LatestRelease{}, nil, softwarelifecycle.LatestReleaseRefused
-	}
-	attested, err := parseReleaseStatementWithAssets(statementBody, release.Tag, release.TargetCommitish, 4)
-	if err != nil || !sameAssetDigests(metadata, attested) {
-		return softwarelifecycle.LatestRelease{}, nil, softwarelifecycle.LatestReleaseRefused
+	recordIndex, recordSequence, qualified := latestAcceptanceRecord(release.Body, release.Tag, release.TargetCommitish, metadata)
+	if release.Qualification != nil {
+		if recordIndex, recordSequence, qualified = source.qualificationLatest(release, metadata); !qualified {
+			return softwarelifecycle.LatestRelease{}, nil, softwarelifecycle.LatestReleaseRefused
+		}
+	} else {
+		if !qualified {
+			return softwarelifecycle.LatestRelease{}, nil, softwarelifecycle.LatestReleaseRefused
+		}
+		var response attestationResponse
+		attestationURL := source.baseURL + "/repos/" + softwarelifecycle.Repository + "/attestations/sha1:" + release.TargetCommitish + "?predicate_type=release&per_page=100"
+		if err := source.latestJSON(ctx, attestationURL, maxBundleBytes, &response); err != nil {
+			latest, outcome := latestFailure(err)
+			return latest, nil, outcome
+		}
+		if len(response.Attestations) != 1 || response.Attestations[0].Initiator != "github" {
+			return softwarelifecycle.LatestRelease{}, nil, softwarelifecycle.LatestReleaseRefused
+		}
+		bundleCtx, cancelBundle := context.WithTimeout(ctx, 30*time.Second)
+		bundleBody, err := source.bundle(bundleCtx, response.Attestations[0])
+		cancelBundle()
+		if err != nil {
+			latest, outcome := latestFailure(err)
+			return latest, nil, outcome
+		}
+		statementBody, err := source.verifier(bundleBody, "sha1", release.TargetCommitish)
+		if err != nil {
+			return softwarelifecycle.LatestRelease{}, nil, softwarelifecycle.LatestReleaseRefused
+		}
+		attested, err := parseReleaseStatementWithAssets(statementBody, release.Tag, release.TargetCommitish, 4)
+		if err != nil || !sameAssetDigests(metadata, attested) {
+			return softwarelifecycle.LatestRelease{}, nil, softwarelifecycle.LatestReleaseRefused
+		}
 	}
 	indexMetadata := metadata["release-index.json"]
 	indexCtx, cancelIndex := context.WithTimeout(ctx, 30*time.Second)
@@ -298,13 +304,106 @@ type githubRef struct {
 }
 
 type githubRelease struct {
-	Tag             string        `json:"tag_name"`
-	TargetCommitish string        `json:"target_commitish"`
-	Body            string        `json:"body"`
-	Draft           bool          `json:"draft"`
-	Prerelease      bool          `json:"prerelease"`
-	Immutable       bool          `json:"immutable"`
-	Assets          []githubAsset `json:"assets"`
+	Tag             string                `json:"tag_name"`
+	TargetCommitish string                `json:"target_commitish"`
+	Body            string                `json:"body"`
+	Draft           bool                  `json:"draft"`
+	Prerelease      bool                  `json:"prerelease"`
+	Immutable       bool                  `json:"immutable"`
+	Assets          []githubAsset         `json:"assets"`
+	Qualification   *qualificationRelease `json:"sbxr_qualification,omitempty"`
+}
+
+type qualificationRelease struct {
+	Manifest json.RawMessage `json:"manifest"`
+	Bundle   json.RawMessage `json:"bundle"`
+}
+
+type qualificationManifest struct {
+	Schema      string          `json:"schema"`
+	Repository  string          `json:"repository"`
+	Approval    json.RawMessage `json:"approval"`
+	Mode        string          `json:"mode"`
+	SourceState string          `json:"source_state"`
+	Workflow    struct {
+		Path   string `json:"path"`
+		Ref    string `json:"ref"`
+		Commit string `json:"commit"`
+		RunID  string `json:"run_id"`
+		RunURL string `json:"run_url"`
+	} `json:"workflow"`
+	Releases []struct {
+		Tag       string `json:"tag"`
+		Commit    string `json:"commit"`
+		Sequence  uint64 `json:"sequence"`
+		ReleaseID uint64 `json:"release_id"`
+		Identity  struct {
+			Repository  string `json:"repository"`
+			Tag         string `json:"tag"`
+			Commit      string `json:"commit"`
+			IndexSHA256 string `json:"release_index_sha256"`
+		} `json:"release_identity"`
+		Assets []struct {
+			Name   string `json:"name"`
+			SHA256 string `json:"sha256"`
+			Size   int64  `json:"size"`
+		}
+	}
+	NativeEvidence               json.RawMessage `json:"native_evidence"`
+	AcceptanceVPSChecklistSHA256 string          `json:"acceptance_vps_checklist_sha256"`
+	PinnedActions                []string        `json:"pinned_actions"`
+	Rescue                       json.RawMessage `json:"rescue"`
+}
+
+func (source Source) qualificationLatest(release githubRelease, metadata map[string]assetMetadata) (string, uint64, bool) {
+	proof := release.Qualification
+	if proof == nil || len(proof.Manifest) == 0 || len(proof.Manifest) > 1<<20 || len(proof.Bundle) == 0 || len(proof.Bundle) > maxBundleBytes || softwarelifecycle.ValidateUniqueJSON(proof.Manifest) != nil || softwarelifecycle.ValidateUniqueJSON(proof.Bundle) != nil {
+		return "", 0, false
+	}
+	var manifest qualificationManifest
+	decoder := json.NewDecoder(bytes.NewReader(proof.Manifest))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&manifest) != nil || decoder.Decode(&struct{}{}) != io.EOF || manifest.Schema != "sbxr-qualification-manifest-v1" || manifest.Repository != softwarelifecycle.Repository || manifest.Workflow.Path != ".github/workflows/candidate.yml" || manifest.Workflow.Ref != "albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main" || !commitPattern.MatchString(manifest.Workflow.Commit) || !workflowEvidencePattern.MatchString(manifest.Workflow.RunURL) || manifest.Workflow.RunID == "" || !strings.HasSuffix(manifest.Workflow.RunURL, "/"+manifest.Workflow.RunID) || len(manifest.Releases) != 2 {
+		return "", 0, false
+	}
+	digest := sha256.Sum256(proof.Manifest)
+	digestText := hex.EncodeToString(digest[:])
+	statement, err := source.verifier(proof.Bundle, "sha256", digestText)
+	if err != nil || !qualificationStatementBinds(statement, digestText) {
+		return "", 0, false
+	}
+	for _, candidate := range manifest.Releases {
+		if candidate.Tag != release.Tag {
+			continue
+		}
+		if candidate.Sequence == 0 || candidate.ReleaseID == 0 || candidate.Commit != release.TargetCommitish || candidate.Identity.Repository != softwarelifecycle.Repository || candidate.Identity.Tag != release.Tag || candidate.Identity.Commit != release.TargetCommitish || !hashPattern.MatchString(candidate.Identity.IndexSHA256) || len(candidate.Assets) != len(metadata) {
+			return "", 0, false
+		}
+		seen := map[string]bool{}
+		for _, asset := range candidate.Assets {
+			got, ok := metadata[asset.Name]
+			if !ok || seen[asset.Name] || asset.Size != got.Size || asset.SHA256 != got.SHA256 {
+				return "", 0, false
+			}
+			seen[asset.Name] = true
+		}
+		return candidate.Identity.IndexSHA256, candidate.Sequence, candidate.Identity.IndexSHA256 == metadata["release-index.json"].SHA256
+	}
+	return "", 0, false
+}
+
+func qualificationStatementBinds(body []byte, digest string) bool {
+	if len(body) == 0 || len(body) > maxBundleBytes || softwarelifecycle.ValidateUniqueJSON(body) != nil {
+		return false
+	}
+	var statement struct {
+		Type    string `json:"_type"`
+		Subject []struct {
+			Name   string            `json:"name"`
+			Digest map[string]string `json:"digest"`
+		} `json:"subject"`
+	}
+	return json.Unmarshal(body, &statement) == nil && statement.Type == "https://in-toto.io/Statement/v1" && len(statement.Subject) == 1 && statement.Subject[0].Name == "qualification-manifest.json" && len(statement.Subject[0].Digest) == 1 && statement.Subject[0].Digest["sha256"] == digest
 }
 
 func stableAcceptanceRecord(body, tag, commit, indexSHA256 string) bool {
@@ -581,7 +680,7 @@ func (source Source) bundle(ctx context.Context, attestation githubAttestation) 
 
 func sigstoreVerifier(trustedRoot *root.TrustedRoot) BundleVerifier {
 	return func(body []byte, algorithm, digest string) ([]byte, error) {
-		if trustedRoot == nil || algorithm != "sha1" || !commitPattern.MatchString(digest) || len(body) == 0 || len(body) > maxBundleBytes {
+		if trustedRoot == nil || algorithm != "sha1" && algorithm != "sha256" || algorithm == "sha1" && !commitPattern.MatchString(digest) || algorithm == "sha256" && !hashPattern.MatchString(digest) || len(body) == 0 || len(body) > maxBundleBytes {
 			return nil, errors.New("bundle verification refused")
 		}
 		var releaseBundle bundle.Bundle
@@ -593,6 +692,9 @@ func sigstoreVerifier(trustedRoot *root.TrustedRoot) BundleVerifier {
 			return nil, errors.New("bundle verification refused")
 		}
 		identity, err := verify.NewShortCertificateIdentity("", ".*", "https://dotcom.releases.github.com", "")
+		if algorithm == "sha256" {
+			identity, err = verify.NewShortCertificateIdentity("https://token.actions.githubusercontent.com", "", "https://github.com/albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main", "")
+		}
 		digestBytes, decodeErr := hex.DecodeString(digest)
 		if err != nil || decodeErr != nil {
 			return nil, errors.New("bundle verification refused")

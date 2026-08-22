@@ -116,7 +116,7 @@ func TestCandidateConstructsDraftsAndSignsTheQualificationBoundary(t *testing.T)
 		}
 	}
 	assertActionsPinned(t, workflow)
-	sign := workflow[strings.Index(workflow, "  sign:"):strings.Index(workflow, "  cleanup-unqualified:")]
+	sign := workflow[strings.Index(workflow, "  sign:"):strings.Index(workflow, "  acceptance-vps:")]
 	attestation := strings.LastIndex(sign, "uses: actions/attest-build-provenance@")
 	manifestUpload := strings.LastIndex(sign, "name: signed-qualification-manifest")
 	if manifestUpload < 0 || attestation < manifestUpload {
@@ -126,6 +126,48 @@ func TestCandidateConstructsDraftsAndSignsTheQualificationBoundary(t *testing.T)
 	if strings.Contains(cleanup, "A_TAG:") || strings.Contains(cleanup, "B_TAG:") || !strings.Contains(cleanup, "BUILD_RELEASES:") {
 		t.Fatal("unsigned cleanup is not limited to releases built by this run")
 	}
+}
+
+func TestCandidateQualifiesTheManifestBoundTwoReleaseJourneyOnTheAcceptanceVPS(t *testing.T) {
+	body, err := os.ReadFile(".github/workflows/candidate.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script, err := os.ReadFile(".github/scripts/installer-updater-vps.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	acceptanceSources := string(body) + string(script)
+	for _, required := range []string{
+		"  acceptance-vps:",
+		"needs: [preflight, sign]",
+		"environment: acceptance-vps",
+		"ACCEPTANCE_VPS_HOST",
+		"ACCEPTANCE_VPS_HOST_KEY",
+		"ACCEPTANCE_VPS_SSH_PRIVATE_KEY",
+		"StrictHostKeyChecking=yes",
+		"gh attestation verify qualification-manifest.json",
+		"go build -o handoff/sbxr-release ./cmd/sbxr-release",
+		"curl -fsSL https://github.com/albertloky/SBXR/releases/latest/download/install.sh | sudo bash",
+		"SOFTWARE-LIFECYCLE-CHECK-UPDATE-AVAILABLE",
+		"SOFTWARE-LIFECYCLE-INSTALL-CONCURRENT-MUTATION",
+		"SOFTWARE-LIFECYCLE-CHECK-CONCURRENT-CHANGE",
+		"prepared:Prepared:$A_TAG",
+		"committed:Committed:$B_TAG",
+		"/var/lib/sbxr/installed.json",
+		"/run/lock/sbxr.lock",
+		"update-ca-certificates --fresh",
+		"sbxr-acceptance-record-v1",
+		"Acceptance time: $accepted_at",
+		"RELEASE-INSTALLER-UPDATER-TWO-RELEASE-QUALIFICATION",
+		"Owner Acceptance: Not required",
+		"retention-days: 90",
+	} {
+		if !strings.Contains(acceptanceSources, required) {
+			t.Fatalf("candidate.yml omitted Acceptance VPS contract %q", required)
+		}
+	}
+	assertActionsPinned(t, acceptanceSources)
 }
 
 func assertActionsPinned(t *testing.T, workflow string) {

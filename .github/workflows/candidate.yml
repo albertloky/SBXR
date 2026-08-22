@@ -406,6 +406,214 @@ jobs:
         with:
           subject-path: qualification-manifest.json
 
+  acceptance-vps:
+    needs: [preflight, sign]
+    runs-on: ubuntu-24.04
+    environment: acceptance-vps
+    permissions:
+      actions: read
+      attestations: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ACCEPTANCE_VPS_HOST: ${{ secrets.ACCEPTANCE_VPS_HOST }}
+      ACCEPTANCE_VPS_HOST_KEY: ${{ secrets.ACCEPTANCE_VPS_HOST_KEY }}
+      ACCEPTANCE_VPS_SSH_PRIVATE_KEY: ${{ secrets.ACCEPTANCE_VPS_SSH_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: signed-qualification-manifest
+          path: handoff
+      - name: Verify and assemble the root-only qualification handoff
+        run: |
+          set -euo pipefail
+          test -n "$ACCEPTANCE_VPS_HOST"
+          test -n "$ACCEPTANCE_VPS_HOST_KEY"
+          test -n "$ACCEPTANCE_VPS_SSH_PRIVATE_KEY"
+          cd handoff
+          gh attestation download qualification-manifest.json --repo "$GITHUB_REPOSITORY" --limit 1
+          bundle="$(find . -maxdepth 1 -name 'sha256:*.jsonl' -type f -print -quit)"
+          test -n "$bundle"
+          gh attestation verify qualification-manifest.json --bundle "$bundle" --repo "$GITHUB_REPOSITORY" --signer-workflow albertloky/SBXR/.github/workflows/candidate.yml --source-ref refs/heads/main --source-digest "$GITHUB_SHA" >/dev/null
+          mv "$bundle" qualification.bundle
+          mkdir -m 0700 assets
+          while read -r release; do
+            tag="$(jq -r .tag <<<"$release")"
+            release_id="$(jq -r .release_id <<<"$release")"
+            mkdir -m 0700 "assets/$tag"
+            gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > release.json
+            jq -e --arg tag "$tag" --arg commit "$(jq -r .commit <<<"$release")" '.tag_name == $tag and .target_commitish == $commit and .draft == true and (.assets | length) == 4' release.json >/dev/null
+            while read -r asset; do
+              name="$(jq -r .name <<<"$asset")"
+              proof="$(jq -c --arg name "$name" '.assets[] | select(.name == $name)' <<<"$release")"
+              test -n "$proof"
+              gh api "repos/$GITHUB_REPOSITORY/releases/assets/$(jq -r .id <<<"$asset")" -H 'Accept: application/octet-stream' > "assets/$tag/$name"
+              test "$(stat -c %s "assets/$tag/$name")" -eq "$(jq -r .size <<<"$proof")"
+              test "$(sha256sum "assets/$tag/$name" | cut -d' ' -f1)" = "$(jq -r .sha256 <<<"$proof")"
+            done < <(jq -c '.assets[]' release.json)
+            test "$(find "assets/$tag" -maxdepth 1 -type f -printf '%f\n' | sort)" = "$(printf '%s\n' install.sh release-index.json sbxr-linux-amd64.tar.gz sbxr-linux-arm64.tar.gz | sort)"
+          done < <(jq -c '.releases[]' qualification-manifest.json)
+          cd ..
+          go build -o handoff/sbxr-release ./cmd/sbxr-release
+          cp .github/scripts/installer-updater-vps.sh handoff/
+          openssl req -x509 -newkey rsa:3072 -nodes -days 2 -subj '/CN=SBXR Qualification CA' -keyout handoff/ca.key -out handoff/ca.crt
+          openssl req -newkey rsa:3072 -nodes -subj '/CN=api.github.com' -keyout handoff/gateway.key -out handoff/gateway.csr
+          printf '%s\n' 'subjectAltName=DNS:api.github.com,DNS:github.com' 'extendedKeyUsage=serverAuth' > handoff/gateway.ext
+          openssl x509 -req -days 2 -in handoff/gateway.csr -CA handoff/ca.crt -CAkey handoff/ca.key -CAcreateserial -extfile handoff/gateway.ext -out handoff/gateway.crt
+          rm handoff/ca.key handoff/gateway.csr handoff/gateway.ext handoff/ca.srl handoff/release.json
+      - name: Run the unchanged packaged A-to-B journey
+        id: journey
+        run: |
+          set -euo pipefail
+          install -m 0600 /dev/null ssh.key
+          printf '%s\n' "$ACCEPTANCE_VPS_SSH_PRIVATE_KEY" > ssh.key
+          printf '%s %s\n' "$ACCEPTANCE_VPS_HOST" "$ACCEPTANCE_VPS_HOST_KEY" > known_hosts
+          ssh_options=(-i "$PWD/ssh.key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$PWD/known_hosts" -o ConnectTimeout=15)
+          cleanup() {
+            rm -f ssh.key known_hosts handoff/gateway.key
+          }
+          trap cleanup EXIT
+          tar -C handoff -czf qualification-handoff.tgz qualification-manifest.json qualification.bundle installer-updater-vps.md installer-updater-vps.sh sbxr-release gateway.crt gateway.key ca.crt assets
+          scp "${ssh_options[@]}" qualification-handoff.tgz "root@$ACCEPTANCE_VPS_HOST:/root/qualification-handoff.tgz"
+          ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'bash -se' <<'REMOTE'
+          test "$(. /etc/os-release; printf '%s:%s' "$ID" "$VERSION_ID")" = ubuntu:24.04
+          test "$(uname -m)" = x86_64
+          test ! -e /usr/local/bin/sbxr
+          test ! -e /var/lib/sbxr
+          install -d -m 0700 /run/sbxr-qualification
+          tar -xzf /root/qualification-handoff.tgz -C /run/sbxr-qualification
+          chmod 0700 /run/sbxr-qualification/sbxr-release /run/sbxr-qualification/installer-updater-vps.sh
+          chmod 0600 /run/sbxr-qualification/qualification-manifest.json /run/sbxr-qualification/qualification.bundle /run/sbxr-qualification/gateway.key
+          cp -a /etc/hosts /run/sbxr-qualification/hosts.original
+          printf '127.0.0.1 api.github.com github.com\n' >> /etc/hosts
+          install -m 0644 /run/sbxr-qualification/ca.crt /usr/local/share/ca-certificates/sbxr-qualification.crt
+          update-ca-certificates >/dev/null
+          nohup /run/sbxr-qualification/sbxr-release gateway -manifest /run/sbxr-qualification/qualification-manifest.json -bundle /run/sbxr-qualification/qualification.bundle -assets /run/sbxr-qualification/assets -certificate /run/sbxr-qualification/gateway.crt -key /run/sbxr-qualification/gateway.key -control /run/sbxr-qualification >/run/sbxr-qualification/gateway.log 2>&1 &
+          printf '%s\n' "$!" > /run/sbxr-qualification/gateway.pid
+          for _ in $(seq 1 100); do curl -fsS https://api.github.com/repos/albertloky/SBXR/releases/latest >/dev/null && exit 0; sleep .1; done
+          exit 1
+          REMOTE
+          ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'touch /run/sbxr-qualification/original-session; while test -e /run/sbxr-qualification/original-session; do sleep 1; done' &
+          original_session=$!
+          sleep 1
+          kill -0 "$original_session"
+          manifest=handoff/qualification-manifest.json
+          a="$(jq -c '.releases[0]' "$manifest")"
+          b="$(jq -c '.releases[1]' "$manifest")"
+          remote_environment="A_TAG=$(jq -r .tag <<<"$a") A_SEQUENCE=$(jq -r .sequence <<<"$a") A_COMMIT=$(jq -r .commit <<<"$a") A_INDEX_SHA256=$(jq -r .release_identity.release_index_sha256 <<<"$a") B_TAG=$(jq -r .tag <<<"$b") B_SEQUENCE=$(jq -r .sequence <<<"$b") B_COMMIT=$(jq -r .commit <<<"$b") B_INDEX_SHA256=$(jq -r .release_identity.release_index_sha256 <<<"$b") MODE=${{ inputs.mode }}"
+          ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" "$remote_environment /run/sbxr-qualification/installer-updater-vps.sh" &
+          journey=$!
+          if test '${{ inputs.mode }}' = rescue; then
+            stages=(rescue-direct-b rescue-source-a rescue-replace-b)
+          else
+            stages=(installed-a pre-prepared recovered-prepared recovered-activated recovered-committed)
+          fi
+          for stage in "${stages[@]}"; do
+            for _ in $(seq 1 3600); do
+              if ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" "test -e /run/sbxr-qualification/stage-$stage"; then break; fi
+              kill -0 "$journey"
+              sleep 1
+            done
+            kill -0 "$original_session"
+            ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'true'
+            ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" "touch /run/sbxr-qualification/stage-$stage-ack"
+          done
+          wait "$journey"
+          kill -0 "$original_session"
+          scp "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST:/run/sbxr-qualification/acceptance-vps-evidence.json" handoff/
+          jq -e '.schema == "sbxr-acceptance-vps-evidence-v1" and .secret_safe == true' handoff/acceptance-vps-evidence.json >/dev/null
+          ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'bash -se' <<'REMOTE'
+          cp -a /run/sbxr-qualification/hosts.original /etc/hosts
+          rm -f /usr/local/share/ca-certificates/sbxr-qualification.crt
+          update-ca-certificates --fresh >/dev/null
+          kill "$(cat /run/sbxr-qualification/gateway.pid)"
+          rm -f /run/sbxr-qualification/original-session
+          find /run/sbxr-qualification -depth -delete
+          rm -f /root/qualification-handoff.tgz
+          test "$(getent ahostsv4 api.github.com | awk 'NR==1 {print $1}')" != 127.0.0.1
+          test "$(getent ahostsv4 github.com | awk 'NR==1 {print $1}')" != 127.0.0.1
+          normal_release="$(curl -fsS https://api.github.com/repos/albertloky/SBXR/releases/latest)"
+          ! grep -F sbxr_qualification <<<"$normal_release"
+          curl -fsSI https://github.com/ >/dev/null
+          test "$(find /var/lib/sbxr -mindepth 1 -maxdepth 1 -printf '%f\n')" = installed.json
+          printf '0\n' | script -qec 'env TERM=xterm-256color LANG=C.UTF-8 /usr/local/bin/sbxr' /dev/null | grep -F 'Status: Ready'
+          REMOTE
+          wait "$original_session"
+      - name: Write separate machine-verifiable A and B Acceptance Records
+        env:
+          MODE: ${{ inputs.mode }}
+          SOURCE_STATE: ${{ needs.preflight.outputs.source_state }}
+          DEFECT_URL: ${{ inputs.defect_issue_url }}
+          FAILED_RUN: ${{ inputs.failed_normal_run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -m 0700 acceptance-records
+          result=RELEASE-INSTALLER-UPDATER-TWO-RELEASE-QUALIFICATION
+          test "$MODE" = normal || result=RELEASE-INSTALLER-UPDATER-RESCUE-QUALIFICATION
+          go_toolchain="$(go version | awk '{print $3}')"
+          accepted_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          workflow_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          journey="$(cat handoff/acceptance-vps-evidence.json)"
+          for index in 0 1; do
+            release="$(jq -c ".releases[$index]" handoff/qualification-manifest.json)"
+            tag="$(jq -r .tag <<<"$release")"
+            role='Clean-installed source release'
+            test "$index" -eq 0 || role='Discovered, installed, recovered, final latest release'
+            test "$MODE" = normal || role='Rescue direct-install and lower-sequence replacement release'
+            canonical="$(jq -cnS --arg schema sbxr-acceptance-record-v1 --arg repository "$GITHUB_REPOSITORY" --arg tag "$tag" --arg commit "$(jq -r .commit <<<"$release")" --arg index_sha256 "$(jq -r .release_identity.release_index_sha256 <<<"$release")" --argjson sequence "$(jq .sequence <<<"$release")" --arg workflow "$workflow_url" --arg accepted_at "$accepted_at" --arg role "$role" --arg code "$result" --argjson assets "$(jq .assets <<<"$release")" --argjson journey "$journey" '{schema:$schema,release_identity:{repository:$repository,tag:$tag,commit:$commit,release_index_sha256:$index_sha256},sequence:$sequence,assets:$assets,workflow_run:$workflow,accepted_at:$accepted_at,runner:"Ubuntu Server 24.04 linux/amd64",stages:{module_verification:"Passed",seam_verification:"Passed",integrated_verification:"Passed on live Ubuntu Server 24.04 amd64",codex_live_acceptance:"Passed",owner_acceptance:"Not required"},journey:$journey,qualification_role:$role,stable_result_code:$code,secret_safe_result:"Passed",evidence:[($workflow+"#artifacts")]}' )"
+            record="acceptance-records/$tag.md"
+            {
+              echo '# SBXR Installer-Updater Acceptance Record'
+              echo 'Status: Qualified'
+              echo "Repository: $GITHUB_REPOSITORY"
+              echo "Tag: $tag"
+              echo "Commit: $(jq -r .commit <<<"$release")"
+              echo "Release index SHA-256: $(jq -r .release_identity.release_index_sha256 <<<"$release")"
+              echo "Sequence: $(jq -r .sequence <<<"$release")"
+              echo "Workflow evidence: $workflow_url"
+              echo "Acceptance time: $accepted_at"
+              echo 'Runner: Ubuntu Server 24.04 linux/amd64'
+              echo "Go toolchain: $go_toolchain"
+              echo 'Public verifier: 1.3.0 26B3382D5700AFBCD84F980D1D5B6C52BFF743DC2A8EE86B8B44C8E1245CE485'
+              echo 'Secret-safe result: Passed'
+              echo "Qualification role: $role"
+              echo "Stable result code: $result"
+              echo 'Module Verification: Passed'
+              echo 'Seam Verification: Passed'
+              echo 'Integrated Verification: Passed on live Ubuntu Server 24.04 amd64'
+              echo 'Codex Live Acceptance: Passed'
+              echo 'Owner Acceptance: Not required'
+              jq -r '.assets[] | "Asset: \(.name) \(.size) \(.sha256)"' <<<"$release"
+              if test "$MODE" = rescue; then
+                echo "Rescue defect evidence: $DEFECT_URL"
+                echo "Failed normal run evidence: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$FAILED_RUN"
+                echo 'Normal journey waiver: Reproducible installed-source defect made the normal menu journey impossible'
+              fi
+              echo '```json'
+              echo "$canonical"
+              echo '```'
+            } > "$record"
+            if test "$index" -eq 1 || test "$SOURCE_STATE" = initial-normal; then
+              gh release edit "$tag" --draft --notes-file "$record"
+            fi
+          done
+          if grep -aERq 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer ' acceptance-records handoff/acceptance-vps-evidence.json; then exit 1; elif test $? -ne 1; then exit 1; fi
+          cat acceptance-records/*.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: installer-updater-acceptance-${{ github.run_id }}
+          path: |
+            acceptance-records
+            handoff/acceptance-vps-evidence.json
+            handoff/qualification-manifest.json
+          if-no-files-found: error
+          retention-days: 90
+
   cleanup-unqualified:
     if: always() && needs.drafts.result != 'skipped' && needs.sign.result != 'success'
     needs: [preflight, drafts, sign]

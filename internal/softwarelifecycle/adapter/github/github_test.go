@@ -126,6 +126,52 @@ func TestSourceChecksOnlyTheQualifiedFourAssetLatestRelease(t *testing.T) {
 	}
 }
 
+func TestSourceChecksAManifestBoundQualificationReleaseWithoutAStableRecord(t *testing.T) {
+	fixture := newLatestReleaseFixture(t)
+	fixture.release.Body = ""
+	assets := make([]map[string]any, 0, len(fixture.release.Assets))
+	for _, asset := range fixture.release.Assets {
+		assets = append(assets, map[string]any{"name": asset.Name, "size": asset.Size, "sha256": strings.TrimPrefix(asset.Digest, "sha256:")})
+	}
+	manifest, err := json.Marshal(map[string]any{
+		"schema":     "sbxr-qualification-manifest-v1",
+		"repository": softwarelifecycle.Repository,
+		"workflow": map[string]any{
+			"path": ".github/workflows/candidate.yml", "ref": "albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main",
+			"commit": fixtureCommit, "run_id": "123", "run_url": "https://github.com/albertloky/SBXR/actions/runs/123",
+		},
+		"releases": []any{map[string]any{
+			"tag": "v1.9.9", "sequence": 16, "commit": fixtureCommit, "release_id": 6,
+			"release_identity": map[string]any{"repository": softwarelifecycle.Repository, "tag": "v1.9.9", "commit": fixtureCommit, "release_index_sha256": strings.Repeat("a", 64)},
+			"assets":           assets,
+		}, map[string]any{
+			"tag": "v2.0.0", "sequence": 17, "commit": fixtureCommit, "release_id": 7,
+			"release_identity": map[string]any{"repository": softwarelifecycle.Repository, "tag": "v2.0.0", "commit": fixtureCommit, "release_index_sha256": fixture.attested["release-index.json"]},
+			"assets":           assets,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.release.Qualification = &qualificationRelease{Manifest: manifest, Bundle: json.RawMessage(`{"fixture":true}`)}
+	digest := sha256.Sum256(manifest)
+	verifier := func(body []byte, algorithm, gotDigest string) ([]byte, error) {
+		if string(body) != `{"fixture":true}` || algorithm != "sha256" || gotDigest != hex.EncodeToString(digest[:]) {
+			return nil, errors.New("qualification verifier refused")
+		}
+		return json.Marshal(map[string]any{
+			"_type":   "https://in-toto.io/Statement/v1",
+			"subject": []any{map[string]any{"name": "qualification-manifest.json", "digest": map[string]string{"sha256": gotDigest}}},
+		})
+	}
+
+	got, outcome := NewWithEndpoint(fixture.server.Client(), fixture.server.URL, verifier).CheckLatest(t.Context())
+
+	if outcome != softwarelifecycle.LatestReleaseAccepted || got.Sequence != 17 || got.Identity.Tag != "v2.0.0" {
+		t.Fatalf("CheckLatest() = %#v, %v", got, outcome)
+	}
+}
+
 func TestSourceCheckLatestRefusesHostileOrChangedReleaseFacts(t *testing.T) {
 	for _, test := range []struct {
 		name   string
