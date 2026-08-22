@@ -541,11 +541,12 @@ jobs:
           tar -xzf /root/qualification-handoff.tgz -C /run/sbxr-qualification
           chmod 0700 /run/sbxr-qualification/sbxr-release /run/sbxr-qualification/installer-updater-vps.sh
           chmod 0600 /run/sbxr-qualification/qualification-manifest.json /run/sbxr-qualification/qualification.bundle /run/sbxr-qualification/gateway.key
+          install -m 0700 /run/sbxr-qualification/sbxr-release /root/sbxr-qualification-gateway
           cp -a /etc/hosts /run/sbxr-qualification/hosts.original
-          printf '127.0.0.1 api.github.com github.com\n' >> /etc/hosts
+          printf '\n127.0.0.1 api.github.com github.com\n' >> /etc/hosts
           install -m 0644 /run/sbxr-qualification/ca.crt /usr/local/share/ca-certificates/sbxr-qualification.crt
           update-ca-certificates >/dev/null
-          nohup /run/sbxr-qualification/sbxr-release gateway -manifest /run/sbxr-qualification/qualification-manifest.json -bundle /run/sbxr-qualification/qualification.bundle -assets /run/sbxr-qualification/assets -certificate /run/sbxr-qualification/gateway.crt -key /run/sbxr-qualification/gateway.key -control /run/sbxr-qualification >/run/sbxr-qualification/gateway.log 2>&1 &
+          nohup /root/sbxr-qualification-gateway gateway -manifest /run/sbxr-qualification/qualification-manifest.json -bundle /run/sbxr-qualification/qualification.bundle -assets /run/sbxr-qualification/assets -certificate /run/sbxr-qualification/gateway.crt -key /run/sbxr-qualification/gateway.key -control /run/sbxr-qualification >/run/sbxr-qualification/gateway.log 2>&1 &
           printf '%s\n' "$!" > /run/sbxr-qualification/gateway.pid
           for _ in $(seq 1 100); do curl -fsS https://api.github.com/repos/albertloky/SBXR/releases/latest >/dev/null && exit 0; sleep .1; done
           exit 1
@@ -558,7 +559,7 @@ jobs:
           a="$(jq -c '.releases[0]' "$manifest")"
           b="$(jq -c '.releases[1]' "$manifest")"
           remote_environment="A_TAG=$(jq -r .tag <<<"$a") A_SEQUENCE=$(jq -r .sequence <<<"$a") A_COMMIT=$(jq -r .commit <<<"$a") A_INDEX_SHA256=$(jq -r .release_identity.release_index_sha256 <<<"$a") B_TAG=$(jq -r .tag <<<"$b") B_SEQUENCE=$(jq -r .sequence <<<"$b") B_COMMIT=$(jq -r .commit <<<"$b") B_INDEX_SHA256=$(jq -r .release_identity.release_index_sha256 <<<"$b") MODE=${{ inputs.mode }}"
-          ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" "$remote_environment /run/sbxr-qualification/installer-updater-vps.sh" &
+          ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" "$remote_environment /usr/bin/bash /run/sbxr-qualification/installer-updater-vps.sh" &
           journey=$!
           if test '${{ inputs.mode }}' = rescue; then
             stages=(rescue-direct-b rescue-source-a rescue-replace-b)
@@ -589,6 +590,7 @@ jobs:
           rm -f /run/sbxr-qualification/original-session
           find /run/sbxr-qualification -depth -delete
           rm -f /root/qualification-handoff.tgz
+          rm -f /root/sbxr-qualification-gateway
           test "$(getent ahostsv4 api.github.com | awk 'NR==1 {print $1}')" != 127.0.0.1
           test "$(getent ahostsv4 github.com | awk 'NR==1 {print $1}')" != 127.0.0.1
           normal_release="$(curl -fsS https://api.github.com/repos/albertloky/SBXR/releases/latest)"
