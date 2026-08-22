@@ -201,10 +201,10 @@ jobs:
               test "$(grep -Fxc "Sequence: $A_SEQUENCE" source-a-acceptance-record.txt)" -eq 1
               test "$(grep -Fxc "Release index SHA-256: $(sha256sum source-a/release-index.json | cut -d' ' -f1)" source-a-acceptance-record.txt)" -eq 1
               for name in install.sh release-index.json sbxr-linux-amd64.tar.gz sbxr-linux-arm64.tar.gz; do
-              size="$(stat -c %s "source-a/$name")"
-              sha256="$(sha256sum "source-a/$name" | cut -d' ' -f1)"
-              test "$(grep -Fxc "Asset: $name $size $sha256" source-a-acceptance-record.txt)" -eq 1
-            done
+                size="$(stat -c %s "source-a/$name")"
+                sha256="$(sha256sum "source-a/$name" | cut -d' ' -f1)"
+                test "$(grep -Fxc "Asset: $name $size $sha256" source-a-acceptance-record.txt)" -eq 1
+              done
             fi
             commit="$(jq -r .target_commitish source-a-release.json)"
             index_sha256="$(sha256sum source-a/release-index.json | cut -d' ' -f1)"
