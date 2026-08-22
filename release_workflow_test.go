@@ -311,6 +311,8 @@ func TestStablePublishesOnlyTheSignedQualifiedDraftsAndProvesStableNoUpdate(t *t
 		"--prerelease=false",
 		"--latest",
 		"for attempt in $(seq 1 60)",
+		"check_deadline=$((SECONDS + 600))",
+		`test "$SECONDS" -lt "$check_deadline"`,
 		"predicate_type=release",
 		"Code: SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT",
 		"releases/latest/download/install.sh",
