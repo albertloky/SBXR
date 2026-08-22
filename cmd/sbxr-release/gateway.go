@@ -219,7 +219,7 @@ func (gateway *qualificationGateway) serveLatest(response http.ResponseWriter) {
 	response.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(response).Encode(map[string]any{
 		"tag_name": release.tag, "target_commitish": release.commit, "body": "", "draft": false, "prerelease": false, "immutable": true, "assets": assets,
-		"sbxr_qualification": map[string]any{"manifest": gateway.manifest, "bundle": gateway.bundle},
+		"sbxr_qualification": map[string]any{"manifest": []byte(gateway.manifest), "bundle": []byte(gateway.bundle)},
 	})
 }
 

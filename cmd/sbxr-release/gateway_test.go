@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -35,8 +36,10 @@ func TestQualificationGatewayServesOnlyManifestBoundReleaseRequests(t *testing.T
 			"assets":           assets,
 		})
 	}
-	manifest, _ := json.Marshal(map[string]any{"schema": "sbxr-qualification-manifest-v1", "repository": "albertloky/SBXR", "releases": releases})
-	gateway, err := newQualificationGateway(manifest, json.RawMessage(`{"bundle":true}`), root)
+	manifest, _ := json.MarshalIndent(map[string]any{"schema": "sbxr-qualification-manifest-v1", "repository": "albertloky/SBXR", "releases": releases}, "", "  ")
+	manifest = append(manifest, '\n')
+	bundle := json.RawMessage("{\n  \"bundle\": true\n}\n")
+	gateway, err := newQualificationGateway(manifest, bundle, root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,6 +50,15 @@ func TestQualificationGatewayServesOnlyManifestBoundReleaseRequests(t *testing.T
 	gateway.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"tag_name":"v2.0.1"`) || !strings.Contains(response.Body.String(), `"sbxr_qualification"`) {
 		t.Fatalf("latest response = %d %s", response.Code, response.Body.String())
+	}
+	var latest struct {
+		Qualification struct {
+			Manifest []byte `json:"manifest"`
+			Bundle   []byte `json:"bundle"`
+		} `json:"sbxr_qualification"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &latest); err != nil || !bytes.Equal(latest.Qualification.Manifest, manifest) || !bytes.Equal(latest.Qualification.Bundle, bundle) {
+		t.Fatal("latest response changed signed qualification bytes")
 	}
 
 	request = httptest.NewRequest(http.MethodGet, "https://github.com/albertloky/SBXR/releases/latest/download/install.sh", nil)

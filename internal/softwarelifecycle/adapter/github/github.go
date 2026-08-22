@@ -215,8 +215,8 @@ type githubRelease struct {
 }
 
 type qualificationRelease struct {
-	Manifest json.RawMessage `json:"manifest"`
-	Bundle   json.RawMessage `json:"bundle"`
+	Manifest []byte `json:"manifest"`
+	Bundle   []byte `json:"bundle"`
 }
 
 type qualificationManifest struct {
