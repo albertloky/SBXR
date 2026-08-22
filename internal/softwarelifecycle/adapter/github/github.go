@@ -26,10 +26,11 @@ import (
 )
 
 const (
-	Version            = "1.3.0"
-	SigningFingerprint = "26B3382D5700AFBCD84F980D1D5B6C52BFF743DC2A8EE86B8B44C8E1245CE485"
-	apiBaseURL         = "https://api.github.com"
-	maxBundleBytes     = 8 << 20
+	Version                         = "1.3.0"
+	SigningFingerprint              = "26B3382D5700AFBCD84F980D1D5B6C52BFF743DC2A8EE86B8B44C8E1245CE485"
+	qualificationSigningFingerprint = "3C2CC7F357DC064EC527FDCD78DA6E9245C21A381E1ABAA0F2B62B186BCAC1A1"
+	apiBaseURL                      = "https://api.github.com"
+	maxBundleBytes                  = 8 << 20
 )
 
 var (
@@ -39,6 +40,9 @@ var (
 
 //go:embed trusted_root.json
 var trustedRootJSON []byte
+
+//go:embed qualification_trusted_root.json
+var qualificationTrustedRootJSON []byte
 
 type BundleVerifier func([]byte, string, string) ([]byte, error)
 
@@ -50,14 +54,19 @@ type Source struct {
 
 func New() Source {
 	digest := sha256.Sum256(trustedRootJSON)
-	if strings.ToUpper(hex.EncodeToString(digest[:])) != SigningFingerprint {
+	qualificationDigest := sha256.Sum256(qualificationTrustedRootJSON)
+	if strings.ToUpper(hex.EncodeToString(digest[:])) != SigningFingerprint || strings.ToUpper(hex.EncodeToString(qualificationDigest[:])) != qualificationSigningFingerprint {
 		return Source{}
 	}
 	trustedRoot, err := root.NewTrustedRootFromJSON(trustedRootJSON)
 	if err != nil {
 		return Source{}
 	}
-	return NewWithEndpoint(publicClient(), apiBaseURL, sigstoreVerifier(trustedRoot))
+	qualificationTrustedRoot, err := root.NewTrustedRootFromJSON(qualificationTrustedRootJSON)
+	if err != nil {
+		return Source{}
+	}
+	return NewWithEndpoint(publicClient(), apiBaseURL, sigstoreVerifier(trustedRoot, qualificationTrustedRoot))
 }
 
 // NewWithEndpoint replaces only the public HTTPS and bundle-verification boundaries for Seam Verification.
@@ -451,7 +460,7 @@ func (source Source) bundle(ctx context.Context, attestation githubAttestation) 
 	return body, nil
 }
 
-func sigstoreVerifier(trustedRoot *root.TrustedRoot) BundleVerifier {
+func sigstoreVerifier(trustedRoot, qualificationTrustedRoot *root.TrustedRoot) BundleVerifier {
 	return func(body []byte, algorithm, digest string) ([]byte, error) {
 		if trustedRoot == nil || algorithm != "sha1" && algorithm != "sha256" || algorithm == "sha1" && !commitPattern.MatchString(digest) || algorithm == "sha256" && !hashPattern.MatchString(digest) || len(body) == 0 || len(body) > maxBundleBytes {
 			return nil, errors.New("bundle verification refused")
@@ -460,7 +469,13 @@ func sigstoreVerifier(trustedRoot *root.TrustedRoot) BundleVerifier {
 		if err := releaseBundle.UnmarshalJSON(body); err != nil {
 			return nil, fmt.Errorf("bundle verification refused: %w", err)
 		}
-		verifier, err := verify.NewVerifier(trustedRoot, verify.WithSignedTimestamps(1))
+		verifierRoot := trustedRoot
+		verifierOptions := []verify.VerifierOption{verify.WithSignedTimestamps(1)}
+		if algorithm == "sha256" {
+			verifierRoot = qualificationTrustedRoot
+			verifierOptions = []verify.VerifierOption{verify.WithTransparencyLog(1), verify.WithObserverTimestamps(1)}
+		}
+		verifier, err := verify.NewVerifier(verifierRoot, verifierOptions...)
 		if err != nil {
 			return nil, errors.New("bundle verification refused")
 		}
