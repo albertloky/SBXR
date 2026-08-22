@@ -99,14 +99,18 @@ durable_update_count() {
   awk '
     /\.update\.json\.next.*update\.json.*= 0$/ { awaiting_sync=1; next }
     awaiting_sync && /fsync\(.*\/var\/lib\/sbxr.*\).* = 0( \(DELAYED\))?$/ { count++; awaiting_sync=0 }
+    awaiting_sync && /fsync\(.*\/var\/lib\/sbxr.*<unfinished \.\.\.>$/ { syncing[$1]=1; next }
+    awaiting_sync && ($1 in syncing) && /<\.\.\. fsync resumed>\).* = 0( \(DELAYED\))?$/ { count++; awaiting_sync=0; delete syncing[$1] }
     END { print count+0 }
   ' "$UPDATE_TRACE"
 }
 
 durable_activation_count() {
   awk '
-    /\.sbxr-update-candidate.*usr\/local\/bin\/sbxr.*= 0$/ { awaiting_sync=1; next }
+    /\.sbxr-update-candidate.*(usr\/local\/bin\/sbxr|usr\/local\/bin>.*"sbxr").*= 0$/ { awaiting_sync=1; next }
     awaiting_sync && /fsync\(.*\/usr\/local\/bin.*\).* = 0( \(DELAYED\))?$/ { count++; awaiting_sync=0 }
+    awaiting_sync && /fsync\(.*\/usr\/local\/bin.*<unfinished \.\.\.>$/ { syncing[$1]=1; next }
+    awaiting_sync && ($1 in syncing) && /<\.\.\. fsync resumed>\).* = 0( \(DELAYED\))?$/ { count++; awaiting_sync=0; delete syncing[$1] }
     END { print count+0 }
   ' "$UPDATE_TRACE"
 }
