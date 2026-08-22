@@ -3,6 +3,14 @@ name: Publish qualified stable releases
 on:
   workflow_dispatch:
     inputs:
+      operation:
+        description: Publish the qualification or abandon and burn it
+        required: true
+        default: publish
+        type: choice
+        options:
+          - publish
+          - abandon
       qualification_run_id:
         description: Successful candidate.yml run ID
         required: true
@@ -20,7 +28,7 @@ env:
 
 jobs:
   preflight:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && inputs.operation == 'publish'
     runs-on: ubuntu-24.04
     environment: acceptance-vps
     permissions:
@@ -167,6 +175,7 @@ jobs:
           retention-days: 90
 
   publish:
+    if: inputs.operation == 'publish'
     needs: preflight
     runs-on: ubuntu-24.04
     environment: stable-publication
@@ -192,6 +201,7 @@ jobs:
       - name: Publish unchanged drafts in the approved order and publicly verify them
         run: |
           set -euo pipefail
+          printf '%s\n' prepublication > publication-stage
           manifest=verified/qualification-manifest.json
           qualification_run_id="$(jq -r .workflow.run_id "$manifest")"
           created="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$qualification_run_id" --jq .created_at | xargs -I{} date -u -d {} +%s)"
@@ -277,10 +287,12 @@ jobs:
             source_tag="$(jq -r .releases[0].tag "$manifest")"
             recheck_draft 0
             gh release edit "$source_tag" --draft=false --prerelease=false --latest
+            printf '%s\n' initial-a-public-verification-failure > publication-stage
             verify_public 0 true
           fi
           latest_tag="$(jq -r .releases[1].tag "$manifest")"
           recheck_draft 1
+          printf '%s\n' b-publication-or-verification-failure > publication-stage
           gh release edit "$latest_tag" --draft=false --prerelease=false --latest
           verify_public 1 true
           curl -fsSL --retry 5 --retry-all-errors "https://github.com/$GITHUB_REPOSITORY/releases/latest/download/install.sh" -o latest-install.sh
@@ -290,6 +302,7 @@ jobs:
       - name: Prove stable B install, Check, and Update are exact no-ops
         run: |
           set -euo pipefail
+          printf '%s\n' stable-no-update-failure > publication-stage
           test -n "$ACCEPTANCE_VPS_HOST"
           test -n "$ACCEPTANCE_VPS_HOST_KEY"
           test -n "$ACCEPTANCE_VPS_SSH_PRIVATE_KEY"
@@ -355,9 +368,164 @@ jobs:
           jq -nS --arg schema sbxr-stable-publication-evidence-v1 --arg workflow "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --arg qualification "$(jq -r .workflow.run_url verified/qualification-manifest.json)" --arg latest "$(jq -r .releases[1].tag verified/qualification-manifest.json)" '{schema:$schema,workflow_run:$workflow,qualification_run:$qualification,latest_tag:$latest,public_verification:"Passed",stable_no_update:"Passed",secret_safe_result:"Passed"}' > stable-evidence/result.json
           if grep -aERq 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer ' stable-evidence; then exit 1; elif test $? -ne 1; then exit 1; fi
           cat stable-evidence/result.json >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' complete > publication-stage
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: stable-publication-${{ github.run_id }}
           path: stable-evidence
           if-no-files-found: error
           retention-days: 90
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: stable-publication-stage
+          path: publication-stage
+          if-no-files-found: ignore
+          retention-days: 90
+
+  finalize-failure:
+    if: always() && (inputs.operation == 'abandon' || needs.preflight.result != 'success' || needs.publish.result != 'success')
+    needs: [preflight, publish]
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      attestations: write
+      contents: write
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+      - name: Recheck the signed qualification and select the approved failure outcome
+        id: failure
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$QUALIFICATION_RUN_ID" | grep -Eq '^[1-9][0-9]*$'
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$QUALIFICATION_RUN_ID" > candidate-run.json
+          jq -e '.path == ".github/workflows/candidate.yml" and .event == "workflow_dispatch" and .conclusion == "success"' candidate-run.json >/dev/null
+          mkdir -m 0700 failure
+          gh run download "$QUALIFICATION_RUN_ID" --repo "$GITHUB_REPOSITORY" --name signed-qualification-manifest --dir failure
+          manifest=failure/qualification-manifest.json
+          gh attestation verify "$manifest" --repo "$GITHUB_REPOSITORY" --signer-workflow albertloky/SBXR/.github/workflows/candidate.yml --source-ref refs/heads/main --source-digest "$(jq -r .head_sha candidate-run.json)" >/dev/null
+          jq -e --arg run "$QUALIFICATION_RUN_ID" '.schema == "sbxr-qualification-manifest-v1" and .repository == env.GITHUB_REPOSITORY and .workflow.run_id == $run and (.releases | length) == 2' "$manifest" >/dev/null
+          created="$(date -u -d "$(jq -r .created_at candidate-run.json)" +%s)"
+          age="$(($(date -u +%s) - created))"
+          reason=prepublication-failure
+          if test '${{ inputs.operation }}' = abandon; then reason=owner-abandoned
+          elif test "$age" -ge "$((90 * 24 * 60 * 60))"; then reason=qualification-expired
+          elif gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name stable-publication-stage --dir failure/stage 2>/dev/null; then reason="$(cat failure/stage/publication-stage)"
+          fi
+          test "$reason" != complete
+          source_state="$(jq -r .source_state "$manifest")"
+          if test "$reason" = prepublication-failure && test "$source_state" = initial-normal; then
+            source_release="$(jq -c '.releases[0]' "$manifest")"
+            source_release_id="$(jq -r .release_id <<<"$source_release")"
+            source_tag="$(jq -r .tag <<<"$source_release")"
+            source_commit="$(jq -r .commit <<<"$source_release")"
+            if gh api "repos/$GITHUB_REPOSITORY/releases/$source_release_id" > failure/source-a.json 2>/dev/null &&
+               jq -e --arg tag "$source_tag" --arg commit "$source_commit" --argjson id "$source_release_id" '.id == $id and .tag_name == $tag and .target_commitish == $commit and .draft == false and .prerelease == false and .immutable == true and (.assets | length) == 4' failure/source-a.json >/dev/null &&
+               gh api "repos/$GITHUB_REPOSITORY/attestations/sha1:$source_commit?predicate_type=release&per_page=100" --jq 'select((.attestations | length) == 1 and .attestations[0].initiator == "github")' >/dev/null 2>&1; then
+              mkdir -m 0700 failure/source-a
+              source_a_valid=true
+              while read -r asset; do
+                name="$(jq -r .name <<<"$asset")"
+                if ! curl -fsSL "https://github.com/$GITHUB_REPOSITORY/releases/download/$source_tag/$name" -o "failure/source-a/$name" ||
+                   test "$(sha256sum "failure/source-a/$name" | cut -d' ' -f1)" != "$(jq -r .sha256 <<<"$asset")"; then source_a_valid=false; fi
+              done < <(jq -c '.assets[]' <<<"$source_release")
+              if test "$source_a_valid" = true; then reason=b-publication-or-verification-failure; else reason=initial-a-public-verification-failure; fi
+            else
+              reason=initial-a-public-verification-failure
+            fi
+          fi
+          jq -n '[]' > failure/targets.json
+          if test "$reason" = initial-a-public-verification-failure; then
+            jq '.releases' "$manifest" > failure/targets.json
+          elif test "$reason" = b-publication-or-verification-failure || test "$reason" = stable-no-update-failure; then
+            jq '[.releases[1]]' "$manifest" > failure/targets.json
+          elif test "$source_state" = initial-normal; then
+            jq '.releases' "$manifest" > failure/targets.json
+          else
+            jq '[.releases[1]]' "$manifest" > failure/targets.json
+          fi
+          test "$(jq length failure/targets.json)" -gt 0
+          outcome=withdraw
+          test "$reason" != prepublication-failure || outcome=failed-prerelease
+          printf 'reason=%s\n' "$reason" >> "$GITHUB_OUTPUT"
+          printf 'outcome=%s\n' "$outcome" >> "$GITHUB_OUTPUT"
+      - name: Recheck and withdraw only the failed targets
+        run: |
+          set -euo pipefail
+          git config user.name github-actions
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git fetch --force --tags origin
+          mkdir -m 0700 failure/burned failure/rechecked
+          recorded_at="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .created_at)"
+          : > failure/burn-refs
+          while read -r release; do
+            tag="$(jq -r .tag <<<"$release")"
+            sequence="$(jq -r .sequence <<<"$release")"
+            commit="$(jq -r .commit <<<"$release")"
+            index_sha256="$(jq -r .release_identity.release_index_sha256 <<<"$release")"
+            printf '%s\n' "$release" > "failure/$tag.json"
+            payload="failure/burned/$tag.json"
+            jq -nS --arg original_tag "$tag" --argjson sequence "$sequence" --arg commit "$commit" --arg release_index_sha256 "$index_sha256" --arg qualification_run_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$QUALIFICATION_RUN_ID" --arg reason '${{ steps.failure.outputs.reason }}' --arg recorded_at "$recorded_at" '{original_tag:$original_tag,sequence:$sequence,commit:$commit,release_index_sha256:$release_index_sha256,qualification_run_url:$qualification_run_url,reason:$reason,recorded_at:$recorded_at}' > "$payload"
+            if git rev-parse -q --verify "refs/tags/release-burned/$tag" >/dev/null; then
+              .github/scripts/prepare-burn-tag.sh "$payload" "$tag" "$commit" >/dev/null
+              if ! gh api "repos/$GITHUB_REPOSITORY/releases/$(jq -r .release_id <<<"$release")" >/dev/null 2>&1; then
+                if object="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha 2>/dev/null)"; then test "$object" = "$commit"; fi
+                continue
+              fi
+            fi
+            .github/scripts/recheck-qualified-release.sh "failure/$tag.json" "failure/rechecked/$tag" failure/release.json
+            object="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha)"
+            test "$object" = "$commit"
+            .github/scripts/prepare-burn-tag.sh "$payload" "$tag" "$commit" >> failure/burn-refs
+          done < <(jq -c '.[]' failure/targets.json)
+      - uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661
+        with:
+          subject-path: failure/burned/*.json
+      - name: Publish the complete attested burned ledger atomically
+        run: |
+          set -euo pipefail
+          mapfile -t refs < <(sed '/^$/d' failure/burn-refs)
+          test "${#refs[@]}" -eq 0 || git push --atomic origin "${refs[@]}"
+      - name: Withdraw only the rechecked burned targets
+        if: steps.failure.outputs.outcome == 'withdraw'
+        run: |
+          set -euo pipefail
+          while read -r release; do
+            tag="$(jq -r .tag <<<"$release")"
+            release_id="$(jq -r .release_id <<<"$release")"
+            commit="$(jq -r .commit <<<"$release")"
+            if ! gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" >/dev/null 2>&1; then
+              .github/scripts/prepare-burn-tag.sh "failure/burned/$tag.json" "$tag" "$commit" >/dev/null
+              if object="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha 2>/dev/null)"; then
+                test "$object" = "$commit"
+                gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag"
+              fi
+              continue
+            fi
+            .github/scripts/recheck-qualified-release.sh "failure/$tag.json" "failure/final/$tag" failure/final-release.json
+            test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha)" = "$commit"
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$release_id"
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag"
+          done < <(jq -c '.[]' failure/targets.json)
+      - name: Publish prepublication failures as rechecked failed prereleases
+        if: steps.failure.outputs.outcome == 'failed-prerelease'
+        run: |
+          set -euo pipefail
+          while read -r release; do
+            tag="$(jq -r .tag <<<"$release")"
+            .github/scripts/recheck-qualified-release.sh "failure/$tag.json" "failure/final/$tag" failure/final-release.json
+            record="failure/$tag.failed.md"
+            .github/scripts/write-failed-acceptance-record.sh "failure/$tag.json" failure/final-release.json "$record" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" RELEASE-INSTALLER-UPDATER-PREPUBLICATION-FAILED failure/qualification-manifest.json /dev/null
+            if jq -e '.draft == true and .prerelease == false' failure/final-release.json >/dev/null; then
+              gh release edit "$tag" --notes-file "$record" --draft=false --prerelease --latest=false
+            else
+              jq -e '.draft == false and .prerelease == true and .immutable == true' failure/final-release.json >/dev/null
+              jq -j .body failure/final-release.json | cmp - "$record"
+            fi
+          done < <(jq -c '.[]' failure/targets.json)

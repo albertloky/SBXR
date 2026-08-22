@@ -2,9 +2,47 @@ package architecture_test
 
 import (
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestBurnEvidenceTagCanBeRetriedOnlyWithTheExactPayload(t *testing.T) {
+	directory := t.TempDir()
+	run := func(arguments ...string) string {
+		t.Helper()
+		command := exec.Command(arguments[0], arguments[1:]...)
+		command.Dir = directory
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v: %v\n%s", arguments, err, output)
+		}
+		return string(output)
+	}
+	run("git", "init", "-q")
+	run("git", "config", "user.name", "test")
+	run("git", "config", "user.email", "test@example.com")
+	if err := os.WriteFile(filepath.Join(directory, "file"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run("git", "add", "file")
+	run("git", "commit", "-qm", "initial")
+	if err := os.WriteFile(filepath.Join(directory, "payload.json"), []byte("{\"reason\":\"failure\"}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	commit := strings.TrimSpace(run("git", "rev-parse", "HEAD"))
+	script, err := filepath.Abs(".github/scripts/prepare-burn-tag.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first := run(script, "payload.json", "v2.0.0", commit); first != "refs/tags/release-burned/v2.0.0\n" {
+		t.Fatalf("first burn tag output = %q", first)
+	}
+	if retry := run(script, "payload.json", "v2.0.0", commit); retry != "" {
+		t.Fatalf("exact retry output = %q", retry)
+	}
+}
 
 func TestContinuousVerificationBuildsAndRunsTheFourAssetPackageNatively(t *testing.T) {
 	body, err := os.ReadFile(".github/workflows/verify.yml")
@@ -70,7 +108,7 @@ func TestCandidateConstructsDraftsAndSignsTheQualificationBoundary(t *testing.T)
 		"release-burned/",
 		"used-sequences.json",
 		"qualification_run_url",
-		"git tag -a \"release-burned/$tag\"",
+		"prepare-burn-tag.sh",
 		"git push --atomic origin",
 		"releases/latest",
 		"gh attestation verify",
@@ -81,13 +119,12 @@ func TestCandidateConstructsDraftsAndSignsTheQualificationBoundary(t *testing.T)
 		"sudo env TERM=xterm-256color LANG=C.UTF-8",
 		"SBXR requires root authority.",
 		"BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY",
-		"gh release create",
+		"gh api --method POST \"repos/$GITHUB_REPOSITORY/releases\"",
 		"--draft",
 		"gh api \"repos/$GITHUB_REPOSITORY/releases/assets/",
 		"cmp \"$directory/$name\" \"downloaded/$tag/$name\"",
 		"environment: acceptance-vps",
 		"actions/runs/$GITHUB_RUN_ID/approvals",
-		"attestations/sha256:$manifest_sha256",
 		"qualification-manifest.json",
 		"actions/attest-build-provenance@",
 		"subject-path: qualification-manifest.json",
@@ -244,6 +281,100 @@ func TestStablePublishesOnlyTheSignedQualifiedDraftsAndProvesStableNoUpdate(t *t
 		t.Fatal("stable publication does not recheck and verify each approved draft before advancing")
 	}
 	assertActionsPinned(t, workflow)
+}
+
+func TestReleaseFailuresWithdrawOnlyRecheckedTargetsAndBurnQualifiedIdentities(t *testing.T) {
+	candidateBody, err := os.ReadFile(".github/workflows/candidate.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stableBody, err := os.ReadFile(".github/workflows/stable.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recheckBody, err := os.ReadFile(".github/scripts/recheck-qualified-release.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordBody, err := os.ReadFile(".github/scripts/write-failed-acceptance-record.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	burnBody, err := os.ReadFile(".github/scripts/prepare-burn-tag.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, stable, recheck, record, burn := string(candidateBody), string(stableBody), string(recheckBody), string(recordBody), string(burnBody)
+	for _, required := range []string{
+		"needs: [preflight, drafts, sign, acceptance-vps]",
+		"needs.acceptance-vps.result != 'success'",
+		"--draft=false --prerelease --latest=false",
+		"post-sign-qualification-failure",
+		"defect-issue.json",
+		".html_url == env.DEFECT_URL and .state == \"open\"",
+		"Publish the rechecked burned releases as failed prereleases",
+		"fully recorded unsigned drafts",
+	} {
+		if !strings.Contains(candidate, required) {
+			t.Fatalf("candidate.yml omitted qualified-failure contract %q", required)
+		}
+	}
+	for _, required := range []string{
+		"operation:",
+		"- publish",
+		"- abandon",
+		"finalize-failure:",
+		"if: always()",
+		"publication-stage",
+		"initial-a-public-verification-failure",
+		"b-publication-or-verification-failure",
+		"stable-no-update-failure",
+		"qualification-expired",
+		"owner-abandoned",
+		"Publish prepublication failures as rechecked failed prereleases",
+		"gh api --method DELETE \"repos/$GITHUB_REPOSITORY/releases/$release_id\"",
+		"gh api --method DELETE \"repos/$GITHUB_REPOSITORY/git/refs/tags/$tag\"",
+		"release-burned/$tag",
+		"git push --atomic origin",
+	} {
+		if !strings.Contains(stable, required) {
+			t.Fatalf("stable.yml omitted withdrawal contract %q", required)
+		}
+	}
+	for _, required := range []string{
+		".id == $release_id and .tag_name == $tag and .target_commitish == $commit",
+		"$release.release_identity == {repository:$repository,tag:$tag,commit:$commit,release_index_sha256:$index}",
+		"sha256sum \"$directory/release-index.json\"",
+	} {
+		if !strings.Contains(recheck, required) {
+			t.Fatalf("release recheck omitted %q", required)
+		}
+	}
+	if strings.Count(candidate, ".github/scripts/recheck-qualified-release.sh") < 2 || strings.Count(stable, ".github/scripts/recheck-qualified-release.sh") < 2 {
+		t.Fatal("release mutations do not share the exact qualified-target recheck")
+	}
+	for _, required := range []string{"Status: Failed prerelease", "Go toolchain:", "Public verifier:", "Qualification role:", "Integrated Verification:", "Codex Live Acceptance:", "evidence:"} {
+		if !strings.Contains(record, required) {
+			t.Fatalf("failed Acceptance Record omitted %q", required)
+		}
+	}
+	if !strings.Contains(burn, "git rev-parse -q --verify") || !strings.Contains(burn, "$(cat \"$payload\")") || strings.Count(candidate, ".github/scripts/prepare-burn-tag.sh") < 1 || strings.Count(stable, ".github/scripts/prepare-burn-tag.sh") < 2 {
+		t.Fatal("burn evidence is not exact and retry-safe")
+	}
+	candidateFailure := candidate[strings.Index(candidate, "cleanup-unqualified:"):]
+	if !strings.Contains(candidateFailure, "gh attestation verify boundary/qualification-manifest.json") ||
+		!strings.Contains(candidateFailure, `.workflow.ref == "albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main"`) ||
+		strings.Index(candidateFailure, "git push --atomic origin") > strings.Index(candidateFailure, `gh release edit "$tag"`) {
+		t.Fatal("candidate failure handling does not verify and burn every identity before release mutation")
+	}
+	stableFailure := stable[strings.Index(stable, "finalize-failure:"):]
+	if strings.Index(stableFailure, "git push --atomic origin") > strings.Index(stableFailure, `gh release edit "$tag"`) ||
+		!strings.Contains(stableFailure, "if: steps.failure.outputs.outcome == 'withdraw'") ||
+		!strings.Contains(stableFailure, "if: steps.failure.outputs.outcome == 'failed-prerelease'") {
+		t.Fatal("stable failure handling does not burn before its approved withdrawal or failed-prerelease outcome")
+	}
+	assertActionsPinned(t, candidate)
+	assertActionsPinned(t, stable)
 }
 
 func assertActionsPinned(t *testing.T, workflow string) {
