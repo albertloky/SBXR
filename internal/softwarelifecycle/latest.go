@@ -9,9 +9,9 @@ import (
 )
 
 type LatestAssetProof struct {
-	Name   string
-	Size   int64
-	SHA256 string
+	Name   string `json:"name"`
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256"`
 }
 
 type latestReleaseIndex struct {
