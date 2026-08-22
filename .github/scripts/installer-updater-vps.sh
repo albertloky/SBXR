@@ -98,7 +98,7 @@ start_update() {
 durable_update_count() {
   awk '
     /\.update\.json\.next.*update\.json.*= 0$/ { awaiting_sync=1; next }
-    awaiting_sync && /fsync\(.*\/var\/lib\/sbxr.*\).* = 0$/ { count++; awaiting_sync=0 }
+    awaiting_sync && /fsync\(.*\/var\/lib\/sbxr.*\).* = 0( \(DELAYED\))?$/ { count++; awaiting_sync=0 }
     END { print count+0 }
   ' "$UPDATE_TRACE"
 }
@@ -106,7 +106,7 @@ durable_update_count() {
 durable_activation_count() {
   awk '
     /\.sbxr-update-candidate.*usr\/local\/bin\/sbxr.*= 0$/ { awaiting_sync=1; next }
-    awaiting_sync && /fsync\(.*\/usr\/local\/bin.*\).* = 0$/ { count++; awaiting_sync=0 }
+    awaiting_sync && /fsync\(.*\/usr\/local\/bin.*\).* = 0( \(DELAYED\))?$/ { count++; awaiting_sync=0 }
     END { print count+0 }
   ' "$UPDATE_TRACE"
 }
@@ -124,8 +124,6 @@ stop_at() {
   else
     for _ in $(seq 1 10000); do
       if test ! -e /var/lib/sbxr/update.json; then
-        kill -CONT "$UPDATE_PID" 2>/dev/null || return 1
-        kill -CONT "$UPDATE_WRAPPER" 2>/dev/null || true
         sleep 0.001
         continue
       fi

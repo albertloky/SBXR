@@ -202,6 +202,7 @@ func TestCandidateQualifiesTheManifestBoundTwoReleaseJourneyOnTheAcceptanceVPS(t
 		"strace -qq -f -yy -e trace=fsync,rename,renameat,renameat2 -e inject=fsync:delay_exit=100ms",
 		"durable_update_count()",
 		"durable_activation_count()",
+		"= 0( \\(DELAYED\\))?$",
 		"current_executable=$(sha256sum /usr/local/bin/sbxr | cut -d' ' -f1)",
 		"prepared:Prepared:$A_TAG:$prior_executable:1:0",
 		"activated:Prepared:$B_TAG:$candidate_executable:1:1",
@@ -228,6 +229,9 @@ func TestCandidateQualifiesTheManifestBoundTwoReleaseJourneyOnTheAcceptanceVPS(t
 		if !strings.Contains(acceptanceSources, required) {
 			t.Fatalf("candidate.yml omitted Acceptance VPS contract %q", required)
 		}
+	}
+	if strings.Contains(string(script), "if test ! -e /var/lib/sbxr/update.json; then\n        kill -CONT") {
+		t.Fatal("candidate VPS loop signals the updater before a durable record exists")
 	}
 	assertActionsPinned(t, acceptanceSources)
 }
