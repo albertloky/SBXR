@@ -164,7 +164,9 @@ lock="$ROOT/run/lock/sbxr.lock"
 if [ ! -e "$lock" ] && [ ! -L "$lock" ]; then
   (set -o noclobber; : >"$lock") 2>/dev/null || true
 fi
-[ ! -L "$lock" ] && [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$lock" 2>/dev/null)" = '0:600:1:regular file' ] || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+[ ! -L "$lock" ] || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+lock_facts=$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$lock" 2>/dev/null) || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+case "$lock_facts" in '0:600:1:regular file'|'0:600:1:regular empty file') ;; *) finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED' ;; esac
 lock_identity=$("$ROOT/usr/bin/stat" -c '%d:%i' "$lock" 2>/dev/null) || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
 exec 9<"$lock" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
 [ "$("$ROOT/usr/bin/stat" -Lc '%d:%i' "/proc/$$/fd/9" 2>/dev/null)" = "$lock_identity" ] || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'

@@ -101,7 +101,7 @@ func TestGeneratedInstallerSupportsOnlyFixedUbuntuHosts(t *testing.T) {
 func TestGeneratedInstallerInstallsQualifiedReleaseWithoutATerminal(t *testing.T) {
 	fixture := newInstallerFixture(t)
 
-	body, err := exec.Command("bash", "-x", fixture.script).CombinedOutput()
+	body, err := exec.Command("bash", fixture.script).CombinedOutput()
 	if err != nil {
 		t.Fatalf("install = %v, %q", err, body)
 	}
@@ -705,7 +705,7 @@ func writeInstallerTools(t *testing.T, root string) {
 	write("findmnt", fmt.Sprintf(`[ ! -f %q/fixtures/mount-failure ] || exit 1; [ ! -f %q/fixtures/mounted ] || /bin/cat %q/fixtures/mounted`, root, root, root))
 	write("rm", fmt.Sprintf(`args=(); signal=0; for value in "$@"; do [ "$value" = '--one-file-system' ] || args+=("$value"); [[ "$value" = */usr/local/bin/sbxr ]] && signal=1; done; if [ "$signal" -eq 1 ] && [ -f %q/fixtures/interrupt-after ]; then /bin/kill -TERM "$PPID"; fi; exec /bin/rm "${args[@]}"`, root))
 	write("sync", `exit 0`)
-	write("stat", fmt.Sprintf(`format=$2; path=$3; case "$path" in /proc/*/fd/9) path=%q/run/lock/sbxr.lock ;; esac; if [ "$format" = '%%d:%%i:%%F' ] && [ -f %q/fixtures/race ] && [[ "$path" = */usr/local/bin/sbxr ]]; then if [ -f %q/fixtures/race-seen ]; then /bin/rm -rf "$path"; /bin/ln -s %q/fixtures/outside "$path"; else : >%q/fixtures/race-seen; fi; fi; facts=$(%s "$path") || exit 1; device=${facts%%%%:*}; rest=${facts#*:}; inode=${rest%%%%:*}; rest=${rest#*:}; mode=${rest%%%%:*}; rest=${rest#*:}; links=${rest%%%%:*}; kind=${rest#*:}; case "$kind" in 'Regular File') kind='regular file' ;; Directory) kind='directory' ;; 'Symbolic Link') kind='symbolic link' ;; esac; case "$format" in '%%u:%%a:%%h:%%F') printf '0:%%s:%%s:%%s\n' "$mode" "$links" "$kind" ;; '%%u:%%a:%%F') printf '0:%%s:%%s\n' "$mode" "$kind" ;; '%%d:%%i:%%F') printf '%%s:%%s:%%s\n' "$device" "$inode" "$kind" ;; '%%d:%%i') printf '%%s:%%s\n' "$device" "$inode" ;; *) exit 1 ;; esac`, root, root, root, root, root, statCommand))
+	write("stat", fmt.Sprintf(`format=$2; path=$3; case "$path" in /proc/*/fd/9) path=%q/run/lock/sbxr.lock ;; esac; if [ "$format" = '%%d:%%i:%%F' ] && [ -f %q/fixtures/race ] && [[ "$path" = */usr/local/bin/sbxr ]]; then if [ -f %q/fixtures/race-seen ]; then /bin/rm -rf "$path"; /bin/ln -s %q/fixtures/outside "$path"; else : >%q/fixtures/race-seen; fi; fi; facts=$(%s "$path") || exit 1; device=${facts%%%%:*}; rest=${facts#*:}; inode=${rest%%%%:*}; rest=${rest#*:}; mode=${rest%%%%:*}; rest=${rest#*:}; links=${rest%%%%:*}; kind=${rest#*:}; case "$kind" in 'Regular File') kind='regular file' ;; Directory) kind='directory' ;; 'Symbolic Link') kind='symbolic link' ;; esac; if [[ "$path" = */run/lock/sbxr.lock ]] && [ "$kind" = 'regular file' ]; then kind='regular empty file'; fi; case "$format" in '%%u:%%a:%%h:%%F') printf '0:%%s:%%s:%%s\n' "$mode" "$links" "$kind" ;; '%%u:%%a:%%F') printf '0:%%s:%%s\n' "$mode" "$kind" ;; '%%d:%%i:%%F') printf '%%s:%%s:%%s\n' "$device" "$inode" "$kind" ;; '%%d:%%i') printf '%%s:%%s\n' "$device" "$inode" ;; *) exit 1 ;; esac`, root, root, root, root, root, statCommand))
 	for _, name := range []string{"chmod", "cmp", "cut", "dd", "grep", "head", "mkdir", "mktemp", "mv", "od", "readlink", "sed", "tail", "tar", "tr", "wc"} {
 		path, err := exec.LookPath(name)
 		if err != nil {
