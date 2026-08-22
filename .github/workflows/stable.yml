@@ -269,15 +269,15 @@ jobs:
             test "$(find "$directory" -maxdepth 1 -type f -printf '%f\n' | sort)" = "$(printf '%s\n' install.sh release-index.json sbxr-linux-amd64.tar.gz sbxr-linux-arm64.tar.gz | sort)"
             go run ./cmd/sbxr-release verify-package -directory "$directory" -architecture amd64
             go run ./cmd/sbxr-release verify-package -directory "$directory" -architecture arm64
-          sudo bash "$directory/install.sh" > "$tag-install.transcript"
-          grep -Fx 'SOFTWARE-LIFECYCLE-INSTALL-INSTALLED' "$tag-install.transcript"
-          check_deadline=$((SECONDS + 600))
-          while true; do
-            if { sleep 1; printf '1\n'; sleep 15; printf '0\n'; } | script -qec 'sudo env TERM=xterm-256color LANG=C.UTF-8 /usr/local/bin/sbxr' /dev/null > "$tag-check.transcript" && grep -F 'Code: SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT' "$tag-check.transcript"; then
-              break
-            fi
-            test "$SECONDS" -lt "$check_deadline"
-            sleep 5
+            sudo bash "$directory/install.sh" > "$tag-install.transcript"
+            grep -Fx 'SOFTWARE-LIFECYCLE-INSTALL-INSTALLED' "$tag-install.transcript"
+            check_deadline=$((SECONDS + 600))
+            while true; do
+              if { sleep 1; printf '1\n'; sleep 15; printf '0\n'; } | script -qec 'sudo env TERM=xterm-256color LANG=C.UTF-8 /usr/local/bin/sbxr' /dev/null > "$tag-check.transcript" && grep -F 'Code: SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT' "$tag-check.transcript"; then
+                break
+              fi
+              test "$SECONDS" -lt "$check_deadline"
+              sleep 5
             done
             sudo rm -f /usr/local/bin/sbxr /run/lock/sbxr.lock
             sudo rm -r /var/lib/sbxr
