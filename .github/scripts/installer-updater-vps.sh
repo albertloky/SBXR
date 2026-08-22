@@ -76,12 +76,15 @@ stage() {
 }
 
 start_update() {
-  local transcript=$1
+  local transcript=$1 mode=${2:-checked}
   { menu 2 120 || true; } >"$transcript" 2>&1 &
   UPDATE_DRIVER=$!
   for _ in $(seq 1 1000); do
     UPDATE_PID=$(pgrep -n -x sbxr || true)
-    test -n "$UPDATE_PID" && grep -F 'Checking the qualified latest release' "$transcript" >/dev/null 2>&1 && return 0
+    if test -n "$UPDATE_PID"; then
+      test "$mode" = early && return 0
+      grep -F 'Checking the qualified latest release' "$transcript" >/dev/null 2>&1 && return 0
+    fi
     sleep 0.01
   done
   return 1
@@ -89,8 +92,13 @@ start_update() {
 
 stop_at() {
   local stage=$1 transcript=$2 checkpoint='' tag=''
-  start_update "$transcript"
+  start_update "$transcript" early
   if test "$stage" = pre-prepared; then
+    for _ in $(seq 1 1000); do
+      grep -F 'Checking the qualified latest release' "$transcript" >/dev/null 2>&1 && break
+      sleep 0.01
+    done
+    grep -F 'Checking the qualified latest release' "$transcript" >/dev/null
     kill -TERM "$UPDATE_PID"
   else
     for _ in $(seq 1 10000); do
