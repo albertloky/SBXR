@@ -535,6 +535,7 @@ jobs:
           ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'bash -se' <<'REMOTE'
           test "$(. /etc/os-release; printf '%s:%s' "$ID" "$VERSION_ID")" = ubuntu:24.04
           test "$(uname -m)" = x86_64
+          command -v strace >/dev/null
           test ! -e /usr/local/bin/sbxr
           test ! -e /var/lib/sbxr
           install -d -m 0700 /run/sbxr-qualification

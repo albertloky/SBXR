@@ -7,13 +7,16 @@ set -euo pipefail
 cd "$CONTROL"
 
 menu() {
-  local choice=$1 delay=${2:-8} input_dir fifo feeder status
+  local choice=$1 delay=${2:-8} trace=${3:-} command='env TERM=xterm-256color LANG=C.UTF-8 /usr/local/bin/sbxr' input_dir fifo feeder status
+  if test -n "$trace"; then
+    command="env TERM=xterm-256color LANG=C.UTF-8 strace -qq -f -yy -e trace=fsync,rename,renameat,renameat2 -e inject=fsync:delay_exit=100ms -o $trace /usr/local/bin/sbxr"
+  fi
   input_dir=$(mktemp -d "$CONTROL/input.XXXXXX")
   fifo="$input_dir/fifo"
   mkfifo -m 0600 "$fifo"
   { sleep 1; printf '%s\n' "$choice"; sleep "$delay"; printf '0\n'; } >"$fifo" &
   feeder=$!
-  if script -qec 'env TERM=xterm-256color LANG=C.UTF-8 /usr/local/bin/sbxr' /dev/null <"$fifo"; then status=0; else status=$?; fi
+  if script -qec "$command" /dev/null <"$fifo"; then status=0; else status=$?; fi
   kill "$feeder" 2>/dev/null || true
   wait "$feeder" 2>/dev/null || true
   rm -f "$fifo"
@@ -77,7 +80,8 @@ stage() {
 
 start_update() {
   local transcript=$1 mode=${2:-checked}
-  { menu 2 120 || true; } >"$transcript" 2>&1 &
+  UPDATE_TRACE="$transcript.strace"
+  { menu 2 120 "$UPDATE_TRACE" || true; } >"$transcript" 2>&1 &
   UPDATE_DRIVER=$!
   for _ in $(seq 1 1000); do
     UPDATE_PID=$(pgrep -n -x sbxr || true)
@@ -91,8 +95,24 @@ start_update() {
   return 1
 }
 
+durable_update_count() {
+  awk '
+    /\.update\.json\.next.*update\.json.*= 0$/ { awaiting_sync=1; next }
+    awaiting_sync && /fsync\(.*\/var\/lib\/sbxr.*\).* = 0$/ { count++; awaiting_sync=0 }
+    END { print count+0 }
+  ' "$UPDATE_TRACE"
+}
+
+durable_activation_count() {
+  awk '
+    /\.sbxr-update-candidate.*usr\/local\/bin\/sbxr.*= 0$/ { awaiting_sync=1; next }
+    awaiting_sync && /fsync\(.*\/usr\/local\/bin.*\).* = 0$/ { count++; awaiting_sync=0 }
+    END { print count+0 }
+  ' "$UPDATE_TRACE"
+}
+
 stop_at() {
-  local stage=$1 transcript=$2 checkpoint='' tag=''
+  local stage=$1 transcript=$2 checkpoint='' tag='' prior_executable='' candidate_executable='' current_executable='' durable=0 activated=0
   start_update "$transcript" early
   if test "$stage" = pre-prepared; then
     for _ in $(seq 1 1000); do
@@ -111,10 +131,15 @@ stop_at() {
       fi
       kill -STOP "$UPDATE_PID" 2>/dev/null || return 1
       checkpoint=$(sed -n 's/.*"checkpoint":"\([^"]*\)".*/\1/p' /var/lib/sbxr/update.json 2>/dev/null || true)
+      prior_executable=$(sed -n 's/.*"prior_executable_sha256":"\([^"]*\)".*/\1/p' /var/lib/sbxr/update.json 2>/dev/null || true)
+      candidate_executable=$(sed -n 's/.*"candidate_executable_sha256":"\([^"]*\)".*/\1/p' /var/lib/sbxr/update.json 2>/dev/null || true)
       tag=$(record_value tag 2>/dev/null || true)
-      if test "$stage:$checkpoint:$tag" = "prepared:Prepared:$A_TAG" ||
-         test "$stage:$checkpoint:$tag" = "activated:Prepared:$B_TAG" ||
-         test "$stage:$checkpoint:$tag" = "committed:Committed:$B_TAG"; then
+      current_executable=$(sha256sum /usr/local/bin/sbxr | cut -d' ' -f1)
+      durable=$(durable_update_count)
+      activated=$(durable_activation_count)
+      if test "$stage:$checkpoint:$tag:$current_executable:$durable:$activated" = "prepared:Prepared:$A_TAG:$prior_executable:1:0" ||
+         test "$stage:$checkpoint:$tag:$current_executable:$durable:$activated" = "activated:Prepared:$B_TAG:$candidate_executable:1:1" ||
+         test "$stage:$checkpoint:$tag:$current_executable:$durable:$activated" = "committed:Committed:$B_TAG:$candidate_executable:2:1"; then
         kill -KILL "$UPDATE_PID" 2>/dev/null || true
         kill -CONT "$UPDATE_WRAPPER" 2>/dev/null || true
         break
