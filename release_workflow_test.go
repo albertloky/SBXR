@@ -280,6 +280,10 @@ func TestStablePublishesOnlyTheSignedQualifiedDraftsAndProvesStableNoUpdate(t *t
 		t.Fatal(err)
 	}
 	workflow := string(body)
+	preflight := workflow[strings.Index(workflow, "  preflight:"):strings.Index(workflow, "  publish:")]
+	if !strings.Contains(preflight, "contents: write") {
+		t.Fatal("stable preflight cannot read candidate-owned draft releases")
+	}
 	for _, required := range []string{
 		"workflow_dispatch:",
 		"qualification_run_id:",
@@ -435,9 +439,14 @@ func TestReleaseFailuresWithdrawOnlyRecheckedTargetsAndBurnQualifiedIdentities(t
 		t.Fatal("candidate failure handling does not verify and burn every identity before release mutation")
 	}
 	stableFailure := stable[strings.Index(stable, "finalize-failure:"):]
+	failedPrerelease := stableFailure[strings.Index(stableFailure, "Publish prepublication failures as rechecked failed prereleases"):]
 	if strings.Index(stableFailure, "git push --atomic origin") > strings.Index(stableFailure, `gh release edit "$tag"`) ||
 		!strings.Contains(stableFailure, "if: steps.failure.outputs.outcome == 'withdraw'") ||
-		!strings.Contains(stableFailure, "if: steps.failure.outputs.outcome == 'failed-prerelease'") {
+		!strings.Contains(stableFailure, "if: steps.failure.outputs.outcome == 'failed-prerelease'") ||
+		!strings.Contains(stableFailure, `jq -e '.draft == true' failure/release.json >/dev/null`) ||
+		strings.Count(stableFailure, `git rev-parse -q --verify "refs/tags/$tag^{commit}"`) < 4 ||
+		!strings.Contains(stableFailure, `test "$(git rev-parse "refs/tags/$tag^{commit}")" = "$commit"`) ||
+		!strings.Contains(failedPrerelease, `commit="$(jq -r .commit <<<"$release")"`) {
 		t.Fatal("stable failure handling does not burn before its approved withdrawal or failed-prerelease outcome")
 	}
 	assertActionsPinned(t, candidate)

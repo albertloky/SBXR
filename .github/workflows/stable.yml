@@ -34,7 +34,7 @@ jobs:
     permissions:
       actions: read
       attestations: read
-      contents: read
+      contents: write
     env:
       GH_TOKEN: ${{ github.token }}
       QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
@@ -475,13 +475,16 @@ jobs:
             if git rev-parse -q --verify "refs/tags/release-burned/$tag" >/dev/null; then
               .github/scripts/prepare-burn-tag.sh "$payload" "$tag" "$commit" >/dev/null
               if ! gh api "repos/$GITHUB_REPOSITORY/releases/$(jq -r .release_id <<<"$release")" >/dev/null 2>&1; then
-                if object="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha 2>/dev/null)"; then test "$object" = "$commit"; fi
+                if object="$(git rev-parse -q --verify "refs/tags/$tag^{commit}")"; then test "$object" = "$commit"; fi
                 continue
               fi
             fi
             .github/scripts/recheck-qualified-release.sh "failure/$tag.json" "failure/rechecked/$tag" failure/release.json
-            object="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha)"
-            test "$object" = "$commit"
+            if object="$(git rev-parse -q --verify "refs/tags/$tag^{commit}")"; then
+              test "$object" = "$commit"
+            else
+              jq -e '.draft == true' failure/release.json >/dev/null
+            fi
             .github/scripts/prepare-burn-tag.sh "$payload" "$tag" "$commit" >> failure/burn-refs
           done < <(jq -c '.[]' failure/targets.json)
       - uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661
@@ -502,16 +505,22 @@ jobs:
             commit="$(jq -r .commit <<<"$release")"
             if ! gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" >/dev/null 2>&1; then
               .github/scripts/prepare-burn-tag.sh "failure/burned/$tag.json" "$tag" "$commit" >/dev/null
-              if object="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha 2>/dev/null)"; then
+              if object="$(git rev-parse -q --verify "refs/tags/$tag^{commit}")"; then
                 test "$object" = "$commit"
                 gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag"
               fi
               continue
             fi
             .github/scripts/recheck-qualified-release.sh "failure/$tag.json" "failure/final/$tag" failure/final-release.json
-            test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha)" = "$commit"
+            tagged=false
+            if object="$(git rev-parse -q --verify "refs/tags/$tag^{commit}")"; then
+              test "$object" = "$commit"
+              tagged=true
+            else
+              jq -e '.draft == true' failure/final-release.json >/dev/null
+            fi
             gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$release_id"
-            gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag"
+            test "$tagged" = false || gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag"
           done < <(jq -c '.[]' failure/targets.json)
       - name: Publish prepublication failures as rechecked failed prereleases
         if: steps.failure.outputs.outcome == 'failed-prerelease'
@@ -519,6 +528,7 @@ jobs:
           set -euo pipefail
           while read -r release; do
             tag="$(jq -r .tag <<<"$release")"
+            commit="$(jq -r .commit <<<"$release")"
             .github/scripts/recheck-qualified-release.sh "failure/$tag.json" "failure/final/$tag" failure/final-release.json
             record="failure/$tag.failed.md"
             .github/scripts/write-failed-acceptance-record.sh "failure/$tag.json" failure/final-release.json "$record" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" RELEASE-INSTALLER-UPDATER-PREPUBLICATION-FAILED failure/qualification-manifest.json /dev/null
@@ -528,4 +538,6 @@ jobs:
               jq -e '.draft == false and .prerelease == true and .immutable == true' failure/final-release.json >/dev/null
               jq -j .body failure/final-release.json | cmp - "$record"
             fi
+            git fetch --force --tags origin
+            test "$(git rev-parse "refs/tags/$tag^{commit}")" = "$commit"
           done < <(jq -c '.[]' failure/targets.json)
