@@ -102,6 +102,11 @@ stop_at() {
     kill -TERM "$UPDATE_PID"
   else
     for _ in $(seq 1 10000); do
+      if test ! -e /var/lib/sbxr/update.json; then
+        kill -CONT "$UPDATE_PID" 2>/dev/null || return 1
+        sleep 0.001
+        continue
+      fi
       kill -STOP "$UPDATE_PID" 2>/dev/null || return 1
       checkpoint=$(sed -n 's/.*"checkpoint":"\([^"]*\)".*/\1/p' /var/lib/sbxr/update.json 2>/dev/null || true)
       tag=$(record_value tag 2>/dev/null || true)

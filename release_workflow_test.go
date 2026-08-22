@@ -198,6 +198,7 @@ func TestCandidateQualifiesTheManifestBoundTwoReleaseJourneyOnTheAcceptanceVPS(t
 		"start_update \"$transcript\" early",
 		"test \"$mode\" = early && return 0",
 		"grep -F 'Checking the qualified latest release' \"$transcript\" >/dev/null 2>&1 && return 0",
+		"if test ! -e /var/lib/sbxr/update.json; then",
 		"grep -F 'Checking the qualified latest release' \"$transcript\" >/dev/null 2>&1 && break",
 		"SOFTWARE-LIFECYCLE-INSTALL-CONCURRENT-MUTATION",
 		"SOFTWARE-LIFECYCLE-CHECK-CONCURRENT-CHANGE",
