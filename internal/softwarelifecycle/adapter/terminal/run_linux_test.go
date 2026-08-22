@@ -425,7 +425,7 @@ func TestRunFramesAndSelectsOnlyFreshLegalActions(t *testing.T) {
 		done <- runResult{action: action, status: status}
 	}()
 
-	waitForPTY(t, master, "Use ↑/↓ or a number, then Enter: 1")
+	transcript := waitForPTY(t, master, "Use ↑/↓ or a number, then Enter: 1")
 	writePTY(t, master, "\x1b[B")                                              // Update.
 	writePTY(t, master, "\x1b[200~"+strings.Repeat("2\r", 32<<10)+"\x1b[201~") // Pasted authorization is streamed and discarded.
 	writePTY(t, master, "\x1b[<0;10;10M")                                      // Mouse input is invalid.
@@ -440,7 +440,7 @@ func TestRunFramesAndSelectsOnlyFreshLegalActions(t *testing.T) {
 	}
 	writePTY(t, master, "\r")
 	<-checked
-	waitForPTY(t, master, "Code: SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT")
+	transcript += waitForPTY(t, master, "Code: SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT")
 	writePTY(t, master, "0\r")
 
 	result := <-done
@@ -451,7 +451,7 @@ func TestRunFramesAndSelectsOnlyFreshLegalActions(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(restored, original) {
 		t.Fatalf("termios was not restored exactly: error=%v\nbefore=%+v\nafter=%+v", err, original, restored)
 	}
-	transcript := readPTY(master)
+	transcript += readPTY(master)
 	for _, want := range []string{
 		"\x1b[H\x1b[2J", "Current SBXR version: v2.0.0", "Latest stable version: Not checked", "Status: Ready",
 		"Result: SBXR is ready.", "Code: SOFTWARE-LIFECYCLE-STATUS-READY", "\x1b[38;2;41;71;102m1. Check for updates\x1b[0m",
