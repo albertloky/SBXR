@@ -128,7 +128,7 @@ successful_finish() {
     exit 130
   fi
   if (: </dev/tty >/dev/tty) 2>/dev/null; then
-    exec "$ROOT/usr/local/bin/sbxr" </dev/tty >/dev/tty 2>/dev/tty
+    LC_ALL='C.UTF-8' LANG='C.UTF-8' exec "$ROOT/usr/local/bin/sbxr" </dev/tty >/dev/tty 2>/dev/tty
   fi
   printf 'Installed %s\nRun: sudo sbxr\n' "$TAG"
   exit 0

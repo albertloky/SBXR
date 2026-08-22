@@ -174,6 +174,16 @@ func TestGeneratedInstallerLaunchesTheMenuThroughAControllingTerminal(t *testing
 	if _, err := os.Stat(filepath.Join(fixture.root, "fixtures/launched")); err != nil {
 		t.Fatalf("installed menu was not launched: %v", err)
 	}
+	locale, err := os.ReadFile(filepath.Join(fixture.root, "fixtures/launched-locale"))
+	if err != nil || string(locale) != "C.UTF-8" {
+		t.Fatalf("installed menu locale = %q, %v", locale, err)
+	}
+}
+
+func TestGeneratedInstallerLaunchesTheMenuWithAUTF8Locale(t *testing.T) {
+	if !strings.Contains(bootstrapBody, `LC_ALL='C.UTF-8' LANG='C.UTF-8' exec "$ROOT/usr/local/bin/sbxr" </dev/tty >/dev/tty 2>/dev/tty`) {
+		t.Fatal("installer does not give the launched menu a UTF-8 locale")
+	}
 }
 
 func TestGeneratedInstallerIsANoopForExactCurrent(t *testing.T) {
@@ -588,6 +598,7 @@ import "os"
 func main() {
 	if root := os.Getenv("SBXR_INSTALL_TEST_ROOT"); root != "" {
 		_ = os.WriteFile(root+"/fixtures/launched", []byte("launched"), 0600)
+		_ = os.WriteFile(root+"/fixtures/launched-locale", []byte(os.Getenv("LC_ALL")), 0600)
 	}
 }
 `), 0o600); err != nil {

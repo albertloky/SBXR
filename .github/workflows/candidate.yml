@@ -559,7 +559,7 @@ jobs:
           a="$(jq -c '.releases[0]' "$manifest")"
           b="$(jq -c '.releases[1]' "$manifest")"
           remote_environment="A_TAG=$(jq -r .tag <<<"$a") A_SEQUENCE=$(jq -r .sequence <<<"$a") A_COMMIT=$(jq -r .commit <<<"$a") A_INDEX_SHA256=$(jq -r .release_identity.release_index_sha256 <<<"$a") B_TAG=$(jq -r .tag <<<"$b") B_SEQUENCE=$(jq -r .sequence <<<"$b") B_COMMIT=$(jq -r .commit <<<"$b") B_INDEX_SHA256=$(jq -r .release_identity.release_index_sha256 <<<"$b") MODE=${{ inputs.mode }}"
-          ssh -tt "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" "$remote_environment /usr/bin/bash /run/sbxr-qualification/installer-updater-vps.sh" &
+          ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" "$remote_environment /usr/bin/bash /run/sbxr-qualification/installer-updater-vps.sh" &
           journey=$!
           if test '${{ inputs.mode }}' = rescue; then
             stages=(rescue-direct-b rescue-source-a rescue-replace-b)

@@ -189,7 +189,6 @@ func TestCandidateQualifiesTheManifestBoundTwoReleaseJourneyOnTheAcceptanceVPS(t
 		"go build -o handoff/sbxr-release ./cmd/sbxr-release",
 		"install -m 0700 /run/sbxr-qualification/sbxr-release /root/sbxr-qualification-gateway",
 		"nohup /root/sbxr-qualification-gateway gateway",
-		"ssh -tt \"${ssh_options[@]}\" \"root@$ACCEPTANCE_VPS_HOST\" \"$remote_environment /usr/bin/bash /run/sbxr-qualification/installer-updater-vps.sh\"",
 		"/usr/bin/bash /run/sbxr-qualification/installer-updater-vps.sh",
 		"printf '\\n127.0.0.1 api.github.com github.com\\n' >> /etc/hosts",
 		"rm -f /root/sbxr-qualification-gateway",
