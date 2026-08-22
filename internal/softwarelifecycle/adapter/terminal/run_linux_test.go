@@ -426,13 +426,17 @@ func TestRunFramesAndSelectsOnlyFreshLegalActions(t *testing.T) {
 	}()
 
 	transcript := waitForPTY(t, master, "Use ↑/↓ or a number, then Enter: 1")
-	writePTY(t, master, "\x1b[B")                                              // Update.
+	writePTY(t, master, "\x1b[B") // Update.
+	transcript += waitForPTY(t, master, "Use ↑/↓ or a number, then Enter: 2")
 	writePTY(t, master, "\x1b[200~"+strings.Repeat("2\r", 32<<10)+"\x1b[201~") // Pasted authorization is streamed and discarded.
 	writePTY(t, master, "\x1b[<0;10;10M")                                      // Mouse input is invalid.
-	writePTY(t, master, "\x1b[1;2A")                                           // Modified arrow is invalid.
-	writePTY(t, master, "\x1b")                                                // Incomplete escape times out.
-	time.Sleep(120 * time.Millisecond)
+	transcript += waitForPTY(t, master, "Use ↑/↓ or a displayed number, then Enter.")
+	writePTY(t, master, "\x1b[1;2A") // Modified arrow is invalid.
+	transcript += waitForPTY(t, master, "Use ↑/↓ or a displayed number, then Enter.")
+	writePTY(t, master, "\x1b") // Incomplete escape times out.
+	transcript += waitForPTY(t, master, "Use ↑/↓ or a displayed number, then Enter.")
 	writePTY(t, master, "1") // Direct selection does not execute.
+	transcript += waitForPTY(t, master, "Use ↑/↓ or a number, then Enter: 1")
 	select {
 	case result := <-done:
 		t.Fatalf("digit executed %v before Enter", result.action)
@@ -441,7 +445,9 @@ func TestRunFramesAndSelectsOnlyFreshLegalActions(t *testing.T) {
 	writePTY(t, master, "\r")
 	<-checked
 	transcript += waitForPTY(t, master, "Code: SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT")
-	writePTY(t, master, "0\r")
+	writePTY(t, master, "0")
+	transcript += waitForPTY(t, master, "Use ↑/↓ or a number, then Enter: 0")
+	writePTY(t, master, "\r")
 
 	result := <-done
 	if result.action != ExitAction || result.status != 0 {
@@ -509,7 +515,9 @@ func TestRunShowsOnlyActionsLegalForFreshStatus(t *testing.T) {
 			if test.action != ExitAction {
 				<-invoked
 				transcript += waitForPTY(t, master, "Code: "+string(test.result.Code))
-				writePTY(t, master, "0\r")
+				writePTY(t, master, "0")
+				transcript += waitForPTY(t, master, "Enter: 0")
+				writePTY(t, master, "\r")
 			}
 			got := <-done
 			if got.action != ExitAction || got.status != 0 {
