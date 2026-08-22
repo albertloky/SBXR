@@ -473,15 +473,16 @@ func TestRunShowsOnlyActionsLegalForFreshStatus(t *testing.T) {
 		name   string
 		result softwarelifecycle.Result
 		input  string
+		ready  string
 		action Action
 		want   []string
 		absent []string
 	}{
-		{name: "ready wraps CSI up", result: softwarelifecycle.Result{State: softwarelifecycle.Ready, Code: softwarelifecycle.StatusReady, Message: "SBXR is ready."}, input: "\x1b[A\r", action: ExitAction, want: []string{"1. Check for updates", "2. Update SBXR", "0. Exit", "Enter: 0"}},
-		{name: "ready wraps SS3 up", result: softwarelifecycle.Result{State: softwarelifecycle.Ready, Code: softwarelifecycle.StatusReady, Message: "SBXR is ready."}, input: "\x1bOA\r", action: ExitAction, want: []string{"Enter: 0"}},
-		{name: "ready accepts SS3 down", result: softwarelifecycle.Result{State: softwarelifecycle.Ready, Code: softwarelifecycle.StatusReady, Message: "SBXR is ready."}, input: "\x1bOB\r", action: UpdateAction, want: []string{"Enter: 2"}},
-		{name: "update in progress", result: softwarelifecycle.Result{State: softwarelifecycle.UpdateInProgress, Code: softwarelifecycle.StatusUpdateInProgress, Message: "Another Software Lifecycle change is in progress."}, input: "\r", action: ExitAction, want: []string{"Status: Update in progress", "0. Exit", "Enter: 0"}, absent: []string{"Check for updates", "Update SBXR", "Start recovery"}},
-		{name: "recovery rejects unavailable digit", result: softwarelifecycle.Result{State: softwarelifecycle.RecoveryRequiredState, Code: softwarelifecycle.StatusRecoveryRequired, Message: "SBXR needs recovery before normal operations can continue."}, input: "2\r", action: RecoverAction, want: []string{"Status: Recovery required", "1. Start recovery", "0. Exit", "Enter: 1", "Use ↑/↓ or a displayed number, then Enter."}, absent: []string{"Check for updates", "Update SBXR"}},
+		{name: "ready wraps CSI up", result: softwarelifecycle.Result{State: softwarelifecycle.Ready, Code: softwarelifecycle.StatusReady, Message: "SBXR is ready."}, input: "\x1b[A", ready: "Enter: 0", action: ExitAction, want: []string{"1. Check for updates", "2. Update SBXR", "0. Exit", "Enter: 0"}},
+		{name: "ready wraps SS3 up", result: softwarelifecycle.Result{State: softwarelifecycle.Ready, Code: softwarelifecycle.StatusReady, Message: "SBXR is ready."}, input: "\x1bOA", ready: "Enter: 0", action: ExitAction, want: []string{"Enter: 0"}},
+		{name: "ready accepts SS3 down", result: softwarelifecycle.Result{State: softwarelifecycle.Ready, Code: softwarelifecycle.StatusReady, Message: "SBXR is ready."}, input: "\x1bOB", ready: "Enter: 2", action: UpdateAction, want: []string{"Enter: 2"}},
+		{name: "update in progress", result: softwarelifecycle.Result{State: softwarelifecycle.UpdateInProgress, Code: softwarelifecycle.StatusUpdateInProgress, Message: "Another Software Lifecycle change is in progress."}, action: ExitAction, want: []string{"Status: Update in progress", "0. Exit", "Enter: 0"}, absent: []string{"Check for updates", "Update SBXR", "Start recovery"}},
+		{name: "recovery rejects unavailable digit", result: softwarelifecycle.Result{State: softwarelifecycle.RecoveryRequiredState, Code: softwarelifecycle.StatusRecoveryRequired, Message: "SBXR needs recovery before normal operations can continue."}, input: "2", ready: "Use ↑/↓ or a displayed number, then Enter.", action: RecoverAction, want: []string{"Status: Recovery required", "1. Start recovery", "0. Exit", "Enter: 1", "Use ↑/↓ or a displayed number, then Enter."}, absent: []string{"Check for updates", "Update SBXR"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -500,7 +501,11 @@ func TestRunShowsOnlyActionsLegalForFreshStatus(t *testing.T) {
 				done <- runResult{action: action, status: status}
 			}()
 			transcript := waitForPTY(t, master, "Use ↑/↓ or a number, then Enter:")
-			writePTY(t, master, test.input)
+			if test.input != "" {
+				writePTY(t, master, test.input)
+				transcript += waitForPTY(t, master, test.ready)
+			}
+			writePTY(t, master, "\r")
 			if test.action != ExitAction {
 				<-invoked
 				transcript += waitForPTY(t, master, "Code: "+string(test.result.Code))
