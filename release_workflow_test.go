@@ -197,6 +197,8 @@ func TestCandidateQualifiesTheManifestBoundTwoReleaseJourneyOnTheAcceptanceVPS(t
 		"grep -F \"Latest stable version: $B_TAG\" check-b.transcript",
 		"start_update \"$transcript\" early",
 		"test \"$mode\" = early && return 0",
+		"UPDATE_WRAPPER=$(pgrep -P \"$UPDATE_DRIVER\" -x script)",
+		"kill -CONT \"$UPDATE_WRAPPER\" 2>/dev/null || true",
 		"grep -F 'Checking the qualified latest release' \"$transcript\" >/dev/null 2>&1 && return 0",
 		"if test ! -e /var/lib/sbxr/update.json; then",
 		"grep -F 'Checking the qualified latest release' \"$transcript\" >/dev/null 2>&1 && break",

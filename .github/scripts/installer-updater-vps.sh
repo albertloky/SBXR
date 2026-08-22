@@ -82,6 +82,7 @@ start_update() {
   for _ in $(seq 1 1000); do
     UPDATE_PID=$(pgrep -n -x sbxr || true)
     if test -n "$UPDATE_PID"; then
+      UPDATE_WRAPPER=$(pgrep -P "$UPDATE_DRIVER" -x script)
       test "$mode" = early && return 0
       grep -F 'Checking the qualified latest release' "$transcript" >/dev/null 2>&1 && return 0
     fi
@@ -104,6 +105,7 @@ stop_at() {
     for _ in $(seq 1 10000); do
       if test ! -e /var/lib/sbxr/update.json; then
         kill -CONT "$UPDATE_PID" 2>/dev/null || return 1
+        kill -CONT "$UPDATE_WRAPPER" 2>/dev/null || true
         sleep 0.001
         continue
       fi
@@ -114,9 +116,11 @@ stop_at() {
          test "$stage:$checkpoint:$tag" = "activated:Prepared:$B_TAG" ||
          test "$stage:$checkpoint:$tag" = "committed:Committed:$B_TAG"; then
         kill -KILL "$UPDATE_PID" 2>/dev/null || true
+        kill -CONT "$UPDATE_WRAPPER" 2>/dev/null || true
         break
       fi
       kill -CONT "$UPDATE_PID" 2>/dev/null || true
+      kill -CONT "$UPDATE_WRAPPER" 2>/dev/null || true
       sleep 0.001
     done
   fi
