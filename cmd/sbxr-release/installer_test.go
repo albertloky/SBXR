@@ -101,7 +101,7 @@ func TestGeneratedInstallerSupportsOnlyFixedUbuntuHosts(t *testing.T) {
 func TestGeneratedInstallerInstallsQualifiedReleaseWithoutATerminal(t *testing.T) {
 	fixture := newInstallerFixture(t)
 
-	body, err := exec.Command("bash", fixture.script).CombinedOutput()
+	body, err := exec.Command("bash", "-x", fixture.script).CombinedOutput()
 	if err != nil {
 		t.Fatalf("install = %v, %q", err, body)
 	}
