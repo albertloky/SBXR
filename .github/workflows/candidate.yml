@@ -491,12 +491,24 @@ jobs:
           gh attestation verify qualification-manifest.json --bundle "$bundle" --repo "$GITHUB_REPOSITORY" --signer-workflow albertloky/SBXR/.github/workflows/candidate.yml --source-ref refs/heads/main --source-digest "$GITHUB_SHA" >/dev/null
           mv "$bundle" qualification.bundle
           mkdir -m 0700 assets
+          source_state="$(jq -r .source_state qualification-manifest.json)"
+          index=0
           while read -r release; do
             tag="$(jq -r .tag <<<"$release")"
             release_id="$(jq -r .release_id <<<"$release")"
             mkdir -m 0700 "assets/$tag"
             gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > release.json
-            jq -e --arg tag "$tag" --arg commit "$(jq -r .commit <<<"$release")" '.tag_name == $tag and .target_commitish == $commit and .draft == true and (.assets | length) == 4' release.json >/dev/null
+            jq -e --arg tag "$tag" --arg commit "$(jq -r .commit <<<"$release")" '.tag_name == $tag and .target_commitish == $commit and (.assets | length) == 4' release.json >/dev/null
+            if test "$index" -eq 0 && test "$source_state" != initial-normal; then
+              if test "$source_state" = later-normal; then
+                jq -e '.draft == false and .prerelease == false and .immutable == true' release.json >/dev/null
+              else
+                test "$source_state" = rescue
+                jq -e '.draft == false and .prerelease == true and .immutable == true' release.json >/dev/null
+              fi
+            else
+              jq -e '.draft == true and .prerelease == false and .immutable == false' release.json >/dev/null
+            fi
             while read -r asset; do
               name="$(jq -r .name <<<"$asset")"
               proof="$(jq -c --arg name "$name" '.assets[] | select(.name == $name)' <<<"$release")"
@@ -506,6 +518,7 @@ jobs:
               test "$(sha256sum "assets/$tag/$name" | cut -d' ' -f1)" = "$(jq -r .sha256 <<<"$proof")"
             done < <(jq -c '.assets[]' release.json)
             test "$(find "assets/$tag" -maxdepth 1 -type f -printf '%f\n' | sort)" = "$(printf '%s\n' install.sh release-index.json sbxr-linux-amd64.tar.gz sbxr-linux-arm64.tar.gz | sort)"
+            index=$((index + 1))
           done < <(jq -c '.releases[]' qualification-manifest.json)
           cd ..
           go build -o handoff/sbxr-release ./cmd/sbxr-release
