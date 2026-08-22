@@ -34,6 +34,23 @@ type LatestUpdateSource interface {
 	PrepareLatest(context.Context, Architecture) (UpdateCandidate, LatestReleaseOutcome)
 }
 
+func (candidate UpdateCandidate) ExecutableSHA256() (string, bool) {
+	if candidate.cell == nil || len(candidate.cell.executable) == 0 {
+		return "", false
+	}
+	digest := sha256.Sum256(candidate.cell.executable)
+	return hex.EncodeToString(digest[:]), true
+}
+
+func ReleaseArchiveExecutableSHA256(archive []byte) (string, bool) {
+	executable, ok := updateArchiveExecutable(archive)
+	if !ok {
+		return "", false
+	}
+	digest := sha256.Sum256(executable)
+	return hex.EncodeToString(digest[:]), true
+}
+
 func VerifyLatestUpdateArchive(release LatestRelease, architecture Architecture, archive []byte) (UpdateCandidate, bool) {
 	executable, ok := updateArchiveExecutable(archive)
 	if !ok {

@@ -18,6 +18,25 @@ const (
 
 var identityMagic = []byte("SBXR-IDENTITY-V1")
 
+// StampReleaseExecutable binds repository release evidence to one pure-Go executable.
+func StampReleaseExecutable(payload []byte, tag, commit string, sequence uint64, architecture Architecture) ([]byte, error) {
+	if len(payload) == 0 || len(payload) > maxInstalledBinary || !immutableReleaseTag.MatchString(tag) || !commitPattern.MatchString(commit) || sequence == 0 || architecture != AMD64 && architecture != ARM64 {
+		return nil, io.ErrUnexpectedEOF
+	}
+	digest := sha256.Sum256(payload)
+	document, err := json.Marshal(embeddedIdentity{Schema: 1, Repository: Repository, Tag: tag, Commit: commit, Sequence: sequence, Architecture: architecture, PayloadSHA256: hex.EncodeToString(digest[:])})
+	if err != nil || len(document) == 0 || len(document) > maxInstalledRecord || len(payload)+len(document)+sha256.Size+8+len(identityMagic) > maxInstalledBinary {
+		return nil, io.ErrUnexpectedEOF
+	}
+	documentDigest := sha256.Sum256(document)
+	result := make([]byte, 0, len(payload)+len(document)+sha256.Size+8+len(identityMagic))
+	result = append(result, payload...)
+	result = append(result, document...)
+	result = append(result, documentDigest[:]...)
+	result = binary.LittleEndian.AppendUint64(result, uint64(len(document)))
+	return append(result, identityMagic...), nil
+}
+
 type LifecycleState string
 
 const (

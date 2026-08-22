@@ -23,6 +23,46 @@ type latestReleaseIndex struct {
 	Assets     []LatestAssetProof `json:"assets"`
 }
 
+var latestIndexedAssetNames = []string{"install.sh", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz"}
+
+func LatestReleaseIndexedAssetNames() []string {
+	return append([]string(nil), latestIndexedAssetNames...)
+}
+
+func LatestReleaseAssetNames() []string {
+	names := make([]string, 0, len(latestIndexedAssetNames)+1)
+	for _, name := range latestIndexedAssetNames {
+		names = append(names, name)
+		if name == "install.sh" {
+			names = append(names, "release-index.json")
+		}
+	}
+	return names
+}
+
+// BuildLatestReleaseIndex creates the strict index consumed by VerifyLatestReleaseIndex.
+func BuildLatestReleaseIndex(tag, commit string, sequence uint64, assets []LatestAssetProof) ([]byte, error) {
+	if !immutableReleaseTag.MatchString(tag) || !commitPattern.MatchString(commit) || sequence == 0 || len(assets) != 3 {
+		return nil, io.ErrUnexpectedEOF
+	}
+	expected := LatestReleaseIndexedAssetNames()
+	for index, asset := range assets {
+		limit := int64(MaxAssetBytes)
+		if asset.Name == "install.sh" {
+			limit = MaxIndexBytes
+		}
+		if asset.Name != expected[index] || asset.Size <= 0 || asset.Size > limit || !hashPattern.MatchString(asset.SHA256) {
+			return nil, io.ErrUnexpectedEOF
+		}
+	}
+	document := latestReleaseIndex{Schema: 1, Repository: Repository, Tag: tag, Commit: commit, Sequence: sequence, Assets: assets}
+	body, err := json.Marshal(document)
+	if err != nil || len(body) == 0 || len(body) > MaxIndexBytes {
+		return nil, io.ErrUnexpectedEOF
+	}
+	return body, nil
+}
+
 func VerifyLatestReleaseIndex(repository, tag, commit string, index []byte, proofs []LatestAssetProof) (LatestRelease, bool) {
 	if repository != Repository || !immutableReleaseTag.MatchString(tag) || !commitPattern.MatchString(commit) || len(index) == 0 || len(index) > MaxIndexBytes || ValidateUniqueJSON(index) != nil {
 		return LatestRelease{}, false
@@ -33,7 +73,7 @@ func VerifyLatestReleaseIndex(repository, tag, commit string, index []byte, proo
 	if decoder.Decode(&document) != nil || decoder.Decode(&struct{}{}) != io.EOF || document.Schema != 1 || document.Repository != repository || document.Tag != tag || document.Commit != commit || document.Sequence == 0 || len(document.Assets) != 3 || len(proofs) != 4 {
 		return LatestRelease{}, false
 	}
-	expected := []string{"install.sh", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz"}
+	expected := LatestReleaseIndexedAssetNames()
 	byName := make(map[string]LatestAssetProof, len(proofs))
 	for _, proof := range proofs {
 		if byName[proof.Name].Name != "" || proof.Size <= 0 || !hashPattern.MatchString(proof.SHA256) {

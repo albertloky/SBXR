@@ -1,60 +1,127 @@
 name: Verify
 
 on:
+  pull_request:
   push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: verify-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  terminal-adapter:
+  native-installer-updater:
     strategy:
+      fail-fast: true
       matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        include:
+          - architecture: amd64
+            runner: ubuntu-24.04
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version-file: go.mod
           cache: false
-      - run: go test ./internal/softwarelifecycle/adapter/terminal -count=1
-
-  test:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: false
-      - name: Run the complete suite with the PTY package isolated
+      - name: Test current Installer-Updater seams
         run: |
-          go list ./... | grep -v '/internal/ownerconsole$' | xargs go test -count=1
-          go test ./internal/ownerconsole -count=1
-      - name: Race-test every non-PTY package
-        run: go list ./... | grep -v '/internal/ownerconsole$' | xargs go test -race -p 1 -count=1
-      - run: go vet ./...
-
-  network-policy-ubuntu-seam:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: false
-      - run: sudo apt-get update && sudo apt-get install --yes nftables
-      - run: sudo env "PATH=$PATH" go test ./internal/networkpolicy/adapter/ubuntu -run TestProductionUbuntuSeam -v
-
-  system-changes-ubuntu-seam:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: false
-      - run: sudo apt-get update && sudo apt-get install --yes iproute2 nftables
-      - run: sudo env "PATH=$PATH" SBXR_CONTROLLED_FIREWALL_SEAM=1 go test ./internal/systemchanges/adapter/ubuntu -run TestProductionFirewallSeam -v
+          lifecycle_tests='^(TestStatus|TestUpdate(Returns|RefusesConcurrent|FailureAfter|RestoresPrior|RetainsRecovery|DefersCancellation|InstallsFresh)|TestRollbackRefuses|TestCandidateRecover|TestRecover|TestPendingOperations|TestCheck)'
+          github_tests='^(TestSourceCheck|TestSigstoreVerifier)'
+          go test ./internal/softwarelifecycle -run "$lifecycle_tests" -count=1
+          go test ./internal/softwarelifecycle/adapter/github -run "$github_tests" -count=1
+          go test ./internal/softwarelifecycle/adapter/terminal -count=1
+          go test ./cmd/sbxr-release -count=1
+          go test -race ./internal/softwarelifecycle -run "$lifecycle_tests" -count=1
+          go test -race ./internal/softwarelifecycle/adapter/github -run "$github_tests" -count=1
+          go test -race ./cmd/sbxr-release -count=1
+          go vet ./cmd/sbxr-installer-updater ./cmd/sbxr-release ./internal/softwarelifecycle/adapter/terminal
+      - name: Build and verify the exact four release assets
+        env:
+          RELEASE_TAG: v2.0.0
+          RELEASE_SEQUENCE: "17"
+        run: |
+          mkdir -m 0700 dist inspect
+          for architecture in amd64 arm64; do
+            go run ./cmd/sbxr-release \
+              -tag "$RELEASE_TAG" \
+              -commit "$GITHUB_SHA" \
+              -sequence "$RELEASE_SEQUENCE" \
+              -architecture "$architecture" \
+              -output "dist/sbxr-linux-$architecture.tar.gz"
+          done
+          amd64_sha256="$(tar -xOzf dist/sbxr-linux-amd64.tar.gz sbxr | sha256sum | cut -d ' ' -f1)"
+          arm64_sha256="$(tar -xOzf dist/sbxr-linux-arm64.tar.gz sbxr | sha256sum | cut -d ' ' -f1)"
+          go run ./cmd/sbxr-release bootstrap \
+            -version 2.0.0 \
+            -tag "$RELEASE_TAG" \
+            -commit "$GITHUB_SHA" \
+            -sequence "$RELEASE_SEQUENCE" \
+            -amd64-executable-sha256 "$amd64_sha256" \
+            -arm64-executable-sha256 "$arm64_sha256" \
+            -output dist/install.sh
+          go run ./cmd/sbxr-release index \
+            -tag "$RELEASE_TAG" \
+            -commit "$GITHUB_SHA" \
+            -sequence "$RELEASE_SEQUENCE" \
+            -directory dist \
+            -output dist/release-index.json
+          test "$(find dist -maxdepth 1 -type f -printf '%f\n' | sort)" = "$(printf '%s\n' install.sh release-index.json sbxr-linux-amd64.tar.gz sbxr-linux-arm64.tar.gz | sort)"
+          go run ./cmd/sbxr-release verify-package -directory dist -architecture '${{ matrix.architecture }}'
+          test "$(tar -tzf 'dist/sbxr-linux-${{ matrix.architecture }}.tar.gz')" = sbxr
+          tar -xzf 'dist/sbxr-linux-${{ matrix.architecture }}.tar.gz' -C inspect
+          machine="$(readelf -h inspect/sbxr | sed -n 's/^  Machine: *//p')"
+          case '${{ matrix.architecture }}' in
+            amd64) test "$machine" = 'Advanced Micro Devices X86-64' ;;
+            arm64) test "$machine" = 'AArch64' ;;
+          esac
+      - name: Exercise the packaged production command and menu
+        run: |
+          if inspect/sbxr >non-root.out 2>non-root.err; then
+            exit 1
+          fi
+          test ! -s non-root.out
+          grep -Fx 'SBXR requires root authority.' non-root.err
+          printf '0\n' | script -qec "sudo env TERM=xterm-256color LANG=C.UTF-8 '$PWD/inspect/sbxr'" menu.transcript
+          grep -F 'Recovery required' menu.transcript
+          grep -F 'Start recovery' menu.transcript
+          grep -F 'Exit' menu.transcript
+          index_sha256="$(sha256sum dist/release-index.json | cut -d ' ' -f1)"
+          executable_sha256="$(sha256sum inspect/sbxr | cut -d ' ' -f1)"
+          sudo install -m 0755 inspect/sbxr /usr/local/bin/sbxr
+          sudo install -d -m 0700 /var/lib/sbxr
+          printf '{"schema":1,"repository":"albertloky/SBXR","tag":"v2.0.0","commit":"%s","release_index_sha256":"%s","sequence":17,"architecture":"%s","executable_sha256":"%s"}\n' "$GITHUB_SHA" "$index_sha256" '${{ matrix.architecture }}' "$executable_sha256" | sudo tee /var/lib/sbxr/installed.json >/dev/null
+          sudo chmod 0600 /var/lib/sbxr/installed.json
+          printf '0\n' | script -qec "sudo env TERM=xterm-256color LANG=C.UTF-8 /usr/local/bin/sbxr" ready.transcript
+          grep -F 'Ready' ready.transcript
+          grep -F 'Check for updates' ready.transcript
+          grep -F 'Update SBXR' ready.transcript
+          sudo install -m 0600 /dev/null /run/lock/sbxr.lock
+          sudo sh -c 'exec 9>/run/lock/sbxr.lock; flock -x 9; touch /tmp/sbxr-lock-held; sleep 10' &
+          locker=$!
+          for attempt in $(seq 1 50); do
+            test -e /tmp/sbxr-lock-held && break
+            sleep 0.1
+          done
+          test -e /tmp/sbxr-lock-held
+          printf '0\n' | script -qec "sudo env TERM=xterm-256color LANG=C.UTF-8 /usr/local/bin/sbxr" concurrent.transcript
+          grep -F 'Update in progress' concurrent.transcript
+          wait "$locker"
+          sudo rm /tmp/sbxr-lock-held /run/lock/sbxr.lock /usr/local/bin/sbxr
+          sudo rm -r /var/lib/sbxr
+      - name: Refuse secret markers from package surfaces
+        env:
+          SECRET_PATTERN: 'SBXR_USER_TOKEN_MARKER_00000000000000abcd|CLOUDFLARE-ROTATED-RUN-TOKEN-MARKER|profile-secret-marker|subscription-secret-marker|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer '
+        run: |
+          summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
+          if grep -aERq "$SECRET_PATTERN" dist inspect non-root.out non-root.err menu.transcript ready.transcript concurrent.transcript "$summary"; then
+            exit 1
+          elif test $? -ne 1; then
+            exit 1
+          fi

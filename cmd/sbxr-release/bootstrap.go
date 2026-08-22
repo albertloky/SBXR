@@ -12,11 +12,9 @@ import (
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 )
 
-var bootstrapValue = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$`)
-
 func buildBootstrapFile(options bootstrapOptions) error {
 	hash := regexp.MustCompile(`^[0-9a-f]{64}$`)
-	if options.output == "" || !bootstrapValue.MatchString(options.version) || options.tag != "v"+options.version || !bootstrapValue.MatchString(options.tag) || !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(options.commit) || !hash.MatchString(options.amd64ExecutableSHA256) || !hash.MatchString(options.arm64ExecutableSHA256) || options.sequence == 0 || options.root != "" && (!strings.HasPrefix(options.root, "/") || strings.ContainsAny(options.root, "\n\r'")) {
+	if options.output == "" || options.tag != "v"+options.version || !validTag(options.tag) || !validCommit(options.commit) || !hash.MatchString(options.amd64ExecutableSHA256) || !hash.MatchString(options.arm64ExecutableSHA256) || options.sequence == 0 || options.root != "" && (!strings.HasPrefix(options.root, "/") || strings.ContainsAny(options.root, "\n\r'")) {
 		return errors.New("bootstrap build refused")
 	}
 	var body bytes.Buffer
