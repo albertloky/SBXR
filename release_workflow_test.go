@@ -144,6 +144,7 @@ func TestCandidateConstructsDraftsAndSignsTheQualificationBoundary(t *testing.T)
 		"release:\n    types:",
 		"sbxr-components-",
 		"acceptance staged-onboarding",
+		`gh attestation verify "source-a/$name"`,
 		"actions/checkout@v",
 		"actions/setup-go@v",
 		"actions/upload-artifact@v",
