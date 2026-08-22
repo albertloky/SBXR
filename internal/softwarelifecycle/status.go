@@ -62,6 +62,9 @@ const (
 	CheckOperation   Operation = "Check"
 	UpdateOperation  Operation = "Update"
 	RecoverOperation Operation = "Recover"
+
+	CheckingQualifiedLatest    = "Checking the qualified latest release"
+	InspectingRecoveryEvidence = "Inspecting recovery evidence"
 )
 
 type Progress struct {
@@ -129,7 +132,7 @@ func (module installedInterface) Status(ctx context.Context) Result {
 	return statusFromInspection(module.local.inspect(ctx))
 }
 
-func (module installedInterface) Check(ctx context.Context, _ ProgressReporter) Result {
+func (module installedInterface) Check(ctx context.Context, progress ProgressReporter) Result {
 	if module.local == nil {
 		return checkNotReady(recoveryRequiredResult())
 	}
@@ -144,6 +147,9 @@ func (module installedInterface) Check(ctx context.Context, _ ProgressReporter) 
 	}
 	if module.latest == nil {
 		return Result{State: Ready, Installed: &installed.identity, Code: CheckReleaseRefused, Message: "The latest SBXR release was refused."}
+	}
+	if progress != nil {
+		progress(Progress{Operation: CheckOperation, Status: CheckingQualifiedLatest, Mode: Spinner})
 	}
 	latest, outcome := module.latest.CheckLatest(ctx)
 	after := module.local.inspect(ctx)

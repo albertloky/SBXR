@@ -747,6 +747,21 @@ func TestCheckReportsQualifiedLatestReleaseBySequence(t *testing.T) {
 	}
 }
 
+func TestCheckReportsOnlyItsVerifiedRemoteWork(t *testing.T) {
+	installed := ReleaseIdentity{Repository: Repository, Tag: "v2.0.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}
+	evidence := installedEvidence(t, installed, 17, AMD64)
+	var reports []Progress
+
+	newInstalledInterface(controlledLocalInspector{evidence: evidence}, controlledLatestSource{outcome: LatestReleaseUnavailable}).Check(t.Context(), func(progress Progress) {
+		reports = append(reports, progress)
+	})
+
+	want := []Progress{{Operation: CheckOperation, Status: "Checking the qualified latest release", Mode: Spinner}}
+	if !reflect.DeepEqual(reports, want) {
+		t.Fatalf("Check progress = %+v, want %+v", reports, want)
+	}
+}
+
 func TestCheckDistinguishesSafeReleaseAndLocalOutcomes(t *testing.T) {
 	installed := ReleaseIdentity{Repository: Repository, Tag: "v2.0.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}
 	evidence := installedEvidence(t, installed, 17, AMD64)

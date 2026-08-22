@@ -196,7 +196,7 @@ func (inspector filesystemInspector) recover(ctx context.Context, progress Progr
 		return updateResult(RecoveryRequiredState, nil, RecoverRefused, "SBXR recovery was refused because safe recovery could not be proven.")
 	}
 	if progress != nil {
-		progress(Progress{Operation: RecoverOperation, Status: "Inspecting recovery evidence", Mode: Spinner})
+		progress(Progress{Operation: RecoverOperation, Status: InspectingRecoveryEvidence, Mode: Spinner})
 	}
 	switch record.Checkpoint {
 	case preparedCheckpoint:
@@ -466,7 +466,7 @@ func (inspector filesystemInspector) update(ctx context.Context, latest LatestRe
 		return updateResult(Ready, &prior.identity, UpdateReleaseRefused, "The latest SBXR release was refused.")
 	}
 	if progress != nil {
-		progress(Progress{Operation: UpdateOperation, Status: "Checking the qualified latest release", Mode: Spinner})
+		progress(Progress{Operation: UpdateOperation, Status: CheckingQualifiedLatest, Mode: Spinner})
 	}
 	candidate, outcome := source.PrepareLatest(ctx, installedArchitecture(priorInspection.installedRecord))
 	if ctx.Err() != nil {
