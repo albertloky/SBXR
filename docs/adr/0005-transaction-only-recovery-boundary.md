@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0014
+---
+
 # Transaction-only recovery boundary
 
 SBXR v1 keeps mandatory transaction safety but no durable backup or historical restore: System Changes owns one global mutation lock, one temporary Rollback Snapshot, the recovery journal, automatic rollback during an operation or after restart, and **Recovery Required** when current Desired State lineage or safe transaction resolution cannot be proven. Durable **Complete** deletes rollback material; only forward repair of the current proven Desired State remains, while VPS loss, missing or corrupt Desired State, old Desired State revisions or secrets, and Owner regret require Complete removal and rebuilding from scratch. This removes the Backup and Recovery Module and leaves exactly eleven deep Modules because the security-sensitive complexity of durable recovery is not justified until recovery beyond an unfinished Change Set is a demonstrated need.

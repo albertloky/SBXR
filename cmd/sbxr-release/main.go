@@ -151,7 +151,7 @@ func buildApplicationArchive(ctx context.Context, options buildOptions, source s
 		return nil, errors.New("release source refused")
 	}
 	executablePath := filepath.Join(directory, "sbxr")
-	command := exec.CommandContext(ctx, "go", "build", "-buildvcs=false", "-trimpath", "-o", executablePath, "./cmd/sbxr-installer-updater")
+	command := exec.CommandContext(ctx, "go", "build", "-buildvcs=false", "-trimpath", "-o", executablePath, "./cmd/sbxr")
 	command.Dir = sourceRoot
 	command.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH="+string(options.architecture))
 	if _, err := command.CombinedOutput(); err != nil {

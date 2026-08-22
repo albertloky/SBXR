@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0014
+---
+
 # Desired State and migrations
 
 SBXR keeps one typed, root-only JSON Desired State behind the State Module's `Load` and `PrepareCommit` Interface, while each owning Module inspects separate Observed State. Revision-bound one-use Plans, review-only sequential migrations, one transaction-scoped Rollback Snapshot, publication of Desired State last, automatic rollback of unfinished Change Sets, and **Recovery Required** on unprovable lineage were chosen over split files, in-place edits, silent migration, or best-effort recovery so stale or half-applied configuration can never become current Desired State; the canonical decisions are the [ticket 13 resolution](https://github.com/albertloky/SBXR/issues/13#issuecomment-5176418094) and [Decide the SBXR v1 recovery boundary](https://github.com/albertloky/SBXR/issues/21#issuecomment-5180278181).

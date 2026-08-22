@@ -1,5 +1,5 @@
 ---
-status: superseded in part by ADR-0010
+status: superseded by ADR-0014
 ---
 
 # Pasteable installation and destructive reclamation

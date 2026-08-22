@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0014
+---
+
 # Installation Module
 
 SBXR adds Installation as a twelfth deep Module because the complete review-first move from proven **Not installed** to proven **Managed** now has enough cross-Module Plan composition, Destructive Reclamation confirmation, fresh pre-Apply validation, State preparation, privileged handoff, operation tracking, cancellation, and restart coordination to earn one interface and one owner. Installation exposes only the Owner actions Review, Confirm Reclamation, Apply, Inspect, Request Cancellation, and Recover; keeps pre-Apply state memory-only; consumes one opaque Approval per Apply attempt; returns domain results for a presentation adapter; and preserves the current Owner experience.

@@ -66,8 +66,10 @@ func TestContinuousVerificationBuildsAndRunsTheFourAssetPackageNatively(t *testi
 		"/var/lib/sbxr/installed.json",
 		"Update in progress",
 		"go test ./internal/softwarelifecycle/adapter/terminal -count=1",
+		"go test ./... -count=1",
 		"go test -race ./internal/softwarelifecycle",
-		"go vet ./cmd/sbxr-installer-updater",
+		"go test -race ./... -count=1",
+		"go vet ./...",
 	} {
 		if !strings.Contains(workflow, required) {
 			t.Fatalf("verify.yml omitted %q", required)

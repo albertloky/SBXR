@@ -1,7 +1,0 @@
-[Unit]
-Description=SBXR serial certificate renewal evaluation
-After=network-online.target sbxr-recovery.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/sbxr private certificate-renewal

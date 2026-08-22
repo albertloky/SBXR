@@ -1,177 +1,44 @@
 # SBXR
 
-SBXR is a single-owner system for managing a fixed set of proxy connection choices on one VPS.
+SBXR is a single-owner Installer-Updater for one executable on one Ubuntu Server.
 
 ## Language
 
-**Owner**:
-The one person who exclusively controls an SBXR installation and its credentials.
-_Avoid_: User, account, administrator
+### Owner
+The one person who exclusively controls one SBXR installation.
 
-**Owner Launch Identity**:
-The root or non-root Linux identity through which the Owner starts SBXR. It is distinct from the Owner, who is the person in control.
-_Avoid_: Owner, Owner account, User, service identity
+### Software Lifecycle
+The sole product Module. It owns installed status, qualified stable release discovery, update, rollback, forward completion, and recovery.
 
-**Connection Profile**:
-One named connection choice that the Owner can configure, test, export, and use from a client device.
-_Avoid_: Protocol, mode, node
+### Pasteable Install Command
+The root-authorized command that finds and installs only the Qualified Stable Release into SBXR's two fixed durable paths.
 
-**Not set up**:
-The accepted long-term Connection Profile state in which SBXR has not created the profile's complete settings, credentials, and owned dependencies, so the profile cannot be enabled, exported, or tested until its setup flow succeeds. Not set up does not itself mean that Installation or a Module is unhealthy.
-_Avoid_: Disabled, Failed, partially configured
+### Release Identity
+The repository, immutable tag, commit SHA, and `release-index.json` SHA-256 that together identify one exact release.
 
-**Enabled**:
-The Connection Profile state in which complete settings, credentials, and owned dependencies exist and SBXR exposes and publishes the profile.
-_Avoid_: Set up, Healthy, active service
+### Release Sequence
+The authenticated positive integer that is the only authority for release order.
 
-**Disabled**:
-The Connection Profile state in which complete settings, credentials, and owned dependencies already exist but SBXR does not expose or publish the profile; the Owner can review a later Change Set to enable it without repeating setup.
-_Avoid_: Not set up, Failed, deleted
+### Qualified Stable Release
+GitHub's canonical immutable Latest release whose four assets, Release Identity, attestations, and Acceptance Record pass Release Qualification.
 
-**Set up Connection Profile**:
-A Connection Profile whose lifecycle state is Enabled or Disabled because its complete settings, credentials, and owned dependencies exist. Set up is a collective description, not a fourth lifecycle state.
-_Avoid_: Not set up, configured, Healthy
+### Release Qualification
+Proof that the exact packaged two-release journey and every required automated, live, identity, SSH, recovery, and secret-safety check passed for unchanged release bytes.
 
-**Clean VPS**:
-A Not installed Ubuntu host without prior SBXR resources or unrelated infrastructure occupying an SBXR-owned seam; ordinary non-conflicting software may be present.
-_Avoid_: Empty VPS, freshly imaged VPS
+### Acceptance Record
+The public, secret-safe record that binds one Release Identity to its qualification stages, evidence, runner facts, and exact asset digests.
 
-**Reclaimable VPS**:
-A Not installed Ubuntu host where the Owner accepts deletion of every specifically reviewed conflict at SBXR's fixed seams while resources outside those exact conflicts must remain unchanged.
-_Avoid_: Clean VPS, disposable VPS, automatically adopted VPS
+### Installed Record
+The root-owned schema-1 record that binds the active executable to its Release Identity, Release Sequence, architecture, and executable digest.
 
-**SBXR-owned seam**:
-An exact address, port, protocol, service identity, resource identity, or path that the reviewed SBXR Plan requires SBXR to own. Ordinary software outside those exact boundaries is not an Installation conflict.
-_Avoid_: Every listener, every installed service, dedicated-appliance boundary
+### Update Record
+The strict root-owned schema-1 transaction record that selects rollback before `Committed` or forward completion at and after `Committed`.
 
-**Pasteable Install Command**:
-One command the Owner can paste on a Clean VPS or Reclaimable VPS to fetch the current qualified stable bootstrap, install or repair only fixed prerequisites, and enter review-first installation without itself authorizing Apply or performing Destructive Reclamation.
-_Avoid_: One-line installer, unattended installer
+### Ready
+The installed lifecycle state in which the active executable and Installed Record agree and no update needs recovery.
 
-**Installation**:
-The review-first process that moves SBXR from a proven Not installed state to proven Managed state through one exact Plan, one Apply attempt, and any required rollback or forward recovery.
-_Avoid_: Update, repair, Complete removal, Pasteable Install Command
+### Update in progress
+The installed lifecycle state in which one process owns the Software Lifecycle mutation lock.
 
-**Cloudflare Profile Setup**:
-The review-first Managed-to-Managed process that atomically creates the complete settings, credentials, and owned dependencies for VLESS XHTTP, VLESS WebSocket, Hysteria2, TUIC, and AnyTLS. Before Irreversible Cloudflare setup started it can restore the prior Managed revision; afterward it must complete forward or enter Recovery Required.
-_Avoid_: Installation, Cloudflare Tunnel, partial profile setup
-
-**Bootstrap Prerequisite Repair**:
-The narrow pre-Plan root operation allowed to install or repair SBXR's fixed launch prerequisites; it cannot stop services, remove conflicting packages, change firewall policy, delete identities, inspect Infrastructure Secrets, or mutate Cloudflare.
-_Avoid_: Destructive Reclamation, Apply, host cleanup
-
-**Destructive Reclamation**:
-An Owner-approved forward-only operation that records durable recovery authority before permanently removing the exact conflicts shown in the reviewed Plan, then continues until SBXR reaches Managed.
-_Avoid_: Repair, cleanup, adoption
-
-**Reclamation Boundary**:
-The fixed limit on Destructive Reclamation: remove only reviewed conflicting packages without autoremove; stop an exact conflicting process and delete its freshly re-proved exact executable or unambiguous script when both appear in the Plan; preserve unrelated data; delete only exclusive conflicting identities; replace inbound firewall policy while preserving SSH and outbound traffic; and remove Docker while preserving its images, volumes, and application data. An exact package-owned executable may be deleted and its package held only with an explicit damaged-package and missed-security-update warning.
-_Avoid_: Clean the server, remove anything suspicious, best-effort cleanup
-
-**Protected Host Foundation**:
-The fixed operating-system executables, services, libraries, interpreters, mounts, package tools, current shell, SSH access, and recovery dependencies that Destructive Reclamation must never delete even when they occupy a requested seam.
-_Avoid_: Probably safe to delete, replaceable system file
-
-**SSH Preservation Proof**:
-The in-memory agreement between the direct SSH session identity captured at launch and fresh observations of its active service, exact listener, and established connection. A listening SSH port or another session is not sufficient.
-_Avoid_: SSH port, SSH configuration, session guess
-
-**Irreversible Reclamation Started**:
-The durable checkpoint written before the first destructive effect; before it the Owner may leave without change, and after it SBXR offers only exact forward recovery to Managed.
-_Avoid_: Apply started, point of no return, partial cleanup
-
-**Irreversible Cloudflare setup started**:
-The durable Cloudflare Profile Setup checkpoint after which SBXR has deleted rollback authority and must complete all five profiles forward or enter Recovery Required.
-_Avoid_: Cloudflare write started, setup cannot fail, partial profile setup
-
-**Acceptance VPS**:
-A disposable VPS reserved for explicitly approved live acceptance, where destructive installation, change, rollback, recovery, and Complete removal checks may run without risking Owner data that must be preserved.
-_Avoid_: Production VPS, valued VPS
-
-**Acceptance Run**:
-One explicitly approved execution of a written acceptance checklist against an exact Acceptance VPS; approval covers every listed step but no unlisted target or action.
-_Avoid_: Standing permission, ad hoc live testing
-
-**Acceptance Client**:
-An explicitly approved disposable client environment outside the Acceptance VPS that Codex may use with temporary Client Access Values during an Acceptance Run; the values are removed or rotated afterward.
-_Avoid_: Owner's personal device, maintained-client acceptance
-
-**Owner Acceptance**:
-Albert's live acceptance on maintained client apps, physical devices, real networks, or Owner-operated workflows when the first release or an affected surface requires it; automated checks and Codex observations cannot satisfy it.
-_Avoid_: Inferred acceptance, Codex acceptance
-
-**Release Qualification**:
-Proof that one exact Release Identity has every required acceptance stage marked Passed or Not required with redacted evidence; only a qualified release may become stable or enter automatic-update discovery.
-_Avoid_: Tests passed, release candidate exists, acceptance pending
-
-**Package Qualification Command**:
-A public, documented, offline command that runs required controlled procedures through the exact packaged executable by reusing production Module Interfaces and transaction paths without live provider effects.
-_Avoid_: Hidden test mode, second transaction harness, source-tree evidence
-
-**Packaged Qualification Run**:
-One no-live execution of the Package Qualification Command, bound to one exact application payload and its matching component archive.
-_Avoid_: Acceptance Run, Owner Acceptance, live acceptance
-
-**Release Identity**:
-The exact repository, immutable tag, commit SHA, and release-index SHA-256 that together identify the release artifacts being accepted.
-_Avoid_: Version number, tag name alone
-
-**Acceptance Record**:
-The single redacted, publishable record of acceptance status, runner, time, software versions, stable check code, secret-safe result, and evidence link or Not required reason; no secret-bearing acceptance archive exists.
-_Avoid_: Raw evidence bundle, hidden acceptance logs
-
-**Acceptance Ladder**:
-The ordered acceptance stages Module Verification, Seam Verification, Integrated Verification, Codex Live Acceptance, and risk-based Owner Acceptance; a required failed or pending stage blocks every later claim and Release Qualification.
-_Avoid_: Tests passed, fully tested
-
-**Module Acceptance**:
-Proof that one Module passed its required Module Verification, Seam Verification, and every live check available before integration; its ticket may close with integrated checks explicitly pending, but this is not Release Qualification.
-_Avoid_: Release accepted, fully qualified
-
-**Acceptance Baseline**:
-A proven Managed revision or proven Not installed state from which an Acceptance Run scenario may safely begin; uncertainty requires stopping and reimaging rather than reusing the VPS.
-_Avoid_: VPS is reachable, seems clean
-
-**Client Access Value**:
-A credential-bearing value used by a client device, including a Connection Profile credential, share URI, QR code content, or subscription URL.
-_Avoid_: Infrastructure credential
-
-**Infrastructure Secret**:
-A credential or private key used by SBXR or a managed service to administer infrastructure or prove server identity, rather than by a client device.
-_Avoid_: Client credential, Client Access Value
-
-**Dedicated Broad Cloudflare User API Token**:
-The Infrastructure Secret that the Owner creates only for SBXR with user-scoped API Tokens Edit plus Cloudflare Tunnel Edit, DNS Edit, and Zone Read across every Cloudflare account and zone available to that Owner. It gives SBXR authority over the Owner's User API Tokens and is stored root-only for guided Cloudflare health, repair, update, rotation, and Complete removal; the legacy Global API Key is never accepted in its place.
-_Avoid_: Global API Key, Account API Token, least-authority token, Tunnel run token
-
-**Desired State**:
-The Owner's saved intended SBXR configuration and last successfully committed revision.
-_Avoid_: Live state, observed configuration
-
-**Observed State**:
-A fresh, read-only inspection of the managed VPS that SBXR compares with Desired State without silently adopting differences.
-_Avoid_: Authoritative State, saved configuration
-
-**Recovery Required**:
-The fail-safe installation status entered when SBXR cannot prove either the current Desired State lineage or the safe resolution of an unfinished Change Set; normal changes remain blocked.
-_Avoid_: Healthy, partially recovered
-
-**Managed**:
-The installation status in which Desired State lineage is proven and no Change Set is unfinished, regardless of the separate Health Results reported by individual Modules.
-_Avoid_: Healthy, problem-free
-
-**Change Set**:
-One approved, revision-bound attempt to move the complete managed installation from one Desired State revision to the next under the global mutation lock.
-_Avoid_: Partial update, individual file change
-
-**Rollback Snapshot**:
-The single root-only, transaction-scoped copy of the last proven Managed revision, or the proven Not installed baseline, used only to reverse its unfinished Change Set and deleted after durable completion.
-_Avoid_: Backup, Recovery Point, restore point
-
-**Correction Flow**:
-The navigable Owner Console path that explains a blocked operation and offers an SBXR-owned correction, required Owner input, recheck, or safe return instead of a dead end.
-_Avoid_: Continue anyway, error page
-
-**Live Profile Check**:
-An optional Owner-started check after SBXR reaches Managed that automatically attributes outside client traffic to each Connection Profile without manual success reporting.
-_Avoid_: Installation health gate, manual connectivity report
+### Recovery required
+The installed lifecycle state in which durable transaction evidence must select safe rollback or forward completion before normal actions can continue.

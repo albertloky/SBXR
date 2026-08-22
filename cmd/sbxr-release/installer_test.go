@@ -16,8 +16,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-
-	"github.com/creack/pty"
 )
 
 func TestGeneratedInstallerRefusesNonRootBeforeMutation(t *testing.T) {
@@ -168,17 +166,10 @@ func TestGeneratedInstallerLaunchesTheMenuThroughAControllingTerminal(t *testing
 		t.Skip("the packaged linux/amd64 executable runs only on its native host")
 	}
 	fixture := newInstallerFixture(t)
-	command := exec.Command("bash", "-c", fmt.Sprintf("bash %q </dev/null", fixture.script))
+	command := exec.Command("script", "-qec", fmt.Sprintf("bash %q </dev/null", fixture.script), "/dev/null")
 	command.Env = append(os.Environ(), "SBXR_INSTALL_TEST_ROOT="+fixture.root)
-	terminal, err := pty.Start(command)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, _ = io.ReadAll(terminal)
-	waitErr := command.Wait()
-	_ = terminal.Close()
-	if waitErr != nil {
-		t.Fatal(waitErr)
+	if body, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("terminal install = %v, %q", err, body)
 	}
 	if _, err := os.Stat(filepath.Join(fixture.root, "fixtures/launched")); err != nil {
 		t.Fatalf("installed menu was not launched: %v", err)
@@ -412,8 +403,8 @@ func TestGeneratedInstallerRefusesProvenHistoricalFullProductUnchanged(t *testin
 	commit := strings.Repeat("d", 40)
 	payload := strings.Repeat("e", 64)
 	body := fmt.Sprintf("#!/usr/bin/env bash\nprintf '%%s\\n' '%s'\n", fmt.Sprintf(`{"build":{"repository":"albertloky/SBXR","tag":"v1.0.15","commit":"%s","payload_sha256":"%s"},"architecture":"amd64","state_schema":2}`, commit, payload))
-	digest := sha256.Sum256([]byte(body))
-	target := fmt.Sprintf("/opt/sbxr/releases/v1.0.15-%s-%s/sbxr", commit, hex.EncodeToString(digest[:]))
+	indexSHA256 := writeHistoricalReleaseFixture(t, fixture.root, commit, []byte(body))
+	target := fmt.Sprintf("/opt/sbxr/releases/v1.0.15-%s-%s/sbxr", commit, indexSHA256)
 	physical := fixture.root + target
 	if err := os.MkdirAll(filepath.Dir(physical), 0o755); err != nil {
 		t.Fatal(err)
@@ -431,6 +422,45 @@ func TestGeneratedInstallerRefusesProvenHistoricalFullProductUnchanged(t *testin
 	if err == nil || strings.TrimSpace(string(result)) != "SOFTWARE-LIFECYCLE-INSTALL-LEGACY-REFUSED" || linkErr != nil || link != target {
 		t.Fatalf("legacy = %v, %q, link %q, %v", err, result, link, linkErr)
 	}
+}
+
+func TestGeneratedInstallerDoesNotTrustAForgedHistoricalSelfReport(t *testing.T) {
+	fixture := newInstallerFixture(t)
+	commit := strings.Repeat("d", 40)
+	body := fmt.Sprintf("#!/usr/bin/env bash\nprintf '%%s\\n' '%s'\n", fmt.Sprintf(`{"build":{"repository":"albertloky/SBXR","tag":"v1.0.15","commit":"%s","payload_sha256":"%s"},"architecture":"amd64","state_schema":2}`, commit, strings.Repeat("e", 64)))
+	target := fmt.Sprintf("/opt/sbxr/releases/v1.0.15-%s-%s/sbxr", commit, strings.Repeat("f", 64))
+	physical := fixture.root + target
+	if err := os.MkdirAll(filepath.Dir(physical), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(physical, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(fixture.root, "usr/local/bin/sbxr")); err != nil {
+		t.Fatal(err)
+	}
+
+	if result, err := exec.Command("bash", fixture.script).CombinedOutput(); err != nil {
+		t.Fatalf("install over forged legacy identity = %v, %q", err, result)
+	}
+	assertInstalledFixture(t, fixture.root, fixture.executable)
+}
+
+func writeHistoricalReleaseFixture(t *testing.T, root, commit string, executable []byte) string {
+	t.Helper()
+	archive := filepath.Join(root, "fixtures/legacy-sbxr-linux-amd64.tar.gz")
+	writeInstallerArchive(t, archive, executable)
+	body, err := os.ReadFile(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(body)
+	index := fmt.Sprintf(`{"schema":1,"product":"sbxr","repository":"albertloky/SBXR","version":"1.0.15","sequence":16,"tag":"v1.0.15","commit":"%s","state_schema":2,"minimum_updater_schema":1,"assets":[{"role":"application-linux-amd64","name":"sbxr-linux-amd64.tar.gz","size":%d,"sha256":"%s"}]}`, commit, len(body), hex.EncodeToString(digest[:]))
+	if err := os.WriteFile(filepath.Join(root, "fixtures/legacy-release-index.json"), []byte(index), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	indexDigest := sha256.Sum256([]byte(index))
+	return hex.EncodeToString(indexDigest[:])
 }
 
 func replaceInstalledRecord(t *testing.T, root, old, new string) {
@@ -663,14 +693,14 @@ func writeInstallerTools(t *testing.T, root string) {
 	}
 	write("id", `printf '0\n'`)
 	write("uname", fmt.Sprintf(`case "${1-}" in -s) printf 'Linux\n' ;; -m) if [ -f %q/fixtures/unsupported ]; then printf 'riscv64\n'; elif [ -f %q/fixtures/arm64 ]; then printf 'aarch64\n'; else printf 'x86_64\n'; fi ;; *) exit 1 ;; esac`, root, root))
-	write("curl", fmt.Sprintf(`out=''; while [ "$#" -gt 0 ]; do case "$1" in --output) out=$2; shift 2 ;; http*) asset=${1##*/}; shift ;; *) shift ;; esac; done; if [ -f %q/fixtures/interrupt ]; then parent=$(/bin/ps -o ppid= -p "$PPID"); /bin/kill -TERM "$parent"; exit 1; fi; /bin/cp %q/fixtures/"$asset" "$out" || exit 1; printf 'https://release-assets.githubusercontent.com/exact\n200'`, root, root))
+	write("curl", fmt.Sprintf(`out=''; legacy=''; while [ "$#" -gt 0 ]; do case "$1" in --output) out=$2; shift 2 ;; http*) url=$1; asset=${1##*/}; case "$url" in */v1.0.15/*) legacy='legacy-' ;; esac; shift ;; *) shift ;; esac; done; if [ -f %q/fixtures/interrupt ]; then parent=$(/bin/ps -o ppid= -p "$PPID"); /bin/kill -TERM "$parent"; exit 1; fi; /bin/cp %q/fixtures/"$legacy$asset" "$out" || exit 1; printf 'https://release-assets.githubusercontent.com/exact\n200'`, root, root))
 	write("sha256sum", `if [ "$#" -eq 0 ]; then /usr/bin/shasum -a 256; else /usr/bin/shasum -a 256 "$1"; fi`)
 	write("flock", fmt.Sprintf(`[ ! -f %q/fixtures/locked ]`, root))
 	write("findmnt", fmt.Sprintf(`[ ! -f %q/fixtures/mount-failure ] || exit 1; [ ! -f %q/fixtures/mounted ] || /bin/cat %q/fixtures/mounted`, root, root, root))
 	write("rm", fmt.Sprintf(`args=(); signal=0; for value in "$@"; do [ "$value" = '--one-file-system' ] || args+=("$value"); [[ "$value" = */usr/local/bin/sbxr ]] && signal=1; done; if [ "$signal" -eq 1 ] && [ -f %q/fixtures/interrupt-after ]; then /bin/kill -TERM "$PPID"; fi; exec /bin/rm "${args[@]}"`, root))
 	write("sync", `exit 0`)
 	write("stat", fmt.Sprintf(`format=$2; path=$3; case "$path" in /proc/*/fd/9) path=%q/run/lock/sbxr.lock ;; esac; if [ "$format" = '%%d:%%i:%%F' ] && [ -f %q/fixtures/race ] && [[ "$path" = */usr/local/bin/sbxr ]]; then if [ -f %q/fixtures/race-seen ]; then /bin/rm -rf "$path"; /bin/ln -s %q/fixtures/outside "$path"; else : >%q/fixtures/race-seen; fi; fi; facts=$(/usr/bin/stat -f '%%d:%%i:%%Lp:%%l:%%HT' "$path") || exit 1; device=${facts%%%%:*}; rest=${facts#*:}; inode=${rest%%%%:*}; rest=${rest#*:}; mode=${rest%%%%:*}; rest=${rest#*:}; links=${rest%%%%:*}; kind=${rest#*:}; case "$kind" in 'Regular File') kind='regular file' ;; Directory) kind='directory' ;; 'Symbolic Link') kind='symbolic link' ;; esac; case "$format" in '%%u:%%a:%%h:%%F') printf '0:%%s:%%s:%%s\n' "$mode" "$links" "$kind" ;; '%%u:%%a:%%F') printf '0:%%s:%%s\n' "$mode" "$kind" ;; '%%d:%%i:%%F') printf '%%s:%%s:%%s\n' "$device" "$inode" "$kind" ;; '%%d:%%i') printf '%%s:%%s\n' "$device" "$inode" ;; *) exit 1 ;; esac`, root, root, root, root, root))
-	for _, name := range []string{"chmod", "cut", "dd", "grep", "head", "mkdir", "mktemp", "mv", "od", "readlink", "sed", "tail", "tar", "tr", "wc"} {
+	for _, name := range []string{"chmod", "cmp", "cut", "dd", "grep", "head", "mkdir", "mktemp", "mv", "od", "readlink", "sed", "tail", "tar", "tr", "wc"} {
 		path, err := exec.LookPath(name)
 		if err != nil {
 			t.Fatal(err)

@@ -189,7 +189,7 @@ download() {
   fi
   case "$effective" in
     "$url") return 0 ;;
-    https://release-assets.githubusercontent.com/*|https://*.githubusercontent.com/*) [ "$url" = "https://github.com/$REPOSITORY/releases/download/$TAG/$name" ] && return 0; return 2 ;;
+    https://release-assets.githubusercontent.com/*|https://*.githubusercontent.com/*) case "$url" in "https://github.com/$REPOSITORY/releases/download/"*/"$name") return 0 ;; *) return 2 ;; esac ;;
     *) return 2 ;;
   esac
 }
@@ -221,20 +221,43 @@ installed_directory="$ROOT/var/lib/sbxr"
 installed_record="$installed_directory/installed.json"
 if [ -L "$active" ]; then
   legacy_target=$("$ROOT/usr/bin/readlink" "$active" 2>/dev/null) || path_refused
-  case "$legacy_target" in
-    /opt/sbxr/releases/v1.0.[0-9]-[0-9a-f]*-[0-9a-f]*/sbxr|/opt/sbxr/releases/v1.0.1[0-5]-[0-9a-f]*-[0-9a-f]*/sbxr)
+  legacy_path_pattern='^/opt/sbxr/releases/v1\.0\.([0-9]|1[0-5])-[0-9a-f]{40}-[0-9a-f]{64}/sbxr$'
+  if printf '%s\n' "$legacy_target" | "$ROOT/usr/bin/grep" -Eqx "$legacy_path_pattern"; then
+      legacy_release=${legacy_target#/opt/sbxr/releases/}
+      legacy_release=${legacy_release%/sbxr}
+      legacy_tag=${legacy_release%%-*}
+      legacy_rest=${legacy_release#*-}
+      legacy_commit=${legacy_rest%%-*}
+      legacy_index_sha=${legacy_rest#*-}
       legacy="$ROOT$legacy_target"
       if [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$legacy" 2>/dev/null)" = '0:755:1:regular file' ]; then
-        legacy_sha=$("$ROOT/usr/bin/sha256sum" "$legacy" | "$ROOT/usr/bin/cut" -d' ' -f1)
-        case "$legacy_target" in *-"$legacy_sha"/sbxr) : ;; *) legacy_sha='' ;; esac
-        if [ -n "$legacy_sha" ]; then
-          legacy_identity=$("$legacy" version --json 2>/dev/null) || legacy_identity=''
-          legacy_pattern='^\{"build":\{"repository":"{{.Repository}}","tag":"v1\.0\.([0-9]|1[0-5])","commit":"[0-9a-f]{40}","payload_sha256":"[0-9a-f]{64}"\},"architecture":"(amd64|arm64)","state_schema":[1-9][0-9]*\}$'
-          [ "$(printf '%s\n' "$legacy_identity" | "$ROOT/usr/bin/grep" -c '^')" -eq 1 ] 2>/dev/null && printf '%s\n' "$legacy_identity" | "$ROOT/usr/bin/grep" -Eqx "$legacy_pattern" && finish 'SOFTWARE-LIFECYCLE-INSTALL-LEGACY-REFUSED'
+        if [ ! -x "$ROOT/usr/bin/tar" ]; then
+          "$ROOT/usr/bin/apt-get" install --yes --no-install-recommends tar >/dev/null 2>&1 || prerequisite_failed
+          [ -x "$ROOT/usr/bin/tar" ] || prerequisite_failed
+        fi
+        legacy_index="$WORK/legacy-release-index.json"
+        legacy_archive="$WORK/legacy-sbxr-linux-$ARCH.tar.gz"
+        legacy_executable="$WORK/legacy-sbxr"
+        if download 'release-index.json' "$legacy_index" 1048576 "https://github.com/$REPOSITORY/releases/download/$legacy_tag/release-index.json" \
+          && [ "$("$ROOT/usr/bin/sha256sum" "$legacy_index" | "$ROOT/usr/bin/cut" -d' ' -f1)" = "$legacy_index_sha" ] \
+          && single_line "$legacy_index" \
+          && "$ROOT/usr/bin/grep" -Fqx '"repository":"{{.Repository}}"' <("$ROOT/usr/bin/sed" -n 's/.*\("repository":"[^"]*"\).*/\1/p' "$legacy_index") \
+          && "$ROOT/usr/bin/grep" -Fqx '"tag":"'"$legacy_tag"'"' <("$ROOT/usr/bin/sed" -n 's/.*\("tag":"[^"]*"\).*/\1/p' "$legacy_index") \
+          && "$ROOT/usr/bin/grep" -Fqx '"commit":"'"$legacy_commit"'"' <("$ROOT/usr/bin/sed" -n 's/.*\("commit":"[^"]*"\).*/\1/p' "$legacy_index"); then
+          legacy_archive_sha=$("$ROOT/usr/bin/sed" -n 's/.*"name":"sbxr-linux-'"$ARCH"'\.tar\.gz"[^}]*"sha256":"\([0-9a-f]\{64\}\)".*/\1/p' "$legacy_index")
+          legacy_archive_size=$("$ROOT/usr/bin/sed" -n 's/.*"name":"sbxr-linux-'"$ARCH"'\.tar\.gz"[^}]*"size":\([0-9][0-9]*\).*/\1/p' "$legacy_index")
+          if [ "${#legacy_archive_sha}" -eq 64 ] && [ "$legacy_archive_size" -gt 0 ] 2>/dev/null \
+            && download "sbxr-linux-$ARCH.tar.gz" "$legacy_archive" 268435456 "https://github.com/$REPOSITORY/releases/download/$legacy_tag/sbxr-linux-$ARCH.tar.gz" \
+            && [ "$("$ROOT/usr/bin/wc" -c <"$legacy_archive")" -eq "$legacy_archive_size" ] 2>/dev/null \
+            && [ "$("$ROOT/usr/bin/sha256sum" "$legacy_archive" | "$ROOT/usr/bin/cut" -d' ' -f1)" = "$legacy_archive_sha" ] \
+            && [ "$("$ROOT/usr/bin/tar" -tzf "$legacy_archive" 2>/dev/null)" = 'sbxr' ] \
+            && "$ROOT/usr/bin/tar" -xOzf "$legacy_archive" sbxr >"$legacy_executable" 2>/dev/null \
+            && "$ROOT/usr/bin/cmp" -s "$legacy" "$legacy_executable"; then
+            finish 'SOFTWARE-LIFECYCLE-INSTALL-LEGACY-REFUSED'
+          fi
         fi
       fi
-      ;;
-  esac
+  fi
 fi
 if [ -f "$active" ] && [ ! -L "$active" ] && [ -d "$installed_directory" ] && [ ! -L "$installed_directory" ] && [ -f "$installed_record" ] && [ ! -L "$installed_record" ] \
   && [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$active" 2>/dev/null)" = '0:755:1:regular file' ] \

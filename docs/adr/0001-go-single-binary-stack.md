@@ -1,7 +1,11 @@
+---
+status: accepted
+---
+
 # Go single-binary implementation stack
 
-SBXR uses pinned Go to build pure-Go (`CGO_ENABLED=0`) single-executable archives for immutable GitHub Releases on `linux/amd64` and `linux/arm64`; the executable embeds schemas, migrations, systemd templates, and its Release Identity, opens the Owner TUI by default, and exposes private system modes, `sbxr version`, and the public Package Qualification Command accepted by ADR-0012.
+SBXR uses pinned Go to build one pure-Go (`CGO_ENABLED=0`) Installer-Updater executable for Ubuntu Server 24.04 on `linux/amd64` and `linux/arm64`. The installed executable opens the standard-library numbered line menu only when called with zero arguments.
 
-All application code must be organized as the deep Modules with small Interfaces established by [Define the deep-module architecture](https://github.com/albertloky/SBXR/issues/6#issuecomment-5174654886); Bubble Tea v2, Lip Gloss v2, selected Bubbles controls, one maintained YAML library, and one reviewed QR library are the only pre-approved dependency categories.
+Software Lifecycle is the only product Module. The line menu, public GitHub release access, fixed-path local I/O, Pasteable Install Command, and repository release workflows are Adapters. The installed product adds no plugin system, secondary command surface, migration framework, second transaction seam, or unsigned qualification override. During one approved Acceptance VPS run, the same zero-argument executable may consume the signed, root-only, workflow-bound qualification authority defined by ADR-0014.
 
-Go was selected over Python with Textual and Rust with Ratatui because it combines runtime-free installation and rollback with strong compile-time structure and lower maintenance complexity; clean Interfaces and Seams permit future per-Module replacement without adding a speculative plugin or multi-language framework.
+The standard library is the default dependency boundary. ADR-0008 records the two approved release-verification dependencies.

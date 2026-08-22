@@ -1,5 +1,5 @@
 ---
-status: superseded by ADR-0005
+status: superseded by ADR-0014
 ---
 
 # Managed lifecycle and recovery

@@ -1,7 +1,0 @@
-[Unit]
-Description=SBXR scheduled read-only health check
-After=network-online.target sbxr-recovery.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/sbxr private health-check

@@ -38,10 +38,12 @@ jobs:
           go test ./internal/softwarelifecycle/adapter/github -run "$github_tests" -count=1
           go test ./internal/softwarelifecycle/adapter/terminal -count=1
           go test ./cmd/sbxr-release -count=1
+          go test ./... -count=1
           go test -race ./internal/softwarelifecycle -run "$lifecycle_tests" -count=1
           go test -race ./internal/softwarelifecycle/adapter/github -run "$github_tests" -count=1
           go test -race ./cmd/sbxr-release -count=1
-          go vet ./cmd/sbxr-installer-updater ./cmd/sbxr-release ./internal/softwarelifecycle/adapter/terminal
+          go test -race ./... -count=1
+          go vet ./...
       - name: Build and verify the exact four release assets
         env:
           RELEASE_TAG: v2.0.0
