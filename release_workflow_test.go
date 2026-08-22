@@ -170,6 +170,82 @@ func TestCandidateQualifiesTheManifestBoundTwoReleaseJourneyOnTheAcceptanceVPS(t
 	assertActionsPinned(t, acceptanceSources)
 }
 
+func TestStablePublishesOnlyTheSignedQualifiedDraftsAndProvesStableNoUpdate(t *testing.T) {
+	body, err := os.ReadFile(".github/workflows/stable.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(body)
+	for _, required := range []string{
+		"workflow_dispatch:",
+		"qualification_run_id:",
+		"group: installer-updater-release",
+		"cancel-in-progress: false",
+		"github.ref == 'refs/heads/main'",
+		"environment: acceptance-vps",
+		"environment: stable-publication",
+		".github/workflows/candidate.yml",
+		"conclusion == \"success\"",
+		"90 * 24 * 60 * 60",
+		"gh attestation verify qualification-manifest.json",
+		"archive/full-product-v1.0.15",
+		"release-burned/",
+		"sbxr-acceptance-record-v1",
+		"find \"$directory\" -maxdepth 1 -type f",
+		"install.sh",
+		"release-index.json",
+		"sbxr-linux-amd64.tar.gz",
+		"sbxr-linux-arm64.tar.gz",
+		"gh release edit",
+		"recheck_draft 0",
+		"recheck_draft 1",
+		"--draft=false",
+		"--prerelease=false",
+		"--latest",
+		"for attempt in $(seq 1 60)",
+		"predicate_type=release",
+		"Code: SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT",
+		"releases/latest/download/install.sh",
+		"cmp latest-install.sh pinned-install.sh",
+		"SOFTWARE-LIFECYCLE-INSTALL-ALREADY-CURRENT",
+		"SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT",
+		"SOFTWARE-LIFECYCLE-UPDATE-ALREADY-CURRENT",
+		"find /var/lib/sbxr -mindepth 1 -maxdepth 1 -printf '%f\\n'",
+		"StrictHostKeyChecking=yes",
+		"retention-days: 90",
+		"contents: write",
+	} {
+		if !strings.Contains(workflow, required) {
+			t.Fatalf("stable.yml omitted %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"sbxr-components-",
+		"acceptance staged-onboarding",
+		"validate-package-qualification",
+		"inputs.tag",
+		"go run ./cmd/sbxr-release -tag",
+		"actions/checkout@v",
+		"actions/setup-go@v",
+		"actions/upload-artifact@v",
+		"actions/download-artifact@v",
+	} {
+		if strings.Contains(workflow, forbidden) {
+			t.Fatalf("stable.yml retained %q", forbidden)
+		}
+	}
+	approval := strings.Index(workflow, `name == "stable-publication"`)
+	recheckA := strings.Index(workflow, "recheck_draft 0")
+	publishA := strings.Index(workflow, `gh release edit "$source_tag"`)
+	verifyA := strings.Index(workflow, "verify_public 0 true")
+	recheckB := strings.Index(workflow, "recheck_draft 1")
+	publishB := strings.Index(workflow, `gh release edit "$latest_tag"`)
+	if approval < 0 || !(approval < recheckA && recheckA < publishA && publishA < verifyA && verifyA < recheckB && recheckB < publishB) {
+		t.Fatal("stable publication does not recheck and verify each approved draft before advancing")
+	}
+	assertActionsPinned(t, workflow)
+}
+
 func assertActionsPinned(t *testing.T, workflow string) {
 	t.Helper()
 	for _, line := range strings.Split(workflow, "\n") {
