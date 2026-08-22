@@ -276,14 +276,6 @@ func TestRunHandlesWaitingAndActiveOperationEOF(t *testing.T) {
 				writePTY(t, master, "\r")
 				waitForPTY(t, master, "Latest stable version: | Checking the qualified latest release")
 			}
-			canonical, err := getTermios(slave.Fd())
-			if err != nil {
-				t.Fatal(err)
-			}
-			canonical.Lflag |= syscall.ICANON
-			if err := setTermios(slave.Fd(), canonical); err != nil {
-				t.Fatal(err)
-			}
 			writePTY(t, master, "\x04")
 			if active {
 				waitForPTY(t, master, "End of input received. SBXR will exit after a safe terminal result.")
