@@ -616,7 +616,7 @@ func waitForPTY(t *testing.T, master *os.File, want string) string {
 	var transcript strings.Builder
 	buffer := make([]byte, 4096)
 	for time.Now().Before(deadline) {
-		count, err := master.Read(buffer)
+		count, err := syscall.Read(int(master.Fd()), buffer)
 		if count > 0 {
 			transcript.Write(buffer[:count])
 			if strings.Contains(transcript.String(), want) {
@@ -652,7 +652,7 @@ func readPTY(master *os.File) string {
 	var transcript strings.Builder
 	buffer := make([]byte, 4096)
 	for {
-		count, err := master.Read(buffer)
+		count, err := syscall.Read(int(master.Fd()), buffer)
 		if count > 0 {
 			transcript.Write(buffer[:count])
 		}
