@@ -908,6 +908,56 @@ func TestQualificationCommandEvaluatesAcceptanceVPSAndConstructsRecords(t *testi
 			}
 			priorVerificationFacts, priorVerificationDecision = verificationFacts, jsonValue(t, string(verificationDecision))
 		}
+		finalObservation := priorVerificationFacts.(map[string]any)["observation"].(map[string]any)
+		identity := finalObservation["release_identity"].(map[string]any)
+		noUpdateFacts := map[string]any{
+			"observation": map[string]any{
+				"after_check_snapshot_sha256": strings.Repeat("8", 64), "after_install_snapshot_sha256": strings.Repeat("8", 64), "after_update_snapshot_sha256": strings.Repeat("8", 64), "before_snapshot_sha256": strings.Repeat("8", 64),
+				"check_result": "SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT", "install_result": "SOFTWARE-LIFECYCLE-INSTALL-ALREADY-CURRENT",
+				"executable_sha256": strings.Repeat("7", 64), "filesystem_layout_exact": true, "snapshots_complete": true,
+				"installed_record":        map[string]any{"architecture": "amd64", "commit": identity["commit"], "executable_sha256": strings.Repeat("7", 64), "release_index_sha256": identity["release_index_sha256"], "repository": identity["repository"], "schema": 1, "sequence": finalObservation["sequence"], "tag": identity["tag"]},
+				"mutation_lock_available": true, "ssh_continuity": true, "transaction_residue_absent": true, "update_result": "SOFTWARE-LIFECYCLE-UPDATE-ALREADY-CURRENT",
+			},
+			"observed_at": "2026-08-23T13:04:00Z", "prior_decision_sha256": sha256String(qualificationDocument(t, priorVerificationDecision)),
+			"publication_verification_decision": priorVerificationDecision, "publication_verification_facts": priorVerificationFacts, "schema": qualificationFactsSchema, "stage": "stable-no-update",
+		}
+		noUpdateDocument := qualificationDocument(t, noUpdateFacts)
+		noUpdateDecision, noUpdateErr := runQualificationCommand(binary, noUpdateDocument)
+		if noUpdateErr != nil {
+			t.Fatalf("%s stable no-update decision = %s, %v", name, noUpdateDecision, noUpdateErr)
+		}
+		decision := jsonObject(t, noUpdateDecision)
+		if decision["outcome"] != "accepted" || decision["public_verification"] != "Passed" || decision["stable_no_update"] != "Passed" || decision["facts_sha256"] != sha256String(noUpdateDocument) || decision["prior_decision_sha256"] != noUpdateFacts["prior_decision_sha256"] || len(decision["actions"].([]any)) != 0 || decision["release_identity"] == nil || decision["sequence"] != finalObservation["sequence"] {
+			t.Fatalf("%s stable no-update decision = %s", name, noUpdateDecision)
+		}
+		if retry, retryErr := runQualificationCommand(binary, noUpdateDocument); retryErr != nil || !bytes.Equal(retry, noUpdateDecision) {
+			t.Fatalf("%s stable no-update retry = %s, %v", name, retry, retryErr)
+		}
+		for hostileName, mutate := range map[string]func(map[string]any){
+			"incomplete observation": func(value map[string]any) { delete(value["observation"].(map[string]any), "update_result") },
+			"changed filesystem": func(value map[string]any) {
+				value["observation"].(map[string]any)["after_check_snapshot_sha256"] = strings.Repeat("9", 64)
+			},
+			"stale observation": func(value map[string]any) { value["observed_at"] = "2026-08-23T14:00:00Z" },
+			"mixed Release Identity": func(value map[string]any) {
+				value["observation"].(map[string]any)["installed_record"].(map[string]any)["tag"] = "v9.9.9"
+			},
+			"changed installed bytes": func(value map[string]any) {
+				value["observation"].(map[string]any)["executable_sha256"] = strings.Repeat("9", 64)
+			},
+			"contradictory result": func(value map[string]any) {
+				value["observation"].(map[string]any)["install_result"] = "SOFTWARE-LIFECYCLE-INSTALL-INSTALLED"
+			},
+			"transaction residue": func(value map[string]any) {
+				value["observation"].(map[string]any)["transaction_residue_absent"] = false
+			},
+			"incomplete snapshots": func(value map[string]any) { value["observation"].(map[string]any)["snapshots_complete"] = false },
+			"wrong prior decision": func(value map[string]any) { value["prior_decision_sha256"] = strings.Repeat("9", 64) },
+		} {
+			hostile := jsonObject(t, []byte(noUpdateDocument))
+			mutate(hostile)
+			assertQualificationRefused(t, binary, qualificationDocument(t, hostile), hostileName)
+		}
 	}
 
 	initialPreflight := candidateFacts("normal")

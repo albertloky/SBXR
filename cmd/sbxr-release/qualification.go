@@ -31,6 +31,7 @@ const (
 	stablePreflightStage               = "stable-preflight"
 	stablePublicationStage             = "stable-publication"
 	stablePublicationVerificationStage = "stable-publication-verification"
+	stableNoUpdateStage                = "stable-no-update"
 	maxQualificationFactsBytes         = 16 << 20
 )
 
@@ -561,6 +562,57 @@ type stablePublicationVerificationDecision struct {
 	Stage               string            `json:"stage"`
 }
 
+type stableInstalledRecord struct {
+	Architecture       softwarelifecycle.Architecture `json:"architecture"`
+	Commit             string                         `json:"commit"`
+	ExecutableSHA256   string                         `json:"executable_sha256"`
+	ReleaseIndexSHA256 string                         `json:"release_index_sha256"`
+	Repository         string                         `json:"repository"`
+	Schema             int                            `json:"schema"`
+	Sequence           uint64                         `json:"sequence"`
+	Tag                string                         `json:"tag"`
+}
+
+type stableNoUpdateObservation struct {
+	AfterCheckSnapshotSHA256   string                       `json:"after_check_snapshot_sha256"`
+	AfterInstallSnapshotSHA256 string                       `json:"after_install_snapshot_sha256"`
+	AfterUpdateSnapshotSHA256  string                       `json:"after_update_snapshot_sha256"`
+	BeforeSnapshotSHA256       string                       `json:"before_snapshot_sha256"`
+	CheckResult                softwarelifecycle.ResultCode `json:"check_result"`
+	ExecutableSHA256           string                       `json:"executable_sha256"`
+	FilesystemLayoutExact      bool                         `json:"filesystem_layout_exact"`
+	InstallResult              string                       `json:"install_result"`
+	InstalledRecord            stableInstalledRecord        `json:"installed_record"`
+	MutationLockAvailable      bool                         `json:"mutation_lock_available"`
+	SnapshotsComplete          bool                         `json:"snapshots_complete"`
+	SSHContinuity              bool                         `json:"ssh_continuity"`
+	TransactionResidueAbsent   bool                         `json:"transaction_residue_absent"`
+	UpdateResult               softwarelifecycle.ResultCode `json:"update_result"`
+}
+
+type stableNoUpdateFacts struct {
+	Observation                     stableNoUpdateObservation `json:"observation"`
+	ObservedAt                      string                    `json:"observed_at"`
+	PriorDecisionSHA256             string                    `json:"prior_decision_sha256"`
+	PublicationVerificationDecision json.RawMessage           `json:"publication_verification_decision"`
+	PublicationVerificationFacts    json.RawMessage           `json:"publication_verification_facts"`
+	Schema                          string                    `json:"schema"`
+	Stage                           string                    `json:"stage"`
+}
+
+type stableNoUpdateDecision struct {
+	Actions             []json.RawMessage       `json:"actions"`
+	FactsSHA256         string                  `json:"facts_sha256"`
+	Outcome             string                  `json:"outcome"`
+	PriorDecisionSHA256 string                  `json:"prior_decision_sha256"`
+	PublicVerification  string                  `json:"public_verification"`
+	ReleaseIdentity     decisionReleaseIdentity `json:"release_identity"`
+	Schema              string                  `json:"schema"`
+	Sequence            uint64                  `json:"sequence"`
+	StableNoUpdate      string                  `json:"stable_no_update"`
+	Stage               string                  `json:"stage"`
+}
+
 type candidateFailureStages struct {
 	CodexLiveAcceptance    string `json:"codex_live_acceptance"`
 	IntegratedVerification string `json:"integrated_verification"`
@@ -729,6 +781,12 @@ func runQualification(input io.Reader, output io.Writer) error {
 			return errors.New("qualification facts refused")
 		}
 		decision, err = evaluateStablePublicationVerification(facts, document)
+	case stableNoUpdateStage:
+		var facts stableNoUpdateFacts
+		if !decodeCanonical(document, &facts) {
+			return errors.New("qualification facts refused")
+		}
+		decision, err = evaluateStableNoUpdate(facts, document)
 	default:
 		return errors.New("qualification facts refused")
 	}
@@ -937,6 +995,44 @@ func evaluateStablePublicationVerification(facts stablePublicationVerificationFa
 	decision.Outcome = "propagation-pending"
 	decision.Actions = []json.RawMessage{mustJSON(observeStableReleaseAction{Commit: action.Commit, FactsSHA256: decision.FactsSHA256, PriorDecisionSHA256: facts.PriorDecisionSHA256, ReleaseID: action.ReleaseID, ReleaseIdentity: action.ReleaseIdentity, Tag: action.Tag, Type: "observe-stable-release", WaitSeconds: 5})}
 	return decision, nil
+}
+
+func evaluateStableNoUpdate(facts stableNoUpdateFacts, document []byte) (stableNoUpdateDecision, error) {
+	refused := func() (stableNoUpdateDecision, error) {
+		return stableNoUpdateDecision{}, errors.New("stable no-update verification refused")
+	}
+	observedAt, observedErr := time.Parse(time.RFC3339, facts.ObservedAt)
+	observation := facts.Observation
+	if facts.Schema != qualificationFactsSchema || facts.Stage != stableNoUpdateStage || observedErr != nil || observedAt.Format(time.RFC3339) != facts.ObservedAt || !validSHA256(facts.PriorDecisionSHA256) || secretBearing(document) ||
+		!observation.FilesystemLayoutExact || !observation.MutationLockAvailable || !observation.SnapshotsComplete || !observation.SSHContinuity || !observation.TransactionResidueAbsent || observation.InstallResult != "SOFTWARE-LIFECYCLE-INSTALL-ALREADY-CURRENT" || observation.CheckResult != softwarelifecycle.CheckAlreadyCurrent || observation.UpdateResult != softwarelifecycle.UpdateAlreadyCurrent ||
+		!validSHA256(observation.BeforeSnapshotSHA256) || observation.AfterInstallSnapshotSHA256 != observation.BeforeSnapshotSHA256 || observation.AfterCheckSnapshotSHA256 != observation.BeforeSnapshotSHA256 || observation.AfterUpdateSnapshotSHA256 != observation.BeforeSnapshotSHA256 {
+		return refused()
+	}
+	var verificationFacts stablePublicationVerificationFacts
+	if !decodeCanonical(facts.PublicationVerificationFacts, &verificationFacts) {
+		return refused()
+	}
+	verification, err := evaluateStablePublicationVerification(verificationFacts, facts.PublicationVerificationFacts)
+	verificationBytes, marshalErr := marshalCanonical(verification)
+	verifiedAt, verifiedAtErr := time.Parse(time.RFC3339, verificationFacts.ObservedAt)
+	if err != nil || marshalErr != nil || !bytes.Equal(verificationBytes, facts.PublicationVerificationDecision) || verification.Outcome != "accepted" || facts.PriorDecisionSHA256 != documentSHA256(facts.PublicationVerificationDecision) || verifiedAtErr != nil || observedAt.Before(verifiedAt) || observedAt.Sub(verifiedAt) > 30*time.Minute {
+		return refused()
+	}
+	var publicationFacts stablePublicationFacts
+	if !decodeCanonical(verificationFacts.PublicationFacts, &publicationFacts) {
+		return refused()
+	}
+	preflight, _, preflightErr := verifiedStablePreflight(publicationFacts.PreflightFacts, publicationFacts.PreflightDecision)
+	publication, publicationErr := evaluateStablePublication(publicationFacts, verificationFacts.PublicationFacts)
+	if preflightErr != nil || publicationErr != nil || len(publication.Actions) != 1 || publicationFacts.ActionIndex != len(preflight.Actions)-1 {
+		return refused()
+	}
+	action := publication.Actions[0]
+	record := observation.InstalledRecord
+	if record.Schema != 1 || record.Architecture != softwarelifecycle.AMD64 || !validSHA256(observation.ExecutableSHA256) || record.ExecutableSHA256 != observation.ExecutableSHA256 || record.Sequence != action.Sequence || (decisionReleaseIdentity{Commit: record.Commit, ReleaseIndexSHA256: record.ReleaseIndexSHA256, Repository: record.Repository, Tag: record.Tag}) != action.ReleaseIdentity {
+		return refused()
+	}
+	return stableNoUpdateDecision{Actions: []json.RawMessage{}, FactsSHA256: documentSHA256(document), Outcome: "accepted", PriorDecisionSHA256: facts.PriorDecisionSHA256, PublicVerification: "Passed", ReleaseIdentity: action.ReleaseIdentity, Schema: qualificationDecisionSchema, Sequence: action.Sequence, StableNoUpdate: "Passed", Stage: stableNoUpdateStage}, nil
 }
 
 func validStablePublicationObservation(observation stablePublicationObservation, action publishStableReleaseAction, expectedLatestReleaseID *int64, public bool) bool {

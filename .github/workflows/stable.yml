@@ -297,14 +297,20 @@ jobs:
           original_session=$!
           sleep 1
           kill -0 "$original_session"
-          final_release="$(jq -c '.releases[1]' verified/qualification-manifest.json)"
-          environment="TAG=$(jq -r .tag <<<"$final_release") SEQUENCE=$(jq -r .sequence <<<"$final_release") COMMIT=$(jq -r .commit <<<"$final_release") INDEX=$(jq -r .release_identity.release_index_sha256 <<<"$final_release")"
-          ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" "$environment bash -se" <<'REMOTE'
+          ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'bash -se' > stable-no-update-observation.json <<'REMOTE'
           set -euo pipefail
+          work="$(mktemp -d /run/sbxr-stable-no-update.XXXXXX)"
+          trap 'rm -r -- "$work"' EXIT
           snapshot() {
-            stat -c '%n:%u:%g:%a:%h:%F:%s' /usr/local/bin/sbxr /var/lib/sbxr /var/lib/sbxr/installed.json
-            sha256sum /usr/local/bin/sbxr /var/lib/sbxr/installed.json
-            find /var/lib/sbxr -xdev -printf '%P:%y:%u:%g:%m:%s\n' | sort
+            stat -c '%n:%u:%g:%a:%h:%F:%s' /usr/local/bin/sbxr /var/lib/sbxr /var/lib/sbxr/installed.json || return 1
+            sha256sum /usr/local/bin/sbxr /var/lib/sbxr/installed.json || return 1
+            find /var/lib/sbxr -xdev -printf '%P:%y:%u:%g:%m:%s\n' | sort || return 1
+          }
+          no_transaction_residue() {
+            local path
+            for path in /usr/local/bin/.sbxr-update-prior /usr/local/bin/.sbxr-update-candidate /var/lib/sbxr/.installed.json.prior /var/lib/sbxr/.installed.json.candidate /var/lib/sbxr/update.json /var/lib/sbxr/.update.json.next; do
+              if test -e "$path" || test -L "$path"; then return 1; fi
+            done
           }
           menu() {
             local choice=$1 output=$2 input fifo feeder
@@ -319,34 +325,55 @@ jobs:
             rm -f "$fifo"
             rmdir "$input"
           }
-          jq -e --arg tag "$TAG" --arg commit "$COMMIT" --arg index "$INDEX" --argjson sequence "$SEQUENCE" '.repository == "albertloky/SBXR" and .tag == $tag and .commit == $commit and .release_index_sha256 == $index and .sequence == $sequence and .architecture == "amd64"' /var/lib/sbxr/installed.json >/dev/null
-          test "$(find /var/lib/sbxr -mindepth 1 -maxdepth 1 -printf '%f\n')" = installed.json
-          test ! -e /var/lib/sbxr/update.json
-          flock -n /run/lock/sbxr.lock true
-          snapshot > before.snapshot
-          curl -fsSL https://github.com/albertloky/SBXR/releases/latest/download/install.sh | bash > install.transcript
-          grep -Fx 'SOFTWARE-LIFECYCLE-INSTALL-ALREADY-CURRENT' install.transcript
-          snapshot > after-install.snapshot
-          cmp before.snapshot after-install.snapshot
-          menu 1 check.transcript
-          grep -F 'Code: SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT' check.transcript
-          snapshot > after-check.snapshot
-          cmp before.snapshot after-check.snapshot
-          menu 2 update.transcript
-          grep -F 'Code: SOFTWARE-LIFECYCLE-UPDATE-ALREADY-CURRENT' update.transcript
-          snapshot > after-update.snapshot
-          cmp before.snapshot after-update.snapshot
+          filesystem_layout_exact=false
+          if test "$(find /var/lib/sbxr -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null)" = installed.json; then filesystem_layout_exact=true; fi
+          transaction_residue_absent=true
+          no_transaction_residue || transaction_residue_absent=false
+          mutation_lock_available=true
+          flock -n /run/lock/sbxr.lock true || mutation_lock_available=false
+          snapshots_complete=true
+          snapshot > "$work/before.snapshot" || { : > "$work/before.snapshot"; snapshots_complete=false; }
+          set +e
+          curl -fsSL https://github.com/albertloky/SBXR/releases/latest/download/install.sh | sudo bash > "$work/install.transcript"
+          pipeline_status=("${PIPESTATUS[@]}")
+          set -e
+          test "${pipeline_status[0]}" -eq 0
+          install_exit="${pipeline_status[1]}"
+          install_result="$(tr -d '\r\n' < "$work/install.transcript")"
+          test "$install_exit" -eq 0 || test -n "$install_result"
+          no_transaction_residue || transaction_residue_absent=false
+          flock -n /run/lock/sbxr.lock true || mutation_lock_available=false
+          snapshot > "$work/after-install.snapshot" || { : > "$work/after-install.snapshot"; snapshots_complete=false; }
+          menu 1 "$work/check.transcript"
+          check_result="$(grep -aoE 'Code: SOFTWARE-LIFECYCLE-[A-Z-]+' "$work/check.transcript" | sed 's/^Code: //' || true)"
+          no_transaction_residue || transaction_residue_absent=false
+          flock -n /run/lock/sbxr.lock true || mutation_lock_available=false
+          snapshot > "$work/after-check.snapshot" || { : > "$work/after-check.snapshot"; snapshots_complete=false; }
+          menu 2 "$work/update.transcript"
+          update_result="$(grep -aoE 'Code: SOFTWARE-LIFECYCLE-[A-Z-]+' "$work/update.transcript" | sed 's/^Code: //' || true)"
+          no_transaction_residue || transaction_residue_absent=false
+          flock -n /run/lock/sbxr.lock true || mutation_lock_available=false
+          snapshot > "$work/after-update.snapshot" || { : > "$work/after-update.snapshot"; snapshots_complete=false; }
+          before="$(sha256sum "$work/before.snapshot" | cut -d' ' -f1)"
+          installed_record="$(jq -c . /var/lib/sbxr/installed.json 2>/dev/null || printf null)"
+          jq -cnS --arg before "$before" --arg after_install "$(sha256sum "$work/after-install.snapshot" | cut -d' ' -f1)" --arg after_check "$(sha256sum "$work/after-check.snapshot" | cut -d' ' -f1)" --arg after_update "$(sha256sum "$work/after-update.snapshot" | cut -d' ' -f1)" --arg check_result "$check_result" --arg executable_sha256 "$(sha256sum /usr/local/bin/sbxr 2>/dev/null | cut -d' ' -f1 || true)" --argjson filesystem_layout_exact "$filesystem_layout_exact" --arg install_result "$install_result" --argjson installed_record "$installed_record" --argjson mutation_lock_available "$mutation_lock_available" --argjson snapshots_complete "$snapshots_complete" --argjson transaction_residue_absent "$transaction_residue_absent" --arg update_result "$update_result" '{after_check_snapshot_sha256:$after_check,after_install_snapshot_sha256:$after_install,after_update_snapshot_sha256:$after_update,before_snapshot_sha256:$before,check_result:$check_result,executable_sha256:$executable_sha256,filesystem_layout_exact:$filesystem_layout_exact,install_result:$install_result,installed_record:$installed_record,mutation_lock_available:$mutation_lock_available,snapshots_complete:$snapshots_complete,ssh_continuity:false,transaction_residue_absent:$transaction_residue_absent,update_result:$update_result}'
           REMOTE
           kill -0 "$original_session"
           ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'rm -f /run/sbxr-stable-original-session'
           wait "$original_session"
+          prior_decision_sha256="$(sha256sum prior-verification-decision.json | cut -d' ' -f1)"
+          jq -cnS --slurpfile observation stable-no-update-observation.json --arg observed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg prior_decision_sha256 "$prior_decision_sha256" --slurpfile publication_verification_decision prior-verification-decision.json --slurpfile publication_verification_facts prior-verification-facts.json '{observation:($observation[0] + {ssh_continuity:true}),observed_at:$observed_at,prior_decision_sha256:$prior_decision_sha256,publication_verification_decision:$publication_verification_decision[0],publication_verification_facts:$publication_verification_facts[0],schema:"sbxr-release-qualification-facts-v1",stage:"stable-no-update"}' | tr -d '\n' > stable-no-update-facts.json
+          go run ./cmd/sbxr-release qualification < stable-no-update-facts.json > stable-no-update-decision.json
+          facts_sha256="$(sha256sum stable-no-update-facts.json | cut -d' ' -f1)"
+          jq -e --arg facts_sha256 "$facts_sha256" --arg prior_decision_sha256 "$prior_decision_sha256" '.schema == "sbxr-release-qualification-decision-v1" and .stage == "stable-no-update" and .outcome == "accepted" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256 and .public_verification == "Passed" and .stable_no_update == "Passed" and (.actions | length) == 0' stable-no-update-decision.json >/dev/null
       - name: Retain public stable evidence
         run: |
           set -euo pipefail
           mkdir -m 0700 stable-evidence
           cp verified/qualification-manifest.json stable-evidence/
           cp -R public stable-evidence/
-          jq -nS --arg schema sbxr-stable-publication-evidence-v1 --arg workflow "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --arg qualification "$(jq -r .workflow.run_url verified/qualification-manifest.json)" --arg latest "$(jq -r .releases[1].tag verified/qualification-manifest.json)" '{schema:$schema,workflow_run:$workflow,qualification_run:$qualification,latest_tag:$latest,public_verification:"Passed",stable_no_update:"Passed",secret_safe_result:"Passed"}' > stable-evidence/result.json
+          cp stable-no-update-facts.json stable-no-update-decision.json stable-evidence/
+          jq -nS --arg schema sbxr-stable-publication-evidence-v1 --arg workflow "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --arg qualification "$(jq -r .workflow.run_url verified/qualification-manifest.json)" --arg latest "$(jq -r .releases[1].tag verified/qualification-manifest.json)" --arg public_verification "$(jq -r .public_verification stable-no-update-decision.json)" --arg stable_no_update "$(jq -r .stable_no_update stable-no-update-decision.json)" --arg stable_no_update_facts_sha256 "$(sha256sum stable-no-update-facts.json | cut -d' ' -f1)" --arg stable_no_update_decision_sha256 "$(sha256sum stable-no-update-decision.json | cut -d' ' -f1)" --arg prior_decision_sha256 "$(jq -r .prior_decision_sha256 stable-no-update-decision.json)" '{schema:$schema,workflow_run:$workflow,qualification_run:$qualification,latest_tag:$latest,public_verification:$public_verification,stable_no_update:$stable_no_update,stable_no_update_facts_sha256:$stable_no_update_facts_sha256,stable_no_update_decision_sha256:$stable_no_update_decision_sha256,prior_decision_sha256:$prior_decision_sha256,secret_safe_result:"Passed"}' > stable-evidence/result.json
           if grep -aERq 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer ' stable-evidence; then exit 1; elif test $? -ne 1; then exit 1; fi
           cat stable-evidence/result.json >> "$GITHUB_STEP_SUMMARY"
           printf '%s\n' complete > publication-stage
