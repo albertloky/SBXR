@@ -160,43 +160,49 @@ func qualificationBoundaryForCandidate(t *testing.T, binary string, preflightFac
 		t.Fatalf("candidate preflight: %v\n%s", err, preflightDecision)
 	}
 	preflight := jsonObject(t, preflightDecision)
-	var source, build map[string]any
+	var sources []any
+	var builds []map[string]any
 	for _, value := range preflight["actions"].([]any) {
 		action := value.(map[string]any)
 		switch action["type"] {
 		case "use-source-release":
-			source = map[string]any{"assets": action["assets"], "commit": action["commit"], "release_id": action["release_id"], "release_identity": action["release_identity"], "sequence": action["sequence"], "tag": action["tag"]}
+			sources = append(sources, map[string]any{"assets": action["assets"], "commit": action["commit"], "release_id": action["release_id"], "release_identity": action["release_identity"], "sequence": action["sequence"], "tag": action["tag"]})
 		case "build-release":
-			build = action
+			builds = append(builds, action)
 		}
 	}
-	if source == nil || build == nil {
-		t.Fatal("later or rescue boundary requires one source and one build action")
+	if len(builds) == 0 {
+		t.Fatal("candidate boundary requires a build action")
 	}
-	tag, sequence, commit := build["tag"].(string), uint64(build["sequence"].(float64)), build["commit"].(string)
-	target := draftTarget(tag, sequence)
-	target["commit"] = commit
-	target["release_identity"].(map[string]any)["commit"] = commit
+	targets, observations := make([]any, len(builds)), make([]any, len(builds))
+	for index, build := range builds {
+		tag, sequence, commit := build["tag"].(string), uint64(build["sequence"].(float64)), build["commit"].(string)
+		target := draftTarget(tag, sequence)
+		target["commit"] = commit
+		target["release_identity"].(map[string]any)["commit"] = commit
+		targets[index] = target
+		observation := draftObservation(tag, sequence, int64(71+len(sources)+index))
+		observation["commit"] = commit
+		observation["release_identity"].(map[string]any)["commit"] = commit
+		observations[index] = observation
+	}
 	constructionFacts := qualificationDocument(t, map[string]any{
-		"built_releases": []any{target}, "preflight_decision": jsonValue(t, string(preflightDecision)), "preflight_facts": jsonValue(t, preflightDocument),
+		"built_releases": targets, "preflight_decision": jsonValue(t, string(preflightDecision)), "preflight_facts": jsonValue(t, preflightDocument),
 		"schema": qualificationFactsSchema, "stage": "candidate-draft-construction",
 	})
 	constructionDecision, err := runQualificationCommand(binary, constructionFacts)
 	if err != nil {
 		t.Fatalf("draft construction: %v\n%s", err, constructionDecision)
 	}
-	observation := draftObservation(tag, sequence, 72)
-	observation["commit"] = commit
-	observation["release_identity"].(map[string]any)["commit"] = commit
 	verificationFacts := qualificationDocument(t, map[string]any{
-		"construction_decision": jsonValue(t, string(constructionDecision)), "construction_facts": jsonValue(t, constructionFacts), "observations": []any{observation},
+		"construction_decision": jsonValue(t, string(constructionDecision)), "construction_facts": jsonValue(t, constructionFacts), "observations": observations,
 		"schema": qualificationFactsSchema, "stage": "candidate-draft-verification",
 	})
 	verificationDecision, err := runQualificationCommand(binary, verificationFacts)
 	if err != nil {
 		t.Fatalf("draft verification: %v\n%s", err, verificationDecision)
 	}
-	releases := []any{source, jsonObject(t, verificationDecision)["verified_releases"].([]any)[0]}
+	releases := append(sources, jsonObject(t, verificationDecision)["verified_releases"].([]any)...)
 	var rescue any
 	if preflightFacts.Candidate.Mode == "rescue" {
 		rescue = map[string]any{"defect_issue_url": *preflightFacts.Candidate.DefectIssueURL, "failed_normal_run_id": *preflightFacts.Candidate.FailedNormalRunID}
@@ -204,9 +210,18 @@ func qualificationBoundaryForCandidate(t *testing.T, binary string, preflightFac
 	boundaryFacts := qualificationDocument(t, map[string]any{
 		"approval": map[string]any{"environments": []any{map[string]any{"name": "acceptance-vps"}}, "state": "approved"}, "candidate_failure_state_sha256": strings.Repeat("9", 64), "checklist_sha256": preflightFacts.ChecklistSHA256,
 		"draft_verification_decision": jsonValue(t, string(verificationDecision)), "draft_verification_facts": jsonValue(t, verificationFacts),
-		"native_evidence":       []any{map[string]any{"path": "native/native-" + tag + "-amd64/evidence/native-amd64.json", "sha256": strings.Repeat("5", 64)}, map[string]any{"path": "native/native-" + tag + "-arm64/evidence/native-arm64.json", "sha256": strings.Repeat("6", 64)}},
+		"native_evidence": func() []any {
+			var evidence []any
+			for _, build := range builds {
+				tag := build["tag"].(string)
+				for _, architecture := range []string{"amd64", "arm64"} {
+					evidence = append(evidence, map[string]any{"path": "native/native-" + tag + "-" + architecture + "/evidence/native-" + architecture + ".json", "sha256": strings.Repeat(strconv.Itoa(5+len(evidence)), 64)})
+				}
+			}
+			return evidence
+		}(),
 		"prior_decision_sha256": sha256String(string(verificationDecision)), "releases": releases, "rescue": rescue, "schema": qualificationFactsSchema, "source_state": preflight["source_state"], "stage": "qualification-boundary",
-		"workflow": map[string]any{"commit": commit, "path": ".github/workflows/candidate.yml", "ref": "albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main", "run_id": "123", "run_url": "https://github.com/albertloky/SBXR/actions/runs/123"},
+		"workflow": map[string]any{"commit": builds[len(builds)-1]["commit"], "path": ".github/workflows/candidate.yml", "ref": "albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main", "run_id": "123", "run_url": "https://github.com/albertloky/SBXR/actions/runs/123"},
 	})
 	manifest, err := runQualificationCommand(binary, boundaryFacts)
 	if err != nil {
@@ -385,6 +400,144 @@ func TestQualificationCommandConstructsQualificationManifest(t *testing.T) {
 			mutate(facts)
 			assertQualificationRefused(t, binary, qualificationDocument(t, facts), name)
 		})
+	}
+}
+
+func TestQualificationCommandFinalizesCandidateFailures(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "sbxr-release")
+	command := exec.Command("go", "build", "-o", binary, ".")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build sbxr-release: %v\n%s", err, output)
+	}
+
+	later := candidateFacts("normal")
+	later.LatestTag = stringPointer("v2.0.0")
+	later.Releases = []observedRelease{qualifiedRelease(false)}
+	later.Tags = []string{"v2.0.0"}
+	boundaryDocument, manifest := qualificationBoundaryForCandidate(t, binary, later)
+	boundary := jsonValue(t, boundaryDocument).(map[string]any)
+	verificationFacts := boundary["draft_verification_facts"].(map[string]any)
+	constructionFacts := verificationFacts["construction_facts"]
+	constructionDecision := verificationFacts["construction_decision"]
+	target := jsonObject(t, manifest)["releases"].([]any)[1].(map[string]any)
+	observation := map[string]any{
+		"assets": target["assets"], "body": "Qualification pending.", "commit": target["commit"], "created_release_id": target["release_id"], "draft": true, "immutable": false, "prerelease": false,
+		"release_id": target["release_id"], "release_identity": target["release_identity"], "release_present": true, "sequence": target["sequence"], "tag": target["tag"], "tag_commit": target["commit"],
+	}
+	base := map[string]any{
+		"burned_identities": []any{}, "candidate_failure_state": nil, "construction_decision": constructionDecision, "construction_facts": constructionFacts,
+		"observations": []any{observation}, "observed_at": "2026-08-23T00:00:00Z", "qualification_boundary_facts": nil, "qualification_manifest": nil,
+		"prior_decision_sha256": sha256String(qualificationDocument(t, constructionDecision)), "reason": "pre-boundary-failure", "schema": qualificationFactsSchema, "stage": "candidate-failure-finalization",
+		"workflow": map[string]any{"commit": strings.Repeat("d", 40), "path": ".github/workflows/candidate.yml", "ref": "albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main", "run_id": "123", "run_url": "https://github.com/albertloky/SBXR/actions/runs/123"},
+	}
+	preBoundary, err := runQualificationCommand(binary, qualificationDocument(t, base))
+	if err != nil {
+		t.Fatalf("pre-boundary failure: %v\n%s", err, preBoundary)
+	}
+	preAction := jsonObject(t, preBoundary)["actions"].([]any)[0].(map[string]any)
+	if preAction["type"] != "cleanup-draft" || preAction["release_id"] != target["release_id"] || preAction["tag"] != target["tag"] {
+		t.Fatalf("pre-boundary decision = %s", preBoundary)
+	}
+	retriedCleanup := jsonObject(t, []byte(qualificationDocument(t, base)))
+	retriedObservation := retriedCleanup["observations"].([]any)[0].(map[string]any)
+	retriedObservation["assets"], retriedObservation["body"], retriedObservation["draft"], retriedObservation["release_present"], retriedObservation["tag_commit"] = []any{}, "", false, false, nil
+	retried, err := runQualificationCommand(binary, qualificationDocument(t, retriedCleanup))
+	if err != nil {
+		t.Fatalf("completed cleanup retry: %v\n%s", err, retried)
+	}
+	retriedAction := jsonObject(t, retried)["actions"].([]any)[0].(map[string]any)
+	if retriedAction["delete_release"] != false || retriedAction["delete_tag"] != false {
+		t.Fatalf("completed cleanup retry = %s", retried)
+	}
+	cleanupVerification := qualificationDocument(t, map[string]any{
+		"burned_identities": []any{}, "failure_decision": jsonValue(t, string(preBoundary)), "failure_facts": jsonValue(t, qualificationDocument(t, base)), "observations": []any{retriedObservation},
+		"schema": qualificationFactsSchema, "stage": "candidate-failure-verification",
+	})
+	if verifiedCleanup, err := runQualificationCommand(binary, cleanupVerification); err != nil || jsonObject(t, verifiedCleanup)["outcome"] != "accepted" {
+		t.Fatalf("cleanup verification = %s, %v", verifiedCleanup, err)
+	}
+
+	failureState := map[string]any{
+		"evidence": []any{"https://github.com/albertloky/SBXR/actions/runs/123#artifacts"}, "recorded_at": "2026-08-23T00:00:00Z", "runner": "Ubuntu Server 24.04 linux/amd64",
+		"schema": "sbxr-candidate-failure-state-v1", "software": map[string]any{"go_toolchain": "go1.26.6", "public_verifier": "1.3.0 " + strings.Repeat("A", 64)},
+		"stages": map[string]any{"codex_live_acceptance": "Failed", "integrated_verification": "Passed"}, "workflow_run": "https://github.com/albertloky/SBXR/actions/runs/123",
+	}
+	base["candidate_failure_state"] = failureState
+	base["qualification_boundary_facts"] = jsonValue(t, boundaryDocument)
+	base["qualification_manifest"] = jsonValue(t, string(manifest))
+	base["prior_decision_sha256"] = sha256String(string(manifest))
+	base["reason"] = "post-sign-qualification-failure"
+	postDocument := qualificationDocument(t, base)
+	postBoundary, err := runQualificationCommand(binary, postDocument)
+	if err != nil {
+		t.Fatalf("post-boundary failure: %v\n%s", err, postBoundary)
+	}
+	post := jsonObject(t, postBoundary)
+	postAction := post["actions"].([]any)[0].(map[string]any)
+	if post["outcome"] != "failed-prerelease" || postAction["type"] != "finalize-failed-release" || postAction["burn_required"] != true || !strings.Contains(postAction["body"].(string), "Status: Failed prerelease\n") {
+		t.Fatalf("post-boundary decision = %s", postBoundary)
+	}
+	exactRetry, err := runQualificationCommand(binary, postDocument)
+	if err != nil || !bytes.Equal(exactRetry, postBoundary) {
+		t.Fatalf("post-boundary exact retry = %s, %v", exactRetry, err)
+	}
+	burn := postAction["burn"].(map[string]any)
+	if burn["original_tag"] != target["tag"] || burn["sequence"] != target["sequence"] || burn["commit"] != target["commit"] || burn["release_index_sha256"] != target["release_identity"].(map[string]any)["release_index_sha256"] || burn["qualification_run_url"] != failureState["workflow_run"] || burn["reason"] != base["reason"] || burn["recorded_at"] != base["observed_at"] {
+		t.Fatalf("burn evidence = %v", burn)
+	}
+	verifiedObservation := jsonValue(t, qualificationDocument(t, observation)).(map[string]any)
+	verifiedObservation["body"], verifiedObservation["draft"], verifiedObservation["immutable"], verifiedObservation["prerelease"] = postAction["body"], false, true, true
+	verificationDocument := qualificationDocument(t, map[string]any{
+		"burned_identities": []any{burn}, "failure_decision": jsonValue(t, string(postBoundary)), "failure_facts": jsonValue(t, postDocument), "observations": []any{verifiedObservation},
+		"schema": qualificationFactsSchema, "stage": "candidate-failure-verification",
+	})
+	verified, err := runQualificationCommand(binary, verificationDocument)
+	if err != nil || jsonObject(t, verified)["outcome"] != "accepted" || jsonObject(t, verified)["prior_decision_sha256"] != sha256String(string(postBoundary)) {
+		t.Fatalf("candidate failure verification = %s, %v", verified, err)
+	}
+	changedResult := jsonObject(t, []byte(verificationDocument))
+	changedResult["observations"].([]any)[0].(map[string]any)["body"] = "changed"
+	assertQualificationRefused(t, binary, qualificationDocument(t, changedResult), "changed failed record result")
+
+	base["burned_identities"] = []any{burn}
+	retry, err := runQualificationCommand(binary, qualificationDocument(t, base))
+	if err != nil || jsonObject(t, retry)["actions"].([]any)[0].(map[string]any)["burn_required"] != false {
+		t.Fatalf("exact burn retry = %s, %v", retry, err)
+	}
+	conflict := jsonObject(t, []byte(qualificationDocument(t, base)))
+	conflict["burned_identities"].([]any)[0].(map[string]any)["reason"] = "changed-reason"
+	assertQualificationRefused(t, binary, qualificationDocument(t, conflict), "conflicting burn evidence")
+	crossed := jsonObject(t, []byte(postDocument))
+	crossed["observations"].([]any)[0].(map[string]any)["tag"] = "v2.0.9"
+	assertQualificationRefused(t, binary, qualificationDocument(t, crossed), "crossed journey")
+	stale := jsonObject(t, []byte(postDocument))
+	stale["prior_decision_sha256"] = strings.Repeat("9", 64)
+	assertQualificationRefused(t, binary, qualificationDocument(t, stale), "stale decision")
+
+	initialBoundaryDocument, initialManifest := qualificationBoundaryForCandidate(t, binary, candidateFacts("normal"))
+	initialBoundary := jsonValue(t, initialBoundaryDocument).(map[string]any)
+	initialVerificationFacts := initialBoundary["draft_verification_facts"].(map[string]any)
+	initialObservations := []any{}
+	for _, value := range jsonObject(t, initialManifest)["releases"].([]any) {
+		release := value.(map[string]any)
+		initialObservations = append(initialObservations, map[string]any{
+			"assets": release["assets"], "body": "Qualification pending.", "commit": release["commit"], "created_release_id": release["release_id"], "draft": true, "immutable": false, "prerelease": false,
+			"release_id": release["release_id"], "release_identity": release["release_identity"], "release_present": true, "sequence": release["sequence"], "tag": release["tag"], "tag_commit": nil,
+		})
+	}
+	initialFailure := map[string]any{
+		"burned_identities": []any{}, "candidate_failure_state": failureState, "construction_decision": initialVerificationFacts["construction_decision"], "construction_facts": initialVerificationFacts["construction_facts"],
+		"observations": initialObservations, "observed_at": "2026-08-23T00:00:00Z", "qualification_boundary_facts": jsonValue(t, initialBoundaryDocument), "qualification_manifest": jsonValue(t, string(initialManifest)),
+		"prior_decision_sha256": sha256String(string(initialManifest)), "reason": "post-sign-qualification-failure", "schema": qualificationFactsSchema, "stage": "candidate-failure-finalization",
+		"workflow": map[string]any{"commit": strings.Repeat("d", 40), "path": ".github/workflows/candidate.yml", "ref": "albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main", "run_id": "123", "run_url": "https://github.com/albertloky/SBXR/actions/runs/123"},
+	}
+	initialDecision, err := runQualificationCommand(binary, qualificationDocument(t, initialFailure))
+	if err != nil {
+		t.Fatalf("initial-normal failure: %v\n%s", err, initialDecision)
+	}
+	initialActions := jsonObject(t, initialDecision)["actions"].([]any)
+	if len(initialActions) != 2 || !strings.Contains(initialActions[0].(map[string]any)["body"].(string), "Qualification role: Clean-installed source release\n") || !strings.Contains(initialActions[1].(map[string]any)["body"].(string), "Qualification role: Discovered, installed, recovered, final latest release\n") {
+		t.Fatalf("initial-normal failed records = %s", initialDecision)
 	}
 }
 

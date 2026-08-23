@@ -108,7 +108,6 @@ func TestCandidateConstructsDraftsAndSignsTheQualificationBoundary(t *testing.T)
 		"github.ref == 'refs/heads/main'",
 		"archive/full-product-v1.0.15",
 		"release-burned/",
-		"qualification_run_url",
 		"candidate-preflight-facts.json",
 		"go run ./cmd/sbxr-release qualification",
 		"candidate-preflight-decision.json",
@@ -447,6 +446,14 @@ func TestReleaseFailuresWithdrawOnlyRecheckedTargetsAndBurnQualifiedIdentities(t
 		`{is_pull_request:has("pull_request"),state,url:.html_url}`,
 		"Publish the rechecked burned releases as failed prereleases",
 		"fully recorded unsigned drafts",
+		`stage:"candidate-failure-finalization"`,
+		"candidate-failure-facts.json",
+		"candidate-failure-decision.json",
+		`all(.actions[]; .type == "finalize-failed-release" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256)`,
+		`jq -jr .body <<<"$action"`,
+		`if jq -e .burn_required <<<"$action"`,
+		`stage:"candidate-failure-verification"`,
+		"candidate-failure-verification-decision.json",
 	} {
 		if !strings.Contains(candidate, required) {
 			t.Fatalf("candidate.yml omitted qualified-failure contract %q", required)
@@ -497,7 +504,9 @@ func TestReleaseFailuresWithdrawOnlyRecheckedTargetsAndBurnQualifiedIdentities(t
 	candidateFailure := candidate[strings.Index(candidate, "cleanup-unqualified:"):]
 	if !strings.Contains(candidateFailure, "gh attestation verify boundary/qualification-manifest.json") ||
 		!strings.Contains(candidateFailure, `.workflow.ref == "albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main"`) ||
-		strings.Index(candidateFailure, "git push --atomic origin") > strings.Index(candidateFailure, `gh release edit "$tag"`) {
+		strings.Index(candidateFailure, "git push --atomic origin") > strings.Index(candidateFailure, `gh release edit "$tag"`) ||
+		strings.Contains(candidateFailure, `jq -nS --arg original_tag`) ||
+		strings.Contains(candidateFailure, `write-failed-acceptance-record.sh`) {
 		t.Fatal("candidate failure handling does not verify and burn every identity before release mutation")
 	}
 	stableFailure := stable[strings.Index(stable, "finalize-failure:"):]

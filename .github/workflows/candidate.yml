@@ -275,20 +275,56 @@ jobs:
               jq --arg tag "$current_tag" --argjson sequence "$current_sequence" --argjson release_id "$(jq .id release.json)" --arg index_sha256 "$current_index_sha256" --argjson assets "$current_assets" '. += [{tag:$tag,sequence:$sequence,commit:env.GITHUB_SHA,release_id:$release_id,release_identity:{repository:env.GITHUB_REPOSITORY,tag:$tag,commit:env.GITHUB_SHA,release_index_sha256:$index_sha256},assets:$assets}]' drafts.json > drafts.next
               mv drafts.next drafts.json
             fi
+
+            printf '[]' > failure-observations.json
             while read -r requested; do
               tag="$(jq -r .tag <<<"$requested")"
               entry="$(jq -c --arg tag "$tag" '.[] | select(.tag == $tag)' drafts.json)"
               test -n "$entry" || continue
               commit="$(jq -r .commit <<<"$entry")"
-              release_id="$(jq -r .release_id <<<"$entry")"
               printf '%s\n' "$entry" > "$tag.cleanup.json"
-              .github/scripts/recheck-qualified-release.sh "$tag.cleanup.json" "cleanup/$tag" cleanup-release.json partial
-              jq -e '.draft == true and .prerelease == false' cleanup-release.json >/dev/null
-              tag_exists=false
-              if object="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha 2>/dev/null)"; then test "$object" = "$commit"; tag_exists=true; fi
-              gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$release_id"
-              test "$tag_exists" != true || gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag"
+              .github/scripts/recheck-qualified-release.sh "$tag.cleanup.json" "cleanup/$tag" "$tag.cleanup-release.json" partial
+              jq -e '.draft == true and .prerelease == false' "$tag.cleanup-release.json" >/dev/null
+              tag_commit=null
+              if object="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha 2>/dev/null)"; then test "$object" = "$commit"; tag_commit="$(jq -cn --arg commit "$object" '$commit')"; fi
+              observation="$(jq -cnS --argjson expected "$entry" --slurpfile release "$tag.cleanup-release.json" --argjson tag_commit "$tag_commit" '{assets:[$release[0].assets[].name as $name | $expected.assets[] | select(.name == $name)],body:$release[0].body,commit:$expected.commit,created_release_id:$expected.release_id,draft:$release[0].draft,immutable:($release[0].immutable // false),prerelease:$release[0].prerelease,release_id:$expected.release_id,release_identity:$expected.release_identity,release_present:true,sequence:$expected.sequence,tag:$expected.tag,tag_commit:$tag_commit}')"
+              jq -cS --argjson observation "$observation" '. + [$observation]' failure-observations.json > failure-observations.next
+              mv failure-observations.next failure-observations.json
             done < <(jq -c '.[]' <<<"$BUILD_RELEASES")
+
+            jq -cnS --slurpfile construction_decision candidate-draft-construction-decision.json --slurpfile construction_facts candidate-draft-construction-facts.json --slurpfile observations failure-observations.json --arg observed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg prior_decision_sha256 "$(sha256sum candidate-draft-construction-decision.json | cut -d' ' -f1)" --arg commit "$GITHUB_SHA" --arg path '.github/workflows/candidate.yml' --arg ref "$GITHUB_WORKFLOW_REF" --arg run_id "$GITHUB_RUN_ID" --arg run_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" '{burned_identities:$construction_facts[0].preflight_facts.burned_identities,candidate_failure_state:null,construction_decision:$construction_decision[0],construction_facts:$construction_facts[0],observations:$observations[0],observed_at:$observed_at,prior_decision_sha256:$prior_decision_sha256,qualification_boundary_facts:null,qualification_manifest:null,reason:"pre-boundary-failure",schema:"sbxr-release-qualification-facts-v1",stage:"candidate-failure-finalization",workflow:{commit:$commit,path:$path,ref:$ref,run_id:$run_id,run_url:$run_url}}' | tr -d '\n' > candidate-failure-facts.json
+            go run ./cmd/sbxr-release qualification < candidate-failure-facts.json > candidate-failure-decision.json
+            facts_sha256="$(sha256sum candidate-failure-facts.json | cut -d' ' -f1)"
+            jq -e --arg facts_sha256 "$facts_sha256" --arg prior_decision_sha256 "$(sha256sum candidate-draft-construction-decision.json | cut -d' ' -f1)" '.schema == "sbxr-release-qualification-decision-v1" and .stage == "candidate-failure-finalization" and .outcome == "cleanup" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256 and all(.actions[]; .type == "cleanup-draft" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256)' candidate-failure-decision.json >/dev/null
+            while read -r action; do
+              tag="$(jq -r .tag <<<"$action")"
+              release_id="$(jq -r .release_id <<<"$action")"
+              commit="$(jq -r .commit <<<"$action")"
+              if jq -e .delete_release <<<"$action" >/dev/null; then
+                jq -e --arg tag "$tag" --arg commit "$commit" --argjson release_id "$release_id" '.tag_name == $tag and .target_commitish == $commit and .id == $release_id and .draft == true and .prerelease == false' "$tag.cleanup-release.json" >/dev/null
+                gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$release_id"
+              fi
+              if jq -e .delete_tag <<<"$action" >/dev/null; then
+                test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha)" = "$commit"
+                gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag"
+              fi
+            done < <(jq -c '.actions[]' candidate-failure-decision.json)
+            printf '[]' > candidate-failure-verified-observations.json
+            while read -r action; do
+              tag="$(jq -r .tag <<<"$action")"
+              release_id="$(jq -r .release_id <<<"$action")"
+              ! gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" >/dev/null 2>&1
+              ! gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1
+              expected="$(jq -c --arg tag "$tag" '.observations[] | select(.tag == $tag)' candidate-failure-facts.json)"
+              observation="$(jq -cnS --argjson expected "$expected" '{assets:[],body:"",commit:$expected.commit,created_release_id:$expected.created_release_id,draft:false,immutable:false,prerelease:false,release_id:$expected.release_id,release_identity:$expected.release_identity,release_present:false,sequence:$expected.sequence,tag:$expected.tag,tag_commit:null}')"
+              jq -cS --argjson observation "$observation" '. + [$observation]' candidate-failure-verified-observations.json > candidate-failure-verified-observations.next
+              mv candidate-failure-verified-observations.next candidate-failure-verified-observations.json
+            done < <(jq -c '.actions[]' candidate-failure-decision.json)
+            jq -cnS --slurpfile failure_decision candidate-failure-decision.json --slurpfile failure_facts candidate-failure-facts.json --slurpfile observations candidate-failure-verified-observations.json '{burned_identities:$failure_facts[0].burned_identities,failure_decision:$failure_decision[0],failure_facts:$failure_facts[0],observations:$observations[0],schema:"sbxr-release-qualification-facts-v1",stage:"candidate-failure-verification"}' | tr -d '\n' > candidate-failure-verification-facts.json
+            go run ./cmd/sbxr-release qualification < candidate-failure-verification-facts.json > candidate-failure-verification-decision.json
+            facts_sha256="$(sha256sum candidate-failure-verification-facts.json | cut -d' ' -f1)"
+            prior_decision_sha256="$(sha256sum candidate-failure-decision.json | cut -d' ' -f1)"
+            jq -e --arg facts_sha256 "$facts_sha256" --arg prior_decision_sha256 "$prior_decision_sha256" '.schema == "sbxr-release-qualification-decision-v1" and .stage == "candidate-failure-verification" and .outcome == "accepted" and .actions == [] and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256' candidate-failure-verification-decision.json >/dev/null
             exit "$status"
           }
           trap cleanup_unsigned_drafts EXIT
@@ -666,7 +702,11 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           fetch-depth: 0
-      - name: Recheck and retain or remove only this run's failed releases
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Evaluate exact candidate failure observations
         id: boundary
         env:
           GH_TOKEN: ${{ github.token }}
@@ -682,27 +722,6 @@ jobs:
             gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name signed-qualification-manifest --dir boundary
             if gh attestation verify boundary/qualification-manifest.json --repo "$GITHUB_REPOSITORY" --signer-workflow albertloky/SBXR/.github/workflows/candidate.yml --source-ref refs/heads/main --source-digest "$GITHUB_SHA" >/dev/null; then
               jq -e --arg run "$GITHUB_RUN_ID" --arg url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --arg commit "$GITHUB_SHA" '.schema == "sbxr-qualification-manifest-v1" and .repository == env.GITHUB_REPOSITORY and .workflow.path == ".github/workflows/candidate.yml" and .workflow.ref == "albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main" and .workflow.commit == $commit and .workflow.run_id == $run and .workflow.run_url == $url' boundary/qualification-manifest.json >/dev/null
-              mkdir -m 0700 boundary/burned
-              git config user.name github-actions
-              git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-              git fetch --force --tags origin
-              recorded_at="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .created_at)"
-              : > boundary/burn-refs
-              while read -r release; do
-                tag="$(jq -r .tag <<<"$release")"
-                entry="$(jq -c --arg tag "$tag" '.releases[] | select(.tag == $tag)' boundary/qualification-manifest.json)"
-                test -n "$entry"
-                commit="$(jq -r .commit <<<"$entry")"
-                printf '%s\n' "$entry" > "boundary/$tag.json"
-                .github/scripts/recheck-qualified-release.sh "boundary/$tag.json" "boundary/rechecked/$tag" boundary/release.json
-                if ! jq -e '.draft == true and .prerelease == false' boundary/release.json >/dev/null; then
-                  jq -e '.draft == false and .prerelease == true and .immutable == true' boundary/release.json >/dev/null
-                  .github/scripts/write-failed-acceptance-record.sh "boundary/$tag.json" boundary/release.json "boundary/$tag.failed.md" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" RELEASE-INSTALLER-UPDATER-QUALIFICATION-FAILED boundary/qualification-manifest.json /dev/null
-                fi
-                payload="boundary/burned/${tag}.json"
-                jq -nS --arg original_tag "$tag" --argjson sequence "$(jq .sequence <<<"$entry")" --arg commit "$commit" --arg release_index_sha256 "$(jq -r .release_identity.release_index_sha256 <<<"$entry")" --arg qualification_run_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --arg reason post-sign-qualification-failure --arg recorded_at "$recorded_at" '{original_tag:$original_tag,sequence:$sequence,commit:$commit,release_index_sha256:$release_index_sha256,qualification_run_url:$qualification_run_url,reason:$reason,recorded_at:$recorded_at}' > "$payload"
-                .github/scripts/prepare-burn-tag.sh "$payload" "$tag" "$commit" >> boundary/burn-refs
-              done < <(jq -c '.[]' <<<"$BUILD_RELEASES")
               signed=true
               echo 'signed=true' >> "$GITHUB_OUTPUT"
             fi
@@ -710,6 +729,50 @@ jobs:
           if test "$signed" != true && gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name qualification-boundary-input --dir boundary/unsigned 2>/dev/null; then
             echo 'recorded=true' >> "$GITHUB_OUTPUT"
           fi
+
+          test "$signed" = true || exit 0
+          mkdir -m 0700 boundary/burned boundary/failure-state boundary/records boundary/rechecked
+          git config user.name github-actions
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git fetch --force --tags origin
+          printf '[]' > boundary/existing-burns.json
+          while read -r tag; do
+            payload="$(git tag -l --format='%(contents)' "release-burned/$tag")"
+            jq -cS --argjson payload "$payload" '. + [$payload] | sort_by(.original_tag)' boundary/existing-burns.json > boundary/existing-burns.next
+            mv boundary/existing-burns.next boundary/existing-burns.json
+          done < <(git for-each-ref refs/tags/release-burned --format='%(refname:strip=3)')
+          if ! gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "candidate-failure-state-$GITHUB_RUN_ID" --dir boundary/failure-state 2>/dev/null; then
+            cp boundary/candidate-failure-state.json boundary/failure-state/candidate-failure-state.json
+          fi
+          printf '[]' > boundary/observations.json
+          while read -r release; do
+            tag="$(jq -r .tag <<<"$release")"
+            entry="$(jq -c --arg tag "$tag" '.releases[] | select(.tag == $tag)' boundary/qualification-manifest.json)"
+            test -n "$entry"
+            printf '%s\n' "$entry" > "boundary/$tag.json"
+            .github/scripts/recheck-qualified-release.sh "boundary/$tag.json" "boundary/rechecked/$tag" "boundary/$tag.release.json"
+            commit="$(jq -r .commit <<<"$entry")"
+            tag_commit=null
+            if object="$(git rev-parse -q --verify "refs/tags/$tag^{commit}")"; then test "$object" = "$commit"; tag_commit="$(jq -cn --arg commit "$object" '$commit')"; fi
+            observation="$(jq -cnS --argjson expected "$entry" --slurpfile release "boundary/$tag.release.json" --argjson tag_commit "$tag_commit" '{assets:$expected.assets,body:$release[0].body,commit:$expected.commit,created_release_id:$expected.release_id,draft:$release[0].draft,immutable:($release[0].immutable // false),prerelease:$release[0].prerelease,release_id:$expected.release_id,release_identity:$expected.release_identity,release_present:true,sequence:$expected.sequence,tag:$expected.tag,tag_commit:$tag_commit}')"
+            jq -cS --argjson observation "$observation" '. + [$observation]' boundary/observations.json > boundary/observations.next
+            mv boundary/observations.next boundary/observations.json
+          done < <(jq -c '.[]' <<<"$BUILD_RELEASES")
+          jq -cnS --slurpfile burned boundary/existing-burns.json --slurpfile failure_state boundary/failure-state/candidate-failure-state.json --slurpfile manifest boundary/qualification-manifest.json --slurpfile boundary_facts boundary/qualification-boundary-facts.json --slurpfile observations boundary/observations.json --arg observed_at "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .created_at)" --arg prior_decision_sha256 "$(sha256sum boundary/qualification-manifest.json | cut -d' ' -f1)" '{burned_identities:$burned[0],candidate_failure_state:$failure_state[0],construction_decision:$boundary_facts[0].draft_verification_facts.construction_decision,construction_facts:$boundary_facts[0].draft_verification_facts.construction_facts,observations:$observations[0],observed_at:$observed_at,prior_decision_sha256:$prior_decision_sha256,qualification_boundary_facts:$boundary_facts[0],qualification_manifest:$manifest[0],reason:"post-sign-qualification-failure",schema:"sbxr-release-qualification-facts-v1",stage:"candidate-failure-finalization",workflow:$manifest[0].workflow}' | tr -d '\n' > boundary/candidate-failure-facts.json
+          go run ./cmd/sbxr-release qualification < boundary/candidate-failure-facts.json > boundary/candidate-failure-decision.json
+          facts_sha256="$(sha256sum boundary/candidate-failure-facts.json | cut -d' ' -f1)"
+          prior_decision_sha256="$(sha256sum boundary/qualification-manifest.json | cut -d' ' -f1)"
+          jq -e --arg facts_sha256 "$facts_sha256" --arg prior_decision_sha256 "$prior_decision_sha256" '.schema == "sbxr-release-qualification-decision-v1" and .stage == "candidate-failure-finalization" and .outcome == "failed-prerelease" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256 and all(.actions[]; .type == "finalize-failed-release" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256)' boundary/candidate-failure-decision.json >/dev/null
+          : > boundary/burn-refs
+          while read -r action; do
+            tag="$(jq -r .tag <<<"$action")"
+            commit="$(jq -r .commit <<<"$action")"
+            jq -S .burn <<<"$action" > "boundary/burned/$tag.json"
+            jq -jr .body <<<"$action" > "boundary/records/$tag.md"
+            if jq -e .burn_required <<<"$action" >/dev/null; then
+              .github/scripts/prepare-burn-tag.sh "boundary/burned/$tag.json" "$tag" "$commit" >> boundary/burn-refs
+            fi
+          done < <(jq -c '.actions[]' boundary/candidate-failure-decision.json)
       - uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661
         if: steps.boundary.outputs.signed == 'true'
         with:
@@ -726,27 +789,21 @@ jobs:
         if: steps.boundary.outputs.signed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          BUILD_RELEASES: ${{ needs.preflight.outputs.build_releases }}
         run: |
           set -euo pipefail
-          mkdir -m 0700 boundary/failure-state
-          if ! gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "candidate-failure-state-$GITHUB_RUN_ID" --dir boundary/failure-state 2>/dev/null; then
-            cp boundary/candidate-failure-state.json boundary/failure-state/candidate-failure-state.json
-          fi
-          if cmp -s boundary/candidate-failure-state.json boundary/failure-state/candidate-failure-state.json; then
-            test "$(sha256sum boundary/failure-state/candidate-failure-state.json | cut -d' ' -f1)" = "$(jq -r .candidate_failure_state_sha256 boundary/qualification-manifest.json)"
-          fi
-          while read -r release; do
-            tag="$(jq -r .tag <<<"$release")"
-            .github/scripts/recheck-qualified-release.sh "boundary/$tag.json" "boundary/final/$tag" boundary/final-release.json
-            .github/scripts/write-failed-acceptance-record.sh "boundary/$tag.json" boundary/final-release.json "boundary/$tag.failed.md" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" RELEASE-INSTALLER-UPDATER-QUALIFICATION-FAILED boundary/qualification-manifest.json boundary/failure-state/candidate-failure-state.json
+          while read -r action; do
+            tag="$(jq -r .tag <<<"$action")"
+            release_id="$(jq -r .release_id <<<"$action")"
+            commit="$(jq -r .commit <<<"$action")"
+            gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > boundary/final-release.json
+            jq -e --arg tag "$tag" --arg commit "$commit" --argjson release_id "$release_id" '.id == $release_id and .tag_name == $tag and .target_commitish == $commit' boundary/final-release.json >/dev/null
             if jq -e '.draft == true and .prerelease == false' boundary/final-release.json >/dev/null; then
-              gh release edit "$tag" --notes-file "boundary/$tag.failed.md" --draft=false --prerelease --latest=false
+              gh release edit "$tag" --notes-file "boundary/records/$tag.md" --draft=false --prerelease --latest=false
             else
               jq -e '.draft == false and .prerelease == true and .immutable == true' boundary/final-release.json >/dev/null
-              jq -j .body boundary/final-release.json | cmp - "boundary/$tag.failed.md"
+              jq -j .body boundary/final-release.json | cmp - "boundary/records/$tag.md"
             fi
-          done < <(jq -c '.[]' <<<"$BUILD_RELEASES")
+          done < <(jq -c '.actions[]' boundary/candidate-failure-decision.json)
       - name: Remove only this run's fully recorded unsigned drafts and tags
         if: steps.boundary.outputs.signed != 'true' && steps.boundary.outputs.recorded == 'true'
         env:
@@ -754,6 +811,7 @@ jobs:
           BUILD_RELEASES: ${{ needs.preflight.outputs.build_releases }}
         run: |
           set -euo pipefail
+          printf '[]' > boundary/unsigned/observations.json
           while read -r release; do
             tag="$(jq -r .tag <<<"$release")"
             test "$(jq --arg tag "$tag" '[.[] | select(.tag == $tag)] | length' boundary/unsigned/drafts.json)" -eq 1
@@ -766,16 +824,83 @@ jobs:
             release_id="$(jq -r .release_id <<<"$entry")"
             commit="$(jq -r .commit <<<"$entry")"
             if ! gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" >/dev/null 2>&1; then
-              if object="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha 2>/dev/null)"; then
-                test "$object" = "$commit"
-                gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag"
-              fi
+              tag_commit=null
+              if object="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha 2>/dev/null)"; then test "$object" = "$commit"; tag_commit="$(jq -cn --arg commit "$object" '$commit')"; fi
+              observation="$(jq -cnS --argjson expected "$entry" --argjson tag_commit "$tag_commit" '{assets:[],body:"",commit:$expected.commit,created_release_id:$expected.release_id,draft:false,immutable:false,prerelease:false,release_id:$expected.release_id,release_identity:$expected.release_identity,release_present:false,sequence:$expected.sequence,tag:$expected.tag,tag_commit:$tag_commit}')"
+              jq -cS --argjson observation "$observation" '. + [$observation]' boundary/unsigned/observations.json > boundary/unsigned/observations.next
+              mv boundary/unsigned/observations.next boundary/unsigned/observations.json
               continue
             fi
             .github/scripts/recheck-qualified-release.sh "boundary/unsigned/$tag.json" "boundary/unsigned/rechecked/$tag" boundary/unsigned/release.json
             jq -e '.draft == true and .prerelease == false' boundary/unsigned/release.json >/dev/null
-            tag_exists=false
-            if object="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha 2>/dev/null)"; then test "$object" = "$commit"; tag_exists=true; fi
-            gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$release_id"
-            test "$tag_exists" != true || gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag"
+            tag_commit=null
+            if object="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha 2>/dev/null)"; then test "$object" = "$commit"; tag_commit="$(jq -cn --arg commit "$object" '$commit')"; fi
+            observation="$(jq -cnS --argjson expected "$entry" --slurpfile release boundary/unsigned/release.json --argjson tag_commit "$tag_commit" '{assets:$expected.assets,body:$release[0].body,commit:$expected.commit,created_release_id:$expected.release_id,draft:$release[0].draft,immutable:($release[0].immutable // false),prerelease:$release[0].prerelease,release_id:$expected.release_id,release_identity:$expected.release_identity,release_present:true,sequence:$expected.sequence,tag:$expected.tag,tag_commit:$tag_commit}')"
+            jq -cS --argjson observation "$observation" '. + [$observation]' boundary/unsigned/observations.json > boundary/unsigned/observations.next
+            mv boundary/unsigned/observations.next boundary/unsigned/observations.json
           done < <(jq -c '.[]' <<<"$BUILD_RELEASES")
+          jq -cnS --slurpfile construction_decision boundary/unsigned/candidate-draft-construction-decision.json --slurpfile construction_facts boundary/unsigned/candidate-draft-construction-facts.json --slurpfile observations boundary/unsigned/observations.json --arg observed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg prior_decision_sha256 "$(sha256sum boundary/unsigned/candidate-draft-construction-decision.json | cut -d' ' -f1)" --arg commit "$GITHUB_SHA" --arg path '.github/workflows/candidate.yml' --arg ref "$GITHUB_WORKFLOW_REF" --arg run_id "$GITHUB_RUN_ID" --arg run_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" '{burned_identities:$construction_facts[0].preflight_facts.burned_identities,candidate_failure_state:null,construction_decision:$construction_decision[0],construction_facts:$construction_facts[0],observations:$observations[0],observed_at:$observed_at,prior_decision_sha256:$prior_decision_sha256,qualification_boundary_facts:null,qualification_manifest:null,reason:"pre-boundary-failure",schema:"sbxr-release-qualification-facts-v1",stage:"candidate-failure-finalization",workflow:{commit:$commit,path:$path,ref:$ref,run_id:$run_id,run_url:$run_url}}' | tr -d '\n' > boundary/unsigned/candidate-failure-facts.json
+          go run ./cmd/sbxr-release qualification < boundary/unsigned/candidate-failure-facts.json > boundary/unsigned/candidate-failure-decision.json
+          facts_sha256="$(sha256sum boundary/unsigned/candidate-failure-facts.json | cut -d' ' -f1)"
+          jq -e --arg facts_sha256 "$facts_sha256" --arg prior_decision_sha256 "$(sha256sum boundary/unsigned/candidate-draft-construction-decision.json | cut -d' ' -f1)" '.schema == "sbxr-release-qualification-decision-v1" and .stage == "candidate-failure-finalization" and .outcome == "cleanup" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256 and all(.actions[]; .type == "cleanup-draft" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256)' boundary/unsigned/candidate-failure-decision.json >/dev/null
+          while read -r action; do
+            tag="$(jq -r .tag <<<"$action")"
+            release_id="$(jq -r .release_id <<<"$action")"
+            commit="$(jq -r .commit <<<"$action")"
+            if jq -e .delete_release <<<"$action" >/dev/null; then
+              gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > boundary/unsigned/final-release.json
+              jq -e --arg tag "$tag" --arg commit "$commit" --argjson release_id "$release_id" '.id == $release_id and .tag_name == $tag and .target_commitish == $commit and .draft == true and .prerelease == false' boundary/unsigned/final-release.json >/dev/null
+              gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$release_id"
+            fi
+            if jq -e .delete_tag <<<"$action" >/dev/null; then
+              test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha)" = "$commit"
+              gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag"
+            fi
+          done < <(jq -c '.actions[]' boundary/unsigned/candidate-failure-decision.json)
+      - name: Verify the observed candidate failure transition
+        if: always() && (steps.boundary.outputs.signed == 'true' || steps.boundary.outputs.recorded == 'true')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if test "${{ steps.boundary.outputs.signed }}" = true; then
+            directory=boundary
+            printf '[]' > "$directory/verified-burns.json"
+            printf '[]' > "$directory/verified-observations.json"
+            git fetch --force --tags origin
+            while read -r action; do
+              tag="$(jq -r .tag <<<"$action")"
+              expected="$(jq -cS .burn <<<"$action")"
+              actual="$(git tag -l --format='%(contents)' "release-burned/$tag" | jq -cS .)"
+              test "$actual" = "$expected"
+              jq -cS --argjson burn "$actual" '. + [$burn] | sort_by(.original_tag)' "$directory/verified-burns.json" > "$directory/verified-burns.next"
+              mv "$directory/verified-burns.next" "$directory/verified-burns.json"
+              .github/scripts/recheck-qualified-release.sh "$directory/$tag.json" "$directory/verified/$tag" "$directory/$tag.verified-release.json"
+              entry="$(jq -c --arg tag "$tag" '.observations[] | select(.tag == $tag)' "$directory/candidate-failure-facts.json")"
+              commit="$(jq -r .commit <<<"$entry")"
+              tag_commit="$(git rev-parse "refs/tags/$tag^{commit}")"
+              test "$tag_commit" = "$commit"
+              observation="$(jq -cnS --argjson expected "$entry" --slurpfile release "$directory/$tag.verified-release.json" --arg tag_commit "$tag_commit" '{assets:$expected.assets,body:$release[0].body,commit:$expected.commit,created_release_id:$expected.created_release_id,draft:$release[0].draft,immutable:($release[0].immutable // false),prerelease:$release[0].prerelease,release_id:$expected.release_id,release_identity:$expected.release_identity,release_present:true,sequence:$expected.sequence,tag:$expected.tag,tag_commit:$tag_commit}')"
+              jq -cS --argjson observation "$observation" '. + [$observation]' "$directory/verified-observations.json" > "$directory/verified-observations.next"
+              mv "$directory/verified-observations.next" "$directory/verified-observations.json"
+            done < <(jq -c '.actions[]' "$directory/candidate-failure-decision.json")
+          else
+            directory=boundary/unsigned
+            jq -cS .burned_identities "$directory/candidate-failure-facts.json" > "$directory/verified-burns.json"
+            printf '[]' > "$directory/verified-observations.json"
+            while read -r action; do
+              tag="$(jq -r .tag <<<"$action")"
+              release_id="$(jq -r .release_id <<<"$action")"
+              ! gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" >/dev/null 2>&1
+              ! gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1
+              expected="$(jq -c --arg tag "$tag" '.observations[] | select(.tag == $tag)' "$directory/candidate-failure-facts.json")"
+              observation="$(jq -cnS --argjson expected "$expected" '{assets:[],body:"",commit:$expected.commit,created_release_id:$expected.created_release_id,draft:false,immutable:false,prerelease:false,release_id:$expected.release_id,release_identity:$expected.release_identity,release_present:false,sequence:$expected.sequence,tag:$expected.tag,tag_commit:null}')"
+              jq -cS --argjson observation "$observation" '. + [$observation]' "$directory/verified-observations.json" > "$directory/verified-observations.next"
+              mv "$directory/verified-observations.next" "$directory/verified-observations.json"
+            done < <(jq -c '.actions[]' "$directory/candidate-failure-decision.json")
+          fi
+          jq -cnS --slurpfile burned "$directory/verified-burns.json" --slurpfile failure_decision "$directory/candidate-failure-decision.json" --slurpfile failure_facts "$directory/candidate-failure-facts.json" --slurpfile observations "$directory/verified-observations.json" '{burned_identities:$burned[0],failure_decision:$failure_decision[0],failure_facts:$failure_facts[0],observations:$observations[0],schema:"sbxr-release-qualification-facts-v1",stage:"candidate-failure-verification"}' | tr -d '\n' > "$directory/candidate-failure-verification-facts.json"
+          go run ./cmd/sbxr-release qualification < "$directory/candidate-failure-verification-facts.json" > "$directory/candidate-failure-verification-decision.json"
+          facts_sha256="$(sha256sum "$directory/candidate-failure-verification-facts.json" | cut -d' ' -f1)"
+          prior_decision_sha256="$(sha256sum "$directory/candidate-failure-decision.json" | cut -d' ' -f1)"
+          jq -e --arg facts_sha256 "$facts_sha256" --arg prior_decision_sha256 "$prior_decision_sha256" '.schema == "sbxr-release-qualification-decision-v1" and .stage == "candidate-failure-verification" and .outcome == "accepted" and .actions == [] and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256' "$directory/candidate-failure-verification-decision.json" >/dev/null
