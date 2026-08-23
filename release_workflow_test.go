@@ -119,7 +119,7 @@ func TestCandidateConstructsDraftsAndSignsTheQualificationBoundary(t *testing.T)
 		"git push --atomic origin",
 		"releases/latest",
 		"gh attestation verify",
-		"RELEASE-INSTALLER-UPDATER-TWO-RELEASE-QUALIFICATION",
+		`stage:"acceptance-vps-result"`,
 		"ubuntu-24.04",
 		"ubuntu-24.04-arm",
 		"go run ./cmd/sbxr-release verify-package",
@@ -272,10 +272,15 @@ func TestCandidateQualifiesTheManifestBoundTwoReleaseJourneyOnTheAcceptanceVPS(t
 		"/var/lib/sbxr/installed.json",
 		"/run/lock/sbxr.lock",
 		"update-ca-certificates --fresh",
-		"sbxr-acceptance-record-v1",
-		"Acceptance time: $accepted_at",
-		"RELEASE-INSTALLER-UPDATER-TWO-RELEASE-QUALIFICATION",
-		"Owner Acceptance: Not required",
+		`stage:"acceptance-vps-result"`,
+		"go run ./cmd/sbxr-release qualification < acceptance-vps-result-facts.json > acceptance-vps-result-decision.json",
+		"facts_sha256=\"$(sha256sum acceptance-vps-result-facts.json | cut -d' ' -f1)\"",
+		"prior_decision_sha256=\"$(sha256sum handoff/qualification-manifest.json | cut -d' ' -f1)\"",
+		`"a": release("A")`,
+		`"b": release("B")`,
+		`"qualification_manifest_sha256": manifest_sha256`,
+		`observed_at="$(jq -r .observed_at handoff/acceptance-vps-evidence.json)"`,
+		`jq -jr --arg tag "$tag" '.records[] | select(.tag == $tag) | .body' acceptance-vps-result-decision.json > "$record"`,
 		"retention-days: 90",
 	} {
 		if !strings.Contains(acceptanceSources, required) {
@@ -284,6 +289,12 @@ func TestCandidateQualifiesTheManifestBoundTwoReleaseJourneyOnTheAcceptanceVPS(t
 	}
 	if strings.Contains(string(script), "if test ! -e /var/lib/sbxr/update.json; then\n        kill -CONT") {
 		t.Fatal("candidate VPS loop signals the updater before a durable record exists")
+	}
+	acceptance := string(body)[strings.Index(string(body), "  acceptance-vps:"):strings.Index(string(body), "  cleanup-unqualified:")]
+	for _, forbidden := range []string{`canonical="$(jq -cnS`, `echo '# SBXR Installer-Updater Acceptance Record'`, `.github/scripts/release-role.sh`} {
+		if strings.Contains(acceptance, forbidden) {
+			t.Fatalf("candidate Acceptance VPS Adapter retained record policy %q", forbidden)
+		}
 	}
 	assertActionsPinned(t, acceptanceSources)
 }

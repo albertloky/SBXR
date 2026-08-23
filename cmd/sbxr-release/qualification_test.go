@@ -304,6 +304,7 @@ func TestQualificationCommandConstructsAndVerifiesCandidateDrafts(t *testing.T) 
 			assertQualificationRefused(t, binary, qualificationDocument(t, facts), name)
 		})
 	}
+
 }
 
 func TestQualificationCommandConstructsQualificationManifest(t *testing.T) {
@@ -384,6 +385,144 @@ func TestQualificationCommandConstructsQualificationManifest(t *testing.T) {
 			mutate(facts)
 			assertQualificationRefused(t, binary, qualificationDocument(t, facts), name)
 		})
+	}
+}
+
+func TestQualificationCommandEvaluatesAcceptanceVPSAndConstructsRecords(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "sbxr-release")
+	command := exec.Command("go", "build", "-o", binary, ".")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build sbxr-release: %v\n%s", err, output)
+	}
+	later := candidateFacts("normal")
+	later.LatestTag = stringPointer("v2.0.0")
+	later.Releases = []observedRelease{qualifiedRelease(false)}
+	later.Tags = []string{"v2.0.0"}
+	boundaryFacts, manifest := qualificationBoundaryForCandidate(t, binary, later)
+	facts := map[string]any{
+		"evaluation_time":         "2026-08-23T13:00:00Z",
+		"github_routing_restored": true,
+		"journey": map[string]any{
+			"a":                  map[string]any{"release_identity": map[string]any{"commit": strings.Repeat("e", 40), "release_index_sha256": strings.Repeat("2", 64), "repository": "albertloky/SBXR", "tag": "v2.0.0"}, "sequence": 17},
+			"activated_rollback": true, "b": map[string]any{"release_identity": map[string]any{"commit": strings.Repeat("d", 40), "release_index_sha256": strings.Repeat("2", 64), "repository": "albertloky/SBXR", "tag": "v2.0.1"}, "sequence": 18}, "check_invalidation": true, "clean_install": true, "committed_forward_recovery": true,
+			"concurrency_refusal": true, "lower_sequence_replacement": "Not required - normal authority", "menu_check": true, "mode": "normal",
+			"observed_at": "2026-08-23T13:00:00Z", "prepared_rollback": true, "production_update": true, "qualification_manifest_sha256": sha256String(string(manifest)), "schema": "sbxr-acceptance-vps-evidence-v1", "secret_safe": true, "ssh_continuity": true,
+		},
+		"observed_at":                     "2026-08-23T13:00:00Z",
+		"prior_decision_sha256":           sha256String(string(manifest)),
+		"qualification_manifest_attested": true,
+		"qualification_boundary_facts":    jsonValue(t, boundaryFacts),
+		"qualification_manifest":          jsonValue(t, string(manifest)),
+		"releases":                        jsonObject(t, manifest)["releases"],
+		"runner": map[string]any{
+			"architecture": "amd64", "go_toolchain": "go1.26.6", "operating_system": "Ubuntu Server 24.04", "public_verifier": "1.3.0 26B3382D5700AFBCD84F980D1D5B6C52BFF743DC2A8EE86B8B44C8E1245CE485",
+		},
+		"schema": qualificationFactsSchema,
+		"stage":  "acceptance-vps-result",
+	}
+	document := qualificationDocument(t, facts)
+	decision, err := runQualificationCommand(binary, document)
+	if err != nil {
+		t.Fatalf("acceptance VPS result: %v\n%s", err, decision)
+	}
+	result := jsonObject(t, decision)
+	if result["schema"] != qualificationDecisionSchema || result["stage"] != "acceptance-vps-result" || result["outcome"] != "accepted" || result["facts_sha256"] != sha256String(document) || result["prior_decision_sha256"] != sha256String(string(manifest)) {
+		t.Fatalf("acceptance decision binding = %s", decision)
+	}
+	records := result["records"].([]any)
+	if len(records) != 2 {
+		t.Fatalf("record count = %d", len(records))
+	}
+	for index, expected := range []struct{ tag, role, sha256 string }{
+		{"v2.0.0", "Clean-installed source release", "731e7ba41b933bed30a60f5b0f318eababc210e407427ccbd885b9a48949387f"},
+		{"v2.0.1", "Discovered, installed, recovered, final latest release", "7aff098fda09c2ea4693b6187d45f5d6e2a791837d343423b4c56e3b4b019504"},
+	} {
+		record := records[index].(map[string]any)
+		if record["tag"] != expected.tag {
+			t.Fatalf("record %d tag = %v", index, record["tag"])
+		}
+		body := record["body"].(string)
+		if sha256String(body) != expected.sha256 {
+			t.Fatalf("record %s SHA-256 = %s", expected.tag, sha256String(body))
+		}
+		for _, required := range []string{"# SBXR Installer-Updater Acceptance Record\n", "Status: Qualified\n", "Tag: " + expected.tag + "\n", "Acceptance time: 2026-08-23T13:00:00Z\n", "Qualification role: " + expected.role + "\n", "Stable result code: RELEASE-INSTALLER-UPDATER-TWO-RELEASE-QUALIFICATION\n", "Owner Acceptance: Not required\n", "```json\n{", "\n```\n"} {
+			if !strings.Contains(body, required) {
+				t.Fatalf("record %s omitted %q\n%s", expected.tag, required, body)
+			}
+		}
+	}
+	retry, err := runQualificationCommand(binary, document)
+	if err != nil || !bytes.Equal(retry, decision) {
+		t.Fatalf("acceptance retry = %s, %v", retry, err)
+	}
+
+	for name, mutate := range map[string]func(map[string]any){
+		"stale prior decision":   func(value map[string]any) { value["prior_decision_sha256"] = strings.Repeat("9", 64) },
+		"stale observation":      func(value map[string]any) { value["observed_at"] = "2026-08-23T12:54:59Z" },
+		"future observation":     func(value map[string]any) { value["observed_at"] = "2026-08-23T13:00:01Z" },
+		"partial journey":        func(value map[string]any) { delete(value["journey"].(map[string]any), "production_update") },
+		"mixed release identity": func(value map[string]any) { value["releases"].([]any)[1].(map[string]any)["tag"] = "v2.0.9" },
+		"crossed journey": func(value map[string]any) {
+			value["journey"].(map[string]any)["a"].(map[string]any)["sequence"] = float64(16)
+		},
+		"routing not restored":    func(value map[string]any) { value["github_routing_restored"] = false },
+		"unsigned manifest":       func(value map[string]any) { value["qualification_manifest_attested"] = false },
+		"secret-bearing evidence": func(value map[string]any) { value["journey"].(map[string]any)["authorization"] = "Bearer secret" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			hostile := jsonObject(t, []byte(document))
+			mutate(hostile)
+			assertQualificationRefused(t, binary, qualificationDocument(t, hostile), name)
+		})
+	}
+
+	rescue := candidateFacts("rescue")
+	rescue.Candidate.DefectIssueURL = stringPointer("https://github.com/albertloky/SBXR/issues/99")
+	rescue.Candidate.FailedNormalRunID = stringPointer("123")
+	rescue.DefectIssue = &defectIssue{State: "open", URL: *rescue.Candidate.DefectIssueURL}
+	rescue.FailedNormalRun = &failedNormalRun{Conclusion: "failure", ID: "123", Mode: "normal", Path: ".github/workflows/candidate.yml"}
+	rescue.Releases = []observedRelease{qualifiedRelease(true)}
+	rescue.Tags = []string{"v2.0.0"}
+	rescue.BurnedIdentities = []burnedIdentity{{Commit: strings.Repeat("e", 40), OriginalTag: "v2.0.0", QualificationRunURL: failedRunURL("123"), Reason: "post-sign-qualification-failure", RecordedAt: "2026-08-23T00:00:00Z", ReleaseIndexSHA256: strings.Repeat("2", 64), Sequence: 17}}
+	rescueBoundaryFacts, rescueManifest := qualificationBoundaryForCandidate(t, binary, rescue)
+	rescueFacts := jsonObject(t, []byte(document))
+	rescueFacts["prior_decision_sha256"] = sha256String(string(rescueManifest))
+	rescueFacts["qualification_boundary_facts"] = jsonValue(t, rescueBoundaryFacts)
+	rescueFacts["qualification_manifest"] = jsonValue(t, string(rescueManifest))
+	rescueFacts["releases"] = jsonObject(t, rescueManifest)["releases"]
+	rescueJourney := rescueFacts["journey"].(map[string]any)
+	rescueJourney["a"] = jsonObject(t, rescueManifest)["releases"].([]any)[0].(map[string]any)
+	delete(rescueJourney["a"].(map[string]any), "assets")
+	delete(rescueJourney["a"].(map[string]any), "commit")
+	delete(rescueJourney["a"].(map[string]any), "release_id")
+	delete(rescueJourney["a"].(map[string]any), "tag")
+	rescueJourney["b"] = jsonObject(t, rescueManifest)["releases"].([]any)[1].(map[string]any)
+	delete(rescueJourney["b"].(map[string]any), "assets")
+	delete(rescueJourney["b"].(map[string]any), "commit")
+	delete(rescueJourney["b"].(map[string]any), "release_id")
+	delete(rescueJourney["b"].(map[string]any), "tag")
+	rescueJourney["qualification_manifest_sha256"] = sha256String(string(rescueManifest))
+	for _, field := range []string{"activated_rollback", "committed_forward_recovery", "menu_check", "prepared_rollback", "production_update"} {
+		rescueJourney[field] = "Not required - rescue authority"
+	}
+	for _, field := range []string{"check_invalidation", "concurrency_refusal"} {
+		rescueJourney[field] = "Proved by native automated qualification"
+	}
+	rescueJourney["lower_sequence_replacement"] = true
+	rescueJourney["mode"] = "rescue"
+	rescueDecision, err := runQualificationCommand(binary, qualificationDocument(t, rescueFacts))
+	if err != nil {
+		t.Fatalf("rescue acceptance decision = %s, %v", rescueDecision, err)
+	}
+	rescueRecords := jsonObject(t, rescueDecision)["records"].([]any)
+	for _, value := range rescueRecords {
+		body := value.(map[string]any)["body"].(string)
+		if !strings.Contains(body, "Stable result code: RELEASE-INSTALLER-UPDATER-RESCUE-QUALIFICATION\n") || !strings.Contains(body, "Qualification role: Rescue direct-install and lower-sequence replacement release\n") || !strings.Contains(body, "Rescue defect evidence: https://github.com/albertloky/SBXR/issues/99\n") {
+			t.Fatalf("rescue Acceptance Record = %s", body)
+		}
+	}
+	if len(rescueRecords) != 2 {
+		t.Fatalf("rescue acceptance decision = %s, %v", rescueDecision, err)
 	}
 }
 

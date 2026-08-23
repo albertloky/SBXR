@@ -226,8 +226,38 @@ else
   stage recovered-committed
 fi
 
-if test "$MODE" = rescue; then
-  printf '%s\n' '{"schema":"sbxr-acceptance-vps-evidence-v1","mode":"rescue","clean_install":true,"lower_sequence_replacement":true,"menu_check":"Not required - rescue authority","production_update":"Not required - rescue authority","prepared_rollback":"Not required - rescue authority","activated_rollback":"Not required - rescue authority","committed_forward_recovery":"Not required - rescue authority","concurrency_refusal":"Proved by native automated qualification","check_invalidation":"Proved by native automated qualification","ssh_continuity":true,"secret_safe":true}' > acceptance-vps-evidence.json
-else
-  printf '%s\n' '{"schema":"sbxr-acceptance-vps-evidence-v1","mode":"normal","clean_install":true,"lower_sequence_replacement":"Not required - normal authority","menu_check":true,"production_update":true,"prepared_rollback":true,"activated_rollback":true,"committed_forward_recovery":true,"concurrency_refusal":true,"check_invalidation":true,"ssh_continuity":true,"secret_safe":true}' > acceptance-vps-evidence.json
-fi
+python3 <<'PY'
+import datetime, hashlib, json, os
+
+def release(prefix):
+    return {
+        "release_identity": {
+            "commit": os.environ[prefix + "_COMMIT"],
+            "release_index_sha256": os.environ[prefix + "_INDEX_SHA256"],
+            "repository": "albertloky/SBXR",
+            "tag": os.environ[prefix + "_TAG"],
+        },
+        "sequence": int(os.environ[prefix + "_SEQUENCE"]),
+    }
+
+with open("qualification-manifest.json", "rb") as source:
+    manifest_sha256 = hashlib.sha256(source.read()).hexdigest()
+mode = os.environ["MODE"]
+waiver = "Not required - rescue authority"
+evidence = {
+    "a": release("A"), "activated_rollback": waiver, "b": release("B"),
+    "check_invalidation": "Proved by native automated qualification", "clean_install": True,
+    "committed_forward_recovery": waiver, "concurrency_refusal": "Proved by native automated qualification",
+    "lower_sequence_replacement": True, "menu_check": waiver, "mode": mode,
+    "observed_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+    "prepared_rollback": waiver, "production_update": waiver, "qualification_manifest_sha256": manifest_sha256,
+    "schema": "sbxr-acceptance-vps-evidence-v1", "secret_safe": True, "ssh_continuity": True,
+}
+if mode == "normal":
+    for field in ("activated_rollback", "check_invalidation", "committed_forward_recovery", "concurrency_refusal", "menu_check", "prepared_rollback", "production_update"):
+        evidence[field] = True
+    evidence["lower_sequence_replacement"] = "Not required - normal authority"
+with open("acceptance-vps-evidence.json", "w", encoding="utf-8") as output:
+    json.dump(evidence, output, separators=(",", ":"), sort_keys=True)
+    output.write("\n")
+PY

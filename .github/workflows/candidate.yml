@@ -611,69 +611,36 @@ jobs:
           set -euo pipefail
           jq '(.stages[] | select(. == "Running")) = "Failed"' candidate-failure-state.json > candidate-failure-state.next
           mv candidate-failure-state.next candidate-failure-state.json
-      - name: Write separate machine-verifiable A and B Acceptance Records
+      - name: Evaluate the Acceptance VPS result and write exact Module records
         env:
-          MODE: ${{ inputs.mode }}
           SOURCE_STATE: ${{ needs.preflight.outputs.source_state }}
-          DEFECT_URL: ${{ inputs.defect_issue_url }}
-          FAILED_RUN: ${{ inputs.failed_normal_run_id }}
         run: |
           set -euo pipefail
           mkdir -m 0700 acceptance-records
-          result=RELEASE-INSTALLER-UPDATER-TWO-RELEASE-QUALIFICATION
-          test "$MODE" = normal || result=RELEASE-INSTALLER-UPDATER-RESCUE-QUALIFICATION
-          go_toolchain="$(go version | awk '{print $3}')"
-          accepted_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          workflow_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          journey="$(cat handoff/acceptance-vps-evidence.json)"
+          prior_decision_sha256="$(sha256sum handoff/qualification-manifest.json | cut -d' ' -f1)"
+          observed_at="$(jq -r .observed_at handoff/acceptance-vps-evidence.json)"
+          jq -cnS --arg evaluation_time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg observed_at "$observed_at" --arg prior_decision_sha256 "$prior_decision_sha256" --slurpfile boundary_facts handoff/qualification-boundary-facts.json --slurpfile journey handoff/acceptance-vps-evidence.json --slurpfile manifest handoff/qualification-manifest.json --arg go_toolchain "$(go version | awk '{print $3}')" --arg public_verifier '1.3.0 26B3382D5700AFBCD84F980D1D5B6C52BFF743DC2A8EE86B8B44C8E1245CE485' '{evaluation_time:$evaluation_time,github_routing_restored:true,journey:$journey[0],observed_at:$observed_at,prior_decision_sha256:$prior_decision_sha256,qualification_boundary_facts:$boundary_facts[0],qualification_manifest:$manifest[0],qualification_manifest_attested:true,releases:$manifest[0].releases,runner:{architecture:"amd64",go_toolchain:$go_toolchain,operating_system:"Ubuntu Server 24.04",public_verifier:$public_verifier},schema:"sbxr-release-qualification-facts-v1",stage:"acceptance-vps-result"}' | tr -d '\n' > acceptance-vps-result-facts.json
+          go run ./cmd/sbxr-release qualification < acceptance-vps-result-facts.json > acceptance-vps-result-decision.json
+          facts_sha256="$(sha256sum acceptance-vps-result-facts.json | cut -d' ' -f1)"
+          jq -e --arg facts_sha256 "$facts_sha256" --arg prior_decision_sha256 "$prior_decision_sha256" '.schema == "sbxr-release-qualification-decision-v1" and .stage == "acceptance-vps-result" and .outcome == "accepted" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256 and (.records | length) == 2' acceptance-vps-result-decision.json >/dev/null
           for index in 0 1; do
-            release="$(jq -c ".releases[$index]" handoff/qualification-manifest.json)"
-            tag="$(jq -r .tag <<<"$release")"
-            role="$(.github/scripts/release-role.sh handoff/qualification-manifest.json "$tag")"
-            canonical="$(jq -cnS --arg schema sbxr-acceptance-record-v1 --arg repository "$GITHUB_REPOSITORY" --arg tag "$tag" --arg commit "$(jq -r .commit <<<"$release")" --arg index_sha256 "$(jq -r .release_identity.release_index_sha256 <<<"$release")" --argjson sequence "$(jq .sequence <<<"$release")" --arg workflow "$workflow_url" --arg accepted_at "$accepted_at" --arg role "$role" --arg code "$result" --argjson assets "$(jq .assets <<<"$release")" --argjson journey "$journey" '{schema:$schema,release_identity:{repository:$repository,tag:$tag,commit:$commit,release_index_sha256:$index_sha256},sequence:$sequence,assets:$assets,workflow_run:$workflow,accepted_at:$accepted_at,runner:"Ubuntu Server 24.04 linux/amd64",stages:{module_verification:"Passed",seam_verification:"Passed",integrated_verification:"Passed on live Ubuntu Server 24.04 amd64",codex_live_acceptance:"Passed",owner_acceptance:"Not required"},journey:$journey,qualification_role:$role,stable_result_code:$code,secret_safe_result:"Passed",evidence:[($workflow+"#artifacts")]}' )"
+            tag="$(jq -r ".releases[$index].tag" handoff/qualification-manifest.json)"
             record="acceptance-records/$tag.md"
-            {
-              echo '# SBXR Installer-Updater Acceptance Record'
-              echo 'Status: Qualified'
-              echo "Repository: $GITHUB_REPOSITORY"
-              echo "Tag: $tag"
-              echo "Commit: $(jq -r .commit <<<"$release")"
-              echo "Release index SHA-256: $(jq -r .release_identity.release_index_sha256 <<<"$release")"
-              echo "Sequence: $(jq -r .sequence <<<"$release")"
-              echo "Workflow evidence: $workflow_url"
-              echo "Acceptance time: $accepted_at"
-              echo 'Runner: Ubuntu Server 24.04 linux/amd64'
-              echo "Go toolchain: $go_toolchain"
-              echo 'Public verifier: 1.3.0 26B3382D5700AFBCD84F980D1D5B6C52BFF743DC2A8EE86B8B44C8E1245CE485'
-              echo 'Secret-safe result: Passed'
-              echo "Qualification role: $role"
-              echo "Stable result code: $result"
-              echo 'Module Verification: Passed'
-              echo 'Seam Verification: Passed'
-              echo 'Integrated Verification: Passed on live Ubuntu Server 24.04 amd64'
-              echo 'Codex Live Acceptance: Passed'
-              echo 'Owner Acceptance: Not required'
-              jq -r '.assets[] | "Asset: \(.name) \(.size) \(.sha256)"' <<<"$release"
-              if test "$MODE" = rescue; then
-                echo "Rescue defect evidence: $DEFECT_URL"
-                echo "Failed normal run evidence: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$FAILED_RUN"
-                echo 'Normal journey waiver: Reproducible installed-source defect made the normal menu journey impossible'
-              fi
-              echo '```json'
-              echo "$canonical"
-              echo '```'
-            } > "$record"
+            test "$(jq -r --arg tag "$tag" '[.records[] | select(.tag == $tag)] | length' acceptance-vps-result-decision.json)" -eq 1
+            jq -jr --arg tag "$tag" '.records[] | select(.tag == $tag) | .body' acceptance-vps-result-decision.json > "$record"
             if test "$index" -eq 1 || test "$SOURCE_STATE" = initial-normal; then
               gh release edit "$tag" --draft --notes-file "$record"
             fi
           done
-          if grep -aERq 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer ' acceptance-records handoff/acceptance-vps-evidence.json; then exit 1; elif test $? -ne 1; then exit 1; fi
+          if grep -aERq 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer ' acceptance-records acceptance-vps-result-facts.json acceptance-vps-result-decision.json handoff/acceptance-vps-evidence.json; then exit 1; elif test $? -ne 1; then exit 1; fi
           cat acceptance-records/*.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: installer-updater-acceptance-${{ github.run_id }}
           path: |
             acceptance-records
+            acceptance-vps-result-facts.json
+            acceptance-vps-result-decision.json
             handoff/acceptance-vps-evidence.json
             handoff/qualification-manifest.json
           if-no-files-found: error

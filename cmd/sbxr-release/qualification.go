@@ -25,6 +25,7 @@ const (
 	candidateDraftConstructionStage = "candidate-draft-construction"
 	candidateDraftVerificationStage = "candidate-draft-verification"
 	qualificationBoundaryStage      = "qualification-boundary"
+	acceptanceVPSResultStage        = "acceptance-vps-result"
 	maxQualificationFactsBytes      = 16 << 20
 )
 
@@ -319,6 +320,97 @@ type qualificationManifest struct {
 	Workflow                     qualificationWorkflow  `json:"workflow"`
 }
 
+type acceptanceVPSRunner struct {
+	Architecture    string `json:"architecture"`
+	GoToolchain     string `json:"go_toolchain"`
+	OperatingSystem string `json:"operating_system"`
+	PublicVerifier  string `json:"public_verifier"`
+}
+
+type acceptanceVPSRelease struct {
+	ReleaseIdentity decisionReleaseIdentity `json:"release_identity"`
+	Sequence        uint64                  `json:"sequence"`
+}
+
+type acceptanceVPSJourney struct {
+	A                           acceptanceVPSRelease `json:"a"`
+	ActivatedRollback           json.RawMessage      `json:"activated_rollback"`
+	B                           acceptanceVPSRelease `json:"b"`
+	CheckInvalidation           json.RawMessage      `json:"check_invalidation"`
+	CleanInstall                bool                 `json:"clean_install"`
+	CommittedForwardRecovery    json.RawMessage      `json:"committed_forward_recovery"`
+	ConcurrencyRefusal          json.RawMessage      `json:"concurrency_refusal"`
+	LowerSequenceReplacement    json.RawMessage      `json:"lower_sequence_replacement"`
+	MenuCheck                   json.RawMessage      `json:"menu_check"`
+	Mode                        string               `json:"mode"`
+	ObservedAt                  string               `json:"observed_at"`
+	PreparedRollback            json.RawMessage      `json:"prepared_rollback"`
+	ProductionUpdate            json.RawMessage      `json:"production_update"`
+	QualificationManifestSHA256 string               `json:"qualification_manifest_sha256"`
+	Schema                      string               `json:"schema"`
+	SecretSafe                  bool                 `json:"secret_safe"`
+	SSHContinuity               bool                 `json:"ssh_continuity"`
+}
+
+type acceptanceVPSResultFacts struct {
+	EvaluationTime                string                 `json:"evaluation_time"`
+	GitHubRoutingRestored         bool                   `json:"github_routing_restored"`
+	Journey                       acceptanceVPSJourney   `json:"journey"`
+	ObservedAt                    string                 `json:"observed_at"`
+	PriorDecisionSHA256           string                 `json:"prior_decision_sha256"`
+	QualificationBoundaryFacts    json.RawMessage        `json:"qualification_boundary_facts"`
+	QualificationManifest         json.RawMessage        `json:"qualification_manifest"`
+	QualificationManifestAttested bool                   `json:"qualification_manifest_attested"`
+	Releases                      []verifiedDraftRelease `json:"releases"`
+	Runner                        acceptanceVPSRunner    `json:"runner"`
+	Schema                        string                 `json:"schema"`
+	Stage                         string                 `json:"stage"`
+}
+
+type acceptanceRecordSoftware struct {
+	GoToolchain    string `json:"go_toolchain"`
+	PublicVerifier string `json:"public_verifier"`
+}
+
+type acceptanceRecordStages struct {
+	CodexLiveAcceptance    string `json:"codex_live_acceptance"`
+	IntegratedVerification string `json:"integrated_verification"`
+	ModuleVerification     string `json:"module_verification"`
+	OwnerAcceptance        string `json:"owner_acceptance"`
+	SeamVerification       string `json:"seam_verification"`
+}
+
+type acceptanceRecordJSON struct {
+	AcceptedAt        string                   `json:"accepted_at"`
+	Assets            []decisionAsset          `json:"assets"`
+	Evidence          []string                 `json:"evidence"`
+	Journey           acceptanceVPSJourney     `json:"journey"`
+	QualificationRole string                   `json:"qualification_role"`
+	ReleaseIdentity   decisionReleaseIdentity  `json:"release_identity"`
+	Runner            string                   `json:"runner"`
+	Schema            string                   `json:"schema"`
+	SecretSafeResult  string                   `json:"secret_safe_result"`
+	Sequence          uint64                   `json:"sequence"`
+	Software          acceptanceRecordSoftware `json:"software"`
+	StableResultCode  string                   `json:"stable_result_code"`
+	Stages            acceptanceRecordStages   `json:"stages"`
+	WorkflowRun       string                   `json:"workflow_run"`
+}
+
+type acceptanceRecord struct {
+	Body string `json:"body"`
+	Tag  string `json:"tag"`
+}
+
+type acceptanceVPSResultDecision struct {
+	FactsSHA256         string             `json:"facts_sha256"`
+	Outcome             string             `json:"outcome"`
+	PriorDecisionSHA256 string             `json:"prior_decision_sha256"`
+	Records             []acceptanceRecord `json:"records"`
+	Schema              string             `json:"schema"`
+	Stage               string             `json:"stage"`
+}
+
 func runQualification(input io.Reader, output io.Writer) error {
 	document, err := io.ReadAll(io.LimitReader(input, maxQualificationFactsBytes+1))
 	if err != nil || len(document) == 0 || len(document) > maxQualificationFactsBytes || softwarelifecycle.ValidateUniqueJSON(document) != nil {
@@ -354,6 +446,12 @@ func runQualification(input io.Reader, output io.Writer) error {
 			return errors.New("qualification facts refused")
 		}
 		decision, err = evaluateQualificationBoundary(facts)
+	case acceptanceVPSResultStage:
+		var facts acceptanceVPSResultFacts
+		if !decodeCanonical(document, &facts) {
+			return errors.New("qualification facts refused")
+		}
+		decision, err = evaluateAcceptanceVPSResult(facts, document)
 	default:
 		return errors.New("qualification facts refused")
 	}
@@ -366,6 +464,112 @@ func runQualification(input io.Reader, output io.Writer) error {
 	}
 	_, err = output.Write(body)
 	return err
+}
+
+func evaluateAcceptanceVPSResult(facts acceptanceVPSResultFacts, document []byte) (acceptanceVPSResultDecision, error) {
+	refused := func() (acceptanceVPSResultDecision, error) {
+		return acceptanceVPSResultDecision{}, errors.New("acceptance VPS result refused")
+	}
+	observedAt, timeErr := time.Parse(time.RFC3339, facts.ObservedAt)
+	evaluationTime, evaluationTimeErr := time.Parse(time.RFC3339, facts.EvaluationTime)
+	age := evaluationTime.Sub(observedAt)
+	if facts.Schema != qualificationFactsSchema || facts.Stage != acceptanceVPSResultStage || !facts.GitHubRoutingRestored || !facts.QualificationManifestAttested || facts.Releases == nil || !validSHA256(facts.PriorDecisionSHA256) || timeErr != nil || evaluationTimeErr != nil || observedAt.Format(time.RFC3339) != facts.ObservedAt || evaluationTime.Format(time.RFC3339) != facts.EvaluationTime || age < 0 || age > 5*time.Minute || !validAcceptanceRunner(facts.Runner) || !validAcceptanceJourney(facts.Journey) {
+		return refused()
+	}
+	var boundaryFacts qualificationBoundaryFacts
+	if !decodeCanonical(facts.QualificationBoundaryFacts, &boundaryFacts) {
+		return refused()
+	}
+	manifest, err := evaluateQualificationBoundary(boundaryFacts)
+	if err != nil {
+		return refused()
+	}
+	manifestBytes, err := marshalCanonical(manifest)
+	if err != nil || !bytes.Equal(manifestBytes, facts.QualificationManifest) || facts.PriorDecisionSHA256 != documentSHA256(facts.QualificationManifest) || !reflect.DeepEqual(facts.Releases, manifest.Releases) || !validAcceptanceJourneyBinding(facts, manifest) {
+		return refused()
+	}
+	records := make([]acceptanceRecord, len(manifest.Releases))
+	for index, release := range manifest.Releases {
+		role := "Discovered, installed, recovered, final latest release"
+		if manifest.Mode == "rescue" {
+			role = "Rescue direct-install and lower-sequence replacement release"
+		} else if index == 0 {
+			role = "Clean-installed source release"
+		}
+		body, err := buildSuccessfulAcceptanceRecord(manifest, facts, release, role)
+		if err != nil {
+			return refused()
+		}
+		records[index] = acceptanceRecord{Body: body, Tag: release.Tag}
+	}
+	return acceptanceVPSResultDecision{FactsSHA256: documentSHA256(document), Outcome: "accepted", PriorDecisionSHA256: facts.PriorDecisionSHA256, Records: records, Schema: qualificationDecisionSchema, Stage: acceptanceVPSResultStage}, nil
+}
+
+func validAcceptanceJourneyBinding(facts acceptanceVPSResultFacts, manifest qualificationManifest) bool {
+	if len(manifest.Releases) != 2 || facts.Journey.Mode != manifest.Mode || facts.Journey.ObservedAt != facts.ObservedAt || facts.Journey.QualificationManifestSHA256 != facts.PriorDecisionSHA256 {
+		return false
+	}
+	a := acceptanceVPSRelease{ReleaseIdentity: manifest.Releases[0].ReleaseIdentity, Sequence: manifest.Releases[0].Sequence}
+	b := acceptanceVPSRelease{ReleaseIdentity: manifest.Releases[1].ReleaseIdentity, Sequence: manifest.Releases[1].Sequence}
+	return facts.Journey.A == a && facts.Journey.B == b
+}
+
+func validAcceptanceRunner(runner acceptanceVPSRunner) bool {
+	return runner.OperatingSystem == "Ubuntu Server 24.04" && runner.Architecture == "amd64" && regexp.MustCompile(`^go[0-9]+\.[0-9]+\.[0-9]+$`).MatchString(runner.GoToolchain) && regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+ [A-F0-9]{64}$`).MatchString(runner.PublicVerifier)
+}
+
+func validAcceptanceJourney(journey acceptanceVPSJourney) bool {
+	if journey.Schema != "sbxr-acceptance-vps-evidence-v1" || !journey.CleanInstall || !journey.SecretSafe || !journey.SSHContinuity {
+		return false
+	}
+	trueValue := json.RawMessage("true")
+	normalWaiver := json.RawMessage(`"Not required - normal authority"`)
+	rescueWaiver := json.RawMessage(`"Not required - rescue authority"`)
+	automated := json.RawMessage(`"Proved by native automated qualification"`)
+	switch journey.Mode {
+	case "normal":
+		return bytes.Equal(journey.ActivatedRollback, trueValue) && bytes.Equal(journey.CheckInvalidation, trueValue) && bytes.Equal(journey.CommittedForwardRecovery, trueValue) && bytes.Equal(journey.ConcurrencyRefusal, trueValue) && bytes.Equal(journey.LowerSequenceReplacement, normalWaiver) && bytes.Equal(journey.MenuCheck, trueValue) && bytes.Equal(journey.PreparedRollback, trueValue) && bytes.Equal(journey.ProductionUpdate, trueValue)
+	case "rescue":
+		return bytes.Equal(journey.ActivatedRollback, rescueWaiver) && bytes.Equal(journey.CheckInvalidation, automated) && bytes.Equal(journey.CommittedForwardRecovery, rescueWaiver) && bytes.Equal(journey.ConcurrencyRefusal, automated) && bytes.Equal(journey.LowerSequenceReplacement, trueValue) && bytes.Equal(journey.MenuCheck, rescueWaiver) && bytes.Equal(journey.PreparedRollback, rescueWaiver) && bytes.Equal(journey.ProductionUpdate, rescueWaiver)
+	default:
+		return false
+	}
+}
+
+func buildSuccessfulAcceptanceRecord(manifest qualificationManifest, facts acceptanceVPSResultFacts, release verifiedDraftRelease, role string) (string, error) {
+	code := "RELEASE-INSTALLER-UPDATER-TWO-RELEASE-QUALIFICATION"
+	if manifest.Mode == "rescue" {
+		code = "RELEASE-INSTALLER-UPDATER-RESCUE-QUALIFICATION"
+	}
+	runner := facts.Runner.OperatingSystem + " linux/" + facts.Runner.Architecture
+	recordJSON := acceptanceRecordJSON{
+		AcceptedAt: facts.ObservedAt, Assets: release.Assets, Evidence: []string{manifest.Workflow.RunURL + "#artifacts"}, Journey: facts.Journey, QualificationRole: role,
+		ReleaseIdentity: release.ReleaseIdentity, Runner: runner, Schema: "sbxr-acceptance-record-v1", SecretSafeResult: "Passed", Sequence: release.Sequence,
+		Software: acceptanceRecordSoftware{GoToolchain: facts.Runner.GoToolchain, PublicVerifier: facts.Runner.PublicVerifier}, StableResultCode: code,
+		Stages: acceptanceRecordStages{CodexLiveAcceptance: "Passed", IntegratedVerification: "Passed on live Ubuntu Server 24.04 amd64", ModuleVerification: "Passed", OwnerAcceptance: "Not required", SeamVerification: "Passed"}, WorkflowRun: manifest.Workflow.RunURL,
+	}
+	canonical, err := marshalCanonical(recordJSON)
+	if err != nil {
+		return "", err
+	}
+	var body strings.Builder
+	for _, line := range []string{
+		"# SBXR Installer-Updater Acceptance Record", "Status: Qualified", "Repository: " + recordJSON.ReleaseIdentity.Repository, "Tag: " + recordJSON.ReleaseIdentity.Tag, "Commit: " + recordJSON.ReleaseIdentity.Commit,
+		"Release index SHA-256: " + recordJSON.ReleaseIdentity.ReleaseIndexSHA256, "Sequence: " + strconv.FormatUint(recordJSON.Sequence, 10), "Workflow evidence: " + recordJSON.WorkflowRun,
+		"Acceptance time: " + recordJSON.AcceptedAt, "Runner: " + recordJSON.Runner, "Go toolchain: " + recordJSON.Software.GoToolchain, "Public verifier: " + recordJSON.Software.PublicVerifier,
+		"Secret-safe result: " + recordJSON.SecretSafeResult, "Qualification role: " + recordJSON.QualificationRole, "Stable result code: " + recordJSON.StableResultCode, "Module Verification: " + recordJSON.Stages.ModuleVerification, "Seam Verification: " + recordJSON.Stages.SeamVerification,
+		"Integrated Verification: " + recordJSON.Stages.IntegratedVerification, "Codex Live Acceptance: " + recordJSON.Stages.CodexLiveAcceptance, "Owner Acceptance: " + recordJSON.Stages.OwnerAcceptance,
+	} {
+		body.WriteString(line + "\n")
+	}
+	for _, asset := range recordJSON.Assets {
+		body.WriteString("Asset: " + asset.Name + " " + strconv.FormatInt(asset.Size, 10) + " " + asset.SHA256 + "\n")
+	}
+	if manifest.Mode == "rescue" {
+		body.WriteString("Rescue defect evidence: " + manifest.Rescue.DefectIssueURL + "\nFailed normal run evidence: " + failedRunURL(manifest.Rescue.FailedNormalRunID) + "\nNormal journey waiver: Reproducible installed-source defect made the normal menu journey impossible\n")
+	}
+	body.WriteString("```json\n" + string(canonical) + "\n```\n")
+	return body.String(), nil
 }
 
 func evaluateQualificationBoundary(facts qualificationBoundaryFacts) (qualificationManifest, error) {
