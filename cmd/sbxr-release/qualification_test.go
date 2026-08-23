@@ -1,9 +1,12 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -119,6 +122,163 @@ func TestQualificationCommandPreservesLaterNormalAndRescuePreflight(t *testing.T
 	rescueAfterRescue.LatestTag = stringPointer("v1.9.0")
 	rescueAfterRescue.Releases = []observedRelease{latestRescue, qualifiedRelease(true)}
 	assertQualificationRefused(t, binary, canonicalFacts(t, rescueAfterRescue), "consecutive rescue")
+}
+
+func TestQualificationCommandConstructsAndVerifiesCandidateDrafts(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "sbxr-release")
+	command := exec.Command("go", "build", "-o", binary, ".")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build sbxr-release: %v\n%s", err, output)
+	}
+
+	built := []any{draftTarget("v2.0.0", 17), draftTarget("v2.0.1", 18)}
+	constructionFacts := qualificationDocument(t, map[string]any{
+		"built_releases":     built,
+		"preflight_decision": jsonValue(t, initialNormalDecision),
+		"preflight_facts":    jsonValue(t, initialNormalFacts),
+		"schema":             qualificationFactsSchema,
+		"stage":              "candidate-draft-construction",
+	})
+	constructionOutput, err := runQualificationCommand(binary, constructionFacts)
+	if err != nil {
+		t.Fatalf("draft construction: %v\n%s", err, constructionOutput)
+	}
+	construction := jsonObject(t, constructionOutput)
+	if construction["outcome"] != "actions-required" || construction["stage"] != "candidate-draft-construction" || len(construction["actions"].([]any)) != 2 {
+		t.Fatalf("construction decision = %s", constructionOutput)
+	}
+	if construction["facts_sha256"] != sha256String(constructionFacts) || construction["prior_decision_sha256"] != sha256String(initialNormalDecision) {
+		t.Fatalf("construction decision is not bound to its facts and prior decision: %s", constructionOutput)
+	}
+	for _, actionValue := range construction["actions"].([]any) {
+		action := actionValue.(map[string]any)
+		if action["type"] != "construct-draft" || action["facts_sha256"] != construction["facts_sha256"] || action["prior_decision_sha256"] != construction["prior_decision_sha256"] {
+			t.Fatalf("unbound construction action: %v", action)
+		}
+	}
+
+	observations := []any{draftObservation("v2.0.0", 17, 71), draftObservation("v2.0.1", 18, 72)}
+	verificationFacts := qualificationDocument(t, map[string]any{
+		"construction_decision": jsonValue(t, string(constructionOutput)),
+		"construction_facts":    jsonValue(t, constructionFacts),
+		"observations":          observations,
+		"schema":                qualificationFactsSchema,
+		"stage":                 "candidate-draft-verification",
+	})
+	verificationOutput, err := runQualificationCommand(binary, verificationFacts)
+	if err != nil {
+		t.Fatalf("draft verification: %v\n%s", err, verificationOutput)
+	}
+	verification := jsonObject(t, verificationOutput)
+	if verification["outcome"] != "accepted" || verification["stage"] != "candidate-draft-verification" || len(verification["verified_releases"].([]any)) != 2 {
+		t.Fatalf("verification decision = %s", verificationOutput)
+	}
+	if verification["facts_sha256"] != sha256String(verificationFacts) || verification["prior_decision_sha256"] != sha256String(string(constructionOutput)) {
+		t.Fatalf("verification decision is not bound to its facts and prior decision: %s", verificationOutput)
+	}
+	retry, err := runQualificationCommand(binary, verificationFacts)
+	if err != nil || string(retry) != string(verificationOutput) {
+		t.Fatalf("verification retry = %s, %v", retry, err)
+	}
+
+	for name, mutate := range map[string]func(map[string]any){
+		"partial": func(facts map[string]any) { facts["observations"] = observations[:1] },
+		"unexpected": func(facts map[string]any) {
+			facts["observations"] = append(observations, draftObservation("v2.0.2", 19, 73))
+		},
+		"stale": func(facts map[string]any) {
+			facts["construction_facts"].(map[string]any)["built_releases"].([]any)[0].(map[string]any)["tag"] = "v2.0.9"
+		},
+		"crossed journey": func(facts map[string]any) {
+			facts["observations"].([]any)[1].(map[string]any)["commit"] = strings.Repeat("b", 40)
+		},
+		"crossed release ID": func(facts map[string]any) {
+			facts["observations"].([]any)[0].(map[string]any)["release_id"] = float64(99)
+		},
+		"crossed asset ID": func(facts map[string]any) {
+			first := facts["observations"].([]any)[0].(map[string]any)["assets"].([]any)[0].(map[string]any)["id"]
+			facts["observations"].([]any)[1].(map[string]any)["assets"].([]any)[0].(map[string]any)["id"] = first
+			facts["observations"].([]any)[1].(map[string]any)["downloads"].([]any)[0].(map[string]any)["id"] = first
+		},
+		"unauthenticated": func(facts map[string]any) {
+			facts["observations"].([]any)[0].(map[string]any)["downloads"].([]any)[0].(map[string]any)["authenticated"] = false
+		},
+		"changed bytes": func(facts map[string]any) {
+			facts["observations"].([]any)[0].(map[string]any)["downloads"].([]any)[0].(map[string]any)["sha256"] = strings.Repeat("9", 64)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			facts := jsonObject(t, []byte(verificationFacts))
+			mutate(facts)
+			assertQualificationRefused(t, binary, qualificationDocument(t, facts), name)
+		})
+	}
+}
+
+func draftTarget(tag string, sequence uint64) map[string]any {
+	return map[string]any{
+		"assets": draftAssets(0), "commit": strings.Repeat("a", 40),
+		"release_identity": map[string]any{"commit": strings.Repeat("a", 40), "release_index_sha256": strings.Repeat("2", 64), "repository": "albertloky/SBXR", "tag": tag},
+		"sequence":         sequence, "tag": tag,
+	}
+}
+
+func draftObservation(tag string, sequence uint64, releaseID int64) map[string]any {
+	return map[string]any{
+		"assets": draftAssets(releaseID * 10), "commit": strings.Repeat("a", 40), "created_release_id": releaseID, "downloads": draftDownloads(releaseID * 10), "draft": true, "immutable": false,
+		"prerelease": false, "release_id": releaseID,
+		"release_identity": map[string]any{"commit": strings.Repeat("a", 40), "release_index_sha256": strings.Repeat("2", 64), "repository": "albertloky/SBXR", "tag": tag},
+		"sequence":         sequence, "tag": tag,
+	}
+}
+
+func draftAssets(idBase int64) []any {
+	names := []string{"install.sh", "release-index.json", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz"}
+	assets := make([]any, len(names))
+	for index, name := range names {
+		asset := map[string]any{"name": name, "sha256": strings.Repeat(strconv.Itoa(index+1), 64), "size": index + 10}
+		if idBase > 0 {
+			asset["id"] = idBase + int64(index)
+		}
+		assets[index] = asset
+	}
+	return assets
+}
+
+func draftDownloads(idBase int64) []any {
+	downloads := draftAssets(idBase)
+	for _, value := range downloads {
+		value.(map[string]any)["authenticated"] = true
+	}
+	return downloads
+}
+
+func qualificationDocument(t *testing.T, value any) string {
+	t.Helper()
+	body, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body)
+}
+
+func jsonValue(t *testing.T, document string) any {
+	t.Helper()
+	var value any
+	if err := json.Unmarshal([]byte(document), &value); err != nil {
+		t.Fatal(err)
+	}
+	return value
+}
+
+func jsonObject(t *testing.T, document []byte) map[string]any {
+	t.Helper()
+	return jsonValue(t, string(document)).(map[string]any)
+}
+
+func sha256String(document string) string {
+	digest := sha256.Sum256([]byte(document))
+	return hex.EncodeToString(digest[:])
 }
 
 func candidateFacts(mode string) qualificationFacts {

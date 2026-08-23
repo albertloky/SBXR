@@ -18,11 +18,18 @@ import (
 )
 
 const (
-	qualificationFactsSchema    = "sbxr-release-qualification-facts-v1"
-	qualificationDecisionSchema = "sbxr-release-qualification-decision-v1"
-	candidatePreflightStage     = "candidate-preflight"
-	maxQualificationFactsBytes  = 16 << 20
+	qualificationFactsSchema        = "sbxr-release-qualification-facts-v1"
+	qualificationDecisionSchema     = "sbxr-release-qualification-decision-v1"
+	candidatePreflightStage         = "candidate-preflight"
+	candidateDraftConstructionStage = "candidate-draft-construction"
+	candidateDraftVerificationStage = "candidate-draft-verification"
+	maxQualificationFactsBytes      = 16 << 20
 )
+
+type qualificationEnvelope struct {
+	Schema string `json:"schema"`
+	Stage  string `json:"stage"`
+}
 
 type qualificationFacts struct {
 	ArchiveCommit          string            `json:"archive_commit"`
@@ -147,22 +154,135 @@ type qualificationDecision struct {
 	Stage       string            `json:"stage"`
 }
 
+type draftReleaseTarget struct {
+	Assets          []decisionAsset         `json:"assets"`
+	Commit          string                  `json:"commit"`
+	ReleaseIdentity decisionReleaseIdentity `json:"release_identity"`
+	Sequence        uint64                  `json:"sequence"`
+	Tag             string                  `json:"tag"`
+}
+
+type candidateDraftConstructionFacts struct {
+	BuiltReleases     []draftReleaseTarget `json:"built_releases"`
+	PreflightDecision json.RawMessage      `json:"preflight_decision"`
+	PreflightFacts    json.RawMessage      `json:"preflight_facts"`
+	Schema            string               `json:"schema"`
+	Stage             string               `json:"stage"`
+}
+
+type constructDraftAction struct {
+	Assets              []decisionAsset         `json:"assets"`
+	Body                string                  `json:"body"`
+	Commit              string                  `json:"commit"`
+	Draft               bool                    `json:"draft"`
+	FactsSHA256         string                  `json:"facts_sha256"`
+	Immutable           bool                    `json:"immutable"`
+	Name                string                  `json:"name"`
+	Prerelease          bool                    `json:"prerelease"`
+	PriorDecisionSHA256 string                  `json:"prior_decision_sha256"`
+	ReleaseIdentity     decisionReleaseIdentity `json:"release_identity"`
+	Sequence            uint64                  `json:"sequence"`
+	Tag                 string                  `json:"tag"`
+	Type                string                  `json:"type"`
+}
+
+type candidateDraftConstructionDecision struct {
+	Actions             []constructDraftAction `json:"actions"`
+	FactsSHA256         string                 `json:"facts_sha256"`
+	Outcome             string                 `json:"outcome"`
+	PriorDecisionSHA256 string                 `json:"prior_decision_sha256"`
+	Schema              string                 `json:"schema"`
+	Stage               string                 `json:"stage"`
+}
+
+type observedDraftAsset struct {
+	ID     int64  `json:"id"`
+	Name   string `json:"name"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+}
+
+type observedDraftDownload struct {
+	Authenticated bool   `json:"authenticated"`
+	ID            int64  `json:"id"`
+	Name          string `json:"name"`
+	SHA256        string `json:"sha256"`
+	Size          int64  `json:"size"`
+}
+
+type observedDraft struct {
+	Assets           []observedDraftAsset    `json:"assets"`
+	Commit           string                  `json:"commit"`
+	CreatedReleaseID int64                   `json:"created_release_id"`
+	Downloads        []observedDraftDownload `json:"downloads"`
+	Draft            bool                    `json:"draft"`
+	Immutable        bool                    `json:"immutable"`
+	Prerelease       bool                    `json:"prerelease"`
+	ReleaseID        int64                   `json:"release_id"`
+	ReleaseIdentity  decisionReleaseIdentity `json:"release_identity"`
+	Sequence         uint64                  `json:"sequence"`
+	Tag              string                  `json:"tag"`
+}
+
+type candidateDraftVerificationFacts struct {
+	ConstructionDecision json.RawMessage `json:"construction_decision"`
+	ConstructionFacts    json.RawMessage `json:"construction_facts"`
+	Observations         []observedDraft `json:"observations"`
+	Schema               string          `json:"schema"`
+	Stage                string          `json:"stage"`
+}
+
+type verifiedDraftRelease struct {
+	Assets          []decisionAsset         `json:"assets"`
+	Commit          string                  `json:"commit"`
+	ReleaseID       int64                   `json:"release_id"`
+	ReleaseIdentity decisionReleaseIdentity `json:"release_identity"`
+	Sequence        uint64                  `json:"sequence"`
+	Tag             string                  `json:"tag"`
+}
+
+type candidateDraftVerificationDecision struct {
+	Actions             []json.RawMessage      `json:"actions"`
+	FactsSHA256         string                 `json:"facts_sha256"`
+	Outcome             string                 `json:"outcome"`
+	PriorDecisionSHA256 string                 `json:"prior_decision_sha256"`
+	Schema              string                 `json:"schema"`
+	Stage               string                 `json:"stage"`
+	VerifiedReleases    []verifiedDraftRelease `json:"verified_releases"`
+}
+
 func runQualification(input io.Reader, output io.Writer) error {
 	document, err := io.ReadAll(io.LimitReader(input, maxQualificationFactsBytes+1))
 	if err != nil || len(document) == 0 || len(document) > maxQualificationFactsBytes || softwarelifecycle.ValidateUniqueJSON(document) != nil {
 		return errors.New("qualification facts refused")
 	}
-	decoder := json.NewDecoder(bytes.NewReader(document))
-	decoder.DisallowUnknownFields()
-	var facts qualificationFacts
-	if decoder.Decode(&facts) != nil || decoder.Decode(&struct{}{}) != io.EOF {
+	var envelope qualificationEnvelope
+	if json.Unmarshal(document, &envelope) != nil || envelope.Schema != qualificationFactsSchema {
 		return errors.New("qualification facts refused")
 	}
-	canonical, err := marshalCanonical(facts)
-	if err != nil || !bytes.Equal(canonical, document) {
+	var decision any
+	switch envelope.Stage {
+	case candidatePreflightStage:
+		var facts qualificationFacts
+		if !decodeCanonical(document, &facts) {
+			return errors.New("qualification facts refused")
+		}
+		decision, err = evaluateCandidatePreflight(facts, document)
+	case candidateDraftConstructionStage:
+		var facts candidateDraftConstructionFacts
+		if !decodeCanonical(document, &facts) {
+			return errors.New("qualification facts refused")
+		}
+		decision, err = evaluateCandidateDraftConstruction(facts, document)
+	case candidateDraftVerificationStage:
+		var facts candidateDraftVerificationFacts
+		if !decodeCanonical(document, &facts) {
+			return errors.New("qualification facts refused")
+		}
+		decision, err = evaluateCandidateDraftVerification(facts, document)
+	default:
 		return errors.New("qualification facts refused")
 	}
-	decision, err := evaluateCandidatePreflight(facts, document)
 	if err != nil {
 		return err
 	}
@@ -172,6 +292,140 @@ func runQualification(input io.Reader, output io.Writer) error {
 	}
 	_, err = output.Write(body)
 	return err
+}
+
+func decodeCanonical(document []byte, value any) bool {
+	decoder := json.NewDecoder(bytes.NewReader(document))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(value) != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		return false
+	}
+	canonical, err := marshalCanonical(value)
+	return err == nil && bytes.Equal(canonical, document)
+}
+
+func evaluateCandidateDraftConstruction(facts candidateDraftConstructionFacts, document []byte) (candidateDraftConstructionDecision, error) {
+	if facts.Schema != qualificationFactsSchema || facts.Stage != candidateDraftConstructionStage || facts.BuiltReleases == nil {
+		return candidateDraftConstructionDecision{}, errors.New("candidate draft construction refused")
+	}
+	preflight, err := verifiedPreflightDecision(facts.PreflightFacts, facts.PreflightDecision)
+	if err != nil {
+		return candidateDraftConstructionDecision{}, err
+	}
+	builds, ok := preflightBuildActions(preflight)
+	if !ok || len(builds) != len(facts.BuiltReleases) {
+		return candidateDraftConstructionDecision{}, errors.New("candidate draft construction refused")
+	}
+	factsDigest := documentSHA256(document)
+	priorDigest := documentSHA256(facts.PreflightDecision)
+	actions := make([]constructDraftAction, len(builds))
+	for index, build := range builds {
+		target := facts.BuiltReleases[index]
+		if target.Commit != build.Commit || target.Sequence != build.Sequence || target.Tag != build.Tag || !validDraftTarget(target) {
+			return candidateDraftConstructionDecision{}, errors.New("candidate draft construction refused")
+		}
+		actions[index] = constructDraftAction{Assets: target.Assets, Body: "Qualification pending.", Commit: target.Commit, Draft: true, FactsSHA256: factsDigest, Name: target.Tag, PriorDecisionSHA256: priorDigest, ReleaseIdentity: target.ReleaseIdentity, Sequence: target.Sequence, Tag: target.Tag, Type: "construct-draft"}
+	}
+	return candidateDraftConstructionDecision{Actions: actions, FactsSHA256: factsDigest, Outcome: "actions-required", PriorDecisionSHA256: priorDigest, Schema: qualificationDecisionSchema, Stage: candidateDraftConstructionStage}, nil
+}
+
+func evaluateCandidateDraftVerification(facts candidateDraftVerificationFacts, document []byte) (candidateDraftVerificationDecision, error) {
+	if facts.Schema != qualificationFactsSchema || facts.Stage != candidateDraftVerificationStage || facts.Observations == nil {
+		return candidateDraftVerificationDecision{}, errors.New("candidate draft verification refused")
+	}
+	var constructionFacts candidateDraftConstructionFacts
+	if !decodeCanonical(facts.ConstructionFacts, &constructionFacts) {
+		return candidateDraftVerificationDecision{}, errors.New("candidate draft verification refused")
+	}
+	expected, err := evaluateCandidateDraftConstruction(constructionFacts, facts.ConstructionFacts)
+	if err != nil {
+		return candidateDraftVerificationDecision{}, errors.New("candidate draft verification refused")
+	}
+	expectedBytes, err := marshalCanonical(expected)
+	if err != nil || !bytes.Equal(expectedBytes, facts.ConstructionDecision) || len(facts.Observations) != len(expected.Actions) {
+		return candidateDraftVerificationDecision{}, errors.New("candidate draft verification refused")
+	}
+	verified := make([]verifiedDraftRelease, len(expected.Actions))
+	seenReleaseIDs := map[int64]bool{}
+	seenAssetIDs := map[int64]bool{}
+	for index, action := range expected.Actions {
+		observation := facts.Observations[index]
+		if seenReleaseIDs[observation.ReleaseID] || !validDraftObservation(observation, action, seenAssetIDs) {
+			return candidateDraftVerificationDecision{}, errors.New("candidate draft verification refused")
+		}
+		seenReleaseIDs[observation.ReleaseID] = true
+		verified[index] = verifiedDraftRelease{Assets: action.Assets, Commit: action.Commit, ReleaseID: observation.ReleaseID, ReleaseIdentity: action.ReleaseIdentity, Sequence: action.Sequence, Tag: action.Tag}
+	}
+	return candidateDraftVerificationDecision{Actions: []json.RawMessage{}, FactsSHA256: documentSHA256(document), Outcome: "accepted", PriorDecisionSHA256: documentSHA256(facts.ConstructionDecision), Schema: qualificationDecisionSchema, Stage: candidateDraftVerificationStage, VerifiedReleases: verified}, nil
+}
+
+func verifiedPreflightDecision(factsDocument, decisionDocument []byte) (qualificationDecision, error) {
+	var facts qualificationFacts
+	if !decodeCanonical(factsDocument, &facts) {
+		return qualificationDecision{}, errors.New("candidate draft construction refused")
+	}
+	expected, err := evaluateCandidatePreflight(facts, factsDocument)
+	if err != nil {
+		return qualificationDecision{}, errors.New("candidate draft construction refused")
+	}
+	expectedBytes, err := marshalCanonical(expected)
+	if err != nil || !bytes.Equal(expectedBytes, decisionDocument) {
+		return qualificationDecision{}, errors.New("candidate draft construction refused")
+	}
+	return expected, nil
+}
+
+func preflightBuildActions(decision qualificationDecision) ([]buildReleaseAction, bool) {
+	builds := make([]buildReleaseAction, 0, len(decision.Actions))
+	for _, raw := range decision.Actions {
+		var kind struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(raw, &kind) != nil {
+			return nil, false
+		}
+		if kind.Type != "build-release" {
+			continue
+		}
+		var action buildReleaseAction
+		if !decodeCanonical(raw, &action) {
+			return nil, false
+		}
+		builds = append(builds, action)
+	}
+	return builds, true
+}
+
+func validDraftTarget(target draftReleaseTarget) bool {
+	if !validCommit(target.Commit) || target.Sequence == 0 || !validTag(target.Tag) || target.ReleaseIdentity.Repository != softwarelifecycle.Repository || target.ReleaseIdentity.Tag != target.Tag || target.ReleaseIdentity.Commit != target.Commit || !validSHA256(target.ReleaseIdentity.ReleaseIndexSHA256) || len(target.Assets) != 4 {
+		return false
+	}
+	expected := softwarelifecycle.LatestReleaseAssetNames()
+	for index, asset := range target.Assets {
+		if asset.Name != expected[index] || asset.Size <= 0 || !validSHA256(asset.SHA256) || asset.Name == "release-index.json" && asset.SHA256 != target.ReleaseIdentity.ReleaseIndexSHA256 {
+			return false
+		}
+	}
+	return true
+}
+
+func validDraftObservation(observation observedDraft, action constructDraftAction, seenAssetIDs map[int64]bool) bool {
+	if observation.ReleaseID <= 0 || observation.CreatedReleaseID != observation.ReleaseID || observation.Draft != action.Draft || observation.Prerelease != action.Prerelease || observation.Immutable != action.Immutable || observation.Commit != action.Commit || observation.Sequence != action.Sequence || observation.Tag != action.Tag || observation.ReleaseIdentity != action.ReleaseIdentity || len(observation.Assets) != len(action.Assets) || len(observation.Downloads) != len(action.Assets) {
+		return false
+	}
+	for index, expected := range action.Assets {
+		asset, download := observation.Assets[index], observation.Downloads[index]
+		if asset.ID <= 0 || seenAssetIDs[asset.ID] || asset.Name != expected.Name || asset.Size != expected.Size || asset.SHA256 != expected.SHA256 || !download.Authenticated || download.ID != asset.ID || download.Name != asset.Name || download.Size != asset.Size || download.SHA256 != asset.SHA256 {
+			return false
+		}
+		seenAssetIDs[asset.ID] = true
+	}
+	return true
+}
+
+func documentSHA256(document []byte) string {
+	digest := sha256.Sum256(document)
+	return hex.EncodeToString(digest[:])
 }
 
 func evaluateCandidatePreflight(facts qualificationFacts, document []byte) (qualificationDecision, error) {

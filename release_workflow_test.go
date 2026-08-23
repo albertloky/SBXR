@@ -126,10 +126,6 @@ func TestCandidateConstructsDraftsAndSignsTheQualificationBoundary(t *testing.T)
 		"sudo env TERM=xterm-256color LANG=C.UTF-8",
 		"SBXR requires root authority.",
 		"BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY",
-		"gh api --method POST \"repos/$GITHUB_REPOSITORY/releases\"",
-		"--draft",
-		"gh api \"repos/$GITHUB_REPOSITORY/releases/assets/",
-		"cmp \"$directory/$name\" \"downloaded/$tag/$name\"",
 		"environment: acceptance-vps",
 		"actions/runs/$GITHUB_RUN_ID/approvals",
 		"qualification-manifest.json",
@@ -175,6 +171,40 @@ func TestCandidateConstructsDraftsAndSignsTheQualificationBoundary(t *testing.T)
 	cleanup := workflow[strings.Index(workflow, "cleanup-unqualified:"):]
 	if strings.Contains(cleanup, "A_TAG:") || strings.Contains(cleanup, "B_TAG:") || !strings.Contains(cleanup, "BUILD_RELEASES:") {
 		t.Fatal("unsigned cleanup is not limited to releases built by this run")
+	}
+}
+
+func TestCandidateDraftAdapterUsesOnlyCanonicalQualificationActionsAndObservations(t *testing.T) {
+	body, err := os.ReadFile(".github/workflows/candidate.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(body)
+	drafts := workflow[strings.Index(workflow, "  drafts:"):strings.Index(workflow, "  sign:")]
+	for _, required := range []string{
+		`stage:"candidate-draft-construction"`,
+		`go run ./cmd/sbxr-release qualification < candidate-draft-construction-facts.json > candidate-draft-construction-decision.json`,
+		`.facts_sha256 == $facts_sha256`,
+		`.prior_decision_sha256 == $prior_decision_sha256`,
+		`gh api --method POST "repos/$repository/releases"`,
+		`gh api "repos/$repository/releases/$created_release_id" > observed-release.json`,
+		`release_id="$(jq -r .id observed-release.json)"`,
+		`gh api "repos/$repository/releases/assets/$id" -H 'Accept: application/octet-stream'`,
+		`stage:"candidate-draft-verification"`,
+		`go run ./cmd/sbxr-release qualification < candidate-draft-verification-facts.json > candidate-draft-verification-decision.json`,
+		`jq -c '.verified_releases' candidate-draft-verification-decision.json > verified-drafts.json`,
+	} {
+		if !strings.Contains(drafts, required) {
+			t.Fatalf("candidate draft Adapter omitted %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		`burned="$(for burned_tag`,
+		`cmp "$directory/$name" "$downloaded/$tag/$name"`,
+	} {
+		if strings.Contains(drafts, forbidden) {
+			t.Fatalf("candidate draft Adapter retained policy %q", forbidden)
+		}
 	}
 }
 

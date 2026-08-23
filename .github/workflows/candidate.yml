@@ -154,6 +154,14 @@ jobs:
           echo "source_state=$source_state" >> "$GITHUB_OUTPUT"
           echo "build_releases=$build_releases" >> "$GITHUB_OUTPUT"
           echo "source_a=$source_a" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: candidate-preflight-decision-chain
+          path: |
+            candidate-preflight-facts.json
+            candidate-preflight-decision.json
+          if-no-files-found: error
+          retention-days: 1
 
   build:
     needs: preflight
@@ -246,7 +254,10 @@ jobs:
         with:
           pattern: native-*
           path: native
-      - name: Assemble, verify, upload, and re-download exact draft bytes
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: candidate-preflight-decision-chain
+      - name: Execute and verify the canonical draft decision chain
         env:
           GH_TOKEN: ${{ github.token }}
           BUILD_RELEASES: ${{ needs.preflight.outputs.build_releases }}
@@ -281,8 +292,7 @@ jobs:
             exit "$status"
           }
           trap cleanup_unsigned_drafts EXIT
-          git fetch --force --tags origin
-          burned="$(for burned_tag in $(git tag --list 'release-burned/*'); do git tag -l --format='%(contents)' "$burned_tag"; done | jq -s .)"
+          printf '[]' > built-releases.json
           while read -r release; do
             tag="$(jq -r .tag <<<"$release")"
             sequence="$(jq -r .sequence <<<"$release")"
@@ -301,28 +311,65 @@ jobs:
             go run ./cmd/sbxr-release verify-package -directory "$directory" -architecture amd64
             go run ./cmd/sbxr-release verify-package -directory "$directory" -architecture arm64
             index_sha256="$(sha256sum "$directory/release-index.json" | cut -d' ' -f1)"
-            if jq -e --arg tag "$tag" --argjson sequence "$sequence" --arg commit "$GITHUB_SHA" --arg index_sha256 "$index_sha256" '.[] | select(.original_tag == $tag or .sequence == $sequence or (.commit == $commit and .release_index_sha256 == $index_sha256))' <<<"$burned" >/dev/null; then
-              exit 1
-            fi
-            assets="$(for name in install.sh release-index.json sbxr-linux-amd64.tar.gz sbxr-linux-arm64.tar.gz; do jq -cn --arg name "$name" --argjson size "$(stat -c %s "$directory/$name")" --arg sha256 "$(sha256sum "$directory/$name" | cut -d' ' -f1)" '{name:$name,size:$size,sha256:$sha256}'; done | jq -s .)"
+            assets="$(for name in install.sh release-index.json sbxr-linux-amd64.tar.gz sbxr-linux-arm64.tar.gz; do jq -cn --arg name "$name" --argjson size "$(stat -c %s "$directory/$name")" --arg sha256 "$(sha256sum "$directory/$name" | cut -d' ' -f1)" '{name:$name,sha256:$sha256,size:$size}'; done | jq -cS -s 'sort_by(.name)')"
+            target="$(jq -cnS --argjson assets "$assets" --arg commit "$GITHUB_SHA" --arg index_sha256 "$index_sha256" --arg repository "$GITHUB_REPOSITORY" --argjson sequence "$sequence" --arg tag "$tag" '{assets:$assets,commit:$commit,release_identity:{commit:$commit,release_index_sha256:$index_sha256,repository:$repository,tag:$tag},sequence:$sequence,tag:$tag}')"
+            jq -cS --argjson target "$target" '. + [$target]' built-releases.json > built-releases.next
+            mv built-releases.next built-releases.json
+          done < <(jq -c '.[]' <<<"$BUILD_RELEASES")
+
+          jq -cnS --slurpfile preflight_decision candidate-preflight-decision.json --slurpfile preflight_facts candidate-preflight-facts.json --slurpfile built_releases built-releases.json '{built_releases:$built_releases[0],preflight_decision:$preflight_decision[0],preflight_facts:$preflight_facts[0],schema:"sbxr-release-qualification-facts-v1",stage:"candidate-draft-construction"}' | tr -d '\n' > candidate-draft-construction-facts.json
+          go run ./cmd/sbxr-release qualification < candidate-draft-construction-facts.json > candidate-draft-construction-decision.json
+          facts_sha256="$(sha256sum candidate-draft-construction-facts.json | cut -d' ' -f1)"
+          prior_decision_sha256="$(sha256sum candidate-preflight-decision.json | cut -d' ' -f1)"
+          jq -e --arg facts_sha256 "$facts_sha256" --arg prior_decision_sha256 "$prior_decision_sha256" '
+            .schema == "sbxr-release-qualification-decision-v1" and .stage == "candidate-draft-construction" and .outcome == "actions-required" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256 and
+            all(.actions[]; .type == "construct-draft" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256 and (keys | sort) == ["assets","body","commit","draft","facts_sha256","immutable","name","prerelease","prior_decision_sha256","release_identity","sequence","tag","type"])' candidate-draft-construction-decision.json >/dev/null
+
+          printf '[]' > draft-observations.json
+          while read -r action; do
+            tag="$(jq -r .tag <<<"$action")"
+            sequence="$(jq -r .sequence <<<"$action")"
+            commit="$(jq -r .commit <<<"$action")"
+            repository="$(jq -r .release_identity.repository <<<"$action")"
+            directory="constructed/$tag"
+            while read -r expected; do
+              name="$(jq -r .name <<<"$expected")"
+              test "$(stat -c %s "$directory/$name")" -eq "$(jq -r .size <<<"$expected")"
+              test "$(sha256sum "$directory/$name" | cut -d' ' -f1)" = "$(jq -r .sha256 <<<"$expected")"
+            done < <(jq -c '.assets[]' <<<"$action")
+            gh api --method POST "repos/$repository/releases" -f tag_name="$tag" -f target_commitish="$commit" -f name="$(jq -r .name <<<"$action")" -f body="$(jq -r .body <<<"$action")" -F draft="$(jq -r .draft <<<"$action")" -F prerelease="$(jq -r .prerelease <<<"$action")" > release.json
+            created_release_id="$(jq -r .id release.json)"
             current_tag=$tag
             current_sequence=$sequence
-            current_index_sha256=$index_sha256
-            current_assets=$assets
-            gh api --method POST "repos/$GITHUB_REPOSITORY/releases" -f tag_name="$tag" -f target_commitish="$GITHUB_SHA" -f name="$tag" -f body='Qualification pending.' -F draft=true > release.json
-            jq -e --arg tag "$tag" --arg sha "$GITHUB_SHA" '.tag_name == $tag and .target_commitish == $sha and .draft == true and .prerelease == false and (.assets | length) == 0' release.json >/dev/null
-            jq --arg tag "$tag" --argjson sequence "$sequence" --argjson release_id "$(jq .id release.json)" --arg index_sha256 "$index_sha256" --argjson assets "$assets" '. += [{tag:$tag,sequence:$sequence,commit:env.GITHUB_SHA,release_id:$release_id,release_identity:{repository:env.GITHUB_REPOSITORY,tag:$tag,commit:env.GITHUB_SHA,release_index_sha256:$index_sha256},assets:$assets}]' drafts.json > drafts.next
-            mv drafts.next drafts.json
-            gh release upload "$tag" "$directory"/*
-            gh api "repos/$GITHUB_REPOSITORY/releases/$(jq -r .id release.json)" > release.json
-            jq -e --arg tag "$tag" --arg sha "$GITHUB_SHA" '.tag_name == $tag and .target_commitish == $sha and .draft == true and .prerelease == false and (.assets | length) == 4' release.json >/dev/null
+            current_index_sha256="$(jq -r .release_identity.release_index_sha256 <<<"$action")"
+            current_assets="$(jq -c .assets <<<"$action")"
+            gh release upload "$tag" "$directory"/* --repo "$repository"
+            gh api "repos/$repository/releases/$created_release_id" > observed-release.json
+            release_id="$(jq -r .id observed-release.json)"
+            assets="$(jq -cS '[.assets[] | {id,name,sha256:((.digest // "") | sub("^sha256:";"")),size}] | sort_by(.name)' observed-release.json)"
+            printf '[]' > downloads.json
             while read -r asset; do
-              name="$(jq -r .name <<<"$asset")"
               id="$(jq -r .id <<<"$asset")"
-              gh api "repos/$GITHUB_REPOSITORY/releases/assets/$id" -H 'Accept: application/octet-stream' > "downloaded/$tag/$name"
-              cmp "$directory/$name" "downloaded/$tag/$name"
-            done < <(jq -c '.assets[]' release.json)
-          done < <(jq -c '.[]' <<<"$BUILD_RELEASES")
+              name="$(jq -r .name <<<"$asset")"
+              gh api "repos/$repository/releases/assets/$id" -H 'Accept: application/octet-stream' > "downloaded/$tag/$name"
+              download="$(jq -cnS --argjson id "$id" --arg name "$name" --arg sha256 "$(sha256sum "downloaded/$tag/$name" | cut -d' ' -f1)" --argjson size "$(stat -c %s "downloaded/$tag/$name")" '{authenticated:true,id:$id,name:$name,sha256:$sha256,size:$size}')"
+              jq -cS --argjson download "$download" '. + [$download]' downloads.json > downloads.next
+              mv downloads.next downloads.json
+            done < <(jq -c '.[]' <<<"$assets")
+            index_sha256="$(sha256sum "downloaded/$tag/release-index.json" | cut -d' ' -f1)"
+            release_identity="$(jq -cS --arg sha256 "$index_sha256" '{commit,release_index_sha256:$sha256,repository,tag}' "downloaded/$tag/release-index.json")"
+            observed="$(jq -cnS --argjson assets "$assets" --arg commit "$(jq -r .target_commitish observed-release.json)" --argjson created_release_id "$created_release_id" --slurpfile downloads downloads.json --argjson draft "$(jq .draft observed-release.json)" --argjson immutable "$(jq '.immutable // false' observed-release.json)" --argjson prerelease "$(jq .prerelease observed-release.json)" --argjson release_id "$release_id" --argjson release_identity "$release_identity" --argjson sequence "$(jq .sequence "downloaded/$tag/release-index.json")" --arg tag "$(jq -r .tag_name observed-release.json)" '{assets:$assets,commit:$commit,created_release_id:$created_release_id,downloads:$downloads[0],draft:$draft,immutable:$immutable,prerelease:$prerelease,release_id:$release_id,release_identity:$release_identity,sequence:$sequence,tag:$tag}')"
+            jq -cS --argjson observed "$observed" '. + [$observed]' draft-observations.json > draft-observations.next
+            mv draft-observations.next draft-observations.json
+          done < <(jq -c '.actions[]' candidate-draft-construction-decision.json)
+
+          jq -cnS --slurpfile construction_decision candidate-draft-construction-decision.json --slurpfile construction_facts candidate-draft-construction-facts.json --slurpfile observations draft-observations.json '{construction_decision:$construction_decision[0],construction_facts:$construction_facts[0],observations:$observations[0],schema:"sbxr-release-qualification-facts-v1",stage:"candidate-draft-verification"}' | tr -d '\n' > candidate-draft-verification-facts.json
+          go run ./cmd/sbxr-release qualification < candidate-draft-verification-facts.json > candidate-draft-verification-decision.json
+          facts_sha256="$(sha256sum candidate-draft-verification-facts.json | cut -d' ' -f1)"
+          prior_decision_sha256="$(sha256sum candidate-draft-construction-decision.json | cut -d' ' -f1)"
+          jq -e --arg facts_sha256 "$facts_sha256" --arg prior_decision_sha256 "$prior_decision_sha256" '.schema == "sbxr-release-qualification-decision-v1" and .stage == "candidate-draft-verification" and .outcome == "accepted" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256 and .actions == []' candidate-draft-verification-decision.json >/dev/null
+          jq -c '.verified_releases' candidate-draft-verification-decision.json > verified-drafts.json
+          jq -cS --argjson source "$SOURCE_A" --slurpfile verified verified-drafts.json 'if $source == {} then $verified[0] else [$source] + $verified[0] end' > drafts.json
           trap - EXIT
           cp "$CHECKLIST" .
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -330,6 +377,12 @@ jobs:
           name: qualification-boundary-input
           path: |
             drafts.json
+            candidate-preflight-facts.json
+            candidate-preflight-decision.json
+            candidate-draft-construction-facts.json
+            candidate-draft-construction-decision.json
+            candidate-draft-verification-facts.json
+            candidate-draft-verification-decision.json
             installer-updater-vps.md
             native/*/evidence/native-*.json
           if-no-files-found: error
