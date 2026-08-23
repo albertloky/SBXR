@@ -352,20 +352,27 @@ func TestStablePublishesOnlyTheSignedQualifiedDraftsAndProvesStableNoUpdate(t *t
 		"environment: acceptance-vps",
 		"environment: stable-publication",
 		".github/workflows/candidate.yml",
-		"conclusion == \"success\"",
-		"90 * 24 * 60 * 60",
+		"conclusion:$candidate_run[0].conclusion",
 		"gh attestation verify qualification-manifest.json",
 		"archive/full-product-v1.0.15",
 		"release-burned/",
-		"sbxr-acceptance-record-v1",
-		"find \"$directory\" -maxdepth 1 -type f",
+		"acceptance-vps-result-facts.json",
+		"acceptance-vps-result-decision.json",
+		`stage:"stable-preflight"`,
+		"stable-preflight-facts.json",
+		"stable-preflight-decision.json",
+		"signed_manifest:$signed_manifest[0]",
+		"commit:$metadata[0].target_commitish",
+		"go run ./cmd/sbxr-release qualification",
+		`all(.actions[]; .type == "publish-stable-release" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256)`,
 		"install.sh",
 		"release-index.json",
 		"sbxr-linux-amd64.tar.gz",
 		"sbxr-linux-arm64.tar.gz",
 		"gh release edit",
-		"recheck_draft 0",
-		"recheck_draft 1",
+		`while read -r action`,
+		`recheck_draft "$index"`,
+		`jq -r .failure_reason`,
 		"--draft=false",
 		"--prerelease=false",
 		"--latest",
@@ -403,13 +410,18 @@ func TestStablePublishesOnlyTheSignedQualifiedDraftsAndProvesStableNoUpdate(t *t
 			t.Fatalf("stable.yml retained %q", forbidden)
 		}
 	}
-	approval := strings.Index(workflow, `name == "stable-publication"`)
-	recheckA := strings.Index(workflow, "recheck_draft 0")
-	publishA := strings.Index(workflow, `gh release edit "$source_tag"`)
-	verifyA := strings.Index(workflow, "verify_public 0 true")
-	recheckB := strings.Index(workflow, "recheck_draft 1")
-	publishB := strings.Index(workflow, `gh release edit "$latest_tag"`)
-	if approval < 0 || !(approval < recheckA && recheckA < publishA && publishA < verifyA && verifyA < recheckB && recheckB < publishB) {
+	publication := workflow[strings.Index(workflow, "  publish:"):strings.Index(workflow, "  finalize-failure:")]
+	for _, forbidden := range []string{`.source_state == "initial-normal"`, `sbxr-acceptance-record-v1`, `test "$((now - created))" -lt "$((90 * 24 * 60 * 60))"`, `.path == ".github/workflows/candidate.yml"`, `test "$run_sha" = "$GITHUB_SHA"`} {
+		if strings.Contains(preflight+publication, forbidden) {
+			t.Fatalf("stable preflight retained policy %q", forbidden)
+		}
+	}
+	approval := strings.Index(publication, `name == "stable-publication"`)
+	action := strings.Index(publication, `.type == "publish-stable-release"`)
+	recheck := strings.Index(publication, `recheck_draft "$index"`)
+	publish := strings.Index(publication, `gh release edit "$tag"`)
+	verify := strings.Index(publication, `verify_public "$index" true`)
+	if approval < 0 || !(approval < action && action < recheck && recheck < publish && publish < verify) {
 		t.Fatal("stable publication does not recheck and verify each approved draft before advancing")
 	}
 	assertActionsPinned(t, workflow)

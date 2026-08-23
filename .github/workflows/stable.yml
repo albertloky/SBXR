@@ -52,19 +52,8 @@ jobs:
       - name: Verify the successful signed qualification
         run: |
           set -euo pipefail
-          printf '%s\n' "$QUALIFICATION_RUN_ID" | grep -Eq '^[1-9][0-9]*$'
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$QUALIFICATION_RUN_ID" > candidate-run.json
-          jq -e '.path == ".github/workflows/candidate.yml" and .event == "workflow_dispatch" and .conclusion == "success"' candidate-run.json >/dev/null
           run_sha="$(jq -r .head_sha candidate-run.json)"
-          test "$run_sha" = "$GITHUB_SHA"
-          test "$run_sha" = "$(git rev-parse origin/main)"
-          created="$(date -u -d "$(jq -r .created_at candidate-run.json)" +%s)"
-          now="$(date -u +%s)"
-          test "$created" -le "$now"
-          test "$((now - created))" -lt "$((90 * 24 * 60 * 60))"
-          test "$(git cat-file -t "$ARCHIVE_TAG")" = tag
-          test "$(git rev-parse "$ARCHIVE_TAG")" = "$(git ls-remote --tags origin "refs/tags/$ARCHIVE_TAG" | cut -f1)"
-          test "$(git rev-parse "$ARCHIVE_TAG^{commit}")" = "$(git ls-remote --tags origin "refs/tags/$ARCHIVE_TAG^{}" | cut -f1)"
 
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$QUALIFICATION_RUN_ID/artifacts" --paginate --slurp | jq 'map(.artifacts) | add' > artifacts.json
           jq -e --arg signed signed-qualification-manifest --arg acceptance "installer-updater-acceptance-$QUALIFICATION_RUN_ID" '([.[] | select(.name == $signed and .expired == false)] | length) == 1 and ([.[] | select(.name == $acceptance and .expired == false)] | length) == 1' artifacts.json >/dev/null
@@ -81,65 +70,40 @@ jobs:
           cd ..
 
           manifest=verified/qualification-manifest.json
-          jq -e --arg run_id "$QUALIFICATION_RUN_ID" --arg run_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$QUALIFICATION_RUN_ID" --arg commit "$run_sha" --arg checklist "$(sha256sum "$CHECKLIST" | cut -d' ' -f1)" '
-            .schema == "sbxr-qualification-manifest-v1" and .repository == env.GITHUB_REPOSITORY and
-            .workflow.path == ".github/workflows/candidate.yml" and .workflow.ref == "albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main" and
-            .workflow.commit == $commit and .workflow.run_id == $run_id and .workflow.run_url == $run_url and
-            .acceptance_vps_checklist_sha256 == $checklist and .approval.state == "approved" and any(.approval.environments[]; .name == "acceptance-vps") and
-            (.source_state == "initial-normal" or .source_state == "later-normal" or .source_state == "rescue") and
-            ((.mode == "normal" and .source_state != "rescue" and .rescue == null) or (.mode == "rescue" and .source_state == "rescue" and (.rescue.failed_normal_run_id | test("^[1-9][0-9]*$")) and (.rescue.defect_issue_url | test("^https://github.com/albertloky/SBXR/issues/[1-9][0-9]*$")))) and
-            (.releases | length) == 2 and .releases[0].tag != .releases[1].tag and .releases[0].sequence > 0 and .releases[1].sequence > .releases[0].sequence
-          ' "$manifest" >/dev/null
-
           git fetch --force --tags origin
-          burned="$(for tag in $(git tag --list 'release-burned/*'); do git tag -l --format='%(contents)' "$tag"; done | jq -s .)"
-          source_state="$(jq -r .source_state "$manifest")"
+          for tag in $(git tag --list 'release-burned/*'); do git tag -l --format='%(contents)' "$tag"; done | jq -s 'sort_by(.original_tag)' > verified/burned.json
+          printf '[]' > verified/releases.json
           mkdir -m 0700 verified/release verified/records
           for index in 0 1; do
             release="$(jq -c ".releases[$index]" "$manifest")"
             tag="$(jq -r .tag <<<"$release")"
-            sequence="$(jq -r .sequence <<<"$release")"
-            commit="$(jq -r .commit <<<"$release")"
             release_id="$(jq -r .release_id <<<"$release")"
-            index_sha256="$(jq -r .release_identity.release_index_sha256 <<<"$release")"
-            printf '%s\n' "$tag" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
-            printf '%s\n' "$commit" | grep -Eq '^[0-9a-f]{40}$'
-            printf '%s\n' "$index_sha256" | grep -Eq '^[0-9a-f]{64}$'
-            jq -e --arg tag "$tag" --arg commit "$commit" --arg index "$index_sha256" --argjson sequence "$sequence" '.release_identity == {repository:env.GITHUB_REPOSITORY,tag:$tag,commit:$commit,release_index_sha256:$index} and (.assets | length) == 4 and (.assets | map(.name) | sort) == ["install.sh","release-index.json","sbxr-linux-amd64.tar.gz","sbxr-linux-arm64.tar.gz"] and all(.assets[]; .size > 0 and (.sha256 | test("^[0-9a-f]{64}$")))' <<<"$release" >/dev/null
-            gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > release.json
-            jq -e --arg tag "$tag" --arg commit "$commit" --argjson release_id "$release_id" '.id == $release_id and .tag_name == $tag and .target_commitish == $commit and (.assets | length) == 4 and (.assets | map(.name) | sort) == ["install.sh","release-index.json","sbxr-linux-amd64.tar.gz","sbxr-linux-arm64.tar.gz"]' release.json >/dev/null
-            if test "$source_state" = initial-normal || test "$index" -eq 1; then
-              jq -e '.draft == true and .prerelease == false and .immutable == false' release.json >/dev/null
-              cp "candidate/acceptance/acceptance-records/$tag.md" "verified/records/$tag.md"
-              jq -j .body release.json | cmp - "verified/records/$tag.md"
-              canonical="$(sed -n '/^```json$/,/^```$/p' "verified/records/$tag.md" | sed '1d;$d')"
-              jq -e --arg tag "$tag" --arg commit "$commit" --arg index "$index_sha256" --argjson sequence "$sequence" '.schema == "sbxr-acceptance-record-v1" and .release_identity == {repository:env.GITHUB_REPOSITORY,tag:$tag,commit:$commit,release_index_sha256:$index} and .sequence == $sequence and .secret_safe_result == "Passed" and .stages.owner_acceptance == "Not required"' <<<"$canonical" >/dev/null
-            elif test "$source_state" = later-normal; then
-              jq -e '.draft == false and .prerelease == false and .immutable == true and (.body | contains("Status: Qualified\n"))' release.json >/dev/null
-              test "$(jq -r .id release.json)" = "$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .id)"
-            else
-              jq -e '.draft == false and .prerelease == true and .immutable == true' release.json >/dev/null
-            fi
-            if jq -e --arg tag "$tag" --argjson sequence "$sequence" --arg commit "$commit" --arg index "$index_sha256" '.[] | select(.original_tag == $tag or .sequence == $sequence or (.commit == $commit and .release_index_sha256 == $index))' <<<"$burned" >/dev/null; then
-              test "$source_state" = rescue
-              test "$index" -eq 0
-              failed_run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$(jq -r .rescue.failed_normal_run_id "$manifest")"
-              jq -e --arg tag "$tag" --argjson sequence "$sequence" --arg commit "$commit" --arg index "$index_sha256" --arg run "$failed_run_url" '.[] | select(.original_tag == $tag and .sequence == $sequence and .commit == $commit and .release_index_sha256 == $index and .qualification_run_url == $run)' <<<"$burned" >/dev/null
-            fi
+            metadata="verified/$tag.metadata.json"
+            gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$metadata"
             directory="verified/release/$tag"
             mkdir -m 0700 "$directory"
+            printf '[]' > assets.json
             while read -r asset; do
               name="$(jq -r .name <<<"$asset")"
-              proof="$(jq -c --arg name "$name" '.assets[] | select(.name == $name)' <<<"$release")"
               gh api "repos/$GITHUB_REPOSITORY/releases/assets/$(jq -r .id <<<"$asset")" -H 'Accept: application/octet-stream' > "$directory/$name"
-              test "$(stat -c %s "$directory/$name")" -eq "$(jq -r .size <<<"$proof")"
-              test "$(sha256sum "$directory/$name" | cut -d' ' -f1)" = "$(jq -r .sha256 <<<"$proof")"
-            done < <(jq -c '.assets[]' release.json)
-            test "$(find "$directory" -maxdepth 1 -type f -printf '%f\n' | sort)" = "$(printf '%s\n' install.sh release-index.json sbxr-linux-amd64.tar.gz sbxr-linux-arm64.tar.gz | sort)"
-            test "$(sha256sum "$directory/release-index.json" | cut -d' ' -f1)" = "$index_sha256"
+              jq -cS --arg name "$name" --arg sha256 "$(sha256sum "$directory/$name" | cut -d' ' -f1)" --argjson size "$(stat -c %s "$directory/$name")" '. + [{name:$name,sha256:$sha256,size:$size}] | sort_by(.name)' assets.json > assets.next
+              mv assets.next assets.json
+            done < <(jq -c '.assets[]' "$metadata")
+            cp "candidate/acceptance/acceptance-records/$tag.md" "verified/records/$tag.md"
+            jq -cS --argjson expected "$release" --slurpfile assets assets.json --slurpfile metadata "$metadata" '{assets:$assets[0],body:$metadata[0].body,commit:$metadata[0].target_commitish,draft:$metadata[0].draft,immutable:($metadata[0].immutable // false),prerelease:$metadata[0].prerelease,release_id:$metadata[0].id,release_identity:$expected.release_identity,sequence:$expected.sequence,tag:$metadata[0].tag_name}' > observation.json
+            jq -cS --slurpfile observation observation.json '. + $observation' verified/releases.json > verified/releases.next
+            mv verified/releases.next verified/releases.json
             go run ./cmd/sbxr-release verify-package -directory "$directory" -architecture amd64
             go run ./cmd/sbxr-release verify-package -directory "$directory" -architecture arm64
           done
+          latest_tag=null
+          if latest="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>/dev/null)"; then latest_tag="$(jq -cn --arg tag "$latest" '$tag')"; fi
+          archive="$(jq -cnS --arg commit "$(git rev-parse "$ARCHIVE_TAG^{commit}")" --arg remote_commit "$(git ls-remote --tags origin "refs/tags/$ARCHIVE_TAG^{}" | cut -f1)" --arg remote_tag_object "$(git ls-remote --tags origin "refs/tags/$ARCHIVE_TAG" | cut -f1)" --arg tag_object "$(git rev-parse "$ARCHIVE_TAG")" --arg type "$(git cat-file -t "$ARCHIVE_TAG")" '{commit:$commit,remote_commit:$remote_commit,remote_tag_object:$remote_tag_object,tag_object:$tag_object,type:$type}')"
+          jq -cnS --slurpfile acceptance_decision candidate/acceptance/acceptance-vps-result-decision.json --slurpfile acceptance_facts candidate/acceptance/acceptance-vps-result-facts.json --argjson archive "$archive" --slurpfile burned verified/burned.json --slurpfile candidate_run candidate-run.json --arg checklist_sha256 "$(sha256sum "$CHECKLIST" | cut -d' ' -f1)" --argjson latest_tag "$latest_tag" --arg observed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --slurpfile releases verified/releases.json --arg remote_main "$(git rev-parse origin/main)" --slurpfile signed_manifest verified/qualification-manifest.json '{acceptance_decision:$acceptance_decision[0],acceptance_facts:$acceptance_facts[0],archive:$archive,burned_identities:$burned[0],candidate_run:{conclusion:$candidate_run[0].conclusion,created_at:$candidate_run[0].created_at,event:$candidate_run[0].event,head_sha:$candidate_run[0].head_sha,id:($candidate_run[0].id|tostring),path:$candidate_run[0].path},checklist_sha256:$checklist_sha256,latest_tag:$latest_tag,manifest_attested:true,observed_at:$observed_at,releases:$releases[0],remote_main:$remote_main,schema:"sbxr-release-qualification-facts-v1",signed_manifest:$signed_manifest[0],stage:"stable-preflight"}' | tr -d '\n' > verified/stable-preflight-facts.json
+          go run ./cmd/sbxr-release qualification < verified/stable-preflight-facts.json > verified/stable-preflight-decision.json
+          facts_sha256="$(sha256sum verified/stable-preflight-facts.json | cut -d' ' -f1)"
+          prior_decision_sha256="$(sha256sum candidate/acceptance/acceptance-vps-result-decision.json | cut -d' ' -f1)"
+          jq -e --arg facts_sha256 "$facts_sha256" --arg prior_decision_sha256 "$prior_decision_sha256" '.schema == "sbxr-release-qualification-decision-v1" and .stage == "stable-preflight" and .outcome == "actions-required" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256 and all(.actions[]; .type == "publish-stable-release" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256)' verified/stable-preflight-decision.json >/dev/null
 
       - name: Recheck preserved B before publication approval
         run: |
@@ -203,10 +167,6 @@ jobs:
           set -euo pipefail
           printf '%s\n' prepublication > publication-stage
           manifest=verified/qualification-manifest.json
-          qualification_run_id="$(jq -r .workflow.run_id "$manifest")"
-          created="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$qualification_run_id" --jq .created_at | xargs -I{} date -u -d {} +%s)"
-          now="$(date -u +%s)"
-          test "$((now - created))" -lt "$((90 * 24 * 60 * 60))"
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/approvals" > approvals.json
           jq -e '[.[] | select(.state == "approved" and any(.environments[]; .name == "stable-publication"))] | length > 0' approvals.json >/dev/null
           mkdir -m 0700 public rechecked
@@ -283,19 +243,20 @@ jobs:
             sudo rm -r /var/lib/sbxr
           }
 
-          source_state="$(jq -r .source_state "$manifest")"
-          if test "$source_state" = initial-normal; then
-            source_tag="$(jq -r .releases[0].tag "$manifest")"
-            recheck_draft 0
-            gh release edit "$source_tag" --draft=false --prerelease=false --latest
-            printf '%s\n' initial-a-public-verification-failure > publication-stage
-            verify_public 0 true
-          fi
-          latest_tag="$(jq -r .releases[1].tag "$manifest")"
-          recheck_draft 1
-          printf '%s\n' b-publication-or-verification-failure > publication-stage
-          gh release edit "$latest_tag" --draft=false --prerelease=false --latest
-          verify_public 1 true
+          facts_sha256="$(sha256sum verified/stable-preflight-facts.json | cut -d' ' -f1)"
+          prior_decision_sha256="$(jq -r .prior_decision_sha256 verified/stable-preflight-decision.json)"
+          while read -r action; do
+            jq -e --arg facts_sha256 "$facts_sha256" --arg prior_decision_sha256 "$prior_decision_sha256" '.type == "publish-stable-release" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256 and .latest == true' <<<"$action" >/dev/null
+            tag="$(jq -r .tag <<<"$action")"
+            index="$(jq -r --arg tag "$tag" '.releases | map(.tag == $tag) | index(true)' "$manifest")"
+            jq -e --argjson action "$action" --argjson index "$index" '.releases[$index] | .tag == $action.tag and .commit == $action.commit and .sequence == $action.sequence and .release_id == $action.release_id and .release_identity == $action.release_identity and .assets == $action.assets' "$manifest" >/dev/null
+            recheck_draft "$index"
+            printf '%s\n' "$(jq -r .failure_reason <<<"$action")" > publication-stage
+            jq -jr .body <<<"$action" | cmp - "verified/records/$tag.md"
+            gh release edit "$tag" --draft=false --prerelease=false --latest
+            verify_public "$index" true
+          done < <(jq -c '.actions[]' verified/stable-preflight-decision.json)
+          latest_tag="$(jq -r '.actions[-1].tag' verified/stable-preflight-decision.json)"
           curl -fsSL --retry 5 --retry-all-errors "https://github.com/$GITHUB_REPOSITORY/releases/latest/download/install.sh" -o latest-install.sh
           curl -fsSL --retry 5 --retry-all-errors "https://github.com/$GITHUB_REPOSITORY/releases/download/$latest_tag/install.sh" -o pinned-install.sh
           cmp latest-install.sh pinned-install.sh

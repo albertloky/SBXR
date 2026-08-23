@@ -609,6 +609,79 @@ func TestQualificationCommandEvaluatesAcceptanceVPSAndConstructsRecords(t *testi
 		t.Fatalf("acceptance retry = %s, %v", retry, err)
 	}
 
+	manifestObject := jsonObject(t, manifest)
+	manifestReleases := manifestObject["releases"].([]any)
+	recordsByTag := map[string]string{}
+	for _, value := range records {
+		record := value.(map[string]any)
+		recordsByTag[record["tag"].(string)] = record["body"].(string)
+	}
+	stableReleases := make([]any, len(manifestReleases))
+	for index, value := range manifestReleases {
+		release := value.(map[string]any)
+		tag := release["tag"].(string)
+		body := recordsByTag[tag]
+		draft, immutable := true, false
+		if index == 0 {
+			body, draft, immutable = later.Releases[0].Body, false, true
+		}
+		stableReleases[index] = map[string]any{
+			"assets": release["assets"], "body": body, "commit": release["commit"], "draft": draft, "immutable": immutable, "prerelease": false,
+			"release_id": release["release_id"], "release_identity": release["release_identity"], "sequence": release["sequence"], "tag": tag,
+		}
+	}
+	stableFacts := map[string]any{
+		"acceptance_decision": jsonValue(t, string(decision)), "acceptance_facts": jsonValue(t, document),
+		"archive":           map[string]any{"commit": later.ArchiveCommit, "remote_commit": later.ArchiveRemoteCommit, "remote_tag_object": later.ArchiveRemoteTagObject, "tag_object": later.ArchiveTagObject, "type": later.ArchiveType},
+		"burned_identities": []any{},
+		"candidate_run":     map[string]any{"conclusion": "success", "created_at": "2026-08-23T12:00:00Z", "event": "workflow_dispatch", "head_sha": strings.Repeat("d", 40), "id": "123", "path": ".github/workflows/candidate.yml"},
+		"checklist_sha256":  later.ChecklistSHA256, "latest_tag": "v2.0.0", "manifest_attested": true, "observed_at": "2026-08-23T13:00:00Z", "releases": stableReleases,
+		"remote_main": strings.Repeat("d", 40), "schema": qualificationFactsSchema, "signed_manifest": jsonValue(t, string(manifest)), "stage": "stable-preflight",
+	}
+	stableDocument := qualificationDocument(t, stableFacts)
+	stableDecision, err := runQualificationCommand(binary, stableDocument)
+	if err != nil {
+		t.Fatalf("stable preflight: %v\n%s", err, stableDecision)
+	}
+	stable := jsonObject(t, stableDecision)
+	stableActions := stable["actions"].([]any)
+	if stable["outcome"] != "actions-required" || stable["facts_sha256"] != sha256String(stableDocument) || stable["prior_decision_sha256"] != sha256String(string(decision)) || len(stableActions) != 1 || stableActions[0].(map[string]any)["tag"] != "v2.0.1" || stableActions[0].(map[string]any)["body"] != recordsByTag["v2.0.1"] {
+		t.Fatalf("stable preflight decision = %s", stableDecision)
+	}
+	for name, mutate := range map[string]func(map[string]any){
+		"90 day qualification": func(value map[string]any) { value["observed_at"] = "2026-11-21T12:00:00Z" },
+		"changed draft bytes": func(value map[string]any) {
+			value["releases"].([]any)[1].(map[string]any)["assets"].([]any)[0].(map[string]any)["sha256"] = strings.Repeat("9", 64)
+		},
+		"changed acceptance record": func(value map[string]any) {
+			value["releases"].([]any)[1].(map[string]any)["body"] = "changed"
+		},
+		"stale acceptance decision": func(value map[string]any) {
+			value["acceptance_decision"].(map[string]any)["facts_sha256"] = strings.Repeat("9", 64)
+		},
+		"incomplete decision chain": func(value map[string]any) {
+			manifest := value["acceptance_facts"].(map[string]any)["qualification_manifest"].(map[string]any)
+			manifest["decision_chain"] = manifest["decision_chain"].([]any)[:2]
+		},
+		"mismatched candidate identity": func(value map[string]any) {
+			value["candidate_run"].(map[string]any)["head_sha"] = strings.Repeat("9", 40)
+		},
+		"changed archive authority": func(value map[string]any) {
+			value["archive"].(map[string]any)["remote_commit"] = strings.Repeat("9", 40)
+		},
+		"different signed manifest": func(value map[string]any) {
+			value["signed_manifest"].(map[string]any)["candidate_failure_state_sha256"] = strings.Repeat("8", 64)
+		},
+		"contradictory source state": func(value map[string]any) { value["latest_tag"] = "v2.0.9" },
+		"unsigned manifest":          func(value map[string]any) { value["manifest_attested"] = false },
+	} {
+		t.Run("stable "+name, func(t *testing.T) {
+			hostile := jsonObject(t, []byte(stableDocument))
+			mutate(hostile)
+			assertQualificationRefused(t, binary, qualificationDocument(t, hostile), name)
+		})
+	}
+
 	for name, mutate := range map[string]func(map[string]any){
 		"stale prior decision":   func(value map[string]any) { value["prior_decision_sha256"] = strings.Repeat("9", 64) },
 		"stale observation":      func(value map[string]any) { value["observed_at"] = "2026-08-23T12:54:59Z" },
@@ -677,6 +750,58 @@ func TestQualificationCommandEvaluatesAcceptanceVPSAndConstructsRecords(t *testi
 	if len(rescueRecords) != 2 {
 		t.Fatalf("rescue acceptance decision = %s, %v", rescueDecision, err)
 	}
+
+	stableCase := func(name string, preflightFacts qualificationFacts, acceptanceFacts map[string]any, acceptanceDecision, caseManifest []byte, sourceBody string, wantActions int) {
+		t.Helper()
+		caseReleases := jsonObject(t, caseManifest)["releases"].([]any)
+		caseRecords := map[string]string{}
+		for _, value := range jsonObject(t, acceptanceDecision)["records"].([]any) {
+			record := value.(map[string]any)
+			caseRecords[record["tag"].(string)] = record["body"].(string)
+		}
+		observations := make([]any, 2)
+		for index, value := range caseReleases {
+			release := value.(map[string]any)
+			tag := release["tag"].(string)
+			body, draft, immutable, prerelease := caseRecords[tag], true, false, false
+			if index == 0 && preflightFacts.Candidate.Mode == "rescue" {
+				body, draft, immutable, prerelease = sourceBody, false, true, true
+			}
+			observations[index] = map[string]any{"assets": release["assets"], "body": body, "commit": release["commit"], "draft": draft, "immutable": immutable, "prerelease": prerelease, "release_id": release["release_id"], "release_identity": release["release_identity"], "sequence": release["sequence"], "tag": tag}
+		}
+		facts := map[string]any{
+			"acceptance_decision": jsonValue(t, string(acceptanceDecision)), "acceptance_facts": acceptanceFacts,
+			"archive":           map[string]any{"commit": preflightFacts.ArchiveCommit, "remote_commit": preflightFacts.ArchiveRemoteCommit, "remote_tag_object": preflightFacts.ArchiveRemoteTagObject, "tag_object": preflightFacts.ArchiveTagObject, "type": preflightFacts.ArchiveType},
+			"burned_identities": jsonValue(t, qualificationDocument(t, preflightFacts.BurnedIdentities)),
+			"candidate_run":     map[string]any{"conclusion": "success", "created_at": "2026-08-23T12:00:00Z", "event": "workflow_dispatch", "head_sha": strings.Repeat("d", 40), "id": "123", "path": ".github/workflows/candidate.yml"},
+			"checklist_sha256":  preflightFacts.ChecklistSHA256, "latest_tag": preflightFacts.LatestTag, "manifest_attested": true, "observed_at": "2026-08-23T13:00:00Z", "releases": observations,
+			"remote_main": strings.Repeat("d", 40), "schema": qualificationFactsSchema, "signed_manifest": jsonValue(t, string(caseManifest)), "stage": "stable-preflight",
+		}
+		result, err := runQualificationCommand(binary, qualificationDocument(t, facts))
+		if err != nil || len(jsonObject(t, result)["actions"].([]any)) != wantActions {
+			t.Fatalf("%s stable preflight = %s, %v", name, result, err)
+		}
+	}
+
+	initialPreflight := candidateFacts("normal")
+	initialBoundaryFacts, initialManifest := qualificationBoundaryForCandidate(t, binary, initialPreflight)
+	initialAcceptanceFacts := jsonObject(t, []byte(document))
+	initialAcceptanceFacts["prior_decision_sha256"] = sha256String(string(initialManifest))
+	initialAcceptanceFacts["qualification_boundary_facts"] = jsonValue(t, initialBoundaryFacts)
+	initialAcceptanceFacts["qualification_manifest"] = jsonValue(t, string(initialManifest))
+	initialAcceptanceFacts["releases"] = jsonObject(t, initialManifest)["releases"]
+	initialJourney := initialAcceptanceFacts["journey"].(map[string]any)
+	for index, name := range []string{"a", "b"} {
+		release := jsonObject(t, initialManifest)["releases"].([]any)[index].(map[string]any)
+		initialJourney[name] = map[string]any{"release_identity": release["release_identity"], "sequence": release["sequence"]}
+	}
+	initialJourney["qualification_manifest_sha256"] = sha256String(string(initialManifest))
+	initialDecision, err := runQualificationCommand(binary, qualificationDocument(t, initialAcceptanceFacts))
+	if err != nil {
+		t.Fatalf("initial acceptance decision = %s, %v", initialDecision, err)
+	}
+	stableCase("initial-normal", initialPreflight, initialAcceptanceFacts, initialDecision, initialManifest, "", 2)
+	stableCase("rescue", rescue, rescueFacts, rescueDecision, rescueManifest, rescue.Releases[0].Body, 1)
 }
 
 func draftTarget(tag string, sequence uint64) map[string]any {
