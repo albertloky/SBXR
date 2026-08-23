@@ -13,9 +13,7 @@ SBXR owns only `/usr/local/bin/sbxr` and `/var/lib/sbxr/installed.json` after a 
 
 ## Installation
 
-New installation is temporarily unavailable until qualified `v2.0.0` is stable and GitHub's canonical Latest release. Do not use the moving `releases/latest/download/install.sh` URL while it still selects a historical full-product release.
-
-After `v2.0.0` becomes the qualified Latest release, the permanent Pasteable Install Command is:
+Use the permanent Pasteable Install Command:
 
 ```sh
 curl -fsSL https://github.com/albertloky/SBXR/releases/latest/download/install.sh | sudo bash
