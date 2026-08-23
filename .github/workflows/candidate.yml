@@ -398,32 +398,35 @@ jobs:
       contents: read
       id-token: write
     steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: go.mod
+          cache: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: qualification-boundary-input
       - name: Create the complete qualification manifest after approval
         env:
           GH_TOKEN: ${{ github.token }}
-          MODE: ${{ inputs.mode }}
-          SOURCE_STATE: ${{ needs.preflight.outputs.source_state }}
-          FAILED_RUN: ${{ inputs.failed_normal_run_id }}
-          DEFECT_URL: ${{ inputs.defect_issue_url }}
         run: |
           set -euo pipefail
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/approvals" > approvals.json
-          approval="$(jq -c '[.[] | select(.state == "approved" and any(.environments[]; .name == "acceptance-vps"))] | last' approvals.json)"
+          approval="$(jq -cS '[.[] | select(.state == "approved" and any(.environments[]; .name == "acceptance-vps"))] | last | {environments:([.environments[] | {name}] | sort_by(.name)),state}' approvals.json)"
           test "$approval" != null
           checklist_sha256="$(sha256sum installer-updater-vps.md | cut -d' ' -f1)"
           native_evidence="$(find native -name 'native-*.json' -type f -print0 | sort -z | xargs -0 sha256sum | jq -Rsc 'split("\n")[:-1] | map(capture("^(?<sha256>[0-9a-f]{64})  (?<path>.+)$"))')"
-          jq -nS --slurpfile releases drafts.json --arg repository "$GITHUB_REPOSITORY" --arg workflow '.github/workflows/candidate.yml' --arg workflow_ref "$GITHUB_WORKFLOW_REF" --arg commit "$GITHUB_SHA" --arg run_id "$GITHUB_RUN_ID" --arg run_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --arg mode "$MODE" --arg source_state "$SOURCE_STATE" --argjson approval "$approval" --arg checklist_sha256 "$checklist_sha256" --argjson native_evidence "$native_evidence" --arg failed_normal_run_id "$FAILED_RUN" --arg defect_issue_url "$DEFECT_URL" '{schema:"sbxr-qualification-manifest-v1",repository:$repository,workflow:{path:$workflow,ref:$workflow_ref,commit:$commit,run_id:$run_id,run_url:$run_url},approval:$approval,mode:$mode,source_state:$source_state,releases:$releases[0],native_evidence:$native_evidence,acceptance_vps_checklist_sha256:$checklist_sha256,pinned_actions:["actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803","actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16","actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02","actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093","actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661"],rescue:(if $mode == "rescue" then {failed_normal_run_id:$failed_normal_run_id,defect_issue_url:$defect_issue_url} else null end)}' > qualification-manifest.json
+          rescue="$(jq -cS 'if .candidate.mode == "rescue" then {defect_issue_url:.candidate.defect_issue_url,failed_normal_run_id:.candidate.failed_normal_run_id} else null end' candidate-preflight-facts.json)"
           jq -nS --arg schema sbxr-candidate-failure-state-v1 --arg workflow "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --arg recorded_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg public_verifier '1.3.0 26B3382D5700AFBCD84F980D1D5B6C52BFF743DC2A8EE86B8B44C8E1245CE485' '{schema:$schema,workflow_run:$workflow,recorded_at:$recorded_at,runner:"Ubuntu Server 24.04 linux/amd64",software:{go_toolchain:"Not started",public_verifier:$public_verifier},stages:{integrated_verification:"Pending",codex_live_acceptance:"Pending"},evidence:[($workflow+"#artifacts")]}' > candidate-failure-state.json
-          jq --arg state "$(sha256sum candidate-failure-state.json | cut -d' ' -f1)" '.candidate_failure_state_sha256 = $state' qualification-manifest.json > qualification-manifest.next
-          mv qualification-manifest.next qualification-manifest.json
+          jq -cnS --argjson approval "$approval" --arg candidate_failure_state_sha256 "$(sha256sum candidate-failure-state.json | cut -d' ' -f1)" --arg checklist_sha256 "$checklist_sha256" --slurpfile draft_verification_decision candidate-draft-verification-decision.json --slurpfile draft_verification_facts candidate-draft-verification-facts.json --argjson native_evidence "$native_evidence" --arg prior_decision_sha256 "$(sha256sum candidate-draft-verification-decision.json | cut -d' ' -f1)" --slurpfile releases drafts.json --argjson rescue "$rescue" --arg source_state "$(jq -r .source_state candidate-preflight-decision.json)" --arg commit "$GITHUB_SHA" --arg path '.github/workflows/candidate.yml' --arg ref "$GITHUB_WORKFLOW_REF" --arg run_id "$GITHUB_RUN_ID" --arg run_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" '{approval:$approval,candidate_failure_state_sha256:$candidate_failure_state_sha256,checklist_sha256:$checklist_sha256,draft_verification_decision:$draft_verification_decision[0],draft_verification_facts:$draft_verification_facts[0],native_evidence:$native_evidence,prior_decision_sha256:$prior_decision_sha256,releases:$releases[0],rescue:$rescue,schema:"sbxr-release-qualification-facts-v1",source_state:$source_state,stage:"qualification-boundary",workflow:{commit:$commit,path:$path,ref:$ref,run_id:$run_id,run_url:$run_url}}' | tr -d '\n' > qualification-boundary-facts.json
+          go run ./cmd/sbxr-release qualification < qualification-boundary-facts.json > qualification-manifest.json
+          jq -e '.schema == "sbxr-qualification-manifest-v1" and .repository == env.GITHUB_REPOSITORY and .approval == {environments:[{name:"acceptance-vps"}],state:"approved"} and .workflow == {commit:env.GITHUB_SHA,path:".github/workflows/candidate.yml",ref:env.GITHUB_WORKFLOW_REF,run_id:env.GITHUB_RUN_ID,run_url:(env.GITHUB_SERVER_URL+"/"+env.GITHUB_REPOSITORY+"/actions/runs/"+env.GITHUB_RUN_ID)} and [.decision_chain[].stage] == ["candidate-preflight","candidate-draft-construction","candidate-draft-verification"] and [.decision_chain[].outcome] == ["accepted","actions-required","accepted"] and (.releases | length) == 2 and all(.releases[]; (.assets | length) == 4)' qualification-manifest.json >/dev/null
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: signed-qualification-manifest
           path: |
             qualification-manifest.json
+            qualification-boundary-facts.json
             candidate-failure-state.json
             drafts.json
             installer-updater-vps.md

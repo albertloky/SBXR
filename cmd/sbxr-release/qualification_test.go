@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -95,6 +96,33 @@ func TestQualificationCommandPreservesLaterNormalAndRescuePreflight(t *testing.T
 		t.Fatalf("rescue decision = %s", rescueOutput)
 	}
 
+	laterBoundaryFacts, laterManifest := qualificationBoundaryForCandidate(t, binary, later)
+	rescueBoundaryFacts, rescueManifest := qualificationBoundaryForCandidate(t, binary, rescue)
+	if got := sha256String(string(laterManifest)); got != "1e506a2675aab0d4e5f1d8b19178fdd0a15be6843ffb06ea6470f53e127be022" {
+		t.Fatalf("later manifest SHA-256 = %s", got)
+	}
+	if got := sha256String(string(rescueManifest)); got != "a79de11913f4a5aa51b3094cbbb749edf0cd9f49117d5fb9fbbd9801b05a738a" {
+		t.Fatalf("rescue manifest SHA-256 = %s", got)
+	}
+	for name, fixture := range map[string]struct {
+		document string
+		mutate   func(map[string]any)
+	}{
+		"stale prior decision digest": {laterBoundaryFacts, func(facts map[string]any) { facts["prior_decision_sha256"] = strings.Repeat("9", 64) }},
+		"crossed release": {laterBoundaryFacts, func(facts map[string]any) {
+			facts["releases"].([]any)[0].(map[string]any)["tag"] = "v2.0.9"
+		}},
+		"changed rescue authority": {rescueBoundaryFacts, func(facts map[string]any) {
+			facts["rescue"].(map[string]any)["failed_normal_run_id"] = "124"
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			facts := jsonObject(t, []byte(fixture.document))
+			fixture.mutate(facts)
+			assertQualificationRefused(t, binary, qualificationDocument(t, facts), name)
+		})
+	}
+
 	laterWithDuplicateSequence := candidateFacts("normal")
 	laterWithDuplicateSequence.LatestTag = stringPointer("v2.0.0")
 	laterWithDuplicateSequence.Releases = []observedRelease{qualifiedRelease(false), {Assets: []observedAsset{}, Body: "historical", Commit: strings.Repeat("f", 40), ID: 8, Sequence: uint64Pointer(17), Tag: "v1.9.0"}}
@@ -122,6 +150,69 @@ func TestQualificationCommandPreservesLaterNormalAndRescuePreflight(t *testing.T
 	rescueAfterRescue.LatestTag = stringPointer("v1.9.0")
 	rescueAfterRescue.Releases = []observedRelease{latestRescue, qualifiedRelease(true)}
 	assertQualificationRefused(t, binary, canonicalFacts(t, rescueAfterRescue), "consecutive rescue")
+}
+
+func qualificationBoundaryForCandidate(t *testing.T, binary string, preflightFacts qualificationFacts) (string, []byte) {
+	t.Helper()
+	preflightDocument := canonicalFacts(t, preflightFacts)
+	preflightDecision, err := runQualificationCommand(binary, preflightDocument)
+	if err != nil {
+		t.Fatalf("candidate preflight: %v\n%s", err, preflightDecision)
+	}
+	preflight := jsonObject(t, preflightDecision)
+	var source, build map[string]any
+	for _, value := range preflight["actions"].([]any) {
+		action := value.(map[string]any)
+		switch action["type"] {
+		case "use-source-release":
+			source = map[string]any{"assets": action["assets"], "commit": action["commit"], "release_id": action["release_id"], "release_identity": action["release_identity"], "sequence": action["sequence"], "tag": action["tag"]}
+		case "build-release":
+			build = action
+		}
+	}
+	if source == nil || build == nil {
+		t.Fatal("later or rescue boundary requires one source and one build action")
+	}
+	tag, sequence, commit := build["tag"].(string), uint64(build["sequence"].(float64)), build["commit"].(string)
+	target := draftTarget(tag, sequence)
+	target["commit"] = commit
+	target["release_identity"].(map[string]any)["commit"] = commit
+	constructionFacts := qualificationDocument(t, map[string]any{
+		"built_releases": []any{target}, "preflight_decision": jsonValue(t, string(preflightDecision)), "preflight_facts": jsonValue(t, preflightDocument),
+		"schema": qualificationFactsSchema, "stage": "candidate-draft-construction",
+	})
+	constructionDecision, err := runQualificationCommand(binary, constructionFacts)
+	if err != nil {
+		t.Fatalf("draft construction: %v\n%s", err, constructionDecision)
+	}
+	observation := draftObservation(tag, sequence, 72)
+	observation["commit"] = commit
+	observation["release_identity"].(map[string]any)["commit"] = commit
+	verificationFacts := qualificationDocument(t, map[string]any{
+		"construction_decision": jsonValue(t, string(constructionDecision)), "construction_facts": jsonValue(t, constructionFacts), "observations": []any{observation},
+		"schema": qualificationFactsSchema, "stage": "candidate-draft-verification",
+	})
+	verificationDecision, err := runQualificationCommand(binary, verificationFacts)
+	if err != nil {
+		t.Fatalf("draft verification: %v\n%s", err, verificationDecision)
+	}
+	releases := []any{source, jsonObject(t, verificationDecision)["verified_releases"].([]any)[0]}
+	var rescue any
+	if preflightFacts.Candidate.Mode == "rescue" {
+		rescue = map[string]any{"defect_issue_url": *preflightFacts.Candidate.DefectIssueURL, "failed_normal_run_id": *preflightFacts.Candidate.FailedNormalRunID}
+	}
+	boundaryFacts := qualificationDocument(t, map[string]any{
+		"approval": map[string]any{"environments": []any{map[string]any{"name": "acceptance-vps"}}, "state": "approved"}, "candidate_failure_state_sha256": strings.Repeat("9", 64), "checklist_sha256": preflightFacts.ChecklistSHA256,
+		"draft_verification_decision": jsonValue(t, string(verificationDecision)), "draft_verification_facts": jsonValue(t, verificationFacts),
+		"native_evidence":       []any{map[string]any{"path": "native/native-" + tag + "-amd64/evidence/native-amd64.json", "sha256": strings.Repeat("5", 64)}, map[string]any{"path": "native/native-" + tag + "-arm64/evidence/native-arm64.json", "sha256": strings.Repeat("6", 64)}},
+		"prior_decision_sha256": sha256String(string(verificationDecision)), "releases": releases, "rescue": rescue, "schema": qualificationFactsSchema, "source_state": preflight["source_state"], "stage": "qualification-boundary",
+		"workflow": map[string]any{"commit": commit, "path": ".github/workflows/candidate.yml", "ref": "albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main", "run_id": "123", "run_url": "https://github.com/albertloky/SBXR/actions/runs/123"},
+	})
+	manifest, err := runQualificationCommand(binary, boundaryFacts)
+	if err != nil {
+		t.Fatalf("qualification boundary: %v\n%s", err, manifest)
+	}
+	return boundaryFacts, manifest
 }
 
 func TestQualificationCommandConstructsAndVerifiesCandidateDrafts(t *testing.T) {
@@ -209,6 +300,87 @@ func TestQualificationCommandConstructsAndVerifiesCandidateDrafts(t *testing.T) 
 	} {
 		t.Run(name, func(t *testing.T) {
 			facts := jsonObject(t, []byte(verificationFacts))
+			mutate(facts)
+			assertQualificationRefused(t, binary, qualificationDocument(t, facts), name)
+		})
+	}
+}
+
+func TestQualificationCommandConstructsQualificationManifest(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "sbxr-release")
+	command := exec.Command("go", "build", "-o", binary, ".")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build sbxr-release: %v\n%s", err, output)
+	}
+
+	constructionFacts := qualificationDocument(t, map[string]any{
+		"built_releases":     []any{draftTarget("v2.0.0", 17), draftTarget("v2.0.1", 18)},
+		"preflight_decision": jsonValue(t, initialNormalDecision),
+		"preflight_facts":    jsonValue(t, initialNormalFacts),
+		"schema":             qualificationFactsSchema,
+		"stage":              "candidate-draft-construction",
+	})
+	constructionDecision, err := runQualificationCommand(binary, constructionFacts)
+	if err != nil {
+		t.Fatalf("draft construction: %v\n%s", err, constructionDecision)
+	}
+	verificationFacts := qualificationDocument(t, map[string]any{
+		"construction_decision": jsonValue(t, string(constructionDecision)),
+		"construction_facts":    jsonValue(t, constructionFacts),
+		"observations":          []any{draftObservation("v2.0.0", 17, 71), draftObservation("v2.0.1", 18, 72)},
+		"schema":                qualificationFactsSchema,
+		"stage":                 "candidate-draft-verification",
+	})
+	verificationDecision, err := runQualificationCommand(binary, verificationFacts)
+	if err != nil {
+		t.Fatalf("draft verification: %v\n%s", err, verificationDecision)
+	}
+	boundaryFacts := qualificationDocument(t, map[string]any{
+		"approval":                       map[string]any{"environments": []any{map[string]any{"name": "acceptance-vps"}}, "state": "approved"},
+		"candidate_failure_state_sha256": strings.Repeat("9", 64),
+		"checklist_sha256":               strings.Repeat("c", 64),
+		"draft_verification_decision":    jsonValue(t, string(verificationDecision)),
+		"draft_verification_facts":       jsonValue(t, verificationFacts),
+		"native_evidence": []any{
+			map[string]any{"path": "native/native-v2.0.0-amd64/evidence/native-amd64.json", "sha256": strings.Repeat("5", 64)},
+			map[string]any{"path": "native/native-v2.0.0-arm64/evidence/native-arm64.json", "sha256": strings.Repeat("6", 64)},
+			map[string]any{"path": "native/native-v2.0.1-amd64/evidence/native-amd64.json", "sha256": strings.Repeat("7", 64)},
+			map[string]any{"path": "native/native-v2.0.1-arm64/evidence/native-arm64.json", "sha256": strings.Repeat("8", 64)},
+		},
+		"prior_decision_sha256": sha256String(string(verificationDecision)),
+		"releases":              jsonObject(t, verificationDecision)["verified_releases"],
+		"rescue":                nil,
+		"schema":                qualificationFactsSchema,
+		"source_state":          "initial-normal",
+		"stage":                 "qualification-boundary",
+		"workflow": map[string]any{
+			"commit": strings.Repeat("a", 40), "path": ".github/workflows/candidate.yml", "ref": "albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main",
+			"run_id": "123", "run_url": "https://github.com/albertloky/SBXR/actions/runs/123",
+		},
+	})
+	manifest, err := runQualificationCommand(binary, boundaryFacts)
+	if err != nil {
+		t.Fatalf("qualification boundary: %v\n%s", err, manifest)
+	}
+	const expectedManifest = `{"acceptance_vps_checklist_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","approval":{"environments":[{"name":"acceptance-vps"}],"state":"approved"},"candidate_failure_state_sha256":"9999999999999999999999999999999999999999999999999999999999999999","decision_chain":[{"decision_sha256":"c080cc282e985f1e7cda6646d9b47b15b4aa855575d777c582e2cfc1fbda411e","facts_sha256":"2e51e83e75a08169f2d6a424ab510f83954bab4e29b35efbfb84e48545f780a3","outcome":"accepted","stage":"candidate-preflight"},{"decision_sha256":"f259e157613df307ff05e306735181635da422fceecbd7c8a5d732c7b7bf2ec6","facts_sha256":"4190445f74b68e64d8fe93d90cb6fc72b0009b85b8d50cd1defb0e8774af8517","outcome":"actions-required","stage":"candidate-draft-construction"},{"decision_sha256":"fdaa1b143a9eac4a65fc28848966aa5f97b8d13e8e1e56f25dbd3daaeafcc064","facts_sha256":"e4a471efeaf0dbcf03ed384aea69ab3f01c72fc088a3d4e2f1c61b2467866129","outcome":"accepted","stage":"candidate-draft-verification"}],"mode":"normal","native_evidence":[{"path":"native/native-v2.0.0-amd64/evidence/native-amd64.json","sha256":"5555555555555555555555555555555555555555555555555555555555555555"},{"path":"native/native-v2.0.0-arm64/evidence/native-arm64.json","sha256":"6666666666666666666666666666666666666666666666666666666666666666"},{"path":"native/native-v2.0.1-amd64/evidence/native-amd64.json","sha256":"7777777777777777777777777777777777777777777777777777777777777777"},{"path":"native/native-v2.0.1-arm64/evidence/native-arm64.json","sha256":"8888888888888888888888888888888888888888888888888888888888888888"}],"pinned_actions":["actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803","actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16","actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02","actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093","actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661"],"releases":[{"assets":[{"name":"install.sh","sha256":"1111111111111111111111111111111111111111111111111111111111111111","size":10},{"name":"release-index.json","sha256":"2222222222222222222222222222222222222222222222222222222222222222","size":11},{"name":"sbxr-linux-amd64.tar.gz","sha256":"3333333333333333333333333333333333333333333333333333333333333333","size":12},{"name":"sbxr-linux-arm64.tar.gz","sha256":"4444444444444444444444444444444444444444444444444444444444444444","size":13}],"commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","release_id":71,"release_identity":{"commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","release_index_sha256":"2222222222222222222222222222222222222222222222222222222222222222","repository":"albertloky/SBXR","tag":"v2.0.0"},"sequence":17,"tag":"v2.0.0"},{"assets":[{"name":"install.sh","sha256":"1111111111111111111111111111111111111111111111111111111111111111","size":10},{"name":"release-index.json","sha256":"2222222222222222222222222222222222222222222222222222222222222222","size":11},{"name":"sbxr-linux-amd64.tar.gz","sha256":"3333333333333333333333333333333333333333333333333333333333333333","size":12},{"name":"sbxr-linux-arm64.tar.gz","sha256":"4444444444444444444444444444444444444444444444444444444444444444","size":13}],"commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","release_id":72,"release_identity":{"commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","release_index_sha256":"2222222222222222222222222222222222222222222222222222222222222222","repository":"albertloky/SBXR","tag":"v2.0.1"},"sequence":18,"tag":"v2.0.1"}],"repository":"albertloky/SBXR","rescue":null,"schema":"sbxr-qualification-manifest-v1","source_state":"initial-normal","workflow":{"commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","path":".github/workflows/candidate.yml","ref":"albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main","run_id":"123","run_url":"https://github.com/albertloky/SBXR/actions/runs/123"}}`
+	if string(manifest) != expectedManifest {
+		t.Fatalf("qualification manifest = %s\nwant %s", manifest, expectedManifest)
+	}
+	retry, err := runQualificationCommand(binary, boundaryFacts)
+	if err != nil || !bytes.Equal(retry, manifest) {
+		t.Fatalf("qualification boundary retry = %s, %v", retry, err)
+	}
+
+	for name, mutate := range map[string]func(map[string]any){
+		"unapproved": func(facts map[string]any) { facts["approval"].(map[string]any)["state"] = "rejected" },
+		"refused prior evidence": func(facts map[string]any) {
+			facts["draft_verification_decision"].(map[string]any)["outcome"] = "refused"
+		},
+		"missing native evidence": func(facts map[string]any) { facts["native_evidence"] = facts["native_evidence"].([]any)[:3] },
+		"changed source state":    func(facts map[string]any) { facts["source_state"] = "rescue" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			facts := jsonObject(t, []byte(boundaryFacts))
 			mutate(facts)
 			assertQualificationRefused(t, binary, qualificationDocument(t, facts), name)
 		})

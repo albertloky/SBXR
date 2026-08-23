@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -23,6 +24,7 @@ const (
 	candidatePreflightStage         = "candidate-preflight"
 	candidateDraftConstructionStage = "candidate-draft-construction"
 	candidateDraftVerificationStage = "candidate-draft-verification"
+	qualificationBoundaryStage      = "qualification-boundary"
 	maxQualificationFactsBytes      = 16 << 20
 )
 
@@ -251,6 +253,72 @@ type candidateDraftVerificationDecision struct {
 	VerifiedReleases    []verifiedDraftRelease `json:"verified_releases"`
 }
 
+type approvalEnvironment struct {
+	Name string `json:"name"`
+}
+
+type qualificationApproval struct {
+	Environments []approvalEnvironment `json:"environments"`
+	State        string                `json:"state"`
+}
+
+type qualificationWorkflow struct {
+	Commit string `json:"commit"`
+	Path   string `json:"path"`
+	Ref    string `json:"ref"`
+	RunID  string `json:"run_id"`
+	RunURL string `json:"run_url"`
+}
+
+type nativeEvidence struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+}
+
+type qualificationBoundaryFacts struct {
+	Approval                    qualificationApproval  `json:"approval"`
+	CandidateFailureStateSHA256 string                 `json:"candidate_failure_state_sha256"`
+	ChecklistSHA256             string                 `json:"checklist_sha256"`
+	DraftVerificationDecision   json.RawMessage        `json:"draft_verification_decision"`
+	DraftVerificationFacts      json.RawMessage        `json:"draft_verification_facts"`
+	NativeEvidence              []nativeEvidence       `json:"native_evidence"`
+	PriorDecisionSHA256         string                 `json:"prior_decision_sha256"`
+	Releases                    []verifiedDraftRelease `json:"releases"`
+	Rescue                      *qualificationRescue   `json:"rescue"`
+	Schema                      string                 `json:"schema"`
+	SourceState                 string                 `json:"source_state"`
+	Stage                       string                 `json:"stage"`
+	Workflow                    qualificationWorkflow  `json:"workflow"`
+}
+
+type decisionChainEntry struct {
+	DecisionSHA256 string `json:"decision_sha256"`
+	FactsSHA256    string `json:"facts_sha256"`
+	Outcome        string `json:"outcome"`
+	Stage          string `json:"stage"`
+}
+
+type qualificationRescue struct {
+	DefectIssueURL    string `json:"defect_issue_url"`
+	FailedNormalRunID string `json:"failed_normal_run_id"`
+}
+
+type qualificationManifest struct {
+	AcceptanceVPSChecklistSHA256 string                 `json:"acceptance_vps_checklist_sha256"`
+	Approval                     qualificationApproval  `json:"approval"`
+	CandidateFailureStateSHA256  string                 `json:"candidate_failure_state_sha256"`
+	DecisionChain                []decisionChainEntry   `json:"decision_chain"`
+	Mode                         string                 `json:"mode"`
+	NativeEvidence               []nativeEvidence       `json:"native_evidence"`
+	PinnedActions                []string               `json:"pinned_actions"`
+	Releases                     []verifiedDraftRelease `json:"releases"`
+	Repository                   string                 `json:"repository"`
+	Rescue                       *qualificationRescue   `json:"rescue"`
+	Schema                       string                 `json:"schema"`
+	SourceState                  string                 `json:"source_state"`
+	Workflow                     qualificationWorkflow  `json:"workflow"`
+}
+
 func runQualification(input io.Reader, output io.Writer) error {
 	document, err := io.ReadAll(io.LimitReader(input, maxQualificationFactsBytes+1))
 	if err != nil || len(document) == 0 || len(document) > maxQualificationFactsBytes || softwarelifecycle.ValidateUniqueJSON(document) != nil {
@@ -280,6 +348,12 @@ func runQualification(input io.Reader, output io.Writer) error {
 			return errors.New("qualification facts refused")
 		}
 		decision, err = evaluateCandidateDraftVerification(facts, document)
+	case qualificationBoundaryStage:
+		var facts qualificationBoundaryFacts
+		if !decodeCanonical(document, &facts) {
+			return errors.New("qualification facts refused")
+		}
+		decision, err = evaluateQualificationBoundary(facts)
 	default:
 		return errors.New("qualification facts refused")
 	}
@@ -292,6 +366,104 @@ func runQualification(input io.Reader, output io.Writer) error {
 	}
 	_, err = output.Write(body)
 	return err
+}
+
+func evaluateQualificationBoundary(facts qualificationBoundaryFacts) (qualificationManifest, error) {
+	refused := func() (qualificationManifest, error) {
+		return qualificationManifest{}, errors.New("qualification boundary refused")
+	}
+	if facts.Schema != qualificationFactsSchema || facts.Stage != qualificationBoundaryStage || facts.Approval.State != "approved" || len(facts.Approval.Environments) != 1 || facts.Approval.Environments[0].Name != "acceptance-vps" || !validSHA256(facts.CandidateFailureStateSHA256) || !validSHA256(facts.ChecklistSHA256) || !validSHA256(facts.PriorDecisionSHA256) || facts.NativeEvidence == nil || facts.Releases == nil {
+		return refused()
+	}
+	var verificationFacts candidateDraftVerificationFacts
+	if !decodeCanonical(facts.DraftVerificationFacts, &verificationFacts) {
+		return refused()
+	}
+	verification, err := evaluateCandidateDraftVerification(verificationFacts, facts.DraftVerificationFacts)
+	if err != nil {
+		return refused()
+	}
+	verificationBytes, err := marshalCanonical(verification)
+	if err != nil || !bytes.Equal(verificationBytes, facts.DraftVerificationDecision) || facts.PriorDecisionSHA256 != documentSHA256(facts.DraftVerificationDecision) {
+		return refused()
+	}
+	var constructionFacts candidateDraftConstructionFacts
+	if !decodeCanonical(verificationFacts.ConstructionFacts, &constructionFacts) {
+		return refused()
+	}
+	construction, err := evaluateCandidateDraftConstruction(constructionFacts, verificationFacts.ConstructionFacts)
+	if err != nil {
+		return refused()
+	}
+	var preflightFacts qualificationFacts
+	if !decodeCanonical(constructionFacts.PreflightFacts, &preflightFacts) || facts.ChecklistSHA256 != preflightFacts.ChecklistSHA256 {
+		return refused()
+	}
+	preflight, err := verifiedPreflightDecision(constructionFacts.PreflightFacts, constructionFacts.PreflightDecision)
+	if err != nil {
+		return refused()
+	}
+	releases := append([]verifiedDraftRelease(nil), verification.VerifiedReleases...)
+	for _, raw := range preflight.Actions {
+		var kind struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(raw, &kind) != nil {
+			return refused()
+		}
+		if kind.Type == "use-source-release" {
+			var source useSourceReleaseAction
+			if !decodeCanonical(raw, &source) {
+				return refused()
+			}
+			releases = append([]verifiedDraftRelease{{Assets: source.Assets, Commit: source.Commit, ReleaseID: source.ReleaseID, ReleaseIdentity: source.ReleaseIdentity, Sequence: source.Sequence, Tag: source.Tag}}, releases...)
+		}
+	}
+	if len(releases) != 2 || facts.Workflow.Path != ".github/workflows/candidate.yml" || facts.Workflow.Ref != softwarelifecycle.Repository+"/.github/workflows/candidate.yml@refs/heads/main" || facts.Workflow.Commit != releases[1].Commit || !validCommit(facts.Workflow.Commit) {
+		return refused()
+	}
+	runID, runErr := strconv.ParseUint(facts.Workflow.RunID, 10, 64)
+	if runErr != nil || runID == 0 || facts.Workflow.RunURL != "https://github.com/"+softwarelifecycle.Repository+"/actions/runs/"+facts.Workflow.RunID || !validNativeEvidence(facts.NativeEvidence, construction.Actions) {
+		return refused()
+	}
+	var rescue *qualificationRescue
+	if preflight.SourceState == "rescue" {
+		if preflightFacts.Candidate.DefectIssueURL == nil || preflightFacts.Candidate.FailedNormalRunID == nil {
+			return refused()
+		}
+		rescue = &qualificationRescue{DefectIssueURL: *preflightFacts.Candidate.DefectIssueURL, FailedNormalRunID: *preflightFacts.Candidate.FailedNormalRunID}
+	}
+	if facts.SourceState != preflight.SourceState || !reflect.DeepEqual(facts.Releases, releases) || (facts.Rescue == nil) != (rescue == nil) || facts.Rescue != nil && *facts.Rescue != *rescue {
+		return refused()
+	}
+	chain := []decisionChainEntry{
+		{DecisionSHA256: documentSHA256(constructionFacts.PreflightDecision), FactsSHA256: documentSHA256(constructionFacts.PreflightFacts), Outcome: preflight.Outcome, Stage: preflight.Stage},
+		{DecisionSHA256: documentSHA256(verificationFacts.ConstructionDecision), FactsSHA256: documentSHA256(verificationFacts.ConstructionFacts), Outcome: construction.Outcome, Stage: construction.Stage},
+		{DecisionSHA256: documentSHA256(facts.DraftVerificationDecision), FactsSHA256: documentSHA256(facts.DraftVerificationFacts), Outcome: verification.Outcome, Stage: verification.Stage},
+	}
+	return qualificationManifest{
+		AcceptanceVPSChecklistSHA256: facts.ChecklistSHA256, Approval: facts.Approval, CandidateFailureStateSHA256: facts.CandidateFailureStateSHA256, DecisionChain: chain,
+		Mode: preflightFacts.Candidate.Mode, NativeEvidence: facts.NativeEvidence, PinnedActions: []string{"actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803", "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16", "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02", "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093", "actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661"},
+		Releases: releases, Repository: softwarelifecycle.Repository, Rescue: rescue, Schema: "sbxr-qualification-manifest-v1", SourceState: preflight.SourceState, Workflow: facts.Workflow,
+	}, nil
+}
+
+func validNativeEvidence(evidence []nativeEvidence, actions []constructDraftAction) bool {
+	expected := make([]string, 0, len(actions)*2)
+	for _, action := range actions {
+		for _, architecture := range []string{"amd64", "arm64"} {
+			expected = append(expected, "native/native-"+action.Tag+"-"+architecture+"/evidence/native-"+architecture+".json")
+		}
+	}
+	if len(evidence) != len(expected) {
+		return false
+	}
+	for index, item := range evidence {
+		if item.Path != expected[index] || !validSHA256(item.SHA256) {
+			return false
+		}
+	}
+	return true
 }
 
 func decodeCanonical(document []byte, value any) bool {

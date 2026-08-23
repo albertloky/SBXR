@@ -128,6 +128,9 @@ func TestCandidateConstructsDraftsAndSignsTheQualificationBoundary(t *testing.T)
 		"BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY",
 		"environment: acceptance-vps",
 		"actions/runs/$GITHUB_RUN_ID/approvals",
+		`stage:"qualification-boundary"`,
+		`go run ./cmd/sbxr-release qualification < qualification-boundary-facts.json > qualification-manifest.json`,
+		`[.decision_chain[].stage] == ["candidate-preflight","candidate-draft-construction","candidate-draft-verification"]`,
 		"qualification-manifest.json",
 		`source_state="$(jq -r .source_state qualification-manifest.json)"`,
 		`if test "$index" -eq 0 && test "$source_state" != initial-normal; then`,
@@ -163,6 +166,11 @@ func TestCandidateConstructsDraftsAndSignsTheQualificationBoundary(t *testing.T)
 	}
 	assertActionsPinned(t, workflow)
 	sign := workflow[strings.Index(workflow, "  sign:"):strings.Index(workflow, "  acceptance-vps:")]
+	for _, forbidden := range []string{`{schema:"sbxr-qualification-manifest-v1"`, `.candidate_failure_state_sha256 = $state`} {
+		if strings.Contains(sign, forbidden) {
+			t.Fatalf("qualification boundary Adapter retained manifest policy %q", forbidden)
+		}
+	}
 	attestation := strings.LastIndex(sign, "uses: actions/attest-build-provenance@")
 	manifestUpload := strings.LastIndex(sign, "name: signed-qualification-manifest")
 	if manifestUpload < 0 || attestation < manifestUpload {

@@ -220,12 +220,13 @@ type qualificationRelease struct {
 }
 
 type qualificationManifest struct {
-	Schema      string          `json:"schema"`
-	Repository  string          `json:"repository"`
-	Approval    json.RawMessage `json:"approval"`
-	Mode        string          `json:"mode"`
-	SourceState string          `json:"source_state"`
-	Workflow    struct {
+	Schema        string                            `json:"schema"`
+	Repository    string                            `json:"repository"`
+	Approval      json.RawMessage                   `json:"approval"`
+	DecisionChain []qualificationDecisionChainEntry `json:"decision_chain"`
+	Mode          string                            `json:"mode"`
+	SourceState   string                            `json:"source_state"`
+	Workflow      struct {
 		Path   string `json:"path"`
 		Ref    string `json:"ref"`
 		Commit string `json:"commit"`
@@ -256,6 +257,13 @@ type qualificationManifest struct {
 	Rescue                       json.RawMessage `json:"rescue"`
 }
 
+type qualificationDecisionChainEntry struct {
+	DecisionSHA256 string `json:"decision_sha256"`
+	FactsSHA256    string `json:"facts_sha256"`
+	Outcome        string `json:"outcome"`
+	Stage          string `json:"stage"`
+}
+
 func (source Source) qualificationLatest(release githubRelease, metadata map[string]assetMetadata) (string, uint64, bool) {
 	proof := release.Qualification
 	if proof == nil || len(proof.Manifest) == 0 || len(proof.Manifest) > 1<<20 || len(proof.Bundle) == 0 || len(proof.Bundle) > maxBundleBytes || softwarelifecycle.ValidateUniqueJSON(proof.Manifest) != nil || softwarelifecycle.ValidateUniqueJSON(proof.Bundle) != nil {
@@ -264,7 +272,7 @@ func (source Source) qualificationLatest(release githubRelease, metadata map[str
 	var manifest qualificationManifest
 	decoder := json.NewDecoder(bytes.NewReader(proof.Manifest))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&manifest) != nil || decoder.Decode(&struct{}{}) != io.EOF || manifest.Schema != "sbxr-qualification-manifest-v1" || manifest.Repository != softwarelifecycle.Repository || manifest.Workflow.Path != ".github/workflows/candidate.yml" || manifest.Workflow.Ref != "albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main" || !commitPattern.MatchString(manifest.Workflow.Commit) || !workflowEvidencePattern.MatchString(manifest.Workflow.RunURL) || manifest.Workflow.RunID == "" || !strings.HasSuffix(manifest.Workflow.RunURL, "/"+manifest.Workflow.RunID) || !hashPattern.MatchString(manifest.CandidateFailureStateSHA256) || len(manifest.Releases) != 2 {
+	if decoder.Decode(&manifest) != nil || decoder.Decode(&struct{}{}) != io.EOF || manifest.Schema != "sbxr-qualification-manifest-v1" || manifest.Repository != softwarelifecycle.Repository || manifest.Workflow.Path != ".github/workflows/candidate.yml" || manifest.Workflow.Ref != "albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main" || !commitPattern.MatchString(manifest.Workflow.Commit) || !workflowEvidencePattern.MatchString(manifest.Workflow.RunURL) || manifest.Workflow.RunID == "" || !strings.HasSuffix(manifest.Workflow.RunURL, "/"+manifest.Workflow.RunID) || !hashPattern.MatchString(manifest.CandidateFailureStateSHA256) || !validQualificationDecisionChain(manifest.DecisionChain) || len(manifest.Releases) != 2 {
 		return "", 0, false
 	}
 	digest := sha256.Sum256(proof.Manifest)
@@ -291,6 +299,20 @@ func (source Source) qualificationLatest(release githubRelease, metadata map[str
 		return candidate.Identity.IndexSHA256, candidate.Sequence, candidate.Identity.IndexSHA256 == metadata["release-index.json"].SHA256
 	}
 	return "", 0, false
+}
+
+func validQualificationDecisionChain(chain []qualificationDecisionChainEntry) bool {
+	stages := []string{"candidate-preflight", "candidate-draft-construction", "candidate-draft-verification"}
+	outcomes := []string{"accepted", "actions-required", "accepted"}
+	if len(chain) != len(stages) {
+		return false
+	}
+	for index, entry := range chain {
+		if entry.Stage != stages[index] || entry.Outcome != outcomes[index] || !hashPattern.MatchString(entry.FactsSHA256) || !hashPattern.MatchString(entry.DecisionSHA256) {
+			return false
+		}
+	}
+	return true
 }
 
 func qualificationStatementBinds(body []byte, digest string) bool {
