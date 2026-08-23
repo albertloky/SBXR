@@ -74,148 +74,82 @@ jobs:
           DEFECT_URL: ${{ inputs.defect_issue_url }}
         run: |
           set -euo pipefail
-          test "$GITHUB_SHA" = "$(git rev-parse HEAD)"
-          test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
-          test "$(git cat-file -t "$ARCHIVE_TAG")" = tag
-          test "$(git rev-parse "$ARCHIVE_TAG")" = "$(git ls-remote --tags origin "refs/tags/$ARCHIVE_TAG" | cut -f1)"
-          test "$(git rev-parse "$ARCHIVE_TAG^{commit}")" = "$(git ls-remote --tags origin "refs/tags/$ARCHIVE_TAG^{}" | cut -f1)"
-          test "$(printf '%s\n' "$A_TAG" "$B_TAG" | grep -Ec '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$')" -eq 2
-          test "$A_TAG" != "$B_TAG"
-          test "$A_SEQUENCE" -gt 0
-          test "$B_SEQUENCE" -gt "$A_SEQUENCE"
-          test -f "$CHECKLIST"
-
+          git fetch --force --tags origin
           gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --paginate --slurp | jq 'add' > releases.json
-          test "$(jq '[.[] | select(.draft)] | length' releases.json)" -eq 0
-          printf '[]' > used-sequences.json
+          printf '[]' > release-facts.json
           while read -r release; do
-            tag="$(jq -r .tag_name <<<"$release")"
+            assets="$(jq -cS '[.assets[] | {digest:((.digest // "") | sub("^sha256:";"")),id,name,size}] | sort_by(.name)' <<<"$release")"
             index_asset_id="$(jq -r '.assets[] | select(.name == "release-index.json") | .id' <<<"$release")"
+            index=null
+            sequence=null
             if test -n "$index_asset_id"; then
               gh api "repos/$GITHUB_REPOSITORY/releases/assets/$index_asset_id" -H 'Accept: application/octet-stream' > existing-index.json
-              if sequence="$(jq -er .sequence existing-index.json 2>/dev/null)"; then
-                jq --arg tag "$tag" --argjson sequence "$sequence" '. += [{tag:$tag,sequence:$sequence}]' used-sequences.json > used-sequences.next
-                mv used-sequences.next used-sequences.json
+              if jq -e '(.sequence | type) == "number" and .sequence > 0 and .sequence == floor' existing-index.json >/dev/null 2>&1; then
+                sequence="$(jq -c .sequence existing-index.json)"
+              fi
+              if jq -e '(.repository | type) == "string" and (.tag | type) == "string" and (.commit | type) == "string" and (.sequence | type) == "number" and .sequence > 0 and .sequence == floor' existing-index.json >/dev/null 2>&1; then
+                index="$(jq -cS --arg sha256 "$(sha256sum existing-index.json | cut -d' ' -f1)" '{commit,repository,sequence,sha256:$sha256,tag}' existing-index.json)"
               fi
             fi
+            fact="$(jq -cnS --argjson assets "$assets" --arg body "$(jq -r '.body // ""' <<<"$release")" --arg commit "$(jq -r .target_commitish <<<"$release")" --argjson draft "$(jq .draft <<<"$release")" --argjson id "$(jq .id <<<"$release")" --argjson immutable "$(jq '.immutable // false' <<<"$release")" --argjson index "$index" --argjson prerelease "$(jq .prerelease <<<"$release")" --argjson sequence "$sequence" --arg tag "$(jq -r .tag_name <<<"$release")" '{assets:$assets,body:$body,commit:$commit,draft:$draft,id:$id,immutable:$immutable,index:$index,prerelease:$prerelease,sequence:$sequence,tag:$tag}')"
+            jq -cS --argjson fact "$fact" '. + [$fact] | sort_by(.id)' release-facts.json > release-facts.next
+            mv release-facts.next release-facts.json
           done < <(jq -c '.[]' releases.json)
-          git fetch --force --tags origin
-          for tag in "$A_TAG" "$B_TAG"; do
-            test "$(jq --arg tag "$tag" '[.[] | select(.tag_name == $tag)] | length' releases.json)" -le 1
-          done
-          burned="$(for burned_tag in $(git tag --list 'release-burned/*'); do git tag -l --format='%(contents)' "$burned_tag"; done | jq -s .)"
-          for candidate in "$A_TAG:$A_SEQUENCE" "$B_TAG:$B_SEQUENCE"; do
-            tag="${candidate%:*}"
-            sequence="${candidate#*:}"
-            if jq -e --arg tag "$tag" --argjson sequence "$sequence" '.[] | select(.original_tag == $tag or .sequence == $sequence)' <<<"$burned" >/dev/null; then
-              test "$MODE" = rescue
-              test "$tag" = "$A_TAG"
-            fi
-          done
-
-          latest=''
+          burned="$(for burned_tag in $(git tag --list 'release-burned/*'); do git tag -l --format='%(contents)' "$burned_tag"; done | jq -cS -s 'sort_by(.original_tag)')"
+          latest_tag=null
           if gh api "repos/$GITHUB_REPOSITORY/releases/latest" > latest.json 2>/dev/null; then
-            if jq -e '.draft == false and .prerelease == false and .immutable == true and (.assets | map(.name) | sort) == ["install.sh","release-index.json","sbxr-linux-amd64.tar.gz","sbxr-linux-arm64.tar.gz"] and (.body | contains("# SBXR Installer-Updater Acceptance Record\n")) and (.body | contains("Status: Qualified\n")) and ((.body | contains("Stable result code: RELEASE-INSTALLER-UPDATER-TWO-RELEASE-QUALIFICATION\n")) or (.body | contains("Stable result code: RELEASE-INSTALLER-UPDATER-RESCUE-QUALIFICATION\n")))' latest.json >/dev/null; then
-              latest="$(jq -r .tag_name latest.json)"
-            fi
+            latest_tag="$(jq -c .tag_name latest.json)"
           fi
-          if test "$MODE" = normal && test -z "$latest"; then
-            highest_sequence="$(jq -n --argjson used "$(cat used-sequences.json)" --argjson burned "$burned" '[$used[].sequence, $burned[].sequence] | max // 16')"
-            test "$A_SEQUENCE" -eq "$((highest_sequence + 1))"
-            test "$B_SEQUENCE" -eq "$((A_SEQUENCE + 1))"
-            if test "$highest_sequence" -eq 16; then
-              test "$A_TAG" = v2.0.0
-              test "$B_TAG" = v2.0.1
-            fi
-            test "$(jq --arg a "$A_TAG" --arg b "$B_TAG" '[.[] | select(.tag_name == $a or .tag_name == $b)] | length' releases.json)" -eq 0
-            test -z "$(git ls-remote --tags origin "refs/tags/$A_TAG" "refs/tags/$B_TAG")"
-            source_state=initial-normal
-            build_releases="$(jq -cn --arg a "$A_TAG" --argjson as "$A_SEQUENCE" --arg b "$B_TAG" --argjson bs "$B_SEQUENCE" '[{"tag":$a,"sequence":$as},{"tag":$b,"sequence":$bs}]')"
-          elif test "$MODE" = normal; then
-            jq -e --arg tag "$A_TAG" '.tag_name == $tag and .draft == false and .prerelease == false and .immutable == true' latest.json >/dev/null
-            cp latest.json source-a-release.json
-            index_asset_id="$(jq -r '.assets[] | select(.name == "release-index.json") | .id' latest.json)"
-            gh api "repos/$GITHUB_REPOSITORY/releases/assets/$index_asset_id" -H 'Accept: application/octet-stream' > source-a-index.json
-            test "$(jq -r .sequence source-a-index.json)" -eq "$A_SEQUENCE"
-            test "$(jq --arg tag "$B_TAG" '[.[] | select(.tag_name == $tag)] | length' releases.json)" -eq 0
-            test -z "$(git ls-remote --tags origin "refs/tags/$B_TAG")"
-            source_state=later-normal
-            build_releases="$(jq -cn --arg tag "$B_TAG" --argjson sequence "$B_SEQUENCE" '[{"tag":$tag,"sequence":$sequence}]')"
-          else
-            test "$MODE" = rescue
-            printf '%s\n' "$FAILED_RUN" | grep -Eq '^[1-9][0-9]*$'
-            printf '%s\n' "$DEFECT_URL" | grep -Eq "^https://github\.com/$GITHUB_REPOSITORY/issues/[1-9][0-9]*$"
+          tags="$(for tag in "$A_TAG" "$B_TAG"; do if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then printf '%s\n' "$tag"; fi; done | jq -Rsc 'split("\n") | map(select(length > 0)) | sort')"
+          defect_issue=null
+          failed_normal_run=null
+          if test "$MODE" = rescue; then
             gh api "repos/$GITHUB_REPOSITORY/issues/${DEFECT_URL##*/}" > defect-issue.json
-            jq -e '.html_url == env.DEFECT_URL and .state == "open" and .pull_request == null' defect-issue.json >/dev/null
-            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$FAILED_RUN" --jq 'select(.path == ".github/workflows/candidate.yml" and .conclusion != "success")' >/dev/null
-            test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$FAILED_RUN" --jq '.inputs.mode')" = normal
-            jq -e --arg tag "$A_TAG" '.[] | select(.tag_name == $tag and .draft == false and .prerelease == true and .immutable == true)' releases.json > source-a-release.json
-            test "$(jq --arg tag "$B_TAG" '[.[] | select(.tag_name == $tag)] | length' releases.json)" -eq 0
-            test -z "$(git ls-remote --tags origin "refs/tags/$B_TAG")"
-            if test -n "$latest"; then
-              ! jq -e '.body | contains("Stable result code: RELEASE-INSTALLER-UPDATER-RESCUE-QUALIFICATION\n")' latest.json >/dev/null
-            fi
-            source_state=rescue
-            build_releases="$(jq -cn --arg tag "$B_TAG" --argjson sequence "$B_SEQUENCE" '[{"tag":$tag,"sequence":$sequence}]')"
+            defect_issue="$(jq -cS '{is_pull_request:has("pull_request"),state,url:.html_url}' defect-issue.json)"
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$FAILED_RUN" > failed-normal-run.json
+            failed_normal_run="$(jq -cS '{conclusion:(.conclusion // ""),id:(.id | tostring),mode:(.inputs.mode // ""),path}' failed-normal-run.json)"
           fi
-          test "$(jq --argjson sequence "$B_SEQUENCE" '[.[] | select(.sequence == $sequence)] | length' used-sequences.json)" -eq 0
-          if test "$source_state" = initial-normal; then
-            test "$(jq --argjson sequence "$A_SEQUENCE" '[.[] | select(.sequence == $sequence)] | length' used-sequences.json)" -eq 0
-          else
-            jq -e --arg tag "$A_TAG" --argjson sequence "$A_SEQUENCE" '[.[] | select(.sequence == $sequence)] == [{tag:$tag,sequence:$sequence}]' used-sequences.json >/dev/null
-          fi
+          failed_normal_run_id=null
+          defect_issue_url=null
+          if test -n "$FAILED_RUN"; then failed_normal_run_id="$(jq -cn --arg value "$FAILED_RUN" '$value')"; fi
+          if test -n "$DEFECT_URL"; then defect_issue_url="$(jq -cn --arg value "$DEFECT_URL" '$value')"; fi
+          jq -cnS \
+            --arg archive_commit "$(git rev-parse "$ARCHIVE_TAG^{commit}")" \
+            --arg archive_remote_commit "$(git ls-remote --tags origin "refs/tags/$ARCHIVE_TAG^{}" | cut -f1)" \
+            --arg archive_remote_tag_object "$(git ls-remote --tags origin "refs/tags/$ARCHIVE_TAG" | cut -f1)" \
+            --arg archive_tag_object "$(git rev-parse "$ARCHIVE_TAG")" \
+            --arg archive_type "$(git cat-file -t "$ARCHIVE_TAG")" \
+            --argjson burned_identities "$burned" \
+            --argjson a_sequence "$A_SEQUENCE" --arg a_tag "$A_TAG" --argjson b_sequence "$B_SEQUENCE" --arg b_tag "$B_TAG" --argjson defect_issue_url "$defect_issue_url" --argjson failed_normal_run_id "$failed_normal_run_id" --arg mode "$MODE" \
+            --arg checklist_sha256 "$(sha256sum "$CHECKLIST" | cut -d' ' -f1)" --arg commit "$(git rev-parse HEAD)" --argjson defect_issue "$defect_issue" --argjson failed_normal_run "$failed_normal_run" --argjson latest_tag "$latest_tag" --argjson releases "$(cat release-facts.json)" --arg remote_main "$(git rev-parse origin/main)" --argjson tags "$tags" \
+            '{archive_commit:$archive_commit,archive_remote_commit:$archive_remote_commit,archive_remote_tag_object:$archive_remote_tag_object,archive_tag_object:$archive_tag_object,archive_type:$archive_type,burned_identities:$burned_identities,candidate:{a_sequence:$a_sequence,a_tag:$a_tag,b_sequence:$b_sequence,b_tag:$b_tag,defect_issue_url:$defect_issue_url,failed_normal_run_id:$failed_normal_run_id,mode:$mode},checklist_sha256:$checklist_sha256,commit:$commit,defect_issue:$defect_issue,failed_normal_run:$failed_normal_run,latest_tag:$latest_tag,releases:$releases,remote_main:$remote_main,schema:"sbxr-release-qualification-facts-v1",stage:"candidate-preflight",tags:$tags}' | tr -d '\n' > candidate-preflight-facts.json
+          go run ./cmd/sbxr-release qualification < candidate-preflight-facts.json > candidate-preflight-decision.json
+          facts_sha256="$(sha256sum candidate-preflight-facts.json | cut -d' ' -f1)"
+          jq -e --arg facts_sha256 "$facts_sha256" --arg mode "$MODE" --arg a_tag "$A_TAG" --argjson a_sequence "$A_SEQUENCE" --arg b_tag "$B_TAG" --argjson b_sequence "$B_SEQUENCE" '
+            .schema == "sbxr-release-qualification-decision-v1" and .stage == "candidate-preflight" and .outcome == "accepted" and .facts_sha256 == $facts_sha256 and
+            (.source_state == "initial-normal" or .source_state == "later-normal" or .source_state == "rescue") and
+            all(.actions[];
+              if .type == "build-release" then (keys | sort) == ["commit","sequence","tag","type"] and .commit == env.GITHUB_SHA and ((.tag == $a_tag and .sequence == $a_sequence) or (.tag == $b_tag and .sequence == $b_sequence))
+              elif .type == "use-source-release" then (keys | sort) == ["assets","commit","draft","immutable","prerelease","release_id","release_identity","sequence","tag","type"] and .tag == $a_tag and .sequence == $a_sequence and (.release_id | type) == "number" and (.release_identity | keys | sort) == ["commit","release_index_sha256","repository","tag"] and .release_identity == {commit:.commit,release_index_sha256:.release_identity.release_index_sha256,repository:env.GITHUB_REPOSITORY,tag:.tag} and (.release_identity.release_index_sha256 | test("^[0-9a-f]{64}$")) and (.assets | length) == 4 and all(.assets[]; (keys | sort) == ["name","sha256","size"] and (.sha256 | test("^[0-9a-f]{64}$")) and .size > 0)
+              else false end) and
+            (if .source_state == "initial-normal" then $mode == "normal" and [.actions[].type] == ["build-release","build-release"] else (.source_state == "rescue") == ($mode == "rescue") and [.actions[].type] == ["use-source-release","build-release"] end)' candidate-preflight-decision.json >/dev/null
+          build_releases="$(jq -c '[.actions[] | select(.type == "build-release") | {tag,sequence}]' candidate-preflight-decision.json)"
+          source_state="$(jq -r .source_state candidate-preflight-decision.json)"
           source_a='{}'
-          if test "$source_state" != initial-normal; then
-            test "$(jq '.assets | length' source-a-release.json)" -eq 4
-            test "$(jq -r '.assets[].name' source-a-release.json | sort)" = "$(printf '%s\n' install.sh release-index.json sbxr-linux-amd64.tar.gz sbxr-linux-arm64.tar.gz | sort)"
+          if jq -e '.actions[] | select(.type == "use-source-release")' candidate-preflight-decision.json > source-action.json; then
+            release_id="$(jq -r .release_id source-action.json)"
+            gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > source-a-release.json
+            jq -e --argjson action "$(cat source-action.json)" '.id == $action.release_id and .tag_name == $action.tag and .target_commitish == $action.commit and .draft == $action.draft and .prerelease == $action.prerelease and .immutable == $action.immutable and (.assets | length) == 4' source-a-release.json >/dev/null
             mkdir -m 0700 source-a
-            while read -r asset; do
-              name="$(jq -r .name <<<"$asset")"
-              id="$(jq -r .id <<<"$asset")"
+            while read -r expected; do
+              name="$(jq -r .name <<<"$expected")"
+              id="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .id' source-a-release.json)"
               gh api "repos/$GITHUB_REPOSITORY/releases/assets/$id" -H 'Accept: application/octet-stream' > "source-a/$name"
-              test "$(stat -c %s "source-a/$name")" -eq "$(jq -r .size <<<"$asset")"
-              test "sha256:$(sha256sum "source-a/$name" | cut -d' ' -f1)" = "$(jq -r .digest <<<"$asset")"
-            done < <(jq -c '.assets[]' source-a-release.json)
-            if test "$source_state" = later-normal; then
-              jq -r .body source-a-release.json > source-a-acceptance-record.txt
-              for line in \
-                '# SBXR Installer-Updater Acceptance Record' \
-                'Status: Qualified' \
-                "Repository: $GITHUB_REPOSITORY" \
-                "Tag: $A_TAG" \
-                "Commit: $(jq -r .target_commitish source-a-release.json)" \
-                'Module Verification: Passed' \
-                'Seam Verification: Passed' \
-                'Integrated Verification: Passed on live Ubuntu Server 24.04 amd64' \
-                'Codex Live Acceptance: Passed' \
-                'Owner Acceptance: Not required' \
-                'Secret-safe result: Passed'; do
-                test "$(grep -Fxc "$line" source-a-acceptance-record.txt)" -eq 1
-              done
-              test "$(grep -Ec '^Stable result code: RELEASE-INSTALLER-UPDATER-(TWO-RELEASE|RESCUE)-QUALIFICATION$' source-a-acceptance-record.txt)" -eq 1
-              test "$(grep -Ec '^Qualification role: (Clean-installed source release|Discovered, installed, recovered, final latest release|Rescue direct-install and lower-sequence replacement release)$' source-a-acceptance-record.txt)" -eq 1
-              test "$(grep -Ec '^Workflow evidence: https://github\.com/albertloky/SBXR/actions/runs/[1-9][0-9]*$' source-a-acceptance-record.txt)" -eq 1
-              test "$(grep -Ec '^Runner: Ubuntu Server 24\.04 linux/amd64$' source-a-acceptance-record.txt)" -eq 1
-              test "$(grep -Ec '^Go toolchain: go[0-9]+\.[0-9]+\.[0-9]+$' source-a-acceptance-record.txt)" -eq 1
-              test "$(grep -Ec '^Public verifier: [0-9]+\.[0-9]+\.[0-9]+ [A-F0-9]{64}$' source-a-acceptance-record.txt)" -eq 1
-              test "$(grep -Fxc "Sequence: $A_SEQUENCE" source-a-acceptance-record.txt)" -eq 1
-              test "$(grep -Fxc "Release index SHA-256: $(sha256sum source-a/release-index.json | cut -d' ' -f1)" source-a-acceptance-record.txt)" -eq 1
-              for name in install.sh release-index.json sbxr-linux-amd64.tar.gz sbxr-linux-arm64.tar.gz; do
-                size="$(stat -c %s "source-a/$name")"
-                sha256="$(sha256sum "source-a/$name" | cut -d' ' -f1)"
-                test "$(grep -Fxc "Asset: $name $size $sha256" source-a-acceptance-record.txt)" -eq 1
-              done
-            fi
-            commit="$(jq -r .target_commitish source-a-release.json)"
-            index_sha256="$(sha256sum source-a/release-index.json | cut -d' ' -f1)"
-            jq -e --arg tag "$A_TAG" --arg commit "$commit" --argjson sequence "$A_SEQUENCE" '.repository == env.GITHUB_REPOSITORY and .tag == $tag and .commit == $commit and .sequence == $sequence' source-a/release-index.json >/dev/null
-            assets="$(for name in install.sh release-index.json sbxr-linux-amd64.tar.gz sbxr-linux-arm64.tar.gz; do jq -cn --arg name "$name" --argjson size "$(stat -c %s "source-a/$name")" --arg sha256 "$(sha256sum "source-a/$name" | cut -d' ' -f1)" '{name:$name,size:$size,sha256:$sha256}'; done | jq -s .)"
-            source_a="$(jq -cn --arg tag "$A_TAG" --argjson sequence "$A_SEQUENCE" --arg commit "$commit" --argjson release_id "$(jq .id source-a-release.json)" --arg index_sha256 "$index_sha256" --argjson assets "$assets" '{tag:$tag,sequence:$sequence,commit:$commit,release_id:$release_id,release_identity:{repository:env.GITHUB_REPOSITORY,tag:$tag,commit:$commit,release_index_sha256:$index_sha256},assets:$assets}')"
-            if test "$source_state" = rescue; then
-              failed_run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$FAILED_RUN"
-              jq -e --arg tag "$A_TAG" --argjson sequence "$A_SEQUENCE" --arg commit "$commit" --arg index_sha256 "$index_sha256" --arg run_url "$failed_run_url" '[.[] | select(.original_tag == $tag and .sequence == $sequence and .commit == $commit and .release_index_sha256 == $index_sha256 and .qualification_run_url == $run_url)] | length == 1' <<<"$burned" >/dev/null
-              jq -e --arg run_url "$failed_run_url" '.body | contains($run_url)' source-a-release.json >/dev/null
-            fi
+              test "$(stat -c %s "source-a/$name")" -eq "$(jq -r .size <<<"$expected")"
+              test "$(sha256sum "source-a/$name" | cut -d' ' -f1)" = "$(jq -r .sha256 <<<"$expected")"
+            done < <(jq -c '.assets[]' source-action.json)
+            jq -e --argjson action "$(cat source-action.json)" '.repository == env.GITHUB_REPOSITORY and .tag == $action.tag and .commit == $action.commit and .sequence == $action.sequence' source-a/release-index.json >/dev/null
+            source_a="$(jq -c '{assets,commit,release_id,release_identity,sequence,tag}' source-action.json)"
           fi
           echo "source_state=$source_state" >> "$GITHUB_OUTPUT"
           echo "build_releases=$build_releases" >> "$GITHUB_OUTPUT"

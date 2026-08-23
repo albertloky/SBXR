@@ -108,8 +108,13 @@ func TestCandidateConstructsDraftsAndSignsTheQualificationBoundary(t *testing.T)
 		"github.ref == 'refs/heads/main'",
 		"archive/full-product-v1.0.15",
 		"release-burned/",
-		"used-sequences.json",
 		"qualification_run_url",
+		"candidate-preflight-facts.json",
+		"go run ./cmd/sbxr-release qualification",
+		"candidate-preflight-decision.json",
+		`.facts_sha256 == $facts_sha256`,
+		`select(.type == "build-release")`,
+		`select(.type == "use-source-release")`,
 		"prepare-burn-tag.sh",
 		"git push --atomic origin",
 		"releases/latest",
@@ -245,38 +250,38 @@ func TestCandidateQualifiesTheManifestBoundTwoReleaseJourneyOnTheAcceptanceVPS(t
 	assertActionsPinned(t, acceptanceSources)
 }
 
-func TestCandidatePreservesFailureEvidenceAndAdvancesAfterBurnedInitialPair(t *testing.T) {
+func TestCandidatePreflightUsesOnlyCanonicalQualificationActions(t *testing.T) {
 	body, err := os.ReadFile(".github/workflows/candidate.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	workflow := string(body)
-	acceptance := workflow[strings.Index(workflow, "  acceptance-vps:"):strings.Index(workflow, "  cleanup-unqualified:")]
-	checkout := strings.Index(acceptance, "uses: actions/checkout@")
-	initialize := strings.Index(acceptance, "name: Initialize exact candidate failure evidence")
-	if checkout < 0 || initialize < 0 || checkout > initialize {
-		t.Fatal("Acceptance VPS failure evidence is initialized before checkout can clean the workspace")
-	}
-	sequenceExpression := `[$used[].sequence, $burned[].sequence] | max // 16`
+	preflight := workflow[strings.Index(workflow, "  preflight:"):strings.Index(workflow, "  build:")]
 	for _, required := range []string{
-		`highest_sequence="$(jq -n --argjson used "$(cat used-sequences.json)" --argjson burned "$burned" '` + sequenceExpression + `')"`,
-		`test "$A_SEQUENCE" -eq "$((highest_sequence + 1))"`,
-		`test "$B_SEQUENCE" -eq "$((A_SEQUENCE + 1))"`,
-		`if test "$highest_sequence" -eq 16; then`,
-		`test "$A_TAG" = v2.0.0`,
-		`test "$B_TAG" = v2.0.1`,
+		`schema:"sbxr-release-qualification-facts-v1"`,
+		`stage:"candidate-preflight"`,
+		`go run ./cmd/sbxr-release qualification < candidate-preflight-facts.json > candidate-preflight-decision.json`,
+		`.schema == "sbxr-release-qualification-decision-v1"`,
+		`if .type == "build-release" then`,
+		`elif .type == "use-source-release" then`,
+		`else false end`,
+		`gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > source-a-release.json`,
+		`test "$(sha256sum "source-a/$name" | cut -d' ' -f1)" = "$(jq -r .sha256 <<<"$expected")"`,
 	} {
-		if !strings.Contains(workflow, required) {
-			t.Fatalf("candidate.yml omitted failed-initial-pair retry contract %q", required)
+		if !strings.Contains(preflight, required) {
+			t.Fatalf("candidate preflight omitted Adapter contract %q", required)
 		}
 	}
-	command := exec.Command("jq", "-nr", "--argjson", "used", `[{"sequence":16}]`, "--argjson", "burned", `[{"sequence":17},{"sequence":18}]`, sequenceExpression)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("select highest used or burned sequence: %v\n%s", err, output)
-	}
-	if string(output) != "18\n" {
-		t.Fatalf("highest used or burned sequence = %q, want 18", output)
+	for _, forbidden := range []string{
+		`highest_sequence=`,
+		`source_state=initial-normal`,
+		`source_state=later-normal`,
+		`source_state=rescue`,
+		`test "$B_SEQUENCE" -gt "$A_SEQUENCE"`,
+	} {
+		if strings.Contains(preflight, forbidden) {
+			t.Fatalf("candidate preflight retained policy %q", forbidden)
+		}
 	}
 }
 
@@ -390,7 +395,7 @@ func TestReleaseFailuresWithdrawOnlyRecheckedTargetsAndBurnQualifiedIdentities(t
 		"--draft=false --prerelease --latest=false",
 		"post-sign-qualification-failure",
 		"defect-issue.json",
-		".html_url == env.DEFECT_URL and .state == \"open\"",
+		`{is_pull_request:has("pull_request"),state,url:.html_url}`,
 		"Publish the rechecked burned releases as failed prereleases",
 		"fully recorded unsigned drafts",
 	} {
