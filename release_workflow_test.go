@@ -361,28 +361,33 @@ func TestStablePublishesOnlyTheSignedQualifiedDraftsAndProvesStableNoUpdate(t *t
 		`stage:"stable-preflight"`,
 		"stable-preflight-facts.json",
 		"stable-preflight-decision.json",
+		`stage:"stable-publication"`,
+		"stable-publication-facts.json",
+		"stable-publication-decision.json",
+		`stage:"stable-publication-verification"`,
+		"stable-publication-verification-facts.json",
+		"stable-publication-verification-decision.json",
+		"go run ./cmd/sbxr-release verify-public-latest",
+		"stable-publication-decisions-${{ github.run_id }}",
+		"path: publication-evidence",
+		`type == "observe-stable-release"`,
+		`test "$outcome" = "propagation-pending"`,
 		"signed_manifest:$signed_manifest[0]",
 		"commit:$metadata[0].target_commitish",
 		"go run ./cmd/sbxr-release qualification",
 		`all(.actions[]; .type == "publish-stable-release" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256)`,
-		"install.sh",
-		"release-index.json",
-		"sbxr-linux-amd64.tar.gz",
-		"sbxr-linux-arm64.tar.gz",
-		"gh release edit",
-		`while read -r action`,
-		`recheck_draft "$index"`,
+		`gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id"`,
 		`jq -r .failure_reason`,
-		"--draft=false",
-		"--prerelease=false",
-		"--latest",
+		"-F draft=false",
+		"-F prerelease=false",
+		"-f make_latest=true",
 		"for attempt in $(seq 1 60)",
 		"check_deadline=$((SECONDS + 600))",
 		`test "$SECONDS" -lt "$check_deadline"`,
 		"predicate_type=release",
 		"Code: SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT",
 		"releases/latest/download/install.sh",
-		"cmp latest-install.sh pinned-install.sh",
+		"latest_install_sha256:$latest_install_sha256",
 		"SOFTWARE-LIFECYCLE-INSTALL-ALREADY-CURRENT",
 		"SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT",
 		"SOFTWARE-LIFECYCLE-UPDATE-ALREADY-CURRENT",
@@ -417,11 +422,12 @@ func TestStablePublishesOnlyTheSignedQualifiedDraftsAndProvesStableNoUpdate(t *t
 		}
 	}
 	approval := strings.Index(publication, `name == "stable-publication"`)
+	recheck := strings.Index(publication, `stage:"stable-publication"`)
 	action := strings.Index(publication, `.type == "publish-stable-release"`)
-	recheck := strings.Index(publication, `recheck_draft "$index"`)
-	publish := strings.Index(publication, `gh release edit "$tag"`)
-	verify := strings.Index(publication, `verify_public "$index" true`)
-	if approval < 0 || !(approval < action && action < recheck && recheck < publish && publish < verify) {
+	publish := strings.Index(publication, `gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id"`)
+	verify := strings.Index(publication, `stage:"stable-publication-verification"`)
+	accepted := strings.Index(publication, `.outcome == "accepted"`)
+	if approval < 0 || !(approval < recheck && recheck < action && action < publish && publish < verify && verify < accepted) {
 		t.Fatal("stable publication does not recheck and verify each approved draft before advancing")
 	}
 	assertActionsPinned(t, workflow)

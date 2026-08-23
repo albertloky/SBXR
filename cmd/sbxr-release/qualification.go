@@ -19,17 +19,19 @@ import (
 )
 
 const (
-	qualificationFactsSchema          = "sbxr-release-qualification-facts-v1"
-	qualificationDecisionSchema       = "sbxr-release-qualification-decision-v1"
-	candidatePreflightStage           = "candidate-preflight"
-	candidateDraftConstructionStage   = "candidate-draft-construction"
-	candidateDraftVerificationStage   = "candidate-draft-verification"
-	qualificationBoundaryStage        = "qualification-boundary"
-	acceptanceVPSResultStage          = "acceptance-vps-result"
-	candidateFailureStage             = "candidate-failure-finalization"
-	candidateFailureVerificationStage = "candidate-failure-verification"
-	stablePreflightStage              = "stable-preflight"
-	maxQualificationFactsBytes        = 16 << 20
+	qualificationFactsSchema           = "sbxr-release-qualification-facts-v1"
+	qualificationDecisionSchema        = "sbxr-release-qualification-decision-v1"
+	candidatePreflightStage            = "candidate-preflight"
+	candidateDraftConstructionStage    = "candidate-draft-construction"
+	candidateDraftVerificationStage    = "candidate-draft-verification"
+	qualificationBoundaryStage         = "qualification-boundary"
+	acceptanceVPSResultStage           = "acceptance-vps-result"
+	candidateFailureStage              = "candidate-failure-finalization"
+	candidateFailureVerificationStage  = "candidate-failure-verification"
+	stablePreflightStage               = "stable-preflight"
+	stablePublicationStage             = "stable-publication"
+	stablePublicationVerificationStage = "stable-publication-verification"
+	maxQualificationFactsBytes         = 16 << 20
 )
 
 type qualificationEnvelope struct {
@@ -465,9 +467,13 @@ type publishStableReleaseAction struct {
 	Assets              []decisionAsset         `json:"assets"`
 	Body                string                  `json:"body"`
 	Commit              string                  `json:"commit"`
+	Draft               bool                    `json:"draft"`
 	FactsSHA256         string                  `json:"facts_sha256"`
 	FailureReason       string                  `json:"failure_reason"`
+	Immutable           bool                    `json:"immutable"`
 	Latest              bool                    `json:"latest"`
+	ObservedAt          string                  `json:"observed_at"`
+	Prerelease          bool                    `json:"prerelease"`
 	PriorDecisionSHA256 string                  `json:"prior_decision_sha256"`
 	ReleaseID           int64                   `json:"release_id"`
 	ReleaseIdentity     decisionReleaseIdentity `json:"release_identity"`
@@ -476,13 +482,83 @@ type publishStableReleaseAction struct {
 	Type                string                  `json:"type"`
 }
 
-type stablePreflightDecision struct {
+type stablePublicationDecision struct {
 	Actions             []publishStableReleaseAction `json:"actions"`
 	FactsSHA256         string                       `json:"facts_sha256"`
 	Outcome             string                       `json:"outcome"`
 	PriorDecisionSHA256 string                       `json:"prior_decision_sha256"`
 	Schema              string                       `json:"schema"`
 	Stage               string                       `json:"stage"`
+}
+
+type stableReleaseAttestation struct {
+	Commit        string `json:"commit"`
+	Count         int    `json:"count"`
+	Initiator     string `json:"initiator"`
+	PredicateType string `json:"predicate_type"`
+}
+
+type stablePublicationObservation struct {
+	Assets              []observedDraftAsset      `json:"assets"`
+	Attestation         *stableReleaseAttestation `json:"attestation"`
+	Body                string                    `json:"body"`
+	Commit              string                    `json:"commit"`
+	Downloads           []decisionAsset           `json:"downloads"`
+	Draft               bool                      `json:"draft"`
+	Immutable           bool                      `json:"immutable"`
+	LatestInstallSHA256 string                    `json:"latest_install_sha256"`
+	LatestReleaseID     *int64                    `json:"latest_release_id"`
+	Prerelease          bool                      `json:"prerelease"`
+	PublicVerification  *publicLatestVerification `json:"public_verification"`
+	ReleaseID           int64                     `json:"release_id"`
+	ReleaseIdentity     decisionReleaseIdentity   `json:"release_identity"`
+	Sequence            uint64                    `json:"sequence"`
+	Tag                 string                    `json:"tag"`
+}
+
+type stablePublicationFacts struct {
+	ActionIndex               int                          `json:"action_index"`
+	Approval                  qualificationApproval        `json:"approval"`
+	Observation               stablePublicationObservation `json:"observation"`
+	ObservedAt                string                       `json:"observed_at"`
+	PreflightDecision         json.RawMessage              `json:"preflight_decision"`
+	PreflightFacts            json.RawMessage              `json:"preflight_facts"`
+	PriorDecisionSHA256       string                       `json:"prior_decision_sha256"`
+	PriorVerificationDecision json.RawMessage              `json:"prior_verification_decision"`
+	PriorVerificationFacts    json.RawMessage              `json:"prior_verification_facts"`
+	Schema                    string                       `json:"schema"`
+	Stage                     string                       `json:"stage"`
+}
+
+type observeStableReleaseAction struct {
+	Commit              string                  `json:"commit"`
+	FactsSHA256         string                  `json:"facts_sha256"`
+	PriorDecisionSHA256 string                  `json:"prior_decision_sha256"`
+	ReleaseID           int64                   `json:"release_id"`
+	ReleaseIdentity     decisionReleaseIdentity `json:"release_identity"`
+	Tag                 string                  `json:"tag"`
+	Type                string                  `json:"type"`
+	WaitSeconds         uint64                  `json:"wait_seconds"`
+}
+
+type stablePublicationVerificationFacts struct {
+	Attempt             uint64                        `json:"attempt"`
+	Observation         *stablePublicationObservation `json:"observation"`
+	ObservedAt          string                        `json:"observed_at"`
+	PriorDecisionSHA256 string                        `json:"prior_decision_sha256"`
+	PublicationDecision json.RawMessage               `json:"publication_decision"`
+	PublicationFacts    json.RawMessage               `json:"publication_facts"`
+	Schema              string                        `json:"schema"`
+	Stage               string                        `json:"stage"`
+}
+
+type stablePublicationVerificationDecision struct {
+	Actions             []json.RawMessage `json:"actions"`
+	FactsSHA256         string            `json:"facts_sha256"`
+	Outcome             string            `json:"outcome"`
+	PriorDecisionSHA256 string            `json:"prior_decision_sha256"`
+	Schema              string            `json:"schema"`
+	Stage               string            `json:"stage"`
 }
 
 type candidateFailureStages struct {
@@ -641,6 +717,18 @@ func runQualification(input io.Reader, output io.Writer) error {
 			return errors.New("qualification facts refused")
 		}
 		decision, err = evaluateStablePreflight(facts, document)
+	case stablePublicationStage:
+		var facts stablePublicationFacts
+		if !decodeCanonical(document, &facts) {
+			return errors.New("qualification facts refused")
+		}
+		decision, err = evaluateStablePublication(facts, document)
+	case stablePublicationVerificationStage:
+		var facts stablePublicationVerificationFacts
+		if !decodeCanonical(document, &facts) {
+			return errors.New("qualification facts refused")
+		}
+		decision, err = evaluateStablePublicationVerification(facts, document)
 	default:
 		return errors.New("qualification facts refused")
 	}
@@ -655,9 +743,9 @@ func runQualification(input io.Reader, output io.Writer) error {
 	return err
 }
 
-func evaluateStablePreflight(facts stablePreflightFacts, document []byte) (stablePreflightDecision, error) {
-	refused := func() (stablePreflightDecision, error) {
-		return stablePreflightDecision{}, errors.New("stable preflight refused")
+func evaluateStablePreflight(facts stablePreflightFacts, document []byte) (stablePublicationDecision, error) {
+	refused := func() (stablePublicationDecision, error) {
+		return stablePublicationDecision{}, errors.New("stable preflight refused")
 	}
 	observedAt, observedErr := time.Parse(time.RFC3339, facts.ObservedAt)
 	createdAt, createdErr := time.Parse(time.RFC3339, facts.CandidateRun.CreatedAt)
@@ -737,9 +825,173 @@ func evaluateStablePreflight(facts stablePreflightFacts, document []byte) (stabl
 		if releaseIndex == 0 {
 			failureReason = "initial-a-public-verification-failure"
 		}
-		actions[index] = publishStableReleaseAction{Assets: release.Assets, Body: records[release.Tag], Commit: release.Commit, FactsSHA256: factsSHA256, FailureReason: failureReason, Latest: true, PriorDecisionSHA256: priorDecisionSHA256, ReleaseID: release.ReleaseID, ReleaseIdentity: release.ReleaseIdentity, Sequence: release.Sequence, Tag: release.Tag, Type: "publish-stable-release"}
+		actions[index] = publishStableReleaseAction{Assets: release.Assets, Body: records[release.Tag], Commit: release.Commit, Draft: false, FactsSHA256: factsSHA256, FailureReason: failureReason, Immutable: true, Latest: true, ObservedAt: facts.ObservedAt, Prerelease: false, PriorDecisionSHA256: priorDecisionSHA256, ReleaseID: release.ReleaseID, ReleaseIdentity: release.ReleaseIdentity, Sequence: release.Sequence, Tag: release.Tag, Type: "publish-stable-release"}
 	}
-	return stablePreflightDecision{Actions: actions, FactsSHA256: factsSHA256, Outcome: "actions-required", PriorDecisionSHA256: priorDecisionSHA256, Schema: qualificationDecisionSchema, Stage: stablePreflightStage}, nil
+	return stablePublicationDecision{Actions: actions, FactsSHA256: factsSHA256, Outcome: "actions-required", PriorDecisionSHA256: priorDecisionSHA256, Schema: qualificationDecisionSchema, Stage: stablePreflightStage}, nil
+}
+
+func evaluateStablePublication(facts stablePublicationFacts, document []byte) (stablePublicationDecision, error) {
+	refused := func() (stablePublicationDecision, error) {
+		return stablePublicationDecision{}, errors.New("stable publication refused")
+	}
+	observedAt, timeErr := time.Parse(time.RFC3339, facts.ObservedAt)
+	if facts.Schema != qualificationFactsSchema || facts.Stage != stablePublicationStage || facts.ActionIndex < 0 || facts.Approval.State != "approved" || len(facts.Approval.Environments) != 1 || facts.Approval.Environments[0].Name != "stable-publication" || timeErr != nil || observedAt.Format(time.RFC3339) != facts.ObservedAt || secretBearing(document) {
+		return refused()
+	}
+	preflight, preflightFacts, err := verifiedStablePreflight(facts.PreflightFacts, facts.PreflightDecision)
+	if err != nil || facts.ActionIndex >= len(preflight.Actions) {
+		return refused()
+	}
+	priorDecisionSHA256 := documentSHA256(facts.PreflightDecision)
+	var expectedLatestReleaseID *int64
+	if facts.ActionIndex == 0 {
+		if !bytes.Equal(facts.PriorVerificationFacts, []byte("null")) || !bytes.Equal(facts.PriorVerificationDecision, []byte("null")) {
+			return refused()
+		}
+		if preflightFacts.LatestTag != nil {
+			for _, release := range preflightFacts.Releases {
+				if release.Tag == *preflightFacts.LatestTag {
+					value := release.ReleaseID
+					expectedLatestReleaseID = &value
+					break
+				}
+			}
+			if expectedLatestReleaseID == nil {
+				return refused()
+			}
+		}
+	} else {
+		var priorFacts stablePublicationVerificationFacts
+		if !decodeCanonical(facts.PriorVerificationFacts, &priorFacts) {
+			return refused()
+		}
+		prior, err := evaluateStablePublicationVerification(priorFacts, facts.PriorVerificationFacts)
+		priorBytes, marshalErr := marshalCanonical(prior)
+		var priorPublicationFacts stablePublicationFacts
+		if err != nil || marshalErr != nil || !bytes.Equal(priorBytes, facts.PriorVerificationDecision) || prior.Outcome != "accepted" || !decodeCanonical(priorFacts.PublicationFacts, &priorPublicationFacts) || priorPublicationFacts.ActionIndex != facts.ActionIndex-1 || !bytes.Equal(priorPublicationFacts.PreflightFacts, facts.PreflightFacts) || !bytes.Equal(priorPublicationFacts.PreflightDecision, facts.PreflightDecision) {
+			return refused()
+		}
+		priorDecisionSHA256 = documentSHA256(facts.PriorVerificationDecision)
+		value := preflight.Actions[facts.ActionIndex-1].ReleaseID
+		expectedLatestReleaseID = &value
+	}
+	if facts.PriorDecisionSHA256 != priorDecisionSHA256 || !validStablePublicationObservation(facts.Observation, preflight.Actions[facts.ActionIndex], expectedLatestReleaseID, false) {
+		return refused()
+	}
+	action := preflight.Actions[facts.ActionIndex]
+	action.FactsSHA256 = documentSHA256(document)
+	action.PriorDecisionSHA256 = priorDecisionSHA256
+	action.ObservedAt = facts.ObservedAt
+	return stablePublicationDecision{Actions: []publishStableReleaseAction{action}, FactsSHA256: action.FactsSHA256, Outcome: "actions-required", PriorDecisionSHA256: priorDecisionSHA256, Schema: qualificationDecisionSchema, Stage: stablePublicationStage}, nil
+}
+
+func verifiedStablePreflight(factsDocument, decisionDocument []byte) (stablePublicationDecision, stablePreflightFacts, error) {
+	var facts stablePreflightFacts
+	if !decodeCanonical(factsDocument, &facts) {
+		return stablePublicationDecision{}, stablePreflightFacts{}, errors.New("stable publication refused")
+	}
+	decision, err := evaluateStablePreflight(facts, factsDocument)
+	decisionBytes, marshalErr := marshalCanonical(decision)
+	if err != nil || marshalErr != nil || !bytes.Equal(decisionBytes, decisionDocument) {
+		return stablePublicationDecision{}, stablePreflightFacts{}, errors.New("stable publication refused")
+	}
+	return decision, facts, nil
+}
+
+func evaluateStablePublicationVerification(facts stablePublicationVerificationFacts, document []byte) (stablePublicationVerificationDecision, error) {
+	refused := func() (stablePublicationVerificationDecision, error) {
+		return stablePublicationVerificationDecision{}, errors.New("stable publication verification refused")
+	}
+	observedAt, observedErr := time.Parse(time.RFC3339, facts.ObservedAt)
+	if facts.Schema != qualificationFactsSchema || facts.Stage != stablePublicationVerificationStage || facts.Attempt == 0 || facts.Attempt > 60 || observedErr != nil || observedAt.Format(time.RFC3339) != facts.ObservedAt || !validSHA256(facts.PriorDecisionSHA256) || secretBearing(document) {
+		return refused()
+	}
+	var publicationFacts stablePublicationFacts
+	if !decodeCanonical(facts.PublicationFacts, &publicationFacts) {
+		return refused()
+	}
+	publication, err := evaluateStablePublication(publicationFacts, facts.PublicationFacts)
+	publicationBytes, marshalErr := marshalCanonical(publication)
+	if err != nil || marshalErr != nil || !bytes.Equal(publicationBytes, facts.PublicationDecision) || facts.PriorDecisionSHA256 != documentSHA256(facts.PublicationDecision) || len(publication.Actions) != 1 {
+		return refused()
+	}
+	publishedAt, publishTimeErr := time.Parse(time.RFC3339, publication.Actions[0].ObservedAt)
+	age := observedAt.Sub(publishedAt)
+	if publishTimeErr != nil || age < 0 {
+		return refused()
+	}
+	decision := stablePublicationVerificationDecision{Actions: []json.RawMessage{}, FactsSHA256: documentSHA256(document), PriorDecisionSHA256: facts.PriorDecisionSHA256, Schema: qualificationDecisionSchema, Stage: stablePublicationVerificationStage}
+	action := publication.Actions[0]
+	latestReleaseID := action.ReleaseID
+	if facts.Observation != nil && age <= 5*time.Minute && validStablePublicationObservation(*facts.Observation, action, &latestReleaseID, true) {
+		decision.Outcome = "accepted"
+		return decision, nil
+	}
+	if facts.Attempt == 60 || age >= 5*time.Minute {
+		decision.Outcome = "propagation-exhausted"
+		return decision, nil
+	}
+	if facts.Observation != nil && !validStablePropagationObservation(*facts.Observation, publicationFacts.Observation, action) {
+		return refused()
+	}
+	decision.Outcome = "propagation-pending"
+	decision.Actions = []json.RawMessage{mustJSON(observeStableReleaseAction{Commit: action.Commit, FactsSHA256: decision.FactsSHA256, PriorDecisionSHA256: facts.PriorDecisionSHA256, ReleaseID: action.ReleaseID, ReleaseIdentity: action.ReleaseIdentity, Tag: action.Tag, Type: "observe-stable-release", WaitSeconds: 5})}
+	return decision, nil
+}
+
+func validStablePublicationObservation(observation stablePublicationObservation, action publishStableReleaseAction, expectedLatestReleaseID *int64, public bool) bool {
+	if !validStablePublicationTarget(observation, action) || !reflect.DeepEqual(observation.LatestReleaseID, expectedLatestReleaseID) {
+		return false
+	}
+	if !public {
+		return observation.Draft && !observation.Immutable && !observation.Prerelease && observation.Attestation == nil && observation.LatestInstallSHA256 == "" && observation.PublicVerification == nil
+	}
+	return !observation.Draft && observation.Immutable && observation.Prerelease == action.Prerelease && observation.LatestReleaseID != nil && *observation.LatestReleaseID == action.ReleaseID && observation.LatestInstallSHA256 == action.Assets[0].SHA256 && observation.Attestation != nil && *observation.Attestation == (stableReleaseAttestation{Commit: action.Commit, Count: 1, Initiator: "github", PredicateType: "release"}) && validPublicLatestVerification(observation.PublicVerification, action)
+}
+
+func validStablePublicationTarget(observation stablePublicationObservation, action publishStableReleaseAction) bool {
+	if observation.ReleaseID != action.ReleaseID || observation.Commit != action.Commit || observation.Sequence != action.Sequence || observation.Tag != action.Tag || observation.ReleaseIdentity != action.ReleaseIdentity || observation.Body != action.Body || len(observation.Assets) != len(action.Assets) || !reflect.DeepEqual(observation.Downloads, action.Assets) {
+		return false
+	}
+	seenAssetIDs := map[int64]bool{}
+	for index, expected := range action.Assets {
+		asset := observation.Assets[index]
+		if asset.ID <= 0 || seenAssetIDs[asset.ID] || asset.Name != expected.Name || asset.SHA256 != expected.SHA256 || asset.Size != expected.Size {
+			return false
+		}
+		seenAssetIDs[asset.ID] = true
+	}
+	return true
+}
+
+func validStablePropagationObservation(observation, prior stablePublicationObservation, action publishStableReleaseAction) bool {
+	if !validStablePublicationTarget(observation, action) || observation.Prerelease {
+		return false
+	}
+	if observation.Draft {
+		return !observation.Immutable && observation.Attestation == nil && observation.LatestInstallSHA256 == "" && reflect.DeepEqual(observation.LatestReleaseID, prior.LatestReleaseID) && pendingPublicLatestVerification(observation.PublicVerification, action, false)
+	}
+	latestPending := reflect.DeepEqual(observation.LatestReleaseID, prior.LatestReleaseID) && observation.LatestInstallSHA256 == "" || observation.LatestReleaseID != nil && *observation.LatestReleaseID == action.ReleaseID && (observation.LatestInstallSHA256 == "" || observation.LatestInstallSHA256 == action.Assets[0].SHA256)
+	attestationPending := observation.Attestation == nil || *observation.Attestation == (stableReleaseAttestation{Commit: action.Commit, Count: 0, Initiator: "", PredicateType: "release"}) || *observation.Attestation == (stableReleaseAttestation{Commit: action.Commit, Count: 1, Initiator: "github", PredicateType: "release"})
+	return latestPending && attestationPending && pendingPublicLatestVerification(observation.PublicVerification, action, observation.LatestReleaseID != nil && *observation.LatestReleaseID == action.ReleaseID)
+}
+
+func validPublicLatestVerification(verification *publicLatestVerification, action publishStableReleaseAction) bool {
+	return verification != nil && verification.Outcome == "accepted" && verification.ReleaseIdentity != nil && *verification.ReleaseIdentity == action.ReleaseIdentity && verification.Sequence != nil && *verification.Sequence == action.Sequence
+}
+
+func pendingPublicLatestVerification(verification *publicLatestVerification, action publishStableReleaseAction, targetIsLatest bool) bool {
+	if verification == nil {
+		return false
+	}
+	switch verification.Outcome {
+	case "unavailable":
+		return verification.ReleaseIdentity == nil && verification.Sequence == nil
+	case "accepted":
+		return verification.ReleaseIdentity != nil && verification.Sequence != nil && (!targetIsLatest || *verification.ReleaseIdentity == action.ReleaseIdentity && *verification.Sequence == action.Sequence)
+	default:
+		return false
+	}
 }
 
 func evaluateCandidateFailureVerification(facts candidateFailureVerificationFacts, document []byte) (candidateFailureVerificationDecision, error) {

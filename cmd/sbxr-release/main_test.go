@@ -115,3 +115,31 @@ func TestReleaseBuildUsesPinnedToolchain(t *testing.T) {
 		t.Skip("release build is pinned to go1.26.6")
 	}
 }
+
+func TestPublicLatestVerificationReportsTheProductionGitHubAdapterResult(t *testing.T) {
+	latest := softwarelifecycle.LatestRelease{Identity: softwarelifecycle.ReleaseIdentity{Repository: softwarelifecycle.Repository, Tag: "v2.0.1", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}, Sequence: 18}
+	for name, fixture := range map[string]struct {
+		outcome softwarelifecycle.LatestReleaseOutcome
+		want    string
+	}{
+		"accepted":    {softwarelifecycle.LatestReleaseAccepted, `{"outcome":"accepted","release_identity":{"commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","release_index_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repository":"albertloky/SBXR","tag":"v2.0.1"},"sequence":18}`},
+		"refused":     {softwarelifecycle.LatestReleaseRefused, `{"outcome":"refused","release_identity":null,"sequence":null}`},
+		"unavailable": {softwarelifecycle.LatestReleaseUnavailable, `{"outcome":"unavailable","release_identity":null,"sequence":null}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := writePublicLatestVerification(t.Context(), &output, latestSource{latest: latest, outcome: fixture.outcome}); err != nil || output.String() != fixture.want {
+				t.Fatalf("verification = %s, %v", output.String(), err)
+			}
+		})
+	}
+}
+
+type latestSource struct {
+	latest  softwarelifecycle.LatestRelease
+	outcome softwarelifecycle.LatestReleaseOutcome
+}
+
+func (source latestSource) CheckLatest(context.Context) (softwarelifecycle.LatestRelease, softwarelifecycle.LatestReleaseOutcome) {
+	return source.latest, source.outcome
+}

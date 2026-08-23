@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
+	githubadapter "github.com/albertloky/SBXR/internal/softwarelifecycle/adapter/github"
 )
 
 type sourceVerifier func(context.Context, string, string) (string, error)
@@ -53,6 +54,13 @@ type gatewayOptions struct {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "verify-public-latest" {
+		if len(os.Args) != 2 || writePublicLatestVerification(context.Background(), os.Stdout, githubadapter.New()) != nil {
+			fmt.Fprintln(os.Stderr, "sbxr public latest verification refused")
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "qualification" {
 		if len(os.Args) != 2 || runQualification(os.Stdin, os.Stdout) != nil {
 			fmt.Fprintln(os.Stderr, "sbxr release qualification refused")
@@ -134,6 +142,41 @@ func main() {
 		fmt.Fprintln(os.Stderr, "sbxr release build refused")
 		os.Exit(1)
 	}
+}
+
+type publicLatestVerification struct {
+	Outcome         string                   `json:"outcome"`
+	ReleaseIdentity *decisionReleaseIdentity `json:"release_identity"`
+	Sequence        *uint64                  `json:"sequence"`
+}
+
+func writePublicLatestVerification(ctx context.Context, output io.Writer, source softwarelifecycle.LatestReleaseSource) error {
+	if ctx == nil || output == nil || source == nil {
+		return errors.New("public latest verification refused")
+	}
+	latest, outcome := source.CheckLatest(ctx)
+	result := publicLatestVerification{}
+	switch outcome {
+	case softwarelifecycle.LatestReleaseAccepted:
+		identity := decisionReleaseIdentity{Commit: latest.Identity.Commit, ReleaseIndexSHA256: latest.Identity.IndexSHA256, Repository: latest.Identity.Repository, Tag: latest.Identity.Tag}
+		if identity.Repository != softwarelifecycle.Repository || !validTag(identity.Tag) || !validCommit(identity.Commit) || !validSHA256(identity.ReleaseIndexSHA256) || latest.Sequence == 0 {
+			return errors.New("public latest verification refused")
+		}
+		sequence := latest.Sequence
+		result = publicLatestVerification{Outcome: "accepted", ReleaseIdentity: &identity, Sequence: &sequence}
+	case softwarelifecycle.LatestReleaseRefused:
+		result.Outcome = "refused"
+	case softwarelifecycle.LatestReleaseUnavailable:
+		result.Outcome = "unavailable"
+	default:
+		return errors.New("public latest verification refused")
+	}
+	body, err := json.Marshal(result)
+	if err != nil {
+		return err
+	}
+	_, err = output.Write(body)
+	return err
 }
 
 func buildApplicationRelease(ctx context.Context, options buildOptions, source sourceVerifier) error {

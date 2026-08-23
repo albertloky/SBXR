@@ -781,6 +781,133 @@ func TestQualificationCommandEvaluatesAcceptanceVPSAndConstructsRecords(t *testi
 		if err != nil || len(jsonObject(t, result)["actions"].([]any)) != wantActions {
 			t.Fatalf("%s stable preflight = %s, %v", name, result, err)
 		}
+		var priorVerificationFacts, priorVerificationDecision any
+		for actionIndex, actionValue := range jsonObject(t, result)["actions"].([]any) {
+			action := actionValue.(map[string]any)
+			assets := action["assets"].([]any)
+			observedAssets, downloads := make([]any, len(assets)), make([]any, len(assets))
+			for assetIndex, assetValue := range assets {
+				asset := assetValue.(map[string]any)
+				id := float64(1000 + actionIndex*10 + assetIndex)
+				observedAssets[assetIndex] = map[string]any{"id": id, "name": asset["name"], "sha256": asset["sha256"], "size": asset["size"]}
+				downloads[assetIndex] = map[string]any{"name": asset["name"], "sha256": asset["sha256"], "size": asset["size"]}
+			}
+			var latestReleaseID any
+			if actionIndex > 0 {
+				latestReleaseID = priorVerificationFacts.(map[string]any)["observation"].(map[string]any)["release_id"]
+			} else if preflightFacts.LatestTag != nil {
+				latestReleaseID = preflightFacts.Releases[0].ID
+			}
+			observation := map[string]any{
+				"assets": observedAssets, "attestation": nil, "body": action["body"], "commit": action["commit"], "downloads": downloads, "draft": true, "immutable": false,
+				"latest_install_sha256": "", "latest_release_id": latestReleaseID, "prerelease": false, "public_verification": nil, "release_id": action["release_id"], "release_identity": action["release_identity"], "sequence": action["sequence"], "tag": action["tag"],
+			}
+			priorDecisionSHA256 := sha256String(string(result))
+			if priorVerificationDecision != nil {
+				priorDecisionSHA256 = sha256String(qualificationDocument(t, priorVerificationDecision))
+			}
+			publicationFacts := map[string]any{
+				"action_index": actionIndex, "approval": map[string]any{"environments": []any{map[string]any{"name": "stable-publication"}}, "state": "approved"}, "observation": observation,
+				"observed_at": "2026-08-23T13:0" + strconv.Itoa(actionIndex+1) + ":00Z", "preflight_decision": jsonValue(t, string(result)), "preflight_facts": facts,
+				"prior_decision_sha256": priorDecisionSHA256, "prior_verification_decision": priorVerificationDecision, "prior_verification_facts": priorVerificationFacts,
+				"schema": qualificationFactsSchema, "stage": "stable-publication",
+			}
+			publicationDocument := qualificationDocument(t, publicationFacts)
+			publicationDecision, err := runQualificationCommand(binary, publicationDocument)
+			if err != nil {
+				t.Fatalf("%s publication %d: %v\n%s", name, actionIndex, err, publicationDecision)
+			}
+			publication := jsonObject(t, publicationDecision)
+			publicationActions := publication["actions"].([]any)
+			if publication["outcome"] != "actions-required" || publication["facts_sha256"] != sha256String(publicationDocument) || publication["prior_decision_sha256"] != priorDecisionSHA256 || len(publicationActions) != 1 {
+				t.Fatalf("%s publication decision = %s", name, publicationDecision)
+			}
+			publish := publicationActions[0].(map[string]any)
+			if publish["tag"] != action["tag"] || publish["release_id"] != action["release_id"] || publish["commit"] != action["commit"] || publish["release_identity"] == nil || publish["prerelease"] != false || publish["latest"] != true {
+				t.Fatalf("%s publication action = %s", name, publicationDecision)
+			}
+
+			pendingFacts := map[string]any{
+				"attempt": 1, "observation": nil, "observed_at": "2026-08-23T13:0" + strconv.Itoa(actionIndex+1) + ":05Z", "prior_decision_sha256": sha256String(string(publicationDecision)),
+				"publication_decision": jsonValue(t, string(publicationDecision)), "publication_facts": publicationFacts, "schema": qualificationFactsSchema, "stage": "stable-publication-verification",
+			}
+			pendingDecision, err := runQualificationCommand(binary, qualificationDocument(t, pendingFacts))
+			if err != nil || jsonObject(t, pendingDecision)["outcome"] != "propagation-pending" || len(jsonObject(t, pendingDecision)["actions"].([]any)) != 1 {
+				t.Fatalf("%s pending propagation = %s, %v", name, pendingDecision, err)
+			}
+			exhaustedFacts := jsonObject(t, []byte(qualificationDocument(t, pendingFacts)))
+			exhaustedFacts["attempt"] = float64(60)
+			exhaustedDecision, exhaustedErr := runQualificationCommand(binary, qualificationDocument(t, exhaustedFacts))
+			if exhaustedErr != nil || jsonObject(t, exhaustedDecision)["outcome"] != "propagation-exhausted" || len(jsonObject(t, exhaustedDecision)["actions"].([]any)) != 0 {
+				t.Fatalf("%s exhausted propagation = %s, %v", name, exhaustedDecision, exhaustedErr)
+			}
+
+			publicObservation := map[string]any{
+				"assets": observedAssets, "attestation": map[string]any{"commit": action["commit"], "count": 1, "initiator": "github", "predicate_type": "release"}, "body": action["body"], "commit": action["commit"], "downloads": downloads,
+				"draft": false, "immutable": true, "latest_install_sha256": assets[0].(map[string]any)["sha256"], "latest_release_id": action["release_id"], "prerelease": false,
+				"public_verification": map[string]any{"outcome": "accepted", "release_identity": action["release_identity"], "sequence": action["sequence"]}, "release_id": action["release_id"], "release_identity": action["release_identity"], "sequence": action["sequence"], "tag": action["tag"],
+			}
+			verificationFacts := map[string]any{
+				"attempt": 2, "observation": publicObservation, "observed_at": "2026-08-23T13:0" + strconv.Itoa(actionIndex+1) + ":10Z", "prior_decision_sha256": sha256String(string(publicationDecision)),
+				"publication_decision": jsonValue(t, string(publicationDecision)), "publication_facts": publicationFacts, "schema": qualificationFactsSchema, "stage": "stable-publication-verification",
+			}
+			verificationDocument := qualificationDocument(t, verificationFacts)
+			visiblePropagation := jsonObject(t, []byte(verificationDocument))
+			visibleObservation := visiblePropagation["observation"].(map[string]any)
+			visibleObservation["attestation"] = nil
+			visibleObservation["immutable"] = false
+			visibleObservation["latest_install_sha256"] = ""
+			visibleDecision, visibleErr := runQualificationCommand(binary, qualificationDocument(t, visiblePropagation))
+			if visibleErr != nil || jsonObject(t, visibleDecision)["outcome"] != "propagation-pending" {
+				t.Fatalf("%s visible propagation = %s, %v", name, visibleDecision, visibleErr)
+			}
+			mixedPropagation := jsonObject(t, []byte(verificationDocument))
+			mixedObservation := mixedPropagation["observation"].(map[string]any)
+			mixedObservation["immutable"] = false
+			mixedObservation["latest_install_sha256"] = ""
+			mixedDecision, mixedErr := runQualificationCommand(binary, qualificationDocument(t, mixedPropagation))
+			if mixedErr != nil || jsonObject(t, mixedDecision)["outcome"] != "propagation-pending" {
+				t.Fatalf("%s mixed propagation = %s, %v", name, mixedDecision, mixedErr)
+			}
+			verificationDecision, err := runQualificationCommand(binary, verificationDocument)
+			if err != nil || jsonObject(t, verificationDecision)["outcome"] != "accepted" || len(jsonObject(t, verificationDecision)["actions"].([]any)) != 0 {
+				t.Fatalf("%s public verification = %s, %v", name, verificationDecision, err)
+			}
+			if retry, retryErr := runQualificationCommand(binary, verificationDocument); retryErr != nil || !bytes.Equal(retry, verificationDecision) {
+				t.Fatalf("%s public verification retry = %s, %v", name, retry, retryErr)
+			}
+			finalAttempt := jsonObject(t, []byte(verificationDocument))
+			finalAttempt["attempt"] = float64(60)
+			finalAttemptDecision, finalAttemptErr := runQualificationCommand(binary, qualificationDocument(t, finalAttempt))
+			if finalAttemptErr != nil || jsonObject(t, finalAttemptDecision)["outcome"] != "accepted" {
+				t.Fatalf("%s final-attempt verification = %s, %v", name, finalAttemptDecision, finalAttemptErr)
+			}
+			deadline := jsonObject(t, []byte(verificationDocument))
+			deadline["observed_at"] = "2026-08-23T13:0" + strconv.Itoa(actionIndex+6) + ":00Z"
+			deadlineDecision, deadlineErr := runQualificationCommand(binary, qualificationDocument(t, deadline))
+			if deadlineErr != nil || jsonObject(t, deadlineDecision)["outcome"] != "accepted" {
+				t.Fatalf("%s deadline verification = %s, %v", name, deadlineDecision, deadlineErr)
+			}
+			for hostileName, mutate := range map[string]func(map[string]any){
+				"wrong Latest selection": func(value map[string]any) { value["observation"].(map[string]any)["latest_release_id"] = float64(999) },
+				"changed downloaded bytes": func(value map[string]any) {
+					value["observation"].(map[string]any)["downloads"].([]any)[0].(map[string]any)["sha256"] = strings.Repeat("9", 64)
+				},
+				"changed Acceptance Record": func(value map[string]any) { value["observation"].(map[string]any)["body"] = "changed" },
+				"wrong attestation": func(value map[string]any) {
+					value["observation"].(map[string]any)["attestation"].(map[string]any)["initiator"] = "other"
+				},
+				"public verifier refusal": func(value map[string]any) {
+					value["observation"].(map[string]any)["public_verification"] = map[string]any{"outcome": "refused", "release_identity": nil, "sequence": nil}
+				},
+				"stale publication decision": func(value map[string]any) { value["prior_decision_sha256"] = strings.Repeat("9", 64) },
+			} {
+				hostile := jsonObject(t, []byte(verificationDocument))
+				mutate(hostile)
+				assertQualificationRefused(t, binary, qualificationDocument(t, hostile), hostileName)
+			}
+			priorVerificationFacts, priorVerificationDecision = verificationFacts, jsonValue(t, string(verificationDecision))
+		}
 	}
 
 	initialPreflight := candidateFacts("normal")

@@ -169,64 +169,52 @@ jobs:
           manifest=verified/qualification-manifest.json
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/approvals" > approvals.json
           jq -e '[.[] | select(.state == "approved" and any(.environments[]; .name == "stable-publication"))] | length > 0' approvals.json >/dev/null
-          mkdir -m 0700 public rechecked
+          jq -cS '[.[] | select(.state == "approved" and any(.environments[]; .name == "stable-publication"))][0] | {environments:[{name:"stable-publication"}],state:.state}' approvals.json > approval.json
+          mkdir -m 0700 public publication-evidence rechecked
 
-          recheck_draft() {
-            local index=$1 release tag commit release_id directory metadata asset name proof
-            release="$(jq -c ".releases[$index]" "$manifest")"
-            tag="$(jq -r .tag <<<"$release")"
-            commit="$(jq -r .commit <<<"$release")"
-            release_id="$(jq -r .release_id <<<"$release")"
-            directory="rechecked/$tag"
-            metadata="rechecked/$tag.metadata.json"
+          collect_observation() {
+            local action=$1 directory=$2 public=$3 tag commit release_id metadata asset name sha256 attestation latest_install_sha256 latest_release_id public_verification release_identity sequence
+            tag="$(jq -r .tag <<<"$action")"
+            commit="$(jq -r .commit <<<"$action")"
+            release_id="$(jq -r .release_id <<<"$action")"
+            metadata="$directory.metadata.json"
             mkdir -m 0700 "$directory"
-            gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$metadata"
-            jq -e --arg tag "$tag" --arg commit "$commit" --argjson id "$release_id" '.id == $id and .tag_name == $tag and .target_commitish == $commit and .draft == true and .prerelease == false and .immutable == false and (.assets | length) == 4 and (.assets | map(.name) | sort) == ["install.sh","release-index.json","sbxr-linux-amd64.tar.gz","sbxr-linux-arm64.tar.gz"]' "$metadata" >/dev/null
-            jq -j .body "$metadata" | cmp - "verified/records/$tag.md"
+            gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$metadata" || return 1
+            printf '[]' > "$directory.assets.json"
+            printf '[]' > "$directory.downloads.json"
             while read -r asset; do
               name="$(jq -r .name <<<"$asset")"
-              proof="$(jq -c --arg name "$name" '.assets[] | select(.name == $name)' <<<"$release")"
-              test -n "$proof"
-              test "$(jq -r .size <<<"$asset")" -eq "$(jq -r .size <<<"$proof")"
-              test "$(jq -r .digest <<<"$asset")" = "sha256:$(jq -r .sha256 <<<"$proof")"
-              gh api "repos/$GITHUB_REPOSITORY/releases/assets/$(jq -r .id <<<"$asset")" -H 'Accept: application/octet-stream' > "$directory/$name"
-              test "$(stat -c %s "$directory/$name")" -eq "$(jq -r .size <<<"$proof")"
-              test "$(sha256sum "$directory/$name" | cut -d' ' -f1)" = "$(jq -r .sha256 <<<"$proof")"
-              cmp "verified/release/$tag/$name" "$directory/$name"
+              if test "$public" = true; then
+                curl -fsSL "https://github.com/$GITHUB_REPOSITORY/releases/download/$tag/$name" -o "$directory/$name" || return 1
+              else
+                gh api "repos/$GITHUB_REPOSITORY/releases/assets/$(jq -r .id <<<"$asset")" -H 'Accept: application/octet-stream' > "$directory/$name" || return 1
+              fi
+              sha256="$(jq -r .digest <<<"$asset")"
+              jq -cS --arg name "$name" --arg sha256 "${sha256#sha256:}" --argjson id "$(jq -r .id <<<"$asset")" --argjson size "$(jq -r .size <<<"$asset")" '. + [{id:$id,name:$name,sha256:$sha256,size:$size}] | sort_by(.name)' "$directory.assets.json" > "$directory.assets.next"
+              mv "$directory.assets.next" "$directory.assets.json"
+              jq -cS --arg name "$name" --arg sha256 "$(sha256sum "$directory/$name" | cut -d' ' -f1)" --argjson size "$(stat -c %s "$directory/$name")" '. + [{name:$name,sha256:$sha256,size:$size}] | sort_by(.name)' "$directory.downloads.json" > "$directory.downloads.next"
+              mv "$directory.downloads.next" "$directory.downloads.json"
             done < <(jq -c '.assets[]' "$metadata")
-            test "$(find "$directory" -maxdepth 1 -type f -printf '%f\n' | sort)" = "$(printf '%s\n' install.sh release-index.json sbxr-linux-amd64.tar.gz sbxr-linux-arm64.tar.gz | sort)"
+            release_identity="$(jq -cS --arg sha256 "$(sha256sum "$directory/release-index.json" | cut -d' ' -f1)" '{commit:.commit,release_index_sha256:$sha256,repository:.repository,tag:.tag}' "$directory/release-index.json")"
+            sequence="$(jq -r .sequence "$directory/release-index.json")"
+            latest_release_id=null
+            if latest="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .id 2>/dev/null)"; then latest_release_id="$latest"; fi
+            attestation=null
+            latest_install_sha256=
+            public_verification=null
+            if test "$public" = true; then
+              if gh api "repos/$GITHUB_REPOSITORY/attestations/sha1:$commit?predicate_type=release&per_page=100" > "$directory.attestation.json" 2>/dev/null; then
+                attestation="$(jq -cS --arg commit "$commit" '{commit:$commit,count:(.attestations|length),initiator:(if (.attestations|length) == 1 then .attestations[0].initiator else "" end),predicate_type:"release"}' "$directory.attestation.json")"
+              fi
+              if curl -fsSL "https://github.com/$GITHUB_REPOSITORY/releases/latest/download/install.sh" -o "$directory.latest-install.sh"; then latest_install_sha256="$(sha256sum "$directory.latest-install.sh" | cut -d' ' -f1)"; fi
+              go run ./cmd/sbxr-release verify-public-latest > "$directory.public-verification.json" || return 1
+              public_verification="$(cat "$directory.public-verification.json")"
+            fi
+            jq -cnS --slurpfile assets "$directory.assets.json" --argjson attestation "$attestation" --slurpfile downloads "$directory.downloads.json" --arg latest_install_sha256 "$latest_install_sha256" --argjson latest_release_id "$latest_release_id" --slurpfile metadata "$metadata" --argjson public_verification "$public_verification" --argjson release_identity "$release_identity" --argjson sequence "$sequence" '{assets:$assets[0],attestation:$attestation,body:$metadata[0].body,commit:$metadata[0].target_commitish,downloads:$downloads[0],draft:$metadata[0].draft,immutable:($metadata[0].immutable // false),latest_install_sha256:$latest_install_sha256,latest_release_id:$latest_release_id,prerelease:$metadata[0].prerelease,public_verification:$public_verification,release_id:$metadata[0].id,release_identity:$release_identity,sequence:$sequence,tag:$metadata[0].tag_name}' | tr -d '\n'
           }
 
-          verify_public() {
-            local index=$1 latest=$2 release tag commit release_id directory metadata name
-            release="$(jq -c ".releases[$index]" "$manifest")"
-            tag="$(jq -r .tag <<<"$release")"
-            commit="$(jq -r .commit <<<"$release")"
-            release_id="$(jq -r .release_id <<<"$release")"
-            directory="public/$tag"
-            metadata="public/$tag.metadata.json"
-            mkdir -m 0700 "$directory"
-            deadline=$((SECONDS + 300))
-            for attempt in $(seq 1 60); do
-              if gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$metadata" 2>/dev/null &&
-                 jq -e --arg tag "$tag" --arg commit "$commit" --argjson id "$release_id" '.id == $id and .tag_name == $tag and .target_commitish == $commit and .draft == false and .prerelease == false and .immutable == true and (.assets | length) == 4 and (.assets | map(.name) | sort) == ["install.sh","release-index.json","sbxr-linux-amd64.tar.gz","sbxr-linux-arm64.tar.gz"]' "$metadata" >/dev/null &&
-                 gh api "repos/$GITHUB_REPOSITORY/attestations/sha1:$commit?predicate_type=release&per_page=100" --jq 'select((.attestations | length) == 1 and .attestations[0].initiator == "github")' >/dev/null 2>&1; then
-                break
-              fi
-              test "$attempt" -lt 60
-              test "$SECONDS" -lt "$deadline"
-              sleep 5
-            done
-            if test "$latest" = true; then test "$release_id" = "$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .id)"; fi
-            jq -j .body "$metadata" | cmp - "verified/records/$tag.md"
-            while read -r asset; do
-              name="$(jq -r .name <<<"$asset")"
-              remaining=$((deadline - SECONDS))
-              test "$remaining" -gt 0
-              curl -fsSL --retry 60 --retry-delay 5 --retry-max-time "$remaining" --retry-all-errors "https://github.com/$GITHUB_REPOSITORY/releases/download/$tag/$name" -o "$directory/$name"
-              cmp "verified/release/$tag/$name" "$directory/$name"
-            done < <(jq -c '.assets[]' "$metadata")
-            test "$(find "$directory" -maxdepth 1 -type f -printf '%f\n' | sort)" = "$(printf '%s\n' install.sh release-index.json sbxr-linux-amd64.tar.gz sbxr-linux-arm64.tar.gz | sort)"
+          verify_public_package() {
+            local directory=$1 tag=$2
             go run ./cmd/sbxr-release verify-package -directory "$directory" -architecture amd64
             go run ./cmd/sbxr-release verify-package -directory "$directory" -architecture arm64
             sudo bash "$directory/install.sh" > "$tag-install.transcript"
@@ -243,23 +231,54 @@ jobs:
             sudo rm -r /var/lib/sbxr
           }
 
-          facts_sha256="$(sha256sum verified/stable-preflight-facts.json | cut -d' ' -f1)"
-          prior_decision_sha256="$(jq -r .prior_decision_sha256 verified/stable-preflight-decision.json)"
-          while read -r action; do
-            jq -e --arg facts_sha256 "$facts_sha256" --arg prior_decision_sha256 "$prior_decision_sha256" '.type == "publish-stable-release" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256 and .latest == true' <<<"$action" >/dev/null
+          printf 'null' > prior-verification-facts.json
+          printf 'null' > prior-verification-decision.json
+          for action_index in $(seq 0 "$(($(jq '.actions | length' verified/stable-preflight-decision.json) - 1))"); do
+            preflight_action="$(jq -c ".actions[$action_index]" verified/stable-preflight-decision.json)"
+            tag="$(jq -r .tag <<<"$preflight_action")"
+            collect_observation "$preflight_action" "rechecked/$tag" false > stable-publication-observation.json
+            prior_decision_sha256="$(sha256sum verified/stable-preflight-decision.json | cut -d' ' -f1)"
+            if test "$action_index" -gt 0; then prior_decision_sha256="$(sha256sum prior-verification-decision.json | cut -d' ' -f1)"; fi
+            jq -cnS --argjson action_index "$action_index" --slurpfile approval approval.json --slurpfile observation stable-publication-observation.json --arg observed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --slurpfile preflight_decision verified/stable-preflight-decision.json --slurpfile preflight_facts verified/stable-preflight-facts.json --arg prior_decision_sha256 "$prior_decision_sha256" --slurpfile prior_verification_decision prior-verification-decision.json --slurpfile prior_verification_facts prior-verification-facts.json '{action_index:$action_index,approval:$approval[0],observation:$observation[0],observed_at:$observed_at,preflight_decision:$preflight_decision[0],preflight_facts:$preflight_facts[0],prior_decision_sha256:$prior_decision_sha256,prior_verification_decision:$prior_verification_decision[0],prior_verification_facts:$prior_verification_facts[0],schema:"sbxr-release-qualification-facts-v1",stage:"stable-publication"}' | tr -d '\n' > stable-publication-facts.json
+            mkdir -m 0700 "publication-evidence/$action_index"
+            cp stable-publication-facts.json "publication-evidence/$action_index/"
+            go run ./cmd/sbxr-release qualification < stable-publication-facts.json > stable-publication-decision.json
+            cp stable-publication-decision.json "publication-evidence/$action_index/"
+            facts_sha256="$(sha256sum stable-publication-facts.json | cut -d' ' -f1)"
+            jq -e --arg facts_sha256 "$facts_sha256" --arg prior_decision_sha256 "$prior_decision_sha256" '.schema == "sbxr-release-qualification-decision-v1" and .stage == "stable-publication" and .outcome == "actions-required" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256 and (.actions | length) == 1 and .actions[0].type == "publish-stable-release" and .actions[0].facts_sha256 == $facts_sha256 and .actions[0].prior_decision_sha256 == $prior_decision_sha256' stable-publication-decision.json >/dev/null
+            action="$(jq -c .actions[0] stable-publication-decision.json)"
+            jq -e '.draft == false and .immutable == true and .prerelease == false and .latest == true' <<<"$action" >/dev/null
             tag="$(jq -r .tag <<<"$action")"
-            index="$(jq -r --arg tag "$tag" '.releases | map(.tag == $tag) | index(true)' "$manifest")"
-            jq -e --argjson action "$action" --argjson index "$index" '.releases[$index] | .tag == $action.tag and .commit == $action.commit and .sequence == $action.sequence and .release_id == $action.release_id and .release_identity == $action.release_identity and .assets == $action.assets' "$manifest" >/dev/null
-            recheck_draft "$index"
+            release_id="$(jq -r .release_id <<<"$action")"
             printf '%s\n' "$(jq -r .failure_reason <<<"$action")" > publication-stage
             jq -jr .body <<<"$action" | cmp - "verified/records/$tag.md"
-            gh release edit "$tag" --draft=false --prerelease=false --latest
-            verify_public "$index" true
-          done < <(jq -c '.actions[]' verified/stable-preflight-decision.json)
-          latest_tag="$(jq -r '.actions[-1].tag' verified/stable-preflight-decision.json)"
-          curl -fsSL --retry 5 --retry-all-errors "https://github.com/$GITHUB_REPOSITORY/releases/latest/download/install.sh" -o latest-install.sh
-          curl -fsSL --retry 5 --retry-all-errors "https://github.com/$GITHUB_REPOSITORY/releases/download/$latest_tag/install.sh" -o pinned-install.sh
-          cmp latest-install.sh pinned-install.sh
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" -F draft=false -F prerelease=false -f make_latest=true >/dev/null
+            for attempt in $(seq 1 60); do
+              if collect_observation "$action" "public/$tag" true > stable-publication-verification-observation.next; then mv stable-publication-verification-observation.next stable-publication-verification-observation.json; else printf 'null' > stable-publication-verification-observation.json; fi
+              prior_decision_sha256="$(sha256sum stable-publication-decision.json | cut -d' ' -f1)"
+              jq -cnS --argjson attempt "$attempt" --slurpfile observation stable-publication-verification-observation.json --arg observed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg prior_decision_sha256 "$prior_decision_sha256" --slurpfile publication_decision stable-publication-decision.json --slurpfile publication_facts stable-publication-facts.json '{attempt:$attempt,observation:$observation[0],observed_at:$observed_at,prior_decision_sha256:$prior_decision_sha256,publication_decision:$publication_decision[0],publication_facts:$publication_facts[0],schema:"sbxr-release-qualification-facts-v1",stage:"stable-publication-verification"}' | tr -d '\n' > stable-publication-verification-facts.json
+              cp stable-publication-verification-facts.json "publication-evidence/$action_index/attempt-$attempt-facts.json"
+              go run ./cmd/sbxr-release qualification < stable-publication-verification-facts.json > stable-publication-verification-decision.json
+              cp stable-publication-verification-decision.json "publication-evidence/$action_index/attempt-$attempt-decision.json"
+              outcome="$(jq -r .outcome stable-publication-verification-decision.json)"
+              if jq -e '.schema == "sbxr-release-qualification-decision-v1" and .stage == "stable-publication-verification" and .outcome == "accepted" and (.actions | length) == 0' stable-publication-verification-decision.json >/dev/null; then break; fi
+              test "$outcome" = "propagation-pending"
+              jq -e --arg prior_decision_sha256 "$prior_decision_sha256" --arg tag "$tag" '.actions | length == 1 and .[0].type == "observe-stable-release" and .[0].prior_decision_sha256 == $prior_decision_sha256 and .[0].tag == $tag' stable-publication-verification-decision.json >/dev/null
+              sleep "$(jq -r .actions[0].wait_seconds stable-publication-verification-decision.json)"
+            done
+            test "$outcome" = accepted
+            verify_public_package "public/$tag" "$tag"
+            cp stable-publication-verification-facts.json prior-verification-facts.json
+            cp stable-publication-verification-decision.json prior-verification-decision.json
+          done
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: stable-publication-decisions-${{ github.run_id }}
+          path: publication-evidence
+          if-no-files-found: ignore
+          retention-days: 90
 
       - name: Prove stable B install, Check, and Update are exact no-ops
         run: |
