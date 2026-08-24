@@ -540,9 +540,11 @@ jobs:
           while read -r release; do
             tag="$(jq -r .tag <<<"$release")"
             release_id="$(jq -r .release_id <<<"$release")"
+            expected_state="$(jq -c --arg tag "$tag" '.[] | select(.tag == $tag) | {draft,immutable,prerelease}' drafts.json)"
+            test -n "$expected_state"
             mkdir -m 0700 "assets/$tag"
             gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > release.json
-            jq -e --argjson expected "$release" '.id == $expected.release_id and .tag_name == $expected.tag and .target_commitish == $expected.commit and .draft == $expected.draft and .prerelease == $expected.prerelease and (.immutable // false) == $expected.immutable and (.assets | length) == 4' release.json >/dev/null
+            jq -e --argjson expected "$release" --argjson state "$expected_state" '.id == $expected.release_id and .tag_name == $expected.tag and .target_commitish == $expected.commit and .draft == $state.draft and .prerelease == $state.prerelease and (.immutable // false) == $state.immutable and (.assets | length) == 4' release.json >/dev/null
             while read -r asset; do
               name="$(jq -r .name <<<"$asset")"
               proof="$(jq -c --arg name "$name" '.assets[] | select(.name == $name)' <<<"$release")"
