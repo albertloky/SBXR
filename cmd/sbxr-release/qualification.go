@@ -1240,7 +1240,7 @@ func validStableFailureManifest(manifest qualificationManifest) bool {
 		}
 	}
 	for index, release := range manifest.Releases {
-		if release.ReleaseID <= 0 || release.Sequence == 0 || release.Commit != manifest.Workflow.Commit || release.ReleaseIdentity != (decisionReleaseIdentity{Commit: release.Commit, ReleaseIndexSHA256: release.ReleaseIdentity.ReleaseIndexSHA256, Repository: softwarelifecycle.Repository, Tag: release.Tag}) || !validSHA256(release.ReleaseIdentity.ReleaseIndexSHA256) || !validTag(release.Tag) || len(release.Assets) != 4 {
+		if release.ReleaseID <= 0 || release.Sequence == 0 || (index != 0 || manifest.SourceState == "initial-normal") && release.Commit != manifest.Workflow.Commit || release.ReleaseIdentity != (decisionReleaseIdentity{Commit: release.Commit, ReleaseIndexSHA256: release.ReleaseIdentity.ReleaseIndexSHA256, Repository: softwarelifecycle.Repository, Tag: release.Tag}) || !validSHA256(release.ReleaseIdentity.ReleaseIndexSHA256) || !validTag(release.Tag) || len(release.Assets) != 4 {
 			return false
 		}
 		if index == 0 && manifest.SourceState != "initial-normal" {

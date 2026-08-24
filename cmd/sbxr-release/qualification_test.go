@@ -644,6 +644,40 @@ func TestQualificationCommandFinalizesStableFailures(t *testing.T) {
 		})
 	}
 
+	rescue := candidateFacts("rescue")
+	rescue.Candidate.DefectIssueURL = stringPointer("https://github.com/albertloky/SBXR/issues/99")
+	rescue.Candidate.FailedNormalRunID = stringPointer("123")
+	rescue.DefectIssue = &defectIssue{State: "open", URL: *rescue.Candidate.DefectIssueURL}
+	rescue.FailedNormalRun = &failedNormalRun{Conclusion: "failure", ID: "123", Mode: "normal", Path: ".github/workflows/candidate.yml"}
+	rescue.Releases = []observedRelease{qualifiedRelease(true)}
+	rescue.Tags = []string{"v2.0.0"}
+	rescue.BurnedIdentities = []burnedIdentity{{Commit: strings.Repeat("e", 40), OriginalTag: "v2.0.0", QualificationRunURL: failedRunURL("123"), Reason: "post-sign-qualification-failure", RecordedAt: "2026-08-23T00:00:00Z", ReleaseIndexSHA256: strings.Repeat("2", 64), Sequence: 17}}
+	_, rescueManifestDocument := qualificationBoundaryForCandidate(t, binary, rescue)
+	rescueManifest := jsonObject(t, rescueManifestDocument)
+	rescueObservations := make([]any, 0, 2)
+	for index, value := range rescueManifest["releases"].([]any) {
+		release := value.(map[string]any)
+		rescueObservations = append(rescueObservations, map[string]any{
+			"assets": release["assets"], "body": stableQualifiedRecordFixture(t, rescueManifestDocument, index), "commit": release["commit"], "draft": release["draft"], "immutable": release["immutable"], "prerelease": release["prerelease"], "publicly_verified": false,
+			"release_id": release["release_id"], "release_identity": release["release_identity"], "release_present": true, "sequence": release["sequence"], "tag": release["tag"], "tag_commit": nil,
+		})
+	}
+	rescueAbandonment := qualificationDocument(t, map[string]any{
+		"burned_identities": rescue.BurnedIdentities,
+		"candidate_run":     map[string]any{"conclusion": "success", "created_at": "2026-08-22T00:00:00Z", "event": "workflow_dispatch", "head_sha": strings.Repeat("d", 40), "id": "123", "path": ".github/workflows/candidate.yml"},
+		"finalization_run":  map[string]any{"created_at": "2026-08-23T00:00:00Z", "head_sha": strings.Repeat("d", 40), "id": "456", "path": ".github/workflows/stable.yml", "url": "https://github.com/albertloky/SBXR/actions/runs/456"},
+		"manifest_attested": true, "observations": rescueObservations, "observed_at": "2026-08-23T00:00:00Z", "operation": "abandon", "publication_stage": "prepublication-failure",
+		"schema": qualificationFactsSchema, "signed_manifest": rescueManifest, "stage": "stable-failure-finalization",
+	})
+	rescueDecision, rescueErr := runQualificationCommand(binary, rescueAbandonment)
+	if rescueErr != nil {
+		t.Fatalf("rescue abandonment: %v\n%s", rescueErr, rescueDecision)
+	}
+	rescueResult := jsonObject(t, rescueDecision)
+	if rescueResult["outcome"] != "withdraw" || rescueResult["reason"] != "owner-abandoned" || len(rescueResult["actions"].([]any)) != 1 {
+		t.Fatalf("rescue abandonment decision = %s", rescueDecision)
+	}
+
 	partial := jsonObject(t, []byte(document))
 	partial["publication_stage"] = "b-publication-or-verification-failure"
 	partial["observations"].([]any)[1].(map[string]any)["tag_commit"] = strings.Repeat("d", 40)
