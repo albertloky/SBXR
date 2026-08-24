@@ -220,13 +220,16 @@ type qualificationRelease struct {
 }
 
 type qualificationManifest struct {
-	Schema        string                            `json:"schema"`
-	Repository    string                            `json:"repository"`
-	Approval      json.RawMessage                   `json:"approval"`
-	DecisionChain []qualificationDecisionChainEntry `json:"decision_chain"`
-	Mode          string                            `json:"mode"`
-	SourceState   string                            `json:"source_state"`
-	Workflow      struct {
+	Schema     string `json:"schema"`
+	Repository string `json:"repository"`
+	Approval   struct {
+		DecisionChain []qualificationDecisionChainEntry `json:"decision_chain"`
+		Environments  json.RawMessage                   `json:"environments"`
+		State         string                            `json:"state"`
+	} `json:"approval"`
+	Mode        string `json:"mode"`
+	SourceState string `json:"source_state"`
+	Workflow    struct {
 		Path   string `json:"path"`
 		Ref    string `json:"ref"`
 		Commit string `json:"commit"`
@@ -272,7 +275,7 @@ func (source Source) qualificationLatest(release githubRelease, metadata map[str
 	var manifest qualificationManifest
 	decoder := json.NewDecoder(bytes.NewReader(proof.Manifest))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&manifest) != nil || decoder.Decode(&struct{}{}) != io.EOF || manifest.Schema != "sbxr-qualification-manifest-v1" || manifest.Repository != softwarelifecycle.Repository || manifest.Workflow.Path != ".github/workflows/candidate.yml" || manifest.Workflow.Ref != "albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main" || !commitPattern.MatchString(manifest.Workflow.Commit) || !workflowEvidencePattern.MatchString(manifest.Workflow.RunURL) || manifest.Workflow.RunID == "" || !strings.HasSuffix(manifest.Workflow.RunURL, "/"+manifest.Workflow.RunID) || !hashPattern.MatchString(manifest.CandidateFailureStateSHA256) || !validQualificationDecisionChain(manifest.DecisionChain) || len(manifest.Releases) != 2 {
+	if decoder.Decode(&manifest) != nil || decoder.Decode(&struct{}{}) != io.EOF || manifest.Schema != "sbxr-qualification-manifest-v1" || manifest.Repository != softwarelifecycle.Repository || manifest.Workflow.Path != ".github/workflows/candidate.yml" || manifest.Workflow.Ref != "albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main" || !commitPattern.MatchString(manifest.Workflow.Commit) || !workflowEvidencePattern.MatchString(manifest.Workflow.RunURL) || manifest.Workflow.RunID == "" || !strings.HasSuffix(manifest.Workflow.RunURL, "/"+manifest.Workflow.RunID) || !hashPattern.MatchString(manifest.CandidateFailureStateSHA256) || !validQualificationDecisionChain(manifest.Approval.DecisionChain) || len(manifest.Releases) != 2 {
 		return "", 0, false
 	}
 	digest := sha256.Sum256(proof.Manifest)

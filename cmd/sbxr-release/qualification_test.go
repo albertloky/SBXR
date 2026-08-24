@@ -98,10 +98,10 @@ func TestQualificationCommandPreservesLaterNormalAndRescuePreflight(t *testing.T
 
 	laterBoundaryFacts, laterManifest := qualificationBoundaryForCandidate(t, binary, later)
 	rescueBoundaryFacts, rescueManifest := qualificationBoundaryForCandidate(t, binary, rescue)
-	if got := sha256String(string(laterManifest)); got != "dfa0b3ea4f0220a087a134d3703f94a8197a617e97f39cb036313ce99a76c72f" {
+	if got := sha256String(string(laterManifest)); got != "273a3ab9c7aeaeb356a263c8ddfb3825cc12c85b1307671d698ebed6d1442d43" {
 		t.Fatalf("later manifest SHA-256 = %s", got)
 	}
-	if got := sha256String(string(rescueManifest)); got != "e31a5b63a3b6d069baf4d573a0d3c569e6b903d087c436d1f7458253fb47df88" {
+	if got := sha256String(string(rescueManifest)); got != "beb13f2792ed3d7c87d044d327bf6e89fa8ddd23ffaab9795ec468942471e8c0" {
 		t.Fatalf("rescue manifest SHA-256 = %s", got)
 	}
 	for name, fixture := range map[string]struct {
@@ -385,12 +385,27 @@ func TestQualificationCommandConstructsQualificationManifest(t *testing.T) {
 		t.Fatalf("qualification boundary: %v\n%s", err, manifest)
 	}
 	const expectedManifest = `{"acceptance_vps_checklist_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","approval":{"environments":[{"name":"acceptance-vps"}],"state":"approved"},"candidate_failure_state_sha256":"9999999999999999999999999999999999999999999999999999999999999999","decision_chain":[{"decision_sha256":"c080cc282e985f1e7cda6646d9b47b15b4aa855575d777c582e2cfc1fbda411e","facts_sha256":"2e51e83e75a08169f2d6a424ab510f83954bab4e29b35efbfb84e48545f780a3","outcome":"accepted","stage":"candidate-preflight"},{"decision_sha256":"f259e157613df307ff05e306735181635da422fceecbd7c8a5d732c7b7bf2ec6","facts_sha256":"4190445f74b68e64d8fe93d90cb6fc72b0009b85b8d50cd1defb0e8774af8517","outcome":"actions-required","stage":"candidate-draft-construction"},{"decision_sha256":"fdaa1b143a9eac4a65fc28848966aa5f97b8d13e8e1e56f25dbd3daaeafcc064","facts_sha256":"e4a471efeaf0dbcf03ed384aea69ab3f01c72fc088a3d4e2f1c61b2467866129","outcome":"accepted","stage":"candidate-draft-verification"}],"mode":"normal","native_evidence":[{"path":"native/native-v2.0.0-amd64/evidence/native-amd64.json","sha256":"5555555555555555555555555555555555555555555555555555555555555555"},{"path":"native/native-v2.0.0-arm64/evidence/native-arm64.json","sha256":"6666666666666666666666666666666666666666666666666666666666666666"},{"path":"native/native-v2.0.1-amd64/evidence/native-amd64.json","sha256":"7777777777777777777777777777777777777777777777777777777777777777"},{"path":"native/native-v2.0.1-arm64/evidence/native-arm64.json","sha256":"8888888888888888888888888888888888888888888888888888888888888888"}],"pinned_actions":["actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803","actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16","actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02","actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093","actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661"],"releases":[{"assets":[{"name":"install.sh","sha256":"1111111111111111111111111111111111111111111111111111111111111111","size":10},{"name":"release-index.json","sha256":"2222222222222222222222222222222222222222222222222222222222222222","size":11},{"name":"sbxr-linux-amd64.tar.gz","sha256":"3333333333333333333333333333333333333333333333333333333333333333","size":12},{"name":"sbxr-linux-arm64.tar.gz","sha256":"4444444444444444444444444444444444444444444444444444444444444444","size":13}],"commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","release_id":71,"release_identity":{"commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","release_index_sha256":"2222222222222222222222222222222222222222222222222222222222222222","repository":"albertloky/SBXR","tag":"v2.0.0"},"sequence":17,"tag":"v2.0.0"},{"assets":[{"name":"install.sh","sha256":"1111111111111111111111111111111111111111111111111111111111111111","size":10},{"name":"release-index.json","sha256":"2222222222222222222222222222222222222222222222222222222222222222","size":11},{"name":"sbxr-linux-amd64.tar.gz","sha256":"3333333333333333333333333333333333333333333333333333333333333333","size":12},{"name":"sbxr-linux-arm64.tar.gz","sha256":"4444444444444444444444444444444444444444444444444444444444444444","size":13}],"commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","release_id":72,"release_identity":{"commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","release_index_sha256":"2222222222222222222222222222222222222222222222222222222222222222","repository":"albertloky/SBXR","tag":"v2.0.1"},"sequence":18,"tag":"v2.0.1"}],"repository":"albertloky/SBXR","rescue":null,"schema":"sbxr-qualification-manifest-v1","source_state":"initial-normal","workflow":{"commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","path":".github/workflows/candidate.yml","ref":"albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main","run_id":"123","run_url":"https://github.com/albertloky/SBXR/actions/runs/123"}}`
-	if got := sha256String(string(manifest)); got != "81087b5c4136828956bc4233a7956fe287775af3f41f25626261128f2642f8a2" {
+	if got := sha256String(string(manifest)); got != "9273c3349a193ca7257425141a1d08651d7f808ec2caa74e70ab5882d7e99d1b" {
 		t.Fatalf("qualification manifest SHA-256 = %s", got)
 	}
-	previousManifest := bytes.ReplaceAll(manifest, []byte(`,"draft":true,"immutable":false,"prerelease":false`), nil)
-	previousManifest = bytes.ReplaceAll(previousManifest, []byte("884f03fdaa74a86c7a451683a385eb909473371709e74a47ea82b1550f79e6a1"), []byte("fdaa1b143a9eac4a65fc28848966aa5f97b8d13e8e1e56f25dbd3daaeafcc064"))
-	if string(previousManifest) != expectedManifest {
+	normalized := jsonObject(t, manifest)
+	approval := normalized["approval"].(map[string]any)
+	if _, exists := normalized["decision_chain"]; exists || len(approval["decision_chain"].([]any)) != 3 {
+		t.Fatalf("qualification manifest did not keep the proof chain inside the legacy-opaque approval field: %s", manifest)
+	}
+	for _, value := range normalized["releases"].([]any) {
+		release := value.(map[string]any)
+		for _, incompatible := range []string{"draft", "immutable", "prerelease"} {
+			if _, exists := release[incompatible]; exists {
+				t.Fatalf("qualification manifest exposed legacy-incompatible %q: %s", incompatible, manifest)
+			}
+		}
+	}
+	normalized["decision_chain"] = approval["decision_chain"]
+	delete(approval, "decision_chain")
+	previousManifest := qualificationDocument(t, normalized)
+	previousManifest = strings.Replace(previousManifest, "884f03fdaa74a86c7a451683a385eb909473371709e74a47ea82b1550f79e6a1", "fdaa1b143a9eac4a65fc28848966aa5f97b8d13e8e1e56f25dbd3daaeafcc064", 1)
+	if previousManifest != expectedManifest {
 		t.Fatalf("qualification manifest = %s\nwant %s", manifest, expectedManifest)
 	}
 	retry, err := runQualificationCommand(binary, boundaryFacts)
@@ -659,7 +674,7 @@ func TestQualificationCommandFinalizesStableFailures(t *testing.T) {
 	for index, value := range rescueManifest["releases"].([]any) {
 		release := value.(map[string]any)
 		rescueObservations = append(rescueObservations, map[string]any{
-			"assets": release["assets"], "body": stableQualifiedRecordFixture(t, rescueManifestDocument, index), "commit": release["commit"], "draft": release["draft"], "immutable": release["immutable"], "prerelease": release["prerelease"], "publicly_verified": false,
+			"assets": release["assets"], "body": stableQualifiedRecordFixture(t, rescueManifestDocument, index), "commit": release["commit"], "draft": index == 1, "immutable": index == 0, "prerelease": index == 0, "publicly_verified": false,
 			"release_id": release["release_id"], "release_identity": release["release_identity"], "release_present": true, "sequence": release["sequence"], "tag": release["tag"], "tag_commit": nil,
 		})
 	}
@@ -811,8 +826,8 @@ func TestQualificationCommandEvaluatesAcceptanceVPSAndConstructsRecords(t *testi
 		t.Fatalf("record count = %d", len(records))
 	}
 	for index, expected := range []struct{ tag, role, sha256 string }{
-		{"v2.0.0", "Clean-installed source release", "7ec9c81f33794a5cfaee6aeac9a2d8fa3fe24a6d39d65c15df7874c38887efcf"},
-		{"v2.0.1", "Discovered, installed, recovered, final latest release", "eb4cb529c41e59b4621f904320a3024f35d1d78d90d57b7f9cfad386190d4b55"},
+		{"v2.0.0", "Clean-installed source release", "ed2baf129cb395194bc33a9647aae78d29f7a6d8faefc52df5ce282991f84660"},
+		{"v2.0.1", "Discovered, installed, recovered, final latest release", "91bb1ac00428665c1ac479bd47b6afae44bf2c1f8b136d10cbd9350f609f16c7"},
 	} {
 		record := records[index].(map[string]any)
 		if record["tag"] != expected.tag {
@@ -885,7 +900,8 @@ func TestQualificationCommandEvaluatesAcceptanceVPSAndConstructsRecords(t *testi
 		},
 		"incomplete decision chain": func(value map[string]any) {
 			manifest := value["acceptance_facts"].(map[string]any)["qualification_manifest"].(map[string]any)
-			manifest["decision_chain"] = manifest["decision_chain"].([]any)[:2]
+			approval := manifest["approval"].(map[string]any)
+			approval["decision_chain"] = approval["decision_chain"].([]any)[:2]
 		},
 		"mismatched candidate identity": func(value map[string]any) {
 			value["candidate_run"].(map[string]any)["head_sha"] = strings.Repeat("9", 40)

@@ -270,8 +270,9 @@ type approvalEnvironment struct {
 }
 
 type qualificationApproval struct {
-	Environments []approvalEnvironment `json:"environments"`
-	State        string                `json:"state"`
+	DecisionChain []decisionChainEntry  `json:"decision_chain,omitempty"`
+	Environments  []approvalEnvironment `json:"environments"`
+	State         string                `json:"state"`
 }
 
 type qualificationWorkflow struct {
@@ -319,16 +320,24 @@ type qualificationManifest struct {
 	AcceptanceVPSChecklistSHA256 string                 `json:"acceptance_vps_checklist_sha256"`
 	Approval                     qualificationApproval  `json:"approval"`
 	CandidateFailureStateSHA256  string                 `json:"candidate_failure_state_sha256"`
-	DecisionChain                []decisionChainEntry   `json:"decision_chain"`
 	Mode                         string                 `json:"mode"`
 	NativeEvidence               []nativeEvidence       `json:"native_evidence"`
 	PinnedActions                []string               `json:"pinned_actions"`
-	Releases                     []verifiedDraftRelease `json:"releases"`
+	Releases                     []qualificationRelease `json:"releases"`
 	Repository                   string                 `json:"repository"`
 	Rescue                       *qualificationRescue   `json:"rescue"`
 	Schema                       string                 `json:"schema"`
 	SourceState                  string                 `json:"source_state"`
 	Workflow                     qualificationWorkflow  `json:"workflow"`
+}
+
+type qualificationRelease struct {
+	Assets          []decisionAsset         `json:"assets"`
+	Commit          string                  `json:"commit"`
+	ReleaseID       int64                   `json:"release_id"`
+	ReleaseIdentity decisionReleaseIdentity `json:"release_identity"`
+	Sequence        uint64                  `json:"sequence"`
+	Tag             string                  `json:"tag"`
 }
 
 type acceptanceVPSRunner struct {
@@ -372,7 +381,7 @@ type acceptanceVPSResultFacts struct {
 	QualificationBoundaryFacts    json.RawMessage        `json:"qualification_boundary_facts"`
 	QualificationManifest         json.RawMessage        `json:"qualification_manifest"`
 	QualificationManifestAttested bool                   `json:"qualification_manifest_attested"`
-	Releases                      []verifiedDraftRelease `json:"releases"`
+	Releases                      []qualificationRelease `json:"releases"`
 	Runner                        acceptanceVPSRunner    `json:"runner"`
 	Schema                        string                 `json:"schema"`
 	Stage                         string                 `json:"stage"`
@@ -1231,24 +1240,17 @@ func stableFailureBurn(existing []burnedIdentity, wanted burnedIdentity) burnedI
 }
 
 func validStableFailureManifest(manifest qualificationManifest) bool {
-	if manifest.Schema != "sbxr-qualification-manifest-v1" || manifest.Repository != softwarelifecycle.Repository || !validSHA256(manifest.AcceptanceVPSChecklistSHA256) || !validSHA256(manifest.CandidateFailureStateSHA256) || manifest.Approval.State != "approved" || len(manifest.Approval.Environments) != 1 || manifest.Approval.Environments[0].Name != "acceptance-vps" || len(manifest.Releases) != 2 || len(manifest.DecisionChain) != 3 || (manifest.SourceState != "initial-normal" && manifest.SourceState != "later-normal" && manifest.SourceState != "rescue") || (manifest.Mode != "normal" && manifest.Mode != "rescue") || (manifest.Mode == "rescue") != (manifest.SourceState == "rescue") || (manifest.Rescue != nil) != (manifest.SourceState == "rescue") || manifest.Workflow.Path != ".github/workflows/candidate.yml" || manifest.Workflow.Ref != softwarelifecycle.Repository+"/.github/workflows/candidate.yml@refs/heads/main" || !validCommit(manifest.Workflow.Commit) || manifest.Workflow.RunURL != failedRunURL(manifest.Workflow.RunID) {
+	if manifest.Schema != "sbxr-qualification-manifest-v1" || manifest.Repository != softwarelifecycle.Repository || !validSHA256(manifest.AcceptanceVPSChecklistSHA256) || !validSHA256(manifest.CandidateFailureStateSHA256) || manifest.Approval.State != "approved" || len(manifest.Approval.Environments) != 1 || manifest.Approval.Environments[0].Name != "acceptance-vps" || len(manifest.Releases) != 2 || len(manifest.Approval.DecisionChain) != 3 || (manifest.SourceState != "initial-normal" && manifest.SourceState != "later-normal" && manifest.SourceState != "rescue") || (manifest.Mode != "normal" && manifest.Mode != "rescue") || (manifest.Mode == "rescue") != (manifest.SourceState == "rescue") || (manifest.Rescue != nil) != (manifest.SourceState == "rescue") || manifest.Workflow.Path != ".github/workflows/candidate.yml" || manifest.Workflow.Ref != softwarelifecycle.Repository+"/.github/workflows/candidate.yml@refs/heads/main" || !validCommit(manifest.Workflow.Commit) || manifest.Workflow.RunURL != failedRunURL(manifest.Workflow.RunID) {
 		return false
 	}
 	expectedStages := []string{candidatePreflightStage, candidateDraftConstructionStage, candidateDraftVerificationStage}
-	for index, entry := range manifest.DecisionChain {
+	for index, entry := range manifest.Approval.DecisionChain {
 		if entry.Stage != expectedStages[index] || !validSHA256(entry.DecisionSHA256) || !validSHA256(entry.FactsSHA256) || entry.Outcome != "accepted" && entry.Outcome != "actions-required" {
 			return false
 		}
 	}
 	for index, release := range manifest.Releases {
 		if release.ReleaseID <= 0 || release.Sequence == 0 || (index != 0 || manifest.SourceState == "initial-normal") && release.Commit != manifest.Workflow.Commit || release.ReleaseIdentity != (decisionReleaseIdentity{Commit: release.Commit, ReleaseIndexSHA256: release.ReleaseIdentity.ReleaseIndexSHA256, Repository: softwarelifecycle.Repository, Tag: release.Tag}) || !validSHA256(release.ReleaseIdentity.ReleaseIndexSHA256) || !validTag(release.Tag) || len(release.Assets) != 4 {
-			return false
-		}
-		if index == 0 && manifest.SourceState != "initial-normal" {
-			if release.Draft || !release.Immutable || release.Prerelease != (manifest.SourceState == "rescue") {
-				return false
-			}
-		} else if !release.Draft || release.Immutable || release.Prerelease {
 			return false
 		}
 		for index, asset := range release.Assets {
@@ -1265,7 +1267,7 @@ func validStableFinalizationRun(run stableFinalizationRun) bool {
 	return err == nil && id > 0 && validCommit(run.HeadSHA) && run.Path == ".github/workflows/stable.yml" && run.URL == failedRunURL(run.ID)
 }
 
-func stableFailureTargetMatches(observation stableFailureObservation, release verifiedDraftRelease) bool {
+func stableFailureTargetMatches(observation stableFailureObservation, release qualificationRelease) bool {
 	if observation.Commit != release.Commit || observation.ReleaseID != release.ReleaseID || observation.ReleaseIdentity != release.ReleaseIdentity || observation.Sequence != release.Sequence || observation.Tag != release.Tag || observation.TagCommit != nil && *observation.TagCommit != release.Commit {
 		return false
 	}
@@ -1275,7 +1277,7 @@ func stableFailureTargetMatches(observation stableFailureObservation, release ve
 	return reflect.DeepEqual(observation.Assets, release.Assets) && (!observation.PubliclyVerified || !observation.Draft && observation.Immutable && !observation.Prerelease && observation.TagCommit != nil)
 }
 
-func stableFailureObservationIsQualified(observation stableFailureObservation, release verifiedDraftRelease, manifest qualificationManifest, workflowRun string) bool {
+func stableFailureObservationIsQualified(observation stableFailureObservation, release qualificationRelease, manifest qualificationManifest, workflowRun string) bool {
 	if !observation.PubliclyVerified || !observation.ReleasePresent || observation.Draft || !observation.Immutable || observation.Prerelease || observation.TagCommit == nil || !strings.Contains(observation.Body, "Status: Qualified\n") {
 		return false
 	}
@@ -1283,7 +1285,7 @@ func stableFailureObservationIsQualified(observation stableFailureObservation, r
 	return err == nil
 }
 
-func buildStableFailedAcceptanceRecord(manifest qualificationManifest, release verifiedDraftRelease, sourceBody, workflowRun string) (string, error) {
+func buildStableFailedAcceptanceRecord(manifest qualificationManifest, release qualificationRelease, sourceBody, workflowRun string) (string, error) {
 	start := strings.Index(sourceBody, "```json\n")
 	end := strings.LastIndex(sourceBody, "\n```\n")
 	if start < 0 || end <= start {
@@ -1572,7 +1574,7 @@ func evaluateCandidateFailure(facts candidateFailureFacts, document []byte) (can
 		if !ok {
 			return refused()
 		}
-		manifestIndex := slices.IndexFunc(manifest.Releases, func(release verifiedDraftRelease) bool { return release.Tag == observation.Tag })
+		manifestIndex := slices.IndexFunc(manifest.Releases, func(release qualificationRelease) bool { return release.Tag == observation.Tag })
 		if manifestIndex < 0 {
 			return refused()
 		}
@@ -1769,7 +1771,7 @@ func validAcceptanceJourney(journey acceptanceVPSJourney) bool {
 	}
 }
 
-func buildSuccessfulAcceptanceRecord(manifest qualificationManifest, facts acceptanceVPSResultFacts, release verifiedDraftRelease, role string) (string, error) {
+func buildSuccessfulAcceptanceRecord(manifest qualificationManifest, facts acceptanceVPSResultFacts, release qualificationRelease, role string) (string, error) {
 	code := "RELEASE-INSTALLER-UPDATER-TWO-RELEASE-QUALIFICATION"
 	if manifest.Mode == "rescue" {
 		code = "RELEASE-INSTALLER-UPDATER-RESCUE-QUALIFICATION"
@@ -1878,10 +1880,16 @@ func evaluateQualificationBoundary(facts qualificationBoundaryFacts) (qualificat
 		{DecisionSHA256: documentSHA256(verificationFacts.ConstructionDecision), FactsSHA256: documentSHA256(verificationFacts.ConstructionFacts), Outcome: construction.Outcome, Stage: construction.Stage},
 		{DecisionSHA256: documentSHA256(facts.DraftVerificationDecision), FactsSHA256: documentSHA256(facts.DraftVerificationFacts), Outcome: verification.Outcome, Stage: verification.Stage},
 	}
+	manifestReleases := make([]qualificationRelease, len(releases))
+	for index, release := range releases {
+		manifestReleases[index] = qualificationRelease{Assets: release.Assets, Commit: release.Commit, ReleaseID: release.ReleaseID, ReleaseIdentity: release.ReleaseIdentity, Sequence: release.Sequence, Tag: release.Tag}
+	}
+	approval := facts.Approval
+	approval.DecisionChain = chain
 	return qualificationManifest{
-		AcceptanceVPSChecklistSHA256: facts.ChecklistSHA256, Approval: facts.Approval, CandidateFailureStateSHA256: facts.CandidateFailureStateSHA256, DecisionChain: chain,
+		AcceptanceVPSChecklistSHA256: facts.ChecklistSHA256, Approval: approval, CandidateFailureStateSHA256: facts.CandidateFailureStateSHA256,
 		Mode: preflightFacts.Candidate.Mode, NativeEvidence: facts.NativeEvidence, PinnedActions: []string{"actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803", "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16", "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02", "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093", "actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661"},
-		Releases: releases, Repository: softwarelifecycle.Repository, Rescue: rescue, Schema: "sbxr-qualification-manifest-v1", SourceState: preflight.SourceState, Workflow: facts.Workflow,
+		Releases: manifestReleases, Repository: softwarelifecycle.Repository, Rescue: rescue, Schema: "sbxr-qualification-manifest-v1", SourceState: preflight.SourceState, Workflow: facts.Workflow,
 	}, nil
 }
 

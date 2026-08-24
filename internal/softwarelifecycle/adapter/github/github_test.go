@@ -36,12 +36,11 @@ func TestSourceChecksTheCandidateFailureStateBoundQualification(t *testing.T) {
 	}
 	manifest, err := json.Marshal(map[string]any{
 		"schema": "sbxr-qualification-manifest-v1", "repository": softwarelifecycle.Repository,
-		"approval": map[string]any{}, "mode": "normal", "source_state": "initial-normal",
-		"decision_chain": []map[string]any{
+		"approval": map[string]any{"decision_chain": []map[string]any{
 			{"decision_sha256": strings.Repeat("d", 64), "facts_sha256": strings.Repeat("e", 64), "outcome": "accepted", "stage": "candidate-preflight"},
 			{"decision_sha256": strings.Repeat("f", 64), "facts_sha256": strings.Repeat("1", 64), "outcome": "actions-required", "stage": "candidate-draft-construction"},
 			{"decision_sha256": strings.Repeat("2", 64), "facts_sha256": strings.Repeat("3", 64), "outcome": "accepted", "stage": "candidate-draft-verification"},
-		},
+		}, "environments": []map[string]any{{"name": "acceptance-vps"}}, "state": "approved"}, "mode": "normal", "source_state": "initial-normal",
 		"workflow":        map[string]any{"path": ".github/workflows/candidate.yml", "ref": "albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main", "commit": fixtureCommit, "run_id": "123", "run_url": "https://github.com/albertloky/SBXR/actions/runs/123"},
 		"releases":        []map[string]any{{"tag": "v2.0.0", "commit": fixtureCommit, "sequence": 17, "release_id": 1, "release_identity": map[string]any{"repository": softwarelifecycle.Repository, "tag": "v2.0.0", "commit": fixtureCommit, "release_index_sha256": fixture.digests["release-index.json"]}, "assets": assets}, {"tag": "v2.0.1", "commit": fixtureCommit, "sequence": 18, "release_id": 2, "release_identity": map[string]any{"repository": softwarelifecycle.Repository, "tag": "v2.0.1", "commit": fixtureCommit, "release_index_sha256": strings.Repeat("a", 64)}, "assets": assets}},
 		"native_evidence": []any{}, "acceptance_vps_checklist_sha256": strings.Repeat("b", 64), "pinned_actions": []string{}, "rescue": nil,

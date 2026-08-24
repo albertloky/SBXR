@@ -145,7 +145,7 @@ func TestCandidateConstructsDraftsAndSignsTheQualificationBoundary(t *testing.T)
 		"actions/runs/$GITHUB_RUN_ID/approvals",
 		`stage:"qualification-boundary"`,
 		`go run ./cmd/sbxr-release qualification < qualification-boundary-facts.json > qualification-manifest.json`,
-		`[.decision_chain[].stage] == ["candidate-preflight","candidate-draft-construction","candidate-draft-verification"]`,
+		`[.approval.decision_chain[].stage] == ["candidate-preflight","candidate-draft-construction","candidate-draft-verification"]`,
 		"qualification-manifest.json",
 		"actions/attest-build-provenance@",
 		"subject-path: qualification-manifest.json",
@@ -307,7 +307,7 @@ func TestCandidateQualifiesTheManifestBoundTwoReleaseJourneyOnTheAcceptanceVPS(t
 		t.Fatal("candidate VPS loop signals the updater before a durable record exists")
 	}
 	acceptance := string(body)[strings.Index(string(body), "  acceptance-vps:"):strings.Index(string(body), "  cleanup-unqualified:")]
-	for _, forbidden := range []string{`canonical="$(jq -cnS`, `echo '# SBXR Installer-Updater Acceptance Record'`, `.github/scripts/release-role.sh`, `source_state="$(jq -r .source_state qualification-manifest.json)"`} {
+	for _, forbidden := range []string{`canonical="$(jq -cnS`, `echo '# SBXR Installer-Updater Acceptance Record'`, `.github/scripts/release-role.sh`, `source_state="$(jq -r .source_state qualification-manifest.json)"`, "              REMOTE\n"} {
 		if strings.Contains(acceptance, forbidden) {
 			t.Fatalf("candidate Acceptance VPS Adapter retained record policy %q", forbidden)
 		}
