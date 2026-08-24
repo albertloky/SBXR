@@ -438,6 +438,10 @@ jobs:
       attestations: write
       contents: read
       id-token: write
+    env:
+      ACCEPTANCE_VPS_HOST: ${{ secrets.ACCEPTANCE_VPS_HOST }}
+      ACCEPTANCE_VPS_HOST_KEY: ${{ secrets.ACCEPTANCE_VPS_HOST_KEY }}
+      ACCEPTANCE_VPS_SSH_PRIVATE_KEY: ${{ secrets.ACCEPTANCE_VPS_SSH_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
@@ -447,6 +451,17 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: qualification-boundary-input
+      - name: Verify Acceptance VPS readiness before signing
+        run: |
+          set -euo pipefail
+          test -n "$ACCEPTANCE_VPS_HOST"
+          test -n "$ACCEPTANCE_VPS_HOST_KEY"
+          test -n "$ACCEPTANCE_VPS_SSH_PRIVATE_KEY"
+          install -m 0600 /dev/null ssh.key
+          printf '%s\n' "$ACCEPTANCE_VPS_SSH_PRIVATE_KEY" > ssh.key
+          printf '%s %s\n' "$ACCEPTANCE_VPS_HOST" "$ACCEPTANCE_VPS_HOST_KEY" > known_hosts
+          trap 'rm -f ssh.key known_hosts' EXIT
+          ssh -i ssh.key -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=known_hosts -o ConnectTimeout=15 "root@$ACCEPTANCE_VPS_HOST" 'test "$(. /etc/os-release; printf "%s:%s" "$ID" "$VERSION_ID")" = ubuntu:24.04 && test "$(uname -m)" = x86_64 && command -v strace >/dev/null && test ! -e /usr/local/bin/sbxr && test ! -e /var/lib/sbxr && test ! -e /run/sbxr-qualification'
       - name: Create the complete qualification manifest after approval
         env:
           GH_TOKEN: ${{ github.token }}
@@ -556,12 +571,47 @@ jobs:
           printf '%s\n' "$ACCEPTANCE_VPS_SSH_PRIVATE_KEY" > ssh.key
           printf '%s %s\n' "$ACCEPTANCE_VPS_HOST" "$ACCEPTANCE_VPS_HOST_KEY" > known_hosts
           ssh_options=(-i "$PWD/ssh.key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$PWD/known_hosts" -o ConnectTimeout=15)
+          remote_initialized=false
+          journey_passed=false
           cleanup() {
+            status=$?
+            set +e
+            if test "$remote_initialized" = true && test "$journey_passed" != true; then
+              if test -n "${journey:-}"; then kill "$journey" 2>/dev/null || true; fi
+              if test -n "${original_session:-}"; then kill "$original_session" 2>/dev/null || true; fi
+              mkdir -p handoff/failure-evidence
+              ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'bash -se' <<'REMOTE'
+          if test -d /run/sbxr-qualification; then
+            cd /run/sbxr-qualification
+            find . -maxdepth 1 -type f \( -name '*.transcript' -o -name '*.strace' -o -name 'gateway.log' -o -name 'stage-*' -o -name 'acceptance-vps-evidence.json' \) -print0 | tar --null -czf /root/qualification-failure-evidence.tgz --files-from -
+          fi
+              REMOTE
+              scp "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST:/root/qualification-failure-evidence.tgz" handoff/failure-evidence/ 2>/dev/null || true
+              if test -f handoff/failure-evidence/qualification-failure-evidence.tgz; then
+                tar -xzf handoff/failure-evidence/qualification-failure-evidence.tgz -C handoff/failure-evidence
+                rm -f handoff/failure-evidence/qualification-failure-evidence.tgz
+              fi
+              ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'bash -se' <<'REMOTE'
+          if test -f /run/sbxr-qualification/hosts.original; then cp -a /run/sbxr-qualification/hosts.original /etc/hosts; fi
+          rm -f /usr/local/share/ca-certificates/sbxr-qualification.crt
+          update-ca-certificates --fresh >/dev/null
+          if test -f /run/sbxr-qualification/gateway.pid; then kill "$(cat /run/sbxr-qualification/gateway.pid)" 2>/dev/null || true; fi
+          pkill -f '/run/sbxr-qualification/installer-updater-vps.sh' 2>/dev/null || true
+          pkill -x sbxr 2>/dev/null || true
+          rm -f /run/sbxr-qualification/original-session
+          rm -f /usr/local/bin/sbxr /usr/local/bin/.sbxr-update-prior /usr/local/bin/.sbxr-update-candidate /run/lock/sbxr.lock
+          if test -d /var/lib/sbxr; then find /var/lib/sbxr -depth -delete; fi
+          if test -d /run/sbxr-qualification; then find /run/sbxr-qualification -depth -delete; fi
+          rm -f /root/qualification-handoff.tgz /root/qualification-failure-evidence.tgz /root/sbxr-qualification-gateway
+          REMOTE
+            fi
             rm -f ssh.key known_hosts handoff/gateway.key
+            return "$status"
           }
           trap cleanup EXIT
           tar -C handoff -czf qualification-handoff.tgz qualification-manifest.json qualification.bundle installer-updater-vps.md installer-updater-vps.sh sbxr-release gateway.crt gateway.key ca.crt assets
           scp "${ssh_options[@]}" qualification-handoff.tgz "root@$ACCEPTANCE_VPS_HOST:/root/qualification-handoff.tgz"
+          remote_initialized=true
           ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'bash -se' <<'REMOTE'
           test "$(. /etc/os-release; printf '%s:%s' "$ID" "$VERSION_ID")" = ubuntu:24.04
           test "$(uname -m)" = x86_64
@@ -631,8 +681,23 @@ jobs:
           printf '0\n' | script -qec 'env TERM=xterm-256color LANG=C.UTF-8 /usr/local/bin/sbxr' /dev/null | grep -F 'Status: Ready'
           REMOTE
           wait "$original_session"
+          journey_passed=true
           jq '.stages.codex_live_acceptance = "Passed"' candidate-failure-state.json > candidate-failure-state.next
           mv candidate-failure-state.next candidate-failure-state.json
+      - name: Retain secret-safe Acceptance VPS failure diagnostics
+        if: always()
+        run: |
+          set -euo pipefail
+          if test -d handoff/failure-evidence; then
+            if grep -aERq 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer ' handoff/failure-evidence; then exit 1; elif test $? -ne 1; then exit 1; fi
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: acceptance-vps-diagnostics-${{ github.run_id }}
+          path: handoff/failure-evidence
+          if-no-files-found: ignore
+          retention-days: 90
       - name: Finalize exact candidate failure evidence
         if: always()
         run: |

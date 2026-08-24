@@ -291,7 +291,17 @@ jobs:
           printf '%s\n' "$ACCEPTANCE_VPS_SSH_PRIVATE_KEY" > ssh.key
           printf '%s %s\n' "$ACCEPTANCE_VPS_HOST" "$ACCEPTANCE_VPS_HOST_KEY" > known_hosts
           ssh_options=(-i "$PWD/ssh.key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$PWD/known_hosts" -o ConnectTimeout=15)
-          cleanup() { rm -f ssh.key known_hosts; }
+          original_session=
+          cleanup() {
+            status=$?
+            set +e
+            if test -n "$original_session"; then
+              ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'rm -f /run/sbxr-stable-original-session' >/dev/null 2>&1 || true
+              wait "$original_session" 2>/dev/null || true
+            fi
+            rm -f ssh.key known_hosts
+            return "$status"
+          }
           trap cleanup EXIT
           ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'touch /run/sbxr-stable-original-session; while test -e /run/sbxr-stable-original-session; do sleep 1; done' &
           original_session=$!
@@ -361,6 +371,7 @@ jobs:
           kill -0 "$original_session"
           ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'rm -f /run/sbxr-stable-original-session'
           wait "$original_session"
+          original_session=
           prior_decision_sha256="$(sha256sum prior-verification-decision.json | cut -d' ' -f1)"
           jq -cnS --slurpfile observation stable-no-update-observation.json --arg observed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg prior_decision_sha256 "$prior_decision_sha256" --slurpfile publication_verification_decision prior-verification-decision.json --slurpfile publication_verification_facts prior-verification-facts.json '{observation:($observation[0] + {ssh_continuity:true}),observed_at:$observed_at,prior_decision_sha256:$prior_decision_sha256,publication_verification_decision:$publication_verification_decision[0],publication_verification_facts:$publication_verification_facts[0],schema:"sbxr-release-qualification-facts-v1",stage:"stable-no-update"}' | tr -d '\n' > stable-no-update-facts.json
           go run ./cmd/sbxr-release qualification < stable-no-update-facts.json > stable-no-update-decision.json
