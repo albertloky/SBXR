@@ -44,6 +44,17 @@ func TestBurnEvidenceTagCanBeRetriedOnlyWithTheExactPayload(t *testing.T) {
 	}
 }
 
+func TestReleaseQualificationCutoverRemovedObsoletePolicyHelpers(t *testing.T) {
+	for _, path := range []string{
+		".github/scripts/release-role.sh",
+		".github/scripts/write-failed-acceptance-record.sh",
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("obsolete qualification policy helper remains: %s", path)
+		}
+	}
+}
+
 func TestContinuousVerificationBuildsAndRunsTheFourAssetPackageNatively(t *testing.T) {
 	body, err := os.ReadFile(".github/workflows/verify.yml")
 	if err != nil {
@@ -131,11 +142,6 @@ func TestCandidateConstructsDraftsAndSignsTheQualificationBoundary(t *testing.T)
 		`go run ./cmd/sbxr-release qualification < qualification-boundary-facts.json > qualification-manifest.json`,
 		`[.decision_chain[].stage] == ["candidate-preflight","candidate-draft-construction","candidate-draft-verification"]`,
 		"qualification-manifest.json",
-		`source_state="$(jq -r .source_state qualification-manifest.json)"`,
-		`if test "$index" -eq 0 && test "$source_state" != initial-normal; then`,
-		`if test "$source_state" = later-normal; then`,
-		`test "$source_state" = rescue`,
-		`jq -e '.draft == false and .prerelease == true and .immutable == true' release.json >/dev/null`,
 		"actions/attest-build-provenance@",
 		"subject-path: qualification-manifest.json",
 		"retention-days: 90",
@@ -234,6 +240,7 @@ func TestCandidateQualifiesTheManifestBoundTwoReleaseJourneyOnTheAcceptanceVPS(t
 		"ACCEPTANCE_VPS_SSH_PRIVATE_KEY",
 		"StrictHostKeyChecking=yes",
 		"gh attestation verify qualification-manifest.json",
+		`.draft == $expected.draft and .prerelease == $expected.prerelease and (.immutable // false) == $expected.immutable`,
 		"go build -o handoff/sbxr-release ./cmd/sbxr-release",
 		"install -m 0700 /run/sbxr-qualification/sbxr-release /root/sbxr-qualification-gateway",
 		"nohup /root/sbxr-qualification-gateway gateway",
@@ -290,7 +297,7 @@ func TestCandidateQualifiesTheManifestBoundTwoReleaseJourneyOnTheAcceptanceVPS(t
 		t.Fatal("candidate VPS loop signals the updater before a durable record exists")
 	}
 	acceptance := string(body)[strings.Index(string(body), "  acceptance-vps:"):strings.Index(string(body), "  cleanup-unqualified:")]
-	for _, forbidden := range []string{`canonical="$(jq -cnS`, `echo '# SBXR Installer-Updater Acceptance Record'`, `.github/scripts/release-role.sh`} {
+	for _, forbidden := range []string{`canonical="$(jq -cnS`, `echo '# SBXR Installer-Updater Acceptance Record'`, `.github/scripts/release-role.sh`, `source_state="$(jq -r .source_state qualification-manifest.json)"`} {
 		if strings.Contains(acceptance, forbidden) {
 			t.Fatalf("candidate Acceptance VPS Adapter retained record policy %q", forbidden)
 		}
@@ -447,15 +454,11 @@ func TestReleaseFailuresWithdrawOnlyRecheckedTargetsAndBurnQualifiedIdentities(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	recordBody, err := os.ReadFile(".github/scripts/write-failed-acceptance-record.sh")
-	if err != nil {
-		t.Fatal(err)
-	}
 	burnBody, err := os.ReadFile(".github/scripts/prepare-burn-tag.sh")
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidate, stable, recheck, record, burn := string(candidateBody), string(stableBody), string(recheckBody), string(recordBody), string(burnBody)
+	candidate, stable, recheck, burn := string(candidateBody), string(stableBody), string(recheckBody), string(burnBody)
 	for _, required := range []string{
 		"needs: [preflight, drafts, sign, acceptance-vps]",
 		"needs.acceptance-vps.result != 'success'",
@@ -517,11 +520,6 @@ func TestReleaseFailuresWithdrawOnlyRecheckedTargetsAndBurnQualifiedIdentities(t
 	}
 	if strings.Count(candidate, ".github/scripts/recheck-qualified-release.sh") < 2 || strings.Count(stable, ".github/scripts/recheck-qualified-release.sh") < 2 {
 		t.Fatal("release mutations do not share the exact qualified-target recheck")
-	}
-	for _, required := range []string{"Status: Failed prerelease", "Go toolchain:", "Public verifier:", "Qualification role:", "Integrated Verification:", "Codex Live Acceptance:", "evidence:"} {
-		if !strings.Contains(record, required) {
-			t.Fatalf("failed Acceptance Record omitted %q", required)
-		}
 	}
 	if !strings.Contains(burn, "git rev-parse -q --verify") || !strings.Contains(burn, "$(cat \"$payload\")") || strings.Count(candidate, ".github/scripts/prepare-burn-tag.sh") < 1 || strings.Count(stable, ".github/scripts/prepare-burn-tag.sh") < 2 {
 		t.Fatal("burn evidence is not exact and retry-safe")

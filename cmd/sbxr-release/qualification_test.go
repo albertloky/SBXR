@@ -98,10 +98,10 @@ func TestQualificationCommandPreservesLaterNormalAndRescuePreflight(t *testing.T
 
 	laterBoundaryFacts, laterManifest := qualificationBoundaryForCandidate(t, binary, later)
 	rescueBoundaryFacts, rescueManifest := qualificationBoundaryForCandidate(t, binary, rescue)
-	if got := sha256String(string(laterManifest)); got != "1e506a2675aab0d4e5f1d8b19178fdd0a15be6843ffb06ea6470f53e127be022" {
+	if got := sha256String(string(laterManifest)); got != "dfa0b3ea4f0220a087a134d3703f94a8197a617e97f39cb036313ce99a76c72f" {
 		t.Fatalf("later manifest SHA-256 = %s", got)
 	}
-	if got := sha256String(string(rescueManifest)); got != "a79de11913f4a5aa51b3094cbbb749edf0cd9f49117d5fb9fbbd9801b05a738a" {
+	if got := sha256String(string(rescueManifest)); got != "e31a5b63a3b6d069baf4d573a0d3c569e6b903d087c436d1f7458253fb47df88" {
 		t.Fatalf("rescue manifest SHA-256 = %s", got)
 	}
 	for name, fixture := range map[string]struct {
@@ -166,7 +166,7 @@ func qualificationBoundaryForCandidate(t *testing.T, binary string, preflightFac
 		action := value.(map[string]any)
 		switch action["type"] {
 		case "use-source-release":
-			sources = append(sources, map[string]any{"assets": action["assets"], "commit": action["commit"], "release_id": action["release_id"], "release_identity": action["release_identity"], "sequence": action["sequence"], "tag": action["tag"]})
+			sources = append(sources, map[string]any{"assets": action["assets"], "commit": action["commit"], "draft": action["draft"], "immutable": action["immutable"], "prerelease": action["prerelease"], "release_id": action["release_id"], "release_identity": action["release_identity"], "sequence": action["sequence"], "tag": action["tag"]})
 		case "build-release":
 			builds = append(builds, action)
 		}
@@ -282,6 +282,12 @@ func TestQualificationCommandConstructsAndVerifiesCandidateDrafts(t *testing.T) 
 	if verification["facts_sha256"] != sha256String(verificationFacts) || verification["prior_decision_sha256"] != sha256String(string(constructionOutput)) {
 		t.Fatalf("verification decision is not bound to its facts and prior decision: %s", verificationOutput)
 	}
+	for _, value := range verification["verified_releases"].([]any) {
+		release := value.(map[string]any)
+		if release["draft"] != true || release["immutable"] != false || release["prerelease"] != false {
+			t.Fatalf("verified release state = %v", release)
+		}
+	}
 	retry, err := runQualificationCommand(binary, verificationFacts)
 	if err != nil || string(retry) != string(verificationOutput) {
 		t.Fatalf("verification retry = %s, %v", retry, err)
@@ -379,7 +385,12 @@ func TestQualificationCommandConstructsQualificationManifest(t *testing.T) {
 		t.Fatalf("qualification boundary: %v\n%s", err, manifest)
 	}
 	const expectedManifest = `{"acceptance_vps_checklist_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","approval":{"environments":[{"name":"acceptance-vps"}],"state":"approved"},"candidate_failure_state_sha256":"9999999999999999999999999999999999999999999999999999999999999999","decision_chain":[{"decision_sha256":"c080cc282e985f1e7cda6646d9b47b15b4aa855575d777c582e2cfc1fbda411e","facts_sha256":"2e51e83e75a08169f2d6a424ab510f83954bab4e29b35efbfb84e48545f780a3","outcome":"accepted","stage":"candidate-preflight"},{"decision_sha256":"f259e157613df307ff05e306735181635da422fceecbd7c8a5d732c7b7bf2ec6","facts_sha256":"4190445f74b68e64d8fe93d90cb6fc72b0009b85b8d50cd1defb0e8774af8517","outcome":"actions-required","stage":"candidate-draft-construction"},{"decision_sha256":"fdaa1b143a9eac4a65fc28848966aa5f97b8d13e8e1e56f25dbd3daaeafcc064","facts_sha256":"e4a471efeaf0dbcf03ed384aea69ab3f01c72fc088a3d4e2f1c61b2467866129","outcome":"accepted","stage":"candidate-draft-verification"}],"mode":"normal","native_evidence":[{"path":"native/native-v2.0.0-amd64/evidence/native-amd64.json","sha256":"5555555555555555555555555555555555555555555555555555555555555555"},{"path":"native/native-v2.0.0-arm64/evidence/native-arm64.json","sha256":"6666666666666666666666666666666666666666666666666666666666666666"},{"path":"native/native-v2.0.1-amd64/evidence/native-amd64.json","sha256":"7777777777777777777777777777777777777777777777777777777777777777"},{"path":"native/native-v2.0.1-arm64/evidence/native-arm64.json","sha256":"8888888888888888888888888888888888888888888888888888888888888888"}],"pinned_actions":["actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803","actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16","actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02","actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093","actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661"],"releases":[{"assets":[{"name":"install.sh","sha256":"1111111111111111111111111111111111111111111111111111111111111111","size":10},{"name":"release-index.json","sha256":"2222222222222222222222222222222222222222222222222222222222222222","size":11},{"name":"sbxr-linux-amd64.tar.gz","sha256":"3333333333333333333333333333333333333333333333333333333333333333","size":12},{"name":"sbxr-linux-arm64.tar.gz","sha256":"4444444444444444444444444444444444444444444444444444444444444444","size":13}],"commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","release_id":71,"release_identity":{"commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","release_index_sha256":"2222222222222222222222222222222222222222222222222222222222222222","repository":"albertloky/SBXR","tag":"v2.0.0"},"sequence":17,"tag":"v2.0.0"},{"assets":[{"name":"install.sh","sha256":"1111111111111111111111111111111111111111111111111111111111111111","size":10},{"name":"release-index.json","sha256":"2222222222222222222222222222222222222222222222222222222222222222","size":11},{"name":"sbxr-linux-amd64.tar.gz","sha256":"3333333333333333333333333333333333333333333333333333333333333333","size":12},{"name":"sbxr-linux-arm64.tar.gz","sha256":"4444444444444444444444444444444444444444444444444444444444444444","size":13}],"commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","release_id":72,"release_identity":{"commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","release_index_sha256":"2222222222222222222222222222222222222222222222222222222222222222","repository":"albertloky/SBXR","tag":"v2.0.1"},"sequence":18,"tag":"v2.0.1"}],"repository":"albertloky/SBXR","rescue":null,"schema":"sbxr-qualification-manifest-v1","source_state":"initial-normal","workflow":{"commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","path":".github/workflows/candidate.yml","ref":"albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main","run_id":"123","run_url":"https://github.com/albertloky/SBXR/actions/runs/123"}}`
-	if string(manifest) != expectedManifest {
+	if got := sha256String(string(manifest)); got != "81087b5c4136828956bc4233a7956fe287775af3f41f25626261128f2642f8a2" {
+		t.Fatalf("qualification manifest SHA-256 = %s", got)
+	}
+	previousManifest := bytes.ReplaceAll(manifest, []byte(`,"draft":true,"immutable":false,"prerelease":false`), nil)
+	previousManifest = bytes.ReplaceAll(previousManifest, []byte("884f03fdaa74a86c7a451683a385eb909473371709e74a47ea82b1550f79e6a1"), []byte("fdaa1b143a9eac4a65fc28848966aa5f97b8d13e8e1e56f25dbd3daaeafcc064"))
+	if string(previousManifest) != expectedManifest {
 		t.Fatalf("qualification manifest = %s\nwant %s", manifest, expectedManifest)
 	}
 	retry, err := runQualificationCommand(binary, boundaryFacts)
@@ -669,6 +680,9 @@ func TestQualificationCommandFinalizesStableFailures(t *testing.T) {
 		"crossed Release Identity": func(value map[string]any) {
 			value["observations"].([]any)[1].(map[string]any)["release_id"] = float64(999)
 		},
+		"changed manifest release state": func(value map[string]any) {
+			value["signed_manifest"].(map[string]any)["releases"].([]any)[0].(map[string]any)["draft"] = false
+		},
 		"unattested manifest":     func(value map[string]any) { value["manifest_attested"] = false },
 		"unknown failure stage":   func(value map[string]any) { value["publication_stage"] = "unknown" },
 		"completed qualification": func(value map[string]any) { value["publication_stage"] = "complete" },
@@ -760,8 +774,8 @@ func TestQualificationCommandEvaluatesAcceptanceVPSAndConstructsRecords(t *testi
 		t.Fatalf("record count = %d", len(records))
 	}
 	for index, expected := range []struct{ tag, role, sha256 string }{
-		{"v2.0.0", "Clean-installed source release", "731e7ba41b933bed30a60f5b0f318eababc210e407427ccbd885b9a48949387f"},
-		{"v2.0.1", "Discovered, installed, recovered, final latest release", "7aff098fda09c2ea4693b6187d45f5d6e2a791837d343423b4c56e3b4b019504"},
+		{"v2.0.0", "Clean-installed source release", "7ec9c81f33794a5cfaee6aeac9a2d8fa3fe24a6d39d65c15df7874c38887efcf"},
+		{"v2.0.1", "Discovered, installed, recovered, final latest release", "eb4cb529c41e59b4621f904320a3024f35d1d78d90d57b7f9cfad386190d4b55"},
 	} {
 		record := records[index].(map[string]any)
 		if record["tag"] != expected.tag {
@@ -893,11 +907,17 @@ func TestQualificationCommandEvaluatesAcceptanceVPSAndConstructsRecords(t *testi
 	rescueJourney["a"] = jsonObject(t, rescueManifest)["releases"].([]any)[0].(map[string]any)
 	delete(rescueJourney["a"].(map[string]any), "assets")
 	delete(rescueJourney["a"].(map[string]any), "commit")
+	delete(rescueJourney["a"].(map[string]any), "draft")
+	delete(rescueJourney["a"].(map[string]any), "immutable")
+	delete(rescueJourney["a"].(map[string]any), "prerelease")
 	delete(rescueJourney["a"].(map[string]any), "release_id")
 	delete(rescueJourney["a"].(map[string]any), "tag")
 	rescueJourney["b"] = jsonObject(t, rescueManifest)["releases"].([]any)[1].(map[string]any)
 	delete(rescueJourney["b"].(map[string]any), "assets")
 	delete(rescueJourney["b"].(map[string]any), "commit")
+	delete(rescueJourney["b"].(map[string]any), "draft")
+	delete(rescueJourney["b"].(map[string]any), "immutable")
+	delete(rescueJourney["b"].(map[string]any), "prerelease")
 	delete(rescueJourney["b"].(map[string]any), "release_id")
 	delete(rescueJourney["b"].(map[string]any), "tag")
 	rescueJourney["qualification_manifest_sha256"] = sha256String(string(rescueManifest))

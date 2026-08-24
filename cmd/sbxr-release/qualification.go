@@ -246,6 +246,9 @@ type candidateDraftVerificationFacts struct {
 type verifiedDraftRelease struct {
 	Assets          []decisionAsset         `json:"assets"`
 	Commit          string                  `json:"commit"`
+	Draft           bool                    `json:"draft"`
+	Immutable       bool                    `json:"immutable"`
+	Prerelease      bool                    `json:"prerelease"`
 	ReleaseID       int64                   `json:"release_id"`
 	ReleaseIdentity decisionReleaseIdentity `json:"release_identity"`
 	Sequence        uint64                  `json:"sequence"`
@@ -1236,8 +1239,15 @@ func validStableFailureManifest(manifest qualificationManifest) bool {
 			return false
 		}
 	}
-	for _, release := range manifest.Releases {
+	for index, release := range manifest.Releases {
 		if release.ReleaseID <= 0 || release.Sequence == 0 || release.Commit != manifest.Workflow.Commit || release.ReleaseIdentity != (decisionReleaseIdentity{Commit: release.Commit, ReleaseIndexSHA256: release.ReleaseIdentity.ReleaseIndexSHA256, Repository: softwarelifecycle.Repository, Tag: release.Tag}) || !validSHA256(release.ReleaseIdentity.ReleaseIndexSHA256) || !validTag(release.Tag) || len(release.Assets) != 4 {
+			return false
+		}
+		if index == 0 && manifest.SourceState != "initial-normal" {
+			if release.Draft || !release.Immutable || release.Prerelease != (manifest.SourceState == "rescue") {
+				return false
+			}
+		} else if !release.Draft || release.Immutable || release.Prerelease {
 			return false
 		}
 		for index, asset := range release.Assets {
@@ -1842,7 +1852,7 @@ func evaluateQualificationBoundary(facts qualificationBoundaryFacts) (qualificat
 			if !decodeCanonical(raw, &source) {
 				return refused()
 			}
-			releases = append([]verifiedDraftRelease{{Assets: source.Assets, Commit: source.Commit, ReleaseID: source.ReleaseID, ReleaseIdentity: source.ReleaseIdentity, Sequence: source.Sequence, Tag: source.Tag}}, releases...)
+			releases = append([]verifiedDraftRelease{{Assets: source.Assets, Commit: source.Commit, Draft: source.Draft, Immutable: source.Immutable, Prerelease: source.Prerelease, ReleaseID: source.ReleaseID, ReleaseIdentity: source.ReleaseIdentity, Sequence: source.Sequence, Tag: source.Tag}}, releases...)
 		}
 	}
 	if len(releases) != 2 || facts.Workflow.Path != ".github/workflows/candidate.yml" || facts.Workflow.Ref != softwarelifecycle.Repository+"/.github/workflows/candidate.yml@refs/heads/main" || facts.Workflow.Commit != releases[1].Commit || !validCommit(facts.Workflow.Commit) {
@@ -1952,7 +1962,7 @@ func evaluateCandidateDraftVerification(facts candidateDraftVerificationFacts, d
 			return candidateDraftVerificationDecision{}, errors.New("candidate draft verification refused")
 		}
 		seenReleaseIDs[observation.ReleaseID] = true
-		verified[index] = verifiedDraftRelease{Assets: action.Assets, Commit: action.Commit, ReleaseID: observation.ReleaseID, ReleaseIdentity: action.ReleaseIdentity, Sequence: action.Sequence, Tag: action.Tag}
+		verified[index] = verifiedDraftRelease{Assets: action.Assets, Commit: action.Commit, Draft: observation.Draft, Immutable: observation.Immutable, Prerelease: observation.Prerelease, ReleaseID: observation.ReleaseID, ReleaseIdentity: action.ReleaseIdentity, Sequence: action.Sequence, Tag: action.Tag}
 	}
 	return candidateDraftVerificationDecision{Actions: []json.RawMessage{}, FactsSHA256: documentSHA256(document), Outcome: "accepted", PriorDecisionSHA256: documentSHA256(facts.ConstructionDecision), Schema: qualificationDecisionSchema, Stage: candidateDraftVerificationStage, VerifiedReleases: verified}, nil
 }
