@@ -206,6 +206,7 @@ func TestCandidateDraftAdapterUsesOnlyCanonicalQualificationActionsAndObservatio
 		`stage:"candidate-draft-verification"`,
 		`go run ./cmd/sbxr-release qualification < candidate-draft-verification-facts.json > candidate-draft-verification-decision.json`,
 		`jq -c '.verified_releases' candidate-draft-verification-decision.json > verified-drafts.json`,
+		`jq -cnS --argjson source "$SOURCE_A" --slurpfile verified verified-drafts.json`,
 	} {
 		if !strings.Contains(drafts, required) {
 			t.Fatalf("candidate draft Adapter omitted %q", required)
@@ -214,6 +215,7 @@ func TestCandidateDraftAdapterUsesOnlyCanonicalQualificationActionsAndObservatio
 	for _, forbidden := range []string{
 		`burned="$(for burned_tag`,
 		`cmp "$directory/$name" "$downloaded/$tag/$name"`,
+		`jq -cS --argjson source "$SOURCE_A" --slurpfile verified verified-drafts.json`,
 	} {
 		if strings.Contains(drafts, forbidden) {
 			t.Fatalf("candidate draft Adapter retained policy %q", forbidden)

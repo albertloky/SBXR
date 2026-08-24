@@ -405,7 +405,7 @@ jobs:
           prior_decision_sha256="$(sha256sum candidate-draft-construction-decision.json | cut -d' ' -f1)"
           jq -e --arg facts_sha256 "$facts_sha256" --arg prior_decision_sha256 "$prior_decision_sha256" '.schema == "sbxr-release-qualification-decision-v1" and .stage == "candidate-draft-verification" and .outcome == "accepted" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256 and .actions == []' candidate-draft-verification-decision.json >/dev/null
           jq -c '.verified_releases' candidate-draft-verification-decision.json > verified-drafts.json
-          jq -cS --argjson source "$SOURCE_A" --slurpfile verified verified-drafts.json 'if $source == {} then $verified[0] else [$source] + $verified[0] end' > drafts.json
+          jq -cnS --argjson source "$SOURCE_A" --slurpfile verified verified-drafts.json 'if $source == {} then $verified[0] else [$source] + $verified[0] end' > drafts.json
           trap - EXIT
           cp "$CHECKLIST" .
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
