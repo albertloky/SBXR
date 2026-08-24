@@ -90,7 +90,7 @@ jobs:
               mv assets.next assets.json
             done < <(jq -c '.assets[]' "$metadata")
             cp "candidate/acceptance/acceptance-records/$tag.md" "verified/records/$tag.md"
-            jq -cS --argjson expected "$release" --slurpfile assets assets.json --slurpfile metadata "$metadata" '{assets:$assets[0],body:$metadata[0].body,commit:$metadata[0].target_commitish,draft:$metadata[0].draft,immutable:($metadata[0].immutable // false),prerelease:$metadata[0].prerelease,release_id:$metadata[0].id,release_identity:$expected.release_identity,sequence:$expected.sequence,tag:$metadata[0].tag_name}' > observation.json
+            jq -cnS --argjson expected "$release" --slurpfile assets assets.json --slurpfile metadata "$metadata" '{assets:$assets[0],body:$metadata[0].body,commit:$metadata[0].target_commitish,draft:$metadata[0].draft,immutable:($metadata[0].immutable // false),prerelease:$metadata[0].prerelease,release_id:$metadata[0].id,release_identity:$expected.release_identity,sequence:$expected.sequence,tag:$metadata[0].tag_name}' > observation.json
             jq -cS --slurpfile observation observation.json '. + $observation' verified/releases.json > verified/releases.next
             mv verified/releases.next verified/releases.json
             go run ./cmd/sbxr-release verify-package -directory "$directory" -architecture amd64

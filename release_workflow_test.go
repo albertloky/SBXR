@@ -396,6 +396,7 @@ func TestStablePublishesOnlyTheSignedQualifiedDraftsAndProvesStableNoUpdate(t *t
 		`type == "observe-stable-release"`,
 		`test "$outcome" = "propagation-pending"`,
 		"signed_manifest:$signed_manifest[0]",
+		`jq -cnS --argjson expected "$release" --slurpfile assets assets.json --slurpfile metadata "$metadata"`,
 		"commit:$metadata[0].target_commitish",
 		"go run ./cmd/sbxr-release qualification",
 		`all(.actions[]; .type == "publish-stable-release" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256)`,
