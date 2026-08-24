@@ -84,10 +84,10 @@ jobs:
             sequence=null
             if test -n "$index_asset_id"; then
               gh api "repos/$GITHUB_REPOSITORY/releases/assets/$index_asset_id" -H 'Accept: application/octet-stream' > existing-index.json
-              if jq -e '(.sequence | type) == "number" and .sequence > 0 and .sequence == floor' existing-index.json >/dev/null 2>&1; then
+              if jq -e '(.sequence | type) == "number" and .sequence > 0 and .sequence == (.sequence | floor)' existing-index.json >/dev/null 2>&1; then
                 sequence="$(jq -c .sequence existing-index.json)"
               fi
-              if jq -e '(.repository | type) == "string" and (.tag | type) == "string" and (.commit | type) == "string" and (.sequence | type) == "number" and .sequence > 0 and .sequence == floor' existing-index.json >/dev/null 2>&1; then
+              if jq -e '(.repository | type) == "string" and (.tag | type) == "string" and (.commit | type) == "string" and (.sequence | type) == "number" and .sequence > 0 and .sequence == (.sequence | floor)' existing-index.json >/dev/null 2>&1; then
                 index="$(jq -cS --arg sha256 "$(sha256sum existing-index.json | cut -d' ' -f1)" '{commit,repository,sequence,sha256:$sha256,tag}' existing-index.json)"
               fi
             fi

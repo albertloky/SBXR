@@ -322,6 +322,7 @@ func TestCandidatePreflightUsesOnlyCanonicalQualificationActions(t *testing.T) {
 		`else false end`,
 		`--slurpfile fact release-fact.json`,
 		`--slurpfile releases release-facts.json`,
+		`.sequence == (.sequence | floor)`,
 		`gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > source-a-release.json`,
 		`test "$(sha256sum "source-a/$name" | cut -d' ' -f1)" = "$(jq -r .sha256 <<<"$expected")"`,
 	} {
@@ -337,6 +338,7 @@ func TestCandidatePreflightUsesOnlyCanonicalQualificationActions(t *testing.T) {
 		`test "$B_SEQUENCE" -gt "$A_SEQUENCE"`,
 		`--argjson fact "$fact"`,
 		`--argjson releases "$(cat release-facts.json)"`,
+		`.sequence == floor`,
 	} {
 		if strings.Contains(preflight, forbidden) {
 			t.Fatalf("candidate preflight retained policy %q", forbidden)
