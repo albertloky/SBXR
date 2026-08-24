@@ -436,6 +436,7 @@ jobs:
           git config user.name github-actions
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git fetch --force --tags origin
+          git merge-base --is-ancestor "$(jq -r .workflow.commit "$manifest")" "$(jq -r .head_sha stable-run.json)"
           for burned_tag in $(git tag --list 'release-burned/*'); do git tag -l --format='%(contents)' "$burned_tag"; done | jq -s 'sort_by(.original_tag)' > failure/burned.json
           printf '[]' > failure/observations.json
           while read -r release; do
@@ -466,7 +467,7 @@ jobs:
           done < <(jq -c '.releases[]' "$manifest")
           publication_stage=prepublication-failure
           if gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name stable-publication-stage --dir failure/stage 2>/dev/null; then publication_stage="$(cat failure/stage/publication-stage)"; fi
-          jq -cnS --slurpfile burned failure/burned.json --slurpfile candidate candidate-run.json --slurpfile finalization stable-run.json --slurpfile manifest "$manifest" --slurpfile observations failure/observations.json --arg observed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg operation '${{ inputs.operation }}' --arg publication_stage "$publication_stage" '{burned_identities:$burned[0],candidate_run:{conclusion:$candidate[0].conclusion,created_at:$candidate[0].created_at,event:$candidate[0].event,head_sha:$candidate[0].head_sha,id:($candidate[0].id|tostring),path:$candidate[0].path},finalization_run:{created_at:$finalization[0].created_at,head_sha:$finalization[0].head_sha,id:($finalization[0].id|tostring),path:$finalization[0].path,url:$finalization[0].html_url},manifest_attested:true,observations:$observations[0],observed_at:$observed_at,operation:$operation,publication_stage:$publication_stage,schema:"sbxr-release-qualification-facts-v1",signed_manifest:$manifest[0],stage:"stable-failure-finalization"}' | tr -d '\n' > failure/stable-failure-facts.json
+          jq -cnS --slurpfile burned failure/burned.json --slurpfile candidate candidate-run.json --slurpfile finalization stable-run.json --slurpfile manifest "$manifest" --slurpfile observations failure/observations.json --arg observed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg operation '${{ inputs.operation }}' --arg publication_stage "$publication_stage" '{burned_identities:$burned[0],candidate_commit_ancestor:true,candidate_run:{conclusion:$candidate[0].conclusion,created_at:$candidate[0].created_at,event:$candidate[0].event,head_sha:$candidate[0].head_sha,id:($candidate[0].id|tostring),path:$candidate[0].path},finalization_run:{created_at:$finalization[0].created_at,head_sha:$finalization[0].head_sha,id:($finalization[0].id|tostring),path:$finalization[0].path,url:$finalization[0].html_url},manifest_attested:true,observations:$observations[0],observed_at:$observed_at,operation:$operation,publication_stage:$publication_stage,schema:"sbxr-release-qualification-facts-v1",signed_manifest:$manifest[0],stage:"stable-failure-finalization"}' | tr -d '\n' > failure/stable-failure-facts.json
           go run ./cmd/sbxr-release qualification < failure/stable-failure-facts.json > failure/stable-failure-decision.json
           facts_sha256="$(sha256sum failure/stable-failure-facts.json | cut -d' ' -f1)"
           prior_decision_sha256="$(sha256sum "$manifest" | cut -d' ' -f1)"

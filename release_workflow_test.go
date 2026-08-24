@@ -507,6 +507,8 @@ func TestReleaseFailuresWithdrawOnlyRecheckedTargetsAndBurnQualifiedIdentities(t
 		"if: always()",
 		"publication-stage",
 		"stable-no-update-failure",
+		`git merge-base --is-ancestor "$(jq -r .workflow.commit "$manifest")" "$(jq -r .head_sha stable-run.json)"`,
+		"candidate_commit_ancestor:true",
 		`stage:"stable-failure-finalization"`,
 		"stable-failure-facts.json",
 		"stable-failure-decision.json",

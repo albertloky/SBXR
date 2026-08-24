@@ -570,10 +570,11 @@ func TestQualificationCommandFinalizesStableFailures(t *testing.T) {
 		})
 	}
 	facts := map[string]any{
-		"burned_identities": []any{},
-		"candidate_run":     map[string]any{"conclusion": "success", "created_at": "2026-08-22T00:00:00Z", "event": "workflow_dispatch", "head_sha": strings.Repeat("d", 40), "id": "123", "path": ".github/workflows/candidate.yml"},
-		"finalization_run":  map[string]any{"created_at": "2026-08-23T00:00:00Z", "head_sha": strings.Repeat("d", 40), "id": "456", "path": ".github/workflows/stable.yml", "url": "https://github.com/albertloky/SBXR/actions/runs/456"},
-		"manifest_attested": true, "observations": observations, "observed_at": "2026-08-23T00:00:00Z", "operation": "publish", "publication_stage": "prepublication-failure",
+		"burned_identities":         []any{},
+		"candidate_commit_ancestor": true,
+		"candidate_run":             map[string]any{"conclusion": "success", "created_at": "2026-08-22T00:00:00Z", "event": "workflow_dispatch", "head_sha": strings.Repeat("d", 40), "id": "123", "path": ".github/workflows/candidate.yml"},
+		"finalization_run":          map[string]any{"created_at": "2026-08-23T00:00:00Z", "head_sha": strings.Repeat("d", 40), "id": "456", "path": ".github/workflows/stable.yml", "url": "https://github.com/albertloky/SBXR/actions/runs/456"},
+		"manifest_attested":         true, "observations": observations, "observed_at": "2026-08-23T00:00:00Z", "operation": "publish", "publication_stage": "prepublication-failure",
 		"schema": qualificationFactsSchema, "signed_manifest": manifest, "stage": "stable-failure-finalization",
 	}
 	document := qualificationDocument(t, facts)
@@ -663,10 +664,11 @@ func TestQualificationCommandFinalizesStableFailures(t *testing.T) {
 		})
 	}
 	rescueAbandonment := qualificationDocument(t, map[string]any{
-		"burned_identities": rescue.BurnedIdentities,
-		"candidate_run":     map[string]any{"conclusion": "success", "created_at": "2026-08-22T00:00:00Z", "event": "workflow_dispatch", "head_sha": strings.Repeat("d", 40), "id": "123", "path": ".github/workflows/candidate.yml"},
-		"finalization_run":  map[string]any{"created_at": "2026-08-23T00:00:00Z", "head_sha": strings.Repeat("d", 40), "id": "456", "path": ".github/workflows/stable.yml", "url": "https://github.com/albertloky/SBXR/actions/runs/456"},
-		"manifest_attested": true, "observations": rescueObservations, "observed_at": "2026-08-23T00:00:00Z", "operation": "abandon", "publication_stage": "prepublication-failure",
+		"burned_identities":         rescue.BurnedIdentities,
+		"candidate_commit_ancestor": true,
+		"candidate_run":             map[string]any{"conclusion": "success", "created_at": "2026-08-22T00:00:00Z", "event": "workflow_dispatch", "head_sha": strings.Repeat("d", 40), "id": "123", "path": ".github/workflows/candidate.yml"},
+		"finalization_run":          map[string]any{"created_at": "2026-08-23T00:00:00Z", "head_sha": strings.Repeat("f", 40), "id": "456", "path": ".github/workflows/stable.yml", "url": "https://github.com/albertloky/SBXR/actions/runs/456"},
+		"manifest_attested":         true, "observations": rescueObservations, "observed_at": "2026-08-23T00:00:00Z", "operation": "abandon", "publication_stage": "prepublication-failure",
 		"schema": qualificationFactsSchema, "signed_manifest": rescueManifest, "stage": "stable-failure-finalization",
 	})
 	rescueDecision, rescueErr := runQualificationCommand(binary, rescueAbandonment)
@@ -720,6 +722,7 @@ func TestQualificationCommandFinalizesStableFailures(t *testing.T) {
 		"unattested manifest":     func(value map[string]any) { value["manifest_attested"] = false },
 		"unknown failure stage":   func(value map[string]any) { value["publication_stage"] = "unknown" },
 		"completed qualification": func(value map[string]any) { value["publication_stage"] = "complete" },
+		"missing ancestry proof":  func(value map[string]any) { value["candidate_commit_ancestor"] = false },
 		"changed finalization run": func(value map[string]any) {
 			value["finalization_run"].(map[string]any)["url"] = "https://github.com/albertloky/SBXR/actions/runs/999"
 		},

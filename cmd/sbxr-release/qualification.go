@@ -643,17 +643,18 @@ type stableFailureObservation struct {
 }
 
 type stableFailureFacts struct {
-	BurnedIdentities []burnedIdentity           `json:"burned_identities"`
-	CandidateRun     stableCandidateRun         `json:"candidate_run"`
-	FinalizationRun  stableFinalizationRun      `json:"finalization_run"`
-	ManifestAttested bool                       `json:"manifest_attested"`
-	Observations     []stableFailureObservation `json:"observations"`
-	ObservedAt       string                     `json:"observed_at"`
-	Operation        string                     `json:"operation"`
-	PublicationStage string                     `json:"publication_stage"`
-	Schema           string                     `json:"schema"`
-	SignedManifest   json.RawMessage            `json:"signed_manifest"`
-	Stage            string                     `json:"stage"`
+	BurnedIdentities        []burnedIdentity           `json:"burned_identities"`
+	CandidateCommitAncestor bool                       `json:"candidate_commit_ancestor"`
+	CandidateRun            stableCandidateRun         `json:"candidate_run"`
+	FinalizationRun         stableFinalizationRun      `json:"finalization_run"`
+	ManifestAttested        bool                       `json:"manifest_attested"`
+	Observations            []stableFailureObservation `json:"observations"`
+	ObservedAt              string                     `json:"observed_at"`
+	Operation               string                     `json:"operation"`
+	PublicationStage        string                     `json:"publication_stage"`
+	Schema                  string                     `json:"schema"`
+	SignedManifest          json.RawMessage            `json:"signed_manifest"`
+	Stage                   string                     `json:"stage"`
 }
 
 type finalizeStableFailureAction struct {
@@ -1149,7 +1150,7 @@ func evaluateStableFailure(facts stableFailureFacts, document []byte) (stableFai
 	if facts.Schema != qualificationFactsSchema || facts.Stage != stableFailureStage || !facts.ManifestAttested || facts.Observations == nil || facts.BurnedIdentities == nil || secretBearing(document) || observedErr != nil || createdErr != nil || finalizationErr != nil || observedAt.Format(time.RFC3339) != facts.ObservedAt || finalizationAt.Format(time.RFC3339) != facts.FinalizationRun.CreatedAt || observedAt.Before(finalizationAt) || observedAt.Before(createdAt) || !validFailureBurns(facts.BurnedIdentities) || !decodeCanonical(facts.SignedManifest, &manifest) || !validStableFailureManifest(manifest) {
 		return refused()
 	}
-	if facts.CandidateRun != (stableCandidateRun{Conclusion: "success", CreatedAt: facts.CandidateRun.CreatedAt, Event: "workflow_dispatch", HeadSHA: manifest.Workflow.Commit, ID: manifest.Workflow.RunID, Path: manifest.Workflow.Path}) || !validStableFinalizationRun(facts.FinalizationRun, manifest.Workflow.Commit) || len(facts.Observations) != len(manifest.Releases) {
+	if !facts.CandidateCommitAncestor || facts.CandidateRun != (stableCandidateRun{Conclusion: "success", CreatedAt: facts.CandidateRun.CreatedAt, Event: "workflow_dispatch", HeadSHA: manifest.Workflow.Commit, ID: manifest.Workflow.RunID, Path: manifest.Workflow.Path}) || !validStableFinalizationRun(facts.FinalizationRun) || len(facts.Observations) != len(manifest.Releases) {
 		return refused()
 	}
 	for index := range manifest.Releases {
@@ -1259,9 +1260,9 @@ func validStableFailureManifest(manifest qualificationManifest) bool {
 	return manifest.Releases[0].Sequence < manifest.Releases[1].Sequence && manifest.Releases[0].Tag != manifest.Releases[1].Tag && manifest.Releases[0].ReleaseID != manifest.Releases[1].ReleaseID
 }
 
-func validStableFinalizationRun(run stableFinalizationRun, commit string) bool {
+func validStableFinalizationRun(run stableFinalizationRun) bool {
 	id, err := strconv.ParseUint(run.ID, 10, 64)
-	return err == nil && id > 0 && run.HeadSHA == commit && run.Path == ".github/workflows/stable.yml" && run.URL == failedRunURL(run.ID)
+	return err == nil && id > 0 && validCommit(run.HeadSHA) && run.Path == ".github/workflows/stable.yml" && run.URL == failedRunURL(run.ID)
 }
 
 func stableFailureTargetMatches(observation stableFailureObservation, release verifiedDraftRelease) bool {
