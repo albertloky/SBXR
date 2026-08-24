@@ -107,7 +107,12 @@ jobs:
             gh api "repos/$GITHUB_REPOSITORY/issues/${DEFECT_URL##*/}" > defect-issue.json
             defect_issue="$(jq -cS '{is_pull_request:has("pull_request"),state,url:.html_url}' defect-issue.json)"
             gh api "repos/$GITHUB_REPOSITORY/actions/runs/$FAILED_RUN" > failed-normal-run.json
-            failed_normal_run="$(jq -cS '{conclusion:(.conclusion // ""),id:(.id | tostring),mode:(.inputs.mode // ""),path}' failed-normal-run.json)"
+            mkdir -m 0700 failed-normal-boundary
+            gh run download "$FAILED_RUN" --repo "$GITHUB_REPOSITORY" --name signed-qualification-manifest --dir failed-normal-boundary
+            failed_sha="$(jq -r .head_sha failed-normal-run.json)"
+            gh attestation verify failed-normal-boundary/qualification-manifest.json --repo "$GITHUB_REPOSITORY" --signer-workflow albertloky/SBXR/.github/workflows/candidate.yml --source-ref refs/heads/main --source-digest "$failed_sha" >/dev/null
+            jq -e --arg run "$FAILED_RUN" --arg sha "$failed_sha" '.schema == "sbxr-qualification-manifest-v1" and .mode == "normal" and .workflow == {commit:$sha,path:".github/workflows/candidate.yml",ref:"albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main",run_id:$run,run_url:("https://github.com/albertloky/SBXR/actions/runs/"+$run)}' failed-normal-boundary/qualification-manifest.json >/dev/null
+            failed_normal_run="$(jq -cS '{conclusion:(.conclusion // ""),id:(.id | tostring),mode:"normal",path}' failed-normal-run.json)"
           fi
           failed_normal_run_id=null
           defect_issue_url=null
