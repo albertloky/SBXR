@@ -541,6 +541,179 @@ func TestQualificationCommandFinalizesCandidateFailures(t *testing.T) {
 	}
 }
 
+func TestQualificationCommandFinalizesStableFailures(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "sbxr-release")
+	command := exec.Command("go", "build", "-o", binary, ".")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build sbxr-release: %v\n%s", err, output)
+	}
+
+	_, manifestDocument := qualificationBoundaryForCandidate(t, binary, candidateFacts("normal"))
+	manifest := jsonObject(t, manifestDocument)
+	observations := make([]any, 0, 2)
+	for index, value := range manifest["releases"].([]any) {
+		release := value.(map[string]any)
+		observations = append(observations, map[string]any{
+			"assets": release["assets"], "body": stableQualifiedRecordFixture(t, manifestDocument, index), "commit": release["commit"], "draft": true, "immutable": false, "prerelease": false, "publicly_verified": false,
+			"release_id": release["release_id"], "release_identity": release["release_identity"], "release_present": true, "sequence": release["sequence"], "tag": release["tag"], "tag_commit": nil,
+		})
+	}
+	facts := map[string]any{
+		"burned_identities": []any{},
+		"candidate_run":     map[string]any{"conclusion": "success", "created_at": "2026-08-22T00:00:00Z", "event": "workflow_dispatch", "head_sha": strings.Repeat("d", 40), "id": "123", "path": ".github/workflows/candidate.yml"},
+		"finalization_run":  map[string]any{"created_at": "2026-08-23T00:00:00Z", "head_sha": strings.Repeat("d", 40), "id": "456", "path": ".github/workflows/stable.yml", "url": "https://github.com/albertloky/SBXR/actions/runs/456"},
+		"manifest_attested": true, "observations": observations, "observed_at": "2026-08-23T00:00:00Z", "operation": "publish", "publication_stage": "prepublication-failure",
+		"schema": qualificationFactsSchema, "signed_manifest": manifest, "stage": "stable-failure-finalization",
+	}
+	document := qualificationDocument(t, facts)
+	decision, err := runQualificationCommand(binary, document)
+	if err != nil {
+		t.Fatalf("stable prepublication failure: %v\n%s", err, decision)
+	}
+	result := jsonObject(t, decision)
+	if result["outcome"] != "failed-prerelease" || result["reason"] != "prepublication-failure" || len(result["actions"].([]any)) != 2 || result["facts_sha256"] != sha256String(document) {
+		t.Fatalf("stable failure decision = %s", decision)
+	}
+	for _, value := range result["actions"].([]any) {
+		action := value.(map[string]any)
+		if action["type"] != "finalize-stable-failure" || action["burn_required"] != true || action["publish_failed_prerelease"] != true || action["delete_release"] != false || action["delete_tag"] != false || action["reason"] != "prepublication-failure" || action["observed_at"] != "2026-08-23T00:00:00Z" {
+			t.Fatalf("stable failure action = %v", action)
+		}
+		burn := action["burn"].(map[string]any)
+		if burn["qualification_run_url"] != "https://github.com/albertloky/SBXR/actions/runs/123" || burn["recorded_at"] != "2026-08-23T00:00:00Z" {
+			t.Fatalf("stable failure burn = %v", burn)
+		}
+	}
+	if retry, retryErr := runQualificationCommand(binary, document); retryErr != nil || !bytes.Equal(retry, decision) {
+		t.Fatalf("stable failure exact retry = %s, %v", retry, retryErr)
+	}
+	rawMarker := jsonObject(t, []byte(document))
+	rawMarker["publication_stage"] = "prepublication"
+	if rawDecision, rawErr := runQualificationCommand(binary, qualificationDocument(t, rawMarker)); rawErr != nil || jsonObject(t, rawDecision)["outcome"] != "failed-prerelease" {
+		t.Fatalf("raw prepublication marker = %s, %v", rawDecision, rawErr)
+	}
+	laterRetry := jsonObject(t, []byte(document))
+	actions := result["actions"].([]any)
+	laterRetry["burned_identities"] = []any{actions[0].(map[string]any)["burn"], actions[1].(map[string]any)["burn"]}
+	laterRetry["observed_at"] = "2026-08-23T01:00:00Z"
+	laterDecision, laterErr := runQualificationCommand(binary, qualificationDocument(t, laterRetry))
+	if laterErr != nil {
+		t.Fatalf("later exact burn retry: %v\n%s", laterErr, laterDecision)
+	}
+	for _, value := range jsonObject(t, laterDecision)["actions"].([]any) {
+		action := value.(map[string]any)
+		if action["burn_required"] != false || action["observed_at"] != "2026-08-23T01:00:00Z" || action["burn"].(map[string]any)["recorded_at"] != "2026-08-23T00:00:00Z" {
+			t.Fatalf("later exact burn retry = %s", laterDecision)
+		}
+	}
+
+	for name, change := range map[string]struct {
+		operation, publicationStage, createdAt, outcome, reason string
+		actions                                                 int
+	}{
+		"initial A public verification": {"publish", "initial-a-public-verification-failure", "2026-08-22T00:00:00Z", "withdraw", "initial-a-public-verification-failure", 2},
+		"B publication or verification": {"publish", "b-publication-or-verification-failure", "2026-08-22T00:00:00Z", "withdraw", "b-publication-or-verification-failure", 1},
+		"stable no-update":              {"publish", "stable-no-update-failure", "2026-08-22T00:00:00Z", "withdraw", "stable-no-update-failure", 1},
+		"cancellation":                  {"publish", "prepublication-failure", "2026-08-22T00:00:00Z", "failed-prerelease", "prepublication-failure", 2},
+		"owner abandonment":             {"abandon", "prepublication-failure", "2026-08-22T00:00:00Z", "withdraw", "owner-abandoned", 2},
+		"90-day expiry":                 {"publish", "prepublication-failure", "2026-05-25T00:00:00Z", "withdraw", "qualification-expired", 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			variant := jsonObject(t, []byte(document))
+			variant["operation"], variant["publication_stage"] = change.operation, change.publicationStage
+			variant["candidate_run"].(map[string]any)["created_at"] = change.createdAt
+			output, runErr := runQualificationCommand(binary, qualificationDocument(t, variant))
+			if runErr != nil {
+				t.Fatalf("stable failure: %v\n%s", runErr, output)
+			}
+			got := jsonObject(t, output)
+			if got["outcome"] != change.outcome || got["reason"] != change.reason || len(got["actions"].([]any)) != change.actions {
+				t.Fatalf("stable failure decision = %s", output)
+			}
+		})
+	}
+
+	partial := jsonObject(t, []byte(document))
+	partial["publication_stage"] = "b-publication-or-verification-failure"
+	partial["observations"].([]any)[1].(map[string]any)["tag_commit"] = strings.Repeat("d", 40)
+	partialDocument := qualificationDocument(t, partial)
+	withdraw, err := runQualificationCommand(binary, partialDocument)
+	if err != nil {
+		t.Fatalf("withdraw decision: %v\n%s", err, withdraw)
+	}
+	withdrawAction := jsonObject(t, withdraw)["actions"].([]any)[0].(map[string]any)
+	post := jsonValue(t, qualificationDocument(t, partial["observations"].([]any)[1])).(map[string]any)
+	post["assets"], post["body"], post["draft"], post["immutable"], post["prerelease"], post["release_present"], post["tag_commit"] = []any{}, "", false, false, false, false, nil
+	verificationDocument := qualificationDocument(t, map[string]any{
+		"burned_identities": []any{withdrawAction["burn"]}, "failure_decision": jsonValue(t, string(withdraw)), "failure_facts": jsonValue(t, partialDocument), "observations": []any{post},
+		"schema": qualificationFactsSchema, "stage": "stable-failure-verification",
+	})
+	verified, verifyErr := runQualificationCommand(binary, verificationDocument)
+	if verifyErr != nil || jsonObject(t, verified)["outcome"] != "accepted" || jsonObject(t, verified)["prior_decision_sha256"] != sha256String(string(withdraw)) {
+		t.Fatalf("stable failure verification = %s, %v", verified, verifyErr)
+	}
+	partial["burned_identities"] = []any{withdrawAction["burn"]}
+	partialObservations := partial["observations"].([]any)
+	partialTarget := partialObservations[1].(map[string]any)
+	partialTarget["assets"], partialTarget["body"], partialTarget["draft"], partialTarget["immutable"], partialTarget["prerelease"], partialTarget["release_present"] = []any{}, "", false, false, false, false
+	resubmitted, resubmitErr := runQualificationCommand(binary, qualificationDocument(t, partial))
+	if resubmitErr != nil {
+		t.Fatalf("partial withdrawal resubmission: %v\n%s", resubmitErr, resubmitted)
+	}
+	resubmittedAction := jsonObject(t, resubmitted)["actions"].([]any)[0].(map[string]any)
+	if resubmittedAction["burn_required"] != false || resubmittedAction["delete_release"] != false || resubmittedAction["delete_tag"] != true {
+		t.Fatalf("partial withdrawal resubmission = %s", resubmitted)
+	}
+
+	for hostileName, mutate := range map[string]func(map[string]any){
+		"crossed Release Identity": func(value map[string]any) {
+			value["observations"].([]any)[1].(map[string]any)["release_id"] = float64(999)
+		},
+		"unattested manifest":     func(value map[string]any) { value["manifest_attested"] = false },
+		"unknown failure stage":   func(value map[string]any) { value["publication_stage"] = "unknown" },
+		"completed qualification": func(value map[string]any) { value["publication_stage"] = "complete" },
+		"changed finalization run": func(value map[string]any) {
+			value["finalization_run"].(map[string]any)["url"] = "https://github.com/albertloky/SBXR/actions/runs/999"
+		},
+	} {
+		hostile := jsonObject(t, []byte(document))
+		mutate(hostile)
+		assertQualificationRefused(t, binary, qualificationDocument(t, hostile), hostileName)
+	}
+
+	preserved := jsonObject(t, []byte(document))
+	preserved["operation"] = "abandon"
+	preservedA := preserved["observations"].([]any)[0].(map[string]any)
+	preservedA["draft"], preservedA["immutable"], preservedA["publicly_verified"], preservedA["tag_commit"] = false, true, true, strings.Repeat("d", 40)
+	preservedDecision, preservedErr := runQualificationCommand(binary, qualificationDocument(t, preserved))
+	if preservedErr != nil || len(jsonObject(t, preservedDecision)["actions"].([]any)) != 1 || jsonObject(t, preservedDecision)["actions"].([]any)[0].(map[string]any)["tag"] != "v2.0.1" {
+		t.Fatalf("proven stable A was not preserved = %s, %v", preservedDecision, preservedErr)
+	}
+	uncertain := jsonObject(t, []byte(qualificationDocument(t, preserved)))
+	uncertain["observations"].([]any)[0].(map[string]any)["publicly_verified"] = false
+	assertQualificationRefused(t, binary, qualificationDocument(t, uncertain), "uncertain stable A withdrawal")
+}
+
+func stableQualifiedRecordFixture(t *testing.T, manifestDocument []byte, releaseIndex int) string {
+	t.Helper()
+	var manifest qualificationManifest
+	if !decodeCanonical(manifestDocument, &manifest) {
+		t.Fatal("decode qualification manifest fixture")
+	}
+	release := manifest.Releases[releaseIndex]
+	record := acceptanceRecordJSON{
+		AcceptedAt: "2026-08-22T00:00:00Z", Assets: release.Assets, Evidence: []string{manifest.Workflow.RunURL + "#artifacts"}, QualificationRole: "Clean-installed source release",
+		ReleaseIdentity: release.ReleaseIdentity, Runner: "Ubuntu Server 24.04 linux/amd64", Schema: "sbxr-acceptance-record-v1", SecretSafeResult: "Passed", Sequence: release.Sequence,
+		Software: acceptanceRecordSoftware{GoToolchain: "go1.26.6", PublicVerifier: "1.3.0 " + strings.Repeat("A", 64)}, StableResultCode: "RELEASE-INSTALLER-UPDATER-TWO-RELEASE-QUALIFICATION",
+		Stages: acceptanceRecordStages{CodexLiveAcceptance: "Passed", IntegratedVerification: "Passed", ModuleVerification: "Passed", OwnerAcceptance: "Not required", SeamVerification: "Passed"}, WorkflowRun: manifest.Workflow.RunURL,
+	}
+	canonical, err := marshalCanonical(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return "# SBXR Installer-Updater Acceptance Record\nStatus: Qualified\n```json\n" + string(canonical) + "\n```\n"
+}
+
 func TestQualificationCommandEvaluatesAcceptanceVPSAndConstructsRecords(t *testing.T) {
 	binary := filepath.Join(t.TempDir(), "sbxr-release")
 	command := exec.Command("go", "build", "-o", binary, ".")

@@ -32,6 +32,8 @@ const (
 	stablePublicationStage             = "stable-publication"
 	stablePublicationVerificationStage = "stable-publication-verification"
 	stableNoUpdateStage                = "stable-no-update"
+	stableFailureStage                 = "stable-failure-finalization"
+	stableFailureVerificationStage     = "stable-failure-verification"
 	maxQualificationFactsBytes         = 16 << 20
 )
 
@@ -613,6 +615,92 @@ type stableNoUpdateDecision struct {
 	Stage               string                  `json:"stage"`
 }
 
+type stableFinalizationRun struct {
+	CreatedAt string `json:"created_at"`
+	HeadSHA   string `json:"head_sha"`
+	ID        string `json:"id"`
+	Path      string `json:"path"`
+	URL       string `json:"url"`
+}
+
+type stableFailureObservation struct {
+	Assets           []decisionAsset         `json:"assets"`
+	Body             string                  `json:"body"`
+	Commit           string                  `json:"commit"`
+	Draft            bool                    `json:"draft"`
+	Immutable        bool                    `json:"immutable"`
+	Prerelease       bool                    `json:"prerelease"`
+	PubliclyVerified bool                    `json:"publicly_verified"`
+	ReleaseID        int64                   `json:"release_id"`
+	ReleaseIdentity  decisionReleaseIdentity `json:"release_identity"`
+	ReleasePresent   bool                    `json:"release_present"`
+	Sequence         uint64                  `json:"sequence"`
+	Tag              string                  `json:"tag"`
+	TagCommit        *string                 `json:"tag_commit"`
+}
+
+type stableFailureFacts struct {
+	BurnedIdentities []burnedIdentity           `json:"burned_identities"`
+	CandidateRun     stableCandidateRun         `json:"candidate_run"`
+	FinalizationRun  stableFinalizationRun      `json:"finalization_run"`
+	ManifestAttested bool                       `json:"manifest_attested"`
+	Observations     []stableFailureObservation `json:"observations"`
+	ObservedAt       string                     `json:"observed_at"`
+	Operation        string                     `json:"operation"`
+	PublicationStage string                     `json:"publication_stage"`
+	Schema           string                     `json:"schema"`
+	SignedManifest   json.RawMessage            `json:"signed_manifest"`
+	Stage            string                     `json:"stage"`
+}
+
+type finalizeStableFailureAction struct {
+	Assets                  []decisionAsset         `json:"assets"`
+	Body                    string                  `json:"body"`
+	Burn                    burnedIdentity          `json:"burn"`
+	BurnRequired            bool                    `json:"burn_required"`
+	Commit                  string                  `json:"commit"`
+	DeleteRelease           bool                    `json:"delete_release"`
+	DeleteTag               bool                    `json:"delete_tag"`
+	FactsSHA256             string                  `json:"facts_sha256"`
+	ObservedAt              string                  `json:"observed_at"`
+	PriorDecisionSHA256     string                  `json:"prior_decision_sha256"`
+	PublishFailedPrerelease bool                    `json:"publish_failed_prerelease"`
+	Reason                  string                  `json:"reason"`
+	ReleaseID               int64                   `json:"release_id"`
+	ReleaseIdentity         decisionReleaseIdentity `json:"release_identity"`
+	Sequence                uint64                  `json:"sequence"`
+	Tag                     string                  `json:"tag"`
+	Type                    string                  `json:"type"`
+}
+
+type stableFailureDecision struct {
+	Actions             []finalizeStableFailureAction `json:"actions"`
+	FactsSHA256         string                        `json:"facts_sha256"`
+	Outcome             string                        `json:"outcome"`
+	PriorDecisionSHA256 string                        `json:"prior_decision_sha256"`
+	Reason              string                        `json:"reason"`
+	Schema              string                        `json:"schema"`
+	Stage               string                        `json:"stage"`
+}
+
+type stableFailureVerificationFacts struct {
+	BurnedIdentities []burnedIdentity           `json:"burned_identities"`
+	FailureDecision  json.RawMessage            `json:"failure_decision"`
+	FailureFacts     json.RawMessage            `json:"failure_facts"`
+	Observations     []stableFailureObservation `json:"observations"`
+	Schema           string                     `json:"schema"`
+	Stage            string                     `json:"stage"`
+}
+
+type stableFailureVerificationDecision struct {
+	Actions             []json.RawMessage `json:"actions"`
+	FactsSHA256         string            `json:"facts_sha256"`
+	Outcome             string            `json:"outcome"`
+	PriorDecisionSHA256 string            `json:"prior_decision_sha256"`
+	Schema              string            `json:"schema"`
+	Stage               string            `json:"stage"`
+}
+
 type candidateFailureStages struct {
 	CodexLiveAcceptance    string `json:"codex_live_acceptance"`
 	IntegratedVerification string `json:"integrated_verification"`
@@ -787,6 +875,18 @@ func runQualification(input io.Reader, output io.Writer) error {
 			return errors.New("qualification facts refused")
 		}
 		decision, err = evaluateStableNoUpdate(facts, document)
+	case stableFailureStage:
+		var facts stableFailureFacts
+		if !decodeCanonical(document, &facts) {
+			return errors.New("qualification facts refused")
+		}
+		decision, err = evaluateStableFailure(facts, document)
+	case stableFailureVerificationStage:
+		var facts stableFailureVerificationFacts
+		if !decodeCanonical(document, &facts) {
+			return errors.New("qualification facts refused")
+		}
+		decision, err = evaluateStableFailureVerification(facts, document)
 	default:
 		return errors.New("qualification facts refused")
 	}
@@ -1033,6 +1133,241 @@ func evaluateStableNoUpdate(facts stableNoUpdateFacts, document []byte) (stableN
 		return refused()
 	}
 	return stableNoUpdateDecision{Actions: []json.RawMessage{}, FactsSHA256: documentSHA256(document), Outcome: "accepted", PriorDecisionSHA256: facts.PriorDecisionSHA256, PublicVerification: "Passed", ReleaseIdentity: action.ReleaseIdentity, Schema: qualificationDecisionSchema, Sequence: action.Sequence, StableNoUpdate: "Passed", Stage: stableNoUpdateStage}, nil
+}
+
+func evaluateStableFailure(facts stableFailureFacts, document []byte) (stableFailureDecision, error) {
+	refused := func() (stableFailureDecision, error) {
+		return stableFailureDecision{}, errors.New("stable failure finalization refused")
+	}
+	observedAt, observedErr := time.Parse(time.RFC3339, facts.ObservedAt)
+	createdAt, createdErr := time.Parse(time.RFC3339, facts.CandidateRun.CreatedAt)
+	finalizationAt, finalizationErr := time.Parse(time.RFC3339, facts.FinalizationRun.CreatedAt)
+	var manifest qualificationManifest
+	if facts.Schema != qualificationFactsSchema || facts.Stage != stableFailureStage || !facts.ManifestAttested || facts.Observations == nil || facts.BurnedIdentities == nil || secretBearing(document) || observedErr != nil || createdErr != nil || finalizationErr != nil || observedAt.Format(time.RFC3339) != facts.ObservedAt || finalizationAt.Format(time.RFC3339) != facts.FinalizationRun.CreatedAt || observedAt.Before(finalizationAt) || observedAt.Before(createdAt) || !validFailureBurns(facts.BurnedIdentities) || !decodeCanonical(facts.SignedManifest, &manifest) || !validStableFailureManifest(manifest) {
+		return refused()
+	}
+	if facts.CandidateRun != (stableCandidateRun{Conclusion: "success", CreatedAt: facts.CandidateRun.CreatedAt, Event: "workflow_dispatch", HeadSHA: manifest.Workflow.Commit, ID: manifest.Workflow.RunID, Path: manifest.Workflow.Path}) || !validStableFinalizationRun(facts.FinalizationRun, manifest.Workflow.Commit) || len(facts.Observations) != len(manifest.Releases) {
+		return refused()
+	}
+	for index := range manifest.Releases {
+		if !stableFailureTargetMatches(facts.Observations[index], manifest.Releases[index]) {
+			return refused()
+		}
+	}
+	if facts.PublicationStage == "complete" {
+		return refused()
+	}
+	reason := facts.PublicationStage
+	if reason == "prepublication" {
+		reason = "prepublication-failure"
+	}
+	if facts.Operation == "abandon" {
+		reason = "owner-abandoned"
+	} else if facts.Operation != "publish" {
+		return refused()
+	} else if observedAt.Sub(createdAt) >= 90*24*time.Hour {
+		reason = "qualification-expired"
+	}
+	aProven := manifest.SourceState == "initial-normal" && stableFailureObservationIsQualified(facts.Observations[0], manifest.Releases[0], manifest, facts.FinalizationRun.URL)
+	if manifest.SourceState == "initial-normal" && facts.Observations[0].ReleasePresent && !facts.Observations[0].Draft && facts.Observations[0].Immutable && !facts.Observations[0].Prerelease && !aProven && reason != "initial-a-public-verification-failure" {
+		return refused()
+	}
+	if (reason == "prepublication-failure" || reason == "initial-a-public-verification-failure") && aProven {
+		reason = "b-publication-or-verification-failure"
+	}
+	if reason != "prepublication-failure" && reason != "initial-a-public-verification-failure" && reason != "b-publication-or-verification-failure" && reason != "stable-no-update-failure" && reason != "qualification-expired" && reason != "owner-abandoned" {
+		return refused()
+	}
+	indexes := []int{1}
+	if manifest.SourceState == "initial-normal" && !aProven && reason != "b-publication-or-verification-failure" && reason != "stable-no-update-failure" {
+		indexes = []int{0, 1}
+	}
+	outcome := "withdraw"
+	if reason == "prepublication-failure" {
+		outcome = "failed-prerelease"
+	}
+	factsSHA256, priorDecisionSHA256 := documentSHA256(document), documentSHA256(facts.SignedManifest)
+	actions := make([]finalizeStableFailureAction, len(indexes))
+	for actionIndex, releaseIndex := range indexes {
+		release, observation := manifest.Releases[releaseIndex], facts.Observations[releaseIndex]
+		burn := stableFailureBurn(facts.BurnedIdentities, burnedIdentity{Commit: release.Commit, OriginalTag: release.Tag, QualificationRunURL: manifest.Workflow.RunURL, Reason: reason, RecordedAt: facts.ObservedAt, ReleaseIndexSHA256: release.ReleaseIdentity.ReleaseIndexSHA256, Sequence: release.Sequence})
+		burnRequired, exact := burnRequirement(facts.BurnedIdentities, burn)
+		if !exact {
+			return refused()
+		}
+		body := ""
+		publishFailedPrerelease := false
+		if outcome == "failed-prerelease" {
+			var err error
+			body, err = buildStableFailedAcceptanceRecord(manifest, release, observation.Body, facts.FinalizationRun.URL)
+			if err != nil {
+				return refused()
+			}
+			publishFailedPrerelease = observation.ReleasePresent && observation.Draft && !observation.Immutable && !observation.Prerelease
+			if observation.ReleasePresent && !publishFailedPrerelease && (!observation.Immutable || !observation.Prerelease || observation.Draft || observation.Body != body) {
+				return refused()
+			}
+		}
+		actions[actionIndex] = finalizeStableFailureAction{Assets: release.Assets, Body: body, Burn: burn, BurnRequired: burnRequired, Commit: release.Commit, DeleteRelease: outcome == "withdraw" && observation.ReleasePresent, DeleteTag: outcome == "withdraw" && observation.TagCommit != nil, FactsSHA256: factsSHA256, ObservedAt: facts.ObservedAt, PriorDecisionSHA256: priorDecisionSHA256, PublishFailedPrerelease: publishFailedPrerelease, Reason: reason, ReleaseID: release.ReleaseID, ReleaseIdentity: release.ReleaseIdentity, Sequence: release.Sequence, Tag: release.Tag, Type: "finalize-stable-failure"}
+	}
+	return stableFailureDecision{Actions: actions, FactsSHA256: factsSHA256, Outcome: outcome, PriorDecisionSHA256: priorDecisionSHA256, Reason: reason, Schema: qualificationDecisionSchema, Stage: stableFailureStage}, nil
+}
+
+func stableFailureBurn(existing []burnedIdentity, wanted burnedIdentity) burnedIdentity {
+	for _, burn := range existing {
+		if burn.OriginalTag == wanted.OriginalTag || burn.Sequence == wanted.Sequence {
+			candidate := wanted
+			candidate.RecordedAt = burn.RecordedAt
+			if burn == candidate {
+				return burn
+			}
+		}
+	}
+	return wanted
+}
+
+func validStableFailureManifest(manifest qualificationManifest) bool {
+	if manifest.Schema != "sbxr-qualification-manifest-v1" || manifest.Repository != softwarelifecycle.Repository || !validSHA256(manifest.AcceptanceVPSChecklistSHA256) || !validSHA256(manifest.CandidateFailureStateSHA256) || manifest.Approval.State != "approved" || len(manifest.Approval.Environments) != 1 || manifest.Approval.Environments[0].Name != "acceptance-vps" || len(manifest.Releases) != 2 || len(manifest.DecisionChain) != 3 || (manifest.SourceState != "initial-normal" && manifest.SourceState != "later-normal" && manifest.SourceState != "rescue") || (manifest.Mode != "normal" && manifest.Mode != "rescue") || (manifest.Mode == "rescue") != (manifest.SourceState == "rescue") || (manifest.Rescue != nil) != (manifest.SourceState == "rescue") || manifest.Workflow.Path != ".github/workflows/candidate.yml" || manifest.Workflow.Ref != softwarelifecycle.Repository+"/.github/workflows/candidate.yml@refs/heads/main" || !validCommit(manifest.Workflow.Commit) || manifest.Workflow.RunURL != failedRunURL(manifest.Workflow.RunID) {
+		return false
+	}
+	expectedStages := []string{candidatePreflightStage, candidateDraftConstructionStage, candidateDraftVerificationStage}
+	for index, entry := range manifest.DecisionChain {
+		if entry.Stage != expectedStages[index] || !validSHA256(entry.DecisionSHA256) || !validSHA256(entry.FactsSHA256) || entry.Outcome != "accepted" && entry.Outcome != "actions-required" {
+			return false
+		}
+	}
+	for _, release := range manifest.Releases {
+		if release.ReleaseID <= 0 || release.Sequence == 0 || release.Commit != manifest.Workflow.Commit || release.ReleaseIdentity != (decisionReleaseIdentity{Commit: release.Commit, ReleaseIndexSHA256: release.ReleaseIdentity.ReleaseIndexSHA256, Repository: softwarelifecycle.Repository, Tag: release.Tag}) || !validSHA256(release.ReleaseIdentity.ReleaseIndexSHA256) || !validTag(release.Tag) || len(release.Assets) != 4 {
+			return false
+		}
+		for index, asset := range release.Assets {
+			if asset.Name != softwarelifecycle.LatestReleaseAssetNames()[index] || !validSHA256(asset.SHA256) || asset.Size <= 0 {
+				return false
+			}
+		}
+	}
+	return manifest.Releases[0].Sequence < manifest.Releases[1].Sequence && manifest.Releases[0].Tag != manifest.Releases[1].Tag && manifest.Releases[0].ReleaseID != manifest.Releases[1].ReleaseID
+}
+
+func validStableFinalizationRun(run stableFinalizationRun, commit string) bool {
+	id, err := strconv.ParseUint(run.ID, 10, 64)
+	return err == nil && id > 0 && run.HeadSHA == commit && run.Path == ".github/workflows/stable.yml" && run.URL == failedRunURL(run.ID)
+}
+
+func stableFailureTargetMatches(observation stableFailureObservation, release verifiedDraftRelease) bool {
+	if observation.Commit != release.Commit || observation.ReleaseID != release.ReleaseID || observation.ReleaseIdentity != release.ReleaseIdentity || observation.Sequence != release.Sequence || observation.Tag != release.Tag || observation.TagCommit != nil && *observation.TagCommit != release.Commit {
+		return false
+	}
+	if !observation.ReleasePresent {
+		return len(observation.Assets) == 0 && observation.Body == "" && !observation.Draft && !observation.Immutable && !observation.Prerelease && !observation.PubliclyVerified
+	}
+	return reflect.DeepEqual(observation.Assets, release.Assets) && (!observation.PubliclyVerified || !observation.Draft && observation.Immutable && !observation.Prerelease && observation.TagCommit != nil)
+}
+
+func stableFailureObservationIsQualified(observation stableFailureObservation, release verifiedDraftRelease, manifest qualificationManifest, workflowRun string) bool {
+	if !observation.PubliclyVerified || !observation.ReleasePresent || observation.Draft || !observation.Immutable || observation.Prerelease || observation.TagCommit == nil || !strings.Contains(observation.Body, "Status: Qualified\n") {
+		return false
+	}
+	_, err := buildStableFailedAcceptanceRecord(manifest, release, observation.Body, workflowRun)
+	return err == nil
+}
+
+func buildStableFailedAcceptanceRecord(manifest qualificationManifest, release verifiedDraftRelease, sourceBody, workflowRun string) (string, error) {
+	start := strings.Index(sourceBody, "```json\n")
+	end := strings.LastIndex(sourceBody, "\n```\n")
+	if start < 0 || end <= start {
+		return "", errors.New("qualified Acceptance Record refused")
+	}
+	recordBytes := []byte(sourceBody[start+8 : end])
+	var source acceptanceRecordJSON
+	if softwarelifecycle.ValidateUniqueJSON(recordBytes) != nil || json.Unmarshal(recordBytes, &source) != nil || source.Schema != "sbxr-acceptance-record-v1" || source.ReleaseIdentity != release.ReleaseIdentity || source.Sequence != release.Sequence || !reflect.DeepEqual(source.Assets, release.Assets) || source.SecretSafeResult != "Passed" || source.Stages.ModuleVerification != "Passed" || source.Stages.SeamVerification != "Passed" {
+		return "", errors.New("qualified Acceptance Record refused")
+	}
+	failedRetry := strings.Contains(sourceBody, "Status: Failed prerelease\n")
+	if !failedRetry && !strings.Contains(sourceBody, "Status: Qualified\n") {
+		return "", errors.New("qualified Acceptance Record refused")
+	}
+	if failedRetry && (source.StableResultCode != "RELEASE-INSTALLER-UPDATER-PREPUBLICATION-FAILED" || source.WorkflowRun != workflowRun) || !failedRetry && source.WorkflowRun != manifest.Workflow.RunURL {
+		return "", errors.New("qualified Acceptance Record refused")
+	}
+	if !failedRetry {
+		canonicalSource, err := marshalCanonical(source)
+		if err != nil || !bytes.Equal(canonicalSource, recordBytes) {
+			return "", errors.New("qualified Acceptance Record refused")
+		}
+	}
+	record := struct {
+		AcceptedAt        string                   `json:"accepted_at"`
+		Assets            []decisionAsset          `json:"assets"`
+		Evidence          []string                 `json:"evidence"`
+		QualificationRole string                   `json:"qualification_role"`
+		ReleaseIdentity   decisionReleaseIdentity  `json:"release_identity"`
+		Runner            string                   `json:"runner"`
+		Schema            string                   `json:"schema"`
+		SecretSafeResult  string                   `json:"secret_safe_result"`
+		Sequence          uint64                   `json:"sequence"`
+		Software          acceptanceRecordSoftware `json:"software"`
+		StableResultCode  string                   `json:"stable_result_code"`
+		Stages            acceptanceRecordStages   `json:"stages"`
+		WorkflowRun       string                   `json:"workflow_run"`
+	}{
+		AcceptedAt: source.AcceptedAt, Assets: source.Assets, Evidence: source.Evidence, QualificationRole: source.QualificationRole, ReleaseIdentity: source.ReleaseIdentity,
+		Runner: source.Runner, Schema: source.Schema, SecretSafeResult: source.SecretSafeResult, Sequence: source.Sequence, Software: source.Software,
+		StableResultCode: "RELEASE-INSTALLER-UPDATER-PREPUBLICATION-FAILED", Stages: source.Stages, WorkflowRun: workflowRun,
+	}
+	canonical, err := marshalCanonical(record)
+	if err != nil {
+		return "", err
+	}
+	if failedRetry && !bytes.Equal(canonical, recordBytes) {
+		return "", errors.New("qualified Acceptance Record refused")
+	}
+	lines := []string{"# SBXR Installer-Updater Acceptance Record", "Status: Failed prerelease", "Repository: " + release.ReleaseIdentity.Repository, "Tag: " + release.Tag, "Commit: " + release.Commit, "Release index SHA-256: " + release.ReleaseIdentity.ReleaseIndexSHA256, "Sequence: " + strconv.FormatUint(release.Sequence, 10), "Workflow evidence: " + workflowRun, "Acceptance time: " + source.AcceptedAt, "Runner: " + source.Runner, "Go toolchain: " + source.Software.GoToolchain, "Public verifier: " + source.Software.PublicVerifier, "Secret-safe result: Passed", "Qualification role: " + source.QualificationRole, "Stable result code: RELEASE-INSTALLER-UPDATER-PREPUBLICATION-FAILED", "Module Verification: " + source.Stages.ModuleVerification, "Seam Verification: " + source.Stages.SeamVerification, "Integrated Verification: " + source.Stages.IntegratedVerification, "Codex Live Acceptance: " + source.Stages.CodexLiveAcceptance, "Owner Acceptance: " + source.Stages.OwnerAcceptance}
+	var body strings.Builder
+	for _, line := range lines {
+		body.WriteString(line + "\n")
+	}
+	for _, asset := range release.Assets {
+		body.WriteString("Asset: " + asset.Name + " " + strconv.FormatInt(asset.Size, 10) + " " + asset.SHA256 + "\n")
+	}
+	body.WriteString("```json\n" + string(canonical) + "\n```\n")
+	if failedRetry && body.String() != sourceBody {
+		return "", errors.New("qualified Acceptance Record refused")
+	}
+	return body.String(), nil
+}
+
+func evaluateStableFailureVerification(facts stableFailureVerificationFacts, document []byte) (stableFailureVerificationDecision, error) {
+	refused := func() (stableFailureVerificationDecision, error) {
+		return stableFailureVerificationDecision{}, errors.New("stable failure verification refused")
+	}
+	if facts.Schema != qualificationFactsSchema || facts.Stage != stableFailureVerificationStage || facts.BurnedIdentities == nil || facts.Observations == nil || secretBearing(document) || !validFailureBurns(facts.BurnedIdentities) {
+		return refused()
+	}
+	var failureFacts stableFailureFacts
+	if !decodeCanonical(facts.FailureFacts, &failureFacts) {
+		return refused()
+	}
+	failure, err := evaluateStableFailure(failureFacts, facts.FailureFacts)
+	failureBytes, marshalErr := marshalCanonical(failure)
+	if err != nil || marshalErr != nil || !bytes.Equal(failureBytes, facts.FailureDecision) || len(facts.Observations) != len(failure.Actions) {
+		return refused()
+	}
+	for index, action := range failure.Actions {
+		observation := facts.Observations[index]
+		burnRequired, exact := burnRequirement(facts.BurnedIdentities, action.Burn)
+		if burnRequired || !exact || observation.Commit != action.Commit || observation.ReleaseID != action.ReleaseID || observation.ReleaseIdentity != action.ReleaseIdentity || observation.Sequence != action.Sequence || observation.Tag != action.Tag {
+			return refused()
+		}
+		if failure.Outcome == "withdraw" {
+			if observation.ReleasePresent || observation.TagCommit != nil || len(observation.Assets) != 0 || observation.Body != "" || observation.Draft || observation.Immutable || observation.Prerelease || observation.PubliclyVerified {
+				return refused()
+			}
+		} else if !observation.ReleasePresent || observation.TagCommit == nil || *observation.TagCommit != action.Commit || observation.Draft || !observation.Immutable || !observation.Prerelease || observation.PubliclyVerified || observation.Body != action.Body || !reflect.DeepEqual(observation.Assets, action.Assets) {
+			return refused()
+		}
+	}
+	return stableFailureVerificationDecision{Actions: []json.RawMessage{}, FactsSHA256: documentSHA256(document), Outcome: "accepted", PriorDecisionSHA256: documentSHA256(facts.FailureDecision), Schema: qualificationDecisionSchema, Stage: stableFailureVerificationStage}, nil
 }
 
 func validStablePublicationObservation(observation stablePublicationObservation, action publishStableReleaseAction, expectedLatestReleaseID *int64, public bool) bool {

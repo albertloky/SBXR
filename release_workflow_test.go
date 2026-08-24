@@ -485,16 +485,22 @@ func TestReleaseFailuresWithdrawOnlyRecheckedTargetsAndBurnQualifiedIdentities(t
 		"finalize-failure:",
 		"if: always()",
 		"publication-stage",
-		"initial-a-public-verification-failure",
-		"b-publication-or-verification-failure",
 		"stable-no-update-failure",
-		"qualification-expired",
-		"owner-abandoned",
-		"Publish prepublication failures as rechecked failed prereleases",
+		`stage:"stable-failure-finalization"`,
+		"stable-failure-facts.json",
+		"stable-failure-decision.json",
+		`all(.actions[]; .type == "finalize-stable-failure"`,
+		"Perform only the decided failure actions",
+		`.publish_failed_prerelease`,
+		`.delete_release`,
+		`.delete_tag`,
+		`jq -jr .body <<<"$action"`,
 		"gh api --method DELETE \"repos/$GITHUB_REPOSITORY/releases/$release_id\"",
 		"gh api --method DELETE \"repos/$GITHUB_REPOSITORY/git/refs/tags/$tag\"",
 		"release-burned/$tag",
 		"git push --atomic origin",
+		`stage:"stable-failure-verification"`,
+		"stable-failure-verification-decision.json",
 	} {
 		if !strings.Contains(stable, required) {
 			t.Fatalf("stable.yml omitted withdrawal contract %q", required)
@@ -529,15 +535,12 @@ func TestReleaseFailuresWithdrawOnlyRecheckedTargetsAndBurnQualifiedIdentities(t
 		t.Fatal("candidate failure handling does not verify and burn every identity before release mutation")
 	}
 	stableFailure := stable[strings.Index(stable, "finalize-failure:"):]
-	failedPrerelease := stableFailure[strings.Index(stableFailure, "Publish prepublication failures as rechecked failed prereleases"):]
 	if strings.Index(stableFailure, "git push --atomic origin") > strings.Index(stableFailure, `gh release edit "$tag"`) ||
-		!strings.Contains(stableFailure, "if: steps.failure.outputs.outcome == 'withdraw'") ||
-		!strings.Contains(stableFailure, "if: steps.failure.outputs.outcome == 'failed-prerelease'") ||
-		!strings.Contains(stableFailure, `jq -e '.draft == true' failure/release.json >/dev/null`) ||
-		strings.Count(stableFailure, `git rev-parse -q --verify "refs/tags/$tag^{commit}"`) < 4 ||
-		!strings.Contains(stableFailure, `test "$(git rev-parse "refs/tags/$tag^{commit}")" = "$commit"`) ||
-		!strings.Contains(failedPrerelease, `commit="$(jq -r .commit <<<"$release")"`) {
-		t.Fatal("stable failure handling does not burn before its approved withdrawal or failed-prerelease outcome")
+		strings.Index(stableFailure, "git push --atomic origin") > strings.Index(stableFailure, `gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$release_id"`) ||
+		!strings.Contains(stableFailure, `jq -S .burn <<<"$action"`) ||
+		!strings.Contains(stableFailure, `.github/scripts/prepare-burn-tag.sh "failure/burned/$tag.json" "$tag" "$commit" >/dev/null`) ||
+		!strings.Contains(stableFailure, `test "$actual_burn" = "$expected_burn"`) {
+		t.Fatal("stable failure Adapter does not attest burns before exact decided mutations and verify their results")
 	}
 	assertActionsPinned(t, candidate)
 	assertActionsPinned(t, stable)
