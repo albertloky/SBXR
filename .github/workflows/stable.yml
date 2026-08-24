@@ -349,18 +349,18 @@ jobs:
           set -e
           test "${pipeline_status[0]}" -eq 0
           install_exit="${pipeline_status[1]}"
-          install_result="$(tr -d '\r\n' < "$work/install.transcript")"
+          install_result="$(grep -aE '^SOFTWARE-LIFECYCLE-INSTALL-[A-Z-]+$' "$work/install.transcript" | tail -n1 || true)"
           test "$install_exit" -eq 0 || test -n "$install_result"
           no_transaction_residue || transaction_residue_absent=false
           flock -n /run/lock/sbxr.lock true || mutation_lock_available=false
           snapshot > "$work/after-install.snapshot" || { : > "$work/after-install.snapshot"; snapshots_complete=false; }
           menu 1 "$work/check.transcript"
-          check_result="$(grep -aoE 'Code: SOFTWARE-LIFECYCLE-[A-Z-]+' "$work/check.transcript" | sed 's/^Code: //' || true)"
+          check_result="$(grep -aoE 'Code: SOFTWARE-LIFECYCLE-CHECK-[A-Z-]+' "$work/check.transcript" | sed 's/^Code: //' | tail -n1 || true)"
           no_transaction_residue || transaction_residue_absent=false
           flock -n /run/lock/sbxr.lock true || mutation_lock_available=false
           snapshot > "$work/after-check.snapshot" || { : > "$work/after-check.snapshot"; snapshots_complete=false; }
           menu 2 "$work/update.transcript"
-          update_result="$(grep -aoE 'Code: SOFTWARE-LIFECYCLE-[A-Z-]+' "$work/update.transcript" | sed 's/^Code: //' || true)"
+          update_result="$(grep -aoE 'Code: SOFTWARE-LIFECYCLE-UPDATE-[A-Z-]+' "$work/update.transcript" | sed 's/^Code: //' | tail -n1 || true)"
           no_transaction_residue || transaction_residue_absent=false
           flock -n /run/lock/sbxr.lock true || mutation_lock_available=false
           snapshot > "$work/after-update.snapshot" || { : > "$work/after-update.snapshot"; snapshots_complete=false; }
@@ -377,6 +377,16 @@ jobs:
           go run ./cmd/sbxr-release qualification < stable-no-update-facts.json > stable-no-update-decision.json
           facts_sha256="$(sha256sum stable-no-update-facts.json | cut -d' ' -f1)"
           jq -e --arg facts_sha256 "$facts_sha256" --arg prior_decision_sha256 "$prior_decision_sha256" '.schema == "sbxr-release-qualification-decision-v1" and .stage == "stable-no-update" and .outcome == "accepted" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256 and .public_verification == "Passed" and .stable_no_update == "Passed" and (.actions | length) == 0' stable-no-update-decision.json >/dev/null
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: stable-no-update-observation-${{ github.run_id }}
+          path: |
+            stable-no-update-observation.json
+            stable-no-update-facts.json
+            stable-no-update-decision.json
+          if-no-files-found: ignore
+          retention-days: 90
       - name: Retain public stable evidence
         run: |
           set -euo pipefail
@@ -514,7 +524,7 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-          git fetch --force --tags origin
+          git fetch --force --prune --prune-tags --tags origin
           printf '[]' > failure/verified-burns.json
           printf '[]' > failure/verified-observations.json
           while read -r action; do
