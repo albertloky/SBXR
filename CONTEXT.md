@@ -1,6 +1,6 @@
 # SBXR
 
-SBXR is a single-owner Installer-Updater for one executable on one Ubuntu Server.
+SBXR is a single-owner proxy product for one Ubuntu Server. Software Lifecycle installs and updates the executable; Proxy Installation owns the installed V3 proxy journey.
 
 ## Language
 
@@ -8,7 +8,52 @@ SBXR is a single-owner Installer-Updater for one executable on one Ubuntu Server
 The one person who exclusively controls one SBXR installation.
 
 ### Software Lifecycle
-The sole product Module. It owns installed status, qualified stable release discovery, update, rollback, forward completion, and recovery.
+The Module that owns installed-software status, qualified stable release discovery, update, rollback, forward completion, and recovery.
+
+### Proxy Installation
+The review-first V3 journey that adds and manages SBXR proxy capability after Software Lifecycle has installed the executable and safely completes removal of the whole installation.
+
+### Proxy Installation Status
+The separate proxy-capability status: `Not set up`, `Running`, `Change in progress`, `Setup incomplete`, `Removal incomplete`, or `Problem detected`. It does not describe Software Lifecycle status or Module health.
+
+### Action
+One exact Owner intent reviewed and, when legal, executed through Proxy Installation.
+
+### Prepared Action
+Opaque, memory-only, single-use authority created by a fresh legal Review and required for Execute. It is invalid after use or when its action, installation, or safety facts no longer match.
+
+### Confirmation
+The Owner's explicit decision to approve or decline one Prepared Action. Only the accepted affirmative value authorizes mutation or credential disclosure.
+
+### Not installed
+The Software Lifecycle result after Complete removal proves that the SBXR executable, Installed Record, Ownership Record, and all proved V3-owned proxy resources are absent. It is distinct from Proxy Installation Status `Not set up`, where SBXR remains installed without proxy capability.
+
+### Proxy Profile
+The single managed V3 proxy endpoint and its one authorized Client Identity.
+
+### Client Identity
+The single credential-bound identity permitted to use the Proxy Profile from an outside client.
+
+### Client Access Values
+The Owner-disclosable values required to construct a Client Configuration. They may include a client credential but never an Infrastructure Secret.
+
+### Client Configuration
+The secret-bearing outside-client artifact derived from the managed Proxy Profile only when the Owner requests it.
+
+### Infrastructure Secret
+A server-side secret that is never disclosed through a Client Configuration, status, logs, or evidence.
+
+### Ownership Record
+The root-owned durable authority that proves which exact resources V3 created and therefore may remove, and which unfinished setup or removal direction is legal.
+
+### Proxy Package Identity
+The official repository, signing-key digest, package name, version, architecture, and package digest that bind one exact proxy package to a qualified SBXR release and one V3 installation.
+
+### Activation committed
+The durable V3 setup checkpoint after which only forward completion to `Running` is legal.
+
+### Removal committed
+The durable V3 removal checkpoint after which only forward completion to `Not installed` is legal.
 
 ### Pasteable Install Command
 The root-authorized command that finds and installs only the Qualified Stable Release into SBXR's two fixed durable paths.
@@ -23,10 +68,13 @@ The authenticated positive integer that is the only authority for release order.
 GitHub's canonical immutable Latest release whose four assets, Release Identity, attestations, and Acceptance Record pass Release Qualification.
 
 ### Release Qualification
-Proof that the exact packaged two-release journey and every required automated, live, identity, SSH, recovery, and secret-safety check passed for unchanged release bytes.
+The single stable-publication gate. It proves that the exact packaged journey required by the product line and every required automated, live, identity, SSH, recovery, and secret-safety check passed for unchanged release bytes. The first V3 release requires clean direct installation and V3 Packaged Live Qualification, not a V1 or V2 migration or an invented V3 update journey.
+
+### V3 Packaged Live Qualification
+The Codex-driven Release Qualification stage that proves the exact packaged V3 setup, activation, outside-client traffic, failure-safety, and Complete removal journey on a real disposable VPS and a genuinely outside network.
 
 ### Acceptance Record
-The public, secret-safe record that binds one Release Identity to its qualification stages, evidence, runner facts, and exact asset digests.
+The single public, secret-safe record that binds one Release Identity to its qualification stages, including V3 Packaged Live Qualification, evidence, runner facts, and exact asset digests.
 
 ### Installed Record
 The root-owned schema-1 record that binds the active executable to its Release Identity, Release Sequence, architecture, and executable digest.

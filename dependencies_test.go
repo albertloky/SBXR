@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -11,9 +12,9 @@ import (
 
 const modulePath = "github.com/albertloky/SBXR"
 
-func TestInstallerUpdaterIsTheOnlyProduct(t *testing.T) {
+func TestProductDirectoriesAreLimitedToTheAcceptedModules(t *testing.T) {
 	assertDirectories(t, "cmd", []string{"sbxr", "sbxr-release"})
-	assertDirectories(t, "internal", []string{"softwarelifecycle"})
+	assertOnlyDirectories(t, "internal", []string{"proxyinstallation", "softwarelifecycle"})
 }
 
 func TestExternalDependenciesStayInTheGitHubAdapter(t *testing.T) {
@@ -39,7 +40,24 @@ func TestExternalDependenciesStayInTheGitHubAdapter(t *testing.T) {
 	}
 }
 
+func assertOnlyDirectories(t *testing.T, root string, allowed []string) {
+	t.Helper()
+	for _, directory := range directoryNames(t, root) {
+		if !slices.Contains(allowed, directory) {
+			t.Fatalf("%s contains unapproved product directory %s", root, directory)
+		}
+	}
+}
+
 func assertDirectories(t *testing.T, root string, want []string) {
+	t.Helper()
+	got := directoryNames(t, root)
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("%s product directories = %v, want %v", root, got, want)
+	}
+}
+
+func directoryNames(t *testing.T, root string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -52,7 +70,5 @@ func assertDirectories(t *testing.T, root string, want []string) {
 		}
 	}
 	sort.Strings(got)
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("%s product directories = %v, want %v", root, got, want)
-	}
+	return got
 }
