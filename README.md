@@ -1,15 +1,15 @@
 # SBXR
 
-SBXR is a small, root-only Installer-Updater for Ubuntu Server 24.04. It installs one `sbxr` executable, finds only the qualified latest stable release, updates itself without losing the prior working executable, and recovers deterministically after interruption.
+SBXR is a root-only V3 proxy product for one Ubuntu Server. Software Lifecycle installs and updates the `sbxr` executable. Proxy Installation owns the installed proxy journey through a review-first numbered menu.
 
 ## Supported system
 
-- Ubuntu Server 24.04 on `amd64` or `arm64`
+- Ubuntu Server 24.04; the first V3 proxy journey accepts only `amd64`
 - Root authority through `sudo`
 - An interactive UTF-8 terminal
 - `curl` for the first GitHub HTTPS download
 
-SBXR owns only `/usr/local/bin/sbxr` and `/var/lib/sbxr/installed.json` after a successful installation. It does not migrate, clean up, or run the historical proxy product.
+Software Lifecycle owns `/usr/local/bin/sbxr` and `/var/lib/sbxr/installed.json`. V3 setup may add only the exact Proxy Installation resources recorded in `/var/lib/sbxr/proxy-ownership.json`. The current tracer bullet reviews and cancels setup without creating any of them.
 
 ## Installation
 
@@ -29,14 +29,14 @@ Run the installed product with no arguments:
 sudo sbxr
 ```
 
-The menu shows the installed version and one lifecycle state: `Ready`, `Update in progress`, or `Recovery required`.
+Every screen shows the installed version, Proxy Installation Status, latest result, and stable result code. A clean installed host starts at `Not set up` with exactly:
 
-- `1. Check for updates` reads GitHub's canonical qualified Latest release without changing local files.
-- `2. Update SBXR` performs a fresh check, verifies the higher Release Sequence, and runs one crash-safe update.
-- `1. Start recovery` is the only normal action shown when recovery is required.
+- `1. Start setup` performs fresh read-only preflight and shows a secret-safe plan.
+- `2. View details` shows current secret-safe local facts.
+- `3. Complete removal` is visible but remains unavailable until its reviewed removal slice is implemented.
 - `0. Exit` returns to the shell.
 
-Use Up, Down, a displayed number, and Enter. Pasted input, mouse input, unknown escape sequences, stale selections, and command arguments execute nothing.
+Enter or `n` declines the Start setup plan; `y` is the only approval value. Approved mutation is not part of this tracer bullet and is refused safely. Command arguments execute nothing.
 
 ## Update and recovery safety
 

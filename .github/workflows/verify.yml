@@ -36,7 +36,7 @@ jobs:
           github_tests='^(TestSourceCheck|TestSigstoreVerifier)'
           go test ./internal/softwarelifecycle -run "$lifecycle_tests" -count=1
           go test ./internal/softwarelifecycle/adapter/github -run "$github_tests" -count=1
-          go test ./internal/softwarelifecycle/adapter/terminal -count=1
+          go test ./internal/proxyinstallation/adapter/terminal -count=1
           go test ./cmd/sbxr-release -count=1
           go test ./... -count=1
           go test -race ./internal/softwarelifecycle -run "$lifecycle_tests" -count=1
@@ -91,8 +91,11 @@ jobs:
           test ! -s non-root.out
           grep -Fx 'SBXR requires root authority.' non-root.err
           printf '0\n' | script -qec "sudo env TERM=xterm-256color LANG=C.UTF-8 '$PWD/inspect/sbxr'" menu.transcript
-          grep -F 'Recovery required' menu.transcript
-          grep -F 'Start recovery' menu.transcript
+          grep -F 'SBXR V3' menu.transcript
+          grep -F 'Proxy status: Not set up' menu.transcript
+          grep -F 'Start setup' menu.transcript
+          grep -F 'View details' menu.transcript
+          grep -F 'Complete removal' menu.transcript
           grep -F 'Exit' menu.transcript
           index_sha256="$(sha256sum dist/release-index.json | cut -d ' ' -f1)"
           executable_sha256="$(sha256sum inspect/sbxr | cut -d ' ' -f1)"
@@ -101,21 +104,10 @@ jobs:
           printf '{"schema":1,"repository":"albertloky/SBXR","tag":"v2.0.0","commit":"%s","release_index_sha256":"%s","sequence":17,"architecture":"%s","executable_sha256":"%s"}\n' "$GITHUB_SHA" "$index_sha256" '${{ matrix.architecture }}' "$executable_sha256" | sudo tee /var/lib/sbxr/installed.json >/dev/null
           sudo chmod 0600 /var/lib/sbxr/installed.json
           printf '0\n' | script -qec "sudo env TERM=xterm-256color LANG=C.UTF-8 /usr/local/bin/sbxr" ready.transcript
-          grep -F 'Ready' ready.transcript
-          grep -F 'Check for updates' ready.transcript
-          grep -F 'Update SBXR' ready.transcript
-          sudo install -m 0600 /dev/null /run/lock/sbxr.lock
-          sudo sh -c 'exec 9>/run/lock/sbxr.lock; flock -x 9; touch /tmp/sbxr-lock-held; sleep 10' &
-          locker=$!
-          for attempt in $(seq 1 50); do
-            test -e /tmp/sbxr-lock-held && break
-            sleep 0.1
-          done
-          test -e /tmp/sbxr-lock-held
-          printf '0\n' | script -qec "sudo env TERM=xterm-256color LANG=C.UTF-8 /usr/local/bin/sbxr" concurrent.transcript
-          grep -F 'Update in progress' concurrent.transcript
-          wait "$locker"
-          sudo rm /tmp/sbxr-lock-held /run/lock/sbxr.lock /usr/local/bin/sbxr
+          grep -F 'Version: v2.0.0' ready.transcript
+          grep -F 'Proxy status: Not set up' ready.transcript
+          grep -F 'PROXY-INSTALLATION-STATUS-NOT-SET-UP' ready.transcript
+          sudo rm /usr/local/bin/sbxr
           sudo rm -r /var/lib/sbxr
       - name: Refuse secret markers from package surfaces
         env:
