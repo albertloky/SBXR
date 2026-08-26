@@ -1,6 +1,6 @@
 # Software Lifecycle
 
-Software Lifecycle is SBXR's only product Module. Its Owner-facing Interface is exactly:
+Software Lifecycle is one of SBXR's two product Modules. Its Owner-facing Interface remains exactly:
 
 ```go
 Status(context.Context) Result
@@ -9,7 +9,7 @@ Update(context.Context, ProgressReporter) Result
 Recover(context.Context, ProgressReporter) Result
 ```
 
-The Module owns installed-state proof, GitHub's qualified Latest release, Release Sequence ordering, the mutation lock, two-checkpoint update, rollback, forward completion, and recovery. The numbered terminal menu is an Adapter to this Interface.
+The Module owns installed-state proof, GitHub's qualified Latest release, Release Sequence ordering, the mutation lock, two-checkpoint update, rollback, forward completion, and recovery. The V3 numbered terminal menu calls Proxy Installation directly.
 
 The durable MVP paths are `/usr/local/bin/sbxr` and `/var/lib/sbxr/installed.json`. Transaction work stays under `/var/lib/sbxr` and is removed at a verified terminal result.
 
