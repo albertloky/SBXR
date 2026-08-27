@@ -31,6 +31,7 @@ type controlledHost struct {
 	active             bool
 	listener           bool
 	busy               bool
+	lockHeld           bool
 	lockChangesFacts   bool
 	statusBusy         bool
 	activeUnknown      bool
@@ -159,6 +160,7 @@ func (host *controlledHost) RemoveFinalOwnership(_, _, _ string, expected []byte
 }
 
 func (host *controlledHost) AcquireMutationLock(string) (*hostadapter.MutationLock, bool, error) {
+	host.lockHeld = true
 	if host.lockChangesFacts {
 		host.preflight.MutationLockAvailable = false
 	}
@@ -313,12 +315,11 @@ func (mismatchedLifecycle) Status(context.Context) softwarelifecycle.Result {
 
 type lockSensitiveLifecycle struct {
 	readyLifecycle
-	statusCalls int
+	host *controlledHost
 }
 
 func (lifecycle *lockSensitiveLifecycle) Status(ctx context.Context) softwarelifecycle.Result {
-	lifecycle.statusCalls++
-	if lifecycle.statusCalls > 1 {
+	if lifecycle.host.lockHeld {
 		return softwarelifecycle.Result{State: softwarelifecycle.UpdateInProgress, Code: softwarelifecycle.StatusUpdateInProgress}
 	}
 	return lifecycle.readyLifecycle.Status(ctx)
@@ -367,8 +368,9 @@ func TestSetupRevalidationAcceptsItsAcquiredMutationLock(t *testing.T) {
 }
 
 func TestSetupRevalidatesInstalledReleaseWhileItOwnsTheSharedLock(t *testing.T) {
-	lifecycle := &lockSensitiveLifecycle{}
-	installation := newInstalledInterface(lifecycle, acceptedHost(), acceptedSingBox{})
+	host := acceptedHost()
+	lifecycle := &lockSensitiveLifecycle{host: host}
+	installation := newInstalledInterface(lifecycle, host, acceptedSingBox{})
 	review := installation.Review(t.Context(), StartSetupAction)
 	var phases []string
 
@@ -378,6 +380,36 @@ func TestSetupRevalidatesInstalledReleaseWhileItOwnsTheSharedLock(t *testing.T) 
 
 	if result.Status != Running || result.Code != SetupComplete || !slices.Contains(phases, string(hostadapter.ValidateConfiguration)) {
 		t.Fatalf("Execute() = %#v, phases = %v", result, phases)
+	}
+}
+
+func TestUnfinishedActionsRevalidateInstalledReleaseUnderTheirOwnedSharedLock(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		finish   Action
+		failures map[hostadapter.Operation]bool
+		want     ResultCode
+	}{
+		{name: "cleanup", finish: FinishCleanupAction, failures: map[hostadapter.Operation]bool{hostadapter.InstallPackage: true, hostadapter.RemovePackage: true}, want: SetupCleanedUp},
+		{name: "setup", finish: FinishSetupAction, failures: map[hostadapter.Operation]bool{hostadapter.StartService: true}, want: SetupComplete},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			host := acceptedHost()
+			host.fails = test.failures
+			installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+			start := installation.Review(t.Context(), StartSetupAction)
+			installation.Execute(t.Context(), *start.Prepared, Approved, nil)
+			host.fails = nil
+			host.lockHeld = false
+			restarted := newInstalledInterface(&lockSensitiveLifecycle{host: host}, host, acceptedSingBox{})
+			finish := restarted.Review(t.Context(), test.finish)
+
+			result := restarted.Execute(t.Context(), *finish.Prepared, Approved, nil)
+
+			if result.Code != test.want {
+				t.Fatalf("Execute() = %#v", result)
+			}
+		})
 	}
 }
 

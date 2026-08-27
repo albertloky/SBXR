@@ -899,7 +899,7 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 		return module.finishRemoval(ctx, record, current, progress)
 	}
 	if authority.action == FinishCleanupAction {
-		record, current, ok := module.revalidateFinishingAuthority(context.WithoutCancel(ctx), authority)
+		record, current, ok := module.revalidateFinishingAuthority(context.WithoutCancel(ctx), authority, lock)
 		inspection := module.host.Inspect(context.WithoutCancel(ctx), slices.Clone(footprint))
 		if !ok || !inspectionAccepted(inspection) || !reflect.DeepEqual(inspection, authority.inspection) {
 			return refused(ProblemDetected, "Prepared Action facts", "Review Finish cleanup again after restoring every changed authority fact.")
@@ -907,7 +907,7 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 		return module.cleanup(ctx, record, current, progress)
 	}
 	if authority.action == FinishSetupAction {
-		record, current, ok := module.revalidateFinishingAuthority(context.WithoutCancel(ctx), authority)
+		record, current, ok := module.revalidateFinishingAuthority(context.WithoutCancel(ctx), authority, lock)
 		if !ok || !module.setupFactsFresh(context.WithoutCancel(ctx), record, current) {
 			return refused(ProblemDetected, "Prepared Action facts", "Review Finish setup again after restoring every changed safety fact.")
 		}
@@ -944,11 +944,7 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 		progress(Progress{ClientConfiguration: slices.Clone(clientConfiguration)})
 		return Result{Status: Running, Message: "Client Configuration was disclosed.", Code: ClientConfigurationDisclosed}
 	}
-	lifecycle, ok := module.lifecycle.(mutationLifecycle)
-	if !ok {
-		return refused(authority.status, "Installed SBXR", "Restore SBXR to a verified Ready Software Lifecycle state before setup.")
-	}
-	installed := lifecycle.StatusUnderMutationLock(ctx, lock)
+	installed := module.statusUnderMutationLock(ctx, lock)
 	currentFacts := module.host.Preflight(ctx, slices.Clone(footprint), slices.Clone(destinations))
 	currentFacts.MutationLockAvailable = authority.facts.MutationLockAvailable
 	selected, failed, _ := acceptedPreflight(currentFacts)
@@ -976,13 +972,21 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 	return module.runPreCommit(ctx, record, body, configuration, progress)
 }
 
-func (module *installedInterface) revalidateFinishingAuthority(ctx context.Context, authority preparedReview) (ownershipRecord, []byte, bool) {
+func (module *installedInterface) statusUnderMutationLock(ctx context.Context, lock *softwarelifecycle.MutationLockAuthority) softwarelifecycle.Result {
+	lifecycle, ok := module.lifecycle.(mutationLifecycle)
+	if !ok {
+		return softwarelifecycle.Result{}
+	}
+	return lifecycle.StatusUnderMutationLock(ctx, lock)
+}
+
+func (module *installedInterface) revalidateFinishingAuthority(ctx context.Context, authority preparedReview, lock *softwarelifecycle.MutationLockAuthority) (ownershipRecord, []byte, bool) {
 	current, err := module.readOwnership()
 	if err != nil || !bytes.Equal(current, authority.record) {
 		return ownershipRecord{}, nil, false
 	}
 	record, ok := decodeOwnership(current)
-	installed := module.lifecycle.Status(ctx)
+	installed := module.statusUnderMutationLock(ctx, lock)
 	return record, current, ok && installed.State == softwarelifecycle.Ready && installed.Installed != nil && *installed.Installed == authority.release && record.Release == authority.release
 }
 
