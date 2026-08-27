@@ -452,7 +452,23 @@ func (adapter Adapter) Apply(ctx context.Context, input OperationInput) Operatio
 		} else if user.OK || group.OK && !adapter.groupExclusive(ctx, spec, group.Fact) {
 			return OperationResult{}
 		}
-		if user.OK && !adapter.command(ctx, "userdel", spec.User).OK || group.OK && !adapter.command(ctx, "groupdel", spec.Group).OK {
+		if user.OK && !adapter.command(ctx, "userdel", spec.User).OK {
+			return OperationResult{}
+		}
+		if user.OK && group.OK {
+			current := adapter.command(ctx, "getent", "group", spec.Group)
+			if !current.OK {
+				if current.Observed && current.Code == 2 {
+					return OperationResult{OK: true, Fact: "package identity absent"}
+				}
+				return OperationResult{}
+			}
+			if current.Fact != group.Fact || !adapter.groupExclusive(ctx, spec, current.Fact) {
+				return OperationResult{}
+			}
+			group = current
+		}
+		if group.OK && !adapter.command(ctx, "groupdel", spec.Group).OK {
 			return OperationResult{}
 		}
 		return OperationResult{OK: true, Fact: "package identity absent"}

@@ -242,6 +242,42 @@ func TestConfigurationRemovalNeverRecursivelyDeletesUnknownEntries(t *testing.T)
 	}
 }
 
+func TestPackageIdentityRemovalAcceptsGroupRemovedByUserdel(t *testing.T) {
+	directory := t.TempDir()
+	commandPath := filepath.Join(directory, "command")
+	statePath := filepath.Join(directory, "identity-removed")
+	groupdelPath := filepath.Join(directory, "groupdel-called")
+	command := `#!/bin/sh
+case "${0##*/}:$1" in
+getent:passwd) [ ! -e "$IDENTITY_REMOVED" ] || exit 2; printf '%s\n' 'sing-box:x:999:999::/var/lib/sing-box:/usr/sbin/nologin';;
+getent:group) [ ! -e "$IDENTITY_REMOVED" ] || exit 2; printf '%s\n' 'sing-box:x:999:';;
+find:*) exit 0;;
+pgrep:*) exit 1;;
+userdel:*) : > "$IDENTITY_REMOVED";;
+groupdel:*) : > "$GROUPDEL_CALLED"; exit 6;;
+esac
+`
+	if err := os.WriteFile(commandPath, []byte(command), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"getent", "find", "pgrep", "userdel", "groupdel"} {
+		if err := os.Symlink(commandPath, filepath.Join(directory, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", directory)
+	t.Setenv("IDENTITY_REMOVED", statePath)
+	t.Setenv("GROUPDEL_CALLED", groupdelPath)
+
+	result := (Adapter{root: directory}).Apply(t.Context(), OperationInput{Operation: RemovePackageIdentity, Spec: testSetupSpec()})
+	if !result.OK || result.Fact != "package identity absent" {
+		t.Fatalf("RemovePackageIdentity = %#v", result)
+	}
+	if _, err := os.Stat(groupdelPath); !os.IsNotExist(err) {
+		t.Fatalf("groupdel ran after userdel removed the group: %v", err)
+	}
+}
+
 func TestReadBoundFileReturnsOnlyTheExactSafeConfiguration(t *testing.T) {
 	root := t.TempDir()
 	name := "/etc/sing-box/config.json"
