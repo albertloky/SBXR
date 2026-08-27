@@ -9,6 +9,11 @@ WORK=/run/sbxr-qualification
 menu_number() {
   local label=$1 output
   output="$(printf '0\n' | /usr/local/bin/sbxr)"
+  menu_number_from "$output" "$label"
+}
+
+menu_number_from() {
+  local output=$1 label=$2
   sed -n "s/^\([1-9][0-9]*\)\. $label$/\1/p" <<<"$output"
 }
 
@@ -18,17 +23,17 @@ scan_vps_capture() {
   if test -e /etc/sing-box/config.json && jq -e '.inbounds[0].tls.reality.private_key and .inbounds[0].users[0].uuid' /etc/sing-box/config.json >/dev/null 2>&1; then
     private_key="$(jq -er '.inbounds[0].tls.reality.private_key' /etc/sing-box/config.json)"
     client_uuid="$(jq -er '.inbounds[0].users[0].uuid' /etc/sing-box/config.json)"
-    ! grep -F -- "$private_key" <<<"$content" >/dev/null
-    ! grep -F -- "$client_uuid" <<<"$content" >/dev/null
+    if grep -F -- "$private_key" <<<"$content" >/dev/null; then return 1; fi
+    if grep -F -- "$client_uuid" <<<"$content" >/dev/null; then return 1; fi
   fi
-  if test -n "${KNOWN_PRIVATE_KEY:-}"; then ! grep -F -- "$KNOWN_PRIVATE_KEY" <<<"$content" >/dev/null; fi
-  if test -n "${KNOWN_CLIENT_UUID:-}"; then ! grep -F -- "$KNOWN_CLIENT_UUID" <<<"$content" >/dev/null; fi
-  ! grep -Eq 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer ' <<<"$content"
+  if test -n "${KNOWN_PRIVATE_KEY:-}" && grep -F -- "$KNOWN_PRIVATE_KEY" <<<"$content" >/dev/null; then return 1; fi
+  if test -n "${KNOWN_CLIENT_UUID:-}" && grep -F -- "$KNOWN_CLIENT_UUID" <<<"$content" >/dev/null; then return 1; fi
+  if grep -Eq 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer ' <<<"$content"; then return 1; fi
 }
 
 protected_inventory() {
   {
-    for path in /usr/local/bin/sbxr /var/lib/sbxr/installed.json /var/lib/sbxr/proxy-ownership.json /var/lib/sbxr/proxy-ownership.finalizing.json /etc/sing-box/config.json /etc/apt/sources.list.d/sagernet.sources /etc/apt/keyrings/sagernet.asc /lib/systemd/system/sing-box.service; do
+    for path in /usr/local/bin/sbxr /var/lib/sbxr/installed.json /var/lib/sbxr/proxy-ownership.json /var/lib/sbxr/proxy-ownership.finalizing.json /etc/sing-box/config.json /etc/apt/sources.list.d/sagernet.sources /etc/apt/keyrings/sagernet.asc /lib/systemd/system/sing-box.service /usr/lib/systemd/system/sing-box.service; do
       if test -e "$path"; then stat -c "$path %a %u %g %s" "$path"; sha256sum "$path"; else printf '%s absent\n' "$path"; fi
     done
     for directory in /var/lib/sbxr /etc/sing-box /var/lib/sing-box; do
@@ -52,10 +57,11 @@ protected_inventory() {
 run_action() {
   local label=$1 input=$2 expected=$3 number output
   number="$(menu_number "$label")"
-  test -n "$number"
-  output="$(printf '%s\n' "$number" "$input" 0 | /usr/local/bin/sbxr)"
-  test "$(grep '^Code: ' <<<"$output" | tail -1)" = "$expected"
-  scan_vps_capture <(printf '%s' "$output")
+  test -n "$number" || return 1
+  output="$(printf '%s\n' "$number" "$input" 0 | /usr/local/bin/sbxr)" || return 1
+  scan_vps_capture <(printf '%s' "$output") || return 1
+  LAST_ACTION_OUTPUT=$output
+  test "$(grep '^Code: ' <<<"$output" | tail -1)" = "$expected" || return 1
 }
 
 view_details() {
@@ -119,20 +125,22 @@ prove_running() {
 }
 
 prove_not_installed() {
-  test ! -e /usr/local/bin/sbxr
-  test ! -e /var/lib/sbxr/installed.json
-  test ! -e /var/lib/sbxr/proxy-ownership.json
-  test ! -e /var/lib/sbxr/proxy-ownership.finalizing.json
-  test ! -e /etc/sing-box/config.json
-  test ! -e /var/lib/sing-box
-  test ! -e /etc/apt/sources.list.d/sagernet.sources
-  test ! -e /etc/apt/keyrings/sagernet.asc
-  ! dpkg-query -W sing-box >/dev/null 2>&1
-  ! apt-mark showhold | grep -Fx sing-box >/dev/null
-  ! systemctl list-unit-files sing-box.service --no-legend 2>/dev/null | grep -F sing-box.service >/dev/null
-  ! ss -H -ltnp 'sport = :443' | grep -F sing-box >/dev/null
-  ! getent passwd sing-box >/dev/null
-  ! getent group sing-box >/dev/null
+  local code output
+  for path in /usr/local/bin/sbxr /var/lib/sbxr/installed.json /var/lib/sbxr/proxy-ownership.json /var/lib/sbxr/proxy-ownership.finalizing.json /etc/sing-box/config.json /var/lib/sing-box /etc/apt/sources.list.d/sagernet.sources /etc/apt/keyrings/sagernet.asc /lib/systemd/system/sing-box.service /usr/lib/systemd/system/sing-box.service; do
+    test ! -e "$path" || return 1
+  done
+  if dpkg-query -W sing-box >/dev/null 2>&1; then return 1; else code=$?; fi
+  test "$code" -eq 1 || return 1
+  output="$(apt-mark showhold)" || return 1
+  if grep -Fx sing-box <<<"$output" >/dev/null; then return 1; fi
+  output="$(systemctl list-unit-files sing-box.service --no-legend 2>/dev/null)" || return 1
+  if grep -F sing-box.service <<<"$output" >/dev/null; then return 1; fi
+  output="$(ss -H -ltnp 'sport = :443')" || return 1
+  if grep -F sing-box <<<"$output" >/dev/null; then return 1; fi
+  if getent passwd sing-box >/dev/null; then return 1; else code=$?; fi
+  test "$code" -eq 2 || return 1
+  if getent group sing-box >/dev/null; then return 1; else code=$?; fi
+  test "$code" -eq 2 || return 1
 }
 
 remote_failure_safety() {
@@ -211,13 +219,99 @@ remote_remove() {
   prove_not_installed
 }
 
+seal_failure_evidence() {
+  local evidence=$1 marker=$2
+  rm -f "$marker"
+  scan_vps_capture "$evidence" || return 1
+  install -m 0600 /dev/null "$marker"
+}
+
+remote_failure_cleanup() {
+  local action after before details details_number evidence evidence_safe input expected output status
+  evidence=$WORK/failure-cleanup-evidence.txt
+  evidence_safe=$WORK/failure-cleanup-evidence.safe
+  rm -f "$evidence_safe"
+  install -m 0600 /dev/null "$evidence"
+  for _ in 1 2 3; do
+    if test ! -x /usr/local/bin/sbxr; then
+      if prove_not_installed; then
+        printf 'Public interface: Not installed\nFinal absence: Verified\n' >>"$evidence"
+        seal_failure_evidence "$evidence" "$evidence_safe"
+        return
+      fi
+      printf 'Public interface: Not installed\nFinal absence: Inspection failed or a protected resource remains\n' >>"$evidence"
+      seal_failure_evidence "$evidence" "$evidence_safe"
+      return 1
+    fi
+    if output="$(printf '0\n' | /usr/local/bin/sbxr)"; then
+      scan_vps_capture <(printf '%s' "$output") || return 1
+    else
+      status=$?
+      if scan_vps_capture <(printf '%s' "$output"); then
+        printf 'Public inspection: Failed (%s)\n%s\n' "$status" "$output" >>"$evidence"
+      else
+        printf 'Public inspection: Failed (%s); rejected secret-bearing output was not retained\n' "$status" >>"$evidence"
+      fi
+      seal_failure_evidence "$evidence" "$evidence_safe"
+      return 1
+    fi
+    printf '%s\n' "$output" >>"$evidence"
+    details_number="$(menu_number_from "$output" 'View details')"
+    if test -n "$details_number"; then
+      details="$(printf '%s\n\n0\n' "$details_number" | /usr/local/bin/sbxr)" || return 1
+      scan_vps_capture <(printf '%s' "$details") || return 1
+      printf '%s\n' "$details" >>"$evidence"
+      seal_failure_evidence "$evidence" "$evidence_safe" || return 1
+    fi
+    if test -e /etc/sing-box/config.json && jq -e '.inbounds[0].tls.reality.private_key and .inbounds[0].users[0].uuid' /etc/sing-box/config.json >/dev/null 2>&1; then
+      KNOWN_PRIVATE_KEY="$(jq -er '.inbounds[0].tls.reality.private_key' /etc/sing-box/config.json)"
+      KNOWN_CLIENT_UUID="$(jq -er '.inbounds[0].users[0].uuid' /etc/sing-box/config.json)"
+    fi
+    before="$(protected_inventory)" || return 1
+    if test -n "$(menu_number_from "$output" 'Finish cleanup')"; then
+      action='Finish cleanup' input=y expected='Code: PROXY-INSTALLATION-SETUP-CLEANED-UP'
+    elif test -n "$(menu_number_from "$output" 'Finish setup')"; then
+      action='Finish setup' input=y expected='Code: PROXY-INSTALLATION-SETUP-COMPLETE'
+    elif test -n "$(menu_number_from "$output" 'Finish removal')"; then
+      action='Finish removal' input='' expected='Code: SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED'
+    elif test -n "$(menu_number_from "$output" 'Complete removal')"; then
+      action='Complete removal' input='REMOVE SBXR' expected='Code: SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED'
+    else
+      after="$(protected_inventory)" || return 1
+      printf 'Legal finishing action: Absent\nProtected inventory before: %s\nProtected inventory after: %s\nRetention: %s\n' "$before" "$after" "$(if test "$before" = "$after"; then printf Verified; else printf Changed; fi)" >>"$evidence"
+      seal_failure_evidence "$evidence" "$evidence_safe"
+      test "$before" = "$after" || return 1
+      return 1
+    fi
+    LAST_ACTION_OUTPUT=
+    if run_action "$action" "$input" "$expected"; then
+      after="$(protected_inventory)" || return 1
+      printf 'Legal finishing action: %s\n%s\nAction result: Accepted\nProtected inventory before: %s\nProtected inventory after: %s\n' "$action" "$LAST_ACTION_OUTPUT" "$before" "$after" >>"$evidence"
+    else
+      after="$(protected_inventory)" || return 1
+      printf 'Legal finishing action: %s\n%s\nAction result: Refused or failed\nProtected inventory before: %s\nProtected inventory after: %s\n' "$action" "${LAST_ACTION_OUTPUT:-No action output}" "$before" "$after" >>"$evidence"
+      seal_failure_evidence "$evidence" "$evidence_safe"
+      return 1
+    fi
+    seal_failure_evidence "$evidence" "$evidence_safe"
+  done
+  if prove_not_installed; then
+    printf 'Final absence: Verified\n' >>"$evidence"
+    seal_failure_evidence "$evidence" "$evidence_safe"
+    return
+  fi
+  printf 'Final absence: Inspection failed or a protected resource remains\n' >>"$evidence"
+  seal_failure_evidence "$evidence" "$evidence_safe"
+  return 1
+}
+
 remote_secret_safe() {
   local private_key client_uuid
   private_key="$(jq -er '.inbounds[0].tls.reality.private_key' /etc/sing-box/config.json)"
   client_uuid="$(jq -er '.inbounds[0].users[0].uuid' /etc/sing-box/config.json)"
-  ! grep -RF -- "$private_key" "$WORK/qualification-manifest.json" "$WORK/gateway.log" >/dev/null 2>&1
-  ! grep -RF -- "$client_uuid" "$WORK/qualification-manifest.json" "$WORK/gateway.log" >/dev/null 2>&1
-  ! grep -Eq 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer ' "$WORK/qualification-manifest.json" "$WORK/gateway.log"
+  if grep -RF -- "$private_key" "$WORK/qualification-manifest.json" "$WORK/gateway.log" >/dev/null 2>&1; then return 1; fi
+  if grep -RF -- "$client_uuid" "$WORK/qualification-manifest.json" "$WORK/gateway.log" >/dev/null 2>&1; then return 1; fi
+  if grep -Eq 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer ' "$WORK/qualification-manifest.json" "$WORK/gateway.log"; then return 1; fi
 }
 
 if [[ ${1:-} == remote-* ]]; then
@@ -228,6 +322,7 @@ if [[ ${1:-} == remote-* ]]; then
     remote-setup-and-disclose) remote_setup_and_disclose ;;
     remote-secret-safe) remote_secret_safe ;;
     remote-remove) remote_remove ;;
+    remote-failure-cleanup) remote_failure_cleanup ;;
     *) exit 1 ;;
   esac
   exit
@@ -266,8 +361,8 @@ trap cleanup EXIT
 exec >"$workflow_capture" 2>&1
 
 scan_runner_capture() {
-  ! grep -F -- "$client_uuid" "$client_log" >/dev/null
-  ! grep -Eq 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer |[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}' "$client_log"
+  if grep -F -- "$client_uuid" "$client_log" >/dev/null; then return 1; fi
+  if grep -Eq 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer |[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}' "$client_log"; then return 1; fi
 }
 
 journey_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -309,8 +404,8 @@ wait "$client_pid" 2>/dev/null || true
 unset client_pid
 scan_runner_capture
 rm -rf "$client_config" "$client_root" "$client_deb" "$client_log" /dev/shm/sagernet.asc /dev/shm/sagernet.sources
-! ss -H -ltn 'sport = :2080' | grep -F '127.0.0.1:2080' >/dev/null
-! pgrep -x sing-box >/dev/null
+if ss -H -ltn 'sport = :2080' | grep -F '127.0.0.1:2080' >/dev/null; then exit 1; fi
+if pgrep -x sing-box >/dev/null; then exit 1; fi
 test ! -e "$client_config"
 test ! -e "$client_root"
 test ! -e "$client_deb"

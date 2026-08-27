@@ -612,6 +612,21 @@ jobs:
                 rm -f handoff/failure-evidence/qualification-failure-evidence.tgz
               fi
               ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'bash -se' <<'REMOTE'
+          proxy_cleanup_status=0
+          cleanup_mode='${{ inputs.mode }}'
+          if test "$cleanup_mode" = v3 && test -f /run/sbxr-qualification/v3-packaged-live.sh && test -f /run/sbxr-qualification/qualification-manifest.json; then
+            release="$(jq -c '.releases[0]' /run/sbxr-qualification/qualification-manifest.json)"
+            tag="$(jq -r .tag <<<"$release")"
+            sequence="$(jq -r .sequence <<<"$release")"
+            commit="$(jq -r .commit <<<"$release")"
+            index="$(jq -r .release_identity.release_index_sha256 <<<"$release")"
+            /usr/bin/bash /run/sbxr-qualification/v3-packaged-live.sh remote-failure-cleanup "$tag" "$sequence" "$commit" "$index" || proxy_cleanup_status=$?
+          elif test "$cleanup_mode" = v3; then
+            proxy_cleanup_status=1
+          fi
+          if test -f /run/sbxr-qualification/failure-cleanup-evidence.txt && test -f /run/sbxr-qualification/failure-cleanup-evidence.safe; then
+            install -m 0600 /run/sbxr-qualification/failure-cleanup-evidence.txt /root/qualification-failure-cleanup-evidence.txt
+          fi
           if test -f /run/sbxr-qualification/hosts.original; then cp -a /run/sbxr-qualification/hosts.original /etc/hosts; fi
           rm -f /usr/local/share/ca-certificates/sbxr-qualification.crt
           update-ca-certificates --fresh >/dev/null
@@ -619,8 +634,6 @@ jobs:
           pkill -f '/run/sbxr-qualification/installer-updater-vps.sh' 2>/dev/null || true
           pkill -x sbxr 2>/dev/null || true
           rm -f /run/sbxr-qualification/original-session
-          rm -f /usr/local/bin/sbxr /usr/local/bin/.sbxr-update-prior /usr/local/bin/.sbxr-update-candidate /run/lock/sbxr.lock
-          if test -d /var/lib/sbxr; then find /var/lib/sbxr -depth -delete; fi
           redirect_comment='sbxr-qualification-${{ github.run_id }}-${{ github.run_attempt }}'
           owned_redirect="-A OUTPUT -d 127.0.0.1/32 -p tcp -m tcp --dport 443 -m comment --comment $redirect_comment -j REDIRECT --to-ports 8443"
           rules="$(iptables -t nat -S OUTPUT)"
@@ -631,7 +644,17 @@ jobs:
           fi
           if test -d /run/sbxr-qualification; then find /run/sbxr-qualification -depth -delete; fi
           rm -f /root/qualification-handoff.tgz /root/qualification-failure-evidence.tgz /root/sbxr-qualification-gateway
+          if test "$cleanup_mode" = v3; then
+            test "$proxy_cleanup_status" -eq 0
+            rm -f /usr/local/bin/.sbxr-update-prior /usr/local/bin/.sbxr-update-candidate /run/lock/sbxr.lock
+          else
+            rm -f /usr/local/bin/sbxr /usr/local/bin/.sbxr-update-prior /usr/local/bin/.sbxr-update-candidate /run/lock/sbxr.lock
+            if test -d /var/lib/sbxr; then find /var/lib/sbxr -depth -delete; fi
+          fi
           REMOTE
+              if scp "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST:/root/qualification-failure-cleanup-evidence.txt" handoff/failure-evidence/ 2>/dev/null; then
+                ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'rm -f /root/qualification-failure-cleanup-evidence.txt' 2>/dev/null || true
+              fi
             fi
             rm -f ssh.key known_hosts handoff/gateway.key
             return "$status"

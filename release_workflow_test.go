@@ -292,7 +292,7 @@ func TestCandidateQualifiesTheManifestBoundTwoReleaseJourneyOnTheAcceptanceVPS(t
 		"rm -f /root/sbxr-qualification-gateway",
 		"acceptance-vps-diagnostics-${{ github.run_id }}",
 		"qualification-failure-evidence.tgz",
-		"if test -d /var/lib/sbxr; then find /var/lib/sbxr -depth -delete; fi",
+		`/usr/bin/bash /run/sbxr-qualification/v3-packaged-live.sh remote-failure-cleanup "$tag" "$sequence" "$commit" "$index"`,
 		"curl -fsSL https://github.com/albertloky/SBXR/releases/latest/download/install.sh | sudo bash",
 		"SOFTWARE-LIFECYCLE-CHECK-UPDATE-AVAILABLE",
 		"grep -F \"Latest stable version: $B_TAG\" check-b.transcript",
@@ -594,6 +594,188 @@ func TestCandidateRoutesOneV3CandidateThroughPackagedLiveQualification(t *testin
 	}
 	assertActionsPinned(t, workflow)
 	assertActionsPinned(t, stable)
+}
+
+func TestCandidateFailureCleanupFinishesOnlyThroughThePublicInterface(t *testing.T) {
+	workflowBody, err := os.ReadFile(".github/workflows/candidate.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scriptBody, err := os.ReadFile(".github/scripts/v3-packaged-live.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow, script := string(workflowBody), string(scriptBody)
+	for _, required := range []string{
+		"remote-failure-cleanup",
+		"Finish cleanup",
+		"PROXY-INSTALLATION-SETUP-CLEANED-UP",
+		"Finish setup",
+		"PROXY-INSTALLATION-SETUP-COMPLETE",
+		"Finish removal",
+		"SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED",
+		"Complete removal",
+		"prove_not_installed",
+	} {
+		if !strings.Contains(script, required) {
+			t.Errorf("packaged-live failure cleanup omitted %q", required)
+		}
+	}
+	for _, required := range []string{`cleanup_mode='${{ inputs.mode }}'`, `if test "$cleanup_mode" = v3`, `if test -d /var/lib/sbxr; then find /var/lib/sbxr -depth -delete; fi`} {
+		if !strings.Contains(workflow, required) {
+			t.Errorf("candidate mode-specific failure cleanup omitted %q", required)
+		}
+	}
+	cleanupCall := strings.Index(workflow, "remote-failure-cleanup")
+	if cleanupCall < 0 {
+		t.Fatal("candidate failure cleanup does not call the packaged public cleanup mode")
+	}
+	transportCleanup := strings.Index(workflow[cleanupCall:], "hosts.original")
+	cleanupResult := strings.Index(workflow[cleanupCall:], `test "$proxy_cleanup_status" -eq 0`)
+	if transportCleanup < 0 || cleanupResult < 0 || transportCleanup >= cleanupResult {
+		t.Fatal("failure cleanup does not preserve the public cleanup result through qualification transport cleanup")
+	}
+	failureCleanup := workflow[cleanupCall : cleanupCall+cleanupResult]
+	for _, forbidden := range []string{"rm -f /usr/local/bin/sbxr", "find /var/lib/sbxr -depth -delete"} {
+		if strings.Contains(failureCleanup, forbidden) {
+			t.Fatalf("failure cleanup bypasses public ownership with %q", forbidden)
+		}
+	}
+}
+
+func TestPackagedFailureCleanupHandlesEveryPublicFinishingState(t *testing.T) {
+	script, err := filepath.Abs(".github/scripts/v3-packaged-live.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := os.ReadFile(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name, state, behavior     string
+		wantSuccess, wantRetained bool
+	}{
+		{"cleanup required", "cleanup", "success", true, false},
+		{"setup required", "setup", "success", true, false},
+		{"removal required", "removal", "success", true, false},
+		{"removal output secret", "removal", "removal-secret", false, false},
+		{"inspection failure", "inspection-failure", "failure", false, true},
+		{"secret inspection failure", "secret-inspection", "failure", false, true},
+		{"unowned mismatch", "problem", "failure", false, true},
+		{"finishing failure", "cleanup", "finishing-failure", false, true},
+		{"final absence failure", "not-set-up", "final-absence", false, true},
+		{"absence inspection failure", "removal", "inspector-failure", false, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			directory := t.TempDir()
+			statePath := filepath.Join(directory, "state")
+			binary := filepath.Join(directory, "sbxr")
+			configuration := filepath.Join(directory, "config.json")
+			sandboxScript := filepath.Join(directory, "v3-packaged-live.sh")
+			work := filepath.Join(directory, "work")
+			bin := filepath.Join(directory, "bin")
+			if err := os.MkdirAll(work, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(bin, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(statePath, []byte(test.state+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			fake := `#!/bin/sh
+set -eu
+state="$(cat "$FAKE_STATE")"
+input="$(cat)"
+choice="$(printf '%s\n' "$input" | sed -n '1p')"
+if test "$state" = inspection-failure; then exit 23; fi
+if test "$state" = secret-inspection; then printf '%s\n' "$KNOWN_CLIENT_UUID"; exit 23; fi
+case "$state:$choice" in
+  cleanup:0) printf 'Proxy status: Setup incomplete\n1. Finish cleanup\n0. Exit\n' ;;
+  setup:0) printf 'Proxy status: Setup incomplete\n1. Finish setup\n0. Exit\n' ;;
+  removal:0) printf 'Proxy status: Removal incomplete\n1. Finish removal\n0. Exit\n' ;;
+  not-set-up:0) printf 'Proxy status: Not set up\n1. Complete removal\n0. Exit\n' ;;
+  running:0) printf 'Proxy status: Running\n1. Complete removal\n0. Exit\n' ;;
+  problem:0) printf 'Proxy status: Problem detected\n1. View details\n0. Exit\n' ;;
+  problem:1) printf 'Detected mismatch: unowned protected resource\nCode: PROXY-INSTALLATION-ACTION-REFUSED\n' ;;
+  cleanup:1)
+    if test "$FAKE_BEHAVIOR" = finishing-failure; then printf 'Code: PROXY-INSTALLATION-ACTION-REFUSED\n'; exit; fi
+    printf 'not-set-up\n' > "$FAKE_STATE"
+    printf 'Code: PROXY-INSTALLATION-SETUP-CLEANED-UP\n'
+    ;;
+  setup:1)
+    printf 'running\n' > "$FAKE_STATE"
+    printf 'Code: PROXY-INSTALLATION-SETUP-COMPLETE\n'
+    ;;
+  removal:1)
+    rm -f "$0" "${FAKE_CONFIG:-}"
+    if test "$FAKE_BEHAVIOR" = removal-secret; then printf '11111111-1111-4111-8111-111111111111\n'; fi
+    printf 'Code: SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED\n'
+    ;;
+  not-set-up:1|running:1)
+    if test "$FAKE_BEHAVIOR" != final-absence; then rm -f "$0"; fi
+    printf 'Code: SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED\n'
+    ;;
+  *) exit 24 ;;
+esac
+`
+			if err := os.WriteFile(binary, []byte(fake), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			inspectors := map[string]string{
+				"dpkg-query": "#!/bin/sh\nif test \"$FAKE_BEHAVIOR\" = inspector-failure; then exit 23; fi\nexit 1\n",
+				"apt-mark":   "#!/bin/sh\nexit 0\n",
+				"systemctl":  "#!/bin/sh\nexit 0\n",
+				"ss":         "#!/bin/sh\nexit 0\n",
+				"getent":     "#!/bin/sh\nexit 2\n",
+				"stat":       "#!/bin/sh\nprintf 'protected-path 700 0 0 1\\n'\n",
+				"sha256sum":  "#!/bin/sh\nif test \"$#\" -eq 0; then cat >/dev/null; fi\nprintf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  -\\n'\n",
+			}
+			for name, body := range inspectors {
+				if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			body := strings.ReplaceAll(string(source), "/usr/local/bin/sbxr", binary)
+			body = strings.ReplaceAll(body, "/etc/sing-box/config.json", configuration)
+			body = strings.Replace(body, "WORK=/run/sbxr-qualification", "WORK="+work, 1)
+			if err := os.WriteFile(sandboxScript, []byte(body), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			command := exec.Command("bash", sandboxScript, "remote-failure-cleanup", "v3.0.10", "71", strings.Repeat("a", 40), strings.Repeat("b", 64))
+			knownClientUUID := "11111111-1111-4111-8111-111111111111"
+			if test.behavior == "removal-secret" {
+				config := `{"inbounds":[{"tls":{"reality":{"private_key":"known-reality-private-key"}},"users":[{"uuid":"` + knownClientUUID + `"}]}]}`
+				if err := os.WriteFile(configuration, []byte(config), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			command.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "FAKE_STATE="+statePath, "FAKE_BEHAVIOR="+test.behavior, "FAKE_CONFIG="+configuration)
+			if test.behavior == "failure" && test.state == "secret-inspection" {
+				command.Env = append(command.Env, "KNOWN_CLIENT_UUID="+knownClientUUID)
+			}
+			output, runErr := command.CombinedOutput()
+			if (runErr == nil) != test.wantSuccess {
+				t.Fatalf("cleanup error = %v, output = %s", runErr, output)
+			}
+			if test.wantRetained {
+				if _, err := os.Stat(binary); err != nil {
+					t.Fatalf("failed cleanup did not retain the inspected executable: %v", err)
+				}
+			}
+			evidence, err := os.ReadFile(filepath.Join(work, "failure-cleanup-evidence.txt"))
+			if err != nil || len(evidence) == 0 || strings.Contains(string(evidence), "PRIVATE KEY") || strings.Contains(string(evidence), knownClientUUID) {
+				t.Fatalf("cleanup evidence = %q, %v", evidence, err)
+			}
+			if _, err := os.Stat(filepath.Join(work, "failure-cleanup-evidence.safe")); err != nil {
+				t.Fatalf("safe cleanup evidence was not sealed: %v", err)
+			}
+			if test.state == "problem" && (!strings.Contains(string(evidence), "Detected mismatch: unowned protected resource") || !strings.Contains(string(evidence), "Legal finishing action: Absent") || !strings.Contains(string(evidence), "Protected inventory after:") || !strings.Contains(string(evidence), "Retention: Verified")) {
+				t.Fatalf("mismatch evidence = %q", evidence)
+			}
+		})
+	}
 }
 
 func TestQualificationGatewayReadinessIsBoundedAndObservable(t *testing.T) {
