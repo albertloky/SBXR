@@ -737,6 +737,13 @@ func (adapter Adapter) writeFile(name string, body []byte, mode os.FileMode) Ope
 	if err != nil {
 		return OperationResult{}
 	}
+	modeErr := file.Chmod(mode)
+	info, statErr := file.Stat()
+	if modeErr != nil || statErr != nil || info.Mode().Perm() != mode.Perm() {
+		_ = file.Close()
+		_ = os.Remove(temporary)
+		return OperationResult{}
+	}
 	written, writeErr := file.Write(body)
 	syncErr := file.Sync()
 	closeErr := file.Close()

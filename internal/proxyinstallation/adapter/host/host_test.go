@@ -190,6 +190,30 @@ func TestAdapterDurablyWritesAndRemovesOwnedConfigurationFiles(t *testing.T) {
 	}
 }
 
+func TestWriteFileAppliesExactModeUnderRestrictiveUmask(t *testing.T) {
+	root := t.TempDir()
+	adapter := Adapter{root: root}
+	priorUmask := syscall.Umask(0o077)
+	defer syscall.Umask(priorUmask)
+
+	for _, test := range []struct {
+		name string
+		mode os.FileMode
+	}{
+		{name: "/etc/apt/keyrings/sagernet.asc", mode: 0o644},
+		{name: "/etc/apt/sources.list.d/sagernet.sources", mode: 0o644},
+		{name: "/etc/sing-box/config.json", mode: 0o640},
+	} {
+		if result := adapter.writeFile(test.name, []byte("fixture\n"), test.mode); !result.OK {
+			t.Fatalf("writeFile(%q) = %#v", test.name, result)
+		}
+		info, err := os.Stat(adapter.path(test.name))
+		if err != nil || info.Mode().Perm() != test.mode {
+			t.Fatalf("writeFile(%q) mode = %v, err = %v", test.name, info.Mode().Perm(), err)
+		}
+	}
+}
+
 func TestConfigurationRemovalNeverRecursivelyDeletesUnknownEntries(t *testing.T) {
 	root := t.TempDir()
 	configurationDirectory := filepath.Join(root, "etc/sing-box")
