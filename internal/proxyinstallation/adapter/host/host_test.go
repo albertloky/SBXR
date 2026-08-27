@@ -3,8 +3,10 @@ package host
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -191,6 +193,30 @@ func TestAdapterDurablyWritesAndRemovesOwnedConfigurationFiles(t *testing.T) {
 	}
 }
 
+func TestStateDirectoryUsesNativeSystemdMode(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(directory, "var/lib"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	commandPath := filepath.Join(directory, "getent")
+	command := "#!/bin/sh\ncase \"$1\" in passwd) printf 'sing-box:x:%d:%d::/:/usr/sbin/nologin\\n';; group) printf 'sing-box:x:%d:\\n';; esac\n"
+	command = fmt.Sprintf(command, os.Getuid(), os.Getgid(), os.Getgid())
+	if err := os.WriteFile(commandPath, []byte(command), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", directory)
+	adapter := Adapter{root: directory}
+	priorUmask := syscall.Umask(0o077)
+	defer syscall.Umask(priorUmask)
+	if result := adapter.Apply(t.Context(), OperationInput{Operation: CreateStateDirectory, Spec: testSetupSpec()}); !result.OK {
+		t.Fatalf("CreateStateDirectory = %#v", result)
+	}
+	info, err := os.Stat(filepath.Join(directory, "var/lib/sing-box"))
+	if err != nil || info.Mode().Perm() != 0o755 {
+		t.Fatalf("state mode = %v, err = %v", info.Mode().Perm(), err)
+	}
+}
+
 func TestWriteFileAppliesExactModeUnderRestrictiveUmask(t *testing.T) {
 	root := t.TempDir()
 	adapter := Adapter{root: root}
@@ -342,17 +368,23 @@ func TestRunningInspectionUsesExactPinnedServiceUnitProvenance(t *testing.T) {
 
 func TestRunningInspectionRequiresExactHeldPackageAndSeparateHold(t *testing.T) {
 	directory := t.TempDir()
+	statePath := filepath.Join(directory, "var/lib/sing-box")
+	if err := os.MkdirAll(statePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	commandPath := filepath.Join(directory, "command")
 	command := `#!/bin/sh
-case "${0##*/}" in
-dpkg-query) printf '%s\n' "$PACKAGE_FACT";;
-apt-mark) printf '%s\n' "$PACKAGE_HOLDS";;
+case "${0##*/}:$1" in
+dpkg-query:*) printf '%s\n' "$PACKAGE_FACT";;
+apt-mark:*) printf '%s\n' "$PACKAGE_HOLDS";;
+getent:passwd) printf 'sing-box:x:%s:%s::/:/usr/sbin/nologin\n' "$HOST_UID" "$HOST_GID";;
+getent:group) printf 'sing-box:x:%s:\n' "$HOST_GID";;
 esac
 `
 	if err := os.WriteFile(commandPath, []byte(command), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"dpkg-query", "apt-mark"} {
+	for _, name := range []string{"dpkg-query", "apt-mark", "getent"} {
 		if err := os.Symlink(commandPath, filepath.Join(directory, name)); err != nil {
 			t.Fatal(err)
 		}
@@ -360,12 +392,17 @@ esac
 	t.Setenv("PATH", directory)
 	t.Setenv("PACKAGE_FACT", "1.13.19 amd64 hi")
 	t.Setenv("PACKAGE_HOLDS", "sing-box")
-	adapter := Adapter{root: directory, architecture: "amd64", publicIPv4: func(context.Context) string { return "203.0.113.7" }}
+	t.Setenv("HOST_UID", strconv.Itoa(os.Getuid()))
+	t.Setenv("HOST_GID", strconv.Itoa(os.Getgid()))
+	adapter := Adapter{root: directory, architecture: "amd64", publicIPv4: func(context.Context) string { return "203.0.113.7" }, packageLocksAvailable: func() bool { return true }}
 	inspect := func() RunningInspection {
 		return adapter.InspectRunning(t.Context(), testSetupSpec(), nil, nil, "", "203.0.113.7")
 	}
+	inspectRemoval := func() RemovalInspection {
+		return adapter.InspectRemoval(t.Context(), testSetupSpec(), nil, nil, "", "203.0.113.7")
+	}
 
-	if facts := inspect(); !facts.Package.Accepted || !facts.Package.Observed || !facts.Hold.Accepted || !facts.Hold.Observed {
+	if facts := inspect(); !facts.Package.Accepted || !facts.Package.Observed || !facts.Hold.Accepted || !facts.Hold.Observed || !facts.State.Accepted || !inspectRemoval().StateEntries.Accepted {
 		t.Fatalf("exact held package facts = %#v", facts)
 	}
 	t.Setenv("PACKAGE_HOLDS", "")
@@ -376,6 +413,26 @@ esac
 	t.Setenv("PACKAGE_HOLDS", "sing-box")
 	if facts := inspect(); facts.Package.Accepted || !facts.Package.Observed || !facts.Hold.Accepted {
 		t.Fatalf("unheld dpkg state facts = %#v", facts)
+	}
+	if err := os.Chmod(statePath, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if facts := inspect(); facts.State.Accepted || !facts.State.Observed || inspectRemoval().StateEntries.Accepted {
+		t.Fatalf("non-native state mode facts = %#v", facts)
+	}
+	if err := os.Chmod(statePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOST_UID", strconv.Itoa(os.Getuid()+1))
+	if facts := inspect(); facts.State.Accepted || !facts.State.Observed || inspectRemoval().StateEntries.Accepted {
+		t.Fatalf("unsafe state owner facts = %#v", facts)
+	}
+	t.Setenv("HOST_UID", strconv.Itoa(os.Getuid()))
+	if err := os.WriteFile(filepath.Join(statePath, "unexpected"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if facts := inspectRemoval(); facts.StateEntries.Accepted || !facts.StateEntries.Observed {
+		t.Fatalf("unexpected state entry facts = %#v", facts)
 	}
 }
 

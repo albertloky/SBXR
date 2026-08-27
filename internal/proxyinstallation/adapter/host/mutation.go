@@ -354,7 +354,10 @@ func (adapter Adapter) Apply(ctx context.Context, input OperationInput) Operatio
 		return typed(adapter.command(ctx, "apt-mark", "hold", spec.PackageName), "package hold applied")
 	case CreateStateDirectory:
 		path := adapter.path(spec.StatePath)
-		if err := os.Mkdir(path, 0o750); err != nil {
+		if err := os.Mkdir(path, 0o755); err != nil {
+			return OperationResult{}
+		}
+		if err := os.Chmod(path, 0o755); err != nil {
 			return OperationResult{}
 		}
 		if adapter.root == "/" && !adapter.command(ctx, "chown", spec.User+":"+spec.Group, spec.StatePath).OK {
@@ -546,7 +549,7 @@ func (adapter Adapter) InspectRunning(ctx context.Context, spec SetupSpec, sourc
 		Hold:              observation(slicesContains(strings.Fields(hold.Fact), spec.PackageName), hold.Observed),
 		PackageIdentity:   observation(user.OK && group.OK && userIDsOK && groupIDOK && userGID == groupGID, user.Observed && group.Observed),
 		Configuration:     observation(configuration, configurationObserved && group.Observed),
-		State:             observation(stateErr == nil && stateStatOK && stateInfo.IsDir() && stateInfo.Mode().Perm() == 0o750 && stateInfo.Mode()&os.ModeSymlink == 0 && userIDsOK && groupIDOK && stateStat.Uid == userUID && stateStat.Gid == groupGID, (stateErr == nil || errors.Is(stateErr, os.ErrNotExist)) && user.Observed && group.Observed),
+		State:             observation(stateErr == nil && stateStatOK && stateInfo.IsDir() && stateInfo.Mode().Perm() == 0o755 && stateInfo.Mode()&os.ModeSymlink == 0 && userIDsOK && groupIDOK && stateStat.Uid == userUID && stateStat.Gid == groupGID, (stateErr == nil || errors.Is(stateErr, os.ErrNotExist)) && user.Observed && group.Observed),
 		Validation:        observation(validation.OK, validation.Observed || validation.OK),
 		ServiceProvenance: observation(provenance.OK && strings.HasPrefix(provenance.Fact, spec.PackageName+":"), provenance.Observed),
 		ServiceEnabled:    observation(enabled.OK && enabled.Fact == "enabled", enabled.Observed),
@@ -562,7 +565,7 @@ func (adapter Adapter) InspectRemoval(ctx context.Context, spec SetupSpec, sourc
 	uid, gid, accountOK := accountIDs(user.Fact)
 	groupGID, groupOK := groupID(group.Fact)
 	configurationEntries, configurationObserved := adapter.directoryContainsOnly(filepath.Dir(spec.ConfigurationPath), 0o755, adapter.ownerUID(), adapter.ownerGID(), filepath.Base(spec.ConfigurationPath))
-	stateEntries, stateObserved := adapter.directoryContainsOnly(spec.StatePath, 0o750, uid, gid)
+	stateEntries, stateObserved := adapter.directoryContainsOnly(spec.StatePath, 0o755, uid, gid)
 	identityExclusive, identityObserved := adapter.identityExclusive(ctx, spec, uid, gid, accountOK && groupOK && gid == groupGID)
 	processExclusive, processObserved := adapter.processExclusive(ctx, spec.PackageName, uid, gid, accountOK && groupOK && gid == groupGID)
 	serviceSafe, serviceObserved := adapter.serviceRemovalSafe(ctx, spec)
