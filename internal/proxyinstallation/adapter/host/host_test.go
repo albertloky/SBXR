@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -272,8 +273,34 @@ func testSetupSpec() SetupSpec {
 	return SetupSpec{
 		OwnershipPath: "/var/lib/sbxr/proxy-ownership.json", OwnershipNextPath: "/var/lib/sbxr/.proxy-ownership.json.next", LockPath: "/run/lock/sbxr.lock",
 		PackageArtifactPath: "/var/lib/sbxr/sing-box_1.13.19_amd64.deb", APTKeyPath: "/etc/apt/keyrings/sagernet.asc", APTSourcePath: "/etc/apt/sources.list.d/sagernet.sources",
-		ConfigurationPath: "/etc/sing-box/config.json", StatePath: "/var/lib/sing-box", Service: "sing-box.service", ServiceUnitPath: "/lib/systemd/system/sing-box.service",
+		ConfigurationPath: "/etc/sing-box/config.json", StatePath: "/var/lib/sing-box", Service: "sing-box.service", ServiceUnitPath: "/usr/lib/systemd/system/sing-box.service",
 		PackageName: "sing-box", PackageVersion: "1.13.19", Architecture: "amd64", PackageSize: 24597120, User: "sing-box", Group: "sing-box", ListenerPort: "443",
+	}
+}
+
+func TestRunningInspectionUsesExactPinnedServiceUnitProvenance(t *testing.T) {
+	directory := t.TempDir()
+	logPath := filepath.Join(directory, "dpkg-query.log")
+	commandPath := filepath.Join(directory, "dpkg-query")
+	command := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$DPKG_QUERY_LOG\"\nif [ \"$1\" = --search ]; then printf '%s\\n' \"$DPKG_QUERY_OWNER\"; else printf '1.13.19 amd64 ii\\n'; fi\n"
+	if err := os.WriteFile(commandPath, []byte(command), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", directory)
+	t.Setenv("DPKG_QUERY_LOG", logPath)
+	t.Setenv("DPKG_QUERY_OWNER", "sing-box: /usr/lib/systemd/system/sing-box.service")
+	adapter := Adapter{root: directory, architecture: "amd64", publicIPv4: func(context.Context) string { return "" }}
+	spec := testSetupSpec()
+	if fact := adapter.InspectRunning(t.Context(), spec, nil, nil, "", "").ServiceProvenance; !fact.Accepted || !fact.Observed {
+		t.Fatalf("sing-box provenance = %#v", fact)
+	}
+	body, err := os.ReadFile(logPath)
+	if err != nil || !strings.Contains(string(body), "--search /usr/lib/systemd/system/sing-box.service\n") {
+		t.Fatalf("dpkg-query calls = %q, %v", body, err)
+	}
+	t.Setenv("DPKG_QUERY_OWNER", "other-package: /usr/lib/systemd/system/sing-box.service")
+	if fact := adapter.InspectRunning(t.Context(), spec, nil, nil, "", "").ServiceProvenance; fact.Accepted || !fact.Observed {
+		t.Fatalf("outside package provenance = %#v", fact)
 	}
 }
 

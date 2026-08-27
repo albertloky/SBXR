@@ -50,6 +50,26 @@ type controlledHost struct {
 	finalRemovalFails  int
 }
 
+func TestPinnedPackageProvenanceUsesCanonicalServiceUnitPath(t *testing.T) {
+	if hostSetupSpec.ServiceUnitPath != "/usr/lib/systemd/system/sing-box.service" {
+		t.Fatalf("service unit provenance path = %q", hostSetupSpec.ServiceUnitPath)
+	}
+	want := map[string]bool{
+		"/lib/systemd/system/sing-box.service":     false,
+		"/usr/lib/systemd/system/sing-box.service": false,
+	}
+	for _, resource := range footprint {
+		if _, ok := want[resource.Name]; ok {
+			want[resource.Name] = true
+		}
+	}
+	for name, present := range want {
+		if !present {
+			t.Errorf("footprint omitted %s", name)
+		}
+	}
+}
+
 type controlledHostFacts struct {
 	inspection                                  hostadapter.Inspection
 	preflight                                   hostadapter.Preflight
@@ -1337,7 +1357,7 @@ func TestReviewReturnsCompleteSecretSafeRunningDetails(t *testing.T) {
 		"Package hold: Present",
 		"Protected configuration identity: /etc/sing-box/config.json SHA-256 " + record.ConfigurationSHA256 + "; Matches",
 		"Packaged validation result: Accepted",
-		"systemd unit provenance: /lib/systemd/system/sing-box.service from sing-box; Matches",
+		"systemd unit provenance: /usr/lib/systemd/system/sing-box.service from sing-box; Matches",
 		"Service enabled: Yes",
 		"Service active: Yes",
 		"Expected public listener ownership: sing-box on TCP 8.8.8.8:443; Matches",

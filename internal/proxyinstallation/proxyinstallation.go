@@ -219,7 +219,7 @@ var hostSetupSpec = hostadapter.SetupSpec{
 	APTKeyPath:          "/etc/apt/keyrings/sagernet.asc", APTKeyURL: "https://sing-box.app/gpg.key", APTKeySHA256: "803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1",
 	APTSourcePath: "/etc/apt/sources.list.d/sagernet.sources",
 	PackageName:   "sing-box", PackageVersion: "1.13.19", Architecture: "amd64", PackageSize: 24597120, PackageSHA256: "fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf",
-	ConfigurationPath: "/etc/sing-box/config.json", StatePath: "/var/lib/sing-box", Service: "sing-box.service", ServiceUnitPath: "/lib/systemd/system/sing-box.service",
+	ConfigurationPath: "/etc/sing-box/config.json", StatePath: "/var/lib/sing-box", Service: "sing-box.service", ServiceUnitPath: "/usr/lib/systemd/system/sing-box.service",
 	User: "sing-box", Group: "sing-box", ListenerPort: "443",
 }
 
@@ -587,7 +587,7 @@ func ownedDetails(installed softwarelifecycle.ReleaseIdentity, installedReady bo
 		"Package hold: " + observationPresence(facts.Hold),
 		"Protected configuration identity: /etc/sing-box/config.json SHA-256 " + record.ConfigurationSHA256 + "; " + observationMatch(facts.Configuration),
 		"Packaged validation result: " + observationAcceptance(facts.Validation),
-		"systemd unit provenance: /lib/systemd/system/sing-box.service from sing-box; " + observationMatch(facts.ServiceProvenance),
+		"systemd unit provenance: /usr/lib/systemd/system/sing-box.service from sing-box; " + observationMatch(facts.ServiceProvenance),
 		"Service enabled: " + observationYesNo(facts.ServiceEnabled),
 		"Service active: " + observationYesNo(facts.ServiceActive),
 		"Expected public listener ownership: sing-box on TCP " + record.PublicIPv4 + ":443; " + observationMatch(facts.Listener),
@@ -620,7 +620,7 @@ func ownedDetails(installed softwarelifecycle.ReleaseIdentity, installedReady bo
 		{facts.Configuration, "protected configuration", facts.Configuration.Accepted, "the protected configuration identity does not match", "Restore /etc/sing-box/config.json with the recorded SHA-256 and protected ownership, then inspect again.", "Restore read-only access to /etc/sing-box/config.json, then inspect again."},
 		{facts.State, "protected state", facts.State.Accepted, "the protected sing-box state identity does not match", "Restore /var/lib/sing-box with the package-created sing-box ownership and mode 0750, then inspect again.", "Restore read-only access to /var/lib/sing-box, then inspect again."},
 		{facts.Validation, "packaged validation", facts.Validation.Accepted, "the packaged configuration validation was refused", "Restore the recorded protected configuration until packaged sing-box check accepts it, then inspect again.", "Restore execution of the packaged sing-box check command, then inspect again."},
-		{facts.ServiceProvenance, "systemd unit provenance", facts.ServiceProvenance.Accepted, "sing-box.service does not have package provenance", "Restore /lib/systemd/system/sing-box.service from sing-box 1.13.19, then inspect again.", "Restore working dpkg-query provenance inspection for sing-box.service, then inspect again."},
+		{facts.ServiceProvenance, "systemd unit provenance", facts.ServiceProvenance.Accepted, "sing-box.service does not have package provenance", "Restore /usr/lib/systemd/system/sing-box.service from sing-box 1.13.19, then inspect again.", "Restore working dpkg-query provenance inspection for sing-box.service, then inspect again."},
 		{facts.ServiceEnabled, "service enabled state", facts.ServiceEnabled.Accepted, "sing-box.service is not enabled", "Enable the package-owned sing-box.service, then inspect again.", "Restore working systemctl enabled-state inspection for sing-box.service, then inspect again."},
 		{facts.ServiceActive, "service active state", facts.ServiceActive.Accepted, "sing-box.service is not active", "Start sing-box.service from the exact installed package, then inspect again.", "Restore working systemctl active-state inspection for sing-box.service, then inspect again."},
 		{facts.Listener, "public listener ownership", facts.Listener.Accepted, "TCP port 443 is not owned by the expected sing-box service", "Restore the sing-box listener on the recorded public endpoint, then inspect again.", "Restore working ss inspection for TCP port 443, then inspect again."},
