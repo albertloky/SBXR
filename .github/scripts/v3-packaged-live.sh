@@ -71,12 +71,14 @@ prove_status() {
 
 interrupt_at() {
   local label=$1 confirmation=$2 event=$3 number=$4
-  local fifo="$WORK/input-$number" output="$WORK/output-$number"
+  local fifo="$WORK/input-$number" output="$WORK/output-$number" action
+  action="$(menu_number "$label")"
+  test -n "$action"
   mkfifo "$fifo"
   exec 3<>"$fifo"
   /usr/local/bin/sbxr <"$fifo" >"$output" &
   local process=$!
-  printf '%s\n%s\n' "$(menu_number "$label")" "$confirmation" >&3
+  printf '%s\n%s\n' "$action" "$confirmation" >&3
   for _ in $(seq 1 6000); do
     if grep -F "Progress: $event" "$output" >/dev/null; then break; fi
     kill -0 "$process"

@@ -538,6 +538,10 @@ func TestCandidateRoutesOneV3CandidateThroughPackagedLiveQualification(t *testin
 	if !strings.Contains(v3Path, `grep '^Code: ' <<<"$output" | tail -1`) {
 		t.Fatal("V3 qualification does not require the final emitted Code to match the expected result")
 	}
+	interruptLaunch := strings.Index(v3Path, `/usr/local/bin/sbxr <"$fifo"`)
+	if interruptLaunch < 0 || !strings.Contains(v3Path[:interruptLaunch], `action="$(menu_number "$label")"`) || !strings.Contains(v3Path[:interruptLaunch], `test -n "$action"`) {
+		t.Fatal("V3 qualification resolves and validates an interruption action after launching its target process")
+	}
 	if strings.Count(v3Path, `test ! -e "$client_root"`) < 2 {
 		t.Fatal("V3 qualification does not prove outside-client cleanup on success and failure")
 	}
