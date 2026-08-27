@@ -130,6 +130,33 @@ func TestAdapterDurablyWritesAndRemovesOwnedConfigurationFiles(t *testing.T) {
 	}
 }
 
+func TestReadBoundFileReturnsOnlyTheExactSafeConfiguration(t *testing.T) {
+	root := t.TempDir()
+	name := "/etc/sing-box/config.json"
+	path := filepath.Join(root, name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{"inbounds":[]}` + "\n")
+	if err := os.WriteFile(path, body, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	adapter := Adapter{root: root}
+	got, err := adapter.readConfigurationFile(name, digest(body), uint32(os.Getgid()))
+	if err != nil || !bytes.Equal(got, body) {
+		t.Fatalf("readConfigurationFile() = %q, %v", got, err)
+	}
+	if _, err := adapter.readConfigurationFile(name, digest([]byte("changed")), uint32(os.Getgid())); err == nil {
+		t.Fatal("readConfigurationFile accepted a changed digest")
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.readConfigurationFile(name, digest(body), uint32(os.Getgid())); err == nil {
+		t.Fatal("readConfigurationFile accepted unsafe permissions")
+	}
+}
+
 func testSetupSpec() SetupSpec {
 	return SetupSpec{
 		OwnershipPath: "/var/lib/sbxr/proxy-ownership.json", OwnershipNextPath: "/var/lib/sbxr/.proxy-ownership.json.next", LockPath: "/run/lock/sbxr.lock",

@@ -3,6 +3,9 @@ package proxyinstallation
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -16,25 +19,27 @@ import (
 )
 
 type controlledHost struct {
-	inspection    hostadapter.Inspection
-	preflight     hostadapter.Preflight
-	ownership     []byte
-	checkpoints   [][]byte
-	operations    []hostadapter.Operation
-	enabled       bool
-	active        bool
-	listener      bool
-	busy          bool
-	statusBusy    bool
-	activeUnknown bool
-	hostUnknown   bool
-	configUnknown bool
-	fails         map[hostadapter.Operation]bool
-	failPublish   setupPhase
-	latePublish   bool
-	publishFailed bool
-	cancelOn      hostadapter.Operation
-	cancel        context.CancelFunc
+	inspection         hostadapter.Inspection
+	preflight          hostadapter.Preflight
+	ownership          []byte
+	checkpoints        [][]byte
+	operations         []hostadapter.Operation
+	configuration      []byte
+	configurationReads int
+	enabled            bool
+	active             bool
+	listener           bool
+	busy               bool
+	statusBusy         bool
+	activeUnknown      bool
+	hostUnknown        bool
+	configUnknown      bool
+	fails              map[hostadapter.Operation]bool
+	failPublish        setupPhase
+	latePublish        bool
+	publishFailed      bool
+	cancelOn           hostadapter.Operation
+	cancel             context.CancelFunc
 }
 
 func acceptedHost() *controlledHost { return &controlledHost{preflight: acceptedPreflightFacts()} }
@@ -64,6 +69,15 @@ func (host *controlledHost) ReadOwnership(string) ([]byte, error) {
 		return nil, os.ErrNotExist
 	}
 	return bytes.Clone(host.ownership), nil
+}
+
+func (host *controlledHost) ReadConfiguration(_ context.Context, _ hostadapter.SetupSpec, expectedDigest string) ([]byte, error) {
+	host.configurationReads++
+	sum := sha256.Sum256(host.configuration)
+	if hex.EncodeToString(sum[:]) != expectedDigest {
+		return nil, errors.New("configuration mismatch")
+	}
+	return bytes.Clone(host.configuration), nil
 }
 
 func (host *controlledHost) MutationInProgress(string) (bool, bool) { return host.statusBusy, true }
@@ -104,6 +118,8 @@ func (host *controlledHost) Apply(_ context.Context, input hostadapter.Operation
 		return hostadapter.OperationResult{}
 	}
 	switch input.Operation {
+	case hostadapter.InstallConfiguration:
+		host.configuration = bytes.Clone(input.Body)
 	case hostadapter.EnableService:
 		host.enabled = true
 	case hostadapter.StartService:
@@ -185,6 +201,10 @@ func (adapter acceptedSingBox) EncodeServerConfiguration(identity singboxadapter
 	return []byte(`{"inbound":"secret-safe-test-fixture"}` + "\n"), nil
 }
 
+func (adapter acceptedSingBox) EncodeClientConfiguration(_ []byte, publicIPv4 string) ([]byte, error) {
+	return []byte(fmt.Sprintf(`{"server":%q,"uuid":"11111111-2222-4333-8444-555555555555","public_key":"public","short_id":"01020304"}`+"\n", publicIPv4)), nil
+}
+
 type readyLifecycle struct{}
 
 func (readyLifecycle) Status(context.Context) softwarelifecycle.Result {
@@ -261,6 +281,70 @@ func TestApprovedSetupReachesLocallyVerifiedRunning(t *testing.T) {
 		if bytes.Contains(host.ownership, []byte(secret)) {
 			t.Fatalf("Ownership Record disclosed %q", secret)
 		}
+	}
+}
+
+func TestOwnerCanReviewDeclineAndDiscloseOneRunningClientConfiguration(t *testing.T) {
+	host := acceptedHost()
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	if result := installation.Execute(t.Context(), *setup.Prepared, Approved, nil); result.Status != Running {
+		t.Fatalf("setup = %#v", result)
+	}
+
+	review := installation.Review(t.Context(), ShowClientConfigurationAction)
+	if review.Prepared == nil || !reflect.DeepEqual(review.LegalActions, []Action{ViewDetailsAction, ShowClientConfigurationAction, CompleteRemovalAction}) {
+		t.Fatalf("Review() = %#v", review)
+	}
+	warnings := strings.Join(review.Plan, "\n")
+	for _, required := range []string{"contains a credential", "anyone with a copy can use the proxy", "terminal history or recording", "no client file", "outside copies survive Complete removal"} {
+		if !strings.Contains(strings.ToLower(warnings), strings.ToLower(required)) {
+			t.Errorf("warning missing %q:\n%s", required, warnings)
+		}
+	}
+	if result := installation.Execute(t.Context(), *review.Prepared, Declined, nil); result.Code != ActionCancelled {
+		t.Fatalf("declined Execute() = %#v", result)
+	}
+
+	review = installation.Review(t.Context(), ShowClientConfigurationAction)
+	var configurations [][]byte
+	reporter := func(progress Progress) {
+		if len(progress.ClientConfiguration) > 0 {
+			configurations = append(configurations, bytes.Clone(progress.ClientConfiguration))
+		}
+	}
+	result := installation.Execute(t.Context(), *review.Prepared, Approved, reporter)
+	if result.Status != Running || result.Code != ClientConfigurationDisclosed || len(configurations) != 1 || !json.Valid(configurations[0]) {
+		t.Fatalf("approved Execute() = %#v", result)
+	}
+	configuration := string(configurations[0])
+	for _, required := range []string{"8.8.8.8", "11111111-2222-4333-8444-555555555555", "public", "01020304"} {
+		if !strings.Contains(configuration, required) {
+			t.Errorf("configuration missing %q: %s", required, configuration)
+		}
+	}
+	if strings.Contains(configuration, "private") || len(host.operations) != 11 {
+		t.Fatalf("disclosure leaked private key or mutated host: configuration=%s operations=%v", configuration, host.operations)
+	}
+	if strings.Contains(fmt.Sprintf("%#v", result), "private") {
+		t.Fatalf("disclosure result leaked the private key: %#v", result)
+	}
+	if reused := installation.Execute(t.Context(), *review.Prepared, Approved, reporter); reused.Code != ActionRefused || len(configurations) != 1 {
+		t.Fatalf("reused Execute() = %#v", reused)
+	}
+	review = installation.Review(t.Context(), ShowClientConfigurationAction)
+	if repeated := installation.Execute(t.Context(), *review.Prepared, Approved, reporter); repeated.Code != ClientConfigurationDisclosed || len(configurations) != 2 {
+		t.Fatalf("repeated Execute() = %#v configurations=%d", repeated, len(configurations))
+	}
+	review = installation.Review(t.Context(), ShowClientConfigurationAction)
+	if missingBoundary := installation.Execute(t.Context(), *review.Prepared, Approved, nil); missingBoundary.Code != ActionRefused || missingBoundary.FailedCheck != "Presentation boundary" || host.configurationReads != 2 {
+		t.Fatalf("missing-boundary Execute() = %#v reads=%d", missingBoundary, host.configurationReads)
+	}
+
+	review = installation.Review(t.Context(), ShowClientConfigurationAction)
+	host.active = false
+	if changed := installation.Execute(t.Context(), *review.Prepared, Approved, reporter); changed.Code != ActionRefused || len(configurations) != 2 || host.configurationReads != 2 {
+		t.Fatalf("changed-fact Execute() = %#v reads=%d", changed, host.configurationReads)
 	}
 }
 

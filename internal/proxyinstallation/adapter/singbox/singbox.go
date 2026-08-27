@@ -87,3 +87,60 @@ func (adapter Adapter) EncodeServerConfiguration(identity Identity, destinationA
 	}
 	return append(body, '\n'), nil
 }
+
+func (adapter Adapter) EncodeClientConfiguration(serverConfiguration []byte, publicIPv4 string) ([]byte, error) {
+	var server struct {
+		Inbounds []struct {
+			Type, Listen string
+			ListenPort   int `json:"listen_port"`
+			Users        []struct{ UUID, Flow string }
+			TLS          struct {
+				Enabled    bool
+				ServerName string `json:"server_name"`
+				Reality    struct {
+					Enabled    bool
+					PrivateKey string   `json:"private_key"`
+					ShortID    []string `json:"short_id"`
+				}
+			}
+		}
+	}
+	if err := json.Unmarshal(serverConfiguration, &server); err != nil || len(server.Inbounds) != 1 || len(server.Inbounds[0].Users) != 1 || len(server.Inbounds[0].TLS.Reality.ShortID) != 1 {
+		return nil, fmt.Errorf("client configuration refused")
+	}
+	inbound, user := server.Inbounds[0], server.Inbounds[0].Users[0]
+	privateBytes, err := base64.RawURLEncoding.DecodeString(inbound.TLS.Reality.PrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("client configuration refused")
+	}
+	private, err := ecdh.X25519().NewPrivateKey(privateBytes)
+	if err != nil {
+		return nil, fmt.Errorf("client configuration refused")
+	}
+	address := net.ParseIP(publicIPv4)
+	identity := Identity{UUID: user.UUID, PrivateKey: inbound.TLS.Reality.PrivateKey, PublicKey: base64.RawURLEncoding.EncodeToString(private.PublicKey().Bytes()), ShortID: inbound.TLS.Reality.ShortID[0]}
+	if address == nil || address.To4() == nil || inbound.Type != "vless" || inbound.ListenPort != 443 || user.Flow != "xtls-rprx-vision" || !inbound.TLS.Enabled || inbound.TLS.ServerName == "" || !inbound.TLS.Reality.Enabled || !adapter.ValidIdentity(identity) {
+		return nil, fmt.Errorf("client configuration refused")
+	}
+	configuration := struct {
+		Log       any   `json:"log"`
+		Inbounds  []any `json:"inbounds"`
+		Outbounds []any `json:"outbounds"`
+	}{
+		Log:      map[string]any{"level": "warn", "timestamp": true},
+		Inbounds: []any{map[string]any{"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 2080}},
+		Outbounds: []any{map[string]any{
+			"type": "vless", "tag": "vless-out", "server": publicIPv4, "server_port": 443, "uuid": user.UUID, "flow": user.Flow,
+			"tls": map[string]any{
+				"enabled": true, "server_name": inbound.TLS.ServerName,
+				"utls":    map[string]any{"enabled": true, "fingerprint": "chrome"},
+				"reality": map[string]any{"enabled": true, "public_key": identity.PublicKey, "short_id": identity.ShortID},
+			},
+		}},
+	}
+	body, err := json.Marshal(configuration)
+	if err != nil {
+		return nil, err
+	}
+	return append(body, '\n'), nil
+}

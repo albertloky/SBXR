@@ -56,15 +56,16 @@ const (
 type ResultCode string
 
 const (
-	StatusNotSetUp         ResultCode = "PROXY-INSTALLATION-STATUS-NOT-SET-UP"
-	StatusProblemDetected  ResultCode = "PROXY-INSTALLATION-STATUS-PROBLEM-DETECTED"
-	StatusChangeInProgress ResultCode = "PROXY-INSTALLATION-STATUS-CHANGE-IN-PROGRESS"
-	ActionCancelled        ResultCode = "PROXY-INSTALLATION-ACTION-CANCELLED"
-	ActionRefused          ResultCode = "PROXY-INSTALLATION-ACTION-REFUSED"
-	SetupComplete          ResultCode = "PROXY-INSTALLATION-SETUP-COMPLETE"
-	SetupNeedsCleanup      ResultCode = "PROXY-INSTALLATION-SETUP-CLEANUP-REQUIRED"
-	SetupNeedsCompletion   ResultCode = "PROXY-INSTALLATION-SETUP-COMPLETION-REQUIRED"
-	SetupCleanedUp         ResultCode = "PROXY-INSTALLATION-SETUP-CLEANED-UP"
+	StatusNotSetUp               ResultCode = "PROXY-INSTALLATION-STATUS-NOT-SET-UP"
+	StatusProblemDetected        ResultCode = "PROXY-INSTALLATION-STATUS-PROBLEM-DETECTED"
+	StatusChangeInProgress       ResultCode = "PROXY-INSTALLATION-STATUS-CHANGE-IN-PROGRESS"
+	ActionCancelled              ResultCode = "PROXY-INSTALLATION-ACTION-CANCELLED"
+	ActionRefused                ResultCode = "PROXY-INSTALLATION-ACTION-REFUSED"
+	SetupComplete                ResultCode = "PROXY-INSTALLATION-SETUP-COMPLETE"
+	SetupNeedsCleanup            ResultCode = "PROXY-INSTALLATION-SETUP-CLEANUP-REQUIRED"
+	SetupNeedsCompletion         ResultCode = "PROXY-INSTALLATION-SETUP-COMPLETION-REQUIRED"
+	SetupCleanedUp               ResultCode = "PROXY-INSTALLATION-SETUP-CLEANED-UP"
+	ClientConfigurationDisclosed ResultCode = "PROXY-INSTALLATION-CLIENT-CONFIGURATION-DISCLOSED"
 )
 
 type Result struct {
@@ -88,7 +89,8 @@ type Review struct {
 }
 
 type Progress struct {
-	Phase string
+	Phase               string
+	ClientConfiguration []byte
 }
 
 type ProgressReporter func(Progress)
@@ -102,6 +104,7 @@ type hostInterface interface {
 	Inspect(context.Context, []hostadapter.Resource) hostadapter.Inspection
 	Preflight(context.Context, []hostadapter.Resource, []hostadapter.Destination) hostadapter.Preflight
 	ReadOwnership(string) ([]byte, error)
+	ReadConfiguration(context.Context, hostadapter.SetupSpec, string) ([]byte, error)
 	MutationInProgress(string) (bool, bool)
 	PublishOwnership(string, string, []byte, []byte) error
 	RemoveOwnership(string, string, []byte) error
@@ -115,6 +118,7 @@ type singboxInterface interface {
 	PrepareIdentity() (singboxadapter.Identity, error)
 	ValidIdentity(singboxadapter.Identity) bool
 	EncodeServerConfiguration(singboxadapter.Identity, string, string) ([]byte, error)
+	EncodeClientConfiguration([]byte, string) ([]byte, error)
 }
 
 type installedInterface struct {
@@ -135,6 +139,7 @@ type preparedReview struct {
 	identity   singboxadapter.Identity
 	record     []byte
 	inspection hostadapter.Inspection
+	running    hostadapter.RunningInspection
 }
 
 type unfinishedDirection string
@@ -385,7 +390,7 @@ func (module *installedInterface) reviewOwned(ctx context.Context, action Action
 		if runningAccepted(facts) {
 			review.Status = Running
 			review.Result = Result{Status: Running, Message: "Proxy setup is complete and locally verified.", Code: SetupComplete}
-			review.LegalActions = []Action{ViewDetailsAction, CompleteRemovalAction}
+			review.LegalActions = []Action{ViewDetailsAction, ShowClientConfigurationAction, CompleteRemovalAction}
 		} else {
 			review.Status = ProblemDetected
 			review.Result = Result{Status: ProblemDetected, Message: "A proxy problem was detected. View details before continuing.", Code: StatusProblemDetected}
@@ -399,6 +404,23 @@ func (module *installedInterface) reviewOwned(ctx context.Context, action Action
 	}
 	review.Details = ownedDetails(installed, installedReady, review.Status, record, facts, "Available")
 	if action == StatusAction || action == ViewDetailsAction {
+		return review
+	}
+	if action == ShowClientConfigurationAction && review.Status == Running {
+		var token [32]byte
+		if _, err := rand.Read(token[:]); err != nil {
+			review.Result = refused(Running, "Prepared Action generation", "Review Show client configuration again.")
+			return review
+		}
+		module.prepared[token] = preparedReview{generation: module.generation, action: action, status: Running, release: installed, record: slices.Clone(body), running: facts}
+		review.Prepared = &PreparedAction{token: token}
+		review.Plan = []string{
+			"Warning: this Client Configuration contains a credential.",
+			"Anyone with a copy can use the proxy while this Client Identity remains active.",
+			"Terminal history or recording can retain the complete Client Configuration.",
+			"SBXR creates no client file on this VPS.",
+			"Outside copies survive Complete removal and must be deleted separately.",
+		}
 		return review
 	}
 	legal := action == FinishCleanupAction && record.Direction == cleanupRequired || action == FinishSetupAction && record.Direction == setupRequired
@@ -707,6 +729,37 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 			return refused(ProblemDetected, "Prepared Action facts", "Review Finish setup again after restoring every changed safety fact.")
 		}
 		return module.finishSetup(ctx, record, current, progress)
+	}
+	if authority.action == ShowClientConfigurationAction {
+		if progress == nil {
+			return refused(Running, "Presentation boundary", "Review Show client configuration again from the SBXR numbered menu.")
+		}
+		current, err := module.host.ReadOwnership(hostSetupSpec.OwnershipPath)
+		record, valid := decodeOwnership(current)
+		if err != nil || !valid || !bytes.Equal(current, authority.record) {
+			return refused(ProblemDetected, "Prepared Action facts", "Restore complete locally Running proxy facts, then review Show client configuration again.")
+		}
+		installed := module.lifecycle.Status(context.WithoutCancel(ctx))
+		facts := module.host.InspectRunning(context.WithoutCancel(ctx), hostSetupSpec, aptSourceBody, current, record.ConfigurationSHA256, record.PublicIPv4)
+		if installed.State != softwarelifecycle.Ready || installed.Installed == nil || *installed.Installed != authority.release || record.Release != authority.release || !runningAccepted(facts) || !reflect.DeepEqual(facts, authority.running) {
+			return refused(ProblemDetected, "Prepared Action facts", "Restore complete locally Running proxy facts, then review Show client configuration again.")
+		}
+		if ctx.Err() != nil {
+			return refused(Running, "Managed termination", "Review Show client configuration again after the current process stops.")
+		}
+		serverConfiguration, err := module.host.ReadConfiguration(context.WithoutCancel(ctx), hostSetupSpec, record.ConfigurationSHA256)
+		if err != nil {
+			return refused(ProblemDetected, "Protected configuration", "Restore the exact protected server configuration, then review Show client configuration again.")
+		}
+		clientConfiguration, err := module.singbox.EncodeClientConfiguration(serverConfiguration, record.PublicIPv4)
+		if err != nil {
+			return refused(ProblemDetected, "Client Configuration", "Restore the exact official server configuration, then review Show client configuration again.")
+		}
+		if ctx.Err() != nil {
+			return refused(Running, "Managed termination", "Review Show client configuration again after the current process stops.")
+		}
+		progress(Progress{ClientConfiguration: slices.Clone(clientConfiguration)})
+		return Result{Status: Running, Message: "Client Configuration was disclosed.", Code: ClientConfigurationDisclosed}
 	}
 	installed := module.lifecycle.Status(ctx)
 	currentFacts := module.host.Preflight(ctx, slices.Clone(footprint), slices.Clone(destinations))

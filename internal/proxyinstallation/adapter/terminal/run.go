@@ -3,7 +3,9 @@ package terminal
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -56,6 +58,46 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 		action := current.LegalActions[number-1]
 		review := installation.Review(ctx, action)
 		switch action {
+		case proxyinstallation.ShowClientConfigurationAction:
+			if review.Prepared == nil {
+				latest = review.Result
+				if writeRefusal(output, latest) != nil {
+					return 1
+				}
+				current = installation.Review(ctx, proxyinstallation.StatusAction)
+				continue
+			}
+			for _, line := range review.Plan {
+				if _, err := fmt.Fprintln(output, line); err != nil {
+					return 1
+				}
+			}
+			confirmation, ok := readConfirmation(reader, output, "Show client configuration? [y/N]")
+			if !ok {
+				return 1
+			}
+			disclosed := false
+			var disclosureErr error
+			latest = installation.Execute(ctx, *review.Prepared, confirmation, func(progress proxyinstallation.Progress) {
+				if disclosureErr != nil || len(progress.ClientConfiguration) == 0 {
+					return
+				}
+				disclosed = true
+				disclosureErr = writeClientConfiguration(output, progress.ClientConfiguration)
+			})
+			if disclosureErr != nil || latest.Code == proxyinstallation.ClientConfigurationDisclosed && !disclosed {
+				return 1
+			}
+			if disclosed {
+				if _, err := io.WriteString(output, "Press Enter to preserve this configuration in terminal scrollback and return to the menu.\n"); err != nil {
+					return 1
+				}
+				if _, err := readLine(reader); err != nil && err != io.EOF {
+					return 1
+				}
+			} else if writeRefusal(output, latest) != nil {
+				return 1
+			}
 		case proxyinstallation.StartSetupAction, proxyinstallation.FinishCleanupAction, proxyinstallation.FinishSetupAction:
 			if review.Prepared == nil {
 				latest = review.Result
@@ -103,6 +145,21 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 		}
 		current = installation.Review(ctx, proxyinstallation.StatusAction)
 	}
+}
+
+func writeClientConfiguration(output io.Writer, configuration []byte) error {
+	if !json.Valid(configuration) {
+		return errors.New("invalid client configuration")
+	}
+	var framed bytes.Buffer
+	framed.WriteString("----- BEGIN SBXR CLIENT CONFIGURATION -----\n")
+	framed.Write(configuration)
+	if configuration[len(configuration)-1] != '\n' {
+		framed.WriteByte('\n')
+	}
+	framed.WriteString("----- END SBXR CLIENT CONFIGURATION -----\n")
+	_, err := io.Copy(output, &framed)
+	return err
 }
 
 func writeFrame(output io.Writer, review proxyinstallation.Review, result proxyinstallation.Result) error {

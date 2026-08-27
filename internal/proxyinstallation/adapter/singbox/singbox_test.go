@@ -45,3 +45,35 @@ func TestAdapterEncodesTheProtectedPackagedServerConfiguration(t *testing.T) {
 		}
 	}
 }
+
+func TestAdapterEncodesTheOfficialOutsideClientConfiguration(t *testing.T) {
+	adapter := New()
+	identity, err := adapter.PrepareIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := adapter.EncodeServerConfiguration(identity, "microsoft.com:443", "microsoft.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body, err := adapter.EncodeClientConfiguration(server, "8.8.8.8")
+	if err != nil || !json.Valid(body) {
+		t.Fatalf("EncodeClientConfiguration() = %q, %v", body, err)
+	}
+	text := string(body)
+	for _, required := range []string{
+		`"type":"mixed"`, `"listen":"127.0.0.1"`, `"listen_port":2080`,
+		`"type":"vless"`, `"server":"8.8.8.8"`, `"server_port":443`,
+		`"uuid":"` + identity.UUID + `"`, `"flow":"xtls-rprx-vision"`,
+		`"server_name":"microsoft.com"`, `"utls":{"enabled":true,"fingerprint":"chrome"}`,
+		`"public_key":"` + identity.PublicKey + `"`, `"short_id":"` + identity.ShortID + `"`,
+	} {
+		if !regexp.MustCompile(regexp.QuoteMeta(required)).MatchString(text) {
+			t.Errorf("configuration missing %s: %s", required, text)
+		}
+	}
+	if regexp.MustCompile(regexp.QuoteMeta(identity.PrivateKey)).MatchString(text) {
+		t.Fatalf("client configuration disclosed the REALITY private key: %s", text)
+	}
+}

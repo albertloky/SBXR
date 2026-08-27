@@ -130,6 +130,40 @@ func (adapter Adapter) ReadOwnership(name string) ([]byte, error) {
 	return adapter.readOwnedFile(name)
 }
 
+func (adapter Adapter) ReadConfiguration(ctx context.Context, spec SetupSpec, expectedDigest string) ([]byte, error) {
+	group := adapter.command(ctx, "getent", "group", spec.Group)
+	gid, ok := groupID(group.Fact)
+	if !group.OK || !ok {
+		return nil, errors.New("configuration group unavailable")
+	}
+	return adapter.readConfigurationFile(spec.ConfigurationPath, expectedDigest, gid)
+}
+
+func (adapter Adapter) readConfigurationFile(name, expectedDigest string, gid uint32) ([]byte, error) {
+	const limit = 1 << 20
+	path := adapter.path(name)
+	info, err := os.Lstat(path)
+	stat, ok := infoSys(info)
+	if err != nil || !ok || !info.Mode().IsRegular() || info.Mode().Perm() != 0o640 || stat.Uid != adapter.ownerUID() || stat.Gid != gid || stat.Nlink != 1 || info.Size() <= 0 || info.Size() > limit {
+		return nil, errors.New("unsafe configuration")
+	}
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	openedStat, openedOK := infoSys(opened)
+	if err != nil || !openedOK || openedStat.Dev != stat.Dev || openedStat.Ino != stat.Ino {
+		return nil, errors.New("configuration changed")
+	}
+	body, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil || int64(len(body)) > limit || digest(body) != expectedDigest {
+		return nil, errors.New("configuration identity mismatch")
+	}
+	return body, nil
+}
+
 func (adapter Adapter) readOwnedFile(name string) ([]byte, error) {
 	path := adapter.path(name)
 	info, err := os.Lstat(path)

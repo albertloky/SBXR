@@ -164,3 +164,63 @@ func TestRunViewsFreshDetailsAndReinspectsAfterEnter(t *testing.T) {
 		t.Fatalf("status=%d actions=%v output:\n%s", status, installation.actions, output.String())
 	}
 }
+
+type disclosureInstallation struct {
+	actions       []proxyinstallation.Action
+	confirmations []proxyinstallation.Confirmation
+	privateKey    string
+}
+
+func (installation *disclosureInstallation) Review(_ context.Context, action proxyinstallation.Action) proxyinstallation.Review {
+	installation.actions = append(installation.actions, action)
+	review := proxyinstallation.Review{
+		Version: "v3.0.0", Status: proxyinstallation.Running,
+		LegalActions: []proxyinstallation.Action{proxyinstallation.ViewDetailsAction, proxyinstallation.ShowClientConfigurationAction},
+		Result:       proxyinstallation.Result{Status: proxyinstallation.Running, Message: "Proxy setup is complete and locally verified.", Code: proxyinstallation.SetupComplete},
+	}
+	if action == proxyinstallation.ShowClientConfigurationAction {
+		review.Plan = []string{"Warning: this Client Configuration contains a credential."}
+		review.Prepared = &proxyinstallation.PreparedAction{}
+	}
+	return review
+}
+
+func (installation *disclosureInstallation) Execute(_ context.Context, _ proxyinstallation.PreparedAction, confirmation proxyinstallation.Confirmation, progress proxyinstallation.ProgressReporter) proxyinstallation.Result {
+	installation.confirmations = append(installation.confirmations, confirmation)
+	if confirmation == proxyinstallation.Declined {
+		return proxyinstallation.Result{Status: proxyinstallation.Running, Message: "No changes were made.", Code: proxyinstallation.ActionCancelled}
+	}
+	progress(proxyinstallation.Progress{ClientConfiguration: []byte(`{"inbounds":[{"type":"mixed","listen":"127.0.0.1"}],"outbounds":[{"type":"vless","server":"8.8.8.8","server_port":443,"uuid":"11111111-2222-4333-8444-555555555555","flow":"xtls-rprx-vision","tls":{"server_name":"microsoft.com","utls":{"enabled":true,"fingerprint":"chrome"},"reality":{"public_key":"public","short_id":"01020304"}}}]}` + "\n")})
+	return proxyinstallation.Result{Status: proxyinstallation.Running, Message: "Client Configuration was disclosed.", Code: proxyinstallation.ClientConfigurationDisclosed}
+}
+
+func TestRunDisclosesClientConfigurationOnlyInsideConfirmedBoundaries(t *testing.T) {
+	installation := &disclosureInstallation{privateKey: "private-infrastructure-secret"}
+	var output bytes.Buffer
+
+	status := Run(t.Context(), nil, bytes.NewBufferString("2\ny\n\n0\n"), &output, &output, installation)
+
+	wantActions := []proxyinstallation.Action{proxyinstallation.StatusAction, proxyinstallation.ShowClientConfigurationAction, proxyinstallation.StatusAction}
+	if status != 0 || !reflect.DeepEqual(installation.actions, wantActions) || !reflect.DeepEqual(installation.confirmations, []proxyinstallation.Confirmation{proxyinstallation.Approved}) {
+		t.Fatalf("status=%d actions=%v confirmations=%v", status, installation.actions, installation.confirmations)
+	}
+	begin := strings.Index(output.String(), "----- BEGIN SBXR CLIENT CONFIGURATION -----")
+	uuid := strings.Index(output.String(), "11111111-2222-4333-8444-555555555555")
+	end := strings.Index(output.String(), "----- END SBXR CLIENT CONFIGURATION -----")
+	if !strings.Contains(output.String(), "Warning: this Client Configuration contains a credential.\nShow client configuration? [y/N]") || begin < 0 || uuid < begin || end < uuid || strings.Count(output.String(), "11111111-2222-4333-8444-555555555555") != 1 || strings.Contains(output.String(), installation.privateKey) || !strings.Contains(output.String(), "Press Enter to preserve this configuration in terminal scrollback and return to the menu.") || !strings.Contains(output.String(), "Code: PROXY-INSTALLATION-CLIENT-CONFIGURATION-DISCLOSED") {
+		t.Fatalf("output:\n%s", output.String())
+	}
+}
+
+func TestRunCancelsClientConfigurationDisclosureOnEnterOrN(t *testing.T) {
+	for _, confirmation := range []string{"", "n"} {
+		installation := &disclosureInstallation{}
+		var output bytes.Buffer
+
+		status := Run(t.Context(), nil, bytes.NewBufferString("2\n"+confirmation+"\n0\n"), &output, &output, installation)
+
+		if status != 0 || !reflect.DeepEqual(installation.confirmations, []proxyinstallation.Confirmation{proxyinstallation.Declined}) || strings.Contains(output.String(), "BEGIN SBXR CLIENT CONFIGURATION") || !strings.Contains(output.String(), "Code: PROXY-INSTALLATION-ACTION-CANCELLED") {
+			t.Fatalf("confirmation=%q status=%d confirmations=%v output:\n%s", confirmation, status, installation.confirmations, output.String())
+		}
+	}
+}
