@@ -340,6 +340,45 @@ func TestRunningInspectionUsesExactPinnedServiceUnitProvenance(t *testing.T) {
 	}
 }
 
+func TestRunningInspectionRequiresExactHeldPackageAndSeparateHold(t *testing.T) {
+	directory := t.TempDir()
+	commandPath := filepath.Join(directory, "command")
+	command := `#!/bin/sh
+case "${0##*/}" in
+dpkg-query) printf '%s\n' "$PACKAGE_FACT";;
+apt-mark) printf '%s\n' "$PACKAGE_HOLDS";;
+esac
+`
+	if err := os.WriteFile(commandPath, []byte(command), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"dpkg-query", "apt-mark"} {
+		if err := os.Symlink(commandPath, filepath.Join(directory, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", directory)
+	t.Setenv("PACKAGE_FACT", "1.13.19 amd64 hi")
+	t.Setenv("PACKAGE_HOLDS", "sing-box")
+	adapter := Adapter{root: directory, architecture: "amd64", publicIPv4: func(context.Context) string { return "203.0.113.7" }}
+	inspect := func() RunningInspection {
+		return adapter.InspectRunning(t.Context(), testSetupSpec(), nil, nil, "", "203.0.113.7")
+	}
+
+	if facts := inspect(); !facts.Package.Accepted || !facts.Package.Observed || !facts.Hold.Accepted || !facts.Hold.Observed {
+		t.Fatalf("exact held package facts = %#v", facts)
+	}
+	t.Setenv("PACKAGE_HOLDS", "")
+	if facts := inspect(); !facts.Package.Accepted || facts.Hold.Accepted || !facts.Hold.Observed {
+		t.Fatalf("missing separate hold facts = %#v", facts)
+	}
+	t.Setenv("PACKAGE_FACT", "1.13.19 amd64 ii")
+	t.Setenv("PACKAGE_HOLDS", "sing-box")
+	if facts := inspect(); facts.Package.Accepted || !facts.Package.Observed || !facts.Hold.Accepted {
+		t.Fatalf("unheld dpkg state facts = %#v", facts)
+	}
+}
+
 func TestExactPackageIdentityAcceptsRecoverableDpkgStatesOnly(t *testing.T) {
 	spec := testSetupSpec()
 	for _, test := range []struct {
@@ -354,6 +393,25 @@ func TestExactPackageIdentityAcceptsRecoverableDpkgStatesOnly(t *testing.T) {
 	} {
 		if got := exactPackageIdentity(test.fact, spec); got != test.want {
 			t.Errorf("exactPackageIdentity(%q) = %t, want %t", test.fact, got, test.want)
+		}
+	}
+}
+
+func TestExactHeldPackageIdentityAcceptsOnlyInstalledHoldState(t *testing.T) {
+	spec := testSetupSpec()
+	for _, test := range []struct {
+		fact string
+		want bool
+	}{
+		{"1.13.19 amd64 hi", true},
+		{"1.13.19 amd64 ii", false},
+		{"1.13.19 amd64 hF", false},
+		{"1.13.18 amd64 hi", false},
+		{"1.13.19 arm64 hi", false},
+		{"unparseable", false},
+	} {
+		if got := exactHeldPackageIdentity(test.fact, spec); got != test.want {
+			t.Errorf("exactHeldPackageIdentity(%q) = %t, want %t", test.fact, got, test.want)
 		}
 	}
 }

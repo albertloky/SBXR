@@ -542,7 +542,7 @@ func (adapter Adapter) InspectRunning(ctx context.Context, spec SetupSpec, sourc
 			spec.APTKeyPath+".sbxr-next", spec.APTSourcePath+".sbxr-next"), adapter.pathsObserved(spec.OwnershipNextPath, spec.PackageArtifactPath, spec.APTKeyPath+".sbxr-next", spec.APTSourcePath+".sbxr-next")),
 		APTKey:            observation(aptKey, aptKeyObserved),
 		APTSource:         observation(aptSource, aptSourceObserved),
-		Package:           observation(packageResult.OK && packageResult.Fact == spec.PackageVersion+" "+spec.Architecture+" ii", packageResult.Observed),
+		Package:           observation(packageResult.OK && exactHeldPackageIdentity(packageResult.Fact, spec), packageResult.Observed),
 		Hold:              observation(slicesContains(strings.Fields(hold.Fact), spec.PackageName), hold.Observed),
 		PackageIdentity:   observation(user.OK && group.OK && userIDsOK && groupIDOK && userGID == groupGID, user.Observed && group.Observed),
 		Configuration:     observation(configuration, configurationObserved && group.Observed),
@@ -688,6 +688,11 @@ func (adapter Adapter) pathsObserved(names ...string) bool {
 func exactPackageIdentity(fact string, spec SetupSpec) bool {
 	fields := strings.Fields(fact)
 	return len(fields) == 3 && fields[0] == spec.PackageVersion && fields[1] == spec.Architecture
+}
+
+func exactHeldPackageIdentity(fact string, spec SetupSpec) bool {
+	fields := strings.Fields(fact)
+	return exactPackageIdentity(fact, spec) && fields[2] == "hi"
 }
 
 func (adapter Adapter) filesAbsent(names ...string) bool {
