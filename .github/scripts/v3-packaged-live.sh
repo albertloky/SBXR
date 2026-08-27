@@ -395,7 +395,7 @@ runner_stage=remote-setup-and-disclose
 uninterrupted_completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 runner_stage=validate-client-configuration
 chmod 0600 "$client_config"
-jq -e '.inbounds == [{type:"mixed",listen:"127.0.0.1",listen_port:2080}] and (.outbounds | length) == 1' "$client_config" >/dev/null
+jq -e '.inbounds == [{type:"mixed",tag:"mixed-in",listen:"127.0.0.1",listen_port:2080}] and (.outbounds | length) == 1' "$client_config" >/dev/null
 test "$(findmnt -no FSTYPE -T "$client_config")" = tmpfs
 test "$(stat -c %a "$client_config")" = 600
 client_uuid="$(jq -er '.outbounds[0].uuid' "$client_config")"

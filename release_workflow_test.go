@@ -1,6 +1,7 @@
 package architecture_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	singboxadapter "github.com/albertloky/SBXR/internal/proxyinstallation/adapter/singbox"
 )
 
 func TestBurnEvidenceTagCanBeRetriedOnlyWithTheExactPayload(t *testing.T) {
@@ -520,6 +523,7 @@ func TestCandidateRoutesOneV3CandidateThroughPackagedLiveQualification(t *testin
 		`stage:"v3-packaged-live-result"`,
 		"v3-packaged-live-result-facts.json",
 		"v3-packaged-live-result-decision.json",
+		`.inbounds == [{type:"mixed",tag:"mixed-in",listen:"127.0.0.1",listen_port:2080}] and (.outbounds | length) == 1`,
 		"/dev/shm/sbxr-v3-client.json",
 		`${RUNNER_TEMP:?}/sbxr-v3-client`,
 		"chmod 0600",
@@ -601,6 +605,47 @@ func TestCandidateRoutesOneV3CandidateThroughPackagedLiveQualification(t *testin
 	}
 	assertActionsPinned(t, workflow)
 	assertActionsPinned(t, stable)
+}
+
+func TestV3QualificationAcceptsTheCanonicalClientConfiguration(t *testing.T) {
+	script, err := os.ReadFile(".github/scripts/v3-packaged-live.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const prefix = "jq -e '"
+	start := strings.Index(string(script), prefix+`.inbounds ==`)
+	if start < 0 {
+		t.Fatal("V3 qualification omitted the Client Configuration predicate")
+	}
+	start += len(prefix)
+	end := strings.Index(string(script)[start:], `' "$client_config"`)
+	if end < 0 {
+		t.Fatal("V3 qualification Client Configuration predicate is malformed")
+	}
+	predicate := string(script)[start : start+end]
+	want := `.inbounds == [{type:"mixed",tag:"mixed-in",listen:"127.0.0.1",listen_port:2080}] and (.outbounds | length) == 1`
+	if predicate != want {
+		t.Fatalf("Client Configuration predicate = %q", predicate)
+	}
+
+	adapter := singboxadapter.New()
+	identity, err := adapter.PrepareIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := adapter.EncodeServerConfiguration(identity, "microsoft.com:443", "microsoft.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := adapter.EncodeClientConfiguration(server, "8.8.8.8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command("jq", "-e", predicate)
+	command.Stdin = bytes.NewReader(client)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("live Client Configuration predicate rejected the production encoder: %v\n%s", err, output)
+	}
 }
 
 func TestPackagedInterruptionRequiresObservedEventAndForcedDeath(t *testing.T) {
