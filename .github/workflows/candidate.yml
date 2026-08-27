@@ -621,6 +621,14 @@ jobs:
           rm -f /run/sbxr-qualification/original-session
           rm -f /usr/local/bin/sbxr /usr/local/bin/.sbxr-update-prior /usr/local/bin/.sbxr-update-candidate /run/lock/sbxr.lock
           if test -d /var/lib/sbxr; then find /var/lib/sbxr -depth -delete; fi
+          redirect_comment='sbxr-qualification-${{ github.run_id }}-${{ github.run_attempt }}'
+          owned_redirect="-A OUTPUT -d 127.0.0.1/32 -p tcp -m tcp --dport 443 -m comment --comment $redirect_comment -j REDIRECT --to-ports 8443"
+          rules="$(iptables -t nat -S OUTPUT)"
+          if grep -Fqx -- "$owned_redirect" <<<"$rules"; then
+            iptables -t nat -D OUTPUT -p tcp -d 127.0.0.1 --dport 443 -m comment --comment "$redirect_comment" -j REDIRECT --to-ports 8443
+            rules="$(iptables -t nat -S OUTPUT)"
+            ! grep -Fqx -- "$owned_redirect" <<<"$rules"
+          fi
           if test -d /run/sbxr-qualification; then find /run/sbxr-qualification -depth -delete; fi
           rm -f /root/qualification-handoff.tgz /root/qualification-failure-evidence.tgz /root/sbxr-qualification-gateway
           REMOTE
@@ -647,7 +655,11 @@ jobs:
           printf '\n127.0.0.1 api.github.com github.com\n' >> /etc/hosts
           install -m 0644 /run/sbxr-qualification/ca.crt /usr/local/share/ca-certificates/sbxr-qualification.crt
           update-ca-certificates >/dev/null
-          /usr/bin/bash /run/sbxr-qualification/qualification-gateway-readiness.sh https://api.github.com/repos/albertloky/SBXR/releases/latest /run/sbxr-qualification/gateway.log /run/sbxr-qualification/gateway.pid 60 /root/sbxr-qualification-gateway gateway -manifest /run/sbxr-qualification/qualification-manifest.json -bundle /run/sbxr-qualification/qualification.bundle -assets /run/sbxr-qualification/assets -certificate /run/sbxr-qualification/gateway.crt -key /run/sbxr-qualification/gateway.key -control /run/sbxr-qualification
+          redirect_comment='sbxr-qualification-${{ github.run_id }}-${{ github.run_attempt }}'
+          rules="$(iptables -t nat -S OUTPUT)"
+          ! grep -Eq -- '^-A OUTPUT -d 127\.0\.0\.1/32 .*--dport 443( .*)? -j REDIRECT --to-ports 8443$' <<<"$rules"
+          iptables -t nat -A OUTPUT -p tcp -d 127.0.0.1 --dport 443 -m comment --comment "$redirect_comment" -j REDIRECT --to-ports 8443
+          /usr/bin/bash /run/sbxr-qualification/qualification-gateway-readiness.sh https://api.github.com/repos/albertloky/SBXR/releases/latest /run/sbxr-qualification/gateway.log /run/sbxr-qualification/gateway.pid 60 /root/sbxr-qualification-gateway gateway -manifest /run/sbxr-qualification/qualification-manifest.json -bundle /run/sbxr-qualification/qualification.bundle -assets /run/sbxr-qualification/assets -certificate /run/sbxr-qualification/gateway.crt -key /run/sbxr-qualification/gateway.key -listen 127.0.0.1:8443 -control /run/sbxr-qualification
           REMOTE
           ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'touch /run/sbxr-qualification/original-session; while test -e /run/sbxr-qualification/original-session; do sleep 1; done' &
           original_session=$!
@@ -688,6 +700,13 @@ jobs:
           cp -a /run/sbxr-qualification/hosts.original /etc/hosts
           rm -f /usr/local/share/ca-certificates/sbxr-qualification.crt
           update-ca-certificates --fresh >/dev/null
+          redirect_comment='sbxr-qualification-${{ github.run_id }}-${{ github.run_attempt }}'
+          owned_redirect="-A OUTPUT -d 127.0.0.1/32 -p tcp -m tcp --dport 443 -m comment --comment $redirect_comment -j REDIRECT --to-ports 8443"
+          rules="$(iptables -t nat -S OUTPUT)"
+          grep -Fqx -- "$owned_redirect" <<<"$rules"
+          iptables -t nat -D OUTPUT -p tcp -d 127.0.0.1 --dport 443 -m comment --comment "$redirect_comment" -j REDIRECT --to-ports 8443
+          rules="$(iptables -t nat -S OUTPUT)"
+          ! grep -Fqx -- "$owned_redirect" <<<"$rules"
           kill "$(cat /run/sbxr-qualification/gateway.pid)"
           rm -f /run/sbxr-qualification/original-session
           find /run/sbxr-qualification -depth -delete

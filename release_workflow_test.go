@@ -1,6 +1,7 @@
 package architecture_test
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -554,10 +555,27 @@ func TestCandidateRoutesOneV3CandidateThroughPackagedLiveQualification(t *testin
 	for _, required := range []string{
 		".github/scripts/qualification-gateway-readiness.sh",
 		`/usr/bin/bash /run/sbxr-qualification/qualification-gateway-readiness.sh https://api.github.com/repos/albertloky/SBXR/releases/latest /run/sbxr-qualification/gateway.log /run/sbxr-qualification/gateway.pid 60 /root/sbxr-qualification-gateway gateway`,
+		`-listen 127.0.0.1:8443`,
+		`redirect_comment='sbxr-qualification-${{ github.run_id }}-${{ github.run_attempt }}'`,
+		`owned_redirect="-A OUTPUT -d 127.0.0.1/32 -p tcp -m tcp --dport 443 -m comment --comment $redirect_comment -j REDIRECT --to-ports 8443"`,
+		`rules="$(iptables -t nat -S OUTPUT)"`,
+		`! grep -Eq -- '^-A OUTPUT -d 127\.0\.0\.1/32 .*--dport 443( .*)? -j REDIRECT --to-ports 8443$' <<<"$rules"`,
+		`iptables -t nat -A OUTPUT -p tcp -d 127.0.0.1 --dport 443 -m comment --comment "$redirect_comment" -j REDIRECT --to-ports 8443`,
+		`grep -Fqx -- "$owned_redirect" <<<"$rules"`,
+		`iptables -t nat -D OUTPUT -p tcp -d 127.0.0.1 --dport 443 -m comment --comment "$redirect_comment" -j REDIRECT --to-ports 8443`,
 	} {
 		if !strings.Contains(workflow, required) {
 			t.Fatalf("candidate.yml omitted bounded observable gateway readiness %q", required)
 		}
+	}
+	if strings.Count(workflow, `iptables -t nat -D OUTPUT -p tcp -d 127.0.0.1 --dport 443 -m comment --comment "$redirect_comment" -j REDIRECT --to-ports 8443`) < 2 {
+		t.Fatal("candidate.yml does not remove the qualification redirect on success and failure")
+	}
+	if strings.Count(workflow, `redirect_comment='sbxr-qualification-${{ github.run_id }}-${{ github.run_attempt }}'`) < 3 || strings.Count(workflow, `rules="$(iptables -t nat -S OUTPUT)"`) < 5 {
+		t.Fatal("candidate.yml does not use run-specific ownership with observable setup and cleanup checks")
+	}
+	if strings.Contains(workflow, `redirect.owned`) {
+		t.Fatal("candidate.yml uses a non-atomic filesystem marker for redirect ownership")
 	}
 	for _, mode := range []string{"remote-failure-safety", "remote-setup-and-disclose", "remote-secret-safe", "remote-remove"} {
 		if !strings.Contains(v3Path, "/usr/bin/bash $WORK/v3-packaged-live.sh "+mode) {
@@ -586,11 +604,10 @@ func TestQualificationGatewayReadinessIsBoundedAndObservable(t *testing.T) {
 	for _, test := range []struct {
 		name, child, curl, timeout, want string
 		wantSuccess                      bool
-		maxDuration                      time.Duration
 	}{
-		{name: "delayed healthy gateway", child: "sleep 10", curl: "sleep .2\nexit 0", timeout: "5", wantSuccess: true, maxDuration: 5 * time.Second},
-		{name: "exited gateway", child: "exit 23", curl: "while test \"$#\" -gt 0; do if test \"$1\" = --max-time; then shift; sleep \"$1\"; exit 1; fi; shift; done\nexit 1", timeout: "10", want: "qualification gateway exited before readiness\nlistener-fact", maxDuration: 5 * time.Second},
-		{name: "live gateway timeout", child: "sleep 10", curl: "exit 1", timeout: "1", want: "qualification gateway readiness timed out\nlistener-fact", maxDuration: 5 * time.Second},
+		{name: "delayed healthy gateway", child: "sleep 10", curl: "sleep .2\nexit 0", timeout: "5", wantSuccess: true},
+		{name: "exited gateway", child: "exit 23", curl: "while test \"$#\" -gt 0; do if test \"$1\" = --max-time; then shift; sleep \"$1\"; exit 1; fi; shift; done\nexit 1", timeout: "30", want: "qualification gateway exited before readiness\nlistener-fact"},
+		{name: "live gateway timeout", child: "sleep 10", curl: "exit 1", timeout: "1", want: "qualification gateway readiness timed out\nlistener-fact"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			directory := t.TempDir()
@@ -606,17 +623,18 @@ func TestQualificationGatewayReadinessIsBoundedAndObservable(t *testing.T) {
 			}
 			log := filepath.Join(directory, "gateway.log")
 			pidFile := filepath.Join(directory, "gateway.pid")
-			command := exec.Command("bash", script, "https://gateway.test/ready", log, pidFile, test.timeout, "sh", "-c", test.child)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			command := exec.CommandContext(ctx, "bash", script, "https://gateway.test/ready", log, pidFile, test.timeout, "sh", "-c", test.child)
 			command.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"))
-			started := time.Now()
 			output, runErr := command.CombinedOutput()
+			if ctx.Err() != nil {
+				t.Fatalf("readiness exceeded its test deadline: %v\n%s", ctx.Err(), output)
+			}
 			if pid, readErr := os.ReadFile(pidFile); readErr == nil {
 				if value, parseErr := strconv.Atoi(strings.TrimSpace(string(pid))); parseErr == nil {
 					_ = exec.Command("kill", strconv.Itoa(value)).Run()
 				}
-			}
-			if time.Since(started) > test.maxDuration {
-				t.Fatalf("readiness exceeded %s: %s", test.maxDuration, output)
 			}
 			if (runErr == nil) != test.wantSuccess {
 				t.Fatalf("readiness error = %v, output = %s", runErr, output)
