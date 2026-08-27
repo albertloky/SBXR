@@ -2,6 +2,7 @@ package architecture_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -675,6 +676,67 @@ func TestPackagedInterruptionRequiresObservedEventAndForcedDeath(t *testing.T) {
 				if _, err := os.Lstat(filepath.Join(work, name)); !os.IsNotExist(err) {
 					t.Fatalf("%s remains: %v", name, err)
 				}
+			}
+		})
+	}
+}
+
+func TestPackagedRunnerCleanupRetainsOnlyTheFixedFailedStage(t *testing.T) {
+	source, err := os.ReadFile(".github/scripts/v3-packaged-live.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := strings.Index(string(source), "\ncleanup() {")
+	if start < 0 {
+		t.Fatal("runner cleanup function not found")
+	}
+	start++
+	end := strings.Index(string(source)[start:], "\n}\ntrap cleanup EXIT")
+	if end < 0 {
+		t.Fatal("runner cleanup function not found")
+	}
+	cleanup := string(source)[start : start+end+2]
+	for _, test := range []struct {
+		name       string
+		exitStatus int
+		wantStage  bool
+	}{
+		{name: "failure", exitStatus: 23, wantStage: true},
+		{name: "success", wantStage: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			directory := t.TempDir()
+			stageEvidence := filepath.Join(directory, "failure-evidence", "runner-stage.txt")
+			workflowCapture := filepath.Join(directory, "workflow.log")
+			secret := "11111111-1111-4111-8111-111111111111"
+			body := "safe capture\n"
+			if test.wantStage {
+				body += secret + "\n"
+			}
+			if err := os.WriteFile(workflowCapture, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			sandboxCleanup := strings.ReplaceAll(cleanup, "/dev/shm/sagernet.asc", filepath.Join(directory, "sagernet.asc"))
+			sandboxCleanup = strings.ReplaceAll(sandboxCleanup, "/dev/shm/sagernet.sources", filepath.Join(directory, "sagernet.sources"))
+			sandbox := fmt.Sprintf("set -u\nclient_config=%q\nclient_root=%q\nclient_deb=%q\nclient_log=%q\nworkflow_capture=%q\nclient_uuid=%q\ndownload=\nrunner_stage=measure-proxied-route\nrunner_stage_evidence=%q\n%s\ntrap cleanup EXIT\nexit %d\n", filepath.Join(directory, "client.json"), filepath.Join(directory, "client"), filepath.Join(directory, "client.deb"), filepath.Join(directory, "client.log"), workflowCapture, secret, stageEvidence, sandboxCleanup, test.exitStatus)
+			script := filepath.Join(directory, "cleanup.sh")
+			if err := os.WriteFile(script, []byte(sandbox), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			output, runErr := exec.Command("bash", script).CombinedOutput()
+			if (runErr != nil) != test.wantStage {
+				t.Fatalf("cleanup error = %v, output = %s", runErr, output)
+			}
+			evidence, readErr := os.ReadFile(stageEvidence)
+			if test.wantStage {
+				if readErr != nil || string(evidence) != "Runner stage: measure-proxied-route\n" || strings.Contains(string(evidence), secret) {
+					t.Fatalf("stage evidence = %q, %v", evidence, readErr)
+				}
+			} else if !os.IsNotExist(readErr) {
+				t.Fatalf("successful cleanup retained stage evidence: %q, %v", evidence, readErr)
+			}
+			if _, err := os.Stat(workflowCapture); !os.IsNotExist(err) {
+				t.Fatalf("workflow capture remains: %v", err)
 			}
 		})
 	}

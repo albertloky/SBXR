@@ -355,6 +355,9 @@ client_root=${RUNNER_TEMP:?}/sbxr-v3-client
 client_deb=/dev/shm/sing-box.deb
 client_log=/dev/shm/sbxr-v3-client.log
 workflow_capture=/dev/shm/sbxr-v3-workflow.log
+runner_stage=initialization
+runner_stage_evidence=handoff/failure-evidence/runner-stage.txt
+rm -f "$runner_stage_evidence"
 cleanup() {
   status=$?
   set +e
@@ -362,6 +365,14 @@ cleanup() {
   if test -e "$workflow_capture"; then
     if grep -Eq 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer |[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}' "$workflow_capture"; then status=1; fi
     if test -n "${client_uuid:-}" && grep -F -- "$client_uuid" "$workflow_capture" >/dev/null; then status=1; fi
+  fi
+  if test "$status" -ne 0; then
+    case "$runner_stage" in
+      initialization|remote-failure-safety|remote-setup-and-disclose|validate-client-configuration|download-client-signing-key|update-client-package-index|download-client-package|verify-client-package|start-outside-client|measure-direct-route|measure-proxied-route|measure-vps-route|compare-routes|cleanup-outside-client|verify-remote-secret-safety|complete-remote-removal|write-evidence) ;;
+      *) runner_stage=unknown ;;
+    esac
+    mkdir -p "$(dirname "$runner_stage_evidence")"
+    printf 'Runner stage: %s\n' "$runner_stage" >"$runner_stage_evidence"
   fi
   rm -rf "$client_config" "$client_root" "$client_deb" "$client_log" "$workflow_capture" /dev/shm/sagernet.asc /dev/shm/sagernet.sources "${download:-}"
   test ! -e "$client_root" || status=1
@@ -376,20 +387,26 @@ scan_runner_capture() {
 }
 
 journey_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+runner_stage=remote-failure-safety
 failure_times="$("${remote[@]}" "TAG=$tag SEQUENCE=$sequence COMMIT=$commit INDEX=$index /usr/bin/bash $WORK/v3-packaged-live.sh remote-failure-safety '$tag' '$sequence' '$commit' '$index'")"
 jq -e 'keys == ["after_activation_completed_at","after_removal_completed_at","before_activation_completed_at","clean_footprint_completed_at","ownership_drift_completed_at"]' <<<"$failure_times" >/dev/null
+runner_stage=remote-setup-and-disclose
 "${remote[@]}" "TAG=$tag SEQUENCE=$sequence COMMIT=$commit INDEX=$index /usr/bin/bash $WORK/v3-packaged-live.sh remote-setup-and-disclose '$tag' '$sequence' '$commit' '$index'" >"$client_config"
 uninterrupted_completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+runner_stage=validate-client-configuration
 chmod 0600 "$client_config"
 jq -e '.inbounds == [{type:"mixed",listen:"127.0.0.1",listen_port:2080}] and (.outbounds | length) == 1' "$client_config" >/dev/null
 test "$(findmnt -no FSTYPE -T "$client_config")" = tmpfs
 test "$(stat -c %a "$client_config")" = 600
 client_uuid="$(jq -er '.outbounds[0].uuid' "$client_config")"
 
+runner_stage=download-client-signing-key
 curl -fsS https://sing-box.app/gpg.key -o /dev/shm/sagernet.asc
 test "$(sha256sum /dev/shm/sagernet.asc | cut -d' ' -f1)" = 803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1
 printf '%s\n' 'Types: deb' 'URIs: https://deb.sagernet.org/' 'Suites: *' 'Components: *' 'Architectures: amd64' 'Signed-By: /dev/shm/sagernet.asc' > /dev/shm/sagernet.sources
+runner_stage=update-client-package-index
 sudo apt-get -o Dir::Etc::sourcelist=/dev/shm/sagernet.sources -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 update >/dev/null 2>"$client_log"
+runner_stage=download-client-package
 apt-get download -o Dir::Etc::sourcelist=/dev/shm/sagernet.sources -o Dir::Etc::sourceparts=- 'sing-box:amd64=1.13.19' >/dev/null 2>>"$client_log"
 scan_runner_capture
 download="$(find . -maxdepth 1 -name 'sing-box_1.13.19_amd64.deb' -type f -print -quit)"
@@ -397,18 +414,25 @@ test -n "$download"
 mv "$download" "$client_deb"
 test "$(stat -c %s "$client_deb")" -eq "$PACKAGE_SIZE"
 test "$(sha256sum "$client_deb" | cut -d' ' -f1)" = "$PACKAGE_SHA256"
+runner_stage=verify-client-package
 mkdir -m 0700 "$client_root"
 dpkg-deb -x "$client_deb" "$client_root"
 "$client_root/usr/bin/sing-box" check -c "$client_config" >/dev/null 2>"$client_log"
 scan_runner_capture
+runner_stage=start-outside-client
 "$client_root/usr/bin/sing-box" run -c "$client_config" >/dev/null 2>"$client_log" &
 client_pid=$!
 for _ in $(seq 1 100); do ss -H -ltn 'sport = :2080' | grep -F '127.0.0.1:2080' >/dev/null && break; kill -0 "$client_pid"; sleep .1; done
+runner_stage=measure-direct-route
 direct="$(curl -fsS https://api.ipify.org)"
+runner_stage=measure-proxied-route
 proxied="$(curl -fsS --proxy socks5h://127.0.0.1:2080 https://api.ipify.org)"
+runner_stage=measure-vps-route
 vps="$("${remote[@]}" curl -fsS https://api.ipify.org)"
+runner_stage=compare-routes
 test "$direct" != "$vps"
 test "$proxied" = "$vps"
+runner_stage=cleanup-outside-client
 kill "$client_pid"
 wait "$client_pid" 2>/dev/null || true
 unset client_pid
@@ -424,10 +448,13 @@ test ! -e /dev/shm/sagernet.asc
 test ! -e /dev/shm/sagernet.sources
 runner_cleanup_completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
+runner_stage=verify-remote-secret-safety
 "${remote[@]}" "/usr/bin/bash $WORK/v3-packaged-live.sh remote-secret-safe '$tag' '$sequence' '$commit' '$index'"
+runner_stage=complete-remote-removal
 "${remote[@]}" "/usr/bin/bash $WORK/v3-packaged-live.sh remote-remove '$tag' '$sequence' '$commit' '$index'"
 complete_removal_completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 observed_at="$complete_removal_completed_at"
 manifest_sha256="$(sha256sum "$manifest" | cut -d' ' -f1)"
+runner_stage=write-evidence
 jq -cnS --arg observed_at "$observed_at" --arg manifest_sha256 "$manifest_sha256" --arg package_sha256 "$PACKAGE_SHA256" --argjson package_size "$PACKAGE_SIZE" --argjson failure_times "$failure_times" --arg journey_started_at "$journey_started_at" --arg uninterrupted_completed_at "$uninterrupted_completed_at" --arg runner_cleanup_completed_at "$runner_cleanup_completed_at" --arg complete_removal_completed_at "$complete_removal_completed_at" '{failure_cases:[{final_state:"Not set up",finishing_action:"Remove qualification conflict",name:"clean-footprint-refusal",post_death_status:"Not set up",trigger_event:"Detected mismatch: /etc/sing-box is present"},{final_state:"Not set up",finishing_action:"Finish cleanup",name:"before-activation-commitment",post_death_status:"Setup incomplete",trigger_event:"Validate configuration"},{final_state:"Running",finishing_action:"Finish setup",name:"after-activation-commitment",post_death_status:"Setup incomplete",trigger_event:"Activation committed"},{final_state:"Running",finishing_action:"Restore recorded metadata",name:"ownership-drift-removal-refusal",post_death_status:"Problem detected",trigger_event:"Detected mismatch: the protected configuration identity does not match"},{final_state:"Not installed",finishing_action:"Finish removal",name:"after-removal-commitment",post_death_status:"Removal incomplete",trigger_event:"Removal committed"}],observed_at:$observed_at,outside_client_package:{architecture:"amd64",name:"sing-box",repository:"https://deb.sagernet.org/",sha256:$package_sha256,signing_key_sha256:"803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1",size:$package_size,version:"1.13.19"},proxy_package:{architecture:"amd64",name:"sing-box",repository:"https://deb.sagernet.org/",sha256:$package_sha256,signing_key_sha256:"803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1",size:$package_size,version:"1.13.19"},qualification_manifest_sha256:$manifest_sha256,schema:"sbxr-v3-packaged-live-evidence-v1",secret_scan:{exact_secrets_absent:true,prohibited_patterns_absent:true,retained_evidence:true,runner_capture:true,vps_capture:true,workflow_output:true},stage_times:($failure_times+{complete_removal_completed_at:$complete_removal_completed_at,journey_started_at:$journey_started_at,runner_cleanup_completed_at:$runner_cleanup_completed_at,uninterrupted_completed_at:$uninterrupted_completed_at}),uninterrupted:{clean_installation:true,details_complete:true,disclosure_bounded:true,egress_matched:true,final_absence_complete:true,installed_identity:true,not_set_up:true,outside_routes_differ:true,removal_result:"SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED",runner_configuration_absent:true,runner_file_mode:"0600",runner_listener_absent:true,runner_memory_backed:true,runner_process_absent:true,running:true,setup_confirmed:true,setup_result:"PROXY-INSTALLATION-SETUP-COMPLETE",setup_reviewed:true}}' | tr -d '\n' > handoff/v3-packaged-live-evidence.json
 ! grep -F -- "$client_uuid" handoff/v3-packaged-live-evidence.json >/dev/null
