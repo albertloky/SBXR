@@ -4,8 +4,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBurnEvidenceTagCanBeRetriedOnlyWithTheExactPayload(t *testing.T) {
@@ -264,7 +266,11 @@ func TestCandidateQualifiesTheManifestBoundTwoReleaseJourneyOnTheAcceptanceVPS(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	acceptanceSources := string(body) + string(script)
+	readiness, err := os.ReadFile(".github/scripts/qualification-gateway-readiness.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	acceptanceSources := string(body) + string(script) + string(readiness)
 	for _, required := range []string{
 		"  acceptance-vps:",
 		"needs: [preflight, sign]",
@@ -278,7 +284,7 @@ func TestCandidateQualifiesTheManifestBoundTwoReleaseJourneyOnTheAcceptanceVPS(t
 		`.draft == $state.draft and .prerelease == $state.prerelease and (.immutable // false) == $state.immutable`,
 		"go build -o handoff/sbxr-release ./cmd/sbxr-release",
 		"install -m 0700 /run/sbxr-qualification/sbxr-release /root/sbxr-qualification-gateway",
-		"nohup /root/sbxr-qualification-gateway gateway",
+		`nohup "$@"`,
 		"/usr/bin/bash /run/sbxr-qualification/installer-updater-vps.sh",
 		"command -v strace >/dev/null",
 		"printf '\\n127.0.0.1 api.github.com github.com\\n' >> /etc/hosts",
@@ -545,6 +551,14 @@ func TestCandidateRoutesOneV3CandidateThroughPackagedLiveQualification(t *testin
 	if strings.Count(v3Path, `test ! -e "$client_root"`) < 2 {
 		t.Fatal("V3 qualification does not prove outside-client cleanup on success and failure")
 	}
+	for _, required := range []string{
+		".github/scripts/qualification-gateway-readiness.sh",
+		`/usr/bin/bash /run/sbxr-qualification/qualification-gateway-readiness.sh https://api.github.com/repos/albertloky/SBXR/releases/latest /run/sbxr-qualification/gateway.log /run/sbxr-qualification/gateway.pid 60 /root/sbxr-qualification-gateway gateway`,
+	} {
+		if !strings.Contains(workflow, required) {
+			t.Fatalf("candidate.yml omitted bounded observable gateway readiness %q", required)
+		}
+	}
 	for _, mode := range []string{"remote-failure-safety", "remote-setup-and-disclose", "remote-secret-safe", "remote-remove"} {
 		if !strings.Contains(v3Path, "/usr/bin/bash $WORK/v3-packaged-live.sh "+mode) {
 			t.Fatalf("V3 qualification directly executes %s from the noexec /run mount", mode)
@@ -562,6 +576,56 @@ func TestCandidateRoutesOneV3CandidateThroughPackagedLiveQualification(t *testin
 	}
 	assertActionsPinned(t, workflow)
 	assertActionsPinned(t, stable)
+}
+
+func TestQualificationGatewayReadinessIsBoundedAndObservable(t *testing.T) {
+	script, err := filepath.Abs(".github/scripts/qualification-gateway-readiness.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name, child, curl, timeout, want string
+		wantSuccess                      bool
+		maxDuration                      time.Duration
+	}{
+		{name: "delayed healthy gateway", child: "sleep 10", curl: "sleep .2\nexit 0", timeout: "5", wantSuccess: true, maxDuration: 5 * time.Second},
+		{name: "exited gateway", child: "exit 23", curl: "while test \"$#\" -gt 0; do if test \"$1\" = --max-time; then shift; sleep \"$1\"; exit 1; fi; shift; done\nexit 1", timeout: "10", want: "qualification gateway exited before readiness\nlistener-fact", maxDuration: 5 * time.Second},
+		{name: "live gateway timeout", child: "sleep 10", curl: "exit 1", timeout: "1", want: "qualification gateway readiness timed out\nlistener-fact", maxDuration: 5 * time.Second},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			directory := t.TempDir()
+			bin := filepath.Join(directory, "bin")
+			if err := os.Mkdir(bin, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(bin, "curl"), []byte("#!/bin/sh\n"+test.curl+"\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(bin, "ss"), []byte("#!/bin/sh\nprintf 'listener-fact\\n'\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			log := filepath.Join(directory, "gateway.log")
+			pidFile := filepath.Join(directory, "gateway.pid")
+			command := exec.Command("bash", script, "https://gateway.test/ready", log, pidFile, test.timeout, "sh", "-c", test.child)
+			command.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"))
+			started := time.Now()
+			output, runErr := command.CombinedOutput()
+			if pid, readErr := os.ReadFile(pidFile); readErr == nil {
+				if value, parseErr := strconv.Atoi(strings.TrimSpace(string(pid))); parseErr == nil {
+					_ = exec.Command("kill", strconv.Itoa(value)).Run()
+				}
+			}
+			if time.Since(started) > test.maxDuration {
+				t.Fatalf("readiness exceeded %s: %s", test.maxDuration, output)
+			}
+			if (runErr == nil) != test.wantSuccess {
+				t.Fatalf("readiness error = %v, output = %s", runErr, output)
+			}
+			if !strings.Contains(string(output), test.want) {
+				t.Fatalf("readiness output = %q, want %q", output, test.want)
+			}
+		})
+	}
 }
 
 func TestReleaseFailuresWithdrawOnlyRecheckedTargetsAndBurnQualifiedIdentities(t *testing.T) {
