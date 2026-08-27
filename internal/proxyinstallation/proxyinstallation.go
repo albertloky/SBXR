@@ -127,6 +127,11 @@ type removalLifecycle interface {
 	RemoveCompleteRemovalInstalledRecord(context.Context, softwarelifecycle.ReleaseIdentity) bool
 }
 
+type mutationLifecycle interface {
+	softwarelifecycle.Interface
+	StatusUnderMutationLock(context.Context, *softwarelifecycle.MutationLockAuthority) softwarelifecycle.Result
+}
+
 type singboxInterface interface {
 	PrepareIdentity() (singboxadapter.Identity, error)
 	ValidIdentity(singboxadapter.Identity) bool
@@ -939,7 +944,11 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 		progress(Progress{ClientConfiguration: slices.Clone(clientConfiguration)})
 		return Result{Status: Running, Message: "Client Configuration was disclosed.", Code: ClientConfigurationDisclosed}
 	}
-	installed := module.lifecycle.Status(ctx)
+	lifecycle, ok := module.lifecycle.(mutationLifecycle)
+	if !ok {
+		return refused(authority.status, "Installed SBXR", "Restore SBXR to a verified Ready Software Lifecycle state before setup.")
+	}
+	installed := lifecycle.StatusUnderMutationLock(ctx, lock)
 	currentFacts := module.host.Preflight(ctx, slices.Clone(footprint), slices.Clone(destinations))
 	currentFacts.MutationLockAvailable = authority.facts.MutationLockAvailable
 	selected, failed, _ := acceptedPreflight(currentFacts)

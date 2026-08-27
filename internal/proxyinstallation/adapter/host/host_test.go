@@ -89,6 +89,23 @@ func TestOwnershipRecordIsStrictAndCrashSafe(t *testing.T) {
 	}
 }
 
+func TestMutationLockAuthorityIsBoundToItsExactHeldFile(t *testing.T) {
+	root := t.TempDir()
+	adapter := Adapter{root: root}
+	if new(MutationLock).Holds(filepath.Join(root, "run/lock/sbxr.lock")) {
+		t.Fatal("zero mutation lock claimed authority")
+	}
+	lock, busy, err := adapter.AcquireMutationLock("/run/lock/sbxr.lock")
+	wantPath := filepath.Join(root, "run/lock/sbxr.lock")
+	if err != nil || busy || !lock.Holds(wantPath) || lock.Holds(filepath.Join(root, "run/lock/other.lock")) {
+		t.Fatalf("AcquireMutationLock() = lock=%#v busy=%t err=%v", lock, busy, err)
+	}
+	lock.Release()
+	if lock.Holds(wantPath) {
+		t.Fatal("released mutation lock retained authority")
+	}
+}
+
 func TestFinalOwnershipRemovalRestoresRecoveryAuthorityUntilStateDirectoryIsEmpty(t *testing.T) {
 	root := t.TempDir()
 	directory := filepath.Join(root, "var", "lib", "sbxr")

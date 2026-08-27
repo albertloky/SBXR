@@ -284,6 +284,10 @@ func (readyLifecycle) Status(context.Context) softwarelifecycle.Result {
 	return softwarelifecycle.Result{State: softwarelifecycle.Ready, Installed: &identity, Code: softwarelifecycle.StatusReady}
 }
 
+func (lifecycle readyLifecycle) StatusUnderMutationLock(ctx context.Context, _ *softwarelifecycle.MutationLockAuthority) softwarelifecycle.Result {
+	return lifecycle.Status(ctx)
+}
+
 func testInstalledIdentity() softwarelifecycle.ReleaseIdentity {
 	return softwarelifecycle.ReleaseIdentity{Repository: softwarelifecycle.Repository, Tag: "v3.0.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}
 }
@@ -305,6 +309,23 @@ type mismatchedLifecycle struct{ readyLifecycle }
 func (mismatchedLifecycle) Status(context.Context) softwarelifecycle.Result {
 	identity := softwarelifecycle.ReleaseIdentity{Repository: softwarelifecycle.Repository, Tag: "v3.0.1", Commit: strings.Repeat("c", 40), IndexSHA256: strings.Repeat("d", 64)}
 	return softwarelifecycle.Result{State: softwarelifecycle.Ready, Installed: &identity, Code: softwarelifecycle.StatusReady}
+}
+
+type lockSensitiveLifecycle struct {
+	readyLifecycle
+	statusCalls int
+}
+
+func (lifecycle *lockSensitiveLifecycle) Status(ctx context.Context) softwarelifecycle.Result {
+	lifecycle.statusCalls++
+	if lifecycle.statusCalls > 1 {
+		return softwarelifecycle.Result{State: softwarelifecycle.UpdateInProgress, Code: softwarelifecycle.StatusUpdateInProgress}
+	}
+	return lifecycle.readyLifecycle.Status(ctx)
+}
+
+func (lifecycle *lockSensitiveLifecycle) StatusUnderMutationLock(ctx context.Context, _ *softwarelifecycle.MutationLockAuthority) softwarelifecycle.Result {
+	return lifecycle.readyLifecycle.Status(ctx)
 }
 
 func TestOwnerCanReviewAndDeclineCleanSetup(t *testing.T) {
@@ -333,6 +354,21 @@ func TestSetupRevalidationAcceptsItsAcquiredMutationLock(t *testing.T) {
 	host := acceptedHost()
 	host.lockChangesFacts = true
 	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	review := installation.Review(t.Context(), StartSetupAction)
+	var phases []string
+
+	result := installation.Execute(t.Context(), *review.Prepared, Approved, func(progress Progress) {
+		phases = append(phases, progress.Phase)
+	})
+
+	if result.Status != Running || result.Code != SetupComplete || !slices.Contains(phases, string(hostadapter.ValidateConfiguration)) {
+		t.Fatalf("Execute() = %#v, phases = %v", result, phases)
+	}
+}
+
+func TestSetupRevalidatesInstalledReleaseWhileItOwnsTheSharedLock(t *testing.T) {
+	lifecycle := &lockSensitiveLifecycle{}
+	installation := newInstalledInterface(lifecycle, acceptedHost(), acceptedSingBox{})
 	review := installation.Review(t.Context(), StartSetupAction)
 	var phases []string
 
@@ -632,6 +668,9 @@ func (lifecycle *controlledRemovalLifecycle) Status(context.Context) softwarelif
 		return softwarelifecycle.Result{State: softwarelifecycle.Ready, Installed: &identity}
 	}
 	return softwarelifecycle.Result{State: softwarelifecycle.RecoveryRequiredState}
+}
+func (lifecycle *controlledRemovalLifecycle) StatusUnderMutationLock(ctx context.Context, _ *softwarelifecycle.MutationLockAuthority) softwarelifecycle.Result {
+	return lifecycle.Status(ctx)
 }
 func (*controlledRemovalLifecycle) Check(context.Context, softwarelifecycle.ProgressReporter) softwarelifecycle.Result {
 	return softwarelifecycle.Result{}

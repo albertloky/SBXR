@@ -665,6 +665,44 @@ func TestStatusReportsConcurrentUpdateWithoutExposingLockFacts(t *testing.T) {
 	}
 }
 
+func TestStatusUnderMutationLockRequiresExactAuthorityAndRevalidatesInstalledIdentity(t *testing.T) {
+	root := t.TempDir()
+	identity := ReleaseIdentity{Repository: Repository, Tag: "v3.0.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}
+	writeInstalledEvidence(t, root, installedEvidence(t, identity, 17, AMD64))
+	lockPath := statusPath(root, mutationLockPath)
+	uid := uint32(os.Getuid())
+	lock, busy, err := AcquireMutationLockAuthority(lockPath, uid)
+	if err != nil || busy {
+		t.Fatalf("acquire mutation lock: %v", err)
+	}
+	defer lock.Release()
+	lifecycle := newInstalledInterface(newLocalInspector(root, uid), nil).(installedInterface)
+
+	if ordinary := lifecycle.Status(t.Context()); ordinary.State != UpdateInProgress {
+		t.Fatalf("Status() = %#v", ordinary)
+	}
+	wrong, wrongBusy, err := AcquireMutationLockAuthority(filepath.Join(root, "run/lock/wrong"), uid)
+	if err != nil || wrongBusy {
+		t.Fatalf("acquire unrelated lock: %v", err)
+	}
+	defer wrong.Release()
+	if refused := lifecycle.StatusUnderMutationLock(t.Context(), wrong); refused.State != RecoveryRequiredState {
+		t.Fatalf("wrong authority = %#v", refused)
+	}
+	if refused := lifecycle.StatusUnderMutationLock(t.Context(), nil); refused.State != RecoveryRequiredState {
+		t.Fatalf("absent authority = %#v", refused)
+	}
+	if got := lifecycle.StatusUnderMutationLock(t.Context(), lock); got.State != Ready || got.Installed == nil || *got.Installed != identity {
+		t.Fatalf("StatusUnderMutationLock() = %#v", got)
+	}
+	if err := os.WriteFile(statusPath(root, installedRecordPath), []byte("changed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if changed := lifecycle.StatusUnderMutationLock(t.Context(), lock); changed.State != RecoveryRequiredState {
+		t.Fatalf("changed installed identity = %#v", changed)
+	}
+}
+
 func TestPendingOperationsReturnVerifiedStatusWithoutInventingAnOutcome(t *testing.T) {
 	evidence := installedEvidence(t, ReleaseIdentity{Repository: Repository, Tag: "v2.0.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}, 17, AMD64)
 	var lifecycle Interface = newInstalledInterface(controlledLocalInspector{evidence}, nil)

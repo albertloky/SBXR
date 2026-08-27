@@ -18,6 +18,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 )
 
 const maxOwnership = 64 << 10
@@ -100,15 +102,7 @@ type ActivationInspection struct {
 	ListenerAvailable     bool
 }
 
-type MutationLock struct{ file *os.File }
-
-func (lock *MutationLock) Release() {
-	if lock == nil || lock.file == nil {
-		return
-	}
-	_ = syscall.Flock(int(lock.file.Fd()), syscall.LOCK_UN)
-	_ = lock.file.Close()
-}
+type MutationLock = softwarelifecycle.MutationLockAuthority
 
 type PackageLocks struct{ files []*os.File }
 
@@ -155,24 +149,7 @@ func (adapter Adapter) AcquireMutationLock(name string) (*MutationLock, bool, er
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, false, err
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
-	if err != nil {
-		return nil, false, err
-	}
-	info, err := file.Stat()
-	stat, ok := infoSys(info)
-	if err != nil || !ok || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || stat.Uid != adapter.ownerUID() || stat.Nlink != 1 {
-		_ = file.Close()
-		return nil, false, errors.New("unsafe mutation lock")
-	}
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		_ = file.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
-			return nil, true, nil
-		}
-		return nil, false, err
-	}
-	return &MutationLock{file: file}, false, nil
+	return softwarelifecycle.AcquireMutationLockAuthority(path, adapter.ownerUID())
 }
 
 func (adapter Adapter) ReadOwnership(name string) ([]byte, error) {

@@ -121,6 +121,15 @@ type Interface interface {
 	Recover(context.Context, ProgressReporter) Result
 }
 
+// StatusUnderMutationLock verifies the installed identity for a caller that owns the shared mutation lock.
+func (module installedInterface) StatusUnderMutationLock(ctx context.Context, authority *MutationLockAuthority) Result {
+	inspector, ok := module.local.(filesystemInspector)
+	if ctx.Err() != nil || !ok || authority == nil || !authority.Holds(inspector.path(mutationLockPath)) {
+		return recoveryRequiredResult()
+	}
+	return statusFromInspection(inspector.inspectReadyUnderLock())
+}
+
 // CompleteRemovalInspection is the private inter-Module fact set used by Proxy Installation.
 type CompleteRemovalInspection struct {
 	Valid, ExecutablePresent, InstalledRecordPresent, StateDirectoryEmpty bool
