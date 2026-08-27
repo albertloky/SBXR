@@ -666,6 +666,7 @@ func TestPackagedFailureCleanupHandlesEveryPublicFinishingState(t *testing.T) {
 		{"finishing failure", "cleanup", "finishing-failure", false, true},
 		{"final absence failure", "not-set-up", "final-absence", false, true},
 		{"absence inspection failure", "removal", "inspector-failure", false, false},
+		{"unit inspection failure", "removal", "systemctl-failure", false, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			directory := t.TempDir()
@@ -726,7 +727,7 @@ esac
 			inspectors := map[string]string{
 				"dpkg-query": "#!/bin/sh\nif test \"$FAKE_BEHAVIOR\" = inspector-failure; then exit 23; fi\nexit 1\n",
 				"apt-mark":   "#!/bin/sh\nexit 0\n",
-				"systemctl":  "#!/bin/sh\nexit 0\n",
+				"systemctl":  "#!/bin/sh\nif test \"$FAKE_BEHAVIOR\" = systemctl-failure; then printf 'inspection failed\\n' >&2; fi\nexit 1\n",
 				"ss":         "#!/bin/sh\nexit 0\n",
 				"getent":     "#!/bin/sh\nexit 2\n",
 				"stat":       "#!/bin/sh\nprintf 'protected-path 700 0 0 1\\n'\n",

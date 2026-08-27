@@ -133,8 +133,8 @@ prove_not_installed() {
   test "$code" -eq 1 || return 1
   output="$(apt-mark showhold)" || return 1
   if grep -Fx sing-box <<<"$output" >/dev/null; then return 1; fi
-  output="$(systemctl list-unit-files sing-box.service --no-legend 2>/dev/null)" || return 1
-  if grep -F sing-box.service <<<"$output" >/dev/null; then return 1; fi
+  if output="$(systemctl list-unit-files sing-box.service --no-legend 2>&1)"; then return 1; else code=$?; fi
+  test "$code" -eq 1 && test -z "$output" || return 1
   output="$(ss -H -ltnp 'sport = :443')" || return 1
   if grep -F sing-box <<<"$output" >/dev/null; then return 1; fi
   if getent passwd sing-box >/dev/null; then return 1; else code=$?; fi
