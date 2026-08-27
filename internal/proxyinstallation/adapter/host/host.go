@@ -301,7 +301,7 @@ func flockAvailable(name string) bool {
 }
 
 func recordLockAvailable(name string) bool {
-	file, err := os.OpenFile(name, os.O_RDWR|syscall.O_NOFOLLOW, 0)
+	file, err := os.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if os.IsNotExist(err) {
 		return true
 	}
@@ -310,11 +310,7 @@ func recordLockAvailable(name string) bool {
 	}
 	defer file.Close()
 	lock := syscall.Flock_t{Type: syscall.F_WRLCK, Whence: io.SeekStart}
-	if err := syscall.FcntlFlock(file.Fd(), syscall.F_SETLK, &lock); err != nil {
-		return false
-	}
-	lock.Type = syscall.F_UNLCK
-	return syscall.FcntlFlock(file.Fd(), syscall.F_SETLK, &lock) == nil
+	return syscall.FcntlFlock(file.Fd(), syscall.F_GETLK, &lock) == nil && lock.Type == syscall.F_UNLCK
 }
 
 func liveDestinationObservation(ctx context.Context, destination Destination) DestinationObservation {

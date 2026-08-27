@@ -125,6 +125,28 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 			latest = installation.Execute(ctx, *review.Prepared, confirmation, func(progress proxyinstallation.Progress) {
 				_, _ = fmt.Fprintln(output, "Progress:", progress.Phase)
 			})
+		case proxyinstallation.CompleteRemovalAction:
+			if review.Prepared == nil {
+				latest = review.Result
+				if writeRefusal(output, latest) != nil {
+					return 1
+				}
+				current = installation.Review(ctx, proxyinstallation.StatusAction)
+				continue
+			}
+			for _, line := range review.Plan {
+				if _, err := fmt.Fprintln(output, line); err != nil {
+					return 1
+				}
+			}
+			confirmation, ok := readCompleteRemovalConfirmation(reader, output)
+			if !ok {
+				return 1
+			}
+			latest = installation.Execute(ctx, *review.Prepared, confirmation, nil)
+			if writeRefusal(output, latest) != nil {
+				return 1
+			}
 		case proxyinstallation.ViewDetailsAction:
 			for _, detail := range review.Details {
 				if _, err := fmt.Fprintln(output, detail); err != nil {
@@ -145,6 +167,20 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 		}
 		current = installation.Review(ctx, proxyinstallation.StatusAction)
 	}
+}
+
+func readCompleteRemovalConfirmation(reader *bufio.Reader, output io.Writer) (proxyinstallation.Confirmation, bool) {
+	if _, err := io.WriteString(output, "Type REMOVE SBXR to confirm Complete removal. Any other input cancels.\n"); err != nil {
+		return 0, false
+	}
+	line, err := readLine(reader)
+	if err != nil && err != io.EOF && !errors.Is(err, errInputTooLong) {
+		return 0, false
+	}
+	if line == "REMOVE SBXR" {
+		return proxyinstallation.Approved, true
+	}
+	return proxyinstallation.Declined, true
 }
 
 func writeClientConfiguration(output io.Writer, configuration []byte) error {

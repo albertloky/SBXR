@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -40,6 +41,23 @@ type controlledHost struct {
 	publishFailed      bool
 	cancelOn           hostadapter.Operation
 	cancel             context.CancelFunc
+	removal            *hostadapter.RemovalInspection
+}
+
+type controlledHostFacts struct {
+	inspection                                  hostadapter.Inspection
+	preflight                                   hostadapter.Preflight
+	ownership, configuration                    []byte
+	operations                                  []hostadapter.Operation
+	enabled, active, listener, busy, statusBusy bool
+}
+
+func (host *controlledHost) facts() controlledHostFacts {
+	return controlledHostFacts{
+		inspection: host.inspection, preflight: host.preflight,
+		ownership: bytes.Clone(host.ownership), configuration: bytes.Clone(host.configuration), operations: slices.Clone(host.operations),
+		enabled: host.enabled, active: host.active, listener: host.listener, busy: host.busy, statusBusy: host.statusBusy,
+	}
 }
 
 func acceptedHost() *controlledHost { return &controlledHost{preflight: acceptedPreflightFacts()} }
@@ -134,6 +152,9 @@ func (host *controlledHost) Apply(_ context.Context, input hostadapter.Operation
 }
 
 func (host *controlledHost) InspectRunning(_ context.Context, _ hostadapter.SetupSpec, _, ownership []byte, _, _ string) hostadapter.RunningInspection {
+	if host.removal != nil {
+		return host.removal.RunningInspection
+	}
 	prepared := false
 	for _, operation := range host.operations {
 		if operation == hostadapter.ValidateConfiguration {
@@ -164,6 +185,18 @@ func (host *controlledHost) InspectRunning(_ context.Context, _ hostadapter.Setu
 
 func (host *controlledHost) InspectActivation(ctx context.Context, spec hostadapter.SetupSpec, source, ownership []byte, digest, publicIPv4 string, _ hostadapter.Destination) hostadapter.ActivationInspection {
 	return hostadapter.ActivationInspection{RunningInspection: host.InspectRunning(ctx, spec, source, ownership, digest, publicIPv4), DestinationCompatible: true, ListenerAvailable: !host.listener}
+}
+
+func (host *controlledHost) InspectRemoval(ctx context.Context, spec hostadapter.SetupSpec, source, ownership []byte, digest, publicIPv4 string) hostadapter.RemovalInspection {
+	if host.removal != nil {
+		return *host.removal
+	}
+	accepted := hostadapter.Observation{Observed: true, Accepted: true}
+	return hostadapter.RemovalInspection{
+		RunningInspection: host.InspectRunning(ctx, spec, source, ownership, digest, publicIPv4),
+		PackageLocks:      accepted, ConfigurationEntries: accepted, StateEntries: accepted,
+		IdentityExclusive: accepted, ProcessExclusive: accepted, ServiceSafe: accepted,
+	}
 }
 
 func observedAbsent(requested []hostadapter.Resource) []hostadapter.Resource {
@@ -250,6 +283,155 @@ func TestOwnerCanReviewAndDeclineCleanSetup(t *testing.T) {
 	result := installation.Execute(t.Context(), *review.Prepared, Declined, nil)
 	if result.Status != NotSetUp || result.Message != "No changes were made." || result.Code != ActionCancelled {
 		t.Fatalf("Execute() = %#v", result)
+	}
+}
+
+func TestOwnerCanReviewAndDeclineCompleteRemovalWithoutMutation(t *testing.T) {
+	for _, status := range []Status{NotSetUp, Running} {
+		t.Run(string(status), func(t *testing.T) {
+			host := acceptedHost()
+			installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+			if status == Running {
+				setup := installation.Review(t.Context(), StartSetupAction)
+				if result := installation.Execute(t.Context(), *setup.Prepared, Approved, nil); result.Status != Running {
+					t.Fatalf("setup = %#v", result)
+				}
+			}
+			before := host.facts()
+
+			review := installation.Review(t.Context(), CompleteRemovalAction)
+
+			if review.Prepared == nil || review.Status != status {
+				t.Fatalf("Review() = %#v", review)
+			}
+			plan := strings.Join(review.Plan, "\n")
+			for _, required := range []string{
+				"Complete removal deletes SBXR, proxy credentials, and every proved V3-owned resource from this VPS.",
+				"Outside copies of the Client Configuration cannot be deleted by SBXR.",
+				"SBXR preserves SSH, firewall, routing, forwarding, provider settings, shared package-manager state, and every unrelated resource.",
+				"Exact confirmation required: REMOVE SBXR",
+			} {
+				if !strings.Contains(plan, required) {
+					t.Errorf("plan missing %q:\n%s", required, plan)
+				}
+			}
+			result := installation.Execute(t.Context(), *review.Prepared, Declined, nil)
+			if result.Status != status || result.Message != "No changes were made." || result.Code != ActionCancelled || !reflect.DeepEqual(host.facts(), before) {
+				t.Fatalf("Execute() = %#v ownership=%q operations=%v", result, host.ownership, host.operations)
+			}
+			if reused := installation.Execute(t.Context(), *review.Prepared, Approved, nil); reused.Code != ActionRefused || !reflect.DeepEqual(host.facts(), before) {
+				t.Fatalf("reused Execute() = %#v ownership=%q operations=%v", reused, host.ownership, host.operations)
+			}
+			for _, secret := range []string{"11111111-2222-4333-8444-555555555555", "private", "secret-safe-test-fixture"} {
+				if strings.Contains(plan, secret) {
+					t.Errorf("plan disclosed %q", secret)
+				}
+			}
+		})
+	}
+}
+
+func TestCompleteRemovalReviewRefusesEveryUnsafeOwnedFact(t *testing.T) {
+	tests := []struct {
+		name   string
+		change func(*hostadapter.RemovalInspection)
+	}{
+		{"changed bytes metadata links types or ownership", func(facts *hostadapter.RemovalInspection) { facts.Configuration.Accepted = false }},
+		{"package identity or hold", func(facts *hostadapter.RemovalInspection) { facts.Package.Accepted = false }},
+		{"package hold", func(facts *hostadapter.RemovalInspection) { facts.Hold.Accepted = false }},
+		{"service identity", func(facts *hostadapter.RemovalInspection) { facts.ServiceProvenance.Accepted = false }},
+		{"system identity", func(facts *hostadapter.RemovalInspection) { facts.Host.Accepted = false }},
+		{"unknown directory entries", func(facts *hostadapter.RemovalInspection) { facts.ConfigurationEntries.Accepted = false }},
+		{"unexpected state membership", func(facts *hostadapter.RemovalInspection) { facts.StateEntries.Accepted = false }},
+		{"reused package identities", func(facts *hostadapter.RemovalInspection) { facts.IdentityExclusive.Accepted = false }},
+		{"outside process use", func(facts *hostadapter.RemovalInspection) { facts.ProcessExclusive.Accepted = false }},
+		{"outside listener use", func(facts *hostadapter.RemovalInspection) { facts.ServiceSafe.Accepted = false }},
+		{"package lock conflict", func(facts *hostadapter.RemovalInspection) { facts.PackageLocks.Accepted = false }},
+		{"unknown fact", func(facts *hostadapter.RemovalInspection) {
+			facts.StateEntries.Observed = false
+			facts.StateEntries.Accepted = false
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			host := acceptedHost()
+			installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+			setup := installation.Review(t.Context(), StartSetupAction)
+			if result := installation.Execute(t.Context(), *setup.Prepared, Approved, nil); result.Status != Running {
+				t.Fatalf("setup = %#v", result)
+			}
+			facts := host.InspectRemoval(t.Context(), hostSetupSpec, aptSourceBody, host.ownership, strings.Repeat("0", 64), "8.8.8.8")
+			test.change(&facts)
+			host.removal = &facts
+			before := host.facts()
+
+			review := installation.Review(t.Context(), CompleteRemovalAction)
+			details := installation.Review(t.Context(), ViewDetailsAction)
+
+			if review.Prepared != nil || review.Result.Code != ActionRefused || review.Result.FailedCheck != "Complete removal preflight" || !strings.Contains(strings.Join(review.Details, "\n"), "Safe correction:") || !strings.Contains(strings.Join(details.Details, "\n"), "Safe correction:") || !reflect.DeepEqual(host.facts(), before) {
+				t.Fatalf("Review() = %#v ownership=%q operations=%v", review, host.ownership, host.operations)
+			}
+		})
+	}
+}
+
+func TestCompleteRemovalAllowsStoppedOrDisabledServiceReduction(t *testing.T) {
+	host := acceptedHost()
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	if result := installation.Execute(t.Context(), *setup.Prepared, Approved, nil); result.Status != Running {
+		t.Fatalf("setup = %#v", result)
+	}
+	host.enabled, host.active, host.listener = false, false, false
+
+	review := installation.Review(t.Context(), CompleteRemovalAction)
+
+	if review.Prepared == nil {
+		t.Fatalf("Review() = %#v", review)
+	}
+}
+
+func TestCompleteRemovalTreatsOnlyContractPermittedAbsenceAsAlreadyRemoved(t *testing.T) {
+	host := acceptedHost()
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	if result := installation.Execute(t.Context(), *setup.Prepared, Approved, nil); result.Status != Running {
+		t.Fatalf("setup = %#v", result)
+	}
+	accepted := installation.Review(t.Context(), CompleteRemovalAction)
+	record, _ := decodeOwnership(host.ownership)
+	facts := host.InspectRemoval(t.Context(), hostSetupSpec, aptSourceBody, host.ownership, record.ConfigurationSHA256, record.PublicIPv4)
+	if accepted.Prepared == nil || !facts.TransactionFilesAbsent.Accepted {
+		t.Fatalf("contract-permitted absent transaction resources = %#v", accepted)
+	}
+	host.removal = &hostadapter.RemovalInspection{}
+	missingRequired := installation.Review(t.Context(), CompleteRemovalAction)
+	if missingRequired.Prepared != nil || missingRequired.Result.Code != ActionRefused {
+		t.Fatalf("unproved missing required resource = %#v", missingRequired)
+	}
+}
+
+func TestApprovedCompleteRemovalRevalidatesBeforeTheExpectedCommitmentRefusal(t *testing.T) {
+	host := acceptedHost()
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	if result := installation.Execute(t.Context(), *setup.Prepared, Approved, nil); result.Status != Running {
+		t.Fatalf("setup = %#v", result)
+	}
+
+	review := installation.Review(t.Context(), CompleteRemovalAction)
+	before := slices.Clone(host.operations)
+	host.active = false
+	changed := installation.Execute(t.Context(), *review.Prepared, Approved, nil)
+	if changed.Code != ActionRefused || changed.FailedCheck != "Prepared Action facts" || !reflect.DeepEqual(host.operations, before) {
+		t.Fatalf("changed Execute() = %#v operations=%v", changed, host.operations)
+	}
+
+	host.active = true
+	review = installation.Review(t.Context(), CompleteRemovalAction)
+	unchanged := installation.Execute(t.Context(), *review.Prepared, Approved, nil)
+	if unchanged.Code != ActionRefused || unchanged.FailedCheck != "Complete removal commitment" || !reflect.DeepEqual(host.operations, before) {
+		t.Fatalf("unchanged Execute() = %#v operations=%v", unchanged, host.operations)
 	}
 }
 
@@ -1035,13 +1217,9 @@ func TestActiveMutationDetailsStayCompleteWhenOwnershipIsInvalid(t *testing.T) {
 	}
 }
 
-func TestReviewRefusesUnsupportedAndIllegalActionsWithoutAuthority(t *testing.T) {
+func TestReviewRefusesIllegalActionsWithoutAuthority(t *testing.T) {
 	installation := newInstalledInterface(readyLifecycle{}, acceptedHost(), acceptedSingBox{})
 
-	unsupported := installation.Review(t.Context(), CompleteRemovalAction)
-	if unsupported.Result.Code != ActionRefused || unsupported.Result.FailedCheck != "Complete removal availability" || unsupported.Prepared != nil {
-		t.Fatalf("Complete removal Review() = %#v", unsupported)
-	}
 	illegal := installation.Review(t.Context(), FinishSetupAction)
 	if illegal.Result.Code != ActionRefused || illegal.Result.FailedCheck != "Legal action" || illegal.Prepared != nil {
 		t.Fatalf("Finish setup Review() = %#v", illegal)

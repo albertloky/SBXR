@@ -112,6 +112,7 @@ type hostInterface interface {
 	Apply(context.Context, hostadapter.OperationInput) hostadapter.OperationResult
 	InspectActivation(context.Context, hostadapter.SetupSpec, []byte, []byte, string, string, hostadapter.Destination) hostadapter.ActivationInspection
 	InspectRunning(context.Context, hostadapter.SetupSpec, []byte, []byte, string, string) hostadapter.RunningInspection
+	InspectRemoval(context.Context, hostadapter.SetupSpec, []byte, []byte, string, string) hostadapter.RemovalInspection
 }
 
 type singboxInterface interface {
@@ -140,6 +141,7 @@ type preparedReview struct {
 	record     []byte
 	inspection hostadapter.Inspection
 	running    hostadapter.RunningInspection
+	removal    hostadapter.RemovalInspection
 }
 
 type unfinishedDirection string
@@ -322,7 +324,7 @@ func (module *installedInterface) Review(ctx context.Context, action Action) Rev
 		case StatusAction, ViewDetailsAction:
 			return review
 		case CompleteRemovalAction:
-			review.Result = refused(ProblemDetected, "Complete removal availability", "Use an SBXR release that implements reviewed V3 Complete removal.")
+			review.Result = refused(ProblemDetected, "Complete removal preflight", "Remove only the unowned or conflicting resource named in View details, then review Complete removal again.")
 		default:
 			review.Result = refused(ProblemDetected, "Legal action", "Choose one of the actions legal for the freshly inspected Proxy Installation Status.")
 		}
@@ -332,8 +334,11 @@ func (module *installedInterface) Review(ctx context.Context, action Action) Rev
 	case StatusAction, ViewDetailsAction:
 		return review
 	case CompleteRemovalAction:
-		review.Result = refused(NotSetUp, "Complete removal availability", "Use an SBXR release that implements reviewed V3 Complete removal.")
-		return review
+		if !installedReady {
+			review.Result = refused(NotSetUp, "Installed SBXR", "Restore SBXR to a verified Ready Software Lifecycle state before Complete removal.")
+			return review
+		}
+		return module.prepareRemoval(review, installed, nil, nil, inspection, hostadapter.RemovalInspection{})
 	case StartSetupAction:
 	default:
 		review.Result = refused(NotSetUp, "Legal action", "Choose one of the actions legal for the freshly inspected Proxy Installation Status.")
@@ -403,6 +408,20 @@ func (module *installedInterface) reviewOwned(ctx context.Context, action Action
 		}
 	}
 	review.Details = ownedDetails(installed, installedReady, review.Status, record, facts, "Available")
+	if action == CompleteRemovalAction {
+		surface := module.host.Inspect(ctx, slices.Clone(footprint))
+		removal := module.host.InspectRemoval(ctx, hostSetupSpec, aptSourceBody, body, record.ConfigurationSHA256, record.PublicIPv4)
+		review.Details = append(review.Details, removalMismatchDetails(removal)...)
+		if !inspectionAccepted(surface) || !removalAccepted(removal) {
+			review.Result = refused(review.Status, "Complete removal preflight", removalCorrection(removal))
+			return review
+		}
+		return module.prepareRemoval(review, installed, &record, body, surface, removal)
+	}
+	if action == ViewDetailsAction && record.Phase == runningPhase {
+		removal := module.host.InspectRemoval(ctx, hostSetupSpec, aptSourceBody, body, record.ConfigurationSHA256, record.PublicIPv4)
+		review.Details = append(review.Details, removalMismatchDetails(removal)...)
+	}
 	if action == StatusAction || action == ViewDetailsAction {
 		return review
 	}
@@ -439,6 +458,18 @@ func (module *installedInterface) reviewOwned(ctx context.Context, action Action
 	}
 	module.prepared[token] = preparedReview{generation: module.generation, action: action, status: review.Status, release: installed, record: slices.Clone(body), inspection: inspection}
 	review.Prepared = &PreparedAction{token: token}
+	return review
+}
+
+func (module *installedInterface) prepareRemoval(review Review, installed softwarelifecycle.ReleaseIdentity, record *ownershipRecord, body []byte, inspection hostadapter.Inspection, removal hostadapter.RemovalInspection) Review {
+	var token [32]byte
+	if _, err := rand.Read(token[:]); err != nil {
+		review.Result = refused(review.Status, "Prepared Action generation", "Review Complete removal again.")
+		return review
+	}
+	module.prepared[token] = preparedReview{generation: module.generation, action: CompleteRemovalAction, status: review.Status, release: installed, record: slices.Clone(body), inspection: inspection, removal: removal}
+	review.Prepared = &PreparedAction{token: token}
+	review.Plan = completeRemovalPlan(record)
 	return review
 }
 
@@ -706,6 +737,28 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 	}
 	if confirmation != Approved || module.lifecycle == nil || module.host == nil || module.singbox == nil {
 		return refused(authority.status, "Prepared Action", "Review the action again and use only the new Prepared Action.")
+	}
+	if authority.action == CompleteRemovalAction {
+		if ctx.Err() != nil {
+			return refused(authority.status, "Managed termination", "Review Complete removal again after the current process stops.")
+		}
+		installed := module.lifecycle.Status(context.WithoutCancel(ctx))
+		inspection := module.host.Inspect(context.WithoutCancel(ctx), slices.Clone(footprint))
+		if installed.State != softwarelifecycle.Ready || installed.Installed == nil || *installed.Installed != authority.release || !reflect.DeepEqual(inspection, authority.inspection) {
+			return refused(ProblemDetected, "Prepared Action facts", "View details, restore every changed SBXR identity or host resource, then review Complete removal again.")
+		}
+		if len(authority.record) > 0 {
+			current, err := module.host.ReadOwnership(hostSetupSpec.OwnershipPath)
+			record, valid := decodeOwnership(current)
+			if err != nil || !valid || !bytes.Equal(current, authority.record) {
+				return refused(ProblemDetected, "Prepared Action facts", "Restore the exact reviewed Ownership Record, then review Complete removal again.")
+			}
+			removal := module.host.InspectRemoval(context.WithoutCancel(ctx), hostSetupSpec, aptSourceBody, current, record.ConfigurationSHA256, record.PublicIPv4)
+			if !removalAccepted(removal) || !reflect.DeepEqual(removal, authority.removal) {
+				return refused(ProblemDetected, "Prepared Action facts", removalCorrection(removal))
+			}
+		}
+		return refused(authority.status, "Complete removal commitment", "Use an SBXR release that implements committed V3 Complete removal.")
 	}
 	lock, busy, err := module.host.AcquireMutationLock(hostSetupSpec.LockPath)
 	if err != nil || busy {
@@ -1070,6 +1123,89 @@ func setupPlan(facts hostadapter.Preflight, selected hostadapter.Destination) []
 		"Owned resource groups: exact repository key and source, qualified package and hold, protected configuration and state, service state, and package-created identity",
 		"SBXR will not change SSH, firewall, routing, or provider settings. It preserves every unrelated host resource.",
 	}
+}
+
+func completeRemovalPlan(record *ownershipRecord) []string {
+	groups := "No V3 proxy resource is present; SBXR executable and Installed Record only"
+	if record != nil {
+		groups = "Ownership Record; exact proxy package and hold; protected configuration and state; package-owned service, user, and group; APT source and signing key; SBXR executable and Installed Record"
+	}
+	plan := []string{
+		"Complete removal deletes SBXR, proxy credentials, and every proved V3-owned resource from this VPS.",
+		"Proved removal inventory: " + groups + ".",
+		"Proved SBXR executable: /usr/local/bin/sbxr",
+		"Proved Installed Record: /var/lib/sbxr/installed.json",
+		"Outside copies of the Client Configuration cannot be deleted by SBXR.",
+		"SBXR preserves SSH, firewall, routing, forwarding, provider settings, shared package-manager state, and every unrelated resource.",
+		"There is no adoption, repair, recursive deletion, force path, or Owner override.",
+		"Exact confirmation required: REMOVE SBXR",
+	}
+	if record != nil {
+		for _, resource := range record.Resources {
+			plan = append(plan, "Proved V3-owned resource: "+resource)
+		}
+	}
+	return plan
+}
+
+func removalAccepted(facts hostadapter.RemovalInspection) bool {
+	required := []hostadapter.Observation{
+		facts.Host, facts.PublicIPv4Matches, facts.Ownership, facts.TransactionFilesAbsent,
+		facts.APTKey, facts.APTSource, facts.Package, facts.Hold, facts.PackageIdentity,
+		facts.Configuration, facts.State, facts.Validation, facts.ServiceProvenance,
+		facts.PackageLocks, facts.ConfigurationEntries, facts.StateEntries,
+		facts.IdentityExclusive, facts.ProcessExclusive,
+		facts.ServiceSafe,
+	}
+	return !slices.ContainsFunc(required, func(fact hostadapter.Observation) bool { return !fact.Observed || !fact.Accepted })
+}
+
+func removalCorrection(facts hostadapter.RemovalInspection) string {
+	checks := []struct {
+		fact hostadapter.Observation
+		name string
+	}{
+		{facts.PackageLocks, "Ubuntu package locks"},
+		{facts.ConfigurationEntries, "/etc/sing-box directory membership"},
+		{facts.StateEntries, "/var/lib/sing-box directory membership"},
+		{facts.IdentityExclusive, "sing-box user and group ownership"},
+		{facts.ProcessExclusive, "sing-box process identity"},
+		{facts.ServiceSafe, "sing-box service, process, and listener state"},
+	}
+	for _, check := range checks {
+		if !check.fact.Observed {
+			return "Restore read-only inspection of " + check.name + ", then review Complete removal again."
+		}
+		if !check.fact.Accepted {
+			return "Remove the unproved use or restore the exact proved " + check.name + ", then review Complete removal again."
+		}
+	}
+	return "Restore every changed V3 ownership, package, service, process, listener, directory, and system fact, then review Complete removal again."
+}
+
+func removalMismatchDetails(facts hostadapter.RemovalInspection) []string {
+	checks := []struct {
+		fact       hostadapter.Observation
+		mismatch   string
+		correction string
+		observe    string
+	}{
+		{facts.PackageLocks, "Ubuntu package locks are in use", "Wait for APT and dpkg to finish, then review Complete removal again.", "Restore safe inspection of every Ubuntu package lock, then inspect again."},
+		{facts.ConfigurationEntries, "/etc/sing-box has changed metadata or unexpected directory entries", "Restore the exact root-owned mode-0755 directory containing only config.json, then inspect again.", "Restore read-only directory and metadata inspection of /etc/sing-box, then inspect again."},
+		{facts.StateEntries, "/var/lib/sing-box has changed metadata or unexpected directory entries", "Remove only unproved entries after preserving Owner data, and restore the exact empty package-owned mode-0750 state directory, then inspect again.", "Restore read-only directory and metadata inspection of /var/lib/sing-box, then inspect again."},
+		{facts.IdentityExclusive, "the sing-box user or group owns resources outside the proved V3 paths", "Reassign or preserve every outside resource before reviewing Complete removal again.", "Restore complete local ownership inspection for the sing-box user and group, then inspect again."},
+		{facts.ProcessExclusive, "the sing-box user, group, or process name is used by an outside process", "Stop or reassign only the outside process after proving its ownership, then inspect again.", "Restore complete process inspection for the sing-box user, group, and process name, then inspect again."},
+		{facts.ServiceSafe, "the service, process, or TCP 443 listener is neither exact Running state nor a harmless stopped reduction", "Stop the outside process or listener, or restore the exact package-owned sing-box service, then inspect again.", "Restore systemd, process, and TCP 443 listener inspection, then inspect again."},
+	}
+	var details []string
+	for _, check := range checks {
+		if !check.fact.Observed {
+			details = append(details, "Detected mismatch: the Complete removal fact could not be inspected", "Safe correction: "+check.observe)
+		} else if !check.fact.Accepted {
+			details = append(details, "Detected mismatch: "+check.mismatch, "Safe correction: "+check.correction)
+		}
+	}
+	return details
 }
 
 func proxyPackageIdentity() string {

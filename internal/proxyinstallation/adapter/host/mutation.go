@@ -12,6 +12,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -79,6 +81,12 @@ type RunningInspection struct {
 	PackageIdentity, Configuration, State     Observation
 	Validation, ServiceProvenance             Observation
 	ServiceEnabled, ServiceActive, Listener   Observation
+}
+
+type RemovalInspection struct {
+	RunningInspection
+	PackageLocks, ConfigurationEntries, StateEntries Observation
+	IdentityExclusive, ProcessExclusive, ServiceSafe Observation
 }
 
 func observation(accepted, observed bool) Observation {
@@ -420,6 +428,122 @@ func (adapter Adapter) InspectRunning(ctx context.Context, spec SetupSpec, sourc
 	}
 }
 
+func (adapter Adapter) InspectRemoval(ctx context.Context, spec SetupSpec, sourceBody, ownership []byte, configurationDigest, publicIPv4 string) RemovalInspection {
+	facts := adapter.InspectRunning(ctx, spec, sourceBody, ownership, configurationDigest, publicIPv4)
+	user := adapter.command(ctx, "getent", "passwd", spec.User)
+	group := adapter.command(ctx, "getent", "group", spec.Group)
+	uid, gid, accountOK := accountIDs(user.Fact)
+	groupGID, groupOK := groupID(group.Fact)
+	configurationEntries, configurationObserved := adapter.directoryContainsOnly(filepath.Dir(spec.ConfigurationPath), 0o755, adapter.ownerUID(), adapter.ownerGID(), filepath.Base(spec.ConfigurationPath))
+	stateEntries, stateObserved := adapter.directoryContainsOnly(spec.StatePath, 0o750, uid, gid)
+	identityExclusive, identityObserved := adapter.identityExclusive(ctx, spec, uid, gid, accountOK && groupOK && gid == groupGID)
+	processExclusive, processObserved := adapter.processExclusive(ctx, spec.PackageName, uid, gid, accountOK && groupOK && gid == groupGID)
+	serviceSafe, serviceObserved := adapter.serviceRemovalSafe(ctx, spec)
+	return RemovalInspection{
+		RunningInspection:    facts,
+		PackageLocks:         observation(adapter.packageLocksAvailable(), true),
+		ConfigurationEntries: observation(configurationEntries, configurationObserved),
+		StateEntries:         observation(stateEntries, stateObserved),
+		IdentityExclusive:    observation(identityExclusive, identityObserved),
+		ProcessExclusive:     observation(processExclusive, processObserved),
+		ServiceSafe:          observation(serviceSafe, serviceObserved),
+	}
+}
+
+func (adapter Adapter) directoryContainsOnly(name string, mode os.FileMode, uid, gid uint32, expected ...string) (bool, bool) {
+	path := adapter.path(name)
+	info, err := os.Lstat(path)
+	stat, ok := infoSys(info)
+	if err != nil || !ok || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != mode || stat.Uid != uid || stat.Gid != gid {
+		return false, err == nil
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return false, false
+	}
+	names := make([]string, len(entries))
+	for index, entry := range entries {
+		names[index] = entry.Name()
+	}
+	slices.Sort(names)
+	slices.Sort(expected)
+	return slices.Equal(names, expected), true
+}
+
+func (adapter Adapter) identityExclusive(ctx context.Context, spec SetupSpec, uid, gid uint32, valid bool) (bool, bool) {
+	if !valid {
+		return false, true
+	}
+	configuration := adapter.path(spec.ConfigurationPath)
+	state := adapter.path(spec.StatePath)
+	result := adapter.command(ctx, "find", adapter.path("/"), "-xdev", "(", "-uid", strconv.FormatUint(uint64(uid), 10), "-o", "-gid", strconv.FormatUint(uint64(gid), 10), ")", "!", "-path", configuration, "!", "-path", state, "!", "-path", state+string(os.PathSeparator)+"*", "-print", "-quit")
+	if !result.Observed || !result.OK {
+		return false, false
+	}
+	return result.Fact == "", true
+}
+
+func (adapter Adapter) processExclusive(ctx context.Context, packageName string, uid, gid uint32, valid bool) (bool, bool) {
+	if !valid {
+		return false, true
+	}
+	userProcesses := adapter.command(ctx, "pgrep", "-u", strconv.FormatUint(uint64(uid), 10))
+	groupProcesses := adapter.command(ctx, "pgrep", "-G", strconv.FormatUint(uint64(gid), 10))
+	packageProcesses := adapter.command(ctx, "pgrep", "-x", packageName)
+	userPIDs, userObserved := pidSet(userProcesses)
+	groupPIDs, groupObserved := pidSet(groupProcesses)
+	packagePIDs, packageObserved := pidSet(packageProcesses)
+	return processSetsExclusive(userPIDs, groupPIDs, packagePIDs), userObserved && groupObserved && packageObserved
+}
+
+func processSetsExclusive(userPIDs, groupPIDs, packagePIDs map[string]struct{}) bool {
+	for pid := range groupPIDs {
+		userPIDs[pid] = struct{}{}
+	}
+	return reflect.DeepEqual(userPIDs, packagePIDs)
+}
+
+func pidSet(result OperationResult) (map[string]struct{}, bool) {
+	if !result.Observed || result.Code != 0 && result.Code != 1 {
+		return nil, false
+	}
+	pids := make(map[string]struct{})
+	for _, pid := range strings.Fields(result.Fact) {
+		pids[pid] = struct{}{}
+	}
+	return pids, true
+}
+
+func (adapter Adapter) serviceRemovalSafe(ctx context.Context, spec SetupSpec) (bool, bool) {
+	enabled := adapter.command(ctx, "systemctl", "is-enabled", spec.Service)
+	active := adapter.command(ctx, "systemctl", "is-active", spec.Service)
+	mainPID := adapter.command(ctx, "systemctl", "show", "--property=MainPID", "--value", spec.Service)
+	process := adapter.command(ctx, "pgrep", "-x", spec.PackageName)
+	listener := adapter.command(ctx, "ss", "-H", "-ltnp", "sport", "=", ":"+spec.ListenerPort)
+	observed := enabled.Observed && active.Observed && mainPID.Observed && process.Observed && listener.Observed
+	return serviceStateRemovalSafe(enabled, active, mainPID, process, listener, spec.PackageName), observed
+}
+
+func serviceStateRemovalSafe(enabled, active, mainPID, process, listener OperationResult, packageName string) bool {
+	enabledKnown := enabled.OK && enabled.Fact == "enabled" || enabled.Observed && (enabled.Fact == "disabled" || enabled.Fact == "masked")
+	running := active.OK && active.Fact == "active" && mainPID.OK && mainPID.Fact != "" && strings.TrimSpace(process.Fact) == mainPID.Fact && listenerOwnedOnly(listener.Fact, packageName)
+	stopped := active.Observed && active.Fact == "inactive" && mainPID.Fact == "0" && !process.OK && process.Code == 1 && listener.OK && listener.Fact == ""
+	return enabledKnown && (running || stopped)
+}
+
+func listenerOwnedOnly(fact, packageName string) bool {
+	lines := strings.Split(strings.TrimSpace(fact), "\n")
+	if len(lines) == 0 || lines[0] == "" {
+		return false
+	}
+	for _, line := range lines {
+		if !strings.Contains(line, `(("`+packageName+`",`) {
+			return false
+		}
+	}
+	return true
+}
+
 func (adapter Adapter) pathObserved(name string) bool {
 	_, err := os.Lstat(adapter.path(name))
 	return err == nil || errors.Is(err, os.ErrNotExist)
@@ -660,6 +784,13 @@ func (adapter Adapter) ownerUID() uint32 {
 		return 0
 	}
 	return uint32(os.Getuid())
+}
+
+func (adapter Adapter) ownerGID() uint32 {
+	if adapter.root == "/" {
+		return 0
+	}
+	return uint32(os.Getgid())
 }
 
 func infoSys(info os.FileInfo) (*syscall.Stat_t, bool) {

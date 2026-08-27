@@ -198,6 +198,79 @@ func TestServiceStoppedRequiresFreshInactiveProcessAndListenerFacts(t *testing.T
 	}
 }
 
+func TestRemovalInspectionRejectsUnexpectedDirectoryEntries(t *testing.T) {
+	root := t.TempDir()
+	configurationDirectory := filepath.Join(root, "etc", "sing-box")
+	stateDirectory := filepath.Join(root, "var", "lib", "sing-box")
+	for _, directory := range []string{configurationDirectory, stateDirectory} {
+		if err := os.MkdirAll(directory, 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	configuration := filepath.Join(configurationDirectory, "config.json")
+	if err := os.WriteFile(configuration, []byte("{}\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	adapter := Adapter{root: root}
+	if accepted, observed := adapter.directoryContainsOnly("/etc/sing-box", 0o750, uint32(os.Getuid()), uint32(os.Getgid()), "config.json"); !accepted || !observed {
+		t.Fatalf("clean directory = accepted %t observed %t", accepted, observed)
+	}
+	if err := os.WriteFile(filepath.Join(configurationDirectory, "unknown"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if accepted, observed := adapter.directoryContainsOnly("/etc/sing-box", 0o750, uint32(os.Getuid()), uint32(os.Getgid()), "config.json"); accepted || !observed {
+		t.Fatalf("unknown entry = accepted %t observed %t", accepted, observed)
+	}
+}
+
+func TestRemovalListenerMustBelongOnlyToThePackage(t *testing.T) {
+	if !listenerOwnedOnly(`LISTEN users:(("sing-box",pid=42,fd=7))`, "sing-box") {
+		t.Fatal("exact package listener was refused")
+	}
+	if listenerOwnedOnly(`LISTEN users:(("not-sing-box",pid=42,fd=7))`, "sing-box") || listenerOwnedOnly(`LISTEN users:(("sing-box",pid=42,fd=7))`+"\n"+`LISTEN users:(("nginx",pid=43,fd=7))`, "sing-box") || listenerOwnedOnly("", "sing-box") {
+		t.Fatal("missing or outside listener was accepted")
+	}
+}
+
+func TestRemovalAcceptsOnlyExactRunningOrStoppedServiceFacts(t *testing.T) {
+	fact := func(value string) OperationResult { return OperationResult{OK: true, Observed: true, Fact: value} }
+	absent := OperationResult{Observed: true, Code: 1}
+	listener := fact(`LISTEN users:(("sing-box",pid=42,fd=7))`)
+	for _, test := range []struct {
+		name                                    string
+		enabled, active, pid, process, listener OperationResult
+		want                                    bool
+	}{
+		{"running enabled", fact("enabled"), fact("active"), fact("42"), fact("42"), listener, true},
+		{"running disabled", OperationResult{Observed: true, Fact: "disabled"}, fact("active"), fact("42"), fact("42"), listener, true},
+		{"stopped enabled", fact("enabled"), OperationResult{Observed: true, Fact: "inactive"}, fact("0"), absent, fact(""), true},
+		{"stopped disabled", OperationResult{Observed: true, Fact: "disabled"}, OperationResult{Observed: true, Fact: "inactive"}, fact("0"), absent, fact(""), true},
+		{"outside listener", fact("enabled"), fact("active"), fact("42"), fact("42"), fact(`LISTEN users:(("nginx",pid=43,fd=7))`), false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := serviceStateRemovalSafe(test.enabled, test.active, test.pid, test.process, test.listener, "sing-box"); got != test.want {
+				t.Fatalf("serviceStateRemovalSafe() = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
+func TestRemovalRejectsOutsideIdentityProcessUse(t *testing.T) {
+	set := func(values ...string) map[string]struct{} {
+		result := make(map[string]struct{}, len(values))
+		for _, value := range values {
+			result[value] = struct{}{}
+		}
+		return result
+	}
+	if !processSetsExclusive(set("42"), set("42"), set("42")) {
+		t.Fatal("exact package process identity was refused")
+	}
+	if processSetsExclusive(set("42", "99"), set("42"), set("42")) {
+		t.Fatal("outside identity process use was accepted")
+	}
+}
+
 func resourcePresent(resources []Resource, name string) bool {
 	for _, resource := range resources {
 		if resource.Name == name {
