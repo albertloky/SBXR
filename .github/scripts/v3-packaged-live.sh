@@ -405,7 +405,7 @@ curl -fsS https://sing-box.app/gpg.key -o /dev/shm/sagernet.asc
 test "$(sha256sum /dev/shm/sagernet.asc | cut -d' ' -f1)" = 803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1
 printf '%s\n' 'Types: deb' 'URIs: https://deb.sagernet.org/' 'Suites: *' 'Components: *' 'Architectures: amd64' 'Signed-By: /dev/shm/sagernet.asc' > /dev/shm/sagernet.sources
 runner_stage=update-client-package-index
-sudo apt-get -o Dir::Etc::sourcelist=/dev/shm/sagernet.sources -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 update >/dev/null 2>"$client_log"
+sudo apt-get -o Acquire::Retries=3 -o Dir::Etc::sourcelist=/dev/shm/sagernet.sources -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 update >/dev/null 2>"$client_log"
 runner_stage=download-client-package
 apt-get download -o Dir::Etc::sourcelist=/dev/shm/sagernet.sources -o Dir::Etc::sourceparts=- 'sing-box:amd64=1.13.19' >/dev/null 2>>"$client_log"
 scan_runner_capture

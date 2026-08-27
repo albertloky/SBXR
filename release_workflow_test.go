@@ -523,6 +523,7 @@ func TestCandidateRoutesOneV3CandidateThroughPackagedLiveQualification(t *testin
 		`stage:"v3-packaged-live-result"`,
 		"v3-packaged-live-result-facts.json",
 		"v3-packaged-live-result-decision.json",
+		`sudo apt-get -o Acquire::Retries=3 -o Dir::Etc::sourcelist=/dev/shm/sagernet.sources -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 update`,
 		`.inbounds == [{type:"mixed",tag:"mixed-in",listen:"127.0.0.1",listen_port:2080}] and (.outbounds | length) == 1`,
 		"/dev/shm/sbxr-v3-client.json",
 		`${RUNNER_TEMP:?}/sbxr-v3-client`,
