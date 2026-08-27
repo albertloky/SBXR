@@ -31,6 +31,7 @@ type controlledHost struct {
 	active             bool
 	listener           bool
 	busy               bool
+	lockChangesFacts   bool
 	statusBusy         bool
 	activeUnknown      bool
 	hostUnknown        bool
@@ -158,6 +159,9 @@ func (host *controlledHost) RemoveFinalOwnership(_, _, _ string, expected []byte
 }
 
 func (host *controlledHost) AcquireMutationLock(string) (*hostadapter.MutationLock, bool, error) {
+	if host.lockChangesFacts {
+		host.preflight.MutationLockAvailable = false
+	}
 	return &hostadapter.MutationLock{}, host.busy, nil
 }
 
@@ -322,6 +326,22 @@ func TestOwnerCanReviewAndDeclineCleanSetup(t *testing.T) {
 	result := installation.Execute(t.Context(), *review.Prepared, Declined, nil)
 	if result.Status != NotSetUp || result.Message != "No changes were made." || result.Code != ActionCancelled {
 		t.Fatalf("Execute() = %#v", result)
+	}
+}
+
+func TestSetupRevalidationAcceptsItsAcquiredMutationLock(t *testing.T) {
+	host := acceptedHost()
+	host.lockChangesFacts = true
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	review := installation.Review(t.Context(), StartSetupAction)
+	var phases []string
+
+	result := installation.Execute(t.Context(), *review.Prepared, Approved, func(progress Progress) {
+		phases = append(phases, progress.Phase)
+	})
+
+	if result.Status != Running || result.Code != SetupComplete || !slices.Contains(phases, string(hostadapter.ValidateConfiguration)) {
+		t.Fatalf("Execute() = %#v, phases = %v", result, phases)
 	}
 }
 

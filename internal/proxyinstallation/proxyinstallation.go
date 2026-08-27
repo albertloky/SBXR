@@ -941,6 +941,7 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 	}
 	installed := module.lifecycle.Status(ctx)
 	currentFacts := module.host.Preflight(ctx, slices.Clone(footprint), slices.Clone(destinations))
+	currentFacts.MutationLockAvailable = authority.facts.MutationLockAvailable
 	selected, failed, _ := acceptedPreflight(currentFacts)
 	if installed.State != softwarelifecycle.Ready || installed.Installed == nil || *installed.Installed != authority.release || failed != "" || !samePreflight(authority.facts, currentFacts) || !module.singbox.ValidIdentity(authority.identity) {
 		return refused(authority.status, "Prepared Action facts", "Review the action again after restoring every changed safety fact.")
