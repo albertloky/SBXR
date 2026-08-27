@@ -195,6 +195,30 @@ func TestCandidateConstructsDraftsAndSignsTheQualificationBoundary(t *testing.T)
 	}
 }
 
+func TestCandidateNativelyVerifiesTheMenuForEachMode(t *testing.T) {
+	body, err := os.ReadFile(".github/workflows/candidate.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	build := string(body)
+	build = build[strings.Index(build, "  build:"):strings.Index(build, "  drafts:")]
+	const verification = `          case "$MODE" in
+            v3)
+              grep -F 'SBXR V3' menu.transcript
+              grep -F 'Proxy status: Not set up' menu.transcript
+              grep -F 'Code: PROXY-INSTALLATION-STATUS-NOT-SET-UP' menu.transcript
+              grep -F 'Start setup' menu.transcript
+              ;;
+            normal|rescue)
+              grep -F 'Recovery required' menu.transcript
+              grep -F 'Start recovery' menu.transcript
+              ;;
+          esac`
+	if !strings.Contains(build, "MODE: ${{ inputs.mode }}") || !strings.Contains(build, verification) {
+		t.Fatal("candidate native verification is not mode-aware")
+	}
+}
+
 func TestCandidateDraftAdapterUsesOnlyCanonicalQualificationActionsAndObservations(t *testing.T) {
 	body, err := os.ReadFile(".github/workflows/candidate.yml")
 	if err != nil {

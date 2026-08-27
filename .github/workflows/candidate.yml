@@ -199,6 +199,7 @@ jobs:
           TAG: ${{ matrix.release.tag }}
           SEQUENCE: ${{ matrix.release.sequence }}
           ARCHITECTURE: ${{ matrix.architecture }}
+          MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail
           mkdir -m 0700 release evidence
@@ -224,8 +225,18 @@ jobs:
           test ! -s non-root.out
           grep -Fx 'SBXR requires root authority.' non-root.err
           printf '0\n' | script -qec "sudo env TERM=xterm-256color LANG=C.UTF-8 '$PWD/inspect/sbxr'" menu.transcript
-          grep -F 'Recovery required' menu.transcript
-          grep -F 'Start recovery' menu.transcript
+          case "$MODE" in
+            v3)
+              grep -F 'SBXR V3' menu.transcript
+              grep -F 'Proxy status: Not set up' menu.transcript
+              grep -F 'Code: PROXY-INSTALLATION-STATUS-NOT-SET-UP' menu.transcript
+              grep -F 'Start setup' menu.transcript
+              ;;
+            normal|rescue)
+              grep -F 'Recovery required' menu.transcript
+              grep -F 'Start recovery' menu.transcript
+              ;;
+          esac
           secret_pattern='SBXR_USER_TOKEN_MARKER_00000000000000abcd|CLOUDFLARE-ROTATED-RUN-TOKEN-MARKER|profile-secret-marker|subscription-secret-marker|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer '
           if grep -aERq "$secret_pattern" release inspect non-root.out non-root.err menu.transcript; then
             exit 1
