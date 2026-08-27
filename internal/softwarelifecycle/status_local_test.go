@@ -46,6 +46,36 @@ func TestStatusUsesVerifiedProductionFileAndLockFacts(t *testing.T) {
 	}
 }
 
+func TestCompleteRemovalDeletesOnlyTheCommittedInstalledPairAndEmptyStateDirectory(t *testing.T) {
+	root := t.TempDir()
+	identity := ReleaseIdentity{Repository: Repository, Tag: "v3.0.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}
+	evidence := installedEvidence(t, identity, 17, AMD64)
+	writeInstalledEvidence(t, root, evidence)
+	ownership := statusPath(root, "/var/lib/sbxr/proxy-ownership.json")
+	mustWriteStatusFile(t, ownership, []byte("committed\n"), 0o600)
+	lifecycle := newInstalledInterface(newLocalInspector(root, uint32(os.Getuid())), nil)
+	removal := lifecycle.(interface {
+		InspectCompleteRemoval(context.Context, ReleaseIdentity) CompleteRemovalInspection
+		RemoveCompleteRemovalExecutable(context.Context, ReleaseIdentity) bool
+		RemoveCompleteRemovalInstalledRecord(context.Context, ReleaseIdentity) bool
+	})
+
+	wrong := identity
+	wrong.Commit = strings.Repeat("c", 40)
+	if removal.RemoveCompleteRemovalExecutable(t.Context(), wrong) {
+		t.Fatal("wrong Release Identity removed the executable")
+	}
+	if !removal.RemoveCompleteRemovalExecutable(t.Context(), identity) || !removal.RemoveCompleteRemovalInstalledRecord(t.Context(), identity) {
+		t.Fatal("committed installed pair was not removed")
+	}
+	if _, err := os.Stat(ownership); err != nil {
+		t.Fatalf("Ownership Record was removed early: %v", err)
+	}
+	if err := os.Remove(ownership); err != nil {
+		t.Fatalf("test cleanup: %v", err)
+	}
+}
+
 func mustWriteStatusFile(t *testing.T, path string, body []byte, mode os.FileMode) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

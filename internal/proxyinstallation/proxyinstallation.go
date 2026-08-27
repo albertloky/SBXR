@@ -26,11 +26,12 @@ import (
 type Status string
 
 const (
-	NotSetUp         Status = "Not set up"
-	Running          Status = "Running"
-	ChangeInProgress Status = "Change in progress"
-	SetupIncomplete  Status = "Setup incomplete"
-	ProblemDetected  Status = "Problem detected"
+	NotSetUp          Status = "Not set up"
+	Running           Status = "Running"
+	ChangeInProgress  Status = "Change in progress"
+	SetupIncomplete   Status = "Setup incomplete"
+	ProblemDetected   Status = "Problem detected"
+	RemovalIncomplete Status = "Removal incomplete"
 )
 
 type Action string
@@ -66,6 +67,8 @@ const (
 	SetupNeedsCompletion         ResultCode = "PROXY-INSTALLATION-SETUP-COMPLETION-REQUIRED"
 	SetupCleanedUp               ResultCode = "PROXY-INSTALLATION-SETUP-CLEANED-UP"
 	ClientConfigurationDisclosed ResultCode = "PROXY-INSTALLATION-CLIENT-CONFIGURATION-DISCLOSED"
+	RemovalNeedsCompletion       ResultCode = "PROXY-INSTALLATION-REMOVAL-COMPLETION-REQUIRED"
+	CompleteRemovalCompleted     ResultCode = "SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED"
 )
 
 type Result struct {
@@ -108,11 +111,20 @@ type hostInterface interface {
 	MutationInProgress(string) (bool, bool)
 	PublishOwnership(string, string, []byte, []byte) error
 	RemoveOwnership(string, string, []byte) error
+	RemoveFinalOwnership(string, string, string, []byte) error
 	AcquireMutationLock(string) (*hostadapter.MutationLock, bool, error)
+	AcquirePackageLocks() (*hostadapter.PackageLocks, bool, error)
 	Apply(context.Context, hostadapter.OperationInput) hostadapter.OperationResult
 	InspectActivation(context.Context, hostadapter.SetupSpec, []byte, []byte, string, string, hostadapter.Destination) hostadapter.ActivationInspection
 	InspectRunning(context.Context, hostadapter.SetupSpec, []byte, []byte, string, string) hostadapter.RunningInspection
 	InspectRemoval(context.Context, hostadapter.SetupSpec, []byte, []byte, string, string) hostadapter.RemovalInspection
+}
+
+type removalLifecycle interface {
+	softwarelifecycle.Interface
+	InspectCompleteRemoval(context.Context, softwarelifecycle.ReleaseIdentity) softwarelifecycle.CompleteRemovalInspection
+	RemoveCompleteRemovalExecutable(context.Context, softwarelifecycle.ReleaseIdentity) bool
+	RemoveCompleteRemovalInstalledRecord(context.Context, softwarelifecycle.ReleaseIdentity) bool
 }
 
 type singboxInterface interface {
@@ -150,6 +162,7 @@ const (
 	cleanupRequired unfinishedDirection = "cleanup required"
 	setupRequired   unfinishedDirection = "setup required"
 	noDirection     unfinishedDirection = "none"
+	removalRequired unfinishedDirection = "removal required"
 )
 
 type setupPhase string
@@ -169,6 +182,7 @@ const (
 	serviceEnabled         setupPhase = "Service enabled"
 	serviceStarted         setupPhase = "Service started"
 	runningPhase           setupPhase = "Running"
+	removalCommitted       setupPhase = "Removal committed"
 )
 
 type ownershipRecord struct {
@@ -183,6 +197,7 @@ type ownershipRecord struct {
 	ConfigurationSHA256 string                            `json:"configuration_sha256"`
 	Resources           []string                          `json:"permitted_resources"`
 	CleanupCheckpoint   int                               `json:"cleanup_checkpoint"`
+	RemovalCheckpoint   int                               `json:"removal_checkpoint"`
 }
 
 var destinations = []hostadapter.Destination{
@@ -203,8 +218,11 @@ var hostSetupSpec = hostadapter.SetupSpec{
 	User: "sing-box", Group: "sing-box", ListenerPort: "443",
 }
 
+const finalOwnershipPath = "/var/lib/.sbxr-removal.json"
+
 var footprint = []hostadapter.Resource{
 	{Kind: hostadapter.PathResource, Name: "/var/lib/sbxr/proxy-ownership.json"},
+	{Kind: hostadapter.PathResource, Name: finalOwnershipPath},
 	{Kind: hostadapter.PathResource, Name: "/var/lib/sbxr/.proxy-ownership.json.next"},
 	{Kind: hostadapter.PathResource, Name: "/var/lib/sbxr/sing-box_1.13.19_amd64.deb"},
 	{Kind: hostadapter.PathResource, Name: "/etc/apt/sources.list.d/sagernet.sources"},
@@ -270,7 +288,7 @@ func (module *installedInterface) Review(ctx context.Context, action Action) Rev
 				review.Result = Result{Status: ChangeInProgress, Message: "Another Proxy Installation change is in progress.", Code: StatusChangeInProgress}
 				review.Details = []string{"Proxy Installation Status: Change in progress", "Safe correction: Wait for the current atomic mutation and checkpoint to finish."}
 				if action == ViewDetailsAction {
-					body, err := module.host.ReadOwnership(hostSetupSpec.OwnershipPath)
+					body, err := module.readOwnership()
 					if err == nil {
 						if record, ok := decodeOwnership(body); ok {
 							facts := module.host.InspectRunning(ctx, hostSetupSpec, aptSourceBody, body, record.ConfigurationSHA256, record.PublicIPv4)
@@ -293,7 +311,7 @@ func (module *installedInterface) Review(ctx context.Context, action Action) Rev
 			}
 			return module.ownershipProblem(ctx, review, installed, installedReady, "Invalid or unsafe", "Unavailable while the mutation lock is unsafe", "the shared mutation lock is invalid or unsafe", "Replace /run/lock/sbxr.lock with a root-owned mode-0600 regular file, then inspect again.")
 		}
-		body, err := module.host.ReadOwnership(hostSetupSpec.OwnershipPath)
+		body, err := module.readOwnership()
 		if err == nil {
 			record, ok := decodeOwnership(body)
 			if !ok {
@@ -371,6 +389,9 @@ func (module *installedInterface) Review(ctx context.Context, action Action) Rev
 }
 
 func (module *installedInterface) reviewOwned(ctx context.Context, action Action, review Review, record ownershipRecord, body []byte, installed softwarelifecycle.ReleaseIdentity, installedReady bool) Review {
+	if record.Direction == removalRequired {
+		return module.reviewCommittedRemoval(ctx, action, review, record, body)
+	}
 	if !installedReady || record.Release != installed {
 		facts := module.host.InspectRunning(ctx, hostSetupSpec, aptSourceBody, body, record.ConfigurationSHA256, record.PublicIPv4)
 		review.Status = ProblemDetected
@@ -457,6 +478,49 @@ func (module *installedInterface) reviewOwned(ctx context.Context, action Action
 		return review
 	}
 	module.prepared[token] = preparedReview{generation: module.generation, action: action, status: review.Status, release: installed, record: slices.Clone(body), inspection: inspection}
+	review.Prepared = &PreparedAction{token: token}
+	return review
+}
+
+func (module *installedInterface) reviewCommittedRemoval(ctx context.Context, action Action, review Review, record ownershipRecord, body []byte) Review {
+	review.Version = record.Release.Tag
+	review.Status = RemovalIncomplete
+	review.Result = Result{Status: RemovalIncomplete, Message: "Complete removal was interrupted and must continue forward.", Code: RemovalNeedsCompletion}
+	review.LegalActions = []Action{FinishRemovalAction, ViewDetailsAction}
+	lifecycle, ok := module.lifecycle.(removalLifecycle)
+	if !ok {
+		review.Status = ProblemDetected
+		review.LegalActions = []Action{ViewDetailsAction}
+		review.Result = refused(ProblemDetected, "Exact executable restoration", "Restore the exact committed SBXR executable with the Pasteable Install Command, then inspect again.")
+		return review
+	}
+	facts := lifecycle.InspectCompleteRemoval(ctx, record.Release)
+	if !facts.Valid {
+		review.Status = ProblemDetected
+		review.LegalActions = []Action{ViewDetailsAction}
+		review.Result = refused(ProblemDetected, "Removal commitment", "Restore the exact committed Release Identity, then inspect again.")
+		return review
+	}
+	review.Details = []string{
+		"SBXR version: " + record.Release.Tag,
+		"Proxy Installation Status: Removal incomplete",
+		"Required unfinished direction: removal required",
+		fmt.Sprintf("Ownership Record: Valid; phase %s; removal checkpoint %d", record.Phase, record.RemovalCheckpoint),
+		"Only Finish removal is permitted. Rollback, cancellation, setup, installation, update, and Latest selection are forbidden.",
+	}
+	if action == StatusAction || action == ViewDetailsAction {
+		return review
+	}
+	if action != FinishRemovalAction {
+		review.Result = refused(RemovalIncomplete, "Legal action", "Choose Finish removal.")
+		return review
+	}
+	var token [32]byte
+	if _, err := rand.Read(token[:]); err != nil {
+		review.Result = refused(RemovalIncomplete, "Prepared Action generation", "Review Finish removal again.")
+		return review
+	}
+	module.prepared[token] = preparedReview{generation: module.generation, action: FinishRemovalAction, status: RemovalIncomplete, release: record.Release, record: slices.Clone(body)}
 	review.Prepared = &PreparedAction{token: token}
 	return review
 }
@@ -742,13 +806,22 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 		if ctx.Err() != nil {
 			return refused(authority.status, "Managed termination", "Review Complete removal again after the current process stops.")
 		}
-		installed := module.lifecycle.Status(context.WithoutCancel(ctx))
+		lock, busy, err := module.host.AcquireMutationLock(hostSetupSpec.LockPath)
+		if err != nil || busy {
+			return refused(authority.status, "SBXR mutation lock", "Wait for the active SBXR change to finish, then review Complete removal again.")
+		}
+		defer lock.Release()
+		packageLocks, packageBusy, err := module.host.AcquirePackageLocks()
+		if err != nil || packageBusy {
+			return refused(authority.status, "Ubuntu package locks", "Wait for APT and dpkg to finish, then review Complete removal again.")
+		}
+		defer packageLocks.Release()
 		inspection := module.host.Inspect(context.WithoutCancel(ctx), slices.Clone(footprint))
-		if installed.State != softwarelifecycle.Ready || installed.Installed == nil || *installed.Installed != authority.release || !reflect.DeepEqual(inspection, authority.inspection) {
+		if !reflect.DeepEqual(inspection, authority.inspection) {
 			return refused(ProblemDetected, "Prepared Action facts", "View details, restore every changed SBXR identity or host resource, then review Complete removal again.")
 		}
 		if len(authority.record) > 0 {
-			current, err := module.host.ReadOwnership(hostSetupSpec.OwnershipPath)
+			current, err := module.readOwnership()
 			record, valid := decodeOwnership(current)
 			if err != nil || !valid || !bytes.Equal(current, authority.record) {
 				return refused(ProblemDetected, "Prepared Action facts", "Restore the exact reviewed Ownership Record, then review Complete removal again.")
@@ -758,7 +831,36 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 				return refused(ProblemDetected, "Prepared Action facts", removalCorrection(removal))
 			}
 		}
-		return refused(authority.status, "Complete removal commitment", "Use an SBXR release that implements committed V3 Complete removal.")
+		lifecycle, ok := module.lifecycle.(removalLifecycle)
+		if !ok {
+			return refused(authority.status, "Complete removal commitment", "Use an SBXR release that implements committed V3 Complete removal.")
+		}
+		installed := lifecycle.InspectCompleteRemoval(context.WithoutCancel(ctx), authority.release)
+		if !installed.Valid || !installed.ExecutablePresent || !installed.InstalledRecordPresent {
+			return refused(ProblemDetected, "Prepared Action facts", "Restore the exact reviewed SBXR Release Identity, then review Complete removal again.")
+		}
+		record := newRemovalOwnershipRecord(authority.release)
+		current := authority.record
+		if len(current) > 0 {
+			var valid bool
+			record, valid = decodeOwnership(current)
+			if !valid {
+				return refused(ProblemDetected, "Removal commitment", "Restore the exact reviewed Ownership Record, then review Complete removal again.")
+			}
+			record.Phase, record.Direction, record.RemovalCheckpoint = removalCommitted, removalRequired, 0
+		}
+		next := ownershipBytes(record)
+		if err := module.host.PublishOwnership(hostSetupSpec.OwnershipPath, hostSetupSpec.OwnershipNextPath, current, next); err != nil {
+			if committed, readErr := module.readOwnership(); readErr == nil {
+				if committedRecord, ok := decodeOwnership(committed); ok && committedRecord.Direction == removalRequired && committedRecord.Release == authority.release {
+					return module.finishRemoval(ctx, committedRecord, committed, progress)
+				}
+			}
+			return refused(authority.status, "Removal commitment", "Review Complete removal again.")
+		}
+		report(progress, string(removalCommitted))
+		packageLocks.Release()
+		return module.finishRemoval(ctx, record, next, progress)
 	}
 	lock, busy, err := module.host.AcquireMutationLock(hostSetupSpec.LockPath)
 	if err != nil || busy {
@@ -767,6 +869,26 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 	defer lock.Release()
 	if ctx.Err() != nil {
 		return refused(authority.status, "Managed termination", "Review the action again after the current process stops.")
+	}
+	if authority.action == FinishRemovalAction {
+		packageLocks, packageBusy, packageErr := module.host.AcquirePackageLocks()
+		if packageErr != nil || packageBusy {
+			return refused(RemovalIncomplete, "Ubuntu package locks", "Wait for APT and dpkg to finish, then review Finish removal again.")
+		}
+		defer packageLocks.Release()
+		current, err := module.readOwnership()
+		record, valid := decodeOwnership(current)
+		if err != nil || !valid || !bytes.Equal(current, authority.record) || record.Direction != removalRequired || record.Release != authority.release {
+			return refused(ProblemDetected, "Prepared Action facts", "Restore the exact committed Ownership Record, then review Finish removal again.")
+		}
+		if record.Package != "" && record.RemovalCheckpoint == 0 {
+			facts := module.host.InspectRemoval(context.WithoutCancel(ctx), hostSetupSpec, aptSourceBody, current, record.ConfigurationSHA256, record.PublicIPv4)
+			if !removalAccepted(facts) {
+				return refused(RemovalIncomplete, "Committed removal facts", removalCorrection(facts))
+			}
+		}
+		packageLocks.Release()
+		return module.finishRemoval(ctx, record, current, progress)
 	}
 	if authority.action == FinishCleanupAction {
 		record, current, ok := module.revalidateFinishingAuthority(context.WithoutCancel(ctx), authority)
@@ -787,7 +909,7 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 		if progress == nil {
 			return refused(Running, "Presentation boundary", "Review Show client configuration again from the SBXR numbered menu.")
 		}
-		current, err := module.host.ReadOwnership(hostSetupSpec.OwnershipPath)
+		current, err := module.readOwnership()
 		record, valid := decodeOwnership(current)
 		if err != nil || !valid || !bytes.Equal(current, authority.record) {
 			return refused(ProblemDetected, "Prepared Action facts", "Restore complete locally Running proxy facts, then review Show client configuration again.")
@@ -827,7 +949,7 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 	record := newOwnershipRecord(authority.release, currentFacts, selected, configuration)
 	body := ownershipBytes(record)
 	if err := module.host.PublishOwnership(hostSetupSpec.OwnershipPath, hostSetupSpec.OwnershipNextPath, nil, body); err != nil {
-		if current, readErr := module.host.ReadOwnership(hostSetupSpec.OwnershipPath); readErr == nil {
+		if current, readErr := module.readOwnership(); readErr == nil {
 			if currentRecord, ok := decodeOwnership(current); ok && reflect.DeepEqual(currentRecord, record) {
 				return module.cleanup(ctx, currentRecord, current, progress)
 			}
@@ -842,7 +964,7 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 }
 
 func (module *installedInterface) revalidateFinishingAuthority(ctx context.Context, authority preparedReview) (ownershipRecord, []byte, bool) {
-	current, err := module.host.ReadOwnership(hostSetupSpec.OwnershipPath)
+	current, err := module.readOwnership()
 	if err != nil || !bytes.Equal(current, authority.record) {
 		return ownershipRecord{}, nil, false
 	}
@@ -889,7 +1011,7 @@ func (module *installedInterface) runPreCommit(ctx context.Context, record owner
 		record.Phase = step.phase
 		next := ownershipBytes(record)
 		if err := module.host.PublishOwnership(hostSetupSpec.OwnershipPath, hostSetupSpec.OwnershipNextPath, body, next); err != nil {
-			if current, readErr := module.host.ReadOwnership(hostSetupSpec.OwnershipPath); readErr == nil {
+			if current, readErr := module.readOwnership(); readErr == nil {
 				body = current
 				if decoded, ok := decodeOwnership(current); ok {
 					record = decoded
@@ -912,7 +1034,7 @@ func (module *installedInterface) runPreCommit(ctx context.Context, record owner
 	record.Phase, record.Direction = activationCommitted, setupRequired
 	next := ownershipBytes(record)
 	if err := module.host.PublishOwnership(hostSetupSpec.OwnershipPath, hostSetupSpec.OwnershipNextPath, body, next); err != nil {
-		if current, readErr := module.host.ReadOwnership(hostSetupSpec.OwnershipPath); readErr == nil {
+		if current, readErr := module.readOwnership(); readErr == nil {
 			if currentRecord, ok := decodeOwnership(current); ok && phaseAtOrAfter(currentRecord.Phase, activationCommitted) {
 				return module.finishSetup(ctx, currentRecord, current, progress)
 			}
@@ -941,7 +1063,7 @@ func (module *installedInterface) finishSetup(ctx context.Context, record owners
 		record.Phase = step.phase
 		next := ownershipBytes(record)
 		if err := module.host.PublishOwnership(hostSetupSpec.OwnershipPath, hostSetupSpec.OwnershipNextPath, body, next); err != nil {
-			if current, readErr := module.host.ReadOwnership(hostSetupSpec.OwnershipPath); readErr == nil {
+			if current, readErr := module.readOwnership(); readErr == nil {
 				if currentRecord, ok := decodeOwnership(current); ok && phaseAtOrAfter(currentRecord.Phase, step.phase) {
 					record, body = currentRecord, current
 					continue
@@ -962,7 +1084,7 @@ func (module *installedInterface) finishSetup(ctx context.Context, record owners
 	record.Phase, record.Direction = runningPhase, noDirection
 	next := ownershipBytes(record)
 	if err := module.host.PublishOwnership(hostSetupSpec.OwnershipPath, hostSetupSpec.OwnershipNextPath, body, next); err != nil {
-		if current, readErr := module.host.ReadOwnership(hostSetupSpec.OwnershipPath); readErr == nil {
+		if current, readErr := module.readOwnership(); readErr == nil {
 			if currentRecord, ok := decodeOwnership(current); ok && currentRecord.Phase == runningPhase && runningAccepted(module.host.InspectRunning(ctx, hostSetupSpec, aptSourceBody, current, currentRecord.ConfigurationSHA256, currentRecord.PublicIPv4)) {
 				return Result{Status: Running, Message: "Proxy setup is complete and locally verified.", Code: SetupComplete}
 			}
@@ -984,7 +1106,7 @@ func (module *installedInterface) cleanup(ctx context.Context, record ownershipR
 		record.CleanupCheckpoint = index + 1
 		next := ownershipBytes(record)
 		if err := module.host.PublishOwnership(hostSetupSpec.OwnershipPath, hostSetupSpec.OwnershipNextPath, body, next); err != nil {
-			if current, readErr := module.host.ReadOwnership(hostSetupSpec.OwnershipPath); readErr == nil {
+			if current, readErr := module.readOwnership(); readErr == nil {
 				if currentRecord, ok := decodeOwnership(current); ok && currentRecord.CleanupCheckpoint >= record.CleanupCheckpoint {
 					record, body = currentRecord, current
 					continue
@@ -1011,17 +1133,134 @@ func (module *installedInterface) cleanup(ctx context.Context, record ownershipR
 	return Result{Status: NotSetUp, Message: "Setup was safely cleaned up. No proxy resources remain.", Code: SetupCleanedUp}
 }
 
+func (module *installedInterface) finishRemoval(ctx context.Context, record ownershipRecord, body []byte, progress ProgressReporter) Result {
+	lifecycle, ok := module.lifecycle.(removalLifecycle)
+	if !ok || record.Direction != removalRequired || record.Phase != removalCommitted {
+		return removalInterrupted("Removal authority")
+	}
+	operations := []hostadapter.Operation{}
+	if record.Package != "" {
+		operations = []hostadapter.Operation{
+			hostadapter.StopDisableService,
+			hostadapter.RemovePackageArtifact,
+			hostadapter.RemovePackageHold,
+			hostadapter.RemovePackage,
+			hostadapter.RemoveConfigurationState,
+			hostadapter.RemovePackageIdentity,
+			hostadapter.RemoveAPTSource,
+			hostadapter.RemoveAPTKey,
+		}
+	}
+	for index, operation := range operations {
+		if record.RemovalCheckpoint > index {
+			continue
+		}
+		if result := module.host.Apply(context.WithoutCancel(ctx), cleanupInput(operation, record)); !result.OK {
+			return removalInterrupted(string(operation))
+		}
+		record.RemovalCheckpoint = index + 1
+		var checkpointed bool
+		body, checkpointed = module.publishRemovalCheckpoint(record, body)
+		if !checkpointed {
+			return removalInterrupted("Removal checkpoint")
+		}
+		report(progress, string(operation))
+		if ctx.Err() != nil {
+			return removalInterrupted("Managed termination")
+		}
+	}
+	proxyCheckpoint := len(operations)
+	if record.RemovalCheckpoint <= proxyCheckpoint {
+		if inspection := module.host.Inspect(context.WithoutCancel(ctx), slices.Clone(footprint)); !cleanupSurfaceAccepted(inspection, true) {
+			return removalInterrupted("Final proxy absence inspection")
+		}
+		record.RemovalCheckpoint = proxyCheckpoint + 1
+		var checkpointed bool
+		body, checkpointed = module.publishRemovalCheckpoint(record, body)
+		if !checkpointed {
+			return removalInterrupted("Proxy absence checkpoint")
+		}
+	}
+	lifecycleFacts := lifecycle.InspectCompleteRemoval(context.WithoutCancel(ctx), record.Release)
+	if !lifecycleFacts.Valid || !lifecycleFacts.StateDirectoryEmpty {
+		return removalInterrupted("SBXR state directory inspection")
+	}
+	executableCheckpoint := proxyCheckpoint + 1
+	if record.RemovalCheckpoint <= executableCheckpoint {
+		if !lifecycle.RemoveCompleteRemovalExecutable(context.WithoutCancel(ctx), record.Release) {
+			return removalInterrupted("SBXR executable removal")
+		}
+		record.RemovalCheckpoint = executableCheckpoint + 1
+		var checkpointed bool
+		body, checkpointed = module.publishRemovalCheckpoint(record, body)
+		if !checkpointed {
+			return removalInterrupted("Executable removal checkpoint")
+		}
+	}
+	installedCheckpoint := executableCheckpoint + 1
+	if record.RemovalCheckpoint <= installedCheckpoint {
+		if !lifecycle.RemoveCompleteRemovalInstalledRecord(context.WithoutCancel(ctx), record.Release) {
+			return removalInterrupted("Installed Record removal")
+		}
+		record.RemovalCheckpoint = installedCheckpoint + 1
+		var checkpointed bool
+		body, checkpointed = module.publishRemovalCheckpoint(record, body)
+		if !checkpointed {
+			return removalInterrupted("Installed Record removal checkpoint")
+		}
+	}
+	if inspection := module.host.Inspect(context.WithoutCancel(ctx), slices.Clone(footprint)); !cleanupSurfaceAccepted(inspection, true) {
+		return removalInterrupted("Final proxy absence inspection")
+	}
+	finalLifecycle := lifecycle.InspectCompleteRemoval(context.WithoutCancel(ctx), record.Release)
+	if !finalLifecycle.Valid || finalLifecycle.ExecutablePresent || finalLifecycle.InstalledRecordPresent || !finalLifecycle.StateDirectoryEmpty {
+		return removalInterrupted("Final installed-product absence inspection")
+	}
+	if err := module.host.RemoveFinalOwnership(hostSetupSpec.OwnershipPath, hostSetupSpec.OwnershipNextPath, finalOwnershipPath, body); err != nil {
+		return removalInterrupted("Ownership Record finalization")
+	}
+	return Result{Message: "SBXR is not installed.", Code: CompleteRemovalCompleted}
+}
+
+func (module *installedInterface) publishRemovalCheckpoint(record ownershipRecord, current []byte) ([]byte, bool) {
+	next := ownershipBytes(record)
+	if err := module.host.PublishOwnership(hostSetupSpec.OwnershipPath, hostSetupSpec.OwnershipNextPath, current, next); err == nil {
+		return next, true
+	}
+	committed, err := module.readOwnership()
+	committedRecord, ok := decodeOwnership(committed)
+	return committed, err == nil && ok && committedRecord.Direction == removalRequired && committedRecord.RemovalCheckpoint >= record.RemovalCheckpoint
+}
+
+func removalInterrupted(failed string) Result {
+	return Result{Status: RemovalIncomplete, Message: "Complete removal must continue forward.", Code: RemovalNeedsCompletion, FailedCheck: failed, Correction: "Start SBXR again and choose Finish removal."}
+}
+
+func (module *installedInterface) readOwnership() ([]byte, error) {
+	body, err := module.host.ReadOwnership(hostSetupSpec.OwnershipPath)
+	if err == nil || !errors.Is(err, os.ErrNotExist) {
+		return body, err
+	}
+	return module.host.ReadOwnership(finalOwnershipPath)
+}
+
 func cleanupSurfaceAccepted(inspection hostadapter.Inspection, ownershipPresent bool) bool {
 	if !inspectionAccepted(inspection) {
 		return false
 	}
+	authorityCount := 0
 	for _, resource := range inspection.Resources {
-		expected := ownershipPresent && resource.Name == "/var/lib/sbxr/proxy-ownership.json"
-		if resource.Present != expected {
+		if resource.Name == hostSetupSpec.OwnershipPath || resource.Name == finalOwnershipPath {
+			if resource.Present {
+				authorityCount++
+			}
+			continue
+		}
+		if resource.Present {
 			return false
 		}
 	}
-	return true
+	return ownershipPresent && authorityCount == 1 || !ownershipPresent && authorityCount == 0
 }
 
 func cleanupInput(operation hostadapter.Operation, record ownershipRecord) hostadapter.OperationInput {
@@ -1236,6 +1475,18 @@ func ownershipBytes(record ownershipRecord) []byte {
 	return append(body, '\n')
 }
 
+func newRemovalOwnershipRecord(release softwarelifecycle.ReleaseIdentity) ownershipRecord {
+	return ownershipRecord{
+		Schema: 1, Phase: removalCommitted, Direction: removalRequired, Release: release,
+		Resources: []string{
+			"/var/lib/sbxr/proxy-ownership.json root:root 0600 one-link schema-1",
+			finalOwnershipPath + " root:root 0600 one-link finalization authority",
+			"/usr/local/bin/sbxr exact committed Release Identity",
+			"/var/lib/sbxr/installed.json exact committed Release Identity",
+		},
+	}
+}
+
 func decodeOwnership(body []byte) (ownershipRecord, bool) {
 	var record ownershipRecord
 	decoder := json.NewDecoder(bytes.NewReader(body))
@@ -1247,20 +1498,44 @@ func decodeOwnership(body []byte) (ownershipRecord, bool) {
 }
 
 func validOwnership(record ownershipRecord) bool {
-	if record.Schema != 1 || !validPhase(record.Phase) || record.Direction != cleanupRequired && record.Direction != setupRequired && record.Direction != noDirection || record.CleanupCheckpoint < 0 || record.CleanupCheckpoint > 8 || record.Direction != cleanupRequired && record.CleanupCheckpoint != 0 || record.Package != "https://deb.sagernet.org/ sing-box 1.13.19 amd64 24597120 fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf" || !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(record.ConfigurationSHA256) || !slices.Equal(record.Resources, ownershipResources(record.ConfigurationSHA256)) {
+	if record.Schema != 1 || !validReleaseIdentity(record.Release) {
+		return false
+	}
+	if record.Direction == removalRequired {
+		if record.Phase != removalCommitted || record.CleanupCheckpoint != 0 || record.RemovalCheckpoint < 0 || record.RemovalCheckpoint > 11 {
+			return false
+		}
+		if record.Package == "" {
+			return record.PublicIPv4 == "" && record.DestinationAddress == "" && record.DestinationName == "" && record.ConfigurationSHA256 == "" && slices.Equal(record.Resources, newRemovalOwnershipRecord(record.Release).Resources)
+		}
+		return validOwnedProxyFields(record)
+	}
+	if !validPhase(record.Phase) || record.Direction != cleanupRequired && record.Direction != setupRequired && record.Direction != noDirection || record.CleanupCheckpoint < 0 || record.CleanupCheckpoint > 8 || record.RemovalCheckpoint != 0 || record.Direction != cleanupRequired && record.CleanupCheckpoint != 0 || !validOwnedProxyFields(record) {
 		return false
 	}
 	if record.Phase == runningPhase && record.Direction != noDirection || phaseAtOrAfter(record.Phase, activationCommitted) && record.Phase != runningPhase && record.Direction != setupRequired || !phaseAtOrAfter(record.Phase, activationCommitted) && record.Direction != cleanupRequired {
 		return false
 	}
+	return true
+}
+
+func validOwnedProxyFields(record ownershipRecord) bool {
+	if record.Package != "https://deb.sagernet.org/ sing-box 1.13.19 amd64 24597120 fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf" || !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(record.ConfigurationSHA256) || !slices.Equal(record.Resources, ownershipResources(record.ConfigurationSHA256)) {
+		return false
+	}
 	_, acceptedDestination := acceptedDestination(record.DestinationAddress, record.DestinationName)
 	ip, ipErr := netip.ParseAddr(record.PublicIPv4)
-	return record.Release.Repository == softwarelifecycle.Repository && regexp.MustCompile(`^v[1-9][0-9]*\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$`).MatchString(record.Release.Tag) && regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(record.Release.Commit) && regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(record.Release.IndexSHA256) && ipErr == nil && isPublicIPv4(ip) && acceptedDestination
+	return ipErr == nil && isPublicIPv4(ip) && acceptedDestination
+}
+
+func validReleaseIdentity(release softwarelifecycle.ReleaseIdentity) bool {
+	return release.Repository == softwarelifecycle.Repository && regexp.MustCompile(`^v[1-9][0-9]*\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$`).MatchString(release.Tag) && regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(release.Commit) && regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(release.IndexSHA256)
 }
 
 func ownershipResources(configurationDigest string) []string {
 	return []string{
 		"/var/lib/sbxr/proxy-ownership.json root:root 0600 one-link schema-1",
+		finalOwnershipPath + " root:root 0600 one-link finalization authority",
 		"/var/lib/sbxr/.proxy-ownership.json.next root:root 0600 one-link transaction material",
 		"/var/lib/sbxr/sing-box_1.13.19_amd64.deb root-owned one-link verified package artifact",
 		"/etc/apt/keyrings/sagernet.asc sha256:803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1",

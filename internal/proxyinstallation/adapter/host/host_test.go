@@ -89,6 +89,49 @@ func TestOwnershipRecordIsStrictAndCrashSafe(t *testing.T) {
 	}
 }
 
+func TestFinalOwnershipRemovalRestoresRecoveryAuthorityUntilStateDirectoryIsEmpty(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(root, "var", "lib", "sbxr")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	adapter := Adapter{root: root}
+	spec := testSetupSpec()
+	finalName := "/var/lib/.sbxr-removal.json"
+	body := []byte("{\"schema\":1}\n")
+	if err := adapter.PublishOwnership(spec.OwnershipPath, spec.OwnershipNextPath, nil, body); err != nil {
+		t.Fatal(err)
+	}
+	unknown := filepath.Join(directory, "unknown")
+	if err := os.WriteFile(unknown, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.RemoveFinalOwnership(spec.OwnershipPath, spec.OwnershipNextPath, finalName, body); err == nil {
+		t.Fatal("final removal accepted a non-empty state directory")
+	}
+	if _, err := adapter.ReadOwnership(spec.OwnershipPath); !os.IsNotExist(err) {
+		t.Fatalf("ordinary ownership still exists: %v", err)
+	}
+	if final, err := adapter.ReadOwnership(finalName); err != nil || !bytes.Equal(final, body) {
+		t.Fatalf("finalization authority = %q, %v", final, err)
+	}
+	if err := os.Remove(unknown); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.RemoveFinalOwnership(spec.OwnershipPath, spec.OwnershipNextPath, finalName, body); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(directory); !os.IsNotExist(err) {
+		t.Fatalf("state directory still exists: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "var", "lib", ".sbxr-removal.json"), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.RemoveFinalOwnership(spec.OwnershipPath, spec.OwnershipNextPath, finalName, body); err != nil {
+		t.Fatalf("resume after state-directory removal: %v", err)
+	}
+}
+
 func TestAdapterDurablyWritesAndRemovesOwnedConfigurationFiles(t *testing.T) {
 	root := t.TempDir()
 	for _, directory := range []string{"etc/apt/sources.list.d", "etc/sing-box", "var/lib/sing-box"} {
@@ -127,6 +170,33 @@ func TestAdapterDurablyWritesAndRemovesOwnedConfigurationFiles(t *testing.T) {
 		if _, err := os.Lstat(filepath.Join(root, name)); !os.IsNotExist(err) {
 			t.Fatalf("%s remains: %v", name, err)
 		}
+	}
+}
+
+func TestConfigurationRemovalNeverRecursivelyDeletesUnknownEntries(t *testing.T) {
+	root := t.TempDir()
+	configurationDirectory := filepath.Join(root, "etc/sing-box")
+	stateDirectory := filepath.Join(root, "var/lib/sing-box")
+	if err := os.MkdirAll(configurationDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(stateDirectory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	configuration := []byte("{}\n")
+	if err := os.WriteFile(filepath.Join(configurationDirectory, "config.json"), configuration, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	unknown := filepath.Join(stateDirectory, "owner-data")
+	if err := os.WriteFile(unknown, []byte("preserve"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result := (Adapter{root: root}).Apply(t.Context(), OperationInput{Operation: RemoveConfigurationState, Spec: testSetupSpec(), SHA256: digest(configuration)})
+	if result.OK {
+		t.Fatal("removal accepted a non-empty state directory")
+	}
+	if body, err := os.ReadFile(unknown); err != nil || string(body) != "preserve" {
+		t.Fatalf("unknown entry changed: %q, %v", body, err)
 	}
 }
 

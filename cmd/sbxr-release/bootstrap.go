@@ -60,6 +60,8 @@ ROOT='{{.Root}}'
 WORK=''
 RECLAIMING=0
 DEFERRED_SIGNAL=0
+RESTORING_REMOVAL=0
+REMOVAL_INDEX_SHA=''
 
 cleanup() {
   if [ -n "$WORK" ]; then
@@ -176,6 +178,28 @@ exec 9<"$lock" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
 WORK=$("$ROOT/usr/bin/mktemp" -d "$ROOT/tmp/sbxr-install.XXXXXX" 2>/dev/null) || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
 "$ROOT/usr/bin/chmod" 0700 "$WORK" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
 
+removal_record="$ROOT/var/lib/sbxr/proxy-ownership.json"
+final_removal_record="$ROOT/var/lib/.sbxr-removal.json"
+if { [ -e "$removal_record" ] || [ -L "$removal_record" ]; } && { [ -e "$final_removal_record" ] || [ -L "$final_removal_record" ]; }; then
+  path_refused
+fi
+if [ ! -e "$removal_record" ] && [ ! -L "$removal_record" ] && { [ -e "$final_removal_record" ] || [ -L "$final_removal_record" ]; }; then
+  removal_record="$final_removal_record"
+fi
+if [ -e "$removal_record" ] || [ -L "$removal_record" ]; then
+  [ ! -L "$removal_record" ] && [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$removal_record" 2>/dev/null)" = '0:600:1:regular file' ] || path_refused
+  [ "$("$ROOT/usr/bin/wc" -c <"$removal_record")" -le 65536 ] 2>/dev/null && single_line "$removal_record" || path_refused
+  removal_prefix='^\{"schema":1,"phase":"Removal committed","unfinished_direction":"removal required","release_identity":\{"repository":"{{.Repository}}","tag":"v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?","commit":"[0-9a-f]{40}","release_index_sha256":"[0-9a-f]{64}"\},'
+  if "$ROOT/usr/bin/grep" -Eq "$removal_prefix" "$removal_record"; then
+    TAG=$("$ROOT/usr/bin/sed" -n 's|.*"release_identity":{"repository":"{{.Repository}}","tag":"\([^"]*\)".*|\1|p' "$removal_record")
+    COMMIT=$("$ROOT/usr/bin/sed" -n 's|.*"release_identity":{"repository":"{{.Repository}}","tag":"[^"]*","commit":"\([0-9a-f]*\)".*|\1|p' "$removal_record")
+    REMOVAL_INDEX_SHA=$("$ROOT/usr/bin/sed" -n 's|.*"release_identity":{"repository":"{{.Repository}}","tag":"[^"]*","commit":"[0-9a-f]*","release_index_sha256":"\([0-9a-f]*\)".*|\1|p' "$removal_record")
+    RESTORING_REMOVAL=1
+	elif "$ROOT/usr/bin/grep" -Fq '"unfinished_direction":"removal required"' "$removal_record"; then
+	  path_refused
+  fi
+fi
+
 # The moving GitHub HTTPS command trusts this script; its embedded identity pins every later download.
 download() {
   local name=$1 destination=$2 limit=$3 url=${4:-} response status effective http
@@ -204,8 +228,10 @@ index="$WORK/release-index.json"
 download_or_finish 'release-index.json' "$index" 1048576
 [ -f "$index" ] && [ ! -L "$index" ] || release_refused
 [ "$("$ROOT/usr/bin/wc" -c <"$index")" -le 1048576 ] 2>/dev/null || release_refused
-index_pattern='^\{"schema":1,"repository":"{{.Repository}}","tag":"{{.Tag}}","commit":"{{.Commit}}","sequence":{{.Sequence}},"assets":\[\{"name":"install\.sh","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\},\{"name":"sbxr-linux-amd64\.tar\.gz","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\},\{"name":"sbxr-linux-arm64\.tar\.gz","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\}\]\}$'
+index_pattern='^\{"schema":1,"repository":"{{.Repository}}","tag":"'"$TAG"'","commit":"'"$COMMIT"'","sequence":[1-9][0-9]*,"assets":\[\{"name":"install\.sh","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\},\{"name":"sbxr-linux-amd64\.tar\.gz","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\},\{"name":"sbxr-linux-arm64\.tar\.gz","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\}\]\}$'
 single_line "$index" && "$ROOT/usr/bin/grep" -Eqx "$index_pattern" "$index" || release_refused
+index_sequence=$("$ROOT/usr/bin/sed" -n 's/.*"sequence":\([0-9]*\).*/\1/p' "$index")
+if [ "$RESTORING_REMOVAL" -eq 1 ]; then SEQUENCE=$index_sequence; else [ "$index_sequence" = "$SEQUENCE" ] || release_refused; fi
 archive_name="sbxr-linux-$ARCH.tar.gz"
 archive_sha=$("$ROOT/usr/bin/sed" -n 's/.*"name":"'"$archive_name"'"[^}]*"sha256":"\([0-9a-f]\{64\}\)".*/\1/p' "$index")
 archive_size=$("$ROOT/usr/bin/sed" -n 's/.*"name":"'"$archive_name"'"[^}]*"size":\([0-9][0-9]*\).*/\1/p' "$index")
@@ -217,6 +243,7 @@ download_or_finish "$archive_name" "$archive" 268435456
 [ "$("$ROOT/usr/bin/wc" -c <"$archive")" -eq "$archive_size" ] 2>/dev/null || release_refused
 [ "$("$ROOT/usr/bin/sha256sum" "$archive" | "$ROOT/usr/bin/cut" -d' ' -f1)" = "$archive_sha" ] || release_refused
 index_sha=$("$ROOT/usr/bin/sha256sum" "$index" | "$ROOT/usr/bin/cut" -d' ' -f1) || release_refused
+[ "$RESTORING_REMOVAL" -eq 0 ] || [ "$index_sha" = "$REMOVAL_INDEX_SHA" ] || release_refused
 
 active="$ROOT/usr/local/bin/sbxr"
 installed_directory="$ROOT/var/lib/sbxr"
@@ -301,9 +328,36 @@ candidate="$WORK/sbxr"
 executable_sha=$("$ROOT/usr/bin/sha256sum" "$candidate" | "$ROOT/usr/bin/cut" -d' ' -f1) || release_refused
 verify_executable_identity "$candidate" "$WORK/candidate-identity.json" || release_refused
 verify_elf_architecture "$candidate" || release_refused
-candidate_identity_pattern='^\{"schema":1,"repository":"{{.Repository}}","tag":"{{.Tag}}","commit":"{{.Commit}}","sequence":{{.Sequence}},"architecture":"'"$ARCH"'","payload_sha256":"[0-9a-f]{64}"\}$'
+candidate_identity_pattern='^\{"schema":1,"repository":"{{.Repository}}","tag":"'"$TAG"'","commit":"'"$COMMIT"'","sequence":'"$SEQUENCE"',"architecture":"'"$ARCH"'","payload_sha256":"[0-9a-f]{64}"\}$'
 single_line "$WORK/candidate-identity.json" && "$ROOT/usr/bin/grep" -Eqx "$candidate_identity_pattern" "$WORK/candidate-identity.json" || release_refused
-[ "$executable_sha" = "$EXPECTED_EXECUTABLE_SHA256" ] || release_refused
+[ "$RESTORING_REMOVAL" -eq 1 ] || [ "$executable_sha" = "$EXPECTED_EXECUTABLE_SHA256" ] || release_refused
+
+if [ "$RESTORING_REMOVAL" -eq 1 ]; then
+  active="$ROOT/usr/local/bin/sbxr"
+  installed_directory="$ROOT/var/lib/sbxr"
+  installed_record="$installed_directory/installed.json"
+  [ ! -e "$active" ] && [ ! -L "$active" ] || path_refused
+  if [ ! -e "$installed_directory" ] && [ ! -L "$installed_directory" ]; then
+    "$ROOT/usr/bin/mkdir" "$installed_directory" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+    "$ROOT/usr/bin/chmod" 0700 "$installed_directory" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+  fi
+  [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%F' "$installed_directory" 2>/dev/null)" = '0:700:directory' ] || path_refused
+  unexpected=$("$ROOT/usr/bin/find" "$installed_directory" -mindepth 1 -maxdepth 1 ! -name proxy-ownership.json ! -name installed.json -print -quit 2>/dev/null) || path_refused
+  [ -z "$unexpected" ] || path_refused
+  "$ROOT/usr/bin/mv" -n "$candidate" "$active" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+  "$ROOT/usr/bin/chmod" 0755 "$active" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+  "$ROOT/usr/bin/sync" "$active" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+  if [ ! -e "$installed_record" ] && [ ! -L "$installed_record" ]; then
+    printf '{"schema":1,"repository":"%s","tag":"%s","commit":"%s","release_index_sha256":"%s","sequence":%s,"architecture":"%s","executable_sha256":"%s"}\n' "$REPOSITORY" "$TAG" "$COMMIT" "$index_sha" "$SEQUENCE" "$ARCH" "$executable_sha" >"$WORK/installed.json" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+    "$ROOT/usr/bin/chmod" 0600 "$WORK/installed.json" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+    "$ROOT/usr/bin/sync" "$WORK/installed.json" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+    "$ROOT/usr/bin/mv" -n "$WORK/installed.json" "$installed_record" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+  fi
+  restored_record_pattern='^\{"schema":1,"repository":"{{.Repository}}","tag":"'"$TAG"'","commit":"'"$COMMIT"'","release_index_sha256":"'"$index_sha"'","sequence":'"$SEQUENCE"',"architecture":"'"$ARCH"'","executable_sha256":"'"$executable_sha"'"\}$'
+  [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$installed_record" 2>/dev/null)" = '0:600:1:regular file' ] && single_line "$installed_record" && "$ROOT/usr/bin/grep" -Eqx "$restored_record_pattern" "$installed_record" || path_refused
+  "$ROOT/usr/bin/sync" "$installed_directory" "$ROOT/usr/local/bin" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+  successful_finish 'SOFTWARE-LIFECYCLE-INSTALL-REMOVAL-RESTORED'
+fi
 
 active_identity=''
 state_identity=''

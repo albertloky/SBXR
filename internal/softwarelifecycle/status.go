@@ -121,6 +121,41 @@ type Interface interface {
 	Recover(context.Context, ProgressReporter) Result
 }
 
+// CompleteRemovalInspection is the private inter-Module fact set used by Proxy Installation.
+type CompleteRemovalInspection struct {
+	Valid, ExecutablePresent, InstalledRecordPresent, StateDirectoryEmpty bool
+}
+
+// InspectCompleteRemoval verifies the exact installed identity without routing normal lifecycle actions.
+func (module installedInterface) InspectCompleteRemoval(ctx context.Context, expected ReleaseIdentity) CompleteRemovalInspection {
+	if local, ok := module.local.(interface {
+		inspectCompleteRemoval(context.Context, ReleaseIdentity) CompleteRemovalInspection
+	}); ok {
+		return local.inspectCompleteRemoval(ctx, expected)
+	}
+	return CompleteRemovalInspection{}
+}
+
+// RemoveCompleteRemovalExecutable removes only the verified executable selected at commitment.
+func (module installedInterface) RemoveCompleteRemovalExecutable(ctx context.Context, expected ReleaseIdentity) bool {
+	if local, ok := module.local.(interface {
+		removeCompleteRemovalExecutable(context.Context, ReleaseIdentity) bool
+	}); ok {
+		return local.removeCompleteRemovalExecutable(ctx, expected)
+	}
+	return false
+}
+
+// RemoveCompleteRemovalInstalledRecord removes only the verified Installed Record selected at commitment.
+func (module installedInterface) RemoveCompleteRemovalInstalledRecord(ctx context.Context, expected ReleaseIdentity) bool {
+	if local, ok := module.local.(interface {
+		removeCompleteRemovalInstalledRecord(context.Context, ReleaseIdentity) bool
+	}); ok {
+		return local.removeCompleteRemovalInstalledRecord(ctx, expected)
+	}
+	return false
+}
+
 type installedInterface struct {
 	local  localInspector
 	latest LatestReleaseSource

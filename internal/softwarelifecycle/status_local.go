@@ -1,7 +1,9 @@
 package softwarelifecycle
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -157,4 +159,65 @@ func (inspector filesystemInspector) path(name string) string {
 		return name
 	}
 	return filepath.Join(inspector.root, strings.TrimPrefix(name, "/"))
+}
+
+func (inspector filesystemInspector) inspectCompleteRemoval(ctx context.Context, expected ReleaseIdentity) CompleteRemovalInspection {
+	if ctx.Err() != nil || !inspector.safeDirectory("/var/lib/sbxr", 0o700) {
+		return CompleteRemovalInspection{}
+	}
+	record, recordOK := inspector.readSafeFile(installedRecordPath, 0o600, 1, maxInstalledRecord)
+	executable, executableOK := inspector.readSafeFile(executablePath, 0o755, 1, maxInstalledBinary)
+	if recordOK && executableOK {
+		identity, ok := verifyInstalledPair(record, executable)
+		if !ok || identity != expected {
+			return CompleteRemovalInspection{}
+		}
+	} else if recordOK {
+		var decoded installedRecord
+		if json.Unmarshal(bytes.TrimSpace(record), &decoded) != nil || !validInstalledRecord(decoded) || releaseIdentity(decoded) != expected {
+			return CompleteRemovalInspection{}
+		}
+	} else if executableOK {
+		return CompleteRemovalInspection{}
+	}
+	entries, err := os.ReadDir(inspector.path("/var/lib/sbxr"))
+	if err != nil {
+		return CompleteRemovalInspection{}
+	}
+	empty := true
+	for _, entry := range entries {
+		if entry.Name() != "installed.json" && entry.Name() != "proxy-ownership.json" {
+			empty = false
+		}
+	}
+	return CompleteRemovalInspection{Valid: recordOK || !executableOK, ExecutablePresent: executableOK, InstalledRecordPresent: recordOK, StateDirectoryEmpty: empty}
+}
+
+func (inspector filesystemInspector) removeCompleteRemovalExecutable(ctx context.Context, expected ReleaseIdentity) bool {
+	facts := inspector.inspectCompleteRemoval(ctx, expected)
+	if !facts.Valid || !facts.ExecutablePresent {
+		return facts.Valid
+	}
+	return os.Remove(inspector.path(executablePath)) == nil && syncRemovalDirectory(inspector.path("/usr/local/bin")) == nil
+}
+
+func (inspector filesystemInspector) removeCompleteRemovalInstalledRecord(ctx context.Context, expected ReleaseIdentity) bool {
+	facts := inspector.inspectCompleteRemoval(ctx, expected)
+	if !facts.Valid || !facts.InstalledRecordPresent || facts.ExecutablePresent {
+		return facts.Valid && !facts.InstalledRecordPresent
+	}
+	return os.Remove(inspector.path(installedRecordPath)) == nil && syncRemovalDirectory(inspector.path("/var/lib/sbxr")) == nil
+}
+
+func syncRemovalDirectory(name string) error {
+	directory, err := os.Open(name)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
+}
+
+func releaseIdentity(record installedRecord) ReleaseIdentity {
+	return ReleaseIdentity{Repository: record.Repository, Tag: record.Tag, Commit: record.Commit, IndexSHA256: record.ReleaseIndexSHA256}
 }

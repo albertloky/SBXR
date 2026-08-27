@@ -279,3 +279,38 @@ func TestRunRequiresExactCompleteRemovalConfirmationAndReinspects(t *testing.T) 
 		})
 	}
 }
+
+type finishingRemovalInstallation struct{ statusReviews int }
+
+func (installation *finishingRemovalInstallation) Review(_ context.Context, action proxyinstallation.Action) proxyinstallation.Review {
+	if action == proxyinstallation.StatusAction {
+		installation.statusReviews++
+	}
+	review := proxyinstallation.Review{
+		Version: "v3.0.0", Status: proxyinstallation.RemovalIncomplete,
+		LegalActions: []proxyinstallation.Action{proxyinstallation.FinishRemovalAction},
+		Result:       proxyinstallation.Result{Status: proxyinstallation.RemovalIncomplete, Message: "Complete removal was interrupted and must continue forward.", Code: proxyinstallation.RemovalNeedsCompletion},
+	}
+	if action == proxyinstallation.FinishRemovalAction {
+		review.Prepared = &proxyinstallation.PreparedAction{}
+	}
+	return review
+}
+
+func (*finishingRemovalInstallation) Execute(_ context.Context, _ proxyinstallation.PreparedAction, confirmation proxyinstallation.Confirmation, _ proxyinstallation.ProgressReporter) proxyinstallation.Result {
+	if confirmation != proxyinstallation.Approved {
+		panic("Finish removal was not approved")
+	}
+	return proxyinstallation.Result{Message: "SBXR is not installed.", Code: proxyinstallation.CompleteRemovalCompleted}
+}
+
+func TestRunFinishesCommittedRemovalAndExitsWithoutRedrawing(t *testing.T) {
+	installation := &finishingRemovalInstallation{}
+	var output bytes.Buffer
+
+	status := Run(t.Context(), nil, bytes.NewBufferString("1\n"), &output, &output, installation)
+
+	if status != 0 || installation.statusReviews != 1 || !strings.Contains(output.String(), "SBXR is not installed.\nCode: SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED") {
+		t.Fatalf("status=%d reviews=%d output:\n%s", status, installation.statusReviews, output.String())
+	}
+}

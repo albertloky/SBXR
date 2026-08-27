@@ -147,6 +147,27 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 			if writeRefusal(output, latest) != nil {
 				return 1
 			}
+			if latest.Code == proxyinstallation.CompleteRemovalCompleted {
+				return 0
+			}
+		case proxyinstallation.FinishRemovalAction:
+			if review.Prepared == nil {
+				latest = review.Result
+				if writeRefusal(output, latest) != nil {
+					return 1
+				}
+				current = installation.Review(ctx, proxyinstallation.StatusAction)
+				continue
+			}
+			latest = installation.Execute(ctx, *review.Prepared, proxyinstallation.Approved, func(progress proxyinstallation.Progress) {
+				_, _ = fmt.Fprintln(output, "Progress:", progress.Phase)
+			})
+			if writeRefusal(output, latest) != nil {
+				return 1
+			}
+			if latest.Code == proxyinstallation.CompleteRemovalCompleted {
+				return 0
+			}
 		case proxyinstallation.ViewDetailsAction:
 			for _, detail := range review.Details {
 				if _, err := fmt.Fprintln(output, detail); err != nil {

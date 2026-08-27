@@ -47,6 +47,7 @@ const (
 	StartService             Operation = "Start service"
 	StopDisableService       Operation = "Stop and disable service"
 	RemovePackageArtifact    Operation = "Remove package artifact"
+	RemovePackageHold        Operation = "Remove package hold"
 	RemovePackage            Operation = "Remove package"
 	RemoveConfigurationState Operation = "Remove configuration and state"
 	RemovePackageIdentity    Operation = "Remove package identity"
@@ -107,6 +108,46 @@ func (lock *MutationLock) Release() {
 	}
 	_ = syscall.Flock(int(lock.file.Fd()), syscall.LOCK_UN)
 	_ = lock.file.Close()
+}
+
+type PackageLocks struct{ files []*os.File }
+
+var ubuntuPackageLocks = []string{"/var/lib/dpkg/lock-frontend", "/var/lib/dpkg/lock", "/var/lib/apt/lists/lock", "/var/cache/apt/archives/lock"}
+
+func (locks *PackageLocks) Release() {
+	if locks == nil {
+		return
+	}
+	for _, file := range locks.files {
+		_ = syscall.FcntlFlock(file.Fd(), syscall.F_SETLK, &syscall.Flock_t{Type: syscall.F_UNLCK, Whence: io.SeekStart})
+		_ = file.Close()
+	}
+	locks.files = nil
+}
+
+func (adapter Adapter) AcquirePackageLocks() (*PackageLocks, bool, error) {
+	locks := &PackageLocks{}
+	for _, name := range ubuntuPackageLocks {
+		file, err := os.OpenFile(adapter.path(name), os.O_RDWR|syscall.O_NOFOLLOW, 0)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			locks.Release()
+			return nil, false, err
+		}
+		lock := syscall.Flock_t{Type: syscall.F_WRLCK, Whence: io.SeekStart}
+		if err := syscall.FcntlFlock(file.Fd(), syscall.F_SETLK, &lock); err != nil {
+			_ = file.Close()
+			locks.Release()
+			if errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EAGAIN) {
+				return nil, true, nil
+			}
+			return nil, false, err
+		}
+		locks.files = append(locks.files, file)
+	}
+	return locks, false, nil
 }
 
 func (adapter Adapter) AcquireMutationLock(name string) (*MutationLock, bool, error) {
@@ -250,7 +291,10 @@ func (adapter Adapter) RemoveOwnership(name, nextName string, expected []byte) e
 		return errors.New("ownership record changed")
 	}
 	stagedPresent := false
-	if _, err := adapter.readOwnedFile(nextName); err == nil {
+	if staged, err := adapter.readOwnedFile(nextName); err == nil {
+		if !bytes.Equal(staged, expected) {
+			return errors.New("ownership checkpoint changed")
+		}
 		stagedPresent = true
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -264,6 +308,46 @@ func (adapter Adapter) RemoveOwnership(name, nextName string, expected []byte) e
 		}
 	}
 	return syncDirectory(adapter.path(filepath.Dir(name)))
+}
+
+func (adapter Adapter) RemoveFinalOwnership(name, nextName, finalName string, expected []byte) error {
+	current, currentErr := adapter.readOwnedFile(name)
+	final, finalErr := adapter.readOwnedFile(finalName)
+	if currentErr == nil && finalErr == nil {
+		return errors.New("multiple ownership records")
+	}
+	if currentErr == nil {
+		if !bytes.Equal(current, expected) || !errors.Is(finalErr, os.ErrNotExist) {
+			return errors.New("ownership record changed")
+		}
+		if staged, err := adapter.readOwnedFile(nextName); err == nil {
+			if !bytes.Equal(staged, expected) || os.Remove(adapter.path(nextName)) != nil {
+				return errors.New("ownership checkpoint changed")
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := os.Rename(adapter.path(name), adapter.path(finalName)); err != nil {
+			return err
+		}
+		if err := syncDirectory(adapter.path(filepath.Dir(finalName))); err != nil {
+			return err
+		}
+	} else if !errors.Is(currentErr, os.ErrNotExist) || finalErr != nil || !bytes.Equal(final, expected) {
+		return errors.New("ownership record changed")
+	}
+	directory := adapter.path(filepath.Dir(name))
+	if err := os.Remove(directory); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	parent := adapter.path(filepath.Dir(finalName))
+	if err := syncDirectory(parent); err != nil {
+		return err
+	}
+	if err := os.Remove(adapter.path(finalName)); err != nil {
+		return err
+	}
+	return syncDirectory(parent)
 }
 
 func (adapter Adapter) Apply(ctx context.Context, input OperationInput) OperationResult {
@@ -337,10 +421,30 @@ func (adapter Adapter) Apply(ctx context.Context, input OperationInput) Operatio
 		if !exactPackageIdentity(installed.Fact, spec) {
 			return OperationResult{}
 		}
-		if result := adapter.command(ctx, "apt-mark", "unhold", spec.PackageName); !result.OK {
-			return result
+		holds := adapter.command(ctx, "apt-mark", "showhold")
+		if !holds.Observed {
+			return OperationResult{}
+		}
+		if slicesContains(strings.Fields(holds.Fact), spec.PackageName) && !adapter.command(ctx, "apt-mark", "unhold", spec.PackageName).OK {
+			return OperationResult{}
 		}
 		return typed(adapter.command(ctx, "apt-get", "purge", "-y", spec.PackageName+"="+spec.PackageVersion), "package absent")
+	case RemovePackageHold:
+		installed := adapter.command(ctx, "dpkg-query", "--show", "--showformat=${Version} ${Architecture} ${db:Status-Abbrev}", spec.PackageName)
+		if !installed.OK {
+			if installed.Observed && installed.Code == 1 {
+				return OperationResult{OK: true, Fact: "package hold absent"}
+			}
+			return OperationResult{}
+		}
+		if !exactPackageIdentity(installed.Fact, spec) || !adapter.command(ctx, "apt-mark", "unhold", spec.PackageName).OK {
+			return OperationResult{}
+		}
+		holds := adapter.command(ctx, "apt-mark", "showhold")
+		if !holds.Observed || slicesContains(strings.Fields(holds.Fact), spec.PackageName) {
+			return OperationResult{}
+		}
+		return OperationResult{OK: true, Fact: "package hold absent"}
 	case RemovePackageArtifact:
 		if !adapter.removeSafeFile(spec.PackageArtifactPath, int64(spec.PackageSize)+(1<<20)) {
 			return OperationResult{}
@@ -350,17 +454,28 @@ func (adapter Adapter) Apply(ctx context.Context, input OperationInput) Operatio
 		if !adapter.removeBoundFile(spec.ConfigurationPath, input.SHA256, 0o640, 1<<20) {
 			return OperationResult{}
 		}
-		if !adapter.removeTree(filepath.Dir(spec.ConfigurationPath)) || !adapter.removeTree(spec.StatePath) {
+		if !adapter.removeEmptyDirectory(filepath.Dir(spec.ConfigurationPath)) || !adapter.removeEmptyDirectory(spec.StatePath) {
 			return OperationResult{}
 		}
 		return OperationResult{OK: true, Fact: "configuration and state absent"}
 	case RemovePackageIdentity:
 		user := adapter.command(ctx, "getent", "passwd", spec.User)
-		if !user.OK && (!user.Observed || user.Code != 2) || user.OK && !adapter.command(ctx, "userdel", spec.User).OK {
+		group := adapter.command(ctx, "getent", "group", spec.Group)
+		if !user.OK && (!user.Observed || user.Code != 2) || !group.OK && (!group.Observed || group.Code != 2) {
 			return OperationResult{}
 		}
-		group := adapter.command(ctx, "getent", "group", spec.Group)
-		if !group.OK && (!group.Observed || group.Code != 2) || group.OK && !adapter.command(ctx, "groupdel", spec.Group).OK {
+		if user.OK && group.OK {
+			uid, gid, accountOK := accountIDs(user.Fact)
+			groupGID, groupOK := groupID(group.Fact)
+			identityExclusive, identityObserved := adapter.identityExclusive(ctx, spec, uid, gid, accountOK && groupOK && gid == groupGID)
+			processExclusive, processObserved := adapter.processExclusive(ctx, spec.PackageName, uid, gid, accountOK && groupOK && gid == groupGID)
+			if !identityObserved || !identityExclusive || !processObserved || !processExclusive {
+				return OperationResult{}
+			}
+		} else if user.OK || group.OK && !adapter.groupExclusive(ctx, spec, group.Fact) {
+			return OperationResult{}
+		}
+		if user.OK && !adapter.command(ctx, "userdel", spec.User).OK || group.OK && !adapter.command(ctx, "groupdel", spec.Group).OK {
 			return OperationResult{}
 		}
 		return OperationResult{OK: true, Fact: "package identity absent"}
@@ -368,15 +483,34 @@ func (adapter Adapter) Apply(ctx context.Context, input OperationInput) Operatio
 		if !adapter.removeBoundFile(spec.APTSourcePath, input.SHA256, 0o644, 4096) {
 			return OperationResult{}
 		}
-		return adapter.removeFile(spec.APTSourcePath + ".sbxr-next")
+		if !adapter.removeBoundFile(spec.APTSourcePath+".sbxr-next", input.SHA256, 0o644, 4096) {
+			return OperationResult{}
+		}
+		return OperationResult{OK: true, Fact: "APT source absent"}
 	case RemoveAPTKey:
 		if !adapter.removeBoundFile(spec.APTKeyPath, spec.APTKeySHA256, 0o644, 1<<20) {
 			return OperationResult{}
 		}
-		return adapter.removeFile(spec.APTKeyPath + ".sbxr-next")
+		if !adapter.removeBoundFile(spec.APTKeyPath+".sbxr-next", spec.APTKeySHA256, 0o644, 1<<20) {
+			return OperationResult{}
+		}
+		return OperationResult{OK: true, Fact: "APT key absent"}
 	default:
 		return OperationResult{}
 	}
+}
+
+func (adapter Adapter) groupExclusive(ctx context.Context, spec SetupSpec, fact string) bool {
+	gid, ok := groupID(fact)
+	if !ok {
+		return false
+	}
+	owned := adapter.command(ctx, "find", adapter.path("/"), "-xdev", "-gid", strconv.FormatUint(uint64(gid), 10), "-print", "-quit")
+	groupProcesses := adapter.command(ctx, "pgrep", "-G", strconv.FormatUint(uint64(gid), 10))
+	packageProcesses := adapter.command(ctx, "pgrep", "-x", spec.PackageName)
+	groupPIDs, groupObserved := pidSet(groupProcesses)
+	packagePIDs, packageObserved := pidSet(packageProcesses)
+	return owned.Observed && owned.OK && owned.Fact == "" && groupObserved && packageObserved && reflect.DeepEqual(groupPIDs, packagePIDs)
 }
 
 func serviceStopped(load, enabled, active, process, listener OperationResult, packageName string) bool {
@@ -647,7 +781,7 @@ func (adapter Adapter) removeFile(name string) OperationResult {
 	return OperationResult{OK: true, Fact: "absent"}
 }
 
-func (adapter Adapter) removeTree(name string) bool {
+func (adapter Adapter) removeEmptyDirectory(name string) bool {
 	path := adapter.path(name)
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -656,7 +790,7 @@ func (adapter Adapter) removeTree(name string) bool {
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return false
 	}
-	return os.RemoveAll(path) == nil && syncDirectory(filepath.Dir(path)) == nil
+	return os.Remove(path) == nil && syncDirectory(filepath.Dir(path)) == nil
 }
 
 func (adapter Adapter) removeBoundFile(name, expectedDigest string, mode os.FileMode, limit int64) bool {

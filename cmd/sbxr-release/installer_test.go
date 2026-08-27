@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/binary"
@@ -109,6 +110,71 @@ func TestGeneratedInstallerInstallsQualifiedReleaseWithoutATerminal(t *testing.T
 		t.Fatalf("install output = %q", body)
 	}
 	assertInstalledFixture(t, fixture.root, fixture.executable)
+}
+
+func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *testing.T) {
+	fixture := newInstallerFixture(t)
+	if body, err := exec.Command("bash", fixture.script).CombinedOutput(); err != nil {
+		t.Fatalf("initial install = %v, %q", err, body)
+	}
+	installedRecord := filepath.Join(fixture.root, "var/lib/sbxr/installed.json")
+	installedBefore, err := os.ReadFile(installedRecord)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := os.ReadFile(filepath.Join(fixture.root, "fixtures/release-index.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexDigest := sha256.Sum256(index)
+	ownership := []byte(fmt.Sprintf(`{"schema":1,"phase":"Removal committed","unfinished_direction":"removal required","release_identity":{"repository":"albertloky/SBXR","tag":"v2.0.0","commit":"%s","release_index_sha256":"%s"},"proxy_package_identity":"","public_ipv4":"","destination_address":"","destination_server_name":"","configuration_sha256":"","permitted_resources":["/var/lib/sbxr/proxy-ownership.json root:root 0600 one-link schema-1","/var/lib/.sbxr-removal.json root:root 0600 one-link finalization authority","/usr/local/bin/sbxr exact committed Release Identity","/var/lib/sbxr/installed.json exact committed Release Identity"],"cleanup_checkpoint":0,"removal_checkpoint":2}`+"\n", strings.Repeat("a", 40), hex.EncodeToString(indexDigest[:])))
+	ownershipPath := filepath.Join(fixture.root, "var/lib/sbxr/proxy-ownership.json")
+	if err := os.WriteFile(ownershipPath, ownership, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(fixture.root, "usr/local/bin/sbxr")); err != nil {
+		t.Fatal(err)
+	}
+	restorer := filepath.Join(fixture.root, "restore-newer-latest.sh")
+	if err := buildBootstrapFile(bootstrapOptions{
+		version: "2.0.1", sequence: 18, tag: "v2.0.1", commit: strings.Repeat("c", 40), output: restorer, root: fixture.root,
+		amd64ExecutableSHA256: strings.Repeat("d", 64), arm64ExecutableSHA256: strings.Repeat("e", 64),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	body, err := exec.Command("bash", restorer).CombinedOutput()
+	if err != nil || !strings.Contains(string(body), "SOFTWARE-LIFECYCLE-INSTALL-REMOVAL-RESTORED") {
+		t.Fatalf("restore = %v, %q", err, body)
+	}
+	restored, restoredErr := os.ReadFile(filepath.Join(fixture.root, "usr/local/bin/sbxr"))
+	installedAfter, installedErr := os.ReadFile(installedRecord)
+	ownershipAfter, ownershipErr := os.ReadFile(ownershipPath)
+	if restoredErr != nil || !bytes.Equal(restored, fixture.executable) || installedErr != nil || !bytes.Equal(installedAfter, installedBefore) || ownershipErr != nil || !bytes.Equal(ownershipAfter, ownership) {
+		t.Fatalf("restored=%v installed=%v ownership=%v", restoredErr, installedErr, ownershipErr)
+	}
+
+	finalOwnershipPath := filepath.Join(fixture.root, "var/lib/.sbxr-removal.json")
+	if err := os.Rename(ownershipPath, finalOwnershipPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(installedRecord); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Dir(installedRecord)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(fixture.root, "usr/local/bin/sbxr")); err != nil {
+		t.Fatal(err)
+	}
+	body, err = exec.Command("bash", restorer).CombinedOutput()
+	if err != nil || !strings.Contains(string(body), "SOFTWARE-LIFECYCLE-INSTALL-REMOVAL-RESTORED") {
+		t.Fatalf("finalization restore = %v, %q", err, body)
+	}
+	finalOwnership, finalOwnershipErr := os.ReadFile(finalOwnershipPath)
+	if finalOwnershipErr != nil || !bytes.Equal(finalOwnership, ownership) {
+		t.Fatalf("finalization ownership=%v", finalOwnershipErr)
+	}
 }
 
 func TestGeneratedInstallerRefusesWrongELFArchitectureBeforeMutation(t *testing.T) {
@@ -717,7 +783,7 @@ func writeInstallerTools(t *testing.T, root string) {
 	write("rm", fmt.Sprintf(`args=(); signal=0; for value in "$@"; do [ "$value" = '--one-file-system' ] || args+=("$value"); [[ "$value" = */usr/local/bin/sbxr ]] && signal=1; done; if [ "$signal" -eq 1 ] && [ -f %q/fixtures/interrupt-after ]; then /bin/kill -TERM "$PPID"; fi; exec /bin/rm "${args[@]}"`, root))
 	write("sync", `exit 0`)
 	write("stat", fmt.Sprintf(`format=$2; path=$3; case "$path" in /proc/*/fd/9) path=%q/run/lock/sbxr.lock ;; esac; if [ "$format" = '%%d:%%i:%%F' ] && [ -f %q/fixtures/race ] && [[ "$path" = */usr/local/bin/sbxr ]]; then if [ -f %q/fixtures/race-seen ]; then /bin/rm -rf "$path"; /bin/ln -s %q/fixtures/outside "$path"; else : >%q/fixtures/race-seen; fi; fi; facts=$(%s "$path") || exit 1; device=${facts%%%%:*}; rest=${facts#*:}; inode=${rest%%%%:*}; rest=${rest#*:}; mode=${rest%%%%:*}; rest=${rest#*:}; links=${rest%%%%:*}; kind=${rest#*:}; case "$kind" in 'Regular File') kind='regular file' ;; Directory) kind='directory' ;; 'Symbolic Link') kind='symbolic link' ;; esac; if [[ "$path" = */run/lock/sbxr.lock ]] && [ "$kind" = 'regular file' ]; then kind='regular empty file'; fi; case "$format" in '%%u:%%a:%%h:%%F') printf '0:%%s:%%s:%%s\n' "$mode" "$links" "$kind" ;; '%%u:%%a:%%F') printf '0:%%s:%%s\n' "$mode" "$kind" ;; '%%d:%%i:%%F') printf '%%s:%%s:%%s\n' "$device" "$inode" "$kind" ;; '%%d:%%i') printf '%%s:%%s\n' "$device" "$inode" ;; *) exit 1 ;; esac`, root, root, root, root, root, statCommand))
-	for _, name := range []string{"chmod", "cmp", "cut", "dd", "grep", "head", "mkdir", "mktemp", "mv", "od", "readlink", "sed", "tail", "tar", "tr", "wc"} {
+	for _, name := range []string{"chmod", "cmp", "cut", "dd", "find", "grep", "head", "mkdir", "mktemp", "mv", "od", "readlink", "sed", "tail", "tar", "tr", "wc"} {
 		path, err := exec.LookPath(name)
 		if err != nil {
 			t.Fatal(err)

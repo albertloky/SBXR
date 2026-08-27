@@ -42,6 +42,10 @@ type controlledHost struct {
 	cancelOn           hostadapter.Operation
 	cancel             context.CancelFunc
 	removal            *hostadapter.RemovalInspection
+	failRemovalPublish map[int]bool
+	lateRemovalPublish map[int]bool
+	finalizing         bool
+	finalRemovalFails  int
 }
 
 type controlledHostFacts struct {
@@ -66,8 +70,11 @@ func (host *controlledHost) Inspect(_ context.Context, requested []hostadapter.R
 	if host.inspection.Resources == nil {
 		resources := observedAbsent(requested)
 		for index := range resources {
-			if resources[index].Name == "/var/lib/sbxr/proxy-ownership.json" {
-				resources[index].Present = len(host.ownership) > 0
+			switch resources[index].Name {
+			case hostSetupSpec.OwnershipPath:
+				resources[index].Present = len(host.ownership) > 0 && !host.finalizing
+			case finalOwnershipPath:
+				resources[index].Present = len(host.ownership) > 0 && host.finalizing
 			}
 		}
 		return hostadapter.Inspection{Resources: resources, Complete: true}
@@ -82,8 +89,11 @@ func (host *controlledHost) Preflight(_ context.Context, requested []hostadapter
 	return host.preflight
 }
 
-func (host *controlledHost) ReadOwnership(string) ([]byte, error) {
+func (host *controlledHost) ReadOwnership(name string) ([]byte, error) {
 	if len(host.ownership) == 0 {
+		return nil, os.ErrNotExist
+	}
+	if host.finalizing != (name == finalOwnershipPath) {
 		return nil, os.ErrNotExist
 	}
 	return bytes.Clone(host.ownership), nil
@@ -105,12 +115,20 @@ func (host *controlledHost) PublishOwnership(_, _ string, expected, next []byte)
 		return errors.New("ownership changed")
 	}
 	record, _ := decodeOwnership(next)
+	if record.Direction == removalRequired && host.failRemovalPublish[record.RemovalCheckpoint] {
+		delete(host.failRemovalPublish, record.RemovalCheckpoint)
+		return errors.New("removal checkpoint failed")
+	}
 	if record.Phase == host.failPublish && !host.publishFailed && !host.latePublish {
 		host.publishFailed = true
 		return errors.New("checkpoint failed")
 	}
 	host.ownership = bytes.Clone(next)
 	host.checkpoints = append(host.checkpoints, bytes.Clone(next))
+	if record.Direction == removalRequired && host.lateRemovalPublish[record.RemovalCheckpoint] {
+		delete(host.lateRemovalPublish, record.RemovalCheckpoint)
+		return errors.New("late removal checkpoint failure")
+	}
 	if record.Phase == host.failPublish && !host.publishFailed && host.latePublish {
 		host.publishFailed = true
 		return errors.New("late checkpoint failure")
@@ -126,8 +144,25 @@ func (host *controlledHost) RemoveOwnership(_, _ string, expected []byte) error 
 	return nil
 }
 
+func (host *controlledHost) RemoveFinalOwnership(_, _, _ string, expected []byte) error {
+	if !bytes.Equal(expected, host.ownership) {
+		return errors.New("ownership changed")
+	}
+	if host.finalRemovalFails > 0 {
+		host.finalRemovalFails--
+		host.finalizing = true
+		return errors.New("simulated process death")
+	}
+	host.finalizing = false
+	return host.RemoveOwnership("", "", expected)
+}
+
 func (host *controlledHost) AcquireMutationLock(string) (*hostadapter.MutationLock, bool, error) {
 	return &hostadapter.MutationLock{}, host.busy, nil
+}
+
+func (host *controlledHost) AcquirePackageLocks() (*hostadapter.PackageLocks, bool, error) {
+	return &hostadapter.PackageLocks{}, host.busy, nil
 }
 
 func (host *controlledHost) Apply(_ context.Context, input hostadapter.OperationInput) hostadapter.OperationResult {
@@ -241,8 +276,12 @@ func (adapter acceptedSingBox) EncodeClientConfiguration(_ []byte, publicIPv4 st
 type readyLifecycle struct{}
 
 func (readyLifecycle) Status(context.Context) softwarelifecycle.Result {
-	identity := softwarelifecycle.ReleaseIdentity{Repository: softwarelifecycle.Repository, Tag: "v3.0.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}
+	identity := testInstalledIdentity()
 	return softwarelifecycle.Result{State: softwarelifecycle.Ready, Installed: &identity, Code: softwarelifecycle.StatusReady}
+}
+
+func testInstalledIdentity() softwarelifecycle.ReleaseIdentity {
+	return softwarelifecycle.ReleaseIdentity{Repository: softwarelifecycle.Repository, Tag: "v3.0.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}
 }
 
 func (readyLifecycle) Check(context.Context, softwarelifecycle.ProgressReporter) softwarelifecycle.Result {
@@ -433,6 +472,175 @@ func TestApprovedCompleteRemovalRevalidatesBeforeTheExpectedCommitmentRefusal(t 
 	if unchanged.Code != ActionRefused || unchanged.FailedCheck != "Complete removal commitment" || !reflect.DeepEqual(host.operations, before) {
 		t.Fatalf("unchanged Execute() = %#v operations=%v", unchanged, host.operations)
 	}
+}
+
+func TestApprovedCompleteRemovalCommitsThenFinishesForwardToNotInstalled(t *testing.T) {
+	host := acceptedHost()
+	lifecycle := &controlledRemovalLifecycle{ready: true}
+	installation := newInstalledInterface(lifecycle, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	if result := installation.Execute(t.Context(), *setup.Prepared, Approved, nil); result.Status != Running {
+		t.Fatalf("setup = %#v", result)
+	}
+	setupCheckpoints := len(host.checkpoints)
+
+	review := installation.Review(t.Context(), CompleteRemovalAction)
+	result := installation.Execute(t.Context(), *review.Prepared, Approved, nil)
+
+	if result.Status != "" || result.Message != "SBXR is not installed." || result.Code != CompleteRemovalCompleted {
+		t.Fatalf("Execute() = %#v", result)
+	}
+	if lifecycle.executable || lifecycle.installedRecord || len(host.ownership) != 0 {
+		t.Fatalf("remaining lifecycle=%#v ownership=%q", lifecycle, host.ownership)
+	}
+	if len(host.checkpoints) == setupCheckpoints {
+		t.Fatal("no durable removal checkpoint")
+	}
+	committed, ok := decodeOwnership(host.checkpoints[setupCheckpoints])
+	if !ok || committed.Phase != removalCommitted || committed.Direction != removalRequired {
+		t.Fatalf("first checkpoint = %#v ok=%v", committed, ok)
+	}
+}
+
+func TestCompleteRemovalRestartsFromEveryDurableDeletionCheckpoint(t *testing.T) {
+	for checkpoint := 0; checkpoint <= 11; checkpoint++ {
+		t.Run(fmt.Sprintf("checkpoint-%d", checkpoint), func(t *testing.T) {
+			host := acceptedHost()
+			host.failRemovalPublish = map[int]bool{checkpoint: true}
+			lifecycle := &controlledRemovalLifecycle{ready: true}
+			installation := newInstalledInterface(lifecycle, host, acceptedSingBox{})
+			setup := installation.Review(t.Context(), StartSetupAction)
+			if result := installation.Execute(t.Context(), *setup.Prepared, Approved, nil); result.Status != Running {
+				t.Fatalf("setup = %#v", result)
+			}
+
+			removal := installation.Review(t.Context(), CompleteRemovalAction)
+			interrupted := installation.Execute(t.Context(), *removal.Prepared, Approved, nil)
+			if checkpoint == 0 {
+				if interrupted.Status != Running || interrupted.Code != ActionRefused {
+					t.Fatalf("pre-commit failure = %#v", interrupted)
+				}
+				removal = installation.Review(t.Context(), CompleteRemovalAction)
+			} else {
+				if interrupted.Status != RemovalIncomplete || interrupted.Code != RemovalNeedsCompletion {
+					t.Fatalf("interrupted = %#v", interrupted)
+				}
+				restarted := newInstalledInterface(lifecycle, host, acceptedSingBox{})
+				status := restarted.Review(t.Context(), StatusAction)
+				if status.Status != RemovalIncomplete || !reflect.DeepEqual(status.LegalActions, []Action{FinishRemovalAction, ViewDetailsAction}) {
+					t.Fatalf("restart status = %#v", status)
+				}
+				removal = restarted.Review(t.Context(), FinishRemovalAction)
+				installation = restarted
+			}
+			finished := installation.Execute(t.Context(), *removal.Prepared, Approved, nil)
+			if finished.Code != CompleteRemovalCompleted || len(host.ownership) != 0 {
+				t.Fatalf("finished = %#v ownership=%q", finished, host.ownership)
+			}
+		})
+	}
+}
+
+func TestCompleteRemovalRestartsAfterProcessDeathDuringFinalOwnershipRemoval(t *testing.T) {
+	host := acceptedHost()
+	host.finalRemovalFails = 1
+	lifecycle := &controlledRemovalLifecycle{ready: true}
+	installation := newInstalledInterface(lifecycle, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+	removal := installation.Review(t.Context(), CompleteRemovalAction)
+	interrupted := installation.Execute(t.Context(), *removal.Prepared, Approved, nil)
+	if interrupted.Status != RemovalIncomplete || !host.finalizing {
+		t.Fatalf("interrupted = %#v finalizing=%t", interrupted, host.finalizing)
+	}
+
+	restarted := newInstalledInterface(lifecycle, host, acceptedSingBox{})
+	status := restarted.Review(t.Context(), StatusAction)
+	if status.Status != RemovalIncomplete || !reflect.DeepEqual(status.LegalActions, []Action{FinishRemovalAction, ViewDetailsAction}) {
+		t.Fatalf("restart status = %#v", status)
+	}
+	finish := restarted.Review(t.Context(), FinishRemovalAction)
+	if result := restarted.Execute(t.Context(), *finish.Prepared, Approved, nil); result.Code != CompleteRemovalCompleted || len(host.ownership) != 0 {
+		t.Fatalf("finish = %#v ownership=%q", result, host.ownership)
+	}
+}
+
+func TestCompleteRemovalRecoversLateCheckpointIOAndManagedTermination(t *testing.T) {
+	t.Run("late checkpoint I/O", func(t *testing.T) {
+		host := acceptedHost()
+		host.lateRemovalPublish = map[int]bool{4: true}
+		lifecycle := &controlledRemovalLifecycle{ready: true}
+		installation := newInstalledInterface(lifecycle, host, acceptedSingBox{})
+		setup := installation.Review(t.Context(), StartSetupAction)
+		installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+		removal := installation.Review(t.Context(), CompleteRemovalAction)
+		if result := installation.Execute(t.Context(), *removal.Prepared, Approved, nil); result.Code != CompleteRemovalCompleted {
+			t.Fatalf("Execute() = %#v", result)
+		}
+	})
+
+	t.Run("managed termination", func(t *testing.T) {
+		host := acceptedHost()
+		lifecycle := &controlledRemovalLifecycle{ready: true}
+		installation := newInstalledInterface(lifecycle, host, acceptedSingBox{})
+		setup := installation.Review(t.Context(), StartSetupAction)
+		installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+		ctx, cancel := context.WithCancel(t.Context())
+		host.cancelOn, host.cancel = hostadapter.RemovePackageHold, cancel
+		removal := installation.Review(ctx, CompleteRemovalAction)
+		interrupted := installation.Execute(ctx, *removal.Prepared, Approved, nil)
+		if interrupted.Status != RemovalIncomplete || interrupted.FailedCheck != "Managed termination" {
+			t.Fatalf("interrupted = %#v", interrupted)
+		}
+		restarted := newInstalledInterface(lifecycle, host, acceptedSingBox{})
+		finish := restarted.Review(t.Context(), FinishRemovalAction)
+		if result := restarted.Execute(t.Context(), *finish.Prepared, Approved, nil); result.Code != CompleteRemovalCompleted {
+			t.Fatalf("finish = %#v", result)
+		}
+	})
+}
+
+type controlledRemovalLifecycle struct {
+	ready, executable, installedRecord  bool
+	failExecutable, failInstalledRecord bool
+}
+
+func (lifecycle *controlledRemovalLifecycle) Status(context.Context) softwarelifecycle.Result {
+	if lifecycle.ready {
+		identity := testInstalledIdentity()
+		lifecycle.executable, lifecycle.installedRecord = true, true
+		return softwarelifecycle.Result{State: softwarelifecycle.Ready, Installed: &identity}
+	}
+	return softwarelifecycle.Result{State: softwarelifecycle.RecoveryRequiredState}
+}
+func (*controlledRemovalLifecycle) Check(context.Context, softwarelifecycle.ProgressReporter) softwarelifecycle.Result {
+	return softwarelifecycle.Result{}
+}
+func (*controlledRemovalLifecycle) Update(context.Context, softwarelifecycle.ProgressReporter) softwarelifecycle.Result {
+	return softwarelifecycle.Result{}
+}
+func (*controlledRemovalLifecycle) Recover(context.Context, softwarelifecycle.ProgressReporter) softwarelifecycle.Result {
+	return softwarelifecycle.Result{}
+}
+func (lifecycle *controlledRemovalLifecycle) InspectCompleteRemoval(context.Context, softwarelifecycle.ReleaseIdentity) softwarelifecycle.CompleteRemovalInspection {
+	return softwarelifecycle.CompleteRemovalInspection{Valid: true, ExecutablePresent: lifecycle.executable, InstalledRecordPresent: lifecycle.installedRecord, StateDirectoryEmpty: true}
+}
+func (lifecycle *controlledRemovalLifecycle) RemoveCompleteRemovalExecutable(context.Context, softwarelifecycle.ReleaseIdentity) bool {
+	if lifecycle.failExecutable {
+		lifecycle.failExecutable = false
+		return false
+	}
+	lifecycle.executable = false
+	lifecycle.ready = false
+	return true
+}
+func (lifecycle *controlledRemovalLifecycle) RemoveCompleteRemovalInstalledRecord(context.Context, softwarelifecycle.ReleaseIdentity) bool {
+	if lifecycle.failInstalledRecord {
+		lifecycle.failInstalledRecord = false
+		return false
+	}
+	lifecycle.installedRecord = false
+	return true
 }
 
 func TestApprovedSetupReachesLocallyVerifiedRunning(t *testing.T) {
