@@ -626,13 +626,15 @@ func TestPackagedInterruptionRequiresObservedEventAndForcedDeath(t *testing.T) {
 			if err := os.Mkdir(work, 0o700); err != nil {
 				t.Fatal(err)
 			}
-			fake := "#!/bin/sh\nexec 2>/dev/null\nIFS= read -r _\nif test -n \"$FAKE_PROGRESS\"; then printf '%s\\n' \"$FAKE_PROGRESS\"; fi\nsleep 30\n"
+			fake := "#!/bin/sh\nexec 2>/dev/null\nIFS= read -r _\nif test -n \"$FAKE_PROGRESS\"; then printf '%s\\n' \"$FAKE_PROGRESS\"; fi\nwhile IFS= read -r _; do :; done\n"
 			if err := os.WriteFile(binary, []byte(fake), 0o700); err != nil {
 				t.Fatal(err)
 			}
 			function := string(source)[start : start+end+2]
 			function = strings.ReplaceAll(function, "/usr/local/bin/sbxr", binary)
-			function = strings.Replace(function, "seq 1 6000", "seq 1 100", 1)
+			if test.progress == "" {
+				function = strings.Replace(function, "seq 1 6000", "seq 1 100", 1)
+			}
 			function = strings.Replace(function, "local process=$!", "local process=$!\nprintf '%s\\n' \"$process\" > "+strconv.Quote(pidPath), 1)
 			if test.signalFailure {
 				function = strings.Replace(function, `kill -SIGSTOP "$process" 2>/dev/null`, "false", 1)
@@ -642,7 +644,7 @@ func TestPackagedInterruptionRequiresObservedEventAndForcedDeath(t *testing.T) {
 			if err := os.WriteFile(script, []byte(sandbox), 0o700); err != nil {
 				t.Fatal(err)
 			}
-			ctx, cancel := context.WithTimeout(t.Context(), 7*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 			defer cancel()
 			command := exec.CommandContext(ctx, "bash", script)
 			command.Env = append(os.Environ(), "FAKE_PROGRESS="+test.progress)
