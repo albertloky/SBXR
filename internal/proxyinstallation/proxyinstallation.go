@@ -922,7 +922,7 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 		if err != nil || !valid || !bytes.Equal(current, authority.record) {
 			return refused(ProblemDetected, "Prepared Action facts", "Restore complete locally Running proxy facts, then review Show client configuration again.")
 		}
-		installed := module.lifecycle.Status(context.WithoutCancel(ctx))
+		installed := module.statusUnderMutationLock(context.WithoutCancel(ctx), lock)
 		facts := module.host.InspectRunning(context.WithoutCancel(ctx), hostSetupSpec, aptSourceBody, current, record.ConfigurationSHA256, record.PublicIPv4)
 		if installed.State != softwarelifecycle.Ready || installed.Installed == nil || *installed.Installed != authority.release || record.Release != authority.release || !runningAccepted(facts) || !reflect.DeepEqual(facts, authority.running) {
 			return refused(ProblemDetected, "Prepared Action facts", "Restore complete locally Running proxy facts, then review Show client configuration again.")

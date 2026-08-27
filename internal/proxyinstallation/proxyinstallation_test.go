@@ -787,11 +787,12 @@ func TestApprovedSetupReachesLocallyVerifiedRunning(t *testing.T) {
 
 func TestOwnerCanReviewDeclineAndDiscloseOneRunningClientConfiguration(t *testing.T) {
 	host := acceptedHost()
-	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	installation := newInstalledInterface(&lockSensitiveLifecycle{host: host}, host, acceptedSingBox{})
 	setup := installation.Review(t.Context(), StartSetupAction)
 	if result := installation.Execute(t.Context(), *setup.Prepared, Approved, nil); result.Status != Running {
 		t.Fatalf("setup = %#v", result)
 	}
+	host.lockHeld = false
 
 	review := installation.Review(t.Context(), ShowClientConfigurationAction)
 	if review.Prepared == nil || !reflect.DeepEqual(review.LegalActions, []Action{ViewDetailsAction, ShowClientConfigurationAction, CompleteRemovalAction}) {
@@ -833,15 +834,18 @@ func TestOwnerCanReviewDeclineAndDiscloseOneRunningClientConfiguration(t *testin
 	if reused := installation.Execute(t.Context(), *review.Prepared, Approved, reporter); reused.Code != ActionRefused || len(configurations) != 1 {
 		t.Fatalf("reused Execute() = %#v", reused)
 	}
+	host.lockHeld = false
 	review = installation.Review(t.Context(), ShowClientConfigurationAction)
 	if repeated := installation.Execute(t.Context(), *review.Prepared, Approved, reporter); repeated.Code != ClientConfigurationDisclosed || len(configurations) != 2 {
 		t.Fatalf("repeated Execute() = %#v configurations=%d", repeated, len(configurations))
 	}
+	host.lockHeld = false
 	review = installation.Review(t.Context(), ShowClientConfigurationAction)
 	if missingBoundary := installation.Execute(t.Context(), *review.Prepared, Approved, nil); missingBoundary.Code != ActionRefused || missingBoundary.FailedCheck != "Presentation boundary" || host.configurationReads != 2 {
 		t.Fatalf("missing-boundary Execute() = %#v reads=%d", missingBoundary, host.configurationReads)
 	}
 
+	host.lockHeld = false
 	review = installation.Review(t.Context(), ShowClientConfigurationAction)
 	host.active = false
 	if changed := installation.Execute(t.Context(), *review.Prepared, Approved, reporter); changed.Code != ActionRefused || len(configurations) != 2 || host.configurationReads != 2 {
