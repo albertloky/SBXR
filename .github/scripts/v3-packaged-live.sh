@@ -245,7 +245,7 @@ index="$(jq -r .release_identity.release_index_sha256 <<<"$release")"
 ssh_options=(-i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" -o ConnectTimeout=15)
 remote=(ssh "${ssh_options[@]}" "root@$host")
 client_config=/dev/shm/sbxr-v3-client.json
-client_root=/dev/shm/sbxr-v3-client
+client_root=${RUNNER_TEMP:?}/sbxr-v3-client
 client_deb=/dev/shm/sing-box.deb
 client_log=/dev/shm/sbxr-v3-client.log
 workflow_capture=/dev/shm/sbxr-v3-workflow.log
@@ -258,6 +258,7 @@ cleanup() {
     if test -n "${client_uuid:-}" && grep -F -- "$client_uuid" "$workflow_capture" >/dev/null; then status=1; fi
   fi
   rm -rf "$client_config" "$client_root" "$client_deb" "$client_log" "$workflow_capture" /dev/shm/sagernet.asc /dev/shm/sagernet.sources "${download:-}"
+  test ! -e "$client_root" || status=1
   exit "$status"
 }
 trap cleanup EXIT

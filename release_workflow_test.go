@@ -513,6 +513,7 @@ func TestCandidateRoutesOneV3CandidateThroughPackagedLiveQualification(t *testin
 		"v3-packaged-live-result-facts.json",
 		"v3-packaged-live-result-decision.json",
 		"/dev/shm/sbxr-v3-client.json",
+		`${RUNNER_TEMP:?}/sbxr-v3-client`,
 		"chmod 0600",
 		"SIGSTOP",
 		"SIGKILL",
@@ -527,6 +528,12 @@ func TestCandidateRoutesOneV3CandidateThroughPackagedLiveQualification(t *testin
 		if !strings.Contains(v3Path, required) {
 			t.Fatalf("candidate.yml omitted V3 qualification contract %q", required)
 		}
+	}
+	if strings.Contains(v3Path, "client_root=/dev/shm/") {
+		t.Fatal("V3 qualification executes the outside client from the runner's noexec /dev/shm mount")
+	}
+	if strings.Count(v3Path, `test ! -e "$client_root"`) < 2 {
+		t.Fatal("V3 qualification does not prove outside-client cleanup on success and failure")
 	}
 	for _, required := range []string{"stable-v3-finalization", "v3-finalization-failure", `v3_packaged_live == "Passed"`, `complete_removal == "Passed"`, "stable-v3-finalization-facts.json", "stable-v3-finalization-decision.json"} {
 		if !strings.Contains(stable, required) {
