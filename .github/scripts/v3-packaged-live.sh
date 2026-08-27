@@ -182,13 +182,13 @@ remote_failure_safety() {
   prove_running
   after_activation_completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-  chmod 0640 /etc/sing-box/config.json
+  chmod 0600 /etc/sing-box/config.json
   drift_before="$(protected_inventory)"
   run_action 'Complete removal' 'REMOVE SBXR' 'Code: PROXY-INSTALLATION-ACTION-REFUSED'
   prove_status 'Problem detected'
   view_details 'Detected mismatch: the protected configuration identity does not match'
   test "$(protected_inventory)" = "$drift_before"
-  chmod 0600 /etc/sing-box/config.json
+  chmod 0640 /etc/sing-box/config.json
   prove_running
   ownership_drift_completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 

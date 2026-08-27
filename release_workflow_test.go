@@ -539,6 +539,12 @@ func TestCandidateRoutesOneV3CandidateThroughPackagedLiveQualification(t *testin
 	if strings.Contains(v3Path, "client_root=/dev/shm/") {
 		t.Fatal("V3 qualification executes the outside client from the runner's noexec /dev/shm mount")
 	}
+	drift := strings.Index(string(scriptBody), "chmod 0600 /etc/sing-box/config.json")
+	refusal := strings.Index(string(scriptBody), "run_action 'Complete removal' 'REMOVE SBXR' 'Code: PROXY-INSTALLATION-ACTION-REFUSED'")
+	restore := strings.Index(string(scriptBody), "chmod 0640 /etc/sing-box/config.json")
+	if drift < 0 || refusal < 0 || restore < 0 || !(drift < refusal && refusal < restore) {
+		t.Fatal("V3 qualification does not apply mode 0600 drift before removal refusal and restore canonical mode 0640 after it")
+	}
 	if strings.Contains(v3Path, "test \"$(grep -Fxc \"$expected\" <<<\"$output\")\" -eq 1\n  test \"$(grep '^Code: ' <<<\"$output\" | tail -1)\" = \"$expected\"") {
 		t.Fatal("V3 qualification rejects retained result codes when the numbered menu rerenders")
 	}
