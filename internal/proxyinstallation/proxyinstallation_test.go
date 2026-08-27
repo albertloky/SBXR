@@ -26,6 +26,9 @@ type controlledHost struct {
 	listener      bool
 	busy          bool
 	statusBusy    bool
+	activeUnknown bool
+	hostUnknown   bool
+	configUnknown bool
 	fails         map[hostadapter.Operation]bool
 	failPublish   setupPhase
 	latePublish   bool
@@ -121,10 +124,25 @@ func (host *controlledHost) InspectRunning(_ context.Context, _ hostadapter.Setu
 			prepared = true
 		}
 	}
+	fact := func(accepted bool) hostadapter.Observation {
+		return hostadapter.Observation{Observed: true, Accepted: accepted}
+	}
+	active := fact(host.active)
+	if host.activeUnknown {
+		active = hostadapter.Observation{}
+	}
+	hostFact, configuration := fact(true), fact(prepared)
+	if host.hostUnknown {
+		hostFact = hostadapter.Observation{}
+	}
+	if host.configUnknown {
+		configuration = hostadapter.Observation{}
+	}
 	return hostadapter.RunningInspection{
-		Ownership: bytes.Equal(ownership, host.ownership), TransactionFilesAbsent: true, APTKey: prepared, APTSource: prepared, Package: prepared, Hold: prepared,
-		PackageIdentity: prepared, Configuration: prepared, State: prepared, Validation: prepared, ServiceProvenance: prepared,
-		ServiceEnabled: host.enabled, ServiceActive: host.active, Listener: host.listener,
+		OSID: "ubuntu", OSVersion: "24.04", Architecture: "amd64", PublicIPv4: "8.8.8.8", Host: hostFact, PublicIPv4Matches: fact(true),
+		Ownership: fact(bytes.Equal(ownership, host.ownership)), TransactionFilesAbsent: fact(true), APTKey: fact(prepared), APTSource: fact(prepared), Package: fact(prepared), Hold: fact(prepared),
+		PackageIdentity: fact(prepared), Configuration: configuration, State: fact(prepared), Validation: fact(prepared), ServiceProvenance: fact(prepared),
+		ServiceEnabled: fact(host.enabled), ServiceActive: active, Listener: fact(host.listener),
 	}
 }
 
@@ -184,6 +202,13 @@ func (readyLifecycle) Update(context.Context, softwarelifecycle.ProgressReporter
 
 func (readyLifecycle) Recover(context.Context, softwarelifecycle.ProgressReporter) softwarelifecycle.Result {
 	return softwarelifecycle.Result{}
+}
+
+type mismatchedLifecycle struct{ readyLifecycle }
+
+func (mismatchedLifecycle) Status(context.Context) softwarelifecycle.Result {
+	identity := softwarelifecycle.ReleaseIdentity{Repository: softwarelifecycle.Repository, Tag: "v3.0.1", Commit: strings.Repeat("c", 40), IndexSHA256: strings.Repeat("d", 64)}
+	return softwarelifecycle.Result{State: softwarelifecycle.Ready, Installed: &identity, Code: softwarelifecycle.StatusReady}
 }
 
 func TestOwnerCanReviewAndDeclineCleanSetup(t *testing.T) {
@@ -631,8 +656,19 @@ func TestReviewReturnsSecretSafeNotSetUpDetails(t *testing.T) {
 	for _, required := range []string{
 		"SBXR version: v3.0.0",
 		"Release Identity: albertloky/SBXR v3.0.0 " + strings.Repeat("a", 40) + " " + strings.Repeat("b", 64),
+		"Ubuntu: 24.04 amd64",
 		"Proxy Installation Status: Not set up",
+		"Required unfinished direction: none",
+		"Mutation lock: Available",
 		"Ownership Record: Absent",
+		"Proxy Package Identity: https://deb.sagernet.org/; signing-key bytes SHA-256 803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1; sing-box 1.13.19 amd64; DEB 24597120 bytes; DEB SHA-256 fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf; Absent",
+		"Package hold: Absent",
+		"Protected configuration identity: Absent",
+		"Packaged validation result: Not applicable",
+		"systemd unit provenance: Absent",
+		"Service enabled: No",
+		"Service active: No",
+		"Expected public listener ownership: Absent",
 		"Client Identity: Absent",
 	} {
 		if !strings.Contains(details, required) {
@@ -642,6 +678,275 @@ func TestReviewReturnsSecretSafeNotSetUpDetails(t *testing.T) {
 	for _, secret := range []string{"11111111-2222-4333-8444-555555555555", "private"} {
 		if strings.Contains(details, secret) {
 			t.Errorf("details disclose %q", secret)
+		}
+	}
+}
+
+func TestViewDetailsReportsFreshActiveMutationCheckpoint(t *testing.T) {
+	host := acceptedHost()
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	if result := installation.Execute(t.Context(), *setup.Prepared, Approved, nil); result.Status != Running {
+		t.Fatalf("setup = %#v", result)
+	}
+	host.statusBusy = true
+
+	review := installation.Review(t.Context(), ViewDetailsAction)
+	details := strings.Join(review.Details, "\n")
+	if review.Status != ChangeInProgress || review.Result.Code != StatusChangeInProgress || !reflect.DeepEqual(review.LegalActions, []Action{ViewDetailsAction}) {
+		t.Fatalf("Review() = %#v", review)
+	}
+	for _, required := range []string{
+		"Proxy Installation Status: Change in progress",
+		"Mutation lock: In use",
+		"Ownership Record: Valid; phase Running; cleanup checkpoint 0",
+		"Required unfinished direction: none",
+	} {
+		if !strings.Contains(details, required) {
+			t.Errorf("details missing %q:\n%s", required, details)
+		}
+	}
+}
+
+func TestViewDetailsExplainsTheRequiredUnfinishedDirection(t *testing.T) {
+	host := acceptedHost()
+	host.fails = map[hostadapter.Operation]bool{hostadapter.StartService: true}
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	if result := installation.Execute(t.Context(), *setup.Prepared, Approved, nil); result.Status != SetupIncomplete {
+		t.Fatalf("setup = %#v", result)
+	}
+
+	review := installation.Review(t.Context(), ViewDetailsAction)
+	details := strings.Join(review.Details, "\n")
+	for _, required := range []string{
+		"Proxy Installation Status: Setup incomplete",
+		"Required unfinished direction: setup required",
+		"Ownership Record: Valid; phase Service enabled; cleanup checkpoint 0",
+		"Public endpoint: 8.8.8.8:443",
+		"Client Identity: Present",
+	} {
+		if !strings.Contains(details, required) {
+			t.Errorf("details missing %q:\n%s", required, details)
+		}
+	}
+}
+
+func TestViewDetailsExplainsCleanupRequired(t *testing.T) {
+	host := acceptedHost()
+	host.fails = map[hostadapter.Operation]bool{hostadapter.InstallPackage: true, hostadapter.RemovePackage: true}
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	if result := installation.Execute(t.Context(), *setup.Prepared, Approved, nil); result.Status != SetupIncomplete {
+		t.Fatalf("setup = %#v", result)
+	}
+
+	details := strings.Join(installation.Review(t.Context(), ViewDetailsAction).Details, "\n")
+	for _, required := range []string{"Proxy Installation Status: Setup incomplete", "Required unfinished direction: cleanup required", "Ownership Record: Valid; phase Service masked"} {
+		if !strings.Contains(details, required) {
+			t.Errorf("details missing %q:\n%s", required, details)
+		}
+	}
+}
+
+func TestReviewReturnsCompleteSecretSafeRunningDetails(t *testing.T) {
+	host := acceptedHost()
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	if result := installation.Execute(t.Context(), *setup.Prepared, Approved, nil); result.Status != Running {
+		t.Fatalf("setup = %#v", result)
+	}
+
+	review := installation.Review(t.Context(), ViewDetailsAction)
+	details := strings.Join(review.Details, "\n")
+	record, _ := decodeOwnership(host.ownership)
+	for _, required := range []string{
+		"SBXR version: v3.0.0",
+		"Release Identity: albertloky/SBXR v3.0.0 " + strings.Repeat("a", 40) + " " + strings.Repeat("b", 64),
+		"Ubuntu: 24.04 amd64",
+		"Proxy Installation Status: Running",
+		"Required unfinished direction: none",
+		"Mutation lock: Available",
+		"Ownership Record: Valid; phase Running; cleanup checkpoint 0",
+		"Proxy Package Identity: https://deb.sagernet.org/; signing-key bytes SHA-256 803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1; sing-box 1.13.19 amd64; DEB 24597120 bytes; DEB SHA-256 fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf",
+		"Package hold: Present",
+		"Protected configuration identity: /etc/sing-box/config.json SHA-256 " + record.ConfigurationSHA256 + "; Matches",
+		"Packaged validation result: Accepted",
+		"systemd unit provenance: /lib/systemd/system/sing-box.service from sing-box; Matches",
+		"Service enabled: Yes",
+		"Service active: Yes",
+		"Expected public listener ownership: sing-box on TCP 8.8.8.8:443; Matches",
+		"Public endpoint: 8.8.8.8:443",
+		"Selected destination: microsoft.com:443",
+		"Server name: microsoft.com",
+		"Client Identity: Present",
+	} {
+		if !strings.Contains(details, required) {
+			t.Errorf("details missing %q:\n%s", required, details)
+		}
+	}
+	for _, secret := range []string{"11111111-2222-4333-8444-555555555555", "private", "secret-safe-test-fixture"} {
+		if strings.Contains(details, secret) {
+			t.Errorf("details disclose %q", secret)
+		}
+	}
+}
+
+func TestReviewReportsRunningDriftWithExactSafeCorrection(t *testing.T) {
+	host := acceptedHost()
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	if result := installation.Execute(t.Context(), *setup.Prepared, Approved, nil); result.Status != Running {
+		t.Fatalf("setup = %#v", result)
+	}
+	host.active = false
+
+	review := installation.Review(t.Context(), ViewDetailsAction)
+	details := strings.Join(review.Details, "\n")
+	if review.Status != ProblemDetected || review.Result.Code != StatusProblemDetected || !reflect.DeepEqual(review.LegalActions, []Action{ViewDetailsAction, CompleteRemovalAction}) {
+		t.Fatalf("Review() = %#v", review)
+	}
+	for _, required := range []string{
+		"Detected mismatch: sing-box.service is not active",
+		"Safe correction: Start sing-box.service from the exact installed package, then inspect again.",
+	} {
+		if !strings.Contains(details, required) {
+			t.Errorf("details missing %q:\n%s", required, details)
+		}
+	}
+	for _, forbidden := range []string{"generic repair", "adopt", "force", "override"} {
+		if strings.Contains(strings.ToLower(details), forbidden) {
+			t.Errorf("details contain forbidden generic action %q:\n%s", forbidden, details)
+		}
+	}
+}
+
+func TestReviewDistinguishesUnavailableObservationFromConfirmedDrift(t *testing.T) {
+	host := acceptedHost()
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	if result := installation.Execute(t.Context(), *setup.Prepared, Approved, nil); result.Status != Running {
+		t.Fatalf("setup = %#v", result)
+	}
+	host.active = false
+	host.activeUnknown = true
+	host.hostUnknown = true
+	host.configUnknown = true
+
+	review := installation.Review(t.Context(), ViewDetailsAction)
+	details := strings.Join(review.Details, "\n")
+	for _, required := range []string{
+		"Ubuntu: Unavailable",
+		"Service active: Unavailable",
+		"Client Identity: Absent",
+		"Detected mismatch: service active state could not be inspected",
+		"Safe correction: Restore working systemctl active-state inspection for sing-box.service, then inspect again.",
+	} {
+		if !strings.Contains(details, required) {
+			t.Errorf("details missing %q:\n%s", required, details)
+		}
+	}
+	if strings.Contains(details, "sing-box.service is not active") || strings.Contains(details, "Start sing-box.service") {
+		t.Fatalf("unavailable observation reported as confirmed drift:\n%s", details)
+	}
+	if strings.Contains(details, "Client Identity: Unavailable") {
+		t.Fatalf("Client Identity escaped its binary vocabulary:\n%s", details)
+	}
+}
+
+func TestValidOwnershipIdentityMismatchKeepsKnownDetails(t *testing.T) {
+	host := acceptedHost()
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	if result := installation.Execute(t.Context(), *setup.Prepared, Approved, nil); result.Status != Running {
+		t.Fatalf("setup = %#v", result)
+	}
+
+	for _, test := range []struct {
+		name       string
+		busy       bool
+		status     Status
+		lock       string
+		correction string
+	}{
+		{"idle", false, ProblemDetected, "Available", "Restore the exact installed SBXR Release Identity"},
+		{"active mutation", true, ChangeInProgress, "In use", "Wait for the active atomic mutation"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			host.statusBusy = test.busy
+			review := newInstalledInterface(mismatchedLifecycle{}, host, acceptedSingBox{}).Review(t.Context(), ViewDetailsAction)
+			details := strings.Join(review.Details, "\n")
+			if review.Status != test.status {
+				t.Fatalf("status = %s, want %s", review.Status, test.status)
+			}
+			for _, required := range []string{
+				"Ownership Record: Valid; phase Running; cleanup checkpoint 0",
+				"Mutation lock: " + test.lock,
+				"Public endpoint: 8.8.8.8:443",
+				"Selected destination: microsoft.com:443",
+				"Server name: microsoft.com",
+				test.correction,
+			} {
+				if !strings.Contains(details, required) {
+					t.Errorf("details missing %q:\n%s", required, details)
+				}
+			}
+			if strings.Contains(details, "Invalid or unsafe") {
+				t.Fatalf("valid Ownership Record was reported invalid:\n%s", details)
+			}
+		})
+	}
+}
+
+func TestViewDetailsKeepsOwnershipProblemsCompleteAndSecretSafe(t *testing.T) {
+	host := acceptedHost()
+	host.ownership = []byte(`{"client_uuid":"11111111-2222-4333-8444-555555555555"}`)
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+
+	review := installation.Review(t.Context(), ViewDetailsAction)
+	details := strings.Join(review.Details, "\n")
+	for _, required := range []string{
+		"SBXR version: v3.0.0",
+		"Release Identity: albertloky/SBXR v3.0.0",
+		"Ubuntu: 24.04 amd64",
+		"Proxy Installation Status: Problem detected",
+		"Mutation lock: Available",
+		"Ownership Record: Invalid or unsafe; checkpoint unavailable",
+		"Proxy Package Identity:",
+		"Public endpoint: Unavailable",
+		"Selected destination: Unavailable",
+		"Server name: Unavailable",
+		"Client Identity: Absent",
+		"Safe correction: Restore the exact root-owned schema-1 Ownership Record from the active Release Identity, then inspect again.",
+	} {
+		if !strings.Contains(details, required) {
+			t.Errorf("details missing %q:\n%s", required, details)
+		}
+	}
+	if strings.Contains(details, "11111111-2222-4333-8444-555555555555") {
+		t.Fatalf("details disclosed invalid record bytes:\n%s", details)
+	}
+}
+
+func TestActiveMutationDetailsStayCompleteWhenOwnershipIsInvalid(t *testing.T) {
+	host := acceptedHost()
+	host.statusBusy = true
+	host.ownership = []byte(`not-json`)
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+
+	review := installation.Review(t.Context(), ViewDetailsAction)
+	details := strings.Join(review.Details, "\n")
+	for _, required := range []string{
+		"Ubuntu: 24.04 amd64",
+		"Proxy Installation Status: Change in progress",
+		"Mutation lock: In use",
+		"Ownership Record: Invalid or unsafe; checkpoint unavailable",
+		"Proxy Package Identity:",
+		"Public endpoint: Unavailable",
+		"Safe correction: Wait for the active atomic mutation and checkpoint to finish, then inspect again.",
+	} {
+		if !strings.Contains(details, required) {
+			t.Errorf("details missing %q:\n%s", required, details)
 		}
 	}
 }

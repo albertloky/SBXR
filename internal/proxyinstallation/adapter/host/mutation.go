@@ -66,8 +66,23 @@ type OperationResult struct {
 	Observed bool
 }
 
+type Observation struct {
+	Observed bool
+	Accepted bool
+}
+
 type RunningInspection struct {
-	Ownership, TransactionFilesAbsent, APTKey, APTSource, Package, Hold, PackageIdentity, Configuration, State, Validation, ServiceProvenance, ServiceEnabled, ServiceActive, Listener bool
+	OSID, OSVersion, Architecture, PublicIPv4 string
+	Host, PublicIPv4Matches                   Observation
+	Ownership, TransactionFilesAbsent         Observation
+	APTKey, APTSource, Package, Hold          Observation
+	PackageIdentity, Configuration, State     Observation
+	Validation, ServiceProvenance             Observation
+	ServiceEnabled, ServiceActive, Listener   Observation
+}
+
+func observation(accepted, observed bool) Observation {
+	return Observation{Observed: observed, Accepted: observed && accepted}
 }
 
 type ActivationInspection struct {
@@ -330,6 +345,8 @@ func serviceStopped(load, enabled, active, process, listener OperationResult, pa
 }
 
 func (adapter Adapter) InspectRunning(ctx context.Context, spec SetupSpec, sourceBody, ownership []byte, configurationDigest, publicIPv4 string) RunningInspection {
+	osID, osVersion := adapter.osRelease()
+	observedPublicIPv4 := adapter.publicIPv4(ctx)
 	current, err := adapter.ReadOwnership(spec.OwnershipPath)
 	packageResult := adapter.command(ctx, "dpkg-query", "--show", "--showformat=${Version} ${Architecture} ${db:Status-Abbrev}", spec.PackageName)
 	hold := adapter.command(ctx, "apt-mark", "showhold")
@@ -344,23 +361,43 @@ func (adapter Adapter) InspectRunning(ctx context.Context, spec SetupSpec, sourc
 	enabled := adapter.command(ctx, "systemctl", "is-enabled", spec.Service)
 	active := adapter.command(ctx, "systemctl", "is-active", spec.Service)
 	listener := adapter.command(ctx, "ss", "-H", "-ltnp", "sport", "=", ":"+spec.ListenerPort)
+	aptKey, aptKeyObserved := adapter.boundFileInspection(spec.APTKeyPath, spec.APTKeySHA256, 0o644, 1<<20)
+	aptSource, aptSourceObserved := adapter.boundFileInspection(spec.APTSourcePath, digest(sourceBody), 0o644, 4096)
+	configuration, configurationObserved := adapter.boundFileGroupInspection(spec.ConfigurationPath, configurationDigest, 0o640, 1<<20, groupGID, groupIDOK)
 	return RunningInspection{
-		Ownership: bytes.Equal(current, ownership) && err == nil,
-		TransactionFilesAbsent: adapter.filesAbsent(spec.OwnershipNextPath, spec.PackageArtifactPath,
-			spec.APTKeyPath+".sbxr-next", spec.APTSourcePath+".sbxr-next"),
-		APTKey:            adapter.boundFileMatches(spec.APTKeyPath, spec.APTKeySHA256, 0o644, 1<<20),
-		APTSource:         adapter.boundFileMatches(spec.APTSourcePath, digest(sourceBody), 0o644, 4096),
-		Package:           packageResult.OK && packageResult.Fact == spec.PackageVersion+" "+spec.Architecture+" ii",
-		Hold:              slicesContains(strings.Fields(hold.Fact), spec.PackageName),
-		PackageIdentity:   user.OK && group.OK && userIDsOK && groupIDOK && userGID == groupGID,
-		Configuration:     adapter.boundFileMatchesGroup(spec.ConfigurationPath, configurationDigest, 0o640, 1<<20, groupGID, groupIDOK),
-		State:             stateErr == nil && stateStatOK && stateInfo.IsDir() && stateInfo.Mode().Perm() == 0o750 && stateInfo.Mode()&os.ModeSymlink == 0 && userIDsOK && groupIDOK && stateStat.Uid == userUID && stateStat.Gid == groupGID,
-		Validation:        validation.OK,
-		ServiceProvenance: provenance.OK && strings.HasPrefix(provenance.Fact, spec.PackageName+":"),
-		ServiceEnabled:    enabled.OK && enabled.Fact == "enabled",
-		ServiceActive:     active.OK && active.Fact == "active",
-		Listener:          listener.OK && strings.Contains(listener.Fact, spec.PackageName) && (strings.Contains(listener.Fact, publicIPv4+":"+spec.ListenerPort) || strings.Contains(listener.Fact, "*:"+spec.ListenerPort) || strings.Contains(listener.Fact, "[::]:"+spec.ListenerPort)),
+		OSID: osID, OSVersion: osVersion, Architecture: adapter.architecture, PublicIPv4: observedPublicIPv4,
+		Host:              observation(osID == "ubuntu" && osVersion == "24.04" && adapter.architecture == spec.Architecture, osID != "" && osVersion != "" && adapter.architecture != ""),
+		PublicIPv4Matches: observation(observedPublicIPv4 == publicIPv4, observedPublicIPv4 != ""),
+		Ownership:         observation(bytes.Equal(current, ownership) && err == nil, err == nil || errors.Is(err, os.ErrNotExist)),
+		TransactionFilesAbsent: observation(adapter.filesAbsent(spec.OwnershipNextPath, spec.PackageArtifactPath,
+			spec.APTKeyPath+".sbxr-next", spec.APTSourcePath+".sbxr-next"), adapter.pathsObserved(spec.OwnershipNextPath, spec.PackageArtifactPath, spec.APTKeyPath+".sbxr-next", spec.APTSourcePath+".sbxr-next")),
+		APTKey:            observation(aptKey, aptKeyObserved),
+		APTSource:         observation(aptSource, aptSourceObserved),
+		Package:           observation(packageResult.OK && packageResult.Fact == spec.PackageVersion+" "+spec.Architecture+" ii", packageResult.Observed),
+		Hold:              observation(slicesContains(strings.Fields(hold.Fact), spec.PackageName), hold.Observed),
+		PackageIdentity:   observation(user.OK && group.OK && userIDsOK && groupIDOK && userGID == groupGID, user.Observed && group.Observed),
+		Configuration:     observation(configuration, configurationObserved && group.Observed),
+		State:             observation(stateErr == nil && stateStatOK && stateInfo.IsDir() && stateInfo.Mode().Perm() == 0o750 && stateInfo.Mode()&os.ModeSymlink == 0 && userIDsOK && groupIDOK && stateStat.Uid == userUID && stateStat.Gid == groupGID, (stateErr == nil || errors.Is(stateErr, os.ErrNotExist)) && user.Observed && group.Observed),
+		Validation:        observation(validation.OK, validation.Observed || validation.OK),
+		ServiceProvenance: observation(provenance.OK && strings.HasPrefix(provenance.Fact, spec.PackageName+":"), provenance.Observed),
+		ServiceEnabled:    observation(enabled.OK && enabled.Fact == "enabled", enabled.Observed),
+		ServiceActive:     observation(active.OK && active.Fact == "active", active.Observed),
+		Listener:          observation(listener.OK && strings.Contains(listener.Fact, spec.PackageName) && (strings.Contains(listener.Fact, publicIPv4+":"+spec.ListenerPort) || strings.Contains(listener.Fact, "*:"+spec.ListenerPort) || strings.Contains(listener.Fact, "[::]:"+spec.ListenerPort)), listener.Observed),
 	}
+}
+
+func (adapter Adapter) pathObserved(name string) bool {
+	_, err := os.Lstat(adapter.path(name))
+	return err == nil || errors.Is(err, os.ErrNotExist)
+}
+
+func (adapter Adapter) pathsObserved(names ...string) bool {
+	for _, name := range names {
+		if !adapter.pathObserved(name) {
+			return false
+		}
+	}
+	return true
 }
 
 func exactPackageIdentity(fact string, spec SetupSpec) bool {
@@ -476,26 +513,46 @@ func (adapter Adapter) removeBoundFile(name, expectedDigest string, mode os.File
 }
 
 func (adapter Adapter) boundFileMatches(name, expectedDigest string, mode os.FileMode, limit int64) bool {
+	matches, _ := adapter.boundFileInspection(name, expectedDigest, mode, limit)
+	return matches
+}
+
+func (adapter Adapter) boundFileInspection(name, expectedDigest string, mode os.FileMode, limit int64) (bool, bool) {
 	path := adapter.path(name)
 	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, true
+	}
 	stat, ok := infoSys(info)
 	if err != nil || !ok || !info.Mode().IsRegular() || info.Mode().Perm() != mode || stat.Uid != adapter.ownerUID() || stat.Nlink != 1 || info.Size() <= 0 || info.Size() > limit {
-		return false
+		return false, err == nil
 	}
 	body, err := os.ReadFile(path)
-	if err != nil || digest(body) != expectedDigest {
-		return false
+	if err != nil {
+		return false, false
 	}
-	return true
+	return digest(body) == expectedDigest, true
 }
 
 func (adapter Adapter) boundFileMatchesGroup(name, expectedDigest string, mode os.FileMode, limit int64, gid uint32, gidOK bool) bool {
-	if !gidOK || !adapter.boundFileMatches(name, expectedDigest, mode, limit) {
-		return false
+	matches, _ := adapter.boundFileGroupInspection(name, expectedDigest, mode, limit, gid, gidOK)
+	return matches
+}
+
+func (adapter Adapter) boundFileGroupInspection(name, expectedDigest string, mode os.FileMode, limit int64, gid uint32, gidOK bool) (bool, bool) {
+	matches, observed := adapter.boundFileInspection(name, expectedDigest, mode, limit)
+	if !gidOK || !matches {
+		return false, observed
 	}
 	info, err := os.Lstat(adapter.path(name))
+	if err != nil {
+		return false, false
+	}
 	stat, ok := infoSys(info)
-	return err == nil && ok && stat.Gid == gid
+	if !ok {
+		return false, true
+	}
+	return stat.Gid == gid, true
 }
 
 func (adapter Adapter) removeSafeFile(name string, limit int64) bool {
@@ -590,9 +647,9 @@ func slicesContains(values []string, value string) bool {
 
 func typed(result OperationResult, fact string) OperationResult {
 	if !result.OK {
-		return OperationResult{}
+		return OperationResult{Code: result.Code, Observed: result.Observed}
 	}
-	return OperationResult{OK: true, Fact: fact}
+	return OperationResult{OK: true, Fact: fact, Observed: true}
 }
 
 func accountIDs(entry string) (uint32, uint32, bool) {

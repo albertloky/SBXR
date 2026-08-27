@@ -262,32 +262,57 @@ func (module *installedInterface) Review(ctx context.Context, action Action) Rev
 				review.LegalActions = []Action{ViewDetailsAction}
 				review.Result = Result{Status: ChangeInProgress, Message: "Another Proxy Installation change is in progress.", Code: StatusChangeInProgress}
 				review.Details = []string{"Proxy Installation Status: Change in progress", "Safe correction: Wait for the current atomic mutation and checkpoint to finish."}
+				if action == ViewDetailsAction {
+					body, err := module.host.ReadOwnership(hostSetupSpec.OwnershipPath)
+					if err == nil {
+						if record, ok := decodeOwnership(body); ok {
+							facts := module.host.InspectRunning(ctx, hostSetupSpec, aptSourceBody, body, record.ConfigurationSHA256, record.PublicIPv4)
+							review.Details = ownedDetails(installed, installedReady, ChangeInProgress, record, facts, "In use")
+							if !installedReady || record.Release != installed {
+								review.Details = append(review.Details, "Detected mismatch: the Ownership Record does not match the active SBXR Release Identity", "Safe correction: Wait for the active atomic mutation and checkpoint to finish, then inspect again.")
+							}
+						} else {
+							review.Details = module.problemDetails(ctx, installed, installedReady, ChangeInProgress, "In use", "Invalid or unsafe; checkpoint unavailable", "the Ownership Record is invalid or unsafe during the active mutation", "Wait for the active atomic mutation and checkpoint to finish, then inspect again.")
+						}
+					} else {
+						ownership := "Unavailable; checkpoint unavailable"
+						if errors.Is(err, os.ErrNotExist) {
+							ownership = "Absent before the first durable checkpoint"
+						}
+						review.Details = module.problemDetails(ctx, installed, installedReady, ChangeInProgress, "In use", ownership, "the Ownership Record checkpoint is not available during the active mutation", "Wait for the active atomic mutation and checkpoint to finish, then inspect again.")
+					}
+				}
 				return review
 			}
-			return ownershipProblem(review, installed, installedReady, "The shared mutation lock is invalid or unsafe.")
+			return module.ownershipProblem(ctx, review, installed, installedReady, "Invalid or unsafe", "Unavailable while the mutation lock is unsafe", "the shared mutation lock is invalid or unsafe", "Replace /run/lock/sbxr.lock with a root-owned mode-0600 regular file, then inspect again.")
 		}
 		body, err := module.host.ReadOwnership(hostSetupSpec.OwnershipPath)
 		if err == nil {
 			record, ok := decodeOwnership(body)
 			if !ok {
-				return ownershipProblem(review, installed, installedReady, "The Ownership Record is invalid or unsafe.")
+				return module.ownershipProblem(ctx, review, installed, installedReady, "Available", "Invalid or unsafe; checkpoint unavailable", "the Ownership Record is invalid or unsafe", "Restore the exact root-owned schema-1 Ownership Record from the active Release Identity, then inspect again.")
 			}
 			return module.reviewOwned(ctx, action, review, record, body, installed, installedReady)
 		}
 		if !errors.Is(err, os.ErrNotExist) {
-			return ownershipProblem(review, installed, installedReady, "The Ownership Record cannot be safely inspected.")
+			return module.ownershipProblem(ctx, review, installed, installedReady, "Available", "Unavailable; checkpoint unavailable", "the Ownership Record cannot be safely inspected", "Restore read-only root access to /var/lib/sbxr/proxy-ownership.json, then inspect again.")
 		}
 	}
 	inspection := hostadapter.Inspection{}
+	var unownedFacts *hostadapter.RunningInspection
 	if module.host != nil {
 		inspection = module.host.Inspect(ctx, slices.Clone(footprint))
+		if action == ViewDetailsAction {
+			facts := module.host.InspectRunning(ctx, hostSetupSpec, aptSourceBody, nil, "", "")
+			unownedFacts = &facts
+		}
 	}
-	review.Details = inspectionDetails(installed, installedReady, NotSetUp, inspection)
+	review.Details = inspectionDetails(installed, installedReady, NotSetUp, inspection, unownedFacts, nil, true)
 	if module.host == nil || module.singbox == nil || !inspectionAccepted(inspection) || resourcesPresent(inspection.Resources) {
 		review.Status = ProblemDetected
 		review.LegalActions = []Action{ViewDetailsAction, CompleteRemovalAction}
 		review.Result = Result{Status: ProblemDetected, Message: "A proxy problem was detected. View details before continuing.", Code: StatusProblemDetected}
-		review.Details = inspectionDetails(installed, installedReady, ProblemDetected, inspection)
+		review.Details = inspectionDetails(installed, installedReady, ProblemDetected, inspection, unownedFacts, nil, true)
 		switch action {
 		case StatusAction, ViewDetailsAction:
 			return review
@@ -337,7 +362,12 @@ func (module *installedInterface) Review(ctx context.Context, action Action) Rev
 
 func (module *installedInterface) reviewOwned(ctx context.Context, action Action, review Review, record ownershipRecord, body []byte, installed softwarelifecycle.ReleaseIdentity, installedReady bool) Review {
 	if !installedReady || record.Release != installed {
-		return ownershipProblem(review, installed, installedReady, "The Ownership Record does not match the active SBXR Release Identity.")
+		facts := module.host.InspectRunning(ctx, hostSetupSpec, aptSourceBody, body, record.ConfigurationSHA256, record.PublicIPv4)
+		review.Status = ProblemDetected
+		review.LegalActions = []Action{ViewDetailsAction}
+		review.Result = Result{Status: ProblemDetected, Message: "A proxy problem was detected. View details before continuing.", Code: StatusProblemDetected}
+		review.Details = append(ownedDetails(installed, installedReady, ProblemDetected, record, facts, "Available"), "Detected mismatch: the Ownership Record does not match the active SBXR Release Identity", "Safe correction: Restore the exact installed SBXR Release Identity recorded by the valid Ownership Record, then inspect again.")
+		return review
 	}
 	review.Status = SetupIncomplete
 	review.Result = Result{Status: SetupIncomplete, Message: "Proxy setup was interrupted and must be finished safely.", Code: SetupNeedsCleanup}
@@ -347,22 +377,27 @@ func (module *installedInterface) reviewOwned(ctx context.Context, action Action
 		review.LegalActions = []Action{FinishSetupAction, ViewDetailsAction}
 	}
 	inspection := hostadapter.Inspection{}
+	facts := hostadapter.RunningInspection{}
+	if record.Phase == runningPhase || action == ViewDetailsAction {
+		facts = module.host.InspectRunning(ctx, hostSetupSpec, aptSourceBody, body, record.ConfigurationSHA256, record.PublicIPv4)
+	}
 	if record.Phase == runningPhase {
-		facts := module.host.InspectRunning(ctx, hostSetupSpec, aptSourceBody, body, record.ConfigurationSHA256, record.PublicIPv4)
 		if runningAccepted(facts) {
 			review.Status = Running
 			review.Result = Result{Status: Running, Message: "Proxy setup is complete and locally verified.", Code: SetupComplete}
 			review.LegalActions = []Action{ViewDetailsAction, CompleteRemovalAction}
 		} else {
-			return ownershipProblem(review, installed, installedReady, "The locally Running facts no longer match the Ownership Record.")
+			review.Status = ProblemDetected
+			review.Result = Result{Status: ProblemDetected, Message: "A proxy problem was detected. View details before continuing.", Code: StatusProblemDetected}
+			review.LegalActions = []Action{ViewDetailsAction, CompleteRemovalAction}
 		}
 	} else {
 		inspection = module.host.Inspect(ctx, slices.Clone(footprint))
 		if !inspectionAccepted(inspection) {
-			return ownershipProblem(review, installed, installedReady, "The owned proxy footprint could not be freshly inspected.")
+			return module.ownershipProblem(ctx, review, installed, installedReady, "Available", fmt.Sprintf("Valid; phase %s; cleanup checkpoint %d", record.Phase, record.CleanupCheckpoint), "the owned proxy footprint could not be freshly inspected", "Restore read-only inspection of every fixed V3 proxy resource, then inspect again.")
 		}
 	}
-	review.Details = ownedDetails(installed, installedReady, review.Status, record)
+	review.Details = ownedDetails(installed, installedReady, review.Status, record, facts, "Available")
 	if action == StatusAction || action == ViewDetailsAction {
 		return review
 	}
@@ -385,35 +420,130 @@ func (module *installedInterface) reviewOwned(ctx context.Context, action Action
 	return review
 }
 
-func ownershipProblem(review Review, installed softwarelifecycle.ReleaseIdentity, installedReady bool, detail string) Review {
+func (module *installedInterface) ownershipProblem(ctx context.Context, review Review, installed softwarelifecycle.ReleaseIdentity, installedReady bool, lock, ownership, detail, correction string) Review {
 	review.Status = ProblemDetected
 	review.LegalActions = []Action{ViewDetailsAction}
 	review.Result = Result{Status: ProblemDetected, Message: "A proxy problem was detected. View details before continuing.", Code: StatusProblemDetected}
-	review.Details = []string{detail, "Safe correction: Restore the exact root-owned Ownership Record or use a qualified recovery procedure."}
+	review.Details = module.problemDetails(ctx, installed, installedReady, ProblemDetected, lock, ownership, detail, correction)
 	if installedReady {
 		review.Version = installed.Tag
 	}
 	return review
 }
 
-func ownedDetails(installed softwarelifecycle.ReleaseIdentity, installedReady bool, status Status, record ownershipRecord) []string {
+func (module *installedInterface) problemDetails(ctx context.Context, installed softwarelifecycle.ReleaseIdentity, installedReady bool, status Status, lock, ownership, detail, correction string) []string {
+	inspection := module.host.Inspect(ctx, slices.Clone(footprint))
+	facts := module.host.InspectRunning(ctx, hostSetupSpec, aptSourceBody, nil, "", "")
+	configurationPresent := resourcePresent(inspection.Resources, "/etc/sing-box")
+	overrides := &detailOverrides{
+		direction: "Unavailable", lock: lock, ownership: ownership,
+		clientIdentity: present(configurationPresent), publicEndpoint: "Unavailable",
+		destination: "Unavailable", serverName: "Unavailable",
+	}
+	details := inspectionDetails(installed, installedReady, status, inspection, &facts, overrides, false)
+	return append(details, "Detected mismatch: "+detail, "Safe correction: "+correction)
+}
+
+func ownedDetails(installed softwarelifecycle.ReleaseIdentity, installedReady bool, status Status, record ownershipRecord, facts hostadapter.RunningInspection, lock string) []string {
 	version, release := "Unavailable", "Unavailable"
 	if installedReady {
 		version = installed.Tag
 		release = fmt.Sprintf("%s %s %s %s", installed.Repository, installed.Tag, installed.Commit, installed.IndexSHA256)
 	}
-	return []string{
+	details := []string{
 		"SBXR version: " + version,
 		"Release Identity: " + release,
+		"Ubuntu: " + ubuntu(facts),
 		"Proxy Installation Status: " + string(status),
-		"Current setup phase: " + string(record.Phase),
 		"Required unfinished direction: " + string(record.Direction),
-		"Ownership Record: Present and verified",
+		"Mutation lock: " + lock,
+		fmt.Sprintf("Ownership Record: Valid; phase %s; cleanup checkpoint %d", record.Phase, record.CleanupCheckpoint),
+		"Proxy Package Identity: " + proxyPackageIdentity() + "; " + observationMatch(all(facts.APTKey, facts.APTSource, facts.Package)),
+		"Package hold: " + observationPresence(facts.Hold),
+		"Protected configuration identity: /etc/sing-box/config.json SHA-256 " + record.ConfigurationSHA256 + "; " + observationMatch(facts.Configuration),
+		"Packaged validation result: " + observationAcceptance(facts.Validation),
+		"systemd unit provenance: /lib/systemd/system/sing-box.service from sing-box; " + observationMatch(facts.ServiceProvenance),
+		"Service enabled: " + observationYesNo(facts.ServiceEnabled),
+		"Service active: " + observationYesNo(facts.ServiceActive),
+		"Expected public listener ownership: sing-box on TCP " + record.PublicIPv4 + ":443; " + observationMatch(facts.Listener),
+		"Public endpoint: " + record.PublicIPv4 + ":443",
+		"Selected destination: " + record.DestinationAddress,
+		"Server name: " + record.DestinationName,
+		"Client Identity: " + present(facts.Configuration.Accepted),
 		"Running is local VPS truth only; outside-client traffic is not claimed.",
 	}
+	if status != ProblemDetected {
+		return details
+	}
+	checks := []struct {
+		fact        hostadapter.Observation
+		unavailable string
+		accepted    bool
+		mismatch    string
+		correction  string
+		observe     string
+	}{
+		{facts.Host, "Ubuntu version and architecture", facts.Host.Accepted, "the host is not Ubuntu 24.04 amd64", "Use the V3 installation only on Ubuntu Server 24.04 amd64, then inspect again.", "Restore read-only access to /etc/os-release, then inspect again."},
+		{facts.PublicIPv4Matches, "public IPv4", facts.PublicIPv4Matches.Accepted, "the current public IPv4 does not match the Ownership Record", "Restore the recorded public IPv4 to this VPS, then inspect again.", "Restore HTTPS access to https://api.ipify.org, then inspect again."},
+		{facts.Ownership, "Ownership Record", facts.Ownership.Accepted, "the Ownership Record changed during inspection", "Restore the exact valid Ownership Record checkpoint, then inspect again.", "Restore read-only access to /var/lib/sbxr/proxy-ownership.json, then inspect again."},
+		{facts.TransactionFilesAbsent, "transaction files", facts.TransactionFilesAbsent.Accepted, "unfinished transaction material is present after Running", "Remove only the proved V3 transaction files, then inspect again.", "Restore read-only access to the four fixed V3 transaction paths, then inspect again."},
+		{facts.APTKey, "APT signing key", facts.APTKey.Accepted, "the SagerNet signing key identity does not match", "Restore /etc/apt/keyrings/sagernet.asc from the qualified package identity, then inspect again.", "Restore read-only access to /etc/apt/keyrings/sagernet.asc, then inspect again."},
+		{facts.APTSource, "APT source", facts.APTSource.Accepted, "the SagerNet APT source identity does not match", "Restore /etc/apt/sources.list.d/sagernet.sources to the exact qualified source, then inspect again.", "Restore read-only access to /etc/apt/sources.list.d/sagernet.sources, then inspect again."},
+		{facts.Package, "proxy package", facts.Package.Accepted, "the sing-box package identity does not match", "Restore sing-box 1.13.19 amd64 from the qualified DEB, then inspect again.", "Restore working dpkg-query inspection for sing-box, then inspect again."},
+		{facts.Hold, "package hold", facts.Hold.Accepted, "the sing-box package hold is absent", "Apply the package hold to sing-box 1.13.19, then inspect again.", "Restore working apt-mark inspection for sing-box, then inspect again."},
+		{facts.PackageIdentity, "package user and group", facts.PackageIdentity.Accepted, "the sing-box user or group identity does not match", "Restore the package-created sing-box user and group ownership, then inspect again.", "Restore working getent inspection for the sing-box user and group, then inspect again."},
+		{facts.Configuration, "protected configuration", facts.Configuration.Accepted, "the protected configuration identity does not match", "Restore /etc/sing-box/config.json with the recorded SHA-256 and protected ownership, then inspect again.", "Restore read-only access to /etc/sing-box/config.json, then inspect again."},
+		{facts.State, "protected state", facts.State.Accepted, "the protected sing-box state identity does not match", "Restore /var/lib/sing-box with the package-created sing-box ownership and mode 0750, then inspect again.", "Restore read-only access to /var/lib/sing-box, then inspect again."},
+		{facts.Validation, "packaged validation", facts.Validation.Accepted, "the packaged configuration validation was refused", "Restore the recorded protected configuration until packaged sing-box check accepts it, then inspect again.", "Restore execution of the packaged sing-box check command, then inspect again."},
+		{facts.ServiceProvenance, "systemd unit provenance", facts.ServiceProvenance.Accepted, "sing-box.service does not have package provenance", "Restore /lib/systemd/system/sing-box.service from sing-box 1.13.19, then inspect again.", "Restore working dpkg-query provenance inspection for sing-box.service, then inspect again."},
+		{facts.ServiceEnabled, "service enabled state", facts.ServiceEnabled.Accepted, "sing-box.service is not enabled", "Enable the package-owned sing-box.service, then inspect again.", "Restore working systemctl enabled-state inspection for sing-box.service, then inspect again."},
+		{facts.ServiceActive, "service active state", facts.ServiceActive.Accepted, "sing-box.service is not active", "Start sing-box.service from the exact installed package, then inspect again.", "Restore working systemctl active-state inspection for sing-box.service, then inspect again."},
+		{facts.Listener, "public listener ownership", facts.Listener.Accepted, "TCP port 443 is not owned by the expected sing-box service", "Restore the sing-box listener on the recorded public endpoint, then inspect again.", "Restore working ss inspection for TCP port 443, then inspect again."},
+	}
+	for _, check := range checks {
+		if !check.fact.Observed {
+			details = append(details, "Detected mismatch: "+check.unavailable+" could not be inspected", "Safe correction: "+check.observe)
+		} else if !check.accepted {
+			details = append(details, "Detected mismatch: "+check.mismatch, "Safe correction: "+check.correction)
+		}
+	}
+	return details
 }
 
-func inspectionDetails(installed softwarelifecycle.ReleaseIdentity, installedReady bool, status Status, inspection hostadapter.Inspection) []string {
+func match(ok bool) string {
+	if ok {
+		return "Matches"
+	}
+	return "Mismatch"
+}
+
+func present(ok bool) string {
+	if ok {
+		return "Present"
+	}
+	return "Absent"
+}
+
+func accepted(ok bool) string {
+	if ok {
+		return "Accepted"
+	}
+	return "Refused"
+}
+
+func yesNo(ok bool) string {
+	if ok {
+		return "Yes"
+	}
+	return "No"
+}
+
+type detailOverrides struct {
+	direction, lock, ownership, clientIdentity string
+	publicEndpoint, destination, serverName    string
+}
+
+func inspectionDetails(installed softwarelifecycle.ReleaseIdentity, installedReady bool, status Status, inspection hostadapter.Inspection, facts *hostadapter.RunningInspection, overrides *detailOverrides, reportResourceMismatches bool) []string {
 	version, identity := "Unavailable", "Unavailable"
 	if installedReady {
 		version = installed.Tag
@@ -425,25 +555,120 @@ func inspectionDetails(installed softwarelifecycle.ReleaseIdentity, installedRea
 	}) {
 		ownership = "Present"
 	}
+	direction, lock := "none", "Available"
+	clientIdentity, publicEndpoint := "Absent", "Absent"
+	destination, serverName := "Absent", "Absent"
+	if overrides != nil {
+		direction, lock, ownership = overrides.direction, overrides.lock, overrides.ownership
+		clientIdentity, publicEndpoint = overrides.clientIdentity, overrides.publicEndpoint
+		destination, serverName = overrides.destination, overrides.serverName
+	}
 	details := []string{
 		"SBXR version: " + version,
 		"Release Identity: " + identity,
 		"Proxy Installation Status: " + string(status),
-		"Required unfinished direction: None",
+		"Required unfinished direction: " + direction,
+		"Mutation lock: " + lock,
 		"Ownership Record: " + ownership,
-		"Client Identity: Absent",
+		"Client Identity: " + clientIdentity,
+	}
+	if facts != nil {
+		configuration := resourcePresent(inspection.Resources, "/etc/sing-box")
+		listener := resourcePresent(inspection.Resources, "443")
+		packagePresent := resourcePresent(inspection.Resources, hostSetupSpec.PackageName)
+		details = slices.Insert(details, 2,
+			"Ubuntu: "+ubuntu(*facts),
+		)
+		details = append(details,
+			"Proxy Package Identity: "+proxyPackageIdentity()+"; "+present(packagePresent),
+			"Package hold: "+observationPresence(facts.Hold),
+			"Protected configuration identity: "+present(configuration),
+			"Packaged validation result: "+validationState(facts, configuration),
+			"systemd unit provenance: "+observationPresence(facts.ServiceProvenance),
+			"Service enabled: "+observationYesNo(facts.ServiceEnabled),
+			"Service active: "+observationYesNo(facts.ServiceActive),
+			"Expected public listener ownership: "+listenerState(facts, listener),
+			"Public endpoint: "+publicEndpoint,
+			"Selected destination: "+destination,
+			"Server name: "+serverName,
+		)
+	}
+	if !reportResourceMismatches {
+		return details
 	}
 	for _, resource := range inspection.Resources {
 		if !resource.Observed {
-			details = append(details, "Detected mismatch: "+resource.Name+" could not be inspected")
+			details = append(details, "Detected mismatch: "+resource.Name+" could not be inspected", "Safe correction: Restore read-only inspection of "+resource.Name+", then inspect again.")
 		} else if resource.Present {
-			details = append(details, "Detected mismatch: "+resource.Name+" is present")
+			details = append(details, "Detected mismatch: "+resource.Name+" is present", "Safe correction: Remove only the conflicting "+resource.Name+" resource after proving it is not Owner data, then inspect again.")
 		}
 	}
-	if status == ProblemDetected {
-		return append(details, "Safe correction: Remove or restore every conflicting proxy resource, then inspect again.")
+	return details
+}
+
+func resourcePresent(resources []hostadapter.Resource, name string) bool {
+	return slices.ContainsFunc(resources, func(resource hostadapter.Resource) bool { return resource.Name == name && resource.Present })
+}
+
+func validationState(facts *hostadapter.RunningInspection, applicable bool) string {
+	if !applicable {
+		return "Not applicable"
 	}
-	return append(details, "Safe correction: None")
+	return observationAcceptance(facts.Validation)
+}
+
+func listenerState(facts *hostadapter.RunningInspection, present bool) string {
+	if !facts.Listener.Observed {
+		return "Unavailable"
+	}
+	if !present {
+		return "Absent"
+	}
+	return match(facts.Listener.Accepted)
+}
+
+func observationPresence(fact hostadapter.Observation) string {
+	if !fact.Observed {
+		return "Unavailable"
+	}
+	return present(fact.Accepted)
+}
+
+func ubuntu(facts hostadapter.RunningInspection) string {
+	if !facts.Host.Observed {
+		return "Unavailable"
+	}
+	return facts.OSVersion + " " + facts.Architecture
+}
+
+func observationYesNo(fact hostadapter.Observation) string {
+	if !fact.Observed {
+		return "Unavailable"
+	}
+	return yesNo(fact.Accepted)
+}
+
+func observationMatch(fact hostadapter.Observation) string {
+	if !fact.Observed {
+		return "Unavailable"
+	}
+	return match(fact.Accepted)
+}
+
+func observationAcceptance(fact hostadapter.Observation) string {
+	if !fact.Observed {
+		return "Unavailable"
+	}
+	return accepted(fact.Accepted)
+}
+
+func all(facts ...hostadapter.Observation) hostadapter.Observation {
+	combined := hostadapter.Observation{Observed: true, Accepted: true}
+	for _, fact := range facts {
+		combined.Observed = combined.Observed && fact.Observed
+		combined.Accepted = combined.Accepted && fact.Accepted
+	}
+	return combined
 }
 
 func (module *installedInterface) Execute(ctx context.Context, prepared PreparedAction, confirmation Confirmation, progress ProgressReporter) Result {
@@ -529,9 +754,9 @@ func (module *installedInterface) setupFactsFresh(ctx context.Context, record ow
 	if !ownedFactsAccepted(facts.RunningInspection) || !facts.DestinationCompatible {
 		return false
 	}
-	inactive := !facts.ServiceActive && !facts.Listener && facts.ListenerAvailable
-	running := facts.ServiceEnabled && facts.ServiceActive && facts.Listener
-	return record.Phase == activationCommitted && (inactive || running) || record.Phase == serviceEnabled && facts.ServiceEnabled && (inactive || running)
+	inactive := facts.ServiceActive.Observed && !facts.ServiceActive.Accepted && facts.Listener.Observed && !facts.Listener.Accepted && facts.ListenerAvailable
+	running := facts.ServiceEnabled.Accepted && facts.ServiceActive.Accepted && facts.Listener.Accepted
+	return record.Phase == activationCommitted && (inactive || running) || record.Phase == serviceEnabled && facts.ServiceEnabled.Accepted && (inactive || running)
 }
 
 func (module *installedInterface) runPreCommit(ctx context.Context, record ownershipRecord, body, configuration []byte, progress ProgressReporter) Result {
@@ -572,7 +797,7 @@ func (module *installedInterface) runPreCommit(ctx context.Context, record owner
 		}
 	}
 	destination, _ := acceptedDestination(record.DestinationAddress, record.DestinationName)
-	if facts := module.host.InspectActivation(ctx, hostSetupSpec, aptSourceBody, body, record.ConfigurationSHA256, record.PublicIPv4, destination); !ownedFactsAccepted(facts.RunningInspection) || facts.ServiceEnabled || facts.ServiceActive || facts.Listener || !facts.DestinationCompatible || !facts.ListenerAvailable {
+	if facts := module.host.InspectActivation(ctx, hostSetupSpec, aptSourceBody, body, record.ConfigurationSHA256, record.PublicIPv4, destination); !ownedFactsAccepted(facts.RunningInspection) || facts.ServiceEnabled.Accepted || facts.ServiceActive.Accepted || facts.Listener.Accepted || !facts.DestinationCompatible || !facts.ListenerAvailable {
 		if ctx.Err() != nil {
 			return interruptedCleanup()
 		}
@@ -783,7 +1008,7 @@ func setupPlan(facts hostadapter.Preflight, selected hostadapter.Destination) []
 		"Public endpoint: " + facts.PublicIPv4 + ":443",
 		"Port preflight: " + facts.PublicIPv4 + ":443 accepted a local bind; SBXR does not claim firewall or provider reachability before setup",
 		"REALITY destination: " + selected.Address + " with server_name " + selected.ServerName,
-		"Proxy Package Identity: https://deb.sagernet.org/; signing-key bytes SHA-256 803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1; sing-box 1.13.19 amd64; DEB 24597120 bytes; DEB SHA-256 fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf",
+		"Proxy Package Identity: " + proxyPackageIdentity(),
 		"APT resources: /etc/apt/keyrings/sagernet.asc and /etc/apt/sources.list.d/sagernet.sources",
 		"Protected resources: /etc/sing-box/config.json, /var/lib/sing-box, sing-box.service, and the package-created sing-box user and group",
 		"Ownership Record: /var/lib/sbxr/proxy-ownership.json",
@@ -792,6 +1017,10 @@ func setupPlan(facts hostadapter.Preflight, selected hostadapter.Destination) []
 		"Owned resource groups: exact repository key and source, qualified package and hold, protected configuration and state, service state, and package-created identity",
 		"SBXR will not change SSH, firewall, routing, or provider settings. It preserves every unrelated host resource.",
 	}
+}
+
+func proxyPackageIdentity() string {
+	return fmt.Sprintf("https://deb.sagernet.org/; signing-key bytes SHA-256 %s; %s %s %s; DEB %d bytes; DEB SHA-256 %s", hostSetupSpec.APTKeySHA256, hostSetupSpec.PackageName, hostSetupSpec.PackageVersion, hostSetupSpec.Architecture, hostSetupSpec.PackageSize, hostSetupSpec.PackageSHA256)
 }
 
 func refused(status Status, failed, correction string) Result {
@@ -878,11 +1107,11 @@ func phaseAtOrAfter(phase, boundary setupPhase) bool {
 }
 
 func runningAccepted(facts hostadapter.RunningInspection) bool {
-	return ownedFactsAccepted(facts) && facts.ServiceEnabled && facts.ServiceActive && facts.Listener
+	return facts.Host.Accepted && facts.PublicIPv4Matches.Accepted && ownedFactsAccepted(facts) && facts.ServiceEnabled.Accepted && facts.ServiceActive.Accepted && facts.Listener.Accepted
 }
 
 func ownedFactsAccepted(facts hostadapter.RunningInspection) bool {
-	return facts.Ownership && facts.TransactionFilesAbsent && facts.APTKey && facts.APTSource && facts.Package && facts.Hold && facts.PackageIdentity && facts.Configuration && facts.State && facts.Validation && facts.ServiceProvenance
+	return facts.Ownership.Accepted && facts.TransactionFilesAbsent.Accepted && facts.APTKey.Accepted && facts.APTSource.Accepted && facts.Package.Accepted && facts.Hold.Accepted && facts.PackageIdentity.Accepted && facts.Configuration.Accepted && facts.State.Accepted && facts.Validation.Accepted && facts.ServiceProvenance.Accepted
 }
 
 func report(progress ProgressReporter, phase string) {

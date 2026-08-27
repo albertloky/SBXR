@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/albertloky/SBXR/internal/proxyinstallation"
@@ -133,5 +134,33 @@ func TestRunPresentsBothFinishingJourneysAndProgress(t *testing.T) {
 				t.Fatalf("status=%d output:\n%s", status, output.String())
 			}
 		})
+	}
+}
+
+type detailsInstallation struct{ actions []proxyinstallation.Action }
+
+func (installation *detailsInstallation) Review(_ context.Context, action proxyinstallation.Action) proxyinstallation.Review {
+	installation.actions = append(installation.actions, action)
+	return proxyinstallation.Review{
+		Version: "v3.0.0", Status: proxyinstallation.Running,
+		LegalActions: []proxyinstallation.Action{proxyinstallation.ViewDetailsAction},
+		Details:      []string{"Fresh inspection: 2"},
+		Result:       proxyinstallation.Result{Status: proxyinstallation.Running, Message: "Proxy setup is complete and locally verified.", Code: proxyinstallation.SetupComplete},
+	}
+}
+
+func (*detailsInstallation) Execute(context.Context, proxyinstallation.PreparedAction, proxyinstallation.Confirmation, proxyinstallation.ProgressReporter) proxyinstallation.Result {
+	return proxyinstallation.Result{}
+}
+
+func TestRunViewsFreshDetailsAndReinspectsAfterEnter(t *testing.T) {
+	installation := &detailsInstallation{}
+	var output bytes.Buffer
+
+	status := Run(t.Context(), nil, bytes.NewBufferString("1\n\n0\n"), &output, &output, installation)
+
+	wantActions := []proxyinstallation.Action{proxyinstallation.StatusAction, proxyinstallation.ViewDetailsAction, proxyinstallation.StatusAction}
+	if status != 0 || !reflect.DeepEqual(installation.actions, wantActions) || !strings.Contains(output.String(), "Fresh inspection: 2\nPress Enter to return to the menu.") {
+		t.Fatalf("status=%d actions=%v output:\n%s", status, installation.actions, output.String())
 	}
 }
