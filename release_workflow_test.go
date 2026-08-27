@@ -535,6 +535,11 @@ func TestCandidateRoutesOneV3CandidateThroughPackagedLiveQualification(t *testin
 	if strings.Count(v3Path, `test ! -e "$client_root"`) < 2 {
 		t.Fatal("V3 qualification does not prove outside-client cleanup on success and failure")
 	}
+	for _, mode := range []string{"remote-failure-safety", "remote-setup-and-disclose", "remote-secret-safe", "remote-remove"} {
+		if !strings.Contains(v3Path, "/usr/bin/bash $WORK/v3-packaged-live.sh "+mode) {
+			t.Fatalf("V3 qualification directly executes %s from the noexec /run mount", mode)
+		}
+	}
 	for _, required := range []string{"stable-v3-finalization", "v3-finalization-failure", `v3_packaged_live == "Passed"`, `complete_removal == "Passed"`, "stable-v3-finalization-facts.json", "stable-v3-finalization-decision.json"} {
 		if !strings.Contains(stable, required) {
 			t.Fatalf("stable.yml omitted V3 finalization contract %q", required)

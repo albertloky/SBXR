@@ -270,9 +270,9 @@ scan_runner_capture() {
 }
 
 journey_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-failure_times="$("${remote[@]}" "TAG=$tag SEQUENCE=$sequence COMMIT=$commit INDEX=$index $WORK/v3-packaged-live.sh remote-failure-safety '$tag' '$sequence' '$commit' '$index'")"
+failure_times="$("${remote[@]}" "TAG=$tag SEQUENCE=$sequence COMMIT=$commit INDEX=$index /usr/bin/bash $WORK/v3-packaged-live.sh remote-failure-safety '$tag' '$sequence' '$commit' '$index'")"
 jq -e 'keys == ["after_activation_completed_at","after_removal_completed_at","before_activation_completed_at","clean_footprint_completed_at","ownership_drift_completed_at"]' <<<"$failure_times" >/dev/null
-"${remote[@]}" "TAG=$tag SEQUENCE=$sequence COMMIT=$commit INDEX=$index $WORK/v3-packaged-live.sh remote-setup-and-disclose '$tag' '$sequence' '$commit' '$index'" >"$client_config"
+"${remote[@]}" "TAG=$tag SEQUENCE=$sequence COMMIT=$commit INDEX=$index /usr/bin/bash $WORK/v3-packaged-live.sh remote-setup-and-disclose '$tag' '$sequence' '$commit' '$index'" >"$client_config"
 uninterrupted_completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 chmod 0600 "$client_config"
 jq -e '.inbounds == [{type:"mixed",listen:"127.0.0.1",listen_port:2080}] and (.outbounds | length) == 1' "$client_config" >/dev/null
@@ -318,8 +318,8 @@ test ! -e /dev/shm/sagernet.asc
 test ! -e /dev/shm/sagernet.sources
 runner_cleanup_completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-"${remote[@]}" "$WORK/v3-packaged-live.sh remote-secret-safe '$tag' '$sequence' '$commit' '$index'"
-"${remote[@]}" "$WORK/v3-packaged-live.sh remote-remove '$tag' '$sequence' '$commit' '$index'"
+"${remote[@]}" "/usr/bin/bash $WORK/v3-packaged-live.sh remote-secret-safe '$tag' '$sequence' '$commit' '$index'"
+"${remote[@]}" "/usr/bin/bash $WORK/v3-packaged-live.sh remote-remove '$tag' '$sequence' '$commit' '$index'"
 complete_removal_completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 observed_at="$complete_removal_completed_at"
 manifest_sha256="$(sha256sum "$manifest" | cut -d' ' -f1)"
