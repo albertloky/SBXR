@@ -532,6 +532,12 @@ func TestCandidateRoutesOneV3CandidateThroughPackagedLiveQualification(t *testin
 	if strings.Contains(v3Path, "client_root=/dev/shm/") {
 		t.Fatal("V3 qualification executes the outside client from the runner's noexec /dev/shm mount")
 	}
+	if strings.Contains(v3Path, "test \"$(grep -Fxc \"$expected\" <<<\"$output\")\" -eq 1\n  test \"$(grep '^Code: ' <<<\"$output\" | tail -1)\" = \"$expected\"") {
+		t.Fatal("V3 qualification rejects retained result codes when the numbered menu rerenders")
+	}
+	if !strings.Contains(v3Path, `grep '^Code: ' <<<"$output" | tail -1`) {
+		t.Fatal("V3 qualification does not require the final emitted Code to match the expected result")
+	}
 	if strings.Count(v3Path, `test ! -e "$client_root"`) < 2 {
 		t.Fatal("V3 qualification does not prove outside-client cleanup on success and failure")
 	}

@@ -54,7 +54,6 @@ run_action() {
   number="$(menu_number "$label")"
   test -n "$number"
   output="$(printf '%s\n' "$number" "$input" 0 | /usr/local/bin/sbxr)"
-  test "$(grep -Fxc "$expected" <<<"$output")" -eq 1
   test "$(grep '^Code: ' <<<"$output" | tail -1)" = "$expected"
   scan_vps_capture <(printf '%s' "$output")
 }
