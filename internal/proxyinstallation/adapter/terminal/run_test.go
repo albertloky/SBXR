@@ -82,3 +82,56 @@ func TestRunRejectsNonCanonicalMenuNumbers(t *testing.T) {
 		t.Fatalf("status=%d confirmations=%v output:\n%s", status, installation.confirmations, output.String())
 	}
 }
+
+type finishingInstallation struct {
+	action proxyinstallation.Action
+	done   bool
+}
+
+func (installation *finishingInstallation) Review(_ context.Context, action proxyinstallation.Action) proxyinstallation.Review {
+	if installation.done {
+		status := proxyinstallation.NotSetUp
+		code := proxyinstallation.SetupCleanedUp
+		message := "Setup was safely cleaned up. No proxy resources remain."
+		if installation.action == proxyinstallation.FinishSetupAction {
+			status, code, message = proxyinstallation.Running, proxyinstallation.SetupComplete, "Proxy setup is complete and locally verified."
+		}
+		return proxyinstallation.Review{Version: "v3.0.0", Status: status, LegalActions: []proxyinstallation.Action{proxyinstallation.ViewDetailsAction}, Result: proxyinstallation.Result{Status: status, Code: code, Message: message}}
+	}
+	review := proxyinstallation.Review{Version: "v3.0.0", Status: proxyinstallation.SetupIncomplete, LegalActions: []proxyinstallation.Action{installation.action, proxyinstallation.ViewDetailsAction}, Result: proxyinstallation.Result{Status: proxyinstallation.SetupIncomplete, Code: proxyinstallation.SetupNeedsCleanup, Message: "Proxy setup was interrupted and must be finished safely."}}
+	if action == installation.action {
+		review.Prepared = &proxyinstallation.PreparedAction{}
+	}
+	return review
+}
+
+func (installation *finishingInstallation) Execute(_ context.Context, _ proxyinstallation.PreparedAction, confirmation proxyinstallation.Confirmation, progress proxyinstallation.ProgressReporter) proxyinstallation.Result {
+	if confirmation != proxyinstallation.Approved {
+		return proxyinstallation.Result{Status: proxyinstallation.SetupIncomplete, Code: proxyinstallation.ActionCancelled, Message: "No changes were made."}
+	}
+	progress(proxyinstallation.Progress{Phase: "Durable finishing checkpoint"})
+	installation.done = true
+	if installation.action == proxyinstallation.FinishSetupAction {
+		return proxyinstallation.Result{Status: proxyinstallation.Running, Code: proxyinstallation.SetupComplete, Message: "Proxy setup is complete and locally verified."}
+	}
+	return proxyinstallation.Result{Status: proxyinstallation.NotSetUp, Code: proxyinstallation.SetupCleanedUp, Message: "Setup was safely cleaned up. No proxy resources remain."}
+}
+
+func TestRunPresentsBothFinishingJourneysAndProgress(t *testing.T) {
+	for _, test := range []struct {
+		action proxyinstallation.Action
+		prompt string
+	}{
+		{proxyinstallation.FinishCleanupAction, "Finish proxy cleanup? [y/N]"},
+		{proxyinstallation.FinishSetupAction, "Finish proxy setup? [y/N]"},
+	} {
+		t.Run(string(test.action), func(t *testing.T) {
+			installation := &finishingInstallation{action: test.action}
+			var output bytes.Buffer
+			status := Run(t.Context(), nil, bytes.NewBufferString("1\ny\n0\n"), &output, &output, installation)
+			if status != 0 || !bytes.Contains(output.Bytes(), []byte(test.prompt)) || !bytes.Contains(output.Bytes(), []byte("Progress: Durable finishing checkpoint")) {
+				t.Fatalf("status=%d output:\n%s", status, output.String())
+			}
+		})
+	}
+}

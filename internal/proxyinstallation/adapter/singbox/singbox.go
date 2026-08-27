@@ -7,8 +7,11 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"net"
 	"regexp"
+	"strconv"
 )
 
 type Identity struct {
@@ -53,4 +56,34 @@ func (Adapter) ValidIdentity(identity Identity) bool {
 	}
 	private, err := ecdh.X25519().NewPrivateKey(privateBytes)
 	return err == nil && subtle.ConstantTimeCompare(private.PublicKey().Bytes(), publicBytes) == 1
+}
+
+func (adapter Adapter) EncodeServerConfiguration(identity Identity, destinationAddress, serverName string) ([]byte, error) {
+	host, portText, err := net.SplitHostPort(destinationAddress)
+	port, portErr := strconv.Atoi(portText)
+	if err != nil || portErr != nil || port < 1 || port > 65535 || serverName == "" || !adapter.ValidIdentity(identity) {
+		return nil, fmt.Errorf("server configuration refused")
+	}
+	configuration := map[string]any{
+		"log": map[string]any{"level": "warn", "timestamp": true},
+		"inbounds": []any{map[string]any{
+			"type": "vless", "tag": "vless-in", "listen": "::", "listen_port": 443,
+			"users": []any{map[string]any{"uuid": identity.UUID, "flow": "xtls-rprx-vision"}},
+			"tls": map[string]any{
+				"enabled": true, "server_name": serverName,
+				"reality": map[string]any{
+					"enabled":     true,
+					"handshake":   map[string]any{"server": host, "server_port": port},
+					"private_key": identity.PrivateKey,
+					"short_id":    []string{identity.ShortID},
+				},
+			},
+		}},
+		"outbounds": []any{map[string]any{"type": "direct", "tag": "direct"}},
+	}
+	body, err := json.Marshal(configuration)
+	if err != nil {
+		return nil, err
+	}
+	return append(body, '\n'), nil
 }

@@ -7,6 +7,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 	githubadapter "github.com/albertloky/SBXR/internal/softwarelifecycle/adapter/github"
@@ -18,5 +20,11 @@ func main() {
 		os.Exit(1)
 	}
 	lifecycle := softwarelifecycle.NewInstalled(githubadapter.New())
-	os.Exit(run(context.Background(), os.Args[1:], os.Stdin, os.Stdout, os.Stderr, lifecycle))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		_ = os.Stdin.Close()
+	}()
+	os.Exit(run(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr, lifecycle))
 }

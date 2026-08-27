@@ -119,6 +119,33 @@ func (adapter Adapter) Preflight(ctx context.Context, resources []Resource, dest
 	}
 }
 
+func (adapter Adapter) MutationInProgress(name string) (bool, bool) {
+	path := adapter.path(name)
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, true
+	}
+	stat, ok := infoSys(info)
+	if err != nil || !ok || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || stat.Uid != adapter.ownerUID() || stat.Nlink != 1 {
+		return false, false
+	}
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return false, false
+	}
+	defer file.Close()
+	opened, openedErr := file.Stat()
+	openedStat, openedOK := infoSys(opened)
+	if openedErr != nil || !openedOK || openedStat.Dev != stat.Dev || openedStat.Ino != stat.Ino {
+		return false, false
+	}
+	err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+	if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+		return true, true
+	}
+	return false, err == nil && syscall.Flock(int(file.Fd()), syscall.LOCK_UN) == nil
+}
+
 func (adapter Adapter) observe(ctx context.Context, request Resource) Resource {
 	request.Present, request.Observed = false, false
 	switch request.Kind {

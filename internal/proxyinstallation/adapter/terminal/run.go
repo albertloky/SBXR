@@ -56,7 +56,7 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 		action := current.LegalActions[number-1]
 		review := installation.Review(ctx, action)
 		switch action {
-		case proxyinstallation.StartSetupAction:
+		case proxyinstallation.StartSetupAction, proxyinstallation.FinishCleanupAction, proxyinstallation.FinishSetupAction:
 			if review.Prepared == nil {
 				latest = review.Result
 				if writeRefusal(output, latest) != nil {
@@ -70,11 +70,19 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 					return 1
 				}
 			}
-			confirmation, ok := readConfirmation(reader, output, "Start proxy setup? [y/N]")
+			prompt := "Start proxy setup? [y/N]"
+			if action == proxyinstallation.FinishCleanupAction {
+				prompt = "Finish proxy cleanup? [y/N]"
+			} else if action == proxyinstallation.FinishSetupAction {
+				prompt = "Finish proxy setup? [y/N]"
+			}
+			confirmation, ok := readConfirmation(reader, output, prompt)
 			if !ok {
 				return 1
 			}
-			latest = installation.Execute(ctx, *review.Prepared, confirmation, nil)
+			latest = installation.Execute(ctx, *review.Prepared, confirmation, func(progress proxyinstallation.Progress) {
+				_, _ = fmt.Fprintln(output, "Progress:", progress.Phase)
+			})
 		case proxyinstallation.ViewDetailsAction:
 			for _, detail := range review.Details {
 				if _, err := fmt.Fprintln(output, detail); err != nil {

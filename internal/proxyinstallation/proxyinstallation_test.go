@@ -1,7 +1,11 @@
 package proxyinstallation
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"fmt"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -11,26 +15,36 @@ import (
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 )
 
-type acceptedHost struct{}
-
-func (acceptedHost) Inspect(_ context.Context, requested []hostadapter.Resource) hostadapter.Inspection {
-	return hostadapter.Inspection{Resources: observedAbsent(requested), Complete: true}
-}
-
-func (acceptedHost) Preflight(_ context.Context, requested []hostadapter.Resource, _ []hostadapter.Destination) hostadapter.Preflight {
-	facts := acceptedPreflightFacts()
-	facts.Resources = observedAbsent(requested)
-	return facts
-}
-
 type controlledHost struct {
-	inspection hostadapter.Inspection
-	preflight  hostadapter.Preflight
+	inspection    hostadapter.Inspection
+	preflight     hostadapter.Preflight
+	ownership     []byte
+	checkpoints   [][]byte
+	operations    []hostadapter.Operation
+	enabled       bool
+	active        bool
+	listener      bool
+	busy          bool
+	statusBusy    bool
+	fails         map[hostadapter.Operation]bool
+	failPublish   setupPhase
+	latePublish   bool
+	publishFailed bool
+	cancelOn      hostadapter.Operation
+	cancel        context.CancelFunc
 }
+
+func acceptedHost() *controlledHost { return &controlledHost{preflight: acceptedPreflightFacts()} }
 
 func (host *controlledHost) Inspect(_ context.Context, requested []hostadapter.Resource) hostadapter.Inspection {
 	if host.inspection.Resources == nil {
-		return hostadapter.Inspection{Resources: observedAbsent(requested), Complete: true}
+		resources := observedAbsent(requested)
+		for index := range resources {
+			if resources[index].Name == "/var/lib/sbxr/proxy-ownership.json" {
+				resources[index].Present = len(host.ownership) > 0
+			}
+		}
+		return hostadapter.Inspection{Resources: resources, Complete: true}
 	}
 	return host.inspection
 }
@@ -40,6 +54,82 @@ func (host *controlledHost) Preflight(_ context.Context, requested []hostadapter
 		host.preflight.Resources = observedAbsent(requested)
 	}
 	return host.preflight
+}
+
+func (host *controlledHost) ReadOwnership(string) ([]byte, error) {
+	if len(host.ownership) == 0 {
+		return nil, os.ErrNotExist
+	}
+	return bytes.Clone(host.ownership), nil
+}
+
+func (host *controlledHost) MutationInProgress(string) (bool, bool) { return host.statusBusy, true }
+
+func (host *controlledHost) PublishOwnership(_, _ string, expected, next []byte) error {
+	if !bytes.Equal(expected, host.ownership) {
+		return errors.New("ownership changed")
+	}
+	record, _ := decodeOwnership(next)
+	if record.Phase == host.failPublish && !host.publishFailed && !host.latePublish {
+		host.publishFailed = true
+		return errors.New("checkpoint failed")
+	}
+	host.ownership = bytes.Clone(next)
+	host.checkpoints = append(host.checkpoints, bytes.Clone(next))
+	if record.Phase == host.failPublish && !host.publishFailed && host.latePublish {
+		host.publishFailed = true
+		return errors.New("late checkpoint failure")
+	}
+	return nil
+}
+
+func (host *controlledHost) RemoveOwnership(_, _ string, expected []byte) error {
+	if !bytes.Equal(expected, host.ownership) {
+		return errors.New("ownership changed")
+	}
+	host.ownership = nil
+	return nil
+}
+
+func (host *controlledHost) AcquireMutationLock(string) (*hostadapter.MutationLock, bool, error) {
+	return &hostadapter.MutationLock{}, host.busy, nil
+}
+
+func (host *controlledHost) Apply(_ context.Context, input hostadapter.OperationInput) hostadapter.OperationResult {
+	host.operations = append(host.operations, input.Operation)
+	if host.fails[input.Operation] {
+		return hostadapter.OperationResult{}
+	}
+	switch input.Operation {
+	case hostadapter.EnableService:
+		host.enabled = true
+	case hostadapter.StartService:
+		host.active, host.listener = true, true
+	case hostadapter.StopDisableService:
+		host.enabled, host.active, host.listener = false, false, false
+	}
+	if input.Operation == host.cancelOn && host.cancel != nil {
+		host.cancel()
+	}
+	return hostadapter.OperationResult{OK: true, Fact: "accepted"}
+}
+
+func (host *controlledHost) InspectRunning(_ context.Context, _ hostadapter.SetupSpec, _, ownership []byte, _, _ string) hostadapter.RunningInspection {
+	prepared := false
+	for _, operation := range host.operations {
+		if operation == hostadapter.ValidateConfiguration {
+			prepared = true
+		}
+	}
+	return hostadapter.RunningInspection{
+		Ownership: bytes.Equal(ownership, host.ownership), TransactionFilesAbsent: true, APTKey: prepared, APTSource: prepared, Package: prepared, Hold: prepared,
+		PackageIdentity: prepared, Configuration: prepared, State: prepared, Validation: prepared, ServiceProvenance: prepared,
+		ServiceEnabled: host.enabled, ServiceActive: host.active, Listener: host.listener,
+	}
+}
+
+func (host *controlledHost) InspectActivation(ctx context.Context, spec hostadapter.SetupSpec, source, ownership []byte, digest, publicIPv4 string, _ hostadapter.Destination) hostadapter.ActivationInspection {
+	return hostadapter.ActivationInspection{RunningInspection: host.InspectRunning(ctx, spec, source, ownership, digest, publicIPv4), DestinationCompatible: true, ListenerAvailable: !host.listener}
 }
 
 func observedAbsent(requested []hostadapter.Resource) []hostadapter.Resource {
@@ -70,6 +160,13 @@ func (acceptedSingBox) ValidIdentity(identity singboxadapter.Identity) bool {
 	return identity.UUID == "11111111-2222-4333-8444-555555555555" && identity.PrivateKey == "private" && identity.PublicKey == "public" && identity.ShortID == "01020304"
 }
 
+func (adapter acceptedSingBox) EncodeServerConfiguration(identity singboxadapter.Identity, _, _ string) ([]byte, error) {
+	if !adapter.ValidIdentity(identity) {
+		return nil, errors.New("invalid identity")
+	}
+	return []byte(`{"inbound":"secret-safe-test-fixture"}` + "\n"), nil
+}
+
 type readyLifecycle struct{}
 
 func (readyLifecycle) Status(context.Context) softwarelifecycle.Result {
@@ -90,7 +187,7 @@ func (readyLifecycle) Recover(context.Context, softwarelifecycle.ProgressReporte
 }
 
 func TestOwnerCanReviewAndDeclineCleanSetup(t *testing.T) {
-	installation := newInstalledInterface(readyLifecycle{}, acceptedHost{}, acceptedSingBox{})
+	installation := newInstalledInterface(readyLifecycle{}, acceptedHost(), acceptedSingBox{})
 
 	review := installation.Review(t.Context(), StartSetupAction)
 
@@ -111,6 +208,311 @@ func TestOwnerCanReviewAndDeclineCleanSetup(t *testing.T) {
 	}
 }
 
+func TestApprovedSetupReachesLocallyVerifiedRunning(t *testing.T) {
+	host := acceptedHost()
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	review := installation.Review(t.Context(), StartSetupAction)
+	var progress []string
+
+	result := installation.Execute(t.Context(), *review.Prepared, Approved, func(event Progress) { progress = append(progress, event.Phase) })
+
+	if string(result.Status) != "Running" || result.Message != "Proxy setup is complete and locally verified." || string(result.Code) != "PROXY-INSTALLATION-SETUP-COMPLETE" {
+		t.Fatalf("Execute() = %#v", result)
+	}
+	wantPhases := []setupPhase{ownershipRecorded, aptKeyInstalled, aptSourceInstalled, serviceMasked, packageInstalled, packageHeld, stateDirectoryCreated, configurationInstalled, configurationValidated, serviceUnmasked, activationCommitted, serviceEnabled, serviceStarted, runningPhase}
+	if len(host.checkpoints) != len(wantPhases) {
+		t.Fatalf("checkpoints=%d, want %d", len(host.checkpoints), len(wantPhases))
+	}
+	for index, body := range host.checkpoints {
+		record, ok := decodeOwnership(body)
+		if !ok || record.Phase != wantPhases[index] {
+			t.Fatalf("checkpoint %d = %q, valid=%t", index, record.Phase, ok)
+		}
+	}
+	if len(progress) != len(wantPhases) {
+		t.Fatalf("progress = %v", progress)
+	}
+	for _, secret := range []string{"11111111-2222-4333-8444-555555555555", "private"} {
+		if bytes.Contains(host.ownership, []byte(secret)) {
+			t.Fatalf("Ownership Record disclosed %q", secret)
+		}
+	}
+}
+
+func TestEveryPreCommitFailureCleansUpToNotSetUp(t *testing.T) {
+	for _, operation := range []hostadapter.Operation{hostadapter.InstallAPTKey, hostadapter.InstallAPTSource, hostadapter.MaskService, hostadapter.InstallPackage, hostadapter.HoldPackage, hostadapter.CreateStateDirectory, hostadapter.InstallConfiguration, hostadapter.ValidateConfiguration} {
+		t.Run(string(operation), func(t *testing.T) {
+			host := acceptedHost()
+			host.fails = map[hostadapter.Operation]bool{operation: true}
+			installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+			review := installation.Review(t.Context(), StartSetupAction)
+
+			result := installation.Execute(t.Context(), *review.Prepared, Approved, nil)
+
+			if result.Status != NotSetUp || result.Code != SetupCleanedUp || len(host.ownership) != 0 {
+				t.Fatalf("Execute() = %#v ownership=%q operations=%v", result, host.ownership, host.operations)
+			}
+		})
+	}
+}
+
+func TestInterruptedCleanupExposesOnlyFinishCleanupAndResumes(t *testing.T) {
+	host := acceptedHost()
+	host.fails = map[hostadapter.Operation]bool{hostadapter.InstallPackage: true, hostadapter.RemovePackage: true}
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	review := installation.Review(t.Context(), StartSetupAction)
+	result := installation.Execute(t.Context(), *review.Prepared, Approved, nil)
+	if result.Status != SetupIncomplete || result.Code != SetupNeedsCleanup || len(host.ownership) == 0 {
+		t.Fatalf("Execute() = %#v ownership=%q", result, host.ownership)
+	}
+
+	restarted := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	status := restarted.Review(t.Context(), StatusAction)
+	if !reflect.DeepEqual(status.LegalActions, []Action{FinishCleanupAction, ViewDetailsAction}) {
+		t.Fatalf("restart status = %#v", status)
+	}
+	finish := restarted.Review(t.Context(), FinishCleanupAction)
+	host.fails = nil
+	result = restarted.Execute(t.Context(), *finish.Prepared, Approved, nil)
+	if result.Status != NotSetUp || result.Code != SetupCleanedUp || len(host.ownership) != 0 {
+		t.Fatalf("Finish cleanup = %#v ownership=%q", result, host.ownership)
+	}
+}
+
+func TestCommittedSetupNeverRollsBackAndFinishSetupResumes(t *testing.T) {
+	host := acceptedHost()
+	host.fails = map[hostadapter.Operation]bool{hostadapter.StartService: true}
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	review := installation.Review(t.Context(), StartSetupAction)
+	result := installation.Execute(t.Context(), *review.Prepared, Approved, nil)
+	if result.Status != SetupIncomplete || result.Code != SetupNeedsCompletion {
+		t.Fatalf("Execute() = %#v", result)
+	}
+	for _, operation := range host.operations {
+		if operation == hostadapter.RemovePackage || operation == hostadapter.RemoveAPTSource || operation == hostadapter.RemoveAPTKey {
+			t.Fatalf("committed setup rolled back through %q", operation)
+		}
+	}
+	restarted := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	status := restarted.Review(t.Context(), StatusAction)
+	if !reflect.DeepEqual(status.LegalActions, []Action{FinishSetupAction, ViewDetailsAction}) {
+		t.Fatalf("restart status = %#v", status)
+	}
+	finish := restarted.Review(t.Context(), FinishSetupAction)
+	host.fails = nil
+	result = restarted.Execute(t.Context(), *finish.Prepared, Approved, nil)
+	if result.Status != Running || result.Code != SetupComplete {
+		t.Fatalf("Finish setup = %#v", result)
+	}
+}
+
+func TestLateActivationCheckpointFailureContinuesForward(t *testing.T) {
+	host := acceptedHost()
+	host.failPublish, host.latePublish = activationCommitted, true
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	review := installation.Review(t.Context(), StartSetupAction)
+
+	result := installation.Execute(t.Context(), *review.Prepared, Approved, nil)
+
+	if result.Status != Running || result.Code != SetupComplete {
+		t.Fatalf("Execute() = %#v", result)
+	}
+	for _, operation := range host.operations {
+		if operation == hostadapter.RemovePackage {
+			t.Fatal("late committed write triggered rollback")
+		}
+	}
+}
+
+func TestEveryCheckpointIOFailureKeepsTheLegalRecoveryDirection(t *testing.T) {
+	for _, phase := range []setupPhase{ownershipRecorded, aptKeyInstalled, aptSourceInstalled, serviceMasked, packageInstalled, packageHeld, stateDirectoryCreated, configurationInstalled, configurationValidated, serviceUnmasked, activationCommitted, serviceEnabled, serviceStarted, runningPhase} {
+		for _, late := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s late=%t", phase, late), func(t *testing.T) {
+				host := acceptedHost()
+				host.failPublish, host.latePublish = phase, late
+				installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+				review := installation.Review(t.Context(), StartSetupAction)
+				result := installation.Execute(t.Context(), *review.Prepared, Approved, nil)
+
+				switch {
+				case phase == ownershipRecorded && !late:
+					if result.Code != ActionRefused || len(host.ownership) != 0 {
+						t.Fatalf("Execute() = %#v ownership=%q", result, host.ownership)
+					}
+				case phaseAtOrAfter(phase, serviceEnabled) && !late:
+					if result.Status != SetupIncomplete || result.Code != SetupNeedsCompletion {
+						t.Fatalf("Execute() = %#v", result)
+					}
+					host.failPublish = ""
+					restarted := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+					finish := restarted.Review(t.Context(), FinishSetupAction)
+					if finish.Prepared == nil {
+						t.Fatalf("Finish setup Review() = %#v", finish)
+					}
+					if result = restarted.Execute(t.Context(), *finish.Prepared, Approved, nil); result.Code != SetupComplete {
+						t.Fatalf("Finish setup Execute() = %#v", result)
+					}
+				case phaseAtOrAfter(phase, activationCommitted) && late:
+					if result.Status != Running || result.Code != SetupComplete {
+						t.Fatalf("Execute() = %#v", result)
+					}
+				default:
+					if result.Status != NotSetUp || result.Code != SetupCleanedUp || len(host.ownership) != 0 {
+						t.Fatalf("Execute() = %#v ownership=%q", result, host.ownership)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestRestartDerivesStatusAndOnlyLegalFinishingActionFromEveryCheckpoint(t *testing.T) {
+	source := acceptedHost()
+	installation := newInstalledInterface(readyLifecycle{}, source, acceptedSingBox{})
+	review := installation.Review(t.Context(), StartSetupAction)
+	if result := installation.Execute(t.Context(), *review.Prepared, Approved, nil); result.Status != Running {
+		t.Fatalf("fixture setup = %#v", result)
+	}
+	for _, body := range source.checkpoints {
+		record, ok := decodeOwnership(body)
+		if !ok {
+			t.Fatalf("invalid fixture checkpoint: %q", body)
+		}
+		host := acceptedHost()
+		host.ownership = bytes.Clone(body)
+		if record.Phase == runningPhase {
+			host.operations = []hostadapter.Operation{hostadapter.ValidateConfiguration}
+			host.enabled, host.active, host.listener = true, true, true
+		}
+		status := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{}).Review(t.Context(), StatusAction)
+		switch {
+		case record.Phase == runningPhase:
+			if status.Status != Running || status.Result.Code != SetupComplete {
+				t.Fatalf("%s status = %#v", record.Phase, status)
+			}
+		case phaseAtOrAfter(record.Phase, activationCommitted):
+			if status.Status != SetupIncomplete || !reflect.DeepEqual(status.LegalActions, []Action{FinishSetupAction, ViewDetailsAction}) {
+				t.Fatalf("%s status = %#v", record.Phase, status)
+			}
+		default:
+			if status.Status != SetupIncomplete || !reflect.DeepEqual(status.LegalActions, []Action{FinishCleanupAction, ViewDetailsAction}) {
+				t.Fatalf("%s status = %#v", record.Phase, status)
+			}
+		}
+	}
+}
+
+func TestStatusDerivesChangeInProgressFromTheMutationLock(t *testing.T) {
+	host := acceptedHost()
+	host.statusBusy = true
+	status := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{}).Review(t.Context(), StatusAction)
+	if status.Status != ChangeInProgress || status.Result.Code != StatusChangeInProgress || !reflect.DeepEqual(status.LegalActions, []Action{ViewDetailsAction}) {
+		t.Fatalf("Review() = %#v", status)
+	}
+}
+
+func TestManagedTerminationStopsAfterTheCurrentDurableCheckpoint(t *testing.T) {
+	tests := []struct {
+		name     string
+		cancelOn hostadapter.Operation
+		fail     hostadapter.Operation
+		code     ResultCode
+	}{
+		{"pre-commit setup", hostadapter.InstallPackage, "", SetupNeedsCleanup},
+		{"committed setup", hostadapter.EnableService, "", SetupNeedsCompletion},
+		{"cleanup", hostadapter.RemovePackageArtifact, hostadapter.HoldPackage, SetupNeedsCleanup},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			host := acceptedHost()
+			host.cancelOn, host.cancel = test.cancelOn, cancel
+			if test.fail != "" {
+				host.fails = map[hostadapter.Operation]bool{test.fail: true}
+			}
+			installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+			review := installation.Review(ctx, StartSetupAction)
+			result := installation.Execute(ctx, *review.Prepared, Approved, nil)
+			if result.Status != SetupIncomplete || result.Code != test.code || result.FailedCheck != "Managed termination" {
+				t.Fatalf("Execute() = %#v operations=%v", result, host.operations)
+			}
+		})
+	}
+}
+
+func TestFinishingActionsRevalidateAuthorityAndActivationFactsBeforeMutation(t *testing.T) {
+	t.Run("changed cleanup authority", func(t *testing.T) {
+		host := acceptedHost()
+		host.fails = map[hostadapter.Operation]bool{hostadapter.InstallPackage: true, hostadapter.RemovePackage: true}
+		installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+		start := installation.Review(t.Context(), StartSetupAction)
+		installation.Execute(t.Context(), *start.Prepared, Approved, nil)
+		restarted := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+		finish := restarted.Review(t.Context(), FinishCleanupAction)
+		record, _ := decodeOwnership(host.ownership)
+		record.CleanupCheckpoint++
+		host.ownership = ownershipBytes(record)
+		before := len(host.operations)
+
+		result := restarted.Execute(t.Context(), *finish.Prepared, Approved, nil)
+
+		if result.Code != ActionRefused || len(host.operations) != before {
+			t.Fatalf("Execute() = %#v operations=%v", result, host.operations[before:])
+		}
+	})
+
+	t.Run("changed cleanup host facts", func(t *testing.T) {
+		host := acceptedHost()
+		host.fails = map[hostadapter.Operation]bool{hostadapter.InstallPackage: true, hostadapter.RemovePackage: true}
+		installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+		start := installation.Review(t.Context(), StartSetupAction)
+		installation.Execute(t.Context(), *start.Prepared, Approved, nil)
+		restarted := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+		finish := restarted.Review(t.Context(), FinishCleanupAction)
+		host.inspection = hostadapter.Inspection{Resources: observedAbsent(footprint), Complete: true}
+		host.inspection.Resources[2].Present = true
+		before := len(host.operations)
+
+		result := restarted.Execute(t.Context(), *finish.Prepared, Approved, nil)
+
+		if result.Code != ActionRefused || len(host.operations) != before {
+			t.Fatalf("Execute() = %#v operations=%v", result, host.operations[before:])
+		}
+	})
+
+	t.Run("changed activation facts", func(t *testing.T) {
+		host := acceptedHost()
+		host.fails = map[hostadapter.Operation]bool{hostadapter.StartService: true}
+		installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+		start := installation.Review(t.Context(), StartSetupAction)
+		installation.Execute(t.Context(), *start.Prepared, Approved, nil)
+		restarted := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+		finish := restarted.Review(t.Context(), FinishSetupAction)
+		host.fails = nil
+		host.listener = true
+		before := len(host.operations)
+
+		result := restarted.Execute(t.Context(), *finish.Prepared, Approved, nil)
+
+		if result.Code != ActionRefused || len(host.operations) != before {
+			t.Fatalf("Execute() = %#v operations=%v", result, host.operations[before:])
+		}
+	})
+}
+
+func TestExecuteRefusesLockConflictBeforeMutation(t *testing.T) {
+	host := acceptedHost()
+	host.busy = true
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	review := installation.Review(t.Context(), StartSetupAction)
+
+	result := installation.Execute(t.Context(), *review.Prepared, Approved, nil)
+
+	if result.Code != ActionRefused || result.FailedCheck != "SBXR mutation lock" || len(host.operations) != 0 || len(host.ownership) != 0 {
+		t.Fatalf("Execute() = %#v operations=%v ownership=%q", result, host.operations, host.ownership)
+	}
+}
+
 func TestFreshInspectionReportsConflictingFootprintAsProblemDetected(t *testing.T) {
 	resources := observedAbsent(footprint)
 	resources[3].Present = true
@@ -126,7 +528,11 @@ func TestFreshInspectionReportsConflictingFootprintAsProblemDetected(t *testing.
 
 func TestFreshInspectionReportsUnknownFootprintAsProblemDetected(t *testing.T) {
 	resources := observedAbsent(footprint)
-	resources[3].Observed = false
+	for index := range resources {
+		if resources[index].Name == "/etc/sing-box" {
+			resources[index].Observed = false
+		}
+	}
 	installation := newInstalledInterface(readyLifecycle{}, &controlledHost{inspection: hostadapter.Inspection{Resources: resources}}, acceptedSingBox{})
 
 	review := installation.Review(t.Context(), StatusAction)
@@ -218,7 +624,7 @@ func TestReviewRefusesEveryFailedSetupPreflight(t *testing.T) {
 }
 
 func TestReviewReturnsSecretSafeNotSetUpDetails(t *testing.T) {
-	installation := newInstalledInterface(readyLifecycle{}, acceptedHost{}, acceptedSingBox{})
+	installation := newInstalledInterface(readyLifecycle{}, acceptedHost(), acceptedSingBox{})
 
 	review := installation.Review(t.Context(), ViewDetailsAction)
 	details := strings.Join(review.Details, "\n")
@@ -241,7 +647,7 @@ func TestReviewReturnsSecretSafeNotSetUpDetails(t *testing.T) {
 }
 
 func TestReviewRefusesUnsupportedAndIllegalActionsWithoutAuthority(t *testing.T) {
-	installation := newInstalledInterface(readyLifecycle{}, acceptedHost{}, acceptedSingBox{})
+	installation := newInstalledInterface(readyLifecycle{}, acceptedHost(), acceptedSingBox{})
 
 	unsupported := installation.Review(t.Context(), CompleteRemovalAction)
 	if unsupported.Result.Code != ActionRefused || unsupported.Result.FailedCheck != "Complete removal availability" || unsupported.Prepared != nil {
