@@ -596,6 +596,82 @@ func TestCandidateRoutesOneV3CandidateThroughPackagedLiveQualification(t *testin
 	assertActionsPinned(t, stable)
 }
 
+func TestPackagedInterruptionRequiresObservedEventAndForcedDeath(t *testing.T) {
+	source, err := os.ReadFile(".github/scripts/v3-packaged-live.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := strings.Index(string(source), "interrupt_at() {")
+	if start < 0 {
+		t.Fatal("interrupt_at function not found")
+	}
+	end := strings.Index(string(source)[start:], "\n}\n\ninstall_candidate() {")
+	if end < 0 {
+		t.Fatal("interrupt_at function not found")
+	}
+	for _, test := range []struct {
+		name, progress string
+		signalFailure  bool
+		wantSuccess    bool
+	}{
+		{name: "missing event", wantSuccess: false},
+		{name: "observed event", progress: "Progress: Expected event", wantSuccess: true},
+		{name: "signal failure after event", progress: "Progress: Expected event", signalFailure: true, wantSuccess: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			directory := t.TempDir()
+			work := filepath.Join(directory, "work")
+			binary := filepath.Join(directory, "sbxr")
+			pidPath := filepath.Join(directory, "pid")
+			if err := os.Mkdir(work, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			fake := "#!/bin/sh\nexec 2>/dev/null\nIFS= read -r _\nif test -n \"$FAKE_PROGRESS\"; then printf '%s\\n' \"$FAKE_PROGRESS\"; fi\nsleep 30\n"
+			if err := os.WriteFile(binary, []byte(fake), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			function := string(source)[start : start+end+2]
+			function = strings.ReplaceAll(function, "/usr/local/bin/sbxr", binary)
+			function = strings.Replace(function, "seq 1 6000", "seq 1 100", 1)
+			function = strings.Replace(function, "local process=$!", "local process=$!\nprintf '%s\\n' \"$process\" > "+strconv.Quote(pidPath), 1)
+			if test.signalFailure {
+				function = strings.Replace(function, `kill -SIGSTOP "$process" 2>/dev/null`, "false", 1)
+			}
+			sandbox := "set -euo pipefail\nWORK=" + work + "\nmenu_number() { printf '1\\n'; }\nscan_vps_capture() { return 0; }\n" + function + "\ninterrupt_at 'Start setup' y 'Expected event' test\n"
+			script := filepath.Join(directory, "test.sh")
+			if err := os.WriteFile(script, []byte(sandbox), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 7*time.Second)
+			defer cancel()
+			command := exec.CommandContext(ctx, "bash", script)
+			command.Env = append(os.Environ(), "FAKE_PROGRESS="+test.progress)
+			output, runErr := command.CombinedOutput()
+			pidBody, readErr := os.ReadFile(pidPath)
+			if readErr == nil {
+				defer exec.Command("kill", "-KILL", strings.TrimSpace(string(pidBody))).Run()
+			}
+			if ctx.Err() != nil {
+				t.Fatalf("interruption left the child alive: %v, output = %s", ctx.Err(), output)
+			}
+			if (runErr == nil) != test.wantSuccess {
+				t.Fatalf("interruption error = %v, output = %s", runErr, output)
+			}
+			if readErr != nil {
+				t.Fatalf("fake process PID was not recorded: %v", readErr)
+			}
+			if exec.Command("kill", "-0", strings.TrimSpace(string(pidBody))).Run() == nil {
+				t.Fatal("interruption left the child process alive")
+			}
+			for _, name := range []string{"input-test", "output-test"} {
+				if _, err := os.Lstat(filepath.Join(work, name)); !os.IsNotExist(err) {
+					t.Fatalf("%s remains: %v", name, err)
+				}
+			}
+		})
+	}
+}
+
 func TestCandidateFailureCleanupFinishesOnlyThroughThePublicInterface(t *testing.T) {
 	workflowBody, err := os.ReadFile(".github/workflows/candidate.yml")
 	if err != nil {

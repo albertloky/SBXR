@@ -76,7 +76,7 @@ prove_status() {
 }
 
 interrupt_at() {
-  local label=$1 confirmation=$2 event=$3 number=$4
+  local label=$1 confirmation=$2 event=$3 number=$4 event_observed=false interrupted=false scan_status=0 wait_status=0
   local fifo="$WORK/input-$number" output="$WORK/output-$number" action
   action="$(menu_number "$label")"
   test -n "$action"
@@ -86,17 +86,27 @@ interrupt_at() {
   local process=$!
   printf '%s\n%s\n' "$action" "$confirmation" >&3
   for _ in $(seq 1 6000); do
-    if grep -F "Progress: $event" "$output" >/dev/null; then break; fi
-    kill -0 "$process"
+    if grep -F "Progress: $event" "$output" >/dev/null; then event_observed=true; break; fi
+    if ! kill -0 "$process" 2>/dev/null; then break; fi
     sleep .01
   done
-  grep -F "Progress: $event" "$output" >/dev/null
-  kill -SIGSTOP "$process"
-  kill -SIGKILL "$process"
-  wait "$process" 2>/dev/null || true
+  if test "$event_observed" = true && kill -0 "$process" 2>/dev/null; then
+    if kill -SIGSTOP "$process" 2>/dev/null && kill -SIGKILL "$process" 2>/dev/null; then interrupted=true; fi
+  elif kill -0 "$process" 2>/dev/null; then
+    kill -SIGKILL "$process" 2>/dev/null || true
+  fi
+  if test "$interrupted" != true && kill -0 "$process" 2>/dev/null; then
+    kill -SIGCONT "$process" 2>/dev/null || true
+    kill -SIGKILL "$process" 2>/dev/null || true
+  fi
+  wait "$process" 2>/dev/null || wait_status=$?
   exec 3>&-
-  scan_vps_capture "$output"
+  scan_vps_capture "$output" || scan_status=$?
   rm -f "$fifo" "$output"
+  test "$scan_status" -eq 0
+  test "$event_observed" = true
+  test "$interrupted" = true
+  test "$wait_status" -eq 137
 }
 
 install_candidate() {
