@@ -1,0 +1,326 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+PACKAGE_SHA256=fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf
+PACKAGE_SIZE=24597120
+WORK=/run/sbxr-qualification
+
+menu_number() {
+  local label=$1 output
+  output="$(printf '0\n' | /usr/local/bin/sbxr)"
+  sed -n "s/^\([1-9][0-9]*\)\. $label$/\1/p" <<<"$output"
+}
+
+scan_vps_capture() {
+  local capture=$1 content private_key client_uuid
+  content="$(<"$capture")"
+  if test -e /etc/sing-box/config.json && jq -e '.inbounds[0].tls.reality.private_key and .inbounds[0].users[0].uuid' /etc/sing-box/config.json >/dev/null 2>&1; then
+    private_key="$(jq -er '.inbounds[0].tls.reality.private_key' /etc/sing-box/config.json)"
+    client_uuid="$(jq -er '.inbounds[0].users[0].uuid' /etc/sing-box/config.json)"
+    ! grep -F -- "$private_key" <<<"$content" >/dev/null
+    ! grep -F -- "$client_uuid" <<<"$content" >/dev/null
+  fi
+  if test -n "${KNOWN_PRIVATE_KEY:-}"; then ! grep -F -- "$KNOWN_PRIVATE_KEY" <<<"$content" >/dev/null; fi
+  if test -n "${KNOWN_CLIENT_UUID:-}"; then ! grep -F -- "$KNOWN_CLIENT_UUID" <<<"$content" >/dev/null; fi
+  ! grep -Eq 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer ' <<<"$content"
+}
+
+protected_inventory() {
+  {
+    for path in /usr/local/bin/sbxr /var/lib/sbxr/installed.json /var/lib/sbxr/proxy-ownership.json /var/lib/sbxr/proxy-ownership.finalizing.json /etc/sing-box/config.json /etc/apt/sources.list.d/sagernet.sources /etc/apt/keyrings/sagernet.asc /lib/systemd/system/sing-box.service; do
+      if test -e "$path"; then stat -c "$path %a %u %g %s" "$path"; sha256sum "$path"; else printf '%s absent\n' "$path"; fi
+    done
+    for directory in /var/lib/sbxr /etc/sing-box /var/lib/sing-box; do
+      if test -d "$directory"; then
+        find "$directory" -xdev -printf '%p %m %U %G %s %y\n' | sort
+        find "$directory" -xdev -type f -print0 | sort -z | xargs -0 -r sha256sum
+      else
+        printf '%s absent\n' "$directory"
+      fi
+    done
+    dpkg-query -W -f='package ${Status} ${Version} ${Architecture}\n' sing-box 2>/dev/null || printf 'package absent\n'
+    if apt-mark showhold | grep -Fx sing-box >/dev/null; then printf 'hold present\n'; else printf 'hold absent\n'; fi
+    if systemctl is-enabled sing-box.service >/dev/null 2>&1; then printf 'enabled yes\n'; else printf 'enabled no\n'; fi
+    if systemctl is-active sing-box.service >/dev/null 2>&1; then printf 'active yes\n'; else printf 'active no\n'; fi
+    (ss -H -ltnp 'sport = :443' | grep -F sing-box || true) | sha256sum
+    if getent passwd sing-box >/dev/null; then getent passwd sing-box | sha256sum; else printf 'user absent\n'; fi
+    if getent group sing-box >/dev/null; then getent group sing-box | sha256sum; else printf 'group absent\n'; fi
+  } | sha256sum | cut -d' ' -f1
+}
+
+run_action() {
+  local label=$1 input=$2 expected=$3 number output
+  number="$(menu_number "$label")"
+  test -n "$number"
+  output="$(printf '%s\n' "$number" "$input" 0 | /usr/local/bin/sbxr)"
+  test "$(grep -Fxc "$expected" <<<"$output")" -eq 1
+  test "$(grep '^Code: ' <<<"$output" | tail -1)" = "$expected"
+  scan_vps_capture <(printf '%s' "$output")
+}
+
+view_details() {
+  local expected=$1 output
+  output="$(printf '%s\n\n0\n' "$(menu_number 'View details')" | /usr/local/bin/sbxr)"
+  scan_vps_capture <(printf '%s' "$output")
+  test "$(grep -Fxc "$expected" <<<"$output")" -eq 1
+}
+
+prove_status() {
+  printf '0\n' | /usr/local/bin/sbxr | grep -F "Proxy status: $1" >/dev/null
+}
+
+interrupt_at() {
+  local label=$1 confirmation=$2 event=$3 number=$4
+  local fifo="$WORK/input-$number" output="$WORK/output-$number"
+  mkfifo "$fifo"
+  exec 3<>"$fifo"
+  /usr/local/bin/sbxr <"$fifo" >"$output" &
+  local process=$!
+  printf '%s\n%s\n' "$(menu_number "$label")" "$confirmation" >&3
+  for _ in $(seq 1 6000); do
+    if grep -F "Progress: $event" "$output" >/dev/null; then break; fi
+    kill -0 "$process"
+    sleep .01
+  done
+  grep -F "Progress: $event" "$output" >/dev/null
+  kill -SIGSTOP "$process"
+  kill -SIGKILL "$process"
+  wait "$process" 2>/dev/null || true
+  exec 3>&-
+  scan_vps_capture "$output"
+  rm -f "$fifo" "$output"
+}
+
+install_candidate() {
+  local output=$WORK/install-output
+  curl -fsS https://github.com/albertloky/SBXR/releases/latest/download/install.sh | bash >"$output" 2>&1
+  scan_vps_capture "$output"
+  rm -f "$output"
+  test -x /usr/local/bin/sbxr
+  jq -e --arg tag "$TAG" --arg commit "$COMMIT" --arg index "$INDEX" --argjson sequence "$SEQUENCE" '.repository == "albertloky/SBXR" and .tag == $tag and .commit == $commit and .release_index_sha256 == $index and .sequence == $sequence and .architecture == "amd64"' /var/lib/sbxr/installed.json >/dev/null
+}
+
+prove_not_set_up() {
+  printf '0\n' | /usr/local/bin/sbxr | grep -F 'Proxy status: Not set up' >/dev/null
+  test ! -e /var/lib/sbxr/proxy-ownership.json
+  test ! -e /var/lib/sbxr/proxy-ownership.finalizing.json
+  test ! -e /etc/sing-box/config.json
+  test ! -e /var/lib/sing-box
+  ! dpkg-query -W sing-box >/dev/null 2>&1
+}
+
+prove_running() {
+  local output
+  output="$(printf '0\n' | /usr/local/bin/sbxr)"
+  grep -F 'Proxy status: Running' <<<"$output" >/dev/null
+  grep -F 'Code: PROXY-INSTALLATION-SETUP-COMPLETE' <<<"$output" >/dev/null
+}
+
+prove_not_installed() {
+  test ! -e /usr/local/bin/sbxr
+  test ! -e /var/lib/sbxr/installed.json
+  test ! -e /var/lib/sbxr/proxy-ownership.json
+  test ! -e /var/lib/sbxr/proxy-ownership.finalizing.json
+  test ! -e /etc/sing-box/config.json
+  test ! -e /var/lib/sing-box
+  test ! -e /etc/apt/sources.list.d/sagernet.sources
+  test ! -e /etc/apt/keyrings/sagernet.asc
+  ! dpkg-query -W sing-box >/dev/null 2>&1
+  ! apt-mark showhold | grep -Fx sing-box >/dev/null
+  ! systemctl list-unit-files sing-box.service --no-legend 2>/dev/null | grep -F sing-box.service >/dev/null
+  ! ss -H -ltnp 'sport = :443' | grep -F sing-box >/dev/null
+  ! getent passwd sing-box >/dev/null
+  ! getent group sing-box >/dev/null
+}
+
+remote_failure_safety() {
+  install_candidate
+  prove_not_set_up
+
+  install -d -m 0700 /etc/sing-box
+  install -m 0600 /dev/null /etc/sing-box/config.json
+  prove_status 'Problem detected'
+  view_details 'Detected mismatch: /etc/sing-box is present'
+  conflict_before="$(protected_inventory)"
+  run_action 'Start setup' '' 'Code: PROXY-INSTALLATION-ACTION-REFUSED'
+  test "$(protected_inventory)" = "$conflict_before"
+  test ! -e /var/lib/sbxr/proxy-ownership.json
+  rm -f /etc/sing-box/config.json
+  rmdir /etc/sing-box
+  prove_not_set_up
+  clean_footprint_completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  interrupt_at 'Start setup' y 'Validate configuration' before-activation
+  prove_status 'Setup incomplete'
+  run_action 'Finish cleanup' y 'Code: PROXY-INSTALLATION-SETUP-CLEANED-UP'
+  prove_not_set_up
+  before_activation_completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  interrupt_at 'Start setup' y 'Activation committed' after-activation
+  prove_status 'Setup incomplete'
+  run_action 'Finish setup' y 'Code: PROXY-INSTALLATION-SETUP-COMPLETE'
+  prove_running
+  after_activation_completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  chmod 0640 /etc/sing-box/config.json
+  drift_before="$(protected_inventory)"
+  run_action 'Complete removal' 'REMOVE SBXR' 'Code: PROXY-INSTALLATION-ACTION-REFUSED'
+  prove_status 'Problem detected'
+  view_details 'Detected mismatch: the protected configuration identity does not match'
+  test "$(protected_inventory)" = "$drift_before"
+  chmod 0600 /etc/sing-box/config.json
+  prove_running
+  ownership_drift_completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  KNOWN_PRIVATE_KEY="$(jq -er '.inbounds[0].tls.reality.private_key' /etc/sing-box/config.json)"
+  KNOWN_CLIENT_UUID="$(jq -er '.inbounds[0].users[0].uuid' /etc/sing-box/config.json)"
+  interrupt_at 'Complete removal' 'REMOVE SBXR' 'Removal committed' after-removal
+  prove_status 'Removal incomplete'
+  run_action 'Finish removal' '' 'Code: SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED'
+  prove_not_installed
+  after_removal_completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  jq -cnS --arg clean "$clean_footprint_completed_at" --arg before "$before_activation_completed_at" --arg after "$after_activation_completed_at" --arg drift "$ownership_drift_completed_at" --arg removal "$after_removal_completed_at" '{after_activation_completed_at:$after,after_removal_completed_at:$removal,before_activation_completed_at:$before,clean_footprint_completed_at:$clean,ownership_drift_completed_at:$drift}'
+}
+
+remote_setup_and_disclose() {
+  install_candidate
+  prove_not_set_up
+  run_action 'Start setup' y 'Code: PROXY-INSTALLATION-SETUP-COMPLETE'
+  prove_running
+  local details
+  details="$(printf '%s\n\n0\n' "$(menu_number 'View details')" | /usr/local/bin/sbxr)"
+  scan_vps_capture <(printf '%s' "$details")
+  for fact in 'Release Identity:' 'Proxy Package Identity:' 'Ownership Record:' 'Packaged validation result:' 'systemd unit provenance' 'Service enabled:' 'Service active:' 'Expected public listener ownership:' 'Package hold:' 'Selected destination:' 'Client Identity: Present'; do
+    grep -F "$fact" <<<"$details" >/dev/null
+  done
+  printf '%s\ny\n\n0\n' "$(menu_number 'Show client configuration')" | /usr/local/bin/sbxr | awk '
+    /^----- BEGIN SBXR CLIENT CONFIGURATION -----$/ {inside=1; next}
+    /^----- END SBXR CLIENT CONFIGURATION -----$/ {inside=0; complete=1; next}
+    inside {print}
+    END {if (!complete) exit 1}
+  '
+}
+
+remote_remove() {
+  prove_running
+  KNOWN_PRIVATE_KEY="$(jq -er '.inbounds[0].tls.reality.private_key' /etc/sing-box/config.json)"
+  KNOWN_CLIENT_UUID="$(jq -er '.inbounds[0].users[0].uuid' /etc/sing-box/config.json)"
+  run_action 'Complete removal' 'REMOVE SBXR' 'Code: SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED'
+  prove_not_installed
+}
+
+remote_secret_safe() {
+  local private_key client_uuid
+  private_key="$(jq -er '.inbounds[0].tls.reality.private_key' /etc/sing-box/config.json)"
+  client_uuid="$(jq -er '.inbounds[0].users[0].uuid' /etc/sing-box/config.json)"
+  ! grep -RF -- "$private_key" "$WORK/qualification-manifest.json" "$WORK/gateway.log" >/dev/null 2>&1
+  ! grep -RF -- "$client_uuid" "$WORK/qualification-manifest.json" "$WORK/gateway.log" >/dev/null 2>&1
+  ! grep -Eq 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer ' "$WORK/qualification-manifest.json" "$WORK/gateway.log"
+}
+
+if [[ ${1:-} == remote-* ]]; then
+  mode=$1
+  TAG=$2 SEQUENCE=$3 COMMIT=$4 INDEX=$5
+  case "$mode" in
+    remote-failure-safety) remote_failure_safety ;;
+    remote-setup-and-disclose) remote_setup_and_disclose ;;
+    remote-secret-safe) remote_secret_safe ;;
+    remote-remove) remote_remove ;;
+    *) exit 1 ;;
+  esac
+  exit
+fi
+
+test $# -eq 4
+host=$1 key=$2 known_hosts=$3 manifest=$4
+test "$(jq -r '.mode' "$manifest")" = v3
+test "$(jq -r '.source_state' "$manifest")" = v3-clean
+test "$(jq '.releases | length' "$manifest")" -eq 1
+release="$(jq -c '.releases[0]' "$manifest")"
+tag="$(jq -r .tag <<<"$release")"
+sequence="$(jq -r .sequence <<<"$release")"
+commit="$(jq -r .commit <<<"$release")"
+index="$(jq -r .release_identity.release_index_sha256 <<<"$release")"
+ssh_options=(-i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" -o ConnectTimeout=15)
+remote=(ssh "${ssh_options[@]}" "root@$host")
+client_config=/dev/shm/sbxr-v3-client.json
+client_root=/dev/shm/sbxr-v3-client
+client_deb=/dev/shm/sing-box.deb
+client_log=/dev/shm/sbxr-v3-client.log
+workflow_capture=/dev/shm/sbxr-v3-workflow.log
+cleanup() {
+  status=$?
+  set +e
+  if test -n "${client_pid:-}"; then kill "$client_pid" 2>/dev/null; wait "$client_pid" 2>/dev/null; fi
+  if test -e "$workflow_capture"; then
+    if grep -Eq 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer |[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}' "$workflow_capture"; then status=1; fi
+    if test -n "${client_uuid:-}" && grep -F -- "$client_uuid" "$workflow_capture" >/dev/null; then status=1; fi
+  fi
+  rm -rf "$client_config" "$client_root" "$client_deb" "$client_log" "$workflow_capture" /dev/shm/sagernet.asc /dev/shm/sagernet.sources "${download:-}"
+  exit "$status"
+}
+trap cleanup EXIT
+exec >"$workflow_capture" 2>&1
+
+scan_runner_capture() {
+  ! grep -F -- "$client_uuid" "$client_log" >/dev/null
+  ! grep -Eq 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer |[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}' "$client_log"
+}
+
+journey_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+failure_times="$("${remote[@]}" "TAG=$tag SEQUENCE=$sequence COMMIT=$commit INDEX=$index $WORK/v3-packaged-live.sh remote-failure-safety '$tag' '$sequence' '$commit' '$index'")"
+jq -e 'keys == ["after_activation_completed_at","after_removal_completed_at","before_activation_completed_at","clean_footprint_completed_at","ownership_drift_completed_at"]' <<<"$failure_times" >/dev/null
+"${remote[@]}" "TAG=$tag SEQUENCE=$sequence COMMIT=$commit INDEX=$index $WORK/v3-packaged-live.sh remote-setup-and-disclose '$tag' '$sequence' '$commit' '$index'" >"$client_config"
+uninterrupted_completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+chmod 0600 "$client_config"
+jq -e '.inbounds == [{type:"mixed",listen:"127.0.0.1",listen_port:2080}] and (.outbounds | length) == 1' "$client_config" >/dev/null
+test "$(findmnt -no FSTYPE -T "$client_config")" = tmpfs
+test "$(stat -c %a "$client_config")" = 600
+client_uuid="$(jq -er '.outbounds[0].uuid' "$client_config")"
+
+curl -fsS https://sing-box.app/gpg.key -o /dev/shm/sagernet.asc
+test "$(sha256sum /dev/shm/sagernet.asc | cut -d' ' -f1)" = 803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1
+printf '%s\n' 'Types: deb' 'URIs: https://deb.sagernet.org/' 'Suites: *' 'Components: *' 'Architectures: amd64' 'Signed-By: /dev/shm/sagernet.asc' > /dev/shm/sagernet.sources
+sudo apt-get -o Dir::Etc::sourcelist=/dev/shm/sagernet.sources -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 update >/dev/null 2>"$client_log"
+apt-get download -o Dir::Etc::sourcelist=/dev/shm/sagernet.sources -o Dir::Etc::sourceparts=- 'sing-box:amd64=1.13.19' >/dev/null 2>>"$client_log"
+scan_runner_capture
+download="$(find . -maxdepth 1 -name 'sing-box_1.13.19_amd64.deb' -type f -print -quit)"
+test -n "$download"
+mv "$download" "$client_deb"
+test "$(stat -c %s "$client_deb")" -eq "$PACKAGE_SIZE"
+test "$(sha256sum "$client_deb" | cut -d' ' -f1)" = "$PACKAGE_SHA256"
+mkdir -m 0700 "$client_root"
+dpkg-deb -x "$client_deb" "$client_root"
+"$client_root/usr/bin/sing-box" check -c "$client_config" >/dev/null 2>"$client_log"
+scan_runner_capture
+"$client_root/usr/bin/sing-box" run -c "$client_config" >/dev/null 2>"$client_log" &
+client_pid=$!
+for _ in $(seq 1 100); do ss -H -ltn 'sport = :2080' | grep -F '127.0.0.1:2080' >/dev/null && break; kill -0 "$client_pid"; sleep .1; done
+direct="$(curl -fsS https://api.ipify.org)"
+proxied="$(curl -fsS --proxy socks5h://127.0.0.1:2080 https://api.ipify.org)"
+vps="$("${remote[@]}" curl -fsS https://api.ipify.org)"
+test "$direct" != "$vps"
+test "$proxied" = "$vps"
+kill "$client_pid"
+wait "$client_pid" 2>/dev/null || true
+unset client_pid
+scan_runner_capture
+rm -rf "$client_config" "$client_root" "$client_deb" "$client_log" /dev/shm/sagernet.asc /dev/shm/sagernet.sources
+! ss -H -ltn 'sport = :2080' | grep -F '127.0.0.1:2080' >/dev/null
+! pgrep -x sing-box >/dev/null
+test ! -e "$client_config"
+test ! -e "$client_root"
+test ! -e "$client_deb"
+test ! -e "$client_log"
+test ! -e /dev/shm/sagernet.asc
+test ! -e /dev/shm/sagernet.sources
+runner_cleanup_completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+"${remote[@]}" "$WORK/v3-packaged-live.sh remote-secret-safe '$tag' '$sequence' '$commit' '$index'"
+"${remote[@]}" "$WORK/v3-packaged-live.sh remote-remove '$tag' '$sequence' '$commit' '$index'"
+complete_removal_completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+observed_at="$complete_removal_completed_at"
+manifest_sha256="$(sha256sum "$manifest" | cut -d' ' -f1)"
+jq -cnS --arg observed_at "$observed_at" --arg manifest_sha256 "$manifest_sha256" --arg package_sha256 "$PACKAGE_SHA256" --argjson package_size "$PACKAGE_SIZE" --argjson failure_times "$failure_times" --arg journey_started_at "$journey_started_at" --arg uninterrupted_completed_at "$uninterrupted_completed_at" --arg runner_cleanup_completed_at "$runner_cleanup_completed_at" --arg complete_removal_completed_at "$complete_removal_completed_at" '{failure_cases:[{final_state:"Not set up",finishing_action:"Remove qualification conflict",name:"clean-footprint-refusal",post_death_status:"Not set up",trigger_event:"Detected mismatch: /etc/sing-box is present"},{final_state:"Not set up",finishing_action:"Finish cleanup",name:"before-activation-commitment",post_death_status:"Setup incomplete",trigger_event:"Validate configuration"},{final_state:"Running",finishing_action:"Finish setup",name:"after-activation-commitment",post_death_status:"Setup incomplete",trigger_event:"Activation committed"},{final_state:"Running",finishing_action:"Restore recorded metadata",name:"ownership-drift-removal-refusal",post_death_status:"Problem detected",trigger_event:"Detected mismatch: the protected configuration identity does not match"},{final_state:"Not installed",finishing_action:"Finish removal",name:"after-removal-commitment",post_death_status:"Removal incomplete",trigger_event:"Removal committed"}],observed_at:$observed_at,outside_client_package:{architecture:"amd64",name:"sing-box",repository:"https://deb.sagernet.org/",sha256:$package_sha256,signing_key_sha256:"803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1",size:$package_size,version:"1.13.19"},proxy_package:{architecture:"amd64",name:"sing-box",repository:"https://deb.sagernet.org/",sha256:$package_sha256,signing_key_sha256:"803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1",size:$package_size,version:"1.13.19"},qualification_manifest_sha256:$manifest_sha256,schema:"sbxr-v3-packaged-live-evidence-v1",secret_scan:{exact_secrets_absent:true,prohibited_patterns_absent:true,retained_evidence:true,runner_capture:true,vps_capture:true,workflow_output:true},stage_times:($failure_times+{complete_removal_completed_at:$complete_removal_completed_at,journey_started_at:$journey_started_at,runner_cleanup_completed_at:$runner_cleanup_completed_at,uninterrupted_completed_at:$uninterrupted_completed_at}),uninterrupted:{clean_installation:true,details_complete:true,disclosure_bounded:true,egress_matched:true,final_absence_complete:true,installed_identity:true,not_set_up:true,outside_routes_differ:true,removal_result:"SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED",runner_configuration_absent:true,runner_file_mode:"0600",runner_listener_absent:true,runner_memory_backed:true,runner_process_absent:true,running:true,setup_confirmed:true,setup_result:"PROXY-INSTALLATION-SETUP-COMPLETE",setup_reviewed:true}}' | tr -d '\n' > handoff/v3-packaged-live-evidence.json
+! grep -F -- "$client_uuid" handoff/v3-packaged-live-evidence.json >/dev/null

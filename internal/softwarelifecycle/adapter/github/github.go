@@ -395,8 +395,14 @@ func latestAcceptanceRecord(body, tag, commit string, assets map[string]assetMet
 	if len(body) == 0 || len(body) > 64<<10 || strings.ContainsAny(body, "\r\x00") || !strings.HasSuffix(body, "\n") {
 		return "", 0, false
 	}
-	if strings.Count(body, "# SBXR Installer-Updater Acceptance Record\n") != 1 {
+	legacy := strings.Count(body, "# SBXR Installer-Updater Acceptance Record\n") == 1 && strings.Count(body, "# SBXR Acceptance Record\n") == 0
+	v3 := strings.Count(body, "# SBXR Acceptance Record\n") == 1 && strings.Count(body, "# SBXR Installer-Updater Acceptance Record\n") == 0
+	if !legacy && !v3 {
 		return "", 0, false
+	}
+	integrated := "Passed on live Ubuntu Server 24.04 amd64"
+	if v3 {
+		integrated = "Passed on live Ubuntu Server 24.04 amd64 and outside runner"
 	}
 	required := map[string]string{
 		"Status: ":                  "Qualified",
@@ -405,7 +411,7 @@ func latestAcceptanceRecord(body, tag, commit string, assets map[string]assetMet
 		"Commit: ":                  commit,
 		"Module Verification: ":     "Passed",
 		"Seam Verification: ":       "Passed",
-		"Integrated Verification: ": "Passed on live Ubuntu Server 24.04 amd64",
+		"Integrated Verification: ": integrated,
 		"Codex Live Acceptance: ":   "Passed",
 		"Owner Acceptance: ":        "Not required",
 	}
@@ -421,10 +427,20 @@ func latestAcceptanceRecord(body, tag, commit string, assets map[string]assetMet
 	verifier, verifierOK := uniqueRecordValue(body, "Public verifier: ")
 	secretSafe, secretSafeOK := uniqueRecordValue(body, "Secret-safe result: ")
 	role, roleOK := uniqueRecordValue(body, "Qualification role: ")
-	if !resultOK || resultCode != "RELEASE-INSTALLER-UPDATER-TWO-RELEASE-QUALIFICATION" && resultCode != "RELEASE-INSTALLER-UPDATER-RESCUE-QUALIFICATION" || !workflowOK || !workflowEvidencePattern.MatchString(workflow) || !runnerOK || !acceptanceRunnerPattern.MatchString(runner) || !toolchainOK || !goToolchainPattern.MatchString(toolchain) || !verifierOK || verifier != Version+" "+SigningFingerprint || !secretSafeOK || secretSafe != "Passed" || !roleOK || !qualificationRolePattern.MatchString(role) {
+	legacyResult := legacy && (resultCode == "RELEASE-INSTALLER-UPDATER-TWO-RELEASE-QUALIFICATION" || resultCode == "RELEASE-INSTALLER-UPDATER-RESCUE-QUALIFICATION") && qualificationRolePattern.MatchString(role)
+	v3Result := v3 && resultCode == "RELEASE-V3-PACKAGED-LIVE-QUALIFICATION" && role == "Clean-installed V3 release"
+	if !resultOK || !legacyResult && !v3Result || !workflowOK || !workflowEvidencePattern.MatchString(workflow) || !runnerOK || !acceptanceRunnerPattern.MatchString(runner) || !toolchainOK || !goToolchainPattern.MatchString(toolchain) || !verifierOK || verifier != Version+" "+SigningFingerprint || !secretSafeOK || secretSafe != "Passed" || !roleOK {
 		return "", 0, false
 	}
-	if resultCode == "RELEASE-INSTALLER-UPDATER-RESCUE-QUALIFICATION" {
+	if v3 {
+		detailed, detailedOK := uniqueRecordValue(body, "Detailed evidence SHA-256: ")
+		proxyPackage, proxyOK := uniqueRecordValue(body, "Proxy package: ")
+		outsidePackage, outsideOK := uniqueRecordValue(body, "Outside-client package: ")
+		packageIdentity := "sing-box 1.13.19 amd64 fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf"
+		if !detailedOK || !hashPattern.MatchString(detailed) || !proxyOK || proxyPackage != packageIdentity || !outsideOK || outsidePackage != packageIdentity {
+			return "", 0, false
+		}
+	} else if resultCode == "RELEASE-INSTALLER-UPDATER-RESCUE-QUALIFICATION" {
 		defect, defectOK := uniqueRecordValue(body, "Rescue defect evidence: ")
 		failedRun, failedRunOK := uniqueRecordValue(body, "Failed normal run evidence: ")
 		waiver, waiverOK := uniqueRecordValue(body, "Normal journey waiver: ")

@@ -57,7 +57,7 @@ type gatewayRelease struct {
 type qualificationGateway struct {
 	manifest json.RawMessage
 	bundle   json.RawMessage
-	releases [2]gatewayRelease
+	releases []gatewayRelease
 	control  string
 }
 
@@ -88,10 +88,10 @@ func newQualificationGateway(manifest, bundle json.RawMessage, assetRoot string)
 		return nil, errors.New("qualification authority refused")
 	}
 	var document gatewayManifest
-	if json.Unmarshal(manifest, &document) != nil || document.Schema != "sbxr-qualification-manifest-v1" || document.Repository != softwarelifecycle.Repository || len(document.Releases) != 2 || document.Releases[0].Tag == document.Releases[1].Tag || document.Releases[0].Sequence == 0 || document.Releases[1].Sequence <= document.Releases[0].Sequence {
+	if json.Unmarshal(manifest, &document) != nil || document.Schema != "sbxr-qualification-manifest-v1" || document.Repository != softwarelifecycle.Repository || len(document.Releases) < 1 || len(document.Releases) > 2 || document.Releases[0].Sequence == 0 || len(document.Releases) == 2 && (document.Releases[0].Tag == document.Releases[1].Tag || document.Releases[1].Sequence <= document.Releases[0].Sequence) {
 		return nil, errors.New("qualification manifest refused")
 	}
-	gateway := &qualificationGateway{manifest: append(json.RawMessage(nil), manifest...), bundle: append(json.RawMessage(nil), bundle...)}
+	gateway := &qualificationGateway{manifest: append(json.RawMessage(nil), manifest...), bundle: append(json.RawMessage(nil), bundle...), releases: make([]gatewayRelease, len(document.Releases))}
 	for index, release := range document.Releases {
 		if !validTag(release.Tag) || !validCommit(release.Commit) || release.Identity.Repository != softwarelifecycle.Repository || release.Identity.Tag != release.Tag || release.Identity.Commit != release.Commit || !validSHA256(release.Identity.IndexSHA256) || len(release.Assets) != len(gatewayAssetNames) {
 			gateway.close()
@@ -173,7 +173,7 @@ func (gateway *qualificationGateway) ServeHTTP(response http.ResponseWriter, req
 		if strings.HasPrefix(request.URL.Path, prefix) {
 			id := strings.TrimPrefix(request.URL.Path, prefix)
 			if len(id) == 1 && id[0] >= '1' && id[0] <= '4' {
-				gateway.serveAsset(response, gateway.releases[1].assets[gatewayAssetNames[id[0]-'1']])
+				gateway.serveAsset(response, gateway.releases[len(gateway.releases)-1].assets[gatewayAssetNames[id[0]-'1']])
 				return
 			}
 		}
@@ -210,7 +210,7 @@ func (gateway *qualificationGateway) waitForLatestRelease() {
 }
 
 func (gateway *qualificationGateway) serveLatest(response http.ResponseWriter) {
-	release := gateway.releases[1]
+	release := gateway.releases[len(gateway.releases)-1]
 	assets := make([]map[string]any, 0, len(gatewayAssetNames))
 	for index, name := range gatewayAssetNames {
 		asset := release.assets[name]

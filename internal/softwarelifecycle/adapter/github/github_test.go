@@ -28,6 +28,20 @@ func TestSourceChecksOnlyTheQualifiedFourAssetLatestRelease(t *testing.T) {
 	}
 }
 
+func TestSourceAcceptsTheV3AcceptanceRecord(t *testing.T) {
+	fixture := newLatestReleaseFixture(t)
+	body := strings.Replace(fixture.acceptanceRecord(), "# SBXR Installer-Updater Acceptance Record", "# SBXR Acceptance Record", 1)
+	body = strings.Replace(body, "Qualification role: Discovered, installed, recovered, final latest release", "Qualification role: Clean-installed V3 release", 1)
+	body = strings.Replace(body, "Stable result code: RELEASE-INSTALLER-UPDATER-TWO-RELEASE-QUALIFICATION", "Stable result code: RELEASE-V3-PACKAGED-LIVE-QUALIFICATION", 1)
+	body = strings.Replace(body, "Integrated Verification: Passed on live Ubuntu Server 24.04 amd64", "Integrated Verification: Passed on live Ubuntu Server 24.04 amd64 and outside runner", 1)
+	body = strings.Replace(body, "Secret-safe result: Passed\n", "Detailed evidence SHA-256: "+strings.Repeat("a", 64)+"\nProxy package: sing-box 1.13.19 amd64 fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf\nOutside-client package: sing-box 1.13.19 amd64 fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf\nSecret-safe result: Passed\n", 1)
+	fixture.release.Body = body
+	got, outcome := NewWithEndpoint(fixture.server.Client(), fixture.server.URL, fixture.verifier).CheckLatest(t.Context())
+	if outcome != softwarelifecycle.LatestReleaseAccepted || got.Sequence != 17 {
+		t.Fatalf("CheckLatest() = %#v, %v", got, outcome)
+	}
+}
+
 func TestSourceChecksTheCandidateFailureStateBoundQualification(t *testing.T) {
 	fixture := newLatestReleaseFixture(t)
 	assets := make([]map[string]any, 0, len(fixture.release.Assets))

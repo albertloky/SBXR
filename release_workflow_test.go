@@ -463,6 +463,61 @@ func TestStablePublishesOnlyTheSignedQualifiedDraftsAndProvesStableNoUpdate(t *t
 	assertActionsPinned(t, workflow)
 }
 
+func TestCandidateRoutesOneV3CandidateThroughPackagedLiveQualification(t *testing.T) {
+	body, err := os.ReadFile(".github/workflows/candidate.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(body)
+	scriptBody, err := os.ReadFile(".github/scripts/v3-packaged-live.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v3Path := workflow + "\n" + string(scriptBody)
+	stableBody, err := os.ReadFile(".github/workflows/stable.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stable := string(stableBody)
+	for _, required := range []string{
+		"- v3",
+		"v3-clean",
+		"docs/acceptance/v3-packaged-live.md",
+		".github/scripts/v3-packaged-live.sh",
+		"v3-packaged-live-evidence.json",
+		`stage:"v3-packaged-live-result"`,
+		"v3-packaged-live-result-facts.json",
+		"v3-packaged-live-result-decision.json",
+		"/dev/shm/sbxr-v3-client.json",
+		"chmod 0600",
+		"SIGSTOP",
+		"SIGKILL",
+		"'Validate configuration'",
+		"'Activation committed'",
+		"'Removal committed'",
+		"fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf",
+		"BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY",
+		"RELEASE-V3-PACKAGED-LIVE-QUALIFICATION",
+		`(.records | length) == 1`,
+	} {
+		if !strings.Contains(v3Path, required) {
+			t.Fatalf("candidate.yml omitted V3 qualification contract %q", required)
+		}
+	}
+	for _, required := range []string{"stable-v3-finalization", "v3-finalization-failure", `v3_packaged_live == "Passed"`, `complete_removal == "Passed"`, "stable-v3-finalization-facts.json", "stable-v3-finalization-decision.json"} {
+		if !strings.Contains(stable, required) {
+			t.Fatalf("stable.yml omitted V3 finalization contract %q", required)
+		}
+	}
+	for _, forbidden := range []string{"v2.0.43", "pause-v3", "test-mode-v3"} {
+		if strings.Contains(workflow, forbidden) {
+			t.Fatalf("candidate.yml invented V3 qualification authority %q", forbidden)
+		}
+	}
+	assertActionsPinned(t, workflow)
+	assertActionsPinned(t, stable)
+}
+
 func TestReleaseFailuresWithdrawOnlyRecheckedTargetsAndBurnQualifiedIdentities(t *testing.T) {
 	candidateBody, err := os.ReadFile(".github/workflows/candidate.yml")
 	if err != nil {

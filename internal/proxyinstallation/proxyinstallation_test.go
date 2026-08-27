@@ -1020,7 +1020,7 @@ func TestFreshInspectionReportsConflictingFootprintAsProblemDetected(t *testing.
 
 	review := installation.Review(t.Context(), StatusAction)
 
-	if review.Status != ProblemDetected || review.Result.Code != StatusProblemDetected || review.Result.Message != "A proxy problem was detected. View details before continuing." || !reflect.DeepEqual(review.LegalActions, []Action{ViewDetailsAction, CompleteRemovalAction}) {
+	if review.Status != ProblemDetected || review.Result.Code != StatusProblemDetected || review.Result.Message != "A proxy problem was detected. View details before continuing." || !reflect.DeepEqual(review.LegalActions, []Action{StartSetupAction, ViewDetailsAction, CompleteRemovalAction}) {
 		t.Fatalf("Review() = %#v", review)
 	}
 }

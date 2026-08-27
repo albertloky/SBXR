@@ -246,9 +246,10 @@ func (installation *removalInstallation) Review(_ context.Context, action proxyi
 	return review
 }
 
-func (installation *removalInstallation) Execute(_ context.Context, _ proxyinstallation.PreparedAction, confirmation proxyinstallation.Confirmation, _ proxyinstallation.ProgressReporter) proxyinstallation.Result {
+func (installation *removalInstallation) Execute(_ context.Context, _ proxyinstallation.PreparedAction, confirmation proxyinstallation.Confirmation, progress proxyinstallation.ProgressReporter) proxyinstallation.Result {
 	installation.confirmations = append(installation.confirmations, confirmation)
 	if confirmation == proxyinstallation.Approved {
+		progress(proxyinstallation.Progress{Phase: "Removal committed"})
 		return proxyinstallation.Result{Status: proxyinstallation.Running, Message: "The requested action was refused. View details for the failed check and correction.", Code: proxyinstallation.ActionRefused}
 	}
 	return proxyinstallation.Result{Status: proxyinstallation.Running, Message: "No changes were made.", Code: proxyinstallation.ActionCancelled}
@@ -273,7 +274,7 @@ func TestRunRequiresExactCompleteRemovalConfirmationAndReinspects(t *testing.T) 
 
 			status := Run(t.Context(), nil, bytes.NewBufferString("1\n"+test.input+"\n0\n"), &output, &output, installation)
 
-			if status != 0 || !reflect.DeepEqual(installation.confirmations, []proxyinstallation.Confirmation{test.confirmation}) || installation.statusReviews != 2 || !strings.Contains(output.String(), "Type REMOVE SBXR to confirm Complete removal") || !strings.Contains(output.String(), "Code: "+string(test.code)) {
+			if status != 0 || !reflect.DeepEqual(installation.confirmations, []proxyinstallation.Confirmation{test.confirmation}) || installation.statusReviews != 2 || !strings.Contains(output.String(), "Type REMOVE SBXR to confirm Complete removal") || !strings.Contains(output.String(), "Code: "+string(test.code)) || test.confirmation == proxyinstallation.Approved && !strings.Contains(output.String(), "Progress: Removal committed") {
 				t.Fatalf("status=%d confirmations=%v reviews=%d output:\n%s", status, installation.confirmations, installation.statusReviews, output.String())
 			}
 		})

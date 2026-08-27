@@ -143,7 +143,9 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 			if !ok {
 				return 1
 			}
-			latest = installation.Execute(ctx, *review.Prepared, confirmation, nil)
+			latest = installation.Execute(ctx, *review.Prepared, confirmation, func(progress proxyinstallation.Progress) {
+				_, _ = fmt.Fprintln(output, "Progress:", progress.Phase)
+			})
 			if writeRefusal(output, latest) != nil {
 				return 1
 			}

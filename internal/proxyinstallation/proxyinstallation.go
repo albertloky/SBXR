@@ -336,6 +336,9 @@ func (module *installedInterface) Review(ctx context.Context, action Action) Rev
 	if module.host == nil || module.singbox == nil || !inspectionAccepted(inspection) || resourcesPresent(inspection.Resources) {
 		review.Status = ProblemDetected
 		review.LegalActions = []Action{ViewDetailsAction, CompleteRemovalAction}
+		if inspectionAccepted(inspection) && resourcesPresent(inspection.Resources) {
+			review.LegalActions = []Action{StartSetupAction, ViewDetailsAction, CompleteRemovalAction}
+		}
 		review.Result = Result{Status: ProblemDetected, Message: "A proxy problem was detected. View details before continuing.", Code: StatusProblemDetected}
 		review.Details = inspectionDetails(installed, installedReady, ProblemDetected, inspection, unownedFacts, nil, true)
 		switch action {

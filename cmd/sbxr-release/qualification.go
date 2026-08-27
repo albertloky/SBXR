@@ -26,11 +26,13 @@ const (
 	candidateDraftVerificationStage    = "candidate-draft-verification"
 	qualificationBoundaryStage         = "qualification-boundary"
 	acceptanceVPSResultStage           = "acceptance-vps-result"
+	v3PackagedLiveResultStage          = "v3-packaged-live-result"
 	candidateFailureStage              = "candidate-failure-finalization"
 	candidateFailureVerificationStage  = "candidate-failure-verification"
 	stablePreflightStage               = "stable-preflight"
 	stablePublicationStage             = "stable-publication"
 	stablePublicationVerificationStage = "stable-publication-verification"
+	stableV3FinalizationStage          = "stable-v3-finalization"
 	stableNoUpdateStage                = "stable-no-update"
 	stableFailureStage                 = "stable-failure-finalization"
 	stableFailureVerificationStage     = "stable-failure-verification"
@@ -431,6 +433,112 @@ type acceptanceVPSResultDecision struct {
 	Stage               string             `json:"stage"`
 }
 
+type v3PackageIdentity struct {
+	Architecture     string `json:"architecture"`
+	Name             string `json:"name"`
+	Repository       string `json:"repository"`
+	SHA256           string `json:"sha256"`
+	SigningKeySHA256 string `json:"signing_key_sha256"`
+	Size             int64  `json:"size"`
+	Version          string `json:"version"`
+}
+
+type v3UninterruptedEvidence struct {
+	CleanInstallation       bool   `json:"clean_installation"`
+	DetailsComplete         bool   `json:"details_complete"`
+	DisclosureBounded       bool   `json:"disclosure_bounded"`
+	EgressMatched           bool   `json:"egress_matched"`
+	FinalAbsenceComplete    bool   `json:"final_absence_complete"`
+	InstalledIdentity       bool   `json:"installed_identity"`
+	NotSetUp                bool   `json:"not_set_up"`
+	OutsideRoutesDiffer     bool   `json:"outside_routes_differ"`
+	RemovalResult           string `json:"removal_result"`
+	RunnerConfigurationGone bool   `json:"runner_configuration_absent"`
+	RunnerFileMode          string `json:"runner_file_mode"`
+	RunnerListenerAbsent    bool   `json:"runner_listener_absent"`
+	RunnerMemoryBacked      bool   `json:"runner_memory_backed"`
+	RunnerProcessAbsent     bool   `json:"runner_process_absent"`
+	Running                 bool   `json:"running"`
+	SetupConfirmed          bool   `json:"setup_confirmed"`
+	SetupResult             string `json:"setup_result"`
+	SetupReviewed           bool   `json:"setup_reviewed"`
+}
+
+type v3FailureCase struct {
+	FinalState      string `json:"final_state"`
+	FinishingAction string `json:"finishing_action"`
+	Name            string `json:"name"`
+	PostDeathStatus string `json:"post_death_status"`
+	TriggerEvent    string `json:"trigger_event"`
+}
+
+type v3SecretScan struct {
+	ExactSecretsAbsent bool `json:"exact_secrets_absent"`
+	PatternsAbsent     bool `json:"prohibited_patterns_absent"`
+	RetainedEvidence   bool `json:"retained_evidence"`
+	RunnerCapture      bool `json:"runner_capture"`
+	VPSCapture         bool `json:"vps_capture"`
+	WorkflowOutput     bool `json:"workflow_output"`
+}
+
+type v3StageTimes struct {
+	AfterActivationCompletedAt  string `json:"after_activation_completed_at"`
+	AfterRemovalCompletedAt     string `json:"after_removal_completed_at"`
+	BeforeActivationCompletedAt string `json:"before_activation_completed_at"`
+	CleanFootprintCompletedAt   string `json:"clean_footprint_completed_at"`
+	CompleteRemovalCompletedAt  string `json:"complete_removal_completed_at"`
+	JourneyStartedAt            string `json:"journey_started_at"`
+	OwnershipDriftCompletedAt   string `json:"ownership_drift_completed_at"`
+	RunnerCleanupCompletedAt    string `json:"runner_cleanup_completed_at"`
+	UninterruptedCompletedAt    string `json:"uninterrupted_completed_at"`
+}
+
+type v3PackagedLiveEvidence struct {
+	FailureCases                []v3FailureCase         `json:"failure_cases"`
+	ObservedAt                  string                  `json:"observed_at"`
+	OutsideClientPackage        v3PackageIdentity       `json:"outside_client_package"`
+	ProxyPackage                v3PackageIdentity       `json:"proxy_package"`
+	QualificationManifestSHA256 string                  `json:"qualification_manifest_sha256"`
+	Schema                      string                  `json:"schema"`
+	SecretScan                  v3SecretScan            `json:"secret_scan"`
+	StageTimes                  v3StageTimes            `json:"stage_times"`
+	Uninterrupted               v3UninterruptedEvidence `json:"uninterrupted"`
+}
+
+type v3PackagedLiveResultFacts struct {
+	DetailedEvidence            v3PackagedLiveEvidence `json:"detailed_evidence"`
+	DetailedEvidenceSHA256      string                 `json:"detailed_evidence_sha256"`
+	EvaluationTime              string                 `json:"evaluation_time"`
+	ObservedAt                  string                 `json:"observed_at"`
+	PriorDecisionSHA256         string                 `json:"prior_decision_sha256"`
+	QualificationBoundaryFacts  json.RawMessage        `json:"qualification_boundary_facts"`
+	QualificationManifest       json.RawMessage        `json:"qualification_manifest"`
+	QualificationManifestSigned bool                   `json:"qualification_manifest_attested"`
+	Releases                    []qualificationRelease `json:"releases"`
+	Runner                      acceptanceVPSRunner    `json:"runner"`
+	Schema                      string                 `json:"schema"`
+	Stage                       string                 `json:"stage"`
+}
+
+type v3AcceptanceRecordJSON struct {
+	AcceptedAt             string                   `json:"accepted_at"`
+	Assets                 []decisionAsset          `json:"assets"`
+	DetailedEvidenceSHA256 string                   `json:"detailed_evidence_sha256"`
+	Evidence               []string                 `json:"evidence"`
+	OutsideClientPackage   v3PackageIdentity        `json:"outside_client_package"`
+	ProxyPackage           v3PackageIdentity        `json:"proxy_package"`
+	QualificationRole      string                   `json:"qualification_role"`
+	ReleaseIdentity        decisionReleaseIdentity  `json:"release_identity"`
+	Runner                 string                   `json:"runner"`
+	Schema                 string                   `json:"schema"`
+	SecretSafeResult       string                   `json:"secret_safe_result"`
+	Sequence               uint64                   `json:"sequence"`
+	Software               acceptanceRecordSoftware `json:"software"`
+	StableResultCode       string                   `json:"stable_result_code"`
+	Stages                 acceptanceRecordStages   `json:"stages"`
+	WorkflowRun            string                   `json:"workflow_run"`
+}
+
 type stableArchiveObservation struct {
 	Commit          string `json:"commit"`
 	RemoteCommit    string `json:"remote_commit"`
@@ -574,6 +682,27 @@ type stablePublicationVerificationDecision struct {
 	PriorDecisionSHA256 string            `json:"prior_decision_sha256"`
 	Schema              string            `json:"schema"`
 	Stage               string            `json:"stage"`
+}
+
+type stableV3FinalizationFacts struct {
+	ObservedAt                      string          `json:"observed_at"`
+	PriorDecisionSHA256             string          `json:"prior_decision_sha256"`
+	PublicationVerificationDecision json.RawMessage `json:"publication_verification_decision"`
+	PublicationVerificationFacts    json.RawMessage `json:"publication_verification_facts"`
+	Schema                          string          `json:"schema"`
+	Stage                           string          `json:"stage"`
+}
+
+type stableV3FinalizationDecision struct {
+	Actions             []json.RawMessage `json:"actions"`
+	CompleteRemoval     string            `json:"complete_removal"`
+	FactsSHA256         string            `json:"facts_sha256"`
+	Outcome             string            `json:"outcome"`
+	PriorDecisionSHA256 string            `json:"prior_decision_sha256"`
+	PublicVerification  string            `json:"public_verification"`
+	Schema              string            `json:"schema"`
+	Stage               string            `json:"stage"`
+	V3PackagedLive      string            `json:"v3_packaged_live"`
 }
 
 type stableInstalledRecord struct {
@@ -852,6 +981,12 @@ func runQualification(input io.Reader, output io.Writer) error {
 			return errors.New("qualification facts refused")
 		}
 		decision, err = evaluateAcceptanceVPSResult(facts, document)
+	case v3PackagedLiveResultStage:
+		var facts v3PackagedLiveResultFacts
+		if !decodeCanonical(document, &facts) {
+			return errors.New("qualification facts refused")
+		}
+		decision, err = evaluateV3PackagedLiveResult(facts, document)
 	case candidateFailureStage:
 		var facts candidateFailureFacts
 		if !decodeCanonical(document, &facts) {
@@ -882,6 +1017,12 @@ func runQualification(input io.Reader, output io.Writer) error {
 			return errors.New("qualification facts refused")
 		}
 		decision, err = evaluateStablePublicationVerification(facts, document)
+	case stableV3FinalizationStage:
+		var facts stableV3FinalizationFacts
+		if !decodeCanonical(document, &facts) {
+			return errors.New("qualification facts refused")
+		}
+		decision, err = evaluateStableV3Finalization(facts, document)
 	case stableNoUpdateStage:
 		var facts stableNoUpdateFacts
 		if !decodeCanonical(document, &facts) {
@@ -924,20 +1065,40 @@ func evaluateStablePreflight(facts stablePreflightFacts, document []byte) (stabl
 	if facts.Schema != qualificationFactsSchema || facts.Stage != stablePreflightStage || !facts.ManifestAttested || facts.BurnedIdentities == nil || facts.Releases == nil || secretBearing(document) || observedErr != nil || createdErr != nil || observedAt.Format(time.RFC3339) != facts.ObservedAt || createdAt.Format(time.RFC3339) != facts.CandidateRun.CreatedAt || age < 0 || age >= 90*24*time.Hour || !validSHA256(facts.ChecklistSHA256) || !validCommit(facts.RemoteMain) || !validFailureBurns(facts.BurnedIdentities) {
 		return refused()
 	}
-	var acceptanceFacts acceptanceVPSResultFacts
-	if !decodeCanonical(facts.AcceptanceFacts, &acceptanceFacts) {
+	var envelope qualificationEnvelope
+	if json.Unmarshal(facts.AcceptanceFacts, &envelope) != nil {
 		return refused()
 	}
-	acceptance, err := evaluateAcceptanceVPSResult(acceptanceFacts, facts.AcceptanceFacts)
-	if err != nil {
-		return refused()
-	}
-	acceptanceBytes, err := marshalCanonical(acceptance)
-	if err != nil || !bytes.Equal(acceptanceBytes, facts.AcceptanceDecision) {
+	var records []acceptanceRecord
+	var boundaryDocument json.RawMessage
+	switch envelope.Stage {
+	case acceptanceVPSResultStage:
+		var acceptanceFacts acceptanceVPSResultFacts
+		if !decodeCanonical(facts.AcceptanceFacts, &acceptanceFacts) {
+			return refused()
+		}
+		acceptance, err := evaluateAcceptanceVPSResult(acceptanceFacts, facts.AcceptanceFacts)
+		acceptanceBytes, marshalErr := marshalCanonical(acceptance)
+		if err != nil || marshalErr != nil || !bytes.Equal(acceptanceBytes, facts.AcceptanceDecision) {
+			return refused()
+		}
+		records, boundaryDocument = acceptance.Records, acceptanceFacts.QualificationBoundaryFacts
+	case v3PackagedLiveResultStage:
+		var acceptanceFacts v3PackagedLiveResultFacts
+		if !decodeCanonical(facts.AcceptanceFacts, &acceptanceFacts) {
+			return refused()
+		}
+		acceptance, err := evaluateV3PackagedLiveResult(acceptanceFacts, facts.AcceptanceFacts)
+		acceptanceBytes, marshalErr := marshalCanonical(acceptance)
+		if err != nil || marshalErr != nil || !bytes.Equal(acceptanceBytes, facts.AcceptanceDecision) {
+			return refused()
+		}
+		records, boundaryDocument = acceptance.Records, acceptanceFacts.QualificationBoundaryFacts
+	default:
 		return refused()
 	}
 	var boundaryFacts qualificationBoundaryFacts
-	if !decodeCanonical(acceptanceFacts.QualificationBoundaryFacts, &boundaryFacts) {
+	if !decodeCanonical(boundaryDocument, &boundaryFacts) {
 		return refused()
 	}
 	manifest, err := evaluateQualificationBoundary(boundaryFacts)
@@ -958,23 +1119,27 @@ func evaluateStablePreflight(facts stablePreflightFacts, document []byte) (stabl
 		return refused()
 	}
 	preflight, err := verifiedPreflightDecision(constructionFacts.PreflightFacts, constructionFacts.PreflightDecision)
-	if err != nil || preflight.SourceState != manifest.SourceState || len(manifest.Releases) != 2 || len(facts.Releases) != 2 || len(acceptance.Records) != 2 {
+	expectedReleases := 2
+	if manifest.Mode == "v3" {
+		expectedReleases = 1
+	}
+	if err != nil || preflight.SourceState != manifest.SourceState || len(manifest.Releases) != expectedReleases || len(facts.Releases) != expectedReleases || len(records) != expectedReleases {
 		return refused()
 	}
-	records := make(map[string]string, len(acceptance.Records))
-	for _, record := range acceptance.Records {
-		if _, exists := records[record.Tag]; exists {
+	recordsByTag := make(map[string]string, len(records))
+	for _, record := range records {
+		if _, exists := recordsByTag[record.Tag]; exists {
 			return refused()
 		}
-		records[record.Tag] = record.Body
+		recordsByTag[record.Tag] = record.Body
 	}
 	for index, release := range manifest.Releases {
 		observed := facts.Releases[index]
 		if observed.Tag != release.Tag || observed.Sequence != release.Sequence || observed.Commit != release.Commit || observed.ReleaseID != release.ReleaseID || observed.ReleaseIdentity != release.ReleaseIdentity || !reflect.DeepEqual(observed.Assets, release.Assets) {
 			return refused()
 		}
-		if index == 1 || manifest.SourceState == "initial-normal" {
-			if !observed.Draft || observed.Immutable || observed.Prerelease || observed.Body != records[release.Tag] {
+		if manifest.Mode == "v3" || index == 1 || manifest.SourceState == "initial-normal" {
+			if !observed.Draft || observed.Immutable || observed.Prerelease || observed.Body != recordsByTag[release.Tag] {
 				return refused()
 			}
 		} else {
@@ -984,7 +1149,7 @@ func evaluateStablePreflight(facts stablePreflightFacts, document []byte) (stabl
 			}
 		}
 	}
-	indexes := []int{1}
+	indexes := []int{len(manifest.Releases) - 1}
 	if manifest.SourceState == "initial-normal" {
 		indexes = []int{0, 1}
 	}
@@ -996,7 +1161,10 @@ func evaluateStablePreflight(facts stablePreflightFacts, document []byte) (stabl
 		if releaseIndex == 0 {
 			failureReason = "initial-a-public-verification-failure"
 		}
-		actions[index] = publishStableReleaseAction{Assets: release.Assets, Body: records[release.Tag], Commit: release.Commit, Draft: false, FactsSHA256: factsSHA256, FailureReason: failureReason, Immutable: true, Latest: true, ObservedAt: facts.ObservedAt, Prerelease: false, PriorDecisionSHA256: priorDecisionSHA256, ReleaseID: release.ReleaseID, ReleaseIdentity: release.ReleaseIdentity, Sequence: release.Sequence, Tag: release.Tag, Type: "publish-stable-release"}
+		if manifest.Mode == "v3" {
+			failureReason = "v3-publication-or-verification-failure"
+		}
+		actions[index] = publishStableReleaseAction{Assets: release.Assets, Body: recordsByTag[release.Tag], Commit: release.Commit, Draft: false, FactsSHA256: factsSHA256, FailureReason: failureReason, Immutable: true, Latest: true, ObservedAt: facts.ObservedAt, Prerelease: false, PriorDecisionSHA256: priorDecisionSHA256, ReleaseID: release.ReleaseID, ReleaseIdentity: release.ReleaseIdentity, Sequence: release.Sequence, Tag: release.Tag, Type: "publish-stable-release"}
 	}
 	return stablePublicationDecision{Actions: actions, FactsSHA256: factsSHA256, Outcome: "actions-required", PriorDecisionSHA256: priorDecisionSHA256, Schema: qualificationDecisionSchema, Stage: stablePreflightStage}, nil
 }
@@ -1110,6 +1278,44 @@ func evaluateStablePublicationVerification(facts stablePublicationVerificationFa
 	return decision, nil
 }
 
+func evaluateStableV3Finalization(facts stableV3FinalizationFacts, document []byte) (stableV3FinalizationDecision, error) {
+	refused := func() (stableV3FinalizationDecision, error) {
+		return stableV3FinalizationDecision{}, errors.New("stable V3 finalization refused")
+	}
+	observedAt, observedErr := time.Parse(time.RFC3339, facts.ObservedAt)
+	if facts.Schema != qualificationFactsSchema || facts.Stage != stableV3FinalizationStage || observedErr != nil || observedAt.Format(time.RFC3339) != facts.ObservedAt || !validSHA256(facts.PriorDecisionSHA256) || secretBearing(document) {
+		return refused()
+	}
+	var verificationFacts stablePublicationVerificationFacts
+	if !decodeCanonical(facts.PublicationVerificationFacts, &verificationFacts) {
+		return refused()
+	}
+	verification, err := evaluateStablePublicationVerification(verificationFacts, facts.PublicationVerificationFacts)
+	verificationBytes, marshalErr := marshalCanonical(verification)
+	verifiedAt, verifiedAtErr := time.Parse(time.RFC3339, verificationFacts.ObservedAt)
+	if err != nil || marshalErr != nil || !bytes.Equal(verificationBytes, facts.PublicationVerificationDecision) || verification.Outcome != "accepted" || facts.PriorDecisionSHA256 != documentSHA256(facts.PublicationVerificationDecision) || verifiedAtErr != nil || observedAt.Before(verifiedAt) || observedAt.Sub(verifiedAt) > 30*time.Minute {
+		return refused()
+	}
+	var publicationFacts stablePublicationFacts
+	if !decodeCanonical(verificationFacts.PublicationFacts, &publicationFacts) {
+		return refused()
+	}
+	var preflightFacts stablePreflightFacts
+	if !decodeCanonical(publicationFacts.PreflightFacts, &preflightFacts) {
+		return refused()
+	}
+	var acceptanceFacts v3PackagedLiveResultFacts
+	if !decodeCanonical(preflightFacts.AcceptanceFacts, &acceptanceFacts) {
+		return refused()
+	}
+	acceptance, acceptanceErr := evaluateV3PackagedLiveResult(acceptanceFacts, preflightFacts.AcceptanceFacts)
+	acceptanceBytes, acceptanceMarshalErr := marshalCanonical(acceptance)
+	if acceptanceErr != nil || acceptanceMarshalErr != nil || !bytes.Equal(acceptanceBytes, preflightFacts.AcceptanceDecision) || len(acceptance.Records) != 1 {
+		return refused()
+	}
+	return stableV3FinalizationDecision{Actions: []json.RawMessage{}, CompleteRemoval: "Passed", FactsSHA256: documentSHA256(document), Outcome: "accepted", PriorDecisionSHA256: facts.PriorDecisionSHA256, PublicVerification: "Passed", Schema: qualificationDecisionSchema, Stage: stableV3FinalizationStage, V3PackagedLive: "Passed"}, nil
+}
+
 func evaluateStableNoUpdate(facts stableNoUpdateFacts, document []byte) (stableNoUpdateDecision, error) {
 	refused := func() (stableNoUpdateDecision, error) {
 		return stableNoUpdateDecision{}, errors.New("stable no-update verification refused")
@@ -1188,10 +1394,10 @@ func evaluateStableFailure(facts stableFailureFacts, document []byte) (stableFai
 	if (reason == "prepublication-failure" || reason == "initial-a-public-verification-failure") && aProven {
 		reason = "b-publication-or-verification-failure"
 	}
-	if reason != "prepublication-failure" && reason != "initial-a-public-verification-failure" && reason != "b-publication-or-verification-failure" && reason != "stable-no-update-failure" && reason != "qualification-expired" && reason != "owner-abandoned" {
+	if reason != "prepublication-failure" && reason != "initial-a-public-verification-failure" && reason != "b-publication-or-verification-failure" && reason != "stable-no-update-failure" && !(reason == "v3-finalization-failure" && manifest.Mode == "v3") && reason != "qualification-expired" && reason != "owner-abandoned" {
 		return refused()
 	}
-	indexes := []int{1}
+	indexes := []int{len(manifest.Releases) - 1}
 	if manifest.SourceState == "initial-normal" && !aProven && reason != "b-publication-or-verification-failure" && reason != "stable-no-update-failure" {
 		indexes = []int{0, 1}
 	}
@@ -1240,7 +1446,9 @@ func stableFailureBurn(existing []burnedIdentity, wanted burnedIdentity) burnedI
 }
 
 func validStableFailureManifest(manifest qualificationManifest) bool {
-	if manifest.Schema != "sbxr-qualification-manifest-v1" || manifest.Repository != softwarelifecycle.Repository || !validSHA256(manifest.AcceptanceVPSChecklistSHA256) || !validSHA256(manifest.CandidateFailureStateSHA256) || manifest.Approval.State != "approved" || len(manifest.Approval.Environments) != 1 || manifest.Approval.Environments[0].Name != "acceptance-vps" || len(manifest.Releases) != 2 || len(manifest.Approval.DecisionChain) != 3 || (manifest.SourceState != "initial-normal" && manifest.SourceState != "later-normal" && manifest.SourceState != "rescue") || (manifest.Mode != "normal" && manifest.Mode != "rescue") || (manifest.Mode == "rescue") != (manifest.SourceState == "rescue") || (manifest.Rescue != nil) != (manifest.SourceState == "rescue") || manifest.Workflow.Path != ".github/workflows/candidate.yml" || manifest.Workflow.Ref != softwarelifecycle.Repository+"/.github/workflows/candidate.yml@refs/heads/main" || !validCommit(manifest.Workflow.Commit) || manifest.Workflow.RunURL != failedRunURL(manifest.Workflow.RunID) {
+	v3 := manifest.Mode == "v3" && manifest.SourceState == "v3-clean" && len(manifest.Releases) == 1
+	legacy := (manifest.Mode == "normal" || manifest.Mode == "rescue") && (manifest.SourceState == "initial-normal" || manifest.SourceState == "later-normal" || manifest.SourceState == "rescue") && len(manifest.Releases) == 2
+	if manifest.Schema != "sbxr-qualification-manifest-v1" || manifest.Repository != softwarelifecycle.Repository || !validSHA256(manifest.AcceptanceVPSChecklistSHA256) || !validSHA256(manifest.CandidateFailureStateSHA256) || manifest.Approval.State != "approved" || len(manifest.Approval.Environments) != 1 || manifest.Approval.Environments[0].Name != "acceptance-vps" || !v3 && !legacy || len(manifest.Approval.DecisionChain) != 3 || (manifest.Mode == "rescue") != (manifest.SourceState == "rescue") || (manifest.Rescue != nil) != (manifest.SourceState == "rescue") || manifest.Workflow.Path != ".github/workflows/candidate.yml" || manifest.Workflow.Ref != softwarelifecycle.Repository+"/.github/workflows/candidate.yml@refs/heads/main" || !validCommit(manifest.Workflow.Commit) || manifest.Workflow.RunURL != failedRunURL(manifest.Workflow.RunID) {
 		return false
 	}
 	expectedStages := []string{candidatePreflightStage, candidateDraftConstructionStage, candidateDraftVerificationStage}
@@ -1250,7 +1458,7 @@ func validStableFailureManifest(manifest qualificationManifest) bool {
 		}
 	}
 	for index, release := range manifest.Releases {
-		if release.ReleaseID <= 0 || release.Sequence == 0 || (index != 0 || manifest.SourceState == "initial-normal") && release.Commit != manifest.Workflow.Commit || release.ReleaseIdentity != (decisionReleaseIdentity{Commit: release.Commit, ReleaseIndexSHA256: release.ReleaseIdentity.ReleaseIndexSHA256, Repository: softwarelifecycle.Repository, Tag: release.Tag}) || !validSHA256(release.ReleaseIdentity.ReleaseIndexSHA256) || !validTag(release.Tag) || len(release.Assets) != 4 {
+		if release.ReleaseID <= 0 || release.Sequence == 0 || (manifest.Mode == "v3" || index != 0 || manifest.SourceState == "initial-normal") && release.Commit != manifest.Workflow.Commit || release.ReleaseIdentity != (decisionReleaseIdentity{Commit: release.Commit, ReleaseIndexSHA256: release.ReleaseIdentity.ReleaseIndexSHA256, Repository: softwarelifecycle.Repository, Tag: release.Tag}) || !validSHA256(release.ReleaseIdentity.ReleaseIndexSHA256) || !validTag(release.Tag) || len(release.Assets) != 4 {
 			return false
 		}
 		for index, asset := range release.Assets {
@@ -1259,7 +1467,7 @@ func validStableFailureManifest(manifest qualificationManifest) bool {
 			}
 		}
 	}
-	return manifest.Releases[0].Sequence < manifest.Releases[1].Sequence && manifest.Releases[0].Tag != manifest.Releases[1].Tag && manifest.Releases[0].ReleaseID != manifest.Releases[1].ReleaseID
+	return v3 || manifest.Releases[0].Sequence < manifest.Releases[1].Sequence && manifest.Releases[0].Tag != manifest.Releases[1].Tag && manifest.Releases[0].ReleaseID != manifest.Releases[1].ReleaseID
 }
 
 func validStableFinalizationRun(run stableFinalizationRun) bool {
@@ -1304,7 +1512,17 @@ func buildStableFailedAcceptanceRecord(manifest qualificationManifest, release q
 		return "", errors.New("qualified Acceptance Record refused")
 	}
 	if !failedRetry {
-		canonicalSource, err := marshalCanonical(source)
+		var canonicalSource []byte
+		var err error
+		if source.StableResultCode == "RELEASE-V3-PACKAGED-LIVE-QUALIFICATION" {
+			var v3Source v3AcceptanceRecordJSON
+			if json.Unmarshal(recordBytes, &v3Source) != nil {
+				return "", errors.New("qualified Acceptance Record refused")
+			}
+			canonicalSource, err = marshalCanonical(v3Source)
+		} else {
+			canonicalSource, err = marshalCanonical(source)
+		}
 		if err != nil || !bytes.Equal(canonicalSource, recordBytes) {
 			return "", errors.New("qualified Acceptance Record refused")
 		}
@@ -1740,6 +1958,97 @@ func evaluateAcceptanceVPSResult(facts acceptanceVPSResultFacts, document []byte
 	return acceptanceVPSResultDecision{FactsSHA256: documentSHA256(document), Outcome: "accepted", PriorDecisionSHA256: facts.PriorDecisionSHA256, Records: records, Schema: qualificationDecisionSchema, Stage: acceptanceVPSResultStage}, nil
 }
 
+func evaluateV3PackagedLiveResult(facts v3PackagedLiveResultFacts, document []byte) (acceptanceVPSResultDecision, error) {
+	refused := func() (acceptanceVPSResultDecision, error) {
+		return acceptanceVPSResultDecision{}, errors.New("V3 packaged live result refused")
+	}
+	observedAt, observedErr := time.Parse(time.RFC3339, facts.ObservedAt)
+	evaluationTime, evaluationErr := time.Parse(time.RFC3339, facts.EvaluationTime)
+	evidenceBytes, evidenceErr := marshalCanonical(facts.DetailedEvidence)
+	if facts.Schema != qualificationFactsSchema || facts.Stage != v3PackagedLiveResultStage || !facts.QualificationManifestSigned || len(facts.Releases) != 1 || !validSHA256(facts.PriorDecisionSHA256) || !validSHA256(facts.DetailedEvidenceSHA256) || observedErr != nil || evaluationErr != nil || observedAt.Format(time.RFC3339) != facts.ObservedAt || evaluationTime.Format(time.RFC3339) != facts.EvaluationTime || evaluationTime.Sub(observedAt) < 0 || evaluationTime.Sub(observedAt) > 5*time.Minute || evidenceErr != nil || facts.DetailedEvidenceSHA256 != documentSHA256(evidenceBytes) || secretBearing(document) || rawV3Secret(document) || !validAcceptanceRunner(facts.Runner) || !validV3Evidence(facts.DetailedEvidence, facts.ObservedAt, facts.PriorDecisionSHA256) {
+		return refused()
+	}
+	var boundaryFacts qualificationBoundaryFacts
+	if !decodeCanonical(facts.QualificationBoundaryFacts, &boundaryFacts) {
+		return refused()
+	}
+	manifest, err := evaluateQualificationBoundary(boundaryFacts)
+	if err != nil || manifest.Mode != "v3" || manifest.SourceState != "v3-clean" || len(manifest.Releases) != 1 {
+		return refused()
+	}
+	manifestBytes, err := marshalCanonical(manifest)
+	if err != nil || !bytes.Equal(manifestBytes, facts.QualificationManifest) || facts.PriorDecisionSHA256 != documentSHA256(facts.QualificationManifest) || !reflect.DeepEqual(facts.Releases, manifest.Releases) {
+		return refused()
+	}
+	body, err := buildV3AcceptanceRecord(manifest, facts)
+	if err != nil {
+		return refused()
+	}
+	return acceptanceVPSResultDecision{FactsSHA256: documentSHA256(document), Outcome: "accepted", PriorDecisionSHA256: facts.PriorDecisionSHA256, Records: []acceptanceRecord{{Body: body, Tag: manifest.Releases[0].Tag}}, Schema: qualificationDecisionSchema, Stage: v3PackagedLiveResultStage}, nil
+}
+
+func rawV3Secret(document []byte) bool {
+	return regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}`).Match(document) || regexp.MustCompile(`(?:^|[^0-9])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?:[^0-9]|$)`).Match(document)
+}
+
+func validV3Evidence(evidence v3PackagedLiveEvidence, observedAt, manifestSHA256 string) bool {
+	if evidence.Schema != "sbxr-v3-packaged-live-evidence-v1" || evidence.ObservedAt != observedAt || evidence.QualificationManifestSHA256 != manifestSHA256 || evidence.ProxyPackage != expectedV3PackageIdentity() || evidence.OutsideClientPackage != expectedV3PackageIdentity() || evidence.FailureCases == nil || !validV3StageTimes(evidence.StageTimes, observedAt) {
+		return false
+	}
+	uninterrupted := evidence.Uninterrupted
+	if !uninterrupted.CleanInstallation || !uninterrupted.InstalledIdentity || !uninterrupted.NotSetUp || !uninterrupted.SetupReviewed || !uninterrupted.SetupConfirmed || uninterrupted.SetupResult != "PROXY-INSTALLATION-SETUP-COMPLETE" || !uninterrupted.Running || !uninterrupted.DetailsComplete || !uninterrupted.DisclosureBounded || !uninterrupted.OutsideRoutesDiffer || !uninterrupted.EgressMatched || !uninterrupted.RunnerMemoryBacked || uninterrupted.RunnerFileMode != "0600" || !uninterrupted.RunnerProcessAbsent || !uninterrupted.RunnerListenerAbsent || !uninterrupted.RunnerConfigurationGone || uninterrupted.RemovalResult != "SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED" || !uninterrupted.FinalAbsenceComplete {
+		return false
+	}
+	expectedFailures := []v3FailureCase{
+		{Name: "clean-footprint-refusal", TriggerEvent: "Detected mismatch: /etc/sing-box is present", PostDeathStatus: "Not set up", FinishingAction: "Remove qualification conflict", FinalState: "Not set up"},
+		{Name: "before-activation-commitment", TriggerEvent: "Validate configuration", PostDeathStatus: "Setup incomplete", FinishingAction: "Finish cleanup", FinalState: "Not set up"},
+		{Name: "after-activation-commitment", TriggerEvent: "Activation committed", PostDeathStatus: "Setup incomplete", FinishingAction: "Finish setup", FinalState: "Running"},
+		{Name: "ownership-drift-removal-refusal", TriggerEvent: "Detected mismatch: the protected configuration identity does not match", PostDeathStatus: "Problem detected", FinishingAction: "Restore recorded metadata", FinalState: "Running"},
+		{Name: "after-removal-commitment", TriggerEvent: "Removal committed", PostDeathStatus: "Removal incomplete", FinishingAction: "Finish removal", FinalState: "Not installed"},
+	}
+	return reflect.DeepEqual(evidence.FailureCases, expectedFailures) && evidence.SecretScan == (v3SecretScan{RetainedEvidence: true, RunnerCapture: true, VPSCapture: true, WorkflowOutput: true, ExactSecretsAbsent: true, PatternsAbsent: true})
+}
+
+func validV3StageTimes(stage v3StageTimes, observedAt string) bool {
+	values := []string{stage.JourneyStartedAt, stage.CleanFootprintCompletedAt, stage.BeforeActivationCompletedAt, stage.AfterActivationCompletedAt, stage.OwnershipDriftCompletedAt, stage.AfterRemovalCompletedAt, stage.UninterruptedCompletedAt, stage.RunnerCleanupCompletedAt, stage.CompleteRemovalCompletedAt}
+	parsed := make([]time.Time, len(values))
+	for index, value := range values {
+		var err error
+		parsed[index], err = time.Parse(time.RFC3339, value)
+		if err != nil || parsed[index].Format(time.RFC3339) != value || index > 0 && parsed[index].Before(parsed[index-1]) {
+			return false
+		}
+	}
+	return stage.CompleteRemovalCompletedAt == observedAt && parsed[len(parsed)-1].Sub(parsed[0]) <= 2*time.Hour
+}
+
+func expectedV3PackageIdentity() v3PackageIdentity {
+	return v3PackageIdentity{Repository: "https://deb.sagernet.org/", SigningKeySHA256: "803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1", Name: "sing-box", Version: "1.13.19", Architecture: "amd64", Size: 24597120, SHA256: "fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf"}
+}
+
+func buildV3AcceptanceRecord(manifest qualificationManifest, facts v3PackagedLiveResultFacts) (string, error) {
+	release := manifest.Releases[0]
+	record := v3AcceptanceRecordJSON{
+		AcceptedAt: facts.ObservedAt, Assets: release.Assets, DetailedEvidenceSHA256: facts.DetailedEvidenceSHA256, Evidence: []string{manifest.Workflow.RunURL + "#artifacts"}, OutsideClientPackage: facts.DetailedEvidence.OutsideClientPackage, ProxyPackage: facts.DetailedEvidence.ProxyPackage,
+		QualificationRole: "Clean-installed V3 release", ReleaseIdentity: release.ReleaseIdentity, Runner: facts.Runner.OperatingSystem + " linux/" + facts.Runner.Architecture, Schema: "sbxr-acceptance-record-v1", SecretSafeResult: "Passed", Sequence: release.Sequence,
+		Software: acceptanceRecordSoftware{GoToolchain: facts.Runner.GoToolchain, PublicVerifier: facts.Runner.PublicVerifier}, StableResultCode: "RELEASE-V3-PACKAGED-LIVE-QUALIFICATION",
+		Stages: acceptanceRecordStages{CodexLiveAcceptance: "Passed", IntegratedVerification: "Passed on live Ubuntu Server 24.04 amd64 and outside runner", ModuleVerification: "Passed", OwnerAcceptance: "Not required", SeamVerification: "Passed"}, WorkflowRun: manifest.Workflow.RunURL,
+	}
+	canonical, err := marshalCanonical(record)
+	if err != nil {
+		return "", err
+	}
+	var body strings.Builder
+	for _, line := range []string{"# SBXR Acceptance Record", "Status: Qualified", "Repository: " + release.ReleaseIdentity.Repository, "Tag: " + release.Tag, "Commit: " + release.Commit, "Release index SHA-256: " + release.ReleaseIdentity.ReleaseIndexSHA256, "Sequence: " + strconv.FormatUint(release.Sequence, 10), "Workflow evidence: " + record.WorkflowRun, "Acceptance time: " + record.AcceptedAt, "Runner: " + record.Runner, "Go toolchain: " + facts.Runner.GoToolchain, "Public verifier: " + facts.Runner.PublicVerifier, "Qualification role: Clean-installed V3 release", "Detailed evidence SHA-256: " + record.DetailedEvidenceSHA256, "Proxy package: sing-box 1.13.19 amd64 " + record.ProxyPackage.SHA256, "Outside-client package: sing-box 1.13.19 amd64 " + record.OutsideClientPackage.SHA256, "Secret-safe result: Passed", "Stable result code: " + record.StableResultCode, "Module Verification: Passed", "Seam Verification: Passed", "Integrated Verification: " + record.Stages.IntegratedVerification, "Codex Live Acceptance: Passed", "Owner Acceptance: Not required"} {
+		body.WriteString(line + "\n")
+	}
+	for _, asset := range release.Assets {
+		body.WriteString("Asset: " + asset.Name + " " + strconv.FormatInt(asset.Size, 10) + " " + asset.SHA256 + "\n")
+	}
+	body.WriteString("```json\n" + string(canonical) + "\n```\n")
+	return body.String(), nil
+}
+
 func validAcceptanceJourneyBinding(facts acceptanceVPSResultFacts, manifest qualificationManifest) bool {
 	if len(manifest.Releases) != 2 || facts.Journey.Mode != manifest.Mode || facts.Journey.ObservedAt != facts.ObservedAt || facts.Journey.QualificationManifestSHA256 != facts.PriorDecisionSHA256 {
 		return false
@@ -1858,7 +2167,11 @@ func evaluateQualificationBoundary(facts qualificationBoundaryFacts) (qualificat
 			releases = append([]verifiedDraftRelease{{Assets: source.Assets, Commit: source.Commit, Draft: source.Draft, Immutable: source.Immutable, Prerelease: source.Prerelease, ReleaseID: source.ReleaseID, ReleaseIdentity: source.ReleaseIdentity, Sequence: source.Sequence, Tag: source.Tag}}, releases...)
 		}
 	}
-	if len(releases) != 2 || facts.Workflow.Path != ".github/workflows/candidate.yml" || facts.Workflow.Ref != softwarelifecycle.Repository+"/.github/workflows/candidate.yml@refs/heads/main" || facts.Workflow.Commit != releases[1].Commit || !validCommit(facts.Workflow.Commit) {
+	expectedReleases := 2
+	if preflightFacts.Candidate.Mode == "v3" {
+		expectedReleases = 1
+	}
+	if len(releases) != expectedReleases || facts.Workflow.Path != ".github/workflows/candidate.yml" || facts.Workflow.Ref != softwarelifecycle.Repository+"/.github/workflows/candidate.yml@refs/heads/main" || facts.Workflow.Commit != releases[len(releases)-1].Commit || !validCommit(facts.Workflow.Commit) {
 		return refused()
 	}
 	runID, runErr := strconv.ParseUint(facts.Workflow.RunID, 10, 64)
@@ -2053,13 +2366,25 @@ func evaluateCandidatePreflight(facts qualificationFacts, document []byte) (qual
 		!validCommit(facts.ArchiveTagObject) || facts.ArchiveTagObject != facts.ArchiveRemoteTagObject ||
 		facts.ArchiveType != "tag" ||
 		!validSHA256(facts.ChecklistSHA256) || facts.BurnedIdentities == nil || facts.Releases == nil || facts.Tags == nil ||
-		!validTag(candidate.ATag) || !validTag(candidate.BTag) || candidate.ATag == candidate.BTag || candidate.ASequence == 0 || candidate.BSequence <= candidate.ASequence ||
 		!validObservedFacts(facts) {
+		return qualificationDecision{}, errors.New("candidate preflight refused")
+	}
+	if candidate.Mode == "v3" {
+		if candidate.ATag != "" || candidate.ASequence != 0 || !validTag(candidate.BTag) || candidate.BSequence == 0 {
+			return qualificationDecision{}, errors.New("candidate preflight refused")
+		}
+	} else if !validTag(candidate.ATag) || !validTag(candidate.BTag) || candidate.ATag == candidate.BTag || candidate.ASequence == 0 || candidate.BSequence <= candidate.ASequence {
 		return qualificationDecision{}, errors.New("candidate preflight refused")
 	}
 	var actions []json.RawMessage
 	var sourceState string
 	switch candidate.Mode {
+	case "v3":
+		if candidate.DefectIssueURL != nil || candidate.FailedNormalRunID != nil || facts.DefectIssue != nil || facts.FailedNormalRun != nil || hasQualifiedV3(facts.Releases) || tagPresent(facts.Tags, candidate.BTag) || releaseByTagExists(facts.Releases, candidate.BTag) || sequenceUseCount(facts.Releases, candidate.BSequence, "") != 0 || collidesWithBurned(facts.BurnedIdentities, candidate.BTag, candidate.BSequence) || candidate.BSequence != highestSequence(facts)+1 {
+			return qualificationDecision{}, errors.New("candidate preflight refused")
+		}
+		sourceState = "v3-clean"
+		actions = []json.RawMessage{mustJSON(buildReleaseAction{facts.Commit, candidate.BSequence, candidate.BTag, "build-release"})}
 	case "normal":
 		if candidate.DefectIssueURL != nil || candidate.FailedNormalRunID != nil || facts.DefectIssue != nil || facts.FailedNormalRun != nil {
 			return qualificationDecision{}, errors.New("candidate preflight refused")
@@ -2239,6 +2564,15 @@ func qualifiedStableRelease(release observedRelease) bool {
 		oneMatch(release.Body, `(?m)^Runner: Ubuntu Server 24\.04 linux/amd64$`) &&
 		oneMatch(release.Body, `(?m)^Go toolchain: go[0-9]+\.[0-9]+\.[0-9]+$`) &&
 		oneMatch(release.Body, `(?m)^Public verifier: [0-9]+\.[0-9]+\.[0-9]+ [A-F0-9]{64}$`)
+}
+
+func hasQualifiedV3(releases []observedRelease) bool {
+	for _, release := range releases {
+		if qualifiedSourceRelease(release, false) && strings.Count(release.Body, "# SBXR Acceptance Record\n") == 1 && strings.Count(release.Body, "Status: Qualified\n") == 1 && strings.Count(release.Body, "Stable result code: RELEASE-V3-PACKAGED-LIVE-QUALIFICATION\n") == 1 && strings.Count(release.Body, "Qualification role: Clean-installed V3 release\n") == 1 {
+			return true
+		}
+	}
+	return false
 }
 
 func oneMatch(value, pattern string) bool {

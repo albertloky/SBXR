@@ -87,3 +87,34 @@ func TestQualificationGatewayServesOnlyManifestBoundReleaseRequests(t *testing.T
 		t.Fatalf("unlisted response = %d %q", response.Code, response.Body.String())
 	}
 }
+
+func TestQualificationGatewayServesOneV3Candidate(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(root, "v3.0.0")
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	assets := []map[string]any{}
+	for _, name := range gatewayAssetNames {
+		body := []byte("v3 " + name)
+		if err := os.WriteFile(filepath.Join(directory, name), body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(body)
+		assets = append(assets, map[string]any{"name": name, "size": len(body), "sha256": hex.EncodeToString(digest[:])})
+	}
+	release := map[string]any{"tag": "v3.0.0", "sequence": 17, "commit": strings.Repeat("a", 40), "release_identity": map[string]any{"repository": "albertloky/SBXR", "tag": "v3.0.0", "commit": strings.Repeat("a", 40), "release_index_sha256": assets[1]["sha256"]}, "assets": assets}
+	manifest, _ := json.Marshal(map[string]any{"schema": "sbxr-qualification-manifest-v1", "repository": "albertloky/SBXR", "releases": []any{release}})
+	gateway, err := newQualificationGateway(manifest, json.RawMessage(`{"bundle":true}`), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gateway.close()
+	request := httptest.NewRequest(http.MethodGet, "https://github.com/albertloky/SBXR/releases/latest/download/install.sh", nil)
+	request.Host = "github.com"
+	response := httptest.NewRecorder()
+	gateway.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Body.String() != "v3 install.sh" {
+		t.Fatalf("V3 install = %d %q", response.Code, response.Body.String())
+	}
+}

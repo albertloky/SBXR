@@ -230,6 +230,146 @@ func qualificationBoundaryForCandidate(t *testing.T, binary string, preflightFac
 	return boundaryFacts, manifest
 }
 
+func TestQualificationCommandBuildsOneCleanV3Candidate(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "sbxr-release")
+	command := exec.Command("go", "build", "-o", binary, ".")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build sbxr-release: %v\n%s", err, output)
+	}
+	facts := candidateFacts("v3")
+	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
+	facts.Candidate.BTag, facts.Candidate.BSequence = "v3.0.0", 17
+	decision, err := runQualificationCommand(binary, canonicalFacts(t, facts))
+	if err != nil {
+		t.Fatalf("V3 preflight: %v\n%s", err, decision)
+	}
+	value := jsonObject(t, decision)
+	actions := value["actions"].([]any)
+	if value["source_state"] != "v3-clean" || len(actions) != 1 || actions[0].(map[string]any)["tag"] != "v3.0.0" {
+		t.Fatalf("V3 preflight = %s", decision)
+	}
+	_, manifest := qualificationBoundaryForCandidate(t, binary, facts)
+	manifestValue := jsonObject(t, manifest)
+	if manifestValue["mode"] != "v3" || len(manifestValue["releases"].([]any)) != 1 {
+		t.Fatalf("V3 manifest = %s", manifest)
+	}
+	existing := qualifiedRelease(false)
+	existing.Body = strings.NewReplacer("# SBXR Installer-Updater Acceptance Record\n", "# SBXR Acceptance Record\n", "Stable result code: RELEASE-INSTALLER-UPDATER-TWO-RELEASE-QUALIFICATION\n", "Stable result code: RELEASE-V3-PACKAGED-LIVE-QUALIFICATION\n", "Qualification role: Clean-installed source release\n", "Qualification role: Clean-installed V3 release\n").Replace(existing.Body)
+	facts.Releases = []observedRelease{existing}
+	facts.Candidate.BSequence = 18
+	assertQualificationRefused(t, binary, canonicalFacts(t, facts), "second clean V3")
+}
+
+func TestQualificationCommandGatesV3PackagedLiveEvidence(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "sbxr-release")
+	command := exec.Command("go", "build", "-o", binary, ".")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build sbxr-release: %v\n%s", err, output)
+	}
+	preflight := candidateFacts("v3")
+	preflight.Candidate.ATag, preflight.Candidate.ASequence = "", 0
+	preflight.Candidate.BTag, preflight.Candidate.BSequence = "v3.0.0", 17
+	boundaryFacts, manifest := qualificationBoundaryForCandidate(t, binary, preflight)
+	manifestSHA256 := sha256String(string(manifest))
+	evidence := v3PackagedLiveEvidence{
+		Schema: "sbxr-v3-packaged-live-evidence-v1", ObservedAt: "2026-08-27T01:00:00Z", QualificationManifestSHA256: manifestSHA256, ProxyPackage: expectedV3PackageIdentity(), OutsideClientPackage: expectedV3PackageIdentity(),
+		StageTimes:    v3StageTimes{JourneyStartedAt: "2026-08-27T00:00:00Z", CleanFootprintCompletedAt: "2026-08-27T00:05:00Z", BeforeActivationCompletedAt: "2026-08-27T00:10:00Z", AfterActivationCompletedAt: "2026-08-27T00:15:00Z", OwnershipDriftCompletedAt: "2026-08-27T00:20:00Z", AfterRemovalCompletedAt: "2026-08-27T00:25:00Z", UninterruptedCompletedAt: "2026-08-27T00:45:00Z", RunnerCleanupCompletedAt: "2026-08-27T00:55:00Z", CompleteRemovalCompletedAt: "2026-08-27T01:00:00Z"},
+		Uninterrupted: v3UninterruptedEvidence{CleanInstallation: true, InstalledIdentity: true, NotSetUp: true, SetupReviewed: true, SetupConfirmed: true, SetupResult: "PROXY-INSTALLATION-SETUP-COMPLETE", Running: true, DetailsComplete: true, DisclosureBounded: true, OutsideRoutesDiffer: true, EgressMatched: true, RunnerMemoryBacked: true, RunnerFileMode: "0600", RunnerProcessAbsent: true, RunnerListenerAbsent: true, RunnerConfigurationGone: true, RemovalResult: "SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED", FinalAbsenceComplete: true},
+		FailureCases: []v3FailureCase{
+			{Name: "clean-footprint-refusal", TriggerEvent: "Detected mismatch: /etc/sing-box is present", PostDeathStatus: "Not set up", FinishingAction: "Remove qualification conflict", FinalState: "Not set up"},
+			{Name: "before-activation-commitment", TriggerEvent: "Validate configuration", PostDeathStatus: "Setup incomplete", FinishingAction: "Finish cleanup", FinalState: "Not set up"},
+			{Name: "after-activation-commitment", TriggerEvent: "Activation committed", PostDeathStatus: "Setup incomplete", FinishingAction: "Finish setup", FinalState: "Running"},
+			{Name: "ownership-drift-removal-refusal", TriggerEvent: "Detected mismatch: the protected configuration identity does not match", PostDeathStatus: "Problem detected", FinishingAction: "Restore recorded metadata", FinalState: "Running"},
+			{Name: "after-removal-commitment", TriggerEvent: "Removal committed", PostDeathStatus: "Removal incomplete", FinishingAction: "Finish removal", FinalState: "Not installed"},
+		},
+		SecretScan: v3SecretScan{RetainedEvidence: true, RunnerCapture: true, VPSCapture: true, WorkflowOutput: true, ExactSecretsAbsent: true, PatternsAbsent: true},
+	}
+	evidenceBytes, err := marshalCanonical(evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts := map[string]any{
+		"detailed_evidence": jsonValue(t, string(evidenceBytes)), "detailed_evidence_sha256": sha256String(string(evidenceBytes)), "evaluation_time": "2026-08-27T01:04:00Z", "observed_at": "2026-08-27T01:00:00Z", "prior_decision_sha256": manifestSHA256,
+		"qualification_boundary_facts": jsonValue(t, boundaryFacts), "qualification_manifest": jsonValue(t, string(manifest)), "qualification_manifest_attested": true, "releases": jsonObject(t, manifest)["releases"],
+		"runner": map[string]any{"architecture": "amd64", "go_toolchain": "go1.26.6", "operating_system": "Ubuntu Server 24.04", "public_verifier": "1.3.0 26B3382D5700AFBCD84F980D1D5B6C52BFF743DC2A8EE86B8B44C8E1245CE485"}, "schema": qualificationFactsSchema, "stage": "v3-packaged-live-result",
+	}
+	document := qualificationDocument(t, facts)
+	var decoded v3PackagedLiveResultFacts
+	if !decodeCanonical([]byte(document), &decoded) {
+		decodedBody, _ := marshalCanonical(decoded)
+		t.Fatalf("V3 facts are not canonical\nwant %s\ngot  %s", document, decodedBody)
+	}
+	if rawV3Secret([]byte(document)) || !validV3Evidence(decoded.DetailedEvidence, decoded.ObservedAt, decoded.PriorDecisionSHA256) {
+		t.Fatal("valid V3 evidence was rejected before the public command")
+	}
+	decision, err := runQualificationCommand(binary, document)
+	if err != nil {
+		t.Fatalf("V3 packaged result: %v\n%s", err, decision)
+	}
+	result := jsonObject(t, decision)
+	if result["outcome"] != "accepted" || result["facts_sha256"] != sha256String(document) || len(result["records"].([]any)) != 1 || !strings.Contains(result["records"].([]any)[0].(map[string]any)["body"].(string), "Stable result code: RELEASE-V3-PACKAGED-LIVE-QUALIFICATION") {
+		t.Fatalf("V3 decision = %s", decision)
+	}
+	release := jsonObject(t, manifest)["releases"].([]any)[0].(map[string]any)
+	recordBody := result["records"].([]any)[0].(map[string]any)["body"]
+	stableFacts := map[string]any{
+		"acceptance_decision": jsonValue(t, string(decision)), "acceptance_facts": jsonValue(t, document), "archive": map[string]any{"commit": preflight.ArchiveCommit, "remote_commit": preflight.ArchiveRemoteCommit, "remote_tag_object": preflight.ArchiveRemoteTagObject, "tag_object": preflight.ArchiveTagObject, "type": preflight.ArchiveType},
+		"burned_identities": []any{}, "candidate_run": map[string]any{"conclusion": "success", "created_at": "2026-08-27T00:00:00Z", "event": "workflow_dispatch", "head_sha": strings.Repeat("d", 40), "id": "123", "path": ".github/workflows/candidate.yml"}, "checklist_sha256": preflight.ChecklistSHA256, "latest_tag": nil, "manifest_attested": true, "observed_at": "2026-08-27T01:00:00Z",
+		"releases":    []any{map[string]any{"assets": release["assets"], "body": recordBody, "commit": release["commit"], "draft": true, "immutable": false, "prerelease": false, "release_id": release["release_id"], "release_identity": release["release_identity"], "sequence": release["sequence"], "tag": release["tag"]}},
+		"remote_main": strings.Repeat("d", 40), "schema": qualificationFactsSchema, "signed_manifest": jsonValue(t, string(manifest)), "stage": "stable-preflight",
+	}
+	stableDecision, stableErr := runQualificationCommand(binary, qualificationDocument(t, stableFacts))
+	if stableErr != nil {
+		t.Fatalf("V3 stable preflight: %v\n%s", stableErr, stableDecision)
+	}
+	stable := jsonObject(t, stableDecision)
+	if stable["outcome"] != "actions-required" || len(stable["actions"].([]any)) != 1 || stable["actions"].([]any)[0].(map[string]any)["tag"] != "v3.0.0" {
+		t.Fatalf("V3 stable decision = %s", stableDecision)
+	}
+	stableFailure := map[string]any{
+		"burned_identities": []any{}, "candidate_commit_ancestor": true,
+		"candidate_run":     map[string]any{"conclusion": "success", "created_at": "2026-08-27T00:00:00Z", "event": "workflow_dispatch", "head_sha": strings.Repeat("d", 40), "id": "123", "path": ".github/workflows/candidate.yml"},
+		"finalization_run":  map[string]any{"created_at": "2026-08-27T01:00:00Z", "head_sha": strings.Repeat("d", 40), "id": "456", "path": ".github/workflows/stable.yml", "url": "https://github.com/albertloky/SBXR/actions/runs/456"},
+		"manifest_attested": true, "observed_at": "2026-08-27T01:01:00Z", "operation": "publish", "publication_stage": "v3-finalization-failure", "schema": qualificationFactsSchema, "signed_manifest": jsonValue(t, string(manifest)), "stage": "stable-failure-finalization",
+		"observations": []any{map[string]any{"assets": release["assets"], "body": recordBody, "commit": release["commit"], "draft": false, "immutable": true, "prerelease": false, "publicly_verified": true, "release_id": release["release_id"], "release_identity": release["release_identity"], "release_present": true, "sequence": release["sequence"], "tag": release["tag"], "tag_commit": release["commit"]}},
+	}
+	failureDecision, failureErr := runQualificationCommand(binary, qualificationDocument(t, stableFailure))
+	if failureErr != nil || jsonObject(t, failureDecision)["reason"] != "v3-finalization-failure" || len(jsonObject(t, failureDecision)["actions"].([]any)) != 1 {
+		t.Fatalf("V3 stable finalization failure = %s, %v", failureDecision, failureErr)
+	}
+	prepublication := jsonObject(t, []byte(qualificationDocument(t, stableFailure)))
+	prepublication["publication_stage"] = "prepublication-failure"
+	prepublicationObservation := prepublication["observations"].([]any)[0].(map[string]any)
+	prepublicationObservation["draft"], prepublicationObservation["immutable"], prepublicationObservation["publicly_verified"], prepublicationObservation["tag_commit"] = true, false, false, nil
+	prepublicationDecision, prepublicationErr := runQualificationCommand(binary, qualificationDocument(t, prepublication))
+	if prepublicationErr != nil || jsonObject(t, prepublicationDecision)["outcome"] != "failed-prerelease" || len(jsonObject(t, prepublicationDecision)["actions"].([]any)) != 1 {
+		t.Fatalf("V3 stable prepublication failure = %s, %v", prepublicationDecision, prepublicationErr)
+	}
+	for name, mutate := range map[string]func(map[string]any){
+		"missing failure": func(value map[string]any) {
+			value["detailed_evidence"].(map[string]any)["failure_cases"] = value["detailed_evidence"].(map[string]any)["failure_cases"].([]any)[:4]
+		},
+		"retained runner secret": func(value map[string]any) {
+			value["detailed_evidence"].(map[string]any)["secret_scan"].(map[string]any)["exact_secrets_absent"] = false
+		},
+		"identity mismatch": func(value map[string]any) {
+			value["detailed_evidence"].(map[string]any)["outside_client_package"].(map[string]any)["sha256"] = strings.Repeat("9", 64)
+		},
+		"stale observation": func(value map[string]any) { value["evaluation_time"] = "2026-08-27T01:05:01Z" },
+		"unsafe stage timing": func(value map[string]any) {
+			value["detailed_evidence"].(map[string]any)["stage_times"].(map[string]any)["journey_started_at"] = "2026-08-26T22:59:59Z"
+		},
+	} {
+		hostile := jsonObject(t, []byte(document))
+		mutate(hostile)
+		if evidence, ok := hostile["detailed_evidence"].(map[string]any); ok {
+			body := qualificationDocument(t, evidence)
+			hostile["detailed_evidence_sha256"] = sha256String(body)
+		}
+		assertQualificationRefused(t, binary, qualificationDocument(t, hostile), name)
+	}
+}
+
 func TestQualificationCommandConstructsAndVerifiesCandidateDrafts(t *testing.T) {
 	binary := filepath.Join(t.TempDir(), "sbxr-release")
 	command := exec.Command("go", "build", "-o", binary, ".")
