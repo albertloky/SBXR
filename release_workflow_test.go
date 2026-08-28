@@ -406,6 +406,20 @@ func TestStablePublishesOnlyTheSignedQualifiedDraftsAndProvesStableNoUpdate(t *t
 		t.Fatal("stable preflight cannot read candidate-owned draft releases")
 	}
 	for _, required := range []string{
+		`2> latest-release.error`,
+		`jq -e 'type == "object" and (.tag_name | type == "string" and length > 0) and (.id | type == "number" and . > 0 and . == floor)' latest-release.json`,
+		`grep -Fxq 'gh: Not Found (HTTP 404)' latest-release.error`,
+		`cat latest-release.error >&2`,
+		`exit 1`,
+	} {
+		if !strings.Contains(preflight, required) {
+			t.Fatalf("stable preflight does not distinguish absent Latest from observation failure: omitted %q", required)
+		}
+	}
+	if strings.Contains(preflight, `releases/latest" > latest-release.json 2>/dev/null`) {
+		t.Fatal("stable preflight maps every Latest observation failure to absence")
+	}
+	for _, required := range []string{
 		"workflow_dispatch:",
 		"qualification_run_id:",
 		"group: installer-updater-release",
@@ -481,6 +495,20 @@ func TestStablePublishesOnlyTheSignedQualifiedDraftsAndProvesStableNoUpdate(t *t
 		}
 	}
 	publication := workflow[strings.Index(workflow, "  publish:"):strings.Index(workflow, "  finalize-failure:")]
+	for _, required := range []string{
+		`2> "$directory.latest-release.error"`,
+		`[[ "$latest" =~ ^[1-9][0-9]*$ ]] || return 1`,
+		`grep -Fxq 'gh: Not Found (HTTP 404)' "$directory.latest-release.error"`,
+		`cat "$directory.latest-release.error" >&2`,
+		`return 1`,
+	} {
+		if !strings.Contains(publication, required) {
+			t.Fatalf("stable publication observer does not distinguish absent Latest from observation failure: omitted %q", required)
+		}
+	}
+	if strings.Contains(publication, `releases/latest" --jq .id 2>/dev/null`) {
+		t.Fatal("stable publication observer maps every Latest observation failure to absence")
+	}
 	for _, forbidden := range []string{`.source_state == "initial-normal"`, `sbxr-acceptance-record-v1`, `test "$((now - created))" -lt "$((90 * 24 * 60 * 60))"`, `.path == ".github/workflows/candidate.yml"`, `test "$run_sha" = "$GITHUB_SHA"`} {
 		if strings.Contains(preflight+publication, forbidden) {
 			t.Fatalf("stable preflight retained policy %q", forbidden)

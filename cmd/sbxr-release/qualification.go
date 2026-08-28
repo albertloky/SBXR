@@ -576,6 +576,7 @@ type stablePreflightFacts struct {
 	BurnedIdentities   []burnedIdentity           `json:"burned_identities"`
 	CandidateRun       stableCandidateRun         `json:"candidate_run"`
 	ChecklistSHA256    string                     `json:"checklist_sha256"`
+	LatestReleaseID    *int64                     `json:"latest_release_id"`
 	LatestTag          *string                    `json:"latest_tag"`
 	ManifestAttested   bool                       `json:"manifest_attested"`
 	ObservedAt         string                     `json:"observed_at"`
@@ -1118,6 +1119,17 @@ func evaluateStablePreflight(facts stablePreflightFacts, document []byte) (stabl
 	if !decodeCanonical(constructionFacts.PreflightFacts, &preflightFacts) || facts.Archive != (stableArchiveObservation{Commit: preflightFacts.ArchiveCommit, RemoteCommit: preflightFacts.ArchiveRemoteCommit, RemoteTagObject: preflightFacts.ArchiveRemoteTagObject, TagObject: preflightFacts.ArchiveTagObject, Type: preflightFacts.ArchiveType}) || !reflect.DeepEqual(facts.LatestTag, preflightFacts.LatestTag) || !reflect.DeepEqual(facts.BurnedIdentities, preflightFacts.BurnedIdentities) {
 		return refused()
 	}
+	var expectedLatestReleaseID *int64
+	if preflightFacts.LatestTag != nil {
+		release, exists := releaseByTag(preflightFacts.Releases, *preflightFacts.LatestTag)
+		if !exists {
+			return refused()
+		}
+		expectedLatestReleaseID = &release.ID
+	}
+	if !reflect.DeepEqual(facts.LatestReleaseID, expectedLatestReleaseID) {
+		return refused()
+	}
 	preflight, err := verifiedPreflightDecision(constructionFacts.PreflightFacts, constructionFacts.PreflightDecision)
 	expectedReleases := 2
 	if manifest.Mode == "v3" {
@@ -1182,22 +1194,10 @@ func evaluateStablePublication(facts stablePublicationFacts, document []byte) (s
 		return refused()
 	}
 	priorDecisionSHA256 := documentSHA256(facts.PreflightDecision)
-	var expectedLatestReleaseID *int64
+	expectedLatestReleaseID := preflightFacts.LatestReleaseID
 	if facts.ActionIndex == 0 {
 		if !bytes.Equal(facts.PriorVerificationFacts, []byte("null")) || !bytes.Equal(facts.PriorVerificationDecision, []byte("null")) {
 			return refused()
-		}
-		if preflightFacts.LatestTag != nil {
-			for _, release := range preflightFacts.Releases {
-				if release.Tag == *preflightFacts.LatestTag {
-					value := release.ReleaseID
-					expectedLatestReleaseID = &value
-					break
-				}
-			}
-			if expectedLatestReleaseID == nil {
-				return refused()
-			}
 		}
 	} else {
 		var priorFacts stablePublicationVerificationFacts

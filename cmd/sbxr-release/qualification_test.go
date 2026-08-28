@@ -268,7 +268,10 @@ func TestQualificationCommandGatesV3PackagedLiveEvidence(t *testing.T) {
 	}
 	preflight := candidateFacts("v3")
 	preflight.Candidate.ATag, preflight.Candidate.ASequence = "", 0
-	preflight.Candidate.BTag, preflight.Candidate.BSequence = "v3.0.0", 17
+	preflight.Candidate.BTag, preflight.Candidate.BSequence = "v3.0.0", 18
+	preflight.LatestTag = stringPointer("v2.0.0")
+	preflight.Releases = []observedRelease{qualifiedRelease(false)}
+	preflight.Tags = []string{"v2.0.0"}
 	boundaryFacts, manifest := qualificationBoundaryForCandidate(t, binary, preflight)
 	manifestSHA256 := sha256String(string(manifest))
 	evidence := v3PackagedLiveEvidence{
@@ -314,7 +317,7 @@ func TestQualificationCommandGatesV3PackagedLiveEvidence(t *testing.T) {
 	recordBody := result["records"].([]any)[0].(map[string]any)["body"]
 	stableFacts := map[string]any{
 		"acceptance_decision": jsonValue(t, string(decision)), "acceptance_facts": jsonValue(t, document), "archive": map[string]any{"commit": preflight.ArchiveCommit, "remote_commit": preflight.ArchiveRemoteCommit, "remote_tag_object": preflight.ArchiveRemoteTagObject, "tag_object": preflight.ArchiveTagObject, "type": preflight.ArchiveType},
-		"burned_identities": []any{}, "candidate_run": map[string]any{"conclusion": "success", "created_at": "2026-08-27T00:00:00Z", "event": "workflow_dispatch", "head_sha": strings.Repeat("d", 40), "id": "123", "path": ".github/workflows/candidate.yml"}, "checklist_sha256": preflight.ChecklistSHA256, "latest_tag": nil, "manifest_attested": true, "observed_at": "2026-08-27T01:00:00Z",
+		"burned_identities": []any{}, "candidate_run": map[string]any{"conclusion": "success", "created_at": "2026-08-27T00:00:00Z", "event": "workflow_dispatch", "head_sha": strings.Repeat("d", 40), "id": "123", "path": ".github/workflows/candidate.yml"}, "checklist_sha256": preflight.ChecklistSHA256, "latest_release_id": 7, "latest_tag": "v2.0.0", "manifest_attested": true, "observed_at": "2026-08-27T01:00:00Z",
 		"releases":    []any{map[string]any{"assets": release["assets"], "body": recordBody, "commit": release["commit"], "draft": true, "immutable": false, "prerelease": false, "release_id": release["release_id"], "release_identity": release["release_identity"], "sequence": release["sequence"], "tag": release["tag"]}},
 		"remote_main": strings.Repeat("d", 40), "schema": qualificationFactsSchema, "signed_manifest": jsonValue(t, string(manifest)), "stage": "stable-preflight",
 	}
@@ -325,6 +328,20 @@ func TestQualificationCommandGatesV3PackagedLiveEvidence(t *testing.T) {
 	stable := jsonObject(t, stableDecision)
 	if stable["outcome"] != "actions-required" || len(stable["actions"].([]any)) != 1 || stable["actions"].([]any)[0].(map[string]any)["tag"] != "v3.0.0" {
 		t.Fatalf("V3 stable decision = %s", stableDecision)
+	}
+	action := stable["actions"].([]any)[0].(map[string]any)
+	observedAssets := make([]any, len(action["assets"].([]any)))
+	for index, assetValue := range action["assets"].([]any) {
+		asset := assetValue.(map[string]any)
+		observedAssets[index] = map[string]any{"id": 100 + index, "name": asset["name"], "sha256": asset["sha256"], "size": asset["size"]}
+	}
+	publicationFacts := map[string]any{
+		"action_index": 0, "approval": map[string]any{"environments": []any{map[string]any{"name": "stable-publication"}}, "state": "approved"},
+		"observation": map[string]any{"assets": observedAssets, "attestation": nil, "body": action["body"], "commit": action["commit"], "downloads": action["assets"], "draft": true, "immutable": false, "latest_install_sha256": "", "latest_release_id": 7, "prerelease": false, "public_verification": nil, "release_id": action["release_id"], "release_identity": action["release_identity"], "sequence": action["sequence"], "tag": action["tag"]},
+		"observed_at": "2026-08-27T01:01:00Z", "preflight_decision": jsonValue(t, string(stableDecision)), "preflight_facts": stableFacts, "prior_decision_sha256": sha256String(string(stableDecision)), "prior_verification_decision": nil, "prior_verification_facts": nil, "schema": qualificationFactsSchema, "stage": "stable-publication",
+	}
+	if publicationDecision, publicationErr := runQualificationCommand(binary, qualificationDocument(t, publicationFacts)); publicationErr != nil || jsonObject(t, publicationDecision)["outcome"] != "actions-required" {
+		t.Fatalf("V3 stable publication = %s, %v", publicationDecision, publicationErr)
 	}
 	stableFailure := map[string]any{
 		"burned_identities": []any{}, "candidate_commit_ancestor": true,
@@ -1014,7 +1031,7 @@ func TestQualificationCommandEvaluatesAcceptanceVPSAndConstructsRecords(t *testi
 		"archive":           map[string]any{"commit": later.ArchiveCommit, "remote_commit": later.ArchiveRemoteCommit, "remote_tag_object": later.ArchiveRemoteTagObject, "tag_object": later.ArchiveTagObject, "type": later.ArchiveType},
 		"burned_identities": []any{},
 		"candidate_run":     map[string]any{"conclusion": "success", "created_at": "2026-08-23T12:00:00Z", "event": "workflow_dispatch", "head_sha": strings.Repeat("d", 40), "id": "123", "path": ".github/workflows/candidate.yml"},
-		"checklist_sha256":  later.ChecklistSHA256, "latest_tag": "v2.0.0", "manifest_attested": true, "observed_at": "2026-08-23T13:00:00Z", "releases": stableReleases,
+		"checklist_sha256":  later.ChecklistSHA256, "latest_release_id": 7, "latest_tag": "v2.0.0", "manifest_attested": true, "observed_at": "2026-08-23T13:00:00Z", "releases": stableReleases,
 		"remote_main": strings.Repeat("d", 40), "schema": qualificationFactsSchema, "signed_manifest": jsonValue(t, string(manifest)), "stage": "stable-preflight",
 	}
 	stableDocument := qualificationDocument(t, stableFacts)
@@ -1028,7 +1045,8 @@ func TestQualificationCommandEvaluatesAcceptanceVPSAndConstructsRecords(t *testi
 		t.Fatalf("stable preflight decision = %s", stableDecision)
 	}
 	for name, mutate := range map[string]func(map[string]any){
-		"90 day qualification": func(value map[string]any) { value["observed_at"] = "2026-11-21T12:00:00Z" },
+		"90 day qualification":    func(value map[string]any) { value["observed_at"] = "2026-11-21T12:00:00Z" },
+		"wrong latest release ID": func(value map[string]any) { value["latest_release_id"] = float64(999) },
 		"changed draft bytes": func(value map[string]any) {
 			value["releases"].([]any)[1].(map[string]any)["assets"].([]any)[0].(map[string]any)["sha256"] = strings.Repeat("9", 64)
 		},
@@ -1160,7 +1178,12 @@ func TestQualificationCommandEvaluatesAcceptanceVPSAndConstructsRecords(t *testi
 			"archive":           map[string]any{"commit": preflightFacts.ArchiveCommit, "remote_commit": preflightFacts.ArchiveRemoteCommit, "remote_tag_object": preflightFacts.ArchiveRemoteTagObject, "tag_object": preflightFacts.ArchiveTagObject, "type": preflightFacts.ArchiveType},
 			"burned_identities": jsonValue(t, qualificationDocument(t, preflightFacts.BurnedIdentities)),
 			"candidate_run":     map[string]any{"conclusion": "success", "created_at": "2026-08-23T12:00:00Z", "event": "workflow_dispatch", "head_sha": strings.Repeat("d", 40), "id": "123", "path": ".github/workflows/candidate.yml"},
-			"checklist_sha256":  preflightFacts.ChecklistSHA256, "latest_tag": preflightFacts.LatestTag, "manifest_attested": true, "observed_at": "2026-08-23T13:00:00Z", "releases": observations,
+			"checklist_sha256":  preflightFacts.ChecklistSHA256, "latest_release_id": func() any {
+				if preflightFacts.LatestTag == nil {
+					return nil
+				}
+				return preflightFacts.Releases[0].ID
+			}(), "latest_tag": preflightFacts.LatestTag, "manifest_attested": true, "observed_at": "2026-08-23T13:00:00Z", "releases": observations,
 			"remote_main": strings.Repeat("d", 40), "schema": qualificationFactsSchema, "signed_manifest": jsonValue(t, string(caseManifest)), "stage": "stable-preflight",
 		}
 		result, err := runQualificationCommand(binary, qualificationDocument(t, facts))

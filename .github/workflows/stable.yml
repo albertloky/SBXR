@@ -97,11 +97,21 @@ jobs:
             go run ./cmd/sbxr-release verify-package -directory "$directory" -architecture arm64
           done
           latest_tag=null
-          if latest="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>/dev/null)"; then latest_tag="$(jq -cn --arg tag "$latest" '$tag')"; fi
+          latest_release_id=null
+          if gh api "repos/$GITHUB_REPOSITORY/releases/latest" > latest-release.json 2> latest-release.error; then
+            jq -e 'type == "object" and (.tag_name | type == "string" and length > 0) and (.id | type == "number" and . > 0 and . == floor)' latest-release.json >/dev/null
+            latest_tag="$(jq -c .tag_name latest-release.json)"
+            latest_release_id="$(jq -c .id latest-release.json)"
+          elif grep -Fxq 'gh: Not Found (HTTP 404)' latest-release.error; then
+            :
+          else
+            cat latest-release.error >&2
+            exit 1
+          fi
           archive="$(jq -cnS --arg commit "$(git rev-parse "$ARCHIVE_TAG^{commit}")" --arg remote_commit "$(git ls-remote --tags origin "refs/tags/$ARCHIVE_TAG^{}" | cut -f1)" --arg remote_tag_object "$(git ls-remote --tags origin "refs/tags/$ARCHIVE_TAG" | cut -f1)" --arg tag_object "$(git rev-parse "$ARCHIVE_TAG")" --arg type "$(git cat-file -t "$ARCHIVE_TAG")" '{commit:$commit,remote_commit:$remote_commit,remote_tag_object:$remote_tag_object,tag_object:$tag_object,type:$type}')"
           checklist="$CHECKLIST"
           if test "$(jq -r .mode "$manifest")" = v3; then checklist=docs/acceptance/v3-packaged-live.md; fi
-          jq -cnS --slurpfile acceptance_decision candidate/acceptance/acceptance-vps-result-decision.json --slurpfile acceptance_facts candidate/acceptance/acceptance-vps-result-facts.json --argjson archive "$archive" --slurpfile burned verified/burned.json --slurpfile candidate_run candidate-run.json --arg checklist_sha256 "$(sha256sum "$checklist" | cut -d' ' -f1)" --argjson latest_tag "$latest_tag" --arg observed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --slurpfile releases verified/releases.json --arg remote_main "$(git rev-parse origin/main)" --slurpfile signed_manifest verified/qualification-manifest.json '{acceptance_decision:$acceptance_decision[0],acceptance_facts:$acceptance_facts[0],archive:$archive,burned_identities:$burned[0],candidate_run:{conclusion:$candidate_run[0].conclusion,created_at:$candidate_run[0].created_at,event:$candidate_run[0].event,head_sha:$candidate_run[0].head_sha,id:($candidate_run[0].id|tostring),path:$candidate_run[0].path},checklist_sha256:$checklist_sha256,latest_tag:$latest_tag,manifest_attested:true,observed_at:$observed_at,releases:$releases[0],remote_main:$remote_main,schema:"sbxr-release-qualification-facts-v1",signed_manifest:$signed_manifest[0],stage:"stable-preflight"}' | tr -d '\n' > verified/stable-preflight-facts.json
+          jq -cnS --slurpfile acceptance_decision candidate/acceptance/acceptance-vps-result-decision.json --slurpfile acceptance_facts candidate/acceptance/acceptance-vps-result-facts.json --argjson archive "$archive" --slurpfile burned verified/burned.json --slurpfile candidate_run candidate-run.json --arg checklist_sha256 "$(sha256sum "$checklist" | cut -d' ' -f1)" --argjson latest_release_id "$latest_release_id" --argjson latest_tag "$latest_tag" --arg observed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --slurpfile releases verified/releases.json --arg remote_main "$(git rev-parse origin/main)" --slurpfile signed_manifest verified/qualification-manifest.json '{acceptance_decision:$acceptance_decision[0],acceptance_facts:$acceptance_facts[0],archive:$archive,burned_identities:$burned[0],candidate_run:{conclusion:$candidate_run[0].conclusion,created_at:$candidate_run[0].created_at,event:$candidate_run[0].event,head_sha:$candidate_run[0].head_sha,id:($candidate_run[0].id|tostring),path:$candidate_run[0].path},checklist_sha256:$checklist_sha256,latest_release_id:$latest_release_id,latest_tag:$latest_tag,manifest_attested:true,observed_at:$observed_at,releases:$releases[0],remote_main:$remote_main,schema:"sbxr-release-qualification-facts-v1",signed_manifest:$signed_manifest[0],stage:"stable-preflight"}' | tr -d '\n' > verified/stable-preflight-facts.json
           go run ./cmd/sbxr-release qualification < verified/stable-preflight-facts.json > verified/stable-preflight-decision.json
           facts_sha256="$(sha256sum verified/stable-preflight-facts.json | cut -d' ' -f1)"
           prior_decision_sha256="$(sha256sum candidate/acceptance/acceptance-vps-result-decision.json | cut -d' ' -f1)"
@@ -201,7 +211,15 @@ jobs:
             release_identity="$(jq -cS --arg sha256 "$(sha256sum "$directory/release-index.json" | cut -d' ' -f1)" '{commit:.commit,release_index_sha256:$sha256,repository:.repository,tag:.tag}' "$directory/release-index.json")"
             sequence="$(jq -r .sequence "$directory/release-index.json")"
             latest_release_id=null
-            if latest="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .id 2>/dev/null)"; then latest_release_id="$latest"; fi
+            if latest="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .id 2> "$directory.latest-release.error")"; then
+              [[ "$latest" =~ ^[1-9][0-9]*$ ]] || return 1
+              latest_release_id="$latest"
+            elif grep -Fxq 'gh: Not Found (HTTP 404)' "$directory.latest-release.error"; then
+              :
+            else
+              cat "$directory.latest-release.error" >&2
+              return 1
+            fi
             attestation=null
             latest_install_sha256=
             public_verification=null
