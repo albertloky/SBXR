@@ -368,13 +368,13 @@ cleanup() {
   fi
   if test "$status" -ne 0; then
     case "$runner_stage" in
-      initialization|remote-failure-safety|remote-setup-and-disclose|validate-client-configuration|download-client-signing-key|update-client-package-index|download-client-package|verify-client-package|start-outside-client|measure-direct-route|measure-proxied-route|measure-vps-route|compare-routes|cleanup-outside-client|verify-remote-secret-safety|complete-remote-removal|write-evidence) ;;
+      initialization|remote-failure-safety|remote-setup-and-disclose|validate-client-configuration|download-client-signing-key|download-client-package|verify-client-package|start-outside-client|measure-direct-route|measure-proxied-route|measure-vps-route|compare-routes|cleanup-outside-client|verify-remote-secret-safety|complete-remote-removal|write-evidence) ;;
       *) runner_stage=unknown ;;
     esac
     mkdir -p "$(dirname "$runner_stage_evidence")"
     printf 'Runner stage: %s\n' "$runner_stage" >"$runner_stage_evidence"
   fi
-  rm -rf "$client_config" "$client_root" "$client_deb" "$client_log" "$workflow_capture" /dev/shm/sagernet.asc /dev/shm/sagernet.sources "${download:-}"
+  rm -rf "$client_config" "$client_root" "$client_deb" "$client_log" "$workflow_capture" /dev/shm/sagernet.asc
   test ! -e "$client_root" || status=1
   exit "$status"
 }
@@ -403,15 +403,8 @@ client_uuid="$(jq -er '.outbounds[0].uuid' "$client_config")"
 runner_stage=download-client-signing-key
 curl -fsS https://sing-box.app/gpg.key -o /dev/shm/sagernet.asc
 test "$(sha256sum /dev/shm/sagernet.asc | cut -d' ' -f1)" = 803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1
-printf '%s\n' 'Types: deb' 'URIs: https://deb.sagernet.org/' 'Suites: *' 'Components: *' 'Architectures: amd64' 'Signed-By: /dev/shm/sagernet.asc' > /dev/shm/sagernet.sources
-runner_stage=update-client-package-index
-sudo apt-get -o Acquire::Retries=3 -o Dir::Etc::sourcelist=/dev/shm/sagernet.sources -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 update >/dev/null 2>"$client_log"
 runner_stage=download-client-package
-apt-get download -o Dir::Etc::sourcelist=/dev/shm/sagernet.sources -o Dir::Etc::sourceparts=- 'sing-box:amd64=1.13.19' >/dev/null 2>>"$client_log"
-scan_runner_capture
-download="$(find . -maxdepth 1 -name 'sing-box_1.13.19_amd64.deb' -type f -print -quit)"
-test -n "$download"
-mv "$download" "$client_deb"
+curl -fsSL --retry 3 --retry-all-errors https://deb.sagernet.org/files/ver_qb4px/sing-box_1.13.19_linux_amd64.deb -o "$client_deb"
 test "$(stat -c %s "$client_deb")" -eq "$PACKAGE_SIZE"
 test "$(sha256sum "$client_deb" | cut -d' ' -f1)" = "$PACKAGE_SHA256"
 runner_stage=verify-client-package
@@ -437,7 +430,7 @@ kill "$client_pid"
 wait "$client_pid" 2>/dev/null || true
 unset client_pid
 scan_runner_capture
-rm -rf "$client_config" "$client_root" "$client_deb" "$client_log" /dev/shm/sagernet.asc /dev/shm/sagernet.sources
+rm -rf "$client_config" "$client_root" "$client_deb" "$client_log" /dev/shm/sagernet.asc
 if ss -H -ltn 'sport = :2080' | grep -F '127.0.0.1:2080' >/dev/null; then exit 1; fi
 if pgrep -x sing-box >/dev/null; then exit 1; fi
 test ! -e "$client_config"
