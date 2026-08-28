@@ -206,9 +206,7 @@ type ownershipRecord struct {
 }
 
 var destinations = []hostadapter.Destination{
-	{Address: "microsoft.com:443", ServerName: "microsoft.com"},
-	{Address: "www.apple.com:443", ServerName: "www.apple.com"},
-	{Address: "cloudflare.com:443", ServerName: "cloudflare.com"},
+	{Address: "google.com:443", ServerName: "google.com"},
 }
 
 var aptSourceBody = []byte("Types: deb\nURIs: https://deb.sagernet.org/\nSuites: *\nComponents: *\nSigned-By: /etc/apt/keyrings/sagernet.asc\n")

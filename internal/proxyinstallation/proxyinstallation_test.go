@@ -70,6 +70,13 @@ func TestPinnedPackageProvenanceUsesCanonicalServiceUnitPath(t *testing.T) {
 	}
 }
 
+func TestProductionUsesOnlyLiveProvenRealityDestination(t *testing.T) {
+	want := []hostadapter.Destination{{Address: "google.com:443", ServerName: "google.com"}}
+	if !reflect.DeepEqual(destinations, want) {
+		t.Fatalf("destinations = %#v, want %#v", destinations, want)
+	}
+}
+
 type controlledHostFacts struct {
 	inspection                                  hostadapter.Inspection
 	preflight                                   hostadapter.Preflight
@@ -274,7 +281,7 @@ func acceptedPreflightFacts() hostadapter.Preflight {
 		Resources: observedAbsent(footprint),
 		OSID:      "ubuntu", OSVersion: "24.04", Architecture: "amd64", PublicIPv4: "8.8.8.8",
 		ClockSynchronized: true, TCP443Available: true, MutationLockAvailable: true, PackageLocksAvailable: true,
-		Destinations: []hostadapter.DestinationObservation{{Destination: hostadapter.Destination{Address: "microsoft.com:443", ServerName: "microsoft.com"}, DNS: true, TCP: true, TLS13: true, HTTP2: true, CertificateName: true}},
+		Destinations: []hostadapter.DestinationObservation{{Destination: hostadapter.Destination{Address: "google.com:443", ServerName: "google.com"}, DNS: true, TCP: true, TLS13: true, HTTP2: true, CertificateName: true}},
 	}
 }
 
@@ -359,7 +366,7 @@ func TestOwnerCanReviewAndDeclineCleanSetup(t *testing.T) {
 		t.Fatalf("Review() = %#v", review)
 	}
 	plan := strings.Join(review.Plan, "\n")
-	for _, required := range []string{"Ubuntu 24.04 amd64", "8.8.8.8:443", "microsoft.com:443", "sing-box 1.13.19 amd64", "803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1", "24597120 bytes", "one generated Client Identity", "/var/lib/sbxr/proxy-ownership.json", "Infrastructure Secret", "will not change SSH, firewall, routing, or provider settings"} {
+	for _, required := range []string{"Ubuntu 24.04 amd64", "8.8.8.8:443", "google.com:443", "sing-box 1.13.19 amd64", "803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1", "24597120 bytes", "one generated Client Identity", "/var/lib/sbxr/proxy-ownership.json", "Infrastructure Secret", "will not change SSH, firewall, routing, or provider settings"} {
 		if !strings.Contains(plan, required) {
 			t.Errorf("plan missing %q:\n%s", required, plan)
 		}
@@ -1366,8 +1373,8 @@ func TestReviewReturnsCompleteSecretSafeRunningDetails(t *testing.T) {
 		"Service active: Yes",
 		"Expected public listener ownership: sing-box on TCP 8.8.8.8:443; Matches",
 		"Public endpoint: 8.8.8.8:443",
-		"Selected destination: microsoft.com:443",
-		"Server name: microsoft.com",
+		"Selected destination: google.com:443",
+		"Server name: google.com",
 		"Client Identity: Present",
 	} {
 		if !strings.Contains(details, required) {
@@ -1472,8 +1479,8 @@ func TestValidOwnershipIdentityMismatchKeepsKnownDetails(t *testing.T) {
 				"Ownership Record: Valid; phase Running; cleanup checkpoint 0",
 				"Mutation lock: " + test.lock,
 				"Public endpoint: 8.8.8.8:443",
-				"Selected destination: microsoft.com:443",
-				"Server name: microsoft.com",
+				"Selected destination: google.com:443",
+				"Server name: google.com",
 				test.correction,
 			} {
 				if !strings.Contains(details, required) {
