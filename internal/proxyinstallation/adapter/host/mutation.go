@@ -190,7 +190,28 @@ func (adapter Adapter) readConfigurationFile(name, expectedDigest string, gid ui
 	return body, nil
 }
 
+func (adapter Adapter) safeParents(name string) error {
+	parent := filepath.Dir(name)
+	if parent != "/" {
+		if err := adapter.safeParents(parent); err != nil {
+			return err
+		}
+	}
+	info, err := os.Lstat(adapter.path(parent))
+	if err != nil {
+		return err
+	}
+	stat, ok := infoSys(info)
+	if !ok || !info.IsDir() || stat.Uid != adapter.ownerUID() || info.Mode().Perm()&0o022 != 0 || parent == "/var/lib/sbxr" && info.Mode().Perm() != 0o700 {
+		return errors.New("unsafe ownership parent")
+	}
+	return nil
+}
+
 func (adapter Adapter) readOwnedFile(name string) ([]byte, error) {
+	if err := adapter.safeParents(name); err != nil {
+		return nil, err
+	}
 	path := adapter.path(name)
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -217,6 +238,31 @@ func (adapter Adapter) readOwnedFile(name string) ([]byte, error) {
 	return body, nil
 }
 
+// SyncOwnership establishes durability before a removal effect, including when
+// a prior process saw rename succeed but directory synchronization failed.
+func (adapter Adapter) SyncOwnership(name string, expected []byte) error {
+	body, err := adapter.ReadOwnership(name)
+	if err != nil || !bytes.Equal(body, expected) {
+		return errors.New("ownership changed")
+	}
+	file, err := os.OpenFile(adapter.path(name), os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	if err := adapter.syncOwnershipDirectory(adapter.path(filepath.Dir(name))); err != nil {
+		return err
+	}
+	body, err = adapter.ReadOwnership(name)
+	if err != nil || !bytes.Equal(body, expected) {
+		return errors.New("ownership changed")
+	}
+	return nil
+}
+
 func (adapter Adapter) PublishOwnership(name, nextName string, expected, next []byte) error {
 	current, err := adapter.ReadOwnership(name)
 	if len(expected) == 0 {
@@ -237,10 +283,10 @@ func (adapter Adapter) PublishOwnership(name, nextName string, expected, next []
 	}
 	temporary := adapter.path(nextName)
 	if staged, stagedErr := adapter.readOwnedFile(nextName); stagedErr == nil {
-		if !bytes.Equal(staged, next) || os.Rename(temporary, adapter.path(name)) != nil {
+		if !bytes.Equal(staged, next) || adapter.SyncOwnership(nextName, next) != nil || os.Rename(temporary, adapter.path(name)) != nil {
 			return errors.New("ownership checkpoint refused")
 		}
-		return syncDirectory(directory)
+		return adapter.syncOwnershipDirectory(directory)
 	} else if !errors.Is(stagedErr, os.ErrNotExist) {
 		return errors.New("ownership checkpoint unsafe")
 	}
@@ -259,7 +305,7 @@ func (adapter Adapter) PublishOwnership(name, nextName string, expected, next []
 		_ = os.Remove(temporary)
 		return err
 	}
-	return syncDirectory(directory)
+	return adapter.syncOwnershipDirectory(directory)
 }
 
 func (adapter Adapter) RemoveOwnership(name, nextName string, expected []byte) error {
@@ -284,7 +330,7 @@ func (adapter Adapter) RemoveOwnership(name, nextName string, expected []byte) e
 			return removeErr
 		}
 	}
-	return syncDirectory(adapter.path(filepath.Dir(name)))
+	return adapter.syncOwnershipDirectory(adapter.path(filepath.Dir(name)))
 }
 
 func (adapter Adapter) RemoveFinalOwnership(name, nextName, finalName string, expected []byte) error {
@@ -307,24 +353,54 @@ func (adapter Adapter) RemoveFinalOwnership(name, nextName, finalName string, ex
 		if err := os.Rename(adapter.path(name), adapter.path(finalName)); err != nil {
 			return err
 		}
-		if err := syncDirectory(adapter.path(filepath.Dir(finalName))); err != nil {
+		if err := adapter.syncOwnershipDirectory(adapter.path(filepath.Dir(finalName))); err != nil {
 			return err
 		}
 	} else if !errors.Is(currentErr, os.ErrNotExist) || finalErr != nil || !bytes.Equal(final, expected) {
 		return errors.New("ownership record changed")
 	}
 	directory := adapter.path(filepath.Dir(name))
+	if _, err := os.Lstat(directory); err == nil {
+		if err := adapter.syncOwnershipDirectory(directory); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := adapter.SyncOwnership(finalName, expected); err != nil {
+		return err
+	}
 	if err := os.Remove(directory); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	parent := adapter.path(filepath.Dir(finalName))
-	if err := syncDirectory(parent); err != nil {
+	if err := adapter.syncOwnershipDirectory(parent); err != nil {
 		return err
 	}
 	if err := os.Remove(adapter.path(finalName)); err != nil {
 		return err
 	}
-	return syncDirectory(parent)
+	if err := adapter.syncOwnershipDirectory(parent); err != nil {
+		// Retain full finishing authority on a late unlink synchronization error.
+		file, createErr := os.OpenFile(adapter.path(finalName), os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o600)
+		if createErr == nil {
+			_, _ = file.Write(expected)
+			_ = file.Sync()
+			_ = file.Close()
+			_ = adapter.syncOwnershipDirectory(parent)
+		}
+		return err
+	}
+	return nil
+}
+
+func (adapter Adapter) syncOwnershipDirectory(name string) error {
+	if adapter.syncDirectoryFault != nil {
+		if err := adapter.syncDirectoryFault(name); err != nil {
+			return err
+		}
+	}
+	return syncDirectory(name)
 }
 
 func (adapter Adapter) Apply(ctx context.Context, input OperationInput) OperationResult {
@@ -517,8 +593,15 @@ func serviceStopped(load, enabled, active, process, listener OperationResult, pa
 }
 
 func (adapter Adapter) InspectRunning(ctx context.Context, spec SetupSpec, sourceBody, ownership []byte, configurationDigest, publicIPv4 string) RunningInspection {
+	return adapter.inspectRunning(ctx, spec, sourceBody, ownership, configurationDigest, publicIPv4, true)
+}
+
+func (adapter Adapter) inspectRunning(ctx context.Context, spec SetupSpec, sourceBody, ownership []byte, configurationDigest, publicIPv4 string, checkAvailability bool) RunningInspection {
 	osID, osVersion := adapter.osRelease()
-	observedPublicIPv4 := adapter.publicIPv4(ctx)
+	observedPublicIPv4 := publicIPv4
+	if checkAvailability {
+		observedPublicIPv4 = adapter.publicIPv4(ctx)
+	}
 	current, err := adapter.ReadOwnership(spec.OwnershipPath)
 	packageResult := adapter.command(ctx, "dpkg-query", "--show", "--showformat=${Version} ${Architecture} ${db:Status-Abbrev}", spec.PackageName)
 	hold := adapter.command(ctx, "apt-mark", "showhold")
@@ -528,7 +611,10 @@ func (adapter Adapter) InspectRunning(ctx context.Context, spec SetupSpec, sourc
 	group := adapter.command(ctx, "getent", "group", spec.Group)
 	userUID, userGID, userIDsOK := accountIDs(user.Fact)
 	groupGID, groupIDOK := groupID(group.Fact)
-	validation := adapter.Apply(ctx, OperationInput{Operation: ValidateConfiguration, Spec: spec})
+	validation := OperationResult{OK: true, Observed: true}
+	if checkAvailability {
+		validation = adapter.Apply(ctx, OperationInput{Operation: ValidateConfiguration, Spec: spec})
+	}
 	provenance := adapter.command(ctx, "dpkg-query", "--search", spec.ServiceUnitPath)
 	enabled := adapter.command(ctx, "systemctl", "is-enabled", spec.Service)
 	active := adapter.command(ctx, "systemctl", "is-active", spec.Service)
@@ -559,7 +645,7 @@ func (adapter Adapter) InspectRunning(ctx context.Context, spec SetupSpec, sourc
 }
 
 func (adapter Adapter) InspectRemoval(ctx context.Context, spec SetupSpec, sourceBody, ownership []byte, configurationDigest, publicIPv4 string) RemovalInspection {
-	facts := adapter.InspectRunning(ctx, spec, sourceBody, ownership, configurationDigest, publicIPv4)
+	facts := adapter.inspectRunning(ctx, spec, sourceBody, ownership, configurationDigest, publicIPv4, false)
 	user := adapter.command(ctx, "getent", "passwd", spec.User)
 	group := adapter.command(ctx, "getent", "group", spec.Group)
 	uid, gid, accountOK := accountIDs(user.Fact)
@@ -569,6 +655,38 @@ func (adapter Adapter) InspectRemoval(ctx context.Context, spec SetupSpec, sourc
 	identityExclusive, identityObserved := adapter.identityExclusive(ctx, spec, uid, gid, accountOK && groupOK && gid == groupGID)
 	processExclusive, processObserved := adapter.processExclusive(ctx, spec.PackageName, uid, gid, accountOK && groupOK && gid == groupGID)
 	serviceSafe, serviceObserved := adapter.serviceRemovalSafe(ctx, spec)
+	// Deletion needs ownership, not availability. Missing exact resources are
+	// harmless reductions; failed observations and changed resources still refuse.
+	for _, item := range []struct {
+		name string
+		fact *Observation
+	}{
+		{spec.APTKeyPath, &facts.APTKey}, {spec.APTSourcePath, &facts.APTSource},
+		{spec.ConfigurationPath, &facts.Configuration}, {spec.StatePath, &facts.State},
+	} {
+		if adapter.safelyAbsent(item.name) {
+			*item.fact = observation(true, true)
+		}
+	}
+	if adapter.safelyAbsent(filepath.Dir(spec.ConfigurationPath)) {
+		configurationEntries, configurationObserved = true, true
+	}
+	if adapter.safelyAbsent(spec.StatePath) {
+		stateEntries, stateObserved = true, true
+	}
+	pkg := adapter.command(ctx, "dpkg-query", "--show", "--showformat=${Version} ${Architecture} ${db:Status-Abbrev}", spec.PackageName)
+	if pkg.Observed && !pkg.OK && pkg.Code == 1 {
+		facts.Package, facts.Hold = observation(true, true), observation(true, true)
+		if adapter.safelyAbsent(spec.ServiceUnitPath) {
+			facts.ServiceProvenance = observation(true, true)
+		}
+	}
+	if user.Observed && !user.OK && user.Code == 2 && group.Observed && !group.OK && group.Code == 2 {
+		facts.PackageIdentity = observation(true, true)
+		identityExclusive, identityObserved = true, true
+		process := adapter.command(ctx, "pgrep", "-x", spec.PackageName)
+		processExclusive, processObserved = !process.OK && process.Code == 1, process.Observed
+	}
 	return RemovalInspection{
 		RunningInspection:    facts,
 		PackageLocks:         observation(adapter.packageLocksAvailable(), true),
@@ -578,6 +696,14 @@ func (adapter Adapter) InspectRemoval(ctx context.Context, spec SetupSpec, sourc
 		ProcessExclusive:     observation(processExclusive, processObserved),
 		ServiceSafe:          observation(serviceSafe, serviceObserved),
 	}
+}
+
+func (adapter Adapter) safelyAbsent(name string) bool {
+	if err := adapter.safeParents(name); err != nil {
+		return errors.Is(err, os.ErrNotExist)
+	}
+	_, err := os.Lstat(adapter.path(name))
+	return errors.Is(err, os.ErrNotExist)
 }
 
 func (adapter Adapter) directoryContainsOnly(name string, mode os.FileMode, uid, gid uint32, expected ...string) (bool, bool) {
@@ -655,7 +781,7 @@ func (adapter Adapter) serviceRemovalSafe(ctx context.Context, spec SetupSpec) (
 }
 
 func serviceStateRemovalSafe(enabled, active, mainPID, process, listener OperationResult, packageName string) bool {
-	enabledKnown := enabled.OK && enabled.Fact == "enabled" || enabled.Observed && (enabled.Fact == "disabled" || enabled.Fact == "masked")
+	enabledKnown := enabled.OK && enabled.Fact == "enabled" || enabled.Observed && (enabled.Fact == "disabled" || enabled.Fact == "masked" || enabled.Fact == "not-found")
 	running := active.OK && active.Fact == "active" && mainPID.OK && mainPID.Fact != "" && strings.TrimSpace(process.Fact) == mainPID.Fact && listenerOwnedOnly(listener.Fact, packageName)
 	stopped := active.Observed && active.Fact == "inactive" && mainPID.Fact == "0" && !process.OK && process.Code == 1 && listener.OK && listener.Fact == ""
 	return enabledKnown && (running || stopped)
@@ -976,4 +1102,55 @@ func groupID(entry string) (uint32, bool) {
 	}
 	gid, err := strconv.ParseUint(fields[2], 10, 32)
 	return uint32(gid), err == nil
+}
+
+// InspectSubscriptionAbsence admits only the subscription-absent footprint.
+// Unknown state entries are evidence to inspect, never cleanup candidates.
+func (adapter Adapter) InspectSubscriptionAbsence(ctx context.Context) Observation {
+	if ctx.Err() != nil {
+		return Observation{}
+	}
+	if err := adapter.safeParents("/var/lib/sbxr"); err != nil {
+		return Observation{}
+	}
+	directory := adapter.path("/var/lib/sbxr")
+	info, err := os.Lstat(directory)
+	if err == nil {
+		stat, ok := infoSys(info)
+		if !ok || !info.IsDir() || info.Mode().Perm() != 0o700 || stat.Uid != adapter.ownerUID() {
+			return Observation{}
+		}
+		entries, err := os.ReadDir(directory)
+		if err != nil {
+			return Observation{}
+		}
+		for _, entry := range entries {
+			switch entry.Name() {
+			case "installed.json", "proxy-ownership.json", ".proxy-ownership.json.next", "sing-box_1.13.19_amd64.deb":
+			default:
+				return observation(false, true)
+			}
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return Observation{}
+	}
+	for _, name := range []string{
+		"/etc/systemd/system/sbxr-subscription.service",
+		"/etc/systemd/system/sbxr-subscription.service.d",
+		"/etc/systemd/system/multi-user.target.wants/sbxr-subscription.service",
+		"/etc/letsencrypt/live/sbxr-subscription", "/etc/letsencrypt/archive/sbxr-subscription",
+		"/etc/letsencrypt/renewal/sbxr-subscription.conf",
+	} {
+		if err := adapter.safeParents(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return Observation{}
+		}
+		if _, err := os.Lstat(adapter.path(name)); err == nil {
+			return observation(false, true)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return Observation{}
+		}
+	}
+	unit := adapter.command(ctx, "systemctl", "show", "--property=LoadState", "--value", "sbxr-subscription.service")
+	listener := adapter.command(ctx, "ss", "-H", "-ltnp", "sport", "=", ":8443")
+	return observation(unit.Fact == "not-found" && listener.OK && listener.Fact == "", unit.Observed && listener.Observed)
 }

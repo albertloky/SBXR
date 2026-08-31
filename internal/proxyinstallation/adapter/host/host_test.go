@@ -568,3 +568,154 @@ func resourcePresent(resources []Resource, name string) bool {
 	}
 	return false
 }
+
+func TestOwnershipRefusesUnsafeParentAndPreservesFinalSchema2Bytes(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(root, "var/lib/sbxr")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	adapter := Adapter{root: root}
+	spec := testSetupSpec()
+	body := []byte(`{"schema":2,"finishing_release_identity":{"tag":"v3.0.22"},"resource_creating_releases":[{"tag":"v3.0.21"}]}` + "\n")
+	if err := adapter.PublishOwnership(spec.OwnershipPath, spec.OwnershipNextPath, nil, body); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(directory, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.ReadOwnership(spec.OwnershipPath); err == nil {
+		t.Fatal("unsafe parent accepted")
+	}
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	moved := directory + "-real"
+	if err := os.Rename(directory, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(moved, directory); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.ReadOwnership(spec.OwnershipPath); err == nil {
+		t.Fatal("symlink parent accepted")
+	}
+	if err := os.Remove(directory); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(moved, directory); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "unknown"), []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	final := "/var/lib/.sbxr-removal.json"
+	if err := adapter.RemoveFinalOwnership(spec.OwnershipPath, spec.OwnershipNextPath, final, body); err == nil {
+		t.Fatal("unknown residue removed")
+	}
+	got, err := adapter.ReadOwnership(final)
+	if err != nil || !bytes.Equal(got, body) {
+		t.Fatalf("full authority lost: %v", err)
+	}
+}
+
+func TestFinalizationRetainsFullAuthorityAcrossEveryDirectorySyncFailure(t *testing.T) {
+	for failure := 1; failure <= 5; failure++ {
+		t.Run(fmt.Sprint(failure), func(t *testing.T) {
+			root := t.TempDir()
+			directory := filepath.Join(root, "var/lib/sbxr")
+			if err := os.MkdirAll(directory, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			adapter := Adapter{root: root}
+			spec := testSetupSpec()
+			body := []byte("{\"schema\":2,\"complete_provenance\":\"retained\"}\n")
+			if err := adapter.PublishOwnership(spec.OwnershipPath, spec.OwnershipNextPath, nil, body); err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			adapter.syncDirectoryFault = func(string) error {
+				calls++
+				if calls == failure {
+					return fmt.Errorf("injected directory sync")
+				}
+				return nil
+			}
+			final := "/var/lib/.sbxr-removal.json"
+			if err := adapter.RemoveFinalOwnership(spec.OwnershipPath, spec.OwnershipNextPath, final, body); err == nil {
+				t.Fatal("failure not observed")
+			}
+			current, currentErr := adapter.ReadOwnership(spec.OwnershipPath)
+			moved, movedErr := adapter.ReadOwnership(final)
+			if (currentErr == nil) == (movedErr == nil) || currentErr == nil && !bytes.Equal(current, body) || movedErr == nil && !bytes.Equal(moved, body) {
+				t.Fatal("lost or duplicated full authority")
+			}
+			restarted := Adapter{root: root}
+			if err := restarted.RemoveFinalOwnership(spec.OwnershipPath, spec.OwnershipNextPath, final, body); err != nil {
+				t.Fatalf("restart: %v", err)
+			}
+			if _, err := os.Lstat(directory); !os.IsNotExist(err) {
+				t.Fatal("directory survived")
+			}
+			if _, err := os.Lstat(adapter.path(final)); !os.IsNotExist(err) {
+				t.Fatal("authority survived")
+			}
+		})
+	}
+}
+
+func TestRemovalInspectsSafelyMissingResourcesWithoutAvailabilityChecks(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "var/lib/sbxr"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "etc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "etc/os-release"), []byte("ID=ubuntu\nVERSION_ID=24.04\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	command := `#!/bin/sh
+case "${0##*/}:$1" in
+dpkg-query:*) exit 1;;
+getent:*) exit 2;;
+pgrep:*) exit 1;;
+systemctl:show) case "$2" in --property=MainPID) printf '0\n';; *) printf 'not-found\n';; esac;;
+systemctl:is-enabled) printf 'not-found\n'; exit 1;;
+systemctl:is-active) printf 'inactive\n'; exit 3;;
+ss:*|apt-mark:*) exit 0;;
+sing-box:*) exit 99;;
+esac
+`
+	commandPath := filepath.Join(root, "command")
+	if err := os.WriteFile(commandPath, []byte(command), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"dpkg-query", "getent", "pgrep", "systemctl", "ss", "apt-mark", "sing-box"} {
+		if err := os.Symlink(commandPath, filepath.Join(root, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", root)
+	adapter := Adapter{root: root, architecture: "amd64", packageLocksAvailable: func() bool { return true }, publicIPv4: func(context.Context) string { t.Fatal("removal attempted network availability"); return "" }}
+	spec := testSetupSpec()
+	body := []byte("owned\n")
+	if err := adapter.PublishOwnership(spec.OwnershipPath, spec.OwnershipNextPath, nil, body); err != nil {
+		t.Fatal(err)
+	}
+	facts := adapter.InspectRemoval(t.Context(), spec, nil, body, strings.Repeat("a", 64), "8.8.8.8")
+	for _, fact := range []Observation{facts.Host, facts.PublicIPv4Matches, facts.Ownership, facts.TransactionFilesAbsent, facts.APTKey, facts.APTSource, facts.Package, facts.Hold, facts.PackageIdentity, facts.Configuration, facts.State, facts.Validation, facts.ServiceProvenance, facts.ConfigurationEntries, facts.StateEntries, facts.IdentityExclusive, facts.ProcessExclusive, facts.ServiceSafe} {
+		if !fact.Observed || !fact.Accepted {
+			t.Fatalf("missing resource refused: %#v", facts)
+		}
+	}
+	if absent := adapter.InspectSubscriptionAbsence(t.Context()); !absent.Observed || !absent.Accepted {
+		t.Fatalf("absence = %#v", absent)
+	}
+	if err := os.WriteFile(filepath.Join(root, "var/lib/sbxr/subscription-token"), []byte("unknown"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if absent := adapter.InspectSubscriptionAbsence(t.Context()); absent.Accepted {
+		t.Fatal("unknown token called absent")
+	}
+}

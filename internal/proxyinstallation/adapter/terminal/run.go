@@ -222,7 +222,7 @@ func writeClientConfiguration(output io.Writer, configuration []byte) error {
 }
 
 func writeFrame(output io.Writer, review proxyinstallation.Review, result proxyinstallation.Result) error {
-	if _, err := fmt.Fprintf(output, "SBXR V3\nVersion: %s\nProxy status: %s\nResult: %s\nCode: %s\n\n", review.Version, review.Status, result.Message, result.Code); err != nil {
+	if _, err := fmt.Fprintf(output, "SBXR V3\nVersion: %s\nProxy status: %s\nSubscription status: %s\nResult: %s\nCode: %s\n\n", review.Version, review.Status, review.SubscriptionStatus, result.Message, result.Code); err != nil {
 		return err
 	}
 	for index, action := range review.LegalActions {

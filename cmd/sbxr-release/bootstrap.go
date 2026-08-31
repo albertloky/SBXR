@@ -187,17 +187,64 @@ if [ ! -e "$removal_record" ] && [ ! -L "$removal_record" ] && { [ -e "$final_re
   removal_record="$final_removal_record"
 fi
 if [ -e "$removal_record" ] || [ -L "$removal_record" ]; then
+  for parent in "$ROOT/var" "$ROOT/var/lib" "$ROOT/var/lib/sbxr"; do
+    if [ -e "$parent" ] || [ -L "$parent" ]; then
+      [ ! -L "$parent" ] || path_refused
+      case "$("$ROOT/usr/bin/stat" -c '%u:%a:%F' "$parent" 2>/dev/null)" in '0:755:directory'|'0:700:directory') ;; *) path_refused ;; esac
+    fi
+  done
+  if [ -e "$ROOT/var/lib/sbxr" ]; then
+    [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%F' "$ROOT/var/lib/sbxr" 2>/dev/null)" = '0:700:directory' ] || path_refused
+  fi
   [ ! -L "$removal_record" ] && [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$removal_record" 2>/dev/null)" = '0:600:1:regular file' ] || path_refused
   [ "$("$ROOT/usr/bin/wc" -c <"$removal_record")" -le 65536 ] 2>/dev/null && single_line "$removal_record" || path_refused
-  removal_prefix='^\{"schema":1,"phase":"Removal committed","unfinished_direction":"removal required","release_identity":\{"repository":"{{.Repository}}","tag":"v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?","commit":"[0-9a-f]{40}","release_index_sha256":"[0-9a-f]{64}"\},'
-  if "$ROOT/usr/bin/grep" -Eq "$removal_prefix" "$removal_record"; then
-    TAG=$("$ROOT/usr/bin/sed" -n 's|.*"release_identity":{"repository":"{{.Repository}}","tag":"\([^"]*\)".*|\1|p' "$removal_record")
-    COMMIT=$("$ROOT/usr/bin/sed" -n 's|.*"release_identity":{"repository":"{{.Repository}}","tag":"[^"]*","commit":"\([0-9a-f]*\)".*|\1|p' "$removal_record")
-    REMOVAL_INDEX_SHA=$("$ROOT/usr/bin/sed" -n 's|.*"release_identity":{"repository":"{{.Repository}}","tag":"[^"]*","commit":"[0-9a-f]*","release_index_sha256":"\([0-9a-f]*\)".*|\1|p' "$removal_record")
-    RESTORING_REMOVAL=1
-	elif "$ROOT/usr/bin/grep" -Fq '"unfinished_direction":"removal required"' "$removal_record"; then
-	  path_refused
+  # Committed records are canonical JSON. Match the complete supported contract,
+  # never a prefix that could hide an unknown operation or conflicting identity.
+  identity='\{"repository":"{{.Repository}}","tag":"v[1-9][0-9]*\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?","commit":"[0-9a-f]{40}","release_index_sha256":"[0-9a-f]{64}"\}'
+  schema=$("$ROOT/usr/bin/sed" -n 's/^{"schema":\([12]\),.*/\1/p' "$removal_record")
+  case "$schema" in 1|2) ;; *) path_refused ;; esac
+  prefix='\{"schema":'"$schema"',"phase":"Removal committed","unfinished_direction":"removal required","release_identity":'"$identity"
+  config_sha=$("$ROOT/usr/bin/sed" -n 's/.*"configuration_sha256":"\([0-9a-f]*\)".*/\1/p' "$removal_record")
+  resources='["/var/lib/sbxr/proxy-ownership.json root:root 0600 one-link schema-'"$schema"'","/var/lib/.sbxr-removal.json root:root 0600 one-link finalization authority"'
+  if [ -z "$config_sha" ]; then
+    fields=',"proxy_package_identity":"","public_ipv4":"","destination_address":"","destination_server_name":"","configuration_sha256":""'
+    resources=$resources',"/usr/local/bin/sbxr exact committed Release Identity","/var/lib/sbxr/installed.json exact committed Release Identity"]'
+    checkpoints='[0-3]'
+    provenance_count=4
+  else
+    [ "${#config_sha}" -eq 64 ] || path_refused
+    fields=',"proxy_package_identity":"https://deb\.sagernet\.org/ sing-box 1\.13\.19 amd64 24597120 fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf","public_ipv4":"[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+","destination_address":"google\.com:443","destination_server_name":"google\.com","configuration_sha256":"'"$config_sha"'"'
+    resources=$resources',"/var/lib/sbxr/.proxy-ownership.json.next root:root 0600 one-link transaction material","/var/lib/sbxr/sing-box_1.13.19_amd64.deb root-owned one-link verified package artifact","/etc/apt/keyrings/sagernet.asc sha256:803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1","/etc/apt/keyrings/sagernet.asc.sbxr-next root-owned transaction material","/etc/apt/sources.list.d/sagernet.sources https://deb.sagernet.org/ signed-by sagernet.asc","/etc/apt/sources.list.d/sagernet.sources.sbxr-next root-owned transaction material","sing-box package 1.13.19 amd64 deb-sha256:fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf","sing-box package hold","/etc/sing-box/config.json sha256:'"$config_sha"'","/var/lib/sing-box package state","sing-box.service package provenance stopped-disabled-before-commit","sing-box package-created user and group","tcp/443 local listener"]'
+    checkpoints='([0-9]|1[01])'
+    provenance_count=15
+    ip=$("$ROOT/usr/bin/sed" -n 's/.*"public_ipv4":"\([0-9.]*\)".*/\1/p' "$removal_record")
+    IFS=. read -r ip1 ip2 ip3 ip4 <<<"$ip"
+    for octet in "$ip1" "$ip2" "$ip3" "$ip4"; do
+      case "$octet" in ''|*[!0-9]*|0[0-9]*) path_refused ;; esac
+      [ "${#octet}" -le 3 ] && [ "$octet" -le 255 ] || path_refused
+    done
+    case "$ip1.$ip2.$ip3" in 0.*|10.*|127.*|169.254.*|192.0.0|192.0.2|192.88.99|192.168.*|198.51.100|203.0.113) path_refused ;; esac
+    [ "$ip1" -lt 224 ] || path_refused
+    if { [ "$ip1" -eq 100 ] && [ "$ip2" -ge 64 ] && [ "$ip2" -le 127 ]; } || { [ "$ip1" -eq 172 ] && [ "$ip2" -ge 16 ] && [ "$ip2" -le 31 ]; } || { [ "$ip1" -eq 198 ] && { [ "$ip2" -eq 18 ] || [ "$ip2" -eq 19 ]; }; }; then path_refused; fi
   fi
+  # Escape literal contract text for ERE; no caller-controlled regular expression.
+  resource_pattern=$(printf '%s' "$resources" | "$ROOT/usr/bin/sed" 's/[][\\.^$*+?(){}|]/\\&/g')
+  suffix=',"permitted_resources":'"$resource_pattern"',"cleanup_checkpoint":0,"removal_checkpoint":'"$checkpoints"
+  selector='release_identity'
+  if [ "$schema" -eq 2 ]; then
+    suffix=$suffix',"resource_creating_releases":\['"$identity"'(,'"$identity"'){'"$((provenance_count - 1))"'}\],"finishing_release_identity":'"$identity"
+    selector='finishing_release_identity'
+  fi
+  "$ROOT/usr/bin/grep" -Eqx '^'"$prefix$fields$suffix"'\}$' "$removal_record" || path_refused
+  if [ "$removal_record" = "$final_removal_record" ]; then
+    final_checkpoint=3
+    [ -z "$config_sha" ] || final_checkpoint=11
+    "$ROOT/usr/bin/grep" -Fq '"removal_checkpoint":'"$final_checkpoint" "$removal_record" || path_refused
+  fi
+  TAG=$("$ROOT/usr/bin/sed" -n 's|.*"'"$selector"'":{"repository":"{{.Repository}}","tag":"\([^"]*\)".*|\1|p' "$removal_record")
+  COMMIT=$("$ROOT/usr/bin/sed" -n 's|.*"'"$selector"'":{"repository":"{{.Repository}}","tag":"[^"]*","commit":"\([0-9a-f]*\)".*|\1|p' "$removal_record")
+  REMOVAL_INDEX_SHA=$("$ROOT/usr/bin/sed" -n 's|.*"'"$selector"'":{"repository":"{{.Repository}}","tag":"[^"]*","commit":"[0-9a-f]*","release_index_sha256":"\([0-9a-f]*\)".*|\1|p' "$removal_record")
+  RESTORING_REMOVAL=1
 fi
 
 # The moving GitHub HTTPS command trusts this script; its embedded identity pins every later download.
@@ -344,6 +391,10 @@ if [ "$RESTORING_REMOVAL" -eq 1 ]; then
   [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%F' "$installed_directory" 2>/dev/null)" = '0:700:directory' ] || path_refused
   unexpected=$("$ROOT/usr/bin/find" "$installed_directory" -mindepth 1 -maxdepth 1 ! -name proxy-ownership.json ! -name installed.json -print -quit 2>/dev/null) || path_refused
   [ -z "$unexpected" ] || path_refused
+  restored_record_pattern='^\{"schema":1,"repository":"{{.Repository}}","tag":"'"$TAG"'","commit":"'"$COMMIT"'","release_index_sha256":"'"$index_sha"'","sequence":'"$SEQUENCE"',"architecture":"'"$ARCH"'","executable_sha256":"'"$executable_sha"'"\}$'
+  if [ -e "$installed_record" ] || [ -L "$installed_record" ]; then
+    [ ! -L "$installed_record" ] && [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$installed_record" 2>/dev/null)" = '0:600:1:regular file' ] && single_line "$installed_record" && "$ROOT/usr/bin/grep" -Eqx "$restored_record_pattern" "$installed_record" || path_refused
+  fi
   "$ROOT/usr/bin/mv" -n "$candidate" "$active" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
   "$ROOT/usr/bin/chmod" 0755 "$active" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
   "$ROOT/usr/bin/sync" "$active" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'

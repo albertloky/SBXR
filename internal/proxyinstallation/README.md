@@ -1,0 +1,38 @@
+# Supported Ownership Records
+
+Issue #345 implements the subscription-absent compatibility slice of #342.
+`Review` and `Execute` remain the Owner Interface. No subscription operation or
+resource creation is admitted by this slice.
+
+- Schema 1 retains its original fields and exact resource contracts. An already
+  committed schema-1 removal binds its original `release_identity`.
+- Schema 2 retains those fields and adds `resource_creating_releases`: one exact
+  Creating Release Identity for each ordered `permitted_resources` entry. Its
+  Ownership Record entry names `schema-2`. Only idle `Running` or committed
+  removal is supported. Subscription, startup, or operation fields are unknown
+  and refuse until their complete behavior is implemented.
+- Schema-2 removal additionally requires `finishing_release_identity`. It is
+  forbidden outside removal. Confirmed removal converts schema 1 at commitment,
+  preserves original creation identities, resets the setup cleanup checkpoint,
+  and selects the verified installed finisher. Reads never convert records.
+- Compatibility requires the entire supported record/resource contract and a
+  verified active Installed Record/executable pair. Creating identities must be
+  the active release or the exact `v3.0.21` identity pinned in the implementation.
+  An arbitrary older identity or matching version number is not admitted. This
+  is inspection/removal support, not qualification of an update source.
+- `Not enabled` requires valid/absent authority, known state-directory contents,
+  absence of the dedicated subscription service and certificate paths, and an
+  absent TCP 8443 listener. Unknown observations or material block mutation;
+  they do not turn an independently verified Running proxy into a proxy fault.
+- Removal synchronizes authority before effects and after an uncertain
+  publication. Finalization moves all bytes to `/var/lib/.sbxr-removal.json`,
+  synchronizes both directories, and keeps exactly one authority until deletion
+  completes. Unknown residue is never recursively erased.
+- The Pasteable Install Command accepts the complete canonical committed wire
+  form, selects the schema-appropriate exact finisher, and restores only its
+  verified executable and Installed Record. It does not recreate proxy resources.
+
+Supported checkpoints are 0–11 with a proxy and 0–3 without one. Final authority
+outside the state directory is valid only at the final checkpoint. A restored
+finishing pair is removed even when its original deletion checkpoint was passed.
+Automated checks do not establish packaged VPS or Karing acceptance.

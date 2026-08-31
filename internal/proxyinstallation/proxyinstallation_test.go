@@ -20,34 +20,36 @@ import (
 )
 
 type controlledHost struct {
-	inspection         hostadapter.Inspection
-	preflight          hostadapter.Preflight
-	ownership          []byte
-	checkpoints        [][]byte
-	operations         []hostadapter.Operation
-	configuration      []byte
-	configurationReads int
-	enabled            bool
-	active             bool
-	listener           bool
-	busy               bool
-	lockHeld           bool
-	lockChangesFacts   bool
-	statusBusy         bool
-	activeUnknown      bool
-	hostUnknown        bool
-	configUnknown      bool
-	fails              map[hostadapter.Operation]bool
-	failPublish        setupPhase
-	latePublish        bool
-	publishFailed      bool
-	cancelOn           hostadapter.Operation
-	cancel             context.CancelFunc
-	removal            *hostadapter.RemovalInspection
-	failRemovalPublish map[int]bool
-	lateRemovalPublish map[int]bool
-	finalizing         bool
-	finalRemovalFails  int
+	failOwnershipSync, failLateSync bool
+	subscriptionAbsence             *hostadapter.Observation
+	inspection                      hostadapter.Inspection
+	preflight                       hostadapter.Preflight
+	ownership                       []byte
+	checkpoints                     [][]byte
+	operations                      []hostadapter.Operation
+	configuration                   []byte
+	configurationReads              int
+	enabled                         bool
+	active                          bool
+	listener                        bool
+	busy                            bool
+	lockHeld                        bool
+	lockChangesFacts                bool
+	statusBusy                      bool
+	activeUnknown                   bool
+	hostUnknown                     bool
+	configUnknown                   bool
+	fails                           map[hostadapter.Operation]bool
+	failPublish                     setupPhase
+	latePublish                     bool
+	publishFailed                   bool
+	cancelOn                        hostadapter.Operation
+	cancel                          context.CancelFunc
+	removal                         *hostadapter.RemovalInspection
+	failRemovalPublish              map[int]bool
+	lateRemovalPublish              map[int]bool
+	finalizing                      bool
+	finalRemovalFails               int
 }
 
 func TestPinnedPackageProvenanceUsesCanonicalServiceUnitPath(t *testing.T) {
@@ -156,6 +158,7 @@ func (host *controlledHost) PublishOwnership(_, _ string, expected, next []byte)
 	host.checkpoints = append(host.checkpoints, bytes.Clone(next))
 	if record.Direction == removalRequired && host.lateRemovalPublish[record.RemovalCheckpoint] {
 		delete(host.lateRemovalPublish, record.RemovalCheckpoint)
+		host.failOwnershipSync = host.failLateSync
 		return errors.New("late removal checkpoint failure")
 	}
 	if record.Phase == host.failPublish && !host.publishFailed && host.latePublish {
@@ -740,7 +743,10 @@ func (*controlledRemovalLifecycle) Update(context.Context, softwarelifecycle.Pro
 func (*controlledRemovalLifecycle) Recover(context.Context, softwarelifecycle.ProgressReporter) softwarelifecycle.Result {
 	return softwarelifecycle.Result{}
 }
-func (lifecycle *controlledRemovalLifecycle) InspectCompleteRemoval(context.Context, softwarelifecycle.ReleaseIdentity) softwarelifecycle.CompleteRemovalInspection {
+func (lifecycle *controlledRemovalLifecycle) InspectCompleteRemoval(_ context.Context, expected softwarelifecycle.ReleaseIdentity) softwarelifecycle.CompleteRemovalInspection {
+	if expected != testInstalledIdentity() {
+		return softwarelifecycle.CompleteRemovalInspection{}
+	}
 	return softwarelifecycle.CompleteRemovalInspection{Valid: true, ExecutablePresent: lifecycle.executable, InstalledRecordPresent: lifecycle.installedRecord, StateDirectoryEmpty: true}
 }
 func (lifecycle *controlledRemovalLifecycle) RemoveCompleteRemovalExecutable(context.Context, softwarelifecycle.ReleaseIdentity) bool {
@@ -1513,7 +1519,7 @@ func TestViewDetailsKeepsOwnershipProblemsCompleteAndSecretSafe(t *testing.T) {
 		"Selected destination: Unavailable",
 		"Server name: Unavailable",
 		"Client Identity: Absent",
-		"Safe correction: Restore the exact root-owned schema-1 Ownership Record from the active Release Identity, then inspect again.",
+		"Safe correction: Restore the exact supported root-owned Ownership Record and its original provenance, then inspect again.",
 	} {
 		if !strings.Contains(details, required) {
 			t.Errorf("details missing %q:\n%s", required, details)
@@ -1553,5 +1559,224 @@ func TestReviewRefusesIllegalActionsWithoutAuthority(t *testing.T) {
 	illegal := installation.Review(t.Context(), FinishSetupAction)
 	if illegal.Result.Code != ActionRefused || illegal.Result.FailedCheck != "Legal action" || illegal.Prepared != nil {
 		t.Fatalf("Finish setup Review() = %#v", illegal)
+	}
+}
+
+func TestReviewSupportedSchema2PreservesOwnershipBytes(t *testing.T) {
+	host := acceptedHost()
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	if result := installation.Execute(t.Context(), *setup.Prepared, Approved, nil); result.Status != Running {
+		t.Fatalf("setup = %#v", result)
+	}
+	var record map[string]any
+	if err := json.Unmarshal(host.ownership, &record); err != nil {
+		t.Fatal(err)
+	}
+	record["schema"] = 2
+	resources := record["permitted_resources"].([]any)
+	resources[0] = "/var/lib/sbxr/proxy-ownership.json root:root 0600 one-link schema-2"
+	origins := make([]softwarelifecycle.ReleaseIdentity, len(resources))
+	for i := range origins {
+		origins[i] = testInstalledIdentity()
+	}
+	record["resource_creating_releases"] = origins
+	host.ownership, _ = json.Marshal(record)
+	before := host.facts()
+	for _, action := range []Action{StatusAction, ViewDetailsAction, CompleteRemovalAction} {
+		review := installation.Review(t.Context(), action)
+		if review.Status != Running || action == CompleteRemovalAction && review.Prepared == nil {
+			t.Fatalf("schema-2 %s = %#v", action, review)
+		}
+	}
+	if !reflect.DeepEqual(before, host.facts()) {
+		t.Fatal("read-only inspection changed the installation")
+	}
+}
+
+func TestCompatibleCreatingReleaseIsPreservedWhenRemovalSelectsInstalledFinisher(t *testing.T) {
+	host := acceptedHost()
+	lifecycle := &controlledRemovalLifecycle{ready: true}
+	installation := newInstalledInterface(lifecycle, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+	record, _ := decodeOwnership(host.ownership)
+	creator := softwarelifecycle.ReleaseIdentity{Repository: softwarelifecycle.Repository, Tag: "v3.0.21", Commit: "989094b9766f02bf17510a71753c6a5c736bf120", IndexSHA256: "90463aa73a2c81542b44ea833c762bb2cd44d2d585fb7bd322279f678feea331"}
+	record.Release = creator
+	host.ownership = ownershipBytes(record)
+	before := bytes.Clone(host.ownership)
+	review := installation.Review(t.Context(), CompleteRemovalAction)
+	if review.Status != Running || review.Prepared == nil || !bytes.Equal(before, host.ownership) {
+		t.Fatalf("compatible removal review = %#v", review)
+	}
+	host.fails = map[hostadapter.Operation]bool{hostadapter.StopDisableService: true}
+	if result := installation.Execute(t.Context(), *review.Prepared, Approved, nil); result.Status != RemovalIncomplete {
+		t.Fatalf("removal = %#v", result)
+	}
+	committed, ok := decodeOwnership(host.ownership)
+	if !ok || committed.Schema != 2 || committed.Release != creator || committed.FinishingRelease == nil || *committed.FinishingRelease != testInstalledIdentity() {
+		t.Fatalf("commitment = %#v", committed)
+	}
+	for _, origin := range committed.ResourceCreatingReleases {
+		if origin != creator {
+			t.Fatal("resource provenance was relabelled")
+		}
+	}
+	delete(host.fails, hostadapter.StopDisableService)
+	restarted := newInstalledInterface(lifecycle, host, acceptedSingBox{})
+	finish := restarted.Review(t.Context(), FinishRemovalAction)
+	if finish.Prepared == nil {
+		t.Fatalf("finish review = %#v", finish)
+	}
+	if result := restarted.Execute(t.Context(), *finish.Prepared, Approved, nil); result.Code != CompleteRemovalCompleted {
+		t.Fatalf("finish = %#v", result)
+	}
+}
+
+func TestSubscriptionAbsenceMustBeProvedWithoutMaskingHealthyProxy(t *testing.T) {
+	host := acceptedHost()
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+	for _, test := range []struct {
+		name string
+		fact hostadapter.Observation
+		want SubscriptionStatus
+	}{
+		{"absent", hostadapter.Observation{Observed: true, Accepted: true}, SubscriptionNotEnabled},
+		{"unknown", hostadapter.Observation{}, SubscriptionProblemDetected},
+		{"unexpected material", hostadapter.Observation{Observed: true}, SubscriptionProblemDetected},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			host.subscriptionAbsence = &test.fact
+			before := host.facts()
+			review := installation.Review(t.Context(), CompleteRemovalAction)
+			if review.Status != Running || review.SubscriptionStatus != test.want || review.Result.SubscriptionStatus != test.want {
+				t.Fatalf("review = %#v", review)
+			}
+			if (review.Prepared != nil) != (test.want == SubscriptionNotEnabled) {
+				t.Fatalf("unsafe removal admission = %#v", review)
+			}
+			if !reflect.DeepEqual(before, host.facts()) {
+				t.Fatal("inspection mutated state")
+			}
+		})
+	}
+}
+
+func (host *controlledHost) InspectSubscriptionAbsence(context.Context) hostadapter.Observation {
+	if host.subscriptionAbsence != nil {
+		return *host.subscriptionAbsence
+	}
+	return hostadapter.Observation{Observed: true, Accepted: true}
+}
+
+func TestSchema2RefusesUnknownOrContradictoryAuthority(t *testing.T) {
+	host := acceptedHost()
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+	original := bytes.Clone(host.ownership)
+	for _, change := range []func(string) string{
+		func(s string) string { return strings.Replace(s, `"schema":1`, `"schema":2,"schema":1`, 1) },
+		func(s string) string {
+			return strings.Replace(s, `"cleanup_checkpoint":0`, `"cleanup_checkpoint":null`, 1)
+		},
+		func(s string) string { return strings.Replace(s, `"cleanup_checkpoint":0,`, ``, 1) },
+		func(s string) string { return strings.Replace(s, `"schema":1`, `"schema":2`, 1) },
+		func(s string) string {
+			return strings.Replace(s, `"schema":1`, `"schema":1,"operation":{"kind":"enable"}`, 1)
+		},
+	} {
+		host.ownership = []byte(change(string(original)))
+		review := installation.Review(t.Context(), CompleteRemovalAction)
+		if review.Prepared != nil || review.Status != ProblemDetected || review.SubscriptionStatus != SubscriptionProblemDetected {
+			t.Fatalf("accepted invalid authority: %#v", review)
+		}
+	}
+}
+
+func TestRemovalDoesNotUseVisibleButUnsynchronizedAuthority(t *testing.T) {
+	for checkpoint := 0; checkpoint <= 11; checkpoint++ {
+		t.Run(fmt.Sprint(checkpoint), func(t *testing.T) {
+			host := acceptedHost()
+			lifecycle := &controlledRemovalLifecycle{ready: true}
+			installation := newInstalledInterface(lifecycle, host, acceptedSingBox{})
+			setup := installation.Review(t.Context(), StartSetupAction)
+			installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+			host.lateRemovalPublish = map[int]bool{checkpoint: true}
+			host.failLateSync = true
+			removal := installation.Review(t.Context(), CompleteRemovalAction)
+			result := installation.Execute(t.Context(), *removal.Prepared, Approved, nil)
+			if result.Code == CompleteRemovalCompleted {
+				t.Fatal("unsynchronized authority permitted further effects")
+			}
+			before := len(host.operations)
+			restarted := newInstalledInterface(lifecycle, host, acceptedSingBox{})
+			finish := restarted.Review(t.Context(), FinishRemovalAction)
+			if finish.Prepared == nil {
+				t.Fatalf("finish = %#v", finish)
+			}
+			result = restarted.Execute(t.Context(), *finish.Prepared, Approved, nil)
+			if len(host.operations) != before || result.Code == CompleteRemovalCompleted {
+				t.Fatal("restart guessed durability")
+			}
+			host.failOwnershipSync = false
+			finish = restarted.Review(t.Context(), FinishRemovalAction)
+			if result = restarted.Execute(t.Context(), *finish.Prepared, Approved, nil); result.Code != CompleteRemovalCompleted {
+				t.Fatalf("durable finishing = %#v", result)
+			}
+		})
+	}
+}
+
+func (host *controlledHost) SyncOwnership(_ string, expected []byte) error {
+	if host.failOwnershipSync || !bytes.Equal(expected, host.ownership) {
+		return errors.New("ownership sync failed")
+	}
+	return nil
+}
+
+func TestFinalizationRemovesRestoredFinisherWithoutRecreatingProxy(t *testing.T) {
+	host := acceptedHost()
+	host.finalRemovalFails = 1
+	lifecycle := &controlledRemovalLifecycle{ready: true}
+	installation := newInstalledInterface(lifecycle, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+	removal := installation.Review(t.Context(), CompleteRemovalAction)
+	installation.Execute(t.Context(), *removal.Prepared, Approved, nil)
+	if !host.finalizing {
+		t.Fatal("did not reach finalization")
+	}
+	before := len(host.operations)
+	lifecycle.ready = true // Pasteable Install Command restored the exact finishing pair.
+	restarted := newInstalledInterface(lifecycle, host, acceptedSingBox{})
+	finish := restarted.Review(t.Context(), FinishRemovalAction)
+	if finish.Prepared == nil {
+		t.Fatalf("finish = %#v", finish)
+	}
+	result := restarted.Execute(t.Context(), *finish.Prepared, Approved, nil)
+	if result.Code != CompleteRemovalCompleted || lifecycle.executable || lifecycle.installedRecord || len(host.operations) != before {
+		t.Fatalf("restored finish = %#v", result)
+	}
+}
+
+func TestLegacyCommittedRemovalRetainsExactCreatingReleaseRule(t *testing.T) {
+	host := acceptedHost()
+	record := newRemovalOwnershipRecord(testInstalledIdentity())
+	host.ownership = ownershipBytes(record)
+	lifecycle := &controlledRemovalLifecycle{ready: true}
+	installation := newInstalledInterface(lifecycle, host, acceptedSingBox{})
+	before := bytes.Clone(host.ownership)
+	review := installation.Review(t.Context(), FinishRemovalAction)
+	if review.Prepared == nil || !bytes.Equal(before, host.ownership) {
+		t.Fatalf("legacy review = %#v", review)
+	}
+	record.Release = legacyProxyCreator
+	host.ownership = ownershipBytes(record)
+	review = installation.Review(t.Context(), FinishRemovalAction)
+	if review.Prepared != nil || review.Status != ProblemDetected {
+		t.Fatal("legacy commitment was reinterpreted as compatible")
 	}
 }

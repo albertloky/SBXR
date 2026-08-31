@@ -113,67 +113,81 @@ func TestGeneratedInstallerInstallsQualifiedReleaseWithoutATerminal(t *testing.T
 }
 
 func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *testing.T) {
-	fixture := newInstallerFixture(t)
-	if body, err := exec.Command("bash", fixture.script).CombinedOutput(); err != nil {
-		t.Fatalf("initial install = %v, %q", err, body)
-	}
-	installedRecord := filepath.Join(fixture.root, "var/lib/sbxr/installed.json")
-	installedBefore, err := os.ReadFile(installedRecord)
-	if err != nil {
-		t.Fatal(err)
-	}
-	index, err := os.ReadFile(filepath.Join(fixture.root, "fixtures/release-index.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	indexDigest := sha256.Sum256(index)
-	ownership := []byte(fmt.Sprintf(`{"schema":1,"phase":"Removal committed","unfinished_direction":"removal required","release_identity":{"repository":"albertloky/SBXR","tag":"v2.0.0","commit":"%s","release_index_sha256":"%s"},"proxy_package_identity":"","public_ipv4":"","destination_address":"","destination_server_name":"","configuration_sha256":"","permitted_resources":["/var/lib/sbxr/proxy-ownership.json root:root 0600 one-link schema-1","/var/lib/.sbxr-removal.json root:root 0600 one-link finalization authority","/usr/local/bin/sbxr exact committed Release Identity","/var/lib/sbxr/installed.json exact committed Release Identity"],"cleanup_checkpoint":0,"removal_checkpoint":2}`+"\n", strings.Repeat("a", 40), hex.EncodeToString(indexDigest[:])))
-	ownershipPath := filepath.Join(fixture.root, "var/lib/sbxr/proxy-ownership.json")
-	if err := os.WriteFile(ownershipPath, ownership, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(filepath.Join(fixture.root, "usr/local/bin/sbxr")); err != nil {
-		t.Fatal(err)
-	}
-	restorer := filepath.Join(fixture.root, "restore-newer-latest.sh")
-	if err := buildBootstrapFile(bootstrapOptions{
-		version: "2.0.1", sequence: 18, tag: "v2.0.1", commit: strings.Repeat("c", 40), output: restorer, root: fixture.root,
-		amd64ExecutableSHA256: strings.Repeat("d", 64), arm64ExecutableSHA256: strings.Repeat("e", 64),
-	}); err != nil {
-		t.Fatal(err)
-	}
+	for _, schema := range []int{1, 2} {
+		t.Run(fmt.Sprint(schema), func(t *testing.T) {
+			fixture := newInstallerFixture(t)
+			if body, err := exec.Command("bash", fixture.script).CombinedOutput(); err != nil {
+				t.Fatalf("initial install = %v, %q", err, body)
+			}
+			installedRecord := filepath.Join(fixture.root, "var/lib/sbxr/installed.json")
+			installedBefore, err := os.ReadFile(installedRecord)
+			if err != nil {
+				t.Fatal(err)
+			}
+			index, err := os.ReadFile(filepath.Join(fixture.root, "fixtures/release-index.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			indexDigest := sha256.Sum256(index)
+			ownership := []byte(fmt.Sprintf(`{"schema":1,"phase":"Removal committed","unfinished_direction":"removal required","release_identity":{"repository":"albertloky/SBXR","tag":"v2.0.0","commit":"%s","release_index_sha256":"%s"},"proxy_package_identity":"","public_ipv4":"","destination_address":"","destination_server_name":"","configuration_sha256":"","permitted_resources":["/var/lib/sbxr/proxy-ownership.json root:root 0600 one-link schema-1","/var/lib/.sbxr-removal.json root:root 0600 one-link finalization authority","/usr/local/bin/sbxr exact committed Release Identity","/var/lib/sbxr/installed.json exact committed Release Identity"],"cleanup_checkpoint":0,"removal_checkpoint":3}`+"\n", strings.Repeat("a", 40), hex.EncodeToString(indexDigest[:])))
+			if schema == 2 {
+				// Keep canonical field order produced by the removal commitment.
+				ownership = []byte(strings.Replace(string(ownership), `"schema":1`, `"schema":2`, 1))
+				ownership = []byte(strings.Replace(string(ownership), `one-link schema-1`, `one-link schema-2`, 1))
+				// Build release identities with the same canonical order as ReleaseIdentity.MarshalJSON.
+				finisherJSON := []byte(fmt.Sprintf(`{"repository":"albertloky/SBXR","tag":"v2.0.0","commit":"%s","release_index_sha256":"%s"}`, strings.Repeat("a", 40), hex.EncodeToString(indexDigest[:])))
+				creatorJSON := []byte(fmt.Sprintf(`{"repository":"albertloky/SBXR","tag":"v3.0.21","commit":"%s","release_index_sha256":"%s"}`, strings.Repeat("e", 40), strings.Repeat("f", 64)))
+				ownership = bytes.Replace(ownership, finisherJSON, creatorJSON, 1)
+				ownership = []byte(strings.TrimSuffix(string(ownership), "}\n") + `,"resource_creating_releases":[` + string(creatorJSON) + `,` + string(creatorJSON) + `,` + string(creatorJSON) + `,` + string(creatorJSON) + `],"finishing_release_identity":` + string(finisherJSON) + "}\n")
+			}
+			ownershipPath := filepath.Join(fixture.root, "var/lib/sbxr/proxy-ownership.json")
+			if err := os.WriteFile(ownershipPath, ownership, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(filepath.Join(fixture.root, "usr/local/bin/sbxr")); err != nil {
+				t.Fatal(err)
+			}
+			restorer := filepath.Join(fixture.root, "restore-newer-latest.sh")
+			if err := buildBootstrapFile(bootstrapOptions{
+				version: "2.0.1", sequence: 18, tag: "v2.0.1", commit: strings.Repeat("c", 40), output: restorer, root: fixture.root,
+				amd64ExecutableSHA256: strings.Repeat("d", 64), arm64ExecutableSHA256: strings.Repeat("e", 64),
+			}); err != nil {
+				t.Fatal(err)
+			}
 
-	body, err := exec.Command("bash", restorer).CombinedOutput()
-	if err != nil || !strings.Contains(string(body), "SOFTWARE-LIFECYCLE-INSTALL-REMOVAL-RESTORED") {
-		t.Fatalf("restore = %v, %q", err, body)
-	}
-	restored, restoredErr := os.ReadFile(filepath.Join(fixture.root, "usr/local/bin/sbxr"))
-	installedAfter, installedErr := os.ReadFile(installedRecord)
-	ownershipAfter, ownershipErr := os.ReadFile(ownershipPath)
-	if restoredErr != nil || !bytes.Equal(restored, fixture.executable) || installedErr != nil || !bytes.Equal(installedAfter, installedBefore) || ownershipErr != nil || !bytes.Equal(ownershipAfter, ownership) {
-		t.Fatalf("restored=%v installed=%v ownership=%v", restoredErr, installedErr, ownershipErr)
-	}
+			body, err := exec.Command("bash", restorer).CombinedOutput()
+			if err != nil || !strings.Contains(string(body), "SOFTWARE-LIFECYCLE-INSTALL-REMOVAL-RESTORED") {
+				t.Fatalf("restore = %v, %q", err, body)
+			}
+			restored, restoredErr := os.ReadFile(filepath.Join(fixture.root, "usr/local/bin/sbxr"))
+			installedAfter, installedErr := os.ReadFile(installedRecord)
+			ownershipAfter, ownershipErr := os.ReadFile(ownershipPath)
+			if restoredErr != nil || !bytes.Equal(restored, fixture.executable) || installedErr != nil || !bytes.Equal(installedAfter, installedBefore) || ownershipErr != nil || !bytes.Equal(ownershipAfter, ownership) {
+				t.Fatalf("restored=%v installed=%v ownership=%v", restoredErr, installedErr, ownershipErr)
+			}
 
-	finalOwnershipPath := filepath.Join(fixture.root, "var/lib/.sbxr-removal.json")
-	if err := os.Rename(ownershipPath, finalOwnershipPath); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(installedRecord); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(filepath.Dir(installedRecord)); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(filepath.Join(fixture.root, "usr/local/bin/sbxr")); err != nil {
-		t.Fatal(err)
-	}
-	body, err = exec.Command("bash", restorer).CombinedOutput()
-	if err != nil || !strings.Contains(string(body), "SOFTWARE-LIFECYCLE-INSTALL-REMOVAL-RESTORED") {
-		t.Fatalf("finalization restore = %v, %q", err, body)
-	}
-	finalOwnership, finalOwnershipErr := os.ReadFile(finalOwnershipPath)
-	if finalOwnershipErr != nil || !bytes.Equal(finalOwnership, ownership) {
-		t.Fatalf("finalization ownership=%v", finalOwnershipErr)
+			finalOwnershipPath := filepath.Join(fixture.root, "var/lib/.sbxr-removal.json")
+			if err := os.Rename(ownershipPath, finalOwnershipPath); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(installedRecord); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(filepath.Dir(installedRecord)); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(filepath.Join(fixture.root, "usr/local/bin/sbxr")); err != nil {
+				t.Fatal(err)
+			}
+			body, err = exec.Command("bash", restorer).CombinedOutput()
+			if err != nil || !strings.Contains(string(body), "SOFTWARE-LIFECYCLE-INSTALL-REMOVAL-RESTORED") {
+				t.Fatalf("finalization restore = %v, %q", err, body)
+			}
+			finalOwnership, finalOwnershipErr := os.ReadFile(finalOwnershipPath)
+			if finalOwnershipErr != nil || !bytes.Equal(finalOwnership, ownership) {
+				t.Fatalf("finalization ownership=%v", finalOwnershipErr)
+			}
+		})
 	}
 }
 

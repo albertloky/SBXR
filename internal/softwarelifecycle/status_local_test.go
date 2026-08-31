@@ -92,3 +92,40 @@ func mustWriteStatusFile(t *testing.T, path string, body []byte, mode os.FileMod
 func statusPath(root, name string) string {
 	return filepath.Join(root, strings.TrimPrefix(name, "/"))
 }
+
+func TestCompleteRemovalRefusesUnsafeOrUnexplainedRemainingMaterial(t *testing.T) {
+	for _, kind := range []string{"unsafe executable", "unsafe record", "unknown record field", "unknown residue", "wrong executable"} {
+		t.Run(kind, func(t *testing.T) {
+			root := t.TempDir()
+			identity := ReleaseIdentity{Repository: Repository, Tag: "v3.0.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}
+			evidence := installedEvidence(t, identity, 17, AMD64)
+			writeInstalledEvidence(t, root, evidence)
+			switch kind {
+			case "unsafe executable":
+				if err := os.Chmod(statusPath(root, executablePath), 0o777); err != nil {
+					t.Fatal(err)
+				}
+			case "unsafe record":
+				if err := os.Chmod(statusPath(root, installedRecordPath), 0o666); err != nil {
+					t.Fatal(err)
+				}
+			case "wrong executable":
+				mustWriteStatusFile(t, statusPath(root, executablePath), []byte("wrong"), 0o755)
+			case "unknown residue":
+				mustWriteStatusFile(t, statusPath(root, "/var/lib/sbxr/subscription-token"), []byte("unexplained"), 0o600)
+			case "unknown record field":
+				if err := os.Remove(statusPath(root, executablePath)); err != nil {
+					t.Fatal(err)
+				}
+				mustWriteStatusFile(t, statusPath(root, installedRecordPath), []byte(strings.Replace(string(evidence.installedRecord), `"schema":1`, `"schema":1,"unknown":true`, 1)), 0o600)
+			}
+			lifecycle := newInstalledInterface(newLocalInspector(root, uint32(os.Getuid())), nil).(interface {
+				RemoveCompleteRemovalExecutable(context.Context, ReleaseIdentity) bool
+				RemoveCompleteRemovalInstalledRecord(context.Context, ReleaseIdentity) bool
+			})
+			if lifecycle.RemoveCompleteRemovalExecutable(t.Context(), identity) || lifecycle.RemoveCompleteRemovalInstalledRecord(t.Context(), identity) {
+				t.Fatal("unsafe removal accepted")
+			}
+		})
+	}
+}

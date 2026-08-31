@@ -70,6 +70,7 @@ type Preflight struct {
 }
 
 type Adapter struct {
+	syncDirectoryFault    func(string) error
 	root                  string
 	architecture          string
 	publicIPv4            func(context.Context) string

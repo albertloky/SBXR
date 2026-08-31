@@ -18,7 +18,7 @@ type journeyInstallation struct {
 
 func (installation *journeyInstallation) Review(_ context.Context, action proxyinstallation.Action) proxyinstallation.Review {
 	installation.actions = append(installation.actions, action)
-	base := proxyinstallation.Review{
+	base := proxyinstallation.Review{SubscriptionStatus: proxyinstallation.SubscriptionNotEnabled,
 		Version: "v3.0.0", Status: proxyinstallation.NotSetUp,
 		LegalActions: []proxyinstallation.Action{proxyinstallation.StartSetupAction, proxyinstallation.ViewDetailsAction, proxyinstallation.CompleteRemovalAction},
 		Result:       proxyinstallation.Result{Status: proxyinstallation.NotSetUp, Message: "Proxy setup has not started.", Code: proxyinstallation.StatusNotSetUp},
@@ -47,7 +47,7 @@ func TestRunPresentsAndCancelsTheRealNotSetUpJourney(t *testing.T) {
 	if status != 0 || !reflect.DeepEqual(installation.actions, []proxyinstallation.Action{proxyinstallation.StatusAction, proxyinstallation.StartSetupAction, proxyinstallation.StatusAction}) || !reflect.DeepEqual(installation.confirmations, []proxyinstallation.Confirmation{proxyinstallation.Declined}) || installation.statusReviews != 2 {
 		t.Fatalf("status=%d actions=%v confirmations=%v statusReviews=%d", status, installation.actions, installation.confirmations, installation.statusReviews)
 	}
-	want := "SBXR V3\nVersion: v3.0.0\nProxy status: Not set up\nResult: Proxy setup has not started.\nCode: PROXY-INSTALLATION-STATUS-NOT-SET-UP\n\n1. Start setup\n2. View details\n3. Complete removal\n0. Exit\n"
+	want := "SBXR V3\nVersion: v3.0.0\nProxy status: Not set up\nSubscription status: Not enabled\nResult: Proxy setup has not started.\nCode: PROXY-INSTALLATION-STATUS-NOT-SET-UP\n\n1. Start setup\n2. View details\n3. Complete removal\n0. Exit\n"
 	if !bytes.Contains(output.Bytes(), []byte(want)) {
 		t.Fatalf("initial frame missing:\n%s", output.String())
 	}
@@ -97,9 +97,9 @@ func (installation *finishingInstallation) Review(_ context.Context, action prox
 		if installation.action == proxyinstallation.FinishSetupAction {
 			status, code, message = proxyinstallation.Running, proxyinstallation.SetupComplete, "Proxy setup is complete and locally verified."
 		}
-		return proxyinstallation.Review{Version: "v3.0.0", Status: status, LegalActions: []proxyinstallation.Action{proxyinstallation.ViewDetailsAction}, Result: proxyinstallation.Result{Status: status, Code: code, Message: message}}
+		return proxyinstallation.Review{SubscriptionStatus: proxyinstallation.SubscriptionNotEnabled, Version: "v3.0.0", Status: status, LegalActions: []proxyinstallation.Action{proxyinstallation.ViewDetailsAction}, Result: proxyinstallation.Result{Status: status, Code: code, Message: message}}
 	}
-	review := proxyinstallation.Review{Version: "v3.0.0", Status: proxyinstallation.SetupIncomplete, LegalActions: []proxyinstallation.Action{installation.action, proxyinstallation.ViewDetailsAction}, Result: proxyinstallation.Result{Status: proxyinstallation.SetupIncomplete, Code: proxyinstallation.SetupNeedsCleanup, Message: "Proxy setup was interrupted and must be finished safely."}}
+	review := proxyinstallation.Review{SubscriptionStatus: proxyinstallation.SubscriptionNotEnabled, Version: "v3.0.0", Status: proxyinstallation.SetupIncomplete, LegalActions: []proxyinstallation.Action{installation.action, proxyinstallation.ViewDetailsAction}, Result: proxyinstallation.Result{Status: proxyinstallation.SetupIncomplete, Code: proxyinstallation.SetupNeedsCleanup, Message: "Proxy setup was interrupted and must be finished safely."}}
 	if action == installation.action {
 		review.Prepared = &proxyinstallation.PreparedAction{}
 	}
@@ -141,7 +141,7 @@ type detailsInstallation struct{ actions []proxyinstallation.Action }
 
 func (installation *detailsInstallation) Review(_ context.Context, action proxyinstallation.Action) proxyinstallation.Review {
 	installation.actions = append(installation.actions, action)
-	return proxyinstallation.Review{
+	return proxyinstallation.Review{SubscriptionStatus: proxyinstallation.SubscriptionNotEnabled,
 		Version: "v3.0.0", Status: proxyinstallation.Running,
 		LegalActions: []proxyinstallation.Action{proxyinstallation.ViewDetailsAction},
 		Details:      []string{"Fresh inspection: 2"},
@@ -173,7 +173,7 @@ type disclosureInstallation struct {
 
 func (installation *disclosureInstallation) Review(_ context.Context, action proxyinstallation.Action) proxyinstallation.Review {
 	installation.actions = append(installation.actions, action)
-	review := proxyinstallation.Review{
+	review := proxyinstallation.Review{SubscriptionStatus: proxyinstallation.SubscriptionNotEnabled,
 		Version: "v3.0.0", Status: proxyinstallation.Running,
 		LegalActions: []proxyinstallation.Action{proxyinstallation.ViewDetailsAction, proxyinstallation.ShowClientConfigurationAction},
 		Result:       proxyinstallation.Result{Status: proxyinstallation.Running, Message: "Proxy setup is complete and locally verified.", Code: proxyinstallation.SetupComplete},
@@ -234,7 +234,7 @@ func (installation *removalInstallation) Review(_ context.Context, action proxyi
 	if action == proxyinstallation.StatusAction {
 		installation.statusReviews++
 	}
-	review := proxyinstallation.Review{
+	review := proxyinstallation.Review{SubscriptionStatus: proxyinstallation.SubscriptionNotEnabled,
 		Version: "v3.0.0", Status: proxyinstallation.Running,
 		LegalActions: []proxyinstallation.Action{proxyinstallation.CompleteRemovalAction},
 		Result:       proxyinstallation.Result{Status: proxyinstallation.Running, Message: "Proxy setup is complete and locally verified.", Code: proxyinstallation.SetupComplete},
@@ -287,7 +287,7 @@ func (installation *finishingRemovalInstallation) Review(_ context.Context, acti
 	if action == proxyinstallation.StatusAction {
 		installation.statusReviews++
 	}
-	review := proxyinstallation.Review{
+	review := proxyinstallation.Review{SubscriptionStatus: proxyinstallation.SubscriptionNotEnabled,
 		Version: "v3.0.0", Status: proxyinstallation.RemovalIncomplete,
 		LegalActions: []proxyinstallation.Action{proxyinstallation.FinishRemovalAction},
 		Result:       proxyinstallation.Result{Status: proxyinstallation.RemovalIncomplete, Message: "Complete removal was interrupted and must continue forward.", Code: proxyinstallation.RemovalNeedsCompletion},

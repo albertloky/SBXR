@@ -1,9 +1,7 @@
 package softwarelifecycle
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -166,7 +164,17 @@ func (inspector filesystemInspector) inspectCompleteRemoval(ctx context.Context,
 		return CompleteRemovalInspection{}
 	}
 	record, recordOK := inspector.readSafeFile(installedRecordPath, 0o600, 1, maxInstalledRecord)
+	if !recordOK {
+		if _, err := os.Lstat(inspector.path(installedRecordPath)); !os.IsNotExist(err) {
+			return CompleteRemovalInspection{}
+		}
+	}
 	executable, executableOK := inspector.readSafeFile(executablePath, 0o755, 1, maxInstalledBinary)
+	if !executableOK {
+		if _, err := os.Lstat(inspector.path(executablePath)); !os.IsNotExist(err) {
+			return CompleteRemovalInspection{}
+		}
+	}
 	if recordOK && executableOK {
 		identity, ok := verifyInstalledPair(record, executable)
 		if !ok || identity != expected {
@@ -174,7 +182,7 @@ func (inspector filesystemInspector) inspectCompleteRemoval(ctx context.Context,
 		}
 	} else if recordOK {
 		var decoded installedRecord
-		if json.Unmarshal(bytes.TrimSpace(record), &decoded) != nil || !validInstalledRecord(decoded) || releaseIdentity(decoded) != expected {
+		if !decodeExactObject(record, &decoded) || !validInstalledRecord(decoded) || releaseIdentity(decoded) != expected {
 			return CompleteRemovalInspection{}
 		}
 	} else if executableOK {
@@ -195,16 +203,22 @@ func (inspector filesystemInspector) inspectCompleteRemoval(ctx context.Context,
 
 func (inspector filesystemInspector) removeCompleteRemovalExecutable(ctx context.Context, expected ReleaseIdentity) bool {
 	facts := inspector.inspectCompleteRemoval(ctx, expected)
-	if !facts.Valid || !facts.ExecutablePresent {
-		return facts.Valid
+	if !facts.Valid || !facts.StateDirectoryEmpty {
+		return false
+	}
+	if !facts.ExecutablePresent {
+		return syncRemovalDirectory(inspector.path("/usr/local/bin")) == nil
 	}
 	return os.Remove(inspector.path(executablePath)) == nil && syncRemovalDirectory(inspector.path("/usr/local/bin")) == nil
 }
 
 func (inspector filesystemInspector) removeCompleteRemovalInstalledRecord(ctx context.Context, expected ReleaseIdentity) bool {
 	facts := inspector.inspectCompleteRemoval(ctx, expected)
-	if !facts.Valid || !facts.InstalledRecordPresent || facts.ExecutablePresent {
-		return facts.Valid && !facts.InstalledRecordPresent
+	if !facts.Valid || !facts.StateDirectoryEmpty || facts.ExecutablePresent {
+		return false
+	}
+	if !facts.InstalledRecordPresent {
+		return syncRemovalDirectory(inspector.path("/var/lib/sbxr")) == nil
 	}
 	return os.Remove(inspector.path(installedRecordPath)) == nil && syncRemovalDirectory(inspector.path("/var/lib/sbxr")) == nil
 }
