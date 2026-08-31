@@ -96,7 +96,7 @@ boundaries, production command construction, removal recovery and restoration.
 The successful private dispatch composition uses the approved test Host Adapter
 and a test trust root while crossing real profile extraction and HTTPS serving.
 Linux-only subprocess checks exercise actual inaccessible mounts and capability
-removal with synthetic cgroup membership; they explicitly skip without root
-mount capability. This is not actual systemd service launch, public CA trust,
+removal with synthetic cgroup membership; they skip locally without root
+mount capability, but CI fails if that capability is unavailable. This is not actual systemd service launch, public CA trust,
 packaged VPS acceptance, or Karing acceptance. Those remain Release Qualification
 obligations, not claims made by a passing unit suite.

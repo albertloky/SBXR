@@ -98,6 +98,9 @@ func TestServingSandboxUsesRealInaccessibleMounts(t *testing.T) {
 	args = args[1:]
 	if os.Geteuid() != 0 {
 		if exec.Command("sudo", "-n", "true").Run() != nil {
+			if os.Getenv("GITHUB_ACTIONS") == "true" {
+				t.Fatal("CI requires root mount capability")
+			}
 			t.Skip("root mount capability unavailable")
 		}
 		// The child changes only this fixture's ownership. Restore it before
@@ -115,6 +118,9 @@ func TestServingSandboxUsesRealInaccessibleMounts(t *testing.T) {
 	cmd.Env = append(os.Environ(), "SBXR_TEST_SERVING_ROOT="+a.root)
 	output, err := cmd.CombinedOutput()
 	if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 77 {
+		if os.Getenv("GITHUB_ACTIONS") == "true" {
+			t.Fatal("CI requires mount namespace capability")
+		}
 		t.Skip("mount namespace capability unavailable")
 	}
 	if err != nil {
