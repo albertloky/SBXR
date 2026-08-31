@@ -2,6 +2,8 @@
 
 This is the required first-V3 stage inside Release Qualification. It qualifies one exact signed draft Release Identity by clean direct installation. It does not use a prior V3 release, update from V2, or migrate V1 or V2.
 
+> Scope: this first-V3 baseline and `sbxr-v3-packaged-live-evidence-v1` retain their original interpretation. [ADR-0016](../adr/0016-v3-proxy-product-and-modules.md) and [#342 Testing Decisions](https://github.com/albertloky/SBXR/issues/342) extend the same Release Qualification gate for recurring V3 releases, declared source upgrades, subscription scenarios, and separate exact Karing macOS evidence. This baseline alone cannot qualify that extension; no new procedure or runtime admission is implemented by this authority handoff.
+
 ## Bound authority
 
 - Verify the signed qualification manifest, one Release Identity, Release Sequence, four asset names, sizes, digests, and unchanged packaged executable.

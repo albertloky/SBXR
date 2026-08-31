@@ -2,6 +2,8 @@
 
 SBXR is a root-only V3 proxy product for one Ubuntu Server. Software Lifecycle installs and updates the `sbxr` executable. Proxy Installation owns the installed proxy journey through a review-first numbered menu.
 
+> Authority: [ADR-0016](docs/adr/0016-v3-proxy-product-and-modules.md) extends the V3 contract for [#342](https://github.com/albertloky/SBXR/issues/342). This is an accepted implementation contract, not a claim that subscription or Client Identity rotation is shipped. The tracer-bullet menu description and Installer-Updater release-pair procedure below are historical snapshots; use ADR-0016 for current boundaries, recurring qualification requirements, and the unresolved actual prior-updater gate.
+
 ## Supported system
 
 - Ubuntu Server 24.04; the first V3 proxy journey accepts only `amd64`

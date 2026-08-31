@@ -1,6 +1,6 @@
 # Installer-Updater release acceptance
 
-This is the only current SBXR Release Qualification procedure. It applies to unchanged packaged Installer-Updater bytes. It does not qualify or retain the historical full proxy product.
+This is the historical Installer-Updater Release Qualification procedure for unchanged packaged Installer-Updater bytes. Its evidence retains that interpretation; it does not qualify the V3 subscription extension or retain the historical full proxy product. [ADR-0016](../docs/adr/0016-v3-proxy-product-and-modules.md) and [#342 Testing Decisions](https://github.com/albertloky/SBXR/issues/342) govern V3 and recurring subscription qualification. The procedure below does not waive the requirement to prove each declared source through its actual packaged updater.
 
 ## Release pair and identity
 
