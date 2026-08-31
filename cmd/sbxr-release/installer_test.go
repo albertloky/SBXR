@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 )
 
 func TestGeneratedInstallerRefusesNonRootBeforeMutation(t *testing.T) {
@@ -113,8 +115,12 @@ func TestGeneratedInstallerInstallsQualifiedReleaseWithoutATerminal(t *testing.T
 }
 
 func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *testing.T) {
-	for _, schema := range []int{1, 2} {
-		t.Run(fmt.Sprint(schema), func(t *testing.T) {
+	for _, variant := range []int{1, 2, 3} {
+		schema := variant
+		if variant == 3 {
+			schema = 2
+		}
+		t.Run(fmt.Sprint(variant), func(t *testing.T) {
 			fixture := newInstallerFixture(t)
 			if body, err := exec.Command("bash", fixture.script).CombinedOutput(); err != nil {
 				t.Fatalf("initial install = %v, %q", err, body)
@@ -129,16 +135,30 @@ func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *tes
 				t.Fatal(err)
 			}
 			indexDigest := sha256.Sum256(index)
-			ownership := []byte(fmt.Sprintf(`{"schema":1,"phase":"Removal committed","unfinished_direction":"removal required","release_identity":{"repository":"albertloky/SBXR","tag":"v2.0.0","commit":"%s","release_index_sha256":"%s"},"proxy_package_identity":"","public_ipv4":"","destination_address":"","destination_server_name":"","configuration_sha256":"","permitted_resources":["/var/lib/sbxr/proxy-ownership.json root:root 0600 one-link schema-1","/var/lib/.sbxr-removal.json root:root 0600 one-link finalization authority","/usr/local/bin/sbxr exact committed Release Identity","/var/lib/sbxr/installed.json exact committed Release Identity"],"cleanup_checkpoint":0,"removal_checkpoint":3}`+"\n", strings.Repeat("a", 40), hex.EncodeToString(indexDigest[:])))
+			finisherJSON, err := json.Marshal(softwarelifecycle.ReleaseIdentity{Repository: softwarelifecycle.Repository, Tag: "v2.0.0", Commit: strings.Repeat("a", 40), IndexSHA256: hex.EncodeToString(indexDigest[:])})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ownership := []byte(fmt.Sprintf(`{"schema":1,"phase":"Removal committed","unfinished_direction":"removal required","release_identity":%s,"proxy_package_identity":"","public_ipv4":"","destination_address":"","destination_server_name":"","configuration_sha256":"","permitted_resources":["/var/lib/sbxr/proxy-ownership.json root:root 0600 one-link schema-1","/var/lib/.sbxr-removal.json root:root 0600 one-link finalization authority","/usr/local/bin/sbxr exact committed Release Identity","/var/lib/sbxr/installed.json exact committed Release Identity"],"cleanup_checkpoint":0,"removal_checkpoint":3}`+"\n", finisherJSON))
 			if schema == 2 {
 				// Keep canonical field order produced by the removal commitment.
 				ownership = []byte(strings.Replace(string(ownership), `"schema":1`, `"schema":2`, 1))
 				ownership = []byte(strings.Replace(string(ownership), `one-link schema-1`, `one-link schema-2`, 1))
-				// Build release identities with the same canonical order as ReleaseIdentity.MarshalJSON.
-				finisherJSON := []byte(fmt.Sprintf(`{"repository":"albertloky/SBXR","tag":"v2.0.0","commit":"%s","release_index_sha256":"%s"}`, strings.Repeat("a", 40), hex.EncodeToString(indexDigest[:])))
-				creatorJSON := []byte(fmt.Sprintf(`{"repository":"albertloky/SBXR","tag":"v3.0.21","commit":"%s","release_index_sha256":"%s"}`, strings.Repeat("e", 40), strings.Repeat("f", 64)))
+				creatorJSON, err := json.Marshal(softwarelifecycle.ReleaseIdentity{Repository: softwarelifecycle.Repository, Tag: "v3.0.21", Commit: strings.Repeat("e", 40), IndexSHA256: strings.Repeat("f", 64)})
+				if err != nil {
+					t.Fatal(err)
+				}
 				ownership = bytes.Replace(ownership, finisherJSON, creatorJSON, 1)
 				ownership = []byte(strings.TrimSuffix(string(ownership), "}\n") + `,"resource_creating_releases":[` + string(creatorJSON) + `,` + string(creatorJSON) + `,` + string(creatorJSON) + `,` + string(creatorJSON) + `],"finishing_release_identity":` + string(finisherJSON) + "}\n")
+			}
+			if variant == 3 {
+				ownership, err = os.ReadFile("../../internal/proxyinstallation/testdata/subscription-absent-schema2.json")
+				if err != nil {
+					t.Fatal(err)
+				}
+				ownership = bytes.Replace(ownership, []byte(`"phase":"Running","unfinished_direction":"none"`), []byte(`"phase":"Removal committed","unfinished_direction":"removal required"`), 1)
+				ownership = bytes.Replace(ownership, []byte(`"removal_checkpoint":0`), []byte(`"removal_checkpoint":11`), 1)
+				ownership = []byte(strings.TrimSuffix(string(ownership), "}\n") + `,"finishing_release_identity":` + string(finisherJSON) + "}\n")
 			}
 			ownershipPath := filepath.Join(fixture.root, "var/lib/sbxr/proxy-ownership.json")
 			if err := os.WriteFile(ownershipPath, ownership, 0o600); err != nil {
@@ -155,6 +175,42 @@ func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *tes
 				t.Fatal(err)
 			}
 
+			for name, wrong := range map[string][]byte{
+				"unknown schema":             bytes.Replace(ownership, []byte(fmt.Sprintf(`"schema":%d`, schema)), []byte(`"schema":99`), 1),
+				"unknown operation":          bytes.Replace(ownership, []byte(`"phase":`), []byte(`"operation":{},"phase":`), 1),
+				"conflicting identity alias": bytes.Replace(ownership, []byte(`"Tag":`), []byte(`"tag":"v9.0.0","Tag":`), 1),
+				"unknown resource":           bytes.Replace(ownership, []byte(`root:root 0600 one-link`), []byte(`unproved resource`), 1),
+			} {
+				t.Run(name, func(t *testing.T) {
+					if err := os.WriteFile(ownershipPath, wrong, 0o600); err != nil {
+						t.Fatal(err)
+					}
+					body, err := exec.Command("bash", restorer).CombinedOutput()
+					if err == nil || !bytes.Contains(body, []byte("SOFTWARE-LIFECYCLE-INSTALL-PATH-REFUSED")) {
+						t.Fatalf("invalid authority accepted: %v", err)
+					}
+					if _, err := os.Lstat(filepath.Join(fixture.root, "usr/local/bin/sbxr")); !os.IsNotExist(err) {
+						t.Fatal("refusal restored an executable")
+					}
+				})
+			}
+			if err := os.WriteFile(ownershipPath, ownership, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			wrongInstalled := bytes.Replace(installedBefore, []byte(`"tag":"v2.0.0"`), []byte(`"tag":"v2x0x0"`), 1)
+			if err := os.WriteFile(installedRecord, wrongInstalled, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			refused, refusedErr := exec.Command("bash", restorer).CombinedOutput()
+			if refusedErr == nil || !bytes.Contains(refused, []byte("SOFTWARE-LIFECYCLE-INSTALL-PATH-REFUSED")) {
+				t.Fatal("inexact Installed Record tag accepted")
+			}
+			if _, err := os.Lstat(filepath.Join(fixture.root, "usr/local/bin/sbxr")); !os.IsNotExist(err) {
+				t.Fatal("inexact tag restored executable before refusal")
+			}
+			if err := os.WriteFile(installedRecord, installedBefore, 0o600); err != nil {
+				t.Fatal(err)
+			}
 			body, err := exec.Command("bash", restorer).CombinedOutput()
 			if err != nil || !strings.Contains(string(body), "SOFTWARE-LIFECYCLE-INSTALL-REMOVAL-RESTORED") {
 				t.Fatalf("restore = %v, %q", err, body)

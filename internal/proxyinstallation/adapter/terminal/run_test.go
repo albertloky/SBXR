@@ -315,3 +315,26 @@ func TestRunFinishesCommittedRemovalAndExitsWithoutRedrawing(t *testing.T) {
 		t.Fatalf("status=%d reviews=%d output:\n%s", status, installation.statusReviews, output.String())
 	}
 }
+
+type subscriptionStatusInstallation struct{ detailsInstallation }
+
+func (installation *subscriptionStatusInstallation) Review(ctx context.Context, action proxyinstallation.Action) proxyinstallation.Review {
+	review := installation.detailsInstallation.Review(ctx, action)
+	review.Status = proxyinstallation.Running
+	if len(installation.actions) > 1 {
+		review.SubscriptionStatus = proxyinstallation.SubscriptionProblemDetected
+	}
+	return review
+}
+func TestRunRedrawsSeparateSubscriptionStatusWithoutChangingProxyStatus(t *testing.T) {
+	installation := &subscriptionStatusInstallation{}
+	var output bytes.Buffer
+	if code := Run(t.Context(), nil, strings.NewReader("1\n\n0\n"), &output, &output, installation); code != 0 {
+		t.Fatalf("Run = %d", code)
+	}
+	for _, want := range []string{"Proxy status: Running\nSubscription status: Not enabled", "Proxy status: Running\nSubscription status: Problem detected"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("missing status frame %q", want)
+		}
+	}
+}

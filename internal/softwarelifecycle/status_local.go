@@ -159,8 +159,24 @@ func (inspector filesystemInspector) path(name string) string {
 	return filepath.Join(inspector.root, strings.TrimPrefix(name, "/"))
 }
 
+func (inspector filesystemInspector) safeRemovalParents(name string) bool {
+	for parent := filepath.Dir(name); ; parent = filepath.Dir(parent) {
+		info, err := os.Lstat(inspector.path(parent))
+		if err != nil || !info.IsDir() || info.Mode().Perm()&0o022 != 0 {
+			return false
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || stat.Uid != inspector.uid {
+			return false
+		}
+		if parent == "/" {
+			return true
+		}
+	}
+}
+
 func (inspector filesystemInspector) inspectCompleteRemoval(ctx context.Context, expected ReleaseIdentity) CompleteRemovalInspection {
-	if ctx.Err() != nil || !inspector.safeDirectory("/var/lib/sbxr", 0o700) {
+	if ctx.Err() != nil || !inspector.safeRemovalParents(executablePath) || !inspector.safeRemovalParents(installedRecordPath) || !inspector.safeDirectory("/var/lib/sbxr", 0o700) {
 		return CompleteRemovalInspection{}
 	}
 	record, recordOK := inspector.readSafeFile(installedRecordPath, 0o600, 1, maxInstalledRecord)

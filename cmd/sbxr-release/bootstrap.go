@@ -200,7 +200,7 @@ if [ -e "$removal_record" ] || [ -L "$removal_record" ]; then
   [ "$("$ROOT/usr/bin/wc" -c <"$removal_record")" -le 65536 ] 2>/dev/null && single_line "$removal_record" || path_refused
   # Committed records are canonical JSON. Match the complete supported contract,
   # never a prefix that could hide an unknown operation or conflicting identity.
-  identity='\{"repository":"{{.Repository}}","tag":"v[1-9][0-9]*\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?","commit":"[0-9a-f]{40}","release_index_sha256":"[0-9a-f]{64}"\}'
+  identity='\{"Repository":"{{.Repository}}","Tag":"v[1-9][0-9]*\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?","Commit":"[0-9a-f]{40}","IndexSHA256":"[0-9a-f]{64}"\}'
   schema=$("$ROOT/usr/bin/sed" -n 's/^{"schema":\([12]\),.*/\1/p' "$removal_record")
   case "$schema" in 1|2) ;; *) path_refused ;; esac
   prefix='\{"schema":'"$schema"',"phase":"Removal committed","unfinished_direction":"removal required","release_identity":'"$identity"
@@ -241,9 +241,9 @@ if [ -e "$removal_record" ] || [ -L "$removal_record" ]; then
     [ -z "$config_sha" ] || final_checkpoint=11
     "$ROOT/usr/bin/grep" -Fq '"removal_checkpoint":'"$final_checkpoint" "$removal_record" || path_refused
   fi
-  TAG=$("$ROOT/usr/bin/sed" -n 's|.*"'"$selector"'":{"repository":"{{.Repository}}","tag":"\([^"]*\)".*|\1|p' "$removal_record")
-  COMMIT=$("$ROOT/usr/bin/sed" -n 's|.*"'"$selector"'":{"repository":"{{.Repository}}","tag":"[^"]*","commit":"\([0-9a-f]*\)".*|\1|p' "$removal_record")
-  REMOVAL_INDEX_SHA=$("$ROOT/usr/bin/sed" -n 's|.*"'"$selector"'":{"repository":"{{.Repository}}","tag":"[^"]*","commit":"[0-9a-f]*","release_index_sha256":"\([0-9a-f]*\)".*|\1|p' "$removal_record")
+  TAG=$("$ROOT/usr/bin/sed" -n 's|.*"'"$selector"'":{"Repository":"{{.Repository}}","Tag":"\([^"]*\)".*|\1|p' "$removal_record")
+  COMMIT=$("$ROOT/usr/bin/sed" -n 's|.*"'"$selector"'":{"Repository":"{{.Repository}}","Tag":"[^"]*","Commit":"\([0-9a-f]*\)".*|\1|p' "$removal_record")
+  REMOVAL_INDEX_SHA=$("$ROOT/usr/bin/sed" -n 's|.*"'"$selector"'":{"Repository":"{{.Repository}}","Tag":"[^"]*","Commit":"[0-9a-f]*","IndexSHA256":"\([0-9a-f]*\)".*|\1|p' "$removal_record")
   RESTORING_REMOVAL=1
 fi
 
@@ -391,9 +391,9 @@ if [ "$RESTORING_REMOVAL" -eq 1 ]; then
   [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%F' "$installed_directory" 2>/dev/null)" = '0:700:directory' ] || path_refused
   unexpected=$("$ROOT/usr/bin/find" "$installed_directory" -mindepth 1 -maxdepth 1 ! -name proxy-ownership.json ! -name installed.json -print -quit 2>/dev/null) || path_refused
   [ -z "$unexpected" ] || path_refused
-  restored_record_pattern='^\{"schema":1,"repository":"{{.Repository}}","tag":"'"$TAG"'","commit":"'"$COMMIT"'","release_index_sha256":"'"$index_sha"'","sequence":'"$SEQUENCE"',"architecture":"'"$ARCH"'","executable_sha256":"'"$executable_sha"'"\}$'
+  restored_record=$(printf '{"schema":1,"repository":"%s","tag":"%s","commit":"%s","release_index_sha256":"%s","sequence":%s,"architecture":"%s","executable_sha256":"%s"}' "$REPOSITORY" "$TAG" "$COMMIT" "$index_sha" "$SEQUENCE" "$ARCH" "$executable_sha")
   if [ -e "$installed_record" ] || [ -L "$installed_record" ]; then
-    [ ! -L "$installed_record" ] && [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$installed_record" 2>/dev/null)" = '0:600:1:regular file' ] && single_line "$installed_record" && "$ROOT/usr/bin/grep" -Eqx "$restored_record_pattern" "$installed_record" || path_refused
+    [ ! -L "$installed_record" ] && [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$installed_record" 2>/dev/null)" = '0:600:1:regular file' ] && single_line "$installed_record" && "$ROOT/usr/bin/grep" -Fqx "$restored_record" "$installed_record" || path_refused
   fi
   "$ROOT/usr/bin/mv" -n "$candidate" "$active" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
   "$ROOT/usr/bin/chmod" 0755 "$active" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
@@ -404,8 +404,7 @@ if [ "$RESTORING_REMOVAL" -eq 1 ]; then
     "$ROOT/usr/bin/sync" "$WORK/installed.json" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
     "$ROOT/usr/bin/mv" -n "$WORK/installed.json" "$installed_record" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
   fi
-  restored_record_pattern='^\{"schema":1,"repository":"{{.Repository}}","tag":"'"$TAG"'","commit":"'"$COMMIT"'","release_index_sha256":"'"$index_sha"'","sequence":'"$SEQUENCE"',"architecture":"'"$ARCH"'","executable_sha256":"'"$executable_sha"'"\}$'
-  [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$installed_record" 2>/dev/null)" = '0:600:1:regular file' ] && single_line "$installed_record" && "$ROOT/usr/bin/grep" -Eqx "$restored_record_pattern" "$installed_record" || path_refused
+  [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$installed_record" 2>/dev/null)" = '0:600:1:regular file' ] && single_line "$installed_record" && "$ROOT/usr/bin/grep" -Fqx "$restored_record" "$installed_record" || path_refused
   "$ROOT/usr/bin/sync" "$installed_directory" "$ROOT/usr/local/bin" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
   successful_finish 'SOFTWARE-LIFECYCLE-INSTALL-REMOVAL-RESTORED'
 fi

@@ -24,6 +24,8 @@ import (
 
 const maxOwnership = 64 << 10
 
+var ErrFinalRemovalSync = errors.New("final authority unlink synchronization failed")
+
 type SetupSpec struct {
 	OwnershipPath, OwnershipNextPath, LockPath, PackageArtifactPath string
 	APTKeyPath, APTKeyURL, APTKeySHA256, APTSourcePath              string
@@ -166,6 +168,9 @@ func (adapter Adapter) ReadConfiguration(ctx context.Context, spec SetupSpec, ex
 }
 
 func (adapter Adapter) readConfigurationFile(name, expectedDigest string, gid uint32) ([]byte, error) {
+	if err := adapter.safeParents(name); err != nil {
+		return nil, err
+	}
 	const limit = 1 << 20
 	path := adapter.path(name)
 	info, err := os.Lstat(path)
@@ -380,16 +385,11 @@ func (adapter Adapter) RemoveFinalOwnership(name, nextName, finalName string, ex
 	if err := os.Remove(adapter.path(finalName)); err != nil {
 		return err
 	}
+	// This is the terminal deletion: every other removal is already durable.
+	// On failure, report uncertainty without creating new, potentially torn
+	// authority. After a crash either the full record or full absence survives.
 	if err := adapter.syncOwnershipDirectory(parent); err != nil {
-		// Retain full finishing authority on a late unlink synchronization error.
-		file, createErr := os.OpenFile(adapter.path(finalName), os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o600)
-		if createErr == nil {
-			_, _ = file.Write(expected)
-			_ = file.Sync()
-			_ = file.Close()
-			_ = adapter.syncOwnershipDirectory(parent)
-		}
-		return err
+		return ErrFinalRemovalSync
 	}
 	return nil
 }
@@ -916,10 +916,13 @@ func (adapter Adapter) removeFile(name string) OperationResult {
 }
 
 func (adapter Adapter) removeEmptyDirectory(name string) bool {
+	if err := adapter.safeParents(name); err != nil {
+		return errors.Is(err, os.ErrNotExist) && adapter.syncAbsentPath(name)
+	}
 	path := adapter.path(name)
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return true
+		return adapter.syncAbsentPath(name)
 	}
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return false
@@ -927,10 +930,23 @@ func (adapter Adapter) removeEmptyDirectory(name string) bool {
 	return os.Remove(path) == nil && syncDirectory(filepath.Dir(path)) == nil
 }
 
+func (adapter Adapter) syncAbsentPath(name string) bool {
+	if !adapter.safelyAbsent(name) {
+		return false
+	}
+	for parent := filepath.Dir(name); ; parent = filepath.Dir(parent) {
+		if _, err := os.Lstat(adapter.path(parent)); err == nil {
+			return syncDirectory(adapter.path(parent)) == nil
+		} else if !errors.Is(err, os.ErrNotExist) || parent == "/" {
+			return false
+		}
+	}
+}
+
 func (adapter Adapter) removeBoundFile(name, expectedDigest string, mode os.FileMode, limit int64) bool {
 	if !adapter.boundFileMatches(name, expectedDigest, mode, limit) {
-		if _, err := os.Lstat(adapter.path(name)); errors.Is(err, os.ErrNotExist) {
-			return true
+		if adapter.safelyAbsent(name) {
+			return adapter.syncAbsentPath(name)
 		}
 		return false
 	}
@@ -944,6 +960,9 @@ func (adapter Adapter) boundFileMatches(name, expectedDigest string, mode os.Fil
 }
 
 func (adapter Adapter) boundFileInspection(name, expectedDigest string, mode os.FileMode, limit int64) (bool, bool) {
+	if err := adapter.safeParents(name); err != nil {
+		return false, errors.Is(err, os.ErrNotExist)
+	}
 	path := adapter.path(name)
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -982,10 +1001,13 @@ func (adapter Adapter) boundFileGroupInspection(name, expectedDigest string, mod
 }
 
 func (adapter Adapter) removeSafeFile(name string, limit int64) bool {
+	if err := adapter.safeParents(name); err != nil {
+		return errors.Is(err, os.ErrNotExist) && adapter.syncAbsentPath(name)
+	}
 	path := adapter.path(name)
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return true
+		return adapter.syncAbsentPath(name)
 	}
 	stat, ok := infoSys(info)
 	if err != nil || !ok || !info.Mode().IsRegular() || stat.Uid != adapter.ownerUID() || stat.Nlink != 1 || info.Size() <= 0 || info.Size() > limit {

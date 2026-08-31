@@ -20,6 +20,7 @@ import (
 )
 
 type controlledHost struct {
+	stagedOwnership                 []byte
 	failOwnershipSync, failLateSync bool
 	subscriptionAbsence             *hostadapter.Observation
 	inspection                      hostadapter.Inspection
@@ -121,6 +122,12 @@ func (host *controlledHost) Preflight(_ context.Context, requested []hostadapter
 }
 
 func (host *controlledHost) ReadOwnership(name string) ([]byte, error) {
+	if name == hostSetupSpec.OwnershipNextPath {
+		if host.stagedOwnership == nil {
+			return nil, os.ErrNotExist
+		}
+		return bytes.Clone(host.stagedOwnership), nil
+	}
 	if len(host.ownership) == 0 {
 		return nil, os.ErrNotExist
 	}
@@ -1678,6 +1685,8 @@ func TestSchema2RefusesUnknownOrContradictoryAuthority(t *testing.T) {
 	installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
 	original := bytes.Clone(host.ownership)
 	for _, change := range []func(string) string{
+		func(s string) string { return strings.Replace(s, `"schema":1`, `"schema":99,"Schema":1`, 1) },
+		func(s string) string { return strings.Replace(s, `"Tag":`, `"tag":"v3.0.999","Tag":`, 1) },
 		func(s string) string { return strings.Replace(s, `"schema":1`, `"schema":2,"schema":1`, 1) },
 		func(s string) string {
 			return strings.Replace(s, `"cleanup_checkpoint":0`, `"cleanup_checkpoint":null`, 1)
@@ -1778,5 +1787,33 @@ func TestLegacyCommittedRemovalRetainsExactCreatingReleaseRule(t *testing.T) {
 	review = installation.Review(t.Context(), FinishRemovalAction)
 	if review.Prepared != nil || review.Status != ProblemDetected {
 		t.Fatal("legacy commitment was reinterpreted as compatible")
+	}
+}
+
+func TestUnknownStagedAuthorityDoesNotProveSubscriptionAbsent(t *testing.T) {
+	host := acceptedHost()
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+	host.stagedOwnership = []byte(`{"schema":2,"operation":{"kind":"enable"}}`)
+	review := installation.Review(t.Context(), CompleteRemovalAction)
+	if review.SubscriptionStatus != SubscriptionProblemDetected || review.Prepared != nil {
+		t.Fatalf("unknown staging = %#v", review)
+	}
+}
+
+func TestSharedSchema2FixtureIsSupportedThroughReview(t *testing.T) {
+	host := acceptedHost()
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+	body, err := os.ReadFile("testdata/subscription-absent-schema2.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.ownership = body
+	review := installation.Review(t.Context(), CompleteRemovalAction)
+	if review.Status != Running || review.SubscriptionStatus != SubscriptionNotEnabled || review.Prepared == nil {
+		t.Fatalf("shared schema-2 fixture = %#v", review)
 	}
 }

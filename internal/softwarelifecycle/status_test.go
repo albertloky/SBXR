@@ -727,11 +727,18 @@ func TestPendingOperationsReturnVerifiedStatusWithoutInventingAnOutcome(t *testi
 
 func TestUpdateInstallsFreshQualifiedHigherSequenceThroughPublicInterface(t *testing.T) {
 	root := t.TempDir()
-	prior := ReleaseIdentity{Repository: Repository, Tag: "v2.0.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}
-	candidate := ReleaseIdentity{Repository: Repository, Tag: "v2.0.1", Commit: strings.Repeat("c", 40), IndexSHA256: strings.Repeat("d", 64)}
+	prior := ReleaseIdentity{Repository: Repository, Tag: "v3.0.21", Commit: "989094b9766f02bf17510a71753c6a5c736bf120", IndexSHA256: "90463aa73a2c81542b44ea833c762bb2cd44d2d585fb7bd322279f678feea331"}
+	candidate := ReleaseIdentity{Repository: Repository, Tag: "v3.0.22", Commit: strings.Repeat("c", 40), IndexSHA256: strings.Repeat("d", 64)}
 	priorEvidence := installedEvidence(t, prior, 17, AMD64)
 	candidateEvidence := installedEvidence(t, candidate, 18, AMD64)
 	writeInstalledEvidence(t, root, priorEvidence)
+	ownership, err := os.ReadFile("../proxyinstallation/testdata/subscription-absent-schema2.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownershipPath := statusPath(root, "/var/lib/sbxr/proxy-ownership.json")
+	mustWriteStatusFile(t, ownershipPath, ownership, 0o600)
+
 	source := &controlledUpdateSource{candidate: updateCandidateFromEvidence(t, candidate, 18, AMD64, candidateEvidence)}
 	var lifecycle Interface = newInstalledInterface(newLocalInspector(root, uint32(os.Getuid())), source)
 	var preparedRecord []byte
@@ -747,6 +754,10 @@ func TestUpdateInstallsFreshQualifiedHigherSequenceThroughPublicInterface(t *tes
 	}
 	if status := lifecycle.Status(t.Context()); status.State != Ready || status.Installed == nil || *status.Installed != candidate {
 		t.Fatalf("Status() = %#v", status)
+	}
+	unchanged, err := os.ReadFile(ownershipPath)
+	if err != nil || !bytes.Equal(unchanged, ownership) {
+		t.Fatal("ordinary update changed Ownership Record bytes")
 	}
 	wantPrepared := fmt.Sprintf("{\"schema\":1,\"checkpoint\":\"Prepared\",\"prior_executable_sha256\":%q,\"prior_installed_record_sha256\":%q,\"candidate_executable_sha256\":%q,\"candidate_installed_record_sha256\":%q}\n", digestBytes(priorEvidence.executable), digestBytes(priorEvidence.installedRecord), digestBytes(candidateEvidence.executable), digestBytes(source.candidate.cell.record))
 	if string(preparedRecord) != wantPrepared {

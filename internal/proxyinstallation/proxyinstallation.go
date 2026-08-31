@@ -329,6 +329,14 @@ func (module *installedInterface) subscriptionStatus(ctx context.Context) Subscr
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return SubscriptionProblemDetected
 	}
+	staged, stagedErr := module.host.ReadOwnership(hostSetupSpec.OwnershipNextPath)
+	if stagedErr == nil {
+		if _, valid := decodeOwnership(staged); !valid {
+			return SubscriptionProblemDetected
+		}
+	} else if !errors.Is(stagedErr, os.ErrNotExist) {
+		return SubscriptionProblemDetected
+	}
 	fact := module.host.InspectSubscriptionAbsence(ctx)
 	if fact.Observed && fact.Accepted {
 		return SubscriptionNotEnabled
@@ -1331,6 +1339,9 @@ func (module *installedInterface) finishRemoval(ctx context.Context, record owne
 		return removalInterrupted("Final installed-product absence inspection")
 	}
 	if err := module.host.RemoveFinalOwnership(hostSetupSpec.OwnershipPath, hostSetupSpec.OwnershipNextPath, finalOwnershipPath, body); err != nil {
+		if errors.Is(err, hostadapter.ErrFinalRemovalSync) {
+			return Result{Status: ProblemDetected, Code: RemovalNeedsCompletion, Message: "All owned resources were removed, but final removal synchronization could not be verified.", FailedCheck: "Final removal synchronization", Correction: "Restore reliable storage access, then inspect the installation again. Do not assume Finish removal is available."}
+		}
 		return removalInterrupted("Ownership Record finalization")
 	}
 	return Result{Message: "SBXR is not installed.", Code: CompleteRemovalCompleted}
@@ -1639,9 +1650,29 @@ func decodeOwnership(body []byte) (ownershipRecord, bool) {
 			return ownershipRecord{}, false
 		}
 	}
-	for _, value := range fields {
+	for name, value := range fields {
+		if !slices.Contains([]string{"schema", "phase", "unfinished_direction", "release_identity", "proxy_package_identity", "public_ipv4", "destination_address", "destination_server_name", "configuration_sha256", "permitted_resources", "cleanup_checkpoint", "removal_checkpoint", "resource_creating_releases", "finishing_release_identity"}, name) {
+			return ownershipRecord{}, false
+		}
 		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
 			return ownershipRecord{}, false
+		}
+	}
+	if !exactIdentityFields(fields["release_identity"]) {
+		return ownershipRecord{}, false
+	}
+	if finishing, exists := fields["finishing_release_identity"]; exists && !exactIdentityFields(finishing) {
+		return ownershipRecord{}, false
+	}
+	if origins, exists := fields["resource_creating_releases"]; exists {
+		var identities []json.RawMessage
+		if json.Unmarshal(origins, &identities) != nil {
+			return ownershipRecord{}, false
+		}
+		for _, identity := range identities {
+			if !exactIdentityFields(identity) {
+				return ownershipRecord{}, false
+			}
 		}
 	}
 	var record ownershipRecord
@@ -1651,6 +1682,20 @@ func decodeOwnership(body []byte) (ownershipRecord, bool) {
 		return ownershipRecord{}, false
 	}
 	return record, true
+}
+
+func exactIdentityFields(body []byte) bool {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(body, &fields) != nil || len(fields) != 4 {
+		return false
+	}
+	for _, name := range []string{"Repository", "Tag", "Commit", "IndexSHA256"} {
+		var value string
+		if json.Unmarshal(fields[name], &value) != nil || value == "" {
+			return false
+		}
+	}
+	return true
 }
 
 func validOwnership(record ownershipRecord) bool {

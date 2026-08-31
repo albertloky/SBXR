@@ -94,13 +94,21 @@ func statusPath(root, name string) string {
 }
 
 func TestCompleteRemovalRefusesUnsafeOrUnexplainedRemainingMaterial(t *testing.T) {
-	for _, kind := range []string{"unsafe executable", "unsafe record", "unknown record field", "unknown residue", "wrong executable"} {
+	for _, kind := range []string{"unsafe executable", "unsafe record", "unknown record field", "unknown residue", "wrong executable", "symlink executable parent"} {
 		t.Run(kind, func(t *testing.T) {
 			root := t.TempDir()
 			identity := ReleaseIdentity{Repository: Repository, Tag: "v3.0.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}
 			evidence := installedEvidence(t, identity, 17, AMD64)
 			writeInstalledEvidence(t, root, evidence)
 			switch kind {
+			case "symlink executable parent":
+				parent := filepath.Dir(statusPath(root, executablePath))
+				if err := os.Rename(parent, parent+"-outside"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(parent+"-outside", parent); err != nil {
+					t.Fatal(err)
+				}
 			case "unsafe executable":
 				if err := os.Chmod(statusPath(root, executablePath), 0o777); err != nil {
 					t.Fatal(err)

@@ -8,7 +8,8 @@ resource creation is admitted by this slice.
   committed schema-1 removal binds its original `release_identity`.
 - Schema 2 retains those fields and adds `resource_creating_releases`: one exact
   Creating Release Identity for each ordered `permitted_resources` entry. Its
-  Ownership Record entry names `schema-2`. Only idle `Running` or committed
+  Ownership Record entry names `schema-2`. Nested Release Identities retain the
+  production field names `Repository`, `Tag`, `Commit`, and `IndexSHA256`. Only idle `Running` or committed
   removal is supported. Subscription, startup, or operation fields are unknown
   and refuse until their complete behavior is implemented.
 - Schema-2 removal additionally requires `finishing_release_identity`. It is
@@ -36,3 +37,8 @@ Supported checkpoints are 0–11 with a proxy and 0–3 without one. Final autho
 outside the state directory is valid only at the final checkpoint. A restored
 finishing pair is removed even when its original deletion checkpoint was passed.
 Automated checks do not establish packaged VPS or Karing acceptance.
+
+The final authority unlink is the terminal deletion. If its directory sync fails,
+report uncertain completion without publishing replacement authority. All earlier
+removals are already durable: restart sees either the complete final record or
+complete installation absence. Neither observation permits restoring proxy resources.
