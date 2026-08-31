@@ -70,6 +70,8 @@ type Preflight struct {
 }
 
 type Adapter struct {
+	subscriptionCommand   func(context.Context, string, ...string) (string, int, bool)
+	subscriptionBind      func(string, string) bool
 	syncDirectoryFault    func(string) error
 	root                  string
 	architecture          string

@@ -33,7 +33,7 @@ func TestProductionConstructionOpensTheV3Menu(t *testing.T) {
 
 	status := run(t.Context(), nil, strings.NewReader("0\n"), &output, &output, constructionLifecycle{})
 
-	if status != 0 || !strings.Contains(output.String(), "SBXR V3\nVersion: v3.0.0\nProxy status:") {
+	if status != 0 || !strings.Contains(output.String(), "SBXR V3\nVersion: v3.0.0\nProxy status:") || !strings.Contains(output.String(), "\nSubscription status:") || strings.Contains(output.String(), "Enable subscription") {
 		t.Fatalf("status=%d output:\n%s", status, output.String())
 	}
 }

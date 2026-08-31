@@ -38,6 +38,25 @@ outside the state directory is valid only at the final checkpoint. A restored
 finishing pair is removed even when its original deletion checkpoint was passed.
 Automated checks do not establish packaged VPS or Karing acceptance.
 
+## Read-only subscription enablement review
+
+Issue #346 adds `Enable subscription` to the existing production menu only after
+fresh Running, compatible idle authority, subscription absence, local TCP 80/8443,
+clock, package-lock, shared Certbot, dependency, and firewall observations pass.
+Unknown or unsupported observations refuse; the existing proxy actions remain
+available when their own authority is safe. Schema 1 and subscription-absent
+schema 2 remain unchanged by inspection or cancellation.
+
+The Plan describes dependency creation/reuse, two exact owned iptables filter
+INPUT rules (recorded IPv4 `/32`, TCP destination 80 or 8443, ACCEPT, comment
+`sbxr-subscription`), the dedicated lineage, official renewal, shared-recorder
+delay, and local-proof limits. It explicitly states that enablement is unavailable.
+No resource contract, certificate, credential, service, or durable operation is
+created. Confirmed execution rechecks facts under the existing mutation lock,
+opened without file creation, and returns `ACTION-REFUSED`. Missing lock authority
+also refuses without creating it. Declining consumes only this Prepared Action;
+it does not finish or clear earlier pending work.
+
 The final authority unlink is the terminal deletion. If its directory sync fails,
 report uncertain completion without publishing replacement authority. All earlier
 removals are already durable: restart sees either the complete final record or

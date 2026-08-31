@@ -3,12 +3,99 @@ package terminal
 import (
 	"bytes"
 	"context"
+	"io"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/albertloky/SBXR/internal/proxyinstallation"
 )
+
+type subscriptionInstallation struct{ journeyInstallation }
+
+func (installation *subscriptionInstallation) Review(ctx context.Context, action proxyinstallation.Action) proxyinstallation.Review {
+	review := installation.journeyInstallation.Review(ctx, action)
+	review.Status = proxyinstallation.Running
+	review.LegalActions = []proxyinstallation.Action{proxyinstallation.ViewDetailsAction, proxyinstallation.ShowClientConfigurationAction, proxyinstallation.CompleteRemovalAction, proxyinstallation.EnableSubscriptionAction}
+	if action == proxyinstallation.EnableSubscriptionAction {
+		review.Prepared = &proxyinstallation.PreparedAction{}
+		review.Plan = []string{"Plan: recorded IPv4 8.8.8.8; TCP 8443 and TCP 80; no changes in this release."}
+	}
+	return review
+}
+
+func (installation *subscriptionInstallation) Execute(ctx context.Context, prepared proxyinstallation.PreparedAction, confirmation proxyinstallation.Confirmation, progress proxyinstallation.ProgressReporter) proxyinstallation.Result {
+	result := installation.journeyInstallation.Execute(ctx, prepared, confirmation, progress)
+	if confirmation == proxyinstallation.Approved {
+		result.Code, result.Message = proxyinstallation.ActionRefused, "The requested action was refused. View details for the failed check and correction."
+		result.FailedCheck, result.Correction = "Enable subscription unavailable", "Enable subscription is unavailable in this release."
+	}
+	return result
+}
+
+func TestRunReviewsSubscriptionAndRedrawsAfterExactConfirmation(t *testing.T) {
+	for _, test := range []struct {
+		input        string
+		confirmation proxyinstallation.Confirmation
+	}{
+		{"y", proxyinstallation.Approved}, {"n", proxyinstallation.Declined}, {"", proxyinstallation.Declined},
+		{"Y\nyes\n y\n" + strings.Repeat("x", 300) + "\nn", proxyinstallation.Declined},
+	} {
+		t.Run(test.input, func(t *testing.T) {
+			installation := &subscriptionInstallation{}
+			var output bytes.Buffer
+			code := Run(t.Context(), nil, strings.NewReader("4\n"+test.input+"\n0\n"), &output, &output, installation)
+			if code != 0 || !reflect.DeepEqual(installation.confirmations, []proxyinstallation.Confirmation{test.confirmation}) || installation.statusReviews != 2 {
+				t.Fatalf("code=%d confirmations=%v reviews=%d output=%s", code, installation.confirmations, installation.statusReviews, output.String())
+			}
+			for _, want := range []string{"4. Enable subscription", "Plan: recorded IPv4", "Enable subscription? [y/N]", "Proxy status: Running\nSubscription status: Not enabled"} {
+				if !strings.Contains(output.String(), want) {
+					t.Errorf("missing %q: %s", want, output.String())
+				}
+			}
+			if test.confirmation == proxyinstallation.Approved {
+				if !strings.Contains(output.String(), "Correction: Enable subscription is unavailable") {
+					t.Fatalf("missing correction: %s", output.String())
+				}
+			} else if !strings.Contains(output.String(), "No changes were made.") {
+				t.Fatalf("missing cancellation: %s", output.String())
+			}
+		})
+	}
+}
+
+type subscriptionFailWriter struct {
+	failAt string
+	bytes.Buffer
+}
+
+func (writer *subscriptionFailWriter) Write(body []byte) (int, error) {
+	if strings.Contains(string(body), writer.failAt) {
+		return 0, io.ErrClosedPipe
+	}
+	return writer.Buffer.Write(body)
+}
+
+type subscriptionFailReader struct{}
+
+func (subscriptionFailReader) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+
+func TestRunSubscriptionIOFailureDoesNotGrantAuthority(t *testing.T) {
+	for _, point := range []string{"Plan:", "Enable subscription?", "Correction:", "read"} {
+		t.Run(point, func(t *testing.T) {
+			installation := &subscriptionInstallation{}
+			writer := &subscriptionFailWriter{failAt: point}
+			var input io.Reader = strings.NewReader("4\ny\n0\n")
+			if point == "read" {
+				input = io.MultiReader(strings.NewReader("4\n"), subscriptionFailReader{})
+			}
+			code := Run(t.Context(), nil, input, writer, writer, installation)
+			if code != 1 || point != "Correction:" && len(installation.confirmations) != 0 {
+				t.Fatalf("code=%d confirmations=%v output=%s", code, installation.confirmations, writer.String())
+			}
+		})
+	}
+}
 
 type journeyInstallation struct {
 	actions       []proxyinstallation.Action

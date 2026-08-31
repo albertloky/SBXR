@@ -20,6 +20,7 @@ import (
 )
 
 type controlledHost struct {
+	subscriptionPreflight           *hostadapter.SubscriptionPreflight
 	stagedOwnership                 []byte
 	failOwnershipSync, failLateSync bool
 	subscriptionAbsence             *hostadapter.Observation
@@ -51,6 +52,14 @@ type controlledHost struct {
 	lateRemovalPublish              map[int]bool
 	finalizing                      bool
 	finalRemovalFails               int
+}
+
+func (host *controlledHost) PreflightSubscription(context.Context, string) hostadapter.SubscriptionPreflight {
+	if host.subscriptionPreflight != nil {
+		return *host.subscriptionPreflight
+	}
+	yes := hostadapter.Observation{Observed: true, Accepted: true}
+	return hostadapter.SubscriptionPreflight{TCP80: yes, TCP8443: yes, Clock: yes, PackageLocks: yes, RenewalIdle: yes, Dependencies: yes, Firewall: yes}
 }
 
 func TestPinnedPackageProvenanceUsesCanonicalServiceUnitPath(t *testing.T) {
@@ -204,6 +213,10 @@ func (host *controlledHost) AcquireMutationLock(string) (*hostadapter.MutationLo
 	return &hostadapter.MutationLock{}, host.busy, nil
 }
 
+func (host *controlledHost) AcquireSubscriptionReviewLock(string) (*hostadapter.MutationLock, bool, error) {
+	return &hostadapter.MutationLock{}, host.busy || host.statusBusy, nil
+}
+
 func (host *controlledHost) AcquirePackageLocks() (*hostadapter.PackageLocks, bool, error) {
 	return &hostadapter.PackageLocks{}, host.busy, nil
 }
@@ -317,6 +330,16 @@ func (adapter acceptedSingBox) EncodeClientConfiguration(_ []byte, publicIPv4 st
 }
 
 type readyLifecycle struct{}
+
+type mutableLifecycle struct {
+	readyLifecycle
+	result softwarelifecycle.Result
+}
+
+func (l *mutableLifecycle) Status(context.Context) softwarelifecycle.Result { return l.result }
+func (l *mutableLifecycle) StatusUnderMutationLock(context.Context, *softwarelifecycle.MutationLockAuthority) softwarelifecycle.Result {
+	return l.result
+}
 
 func (readyLifecycle) Status(context.Context) softwarelifecycle.Result {
 	identity := testInstalledIdentity()
@@ -815,7 +838,7 @@ func TestOwnerCanReviewDeclineAndDiscloseOneRunningClientConfiguration(t *testin
 	host.lockHeld = false
 
 	review := installation.Review(t.Context(), ShowClientConfigurationAction)
-	if review.Prepared == nil || !reflect.DeepEqual(review.LegalActions, []Action{ViewDetailsAction, ShowClientConfigurationAction, CompleteRemovalAction}) {
+	if review.Prepared == nil || !reflect.DeepEqual(review.LegalActions, []Action{ViewDetailsAction, ShowClientConfigurationAction, CompleteRemovalAction, EnableSubscriptionAction}) {
 		t.Fatalf("Review() = %#v", review)
 	}
 	warnings := strings.Join(review.Plan, "\n")
@@ -870,6 +893,176 @@ func TestOwnerCanReviewDeclineAndDiscloseOneRunningClientConfiguration(t *testin
 	host.active = false
 	if changed := installation.Execute(t.Context(), *review.Prepared, Approved, reporter); changed.Code != ActionRefused || len(configurations) != 2 || host.configurationReads != 2 {
 		t.Fatalf("changed-fact Execute() = %#v reads=%d", changed, host.configurationReads)
+	}
+}
+
+func TestOwnerCanReviewSubscriptionWithoutEnablingIt(t *testing.T) {
+	for _, confirmation := range []Confirmation{Declined, Approved, 0} {
+		t.Run(fmt.Sprint(confirmation), func(t *testing.T) {
+			host := acceptedHost()
+			installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+			setup := installation.Review(t.Context(), StartSetupAction)
+			installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+			before := host.facts()
+			review := installation.Review(t.Context(), Action("Enable subscription"))
+			if review.Prepared == nil || review.Status != Running || review.SubscriptionStatus != SubscriptionNotEnabled || !slices.Contains(review.LegalActions, Action("Enable subscription")) {
+				t.Fatalf("enable review = %#v", review)
+			}
+			plan := strings.Join(review.Plan, "\n")
+			for _, want := range []string{"Enable subscription", "8.8.8.8", "8443", "80", "provider", "snapd", "Certbot", "sbxr-subscription", "renewal", "shared", "Karing", "unavailable"} {
+				if !strings.Contains(plan, want) {
+					t.Errorf("Plan missing %q: %s", want, plan)
+				}
+			}
+			result := installation.Execute(t.Context(), *review.Prepared, confirmation, func(event Progress) { t.Fatalf("read-only attempt emitted progress: %#v", event) })
+			want := ActionRefused
+			if confirmation == Declined {
+				want = ActionCancelled
+			}
+			if result.Code != want || result.ProxyTraffic != ProvedWorking || confirmation == Declined && result.Message != "No changes were made." {
+				t.Fatalf("result = %#v", result)
+			}
+			if confirmation == Approved && !strings.Contains(result.Correction, "unavailable") {
+				t.Fatalf("missing unavailable correction: %#v", result)
+			}
+			if reused := installation.Execute(t.Context(), *review.Prepared, Approved, nil); reused.Code != ActionRefused {
+				t.Fatalf("reused = %#v", reused)
+			}
+			if !reflect.DeepEqual(before, host.facts()) {
+				t.Fatal("subscription review/execute mutated host")
+			}
+		})
+	}
+}
+
+func TestSubscriptionDeclineDoesNotClearEarlierPendingWork(t *testing.T) {
+	host := acceptedHost()
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+	review := installation.Review(t.Context(), EnableSubscriptionAction)
+	if review.Prepared == nil {
+		t.Fatalf("review = %#v", review)
+	}
+	host.stagedOwnership = bytes.Clone(host.ownership)
+	before := bytes.Clone(host.stagedOwnership)
+	result := installation.Execute(t.Context(), *review.Prepared, Declined, nil)
+	if result.Code != ActionCancelled || !bytes.Equal(before, host.stagedOwnership) {
+		t.Fatalf("decline cleared pending work: %#v", result)
+	}
+	if next := installation.Review(t.Context(), EnableSubscriptionAction); next.Prepared != nil || next.Result.Code != ActionRefused {
+		t.Fatalf("pending work allowed enablement: %#v", next)
+	}
+}
+
+func TestSubscriptionReviewRefusesUnsafeAuthorityAndPreservesSecrets(t *testing.T) {
+	for _, change := range []string{"unknown ownership", "subscription material", "pending", "incompatible", "proxy stopped", "active change"} {
+		t.Run(change, func(t *testing.T) {
+			host := acceptedHost()
+			installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+			setup := installation.Review(t.Context(), StartSetupAction)
+			installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+			switch change {
+			case "unknown ownership":
+				host.ownership = []byte(`{"schema":99,"secret":"subscription-secret-marker"}`)
+			case "subscription material":
+				host.subscriptionAbsence = &hostadapter.Observation{Observed: true}
+			case "pending":
+				host.stagedOwnership = bytes.Clone(host.ownership)
+			case "incompatible":
+				installation = newInstalledInterface(mismatchedLifecycle{}, host, acceptedSingBox{})
+			case "proxy stopped":
+				host.active = false
+			case "active change":
+				host.statusBusy = true
+			}
+			before := host.facts()
+			review := installation.Review(t.Context(), EnableSubscriptionAction)
+			if review.Prepared != nil || review.Result.Code != ActionRefused || review.Result.FailedCheck == "" || review.Result.Correction == "" || slices.Contains(review.LegalActions, EnableSubscriptionAction) {
+				t.Fatalf("unsafe review = %#v", review)
+			}
+			for _, secret := range []string{"subscription-secret-marker", "11111111-2222-4333-8444-555555555555", "private-infrastructure-secret"} {
+				if strings.Contains(fmt.Sprintf("%#v", review), secret) {
+					t.Fatal("review leaked secret")
+				}
+			}
+			if !reflect.DeepEqual(before, host.facts()) || host.configurationReads != 0 {
+				t.Fatal("unsafe review mutated or disclosed configuration")
+			}
+		})
+	}
+}
+
+func TestSubscriptionReviewGatesFreshSafetyFacts(t *testing.T) {
+	for _, check := range []string{"TCP80", "TCP8443", "Clock", "PackageLocks", "RenewalIdle", "Dependencies", "Firewall"} {
+		for _, observed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/observed=%t", check, observed), func(t *testing.T) {
+				host := acceptedHost()
+				installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+				setup := installation.Review(t.Context(), StartSetupAction)
+				installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+				facts := host.PreflightSubscription(t.Context(), "8.8.8.8")
+				reflect.ValueOf(&facts).Elem().FieldByName(check).Set(reflect.ValueOf(hostadapter.Observation{Observed: observed}))
+				host.subscriptionPreflight = &facts
+				before := host.facts()
+				for _, action := range []Action{StatusAction, ViewDetailsAction, EnableSubscriptionAction} {
+					review := installation.Review(t.Context(), action)
+					if review.Status != Running || review.ProxyTraffic != ProvedWorking || review.Prepared != nil || slices.Contains(review.LegalActions, EnableSubscriptionAction) || !slices.Contains(review.LegalActions, ShowClientConfigurationAction) || !slices.Contains(review.LegalActions, CompleteRemovalAction) {
+						t.Fatalf("unsafe review = %#v", review)
+					}
+					if action == EnableSubscriptionAction && (review.Result.Code != ActionRefused || review.Result.FailedCheck == "" || review.Result.Correction == "") {
+						t.Fatalf("missing correction: %#v", review)
+					}
+				}
+				if !reflect.DeepEqual(before, host.facts()) {
+					t.Fatal("unsafe review mutated host")
+				}
+			})
+		}
+	}
+}
+
+func TestSubscriptionApprovalRevalidatesAndConsumesAuthorityWithoutMutation(t *testing.T) {
+	for _, change := range []string{"review", "module", "ownership", "pending", "proxy", "subscription", "preflight", "lock", "release"} {
+		t.Run(change, func(t *testing.T) {
+			host := acceptedHost()
+			lifecycle := &mutableLifecycle{result: readyLifecycle{}.Status(t.Context())}
+			installation := newInstalledInterface(lifecycle, host, acceptedSingBox{})
+			setup := installation.Review(t.Context(), StartSetupAction)
+			installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+			review := installation.Review(t.Context(), EnableSubscriptionAction)
+			if review.Prepared == nil {
+				t.Fatalf("review = %#v", review)
+			}
+			switch change {
+			case "review":
+				installation.Review(t.Context(), StatusAction)
+			case "module":
+				installation = newInstalledInterface(lifecycle, host, acceptedSingBox{})
+			case "ownership":
+				host.ownership = append(host.ownership, '\n')
+			case "pending":
+				host.stagedOwnership = bytes.Clone(host.ownership)
+			case "proxy":
+				host.active = false
+			case "subscription":
+				host.subscriptionAbsence = &hostadapter.Observation{}
+			case "preflight":
+				host.subscriptionPreflight = &hostadapter.SubscriptionPreflight{}
+			case "lock":
+				host.statusBusy = true
+			case "release":
+				lifecycle.result = softwarelifecycle.Result{}
+			}
+			before := host.facts()
+			result := installation.Execute(t.Context(), *review.Prepared, Approved, func(Progress) { t.Fatal("unexpected progress/disclosure") })
+			if result.Code != ActionRefused || result.FailedCheck == "Enable subscription unavailable" {
+				t.Fatalf("stale authority not diagnosed: %#v", result)
+			}
+			if !reflect.DeepEqual(before, host.facts()) {
+				t.Fatal("stale approval mutated state")
+			}
+		})
 	}
 }
 
@@ -1590,10 +1783,15 @@ func TestReviewSupportedSchema2PreservesOwnershipBytes(t *testing.T) {
 	record["resource_creating_releases"] = origins
 	host.ownership, _ = json.Marshal(record)
 	before := host.facts()
-	for _, action := range []Action{StatusAction, ViewDetailsAction, CompleteRemovalAction} {
+	for _, action := range []Action{StatusAction, ViewDetailsAction, CompleteRemovalAction, EnableSubscriptionAction} {
 		review := installation.Review(t.Context(), action)
-		if review.Status != Running || action == CompleteRemovalAction && review.Prepared == nil {
+		if review.Status != Running || (action == CompleteRemovalAction || action == EnableSubscriptionAction) && review.Prepared == nil {
 			t.Fatalf("schema-2 %s = %#v", action, review)
+		}
+		if action == EnableSubscriptionAction {
+			if result := installation.Execute(t.Context(), *review.Prepared, Declined, nil); result.Code != ActionCancelled {
+				t.Fatalf("schema-2 decline: %#v", result)
+			}
 		}
 	}
 	if !reflect.DeepEqual(before, host.facts()) {

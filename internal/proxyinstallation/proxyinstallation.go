@@ -60,6 +60,7 @@ const (
 	ShowClientConfigurationAction Action = "Show client configuration"
 	CompleteRemovalAction         Action = "Complete removal"
 	FinishRemovalAction           Action = "Finish removal"
+	EnableSubscriptionAction      Action = "Enable subscription"
 )
 
 type Confirmation uint8
@@ -125,6 +126,8 @@ type Interface interface {
 }
 
 type hostInterface interface {
+	PreflightSubscription(context.Context, string) hostadapter.SubscriptionPreflight
+	AcquireSubscriptionReviewLock(string) (*hostadapter.MutationLock, bool, error)
 	InspectSubscriptionAbsence(context.Context) hostadapter.Observation
 	Inspect(context.Context, []hostadapter.Resource) hostadapter.Inspection
 	Preflight(context.Context, []hostadapter.Resource, []hostadapter.Destination) hostadapter.Preflight
@@ -172,16 +175,17 @@ type installedInterface struct {
 }
 
 type preparedReview struct {
-	generation uint64
-	action     Action
-	status     Status
-	release    softwarelifecycle.ReleaseIdentity
-	facts      hostadapter.Preflight
-	identity   singboxadapter.Identity
-	record     []byte
-	inspection hostadapter.Inspection
-	running    hostadapter.RunningInspection
-	removal    hostadapter.RemovalInspection
+	subscription hostadapter.SubscriptionPreflight
+	generation   uint64
+	action       Action
+	status       Status
+	release      softwarelifecycle.ReleaseIdentity
+	facts        hostadapter.Preflight
+	identity     singboxadapter.Identity
+	record       []byte
+	inspection   hostadapter.Inspection
+	running      hostadapter.RunningInspection
+	removal      hostadapter.RemovalInspection
 }
 
 type unfinishedDirection string
@@ -295,6 +299,13 @@ func (module *installedInterface) Review(ctx context.Context, action Action) Rev
 	module.mu.Lock()
 	defer module.mu.Unlock()
 	review := module.review(ctx, action)
+	if action == EnableSubscriptionAction && review.Prepared == nil && review.Result.Code != ActionRefused {
+		failed, correction := "Compatible idle installation", "Use View details to restore a compatible installed release, supported idle Ownership Record, and locally Running proxy before enabling a subscription."
+		if review.Status == ChangeInProgress {
+			failed, correction = "Whole-host mutation", "Wait for the active SBXR change to finish, then review Enable subscription again."
+		}
+		review.Result = refused(review.Status, failed, correction)
+	}
 	review.SubscriptionStatus = module.subscriptionStatus(ctx)
 	review.ProxyTraffic, review.SubscriptionServing = CannotBeVerified, CannotBeVerified
 	if review.Status == Running {
@@ -310,7 +321,7 @@ func (module *installedInterface) Review(ctx context.Context, action Action) Rev
 		clear(module.prepared)
 		review.Prepared = nil
 		review.LegalActions = []Action{ViewDetailsAction}
-		if action != StatusAction && action != ViewDetailsAction {
+		if action != StatusAction && action != ViewDetailsAction && review.Result.Code != ActionRefused {
 			review.Result.Code, review.Result.FailedCheck, review.Result.Correction = ActionRefused, "Subscription absence", "Restore safe, supported authority and prove subscription material absent before retrying."
 		}
 	}
@@ -498,7 +509,7 @@ func (module *installedInterface) reviewOwned(ctx context.Context, action Action
 		if runningAccepted(facts) {
 			review.Status = Running
 			review.Result = Result{Status: Running, Message: "Proxy setup is complete and locally verified.", Code: SetupComplete}
-			review.LegalActions = []Action{ViewDetailsAction, ShowClientConfigurationAction, CompleteRemovalAction}
+			review.LegalActions = []Action{ViewDetailsAction, ShowClientConfigurationAction, CompleteRemovalAction, EnableSubscriptionAction}
 		} else {
 			review.Status = ProblemDetected
 			review.Result = Result{Status: ProblemDetected, Message: "A proxy problem was detected. View details before continuing.", Code: StatusProblemDetected}
@@ -511,6 +522,19 @@ func (module *installedInterface) reviewOwned(ctx context.Context, action Action
 		}
 	}
 	review.Details = ownedDetails(installed, installedReady, review.Status, record, facts, "Available")
+	subscription := hostadapter.SubscriptionPreflight{}
+	if review.Status == Running {
+		subscription = module.host.PreflightSubscription(ctx, record.PublicIPv4)
+		failed, correction := module.subscriptionAdmission(ctx, subscription)
+		if failed != "" {
+			review.LegalActions = slices.DeleteFunc(review.LegalActions, func(a Action) bool { return a == EnableSubscriptionAction })
+			review.Details = append(review.Details, "Subscription enablement check: "+failed, "Safe correction: "+correction)
+			if action == EnableSubscriptionAction {
+				review.Result = refused(Running, failed, correction)
+				return review
+			}
+		}
+	}
 	if action == CompleteRemovalAction {
 		surface := module.host.Inspect(ctx, slices.Clone(footprint))
 		removal := module.host.InspectRemoval(ctx, hostSetupSpec, aptSourceBody, body, record.ConfigurationSHA256, record.PublicIPv4)
@@ -528,13 +552,13 @@ func (module *installedInterface) reviewOwned(ctx context.Context, action Action
 	if action == StatusAction || action == ViewDetailsAction {
 		return review
 	}
-	if action == ShowClientConfigurationAction && review.Status == Running {
+	if (action == ShowClientConfigurationAction || action == EnableSubscriptionAction) && review.Status == Running {
 		var token [32]byte
 		if _, err := rand.Read(token[:]); err != nil {
 			review.Result = refused(Running, "Prepared Action generation", "Review Show client configuration again.")
 			return review
 		}
-		module.prepared[token] = preparedReview{generation: module.generation, action: action, status: Running, release: installed, record: slices.Clone(body), running: facts}
+		module.prepared[token] = preparedReview{generation: module.generation, action: action, status: Running, release: installed, record: slices.Clone(body), running: facts, subscription: subscription}
 		review.Prepared = &PreparedAction{token: token}
 		review.Plan = []string{
 			"Warning: this Client Configuration contains a credential.",
@@ -542,6 +566,9 @@ func (module *installedInterface) reviewOwned(ctx context.Context, action Action
 			"Terminal history or recording can retain the complete Client Configuration.",
 			"SBXR creates no client file on this VPS.",
 			"Outside copies survive Complete removal and must be deleted separately.",
+		}
+		if action == EnableSubscriptionAction {
+			review.Plan = subscriptionPlan(record.PublicIPv4, subscription)
 		}
 		return review
 	}
@@ -877,9 +904,18 @@ func all(facts ...hostadapter.Observation) hostadapter.Observation {
 func (module *installedInterface) Execute(ctx context.Context, prepared PreparedAction, confirmation Confirmation, progress ProgressReporter) (result Result) {
 	module.mu.Lock()
 	defer module.mu.Unlock()
+	authority, ok := module.prepared[prepared.token]
+	delete(module.prepared, prepared.token)
 	defer func() {
 		result.SubscriptionStatus = module.subscriptionStatus(context.WithoutCancel(ctx))
 		result.ProxyTraffic, result.SubscriptionServing = CannotBeVerified, CannotBeVerified
+		if authority.action == EnableSubscriptionAction {
+			fresh := module.review(context.WithoutCancel(ctx), StatusAction)
+			result.Status = fresh.Status
+			if fresh.Status == Running {
+				result.ProxyTraffic = ProvedWorking
+			}
+		}
 		if result.Code == SetupComplete || result.Code == ClientConfigurationDisclosed {
 			result.ProxyTraffic = ProvedWorking
 		}
@@ -890,8 +926,6 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 			result.SubscriptionServing = ProvedStopped
 		}
 	}()
-	authority, ok := module.prepared[prepared.token]
-	delete(module.prepared, prepared.token)
 	if !ok || authority.generation != module.generation {
 		return refused(NotSetUp, "Prepared Action", "Review the action again and use only the new Prepared Action.")
 	}
@@ -900,6 +934,9 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 	}
 	if confirmation != Approved || module.lifecycle == nil || module.host == nil || module.singbox == nil {
 		return refused(authority.status, "Prepared Action", "Review the action again and use only the new Prepared Action.")
+	}
+	if authority.action == EnableSubscriptionAction {
+		return module.refuseSubscriptionExecution(ctx, authority)
 	}
 	if authority.action == CompleteRemovalAction {
 		if ctx.Err() != nil {

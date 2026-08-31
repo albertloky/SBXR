@@ -13,7 +13,16 @@ type MutationLockAuthority struct {
 }
 
 func AcquireMutationLockAuthority(path string, uid uint32) (*MutationLockAuthority, bool, error) {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
+	return acquireMutationLockAuthority(path, uid, os.O_CREATE|os.O_RDWR)
+}
+
+// AcquireExistingMutationLockAuthority never creates durable state for read-only work.
+func AcquireExistingMutationLockAuthority(path string, uid uint32) (*MutationLockAuthority, bool, error) {
+	return acquireMutationLockAuthority(path, uid, os.O_RDONLY)
+}
+
+func acquireMutationLockAuthority(path string, uid uint32, flags int) (*MutationLockAuthority, bool, error) {
+	file, err := os.OpenFile(path, flags|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return nil, false, err
 	}
