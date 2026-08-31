@@ -187,7 +187,7 @@ if [ ! -e "$removal_record" ] && [ ! -L "$removal_record" ] && { [ -e "$final_re
   removal_record="$final_removal_record"
 fi
 if [ -e "$removal_record" ] || [ -L "$removal_record" ]; then
-  for parent in "$ROOT/var" "$ROOT/var/lib" "$ROOT/var/lib/sbxr"; do
+  for parent in "$ROOT/var" "$ROOT/var/lib" "$ROOT/var/lib/sbxr" "$ROOT/usr" "$ROOT/usr/local" "$ROOT/usr/local/bin"; do
     if [ -e "$parent" ] || [ -L "$parent" ]; then
       [ ! -L "$parent" ] || path_refused
       case "$("$ROOT/usr/bin/stat" -c '%u:%a:%F' "$parent" 2>/dev/null)" in '0:755:directory'|'0:700:directory') ;; *) path_refused ;; esac

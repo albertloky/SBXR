@@ -211,6 +211,30 @@ func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *tes
 			if err := os.WriteFile(installedRecord, installedBefore, 0o600); err != nil {
 				t.Fatal(err)
 			}
+			if variant == 1 {
+				t.Run("symlink executable parent", func(t *testing.T) {
+					parent := filepath.Join(fixture.root, "usr/local/bin")
+					if err := os.Rename(parent, parent+"-outside"); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Symlink(parent+"-outside", parent); err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() {
+						_ = os.Remove(filepath.Join(parent, "sbxr"))
+						_ = os.Remove(parent)
+						_ = os.Rename(parent+"-outside", parent)
+					})
+					body, err := exec.Command("bash", restorer).CombinedOutput()
+					if err == nil || !bytes.Contains(body, []byte("SOFTWARE-LIFECYCLE-INSTALL-PATH-REFUSED")) {
+						t.Fatal("restoration followed a symlink parent")
+					}
+					if _, err := os.Lstat(filepath.Join(parent, "sbxr")); !os.IsNotExist(err) {
+						t.Fatal("unsafe restoration created an executable")
+					}
+				})
+			}
+
 			body, err := exec.Command("bash", restorer).CombinedOutput()
 			if err != nil || !strings.Contains(string(body), "SOFTWARE-LIFECYCLE-INSTALL-REMOVAL-RESTORED") {
 				t.Fatalf("restore = %v, %q", err, body)
