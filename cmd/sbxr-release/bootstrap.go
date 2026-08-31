@@ -227,6 +227,26 @@ if [ -e "$removal_record" ] || [ -L "$removal_record" ]; then
     [ "$ip1" -lt 224 ] || path_refused
     if { [ "$ip1" -eq 100 ] && [ "$ip2" -ge 64 ] && [ "$ip2" -le 127 ]; } || { [ "$ip1" -eq 172 ] && [ "$ip2" -ge 16 ] && [ "$ip2" -le 31 ]; } || { [ "$ip1" -eq 198 ] && { [ "$ip2" -eq 18 ] || [ "$ip2" -eq 19 ]; }; }; then path_refused; fi
   fi
+  serving_suffix=''
+  if "$ROOT/usr/bin/grep" -Fq '"serving":' "$removal_record"; then
+    [ "$schema" -eq 2 ] && [ -n "$config_sha" ] || path_refused
+    serving=$("$ROOT/usr/bin/sed" -n 's/.*,"serving":\(.*\)}$/\1/p' "$removal_record")
+    printf '%s\n' "$serving" | "$ROOT/usr/bin/grep" -Eqx '\{"link_id":"[0-9a-f]{32}","credential_sha256":"[0-9a-f]{64}","certificate_generation":[1-9][0-9]{0,6},"certificate_sha256":\["[0-9a-f]{64}","[0-9a-f]{64}","[0-9a-f]{64}","[0-9a-f]{64}"\]\}' || path_refused
+    if printf '%s\n' "$serving" | "$ROOT/usr/bin/grep" -Eq '"(0{32}|0{64})"'; then path_refused; fi
+    generation=$(printf '%s' "$serving" | "$ROOT/usr/bin/sed" -n 's/.*"certificate_generation":\([0-9]*\),.*/\1/p')
+    [ "$generation" -le 1000000 ] || path_refused
+    hashes=$(printf '%s' "$serving" | "$ROOT/usr/bin/sed" -n 's/.*"certificate_sha256":\["\([0-9a-f]*\)","\([0-9a-f]*\)","\([0-9a-f]*\)","\([0-9a-f]*\)"\]}/\1 \2 \3 \4/p')
+    read -r cert_hash chain_hash fullchain_hash privkey_hash <<<"$hashes"
+    resources=${resources%]}',"/etc/systemd/system/sbxr-subscription.service root:root 0644 one-link fixed-serving-v1","/var/lib/sbxr/subscription-token root:root 0600 one-link credential","/var/lib/sbxr/subscription-staging root:root 0700 empty-directory","/etc/letsencrypt/archive/sbxr-subscription root:root 0700 directory","/etc/letsencrypt/live/sbxr-subscription root:root 0700 directory"'
+    for name in cert chain fullchain privkey; do
+      mode=0644
+      case "$name" in cert) hash=$cert_hash ;; chain) hash=$chain_hash ;; fullchain) hash=$fullchain_hash ;; privkey) hash=$privkey_hash; mode=0600 ;; esac
+      resources=$resources',"/etc/letsencrypt/archive/sbxr-subscription/'"$name$generation"'.pem root:root '"$mode"' one-link '"$hash"'","/etc/letsencrypt/live/sbxr-subscription/'"$name"'.pem root:root symlink ../../archive/sbxr-subscription/'"$name$generation"'.pem"'
+    done
+    resources=$resources']'
+    provenance_count=$((provenance_count + 13))
+    serving_suffix=',"serving":'$(printf '%s' "$serving" | "$ROOT/usr/bin/sed" 's/[][\\.^$*+?(){}|]/\\&/g')
+  fi
   # Escape literal contract text for ERE; no caller-controlled regular expression.
   resource_pattern=$(printf '%s' "$resources" | "$ROOT/usr/bin/sed" 's/[][\\.^$*+?(){}|]/\\&/g')
   suffix=',"permitted_resources":'"$resource_pattern"',"cleanup_checkpoint":0,"removal_checkpoint":'"$checkpoints"
@@ -235,7 +255,7 @@ if [ -e "$removal_record" ] || [ -L "$removal_record" ]; then
     suffix=$suffix',"resource_creating_releases":\['"$identity"'(,'"$identity"'){'"$((provenance_count - 1))"'}\],"finishing_release_identity":'"$identity"
     selector='finishing_release_identity'
   fi
-  "$ROOT/usr/bin/grep" -Eqx '^'"$prefix$fields$suffix"'\}$' "$removal_record" || path_refused
+  "$ROOT/usr/bin/grep" -Eqx '^'"$prefix$fields$suffix$serving_suffix"'\}$' "$removal_record" || path_refused
   if [ "$removal_record" = "$final_removal_record" ]; then
     final_checkpoint=3
     [ -z "$config_sha" ] || final_checkpoint=11

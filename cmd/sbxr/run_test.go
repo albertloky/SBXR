@@ -37,3 +37,12 @@ func TestProductionConstructionOpensTheV3Menu(t *testing.T) {
 		t.Fatalf("status=%d output:\n%s", status, output.String())
 	}
 }
+
+func TestPrivateServingArgumentDoesNotAuthorizeExecution(t *testing.T) {
+	t.Setenv("SBXR_SERVING_ROLE", "authorized")
+	t.Setenv("LISTEN_PID", "1")
+	var output bytes.Buffer
+	if run(t.Context(), []string{"--subscription-serving"}, strings.NewReader(""), &output, &output, constructionLifecycle{}) != 1 || output.Len() != 0 {
+		t.Fatal("private serving dispatch did not refuse silently")
+	}
+}

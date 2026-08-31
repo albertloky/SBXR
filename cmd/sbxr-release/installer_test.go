@@ -18,6 +18,7 @@ import (
 	"sync"
 	"testing"
 
+	hostadapter "github.com/albertloky/SBXR/internal/proxyinstallation/adapter/host"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 )
 
@@ -115,9 +116,9 @@ func TestGeneratedInstallerInstallsQualifiedReleaseWithoutATerminal(t *testing.T
 }
 
 func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *testing.T) {
-	for _, variant := range []int{1, 2, 3} {
+	for _, variant := range []int{1, 2, 3, 4} {
 		schema := variant
-		if variant == 3 {
+		if variant >= 3 {
 			schema = 2
 		}
 		t.Run(fmt.Sprint(variant), func(t *testing.T) {
@@ -151,7 +152,7 @@ func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *tes
 				ownership = bytes.Replace(ownership, finisherJSON, creatorJSON, 1)
 				ownership = []byte(strings.TrimSuffix(string(ownership), "}\n") + `,"resource_creating_releases":[` + string(creatorJSON) + `,` + string(creatorJSON) + `,` + string(creatorJSON) + `,` + string(creatorJSON) + `],"finishing_release_identity":` + string(finisherJSON) + "}\n")
 			}
-			if variant == 3 {
+			if variant >= 3 {
 				ownership, err = os.ReadFile("../../internal/proxyinstallation/testdata/subscription-absent-schema2.json")
 				if err != nil {
 					t.Fatal(err)
@@ -159,6 +160,24 @@ func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *tes
 				ownership = bytes.Replace(ownership, []byte(`"phase":"Running","unfinished_direction":"none"`), []byte(`"phase":"Removal committed","unfinished_direction":"removal required"`), 1)
 				ownership = bytes.Replace(ownership, []byte(`"removal_checkpoint":0`), []byte(`"removal_checkpoint":11`), 1)
 				ownership = []byte(strings.TrimSuffix(string(ownership), "}\n") + `,"finishing_release_identity":` + string(finisherJSON) + "}\n")
+			}
+			if variant == 4 {
+				authority := hostadapter.ServingAuthority{LinkID: strings.Repeat("a", 32), CredentialSHA256: strings.Repeat("b", 64), CertificateGeneration: 1, CertificateSHA256: [4]string{strings.Repeat("c", 64), strings.Repeat("d", 64), strings.Repeat("e", 64), strings.Repeat("f", 64)}}
+				resources, _ := json.Marshal(authority.Resources())
+				ownership = bytes.Replace(ownership, []byte(`],"cleanup_checkpoint"`), append(append([]byte(","), resources[1:]...), []byte(`,"cleanup_checkpoint"`)...), 1)
+				var fields map[string]json.RawMessage
+				if json.Unmarshal(ownership, &fields) != nil {
+					t.Fatal("test authority failed")
+				}
+				var extra []byte
+				for range authority.Resources() {
+					extra = append(extra, ',')
+					extra = append(extra, fields["release_identity"]...)
+				}
+				extra = append(extra, []byte(`],"finishing_release_identity"`)...)
+				ownership = bytes.Replace(ownership, []byte(`],"finishing_release_identity"`), extra, 1)
+				serving, _ := json.Marshal(authority)
+				ownership = []byte(strings.TrimSuffix(string(ownership), "}\n") + `,"serving":` + string(serving) + "}\n")
 			}
 			ownershipPath := filepath.Join(fixture.root, "var/lib/sbxr/proxy-ownership.json")
 			if err := os.WriteFile(ownershipPath, ownership, 0o600); err != nil {

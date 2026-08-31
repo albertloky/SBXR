@@ -10,8 +10,9 @@ resource creation is admitted by this slice.
   Creating Release Identity for each ordered `permitted_resources` entry. Its
   Ownership Record entry names `schema-2`. Nested Release Identities retain the
   production field names `Repository`, `Tag`, `Commit`, and `IndexSHA256`. Only idle `Running` or committed
-  removal is supported. Subscription, startup, or operation fields are unknown
-  and refuse until their complete behavior is implemented.
+  removal is supported. The optional runtime-only `serving` contract is described
+  in [Subscription Serving](subscriptionserving/README.md); other subscription,
+  startup, or operation fields refuse until their complete behavior is implemented.
 - Schema-2 removal additionally requires `finishing_release_identity`. It is
   forbidden outside removal. Confirmed removal converts schema 1 at commitment,
   preserves original creation identities, resets the setup cleanup checkpoint,

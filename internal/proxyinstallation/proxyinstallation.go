@@ -232,6 +232,7 @@ type ownershipRecord struct {
 	RemovalCheckpoint        int                                 `json:"removal_checkpoint"`
 	ResourceCreatingReleases []softwarelifecycle.ReleaseIdentity `json:"resource_creating_releases,omitempty"`
 	FinishingRelease         *softwarelifecycle.ReleaseIdentity  `json:"finishing_release_identity,omitempty"`
+	Serving                  *hostadapter.ServingAuthority       `json:"serving,omitempty"`
 }
 
 var destinations = []hostadapter.Destination{
@@ -317,13 +318,22 @@ func (module *installedInterface) Review(ctx context.Context, action Action) Rev
 	review.Result.SubscriptionStatus = review.SubscriptionStatus
 	review.Result.ProxyTraffic, review.Result.SubscriptionServing = review.ProxyTraffic, review.SubscriptionServing
 	review.Details = append(review.Details, "Subscription Capability Status: "+string(review.SubscriptionStatus))
-	if review.SubscriptionStatus != SubscriptionNotEnabled {
+	if review.SubscriptionStatus != SubscriptionNotEnabled && !module.servingSurfaceSafe() {
 		clear(module.prepared)
 		review.Prepared = nil
 		review.LegalActions = []Action{ViewDetailsAction}
 		if action != StatusAction && action != ViewDetailsAction && review.Result.Code != ActionRefused {
 			review.Result.Code, review.Result.FailedCheck, review.Result.Correction = ActionRefused, "Subscription absence", "Restore safe, supported authority and prove subscription material absent before retrying."
 		}
+	}
+	if module.servingSurfaceSafe() {
+		review.LegalActions = slices.DeleteFunc(review.LegalActions, func(a Action) bool { return a == EnableSubscriptionAction })
+		if action == EnableSubscriptionAction {
+			clear(module.prepared)
+			review.Prepared = nil
+			review.Result = refused(review.Status, "Existing serving authority", "Complete removal is supported; subscription enablement remains unavailable.")
+		}
+		review.Details = append(review.Details, "Subscription runtime authority is supported. Managed renewal and Owner enablement are not available in this slice.")
 	}
 	return review
 }
@@ -334,7 +344,7 @@ func (module *installedInterface) subscriptionStatus(ctx context.Context) Subscr
 	}
 	body, err := module.readOwnership()
 	if err == nil {
-		if _, valid := decodeOwnership(body); !valid {
+		if record, valid := decodeOwnership(body); !valid || record.Serving != nil {
 			return SubscriptionProblemDetected
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -947,7 +957,7 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 			return refused(authority.status, "SBXR mutation lock", "Wait for the active SBXR change to finish, then review Complete removal again.")
 		}
 		defer lock.Release()
-		if module.subscriptionStatus(context.WithoutCancel(ctx)) != SubscriptionNotEnabled {
+		if module.subscriptionStatus(context.WithoutCancel(ctx)) != SubscriptionNotEnabled && !module.servingSurfaceSafe() {
 			return refused(authority.status, "Subscription absence", "Inspect subscription material before retrying.")
 		}
 		packageLocks, packageBusy, err := module.host.AcquirePackageLocks()
@@ -1007,7 +1017,7 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 		return refused(authority.status, "SBXR mutation lock", "Wait for the active SBXR change to finish, then review the action again.")
 	}
 	defer lock.Release()
-	if module.subscriptionStatus(context.WithoutCancel(ctx)) != SubscriptionNotEnabled {
+	if module.subscriptionStatus(context.WithoutCancel(ctx)) != SubscriptionNotEnabled && !(module.servingSurfaceSafe() && (authority.action == FinishRemovalAction || authority.action == ShowClientConfigurationAction)) {
 		return refused(authority.status, "Subscription absence", "Inspect subscription material before retrying.")
 	}
 	if ctx.Err() != nil {
@@ -1292,6 +1302,16 @@ func (module *installedInterface) finishRemoval(ctx context.Context, record owne
 	}
 	if !module.syncRemovalAuthority(body) {
 		return removalInterrupted("Removal authority synchronization")
+	}
+	if record.Serving != nil {
+		host, ok := module.host.(servingRemovalHost)
+		if !ok || !host.RemoveServingRuntime(context.WithoutCancel(ctx), *record.Serving) || !host.ServingRuntimeAbsent(*record.Serving) {
+			return removalInterrupted("Subscription Serving removal")
+		}
+		report(progress, "Subscription Serving removed")
+		if ctx.Err() != nil {
+			return removalInterrupted("Managed termination")
+		}
 	}
 	operations := []hostadapter.Operation{}
 	if record.Package != "" {
@@ -1688,11 +1708,23 @@ func decodeOwnership(body []byte) (ownershipRecord, bool) {
 		}
 	}
 	for name, value := range fields {
-		if !slices.Contains([]string{"schema", "phase", "unfinished_direction", "release_identity", "proxy_package_identity", "public_ipv4", "destination_address", "destination_server_name", "configuration_sha256", "permitted_resources", "cleanup_checkpoint", "removal_checkpoint", "resource_creating_releases", "finishing_release_identity"}, name) {
+		if !slices.Contains([]string{"schema", "phase", "unfinished_direction", "release_identity", "proxy_package_identity", "public_ipv4", "destination_address", "destination_server_name", "configuration_sha256", "permitted_resources", "cleanup_checkpoint", "removal_checkpoint", "resource_creating_releases", "finishing_release_identity", "serving"}, name) {
 			return ownershipRecord{}, false
 		}
 		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
 			return ownershipRecord{}, false
+		}
+	}
+	if raw, exists := fields["serving"]; exists {
+		var serving map[string]json.RawMessage
+		var hashes []string
+		if json.Unmarshal(raw, &serving) != nil || len(serving) != 4 || json.Unmarshal(serving["certificate_sha256"], &hashes) != nil || len(hashes) != 4 {
+			return ownershipRecord{}, false
+		}
+		for _, name := range []string{"link_id", "credential_sha256", "certificate_generation", "certificate_sha256"} {
+			if len(serving[name]) == 0 || bytes.Equal(bytes.TrimSpace(serving[name]), []byte("null")) {
+				return ownershipRecord{}, false
+			}
 		}
 	}
 	if !exactIdentityFields(fields["release_identity"]) {
@@ -1740,7 +1772,7 @@ func validOwnership(record ownershipRecord) bool {
 		return false
 	}
 	if record.Schema == 1 {
-		if record.ResourceCreatingReleases != nil || record.FinishingRelease != nil {
+		if record.ResourceCreatingReleases != nil || record.FinishingRelease != nil || record.Serving != nil {
 			return false
 		}
 	} else {
@@ -1760,6 +1792,9 @@ func validOwnership(record ownershipRecord) bool {
 			return false
 		}
 	}
+	if record.Serving != nil && (!record.Serving.Valid() || record.Package == "" || record.Phase != runningPhase && record.Phase != removalCommitted) {
+		return false
+	}
 	if record.Direction == removalRequired {
 		if record.Phase != removalCommitted || record.CleanupCheckpoint != 0 || record.RemovalCheckpoint < 0 || record.RemovalCheckpoint > removalCheckpointLimit(record) {
 			return false
@@ -1778,9 +1813,8 @@ func validOwnership(record ownershipRecord) bool {
 	return true
 }
 
-// Schema 2 currently supports only the original proxy footprint with no
-// subscription or unfinished capability operation. Future contracts must bring
-// their complete inspection, recovery, and removal behavior before admission.
+// Schema 2 supports the original proxy footprint and the fixed serving-only
+// footprint. Pending capability operations remain unsupported.
 func recordResources(record ownershipRecord, softwareOnly bool) []string {
 	resources := ownershipResources(record.ConfigurationSHA256)
 	if softwareOnly {
@@ -1788,6 +1822,9 @@ func recordResources(record ownershipRecord, softwareOnly bool) []string {
 	}
 	if record.Schema == 2 {
 		resources[0] = "/var/lib/sbxr/proxy-ownership.json root:root 0600 one-link schema-2"
+	}
+	if record.Serving != nil {
+		resources = append(resources, record.Serving.Resources()...)
 	}
 	return resources
 }

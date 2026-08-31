@@ -21,6 +21,8 @@ type SubscriptionPreflight struct {
 	DependencyIdentity, FirewallIdentity                                     string
 }
 
+var certbotDirectoryLocks = []string{"/etc/letsencrypt/.certbot.lock", "/var/lib/letsencrypt/.certbot.lock", "/var/log/letsencrypt/.certbot.lock"}
+
 func (adapter Adapter) AcquireSubscriptionReviewLock(name string) (*MutationLock, bool, error) {
 	if err := adapter.safeParents(name); err != nil {
 		return nil, false, err
@@ -52,7 +54,7 @@ func (adapter Adapter) PreflightSubscription(ctx context.Context, ipv4 string) S
 
 	// Certbot uses these shared directory locks. Observation never creates them.
 	idle := true
-	for _, path := range []string{"/etc/letsencrypt/.certbot.lock", "/var/lib/letsencrypt/.certbot.lock", "/var/log/letsencrypt/.certbot.lock"} {
+	for _, path := range certbotDirectoryLocks {
 		if err := adapter.safeParents(path); err != nil && !os.IsNotExist(err) {
 			idle = false
 		}
