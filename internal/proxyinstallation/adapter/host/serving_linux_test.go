@@ -100,6 +100,14 @@ func TestServingSandboxUsesRealInaccessibleMounts(t *testing.T) {
 		if exec.Command("sudo", "-n", "true").Run() != nil {
 			t.Skip("root mount capability unavailable")
 		}
+		// The child changes only this fixture's ownership. Restore it before
+		// t.TempDir cleanup in the unprivileged parent, including on failures.
+		t.Cleanup(func() {
+			owner := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
+			if exec.Command("sudo", "-n", "chown", "-R", owner, a.root).Run() != nil {
+				t.Error("sandbox fixture ownership cleanup failed")
+			}
+		})
 		program = "sudo"
 		args = []string{"-n", "--preserve-env=SBXR_TEST_SERVING_ROOT", os.Args[0], "-test.run=^TestServingSandboxChild$"}
 	}
