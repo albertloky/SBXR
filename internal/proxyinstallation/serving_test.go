@@ -2,22 +2,150 @@ package proxyinstallation
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
+	"encoding/pem"
+	"errors"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	hostadapter "github.com/albertloky/SBXR/internal/proxyinstallation/adapter/host"
+	singboxadapter "github.com/albertloky/SBXR/internal/proxyinstallation/adapter/singbox"
+	"github.com/albertloky/SBXR/internal/proxyinstallation/subscriptionserving"
 )
 
 type servingTestHost struct {
 	*controlledHost
-	safe, removed bool
-	failRemoval   bool
+	safe, removed               bool
+	failRemoval                 bool
+	exclusionBusy, missingFiles bool
 }
 
-func (h *servingTestHost) InspectServingFiles(hostadapter.ServingAuthority, bool) hostadapter.Observation {
-	return hostadapter.Observation{Observed: true, Accepted: h.safe}
+type dispatchTestHost struct {
+	*servingTestHost
+	certificate subscriptionserving.Certificate
+	listener    net.Listener
+	ip          string
+	bound       chan struct{}
 }
-func (h *servingTestHost) RemoveServingRuntime(context.Context, hostadapter.ServingAuthority) bool {
+type advertisedListener struct {
+	net.Listener
+	ip string
+}
+
+func (l advertisedListener) Addr() net.Addr                                           { return &net.TCPAddr{IP: net.ParseIP(l.ip), Port: 8443} }
+func (h *dispatchTestHost) ValidateServingDispatch(hostadapter.ServingAuthority) bool { return true }
+func (h *dispatchTestHost) ServingPublicIPv4(_ context.Context, ip string) bool       { return ip == h.ip }
+func (h *dispatchTestHost) ReadServingConfiguration(_ hostadapter.SetupSpec, expected string) ([]byte, error) {
+	sum := sha256.Sum256(h.configuration)
+	if hex.EncodeToString(sum[:]) != expected {
+		return nil, errors.New("test configuration mismatch")
+	}
+	return h.configuration, nil
+}
+func (h *dispatchTestHost) LoadServingCertificate(a hostadapter.ServingAuthority) (subscriptionserving.Certificate, bool) {
+	return h.certificate, a.CertificateGeneration == h.certificate.Generation && a.CertificateSHA256[2] == hex.EncodeToString(h.certificate.ChainSHA256[:]) && a.CertificateSHA256[3] == hex.EncodeToString(h.certificate.KeySHA256[:])
+}
+func (h *dispatchTestHost) ServingGeneration(a hostadapter.ServingAuthority) subscriptionserving.Generation {
+	return hostadapter.New().ServingGeneration(a)
+}
+func (h *dispatchTestHost) BindServingListener(ip string) (net.Listener, error) {
+	if ip != h.ip {
+		return nil, errors.New("test address mismatch")
+	}
+	close(h.bound)
+	return advertisedListener{Listener: h.listener, ip: ip}, nil
+}
+
+func TestAcceptedPrivateDispatchComposesAuthorityProfileTLSAndServing(t *testing.T) {
+	_, h, lifecycle := servingInstallation(t)
+	record, ok := decodeOwnership(h.ownership)
+	if !ok {
+		t.Fatal("test ownership invalid")
+	}
+	identity, err := singboxadapter.New().PrepareIdentity()
+	if err != nil {
+		t.Fatal("test identity failed")
+	}
+	h.configuration, err = singboxadapter.New().EncodeServerConfiguration(identity, record.DestinationAddress, record.DestinationName)
+	if err != nil {
+		t.Fatal("test configuration failed")
+	}
+	sum := sha256.Sum256(h.configuration)
+	record.ConfigurationSHA256 = hex.EncodeToString(sum[:])
+	token := strings.Repeat("A", 43)
+	sum = sha256.Sum256([]byte(token))
+	record.Serving.CredentialSHA256 = hex.EncodeToString(sum[:])
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	root := &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+	der, _ := x509.CreateCertificate(rand.Reader, root, root, &key.PublicKey, key)
+	root, _ = x509.ParseCertificate(der)
+	leaf := &x509.Certificate{SerialNumber: big.NewInt(2), NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Minute), IPAddresses: []net.IP{net.ParseIP(record.PublicIPv4)}, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	der, err = x509.CreateCertificate(rand.Reader, leaf, root, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal("test certificate failed")
+	}
+	chain := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	private, _ := x509.MarshalPKCS8PrivateKey(key)
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private})
+	cert := subscriptionserving.Certificate{Chain: chain, Key: keyPEM, ChainSHA256: sha256.Sum256(chain), KeySHA256: sha256.Sum256(keyPEM), Lineage: "sbxr-subscription", Generation: 1}
+	record.Serving.CertificateSHA256[2] = hex.EncodeToString(cert.ChainSHA256[:])
+	record.Serving.CertificateSHA256[3] = hex.EncodeToString(cert.KeySHA256[:])
+	record.Resources = recordResources(record, false)
+	h.ownership = ownershipBytes(record)
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { listener.Close() })
+	pool := x509.NewCertPool()
+	pool.AddCert(root)
+	host := &dispatchTestHost{servingTestHost: h, certificate: cert, listener: listener, ip: record.PublicIPv4, bound: make(chan struct{})}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan subscriptionserving.Code, 1)
+	go func() { done <- serveSubscription(ctx, lifecycle, host, subscriptionserving.New(pool, nil)) }()
+	select {
+	case <-host.bound:
+	case <-done:
+		t.Fatal("private dispatch refused valid authority")
+	case <-time.After(3 * time.Second):
+		t.Fatal("private dispatch did not bind")
+	}
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: record.PublicIPv4}}, Timeout: 3 * time.Second}
+	defer client.CloseIdleConnections()
+	response, err := client.Get("https://" + listener.Addr().String() + "/s/" + token)
+	if err != nil {
+		t.Fatal("private dispatch HTTPS failed")
+	}
+	body, err := io.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil || response.StatusCode != 200 || !strings.HasPrefix(string(body), "vless://"+identity.UUID+"@"+record.PublicIPv4+":443?") {
+		t.Fatal("private dispatch did not serve authoritative profile")
+	}
+	cancel()
+	if <-done != subscriptionserving.Stopped {
+		t.Fatal("private dispatch shutdown failed")
+	}
+}
+
+func (h *servingTestHost) InspectServingFiles(_ hostadapter.ServingAuthority, removing bool) hostadapter.Observation {
+	return hostadapter.Observation{Observed: true, Accepted: h.safe && (!h.missingFiles || removing)}
+}
+func (h *servingTestHost) AcquireServingExclusion() (*hostadapter.ServingExclusion, bool) {
+	return &hostadapter.ServingExclusion{}, !h.exclusionBusy
+}
+func (h *servingTestHost) RemoveServingRuntime(context.Context, hostadapter.ServingAuthority, *hostadapter.ServingExclusion) bool {
 	if h.failRemoval {
 		h.failRemoval = false
 		return false
@@ -75,5 +203,30 @@ func TestServingAuthorityPreservesProxyAndSupportsRemovalRecovery(t *testing.T) 
 	}
 	if m.Execute(t.Context(), *review.Prepared, Approved, nil).Code != CompleteRemovalCompleted || !h.removed || len(h.ownership) != 0 {
 		t.Fatal("serving removal incomplete")
+	}
+}
+
+func TestMissingServingFilesStillPermitCompleteRemoval(t *testing.T) {
+	m, h, _ := servingInstallation(t)
+	h.missingFiles = true
+	review := m.Review(t.Context(), CompleteRemovalAction)
+	if review.Prepared == nil {
+		t.Fatal("safely missing serving files blocked removal")
+	}
+	if m.Execute(t.Context(), *review.Prepared, Approved, nil).Code != CompleteRemovalCompleted {
+		t.Fatal("missing-file removal failed")
+	}
+}
+
+func TestServingExclusionFailureDoesNotCommitRemoval(t *testing.T) {
+	m, h, _ := servingInstallation(t)
+	before := string(h.ownership)
+	review := m.Review(t.Context(), CompleteRemovalAction)
+	if review.Prepared == nil {
+		t.Fatal("removal review failed")
+	}
+	h.exclusionBusy = true
+	if m.Execute(t.Context(), *review.Prepared, Approved, nil).Code != ActionRefused || string(h.ownership) != before || h.removed {
+		t.Fatal("failed exclusion changed authority or resources")
 	}
 }

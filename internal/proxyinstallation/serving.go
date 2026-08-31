@@ -15,8 +15,20 @@ import (
 
 type servingRemovalHost interface {
 	InspectServingFiles(hostadapter.ServingAuthority, bool) hostadapter.Observation
-	RemoveServingRuntime(context.Context, hostadapter.ServingAuthority) bool
+	AcquireServingExclusion() (*hostadapter.ServingExclusion, bool)
+	RemoveServingRuntime(context.Context, hostadapter.ServingAuthority, *hostadapter.ServingExclusion) bool
 	ServingRuntimeAbsent(hostadapter.ServingAuthority) bool
+}
+
+type servingDispatchHost interface {
+	AcquireSubscriptionReviewLock(string) (*hostadapter.MutationLock, bool, error)
+	ReadOwnership(string) ([]byte, error)
+	ValidateServingDispatch(hostadapter.ServingAuthority) bool
+	ServingPublicIPv4(context.Context, string) bool
+	ReadServingConfiguration(hostadapter.SetupSpec, string) ([]byte, error)
+	LoadServingCertificate(hostadapter.ServingAuthority) (subscriptionserving.Certificate, bool)
+	ServingGeneration(hostadapter.ServingAuthority) subscriptionserving.Generation
+	BindServingListener(string) (net.Listener, error)
 }
 
 func (m *installedInterface) servingSurfaceSafe() bool {
@@ -44,14 +56,17 @@ func (m *installedInterface) servingSurfaceSafe() bool {
 		return false
 	}
 	host, ok := m.host.(servingRemovalHost)
-	return ok && host.InspectServingFiles(*record.Serving, record.Direction == removalRequired).Accepted
+	return ok && host.InspectServingFiles(*record.Serving, true).Accepted
 }
 
 // ServeSubscription is the private same-executable systemd role, not an Owner
 // operation. The concrete private Module receives only validated in-memory
 // state and an already bound listener. This path never publishes authority.
 func ServeSubscription(ctx context.Context, lifecycle softwarelifecycle.Interface) subscriptionserving.Code {
-	host := hostadapter.New()
+	return serveSubscription(ctx, lifecycle, hostadapter.New(), subscriptionserving.New(nil, nil))
+}
+
+func serveSubscription(ctx context.Context, lifecycle softwarelifecycle.Interface, host servingDispatchHost, m *subscriptionserving.Module) subscriptionserving.Code {
 	lock, busy, err := host.AcquireSubscriptionReviewLock(hostSetupSpec.LockPath)
 	if err != nil || busy {
 		return subscriptionserving.Refused
@@ -90,7 +105,6 @@ func ServeSubscription(ctx context.Context, lifecycle softwarelifecycle.Interfac
 	if !ok {
 		return subscriptionserving.Refused
 	}
-	m := subscriptionserving.New(nil, nil)
 	state, code := m.Prepare(facts, host.ServingGeneration(*record.Serving), certificate)
 	if code != subscriptionserving.Ready {
 		return code
@@ -99,7 +113,7 @@ func ServeSubscription(ctx context.Context, lifecycle softwarelifecycle.Interfac
 	if err != nil || !bytes.Equal(body, current) {
 		return subscriptionserving.Refused
 	}
-	listener, err := net.Listen("tcp4", net.JoinHostPort(record.PublicIPv4, "8443"))
+	listener, err := host.BindServingListener(record.PublicIPv4)
 	if err != nil {
 		return subscriptionserving.Refused
 	}

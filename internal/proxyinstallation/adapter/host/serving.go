@@ -281,6 +281,10 @@ func (a Adapter) ServingPublicIPv4(ctx context.Context, expected string) bool {
 	return a.publicIPv4 != nil && a.publicIPv4(ctx) == expected
 }
 
+func (a Adapter) BindServingListener(ip string) (net.Listener, error) {
+	return net.Listen("tcp4", net.JoinHostPort(ip, "8443"))
+}
+
 func (a Adapter) ReadServingConfiguration(spec SetupSpec, expected string) ([]byte, error) {
 	// The fixed root-only service can read root-owned 0640 configuration without
 	// spawning getent or retaining raw process output inside its sandbox.
@@ -329,36 +333,68 @@ func (a Adapter) ServingQuiescent() bool {
 	return l.Close() == nil
 }
 
-// RemoveServingRuntime is repeatable only under already committed removal
-// authority and the Whole-Host Mutation Lock. All steps re-observe exact files;
-// late errors leave full provenance in the unchanged Ownership Record.
-func (a Adapter) RemoveServingRuntime(ctx context.Context, authority ServingAuthority) bool {
-	if !a.InspectServingFiles(authority, true).Accepted {
-		return false
+type ServingExclusion struct {
+	root  string
+	files []*os.File
+}
+
+func (e *ServingExclusion) Release() {
+	if e != nil {
+		for _, file := range e.files {
+			file.Close()
+		}
+		e.files = nil
 	}
+}
+
+func (a Adapter) AcquireServingExclusion() (*ServingExclusion, bool) {
+	exclusion := &ServingExclusion{root: a.root}
+	accepted := false
+	defer func() {
+		if !accepted {
+			exclusion.Release()
+		}
+	}()
 	// With no renewal integration in this footprint, use the existing official
 	// shared lock inodes to exclude Certbot while removing its owned material.
 	// Missing locks refuse; this read/remove path must not create shared state.
 	for _, path := range certbotDirectoryLocks {
 		if a.safeParents(path) != nil {
-			return false
+			return nil, false
 		}
 		file, err := os.OpenFile(a.path(path), os.O_RDWR|syscall.O_NOFOLLOW, 0)
 		if err != nil {
-			return false
+			return nil, false
 		}
-		defer file.Close()
+		exclusion.files = append(exclusion.files, file)
 		info, err := file.Stat()
 		stat, ok := infoSys(info)
 		if err != nil || !ok || !info.Mode().IsRegular() || stat.Uid != a.ownerUID() || stat.Nlink != 1 || info.Mode().Perm()&0022 != 0 {
-			return false
+			return nil, false
 		}
 		lock := syscall.Flock_t{Type: syscall.F_WRLCK, Whence: io.SeekStart}
 		if syscall.FcntlFlock(file.Fd(), syscall.F_SETLK, &lock) != nil {
-			return false
+			return nil, false
 		}
 		current, err := os.Lstat(a.path(path))
 		if err != nil || !os.SameFile(info, current) {
+			return nil, false
+		}
+	}
+	accepted = true
+	return exclusion, true
+}
+
+// RemoveServingRuntime requires retained precommit exclusion. It never opens
+// another descriptor for those POSIX lock inodes (closing it would unlock them).
+func (a Adapter) RemoveServingRuntime(ctx context.Context, authority ServingAuthority, exclusion *ServingExclusion) bool {
+	if exclusion == nil || exclusion.root != a.root || len(exclusion.files) != len(certbotDirectoryLocks) || !a.InspectServingFiles(authority, true).Accepted {
+		return false
+	}
+	for i, file := range exclusion.files {
+		info, err := file.Stat()
+		current, e := os.Lstat(a.path(certbotDirectoryLocks[i]))
+		if err != nil || e != nil || !os.SameFile(info, current) {
 			return false
 		}
 	}

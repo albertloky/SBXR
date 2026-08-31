@@ -76,11 +76,12 @@ enablement remains disabled. Subscription Capability Status remains
 proxy remains independently `Running`. #348–#350 must extend the complete
 contract before introducing their writers, creation, enablement and recovery.
 
-Complete removal first commits the existing forward-only Ownership Record,
-retaining all serving provenance. Under whole-host authority, the Host Adapter
-locks all three existing official Certbot directory-lock inodes with nonblocking
-POSIX locks. Missing/unsafe/busy locks refuse without creating or replacing
-them. It stops the fixed service, proves cgroup-v2 descendant quiescence and
+Before committing removal, the Host Adapter locks all three existing official
+Certbot directory-lock inodes with nonblocking POSIX locks under whole-host
+authority. Missing/unsafe/busy locks refuse without changing durable authority
+or creating/replacing shared files. The commitment retains all serving
+provenance and the exclusion remains held through cleanup. Finish removal
+reacquires that same exclusion. It stops the fixed service, proves cgroup-v2 descendant quiescence and
 listener closure, removes only exact owned material with directory sync after
 each deletion, reloads systemd, and proves absence before proxy/software
 deletion. Retry re-observes partial deletions; it never restores serving or
@@ -92,6 +93,8 @@ record without changing legacy schema-1 or subscription-absent schema-2 rules.
 
 Automated checks use real TLS with a test trust root, owning Module/Adapter
 boundaries, production command construction, removal recovery and restoration.
+The successful private dispatch composition uses the approved test Host Adapter
+and a test trust root while crossing real profile extraction and HTTPS serving.
 Linux-only subprocess checks exercise actual inaccessible mounts and capability
 removal with synthetic cgroup membership; they explicitly skip without root
 mount capability. This is not actual systemd service launch, public CA trust,

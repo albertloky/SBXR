@@ -999,18 +999,31 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 			record.Phase, record.Direction, record.RemovalCheckpoint, record.CleanupCheckpoint = removalCommitted, removalRequired, 0, 0
 		}
 		record = removalAuthority(record, authority.release)
+		var exclusion *hostadapter.ServingExclusion
+		if record.Serving != nil {
+			host, ok := module.host.(servingRemovalHost)
+			if !ok {
+				return refused(authority.status, "Serving exclusion", "Restore supported serving inspection before removal.")
+			}
+			var acquired bool
+			exclusion, acquired = host.AcquireServingExclusion()
+			if !acquired {
+				return refused(authority.status, "Certbot exclusion", "Wait for Certbot to finish or restore its protected lock files, then review Complete removal again.")
+			}
+			defer exclusion.Release()
+		}
 		next := ownershipBytes(record)
 		if err := module.host.PublishOwnership(hostSetupSpec.OwnershipPath, hostSetupSpec.OwnershipNextPath, current, next); err != nil {
 			if committed, readErr := module.readOwnership(); readErr == nil {
 				if committedRecord, ok := decodeOwnership(committed); ok && bytes.Equal(committed, next) && committedRecord.Direction == removalRequired && finishingRelease(committedRecord) == authority.release {
-					return module.finishRemoval(ctx, committedRecord, committed, progress)
+					return module.finishRemoval(ctx, committedRecord, committed, progress, exclusion)
 				}
 			}
 			return refused(authority.status, "Removal commitment", "Review Complete removal again.")
 		}
 		report(progress, string(removalCommitted))
 		packageLocks.Release()
-		return module.finishRemoval(ctx, record, next, progress)
+		return module.finishRemoval(ctx, record, next, progress, exclusion)
 	}
 	lock, busy, err := module.host.AcquireMutationLock(hostSetupSpec.LockPath)
 	if err != nil || busy {
@@ -1041,7 +1054,7 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 			}
 		}
 		packageLocks.Release()
-		return module.finishRemoval(ctx, record, current, progress)
+		return module.finishRemoval(ctx, record, current, progress, nil)
 	}
 	if authority.action == FinishCleanupAction {
 		record, current, ok := module.revalidateFinishingAuthority(context.WithoutCancel(ctx), authority, lock)
@@ -1295,7 +1308,7 @@ func (module *installedInterface) cleanup(ctx context.Context, record ownershipR
 	return Result{Status: NotSetUp, Message: "Setup was safely cleaned up. No proxy resources remain.", Code: SetupCleanedUp}
 }
 
-func (module *installedInterface) finishRemoval(ctx context.Context, record ownershipRecord, body []byte, progress ProgressReporter) Result {
+func (module *installedInterface) finishRemoval(ctx context.Context, record ownershipRecord, body []byte, progress ProgressReporter, exclusion *hostadapter.ServingExclusion) Result {
 	lifecycle, ok := module.lifecycle.(removalLifecycle)
 	if !ok || record.Direction != removalRequired || record.Phase != removalCommitted {
 		return removalInterrupted("Removal authority")
@@ -1305,7 +1318,18 @@ func (module *installedInterface) finishRemoval(ctx context.Context, record owne
 	}
 	if record.Serving != nil {
 		host, ok := module.host.(servingRemovalHost)
-		if !ok || !host.RemoveServingRuntime(context.WithoutCancel(ctx), *record.Serving) || !host.ServingRuntimeAbsent(*record.Serving) {
+		if !ok {
+			return removalInterrupted("Subscription Serving exclusion")
+		}
+		if exclusion == nil {
+			var acquired bool
+			exclusion, acquired = host.AcquireServingExclusion()
+			if !acquired {
+				return removalInterrupted("Subscription Serving exclusion")
+			}
+			defer exclusion.Release()
+		}
+		if !host.RemoveServingRuntime(context.WithoutCancel(ctx), *record.Serving, exclusion) || !host.ServingRuntimeAbsent(*record.Serving) {
 			return removalInterrupted("Subscription Serving removal")
 		}
 		report(progress, "Subscription Serving removed")

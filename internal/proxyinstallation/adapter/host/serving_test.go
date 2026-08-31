@@ -1,8 +1,10 @@
 package host
 
 import (
+	"bufio"
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -77,6 +79,16 @@ func servingFiles(t *testing.T) (Adapter, ServingAuthority) {
 	return a, authority
 }
 
+func removeServing(t *testing.T, a Adapter, authority ServingAuthority) bool {
+	t.Helper()
+	exclusion, ok := a.AcquireServingExclusion()
+	if !ok {
+		return false
+	}
+	defer exclusion.Release()
+	return a.RemoveServingRuntime(t.Context(), authority, exclusion)
+}
+
 func TestServingFilesAndRemovalPreserveUnrelatedLineages(t *testing.T) {
 	a, authority := servingFiles(t)
 	if !a.InspectServingFiles(authority, false).Accepted {
@@ -86,13 +98,13 @@ func TestServingFilesAndRemovalPreserveUnrelatedLineages(t *testing.T) {
 	if err := os.Mkdir(unrelated, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if !a.RemoveServingRuntime(t.Context(), authority) || !a.ServingRuntimeAbsent(authority) {
+	if !removeServing(t, a, authority) || !a.ServingRuntimeAbsent(authority) {
 		t.Fatal("runtime removal failed")
 	}
 	if _, err := os.Stat(unrelated); err != nil {
 		t.Fatal("unrelated lineage removed")
 	}
-	if !a.RemoveServingRuntime(t.Context(), authority) {
+	if !removeServing(t, a, authority) {
 		t.Fatal("repeated removal failed")
 	}
 }
@@ -109,11 +121,11 @@ func TestServingRemovalResumesAfterEveryUnlinkSynchronizationFailure(t *testing.
 				}
 				return nil
 			}
-			if a.RemoveServingRuntime(t.Context(), authority) {
+			if removeServing(t, a, authority) {
 				t.Fatal("synchronization failure accepted")
 			}
 			a.syncDirectoryFault = nil
-			if !a.RemoveServingRuntime(t.Context(), authority) || !a.ServingRuntimeAbsent(authority) {
+			if !removeServing(t, a, authority) || !a.ServingRuntimeAbsent(authority) {
 				t.Fatal("removal recovery failed")
 			}
 		})
@@ -135,9 +147,54 @@ func TestServingFilesRefuseUnsafeOwnershipLinksAndUnknownState(t *testing.T) {
 		t.Run("unsafe", func(t *testing.T) {
 			a, authority := servingFiles(t)
 			mutate(a)
-			if a.InspectServingFiles(authority, false).Accepted || a.RemoveServingRuntime(t.Context(), authority) {
+			if a.InspectServingFiles(authority, false).Accepted || removeServing(t, a, authority) {
 				t.Fatal("unsafe serving material accepted")
 			}
 		})
+	}
+}
+
+func TestServingExclusionRefusesBusyOrMissingOfficialLockInodes(t *testing.T) {
+	a, _ := servingFiles(t)
+	path := a.path(certbotDirectoryLocks[0])
+	child := exec.Command(os.Args[0], "-test.run=^TestSubscriptionCertbotLockChild$")
+	child.Env = append(os.Environ(), "SBXR_TEST_CERTBOT_LOCK="+path)
+	input, err := child.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := child.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child.Start() != nil {
+		t.Fatal("lock child failed")
+	}
+	t.Cleanup(func() { input.Close(); child.Wait() })
+	if line, err := bufio.NewReader(output).ReadString('\n'); err != nil || line != "locked\n" {
+		t.Fatal("lock readiness failed")
+	}
+	if exclusion, ok := a.AcquireServingExclusion(); ok {
+		exclusion.Release()
+		t.Fatal("active Certbot admitted")
+	}
+	input.Close()
+	if child.Wait() != nil {
+		t.Fatal("lock child exit failed")
+	}
+	exclusion, ok := a.AcquireServingExclusion()
+	if !ok {
+		t.Fatal("released Certbot locks refused")
+	}
+	exclusion.Release()
+	if os.Remove(path) != nil {
+		t.Fatal("lock removal fixture failed")
+	}
+	if exclusion, ok := a.AcquireServingExclusion(); ok {
+		exclusion.Release()
+		t.Fatal("missing lock authority accepted")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("missing shared lock recreated")
 	}
 }
