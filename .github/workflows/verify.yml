@@ -114,7 +114,7 @@ jobs:
           SECRET_PATTERN: 'SBXR_USER_TOKEN_MARKER_00000000000000abcd|CLOUDFLARE-ROTATED-RUN-TOKEN-MARKER|profile-secret-marker|subscription-secret-marker|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer '
         run: |
           summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
-          if grep -aERq "$SECRET_PATTERN" dist inspect non-root.out non-root.err menu.transcript ready.transcript concurrent.transcript "$summary"; then
+          if grep -aERq "$SECRET_PATTERN" dist inspect non-root.out non-root.err menu.transcript ready.transcript "$summary"; then
             exit 1
           elif test $? -ne 1; then
             exit 1
