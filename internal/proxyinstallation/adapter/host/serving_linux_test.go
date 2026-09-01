@@ -76,7 +76,7 @@ func TestServingSandboxChild(t *testing.T) {
 	if errno != 0 {
 		t.Fatal("capability drop failed")
 	}
-	if !(Adapter{root: "/"}).ValidateServingDispatch(authority) {
+	if !(Adapter{root: "/"}).ValidateServingDispatch(authority, nil) {
 		t.Fatal("protected dispatch refused")
 	}
 	for _, path := range []string{ServingTokenPath, ServingStagingPath} {
