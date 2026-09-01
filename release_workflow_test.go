@@ -450,6 +450,14 @@ func TestCandidatePreflightUsesOnlyCanonicalQualificationActions(t *testing.T) {
 	}
 	workflow := string(body)
 	preflight := workflow[strings.Index(workflow, "  preflight:"):strings.Index(workflow, "  build:")]
+	if !strings.Contains(preflight, "bash .github/scripts/release-history.sh release-facts.json") {
+		t.Fatal("preflight must invoke the shared history collector")
+	}
+	history, err := os.ReadFile(".github/scripts/release-history.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	preflight += string(history)
 	for _, required := range []string{
 		`schema:"sbxr-release-qualification-facts-v1"`,
 		`stage:"candidate-preflight"`,
