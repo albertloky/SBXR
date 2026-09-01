@@ -3070,17 +3070,18 @@ func TestSoftwareUpdateAdmissionUsesExactIdleProxyAuthorityAndBothReleases(t *te
 	rotate := installation.Review(t.Context(), RotateClientIdentityAction)
 	installation.Execute(t.Context(), *rotate.Prepared, Approved, nil)
 	source := testInstalledIdentity()
-	compatible := softwarelifecycle.UpdateTarget{Identity: source, Executable: []byte(expandedProxyAuthorityCapability)}
+	support := &softwarelifecycle.ReleaseSupport{Scope: softwarelifecycle.RecurringSubscriptionUpgrade, Contract: softwarelifecycle.SubscriptionUpdateContract, Sources: []softwarelifecycle.ReleaseIdentity{source}}
+	compatible := softwarelifecycle.UpdateTarget{Support: support, Identity: source, Executable: []byte(expandedProxyAuthorityCapability)}
 	if !AdmitSoftwareUpdate(host.ownership, source, nil) || !AdmitSoftwareUpdate(host.ownership, source, &compatible) {
 		t.Fatal("compatible source was refused")
 	}
 	target := source
 	target.Tag, target.Commit = "v3.0.1", strings.Repeat("c", 40)
-	unsupported := softwarelifecycle.UpdateTarget{Identity: target, Executable: []byte("no declared capability")}
+	unsupported := softwarelifecycle.UpdateTarget{Support: support, Identity: target, Executable: []byte("no declared capability")}
 	if AdmitSoftwareUpdate(host.ownership, source, &unsupported) {
 		t.Fatal("candidate without expanded-authority compatibility was admitted")
 	}
-	supported := softwarelifecycle.UpdateTarget{Identity: target, Executable: []byte("prefix " + expandedProxyAuthorityCapability + " suffix")}
+	supported := softwarelifecycle.UpdateTarget{Support: support, Identity: target, Executable: []byte("prefix " + expandedProxyAuthorityCapability + " suffix")}
 	if !AdmitSoftwareUpdate(host.ownership, source, &supported) {
 		t.Fatal("candidate with expanded-authority compatibility was refused")
 	}

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -91,7 +92,11 @@ func TestGeneratedInstallerSupportsOnlyFixedUbuntuHosts(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newInstallerFixture(t)
 			test.change(t, fixture)
+			before := installerAuthoritySnapshot(t, fixture.root)
 			body, err := exec.Command("bash", fixture.script).CombinedOutput()
+			if after := installerAuthoritySnapshot(t, fixture.root); !reflect.DeepEqual(before, after) {
+				t.Fatal("refusal changed installation authority")
+			}
 			if err == nil || strings.TrimSpace(string(body)) != "SOFTWARE-LIFECYCLE-INSTALL-HOST-REFUSED" {
 				t.Fatalf("unsupported host = %v, %q", err, body)
 			}
@@ -433,7 +438,7 @@ func TestGeneratedInstallerIsANoopForExactCurrent(t *testing.T) {
 	}
 }
 
-func TestGeneratedInstallerRepairsOrReplacesReclaimableStates(t *testing.T) {
+func TestGeneratedInstallerRefusesRemainingInstallationStates(t *testing.T) {
 	for _, test := range []struct {
 		name   string
 		change func(t *testing.T, fixture installerFixture)
@@ -483,10 +488,10 @@ func TestGeneratedInstallerRepairsOrReplacesReclaimableStates(t *testing.T) {
 			}
 			test.change(t, fixture)
 			body, err := exec.Command("bash", fixture.script).CombinedOutput()
-			if err != nil || !strings.Contains(string(body), "SOFTWARE-LIFECYCLE-INSTALL-INSTALLED") {
+			if err == nil || !strings.Contains(string(body), "SOFTWARE-LIFECYCLE-INSTALL-PATH-REFUSED") {
 				t.Fatalf("replacement = %v, %q", err, body)
 			}
-			assertInstalledFixture(t, fixture.root, fixture.executable)
+
 		})
 	}
 }
@@ -507,7 +512,7 @@ func TestGeneratedInstallerRefusesAValidHigherSequenceUnchanged(t *testing.T) {
 	}
 }
 
-func TestGeneratedInstallerKeepsReclamationInsidePhysicalUnmountedPaths(t *testing.T) {
+func TestGeneratedInstallerRefusesOccupiedPathsWithoutFollowingLinks(t *testing.T) {
 	t.Run("does not follow links", func(t *testing.T) {
 		fixture := newInstallerFixture(t)
 		outside := filepath.Join(fixture.root, "fixtures/outside")
@@ -520,7 +525,7 @@ func TestGeneratedInstallerKeepsReclamationInsidePhysicalUnmountedPaths(t *testi
 
 		body, err := exec.Command("bash", fixture.script).CombinedOutput()
 		kept, _ := os.ReadFile(outside)
-		if err != nil || !strings.Contains(string(body), "SOFTWARE-LIFECYCLE-INSTALL-INSTALLED") || string(kept) != "keep" {
+		if err == nil || !strings.Contains(string(body), "SOFTWARE-LIFECYCLE-INSTALL-PATH-REFUSED") || string(kept) != "keep" {
 			t.Fatalf("linked path = %v, %q, outside %q", err, body, kept)
 		}
 	})
@@ -608,7 +613,7 @@ func TestGeneratedInstallerReportsConcurrencyPrerequisiteAndInterruption(t *test
 	}
 }
 
-func TestGeneratedInstallerDefersSignalAfterReclamationUntilInstalled(t *testing.T) {
+func TestGeneratedInstallerRefusesOccupiedPathBeforeInstallEffects(t *testing.T) {
 	fixture := newInstallerFixture(t)
 	if err := os.MkdirAll(filepath.Join(fixture.root, "usr/local/bin/sbxr"), 0o755); err != nil {
 		t.Fatal(err)
@@ -618,10 +623,12 @@ func TestGeneratedInstallerDefersSignalAfterReclamationUntilInstalled(t *testing
 	}
 
 	body, err := exec.Command("bash", fixture.script).CombinedOutput()
-	if err == nil || !strings.Contains(string(body), "SOFTWARE-LIFECYCLE-INSTALL-INSTALLED") {
+	if err == nil || !strings.Contains(string(body), "SOFTWARE-LIFECYCLE-INSTALL-PATH-REFUSED") {
 		t.Fatalf("deferred signal = %v, %q", err, body)
 	}
-	assertInstalledFixture(t, fixture.root, fixture.executable)
+	if info, err := os.Stat(filepath.Join(fixture.root, "usr/local/bin/sbxr")); err != nil || !info.IsDir() {
+		t.Fatal("occupied path changed")
+	}
 }
 
 func TestGeneratedInstallerRefusesProvenHistoricalFullProductUnchanged(t *testing.T) {
@@ -666,10 +673,12 @@ func TestGeneratedInstallerDoesNotTrustAForgedHistoricalSelfReport(t *testing.T)
 		t.Fatal(err)
 	}
 
-	if result, err := exec.Command("bash", fixture.script).CombinedOutput(); err != nil {
+	if result, err := exec.Command("bash", fixture.script).CombinedOutput(); err == nil || !strings.Contains(string(result), "SOFTWARE-LIFECYCLE-INSTALL-PATH-REFUSED") {
 		t.Fatalf("install over forged legacy identity = %v, %q", err, result)
 	}
-	assertInstalledFixture(t, fixture.root, fixture.executable)
+	if link, err := os.Readlink(filepath.Join(fixture.root, "usr/local/bin/sbxr")); err != nil || link != target {
+		t.Fatal("existing link changed")
+	}
 }
 
 func writeHistoricalReleaseFixture(t *testing.T, root, commit string, executable []byte) string {
@@ -978,5 +987,56 @@ func assertInstalledFixture(t *testing.T, root string, wantExecutable []byte) {
 	}
 	if info, err := record.Stat(); err != nil || info.Mode().Perm() != 0o600 || info.Size() > 4096 {
 		t.Fatalf("installed record mode = %v, %v", info, err)
+	}
+}
+
+func installerAuthoritySnapshot(t *testing.T, root string) map[string]string {
+	t.Helper()
+	result := map[string]string{}
+	for _, name := range []string{"usr/local/bin/sbxr", "var/lib/sbxr"} {
+		err := filepath.Walk(filepath.Join(root, name), func(path string, info os.FileInfo, err error) error {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			result[path] = info.Mode().String()
+			if info.Mode().IsRegular() {
+				body, err := os.ReadFile(path)
+				if err != nil {
+					return err
+				}
+				result[path] += string(body)
+			}
+			if info.Mode()&os.ModeSymlink != 0 {
+				target, err := os.Readlink(path)
+				if err != nil {
+					return err
+				}
+				result[path] += target
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return result
+}
+
+func TestGeneratedInstallerRefusesOrphanedProxyResources(t *testing.T) {
+	fixture := newInstallerFixture(t)
+	name := filepath.Join(fixture.root, "etc/sing-box/config.json")
+	if err := os.MkdirAll(filepath.Dir(name), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(name, []byte("preserve existing resource"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	body, err := exec.Command("bash", fixture.script).CombinedOutput()
+	kept, readErr := os.ReadFile(name)
+	if err == nil || !strings.Contains(string(body), "SOFTWARE-LIFECYCLE-INSTALL-PATH-REFUSED") || readErr != nil || string(kept) != "preserve existing resource" {
+		t.Fatalf("orphaned resource=%v %s", err, body)
 	}
 }

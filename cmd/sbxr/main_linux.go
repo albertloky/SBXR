@@ -20,7 +20,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "SBXR requires root authority.\nRun: sudo sbxr")
 		os.Exit(1)
 	}
-	lifecycle := softwarelifecycle.NewInstalledWithUpdateAdmission(githubadapter.New(), proxyinstallation.AdmitSoftwareUpdate)
+	lifecycle := softwarelifecycle.NewInstalledWithUpdateRuntime(githubadapter.New(), proxyinstallation.AdmitSoftwareUpdate, proxyinstallation.SoftwareUpdateRuntime())
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 	go func() {

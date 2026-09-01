@@ -78,7 +78,7 @@ func (a Adapter) WithRuntimeStart(ctx context.Context, lock *MutationLock, role 
 		request := make([]byte, len(role)+1)
 		uid, peerOK := runtimePeerUID(connection)
 		_, err = io.ReadFull(connection, request)
-		if !peerOK || uid != a.ownerUID() || err != nil || string(request) != role+"\n" {
+		if !peerOK || uid != a.ownerUID() || err != nil || string(request) != role+"\n" || !a.updateRuntimePeerAccepted(connection, role) {
 			done <- false
 			return
 		}
@@ -128,4 +128,17 @@ func (a Adapter) BorrowRuntimeStartLock(role string) (*MutationLock, error) {
 	}
 	syscall.CloseOnExec(fds[0])
 	return softwarelifecycle.BorrowRuntimeLock(os.NewFile(uintptr(fds[0]), "runtime lock"), a.path("/run/lock/sbxr.lock"), a.ownerUID())
+}
+
+// The service sandbox hides /proc. The parent verifies the peer executable
+// before lending authority for a committed update's private serving start.
+func (a Adapter) updateRuntimePeerAccepted(connection *net.UnixConn, role string) bool {
+	if _, err := os.Lstat(a.path("/var/lib/sbxr/update.json")); errors.Is(err, os.ErrNotExist) {
+		return true
+	} else if err != nil || role != ServingRole {
+		return false
+	}
+	installed, err := a.readInstalledUpdateExecutable()
+	peer, peerErr := runtimePeerExecutable(connection)
+	return err == nil && peerErr == nil && digest(installed) == digest(peer)
 }

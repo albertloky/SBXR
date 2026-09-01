@@ -272,7 +272,7 @@ func (a Adapter) inspectServingFiles(authority ServingAuthority, removing, sandb
 			return Observation{}
 		}
 	}
-	if !a.servingDirectory("/var/lib/sbxr", []string{"installed.json", "proxy-ownership.json", ".proxy-ownership.json.next", "client-identity-target.json", "client-identity-target.json.sbxr-next", "subscription-token", "subscription-serving.json", "subscription-staging", "renewal-attempts.json", ".renewal-attempts.json.next", "renewal-admission.lock", "renewal-writer.lock"}, removing) {
+	if !a.servingDirectory("/var/lib/sbxr", []string{"update.json", ".update.json.next", ".installed.json.prior", ".installed.json.candidate", "installed.json", "proxy-ownership.json", ".proxy-ownership.json.next", "client-identity-target.json", "client-identity-target.json.sbxr-next", "subscription-token", "subscription-serving.json", "subscription-staging", "renewal-attempts.json", ".renewal-attempts.json.next", "renewal-admission.lock", "renewal-writer.lock"}, removing) {
 		return Observation{}
 	}
 	if !sandbox && !a.servingDirectory(ServingStagingPath, nil, removing) {

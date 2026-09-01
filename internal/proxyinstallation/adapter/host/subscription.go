@@ -162,6 +162,14 @@ func (adapter Adapter) PreflightSubscription(ctx context.Context, ipv4 string) S
 	facts.Firewall = observation(code == 0 && strings.Contains(rules, "*filter\n") && strings.Contains(rules, ":INPUT ") && strings.Contains(rules, "\nCOMMIT") && !strings.Contains(rules, "sbxr-subscription"), observed && code == 0)
 	facts.FirewallIdentity = fmt.Sprintf("%x", sha256.Sum256([]byte(rules)))
 
+	return adapter.subscriptionDependencies(ctx, facts)
+}
+
+func (adapter Adapter) subscriptionDependencies(ctx context.Context, facts SubscriptionPreflight) SubscriptionPreflight {
+	command := adapter.subscriptionCommand
+	if command == nil {
+		command = commandOutput
+	}
 	packages, code, observed := command(ctx, "dpkg-query", "--show", "--showformat=${Package} ${db:Status-Status} ${Version}\\n", "snapd", "certbot")
 	if !observed || (code != 0 && code != 1) || code == 0 && strings.TrimSpace(packages) == "" {
 		return facts

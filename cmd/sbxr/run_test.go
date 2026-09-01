@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"io"
 	"strings"
 	"testing"
 
@@ -73,5 +74,84 @@ func TestPrivateRenewalArgumentsAndEnvironmentDoNotAuthorizeExecution(t *testing
 				t.Fatalf("run() = %d output=%q", code, output.String())
 			}
 		})
+	}
+}
+
+type menuLifecycle struct {
+	constructionLifecycle
+	updates, checks, recoveries int
+}
+
+func (m *menuLifecycle) Check(context.Context, softwarelifecycle.ProgressReporter) softwarelifecycle.Result {
+	m.checks++
+	r := m.Status(context.Background())
+	target := *r.Installed
+	target.Tag = "v3.0.22"
+	r.Latest, r.Code = &target, softwarelifecycle.CheckUpdateAvailable
+	return r
+}
+func (m *menuLifecycle) Update(context.Context, softwarelifecycle.ProgressReporter) softwarelifecycle.Result {
+	m.updates++
+	return m.Status(context.Background())
+}
+func (m *menuLifecycle) Recover(context.Context, softwarelifecycle.ProgressReporter) softwarelifecycle.Result {
+	m.recoveries++
+	return m.Status(context.Background())
+}
+func TestProductionMenuLifecycleConfirmation(t *testing.T) {
+	for _, answer := range []string{"", "n", "y"} {
+		t.Run(answer, func(t *testing.T) {
+			lifecycle := &menuLifecycle{}
+			var frame bytes.Buffer
+			run(t.Context(), nil, strings.NewReader("0\n"), &frame, &frame, lifecycle)
+			choice := ""
+			for _, line := range strings.Split(frame.String(), "\n") {
+				if strings.HasSuffix(line, ". Update") {
+					choice = strings.TrimSuffix(line, ". Update")
+				}
+			}
+			if choice == "" || !strings.Contains(frame.String(), ". Check\n") || !strings.Contains(frame.String(), ". Recover\n") {
+				t.Fatalf("missing lifecycle choices: %s", frame.String())
+			}
+			var output bytes.Buffer
+			code := run(t.Context(), nil, strings.NewReader(choice+"\n"+answer+"\n0\n"), &output, &output, lifecycle)
+			want := 0
+			if answer == "y" {
+				want = 1
+			}
+			if code != 0 || lifecycle.updates != want || lifecycle.checks != 1 || !strings.Contains(output.String(), "v3.0.22") || !strings.Contains(output.String(), "Update SBXR? [y/N]") {
+				t.Fatalf("code=%d lifecycle=%+v output=%s", code, lifecycle, output.String())
+			}
+		})
+	}
+}
+
+type failingMenuOutput struct{ needle string }
+
+func (w failingMenuOutput) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), w.needle) {
+		return 0, io.ErrClosedPipe
+	}
+	return len(p), nil
+}
+func TestProductionMenuOutputFailurePreventsApproval(t *testing.T) {
+	lifecycle := &menuLifecycle{}
+	var frame bytes.Buffer
+	run(t.Context(), nil, strings.NewReader("0\n"), &frame, &frame, lifecycle)
+	choice := ""
+	for _, line := range strings.Split(frame.String(), "\n") {
+		if strings.HasSuffix(line, ". Update") {
+			choice = strings.TrimSuffix(line, ". Update")
+		}
+	}
+	if choice == "" {
+		t.Fatal("missing update choice")
+	}
+	for _, needle := range []string{"Target:", "Update SBXR? [y/N]"} {
+		var errors bytes.Buffer
+		code := run(t.Context(), nil, strings.NewReader(choice+"\ny\n0\n"), failingMenuOutput{needle}, &errors, lifecycle)
+		if code != 1 || lifecycle.updates != 0 {
+			t.Fatalf("output failure authorized update: code=%d updates=%d", code, lifecycle.updates)
+		}
 	}
 }

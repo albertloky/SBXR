@@ -38,5 +38,5 @@ func run(ctx context.Context, arguments []string, input io.Reader, output, error
 		}
 		return 1
 	}
-	return terminal.Run(ctx, arguments, input, output, errorOutput, proxyinstallation.NewInstalled(lifecycle))
+	return terminal.Run(ctx, arguments, input, output, errorOutput, proxyinstallation.NewInstalled(lifecycle), lifecycle)
 }

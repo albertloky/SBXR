@@ -25,6 +25,8 @@ var transactionPaths = []string{
 }
 
 type filesystemInspector struct {
+	updateRuntime          *UpdateRuntime
+	requireSupport         bool
 	root                   string
 	uid                    uint32
 	beforeRecoveryMutation func()

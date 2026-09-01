@@ -19,3 +19,36 @@ func TestBuildLatestReleaseIndexUsesPortableAssetFieldNames(t *testing.T) {
 		t.Fatalf("release index asset fields are not portable: %s", text)
 	}
 }
+
+func TestSubscriptionIndexBindsScopeSourcesAndContract(t *testing.T) {
+	assets := []LatestAssetProof{}
+	for _, name := range LatestReleaseIndexedAssetNames() {
+		assets = append(assets, LatestAssetProof{Name: name, Size: 1, SHA256: strings.Repeat("a", 64)})
+	}
+	source := ReleaseIdentity{Repository: Repository, Tag: "v3.0.22", Commit: strings.Repeat("b", 40), IndexSHA256: strings.Repeat("c", 64)}
+	for _, support := range []ReleaseSupport{
+		{Scope: FirstSubscriptionCleanInstall, Sources: []ReleaseIdentity{}, Contract: SubscriptionUpdateContract},
+		{Scope: RecurringSubscriptionUpgrade, Sources: []ReleaseIdentity{source}, Contract: SubscriptionUpdateContract},
+	} {
+		body, err := BuildSubscriptionReleaseIndex("v3.0.23", strings.Repeat("d", 40), 23, assets, support)
+		if err != nil {
+			t.Fatal(err)
+		}
+		proofs := append(append([]LatestAssetProof{}, assets...), LatestAssetProof{Name: "release-index.json", Size: int64(len(body)), SHA256: digestBytes(body)})
+		release, ok := VerifyLatestReleaseIndex(Repository, "v3.0.23", strings.Repeat("d", 40), body, proofs)
+		if !ok || release.Support == nil || release.Support.Scope != support.Scope || supportedUpdate(release, source, true) != (support.Scope == RecurringSubscriptionUpgrade) {
+			t.Fatalf("scope lost: %+v", release)
+		}
+	}
+	for _, support := range []ReleaseSupport{
+		{Scope: FirstSubscriptionCleanInstall, Sources: []ReleaseIdentity{source}, Contract: SubscriptionUpdateContract},
+		{Scope: RecurringSubscriptionUpgrade, Sources: []ReleaseIdentity{}, Contract: SubscriptionUpdateContract},
+		{Scope: RecurringSubscriptionUpgrade, Sources: []ReleaseIdentity{source, source}, Contract: SubscriptionUpdateContract},
+		{Scope: FirstSubscriptionCleanInstall, Contract: SubscriptionUpdateContract},
+		{Scope: FirstSubscriptionCleanInstall, Sources: []ReleaseIdentity{}, Contract: "unknown"},
+	} {
+		if _, err := BuildSubscriptionReleaseIndex("v3.0.23", strings.Repeat("d", 40), 23, assets, support); err == nil {
+			t.Fatalf("invalid support admitted: %+v", support)
+		}
+	}
+}

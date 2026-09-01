@@ -247,7 +247,7 @@ func buildReleaseIndexFile(options indexOptions) error {
 		digest := sha256.Sum256(body)
 		assets = append(assets, softwarelifecycle.LatestAssetProof{Name: name, Size: int64(len(body)), SHA256: hex.EncodeToString(digest[:])})
 	}
-	body, err := softwarelifecycle.BuildLatestReleaseIndex(options.tag, options.commit, options.sequence, assets)
+	body, err := softwarelifecycle.BuildSubscriptionReleaseIndex(options.tag, options.commit, options.sequence, assets, softwarelifecycle.ReleaseSupport{Scope: softwarelifecycle.FirstSubscriptionCleanInstall, Sources: []softwarelifecycle.ReleaseIdentity{}, Contract: softwarelifecycle.SubscriptionUpdateContract})
 	if err != nil {
 		return errors.New("release index refused")
 	}

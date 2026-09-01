@@ -13,12 +13,13 @@ import (
 	"strings"
 
 	"github.com/albertloky/SBXR/internal/proxyinstallation"
+	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 )
 
 var errInputTooLong = errors.New("input line too long")
 
 // Run owns one numbered-menu session.
-func Run(ctx context.Context, arguments []string, input io.Reader, output, errorOutput io.Writer, installation proxyinstallation.Interface) int {
+func Run(ctx context.Context, arguments []string, input io.Reader, output, errorOutput io.Writer, installation proxyinstallation.Interface, lifecycle softwarelifecycle.Interface) int {
 	if len(arguments) != 0 || input == nil || output == nil || errorOutput == nil || installation == nil {
 		if errorOutput != nil {
 			_, _ = io.WriteString(errorOutput, "SBXR accepts no arguments.\nRun: sudo sbxr\n")
@@ -29,7 +30,7 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 	current := installation.Review(ctx, proxyinstallation.StatusAction)
 	latest := current.Result
 	for {
-		if writeFrame(output, current, latest) != nil {
+		if writeFrame(output, current, latest, lifecycle, ctx) != nil {
 			return 1
 		}
 		line, err := readLine(reader)
@@ -49,10 +50,18 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 			return 0
 		}
 		number, parseErr := strconv.Atoi(line)
-		if parseErr != nil || strconv.Itoa(number) != line || number < 1 || number > len(current.LegalActions) {
+		if parseErr != nil || strconv.Itoa(number) != line || number < 1 || number > len(current.LegalActions)+lifecycleChoiceCount(lifecycle) {
 			if _, err := io.WriteString(output, "Enter one of the displayed numbers.\n"); err != nil {
 				return 1
 			}
+			continue
+		}
+		if number > len(current.LegalActions) {
+			if !runLifecycle(ctx, reader, output, lifecycle, number-len(current.LegalActions)) {
+				return 1
+			}
+			current = installation.Review(ctx, proxyinstallation.StatusAction)
+			latest = current.Result
 			continue
 		}
 		action := current.LegalActions[number-1]
@@ -300,13 +309,23 @@ func writeClientConfiguration(output io.Writer, configuration []byte) error {
 	return err
 }
 
-func writeFrame(output io.Writer, review proxyinstallation.Review, result proxyinstallation.Result) error {
+func writeFrame(output io.Writer, review proxyinstallation.Review, result proxyinstallation.Result, lifecycle softwarelifecycle.Interface, ctx context.Context) error {
 	if _, err := fmt.Fprintf(output, "SBXR V3\nVersion: %s\nProxy status: %s\nSubscription status: %s\nProxy traffic availability: %s\nSubscription serving availability: %s\nResult: %s\nCode: %s\n\n", review.Version, review.Status, review.SubscriptionStatus, review.ProxyTraffic, review.SubscriptionServing, result.Message, result.Code); err != nil {
 		return err
 	}
 	for index, action := range review.LegalActions {
 		if _, err := fmt.Fprintf(output, "%d. %s\n", index+1, action); err != nil {
 			return err
+		}
+	}
+	if lifecycle != nil {
+		if err := writeLifecycleResult(output, lifecycle.Status(ctx)); err != nil {
+			return err
+		}
+		for index, label := range []string{"Check", "Update", "Recover"} {
+			if _, err := fmt.Fprintf(output, "%d. %s\n", len(review.LegalActions)+index+1, label); err != nil {
+				return err
+			}
 		}
 	}
 	_, err := io.WriteString(output, "0. Exit\n")

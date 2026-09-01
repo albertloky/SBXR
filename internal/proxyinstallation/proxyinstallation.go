@@ -2682,7 +2682,7 @@ func AdmitSoftwareUpdate(body []byte, source softwarelifecycle.ReleaseIdentity, 
 	if target == nil {
 		return true
 	}
-	if !validReleaseIdentity(target.Identity) || !bytes.Contains(target.Executable, []byte(expandedProxyAuthorityCapability)) {
+	if !validReleaseIdentity(target.Identity) || target.Support == nil || target.Support.Scope != softwarelifecycle.RecurringSubscriptionUpgrade || target.Support.Contract != softwarelifecycle.SubscriptionUpdateContract || !slices.Contains(target.Support.Sources, source) || !bytes.Contains(target.Executable, []byte(expandedProxyAuthorityCapability)) {
 		return false
 	}
 	return true

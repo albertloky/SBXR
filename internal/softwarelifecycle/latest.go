@@ -21,6 +21,7 @@ type latestReleaseIndex struct {
 	Commit     string             `json:"commit"`
 	Sequence   uint64             `json:"sequence"`
 	Assets     []LatestAssetProof `json:"assets"`
+	Support    *ReleaseSupport    `json:"support,omitempty"`
 }
 
 var latestIndexedAssetNames = []string{"install.sh", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz"}
@@ -70,7 +71,11 @@ func VerifyLatestReleaseIndex(repository, tag, commit string, index []byte, proo
 	decoder := json.NewDecoder(bytes.NewReader(index))
 	decoder.DisallowUnknownFields()
 	var document latestReleaseIndex
-	if decoder.Decode(&document) != nil || decoder.Decode(&struct{}{}) != io.EOF || document.Schema != 1 || document.Repository != repository || document.Tag != tag || document.Commit != commit || document.Sequence == 0 || len(document.Assets) != 3 || len(proofs) != 4 {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(index, &fields) != nil {
+		return LatestRelease{}, false
+	}
+	if decoder.Decode(&document) != nil || decoder.Decode(&struct{}{}) != io.EOF || (document.Schema != 1 && document.Schema != 2) || (document.Schema == 1 && (document.Support != nil || len(fields) != 6)) || (document.Schema == 2 && !document.Support.valid()) || document.Repository != repository || document.Tag != tag || document.Commit != commit || document.Sequence == 0 || len(document.Assets) != 3 || len(proofs) != 4 {
 		return LatestRelease{}, false
 	}
 	expected := LatestReleaseIndexedAssetNames()
@@ -96,5 +101,5 @@ func VerifyLatestReleaseIndex(repository, tag, commit string, index []byte, proo
 			return LatestRelease{}, false
 		}
 	}
-	return LatestRelease{Identity: ReleaseIdentity{Repository: repository, Tag: tag, Commit: commit, IndexSHA256: indexSHA256}, Sequence: document.Sequence}, true
+	return LatestRelease{Identity: ReleaseIdentity{Repository: repository, Tag: tag, Commit: commit, IndexSHA256: indexSHA256}, Sequence: document.Sequence, Support: document.Support}, true
 }

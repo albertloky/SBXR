@@ -151,6 +151,7 @@ const (
 )
 
 type updateRecord struct {
+	OwnershipSHA256                string           `json:"ownership_sha256,omitempty"`
 	Schema                         int              `json:"schema"`
 	Checkpoint                     updateCheckpoint `json:"checkpoint"`
 	PriorExecutableSHA256          string           `json:"prior_executable_sha256"`
@@ -209,11 +210,31 @@ func (inspector filesystemInspector) recover(ctx context.Context, progress Progr
 		}
 		return updateResult(RecoveryRequiredState, nil, RecoverRefused, "SBXR recovery was refused because safe recovery could not be proven.")
 	}
+	if reviewed, bound := ctx.Value(reviewKey{}).(Result); bound && (reviewed.recoveryBinding == "" || reviewed.recoveryBinding != digestBytes(updateRecordBytes(record))) {
+		return updateResult(RecoveryRequiredState, nil, RecoverRefused, "Recovery facts changed. Review Recover again.")
+	}
 	if ctx.Err() != nil {
 		return updateResult(RecoveryRequiredState, nil, RecoverRefused, "SBXR recovery was refused because safe recovery could not be proven.")
 	}
 	if progress != nil {
 		progress(Progress{Operation: RecoverOperation, Status: InspectingRecoveryEvidence, Mode: Spinner})
+	}
+	if ctx.Err() != nil {
+		return updateResult(RecoveryRequiredState, nil, RecoverRefused, "Recovery was cancelled before effects. Review Recover again.")
+	}
+	authority := &MutationLockAuthority{file: lock, path: inspector.path(mutationLockPath), uid: inspector.uid}
+	if record.Schema == 2 {
+		body, err := updateOwnership(root)
+		if err != nil || digestBytes(body) != record.OwnershipSHA256 {
+			return updateResult(RecoveryRequiredState, nil, RecoverRefused, "Proxy authority changed. Restore the exact transaction authority before recovery.")
+		}
+		// Admission inspects resource contracts without requiring an active pair:
+		// Prepared may contain the original two-file replacement interruption.
+		_, release, ok := inspector.acquireRuntime(ctx, root, ReleaseIdentity{}, nil, authority)
+		if !ok {
+			return updateResult(RecoveryRequiredState, nil, RecoverRefused, "Recovery contracts are unsafe or busy. Wait for active writers and inspect pending proxy work.")
+		}
+		defer release()
 	}
 	switch record.Checkpoint {
 	case preparedCheckpoint:
@@ -245,6 +266,9 @@ func (inspector filesystemInspector) recover(ctx context.Context, progress Progr
 		}
 		if inspector.beforeRecoveryMutation != nil {
 			inspector.beforeRecoveryMutation()
+		}
+		if !inspector.completeRuntime(ctx, root, record, authority) {
+			return updateResult(RecoveryRequiredState, nil, RecoverFailed, "The committed release needs runtime completion. Review Recover again after correcting the subscription fault.")
 		}
 		if err := cleanupCommitted(root, record); err != nil {
 			return updateResult(RecoveryRequiredState, nil, RecoverFailed, "SBXR recovery could not reach a verified terminal state.")
@@ -501,11 +525,31 @@ func (inspector filesystemInspector) update(ctx context.Context, latest LatestRe
 	if candidate.cell.release.Identity == prior.identity && candidate.cell.release.Sequence == prior.sequence {
 		return updateResult(Ready, &prior.identity, UpdateAlreadyCurrent, "SBXR is already current.")
 	}
-	target := UpdateTarget{Identity: candidate.cell.release.Identity, Executable: candidate.cell.executable}
+	if !supportedUpdate(candidate.cell.release, prior.identity, inspector.requireSupport) {
+		return updateResult(Ready, &prior.identity, UpdateReleaseRefused, CleanInstallCorrection)
+	}
+	if !reviewedUpdateMatches(ctx, prior.identity, candidate.cell.release) {
+		return updateResult(Ready, &prior.identity, UpdateReleaseRefused, "The reviewed release changed. Check again and review the new target.")
+	}
+	target := UpdateTarget{Support: candidate.cell.release.Support, Identity: candidate.cell.release.Identity, Executable: candidate.cell.executable}
 	if !proxyAuthorityAllowsUpdate(root, inspector.updateAdmission, prior.identity, &target) {
 		return updateResult(Ready, &prior.identity, UpdateReleaseRefused, "The update target is incompatible with the installed Proxy Installation authority.")
 	}
+	authority := &MutationLockAuthority{file: lock, path: inspector.path(mutationLockPath), uid: inspector.uid}
+	var ownership []byte
+	if inspector.updateRuntime != nil {
+		var release func()
+		var admitted bool
+		ownership, release, admitted = inspector.acquireRuntime(ctx, root, prior.identity, &target, authority)
+		if !admitted {
+			return updateResult(Ready, &prior.identity, UpdateReleaseRefused, "Proxy or subscription contracts are unsafe or busy. Finish pending work, then Check again.")
+		}
+		defer release()
+	}
 	record := bindUpdateRecord(priorInspection, candidate)
+	if inspector.updateRuntime != nil {
+		record.Schema, record.OwnershipSHA256 = 2, digestBytes(ownership)
+	}
 	if err := prepareUpdate(root, priorInspection, candidate); err != nil {
 		if cleanupPrePrepared(root, record) != nil {
 			return updateResult(RecoveryRequiredState, nil, UpdateRecoveryRequired, "The update needs recovery before normal operations can continue.")
@@ -548,6 +592,9 @@ func (inspector filesystemInspector) update(ctx context.Context, latest LatestRe
 			return updateResult(Ready, &prior.identity, UpdatePriorRestored, "The update failed. The prior release was restored.")
 		}
 		return updateResult(RecoveryRequiredState, nil, UpdateRecoveryRequired, "The update needs recovery before normal operations can continue.")
+	}
+	if !inspector.completeRuntime(ctx, root, record, authority) {
+		return updateResult(RecoveryRequiredState, &candidate.cell.release.Identity, UpdateRecoveryRequired, "The committed release needs runtime completion. Use Recover; do not reinstall or remove authority.")
 	}
 	if err := cleanupCommitted(root, record); err != nil {
 		return updateResult(RecoveryRequiredState, &candidate.cell.release.Identity, UpdateRecoveryRequired, "The update needs recovery before normal operations can continue.")
@@ -627,7 +674,7 @@ func bindCheckpoint(record updateRecord, checkpoint updateCheckpoint) updateReco
 }
 
 func publishUpdateRecord(root *os.Root, record updateRecord, expected updateCheckpoint) error {
-	if record.Schema != 1 || record.Checkpoint != preparedCheckpoint && record.Checkpoint != committedCheckpoint || !validUpdateDigests(record) {
+	if !validUpdateSchema(record) || record.Checkpoint != preparedCheckpoint && record.Checkpoint != committedCheckpoint || !validUpdateDigests(record) {
 		return errors.New("update record refused")
 	}
 	if expected == "" {
@@ -656,7 +703,11 @@ func readUpdateRecord(root *os.Root) (updateRecord, error) {
 		return updateRecord{}, err
 	}
 	var record updateRecord
-	if !decodeExactObject(body, &record) || record.Schema != 1 || record.Checkpoint != preparedCheckpoint && record.Checkpoint != committedCheckpoint || !validUpdateDigests(record) {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(body, &fields) != nil {
+		return updateRecord{}, errors.New("update record refused")
+	}
+	if !decodeExactObject(body, &record) || (record.Schema == 1 && len(fields) != 6) || (record.Schema == 2 && len(fields) != 7) || !validUpdateSchema(record) || record.Checkpoint != preparedCheckpoint && record.Checkpoint != committedCheckpoint || !validUpdateDigests(record) {
 		return updateRecord{}, errors.New("update record refused")
 	}
 	return record, nil
@@ -900,4 +951,8 @@ func syncUpdateDirectory(root *os.Root, name string) error {
 
 func updateResult(state LifecycleState, installed *ReleaseIdentity, code ResultCode, message string) Result {
 	return Result{State: state, Installed: installed, Code: code, Message: message}
+}
+
+func validUpdateSchema(record updateRecord) bool {
+	return record.Schema == 1 && record.OwnershipSHA256 == "" || record.Schema == 2 && hashPattern.MatchString(record.OwnershipSHA256)
 }

@@ -372,7 +372,8 @@ download_or_finish 'release-index.json' "$index" 1048576
 [ -f "$index" ] && [ ! -L "$index" ] || release_refused
 [ "$("$ROOT/usr/bin/wc" -c <"$index")" -le 1048576 ] 2>/dev/null || release_refused
 index_pattern='^\{"schema":1,"repository":"{{.Repository}}","tag":"'"$TAG"'","commit":"'"$COMMIT"'","sequence":[1-9][0-9]*,"assets":\[\{"name":"install\.sh","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\},\{"name":"sbxr-linux-amd64\.tar\.gz","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\},\{"name":"sbxr-linux-arm64\.tar\.gz","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\}\]\}$'
-single_line "$index" && "$ROOT/usr/bin/grep" -Eqx "$index_pattern" "$index" || release_refused
+subscription_index_pattern='^\{"schema":2,"repository":"{{.Repository}}","tag":"'"$TAG"'","commit":"'"$COMMIT"'","sequence":[1-9][0-9]*,"assets":\[\{"name":"install\.sh","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\},\{"name":"sbxr-linux-amd64\.tar\.gz","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\},\{"name":"sbxr-linux-arm64\.tar\.gz","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\}\],"support":\{"scope":"first-subscription-clean-install","sources":\[\],"contract":"sbxr-subscription-update-v1"\}\}$'
+single_line "$index" && { "$ROOT/usr/bin/grep" -Eqx "$index_pattern" "$index" || "$ROOT/usr/bin/grep" -Eqx "$subscription_index_pattern" "$index"; } || release_refused
 index_sequence=$("$ROOT/usr/bin/sed" -n 's/.*"sequence":\([0-9]*\).*/\1/p' "$index")
 if [ "$RESTORING_REMOVAL" -eq 1 ]; then SEQUENCE=$index_sequence; else [ "$index_sequence" = "$SEQUENCE" ] || release_refused; fi
 archive_name="sbxr-linux-$ARCH.tar.gz"
@@ -505,34 +506,12 @@ if [ "$RESTORING_REMOVAL" -eq 1 ]; then
   successful_finish 'SOFTWARE-LIFECYCLE-INSTALL-REMOVAL-RESTORED'
 fi
 
-active_identity=''
-state_identity=''
-if [ -e "$active" ] || [ -L "$active" ]; then
-  before=$("$ROOT/usr/bin/stat" -c '%d:%i:%F' "$active" 2>/dev/null) || path_refused
-  mounted_within "$active" && path_refused
-  active_identity=$("$ROOT/usr/bin/stat" -c '%d:%i:%F' "$active" 2>/dev/null) || path_refused
-  [ "$before" = "$active_identity" ] || path_refused
-fi
-if [ -e "$installed_directory" ] || [ -L "$installed_directory" ]; then
-  before=$("$ROOT/usr/bin/stat" -c '%d:%i:%F' "$installed_directory" 2>/dev/null) || path_refused
-  mounted_within "$installed_directory" && path_refused
-  state_identity=$("$ROOT/usr/bin/stat" -c '%d:%i:%F' "$installed_directory" 2>/dev/null) || path_refused
-  [ "$before" = "$state_identity" ] || path_refused
-fi
-
+# A clean installation never reclaims an existing product or protected state.
+[ ! -e "$active" ] && [ ! -L "$active" ] && [ ! -e "$installed_directory" ] && [ ! -L "$installed_directory" ] || path_refused
+for resource in /etc/sing-box /var/lib/sing-box /usr/bin/sing-box /etc/apt/sources.list.d/sagernet.sources /etc/apt/keyrings/sagernet.asc /etc/systemd/system/sbxr-subscription.service /etc/systemd/system/sbxr-subscription-firewall.service /etc/systemd/system/sing-box.service.d/sbxr-client-identity.conf /etc/letsencrypt/live/sbxr-subscription /etc/letsencrypt/archive/sbxr-subscription /etc/letsencrypt/renewal/sbxr-subscription.conf /etc/letsencrypt/renewal-hooks/deploy/sbxr-subscription /etc/letsencrypt/renewal-hooks/post/sbxr-subscription /etc/systemd/system/snap.certbot.renew.service.d/50-sbxr-recorder.conf; do
+  [ ! -e "$ROOT$resource" ] && [ ! -L "$ROOT$resource" ] || path_refused
+done
 RECLAIMING=1
-if [ -n "$active_identity" ]; then
-  mounted_within "$active" && reclamation_failed
-  [ "$("$ROOT/usr/bin/stat" -c '%d:%i:%F' "$active" 2>/dev/null)" = "$active_identity" ] || reclamation_failed
-  "$ROOT/usr/bin/rm" -rf --one-file-system -- "$active" || reclamation_failed
-  [ ! -e "$active" ] && [ ! -L "$active" ] || reclamation_failed
-fi
-if [ -n "$state_identity" ]; then
-  mounted_within "$installed_directory" && reclamation_failed
-  [ "$("$ROOT/usr/bin/stat" -c '%d:%i:%F' "$installed_directory" 2>/dev/null)" = "$state_identity" ] || reclamation_failed
-  "$ROOT/usr/bin/rm" -rf --one-file-system -- "$installed_directory" || reclamation_failed
-  [ ! -e "$installed_directory" ] && [ ! -L "$installed_directory" ] || reclamation_failed
-fi
 "$ROOT/usr/bin/mkdir" "$ROOT/var/lib/sbxr" || reclamation_failed
 "$ROOT/usr/bin/chmod" 0700 "$ROOT/var/lib/sbxr" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
 "$ROOT/usr/bin/mv" -n "$candidate" "$ROOT/usr/local/bin/sbxr" || reclamation_failed

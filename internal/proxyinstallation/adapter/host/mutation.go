@@ -1157,7 +1157,7 @@ func (adapter Adapter) InspectSubscriptionAbsence(ctx context.Context) Observati
 		}
 		for _, entry := range entries {
 			switch entry.Name() {
-			case "installed.json", "proxy-ownership.json", ".proxy-ownership.json.next", "sing-box_1.13.19_amd64.deb":
+			case "installed.json", "proxy-ownership.json", ".proxy-ownership.json.next", "sing-box_1.13.19_amd64.deb", "update.json", ".update.json.next", ".installed.json.prior", ".installed.json.candidate":
 			default:
 				return observation(false, true)
 			}

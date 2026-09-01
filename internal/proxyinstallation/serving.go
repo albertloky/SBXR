@@ -164,6 +164,13 @@ func serveSubscription(ctx context.Context, lifecycle softwarelifecycle.Interfac
 		return subscriptionserving.Refused
 	}
 	installed := lc.StatusUnderMutationLock(ctx, lock)
+	if installed.State != softwarelifecycle.Ready && borrowed {
+		if committed, ok := lifecycle.(interface {
+			CommittedRuntimeStatus(context.Context, *softwarelifecycle.MutationLockAuthority) softwarelifecycle.Result
+		}); ok {
+			installed = committed.CommittedRuntimeStatus(ctx, lock)
+		}
+	}
 	if installed.State != softwarelifecycle.Ready || installed.Installed == nil {
 		return subscriptionserving.Refused
 	}

@@ -45,7 +45,7 @@ func TestRunReviewsSubscriptionAndRedrawsAfterExactConfirmation(t *testing.T) {
 		t.Run(test.input, func(t *testing.T) {
 			installation := &subscriptionInstallation{}
 			var output bytes.Buffer
-			code := Run(t.Context(), nil, strings.NewReader("4\n"+test.input+"\n0\n"), &output, &output, installation)
+			code := Run(t.Context(), nil, strings.NewReader("4\n"+test.input+"\n0\n"), &output, &output, installation, nil)
 			if code != 0 || !reflect.DeepEqual(installation.confirmations, []proxyinstallation.Confirmation{test.confirmation}) || installation.statusReviews != 2 {
 				t.Fatalf("code=%d confirmations=%v reviews=%d output=%s", code, installation.confirmations, installation.statusReviews, output.String())
 			}
@@ -90,7 +90,7 @@ func (installation *rotationInstallation) Execute(_ context.Context, _ proxyinst
 func TestRunDisplaysRotatedLinkAndExactReplacementWarning(t *testing.T) {
 	installation := &rotationInstallation{}
 	var output bytes.Buffer
-	code := Run(t.Context(), nil, strings.NewReader("2\ny\n\n0\n"), &output, &output, installation)
+	code := Run(t.Context(), nil, strings.NewReader("2\ny\n\n0\n"), &output, &output, installation, nil)
 	for _, want := range []string{"Rotate subscription link? [y/N]", "This link is a reusable credential.", "Replace the old link in Karing. The old link no longer works. Your proxy Client Identity has not changed."} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("missing %q: %s", want, output.String())
@@ -124,7 +124,7 @@ func (installation *repairInstallation) Execute(_ context.Context, _ proxyinstal
 func TestRunConfirmsRepairWithExactPrompt(t *testing.T) {
 	installation := &repairInstallation{}
 	var output bytes.Buffer
-	if code := Run(t.Context(), nil, strings.NewReader("1\ny\n0\n"), &output, &output, installation); code != 0 {
+	if code := Run(t.Context(), nil, strings.NewReader("1\ny\n0\n"), &output, &output, installation, nil); code != 0 {
 		t.Fatalf("Run() = %d output=%s", code, output.String())
 	}
 	for _, want := range []string{"Repair subscription? [y/N]", "Progress: Repairing subscription serving", string(proxyinstallation.SubscriptionRepaired)} {
@@ -138,7 +138,7 @@ func TestRunReportsRepairOutputFailureAfterOneApprovedExecution(t *testing.T) {
 	installation := &repairInstallation{}
 	output := &rotationFailWriter{failAt: string(proxyinstallation.SubscriptionRepaired)}
 	var errors bytes.Buffer
-	code := Run(t.Context(), nil, strings.NewReader("1\ny\n"), output, &errors, installation)
+	code := Run(t.Context(), nil, strings.NewReader("1\ny\n"), output, &errors, installation, nil)
 	if code != 1 || !reflect.DeepEqual(installation.confirmations, []proxyinstallation.Confirmation{proxyinstallation.Approved}) {
 		t.Fatalf("code=%d confirmations=%v output=%s errors=%s", code, installation.confirmations, output.String(), errors.String())
 	}
@@ -148,7 +148,7 @@ func TestRunReportsCommittedRotationDisplayFailure(t *testing.T) {
 	installation := &rotationInstallation{}
 	output := &rotationFailWriter{failAt: "Replace the old link in Karing."}
 	var errors bytes.Buffer
-	code := Run(t.Context(), nil, strings.NewReader("2\ny\n"), output, &errors, installation)
+	code := Run(t.Context(), nil, strings.NewReader("2\ny\n"), output, &errors, installation, nil)
 	if code != 1 || !strings.Contains(errors.String(), string(proxyinstallation.SubscriptionLinkDisplayIncomplete)) || !reflect.DeepEqual(installation.confirmations, []proxyinstallation.Confirmation{proxyinstallation.Approved}) {
 		t.Fatalf("code=%d confirmations=%v output=%s errors=%s", code, installation.confirmations, output.String(), errors.String())
 	}
@@ -183,7 +183,7 @@ func (installation *clientIdentityInstallation) Execute(_ context.Context, _ pro
 func TestRunUsesExactClientIdentityRotationPromptWithoutSecretOutput(t *testing.T) {
 	installation := &clientIdentityInstallation{}
 	var output bytes.Buffer
-	if code := Run(t.Context(), nil, strings.NewReader("1\ny\n0\n"), &output, &output, installation); code != 0 {
+	if code := Run(t.Context(), nil, strings.NewReader("1\ny\n0\n"), &output, &output, installation, nil); code != 0 {
 		t.Fatalf("Run() = %d output=%s", code, output.String())
 	}
 	for _, want := range []string{"Rotate Client Identity? [y/N]", "Progress: Committing Client Identity revocation", string(proxyinstallation.ClientIdentityRotated)} {
@@ -200,7 +200,7 @@ func TestRunReportsClientIdentityResultDisplayFailureAfterCommit(t *testing.T) {
 	installation := &clientIdentityInstallation{}
 	output := &rotationFailWriter{failAt: string(proxyinstallation.ClientIdentityRotated)}
 	var errors bytes.Buffer
-	code := Run(t.Context(), nil, strings.NewReader("1\ny\n"), output, &errors, installation)
+	code := Run(t.Context(), nil, strings.NewReader("1\ny\n"), output, &errors, installation, nil)
 	if code != 1 || !strings.Contains(errors.String(), string(proxyinstallation.ClientIdentityRotationDisplayIncomplete)) || !reflect.DeepEqual(installation.confirmations, []proxyinstallation.Confirmation{proxyinstallation.Approved}) {
 		t.Fatalf("code=%d confirmations=%v output=%s errors=%s", code, installation.confirmations, output.String(), errors.String())
 	}
@@ -210,7 +210,7 @@ func TestRunKeepsEnabledAndUnavailableIdentityRotationSeparateFromDisclosure(t *
 	for _, status := range []proxyinstallation.SubscriptionStatus{proxyinstallation.SubscriptionAvailable, proxyinstallation.SubscriptionProblemDetected} {
 		installation := &clientIdentityInstallation{subscription: status}
 		var output bytes.Buffer
-		if code := Run(t.Context(), nil, strings.NewReader("1\ny\n\n0\n"), &output, &output, installation); code != 0 {
+		if code := Run(t.Context(), nil, strings.NewReader("1\ny\n\n0\n"), &output, &output, installation, nil); code != 0 {
 			t.Fatal(code)
 		}
 		if !strings.Contains(output.String(), "Subscription status: "+string(status)) || !strings.Contains(output.String(), "Rotate Client Identity? [y/N]") || strings.Contains(output.String(), "https://") || strings.Contains(output.String(), "Karing refreshed") || len(installation.confirmations) != 1 {
@@ -258,7 +258,7 @@ func TestRunSubscriptionIOFailureDoesNotGrantAuthority(t *testing.T) {
 			if point == "read" {
 				input = io.MultiReader(strings.NewReader("4\n"), subscriptionFailReader{})
 			}
-			code := Run(t.Context(), nil, input, writer, writer, installation)
+			code := Run(t.Context(), nil, input, writer, writer, installation, nil)
 			postcommit := point == "Progress:" || point == "https://8.8.8.8:8443/s/"
 			if code != 1 || !postcommit && len(installation.confirmations) != 0 {
 				t.Fatalf("code=%d confirmations=%v output=%s", code, installation.confirmations, writer.String())
@@ -302,7 +302,7 @@ func TestRunPresentsAndCancelsTheRealNotSetUpJourney(t *testing.T) {
 	installation := &journeyInstallation{}
 	var output bytes.Buffer
 
-	status := Run(t.Context(), nil, bytes.NewBufferString("1\n\n0\n"), &output, &output, installation)
+	status := Run(t.Context(), nil, bytes.NewBufferString("1\n\n0\n"), &output, &output, installation, nil)
 
 	if status != 0 || !reflect.DeepEqual(installation.actions, []proxyinstallation.Action{proxyinstallation.StatusAction, proxyinstallation.StartSetupAction, proxyinstallation.StatusAction}) || !reflect.DeepEqual(installation.confirmations, []proxyinstallation.Confirmation{proxyinstallation.Declined}) || installation.statusReviews != 2 {
 		t.Fatalf("status=%d actions=%v confirmations=%v statusReviews=%d", status, installation.actions, installation.confirmations, installation.statusReviews)
@@ -326,7 +326,7 @@ func TestRunAcceptsOnlyYOrNConfirmation(t *testing.T) {
 	installation := &journeyInstallation{}
 	var output bytes.Buffer
 
-	status := Run(t.Context(), nil, bytes.NewBufferString("1\nmaybe\ny\n0\n"), &output, &output, installation)
+	status := Run(t.Context(), nil, bytes.NewBufferString("1\nmaybe\ny\n0\n"), &output, &output, installation, nil)
 
 	if status != 0 || !reflect.DeepEqual(installation.confirmations, []proxyinstallation.Confirmation{proxyinstallation.Approved}) || !bytes.Contains(output.Bytes(), []byte("Enter y or n.\nStart proxy setup? [y/N]")) {
 		t.Fatalf("status=%d confirmations=%v output:\n%s", status, installation.confirmations, output.String())
@@ -337,7 +337,7 @@ func TestRunRejectsNonCanonicalMenuNumbers(t *testing.T) {
 	installation := &journeyInstallation{}
 	var output bytes.Buffer
 
-	status := Run(t.Context(), nil, bytes.NewBufferString("+1\n01\n1\n\n0\n"), &output, &output, installation)
+	status := Run(t.Context(), nil, bytes.NewBufferString("+1\n01\n1\n\n0\n"), &output, &output, installation, nil)
 
 	if status != 0 || len(installation.confirmations) != 1 || bytes.Count(output.Bytes(), []byte("Enter one of the displayed numbers.")) != 2 {
 		t.Fatalf("status=%d confirmations=%v output:\n%s", status, installation.confirmations, output.String())
@@ -389,7 +389,7 @@ func TestRunPresentsBothFinishingJourneysAndProgress(t *testing.T) {
 		t.Run(string(test.action), func(t *testing.T) {
 			installation := &finishingInstallation{action: test.action}
 			var output bytes.Buffer
-			status := Run(t.Context(), nil, bytes.NewBufferString("1\ny\n0\n"), &output, &output, installation)
+			status := Run(t.Context(), nil, bytes.NewBufferString("1\ny\n0\n"), &output, &output, installation, nil)
 			if status != 0 || !bytes.Contains(output.Bytes(), []byte(test.prompt)) || !bytes.Contains(output.Bytes(), []byte("Progress: Durable finishing checkpoint")) {
 				t.Fatalf("status=%d output:\n%s", status, output.String())
 			}
@@ -426,7 +426,7 @@ func (installation *subscriptionFinishingInstallation) Execute(_ context.Context
 func TestRunConfirmsAndFinishesCertificateActivation(t *testing.T) {
 	installation := &subscriptionFinishingInstallation{}
 	var output bytes.Buffer
-	if code := Run(t.Context(), nil, strings.NewReader("1\ny\n0\n"), &output, &output, installation); code != 0 {
+	if code := Run(t.Context(), nil, strings.NewReader("1\ny\n0\n"), &output, &output, installation, nil); code != 0 {
 		t.Fatalf("Run() = %d output=%s", code, output.String())
 	}
 	for _, want := range []string{"Finish subscription change? [y/N]", "Progress: Finishing subscription change", "Subscription status: Available", "PROXY-INSTALLATION-SUBSCRIPTION-CHANGE-FINISHED"} {
@@ -456,7 +456,7 @@ func TestRunViewsFreshDetailsAndReinspectsAfterEnter(t *testing.T) {
 	installation := &detailsInstallation{}
 	var output bytes.Buffer
 
-	status := Run(t.Context(), nil, bytes.NewBufferString("1\n\n0\n"), &output, &output, installation)
+	status := Run(t.Context(), nil, bytes.NewBufferString("1\n\n0\n"), &output, &output, installation, nil)
 
 	wantActions := []proxyinstallation.Action{proxyinstallation.StatusAction, proxyinstallation.ViewDetailsAction, proxyinstallation.StatusAction}
 	if status != 0 || !reflect.DeepEqual(installation.actions, wantActions) || !strings.Contains(output.String(), "Fresh inspection: 2\nPress Enter to return to the menu.") {
@@ -497,7 +497,7 @@ func TestRunDisclosesClientConfigurationOnlyInsideConfirmedBoundaries(t *testing
 	installation := &disclosureInstallation{privateKey: "private-infrastructure-secret"}
 	var output bytes.Buffer
 
-	status := Run(t.Context(), nil, bytes.NewBufferString("2\ny\n\n0\n"), &output, &output, installation)
+	status := Run(t.Context(), nil, bytes.NewBufferString("2\ny\n\n0\n"), &output, &output, installation, nil)
 
 	wantActions := []proxyinstallation.Action{proxyinstallation.StatusAction, proxyinstallation.ShowClientConfigurationAction, proxyinstallation.StatusAction}
 	if status != 0 || !reflect.DeepEqual(installation.actions, wantActions) || !reflect.DeepEqual(installation.confirmations, []proxyinstallation.Confirmation{proxyinstallation.Approved}) {
@@ -516,7 +516,7 @@ func TestRunCancelsClientConfigurationDisclosureOnEnterOrN(t *testing.T) {
 		installation := &disclosureInstallation{}
 		var output bytes.Buffer
 
-		status := Run(t.Context(), nil, bytes.NewBufferString("2\n"+confirmation+"\n0\n"), &output, &output, installation)
+		status := Run(t.Context(), nil, bytes.NewBufferString("2\n"+confirmation+"\n0\n"), &output, &output, installation, nil)
 
 		if status != 0 || !reflect.DeepEqual(installation.confirmations, []proxyinstallation.Confirmation{proxyinstallation.Declined}) || strings.Contains(output.String(), "BEGIN SBXR CLIENT CONFIGURATION") || !strings.Contains(output.String(), "Code: PROXY-INSTALLATION-ACTION-CANCELLED") {
 			t.Fatalf("confirmation=%q status=%d confirmations=%v output:\n%s", confirmation, status, installation.confirmations, output.String())
@@ -571,7 +571,7 @@ func TestRunRequiresExactCompleteRemovalConfirmationAndReinspects(t *testing.T) 
 			installation := &removalInstallation{}
 			var output bytes.Buffer
 
-			status := Run(t.Context(), nil, bytes.NewBufferString("1\n"+test.input+"\n0\n"), &output, &output, installation)
+			status := Run(t.Context(), nil, bytes.NewBufferString("1\n"+test.input+"\n0\n"), &output, &output, installation, nil)
 
 			if status != 0 || !reflect.DeepEqual(installation.confirmations, []proxyinstallation.Confirmation{test.confirmation}) || installation.statusReviews != 2 || !strings.Contains(output.String(), "Type REMOVE SBXR to confirm Complete removal") || !strings.Contains(output.String(), "Code: "+string(test.code)) || test.confirmation == proxyinstallation.Approved && !strings.Contains(output.String(), "Progress: Removal committed") {
 				t.Fatalf("status=%d confirmations=%v reviews=%d output:\n%s", status, installation.confirmations, installation.statusReviews, output.String())
@@ -608,7 +608,7 @@ func TestRunFinishesCommittedRemovalAndExitsWithoutRedrawing(t *testing.T) {
 	installation := &finishingRemovalInstallation{}
 	var output bytes.Buffer
 
-	status := Run(t.Context(), nil, bytes.NewBufferString("1\n"), &output, &output, installation)
+	status := Run(t.Context(), nil, bytes.NewBufferString("1\n"), &output, &output, installation, nil)
 
 	if status != 0 || installation.statusReviews != 1 || !strings.Contains(output.String(), "SBXR is not installed.\nCode: SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED") {
 		t.Fatalf("status=%d reviews=%d output:\n%s", status, installation.statusReviews, output.String())
@@ -628,7 +628,7 @@ func (installation *subscriptionStatusInstallation) Review(ctx context.Context, 
 func TestRunRedrawsSeparateSubscriptionStatusWithoutChangingProxyStatus(t *testing.T) {
 	installation := &subscriptionStatusInstallation{}
 	var output bytes.Buffer
-	if code := Run(t.Context(), nil, strings.NewReader("1\n\n0\n"), &output, &output, installation); code != 0 {
+	if code := Run(t.Context(), nil, strings.NewReader("1\n\n0\n"), &output, &output, installation, nil); code != 0 {
 		t.Fatalf("Run = %d", code)
 	}
 	for _, want := range []string{"Proxy status: Running\nSubscription status: Not enabled", "Proxy status: Running\nSubscription status: Problem detected"} {

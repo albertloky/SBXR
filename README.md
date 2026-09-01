@@ -2,7 +2,7 @@
 
 SBXR is a root-only V3 proxy product for one Ubuntu Server. Software Lifecycle installs and updates the `sbxr` executable. Proxy Installation owns the installed proxy journey through a review-first numbered menu.
 
-> Authority: [ADR-0016](docs/adr/0016-v3-proxy-product-and-modules.md) extends the V3 contract for [#342](https://github.com/albertloky/SBXR/issues/342). This is an accepted implementation contract, not a claim that subscription or Client Identity rotation is shipped. The tracer-bullet menu description and Installer-Updater release-pair procedure below are historical snapshots; use ADR-0016 for current boundaries, recurring qualification requirements, and the unresolved actual prior-updater gate.
+> Authority: [ADR-0016](docs/adr/0016-v3-proxy-product-and-modules.md) extends the V3 contract for [#342](https://github.com/albertloky/SBXR/issues/342). This is an accepted implementation contract, not a claim that subscription or Client Identity rotation is shipped. The tracer-bullet menu description and Installer-Updater release-pair procedure below are historical snapshots; use ADR-0016 for current boundaries, recurring qualification requirements, and the approved first-subscription clean-install policy.
 
 ## Supported system
 
@@ -31,18 +31,27 @@ Run the installed product with no arguments:
 sudo sbxr
 ```
 
-Every screen shows the installed version, Proxy Installation Status, latest result, and stable result code. A clean installed host starts at `Not set up` with exactly:
-
-- `1. Start setup` performs fresh read-only preflight and shows a secret-safe plan.
-- `2. View details` shows current secret-safe local facts.
-- `3. Complete removal` is visible but remains unavailable until its reviewed removal slice is implemented.
-- `0. Exit` returns to the shell.
-
-Enter or `n` declines the Start setup plan; `y` is the only approval value. Approved mutation is not part of this tracer bullet and is refused safely. Command arguments execute nothing.
+Every screen shows fresh proxy, subscription, and Software Lifecycle status.
+The same menu lists legal Proxy Installation Actions plus `Check`, `Update`, and
+`Recover`. Numbers follow the currently legal proxy Actions. `Update` shows the
+exact target; `Recover` shows the proved direction. Only `y` approves effects.
+Empty input or `n` cancels. Changed facts require a fresh review.
 
 ## Update and recovery safety
 
-Install, Update, and Recover share one nonblocking mutation lock. Update keeps exact prior and candidate bytes under a strict two-checkpoint transaction. Before `Committed`, recovery can only restore the verified prior release. At or after `Committed`, recovery can only retain the verified candidate and finish cleanup. Contradictory evidence fails closed.
+The first subscription release supports clean installation only. No incoming
+update from `v3.0.21` or earlier is supported. Use the old release's reviewed
+Complete removal, finish an interrupted removal through its exact-release route,
+then install and set up fresh. Expect downtime, new proxy credentials, and new
+client setup. Installation refuses remaining authority or resources.
+
+Future recurring updates require explicit qualified source support. They preserve
+Ownership Record bytes, creating provenance, proxy configuration, and both
+credentials. Before `Committed`, recovery restores the exact prior release.
+After `Committed`, it retains the candidate and finishes Subscription Serving
+runtime verification before clearing the Update Record. It does not restart
+sing-box. See [Software Lifecycle](internal/softwarelifecycle/README.md) for the
+versioned support and transaction contracts.
 
 ## Releases and qualification
 

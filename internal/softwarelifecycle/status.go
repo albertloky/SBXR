@@ -60,12 +60,14 @@ const (
 )
 
 type Result struct {
-	State           LifecycleState
-	Installed       *ReleaseIdentity
-	Latest          *ReleaseIdentity
-	UpdateInstalled bool
-	Code            ResultCode
-	Message         string
+	RecoveryDirection string
+	recoveryBinding   string
+	State             LifecycleState
+	Installed         *ReleaseIdentity
+	Latest            *ReleaseIdentity
+	UpdateInstalled   bool
+	Code              ResultCode
+	Message           string
 }
 
 type ProgressMode string
@@ -97,6 +99,7 @@ type Progress struct {
 type ProgressReporter func(Progress)
 
 type UpdateTarget struct {
+	Support    *ReleaseSupport
 	Identity   ReleaseIdentity
 	Executable []byte
 }
@@ -106,6 +109,7 @@ type UpdateTarget struct {
 type UpdateAdmission func([]byte, ReleaseIdentity, *UpdateTarget) bool
 
 type LatestRelease struct {
+	Support  *ReleaseSupport
 	Identity ReleaseIdentity
 	Sequence uint64
 }
@@ -205,7 +209,11 @@ func (module installedInterface) Status(ctx context.Context) Result {
 	if module.local == nil {
 		return recoveryRequiredResult()
 	}
-	return statusFromInspection(module.local.inspect(ctx))
+	result := statusFromInspection(module.local.inspect(ctx))
+	if inspector, ok := module.local.(filesystemInspector); ok && result.State == RecoveryRequiredState {
+		return inspector.recoveryReview(result)
+	}
+	return result
 }
 
 func (module installedInterface) Check(ctx context.Context, progress ProgressReporter) Result {
@@ -253,6 +261,11 @@ func (module installedInterface) Check(ctx context.Context, progress ProgressRep
 			return base
 		}
 		if latest.Identity != installed.identity && latest.Sequence > installed.sequence {
+			inspector, _ := module.local.(filesystemInspector)
+			if !supportedUpdate(latest, installed.identity, inspector.requireSupport) {
+				base.Code, base.Message = CheckReleaseRefused, CleanInstallCorrection
+				return base
+			}
 			base.Latest = &latest.Identity
 			base.Code = CheckUpdateAvailable
 			base.Message = "A newer qualified SBXR release is available."

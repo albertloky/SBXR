@@ -3,6 +3,7 @@
 package host
 
 import (
+	"errors"
 	"net"
 	"syscall"
 	"unsafe"
@@ -24,4 +25,8 @@ func runtimePeerUID(connection *net.UnixConn) (uint32, bool) {
 		_, _, callErr = syscall.Syscall6(syscall.SYS_GETSOCKOPT, fd, 0, 1, uintptr(unsafe.Pointer(&peer)), uintptr(unsafe.Pointer(&size)), 0)
 	})
 	return peer.UID, err == nil && callErr == 0 && peer.Version == 0
+}
+
+func runtimePeerExecutable(*net.UnixConn) ([]byte, error) {
+	return nil, errors.New("Linux runtime peer proof required")
 }

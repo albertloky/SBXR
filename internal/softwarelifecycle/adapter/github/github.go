@@ -175,7 +175,7 @@ func (source Source) latest(ctx context.Context, archiveName string) (softwareli
 		proofs = append(proofs, softwarelifecycle.LatestAssetProof{Name: name, Size: asset.Size, SHA256: asset.SHA256})
 	}
 	latest, valid := softwarelifecycle.VerifyLatestReleaseIndex(softwarelifecycle.Repository, release.Tag, release.TargetCommitish, index, proofs)
-	if !valid || latest.Sequence != recordSequence {
+	if !valid || latest.Sequence != recordSequence || !qualifiedReleaseSupport(release.Body, latest) {
 		return softwarelifecycle.LatestRelease{}, nil, softwarelifecycle.LatestReleaseRefused
 	}
 	if archiveName == "" {
@@ -397,7 +397,9 @@ func latestAcceptanceRecord(body, tag, commit string, assets map[string]assetMet
 	}
 	legacy := strings.Count(body, "# SBXR Installer-Updater Acceptance Record\n") == 1 && strings.Count(body, "# SBXR Acceptance Record\n") == 0
 	v3 := strings.Count(body, "# SBXR Acceptance Record\n") == 1 && strings.Count(body, "# SBXR Installer-Updater Acceptance Record\n") == 0
+	cleanSubscription := v3 && strings.Count(body, "Stable result code: RELEASE-V3-SUBSCRIPTION-CLEAN-INSTALL-QUALIFICATION\n") == 1
 	recurring := v3 && strings.Count(body, "Stable result code: RELEASE-V3-SUBSCRIPTION-QUALIFICATION\n") == 1
+	subscription := recurring || cleanSubscription
 	if !legacy && !v3 {
 		return "", 0, false
 	}
@@ -405,7 +407,7 @@ func latestAcceptanceRecord(body, tag, commit string, assets map[string]assetMet
 	if v3 {
 		integrated = "Passed on live Ubuntu Server 24.04 amd64 and outside runner"
 	}
-	if recurring {
+	if subscription {
 		integrated = "Passed on live Ubuntu Server 24.04 amd64 and Karing macOS"
 	}
 	required := map[string]string{
@@ -432,7 +434,7 @@ func latestAcceptanceRecord(body, tag, commit string, assets map[string]assetMet
 	secretSafe, secretSafeOK := uniqueRecordValue(body, "Secret-safe result: ")
 	role, roleOK := uniqueRecordValue(body, "Qualification role: ")
 	legacyResult := legacy && (resultCode == "RELEASE-INSTALLER-UPDATER-TWO-RELEASE-QUALIFICATION" || resultCode == "RELEASE-INSTALLER-UPDATER-RESCUE-QUALIFICATION") && qualificationRolePattern.MatchString(role)
-	v3Result := v3 && resultCode == "RELEASE-V3-PACKAGED-LIVE-QUALIFICATION" && role == "Clean-installed V3 release" || recurring && role == "Recurring subscription-capable V3 release"
+	v3Result := v3 && resultCode == "RELEASE-V3-PACKAGED-LIVE-QUALIFICATION" && role == "Clean-installed V3 release" || recurring && role == "Recurring subscription-capable V3 release" || cleanSubscription && role == "Clean-installed subscription-capable V3 release"
 	if !resultOK || !legacyResult && !v3Result || !workflowOK || !workflowEvidencePattern.MatchString(workflow) || !runnerOK || !acceptanceRunnerPattern.MatchString(runner) || !toolchainOK || !goToolchainPattern.MatchString(toolchain) || !verifierOK || verifier != Version+" "+SigningFingerprint || !secretSafeOK || secretSafe != "Passed" || !roleOK {
 		return "", 0, false
 	}
@@ -441,10 +443,10 @@ func latestAcceptanceRecord(body, tag, commit string, assets map[string]assetMet
 		proxyPackage, proxyOK := uniqueRecordValue(body, "Proxy package: ")
 		outsidePackage, outsideOK := uniqueRecordValue(body, "Outside-client package: ")
 		packageIdentity := "sing-box 1.13.19 amd64 fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf"
-		if !detailedOK || !hashPattern.MatchString(detailed) || !proxyOK || proxyPackage != packageIdentity || !recurring && (!outsideOK || outsidePackage != packageIdentity) {
+		if !detailedOK || !hashPattern.MatchString(detailed) || !proxyOK || proxyPackage != packageIdentity || !subscription && (!outsideOK || outsidePackage != packageIdentity) {
 			return "", 0, false
 		}
-		if recurring {
+		if subscription {
 			for prefix, wanted := range map[string]string{
 				"Karing macOS: ": "Passed",
 				"Natural timer firing and naturally due certificate renewal: ": "Not observed",
