@@ -76,6 +76,7 @@ type Adapter struct {
 	renewalProcessIdentity  func(int) (string, uint64, bool)
 	renewalCertificateValid func(RenewalAuthority, int) bool
 	renewalTrustRoots       *x509.CertPool
+	servingLoaded           func(context.Context, RenewalAuthority, ServingAuthority, ServingAuthority) (ServingAuthority, bool)
 	subscriptionBind        func(string, string) bool
 	syncDirectoryFault      func(string) error
 	root                    string

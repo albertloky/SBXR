@@ -67,8 +67,9 @@ func (m *installedInterface) acquireSubscriptionExclusion(record ownershipRecord
 type servingDispatchHost interface {
 	AcquireSubscriptionReviewLock(string) (*hostadapter.MutationLock, bool, error)
 	ReadOwnership(string) ([]byte, error)
-	ValidateServingDispatch(hostadapter.ServingAuthority) bool
+	ValidateServingDispatch(hostadapter.ServingAuthority, *hostadapter.RenewalAuthority) bool
 	ServingPublicIPv4(context.Context, string) bool
+	WatchServingPublicIPv4(context.Context, string) <-chan bool
 	ReadServingConfiguration(hostadapter.SetupSpec, string) ([]byte, error)
 	LoadServingCertificate(hostadapter.ServingAuthority) (subscriptionserving.Certificate, bool)
 	ServingGeneration(hostadapter.ServingAuthority) subscriptionserving.Generation
@@ -136,12 +137,16 @@ func serveSubscription(ctx context.Context, lifecycle softwarelifecycle.Interfac
 	if err != nil || !ok || record.Serving == nil || record.Direction != noDirection || record.Phase != runningPhase || !compatibleOwnership(record, *installed.Installed) {
 		return subscriptionserving.Refused
 	}
+	selected := *record.Serving
+	if record.Activation != nil {
+		selected = record.Activation.Target
+	}
 	for _, path := range []string{hostSetupSpec.OwnershipNextPath, finalOwnershipPath} {
 		if _, err := host.ReadOwnership(path); !errors.Is(err, os.ErrNotExist) {
 			return subscriptionserving.Refused
 		}
 	}
-	if !host.ValidateServingDispatch(*record.Serving) || !host.ServingPublicIPv4(ctx, record.PublicIPv4) {
+	if !host.ValidateServingDispatch(selected, record.Renewal) || !host.ServingPublicIPv4(ctx, record.PublicIPv4) {
 		return subscriptionserving.Refused
 	}
 	configuration, err := host.ReadServingConfiguration(hostSetupSpec, record.ConfigurationSHA256)
@@ -152,11 +157,11 @@ func serveSubscription(ctx context.Context, lifecycle softwarelifecycle.Interfac
 	if err != nil || facts.ServerName != record.DestinationName {
 		return subscriptionserving.Refused
 	}
-	certificate, ok := host.LoadServingCertificate(*record.Serving)
+	certificate, ok := host.LoadServingCertificate(selected)
 	if !ok {
 		return subscriptionserving.Refused
 	}
-	state, code := m.Prepare(facts, host.ServingGeneration(*record.Serving), certificate)
+	state, code := m.Prepare(facts, host.ServingGeneration(selected), certificate)
 	if code != subscriptionserving.Ready {
 		return code
 	}
@@ -169,5 +174,16 @@ func serveSubscription(ctx context.Context, lifecycle softwarelifecycle.Interfac
 		return subscriptionserving.Refused
 	}
 	lock.Release()
-	return m.Serve(ctx, state, listener)
+	servingContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		select {
+		case accepted, ok := <-host.WatchServingPublicIPv4(servingContext, record.PublicIPv4):
+			if ok && !accepted {
+				cancel()
+			}
+		case <-servingContext.Done():
+		}
+	}()
+	return m.Serve(servingContext, state, listener)
 }

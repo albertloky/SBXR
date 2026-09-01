@@ -154,6 +154,23 @@ func TestServingFilesRefuseUnsafeOwnershipLinksAndUnknownState(t *testing.T) {
 	}
 }
 
+func TestServingRemovalDeletesProvedCertificateHistory(t *testing.T) {
+	a, authority := servingFiles(t)
+	for _, name := range certificateNames {
+		mode := os.FileMode(0644)
+		if name == "privkey" {
+			mode = 0600
+		}
+		body, err := os.ReadFile(a.path(servingArchive + "/" + name + "1.pem"))
+		if err != nil || os.WriteFile(a.path(servingArchive+"/"+name+"2.pem"), body, mode) != nil {
+			t.Fatal("create proved certificate history")
+		}
+	}
+	if !removeServing(t, a, authority) || !a.ServingRuntimeAbsent(authority) {
+		t.Fatal("proved certificate history prevented removal")
+	}
+}
+
 func TestServingExclusionRefusesBusyOrMissingOfficialLockInodes(t *testing.T) {
 	a, _ := servingFiles(t)
 	path := a.path(certbotDirectoryLocks[0])
@@ -196,5 +213,56 @@ func TestServingExclusionRefusesBusyOrMissingOfficialLockInodes(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatal("missing shared lock recreated")
+	}
+}
+
+func TestCertificateActivationInspectionBindsOnePublishedGenerationAndLoadedState(t *testing.T) {
+	a, accepted := servingFiles(t)
+	renewal := RenewalAuthority{RecorderID: strings.Repeat("1", 32), Lineage: "sbxr-subscription", PublicIPv4: "8.8.8.8", Invocation: OfficialRenewalInvocation}
+	a.publicIPv4 = func(context.Context) string { return renewal.PublicIPv4 }
+	a.renewalCertificateValid = func(_ RenewalAuthority, generation int) bool { return generation == 2 }
+	a.servingLoaded = func(context.Context, RenewalAuthority, ServingAuthority, ServingAuthority) (ServingAuthority, bool) {
+		return accepted, true
+	}
+	for _, name := range certificateNames {
+		body := []byte(name + " replacement\n")
+		mode := os.FileMode(0644)
+		if name == "privkey" {
+			mode = 0600
+		}
+		if err := os.WriteFile(a.path(servingArchive+"/"+name+"2.pem"), body, mode); err != nil {
+			t.Fatal(err)
+		}
+		path := a.path(servingLive + "/" + name + ".pem")
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("../../archive/sbxr-subscription/"+name+"2.pem", path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inspection := a.InspectCertificateActivation(t.Context(), renewal, accepted)
+	if !inspection.Observed || !inspection.Accepted || inspection.Published.CertificateGeneration != 2 || inspection.Loaded != accepted || inspection.Published.LinkID != accepted.LinkID || inspection.Published.CredentialSHA256 != accepted.CredentialSHA256 {
+		t.Fatalf("InspectCertificateActivation() = %#v", inspection)
+	}
+	restarts := 0
+	a.subscriptionCommand = func(_ context.Context, name string, arguments ...string) (string, int, bool) {
+		if name == "systemctl" && strings.Join(arguments, " ") == "restart sbxr-subscription.service" {
+			restarts++
+			return "", 0, true
+		}
+		return "", 1, true
+	}
+	if !a.ActivateServing(t.Context(), renewal, inspection.Published) || restarts != 1 {
+		t.Fatalf("ActivateServing() restarts=%d", restarts)
+	}
+	if err := os.Remove(a.path(servingLive + "/chain.pem")); err != nil || os.Symlink("../../archive/sbxr-subscription/chain1.pem", a.path(servingLive+"/chain.pem")) != nil {
+		t.Fatal("mixed generation fixture failed")
+	}
+	if mixed := a.InspectCertificateActivation(t.Context(), renewal, accepted); !mixed.Observed || mixed.Accepted {
+		t.Fatalf("mixed InspectCertificateActivation() = %#v", mixed)
+	}
+	if a.ActivateServing(t.Context(), renewal, inspection.Published) || restarts != 1 {
+		t.Fatalf("mixed ActivateServing() restarts=%d", restarts)
 	}
 }

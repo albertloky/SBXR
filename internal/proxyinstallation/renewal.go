@@ -7,6 +7,7 @@ import (
 	"os"
 
 	hostadapter "github.com/albertloky/SBXR/internal/proxyinstallation/adapter/host"
+	singboxadapter "github.com/albertloky/SBXR/internal/proxyinstallation/adapter/singbox"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 )
 
@@ -88,5 +89,24 @@ func recordRenewalHook(ctx context.Context, lifecycle softwarelifecycle.Interfac
 		return false
 	}
 	current, err := host.ReadOwnership(hostSetupSpec.OwnershipPath)
-	return err == nil && bytes.Equal(body, current)
+	if err != nil || !bytes.Equal(body, current) {
+		return false
+	}
+	if role != hostadapter.RenewalDeployRole {
+		return true
+	}
+	fullHost, ok := host.(interface {
+		hostInterface
+		certificateActivationHost
+		renewalHost
+	})
+	if !ok {
+		return false
+	}
+	module := newInstalledInterface(lifecycle, fullHost, singboxadapter.New()).(*installedInterface)
+	review := module.reviewPublishedCertificateActivation(ctx)
+	if review.Prepared == nil {
+		return review.SubscriptionStatus == SubscriptionAvailable
+	}
+	return module.Execute(ctx, *review.Prepared, Approved, nil).Code == SubscriptionChangeFinished
 }

@@ -37,8 +37,11 @@ const (
 type SubscriptionStatus string
 
 const (
-	SubscriptionNotEnabled      SubscriptionStatus = "Not enabled"
-	SubscriptionProblemDetected SubscriptionStatus = "Problem detected"
+	SubscriptionNotEnabled       SubscriptionStatus = "Not enabled"
+	SubscriptionAvailable        SubscriptionStatus = "Available"
+	SubscriptionChangeInProgress SubscriptionStatus = "Change in progress"
+	SubscriptionChangeIncomplete SubscriptionStatus = "Change incomplete"
+	SubscriptionProblemDetected  SubscriptionStatus = "Problem detected"
 )
 
 type Availability string
@@ -52,15 +55,16 @@ const (
 type Action string
 
 const (
-	StatusAction                  Action = "Status"
-	ViewDetailsAction             Action = "View details"
-	StartSetupAction              Action = "Start setup"
-	FinishCleanupAction           Action = "Finish cleanup"
-	FinishSetupAction             Action = "Finish setup"
-	ShowClientConfigurationAction Action = "Show client configuration"
-	CompleteRemovalAction         Action = "Complete removal"
-	FinishRemovalAction           Action = "Finish removal"
-	EnableSubscriptionAction      Action = "Enable subscription"
+	StatusAction                   Action = "Status"
+	ViewDetailsAction              Action = "View details"
+	StartSetupAction               Action = "Start setup"
+	FinishCleanupAction            Action = "Finish cleanup"
+	FinishSetupAction              Action = "Finish setup"
+	ShowClientConfigurationAction  Action = "Show client configuration"
+	CompleteRemovalAction          Action = "Complete removal"
+	FinishRemovalAction            Action = "Finish removal"
+	EnableSubscriptionAction       Action = "Enable subscription"
+	FinishSubscriptionChangeAction Action = "Finish subscription change"
 )
 
 type Confirmation uint8
@@ -73,18 +77,24 @@ const (
 type ResultCode string
 
 const (
-	StatusNotSetUp               ResultCode = "PROXY-INSTALLATION-STATUS-NOT-SET-UP"
-	StatusProblemDetected        ResultCode = "PROXY-INSTALLATION-STATUS-PROBLEM-DETECTED"
-	StatusChangeInProgress       ResultCode = "PROXY-INSTALLATION-STATUS-CHANGE-IN-PROGRESS"
-	ActionCancelled              ResultCode = "PROXY-INSTALLATION-ACTION-CANCELLED"
-	ActionRefused                ResultCode = "PROXY-INSTALLATION-ACTION-REFUSED"
-	SetupComplete                ResultCode = "PROXY-INSTALLATION-SETUP-COMPLETE"
-	SetupNeedsCleanup            ResultCode = "PROXY-INSTALLATION-SETUP-CLEANUP-REQUIRED"
-	SetupNeedsCompletion         ResultCode = "PROXY-INSTALLATION-SETUP-COMPLETION-REQUIRED"
-	SetupCleanedUp               ResultCode = "PROXY-INSTALLATION-SETUP-CLEANED-UP"
-	ClientConfigurationDisclosed ResultCode = "PROXY-INSTALLATION-CLIENT-CONFIGURATION-DISCLOSED"
-	RemovalNeedsCompletion       ResultCode = "PROXY-INSTALLATION-REMOVAL-COMPLETION-REQUIRED"
-	CompleteRemovalCompleted     ResultCode = "SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED"
+	StatusNotSetUp                     ResultCode = "PROXY-INSTALLATION-STATUS-NOT-SET-UP"
+	StatusProblemDetected              ResultCode = "PROXY-INSTALLATION-STATUS-PROBLEM-DETECTED"
+	StatusChangeInProgress             ResultCode = "PROXY-INSTALLATION-STATUS-CHANGE-IN-PROGRESS"
+	ActionCancelled                    ResultCode = "PROXY-INSTALLATION-ACTION-CANCELLED"
+	ActionRefused                      ResultCode = "PROXY-INSTALLATION-ACTION-REFUSED"
+	SetupComplete                      ResultCode = "PROXY-INSTALLATION-SETUP-COMPLETE"
+	SetupNeedsCleanup                  ResultCode = "PROXY-INSTALLATION-SETUP-CLEANUP-REQUIRED"
+	SetupNeedsCompletion               ResultCode = "PROXY-INSTALLATION-SETUP-COMPLETION-REQUIRED"
+	SetupCleanedUp                     ResultCode = "PROXY-INSTALLATION-SETUP-CLEANED-UP"
+	ClientConfigurationDisclosed       ResultCode = "PROXY-INSTALLATION-CLIENT-CONFIGURATION-DISCLOSED"
+	RemovalNeedsCompletion             ResultCode = "PROXY-INSTALLATION-REMOVAL-COMPLETION-REQUIRED"
+	CompleteRemovalCompleted           ResultCode = "SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED"
+	SubscriptionStatusNotEnabled       ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-STATUS-NOT-ENABLED"
+	SubscriptionStatusAvailable        ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-STATUS-AVAILABLE"
+	SubscriptionStatusChangeIncomplete ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-STATUS-CHANGE-INCOMPLETE"
+	SubscriptionStatusProblemDetected  ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-STATUS-PROBLEM-DETECTED"
+	SubscriptionChangeFinished         ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-CHANGE-FINISHED"
+	SubscriptionChangeNeedsCompletion  ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-CHANGE-INCOMPLETE"
 )
 
 type Result struct {
@@ -186,6 +196,7 @@ type preparedReview struct {
 	inspection   hostadapter.Inspection
 	running      hostadapter.RunningInspection
 	removal      hostadapter.RemovalInspection
+	activation   hostadapter.CertificateActivationInspection
 }
 
 type unfinishedDirection string
@@ -234,7 +245,21 @@ type ownershipRecord struct {
 	FinishingRelease         *softwarelifecycle.ReleaseIdentity  `json:"finishing_release_identity,omitempty"`
 	Serving                  *hostadapter.ServingAuthority       `json:"serving,omitempty"`
 	Renewal                  *hostadapter.RenewalAuthority       `json:"renewal,omitempty"`
+	Activation               *certificateActivation              `json:"certificate_activation,omitempty"`
 }
+
+type certificateActivation struct {
+	Source     hostadapter.ServingAuthority    `json:"source"`
+	Target     hostadapter.ServingAuthority    `json:"target"`
+	Checkpoint certificateActivationCheckpoint `json:"checkpoint"`
+}
+
+type certificateActivationCheckpoint string
+
+const (
+	activationTargetRecorded certificateActivationCheckpoint = "target recorded"
+	activationTargetAccepted certificateActivationCheckpoint = "target accepted"
+)
 
 var destinations = []hostadapter.Destination{
 	{Address: "google.com:443", ServerName: "google.com"},
@@ -308,16 +333,22 @@ func (module *installedInterface) Review(ctx context.Context, action Action) Rev
 		}
 		review.Result = refused(review.Status, failed, correction)
 	}
-	review.SubscriptionStatus = module.subscriptionStatus(ctx)
+	status, activation := module.inspectSubscription(ctx)
+	if review.Status == ChangeInProgress && status != SubscriptionNotEnabled {
+		status = SubscriptionChangeInProgress
+	}
+	review.SubscriptionStatus = status
 	review.ProxyTraffic, review.SubscriptionServing = CannotBeVerified, CannotBeVerified
 	if review.Status == Running {
 		review.ProxyTraffic = ProvedWorking
 	}
 	if review.SubscriptionStatus == SubscriptionNotEnabled {
 		review.SubscriptionServing = ProvedStopped
+	} else if activation.Loaded.Valid() {
+		review.SubscriptionServing = ProvedWorking
+	} else if activation.Observed && activation.Accepted {
+		review.SubscriptionServing = ProvedStopped
 	}
-	review.Result.SubscriptionStatus = review.SubscriptionStatus
-	review.Result.ProxyTraffic, review.Result.SubscriptionServing = review.ProxyTraffic, review.SubscriptionServing
 	review.Details = append(review.Details, "Subscription Capability Status: "+string(review.SubscriptionStatus))
 	if body, err := module.readOwnership(); err == nil {
 		if record, ok := decodeOwnership(body); ok && record.Renewal != nil {
@@ -327,51 +358,45 @@ func (module *installedInterface) Review(ctx context.Context, action Action) Rev
 			}
 		}
 	}
-	if review.SubscriptionStatus != SubscriptionNotEnabled && !module.servingSurfaceSafe() {
-		clear(module.prepared)
-		review.Prepared = nil
-		review.LegalActions = []Action{ViewDetailsAction}
-		if action != StatusAction && action != ViewDetailsAction && review.Result.Code != ActionRefused {
-			review.Result.Code, review.Result.FailedCheck, review.Result.Correction = ActionRefused, "Subscription absence", "Restore safe, supported authority and prove subscription material absent before retrying."
+	if review.Status == Running && review.SubscriptionStatus == SubscriptionProblemDetected {
+		removalSafe := module.servingSurfaceSafe() && action == CompleteRemovalAction && review.Prepared != nil
+		if !removalSafe {
+			clear(module.prepared)
+			review.Prepared = nil
+			review.LegalActions = []Action{ViewDetailsAction}
+			if action != StatusAction && action != ViewDetailsAction && review.Result.Code != ActionRefused {
+				review.Result = refused(review.Status, "Subscription authority", "Restore one consistent published, accepted, and loaded certificate generation, then inspect again.")
+			}
 		}
 	}
-	if module.servingSurfaceSafe() {
+	if review.Status == Running && review.SubscriptionStatus == SubscriptionAvailable {
 		review.LegalActions = slices.DeleteFunc(review.LegalActions, func(a Action) bool { return a == EnableSubscriptionAction })
 		if action == EnableSubscriptionAction {
 			clear(module.prepared)
 			review.Prepared = nil
 			review.Result = refused(review.Status, "Existing serving authority", "Complete removal is supported; subscription enablement remains unavailable.")
 		}
-		review.Details = append(review.Details, "Subscription runtime authority and managed renewal recording are supported. Owner enablement remains unavailable in this slice.")
+		review.Details = append(review.Details, "Subscription passed local checks. Karing reachability is not verified.")
 	}
+	if review.Status == Running && review.SubscriptionStatus == SubscriptionChangeIncomplete {
+		review.LegalActions = []Action{FinishSubscriptionChangeAction, ViewDetailsAction}
+		review.Result = Result{Status: review.Status, SubscriptionStatus: review.SubscriptionStatus, Message: "A subscription change needs safe cleanup or completion.", Code: SubscriptionStatusChangeIncomplete}
+		if action == FinishSubscriptionChangeAction {
+			review = module.prepareCertificateActivationReview(ctx, review, activation)
+		} else if action != StatusAction && action != ViewDetailsAction {
+			review.Result = refused(review.Status, "Legal action", "Choose Finish subscription change for the proved certificate activation direction.")
+		}
+	} else if review.Status == Running && action == FinishSubscriptionChangeAction {
+		review.Result = refused(review.Status, "Certificate activation direction", "Review View details and restore one proved published certificate generation before finishing.")
+	}
+	review.Result.SubscriptionStatus = review.SubscriptionStatus
+	review.Result.ProxyTraffic, review.Result.SubscriptionServing = review.ProxyTraffic, review.SubscriptionServing
 	return review
 }
 
 func (module *installedInterface) subscriptionStatus(ctx context.Context) SubscriptionStatus {
-	if module.host == nil {
-		return SubscriptionProblemDetected
-	}
-	body, err := module.readOwnership()
-	if err == nil {
-		if record, valid := decodeOwnership(body); !valid || record.Serving != nil {
-			return SubscriptionProblemDetected
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return SubscriptionProblemDetected
-	}
-	staged, stagedErr := module.host.ReadOwnership(hostSetupSpec.OwnershipNextPath)
-	if stagedErr == nil {
-		if _, valid := decodeOwnership(staged); !valid {
-			return SubscriptionProblemDetected
-		}
-	} else if !errors.Is(stagedErr, os.ErrNotExist) {
-		return SubscriptionProblemDetected
-	}
-	fact := module.host.InspectSubscriptionAbsence(ctx)
-	if fact.Observed && fact.Accepted {
-		return SubscriptionNotEnabled
-	}
-	return SubscriptionProblemDetected
+	status, _ := module.inspectSubscription(ctx)
+	return status
 }
 
 func (module *installedInterface) review(ctx context.Context, action Action) Review {
@@ -926,8 +951,10 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 	authority, ok := module.prepared[prepared.token]
 	delete(module.prepared, prepared.token)
 	defer func() {
-		result.SubscriptionStatus = module.subscriptionStatus(context.WithoutCancel(ctx))
-		result.ProxyTraffic, result.SubscriptionServing = CannotBeVerified, CannotBeVerified
+		if result.Code != SubscriptionStatusProblemDetected {
+			result.SubscriptionStatus = module.subscriptionStatus(context.WithoutCancel(ctx))
+			result.ProxyTraffic, result.SubscriptionServing = CannotBeVerified, CannotBeVerified
+		}
 		if authority.action == EnableSubscriptionAction {
 			fresh := module.review(context.WithoutCancel(ctx), StatusAction)
 			result.Status = fresh.Status
@@ -937,6 +964,9 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 		}
 		if result.Code == SetupComplete || result.Code == ClientConfigurationDisclosed {
 			result.ProxyTraffic = ProvedWorking
+		}
+		if result.Code == SubscriptionChangeFinished {
+			result.ProxyTraffic, result.SubscriptionServing = ProvedWorking, ProvedWorking
 		}
 		if result.Code == CompleteRemovalCompleted {
 			result.ProxyTraffic = ProvedStopped
@@ -956,6 +986,9 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 	}
 	if authority.action == EnableSubscriptionAction {
 		return module.refuseSubscriptionExecution(ctx, authority)
+	}
+	if authority.action == FinishSubscriptionChangeAction {
+		return module.executeCertificateActivation(ctx, authority, progress)
 	}
 	if authority.action == CompleteRemovalAction {
 		if ctx.Err() != nil {
@@ -1744,7 +1777,7 @@ func decodeOwnership(body []byte) (ownershipRecord, bool) {
 		}
 	}
 	for name, value := range fields {
-		if !slices.Contains([]string{"schema", "phase", "unfinished_direction", "release_identity", "proxy_package_identity", "public_ipv4", "destination_address", "destination_server_name", "configuration_sha256", "permitted_resources", "cleanup_checkpoint", "removal_checkpoint", "resource_creating_releases", "finishing_release_identity", "serving", "renewal"}, name) {
+		if !slices.Contains([]string{"schema", "phase", "unfinished_direction", "release_identity", "proxy_package_identity", "public_ipv4", "destination_address", "destination_server_name", "configuration_sha256", "permitted_resources", "cleanup_checkpoint", "removal_checkpoint", "resource_creating_releases", "finishing_release_identity", "serving", "renewal", "certificate_activation"}, name) {
 			return ownershipRecord{}, false
 		}
 		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
@@ -1772,6 +1805,12 @@ func decodeOwnership(body []byte) (ownershipRecord, bool) {
 			if len(renewal[name]) == 0 || bytes.Equal(bytes.TrimSpace(renewal[name]), []byte("null")) {
 				return ownershipRecord{}, false
 			}
+		}
+	}
+	if raw, exists := fields["certificate_activation"]; exists {
+		var activation map[string]json.RawMessage
+		if json.Unmarshal(raw, &activation) != nil || len(activation) != 3 || len(activation["source"]) == 0 || len(activation["target"]) == 0 || len(activation["checkpoint"]) == 0 {
+			return ownershipRecord{}, false
 		}
 	}
 	if !exactIdentityFields(fields["release_identity"]) {
@@ -1819,7 +1858,7 @@ func validOwnership(record ownershipRecord) bool {
 		return false
 	}
 	if record.Schema == 1 {
-		if record.ResourceCreatingReleases != nil || record.FinishingRelease != nil || record.Serving != nil || record.Renewal != nil {
+		if record.ResourceCreatingReleases != nil || record.FinishingRelease != nil || record.Serving != nil || record.Renewal != nil || record.Activation != nil {
 			return false
 		}
 	} else {
@@ -1843,6 +1882,9 @@ func validOwnership(record ownershipRecord) bool {
 		return false
 	}
 	if record.Renewal != nil && (record.Serving == nil || !record.Renewal.Valid() || record.Renewal.PublicIPv4 != record.PublicIPv4 || record.Phase != runningPhase && record.Phase != removalCommitted) {
+		return false
+	}
+	if record.Activation != nil && (record.Schema != 2 || record.Serving == nil || record.Renewal == nil || record.Direction != noDirection || record.Phase != runningPhase || record.Activation.Checkpoint == activationTargetRecorded && record.Activation.Source != *record.Serving || record.Activation.Checkpoint == activationTargetAccepted && record.Activation.Target != *record.Serving || !validCertificateActivation(*record.Activation)) {
 		return false
 	}
 	if record.Direction == removalRequired {
@@ -1880,6 +1922,10 @@ func recordResources(record ownershipRecord, softwareOnly bool) []string {
 		resources = append(resources, record.Renewal.Resources()...)
 	}
 	return resources
+}
+
+func validCertificateActivation(activation certificateActivation) bool {
+	return (activation.Checkpoint == activationTargetRecorded || activation.Checkpoint == activationTargetAccepted) && compatibleCertificateTarget(activation.Source, activation.Target)
 }
 
 // This exact prior creator is supported only for its validated original proxy

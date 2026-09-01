@@ -98,7 +98,7 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 			} else if writeRefusal(output, latest) != nil {
 				return 1
 			}
-		case proxyinstallation.StartSetupAction, proxyinstallation.FinishCleanupAction, proxyinstallation.FinishSetupAction, proxyinstallation.EnableSubscriptionAction:
+		case proxyinstallation.StartSetupAction, proxyinstallation.FinishCleanupAction, proxyinstallation.FinishSetupAction, proxyinstallation.EnableSubscriptionAction, proxyinstallation.FinishSubscriptionChangeAction:
 			if review.Prepared == nil {
 				latest = review.Result
 				if writeRefusal(output, latest) != nil {
@@ -119,6 +119,8 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 				prompt = "Finish proxy setup? [y/N]"
 			} else if action == proxyinstallation.EnableSubscriptionAction {
 				prompt = "Enable subscription? [y/N]"
+			} else if action == proxyinstallation.FinishSubscriptionChangeAction {
+				prompt = "Finish subscription change? [y/N]"
 			}
 			confirmation, ok := readConfirmation(reader, output, prompt)
 			if !ok {

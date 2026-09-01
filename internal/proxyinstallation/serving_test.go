@@ -22,6 +22,7 @@ import (
 	hostadapter "github.com/albertloky/SBXR/internal/proxyinstallation/adapter/host"
 	singboxadapter "github.com/albertloky/SBXR/internal/proxyinstallation/adapter/singbox"
 	"github.com/albertloky/SBXR/internal/proxyinstallation/subscriptionserving"
+	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 )
 
 type servingTestHost struct {
@@ -37,15 +38,25 @@ type dispatchTestHost struct {
 	listener    net.Listener
 	ip          string
 	bound       chan struct{}
+	publicIPv4  chan bool
+	validated   int
+	selected    hostadapter.ServingAuthority
 }
 type advertisedListener struct {
 	net.Listener
 	ip string
 }
 
-func (l advertisedListener) Addr() net.Addr                                           { return &net.TCPAddr{IP: net.ParseIP(l.ip), Port: 8443} }
-func (h *dispatchTestHost) ValidateServingDispatch(hostadapter.ServingAuthority) bool { return true }
-func (h *dispatchTestHost) ServingPublicIPv4(_ context.Context, ip string) bool       { return ip == h.ip }
+func (l advertisedListener) Addr() net.Addr { return &net.TCPAddr{IP: net.ParseIP(l.ip), Port: 8443} }
+func (h *dispatchTestHost) ValidateServingDispatch(authority hostadapter.ServingAuthority, _ *hostadapter.RenewalAuthority) bool {
+	h.validated++
+	h.selected = authority
+	return true
+}
+func (h *dispatchTestHost) ServingPublicIPv4(_ context.Context, ip string) bool { return ip == h.ip }
+func (h *dispatchTestHost) WatchServingPublicIPv4(context.Context, string) <-chan bool {
+	return h.publicIPv4
+}
 func (h *dispatchTestHost) ReadServingConfiguration(_ hostadapter.SetupSpec, expected string) ([]byte, error) {
 	sum := sha256.Sum256(h.configuration)
 	if hex.EncodeToString(sum[:]) != expected {
@@ -110,7 +121,7 @@ func TestAcceptedPrivateDispatchComposesAuthorityProfileTLSAndServing(t *testing
 	t.Cleanup(func() { listener.Close() })
 	pool := x509.NewCertPool()
 	pool.AddCert(root)
-	host := &dispatchTestHost{servingTestHost: h, certificate: cert, listener: listener, ip: record.PublicIPv4, bound: make(chan struct{})}
+	host := &dispatchTestHost{servingTestHost: h, certificate: cert, listener: listener, ip: record.PublicIPv4, bound: make(chan struct{}), publicIPv4: make(chan bool, 1)}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := make(chan subscriptionserving.Code, 1)
@@ -133,9 +144,42 @@ func TestAcceptedPrivateDispatchComposesAuthorityProfileTLSAndServing(t *testing
 	if err != nil || response.StatusCode != 200 || !strings.HasPrefix(string(body), "vless://"+identity.UUID+"@"+record.PublicIPv4+":443?") {
 		t.Fatal("private dispatch did not serve authoritative profile")
 	}
-	cancel()
+	host.publicIPv4 <- false
 	if <-done != subscriptionserving.Stopped {
-		t.Fatal("private dispatch shutdown failed")
+		t.Fatal("private dispatch did not stop after public IPv4 drift")
+	}
+}
+
+func TestPrivateServingSelectsTheRecordedCertificateActivationTarget(t *testing.T) {
+	_, host, lifecycle := servingInstallation(t)
+	record, ok := decodeOwnership(host.ownership)
+	if !ok {
+		t.Fatal("serving authority invalid")
+	}
+	record.Renewal = &hostadapter.RenewalAuthority{RecorderID: strings.Repeat("1", 32), Lineage: "sbxr-subscription", PublicIPv4: record.PublicIPv4, Invocation: hostadapter.OfficialRenewalInvocation}
+	record.Resources = recordResources(record, false)
+	record.ResourceCreatingReleases = make([]softwarelifecycle.ReleaseIdentity, len(record.Resources))
+	for index := range record.ResourceCreatingReleases {
+		record.ResourceCreatingReleases[index] = record.Release
+	}
+	host.ownership = ownershipBytes(record)
+	baseline := &dispatchTestHost{servingTestHost: host, ip: record.PublicIPv4, bound: make(chan struct{}), publicIPv4: make(chan bool)}
+	if code := serveSubscription(t.Context(), lifecycle, baseline, subscriptionserving.New(nil, nil)); code != subscriptionserving.Refused || baseline.validated != 1 {
+		t.Fatalf("baseline serveSubscription() = %s validated=%d", code, baseline.validated)
+	}
+	target := *record.Serving
+	target.CertificateGeneration++
+	for index := range target.CertificateSHA256 {
+		target.CertificateSHA256[index] = strings.Repeat(string(rune('5'+index)), 64)
+	}
+	record.Activation = &certificateActivation{Source: *record.Serving, Target: target, Checkpoint: activationTargetRecorded}
+	host.ownership = ownershipBytes(record)
+	if _, ok := decodeOwnership(host.ownership); !ok {
+		t.Fatalf("pending activation authority invalid: %s", host.ownership)
+	}
+	dispatch := &dispatchTestHost{servingTestHost: host, ip: record.PublicIPv4, bound: make(chan struct{}), publicIPv4: make(chan bool)}
+	if code := serveSubscription(t.Context(), lifecycle, dispatch, subscriptionserving.New(nil, nil)); code != subscriptionserving.Refused || dispatch.validated != 1 || dispatch.selected != target {
+		t.Fatalf("serveSubscription() = %s validated=%d selected=%#v", code, dispatch.validated, dispatch.selected)
 	}
 }
 

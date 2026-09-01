@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -76,6 +80,16 @@ type ServingAuthority struct {
 	CredentialSHA256      string    `json:"credential_sha256"`
 	CertificateGeneration int       `json:"certificate_generation"`
 	CertificateSHA256     [4]string `json:"certificate_sha256"`
+}
+
+// CertificateActivationInspection compares the certificate generation
+// published by Certbot with the generation accepted by the Ownership Record
+// and the generation actually loaded by Subscription Serving.
+type CertificateActivationInspection struct {
+	Published ServingAuthority
+	Loaded    ServingAuthority
+	Observed  bool
+	Accepted  bool
 }
 
 func (ServingAuthority) String() string   { return "Serving authority (redacted)" }
@@ -153,12 +167,76 @@ func (a Adapter) servingDirectory(path string, allowed []string, missing bool) b
 	if err != nil {
 		return false
 	}
+	archiveGenerations := map[int]int{}
+	allowedGeneration := 0
+	for _, name := range allowed {
+		if generation, ok := servingArchiveIdentity(name); ok {
+			allowedGeneration = generation
+		}
+	}
 	for _, entry := range entries {
-		if !slices.Contains(allowed, entry.Name()) {
+		generation, archiveName := servingArchiveIdentity(entry.Name())
+		if !slices.Contains(allowed, entry.Name()) && !(path == servingArchive && archiveName) {
+			return false
+		}
+		if path == servingArchive && archiveName {
+			archiveGenerations[generation]++
+		}
+	}
+	for generation, count := range archiveGenerations {
+		if count != len(certificateNames) && !(missing && (generation == allowedGeneration || archiveGenerations[allowedGeneration] == 0)) {
 			return false
 		}
 	}
 	return true
+}
+
+func servingArchiveIdentity(name string) (int, bool) {
+	for _, prefix := range certificateNames {
+		if strings.HasPrefix(name, prefix) && strings.HasSuffix(name, ".pem") {
+			generation, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(name, prefix), ".pem"))
+			return generation, err == nil && generation > 0 && generation <= 1000000 && name == prefix+strconv.Itoa(generation)+".pem"
+		}
+	}
+	return 0, false
+}
+
+func (a Adapter) removableServingArchive(authority ServingAuthority) ([]string, bool) {
+	entries, err := os.ReadDir(a.path(servingArchive))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, true
+	}
+	if err != nil {
+		return nil, false
+	}
+	counts := map[int]int{}
+	current, history := make([]string, 0, len(certificateNames)), make([]string, 0, len(entries))
+	for _, entry := range entries {
+		generation, valid := servingArchiveIdentity(entry.Name())
+		if !valid {
+			return nil, false
+		}
+		mode := os.FileMode(0644)
+		if strings.HasPrefix(entry.Name(), "privkey") {
+			mode = 0600
+		}
+		path := servingArchive + "/" + entry.Name()
+		if _, err := a.protectedServingFile(path, mode, ""); err != nil {
+			return nil, false
+		}
+		counts[generation]++
+		if generation == authority.CertificateGeneration {
+			current = append(current, path)
+		} else {
+			history = append(history, path)
+		}
+	}
+	for _, count := range counts {
+		if count > len(certificateNames) {
+			return nil, false
+		}
+	}
+	return append(current, history...), true
 }
 
 func (a Adapter) InspectServingFiles(authority ServingAuthority, removing bool) Observation {
@@ -256,11 +334,155 @@ func (a Adapter) ServingGeneration(authority ServingAuthority) subscriptionservi
 	return subscriptionserving.Generation{LinkID: authority.LinkID, CredentialSHA256: sum}
 }
 
+func (a Adapter) publishedCertificateAuthority(renewal RenewalAuthority, accepted ServingAuthority) (ServingAuthority, bool) {
+	if !renewal.Valid() || !accepted.Valid() || renewal.Lineage != "sbxr-subscription" {
+		return ServingAuthority{}, false
+	}
+	target := accepted
+	generation := 0
+	for index, name := range certificateNames {
+		path := servingLive + "/" + name + ".pem"
+		info, err := os.Lstat(a.path(path))
+		stat, ok := infoSys(info)
+		link, linkErr := os.Readlink(a.path(path))
+		prefix := "../../archive/" + renewal.Lineage + "/" + name
+		candidate, parseErr := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(link, prefix), ".pem"))
+		valid := parseErr == nil && candidate > 0 && candidate <= 1000000 && link == prefix+strconv.Itoa(candidate)+".pem"
+		if err != nil || !ok || stat.Uid != a.ownerUID() || info.Mode()&os.ModeSymlink == 0 || linkErr != nil || !valid || generation != 0 && generation != candidate {
+			return ServingAuthority{}, false
+		}
+		generation = candidate
+		mode := os.FileMode(0644)
+		if name == "privkey" {
+			mode = 0600
+		}
+		body, err := a.protectedServingFile(servingArchive+"/"+name+strconv.Itoa(generation)+".pem", mode, "")
+		if err != nil {
+			return ServingAuthority{}, false
+		}
+		target.CertificateSHA256[index] = digest(body)
+	}
+	target.CertificateGeneration = generation
+	if !target.Valid() || !a.validRenewalCertificate(renewal, generation) {
+		return ServingAuthority{}, false
+	}
+	return target, true
+}
+
+func (a Adapter) publishedServingAuthority(renewal RenewalAuthority, accepted ServingAuthority) (ServingAuthority, bool) {
+	target, valid := a.publishedCertificateAuthority(renewal, accepted)
+	if !valid || !a.servingDirectory(ServingStagingPath, nil, false) {
+		return ServingAuthority{}, false
+	}
+	unit, unitErr := a.protectedServingFile(ServingUnitPath, 0644, "")
+	token, tokenErr := a.protectedServingFile(ServingTokenPath, 0600, "")
+	if unitErr != nil || string(unit) != ServingUnit || tokenErr != nil || len(token) != 44 || token[43] != '\n' || digest(token[:43]) != target.CredentialSHA256 {
+		return ServingAuthority{}, false
+	}
+	return target, true
+}
+
+func (a Adapter) loadedServingAuthority(ctx context.Context, renewal RenewalAuthority, accepted, published ServingAuthority) (ServingAuthority, bool) {
+	if a.servingLoaded != nil {
+		return a.servingLoaded(ctx, renewal, accepted, published)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	run := a.subscriptionCommand
+	if run == nil {
+		run = commandOutput
+	}
+	output, code, observed := run(ctx, "systemctl", "show", "--property=ActiveState", "--value", "sbxr-subscription.service")
+	if !observed || code != 0 {
+		return ServingAuthority{}, false
+	}
+	if strings.TrimSpace(output) != "active" {
+		return ServingAuthority{}, true
+	}
+	pidOutput, pidCode, pidObserved := run(ctx, "systemctl", "show", "--property=MainPID", "--value", "sbxr-subscription.service")
+	pid, pidErr := strconv.Atoi(strings.TrimSpace(pidOutput))
+	cgroup, cgroupErr := os.ReadFile(a.path(servingCgroup + "/cgroup.procs"))
+	listener, listenerCode, listenerObserved := run(ctx, "ss", "-H", "-ltnp", "sport", "=", ":8443")
+	lines := strings.Split(strings.TrimSpace(listener), "\n")
+	fields := strings.Fields(listener)
+	if !pidObserved || pidCode != 0 || pidErr != nil || pid < 1 || cgroupErr != nil || len(cgroup) > 4096 || strings.TrimSpace(string(cgroup)) != strconv.Itoa(pid) || !listenerObserved || listenerCode != 0 || len(lines) != 1 || len(fields) < 5 || fields[3] != net.JoinHostPort(renewal.PublicIPv4, "8443") || !strings.Contains(listener, "pid="+strconv.Itoa(pid)+",") {
+		return ServingAuthority{}, false
+	}
+	token, err := a.protectedServingFile(ServingTokenPath, 0600, "")
+	if err != nil || len(token) != 44 || token[43] != '\n' || digest(token[:43]) != published.CredentialSHA256 {
+		return ServingAuthority{}, false
+	}
+	transport := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, ServerName: renewal.PublicIPv4}}
+	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	defer transport.CloseIdleConnections()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+net.JoinHostPort(renewal.PublicIPv4, "8443")+"/s/"+string(token[:43]), nil)
+	if err != nil {
+		return ServingAuthority{}, false
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return ServingAuthority{}, false
+	}
+	body, readErr := io.ReadAll(io.LimitReader(response.Body, 4097))
+	closeErr := response.Body.Close()
+	state := response.TLS
+	if readErr != nil || closeErr != nil || response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "text/plain; charset=utf-8" || response.Header.Get("Cache-Control") != "no-store" || response.Header.Get("X-Content-Type-Options") != "nosniff" || len(body) < 1 || len(body) > 4096 || body[len(body)-1] != '\n' || bytes.Count(body, []byte{'\n'}) != 1 || state == nil || len(state.PeerCertificates) == 0 || len(state.VerifiedChains) == 0 || len(state.VerifiedChains[0]) == 0 || !state.VerifiedChains[0][0].Equal(state.PeerCertificates[0]) {
+		return ServingAuthority{}, false
+	}
+	for _, candidate := range []ServingAuthority{published, accepted} {
+		body, err := a.protectedServingFile(servingArchive+"/cert"+strconv.Itoa(candidate.CertificateGeneration)+".pem", 0644, candidate.CertificateSHA256[0])
+		block, _ := pemDecodeCertificate(body)
+		if err == nil && block != nil && bytes.Equal(block.Raw, state.PeerCertificates[0].Raw) {
+			return candidate, true
+		}
+	}
+	return ServingAuthority{}, true
+}
+
+func pemDecodeCertificate(body []byte) (*x509.Certificate, error) {
+	block, rest := pem.Decode(body)
+	if block == nil || block.Type != "CERTIFICATE" || len(bytes.TrimSpace(rest)) != 0 {
+		return nil, errors.New("certificate refused")
+	}
+	return x509.ParseCertificate(block.Bytes)
+}
+
+// InspectCertificateActivation is read-only. It binds all four published
+// certificate files to one generation before reporting a forward target.
+func (a Adapter) InspectCertificateActivation(ctx context.Context, renewal RenewalAuthority, accepted ServingAuthority) CertificateActivationInspection {
+	if !a.ServingPublicIPv4(ctx, renewal.PublicIPv4) {
+		return CertificateActivationInspection{Observed: true}
+	}
+	published, valid := a.publishedServingAuthority(renewal, accepted)
+	if !valid {
+		loaded, observed := a.loadedServingAuthority(ctx, renewal, accepted, accepted)
+		return CertificateActivationInspection{Loaded: loaded, Observed: observed}
+	}
+	loaded, observed := a.loadedServingAuthority(ctx, renewal, accepted, published)
+	return CertificateActivationInspection{Published: published, Loaded: loaded, Observed: observed, Accepted: true}
+}
+
+func (a Adapter) ActivateServing(ctx context.Context, renewal RenewalAuthority, target ServingAuthority) bool {
+	published, valid := a.publishedServingAuthority(renewal, target)
+	if !valid || published != target || !a.servingCommand(ctx, "restart", "sbxr-subscription.service") {
+		return false
+	}
+	// The caller performs the full published/loaded reinspection under retained
+	// whole-host authority before it commits the accepted generation.
+	return true
+}
+
 // ValidateServingDispatch is read-only. The fixed cgroup, inaccessible host
 // control sockets/proc/credentials, and zero capabilities are independent of
 // arguments and environment. Nothing here creates missing authority.
-func (a Adapter) ValidateServingDispatch(authority ServingAuthority) bool {
-	if a.root != "/" || os.Geteuid() != 0 || !servingCapabilitiesRestricted() || !a.inspectServingFiles(authority, false, true).Accepted {
+func (a Adapter) ValidateServingDispatch(authority ServingAuthority, renewal *RenewalAuthority) bool {
+	materialValid := a.inspectServingFiles(authority, false, true).Accepted
+	if renewal != nil {
+		published, valid := a.publishedCertificateAuthority(*renewal, authority)
+		unit, unitErr := a.protectedServingFile(ServingUnitPath, 0644, "")
+		materialValid = valid && published == authority && unitErr == nil && string(unit) == ServingUnit
+	}
+	if a.root != "/" || os.Geteuid() != 0 || !servingCapabilitiesRestricted() || !materialValid {
 		return false
 	}
 	for _, path := range []string{ServingTokenPath, ServingStagingPath, "/proc", "/run/systemd", "/run/dbus"} {
@@ -279,6 +501,27 @@ func (a Adapter) ValidateServingDispatch(authority ServingAuthority) bool {
 
 func (a Adapter) ServingPublicIPv4(ctx context.Context, expected string) bool {
 	return a.publicIPv4 != nil && a.publicIPv4(ctx) == expected
+}
+
+func (a Adapter) WatchServingPublicIPv4(ctx context.Context, expected string) <-chan bool {
+	result := make(chan bool, 1)
+	go func() {
+		defer close(result)
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if !a.ServingPublicIPv4(ctx, expected) {
+					result <- false
+					return
+				}
+			}
+		}
+	}()
+	return result
 }
 
 func (a Adapter) BindServingListener(ip string) (net.Listener, error) {
@@ -391,6 +634,10 @@ func (a Adapter) RemoveServingRuntime(ctx context.Context, authority ServingAuth
 	if exclusion == nil || exclusion.root != a.root || len(exclusion.files) != len(certbotDirectoryLocks) || !a.InspectServingFiles(authority, true).Accepted {
 		return false
 	}
+	archivePaths, validArchive := a.removableServingArchive(authority)
+	if !validArchive {
+		return false
+	}
 	for i, file := range exclusion.files {
 		info, err := file.Stat()
 		current, e := os.Lstat(a.path(certbotDirectoryLocks[i]))
@@ -403,13 +650,11 @@ func (a Adapter) RemoveServingRuntime(ctx context.Context, authority ServingAuth
 	}
 	paths := []string{}
 	for _, name := range certificateNames {
-		paths = append(paths, servingLive+"/"+name+".pem", servingArchive+"/"+name+strconv.Itoa(authority.CertificateGeneration)+".pem")
+		paths = append(paths, servingLive+"/"+name+".pem")
 	}
+	paths = append(paths, archivePaths...)
 	paths = append(paths, servingLive, servingArchive, ServingTokenPath, ServingStagingPath, ServingUnitPath)
 	for _, path := range paths {
-		if !a.InspectServingFiles(authority, true).Accepted {
-			return false
-		}
 		if err := os.Remove(a.path(path)); errors.Is(err, os.ErrNotExist) {
 			if !a.syncAbsentPath(path) {
 				return false

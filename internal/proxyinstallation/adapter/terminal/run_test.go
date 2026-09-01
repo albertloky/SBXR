@@ -224,6 +224,45 @@ func TestRunPresentsBothFinishingJourneysAndProgress(t *testing.T) {
 	}
 }
 
+type subscriptionFinishingInstallation struct{ done bool }
+
+func (installation *subscriptionFinishingInstallation) Review(_ context.Context, action proxyinstallation.Action) proxyinstallation.Review {
+	status := proxyinstallation.SubscriptionChangeIncomplete
+	result := proxyinstallation.Result{Status: proxyinstallation.Running, SubscriptionStatus: status, Code: proxyinstallation.SubscriptionStatusChangeIncomplete, Message: "A subscription change needs safe cleanup or completion."}
+	if installation.done {
+		status = proxyinstallation.SubscriptionAvailable
+		result = proxyinstallation.Result{Status: proxyinstallation.Running, SubscriptionStatus: status, Code: proxyinstallation.SubscriptionChangeFinished, Message: "The interrupted subscription change was completed."}
+	}
+	review := proxyinstallation.Review{Version: "v3.0.0", Status: proxyinstallation.Running, SubscriptionStatus: status, LegalActions: []proxyinstallation.Action{proxyinstallation.FinishSubscriptionChangeAction, proxyinstallation.ViewDetailsAction}, Result: result}
+	if action == proxyinstallation.FinishSubscriptionChangeAction && !installation.done {
+		review.Prepared = &proxyinstallation.PreparedAction{}
+		review.Plan = []string{"Direction: activate the exact published certificate generation."}
+	}
+	return review
+}
+
+func (installation *subscriptionFinishingInstallation) Execute(_ context.Context, _ proxyinstallation.PreparedAction, confirmation proxyinstallation.Confirmation, progress proxyinstallation.ProgressReporter) proxyinstallation.Result {
+	if confirmation != proxyinstallation.Approved {
+		return proxyinstallation.Result{Status: proxyinstallation.Running, SubscriptionStatus: proxyinstallation.SubscriptionChangeIncomplete, Code: proxyinstallation.ActionCancelled, Message: "No changes were made."}
+	}
+	progress(proxyinstallation.Progress{Phase: "Finishing subscription change"})
+	installation.done = true
+	return proxyinstallation.Result{Status: proxyinstallation.Running, SubscriptionStatus: proxyinstallation.SubscriptionAvailable, Code: proxyinstallation.SubscriptionChangeFinished, Message: "The interrupted subscription change was completed."}
+}
+
+func TestRunConfirmsAndFinishesCertificateActivation(t *testing.T) {
+	installation := &subscriptionFinishingInstallation{}
+	var output bytes.Buffer
+	if code := Run(t.Context(), nil, strings.NewReader("1\ny\n0\n"), &output, &output, installation); code != 0 {
+		t.Fatalf("Run() = %d output=%s", code, output.String())
+	}
+	for _, want := range []string{"Finish subscription change? [y/N]", "Progress: Finishing subscription change", "Subscription status: Available", "PROXY-INSTALLATION-SUBSCRIPTION-CHANGE-FINISHED"} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("missing %q: %s", want, output.String())
+		}
+	}
+}
+
 type detailsInstallation struct{ actions []proxyinstallation.Action }
 
 func (installation *detailsInstallation) Review(_ context.Context, action proxyinstallation.Action) proxyinstallation.Review {
