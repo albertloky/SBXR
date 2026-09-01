@@ -6,6 +6,16 @@ Investigation date: 2026-08-31 UTC. **Result: unsatisfied release blocker.**
 
 Authority: [#342, Implementation Decision 11 and Testing Decisions](https://github.com/albertloky/SBXR/issues/342), [#338's selected resolution](https://github.com/albertloky/SBXR/issues/338#issuecomment-5475359350), [#335's selected resolution](https://github.com/albertloky/SBXR/issues/335#issuecomment-5478617632), and [ADR-0016](../adr/0016-v3-proxy-product-and-modules.md). This report records implementation evidence; it changes none of those decisions.
 
+## Revalidation: 2026-09-01 UTC
+
+Repeated the read-only reproduction below from checkout `aa76642d374dbf7f4fb3bb1dab82708b25f9da08`. Both the current checkout's public verifier and the exact released source's verifier accepted the same `v3.0.21` Release Identity and Release Sequence `82` recorded below. Fresh downloads of all four assets and both extracted executables matched every size and digest in the tables; the released-source package verifier accepted both architectures. The released-source focused tests passed.
+
+Rechecked the released entry point and production caller search: the Owner still reaches only the Proxy Installation terminal; no production `.Check(`, `.Update(`, or `.Recover(` call exists in that released source. Its installer still offers the same installation and removal-restoration routes. The retained Update Record and recovery contracts below therefore remain the relevant source constraints.
+
+Current `main` now includes subscription serving, renewal recorder/hook, and proxy-start dispatch in `cmd/sbxr/run.go`. Those changes are absent from the verified immutable source package and do not supply its missing updater/recovery invocation. The original checkout comparison below describes the 2026-08-31 investigation only.
+
+**Disposition unchanged: keep #344 OPEN.** No supported route was established, and no live upgrade or recovery was executed. Candidate changes cannot add a caller to unchanged prior release bytes. Closing this as satisfied still requires proof of the supported source route; an alternative requires an explicit change to #342's authoritative constraint. Revalidate the qualified stable and active installed source again at candidate qualification.
+
 ## Verified source and evidence limits
 
 The production public verifier returned:
