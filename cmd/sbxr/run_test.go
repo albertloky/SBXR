@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	hostadapter "github.com/albertloky/SBXR/internal/proxyinstallation/adapter/host"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 )
 
@@ -44,5 +45,26 @@ func TestPrivateServingArgumentDoesNotAuthorizeExecution(t *testing.T) {
 	var output bytes.Buffer
 	if run(t.Context(), []string{"--subscription-serving"}, strings.NewReader(""), &output, &output, constructionLifecycle{}) != 1 || output.Len() != 0 {
 		t.Fatal("private serving dispatch did not refuse silently")
+	}
+}
+
+func TestPrivateRenewalArgumentsAndEnvironmentDoNotAuthorizeExecution(t *testing.T) {
+	t.Setenv("SBXR_RENEWAL_ATTEMPT_ID", strings.Repeat("a", 32))
+	t.Setenv("RENEWED_LINEAGE", "/etc/letsencrypt/live/sbxr-subscription")
+	t.Setenv("RENEWED_DOMAINS", "8.8.8.8")
+	for _, test := range []struct {
+		role string
+		code int
+	}{
+		{hostadapter.RenewalRecorderRole, hostadapter.RenewalRecorderRefused},
+		{hostadapter.RenewalDeployRole, 1},
+		{hostadapter.RenewalPostRole, 1},
+	} {
+		t.Run(test.role, func(t *testing.T) {
+			var output bytes.Buffer
+			if code := run(t.Context(), []string{test.role}, strings.NewReader(""), &output, &output, constructionLifecycle{}); code != test.code || output.Len() != 0 {
+				t.Fatalf("run() = %d output=%q", code, output.String())
+			}
+		})
 	}
 }

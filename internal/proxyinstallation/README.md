@@ -58,6 +58,32 @@ opened without file creation, and returns `ACTION-REFUSED`. Missing lock authori
 also refuses without creating it. Declining consumes only this Prepared Action;
 it does not finish or clear earlier pending work.
 
+## Managed Certbot renewal recording
+
+Issue #348 adds an optional schema-2 `renewal` contract only beside the existing
+supported `serving` contract. The fixed private recorder wraps the qualified
+official `snap.certbot.renew` service route. It durably publishes a protected,
+bounded attempt receipt before launching the official snap app, then records the
+exact exit and validated owned-lineage deploy/post-hook outcome. Missing, unsafe,
+abandoned, failed, stale, or contradictory evidence remains `Problem detected`;
+later no-op or unrelated success does not erase it.
+
+The recorder admission lock and short evidence-writer lock are separate from the
+Whole-Host Mutation Lock. Start publication occurs while the caller still owns
+whole-host authority. The recorder releases admission before waiting for Certbot,
+and hook writers hold only the evidence lock. Complete removal obtains renewal
+admission/writer exclusion before Certbot POSIX lockf exclusion, refuses live
+work before commitment, removes only the exact owned drop-in and hooks, preserves
+unrelated overrides, and resumes partial durable deletion safely.
+
+The private roles are not Owner commands and their arguments or environment do
+not create authority. Fresh dispatch requires the exact installed pair, complete
+Ownership Record, idle durable gates, official Certbot snap 5.4+, official timer
+and service identity, fixed recorder route, protected files, and matching
+recorder/lineage/IPv4 authority. This slice does not enable a subscription,
+activate a replacement certificate, prove a packaged VPS route, or claim that a
+new or renamed external Certbot route was prevented before later drift detection.
+
 The final authority unlink is the terminal deletion. If its directory sync fails,
 report uncertain completion without publishing replacement authority. All earlier
 removals are already durable: restart sees either the complete final record or

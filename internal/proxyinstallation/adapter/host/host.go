@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"io"
 	"net"
@@ -70,17 +71,21 @@ type Preflight struct {
 }
 
 type Adapter struct {
-	subscriptionCommand   func(context.Context, string, ...string) (string, int, bool)
-	subscriptionBind      func(string, string) bool
-	syncDirectoryFault    func(string) error
-	root                  string
-	architecture          string
-	publicIPv4            func(context.Context) string
-	clockSynchronized     func(context.Context) bool
-	tcp443Available       func(string) bool
-	mutationLockAvailable func() bool
-	packageLocksAvailable func() bool
-	probeDestination      func(context.Context, Destination) DestinationObservation
+	subscriptionCommand     func(context.Context, string, ...string) (string, int, bool)
+	renewalCommand          func(context.Context, string, ...string) int
+	renewalProcessIdentity  func(int) (string, uint64, bool)
+	renewalCertificateValid func(RenewalAuthority, int) bool
+	renewalTrustRoots       *x509.CertPool
+	subscriptionBind        func(string, string) bool
+	syncDirectoryFault      func(string) error
+	root                    string
+	architecture            string
+	publicIPv4              func(context.Context) string
+	clockSynchronized       func(context.Context) bool
+	tcp443Available         func(string) bool
+	mutationLockAvailable   func() bool
+	packageLocksAvailable   func() bool
+	probeDestination        func(context.Context, Destination) DestinationObservation
 }
 
 func New() Adapter {

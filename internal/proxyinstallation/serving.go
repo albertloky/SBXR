@@ -20,6 +20,50 @@ type servingRemovalHost interface {
 	ServingRuntimeAbsent(hostadapter.ServingAuthority) bool
 }
 
+type subscriptionExclusion struct {
+	serving *hostadapter.ServingExclusion
+	renewal *hostadapter.RenewalExclusion
+}
+
+func (e *subscriptionExclusion) Release() {
+	if e == nil {
+		return
+	}
+	if e.serving != nil {
+		e.serving.Release()
+	}
+	if e.renewal != nil {
+		e.renewal.Release()
+	}
+}
+
+func (m *installedInterface) acquireSubscriptionExclusion(record ownershipRecord) (*subscriptionExclusion, bool) {
+	exclusion := &subscriptionExclusion{}
+	if record.Renewal != nil {
+		host, ok := m.host.(renewalHost)
+		if !ok {
+			return nil, false
+		}
+		exclusion.renewal, ok = host.AcquireRenewalExclusion(*record.Renewal)
+		if !ok {
+			return nil, false
+		}
+	}
+	if record.Serving != nil {
+		host, ok := m.host.(servingRemovalHost)
+		if !ok {
+			exclusion.Release()
+			return nil, false
+		}
+		exclusion.serving, ok = host.AcquireServingExclusion()
+		if !ok {
+			exclusion.Release()
+			return nil, false
+		}
+	}
+	return exclusion, true
+}
+
 type servingDispatchHost interface {
 	AcquireSubscriptionReviewLock(string) (*hostadapter.MutationLock, bool, error)
 	ReadOwnership(string) ([]byte, error)
@@ -56,7 +100,14 @@ func (m *installedInterface) servingSurfaceSafe() bool {
 		return false
 	}
 	host, ok := m.host.(servingRemovalHost)
-	return ok && host.InspectServingFiles(*record.Serving, true).Accepted
+	if !ok || !host.InspectServingFiles(*record.Serving, true).Accepted {
+		return false
+	}
+	if record.Renewal != nil {
+		renewal, ok := m.host.(renewalHost)
+		return ok && renewal.InspectRenewal(*record.Renewal).Observed
+	}
+	return true
 }
 
 // ServeSubscription is the private same-executable systemd role, not an Owner
