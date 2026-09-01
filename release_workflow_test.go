@@ -49,6 +49,18 @@ func TestRecurringV3UsesTheExistingQualificationWorkflow(t *testing.T) {
 	}
 }
 
+func TestSigningUsesVerifiedIndexArtifactWithoutDraftReadPermission(t *testing.T) {
+	body, err := os.ReadFile(".github/workflows/candidate.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(body)
+	sign := workflow[strings.Index(workflow, "  sign:"):strings.Index(workflow, "  acceptance-vps:")]
+	if strings.Contains(sign, "candidate-metadata.json") || !strings.Contains(sign, "contents: read") || !strings.Contains(workflow, "downloaded/*/release-index.json") || !strings.Contains(sign, `candidate_index="downloaded/$(jq -r '.[0].tag' drafts.json)/release-index.json"`) || !strings.Contains(sign, `--rawfile candidate_index "$candidate_index"`) {
+		t.Fatal("signing must bind the already verified index artifact without reading a private draft")
+	}
+}
+
 func TestBurnEvidenceTagCanBeRetriedOnlyWithTheExactPayload(t *testing.T) {
 	directory := t.TempDir()
 	run := func(arguments ...string) string {

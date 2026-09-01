@@ -445,6 +445,7 @@ jobs:
             candidate-draft-verification-decision.json
             installer-updater-vps.md
             native/*/evidence/native-*.json
+            downloaded/*/release-index.json
           if-no-files-found: error
           retention-days: 90
 
@@ -500,13 +501,15 @@ jobs:
             # Recheck Latest after builds and approval, not just at preflight.
             go run ./cmd/sbxr-release verify-public-latest > current-source-verification.json
             jq -e --slurpfile current current-source-verification.json '.latest_tag == $current[0].release_identity.tag and $current[0].outcome == "accepted" and any(.releases[]; .tag == $current[0].release_identity.tag and .commit == $current[0].release_identity.commit and .index.sha256 == $current[0].release_identity.release_index_sha256)' candidate-preflight-facts.json >/dev/null
-            gh api repos/KaringX/karing/releases/latest > karing-latest.json
+            gh api repos/KaringX/karing/releases/latest > karing-latest.json || { printf '%s\n' 'Official Karing metadata lookup failed.' >&2; exit 1; }
             jq -e --argjson attempt "$V3_ATTEMPT" '.draft == false and .prerelease == false and (.tag_name | ltrimstr("v")) == $attempt.packages.karing.version and any(.assets[]; .size == $attempt.packages.karing.size and .digest == ("sha256:" + $attempt.packages.karing.sha256))' karing-latest.json >/dev/null
             baseline="$(jq -cS '.subscription_history as $h | $h.releases[] | select(.tag == $h.public_latest.release_identity.tag) | {assets:[.assets[] | {name,sha256:.digest,size}],commit,release_id:.id,release_identity:$h.public_latest.release_identity,sequence:.sequence,tag}' candidate-preflight-facts.json)"
-            gh api "repos/$GITHUB_REPOSITORY/releases/$(jq -r '.[0].release_id' drafts.json)" > candidate-metadata.json
-            gh api "repos/$GITHUB_REPOSITORY/releases/assets/$(jq -r '.assets[] | select(.name == "release-index.json") | .id' candidate-metadata.json)" -H 'Accept: application/octet-stream' > candidate-index.json
+            # Draft reads require push authority. Reuse the authenticated bytes
+            # already checked by the draft decision chain; retain read-only signing.
+            candidate_index="downloaded/$(jq -r '.[0].tag' drafts.json)/release-index.json"
+            test "$(sha256sum "$candidate_index" | cut -d' ' -f1)" = "$(jq -r '.[0].release_identity.release_index_sha256' drafts.json)"
             now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            jq -cS --argjson attempt "$V3_ATTEMPT" --arg now "$now" --arg id "run-$GITHUB_RUN_ID-attempt-$GITHUB_RUN_ATTEMPT" --argjson run_attempt "$GITHUB_RUN_ATTEMPT" --argjson baseline "$baseline" --rawfile candidate_index candidate-index.json '. + {v3_attempt:($attempt + {attempt_id:$id,baseline:$baseline,candidate_index:$candidate_index,run_attempt:$run_attempt,started_at:$now,karing_latest_checked_at:$now})}' qualification-boundary-facts.json | tr -d '\n' > qualification-boundary-facts.next
+            jq -cS --argjson attempt "$V3_ATTEMPT" --arg now "$now" --arg id "run-$GITHUB_RUN_ID-attempt-$GITHUB_RUN_ATTEMPT" --argjson run_attempt "$GITHUB_RUN_ATTEMPT" --argjson baseline "$baseline" --rawfile candidate_index "$candidate_index" '. + {v3_attempt:($attempt + {attempt_id:$id,baseline:$baseline,candidate_index:$candidate_index,run_attempt:$run_attempt,started_at:$now,karing_latest_checked_at:$now})}' qualification-boundary-facts.json | tr -d '\n' > qualification-boundary-facts.next
             mv qualification-boundary-facts.next qualification-boundary-facts.json
           fi
           go run ./cmd/sbxr-release qualification < qualification-boundary-facts.json > qualification-manifest.json
