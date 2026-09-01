@@ -2,7 +2,10 @@ package host
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
@@ -243,5 +246,178 @@ func TestSubscriptionReviewLockNeverCreatesFiles(t *testing.T) {
 	if other, busy, err := adapter.AcquireSubscriptionReviewLock(name); err != nil || !busy {
 		other.Release()
 		t.Fatalf("held lock: %v %v", busy, err)
+	}
+}
+
+func TestSubscriptionLinkRedisclosureRequiresExactProtectedCredential(t *testing.T) {
+	adapter := Adapter{root: t.TempDir()}
+	directory := adapter.path("/var/lib/sbxr")
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	token := []byte("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ")
+	sum := sha256.Sum256(token)
+	authority := ServingAuthority{LinkID: strings.Repeat("1", 32), CredentialSHA256: hex.EncodeToString(sum[:]), CertificateGeneration: 1, CertificateSHA256: [4]string{strings.Repeat("2", 64), strings.Repeat("3", 64), strings.Repeat("4", 64), strings.Repeat("5", 64)}}
+	if err := os.WriteFile(adapter.path(ServingTokenPath), append(token, '\n'), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(adapter.path(ServingStatePath), servingStateBytes(authority), 0600); err != nil {
+		t.Fatal(err)
+	}
+	link, ok := adapter.ReadSubscriptionLink(authority, "8.8.8.8")
+	if !ok || string(link) != "https://8.8.8.8:8443/s/"+string(token) {
+		t.Fatalf("link=%q ok=%t", link, ok)
+	}
+	if err := os.Chmod(adapter.path(ServingTokenPath), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if link, ok := adapter.ReadSubscriptionLink(authority, "8.8.8.8"); ok || len(link) != 0 {
+		t.Fatal("unsafe credential was disclosed")
+	}
+	if err := os.Chmod(adapter.path(ServingTokenPath), 0600); err != nil {
+		t.Fatal(err)
+	}
+	changed := authority
+	changed.LinkID = strings.Repeat("6", 32)
+	if err := os.WriteFile(adapter.path(ServingStatePath), servingStateBytes(changed), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if link, ok := adapter.ReadSubscriptionLink(authority, "8.8.8.8"); ok || len(link) != 0 {
+		t.Fatal("mismatched serving state was disclosed")
+	}
+}
+
+func TestSubscriptionFirewallRequiresBothExactOwnedRules(t *testing.T) {
+	adapter := Adapter{}
+	adapter.subscriptionCommand = func(context.Context, string, ...string) (string, int, bool) {
+		return "*filter\n:INPUT ACCEPT [0:0]\n-A INPUT -d 8.8.8.8/32 -p tcp -m tcp --dport 80 -m comment --comment sbxr-subscription -j ACCEPT\n-A INPUT -d 8.8.8.8/32 -p tcp -m tcp --dport 8443 -m comment --comment sbxr-subscription -j ACCEPT\nCOMMIT\n", 0, true
+	}
+	if !adapter.exactSubscriptionFirewall("8.8.8.8") {
+		t.Fatal("exact firewall rules refused")
+	}
+	adapter.subscriptionCommand = func(context.Context, string, ...string) (string, int, bool) {
+		return "*filter\n:INPUT ACCEPT [0:0]\n-A INPUT -d 8.8.8.8/32 -p tcp -m tcp --dport 80 -m comment --comment sbxr-subscription -j ACCEPT\nCOMMIT\n", 0, true
+	}
+	if adapter.exactSubscriptionFirewall("8.8.8.8") {
+		t.Fatal("partial firewall ownership accepted")
+	}
+}
+
+func TestSubscriptionStagingRefusesExistingSymlink(t *testing.T) {
+	adapter := Adapter{root: t.TempDir()}
+	if err := os.MkdirAll(adapter.path("/var/lib/sbxr"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	target := adapter.path("/var/lib/sbxr/target")
+	if err := os.Mkdir(target, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, adapter.path(ServingStagingPath)); err != nil {
+		t.Fatal(err)
+	}
+	if adapter.prepareServingStaging() {
+		t.Fatal("symlink staging path was accepted")
+	}
+	if info, err := os.Stat(target); err != nil || info.Mode().Perm() != 0755 {
+		t.Fatalf("target was changed: %v %v", info, err)
+	}
+}
+
+func TestSubscriptionPublicationNeverReplacesUnexpectedCurrentValue(t *testing.T) {
+	adapter := Adapter{root: t.TempDir()}
+	if err := os.MkdirAll(adapter.path("/var/lib/sbxr"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	unexpected := []byte("unexpected current value\n")
+	if err := os.WriteFile(adapter.path(ServingTokenPath), unexpected, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if adapter.publishSubscriptionFile(ServingTokenPath, []byte("authorized value\n"), 0600) {
+		t.Fatal("unexpected current value was replaced")
+	}
+	current, err := os.ReadFile(adapter.path(ServingTokenPath))
+	if err != nil || !bytes.Equal(current, unexpected) {
+		t.Fatalf("current value changed: %q %v", current, err)
+	}
+}
+
+func TestSubscriptionPublicationFinishesExactSynchronizedStaging(t *testing.T) {
+	adapter := Adapter{root: t.TempDir()}
+	if err := os.MkdirAll(adapter.path("/var/lib/sbxr"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte("authorized value\n")
+	if err := os.WriteFile(adapter.path(ServingTokenPath+".sbxr-next"), body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if !adapter.publishSubscriptionFile(ServingTokenPath, body, 0600) {
+		t.Fatal("exact staged publication did not finish")
+	}
+	current, err := os.ReadFile(adapter.path(ServingTokenPath))
+	if err != nil || !bytes.Equal(current, body) || !adapter.safelyAbsent(ServingTokenPath+".sbxr-next") {
+		t.Fatalf("publication = %q err=%v", current, err)
+	}
+}
+
+func TestSubscriptionCleanupRemovesExactFirewallAndRenewalStaging(t *testing.T) {
+	adapter := Adapter{root: t.TempDir()}
+	for _, file := range []struct {
+		path string
+		body []byte
+		mode os.FileMode
+	}{
+		{SubscriptionFirewallUnitPath, []byte(subscriptionFirewallUnit("8.8.8.8")), 0644},
+		{RenewalDropInPath, []byte(RenewalDropIn), 0644},
+	} {
+		if err := os.MkdirAll(filepath.Dir(adapter.path(file.path)), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(adapter.path(file.path+".sbxr-next"), file.body, file.mode); err != nil {
+			t.Fatal(err)
+		}
+		if !adapter.removeSubscriptionPublication(file.path, file.body, file.mode) || !adapter.safelyAbsent(file.path+".sbxr-next") {
+			t.Fatalf("pending publication remained for %s", file.path)
+		}
+	}
+}
+
+func TestSubscriptionFirewallUnitIsIdempotentAndRemovesExactDuplicates(t *testing.T) {
+	unit := subscriptionFirewallUnit("8.8.8.8")
+	for _, want := range []string{"-C INPUT -d 8.8.8.8/32", "while /usr/sbin/iptables -w -C INPUT", "-D INPUT -d 8.8.8.8/32"} {
+		if !strings.Contains(unit, want) {
+			t.Fatalf("unit missing %q: %s", want, unit)
+		}
+	}
+}
+
+func TestInterruptedCertbotEffectRecoversExactServingAuthority(t *testing.T) {
+	adapter, renewal := renewalFiles(t)
+	installRenewalCertificate(t, adapter, renewal.PublicIPv4)
+	credential := []byte("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ")
+	sum := sha256.Sum256(credential)
+	resources := SubscriptionResourceAuthority{PublicIPv4: renewal.PublicIPv4, FirewallSHA256: strings.Repeat("1", 64)}
+	serving, ok := adapter.recoverEnablementServing(SubscriptionCleanupInput{
+		Checkpoint: 7, LinkID: strings.Repeat("2", 32), CredentialSHA256: hex.EncodeToString(sum[:]), RecorderID: renewal.RecorderID, Resources: &resources,
+	})
+	if !ok || serving.CertificateGeneration != 1 || serving.LinkID != strings.Repeat("2", 32) || serving.CredentialSHA256 != hex.EncodeToString(sum[:]) {
+		t.Fatalf("recovered = %#v ok=%t", serving, ok)
+	}
+}
+
+func TestInterruptedCertbotEffectCleansExactPartialLineage(t *testing.T) {
+	adapter := Adapter{root: t.TempDir()}
+	for _, directory := range []string{servingArchive, servingLive} {
+		if err := os.MkdirAll(adapter.path(directory), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(adapter.path(servingArchive+"/cert1.pem"), []byte("partial certificate\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../../archive/sbxr-subscription/cert1.pem", adapter.path(servingLive+"/cert.pem")); err != nil {
+		t.Fatal(err)
+	}
+	if !adapter.removeOwnedLineage(nil) || !adapter.safelyAbsent(servingArchive) || !adapter.safelyAbsent(servingLive) {
+		t.Fatal("exact partial lineage was not cleaned")
 	}
 }

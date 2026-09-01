@@ -126,10 +126,33 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 			if !ok {
 				return 1
 			}
+			var subscriptionLink []byte
+			var progressErr error
 			latest = installation.Execute(ctx, *review.Prepared, confirmation, func(progress proxyinstallation.Progress) {
-				_, _ = fmt.Fprintln(output, "Progress:", progress.Phase)
+				if progressErr != nil {
+					return
+				}
+				if progress.Phase != "" {
+					_, progressErr = fmt.Fprintln(output, "Progress:", progress.Phase)
+				}
+				if len(progress.SubscriptionLink) > 0 {
+					subscriptionLink = bytes.Clone(progress.SubscriptionLink)
+				}
 			})
-			if action == proxyinstallation.EnableSubscriptionAction && writeRefusal(output, latest) != nil {
+			if action == proxyinstallation.EnableSubscriptionAction && latest.Code == proxyinstallation.SubscriptionEnabled {
+				if progressErr != nil || len(subscriptionLink) == 0 || writeSubscriptionLink(output, subscriptionLink) != nil {
+					_ = writeRefusal(errorOutput, proxyinstallation.Result{Code: proxyinstallation.SubscriptionLinkDisplayIncomplete, Message: "The subscription change completed, but link display did not complete. Use View details."})
+					return 1
+				}
+				if _, err := io.WriteString(output, "Press Enter to preserve this link in terminal scrollback and return to the menu.\n"); err != nil {
+					return 1
+				}
+				if _, err := readLine(reader); err != nil && err != io.EOF {
+					return 1
+				}
+			} else if progressErr != nil {
+				return 1
+			} else if action == proxyinstallation.EnableSubscriptionAction && writeRefusal(output, latest) != nil {
 				return 1
 			}
 		case proxyinstallation.CompleteRemovalAction:
@@ -183,6 +206,13 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 					return 1
 				}
 			}
+			if len(review.SubscriptionLink) > 0 {
+				if writeSubscriptionLink(output, review.SubscriptionLink) != nil {
+					_, _ = io.WriteString(errorOutput, "Subscription link output failed.\n")
+					return 1
+				}
+				latest = proxyinstallation.Result{Status: review.Status, SubscriptionStatus: review.SubscriptionStatus, Code: proxyinstallation.SubscriptionLinkDisclosed, Message: "The subscription link was displayed. Keep it private."}
+			}
 			if _, err := io.WriteString(output, "Press Enter to return to the menu.\n"); err != nil {
 				return 1
 			}
@@ -197,6 +227,17 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 		}
 		current = installation.Review(ctx, proxyinstallation.StatusAction)
 	}
+}
+
+func writeSubscriptionLink(output io.Writer, link []byte) error {
+	if len(link) == 0 || bytes.ContainsAny(link, "\r\n") {
+		return errors.New("invalid subscription link")
+	}
+	if _, err := io.WriteString(output, "This link is a reusable credential. Anyone with it can obtain your proxy connection details. Keep it private. It will remain in terminal scrollback.\n"); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintf(output, "%s\n", link)
+	return err
 }
 
 func readCompleteRemovalConfirmation(reader *bufio.Reader, output io.Writer) (proxyinstallation.Confirmation, bool) {

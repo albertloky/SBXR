@@ -26,7 +26,9 @@ import (
 
 const ServingRole = "--subscription-serving"
 const ServingUnitPath = "/etc/systemd/system/sbxr-subscription.service"
+const ServingUnitWantsPath = "/etc/systemd/system/multi-user.target.wants/sbxr-subscription.service"
 const ServingTokenPath = "/var/lib/sbxr/subscription-token"
+const ServingStatePath = "/var/lib/sbxr/subscription-serving.json"
 const ServingStagingPath = "/var/lib/sbxr/subscription-staging"
 const servingArchive = "/etc/letsencrypt/archive/sbxr-subscription"
 const servingLive = "/etc/letsencrypt/live/sbxr-subscription"
@@ -114,7 +116,7 @@ func (a ServingAuthority) Valid() bool {
 var certificateNames = []string{"cert", "chain", "fullchain", "privkey"}
 
 func (a ServingAuthority) Resources() []string {
-	resources := []string{ServingUnitPath + " root:root 0644 one-link fixed-serving-v1", ServingTokenPath + " root:root 0600 one-link credential", ServingStagingPath + " root:root 0700 empty-directory", servingArchive + " root:root 0700 directory", servingLive + " root:root 0700 directory"}
+	resources := []string{ServingUnitPath + " root:root 0644 one-link fixed-serving-v1", ServingUnitWantsPath + " root-owned symlink ../sbxr-subscription.service", ServingTokenPath + " root:root 0600 one-link credential", ServingStatePath + " root:root 0600 immutable serving state", ServingStagingPath + " root:root 0700 empty-directory", servingArchive + " root:root 0700 directory", servingLive + " root:root 0700 directory"}
 	for i, name := range certificateNames {
 		archive := servingArchive + "/" + name + strconv.Itoa(a.CertificateGeneration) + ".pem"
 		mode := "0644"
@@ -213,7 +215,7 @@ func (a Adapter) removableServingArchive(authority ServingAuthority) ([]string, 
 	current, history := make([]string, 0, len(certificateNames)), make([]string, 0, len(entries))
 	for _, entry := range entries {
 		generation, valid := servingArchiveIdentity(entry.Name())
-		if !valid {
+		if !valid || generation > authority.CertificateGeneration {
 			return nil, false
 		}
 		mode := os.FileMode(0644)
@@ -249,7 +251,7 @@ func (a Adapter) inspectServingFiles(authority ServingAuthority, removing, sandb
 	}
 	// Unknown staging, renewal, hooks and overrides belong to later complete
 	// lifecycle contracts. Never adopt or delete them as this runtime footprint.
-	for _, path := range []string{"/etc/letsencrypt/renewal/sbxr-subscription.conf", ServingUnitPath + ".d", "/etc/systemd/system/multi-user.target.wants/sbxr-subscription.service",
+	for _, path := range []string{ServingUnitPath + ".d",
 		"/run/systemd/system/sbxr-subscription.service", "/run/systemd/system/sbxr-subscription.service.d", "/usr/lib/systemd/system/sbxr-subscription.service", "/usr/lib/systemd/system/sbxr-subscription.service.d",
 		"/etc/systemd/system/service.d", "/usr/lib/systemd/system/service.d"} {
 		if sandbox && strings.HasPrefix(path, "/run/systemd/") {
@@ -259,7 +261,7 @@ func (a Adapter) inspectServingFiles(authority ServingAuthority, removing, sandb
 			return Observation{}
 		}
 	}
-	if !a.servingDirectory("/var/lib/sbxr", []string{"installed.json", "proxy-ownership.json", ".proxy-ownership.json.next", "subscription-token", "subscription-staging"}, removing) {
+	if !a.servingDirectory("/var/lib/sbxr", []string{"installed.json", "proxy-ownership.json", ".proxy-ownership.json.next", "subscription-token", "subscription-serving.json", "subscription-staging", "renewal-attempts.json", ".renewal-attempts.json.next", "renewal-admission.lock", "renewal-writer.lock"}, removing) {
 		return Observation{}
 	}
 	if !sandbox && !a.servingDirectory(ServingStagingPath, nil, removing) {
@@ -297,12 +299,24 @@ func (a Adapter) inspectServingFiles(authority ServingAuthority, removing, sandb
 	if err != nil && !(removing && errors.Is(err, os.ErrNotExist)) || err == nil && string(unit) != ServingUnit {
 		return Observation{}
 	}
+	wantsInfo, wantsErr := os.Lstat(a.path(ServingUnitWantsPath))
+	wantsTarget, targetErr := os.Readlink(a.path(ServingUnitWantsPath))
+	if removing && errors.Is(wantsErr, os.ErrNotExist) {
+		// Safe partial removal.
+	} else if wantsErr != nil || wantsInfo.Mode()&os.ModeSymlink == 0 || targetErr != nil || wantsTarget != "../sbxr-subscription.service" {
+		return Observation{}
+	}
 	if !sandbox {
 		token, err := a.protectedServingFile(ServingTokenPath, 0600, "")
+		tokenPresent := err == nil
 		if err != nil && !(removing && errors.Is(err, os.ErrNotExist)) || err == nil && (len(token) != 44 || token[43] != '\n' || digest(token[:43]) != authority.CredentialSHA256) {
 			return Observation{}
 		}
-		if err == nil {
+		state, err := a.protectedServingFile(ServingStatePath, 0600, digest(servingStateBytes(authority)))
+		if err != nil && !(removing && errors.Is(err, os.ErrNotExist)) || err == nil && !bytes.Equal(state, servingStateBytes(authority)) {
+			return Observation{}
+		}
+		if tokenPresent {
 			decoded, err := base64.RawURLEncoding.Strict().DecodeString(string(token[:43]))
 			if err != nil || len(decoded) != 32 {
 				return Observation{}
@@ -645,7 +659,7 @@ func (a Adapter) RemoveServingRuntime(ctx context.Context, authority ServingAuth
 			return false
 		}
 	}
-	if !a.safelyAbsent(ServingUnitPath) && !a.servingCommand(ctx, "stop", "sbxr-subscription.service") || !a.ServingQuiescent() {
+	if !a.safelyAbsent(ServingUnitPath) && !a.servingCommand(ctx, "disable", "--now", "sbxr-subscription.service") || !a.ServingQuiescent() {
 		return false
 	}
 	paths := []string{}
@@ -653,7 +667,7 @@ func (a Adapter) RemoveServingRuntime(ctx context.Context, authority ServingAuth
 		paths = append(paths, servingLive+"/"+name+".pem")
 	}
 	paths = append(paths, archivePaths...)
-	paths = append(paths, servingLive, servingArchive, ServingTokenPath, ServingStagingPath, ServingUnitPath)
+	paths = append(paths, servingLive, servingArchive, ServingTokenPath, ServingStatePath, ServingStagingPath, ServingUnitWantsPath, ServingUnitPath)
 	for _, path := range paths {
 		if err := os.Remove(a.path(path)); errors.Is(err, os.ErrNotExist) {
 			if !a.syncAbsentPath(path) {

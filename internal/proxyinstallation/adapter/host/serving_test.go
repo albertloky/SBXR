@@ -54,6 +54,9 @@ func servingFiles(t *testing.T) (Adapter, ServingAuthority) {
 	if err := os.MkdirAll(a.path("/etc/systemd/system"), 0755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Dir(a.path(ServingUnitWantsPath)), 0755); err != nil {
+		t.Fatal(err)
+	}
 	token := []byte(strings.Repeat("A", 43) + "\n")
 	authority := ServingAuthority{LinkID: strings.Repeat("a", 32), CredentialSHA256: digest(token[:43]), CertificateGeneration: 1}
 	for i, name := range certificateNames {
@@ -73,7 +76,13 @@ func servingFiles(t *testing.T) (Adapter, ServingAuthority) {
 	if err := os.WriteFile(a.path(ServingUnitPath), []byte(ServingUnit), 0644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Symlink("../sbxr-subscription.service", a.path(ServingUnitWantsPath)); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(a.path(ServingTokenPath), token, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(a.path(ServingStatePath), servingStateBytes(authority), 0600); err != nil {
 		t.Fatal(err)
 	}
 	return a, authority
@@ -162,12 +171,37 @@ func TestServingRemovalDeletesProvedCertificateHistory(t *testing.T) {
 			mode = 0600
 		}
 		body, err := os.ReadFile(a.path(servingArchive + "/" + name + "1.pem"))
-		if err != nil || os.WriteFile(a.path(servingArchive+"/"+name+"2.pem"), body, mode) != nil {
+		if err != nil || os.Rename(a.path(servingArchive+"/"+name+"1.pem"), a.path(servingArchive+"/"+name+"2.pem")) != nil || os.WriteFile(a.path(servingArchive+"/"+name+"1.pem"), body, mode) != nil {
 			t.Fatal("create proved certificate history")
 		}
+		live := a.path(servingLive + "/" + name + ".pem")
+		if os.Remove(live) != nil || os.Symlink("../../archive/sbxr-subscription/"+name+"2.pem", live) != nil {
+			t.Fatal("publish current generation")
+		}
+	}
+	authority.CertificateGeneration = 2
+	if err := os.WriteFile(a.path(ServingStatePath), servingStateBytes(authority), 0600); err != nil {
+		t.Fatal(err)
 	}
 	if !removeServing(t, a, authority) || !a.ServingRuntimeAbsent(authority) {
 		t.Fatal("proved certificate history prevented removal")
+	}
+}
+
+func TestServingRemovalRefusesUnrecordedFutureGeneration(t *testing.T) {
+	a, authority := servingFiles(t)
+	for _, name := range certificateNames {
+		mode := os.FileMode(0644)
+		if name == "privkey" {
+			mode = 0600
+		}
+		body, err := os.ReadFile(a.path(servingArchive + "/" + name + "1.pem"))
+		if err != nil || os.WriteFile(a.path(servingArchive+"/"+name+"2.pem"), body, mode) != nil {
+			t.Fatal("create unrecorded future generation")
+		}
+	}
+	if removeServing(t, a, authority) {
+		t.Fatal("unrecorded future generation was removed")
 	}
 }
 

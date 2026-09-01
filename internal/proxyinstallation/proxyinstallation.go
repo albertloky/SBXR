@@ -16,6 +16,7 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"strings"
 	"sync"
 
 	hostadapter "github.com/albertloky/SBXR/internal/proxyinstallation/adapter/host"
@@ -95,6 +96,10 @@ const (
 	SubscriptionStatusProblemDetected  ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-STATUS-PROBLEM-DETECTED"
 	SubscriptionChangeFinished         ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-CHANGE-FINISHED"
 	SubscriptionChangeNeedsCompletion  ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-CHANGE-INCOMPLETE"
+	SubscriptionEnabled                ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-ENABLED"
+	SubscriptionChangeCleanedUp        ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-CHANGE-CLEANED-UP"
+	SubscriptionLinkDisplayIncomplete  ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-LINK-DISPLAY-INCOMPLETE"
+	SubscriptionLinkDisclosed          ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-LINK-DISCLOSED"
 )
 
 type Result struct {
@@ -121,11 +126,13 @@ type Review struct {
 	Plan                []string
 	Result              Result
 	Prepared            *PreparedAction
+	SubscriptionLink    []byte
 }
 
 type Progress struct {
 	Phase               string
 	ClientConfiguration []byte
+	SubscriptionLink    []byte
 }
 
 type ProgressReporter func(Progress)
@@ -229,23 +236,35 @@ const (
 )
 
 type ownershipRecord struct {
-	Schema                   int                                 `json:"schema"`
-	Phase                    setupPhase                          `json:"phase"`
-	Direction                unfinishedDirection                 `json:"unfinished_direction"`
-	Release                  softwarelifecycle.ReleaseIdentity   `json:"release_identity"`
-	Package                  string                              `json:"proxy_package_identity"`
-	PublicIPv4               string                              `json:"public_ipv4"`
-	DestinationAddress       string                              `json:"destination_address"`
-	DestinationName          string                              `json:"destination_server_name"`
-	ConfigurationSHA256      string                              `json:"configuration_sha256"`
-	Resources                []string                            `json:"permitted_resources"`
-	CleanupCheckpoint        int                                 `json:"cleanup_checkpoint"`
-	RemovalCheckpoint        int                                 `json:"removal_checkpoint"`
-	ResourceCreatingReleases []softwarelifecycle.ReleaseIdentity `json:"resource_creating_releases,omitempty"`
-	FinishingRelease         *softwarelifecycle.ReleaseIdentity  `json:"finishing_release_identity,omitempty"`
-	Serving                  *hostadapter.ServingAuthority       `json:"serving,omitempty"`
-	Renewal                  *hostadapter.RenewalAuthority       `json:"renewal,omitempty"`
-	Activation               *certificateActivation              `json:"certificate_activation,omitempty"`
+	Schema                   int                                        `json:"schema"`
+	Phase                    setupPhase                                 `json:"phase"`
+	Direction                unfinishedDirection                        `json:"unfinished_direction"`
+	Release                  softwarelifecycle.ReleaseIdentity          `json:"release_identity"`
+	Package                  string                                     `json:"proxy_package_identity"`
+	PublicIPv4               string                                     `json:"public_ipv4"`
+	DestinationAddress       string                                     `json:"destination_address"`
+	DestinationName          string                                     `json:"destination_server_name"`
+	ConfigurationSHA256      string                                     `json:"configuration_sha256"`
+	Resources                []string                                   `json:"permitted_resources"`
+	CleanupCheckpoint        int                                        `json:"cleanup_checkpoint"`
+	RemovalCheckpoint        int                                        `json:"removal_checkpoint"`
+	ResourceCreatingReleases []softwarelifecycle.ReleaseIdentity        `json:"resource_creating_releases,omitempty"`
+	FinishingRelease         *softwarelifecycle.ReleaseIdentity         `json:"finishing_release_identity,omitempty"`
+	Serving                  *hostadapter.ServingAuthority              `json:"serving,omitempty"`
+	Renewal                  *hostadapter.RenewalAuthority              `json:"renewal,omitempty"`
+	Activation               *certificateActivation                     `json:"certificate_activation,omitempty"`
+	Enablement               *subscriptionEnablement                    `json:"subscription_enablement,omitempty"`
+	SubscriptionResources    *hostadapter.SubscriptionResourceAuthority `json:"subscription_resources,omitempty"`
+}
+
+type subscriptionEnablement struct {
+	Checkpoint       int                                        `json:"checkpoint"`
+	LinkID           string                                     `json:"link_id"`
+	CredentialSHA256 string                                     `json:"credential_sha256"`
+	RecorderID       string                                     `json:"recorder_id"`
+	Serving          *hostadapter.ServingAuthority              `json:"serving,omitempty"`
+	Renewal          *hostadapter.RenewalAuthority              `json:"renewal,omitempty"`
+	Resources        *hostadapter.SubscriptionResourceAuthority `json:"resources,omitempty"`
 }
 
 type certificateActivation struct {
@@ -379,11 +398,21 @@ func (module *installedInterface) Review(ctx context.Context, action Action) Rev
 		review.Details = append(review.Details, "Subscription passed local checks. Karing reachability is not verified.")
 	}
 	if review.Status == Running && review.SubscriptionStatus == SubscriptionChangeIncomplete {
-		review.LegalActions = []Action{FinishSubscriptionChangeAction, ViewDetailsAction}
-		review.Result = Result{Status: review.Status, SubscriptionStatus: review.SubscriptionStatus, Message: "A subscription change needs safe cleanup or completion.", Code: SubscriptionStatusChangeIncomplete}
+		review.LegalActions = []Action{FinishSubscriptionChangeAction, ViewDetailsAction, CompleteRemovalAction}
+		if action != CompleteRemovalAction {
+			review.Result = Result{Status: review.Status, SubscriptionStatus: review.SubscriptionStatus, Message: "A subscription change needs safe cleanup or completion.", Code: SubscriptionStatusChangeIncomplete}
+		}
 		if action == FinishSubscriptionChangeAction {
-			review = module.prepareCertificateActivationReview(ctx, review, activation)
-		} else if action != StatusAction && action != ViewDetailsAction {
+			if body, err := module.readOwnership(); err == nil {
+				if record, ok := decodeOwnership(body); ok && record.Enablement != nil {
+					review = module.prepareEnablementCleanupReview(ctx, review, record, body)
+				} else {
+					review = module.prepareCertificateActivationReview(ctx, review, activation)
+				}
+			} else {
+				review.Result = refused(review.Status, "Subscription authority", "Restore the exact durable Ownership Record, then inspect again.")
+			}
+		} else if action != StatusAction && action != ViewDetailsAction && action != CompleteRemovalAction {
 			review.Result = refused(review.Status, "Legal action", "Choose Finish subscription change for the proved certificate activation direction.")
 		}
 	} else if review.Status == Running && action == FinishSubscriptionChangeAction {
@@ -391,6 +420,17 @@ func (module *installedInterface) Review(ctx context.Context, action Action) Rev
 	}
 	review.Result.SubscriptionStatus = review.SubscriptionStatus
 	review.Result.ProxyTraffic, review.Result.SubscriptionServing = review.ProxyTraffic, review.SubscriptionServing
+	if action == ViewDetailsAction {
+		if body, err := module.readOwnership(); err == nil {
+			if record, ok := decodeOwnership(body); ok && record.Serving != nil {
+				if host, ok := module.host.(interface {
+					ReadSubscriptionLink(hostadapter.ServingAuthority, string) ([]byte, bool)
+				}); ok {
+					review.SubscriptionLink, _ = host.ReadSubscriptionLink(*record.Serving, record.PublicIPv4)
+				}
+			}
+		}
+	}
 	return review
 }
 
@@ -951,7 +991,7 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 	authority, ok := module.prepared[prepared.token]
 	delete(module.prepared, prepared.token)
 	defer func() {
-		if result.Code != SubscriptionStatusProblemDetected {
+		if result.Code != SubscriptionStatusProblemDetected && result.Code != SubscriptionEnabled {
 			result.SubscriptionStatus = module.subscriptionStatus(context.WithoutCancel(ctx))
 			result.ProxyTraffic, result.SubscriptionServing = CannotBeVerified, CannotBeVerified
 		}
@@ -965,7 +1005,7 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 		if result.Code == SetupComplete || result.Code == ClientConfigurationDisclosed {
 			result.ProxyTraffic = ProvedWorking
 		}
-		if result.Code == SubscriptionChangeFinished {
+		if result.Code == SubscriptionChangeFinished || result.Code == SubscriptionEnabled {
 			result.ProxyTraffic, result.SubscriptionServing = ProvedWorking, ProvedWorking
 		}
 		if result.Code == CompleteRemovalCompleted {
@@ -985,9 +1025,12 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 		return refused(authority.status, "Prepared Action", "Review the action again and use only the new Prepared Action.")
 	}
 	if authority.action == EnableSubscriptionAction {
-		return module.refuseSubscriptionExecution(ctx, authority)
+		return module.enableSubscription(ctx, authority, progress)
 	}
 	if authority.action == FinishSubscriptionChangeAction {
+		if record, body, ok := module.currentEnablement(authority); ok {
+			return module.executeEnablementCleanup(ctx, authority, record, body, progress)
+		}
 		return module.executeCertificateActivation(ctx, authority, progress)
 	}
 	if authority.action == CompleteRemovalAction {
@@ -999,7 +1042,7 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 			return refused(authority.status, "SBXR mutation lock", "Wait for the active SBXR change to finish, then review Complete removal again.")
 		}
 		defer lock.Release()
-		if module.subscriptionStatus(context.WithoutCancel(ctx)) != SubscriptionNotEnabled && !module.servingSurfaceSafe() {
+		if module.subscriptionStatus(context.WithoutCancel(ctx)) != SubscriptionNotEnabled && !module.subscriptionRemovalSurfaceSafe() {
 			return refused(authority.status, "Subscription absence", "Inspect subscription material before retrying.")
 		}
 		packageLocks, packageBusy, err := module.host.AcquirePackageLocks()
@@ -1068,7 +1111,7 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 		return refused(authority.status, "SBXR mutation lock", "Wait for the active SBXR change to finish, then review the action again.")
 	}
 	defer lock.Release()
-	if module.subscriptionStatus(context.WithoutCancel(ctx)) != SubscriptionNotEnabled && !(module.servingSurfaceSafe() && (authority.action == FinishRemovalAction || authority.action == ShowClientConfigurationAction)) {
+	if module.subscriptionStatus(context.WithoutCancel(ctx)) != SubscriptionNotEnabled && authority.action != FinishRemovalAction && !(module.servingSurfaceSafe() && authority.action == ShowClientConfigurationAction) {
 		return refused(authority.status, "Subscription absence", "Inspect subscription material before retrying.")
 	}
 	if ctx.Err() != nil {
@@ -1354,33 +1397,79 @@ func (module *installedInterface) finishRemoval(ctx context.Context, record owne
 	if !module.syncRemovalAuthority(body) {
 		return removalInterrupted("Removal authority synchronization")
 	}
+	if record.Enablement != nil {
+		host, ok := module.host.(subscriptionEnablementHost)
+		if !ok || !host.CleanupPreparedSubscription(context.WithoutCancel(ctx), hostadapter.SubscriptionCleanupInput{Checkpoint: record.Enablement.Checkpoint, LinkID: record.Enablement.LinkID, CredentialSHA256: record.Enablement.CredentialSHA256, RecorderID: record.Enablement.RecorderID, Serving: record.Enablement.Serving, Renewal: record.Enablement.Renewal, Resources: record.Enablement.Resources}) {
+			return removalInterrupted("Interrupted subscription enablement removal")
+		}
+		report(progress, "Cleaning up subscription change")
+	}
 	if record.Serving != nil {
 		host, ok := module.host.(servingRemovalHost)
 		if !ok {
 			return removalInterrupted("Subscription Serving exclusion")
 		}
-		if exclusion == nil {
-			var acquired bool
-			exclusion, acquired = module.acquireSubscriptionExclusion(record)
-			if !acquired {
-				return removalInterrupted("Subscription Serving exclusion")
+		if host.ServingRuntimeAbsent(*record.Serving) {
+			report(progress, "Subscription Serving removed")
+		} else {
+			if exclusion == nil {
+				var acquired bool
+				exclusion, acquired = module.acquireSubscriptionExclusion(record)
+				if !acquired {
+					return removalInterrupted("Subscription Serving exclusion")
+				}
+				defer exclusion.Release()
 			}
-			defer exclusion.Release()
+			if !host.RemoveServingRuntime(context.WithoutCancel(ctx), *record.Serving, exclusion.serving) || !host.ServingRuntimeAbsent(*record.Serving) {
+				return removalInterrupted("Subscription Serving removal")
+			}
+			report(progress, "Subscription Serving removed")
 		}
-		if !host.RemoveServingRuntime(context.WithoutCancel(ctx), *record.Serving, exclusion.serving) || !host.ServingRuntimeAbsent(*record.Serving) {
-			return removalInterrupted("Subscription Serving removal")
-		}
-		report(progress, "Subscription Serving removed")
 		if ctx.Err() != nil {
 			return removalInterrupted("Managed termination")
 		}
 	}
 	if record.Renewal != nil {
 		host, ok := module.host.(renewalHost)
-		if !ok || exclusion == nil || exclusion.renewal == nil || !host.RemoveRenewalIntegration(context.WithoutCancel(ctx), *record.Renewal, exclusion.renewal) || !host.RenewalIntegrationAbsent(*record.Renewal) {
+		if !ok {
 			return removalInterrupted("Renewal recorder removal")
 		}
+		if !host.RenewalIntegrationAbsent(*record.Renewal) {
+			if exclusion == nil {
+				var acquired bool
+				exclusion, acquired = module.acquireSubscriptionExclusion(record)
+				if !acquired {
+					return removalInterrupted("Renewal recorder exclusion")
+				}
+				defer exclusion.Release()
+			}
+			if exclusion == nil || exclusion.renewal == nil || !host.RemoveRenewalIntegration(context.WithoutCancel(ctx), *record.Renewal, exclusion.renewal) || !host.RenewalIntegrationAbsent(*record.Renewal) {
+				return removalInterrupted("Renewal recorder removal")
+			}
+		}
 		report(progress, "Renewal recorder removed")
+	}
+	if record.SubscriptionResources != nil {
+		host, ok := module.host.(subscriptionResourceRemovalHost)
+		if !ok {
+			return removalInterrupted("Subscription owned-resource removal")
+		}
+		if exclusion == nil {
+			servingHost, ok := module.host.(servingRemovalHost)
+			if !ok {
+				return removalInterrupted("Subscription resource exclusion")
+			}
+			servingExclusion, acquired := servingHost.AcquireServingExclusion()
+			if !acquired {
+				return removalInterrupted("Subscription resource exclusion")
+			}
+			exclusion = &subscriptionExclusion{serving: servingExclusion}
+			defer exclusion.Release()
+		}
+		if !host.RemoveSubscriptionResources(context.WithoutCancel(ctx), *record.SubscriptionResources, record.Serving) {
+			return removalInterrupted("Subscription owned-resource removal")
+		}
+		report(progress, "Subscription owned resources removed")
 	}
 	operations := []hostadapter.Operation{}
 	if record.Package != "" {
@@ -1777,7 +1866,7 @@ func decodeOwnership(body []byte) (ownershipRecord, bool) {
 		}
 	}
 	for name, value := range fields {
-		if !slices.Contains([]string{"schema", "phase", "unfinished_direction", "release_identity", "proxy_package_identity", "public_ipv4", "destination_address", "destination_server_name", "configuration_sha256", "permitted_resources", "cleanup_checkpoint", "removal_checkpoint", "resource_creating_releases", "finishing_release_identity", "serving", "renewal", "certificate_activation"}, name) {
+		if !slices.Contains([]string{"schema", "phase", "unfinished_direction", "release_identity", "proxy_package_identity", "public_ipv4", "destination_address", "destination_server_name", "configuration_sha256", "permitted_resources", "cleanup_checkpoint", "removal_checkpoint", "resource_creating_releases", "finishing_release_identity", "serving", "renewal", "certificate_activation", "subscription_enablement", "subscription_resources"}, name) {
 			return ownershipRecord{}, false
 		}
 		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
@@ -1811,6 +1900,17 @@ func decodeOwnership(body []byte) (ownershipRecord, bool) {
 		var activation map[string]json.RawMessage
 		if json.Unmarshal(raw, &activation) != nil || len(activation) != 3 || len(activation["source"]) == 0 || len(activation["target"]) == 0 || len(activation["checkpoint"]) == 0 {
 			return ownershipRecord{}, false
+		}
+	}
+	if raw, exists := fields["subscription_enablement"]; exists {
+		var enablement map[string]json.RawMessage
+		if json.Unmarshal(raw, &enablement) != nil {
+			return ownershipRecord{}, false
+		}
+		for _, name := range []string{"link_id", "credential_sha256", "recorder_id"} {
+			if len(enablement[name]) == 0 || bytes.Equal(bytes.TrimSpace(enablement[name]), []byte("null")) {
+				return ownershipRecord{}, false
+			}
 		}
 	}
 	if !exactIdentityFields(fields["release_identity"]) {
@@ -1858,7 +1958,7 @@ func validOwnership(record ownershipRecord) bool {
 		return false
 	}
 	if record.Schema == 1 {
-		if record.ResourceCreatingReleases != nil || record.FinishingRelease != nil || record.Serving != nil || record.Renewal != nil || record.Activation != nil {
+		if record.ResourceCreatingReleases != nil || record.FinishingRelease != nil || record.Serving != nil || record.Renewal != nil || record.Activation != nil || record.Enablement != nil || record.SubscriptionResources != nil {
 			return false
 		}
 	} else {
@@ -1885,6 +1985,12 @@ func validOwnership(record ownershipRecord) bool {
 		return false
 	}
 	if record.Activation != nil && (record.Schema != 2 || record.Serving == nil || record.Renewal == nil || record.Direction != noDirection || record.Phase != runningPhase || record.Activation.Checkpoint == activationTargetRecorded && record.Activation.Source != *record.Serving || record.Activation.Checkpoint == activationTargetAccepted && record.Activation.Target != *record.Serving || !validCertificateActivation(*record.Activation)) {
+		return false
+	}
+	if record.Enablement != nil && (record.Schema != 2 || record.Serving != nil || record.Renewal != nil || record.Activation != nil || record.Direction != noDirection && record.Direction != removalRequired || record.Phase != runningPhase && record.Phase != removalCommitted || !validSubscriptionEnablement(*record.Enablement)) {
+		return false
+	}
+	if record.SubscriptionResources != nil && (record.Schema != 2 || !record.SubscriptionResources.Valid() || record.SubscriptionResources.PublicIPv4 != record.PublicIPv4 || record.Serving == nil || record.Renewal == nil) {
 		return false
 	}
 	if record.Direction == removalRequired {
@@ -1921,7 +2027,61 @@ func recordResources(record ownershipRecord, softwareOnly bool) []string {
 	if record.Renewal != nil {
 		resources = append(resources, record.Renewal.Resources()...)
 	}
+	if record.SubscriptionResources != nil {
+		resources = append(resources, record.SubscriptionResources.Resources()...)
+	}
+	if record.Enablement != nil {
+		if record.Enablement.Serving == nil {
+			resources = append(resources,
+				hostadapter.ServingTokenPath+" root:root 0600 one-link provisional credential",
+				hostadapter.ServingStagingPath+" root:root 0700 provisional material",
+				hostadapter.ServingUnitPath+" root:root 0644 one-link fixed-serving-v1",
+				hostadapter.ServingUnitWantsPath+" root-owned provisional enablement symlink",
+				"/etc/letsencrypt/archive/sbxr-subscription owned provisional lineage",
+				"/etc/letsencrypt/live/sbxr-subscription owned provisional lineage",
+				"/etc/letsencrypt/renewal/sbxr-subscription.conf owned provisional lineage",
+				hostadapter.RenewalDropInPath+" root:root 0644 provisional recorder route",
+				hostadapter.RenewalDeployHookPath+" root:root 0700 provisional hook",
+				hostadapter.RenewalPostHookPath+" root:root 0700 provisional hook",
+				hostadapter.RenewalEvidencePath+" root:root 0600 provisional evidence",
+			)
+		} else {
+			resources = append(resources, record.Enablement.Serving.Resources()...)
+		}
+		if record.Enablement.Renewal != nil {
+			resources = append(resources, record.Enablement.Renewal.Resources()...)
+		}
+		if record.Enablement.Resources != nil {
+			resources = append(resources, record.Enablement.Resources.Resources()...)
+		}
+		if record.Enablement.Checkpoint >= hostadapter.SubscriptionServingCheckpoint && record.Enablement.Checkpoint <= 14 {
+			resources = append(resources, hostadapter.SubscriptionCandidateTokenPath+" root:root 0600 one-link provisional credential")
+		}
+		if record.Enablement.Checkpoint >= hostadapter.SubscriptionServingCheckpoint && record.Enablement.Checkpoint <= 15 {
+			resources = append(resources, hostadapter.SubscriptionCandidateStatePath+" root:root 0600 immutable provisional serving state")
+		}
+		for _, path := range []string{hostadapter.SubscriptionCandidateTokenPath, hostadapter.SubscriptionCandidateStatePath, hostadapter.ServingTokenPath, hostadapter.ServingStatePath, hostadapter.ServingUnitPath} {
+			resources = append(resources, path+".sbxr-next root-owned synchronized no-replace publication")
+		}
+		for _, path := range []string{hostadapter.SubscriptionFirewallUnitPath, hostadapter.RenewalDropInPath, hostadapter.RenewalDeployHookPath, hostadapter.RenewalPostHookPath, hostadapter.RenewalAdmissionPath, hostadapter.RenewalWriterPath, hostadapter.RenewalEvidencePath} {
+			resources = append(resources, path+".sbxr-next root-owned synchronized no-replace publication")
+		}
+	}
 	return resources
+}
+
+func validSubscriptionEnablement(enablement subscriptionEnablement) bool {
+	validHex := func(value string, size int) bool {
+		decoded, err := hex.DecodeString(value)
+		return err == nil && len(decoded) == size && hex.EncodeToString(decoded) == value && value != strings.Repeat("0", size*2)
+	}
+	if enablement.Checkpoint < 0 || enablement.Checkpoint > hostadapter.SubscriptionActivationCheckpoint || !validHex(enablement.LinkID, 16) || !validHex(enablement.CredentialSHA256, 32) || !validHex(enablement.RecorderID, 16) || (enablement.Serving == nil) != (enablement.Renewal == nil) || enablement.Serving != nil && enablement.Resources == nil {
+		return false
+	}
+	if enablement.Resources != nil && !enablement.Resources.Valid() {
+		return false
+	}
+	return enablement.Serving == nil || enablement.Serving.Valid() && enablement.Renewal.Valid() && enablement.Serving.LinkID == enablement.LinkID && enablement.Serving.CredentialSHA256 == enablement.CredentialSHA256 && enablement.Renewal.RecorderID == enablement.RecorderID && enablement.Resources.PublicIPv4 == enablement.Renewal.PublicIPv4
 }
 
 func validCertificateActivation(activation certificateActivation) bool {

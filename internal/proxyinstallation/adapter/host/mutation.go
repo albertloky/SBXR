@@ -1158,6 +1158,8 @@ func (adapter Adapter) InspectSubscriptionAbsence(ctx context.Context) Observati
 	}
 	for _, name := range []string{
 		"/etc/systemd/system/sbxr-subscription.service",
+		SubscriptionFirewallUnitPath,
+		RenewalDropInPath, RenewalDeployHookPath, RenewalPostHookPath,
 		"/etc/systemd/system/sbxr-subscription.service.d",
 		"/etc/systemd/system/multi-user.target.wants/sbxr-subscription.service",
 		"/etc/letsencrypt/live/sbxr-subscription", "/etc/letsencrypt/archive/sbxr-subscription",
@@ -1174,5 +1176,12 @@ func (adapter Adapter) InspectSubscriptionAbsence(ctx context.Context) Observati
 	}
 	unit := adapter.command(ctx, "systemctl", "show", "--property=LoadState", "--value", "sbxr-subscription.service")
 	listener := adapter.command(ctx, "ss", "-H", "-ltnp", "sport", "=", ":8443")
-	return observation(unit.Fact == "not-found" && listener.OK && listener.Fact == "", unit.Observed && listener.Observed)
+	run := adapter.subscriptionCommand
+	if run == nil {
+		run = commandOutput
+	}
+	firewallUnit, firewallCode, firewallObserved := run(ctx, "systemctl", "show", "--property=LoadState", "--value", "sbxr-subscription-firewall.service")
+	rules, rulesCode, rulesObserved := run(ctx, "iptables-save", "-t", "filter")
+	accepted := unit.Fact == "not-found" && listener.OK && listener.Fact == "" && firewallCode == 0 && strings.TrimSpace(firewallUnit) == "not-found" && rulesCode == 0 && !strings.Contains(rules, "sbxr-subscription")
+	return observation(accepted, unit.Observed && listener.Observed && firewallObserved && rulesObserved)
 }

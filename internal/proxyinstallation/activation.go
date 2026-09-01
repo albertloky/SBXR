@@ -46,6 +46,9 @@ func (module *installedInterface) inspectSubscription(ctx context.Context) (Subs
 	if staged, stagedErr := module.host.ReadOwnership(hostSetupSpec.OwnershipNextPath); !errors.Is(stagedErr, os.ErrNotExist) || len(staged) != 0 {
 		return SubscriptionProblemDetected, hostadapter.CertificateActivationInspection{}
 	}
+	if record.Enablement != nil {
+		return SubscriptionChangeIncomplete, hostadapter.CertificateActivationInspection{}
+	}
 	if record.Serving == nil {
 		fact := module.host.InspectSubscriptionAbsence(ctx)
 		if fact.Observed && fact.Accepted {

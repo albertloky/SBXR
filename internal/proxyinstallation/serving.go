@@ -20,6 +20,10 @@ type servingRemovalHost interface {
 	ServingRuntimeAbsent(hostadapter.ServingAuthority) bool
 }
 
+type subscriptionResourceRemovalHost interface {
+	RemoveSubscriptionResources(context.Context, hostadapter.SubscriptionResourceAuthority, *hostadapter.ServingAuthority) bool
+}
+
 type subscriptionExclusion struct {
 	serving *hostadapter.ServingExclusion
 	renewal *hostadapter.RenewalExclusion
@@ -111,6 +115,19 @@ func (m *installedInterface) servingSurfaceSafe() bool {
 	return true
 }
 
+func (m *installedInterface) subscriptionRemovalSurfaceSafe() bool {
+	if m.servingSurfaceSafe() {
+		return true
+	}
+	body, err := m.readOwnership()
+	record, ok := decodeOwnership(body)
+	if err != nil || !ok || record.Enablement == nil || record.Enablement.Resources == nil || !record.Enablement.Resources.Valid() {
+		return false
+	}
+	_, stagedErr := m.host.ReadOwnership(hostSetupSpec.OwnershipNextPath)
+	return errors.Is(stagedErr, os.ErrNotExist)
+}
+
 // ServeSubscription is the private same-executable systemd role, not an Owner
 // operation. The concrete private Module receives only validated in-memory
 // state and an already bound listener. This path never publishes authority.
@@ -134,10 +151,18 @@ func serveSubscription(ctx context.Context, lifecycle softwarelifecycle.Interfac
 	}
 	body, err := host.ReadOwnership(hostSetupSpec.OwnershipPath)
 	record, ok := decodeOwnership(body)
-	if err != nil || !ok || record.Serving == nil || record.Direction != noDirection || record.Phase != runningPhase || !compatibleOwnership(record, *installed.Installed) {
+	if err != nil || !ok || record.Direction != noDirection || record.Phase != runningPhase || !compatibleOwnership(record, *installed.Installed) {
 		return subscriptionserving.Refused
 	}
-	selected := *record.Serving
+	var selected hostadapter.ServingAuthority
+	var renewal *hostadapter.RenewalAuthority
+	if record.Serving != nil {
+		selected, renewal = *record.Serving, record.Renewal
+	} else if record.Enablement != nil && record.Enablement.Serving != nil && record.Enablement.Renewal != nil {
+		selected, renewal = *record.Enablement.Serving, record.Enablement.Renewal
+	} else {
+		return subscriptionserving.Refused
+	}
 	if record.Activation != nil {
 		selected = record.Activation.Target
 	}
@@ -146,7 +171,7 @@ func serveSubscription(ctx context.Context, lifecycle softwarelifecycle.Interfac
 			return subscriptionserving.Refused
 		}
 	}
-	if !host.ValidateServingDispatch(selected, record.Renewal) || !host.ServingPublicIPv4(ctx, record.PublicIPv4) {
+	if !host.ValidateServingDispatch(selected, renewal) || !host.ServingPublicIPv4(ctx, record.PublicIPv4) {
 		return subscriptionserving.Refused
 	}
 	configuration, err := host.ReadServingConfiguration(hostSetupSpec, record.ConfigurationSHA256)

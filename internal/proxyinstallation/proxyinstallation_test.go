@@ -11,6 +11,7 @@ import (
 	"os"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -52,7 +53,110 @@ type controlledHost struct {
 	lateRemovalPublish              map[int]bool
 	finalizing                      bool
 	finalRemovalFails               int
+	failSubscriptionPreparation     bool
+	failSubscriptionCheckpoint      int
+	subscriptionPrepared            bool
+	subscriptionServing             hostadapter.ServingAuthority
+	subscriptionRenewal             hostadapter.RenewalAuthority
+	subscriptionCredential          []byte
+	subscriptionCredentialCount     int
 }
+
+func (host *controlledHost) PrepareSubscription(_ context.Context, input hostadapter.SubscriptionEnableInput) hostadapter.SubscriptionEnableResult {
+	host.subscriptionPrepared = true
+	host.subscriptionCredential = bytes.Clone(input.Credential)
+	host.subscriptionCredentialCount++
+	host.subscriptionServing = input.Serving
+	host.subscriptionServing.CertificateGeneration = 1
+	host.subscriptionServing.CertificateSHA256 = [4]string{strings.Repeat("1", 64), strings.Repeat("2", 64), strings.Repeat("3", 64), strings.Repeat("4", 64)}
+	host.subscriptionRenewal = input.Renewal
+	resources := input.Resources
+	for checkpoint := 1; checkpoint < hostadapter.SubscriptionServingCheckpoint; checkpoint++ {
+		if !input.Authorize(checkpoint, nil) {
+			return hostadapter.SubscriptionEnableResult{Resources: resources}
+		}
+	}
+	for checkpoint := hostadapter.SubscriptionServingCheckpoint; checkpoint < hostadapter.SubscriptionActivationCheckpoint; checkpoint++ {
+		if !input.Authorize(checkpoint, &host.subscriptionServing) {
+			return hostadapter.SubscriptionEnableResult{Resources: resources}
+		}
+	}
+	if host.failSubscriptionPreparation {
+		return hostadapter.SubscriptionEnableResult{Resources: resources}
+	}
+	return hostadapter.SubscriptionEnableResult{Serving: host.subscriptionServing, Renewal: host.subscriptionRenewal, Resources: resources, Prepared: true}
+}
+
+func (host *controlledHost) InspectPreparedSubscription(_ context.Context, serving hostadapter.ServingAuthority, renewal hostadapter.RenewalAuthority) hostadapter.Observation {
+	accepted := host.subscriptionPrepared && serving == host.subscriptionServing && renewal == host.subscriptionRenewal
+	return hostadapter.Observation{Observed: true, Accepted: accepted}
+}
+
+func (host *controlledHost) ActivatePreparedSubscription(context.Context, hostadapter.ServingAuthority, hostadapter.RenewalAuthority) bool {
+	return host.subscriptionPrepared
+}
+
+func (host *controlledHost) ReadSubscriptionLink(serving hostadapter.ServingAuthority, publicIPv4 string) ([]byte, bool) {
+	if serving != host.subscriptionServing || len(host.subscriptionCredential) != 43 {
+		return nil, false
+	}
+	return []byte("https://" + publicIPv4 + ":8443/s/" + string(host.subscriptionCredential)), true
+}
+
+func (host *controlledHost) CleanupPreparedSubscription(context.Context, hostadapter.SubscriptionCleanupInput) bool {
+	host.subscriptionPrepared = false
+	host.subscriptionServing = hostadapter.ServingAuthority{}
+	host.subscriptionRenewal = hostadapter.RenewalAuthority{}
+	host.subscriptionCredential = nil
+	return true
+}
+
+func (host *controlledHost) RemoveSubscriptionResources(context.Context, hostadapter.SubscriptionResourceAuthority, *hostadapter.ServingAuthority) bool {
+	return true
+}
+
+func (host *controlledHost) InspectRenewal(hostadapter.RenewalAuthority) hostadapter.RenewalInspection {
+	return hostadapter.RenewalInspection{Observation: hostadapter.Observation{Observed: true, Accepted: true}, State: hostadapter.RenewalAttemptHealthy}
+}
+
+func (*controlledHost) PrepareRenewalRecorder(hostadapter.RenewalAuthority) (hostadapter.RenewalAttemptRunner, bool) {
+	return nil, false
+}
+
+func (*controlledHost) RecordRenewalHook(hostadapter.RenewalAuthority, string, map[string]string) bool {
+	return false
+}
+
+func (host *controlledHost) InspectCertificateActivation(context.Context, hostadapter.RenewalAuthority, hostadapter.ServingAuthority) hostadapter.CertificateActivationInspection {
+	return hostadapter.CertificateActivationInspection{Published: host.subscriptionServing, Loaded: host.subscriptionServing, Observed: true, Accepted: true}
+}
+
+func (*controlledHost) ActivateServing(context.Context, hostadapter.RenewalAuthority, hostadapter.ServingAuthority) bool {
+	return true
+}
+
+func (host *controlledHost) InspectServingFiles(hostadapter.ServingAuthority, bool) hostadapter.Observation {
+	return hostadapter.Observation{Observed: true, Accepted: true}
+}
+
+func (host *controlledHost) AcquireServingExclusion() (*hostadapter.ServingExclusion, bool) {
+	return &hostadapter.ServingExclusion{}, true
+}
+
+func (host *controlledHost) AcquireRenewalExclusion(hostadapter.RenewalAuthority) (*hostadapter.RenewalExclusion, bool) {
+	return &hostadapter.RenewalExclusion{}, true
+}
+
+func (host *controlledHost) RemoveServingRuntime(context.Context, hostadapter.ServingAuthority, *hostadapter.ServingExclusion) bool {
+	host.subscriptionPrepared = false
+	return true
+}
+
+func (*controlledHost) ServingRuntimeAbsent(hostadapter.ServingAuthority) bool { return true }
+func (*controlledHost) RemoveRenewalIntegration(context.Context, hostadapter.RenewalAuthority, *hostadapter.RenewalExclusion) bool {
+	return true
+}
+func (*controlledHost) RenewalIntegrationAbsent(hostadapter.RenewalAuthority) bool { return true }
 
 func (host *controlledHost) PreflightSubscription(context.Context, string) hostadapter.SubscriptionPreflight {
 	if host.subscriptionPreflight != nil {
@@ -165,6 +269,10 @@ func (host *controlledHost) PublishOwnership(_, _ string, expected, next []byte)
 	if record.Direction == removalRequired && host.failRemovalPublish[record.RemovalCheckpoint] {
 		delete(host.failRemovalPublish, record.RemovalCheckpoint)
 		return errors.New("removal checkpoint failed")
+	}
+	if host.failSubscriptionCheckpoint > 0 && record.Enablement != nil && record.Enablement.Checkpoint == host.failSubscriptionCheckpoint {
+		host.failSubscriptionCheckpoint = -1
+		return errors.New("subscription checkpoint failed")
 	}
 	if record.Phase == host.failPublish && !host.publishFailed && !host.latePublish {
 		host.publishFailed = true
@@ -896,8 +1004,8 @@ func TestOwnerCanReviewDeclineAndDiscloseOneRunningClientConfiguration(t *testin
 	}
 }
 
-func TestOwnerCanReviewSubscriptionWithoutEnablingIt(t *testing.T) {
-	for _, confirmation := range []Confirmation{Declined, Approved, 0} {
+func TestOwnerCanReviewAndDeclineSubscriptionEnablement(t *testing.T) {
+	for _, confirmation := range []Confirmation{Declined, 0} {
 		t.Run(fmt.Sprint(confirmation), func(t *testing.T) {
 			host := acceptedHost()
 			installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
@@ -909,21 +1017,18 @@ func TestOwnerCanReviewSubscriptionWithoutEnablingIt(t *testing.T) {
 				t.Fatalf("enable review = %#v", review)
 			}
 			plan := strings.Join(review.Plan, "\n")
-			for _, want := range []string{"Enable subscription", "8.8.8.8", "8443", "80", "provider", "snapd", "Certbot", "sbxr-subscription", "renewal", "shared", "Karing", "unavailable"} {
+			for _, want := range []string{"Enable subscription", "8.8.8.8", "8443", "80", "provider", "snapd", "Certbot", "sbxr-subscription", "renewal", "shared", "Karing"} {
 				if !strings.Contains(plan, want) {
 					t.Errorf("Plan missing %q: %s", want, plan)
 				}
 			}
-			result := installation.Execute(t.Context(), *review.Prepared, confirmation, func(event Progress) { t.Fatalf("read-only attempt emitted progress: %#v", event) })
-			want := ActionRefused
-			if confirmation == Declined {
-				want = ActionCancelled
+			result := installation.Execute(t.Context(), *review.Prepared, confirmation, func(event Progress) { t.Fatalf("declined attempt emitted progress: %#v", event) })
+			want := ActionCancelled
+			if confirmation == 0 {
+				want = ActionRefused
 			}
 			if result.Code != want || result.ProxyTraffic != ProvedWorking || confirmation == Declined && result.Message != "No changes were made." {
 				t.Fatalf("result = %#v", result)
-			}
-			if confirmation == Approved && !strings.Contains(result.Correction, "unavailable") {
-				t.Fatalf("missing unavailable correction: %#v", result)
 			}
 			if reused := installation.Execute(t.Context(), *review.Prepared, Approved, nil); reused.Code != ActionRefused {
 				t.Fatalf("reused = %#v", reused)
@@ -932,6 +1037,169 @@ func TestOwnerCanReviewSubscriptionWithoutEnablingIt(t *testing.T) {
 				t.Fatal("subscription review/execute mutated host")
 			}
 		})
+	}
+}
+
+func TestOwnerCanEnableOneVerifiedSubscriptionGeneration(t *testing.T) {
+	host := acceptedHost()
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	if result := installation.Execute(t.Context(), *setup.Prepared, Approved, nil); result.Code != SetupComplete {
+		t.Fatalf("setup = %#v", result)
+	}
+
+	review := installation.Review(t.Context(), EnableSubscriptionAction)
+	var links [][]byte
+	result := installation.Execute(t.Context(), *review.Prepared, Approved, func(progress Progress) {
+		if len(progress.SubscriptionLink) > 0 {
+			links = append(links, bytes.Clone(progress.SubscriptionLink))
+		}
+	})
+
+	if result.Code != SubscriptionEnabled || result.Status != Running || result.SubscriptionStatus != SubscriptionAvailable || len(links) != 1 {
+		t.Fatalf("enable = %#v links=%q", result, links)
+	}
+	if !strings.HasPrefix(string(links[0]), "https://8.8.8.8:8443/s/") || len(strings.TrimPrefix(string(links[0]), "https://8.8.8.8:8443/s/")) != 43 {
+		t.Fatalf("link = %q", links[0])
+	}
+	record, ok := decodeOwnership(host.ownership)
+	if !ok || record.Schema != 2 || record.Serving == nil || record.Renewal == nil || record.Enablement != nil || !host.subscriptionPrepared {
+		t.Fatalf("ownership = %#v valid=%t", record, ok)
+	}
+	if bytes.Contains(host.ownership, host.subscriptionCredential) || bytes.Contains(host.ownership, links[0]) {
+		t.Fatal("Ownership Record contains a subscription credential")
+	}
+}
+
+func TestSubscriptionResourcesKeepTheirCreatingRelease(t *testing.T) {
+	host := acceptedHost()
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+	record, _ := decodeOwnership(host.ownership)
+	legacy := legacyProxyCreator
+	record.Release = legacy
+	for index := range record.ResourceCreatingReleases {
+		record.ResourceCreatingReleases[index] = legacy
+	}
+	original := slices.Clone(record.Resources)
+	host.ownership = ownershipBytes(record)
+	review := installation.Review(t.Context(), EnableSubscriptionAction)
+	if result := installation.Execute(t.Context(), *review.Prepared, Approved, nil); result.Code != SubscriptionEnabled {
+		t.Fatalf("enable = %#v", result)
+	}
+	committed, ok := decodeOwnership(host.ownership)
+	if !ok {
+		t.Fatal("committed ownership invalid")
+	}
+	creators := map[string]softwarelifecycle.ReleaseIdentity{}
+	for index, resource := range committed.Resources {
+		creators[subscriptionResourceIdentity(resource)] = committed.ResourceCreatingReleases[index]
+	}
+	for _, resource := range original {
+		if creators[subscriptionResourceIdentity(resource)] != legacy {
+			t.Fatalf("original resource %q was relabelled", resource)
+		}
+	}
+	for _, resource := range committed.Resources[len(original):] {
+		if creators[resource] != testInstalledIdentity() {
+			t.Fatalf("new resource %q has creator %#v", resource, creators[resource])
+		}
+	}
+}
+
+func TestEnablementCheckpointFailureRecoversWithoutAnotherCredential(t *testing.T) {
+	for checkpoint := 1; checkpoint <= hostadapter.SubscriptionActivationCheckpoint; checkpoint++ {
+		t.Run(strconv.Itoa(checkpoint), func(t *testing.T) {
+			host := acceptedHost()
+			installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+			setup := installation.Review(t.Context(), StartSetupAction)
+			installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+			host.failSubscriptionCheckpoint = checkpoint
+			enable := installation.Review(t.Context(), EnableSubscriptionAction)
+			if result := installation.Execute(t.Context(), *enable.Prepared, Approved, nil); result.Code != SubscriptionChangeNeedsCompletion {
+				t.Fatalf("enable = %#v", result)
+			}
+			restarted := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+			finish := restarted.Review(t.Context(), FinishSubscriptionChangeAction)
+			if finish.Prepared == nil {
+				t.Fatalf("finish review = %#v", finish)
+			}
+			if result := restarted.Execute(t.Context(), *finish.Prepared, Approved, nil); result.Code != SubscriptionChangeCleanedUp {
+				t.Fatalf("finish = %#v", result)
+			}
+			if host.subscriptionCredentialCount != 1 {
+				t.Fatalf("credential generations = %d", host.subscriptionCredentialCount)
+			}
+		})
+	}
+}
+
+func TestInterruptedPrecommitEnablementCleansUpThroughFreshFinish(t *testing.T) {
+	host := acceptedHost()
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+	host.failSubscriptionPreparation = true
+	enable := installation.Review(t.Context(), EnableSubscriptionAction)
+	if result := installation.Execute(t.Context(), *enable.Prepared, Approved, nil); result.Code != SubscriptionChangeNeedsCompletion {
+		t.Fatalf("interrupted enable = %#v", result)
+	}
+	restarted := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	finish := restarted.Review(t.Context(), FinishSubscriptionChangeAction)
+	if finish.Prepared == nil || finish.SubscriptionStatus != SubscriptionChangeIncomplete || !strings.Contains(strings.Join(finish.Plan, "\n"), "clean") {
+		t.Fatalf("finish review = %#v", finish)
+	}
+	if result := restarted.Execute(t.Context(), *finish.Prepared, Approved, nil); result.Code != SubscriptionChangeCleanedUp || result.SubscriptionStatus != SubscriptionNotEnabled {
+		t.Fatalf("finish = %#v", result)
+	}
+	record, ok := decodeOwnership(host.ownership)
+	if !ok || record.Schema != 2 || record.Enablement != nil || record.Serving != nil {
+		t.Fatalf("clean ownership = %#v valid=%t", record, ok)
+	}
+}
+
+func TestCompleteRemovalDeletesCommittedSubscriptionAuthority(t *testing.T) {
+	host := acceptedHost()
+	lifecycle := &controlledRemovalLifecycle{ready: true}
+	installation := newInstalledInterface(lifecycle, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+	enable := installation.Review(t.Context(), EnableSubscriptionAction)
+	if result := installation.Execute(t.Context(), *enable.Prepared, Approved, func(Progress) {}); result.Code != SubscriptionEnabled {
+		t.Fatalf("enable = %#v", result)
+	}
+	view := installation.Review(t.Context(), ViewDetailsAction)
+	if view.SubscriptionStatus != SubscriptionAvailable || len(view.SubscriptionLink) == 0 {
+		t.Fatalf("view = %#v", view)
+	}
+	removal := installation.Review(t.Context(), CompleteRemovalAction)
+	if removal.Prepared == nil {
+		t.Fatalf("removal review = %#v", removal)
+	}
+	if result := installation.Execute(t.Context(), *removal.Prepared, Approved, nil); result.Code != CompleteRemovalCompleted || len(host.ownership) != 0 {
+		t.Fatalf("removal = %#v ownership=%q", result, host.ownership)
+	}
+}
+
+func TestCompleteRemovalTakesOverInterruptedSubscriptionEnablement(t *testing.T) {
+	host := acceptedHost()
+	host.failSubscriptionPreparation = true
+	lifecycle := &controlledRemovalLifecycle{ready: true}
+	installation := newInstalledInterface(lifecycle, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+	enable := installation.Review(t.Context(), EnableSubscriptionAction)
+	if result := installation.Execute(t.Context(), *enable.Prepared, Approved, nil); result.Code != SubscriptionChangeNeedsCompletion {
+		t.Fatalf("enable = %#v", result)
+	}
+	restarted := newInstalledInterface(lifecycle, host, acceptedSingBox{})
+	removal := restarted.Review(t.Context(), CompleteRemovalAction)
+	if removal.Prepared == nil || !slices.Contains(removal.LegalActions, CompleteRemovalAction) {
+		t.Fatalf("removal review = %#v", removal)
+	}
+	if result := restarted.Execute(t.Context(), *removal.Prepared, Approved, nil); result.Code != CompleteRemovalCompleted {
+		t.Fatalf("removal = %#v", result)
 	}
 }
 

@@ -19,7 +19,7 @@ func (installation *subscriptionInstallation) Review(ctx context.Context, action
 	review.LegalActions = []proxyinstallation.Action{proxyinstallation.ViewDetailsAction, proxyinstallation.ShowClientConfigurationAction, proxyinstallation.CompleteRemovalAction, proxyinstallation.EnableSubscriptionAction}
 	if action == proxyinstallation.EnableSubscriptionAction {
 		review.Prepared = &proxyinstallation.PreparedAction{}
-		review.Plan = []string{"Plan: recorded IPv4 8.8.8.8; TCP 8443 and TCP 80; no changes in this release."}
+		review.Plan = []string{"Plan: recorded IPv4 8.8.8.8; TCP 8443 and TCP 80."}
 	}
 	return review
 }
@@ -27,8 +27,9 @@ func (installation *subscriptionInstallation) Review(ctx context.Context, action
 func (installation *subscriptionInstallation) Execute(ctx context.Context, prepared proxyinstallation.PreparedAction, confirmation proxyinstallation.Confirmation, progress proxyinstallation.ProgressReporter) proxyinstallation.Result {
 	result := installation.journeyInstallation.Execute(ctx, prepared, confirmation, progress)
 	if confirmation == proxyinstallation.Approved {
-		result.Code, result.Message = proxyinstallation.ActionRefused, "The requested action was refused. View details for the failed check and correction."
-		result.FailedCheck, result.Correction = "Enable subscription unavailable", "Enable subscription is unavailable in this release."
+		progress(proxyinstallation.Progress{Phase: "Verifying subscription result"})
+		progress(proxyinstallation.Progress{SubscriptionLink: []byte("https://8.8.8.8:8443/s/abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ")})
+		result.Code, result.Message = proxyinstallation.SubscriptionEnabled, "The subscription is enabled and locally verified."
 	}
 	return result
 }
@@ -54,8 +55,10 @@ func TestRunReviewsSubscriptionAndRedrawsAfterExactConfirmation(t *testing.T) {
 				}
 			}
 			if test.confirmation == proxyinstallation.Approved {
-				if !strings.Contains(output.String(), "Correction: Enable subscription is unavailable") {
-					t.Fatalf("missing correction: %s", output.String())
+				for _, want := range []string{"This link is a reusable credential.", "https://8.8.8.8:8443/s/", "Progress: Verifying subscription result"} {
+					if !strings.Contains(output.String(), want) {
+						t.Fatalf("missing %q: %s", want, output.String())
+					}
 				}
 			} else if !strings.Contains(output.String(), "No changes were made.") {
 				t.Fatalf("missing cancellation: %s", output.String())
@@ -81,7 +84,7 @@ type subscriptionFailReader struct{}
 func (subscriptionFailReader) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
 
 func TestRunSubscriptionIOFailureDoesNotGrantAuthority(t *testing.T) {
-	for _, point := range []string{"Plan:", "Enable subscription?", "Correction:", "read"} {
+	for _, point := range []string{"Plan:", "Enable subscription?", "Progress:", "https://8.8.8.8:8443/s/", "read"} {
 		t.Run(point, func(t *testing.T) {
 			installation := &subscriptionInstallation{}
 			writer := &subscriptionFailWriter{failAt: point}
@@ -90,8 +93,12 @@ func TestRunSubscriptionIOFailureDoesNotGrantAuthority(t *testing.T) {
 				input = io.MultiReader(strings.NewReader("4\n"), subscriptionFailReader{})
 			}
 			code := Run(t.Context(), nil, input, writer, writer, installation)
-			if code != 1 || point != "Correction:" && len(installation.confirmations) != 0 {
+			postcommit := point == "Progress:" || point == "https://8.8.8.8:8443/s/"
+			if code != 1 || !postcommit && len(installation.confirmations) != 0 {
 				t.Fatalf("code=%d confirmations=%v output=%s", code, installation.confirmations, writer.String())
+			}
+			if postcommit && !strings.Contains(writer.String(), string(proxyinstallation.SubscriptionLinkDisplayIncomplete)) {
+				t.Fatalf("missing display-incomplete result: %s", writer.String())
 			}
 		})
 	}

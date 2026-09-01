@@ -684,6 +684,7 @@ systemctl:show) case "$2" in --property=MainPID) printf '0\n';; *) printf 'not-f
 systemctl:is-enabled) printf 'not-found\n'; exit 1;;
 systemctl:is-active) printf 'inactive\n'; exit 3;;
 ss:*|apt-mark:*) exit 0;;
+iptables-save:*) printf '*filter\n:INPUT ACCEPT [0:0]\nCOMMIT\n';;
 sing-box:*) exit 99;;
 esac
 `
@@ -691,7 +692,7 @@ esac
 	if err := os.WriteFile(commandPath, []byte(command), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"dpkg-query", "getent", "pgrep", "systemctl", "ss", "apt-mark", "sing-box"} {
+	for _, name := range []string{"dpkg-query", "getent", "pgrep", "systemctl", "ss", "apt-mark", "sing-box", "iptables-save"} {
 		if err := os.Symlink(commandPath, filepath.Join(root, name)); err != nil {
 			t.Fatal(err)
 		}

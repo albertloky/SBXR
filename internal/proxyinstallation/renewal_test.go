@@ -3,6 +3,7 @@ package proxyinstallation
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -164,7 +165,7 @@ func TestPublishedCertificateReplacementIsReviewedAndFinishedForward(t *testing.
 	m = newInstalledInterface(lifecycle, host, acceptedSingBox{})
 
 	review := m.Review(t.Context(), FinishSubscriptionChangeAction)
-	if review.Status != Running || review.SubscriptionStatus != SubscriptionChangeIncomplete || review.Prepared == nil || len(review.LegalActions) != 2 || review.LegalActions[0] != FinishSubscriptionChangeAction {
+	if review.Status != Running || review.SubscriptionStatus != SubscriptionChangeIncomplete || review.Prepared == nil || !reflect.DeepEqual(review.LegalActions, []Action{FinishSubscriptionChangeAction, ViewDetailsAction, CompleteRemovalAction}) {
 		t.Fatalf("Review() = %#v", review)
 	}
 	for _, want := range []string{"generation 1", "generation 2", "Ownership Record", "proved usable"} {
