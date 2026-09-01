@@ -475,6 +475,9 @@ func (inspector filesystemInspector) update(ctx context.Context, latest LatestRe
 	if priorStatus.State != Ready || !valid {
 		return updateResult(RecoveryRequiredState, nil, UpdateNotReady, "SBXR is not ready to update.")
 	}
+	if !proxyAuthorityAllowsUpdate(root, inspector.updateAdmission, prior.identity, nil) {
+		return updateResult(Ready, &prior.identity, UpdateNotReady, "Finish the pending Proxy Installation change before updating SBXR.")
+	}
 	if ctx.Err() != nil {
 		return updateResult(Ready, &prior.identity, UpdateInterrupted, "The update was interrupted before installation.")
 	}
@@ -497,6 +500,10 @@ func (inspector filesystemInspector) update(ctx context.Context, latest LatestRe
 	}
 	if candidate.cell.release.Identity == prior.identity && candidate.cell.release.Sequence == prior.sequence {
 		return updateResult(Ready, &prior.identity, UpdateAlreadyCurrent, "SBXR is already current.")
+	}
+	target := UpdateTarget{Identity: candidate.cell.release.Identity, Executable: candidate.cell.executable}
+	if !proxyAuthorityAllowsUpdate(root, inspector.updateAdmission, prior.identity, &target) {
+		return updateResult(Ready, &prior.identity, UpdateReleaseRefused, "The update target is incompatible with the installed Proxy Installation authority.")
 	}
 	record := bindUpdateRecord(priorInspection, candidate)
 	if err := prepareUpdate(root, priorInspection, candidate); err != nil {
@@ -546,6 +553,16 @@ func (inspector filesystemInspector) update(ctx context.Context, latest LatestRe
 		return updateResult(RecoveryRequiredState, &candidate.cell.release.Identity, UpdateRecoveryRequired, "The update needs recovery before normal operations can continue.")
 	}
 	return Result{State: Ready, Installed: &candidate.cell.release.Identity, UpdateInstalled: true, Code: UpdateInstalled, Message: "SBXR was updated."}
+}
+
+func proxyAuthorityAllowsUpdate(root *os.Root, admission UpdateAdmission, source ReleaseIdentity, target *UpdateTarget) bool {
+	if _, err := root.Lstat("var/lib/sbxr/proxy-ownership.json"); errors.Is(err, os.ErrNotExist) {
+		return true
+	} else if err != nil {
+		return false
+	}
+	body, err := readRootFile(root, "var/lib/sbxr/proxy-ownership.json", 0600, 1, 64<<10)
+	return err == nil && admission != nil && admission(body, source, target)
 }
 
 func installedArchitecture(record []byte) Architecture {

@@ -39,6 +39,25 @@ outside the state directory is valid only at the final checkpoint. A restored
 finishing pair is removed even when its original deletion checkpoint was passed.
 Automated checks do not establish packaged VPS or Karing acceptance.
 
+## Client Identity rotation without Subscription Serving
+
+Issue #353 adds reviewed `Rotate Client Identity` and `Finish Client Identity
+rotation` actions for a freshly proved Running proxy with subscription absence.
+The sing-box Adapter replaces only the VLESS UUID. A protected staged
+configuration and one schema-2 operation bind exact source and target
+configuration digests without storing credentials in durable authority.
+
+The owned `sing-box.service` drop-in routes every ordinary start through a fixed
+private `ExecCondition`. Before cutover it admits only the unchanged source.
+During cutover it refuses ordinary starts; one exact `/run` authority can be
+consumed only while the Whole-Host Mutation Lock is held by reviewed finishing.
+The revocation checkpoint is forward-only. Before it, finishing cleans up and
+restores the proved source. After it, finishing can publish and start only the
+prepared target. Complete removal removes pending target material and retains
+the startup gate until the package service is stopped and disabled. Automated
+checks do not prove termination of a real outside session or packaged Karing
+refresh.
+
 ## Read-only subscription enablement review
 
 Issue #346 adds `Enable subscription` to the existing production menu only after

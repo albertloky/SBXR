@@ -78,6 +78,15 @@ type Observation struct {
 	Accepted bool
 }
 
+type ProxyStartupAuthority struct {
+	DropInSHA256     string `json:"drop_in_sha256"`
+	DirectoryCreated bool   `json:"directory_created"`
+}
+
+func (authority ProxyStartupAuthority) Valid() bool {
+	return len(authority.DropInSHA256) == 64 && strings.Trim(authority.DropInSHA256, "0123456789abcdef") == "" && authority.DropInSHA256 != strings.Repeat("0", 64)
+}
+
 type RunningInspection struct {
 	OSID, OSVersion, Architecture, PublicIPv4 string
 	Host, PublicIPv4Matches                   Observation

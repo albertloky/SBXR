@@ -28,6 +28,7 @@ type filesystemInspector struct {
 	root                   string
 	uid                    uint32
 	beforeRecoveryMutation func()
+	updateAdmission        UpdateAdmission
 }
 
 func newLocalInspector(root string, uid uint32) localInspector {

@@ -48,6 +48,13 @@ func TestPrivateServingArgumentDoesNotAuthorizeExecution(t *testing.T) {
 	}
 }
 
+func TestPrivateProxyStartArgumentDoesNotCreateAuthority(t *testing.T) {
+	var output bytes.Buffer
+	if run(t.Context(), []string{hostadapter.ProxyStartRole}, strings.NewReader(""), &output, &output, constructionLifecycle{}) != 1 || output.Len() != 0 {
+		t.Fatal("private proxy start dispatch did not refuse silently")
+	}
+}
+
 func TestPrivateRenewalArgumentsAndEnvironmentDoNotAuthorizeExecution(t *testing.T) {
 	t.Setenv("SBXR_RENEWAL_ATTEMPT_ID", strings.Repeat("a", 32))
 	t.Setenv("RENEWED_LINEAGE", "/etc/letsencrypt/live/sbxr-subscription")

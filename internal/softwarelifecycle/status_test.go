@@ -740,7 +740,7 @@ func TestUpdateInstallsFreshQualifiedHigherSequenceThroughPublicInterface(t *tes
 	mustWriteStatusFile(t, ownershipPath, ownership, 0o600)
 
 	source := &controlledUpdateSource{candidate: updateCandidateFromEvidence(t, candidate, 18, AMD64, candidateEvidence)}
-	var lifecycle Interface = newInstalledInterface(newLocalInspector(root, uint32(os.Getuid())), source)
+	var lifecycle Interface = newInstalledInterface(filesystemInspector{root: root, uid: uint32(os.Getuid()), updateAdmission: func([]byte, ReleaseIdentity, *UpdateTarget) bool { return true }}, source)
 	var preparedRecord []byte
 
 	result := lifecycle.Update(t.Context(), func(progress Progress) {
@@ -767,6 +767,24 @@ func TestUpdateInstallsFreshQualifiedHigherSequenceThroughPublicInterface(t *tes
 		if _, err := os.Lstat(statusPath(root, name)); !os.IsNotExist(err) {
 			t.Fatalf("transaction material remains at %s: %v", name, err)
 		}
+	}
+}
+
+func TestUpdateRefusesPendingClientIdentityRotationBeforeRemoteWork(t *testing.T) {
+	root := t.TempDir()
+	prior := ReleaseIdentity{Repository: Repository, Tag: "v3.0.21", Commit: "989094b9766f02bf17510a71753c6a5c736bf120", IndexSHA256: "90463aa73a2c81542b44ea833c762bb2cd44d2d585fb7bd322279f678feea331"}
+	candidate := ReleaseIdentity{Repository: Repository, Tag: "v3.0.22", Commit: strings.Repeat("c", 40), IndexSHA256: strings.Repeat("d", 64)}
+	priorEvidence := installedEvidence(t, prior, 17, AMD64)
+	candidateEvidence := installedEvidence(t, candidate, 18, AMD64)
+	writeInstalledEvidence(t, root, priorEvidence)
+	mustWriteStatusFile(t, statusPath(root, "/var/lib/sbxr/proxy-ownership.json"), []byte(`{"schema":2,"phase":"Running","unfinished_direction":"none","client_identity_rotation":{}}`+"\n"), 0600)
+	source := &controlledUpdateSource{candidate: updateCandidateFromEvidence(t, candidate, 18, AMD64, candidateEvidence)}
+	lifecycle := newInstalledInterface(filesystemInspector{root: root, uid: uint32(os.Getuid()), updateAdmission: func([]byte, ReleaseIdentity, *UpdateTarget) bool { return false }}, source)
+
+	result := lifecycle.Update(t.Context(), nil)
+
+	if result.State != Ready || result.Code != UpdateNotReady || source.calls.Load() != 0 || !strings.Contains(result.Message, "Finish the pending Proxy Installation change") {
+		t.Fatalf("Update() = %#v calls=%d", result, source.calls.Load())
 	}
 }
 

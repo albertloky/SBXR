@@ -98,7 +98,7 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 			} else if writeRefusal(output, latest) != nil {
 				return 1
 			}
-		case proxyinstallation.StartSetupAction, proxyinstallation.FinishCleanupAction, proxyinstallation.FinishSetupAction, proxyinstallation.EnableSubscriptionAction, proxyinstallation.RotateSubscriptionLinkAction, proxyinstallation.RepairSubscriptionAction, proxyinstallation.FinishSubscriptionChangeAction:
+		case proxyinstallation.StartSetupAction, proxyinstallation.FinishCleanupAction, proxyinstallation.FinishSetupAction, proxyinstallation.EnableSubscriptionAction, proxyinstallation.RotateSubscriptionLinkAction, proxyinstallation.RepairSubscriptionAction, proxyinstallation.FinishSubscriptionChangeAction, proxyinstallation.RotateClientIdentityAction, proxyinstallation.FinishClientIdentityAction:
 			if review.Prepared == nil {
 				latest = review.Result
 				if writeRefusal(output, latest) != nil {
@@ -125,6 +125,10 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 				prompt = "Repair subscription? [y/N]"
 			} else if action == proxyinstallation.FinishSubscriptionChangeAction {
 				prompt = "Finish subscription change? [y/N]"
+			} else if action == proxyinstallation.RotateClientIdentityAction {
+				prompt = "Rotate Client Identity? [y/N]"
+			} else if action == proxyinstallation.FinishClientIdentityAction {
+				prompt = "Finish Client Identity rotation? [y/N]"
 			}
 			confirmation, ok := readConfirmation(reader, output, prompt)
 			if !ok {
@@ -162,9 +166,17 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 					return 1
 				}
 			} else if progressErr != nil {
+				if clientIdentityCompleted(latest.Code) {
+					_ = writeClientIdentityDisplayIncomplete(errorOutput)
+				}
 				return 1
-			} else if (action == proxyinstallation.EnableSubscriptionAction || action == proxyinstallation.RotateSubscriptionLinkAction) && writeRefusal(output, latest) != nil {
-				return 1
+			} else if action == proxyinstallation.EnableSubscriptionAction || action == proxyinstallation.RotateSubscriptionLinkAction || action == proxyinstallation.RotateClientIdentityAction || action == proxyinstallation.FinishClientIdentityAction {
+				if writeRefusal(output, latest) != nil {
+					if clientIdentityCompleted(latest.Code) {
+						_ = writeClientIdentityDisplayIncomplete(errorOutput)
+					}
+					return 1
+				}
 			}
 		case proxyinstallation.CompleteRemovalAction:
 			if review.Prepared == nil {
@@ -240,6 +252,14 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 	}
 }
 
+func clientIdentityCompleted(code proxyinstallation.ResultCode) bool {
+	return code == proxyinstallation.ClientIdentityRotated || code == proxyinstallation.ClientIdentityRotationFinished
+}
+
+func writeClientIdentityDisplayIncomplete(output io.Writer) error {
+	return writeRefusal(output, proxyinstallation.Result{Code: proxyinstallation.ClientIdentityRotationDisplayIncomplete, Message: "Client Identity rotation completed, but result display did not complete. Use View details."})
+}
+
 func writeSubscriptionLink(output io.Writer, link []byte) error {
 	if len(link) == 0 || bytes.ContainsAny(link, "\r\n") {
 		return errors.New("invalid subscription link")
@@ -281,7 +301,7 @@ func writeClientConfiguration(output io.Writer, configuration []byte) error {
 }
 
 func writeFrame(output io.Writer, review proxyinstallation.Review, result proxyinstallation.Result) error {
-	if _, err := fmt.Fprintf(output, "SBXR V3\nVersion: %s\nProxy status: %s\nSubscription status: %s\nResult: %s\nCode: %s\n\n", review.Version, review.Status, review.SubscriptionStatus, result.Message, result.Code); err != nil {
+	if _, err := fmt.Fprintf(output, "SBXR V3\nVersion: %s\nProxy status: %s\nSubscription status: %s\nProxy traffic availability: %s\nSubscription serving availability: %s\nResult: %s\nCode: %s\n\n", review.Version, review.Status, review.SubscriptionStatus, review.ProxyTraffic, review.SubscriptionServing, result.Message, result.Code); err != nil {
 		return err
 	}
 	for index, action := range review.LegalActions {

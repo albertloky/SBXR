@@ -154,6 +154,52 @@ func TestRunReportsCommittedRotationDisplayFailure(t *testing.T) {
 	}
 }
 
+type clientIdentityInstallation struct{ journeyInstallation }
+
+func (installation *clientIdentityInstallation) Review(_ context.Context, action proxyinstallation.Action) proxyinstallation.Review {
+	review := proxyinstallation.Review{Status: proxyinstallation.Running, SubscriptionStatus: proxyinstallation.SubscriptionNotEnabled, LegalActions: []proxyinstallation.Action{proxyinstallation.RotateClientIdentityAction}}
+	if action == proxyinstallation.RotateClientIdentityAction {
+		review.Prepared = &proxyinstallation.PreparedAction{}
+		review.Plan = []string{"Action: Rotate Client Identity", "Existing sessions will disconnect."}
+	}
+	return review
+}
+
+func (installation *clientIdentityInstallation) Execute(_ context.Context, _ proxyinstallation.PreparedAction, confirmation proxyinstallation.Confirmation, progress proxyinstallation.ProgressReporter) proxyinstallation.Result {
+	installation.confirmations = append(installation.confirmations, confirmation)
+	if confirmation == proxyinstallation.Approved {
+		progress(proxyinstallation.Progress{Phase: "Committing Client Identity revocation"})
+		return proxyinstallation.Result{Status: proxyinstallation.Running, SubscriptionStatus: proxyinstallation.SubscriptionNotEnabled, Code: proxyinstallation.ClientIdentityRotated, Message: "The Client Identity was rotated. Refresh the unchanged Subscription Link or use Show client configuration."}
+	}
+	return proxyinstallation.Result{Code: proxyinstallation.ActionCancelled, Message: "No changes were made."}
+}
+
+func TestRunUsesExactClientIdentityRotationPromptWithoutSecretOutput(t *testing.T) {
+	installation := &clientIdentityInstallation{}
+	var output bytes.Buffer
+	if code := Run(t.Context(), nil, strings.NewReader("1\ny\n0\n"), &output, &output, installation); code != 0 {
+		t.Fatalf("Run() = %d output=%s", code, output.String())
+	}
+	for _, want := range []string{"Rotate Client Identity? [y/N]", "Progress: Committing Client Identity revocation", string(proxyinstallation.ClientIdentityRotated)} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("missing %q: %s", want, output.String())
+		}
+	}
+	if strings.Contains(output.String(), "BEGIN SBXR CLIENT CONFIGURATION") || strings.Contains(output.String(), "https://") {
+		t.Fatalf("rotation disclosed a secret: %s", output.String())
+	}
+}
+
+func TestRunReportsClientIdentityResultDisplayFailureAfterCommit(t *testing.T) {
+	installation := &clientIdentityInstallation{}
+	output := &rotationFailWriter{failAt: string(proxyinstallation.ClientIdentityRotated)}
+	var errors bytes.Buffer
+	code := Run(t.Context(), nil, strings.NewReader("1\ny\n"), output, &errors, installation)
+	if code != 1 || !strings.Contains(errors.String(), string(proxyinstallation.ClientIdentityRotationDisplayIncomplete)) || !reflect.DeepEqual(installation.confirmations, []proxyinstallation.Confirmation{proxyinstallation.Approved}) {
+		t.Fatalf("code=%d confirmations=%v output=%s errors=%s", code, installation.confirmations, output.String(), errors.String())
+	}
+}
+
 type rotationFailWriter struct {
 	failAt string
 	buffer bytes.Buffer
@@ -242,7 +288,7 @@ func TestRunPresentsAndCancelsTheRealNotSetUpJourney(t *testing.T) {
 	if status != 0 || !reflect.DeepEqual(installation.actions, []proxyinstallation.Action{proxyinstallation.StatusAction, proxyinstallation.StartSetupAction, proxyinstallation.StatusAction}) || !reflect.DeepEqual(installation.confirmations, []proxyinstallation.Confirmation{proxyinstallation.Declined}) || installation.statusReviews != 2 {
 		t.Fatalf("status=%d actions=%v confirmations=%v statusReviews=%d", status, installation.actions, installation.confirmations, installation.statusReviews)
 	}
-	want := "SBXR V3\nVersion: v3.0.0\nProxy status: Not set up\nSubscription status: Not enabled\nResult: Proxy setup has not started.\nCode: PROXY-INSTALLATION-STATUS-NOT-SET-UP\n\n1. Start setup\n2. View details\n3. Complete removal\n0. Exit\n"
+	want := "SBXR V3\nVersion: v3.0.0\nProxy status: Not set up\nSubscription status: Not enabled\nProxy traffic availability: \nSubscription serving availability: \nResult: Proxy setup has not started.\nCode: PROXY-INSTALLATION-STATUS-NOT-SET-UP\n\n1. Start setup\n2. View details\n3. Complete removal\n0. Exit\n"
 	if !bytes.Contains(output.Bytes(), []byte(want)) {
 		t.Fatalf("initial frame missing:\n%s", output.String())
 	}

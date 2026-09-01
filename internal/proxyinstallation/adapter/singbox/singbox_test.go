@@ -1,8 +1,10 @@
 package singbox
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"reflect"
 	"regexp"
 	"testing"
 )
@@ -25,6 +27,39 @@ func TestAdapterPreparesValidUniqueClientIdentities(t *testing.T) {
 		if err != nil || len(decoded) != 32 {
 			t.Fatalf("%s key = %q, %v", name, value, err)
 		}
+	}
+}
+
+func TestAdapterReplacesOnlyTheVLESSClientIdentity(t *testing.T) {
+	adapter := New()
+	identity, err := adapter.PrepareIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := adapter.EncodeServerConfiguration(identity, "microsoft.com:443", "microsoft.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := adapter.ReplaceClientIdentity(source)
+	if err != nil || bytes.Equal(source, target) {
+		t.Fatalf("ReplaceClientIdentity() changed nothing: %v", err)
+	}
+
+	var before, after map[string]any
+	if json.Unmarshal(source, &before) != nil || json.Unmarshal(target, &after) != nil {
+		t.Fatal("replacement configuration is not JSON")
+	}
+	beforeUser := before["inbounds"].([]any)[0].(map[string]any)["users"].([]any)[0].(map[string]any)
+	afterUser := after["inbounds"].([]any)[0].(map[string]any)["users"].([]any)[0].(map[string]any)
+	if beforeUser["uuid"] == afterUser["uuid"] {
+		t.Fatal("VLESS UUID was not replaced")
+	}
+	afterUser["uuid"] = beforeUser["uuid"]
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("replacement changed non-UUID fields\nbefore: %s\nafter:  %s", source, target)
+	}
+	if _, err := adapter.CurrentConnectionFacts(target, "8.8.8.8"); err != nil {
+		t.Fatalf("replacement configuration refused: %v", err)
 	}
 }
 

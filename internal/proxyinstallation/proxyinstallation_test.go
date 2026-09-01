@@ -68,6 +68,132 @@ type controlledHost struct {
 	renewalProblem                  bool
 	publicIPDrift                   bool
 	subscriptionStarts              int
+	clientIdentityTarget            []byte
+	clientIdentityStartup           *hostadapter.ProxyStartupAuthority
+	clientIdentityFail              string
+	proxyStartAuthorization         string
+	failClientCheckpoint            clientIdentityRotationCheckpoint
+	failClientCompletion            bool
+}
+
+func (*controlledHost) PlanProxyStartupIntegration() (hostadapter.ProxyStartupAuthority, hostadapter.Observation) {
+	sum := sha256.Sum256([]byte(hostadapter.ProxyStartupDropIn))
+	return hostadapter.ProxyStartupAuthority{DropInSHA256: hex.EncodeToString(sum[:]), DirectoryCreated: true}, hostadapter.Observation{Observed: true, Accepted: true}
+}
+func (host *controlledHost) ClientIdentityPreparationIdle() hostadapter.Observation {
+	return hostadapter.Observation{Observed: true, Accepted: len(host.clientIdentityTarget) == 0 && host.proxyStartAuthorization == ""}
+}
+
+func (host *controlledHost) PrepareClientIdentityTarget(body []byte, digest string) bool {
+	if host.clientIdentityFail == "prepare" {
+		host.clientIdentityFail = ""
+		return false
+	}
+	sum := sha256.Sum256(body)
+	if hex.EncodeToString(sum[:]) != digest {
+		return false
+	}
+	host.clientIdentityTarget = bytes.Clone(body)
+	return true
+}
+
+func (host *controlledHost) PublishProxyStartupIntegration(authority hostadapter.ProxyStartupAuthority) bool {
+	if host.clientIdentityFail == "startup" {
+		host.clientIdentityFail = ""
+		return false
+	}
+	host.clientIdentityStartup = &authority
+	return true
+}
+
+func (host *controlledHost) ReloadProxyStartupIntegration(context.Context) bool {
+	if host.clientIdentityFail == "reload" {
+		host.clientIdentityFail = ""
+		return false
+	}
+	return true
+}
+func (host *controlledHost) VerifyProxyStartupIntegration(_ context.Context, authority hostadapter.ProxyStartupAuthority) bool {
+	if host.clientIdentityFail == "route" {
+		host.clientIdentityFail = ""
+		return false
+	}
+	return host.clientIdentityStartup != nil && *host.clientIdentityStartup == authority
+}
+func (host *controlledHost) ConsumeProxyStartAuthorization(target string) bool {
+	if host.proxyStartAuthorization != target {
+		return false
+	}
+	host.proxyStartAuthorization = ""
+	return true
+}
+func (host *controlledHost) StopProxyForClientIdentityRotation(context.Context) bool {
+	if host.clientIdentityFail == "stop" {
+		host.clientIdentityFail = ""
+		return false
+	}
+	host.active, host.listener = false, false
+	return true
+}
+func (host *controlledHost) ProxyQuiescentForClientIdentityRotation(context.Context) bool {
+	if host.clientIdentityFail == "quiescence" {
+		host.clientIdentityFail = ""
+		return false
+	}
+	return !host.active && !host.listener
+}
+func (host *controlledHost) PublishClientIdentityConfiguration(source, target string) bool {
+	if host.clientIdentityFail == "publish" {
+		host.clientIdentityFail = ""
+		return false
+	}
+	current := sha256.Sum256(host.configuration)
+	replacement := sha256.Sum256(host.clientIdentityTarget)
+	if hex.EncodeToString(replacement[:]) != target {
+		return false
+	}
+	if hex.EncodeToString(current[:]) == target {
+		return true
+	}
+	if hex.EncodeToString(current[:]) != source {
+		return false
+	}
+	host.configuration = bytes.Clone(host.clientIdentityTarget)
+	return true
+}
+func (host *controlledHost) StartProxyForClientIdentityRotation(context.Context, string) bool {
+	if host.clientIdentityFail == "start" {
+		host.clientIdentityFail = ""
+		return false
+	}
+	host.active, host.listener = true, true
+	return true
+}
+func (host *controlledHost) RemoveClientIdentityTarget(_, target string) bool {
+	if host.clientIdentityFail == "remove" {
+		host.clientIdentityFail = ""
+		return false
+	}
+	digest := sha256.Sum256(host.clientIdentityTarget)
+	if len(host.clientIdentityTarget) > 0 && hex.EncodeToString(digest[:]) != target {
+		return false
+	}
+	host.clientIdentityTarget = nil
+	return true
+}
+func (host *controlledHost) RestoreClientIdentityRotation(context.Context, string, string, *hostadapter.ProxyStartupAuthority) bool {
+	host.clientIdentityTarget = nil
+	host.active, host.listener = true, true
+	return true
+}
+func (host *controlledHost) InspectClientIdentityRotation(source, target, canonical string, startup *hostadapter.ProxyStartupAuthority, targetRequired, startupRequired, forward bool) hostadapter.Observation {
+	targetAccepted := !targetRequired || len(host.clientIdentityTarget) > 0
+	startupAccepted := !startupRequired || startup != nil && host.clientIdentityStartup != nil && *startup == *host.clientIdentityStartup
+	return hostadapter.Observation{Observed: true, Accepted: (canonical == source || canonical == target) && targetAccepted && startupAccepted}
+}
+func (host *controlledHost) RemoveProxyStartupIntegration(context.Context, hostadapter.ProxyStartupAuthority) bool {
+	host.clientIdentityStartup = nil
+	return true
 }
 
 func (host *controlledHost) PrepareSubscription(_ context.Context, input hostadapter.SubscriptionEnableInput) hostadapter.SubscriptionEnableResult {
@@ -301,6 +427,10 @@ func (host *controlledHost) Inspect(_ context.Context, requested []hostadapter.R
 				resources[index].Present = len(host.ownership) > 0 && !host.finalizing
 			case finalOwnershipPath:
 				resources[index].Present = len(host.ownership) > 0 && host.finalizing
+			case hostadapter.ClientIdentityTargetPath:
+				resources[index].Present = len(host.clientIdentityTarget) > 0
+			case hostadapter.ProxyStartupDropInPath:
+				resources[index].Present = host.clientIdentityStartup != nil
 			}
 		}
 		return hostadapter.Inspection{Resources: resources, Complete: true}
@@ -347,6 +477,14 @@ func (host *controlledHost) PublishOwnership(_, _ string, expected, next []byte)
 		return errors.New("ownership changed")
 	}
 	record, _ := decodeOwnership(next)
+	if host.failClientCheckpoint != "" && record.ClientRotation != nil && record.ClientRotation.Checkpoint == host.failClientCheckpoint {
+		host.failClientCheckpoint = ""
+		return errors.New("client rotation checkpoint failed")
+	}
+	if host.failClientCompletion && record.ClientRotation == nil && bytes.Contains(host.ownership, []byte(`"client_identity_rotation"`)) {
+		host.failClientCompletion = false
+		return errors.New("client rotation completion failed")
+	}
 	if record.Direction == removalRequired && host.failRemovalPublish[record.RemovalCheckpoint] {
 		delete(host.failRemovalPublish, record.RemovalCheckpoint)
 		return errors.New("removal checkpoint failed")
@@ -516,6 +654,10 @@ func (adapter acceptedSingBox) EncodeServerConfiguration(identity singboxadapter
 
 func (adapter acceptedSingBox) EncodeClientConfiguration(_ []byte, publicIPv4 string) ([]byte, error) {
 	return []byte(fmt.Sprintf(`{"server":%q,"uuid":"11111111-2222-4333-8444-555555555555","public_key":"public","short_id":"01020304"}`+"\n", publicIPv4)), nil
+}
+
+func (acceptedSingBox) ReplaceClientIdentity([]byte) ([]byte, error) {
+	return []byte(`{"inbound":"replacement-secret-safe-test-fixture"}` + "\n"), nil
 }
 
 type readyLifecycle struct{}
@@ -1027,7 +1169,7 @@ func TestOwnerCanReviewDeclineAndDiscloseOneRunningClientConfiguration(t *testin
 	host.lockHeld = false
 
 	review := installation.Review(t.Context(), ShowClientConfigurationAction)
-	if review.Prepared == nil || !reflect.DeepEqual(review.LegalActions, []Action{ViewDetailsAction, ShowClientConfigurationAction, CompleteRemovalAction, EnableSubscriptionAction}) {
+	if review.Prepared == nil || !reflect.DeepEqual(review.LegalActions, []Action{ViewDetailsAction, ShowClientConfigurationAction, CompleteRemovalAction, EnableSubscriptionAction, RotateClientIdentityAction}) {
 		t.Fatalf("Review() = %#v", review)
 	}
 	warnings := strings.Join(review.Plan, "\n")
@@ -2472,6 +2614,299 @@ func (host *controlledHost) InspectSubscriptionAbsence(context.Context) hostadap
 	return hostadapter.Observation{Observed: true, Accepted: true}
 }
 
+func TestRunningWithoutSubscriptionOffersReviewedClientIdentityRotation(t *testing.T) {
+	host := acceptedHost()
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	if result := installation.Execute(t.Context(), *setup.Prepared, Approved, nil); result.Code != SetupComplete {
+		t.Fatalf("setup = %#v", result)
+	}
+
+	review := installation.Review(t.Context(), RotateClientIdentityAction)
+	if review.Prepared == nil || review.Status != Running || review.SubscriptionStatus != SubscriptionNotEnabled || !slices.Contains(review.LegalActions, RotateClientIdentityAction) {
+		t.Fatalf("rotation review = %#v", review)
+	}
+	plan := strings.Join(review.Plan, "\n")
+	for _, want := range []string{"Action: Rotate Client Identity", "disconnect", "same Subscription Link", "extended outage", "Show client configuration", "leaked Subscription Link"} {
+		if !strings.Contains(plan, want) {
+			t.Errorf("Plan missing %q: %s", want, plan)
+		}
+	}
+}
+
+func TestReviewedClientIdentityRotationReplacesOnlyUUID(t *testing.T) {
+	host := acceptedHost()
+	singbox := singboxadapter.New()
+	installation := newInstalledInterface(readyLifecycle{}, host, singbox)
+	setup := installation.Review(t.Context(), StartSetupAction)
+	if result := installation.Execute(t.Context(), *setup.Prepared, Approved, nil); result.Code != SetupComplete {
+		t.Fatalf("setup = %#v", result)
+	}
+	source := bytes.Clone(host.configuration)
+	sourceFacts, err := singbox.CurrentConnectionFacts(source, "8.8.8.8")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	review := installation.Review(t.Context(), RotateClientIdentityAction)
+	var phases []string
+	result := installation.Execute(t.Context(), *review.Prepared, Approved, func(progress Progress) {
+		if progress.Phase != "" {
+			phases = append(phases, progress.Phase)
+		}
+		if len(progress.ClientConfiguration) != 0 || len(progress.SubscriptionLink) != 0 {
+			t.Fatal("rotation disclosed a secret")
+		}
+	})
+	if result.Code != ClientIdentityRotated || result.Status != Running || result.SubscriptionStatus != SubscriptionNotEnabled || result.ProxyTraffic != ProvedWorking || result.SubscriptionServing != ProvedStopped {
+		t.Fatalf("rotation = %#v", result)
+	}
+	targetFacts, err := singbox.CurrentConnectionFacts(host.configuration, "8.8.8.8")
+	if err != nil || sourceFacts.UUID == targetFacts.UUID {
+		t.Fatalf("target facts = %#v, %v", targetFacts, err)
+	}
+	sourceFacts.UUID = targetFacts.UUID
+	if sourceFacts != targetFacts {
+		t.Fatalf("noncredential facts changed: source %#v target %#v", sourceFacts, targetFacts)
+	}
+	record, ok := decodeOwnership(host.ownership)
+	targetDigest := sha256.Sum256(host.configuration)
+	if !ok || record.Schema != 2 || record.ClientRotation != nil || record.Startup == nil || hex.EncodeToString(targetDigest[:]) != record.ConfigurationSHA256 {
+		t.Fatalf("completed authority = %#v", record)
+	}
+	for _, want := range []string{"Checking Client Identity rotation safety", "Preparing replacement Client Identity", "Preparing Client Identity startup protection", "Stopping old Client Identity access", "Committing Client Identity revocation", "Activating replacement Client Identity", "Finishing Client Identity rotation", "Verifying Client Identity rotation result"} {
+		if !slices.Contains(phases, want) {
+			t.Errorf("missing phase %q: %v", want, phases)
+		}
+	}
+}
+
+func TestClientIdentityRotationRecoveryNeverRestoresAfterRevocation(t *testing.T) {
+	for _, test := range []struct {
+		name, fail string
+		wantCode   ResultCode
+		wantChange bool
+	}{
+		{"pre-revocation cleanup", "stop", ClientIdentityRotationCleanedUp, false},
+		{"post-revocation finish", "start", ClientIdentityRotationFinished, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			host := acceptedHost()
+			singbox := singboxadapter.New()
+			installation := newInstalledInterface(readyLifecycle{}, host, singbox)
+			setup := installation.Review(t.Context(), StartSetupAction)
+			installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+			source := bytes.Clone(host.configuration)
+			host.clientIdentityFail = test.fail
+			rotate := installation.Review(t.Context(), RotateClientIdentityAction)
+			if result := installation.Execute(t.Context(), *rotate.Prepared, Approved, nil); result.Code != ClientIdentityRotationNeedsFinish {
+				t.Fatalf("interruption = %#v", result)
+			}
+			pending, ok := decodeOwnership(host.ownership)
+			if !ok || pending.ClientRotation == nil {
+				t.Fatalf("pending authority = %#v", pending)
+			}
+			target := bytes.Clone(host.clientIdentityTarget)
+			restarted := newInstalledInterface(readyLifecycle{}, host, singbox)
+			finish := restarted.Review(t.Context(), FinishClientIdentityAction)
+			if finish.Prepared == nil || finish.Status != ChangeIncomplete || !slices.Equal(finish.LegalActions, []Action{FinishClientIdentityAction, ViewDetailsAction, CompleteRemovalAction}) {
+				t.Fatalf("finish review = %#v", finish)
+			}
+			result := restarted.Execute(t.Context(), *finish.Prepared, Approved, nil)
+			if result.Code != test.wantCode {
+				t.Fatalf("finish = %#v", result)
+			}
+			if test.wantChange != !bytes.Equal(source, host.configuration) || test.wantChange && !bytes.Equal(target, host.configuration) {
+				t.Fatalf("wrong recovery direction: source=%s target=%s current=%s", source, target, host.configuration)
+			}
+		})
+	}
+}
+
+func TestClientIdentityRecoveryFreshlyVerifiesTheStartupRoute(t *testing.T) {
+	host := acceptedHost()
+	installation := newInstalledInterface(readyLifecycle{}, host, singboxadapter.New())
+	setup := installation.Review(t.Context(), StartSetupAction)
+	installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+	host.clientIdentityFail = "start"
+	rotate := installation.Review(t.Context(), RotateClientIdentityAction)
+	installation.Execute(t.Context(), *rotate.Prepared, Approved, nil)
+
+	restarted := newInstalledInterface(readyLifecycle{}, host, singboxadapter.New())
+	finish := restarted.Review(t.Context(), FinishClientIdentityAction)
+	plan := strings.Join(finish.Plan, "\n")
+	for _, want := range []string{"Selected direction:", "Remaining effects:", "Proxy traffic availability:", "Subscription serving availability: proved stopped"} {
+		if !strings.Contains(plan, want) {
+			t.Errorf("Finish Plan missing %q: %s", want, plan)
+		}
+	}
+	host.clientIdentityFail = "route"
+	result := restarted.Execute(t.Context(), *finish.Prepared, Approved, nil)
+	if result.Code != ClientIdentityRotationNeedsFinish || result.FailedCheck != "Effective startup route" {
+		t.Fatalf("stale startup route was trusted: %#v", result)
+	}
+}
+
+func TestClientIdentityFailureUsesTheStableResultContract(t *testing.T) {
+	result := clientIdentityFailed("test check", "test correction")
+	if result.Code != ClientIdentityRotationFailed || result.Message != "Client Identity rotation failed. Follow the correction before retrying." || result.FailedCheck != "test check" || result.Correction != "test correction" {
+		t.Fatalf("failure result = %#v", result)
+	}
+}
+
+func TestOrdinaryProxyStartupFailsClosedDuringClientIdentityCutover(t *testing.T) {
+	host := acceptedHost()
+	singbox := singboxadapter.New()
+	installation := newInstalledInterface(readyLifecycle{}, host, singbox)
+	setup := installation.Review(t.Context(), StartSetupAction)
+	installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+	host.clientIdentityFail = "stop"
+	rotate := installation.Review(t.Context(), RotateClientIdentityAction)
+	installation.Execute(t.Context(), *rotate.Prepared, Approved, nil)
+	record, ok := decodeOwnership(host.ownership)
+	if !ok || record.ClientRotation == nil || record.ClientRotation.Checkpoint != clientRotationGated {
+		t.Fatalf("gate authority = %#v", record)
+	}
+	if authorizeProxyStart(t.Context(), readyLifecycle{}, host) {
+		t.Fatal("ordinary start bypassed the durable cutover gate")
+	}
+	host.statusBusy = true
+	host.proxyStartAuthorization = record.ClientRotation.Source
+	if !authorizeProxyStart(t.Context(), readyLifecycle{}, host) || host.proxyStartAuthorization != "" {
+		t.Fatal("reviewed finishing start was not consumed exactly once")
+	}
+	if authorizeProxyStart(t.Context(), readyLifecycle{}, host) {
+		t.Fatal("consumed finishing authority was reusable")
+	}
+}
+
+func TestCompletedStartupIntegrationIsReusedForLaterClientIdentityRotation(t *testing.T) {
+	host := acceptedHost()
+	singbox := singboxadapter.New()
+	installation := newInstalledInterface(readyLifecycle{}, host, singbox)
+	setup := installation.Review(t.Context(), StartSetupAction)
+	installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+	for attempt := 0; attempt < 2; attempt++ {
+		review := installation.Review(t.Context(), RotateClientIdentityAction)
+		if review.Prepared == nil {
+			t.Fatalf("review %d = %#v", attempt, review)
+		}
+		if result := installation.Execute(t.Context(), *review.Prepared, Approved, nil); result.Code != ClientIdentityRotated {
+			t.Fatalf("rotation %d = %#v", attempt, result)
+		}
+	}
+	record, ok := decodeOwnership(host.ownership)
+	if !ok || record.Startup == nil || !record.Startup.DirectoryCreated {
+		t.Fatalf("startup provenance was not preserved: %#v", record.Startup)
+	}
+}
+
+func TestClientIdentityRotationFinishesEveryInterruptedHostEffect(t *testing.T) {
+	for _, test := range []struct {
+		failure  string
+		wantCode ResultCode
+	}{
+		{"prepare", ClientIdentityRotationCleanedUp},
+		{"startup", ClientIdentityRotationCleanedUp},
+		{"reload", ClientIdentityRotationCleanedUp},
+		{"route", ClientIdentityRotationCleanedUp},
+		{"stop", ClientIdentityRotationCleanedUp},
+		{"quiescence", ClientIdentityRotationCleanedUp},
+		{"publish", ClientIdentityRotationFinished},
+		{"start", ClientIdentityRotationFinished},
+		{"remove", ClientIdentityRotationFinished},
+	} {
+		t.Run(test.failure, func(t *testing.T) {
+			host := acceptedHost()
+			singbox := singboxadapter.New()
+			installation := newInstalledInterface(readyLifecycle{}, host, singbox)
+			setup := installation.Review(t.Context(), StartSetupAction)
+			installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+			host.clientIdentityFail = test.failure
+			rotate := installation.Review(t.Context(), RotateClientIdentityAction)
+			if result := installation.Execute(t.Context(), *rotate.Prepared, Approved, nil); result.Code != ClientIdentityRotationNeedsFinish {
+				t.Fatalf("interruption = %#v", result)
+			}
+			restarted := newInstalledInterface(readyLifecycle{}, host, singbox)
+			finish := restarted.Review(t.Context(), FinishClientIdentityAction)
+			if finish.Prepared == nil {
+				t.Fatalf("finish review = %#v", finish)
+			}
+			if result := restarted.Execute(t.Context(), *finish.Prepared, Approved, nil); result.Code != test.wantCode {
+				t.Fatalf("finish = %#v", result)
+			}
+		})
+	}
+}
+
+func TestClientIdentityRotationFinishesEveryInterruptedDurablePublication(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		checkpoint clientIdentityRotationCheckpoint
+		completion bool
+		wantCode   ResultCode
+	}{
+		{"target prepared", clientRotationTargetPrepared, false, ClientIdentityRotationCleanedUp},
+		{"integration published", clientRotationIntegrationPublished, false, ClientIdentityRotationCleanedUp},
+		{"systemd reloaded", clientRotationReloaded, false, ClientIdentityRotationCleanedUp},
+		{"route verified", clientRotationRouteVerified, false, ClientIdentityRotationCleanedUp},
+		{"cutover gated", clientRotationGated, false, ClientIdentityRotationCleanedUp},
+		{"source stopped", clientRotationStopped, false, ClientIdentityRotationCleanedUp},
+		{"source quiescent", clientRotationQuiescent, false, ClientIdentityRotationCleanedUp},
+		{"source revoked", clientRotationRevoked, false, ClientIdentityRotationCleanedUp},
+		{"target published", clientRotationTargetPublished, false, ClientIdentityRotationFinished},
+		{"target started", clientRotationTargetStarted, false, ClientIdentityRotationFinished},
+		{"completion", "", true, ClientIdentityRotationFinished},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			host := acceptedHost()
+			singbox := singboxadapter.New()
+			installation := newInstalledInterface(readyLifecycle{}, host, singbox)
+			setup := installation.Review(t.Context(), StartSetupAction)
+			installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+			host.failClientCheckpoint, host.failClientCompletion = test.checkpoint, test.completion
+			rotate := installation.Review(t.Context(), RotateClientIdentityAction)
+			if result := installation.Execute(t.Context(), *rotate.Prepared, Approved, nil); result.Code != ClientIdentityRotationNeedsFinish {
+				t.Fatalf("interruption = %#v", result)
+			}
+			restarted := newInstalledInterface(readyLifecycle{}, host, singbox)
+			finish := restarted.Review(t.Context(), FinishClientIdentityAction)
+			if finish.Prepared == nil {
+				t.Fatalf("finish review = %#v", finish)
+			}
+			if result := restarted.Execute(t.Context(), *finish.Prepared, Approved, nil); result.Code != test.wantCode {
+				t.Fatalf("finish = %#v", result)
+			}
+		})
+	}
+}
+
+func TestCompleteRemovalTakesOverClientIdentityRotationWithoutStartingEitherGeneration(t *testing.T) {
+	for _, failure := range []string{"stop", "start"} {
+		t.Run(failure, func(t *testing.T) {
+			host := acceptedHost()
+			lifecycle := &controlledRemovalLifecycle{ready: true}
+			installation := newInstalledInterface(lifecycle, host, singboxadapter.New())
+			setup := installation.Review(t.Context(), StartSetupAction)
+			installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+			host.clientIdentityFail = failure
+			rotate := installation.Review(t.Context(), RotateClientIdentityAction)
+			installation.Execute(t.Context(), *rotate.Prepared, Approved, nil)
+			starts := len(host.operations)
+			removal := installation.Review(t.Context(), CompleteRemovalAction)
+			if removal.Prepared == nil {
+				t.Fatalf("removal review = %#v", removal)
+			}
+			if result := installation.Execute(t.Context(), *removal.Prepared, Approved, nil); result.Code != CompleteRemovalCompleted {
+				t.Fatalf("removal = %#v", result)
+			}
+			if len(host.operations) < starts || host.clientIdentityTarget != nil || host.clientIdentityStartup != nil || host.active || host.listener {
+				t.Fatalf("removal revived or retained rotation state: %#v", host)
+			}
+		})
+	}
+}
+
 func TestSchema2RefusesUnknownOrContradictoryAuthority(t *testing.T) {
 	host := acceptedHost()
 	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
@@ -2609,5 +3044,49 @@ func TestSharedSchema2FixtureIsSupportedThroughReview(t *testing.T) {
 	review := installation.Review(t.Context(), CompleteRemovalAction)
 	if review.Status != Running || review.SubscriptionStatus != SubscriptionNotEnabled || review.Prepared == nil {
 		t.Fatalf("shared schema-2 fixture = %#v", review)
+	}
+}
+
+func TestSoftwareUpdateAdmissionUsesExactIdleProxyAuthorityAndBothReleases(t *testing.T) {
+	host := acceptedHost()
+	installation := newInstalledInterface(readyLifecycle{}, host, singboxadapter.New())
+	setup := installation.Review(t.Context(), StartSetupAction)
+	installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+	rotate := installation.Review(t.Context(), RotateClientIdentityAction)
+	installation.Execute(t.Context(), *rotate.Prepared, Approved, nil)
+	source := testInstalledIdentity()
+	compatible := softwarelifecycle.UpdateTarget{Identity: source, Executable: []byte(expandedProxyAuthorityCapability)}
+	if !AdmitSoftwareUpdate(host.ownership, source, nil) || !AdmitSoftwareUpdate(host.ownership, source, &compatible) {
+		t.Fatal("compatible source was refused")
+	}
+	target := source
+	target.Tag, target.Commit = "v3.0.1", strings.Repeat("c", 40)
+	unsupported := softwarelifecycle.UpdateTarget{Identity: target, Executable: []byte("no declared capability")}
+	if AdmitSoftwareUpdate(host.ownership, source, &unsupported) {
+		t.Fatal("candidate without expanded-authority compatibility was admitted")
+	}
+	supported := softwarelifecycle.UpdateTarget{Identity: target, Executable: []byte("prefix " + expandedProxyAuthorityCapability + " suffix")}
+	if !AdmitSoftwareUpdate(host.ownership, source, &supported) {
+		t.Fatal("candidate with expanded-authority compatibility was refused")
+	}
+	record, _ := decodeOwnership(host.ownership)
+	if !compatibleOwnership(record, target) {
+		t.Fatal("compatible installed target could not consume preserved authority")
+	}
+	targetLifecycle := &mutableLifecycle{result: softwarelifecycle.Result{State: softwarelifecycle.Ready, Installed: &target, Code: softwarelifecycle.StatusReady}}
+	if review := newInstalledInterface(targetLifecycle, host, singboxadapter.New()).Review(t.Context(), StatusAction); review.Status != Running || !authorizeProxyStart(t.Context(), targetLifecycle, host) {
+		t.Fatalf("post-update preserved authority was unusable: %#v", review)
+	}
+	legacyRecord := record
+	legacyRecord.Release = legacyProxyCreator
+	for index := range legacyRecord.ResourceCreatingReleases {
+		legacyRecord.ResourceCreatingReleases[index] = legacyProxyCreator
+	}
+	if AdmitSoftwareUpdate(ownershipBytes(legacyRecord), legacyProxyCreator, &unsupported) {
+		t.Fatal("arbitrary candidate was admitted through legacy compatibility")
+	}
+	record.ClientRotation = &clientIdentityRotation{}
+	if AdmitSoftwareUpdate(ownershipBytes(record), source, nil) {
+		t.Fatal("pending proxy work was admitted")
 	}
 }

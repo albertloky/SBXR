@@ -25,26 +25,72 @@ var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89a
 func New() Adapter { return Adapter{} }
 
 func (Adapter) PrepareIdentity() (Identity, error) {
-	uuid := make([]byte, 16)
-	shortID := make([]byte, 4)
-	if _, err := rand.Read(uuid); err != nil {
+	uuid, err := prepareUUID()
+	if err != nil {
 		return Identity{}, err
 	}
+	shortID := make([]byte, 4)
 	if _, err := rand.Read(shortID); err != nil {
 		return Identity{}, err
 	}
-	uuid[6] = uuid[6]&0x0f | 0x40
-	uuid[8] = uuid[8]&0x3f | 0x80
 	private, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
 		return Identity{}, err
 	}
 	return Identity{
-		UUID:       fmt.Sprintf("%x-%x-%x-%x-%x", uuid[0:4], uuid[4:6], uuid[6:8], uuid[8:10], uuid[10:16]),
+		UUID:       uuid,
 		PrivateKey: base64.RawURLEncoding.EncodeToString(private.Bytes()),
 		PublicKey:  base64.RawURLEncoding.EncodeToString(private.PublicKey().Bytes()),
 		ShortID:    hex.EncodeToString(shortID),
 	}, nil
+}
+
+func prepareUUID() (string, error) {
+	uuid := make([]byte, 16)
+	if _, err := rand.Read(uuid); err != nil {
+		return "", err
+	}
+	uuid[6] = uuid[6]&0x0f | 0x40
+	uuid[8] = uuid[8]&0x3f | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", uuid[0:4], uuid[4:6], uuid[6:8], uuid[8:10], uuid[10:16]), nil
+}
+
+// ReplaceClientIdentity preserves every supported server field except the one
+// VLESS UUID. It never generates new REALITY key or short-ID material.
+func (adapter Adapter) ReplaceClientIdentity(source []byte) ([]byte, error) {
+	if _, err := adapter.CurrentConnectionFacts(source, "192.0.2.1"); err != nil {
+		return nil, fmt.Errorf("client identity replacement refused")
+	}
+	var configuration map[string]any
+	if json.Unmarshal(source, &configuration) != nil {
+		return nil, fmt.Errorf("client identity replacement refused")
+	}
+	inbounds, ok := configuration["inbounds"].([]any)
+	if !ok || len(inbounds) != 1 {
+		return nil, fmt.Errorf("client identity replacement refused")
+	}
+	inbound, ok := inbounds[0].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("client identity replacement refused")
+	}
+	users, ok := inbound["users"].([]any)
+	if !ok || len(users) != 1 {
+		return nil, fmt.Errorf("client identity replacement refused")
+	}
+	user, ok := users[0].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("client identity replacement refused")
+	}
+	uuid, err := prepareUUID()
+	if err != nil {
+		return nil, err
+	}
+	user["uuid"] = uuid
+	body, err := json.Marshal(configuration)
+	if err != nil {
+		return nil, err
+	}
+	return append(body, '\n'), nil
 }
 
 func (Adapter) ValidIdentity(identity Identity) bool {

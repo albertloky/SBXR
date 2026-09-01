@@ -32,5 +32,11 @@ func run(ctx context.Context, arguments []string, input io.Reader, output, error
 		}
 		return 1
 	}
+	if len(arguments) == 1 && arguments[0] == hostadapter.ProxyStartRole {
+		if proxyinstallation.AuthorizeProxyStart(ctx, lifecycle) {
+			return 0
+		}
+		return 1
+	}
 	return terminal.Run(ctx, arguments, input, output, errorOutput, proxyinstallation.NewInstalled(lifecycle))
 }

@@ -96,6 +96,15 @@ type Progress struct {
 
 type ProgressReporter func(Progress)
 
+type UpdateTarget struct {
+	Identity   ReleaseIdentity
+	Executable []byte
+}
+
+// UpdateAdmission is the private collaboration through which the owner of a
+// durable product record admits both the installed source and update target.
+type UpdateAdmission func([]byte, ReleaseIdentity, *UpdateTarget) bool
+
 type LatestRelease struct {
 	Identity ReleaseIdentity
 	Sequence uint64
@@ -182,6 +191,10 @@ type localInspection struct {
 
 func NewInstalled(latest LatestReleaseSource) Interface {
 	return newInstalledInterface(newLocalInspector("/", 0), latest)
+}
+
+func NewInstalledWithUpdateAdmission(latest LatestReleaseSource, admission UpdateAdmission) Interface {
+	return newInstalledInterface(filesystemInspector{root: "/", uid: 0, updateAdmission: admission}, latest)
 }
 
 func newInstalledInterface(local localInspector, latest LatestReleaseSource) Interface {

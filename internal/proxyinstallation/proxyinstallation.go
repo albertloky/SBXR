@@ -30,6 +30,7 @@ const (
 	NotSetUp          Status = "Not set up"
 	Running           Status = "Running"
 	ChangeInProgress  Status = "Change in progress"
+	ChangeIncomplete  Status = "Change incomplete"
 	SetupIncomplete   Status = "Setup incomplete"
 	ProblemDetected   Status = "Problem detected"
 	RemovalIncomplete Status = "Removal incomplete"
@@ -68,6 +69,8 @@ const (
 	RotateSubscriptionLinkAction   Action = "Rotate subscription link"
 	RepairSubscriptionAction       Action = "Repair subscription"
 	FinishSubscriptionChangeAction Action = "Finish subscription change"
+	RotateClientIdentityAction     Action = "Rotate Client Identity"
+	FinishClientIdentityAction     Action = "Finish Client Identity rotation"
 )
 
 type Confirmation uint8
@@ -80,30 +83,37 @@ const (
 type ResultCode string
 
 const (
-	StatusNotSetUp                     ResultCode = "PROXY-INSTALLATION-STATUS-NOT-SET-UP"
-	StatusProblemDetected              ResultCode = "PROXY-INSTALLATION-STATUS-PROBLEM-DETECTED"
-	StatusChangeInProgress             ResultCode = "PROXY-INSTALLATION-STATUS-CHANGE-IN-PROGRESS"
-	ActionCancelled                    ResultCode = "PROXY-INSTALLATION-ACTION-CANCELLED"
-	ActionRefused                      ResultCode = "PROXY-INSTALLATION-ACTION-REFUSED"
-	SetupComplete                      ResultCode = "PROXY-INSTALLATION-SETUP-COMPLETE"
-	SetupNeedsCleanup                  ResultCode = "PROXY-INSTALLATION-SETUP-CLEANUP-REQUIRED"
-	SetupNeedsCompletion               ResultCode = "PROXY-INSTALLATION-SETUP-COMPLETION-REQUIRED"
-	SetupCleanedUp                     ResultCode = "PROXY-INSTALLATION-SETUP-CLEANED-UP"
-	ClientConfigurationDisclosed       ResultCode = "PROXY-INSTALLATION-CLIENT-CONFIGURATION-DISCLOSED"
-	RemovalNeedsCompletion             ResultCode = "PROXY-INSTALLATION-REMOVAL-COMPLETION-REQUIRED"
-	CompleteRemovalCompleted           ResultCode = "SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED"
-	SubscriptionStatusNotEnabled       ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-STATUS-NOT-ENABLED"
-	SubscriptionStatusAvailable        ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-STATUS-AVAILABLE"
-	SubscriptionStatusChangeIncomplete ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-STATUS-CHANGE-INCOMPLETE"
-	SubscriptionStatusProblemDetected  ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-STATUS-PROBLEM-DETECTED"
-	SubscriptionChangeFinished         ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-CHANGE-FINISHED"
-	SubscriptionChangeNeedsCompletion  ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-CHANGE-INCOMPLETE"
-	SubscriptionEnabled                ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-ENABLED"
-	SubscriptionLinkRotated            ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-LINK-ROTATED"
-	SubscriptionRepaired               ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-REPAIRED"
-	SubscriptionChangeCleanedUp        ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-CHANGE-CLEANED-UP"
-	SubscriptionLinkDisplayIncomplete  ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-LINK-DISPLAY-INCOMPLETE"
-	SubscriptionLinkDisclosed          ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-LINK-DISCLOSED"
+	StatusNotSetUp                          ResultCode = "PROXY-INSTALLATION-STATUS-NOT-SET-UP"
+	StatusProblemDetected                   ResultCode = "PROXY-INSTALLATION-STATUS-PROBLEM-DETECTED"
+	StatusChangeInProgress                  ResultCode = "PROXY-INSTALLATION-STATUS-CHANGE-IN-PROGRESS"
+	StatusChangeIncomplete                  ResultCode = "PROXY-INSTALLATION-STATUS-CHANGE-INCOMPLETE"
+	ActionCancelled                         ResultCode = "PROXY-INSTALLATION-ACTION-CANCELLED"
+	ActionRefused                           ResultCode = "PROXY-INSTALLATION-ACTION-REFUSED"
+	SetupComplete                           ResultCode = "PROXY-INSTALLATION-SETUP-COMPLETE"
+	SetupNeedsCleanup                       ResultCode = "PROXY-INSTALLATION-SETUP-CLEANUP-REQUIRED"
+	SetupNeedsCompletion                    ResultCode = "PROXY-INSTALLATION-SETUP-COMPLETION-REQUIRED"
+	SetupCleanedUp                          ResultCode = "PROXY-INSTALLATION-SETUP-CLEANED-UP"
+	ClientConfigurationDisclosed            ResultCode = "PROXY-INSTALLATION-CLIENT-CONFIGURATION-DISCLOSED"
+	RemovalNeedsCompletion                  ResultCode = "PROXY-INSTALLATION-REMOVAL-COMPLETION-REQUIRED"
+	CompleteRemovalCompleted                ResultCode = "SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED"
+	SubscriptionStatusNotEnabled            ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-STATUS-NOT-ENABLED"
+	SubscriptionStatusAvailable             ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-STATUS-AVAILABLE"
+	SubscriptionStatusChangeIncomplete      ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-STATUS-CHANGE-INCOMPLETE"
+	SubscriptionStatusProblemDetected       ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-STATUS-PROBLEM-DETECTED"
+	SubscriptionChangeFinished              ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-CHANGE-FINISHED"
+	SubscriptionChangeNeedsCompletion       ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-CHANGE-INCOMPLETE"
+	SubscriptionEnabled                     ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-ENABLED"
+	SubscriptionLinkRotated                 ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-LINK-ROTATED"
+	SubscriptionRepaired                    ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-REPAIRED"
+	SubscriptionChangeCleanedUp             ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-CHANGE-CLEANED-UP"
+	SubscriptionLinkDisplayIncomplete       ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-LINK-DISPLAY-INCOMPLETE"
+	SubscriptionLinkDisclosed               ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-LINK-DISCLOSED"
+	ClientIdentityRotated                   ResultCode = "PROXY-INSTALLATION-CLIENT-IDENTITY-ROTATED"
+	ClientIdentityRotationNeedsFinish       ResultCode = "PROXY-INSTALLATION-CLIENT-IDENTITY-ROTATION-INCOMPLETE"
+	ClientIdentityRotationFailed            ResultCode = "PROXY-INSTALLATION-CLIENT-IDENTITY-ROTATION-FAILED"
+	ClientIdentityRotationFinished          ResultCode = "PROXY-INSTALLATION-CLIENT-IDENTITY-ROTATION-FINISHED"
+	ClientIdentityRotationCleanedUp         ResultCode = "PROXY-INSTALLATION-CLIENT-IDENTITY-ROTATION-CLEANED-UP"
+	ClientIdentityRotationDisplayIncomplete ResultCode = "PROXY-INSTALLATION-CLIENT-IDENTITY-ROTATION-DISPLAY-INCOMPLETE"
 )
 
 type Result struct {
@@ -184,6 +194,7 @@ type singboxInterface interface {
 	ValidIdentity(singboxadapter.Identity) bool
 	EncodeServerConfiguration(singboxadapter.Identity, string, string) ([]byte, error)
 	EncodeClientConfiguration([]byte, string) ([]byte, error)
+	ReplaceClientIdentity([]byte) ([]byte, error)
 }
 
 type installedInterface struct {
@@ -210,6 +221,8 @@ type preparedReview struct {
 	activation   hostadapter.CertificateActivationInspection
 	renewal      hostadapter.RenewalInspection
 	repair       subscriptionRepairCorrection
+	target       []byte
+	startup      *hostadapter.ProxyStartupAuthority
 }
 
 type unfinishedDirection string
@@ -264,6 +277,69 @@ type ownershipRecord struct {
 	Repair                   *subscriptionRepair                        `json:"subscription_repair,omitempty"`
 	SubscriptionCompromised  bool                                       `json:"subscription_compromised,omitempty"`
 	SubscriptionResources    *hostadapter.SubscriptionResourceAuthority `json:"subscription_resources,omitempty"`
+	Startup                  *hostadapter.ProxyStartupAuthority         `json:"proxy_startup,omitempty"`
+	ClientRotation           *clientIdentityRotation                    `json:"client_identity_rotation,omitempty"`
+}
+
+type clientIdentityRotation struct {
+	OperationID string                           `json:"operation_id"`
+	Direction   string                           `json:"direction"`
+	Effects     []string                         `json:"effects"`
+	Completed   []string                         `json:"completed_effects"`
+	Source      string                           `json:"source_configuration_sha256"`
+	Target      string                           `json:"target_configuration_sha256"`
+	Checkpoint  clientIdentityRotationCheckpoint `json:"checkpoint"`
+}
+
+type clientIdentityRotationCheckpoint string
+
+const (
+	clientRotationAuthorized           clientIdentityRotationCheckpoint = "rotation authorized"
+	clientRotationTargetPrepared       clientIdentityRotationCheckpoint = "target prepared"
+	clientRotationIntegrationPublished clientIdentityRotationCheckpoint = "startup integration published"
+	clientRotationReloaded             clientIdentityRotationCheckpoint = "systemd reloaded"
+	clientRotationRouteVerified        clientIdentityRotationCheckpoint = "startup route verified"
+	clientRotationGated                clientIdentityRotationCheckpoint = "cutover gated"
+	clientRotationStopped              clientIdentityRotationCheckpoint = "source stopped"
+	clientRotationQuiescent            clientIdentityRotationCheckpoint = "source quiescent"
+	clientRotationRevoked              clientIdentityRotationCheckpoint = "source revoked"
+	clientRotationTargetPublished      clientIdentityRotationCheckpoint = "target published"
+	clientRotationTargetStarted        clientIdentityRotationCheckpoint = "target started"
+)
+
+var clientIdentityRotationEffects = []string{"prepare target", "publish startup integration", "reload systemd", "verify startup route", "establish cutover gate", "stop source", "prove source quiescence", "revoke source", "publish target", "start target", "verify target", "clean staging"}
+
+type clientIdentityCheckpointPolicy struct {
+	checkpoint      clientIdentityRotationCheckpoint
+	effect          string
+	targetRequired  bool
+	startupRequired bool
+	ordinaryStart   bool
+	forward         bool
+	targetCanonical bool
+	verifyRoute     bool
+}
+
+var clientIdentityCheckpointPolicies = []clientIdentityCheckpointPolicy{
+	{checkpoint: clientRotationAuthorized, ordinaryStart: true},
+	{checkpoint: clientRotationTargetPrepared, effect: "prepare target", targetRequired: true, ordinaryStart: true},
+	{checkpoint: clientRotationIntegrationPublished, effect: "publish startup integration", targetRequired: true, startupRequired: true, ordinaryStart: true},
+	{checkpoint: clientRotationReloaded, effect: "reload systemd", targetRequired: true, startupRequired: true, ordinaryStart: true},
+	{checkpoint: clientRotationRouteVerified, effect: "verify startup route", targetRequired: true, startupRequired: true, ordinaryStart: true, verifyRoute: true},
+	{checkpoint: clientRotationGated, effect: "establish cutover gate", targetRequired: true, startupRequired: true, verifyRoute: true},
+	{checkpoint: clientRotationStopped, effect: "stop source", targetRequired: true, startupRequired: true, verifyRoute: true},
+	{checkpoint: clientRotationQuiescent, effect: "prove source quiescence", targetRequired: true, startupRequired: true, verifyRoute: true},
+	{checkpoint: clientRotationRevoked, effect: "revoke source", targetRequired: true, startupRequired: true, forward: true, verifyRoute: true},
+	{checkpoint: clientRotationTargetPublished, effect: "publish target", targetRequired: true, startupRequired: true, forward: true, targetCanonical: true, verifyRoute: true},
+	{checkpoint: clientRotationTargetStarted, effect: "start target", startupRequired: true, forward: true, targetCanonical: true, verifyRoute: true},
+}
+
+func clientIdentityPolicy(checkpoint clientIdentityRotationCheckpoint) (clientIdentityCheckpointPolicy, int, bool) {
+	index := slices.IndexFunc(clientIdentityCheckpointPolicies, func(policy clientIdentityCheckpointPolicy) bool { return policy.checkpoint == checkpoint })
+	if index < 0 {
+		return clientIdentityCheckpointPolicy{}, -1, false
+	}
+	return clientIdentityCheckpointPolicies[index], index, true
 }
 
 type subscriptionEnablement struct {
@@ -365,6 +441,8 @@ var footprint = []hostadapter.Resource{
 	{Kind: hostadapter.PathResource, Name: "/etc/apt/keyrings/sagernet.asc"},
 	{Kind: hostadapter.PathResource, Name: "/etc/apt/keyrings/sagernet.asc.sbxr-next"},
 	{Kind: hostadapter.PathResource, Name: "/etc/sing-box"},
+	{Kind: hostadapter.PathResource, Name: hostadapter.ClientIdentityTargetPath},
+	{Kind: hostadapter.PathResource, Name: hostadapter.ProxyStartupDropInPath},
 	{Kind: hostadapter.PathResource, Name: "/var/lib/sing-box"},
 	{Kind: hostadapter.PathResource, Name: "/usr/bin/sing-box"},
 	{Kind: hostadapter.PathResource, Name: "/etc/systemd/system/sing-box.service"},
@@ -677,6 +755,9 @@ func (module *installedInterface) reviewOwned(ctx context.Context, action Action
 		review.Details = append(ownedDetails(installed, installedReady, ProblemDetected, record, facts, "Available"), "Detected mismatch: the Ownership Record does not match the active SBXR Release Identity", "Safe correction: Restore the exact installed SBXR Release Identity recorded by the valid Ownership Record, then inspect again.")
 		return review
 	}
+	if record.ClientRotation != nil {
+		return module.prepareClientIdentityFinishReview(ctx, action, review, record, body, installed)
+	}
 	review.Status = SetupIncomplete
 	review.Result = Result{Status: SetupIncomplete, Message: "Proxy setup was interrupted and must be finished safely.", Code: SetupNeedsCleanup}
 	review.LegalActions = []Action{FinishCleanupAction, ViewDetailsAction}
@@ -717,6 +798,43 @@ func (module *installedInterface) reviewOwned(ctx context.Context, action Action
 				review.Result = refused(Running, failed, correction)
 				return review
 			}
+		}
+		absence := module.host.InspectSubscriptionAbsence(ctx)
+		clientHost, clientSupported := module.host.(clientIdentityHost)
+		startup := hostadapter.Observation{}
+		var startupAuthority hostadapter.ProxyStartupAuthority
+		if clientSupported {
+			if record.Startup != nil {
+				startupAuthority, startup = *record.Startup, hostadapter.Observation{Observed: true, Accepted: clientHost.VerifyProxyStartupIntegration(ctx, *record.Startup)}
+			} else {
+				startupAuthority, startup = clientHost.PlanProxyStartupIntegration()
+			}
+			idle := clientHost.ClientIdentityPreparationIdle()
+			startup.Observed = startup.Observed && idle.Observed
+			startup.Accepted = startup.Accepted && idle.Accepted
+		}
+		if absence.Observed && absence.Accepted && subscription.PackageLocks.Observed && subscription.PackageLocks.Accepted && subscription.RenewalIdle.Observed && subscription.RenewalIdle.Accepted && startup.Observed && startup.Accepted {
+			review.LegalActions = append(review.LegalActions, RotateClientIdentityAction)
+			if action == RotateClientIdentityAction {
+				configuration, err := module.host.ReadConfiguration(ctx, hostSetupSpec, record.ConfigurationSHA256)
+				target, replaceErr := module.singbox.ReplaceClientIdentity(configuration)
+				if err != nil || replaceErr != nil || len(target) == 0 {
+					review.Result = refused(Running, "Client Identity preparation", "Restore the proved current configuration, then review Rotate Client Identity again.")
+					return review
+				}
+				var token [32]byte
+				if _, err := rand.Read(token[:]); err != nil {
+					review.Result = refused(Running, "Prepared Action generation", "Review Rotate Client Identity again.")
+					return review
+				}
+				module.prepared[token] = preparedReview{generation: module.generation, action: action, status: Running, release: installed, record: slices.Clone(body), running: facts, subscription: subscription, target: slices.Clone(target), startup: &startupAuthority}
+				review.Prepared = &PreparedAction{token: token}
+				review.Plan = clientIdentityRotationPlan()
+				return review
+			}
+		} else if action == RotateClientIdentityAction {
+			review.Result = refused(Running, "Client Identity rotation admission", "Restore proved subscription absence and idle package, Certbot, and managed-writer facts, then review again.")
+			return review
 		}
 	}
 	if action == CompleteRemovalAction {
@@ -1108,6 +1226,12 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 		if result.Code == SubscriptionChangeFinished || result.Code == SubscriptionEnabled || result.Code == SubscriptionLinkRotated || result.Code == SubscriptionRepaired {
 			result.ProxyTraffic, result.SubscriptionServing = ProvedWorking, ProvedWorking
 		}
+		if result.Code == ClientIdentityRotated || result.Code == ClientIdentityRotationFinished {
+			result.Status, result.ProxyTraffic, result.SubscriptionServing = Running, ProvedWorking, ProvedStopped
+		}
+		if result.Code == ClientIdentityRotationCleanedUp {
+			result.Status, result.ProxyTraffic, result.SubscriptionServing = Running, ProvedWorking, ProvedStopped
+		}
 		if result.Code == SubscriptionChangeNeedsCompletion && authority.repair != "" {
 			result.ProxyTraffic = ProvedWorking
 		}
@@ -1129,6 +1253,12 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 	}
 	if authority.action == EnableSubscriptionAction {
 		return module.enableSubscription(ctx, authority, progress)
+	}
+	if authority.action == RotateClientIdentityAction {
+		return module.rotateClientIdentity(ctx, authority, progress)
+	}
+	if authority.action == FinishClientIdentityAction {
+		return module.finishClientIdentityRotation(ctx, authority, progress)
 	}
 	if authority.action == RotateSubscriptionLinkAction {
 		return module.rotateSubscriptionLink(ctx, authority, progress)
@@ -1512,6 +1642,13 @@ func (module *installedInterface) finishRemoval(ctx context.Context, record owne
 	if !module.syncRemovalAuthority(body) {
 		return removalInterrupted("Removal authority synchronization")
 	}
+	if record.ClientRotation != nil {
+		host, ok := module.host.(clientIdentityHost)
+		if !ok || !host.RemoveClientIdentityTarget(record.ClientRotation.Source, record.ClientRotation.Target) {
+			return removalInterrupted("Interrupted Client Identity rotation removal")
+		}
+		report(progress, "Client Identity rotation target removed")
+	}
 	if record.Enablement != nil {
 		host, ok := module.host.(subscriptionEnablementHost)
 		if !ok || !host.CleanupPreparedSubscription(context.WithoutCancel(ctx), hostadapter.SubscriptionCleanupInput{Checkpoint: record.Enablement.Checkpoint, LinkID: record.Enablement.LinkID, CredentialSHA256: record.Enablement.CredentialSHA256, RecorderID: record.Enablement.RecorderID, Serving: record.Enablement.Serving, Renewal: record.Enablement.Renewal, Resources: record.Enablement.Resources}) {
@@ -1641,6 +1778,16 @@ func (module *installedInterface) finishRemoval(ctx context.Context, record owne
 			hostadapter.RemoveAPTKey,
 		}
 	}
+	removeStartup := func() bool {
+		if record.Startup == nil {
+			return true
+		}
+		host, ok := module.host.(clientIdentityHost)
+		return ok && host.RemoveProxyStartupIntegration(context.WithoutCancel(ctx), *record.Startup)
+	}
+	if record.RemovalCheckpoint > 0 && !removeStartup() {
+		return removalInterrupted("Proxy startup integration removal")
+	}
 	for index, operation := range operations {
 		if record.RemovalCheckpoint > index {
 			continue
@@ -1655,6 +1802,12 @@ func (module *installedInterface) finishRemoval(ctx context.Context, record owne
 			return removalInterrupted("Removal checkpoint")
 		}
 		report(progress, string(operation))
+		if operation == hostadapter.StopDisableService {
+			if !removeStartup() {
+				return removalInterrupted("Proxy startup integration removal")
+			}
+			report(progress, "Proxy startup integration removed")
+		}
 		if ctx.Err() != nil {
 			return removalInterrupted("Managed termination")
 		}
@@ -2023,7 +2176,7 @@ func decodeOwnership(body []byte) (ownershipRecord, bool) {
 		}
 	}
 	for name, value := range fields {
-		if !slices.Contains([]string{"schema", "phase", "unfinished_direction", "release_identity", "proxy_package_identity", "public_ipv4", "destination_address", "destination_server_name", "configuration_sha256", "permitted_resources", "cleanup_checkpoint", "removal_checkpoint", "resource_creating_releases", "finishing_release_identity", "serving", "renewal", "certificate_activation", "subscription_enablement", "subscription_rotation", "subscription_repair", "subscription_compromised", "subscription_resources"}, name) {
+		if !slices.Contains([]string{"schema", "phase", "unfinished_direction", "release_identity", "proxy_package_identity", "public_ipv4", "destination_address", "destination_server_name", "configuration_sha256", "permitted_resources", "cleanup_checkpoint", "removal_checkpoint", "resource_creating_releases", "finishing_release_identity", "serving", "renewal", "certificate_activation", "subscription_enablement", "subscription_rotation", "subscription_repair", "subscription_compromised", "subscription_resources", "proxy_startup", "client_identity_rotation"}, name) {
 			return ownershipRecord{}, false
 		}
 		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
@@ -2097,6 +2250,23 @@ func decodeOwnership(body []byte) (ownershipRecord, bool) {
 			}
 		}
 	}
+	if raw, exists := fields["proxy_startup"]; exists {
+		var startup map[string]json.RawMessage
+		if json.Unmarshal(raw, &startup) != nil || len(startup) != 2 || len(startup["drop_in_sha256"]) == 0 || len(startup["directory_created"]) == 0 {
+			return ownershipRecord{}, false
+		}
+	}
+	if raw, exists := fields["client_identity_rotation"]; exists {
+		var rotation map[string]json.RawMessage
+		if json.Unmarshal(raw, &rotation) != nil || len(rotation) != 7 {
+			return ownershipRecord{}, false
+		}
+		for _, name := range []string{"operation_id", "direction", "effects", "completed_effects", "source_configuration_sha256", "target_configuration_sha256", "checkpoint"} {
+			if len(rotation[name]) == 0 || bytes.Equal(bytes.TrimSpace(rotation[name]), []byte("null")) {
+				return ownershipRecord{}, false
+			}
+		}
+	}
 	if !exactIdentityFields(fields["release_identity"]) {
 		return ownershipRecord{}, false
 	}
@@ -2142,7 +2312,7 @@ func validOwnership(record ownershipRecord) bool {
 		return false
 	}
 	if record.Schema == 1 {
-		if record.ResourceCreatingReleases != nil || record.FinishingRelease != nil || record.Serving != nil || record.Renewal != nil || record.Activation != nil || record.Enablement != nil || record.Rotation != nil || record.Repair != nil || record.SubscriptionResources != nil {
+		if record.ResourceCreatingReleases != nil || record.FinishingRelease != nil || record.Serving != nil || record.Renewal != nil || record.Activation != nil || record.Enablement != nil || record.Rotation != nil || record.Repair != nil || record.SubscriptionResources != nil || record.Startup != nil || record.ClientRotation != nil {
 			return false
 		}
 	} else {
@@ -2184,6 +2354,12 @@ func validOwnership(record ownershipRecord) bool {
 		return false
 	}
 	if record.SubscriptionResources != nil && (record.Schema != 2 || !record.SubscriptionResources.Valid() || record.SubscriptionResources.PublicIPv4 != record.PublicIPv4 || record.Serving == nil || record.Renewal == nil) {
+		return false
+	}
+	if record.Startup != nil && (record.Schema != 2 || !record.Startup.Valid() || record.Phase != runningPhase && record.Phase != removalCommitted) {
+		return false
+	}
+	if record.ClientRotation != nil && (record.Schema != 2 || record.Serving != nil || record.Enablement != nil || record.Rotation != nil || record.Repair != nil || record.Activation != nil || record.Direction != noDirection && record.Direction != removalRequired || record.Phase != runningPhase && record.Phase != removalCommitted || !validClientIdentityRotation(*record.ClientRotation, record.Startup, record.ConfigurationSHA256)) {
 		return false
 	}
 	if record.Direction == removalRequired {
@@ -2292,7 +2468,30 @@ func recordResources(record ownershipRecord, softwareOnly bool) []string {
 			hostadapter.SubscriptionCandidateStatePath+" root:root 0600 immutable replacement serving state",
 		)
 	}
+	if record.Startup != nil {
+		resources = append(resources, record.Startup.Resources()...)
+	}
+	if record.ClientRotation != nil {
+		resources = append(resources, hostadapter.ClientIdentityTargetPath+" root:root 0600 one-link sha256:"+record.ClientRotation.Target)
+	}
 	return resources
+}
+
+func validClientIdentityRotation(rotation clientIdentityRotation, startup *hostadapter.ProxyStartupAuthority, configurationSHA256 string) bool {
+	policy, index, known := clientIdentityPolicy(rotation.Checkpoint)
+	id, err := hex.DecodeString(rotation.OperationID)
+	validDigest := regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString
+	if !known || err != nil || len(id) != 16 || rotation.OperationID == strings.Repeat("0", 32) || !validDigest(rotation.Source) || !validDigest(rotation.Target) || rotation.Source == rotation.Target || !slices.Equal(rotation.Effects, clientIdentityRotationEffects) || !slices.Equal(rotation.Completed, clientIdentityRotationEffects[:index]) {
+		return false
+	}
+	direction := map[bool]string{false: "cleanup", true: "forward"}[policy.forward]
+	if rotation.Direction != direction || startup == nil {
+		return false
+	}
+	if policy.targetCanonical {
+		return configurationSHA256 == rotation.Target
+	}
+	return configurationSHA256 == rotation.Source
 }
 
 func validSubscriptionEnablement(enablement subscriptionEnablement) bool {
@@ -2378,6 +2577,9 @@ func compatibleOwnership(record ownershipRecord, installed softwarelifecycle.Rel
 	if record.Phase != runningPhase {
 		return record.Schema == 1 && record.Release == installed
 	}
+	if record.Schema == 2 {
+		return true
+	}
 	if record.Release != installed && record.Release != legacyProxyCreator {
 		return false
 	}
@@ -2385,6 +2587,24 @@ func compatibleOwnership(record ownershipRecord, installed softwarelifecycle.Rel
 		if creator != installed && creator != legacyProxyCreator {
 			return false
 		}
+	}
+	return true
+}
+
+// AdmitSoftwareUpdate keeps Proxy Installation's exact durable-record rules
+// out of Software Lifecycle. A target must understand every creating release.
+const expandedProxyAuthorityCapability = "SBXR-PROXY-AUTHORITY-SCHEMA-2-CLIENT-IDENTITY-ROTATION-V1"
+
+func AdmitSoftwareUpdate(body []byte, source softwarelifecycle.ReleaseIdentity, target *softwarelifecycle.UpdateTarget) bool {
+	record, ok := decodeOwnership(body)
+	if !ok || record.Phase != runningPhase || record.Direction != noDirection || record.FinishingRelease != nil || record.Activation != nil || record.Enablement != nil || record.Rotation != nil || record.Repair != nil || record.ClientRotation != nil || !compatibleOwnership(record, source) {
+		return false
+	}
+	if target == nil {
+		return true
+	}
+	if !validReleaseIdentity(target.Identity) || !bytes.Contains(target.Executable, []byte(expandedProxyAuthorityCapability)) {
+		return false
 	}
 	return true
 }

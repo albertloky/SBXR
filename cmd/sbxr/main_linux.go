@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/albertloky/SBXR/internal/proxyinstallation"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 	githubadapter "github.com/albertloky/SBXR/internal/softwarelifecycle/adapter/github"
 )
@@ -19,7 +20,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "SBXR requires root authority.\nRun: sudo sbxr")
 		os.Exit(1)
 	}
-	lifecycle := softwarelifecycle.NewInstalled(githubadapter.New())
+	lifecycle := softwarelifecycle.NewInstalledWithUpdateAdmission(githubadapter.New(), proxyinstallation.AdmitSoftwareUpdate)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 	go func() {
