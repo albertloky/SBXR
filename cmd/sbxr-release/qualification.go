@@ -1017,6 +1017,8 @@ func runQualification(input io.Reader, output io.Writer) error {
 			return errors.New("qualification facts refused")
 		}
 		decision, err = evaluateCandidateFailureVerification(facts, document)
+	case "owner-exception-result":
+		decision, err = evaluateOwnerException(document)
 	case stablePreflightStage:
 		var facts stablePreflightFacts
 		if !decodeCanonical(document, &facts) {
@@ -1101,7 +1103,7 @@ func evaluateStablePreflight(facts stablePreflightFacts, document []byte) (stabl
 			return refused()
 		}
 		records, boundaryDocument = acceptance.Records, acceptanceFacts.QualificationBoundaryFacts
-	case v3PackagedLiveResultStage:
+	case v3PackagedLiveResultStage, "owner-exception-result":
 		var acceptanceFacts struct {
 			QualificationBoundaryFacts json.RawMessage `json:"qualification_boundary_facts"`
 		}
@@ -1335,7 +1337,12 @@ func evaluateStableV3Finalization(facts stableV3FinalizationFacts, document []by
 	if acceptanceErr != nil || acceptanceMarshalErr != nil || !bytes.Equal(acceptanceBytes, preflightFacts.AcceptanceDecision) || len(acceptance.Records) != 1 {
 		return refused()
 	}
-	return stableV3FinalizationDecision{Actions: []json.RawMessage{}, CompleteRemoval: "Passed", FactsSHA256: documentSHA256(document), Outcome: "accepted", PriorDecisionSHA256: facts.PriorDecisionSHA256, PublicVerification: "Passed", Schema: qualificationDecisionSchema, Stage: stableV3FinalizationStage, V3PackagedLive: "Passed"}, nil
+	live := "Passed"
+	var manifest qualificationManifest
+	if decodeCanonical(preflightFacts.SignedManifest, &manifest) && ownerExceptionManifest(manifest) {
+		live = softwarelifecycle.OwnerExceptionLive
+	}
+	return stableV3FinalizationDecision{Actions: []json.RawMessage{}, CompleteRemoval: live, FactsSHA256: documentSHA256(document), Outcome: "accepted", PriorDecisionSHA256: facts.PriorDecisionSHA256, PublicVerification: "Passed", Schema: qualificationDecisionSchema, Stage: stableV3FinalizationStage, V3PackagedLive: live}, nil
 }
 
 func evaluateStableNoUpdate(facts stableNoUpdateFacts, document []byte) (stableNoUpdateDecision, error) {
@@ -1468,6 +1475,9 @@ func stableFailureBurn(existing []burnedIdentity, wanted burnedIdentity) burnedI
 }
 
 func validStableFailureManifest(manifest qualificationManifest) bool {
+	if manifest.V3Attempt != nil && manifest.V3Attempt.OwnerException != "" && !ownerExceptionManifest(manifest) {
+		return false
+	}
 	recurring := manifest.Schema == "sbxr-qualification-manifest-v2" && manifest.Mode == "v3" && manifest.SourceState == "v3-recurring" && manifest.V3Attempt != nil && len(manifest.V3Attempt.Sources) > 0 && slices.Equal(manifest.V3Attempt.RequiredScenarios, requiredV3Scenarios(manifest.V3Attempt.Sources))
 	scoped := manifest.Schema == "sbxr-qualification-manifest-v3" && manifest.Mode == "v3" && manifest.V3Attempt != nil && attemptVersion(manifest.V3Attempt) == "v3" && manifest.V3Attempt.Baseline != nil && validAttemptSupport(*manifest.V3Attempt) && len(manifest.Releases) == 1 && validAttemptIndex(*manifest.V3Attempt, manifest.Releases[0]) && ((manifest.SourceState == "v3-subscription-clean" && manifest.V3Attempt.Support.Scope == softwarelifecycle.FirstSubscriptionCleanInstall) || (manifest.SourceState == "v3-recurring" && manifest.V3Attempt.Support.Scope == softwarelifecycle.RecurringSubscriptionUpgrade))
 	v3 := manifest.Mode == "v3" && (manifest.SourceState == "v3-clean" || recurring || scoped) && len(manifest.Releases) == 1
@@ -1510,7 +1520,7 @@ func stableFailureTargetMatches(observation stableFailureObservation, release qu
 }
 
 func stableFailureObservationIsQualified(observation stableFailureObservation, release qualificationRelease, manifest qualificationManifest, workflowRun string) bool {
-	if !observation.PubliclyVerified || !observation.ReleasePresent || observation.Draft || !observation.Immutable || observation.Prerelease || observation.TagCommit == nil || !strings.Contains(observation.Body, "Status: Qualified\n") {
+	if !observation.PubliclyVerified || !observation.ReleasePresent || observation.Draft || !observation.Immutable || observation.Prerelease || observation.TagCommit == nil || !(strings.Contains(observation.Body, "Status: Qualified\n") || ownerExceptionManifest(manifest) && strings.Contains(observation.Body, "Status: Qualified by Owner exception\n")) {
 		return false
 	}
 	_, err := buildStableFailedAcceptanceRecord(manifest, release, observation.Body, workflowRun)
@@ -1525,11 +1535,15 @@ func buildStableFailedAcceptanceRecord(manifest qualificationManifest, release q
 	}
 	recordBytes := []byte(sourceBody[start+8 : end])
 	var source acceptanceRecordJSON
-	if softwarelifecycle.ValidateUniqueJSON(recordBytes) != nil || json.Unmarshal(recordBytes, &source) != nil || (source.Schema != "sbxr-acceptance-record-v1" && !((source.Schema == "sbxr-acceptance-record-v2" || source.Schema == "sbxr-acceptance-record-v3" && manifest.Schema == "sbxr-qualification-manifest-v3") && manifest.V3Attempt != nil)) || source.ReleaseIdentity != release.ReleaseIdentity || source.Sequence != release.Sequence || !reflect.DeepEqual(source.Assets, release.Assets) || source.SecretSafeResult != "Passed" || source.Stages.ModuleVerification != "Passed" || source.Stages.SeamVerification != "Passed" {
+	wantedSecrets := "Passed"
+	if ownerExceptionManifest(manifest) {
+		wantedSecrets = softwarelifecycle.OwnerExceptionSecrets
+	}
+	if softwarelifecycle.ValidateUniqueJSON(recordBytes) != nil || json.Unmarshal(recordBytes, &source) != nil || (source.Schema != "sbxr-acceptance-record-v1" && !((source.Schema == "sbxr-acceptance-record-v2" || source.Schema == "sbxr-acceptance-record-v3" && manifest.Schema == "sbxr-qualification-manifest-v3") && manifest.V3Attempt != nil)) || source.ReleaseIdentity != release.ReleaseIdentity || source.Sequence != release.Sequence || !reflect.DeepEqual(source.Assets, release.Assets) || source.SecretSafeResult != wantedSecrets || source.Stages.ModuleVerification != "Passed" || source.Stages.SeamVerification != "Passed" {
 		return "", errors.New("qualified Acceptance Record refused")
 	}
 	failedRetry := strings.Contains(sourceBody, "Status: Failed prerelease\n")
-	if !failedRetry && !strings.Contains(sourceBody, "Status: Qualified\n") {
+	if !failedRetry && !(strings.Contains(sourceBody, "Status: Qualified\n") || ownerExceptionManifest(manifest) && strings.Contains(sourceBody, "Status: Qualified by Owner exception\n")) {
 		return "", errors.New("qualified Acceptance Record refused")
 	}
 	if failedRetry && (source.StableResultCode != "RELEASE-INSTALLER-UPDATER-PREPUBLICATION-FAILED" || source.WorkflowRun != workflowRun) || !failedRetry && source.WorkflowRun != manifest.Workflow.RunURL {
@@ -1538,12 +1552,18 @@ func buildStableFailedAcceptanceRecord(manifest qualificationManifest, release q
 	if !failedRetry {
 		var canonicalSource []byte
 		var err error
-		if source.StableResultCode == "RELEASE-V3-SUBSCRIPTION-QUALIFICATION" || source.StableResultCode == "RELEASE-V3-SUBSCRIPTION-CLEAN-INSTALL-QUALIFICATION" {
+		if source.StableResultCode == "RELEASE-V3-SUBSCRIPTION-QUALIFICATION" || source.StableResultCode == "RELEASE-V3-SUBSCRIPTION-CLEAN-INSTALL-QUALIFICATION" || source.StableResultCode == softwarelifecycle.OwnerExceptionCode && ownerExceptionManifest(manifest) {
 			var recurring v3RecurringAcceptanceRecord
 			if !decodeCanonical(recordBytes, &recurring) || manifest.V3Attempt == nil || !reflect.DeepEqual(recurring.Attempt, *manifest.V3Attempt) {
 				return "", errors.New("qualified Acceptance Record refused")
 			}
 			canonicalSource, err = marshalCanonical(recurring)
+			if source.StableResultCode == softwarelifecycle.OwnerExceptionCode {
+				expected, buildErr := buildRecurringAcceptanceRecord(manifest, v3RecurringResultFacts{EvaluationTime: recurring.AcceptedAt, DetailedEvidenceSHA256: recurring.DetailedEvidenceSHA256})
+				if buildErr != nil || expected != sourceBody {
+					return "", errors.New("Owner exception record refused")
+				}
+			}
 		} else if source.StableResultCode == "RELEASE-V3-PACKAGED-LIVE-QUALIFICATION" {
 			var v3Source v3AcceptanceRecordJSON
 			if json.Unmarshal(recordBytes, &v3Source) != nil {
@@ -1586,6 +1606,9 @@ func buildStableFailedAcceptanceRecord(manifest qualificationManifest, release q
 	lines := []string{"# SBXR Installer-Updater Acceptance Record", "Status: Failed prerelease", "Repository: " + release.ReleaseIdentity.Repository, "Tag: " + release.Tag, "Commit: " + release.Commit, "Release index SHA-256: " + release.ReleaseIdentity.ReleaseIndexSHA256, "Sequence: " + strconv.FormatUint(release.Sequence, 10), "Workflow evidence: " + workflowRun, "Acceptance time: " + source.AcceptedAt, "Runner: " + source.Runner, "Go toolchain: " + source.Software.GoToolchain, "Public verifier: " + source.Software.PublicVerifier, "Secret-safe result: Passed", "Qualification role: " + source.QualificationRole, "Stable result code: RELEASE-INSTALLER-UPDATER-PREPUBLICATION-FAILED", "Module Verification: " + source.Stages.ModuleVerification, "Seam Verification: " + source.Stages.SeamVerification, "Integrated Verification: " + source.Stages.IntegratedVerification, "Codex Live Acceptance: " + source.Stages.CodexLiveAcceptance, "Owner Acceptance: " + source.Stages.OwnerAcceptance}
 	var body strings.Builder
 	for _, line := range lines {
+		if line == "Secret-safe result: Passed" {
+			line = "Secret-safe result: " + source.SecretSafeResult
+		}
 		body.WriteString(line + "\n")
 	}
 	for _, asset := range release.Assets {

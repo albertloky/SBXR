@@ -23,7 +23,7 @@ func qualifiedReleaseSupport(body string, release softwarelifecycle.LatestReleas
 		return false
 	}
 	if release.Support.Scope == softwarelifecycle.FirstSubscriptionCleanInstall {
-		return code == "RELEASE-V3-SUBSCRIPTION-CLEAN-INSTALL-QUALIFICATION"
+		return code == "RELEASE-V3-SUBSCRIPTION-CLEAN-INSTALL-QUALIFICATION" || code == softwarelifecycle.OwnerExceptionCode && softwarelifecycle.OwnerExceptionTarget(release.Identity.Tag, release.Sequence, release.Support)
 	}
 	if code != "RELEASE-V3-SUBSCRIPTION-QUALIFICATION" {
 		return false

@@ -1,5 +1,7 @@
 # SBXR
 
+> `v3.1.0` / Release Sequence `83` has an [Owner-approved stable-release exception](docs/adr/0017-one-release-owner-exception.md). Live VPS and Karing qualification is incomplete; subscription and Client Identity rotation are not fully proved. All other release checks remain required. This exception does not apply to later releases.
+
 SBXR is a root-only V3 proxy product for one Ubuntu Server. Software Lifecycle installs and updates the `sbxr` executable. Proxy Installation owns the installed proxy journey through a review-first numbered menu.
 
 > Authority: [ADR-0016](docs/adr/0016-v3-proxy-product-and-modules.md) extends the V3 contract for [#342](https://github.com/albertloky/SBXR/issues/342). This is an accepted implementation contract, not a claim that subscription or Client Identity rotation is shipped. The tracer-bullet menu description and Installer-Updater release-pair procedure below are historical snapshots; use ADR-0016 for current boundaries, recurring qualification requirements, and the approved first-subscription clean-install policy.

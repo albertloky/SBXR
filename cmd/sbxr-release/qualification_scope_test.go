@@ -58,14 +58,22 @@ func scopeHistoryFixture(t *testing.T, source observedRelease) map[string]any {
 }
 
 func TestQualificationCommandBindsFirstSubscriptionAttempt(t *testing.T) {
+	for _, exception := range []string{"", softwarelifecycle.OwnerExceptionID} {
+		t.Run("exception="+exception, func(t *testing.T) { testFirstSubscriptionAttempt(t, exception) })
+	}
+}
+
+func testFirstSubscriptionAttempt(t *testing.T, exception string) {
 	binary := filepath.Join(t.TempDir(), "sbxr-release")
 	if output, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, output)
 	}
 	facts := candidateFacts("v3")
 	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
-	facts.Candidate.BTag, facts.Candidate.BSequence, facts.Candidate.EvidenceVersion = "v3.1.0", 18, 3
+	facts.Candidate.BTag, facts.Candidate.BSequence, facts.Candidate.EvidenceVersion = "v3.1.0", 83, 3
 	source := recurringSourceFixture()
+	*source.Sequence, source.Index.Sequence = 82, 82
+	source.Body = strings.ReplaceAll(source.Body, "Sequence: 17\n", "Sequence: 82\n")
 	source.Index.Schema = 1
 	facts.Releases, facts.LatestTag = []observedRelease{source}, &source.Tag
 	facts.Candidate.Support = &v3ReleaseSupport{Contract: softwarelifecycle.SubscriptionUpdateContract, Scope: softwarelifecycle.FirstSubscriptionCleanInstall, Sources: []decisionReleaseIdentity{}}
@@ -74,6 +82,9 @@ func TestQualificationCommandBindsFirstSubscriptionAttempt(t *testing.T) {
 	}
 	attempt := recurringAttemptFixture(t, source)
 	attempt["schema"] = "sbxr-v3-qualification-attempt-v3"
+	if exception != "" {
+		attempt["owner_exception"] = exception
+	}
 	attempt["support"] = facts.Candidate.Support
 	attempt["baseline"] = historyBaseline(facts.SubscriptionHistory)
 	attempt["sources"] = []any{}
@@ -95,7 +106,7 @@ func TestQualificationCommandBindsFirstSubscriptionAttempt(t *testing.T) {
 			assets = append(assets, softwarelifecycle.LatestAssetProof{Name: a["name"].(string), Size: int64(a["size"].(int)), SHA256: a["sha256"].(string)})
 		}
 	}
-	index, err := softwarelifecycle.BuildSubscriptionReleaseIndex(facts.Candidate.BTag, facts.Commit, 18, assets, facts.Candidate.Support.lifecycle())
+	index, err := softwarelifecycle.BuildSubscriptionReleaseIndex(facts.Candidate.BTag, facts.Commit, 83, assets, facts.Candidate.Support.lifecycle())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,12 +130,36 @@ func TestQualificationCommandBindsFirstSubscriptionAttempt(t *testing.T) {
 	}
 	rebindRecurringEvidence(t, evidence)
 	document := recurringResultFixture(t, boundary, manifest, evidence)
+	if exception != "" {
+		assertQualificationRefused(t, binary, document, "exception cannot claim completed live scenarios")
+		document = qualificationDocument(t, map[string]any{"schema": qualificationFactsSchema, "stage": "owner-exception-result", "qualification_boundary_facts": jsonValue(t, boundary), "qualification_manifest": jsonObject(t, manifest), "qualification_manifest_attested": true, "observed_at": attempt["started_at"]})
+		for name, mutate := range map[string]func(map[string]any){
+			"unsigned": func(v map[string]any) { v["qualification_manifest_attested"] = false },
+			"unbound manifest": func(v map[string]any) {
+				v["qualification_manifest"].(map[string]any)["v3_attempt"].(map[string]any)["owner_exception"] = "other"
+			},
+			"invented scenarios": func(v map[string]any) { v["scenarios"] = []any{} },
+		} {
+			v := jsonObject(t, []byte(document))
+			mutate(v)
+			assertQualificationRefused(t, binary, qualificationDocument(t, v), name)
+		}
+	}
 	output, err := runQualificationCommand(binary, document)
 	if err != nil {
 		t.Fatalf("clean-install evidence: %v\n%s", err, output)
 	}
 	body := jsonObject(t, output)["records"].([]any)[0].(map[string]any)["body"].(string)
-	for _, line := range []string{"RELEASE-V3-SUBSCRIPTION-CLEAN-INSTALL-QUALIFICATION", "Incoming source upgrades: Not applicable", "Two-release update/recovery: Not applicable", "Release support: ", "Stable baseline: ", "Scenario: lifecycle-menu "} {
+	required := []string{"RELEASE-V3-SUBSCRIPTION-CLEAN-INSTALL-QUALIFICATION", "Incoming source upgrades: Not applicable", "Two-release update/recovery: Not applicable", "Release support: ", "Stable baseline: ", "Scenario: lifecycle-menu "}
+	if exception != "" {
+		required = []string{softwarelifecycle.OwnerExceptionCode, softwarelifecycle.OwnerExceptionLive, softwarelifecycle.OwnerExceptionSecrets, "Live qualification: Incomplete", "Incoming source upgrades: Not applicable"}
+		for _, forbidden := range []string{"Karing macOS: Passed", "Codex Live Acceptance: Passed", "Scenario: ", "Integrated Verification: Passed"} {
+			if strings.Contains(body, forbidden) {
+				t.Fatalf("false claim: %s", forbidden)
+			}
+		}
+	}
+	for _, line := range required {
 		if !strings.Contains(body, line) {
 			t.Fatalf("record lacks %q", line)
 		}
@@ -158,8 +193,28 @@ func TestQualificationCommandBindsFirstSubscriptionAttempt(t *testing.T) {
 		"observation": map[string]any{"assets": observedAssets, "attestation": nil, "body": action["body"], "commit": action["commit"], "downloads": action["assets"], "draft": true, "immutable": false, "latest_install_sha256": "", "latest_release_id": source.ID, "prerelease": false, "public_verification": nil, "release_id": action["release_id"], "release_identity": action["release_identity"], "sequence": action["sequence"], "tag": action["tag"]},
 		"observed_at": "2026-09-02T00:01:00Z", "preflight_decision": jsonValue(t, string(stableDecision)), "preflight_facts": stableFacts, "prior_decision_sha256": sha256String(string(stableDecision)), "prior_verification_decision": nil, "prior_verification_facts": nil, "schema": qualificationFactsSchema, "stage": "stable-publication", "subscription_history": scopeHistoryFixture(t, source),
 	}
-	if publicationDecision, publicationErr := runQualificationCommand(binary, qualificationDocument(t, publicationFacts)); publicationErr != nil || jsonObject(t, publicationDecision)["outcome"] != "actions-required" {
+	publicationDecision, publicationErr := runQualificationCommand(binary, qualificationDocument(t, publicationFacts))
+	if publicationErr != nil || jsonObject(t, publicationDecision)["outcome"] != "actions-required" {
 		t.Fatalf("V3 stable publication = %s, %v", publicationDecision, publicationErr)
+	}
+	public := jsonObject(t, []byte(qualificationDocument(t, publicationFacts["observation"])))
+	public["draft"], public["immutable"], public["latest_release_id"] = false, true, action["release_id"]
+	public["attestation"] = map[string]any{"commit": action["commit"], "count": 1, "initiator": "github", "predicate_type": "release"}
+	public["public_verification"] = map[string]any{"outcome": "accepted", "release_identity": action["release_identity"], "sequence": action["sequence"]}
+	public["latest_install_sha256"] = action["assets"].([]any)[0].(map[string]any)["sha256"]
+	verification := map[string]any{"attempt": 1, "observation": public, "observed_at": "2026-09-02T00:01:10Z", "prior_decision_sha256": sha256String(string(publicationDecision)), "publication_decision": jsonObject(t, publicationDecision), "publication_facts": publicationFacts, "schema": qualificationFactsSchema, "stage": "stable-publication-verification"}
+	verified, verifyErr := runQualificationCommand(binary, qualificationDocument(t, verification))
+	if verifyErr != nil || jsonObject(t, verified)["outcome"] != "accepted" {
+		t.Fatalf("public verification: %s %v", verified, verifyErr)
+	}
+	finalFacts := map[string]any{"schema": qualificationFactsSchema, "stage": "stable-v3-finalization", "observed_at": "2026-09-02T00:02:00Z", "prior_decision_sha256": sha256String(string(verified)), "publication_verification_decision": jsonObject(t, verified), "publication_verification_facts": verification}
+	final, finalErr := runQualificationCommand(binary, qualificationDocument(t, finalFacts))
+	wantedLive := "Passed"
+	if exception != "" {
+		wantedLive = softwarelifecycle.OwnerExceptionLive
+	}
+	if finalErr != nil || jsonObject(t, final)["v3_packaged_live"] != wantedLive || jsonObject(t, final)["complete_removal"] != wantedLive {
+		t.Fatalf("finalization: %s %v", final, finalErr)
 	}
 
 	failure := map[string]any{
@@ -191,6 +246,7 @@ func TestQualificationCommandBindsFirstSubscriptionAttempt(t *testing.T) {
 		}
 	}
 	for name, mutate := range map[string]func(map[string]any){
+		"unknown owner exception": func(v map[string]any) { v["v3_attempt"].(map[string]any)["owner_exception"] = "unapproved" },
 		"scope mismatch": func(v map[string]any) {
 			v["v3_attempt"].(map[string]any)["support"].(map[string]any)["scope"] = "recurring-subscription-upgrade"
 		},

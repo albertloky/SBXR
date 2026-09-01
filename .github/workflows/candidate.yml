@@ -527,6 +527,7 @@ jobs:
           subject-path: qualification-manifest.json
 
   acceptance-vps:
+    if: ${{ !fromJSON(inputs.v3_attempt || '{}').owner_exception }}
     needs: [preflight, sign]
     runs-on: ubuntu-24.04
     environment: acceptance-vps
@@ -904,9 +905,57 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+  owner-exception:
+    if: ${{ fromJSON(inputs.v3_attempt || '{}').owner_exception }}
+    needs: [preflight, sign]
+    runs-on: ubuntu-24.04
+    environment: acceptance-vps
+    permissions:
+      actions: read
+      attestations: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: signed-qualification-manifest
+      - name: Verify and record the exact Owner exception without live claims
+        run: |
+          set -euo pipefail
+          gh attestation verify qualification-manifest.json --repo "$GITHUB_REPOSITORY" --signer-workflow albertloky/SBXR/.github/workflows/candidate.yml --source-ref refs/heads/main --source-digest "$GITHUB_SHA" >/dev/null
+          jq -cnS --slurpfile boundary qualification-boundary-facts.json --slurpfile manifest qualification-manifest.json --arg observed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{schema:"sbxr-release-qualification-facts-v1",stage:"owner-exception-result",qualification_boundary_facts:$boundary[0],qualification_manifest:$manifest[0],qualification_manifest_attested:true,observed_at:$observed_at}' | tr -d '\n' > acceptance-vps-result-facts.json
+          go run ./cmd/sbxr-release qualification < acceptance-vps-result-facts.json > acceptance-vps-result-decision.json
+          facts_sha256="$(sha256sum acceptance-vps-result-facts.json | cut -d' ' -f1)"
+          prior_decision_sha256="$(sha256sum qualification-manifest.json | cut -d' ' -f1)"
+          jq -e --arg facts "$facts_sha256" --arg prior "$prior_decision_sha256" '.schema == "sbxr-release-qualification-decision-v1" and .stage == "owner-exception-result" and .outcome == "accepted" and .facts_sha256 == $facts and .prior_decision_sha256 == $prior and (.records | length) == 1 and .records[0].tag == "v3.1.0"' acceptance-vps-result-decision.json >/dev/null
+          mkdir -m 0700 acceptance-records rechecked
+          jq -jr '.records[0].body' acceptance-vps-result-decision.json > acceptance-records/v3.1.0.md
+          jq -cS '.releases[0]' qualification-manifest.json > expected-release.json
+          .github/scripts/recheck-qualified-release.sh expected-release.json rechecked release.json
+          jq -e '.draft == true and .prerelease == false' release.json >/dev/null
+          secret_pattern='BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer |[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|vless://|https://[^ /"[:space:]]+:8443/'
+          if grep -aERq "$secret_pattern" acceptance-records acceptance-vps-result-facts.json acceptance-vps-result-decision.json; then exit 1; elif test $? -ne 1; then exit 1; fi
+          gh release edit v3.1.0 --draft --notes-file acceptance-records/v3.1.0.md
+          cat acceptance-records/v3.1.0.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: installer-updater-acceptance-${{ github.run_id }}
+          path: |
+            acceptance-records/
+            acceptance-vps-result-facts.json
+            acceptance-vps-result-decision.json
+          if-no-files-found: error
+          retention-days: 90
+
   cleanup-unqualified:
-    if: always() && needs.drafts.result != 'skipped' && needs.acceptance-vps.result != 'success'
-    needs: [preflight, drafts, sign, acceptance-vps]
+    if: always() && needs.drafts.result != 'skipped' && needs.acceptance-vps.result != 'success' && needs.owner-exception.result != 'success'
+    needs: [preflight, drafts, sign, acceptance-vps, owner-exception]
     runs-on: ubuntu-24.04
     permissions:
       actions: read

@@ -162,6 +162,10 @@ type v3RecurringAcceptanceRecord struct {
 }
 
 func evaluateV3Result(document []byte) (acceptanceVPSResultDecision, error) {
+	var stage qualificationEnvelope
+	if json.Unmarshal(document, &stage) == nil && stage.Stage == "owner-exception-result" {
+		return evaluateOwnerException(document)
+	}
 	var envelope struct {
 		DetailedEvidence struct {
 			Schema string `json:"schema"`
@@ -427,17 +431,29 @@ func buildRecurringAcceptanceRecord(manifest qualificationManifest, facts v3Recu
 		role, code = "Clean-installed subscription-capable V3 release", "RELEASE-V3-SUBSCRIPTION-CLEAN-INSTALL-QUALIFICATION"
 		notApplicable = []string{"incoming-source-upgrades", "two-release-update-recovery"}
 	}
+	status, live, integrated, owner, secretSafe, karing := "Qualified", "Passed", "Passed on live Ubuntu Server 24.04 amd64 and Karing macOS", "Not required", "Passed", "Passed"
+	if ownerExceptionManifest(manifest) {
+		if len(facts.DetailedEvidence.Scenarios) != 0 {
+			return "", errors.New("Owner exception cannot claim live scenarios")
+		}
+		status, code = "Qualified by Owner exception", softwarelifecycle.OwnerExceptionCode
+		live, integrated, karing = softwarelifecycle.OwnerExceptionLive, softwarelifecycle.OwnerExceptionLive, softwarelifecycle.OwnerExceptionLive
+		owner, secretSafe = "One-release exception approved", softwarelifecycle.OwnerExceptionSecrets
+	}
 	var body strings.Builder
 	for _, line := range []string{
-		"# SBXR Acceptance Record", "Status: Qualified", "Repository: " + release.ReleaseIdentity.Repository, "Tag: " + release.Tag, "Commit: " + release.Commit,
+		"# SBXR Acceptance Record", "Status: " + status, "Repository: " + release.ReleaseIdentity.Repository, "Tag: " + release.Tag, "Commit: " + release.Commit,
 		"Release index SHA-256: " + release.ReleaseIdentity.ReleaseIndexSHA256, "Sequence: " + strconv.FormatUint(release.Sequence, 10), "Workflow evidence: " + manifest.Workflow.RunURL,
 		"Acceptance time: " + facts.EvaluationTime, "Runner: Ubuntu Server 24.04 linux/amd64", "Go toolchain: " + attempt.Runner.GoToolchain, "Public verifier: " + attempt.Runner.PublicVerifier,
 		"Qualification role: " + role, "Detailed evidence SHA-256: " + facts.DetailedEvidenceSHA256,
-		"Stable result code: " + code, "Module Verification: Passed", "Seam Verification: Passed", "Integrated Verification: Passed on live Ubuntu Server 24.04 amd64 and Karing macOS", "Codex Live Acceptance: Passed", "Owner Acceptance: Not required", "Secret-safe result: Passed", "Karing macOS: Passed",
+		"Stable result code: " + code, "Module Verification: Passed", "Seam Verification: Passed", "Integrated Verification: " + integrated, "Codex Live Acceptance: " + live, "Owner Acceptance: " + owner, "Secret-safe result: " + secretSafe, "Karing macOS: " + karing,
 		"Natural timer firing and naturally due certificate renewal: Not observed",
 		"Unsupported new or renamed renewal route: May execute before detection; historical outcomes unknown",
 	} {
 		body.WriteString(line + "\n")
+	}
+	if ownerExceptionManifest(manifest) {
+		body.WriteString("Owner exception: " + softwarelifecycle.OwnerExceptionID + "\nLive qualification: Incomplete\nClient compatibility: static-official-evidence-passed-live-karing-pending\nWarning: Subscription and Client Identity rotation are not fully proved on a live VPS and Karing.\nPolicy: docs/adr/0017-one-release-owner-exception.md\n")
 	}
 	if attempt.Support != nil {
 		support, _ := json.Marshal(attempt.Support.lifecycle())
@@ -461,9 +477,9 @@ func buildRecurringAcceptanceRecord(manifest qualificationManifest, facts v3Recu
 	}
 	encoded, err := marshalCanonical(v3RecurringAcceptanceRecord{
 		AcceptedAt: facts.EvaluationTime, Assets: release.Assets, Attempt: *attempt, DetailedEvidenceSHA256: facts.DetailedEvidenceSHA256, Evidence: []string{manifest.Workflow.RunURL + "#artifacts"},
-		NotApplicable: notApplicable, QualificationRole: role, ReleaseIdentity: release.ReleaseIdentity, Runner: "Ubuntu Server 24.04 linux/amd64", Schema: recordSchema, SecretSafeResult: "Passed", Sequence: release.Sequence,
+		NotApplicable: notApplicable, QualificationRole: role, ReleaseIdentity: release.ReleaseIdentity, Runner: "Ubuntu Server 24.04 linux/amd64", Schema: recordSchema, SecretSafeResult: secretSafe, Sequence: release.Sequence,
 		Software: acceptanceRecordSoftware{GoToolchain: attempt.Runner.GoToolchain, PublicVerifier: attempt.Runner.PublicVerifier}, StableResultCode: code,
-		Stages: acceptanceRecordStages{CodexLiveAcceptance: "Passed", IntegratedVerification: "Passed on live Ubuntu Server 24.04 amd64 and Karing macOS", ModuleVerification: "Passed", OwnerAcceptance: "Not required", SeamVerification: "Passed"}, WorkflowRun: manifest.Workflow.RunURL,
+		Stages: acceptanceRecordStages{CodexLiveAcceptance: live, IntegratedVerification: integrated, ModuleVerification: "Passed", OwnerAcceptance: owner, SeamVerification: "Passed"}, WorkflowRun: manifest.Workflow.RunURL,
 	})
 	if err != nil {
 		return "", err
@@ -505,6 +521,7 @@ type v3QualificationAttempt struct {
 	MacRunnerID            string                  `json:"mac_runner_id"`
 	MacOSVersion           string                  `json:"macos_version"`
 	OutsideRunnerID        string                  `json:"outside_runner_id"`
+	OwnerException         string                  `json:"owner_exception,omitempty"`
 	Packages               v3QualificationPackages `json:"packages"`
 	ProxyPackage           v3PackageIdentity       `json:"proxy_package"`
 	RequiredScenarios      []string                `json:"required_scenarios"`
@@ -521,6 +538,9 @@ type v3QualificationAttempt struct {
 }
 
 func validV3Attempt(attempt v3QualificationAttempt, preflight qualificationFacts, workflow qualificationWorkflow) bool {
+	if attempt.OwnerException != "" && (attempt.OwnerException != softwarelifecycle.OwnerExceptionID || attempt.Support == nil || !softwarelifecycle.OwnerExceptionTarget(preflight.Candidate.BTag, preflight.Candidate.BSequence, supportPointer(attempt.Support)) || attempt.Schema != "sbxr-v3-qualification-attempt-v3") {
+		return false
+	}
 	started, ok := qualificationTime(attempt.StartedAt)
 	checked, checkedOK := qualificationTime(attempt.KaringLatestCheckedAt)
 	if !ok || !checkedOK || started.Before(checked) || started.Sub(checked) > 5*time.Minute ||
@@ -616,12 +636,20 @@ func qualifiedV3Source(release observedRelease) bool {
 	if !qualifiedSourceRelease(release, false) {
 		return false
 	}
+	exception := strings.Count(release.Body, "Stable result code: "+softwarelifecycle.OwnerExceptionCode+"\n") == 1
+	status, live, owner, secrets := "Qualified", "Passed", "Not required", "Passed"
+	if exception {
+		if !softwarelifecycle.OwnerExceptionTarget(release.Tag, release.Index.Sequence, supportPointer(release.Index.Support)) || strings.Count(release.Body, "Owner exception: "+softwarelifecycle.OwnerExceptionID+"\n") != 1 || strings.Count(release.Body, "Live qualification: Incomplete\n") != 1 {
+			return false
+		}
+		status, live, owner, secrets = "Qualified by Owner exception", softwarelifecycle.OwnerExceptionLive, "One-release exception approved", softwarelifecycle.OwnerExceptionSecrets
+	}
 	for _, line := range []string{
-		"# SBXR Acceptance Record", "Status: Qualified", "Repository: " + softwarelifecycle.Repository,
+		"# SBXR Acceptance Record", "Status: " + status, "Repository: " + softwarelifecycle.Repository,
 		"Tag: " + release.Tag, "Commit: " + release.Commit,
 		"Sequence: " + strconv.FormatUint(release.Index.Sequence, 10), "Release index SHA-256: " + release.Index.SHA256,
-		"Module Verification: Passed", "Seam Verification: Passed", "Codex Live Acceptance: Passed",
-		"Owner Acceptance: Not required", "Secret-safe result: Passed",
+		"Module Verification: Passed", "Seam Verification: Passed", "Codex Live Acceptance: " + live,
+		"Owner Acceptance: " + owner, "Secret-safe result: " + secrets,
 	} {
 		if strings.Count(release.Body, line+"\n") != 1 {
 			return false
@@ -632,8 +660,8 @@ func qualifiedV3Source(release observedRelease) bool {
 			return false
 		}
 	}
-	return oneMatch(release.Body, `(?m)^Stable result code: RELEASE-V3-(PACKAGED-LIVE|SUBSCRIPTION|SUBSCRIPTION-CLEAN-INSTALL)-QUALIFICATION$`) &&
+	return (exception || oneMatch(release.Body, `(?m)^Stable result code: RELEASE-V3-(PACKAGED-LIVE|SUBSCRIPTION|SUBSCRIPTION-CLEAN-INSTALL)-QUALIFICATION$`)) &&
 		oneMatch(release.Body, `(?m)^Qualification role: (Clean-installed V3 release|Recurring subscription-capable V3 release|Clean-installed subscription-capable V3 release)$`) &&
 		oneMatch(release.Body, `(?m)^Workflow evidence: https://github\.com/albertloky/SBXR/actions/runs/[1-9][0-9]*$`) &&
-		oneMatch(release.Body, `(?m)^Integrated Verification: Passed on live Ubuntu Server 24\.04 amd64 and (outside runner|Karing macOS)$`)
+		(exception && strings.Count(release.Body, "Integrated Verification: "+softwarelifecycle.OwnerExceptionLive+"\n") == 1 || !exception && oneMatch(release.Body, `(?m)^Integrated Verification: Passed on live Ubuntu Server 24\.04 amd64 and (outside runner|Karing macOS)$`))
 }

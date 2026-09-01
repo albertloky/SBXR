@@ -433,7 +433,8 @@ func latestAcceptanceRecord(body, tag, commit string, assets map[string]assetMet
 	v3 := strings.Count(body, "# SBXR Acceptance Record\n") == 1 && strings.Count(body, "# SBXR Installer-Updater Acceptance Record\n") == 0
 	cleanSubscription := v3 && strings.Count(body, "Stable result code: RELEASE-V3-SUBSCRIPTION-CLEAN-INSTALL-QUALIFICATION\n") == 1
 	recurring := v3 && strings.Count(body, "Stable result code: RELEASE-V3-SUBSCRIPTION-QUALIFICATION\n") == 1
-	subscription := recurring || cleanSubscription
+	exception := v3 && strings.Count(body, "Stable result code: "+softwarelifecycle.OwnerExceptionCode+"\n") == 1
+	subscription := recurring || cleanSubscription || exception
 	if !legacy && !v3 {
 		return "", 0, false
 	}
@@ -455,6 +456,22 @@ func latestAcceptanceRecord(body, tag, commit string, assets map[string]assetMet
 		"Codex Live Acceptance: ":   "Passed",
 		"Owner Acceptance: ":        "Not required",
 	}
+	if exception {
+		var support softwarelifecycle.ReleaseSupport
+		declared, ok := uniqueRecordValue(body, "Release support: ")
+		sequenceText, seqOK := uniqueRecordValue(body, "Sequence: ")
+		sequence, seqErr := strconv.ParseUint(sequenceText, 10, 64)
+		if !ok || !seqOK || seqErr != nil || softwarelifecycle.ValidateUniqueJSON([]byte(declared)) != nil || json.Unmarshal([]byte(declared), &support) != nil || !softwarelifecycle.OwnerExceptionTarget(tag, sequence, &support) {
+			return "", 0, false
+		}
+		required["Status: "] = "Qualified by Owner exception"
+		required["Integrated Verification: "] = softwarelifecycle.OwnerExceptionLive
+		required["Codex Live Acceptance: "] = softwarelifecycle.OwnerExceptionLive
+		required["Owner Acceptance: "] = "One-release exception approved"
+		required["Owner exception: "] = softwarelifecycle.OwnerExceptionID
+		required["Live qualification: "] = "Incomplete"
+		required["Client compatibility: "] = "static-official-evidence-passed-live-karing-pending"
+	}
 	for prefix, expected := range required {
 		if value, ok := uniqueRecordValue(body, prefix); !ok || value != expected {
 			return "", 0, false
@@ -468,8 +485,12 @@ func latestAcceptanceRecord(body, tag, commit string, assets map[string]assetMet
 	secretSafe, secretSafeOK := uniqueRecordValue(body, "Secret-safe result: ")
 	role, roleOK := uniqueRecordValue(body, "Qualification role: ")
 	legacyResult := legacy && (resultCode == "RELEASE-INSTALLER-UPDATER-TWO-RELEASE-QUALIFICATION" || resultCode == "RELEASE-INSTALLER-UPDATER-RESCUE-QUALIFICATION") && qualificationRolePattern.MatchString(role)
-	v3Result := v3 && resultCode == "RELEASE-V3-PACKAGED-LIVE-QUALIFICATION" && role == "Clean-installed V3 release" || recurring && role == "Recurring subscription-capable V3 release" || cleanSubscription && role == "Clean-installed subscription-capable V3 release"
-	if !resultOK || !legacyResult && !v3Result || !workflowOK || !workflowEvidencePattern.MatchString(workflow) || !runnerOK || !acceptanceRunnerPattern.MatchString(runner) || !toolchainOK || !goToolchainPattern.MatchString(toolchain) || !verifierOK || verifier != Version+" "+SigningFingerprint || !secretSafeOK || secretSafe != "Passed" || !roleOK {
+	v3Result := v3 && resultCode == "RELEASE-V3-PACKAGED-LIVE-QUALIFICATION" && role == "Clean-installed V3 release" || recurring && role == "Recurring subscription-capable V3 release" || (cleanSubscription || exception) && role == "Clean-installed subscription-capable V3 release"
+	wantedSecrets := "Passed"
+	if exception {
+		wantedSecrets = softwarelifecycle.OwnerExceptionSecrets
+	}
+	if !resultOK || !legacyResult && !v3Result || !workflowOK || !workflowEvidencePattern.MatchString(workflow) || !runnerOK || !acceptanceRunnerPattern.MatchString(runner) || !toolchainOK || !goToolchainPattern.MatchString(toolchain) || !verifierOK || verifier != Version+" "+SigningFingerprint || !secretSafeOK || secretSafe != wantedSecrets || !roleOK {
 		return "", 0, false
 	}
 	if v3 {
@@ -481,8 +502,12 @@ func latestAcceptanceRecord(body, tag, commit string, assets map[string]assetMet
 			return "", 0, false
 		}
 		if subscription {
+			wantedKaring := "Passed"
+			if exception {
+				wantedKaring = softwarelifecycle.OwnerExceptionLive
+			}
 			for prefix, wanted := range map[string]string{
-				"Karing macOS: ": "Passed",
+				"Karing macOS: ": wantedKaring,
 				"Natural timer firing and naturally due certificate renewal: ": "Not observed",
 				"Unsupported new or renamed renewal route: ":                   "May execute before detection; historical outcomes unknown",
 			} {

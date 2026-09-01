@@ -7,6 +7,11 @@ import (
 )
 
 const (
+	// ADR-0017: one Owner-approved release, never a general evidence waiver.
+	OwnerExceptionCode            = "RELEASE-V3-SUBSCRIPTION-OWNER-EXCEPTION"
+	OwnerExceptionID              = "owner-approved-v3.1.0-sequence-83"
+	OwnerExceptionLive            = "Not performed; waived by Owner for this release"
+	OwnerExceptionSecrets         = "Automated scans passed; live capture coverage not proved"
 	FirstSubscriptionCleanInstall = "first-subscription-clean-install"
 	RecurringSubscriptionUpgrade  = "recurring-subscription-upgrade"
 	// This contract includes schema-2 Update Record runtime completion and the
@@ -14,6 +19,10 @@ const (
 	SubscriptionUpdateContract = "sbxr-subscription-update-v1"
 	CleanInstallCorrection     = "This release does not support this incoming update. Use the old release's reviewed Complete removal, finish any interrupted removal with its exact release, then install and set up fresh. This causes downtime, new proxy credentials, and new client setup. Do not install over remaining authority or resources."
 )
+
+func OwnerExceptionTarget(tag string, sequence uint64, support *ReleaseSupport) bool {
+	return tag == "v3.1.0" && sequence == 83 && support != nil && support.valid() && support.Scope == FirstSubscriptionCleanInstall
+}
 
 type ReleaseSupport struct {
 	Scope    string            `json:"scope"`

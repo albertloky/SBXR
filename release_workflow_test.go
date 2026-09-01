@@ -730,7 +730,7 @@ func TestCandidateRoutesOneV3CandidateThroughPackagedLiveQualification(t *testin
 			t.Fatalf("V3 qualification directly executes %s from the noexec /run mount", mode)
 		}
 	}
-	for _, required := range []string{"stable-v3-finalization", "v3-finalization-failure", `v3_packaged_live == "Passed"`, `complete_removal == "Passed"`, "stable-v3-finalization-facts.json", "stable-v3-finalization-decision.json"} {
+	for _, required := range []string{"stable-v3-finalization", "v3-finalization-failure", `v3_packaged_live == $live`, `complete_removal == $live`, "live_result=Passed", "owner-approved-v3.1.0-sequence-83", "stable-v3-finalization-facts.json", "stable-v3-finalization-decision.json"} {
 		if !strings.Contains(stable, required) {
 			t.Fatalf("stable.yml omitted V3 finalization contract %q", required)
 		}
@@ -1176,7 +1176,7 @@ func TestReleaseFailuresWithdrawOnlyRecheckedTargetsAndBurnQualifiedIdentities(t
 	}
 	candidate, stable, recheck, burn := string(candidateBody), string(stableBody), string(recheckBody), string(burnBody)
 	for _, required := range []string{
-		"needs: [preflight, drafts, sign, acceptance-vps]",
+		"needs: [preflight, drafts, sign, acceptance-vps, owner-exception]",
 		"needs.acceptance-vps.result != 'success'",
 		"--draft=false --prerelease --latest=false",
 		"post-sign-qualification-failure",
