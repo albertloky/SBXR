@@ -1,6 +1,8 @@
 # #344: Packaged source-upgrade feasibility
 
-Investigation date: 2026-08-31 UTC. **Result: unsatisfied release blocker.**
+Investigation date: 2026-08-31 UTC. **Technical result: no supported packaged source-upgrade route.**
+
+**Disposition superseded on 2026-09-01:** Albert approved clean installation for the first subscription release in [#342](https://github.com/albertloky/SBXR/issues/342). #344 is closed as superseded, not successfully qualified. See [ADR-0016](../adr/0016-v3-proxy-product-and-modules.md#approved-scope-change-first-subscription-release-uses-clean-installation). Existing installations require reviewed Complete removal followed by fresh installation/setup, with downtime and new credentials/client setup. No live removal is authorized here. The original investigation, revalidation, and keep-open instructions below remain historical evidence under the former scope; the explicit Owner decision replaces that disposition without changing any package finding.
 
 [Issue #344](https://github.com/albertloky/SBXR/issues/344) requires the actual current qualified stable source's own unchanged packaged updater and recovery route. No supported invocation exists in the verified source below. Keep #344 open; completing this investigation does not satisfy the source-upgrade requirement or authorize a different route.
 

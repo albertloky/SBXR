@@ -95,7 +95,7 @@ The authenticated positive integer that is the only authority for release order.
 GitHub's canonical immutable Latest release whose four assets, Release Identity, attestations, and Acceptance Record pass Release Qualification.
 
 ### Release Qualification
-The single stable-publication gate that binds unchanged release bytes to the required automated, packaged VPS, exact-client, identity, SSH, recovery, and secret-safety evidence. The first V3 release requires clean direct installation; recurring subscription-capable V3 releases also require each declared source upgrade and exact Karing macOS evidence.
+The single stable-publication gate that binds unchanged release bytes to the required automated, packaged VPS, exact-client, identity, SSH, recovery, and secret-safety evidence. The first V3 release and first subscription-capable release have distinct clean-install qualification scopes. Subscription releases require exact Karing macOS evidence; later recurring releases also require each declared source upgrade. A clean-install scope does not prove an upgrade route.
 
 ### V3 Packaged Live Qualification
 The Codex-driven Release Qualification stage that proves the applicable V3 journey through the exact packaged executable on a real disposable VPS and a genuinely outside network. Its first-V3 baseline and recurring subscription, Client Identity, update, and removal scenarios remain distinct from exact Karing macOS evidence.
