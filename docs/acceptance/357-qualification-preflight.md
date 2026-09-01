@@ -1,5 +1,38 @@
 # #357: Subscription qualification preflight
 
+## Current disposition after Owner approval
+
+Albert approved using `RackNerd` as the disposable Acceptance VPS, including reviewed Complete removal, downtime, new credentials/client setup, and the required interruption/reboot scenarios. That authorization remains valid; do not ask for the same host authorization again.
+
+The installed `v3.0.21` executable performed its supported reviewed Complete removal on 2026-09-01, from `15:02:15.654937 UTC` to `15:02:29.241710 UTC`. Its zero-argument menu received the exact `REMOVE SBXR` confirmation and returned exit `0`, `SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED`, and `SBXR is not installed.` Fresh inspection proved absence of the executable, `/var/lib/sbxr`, finalization authority, proxy configuration/state, SagerNet APT source/key, and installed sing-box package. The original SSH session survived; a new SSH connection succeeded; the SSH service remained active and the observed routing table was unchanged. This was preparatory removal, not a signed candidate scenario or upgrade.
+
+The current blocker is the packaged draft-access route, not host authorization. No candidate was selected, constructed, signed, or burned. #357 remains OPEN.
+
+### Confirmed transport gap
+
+At `8af07d56ef606acb5d98928f8bb929af74b235ec`:
+
+- The workflow requires `sbxr-qualification-manifest-v3`, but [`newQualificationGateway`](../../cmd/sbxr-release/gateway.go) rejects every schema other than `sbxr-qualification-manifest-v1`.
+- The version-3 branches in [candidate.yml](../../.github/workflows/candidate.yml) exit before TLS/gateway preparation and invoke only the evidence collector. The collector supplies no packaged draft-download route.
+- The unchanged [installer](../../cmd/sbxr-release/bootstrap.go) downloads its pinned index/archive through `https://github.com/albertloky/SBXR/releases/download/<tag>/<asset>`. Authenticated workflow asset downloads do not install those bytes through the Owner's installer. No successful version-3 draft installation is established.
+- If the existing gateway is extended to supply lifecycle discovery, the production GitHub Adapter's [`qualificationLatest`](../../internal/softwarelifecycle/adapter/github/github.go) also currently requires a version-1, two-release manifest. Changing the gateway alone cannot establish that route.
+- The historical gateway binds `127.0.0.1:8443`; reusing that setup unchanged would occupy the subscription port. This is a static conflict, not an observed live subscription failure.
+
+A local comparison exercised the compiled repository `sbxr-release gateway` command with one synthetic four-asset set, a local test TLS certificate, and two manifests differing only in `schema`. Version 1 served the bound installer over local HTTPS; version 3 exited with `sbxr qualification gateway refused`. The probe was not a signed attempt, did not install anything, and does not count as packaged acceptance. Existing `TestQualificationGateway*` checks passed; they cover the historical version-1 route.
+
+Before changing release trust or routing, approve a concrete extension of the existing channel: carry the unchanged version-3 manifest and exact asset binding through the existing gateway and production reader; retain signature/workflow/approval validation and scope refusal; isolate its temporary transport from TCP 80/443/8443; and define safe routing/process restoration across the required reboot/removal scenarios. Prove actual installer and lifecycle behavior before starting the signed matrix. Do not relabel version-3 evidence as version 1, publish a draft early, inject installed authority, add another product runner, or treat a schema-only relaxation as sufficient. The detailed transport integration remains unresolved.
+
+### Additional readiness evidence
+
+- The existing paginated release-history collector completed and returned 77 published releases, maximum Release Sequence `82`, with no subscription-support declaration in their indices. Public Latest verification accepted the baseline recorded below. The authoritative first-release eligibility check must still run in candidate preflight and again at publication.
+- The downloaded official Karing DMG matched SHA-256 `6f421213b6208e3abc1eda6fdd8ddc2014239c7f4241387749ae3a3729c658ea`. All 2987 regular-file/symlink entries in `/Applications/Karing.app` matched the application in that read-only DMG. This proves that comparison, not live Karing acceptance.
+- Official Snap Store metadata and `snap info certbot` agreed on amd64 stable/beta Certbot `5.7.0`, revision `5781`; edge was `5.8.0.dev0`, revision `5891`. An official historical download of revision `5778` contained `5.7.0.dev0`. The development versions do not meet the current production/evidence parser contract. The required distinct, supported before/after Certbot package pair for `snap-refresh` remains unproved; this limited inspection does not establish that no usable historical official revision exists. No Certbot package was installed.
+- [Verify run 33522702455](https://github.com/albertloky/SBXR/actions/runs/33522702455) completed successfully on exact checkout `8af07d56ef606acb5d98928f8bb929af74b235ec` for native Ubuntu `amd64` and `arm64`. Earlier local full-suite, vet, and dependency results remain recorded in [the first delivery comment](https://github.com/albertloky/SBXR/issues/357#issuecomment-5495906170).
+
+The host now has no SBXR proxy service. Stable publication remains separately gated. All signed packaged scenarios, exact outside-network observations, full secret-capture coverage, and the final Karing journey remain missing; do not close #357 or generate a successful Acceptance Record from these observations.
+
+## Historical pre-approval snapshot
+
 Observed on 2026-09-01 UTC from checkout `26488284602825c7ffbb409d5bb4f6b3d4176786`.
 
 **Disposition: blocked before candidate construction and the signed acceptance boundary. Keep [#357](https://github.com/albertloky/SBXR/issues/357) open.** This is a read-only preflight report, not an Acceptance Record or a failed signed attempt. No candidate identity was selected or burned, no qualification scenario was started, and no VPS mutation or release publication was performed.
