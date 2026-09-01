@@ -80,6 +80,7 @@ type candidateRequest struct {
 	BSequence         uint64  `json:"b_sequence"`
 	BTag              string  `json:"b_tag"`
 	DefectIssueURL    *string `json:"defect_issue_url"`
+	EvidenceVersion   int     `json:"evidence_version,omitempty"`
 	FailedNormalRunID *string `json:"failed_normal_run_id"`
 	Mode              string  `json:"mode"`
 }
@@ -291,19 +292,20 @@ type nativeEvidence struct {
 }
 
 type qualificationBoundaryFacts struct {
-	Approval                    qualificationApproval  `json:"approval"`
-	CandidateFailureStateSHA256 string                 `json:"candidate_failure_state_sha256"`
-	ChecklistSHA256             string                 `json:"checklist_sha256"`
-	DraftVerificationDecision   json.RawMessage        `json:"draft_verification_decision"`
-	DraftVerificationFacts      json.RawMessage        `json:"draft_verification_facts"`
-	NativeEvidence              []nativeEvidence       `json:"native_evidence"`
-	PriorDecisionSHA256         string                 `json:"prior_decision_sha256"`
-	Releases                    []verifiedDraftRelease `json:"releases"`
-	Rescue                      *qualificationRescue   `json:"rescue"`
-	Schema                      string                 `json:"schema"`
-	SourceState                 string                 `json:"source_state"`
-	Stage                       string                 `json:"stage"`
-	Workflow                    qualificationWorkflow  `json:"workflow"`
+	Approval                    qualificationApproval   `json:"approval"`
+	CandidateFailureStateSHA256 string                  `json:"candidate_failure_state_sha256"`
+	ChecklistSHA256             string                  `json:"checklist_sha256"`
+	DraftVerificationDecision   json.RawMessage         `json:"draft_verification_decision"`
+	DraftVerificationFacts      json.RawMessage         `json:"draft_verification_facts"`
+	NativeEvidence              []nativeEvidence        `json:"native_evidence"`
+	PriorDecisionSHA256         string                  `json:"prior_decision_sha256"`
+	Releases                    []verifiedDraftRelease  `json:"releases"`
+	Rescue                      *qualificationRescue    `json:"rescue"`
+	Schema                      string                  `json:"schema"`
+	SourceState                 string                  `json:"source_state"`
+	Stage                       string                  `json:"stage"`
+	V3Attempt                   *v3QualificationAttempt `json:"v3_attempt,omitempty"`
+	Workflow                    qualificationWorkflow   `json:"workflow"`
 }
 
 type decisionChainEntry struct {
@@ -319,18 +321,19 @@ type qualificationRescue struct {
 }
 
 type qualificationManifest struct {
-	AcceptanceVPSChecklistSHA256 string                 `json:"acceptance_vps_checklist_sha256"`
-	Approval                     qualificationApproval  `json:"approval"`
-	CandidateFailureStateSHA256  string                 `json:"candidate_failure_state_sha256"`
-	Mode                         string                 `json:"mode"`
-	NativeEvidence               []nativeEvidence       `json:"native_evidence"`
-	PinnedActions                []string               `json:"pinned_actions"`
-	Releases                     []qualificationRelease `json:"releases"`
-	Repository                   string                 `json:"repository"`
-	Rescue                       *qualificationRescue   `json:"rescue"`
-	Schema                       string                 `json:"schema"`
-	SourceState                  string                 `json:"source_state"`
-	Workflow                     qualificationWorkflow  `json:"workflow"`
+	AcceptanceVPSChecklistSHA256 string                  `json:"acceptance_vps_checklist_sha256"`
+	Approval                     qualificationApproval   `json:"approval"`
+	CandidateFailureStateSHA256  string                  `json:"candidate_failure_state_sha256"`
+	Mode                         string                  `json:"mode"`
+	NativeEvidence               []nativeEvidence        `json:"native_evidence"`
+	PinnedActions                []string                `json:"pinned_actions"`
+	Releases                     []qualificationRelease  `json:"releases"`
+	Repository                   string                  `json:"repository"`
+	Rescue                       *qualificationRescue    `json:"rescue"`
+	Schema                       string                  `json:"schema"`
+	SourceState                  string                  `json:"source_state"`
+	V3Attempt                    *v3QualificationAttempt `json:"v3_attempt,omitempty"`
+	Workflow                     qualificationWorkflow   `json:"workflow"`
 }
 
 type qualificationRelease struct {
@@ -983,11 +986,19 @@ func runQualification(input io.Reader, output io.Writer) error {
 		}
 		decision, err = evaluateAcceptanceVPSResult(facts, document)
 	case v3PackagedLiveResultStage:
-		var facts v3PackagedLiveResultFacts
+		decision, err = evaluateV3Result(document)
+	case "v3-scenario-result":
+		var facts v3RecurringResultFacts
 		if !decodeCanonical(document, &facts) {
 			return errors.New("qualification facts refused")
 		}
-		decision, err = evaluateV3PackagedLiveResult(facts, document)
+		decision, err = evaluateV3ScenarioResult(facts, document)
+	case "v3-scenario-failure":
+		var facts v3ScenarioFailureFacts
+		if !decodeCanonical(document, &facts) {
+			return errors.New("qualification facts refused")
+		}
+		decision, err = evaluateV3ScenarioFailure(facts, document)
 	case candidateFailureStage:
 		var facts candidateFailureFacts
 		if !decodeCanonical(document, &facts) {
@@ -1085,11 +1096,13 @@ func evaluateStablePreflight(facts stablePreflightFacts, document []byte) (stabl
 		}
 		records, boundaryDocument = acceptance.Records, acceptanceFacts.QualificationBoundaryFacts
 	case v3PackagedLiveResultStage:
-		var acceptanceFacts v3PackagedLiveResultFacts
-		if !decodeCanonical(facts.AcceptanceFacts, &acceptanceFacts) {
+		var acceptanceFacts struct {
+			QualificationBoundaryFacts json.RawMessage `json:"qualification_boundary_facts"`
+		}
+		if json.Unmarshal(facts.AcceptanceFacts, &acceptanceFacts) != nil {
 			return refused()
 		}
-		acceptance, err := evaluateV3PackagedLiveResult(acceptanceFacts, facts.AcceptanceFacts)
+		acceptance, err := evaluateV3Result(facts.AcceptanceFacts)
 		acceptanceBytes, marshalErr := marshalCanonical(acceptance)
 		if err != nil || marshalErr != nil || !bytes.Equal(acceptanceBytes, facts.AcceptanceDecision) {
 			return refused()
@@ -1304,11 +1317,7 @@ func evaluateStableV3Finalization(facts stableV3FinalizationFacts, document []by
 	if !decodeCanonical(publicationFacts.PreflightFacts, &preflightFacts) {
 		return refused()
 	}
-	var acceptanceFacts v3PackagedLiveResultFacts
-	if !decodeCanonical(preflightFacts.AcceptanceFacts, &acceptanceFacts) {
-		return refused()
-	}
-	acceptance, acceptanceErr := evaluateV3PackagedLiveResult(acceptanceFacts, preflightFacts.AcceptanceFacts)
+	acceptance, acceptanceErr := evaluateV3Result(preflightFacts.AcceptanceFacts)
 	acceptanceBytes, acceptanceMarshalErr := marshalCanonical(acceptance)
 	if acceptanceErr != nil || acceptanceMarshalErr != nil || !bytes.Equal(acceptanceBytes, preflightFacts.AcceptanceDecision) || len(acceptance.Records) != 1 {
 		return refused()
@@ -1446,9 +1455,10 @@ func stableFailureBurn(existing []burnedIdentity, wanted burnedIdentity) burnedI
 }
 
 func validStableFailureManifest(manifest qualificationManifest) bool {
-	v3 := manifest.Mode == "v3" && manifest.SourceState == "v3-clean" && len(manifest.Releases) == 1
+	recurring := manifest.Schema == "sbxr-qualification-manifest-v2" && manifest.Mode == "v3" && manifest.SourceState == "v3-recurring" && manifest.V3Attempt != nil && len(manifest.V3Attempt.Sources) > 0 && slices.Equal(manifest.V3Attempt.RequiredScenarios, requiredV3Scenarios(manifest.V3Attempt.Sources))
+	v3 := manifest.Mode == "v3" && (manifest.SourceState == "v3-clean" || recurring) && len(manifest.Releases) == 1
 	legacy := (manifest.Mode == "normal" || manifest.Mode == "rescue") && (manifest.SourceState == "initial-normal" || manifest.SourceState == "later-normal" || manifest.SourceState == "rescue") && len(manifest.Releases) == 2
-	if manifest.Schema != "sbxr-qualification-manifest-v1" || manifest.Repository != softwarelifecycle.Repository || !validSHA256(manifest.AcceptanceVPSChecklistSHA256) || !validSHA256(manifest.CandidateFailureStateSHA256) || manifest.Approval.State != "approved" || len(manifest.Approval.Environments) != 1 || manifest.Approval.Environments[0].Name != "acceptance-vps" || !v3 && !legacy || len(manifest.Approval.DecisionChain) != 3 || (manifest.Mode == "rescue") != (manifest.SourceState == "rescue") || (manifest.Rescue != nil) != (manifest.SourceState == "rescue") || manifest.Workflow.Path != ".github/workflows/candidate.yml" || manifest.Workflow.Ref != softwarelifecycle.Repository+"/.github/workflows/candidate.yml@refs/heads/main" || !validCommit(manifest.Workflow.Commit) || manifest.Workflow.RunURL != failedRunURL(manifest.Workflow.RunID) {
+	if !recurring && (manifest.Schema != "sbxr-qualification-manifest-v1" || manifest.V3Attempt != nil) || manifest.Repository != softwarelifecycle.Repository || !validSHA256(manifest.AcceptanceVPSChecklistSHA256) || !validSHA256(manifest.CandidateFailureStateSHA256) || manifest.Approval.State != "approved" || len(manifest.Approval.Environments) != 1 || manifest.Approval.Environments[0].Name != "acceptance-vps" || !v3 && !legacy || len(manifest.Approval.DecisionChain) != 3 || (manifest.Mode == "rescue") != (manifest.SourceState == "rescue") || (manifest.Rescue != nil) != (manifest.SourceState == "rescue") || manifest.Workflow.Path != ".github/workflows/candidate.yml" || manifest.Workflow.Ref != softwarelifecycle.Repository+"/.github/workflows/candidate.yml@refs/heads/main" || !validCommit(manifest.Workflow.Commit) || manifest.Workflow.RunURL != failedRunURL(manifest.Workflow.RunID) {
 		return false
 	}
 	expectedStages := []string{candidatePreflightStage, candidateDraftConstructionStage, candidateDraftVerificationStage}
@@ -1501,7 +1511,7 @@ func buildStableFailedAcceptanceRecord(manifest qualificationManifest, release q
 	}
 	recordBytes := []byte(sourceBody[start+8 : end])
 	var source acceptanceRecordJSON
-	if softwarelifecycle.ValidateUniqueJSON(recordBytes) != nil || json.Unmarshal(recordBytes, &source) != nil || source.Schema != "sbxr-acceptance-record-v1" || source.ReleaseIdentity != release.ReleaseIdentity || source.Sequence != release.Sequence || !reflect.DeepEqual(source.Assets, release.Assets) || source.SecretSafeResult != "Passed" || source.Stages.ModuleVerification != "Passed" || source.Stages.SeamVerification != "Passed" {
+	if softwarelifecycle.ValidateUniqueJSON(recordBytes) != nil || json.Unmarshal(recordBytes, &source) != nil || (source.Schema != "sbxr-acceptance-record-v1" && !(source.Schema == "sbxr-acceptance-record-v2" && manifest.V3Attempt != nil)) || source.ReleaseIdentity != release.ReleaseIdentity || source.Sequence != release.Sequence || !reflect.DeepEqual(source.Assets, release.Assets) || source.SecretSafeResult != "Passed" || source.Stages.ModuleVerification != "Passed" || source.Stages.SeamVerification != "Passed" {
 		return "", errors.New("qualified Acceptance Record refused")
 	}
 	failedRetry := strings.Contains(sourceBody, "Status: Failed prerelease\n")
@@ -1514,7 +1524,13 @@ func buildStableFailedAcceptanceRecord(manifest qualificationManifest, release q
 	if !failedRetry {
 		var canonicalSource []byte
 		var err error
-		if source.StableResultCode == "RELEASE-V3-PACKAGED-LIVE-QUALIFICATION" {
+		if source.StableResultCode == "RELEASE-V3-SUBSCRIPTION-QUALIFICATION" {
+			var recurring v3RecurringAcceptanceRecord
+			if !decodeCanonical(recordBytes, &recurring) || manifest.V3Attempt == nil || !reflect.DeepEqual(recurring.Attempt, *manifest.V3Attempt) {
+				return "", errors.New("qualified Acceptance Record refused")
+			}
+			canonicalSource, err = marshalCanonical(recurring)
+		} else if source.StableResultCode == "RELEASE-V3-PACKAGED-LIVE-QUALIFICATION" {
 			var v3Source v3AcceptanceRecordJSON
 			if json.Unmarshal(recordBytes, &v3Source) != nil {
 				return "", errors.New("qualified Acceptance Record refused")
@@ -2199,10 +2215,19 @@ func evaluateQualificationBoundary(facts qualificationBoundaryFacts) (qualificat
 	}
 	approval := facts.Approval
 	approval.DecisionChain = chain
+	manifestSchema := "sbxr-qualification-manifest-v1"
+	if preflight.SourceState == "v3-recurring" {
+		if facts.V3Attempt == nil || !validV3Attempt(*facts.V3Attempt, preflightFacts, facts.Workflow) {
+			return refused()
+		}
+		manifestSchema = "sbxr-qualification-manifest-v2"
+	} else if facts.V3Attempt != nil {
+		return refused()
+	}
 	return qualificationManifest{
 		AcceptanceVPSChecklistSHA256: facts.ChecklistSHA256, Approval: approval, CandidateFailureStateSHA256: facts.CandidateFailureStateSHA256,
 		Mode: preflightFacts.Candidate.Mode, NativeEvidence: facts.NativeEvidence, PinnedActions: []string{"actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803", "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16", "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02", "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093", "actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661"},
-		Releases: manifestReleases, Repository: softwarelifecycle.Repository, Rescue: rescue, Schema: "sbxr-qualification-manifest-v1", SourceState: preflight.SourceState, Workflow: facts.Workflow,
+		Releases: manifestReleases, Repository: softwarelifecycle.Repository, Rescue: rescue, Schema: manifestSchema, SourceState: preflight.SourceState, V3Attempt: facts.V3Attempt, Workflow: facts.Workflow,
 	}, nil
 }
 
@@ -2360,6 +2385,15 @@ func documentSHA256(document []byte) string {
 
 func evaluateCandidatePreflight(facts qualificationFacts, document []byte) (qualificationDecision, error) {
 	candidate := facts.Candidate
+	if candidate.Mode != "v3" && hasQualifiedV3(facts.Releases) {
+		return qualificationDecision{}, errors.New("candidate preflight refused")
+	}
+	if candidate.EvidenceVersion != 0 && (candidate.Mode != "v3" || candidate.EvidenceVersion != 2) {
+		return qualificationDecision{}, errors.New("candidate preflight refused")
+	}
+	if candidate.EvidenceVersion == 2 && recurringSecret(document) {
+		return qualificationDecision{}, errors.New("candidate preflight refused")
+	}
 	if facts.Schema != qualificationFactsSchema || facts.Stage != candidatePreflightStage ||
 		!validCommit(facts.Commit) || facts.RemoteMain != facts.Commit ||
 		!validCommit(facts.ArchiveCommit) || facts.ArchiveCommit != facts.ArchiveRemoteCommit ||
@@ -2380,10 +2414,20 @@ func evaluateCandidatePreflight(facts qualificationFacts, document []byte) (qual
 	var sourceState string
 	switch candidate.Mode {
 	case "v3":
-		if candidate.DefectIssueURL != nil || candidate.FailedNormalRunID != nil || facts.DefectIssue != nil || facts.FailedNormalRun != nil || hasQualifiedV3(facts.Releases) || tagPresent(facts.Tags, candidate.BTag) || releaseByTagExists(facts.Releases, candidate.BTag) || sequenceUseCount(facts.Releases, candidate.BSequence, "") != 0 || collidesWithBurned(facts.BurnedIdentities, candidate.BTag, candidate.BSequence) || candidate.BSequence != highestSequence(facts)+1 {
+		if candidate.DefectIssueURL != nil || candidate.FailedNormalRunID != nil || facts.DefectIssue != nil || facts.FailedNormalRun != nil || candidate.EvidenceVersion == 0 && hasQualifiedV3(facts.Releases) || tagPresent(facts.Tags, candidate.BTag) || releaseByTagExists(facts.Releases, candidate.BTag) || sequenceUseCount(facts.Releases, candidate.BSequence, "") != 0 || collidesWithBurned(facts.BurnedIdentities, candidate.BTag, candidate.BSequence) || candidate.BSequence != highestSequence(facts)+1 {
 			return qualificationDecision{}, errors.New("candidate preflight refused")
 		}
 		sourceState = "v3-clean"
+		if candidate.EvidenceVersion == 2 {
+			if facts.LatestTag == nil {
+				return qualificationDecision{}, errors.New("candidate preflight refused")
+			}
+			source, exists := releaseByTag(facts.Releases, *facts.LatestTag)
+			if !exists || !qualifiedV3Source(source) {
+				return qualificationDecision{}, errors.New("candidate preflight refused")
+			}
+			sourceState = "v3-recurring"
+		}
 		actions = []json.RawMessage{mustJSON(buildReleaseAction{facts.Commit, candidate.BSequence, candidate.BTag, "build-release"})}
 	case "normal":
 		if candidate.DefectIssueURL != nil || candidate.FailedNormalRunID != nil || facts.DefectIssue != nil || facts.FailedNormalRun != nil {
@@ -2568,6 +2612,9 @@ func qualifiedStableRelease(release observedRelease) bool {
 
 func hasQualifiedV3(releases []observedRelease) bool {
 	for _, release := range releases {
+		if qualifiedV3Source(release) {
+			return true
+		}
 		if qualifiedSourceRelease(release, false) && strings.Count(release.Body, "# SBXR Acceptance Record\n") == 1 && strings.Count(release.Body, "Status: Qualified\n") == 1 && strings.Count(release.Body, "Stable result code: RELEASE-V3-PACKAGED-LIVE-QUALIFICATION\n") == 1 && strings.Count(release.Body, "Qualification role: Clean-installed V3 release\n") == 1 {
 			return true
 		}

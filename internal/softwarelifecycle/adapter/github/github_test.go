@@ -42,6 +42,31 @@ func TestSourceAcceptsTheV3AcceptanceRecord(t *testing.T) {
 	}
 }
 
+func TestSourceChecksRecurringV3WithoutReinterpretingHistoricalEvidence(t *testing.T) {
+	fixture := newLatestReleaseFixture(t)
+	body := strings.NewReplacer(
+		"# SBXR Installer-Updater Acceptance Record", "# SBXR Acceptance Record",
+		"Qualification role: Discovered, installed, recovered, final latest release", "Qualification role: Recurring subscription-capable V3 release",
+		"Stable result code: RELEASE-INSTALLER-UPDATER-TWO-RELEASE-QUALIFICATION", "Stable result code: RELEASE-V3-SUBSCRIPTION-QUALIFICATION",
+		"Integrated Verification: Passed on live Ubuntu Server 24.04 amd64", "Integrated Verification: Passed on live Ubuntu Server 24.04 amd64 and Karing macOS",
+	).Replace(fixture.acceptanceRecord())
+	body += "Detailed evidence SHA-256: " + strings.Repeat("a", 64) + "\nProxy package: sing-box 1.13.19 amd64 fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf\nKaring package: karing 1.2.0 macos-arm64 " + strings.Repeat("b", 64) + "\nKaring macOS: Passed\nNatural timer firing and naturally due certificate renewal: Not observed\nUnsupported new or renamed renewal route: May execute before detection; historical outcomes unknown\n"
+	fixture.release.Body = body
+	if _, outcome := NewWithEndpoint(fixture.server.Client(), fixture.server.URL, fixture.verifier).CheckLatest(t.Context()); outcome != softwarelifecycle.LatestReleaseAccepted {
+		t.Fatalf("recurring record refused: %v", outcome)
+	}
+	for _, marker := range []string{"Karing macOS: Passed\n", "Natural timer firing and naturally due certificate renewal: Not observed\n", "Unsupported new or renamed renewal route: May execute before detection; historical outcomes unknown\n"} {
+		fixture.release.Body = strings.Replace(body, marker, "", 1)
+		if _, outcome := NewWithEndpoint(fixture.server.Client(), fixture.server.URL, fixture.verifier).CheckLatest(t.Context()); outcome == softwarelifecycle.LatestReleaseAccepted {
+			t.Fatalf("accepted missing %q", marker)
+		}
+	}
+	fixture.release.Body = strings.Replace(body, "RELEASE-V3-SUBSCRIPTION-QUALIFICATION", "RELEASE-V3-PACKAGED-LIVE-QUALIFICATION", 1)
+	if _, outcome := NewWithEndpoint(fixture.server.Client(), fixture.server.URL, fixture.verifier).CheckLatest(t.Context()); outcome == softwarelifecycle.LatestReleaseAccepted {
+		t.Fatal("historical marker used for recurring evidence")
+	}
+}
+
 func TestSourceChecksTheCandidateFailureStateBoundQualification(t *testing.T) {
 	fixture := newLatestReleaseFixture(t)
 	assets := make([]map[string]any, 0, len(fixture.release.Assets))

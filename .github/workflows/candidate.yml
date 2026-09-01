@@ -35,6 +35,10 @@ on:
         description: Required only for rescue
         required: false
         type: string
+      v3_attempt:
+        description: Canonical secret-safe v2 attempt plan; required for recurring V3
+        required: false
+        type: string
 
 permissions: {}
 
@@ -74,9 +78,17 @@ jobs:
           B_SEQUENCE: ${{ inputs.b_sequence }}
           FAILED_RUN: ${{ inputs.failed_normal_run_id }}
           DEFECT_URL: ${{ inputs.defect_issue_url }}
+          V3_ATTEMPT: ${{ inputs.v3_attempt }}
         run: |
           set -euo pipefail
           if test "$MODE" = v3; then CHECKLIST="$V3_CHECKLIST"; A_TAG=; A_SEQUENCE=0; fi
+          if test "$MODE" = v3; then
+            test -n "$V3_ATTEMPT"
+            test "$V3_ATTEMPT" = "$(jq -cS . <<<"$V3_ATTEMPT")"
+            go run ./cmd/sbxr-release verify-public-latest > current-source-verification.json
+            jq -e '.outcome == "accepted"' current-source-verification.json >/dev/null
+            jq -e --slurpfile current current-source-verification.json 'any(.sources[]; .release_identity == $current[0].release_identity and .sequence == $current[0].sequence)' <<<"$V3_ATTEMPT" >/dev/null
+          fi
           git fetch --force --tags origin
           gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --paginate --slurp | jq 'add' > releases.json
           printf '[]' > release-facts.json
@@ -130,17 +142,17 @@ jobs:
             --argjson burned_identities "$burned" \
             --argjson a_sequence "$A_SEQUENCE" --arg a_tag "$A_TAG" --argjson b_sequence "$B_SEQUENCE" --arg b_tag "$B_TAG" --argjson defect_issue_url "$defect_issue_url" --argjson failed_normal_run_id "$failed_normal_run_id" --arg mode "$MODE" \
             --arg checklist_sha256 "$(sha256sum "$CHECKLIST" | cut -d' ' -f1)" --arg commit "$(git rev-parse HEAD)" --argjson defect_issue "$defect_issue" --argjson failed_normal_run "$failed_normal_run" --argjson latest_tag "$latest_tag" --slurpfile releases release-facts.json --arg remote_main "$(git rev-parse origin/main)" --argjson tags "$tags" \
-            '{archive_commit:$archive_commit,archive_remote_commit:$archive_remote_commit,archive_remote_tag_object:$archive_remote_tag_object,archive_tag_object:$archive_tag_object,archive_type:$archive_type,burned_identities:$burned_identities,candidate:{a_sequence:$a_sequence,a_tag:$a_tag,b_sequence:$b_sequence,b_tag:$b_tag,defect_issue_url:$defect_issue_url,failed_normal_run_id:$failed_normal_run_id,mode:$mode},checklist_sha256:$checklist_sha256,commit:$commit,defect_issue:$defect_issue,failed_normal_run:$failed_normal_run,latest_tag:$latest_tag,releases:$releases[0],remote_main:$remote_main,schema:"sbxr-release-qualification-facts-v1",stage:"candidate-preflight",tags:$tags}' | tr -d '\n' > candidate-preflight-facts.json
+            '{archive_commit:$archive_commit,archive_remote_commit:$archive_remote_commit,archive_remote_tag_object:$archive_remote_tag_object,archive_tag_object:$archive_tag_object,archive_type:$archive_type,burned_identities:$burned_identities,candidate:({a_sequence:$a_sequence,a_tag:$a_tag,b_sequence:$b_sequence,b_tag:$b_tag,defect_issue_url:$defect_issue_url,failed_normal_run_id:$failed_normal_run_id,mode:$mode} + (if $mode == "v3" then {evidence_version:2} else {} end)),checklist_sha256:$checklist_sha256,commit:$commit,defect_issue:$defect_issue,failed_normal_run:$failed_normal_run,latest_tag:$latest_tag,releases:$releases[0],remote_main:$remote_main,schema:"sbxr-release-qualification-facts-v1",stage:"candidate-preflight",tags:$tags}' | tr -d '\n' > candidate-preflight-facts.json
           go run ./cmd/sbxr-release qualification < candidate-preflight-facts.json > candidate-preflight-decision.json
           facts_sha256="$(sha256sum candidate-preflight-facts.json | cut -d' ' -f1)"
           jq -e --arg facts_sha256 "$facts_sha256" --arg mode "$MODE" --arg a_tag "$A_TAG" --argjson a_sequence "$A_SEQUENCE" --arg b_tag "$B_TAG" --argjson b_sequence "$B_SEQUENCE" '
             .schema == "sbxr-release-qualification-decision-v1" and .stage == "candidate-preflight" and .outcome == "accepted" and .facts_sha256 == $facts_sha256 and
-            (.source_state == "initial-normal" or .source_state == "later-normal" or .source_state == "rescue" or .source_state == "v3-clean") and
+            (.source_state == "initial-normal" or .source_state == "later-normal" or .source_state == "rescue" or .source_state == "v3-clean" or .source_state == "v3-recurring") and
             all(.actions[];
               if .type == "build-release" then (keys | sort) == ["commit","sequence","tag","type"] and .commit == env.GITHUB_SHA and ((.tag == $a_tag and .sequence == $a_sequence) or (.tag == $b_tag and .sequence == $b_sequence))
               elif .type == "use-source-release" then (keys | sort) == ["assets","commit","draft","immutable","prerelease","release_id","release_identity","sequence","tag","type"] and .tag == $a_tag and .sequence == $a_sequence and (.release_id | type) == "number" and (.release_identity | keys | sort) == ["commit","release_index_sha256","repository","tag"] and .release_identity == {commit:.commit,release_index_sha256:.release_identity.release_index_sha256,repository:env.GITHUB_REPOSITORY,tag:.tag} and (.release_identity.release_index_sha256 | test("^[0-9a-f]{64}$")) and (.assets | length) == 4 and all(.assets[]; (keys | sort) == ["name","sha256","size"] and (.sha256 | test("^[0-9a-f]{64}$")) and .size > 0)
               else false end) and
-            (if .source_state == "v3-clean" then $mode == "v3" and [.actions[].type] == ["build-release"] and .actions[0].tag == $b_tag and .actions[0].sequence == $b_sequence elif .source_state == "initial-normal" then $mode == "normal" and [.actions[].type] == ["build-release","build-release"] else (.source_state == "rescue") == ($mode == "rescue") and [.actions[].type] == ["use-source-release","build-release"] end)' candidate-preflight-decision.json >/dev/null
+            (if .source_state == "v3-clean" or .source_state == "v3-recurring" then $mode == "v3" and [.actions[].type] == ["build-release"] and .actions[0].tag == $b_tag and .actions[0].sequence == $b_sequence elif .source_state == "initial-normal" then $mode == "normal" and [.actions[].type] == ["build-release","build-release"] else (.source_state == "rescue") == ($mode == "rescue") and [.actions[].type] == ["use-source-release","build-release"] end)' candidate-preflight-decision.json >/dev/null
           build_releases="$(jq -c '[.actions[] | select(.type == "build-release") | {tag,sequence}]' candidate-preflight-decision.json)"
           source_state="$(jq -r .source_state candidate-preflight-decision.json)"
           source_a='{}'
@@ -481,6 +493,7 @@ jobs:
       - name: Create the complete qualification manifest after approval
         env:
           GH_TOKEN: ${{ github.token }}
+          V3_ATTEMPT: ${{ inputs.v3_attempt }}
         run: |
           set -euo pipefail
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/approvals" > approvals.json
@@ -491,8 +504,19 @@ jobs:
           rescue="$(jq -cS 'if .candidate.mode == "rescue" then {defect_issue_url:.candidate.defect_issue_url,failed_normal_run_id:.candidate.failed_normal_run_id} else null end' candidate-preflight-facts.json)"
           jq -nS --arg schema sbxr-candidate-failure-state-v1 --arg workflow "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --arg recorded_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg public_verifier '1.3.0 26B3382D5700AFBCD84F980D1D5B6C52BFF743DC2A8EE86B8B44C8E1245CE485' '{schema:$schema,workflow_run:$workflow,recorded_at:$recorded_at,runner:"Ubuntu Server 24.04 linux/amd64",software:{go_toolchain:"Not started",public_verifier:$public_verifier},stages:{integrated_verification:"Pending",codex_live_acceptance:"Pending"},evidence:[($workflow+"#artifacts")]}' > candidate-failure-state.json
           jq -cnS --argjson approval "$approval" --arg candidate_failure_state_sha256 "$(sha256sum candidate-failure-state.json | cut -d' ' -f1)" --arg checklist_sha256 "$checklist_sha256" --slurpfile draft_verification_decision candidate-draft-verification-decision.json --slurpfile draft_verification_facts candidate-draft-verification-facts.json --argjson native_evidence "$native_evidence" --arg prior_decision_sha256 "$(sha256sum candidate-draft-verification-decision.json | cut -d' ' -f1)" --slurpfile releases drafts.json --argjson rescue "$rescue" --arg source_state "$(jq -r .source_state candidate-preflight-decision.json)" --arg commit "$GITHUB_SHA" --arg path '.github/workflows/candidate.yml' --arg ref "$GITHUB_WORKFLOW_REF" --arg run_id "$GITHUB_RUN_ID" --arg run_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" '{approval:$approval,candidate_failure_state_sha256:$candidate_failure_state_sha256,checklist_sha256:$checklist_sha256,draft_verification_decision:$draft_verification_decision[0],draft_verification_facts:$draft_verification_facts[0],native_evidence:$native_evidence,prior_decision_sha256:$prior_decision_sha256,releases:$releases[0],rescue:$rescue,schema:"sbxr-release-qualification-facts-v1",source_state:$source_state,stage:"qualification-boundary",workflow:{commit:$commit,path:$path,ref:$ref,run_id:$run_id,run_url:$run_url}}' | tr -d '\n' > qualification-boundary-facts.json
+          if test '${{ inputs.mode }}' = v3; then
+            test "$V3_ATTEMPT" = "$(jq -cS . <<<"$V3_ATTEMPT")"
+            # Recheck Latest after builds and approval, not just at preflight.
+            go run ./cmd/sbxr-release verify-public-latest > current-source-verification.json
+            jq -e --slurpfile current current-source-verification.json '.latest_tag == $current[0].release_identity.tag and $current[0].outcome == "accepted" and any(.releases[]; .tag == $current[0].release_identity.tag and .commit == $current[0].release_identity.commit and .index.sha256 == $current[0].release_identity.release_index_sha256)' candidate-preflight-facts.json >/dev/null
+            gh api repos/KaringX/karing/releases/latest > karing-latest.json
+            jq -e --argjson attempt "$V3_ATTEMPT" '.draft == false and .prerelease == false and (.tag_name | ltrimstr("v")) == $attempt.packages.karing.version and any(.assets[]; .size == $attempt.packages.karing.size and .digest == ("sha256:" + $attempt.packages.karing.sha256))' karing-latest.json >/dev/null
+            now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            jq -cS --argjson attempt "$V3_ATTEMPT" --arg now "$now" --arg id "run-$GITHUB_RUN_ID-attempt-$GITHUB_RUN_ATTEMPT" --argjson run_attempt "$GITHUB_RUN_ATTEMPT" '. + {v3_attempt:($attempt + {attempt_id:$id,run_attempt:$run_attempt,started_at:$now,karing_latest_checked_at:$now})}' qualification-boundary-facts.json | tr -d '\n' > qualification-boundary-facts.next
+            mv qualification-boundary-facts.next qualification-boundary-facts.json
+          fi
           go run ./cmd/sbxr-release qualification < qualification-boundary-facts.json > qualification-manifest.json
-          jq -e --arg mode '${{ inputs.mode }}' '.schema == "sbxr-qualification-manifest-v1" and .repository == env.GITHUB_REPOSITORY and .mode == $mode and .approval.environments == [{name:"acceptance-vps"}] and .approval.state == "approved" and .workflow == {commit:env.GITHUB_SHA,path:".github/workflows/candidate.yml",ref:env.GITHUB_WORKFLOW_REF,run_id:env.GITHUB_RUN_ID,run_url:(env.GITHUB_SERVER_URL+"/"+env.GITHUB_REPOSITORY+"/actions/runs/"+env.GITHUB_RUN_ID)} and [.approval.decision_chain[].stage] == ["candidate-preflight","candidate-draft-construction","candidate-draft-verification"] and [.approval.decision_chain[].outcome] == ["accepted","actions-required","accepted"] and (.releases | length) == (if $mode == "v3" then 1 else 2 end) and all(.releases[]; (.assets | length) == 4)' qualification-manifest.json >/dev/null
+          jq -e --arg mode '${{ inputs.mode }}' '(.schema == "sbxr-qualification-manifest-v1" or .schema == "sbxr-qualification-manifest-v2") and .repository == env.GITHUB_REPOSITORY and .mode == $mode and .approval.environments == [{name:"acceptance-vps"}] and .approval.state == "approved" and .workflow == {commit:env.GITHUB_SHA,path:".github/workflows/candidate.yml",ref:env.GITHUB_WORKFLOW_REF,run_id:env.GITHUB_RUN_ID,run_url:(env.GITHUB_SERVER_URL+"/"+env.GITHUB_REPOSITORY+"/actions/runs/"+env.GITHUB_RUN_ID)} and [.approval.decision_chain[].stage] == ["candidate-preflight","candidate-draft-construction","candidate-draft-verification"] and [.approval.decision_chain[].outcome] == ["accepted","actions-required","accepted"] and (.releases | length) == (if $mode == "v3" then 1 else 2 end) and all(.releases[]; (.assets | length) == 4)' qualification-manifest.json >/dev/null
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: signed-qualification-manifest
@@ -576,6 +600,7 @@ jobs:
           cp .github/scripts/installer-updater-vps.sh handoff/
           cp .github/scripts/qualification-gateway-readiness.sh handoff/
           cp .github/scripts/v3-packaged-live.sh handoff/
+          if test "$(jq -r .schema handoff/qualification-manifest.json)" = sbxr-qualification-manifest-v2; then exit 0; fi
           openssl req -x509 -newkey rsa:3072 -nodes -days 2 -subj '/CN=SBXR Qualification CA' -keyout handoff/ca.key -out handoff/ca.crt
           openssl req -newkey rsa:3072 -nodes -subj '/CN=api.github.com' -keyout handoff/gateway.key -out handoff/gateway.csr
           printf '%s\n' 'subjectAltName=DNS:api.github.com,DNS:github.com' 'extendedKeyUsage=serverAuth' > handoff/gateway.ext
@@ -590,6 +615,15 @@ jobs:
           install -m 0600 /dev/null ssh.key
           printf '%s\n' "$ACCEPTANCE_VPS_SSH_PRIVATE_KEY" > ssh.key
           printf '%s %s\n' "$ACCEPTANCE_VPS_HOST" "$ACCEPTANCE_VPS_HOST_KEY" > known_hosts
+          if test "$(jq -r .schema handoff/qualification-manifest.json)" = sbxr-qualification-manifest-v2; then
+            # The operator drives only supported packaged paths on the VPS and
+            # Mac. This collector validates evidence; it cannot simulate them.
+            bash .github/scripts/v3-recurring-evidence.sh "$ACCEPTANCE_VPS_HOST" "$PWD/ssh.key" "$PWD/known_hosts"
+            rm -f ssh.key known_hosts
+            jq '.stages.integrated_verification = "Passed" | .stages.codex_live_acceptance = "Passed"' candidate-failure-state.json > candidate-failure-state.next
+            mv candidate-failure-state.next candidate-failure-state.json
+            exit 0
+          fi
           ssh_options=(-i "$PWD/ssh.key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$PWD/known_hosts" -o ConnectTimeout=15)
           remote_initialized=false
           journey_passed=false
@@ -782,17 +816,25 @@ jobs:
           if test '${{ inputs.mode }}' = v3; then
             observed_at="$(jq -r .observed_at handoff/v3-packaged-live-evidence.json)"
             detailed_evidence_sha256="$(sha256sum handoff/v3-packaged-live-evidence.json | cut -d' ' -f1)"
+            if test "$(jq -r .schema handoff/qualification-manifest.json)" = sbxr-qualification-manifest-v2; then
+              cp handoff/v3-packaged-live-result-facts.json v3-packaged-live-result-facts.json
+              completed="$(date -u -d "$(jq -r '.detailed_evidence.scenarios[-1].completed_at' v3-packaged-live-result-facts.json)" +%s)"
+              test "$(( $(date +%s) - completed ))" -le 300
+            else
             jq -cnS --arg detailed_evidence_sha256 "$detailed_evidence_sha256" --arg evaluation_time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg observed_at "$observed_at" --arg prior_decision_sha256 "$prior_decision_sha256" --slurpfile boundary_facts handoff/qualification-boundary-facts.json --slurpfile detailed_evidence handoff/v3-packaged-live-evidence.json --slurpfile manifest handoff/qualification-manifest.json --arg go_toolchain "$(go version | awk '{print $3}')" --arg public_verifier '1.3.0 26B3382D5700AFBCD84F980D1D5B6C52BFF743DC2A8EE86B8B44C8E1245CE485' '{detailed_evidence:$detailed_evidence[0],detailed_evidence_sha256:$detailed_evidence_sha256,evaluation_time:$evaluation_time,observed_at:$observed_at,prior_decision_sha256:$prior_decision_sha256,qualification_boundary_facts:$boundary_facts[0],qualification_manifest:$manifest[0],qualification_manifest_attested:true,releases:$manifest[0].releases,runner:{architecture:"amd64",go_toolchain:$go_toolchain,operating_system:"Ubuntu Server 24.04",public_verifier:$public_verifier},schema:"sbxr-release-qualification-facts-v1",stage:"v3-packaged-live-result"}' | tr -d '\n' > v3-packaged-live-result-facts.json
+            fi
             go run ./cmd/sbxr-release qualification < v3-packaged-live-result-facts.json > v3-packaged-live-result-decision.json
             facts_sha256="$(sha256sum v3-packaged-live-result-facts.json | cut -d' ' -f1)"
-            jq -e --arg facts_sha256 "$facts_sha256" --arg prior_decision_sha256 "$prior_decision_sha256" '.schema == "sbxr-release-qualification-decision-v1" and .stage == "v3-packaged-live-result" and .outcome == "accepted" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256 and (.records | length) == 1 and (.records[0].body | contains("RELEASE-V3-PACKAGED-LIVE-QUALIFICATION"))' v3-packaged-live-result-decision.json >/dev/null
+            result_code=RELEASE-V3-PACKAGED-LIVE-QUALIFICATION
+            if test "$(jq -r .schema handoff/qualification-manifest.json)" = sbxr-qualification-manifest-v2; then result_code=RELEASE-V3-SUBSCRIPTION-QUALIFICATION; fi
+            jq -e --arg result_code "$result_code" --arg facts_sha256 "$facts_sha256" --arg prior_decision_sha256 "$prior_decision_sha256" '.schema == "sbxr-release-qualification-decision-v1" and .stage == "v3-packaged-live-result" and .outcome == "accepted" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256 and (.records | length) == 1 and (.records[0].body | contains($result_code))' v3-packaged-live-result-decision.json >/dev/null
             cp v3-packaged-live-result-facts.json acceptance-vps-result-facts.json
             cp v3-packaged-live-result-decision.json acceptance-vps-result-decision.json
             tag="$(jq -r '.releases[0].tag' handoff/qualification-manifest.json)"
             jq -jr --arg tag "$tag" '.records[] | select(.tag == $tag) | .body' v3-packaged-live-result-decision.json > "acceptance-records/$tag.md"
-            gh release edit "$tag" --draft --notes-file "acceptance-records/$tag.md"
             if grep -aERq 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer |[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9]{1,3}(\.[0-9]{1,3}){3}' acceptance-records v3-packaged-live-result-facts.json v3-packaged-live-result-decision.json handoff/v3-packaged-live-evidence.json; then exit 1; elif test $? -ne 1; then exit 1; fi
             cat acceptance-records/*.md >> "$GITHUB_STEP_SUMMARY"
+            gh release edit "$tag" --draft --notes-file "acceptance-records/$tag.md"
           else
           observed_at="$(jq -r .observed_at handoff/acceptance-vps-evidence.json)"
           jq -cnS --arg evaluation_time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg observed_at "$observed_at" --arg prior_decision_sha256 "$prior_decision_sha256" --slurpfile boundary_facts handoff/qualification-boundary-facts.json --slurpfile journey handoff/acceptance-vps-evidence.json --slurpfile manifest handoff/qualification-manifest.json --arg go_toolchain "$(go version | awk '{print $3}')" --arg public_verifier '1.3.0 26B3382D5700AFBCD84F980D1D5B6C52BFF743DC2A8EE86B8B44C8E1245CE485' '{evaluation_time:$evaluation_time,github_routing_restored:true,journey:$journey[0],observed_at:$observed_at,prior_decision_sha256:$prior_decision_sha256,qualification_boundary_facts:$boundary_facts[0],qualification_manifest:$manifest[0],qualification_manifest_attested:true,releases:$manifest[0].releases,runner:{architecture:"amd64",go_toolchain:$go_toolchain,operating_system:"Ubuntu Server 24.04",public_verifier:$public_verifier},schema:"sbxr-release-qualification-facts-v1",stage:"acceptance-vps-result"}' | tr -d '\n' > acceptance-vps-result-facts.json
@@ -822,6 +864,7 @@ jobs:
             v3-packaged-live-result-facts.json
             v3-packaged-live-result-decision.json
             handoff/v3-packaged-live-evidence.json
+            handoff/v3-scenarios/
             handoff/qualification-manifest.json
           if-no-files-found: error
           retention-days: 90
@@ -865,7 +908,7 @@ jobs:
           if test -n "$artifact_id"; then
             gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name signed-qualification-manifest --dir boundary
             if gh attestation verify boundary/qualification-manifest.json --repo "$GITHUB_REPOSITORY" --signer-workflow albertloky/SBXR/.github/workflows/candidate.yml --source-ref refs/heads/main --source-digest "$GITHUB_SHA" >/dev/null; then
-              jq -e --arg run "$GITHUB_RUN_ID" --arg url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --arg commit "$GITHUB_SHA" '.schema == "sbxr-qualification-manifest-v1" and .repository == env.GITHUB_REPOSITORY and .workflow.path == ".github/workflows/candidate.yml" and .workflow.ref == "albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main" and .workflow.commit == $commit and .workflow.run_id == $run and .workflow.run_url == $url' boundary/qualification-manifest.json >/dev/null
+              jq -e --arg run "$GITHUB_RUN_ID" --arg url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --arg commit "$GITHUB_SHA" '(.schema == "sbxr-qualification-manifest-v1" or .schema == "sbxr-qualification-manifest-v2") and .repository == env.GITHUB_REPOSITORY and .workflow.path == ".github/workflows/candidate.yml" and .workflow.ref == "albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main" and .workflow.commit == $commit and .workflow.run_id == $run and .workflow.run_url == $url' boundary/qualification-manifest.json >/dev/null
               signed=true
               echo 'signed=true' >> "$GITHUB_OUTPUT"
             fi

@@ -397,12 +397,16 @@ func latestAcceptanceRecord(body, tag, commit string, assets map[string]assetMet
 	}
 	legacy := strings.Count(body, "# SBXR Installer-Updater Acceptance Record\n") == 1 && strings.Count(body, "# SBXR Acceptance Record\n") == 0
 	v3 := strings.Count(body, "# SBXR Acceptance Record\n") == 1 && strings.Count(body, "# SBXR Installer-Updater Acceptance Record\n") == 0
+	recurring := v3 && strings.Count(body, "Stable result code: RELEASE-V3-SUBSCRIPTION-QUALIFICATION\n") == 1
 	if !legacy && !v3 {
 		return "", 0, false
 	}
 	integrated := "Passed on live Ubuntu Server 24.04 amd64"
 	if v3 {
 		integrated = "Passed on live Ubuntu Server 24.04 amd64 and outside runner"
+	}
+	if recurring {
+		integrated = "Passed on live Ubuntu Server 24.04 amd64 and Karing macOS"
 	}
 	required := map[string]string{
 		"Status: ":                  "Qualified",
@@ -428,7 +432,7 @@ func latestAcceptanceRecord(body, tag, commit string, assets map[string]assetMet
 	secretSafe, secretSafeOK := uniqueRecordValue(body, "Secret-safe result: ")
 	role, roleOK := uniqueRecordValue(body, "Qualification role: ")
 	legacyResult := legacy && (resultCode == "RELEASE-INSTALLER-UPDATER-TWO-RELEASE-QUALIFICATION" || resultCode == "RELEASE-INSTALLER-UPDATER-RESCUE-QUALIFICATION") && qualificationRolePattern.MatchString(role)
-	v3Result := v3 && resultCode == "RELEASE-V3-PACKAGED-LIVE-QUALIFICATION" && role == "Clean-installed V3 release"
+	v3Result := v3 && resultCode == "RELEASE-V3-PACKAGED-LIVE-QUALIFICATION" && role == "Clean-installed V3 release" || recurring && role == "Recurring subscription-capable V3 release"
 	if !resultOK || !legacyResult && !v3Result || !workflowOK || !workflowEvidencePattern.MatchString(workflow) || !runnerOK || !acceptanceRunnerPattern.MatchString(runner) || !toolchainOK || !goToolchainPattern.MatchString(toolchain) || !verifierOK || verifier != Version+" "+SigningFingerprint || !secretSafeOK || secretSafe != "Passed" || !roleOK {
 		return "", 0, false
 	}
@@ -437,8 +441,23 @@ func latestAcceptanceRecord(body, tag, commit string, assets map[string]assetMet
 		proxyPackage, proxyOK := uniqueRecordValue(body, "Proxy package: ")
 		outsidePackage, outsideOK := uniqueRecordValue(body, "Outside-client package: ")
 		packageIdentity := "sing-box 1.13.19 amd64 fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf"
-		if !detailedOK || !hashPattern.MatchString(detailed) || !proxyOK || proxyPackage != packageIdentity || !outsideOK || outsidePackage != packageIdentity {
+		if !detailedOK || !hashPattern.MatchString(detailed) || !proxyOK || proxyPackage != packageIdentity || !recurring && (!outsideOK || outsidePackage != packageIdentity) {
 			return "", 0, false
+		}
+		if recurring {
+			for prefix, wanted := range map[string]string{
+				"Karing macOS: ": "Passed",
+				"Natural timer firing and naturally due certificate renewal: ": "Not observed",
+				"Unsupported new or renamed renewal route: ":                   "May execute before detection; historical outcomes unknown",
+			} {
+				if value, ok := uniqueRecordValue(body, prefix); !ok || value != wanted {
+					return "", 0, false
+				}
+			}
+			karing, ok := uniqueRecordValue(body, "Karing package: ")
+			if !ok || !regexp.MustCompile(`^karing [0-9]+(?:[.-][0-9]+){0,5} macos-(arm64|amd64) [a-f0-9]{64}$`).MatchString(karing) {
+				return "", 0, false
+			}
 		}
 	} else if resultCode == "RELEASE-INSTALLER-UPDATER-RESCUE-QUALIFICATION" {
 		defect, defectOK := uniqueRecordValue(body, "Rescue defect evidence: ")

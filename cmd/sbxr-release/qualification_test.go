@@ -152,7 +152,7 @@ func TestQualificationCommandPreservesLaterNormalAndRescuePreflight(t *testing.T
 	assertQualificationRefused(t, binary, canonicalFacts(t, rescueAfterRescue), "consecutive rescue")
 }
 
-func qualificationBoundaryForCandidate(t *testing.T, binary string, preflightFacts qualificationFacts) (string, []byte) {
+func qualificationBoundaryForCandidate(t *testing.T, binary string, preflightFacts qualificationFacts, attempt ...any) (string, []byte) {
 	t.Helper()
 	preflightDocument := canonicalFacts(t, preflightFacts)
 	preflightDecision, err := runQualificationCommand(binary, preflightDocument)
@@ -223,6 +223,11 @@ func qualificationBoundaryForCandidate(t *testing.T, binary string, preflightFac
 		"prior_decision_sha256": sha256String(string(verificationDecision)), "releases": releases, "rescue": rescue, "schema": qualificationFactsSchema, "source_state": preflight["source_state"], "stage": "qualification-boundary",
 		"workflow": map[string]any{"commit": builds[len(builds)-1]["commit"], "path": ".github/workflows/candidate.yml", "ref": "albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main", "run_id": "123", "run_url": "https://github.com/albertloky/SBXR/actions/runs/123"},
 	})
+	if len(attempt) != 0 {
+		bound := jsonObject(t, []byte(boundaryFacts))
+		bound["v3_attempt"] = attempt[0]
+		boundaryFacts = qualificationDocument(t, bound)
+	}
 	manifest, err := runQualificationCommand(binary, boundaryFacts)
 	if err != nil {
 		t.Fatalf("qualification boundary: %v\n%s", err, manifest)
