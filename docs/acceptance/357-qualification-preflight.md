@@ -1,6 +1,26 @@
 # #357: Subscription qualification preflight
 
-## Current disposition after Owner approval
+## Owner-directed ticket closure, 2026-09-01 UTC
+
+Albert rejected multi-day scope and explicitly directed: “multi-day scope is not included in live qualificationa t first, so do other test and commit and push and close the ticket.” Close #357 after the remaining automated verification and delivery. This supersedes this report's earlier instructions to keep the ticket open; it does not turn unobserved scenarios into passes or create a successful Acceptance Record.
+
+ADR-0016 already excludes waiting multiple days for natural renewal. Natural timer firing and naturally due renewal remain **Not observed**. The separately identified repeated-issuance budget below explains why the complete signed matrix was not attempted; it does not add a multi-day requirement to this ticket. No multi-day implementation or automation is authorized or included.
+
+The existing signed collector requires the ordered complete scenario list and a cumulative validated prefix. It has no partial-success route. No new signed attempt was started for a knowingly incomplete matrix. Signed packaged VPS scenarios, outside-network subscription/rotation proof, complete secret-capture coverage, and the final Karing journey remain missing. Retain `static-official-evidence-passed-live-karing-pending`. Ticket closure is an Owner-directed work disposition, not Release Qualification success; the existing stable-publication gate remains unchanged.
+
+Final verification on checkout `0ef6a0d6733ad80c9bbe2fb7851e11fca46fe938` (only this report changed afterward):
+
+- `GOTOOLCHAIN=go1.26.6 go test ./... -count=1`: passed all ten packages.
+- `GOTOOLCHAIN=go1.26.6 go test -race ./... -count=1`: passed all ten packages.
+- `GOTOOLCHAIN=go1.26.6 go vet ./...` and `GOTOOLCHAIN=go1.26.6 go mod verify`: passed.
+- Ruby YAML parsing of all three workflows and `bash -n` on all 30 embedded run blocks: passed. `git diff --check`: passed.
+- [Verify run 33528137052](https://github.com/albertloky/SBXR/actions/runs/33528137052): passed native Ubuntu `amd64` and `arm64` jobs, including four-asset construction/verification, packaged production menu checks, race checks, and package-surface secret-marker scans.
+- The workflow's prohibited-marker pattern found no match in the two new local test logs or this report. This bounded scan does not prove absence on uncollected runner/VPS/Mac surfaces.
+- Final Standards and Spec reviews of the closure disposition: zero actionable findings on each axis.
+
+No production code, acceptance validator, or release policy changed in this closure commit. The earlier observations and exact candidate/package identities remain historical evidence under their original limits.
+
+## Historical disposition after earlier Owner approvals
 
 Albert approved using `RackNerd` as the disposable Acceptance VPS, including reviewed Complete removal, downtime, new credentials/client setup, and the required interruption/reboot scenarios. That authorization remains valid; do not ask for the same host authorization again.
 
@@ -49,7 +69,7 @@ Focused checks cover signed clean-install discovery, scope/approval/index refusa
 - Official Snap Store metadata and `snap info certbot` agreed on amd64 stable/beta Certbot `5.7.0`, revision `5781`; edge was `5.8.0.dev0`, revision `5891`. An official historical download of revision `5778` contained `5.7.0.dev0`. The development versions do not meet the current production/evidence parser contract. Further official Store revision metadata identified Certbot `5.6.0`, revision `5603`. `snap download certbot --revision=5603` retrieved its official package/assertion; squashfs metadata confirmed `amd64`, `classic`, and `core24`. The package size is `77099008` bytes and SHA-256 is `815dfc1c1d45a965db71b5ff7e81ce15061d2977a65a56fc4d6d19518ccd95e0`. This supplies a supported planned predecessor to `5.7.0`; the actual `5.6.0` installation was subsequently proved, while signed refresh/qualification remains unproved. Certbot `5.6.0` was subsequently installed through its official assertion, pulling official `core24` revision `1643` and snapd `2.76.2` revision `27710`. Certbot/snapd/core24 general refreshes were temporarily held during preparation and explicitly released after stopping the unsigned run. The packages remain installed; reobserve their exact identities before another attempt. No SBXR installation or ACME issuance followed.
 - [Verify run 33522702455](https://github.com/albertloky/SBXR/actions/runs/33522702455) completed successfully on exact checkout `8af07d56ef606acb5d98928f8bb929af74b235ec` for native Ubuntu `amd64` and `arm64`. Earlier local full-suite, vet, and dependency results remain recorded in [the first delivery comment](https://github.com/albertloky/SBXR/issues/357#issuecomment-5495906170).
 
-The host now has no SBXR proxy service. Stable publication remains separately gated. All signed packaged scenarios, exact outside-network observations, full secret-capture coverage, and the final Karing journey remain missing; do not close #357 or generate a successful Acceptance Record from these observations.
+At that observation the host had no SBXR proxy service. Stable publication remains separately gated. All signed packaged scenarios, exact outside-network observations, full secret-capture coverage, and the final Karing journey remain missing. These observations do not support a successful Acceptance Record; the later Owner-directed ticket closure is recorded above.
 
 ## Historical pre-approval snapshot
 
