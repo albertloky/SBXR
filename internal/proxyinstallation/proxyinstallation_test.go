@@ -74,6 +74,9 @@ type controlledHost struct {
 	proxyStartAuthorization         string
 	failClientCheckpoint            clientIdentityRotationCheckpoint
 	failClientCompletion            bool
+	clientSubscriptionArtifact      []byte
+	clientPublishedCertificate      *hostadapter.ServingAuthority
+	clientCertificateInvalid        bool
 }
 
 func (*controlledHost) PlanProxyStartupIntegration() (hostadapter.ProxyStartupAuthority, hostadapter.Observation) {
@@ -236,6 +239,7 @@ func (host *controlledHost) ActivatePreparedSubscription(context.Context, hostad
 		return false
 	}
 	host.subscriptionStarts++
+	host.subscriptionStopped = false
 	return host.subscriptionPrepared
 }
 
@@ -270,7 +274,7 @@ func (host *controlledHost) StopSubscriptionRotation(_ context.Context, input ho
 }
 
 func (host *controlledHost) PublishSubscriptionRotation(input hostadapter.SubscriptionRotationInput) bool {
-	if !host.subscriptionStopped || input.Target != host.subscriptionRotationServing || input.Source != host.subscriptionServing && input.Target != host.subscriptionServing {
+	if !host.subscriptionStopped && input.Target != host.subscriptionServing || input.Target != host.subscriptionRotationServing || input.Source != host.subscriptionServing && input.Target != host.subscriptionServing {
 		return false
 	}
 	if host.failRotationEffect == "publish" {
@@ -335,7 +339,18 @@ func (*controlledHost) RecordRenewalHook(hostadapter.RenewalAuthority, string, m
 }
 
 func (host *controlledHost) InspectCertificateActivation(context.Context, hostadapter.RenewalAuthority, hostadapter.ServingAuthority) hostadapter.CertificateActivationInspection {
-	return hostadapter.CertificateActivationInspection{Published: host.subscriptionServing, Loaded: host.subscriptionServing, Observed: true, Accepted: true}
+	loaded := host.subscriptionServing
+	if host.subscriptionStopped {
+		loaded = hostadapter.ServingAuthority{}
+	}
+	published := host.subscriptionServing
+	if host.clientPublishedCertificate != nil {
+		published = *host.clientPublishedCertificate
+	}
+	if host.clientCertificateInvalid {
+		return hostadapter.CertificateActivationInspection{Observed: true, Loaded: loaded}
+	}
+	return hostadapter.CertificateActivationInspection{Published: published, Loaded: loaded, Observed: true, Accepted: true}
 }
 
 func (*controlledHost) ActivateServing(context.Context, hostadapter.RenewalAuthority, hostadapter.ServingAuthority) bool {

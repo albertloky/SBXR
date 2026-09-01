@@ -58,6 +58,31 @@ the startup gate until the package service is stopped and disabled. Automated
 checks do not prove termination of a real outside session or packaged Karing
 refresh.
 
+## Client Identity rotation with Subscription Serving
+
+Issue #354 extends that same operation to enabled subscriptions, including
+independent certificate, listener, or renewal faults when required material is
+proved. The unchanged link selects a staged, digest-bound replacement artifact;
+only the UUID changes. Both startup paths are gated before owned process groups
+and accepted requests are stopped. Recovery restores the source only before
+revocation and finishes only the selected target afterward. Complete removal
+takes over either direction without starting a credential generation.
+
+Private startup borrows the Owner's already-held lock through a one-use,
+same-UID Unix descriptor handoff. Closing the child's descriptor does not unlock
+the Owner. Linux uses an abstract socket, so process death leaves no socket file.
+The fixed serving sandbox admits AF_UNIX for that handoff and hides staged proxy
+configuration. Rotation can update the exact earlier serving unit to this fixed
+contract under recorded startup authority. No environment value authorizes a
+start, and ordinary startup never chooses a recovery direction.
+
+The target proxy remains working through a separately diagnosed subscription
+fault. Compatible certificate publication is incorporated into the same
+operation without reissuing certificates or clearing renewal failure evidence.
+Artifact/configuration agreement, protected saved state, startup protection,
+and cleanup remain mandatory. The Owner must refresh the unchanged link or use
+the separately confirmed fallback; no result claims Karing refreshed.
+
 ## Read-only subscription enablement review
 
 Issue #346 adds `Enable subscription` to the existing production menu only after

@@ -7,9 +7,37 @@ import (
 )
 
 type MutationLockAuthority struct {
-	file *os.File
-	path string
-	uid  uint32
+	file     *os.File
+	path     string
+	uid      uint32
+	borrowed bool
+}
+
+// RuntimeDescriptor duplicates the already-held open file description. A
+// private runtime child may inspect under it; it must not release the owner lock.
+func (authority *MutationLockAuthority) RuntimeDescriptor() (*os.File, error) {
+	if authority == nil || authority.borrowed || !authority.Holds(authority.path) {
+		return nil, errors.New("runtime lock refused")
+	}
+	fd, err := syscall.Dup(int(authority.file.Fd()))
+	if err != nil {
+		return nil, err
+	}
+	syscall.CloseOnExec(fd)
+	return os.NewFile(uintptr(fd), authority.path), nil
+}
+
+// BorrowRuntimeLock accepts only a descriptor for the exact protected lock.
+// The authenticated private Host handoff owns transport admission.
+func BorrowRuntimeLock(file *os.File, path string, uid uint32) (*MutationLockAuthority, error) {
+	authority := &MutationLockAuthority{file: file, path: path, uid: uid, borrowed: true}
+	if file == nil || !authority.Holds(path) {
+		if file != nil {
+			file.Close()
+		}
+		return nil, errors.New("runtime lock refused")
+	}
+	return authority, nil
 }
 
 func AcquireMutationLockAuthority(path string, uid uint32) (*MutationLockAuthority, bool, error) {
@@ -60,7 +88,9 @@ func (authority *MutationLockAuthority) Release() {
 	if authority == nil || authority.file == nil {
 		return
 	}
-	_ = syscall.Flock(int(authority.file.Fd()), syscall.LOCK_UN)
+	if !authority.borrowed {
+		_ = syscall.Flock(int(authority.file.Fd()), syscall.LOCK_UN)
+	}
 	_ = authority.file.Close()
 	authority.file = nil
 }

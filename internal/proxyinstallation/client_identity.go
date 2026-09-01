@@ -47,6 +47,21 @@ func AuthorizeProxyStart(ctx context.Context, lifecycle softwarelifecycle.Interf
 
 func authorizeProxyStart(ctx context.Context, lifecycle softwarelifecycle.Interface, host proxyStartHost) bool {
 	status := lifecycle.Status(ctx)
+	if status.State == softwarelifecycle.UpdateInProgress {
+		starter, ok := host.(interface {
+			BorrowRuntimeStartLock(string) (*hostadapter.MutationLock, error)
+		})
+		lc, lifecycleOK := lifecycle.(mutationLifecycle)
+		if !ok || !lifecycleOK {
+			return false
+		}
+		lock, err := starter.BorrowRuntimeStartLock(hostadapter.ProxyStartRole)
+		if err != nil {
+			return false
+		}
+		defer lock.Release()
+		status = lc.StatusUnderMutationLock(ctx, lock)
+	}
 	body, err := host.ReadOwnership(hostSetupSpec.OwnershipPath)
 	record, ok := decodeOwnership(body)
 	if err != nil || !ok || status.State != softwarelifecycle.Ready || status.Installed == nil || !compatibleOwnership(record, *status.Installed) || record.Phase != runningPhase || record.Direction != noDirection || record.Startup == nil || !host.VerifyProxyStartupIntegration(ctx, *record.Startup) {
@@ -91,7 +106,7 @@ func clientIdentityRotationPlan() []string {
 func (module *installedInterface) prepareClientIdentityFinishReview(ctx context.Context, action Action, review Review, record ownershipRecord, body []byte, installed softwarelifecycle.ReleaseIdentity) Review {
 	host, ok := module.host.(clientIdentityHost)
 	targetRequired, startupRequired := clientRotationRequirements(record.ClientRotation.Checkpoint)
-	accepted := ok && host.InspectClientIdentityRotation(record.ClientRotation.Source, record.ClientRotation.Target, record.ConfigurationSHA256, record.Startup, targetRequired, startupRequired, record.ClientRotation.Direction == "forward").Accepted
+	accepted := ok && host.InspectClientIdentityRotation(record.ClientRotation.Source, record.ClientRotation.Target, record.ConfigurationSHA256, record.Startup, targetRequired, startupRequired, record.ClientRotation.Direction == "forward").Accepted && module.inspectClientIdentitySubscription(record)
 	review.Status = ChangeIncomplete
 	running := module.host.InspectRunning(ctx, hostSetupSpec, aptSourceBody, body, record.ConfigurationSHA256, record.PublicIPv4)
 	review.ProxyTraffic = CannotBeVerified
@@ -112,7 +127,7 @@ func (module *installedInterface) prepareClientIdentityFinishReview(ctx context.
 	}
 	if action == CompleteRemovalAction {
 		surface := module.host.Inspect(ctx, slices.Clone(footprint))
-		removal := module.host.InspectRemoval(ctx, hostSetupSpec, aptSourceBody, body, record.ConfigurationSHA256, record.PublicIPv4)
+		removal := module.inspectOwnedRemoval(ctx, record, body)
 		if !inspectionAccepted(surface) || !removalAccepted(removal) {
 			review.Result = refused(ChangeIncomplete, "Complete removal preflight", removalCorrection(removal))
 			return review
@@ -144,7 +159,21 @@ func (module *installedInterface) prepareClientIdentityFinishReview(ctx context.
 		remaining = slices.Clone(record.ClientRotation.Effects[len(record.ClientRotation.Completed):])
 	}
 	review.Plan = []string{"Action: Finish Client Identity rotation", "Selected direction: " + direction + ".", "Remaining effects: " + strings.Join(remaining, ", ") + ".", "Proxy traffic availability: " + string(review.ProxyTraffic) + ".", "Subscription serving availability: " + string(ProvedStopped) + ".", "Subscription Capability remains Not enabled.", "No Client Configuration is displayed automatically."}
+	if record.Serving != nil {
+		review.Plan[5] = "Preserve the unchanged Subscription Link and publish only matching selected artifact material. Retain independent subscription faults and renewal evidence; never start stale artifacts."
+	}
 	return review
+}
+
+func (module *installedInterface) inspectOwnedRemoval(ctx context.Context, record ownershipRecord, body []byte) hostadapter.RemovalInspection {
+	if rotation := record.ClientRotation; rotation != nil {
+		if host, ok := module.host.(interface {
+			InspectClientIdentityRemoval(context.Context, hostadapter.SetupSpec, []byte, []byte, string, string, string, bool) hostadapter.RemovalInspection
+		}); ok {
+			return host.InspectClientIdentityRemoval(ctx, hostSetupSpec, aptSourceBody, body, rotation.Source, rotation.Target, record.PublicIPv4, rotation.Direction == "forward")
+		}
+	}
+	return module.host.InspectRemoval(ctx, hostSetupSpec, aptSourceBody, body, record.ConfigurationSHA256, record.PublicIPv4)
 }
 
 func (module *installedInterface) finishClientIdentityRotation(ctx context.Context, authority preparedReview, progress ProgressReporter) Result {
@@ -157,6 +186,7 @@ func (module *installedInterface) finishClientIdentityRotation(ctx context.Conte
 		return refused(ChangeIncomplete, "SBXR mutation lock", "Wait for active SBXR work, then review Finish Client Identity rotation again.")
 	}
 	defer lock.Release()
+	ctx = hostadapter.RuntimeStartContext(ctx, lock)
 	installed := module.statusUnderMutationLock(context.WithoutCancel(ctx), lock)
 	current, readErr := module.readOwnership()
 	record, valid := decodeOwnership(current)
@@ -165,9 +195,14 @@ func (module *installedInterface) finishClientIdentityRotation(ctx context.Conte
 		targetRequired, startupRequired = clientRotationRequirements(record.ClientRotation.Checkpoint)
 	}
 	forward := record.ClientRotation != nil && record.ClientRotation.Direction == "forward"
-	if readErr != nil || !valid || !bytes.Equal(current, authority.record) || record.ClientRotation == nil || installed.State != softwarelifecycle.Ready || installed.Installed == nil || *installed.Installed != authority.release || !host.InspectClientIdentityRotation(record.ClientRotation.Source, record.ClientRotation.Target, record.ConfigurationSHA256, record.Startup, targetRequired, startupRequired, forward).Accepted {
+	if readErr != nil || !valid || !bytes.Equal(current, authority.record) || record.ClientRotation == nil || installed.State != softwarelifecycle.Ready || installed.Installed == nil || *installed.Installed != authority.release || !host.InspectClientIdentityRotation(record.ClientRotation.Source, record.ClientRotation.Target, record.ConfigurationSHA256, record.Startup, targetRequired, startupRequired, forward).Accepted || !module.inspectClientIdentitySubscription(record) {
 		return refused(ChangeIncomplete, "Prepared Action facts", "Restore the reviewed durable rotation authority, then review again.")
 	}
+	exclusion, excluded := module.acquireSubscriptionExclusion(record)
+	if !excluded {
+		return refused(ChangeIncomplete, "Certbot and serving exclusion", "Wait for active managed writers, then review finishing again.")
+	}
+	defer exclusion.Release()
 	if record.ClientRotation.Direction == "cleanup" {
 		report(progress, "Cleaning up Client Identity rotation")
 		if !host.RestoreClientIdentityRotation(context.WithoutCancel(ctx), record.ClientRotation.Source, record.ClientRotation.Target, record.Startup) {
@@ -176,6 +211,9 @@ func (module *installedInterface) finishClientIdentityRotation(ctx context.Conte
 		running := module.host.InspectRunning(context.WithoutCancel(ctx), hostSetupSpec, aptSourceBody, current, record.ClientRotation.Source, record.PublicIPv4)
 		if !runningAccepted(running) {
 			return clientIdentityIncomplete("Source traffic verification", "Restore and prove the unchanged source proxy traffic before finishing cleanup.")
+		}
+		if !module.finishIdentitySubscription(context.WithoutCancel(ctx), &record, &current) {
+			return clientIdentityIncomplete("Source subscription restoration", "Restore proved source artifact material and safe startup facts, then finish cleanup.")
 		}
 		if record.Startup != nil && !host.VerifyProxyStartupIntegration(context.WithoutCancel(ctx), *record.Startup) {
 			if !host.RemoveProxyStartupIntegration(context.WithoutCancel(ctx), *record.Startup) {
@@ -213,18 +251,24 @@ func (module *installedInterface) rotateClientIdentity(ctx context.Context, auth
 		return refused(Running, "SBXR mutation lock", "Wait for active SBXR work, then review Rotate Client Identity again.")
 	}
 	defer lock.Release()
+	ctx = hostadapter.RuntimeStartContext(ctx, lock)
 	report(progress, "Checking Client Identity rotation safety")
 	installed := module.statusUnderMutationLock(context.WithoutCancel(ctx), lock)
 	current, readErr := module.readOwnership()
 	record, valid := decodeOwnership(current)
 	running := module.host.InspectRunning(context.WithoutCancel(ctx), hostSetupSpec, aptSourceBody, current, record.ConfigurationSHA256, record.PublicIPv4)
-	absence := module.host.InspectSubscriptionAbsence(context.WithoutCancel(ctx))
+	subscriptionSafe := module.clientIdentitySubscriptionAdmitted(context.WithoutCancel(ctx), record)
 	preflight := module.host.PreflightSubscription(context.WithoutCancel(ctx), record.PublicIPv4)
 	targetDigest := sha256.Sum256(authority.target)
 	idle := host.ClientIdentityPreparationIdle()
-	if readErr != nil || !valid || !bytes.Equal(current, authority.record) || installed.State != softwarelifecycle.Ready || installed.Installed == nil || *installed.Installed != authority.release || !compatibleOwnership(record, authority.release) || !reflect.DeepEqual(running, authority.running) || !runningAccepted(running) || !absence.Observed || !absence.Accepted || !preflight.PackageLocks.Observed || !preflight.PackageLocks.Accepted || !preflight.RenewalIdle.Observed || !preflight.RenewalIdle.Accepted || !idle.Observed || !idle.Accepted || authority.startup == nil || len(authority.target) == 0 {
+	if readErr != nil || !valid || !bytes.Equal(current, authority.record) || installed.State != softwarelifecycle.Ready || installed.Installed == nil || *installed.Installed != authority.release || !compatibleOwnership(record, authority.release) || !reflect.DeepEqual(running, authority.running) || !runningAccepted(running) || !subscriptionSafe || !preflight.PackageLocks.Observed || !preflight.PackageLocks.Accepted || !preflight.RenewalIdle.Observed || !preflight.RenewalIdle.Accepted || !idle.Observed || !idle.Accepted || authority.startup == nil || len(authority.target) == 0 {
 		return refused(Running, "Prepared Action facts", "Restore the reviewed Running proxy, subscription absence, idle exclusion, and startup facts, then review again.")
 	}
+	exclusion, excluded := module.acquireSubscriptionExclusion(record)
+	if !excluded {
+		return refused(Running, "Certbot and serving exclusion", "Wait for active managed writers, then review rotation again.")
+	}
+	defer exclusion.Release()
 	operationID := make([]byte, 16)
 	if _, err := rand.Read(operationID); err != nil {
 		return clientIdentityFailed("Rotation operation generation", "Review Rotate Client Identity again.")
@@ -238,6 +282,17 @@ func (module *installedInterface) rotateClientIdentity(ctx context.Context, auth
 		}
 	}
 	record.ClientRotation = &clientIdentityRotation{OperationID: hex.EncodeToString(operationID), Direction: "cleanup", Effects: slices.Clone(clientIdentityRotationEffects), Completed: []string{}, Source: record.ConfigurationSHA256, Target: hex.EncodeToString(targetDigest[:]), Checkpoint: clientRotationAuthorized}
+	var artifact []byte
+	if record.Serving != nil {
+		source, err := module.host.ReadConfiguration(ctx, hostSetupSpec, record.ConfigurationSHA256)
+		_, sourceHash, sourceOK := clientArtifact(source, record.PublicIPv4)
+		targetArtifact, targetHash, targetOK := clientArtifact(authority.target, record.PublicIPv4)
+		if err != nil || !sourceOK || !targetOK || sourceHash == targetHash {
+			return clientIdentityFailed("Subscription artifact preparation", "Restore exact source connection material and review again.")
+		}
+		artifact = targetArtifact
+		record.ClientRotation.Subscription = &hostadapter.ClientIdentitySubscription{Source: *record.Serving, Target: *record.Serving, SourceArtifactSHA256: sourceHash, TargetArtifactSHA256: targetHash}
+	}
 	record.Startup = authority.startup
 	updateSubscriptionResources(&record, authority.release)
 	current, ok = module.publishClientIdentityCheckpoint(record, current)
@@ -247,6 +302,11 @@ func (module *installedInterface) rotateClientIdentity(ctx context.Context, auth
 	report(progress, "Preparing replacement Client Identity")
 	if !host.PrepareClientIdentityTarget(authority.target, record.ClientRotation.Target) {
 		return clientIdentityIncomplete("Replacement preparation", "Use Finish Client Identity rotation to clean up the proved unused replacement.")
+	}
+	if sub := record.ClientRotation.Subscription; sub != nil {
+		if !module.host.(clientIdentitySubscriptionHost).PrepareClientIdentitySubscription(*sub, artifact) {
+			return clientIdentityIncomplete("Replacement subscription preparation", "Finish Client Identity rotation to clean up only the proved unused target.")
+		}
 	}
 	current, record, ok = module.advanceClientIdentity(record, current, clientRotationTargetPrepared)
 	if !ok {
@@ -261,6 +321,9 @@ func (module *installedInterface) completeClientIdentityRotation(ctx context.Con
 	if !known || policy.verifyRoute && !host.VerifyProxyStartupIntegration(context.WithoutCancel(ctx), *record.Startup) {
 		return clientIdentityIncomplete("Effective startup route", "Restore and freshly verify the exact recorded startup integration, then finish the rotation.")
 	}
+	if policy.verifyRoute && record.Serving != nil && !module.host.(clientIdentitySubscriptionHost).VerifyClientIdentityServingStartup(context.WithoutCancel(ctx)) {
+		return clientIdentityIncomplete("Subscription startup route", "Restore and verify the exact recorded serving route before finishing.")
+	}
 	advance := func(next clientIdentityRotationCheckpoint) bool {
 		var ok bool
 		current, record, ok = module.advanceClientIdentity(record, current, next)
@@ -269,6 +332,9 @@ func (module *installedInterface) completeClientIdentityRotation(ctx context.Con
 	}
 	if checkpoint == clientRotationTargetPrepared {
 		report(progress, "Preparing Client Identity startup protection")
+		if record.Serving != nil && !module.host.(clientIdentitySubscriptionHost).UpgradeClientIdentityServingStartup() {
+			return clientIdentityIncomplete("Subscription startup integration", "Restore the exact owned Subscription Serving unit, then finish rotation.")
+		}
 		if !host.PublishProxyStartupIntegration(*record.Startup) {
 			return clientIdentityIncomplete("Startup integration publication", "Use Finish Client Identity rotation after restoring the exact owned startup path.")
 		}
@@ -282,6 +348,9 @@ func (module *installedInterface) completeClientIdentityRotation(ctx context.Con
 		}
 	}
 	if checkpoint == clientRotationReloaded {
+		if record.Serving != nil && !module.host.(clientIdentitySubscriptionHost).VerifyClientIdentityServingStartup(context.WithoutCancel(ctx)) {
+			return clientIdentityIncomplete("Subscription startup route", "Restore the exact owned Subscription Serving route, then finish rotation.")
+		}
 		if !host.VerifyProxyStartupIntegration(context.WithoutCancel(ctx), *record.Startup) || !advance(clientRotationRouteVerified) {
 			return clientIdentityIncomplete("Effective startup route", "Restore the exact recorded startup integration, then finish the rotation.")
 		}
@@ -291,11 +360,17 @@ func (module *installedInterface) completeClientIdentityRotation(ctx context.Con
 	}
 	if checkpoint == clientRotationGated {
 		report(progress, "Stopping old Client Identity access")
+		if record.Serving != nil && !module.host.(clientIdentitySubscriptionHost).StopClientIdentitySubscription(context.WithoutCancel(ctx)) {
+			return clientIdentityIncomplete("Old-artifact quiescence", "Prove old accepted requests and owned descendants stopped before finishing.")
+		}
 		if !host.StopProxyForClientIdentityRotation(context.WithoutCancel(ctx)) || !advance(clientRotationStopped) {
 			return clientIdentityIncomplete("Source proxy stop", "Use Finish Client Identity rotation to restore the source before revocation.")
 		}
 	}
 	if checkpoint == clientRotationStopped {
+		if record.Serving != nil && !module.host.(clientIdentitySubscriptionHost).StopClientIdentitySubscription(context.WithoutCancel(ctx)) {
+			return clientIdentityIncomplete("Old-artifact quiescence", "Keep both startup gates closed and finish the proved direction.")
+		}
 		if !host.ProxyQuiescentForClientIdentityRotation(context.WithoutCancel(ctx)) || !advance(clientRotationQuiescent) {
 			return clientIdentityIncomplete("Old-session quiescence", "Prove the owned process group and descendants are empty, then finish the rotation.")
 		}
@@ -326,7 +401,7 @@ func (module *installedInterface) completeClientIdentityRotation(ctx context.Con
 	report(progress, "Finishing Client Identity rotation")
 	report(progress, "Verifying Client Identity rotation result")
 	running := module.host.InspectRunning(context.WithoutCancel(ctx), hostSetupSpec, aptSourceBody, current, record.ConfigurationSHA256, record.PublicIPv4)
-	if !runningAccepted(running) || !host.RemoveClientIdentityTarget(record.ClientRotation.Source, record.ClientRotation.Target) {
+	if !runningAccepted(running) || !module.finishIdentitySubscription(context.WithoutCancel(ctx), &record, &current) || !host.RemoveClientIdentityTarget(record.ClientRotation.Source, record.ClientRotation.Target) {
 		return clientIdentityIncomplete("Replacement proxy verification", "Correct the prepared target runtime, then use Finish Client Identity rotation.")
 	}
 	record.ClientRotation = nil

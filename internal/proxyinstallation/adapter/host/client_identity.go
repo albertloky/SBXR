@@ -11,6 +11,7 @@ import (
 )
 
 const ClientIdentityTargetPath = "/var/lib/sbxr/client-identity-target.json"
+const ClientIdentityConfigurationNextPath = "/etc/sing-box/.config.json.sbxr-next"
 const ProxyStartupDropInDirectory = "/etc/systemd/system/sing-box.service.d"
 const ProxyStartupDropInPath = ProxyStartupDropInDirectory + "/sbxr-client-identity.conf"
 const ProxyStartRole = "--proxy-start-authorize"
@@ -167,17 +168,23 @@ func (adapter Adapter) PublishClientIdentityConfiguration(source, target string)
 	if preparedErr != nil || len(current) == 0 {
 		return false
 	}
-	temporary := adapter.path("/etc/sing-box/.config.json.sbxr-next")
-	file, err := os.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0640)
-	if err != nil {
-		return false
+	temporary := adapter.path(ClientIdentityConfigurationNextPath)
+	if _, err := os.Lstat(temporary); errors.Is(err, os.ErrNotExist) {
+		file, err := os.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0640)
+		if err != nil {
+			return false
+		}
+		written, writeErr := file.Write(prepared)
+		ownErr := file.Chown(int(adapter.ownerUID()), int(gid))
+		syncErr := file.Sync()
+		closeErr := file.Close()
+		if writeErr != nil || written != len(prepared) || ownErr != nil || syncErr != nil || closeErr != nil {
+			_ = os.Remove(temporary)
+			return false
+		}
 	}
-	written, writeErr := file.Write(prepared)
-	ownErr := file.Chown(int(adapter.ownerUID()), int(gid))
-	syncErr := file.Sync()
-	closeErr := file.Close()
-	if writeErr != nil || written != len(prepared) || ownErr != nil || syncErr != nil || closeErr != nil {
-		_ = os.Remove(temporary)
+	staged, stagedErr := adapter.readConfigurationFile(ClientIdentityConfigurationNextPath, target, gid)
+	if stagedErr != nil || !bytes.Equal(staged, prepared) {
 		return false
 	}
 	latest, err := adapter.readConfigurationFile("/etc/sing-box/config.json", source, gid)
@@ -188,7 +195,7 @@ func (adapter Adapter) StartProxyForClientIdentityRotation(ctx context.Context, 
 	if !adapter.publishSubscriptionFile(proxyStartAuthorizationPath, []byte(target+"\n"), 0600) {
 		return false
 	}
-	started := adapter.command(ctx, "systemctl", "start", "sing-box.service").OK
+	started := adapter.runtimeStart(ctx, ProxyStartRole, func() bool { return adapter.command(ctx, "systemctl", "start", "sing-box.service").OK })
 	_ = os.Remove(adapter.path(proxyStartAuthorizationPath))
 	_ = adapter.syncOwnershipDirectory(adapter.path("/run"))
 	return started
@@ -200,6 +207,19 @@ func (adapter Adapter) ConsumeProxyStartAuthorization(target string) bool {
 }
 
 func (adapter Adapter) RemoveClientIdentityTarget(source, target string) bool {
+	if !adapter.safelyAbsent(ClientIdentityConfigurationNextPath) {
+		group := adapter.command(context.Background(), "getent", "group", "sing-box")
+		gid, ok := groupID(group.Fact)
+		if !group.OK || !ok {
+			return false
+		}
+		if _, err := adapter.readConfigurationFile(ClientIdentityConfigurationNextPath, target, gid); err != nil || os.Remove(adapter.path(ClientIdentityConfigurationNextPath)) != nil {
+			return false
+		}
+	}
+	if !adapter.syncAbsentPath(ClientIdentityConfigurationNextPath) {
+		return false
+	}
 	if body, err := adapter.protectedServingFile(proxyStartAuthorizationPath, 0600, ""); err == nil {
 		value := strings.TrimSpace(string(body))
 		if value != source && value != target || os.Remove(adapter.path(proxyStartAuthorizationPath)) != nil || adapter.syncOwnershipDirectory(adapter.path("/run")) != nil {
@@ -208,7 +228,7 @@ func (adapter Adapter) RemoveClientIdentityTarget(source, target string) bool {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return false
 	}
-	return adapter.removeBoundFile(ClientIdentityTargetPath, target, 0600, 1<<20)
+	return adapter.removeClientPublication(ClientIdentityTargetPath, 0600, target)
 }
 
 func (adapter Adapter) RestoreClientIdentityRotation(ctx context.Context, source, target string, startup *ProxyStartupAuthority) bool {
@@ -234,25 +254,49 @@ func (adapter Adapter) InspectClientIdentityRotation(source, target, canonical s
 	if canonicalErr != nil && forward && canonical != target {
 		canonicalBody, canonicalErr = adapter.readConfigurationFile("/etc/sing-box/config.json", target, gid)
 	}
-	targetBody, targetErr := adapter.protectedServingFile(ClientIdentityTargetPath, 0600, target)
-	targetAccepted := targetErr == nil && len(targetBody) > 0 || !targetRequired && errors.Is(targetErr, os.ErrNotExist)
+	targetBody, targetErr := adapter.clientPublicationFile(ClientIdentityTargetPath, 0600, target)
+	targetAccepted := targetErr == nil && len(targetBody) > 0 || (!targetRequired || !forward && canonical == source) && errors.Is(targetErr, os.ErrNotExist)
 	accepted := group.OK && groupOK && canonicalErr == nil && len(canonicalBody) > 0 && targetAccepted
+	if !adapter.safelyAbsent(ClientIdentityConfigurationNextPath) {
+		_, err := adapter.readConfigurationFile(ClientIdentityConfigurationNextPath, target, gid)
+		accepted = accepted && forward && err == nil
+	}
 	if startup != nil {
-		body, err := adapter.protectedServingFile(ProxyStartupDropInPath, 0644, startup.DropInSHA256)
+		body, err := adapter.clientPublicationFile(ProxyStartupDropInPath, 0644, startup.DropInSHA256)
 		accepted = accepted && (err == nil && string(body) == ProxyStartupDropIn || !startupRequired && errors.Is(err, os.ErrNotExist))
 	}
 	return observation(accepted && (canonical == source || canonical == target), group.Observed)
 }
 
+// Removal accepts either recorded canonical digest after revocation, including
+// a target rename whose following Ownership Record checkpoint did not finish.
+func (adapter Adapter) InspectClientIdentityRemoval(ctx context.Context, spec SetupSpec, sourceBody, ownership []byte, source, target, ipv4 string, forward bool) RemovalInspection {
+	selected := source
+	if forward {
+		if _, err := adapter.ReadConfiguration(ctx, spec, target); err == nil {
+			selected = target
+		}
+	}
+	facts := adapter.InspectRemoval(ctx, spec, sourceBody, ownership, selected, ipv4)
+	if forward && !adapter.safelyAbsent(ClientIdentityConfigurationNextPath) {
+		group := adapter.command(ctx, "getent", "group", "sing-box")
+		gid, ok := groupID(group.Fact)
+		_, err := adapter.readConfigurationFile(ClientIdentityConfigurationNextPath, target, gid)
+		accepted, observed := adapter.directoryContainsOnly("/etc/sing-box", 0755, adapter.ownerUID(), adapter.ownerGID(), "config.json", ".config.json.sbxr-next")
+		facts.ConfigurationEntries = observation(accepted && group.OK && ok && err == nil, observed && group.Observed)
+	}
+	return facts
+}
+
 func (adapter Adapter) RemoveProxyStartupIntegration(ctx context.Context, authority ProxyStartupAuthority) bool {
-	body, err := adapter.protectedServingFile(ProxyStartupDropInPath, 0644, authority.DropInSHA256)
+	body, err := adapter.clientPublicationFile(ProxyStartupDropInPath, 0644, authority.DropInSHA256)
 	if errors.Is(err, os.ErrNotExist) {
 		if authority.DirectoryCreated && !adapter.removeEmptyDirectory(ProxyStartupDropInDirectory) {
 			return false
 		}
 		return adapter.ReloadProxyStartupIntegration(ctx)
 	}
-	if err != nil || string(body) != ProxyStartupDropIn || os.Remove(adapter.path(ProxyStartupDropInPath)) != nil || adapter.syncOwnershipDirectory(adapter.path(ProxyStartupDropInDirectory)) != nil || !adapter.ReloadProxyStartupIntegration(ctx) {
+	if err != nil || string(body) != ProxyStartupDropIn || !adapter.removeClientPublication(ProxyStartupDropInPath, 0644, authority.DropInSHA256) || !adapter.ReloadProxyStartupIntegration(ctx) {
 		return false
 	}
 	if authority.DirectoryCreated {

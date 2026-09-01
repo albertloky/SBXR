@@ -154,10 +154,16 @@ func TestRunReportsCommittedRotationDisplayFailure(t *testing.T) {
 	}
 }
 
-type clientIdentityInstallation struct{ journeyInstallation }
+type clientIdentityInstallation struct {
+	journeyInstallation
+	subscription proxyinstallation.SubscriptionStatus
+}
 
 func (installation *clientIdentityInstallation) Review(_ context.Context, action proxyinstallation.Action) proxyinstallation.Review {
 	review := proxyinstallation.Review{Status: proxyinstallation.Running, SubscriptionStatus: proxyinstallation.SubscriptionNotEnabled, LegalActions: []proxyinstallation.Action{proxyinstallation.RotateClientIdentityAction}}
+	if installation.subscription != "" {
+		review.SubscriptionStatus = installation.subscription
+	}
 	if action == proxyinstallation.RotateClientIdentityAction {
 		review.Prepared = &proxyinstallation.PreparedAction{}
 		review.Plan = []string{"Action: Rotate Client Identity", "Existing sessions will disconnect."}
@@ -197,6 +203,19 @@ func TestRunReportsClientIdentityResultDisplayFailureAfterCommit(t *testing.T) {
 	code := Run(t.Context(), nil, strings.NewReader("1\ny\n"), output, &errors, installation)
 	if code != 1 || !strings.Contains(errors.String(), string(proxyinstallation.ClientIdentityRotationDisplayIncomplete)) || !reflect.DeepEqual(installation.confirmations, []proxyinstallation.Confirmation{proxyinstallation.Approved}) {
 		t.Fatalf("code=%d confirmations=%v output=%s errors=%s", code, installation.confirmations, output.String(), errors.String())
+	}
+}
+
+func TestRunKeepsEnabledAndUnavailableIdentityRotationSeparateFromDisclosure(t *testing.T) {
+	for _, status := range []proxyinstallation.SubscriptionStatus{proxyinstallation.SubscriptionAvailable, proxyinstallation.SubscriptionProblemDetected} {
+		installation := &clientIdentityInstallation{subscription: status}
+		var output bytes.Buffer
+		if code := Run(t.Context(), nil, strings.NewReader("1\ny\n\n0\n"), &output, &output, installation); code != 0 {
+			t.Fatal(code)
+		}
+		if !strings.Contains(output.String(), "Subscription status: "+string(status)) || !strings.Contains(output.String(), "Rotate Client Identity? [y/N]") || strings.Contains(output.String(), "https://") || strings.Contains(output.String(), "Karing refreshed") || len(installation.confirmations) != 1 {
+			t.Fatal("rotation lost independent status, disclosed a secret, or repeated")
+		}
 	}
 }
 

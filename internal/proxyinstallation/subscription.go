@@ -59,6 +59,7 @@ func (module *installedInterface) enableSubscription(ctx context.Context, author
 		return refused(Running, "SBXR mutation lock", "Wait for active SBXR work and restore the existing safe mutation lock before reviewing again.")
 	}
 	defer lock.Release()
+	ctx = hostadapter.RuntimeStartContext(ctx, lock)
 	packageLocks, packageBusy, packageErr := module.host.AcquirePackageLocks()
 	if packageErr != nil || packageBusy {
 		return refused(Running, "Ubuntu package locks", "Wait for APT and dpkg to finish, then review Enable subscription again.")
@@ -222,6 +223,7 @@ func (module *installedInterface) executeEnablementCleanup(ctx context.Context, 
 		return refused(Running, "SBXR mutation lock", "Wait for active SBXR work, then review Finish subscription change again.")
 	}
 	defer lock.Release()
+	ctx = hostadapter.RuntimeStartContext(ctx, lock)
 	installed := module.statusUnderMutationLock(context.WithoutCancel(ctx), lock)
 	running := module.host.InspectRunning(context.WithoutCancel(ctx), hostSetupSpec, aptSourceBody, current, record.ConfigurationSHA256, record.PublicIPv4)
 	if ctx.Err() != nil || installed.State != softwarelifecycle.Ready || installed.Installed == nil || *installed.Installed != authority.release || !bytes.Equal(current, authority.record) || !reflect.DeepEqual(running, authority.running) {
@@ -262,6 +264,9 @@ func updateSubscriptionResources(record *ownershipRecord, creator softwarelifecy
 }
 
 func subscriptionResourceIdentity(resource string) string {
+	if strings.HasPrefix(resource, "/etc/sing-box/config.json ") {
+		return "/etc/sing-box/config.json"
+	}
 	return strings.ReplaceAll(strings.ReplaceAll(resource, "schema-1", "schema"), "schema-2", "schema")
 }
 

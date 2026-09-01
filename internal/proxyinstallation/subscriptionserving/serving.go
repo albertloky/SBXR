@@ -93,12 +93,11 @@ var name = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9.-]{0,251}[a-zA-Z0-9])?$
 var linkID = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 func (m *Module) Prepare(f singbox.ConnectionFacts, generation Generation, cert Certificate) (*State, Code) {
-	ip, err := netip.ParseAddr(f.PublicIPv4)
-	public, publicErr := base64.RawURLEncoding.Strict().DecodeString(f.PublicKey)
-	short, shortErr := hex.DecodeString(f.ShortID)
-	if err != nil || !ip.Is4() || ip.String() != f.PublicIPv4 || !uuid.MatchString(f.UUID) || !name.MatchString(f.ServerName) || publicErr != nil || len(public) != 32 || shortErr != nil || len(short) != 4 || hex.EncodeToString(short) != f.ShortID || !linkID.MatchString(generation.LinkID) || generation.CredentialSHA256 == [32]byte{} {
+	artifact, code := Artifact(f)
+	if code != Ready || !linkID.MatchString(generation.LinkID) || generation.CredentialSHA256 == [32]byte{} {
 		return nil, Refused
 	}
+	ip, err := netip.ParseAddr(f.PublicIPv4)
 	if cert.Lineage != "sbxr-subscription" || cert.Generation < 1 || cert.Generation > 1000000 || len(cert.Chain) > 64<<10 || len(cert.Key) > 16<<10 || sha256.Sum256(cert.Chain) != cert.ChainSHA256 || sha256.Sum256(cert.Key) != cert.KeySHA256 {
 		return nil, Refused
 	}
@@ -128,12 +127,23 @@ func (m *Module) Prepare(f singbox.ConnectionFacts, generation Generation, cert 
 			expires = cert.NotAfter
 		}
 	}
+	return &State{artifact: string(artifact), ip: f.PublicIPv4, generation: generation, certificate: pair, expires: expires}, Ready
+}
+
+// Artifact prepares secret-bearing node bytes independently of TLS availability.
+func Artifact(f singbox.ConnectionFacts) ([]byte, Code) {
+	ip, err := netip.ParseAddr(f.PublicIPv4)
+	public, publicErr := base64.RawURLEncoding.Strict().DecodeString(f.PublicKey)
+	short, shortErr := hex.DecodeString(f.ShortID)
+	if err != nil || !ip.Is4() || ip.String() != f.PublicIPv4 || !uuid.MatchString(f.UUID) || !name.MatchString(f.ServerName) || publicErr != nil || len(public) != 32 || shortErr != nil || len(short) != 4 || hex.EncodeToString(short) != f.ShortID {
+		return nil, Refused
+	}
 	escape := func(s string) string { return strings.ReplaceAll(url.QueryEscape(s), "+", "%20") }
 	artifact := "vless://" + f.UUID + "@" + f.PublicIPv4 + ":443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=" + escape(f.ServerName) + "&fp=chrome&pbk=" + escape(f.PublicKey) + "&sid=" + escape(f.ShortID) + "&type=tcp#" + escape("SBXR Proxy ("+f.PublicIPv4+")") + "\n"
 	if len(artifact) == 0 || len(artifact) > 4096 {
 		return nil, Refused
 	}
-	return &State{artifact: artifact, ip: f.PublicIPv4, generation: generation, certificate: pair, expires: expires}, Ready
+	return []byte(artifact), Ready
 }
 
 type Facts struct {

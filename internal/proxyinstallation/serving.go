@@ -125,6 +125,10 @@ func (m *installedInterface) subscriptionRemovalSurfaceSafe() bool {
 	}
 	body, err := m.readOwnership()
 	record, ok := decodeOwnership(body)
+	if err == nil && ok && record.ClientRotation != nil && record.ClientRotation.Subscription != nil {
+		_, stagedErr := m.host.ReadOwnership(hostSetupSpec.OwnershipNextPath)
+		return errors.Is(stagedErr, os.ErrNotExist) && m.inspectClientIdentitySubscription(record)
+	}
 	if err != nil || !ok || record.Enablement == nil || record.Enablement.Resources == nil || !record.Enablement.Resources.Valid() {
 		return false
 	}
@@ -141,7 +145,17 @@ func ServeSubscription(ctx context.Context, lifecycle softwarelifecycle.Interfac
 
 func serveSubscription(ctx context.Context, lifecycle softwarelifecycle.Interface, host servingDispatchHost, m *subscriptionserving.Module) subscriptionserving.Code {
 	lock, busy, err := host.AcquireSubscriptionReviewLock(hostSetupSpec.LockPath)
-	if err != nil || busy {
+	borrowed := false
+	if err == nil && busy {
+		if starter, ok := host.(interface {
+			BorrowRuntimeStartLock(string) (*hostadapter.MutationLock, error)
+		}); ok {
+			lock, err = starter.BorrowRuntimeStartLock(hostadapter.ServingRole)
+			busy = err != nil
+			borrowed = err == nil
+		}
+	}
+	if err != nil || busy || lock == nil {
 		return subscriptionserving.Refused
 	}
 	defer lock.Release()
@@ -158,8 +172,18 @@ func serveSubscription(ctx context.Context, lifecycle softwarelifecycle.Interfac
 	if err != nil || !ok || record.Direction != noDirection || record.Phase != runningPhase || !compatibleOwnership(record, *installed.Installed) {
 		return subscriptionserving.Refused
 	}
-	if record.Rotation != nil {
+	if record.Rotation != nil && !borrowed {
 		return subscriptionserving.Refused
+	}
+	if record.ClientRotation != nil {
+		policy, _, known := clientIdentityPolicy(record.ClientRotation.Checkpoint)
+		selected := record.ClientRotation.Source
+		if policy.forward {
+			selected = record.ClientRotation.Target
+		}
+		if !known || !policy.ordinaryStart && !borrowed || record.ClientRotation.Subscription == nil || record.ConfigurationSHA256 != selected {
+			return subscriptionserving.Refused
+		}
 	}
 	if record.Repair != nil && record.Repair.Checkpoint != repairPrepared && record.Repair.Target == nil {
 		return subscriptionserving.Refused

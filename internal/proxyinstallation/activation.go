@@ -62,6 +62,7 @@ func (module *installedInterface) inspectSubscription(ctx context.Context) (Subs
 		}
 		return SubscriptionProblemDetected, hostadapter.CertificateActivationInspection{}
 	}
+	if record.ClientRotation != nil { return SubscriptionChangeIncomplete, hostadapter.CertificateActivationInspection{} }
 	activationHost, ok := module.host.(certificateActivationHost)
 	renewalHost, renewalOK := module.host.(renewalHost)
 	if !ok || !renewalOK || record.Renewal == nil {
@@ -195,6 +196,7 @@ func (module *installedInterface) executeCertificateActivation(ctx context.Conte
 		return refused(Running, "SBXR mutation lock", "Wait for active SBXR work, then review Finish subscription change again.")
 	}
 	defer lock.Release()
+	ctx = hostadapter.RuntimeStartContext(ctx, lock)
 	current, err := module.readOwnership()
 	record, valid := decodeOwnership(current)
 	installed := module.statusUnderMutationLock(context.WithoutCancel(ctx), lock)
@@ -287,7 +289,7 @@ func (module *installedInterface) reviewPublishedCertificateActivation(ctx conte
 	body, err := module.readOwnership()
 	record, valid := decodeOwnership(body)
 	host, ok := module.host.(certificateActivationHost)
-	if err != nil || !valid || !ok || record.Serving == nil || record.Renewal == nil {
+	if err != nil || !valid || !ok || record.Serving == nil || record.Renewal == nil || record.ClientRotation != nil {
 		return review
 	}
 	inspection := host.InspectCertificateActivation(ctx, *record.Renewal, *record.Serving)

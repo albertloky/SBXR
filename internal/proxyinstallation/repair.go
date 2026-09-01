@@ -158,6 +158,7 @@ func (module *installedInterface) executeSubscriptionRepair(ctx context.Context,
 		return refused(Running, "SBXR mutation lock", "Wait for active SBXR work, then review the repair action again.")
 	}
 	defer lock.Release()
+	ctx = hostadapter.RuntimeStartContext(ctx, lock)
 	current, err := module.readOwnership()
 	record, valid := decodeOwnership(current)
 	installed := module.statusUnderMutationLock(context.WithoutCancel(ctx), lock)

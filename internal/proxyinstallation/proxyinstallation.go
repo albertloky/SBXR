@@ -282,13 +282,14 @@ type ownershipRecord struct {
 }
 
 type clientIdentityRotation struct {
-	OperationID string                           `json:"operation_id"`
-	Direction   string                           `json:"direction"`
-	Effects     []string                         `json:"effects"`
-	Completed   []string                         `json:"completed_effects"`
-	Source      string                           `json:"source_configuration_sha256"`
-	Target      string                           `json:"target_configuration_sha256"`
-	Checkpoint  clientIdentityRotationCheckpoint `json:"checkpoint"`
+	OperationID  string                                  `json:"operation_id"`
+	Direction    string                                  `json:"direction"`
+	Effects      []string                                `json:"effects"`
+	Completed    []string                                `json:"completed_effects"`
+	Source       string                                  `json:"source_configuration_sha256"`
+	Target       string                                  `json:"target_configuration_sha256"`
+	Checkpoint   clientIdentityRotationCheckpoint        `json:"checkpoint"`
+	Subscription *hostadapter.ClientIdentitySubscription `json:"subscription,omitempty"`
 }
 
 type clientIdentityRotationCheckpoint string
@@ -480,6 +481,7 @@ func (module *installedInterface) Review(ctx context.Context, action Action) Rev
 	module.mu.Lock()
 	defer module.mu.Unlock()
 	review := module.review(ctx, action)
+	identityLegal := slices.Contains(review.LegalActions, RotateClientIdentityAction)
 	if action == EnableSubscriptionAction && review.Prepared == nil && review.Result.Code != ActionRefused {
 		failed, correction := "Compatible idle installation", "Use View details to restore a compatible installed release, supported idle Ownership Record, and locally Running proxy before enabling a subscription."
 		if review.Status == ChangeInProgress {
@@ -492,7 +494,10 @@ func (module *installedInterface) Review(ctx context.Context, action Action) Rev
 		status = SubscriptionChangeInProgress
 	}
 	review.SubscriptionStatus = status
-	review.ProxyTraffic, review.SubscriptionServing = CannotBeVerified, CannotBeVerified
+	if review.ProxyTraffic == "" {
+		review.ProxyTraffic = CannotBeVerified
+	}
+	review.SubscriptionServing = CannotBeVerified
 	if review.Status == Running {
 		review.ProxyTraffic = ProvedWorking
 	}
@@ -512,7 +517,7 @@ func (module *installedInterface) Review(ctx context.Context, action Action) Rev
 			}
 		}
 	}
-	if review.Status == Running && review.SubscriptionStatus == SubscriptionProblemDetected {
+	if review.Status == Running && review.SubscriptionStatus == SubscriptionProblemDetected && action != RotateClientIdentityAction {
 		compromised, rotationCandidate := false, false
 		if body, err := module.readOwnership(); err == nil {
 			if record, ok := decodeOwnership(body); ok {
@@ -571,7 +576,7 @@ func (module *installedInterface) Review(ctx context.Context, action Action) Rev
 			review = module.prepareSubscriptionRotationReview(ctx, review, activation)
 		}
 	}
-	if review.Status == Running && review.SubscriptionStatus == SubscriptionChangeIncomplete {
+	if review.Status == Running && review.SubscriptionStatus == SubscriptionChangeIncomplete && !(identityLegal && action == RotateClientIdentityAction) {
 		review.LegalActions = []Action{FinishSubscriptionChangeAction, ViewDetailsAction, CompleteRemovalAction}
 		if action != CompleteRemovalAction {
 			review.Result = Result{Status: review.Status, SubscriptionStatus: review.SubscriptionStatus, Message: "A subscription change needs safe cleanup or completion.", Code: SubscriptionStatusChangeIncomplete}
@@ -597,6 +602,9 @@ func (module *installedInterface) Review(ctx context.Context, action Action) Rev
 		review.Result = refused(review.Status, "Certificate activation direction", "Review View details and restore one proved published certificate generation before finishing.")
 	}
 	review.Result.SubscriptionStatus = review.SubscriptionStatus
+	if identityLegal && !slices.Contains(review.LegalActions, RotateClientIdentityAction) {
+		review.LegalActions = append(review.LegalActions, RotateClientIdentityAction)
+	}
 	review.Result.ProxyTraffic, review.Result.SubscriptionServing = review.ProxyTraffic, review.SubscriptionServing
 	if action == ViewDetailsAction {
 		if body, err := module.readOwnership(); err == nil {
@@ -799,7 +807,7 @@ func (module *installedInterface) reviewOwned(ctx context.Context, action Action
 				return review
 			}
 		}
-		absence := module.host.InspectSubscriptionAbsence(ctx)
+		subscriptionSafe := module.clientIdentitySubscriptionAdmitted(ctx, record)
 		clientHost, clientSupported := module.host.(clientIdentityHost)
 		startup := hostadapter.Observation{}
 		var startupAuthority hostadapter.ProxyStartupAuthority
@@ -813,7 +821,7 @@ func (module *installedInterface) reviewOwned(ctx context.Context, action Action
 			startup.Observed = startup.Observed && idle.Observed
 			startup.Accepted = startup.Accepted && idle.Accepted
 		}
-		if absence.Observed && absence.Accepted && subscription.PackageLocks.Observed && subscription.PackageLocks.Accepted && subscription.RenewalIdle.Observed && subscription.RenewalIdle.Accepted && startup.Observed && startup.Accepted {
+		if subscriptionSafe && subscription.PackageLocks.Observed && subscription.PackageLocks.Accepted && subscription.RenewalIdle.Observed && subscription.RenewalIdle.Accepted && startup.Observed && startup.Accepted {
 			review.LegalActions = append(review.LegalActions, RotateClientIdentityAction)
 			if action == RotateClientIdentityAction {
 				configuration, err := module.host.ReadConfiguration(ctx, hostSetupSpec, record.ConfigurationSHA256)
@@ -830,16 +838,21 @@ func (module *installedInterface) reviewOwned(ctx context.Context, action Action
 				module.prepared[token] = preparedReview{generation: module.generation, action: action, status: Running, release: installed, record: slices.Clone(body), running: facts, subscription: subscription, target: slices.Clone(target), startup: &startupAuthority}
 				review.Prepared = &PreparedAction{token: token}
 				review.Plan = clientIdentityRotationPlan()
+				if record.Serving != nil {
+					review.Plan[3] = "Preserve the same Subscription Link, its credential and Link ID, node name, and all non-UUID connection fields. Pause Subscription Serving during cutover; an independent availability fault does not require repair first."
+					review.Plan[5] = "Refresh the unchanged Subscription Link after completion, or use separately confirmed Show client configuration. If the revoked proxy blocks refresh, temporarily stop using that proxy and fetch through a working direct connection. Do not change persistent Karing DNS, routing, TUN, or settings."
+					review.Plan = append(review.Plan, "Active Certbot or managed writers require a retry; the official renewal schedule and unresolved renewal failures remain unchanged.")
+				}
 				return review
 			}
 		} else if action == RotateClientIdentityAction {
-			review.Result = refused(Running, "Client Identity rotation admission", "Restore proved subscription absence and idle package, Certbot, and managed-writer facts, then review again.")
+			review.Result = refused(Running, "Client Identity rotation admission", "Restore proved subscription material or absence and idle package, Certbot, and managed-writer facts, then review again.")
 			return review
 		}
 	}
 	if action == CompleteRemovalAction {
 		surface := module.host.Inspect(ctx, slices.Clone(footprint))
-		removal := module.host.InspectRemoval(ctx, hostSetupSpec, aptSourceBody, body, record.ConfigurationSHA256, record.PublicIPv4)
+		removal := module.inspectOwnedRemoval(ctx, record, body)
 		review.Details = append(review.Details, removalMismatchDetails(removal)...)
 		if !inspectionAccepted(surface) || !removalAccepted(removal) {
 			review.Result = refused(review.Status, "Complete removal preflight", removalCorrection(removal))
@@ -848,7 +861,7 @@ func (module *installedInterface) reviewOwned(ctx context.Context, action Action
 		return module.prepareRemoval(review, installed, &record, body, surface, removal)
 	}
 	if action == ViewDetailsAction && record.Phase == runningPhase {
-		removal := module.host.InspectRemoval(ctx, hostSetupSpec, aptSourceBody, body, record.ConfigurationSHA256, record.PublicIPv4)
+		removal := module.inspectOwnedRemoval(ctx, record, body)
 		review.Details = append(review.Details, removalMismatchDetails(removal)...)
 	}
 	if action == StatusAction || action == ViewDetailsAction {
@@ -1227,10 +1240,22 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 			result.ProxyTraffic, result.SubscriptionServing = ProvedWorking, ProvedWorking
 		}
 		if result.Code == ClientIdentityRotated || result.Code == ClientIdentityRotationFinished {
-			result.Status, result.ProxyTraffic, result.SubscriptionServing = Running, ProvedWorking, ProvedStopped
+			result.Status, result.ProxyTraffic = Running, ProvedWorking
+			_, inspection := module.inspectSubscription(context.WithoutCancel(ctx))
+			if inspection.Loaded.Valid() {
+				result.SubscriptionServing = ProvedWorking
+			} else if inspection.Observed {
+				result.SubscriptionServing = ProvedStopped
+			}
 		}
 		if result.Code == ClientIdentityRotationCleanedUp {
-			result.Status, result.ProxyTraffic, result.SubscriptionServing = Running, ProvedWorking, ProvedStopped
+			result.Status, result.ProxyTraffic = Running, ProvedWorking
+			_, inspection := module.inspectSubscription(context.WithoutCancel(ctx))
+			if inspection.Loaded.Valid() {
+				result.SubscriptionServing = ProvedWorking
+			} else if inspection.Observed {
+				result.SubscriptionServing = ProvedStopped
+			}
 		}
 		if result.Code == SubscriptionChangeNeedsCompletion && authority.repair != "" {
 			result.ProxyTraffic = ProvedWorking
@@ -1240,6 +1265,15 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 		}
 		if result.SubscriptionStatus == SubscriptionNotEnabled {
 			result.SubscriptionServing = ProvedStopped
+		}
+		if result.Code == ClientIdentityRotationNeedsFinish {
+			body, err := module.readOwnership()
+			if record, ok := decodeOwnership(body); err == nil && ok {
+				facts := module.host.InspectRunning(context.WithoutCancel(ctx), hostSetupSpec, aptSourceBody, body, record.ConfigurationSHA256, record.PublicIPv4)
+				if runningAccepted(facts) {
+					result.ProxyTraffic = ProvedWorking
+				}
+			}
 		}
 	}()
 	if !ok || authority.generation != module.generation {
@@ -1305,7 +1339,7 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 			if err != nil || !valid || !bytes.Equal(current, authority.record) {
 				return refused(ProblemDetected, "Prepared Action facts", "Restore the exact reviewed Ownership Record, then review Complete removal again.")
 			}
-			removal := module.host.InspectRemoval(context.WithoutCancel(ctx), hostSetupSpec, aptSourceBody, current, record.ConfigurationSHA256, record.PublicIPv4)
+			removal := module.inspectOwnedRemoval(context.WithoutCancel(ctx), record, current)
 			if !removalAccepted(removal) || !reflect.DeepEqual(removal, authority.removal) {
 				return refused(ProblemDetected, "Prepared Action facts", removalCorrection(removal))
 			}
@@ -1374,7 +1408,7 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 			return refused(ProblemDetected, "Prepared Action facts", "Restore the exact committed Ownership Record, then review Finish removal again.")
 		}
 		if record.Package != "" && record.RemovalCheckpoint == 0 {
-			facts := module.host.InspectRemoval(context.WithoutCancel(ctx), hostSetupSpec, aptSourceBody, current, record.ConfigurationSHA256, record.PublicIPv4)
+			facts := module.inspectOwnedRemoval(context.WithoutCancel(ctx), record, current)
 			if !removalAccepted(facts) {
 				return refused(RemovalIncomplete, "Committed removal facts", removalCorrection(facts))
 			}
@@ -1642,7 +1676,27 @@ func (module *installedInterface) finishRemoval(ctx context.Context, record owne
 	if !module.syncRemovalAuthority(body) {
 		return removalInterrupted("Removal authority synchronization")
 	}
+	repairServingRemoved := false
 	if record.ClientRotation != nil {
+		if sub := record.ClientRotation.Subscription; sub != nil {
+			host, supported := module.host.(clientIdentitySubscriptionHost)
+			remover, removalSupported := module.host.(subscriptionRepairRemovalHost)
+			if !supported || !removalSupported {
+				return removalInterrupted("Client Identity subscription removal")
+			}
+			if exclusion == nil {
+				var acquired bool
+				exclusion, acquired = module.acquireSubscriptionExclusion(record)
+				if !acquired {
+					return removalInterrupted("Client Identity subscription exclusion")
+				}
+				defer exclusion.Release()
+			}
+			if !host.RemoveClientIdentitySubscription(*sub) || !remover.RemoveSubscriptionRepair(context.WithoutCancel(ctx), sub.Source, sub.Target, exclusion.serving) {
+				return removalInterrupted("Client Identity subscription removal")
+			}
+			repairServingRemoved = true
+		}
 		host, ok := module.host.(clientIdentityHost)
 		if !ok || !host.RemoveClientIdentityTarget(record.ClientRotation.Source, record.ClientRotation.Target) {
 			return removalInterrupted("Interrupted Client Identity rotation removal")
@@ -1674,7 +1728,6 @@ func (module *installedInterface) finishRemoval(ctx context.Context, record owne
 		}
 		report(progress, "Cleaning up subscription change")
 	}
-	repairServingRemoved := false
 	if record.Repair != nil && record.Repair.Target != nil {
 		host, ok := module.host.(subscriptionRepairRemovalHost)
 		if !ok {
@@ -2258,11 +2311,17 @@ func decodeOwnership(body []byte) (ownershipRecord, bool) {
 	}
 	if raw, exists := fields["client_identity_rotation"]; exists {
 		var rotation map[string]json.RawMessage
-		if json.Unmarshal(raw, &rotation) != nil || len(rotation) != 7 {
+		if json.Unmarshal(raw, &rotation) != nil || len(rotation) != 7 && len(rotation) != 8 {
 			return ownershipRecord{}, false
 		}
 		for _, name := range []string{"operation_id", "direction", "effects", "completed_effects", "source_configuration_sha256", "target_configuration_sha256", "checkpoint"} {
 			if len(rotation[name]) == 0 || bytes.Equal(bytes.TrimSpace(rotation[name]), []byte("null")) {
+				return ownershipRecord{}, false
+			}
+		}
+		if raw, exists := rotation["subscription"]; exists {
+			var sub map[string]json.RawMessage
+			if json.Unmarshal(raw, &sub) != nil || len(sub) != 4 {
 				return ownershipRecord{}, false
 			}
 		}
@@ -2359,8 +2418,14 @@ func validOwnership(record ownershipRecord) bool {
 	if record.Startup != nil && (record.Schema != 2 || !record.Startup.Valid() || record.Phase != runningPhase && record.Phase != removalCommitted) {
 		return false
 	}
-	if record.ClientRotation != nil && (record.Schema != 2 || record.Serving != nil || record.Enablement != nil || record.Rotation != nil || record.Repair != nil || record.Activation != nil || record.Direction != noDirection && record.Direction != removalRequired || record.Phase != runningPhase && record.Phase != removalCommitted || !validClientIdentityRotation(*record.ClientRotation, record.Startup, record.ConfigurationSHA256)) {
+	if record.ClientRotation != nil && (record.Schema != 2 || record.Enablement != nil || record.Rotation != nil || record.Repair != nil || record.Activation != nil || record.Direction != noDirection && record.Direction != removalRequired || record.Phase != runningPhase && record.Phase != removalCommitted || !validClientIdentityRotation(*record.ClientRotation, record.Startup, record.ConfigurationSHA256)) {
 		return false
+	}
+	if record.ClientRotation != nil {
+		sub := record.ClientRotation.Subscription
+		if (sub == nil) != (record.Serving == nil) || sub != nil && (!sub.Valid() || record.Renewal == nil || *record.Serving != sub.Source && *record.Serving != sub.Target) {
+			return false
+		}
 	}
 	if record.Direction == removalRequired {
 		if record.Phase != removalCommitted || record.CleanupCheckpoint != 0 || record.RemovalCheckpoint < 0 || record.RemovalCheckpoint > removalCheckpointLimit(record) {
@@ -2473,6 +2538,29 @@ func recordResources(record ownershipRecord, softwareOnly bool) []string {
 	}
 	if record.ClientRotation != nil {
 		resources = append(resources, hostadapter.ClientIdentityTargetPath+" root:root 0600 one-link sha256:"+record.ClientRotation.Target)
+		resources = append(resources,
+			hostadapter.ClientIdentityTargetPath+".sbxr-next root-owned Client Identity target publication",
+			hostadapter.ClientIdentityConfigurationNextPath+" root:sing-box 0640 one-link sha256:"+record.ClientRotation.Target,
+			hostadapter.ProxyStartupDropInPath+".sbxr-next root-owned Client Identity startup publication")
+		if sub := record.ClientRotation.Subscription; sub != nil {
+			for _, serving := range []hostadapter.ServingAuthority{sub.Source, sub.Target} {
+				for _, resource := range serving.Resources() {
+					path, _, _ := strings.Cut(resource, " ")
+					if !slices.ContainsFunc(resources, func(existing string) bool {
+						existingPath, _, _ := strings.Cut(existing, " ")
+						return existingPath == path
+					}) {
+						resources = append(resources, resource)
+					}
+				}
+			}
+			resources = append(resources, hostadapter.ClientIdentityArtifactPath+" root:root 0600 one-link sha256:"+sub.TargetArtifactSHA256,
+				hostadapter.SubscriptionCandidateStatePath+" root:root 0600 immutable Client Identity serving state",
+				hostadapter.ClientIdentityArtifactPath+".sbxr-next root-owned Client Identity artifact publication",
+				hostadapter.SubscriptionCandidateStatePath+".sbxr-next root-owned Client Identity state publication",
+				hostadapter.ServingUnitPath+".sbxr-next root-owned Client Identity serving startup publication",
+				hostadapter.ServingUnitPath+".sbxr-next.sbxr-next root-owned Client Identity serving startup publication")
+		}
 	}
 	return resources
 }

@@ -46,7 +46,7 @@ func recordRenewal(ctx context.Context, lifecycle softwarelifecycle.Interface, h
 	installed := lc.StatusUnderMutationLock(ctx, lock)
 	body, err := host.ReadOwnership(hostSetupSpec.OwnershipPath)
 	record, valid := decodeOwnership(body)
-	if err != nil || !valid || installed.State != softwarelifecycle.Ready || installed.Installed == nil || record.Renewal == nil || record.Serving == nil || record.Direction != noDirection || record.Phase != runningPhase || !compatibleOwnership(record, *installed.Installed) {
+	if err != nil || !valid || installed.State != softwarelifecycle.Ready || installed.Installed == nil || record.Renewal == nil || record.Serving == nil || record.ClientRotation != nil || record.Direction != noDirection || record.Phase != runningPhase || !compatibleOwnership(record, *installed.Installed) {
 		lock.Release()
 		return hostadapter.RenewalRecorderRefused
 	}
@@ -77,7 +77,7 @@ func recordRenewalHook(ctx context.Context, lifecycle softwarelifecycle.Interfac
 	status := lifecycle.Status(ctx)
 	body, err := host.ReadOwnership(hostSetupSpec.OwnershipPath)
 	record, valid := decodeOwnership(body)
-	if err != nil || !valid || status.State != softwarelifecycle.Ready || status.Installed == nil || record.Renewal == nil || record.Serving == nil || record.Direction != noDirection || record.Phase != runningPhase || !compatibleOwnership(record, *status.Installed) {
+	if err != nil || !valid || status.State != softwarelifecycle.Ready || status.Installed == nil || record.Renewal == nil || record.Serving == nil || record.ClientRotation != nil || record.Direction != noDirection || record.Phase != runningPhase || !compatibleOwnership(record, *status.Installed) {
 		return false
 	}
 	for _, path := range []string{hostSetupSpec.OwnershipNextPath, finalOwnershipPath} {

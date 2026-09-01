@@ -154,6 +154,14 @@ esac
 	if err != nil || !bytes.Equal(unchanged, source) {
 		t.Fatalf("source changed after refused publication: %q, %v", unchanged, err)
 	}
+	if err := os.WriteFile(adapter.path("/etc/sing-box/.config.json.sbxr-next"), target, 0640); err != nil {
+		t.Fatal(err)
+	}
+	adapter.packageLocksAvailable = func() bool { return true }
+	removal := adapter.InspectClientIdentityRemoval(t.Context(), testSetupSpec(), nil, nil, digest(source), digest(target), "8.8.8.8", true)
+	if !removal.Configuration.Accepted || !removal.ConfigurationEntries.Accepted {
+		t.Fatal("proved interrupted target publication blocked removal")
+	}
 	if !adapter.PublishClientIdentityConfiguration(digest(source), digest(target)) {
 		t.Fatal("expected-current target publication failed")
 	}
@@ -161,10 +169,17 @@ esac
 	if err != nil || string(published) != string(target) {
 		t.Fatalf("published = %q, %v", published, err)
 	}
+	removal = adapter.InspectClientIdentityRemoval(t.Context(), testSetupSpec(), nil, nil, digest(source), digest(target), "8.8.8.8", true)
+	if !removal.Configuration.Accepted || !removal.ConfigurationEntries.Accepted {
+		t.Fatal("target rename before record checkpoint blocked removal")
+	}
+	if err := os.WriteFile(adapter.path(ClientIdentityConfigurationNextPath), target, 0640); err != nil {
+		t.Fatal(err)
+	}
 	if !adapter.StartProxyForClientIdentityRotation(t.Context(), digest(target)) || !adapter.RemoveClientIdentityTarget(digest(source), digest(target)) || !adapter.RemoveProxyStartupIntegration(t.Context(), authority) {
 		t.Fatal("finishing cleanup failed")
 	}
-	for _, path := range []string{ClientIdentityTargetPath, ProxyStartupDropInPath, ProxyStartupDropInDirectory} {
+	for _, path := range []string{ClientIdentityTargetPath, ClientIdentityConfigurationNextPath, ProxyStartupDropInPath, ProxyStartupDropInDirectory} {
 		if _, err := os.Lstat(adapter.path(path)); !os.IsNotExist(err) {
 			t.Fatalf("owned path survived: %s (%v)", path, err)
 		}

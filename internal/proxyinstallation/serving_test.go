@@ -41,7 +41,16 @@ type dispatchTestHost struct {
 	publicIPv4  chan bool
 	validated   int
 	selected    hostadapter.ServingAuthority
+	borrowStart bool
 }
+
+func (h *dispatchTestHost) BorrowRuntimeStartLock(role string) (*hostadapter.MutationLock, error) {
+	if !h.borrowStart || role != hostadapter.ServingRole {
+		return nil, errors.New("test start refused")
+	}
+	return &hostadapter.MutationLock{}, nil
+}
+
 type advertisedListener struct {
 	net.Listener
 	ip string
@@ -79,6 +88,14 @@ func (h *dispatchTestHost) BindServingListener(ip string) (net.Listener, error) 
 }
 
 func TestAcceptedPrivateDispatchComposesAuthorityProfileTLSAndServing(t *testing.T) {
+	testAcceptedPrivateDispatch(t, false)
+}
+
+func TestPrivateDispatchServesOnlySelectedIdentityThroughAuthorizedCutoverStart(t *testing.T) {
+	testAcceptedPrivateDispatch(t, true)
+}
+
+func testAcceptedPrivateDispatch(t *testing.T, rotating bool) {
 	_, h, lifecycle := servingInstallation(t)
 	record, ok := decodeOwnership(h.ownership)
 	if !ok {
@@ -113,6 +130,22 @@ func TestAcceptedPrivateDispatchComposesAuthorityProfileTLSAndServing(t *testing
 	record.Serving.CertificateSHA256[2] = hex.EncodeToString(cert.ChainSHA256[:])
 	record.Serving.CertificateSHA256[3] = hex.EncodeToString(cert.KeySHA256[:])
 	record.Resources = recordResources(record, false)
+	if rotating {
+		sourceSum := sha256.Sum256(h.configuration)
+		_, sourceArtifact, _ := clientArtifact(h.configuration, record.PublicIPv4)
+		h.configuration, err = singboxadapter.New().ReplaceClientIdentity(h.configuration)
+		if err != nil {
+			t.Fatal("target configuration preparation failed")
+		}
+		targetSum := sha256.Sum256(h.configuration)
+		_, targetArtifact, _ := clientArtifact(h.configuration, record.PublicIPv4)
+		record.ConfigurationSHA256 = hex.EncodeToString(targetSum[:])
+		startup, _ := h.PlanProxyStartupIntegration()
+		record.Startup = &startup
+		record.Renewal = &hostadapter.RenewalAuthority{RecorderID: strings.Repeat("1", 32), Lineage: "sbxr-subscription", PublicIPv4: record.PublicIPv4, Invocation: hostadapter.OfficialRenewalInvocation}
+		record.ClientRotation = &clientIdentityRotation{OperationID: strings.Repeat("1", 32), Direction: "forward", Effects: append([]string(nil), clientIdentityRotationEffects...), Completed: append([]string(nil), clientIdentityRotationEffects[:10]...), Source: hex.EncodeToString(sourceSum[:]), Target: record.ConfigurationSHA256, Checkpoint: clientRotationTargetStarted, Subscription: &hostadapter.ClientIdentitySubscription{Source: *record.Serving, Target: *record.Serving, SourceArtifactSHA256: sourceArtifact, TargetArtifactSHA256: targetArtifact}}
+		updateSubscriptionResources(&record, record.Release)
+	}
 	h.ownership = ownershipBytes(record)
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -122,6 +155,12 @@ func TestAcceptedPrivateDispatchComposesAuthorityProfileTLSAndServing(t *testing
 	pool := x509.NewCertPool()
 	pool.AddCert(root)
 	host := &dispatchTestHost{servingTestHost: h, certificate: cert, listener: listener, ip: record.PublicIPv4, bound: make(chan struct{}), publicIPv4: make(chan bool, 1)}
+	if rotating {
+		if code := serveSubscription(t.Context(), lifecycle, host, subscriptionserving.New(pool, nil)); code != subscriptionserving.Refused || host.validated != 0 {
+			t.Fatal("ordinary startup bypassed cutover gate")
+		}
+		host.statusBusy, host.borrowStart = true, true
+	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := make(chan subscriptionserving.Code, 1)
@@ -141,7 +180,15 @@ func TestAcceptedPrivateDispatchComposesAuthorityProfileTLSAndServing(t *testing
 	}
 	body, err := io.ReadAll(response.Body)
 	response.Body.Close()
-	if err != nil || response.StatusCode != 200 || !strings.HasPrefix(string(body), "vless://"+identity.UUID+"@"+record.PublicIPv4+":443?") {
+	selectedIdentity := identity.UUID
+	if rotating {
+		facts, factsErr := singboxadapter.New().CurrentConnectionFacts(h.configuration, record.PublicIPv4)
+		if factsErr != nil || facts.UUID == identity.UUID || strings.Contains(string(body), identity.UUID) {
+			t.Fatal("revoked Client Identity was served")
+		}
+		selectedIdentity = facts.UUID
+	}
+	if err != nil || response.StatusCode != 200 || !strings.HasPrefix(string(body), "vless://"+selectedIdentity+"@"+record.PublicIPv4+":443?") {
 		t.Fatal("private dispatch did not serve authoritative profile")
 	}
 	host.publicIPv4 <- false

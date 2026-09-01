@@ -380,7 +380,7 @@ func (adapter Adapter) publishSubscriptionFile(path string, body []byte, mode os
 		} else if !errors.Is(stagedErr, os.ErrNotExist) {
 			return false
 		}
-		return true
+		return adapter.syncOwnershipDirectory(adapter.path(filepath.Dir(path))) == nil
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return false
@@ -391,10 +391,10 @@ func (adapter Adapter) publishSubscriptionFile(path string, body []byte, mode os
 		if createErr != nil {
 			return false
 		}
-		_, writeErr := file.Write(body)
+		written, writeErr := file.Write(body)
 		syncErr := file.Sync()
 		closeErr := file.Close()
-		if writeErr != nil || syncErr != nil || closeErr != nil || adapter.syncOwnershipDirectory(adapter.path(filepath.Dir(path))) != nil {
+		if writeErr != nil || written != len(body) || syncErr != nil || closeErr != nil || adapter.syncOwnershipDirectory(adapter.path(filepath.Dir(path))) != nil {
 			return false
 		}
 		staged, stagedErr = adapter.protectedServingFile(temporary, mode, "")
@@ -411,12 +411,17 @@ func (adapter Adapter) ActivatePreparedSubscription(ctx context.Context, serving
 	if !serving.Valid() || !renewal.Valid() || !valid || published != serving || !adapter.renewalFiles(renewal) || !adapter.exactSubscriptionFirewall(renewal.PublicIPv4) {
 		return false
 	}
+	if loaded, observed := adapter.loadedServingAuthority(ctx, renewal, serving, serving); observed && loaded == serving {
+		return true
+	}
 	run := adapter.subscriptionCommand
 	if run == nil {
 		run = commandOutput
 	}
-	_, code, observed := run(ctx, "systemctl", "enable", "--now", "sbxr-subscription.service")
-	return observed && code == 0
+	return adapter.runtimeStart(ctx, ServingRole, func() bool {
+		_, code, observed := run(ctx, "systemctl", "enable", "--now", "sbxr-subscription.service")
+		return observed && code == 0
+	})
 }
 
 func (adapter Adapter) PrepareSubscriptionRotation(input SubscriptionRotationInput) bool {
@@ -489,7 +494,7 @@ func (adapter Adapter) RemoveSubscriptionRepair(ctx context.Context, source, tar
 	wants, wantsErr := os.Readlink(adapter.path(ServingUnitWantsPath))
 	archivePaths, archiveOK := adapter.removableServingArchive(target)
 	unitPresent := unitErr == nil
-	unitAccepted := unitPresent && string(unit) == ServingUnit || errors.Is(unitErr, os.ErrNotExist) && adapter.safelyAbsent(ServingUnitPath)
+	unitAccepted := unitPresent && knownServingUnit(unit) || errors.Is(unitErr, os.ErrNotExist) && adapter.safelyAbsent(ServingUnitPath)
 	wantsAccepted := wantsErr == nil && wants == "../sbxr-subscription.service" || errors.Is(wantsErr, os.ErrNotExist) && adapter.safelyAbsent(ServingUnitWantsPath)
 	if !unitAccepted || !wantsAccepted || !archiveOK {
 		return false

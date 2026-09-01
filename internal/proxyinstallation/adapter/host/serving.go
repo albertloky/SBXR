@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	singboxadapter "github.com/albertloky/SBXR/internal/proxyinstallation/adapter/singbox"
 	"github.com/albertloky/SBXR/internal/proxyinstallation/subscriptionserving"
 )
 
@@ -63,8 +64,8 @@ ProtectControlGroups=yes
 RestrictNamespaces=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
-RestrictAddressFamilies=AF_INET AF_INET6
-InaccessiblePaths=/var/lib/sbxr/subscription-token /var/lib/sbxr/subscription-staging /proc /run/systemd /run/dbus
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+InaccessiblePaths=/var/lib/sbxr/subscription-token /var/lib/sbxr/subscription-staging -/var/lib/sbxr/client-identity-target.json -/var/lib/sbxr/client-identity-target.json.sbxr-next /proc /run/systemd /run/dbus
 StandardInput=null
 StandardOutput=null
 StandardError=null
@@ -73,6 +74,12 @@ UMask=0077
 [Install]
 WantedBy=multi-user.target
 `
+
+var legacyServingUnit = strings.ReplaceAll(strings.ReplaceAll(ServingUnit, " AF_UNIX", ""), " -/var/lib/sbxr/client-identity-target.json -/var/lib/sbxr/client-identity-target.json.sbxr-next", "")
+
+func knownServingUnit(body []byte) bool {
+	return string(body) == ServingUnit || string(body) == legacyServingUnit
+}
 
 // ServingAuthority is an Ownership Record component, never an independent
 // authority file. This bounded runtime-only contract has no renewal writer,
@@ -131,6 +138,10 @@ func (a ServingAuthority) Resources() []string {
 // protectedServingFile returns bytes only after bounded descriptor identity,
 // safe-parent, mode, link-count, ownership and expected-content checks.
 func (a Adapter) protectedServingFile(path string, mode os.FileMode, expected string) ([]byte, error) {
+	return a.protectedServingFileWithLinks(path, mode, expected, 1)
+}
+
+func (a Adapter) protectedServingFileWithLinks(path string, mode os.FileMode, expected string, links uint64) ([]byte, error) {
 	refused := errors.New("serving material refused")
 	if err := a.safeParents(path); err != nil {
 		return nil, err
@@ -142,7 +153,7 @@ func (a Adapter) protectedServingFile(path string, mode os.FileMode, expected st
 	defer f.Close()
 	info, err := f.Stat()
 	stat, ok := infoSys(info)
-	if err != nil || !ok || !info.Mode().IsRegular() || info.Mode().Perm() != mode || stat.Uid != a.ownerUID() || stat.Nlink != 1 || info.Size() <= 0 || info.Size() > 64<<10 {
+	if err != nil || !ok || !info.Mode().IsRegular() || info.Mode().Perm() != mode || stat.Uid != a.ownerUID() || uint64(stat.Nlink) != links || info.Size() <= 0 || info.Size() > 64<<10 {
 		return nil, refused
 	}
 	body, err := io.ReadAll(io.LimitReader(f, 64<<10+1))
@@ -245,7 +256,7 @@ func (a Adapter) InspectServingFiles(authority ServingAuthority, removing bool) 
 	return a.inspectServingFiles(authority, removing, false)
 }
 
-func (a Adapter) inspectServingFiles(authority ServingAuthority, removing, sandbox bool) Observation {
+func (a Adapter) inspectServingFiles(authority ServingAuthority, removing, sandbox bool, stored ...ServingAuthority) Observation {
 	if !authority.Valid() {
 		return observation(false, true)
 	}
@@ -261,7 +272,7 @@ func (a Adapter) inspectServingFiles(authority ServingAuthority, removing, sandb
 			return Observation{}
 		}
 	}
-	if !a.servingDirectory("/var/lib/sbxr", []string{"installed.json", "proxy-ownership.json", ".proxy-ownership.json.next", "subscription-token", "subscription-serving.json", "subscription-staging", "renewal-attempts.json", ".renewal-attempts.json.next", "renewal-admission.lock", "renewal-writer.lock"}, removing) {
+	if !a.servingDirectory("/var/lib/sbxr", []string{"installed.json", "proxy-ownership.json", ".proxy-ownership.json.next", "client-identity-target.json", "client-identity-target.json.sbxr-next", "subscription-token", "subscription-serving.json", "subscription-staging", "renewal-attempts.json", ".renewal-attempts.json.next", "renewal-admission.lock", "renewal-writer.lock"}, removing) {
 		return Observation{}
 	}
 	if !sandbox && !a.servingDirectory(ServingStagingPath, nil, removing) {
@@ -296,7 +307,7 @@ func (a Adapter) inspectServingFiles(authority ServingAuthority, removing, sandb
 		}
 	}
 	unit, err := a.protectedServingFile(ServingUnitPath, 0644, "")
-	if err != nil && !(removing && errors.Is(err, os.ErrNotExist)) || err == nil && string(unit) != ServingUnit {
+	if err != nil && !(removing && errors.Is(err, os.ErrNotExist)) || err == nil && !knownServingUnit(unit) {
 		return Observation{}
 	}
 	wantsInfo, wantsErr := os.Lstat(a.path(ServingUnitWantsPath))
@@ -312,8 +323,12 @@ func (a Adapter) inspectServingFiles(authority ServingAuthority, removing, sandb
 		if err != nil && !(removing && errors.Is(err, os.ErrNotExist)) || err == nil && (len(token) != 44 || token[43] != '\n' || digest(token[:43]) != authority.CredentialSHA256) {
 			return Observation{}
 		}
-		state, err := a.protectedServingFile(ServingStatePath, 0600, digest(servingStateBytes(authority)))
-		if err != nil && !(removing && errors.Is(err, os.ErrNotExist)) || err == nil && !bytes.Equal(state, servingStateBytes(authority)) {
+		stateAuthority := authority
+		if len(stored) == 1 {
+			stateAuthority = stored[0]
+		}
+		state, err := a.protectedServingFile(ServingStatePath, 0600, digest(servingStateBytes(stateAuthority)))
+		if err != nil && !(removing && errors.Is(err, os.ErrNotExist)) || err == nil && !bytes.Equal(state, servingStateBytes(stateAuthority)) {
 			return Observation{}
 		}
 		if tokenPresent {
@@ -443,6 +458,14 @@ func (a Adapter) loadedServingAuthority(ctx context.Context, renewal RenewalAuth
 	if readErr != nil || closeErr != nil || response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "text/plain; charset=utf-8" || response.Header.Get("Cache-Control") != "no-store" || response.Header.Get("X-Content-Type-Options") != "nosniff" || len(body) < 1 || len(body) > 4096 || body[len(body)-1] != '\n' || bytes.Count(body, []byte{'\n'}) != 1 || state == nil || len(state.PeerCertificates) == 0 || len(state.VerifiedChains) == 0 || len(state.VerifiedChains[0]) == 0 || !state.VerifiedChains[0][0].Equal(state.PeerCertificates[0]) {
 		return ServingAuthority{}, false
 	}
+	// A valid certificate and envelope do not prove the current Client Identity.
+	// Compare the actual response against the protected canonical configuration.
+	configuration, err := a.protectedServingFile("/etc/sing-box/config.json", 0640, "")
+	facts, factsErr := singboxadapter.New().CurrentConnectionFacts(configuration, renewal.PublicIPv4)
+	expected, artifactCode := subscriptionserving.Artifact(facts)
+	if err != nil || factsErr != nil || artifactCode != subscriptionserving.Ready || !bytes.Equal(body, expected) {
+		return ServingAuthority{}, false
+	}
 	for _, candidate := range []ServingAuthority{published, accepted} {
 		body, err := a.protectedServingFile(servingArchive+"/cert"+strconv.Itoa(candidate.CertificateGeneration)+".pem", 0644, candidate.CertificateSHA256[0])
 		block, _ := pemDecodeCertificate(body)
@@ -478,7 +501,7 @@ func (a Adapter) InspectCertificateActivation(ctx context.Context, renewal Renew
 
 func (a Adapter) ActivateServing(ctx context.Context, renewal RenewalAuthority, target ServingAuthority) bool {
 	published, valid := a.publishedServingAuthority(renewal, target)
-	if !valid || published != target || !a.servingCommand(ctx, "restart", "sbxr-subscription.service") {
+	if !valid || published != target || !a.runtimeStart(ctx, ServingRole, func() bool { return a.servingCommand(ctx, "restart", "sbxr-subscription.service") }) {
 		return false
 	}
 	// The caller performs the full published/loaded reinspection under retained
