@@ -1298,6 +1298,14 @@ func TestQualificationCommandEvaluatesAcceptanceVPSAndConstructsRecords(t *testi
 			if mixedErr != nil || jsonObject(t, mixedDecision)["outcome"] != "propagation-pending" {
 				t.Fatalf("%s mixed propagation = %s, %v", name, mixedDecision, mixedErr)
 			}
+			stalePublicLatest := jsonObject(t, []byte(verificationDocument))
+			staleVerification := stalePublicLatest["observation"].(map[string]any)["public_verification"].(map[string]any)
+			staleVerification["release_identity"] = map[string]any{"commit": strings.Repeat("a", 40), "release_index_sha256": strings.Repeat("b", 64), "repository": "albertloky/SBXR", "tag": "v1.0.0"}
+			staleVerification["sequence"] = float64(1)
+			staleDecision, staleErr := runQualificationCommand(binary, qualificationDocument(t, stalePublicLatest))
+			if staleErr != nil || jsonObject(t, staleDecision)["outcome"] != "propagation-pending" {
+				t.Fatalf("%s stale public latest propagation = %s, %v", name, staleDecision, staleErr)
+			}
 			verificationDecision, err := runQualificationCommand(binary, verificationDocument)
 			if err != nil || jsonObject(t, verificationDecision)["outcome"] != "accepted" || len(jsonObject(t, verificationDecision)["actions"].([]any)) != 0 {
 				t.Fatalf("%s public verification = %s, %v", name, verificationDecision, err)

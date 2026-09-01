@@ -1684,18 +1684,18 @@ func validStablePropagationObservation(observation, prior stablePublicationObser
 		return false
 	}
 	if observation.Draft {
-		return !observation.Immutable && observation.Attestation == nil && observation.LatestInstallSHA256 == "" && reflect.DeepEqual(observation.LatestReleaseID, prior.LatestReleaseID) && pendingPublicLatestVerification(observation.PublicVerification, action, false)
+		return !observation.Immutable && observation.Attestation == nil && observation.LatestInstallSHA256 == "" && reflect.DeepEqual(observation.LatestReleaseID, prior.LatestReleaseID) && pendingPublicLatestVerification(observation.PublicVerification)
 	}
 	latestPending := reflect.DeepEqual(observation.LatestReleaseID, prior.LatestReleaseID) && observation.LatestInstallSHA256 == "" || observation.LatestReleaseID != nil && *observation.LatestReleaseID == action.ReleaseID && (observation.LatestInstallSHA256 == "" || observation.LatestInstallSHA256 == action.Assets[0].SHA256)
 	attestationPending := observation.Attestation == nil || *observation.Attestation == (stableReleaseAttestation{Commit: action.Commit, Count: 0, Initiator: "", PredicateType: "release"}) || *observation.Attestation == (stableReleaseAttestation{Commit: action.Commit, Count: 1, Initiator: "github", PredicateType: "release"})
-	return latestPending && attestationPending && pendingPublicLatestVerification(observation.PublicVerification, action, observation.LatestReleaseID != nil && *observation.LatestReleaseID == action.ReleaseID)
+	return latestPending && attestationPending && pendingPublicLatestVerification(observation.PublicVerification)
 }
 
 func validPublicLatestVerification(verification *publicLatestVerification, action publishStableReleaseAction) bool {
 	return verification != nil && verification.Outcome == "accepted" && verification.ReleaseIdentity != nil && *verification.ReleaseIdentity == action.ReleaseIdentity && verification.Sequence != nil && *verification.Sequence == action.Sequence
 }
 
-func pendingPublicLatestVerification(verification *publicLatestVerification, action publishStableReleaseAction, targetIsLatest bool) bool {
+func pendingPublicLatestVerification(verification *publicLatestVerification) bool {
 	if verification == nil {
 		return false
 	}
@@ -1703,7 +1703,7 @@ func pendingPublicLatestVerification(verification *publicLatestVerification, act
 	case "unavailable":
 		return verification.ReleaseIdentity == nil && verification.Sequence == nil
 	case "accepted":
-		return verification.ReleaseIdentity != nil && verification.Sequence != nil && (!targetIsLatest || *verification.ReleaseIdentity == action.ReleaseIdentity && *verification.Sequence == action.Sequence)
+		return verification.ReleaseIdentity != nil && verification.Sequence != nil
 	default:
 		return false
 	}
