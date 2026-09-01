@@ -32,6 +32,7 @@ const (
 	RenewalDeployRole         = "--certbot-deploy-hook"
 	RenewalPostRole           = "--certbot-post-hook"
 	OfficialRenewalInvocation = "snap-certbot-renew-v1"
+	OwnerRenewalInvocation    = "snap-certbot-certonly-v1"
 	RenewalDropInPath         = "/etc/systemd/system/snap.certbot.renew.service.d/50-sbxr-recorder.conf"
 	RenewalDeployHookPath     = "/etc/letsencrypt/renewal-hooks/deploy/sbxr-subscription"
 	RenewalPostHookPath       = "/etc/letsencrypt/renewal-hooks/post/sbxr-subscription"
@@ -508,7 +509,7 @@ func (a Adapter) readRenewalEvidence(authority RenewalAuthority) (RenewalEvidenc
 		id, e := hex.DecodeString(attempt.AttemptID)
 		started, timeErr := time.Parse(time.RFC3339Nano, attempt.StartedAt)
 		_, lineageValid := renewalLineageGeneration(authority, attempt.LineageBefore)
-		if e != nil || len(id) != 16 || hex.EncodeToString(id) != attempt.AttemptID || seen[attempt.AttemptID] || attempt.Invocation != authority.Invocation || attempt.RecorderPID < 1 || attempt.ProcessTick == 0 || attempt.BootID == "" || !lineageValid || timeErr != nil || started.Before(latest) || started.After(maximum) {
+		if e != nil || len(id) != 16 || hex.EncodeToString(id) != attempt.AttemptID || seen[attempt.AttemptID] || attempt.Invocation != authority.Invocation && attempt.Invocation != OwnerRenewalInvocation || attempt.RecorderPID < 1 || attempt.ProcessTick == 0 || attempt.BootID == "" || !lineageValid || timeErr != nil || started.Before(latest) || started.After(maximum) {
 			return RenewalEvidence{}, nil, errors.New("renewal attempt invalid")
 		}
 		seen[attempt.AttemptID] = true
@@ -551,7 +552,7 @@ func ownedRenewalOutcome(authority RenewalAuthority, attempt RenewalAttempt, lin
 	if beforeValid && afterValid && before == after && attempt.DeployHook == nil && attempt.PostHook == nil {
 		return "no-op"
 	}
-	if beforeValid && afterValid && after > before && attempt.DeployHook != nil && attempt.PostHook != nil && attempt.DeployHook.LineageTarget == lineageAfter && attempt.DeployHook.Outcome == "succeeded" && attempt.PostHook.Outcome == "succeeded" {
+	if beforeValid && afterValid && after > before && (attempt.Invocation == OwnerRenewalInvocation && attempt.DeployHook == nil && attempt.PostHook == nil || attempt.DeployHook != nil && attempt.PostHook != nil && attempt.DeployHook.LineageTarget == lineageAfter && attempt.DeployHook.Outcome == "succeeded" && attempt.PostHook.Outcome == "succeeded") {
 		return "renewed"
 	}
 	return "incomplete"
@@ -612,22 +613,28 @@ type RenewalAttemptRunner interface {
 }
 
 type renewalAttemptRunner struct {
-	adapter   Adapter
-	authority RenewalAuthority
-	attempt   RenewalAttempt
-	admission *os.File
-	finished  bool
+	adapter       Adapter
+	authority     RenewalAuthority
+	attempt       RenewalAttempt
+	admission     *os.File
+	command       []string
+	holdAdmission bool
+	finished      bool
 }
 
 // PrepareRenewalRecorder publishes the receipt while the caller still owns
 // whole-host authority. Run releases admission before waiting for Certbot.
 func (a Adapter) PrepareRenewalRecorder(authority RenewalAuthority) (RenewalAttemptRunner, bool) {
-	admission, ok := a.openRenewalLock(RenewalAdmissionPath, false)
+	return a.prepareRenewalAttempt(authority, OfficialRenewalInvocation, false, false, []string{"/usr/bin/snap", "run", "--timer=00:00~24:00/2", "certbot.renew"})
+}
+
+func (a Adapter) prepareRenewalAttempt(authority RenewalAuthority, invocation string, allowAbandoned, exclusive bool, command []string) (RenewalAttemptRunner, bool) {
+	admission, ok := a.openRenewalLock(RenewalAdmissionPath, exclusive)
 	if !ok {
 		return nil, false
 	}
 	inspection := a.InspectRenewal(authority)
-	if inspection.State == RenewalAttemptUnsafe || inspection.State == RenewalAttemptLive || inspection.State == RenewalAttemptAbandoned {
+	if inspection.State == RenewalAttemptUnsafe || inspection.State == RenewalAttemptLive || inspection.State == RenewalAttemptAbandoned && !allowAbandoned {
 		admission.Close()
 		return nil, false
 	}
@@ -666,7 +673,7 @@ func (a Adapter) PrepareRenewalRecorder(authority RenewalAuthority) (RenewalAtte
 		admission.Close()
 		return nil, false
 	}
-	attempt := RenewalAttempt{AttemptID: hex.EncodeToString(id), Invocation: authority.Invocation, StartedAt: time.Now().UTC().Format(time.RFC3339Nano), BootID: boot, RecorderPID: os.Getpid(), ProcessTick: tick, LineageBefore: lineageBefore}
+	attempt := RenewalAttempt{AttemptID: hex.EncodeToString(id), Invocation: invocation, StartedAt: time.Now().UTC().Format(time.RFC3339Nano), BootID: boot, RecorderPID: os.Getpid(), ProcessTick: tick, LineageBefore: lineageBefore}
 	activeRenewalAttempts.Store(attempt.AttemptID, true)
 	evidence.Attempts = append(evidence.Attempts, attempt)
 	if !a.publishRenewalEvidence(authority, expected, evidence) {
@@ -674,7 +681,7 @@ func (a Adapter) PrepareRenewalRecorder(authority RenewalAuthority) (RenewalAtte
 		admission.Close()
 		return nil, false
 	}
-	return &renewalAttemptRunner{adapter: a, authority: authority, attempt: attempt, admission: admission}, true
+	return &renewalAttemptRunner{adapter: a, authority: authority, attempt: attempt, admission: admission, command: command, holdAdmission: exclusive}, true
 }
 
 func (r *renewalAttemptRunner) Abort() {
@@ -694,17 +701,26 @@ func (r *renewalAttemptRunner) Run(ctx context.Context) int {
 		return RenewalRecorderRefused
 	}
 	r.finished = true
-	if r.admission != nil {
+	if r.admission != nil && !r.holdAdmission {
 		r.admission.Close()
 		r.admission = nil
 	}
+	if r.admission != nil {
+		defer func() {
+			r.admission.Close()
+			r.admission = nil
+		}()
+	}
 	defer activeRenewalAttempts.Delete(r.attempt.AttemptID)
+	if len(r.command) == 0 {
+		return RenewalRecorderRefused
+	}
 	run := r.adapter.renewalCommand
 	code := 0
 	if run != nil {
-		code = run(ctx, "/usr/bin/snap", "run", "--timer=00:00~24:00/2", "certbot.renew")
+		code = run(ctx, r.command[0], r.command[1:]...)
 	} else {
-		command := exec.CommandContext(ctx, "/usr/bin/snap", "run", "--timer=00:00~24:00/2", "certbot.renew")
+		command := exec.CommandContext(ctx, r.command[0], r.command[1:]...)
 		environment := slices.DeleteFunc(os.Environ(), func(value string) bool {
 			name, _, _ := strings.Cut(value, "=")
 			return slices.Contains([]string{"SBXR_RENEWAL_ATTEMPT_ID", "RENEWED_LINEAGE", "RENEWED_DOMAINS", "FAILED_DOMAINS"}, name)
@@ -941,6 +957,75 @@ func (a Adapter) AcquireRenewalExclusion(authority RenewalAuthority) (*RenewalEx
 		}
 	}
 	return exclusion, true
+}
+
+// RepairSubscriptionCertificate performs one reviewed replacement attempt.
+// The caller retains whole-host authority and activates the published target.
+func (a Adapter) RepairSubscriptionCertificate(ctx context.Context, authority RenewalAuthority) bool {
+	if !authority.Valid() || !a.renewalFiles(authority) || !a.renewalRoute() || !a.renewalHooksSafe() {
+		return false
+	}
+	beforeTarget, ok := a.renewalLineageTarget(authority)
+	beforeGeneration, valid := renewalLineageGeneration(authority, beforeTarget)
+	if !ok || !valid || !a.validRenewalCertificate(authority, beforeGeneration) {
+		return false
+	}
+	locks := make([]os.FileInfo, len(certbotDirectoryLocks))
+	for index, path := range certbotDirectoryLocks {
+		if !a.certbotLockAvailable(path) {
+			return false
+		}
+		locks[index], _ = os.Lstat(a.path(path))
+		if locks[index] == nil {
+			return false
+		}
+	}
+	command := []string{"/snap/bin/certbot", "certonly", "--non-interactive", "--agree-tos", "--register-unsafely-without-email", "--standalone", "--preferred-challenges", "http", "--no-directory-hooks", "--force-renewal", "--cert-name", authority.Lineage, "--profile", "shortlived", "--ip-address", authority.PublicIPv4}
+	runner, prepared := a.prepareRenewalAttempt(authority, OwnerRenewalInvocation, true, true, command)
+	if !prepared || runner.Run(ctx) != 0 {
+		return false
+	}
+	for index, path := range certbotDirectoryLocks {
+		current, err := os.Lstat(a.path(path))
+		if err != nil || !os.SameFile(locks[index], current) {
+			return false
+		}
+	}
+	afterTarget, ok := a.renewalLineageTarget(authority)
+	afterGeneration, valid := renewalLineageGeneration(authority, afterTarget)
+	return ok && valid && afterGeneration > beforeGeneration && a.validRenewalCertificate(authority, afterGeneration)
+}
+
+// ResolveRenewalFailure clears only diagnosed evidence after the reviewed
+// replacement is published, accepted, loaded, and freshly validated.
+func (a Adapter) ResolveRenewalFailure(authority RenewalAuthority, accepted ServingAuthority) bool {
+	if !authority.Valid() || !accepted.Valid() || !a.renewalFiles(authority) || !a.renewalRoute() {
+		return false
+	}
+	target, ok := a.renewalLineageTarget(authority)
+	generation, valid := renewalLineageGeneration(authority, target)
+	published, publishedOK := a.publishedCertificateAuthority(authority, accepted)
+	if !ok || !valid || generation != accepted.CertificateGeneration || !publishedOK || published != accepted {
+		return false
+	}
+	evidence, expected, err := a.readRenewalEvidence(authority)
+	if err != nil {
+		return false
+	}
+	if len(evidence.Attempts) == 0 {
+		return true
+	}
+	for _, attempt := range evidence.Attempts {
+		if attempt.Completion == nil {
+			live, known := a.attemptLive(attempt)
+			if !known || live {
+				return false
+			}
+		}
+	}
+	evidence.EstablishedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	evidence.Attempts = nil
+	return a.publishRenewalEvidence(authority, expected, evidence)
 }
 
 func (a Adapter) RemoveRenewalIntegration(ctx context.Context, authority RenewalAuthority, exclusion *RenewalExclusion) bool {

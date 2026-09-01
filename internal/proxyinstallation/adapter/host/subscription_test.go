@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -425,6 +426,93 @@ func TestCommittedRotationRemovalRequiresExclusionAndRefusesConflictingCanonical
 	}
 	if !adapter.RemoveSubscriptionRotation(t.Context(), input, exclusion) || !adapter.safelyAbsent(ServingTokenPath) || !adapter.safelyAbsent(ServingStatePath) || !adapter.safelyAbsent(SubscriptionCandidateTokenPath) || !adapter.safelyAbsent(SubscriptionCandidateStatePath) {
 		t.Fatal("proved source/target rotation material was not removed")
+	}
+}
+
+func TestPublishedCertificateRepairRemovalDeletesCompleteMixedServingFootprint(t *testing.T) {
+	adapter := Adapter{root: t.TempDir()}
+	reloads := 0
+	adapter.subscriptionCommand = func(_ context.Context, name string, arguments ...string) (string, int, bool) {
+		if name != "systemctl" || !slices.Equal(arguments, []string{"disable", "--now", "sbxr-subscription.service"}) && !slices.Equal(arguments, []string{"daemon-reload"}) {
+			t.Fatalf("unexpected command %s %v", name, arguments)
+		}
+		if slices.Equal(arguments, []string{"daemon-reload"}) {
+			reloads++
+			if reloads == 1 {
+				return "", 1, true
+			}
+		}
+		return "", 0, true
+	}
+	for _, path := range append(slices.Clone(certbotDirectoryLocks), servingCgroup+"/cgroup.events") {
+		full := adapter.path(path)
+		if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
+			t.Fatal(err)
+		}
+		body := []byte(nil)
+		if strings.HasSuffix(path, "cgroup.events") {
+			body = []byte("populated 0\n")
+		}
+		if err := os.WriteFile(full, body, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !adapter.ServingQuiescent() {
+		t.Skip("TCP 8443 is not available for the production quiescence check")
+	}
+	credential := []byte(base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32)))
+	credentialDigest := sha256.Sum256(credential)
+	source := ServingAuthority{LinkID: strings.Repeat("1", 32), CredentialSHA256: hex.EncodeToString(credentialDigest[:]), CertificateGeneration: 1}
+	target := source
+	target.CertificateGeneration = 2
+	for generation, authority := range map[int]*ServingAuthority{1: &source, 2: &target} {
+		for index, name := range certificateNames {
+			body := []byte(fmt.Sprintf("%s generation %d\n", name, generation))
+			mode := os.FileMode(0644)
+			if name == "privkey" {
+				mode = 0600
+			}
+			path := adapter.path(servingArchive + "/" + name + strconv.Itoa(generation) + ".pem")
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil || os.WriteFile(path, body, mode) != nil {
+				t.Fatal("certificate fixture failed")
+			}
+			authority.CertificateSHA256[index] = digest(body)
+		}
+	}
+	for _, name := range certificateNames {
+		path := adapter.path(servingLive + "/" + name + ".pem")
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil || os.Symlink("../../archive/sbxr-subscription/"+name+"2.pem", path) != nil {
+			t.Fatal("live certificate fixture failed")
+		}
+	}
+	for path, fixture := range map[string]struct {
+		body []byte
+		mode os.FileMode
+	}{ServingTokenPath: {append(bytes.Clone(credential), '\n'), 0600}, ServingStatePath: {servingStateBytes(source), 0600}, ServingUnitPath: {[]byte(ServingUnit), 0644}} {
+		if err := os.MkdirAll(filepath.Dir(adapter.path(path)), 0700); err != nil || os.WriteFile(adapter.path(path), fixture.body, fixture.mode) != nil {
+			t.Fatal("serving fixture failed")
+		}
+	}
+	if err := os.MkdirAll(adapter.path(ServingStagingPath), 0700); err != nil || os.MkdirAll(filepath.Dir(adapter.path(ServingUnitWantsPath)), 0755) != nil || os.Symlink("../sbxr-subscription.service", adapter.path(ServingUnitWantsPath)) != nil {
+		t.Fatal("serving structure fixture failed")
+	}
+	exclusion, ok := adapter.AcquireServingExclusion()
+	if !ok {
+		t.Fatal("serving exclusion refused")
+	}
+	defer exclusion.Release()
+	if adapter.RemoveSubscriptionRepair(t.Context(), source, target, exclusion) {
+		t.Fatal("removal ignored daemon reload failure")
+	}
+	if !adapter.RemoveSubscriptionRepair(t.Context(), source, target, exclusion) {
+		t.Fatal("partially completed mixed repair removal did not resume")
+	}
+	for _, authority := range []ServingAuthority{source, target} {
+		for _, resource := range authority.Resources() {
+			if !adapter.safelyAbsent(strings.SplitN(resource, " ", 2)[0]) {
+				t.Fatalf("resource remains: %s", resource)
+			}
+		}
 	}
 }
 

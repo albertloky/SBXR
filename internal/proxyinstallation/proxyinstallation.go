@@ -66,6 +66,7 @@ const (
 	FinishRemovalAction            Action = "Finish removal"
 	EnableSubscriptionAction       Action = "Enable subscription"
 	RotateSubscriptionLinkAction   Action = "Rotate subscription link"
+	RepairSubscriptionAction       Action = "Repair subscription"
 	FinishSubscriptionChangeAction Action = "Finish subscription change"
 )
 
@@ -99,6 +100,7 @@ const (
 	SubscriptionChangeNeedsCompletion  ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-CHANGE-INCOMPLETE"
 	SubscriptionEnabled                ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-ENABLED"
 	SubscriptionLinkRotated            ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-LINK-ROTATED"
+	SubscriptionRepaired               ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-REPAIRED"
 	SubscriptionChangeCleanedUp        ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-CHANGE-CLEANED-UP"
 	SubscriptionLinkDisplayIncomplete  ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-LINK-DISPLAY-INCOMPLETE"
 	SubscriptionLinkDisclosed          ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-LINK-DISCLOSED"
@@ -206,6 +208,8 @@ type preparedReview struct {
 	running      hostadapter.RunningInspection
 	removal      hostadapter.RemovalInspection
 	activation   hostadapter.CertificateActivationInspection
+	renewal      hostadapter.RenewalInspection
+	repair       subscriptionRepairCorrection
 }
 
 type unfinishedDirection string
@@ -257,6 +261,7 @@ type ownershipRecord struct {
 	Activation               *certificateActivation                     `json:"certificate_activation,omitempty"`
 	Enablement               *subscriptionEnablement                    `json:"subscription_enablement,omitempty"`
 	Rotation                 *subscriptionRotation                      `json:"subscription_rotation,omitempty"`
+	Repair                   *subscriptionRepair                        `json:"subscription_repair,omitempty"`
 	SubscriptionCompromised  bool                                       `json:"subscription_compromised,omitempty"`
 	SubscriptionResources    *hostadapter.SubscriptionResourceAuthority `json:"subscription_resources,omitempty"`
 }
@@ -303,6 +308,33 @@ type certificateActivationCheckpoint string
 const (
 	activationTargetRecorded certificateActivationCheckpoint = "target recorded"
 	activationTargetAccepted certificateActivationCheckpoint = "target accepted"
+)
+
+type subscriptionRepair struct {
+	OperationID string                        `json:"operation_id"`
+	Kind        string                        `json:"kind"`
+	Direction   string                        `json:"direction"`
+	Correction  subscriptionRepairCorrection  `json:"correction"`
+	Effects     []string                      `json:"effects"`
+	Completed   []string                      `json:"completed_effects"`
+	Checkpoint  subscriptionRepairCheckpoint  `json:"checkpoint"`
+	Source      hostadapter.ServingAuthority  `json:"source"`
+	Target      *hostadapter.ServingAuthority `json:"target,omitempty"`
+}
+
+type subscriptionRepairCorrection string
+
+const (
+	repairCertificate subscriptionRepairCorrection = "renew owned certificate"
+	repairRuntime     subscriptionRepairCorrection = "restart owned serving runtime"
+)
+
+type subscriptionRepairCheckpoint string
+
+const (
+	repairPrepared  subscriptionRepairCheckpoint = "prepared"
+	repairCommitted subscriptionRepairCheckpoint = "committed"
+	repairAccepted  subscriptionRepairCheckpoint = "accepted"
 )
 
 var destinations = []hostadapter.Destination{
@@ -410,17 +442,31 @@ func (module *installedInterface) Review(ctx context.Context, action Action) Rev
 				rotationCandidate = record.Rotation == nil && record.Serving != nil && record.Renewal != nil && activation.Observed && activation.Published == *record.Serving
 			}
 		}
-		if rotationCandidate {
-			review.LegalActions = []Action{ViewDetailsAction, ShowClientConfigurationAction, CompleteRemovalAction, RotateSubscriptionLinkAction}
+		repairCandidate := false
+		if body, err := module.readOwnership(); err == nil {
+			if record, ok := decodeOwnership(body); ok {
+				_, _, repairCandidate = module.repairDiagnosis(ctx, record, activation)
+			}
+		}
+		if rotationCandidate || repairCandidate {
+			review.LegalActions = []Action{ViewDetailsAction, ShowClientConfigurationAction, CompleteRemovalAction}
+			if repairCandidate {
+				review.LegalActions = append([]Action{RepairSubscriptionAction}, review.LegalActions...)
+			}
+			if rotationCandidate {
+				review.LegalActions = append(review.LegalActions, RotateSubscriptionLinkAction)
+			}
 			if compromised {
 				review.Details = append(review.Details, "Subscription security problem: the old link remains authoritative after a failed replacement attempt.")
 			}
 			if action == RotateSubscriptionLinkAction {
 				review = module.prepareSubscriptionRotationReview(ctx, review, activation)
+			} else if action == RepairSubscriptionAction && repairCandidate {
+				review = module.prepareSubscriptionRepairReview(ctx, review, activation)
 			} else if action != StatusAction && action != ViewDetailsAction && action != ShowClientConfigurationAction && action != CompleteRemovalAction {
 				clear(module.prepared)
 				review.Prepared = nil
-				review.Result = refused(review.Status, "Legal action", "Rotate the compromised Subscription Link, inspect details, use the confirmed client fallback, or complete removal.")
+				review.Result = refused(review.Status, "Legal action", "Choose one displayed exact subscription action, inspect details, use the confirmed client fallback, or complete removal.")
 			}
 		} else {
 			removalSafe := module.servingSurfaceSafe() && action == CompleteRemovalAction && review.Prepared != nil
@@ -458,6 +504,8 @@ func (module *installedInterface) Review(ctx context.Context, action Action) Rev
 					review = module.prepareEnablementCleanupReview(ctx, review, record, body)
 				} else if ok && record.Rotation != nil {
 					review = module.prepareSubscriptionRotationFinishReview(ctx, review, record, body)
+				} else if ok && record.Repair != nil {
+					review = module.prepareSubscriptionRepairFinishReview(ctx, review, record, body)
 				} else {
 					review = module.prepareCertificateActivationReview(ctx, review, activation)
 				}
@@ -1057,8 +1105,11 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 		if result.Code == SetupComplete || result.Code == ClientConfigurationDisclosed {
 			result.ProxyTraffic = ProvedWorking
 		}
-		if result.Code == SubscriptionChangeFinished || result.Code == SubscriptionEnabled || result.Code == SubscriptionLinkRotated {
+		if result.Code == SubscriptionChangeFinished || result.Code == SubscriptionEnabled || result.Code == SubscriptionLinkRotated || result.Code == SubscriptionRepaired {
 			result.ProxyTraffic, result.SubscriptionServing = ProvedWorking, ProvedWorking
+		}
+		if result.Code == SubscriptionChangeNeedsCompletion && authority.repair != "" {
+			result.ProxyTraffic = ProvedWorking
 		}
 		if result.Code == CompleteRemovalCompleted {
 			result.ProxyTraffic = ProvedStopped
@@ -1082,12 +1133,18 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 	if authority.action == RotateSubscriptionLinkAction {
 		return module.rotateSubscriptionLink(ctx, authority, progress)
 	}
+	if authority.action == RepairSubscriptionAction {
+		return module.executeSubscriptionRepair(ctx, authority, progress)
+	}
 	if authority.action == FinishSubscriptionChangeAction {
 		if record, body, ok := module.currentSubscriptionRotation(authority); ok {
 			return module.finishSubscriptionRotation(ctx, authority, record, body, progress)
 		}
 		if record, body, ok := module.currentEnablement(authority); ok {
 			return module.executeEnablementCleanup(ctx, authority, record, body, progress)
+		}
+		if _, _, ok := module.currentRepair(authority); ok {
+			return module.executeSubscriptionRepair(ctx, authority, progress)
 		}
 		return module.executeCertificateActivation(ctx, authority, progress)
 	}
@@ -1480,7 +1537,27 @@ func (module *installedInterface) finishRemoval(ctx context.Context, record owne
 		}
 		report(progress, "Cleaning up subscription change")
 	}
-	if record.Serving != nil {
+	repairServingRemoved := false
+	if record.Repair != nil && record.Repair.Target != nil {
+		host, ok := module.host.(subscriptionRepairRemovalHost)
+		if !ok {
+			return removalInterrupted("Interrupted subscription repair removal")
+		}
+		if exclusion == nil {
+			var acquired bool
+			exclusion, acquired = module.acquireSubscriptionExclusion(record)
+			if !acquired {
+				return removalInterrupted("Subscription repair exclusion")
+			}
+			defer exclusion.Release()
+		}
+		if !host.RemoveSubscriptionRepair(context.WithoutCancel(ctx), record.Repair.Source, *record.Repair.Target, exclusion.serving) {
+			return removalInterrupted("Interrupted subscription repair removal")
+		}
+		repairServingRemoved = true
+		report(progress, "Cleaning up subscription change")
+	}
+	if record.Serving != nil && !repairServingRemoved {
 		host, ok := module.host.(servingRemovalHost)
 		if !ok {
 			return removalInterrupted("Subscription Serving exclusion")
@@ -1542,7 +1619,11 @@ func (module *installedInterface) finishRemoval(ctx context.Context, record owne
 			exclusion = &subscriptionExclusion{serving: servingExclusion}
 			defer exclusion.Release()
 		}
-		if !host.RemoveSubscriptionResources(context.WithoutCancel(ctx), *record.SubscriptionResources, record.Serving) {
+		removalServing := record.Serving
+		if record.Repair != nil && record.Repair.Target != nil {
+			removalServing = record.Repair.Target
+		}
+		if !host.RemoveSubscriptionResources(context.WithoutCancel(ctx), *record.SubscriptionResources, removalServing) {
 			return removalInterrupted("Subscription owned-resource removal")
 		}
 		report(progress, "Subscription owned resources removed")
@@ -1942,7 +2023,7 @@ func decodeOwnership(body []byte) (ownershipRecord, bool) {
 		}
 	}
 	for name, value := range fields {
-		if !slices.Contains([]string{"schema", "phase", "unfinished_direction", "release_identity", "proxy_package_identity", "public_ipv4", "destination_address", "destination_server_name", "configuration_sha256", "permitted_resources", "cleanup_checkpoint", "removal_checkpoint", "resource_creating_releases", "finishing_release_identity", "serving", "renewal", "certificate_activation", "subscription_enablement", "subscription_rotation", "subscription_compromised", "subscription_resources"}, name) {
+		if !slices.Contains([]string{"schema", "phase", "unfinished_direction", "release_identity", "proxy_package_identity", "public_ipv4", "destination_address", "destination_server_name", "configuration_sha256", "permitted_resources", "cleanup_checkpoint", "removal_checkpoint", "resource_creating_releases", "finishing_release_identity", "serving", "renewal", "certificate_activation", "subscription_enablement", "subscription_rotation", "subscription_repair", "subscription_compromised", "subscription_resources"}, name) {
 			return ownershipRecord{}, false
 		}
 		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
@@ -1995,6 +2076,27 @@ func decodeOwnership(body []byte) (ownershipRecord, bool) {
 			return ownershipRecord{}, false
 		}
 	}
+	if raw, exists := fields["subscription_repair"]; exists {
+		var repair map[string]json.RawMessage
+		if json.Unmarshal(raw, &repair) != nil || len(repair) < 8 || len(repair) > 9 {
+			return ownershipRecord{}, false
+		}
+		for _, name := range []string{"operation_id", "kind", "direction", "correction", "checkpoint", "source"} {
+			if len(repair[name]) == 0 || bytes.Equal(bytes.TrimSpace(repair[name]), []byte("null")) {
+				return ownershipRecord{}, false
+			}
+		}
+		for _, name := range []string{"effects", "completed_effects"} {
+			if len(repair[name]) == 0 {
+				return ownershipRecord{}, false
+			}
+		}
+		for name, value := range repair {
+			if !slices.Contains([]string{"operation_id", "kind", "direction", "correction", "effects", "completed_effects", "checkpoint", "source", "target"}, name) || name == "target" && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+				return ownershipRecord{}, false
+			}
+		}
+	}
 	if !exactIdentityFields(fields["release_identity"]) {
 		return ownershipRecord{}, false
 	}
@@ -2040,7 +2142,7 @@ func validOwnership(record ownershipRecord) bool {
 		return false
 	}
 	if record.Schema == 1 {
-		if record.ResourceCreatingReleases != nil || record.FinishingRelease != nil || record.Serving != nil || record.Renewal != nil || record.Activation != nil || record.Enablement != nil || record.Rotation != nil || record.SubscriptionResources != nil {
+		if record.ResourceCreatingReleases != nil || record.FinishingRelease != nil || record.Serving != nil || record.Renewal != nil || record.Activation != nil || record.Enablement != nil || record.Rotation != nil || record.Repair != nil || record.SubscriptionResources != nil {
 			return false
 		}
 	} else {
@@ -2073,6 +2175,9 @@ func validOwnership(record ownershipRecord) bool {
 		return false
 	}
 	if record.Rotation != nil && (record.Schema != 2 || record.Serving == nil || record.Renewal == nil || record.Enablement != nil || record.Activation != nil || record.Direction != noDirection && record.Direction != removalRequired || record.Phase != runningPhase && record.Phase != removalCommitted || !validSubscriptionRotation(*record.Rotation) || record.Rotation.Checkpoint != rotationCommitted && *record.Serving != record.Rotation.Source || record.Rotation.Checkpoint == rotationCommitted && *record.Serving != record.Rotation.Target) {
+		return false
+	}
+	if record.Repair != nil && (record.Schema != 2 || record.Serving == nil || record.Renewal == nil || record.Enablement != nil || record.Rotation != nil || record.Activation != nil || record.Direction != noDirection && record.Direction != removalRequired || record.Phase != runningPhase && record.Phase != removalCommitted || !validSubscriptionRepair(*record.Repair) || record.Repair.Checkpoint != repairAccepted && *record.Serving != record.Repair.Source || record.Repair.Checkpoint == repairAccepted && (record.Repair.Target == nil || *record.Serving != *record.Repair.Target)) {
 		return false
 	}
 	if record.SubscriptionCompromised && (record.Schema != 2 || record.Serving == nil) {
@@ -2117,6 +2222,32 @@ func recordResources(record ownershipRecord, softwareOnly bool) []string {
 	}
 	if record.SubscriptionResources != nil {
 		resources = append(resources, record.SubscriptionResources.Resources()...)
+	}
+	if record.Repair != nil {
+		additional := record.Repair.Target
+		replaceShared := additional != nil && *record.Serving == record.Repair.Source
+		if *record.Serving != record.Repair.Source {
+			additional = &record.Repair.Source
+		}
+		if additional != nil && *additional != *record.Serving {
+			for _, resource := range additional.Resources() {
+				path, _, _ := strings.Cut(resource, " ")
+				replaced := false
+				for index, current := range resources {
+					currentPath, _, _ := strings.Cut(current, " ")
+					if currentPath == path {
+						if replaceShared {
+							resources[index] = resource
+						}
+						replaced = true
+						break
+					}
+				}
+				if !replaced {
+					resources = append(resources, resource)
+				}
+			}
+		}
 	}
 	if record.Enablement != nil {
 		if record.Enablement.Serving == nil {
@@ -2195,6 +2326,38 @@ func validSubscriptionRotation(rotation subscriptionRotation) bool {
 
 func validCertificateActivation(activation certificateActivation) bool {
 	return (activation.Checkpoint == activationTargetRecorded || activation.Checkpoint == activationTargetAccepted) && compatibleCertificateTarget(activation.Source, activation.Target)
+}
+
+func validSubscriptionRepair(repair subscriptionRepair) bool {
+	id, err := hex.DecodeString(repair.OperationID)
+	if err != nil || len(id) != 16 || hex.EncodeToString(id) != repair.OperationID || repair.OperationID == strings.Repeat("0", 32) || !repair.Source.Valid() {
+		return false
+	}
+	if repair.Kind != "repair subscription" || repair.Correction != repairCertificate && repair.Correction != repairRuntime || repair.Checkpoint != repairPrepared && repair.Checkpoint != repairCommitted && repair.Checkpoint != repairAccepted {
+		return false
+	}
+	effects := []string{"restart owned serving runtime"}
+	completed := []string(nil)
+	if repair.Correction == repairCertificate {
+		effects = []string{"renew owned certificate", "activate published certificate", "resolve renewal evidence"}
+		if repair.Target != nil {
+			completed = []string{"certificate published"}
+		}
+	}
+	direction := "cleanup"
+	if repair.Checkpoint != repairPrepared {
+		direction = "forward"
+	}
+	if repair.Checkpoint == repairAccepted {
+		completed = slices.Clone(effects)
+	}
+	if repair.Direction != direction || !slices.Equal(repair.Effects, effects) || !slices.Equal(repair.Completed, completed) || repair.Target != nil && !compatibleCertificateTarget(repair.Source, *repair.Target) {
+		return false
+	}
+	if repair.Checkpoint == repairPrepared && repair.Target != nil || repair.Checkpoint == repairAccepted && repair.Target == nil {
+		return false
+	}
+	return repair.Target == nil || repair.Correction == repairRuntime && *repair.Target == repair.Source || repair.Correction == repairCertificate && repair.Target.CertificateGeneration > repair.Source.CertificateGeneration
 }
 
 // This exact prior creator is supported only for its validated original proxy

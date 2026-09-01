@@ -116,7 +116,7 @@ func TestGeneratedInstallerInstallsQualifiedReleaseWithoutATerminal(t *testing.T
 }
 
 func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *testing.T) {
-	for _, variant := range []int{1, 2, 3, 4} {
+	for _, variant := range []int{1, 2, 3, 4, 5} {
 		schema := variant
 		if variant >= 3 {
 			schema = 2
@@ -161,7 +161,7 @@ func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *tes
 				ownership = bytes.Replace(ownership, []byte(`"removal_checkpoint":0`), []byte(`"removal_checkpoint":11`), 1)
 				ownership = []byte(strings.TrimSuffix(string(ownership), "}\n") + `,"finishing_release_identity":` + string(finisherJSON) + "}\n")
 			}
-			if variant == 4 {
+			if variant >= 4 {
 				authority := hostadapter.ServingAuthority{LinkID: strings.Repeat("a", 32), CredentialSHA256: strings.Repeat("b", 64), CertificateGeneration: 1, CertificateSHA256: [4]string{strings.Repeat("c", 64), strings.Repeat("d", 64), strings.Repeat("e", 64), strings.Repeat("f", 64)}}
 				resources, _ := json.Marshal(authority.Resources())
 				ownership = bytes.Replace(ownership, []byte(`],"cleanup_checkpoint"`), append(append([]byte(","), resources[1:]...), []byte(`,"cleanup_checkpoint"`)...), 1)
@@ -178,6 +178,43 @@ func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *tes
 				ownership = bytes.Replace(ownership, []byte(`],"finishing_release_identity"`), extra, 1)
 				serving, _ := json.Marshal(authority)
 				ownership = []byte(strings.TrimSuffix(string(ownership), "}\n") + `,"serving":` + string(serving) + "}\n")
+				if variant == 5 {
+					renewal := hostadapter.RenewalAuthority{RecorderID: strings.Repeat("1", 32), Lineage: "sbxr-subscription", PublicIPv4: "8.8.8.8", Invocation: hostadapter.OfficialRenewalInvocation}
+					subscription := hostadapter.SubscriptionResourceAuthority{PublicIPv4: "8.8.8.8", FirewallSHA256: strings.Repeat("2", 64)}
+					target := authority
+					target.CertificateGeneration = 2
+					for index := range target.CertificateSHA256 {
+						target.CertificateSHA256[index] = strings.Repeat(string(rune('6'+index)), 64)
+					}
+					additional := append(renewal.Resources(), subscription.Resources()...)
+					for index, resource := range authority.Resources() {
+						targetResource := target.Resources()[index]
+						if strings.Contains(resource, "/live/") {
+							ownership = bytes.Replace(ownership, []byte(resource), []byte(targetResource), 1)
+						}
+						if strings.HasPrefix(targetResource, "/etc/letsencrypt/archive/") && strings.Contains(targetResource, "2.pem") {
+							additional = append(additional, targetResource)
+						}
+					}
+					additionalJSON, _ := json.Marshal(additional)
+					ownership = bytes.Replace(ownership, []byte(`],"cleanup_checkpoint"`), append(append([]byte(","), additionalJSON[1:]...), []byte(`,"cleanup_checkpoint"`)...), 1)
+					var fields map[string]json.RawMessage
+					if json.Unmarshal(ownership, &fields) != nil {
+						t.Fatal("repair authority failed")
+					}
+					var extra []byte
+					for range additional {
+						extra = append(extra, ',')
+						extra = append(extra, fields["release_identity"]...)
+					}
+					extra = append(extra, []byte(`],"finishing_release_identity"`)...)
+					ownership = bytes.Replace(ownership, []byte(`],"finishing_release_identity"`), extra, 1)
+					renewalJSON, _ := json.Marshal(renewal)
+					subscriptionJSON, _ := json.Marshal(subscription)
+					targetJSON, _ := json.Marshal(target)
+					repair := `{"operation_id":"` + strings.Repeat("3", 32) + `","kind":"repair subscription","direction":"forward","correction":"renew owned certificate","effects":["renew owned certificate","activate published certificate","resolve renewal evidence"],"completed_effects":["certificate published"],"checkpoint":"committed","source":` + string(serving) + `,"target":` + string(targetJSON) + `}`
+					ownership = []byte(strings.TrimSuffix(string(ownership), "}\n") + `,"renewal":` + string(renewalJSON) + `,"subscription_repair":` + repair + `,"subscription_resources":` + string(subscriptionJSON) + "}\n")
+				}
 			}
 			ownershipPath := filepath.Join(fixture.root, "var/lib/sbxr/proxy-ownership.json")
 			if err := os.WriteFile(ownershipPath, ownership, 0o600); err != nil {

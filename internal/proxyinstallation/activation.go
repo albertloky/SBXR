@@ -52,6 +52,9 @@ func (module *installedInterface) inspectSubscription(ctx context.Context) (Subs
 	if record.Rotation != nil {
 		return SubscriptionChangeIncomplete, hostadapter.CertificateActivationInspection{}
 	}
+	if record.Repair != nil {
+		return SubscriptionChangeIncomplete, hostadapter.CertificateActivationInspection{}
+	}
 	if record.Serving == nil {
 		fact := module.host.InspectSubscriptionAbsence(ctx)
 		if fact.Observed && fact.Accepted {

@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
@@ -148,6 +149,113 @@ func runRenewalRecorder(ctx context.Context, a Adapter, authority RenewalAuthori
 		return RenewalRecorderRefused
 	}
 	return runner.Run(ctx)
+}
+
+func TestReviewedCertificateRepairUsesOneExactOwnedCertbotAttempt(t *testing.T) {
+	a, authority := renewalFiles(t)
+	if err := os.MkdirAll(a.path("/etc/letsencrypt/renewal"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range certbotDirectoryLocks {
+		if err := os.MkdirAll(a.path(filepath.Dir(path)), 0755); err != nil || os.WriteFile(a.path(path), nil, 0600) != nil {
+			t.Fatal("certbot lock fixture failed")
+		}
+	}
+	if err := os.WriteFile(a.path("/etc/letsencrypt/renewal/sbxr-subscription.conf"), []byte("archive_dir = /etc/letsencrypt/archive/sbxr-subscription\ncert = /etc/letsencrypt/live/sbxr-subscription/cert.pem\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var command string
+	var competingAdmission bool
+	a.renewalCommand = func(_ context.Context, name string, arguments ...string) int {
+		command = name + " " + strings.Join(arguments, " ")
+		if admission, ok := a.openRenewalLock(RenewalAdmissionPath, false); ok {
+			competingAdmission = true
+			admission.Close()
+		}
+		if err := os.WriteFile(a.path(servingArchive+"/cert2.pem"), []byte("test certificate 2\n"), 0644); err != nil {
+			return 1
+		}
+		if err := os.Remove(a.path(servingLive + "/cert.pem")); err != nil {
+			return 1
+		}
+		if err := os.Symlink("../../archive/sbxr-subscription/cert2.pem", a.path(servingLive+"/cert.pem")); err != nil {
+			return 1
+		}
+		return 0
+	}
+	if !a.RepairSubscriptionCertificate(t.Context(), authority) {
+		t.Fatal("RepairSubscriptionCertificate() refused")
+	}
+	want := "/snap/bin/certbot certonly --non-interactive --agree-tos --register-unsafely-without-email --standalone --preferred-challenges http --no-directory-hooks --force-renewal --cert-name sbxr-subscription --profile shortlived --ip-address 8.8.8.8"
+	if command != want {
+		t.Fatalf("command = %q", command)
+	}
+	if competingAdmission {
+		t.Fatal("scheduled renewal admission entered during Owner Certbot")
+	}
+	inspection := a.InspectRenewal(authority)
+	if len(inspection.Evidence.Attempts) != 1 || inspection.Evidence.Attempts[0].Invocation != OwnerRenewalInvocation || inspection.Evidence.Attempts[0].Completion == nil || inspection.Evidence.Attempts[0].Completion.OwnedOutcome != "renewed" {
+		t.Fatalf("owner attempt evidence = %#v", inspection.Evidence)
+	}
+}
+
+func TestReviewedCertificateRepairRefusesBusyRenewalAdmission(t *testing.T) {
+	a, authority := renewalFiles(t)
+	if err := os.MkdirAll(a.path("/etc/letsencrypt/renewal"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range certbotDirectoryLocks {
+		if err := os.MkdirAll(a.path(filepath.Dir(path)), 0755); err != nil || os.WriteFile(a.path(path), nil, 0600) != nil {
+			t.Fatal("certbot lock fixture failed")
+		}
+	}
+	if err := os.WriteFile(a.path("/etc/letsencrypt/renewal/sbxr-subscription.conf"), []byte("archive_dir = /etc/letsencrypt/archive/sbxr-subscription\ncert = /etc/letsencrypt/live/sbxr-subscription/cert.pem\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	admission, ok := a.openRenewalLock(RenewalAdmissionPath, true)
+	if !ok {
+		t.Fatal("renewal admission fixture refused")
+	}
+	defer admission.Close()
+	called := false
+	a.renewalCommand = func(context.Context, string, ...string) int { called = true; return 0 }
+	if a.RepairSubscriptionCertificate(t.Context(), authority) || called {
+		t.Fatal("Owner repair bypassed renewal admission contention")
+	}
+}
+
+func TestResolvedRepairClearsOnlyIdleFailedRenewalEvidence(t *testing.T) {
+	a, authority := renewalFiles(t)
+	now := time.Now().UTC()
+	evidence := RenewalEvidence{Schema: 1, RecorderID: authority.RecorderID, EstablishedAt: now.Add(-time.Minute).Format(time.RFC3339Nano), Attempts: []RenewalAttempt{{AttemptID: strings.Repeat("1", 32), Invocation: authority.Invocation, StartedAt: now.Add(-time.Minute).Format(time.RFC3339Nano), BootID: "old", RecorderPID: 999, ProcessTick: 1, LineageBefore: "../../archive/sbxr-subscription/cert1.pem", Completion: &RenewalCompletion{ExitCode: 1, CompletedAt: now.Format(time.RFC3339Nano), OwnedOutcome: "no-op", LineageAfter: "../../archive/sbxr-subscription/cert1.pem"}}}}
+	body, _ := json.Marshal(evidence)
+	if err := os.WriteFile(a.path(RenewalEvidencePath), append(body, '\n'), 0600); err != nil {
+		t.Fatal(err)
+	}
+	accepted := ServingAuthority{LinkID: strings.Repeat("1", 32), CredentialSHA256: strings.Repeat("2", 64), CertificateGeneration: 1}
+	for index, fixture := range []struct {
+		name string
+		body []byte
+		mode os.FileMode
+	}{{"cert", []byte("test certificate 1\n"), 0644}, {"chain", []byte("test chain 1\n"), 0644}, {"fullchain", []byte("test fullchain 1\n"), 0644}, {"privkey", []byte("test key 1\n"), 0600}} {
+		if index > 0 {
+			if err := os.WriteFile(a.path(servingArchive+"/"+fixture.name+"1.pem"), fixture.body, fixture.mode); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink("../../archive/sbxr-subscription/"+fixture.name+"1.pem", a.path(servingLive+"/"+fixture.name+".pem")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		sum := sha256.Sum256(fixture.body)
+		accepted.CertificateSHA256[index] = fmt.Sprintf("%x", sum)
+	}
+	if !a.ResolveRenewalFailure(authority, accepted) {
+		t.Fatal("ResolveRenewalFailure() refused")
+	}
+	inspection := a.InspectRenewal(authority)
+	if inspection.State != RenewalAttemptHealthy || len(inspection.Evidence.Attempts) != 0 {
+		t.Fatalf("InspectRenewal() = %#v", inspection)
+	}
 }
 
 func TestRenewalCertificateValidationUsesProtectedArchiveMaterial(t *testing.T) {

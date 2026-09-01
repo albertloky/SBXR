@@ -24,6 +24,10 @@ type subscriptionResourceRemovalHost interface {
 	RemoveSubscriptionResources(context.Context, hostadapter.SubscriptionResourceAuthority, *hostadapter.ServingAuthority) bool
 }
 
+type subscriptionRepairRemovalHost interface {
+	RemoveSubscriptionRepair(context.Context, hostadapter.ServingAuthority, hostadapter.ServingAuthority, *hostadapter.ServingExclusion) bool
+}
+
 type subscriptionExclusion struct {
 	serving *hostadapter.ServingExclusion
 	renewal *hostadapter.RenewalExclusion
@@ -157,6 +161,9 @@ func serveSubscription(ctx context.Context, lifecycle softwarelifecycle.Interfac
 	if record.Rotation != nil {
 		return subscriptionserving.Refused
 	}
+	if record.Repair != nil && record.Repair.Checkpoint != repairPrepared && record.Repair.Target == nil {
+		return subscriptionserving.Refused
+	}
 	var selected hostadapter.ServingAuthority
 	var renewal *hostadapter.RenewalAuthority
 	if record.Serving != nil {
@@ -168,6 +175,9 @@ func serveSubscription(ctx context.Context, lifecycle softwarelifecycle.Interfac
 	}
 	if record.Activation != nil {
 		selected = record.Activation.Target
+	}
+	if record.Repair != nil && record.Repair.Target != nil {
+		selected = *record.Repair.Target
 	}
 	for _, path := range []string{hostSetupSpec.OwnershipNextPath, finalOwnershipPath} {
 		if _, err := host.ReadOwnership(path); !errors.Is(err, os.ErrNotExist) {

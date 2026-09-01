@@ -480,6 +480,78 @@ func (adapter Adapter) RemoveSubscriptionRotation(ctx context.Context, input Sub
 	return adapter.removeFile(ServingTokenPath).OK && adapter.removeFile(ServingStatePath).OK && adapter.ServingQuiescent()
 }
 
+func (adapter Adapter) RemoveSubscriptionRepair(ctx context.Context, source, target ServingAuthority, exclusion *ServingExclusion) bool {
+	stagingAccepted := adapter.servingDirectory(ServingStagingPath, nil, false) || adapter.safelyAbsent(ServingStagingPath)
+	if !source.Valid() || !target.Valid() || source.LinkID != target.LinkID || source.CredentialSHA256 != target.CredentialSHA256 || !adapter.validServingExclusion(exclusion) || !stagingAccepted {
+		return false
+	}
+	unit, unitErr := adapter.protectedServingFile(ServingUnitPath, 0644, "")
+	wants, wantsErr := os.Readlink(adapter.path(ServingUnitWantsPath))
+	archivePaths, archiveOK := adapter.removableServingArchive(target)
+	unitPresent := unitErr == nil
+	unitAccepted := unitPresent && string(unit) == ServingUnit || errors.Is(unitErr, os.ErrNotExist) && adapter.safelyAbsent(ServingUnitPath)
+	wantsAccepted := wantsErr == nil && wants == "../sbxr-subscription.service" || errors.Is(wantsErr, os.ErrNotExist) && adapter.safelyAbsent(ServingUnitWantsPath)
+	if !unitAccepted || !wantsAccepted || !archiveOK {
+		return false
+	}
+	token, tokenErr := adapter.protectedServingFile(ServingTokenPath, 0600, "")
+	if tokenErr == nil && (len(token) != 44 || token[43] != '\n' || digest(token[:43]) != source.CredentialSHA256) || tokenErr != nil && !errors.Is(tokenErr, os.ErrNotExist) {
+		return false
+	}
+	state, stateErr := adapter.protectedServingFile(ServingStatePath, 0600, "")
+	if stateErr == nil && !bytes.Equal(state, servingStateBytes(source)) && !bytes.Equal(state, servingStateBytes(target)) || stateErr != nil && !errors.Is(stateErr, os.ErrNotExist) {
+		return false
+	}
+	for index, name := range certificateNames {
+		path := servingLive + "/" + name + ".pem"
+		link, err := os.Readlink(adapter.path(path))
+		if errors.Is(err, os.ErrNotExist) && adapter.safelyAbsent(path) {
+			continue
+		}
+		generation, valid := servingArchiveIdentity(filepath.Base(link))
+		selected := source
+		if generation == target.CertificateGeneration {
+			selected = target
+		}
+		mode := os.FileMode(0644)
+		if name == "privkey" {
+			mode = 0600
+		}
+		if err != nil || !valid || generation != source.CertificateGeneration && generation != target.CertificateGeneration || link != "../../archive/sbxr-subscription/"+filepath.Base(link) {
+			return false
+		}
+		if _, err := adapter.protectedServingFile(servingArchive+"/"+name+strconv.Itoa(generation)+".pem", mode, selected.CertificateSHA256[index]); err != nil {
+			return false
+		}
+	}
+	for index, file := range exclusion.files {
+		info, err := file.Stat()
+		current, currentErr := os.Lstat(adapter.path(certbotDirectoryLocks[index]))
+		if err != nil || currentErr != nil || !os.SameFile(info, current) {
+			return false
+		}
+	}
+	if unitPresent && !adapter.servingCommand(ctx, "disable", "--now", "sbxr-subscription.service") || !adapter.ServingQuiescent() {
+		return false
+	}
+	paths := make([]string, 0, len(certificateNames)+len(archivePaths)+7)
+	for _, name := range certificateNames {
+		paths = append(paths, servingLive+"/"+name+".pem")
+	}
+	paths = append(paths, archivePaths...)
+	paths = append(paths, servingLive, servingArchive, ServingTokenPath, ServingStatePath, ServingStagingPath, ServingUnitWantsPath, ServingUnitPath)
+	for _, path := range paths {
+		if err := os.Remove(adapter.path(path)); errors.Is(err, os.ErrNotExist) {
+			if !adapter.syncAbsentPath(path) {
+				return false
+			}
+		} else if err != nil || adapter.syncOwnershipDirectory(adapter.path(filepath.Dir(path))) != nil {
+			return false
+		}
+	}
+	return adapter.servingCommand(ctx, "daemon-reload") && adapter.ServingQuiescent()
+}
+
 func (adapter Adapter) SubscriptionRotationStagingEmpty() bool {
 	return adapter.servingDirectory(ServingStagingPath, nil, false) && adapter.syncOwnershipDirectory(adapter.path(ServingStagingPath)) == nil
 }

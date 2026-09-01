@@ -231,21 +231,97 @@ if [ -e "$removal_record" ] || [ -L "$removal_record" ]; then
   if "$ROOT/usr/bin/grep" -Fq '"serving":' "$removal_record"; then
     [ "$schema" -eq 2 ] && [ -n "$config_sha" ] || path_refused
     serving=$("$ROOT/usr/bin/sed" -n 's/.*,"serving":\(.*\)}$/\1/p' "$removal_record")
+    if "$ROOT/usr/bin/grep" -Fq '"renewal":' "$removal_record"; then
+      serving=$("$ROOT/usr/bin/sed" -n 's/.*,"serving":\(.*\),"renewal":.*/\1/p' "$removal_record")
+    fi
     printf '%s\n' "$serving" | "$ROOT/usr/bin/grep" -Eqx '\{"link_id":"[0-9a-f]{32}","credential_sha256":"[0-9a-f]{64}","certificate_generation":[1-9][0-9]{0,6},"certificate_sha256":\["[0-9a-f]{64}","[0-9a-f]{64}","[0-9a-f]{64}","[0-9a-f]{64}"\]\}' || path_refused
     if printf '%s\n' "$serving" | "$ROOT/usr/bin/grep" -Eq '"(0{32}|0{64})"'; then path_refused; fi
     generation=$(printf '%s' "$serving" | "$ROOT/usr/bin/sed" -n 's/.*"certificate_generation":\([0-9]*\),.*/\1/p')
     [ "$generation" -le 1000000 ] || path_refused
     hashes=$(printf '%s' "$serving" | "$ROOT/usr/bin/sed" -n 's/.*"certificate_sha256":\["\([0-9a-f]*\)","\([0-9a-f]*\)","\([0-9a-f]*\)","\([0-9a-f]*\)"\]}/\1 \2 \3 \4/p')
     read -r cert_hash chain_hash fullchain_hash privkey_hash <<<"$hashes"
-    resources=${resources%]}',"/etc/systemd/system/sbxr-subscription.service root:root 0644 one-link fixed-serving-v1","/var/lib/sbxr/subscription-token root:root 0600 one-link credential","/var/lib/sbxr/subscription-staging root:root 0700 empty-directory","/etc/letsencrypt/archive/sbxr-subscription root:root 0700 directory","/etc/letsencrypt/live/sbxr-subscription root:root 0700 directory"'
+    resources=${resources%]}',"/etc/systemd/system/sbxr-subscription.service root:root 0644 one-link fixed-serving-v1","/etc/systemd/system/multi-user.target.wants/sbxr-subscription.service root-owned symlink ../sbxr-subscription.service","/var/lib/sbxr/subscription-token root:root 0600 one-link credential","/var/lib/sbxr/subscription-serving.json root:root 0600 immutable serving state","/var/lib/sbxr/subscription-staging root:root 0700 empty-directory","/etc/letsencrypt/archive/sbxr-subscription root:root 0700 directory","/etc/letsencrypt/live/sbxr-subscription root:root 0700 directory"'
     for name in cert chain fullchain privkey; do
       mode=0644
       case "$name" in cert) hash=$cert_hash ;; chain) hash=$chain_hash ;; fullchain) hash=$fullchain_hash ;; privkey) hash=$privkey_hash; mode=0600 ;; esac
       resources=$resources',"/etc/letsencrypt/archive/sbxr-subscription/'"$name$generation"'.pem root:root '"$mode"' one-link '"$hash"'","/etc/letsencrypt/live/sbxr-subscription/'"$name"'.pem root:root symlink ../../archive/sbxr-subscription/'"$name$generation"'.pem"'
     done
     resources=$resources']'
-    provenance_count=$((provenance_count + 13))
+    provenance_count=$((provenance_count + 15))
     serving_suffix=',"serving":'$(printf '%s' "$serving" | "$ROOT/usr/bin/sed" 's/[][\\.^$*+?(){}|]/\\&/g')
+  fi
+  renewal_suffix=''
+  if "$ROOT/usr/bin/grep" -Fq '"renewal":' "$removal_record"; then
+    [ -n "$serving_suffix" ] || path_refused
+    renewal=$("$ROOT/usr/bin/sed" -n 's/.*,"renewal":\(.*\),"subscription_repair":.*/\1/p' "$removal_record")
+    printf '%s\n' "$renewal" | "$ROOT/usr/bin/grep" -Eqx '\{"recorder_id":"[0-9a-f]{32}","lineage":"sbxr-subscription","public_ipv4":"'"$ip"'","invocation":"snap-certbot-renew-v1"\}' || path_refused
+    printf '%s\n' "$renewal" | "$ROOT/usr/bin/grep" -Eq '"recorder_id":"0{32}"' && path_refused
+    resources=${resources%]}',"/etc/systemd/system/snap.certbot.renew.service.d/50-sbxr-recorder.conf root:root 0644 one-link recorder-v1","/etc/letsencrypt/renewal-hooks/deploy/sbxr-subscription root:root 0700 one-link deploy-writer-v1","/etc/letsencrypt/renewal-hooks/post/sbxr-subscription root:root 0700 one-link post-writer-v1","/var/lib/sbxr/renewal-attempts.json root:root 0600 one-link bounded-evidence-v1","/var/lib/sbxr/renewal-admission.lock root:root 0600 one-link admission-v1","/var/lib/sbxr/renewal-writer.lock root:root 0600 one-link writer-v1"]'
+    provenance_count=$((provenance_count + 6))
+    renewal_suffix=',"renewal":'$(printf '%s' "$renewal" | "$ROOT/usr/bin/sed" 's/[][\\.^$*+?(){}|]/\\&/g')
+  fi
+  repair_suffix=''
+  if "$ROOT/usr/bin/grep" -Fq '"subscription_repair":' "$removal_record"; then
+    [ -n "$renewal_suffix" ] || path_refused
+    repair=$("$ROOT/usr/bin/sed" -n 's/.*,"subscription_repair":\(.*\),"subscription_resources":.*/\1/p' "$removal_record")
+    repair_id=$(printf '%s' "$repair" | "$ROOT/usr/bin/sed" -n 's/^{"operation_id":"\([0-9a-f]*\)".*/\1/p')
+    [ "${#repair_id}" -eq 32 ] && [ "$repair_id" != 00000000000000000000000000000000 ] || path_refused
+    source=$(printf '%s' "$repair" | "$ROOT/usr/bin/sed" -n 's/.*,"source":\(.*\),"target":.*/\1/p')
+    if [ -z "$source" ]; then source=$(printf '%s' "$repair" | "$ROOT/usr/bin/sed" -n 's/.*,"source":\(.*\)}$/\1/p'); fi
+    target=$(printf '%s' "$repair" | "$ROOT/usr/bin/sed" -n 's/.*,"target":\(.*\)}$/\1/p')
+    serving_pattern='\{"link_id":"[0-9a-f]{32}","credential_sha256":"[0-9a-f]{64}","certificate_generation":[1-9][0-9]{0,6},"certificate_sha256":\["[0-9a-f]{64}","[0-9a-f]{64}","[0-9a-f]{64}","[0-9a-f]{64}"\]\}'
+    printf '%s\n' "$source" | "$ROOT/usr/bin/grep" -Eqx "$serving_pattern" || path_refused
+    [ -z "$target" ] || printf '%s\n' "$target" | "$ROOT/usr/bin/grep" -Eqx "$serving_pattern" || path_refused
+    correction=$(printf '%s' "$repair" | "$ROOT/usr/bin/sed" -n 's/.*,"correction":"\([^"]*\)".*/\1/p')
+    direction=$(printf '%s' "$repair" | "$ROOT/usr/bin/sed" -n 's/.*,"direction":"\([^"]*\)".*/\1/p')
+    checkpoint=$(printf '%s' "$repair" | "$ROOT/usr/bin/sed" -n 's/.*,"checkpoint":"\([^"]*\)".*/\1/p')
+    certificate_target_valid=0
+    if [ -n "$target" ]; then
+      source_link=$(printf '%s' "$source" | "$ROOT/usr/bin/sed" -n 's/.*"link_id":"\([0-9a-f]*\)".*/\1/p')
+      source_credential=$(printf '%s' "$source" | "$ROOT/usr/bin/sed" -n 's/.*"credential_sha256":"\([0-9a-f]*\)".*/\1/p')
+      source_generation=$(printf '%s' "$source" | "$ROOT/usr/bin/sed" -n 's/.*"certificate_generation":\([0-9]*\),.*/\1/p')
+      target_link=$(printf '%s' "$target" | "$ROOT/usr/bin/sed" -n 's/.*"link_id":"\([0-9a-f]*\)".*/\1/p')
+      target_credential=$(printf '%s' "$target" | "$ROOT/usr/bin/sed" -n 's/.*"credential_sha256":"\([0-9a-f]*\)".*/\1/p')
+      target_generation=$(printf '%s' "$target" | "$ROOT/usr/bin/sed" -n 's/.*"certificate_generation":\([0-9]*\),.*/\1/p')
+      if [ "$target_link" = "$source_link" ] && [ "$target_credential" = "$source_credential" ] && [ "$target_generation" -gt "$source_generation" ] && [ "$target_generation" -le 1000000 ]; then certificate_target_valid=1; fi
+    fi
+    case "$correction:$direction:$checkpoint" in
+      'restart owned serving runtime:cleanup:prepared') effects='\["restart owned serving runtime"\]'; completed='null'; [ -z "$target" ] && [ "$source" = "$serving" ] || path_refused ;;
+      'restart owned serving runtime:forward:committed') effects='\["restart owned serving runtime"\]'; completed='null'; { [ -z "$target" ] || [ "$target" = "$source" ]; } && [ "$source" = "$serving" ] || path_refused ;;
+      'restart owned serving runtime:forward:accepted') effects='\["restart owned serving runtime"\]'; completed='\["restart owned serving runtime"\]'; [ "$target" = "$source" ] && [ "$target" = "$serving" ] || path_refused ;;
+      'renew owned certificate:cleanup:prepared') effects='\["renew owned certificate","activate published certificate","resolve renewal evidence"\]'; completed='null'; [ -z "$target" ] && [ "$source" = "$serving" ] || path_refused ;;
+      'renew owned certificate:forward:committed') effects='\["renew owned certificate","activate published certificate","resolve renewal evidence"\]'; completed='(null|\["certificate published"\])'; [ "$source" = "$serving" ] && { [ -z "$target" ] || [ "$certificate_target_valid" -eq 1 ]; } || path_refused ;;
+      'renew owned certificate:forward:accepted') effects='\["renew owned certificate","activate published certificate","resolve renewal evidence"\]'; completed="$effects"; [ "$certificate_target_valid" -eq 1 ] && [ "$target" = "$serving" ] || path_refused ;;
+      *) path_refused ;;
+    esac
+    printf '%s\n' "$repair" | "$ROOT/usr/bin/grep" -Eqx '^\{"operation_id":"[0-9a-f]{32}","kind":"repair subscription","direction":"'"$direction"'","correction":"'"$correction"'","effects":'"$effects"',"completed_effects":'"$completed"',"checkpoint":"'"$checkpoint"'","source":.*(,"target":.*)?\}$' || path_refused
+    repair_suffix=',"subscription_repair":'$(printf '%s' "$repair" | "$ROOT/usr/bin/sed" 's/[][\\.^$*+?(){}|]/\\&/g')
+  fi
+  subscription_suffix=''
+  if "$ROOT/usr/bin/grep" -Fq '"subscription_resources":' "$removal_record"; then
+    [ -n "$renewal_suffix" ] || path_refused
+    subscription=$("$ROOT/usr/bin/sed" -n 's/.*,"subscription_resources":\(.*\)}$/\1/p' "$removal_record")
+    printf '%s\n' "$subscription" | "$ROOT/usr/bin/grep" -Eqx '\{"public_ipv4":"'"$ip"'","firewall_sha256":"[0-9a-f]{64}","snapd_created":(true|false),"certbot_created":(true|false)\}' || path_refused
+    firewall_sha=$(printf '%s' "$subscription" | "$ROOT/usr/bin/sed" -n 's/.*"firewall_sha256":"\([0-9a-f]*\)".*/\1/p')
+    [ "$firewall_sha" != 0000000000000000000000000000000000000000000000000000000000000000 ] || path_refused
+    snapd=$(printf '%s' "$subscription" | "$ROOT/usr/bin/sed" -n 's/.*"snapd_created":\(true\|false\).*/\1/p'); [ "$snapd" = true ] && snapd=created || snapd=reused
+    certbot=$(printf '%s' "$subscription" | "$ROOT/usr/bin/sed" -n 's/.*"certbot_created":\(true\|false\).*/\1/p'); [ "$certbot" = true ] && certbot=created || certbot=reused
+    resources=${resources%]}',"/etc/systemd/system/sbxr-subscription-firewall.service root:root 0644 one-link sha256:'"$firewall_sha"'","iptables filter INPUT '"$ip"'/32 tcp/80 comment=sbxr-subscription exact-owned","iptables filter INPUT '"$ip"'/32 tcp/8443 comment=sbxr-subscription exact-owned","snapd dependency '"$snapd"'","official Certbot snap dependency '"$certbot"'"]'
+    provenance_count=$((provenance_count + 5))
+    subscription_suffix=',"subscription_resources":'$(printf '%s' "$subscription" | "$ROOT/usr/bin/sed" 's/[][\\.^$*+?(){}|]/\\&/g')
+  fi
+  if [ "${correction:-}" = 'renew owned certificate' ] && [ "${certificate_target_valid:-0}" -eq 1 ] && [ "$target" != "$serving" ]; then
+    target_hashes=$(printf '%s' "$target" | "$ROOT/usr/bin/sed" -n 's/.*"certificate_sha256":\["\([0-9a-f]*\)","\([0-9a-f]*\)","\([0-9a-f]*\)","\([0-9a-f]*\)"\]}/\1 \2 \3 \4/p')
+    read -r target_cert_hash target_chain_hash target_fullchain_hash target_privkey_hash <<<"$target_hashes"
+    for name in cert chain fullchain privkey; do
+      mode=0644
+      case "$name" in cert) hash=$target_cert_hash ;; chain) hash=$target_chain_hash ;; fullchain) hash=$target_fullchain_hash ;; privkey) hash=$target_privkey_hash; mode=0600 ;; esac
+      old_live='/etc/letsencrypt/live/sbxr-subscription/'"$name"'.pem root:root symlink ../../archive/sbxr-subscription/'"$name$source_generation"'.pem'
+      new_live='/etc/letsencrypt/live/sbxr-subscription/'"$name"'.pem root:root symlink ../../archive/sbxr-subscription/'"$name$target_generation"'.pem'
+      resources=${resources/"$old_live"/"$new_live"}
+      resources=${resources%]}',"/etc/letsencrypt/archive/sbxr-subscription/'"$name$target_generation"'.pem root:root '"$mode"' one-link '"$hash"'"]'
+    done
+    provenance_count=$((provenance_count + 4))
   fi
   # Escape literal contract text for ERE; no caller-controlled regular expression.
   resource_pattern=$(printf '%s' "$resources" | "$ROOT/usr/bin/sed" 's/[][\\.^$*+?(){}|]/\\&/g')
@@ -255,7 +331,7 @@ if [ -e "$removal_record" ] || [ -L "$removal_record" ]; then
     suffix=$suffix',"resource_creating_releases":\['"$identity"'(,'"$identity"'){'"$((provenance_count - 1))"'}\],"finishing_release_identity":'"$identity"
     selector='finishing_release_identity'
   fi
-  "$ROOT/usr/bin/grep" -Eqx '^'"$prefix$fields$suffix$serving_suffix"'\}$' "$removal_record" || path_refused
+  "$ROOT/usr/bin/grep" -Eqx '^'"$prefix$fields$suffix$serving_suffix$renewal_suffix$repair_suffix$subscription_suffix"'\}$' "$removal_record" || path_refused
   if [ "$removal_record" = "$final_removal_record" ]; then
     final_checkpoint=3
     [ -z "$config_sha" ] || final_checkpoint=11

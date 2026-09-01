@@ -101,6 +101,49 @@ func TestRunDisplaysRotatedLinkAndExactReplacementWarning(t *testing.T) {
 	}
 }
 
+type repairInstallation struct{ journeyInstallation }
+
+func (installation *repairInstallation) Review(_ context.Context, action proxyinstallation.Action) proxyinstallation.Review {
+	review := proxyinstallation.Review{Status: proxyinstallation.Running, SubscriptionStatus: proxyinstallation.SubscriptionProblemDetected, LegalActions: []proxyinstallation.Action{proxyinstallation.RepairSubscriptionAction}}
+	if action == proxyinstallation.RepairSubscriptionAction {
+		review.Prepared = &proxyinstallation.PreparedAction{}
+		review.Plan = []string{"Action: Repair subscription", "Exact correction: restart only owned Subscription Serving."}
+	}
+	return review
+}
+
+func (installation *repairInstallation) Execute(_ context.Context, _ proxyinstallation.PreparedAction, confirmation proxyinstallation.Confirmation, progress proxyinstallation.ProgressReporter) proxyinstallation.Result {
+	installation.confirmations = append(installation.confirmations, confirmation)
+	if confirmation == proxyinstallation.Approved {
+		progress(proxyinstallation.Progress{Phase: "Repairing subscription serving"})
+		return proxyinstallation.Result{Status: proxyinstallation.Running, SubscriptionStatus: proxyinstallation.SubscriptionAvailable, Code: proxyinstallation.SubscriptionRepaired, Message: "Subscription repair completed and passed local checks."}
+	}
+	return proxyinstallation.Result{Code: proxyinstallation.ActionCancelled, Message: "No changes were made."}
+}
+
+func TestRunConfirmsRepairWithExactPrompt(t *testing.T) {
+	installation := &repairInstallation{}
+	var output bytes.Buffer
+	if code := Run(t.Context(), nil, strings.NewReader("1\ny\n0\n"), &output, &output, installation); code != 0 {
+		t.Fatalf("Run() = %d output=%s", code, output.String())
+	}
+	for _, want := range []string{"Repair subscription? [y/N]", "Progress: Repairing subscription serving", string(proxyinstallation.SubscriptionRepaired)} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("missing %q: %s", want, output.String())
+		}
+	}
+}
+
+func TestRunReportsRepairOutputFailureAfterOneApprovedExecution(t *testing.T) {
+	installation := &repairInstallation{}
+	output := &rotationFailWriter{failAt: string(proxyinstallation.SubscriptionRepaired)}
+	var errors bytes.Buffer
+	code := Run(t.Context(), nil, strings.NewReader("1\ny\n"), output, &errors, installation)
+	if code != 1 || !reflect.DeepEqual(installation.confirmations, []proxyinstallation.Confirmation{proxyinstallation.Approved}) {
+		t.Fatalf("code=%d confirmations=%v output=%s errors=%s", code, installation.confirmations, output.String(), errors.String())
+	}
+}
+
 func TestRunReportsCommittedRotationDisplayFailure(t *testing.T) {
 	installation := &rotationInstallation{}
 	output := &rotationFailWriter{failAt: "Replace the old link in Karing."}
