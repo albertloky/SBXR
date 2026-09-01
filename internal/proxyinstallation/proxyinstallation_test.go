@@ -60,6 +60,14 @@ type controlledHost struct {
 	subscriptionRenewal             hostadapter.RenewalAuthority
 	subscriptionCredential          []byte
 	subscriptionCredentialCount     int
+	subscriptionRotationCredential  []byte
+	subscriptionRotationServing     hostadapter.ServingAuthority
+	subscriptionStopped             bool
+	subscriptionOverlap             bool
+	failRotationEffect              string
+	renewalProblem                  bool
+	publicIPDrift                   bool
+	subscriptionStarts              int
 }
 
 func (host *controlledHost) PrepareSubscription(_ context.Context, input hostadapter.SubscriptionEnableInput) hostadapter.SubscriptionEnableResult {
@@ -88,12 +96,82 @@ func (host *controlledHost) PrepareSubscription(_ context.Context, input hostada
 }
 
 func (host *controlledHost) InspectPreparedSubscription(_ context.Context, serving hostadapter.ServingAuthority, renewal hostadapter.RenewalAuthority) hostadapter.Observation {
+	if host.failRotationEffect == "verify" {
+		host.failRotationEffect = ""
+		return hostadapter.Observation{Observed: true}
+	}
 	accepted := host.subscriptionPrepared && serving == host.subscriptionServing && renewal == host.subscriptionRenewal
 	return hostadapter.Observation{Observed: true, Accepted: accepted}
 }
 
 func (host *controlledHost) ActivatePreparedSubscription(context.Context, hostadapter.ServingAuthority, hostadapter.RenewalAuthority) bool {
+	if host.failRotationEffect == "activate" {
+		host.failRotationEffect = ""
+		return false
+	}
+	host.subscriptionStarts++
 	return host.subscriptionPrepared
+}
+
+func (host *controlledHost) ServingPublicIPv4(context.Context, string) bool {
+	return !host.publicIPDrift
+}
+
+func (host *controlledHost) PrepareSubscriptionRotation(input hostadapter.SubscriptionRotationInput) bool {
+	if input.Source != host.subscriptionServing || len(input.Credential) != 43 {
+		return false
+	}
+	host.subscriptionRotationCredential = bytes.Clone(input.Credential)
+	host.subscriptionRotationServing = input.Target
+	host.subscriptionCredentialCount++
+	if host.failRotationEffect == "prepare" {
+		host.failRotationEffect = ""
+		return false
+	}
+	return true
+}
+
+func (host *controlledHost) StopSubscriptionRotation(_ context.Context, input hostadapter.SubscriptionRotationInput) bool {
+	if input.Source != host.subscriptionServing {
+		return false
+	}
+	host.subscriptionStopped = true
+	if host.failRotationEffect == "stop" {
+		host.failRotationEffect = ""
+		return false
+	}
+	return true
+}
+
+func (host *controlledHost) PublishSubscriptionRotation(input hostadapter.SubscriptionRotationInput) bool {
+	if !host.subscriptionStopped || input.Target != host.subscriptionRotationServing || input.Source != host.subscriptionServing && input.Target != host.subscriptionServing {
+		return false
+	}
+	if host.failRotationEffect == "publish" {
+		host.failRotationEffect = ""
+		return false
+	}
+	host.subscriptionOverlap = !host.subscriptionStopped
+	host.subscriptionCredential = bytes.Clone(host.subscriptionRotationCredential)
+	host.subscriptionServing = input.Target
+	return true
+}
+
+func (host *controlledHost) RestoreSubscriptionRotation(context.Context, hostadapter.SubscriptionRotationInput) bool {
+	host.subscriptionRotationCredential = nil
+	host.subscriptionRotationServing = hostadapter.ServingAuthority{}
+	host.subscriptionStopped = false
+	return true
+}
+
+func (host *controlledHost) RemoveSubscriptionRotation(context.Context, hostadapter.SubscriptionRotationInput, *hostadapter.ServingExclusion) bool {
+	host.subscriptionRotationCredential = nil
+	host.subscriptionRotationServing = hostadapter.ServingAuthority{}
+	return true
+}
+
+func (host *controlledHost) SubscriptionRotationStagingEmpty() bool {
+	return len(host.subscriptionRotationCredential) == 0 || host.subscriptionServing == host.subscriptionRotationServing
 }
 
 func (host *controlledHost) ReadSubscriptionLink(serving hostadapter.ServingAuthority, publicIPv4 string) ([]byte, bool) {
@@ -116,6 +194,9 @@ func (host *controlledHost) RemoveSubscriptionResources(context.Context, hostada
 }
 
 func (host *controlledHost) InspectRenewal(hostadapter.RenewalAuthority) hostadapter.RenewalInspection {
+	if host.renewalProblem {
+		return hostadapter.RenewalInspection{Observation: hostadapter.Observation{Observed: true}, State: hostadapter.RenewalAttemptFailed}
+	}
 	return hostadapter.RenewalInspection{Observation: hostadapter.Observation{Observed: true, Accepted: true}, State: hostadapter.RenewalAttemptHealthy}
 }
 
@@ -1068,6 +1149,253 @@ func TestOwnerCanEnableOneVerifiedSubscriptionGeneration(t *testing.T) {
 	}
 	if bytes.Contains(host.ownership, host.subscriptionCredential) || bytes.Contains(host.ownership, links[0]) {
 		t.Fatal("Ownership Record contains a subscription credential")
+	}
+}
+
+func TestOwnerCanRotateSubscriptionLinkWithoutChangingProxyAccess(t *testing.T) {
+	host := acceptedHost()
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+	enable := installation.Review(t.Context(), EnableSubscriptionAction)
+	installation.Execute(t.Context(), *enable.Prepared, Approved, nil)
+	oldCredential := bytes.Clone(host.subscriptionCredential)
+	oldConfiguration := bytes.Clone(host.configuration)
+
+	review := installation.Review(t.Context(), RotateSubscriptionLinkAction)
+	if review.Prepared == nil || !slices.Contains(review.LegalActions, RotateSubscriptionLinkAction) {
+		t.Fatalf("rotation review = %#v", review)
+	}
+	plan := strings.Join(review.Plan, "\n")
+	for _, want := range []string{"no overlap", "Karing", "Client Identity", "Proxy Profile", "copied"} {
+		if !strings.Contains(plan, want) {
+			t.Errorf("rotation Plan missing %q: %s", want, plan)
+		}
+	}
+	var links [][]byte
+	result := installation.Execute(t.Context(), *review.Prepared, Approved, func(progress Progress) {
+		if len(progress.SubscriptionLink) != 0 {
+			links = append(links, bytes.Clone(progress.SubscriptionLink))
+		}
+	})
+	if result.Code != SubscriptionLinkRotated || result.SubscriptionStatus != SubscriptionAvailable || len(links) != 1 {
+		t.Fatalf("rotation = %#v links=%q", result, links)
+	}
+	if bytes.Equal(oldCredential, host.subscriptionCredential) || !bytes.Equal(oldConfiguration, host.configuration) || host.subscriptionCredentialCount != 2 || host.subscriptionOverlap {
+		t.Fatalf("old=%q new=%q generations=%d overlap=%t", oldCredential, host.subscriptionCredential, host.subscriptionCredentialCount, host.subscriptionOverlap)
+	}
+}
+
+func rotationTarget(source hostadapter.ServingAuthority) (hostadapter.ServingAuthority, []byte) {
+	credential := []byte("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq")
+	digest := sha256.Sum256(credential)
+	target := source
+	target.LinkID = "abcdefabcdefabcdefabcdefabcdefab"
+	target.CredentialSHA256 = hex.EncodeToString(digest[:])
+	return target, credential
+}
+
+func rotationOperation(source, target hostadapter.ServingAuthority, checkpoint subscriptionRotationCheckpoint) subscriptionRotation {
+	direction := "cleanup"
+	var completed []string
+	if checkpoint == rotationStopAuthorized {
+		completed = []string{"target prepared"}
+	}
+	if checkpoint == rotationCommitted {
+		direction, completed = "forward", []string{"target prepared", "source stopped"}
+	}
+	return subscriptionRotation{OperationID: strings.Repeat("8", 32), Kind: "rotate subscription link", Direction: direction, Effects: slices.Clone(subscriptionRotationEffects), Completed: completed, Source: source, Target: target, Checkpoint: checkpoint}
+}
+
+func TestSubscriptionRotationRestartUsesDurableRecoveryDirection(t *testing.T) {
+	for _, checkpoint := range []subscriptionRotationCheckpoint{rotationTargetAuthorized, rotationStopAuthorized, rotationCommitted} {
+		t.Run(string(checkpoint), func(t *testing.T) {
+			host := acceptedHost()
+			installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+			setup := installation.Review(t.Context(), StartSetupAction)
+			installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+			enable := installation.Review(t.Context(), EnableSubscriptionAction)
+			installation.Execute(t.Context(), *enable.Prepared, Approved, nil)
+			source := host.subscriptionServing
+			target, credential := rotationTarget(source)
+			record, _ := decodeOwnership(host.ownership)
+			operation := rotationOperation(source, target, checkpoint)
+			record.Rotation = &operation
+			host.subscriptionRotationServing, host.subscriptionRotationCredential = target, credential
+			if checkpoint == rotationCommitted {
+				record.Serving = &target
+				host.subscriptionStopped = true
+			}
+			updateSubscriptionResources(&record, testInstalledIdentity())
+			host.ownership = ownershipBytes(record)
+
+			restarted := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+			review := restarted.Review(t.Context(), FinishSubscriptionChangeAction)
+			if review.Prepared == nil || !strings.Contains(strings.Join(review.Plan, "\n"), map[bool]string{true: "selected replacement", false: "old generation"}[checkpoint == rotationCommitted]) {
+				t.Fatalf("finish review = %#v", review)
+			}
+			result := restarted.Execute(t.Context(), *review.Prepared, Approved, func(Progress) {})
+			if checkpoint == rotationCommitted {
+				if result.Code != SubscriptionLinkRotated || host.subscriptionServing != target {
+					t.Fatalf("forward finish = %#v serving=%#v", result, host.subscriptionServing)
+				}
+			} else if result.Code != SubscriptionChangeCleanedUp || host.subscriptionServing != source {
+				t.Fatalf("cleanup finish = %#v serving=%#v", result, host.subscriptionServing)
+			}
+			committed, ok := decodeOwnership(host.ownership)
+			if !ok || committed.Rotation != nil {
+				t.Fatalf("committed ownership = %#v valid=%t", committed, ok)
+			}
+		})
+	}
+}
+
+func TestSubscriptionRotationRecoversEachLateEffectWithoutAnotherTarget(t *testing.T) {
+	for _, effect := range []string{"prepare", "stop", "publish", "activate", "verify"} {
+		t.Run(effect, func(t *testing.T) {
+			host := acceptedHost()
+			installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+			setup := installation.Review(t.Context(), StartSetupAction)
+			installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+			enable := installation.Review(t.Context(), EnableSubscriptionAction)
+			installation.Execute(t.Context(), *enable.Prepared, Approved, nil)
+			host.failRotationEffect = effect
+			rotate := installation.Review(t.Context(), RotateSubscriptionLinkAction)
+			if result := installation.Execute(t.Context(), *rotate.Prepared, Approved, nil); result.Code != SubscriptionChangeNeedsCompletion {
+				t.Fatalf("interrupted rotation = %#v", result)
+			}
+			restarted := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+			finish := restarted.Review(t.Context(), FinishSubscriptionChangeAction)
+			if finish.Prepared == nil {
+				t.Fatalf("finish review = %#v", finish)
+			}
+			result := restarted.Execute(t.Context(), *finish.Prepared, Approved, func(Progress) {})
+			forward := effect == "publish" || effect == "activate" || effect == "verify"
+			if forward && result.Code != SubscriptionLinkRotated || !forward && result.Code != SubscriptionChangeCleanedUp {
+				t.Fatalf("finish = %#v", result)
+			}
+			if host.subscriptionCredentialCount != 2 {
+				t.Fatalf("credential generations = %d", host.subscriptionCredentialCount)
+			}
+		})
+	}
+}
+
+func TestFailedRevocationKeepsOldLinkWorkingAndSecurityProblemVisible(t *testing.T) {
+	host := acceptedHost()
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+	enable := installation.Review(t.Context(), EnableSubscriptionAction)
+	installation.Execute(t.Context(), *enable.Prepared, Approved, nil)
+	oldCredential := bytes.Clone(host.subscriptionCredential)
+	record, _ := decodeOwnership(host.ownership)
+	record.SubscriptionCompromised = true
+	host.ownership = ownershipBytes(record)
+	host.failRotationEffect = "prepare"
+	rotate := installation.Review(t.Context(), RotateSubscriptionLinkAction)
+	installation.Execute(t.Context(), *rotate.Prepared, Approved, nil)
+	restarted := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	finish := restarted.Review(t.Context(), FinishSubscriptionChangeAction)
+	if result := restarted.Execute(t.Context(), *finish.Prepared, Approved, nil); result.Code != SubscriptionChangeCleanedUp || result.SubscriptionStatus != SubscriptionProblemDetected {
+		t.Fatalf("cleanup = %#v", result)
+	}
+	problem := restarted.Review(t.Context(), StatusAction)
+	if problem.SubscriptionStatus != SubscriptionProblemDetected || !slices.Contains(problem.LegalActions, RotateSubscriptionLinkAction) || !bytes.Equal(oldCredential, host.subscriptionCredential) || !strings.Contains(strings.Join(problem.Details, "\n"), "security problem") {
+		t.Fatalf("problem = %#v credential=%q", problem, host.subscriptionCredential)
+	}
+	retry := restarted.Review(t.Context(), RotateSubscriptionLinkAction)
+	if retry.Prepared == nil {
+		t.Fatalf("retry = %#v", retry)
+	}
+	if result := restarted.Execute(t.Context(), *retry.Prepared, Approved, func(Progress) {}); result.Code != SubscriptionLinkRotated || result.SubscriptionStatus != SubscriptionAvailable {
+		t.Fatalf("retry result = %#v", result)
+	}
+}
+
+func TestSubscriptionFaultNeitherAutomaticallyAllowsNorBlocksRotation(t *testing.T) {
+	host := acceptedHost()
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+	enable := installation.Review(t.Context(), EnableSubscriptionAction)
+	installation.Execute(t.Context(), *enable.Prepared, Approved, nil)
+	host.renewalProblem = true
+	if review := installation.Review(t.Context(), RotateSubscriptionLinkAction); review.Prepared == nil || review.SubscriptionStatus != SubscriptionProblemDetected {
+		t.Fatalf("unrelated renewal fault blocked safe rotation: %#v", review)
+	}
+	host.publicIPDrift = true
+	if review := installation.Review(t.Context(), RotateSubscriptionLinkAction); review.Prepared != nil || review.Result.Code != ActionRefused {
+		t.Fatalf("public-IP drift allowed rotation: %#v", review)
+	}
+}
+
+func TestSubscriptionRotationRevalidatesMutableServingFacts(t *testing.T) {
+	host := acceptedHost()
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+	enable := installation.Review(t.Context(), EnableSubscriptionAction)
+	installation.Execute(t.Context(), *enable.Prepared, Approved, nil)
+	rotate := installation.Review(t.Context(), RotateSubscriptionLinkAction)
+	host.subscriptionServing.CertificateGeneration++
+	before := host.subscriptionCredentialCount
+	if result := installation.Execute(t.Context(), *rotate.Prepared, Approved, nil); result.Code != ActionRefused || host.subscriptionCredentialCount != before {
+		t.Fatalf("changed serving facts = %#v generations=%d", result, host.subscriptionCredentialCount)
+	}
+}
+
+func TestCompleteRemovalTakesOverSubscriptionRotationWithoutStartingEitherGeneration(t *testing.T) {
+	host := acceptedHost()
+	lifecycle := &controlledRemovalLifecycle{ready: true}
+	installation := newInstalledInterface(lifecycle, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+	enable := installation.Review(t.Context(), EnableSubscriptionAction)
+	installation.Execute(t.Context(), *enable.Prepared, Approved, nil)
+	record, _ := decodeOwnership(host.ownership)
+	target, credential := rotationTarget(*record.Serving)
+	operation := rotationOperation(*record.Serving, target, rotationStopAuthorized)
+	record.Rotation = &operation
+	host.subscriptionRotationServing, host.subscriptionRotationCredential = target, credential
+	updateSubscriptionResources(&record, testInstalledIdentity())
+	host.ownership = ownershipBytes(record)
+
+	restarted := newInstalledInterface(lifecycle, host, acceptedSingBox{})
+	removal := restarted.Review(t.Context(), CompleteRemovalAction)
+	if removal.Prepared == nil {
+		t.Fatalf("removal review = %#v", removal)
+	}
+	if result := restarted.Execute(t.Context(), *removal.Prepared, Approved, nil); result.Code != CompleteRemovalCompleted || len(host.subscriptionRotationCredential) != 0 {
+		t.Fatalf("removal = %#v target=%q", result, host.subscriptionRotationCredential)
+	}
+}
+
+func TestCompleteRemovalTakesOverCommittedRotationBeforeTargetPublication(t *testing.T) {
+	host := acceptedHost()
+	lifecycle := &controlledRemovalLifecycle{ready: true}
+	installation := newInstalledInterface(lifecycle, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+	enable := installation.Review(t.Context(), EnableSubscriptionAction)
+	installation.Execute(t.Context(), *enable.Prepared, Approved, nil)
+	source := host.subscriptionServing
+	record, _ := decodeOwnership(host.ownership)
+	target, credential := rotationTarget(source)
+	operation := rotationOperation(source, target, rotationCommitted)
+	record.Serving, record.Rotation = &target, &operation
+	host.subscriptionRotationServing, host.subscriptionRotationCredential, host.subscriptionStopped = target, credential, true
+	updateSubscriptionResources(&record, testInstalledIdentity())
+	host.ownership = ownershipBytes(record)
+	starts := host.subscriptionStarts
+
+	restarted := newInstalledInterface(lifecycle, host, acceptedSingBox{})
+	removal := restarted.Review(t.Context(), CompleteRemovalAction)
+	if removal.Prepared == nil {
+		t.Fatalf("removal review = %#v", removal)
+	}
+	if result := restarted.Execute(t.Context(), *removal.Prepared, Approved, nil); result.Code != CompleteRemovalCompleted || host.subscriptionStarts != starts {
+		t.Fatalf("removal = %#v starts=%d want=%d", result, host.subscriptionStarts, starts)
 	}
 }
 

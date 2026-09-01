@@ -645,7 +645,7 @@ func (a Adapter) AcquireServingExclusion() (*ServingExclusion, bool) {
 // RemoveServingRuntime requires retained precommit exclusion. It never opens
 // another descriptor for those POSIX lock inodes (closing it would unlock them).
 func (a Adapter) RemoveServingRuntime(ctx context.Context, authority ServingAuthority, exclusion *ServingExclusion) bool {
-	if exclusion == nil || exclusion.root != a.root || len(exclusion.files) != len(certbotDirectoryLocks) || !a.InspectServingFiles(authority, true).Accepted {
+	if !a.validServingExclusion(exclusion) || !a.InspectServingFiles(authority, true).Accepted {
 		return false
 	}
 	archivePaths, validArchive := a.removableServingArchive(authority)
@@ -678,6 +678,20 @@ func (a Adapter) RemoveServingRuntime(ctx context.Context, authority ServingAuth
 		}
 	}
 	return a.servingCommand(ctx, "daemon-reload") && a.ServingQuiescent()
+}
+
+func (a Adapter) validServingExclusion(exclusion *ServingExclusion) bool {
+	if exclusion == nil || exclusion.root != a.root || len(exclusion.files) != len(certbotDirectoryLocks) {
+		return false
+	}
+	for i, file := range exclusion.files {
+		info, err := file.Stat()
+		current, currentErr := os.Lstat(a.path(certbotDirectoryLocks[i]))
+		if err != nil || currentErr != nil || !os.SameFile(info, current) {
+			return false
+		}
+	}
+	return true
 }
 
 func (a Adapter) ServingRuntimeAbsent(authority ServingAuthority) bool {

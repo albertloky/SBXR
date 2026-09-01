@@ -65,6 +65,7 @@ const (
 	CompleteRemovalAction          Action = "Complete removal"
 	FinishRemovalAction            Action = "Finish removal"
 	EnableSubscriptionAction       Action = "Enable subscription"
+	RotateSubscriptionLinkAction   Action = "Rotate subscription link"
 	FinishSubscriptionChangeAction Action = "Finish subscription change"
 )
 
@@ -97,6 +98,7 @@ const (
 	SubscriptionChangeFinished         ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-CHANGE-FINISHED"
 	SubscriptionChangeNeedsCompletion  ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-CHANGE-INCOMPLETE"
 	SubscriptionEnabled                ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-ENABLED"
+	SubscriptionLinkRotated            ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-LINK-ROTATED"
 	SubscriptionChangeCleanedUp        ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-CHANGE-CLEANED-UP"
 	SubscriptionLinkDisplayIncomplete  ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-LINK-DISPLAY-INCOMPLETE"
 	SubscriptionLinkDisclosed          ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-LINK-DISCLOSED"
@@ -254,6 +256,8 @@ type ownershipRecord struct {
 	Renewal                  *hostadapter.RenewalAuthority              `json:"renewal,omitempty"`
 	Activation               *certificateActivation                     `json:"certificate_activation,omitempty"`
 	Enablement               *subscriptionEnablement                    `json:"subscription_enablement,omitempty"`
+	Rotation                 *subscriptionRotation                      `json:"subscription_rotation,omitempty"`
+	SubscriptionCompromised  bool                                       `json:"subscription_compromised,omitempty"`
 	SubscriptionResources    *hostadapter.SubscriptionResourceAuthority `json:"subscription_resources,omitempty"`
 }
 
@@ -266,6 +270,27 @@ type subscriptionEnablement struct {
 	Renewal          *hostadapter.RenewalAuthority              `json:"renewal,omitempty"`
 	Resources        *hostadapter.SubscriptionResourceAuthority `json:"resources,omitempty"`
 }
+
+type subscriptionRotation struct {
+	OperationID string                         `json:"operation_id"`
+	Kind        string                         `json:"kind"`
+	Direction   string                         `json:"direction"`
+	Effects     []string                       `json:"effects"`
+	Completed   []string                       `json:"completed_effects"`
+	Source      hostadapter.ServingAuthority   `json:"source"`
+	Target      hostadapter.ServingAuthority   `json:"target"`
+	Checkpoint  subscriptionRotationCheckpoint `json:"checkpoint"`
+}
+
+type subscriptionRotationCheckpoint string
+
+const (
+	rotationTargetAuthorized subscriptionRotationCheckpoint = "target authorized"
+	rotationStopAuthorized   subscriptionRotationCheckpoint = "stop authorized"
+	rotationCommitted        subscriptionRotationCheckpoint = "committed"
+)
+
+var subscriptionRotationEffects = []string{"prepare target", "stop source", "publish target", "activate target"}
 
 type certificateActivation struct {
 	Source     hostadapter.ServingAuthority    `json:"source"`
@@ -378,24 +403,49 @@ func (module *installedInterface) Review(ctx context.Context, action Action) Rev
 		}
 	}
 	if review.Status == Running && review.SubscriptionStatus == SubscriptionProblemDetected {
-		removalSafe := module.servingSurfaceSafe() && action == CompleteRemovalAction && review.Prepared != nil
-		if !removalSafe {
-			clear(module.prepared)
-			review.Prepared = nil
-			review.LegalActions = []Action{ViewDetailsAction}
-			if action != StatusAction && action != ViewDetailsAction && review.Result.Code != ActionRefused {
-				review.Result = refused(review.Status, "Subscription authority", "Restore one consistent published, accepted, and loaded certificate generation, then inspect again.")
+		compromised, rotationCandidate := false, false
+		if body, err := module.readOwnership(); err == nil {
+			if record, ok := decodeOwnership(body); ok {
+				compromised = record.SubscriptionCompromised && record.Rotation == nil && record.Serving != nil
+				rotationCandidate = record.Rotation == nil && record.Serving != nil && record.Renewal != nil && activation.Observed && activation.Published == *record.Serving
+			}
+		}
+		if rotationCandidate {
+			review.LegalActions = []Action{ViewDetailsAction, ShowClientConfigurationAction, CompleteRemovalAction, RotateSubscriptionLinkAction}
+			if compromised {
+				review.Details = append(review.Details, "Subscription security problem: the old link remains authoritative after a failed replacement attempt.")
+			}
+			if action == RotateSubscriptionLinkAction {
+				review = module.prepareSubscriptionRotationReview(ctx, review, activation)
+			} else if action != StatusAction && action != ViewDetailsAction && action != ShowClientConfigurationAction && action != CompleteRemovalAction {
+				clear(module.prepared)
+				review.Prepared = nil
+				review.Result = refused(review.Status, "Legal action", "Rotate the compromised Subscription Link, inspect details, use the confirmed client fallback, or complete removal.")
+			}
+		} else {
+			removalSafe := module.servingSurfaceSafe() && action == CompleteRemovalAction && review.Prepared != nil
+			if !removalSafe {
+				clear(module.prepared)
+				review.Prepared = nil
+				review.LegalActions = []Action{ViewDetailsAction}
+				if action != StatusAction && action != ViewDetailsAction && review.Result.Code != ActionRefused {
+					review.Result = refused(review.Status, "Subscription authority", "Restore one consistent published, accepted, and loaded certificate generation, then inspect again.")
+				}
 			}
 		}
 	}
 	if review.Status == Running && review.SubscriptionStatus == SubscriptionAvailable {
 		review.LegalActions = slices.DeleteFunc(review.LegalActions, func(a Action) bool { return a == EnableSubscriptionAction })
+		review.LegalActions = append(review.LegalActions, RotateSubscriptionLinkAction)
 		if action == EnableSubscriptionAction {
 			clear(module.prepared)
 			review.Prepared = nil
 			review.Result = refused(review.Status, "Existing serving authority", "Complete removal is supported; subscription enablement remains unavailable.")
 		}
 		review.Details = append(review.Details, "Subscription passed local checks. Karing reachability is not verified.")
+		if action == RotateSubscriptionLinkAction {
+			review = module.prepareSubscriptionRotationReview(ctx, review, activation)
+		}
 	}
 	if review.Status == Running && review.SubscriptionStatus == SubscriptionChangeIncomplete {
 		review.LegalActions = []Action{FinishSubscriptionChangeAction, ViewDetailsAction, CompleteRemovalAction}
@@ -406,6 +456,8 @@ func (module *installedInterface) Review(ctx context.Context, action Action) Rev
 			if body, err := module.readOwnership(); err == nil {
 				if record, ok := decodeOwnership(body); ok && record.Enablement != nil {
 					review = module.prepareEnablementCleanupReview(ctx, review, record, body)
+				} else if ok && record.Rotation != nil {
+					review = module.prepareSubscriptionRotationFinishReview(ctx, review, record, body)
 				} else {
 					review = module.prepareCertificateActivationReview(ctx, review, activation)
 				}
@@ -1005,7 +1057,7 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 		if result.Code == SetupComplete || result.Code == ClientConfigurationDisclosed {
 			result.ProxyTraffic = ProvedWorking
 		}
-		if result.Code == SubscriptionChangeFinished || result.Code == SubscriptionEnabled {
+		if result.Code == SubscriptionChangeFinished || result.Code == SubscriptionEnabled || result.Code == SubscriptionLinkRotated {
 			result.ProxyTraffic, result.SubscriptionServing = ProvedWorking, ProvedWorking
 		}
 		if result.Code == CompleteRemovalCompleted {
@@ -1027,7 +1079,13 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 	if authority.action == EnableSubscriptionAction {
 		return module.enableSubscription(ctx, authority, progress)
 	}
+	if authority.action == RotateSubscriptionLinkAction {
+		return module.rotateSubscriptionLink(ctx, authority, progress)
+	}
 	if authority.action == FinishSubscriptionChangeAction {
+		if record, body, ok := module.currentSubscriptionRotation(authority); ok {
+			return module.finishSubscriptionRotation(ctx, authority, record, body, progress)
+		}
 		if record, body, ok := module.currentEnablement(authority); ok {
 			return module.executeEnablementCleanup(ctx, authority, record, body, progress)
 		}
@@ -1401,6 +1459,24 @@ func (module *installedInterface) finishRemoval(ctx context.Context, record owne
 		host, ok := module.host.(subscriptionEnablementHost)
 		if !ok || !host.CleanupPreparedSubscription(context.WithoutCancel(ctx), hostadapter.SubscriptionCleanupInput{Checkpoint: record.Enablement.Checkpoint, LinkID: record.Enablement.LinkID, CredentialSHA256: record.Enablement.CredentialSHA256, RecorderID: record.Enablement.RecorderID, Serving: record.Enablement.Serving, Renewal: record.Enablement.Renewal, Resources: record.Enablement.Resources}) {
 			return removalInterrupted("Interrupted subscription enablement removal")
+		}
+		report(progress, "Cleaning up subscription change")
+	}
+	if record.Rotation != nil {
+		host, ok := module.host.(subscriptionRotationHost)
+		if !ok || record.Renewal == nil {
+			return removalInterrupted("Interrupted Subscription Link rotation removal")
+		}
+		if exclusion == nil {
+			var acquired bool
+			exclusion, acquired = module.acquireSubscriptionExclusion(record)
+			if !acquired {
+				return removalInterrupted("Subscription rotation exclusion")
+			}
+			defer exclusion.Release()
+		}
+		if !host.RemoveSubscriptionRotation(context.WithoutCancel(ctx), hostadapter.SubscriptionRotationInput{Source: record.Rotation.Source, Target: record.Rotation.Target, Renewal: *record.Renewal}, exclusion.serving) {
+			return removalInterrupted("Interrupted Subscription Link rotation removal")
 		}
 		report(progress, "Cleaning up subscription change")
 	}
@@ -1866,7 +1942,7 @@ func decodeOwnership(body []byte) (ownershipRecord, bool) {
 		}
 	}
 	for name, value := range fields {
-		if !slices.Contains([]string{"schema", "phase", "unfinished_direction", "release_identity", "proxy_package_identity", "public_ipv4", "destination_address", "destination_server_name", "configuration_sha256", "permitted_resources", "cleanup_checkpoint", "removal_checkpoint", "resource_creating_releases", "finishing_release_identity", "serving", "renewal", "certificate_activation", "subscription_enablement", "subscription_resources"}, name) {
+		if !slices.Contains([]string{"schema", "phase", "unfinished_direction", "release_identity", "proxy_package_identity", "public_ipv4", "destination_address", "destination_server_name", "configuration_sha256", "permitted_resources", "cleanup_checkpoint", "removal_checkpoint", "resource_creating_releases", "finishing_release_identity", "serving", "renewal", "certificate_activation", "subscription_enablement", "subscription_rotation", "subscription_compromised", "subscription_resources"}, name) {
 			return ownershipRecord{}, false
 		}
 		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
@@ -1911,6 +1987,12 @@ func decodeOwnership(body []byte) (ownershipRecord, bool) {
 			if len(enablement[name]) == 0 || bytes.Equal(bytes.TrimSpace(enablement[name]), []byte("null")) {
 				return ownershipRecord{}, false
 			}
+		}
+	}
+	if raw, exists := fields["subscription_rotation"]; exists {
+		var rotation map[string]json.RawMessage
+		if json.Unmarshal(raw, &rotation) != nil || len(rotation["source"]) == 0 || len(rotation["target"]) == 0 || len(rotation["checkpoint"]) == 0 {
+			return ownershipRecord{}, false
 		}
 	}
 	if !exactIdentityFields(fields["release_identity"]) {
@@ -1958,7 +2040,7 @@ func validOwnership(record ownershipRecord) bool {
 		return false
 	}
 	if record.Schema == 1 {
-		if record.ResourceCreatingReleases != nil || record.FinishingRelease != nil || record.Serving != nil || record.Renewal != nil || record.Activation != nil || record.Enablement != nil || record.SubscriptionResources != nil {
+		if record.ResourceCreatingReleases != nil || record.FinishingRelease != nil || record.Serving != nil || record.Renewal != nil || record.Activation != nil || record.Enablement != nil || record.Rotation != nil || record.SubscriptionResources != nil {
 			return false
 		}
 	} else {
@@ -1988,6 +2070,12 @@ func validOwnership(record ownershipRecord) bool {
 		return false
 	}
 	if record.Enablement != nil && (record.Schema != 2 || record.Serving != nil || record.Renewal != nil || record.Activation != nil || record.Direction != noDirection && record.Direction != removalRequired || record.Phase != runningPhase && record.Phase != removalCommitted || !validSubscriptionEnablement(*record.Enablement)) {
+		return false
+	}
+	if record.Rotation != nil && (record.Schema != 2 || record.Serving == nil || record.Renewal == nil || record.Enablement != nil || record.Activation != nil || record.Direction != noDirection && record.Direction != removalRequired || record.Phase != runningPhase && record.Phase != removalCommitted || !validSubscriptionRotation(*record.Rotation) || record.Rotation.Checkpoint != rotationCommitted && *record.Serving != record.Rotation.Source || record.Rotation.Checkpoint == rotationCommitted && *record.Serving != record.Rotation.Target) {
+		return false
+	}
+	if record.SubscriptionCompromised && (record.Schema != 2 || record.Serving == nil) {
 		return false
 	}
 	if record.SubscriptionResources != nil && (record.Schema != 2 || !record.SubscriptionResources.Valid() || record.SubscriptionResources.PublicIPv4 != record.PublicIPv4 || record.Serving == nil || record.Renewal == nil) {
@@ -2067,6 +2155,12 @@ func recordResources(record ownershipRecord, softwareOnly bool) []string {
 			resources = append(resources, path+".sbxr-next root-owned synchronized no-replace publication")
 		}
 	}
+	if record.Rotation != nil {
+		resources = append(resources,
+			hostadapter.SubscriptionCandidateTokenPath+" root:root 0600 one-link replacement credential",
+			hostadapter.SubscriptionCandidateStatePath+" root:root 0600 immutable replacement serving state",
+		)
+	}
 	return resources
 }
 
@@ -2082,6 +2176,21 @@ func validSubscriptionEnablement(enablement subscriptionEnablement) bool {
 		return false
 	}
 	return enablement.Serving == nil || enablement.Serving.Valid() && enablement.Renewal.Valid() && enablement.Serving.LinkID == enablement.LinkID && enablement.Serving.CredentialSHA256 == enablement.CredentialSHA256 && enablement.Renewal.RecorderID == enablement.RecorderID && enablement.Resources.PublicIPv4 == enablement.Renewal.PublicIPv4
+}
+
+func validSubscriptionRotation(rotation subscriptionRotation) bool {
+	completed := map[subscriptionRotationCheckpoint][]string{
+		rotationTargetAuthorized: nil,
+		rotationStopAuthorized:   {"target prepared"},
+		rotationCommitted:        {"target prepared", "source stopped"},
+	}
+	wantCompleted, checkpointOK := completed[rotation.Checkpoint]
+	direction := "cleanup"
+	if rotation.Checkpoint == rotationCommitted {
+		direction = "forward"
+	}
+	operationID, err := hex.DecodeString(rotation.OperationID)
+	return checkpointOK && err == nil && len(operationID) == 16 && hex.EncodeToString(operationID) == rotation.OperationID && rotation.OperationID != strings.Repeat("0", 32) && rotation.Kind == "rotate subscription link" && rotation.Direction == direction && slices.Equal(rotation.Effects, subscriptionRotationEffects) && slices.Equal(rotation.Completed, wantCompleted) && rotation.Source.Valid() && rotation.Target.Valid() && rotation.Source.LinkID != rotation.Target.LinkID && rotation.Source.CredentialSHA256 != rotation.Target.CredentialSHA256 && rotation.Source.CertificateGeneration == rotation.Target.CertificateGeneration && rotation.Source.CertificateSHA256 == rotation.Target.CertificateSHA256
 }
 
 func validCertificateActivation(activation certificateActivation) bool {

@@ -154,6 +154,9 @@ func serveSubscription(ctx context.Context, lifecycle softwarelifecycle.Interfac
 	if err != nil || !ok || record.Direction != noDirection || record.Phase != runningPhase || !compatibleOwnership(record, *installed.Installed) {
 		return subscriptionserving.Refused
 	}
+	if record.Rotation != nil {
+		return subscriptionserving.Refused
+	}
 	var selected hostadapter.ServingAuthority
 	var renewal *hostadapter.RenewalAuthority
 	if record.Serving != nil {

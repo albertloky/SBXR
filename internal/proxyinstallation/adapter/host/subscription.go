@@ -58,6 +58,13 @@ type SubscriptionCleanupInput struct {
 	Resources        *SubscriptionResourceAuthority
 }
 
+type SubscriptionRotationInput struct {
+	Source     ServingAuthority
+	Target     ServingAuthority
+	Renewal    RenewalAuthority
+	Credential []byte
+}
+
 const SubscriptionFirewallUnitPath = "/etc/systemd/system/sbxr-subscription-firewall.service"
 const SubscriptionServingCheckpoint = 8
 const SubscriptionActivationCheckpoint = 23
@@ -410,6 +417,91 @@ func (adapter Adapter) ActivatePreparedSubscription(ctx context.Context, serving
 	}
 	_, code, observed := run(ctx, "systemctl", "enable", "--now", "sbxr-subscription.service")
 	return observed && code == 0
+}
+
+func (adapter Adapter) PrepareSubscriptionRotation(input SubscriptionRotationInput) bool {
+	decoded, err := base64.RawURLEncoding.Strict().DecodeString(string(input.Credential))
+	if err != nil || len(input.Credential) != 43 || len(decoded) != 32 || !input.Source.Valid() || !input.Target.Valid() || !input.Renewal.Valid() || input.Source.CertificateGeneration != input.Target.CertificateGeneration || input.Source.CertificateSHA256 != input.Target.CertificateSHA256 || input.Source.LinkID == input.Target.LinkID || input.Source.CredentialSHA256 == input.Target.CredentialSHA256 || input.Target.CredentialSHA256 != digest(input.Credential) {
+		return false
+	}
+	if link, ok := adapter.ReadSubscriptionLink(input.Source, input.Renewal.PublicIPv4); !ok || len(link) == 0 || !adapter.prepareServingStaging() {
+		return false
+	}
+	credential := append(bytes.Clone(input.Credential), '\n')
+	return adapter.publishSubscriptionFile(SubscriptionCandidateTokenPath, credential, 0600) && adapter.publishSubscriptionFile(SubscriptionCandidateStatePath, servingStateBytes(input.Target), 0600)
+}
+
+func (adapter Adapter) StopSubscriptionRotation(ctx context.Context, input SubscriptionRotationInput) bool {
+	credential, credentialErr := adapter.protectedServingFile(SubscriptionCandidateTokenPath, 0600, "")
+	state, stateErr := adapter.protectedServingFile(SubscriptionCandidateStatePath, 0600, digest(servingStateBytes(input.Target)))
+	if link, ok := adapter.ReadSubscriptionLink(input.Source, input.Renewal.PublicIPv4); !ok || len(link) == 0 || credentialErr != nil || len(credential) != 44 || credential[43] != '\n' || digest(credential[:43]) != input.Target.CredentialSHA256 || stateErr != nil || !bytes.Equal(state, servingStateBytes(input.Target)) || !adapter.servingCommand(ctx, "stop", "sbxr-subscription.service") {
+		return false
+	}
+	return adapter.ServingQuiescent()
+}
+
+func (adapter Adapter) PublishSubscriptionRotation(input SubscriptionRotationInput) bool {
+	if len(input.Credential) == 0 {
+		candidate, err := adapter.protectedServingFile(SubscriptionCandidateTokenPath, 0600, "")
+		if err != nil {
+			candidate, err = adapter.protectedServingFile(ServingTokenPath, 0600, "")
+		}
+		if err != nil || len(candidate) != 44 || candidate[43] != '\n' || digest(candidate[:43]) != input.Target.CredentialSHA256 {
+			return false
+		}
+		input.Credential = candidate[:43]
+	}
+	return adapter.replaceSubscriptionFile(ServingTokenPath, SubscriptionCandidateTokenPath, append(bytes.Clone(input.Credential), '\n'), 0600, input.Source.CredentialSHA256) &&
+		adapter.replaceSubscriptionFile(ServingStatePath, SubscriptionCandidateStatePath, servingStateBytes(input.Target), 0600, digest(servingStateBytes(input.Source)))
+}
+
+func (adapter Adapter) RestoreSubscriptionRotation(ctx context.Context, input SubscriptionRotationInput) bool {
+	if link, ok := adapter.ReadSubscriptionLink(input.Source, input.Renewal.PublicIPv4); !ok || len(link) == 0 {
+		return false
+	}
+	if !adapter.removeSubscriptionCandidates(&input.Target, input.Target.CredentialSHA256) {
+		return false
+	}
+	return adapter.ActivatePreparedSubscription(ctx, input.Source, input.Renewal) && adapter.InspectPreparedSubscription(ctx, input.Source, input.Renewal).Accepted
+}
+
+func (adapter Adapter) RemoveSubscriptionRotation(ctx context.Context, input SubscriptionRotationInput, exclusion *ServingExclusion) bool {
+	if !input.Source.Valid() || !input.Target.Valid() || !adapter.validServingExclusion(exclusion) || !adapter.servingCommand(ctx, "disable", "--now", "sbxr-subscription.service") || !adapter.ServingQuiescent() || !adapter.removeSubscriptionCandidates(&input.Target, input.Target.CredentialSHA256) {
+		return false
+	}
+	token, tokenErr := adapter.protectedServingFile(ServingTokenPath, 0600, "")
+	if tokenErr == nil && (len(token) != 44 || token[43] != '\n' || digest(token[:43]) != input.Source.CredentialSHA256 && digest(token[:43]) != input.Target.CredentialSHA256) || tokenErr != nil && !errors.Is(tokenErr, os.ErrNotExist) {
+		return false
+	}
+	state, stateErr := adapter.protectedServingFile(ServingStatePath, 0600, "")
+	if stateErr == nil && !bytes.Equal(state, servingStateBytes(input.Source)) && !bytes.Equal(state, servingStateBytes(input.Target)) || stateErr != nil && !errors.Is(stateErr, os.ErrNotExist) {
+		return false
+	}
+	return adapter.removeFile(ServingTokenPath).OK && adapter.removeFile(ServingStatePath).OK && adapter.ServingQuiescent()
+}
+
+func (adapter Adapter) SubscriptionRotationStagingEmpty() bool {
+	return adapter.servingDirectory(ServingStagingPath, nil, false) && adapter.syncOwnershipDirectory(adapter.path(ServingStagingPath)) == nil
+}
+
+func (adapter Adapter) replaceSubscriptionFile(path, candidate string, target []byte, mode os.FileMode, sourceDigest string) bool {
+	current, err := adapter.protectedServingFile(path, mode, "")
+	if err == nil && bytes.Equal(current, target) {
+		return adapter.syncOwnershipDirectory(adapter.path(filepath.Dir(path))) == nil && adapter.removeFile(candidate).OK && adapter.syncOwnershipDirectory(adapter.path(filepath.Dir(candidate))) == nil
+	}
+	sourceMatches := digest(current) == sourceDigest
+	if path == ServingTokenPath {
+		sourceMatches = digest(bytes.TrimSuffix(current, []byte{'\n'})) == sourceDigest
+	}
+	if err != nil || !sourceMatches {
+		return false
+	}
+	staged, err := adapter.protectedServingFile(candidate, mode, digest(target))
+	if err != nil || !bytes.Equal(staged, target) || os.Rename(adapter.path(candidate), adapter.path(path)) != nil || adapter.syncOwnershipDirectory(adapter.path(filepath.Dir(path))) != nil {
+		return false
+	}
+	published, err := adapter.protectedServingFile(path, mode, digest(target))
+	return err == nil && bytes.Equal(published, target)
 }
 
 func subscriptionFirewallUnit(ipv4 string) string {

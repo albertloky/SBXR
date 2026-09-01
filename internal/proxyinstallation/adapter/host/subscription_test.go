@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -284,6 +286,145 @@ func TestSubscriptionLinkRedisclosureRequiresExactProtectedCredential(t *testing
 	}
 	if link, ok := adapter.ReadSubscriptionLink(authority, "8.8.8.8"); ok || len(link) != 0 {
 		t.Fatal("mismatched serving state was disclosed")
+	}
+}
+
+func TestSubscriptionRotationKeepsSourceCanonicalUntilTargetPublication(t *testing.T) {
+	adapter := Adapter{root: t.TempDir()}
+	if err := os.MkdirAll(adapter.path("/var/lib/sbxr"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	sourceCredential := []byte(base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32)))
+	targetCredential := []byte(base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{2}, 32)))
+	sourceDigest, targetDigest := sha256.Sum256(sourceCredential), sha256.Sum256(targetCredential)
+	source := ServingAuthority{LinkID: strings.Repeat("1", 32), CredentialSHA256: hex.EncodeToString(sourceDigest[:]), CertificateGeneration: 1, CertificateSHA256: [4]string{strings.Repeat("2", 64), strings.Repeat("3", 64), strings.Repeat("4", 64), strings.Repeat("5", 64)}}
+	target := source
+	target.LinkID, target.CredentialSHA256 = strings.Repeat("6", 32), hex.EncodeToString(targetDigest[:])
+	for path, body := range map[string][]byte{ServingTokenPath: append(bytes.Clone(sourceCredential), '\n'), ServingStatePath: servingStateBytes(source)} {
+		if err := os.WriteFile(adapter.path(path), body, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	input := SubscriptionRotationInput{Source: source, Target: target, Renewal: RenewalAuthority{RecorderID: strings.Repeat("7", 32), Lineage: "sbxr-subscription", PublicIPv4: "8.8.8.8", Invocation: OfficialRenewalInvocation}, Credential: targetCredential}
+	if !adapter.PrepareSubscriptionRotation(input) {
+		t.Fatal("replacement preparation refused")
+	}
+	if link, ok := adapter.ReadSubscriptionLink(source, "8.8.8.8"); !ok || !bytes.Contains(link, sourceCredential) {
+		t.Fatalf("source changed before commitment: %q %t", link, ok)
+	}
+	failed := false
+	adapter.syncDirectoryFault = func(string) error {
+		if !failed {
+			failed = true
+			return errors.New("late directory sync failure")
+		}
+		return nil
+	}
+	if adapter.PublishSubscriptionRotation(input) {
+		t.Fatal("late directory sync failure reported success")
+	}
+	adapter.syncDirectoryFault = nil
+	if !adapter.PublishSubscriptionRotation(input) || !adapter.SubscriptionRotationStagingEmpty() {
+		t.Fatal("target publication refused")
+	}
+	if link, ok := adapter.ReadSubscriptionLink(target, "8.8.8.8"); !ok || !bytes.Contains(link, targetCredential) {
+		t.Fatalf("target not authoritative: %q %t", link, ok)
+	}
+	if _, ok := adapter.ReadSubscriptionLink(source, "8.8.8.8"); ok {
+		t.Fatal("source remained authoritative after commitment")
+	}
+}
+
+func TestSubscriptionRotationQuiescenceIncludesProcessGroupAndListener(t *testing.T) {
+	adapter := Adapter{root: t.TempDir()}
+	events := adapter.path(servingCgroup + "/cgroup.events")
+	if err := os.MkdirAll(filepath.Dir(events), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(events, []byte("populated 1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if adapter.ServingQuiescent() {
+		t.Fatal("populated serving cgroup treated as quiescent")
+	}
+	if err := os.WriteFile(events, []byte("populated 0\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp4", "0.0.0.0:8443")
+	if err != nil {
+		t.Skipf("cannot reserve TCP 8443: %v", err)
+	}
+	if adapter.ServingQuiescent() {
+		t.Fatal("live listener treated as quiescent")
+	}
+	listener.Close()
+	if !adapter.ServingQuiescent() {
+		t.Fatal("empty cgroup and absent listener not proved quiescent")
+	}
+}
+
+func TestCommittedRotationRemovalRequiresExclusionAndRefusesConflictingCanonicalMaterial(t *testing.T) {
+	adapter := Adapter{root: t.TempDir()}
+	adapter.subscriptionCommand = func(_ context.Context, name string, arguments ...string) (string, int, bool) {
+		if name != "systemctl" || !slices.Equal(arguments, []string{"disable", "--now", "sbxr-subscription.service"}) {
+			t.Fatalf("unexpected command %s %v", name, arguments)
+		}
+		return "", 0, true
+	}
+	for _, path := range append(slices.Clone(certbotDirectoryLocks), servingCgroup+"/cgroup.events") {
+		full := adapter.path(path)
+		if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
+			t.Fatal(err)
+		}
+		body := []byte(nil)
+		if strings.HasSuffix(path, "cgroup.events") {
+			body = []byte("populated 0\n")
+		}
+		if err := os.WriteFile(full, body, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !adapter.ServingQuiescent() {
+		t.Skip("TCP 8443 is not available for the production quiescence check")
+	}
+	if err := os.MkdirAll(adapter.path("/var/lib/sbxr"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	sourceCredential := []byte(base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32)))
+	targetCredential := []byte(base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{2}, 32)))
+	sourceDigest, targetDigest := sha256.Sum256(sourceCredential), sha256.Sum256(targetCredential)
+	source := ServingAuthority{LinkID: strings.Repeat("1", 32), CredentialSHA256: hex.EncodeToString(sourceDigest[:]), CertificateGeneration: 1, CertificateSHA256: [4]string{strings.Repeat("2", 64), strings.Repeat("3", 64), strings.Repeat("4", 64), strings.Repeat("5", 64)}}
+	target := source
+	target.LinkID, target.CredentialSHA256 = strings.Repeat("6", 32), hex.EncodeToString(targetDigest[:])
+	for path, body := range map[string][]byte{ServingTokenPath: append(bytes.Clone(sourceCredential), '\n'), ServingStatePath: servingStateBytes(source), SubscriptionCandidateTokenPath: append(bytes.Clone(targetCredential), '\n'), SubscriptionCandidateStatePath: servingStateBytes(target)} {
+		if err := os.MkdirAll(filepath.Dir(adapter.path(path)), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(adapter.path(path), body, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	input := SubscriptionRotationInput{Source: source, Target: target, Renewal: RenewalAuthority{RecorderID: strings.Repeat("7", 32), Lineage: "sbxr-subscription", PublicIPv4: "8.8.8.8", Invocation: OfficialRenewalInvocation}}
+	if adapter.RemoveSubscriptionRotation(t.Context(), input, nil) {
+		t.Fatal("rotation removal accepted no retained exclusion")
+	}
+	exclusion, ok := adapter.AcquireServingExclusion()
+	if !ok {
+		t.Fatal("serving exclusion refused")
+	}
+	defer exclusion.Release()
+	conflict := []byte(base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{3}, 32)))
+	if err := os.WriteFile(adapter.path(ServingTokenPath), append(conflict, '\n'), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if adapter.RemoveSubscriptionRotation(t.Context(), input, exclusion) {
+		t.Fatal("rotation removal accepted conflicting canonical credential")
+	}
+	if err := os.WriteFile(adapter.path(ServingTokenPath), append(sourceCredential, '\n'), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if !adapter.RemoveSubscriptionRotation(t.Context(), input, exclusion) || !adapter.safelyAbsent(ServingTokenPath) || !adapter.safelyAbsent(ServingStatePath) || !adapter.safelyAbsent(SubscriptionCandidateTokenPath) || !adapter.safelyAbsent(SubscriptionCandidateStatePath) {
+		t.Fatal("proved source/target rotation material was not removed")
 	}
 }
 

@@ -49,6 +49,9 @@ func (module *installedInterface) inspectSubscription(ctx context.Context) (Subs
 	if record.Enablement != nil {
 		return SubscriptionChangeIncomplete, hostadapter.CertificateActivationInspection{}
 	}
+	if record.Rotation != nil {
+		return SubscriptionChangeIncomplete, hostadapter.CertificateActivationInspection{}
+	}
 	if record.Serving == nil {
 		fact := module.host.InspectSubscriptionAbsence(ctx)
 		if fact.Observed && fact.Accepted {
@@ -82,6 +85,9 @@ func (module *installedInterface) inspectSubscription(ctx context.Context) (Subs
 		return SubscriptionProblemDetected, inspection
 	}
 	if !renewalHealthyForAccepted(renewal, *record.Serving) {
+		return SubscriptionProblemDetected, inspection
+	}
+	if record.SubscriptionCompromised {
 		return SubscriptionProblemDetected, inspection
 	}
 	return SubscriptionAvailable, inspection

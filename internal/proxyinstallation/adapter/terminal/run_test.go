@@ -67,6 +67,64 @@ func TestRunReviewsSubscriptionAndRedrawsAfterExactConfirmation(t *testing.T) {
 	}
 }
 
+type rotationInstallation struct{ journeyInstallation }
+
+func (installation *rotationInstallation) Review(_ context.Context, action proxyinstallation.Action) proxyinstallation.Review {
+	review := proxyinstallation.Review{Status: proxyinstallation.Running, SubscriptionStatus: proxyinstallation.SubscriptionAvailable, LegalActions: []proxyinstallation.Action{proxyinstallation.ViewDetailsAction, proxyinstallation.RotateSubscriptionLinkAction}}
+	if action == proxyinstallation.RotateSubscriptionLinkAction {
+		review.Prepared = &proxyinstallation.PreparedAction{}
+		review.Plan = []string{"Action: Rotate subscription link", "There is no overlap."}
+	}
+	return review
+}
+
+func (installation *rotationInstallation) Execute(_ context.Context, _ proxyinstallation.PreparedAction, confirmation proxyinstallation.Confirmation, progress proxyinstallation.ProgressReporter) proxyinstallation.Result {
+	installation.confirmations = append(installation.confirmations, confirmation)
+	if confirmation != proxyinstallation.Approved {
+		return proxyinstallation.Result{Code: proxyinstallation.ActionCancelled, Message: "No changes were made."}
+	}
+	progress(proxyinstallation.Progress{SubscriptionLink: []byte("https://8.8.8.8:8443/s/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq")})
+	return proxyinstallation.Result{Status: proxyinstallation.Running, SubscriptionStatus: proxyinstallation.SubscriptionAvailable, Code: proxyinstallation.SubscriptionLinkRotated, Message: "The subscription link was rotated. Replace the old link in Karing."}
+}
+
+func TestRunDisplaysRotatedLinkAndExactReplacementWarning(t *testing.T) {
+	installation := &rotationInstallation{}
+	var output bytes.Buffer
+	code := Run(t.Context(), nil, strings.NewReader("2\ny\n\n0\n"), &output, &output, installation)
+	for _, want := range []string{"Rotate subscription link? [y/N]", "This link is a reusable credential.", "Replace the old link in Karing. The old link no longer works. Your proxy Client Identity has not changed."} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("missing %q: %s", want, output.String())
+		}
+	}
+	if code != 0 || !reflect.DeepEqual(installation.confirmations, []proxyinstallation.Confirmation{proxyinstallation.Approved}) {
+		t.Fatalf("code=%d confirmations=%v output=%s", code, installation.confirmations, output.String())
+	}
+}
+
+func TestRunReportsCommittedRotationDisplayFailure(t *testing.T) {
+	installation := &rotationInstallation{}
+	output := &rotationFailWriter{failAt: "Replace the old link in Karing."}
+	var errors bytes.Buffer
+	code := Run(t.Context(), nil, strings.NewReader("2\ny\n"), output, &errors, installation)
+	if code != 1 || !strings.Contains(errors.String(), string(proxyinstallation.SubscriptionLinkDisplayIncomplete)) || !reflect.DeepEqual(installation.confirmations, []proxyinstallation.Confirmation{proxyinstallation.Approved}) {
+		t.Fatalf("code=%d confirmations=%v output=%s errors=%s", code, installation.confirmations, output.String(), errors.String())
+	}
+}
+
+type rotationFailWriter struct {
+	failAt string
+	buffer bytes.Buffer
+}
+
+func (writer *rotationFailWriter) Write(body []byte) (int, error) {
+	if strings.Contains(string(body), writer.failAt) {
+		return 0, io.ErrClosedPipe
+	}
+	return writer.buffer.Write(body)
+}
+
+func (writer *rotationFailWriter) String() string { return writer.buffer.String() }
+
 type subscriptionFailWriter struct {
 	failAt string
 	bytes.Buffer

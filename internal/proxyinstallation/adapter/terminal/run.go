@@ -98,7 +98,7 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 			} else if writeRefusal(output, latest) != nil {
 				return 1
 			}
-		case proxyinstallation.StartSetupAction, proxyinstallation.FinishCleanupAction, proxyinstallation.FinishSetupAction, proxyinstallation.EnableSubscriptionAction, proxyinstallation.FinishSubscriptionChangeAction:
+		case proxyinstallation.StartSetupAction, proxyinstallation.FinishCleanupAction, proxyinstallation.FinishSetupAction, proxyinstallation.EnableSubscriptionAction, proxyinstallation.RotateSubscriptionLinkAction, proxyinstallation.FinishSubscriptionChangeAction:
 			if review.Prepared == nil {
 				latest = review.Result
 				if writeRefusal(output, latest) != nil {
@@ -119,6 +119,8 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 				prompt = "Finish proxy setup? [y/N]"
 			} else if action == proxyinstallation.EnableSubscriptionAction {
 				prompt = "Enable subscription? [y/N]"
+			} else if action == proxyinstallation.RotateSubscriptionLinkAction {
+				prompt = "Rotate subscription link? [y/N]"
 			} else if action == proxyinstallation.FinishSubscriptionChangeAction {
 				prompt = "Finish subscription change? [y/N]"
 			}
@@ -139,12 +141,19 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 					subscriptionLink = bytes.Clone(progress.SubscriptionLink)
 				}
 			})
-			if action == proxyinstallation.EnableSubscriptionAction && latest.Code == proxyinstallation.SubscriptionEnabled {
+			if action == proxyinstallation.EnableSubscriptionAction && latest.Code == proxyinstallation.SubscriptionEnabled || action == proxyinstallation.RotateSubscriptionLinkAction && latest.Code == proxyinstallation.SubscriptionLinkRotated {
 				if progressErr != nil || len(subscriptionLink) == 0 || writeSubscriptionLink(output, subscriptionLink) != nil {
 					_ = writeRefusal(errorOutput, proxyinstallation.Result{Code: proxyinstallation.SubscriptionLinkDisplayIncomplete, Message: "The subscription change completed, but link display did not complete. Use View details."})
 					return 1
 				}
+				if action == proxyinstallation.RotateSubscriptionLinkAction {
+					if _, err := io.WriteString(output, "Replace the old link in Karing. The old link no longer works. Your proxy Client Identity has not changed.\n"); err != nil {
+						_ = writeRefusal(errorOutput, proxyinstallation.Result{Code: proxyinstallation.SubscriptionLinkDisplayIncomplete, Message: "The subscription change completed, but link display did not complete. Use View details."})
+						return 1
+					}
+				}
 				if _, err := io.WriteString(output, "Press Enter to preserve this link in terminal scrollback and return to the menu.\n"); err != nil {
+					_ = writeRefusal(errorOutput, proxyinstallation.Result{Code: proxyinstallation.SubscriptionLinkDisplayIncomplete, Message: "The subscription change completed, but link display did not complete. Use View details."})
 					return 1
 				}
 				if _, err := readLine(reader); err != nil && err != io.EOF {
@@ -152,7 +161,7 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 				}
 			} else if progressErr != nil {
 				return 1
-			} else if action == proxyinstallation.EnableSubscriptionAction && writeRefusal(output, latest) != nil {
+			} else if (action == proxyinstallation.EnableSubscriptionAction || action == proxyinstallation.RotateSubscriptionLinkAction) && writeRefusal(output, latest) != nil {
 				return 1
 			}
 		case proxyinstallation.CompleteRemovalAction:

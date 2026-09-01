@@ -183,6 +183,26 @@ func TestPrivateServingSelectsTheRecordedCertificateActivationTarget(t *testing.
 	}
 }
 
+func TestPrivateServingNeverChoosesRotationRecoveryAtStartup(t *testing.T) {
+	_, host, lifecycle := servingInstallation(t)
+	record, _ := decodeOwnership(host.ownership)
+	record.Renewal = &hostadapter.RenewalAuthority{RecorderID: strings.Repeat("1", 32), Lineage: "sbxr-subscription", PublicIPv4: record.PublicIPv4, Invocation: hostadapter.OfficialRenewalInvocation}
+	target := *record.Serving
+	target.LinkID, target.CredentialSHA256 = strings.Repeat("2", 32), strings.Repeat("3", 64)
+	operation := rotationOperation(*record.Serving, target, rotationStopAuthorized)
+	record.Rotation = &operation
+	record.Resources = recordResources(record, false)
+	record.ResourceCreatingReleases = make([]softwarelifecycle.ReleaseIdentity, len(record.Resources))
+	for index := range record.ResourceCreatingReleases {
+		record.ResourceCreatingReleases[index] = record.Release
+	}
+	host.ownership = ownershipBytes(record)
+	dispatch := &dispatchTestHost{servingTestHost: host, ip: record.PublicIPv4, bound: make(chan struct{}), publicIPv4: make(chan bool)}
+	if code := serveSubscription(t.Context(), lifecycle, dispatch, subscriptionserving.New(nil, nil)); code != subscriptionserving.Refused || dispatch.validated != 0 {
+		t.Fatalf("startup selected pending rotation: code=%s validated=%d", code, dispatch.validated)
+	}
+}
+
 func (h *servingTestHost) InspectServingFiles(_ hostadapter.ServingAuthority, removing bool) hostadapter.Observation {
 	return hostadapter.Observation{Observed: true, Accepted: h.safe && (!h.missingFiles || removing)}
 }
