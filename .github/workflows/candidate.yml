@@ -832,7 +832,11 @@ jobs:
             cp v3-packaged-live-result-decision.json acceptance-vps-result-decision.json
             tag="$(jq -r '.releases[0].tag' handoff/qualification-manifest.json)"
             jq -jr --arg tag "$tag" '.records[] | select(.tag == $tag) | .body' v3-packaged-live-result-decision.json > "acceptance-records/$tag.md"
-            if grep -aERq 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer |[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9]{1,3}(\.[0-9]{1,3}){3}' acceptance-records v3-packaged-live-result-facts.json v3-packaged-live-result-decision.json handoff/v3-packaged-live-evidence.json; then exit 1; elif test $? -ne 1; then exit 1; fi
+            secret_pattern='BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer |[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|vless://|https://[^ /"[:space:]]+:8443/'
+            # Historical evidence forbids bare IPv4 addresses. V2 uses a closed
+            # schema and also permits four-part official Karing version numbers.
+            if test "$result_code" = RELEASE-V3-PACKAGED-LIVE-QUALIFICATION; then secret_pattern="$secret_pattern|[0-9]{1,3}(\.[0-9]{1,3}){3}"; fi
+            if grep -aERq "$secret_pattern" acceptance-records v3-packaged-live-result-facts.json v3-packaged-live-result-decision.json handoff/v3-packaged-live-evidence.json; then exit 1; elif test $? -ne 1; then exit 1; fi
             cat acceptance-records/*.md >> "$GITHUB_STEP_SUMMARY"
             gh release edit "$tag" --draft --notes-file "acceptance-records/$tag.md"
           else

@@ -23,13 +23,17 @@ stop_attempt() {
     # Do not fetch raw output or run cleanup against an uncertain installation.
     "${remote[@]}" 'test ! -d /run/sbxr-qualification/v3-evidence || printf "%s\n" STOP > /run/sbxr-qualification/v3-evidence/request.json' || true
     mkdir -p handoff/failure-evidence
-    jq -cnS --slurpfile m "$manifest" --slurpfile b "$boundary" --arg scenario "$scenario" --arg operation "$operation" --arg reason "$reason" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{failure:{actual_result:$reason,attempt_id:$m[0].v3_attempt.attempt_id,boundary:"unknown",candidate:$m[0].releases[0],expected_result:"expected-safety-and-final-state-proved",host_state:"Unknown",observed_at:$now,operation_id:$operation,scenario_id:$scenario,schema:"sbxr-v3-scenario-failure-v2",vps_id:$m[0].v3_attempt.vps_id},qualification_boundary_facts:$b[0],qualification_manifest:$m[0],qualification_manifest_attested:true,safety_cleanup:{host_state:"Unknown",status:"not-started"},schema:"sbxr-release-qualification-facts-v1",stage:"v3-scenario-failure"}' | tr -d '\n' > "$directory/failure.json"
+    if test "$reason" = failure-recorded; then
+      cp "$directory/retained-failure.json" "$directory/failure.json"
+    else
+      jq -cnS --slurpfile m "$manifest" --slurpfile b "$boundary" --arg scenario "$scenario" --arg operation "$operation" --arg reason "$reason" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{failure:{actual_result:$reason,attempt_id:$m[0].v3_attempt.attempt_id,boundary:"unknown",candidate:$m[0].releases[0],expected_result:"expected-safety-and-final-state-proved",host_state:"Unknown",observed_at:$now,operation_id:$operation,scenario_id:$scenario,schema:"sbxr-v3-scenario-failure-v2",vps_id:$m[0].v3_attempt.vps_id},qualification_boundary_facts:$b[0],qualification_manifest:$m[0],qualification_manifest_attested:true,safety_cleanup:{host_state:"Unknown",status:"not-started"},schema:"sbxr-release-qualification-facts-v1",stage:"v3-scenario-failure"}' | tr -d '\n' > "$directory/failure.json"
+    fi
     if "$tool" qualification < "$directory/failure.json" > "$directory/failure-decision.json" && jq -e '.outcome == "failed" and .stop_test_mutations and .burn_required' "$directory/failure-decision.json" >/dev/null; then
       cp "$directory/failure.json" "$directory/failure-decision.json" handoff/failure-evidence/
     fi
   fi
   # Only temporary files created by this collector; never product authority.
-  rm -f "$directory/input.json" "$directory/decision.json" "$directory/failure.json" "$directory/failure-decision.json" "$directory/previous.json" "$directory/request.json" "$directory/final.json"
+  rm -f "$directory/input.json" "$directory/decision.json" "$directory/failure.json" "$directory/failure-decision.json" "$directory/previous.json" "$directory/request.json" "$directory/final.json" "$directory/retained-failure.json"
   rmdir "$directory"
   exit "$status"
 }
@@ -58,6 +62,13 @@ while read -r scenario; do
   # Validate the original bytes BEFORE jq: duplicate and unknown keys must not
   # disappear during normalization. Invalid input is never retained or echoed.
   "$tool" qualification < "$directory/input.json" > "$directory/decision.json"
+  if jq -e '.stage == "v3-scenario-failure"' "$directory/input.json" >/dev/null; then
+    jq -e --slurpfile m "$manifest" --arg scenario "$scenario" '.qualification_manifest == $m[0] and .failure.scenario_id == $scenario' "$directory/input.json" >/dev/null
+    jq -e '.outcome == "failed" and .stop_test_mutations and .burn_required' "$directory/decision.json" >/dev/null
+    cp "$directory/input.json" "$directory/retained-failure.json"
+    reason=failure-recorded
+    exit 1
+  fi
   jq -e --arg digest "$digest" --arg scenario "$scenario" --argjson count "$index" --slurpfile previous "$directory/previous.json" '.stage == "v3-scenario-result" and .prior_decision_sha256 == $digest and (.detailed_evidence.scenarios | length) == $count and .detailed_evidence.scenarios[-1].scenario_id == $scenario and .detailed_evidence.scenarios[:-1] == $previous[0]' "$directory/input.json" >/dev/null
   jq -e '.outcome == "accepted" and .records == []' "$directory/decision.json" >/dev/null
   completed="$(date -u -d "$(jq -r '.detailed_evidence.scenarios[-1].completed_at' "$directory/input.json")" +%s)"

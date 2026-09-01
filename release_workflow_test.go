@@ -29,7 +29,7 @@ func TestRecurringV3UsesTheExistingQualificationWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, required := range []string{"v3-scenario-result", "v3-scenario-failure", "stop_test_mutations", "qualification <", "completed_at", "300", "7200", "STOP"} {
+	for _, required := range []string{"v3-scenario-result", "v3-scenario-failure", "stop_test_mutations", "qualification <", "completed_at", "300", "7200", "STOP", "failure-recorded", "retained-failure.json", ".failure.scenario_id == $scenario"} {
 		if !strings.Contains(string(collector), required) {
 			t.Fatalf("missing evidence handoff contract %q", required)
 		}

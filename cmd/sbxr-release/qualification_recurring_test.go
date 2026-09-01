@@ -10,6 +10,12 @@ import (
 	"time"
 )
 
+func recurringSourceFixture() observedRelease {
+	source := qualifiedRelease(false)
+	source.Body = strings.NewReplacer("# SBXR Installer-Updater Acceptance Record\n", "# SBXR Acceptance Record\n", "Stable result code: RELEASE-INSTALLER-UPDATER-TWO-RELEASE-QUALIFICATION\n", "Stable result code: RELEASE-V3-PACKAGED-LIVE-QUALIFICATION\n", "Qualification role: Clean-installed source release\n", "Qualification role: Clean-installed V3 release\n", "Integrated Verification: Passed on live Ubuntu Server 24.04 amd64\n", "Integrated Verification: Passed on live Ubuntu Server 24.04 amd64 and outside runner\n").Replace(source.Body)
+	return source
+}
+
 func TestQualificationCommandRequiresCompleteRecurringEvidence(t *testing.T) {
 	binary := filepath.Join(t.TempDir(), "sbxr-release")
 	if output, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
@@ -18,8 +24,7 @@ func TestQualificationCommandRequiresCompleteRecurringEvidence(t *testing.T) {
 	facts := candidateFacts("v3")
 	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
 	facts.Candidate.BTag, facts.Candidate.BSequence, facts.Candidate.EvidenceVersion = "v3.1.0", 18, 2
-	source := qualifiedRelease(false)
-	source.Body = strings.NewReplacer("# SBXR Installer-Updater Acceptance Record\n", "# SBXR Acceptance Record\n", "Stable result code: RELEASE-INSTALLER-UPDATER-TWO-RELEASE-QUALIFICATION\n", "Stable result code: RELEASE-V3-PACKAGED-LIVE-QUALIFICATION\n", "Qualification role: Clean-installed source release\n", "Qualification role: Clean-installed V3 release\n", "Integrated Verification: Passed on live Ubuntu Server 24.04 amd64\n", "Integrated Verification: Passed on live Ubuntu Server 24.04 amd64 and outside runner\n").Replace(source.Body)
+	source := recurringSourceFixture()
 	facts.Releases, facts.LatestTag = []observedRelease{source}, &source.Tag
 	attempt := recurringAttemptFixture(t, source)
 	boundary, manifest := qualificationBoundaryForCandidate(t, binary, facts, attempt)
@@ -106,6 +111,35 @@ func TestQualificationCommandRequiresCompleteRecurringEvidence(t *testing.T) {
 			s[len(s)-1].(map[string]any)["final_state"] = "Running"
 		},
 		"Karing not last": func(e map[string]any) { s := e["scenarios"].([]any); s[0], s[len(s)-1] = s[len(s)-1], s[0] },
+		"enablement lost running proxy": func(e map[string]any) {
+			for _, raw := range e["scenarios"].([]any) {
+				s := raw.(map[string]any)
+				if s["scenario_id"] == "enable-precommit" {
+					s["final_state"] = "Not set up"
+				}
+			}
+		},
+		"rollback revoked old link": func(e map[string]any) {
+			for _, raw := range e["scenarios"].([]any) {
+				s := raw.(map[string]any)
+				if s["scenario_id"] == "link-precommit" {
+					for _, ref := range s["evidence"].([]any) {
+						r := ref.(map[string]any)["record"].(map[string]any)
+						if r["check"] == "old-link-usable" {
+							r["check"] = "old-link-404"
+						}
+					}
+				}
+			}
+		},
+		"activation rewound certificate history": func(e map[string]any) {
+			for _, raw := range e["scenarios"].([]any) {
+				s := raw.(map[string]any)
+				if s["scenario_id"] == "activation-precommit" {
+					s["recovery_direction"] = "rollback"
+				}
+			}
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			variant := jsonObject(t, []byte(qualificationDocument(t, evidence)))
@@ -205,7 +239,7 @@ func recurringEvidenceFixture(t *testing.T, manifest []byte, attempt map[string]
 	for index, id := range attempt["required_scenarios"].([]string) {
 		// Fixture values state the intended public contract, not a captured live pass.
 		initial, boundary, recovery, final := "Running", "observed", "none", "Running"
-		if strings.Contains(id, "precommit") {
+		if strings.Contains(id, "precommit") || id == "enable-schema2-absent" {
 			boundary, recovery = "before-commitment", "rollback"
 		}
 		if strings.Contains(id, "postcommit") {
@@ -214,18 +248,35 @@ func recurringEvidenceFixture(t *testing.T, manifest []byte, attempt map[string]
 		if strings.HasPrefix(id, "remove-") || id == "baseline-removal" || id == "baseline-clean" || id == "karing-final" {
 			final = "Not installed"
 		}
-		if strings.HasPrefix(id, "baseline-") || strings.HasPrefix(id, "enable-") {
+		if id == "baseline-clean" {
+			initial = "Not installed"
+		}
+		if id == "baseline-refusal" || id == "baseline-precommit" || id == "baseline-postcommit" {
 			initial = "Not set up"
 		}
-		if id == "baseline-refusal" || id == "baseline-precommit" || id == "enable-precommit" || id == "enable-schema2-absent" {
+		if id == "baseline-refusal" || id == "baseline-precommit" {
 			final = "Not set up"
 		}
-		if strings.HasPrefix(id, "remove-") && (strings.HasSuffix(id, "precommit") || strings.HasSuffix(id, "postcommit")) {
-			initial = "Change incomplete"
-			recovery = "forward"
+		if id == "baseline-refusal" || id == "baseline-drift" || id == "invalid-replacement" || id == "update-incompatible" || id == "update-unlisted" {
+			boundary = "refusal"
 		}
-		if id == "remove-certbot" || id == "remove-writer" || id == "remove-admission-race" || id == "update-incompatible" || id == "update-unlisted" {
+		if strings.HasPrefix(id, "remove-") && (strings.HasSuffix(id, "precommit") || strings.HasSuffix(id, "postcommit")) {
+			recovery = "forward"
+			if strings.HasPrefix(id, "remove-identity-") {
+				initial = "Change incomplete"
+			}
+		}
+		if id == "remove-certbot" || id == "remove-writer" || id == "remove-admission-race" || id == "remove-directory-lock" {
 			final, boundary = "Running", "refusal"
+		}
+		if id == "remove-death" || id == "remove-reboot" || id == "remove-shared-route" || id == "remove-finalization" || id == "remove-exact-restoration" || id == "baseline-removal" {
+			boundary, recovery = "after-commitment", "forward"
+		}
+		if id == "remove-finalization" || id == "remove-exact-restoration" {
+			initial = "Removal incomplete"
+		}
+		if id == "activation-precommit" || id == "managed-renewal" {
+			recovery = "forward"
 		}
 		var source any
 		if strings.HasPrefix(id, "source-") {
@@ -259,27 +310,85 @@ func recurringEvidenceFixture(t *testing.T, manifest []byte, attempt map[string]
 }
 
 func fixtureRecurringChecks(id string) []string {
-	checks := strings.Fields(`fresh-disposable-vps-preflight unchanged-candidate-bytes initial-state-proved boundary-observed final-state-proved original-ssh-continuity supported-effective-route-inspected capture-coverage-complete exact-secrets-absent prohibited-patterns-absent`)
+	checks := strings.Fields(`fresh-disposable-vps-preflight unchanged-candidate-bytes initial-state-proved boundary-observed final-state-proved original-ssh-continuity capture-coverage-complete exact-secrets-absent prohibited-patterns-absent`)
 	family := strings.Split(id, "-")[0]
-	extra := map[string]string{
-		"baseline":    `clean-direct-install reviewed-setup safety-refusals local-activation outside-proxy-traffic complete-owned-removal`,
-		"enable":      `schema1-conversion schema2-absent-retained provisional-cleanup same-generation-finishing proxy-and-traffic-unchanged`,
-		"link":        `one-prepared-target no-old-process-or-request-overlap old-link-404 client-identity-unchanged proxy-traffic-unchanged`,
-		"repair":      `diagnosed-correction production-certificate-issued canonical-publication accepted-activation outside-tls-presentation missed-activation-finished`,
-		"activation":  `diagnosed-correction production-certificate-issued canonical-publication accepted-activation outside-tls-presentation missed-activation-finished`,
-		"invalid":     `invalid-replacement-refused valid-loaded-certificate-preserved`,
-		"managed":     `supported-managed-attempt-interrupted recorder-unknown-or-failed reviewed-repair-targeted-production-replacement fault-retained-until-proof official-schedule-integration recorder-start recorder-outcome production-issuance canonical-publication accepted-activation outside-tls natural-timer-not-observed naturally-due-renewal-not-observed`,
-		"recorder":    `start-failure outcome-failure stale-attempt live-attempt retention lock-order-contention child-and-writer-death reboot-exclusion official-route`,
-		"snap":        `supported-snap-refresh effective-generated-route-preserved recorder-and-hooks-verified planned-package-change-only`,
-		"unsupported": `new-or-renamed-route-detected problem-detected accounting-gap-explicit bypass-prevention-not-claimed historical-outcomes-unknown`,
-		"identity":    `old-established-outside-session old-new-connection-attempts owned-process-groups-and-descendants-terminated outside-target-healthy startup-publication reload effective-route source-only-before-gate ordinary-start-denied-after-gate source-restoration-only-before-revocation one-target-forward-after-revocation unchanged-link-and-noncredential-fields unavailable-subscription-fallback absent-subscription-fallback`,
-		"source":      `actual-source-packaged-updater actual-source-packaged-recovery source-record-schema-proved both-releases-understand-recovery admission-exclusion creation-provenance-preserved no-ownership-migration prior-exact-restoration candidate-forward-runtime-completion serving-only-restart proxy-not-restarted both-credentials-unchanged no-helper-or-intermediate-release`,
-		"update":      `incompatible-downgrade-refused unlisted-source-refused no-replacement-on-refusal`,
-		"remove":      `idle-pending-takeover both-commitment-sides full-pending-provenance no-repair-or-revoked-start certbot-and-writer-exclusion admission-races directory-locks no-recreation-after-death-or-reboot shared-route-delay-and-restoration unrelated-resources-preserved final-state-directory-inspection one-authoritative-location exact-finishing-executable unknown-residue-refused all-owned-resources-absent-or-safely-retained-on-refusal`,
-		"secret":      `sandbox-cannot-read-token canonical-and-candidate-protection units-arguments-environment-safe runner-vps-mac-terminal-workflow-retained-scans qualification-secrets-and-client-processes-cleaned unrelated-data-preserved`,
-		"karing":      `latest-official-stable-macos-package one-real-remote-profile one-vless-reality-node all-fields-and-name-match settings-preserved direct-and-proxied-traffic manual-refresh genuinely-due-five-minute-auto-refresh old-established-session-terminated owned-process-groups-and-descendants-terminated old-new-connections-refused outside-target-healthy unchanged-real-link replacement-uuid-adopted other-fields-preserved traffic-restored direct-refresh-correction-or-confirmed-fallback https-outage-preserves-node same-link-recovery complete-removal outside-access-unusable full-owned-absence temporary-secret-and-process-cleanup`,
+	if family != "baseline" {
+		checks = append(checks, "supported-effective-route-inspected")
 	}
-	return append(checks, strings.Fields(extra[family])...)
+	switch family {
+	case "enable", "link", "repair", "activation", "invalid", "managed", "recorder", "snap", "unsupported":
+		checks = append(checks, "proxy-and-traffic-unchanged", "client-identity-unchanged")
+		if family != "enable" && family != "link" {
+			checks = append(checks, "unchanged-link")
+		}
+	case "identity":
+		checks = append(checks, strings.Fields(`old-established-outside-session outside-target-healthy startup-publication reload effective-route source-only-before-gate ordinary-start-denied-after-gate unchanged-link-and-noncredential-fields`)...)
+	case "source":
+		checks = append(checks, strings.Fields(`actual-source-packaged-updater source-record-schema-proved both-releases-understand-recovery admission-exclusion creation-provenance-preserved no-ownership-migration proxy-not-restarted both-credentials-unchanged no-helper-or-intermediate-release`)...)
+		switch {
+		case strings.HasSuffix(id, "-precommit"):
+			return append(checks, "actual-source-packaged-recovery", "prior-exact-restoration", "source-installed-record-restored")
+		case strings.HasSuffix(id, "-postcommit"):
+			return append(checks, "candidate-forward-runtime-completion", "serving-only-restart")
+		default:
+			return append(checks, "candidate-installed-record-proved", "serving-only-restart")
+		}
+	case "remove":
+		if id != "remove-certbot" && id != "remove-writer" && id != "remove-admission-race" && id != "remove-directory-lock" {
+			checks = append(checks, strings.Fields(`removal-commitment-observed writers-and-starts-excluded supported-directory-lock-acquired full-pending-provenance unrelated-resources-preserved final-state-directory-inspection one-authoritative-location all-owned-resources-absent`)...)
+		}
+		if strings.HasSuffix(id, "-precommit") || strings.HasSuffix(id, "-postcommit") {
+			return append(checks, "idle-pending-takeover", "pending-operation-side-proved", "no-repair-or-revoked-start")
+		}
+	}
+	extra := map[string]string{
+		"baseline-clean":           `clean-direct-install reviewed-setup local-activation outside-proxy-traffic complete-owned-removal`,
+		"baseline-refusal":         `footprint-conflict-detected setup-refused-before-mutation conflict-only-restored`,
+		"baseline-precommit":       `setup-precommit-interruption cleanup-direction-proved reviewed-cleanup provisional-resources-absent`,
+		"baseline-postcommit":      `setup-commitment-observed reviewed-finishing local-activation outside-proxy-traffic`,
+		"baseline-drift":           `owned-metadata-drift-detected removal-refused-before-mutation exact-metadata-restored`,
+		"baseline-removal":         `removal-commitment-observed interruption-observed reviewed-removal-finishing complete-owned-removal`,
+		"enable-schema1":           `schema1-conversion creation-provenance-preserved enabled-generation-agreement authoritative-link-disclosed`,
+		"enable-precommit":         `one-provisional-generation provisional-serving-stopped provisional-cleanup subscription-absent shared-resources-preserved no-provisional-disclosure`,
+		"enable-postcommit":        `committed-generation-proved same-generation-finishing transaction-material-cleaned authoritative-link-disclosed`,
+		"enable-schema2-absent":    `schema2-absent-retained no-schema-downgrade subscription-absent provisional-cleanup`,
+		"link-precommit":           `one-prepared-target old-serving-quiesced old-generation-restored unused-target-removed old-link-usable no-replacement-disclosure`,
+		"link-postcommit":          `one-prepared-target no-old-process-or-request-overlap target-only-finishing old-link-404 new-link-usable`,
+		"repair-precommit":         `diagnosed-correction unused-preparation-cleaned correction-not-applied original-fault-retained certificate-history-not-rewound`,
+		"repair-postcommit":        `diagnosed-correction exact-approved-correction-finished no-second-repair selected-generation-agreement`,
+		"activation-precommit":     `canonical-publication standing-renewal-authority local-operation-not-yet-published reviewed-forward-activation accepted-activation outside-tls-presentation certificate-history-not-rewound`,
+		"activation-postcommit":    `canonical-publication recorded-activation-target same-target-finishing accepted-activation outside-tls-presentation certificate-history-not-rewound`,
+		"invalid-replacement":      `invalid-replacement-refused valid-loaded-certificate-preserved no-serving-restart`,
+		"recorder-start":           `start-failure child-not-launched shared-route-delay-accounted`,
+		"recorder-outcome":         `outcome-failure unknown-outcome-reported no-false-renewal-success`,
+		"recorder-stale":           `stale-attempt stale-outcome-rejected active-attempt-not-overwritten`,
+		"recorder-live":            `live-attempt live-and-abandoned-distinguished live-not-completed`,
+		"recorder-retention":       `retention unresolved-fault-retained noop-and-unrelated-success-do-not-clear bounded-retention-refuses-new-child`,
+		"recorder-locks":           `lock-order-contention no-evidence-lock-held-during-child-or-whole-host-wait bounded-refusal`,
+		"recorder-death":           `child-and-writer-death unfinished-attempt-retained no-false-outcome`,
+		"recorder-reboot":          `reboot-exclusion unfinished-attempt-retained startup-does-not-invent-outcome`,
+		"identity-precommit":       `owned-process-groups-and-descendants-terminated source-restoration-only-before-revocation unused-target-removed source-traffic-restored rotation-reported-cancelled`,
+		"identity-postcommit":      `owned-process-groups-and-descendants-terminated old-new-connections-refused one-target-forward-after-revocation replacement-traffic-proved`,
+		"identity-unavailable":     `owned-process-groups-and-descendants-terminated old-new-connections-refused replacement-traffic-proved subscription-fault-reported-separately unavailable-subscription-fallback`,
+		"identity-absent":          `owned-process-groups-and-descendants-terminated old-new-connections-refused replacement-traffic-proved subscription-remains-absent absent-subscription-fallback`,
+		"update-incompatible":      `incompatible-downgrade-refused no-replacement-on-refusal`,
+		"update-unlisted":          `unlisted-source-refused no-replacement-on-refusal`,
+		"remove-certbot":           `active-certbot-proved removal-refused owned-resources-preserved`,
+		"remove-writer":            `active-writer-proved removal-refused owned-resources-preserved`,
+		"remove-admission-race":    `writer-admission-race-proved removal-refused owned-resources-preserved`,
+		"remove-directory-lock":    `supported-directory-lock-held bounded-contention-refusal owned-resources-preserved`,
+		"remove-death":             `writer-and-owner-death no-state-recreation reviewed-removal-finishing`,
+		"remove-reboot":            `reboot-observed no-state-recreation ordinary-start-refused reviewed-removal-finishing`,
+		"remove-shared-route":      `shared-route-delay-and-restoration interrupted-restoration-finished unrelated-lineages-and-accounts-preserved`,
+		"remove-finalization":      `finalization-interruption unknown-residue-refused exact-authority-handoff finalization-finished`,
+		"remove-exact-restoration": `exact-finishing-executable wrong-executable-refused restored-finishing-release-proved removal-finished`,
+		"managed-renewal":          `supported-managed-attempt-interrupted recorder-unknown-or-failed reviewed-repair-targeted-production-replacement fault-retained-until-proof official-schedule-integration recorder-start recorder-outcome production-issuance canonical-publication accepted-activation outside-tls natural-timer-not-observed naturally-due-renewal-not-observed`,
+		"snap-refresh":             `supported-snap-refresh effective-generated-route-preserved recorder-and-hooks-verified planned-package-change-only`,
+		"unsupported-route":        `new-or-renamed-route-detected problem-detected accounting-gap-explicit bypass-prevention-not-claimed historical-outcomes-unknown`,
+		"secret-containment":       `sandbox-cannot-read-token canonical-and-candidate-protection units-arguments-environment-safe runner-vps-mac-terminal-workflow-retained-scans qualification-secrets-and-client-processes-cleaned unrelated-data-preserved`,
+		"karing-final":             `latest-official-stable-macos-package one-real-remote-profile one-vless-reality-node all-fields-and-name-match settings-preserved direct-and-proxied-traffic manual-refresh genuinely-due-five-minute-auto-refresh old-established-session-terminated owned-process-groups-and-descendants-terminated old-new-connections-refused outside-target-healthy unchanged-real-link replacement-uuid-adopted other-fields-preserved traffic-restored direct-refresh-correction-or-confirmed-fallback https-outage-preserves-node same-link-recovery complete-removal outside-access-unusable full-owned-absence temporary-secret-and-process-cleanup`,
+	}
+	return append(checks, strings.Fields(extra[id])...)
 }
 
 func TestQualificationCommandBindsRecurringAttempt(t *testing.T) {
@@ -290,8 +399,7 @@ func TestQualificationCommandBindsRecurringAttempt(t *testing.T) {
 	facts := candidateFacts("v3")
 	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
 	facts.Candidate.BTag, facts.Candidate.BSequence, facts.Candidate.EvidenceVersion = "v3.1.0", 18, 2
-	source := qualifiedRelease(false)
-	source.Body = strings.NewReplacer("# SBXR Installer-Updater Acceptance Record\n", "# SBXR Acceptance Record\n", "Stable result code: RELEASE-INSTALLER-UPDATER-TWO-RELEASE-QUALIFICATION\n", "Stable result code: RELEASE-V3-PACKAGED-LIVE-QUALIFICATION\n", "Qualification role: Clean-installed source release\n", "Qualification role: Clean-installed V3 release\n", "Integrated Verification: Passed on live Ubuntu Server 24.04 amd64\n", "Integrated Verification: Passed on live Ubuntu Server 24.04 amd64 and outside runner\n").Replace(source.Body)
+	source := recurringSourceFixture()
 	facts.Releases, facts.LatestTag = []observedRelease{source}, &source.Tag
 	attempt := recurringAttemptFixture(t, source)
 	boundary, manifest := qualificationBoundaryForCandidate(t, binary, facts, attempt)
@@ -305,6 +413,12 @@ func TestQualificationCommandBindsRecurringAttempt(t *testing.T) {
 		"shortened matrix": func(v map[string]any) { v["v3_attempt"].(map[string]any)["required_scenarios"] = []any{"karing-final"} },
 		"no source":        func(v map[string]any) { v["v3_attempt"].(map[string]any)["sources"] = []any{} },
 		"extended limit":   func(v map[string]any) { v["v3_attempt"].(map[string]any)["scenario_limit_seconds"] = 1801 },
+		"unsupported Certbot": func(v map[string]any) {
+			v["v3_attempt"].(map[string]any)["packages"].(map[string]any)["certbot"].(map[string]any)["version"] = "5.3.9"
+		},
+		"unsupported refreshed Certbot": func(v map[string]any) {
+			v["v3_attempt"].(map[string]any)["after_snap_refresh"].(map[string]any)["certbot"].(map[string]any)["version"] = "4.99.0"
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			variant := jsonObject(t, []byte(boundary))
@@ -320,12 +434,12 @@ func recurringAttemptFixture(t *testing.T, source observedRelease) map[string]an
 		return map[string]any{"architecture": architecture, "name": name, "repository": repository, "sha256": strings.Repeat("a", 64), "size": 100, "version": version}
 	}
 	packages := map[string]any{
-		"certbot": packageIdentity("certbot", "https://snapcraft.io/certbot", "amd64", "5.0.0"),
+		"certbot": packageIdentity("certbot", "https://snapcraft.io/certbot", "amd64", "5.4.0"),
 		"karing":  packageIdentity("karing", "https://github.com/KaringX/karing", "macos-arm64", "1.2.0"),
 		"snap":    packageIdentity("snapd", "https://snapcraft.io/snapd", "amd64", "2.70"),
 	}
 	after := jsonObject(t, []byte(qualificationDocument(t, packages)))
-	after["certbot"].(map[string]any)["version"] = "5.0.1"
+	after["certbot"].(map[string]any)["version"] = "5.4.1"
 	after["certbot"].(map[string]any)["sha256"] = strings.Repeat("b", 64)
 	return map[string]any{
 		"after_snap_refresh": after, "attempt_id": "run-123-attempt-1", "karing_latest_checked_at": "2026-09-01T00:00:00Z",
@@ -354,8 +468,7 @@ func TestQualificationCommandAdmitsRecurringV3OnlyWithVersionedEvidence(t *testi
 	facts := candidateFacts("v3")
 	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
 	facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.0", 18
-	source := qualifiedRelease(false)
-	source.Body = strings.NewReplacer("# SBXR Installer-Updater Acceptance Record\n", "# SBXR Acceptance Record\n", "Stable result code: RELEASE-INSTALLER-UPDATER-TWO-RELEASE-QUALIFICATION\n", "Stable result code: RELEASE-V3-PACKAGED-LIVE-QUALIFICATION\n", "Qualification role: Clean-installed source release\n", "Qualification role: Clean-installed V3 release\n", "Integrated Verification: Passed on live Ubuntu Server 24.04 amd64\n", "Integrated Verification: Passed on live Ubuntu Server 24.04 amd64 and outside runner\n").Replace(source.Body)
+	source := recurringSourceFixture()
 	facts.Releases, facts.LatestTag = []observedRelease{source}, &source.Tag
 	document := jsonObject(t, []byte(canonicalFacts(t, facts)))
 	document["candidate"].(map[string]any)["evidence_version"] = 2
