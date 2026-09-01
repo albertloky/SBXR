@@ -158,7 +158,11 @@ func (module *installedInterface) prepareClientIdentityFinishReview(ctx context.
 		direction = "finish only the prepared target; the revoked source can never be restored"
 		remaining = slices.Clone(record.ClientRotation.Effects[len(record.ClientRotation.Completed):])
 	}
-	review.Plan = []string{"Action: Finish Client Identity rotation", "Selected direction: " + direction + ".", "Remaining effects: " + strings.Join(remaining, ", ") + ".", "Proxy traffic availability: " + string(review.ProxyTraffic) + ".", "Subscription serving availability: " + string(ProvedStopped) + ".", "Subscription Capability remains Not enabled.", "No Client Configuration is displayed automatically."}
+	servingAvailability := ProvedStopped
+	if record.Serving != nil {
+		servingAvailability = CannotBeVerified
+	}
+	review.Plan = []string{"Action: Finish Client Identity rotation", "Selected direction: " + direction + ".", "Remaining effects: " + strings.Join(remaining, ", ") + ".", "Proxy traffic availability: " + string(review.ProxyTraffic) + ".", "Subscription serving availability: " + string(servingAvailability) + ".", "Subscription Capability remains Not enabled.", "No Client Configuration is displayed automatically."}
 	if record.Serving != nil {
 		review.Plan[5] = "Preserve the unchanged Subscription Link and publish only matching selected artifact material. Retain independent subscription faults and renewal evidence; never start stale artifacts."
 	}
@@ -284,6 +288,10 @@ func (module *installedInterface) rotateClientIdentity(ctx context.Context, auth
 	record.ClientRotation = &clientIdentityRotation{OperationID: hex.EncodeToString(operationID), Direction: "cleanup", Effects: slices.Clone(clientIdentityRotationEffects), Completed: []string{}, Source: record.ConfigurationSHA256, Target: hex.EncodeToString(targetDigest[:]), Checkpoint: clientRotationAuthorized}
 	var artifact []byte
 	if record.Serving != nil {
+		selectedCertificate, ready := module.host.(clientIdentitySubscriptionHost).ClientIdentitySubscriptionReady(ctx, *record.Serving, *record.Renewal)
+		if !ready {
+			return clientIdentityFailed("Subscription authority", "Restore exact subscription material and review again.")
+		}
 		source, err := module.host.ReadConfiguration(ctx, hostSetupSpec, record.ConfigurationSHA256)
 		_, sourceHash, sourceOK := clientArtifact(source, record.PublicIPv4)
 		targetArtifact, targetHash, targetOK := clientArtifact(authority.target, record.PublicIPv4)
@@ -291,7 +299,7 @@ func (module *installedInterface) rotateClientIdentity(ctx context.Context, auth
 			return clientIdentityFailed("Subscription artifact preparation", "Restore exact source connection material and review again.")
 		}
 		artifact = targetArtifact
-		record.ClientRotation.Subscription = &hostadapter.ClientIdentitySubscription{Source: *record.Serving, Target: *record.Serving, SourceArtifactSHA256: sourceHash, TargetArtifactSHA256: targetHash}
+		record.ClientRotation.Subscription = &hostadapter.ClientIdentitySubscription{Source: *record.Serving, Target: selectedCertificate, SourceArtifactSHA256: sourceHash, TargetArtifactSHA256: targetHash}
 	}
 	record.Startup = authority.startup
 	updateSubscriptionResources(&record, authority.release)

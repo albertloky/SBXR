@@ -1239,16 +1239,7 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 		if result.Code == SubscriptionChangeFinished || result.Code == SubscriptionEnabled || result.Code == SubscriptionLinkRotated || result.Code == SubscriptionRepaired {
 			result.ProxyTraffic, result.SubscriptionServing = ProvedWorking, ProvedWorking
 		}
-		if result.Code == ClientIdentityRotated || result.Code == ClientIdentityRotationFinished {
-			result.Status, result.ProxyTraffic = Running, ProvedWorking
-			_, inspection := module.inspectSubscription(context.WithoutCancel(ctx))
-			if inspection.Loaded.Valid() {
-				result.SubscriptionServing = ProvedWorking
-			} else if inspection.Observed {
-				result.SubscriptionServing = ProvedStopped
-			}
-		}
-		if result.Code == ClientIdentityRotationCleanedUp {
+		if result.Code == ClientIdentityRotated || result.Code == ClientIdentityRotationFinished || result.Code == ClientIdentityRotationCleanedUp {
 			result.Status, result.ProxyTraffic = Running, ProvedWorking
 			_, inspection := module.inspectSubscription(context.WithoutCancel(ctx))
 			if inspection.Loaded.Valid() {

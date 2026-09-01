@@ -35,20 +35,20 @@ func (s ClientIdentitySubscription) Valid() bool {
 		validDigest(s.SourceArtifactSHA256) && validDigest(s.TargetArtifactSHA256) && s.SourceArtifactSHA256 != s.TargetArtifactSHA256
 }
 
-func (a Adapter) ClientIdentitySubscriptionReady(ctx context.Context, source ServingAuthority, renewal RenewalAuthority) bool {
+func (a Adapter) ClientIdentitySubscriptionReady(ctx context.Context, source ServingAuthority, renewal RenewalAuthority) (ServingAuthority, bool) {
 	if !a.ServingPublicIPv4(ctx, renewal.PublicIPv4) || !a.renewalFiles(renewal) {
-		return false
+		return ServingAuthority{}, false
 	}
 	if _, ok := a.ReadSubscriptionLink(source, renewal.PublicIPv4); !ok {
-		return false
+		return ServingAuthority{}, false
 	}
 	if a.InspectServingFiles(source, false).Accepted {
-		return true
+		return source, true
 	}
 	// A complete, trusted, newer canonical publication can be incorporated into
 	// this operation. The accepted source state and credential remain unchanged.
 	published, ok := a.publishedCertificateAuthority(renewal, source)
-	return ok && published.CertificateGeneration > source.CertificateGeneration && a.inspectServingFiles(published, false, false, source).Accepted
+	return published, ok && published.CertificateGeneration > source.CertificateGeneration && a.inspectServingFiles(published, false, false, source).Accepted
 }
 
 func (a Adapter) PrepareClientIdentitySubscription(s ClientIdentitySubscription, artifact []byte) bool {
@@ -64,7 +64,7 @@ func (a Adapter) InspectClientIdentitySubscription(s ClientIdentitySubscription,
 	_, source := a.ReadSubscriptionLink(s.Source, ipv4)
 	_, target := a.ReadSubscriptionLink(s.Target, ipv4)
 	unit, err := a.protectedServingFile(ServingUnitPath, 0644, "")
-	if err != nil || !knownServingUnit(unit) || !source && !(forward && target) {
+	if err != nil || !knownServingUnit(unit) || !source && !target {
 		return observation(false, true)
 	}
 	for _, item := range []struct{ path, hash string }{
@@ -72,7 +72,7 @@ func (a Adapter) InspectClientIdentitySubscription(s ClientIdentitySubscription,
 		{SubscriptionCandidateStatePath, digest(servingStateBytes(s.Target))},
 	} {
 		_, err := a.clientPublicationFile(item.path, 0600, item.hash)
-		if err != nil && !(errors.Is(err, os.ErrNotExist) && (!required || !forward && source || forward && target && item.path == SubscriptionCandidateStatePath)) {
+		if err != nil && !(errors.Is(err, os.ErrNotExist) && (!required || !forward && (source || target) || forward && target && item.path == SubscriptionCandidateStatePath)) {
 			return observation(false, true)
 		}
 	}

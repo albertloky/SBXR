@@ -13,8 +13,12 @@ import (
 	singboxadapter "github.com/albertloky/SBXR/internal/proxyinstallation/adapter/singbox"
 )
 
-func (h *controlledHost) ClientIdentitySubscriptionReady(_ context.Context, source hostadapter.ServingAuthority, renewal hostadapter.RenewalAuthority) bool {
-	return source == h.subscriptionServing && renewal == h.subscriptionRenewal && len(h.subscriptionCredential) == 43 && !h.publicIPDrift
+func (h *controlledHost) ClientIdentitySubscriptionReady(_ context.Context, source hostadapter.ServingAuthority, renewal hostadapter.RenewalAuthority) (hostadapter.ServingAuthority, bool) {
+	target := source
+	if h.clientPublishedCertificate != nil {
+		target = *h.clientPublishedCertificate
+	}
+	return target, source == h.subscriptionServing && renewal == h.subscriptionRenewal && len(h.subscriptionCredential) == 43 && !h.publicIPDrift
 }
 func (*controlledHost) UpgradeClientIdentityServingStartup() bool               { return true }
 func (*controlledHost) VerifyClientIdentityServingStartup(context.Context) bool { return true }
@@ -137,6 +141,9 @@ func TestEnabledIdentityRotationRecoversEveryDurableCheckpoint(t *testing.T) {
 				if finish.Prepared == nil {
 					t.Fatalf("finish refused: %s", finish.Result.FailedCheck)
 				}
+				if strings.Contains(strings.Join(finish.Plan, "\n"), "Subscription serving availability: Proved stopped") {
+					t.Fatal("finishing plan inferred stopped serving from pending status")
+				}
 				got := restarted.Execute(t.Context(), *finish.Prepared, Approved, nil)
 				want := ClientIdentityRotationCleanedUp
 				if pending.ClientRotation.Direction == "forward" {
@@ -231,6 +238,33 @@ func TestEnabledIdentityRotationIncorporatesStandingCertificatePublication(t *te
 		if _, valid := decodeOwnership(body); !valid {
 			t.Fatal("invalid intermediate durable authority")
 		}
+	}
+}
+
+func TestEnabledIdentityRotationRecordsStandingCertificateBeforeTargetPreparation(t *testing.T) {
+	m, host := enabledIdentityInstallation(t)
+	certificate := host.subscriptionServing
+	certificate.CertificateGeneration++
+	host.clientPublishedCertificate = &certificate
+	host.failClientCheckpoint = clientRotationTargetPrepared
+	source := bytes.Clone(host.configuration)
+	rotate := m.Review(t.Context(), RotateClientIdentityAction)
+	if rotate.Prepared == nil {
+		t.Fatal("standing activation blocked rotation")
+	}
+	if got := m.Execute(t.Context(), *rotate.Prepared, Approved, nil); got.Code != ClientIdentityRotationNeedsFinish {
+		t.Fatal(got.Code)
+	}
+	record, ok := decodeOwnership(host.ownership)
+	if !ok || record.ClientRotation.Subscription.Target != certificate || !bytes.Equal(source, host.configuration) {
+		t.Fatal("initial recovery authority omitted published certificate or changed source")
+	}
+	finish := m.Review(t.Context(), FinishClientIdentityAction)
+	if finish.Prepared == nil {
+		t.Fatal("source cleanup refused")
+	}
+	if got := m.Execute(t.Context(), *finish.Prepared, Approved, nil); got.Code != ClientIdentityRotationCleanedUp {
+		t.Fatal(got.Code)
 	}
 }
 

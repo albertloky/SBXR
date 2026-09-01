@@ -71,3 +71,20 @@ func TestClientIdentityServingStartupUpgradeRecoversPublicationBoundaries(t *tes
 		})
 	}
 }
+
+func TestClientIdentityCleanupAcceptsRecordedCertificatePublicationWithoutChangingIdentity(t *testing.T) {
+	a, source := servingFiles(t)
+	target := source
+	target.CertificateGeneration++
+	artifact := []byte("vless://unused-target\n")
+	sub := ClientIdentitySubscription{Source: source, Target: target, SourceArtifactSHA256: digest([]byte("source artifact\n")), TargetArtifactSHA256: digest(artifact)}
+	if !a.PrepareClientIdentitySubscription(sub, artifact) || !a.PublishClientIdentitySubscription(source, target) {
+		t.Fatal("certificate publication setup failed")
+	}
+	if !a.InspectClientIdentitySubscription(sub, "8.8.8.8", true, false).Accepted {
+		t.Fatal("recorded same-link certificate publication blocked source cleanup")
+	}
+	if !a.RemoveClientIdentitySubscription(sub) || !a.InspectClientIdentitySubscription(sub, "8.8.8.8", true, false).Accepted {
+		t.Fatal("cleanup could not resume after staged target removal")
+	}
+}

@@ -13,7 +13,7 @@ import (
 type clientIdentitySubscriptionHost interface {
 	UpgradeClientIdentityServingStartup() bool
 	VerifyClientIdentityServingStartup(context.Context) bool
-	ClientIdentitySubscriptionReady(context.Context, hostadapter.ServingAuthority, hostadapter.RenewalAuthority) bool
+	ClientIdentitySubscriptionReady(context.Context, hostadapter.ServingAuthority, hostadapter.RenewalAuthority) (hostadapter.ServingAuthority, bool)
 	PrepareClientIdentitySubscription(hostadapter.ClientIdentitySubscription, []byte) bool
 	InspectClientIdentitySubscription(hostadapter.ClientIdentitySubscription, string, bool, bool) hostadapter.Observation
 	StopClientIdentitySubscription(context.Context) bool
@@ -31,7 +31,11 @@ func (m *installedInterface) clientIdentitySubscriptionAdmitted(ctx context.Cont
 		return absent.Observed && absent.Accepted
 	}
 	host, ok := m.host.(clientIdentitySubscriptionHost)
-	return ok && record.Renewal != nil && host.ClientIdentitySubscriptionReady(ctx, *record.Serving, *record.Renewal)
+	if !ok || record.Renewal == nil {
+		return false
+	}
+	_, ready := host.ClientIdentitySubscriptionReady(ctx, *record.Serving, *record.Renewal)
+	return ready
 }
 
 func clientArtifact(configuration []byte, ipv4 string) ([]byte, string, bool) {
@@ -96,6 +100,12 @@ func (m *installedInterface) finishIdentitySubscription(ctx context.Context, rec
 			return false
 		}
 	}
+	if _, ok := serving.ReadSubscriptionLink(*record.Serving, record.PublicIPv4); !ok || !host.RemoveClientIdentitySubscription(*sub) {
+		return false
+	}
+	// Ordinary certificate inspection deliberately requires empty staging.
+	// The exact selected artifact was checked above; remove only its proved
+	// publication before inspecting or activating the selected certificate.
 	inspection := activation.InspectCertificateActivation(ctx, *record.Renewal, *record.Serving)
 	if inspection.Accepted && inspection.Observed && inspection.Published != *record.Serving {
 		if !compatibleCertificateTarget(*record.Serving, inspection.Published) {
@@ -118,9 +128,6 @@ func (m *installedInterface) finishIdentitySubscription(ctx context.Context, rec
 		inspection = activation.InspectCertificateActivation(ctx, *record.Renewal, *record.Serving)
 	}
 	if _, ok := serving.ReadSubscriptionLink(*record.Serving, record.PublicIPv4); !ok {
-		return false
-	}
-	if !host.RemoveClientIdentitySubscription(*sub) {
 		return false
 	}
 	if !inspection.Observed || !inspection.Accepted || inspection.Published != *record.Serving {

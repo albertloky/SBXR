@@ -347,7 +347,7 @@ func (host *controlledHost) InspectCertificateActivation(context.Context, hostad
 	if host.clientPublishedCertificate != nil {
 		published = *host.clientPublishedCertificate
 	}
-	if host.clientCertificateInvalid {
+	if host.clientCertificateInvalid || len(host.clientSubscriptionArtifact) != 0 {
 		return hostadapter.CertificateActivationInspection{Observed: true, Loaded: loaded}
 	}
 	return hostadapter.CertificateActivationInspection{Published: published, Loaded: loaded, Observed: true, Accepted: true}
