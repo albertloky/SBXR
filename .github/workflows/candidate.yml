@@ -480,7 +480,7 @@ jobs:
           printf '%s\n' "$ACCEPTANCE_VPS_SSH_PRIVATE_KEY" > ssh.key
           printf '%s %s\n' "$ACCEPTANCE_VPS_HOST" "$ACCEPTANCE_VPS_HOST_KEY" > known_hosts
           trap 'rm -f ssh.key known_hosts' EXIT
-          ssh -i ssh.key -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=known_hosts -o ConnectTimeout=15 "root@$ACCEPTANCE_VPS_HOST" 'test "$(. /etc/os-release; printf "%s:%s" "$ID" "$VERSION_ID")" = ubuntu:24.04 && test "$(uname -m)" = x86_64 && command -v strace >/dev/null && test ! -e /usr/local/bin/sbxr && test ! -e /var/lib/sbxr && test ! -e /run/sbxr-qualification'
+          ssh -i ssh.key -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=known_hosts -o ConnectTimeout=15 "root@$ACCEPTANCE_VPS_HOST" 'test "$(. /etc/os-release; printf "%s:%s" "$ID" "$VERSION_ID")" = ubuntu:24.04 && test "$(uname -m)" = x86_64 && command -v strace >/dev/null && test ! -e /usr/local/bin/sbxr && test ! -e /var/lib/sbxr && test ! -e /run/sbxr-qualification && test ! -e /root/sbxr-qualification-v3 && test ! -e /root/sbxr-qualification-evidence'
       - name: Create the complete qualification manifest after approval
         env:
           GH_TOKEN: ${{ github.token }}
@@ -594,7 +594,8 @@ jobs:
           cp .github/scripts/installer-updater-vps.sh handoff/
           cp .github/scripts/qualification-gateway-readiness.sh handoff/
           cp .github/scripts/v3-packaged-live.sh handoff/
-          if jq -e '.schema == "sbxr-qualification-manifest-v2" or .schema == "sbxr-qualification-manifest-v3"' handoff/qualification-manifest.json >/dev/null; then exit 0; fi
+          if jq -e '.schema == "sbxr-qualification-manifest-v2"' handoff/qualification-manifest.json >/dev/null; then exit 0; fi
+          cp .github/scripts/v3-qualification-transport.sh handoff/
           openssl req -x509 -newkey rsa:3072 -nodes -days 2 -subj '/CN=SBXR Qualification CA' -keyout handoff/ca.key -out handoff/ca.crt
           openssl req -newkey rsa:3072 -nodes -subj '/CN=api.github.com' -keyout handoff/gateway.key -out handoff/gateway.csr
           printf '%s\n' 'subjectAltName=DNS:api.github.com,DNS:github.com' 'extendedKeyUsage=serverAuth' > handoff/gateway.ext
@@ -610,10 +611,38 @@ jobs:
           printf '%s\n' "$ACCEPTANCE_VPS_SSH_PRIVATE_KEY" > ssh.key
           printf '%s %s\n' "$ACCEPTANCE_VPS_HOST" "$ACCEPTANCE_VPS_HOST_KEY" > known_hosts
           if jq -e '.schema == "sbxr-qualification-manifest-v2" or .schema == "sbxr-qualification-manifest-v3"' handoff/qualification-manifest.json >/dev/null; then
+            if jq -e '.schema == "sbxr-qualification-manifest-v3"' handoff/qualification-manifest.json >/dev/null; then
+              ssh_options=(-i "$PWD/ssh.key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$PWD/known_hosts" -o ConnectTimeout=15)
+              tar -C handoff -czf v3-transport.tgz qualification-manifest.json qualification.bundle sbxr-release gateway.crt gateway.key ca.crt assets v3-qualification-transport.sh
+              cleanup_v3_transport() {
+                status=$?
+                trap - EXIT
+                restored=false
+                for retry in {1..12}; do
+                  if ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'if test ! -e /root/sbxr-qualification-v3; then exit 0; fi; test "$(cat /root/sbxr-qualification-v3/staging-owned)" = "${{ github.run_id }}-${{ github.run_attempt }}" || exit 1; if test -f /root/sbxr-qualification-v3/transport-owned; then bash /root/sbxr-qualification-v3/v3-qualification-transport.sh down; elif test -d /root/sbxr-qualification-v3 && test ! -L /root/sbxr-qualification-v3; then find /root/sbxr-qualification-v3 -depth -delete; else test ! -e /root/sbxr-qualification-v3; fi'; then restored=true; break; fi
+                  sleep 5
+                done
+                if test "$restored" != true; then
+                  printf '%s\n' '::error::Qualification transport cleanup unproved. Reconnect and run bash /root/sbxr-qualification-v3/v3-qualification-transport.sh down; do not start another attempt.' >&2
+                  status=1
+                fi
+                rm ssh.key known_hosts handoff/gateway.key v3-transport.tgz
+                exit "$status"
+              }
+              trap cleanup_v3_transport EXIT
+              ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'test ! -e /root/sbxr-qualification-v3 && install -d -m 0700 /root/sbxr-qualification-v3 && printf "%s\n" "${{ github.run_id }}-${{ github.run_attempt }}" > /root/sbxr-qualification-v3/staging-owned'
+              ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'umask 077; tar -xzf - -C /root/sbxr-qualification-v3; chmod 0700 /root/sbxr-qualification-v3/sbxr-release' < v3-transport.tgz
+              ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'bash /root/sbxr-qualification-v3/v3-qualification-transport.sh up'
+            fi
             # The operator drives only supported packaged paths on the VPS and
             # Mac. This collector validates evidence; it cannot simulate them.
             bash .github/scripts/v3-recurring-evidence.sh "$ACCEPTANCE_VPS_HOST" "$PWD/ssh.key" "$PWD/known_hosts"
-            rm -f ssh.key known_hosts
+            if jq -e '.schema == "sbxr-qualification-manifest-v3"' handoff/qualification-manifest.json >/dev/null; then
+              ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'bash /root/sbxr-qualification-v3/v3-qualification-transport.sh down'
+              trap - EXIT
+              rm handoff/gateway.key v3-transport.tgz
+            fi
+            rm ssh.key known_hosts
             jq '.stages.integrated_verification = "Passed" | .stages.codex_live_acceptance = "Passed"' candidate-failure-state.json > candidate-failure-state.next
             mv candidate-failure-state.next candidate-failure-state.json
             exit 0

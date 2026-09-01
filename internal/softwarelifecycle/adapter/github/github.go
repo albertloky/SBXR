@@ -175,7 +175,7 @@ func (source Source) latest(ctx context.Context, archiveName string) (softwareli
 		proofs = append(proofs, softwarelifecycle.LatestAssetProof{Name: name, Size: asset.Size, SHA256: asset.SHA256})
 	}
 	latest, valid := softwarelifecycle.VerifyLatestReleaseIndex(softwarelifecycle.Repository, release.Tag, release.TargetCommitish, index, proofs)
-	if !valid || latest.Sequence != recordSequence || !qualifiedReleaseSupport(release.Body, latest) {
+	if !valid || latest.Sequence != recordSequence || !qualificationSupport(release, index, latest) {
 		return softwarelifecycle.LatestRelease{}, nil, softwarelifecycle.LatestReleaseRefused
 	}
 	if archiveName == "" {
@@ -258,6 +258,7 @@ type qualificationManifest struct {
 	CandidateFailureStateSHA256  string          `json:"candidate_failure_state_sha256"`
 	PinnedActions                []string        `json:"pinned_actions"`
 	Rescue                       json.RawMessage `json:"rescue"`
+	V3Attempt                    json.RawMessage `json:"v3_attempt"`
 }
 
 type qualificationDecisionChainEntry struct {
@@ -275,7 +276,15 @@ func (source Source) qualificationLatest(release githubRelease, metadata map[str
 	var manifest qualificationManifest
 	decoder := json.NewDecoder(bytes.NewReader(proof.Manifest))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&manifest) != nil || decoder.Decode(&struct{}{}) != io.EOF || manifest.Schema != "sbxr-qualification-manifest-v1" || manifest.Repository != softwarelifecycle.Repository || manifest.Workflow.Path != ".github/workflows/candidate.yml" || manifest.Workflow.Ref != "albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main" || !commitPattern.MatchString(manifest.Workflow.Commit) || !workflowEvidencePattern.MatchString(manifest.Workflow.RunURL) || manifest.Workflow.RunID == "" || !strings.HasSuffix(manifest.Workflow.RunURL, "/"+manifest.Workflow.RunID) || !hashPattern.MatchString(manifest.CandidateFailureStateSHA256) || !validQualificationDecisionChain(manifest.Approval.DecisionChain) || len(manifest.Releases) != 2 {
+	if decoder.Decode(&manifest) != nil || decoder.Decode(&struct{}{}) != io.EOF || manifest.Repository != softwarelifecycle.Repository || manifest.Workflow.Path != ".github/workflows/candidate.yml" || manifest.Workflow.Ref != "albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main" || !commitPattern.MatchString(manifest.Workflow.Commit) || !workflowEvidencePattern.MatchString(manifest.Workflow.RunURL) || manifest.Workflow.RunID == "" || !strings.HasSuffix(manifest.Workflow.RunURL, "/"+manifest.Workflow.RunID) || !hashPattern.MatchString(manifest.CandidateFailureStateSHA256) || !validQualificationDecisionChain(manifest.Approval.DecisionChain) {
+		return "", 0, false
+	}
+	legacy := manifest.Schema == "sbxr-qualification-manifest-v1" && len(manifest.Releases) == 2 && len(manifest.V3Attempt) == 0
+	clean := manifest.Schema == "sbxr-qualification-manifest-v3" && manifest.Mode == "v3" && manifest.SourceState == "v3-subscription-clean" && len(manifest.Releases) == 1 && len(manifest.V3Attempt) > 0 && manifest.Releases[0].Commit == manifest.Workflow.Commit
+	var environments []struct {
+		Name string `json:"name"`
+	}
+	if !legacy && !clean || manifest.Approval.State != "approved" || json.Unmarshal(manifest.Approval.Environments, &environments) != nil || len(environments) != 1 || environments[0].Name != "acceptance-vps" {
 		return "", 0, false
 	}
 	digest := sha256.Sum256(proof.Manifest)
@@ -302,6 +311,31 @@ func (source Source) qualificationLatest(release githubRelease, metadata map[str
 		return candidate.Identity.IndexSHA256, candidate.Sequence, candidate.Identity.IndexSHA256 == metadata["release-index.json"].SHA256
 	}
 	return "", 0, false
+}
+
+// A signed attempt authorizes candidate delivery, not a stable Acceptance Record.
+// Version 3 currently qualifies the first subscription release by clean install.
+func qualificationSupport(release githubRelease, index []byte, latest softwarelifecycle.LatestRelease) bool {
+	if release.Qualification == nil {
+		return qualifiedReleaseSupport(release.Body, latest)
+	}
+	var manifest qualificationManifest
+	if json.Unmarshal(release.Qualification.Manifest, &manifest) != nil {
+		return false
+	}
+	if manifest.Schema == "sbxr-qualification-manifest-v1" {
+		return latest.Support == nil
+	}
+	var attempt struct {
+		Schema         string                            `json:"schema"`
+		CandidateIndex string                            `json:"candidate_index"`
+		Support        *softwarelifecycle.ReleaseSupport `json:"support"`
+		Sources        []json.RawMessage                 `json:"sources"`
+	}
+	if json.Unmarshal(manifest.V3Attempt, &attempt) != nil || attempt.Schema != "sbxr-v3-qualification-attempt-v3" || attempt.CandidateIndex != string(index) || attempt.Sources == nil || len(attempt.Sources) != 0 || attempt.Support == nil || latest.Support == nil {
+		return false
+	}
+	return attempt.Support.Scope == softwarelifecycle.FirstSubscriptionCleanInstall && attempt.Support.Contract == softwarelifecycle.SubscriptionUpdateContract && attempt.Support.Sources != nil && len(attempt.Support.Sources) == 0 && latest.Support.Scope == attempt.Support.Scope && latest.Support.Contract == attempt.Support.Contract && len(latest.Support.Sources) == 0
 }
 
 func validQualificationDecisionChain(chain []qualificationDecisionChainEntry) bool {

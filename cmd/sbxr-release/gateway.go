@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -88,8 +89,16 @@ func newQualificationGateway(manifest, bundle json.RawMessage, assetRoot string)
 		return nil, errors.New("qualification authority refused")
 	}
 	var document gatewayManifest
-	if json.Unmarshal(manifest, &document) != nil || document.Schema != "sbxr-qualification-manifest-v1" || document.Repository != softwarelifecycle.Repository || len(document.Releases) < 1 || len(document.Releases) > 2 || document.Releases[0].Sequence == 0 || len(document.Releases) == 2 && (document.Releases[0].Tag == document.Releases[1].Tag || document.Releases[1].Sequence <= document.Releases[0].Sequence) {
+	if json.Unmarshal(manifest, &document) != nil || document.Repository != softwarelifecycle.Repository || len(document.Releases) < 1 || len(document.Releases) > 2 || document.Releases[0].Sequence == 0 || len(document.Releases) == 2 && (document.Releases[0].Tag == document.Releases[1].Tag || document.Releases[1].Sequence <= document.Releases[0].Sequence) {
 		return nil, errors.New("qualification manifest refused")
+	}
+	if document.Schema != "sbxr-qualification-manifest-v1" {
+		var scoped qualificationManifest
+		decoder := json.NewDecoder(bytes.NewReader(manifest))
+		decoder.DisallowUnknownFields()
+		if document.Schema != "sbxr-qualification-manifest-v3" || decoder.Decode(&scoped) != nil || decoder.Decode(&struct{}{}) != io.EOF || scoped.SourceState != "v3-subscription-clean" || !validStableFailureManifest(scoped) {
+			return nil, errors.New("qualification manifest refused")
+		}
 	}
 	gateway := &qualificationGateway{manifest: append(json.RawMessage(nil), manifest...), bundle: append(json.RawMessage(nil), bundle...), releases: make([]gatewayRelease, len(document.Releases))}
 	for index, release := range document.Releases {

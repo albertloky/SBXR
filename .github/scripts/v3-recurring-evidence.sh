@@ -20,7 +20,7 @@ stop_attempt() {
   trap - EXIT
   if test "$status" -ne 0; then
     # Do not fetch raw output or run cleanup against an uncertain installation.
-    "${remote[@]}" 'test ! -d /run/sbxr-qualification/v3-evidence || printf "%s\n" STOP > /run/sbxr-qualification/v3-evidence/request.json' || true
+    "${remote[@]}" 'test ! -d /root/sbxr-qualification-evidence || printf "%s\n" STOP > /root/sbxr-qualification-evidence/request.json' || true
     mkdir -p handoff/failure-evidence
     if test "$reason" = failure-recorded; then
       cp "$directory/retained-failure.json" "$directory/failure.json"
@@ -38,10 +38,10 @@ stop_attempt() {
 }
 trap stop_attempt EXIT
 
-"${remote[@]}" 'test ! -e /run/sbxr-qualification && install -d -m 0700 /run/sbxr-qualification/v3-evidence'
 # Bind a non-secret, host-specific identity without publishing a machine ID.
 actual_vps="$("${remote[@]}" 'test "$(. /etc/os-release; printf "%s:%s" "$ID" "$VERSION_ID")" = ubuntu:24.04 && test "$(uname -m)" = x86_64 && sha256sum /etc/machine-id' | cut -d' ' -f1)"
 test "$actual_vps" = "$(jq -r .v3_attempt.vps_identity_sha256 "$manifest")"
+"${remote[@]}" 'test ! -e /root/sbxr-qualification-evidence && install -d -m 0700 /root/sbxr-qualification-evidence'
 printf '[]' > "$directory/previous.json"
 index=0
 while read -r scenario; do
@@ -51,13 +51,13 @@ while read -r scenario; do
   if test "$scenario" = karing-final; then limit=7200; fi
   started="$(date +%s)"
   jq -cnS --arg scenario "$scenario" --arg digest "$digest" --argjson limit "$limit" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{not_before:$now,qualification_manifest_sha256:$digest,scenario_id:$scenario,scenario_limit_seconds:$limit}' > "$directory/request.json"
-  "${remote[@]}" 'umask 077; test ! -e /run/sbxr-qualification/v3-evidence/result.json; cat > /run/sbxr-qualification/v3-evidence/request.json' < "$directory/request.json"
-  while ! "${remote[@]}" 'test -f /run/sbxr-qualification/v3-evidence/result.json'; do
+  "${remote[@]}" 'umask 077; test ! -e /root/sbxr-qualification-evidence/result.json; cat > /root/sbxr-qualification-evidence/request.json' < "$directory/request.json"
+  while ! "${remote[@]}" 'test -f /root/sbxr-qualification-evidence/result.json'; do
     if test "$(( $(date +%s) - started ))" -gt "$((limit + 300))"; then reason=timeout; exit 1; fi
     sleep 2
   done
   reason=evidence-refused
-  "${remote[@]}" 'test "$(stat -c "%a:%u:%h:%F" /run/sbxr-qualification/v3-evidence/result.json)" = "600:0:1:regular file" && test "$(stat -c %s /run/sbxr-qualification/v3-evidence/result.json)" -le 16777216 && cat /run/sbxr-qualification/v3-evidence/result.json' > "$directory/input.json"
+  "${remote[@]}" 'test "$(stat -c "%a:%u:%h:%F" /root/sbxr-qualification-evidence/result.json)" = "600:0:1:regular file" && test "$(stat -c %s /root/sbxr-qualification-evidence/result.json)" -le 16777216 && cat /root/sbxr-qualification-evidence/result.json' > "$directory/input.json"
   # Validate the original bytes BEFORE jq: duplicate and unknown keys must not
   # disappear during normalization. Invalid input is never retained or echoed.
   "$tool" qualification < "$directory/input.json" > "$directory/decision.json"
@@ -81,11 +81,11 @@ while read -r scenario; do
   cp "$directory/input.json" "handoff/v3-scenarios/$index-facts.json"
   cp "$directory/decision.json" "handoff/v3-scenarios/$index-decision.json"
   jq -cS '.detailed_evidence.scenarios' "$directory/input.json" > "$directory/previous.json"
-  "${remote[@]}" 'rm /run/sbxr-qualification/v3-evidence/result.json'
+  "${remote[@]}" 'rm /root/sbxr-qualification-evidence/result.json'
   reason=unexpected-failure
 done < <(jq -r '.v3_attempt.required_scenarios[]' "$manifest")
 
-"${remote[@]}" 'test ! -e /usr/local/bin/sbxr && test ! -e /var/lib/sbxr && rm /run/sbxr-qualification/v3-evidence/request.json && rmdir /run/sbxr-qualification/v3-evidence /run/sbxr-qualification'
+"${remote[@]}" 'test ! -e /usr/local/bin/sbxr && test ! -e /var/lib/sbxr && rm /root/sbxr-qualification-evidence/request.json && rmdir /root/sbxr-qualification-evidence'
 # This is a new evaluation time, not a rewrite of a scenario timestamp.
 jq -cS --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.stage = "v3-packaged-live-result" | .evaluation_time = $now' "$directory/input.json" | tr -d '\n' > "$directory/final.json"
 "$tool" qualification < "$directory/final.json" > "$directory/decision.json"

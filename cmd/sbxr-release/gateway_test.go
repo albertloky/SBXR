@@ -5,10 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -116,5 +118,85 @@ func TestQualificationGatewayServesOneV3Candidate(t *testing.T) {
 	gateway.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || response.Body.String() != "v3 install.sh" {
 		t.Fatalf("V3 install = %d %q", response.Code, response.Body.String())
+	}
+}
+
+func TestQualificationGatewayServesBoundSubscriptionCandidate(t *testing.T) {
+	root := t.TempDir()
+	tag, commit := "v3.1.0", strings.Repeat("a", 40)
+	directory := filepath.Join(root, tag)
+	if err := os.Mkdir(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	var assets []decisionAsset
+	var proofs []softwarelifecycle.LatestAssetProof
+	for _, name := range softwarelifecycle.LatestReleaseIndexedAssetNames() {
+		body := []byte(name)
+		digest := sha256.Sum256(body)
+		if err := os.WriteFile(filepath.Join(directory, name), body, 0600); err != nil {
+			t.Fatal(err)
+		}
+		asset := decisionAsset{Name: name, Size: int64(len(body)), SHA256: hex.EncodeToString(digest[:])}
+		assets = append(assets, asset)
+		proofs = append(proofs, softwarelifecycle.LatestAssetProof{Name: name, Size: asset.Size, SHA256: asset.SHA256})
+	}
+	support := v3ReleaseSupport{Scope: softwarelifecycle.FirstSubscriptionCleanInstall, Contract: softwarelifecycle.SubscriptionUpdateContract, Sources: []decisionReleaseIdentity{}}
+	index, err := softwarelifecycle.BuildSubscriptionReleaseIndex(tag, commit, 18, proofs, support.lifecycle())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "release-index.json"), index, 0600); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(index)
+	assets = append(assets, decisionAsset{Name: "release-index.json", Size: int64(len(index)), SHA256: hex.EncodeToString(digest[:])})
+	slices.SortFunc(assets, func(a, b decisionAsset) int { return strings.Compare(a.Name, b.Name) })
+	release := qualificationRelease{Tag: tag, Commit: commit, Sequence: 18, ReleaseID: 123, Assets: assets, ReleaseIdentity: decisionReleaseIdentity{Repository: softwarelifecycle.Repository, Tag: tag, Commit: commit, ReleaseIndexSHA256: hex.EncodeToString(digest[:])}}
+	attempt := &v3QualificationAttempt{Schema: "sbxr-v3-qualification-attempt-v3", CandidateIndex: string(index), Support: &support, Sources: []v3QualificationSource{}, Baseline: &qualificationRelease{}}
+	attempt.RequiredScenarios = attemptScenarios(*attempt)
+	manifest := qualificationManifest{Schema: "sbxr-qualification-manifest-v3", Repository: softwarelifecycle.Repository, Mode: "v3", SourceState: "v3-subscription-clean", Releases: []qualificationRelease{release}, V3Attempt: attempt, AcceptanceVPSChecklistSHA256: strings.Repeat("a", 64), CandidateFailureStateSHA256: strings.Repeat("b", 64), Approval: qualificationApproval{State: "approved", Environments: []approvalEnvironment{{Name: "acceptance-vps"}}}, Workflow: qualificationWorkflow{Commit: commit, Path: ".github/workflows/candidate.yml", Ref: softwarelifecycle.Repository + "/.github/workflows/candidate.yml@refs/heads/main", RunID: "123", RunURL: "https://github.com/albertloky/SBXR/actions/runs/123"}}
+	for i, stage := range []string{candidatePreflightStage, candidateDraftConstructionStage, candidateDraftVerificationStage} {
+		outcome := "accepted"
+		if i == 1 {
+			outcome = "actions-required"
+		}
+		manifest.Approval.DecisionChain = append(manifest.Approval.DecisionChain, decisionChainEntry{Stage: stage, Outcome: outcome, FactsSHA256: strings.Repeat("c", 64), DecisionSHA256: strings.Repeat("d", 64)})
+	}
+	encoded, _ := json.MarshalIndent(manifest, "", "  ")
+	bundle := json.RawMessage(`{"bundle":true}`)
+	gateway, err := newQualificationGateway(encoded, bundle, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gateway.close()
+	response := httptest.NewRecorder()
+	gateway.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "https://api.github.com/repos/albertloky/SBXR/releases/latest", nil))
+	var latest struct {
+		Qualification struct{ Manifest, Bundle []byte } `json:"sbxr_qualification"`
+	}
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &latest) != nil || !bytes.Equal(latest.Qualification.Manifest, encoded) || !bytes.Equal(latest.Qualification.Bundle, bundle) {
+		t.Fatal("signed bytes changed")
+	}
+	response = httptest.NewRecorder()
+	gateway.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "https://github.com/albertloky/SBXR/releases/download/"+tag+"/release-index.json", nil))
+	if response.Code != http.StatusOK || !bytes.Equal(response.Body.Bytes(), index) {
+		t.Fatal("bound index unavailable")
+	}
+	for _, mutate := range []func(*qualificationManifest){
+		func(m *qualificationManifest) { m.Schema = "sbxr-qualification-manifest-v4" },
+		func(m *qualificationManifest) { m.Approval.State = "pending" },
+		func(m *qualificationManifest) { m.SourceState = "v3-recurring" },
+		func(m *qualificationManifest) { m.V3Attempt.CandidateIndex += "\n" },
+	} {
+		var changed qualificationManifest
+		if json.Unmarshal(encoded, &changed) != nil {
+			t.Fatal("fixture")
+		}
+		mutate(&changed)
+		body, _ := json.Marshal(changed)
+		if gateway, err := newQualificationGateway(body, bundle, root); err == nil {
+			gateway.close()
+			t.Fatal("unbound manifest accepted")
+		}
 	}
 }
