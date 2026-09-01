@@ -184,6 +184,21 @@ func qualificationBoundaryForCandidate(t *testing.T, binary string, preflightFac
 		observation := draftObservation(tag, sequence, int64(71+len(sources)+index))
 		observation["commit"] = commit
 		observation["release_identity"].(map[string]any)["commit"] = commit
+		if len(attempt) > 0 {
+			if encoded, ok := attempt[0].(map[string]any)["candidate_index"].(string); ok {
+				digest := sha256String(encoded)
+				target["release_identity"].(map[string]any)["release_index_sha256"] = digest
+				observation["release_identity"].(map[string]any)["release_index_sha256"] = digest
+				for _, set := range []any{target["assets"], observation["assets"], observation["downloads"]} {
+					for _, raw := range set.([]any) {
+						asset := raw.(map[string]any)
+						if asset["name"] == "release-index.json" {
+							asset["sha256"], asset["size"] = digest, len(encoded)
+						}
+					}
+				}
+			}
+		}
 		observations[index] = observation
 	}
 	constructionFacts := qualificationDocument(t, map[string]any{

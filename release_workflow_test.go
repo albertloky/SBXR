@@ -20,10 +20,20 @@ func TestRecurringV3UsesTheExistingQualificationWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, required := range []string{"v3_attempt:", "evidence_version:2", "v3-recurring", "sbxr-qualification-manifest-v2", "v3-recurring-evidence.sh", "RELEASE-V3-SUBSCRIPTION-QUALIFICATION", "go run ./cmd/sbxr-release verify-public-latest"} {
+	for _, required := range []string{"v3_attempt:", "evidence_version:3", "v3-subscription-clean", "sbxr-qualification-manifest-v3", "subscription_history", "release-history.sh", "candidate_index", "-support release-support.json", "v3-recurring", "sbxr-qualification-manifest-v2", "v3-recurring-evidence.sh", "RELEASE-V3-SUBSCRIPTION-QUALIFICATION", "go run ./cmd/sbxr-release verify-public-latest"} {
 		if !strings.Contains(string(workflow), required) {
 			t.Fatalf("missing recurring workflow contract %q", required)
 		}
+	}
+	stable, err := os.ReadFile(".github/workflows/stable.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(stable), "bash .github/scripts/release-history.sh current-release-history.json") != 2 || strings.Count(string(stable), "subscription_history:{complete:true") != 2 {
+		t.Fatal("publication must recheck history before and after approval")
+	}
+	if output, err := exec.Command("bash", "-n", ".github/scripts/release-history.sh").CombinedOutput(); err != nil {
+		t.Fatalf("history collector syntax: %v %s", err, output)
 	}
 	collector, err := os.ReadFile(".github/scripts/v3-recurring-evidence.sh")
 	if err != nil {

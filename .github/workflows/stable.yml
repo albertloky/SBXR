@@ -112,6 +112,12 @@ jobs:
           checklist="$CHECKLIST"
           if test "$(jq -r .mode "$manifest")" = v3; then checklist=docs/acceptance/v3-packaged-live.md; fi
           jq -cnS --slurpfile acceptance_decision candidate/acceptance/acceptance-vps-result-decision.json --slurpfile acceptance_facts candidate/acceptance/acceptance-vps-result-facts.json --argjson archive "$archive" --slurpfile burned verified/burned.json --slurpfile candidate_run candidate-run.json --arg checklist_sha256 "$(sha256sum "$checklist" | cut -d' ' -f1)" --argjson latest_release_id "$latest_release_id" --argjson latest_tag "$latest_tag" --arg observed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --slurpfile releases verified/releases.json --arg remote_main "$(git rev-parse origin/main)" --slurpfile signed_manifest verified/qualification-manifest.json '{acceptance_decision:$acceptance_decision[0],acceptance_facts:$acceptance_facts[0],archive:$archive,burned_identities:$burned[0],candidate_run:{conclusion:$candidate_run[0].conclusion,created_at:$candidate_run[0].created_at,event:$candidate_run[0].event,head_sha:$candidate_run[0].head_sha,id:($candidate_run[0].id|tostring),path:$candidate_run[0].path},checklist_sha256:$checklist_sha256,latest_release_id:$latest_release_id,latest_tag:$latest_tag,manifest_attested:true,observed_at:$observed_at,releases:$releases[0],remote_main:$remote_main,schema:"sbxr-release-qualification-facts-v1",signed_manifest:$signed_manifest[0],stage:"stable-preflight"}' | tr -d '\n' > verified/stable-preflight-facts.json
+          if test "$(jq -r .schema "$manifest")" = sbxr-qualification-manifest-v3; then
+            bash .github/scripts/release-history.sh current-release-history.json
+            go run ./cmd/sbxr-release verify-public-latest > current-source-verification.json
+            jq -cS --slurpfile releases current-release-history.json --slurpfile latest current-source-verification.json '. + {subscription_history:{complete:true,public_latest:$latest[0],releases:$releases[0]}}' verified/stable-preflight-facts.json | tr -d '\n' > current-history-facts.json
+            mv current-history-facts.json verified/stable-preflight-facts.json
+          fi
           go run ./cmd/sbxr-release qualification < verified/stable-preflight-facts.json > verified/stable-preflight-decision.json
           facts_sha256="$(sha256sum verified/stable-preflight-facts.json | cut -d' ' -f1)"
           prior_decision_sha256="$(sha256sum candidate/acceptance/acceptance-vps-result-decision.json | cut -d' ' -f1)"
@@ -262,6 +268,12 @@ jobs:
             prior_decision_sha256="$(sha256sum verified/stable-preflight-decision.json | cut -d' ' -f1)"
             if test "$action_index" -gt 0; then prior_decision_sha256="$(sha256sum prior-verification-decision.json | cut -d' ' -f1)"; fi
             jq -cnS --argjson action_index "$action_index" --slurpfile approval approval.json --slurpfile observation stable-publication-observation.json --arg observed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --slurpfile preflight_decision verified/stable-preflight-decision.json --slurpfile preflight_facts verified/stable-preflight-facts.json --arg prior_decision_sha256 "$prior_decision_sha256" --slurpfile prior_verification_decision prior-verification-decision.json --slurpfile prior_verification_facts prior-verification-facts.json '{action_index:$action_index,approval:$approval[0],observation:$observation[0],observed_at:$observed_at,preflight_decision:$preflight_decision[0],preflight_facts:$preflight_facts[0],prior_decision_sha256:$prior_decision_sha256,prior_verification_decision:$prior_verification_decision[0],prior_verification_facts:$prior_verification_facts[0],schema:"sbxr-release-qualification-facts-v1",stage:"stable-publication"}' | tr -d '\n' > stable-publication-facts.json
+            if test "$(jq -r .schema verified/qualification-manifest.json)" = sbxr-qualification-manifest-v3; then
+              bash .github/scripts/release-history.sh current-release-history.json
+              go run ./cmd/sbxr-release verify-public-latest > current-source-verification.json
+              jq -cS --slurpfile releases current-release-history.json --slurpfile latest current-source-verification.json '. + {subscription_history:{complete:true,public_latest:$latest[0],releases:$releases[0]}}' stable-publication-facts.json | tr -d '\n' > current-history-facts.json
+              mv current-history-facts.json stable-publication-facts.json
+            fi
             mkdir -m 0700 "publication-evidence/$action_index"
             cp stable-publication-facts.json "publication-evidence/$action_index/"
             go run ./cmd/sbxr-release qualification < stable-publication-facts.json > stable-publication-decision.json

@@ -81,7 +81,7 @@ func evaluateV3ScenarioFailure(facts v3ScenarioFailureFacts, document []byte) (v
 	observed, timeOK := qualificationTime(failure.ObservedAt)
 	started, _ := qualificationTime(attempt.StartedAt)
 	states := []string{"Unknown", "Not installed", "Not set up", "Running", "Problem detected", "Setup incomplete", "Change incomplete", "Removal incomplete"}
-	if !timeOK || observed.Before(started) || failure.Schema != "sbxr-v3-scenario-failure-v2" || failure.AttemptID != attempt.AttemptID || failure.VPSID != attempt.VPSID || !reflect.DeepEqual(failure.Candidate, release) || !slices.Contains(attempt.RequiredScenarios, failure.ScenarioID) || !independentID(failure.OperationID, "operation") || failure.ExpectedResult != "expected-safety-and-final-state-proved" || !slices.Contains([]string{"unexpected-failure", "timeout", "unexplained-drift", "evidence-refused"}, failure.ActualResult) || !slices.Contains([]string{"unknown", "observed", "before-commitment", "after-commitment", "refusal"}, failure.Boundary) || !slices.Contains(states, failure.HostState) || !slices.Contains(states, facts.SafetyCleanup.HostState) || !slices.Contains([]string{"not-started", "completed", "incomplete"}, facts.SafetyCleanup.Status) {
+	if !timeOK || observed.Before(started) || failure.Schema != "sbxr-v3-scenario-failure-"+attemptVersion(attempt) || failure.AttemptID != attempt.AttemptID || failure.VPSID != attempt.VPSID || !reflect.DeepEqual(failure.Candidate, release) || !slices.Contains(attempt.RequiredScenarios, failure.ScenarioID) || !independentID(failure.OperationID, "operation") || failure.ExpectedResult != "expected-safety-and-final-state-proved" || !slices.Contains([]string{"unexpected-failure", "timeout", "unexplained-drift", "evidence-refused"}, failure.ActualResult) || !slices.Contains([]string{"unknown", "observed", "before-commitment", "after-commitment", "refusal"}, failure.Boundary) || !slices.Contains(states, failure.HostState) || !slices.Contains(states, facts.SafetyCleanup.HostState) || !slices.Contains([]string{"not-started", "completed", "incomplete"}, facts.SafetyCleanup.Status) {
 		return refused()
 	}
 	burn := burnedIdentity{Commit: release.Commit, OriginalTag: release.Tag, QualificationRunURL: manifest.Workflow.RunURL, Reason: "post-sign-qualification-failure", RecordedAt: failure.ObservedAt, ReleaseIndexSHA256: release.ReleaseIdentity.ReleaseIndexSHA256, Sequence: release.Sequence}
@@ -148,6 +148,7 @@ type v3RecurringAcceptanceRecord struct {
 	Attempt                v3QualificationAttempt   `json:"attempt"`
 	DetailedEvidenceSHA256 string                   `json:"detailed_evidence_sha256"`
 	Evidence               []string                 `json:"evidence"`
+	NotApplicable          []string                 `json:"not_applicable,omitempty"`
 	QualificationRole      string                   `json:"qualification_role"`
 	ReleaseIdentity        decisionReleaseIdentity  `json:"release_identity"`
 	Runner                 string                   `json:"runner"`
@@ -166,7 +167,7 @@ func evaluateV3Result(document []byte) (acceptanceVPSResultDecision, error) {
 			Schema string `json:"schema"`
 		} `json:"detailed_evidence"`
 	}
-	if json.Unmarshal(document, &envelope) == nil && envelope.DetailedEvidence.Schema == "sbxr-v3-packaged-live-evidence-v2" {
+	if json.Unmarshal(document, &envelope) == nil && (envelope.DetailedEvidence.Schema == "sbxr-v3-packaged-live-evidence-v2" || envelope.DetailedEvidence.Schema == "sbxr-v3-packaged-live-evidence-v3") {
 		var facts v3RecurringResultFacts
 		if decodeCanonical(document, &facts) {
 			return evaluateRecurringV3Result(facts, document)
@@ -187,7 +188,7 @@ func recurringManifest(facts v3RecurringResultFacts) (qualificationManifest, err
 	}
 	manifest, err := evaluateQualificationBoundary(boundary)
 	encoded, marshalErr := marshalCanonical(manifest)
-	if err != nil || marshalErr != nil || !facts.QualificationManifestSigned || manifest.Schema != "sbxr-qualification-manifest-v2" || manifest.V3Attempt == nil || manifest.Mode != "v3" || manifest.SourceState != "v3-recurring" || len(manifest.Releases) != 1 || !bytes.Equal(encoded, facts.QualificationManifest) || facts.PriorDecisionSHA256 != documentSHA256(encoded) || !reflect.DeepEqual(facts.Releases, manifest.Releases) || facts.Runner != manifest.V3Attempt.Runner {
+	if err != nil || marshalErr != nil || !facts.QualificationManifestSigned || (manifest.Schema != "sbxr-qualification-manifest-v2" && manifest.Schema != "sbxr-qualification-manifest-v3") || manifest.V3Attempt == nil || manifest.Mode != "v3" || (manifest.SourceState != "v3-recurring" && manifest.SourceState != "v3-subscription-clean") || len(manifest.Releases) != 1 || !bytes.Equal(encoded, facts.QualificationManifest) || facts.PriorDecisionSHA256 != documentSHA256(encoded) || !reflect.DeepEqual(facts.Releases, manifest.Releases) || facts.Runner != manifest.V3Attempt.Runner {
 		return qualificationManifest{}, errors.New("recurring qualification refused")
 	}
 	return manifest, nil
@@ -222,7 +223,7 @@ func validRecurringEvidence(facts v3RecurringResultFacts, manifest qualification
 	encoded, err := marshalCanonical(evidence)
 	observed, observedOK := qualificationTime(facts.ObservedAt)
 	evaluated, evaluatedOK := qualificationTime(facts.EvaluationTime)
-	if attempt == nil || facts.Schema != qualificationFactsSchema || err != nil || facts.DetailedEvidenceSHA256 != documentSHA256(encoded) || evidence.Schema != "sbxr-v3-packaged-live-evidence-v2" || evidence.AttemptID != attempt.AttemptID || evidence.QualificationManifestSHA256 != facts.PriorDecisionSHA256 || evidence.ObservedAt != facts.ObservedAt || !observedOK || !evaluatedOK || evaluated.Before(observed) || evaluated.Sub(observed) > 5*time.Minute || len(evidence.Scenarios) == 0 || len(evidence.Scenarios) > len(attempt.RequiredScenarios) || complete && len(evidence.Scenarios) != len(attempt.RequiredScenarios) {
+	if attempt == nil || facts.Schema != qualificationFactsSchema || err != nil || facts.DetailedEvidenceSHA256 != documentSHA256(encoded) || evidence.Schema != "sbxr-v3-packaged-live-evidence-"+attemptVersion(attempt) || evidence.AttemptID != attempt.AttemptID || evidence.QualificationManifestSHA256 != facts.PriorDecisionSHA256 || evidence.ObservedAt != facts.ObservedAt || !observedOK || !evaluatedOK || evaluated.Before(observed) || evaluated.Sub(observed) > 5*time.Minute || len(evidence.Scenarios) == 0 || len(evidence.Scenarios) > len(attempt.RequiredScenarios) || complete && len(evidence.Scenarios) != len(attempt.RequiredScenarios) {
 		return false
 	}
 	previousTime, _ := qualificationTime(attempt.StartedAt)
@@ -236,7 +237,7 @@ func validRecurringEvidence(facts v3RecurringResultFacts, manifest qualification
 		if scenario.ScenarioID == "karing-final" {
 			limit = 2 * time.Hour
 		}
-		if !startOK || !completionOK || !validationOK || started.Before(previousTime) || completed.Before(started) || completed.Sub(started) > limit || validated.Before(completed) || validated.Sub(completed) > 5*time.Minute || validated.After(observed) || scenario.PreflightAt != scenario.StartedAt || scenario.PriorScenarioSHA256 != previousDigest || scenario.ScenarioID != attempt.RequiredScenarios[index] || scenario.Schema != "sbxr-v3-scenario-evidence-v2" || scenario.AttemptID != attempt.AttemptID || scenario.VPSID != attempt.VPSID || scenario.VPSIdentitySHA256 != attempt.VPSIdentitySHA256 || !reflect.DeepEqual(scenario.Candidate, manifest.Releases[0]) || !independentID(scenario.OperationID, "operation") || operations[scenario.OperationID] || scenario.LinkID != "" && !independentID(scenario.LinkID, "link") || scenario.PackagesBefore != packages {
+		if !startOK || !completionOK || !validationOK || started.Before(previousTime) || completed.Before(started) || completed.Sub(started) > limit || validated.Before(completed) || validated.Sub(completed) > 5*time.Minute || validated.After(observed) || scenario.PreflightAt != scenario.StartedAt || scenario.PriorScenarioSHA256 != previousDigest || scenario.ScenarioID != attempt.RequiredScenarios[index] || scenario.Schema != "sbxr-v3-scenario-evidence-"+attemptVersion(attempt) || scenario.AttemptID != attempt.AttemptID || scenario.VPSID != attempt.VPSID || scenario.VPSIdentitySHA256 != attempt.VPSIdentitySHA256 || !reflect.DeepEqual(scenario.Candidate, manifest.Releases[0]) || !independentID(scenario.OperationID, "operation") || operations[scenario.OperationID] || scenario.LinkID != "" && !independentID(scenario.LinkID, "link") || scenario.PackagesBefore != packages {
 			return false
 		}
 		operations[scenario.OperationID] = true
@@ -318,6 +319,9 @@ func validScenarioResult(scenario v3ScenarioEvidence, sources []v3QualificationS
 		return false
 	}
 	checks := requiredV3Checks(id)
+	if scenario.Schema == "sbxr-v3-scenario-evidence-v3" && id == "enable-schema1" {
+		checks = append(checks, strings.Fields("candidate-supported-setup-origin no-protected-state-edit no-unsupported-migration")...)
+	}
 	if len(checks) != len(scenario.Evidence) {
 		return false
 	}
@@ -362,6 +366,7 @@ func requiredV3Checks(id string) []string {
 		}
 	}
 	extra := map[string]string{
+		"lifecycle-menu":           `packaged-zero-argument-menu check-reachable update-reachable recover-reachable explicit-confirmation safe-no-update safe-no-recovery clean-install-target-refused no-replacement-on-refusal`,
 		"baseline-clean":           `clean-direct-install reviewed-setup local-activation outside-proxy-traffic complete-owned-removal`,
 		"baseline-refusal":         `footprint-conflict-detected setup-refused-before-mutation conflict-only-restored`,
 		"baseline-precommit":       `setup-precommit-interruption cleanup-direction-proved reviewed-cleanup provisional-resources-absent`,
@@ -413,17 +418,34 @@ func requiredV3Checks(id string) []string {
 
 func buildRecurringAcceptanceRecord(manifest qualificationManifest, facts v3RecurringResultFacts) (string, error) {
 	release, attempt := manifest.Releases[0], manifest.V3Attempt
+	role, code, recordSchema := "Recurring subscription-capable V3 release", "RELEASE-V3-SUBSCRIPTION-QUALIFICATION", "sbxr-acceptance-record-v2"
+	var notApplicable []string
+	if attemptVersion(attempt) == "v3" {
+		recordSchema = "sbxr-acceptance-record-v3"
+	}
+	if attempt.Support != nil && attempt.Support.Scope == softwarelifecycle.FirstSubscriptionCleanInstall {
+		role, code = "Clean-installed subscription-capable V3 release", "RELEASE-V3-SUBSCRIPTION-CLEAN-INSTALL-QUALIFICATION"
+		notApplicable = []string{"incoming-source-upgrades", "two-release-update-recovery"}
+	}
 	var body strings.Builder
 	for _, line := range []string{
 		"# SBXR Acceptance Record", "Status: Qualified", "Repository: " + release.ReleaseIdentity.Repository, "Tag: " + release.Tag, "Commit: " + release.Commit,
 		"Release index SHA-256: " + release.ReleaseIdentity.ReleaseIndexSHA256, "Sequence: " + strconv.FormatUint(release.Sequence, 10), "Workflow evidence: " + manifest.Workflow.RunURL,
 		"Acceptance time: " + facts.EvaluationTime, "Runner: Ubuntu Server 24.04 linux/amd64", "Go toolchain: " + attempt.Runner.GoToolchain, "Public verifier: " + attempt.Runner.PublicVerifier,
-		"Qualification role: Recurring subscription-capable V3 release", "Detailed evidence SHA-256: " + facts.DetailedEvidenceSHA256,
-		"Stable result code: RELEASE-V3-SUBSCRIPTION-QUALIFICATION", "Module Verification: Passed", "Seam Verification: Passed", "Integrated Verification: Passed on live Ubuntu Server 24.04 amd64 and Karing macOS", "Codex Live Acceptance: Passed", "Owner Acceptance: Not required", "Secret-safe result: Passed", "Karing macOS: Passed",
+		"Qualification role: " + role, "Detailed evidence SHA-256: " + facts.DetailedEvidenceSHA256,
+		"Stable result code: " + code, "Module Verification: Passed", "Seam Verification: Passed", "Integrated Verification: Passed on live Ubuntu Server 24.04 amd64 and Karing macOS", "Codex Live Acceptance: Passed", "Owner Acceptance: Not required", "Secret-safe result: Passed", "Karing macOS: Passed",
 		"Natural timer firing and naturally due certificate renewal: Not observed",
 		"Unsupported new or renamed renewal route: May execute before detection; historical outcomes unknown",
 	} {
 		body.WriteString(line + "\n")
+	}
+	if attempt.Support != nil {
+		support, _ := json.Marshal(attempt.Support.lifecycle())
+		baseline, _ := marshalCanonical(attempt.Baseline)
+		body.WriteString("Release support: " + string(support) + "\nStable baseline: " + string(baseline) + "\n")
+		if len(notApplicable) > 0 {
+			body.WriteString("Incoming source upgrades: Not applicable\nTwo-release update/recovery: Not applicable\n")
+		}
 	}
 	for _, asset := range release.Assets {
 		body.WriteString("Asset: " + asset.Name + " " + strconv.FormatInt(asset.Size, 10) + " " + asset.SHA256 + "\n")
@@ -439,8 +461,8 @@ func buildRecurringAcceptanceRecord(manifest qualificationManifest, facts v3Recu
 	}
 	encoded, err := marshalCanonical(v3RecurringAcceptanceRecord{
 		AcceptedAt: facts.EvaluationTime, Assets: release.Assets, Attempt: *attempt, DetailedEvidenceSHA256: facts.DetailedEvidenceSHA256, Evidence: []string{manifest.Workflow.RunURL + "#artifacts"},
-		QualificationRole: "Recurring subscription-capable V3 release", ReleaseIdentity: release.ReleaseIdentity, Runner: "Ubuntu Server 24.04 linux/amd64", Schema: "sbxr-acceptance-record-v2", SecretSafeResult: "Passed", Sequence: release.Sequence,
-		Software: acceptanceRecordSoftware{GoToolchain: attempt.Runner.GoToolchain, PublicVerifier: attempt.Runner.PublicVerifier}, StableResultCode: "RELEASE-V3-SUBSCRIPTION-QUALIFICATION",
+		NotApplicable: notApplicable, QualificationRole: role, ReleaseIdentity: release.ReleaseIdentity, Runner: "Ubuntu Server 24.04 linux/amd64", Schema: recordSchema, SecretSafeResult: "Passed", Sequence: release.Sequence,
+		Software: acceptanceRecordSoftware{GoToolchain: attempt.Runner.GoToolchain, PublicVerifier: attempt.Runner.PublicVerifier}, StableResultCode: code,
 		Stages: acceptanceRecordStages{CodexLiveAcceptance: "Passed", IntegratedVerification: "Passed on live Ubuntu Server 24.04 amd64 and Karing macOS", ModuleVerification: "Passed", OwnerAcceptance: "Not required", SeamVerification: "Passed"}, WorkflowRun: manifest.Workflow.RunURL,
 	})
 	if err != nil {
@@ -476,6 +498,8 @@ type v3QualificationSource struct {
 type v3QualificationAttempt struct {
 	AfterSnapRefresh       v3QualificationPackages `json:"after_snap_refresh"`
 	AttemptID              string                  `json:"attempt_id"`
+	Baseline               *qualificationRelease   `json:"baseline,omitempty"`
+	CandidateIndex         string                  `json:"candidate_index,omitempty"`
 	KaringLatestCheckedAt  string                  `json:"karing_latest_checked_at"`
 	KaringLimitSeconds     int                     `json:"karing_limit_seconds"`
 	MacRunnerID            string                  `json:"mac_runner_id"`
@@ -490,6 +514,7 @@ type v3QualificationAttempt struct {
 	Schema                 string                  `json:"schema"`
 	Sources                []v3QualificationSource `json:"sources"`
 	StartedAt              string                  `json:"started_at"`
+	Support                *v3ReleaseSupport       `json:"support,omitempty"`
 	ValidationLimitSeconds int                     `json:"validation_limit_seconds"`
 	VPSID                  string                  `json:"vps_id"`
 	VPSIdentitySHA256      string                  `json:"vps_identity_sha256"`
@@ -499,19 +524,29 @@ func validV3Attempt(attempt v3QualificationAttempt, preflight qualificationFacts
 	started, ok := qualificationTime(attempt.StartedAt)
 	checked, checkedOK := qualificationTime(attempt.KaringLatestCheckedAt)
 	if !ok || !checkedOK || started.Before(checked) || started.Sub(checked) > 5*time.Minute ||
-		attempt.Schema != "sbxr-v3-qualification-attempt-v2" || attempt.RunAttempt < 1 ||
+		(attempt.Schema != "sbxr-v3-qualification-attempt-v2" && attempt.Schema != "sbxr-v3-qualification-attempt-v3") || attempt.RunAttempt < 1 ||
 		attempt.AttemptID != "run-"+workflow.RunID+"-attempt-"+strconv.Itoa(attempt.RunAttempt) ||
 		attempt.ScenarioLimitSeconds != 1800 || attempt.KaringLimitSeconds != 7200 || attempt.ValidationLimitSeconds != 300 ||
 		!validAcceptanceRunner(attempt.Runner) || attempt.Runner.GoToolchain != "go1.26.6" ||
 		!independentID(attempt.VPSID, "vps") || !independentID(attempt.OutsideRunnerID, "runner") || !independentID(attempt.MacRunnerID, "mac") || !regexp.MustCompile(`^[0-9]+\.[0-9]+(?:\.[0-9]+)?$`).MatchString(attempt.MacOSVersion) || !validSHA256(attempt.VPSIdentitySHA256) ||
 		attempt.ProxyPackage != expectedV3PackageIdentity() || !validV3Packages(attempt.Packages) || !validV3Packages(attempt.AfterSnapRefresh) ||
-		attempt.Packages.Karing != attempt.AfterSnapRefresh.Karing || attempt.Packages.Certbot == attempt.AfterSnapRefresh.Certbot || len(attempt.Sources) == 0 || preflight.LatestTag == nil {
+		attempt.Packages.Karing != attempt.AfterSnapRefresh.Karing || attempt.Packages.Certbot == attempt.AfterSnapRefresh.Certbot || preflight.LatestTag == nil {
+		return false
+	}
+	if attempt.Schema == "sbxr-v3-qualification-attempt-v3" {
+		if preflight.Candidate.EvidenceVersion != 3 || attempt.Support == nil || !reflect.DeepEqual(attempt.Support, preflight.Candidate.Support) || !validSubscriptionHistory(preflight.SubscriptionHistory, attempt.Support.Scope, attempt.Baseline) || attempt.Baseline == nil || !validAttemptSupport(attempt) {
+			return false
+		}
+		if attempt.Support.Scope == softwarelifecycle.FirstSubscriptionCleanInstall {
+			return true
+		}
+	} else if preflight.Candidate.EvidenceVersion != 2 || attempt.Support != nil || attempt.Baseline != nil || attempt.CandidateIndex != "" || len(attempt.Sources) == 0 {
 		return false
 	}
 	seen := map[string]bool{}
 	for _, source := range attempt.Sources {
 		observed, exists := releaseByTag(preflight.Releases, source.ReleaseIdentity.Tag)
-		if !exists || !qualifiedV3Source(observed) || seen[observed.Tag] || source.OwnershipSchema != 1 && source.OwnershipSchema != 2 || source.PublicVerification != "accepted" {
+		if !exists || !qualifiedV3Source(observed) || attempt.Schema == "sbxr-v3-qualification-attempt-v3" && !subscriptionRelease(observed) || seen[observed.Tag] || source.OwnershipSchema != 1 && source.OwnershipSchema != 2 || source.PublicVerification != "accepted" {
 			return false
 		}
 		action := sourceAction(observed)
@@ -520,7 +555,7 @@ func validV3Attempt(attempt v3QualificationAttempt, preflight qualificationFacts
 		}
 		seen[observed.Tag] = true
 	}
-	return seen[*preflight.LatestTag] && slices.Equal(attempt.RequiredScenarios, requiredV3Scenarios(attempt.Sources))
+	return seen[*preflight.LatestTag] && slices.Equal(attempt.RequiredScenarios, attemptScenarios(attempt))
 }
 
 func validV3Packages(packages v3QualificationPackages) bool {
@@ -597,8 +632,8 @@ func qualifiedV3Source(release observedRelease) bool {
 			return false
 		}
 	}
-	return oneMatch(release.Body, `(?m)^Stable result code: RELEASE-V3-(PACKAGED-LIVE|SUBSCRIPTION)-QUALIFICATION$`) &&
-		oneMatch(release.Body, `(?m)^Qualification role: (Clean-installed V3 release|Recurring subscription-capable V3 release)$`) &&
+	return oneMatch(release.Body, `(?m)^Stable result code: RELEASE-V3-(PACKAGED-LIVE|SUBSCRIPTION|SUBSCRIPTION-CLEAN-INSTALL)-QUALIFICATION$`) &&
+		oneMatch(release.Body, `(?m)^Qualification role: (Clean-installed V3 release|Recurring subscription-capable V3 release|Clean-installed subscription-capable V3 release)$`) &&
 		oneMatch(release.Body, `(?m)^Workflow evidence: https://github\.com/albertloky/SBXR/actions/runs/[1-9][0-9]*$`) &&
 		oneMatch(release.Body, `(?m)^Integrated Verification: Passed on live Ubuntu Server 24\.04 amd64 and (outside runner|Karing macOS)$`)
 }

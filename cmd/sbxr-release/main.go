@@ -33,8 +33,8 @@ type buildOptions struct {
 }
 
 type indexOptions struct {
-	tag, commit, directory, output string
-	sequence                       uint64
+	tag, commit, directory, output, support string
+	sequence                                uint64
 }
 
 type bootstrapOptions struct {
@@ -92,6 +92,7 @@ func main() {
 		flags.StringVar(&options.commit, "commit", "", "40-character commit SHA")
 		flags.StringVar(&options.directory, "directory", "", "directory containing install.sh and both application archives")
 		flags.StringVar(&options.output, "output", "", "release-index.json output path")
+		flags.StringVar(&options.support, "support", "", "canonical qualification support declaration")
 		if flags.Parse(os.Args[2:]) != nil || flags.NArg() != 0 || buildReleaseIndexFile(options) != nil {
 			fmt.Fprintln(os.Stderr, "sbxr release index refused")
 			os.Exit(1)
@@ -247,7 +248,16 @@ func buildReleaseIndexFile(options indexOptions) error {
 		digest := sha256.Sum256(body)
 		assets = append(assets, softwarelifecycle.LatestAssetProof{Name: name, Size: int64(len(body)), SHA256: hex.EncodeToString(digest[:])})
 	}
-	body, err := softwarelifecycle.BuildSubscriptionReleaseIndex(options.tag, options.commit, options.sequence, assets, softwarelifecycle.ReleaseSupport{Scope: softwarelifecycle.FirstSubscriptionCleanInstall, Sources: []softwarelifecycle.ReleaseIdentity{}, Contract: softwarelifecycle.SubscriptionUpdateContract})
+	support := softwarelifecycle.ReleaseSupport{Scope: softwarelifecycle.FirstSubscriptionCleanInstall, Sources: []softwarelifecycle.ReleaseIdentity{}, Contract: softwarelifecycle.SubscriptionUpdateContract}
+	if options.support != "" {
+		encoded, err := os.ReadFile(options.support)
+		var declaration v3ReleaseSupport
+		if err != nil || len(encoded) > softwarelifecycle.MaxIndexBytes || !decodeCanonical(encoded, &declaration) || !validSupportDeclaration(declaration) {
+			return errors.New("release support refused")
+		}
+		support = declaration.lifecycle()
+	}
+	body, err := softwarelifecycle.BuildSubscriptionReleaseIndex(options.tag, options.commit, options.sequence, assets, support)
 	if err != nil {
 		return errors.New("release index refused")
 	}

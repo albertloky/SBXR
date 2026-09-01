@@ -61,6 +61,7 @@ type qualificationFacts struct {
 	RemoteMain             string            `json:"remote_main"`
 	Schema                 string            `json:"schema"`
 	Stage                  string            `json:"stage"`
+	SubscriptionHistory    *v3ReleaseHistory `json:"subscription_history,omitempty"`
 	Tags                   []string          `json:"tags"`
 }
 
@@ -75,14 +76,15 @@ type burnedIdentity struct {
 }
 
 type candidateRequest struct {
-	ASequence         uint64  `json:"a_sequence"`
-	ATag              string  `json:"a_tag"`
-	BSequence         uint64  `json:"b_sequence"`
-	BTag              string  `json:"b_tag"`
-	DefectIssueURL    *string `json:"defect_issue_url"`
-	EvidenceVersion   int     `json:"evidence_version,omitempty"`
-	FailedNormalRunID *string `json:"failed_normal_run_id"`
-	Mode              string  `json:"mode"`
+	ASequence         uint64            `json:"a_sequence"`
+	ATag              string            `json:"a_tag"`
+	BSequence         uint64            `json:"b_sequence"`
+	BTag              string            `json:"b_tag"`
+	DefectIssueURL    *string           `json:"defect_issue_url"`
+	EvidenceVersion   int               `json:"evidence_version,omitempty"`
+	FailedNormalRunID *string           `json:"failed_normal_run_id"`
+	Mode              string            `json:"mode"`
+	Support           *v3ReleaseSupport `json:"support,omitempty"`
 }
 
 type defectIssue struct {
@@ -106,11 +108,13 @@ type observedAsset struct {
 }
 
 type observedIndex struct {
-	Commit     string `json:"commit"`
-	Repository string `json:"repository"`
-	Sequence   uint64 `json:"sequence"`
-	SHA256     string `json:"sha256"`
-	Tag        string `json:"tag"`
+	Commit     string            `json:"commit"`
+	Repository string            `json:"repository"`
+	Schema     int               `json:"schema,omitempty"`
+	Sequence   uint64            `json:"sequence"`
+	SHA256     string            `json:"sha256"`
+	Support    *v3ReleaseSupport `json:"support,omitempty"`
+	Tag        string            `json:"tag"`
 }
 
 type observedRelease struct {
@@ -573,21 +577,22 @@ type stableReleaseObservation struct {
 }
 
 type stablePreflightFacts struct {
-	AcceptanceDecision json.RawMessage            `json:"acceptance_decision"`
-	AcceptanceFacts    json.RawMessage            `json:"acceptance_facts"`
-	Archive            stableArchiveObservation   `json:"archive"`
-	BurnedIdentities   []burnedIdentity           `json:"burned_identities"`
-	CandidateRun       stableCandidateRun         `json:"candidate_run"`
-	ChecklistSHA256    string                     `json:"checklist_sha256"`
-	LatestReleaseID    *int64                     `json:"latest_release_id"`
-	LatestTag          *string                    `json:"latest_tag"`
-	ManifestAttested   bool                       `json:"manifest_attested"`
-	ObservedAt         string                     `json:"observed_at"`
-	Releases           []stableReleaseObservation `json:"releases"`
-	RemoteMain         string                     `json:"remote_main"`
-	Schema             string                     `json:"schema"`
-	SignedManifest     json.RawMessage            `json:"signed_manifest"`
-	Stage              string                     `json:"stage"`
+	AcceptanceDecision  json.RawMessage            `json:"acceptance_decision"`
+	AcceptanceFacts     json.RawMessage            `json:"acceptance_facts"`
+	Archive             stableArchiveObservation   `json:"archive"`
+	BurnedIdentities    []burnedIdentity           `json:"burned_identities"`
+	CandidateRun        stableCandidateRun         `json:"candidate_run"`
+	ChecklistSHA256     string                     `json:"checklist_sha256"`
+	LatestReleaseID     *int64                     `json:"latest_release_id"`
+	LatestTag           *string                    `json:"latest_tag"`
+	ManifestAttested    bool                       `json:"manifest_attested"`
+	ObservedAt          string                     `json:"observed_at"`
+	Releases            []stableReleaseObservation `json:"releases"`
+	RemoteMain          string                     `json:"remote_main"`
+	Schema              string                     `json:"schema"`
+	SignedManifest      json.RawMessage            `json:"signed_manifest"`
+	Stage               string                     `json:"stage"`
+	SubscriptionHistory *v3ReleaseHistory          `json:"subscription_history,omitempty"`
 }
 
 type publishStableReleaseAction struct {
@@ -655,6 +660,7 @@ type stablePublicationFacts struct {
 	PriorVerificationFacts    json.RawMessage              `json:"prior_verification_facts"`
 	Schema                    string                       `json:"schema"`
 	Stage                     string                       `json:"stage"`
+	SubscriptionHistory       *v3ReleaseHistory            `json:"subscription_history,omitempty"`
 }
 
 type observeStableReleaseAction struct {
@@ -1132,6 +1138,9 @@ func evaluateStablePreflight(facts stablePreflightFacts, document []byte) (stabl
 	if !decodeCanonical(constructionFacts.PreflightFacts, &preflightFacts) || facts.Archive != (stableArchiveObservation{Commit: preflightFacts.ArchiveCommit, RemoteCommit: preflightFacts.ArchiveRemoteCommit, RemoteTagObject: preflightFacts.ArchiveRemoteTagObject, TagObject: preflightFacts.ArchiveTagObject, Type: preflightFacts.ArchiveType}) || !reflect.DeepEqual(facts.LatestTag, preflightFacts.LatestTag) || !reflect.DeepEqual(facts.BurnedIdentities, preflightFacts.BurnedIdentities) {
 		return refused()
 	}
+	if !validPublicationHistory(manifest, facts.SubscriptionHistory) {
+		return refused()
+	}
 	var expectedLatestReleaseID *int64
 	if preflightFacts.LatestTag != nil {
 		release, exists := releaseByTag(preflightFacts.Releases, *preflightFacts.LatestTag)
@@ -1204,6 +1213,10 @@ func evaluateStablePublication(facts stablePublicationFacts, document []byte) (s
 	}
 	preflight, preflightFacts, err := verifiedStablePreflight(facts.PreflightFacts, facts.PreflightDecision)
 	if err != nil || facts.ActionIndex >= len(preflight.Actions) {
+		return refused()
+	}
+	var manifest qualificationManifest
+	if !decodeCanonical(preflightFacts.SignedManifest, &manifest) || !validPublicationHistory(manifest, facts.SubscriptionHistory) {
 		return refused()
 	}
 	priorDecisionSHA256 := documentSHA256(facts.PreflightDecision)
@@ -1456,9 +1469,10 @@ func stableFailureBurn(existing []burnedIdentity, wanted burnedIdentity) burnedI
 
 func validStableFailureManifest(manifest qualificationManifest) bool {
 	recurring := manifest.Schema == "sbxr-qualification-manifest-v2" && manifest.Mode == "v3" && manifest.SourceState == "v3-recurring" && manifest.V3Attempt != nil && len(manifest.V3Attempt.Sources) > 0 && slices.Equal(manifest.V3Attempt.RequiredScenarios, requiredV3Scenarios(manifest.V3Attempt.Sources))
-	v3 := manifest.Mode == "v3" && (manifest.SourceState == "v3-clean" || recurring) && len(manifest.Releases) == 1
+	scoped := manifest.Schema == "sbxr-qualification-manifest-v3" && manifest.Mode == "v3" && manifest.V3Attempt != nil && attemptVersion(manifest.V3Attempt) == "v3" && manifest.V3Attempt.Baseline != nil && validAttemptSupport(*manifest.V3Attempt) && len(manifest.Releases) == 1 && validAttemptIndex(*manifest.V3Attempt, manifest.Releases[0]) && ((manifest.SourceState == "v3-subscription-clean" && manifest.V3Attempt.Support.Scope == softwarelifecycle.FirstSubscriptionCleanInstall) || (manifest.SourceState == "v3-recurring" && manifest.V3Attempt.Support.Scope == softwarelifecycle.RecurringSubscriptionUpgrade))
+	v3 := manifest.Mode == "v3" && (manifest.SourceState == "v3-clean" || recurring || scoped) && len(manifest.Releases) == 1
 	legacy := (manifest.Mode == "normal" || manifest.Mode == "rescue") && (manifest.SourceState == "initial-normal" || manifest.SourceState == "later-normal" || manifest.SourceState == "rescue") && len(manifest.Releases) == 2
-	if !recurring && (manifest.Schema != "sbxr-qualification-manifest-v1" || manifest.V3Attempt != nil) || manifest.Repository != softwarelifecycle.Repository || !validSHA256(manifest.AcceptanceVPSChecklistSHA256) || !validSHA256(manifest.CandidateFailureStateSHA256) || manifest.Approval.State != "approved" || len(manifest.Approval.Environments) != 1 || manifest.Approval.Environments[0].Name != "acceptance-vps" || !v3 && !legacy || len(manifest.Approval.DecisionChain) != 3 || (manifest.Mode == "rescue") != (manifest.SourceState == "rescue") || (manifest.Rescue != nil) != (manifest.SourceState == "rescue") || manifest.Workflow.Path != ".github/workflows/candidate.yml" || manifest.Workflow.Ref != softwarelifecycle.Repository+"/.github/workflows/candidate.yml@refs/heads/main" || !validCommit(manifest.Workflow.Commit) || manifest.Workflow.RunURL != failedRunURL(manifest.Workflow.RunID) {
+	if !recurring && !scoped && (manifest.Schema != "sbxr-qualification-manifest-v1" || manifest.V3Attempt != nil) || manifest.Repository != softwarelifecycle.Repository || !validSHA256(manifest.AcceptanceVPSChecklistSHA256) || !validSHA256(manifest.CandidateFailureStateSHA256) || manifest.Approval.State != "approved" || len(manifest.Approval.Environments) != 1 || manifest.Approval.Environments[0].Name != "acceptance-vps" || !v3 && !legacy || len(manifest.Approval.DecisionChain) != 3 || (manifest.Mode == "rescue") != (manifest.SourceState == "rescue") || (manifest.Rescue != nil) != (manifest.SourceState == "rescue") || manifest.Workflow.Path != ".github/workflows/candidate.yml" || manifest.Workflow.Ref != softwarelifecycle.Repository+"/.github/workflows/candidate.yml@refs/heads/main" || !validCommit(manifest.Workflow.Commit) || manifest.Workflow.RunURL != failedRunURL(manifest.Workflow.RunID) {
 		return false
 	}
 	expectedStages := []string{candidatePreflightStage, candidateDraftConstructionStage, candidateDraftVerificationStage}
@@ -1511,7 +1525,7 @@ func buildStableFailedAcceptanceRecord(manifest qualificationManifest, release q
 	}
 	recordBytes := []byte(sourceBody[start+8 : end])
 	var source acceptanceRecordJSON
-	if softwarelifecycle.ValidateUniqueJSON(recordBytes) != nil || json.Unmarshal(recordBytes, &source) != nil || (source.Schema != "sbxr-acceptance-record-v1" && !(source.Schema == "sbxr-acceptance-record-v2" && manifest.V3Attempt != nil)) || source.ReleaseIdentity != release.ReleaseIdentity || source.Sequence != release.Sequence || !reflect.DeepEqual(source.Assets, release.Assets) || source.SecretSafeResult != "Passed" || source.Stages.ModuleVerification != "Passed" || source.Stages.SeamVerification != "Passed" {
+	if softwarelifecycle.ValidateUniqueJSON(recordBytes) != nil || json.Unmarshal(recordBytes, &source) != nil || (source.Schema != "sbxr-acceptance-record-v1" && !((source.Schema == "sbxr-acceptance-record-v2" || source.Schema == "sbxr-acceptance-record-v3" && manifest.Schema == "sbxr-qualification-manifest-v3") && manifest.V3Attempt != nil)) || source.ReleaseIdentity != release.ReleaseIdentity || source.Sequence != release.Sequence || !reflect.DeepEqual(source.Assets, release.Assets) || source.SecretSafeResult != "Passed" || source.Stages.ModuleVerification != "Passed" || source.Stages.SeamVerification != "Passed" {
 		return "", errors.New("qualified Acceptance Record refused")
 	}
 	failedRetry := strings.Contains(sourceBody, "Status: Failed prerelease\n")
@@ -1524,7 +1538,7 @@ func buildStableFailedAcceptanceRecord(manifest qualificationManifest, release q
 	if !failedRetry {
 		var canonicalSource []byte
 		var err error
-		if source.StableResultCode == "RELEASE-V3-SUBSCRIPTION-QUALIFICATION" {
+		if source.StableResultCode == "RELEASE-V3-SUBSCRIPTION-QUALIFICATION" || source.StableResultCode == "RELEASE-V3-SUBSCRIPTION-CLEAN-INSTALL-QUALIFICATION" {
 			var recurring v3RecurringAcceptanceRecord
 			if !decodeCanonical(recordBytes, &recurring) || manifest.V3Attempt == nil || !reflect.DeepEqual(recurring.Attempt, *manifest.V3Attempt) {
 				return "", errors.New("qualified Acceptance Record refused")
@@ -2216,11 +2230,17 @@ func evaluateQualificationBoundary(facts qualificationBoundaryFacts) (qualificat
 	approval := facts.Approval
 	approval.DecisionChain = chain
 	manifestSchema := "sbxr-qualification-manifest-v1"
-	if preflight.SourceState == "v3-recurring" {
+	if preflight.SourceState == "v3-recurring" || preflight.SourceState == "v3-subscription-clean" {
 		if facts.V3Attempt == nil || !validV3Attempt(*facts.V3Attempt, preflightFacts, facts.Workflow) {
 			return refused()
 		}
 		manifestSchema = "sbxr-qualification-manifest-v2"
+		if preflightFacts.Candidate.EvidenceVersion == 3 {
+			if !validAttemptIndex(*facts.V3Attempt, manifestReleases[0]) {
+				return refused()
+			}
+			manifestSchema = "sbxr-qualification-manifest-v3"
+		}
 	} else if facts.V3Attempt != nil {
 		return refused()
 	}
@@ -2385,13 +2405,16 @@ func documentSHA256(document []byte) string {
 
 func evaluateCandidatePreflight(facts qualificationFacts, document []byte) (qualificationDecision, error) {
 	candidate := facts.Candidate
+	if candidate.EvidenceVersion != 3 && (candidate.Support != nil || facts.SubscriptionHistory != nil) {
+		return qualificationDecision{}, errors.New("historical scope override refused")
+	}
 	if candidate.Mode != "v3" && hasQualifiedV3(facts.Releases) {
 		return qualificationDecision{}, errors.New("candidate preflight refused")
 	}
-	if candidate.EvidenceVersion != 0 && (candidate.Mode != "v3" || candidate.EvidenceVersion != 2) {
+	if candidate.EvidenceVersion != 0 && (candidate.Mode != "v3" || candidate.EvidenceVersion != 2 && candidate.EvidenceVersion != 3) {
 		return qualificationDecision{}, errors.New("candidate preflight refused")
 	}
-	if candidate.EvidenceVersion == 2 && recurringSecret(document) {
+	if candidate.EvidenceVersion >= 2 && recurringSecret(document) {
 		return qualificationDecision{}, errors.New("candidate preflight refused")
 	}
 	if facts.Schema != qualificationFactsSchema || facts.Stage != candidatePreflightStage ||
@@ -2427,6 +2450,15 @@ func evaluateCandidatePreflight(facts qualificationFacts, document []byte) (qual
 				return qualificationDecision{}, errors.New("candidate preflight refused")
 			}
 			sourceState = "v3-recurring"
+		}
+		if candidate.EvidenceVersion == 3 {
+			if candidate.Support == nil || facts.LatestTag == nil || !reflect.DeepEqual(facts.Releases, historyReleases(facts.SubscriptionHistory)) || !validSubscriptionHistory(facts.SubscriptionHistory, candidate.Support.Scope, nil) || facts.SubscriptionHistory.PublicLatest.ReleaseIdentity.Tag != *facts.LatestTag || !validSupportDeclaration(*candidate.Support) {
+				return qualificationDecision{}, errors.New("subscription scope refused")
+			}
+			sourceState = "v3-recurring"
+			if candidate.Support.Scope == softwarelifecycle.FirstSubscriptionCleanInstall {
+				sourceState = "v3-subscription-clean"
+			}
 		}
 		actions = []json.RawMessage{mustJSON(buildReleaseAction{facts.Commit, candidate.BSequence, candidate.BTag, "build-release"})}
 	case "normal":
