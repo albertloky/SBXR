@@ -112,8 +112,23 @@ func SubscriptionResourcesForEnablement(publicIPv4 string, facts SubscriptionPre
 var certbotDirectoryLocks = []string{"/etc/letsencrypt/.certbot.lock", "/var/lib/letsencrypt/.certbot.lock", "/var/log/letsencrypt/.certbot.lock"}
 
 func (adapter Adapter) AcquireSubscriptionReviewLock(name string) (*MutationLock, bool, error) {
-	if err := adapter.safeParents(name); err != nil {
+	parentCheck := name
+	if name == "/run/lock/sbxr.lock" {
+		parentCheck = filepath.Dir(name)
+	}
+	if err := adapter.safeParents(parentCheck); err != nil {
 		return nil, false, err
+	}
+	if name == "/run/lock/sbxr.lock" {
+		// A root-owned sticky shared directory protects the existing root-owned lock.
+		info, err := os.Lstat(adapter.path(parentCheck))
+		if err != nil {
+			return nil, false, err
+		}
+		stat, ok := infoSys(info)
+		if !ok || !info.IsDir() || stat.Uid != adapter.ownerUID() || info.Mode().Perm()&0o022 != 0 && info.Mode()&os.ModeSticky == 0 {
+			return nil, false, &parentSafetyError{path: parentCheck, mode: info.Mode()}
+		}
 	}
 	return softwarelifecycle.AcquireExistingMutationLockAuthority(adapter.path(name), adapter.ownerUID())
 }

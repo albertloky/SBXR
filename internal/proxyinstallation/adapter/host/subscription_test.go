@@ -329,6 +329,135 @@ func TestSubscriptionReviewLockNeverCreatesFiles(t *testing.T) {
 	}
 }
 
+func TestSubscriptionReviewLockStickyParent(t *testing.T) {
+	adapter := Adapter{root: t.TempDir()}
+	name := "/run/lock/sbxr.lock"
+	path := adapter.path(name)
+	parent := filepath.Dir(path)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(parent, os.ModeSticky|0o777); err != nil {
+		t.Fatal(err)
+	}
+	if lock, _, err := adapter.AcquireSubscriptionReviewLock(name); err == nil {
+		lock.Release()
+		t.Fatal("absent lock accepted")
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatalf("read-only acquisition created lock: %v", err)
+	}
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		lock, busy, err := adapter.AcquireSubscriptionReviewLock(name)
+		if err != nil || busy || lock == nil || !lock.Holds(path) {
+			t.Fatalf("safe lock under sticky parent refused: busy=%v err=%v", busy, err)
+		}
+		other, busy, err := adapter.AcquireSubscriptionReviewLock(name)
+		other.Release()
+		lock.Release()
+		if err != nil || !busy {
+			t.Fatalf("held lock not excluded: busy=%v err=%v", busy, err)
+		}
+	}
+	after, err := os.Stat(path)
+	if err != nil || !os.SameFile(before, after) || after.Mode() != before.Mode() || after.Size() != 0 || !after.ModTime().Equal(before.ModTime()) {
+		t.Fatalf("lock changed: %v", err)
+	}
+	parentInfo, err := os.Stat(parent)
+	if err != nil || parentInfo.Mode() != os.ModeDir|os.ModeSticky|0o777 {
+		t.Fatalf("shared directory permissions changed: %v", err)
+	}
+}
+
+func TestSubscriptionReviewLockRefusesUnsafePaths(t *testing.T) {
+	for _, test := range []string{"writable_parent", "group_writable_parent", "sticky_ancestor", "symlink_parent", "writable_lock", "symlink_lock", "hardlink_lock", "other_path", "foreign_parent", "foreign_lock"} {
+		t.Run(test, func(t *testing.T) {
+			if strings.HasPrefix(test, "foreign_") && os.Geteuid() != 0 {
+				t.Skip("requires root to create foreign-owned fixture")
+			}
+			adapter := Adapter{root: t.TempDir()}
+			name := "/run/lock/sbxr.lock"
+			path := adapter.path(name)
+			parent := filepath.Dir(path)
+			must := func(err error) {
+				t.Helper()
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			must(os.MkdirAll(parent, 0o755))
+			must(os.Chmod(parent, os.ModeSticky|0o777))
+			must(os.WriteFile(path, nil, 0o600))
+			switch test {
+			case "writable_parent":
+				must(os.Chmod(parent, 0o777))
+			case "group_writable_parent":
+				must(os.Chmod(parent, 0o775))
+			case "sticky_ancestor":
+				must(os.Chmod(filepath.Dir(parent), os.ModeSticky|0o777))
+			case "symlink_parent":
+				must(os.Rename(parent, parent+"-target"))
+				must(os.Symlink(parent+"-target", parent))
+			case "writable_lock":
+				must(os.Chmod(path, 0o666))
+			case "symlink_lock":
+				must(os.Rename(path, path+"-target"))
+				must(os.Symlink(path+"-target", path))
+			case "hardlink_lock":
+				must(os.Link(path, path+"-alias"))
+			case "other_path":
+				name = "/run/lock/other.lock"
+				must(os.WriteFile(adapter.path(name), nil, 0o600))
+			case "foreign_parent":
+				must(os.Chown(parent, 65534, -1))
+			case "foreign_lock":
+				must(os.Chown(path, 65534, -1))
+			}
+			lock, busy, err := adapter.AcquireSubscriptionReviewLock(name)
+			lock.Release()
+			if err == nil || busy || lock != nil {
+				t.Fatalf("unsafe lock was not refused: busy=%v err=%v", busy, err)
+			}
+		})
+	}
+}
+
+func TestSubscriptionReviewLockRefusesFIFOWithoutBlocking(t *testing.T) {
+	if root := os.Getenv("SBXR_TEST_FIFO_LOCK_ROOT"); root != "" {
+		lock, busy, err := (Adapter{root: root}).AcquireSubscriptionReviewLock("/run/lock/sbxr.lock")
+		lock.Release()
+		if err == nil || busy || lock != nil {
+			t.Fatal("FIFO lock accepted")
+		}
+		return
+	}
+	adapter := Adapter{root: t.TempDir()}
+	parent := adapter.path("/run/lock")
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(parent, os.ModeSticky|0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(adapter.path("/run/lock/sbxr.lock"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	child := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestSubscriptionReviewLockRefusesFIFOWithoutBlocking$")
+	child.Env = append(os.Environ(), "SBXR_TEST_FIFO_LOCK_ROOT="+adapter.root)
+	if output, err := child.CombinedOutput(); err != nil {
+		t.Fatalf("FIFO refusal must finish without blocking: %v (%v)\n%s", err, ctx.Err(), output)
+	}
+}
+
 func TestSubscriptionLinkRedisclosureRequiresExactProtectedCredential(t *testing.T) {
 	adapter := Adapter{root: t.TempDir()}
 	directory := adapter.path("/var/lib/sbxr")

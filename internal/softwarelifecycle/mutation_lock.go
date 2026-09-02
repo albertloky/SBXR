@@ -46,7 +46,8 @@ func AcquireMutationLockAuthority(path string, uid uint32) (*MutationLockAuthori
 
 // AcquireExistingMutationLockAuthority never creates durable state for read-only work.
 func AcquireExistingMutationLockAuthority(path string, uid uint32) (*MutationLockAuthority, bool, error) {
-	return acquireMutationLockAuthority(path, uid, os.O_RDONLY)
+	// A FIFO in the shared lock directory must reach the type check without waiting for a writer.
+	return acquireMutationLockAuthority(path, uid, os.O_RDONLY|syscall.O_NONBLOCK)
 }
 
 func acquireMutationLockAuthority(path string, uid uint32, flags int) (*MutationLockAuthority, bool, error) {
