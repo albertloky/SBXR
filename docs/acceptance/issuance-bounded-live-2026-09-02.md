@@ -199,3 +199,53 @@ request or Karing profile change occurred. APT timers remain temporarily stopped
 Before another signed attempt, the unchanged planned snaps were held until
 `14:46:12Z`; this did not extend any qualification clock. Restore timers and
 release package holds after qualification.
+
+## Sequence 88: SSH consumed the collector's scenario input
+
+[Candidate run 33600700277](https://github.com/albertloky/SBXR/actions/runs/33600700277)
+used `v3.1.5`, Release Sequence `88`, commit
+`b532def910d1d9afc9b50bd6eed5beaca7ef12b2`, and Release Index SHA-256
+`248fe3ffdf454b5bff29ea40808d4c49d815dfb9e3db802cb679d31ecaf31174`.
+Both native candidate builds and [Verify run 33600700209](https://github.com/albertloky/SBXR/actions/runs/33600700209)
+passed. Manifest `4e18636047e15bc8d7865ec04c0bb4c6bc5fc444a8c668a9e96585be8b6c7c9b`
+was signed at `2026-09-02T07:04:01Z`; its attestation was verified before live approval.
+
+The first request began at `07:05:32Z`. Fresh Mac/VPS preflight started at
+`07:06:26Z` and passed at `07:06:30Z`. Clean installation and unchanged executable
+comparison passed at `07:06:52Z`; reviewed setup/local activation at `07:07:22Z`;
+View details and capture checks at `07:08:11Z`. The actual GitHub Ubuntu outside
+probe ran from `07:08:12Z` to `07:08:22Z` and returned all three true observations:
+different direct/outside routes, proxied egress matching the VPS, and complete
+runner-client cleanup. No substitute Mac probe supplied these observations.
+
+Supported Complete removal and final capture scans passed at `07:09:35Z`;
+the original SSH session answered at `07:09:39Z`, and the unchanged Mac package
+was checked at `07:09:40Z`. The resulting baseline evidence was locally accepted
+at `07:10:15Z` and atomically submitted. The collector accepted that first prefix,
+removed its result file, then incorrectly entered final cleanup instead of
+requesting `baseline-refusal`. At `07:10:37Z` its job log reported the absent
+`outside-reply-baseline-postcommit.json`; that later probe had never been requested.
+
+The scenario loop supplied its list on standard input. Its SSH children consumed
+the remaining IDs, so the next read reached EOF. EOF also cleared `scenario`,
+making the automatic failure facts invalid; no detailed failure artifact was
+uploaded. The collector now reads the list from dedicated descriptor 3 and assigns
+the current scenario only after a successful read. Normal SSH input remains
+available for the explicit request/result transfers. The outside-probe child can
+reuse its own descriptor 3 without changing the parent's descriptor.
+
+The regression uses the actual loop boundaries and a real stdin-consuming child.
+Before the fix it ran only the first scenario and lost the last ID; a second
+case without stdin consumption separately proved the EOF identity loss. Both
+cases passed twenty repetitions after the fix, and independent review found no
+blockers. The test is not live acceptance evidence.
+Both complete repository-wide normal and race test commands passed with pinned
+Go `1.26.6`, as did vet, module verification, Bash syntax, and diff checks.
+
+The workflow failed and burned `refs/tags/release-burned/v3.1.5`. The one accepted
+baseline scenario belongs to this failed attempt and cannot be reused. No later
+live scenario, production CA request, or Karing profile change occurred. Fresh
+product/transport absence and exact remaining temporary-file cleanup passed at
+`07:14:46Z`; no second product removal was needed. Separately constructed local
+failure/cleanup facts were accepted as failed / completed / Not installed. They
+do not replace the missing workflow failure artifact or change the failed result.

@@ -47,7 +47,9 @@ test "$actual_vps" = "$(jq -r .v3_attempt.vps_identity_sha256 "$manifest")"
 "${remote[@]}" 'test ! -e /root/sbxr-qualification-evidence && install -d -m 0700 /root/sbxr-qualification-evidence'
 printf '[]' > "$directory/previous.json"
 index=0
-while read -r scenario; do
+# Keep ssh's stdin separate, and retain the last scenario when read reaches EOF.
+while IFS= read -r next_scenario <&3; do
+  scenario=$next_scenario
   index=$((index + 1))
   operation="operation-$index"
   limit=1800
@@ -107,7 +109,7 @@ while read -r scenario; do
   jq -cS '.detailed_evidence.scenarios' "$directory/input.json" > "$directory/previous.json"
   "${remote[@]}" 'rm /root/sbxr-qualification-evidence/result.json'
   reason=unexpected-failure
-done < <(jq -r '.v3_attempt.required_scenarios[]' "$manifest")
+done 3< <(jq -r '.v3_attempt.required_scenarios[]' "$manifest")
 
 "${remote[@]}" 'test ! -e /usr/local/bin/sbxr && test ! -e /var/lib/sbxr && rm /root/sbxr-qualification-evidence/request.json /root/sbxr-qualification-evidence/outside-reply-baseline-clean.json /root/sbxr-qualification-evidence/outside-reply-baseline-postcommit.json && rmdir /root/sbxr-qualification-evidence'
 # This is a new evaluation time, not a rewrite of a scenario timestamp.

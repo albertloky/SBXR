@@ -52,6 +52,37 @@ func TestRecurringV3UsesTheExistingQualificationWorkflow(t *testing.T) {
 	}
 }
 
+func TestRecurringCollectorPreservesScenarioInputAndLastFailureIdentity(t *testing.T) {
+	source, err := os.ReadFile(".github/scripts/v3-recurring-evidence.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, loop, found := strings.Cut(string(source), "\nindex=0\n")
+	header, _, hasBody := strings.Cut(loop, "  index=$((index + 1))\n")
+	_, ending, hasEnd := strings.Cut(loop, "  reason=unexpected-failure\n")
+	footer, _, _ := strings.Cut(ending, "\n")
+	if !found || !hasBody || !hasEnd || !strings.Contains(footer, ".v3_attempt.required_scenarios[]") {
+		t.Fatal("scenario loop boundaries not found")
+	}
+	manifest := filepath.Join(t.TempDir(), "manifest.json")
+	if err := os.WriteFile(manifest, []byte(`{"v3_attempt":{"required_scenarios":["baseline-clean","baseline-refusal","karing-final"]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, child := range []string{":", "cat >/dev/null"} {
+		t.Run(child, func(t *testing.T) {
+			// A real child consumes stdin just as ssh does; use the collector's
+			// unchanged loop boundaries, without a network or live evidence.
+			script := "set -euo pipefail\nmanifest=" + strconv.Quote(manifest) + "\nscenario=baseline-clean\n" + header + child + "\nprintf '%s\\n' \"$scenario\"\n" + footer + "\nprintf 'last=%s\\n' \"$scenario\"\n"
+			command := exec.Command("bash", "-c", script)
+			command.Stdin = strings.NewReader("ordinary child input\n")
+			output, err := command.CombinedOutput()
+			if err != nil || string(output) != "baseline-clean\nbaseline-refusal\nkaring-final\nlast=karing-final\n" {
+				t.Fatalf("scenario loop lost input or failure identity: %v, output = %q", err, output)
+			}
+		})
+	}
+}
+
 func TestSigningUsesVerifiedIndexArtifactWithoutDraftReadPermission(t *testing.T) {
 	body, err := os.ReadFile(".github/workflows/candidate.yml")
 	if err != nil {
