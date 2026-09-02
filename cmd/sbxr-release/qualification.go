@@ -1479,7 +1479,7 @@ func validStableFailureManifest(manifest qualificationManifest) bool {
 		return false
 	}
 	recurring := manifest.Schema == "sbxr-qualification-manifest-v2" && manifest.Mode == "v3" && manifest.SourceState == "v3-recurring" && manifest.V3Attempt != nil && len(manifest.V3Attempt.Sources) > 0 && slices.Equal(manifest.V3Attempt.RequiredScenarios, requiredV3Scenarios(manifest.V3Attempt.Sources))
-	scoped := manifest.Schema == "sbxr-qualification-manifest-v3" && manifest.Mode == "v3" && manifest.V3Attempt != nil && attemptVersion(manifest.V3Attempt) == "v3" && manifest.V3Attempt.Baseline != nil && validAttemptSupport(*manifest.V3Attempt) && len(manifest.Releases) == 1 && validAttemptIndex(*manifest.V3Attempt, manifest.Releases[0]) && ((manifest.SourceState == "v3-subscription-clean" && manifest.V3Attempt.Support.Scope == softwarelifecycle.FirstSubscriptionCleanInstall) || (manifest.SourceState == "v3-recurring" && manifest.V3Attempt.Support.Scope == softwarelifecycle.RecurringSubscriptionUpgrade))
+	scoped := manifest.Schema == "sbxr-qualification-manifest-v3" && manifest.Mode == "v3" && manifest.V3Attempt != nil && attemptVersion(manifest.V3Attempt) == "v3" && manifest.V3Attempt.Baseline != nil && validAttemptSupport(*manifest.V3Attempt) && len(manifest.Releases) == 1 && validAttemptIndex(*manifest.V3Attempt, manifest.Releases[0]) && ((manifest.SourceState == "v3-subscription-clean" && cleanInstallScope(manifest.V3Attempt.Support.Scope)) || (manifest.SourceState == "v3-recurring" && manifest.V3Attempt.Support.Scope == softwarelifecycle.RecurringSubscriptionUpgrade))
 	v3 := manifest.Mode == "v3" && (manifest.SourceState == "v3-clean" || recurring || scoped) && len(manifest.Releases) == 1
 	legacy := (manifest.Mode == "normal" || manifest.Mode == "rescue") && (manifest.SourceState == "initial-normal" || manifest.SourceState == "later-normal" || manifest.SourceState == "rescue") && len(manifest.Releases) == 2
 	if !recurring && !scoped && (manifest.Schema != "sbxr-qualification-manifest-v1" || manifest.V3Attempt != nil) || manifest.Repository != softwarelifecycle.Repository || !validSHA256(manifest.AcceptanceVPSChecklistSHA256) || !validSHA256(manifest.CandidateFailureStateSHA256) || manifest.Approval.State != "approved" || len(manifest.Approval.Environments) != 1 || manifest.Approval.Environments[0].Name != "acceptance-vps" || !v3 && !legacy || len(manifest.Approval.DecisionChain) != 3 || (manifest.Mode == "rescue") != (manifest.SourceState == "rescue") || (manifest.Rescue != nil) != (manifest.SourceState == "rescue") || manifest.Workflow.Path != ".github/workflows/candidate.yml" || manifest.Workflow.Ref != softwarelifecycle.Repository+"/.github/workflows/candidate.yml@refs/heads/main" || !validCommit(manifest.Workflow.Commit) || manifest.Workflow.RunURL != failedRunURL(manifest.Workflow.RunID) {
@@ -2479,7 +2479,7 @@ func evaluateCandidatePreflight(facts qualificationFacts, document []byte) (qual
 				return qualificationDecision{}, errors.New("subscription scope refused")
 			}
 			sourceState = "v3-recurring"
-			if candidate.Support.Scope == softwarelifecycle.FirstSubscriptionCleanInstall {
+			if cleanInstallScope(candidate.Support.Scope) {
 				sourceState = "v3-subscription-clean"
 			}
 		}

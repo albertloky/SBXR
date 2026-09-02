@@ -10,6 +10,8 @@ V3 is a new SBXR product line for one Owner and one Ubuntu Server 24.04 `amd64` 
 
 [ADR-0017](0017-one-release-owner-exception.md) records the Owner-approved live-evidence exception for stable `v3.1.0`, Release Sequence `83`, only. It does not claim completed live qualification or waive other checks.
 
+[ADR-0018](0018-clean-install-subscription-repair.md) permits one explicitly scoped clean-install repair while the exact published `v3.1.0` remains the baseline. It supersedes only the incoming-source requirement for that repair scope and retains all applicable live evidence.
+
 Read #342 and its selected resolutions for implementation or qualification of any subscription, Client Identity, compatibility, startup, or removal path. Their safety and evidence requirements remain normative in full; this ADR concentrates ownership and invariants rather than replacing those contracts. Explicit later refinements take precedence:
 
 | Selected resolution | Authority retained or refined |

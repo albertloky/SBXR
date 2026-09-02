@@ -59,11 +59,83 @@ func scopeHistoryFixture(t *testing.T, source observedRelease) map[string]any {
 
 func TestQualificationCommandBindsFirstSubscriptionAttempt(t *testing.T) {
 	for _, exception := range []string{"", softwarelifecycle.OwnerExceptionID} {
-		t.Run("exception="+exception, func(t *testing.T) { testFirstSubscriptionAttempt(t, exception) })
+		t.Run("exception="+exception, func(t *testing.T) { testFirstSubscriptionAttempt(t, exception, false) })
 	}
 }
 
-func testFirstSubscriptionAttempt(t *testing.T, exception string) {
+func TestQualificationCommandBindsCleanInstallRepair(t *testing.T) {
+	testFirstSubscriptionAttempt(t, "", true)
+}
+
+func TestRepairScopeRequiresExactCompleteUnreusedBaseline(t *testing.T) {
+	source := repairBaselineFixture(t)
+	var history v3ReleaseHistory
+	if err := json.Unmarshal([]byte(qualificationDocument(t, scopeHistoryFixture(t, source))), &history); err != nil {
+		t.Fatal(err)
+	}
+	if !validSubscriptionHistory(&history, softwarelifecycle.SubscriptionCleanInstallRepair, nil) {
+		t.Fatal("repair baseline refused")
+	}
+	for name, change := range map[string]func(*v3ReleaseHistory){
+		"incomplete":      func(h *v3ReleaseHistory) { h.Complete = false },
+		"unverified":      func(h *v3ReleaseHistory) { h.PublicLatest.Outcome = "unknown" },
+		"unknown release": func(h *v3ReleaseHistory) { h.Releases[0].Index = nil },
+		"previous published repair": func(h *v3ReleaseHistory) {
+			var previous observedRelease
+			body, _ := json.Marshal(source)
+			_ = json.Unmarshal(body, &previous)
+			previous.ID++
+			previous.Tag, previous.Index.Tag = "v3.1.1", "v3.1.1"
+			*previous.Sequence, previous.Index.Sequence = 84, 84
+			previous.Index.Support.Scope = softwarelifecycle.SubscriptionCleanInstallRepair
+			h.Releases = append(h.Releases, previous)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			body, _ := json.Marshal(history)
+			var changed v3ReleaseHistory
+			_ = json.Unmarshal(body, &changed)
+			change(&changed)
+			if validSubscriptionHistory(&changed, softwarelifecycle.SubscriptionCleanInstallRepair, nil) {
+				t.Fatal("unsafe repair history accepted")
+			}
+		})
+	}
+	for _, pair := range [][2]string{{source.Commit, strings.Repeat("f", 40)}, {source.Index.SHA256, strings.Repeat("f", 64)}, {source.Tag, "v3.1.2"}} {
+		body, _ := json.Marshal(history)
+		var changed v3ReleaseHistory
+		_ = json.Unmarshal([]byte(strings.ReplaceAll(string(body), pair[0], pair[1])), &changed)
+		if validSubscriptionHistory(&changed, softwarelifecycle.SubscriptionCleanInstallRepair, nil) {
+			t.Fatal("different repair baseline accepted")
+		}
+	}
+}
+
+func repairBaselineFixture(t *testing.T) observedRelease {
+	t.Helper()
+	source := recurringSourceFixture()
+	commit := "c0667a12ea914f2d0c86d73d52bfb8b40fea054a"
+	index := "5e9b25cf2bd5b448c0a833b6420e165bd47a207144bb63330a62e0b9dafc3cd1"
+	source.Body = strings.NewReplacer(source.Tag, "v3.1.0", source.Commit, commit, source.Index.SHA256, index,
+		"Sequence: 17\n", "Sequence: 83\n", "Status: Qualified\n", "Status: Qualified by Owner exception\n",
+		"Codex Live Acceptance: Passed\n", "Codex Live Acceptance: "+softwarelifecycle.OwnerExceptionLive+"\n",
+		"Integrated Verification: Passed on live Ubuntu Server 24.04 amd64 and outside runner\n", "Integrated Verification: "+softwarelifecycle.OwnerExceptionLive+"\n",
+		"Owner Acceptance: Not required\n", "Owner Acceptance: One-release exception approved\n",
+		"Secret-safe result: Passed\n", "Secret-safe result: "+softwarelifecycle.OwnerExceptionSecrets+"\n",
+		"RELEASE-V3-PACKAGED-LIVE-QUALIFICATION", softwarelifecycle.OwnerExceptionCode,
+		"Clean-installed V3 release", "Clean-installed subscription-capable V3 release").Replace(source.Body)
+	source.Body += "Owner exception: " + softwarelifecycle.OwnerExceptionID + "\nLive qualification: Incomplete\n"
+	source.Tag, source.Index.Tag, source.Commit, source.Index.Commit = "v3.1.0", "v3.1.0", commit, commit
+	source.Index.SHA256, source.Assets[1].Digest = index, index
+	*source.Sequence, source.Index.Sequence, source.Index.Schema = 83, 83, 2
+	source.Index.Support = &v3ReleaseSupport{Scope: softwarelifecycle.FirstSubscriptionCleanInstall, Contract: softwarelifecycle.SubscriptionUpdateContract, Sources: []decisionReleaseIdentity{}}
+	if !qualifiedV3Source(source) {
+		t.Fatal("invalid repair baseline fixture")
+	}
+	return source
+}
+
+func testFirstSubscriptionAttempt(t *testing.T, exception string, repair bool) {
 	binary := filepath.Join(t.TempDir(), "sbxr-release")
 	if output, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, output)
@@ -75,8 +147,15 @@ func testFirstSubscriptionAttempt(t *testing.T, exception string) {
 	*source.Sequence, source.Index.Sequence = 82, 82
 	source.Body = strings.ReplaceAll(source.Body, "Sequence: 17\n", "Sequence: 82\n")
 	source.Index.Schema = 1
+	if repair {
+		source = repairBaselineFixture(t)
+		facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.1", 84
+	}
 	facts.Releases, facts.LatestTag = []observedRelease{source}, &source.Tag
 	facts.Candidate.Support = &v3ReleaseSupport{Contract: softwarelifecycle.SubscriptionUpdateContract, Scope: softwarelifecycle.FirstSubscriptionCleanInstall, Sources: []decisionReleaseIdentity{}}
+	if repair {
+		facts.Candidate.Support.Scope = "subscription-clean-install-repair"
+	}
 	if json.Unmarshal([]byte(qualificationDocument(t, scopeHistoryFixture(t, source))), &facts.SubscriptionHistory) != nil {
 		t.Fatal("history fixture")
 	}
@@ -106,7 +185,7 @@ func testFirstSubscriptionAttempt(t *testing.T, exception string) {
 			assets = append(assets, softwarelifecycle.LatestAssetProof{Name: a["name"].(string), Size: int64(a["size"].(int)), SHA256: a["sha256"].(string)})
 		}
 	}
-	index, err := softwarelifecycle.BuildSubscriptionReleaseIndex(facts.Candidate.BTag, facts.Commit, 83, assets, facts.Candidate.Support.lifecycle())
+	index, err := softwarelifecycle.BuildSubscriptionReleaseIndex(facts.Candidate.BTag, facts.Commit, facts.Candidate.BSequence, assets, facts.Candidate.Support.lifecycle())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,6 +326,13 @@ func testFirstSubscriptionAttempt(t *testing.T, exception string) {
 	}
 	for name, mutate := range map[string]func(map[string]any){
 		"unknown owner exception": func(v map[string]any) { v["v3_attempt"].(map[string]any)["owner_exception"] = "unapproved" },
+		"old waiver on repair": func(v map[string]any) {
+			if repair {
+				v["v3_attempt"].(map[string]any)["owner_exception"] = softwarelifecycle.OwnerExceptionID
+			} else {
+				v["v3_attempt"].(map[string]any)["owner_exception"] = "unapproved"
+			}
+		},
 		"scope mismatch": func(v map[string]any) {
 			v["v3_attempt"].(map[string]any)["support"].(map[string]any)["scope"] = "recurring-subscription-upgrade"
 		},

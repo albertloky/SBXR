@@ -87,7 +87,7 @@ jobs:
             test "$V3_ATTEMPT" = "$(jq -cS . <<<"$V3_ATTEMPT")"
             go run ./cmd/sbxr-release verify-public-latest > current-source-verification.json
             jq -e '.outcome == "accepted"' current-source-verification.json >/dev/null
-            jq -e '.schema == "sbxr-v3-qualification-attempt-v3" and (.support.scope == "first-subscription-clean-install" or .support.scope == "recurring-subscription-upgrade")' <<<"$V3_ATTEMPT" >/dev/null
+            jq -e '.schema == "sbxr-v3-qualification-attempt-v3" and (.support.scope == "first-subscription-clean-install" or .support.scope == "subscription-clean-install-repair" or .support.scope == "recurring-subscription-upgrade")' <<<"$V3_ATTEMPT" >/dev/null
           fi
           git fetch --force --tags origin
           bash .github/scripts/release-history.sh release-facts.json

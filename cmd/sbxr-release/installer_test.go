@@ -41,6 +41,24 @@ func TestGeneratedInstallerRefusesNonRootBeforeMutation(t *testing.T) {
 	}
 }
 
+func TestGeneratedInstallerAcceptsCleanInstallRepairIndex(t *testing.T) {
+	fixture := newInstallerFixture(t)
+	path := filepath.Join(fixture.root, "fixtures/release-index.json")
+	index, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := strings.Replace(string(index), `"schema":1`, `"schema":2`, 1)
+	body = strings.TrimSuffix(strings.TrimSpace(body), "}") + `,"support":{"scope":"subscription-clean-install-repair","sources":[],"contract":"sbxr-subscription-update-v1"}}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command("bash", fixture.script).CombinedOutput()
+	if err != nil || !strings.Contains(string(output), "SOFTWARE-LIFECYCLE-INSTALL-INSTALLED") {
+		t.Fatalf("repair install = %v, %q", err, output)
+	}
+}
+
 func TestGeneratedInstallerSupportsOnlyFixedUbuntuHosts(t *testing.T) {
 	t.Run("standard os-release link", func(t *testing.T) {
 		fixture := newInstallerFixture(t)

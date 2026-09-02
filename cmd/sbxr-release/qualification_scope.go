@@ -34,7 +34,7 @@ func validSupportDeclaration(support v3ReleaseSupport) bool {
 	if support.Contract != softwarelifecycle.SubscriptionUpdateContract || support.Sources == nil || len(support.Sources) > 32 {
 		return false
 	}
-	if support.Scope == softwarelifecycle.FirstSubscriptionCleanInstall {
+	if cleanInstallScope(support.Scope) {
 		return len(support.Sources) == 0
 	}
 	if support.Scope != softwarelifecycle.RecurringSubscriptionUpgrade || len(support.Sources) == 0 {
@@ -94,8 +94,26 @@ func validSubscriptionHistory(history *v3ReleaseHistory, scope string, baseline 
 		return true
 	case softwarelifecycle.RecurringSubscriptionUpgrade:
 		return subscriptionRelease(source)
+	case softwarelifecycle.SubscriptionCleanInstallRepair:
+		// ADR-0018 repairs this exact immutable baseline, not arbitrary future releases.
+		if *latest != (decisionReleaseIdentity{Repository: softwarelifecycle.Repository, Tag: "v3.1.0", Commit: "c0667a12ea914f2d0c86d73d52bfb8b40fea054a", ReleaseIndexSHA256: "5e9b25cf2bd5b448c0a833b6420e165bd47a207144bb63330a62e0b9dafc3cd1"}) || source.Index.Sequence != 83 {
+			return false
+		}
+		for _, release := range history.Releases {
+			if !historicalV1Tag(release.Tag) && (release.Index == nil || release.Index.Schema != 1 && release.Index.Schema != 2 || release.Index.Schema == 1 && release.Index.Support != nil || release.Index.Schema == 2 && (release.Index.Support == nil || !validSupportDeclaration(*release.Index.Support))) {
+				return false
+			}
+			if !release.Prerelease && release.Index != nil && release.Index.Support != nil && release.Index.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair {
+				return false
+			}
+		}
+		return true
 	}
 	return false
+}
+
+func cleanInstallScope(scope string) bool {
+	return scope == softwarelifecycle.FirstSubscriptionCleanInstall || scope == softwarelifecycle.SubscriptionCleanInstallRepair
 }
 
 func historyBaseline(history *v3ReleaseHistory) qualificationRelease {
@@ -113,7 +131,7 @@ func attemptVersion(attempt *v3QualificationAttempt) string {
 
 func attemptScenarios(attempt v3QualificationAttempt) []string {
 	ids := requiredV3Scenarios(attempt.Sources)
-	if attempt.Support != nil && attempt.Support.Scope == softwarelifecycle.FirstSubscriptionCleanInstall {
+	if attempt.Support != nil && cleanInstallScope(attempt.Support.Scope) {
 		index := slices.Index(ids, "update-incompatible")
 		ids = append(ids[:index], append([]string{"lifecycle-menu"}, ids[index+2:]...)...)
 	}

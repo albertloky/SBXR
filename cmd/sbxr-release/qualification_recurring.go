@@ -427,7 +427,7 @@ func buildRecurringAcceptanceRecord(manifest qualificationManifest, facts v3Recu
 	if attemptVersion(attempt) == "v3" {
 		recordSchema = "sbxr-acceptance-record-v3"
 	}
-	if attempt.Support != nil && attempt.Support.Scope == softwarelifecycle.FirstSubscriptionCleanInstall {
+	if attempt.Support != nil && cleanInstallScope(attempt.Support.Scope) {
 		role, code = "Clean-installed subscription-capable V3 release", "RELEASE-V3-SUBSCRIPTION-CLEAN-INSTALL-QUALIFICATION"
 		notApplicable = []string{"incoming-source-upgrades", "two-release-update-recovery"}
 	}
@@ -557,7 +557,7 @@ func validV3Attempt(attempt v3QualificationAttempt, preflight qualificationFacts
 		if preflight.Candidate.EvidenceVersion != 3 || attempt.Support == nil || !reflect.DeepEqual(attempt.Support, preflight.Candidate.Support) || !validSubscriptionHistory(preflight.SubscriptionHistory, attempt.Support.Scope, attempt.Baseline) || attempt.Baseline == nil || !validAttemptSupport(attempt) {
 			return false
 		}
-		if attempt.Support.Scope == softwarelifecycle.FirstSubscriptionCleanInstall {
+		if cleanInstallScope(attempt.Support.Scope) {
 			return true
 		}
 	} else if preflight.Candidate.EvidenceVersion != 2 || attempt.Support != nil || attempt.Baseline != nil || attempt.CandidateIndex != "" || len(attempt.Sources) == 0 {

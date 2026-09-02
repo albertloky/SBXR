@@ -122,7 +122,7 @@ func TestQualificationGatewayServesOneV3Candidate(t *testing.T) {
 }
 
 func TestQualificationGatewayServesBoundSubscriptionCandidate(t *testing.T) {
-	for _, scope := range []string{softwarelifecycle.FirstSubscriptionCleanInstall, softwarelifecycle.RecurringSubscriptionUpgrade} {
+	for _, scope := range []string{softwarelifecycle.FirstSubscriptionCleanInstall, softwarelifecycle.SubscriptionCleanInstallRepair, softwarelifecycle.RecurringSubscriptionUpgrade} {
 		t.Run(scope, func(t *testing.T) { testQualificationGatewaySubscriptionCandidate(t, scope) })
 	}
 }
@@ -146,7 +146,7 @@ func testQualificationGatewaySubscriptionCandidate(t *testing.T, scope string) {
 		assets = append(assets, asset)
 		proofs = append(proofs, softwarelifecycle.LatestAssetProof{Name: name, Size: asset.Size, SHA256: asset.SHA256})
 	}
-	support := v3ReleaseSupport{Scope: softwarelifecycle.FirstSubscriptionCleanInstall, Contract: softwarelifecycle.SubscriptionUpdateContract, Sources: []decisionReleaseIdentity{}}
+	support := v3ReleaseSupport{Scope: scope, Contract: softwarelifecycle.SubscriptionUpdateContract, Sources: []decisionReleaseIdentity{}}
 	var sources = []v3QualificationSource{}
 	sourceState := "v3-subscription-clean"
 	if scope == softwarelifecycle.RecurringSubscriptionUpgrade {
