@@ -151,6 +151,40 @@ func runRenewalRecorder(ctx context.Context, a Adapter, authority RenewalAuthori
 	return runner.Run(ctx)
 }
 
+func TestRenewalInspectionAcceptsHeldOfficialCertbot(t *testing.T) {
+	a, authority := renewalFiles(t)
+	command := a.subscriptionCommand
+	a.subscriptionCommand = func(ctx context.Context, name string, args ...string) (string, int, bool) {
+		body, code, observed := command(ctx, name, args...)
+		if name == "snap" && args[0] == "list" {
+			body = strings.ReplaceAll(body, " classic\n", " classic,held\n")
+		}
+		return body, code, observed
+	}
+	if inspection := a.InspectRenewal(authority); !inspection.Observed || !inspection.Accepted || inspection.State != RenewalAttemptHealthy {
+		t.Fatal("a refresh hold made the supported renewal route unhealthy")
+	}
+}
+
+func TestRenewalInspectionRefusesUnsupportedCertbotModes(t *testing.T) {
+	for _, notes := range []string{"held", "classic,devmode", "classic,devmode,held", "classic,unknown"} {
+		t.Run(notes, func(t *testing.T) {
+			a, authority := renewalFiles(t)
+			command := a.subscriptionCommand
+			a.subscriptionCommand = func(ctx context.Context, name string, args ...string) (string, int, bool) {
+				body, code, observed := command(ctx, name, args...)
+				if name == "snap" && args[0] == "list" {
+					body = strings.ReplaceAll(body, " classic\n", " "+notes+"\n")
+				}
+				return body, code, observed
+			}
+			if inspection := a.InspectRenewal(authority); inspection.State != RenewalAttemptUnsafe || inspection.Accepted {
+				t.Fatal("unsupported Certbot mode accepted")
+			}
+		})
+	}
+}
+
 func TestReviewedCertificateRepairUsesOneExactOwnedCertbotAttempt(t *testing.T) {
 	a, authority := renewalFiles(t)
 	if err := os.MkdirAll(a.path("/etc/letsencrypt/renewal"), 0755); err != nil {

@@ -291,7 +291,7 @@ func (a Adapter) certbotRoute(expectedPath, expectedArguments string) bool {
 		return false
 	}
 	fields := strings.Fields(lines[1])
-	if len(fields) != 6 || fields[0] != "certbot" || fields[4] != "certbot-eff✓" || fields[5] != "classic" {
+	if len(fields) != 6 || fields[0] != "certbot" || fields[4] != "certbot-eff✓" || fields[5] != "classic" && fields[5] != "classic,held" {
 		return false
 	}
 	version := strings.Split(fields[1], ".")

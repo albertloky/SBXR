@@ -245,6 +245,16 @@ func TestSubscriptionPreflightRequestsStablePublisherOutput(t *testing.T) {
 	}
 }
 
+func TestSubscriptionPreflightAcceptsHeldOfficialCertbot(t *testing.T) {
+	adapter, commands := subscriptionReviewHost(t)
+	commands["dpkg-query"] = OperationResult{Fact: "snapd installed 2.76.2\n", Code: 1, Observed: true}
+	commands["snap list"] = OperationResult{Fact: "Name Version Rev Tracking Publisher Notes\ncertbot 5.7.0 5781 - certbot-eff✓ classic,held\n", Observed: true}
+	facts := adapter.PreflightSubscription(t.Context(), "8.8.8.8")
+	if !facts.Dependencies.Observed || !facts.Dependencies.Accepted || !facts.CertbotInstalled {
+		t.Fatal("a refresh hold made the supported official Certbot unavailable")
+	}
+}
+
 func TestSubscriptionPreflightRefusesUnknownAndUnsupportedDependencies(t *testing.T) {
 	for _, test := range []struct {
 		name, command, body string
@@ -258,6 +268,10 @@ func TestSubscriptionPreflightRefusesUnknownAndUnsupportedDependencies(t *testin
 		{"malformed snap", "snap list", "garbage", 0, true},
 		{"old snap", "snap list", "Name Version Rev Tracking Publisher Notes\ncertbot 5.3.0 1 latest/stable certbot-eff✓ classic\n", 0, true},
 		{"wrong publisher", "snap list", "Name Version Rev Tracking Publisher Notes\ncertbot 5.4.0 1 latest/stable somebody classic\n", 0, true},
+		{"held without classic", "snap list", "Name Version Rev Tracking Publisher Notes\ncertbot 5.7.0 5781 - certbot-eff✓ held\n", 0, true},
+		{"development mode", "snap list", "Name Version Rev Tracking Publisher Notes\ncertbot 5.7.0 5781 - certbot-eff✓ classic,devmode\n", 0, true},
+		{"held development mode", "snap list", "Name Version Rev Tracking Publisher Notes\ncertbot 5.7.0 5781 - certbot-eff✓ classic,devmode,held\n", 0, true},
+		{"unknown mode", "snap list", "Name Version Rev Tracking Publisher Notes\ncertbot 5.7.0 5781 - certbot-eff✓ classic,unknown\n", 0, true},
 		{"active snap", "snap changes", "ID Status Spawn Ready Summary\n1 Doing today - Refresh\n", 0, true},
 		{"unknown changes", "snap changes", "garbage", 0, true},
 	} {

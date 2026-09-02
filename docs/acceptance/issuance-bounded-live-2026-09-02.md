@@ -395,3 +395,53 @@ product/transport absence and exact remaining temporary-file cleanup passed at
 `07:14:46Z`; no second product removal was needed. Separately constructed local
 failure/cleanup facts were accepted as failed / completed / Not installed. They
 do not replace the missing workflow failure artifact or change the failed result.
+
+## Sequence 94: refresh hold refused as unsupported Certbot
+
+[Candidate run 33633684913](https://github.com/albertloky/SBXR/actions/runs/33633684913)
+used `v3.1.11`, Release Sequence `94`, commit
+`39240c90f7246ce002a17aae80ba4b3adc421330`, and Release Index SHA-256
+`49005fcb093bcf0ecfd70e00c4bd6d146f525adcf212ab2f79c804a95702c4bb`.
+Both native jobs passed. Signed manifest
+`32b4a6b462d369fe1a92d8cd027e97a6f56a05ce689e50124a5e320c2f0f81e1`
+was independently validated and its attestation verified before live approval.
+All six baseline scenarios were accepted, including both actual GitHub outside
+probes, recovery directions, refusals, original SSH continuity, and removal.
+
+`enable-schema1` began at `13:39:36Z`. Supported setup produced Running schema-1
+authority at `13:39:55Z`. The exact Mac auxiliary client became ready at
+`13:40:20Z`, and actual outside traffic used one uninterrupted connection.
+The normal menu did not offer Enable subscription: View details reported
+`Subscription enablement check: Subscription dependencies`. The official
+Certbot `5.7.0` revision `5781` reported Notes `classic,held` because qualification
+temporarily held refreshes. Both dependency admission and renewal-route inspection
+required Notes to equal `classic`, incorrectly rejecting that unchanged package.
+No Enable subscription execution, production CA request, or Karing profile change
+occurred. The operator helper also retained a stale prior action on menu lookup
+failure; that capture is not evidence of an enablement action result.
+
+Failure facts recorded at `13:41:47Z` identify `enable-schema1`, refusal, and
+Running. The collector retained those exact bytes and burned
+`refs/tags/release-burned/v3.1.11`. Supported Complete removal and absence checks
+passed at `13:44:05Z`; separate cleanup facts remain failed / completed /
+Not installed. Certbot `5.8.0` revision `5893`, refresh eligibility, and the
+original active/enabled APT timers were restored at `13:45:06Z`. Temporary
+transport/files were absent and SSH still required public keys at `13:47:11Z`.
+
+The correction accepts only `classic` and `classic,held` in both existing
+inspection paths. Publisher, version, active-change, route, and other safety
+checks remain unchanged. Each held-package regression failed before its fix and
+passed afterward; focused tests also prove unsupported modes still refuse.
+These are automated results, not subscription or Karing live acceptance. A fresh
+candidate must repeat the full retained matrix; no baseline pass is reusable.
+Multi-day natural renewal remains Not observed.
+
+The first final-tree local normal suite reached its unchanged ten-minute package
+limit in `TestBuildAndVerifyExactFourAssetRelease`, while its Linux release build
+was still compiling. Every other package passed. The affected packaging test and
+complete normal/race suites are being rerun without changing test timeouts; no
+full-suite pass is claimed by this entry. Native verification must also pass
+before signing a new attempt. During unsigned preparation, desktop control could
+not operate Karing and then reported `Sky Computer Use native pipe startup failed`.
+No new signed attempt, production issuance, or Karing profile/settings change was
+made while that required client control remained unavailable.

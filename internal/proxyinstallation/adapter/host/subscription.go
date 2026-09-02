@@ -254,7 +254,7 @@ func (adapter Adapter) subscriptionDependencies(ctx context.Context, facts Subsc
 			major, e1 := strconv.Atoi(version[0])
 			minor, e2 := strconv.Atoi(version[1])
 			_, e3 := strconv.Atoi(version[2])
-			if e1 != nil || e2 != nil || e3 != nil || major < 5 || major == 5 && minor < 4 || fields[4] != "certbot-eff✓" || fields[5] != "classic" {
+			if e1 != nil || e2 != nil || e3 != nil || major < 5 || major == 5 && minor < 4 || fields[4] != "certbot-eff✓" || fields[5] != "classic" && fields[5] != "classic,held" {
 				return facts
 			}
 			facts.CertbotInstalled = true
