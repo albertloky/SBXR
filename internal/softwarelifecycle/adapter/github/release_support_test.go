@@ -49,6 +49,9 @@ func testCleanInstallSupport(t *testing.T, scope string, exception bool) {
 	).Replace(fixture.acceptanceRecord())
 	encoded, _ := json.Marshal(support)
 	body += "Release support: " + string(encoded) + "\nDetailed evidence SHA-256: " + strings.Repeat("a", 64) + "\nProxy package: sing-box 1.13.19 amd64 fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf\nKaring package: karing 1.2.0 macos-arm64 " + strings.Repeat("b", 64) + "\nKaring macOS: Passed\nNatural timer firing and naturally due certificate renewal: Not observed\nUnsupported new or renamed renewal route: May execute before detection; historical outcomes unknown\n"
+	if scope == softwarelifecycle.SubscriptionCleanInstallRepair {
+		body += "Evidence policy: " + softwarelifecycle.RepairEvidencePolicy + "\nAutomated-only scenarios (not live): " + softwarelifecycle.RepairAutomatedOnlyScenarios + "\nAutomated-only result: Passed in native amd64/arm64 workflow\n"
+	}
 	if exception {
 		body = strings.NewReplacer("Tag: v2.0.0", "Tag: v3.1.0", "Sequence: 17", "Sequence: 83", "Status: Qualified", "Status: Qualified by Owner exception", "RELEASE-V3-SUBSCRIPTION-CLEAN-INSTALL-QUALIFICATION", softwarelifecycle.OwnerExceptionCode, "Integrated Verification: Passed on live Ubuntu Server 24.04 amd64 and Karing macOS", "Integrated Verification: "+softwarelifecycle.OwnerExceptionLive, "Codex Live Acceptance: Passed", "Codex Live Acceptance: "+softwarelifecycle.OwnerExceptionLive, "Owner Acceptance: Not required", "Owner Acceptance: One-release exception approved", "Secret-safe result: Passed", "Secret-safe result: "+softwarelifecycle.OwnerExceptionSecrets, "Karing macOS: Passed", "Karing macOS: "+softwarelifecycle.OwnerExceptionLive).Replace(body)
 		body += "Owner exception: " + softwarelifecycle.OwnerExceptionID + "\nLive qualification: Incomplete\nClient compatibility: static-official-evidence-passed-live-karing-pending\n"
@@ -70,6 +73,15 @@ func testCleanInstallSupport(t *testing.T, scope string, exception bool) {
 		t.Fatalf("CheckLatest=%+v %v", got, outcome)
 	}
 	mutations := []string{strings.Replace(body, "Release support: ", "Unknown support: ", 1), strings.Replace(body, scope, softwarelifecycle.RecurringSubscriptionUpgrade, 1)}
+	if scope == softwarelifecycle.SubscriptionCleanInstallRepair {
+		mutations = append(mutations,
+			strings.Replace(body, "Evidence policy: "+softwarelifecycle.RepairEvidencePolicy, "Evidence policy: unknown", 1),
+			strings.Replace(body, "Automated-only scenarios (not live): "+softwarelifecycle.RepairAutomatedOnlyScenarios, "Automated-only scenarios (not live): ", 1),
+			strings.Replace(body, "Automated-only result: Passed in native amd64/arm64 workflow", "Automated-only result: Passed", 1),
+		)
+	} else {
+		mutations = append(mutations, body+"Evidence policy: "+softwarelifecycle.RepairEvidencePolicy+"\nAutomated-only scenarios (not live): "+softwarelifecycle.RepairAutomatedOnlyScenarios+"\nAutomated-only result: Passed in native amd64/arm64 workflow\n")
+	}
 	if exception {
 		mutations = append(mutations, strings.Replace(body, "Sequence: 83", "Sequence: 84", 1), strings.Replace(body, softwarelifecycle.OwnerExceptionID, "other", 1), strings.ReplaceAll(body, softwarelifecycle.OwnerExceptionLive, "Passed"), strings.Replace(body, "Live qualification: Incomplete", "Live qualification: Complete", 1))
 	} else {

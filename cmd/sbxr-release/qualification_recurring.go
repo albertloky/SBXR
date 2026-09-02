@@ -459,6 +459,9 @@ func buildRecurringAcceptanceRecord(manifest qualificationManifest, facts v3Recu
 		support, _ := json.Marshal(attempt.Support.lifecycle())
 		baseline, _ := marshalCanonical(attempt.Baseline)
 		body.WriteString("Release support: " + string(support) + "\nStable baseline: " + string(baseline) + "\n")
+		if attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair {
+			body.WriteString("Evidence policy: " + attempt.EvidencePolicy + "\nAutomated-only scenarios (not live): " + strings.Join(attempt.AutomatedOnlyScenarios, " ") + "\nAutomated-only result: Passed in native amd64/arm64 workflow\n")
+		}
 		if len(notApplicable) > 0 {
 			body.WriteString("Incoming source upgrades: Not applicable\nTwo-release update/recovery: Not applicable\n")
 		}
@@ -514,8 +517,10 @@ type v3QualificationSource struct {
 type v3QualificationAttempt struct {
 	AfterSnapRefresh       v3QualificationPackages `json:"after_snap_refresh"`
 	AttemptID              string                  `json:"attempt_id"`
+	AutomatedOnlyScenarios []string                `json:"automated_only_scenarios,omitempty"`
 	Baseline               *qualificationRelease   `json:"baseline,omitempty"`
 	CandidateIndex         string                  `json:"candidate_index,omitempty"`
+	EvidencePolicy         string                  `json:"evidence_policy,omitempty"`
 	KaringLatestCheckedAt  string                  `json:"karing_latest_checked_at"`
 	KaringLimitSeconds     int                     `json:"karing_limit_seconds"`
 	MacRunnerID            string                  `json:"mac_runner_id"`
@@ -560,7 +565,7 @@ func validV3Attempt(attempt v3QualificationAttempt, preflight qualificationFacts
 		if cleanInstallScope(attempt.Support.Scope) {
 			return true
 		}
-	} else if preflight.Candidate.EvidenceVersion != 2 || attempt.Support != nil || attempt.Baseline != nil || attempt.CandidateIndex != "" || len(attempt.Sources) == 0 {
+	} else if preflight.Candidate.EvidenceVersion != 2 || attempt.Support != nil || attempt.Baseline != nil || attempt.CandidateIndex != "" || attempt.EvidencePolicy != "" || attempt.AutomatedOnlyScenarios != nil || len(attempt.Sources) == 0 {
 		return false
 	}
 	seen := map[string]bool{}

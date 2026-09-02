@@ -22,6 +22,19 @@ func qualifiedReleaseSupport(body string, release softwarelifecycle.LatestReleas
 	if !ok {
 		return false
 	}
+	policy, policyOK := uniqueRecordValue(body, "Evidence policy: ")
+	automatedOnly, automatedOnlyOK := uniqueRecordValue(body, "Automated-only scenarios (not live): ")
+	automatedResult, automatedResultOK := uniqueRecordValue(body, "Automated-only result: ")
+	hasRecordLine := func(prefix string) bool {
+		return strings.HasPrefix(body, prefix) || strings.Contains(body, "\n"+prefix)
+	}
+	if release.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair {
+		if !policyOK || policy != softwarelifecycle.RepairEvidencePolicy || !automatedOnlyOK || automatedOnly != softwarelifecycle.RepairAutomatedOnlyScenarios || !automatedResultOK || automatedResult != "Passed in native amd64/arm64 workflow" {
+			return false
+		}
+	} else if hasRecordLine("Evidence policy: ") || hasRecordLine("Automated-only scenarios (not live): ") || hasRecordLine("Automated-only result: ") {
+		return false
+	}
 	if release.Support.Scope == softwarelifecycle.FirstSubscriptionCleanInstall || release.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair {
 		return code == "RELEASE-V3-SUBSCRIPTION-CLEAN-INSTALL-QUALIFICATION" || code == softwarelifecycle.OwnerExceptionCode && softwarelifecycle.OwnerExceptionTarget(release.Identity.Tag, release.Sequence, release.Support)
 	}

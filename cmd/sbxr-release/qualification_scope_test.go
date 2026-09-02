@@ -161,23 +161,34 @@ func testFirstSubscriptionAttempt(t *testing.T, exception string, repair bool) {
 	}
 	attempt := recurringAttemptFixture(t, source)
 	attempt["schema"] = "sbxr-v3-qualification-attempt-v3"
+	if repair {
+		attempt["evidence_policy"] = softwarelifecycle.RepairEvidencePolicy
+		attempt["automated_only_scenarios"] = strings.Fields(softwarelifecycle.RepairAutomatedOnlyScenarios)
+	}
 	if exception != "" {
 		attempt["owner_exception"] = exception
 	}
 	attempt["support"] = facts.Candidate.Support
 	attempt["baseline"] = historyBaseline(facts.SubscriptionHistory)
 	attempt["sources"] = []any{}
-	var scenarios []string
-	for _, id := range attempt["required_scenarios"].([]string) {
-		if strings.HasPrefix(id, "source-") || strings.HasPrefix(id, "update-") {
-			continue
+	if repair {
+		attempt["required_scenarios"] = strings.Fields(`baseline-clean baseline-refusal baseline-precommit baseline-postcommit baseline-drift baseline-removal
+enable-schema1 link-precommit link-postcommit managed-renewal recorder-live recorder-locks snap-refresh unsupported-route
+identity-precommit identity-postcommit identity-unavailable identity-absent lifecycle-menu
+remove-certbot remove-writer remove-admission-race remove-directory-lock secret-containment karing-final`)
+	} else {
+		var scenarios []string
+		for _, id := range attempt["required_scenarios"].([]string) {
+			if strings.HasPrefix(id, "source-") || strings.HasPrefix(id, "update-") {
+				continue
+			}
+			if id == "remove-enable-precommit" {
+				scenarios = append(scenarios, "lifecycle-menu")
+			}
+			scenarios = append(scenarios, id)
 		}
-		if id == "remove-enable-precommit" {
-			scenarios = append(scenarios, "lifecycle-menu")
-		}
-		scenarios = append(scenarios, id)
+		attempt["required_scenarios"] = scenarios
 	}
-	attempt["required_scenarios"] = scenarios
 	var assets []softwarelifecycle.LatestAssetProof
 	for _, raw := range draftAssets(0) {
 		a := raw.(map[string]any)
@@ -191,6 +202,13 @@ func testFirstSubscriptionAttempt(t *testing.T, exception string, repair bool) {
 	}
 	attempt["candidate_index"] = string(index)
 	boundary, manifest := qualificationBoundaryForCandidate(t, binary, facts, attempt)
+	if !repair {
+		v := jsonObject(t, []byte(boundary))
+		a := v["v3_attempt"].(map[string]any)
+		a["evidence_policy"] = softwarelifecycle.RepairEvidencePolicy
+		a["automated_only_scenarios"] = strings.Fields(softwarelifecycle.RepairAutomatedOnlyScenarios)
+		assertQualificationRefused(t, binary, qualificationDocument(t, v), "repair fields on first scope")
+	}
 	evidence := recurringEvidenceFixture(t, manifest, attempt)
 	evidence["schema"] = "sbxr-v3-packaged-live-evidence-v3"
 	for _, raw := range evidence["scenarios"].([]any) {
@@ -209,6 +227,52 @@ func testFirstSubscriptionAttempt(t *testing.T, exception string, repair bool) {
 	}
 	rebindRecurringEvidence(t, evidence)
 	document := recurringResultFixture(t, boundary, manifest, evidence)
+	if repair {
+		for name, mutate := range map[string]func(map[string]any){
+			"missing policy": func(v map[string]any) {
+				delete(v["qualification_manifest"].(map[string]any)["v3_attempt"].(map[string]any), "evidence_policy")
+			},
+			"unknown policy": func(v map[string]any) {
+				v["qualification_manifest"].(map[string]any)["v3_attempt"].(map[string]any)["evidence_policy"] = "unknown"
+			},
+			"missing automated-only list": func(v map[string]any) {
+				delete(v["qualification_manifest"].(map[string]any)["v3_attempt"].(map[string]any), "automated_only_scenarios")
+			},
+			"reordered automated-only list": func(v map[string]any) {
+				ids := v["qualification_manifest"].(map[string]any)["v3_attempt"].(map[string]any)["automated_only_scenarios"].([]any)
+				ids[0], ids[1] = ids[1], ids[0]
+			},
+			"extra automated-only list item": func(v map[string]any) {
+				a := v["qualification_manifest"].(map[string]any)["v3_attempt"].(map[string]any)
+				a["automated_only_scenarios"] = append(a["automated_only_scenarios"].([]any), "karing-final")
+			},
+			"excluded-ID live claim": func(v map[string]any) {
+				scenarios := v["detailed_evidence"].(map[string]any)["scenarios"].([]any)
+				claim := scenarios[0].(map[string]any)
+				claim["scenario_id"] = "enable-precommit"
+				v["detailed_evidence"].(map[string]any)["scenarios"] = append(scenarios, claim)
+			},
+			"omitted Karing": func(v map[string]any) {
+				scenarios := v["detailed_evidence"].(map[string]any)["scenarios"].([]any)
+				v["detailed_evidence"].(map[string]any)["scenarios"] = scenarios[:len(scenarios)-1]
+			},
+			"omitted managed renewal": func(v map[string]any) {
+				scenarios := v["detailed_evidence"].(map[string]any)["scenarios"].([]any)
+				for i, raw := range scenarios {
+					if raw.(map[string]any)["scenario_id"] == "managed-renewal" {
+						v["detailed_evidence"].(map[string]any)["scenarios"] = append(scenarios[:i], scenarios[i+1:]...)
+						return
+					}
+				}
+			},
+		} {
+			t.Run(name, func(t *testing.T) {
+				v := jsonObject(t, []byte(document))
+				mutate(v)
+				assertQualificationRefused(t, binary, qualificationDocument(t, v), name)
+			})
+		}
+	}
 	if exception != "" {
 		assertQualificationRefused(t, binary, document, "exception cannot claim completed live scenarios")
 		document = qualificationDocument(t, map[string]any{"schema": qualificationFactsSchema, "stage": "owner-exception-result", "qualification_boundary_facts": jsonValue(t, boundary), "qualification_manifest": jsonObject(t, manifest), "qualification_manifest_attested": true, "observed_at": attempt["started_at"]})
@@ -241,6 +305,18 @@ func testFirstSubscriptionAttempt(t *testing.T, exception string, repair bool) {
 	for _, line := range required {
 		if !strings.Contains(body, line) {
 			t.Fatalf("record lacks %q", line)
+		}
+	}
+	if repair {
+		for _, line := range []string{"Evidence policy: " + softwarelifecycle.RepairEvidencePolicy, "Automated-only scenarios (not live): " + softwarelifecycle.RepairAutomatedOnlyScenarios, "Automated-only result: Passed in native amd64/arm64 workflow"} {
+			if strings.Count(body, line) != 1 {
+				t.Fatalf("record disclosure %q", line)
+			}
+		}
+		for _, id := range strings.Fields(softwarelifecycle.RepairAutomatedOnlyScenarios) {
+			if strings.Contains(body, "Scenario: "+id+" ") {
+				t.Fatalf("automated-only scenario claimed live: %s", id)
+			}
 		}
 	}
 	m := jsonObject(t, manifest)
@@ -425,6 +501,11 @@ func TestQualificationCommandRequiresActualRecurringSubscriptionSources(t *testi
 		},
 		"historical schema override": func(v map[string]any) {
 			v["v3_attempt"].(map[string]any)["schema"] = "sbxr-v3-qualification-attempt-v2"
+		},
+		"repair fields on recurring scope": func(v map[string]any) {
+			a := v["v3_attempt"].(map[string]any)
+			a["evidence_policy"] = softwarelifecycle.RepairEvidencePolicy
+			a["automated_only_scenarios"] = strings.Fields(softwarelifecycle.RepairAutomatedOnlyScenarios)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

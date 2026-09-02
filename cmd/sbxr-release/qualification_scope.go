@@ -131,6 +131,10 @@ func attemptVersion(attempt *v3QualificationAttempt) string {
 
 func attemptScenarios(attempt v3QualificationAttempt) []string {
 	ids := requiredV3Scenarios(attempt.Sources)
+	if attempt.Support != nil && attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair {
+		automatedOnly := strings.Fields(softwarelifecycle.RepairAutomatedOnlyScenarios)
+		ids = slices.DeleteFunc(ids, func(id string) bool { return slices.Contains(automatedOnly, id) })
+	}
 	if attempt.Support != nil && cleanInstallScope(attempt.Support.Scope) {
 		index := slices.Index(ids, "update-incompatible")
 		ids = append(ids[:index], append([]string{"lifecycle-menu"}, ids[index+2:]...)...)
@@ -140,6 +144,13 @@ func attemptScenarios(attempt v3QualificationAttempt) []string {
 
 func validAttemptSupport(attempt v3QualificationAttempt) bool {
 	if attempt.Support == nil || !validSupportDeclaration(*attempt.Support) || attempt.Sources == nil || len(attempt.Support.Sources) != len(attempt.Sources) || !slices.Equal(attempt.RequiredScenarios, attemptScenarios(attempt)) {
+		return false
+	}
+	if attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair {
+		if attempt.EvidencePolicy != softwarelifecycle.RepairEvidencePolicy || !slices.Equal(attempt.AutomatedOnlyScenarios, strings.Fields(softwarelifecycle.RepairAutomatedOnlyScenarios)) {
+			return false
+		}
+	} else if attempt.EvidencePolicy != "" || attempt.AutomatedOnlyScenarios != nil {
 		return false
 	}
 	for i, source := range attempt.Sources {
