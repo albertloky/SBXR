@@ -26,3 +26,7 @@ duplicate, or scope-inappropriate disclosures. Policy v1 and historical attempts
 retain their original contracts. No other scenario, check, production behavior,
 release support, clock, failure burn, trust rule, or Karing journey changes.
 Natural timer firing and naturally due renewal remain Not observed.
+
+[ADR-0021](0021-karing-latency-with-current-connection.md) subsequently defines
+repair policy v3 for per-node Karing latency while preserving the Owner's current
+connection. Historical v2 attempts retain this ADR's full Karing requirements.

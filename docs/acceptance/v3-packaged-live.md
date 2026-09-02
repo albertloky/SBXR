@@ -6,6 +6,11 @@ This is the required first-V3 stage inside Release Qualification. It qualifies o
 
 ## Subscription qualification scopes
 
+New repair attempts use [ADR-0021](../adr/0021-karing-latency-with-current-connection.md)
+and `repair-issuance-bounded-v3`: per-node Karing latency with the Owner's current
+connection preserved. This supersedes the v2/full-Karing clauses below only for
+that explicit policy. Historical v1/v2 attempts retain their original contracts.
+
 Use the same `.github/workflows/candidate.yml`, `acceptance-vps` approval, `sbxr-release qualification` command, failure finalization, and `.github/workflows/stable.yml`. No new release asset, product dispatch, or transaction harness is introduced. The workflow's `v3` input requests evidence version `3`. It cannot use historical evidence, an empty source list alone, or normal/rescue qualification to bypass subscription obligations.
 
 The workflow accepts a canonical, secret-safe `v3_attempt` JSON declaration. The wire fields are defined by `v3QualificationAttempt` in `cmd/sbxr-release/qualification_recurring.go`. Canonical means sorted object keys, no whitespace outside string values, no unknown/duplicate keys, no omitted required fields, and no trailing newline. The declaration binds:
@@ -14,7 +19,7 @@ The workflow accepts a canonical, secret-safe `v3_attempt` JSON declaration. The
 - For `first-subscription-clean-install`, both source lists are explicitly empty. Full paginated release history and the existing public Latest verifier must prove a current V3 stable baseline and absence of any earlier subscription-capable Qualified Stable Release. Unknown history refuses. The signed `baseline` binds that release's exact identity, sequence, assets and GitHub release ID solely as baseline evidence.
 - For `subscription-clean-install-repair`, [ADR-0018](../adr/0018-clean-install-subscription-repair.md) requires the exact published `v3.1.0` baseline, complete history, no prior published stable repair, and empty source lists. It uses the clean-install scenario matrix with ADR-0019's evidence split below and the same `v3-subscription-clean` transport state, with its distinct scope signed into the attempt, index, and Acceptance Record. It cannot use the live-evidence waiver. Recheck the baseline at publication; later recurring qualification remains required after the repair.
 - For that repair scope only, [ADR-0019](../adr/0019-issuance-bounded-repair-qualification.md) requires signed `evidence_policy:"repair-issuance-bounded-v1"` and the exact ordered `automated_only_scenarios` list. Remove only those 29 IDs from the required live list, retaining the other 25 scenarios in order. The excluded IDs are mandatory native automated evidence, not live passes or Not applicable. Publish the policy and exact automated-only list in the Acceptance Record. No policy/list omission, substitution, extra exclusion, or reuse on another scope is accepted. All other clauses below apply to the retained live scenarios; other scopes keep the full matrix.
-- New repair attempts use [ADR-0020](../adr/0020-clean-install-lifecycle-evidence.md)'s `evidence_policy:"repair-issuance-bounded-v2"`. Keep those exact 25/29 scenario lists. Within live `lifecycle-menu` only, omit `explicit-confirmation` and `clean-install-target-refused`: the single-candidate/no-update/no-recovery path cannot produce them. Both remain mandatory native automated checks (`TestProductionMenuLifecycleConfirmation`, `TestProductionMenuOutputFailurePreventsApproval`, and `TestCleanInstallScopeCannotBeAnUpdateTarget`). The public record must contain exactly `Automated-only checks (not live): lifecycle-menu/explicit-confirmation lifecycle-menu/clean-install-target-refused`. All other lifecycle checks stay live; no fixture, other confirmation, or generic older-target refusal substitutes for the two exclusions. Historical v1 attempts retain their full lifecycle checks. Production HTTPS, all Karing checks including actual due automatic refresh, deadlines, and failure burns are unchanged.
+- Historical v2 repair attempts use [ADR-0020](../adr/0020-clean-install-lifecycle-evidence.md)'s `evidence_policy:"repair-issuance-bounded-v2"`. Keep those exact 25/29 scenario lists. Within live `lifecycle-menu` only, omit `explicit-confirmation` and `clean-install-target-refused`: the single-candidate/no-update/no-recovery path cannot produce them. Both remain mandatory native automated checks (`TestProductionMenuLifecycleConfirmation`, `TestProductionMenuOutputFailurePreventsApproval`, and `TestCleanInstallScopeCannotBeAnUpdateTarget`). The public record must contain exactly `Automated-only checks (not live): lifecycle-menu/explicit-confirmation lifecycle-menu/clean-install-target-refused`. All other lifecycle checks stay live; no fixture, other confirmation, or generic older-target refusal substitutes for the two exclusions. Historical v1 attempts retain their full lifecycle checks. Production HTTPS, all Karing checks including actual due automatic refresh, deadlines, and failure burns are unchanged.
 - For `recurring-subscription-upgrade`, exact active source Release Identities, sequences, four asset digests/sizes, actual Ownership Record schema, and accepted public verification are required. Include then-current subscription-capable Qualified Stable Release. Each source adds its own packaged upgrade, precommit restoration, and postcommit recovery scenarios. No helper, invented intermediate source, or unlisted source is admitted.
 - Proxy Package Identity, initial Certbot/snap/Karing packages, and the explicitly planned package set after supported snap refresh. Each package has repository, name, version, architecture, size, and SHA-256. Official Certbot snap must be `5.4+` both before and after refresh. Packages cannot drift between scenarios. A declared change is not permission to change unrelated resources.
 - One Acceptance VPS ID plus SHA-256 of its `/etc/machine-id`, Ubuntu Server 24.04 `amd64`, Go `1.26.6`, public-verifier identity, independent outside-runner/Mac IDs, macOS version, and exact Karing macOS architecture.
@@ -119,6 +124,35 @@ subscription Plan before recovery; it must not issue a certificate. Source revie
 supports this injection path, but only actual observations can qualify the case.
 
 The final `karing-final` scenario must be last, within two uninterrupted hours, and end in Complete removal. It requires the real HTTPS Subscription Link, one remote profile/node, exact fields/name/settings, direct/proxied traffic, manual refresh, a genuinely due five-minute automatic refresh, old-session termination and new-connection refusal, unchanged-link replacement adoption, outside-target distinction, direct-refresh correction or separately confirmed fallback, outage preservation/recovery, full absence, and qualification-secret/process cleanup.
+
+For repair policy v3 only, replace the four Karing traffic/session checks and add
+the five observations exactly as ADR-0021 specifies. The operator journey is:
+
+1. Record the current Karing connection and settings privately. Import only the
+   SBXR test profile; never select it as the active connection. Prove one node and
+   exact fields/name. If a step needs a VPN restart or route/selector change,
+   stop before it; this approval does not permit disturbing the current connection.
+2. Press latency for that node and observe a new successful result, not an old
+   displayed number. Keep manual and genuinely due five-minute automatic refresh.
+3. Coordinate reviewed server Client Identity rotation. Before any refresh,
+   privately prove the node still has the old UUID, then run a fresh latency test:
+   it must fail. Independently prove the test URL is healthy and old credentials
+   are refused. An accidental automatic refresh invalidates this negative check.
+4. Refresh the exact same real HTTPS Subscription Link. Prove the new UUID and
+   unchanged other fields/name/settings, then require a fresh successful latency
+   result. Retain actual ordered times for all four latency/refresh events.
+5. During the HTTPS-only outage, preserve the cached node and require fresh node
+   latency success. Restore HTTPS and prove refresh from the same link succeeds.
+6. Complete removal; prove server absence and outside access refusal, including a
+   fresh failed SBXR-node test. Remove only test-owned data. Prove the Owner's
+   original connection/settings remained unchanged throughout.
+
+All server-side session termination, process/descendant, startup, credential
+refusal, and fallback obligations remain. They use the independent outside test
+client and server observations, not ordinary traffic over the Owner's Karing
+connection. The public record must contain ADR-0021's exact connectivity-coverage
+and checks-not-performed lines. No timeout is extended and no live pass is implied
+by accepting this policy or by passing automated evidence-validation tests.
 
 ### One Acceptance Record and failure handling
 

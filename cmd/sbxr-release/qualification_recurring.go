@@ -323,10 +323,17 @@ func validScenarioResult(scenario v3ScenarioEvidence, attempt v3QualificationAtt
 		return false
 	}
 	checks := requiredV3Checks(id)
-	if attempt.Support != nil && attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair && attempt.EvidencePolicy == softwarelifecycle.RepairLifecycleEvidencePolicy && id == "lifecycle-menu" {
+	latency := attempt.Support != nil && attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair && attempt.EvidencePolicy == softwarelifecycle.RepairKaringLatencyEvidencePolicy
+	if attempt.Support != nil && attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair && (attempt.EvidencePolicy == softwarelifecycle.RepairLifecycleEvidencePolicy || latency) && id == "lifecycle-menu" {
 		checks = slices.DeleteFunc(checks, func(check string) bool {
 			return slices.Contains(strings.Fields(softwarelifecycle.RepairAutomatedOnlyChecks), id+"/"+check)
 		})
+	}
+	if latency && id == "karing-final" {
+		checks = slices.DeleteFunc(checks, func(check string) bool {
+			return slices.Contains(strings.Fields(softwarelifecycle.RepairKaringChecksNotPerformed), id+"/"+check)
+		})
+		checks = append(checks, strings.Fields("current-connection-preserved fresh-initial-node-latency fresh-revoked-identity-latency-refused same-link-refresh-before-replacement-latency fresh-replacement-node-latency")...)
 	}
 	if scenario.Schema == "sbxr-v3-scenario-evidence-v3" && id == "enable-schema1" {
 		checks = append(checks, strings.Fields("candidate-supported-setup-origin no-protected-state-edit no-unsupported-migration")...)
@@ -337,6 +344,16 @@ func validScenarioResult(scenario v3ScenarioEvidence, attempt v3QualificationAtt
 	for index, check := range checks {
 		if scenario.Evidence[index].Record.Check != check {
 			return false
+		}
+	}
+	if latency && id == "karing-final" {
+		var previous time.Time
+		for _, evidence := range scenario.Evidence[len(scenario.Evidence)-4:] {
+			observed, ok := qualificationTime(evidence.Record.ObservedAt)
+			if !ok || observed.Before(previous) {
+				return false
+			}
+			previous = observed
 		}
 	}
 	return true
@@ -466,8 +483,11 @@ func buildRecurringAcceptanceRecord(manifest qualificationManifest, facts v3Recu
 		body.WriteString("Release support: " + string(support) + "\nStable baseline: " + string(baseline) + "\n")
 		if attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair {
 			body.WriteString("Evidence policy: " + attempt.EvidencePolicy + "\nAutomated-only scenarios (not live): " + strings.Join(attempt.AutomatedOnlyScenarios, " ") + "\nAutomated-only result: Passed in native amd64/arm64 workflow\n")
-			if attempt.EvidencePolicy == softwarelifecycle.RepairLifecycleEvidencePolicy {
+			if attempt.EvidencePolicy == softwarelifecycle.RepairLifecycleEvidencePolicy || attempt.EvidencePolicy == softwarelifecycle.RepairKaringLatencyEvidencePolicy {
 				body.WriteString("Automated-only checks (not live): " + softwarelifecycle.RepairAutomatedOnlyChecks + "\n")
+			}
+			if attempt.EvidencePolicy == softwarelifecycle.RepairKaringLatencyEvidencePolicy {
+				body.WriteString("Karing connectivity evidence: " + softwarelifecycle.RepairKaringConnectivityEvidence + "\nKaring checks not performed: " + softwarelifecycle.RepairKaringChecksNotPerformed + "\n")
 			}
 		}
 		if len(notApplicable) > 0 {

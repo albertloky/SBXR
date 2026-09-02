@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -64,7 +65,7 @@ func TestQualificationCommandBindsFirstSubscriptionAttempt(t *testing.T) {
 }
 
 func TestQualificationCommandBindsCleanInstallRepair(t *testing.T) {
-	for _, policy := range []string{softwarelifecycle.RepairEvidencePolicy, "repair-issuance-bounded-v2"} {
+	for _, policy := range []string{softwarelifecycle.RepairEvidencePolicy, "repair-issuance-bounded-v2", "repair-issuance-bounded-v3"} {
 		t.Run(policy, func(t *testing.T) { testFirstSubscriptionAttempt(t, "", policy) })
 	}
 }
@@ -221,11 +222,19 @@ remove-certbot remove-writer remove-admission-race remove-directory-lock secret-
 		switch s["scenario_id"] {
 		case "lifecycle-menu":
 			extra = strings.Fields("packaged-zero-argument-menu check-reachable update-reachable recover-reachable explicit-confirmation safe-no-update safe-no-recovery clean-install-target-refused no-replacement-on-refusal")
-			if policy == "repair-issuance-bounded-v2" {
+			if policy == "repair-issuance-bounded-v2" || policy == "repair-issuance-bounded-v3" {
 				extra = strings.Fields("packaged-zero-argument-menu check-reachable update-reachable recover-reachable safe-no-update safe-no-recovery no-replacement-on-refusal")
 			}
 		case "enable-schema1":
 			extra = strings.Fields("candidate-supported-setup-origin no-protected-state-edit no-unsupported-migration")
+		case "karing-final":
+			if policy == "repair-issuance-bounded-v3" {
+				s["evidence"] = slices.DeleteFunc(s["evidence"].([]any), func(raw any) bool {
+					check := raw.(map[string]any)["record"].(map[string]any)["check"].(string)
+					return slices.Contains(strings.Fields("direct-and-proxied-traffic old-established-session-terminated traffic-restored direct-refresh-correction-or-confirmed-fallback"), check)
+				})
+				extra = strings.Fields("current-connection-preserved fresh-initial-node-latency fresh-revoked-identity-latency-refused same-link-refresh-before-replacement-latency fresh-replacement-node-latency")
+			}
 		}
 		for _, check := range extra {
 			s["evidence"] = append(s["evidence"].([]any), map[string]any{"record": map[string]any{"check": check, "observed_at": s["completed_at"], "result": "observed"}, "sha256": ""})
@@ -233,8 +242,48 @@ remove-certbot remove-writer remove-admission-race remove-directory-lock secret-
 	}
 	rebindRecurringEvidence(t, evidence)
 	document := recurringResultFixture(t, boundary, manifest, evidence)
+	if policy == "repair-issuance-bounded-v3" {
+		var scenario v3ScenarioEvidence
+		scenarios := evidence["scenarios"].([]any)
+		if err := json.Unmarshal([]byte(qualificationDocument(t, scenarios[len(scenarios)-1])), &scenario); err != nil {
+			t.Fatal(err)
+		}
+		boundAttempt := v3QualificationAttempt{EvidencePolicy: policy, Support: facts.Candidate.Support}
+		if !validScenarioResult(scenario, boundAttempt) {
+			t.Fatal("latency scenario refused")
+		}
+		for _, oldPolicy := range []string{"", "repair-issuance-bounded-v1", "repair-issuance-bounded-v2"} {
+			changed := boundAttempt
+			changed.EvidencePolicy = oldPolicy
+			if validScenarioResult(scenario, changed) {
+				t.Fatal("latency evidence reinterpreted as historical full Karing proof")
+			}
+		}
+		for _, scope := range []string{softwarelifecycle.FirstSubscriptionCleanInstall, softwarelifecycle.RecurringSubscriptionUpgrade} {
+			changed := boundAttempt
+			changed.Support = &v3ReleaseSupport{Scope: scope}
+			if validScenarioResult(scenario, changed) {
+				t.Fatal("latency substitution accepted outside repair")
+			}
+		}
+		for _, check := range strings.Fields("direct-and-proxied-traffic old-established-session-terminated traffic-restored direct-refresh-correction-or-confirmed-fallback") {
+			changed := scenario
+			changed.Evidence = append(slices.Clone(scenario.Evidence), v3EvidenceReference{Record: v3Observation{Check: check}})
+			if validScenarioResult(changed, boundAttempt) {
+				t.Fatal("omitted Karing check claimed as performed")
+			}
+		}
+		for i := len(scenario.Evidence) - 3; i < len(scenario.Evidence); i++ {
+			changed := scenario
+			changed.Evidence = slices.Clone(scenario.Evidence)
+			changed.Evidence[i].Record.ObservedAt = scenario.StartedAt
+			if validScenarioResult(changed, boundAttempt) {
+				t.Fatal("out-of-order latency or subscription refresh accepted")
+			}
+		}
+	}
 	if repair {
-		if policy == "repair-issuance-bounded-v2" {
+		if policy == "repair-issuance-bounded-v2" || policy == "repair-issuance-bounded-v3" {
 			for _, check := range []string{"explicit-confirmation", "clean-install-target-refused"} {
 				t.Run("automated-check-cannot-claim-live/"+check, func(t *testing.T) {
 					v := jsonObject(t, []byte(document))
@@ -253,7 +302,7 @@ remove-certbot remove-writer remove-admission-race remove-directory-lock secret-
 		}
 		for _, raw := range evidence["scenarios"].([]any) {
 			scenario := raw.(map[string]any)
-			if scenario["scenario_id"] != "lifecycle-menu" {
+			if scenario["scenario_id"] != "lifecycle-menu" && !(policy == "repair-issuance-bounded-v3" && scenario["scenario_id"] == "karing-final") {
 				continue
 			}
 			for index, rawCheck := range scenario["evidence"].([]any) {
@@ -263,7 +312,7 @@ remove-certbot remove-writer remove-admission-race remove-directory-lock secret-
 					e := v["detailed_evidence"].(map[string]any)
 					for _, raw := range e["scenarios"].([]any) {
 						s := raw.(map[string]any)
-						if s["scenario_id"] == "lifecycle-menu" {
+						if s["scenario_id"] == scenario["scenario_id"] {
 							checks := s["evidence"].([]any)
 							s["evidence"] = append(checks[:index], checks[index+1:]...)
 						}
@@ -379,12 +428,20 @@ remove-certbot remove-writer remove-admission-race remove-directory-lock secret-
 		}
 	}
 	checkLine := "Automated-only checks (not live): lifecycle-menu/explicit-confirmation lifecycle-menu/clean-install-target-refused\n"
-	if policy == "repair-issuance-bounded-v2" {
+	if policy == "repair-issuance-bounded-v2" || policy == "repair-issuance-bounded-v3" {
 		if strings.Count(body, checkLine) != 1 {
 			t.Fatal("record lacks exact automated-only checks")
 		}
 	} else if strings.Contains(body, "Automated-only checks (not live): ") {
 		t.Fatal("historical contract acquired new exclusions")
+	}
+	latencyLine := "Karing connectivity evidence: Fresh per-node latency; current connection preserved; no Karing browsing or established-session claim\n"
+	if policy == "repair-issuance-bounded-v3" {
+		if strings.Count(body, latencyLine) != 1 || !strings.Contains(body, "Karing checks not performed: karing-final/direct-and-proxied-traffic karing-final/old-established-session-terminated karing-final/traffic-restored karing-final/direct-refresh-correction-or-confirmed-fallback\n") {
+			t.Fatal("record lacks exact latency coverage and exclusions")
+		}
+	} else if strings.Contains(body, "Karing connectivity evidence: ") || strings.Contains(body, "Karing checks not performed: ") {
+		t.Fatal("historical contract acquired latency coverage")
 	}
 	m := jsonObject(t, manifest)
 	target := m["releases"].([]any)[0].(map[string]any)

@@ -147,7 +147,7 @@ func validAttemptSupport(attempt v3QualificationAttempt) bool {
 		return false
 	}
 	if attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair {
-		if (attempt.EvidencePolicy != softwarelifecycle.RepairEvidencePolicy && attempt.EvidencePolicy != softwarelifecycle.RepairLifecycleEvidencePolicy) || !slices.Equal(attempt.AutomatedOnlyScenarios, strings.Fields(softwarelifecycle.RepairAutomatedOnlyScenarios)) {
+		if !slices.Contains([]string{softwarelifecycle.RepairEvidencePolicy, softwarelifecycle.RepairLifecycleEvidencePolicy, softwarelifecycle.RepairKaringLatencyEvidencePolicy}, attempt.EvidencePolicy) || !slices.Equal(attempt.AutomatedOnlyScenarios, strings.Fields(softwarelifecycle.RepairAutomatedOnlyScenarios)) {
 			return false
 		}
 	} else if attempt.EvidencePolicy != "" || attempt.AutomatedOnlyScenarios != nil {

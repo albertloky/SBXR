@@ -8,17 +8,20 @@ import (
 
 const (
 	// ADR-0017: one Owner-approved release, never a general evidence waiver.
-	OwnerExceptionCode             = "RELEASE-V3-SUBSCRIPTION-OWNER-EXCEPTION"
-	OwnerExceptionID               = "owner-approved-v3.1.0-sequence-83"
-	OwnerExceptionLive             = "Not performed; waived by Owner for this release"
-	OwnerExceptionSecrets          = "Automated scans passed; live capture coverage not proved"
-	FirstSubscriptionCleanInstall  = "first-subscription-clean-install"
-	SubscriptionCleanInstallRepair = "subscription-clean-install-repair"
-	RecurringSubscriptionUpgrade   = "recurring-subscription-upgrade"
-	RepairEvidencePolicy           = "repair-issuance-bounded-v1"
-	RepairLifecycleEvidencePolicy  = "repair-issuance-bounded-v2"
-	RepairAutomatedOnlyChecks      = "lifecycle-menu/explicit-confirmation lifecycle-menu/clean-install-target-refused"
-	RepairAutomatedOnlyScenarios   = "enable-precommit enable-postcommit enable-schema2-absent repair-precommit repair-postcommit activation-precommit activation-postcommit invalid-replacement recorder-start recorder-outcome recorder-stale recorder-retention recorder-death recorder-reboot remove-enable-precommit remove-enable-postcommit remove-link-precommit remove-link-postcommit remove-repair-precommit remove-repair-postcommit remove-activation-precommit remove-activation-postcommit remove-identity-precommit remove-identity-postcommit remove-death remove-reboot remove-shared-route remove-finalization remove-exact-restoration"
+	OwnerExceptionCode                = "RELEASE-V3-SUBSCRIPTION-OWNER-EXCEPTION"
+	OwnerExceptionID                  = "owner-approved-v3.1.0-sequence-83"
+	OwnerExceptionLive                = "Not performed; waived by Owner for this release"
+	OwnerExceptionSecrets             = "Automated scans passed; live capture coverage not proved"
+	FirstSubscriptionCleanInstall     = "first-subscription-clean-install"
+	SubscriptionCleanInstallRepair    = "subscription-clean-install-repair"
+	RecurringSubscriptionUpgrade      = "recurring-subscription-upgrade"
+	RepairEvidencePolicy              = "repair-issuance-bounded-v1"
+	RepairLifecycleEvidencePolicy     = "repair-issuance-bounded-v2"
+	RepairKaringLatencyEvidencePolicy = "repair-issuance-bounded-v3"
+	RepairKaringConnectivityEvidence  = "Fresh per-node latency; current connection preserved; no Karing browsing or established-session claim"
+	RepairKaringChecksNotPerformed    = "karing-final/direct-and-proxied-traffic karing-final/old-established-session-terminated karing-final/traffic-restored karing-final/direct-refresh-correction-or-confirmed-fallback"
+	RepairAutomatedOnlyChecks         = "lifecycle-menu/explicit-confirmation lifecycle-menu/clean-install-target-refused"
+	RepairAutomatedOnlyScenarios      = "enable-precommit enable-postcommit enable-schema2-absent repair-precommit repair-postcommit activation-precommit activation-postcommit invalid-replacement recorder-start recorder-outcome recorder-stale recorder-retention recorder-death recorder-reboot remove-enable-precommit remove-enable-postcommit remove-link-precommit remove-link-postcommit remove-repair-precommit remove-repair-postcommit remove-activation-precommit remove-activation-postcommit remove-identity-precommit remove-identity-postcommit remove-death remove-reboot remove-shared-route remove-finalization remove-exact-restoration"
 	// This contract includes schema-2 Update Record runtime completion and the
 	// fixed ownership, package, serving, renewal and startup representations.
 	SubscriptionUpdateContract = "sbxr-subscription-update-v1"

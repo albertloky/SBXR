@@ -2,6 +2,7 @@ package github
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
@@ -12,6 +13,18 @@ import (
 func qualifiedReleaseSupport(body string, release softwarelifecycle.LatestRelease) bool {
 	hasRecordLine := func(prefix string) bool {
 		return strings.HasPrefix(body, prefix) || strings.Contains(body, "\n"+prefix)
+	}
+	latency := release.Support != nil && release.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair
+	policy, policyOK := uniqueRecordValue(body, "Evidence policy: ")
+	latency = latency && policyOK && policy == softwarelifecycle.RepairKaringLatencyEvidencePolicy
+	if latency {
+		coverage, coverageOK := uniqueRecordValue(body, "Karing connectivity evidence: ")
+		excluded, excludedOK := uniqueRecordValue(body, "Karing checks not performed: ")
+		if !coverageOK || coverage != softwarelifecycle.RepairKaringConnectivityEvidence || !excludedOK || excluded != softwarelifecycle.RepairKaringChecksNotPerformed {
+			return false
+		}
+	} else if hasRecordLine("Karing connectivity evidence: ") || hasRecordLine("Karing checks not performed: ") {
+		return false
 	}
 	if release.Support == nil {
 		return !hasRecordLine("Evidence policy: ") && !hasRecordLine("Automated-only scenarios (not live): ") && !hasRecordLine("Automated-only result: ") && !hasRecordLine("Automated-only checks (not live): ")
@@ -25,14 +38,13 @@ func qualifiedReleaseSupport(body string, release softwarelifecycle.LatestReleas
 	if !ok {
 		return false
 	}
-	policy, policyOK := uniqueRecordValue(body, "Evidence policy: ")
 	automatedOnly, automatedOnlyOK := uniqueRecordValue(body, "Automated-only scenarios (not live): ")
 	automatedResult, automatedResultOK := uniqueRecordValue(body, "Automated-only result: ")
 	if release.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair {
-		if !policyOK || (policy != softwarelifecycle.RepairEvidencePolicy && policy != softwarelifecycle.RepairLifecycleEvidencePolicy) || !automatedOnlyOK || automatedOnly != softwarelifecycle.RepairAutomatedOnlyScenarios || !automatedResultOK || automatedResult != "Passed in native amd64/arm64 workflow" {
+		if !policyOK || !slices.Contains([]string{softwarelifecycle.RepairEvidencePolicy, softwarelifecycle.RepairLifecycleEvidencePolicy, softwarelifecycle.RepairKaringLatencyEvidencePolicy}, policy) || !automatedOnlyOK || automatedOnly != softwarelifecycle.RepairAutomatedOnlyScenarios || !automatedResultOK || automatedResult != "Passed in native amd64/arm64 workflow" {
 			return false
 		}
-		if policy == softwarelifecycle.RepairLifecycleEvidencePolicy {
+		if policy == softwarelifecycle.RepairLifecycleEvidencePolicy || latency {
 			checks, ok := uniqueRecordValue(body, "Automated-only checks (not live): ")
 			if !ok || checks != softwarelifecycle.RepairAutomatedOnlyChecks {
 				return false

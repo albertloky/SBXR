@@ -12,9 +12,14 @@ import (
 func TestSourceBindsCleanInstallSupportToQualifiedIndex(t *testing.T) {
 	for _, scope := range []string{softwarelifecycle.FirstSubscriptionCleanInstall, softwarelifecycle.SubscriptionCleanInstallRepair} {
 		for _, exception := range []bool{false, true} {
-			t.Run(scope+"/"+map[bool]string{false: "qualified", true: "owner-exception"}[exception], func(t *testing.T) { testCleanInstallSupport(t, scope, exception) })
+			t.Run(scope+"/"+map[bool]string{false: "qualified", true: "owner-exception"}[exception], func(t *testing.T) {
+				testCleanInstallSupport(t, scope, exception, softwarelifecycle.RepairEvidencePolicy)
+			})
 		}
 	}
+	t.Run("latency-policy", func(t *testing.T) {
+		testCleanInstallSupport(t, softwarelifecycle.SubscriptionCleanInstallRepair, false, "repair-issuance-bounded-v3")
+	})
 }
 
 func TestUniqueRecordValueRefusesEmptyFirstAndDuplicateRecords(t *testing.T) {
@@ -28,7 +33,7 @@ func TestUniqueRecordValueRefusesEmptyFirstAndDuplicateRecords(t *testing.T) {
 	}
 }
 
-func testCleanInstallSupport(t *testing.T, scope string, exception bool) {
+func testCleanInstallSupport(t *testing.T, scope string, exception bool, policy string) {
 	fixture := newLatestReleaseFixture(t)
 	sequence := uint64(17)
 	if exception {
@@ -61,7 +66,10 @@ func testCleanInstallSupport(t *testing.T, scope string, exception bool) {
 	encoded, _ := json.Marshal(support)
 	body += "Release support: " + string(encoded) + "\nDetailed evidence SHA-256: " + strings.Repeat("a", 64) + "\nProxy package: sing-box 1.13.19 amd64 fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf\nKaring package: karing 1.2.0 macos-arm64 " + strings.Repeat("b", 64) + "\nKaring macOS: Passed\nNatural timer firing and naturally due certificate renewal: Not observed\nUnsupported new or renamed renewal route: May execute before detection; historical outcomes unknown\n"
 	if scope == softwarelifecycle.SubscriptionCleanInstallRepair {
-		body += "Evidence policy: " + softwarelifecycle.RepairEvidencePolicy + "\nAutomated-only scenarios (not live): " + softwarelifecycle.RepairAutomatedOnlyScenarios + "\nAutomated-only result: Passed in native amd64/arm64 workflow\n"
+		body += "Evidence policy: " + policy + "\nAutomated-only scenarios (not live): " + softwarelifecycle.RepairAutomatedOnlyScenarios + "\nAutomated-only result: Passed in native amd64/arm64 workflow\n"
+		if policy == "repair-issuance-bounded-v3" {
+			body += "Automated-only checks (not live): " + softwarelifecycle.RepairAutomatedOnlyChecks + "\nKaring connectivity evidence: " + softwarelifecycle.RepairKaringConnectivityEvidence + "\nKaring checks not performed: " + softwarelifecycle.RepairKaringChecksNotPerformed + "\n"
+		}
 	}
 	if exception {
 		body = strings.NewReplacer("Tag: v2.0.0", "Tag: v3.1.0", "Sequence: 17", "Sequence: 83", "Status: Qualified", "Status: Qualified by Owner exception", "RELEASE-V3-SUBSCRIPTION-CLEAN-INSTALL-QUALIFICATION", softwarelifecycle.OwnerExceptionCode, "Integrated Verification: Passed on live Ubuntu Server 24.04 amd64 and Karing macOS", "Integrated Verification: "+softwarelifecycle.OwnerExceptionLive, "Codex Live Acceptance: Passed", "Codex Live Acceptance: "+softwarelifecycle.OwnerExceptionLive, "Owner Acceptance: Not required", "Owner Acceptance: One-release exception approved", "Secret-safe result: Passed", "Secret-safe result: "+softwarelifecycle.OwnerExceptionSecrets, "Karing macOS: Passed", "Karing macOS: "+softwarelifecycle.OwnerExceptionLive).Replace(body)
@@ -86,11 +94,17 @@ func testCleanInstallSupport(t *testing.T, scope string, exception bool) {
 	mutations := []string{strings.Replace(body, "Release support: ", "Unknown support: ", 1), strings.Replace(body, scope, softwarelifecycle.RecurringSubscriptionUpgrade, 1)}
 	if scope == softwarelifecycle.SubscriptionCleanInstallRepair {
 		mutations = append(mutations,
-			strings.Replace(body, "Evidence policy: "+softwarelifecycle.RepairEvidencePolicy, "Evidence policy: unknown", 1),
+			strings.Replace(body, "Evidence policy: "+policy, "Evidence policy: unknown", 1),
 			strings.Replace(body, "Automated-only scenarios (not live): "+softwarelifecycle.RepairAutomatedOnlyScenarios, "Automated-only scenarios (not live): ", 1),
 			strings.Replace(body, "Automated-only result: Passed in native amd64/arm64 workflow", "Automated-only result: Passed", 1),
 			body+"Scenario: enable-precommit "+strings.Repeat("a", 64)+" https://github.com/albertloky/SBXR/actions/runs/17#artifacts\n",
 		)
+		if policy == "repair-issuance-bounded-v3" {
+			mutations = append(mutations,
+				strings.Replace(body, "Karing connectivity evidence: "+softwarelifecycle.RepairKaringConnectivityEvidence+"\n", "", 1),
+				strings.Replace(body, "Karing checks not performed: "+softwarelifecycle.RepairKaringChecksNotPerformed+"\n", "", 1),
+			)
+		}
 	} else {
 		mutations = append(mutations, body+"Evidence policy: "+softwarelifecycle.RepairEvidencePolicy+"\nAutomated-only scenarios (not live): "+softwarelifecycle.RepairAutomatedOnlyScenarios+"\nAutomated-only result: Passed in native amd64/arm64 workflow\n")
 	}
@@ -144,5 +158,39 @@ func TestQualifiedReleaseSupportBindsRepairV2CheckDisclosure(t *testing.T) {
 	}
 	if qualifiedReleaseSupport(line, softwarelifecycle.LatestRelease{}) {
 		t.Fatal("check disclosure accepted without support")
+	}
+}
+
+func TestQualifiedReleaseSupportBindsRepairLatencyDisclosure(t *testing.T) {
+	support := softwarelifecycle.ReleaseSupport{Scope: softwarelifecycle.SubscriptionCleanInstallRepair, Sources: []softwarelifecycle.ReleaseIdentity{}, Contract: softwarelifecycle.SubscriptionUpdateContract}
+	encoded, _ := json.Marshal(support)
+	body := "Release support: " + string(encoded) + "\nStable result code: RELEASE-V3-SUBSCRIPTION-CLEAN-INSTALL-QUALIFICATION\nEvidence policy: repair-issuance-bounded-v3\nAutomated-only scenarios (not live): " + softwarelifecycle.RepairAutomatedOnlyScenarios + "\nAutomated-only result: Passed in native amd64/arm64 workflow\nAutomated-only checks (not live): " + softwarelifecycle.RepairAutomatedOnlyChecks + "\n"
+	coverage := "Karing connectivity evidence: Fresh per-node latency; current connection preserved; no Karing browsing or established-session claim\n"
+	excluded := "Karing checks not performed: karing-final/direct-and-proxied-traffic karing-final/old-established-session-terminated karing-final/traffic-restored karing-final/direct-refresh-correction-or-confirmed-fallback\n"
+	release := softwarelifecycle.LatestRelease{Support: &support}
+	if !qualifiedReleaseSupport(body+coverage+excluded, release) {
+		t.Fatal("exact latency disclosure refused")
+	}
+	for _, changed := range []string{
+		body, body + coverage, body + excluded,
+		body + coverage + excluded + coverage, body + coverage + excluded + excluded,
+		body + strings.Replace(coverage, "Fresh per-node latency", "Full traffic passed", 1) + excluded,
+		body + coverage + strings.Replace(excluded, "karing-final/old-established-session-terminated ", "", 1),
+		strings.Replace(body, "repair-issuance-bounded-v3", "repair-issuance-bounded-v2", 1) + coverage + excluded,
+		strings.Replace(body, "repair-issuance-bounded-v3", "repair-issuance-bounded-v1", 1) + coverage + excluded,
+	} {
+		if qualifiedReleaseSupport(changed, release) {
+			t.Fatal("altered or historical latency disclosure accepted")
+		}
+	}
+	for _, scope := range []string{softwarelifecycle.FirstSubscriptionCleanInstall, softwarelifecycle.RecurringSubscriptionUpgrade} {
+		support.Scope = scope
+		encoded, _ = json.Marshal(support)
+		if qualifiedReleaseSupport("Release support: "+string(encoded)+"\nStable result code: RELEASE-V3-SUBSCRIPTION-CLEAN-INSTALL-QUALIFICATION\n"+coverage+excluded, release) {
+			t.Fatal("latency disclosure accepted outside repair")
+		}
+	}
+	if qualifiedReleaseSupport(coverage+excluded, softwarelifecycle.LatestRelease{}) {
+		t.Fatal("latency disclosure accepted without support")
 	}
 }
