@@ -31,6 +31,15 @@ The temporary transport uses root-only `/root/sbxr-qualification-v3`, a dedicate
 
 After the signed handoff is available, the collector creates root-only `/root/sbxr-qualification-evidence/request.json`. Each request names the scenario, manifest digest, earliest start, and inclusive duration limit. Read the signed artifact and request, then:
 
+For Mac-driven qualification while Karing owns the default route, keep the SSH
+control connection independent of the proxy under test. On macOS, bind native
+`nc` to the observed physical interface (for example,
+`ssh -o ConnectTimeout=12 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o 'ProxyCommand=/usr/bin/nc -b en0 %h %p' RackNerd`). Verify the actual interface and
+host first. Do not add `nc -w`: macOS applies that timeout to an idle established
+connection, not only connection setup. Before signing, prove the same control
+session survives an idle interval and a subsequent command. This does not replace
+the GitHub Ubuntu outside-client probe or any per-scenario SSH continuity check.
+
 1. Perform fresh preflight on the bound VPS. Prove the initial installation/ownership, package, clock, outside-runner, exclusion, and supported effective renewal-route facts. Start/completion times describe actual work, including preflight, injection, recovery, and verification.
 2. Drive the supported packaged scenario. Observe its commitment boundary; a signal or phase label alone is not proof. Record the required observations through protected comparison channels. Keep complete links, Client Identities, credential digests, request data, artifacts/configurations, raw process output, and Infrastructure Secrets out of evidence.
 3. Prepare canonical `sbxr-v3-scenario-evidence-v3`: attempt/scenario IDs, candidate assets/identity, exact source where applicable, same VPS identity, independent `operation-<number>` and optional `link-<number>`, initial/final state, observed boundary, expected/actual result, recovery direction, package sets, actual start/preflight/completion/validation times, previous scenario digest, and evidence references. Each reference contains a typed observation, its actual time, and SHA-256 of that canonical observation. Arbitrary text and raw captures have no accepted field.
