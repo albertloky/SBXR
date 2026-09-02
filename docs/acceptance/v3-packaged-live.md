@@ -40,6 +40,17 @@ connection, not only connection setup. Before signing, prove the same control
 session survives an idle interval and a subsequent command. This does not replace
 the GitHub Ubuntu outside-client probe or any per-scenario SSH continuity check.
 
+On the disposable VPS, record the active/enabled state of `apt-daily.timer` and
+`apt-daily-upgrade.timer`, then temporarily stop those timers before qualification.
+Wait for any already-running package work to finish; do not kill it. Recheck both
+APT services and all package locks before installation. An empty lock check alone
+does not prevent a timer from starting package work during setup. Restore the
+timers' recorded active state after qualification; do not disable them or change
+their schedules. At the operator call site, handle a failed `run_action` before
+exiting the shell: retain only its successfully scanned `LAST_ACTION_OUTPUT` in
+the protected diagnostic channel. Do not lose the action result through an
+immediate `set -e` exit, or echo an unscanned capture.
+
 1. Perform fresh preflight on the bound VPS. Prove the initial installation/ownership, package, clock, outside-runner, exclusion, and supported effective renewal-route facts. Start/completion times describe actual work, including preflight, injection, recovery, and verification.
 2. Drive the supported packaged scenario. Observe its commitment boundary; a signal or phase label alone is not proof. Record the required observations through protected comparison channels. Keep complete links, Client Identities, credential digests, request data, artifacts/configurations, raw process output, and Infrastructure Secrets out of evidence.
 3. Prepare canonical `sbxr-v3-scenario-evidence-v3`: attempt/scenario IDs, candidate assets/identity, exact source where applicable, same VPS identity, independent `operation-<number>` and optional `link-<number>`, initial/final state, observed boundary, expected/actual result, recovery direction, package sets, actual start/preflight/completion/validation times, previous scenario digest, and evidence references. Each reference contains a typed observation, its actual time, and SHA-256 of that canonical observation. Arbitrary text and raw captures have no accepted field.

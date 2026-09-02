@@ -110,3 +110,45 @@ was cancelled before draft construction/signing. No `v3.1.3` release, signed
 attempt, live scenario, or production CA request was created by that run.
 Release Sequence `86` was not burned; it may be constructed from the corrected
 commit after fresh native verification.
+
+## Signed sequence 86: setup failure with concurrent unattended upgrades
+
+[Candidate run 33597082963](https://github.com/albertloky/SBXR/actions/runs/33597082963)
+used `v3.1.3`, Release Sequence `86`, commit
+`26ace973e5fb1d8b2ec83f6eb751a50fd080b845`, and Release Index SHA-256
+`175b91c5610edbe9b0166fe0b3577db977806bb70dba9dc4cfd39fd9ee30879f`.
+Both candidate-native builds and [Verify run 33597074011](https://github.com/albertloky/SBXR/actions/runs/33597074011)
+passed. Manifest `eebd8debbd5344f4f2e951f021d46811169f23e1ecfc7b6e73e385602f7943e4`
+was signed at `2026-09-02T06:15:40Z`; its attestation was verified before the
+second environment approval.
+
+The first request began at `2026-09-02T06:18:02Z`. Fresh preflight started at
+`06:18:52Z` and passed at `06:18:53Z`, including package locks/process absence.
+Clean installation, `Not set up`, and installed-executable/archive comparison
+passed at `06:19:15Z`. Reviewed Start setup then returned failure. The shell
+exited before retaining its scanned action output, so its exact failed operation
+is unknown. Read-only inspection at `06:20:35Z` found `Not set up`, no Ownership
+Record, and inactive `sing-box`. The original direct SSH session remained alive.
+
+Independent system records prove that `apt-daily-upgrade.service` started at
+`06:19:35Z`, after the clear preflight. Unattended upgrades began at `06:19:44Z`,
+performed package work from `06:20:08Z`, and finished at `06:20:37Z`. This is a
+confirmed concurrent package operation, consistent with setup's safety cleanup,
+but not proof of its exact failure cause without the lost action output.
+
+Canonical failure facts were accepted with `boundary: unknown` and
+`host_state: Not set up`. No outside probe or baseline pass was submitted.
+Supported Complete removal passed at `06:21:41Z`; fresh product absence was
+checked at `06:22:01Z`. Separate cleanup facts were accepted as completed / Not
+installed, with the outcome still failed. No production CA request or Karing
+profile change occurred. This signed attempt requires a burn and a complete
+rerun under a fresh Release Identity, unlike the earlier unsigned cancellation.
+The workflow finished failed with successful failure finalization;
+`refs/tags/release-burned/v3.1.3` was verified. Product/transport absence and removal
+of the exact attempt-owned temporary files were proved at `06:23:52Z`.
+
+At `06:22:40Z`, both previously active/enabled APT timers were temporarily stopped
+after their services and package locks were idle. Their enabled state and
+schedules were preserved. Restore both timers after qualification. The procedure
+now requires that bounded exclusion and retention of scanned failure output at
+the operator call site. No product behavior changed.
