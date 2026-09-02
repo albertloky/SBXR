@@ -61,7 +61,15 @@ run_action() {
   output="$(printf '%s\n' "$number" "$input" 0 | /usr/local/bin/sbxr)" || return 1
   scan_vps_capture <(printf '%s' "$output") || return 1
   LAST_ACTION_OUTPUT=$output
-  test "$(grep '^Code: ' <<<"$output" | tail -1)" = "$expected" || return 1
+  # Ignore the initial menu and the separate lifecycle status in later frames.
+  test "$(awk '
+    /^0\. Exit$/ {action=1; next}
+    !action {next}
+    /^SBXR V3$/ {lifecycle=0; next}
+    /^Software Lifecycle:/ {lifecycle=1; next}
+    /^Code: / && !lifecycle {code=$0}
+    END {print code}
+  ' <<<"$output")" = "$expected" || return 1
 }
 
 view_details() {

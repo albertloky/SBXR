@@ -1,4 +1,6 @@
-# Issuance-bounded repair: failed first live attempt
+# Issuance-bounded repair: failed live attempts
+
+## Sequence 84: Mac SSH idle timeout
 
 Attempt `run-33592907845-attempt-1` used `repair-issuance-bounded-v1`,
 candidate `v3.1.1`, Release Sequence `84`, commit
@@ -44,3 +46,51 @@ a 45-second command-idle interval without changing Mac routing or Karing setting
 The qualification procedure now requires this check before signing.
 A fresh Release Identity and the complete retained live matrix remain required.
 Natural timer firing and naturally due renewal remain excluded and Not observed.
+
+## Sequence 85: acceptance helper selected lifecycle status
+
+Fresh attempt `run-33594398326-attempt-1` used `v3.1.2`, Release Sequence `85`,
+commit `f6a527edab2203dbacb5bcf42a5bc9f1c5c72b6e`, and Release Index SHA-256
+`e0b6df7603d850948481ac936d1c911164db0c056a415552f49532217650008a`.
+Both candidate-native jobs and the separate Verify workflow passed. The signed
+manifest was created at `2026-09-02T05:36:44Z`.
+
+`baseline-clean` preflight passed at `2026-09-02T05:39:38Z`; clean installation
+and comparison of the installed executable against the signed archive passed at
+`2026-09-02T05:40:03Z`. Reviewed Start setup completed, but `run_action` returned
+failure. The original direct SSH session remained connected. Read-only inspection
+at `2026-09-02T05:40:32Z` found `Running` and
+`PROXY-INSTALLATION-SETUP-COMPLETE`.
+
+The existing helper selected the last `Code:` line from terminal output. The
+terminal now prints Software Lifecycle status after the Proxy Installation
+result in each menu frame, so that line was `SOFTWARE-LIFECYCLE-STATUS-READY`.
+The helper therefore rejected successful setup before the additional state check
+could run. No baseline result was submitted and no outside-client probe ran.
+
+The exact shared helper regression failed before the fix and passed afterward.
+The parser now skips the initial menu and later Software Lifecycle sections;
+it still rejects a real refusal, an absent action result, and failed removal.
+Complete removal's result without another menu remains accepted. The earlier
+source-text test that required the broken last-line expression was replaced by
+these executable checks. Cleanup test output now includes the initial menu, as
+the real terminal does. No packaged product behavior changed.
+
+With `GOTOOLCHAIN=go1.26.6`, every package passed normal and race checks. The two
+full commands had compiled the obsolete source-text assertion before its removal
+and therefore exited failed for that root-package assertion; the final root
+package was rerun separately in both modes and passed. All other package results
+in those full runs passed. Focused regression/cleanup tests, `go vet ./...`,
+`go mod verify`, Bash syntax, and diff checks passed. Independent code-quality
+review found no blockers. Fresh candidate-native verification remains mandatory.
+
+Canonical failure facts were accepted and the workflow finalized `v3.1.2` as a
+failed prerelease with its burn record. Supported Complete removal succeeded;
+product and transport absence were rechecked at `2026-09-02T05:44:00Z`.
+Separate canonical safety-cleanup facts remained `outcome: failed` with
+`completed` / `Not installed`. Exact attempt-owned temporary files were removed.
+No production CA order or Karing profile change occurred. A fresh identity and
+the complete retained live matrix are still required.
+
+Evidence: [candidate run 33594398326](https://github.com/albertloky/SBXR/actions/runs/33594398326)
+and [Verify run 33594389070](https://github.com/albertloky/SBXR/actions/runs/33594389070).

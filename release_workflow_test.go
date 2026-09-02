@@ -720,12 +720,6 @@ func TestCandidateRoutesOneV3CandidateThroughPackagedLiveQualification(t *testin
 	if drift < 0 || refusal < 0 || restore < 0 || !(drift < refusal && refusal < restore) {
 		t.Fatal("V3 qualification does not apply mode 0600 drift before removal refusal and restore canonical mode 0640 after it")
 	}
-	if strings.Contains(v3Path, "test \"$(grep -Fxc \"$expected\" <<<\"$output\")\" -eq 1\n  test \"$(grep '^Code: ' <<<\"$output\" | tail -1)\" = \"$expected\"") {
-		t.Fatal("V3 qualification rejects retained result codes when the numbered menu rerenders")
-	}
-	if !strings.Contains(v3Path, `grep '^Code: ' <<<"$output" | tail -1`) {
-		t.Fatal("V3 qualification does not require the final emitted Code to match the expected result")
-	}
 	interruptLaunch := strings.Index(v3Path, `/usr/local/bin/sbxr <"$fifo"`)
 	if interruptLaunch < 0 || !strings.Contains(v3Path[:interruptLaunch], `action="$(menu_number "$label")"`) || !strings.Contains(v3Path[:interruptLaunch], `test -n "$action"`) {
 		t.Fatal("V3 qualification resolves and validates an interruption action after launching its target process")
@@ -815,6 +809,44 @@ func TestV3QualificationAcceptsTheCanonicalClientConfiguration(t *testing.T) {
 	command.Stdin = bytes.NewReader(client)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("live Client Configuration predicate rejected the production encoder: %v\n%s", err, output)
+	}
+}
+
+func TestPackagedActionReadsItsResultNotLifecycleStatus(t *testing.T) {
+	source, err := os.ReadFile(".github/scripts/v3-packaged-live.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := strings.Index(string(source), "run_action() {")
+	if start < 0 {
+		t.Fatal("run_action function not found")
+	}
+	end := strings.Index(string(source)[start:], "\n}\n\nview_details() {")
+	if end < 0 {
+		t.Fatal("run_action function not found")
+	}
+	function := string(source)[start : start+end+2]
+	const setup = "Code: PROXY-INSTALLATION-SETUP-COMPLETE"
+	const removed = "Code: SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED"
+	const initial = "SBXR V3\n" + setup + "\nSoftware Lifecycle: Ready\nCode: SOFTWARE-LIFECYCLE-STATUS-READY\n0. Exit\n"
+	for _, test := range []struct {
+		name, after, expected string
+		want                  bool
+	}{
+		{"setup with lifecycle status", "SBXR V3\n" + setup + "\nSoftware Lifecycle: Ready\nCode: SOFTWARE-LIFECYCLE-STATUS-READY\n0. Exit\n", setup, true},
+		{"real refusal after prior success", "SBXR V3\nCode: PROXY-INSTALLATION-ACTION-REFUSED\nSoftware Lifecycle: Ready\nCode: SOFTWARE-LIFECYCLE-STATUS-READY\n0. Exit\n", setup, false},
+		{"missing action result", "", setup, false},
+		{"complete removal without another menu", removed + "\n", removed, true},
+		{"refused removal", "Code: PROXY-INSTALLATION-ACTION-REFUSED\n", removed, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			command := exec.Command("bash", "-c", "set -euo pipefail\nmenu_number() { printf '1\\n'; }\nscan_vps_capture() { return 0; }\nfunction /usr/local/bin/sbxr { printf '%s' \"$ACTION_OUTPUT\"; }\n"+function+"\nrun_action 'Start setup' y \"$EXPECTED\"\n")
+			command.Env = append(os.Environ(), "ACTION_OUTPUT="+initial+test.after, "EXPECTED="+test.expected)
+			output, err := command.CombinedOutput()
+			if (err == nil) != test.want {
+				t.Fatalf("action success = %v, want %v; output: %s", err == nil, test.want, output)
+			}
+		})
 	}
 }
 
@@ -1054,6 +1086,8 @@ input="$(cat)"
 choice="$(printf '%s\n' "$input" | sed -n '1p')"
 if test "$state" = inspection-failure; then exit 23; fi
 if test "$state" = secret-inspection; then printf '%s\n' "$KNOWN_CLIENT_UUID"; exit 23; fi
+# The real terminal prints its initial menu before every submitted action.
+if test "$choice" != 0; then printf 'SBXR V3\n0. Exit\n'; fi
 case "$state:$choice" in
   cleanup:0) printf 'Proxy status: Setup incomplete\n1. Finish cleanup\n0. Exit\n' ;;
   setup:0) printf 'Proxy status: Setup incomplete\n1. Finish setup\n0. Exit\n' ;;
