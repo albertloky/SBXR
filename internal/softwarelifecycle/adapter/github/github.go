@@ -280,11 +280,11 @@ func (source Source) qualificationLatest(release githubRelease, metadata map[str
 		return "", 0, false
 	}
 	legacy := manifest.Schema == "sbxr-qualification-manifest-v1" && len(manifest.Releases) == 2 && len(manifest.V3Attempt) == 0
-	clean := manifest.Schema == "sbxr-qualification-manifest-v3" && manifest.Mode == "v3" && manifest.SourceState == "v3-subscription-clean" && len(manifest.Releases) == 1 && len(manifest.V3Attempt) > 0 && manifest.Releases[0].Commit == manifest.Workflow.Commit
+	scoped := manifest.Schema == "sbxr-qualification-manifest-v3" && manifest.Mode == "v3" && (manifest.SourceState == "v3-subscription-clean" || manifest.SourceState == "v3-recurring") && len(manifest.Releases) == 1 && len(manifest.V3Attempt) > 0 && manifest.Releases[0].Commit == manifest.Workflow.Commit
 	var environments []struct {
 		Name string `json:"name"`
 	}
-	if !legacy && !clean || manifest.Approval.State != "approved" || json.Unmarshal(manifest.Approval.Environments, &environments) != nil || len(environments) != 1 || environments[0].Name != "acceptance-vps" {
+	if !legacy && !scoped || manifest.Approval.State != "approved" || json.Unmarshal(manifest.Approval.Environments, &environments) != nil || len(environments) != 1 || environments[0].Name != "acceptance-vps" {
 		return "", 0, false
 	}
 	digest := sha256.Sum256(proof.Manifest)
@@ -314,7 +314,7 @@ func (source Source) qualificationLatest(release githubRelease, metadata map[str
 }
 
 // A signed attempt authorizes candidate delivery, not a stable Acceptance Record.
-// Version 3 currently qualifies the first subscription release by clean install.
+// Version 3 binds either first clean installation or exact recurring sources.
 func qualificationSupport(release githubRelease, index []byte, latest softwarelifecycle.LatestRelease) bool {
 	if release.Qualification == nil {
 		return qualifiedReleaseSupport(release.Body, latest)
@@ -326,16 +326,35 @@ func qualificationSupport(release githubRelease, index []byte, latest softwareli
 	if manifest.Schema == "sbxr-qualification-manifest-v1" {
 		return latest.Support == nil
 	}
-	var attempt struct {
-		Schema         string                            `json:"schema"`
-		CandidateIndex string                            `json:"candidate_index"`
-		Support        *softwarelifecycle.ReleaseSupport `json:"support"`
-		Sources        []json.RawMessage                 `json:"sources"`
+	// Qualification uses lowercase wire names, unlike the package's ReleaseIdentity.
+	type identity struct {
+		Repository  string `json:"repository"`
+		Tag         string `json:"tag"`
+		Commit      string `json:"commit"`
+		IndexSHA256 string `json:"release_index_sha256"`
 	}
-	if json.Unmarshal(manifest.V3Attempt, &attempt) != nil || attempt.Schema != "sbxr-v3-qualification-attempt-v3" || attempt.CandidateIndex != string(index) || attempt.Sources == nil || len(attempt.Sources) != 0 || attempt.Support == nil || latest.Support == nil {
+	var attempt struct {
+		Schema         string `json:"schema"`
+		CandidateIndex string `json:"candidate_index"`
+		Support        *struct {
+			Scope    string     `json:"scope"`
+			Contract string     `json:"contract"`
+			Sources  []identity `json:"sources"`
+		} `json:"support"`
+		Sources []struct {
+			Identity identity `json:"release_identity"`
+		} `json:"sources"`
+	}
+	if json.Unmarshal(manifest.V3Attempt, &attempt) != nil || attempt.Schema != "sbxr-v3-qualification-attempt-v3" || attempt.CandidateIndex != string(index) || attempt.Sources == nil || attempt.Support == nil || latest.Support == nil || attempt.Support.Sources == nil || attempt.Support.Scope != latest.Support.Scope || attempt.Support.Contract != latest.Support.Contract || len(attempt.Support.Sources) != len(latest.Support.Sources) || len(attempt.Sources) != len(latest.Support.Sources) {
 		return false
 	}
-	return attempt.Support.Scope == softwarelifecycle.FirstSubscriptionCleanInstall && attempt.Support.Contract == softwarelifecycle.SubscriptionUpdateContract && attempt.Support.Sources != nil && len(attempt.Support.Sources) == 0 && latest.Support.Scope == attempt.Support.Scope && latest.Support.Contract == attempt.Support.Contract && len(latest.Support.Sources) == 0
+	for i, source := range latest.Support.Sources {
+		want := identity{Repository: source.Repository, Tag: source.Tag, Commit: source.Commit, IndexSHA256: source.IndexSHA256}
+		if attempt.Support.Sources[i] != want || attempt.Sources[i].Identity != want {
+			return false
+		}
+	}
+	return manifest.SourceState == "v3-subscription-clean" && latest.Support.Scope == softwarelifecycle.FirstSubscriptionCleanInstall || manifest.SourceState == "v3-recurring" && latest.Support.Scope == softwarelifecycle.RecurringSubscriptionUpgrade
 }
 
 func validQualificationDecisionChain(chain []qualificationDecisionChainEntry) bool {

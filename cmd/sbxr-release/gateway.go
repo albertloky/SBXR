@@ -96,7 +96,7 @@ func newQualificationGateway(manifest, bundle json.RawMessage, assetRoot string)
 		var scoped qualificationManifest
 		decoder := json.NewDecoder(bytes.NewReader(manifest))
 		decoder.DisallowUnknownFields()
-		if document.Schema != "sbxr-qualification-manifest-v3" || decoder.Decode(&scoped) != nil || decoder.Decode(&struct{}{}) != io.EOF || scoped.SourceState != "v3-subscription-clean" || !validStableFailureManifest(scoped) {
+		if document.Schema != "sbxr-qualification-manifest-v3" || decoder.Decode(&scoped) != nil || decoder.Decode(&struct{}{}) != io.EOF || !validStableFailureManifest(scoped) {
 			return nil, errors.New("qualification manifest refused")
 		}
 	}

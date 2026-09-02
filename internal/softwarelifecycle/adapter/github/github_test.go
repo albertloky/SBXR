@@ -101,73 +101,130 @@ func TestSourceChecksTheCandidateFailureStateBoundQualification(t *testing.T) {
 	if outcome != softwarelifecycle.LatestReleaseAccepted || got.Sequence != 17 {
 		t.Fatalf("CheckLatest() = %#v, %v", got, outcome)
 	}
-	t.Run("signed first subscription candidate", func(t *testing.T) {
-		support := softwarelifecycle.ReleaseSupport{Scope: softwarelifecycle.FirstSubscriptionCleanInstall, Sources: []softwarelifecycle.ReleaseIdentity{}, Contract: softwarelifecycle.SubscriptionUpdateContract}
-		var proofs []softwarelifecycle.LatestAssetProof
-		for _, name := range softwarelifecycle.LatestReleaseIndexedAssetNames() {
-			proofs = append(proofs, softwarelifecycle.LatestAssetProof{Name: name, Size: int64(len(fixture.assets[name])), SHA256: fixture.digests[name]})
-		}
-		index, err := softwarelifecycle.BuildSubscriptionReleaseIndex(fixture.release.Tag, fixtureCommit, 17, proofs, support)
-		if err != nil {
-			t.Fatal(err)
-		}
-		indexDigest := sha256.Sum256(index)
-		fixture.assets["release-index.json"] = index
-		fixture.digests["release-index.json"] = hex.EncodeToString(indexDigest[:])
-		for i, asset := range fixture.release.Assets {
-			if asset.Name == "release-index.json" {
-				fixture.release.Assets[i].Size = int64(len(index))
-				fixture.release.Assets[i].Digest = "sha256:" + fixture.digests[asset.Name]
+	for _, scope := range []string{softwarelifecycle.FirstSubscriptionCleanInstall, softwarelifecycle.RecurringSubscriptionUpgrade} {
+		t.Run("signed "+scope, func(t *testing.T) {
+			support := softwarelifecycle.ReleaseSupport{Scope: softwarelifecycle.FirstSubscriptionCleanInstall, Sources: []softwarelifecycle.ReleaseIdentity{}, Contract: softwarelifecycle.SubscriptionUpdateContract}
+			wireSources := []any{}
+			attemptSources := []any{}
+			sourceState := "v3-subscription-clean"
+			if scope == softwarelifecycle.RecurringSubscriptionUpgrade {
+				support.Scope, sourceState = scope, "v3-recurring"
+				for _, tag := range []string{"v3.0.1", "v3.0.2"} {
+					support.Sources = append(support.Sources, softwarelifecycle.ReleaseIdentity{Repository: softwarelifecycle.Repository, Tag: tag, Commit: fixtureCommit, IndexSHA256: strings.Repeat("a", 64)})
+					identity := map[string]any{"repository": softwarelifecycle.Repository, "tag": tag, "commit": fixtureCommit, "release_index_sha256": strings.Repeat("a", 64)}
+					wireSources = append(wireSources, identity)
+					attemptSources = append(attemptSources, map[string]any{"release_identity": identity})
+				}
 			}
-		}
-		var scoped map[string]any
-		if json.Unmarshal(manifest, &scoped) != nil {
-			t.Fatal("manifest fixture")
-		}
-		scoped["schema"], scoped["mode"], scoped["source_state"] = "sbxr-qualification-manifest-v3", "v3", "v3-subscription-clean"
-		candidate := scoped["releases"].([]any)[0].(map[string]any)
-		candidate["release_identity"].(map[string]any)["release_index_sha256"] = fixture.digests["release-index.json"]
-		for _, raw := range candidate["assets"].([]any) {
-			a := raw.(map[string]any)
-			if a["name"] == "release-index.json" {
-				a["sha256"], a["size"] = fixture.digests["release-index.json"], len(index)
+			var proofs []softwarelifecycle.LatestAssetProof
+			for _, name := range softwarelifecycle.LatestReleaseIndexedAssetNames() {
+				proofs = append(proofs, softwarelifecycle.LatestAssetProof{Name: name, Size: int64(len(fixture.assets[name])), SHA256: fixture.digests[name]})
 			}
-		}
-		scoped["releases"] = []any{candidate}
-		scoped["v3_attempt"] = map[string]any{"schema": "sbxr-v3-qualification-attempt-v3", "candidate_index": string(index), "support": support, "sources": []any{}}
-		fixture.release.Body = ""
-		bind := func(value map[string]any) {
-			encoded, err := json.Marshal(value)
+			index, err := softwarelifecycle.BuildSubscriptionReleaseIndex(fixture.release.Tag, fixtureCommit, 17, proofs, support)
 			if err != nil {
 				t.Fatal(err)
 			}
-			digest = sha256.Sum256(encoded)
-			fixture.release.Qualification.Manifest = encoded
-		}
-		bind(scoped)
-		source := NewWithEndpoint(fixture.server.Client(), fixture.server.URL, verifier)
-		got, outcome := source.CheckLatest(t.Context())
-		if outcome != softwarelifecycle.LatestReleaseAccepted || got.Support == nil || got.Support.Scope != support.Scope || len(got.Support.Sources) != 0 {
-			t.Fatalf("signed clean-install candidate = %#v, %v", got, outcome)
-		}
-		for _, mutate := range []func(map[string]any){
-			func(v map[string]any) { v["source_state"] = "v3-recurring" },
-			func(v map[string]any) { v["v3_attempt"].(map[string]any)["candidate_index"] = string(index) + "\n" },
-			func(v map[string]any) {
-				v["v3_attempt"].(map[string]any)["schema"] = "sbxr-v3-qualification-attempt-v2"
-			},
-			func(v map[string]any) { v["approval"].(map[string]any)["state"] = "pending" },
-		} {
-			encoded, _ := json.Marshal(scoped)
-			var changed map[string]any
-			_ = json.Unmarshal(encoded, &changed)
-			mutate(changed)
-			bind(changed)
-			if _, outcome := source.CheckLatest(t.Context()); outcome != softwarelifecycle.LatestReleaseRefused {
-				t.Fatal("unbound scoped candidate admitted")
+			indexDigest := sha256.Sum256(index)
+			fixture.assets["release-index.json"] = index
+			fixture.digests["release-index.json"] = hex.EncodeToString(indexDigest[:])
+			for i, asset := range fixture.release.Assets {
+				if asset.Name == "release-index.json" {
+					fixture.release.Assets[i].Size = int64(len(index))
+					fixture.release.Assets[i].Digest = "sha256:" + fixture.digests[asset.Name]
+				}
 			}
-		}
-	})
+			var scoped map[string]any
+			if json.Unmarshal(manifest, &scoped) != nil {
+				t.Fatal("manifest fixture")
+			}
+			scoped["schema"], scoped["mode"], scoped["source_state"] = "sbxr-qualification-manifest-v3", "v3", sourceState
+			candidate := scoped["releases"].([]any)[0].(map[string]any)
+			candidate["release_identity"].(map[string]any)["release_index_sha256"] = fixture.digests["release-index.json"]
+			for _, raw := range candidate["assets"].([]any) {
+				a := raw.(map[string]any)
+				if a["name"] == "release-index.json" {
+					a["sha256"], a["size"] = fixture.digests["release-index.json"], len(index)
+				}
+			}
+			scoped["releases"] = []any{candidate}
+			scoped["v3_attempt"] = map[string]any{"schema": "sbxr-v3-qualification-attempt-v3", "candidate_index": string(index), "support": map[string]any{"scope": scope, "contract": support.Contract, "sources": wireSources}, "sources": attemptSources}
+			fixture.release.Body = ""
+			bind := func(value map[string]any) {
+				encoded, err := json.Marshal(value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				digest = sha256.Sum256(encoded)
+				fixture.release.Qualification.Manifest = encoded
+			}
+			bind(scoped)
+			source := NewWithEndpoint(fixture.server.Client(), fixture.server.URL, verifier)
+			got, outcome := source.CheckLatest(t.Context())
+			if outcome != softwarelifecycle.LatestReleaseAccepted || got.Support == nil || got.Support.Scope != support.Scope || len(got.Support.Sources) != len(support.Sources) {
+				t.Fatalf("signed subscription candidate = %#v, %v", got, outcome)
+			}
+			for _, mutate := range []func(map[string]any){
+				func(v map[string]any) { v["source_state"] = "unknown" },
+				func(v map[string]any) {
+					if sourceState == "v3-recurring" {
+						v["source_state"] = "v3-subscription-clean"
+					} else {
+						v["source_state"] = "v3-recurring"
+					}
+				},
+				func(v map[string]any) { v["workflow"].(map[string]any)["commit"] = strings.Repeat("b", 40) },
+				func(v map[string]any) { v["v3_attempt"].(map[string]any)["sources"] = nil },
+				func(v map[string]any) { v["v3_attempt"].(map[string]any)["support"].(map[string]any)["sources"] = nil },
+				func(v map[string]any) { v["v3_attempt"].(map[string]any)["candidate_index"] = string(index) + "\n" },
+				func(v map[string]any) {
+					v["v3_attempt"].(map[string]any)["schema"] = "sbxr-v3-qualification-attempt-v2"
+				},
+				func(v map[string]any) { v["approval"].(map[string]any)["state"] = "pending" },
+			} {
+				encoded, _ := json.Marshal(scoped)
+				var changed map[string]any
+				_ = json.Unmarshal(encoded, &changed)
+				mutate(changed)
+				bind(changed)
+				if _, outcome := source.CheckLatest(t.Context()); outcome != softwarelifecycle.LatestReleaseRefused {
+					t.Fatal("unbound scoped candidate admitted")
+				}
+			}
+			if scope == softwarelifecycle.RecurringSubscriptionUpgrade {
+				for _, field := range []string{"sources", "support"} {
+					for _, change := range []string{"missing", "extra", "reordered", "mismatched"} {
+						encoded, _ := json.Marshal(scoped)
+						var changed map[string]any
+						_ = json.Unmarshal(encoded, &changed)
+						target := changed["v3_attempt"].(map[string]any)
+						if field == "support" {
+							target = target["support"].(map[string]any)
+						}
+						list := target["sources"].([]any)
+						switch change {
+						case "missing":
+							list = list[:1]
+						case "extra":
+							list = append(list, list[0])
+						case "reordered":
+							list[0], list[1] = list[1], list[0]
+						case "mismatched":
+							identity := list[0].(map[string]any)
+							if field == "sources" {
+								identity = identity["release_identity"].(map[string]any)
+							}
+							identity["release_index_sha256"] = strings.Repeat("b", 64)
+						}
+						target["sources"] = list
+						bind(changed)
+						if _, outcome := source.CheckLatest(t.Context()); outcome != softwarelifecycle.LatestReleaseRefused {
+							t.Fatalf("accepted %s %s", field, change)
+						}
+					}
+				}
+			}
+		})
+	}
 }
 
 func TestSourceRefusesChangedLatestReleaseFacts(t *testing.T) {

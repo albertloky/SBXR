@@ -122,6 +122,12 @@ func TestQualificationGatewayServesOneV3Candidate(t *testing.T) {
 }
 
 func TestQualificationGatewayServesBoundSubscriptionCandidate(t *testing.T) {
+	for _, scope := range []string{softwarelifecycle.FirstSubscriptionCleanInstall, softwarelifecycle.RecurringSubscriptionUpgrade} {
+		t.Run(scope, func(t *testing.T) { testQualificationGatewaySubscriptionCandidate(t, scope) })
+	}
+}
+
+func testQualificationGatewaySubscriptionCandidate(t *testing.T, scope string) {
 	root := t.TempDir()
 	tag, commit := "v3.1.0", strings.Repeat("a", 40)
 	directory := filepath.Join(root, tag)
@@ -141,6 +147,14 @@ func TestQualificationGatewayServesBoundSubscriptionCandidate(t *testing.T) {
 		proofs = append(proofs, softwarelifecycle.LatestAssetProof{Name: name, Size: asset.Size, SHA256: asset.SHA256})
 	}
 	support := v3ReleaseSupport{Scope: softwarelifecycle.FirstSubscriptionCleanInstall, Contract: softwarelifecycle.SubscriptionUpdateContract, Sources: []decisionReleaseIdentity{}}
+	var sources = []v3QualificationSource{}
+	sourceState := "v3-subscription-clean"
+	if scope == softwarelifecycle.RecurringSubscriptionUpgrade {
+		support.Scope, sourceState = scope, "v3-recurring"
+		source := decisionReleaseIdentity{Repository: softwarelifecycle.Repository, Tag: "v3.0.1", Commit: strings.Repeat("b", 40), ReleaseIndexSHA256: strings.Repeat("c", 64)}
+		support.Sources = append(support.Sources, source)
+		sources = append(sources, v3QualificationSource{ReleaseIdentity: source})
+	}
 	index, err := softwarelifecycle.BuildSubscriptionReleaseIndex(tag, commit, 18, proofs, support.lifecycle())
 	if err != nil {
 		t.Fatal(err)
@@ -152,7 +166,7 @@ func TestQualificationGatewayServesBoundSubscriptionCandidate(t *testing.T) {
 	assets = append(assets, decisionAsset{Name: "release-index.json", Size: int64(len(index)), SHA256: hex.EncodeToString(digest[:])})
 	slices.SortFunc(assets, func(a, b decisionAsset) int { return strings.Compare(a.Name, b.Name) })
 	release := qualificationRelease{Tag: tag, Commit: commit, Sequence: 18, ReleaseID: 123, Assets: assets, ReleaseIdentity: decisionReleaseIdentity{Repository: softwarelifecycle.Repository, Tag: tag, Commit: commit, ReleaseIndexSHA256: hex.EncodeToString(digest[:])}}
-	attempt := &v3QualificationAttempt{Schema: "sbxr-v3-qualification-attempt-v3", CandidateIndex: string(index), Support: &support, Sources: []v3QualificationSource{}, Baseline: &qualificationRelease{}}
+	attempt := &v3QualificationAttempt{Schema: "sbxr-v3-qualification-attempt-v3", CandidateIndex: string(index), Support: &support, Sources: sources, Baseline: &qualificationRelease{}}
 	attempt.RequiredScenarios = attemptScenarios(*attempt)
 	manifest := qualificationManifest{Schema: "sbxr-qualification-manifest-v3", Repository: softwarelifecycle.Repository, Mode: "v3", SourceState: "v3-subscription-clean", Releases: []qualificationRelease{release}, V3Attempt: attempt, AcceptanceVPSChecklistSHA256: strings.Repeat("a", 64), CandidateFailureStateSHA256: strings.Repeat("b", 64), Approval: qualificationApproval{State: "approved", Environments: []approvalEnvironment{{Name: "acceptance-vps"}}}, Workflow: qualificationWorkflow{Commit: commit, Path: ".github/workflows/candidate.yml", Ref: softwarelifecycle.Repository + "/.github/workflows/candidate.yml@refs/heads/main", RunID: "123", RunURL: "https://github.com/albertloky/SBXR/actions/runs/123"}}
 	for i, stage := range []string{candidatePreflightStage, candidateDraftConstructionStage, candidateDraftVerificationStage} {
@@ -162,6 +176,7 @@ func TestQualificationGatewayServesBoundSubscriptionCandidate(t *testing.T) {
 		}
 		manifest.Approval.DecisionChain = append(manifest.Approval.DecisionChain, decisionChainEntry{Stage: stage, Outcome: outcome, FactsSHA256: strings.Repeat("c", 64), DecisionSHA256: strings.Repeat("d", 64)})
 	}
+	manifest.SourceState = sourceState
 	encoded, _ := json.MarshalIndent(manifest, "", "  ")
 	bundle := json.RawMessage(`{"bundle":true}`)
 	gateway, err := newQualificationGateway(encoded, bundle, root)
@@ -185,7 +200,16 @@ func TestQualificationGatewayServesBoundSubscriptionCandidate(t *testing.T) {
 	for _, mutate := range []func(*qualificationManifest){
 		func(m *qualificationManifest) { m.Schema = "sbxr-qualification-manifest-v4" },
 		func(m *qualificationManifest) { m.Approval.State = "pending" },
-		func(m *qualificationManifest) { m.SourceState = "v3-recurring" },
+		func(m *qualificationManifest) { m.SourceState = "unknown" },
+		func(m *qualificationManifest) {
+			if m.SourceState == "v3-recurring" {
+				m.SourceState = "v3-subscription-clean"
+			} else {
+				m.SourceState = "v3-recurring"
+			}
+		},
+		func(m *qualificationManifest) { m.V3Attempt.Support.Sources = nil },
+		func(m *qualificationManifest) { m.V3Attempt.Sources = nil },
 		func(m *qualificationManifest) { m.V3Attempt.CandidateIndex += "\n" },
 	} {
 		var changed qualificationManifest
