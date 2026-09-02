@@ -16,6 +16,8 @@ const (
 	SubscriptionCleanInstallRepair = "subscription-clean-install-repair"
 	RecurringSubscriptionUpgrade   = "recurring-subscription-upgrade"
 	RepairEvidencePolicy           = "repair-issuance-bounded-v1"
+	RepairLifecycleEvidencePolicy  = "repair-issuance-bounded-v2"
+	RepairAutomatedOnlyChecks      = "lifecycle-menu/explicit-confirmation lifecycle-menu/clean-install-target-refused"
 	RepairAutomatedOnlyScenarios   = "enable-precommit enable-postcommit enable-schema2-absent repair-precommit repair-postcommit activation-precommit activation-postcommit invalid-replacement recorder-start recorder-outcome recorder-stale recorder-retention recorder-death recorder-reboot remove-enable-precommit remove-enable-postcommit remove-link-precommit remove-link-postcommit remove-repair-precommit remove-repair-postcommit remove-activation-precommit remove-activation-postcommit remove-identity-precommit remove-identity-postcommit remove-death remove-reboot remove-shared-route remove-finalization remove-exact-restoration"
 	// This contract includes schema-2 Update Record runtime completion and the
 	// fixed ownership, package, serving, renewal and startup representations.

@@ -59,12 +59,14 @@ func scopeHistoryFixture(t *testing.T, source observedRelease) map[string]any {
 
 func TestQualificationCommandBindsFirstSubscriptionAttempt(t *testing.T) {
 	for _, exception := range []string{"", softwarelifecycle.OwnerExceptionID} {
-		t.Run("exception="+exception, func(t *testing.T) { testFirstSubscriptionAttempt(t, exception, false) })
+		t.Run("exception="+exception, func(t *testing.T) { testFirstSubscriptionAttempt(t, exception, "") })
 	}
 }
 
 func TestQualificationCommandBindsCleanInstallRepair(t *testing.T) {
-	testFirstSubscriptionAttempt(t, "", true)
+	for _, policy := range []string{softwarelifecycle.RepairEvidencePolicy, "repair-issuance-bounded-v2"} {
+		t.Run(policy, func(t *testing.T) { testFirstSubscriptionAttempt(t, "", policy) })
+	}
 }
 
 func TestRepairScopeRequiresExactCompleteUnreusedBaseline(t *testing.T) {
@@ -135,7 +137,8 @@ func repairBaselineFixture(t *testing.T) observedRelease {
 	return source
 }
 
-func testFirstSubscriptionAttempt(t *testing.T, exception string, repair bool) {
+func testFirstSubscriptionAttempt(t *testing.T, exception string, policy string) {
+	repair := policy != ""
 	binary := filepath.Join(t.TempDir(), "sbxr-release")
 	if output, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, output)
@@ -162,7 +165,7 @@ func testFirstSubscriptionAttempt(t *testing.T, exception string, repair bool) {
 	attempt := recurringAttemptFixture(t, source)
 	attempt["schema"] = "sbxr-v3-qualification-attempt-v3"
 	if repair {
-		attempt["evidence_policy"] = softwarelifecycle.RepairEvidencePolicy
+		attempt["evidence_policy"] = policy
 		attempt["automated_only_scenarios"] = strings.Fields(softwarelifecycle.RepairAutomatedOnlyScenarios)
 	}
 	if exception != "" {
@@ -218,6 +221,9 @@ remove-certbot remove-writer remove-admission-race remove-directory-lock secret-
 		switch s["scenario_id"] {
 		case "lifecycle-menu":
 			extra = strings.Fields("packaged-zero-argument-menu check-reachable update-reachable recover-reachable explicit-confirmation safe-no-update safe-no-recovery clean-install-target-refused no-replacement-on-refusal")
+			if policy == "repair-issuance-bounded-v2" {
+				extra = strings.Fields("packaged-zero-argument-menu check-reachable update-reachable recover-reachable safe-no-update safe-no-recovery no-replacement-on-refusal")
+			}
 		case "enable-schema1":
 			extra = strings.Fields("candidate-supported-setup-origin no-protected-state-edit no-unsupported-migration")
 		}
@@ -227,6 +233,48 @@ remove-certbot remove-writer remove-admission-race remove-directory-lock secret-
 	}
 	rebindRecurringEvidence(t, evidence)
 	document := recurringResultFixture(t, boundary, manifest, evidence)
+	if repair {
+		if policy == "repair-issuance-bounded-v2" {
+			for _, check := range []string{"explicit-confirmation", "clean-install-target-refused"} {
+				t.Run("automated-check-cannot-claim-live/"+check, func(t *testing.T) {
+					v := jsonObject(t, []byte(document))
+					e := v["detailed_evidence"].(map[string]any)
+					for _, raw := range e["scenarios"].([]any) {
+						s := raw.(map[string]any)
+						if s["scenario_id"] == "lifecycle-menu" {
+							s["evidence"] = append(s["evidence"].([]any), map[string]any{"record": map[string]any{"check": check, "observed_at": s["completed_at"], "result": "observed"}, "sha256": ""})
+						}
+					}
+					rebindRecurringEvidence(t, e)
+					v["detailed_evidence_sha256"] = sha256String(qualificationDocument(t, e))
+					assertQualificationRefused(t, binary, qualificationDocument(t, v), check)
+				})
+			}
+		}
+		for _, raw := range evidence["scenarios"].([]any) {
+			scenario := raw.(map[string]any)
+			if scenario["scenario_id"] != "lifecycle-menu" {
+				continue
+			}
+			for index, rawCheck := range scenario["evidence"].([]any) {
+				check := rawCheck.(map[string]any)["record"].(map[string]any)["check"].(string)
+				t.Run("required-live-check/"+check, func(t *testing.T) {
+					v := jsonObject(t, []byte(document))
+					e := v["detailed_evidence"].(map[string]any)
+					for _, raw := range e["scenarios"].([]any) {
+						s := raw.(map[string]any)
+						if s["scenario_id"] == "lifecycle-menu" {
+							checks := s["evidence"].([]any)
+							s["evidence"] = append(checks[:index], checks[index+1:]...)
+						}
+					}
+					rebindRecurringEvidence(t, e)
+					v["detailed_evidence_sha256"] = sha256String(qualificationDocument(t, e))
+					assertQualificationRefused(t, binary, qualificationDocument(t, v), check)
+				})
+			}
+		}
+	}
 	if repair {
 		for name, mutate := range map[string]func(map[string]any){
 			"missing policy": func(v map[string]any) {
@@ -319,7 +367,7 @@ remove-certbot remove-writer remove-admission-race remove-directory-lock secret-
 		}
 	}
 	if repair {
-		for _, line := range []string{"Evidence policy: " + softwarelifecycle.RepairEvidencePolicy, "Automated-only scenarios (not live): " + softwarelifecycle.RepairAutomatedOnlyScenarios, "Automated-only result: Passed in native amd64/arm64 workflow"} {
+		for _, line := range []string{"Evidence policy: " + policy, "Automated-only scenarios (not live): " + softwarelifecycle.RepairAutomatedOnlyScenarios, "Automated-only result: Passed in native amd64/arm64 workflow"} {
 			if strings.Count(body, line) != 1 {
 				t.Fatalf("record disclosure %q", line)
 			}
@@ -329,6 +377,14 @@ remove-certbot remove-writer remove-admission-race remove-directory-lock secret-
 				t.Fatalf("automated-only scenario claimed live: %s", id)
 			}
 		}
+	}
+	checkLine := "Automated-only checks (not live): lifecycle-menu/explicit-confirmation lifecycle-menu/clean-install-target-refused\n"
+	if policy == "repair-issuance-bounded-v2" {
+		if strings.Count(body, checkLine) != 1 {
+			t.Fatal("record lacks exact automated-only checks")
+		}
+	} else if strings.Contains(body, "Automated-only checks (not live): ") {
+		t.Fatal("historical contract acquired new exclusions")
 	}
 	m := jsonObject(t, manifest)
 	target := m["releases"].([]any)[0].(map[string]any)

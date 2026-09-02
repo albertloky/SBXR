@@ -14,7 +14,7 @@ func qualifiedReleaseSupport(body string, release softwarelifecycle.LatestReleas
 		return strings.HasPrefix(body, prefix) || strings.Contains(body, "\n"+prefix)
 	}
 	if release.Support == nil {
-		return !hasRecordLine("Evidence policy: ") && !hasRecordLine("Automated-only scenarios (not live): ") && !hasRecordLine("Automated-only result: ")
+		return !hasRecordLine("Evidence policy: ") && !hasRecordLine("Automated-only scenarios (not live): ") && !hasRecordLine("Automated-only result: ") && !hasRecordLine("Automated-only checks (not live): ")
 	}
 	encoded, err := json.Marshal(release.Support)
 	declared, ok := uniqueRecordValue(body, "Release support: ")
@@ -29,7 +29,15 @@ func qualifiedReleaseSupport(body string, release softwarelifecycle.LatestReleas
 	automatedOnly, automatedOnlyOK := uniqueRecordValue(body, "Automated-only scenarios (not live): ")
 	automatedResult, automatedResultOK := uniqueRecordValue(body, "Automated-only result: ")
 	if release.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair {
-		if !policyOK || policy != softwarelifecycle.RepairEvidencePolicy || !automatedOnlyOK || automatedOnly != softwarelifecycle.RepairAutomatedOnlyScenarios || !automatedResultOK || automatedResult != "Passed in native amd64/arm64 workflow" {
+		if !policyOK || (policy != softwarelifecycle.RepairEvidencePolicy && policy != softwarelifecycle.RepairLifecycleEvidencePolicy) || !automatedOnlyOK || automatedOnly != softwarelifecycle.RepairAutomatedOnlyScenarios || !automatedResultOK || automatedResult != "Passed in native amd64/arm64 workflow" {
+			return false
+		}
+		if policy == softwarelifecycle.RepairLifecycleEvidencePolicy {
+			checks, ok := uniqueRecordValue(body, "Automated-only checks (not live): ")
+			if !ok || checks != softwarelifecycle.RepairAutomatedOnlyChecks {
+				return false
+			}
+		} else if hasRecordLine("Automated-only checks (not live): ") {
 			return false
 		}
 		for _, id := range strings.Fields(softwarelifecycle.RepairAutomatedOnlyScenarios) {
@@ -37,7 +45,7 @@ func qualifiedReleaseSupport(body string, release softwarelifecycle.LatestReleas
 				return false
 			}
 		}
-	} else if hasRecordLine("Evidence policy: ") || hasRecordLine("Automated-only scenarios (not live): ") || hasRecordLine("Automated-only result: ") {
+	} else if hasRecordLine("Evidence policy: ") || hasRecordLine("Automated-only scenarios (not live): ") || hasRecordLine("Automated-only result: ") || hasRecordLine("Automated-only checks (not live): ") {
 		return false
 	}
 	if release.Support.Scope == softwarelifecycle.FirstSubscriptionCleanInstall || release.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair {

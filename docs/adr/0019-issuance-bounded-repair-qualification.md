@@ -48,3 +48,6 @@ No retry after an unexpected failure may borrow earlier passes. Do not probe the
 CA by issuing extra certificates, change identifiers/accounts to avoid limits,
 use staging trust, restore deleted lineage state, or extend the six-hour transport.
 Natural timer firing and naturally due renewal remain excluded and Not observed.
+
+[ADR-0020](0020-clean-install-lifecycle-evidence.md) adds a separately signed v2
+policy for two unreachable lifecycle checks; v1 retains the contract above.

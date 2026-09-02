@@ -1,5 +1,27 @@
 # Issuance-bounded repair: failed live attempts
 
+## Approved lifecycle evidence correction
+
+Albert approved [ADR-0020](../adr/0020-clean-install-lifecycle-evidence.md) on
+2026-09-02: only `lifecycle-menu/explicit-confirmation` and
+`lifecycle-menu/clean-install-target-refused` move to mandatory native automated
+evidence under new signed policy `repair-issuance-bounded-v2`. The 25 live
+scenarios, 29 automated-only scenarios, remaining live lifecycle checks, and
+complete Karing journey are unchanged. Historical v1 results below are unchanged;
+this decision is not a live pass or a published stable release. A fresh signed
+attempt must rerun every retained live scenario.
+
+Before the new attempt, official Karing metadata showed that asset `540868464`
+replaced the same-version `karing_1.2.24.2709_macos_universal.dmg` at
+`2026-09-02T08:32:22Z`. The replacement is `103105344` bytes, SHA-256
+`7ee8f97d0291218beb83f910bd445a4081c67ea830e4dd5b73d2c4128563a8da`.
+The download matched both values and passed strict deep signature verification
+and notarized Developer ID assessment for `TNPM9PFX3W`. A recursive comparison
+proved that every installed app file's SHA-256, symbolic-link target, and mode
+matches the new image; only timestamps differed. No app replacement, profile
+change, or connection change was needed. Earlier attempt package
+identities remain unchanged historical facts, not the new declaration.
+
 ## Unsigned sequence 90: lifecycle live-contract blocker
 
 [Candidate run 33606125022](https://github.com/albertloky/SBXR/actions/runs/33606125022)
@@ -25,7 +47,8 @@ and an unchanged installation. A setup confirmation, generic older-release
 refusal, or automated fixture is not either missing live observation. No fixture
 gateway, invented target, protected-state edit, new exclusion, or relabelled pass
 was used. ADR-0019 still requires the complete retained per-scenario evidence;
-changing that contract remains an unresolved Owner decision.
+changing that contract was then an unresolved Owner decision, since resolved by
+ADR-0020 above for new v2 attempts only.
 
 The run was cancelled during draft construction, before signing or live setup.
 Unsigned cleanup succeeded, and the `v3.1.7` release endpoint returned HTTP 404.

@@ -248,7 +248,7 @@ func validRecurringEvidence(facts v3RecurringResultFacts, manifest qualification
 		if scenario.ScenarioID == "snap-refresh" {
 			packages = attempt.AfterSnapRefresh
 		}
-		if scenario.PackagesAfter != packages || !validScenarioResult(scenario, attempt.Sources) {
+		if scenario.PackagesAfter != packages || !validScenarioResult(scenario, *attempt) {
 			return false
 		}
 		for _, reference := range scenario.Evidence {
@@ -266,7 +266,7 @@ func validRecurringEvidence(facts v3RecurringResultFacts, manifest qualification
 	return last.ValidatedAt == facts.ObservedAt && evaluated.Sub(completed) <= 5*time.Minute
 }
 
-func validScenarioResult(scenario v3ScenarioEvidence, sources []v3QualificationSource) bool {
+func validScenarioResult(scenario v3ScenarioEvidence, attempt v3QualificationAttempt) bool {
 	id := scenario.ScenarioID
 	initial, boundary, recovery, final := "Running", "observed", "none", "Running"
 	if strings.Contains(id, "precommit") || id == "enable-schema2-absent" {
@@ -312,7 +312,7 @@ func validScenarioResult(scenario v3ScenarioEvidence, sources []v3QualificationS
 		return false
 	}
 	var source *v3QualificationSource
-	for _, item := range sources {
+	for _, item := range attempt.Sources {
 		if strings.HasPrefix(id, "source-"+item.ReleaseIdentity.Tag+"-") {
 			copy := item
 			source = &copy
@@ -323,6 +323,11 @@ func validScenarioResult(scenario v3ScenarioEvidence, sources []v3QualificationS
 		return false
 	}
 	checks := requiredV3Checks(id)
+	if attempt.Support != nil && attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair && attempt.EvidencePolicy == softwarelifecycle.RepairLifecycleEvidencePolicy && id == "lifecycle-menu" {
+		checks = slices.DeleteFunc(checks, func(check string) bool {
+			return slices.Contains(strings.Fields(softwarelifecycle.RepairAutomatedOnlyChecks), id+"/"+check)
+		})
+	}
 	if scenario.Schema == "sbxr-v3-scenario-evidence-v3" && id == "enable-schema1" {
 		checks = append(checks, strings.Fields("candidate-supported-setup-origin no-protected-state-edit no-unsupported-migration")...)
 	}
@@ -461,6 +466,9 @@ func buildRecurringAcceptanceRecord(manifest qualificationManifest, facts v3Recu
 		body.WriteString("Release support: " + string(support) + "\nStable baseline: " + string(baseline) + "\n")
 		if attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair {
 			body.WriteString("Evidence policy: " + attempt.EvidencePolicy + "\nAutomated-only scenarios (not live): " + strings.Join(attempt.AutomatedOnlyScenarios, " ") + "\nAutomated-only result: Passed in native amd64/arm64 workflow\n")
+			if attempt.EvidencePolicy == softwarelifecycle.RepairLifecycleEvidencePolicy {
+				body.WriteString("Automated-only checks (not live): " + softwarelifecycle.RepairAutomatedOnlyChecks + "\n")
+			}
 		}
 		if len(notApplicable) > 0 {
 			body.WriteString("Incoming source upgrades: Not applicable\nTwo-release update/recovery: Not applicable\n")

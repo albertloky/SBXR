@@ -113,3 +113,36 @@ func TestQualifiedReleaseSupportRefusesPolicyOnHistoricalRelease(t *testing.T) {
 		t.Fatal("historical release accepted a repair policy")
 	}
 }
+
+func TestQualifiedReleaseSupportBindsRepairV2CheckDisclosure(t *testing.T) {
+	support := softwarelifecycle.ReleaseSupport{Scope: softwarelifecycle.SubscriptionCleanInstallRepair, Sources: []softwarelifecycle.ReleaseIdentity{}, Contract: softwarelifecycle.SubscriptionUpdateContract}
+	encoded, _ := json.Marshal(support)
+	body := "Release support: " + string(encoded) + "\nStable result code: RELEASE-V3-SUBSCRIPTION-CLEAN-INSTALL-QUALIFICATION\nEvidence policy: repair-issuance-bounded-v2\nAutomated-only scenarios (not live): " + softwarelifecycle.RepairAutomatedOnlyScenarios + "\nAutomated-only result: Passed in native amd64/arm64 workflow\n"
+	line := "Automated-only checks (not live): lifecycle-menu/explicit-confirmation lifecycle-menu/clean-install-target-refused\n"
+	release := softwarelifecycle.LatestRelease{Support: &support}
+	if !qualifiedReleaseSupport(body+line, release) {
+		t.Fatal("exact v2 disclosure refused")
+	}
+	for _, changed := range []string{
+		body, body + line + line,
+		body + "Automated-only checks (not live): \n" + line,
+		body + strings.Replace(line, "lifecycle-menu/explicit-confirmation ", "", 1),
+		body + strings.Replace(line, "\n", " lifecycle-menu/safe-no-update\n", 1),
+		body + "Automated-only checks (not live): lifecycle-menu/clean-install-target-refused lifecycle-menu/explicit-confirmation\n",
+		strings.Replace(body, "repair-issuance-bounded-v2", softwarelifecycle.RepairEvidencePolicy, 1) + line,
+	} {
+		if qualifiedReleaseSupport(changed, release) {
+			t.Fatal("changed or historical check disclosure accepted")
+		}
+	}
+	for _, scope := range []string{softwarelifecycle.FirstSubscriptionCleanInstall, softwarelifecycle.RecurringSubscriptionUpgrade} {
+		support.Scope = scope
+		encoded, _ = json.Marshal(support)
+		if qualifiedReleaseSupport("Release support: "+string(encoded)+"\nStable result code: RELEASE-V3-SUBSCRIPTION-CLEAN-INSTALL-QUALIFICATION\n"+line, release) {
+			t.Fatal("check disclosure accepted outside repair")
+		}
+	}
+	if qualifiedReleaseSupport(line, softwarelifecycle.LatestRelease{}) {
+		t.Fatal("check disclosure accepted without support")
+	}
+}
