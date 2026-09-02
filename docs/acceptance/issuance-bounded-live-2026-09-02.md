@@ -1,5 +1,44 @@
 # Issuance-bounded repair: failed live attempts
 
+## Unsigned sequence 90: lifecycle live-contract blocker
+
+[Candidate run 33606125022](https://github.com/albertloky/SBXR/actions/runs/33606125022)
+targeted `v3.1.7`, Release Sequence `90`, commit
+`c7af2723ab61dbe6abd43eb598da4e179858f91c`. Both native candidate builds and
+[Verify run 33606090043](https://github.com/albertloky/SBXR/actions/runs/33606090043)
+passed. Before signing, source inspection and independent specification review
+confirmed that the unchanged single-candidate clean-install contract cannot
+produce two required `lifecycle-menu` observations:
+
+- `explicit-confirmation`: `terminal/lifecycle.go` returns before the Update
+  prompt unless Check reports an available supported update, and before Recover
+  confirmation unless an actual lifecycle recovery direction exists. Neither
+  exists in the admitted same-candidate/no-update/no-recovery state.
+- `clean-install-target-refused`: `softwarelifecycle/status.go` reports Already
+  current for the same identity/sequence before testing update support. The
+  specific clean-install-only refusal requires a different higher-sequence
+  target. The signed one-candidate attempt has no such target; lower-sequence
+  stable `v3.1.0` produces a different generic refusal.
+
+The allowed live path can prove menu reachability, Already current, no recovery,
+and an unchanged installation. A setup confirmation, generic older-release
+refusal, or automated fixture is not either missing live observation. No fixture
+gateway, invented target, protected-state edit, new exclusion, or relabelled pass
+was used. ADR-0019 still requires the complete retained per-scenario evidence;
+changing that contract remains an unresolved Owner decision.
+
+The run was cancelled during draft construction, before signing or live setup.
+Unsigned cleanup succeeded, and the `v3.1.7` release endpoint returned HTTP 404.
+No signed attempt or production CA request was created; Sequence `90` was not
+burned by this cancellation. Public stable `v3.1.0` remains unchanged.
+
+At `2026-09-02T08:08:56Z`, the VPS's original Certbot `5.8.0` revision `5893` was
+restored, general refresh holds for certbot/snapd/core24 were removed, and both
+originally active/enabled APT timers were active/enabled again. Product and
+qualification transport/evidence were absent. Mac qualification listeners were
+absent at `08:09:06Z`; the temporary accessibility attribute was restored.
+No Owner Karing profile or connection was changed.
+
 ## Sequence 89: Mac traffic probe preceded client readiness
 
 [Candidate run 33602993845](https://github.com/albertloky/SBXR/actions/runs/33602993845)
