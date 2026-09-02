@@ -443,7 +443,7 @@ test "$(stat -c %a "$client_config")" = 600
 client_uuid="$(jq -er '.outbounds[0].uuid' "$client_config")"
 
 runner_stage=download-client-signing-key
-curl -fsS https://sing-box.app/gpg.key -o /dev/shm/sagernet.asc
+curl -fsSL https://sing-box.app/gpg.key -o /dev/shm/sagernet.asc
 test "$(sha256sum /dev/shm/sagernet.asc | cut -d' ' -f1)" = 803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1
 runner_stage=download-client-package
 curl -fsSL --retry 3 --retry-all-errors https://deb.sagernet.org/files/ver_qb4px/sing-box_1.13.19_linux_amd64.deb -o "$client_deb"

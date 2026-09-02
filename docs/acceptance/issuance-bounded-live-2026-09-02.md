@@ -152,3 +152,50 @@ after their services and package locks were idle. Their enabled state and
 schedules were preserved. Restore both timers after qualification. The procedure
 now requires that bounded exclusion and retention of scanned failure output at
 the operator call site. No product behavior changed.
+
+## Sequence 87: outside runner did not follow signing-key redirect
+
+[Candidate run 33598688058](https://github.com/albertloky/SBXR/actions/runs/33598688058)
+used `v3.1.4`, Release Sequence `87`, commit
+`2461db5822bf99ac3580773a1a336eb092bfa237`, and Release Index SHA-256
+`8b9a34ee84820b25634c5811a741b745aec75baf1dabf9d1bbd18c77b8c020d5`.
+Both candidate-native builds and [Verify run 33598667749](https://github.com/albertloky/SBXR/actions/runs/33598667749)
+passed. Manifest `079ab5a789ef5130e6be99216b552ef6ce83cc90e4e6fbadb66eeea99cbbf92c`
+was signed at `2026-09-02T06:37:36Z`; attestation verification preceded the live gate.
+
+The baseline request began at `06:39:12Z`. Mac/VPS preflight started at `06:40:04Z`
+and passed at `06:40:09Z`, including inactive APT timers/services, clear locks,
+exact package checks, and clean product state. Installation and executable/archive
+comparison passed at `06:40:33Z`. Reviewed setup and local activation passed at
+`06:41:03Z`; View details and capture checks passed at `06:41:36Z`. The original
+direct SSH session remained alive. The required GitHub outside probe was then
+requested, not replaced by a Mac probe.
+
+The collector stopped at `06:41:47Z`. Its retained diagnostic is exactly
+`Runner stage: download-client-signing-key`. The helper used
+`curl -fsS https://sing-box.app/gpg.key`: the endpoint returns HTTP 301, and without
+`-L`, curl saved the 167-byte redirect HTML. Reproduction produced SHA-256
+`446a6087825fa73eadb045e5a2e9e2adf7df241b571228187728191d961dda1f`, not the pinned
+key. Following the same redirect returned the unchanged required key SHA-256
+`803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1`.
+The shared helper now follows redirects, retaining the exact hash check. This
+fix applies to both historical qualification and the outside-probe path.
+
+A regression runs the actual download/check block with curl against a local
+HTTP 301 server. The pinned body failed before the fix and passed afterward;
+a changed body still fails. Ten focused repetitions and independent quality
+review passed. This is automated evidence, not a live outside-traffic pass.
+With pinned Go `1.26.6`, both complete repository-wide normal and race commands
+passed with exit status zero, as did vet, module verification, shell syntax, and
+diff checks. Twenty additional race-mode redirect regression repetitions passed.
+
+The collector's original failure facts remain unchanged (`evidence-refused`,
+unknown boundary/state). Supported Complete removal passed at `06:44:03Z`.
+Separate safety-cleanup facts were accepted as completed / Not installed, with
+the outcome still failed. Product/transport absence and exact temporary-file
+cleanup passed at `06:46:11Z`; `refs/tags/release-burned/v3.1.4` was verified.
+No outside-proxy-traffic result or baseline scenario passed. No production CA
+request or Karing profile change occurred. APT timers remain temporarily stopped.
+Before another signed attempt, the unchanged planned snaps were held until
+`14:46:12Z`; this did not extend any qualification clock. Restore timers and
+release package holds after qualification.

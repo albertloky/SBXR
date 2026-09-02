@@ -3,7 +3,10 @@ package architecture_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -924,6 +927,42 @@ func TestPackagedInterruptionRequiresObservedEventAndForcedDeath(t *testing.T) {
 				if _, err := os.Lstat(filepath.Join(work, name)); !os.IsNotExist(err) {
 					t.Fatalf("%s remains: %v", name, err)
 				}
+			}
+		})
+	}
+}
+
+func TestPackagedSigningKeyDownloadFollowsRedirectAndChecksDigest(t *testing.T) {
+	source, err := os.ReadFile(".github/scripts/v3-packaged-live.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, rest, found := strings.Cut(string(source), "runner_stage=download-client-signing-key\n")
+	download, _, ended := strings.Cut(rest, "runner_stage=download-client-package\n")
+	if !found || !ended {
+		t.Fatal("signing-key download block not found")
+	}
+	const key = "public signing key fixture\n"
+	for _, body := range []string{key, "changed key\n"} {
+		t.Run(strings.TrimSpace(body), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/gpg.key" {
+					http.Redirect(w, r, "/key", http.StatusMovedPermanently)
+					return
+				}
+				fmt.Fprint(w, body)
+			}))
+			defer server.Close()
+			script := strings.NewReplacer(
+				"https://sing-box.app/gpg.key", server.URL+"/gpg.key",
+				"/dev/shm/sagernet.asc", filepath.Join(t.TempDir(), "sagernet.asc"),
+				"803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1", fmt.Sprintf("%x", sha256.Sum256([]byte(key))),
+			).Replace(download)
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			output, err := exec.CommandContext(ctx, "bash", "-c", "set -euo pipefail\n"+script).CombinedOutput()
+			if (err == nil) != (body == key) {
+				t.Fatalf("redirected key verification: %v, output = %s", err, output)
 			}
 		})
 	}
