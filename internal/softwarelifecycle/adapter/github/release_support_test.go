@@ -17,6 +17,17 @@ func TestSourceBindsCleanInstallSupportToQualifiedIndex(t *testing.T) {
 	}
 }
 
+func TestUniqueRecordValueRefusesEmptyFirstAndDuplicateRecords(t *testing.T) {
+	for _, body := range []string{
+		"Evidence policy: \nEvidence policy: " + softwarelifecycle.RepairEvidencePolicy,
+		"Evidence policy: " + softwarelifecycle.RepairEvidencePolicy + "\nEvidence policy: " + softwarelifecycle.RepairEvidencePolicy,
+	} {
+		if _, ok := uniqueRecordValue(body, "Evidence policy: "); ok {
+			t.Fatal("duplicate record accepted")
+		}
+	}
+}
+
 func testCleanInstallSupport(t *testing.T, scope string, exception bool) {
 	fixture := newLatestReleaseFixture(t)
 	sequence := uint64(17)
@@ -78,6 +89,7 @@ func testCleanInstallSupport(t *testing.T, scope string, exception bool) {
 			strings.Replace(body, "Evidence policy: "+softwarelifecycle.RepairEvidencePolicy, "Evidence policy: unknown", 1),
 			strings.Replace(body, "Automated-only scenarios (not live): "+softwarelifecycle.RepairAutomatedOnlyScenarios, "Automated-only scenarios (not live): ", 1),
 			strings.Replace(body, "Automated-only result: Passed in native amd64/arm64 workflow", "Automated-only result: Passed", 1),
+			body+"Scenario: enable-precommit "+strings.Repeat("a", 64)+" https://github.com/albertloky/SBXR/actions/runs/17#artifacts\n",
 		)
 	} else {
 		mutations = append(mutations, body+"Evidence policy: "+softwarelifecycle.RepairEvidencePolicy+"\nAutomated-only scenarios (not live): "+softwarelifecycle.RepairAutomatedOnlyScenarios+"\nAutomated-only result: Passed in native amd64/arm64 workflow\n")
@@ -93,5 +105,11 @@ func testCleanInstallSupport(t *testing.T, scope string, exception bool) {
 		if _, outcome := source.CheckLatest(t.Context()); outcome == softwarelifecycle.LatestReleaseAccepted {
 			t.Fatal("unbound support admitted")
 		}
+	}
+}
+
+func TestQualifiedReleaseSupportRefusesPolicyOnHistoricalRelease(t *testing.T) {
+	if qualifiedReleaseSupport("Evidence policy: "+softwarelifecycle.RepairEvidencePolicy+"\n", softwarelifecycle.LatestRelease{}) {
+		t.Fatal("historical release accepted a repair policy")
 	}
 }

@@ -167,7 +167,14 @@ func testQualificationGatewaySubscriptionCandidate(t *testing.T, scope string) {
 	slices.SortFunc(assets, func(a, b decisionAsset) int { return strings.Compare(a.Name, b.Name) })
 	release := qualificationRelease{Tag: tag, Commit: commit, Sequence: 18, ReleaseID: 123, Assets: assets, ReleaseIdentity: decisionReleaseIdentity{Repository: softwarelifecycle.Repository, Tag: tag, Commit: commit, ReleaseIndexSHA256: hex.EncodeToString(digest[:])}}
 	attempt := &v3QualificationAttempt{Schema: "sbxr-v3-qualification-attempt-v3", CandidateIndex: string(index), Support: &support, Sources: sources, Baseline: &qualificationRelease{}}
+	if scope == softwarelifecycle.SubscriptionCleanInstallRepair {
+		attempt.EvidencePolicy = softwarelifecycle.RepairEvidencePolicy
+		attempt.AutomatedOnlyScenarios = strings.Fields(softwarelifecycle.RepairAutomatedOnlyScenarios)
+	}
 	attempt.RequiredScenarios = attemptScenarios(*attempt)
+	if scope == softwarelifecycle.SubscriptionCleanInstallRepair && len(attempt.RequiredScenarios) != 25 {
+		t.Fatal("repair live scenario count")
+	}
 	manifest := qualificationManifest{Schema: "sbxr-qualification-manifest-v3", Repository: softwarelifecycle.Repository, Mode: "v3", SourceState: "v3-subscription-clean", Releases: []qualificationRelease{release}, V3Attempt: attempt, AcceptanceVPSChecklistSHA256: strings.Repeat("a", 64), CandidateFailureStateSHA256: strings.Repeat("b", 64), Approval: qualificationApproval{State: "approved", Environments: []approvalEnvironment{{Name: "acceptance-vps"}}}, Workflow: qualificationWorkflow{Commit: commit, Path: ".github/workflows/candidate.yml", Ref: softwarelifecycle.Repository + "/.github/workflows/candidate.yml@refs/heads/main", RunID: "123", RunURL: "https://github.com/albertloky/SBXR/actions/runs/123"}}
 	for i, stage := range []string{candidatePreflightStage, candidateDraftConstructionStage, candidateDraftVerificationStage} {
 		outcome := "accepted"

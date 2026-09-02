@@ -566,16 +566,17 @@ func latestAcceptanceRecord(body, tag, commit string, assets map[string]assetMet
 }
 
 func uniqueRecordValue(body, prefix string) (string, bool) {
-	value := ""
+	value, found := "", false
 	for _, line := range strings.Split(body, "\n") {
 		if strings.HasPrefix(line, prefix) {
-			if value != "" {
+			if found {
 				return "", false
 			}
+			found = true
 			value = strings.TrimPrefix(line, prefix)
 		}
 	}
-	return value, value != ""
+	return value, found && value != ""
 }
 
 func (source Source) bundle(ctx context.Context, attestation githubAttestation) ([]byte, error) {

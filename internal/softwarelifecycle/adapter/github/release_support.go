@@ -10,8 +10,11 @@ import (
 // Release support is authenticated by the release-index digest. Qualification
 // must repeat that exact declaration, binding its source scenarios to evidence.
 func qualifiedReleaseSupport(body string, release softwarelifecycle.LatestRelease) bool {
+	hasRecordLine := func(prefix string) bool {
+		return strings.HasPrefix(body, prefix) || strings.Contains(body, "\n"+prefix)
+	}
 	if release.Support == nil {
-		return true
+		return !hasRecordLine("Evidence policy: ") && !hasRecordLine("Automated-only scenarios (not live): ") && !hasRecordLine("Automated-only result: ")
 	}
 	encoded, err := json.Marshal(release.Support)
 	declared, ok := uniqueRecordValue(body, "Release support: ")
@@ -25,12 +28,14 @@ func qualifiedReleaseSupport(body string, release softwarelifecycle.LatestReleas
 	policy, policyOK := uniqueRecordValue(body, "Evidence policy: ")
 	automatedOnly, automatedOnlyOK := uniqueRecordValue(body, "Automated-only scenarios (not live): ")
 	automatedResult, automatedResultOK := uniqueRecordValue(body, "Automated-only result: ")
-	hasRecordLine := func(prefix string) bool {
-		return strings.HasPrefix(body, prefix) || strings.Contains(body, "\n"+prefix)
-	}
 	if release.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair {
 		if !policyOK || policy != softwarelifecycle.RepairEvidencePolicy || !automatedOnlyOK || automatedOnly != softwarelifecycle.RepairAutomatedOnlyScenarios || !automatedResultOK || automatedResult != "Passed in native amd64/arm64 workflow" {
 			return false
+		}
+		for _, id := range strings.Fields(softwarelifecycle.RepairAutomatedOnlyScenarios) {
+			if hasRecordLine("Scenario: " + id + " ") {
+				return false
+			}
 		}
 	} else if hasRecordLine("Evidence policy: ") || hasRecordLine("Automated-only scenarios (not live): ") || hasRecordLine("Automated-only result: ") {
 		return false

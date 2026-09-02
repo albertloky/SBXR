@@ -246,21 +246,29 @@ remove-certbot remove-writer remove-admission-race remove-directory-lock secret-
 				a := v["qualification_manifest"].(map[string]any)["v3_attempt"].(map[string]any)
 				a["automated_only_scenarios"] = append(a["automated_only_scenarios"].([]any), "karing-final")
 			},
-			"excluded-ID live claim": func(v map[string]any) {
-				scenarios := v["detailed_evidence"].(map[string]any)["scenarios"].([]any)
+		} {
+			t.Run(name, func(t *testing.T) {
+				v := jsonObject(t, []byte(document))
+				mutate(v)
+				assertQualificationRefused(t, binary, qualificationDocument(t, v), name)
+			})
+		}
+		for name, mutate := range map[string]func(map[string]any){
+			"excluded-ID live claim": func(evidence map[string]any) {
+				scenarios := evidence["scenarios"].([]any)
 				claim := scenarios[0].(map[string]any)
 				claim["scenario_id"] = "enable-precommit"
-				v["detailed_evidence"].(map[string]any)["scenarios"] = append(scenarios, claim)
+				evidence["scenarios"] = append(scenarios, claim)
 			},
-			"omitted Karing": func(v map[string]any) {
-				scenarios := v["detailed_evidence"].(map[string]any)["scenarios"].([]any)
-				v["detailed_evidence"].(map[string]any)["scenarios"] = scenarios[:len(scenarios)-1]
+			"omitted Karing": func(evidence map[string]any) {
+				scenarios := evidence["scenarios"].([]any)
+				evidence["scenarios"] = scenarios[:len(scenarios)-1]
 			},
-			"omitted managed renewal": func(v map[string]any) {
-				scenarios := v["detailed_evidence"].(map[string]any)["scenarios"].([]any)
+			"omitted managed renewal": func(evidence map[string]any) {
+				scenarios := evidence["scenarios"].([]any)
 				for i, raw := range scenarios {
 					if raw.(map[string]any)["scenario_id"] == "managed-renewal" {
-						v["detailed_evidence"].(map[string]any)["scenarios"] = append(scenarios[:i], scenarios[i+1:]...)
+						evidence["scenarios"] = append(scenarios[:i], scenarios[i+1:]...)
 						return
 					}
 				}
@@ -268,7 +276,10 @@ remove-certbot remove-writer remove-admission-race remove-directory-lock secret-
 		} {
 			t.Run(name, func(t *testing.T) {
 				v := jsonObject(t, []byte(document))
-				mutate(v)
+				evidence := v["detailed_evidence"].(map[string]any)
+				mutate(evidence)
+				rebindRecurringEvidence(t, evidence)
+				v["detailed_evidence_sha256"] = sha256String(qualificationDocument(t, evidence))
 				assertQualificationRefused(t, binary, qualificationDocument(t, v), name)
 			})
 		}
@@ -435,6 +446,23 @@ remove-certbot remove-writer remove-admission-race remove-directory-lock secret-
 			mutate(v)
 			assertQualificationRefused(t, binary, qualificationDocument(t, v), name)
 		})
+	}
+	if repair {
+		for name, mutate := range map[string]func(map[string]any){
+			"missing repair policy":                func(a map[string]any) { delete(a, "evidence_policy") },
+			"unknown repair policy":                func(a map[string]any) { a["evidence_policy"] = "unknown" },
+			"missing repair automated-only list":   func(a map[string]any) { delete(a, "automated_only_scenarios") },
+			"reordered repair automated-only list": func(a map[string]any) { ids := a["automated_only_scenarios"].([]any); ids[0], ids[1] = ids[1], ids[0] },
+			"extra repair automated-only list": func(a map[string]any) {
+				a["automated_only_scenarios"] = append(a["automated_only_scenarios"].([]any), "karing-final")
+			},
+		} {
+			t.Run(name, func(t *testing.T) {
+				v := jsonObject(t, []byte(boundary))
+				mutate(v["v3_attempt"].(map[string]any))
+				assertQualificationRefused(t, binary, qualificationDocument(t, v), name)
+			})
+		}
 	}
 }
 
