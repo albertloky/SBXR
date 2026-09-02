@@ -840,7 +840,7 @@ func TestPackagedActionReadsItsResultNotLifecycleStatus(t *testing.T) {
 		{"refused removal", "Code: PROXY-INSTALLATION-ACTION-REFUSED\n", removed, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			command := exec.Command("bash", "-c", "set -euo pipefail\nmenu_number() { printf '1\\n'; }\nscan_vps_capture() { return 0; }\nfunction /usr/local/bin/sbxr { printf '%s' \"$ACTION_OUTPUT\"; }\n"+function+"\nrun_action 'Start setup' y \"$EXPECTED\"\n")
+			command := exec.Command("bash", "-c", "set -euo pipefail\nmenu_number() { printf '1\\n'; }\nscan_vps_capture() { return 0; }\nfunction /usr/local/bin/sbxr { cat >/dev/null; printf '%s' \"$ACTION_OUTPUT\"; }\n"+function+"\nrun_action 'Start setup' y \"$EXPECTED\"\n")
 			command.Env = append(os.Environ(), "ACTION_OUTPUT="+initial+test.after, "EXPECTED="+test.expected)
 			output, err := command.CombinedOutput()
 			if (err == nil) != test.want {

@@ -94,3 +94,19 @@ the complete retained live matrix are still required.
 
 Evidence: [candidate run 33594398326](https://github.com/albertloky/SBXR/actions/runs/33594398326)
 and [Verify run 33594389070](https://github.com/albertloky/SBXR/actions/runs/33594389070).
+
+## Unsigned sequence 86 preparation: Linux test-fixture pipe race
+
+[Verify run 33596559548](https://github.com/albertloky/SBXR/actions/runs/33596559548)
+found a Linux-only race in the new shell test: its fake command returned without
+reading the input pipe. The resulting producer `SIGPIPE` made a successful
+parser case fail before result selection. A native Linux reproduction observed
+361 failures in 1,000 iterations; consuming input before returning the fixture
+output passed all 1,000 iterations. The fixture now consumes its input, matching
+the existing cleanup fixture. The acceptance helper itself is unchanged.
+
+[Candidate run 33596570533](https://github.com/albertloky/SBXR/actions/runs/33596570533)
+was cancelled before draft construction/signing. No `v3.1.3` release, signed
+attempt, live scenario, or production CA request was created by that run.
+Release Sequence `86` was not burned; it may be constructed from the corrected
+commit after fresh native verification.
