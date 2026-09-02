@@ -61,6 +61,27 @@ func TestSigningUsesVerifiedIndexArtifactWithoutDraftReadPermission(t *testing.T
 	}
 }
 
+func TestRepairAutomatedEvidenceRunsBeforeNativeAssets(t *testing.T) {
+	body, err := os.ReadFile(".github/workflows/candidate.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(body)
+	build := workflow[strings.Index(workflow, "  build:"):strings.Index(workflow, "  drafts:")]
+	assets := strings.Index(build, "mkdir -m 0700 release evidence")
+	for _, required := range []string{
+		`test "$MODE" = v3 && test "$(jq -r .support.scope <<<"$V3_ATTEMPT")" = subscription-clean-install-repair`,
+		"go test -p 1 -timeout 30m ./... -count=1",
+		"go test -race -p 1 -timeout 30m ./... -count=1",
+		"go vet ./...", "go mod verify",
+	} {
+		position := strings.Index(build, required)
+		if position < 0 || assets < 0 || position >= assets {
+			t.Fatalf("repair native evidence lacks pre-build check %q", required)
+		}
+	}
+}
+
 func TestBurnEvidenceTagCanBeRetriedOnlyWithTheExactPayload(t *testing.T) {
 	directory := t.TempDir()
 	run := func(arguments ...string) string {

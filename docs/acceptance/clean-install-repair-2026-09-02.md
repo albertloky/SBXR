@@ -1,5 +1,13 @@
 # Approved clean-install repair: implementation verified, live preflight blocked
 
+> Historical preflight record. Albert subsequently approved
+> [ADR-0019](../adr/0019-issuance-bounded-repair-qualification.md): 29 named
+> destructive cases use explicit automated-only evidence; 25 cases remain live,
+> including production HTTPS and the complete Karing journey. That decision
+> supersedes the full-matrix budget blocker below, not its historical evidence.
+> Planned issuance is not proof of CA capacity or live acceptance. The current
+> procedure is [V3 Packaged Live Qualification](v3-packaged-live.md).
+
 ## Decision and implementation
 
 Albert approved the clean-install repair route after the unchanged public

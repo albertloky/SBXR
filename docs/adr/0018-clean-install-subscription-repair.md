@@ -9,6 +9,10 @@ immutable `v3.1.0` cannot consume a recurring signed candidate. Add explicit
 `subscription-clean-install-repair` support with empty incoming source lists.
 This is a qualification-scope change, not an exception from live evidence.
 
+[ADR-0019](0019-issuance-bounded-repair-qualification.md) subsequently replaces
+the full live-matrix requirement below with an explicit issuance-bounded matrix
+for this repair scope only. It preserves the other conditions in this decision.
+
 Permit this scope only while the verified public Latest baseline is exactly
 `albertloky/SBXR`, tag `v3.1.0`, sequence `83`, commit
 `c0667a12ea914f2d0c86d73d52bfb8b40fea054a`, index SHA-256

@@ -2,6 +2,9 @@
 # Evidence handoff only. The operator uses unchanged packaged production paths.
 set -euo pipefail
 umask 077
+outside_request_matches() {
+  cmp -s "$1" <(printf '{"deadline_unix":%s,"qualification_manifest_sha256":"%s","request_id":"%s","scenario_id":"%s","schema":"sbxr-v3-outside-probe-request-v1"}' "$2" "$3" "$4" "$5")
+}
 test "$#" -eq 3
 remote=(ssh -i "$2" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$3" -o ConnectTimeout=15 "root@$1")
 manifest=handoff/qualification-manifest.json
@@ -32,7 +35,7 @@ stop_attempt() {
     fi
   fi
   # Only temporary files created by this collector; never product authority.
-  rm -f "$directory/input.json" "$directory/decision.json" "$directory/failure.json" "$directory/failure-decision.json" "$directory/previous.json" "$directory/request.json" "$directory/final.json" "$directory/retained-failure.json"
+  rm -f "$directory/input.json" "$directory/decision.json" "$directory/failure.json" "$directory/failure-decision.json" "$directory/previous.json" "$directory/request.json" "$directory/outside-request.json" "$directory/outside-reply.json" "$directory/final.json" "$directory/retained-failure.json"
   rmdir "$directory"
   exit "$status"
 }
@@ -50,9 +53,28 @@ while read -r scenario; do
   limit=1800
   if test "$scenario" = karing-final; then limit=7200; fi
   started="$(date +%s)"
-  jq -cnS --arg scenario "$scenario" --arg digest "$digest" --argjson limit "$limit" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{not_before:$now,qualification_manifest_sha256:$digest,scenario_id:$scenario,scenario_limit_seconds:$limit}' > "$directory/request.json"
+  deadline=$((started + limit))
+  outside_probe_required=false outside_probe_done=false
+  if test "$scenario" = baseline-clean || test "$scenario" = baseline-postcommit; then outside_probe_required=true; fi
+  jq -cnS --arg scenario "$scenario" --arg digest "$digest" --argjson limit "$limit" --argjson deadline "$deadline" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{deadline_unix:$deadline,not_before:$now,qualification_manifest_sha256:$digest,scenario_id:$scenario,scenario_limit_seconds:$limit}' > "$directory/request.json"
   "${remote[@]}" 'umask 077; test ! -e /root/sbxr-qualification-evidence/result.json; cat > /root/sbxr-qualification-evidence/request.json' < "$directory/request.json"
   while ! "${remote[@]}" 'test -f /root/sbxr-qualification-evidence/result.json'; do
+    if "${remote[@]}" 'test -e /root/sbxr-qualification-evidence/outside-request.json || test -L /root/sbxr-qualification-evidence/outside-request.json'; then
+      reason=evidence-refused
+      test "$outside_probe_required" = true
+      "${remote[@]}" 'test "$(stat -c "%a:%u:%h:%F" /root/sbxr-qualification-evidence/outside-request.json)" = "600:0:1:regular file" && test "$(stat -c %s /root/sbxr-qualification-evidence/outside-request.json)" -le 512 && cat /root/sbxr-qualification-evidence/outside-request.json' > "$directory/outside-request.json"
+      # Fixed raw bytes reject duplicates, unknown keys, and normalization.
+      request_id=probe-1
+      if test "$scenario" = baseline-postcommit; then request_id=probe-2; fi
+      outside_request_matches "$directory/outside-request.json" "$deadline" "$digest" "$request_id" "$scenario"
+      test "$outside_probe_done" = false
+      remaining=$((deadline - $(date +%s)))
+      test "$remaining" -gt 0
+      timeout --kill-after=5 "$remaining" bash .github/scripts/v3-packaged-live.sh outside-probe "$1" "$2" "$3" "$manifest" "$scenario" "$deadline" > "$directory/outside-reply.json"
+      jq -e --arg scenario "$scenario" '.schema == "sbxr-v3-outside-probe-reply-v1" and .scenario_id == $scenario and .observation == {egress_matched:true,outside_routes_differ:true,runner_cleanup_complete:true}' "$directory/outside-reply.json" >/dev/null
+      "${remote[@]}" "umask 077; test ! -e /root/sbxr-qualification-evidence/outside-reply-$scenario.json && test ! -L /root/sbxr-qualification-evidence/outside-reply-$scenario.json && test ! -e /root/sbxr-qualification-evidence/outside-reply-$scenario.tmp && test ! -L /root/sbxr-qualification-evidence/outside-reply-$scenario.tmp && cat > /root/sbxr-qualification-evidence/outside-reply-$scenario.tmp && mv -T /root/sbxr-qualification-evidence/outside-reply-$scenario.tmp /root/sbxr-qualification-evidence/outside-reply-$scenario.json && rm /root/sbxr-qualification-evidence/outside-request.json" < "$directory/outside-reply.json"
+      outside_probe_done=true
+    fi
     if test "$(( $(date +%s) - started ))" -gt "$((limit + 300))"; then reason=timeout; exit 1; fi
     sleep 2
   done
@@ -68,6 +90,8 @@ while read -r scenario; do
     reason=failure-recorded
     exit 1
   fi
+  if test "$outside_probe_required" = true && test "$outside_probe_done" != true; then exit 1; fi
+  "${remote[@]}" 'test ! -e /root/sbxr-qualification-evidence/outside-request.json && test ! -L /root/sbxr-qualification-evidence/outside-request.json'
   jq -e --arg digest "$digest" --arg scenario "$scenario" --argjson count "$index" --slurpfile previous "$directory/previous.json" '.stage == "v3-scenario-result" and .prior_decision_sha256 == $digest and (.detailed_evidence.scenarios | length) == $count and .detailed_evidence.scenarios[-1].scenario_id == $scenario and .detailed_evidence.scenarios[:-1] == $previous[0]' "$directory/input.json" >/dev/null
   jq -e '.outcome == "accepted" and .records == []' "$directory/decision.json" >/dev/null
   completed="$(date -u -d "$(jq -r '.detailed_evidence.scenarios[-1].completed_at' "$directory/input.json")" +%s)"
@@ -85,7 +109,7 @@ while read -r scenario; do
   reason=unexpected-failure
 done < <(jq -r '.v3_attempt.required_scenarios[]' "$manifest")
 
-"${remote[@]}" 'test ! -e /usr/local/bin/sbxr && test ! -e /var/lib/sbxr && rm /root/sbxr-qualification-evidence/request.json && rmdir /root/sbxr-qualification-evidence'
+"${remote[@]}" 'test ! -e /usr/local/bin/sbxr && test ! -e /var/lib/sbxr && rm /root/sbxr-qualification-evidence/request.json /root/sbxr-qualification-evidence/outside-reply-baseline-clean.json /root/sbxr-qualification-evidence/outside-reply-baseline-postcommit.json && rmdir /root/sbxr-qualification-evidence'
 # This is a new evaluation time, not a rewrite of a scenario timestamp.
 jq -cS --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.stage = "v3-packaged-live-result" | .evaluation_time = $now' "$directory/input.json" | tr -d '\n' > "$directory/final.json"
 "$tool" qualification < "$directory/final.json" > "$directory/decision.json"

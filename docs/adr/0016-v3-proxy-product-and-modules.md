@@ -12,6 +12,8 @@ V3 is a new SBXR product line for one Owner and one Ubuntu Server 24.04 `amd64` 
 
 [ADR-0018](0018-clean-install-subscription-repair.md) permits one explicitly scoped clean-install repair while the exact published `v3.1.0` remains the baseline. It supersedes only the incoming-source requirement for that repair scope and retains all applicable live evidence.
 
+[ADR-0019](0019-issuance-bounded-repair-qualification.md) further narrows that repair scope's live matrix to fit the production issuance budget. Its exact repeated destructive cases require automated-only evidence, explicitly disclosed as not observed live; production HTTPS, managed replacement, and final exact Karing remain mandatory.
+
 Read #342 and its selected resolutions for implementation or qualification of any subscription, Client Identity, compatibility, startup, or removal path. Their safety and evidence requirements remain normative in full; this ADR concentrates ownership and invariants rather than replacing those contracts. Explicit later refinements take precedence:
 
 | Selected resolution | Authority retained or refined |

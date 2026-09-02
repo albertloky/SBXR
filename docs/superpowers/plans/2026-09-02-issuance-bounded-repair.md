@@ -15,33 +15,37 @@ Files: `internal/softwarelifecycle/release_support.go`,
 `cmd/sbxr-release/qualification_scope.go`, `qualification_recurring.go`, and
 `qualification_scope_test.go`; existing fixture callers only if necessary.
 
-- [ ] Extend the existing repair command regression first: set
+- [x] Extend the existing repair command regression first: set
   `evidence_policy` to `repair-issuance-bounded-v1`, set
   `automated_only_scenarios` to ADR-0019's exact ordered list, and remove those IDs
   from `required_scenarios`. Run
   `GOTOOLCHAIN=go1.26.6 go test ./cmd/sbxr-release -run TestQualificationCommandBindsCleanInstallRepair -count=1`;
   expect refusal before implementing support.
-- [ ] Add two shared immutable string constants for the policy and space-separated
+- [x] Add two shared immutable string constants for the policy and space-separated
   list. Add optional signed attempt fields `EvidencePolicy string` and
   `AutomatedOnlyScenarios []string`. In `validAttemptSupport`, repair requires
   exact policy and `slices.Equal` to the fixed list. All other scopes require
   absence of both fields. In `attemptScenarios`, filter only that exact list for
   repair. Do not change per-scenario evidence, clocks, or other scopes.
-- [ ] Emit exact public lines `Evidence policy: <policy>`,
+- [x] Emit exact public lines `Evidence policy: <policy>`,
   `Automated-only scenarios (not live): <space-separated list>` and
   `Automated-only result: Passed in native amd64/arm64 workflow`. The embedded
   Acceptance Record already includes the signed attempt. Require these exact
   unique lines in the public repair-support reader; reject them on other scopes.
-- [ ] Extend regression mutations: missing/unknown policy, missing/reordered/extra
+- [x] Extend regression mutations: missing/unknown policy, missing/reordered/extra
   automated-only IDs, claiming an excluded case live, omitted Karing or managed
   renewal, and policy on first/recurring scope must refuse. Assert exact public
   disclosure and absence of `Scenario:` entries for automated-only cases.
-- [ ] Run focused package tests, review diff, and commit only intended code/tests.
+- [x] Run focused package tests, review diff, and commit only intended code/tests.
 
 ## Task 2: Review, verification, and integration
 
-- [ ] Independent spec review, then code-quality review of Task 1 and ADR-0019.
-- [ ] Run full normal and race suites with `-p 1 -timeout 30m ./... -count=1`,
+- [x] Bind automated-only proof to the candidate's own native build jobs: run
+  full normal/race suites, vet and module verification before producing native
+  assets/evidence for repair scope. The focused workflow regression failed before
+  this change and passed afterward. Other scopes keep their existing workflow.
+- [x] Independent spec review, then code-quality review of Task 1 and ADR-0019.
+- [x] Run full normal and race suites with `-p 1 -timeout 30m ./... -count=1`,
   `go vet ./...`, `go mod verify`, both Linux cross-builds and diff/format checks.
 - [ ] Point ADR-0016, ADR-0018 and the packaged acceptance procedure to ADR-0019.
   Record the approved change on the parent spec and qualification ticket without
@@ -51,6 +55,17 @@ Files: `internal/softwarelifecycle/release_support.go`,
 
 ## Task 3: Retained live execution
 
+- [x] Restore access to the existing baseline outside-client proof from the
+  recurring collector. Reuse the official Linux client download/verification,
+  protected confirmed disclosure, traffic comparison and cleanup from
+  `v3-packaged-live.sh`. A fixed, scenario-bound request may invoke only this
+  read-only traffic probe on the existing GitHub Ubuntu amd64 runner, never
+  arbitrary commands, setup, removal or another transaction harness. Keep request
+  and reply secret-safe; keep client configuration and raw captures in runner
+  tmpfs and remove them on success/failure. Preserve historical baseline behavior.
+  Reject malformed, duplicate, stale or wrong-scenario requests and bound the
+  probe to the scenario's remaining time. Tests must prove command dispatch,
+  refusal, protected handling and cleanup before using the live route.
 - [ ] Freshly verify public baseline/history/unused identity, VPS absence and locks,
   exact Certbot/snap planned refresh, latest official Karing bytes and Mac controls.
 - [ ] Prepare the canonical attempt with the exact retained list and three planned

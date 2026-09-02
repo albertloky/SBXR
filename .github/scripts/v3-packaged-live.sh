@@ -213,12 +213,7 @@ remote_setup_and_disclose() {
   for fact in 'Release Identity:' 'Proxy Package Identity:' 'Ownership Record:' 'Packaged validation result:' 'systemd unit provenance' 'Service enabled:' 'Service active:' 'Expected public listener ownership:' 'Package hold:' 'Selected destination:' 'Client Identity: Present'; do
     grep -F "$fact" <<<"$details" >/dev/null
   done
-  printf '%s\ny\n\n0\n' "$(menu_number 'Show client configuration')" | /usr/local/bin/sbxr | awk '
-    /^----- BEGIN SBXR CLIENT CONFIGURATION -----$/ {inside=1; next}
-    /^----- END SBXR CLIENT CONFIGURATION -----$/ {inside=0; complete=1; next}
-    inside {print}
-    END {if (!complete) exit 1}
-  '
+  remote_outside_disclose
 }
 
 remote_remove() {
@@ -227,6 +222,16 @@ remote_remove() {
   KNOWN_CLIENT_UUID="$(jq -er '.inbounds[0].users[0].uuid' /etc/sing-box/config.json)"
   run_action 'Complete removal' 'REMOVE SBXR' 'Code: SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED'
   prove_not_installed
+}
+
+remote_outside_disclose() {
+  prove_running
+  printf '%s\ny\n\n0\n' "$(menu_number 'Show client configuration')" | /usr/local/bin/sbxr | awk '
+    /^----- BEGIN SBXR CLIENT CONFIGURATION -----$/ {inside=1; next}
+    /^----- END SBXR CLIENT CONFIGURATION -----$/ {inside=0; complete=1; next}
+    inside {print}
+    END {if (!complete) exit 1}
+  '
 }
 
 seal_failure_evidence() {
@@ -333,15 +338,32 @@ if [[ ${1:-} == remote-* ]]; then
     remote-secret-safe) remote_secret_safe ;;
     remote-remove) remote_remove ;;
     remote-failure-cleanup) remote_failure_cleanup ;;
+    remote-outside-disclose) remote_outside_disclose ;;
     *) exit 1 ;;
   esac
   exit
 fi
 
-test $# -eq 4
+outside_probe=false
+if [[ ${1:-} == outside-probe ]]; then
+  test "$#" -eq 7
+  outside_probe=true
+  shift
+  scenario=$5 deadline=$6
+  case "$scenario" in baseline-clean|baseline-postcommit) ;; *) exit 1 ;; esac
+  [[ "$deadline" =~ ^[0-9]{10}$ ]]
+  test "$(date +%s)" -lt "$deadline"
+else
+  test $# -eq 4
+fi
+
 host=$1 key=$2 known_hosts=$3 manifest=$4
 test "$(jq -r '.mode' "$manifest")" = v3
-test "$(jq -r '.source_state' "$manifest")" = v3-clean
+if test "$outside_probe" = true; then
+  jq -e '.source_state == "v3-recurring" or .source_state == "v3-subscription-clean"' "$manifest" >/dev/null
+else
+  test "$(jq -r '.source_state' "$manifest")" = v3-clean
+fi
 test "$(jq '.releases | length' "$manifest")" -eq 1
 release="$(jq -c '.releases[0]' "$manifest")"
 tag="$(jq -r .tag <<<"$release")"
@@ -355,6 +377,11 @@ client_root=${RUNNER_TEMP:?}/sbxr-v3-client
 client_deb=/dev/shm/sing-box.deb
 client_log=/dev/shm/sbxr-v3-client.log
 workflow_capture=/dev/shm/sbxr-v3-workflow.log
+# Refuse collisions before installing a cleanup trap or writing any file.
+for path in "$client_config" "$client_root" "$client_deb" "$client_log" "$workflow_capture" /dev/shm/sagernet.asc; do
+  if test -e "$path" || test -L "$path"; then exit 1; fi
+done
+test "$(findmnt -no FSTYPE -T /dev/shm)" = tmpfs
 runner_stage=initialization
 runner_stage_evidence=handoff/failure-evidence/runner-stage.txt
 rm -f "$runner_stage_evidence"
@@ -379,6 +406,8 @@ cleanup() {
   exit "$status"
 }
 trap cleanup EXIT
+trap 'exit 1' TERM INT HUP
+exec 3>&1
 exec >"$workflow_capture" 2>&1
 
 scan_runner_capture() {
@@ -388,10 +417,15 @@ scan_runner_capture() {
 
 journey_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 runner_stage=remote-failure-safety
-failure_times="$("${remote[@]}" "TAG=$tag SEQUENCE=$sequence COMMIT=$commit INDEX=$index /usr/bin/bash $WORK/v3-packaged-live.sh remote-failure-safety '$tag' '$sequence' '$commit' '$index'")"
-jq -e 'keys == ["after_activation_completed_at","after_removal_completed_at","before_activation_completed_at","clean_footprint_completed_at","ownership_drift_completed_at"]' <<<"$failure_times" >/dev/null
-runner_stage=remote-setup-and-disclose
-"${remote[@]}" "TAG=$tag SEQUENCE=$sequence COMMIT=$commit INDEX=$index /usr/bin/bash $WORK/v3-packaged-live.sh remote-setup-and-disclose '$tag' '$sequence' '$commit' '$index'" >"$client_config"
+if test "$outside_probe" = true; then
+  runner_stage=remote-setup-and-disclose
+  "${remote[@]}" "/usr/bin/bash -s remote-outside-disclose '$tag' '$sequence' '$commit' '$index'" < "$0" >"$client_config"
+else
+  failure_times="$("${remote[@]}" "TAG=$tag SEQUENCE=$sequence COMMIT=$commit INDEX=$index /usr/bin/bash $WORK/v3-packaged-live.sh remote-failure-safety '$tag' '$sequence' '$commit' '$index'")"
+  jq -e 'keys == ["after_activation_completed_at","after_removal_completed_at","before_activation_completed_at","clean_footprint_completed_at","ownership_drift_completed_at"]' <<<"$failure_times" >/dev/null
+  runner_stage=remote-setup-and-disclose
+  "${remote[@]}" "TAG=$tag SEQUENCE=$sequence COMMIT=$commit INDEX=$index /usr/bin/bash $WORK/v3-packaged-live.sh remote-setup-and-disclose '$tag' '$sequence' '$commit' '$index'" >"$client_config"
+fi
 uninterrupted_completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 runner_stage=validate-client-configuration
 chmod 0600 "$client_config"
@@ -440,6 +474,14 @@ test ! -e "$client_log"
 test ! -e /dev/shm/sagernet.asc
 test ! -e /dev/shm/sagernet.sources
 runner_cleanup_completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+if test "$outside_probe" = true; then
+  test "$(date +%s)" -le "$deadline"
+  # Scan before publishing a reply; the EXIT trap scans again on every exit.
+  if grep -Eq 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer |[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}' "$workflow_capture" || grep -F -- "$client_uuid" "$workflow_capture" >/dev/null; then exit 1; fi
+  jq -cnS --arg scenario "$scenario" --arg started "$journey_started_at" --arg completed "$runner_cleanup_completed_at" '{completed_at:$completed,observation:{egress_matched:true,outside_routes_differ:true,runner_cleanup_complete:true},scenario_id:$scenario,schema:"sbxr-v3-outside-probe-reply-v1",started_at:$started}' >&3
+  exit
+fi
 
 runner_stage=verify-remote-secret-safety
 "${remote[@]}" "/usr/bin/bash $WORK/v3-packaged-live.sh remote-secret-safe '$tag' '$sequence' '$commit' '$index'"

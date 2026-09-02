@@ -200,6 +200,12 @@ jobs:
           V3_ATTEMPT: ${{ inputs.v3_attempt }}
         run: |
           set -euo pipefail
+          if test "$MODE" = v3 && test "$(jq -r .support.scope <<<"$V3_ATTEMPT")" = subscription-clean-install-repair; then
+            go test -p 1 -timeout 30m ./... -count=1
+            go test -race -p 1 -timeout 30m ./... -count=1
+            go vet ./...
+            go mod verify
+          fi
           mkdir -m 0700 release evidence
           for target in amd64 arm64; do
             go run ./cmd/sbxr-release -tag "$TAG" -commit "$GITHUB_SHA" -sequence "$SEQUENCE" -architecture "$target" -output "release/sbxr-linux-$target.tar.gz"
