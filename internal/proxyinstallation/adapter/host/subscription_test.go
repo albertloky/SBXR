@@ -69,6 +69,8 @@ func TestSubscriptionPreflightObservesRealCertbotPOSIXLock(t *testing.T) {
 	}
 	if facts := adapter.PreflightSubscription(t.Context(), "8.8.8.8"); facts.RenewalIdle.Accepted {
 		t.Fatal("active POSIX lock was treated as idle Certbot")
+	} else if !facts.RenewalIdle.Observed || !strings.Contains(facts.RenewalCorrection, "is busy") {
+		t.Fatalf("active POSIX lock diagnostic: %#v", facts)
 	}
 }
 
@@ -86,6 +88,81 @@ func TestSubscriptionPreflightRefusesUnprotectedCertbotLock(t *testing.T) {
 	}
 	if facts := adapter.PreflightSubscription(t.Context(), "8.8.8.8"); facts.RenewalIdle.Accepted {
 		t.Fatal("shared Certbot lock inode accepted")
+	}
+}
+
+func TestSubscriptionPreflightExplainsUnsafeCertbotAncestorWithoutMutation(t *testing.T) {
+	adapter, _ := subscriptionReviewHost(t)
+	logPath := adapter.path("/var/log")
+	if err := os.MkdirAll(filepath.Join(logPath, "letsencrypt"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(logPath, 0o775); err != nil {
+		t.Fatal(err)
+	}
+	facts := adapter.PreflightSubscription(t.Context(), "8.8.8.8")
+	diagnostic := fmt.Sprint(facts)
+	if facts.RenewalIdle.Accepted || !strings.Contains(diagnostic, "/var/log") || !strings.Contains(diagnostic, "0775") || strings.Contains(diagnostic, adapter.root) {
+		t.Fatalf("unsafe ancestor diagnostic: %#v", facts)
+	}
+	info, err := os.Stat(logPath)
+	entries, readErr := os.ReadDir(filepath.Join(logPath, "letsencrypt"))
+	if err != nil || readErr != nil || info.Mode().Perm() != 0o775 || len(entries) != 0 {
+		t.Fatal("preflight changed the unsafe directory or created a lock")
+	}
+	if err := os.Chmod(logPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	after := adapter.PreflightSubscription(t.Context(), "8.8.8.8")
+	if !after.RenewalIdle.Observed || !after.RenewalIdle.Accepted || strings.Contains(fmt.Sprint(after), "/var/log") {
+		t.Fatalf("corrected ancestor remains refused: %#v", after)
+	}
+}
+
+func TestSubscriptionPreflightDistinguishesUnsafeAndUnknownCertbotFacts(t *testing.T) {
+	for _, kind := range []string{"symlink parent", "symlink lock", "hardlink lock", "writable lock", "uninspectable parent", "unknown process"} {
+		t.Run(kind, func(t *testing.T) {
+			adapter, commands := subscriptionReviewHost(t)
+			path := adapter.path("/var/log/letsencrypt/.certbot.lock")
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var err error
+			switch kind {
+			case "symlink parent":
+				err = os.Rename(filepath.Dir(path), filepath.Dir(path)+"-target")
+				if err == nil {
+					err = os.Symlink("letsencrypt-target", filepath.Dir(path))
+				}
+			case "symlink lock":
+				err = os.Rename(path, path+"-target")
+				if err == nil {
+					err = os.Symlink(".certbot.lock-target", path)
+				}
+			case "hardlink lock":
+				err = os.Link(path, path+"-alias")
+			case "writable lock":
+				err = os.Chmod(path, 0o666)
+			case "uninspectable parent":
+				// An overlong Adapter root deterministically fails Lstat on every platform.
+				adapter.root = filepath.Join(adapter.root, strings.Repeat("secret", 100))
+			case "unknown process":
+				commands["pgrep"] = OperationResult{Fact: "secret-process-output", Code: 2}
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			facts := adapter.PreflightSubscription(t.Context(), "8.8.8.8")
+			if facts.RenewalIdle.Accepted || facts.RenewalCorrection == "" || strings.Contains(facts.RenewalCorrection, "Wait") || strings.Contains(facts.RenewalCorrection, "secret") || strings.Contains(facts.RenewalCorrection, adapter.root) {
+				t.Fatalf("unsafe or unknown Certbot fact: %#v", facts)
+			}
+			if (kind == "uninspectable parent" || kind == "unknown process") && facts.RenewalIdle.Observed {
+				t.Fatal("unknown observation claimed known")
+			}
+		})
 	}
 }
 

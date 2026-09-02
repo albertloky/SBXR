@@ -318,6 +318,11 @@ func writeFrame(output io.Writer, review proxyinstallation.Review, result proxyi
 			return err
 		}
 	}
+	for _, unavailable := range review.UnavailableActions {
+		if _, err := fmt.Fprintf(output, "Unavailable: %s — %s\nCorrection: %s\n", unavailable.Action, unavailable.FailedCheck, unavailable.Correction); err != nil {
+			return err
+		}
+	}
 	if lifecycle != nil {
 		if err := writeLifecycleResult(output, lifecycle.Status(ctx)); err != nil {
 			return err

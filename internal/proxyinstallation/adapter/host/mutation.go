@@ -204,6 +204,15 @@ func (adapter Adapter) readConfigurationFile(name, expectedDigest string, gid ui
 	return body, nil
 }
 
+type parentSafetyError struct {
+	path string
+	mode os.FileMode
+	err  error
+}
+
+func (err *parentSafetyError) Error() string { return "unsafe ownership parent" }
+func (err *parentSafetyError) Unwrap() error { return err.err }
+
 func (adapter Adapter) safeParents(name string) error {
 	parent := filepath.Dir(name)
 	if parent != "/" {
@@ -213,11 +222,14 @@ func (adapter Adapter) safeParents(name string) error {
 	}
 	info, err := os.Lstat(adapter.path(parent))
 	if err != nil {
-		return err
+		if os.IsNotExist(err) {
+			return err
+		}
+		return &parentSafetyError{path: parent, err: err}
 	}
 	stat, ok := infoSys(info)
 	if !ok || !info.IsDir() || stat.Uid != adapter.ownerUID() || info.Mode().Perm()&0o022 != 0 || parent == "/var/lib/sbxr" && info.Mode().Perm() != 0o700 {
-		return errors.New("unsafe ownership parent")
+		return &parentSafetyError{path: parent, mode: info.Mode()}
 	}
 	return nil
 }

@@ -23,6 +23,17 @@ type subscriptionEnablementHost interface {
 	CleanupPreparedSubscription(context.Context, hostadapter.SubscriptionCleanupInput) bool
 }
 
+func certbotAdmission(facts hostadapter.SubscriptionPreflight) (string, string) {
+	if facts.RenewalIdle.Observed && facts.RenewalIdle.Accepted {
+		return "", ""
+	}
+	correction := facts.RenewalCorrection
+	if correction == "" {
+		correction = "Shared Certbot safety cannot be verified. Inspect its parent directories, lock files, and processes, then review again."
+	}
+	return "Shared Certbot admission", correction
+}
+
 func (module *installedInterface) subscriptionAdmission(ctx context.Context, facts hostadapter.SubscriptionPreflight) (string, string) {
 	if ctx.Err() != nil {
 		return "Managed termination", "Review Enable subscription again after the current process stops."
@@ -38,11 +49,14 @@ func (module *installedInterface) subscriptionAdmission(ctx context.Context, fac
 		{facts.TCP8443, "Local TCP 8443", "Free TCP 8443 on the recorded IPv4, then review again. No alternative subscription port is permitted."},
 		{facts.Clock, "Synchronized clock", "Restore synchronized host time before certificate issuance."},
 		{facts.PackageLocks, "Ubuntu package locks", "Wait for APT and dpkg to finish, then review again."},
-		{facts.RenewalIdle, "Shared Certbot admission", "Wait for shared Certbot work and managed writers to finish; do not terminate them."},
+		{facts.RenewalIdle, "Shared Certbot admission", ""},
 		{facts.Dependencies, "Subscription dependencies", "Restore inspectable snapd and official Certbot snap 5.4+ or prove their absence; APT Certbot and active or unknown snap changes are unsupported. Inspect conflicts without deleting unproved resources."},
 		{facts.Firewall, "Local firewall", "Restore readable iptables filter rules and resolve conflicting sbxr-subscription contributions before review; preserve unrelated rules."},
 	} {
 		if !check.fact.Observed || !check.fact.Accepted {
+			if check.name == "Shared Certbot admission" {
+				return certbotAdmission(facts)
+			}
 			return check.name, check.correction
 		}
 	}

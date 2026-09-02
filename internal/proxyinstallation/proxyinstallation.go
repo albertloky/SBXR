@@ -129,6 +129,11 @@ type Result struct {
 
 type PreparedAction struct{ token [32]byte }
 
+type UnavailableAction struct {
+	Action                  Action
+	FailedCheck, Correction string
+}
+
 type Review struct {
 	SubscriptionStatus  SubscriptionStatus
 	ProxyTraffic        Availability
@@ -136,6 +141,7 @@ type Review struct {
 	Version             string
 	Status              Status
 	LegalActions        []Action
+	UnavailableActions  []UnavailableAction
 	Details             []string
 	Plan                []string
 	Result              Result
@@ -494,6 +500,9 @@ func (module *installedInterface) Review(ctx context.Context, action Action) Rev
 		status = SubscriptionChangeInProgress
 	}
 	review.SubscriptionStatus = status
+	if status != SubscriptionNotEnabled {
+		review.UnavailableActions = slices.DeleteFunc(review.UnavailableActions, func(unavailable UnavailableAction) bool { return unavailable.Action == EnableSubscriptionAction })
+	}
 	if review.ProxyTraffic == "" {
 		review.ProxyTraffic = CannotBeVerified
 	}
@@ -798,6 +807,13 @@ func (module *installedInterface) reviewOwned(ctx context.Context, action Action
 	subscription := hostadapter.SubscriptionPreflight{}
 	if review.Status == Running {
 		subscription = module.host.PreflightSubscription(ctx, record.PublicIPv4)
+		certbotFailed, certbotCorrection := certbotAdmission(subscription)
+		if certbotFailed != "" {
+			for _, unavailable := range []Action{EnableSubscriptionAction, RotateClientIdentityAction} {
+				review.UnavailableActions = append(review.UnavailableActions, UnavailableAction{Action: unavailable, FailedCheck: certbotFailed, Correction: certbotCorrection})
+				review.Details = append(review.Details, string(unavailable)+" unavailable: "+certbotFailed, "Safe correction: "+certbotCorrection)
+			}
+		}
 		failed, correction := module.subscriptionAdmission(ctx, subscription)
 		if failed != "" {
 			review.LegalActions = slices.DeleteFunc(review.LegalActions, func(a Action) bool { return a == EnableSubscriptionAction })
@@ -846,6 +862,10 @@ func (module *installedInterface) reviewOwned(ctx context.Context, action Action
 				return review
 			}
 		} else if action == RotateClientIdentityAction {
+			if certbotFailed != "" {
+				review.Result = refused(Running, certbotFailed, certbotCorrection)
+				return review
+			}
 			review.Result = refused(Running, "Client Identity rotation admission", "Restore proved subscription material or absence and idle package, Certbot, and managed-writer facts, then review again.")
 			return review
 		}

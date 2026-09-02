@@ -13,6 +13,36 @@ import (
 
 type subscriptionInstallation struct{ journeyInstallation }
 
+type certbotRefusedInstallation struct{ journeyInstallation }
+
+func (installation *certbotRefusedInstallation) Review(_ context.Context, action proxyinstallation.Action) proxyinstallation.Review {
+	installation.actions = append(installation.actions, action)
+	return proxyinstallation.Review{
+		Status: proxyinstallation.Running, SubscriptionStatus: proxyinstallation.SubscriptionNotEnabled,
+		LegalActions: []proxyinstallation.Action{proxyinstallation.ViewDetailsAction},
+		UnavailableActions: []proxyinstallation.UnavailableAction{
+			{Action: proxyinstallation.EnableSubscriptionAction, FailedCheck: "Shared Certbot admission", Correction: "Unsafe Certbot parent /var/log (mode 0775). Inspect and correct it before reviewing again."},
+			{Action: proxyinstallation.RotateClientIdentityAction, FailedCheck: "Shared Certbot admission", Correction: "Unsafe Certbot parent /var/log (mode 0775). Inspect and correct it before reviewing again."},
+		},
+	}
+}
+
+func TestRunExplainsUnavailableCertbotActionsWithoutNumberingThem(t *testing.T) {
+	installation := &certbotRefusedInstallation{}
+	var output bytes.Buffer
+	if code := Run(t.Context(), nil, strings.NewReader("2\n0\n"), &output, &output, installation, nil); code != 0 {
+		t.Fatalf("code=%d output=%s", code, output.String())
+	}
+	for _, want := range []string{"Unavailable: Enable subscription", "Unavailable: Rotate Client Identity", "/var/log (mode 0775)", "Enter one of the displayed numbers."} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("missing %q: %s", want, output.String())
+		}
+	}
+	if !reflect.DeepEqual(installation.actions, []proxyinstallation.Action{proxyinstallation.StatusAction}) || len(installation.confirmations) != 0 {
+		t.Fatal("unavailable action was reviewed or executed")
+	}
+}
+
 func (installation *subscriptionInstallation) Review(ctx context.Context, action proxyinstallation.Action) proxyinstallation.Review {
 	review := installation.journeyInstallation.Review(ctx, action)
 	review.Status = proxyinstallation.Running

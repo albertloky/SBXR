@@ -265,8 +265,11 @@ func (module *installedInterface) rotateClientIdentity(ctx context.Context, auth
 	preflight := module.host.PreflightSubscription(context.WithoutCancel(ctx), record.PublicIPv4)
 	targetDigest := sha256.Sum256(authority.target)
 	idle := host.ClientIdentityPreparationIdle()
-	if readErr != nil || !valid || !bytes.Equal(current, authority.record) || installed.State != softwarelifecycle.Ready || installed.Installed == nil || *installed.Installed != authority.release || !compatibleOwnership(record, authority.release) || !reflect.DeepEqual(running, authority.running) || !runningAccepted(running) || !subscriptionSafe || !preflight.PackageLocks.Observed || !preflight.PackageLocks.Accepted || !preflight.RenewalIdle.Observed || !preflight.RenewalIdle.Accepted || !idle.Observed || !idle.Accepted || authority.startup == nil || len(authority.target) == 0 {
+	if readErr != nil || !valid || !bytes.Equal(current, authority.record) || installed.State != softwarelifecycle.Ready || installed.Installed == nil || *installed.Installed != authority.release || !compatibleOwnership(record, authority.release) || !reflect.DeepEqual(running, authority.running) || !runningAccepted(running) || !subscriptionSafe || !preflight.PackageLocks.Observed || !preflight.PackageLocks.Accepted || !idle.Observed || !idle.Accepted || authority.startup == nil || len(authority.target) == 0 {
 		return refused(Running, "Prepared Action facts", "Restore the reviewed Running proxy, subscription absence, idle exclusion, and startup facts, then review again.")
+	}
+	if failed, correction := certbotAdmission(preflight); failed != "" {
+		return refused(Running, failed, correction)
 	}
 	exclusion, excluded := module.acquireSubscriptionExclusion(record)
 	if !excluded {

@@ -834,7 +834,8 @@ func TestPackagedInterruptionRequiresObservedEventAndForcedDeath(t *testing.T) {
 			function := string(source)[start : start+end+2]
 			function = strings.ReplaceAll(function, "/usr/local/bin/sbxr", binary)
 			if test.progress == "" {
-				function = strings.Replace(function, "seq 1 6000", "seq 1 100", 1)
+				// Prove repeated missing observations and cleanup, not the production wait duration.
+				function = strings.Replace(function, "seq 1 6000", "seq 1 3", 1)
 			}
 			function = strings.Replace(function, "local process=$!", "local process=$!\nprintf '%s\\n' \"$process\" > "+strconv.Quote(pidPath), 1)
 			if test.signalFailure {

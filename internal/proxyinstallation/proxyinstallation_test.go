@@ -1775,6 +1775,111 @@ func TestSubscriptionReviewGatesFreshSafetyFacts(t *testing.T) {
 	}
 }
 
+func TestReviewExplainsSharedCertbotRefusalForBothActions(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		observed   bool
+		correction string
+	}{
+		{"unsafe parent", true, "Unsafe Certbot parent /var/log (mode 0775). Require a root-owned directory with no group or other write permission; inspect and correct it before reviewing again."},
+		{"unknown inspection", false, ""},
+		{"busy", true, "Shared Certbot lock /var/log/letsencrypt/.certbot.lock is busy. Wait for shared Certbot work to finish; do not terminate it."},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			host := acceptedHost()
+			installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+			setup := installation.Review(t.Context(), StartSetupAction)
+			installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+			facts := host.PreflightSubscription(t.Context(), "8.8.8.8")
+			facts.RenewalIdle = hostadapter.Observation{Observed: test.observed}
+			facts.RenewalCorrection = test.correction
+			host.subscriptionPreflight = &facts
+			correction := test.correction
+			if correction == "" {
+				correction = "Shared Certbot safety cannot be verified. Inspect its parent directories, lock files, and processes, then review again."
+			}
+			wantUnavailable := []UnavailableAction{
+				{Action: EnableSubscriptionAction, FailedCheck: "Shared Certbot admission", Correction: correction},
+				{Action: RotateClientIdentityAction, FailedCheck: "Shared Certbot admission", Correction: correction},
+			}
+			before := host.facts()
+			for _, action := range []Action{StatusAction, ViewDetailsAction, EnableSubscriptionAction, RotateClientIdentityAction} {
+				review := installation.Review(t.Context(), action)
+				if !reflect.DeepEqual(review.UnavailableActions, wantUnavailable) {
+					t.Fatalf("typed unavailable actions = %#v, want %#v", review.UnavailableActions, wantUnavailable)
+				}
+				details := strings.Join(review.Details, "\n")
+				if review.Status != Running || review.Prepared != nil || slices.Contains(review.LegalActions, EnableSubscriptionAction) || slices.Contains(review.LegalActions, RotateClientIdentityAction) || !strings.Contains(details, "Rotate Client Identity") || !strings.Contains(details, "Enable subscription") {
+					t.Fatalf("missing both action refusals: %#v", review)
+				}
+				if action == EnableSubscriptionAction || action == RotateClientIdentityAction {
+					if review.Result.Code != ActionRefused || review.Result.FailedCheck != "Shared Certbot admission" || test.correction != "" && review.Result.Correction != test.correction || !test.observed && strings.Contains(review.Result.Correction, "Wait") {
+						t.Fatalf("misleading refusal: %#v", review.Result)
+					}
+				}
+				if test.correction != "" && !strings.Contains(details, test.correction) {
+					t.Fatalf("missing diagnostic: %s", details)
+				}
+			}
+			if !reflect.DeepEqual(before, host.facts()) {
+				t.Fatal("refusal mutated host")
+			}
+		})
+	}
+}
+
+func TestEnabledSubscriptionOnlyReportsClientIdentityCertbotUnavailability(t *testing.T) {
+	host := acceptedHost()
+	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	setup := installation.Review(t.Context(), StartSetupAction)
+	if result := installation.Execute(t.Context(), *setup.Prepared, Approved, nil); result.Code != SetupComplete {
+		t.Fatalf("setup = %#v", result)
+	}
+	enable := installation.Review(t.Context(), EnableSubscriptionAction)
+	if result := installation.Execute(t.Context(), *enable.Prepared, Approved, func(Progress) {}); result.Code != SubscriptionEnabled {
+		t.Fatalf("enable = %#v", result)
+	}
+	facts := host.PreflightSubscription(t.Context(), "8.8.8.8")
+	facts.RenewalIdle = hostadapter.Observation{Observed: true}
+	facts.RenewalCorrection = "Unsafe Certbot parent /var/log (mode 0775). Inspect and correct it before reviewing again."
+	host.subscriptionPreflight = &facts
+	wantUnavailable := []UnavailableAction{{Action: RotateClientIdentityAction, FailedCheck: "Shared Certbot admission", Correction: facts.RenewalCorrection}}
+	before := host.facts()
+	for _, action := range []Action{StatusAction, ViewDetailsAction} {
+		review := installation.Review(t.Context(), action)
+		if review.SubscriptionStatus != SubscriptionAvailable || !reflect.DeepEqual(review.UnavailableActions, wantUnavailable) || slices.Contains(review.LegalActions, EnableSubscriptionAction) || slices.Contains(review.LegalActions, RotateClientIdentityAction) {
+			t.Fatalf("enabled subscription unavailable actions: %#v", review)
+		}
+	}
+	if !reflect.DeepEqual(before, host.facts()) {
+		t.Fatal("read-only review mutated enabled subscription")
+	}
+}
+
+func TestExecuteReportsChangedCertbotSafetyForBothActions(t *testing.T) {
+	for _, action := range []Action{EnableSubscriptionAction, RotateClientIdentityAction} {
+		t.Run(string(action), func(t *testing.T) {
+			host := acceptedHost()
+			installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+			setup := installation.Review(t.Context(), StartSetupAction)
+			installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
+			review := installation.Review(t.Context(), action)
+			if review.Prepared == nil {
+				t.Fatalf("action not admitted: %#v", review)
+			}
+			facts := host.PreflightSubscription(t.Context(), "8.8.8.8")
+			facts.RenewalIdle = hostadapter.Observation{Observed: true}
+			facts.RenewalCorrection = "Unsafe Certbot parent /var/log (mode 0775). Inspect and correct it before reviewing again."
+			host.subscriptionPreflight = &facts
+			before := host.facts()
+			result := installation.Execute(t.Context(), *review.Prepared, Approved, nil)
+			if result.Code != ActionRefused || result.FailedCheck != "Shared Certbot admission" || result.Correction != facts.RenewalCorrection || !reflect.DeepEqual(before, host.facts()) {
+				t.Fatalf("changed Certbot safety: %#v", result)
+			}
+		})
+	}
+}
+
 func TestSubscriptionApprovalRevalidatesAndConsumesAuthorityWithoutMutation(t *testing.T) {
 	for _, change := range []string{"review", "module", "ownership", "pending", "proxy", "subscription", "preflight", "lock", "release"} {
 		t.Run(change, func(t *testing.T) {

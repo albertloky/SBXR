@@ -27,6 +27,7 @@ type SubscriptionPreflight struct {
 	TCP80, TCP8443, Clock, PackageLocks, RenewalIdle, Dependencies, Firewall Observation
 	SnapdInstalled, CertbotInstalled                                         bool
 	DependencyIdentity, FirewallIdentity                                     string
+	RenewalCorrection                                                        string
 }
 
 // SubscriptionEnableInput is the exact generation authorized by the Ownership
@@ -140,15 +141,37 @@ func (adapter Adapter) PreflightSubscription(ctx context.Context, ipv4 string) S
 	}
 
 	// Certbot uses these shared directory locks. Observation never creates them.
-	idle := true
+	facts.RenewalIdle = observation(true, true)
 	for _, path := range certbotDirectoryLocks {
-		if err := adapter.safeParents(path); err != nil && !os.IsNotExist(err) {
-			idle = false
+		if err := adapter.safeParents(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			facts.RenewalIdle = observation(false, false)
+			facts.RenewalCorrection = "Restore safe, inspectable Certbot parent directories, then review again."
+			var parent *parentSafetyError
+			if errors.As(err, &parent) {
+				if parent.err == nil {
+					facts.RenewalIdle.Observed = true
+					facts.RenewalCorrection = fmt.Sprintf("Unsafe Certbot parent %s (mode %04o). Require a root-owned directory with no group or other write permission; inspect and correct it before reviewing again.", parent.path, parent.mode.Perm())
+				} else {
+					facts.RenewalCorrection = "Cannot inspect Certbot parent " + parent.path + ". Restore safe read-only inspection, then review again."
+				}
+			}
+			break
 		}
-		idle = idle && adapter.certbotLockAvailable(path)
+		fact, correction := adapter.inspectCertbotLock(path)
+		if !fact.Accepted {
+			facts.RenewalIdle, facts.RenewalCorrection = fact, correction
+			break
+		}
 	}
 	_, code, observed := command(ctx, "pgrep", "--exact", "certbot")
-	facts.RenewalIdle = observation(idle && code == 1, observed && (code == 0 || code == 1))
+	if facts.RenewalIdle.Accepted {
+		facts.RenewalIdle = observation(code == 1, observed && (code == 0 || code == 1))
+		if !facts.RenewalIdle.Observed {
+			facts.RenewalCorrection = "Cannot inspect shared Certbot processes. Restore process inspection, then review again."
+		} else if !facts.RenewalIdle.Accepted {
+			facts.RenewalCorrection = "Wait for shared Certbot work to finish; do not terminate it."
+		}
+	}
 
 	// Only a known iptables filter surface can support the reviewed exact rules.
 	rules, code, observed := command(ctx, "iptables-save", "-t", "filter")
@@ -1003,25 +1026,46 @@ func subscriptionTCPAvailable(ipv4, port string) bool {
 }
 
 func (adapter Adapter) certbotLockAvailable(name string) bool {
+	fact, _ := adapter.inspectCertbotLock(name)
+	return fact.Observed && fact.Accepted
+}
+
+func (adapter Adapter) inspectCertbotLock(name string) (Observation, string) {
 	path := adapter.path(name)
-	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	unknown := "Cannot inspect shared Certbot lock " + name + ". Restore safe read-only lock inspection, then review again."
+	unsafe := "Unsafe shared Certbot lock " + name + ". Require a root-owned, one-link regular file with no group or other write permission; inspect and correct it before reviewing again."
+	current, err := os.Lstat(path)
 	if os.IsNotExist(err) {
-		return true
+		return observation(true, true), ""
 	}
+	stat, ok := infoSys(current)
 	if err != nil {
-		return false
+		return observation(false, false), unknown
+	}
+	if !ok || !current.Mode().IsRegular() || current.Mode().Perm()&0o022 != 0 || stat.Uid != adapter.ownerUID() || stat.Nlink != 1 {
+		return observation(false, true), unsafe
+	}
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return observation(false, false), unknown
 	}
 	defer file.Close()
 	info, err := file.Stat()
-	stat, ok := infoSys(info)
+	stat, ok = infoSys(info)
 	if err != nil || !ok || !info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0 || stat.Uid != adapter.ownerUID() || stat.Nlink != 1 {
-		return false
+		return observation(false, false), unknown
 	}
 	// F_GETLK observes Certbot's POSIX lockf lock without creating or writing a file.
 	lock := syscall.Flock_t{Type: syscall.F_WRLCK, Whence: io.SeekStart}
-	if syscall.FcntlFlock(file.Fd(), syscall.F_GETLK, &lock) != nil || lock.Type != syscall.F_UNLCK {
-		return false
+	if syscall.FcntlFlock(file.Fd(), syscall.F_GETLK, &lock) != nil {
+		return observation(false, false), unknown
 	}
-	current, err := os.Lstat(path)
-	return err == nil && os.SameFile(info, current)
+	current, err = os.Lstat(path)
+	if err != nil || !os.SameFile(info, current) {
+		return observation(false, false), unknown
+	}
+	if lock.Type != syscall.F_UNLCK {
+		return observation(false, true), "Shared Certbot lock " + name + " is busy. Wait for shared Certbot work to finish; do not terminate it."
+	}
+	return observation(true, true), ""
 }
