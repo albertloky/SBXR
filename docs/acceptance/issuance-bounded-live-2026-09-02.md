@@ -1,5 +1,64 @@
 # Issuance-bounded repair: failed live attempts
 
+## Sequence 89: Mac traffic probe preceded client readiness
+
+[Candidate run 33602993845](https://github.com/albertloky/SBXR/actions/runs/33602993845)
+used `v3.1.6`, Release Sequence `89`, commit
+`fca10b069f6a4caab5b035e2c4deb443c15c5565`, and Release Index SHA-256
+`c0a5518ce2e2917f76c30c06d1af260f7186997829c45e4bf2214c1856a46c17`.
+Both candidate-native jobs and [Verify run 33602995332](https://github.com/albertloky/SBXR/actions/runs/33602995332)
+passed. Manifest `d14f85d923ebe42e7b7c29e37bcf62b90d1d021e3567062fa76e30f74dc4e8cc`
+was signed at `07:32:14Z`; its attestation and exact 25/29 lists were verified
+before approving the live gate. All times below are on `2026-09-02`.
+
+The collector accepted the six baseline prefixes in order. Clean setup/removal
+finished at `07:37:50Z`; its real GitHub outside probe passed at `07:36:47Z`.
+Footprint refusal/restoration finished at `07:39:46Z`. Precommit setup had durable
+cleanup authority at `07:41:32Z` and finished cleanup at `07:41:45Z`. Its interrupt
+capture was scanned against the current secrets; after cleanup, additional UUID
+and 43-character REALITY-key shape checks proved that cleanup output and the
+available journal could contain neither secret, although those provisional
+values were no longer present in the configuration. Postcommit setup had durable
+forward authority at `07:43:42Z`, finished at `07:43:51Z`, and passed its second
+real GitHub outside probe at `07:44:01Z`. Metadata-drift refusal/restoration passed
+at `07:45:56Z`. Removal commitment was observed at `07:47:24Z`; reviewed finishing
+proved complete absence at `07:47:39Z`. Original SSH continuity checks passed for
+each case. These accepted prefixes prove the collector now advances, but cannot
+be reused after the later failure.
+
+The `enable-schema1` request began at `07:48:53Z`. Fresh supported candidate
+installation/setup, schema-1 origin, exact executable, and the effective official
+renewal route passed at `07:49:46Z`. Before enabling subscription, the operator
+launched a Mac client pipeline which first obtains public Show client
+configuration over SSH. The traffic probe ran before that pipeline's final client
+opened `127.0.0.1:2080`: at `07:50:17Z` it returned `ConnectionRefusedError` with
+zero completed requests. Read-only inspection at `07:50:26Z` found the listener
+present and its stderr capture empty. No traffic result or enablement pass was
+submitted. No Enable subscription action or production CA request occurred.
+
+Canonical failure facts retained the original `07:50:17Z` event, `operation-7`,
+`enable-schema1`, and known `Running` state. The collector accepted the failure;
+its downloaded failure artifact was byte-identical to the submitted facts.
+The exact Mac client was stopped, its listener absent, and its capture empty at
+`07:51:56Z`. Supported Complete removal passed at `07:52:22Z`. Product/transport
+absence and removal of exact attempt-owned temporary files passed at `07:53:27Z`.
+Separate cleanup facts remained failed, with completed / Not installed cleanup.
+No Karing profile or Owner connection was changed. APT timers remain temporarily
+stopped, with enabled state preserved; snap holds remain bounded by `14:46:12Z`.
+
+The procedure now requires a bounded native Mac readiness check against the exact
+client PID, executable, and loopback listener before any traffic probe. A local
+reproduction delayed input to the real unchanged official client, with no
+credentials or outside traffic: the immediate assertion failed, the readiness
+check passed, and wrong-executable/exited-client cases refused. A live process
+without a listener was refused at the unchanged 30-second readiness deadline.
+The scenario
+clock is unchanged; traffic failures cannot be retried. This is an operator
+readiness correction, not a packaged-product change or a live acceptance pass.
+A fresh Release Identity and all 25 retained live scenarios remain required.
+Failure finalization passed; `refs/tags/release-burned/v3.1.6` was verified.
+Public stable `v3.1.0` remains unchanged. Independent review found no blocker.
+
 ## Sequence 84: Mac SSH idle timeout
 
 Attempt `run-33592907845-attempt-1` used `repair-issuance-bounded-v1`,

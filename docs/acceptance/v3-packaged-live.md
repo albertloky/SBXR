@@ -40,6 +40,32 @@ connection, not only connection setup. Before signing, prove the same control
 session survives an idle interval and a subsequent command. This does not replace
 the GitHub Ubuntu outside-client probe or any per-scenario SSH continuity check.
 
+Before a Mac-side traffic check, wait for the exact client process to own its
+loopback listener. Launching the SSH/configuration/client pipeline is not readiness:
+the public configuration disclosure can still be running. Capture the client PID
+from the last background pipeline command, retain stderr in the protected capture,
+and use a bounded native check before the first traffic request:
+
+```bash
+wait_mac_client() {
+  local pid=$1 executable=$2 port=$3 deadline=$((SECONDS + 30))
+  while test "$SECONDS" -lt "$deadline"; do
+    kill -0 "$pid" 2>/dev/null || return 1
+    if test "$(lsof -nP -tiTCP@127.0.0.1:"$port" -sTCP:LISTEN)" = "$pid"; then
+      test "$(ps -p "$pid" -o comm=)" = "$executable"
+      return
+    fi
+    sleep .1
+  done
+  return 1
+}
+```
+
+Require this check to succeed before invoking the traffic/session probe. A wrong
+process, client exit, or readiness timeout fails the scenario. Once a traffic
+probe starts, do not retry a failed request or replace its connection. This wait
+is part of the original scenario clock; it grants no extension or retry waiver.
+
 On the disposable VPS, record the active/enabled state of `apt-daily.timer` and
 `apt-daily-upgrade.timer`, then temporarily stop those timers before qualification.
 Wait for any already-running package work to finish; do not kill it. Recheck both
