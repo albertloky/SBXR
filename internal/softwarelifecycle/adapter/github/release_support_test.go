@@ -10,18 +10,20 @@ import (
 )
 
 func TestSourceBindsCleanInstallSupportToQualifiedIndex(t *testing.T) {
-	for _, exception := range []bool{false, true} {
-		t.Run(map[bool]string{false: "qualified", true: "owner-exception"}[exception], func(t *testing.T) { testCleanInstallSupport(t, exception) })
+	for _, scope := range []string{softwarelifecycle.FirstSubscriptionCleanInstall, softwarelifecycle.SubscriptionCleanInstallRepair} {
+		for _, exception := range []bool{false, true} {
+			t.Run(scope+"/"+map[bool]string{false: "qualified", true: "owner-exception"}[exception], func(t *testing.T) { testCleanInstallSupport(t, scope, exception) })
+		}
 	}
 }
 
-func testCleanInstallSupport(t *testing.T, exception bool) {
+func testCleanInstallSupport(t *testing.T, scope string, exception bool) {
 	fixture := newLatestReleaseFixture(t)
 	sequence := uint64(17)
 	if exception {
 		fixture.release.Tag, sequence = "v3.1.0", 83
 	}
-	support := softwarelifecycle.ReleaseSupport{Scope: softwarelifecycle.FirstSubscriptionCleanInstall, Sources: []softwarelifecycle.ReleaseIdentity{}, Contract: softwarelifecycle.SubscriptionUpdateContract}
+	support := softwarelifecycle.ReleaseSupport{Scope: scope, Sources: []softwarelifecycle.ReleaseIdentity{}, Contract: softwarelifecycle.SubscriptionUpdateContract}
 	var assets []softwarelifecycle.LatestAssetProof
 	for _, name := range softwarelifecycle.LatestReleaseIndexedAssetNames() {
 		assets = append(assets, softwarelifecycle.LatestAssetProof{Name: name, Size: int64(len(fixture.assets[name])), SHA256: fixture.digests[name]})
@@ -53,14 +55,26 @@ func testCleanInstallSupport(t *testing.T, exception bool) {
 	}
 	fixture.release.Body = body
 	source := NewWithEndpoint(fixture.server.Client(), fixture.server.URL, fixture.verifier)
-	if got, outcome := source.CheckLatest(t.Context()); outcome != softwarelifecycle.LatestReleaseAccepted || got.Support == nil || got.Support.Scope != softwarelifecycle.FirstSubscriptionCleanInstall {
+	latest := softwarelifecycle.LatestRelease{Identity: softwarelifecycle.ReleaseIdentity{Tag: fixture.release.Tag}, Sequence: sequence, Support: &support}
+	refusedException := exception && scope == softwarelifecycle.SubscriptionCleanInstallRepair
+	if qualifiedReleaseSupport(body, latest) == refusedException {
+		t.Fatal("public support result did not match its scope")
+	}
+	if refusedException {
+		if _, outcome := source.CheckLatest(t.Context()); outcome != softwarelifecycle.LatestReleaseRefused {
+			t.Fatal("repair Owner exception admitted")
+		}
+		return
+	}
+	if got, outcome := source.CheckLatest(t.Context()); outcome != softwarelifecycle.LatestReleaseAccepted || got.Support == nil || got.Support.Scope != scope {
 		t.Fatalf("CheckLatest=%+v %v", got, outcome)
 	}
-	mutations := []string{strings.Replace(body, "Release support: ", "Unknown support: ", 1), strings.Replace(body, "first-subscription-clean-install", "recurring-subscription-upgrade", 1)}
+	mutations := []string{strings.Replace(body, "Release support: ", "Unknown support: ", 1), strings.Replace(body, scope, softwarelifecycle.RecurringSubscriptionUpgrade, 1)}
 	if exception {
 		mutations = append(mutations, strings.Replace(body, "Sequence: 83", "Sequence: 84", 1), strings.Replace(body, softwarelifecycle.OwnerExceptionID, "other", 1), strings.ReplaceAll(body, softwarelifecycle.OwnerExceptionLive, "Passed"), strings.Replace(body, "Live qualification: Incomplete", "Live qualification: Complete", 1))
 	} else {
 		mutations = append(mutations, strings.Replace(body, "Karing macOS: Passed", "Karing macOS: Not tested", 1))
+		mutations = append(mutations, strings.Replace(body, "RELEASE-V3-SUBSCRIPTION-CLEAN-INSTALL-QUALIFICATION", "RELEASE-V3-SUBSCRIPTION-QUALIFICATION", 1))
 	}
 	for _, mutated := range mutations {
 		fixture.release.Body = mutated

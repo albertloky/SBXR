@@ -10,8 +10,10 @@ func TestOwnerExceptionIsOneCleanInstallRelease(t *testing.T) {
 	if OwnerExceptionTarget("v3.1.1", 83, support) || OwnerExceptionTarget("v3.1.0", 84, support) || OwnerExceptionTarget("v3.1.0", 83, nil) {
 		t.Fatal("exception broadened")
 	}
-	support.Scope = RecurringSubscriptionUpgrade
-	if OwnerExceptionTarget("v3.1.0", 83, support) {
-		t.Fatal("upgrade exception granted")
+	for _, scope := range []string{RecurringSubscriptionUpgrade, SubscriptionCleanInstallRepair} {
+		support.Scope = scope
+		if OwnerExceptionTarget("v3.1.0", 83, support) {
+			t.Fatalf("exception granted for %s", scope)
+		}
 	}
 }

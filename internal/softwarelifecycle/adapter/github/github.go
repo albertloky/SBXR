@@ -314,7 +314,7 @@ func (source Source) qualificationLatest(release githubRelease, metadata map[str
 }
 
 // A signed attempt authorizes candidate delivery, not a stable Acceptance Record.
-// Version 3 binds either first clean installation or exact recurring sources.
+// Version 3 binds clean installation or exact recurring sources.
 func qualificationSupport(release githubRelease, index []byte, latest softwarelifecycle.LatestRelease) bool {
 	if release.Qualification == nil {
 		return qualifiedReleaseSupport(release.Body, latest)
@@ -354,7 +354,7 @@ func qualificationSupport(release githubRelease, index []byte, latest softwareli
 			return false
 		}
 	}
-	return manifest.SourceState == "v3-subscription-clean" && latest.Support.Scope == softwarelifecycle.FirstSubscriptionCleanInstall || manifest.SourceState == "v3-recurring" && latest.Support.Scope == softwarelifecycle.RecurringSubscriptionUpgrade
+	return manifest.SourceState == "v3-subscription-clean" && (latest.Support.Scope == softwarelifecycle.FirstSubscriptionCleanInstall || latest.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair) || manifest.SourceState == "v3-recurring" && latest.Support.Scope == softwarelifecycle.RecurringSubscriptionUpgrade
 }
 
 func validQualificationDecisionChain(chain []qualificationDecisionChainEntry) bool {

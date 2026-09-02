@@ -8,12 +8,13 @@ import (
 
 const (
 	// ADR-0017: one Owner-approved release, never a general evidence waiver.
-	OwnerExceptionCode            = "RELEASE-V3-SUBSCRIPTION-OWNER-EXCEPTION"
-	OwnerExceptionID              = "owner-approved-v3.1.0-sequence-83"
-	OwnerExceptionLive            = "Not performed; waived by Owner for this release"
-	OwnerExceptionSecrets         = "Automated scans passed; live capture coverage not proved"
-	FirstSubscriptionCleanInstall = "first-subscription-clean-install"
-	RecurringSubscriptionUpgrade  = "recurring-subscription-upgrade"
+	OwnerExceptionCode             = "RELEASE-V3-SUBSCRIPTION-OWNER-EXCEPTION"
+	OwnerExceptionID               = "owner-approved-v3.1.0-sequence-83"
+	OwnerExceptionLive             = "Not performed; waived by Owner for this release"
+	OwnerExceptionSecrets          = "Automated scans passed; live capture coverage not proved"
+	FirstSubscriptionCleanInstall  = "first-subscription-clean-install"
+	SubscriptionCleanInstallRepair = "subscription-clean-install-repair"
+	RecurringSubscriptionUpgrade   = "recurring-subscription-upgrade"
 	// This contract includes schema-2 Update Record runtime completion and the
 	// fixed ownership, package, serving, renewal and startup representations.
 	SubscriptionUpdateContract = "sbxr-subscription-update-v1"
@@ -34,7 +35,7 @@ func (support *ReleaseSupport) valid() bool {
 	if support == nil || support.Contract != SubscriptionUpdateContract || support.Sources == nil || len(support.Sources) > 32 {
 		return false
 	}
-	if support.Scope == FirstSubscriptionCleanInstall {
+	if support.Scope == FirstSubscriptionCleanInstall || support.Scope == SubscriptionCleanInstallRepair {
 		return len(support.Sources) == 0
 	}
 	if support.Scope != RecurringSubscriptionUpgrade || len(support.Sources) == 0 {

@@ -101,9 +101,9 @@ func TestSourceChecksTheCandidateFailureStateBoundQualification(t *testing.T) {
 	if outcome != softwarelifecycle.LatestReleaseAccepted || got.Sequence != 17 {
 		t.Fatalf("CheckLatest() = %#v, %v", got, outcome)
 	}
-	for _, scope := range []string{softwarelifecycle.FirstSubscriptionCleanInstall, softwarelifecycle.RecurringSubscriptionUpgrade} {
+	for _, scope := range []string{softwarelifecycle.FirstSubscriptionCleanInstall, softwarelifecycle.SubscriptionCleanInstallRepair, softwarelifecycle.RecurringSubscriptionUpgrade} {
 		t.Run("signed "+scope, func(t *testing.T) {
-			support := softwarelifecycle.ReleaseSupport{Scope: softwarelifecycle.FirstSubscriptionCleanInstall, Sources: []softwarelifecycle.ReleaseIdentity{}, Contract: softwarelifecycle.SubscriptionUpdateContract}
+			support := softwarelifecycle.ReleaseSupport{Scope: scope, Sources: []softwarelifecycle.ReleaseIdentity{}, Contract: softwarelifecycle.SubscriptionUpdateContract}
 			wireSources := []any{}
 			attemptSources := []any{}
 			sourceState := "v3-subscription-clean"
@@ -175,6 +175,10 @@ func TestSourceChecksTheCandidateFailureStateBoundQualification(t *testing.T) {
 				func(v map[string]any) { v["workflow"].(map[string]any)["commit"] = strings.Repeat("b", 40) },
 				func(v map[string]any) { v["v3_attempt"].(map[string]any)["sources"] = nil },
 				func(v map[string]any) { v["v3_attempt"].(map[string]any)["support"].(map[string]any)["sources"] = nil },
+				func(v map[string]any) { v["v3_attempt"].(map[string]any)["sources"] = []any{map[string]any{}} },
+				func(v map[string]any) {
+					v["v3_attempt"].(map[string]any)["support"].(map[string]any)["sources"] = []any{map[string]any{}}
+				},
 				func(v map[string]any) { v["v3_attempt"].(map[string]any)["candidate_index"] = string(index) + "\n" },
 				func(v map[string]any) {
 					v["v3_attempt"].(map[string]any)["schema"] = "sbxr-v3-qualification-attempt-v2"

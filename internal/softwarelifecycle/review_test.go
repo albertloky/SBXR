@@ -23,21 +23,25 @@ func TestUpdateRefusesChangedReviewedTarget(t *testing.T) {
 }
 
 func TestCleanInstallScopeCannotBeAnUpdateTarget(t *testing.T) {
-	root := t.TempDir()
-	prior := ReleaseIdentity{Repository: Repository, Tag: "v3.0.21", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}
-	target := ReleaseIdentity{Repository: Repository, Tag: "v3.0.22", Commit: strings.Repeat("c", 40), IndexSHA256: strings.Repeat("d", 64)}
-	writeInstalledEvidence(t, root, installedEvidence(t, prior, 21, AMD64))
-	candidate := updateCandidateFromEvidence(t, target, 22, AMD64, installedEvidence(t, target, 22, AMD64))
-	candidate.cell.release.Support = &ReleaseSupport{Scope: FirstSubscriptionCleanInstall, Sources: []ReleaseIdentity{}, Contract: SubscriptionUpdateContract}
-	source := &controlledUpdateSource{candidate: candidate}
-	lifecycle := newInstalledInterface(filesystemInspector{root: root, uid: uint32(os.Getuid())}, source)
-	if got := lifecycle.Check(t.Context(), nil); got.Code != CheckReleaseRefused {
-		t.Fatalf("Check = %+v", got)
-	}
-	if got := lifecycle.Update(t.Context(), nil); got.Code != UpdateReleaseRefused {
-		t.Fatalf("Update = %+v", got)
-	}
-	if got := lifecycle.Status(t.Context()); got.Installed == nil || *got.Installed != prior {
-		t.Fatal("prior changed")
+	for _, scope := range []string{FirstSubscriptionCleanInstall, SubscriptionCleanInstallRepair} {
+		t.Run(scope, func(t *testing.T) {
+			root := t.TempDir()
+			prior := ReleaseIdentity{Repository: Repository, Tag: "v3.0.21", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}
+			target := ReleaseIdentity{Repository: Repository, Tag: "v3.0.22", Commit: strings.Repeat("c", 40), IndexSHA256: strings.Repeat("d", 64)}
+			writeInstalledEvidence(t, root, installedEvidence(t, prior, 21, AMD64))
+			candidate := updateCandidateFromEvidence(t, target, 22, AMD64, installedEvidence(t, target, 22, AMD64))
+			candidate.cell.release.Support = &ReleaseSupport{Scope: scope, Sources: []ReleaseIdentity{}, Contract: SubscriptionUpdateContract}
+			source := &controlledUpdateSource{candidate: candidate}
+			lifecycle := newInstalledInterface(filesystemInspector{root: root, uid: uint32(os.Getuid())}, source)
+			if got := lifecycle.Check(t.Context(), nil); got.Code != CheckReleaseRefused {
+				t.Fatalf("Check = %+v", got)
+			}
+			if got := lifecycle.Update(t.Context(), nil); got.Code != UpdateReleaseRefused {
+				t.Fatalf("Update = %+v", got)
+			}
+			if got := lifecycle.Status(t.Context()); got.Installed == nil || *got.Installed != prior {
+				t.Fatal("prior changed")
+			}
+		})
 	}
 }
