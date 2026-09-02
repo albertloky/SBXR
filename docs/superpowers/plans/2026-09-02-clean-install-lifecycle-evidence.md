@@ -10,7 +10,7 @@ Acceptance Record, and public verifier; add no workflow or configurable waiver.
 - [x] Run focused tests, then `GOTOOLCHAIN=go1.26.6 go test -p 1 ./...`,
   `GOTOOLCHAIN=go1.26.6 go test -p 1 -race ./...`, `GOTOOLCHAIN=go1.26.6 go vet ./...`,
   and `GOTOOLCHAIN=go1.26.6 go mod verify`; review the final diff.
-- [ ] Update acceptance procedure and tracker decision, commit/push exact files.
+- [x] Update acceptance procedure and tracker decision, commit/push exact files.
 - [ ] Recheck host/packages/release history; qualify a fresh signed candidate
   through all 25 live scenarios and full Karing, then publish stable only on pass.
 
@@ -23,3 +23,9 @@ normal/race packages sequentially with `-p 1`; retain the default package timeou
 and all live scenario/transport deadlines. Independent specification review
 found no blocker. Approved tracker pointers: #342 comment 5506809472 and #331
 comment 5506825047.
+
+Implementation pushed as `81a43da56bfcaccf461323eefe16698e3f040ed6`.
+Fresh run `33611200606` failed before signing because the repository is private
+and anonymous public Latest verification returns HTTP 404. Live qualification
+and publication remain blocked on an explicit Owner visibility decision; do not
+make the repository public or bypass anonymous verification under fix approval.

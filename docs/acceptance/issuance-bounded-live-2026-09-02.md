@@ -1,5 +1,30 @@
 # Issuance-bounded repair: failed live attempts
 
+## Unsigned sequence 90: public release access unavailable
+
+[Candidate run 33611200606](https://github.com/albertloky/SBXR/actions/runs/33611200606)
+used commit `81a43da56bfcaccf461323eefe16698e3f040ed6`, `v3.1.7`, Sequence `90`,
+and the approved v2 declaration. Preflight failed at public Latest verification,
+before candidate builds, draft construction, signing, or live setup. The same
+production verifier locally returned `refused`; a temporary diagnostic isolated
+the failure to the initial public metadata request, before acceptance-record or
+signature checks. Anonymous repository, Latest API, and release-page requests
+returned HTTP `404`, while authenticated GitHub inspection reported
+`visibility: PRIVATE`, `isPrivate: true`. Anonymous quota remained available;
+this was not a rate-limit refusal. The diagnostic was removed after inspection.
+
+No visibility change, authenticated-verifier bypass, signed attempt, or production
+CA request was made. Making the repository public exposes source and history and
+requires an explicit Owner visibility decision; general fix approval is not that
+decision. Public install/verification cannot qualify while anonymous access is
+unavailable. Existing stable `v3.1.0` remains the authenticated Latest record;
+that is not proof it is publicly available. No `v3.1.7` or burned tag was created.
+
+At `2026-09-02T08:59:53Z`, Certbot `5.8.0` revision `5893` was restored, the
+general certbot/snapd/core24 holds were removed, and both original APT timers
+were active/enabled. Product, transport, and evidence directories were absent.
+No Karing app replacement, profile change, or connection change occurred.
+
 ## Approved lifecycle evidence correction
 
 Albert approved [ADR-0020](../adr/0020-clean-install-lifecycle-evidence.md) on
