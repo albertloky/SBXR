@@ -139,6 +139,18 @@ esac
 	if adapter.PublishProxyStartupIntegration(wrongAuthority) {
 		t.Fatal("wrong startup digest was published")
 	}
+	if fresh {
+		prior := syscall.Umask(0077)
+		defer syscall.Umask(prior)
+		if !adapter.PublishProxyStartupIntegration(authority) {
+			t.Fatal("startup publication under restrictive umask failed")
+		}
+		syscall.Umask(prior)
+		info, err := os.Stat(adapter.path(ProxyStartupDropInDirectory))
+		if err != nil || info.Mode().Perm() != 0755 {
+			t.Fatalf("startup directory differs from its declared mode: %v %v", info, err)
+		}
+	}
 	if !adapter.PublishProxyStartupIntegration(authority) || !authority.Valid() || !authority.DirectoryCreated {
 		t.Fatalf("startup authority = %#v", authority)
 	}

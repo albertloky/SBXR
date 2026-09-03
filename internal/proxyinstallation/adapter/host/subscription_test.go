@@ -818,6 +818,152 @@ func TestSubscriptionPublicationAppliesExactModeUnderRestrictiveUmask(t *testing
 	}
 }
 
+func TestSubscriptionPreparationCreatesMissingRecorderDirectory(t *testing.T) {
+	for _, created := range []bool{true, false} {
+		t.Run(fmt.Sprintf("created=%t", created), func(t *testing.T) {
+			testSubscriptionRecorderDirectory(t, created)
+		})
+	}
+}
+
+func testSubscriptionRecorderDirectory(t *testing.T, created bool) {
+	t.Helper()
+	adapter, renewal := renewalFiles(t)
+	for _, file := range renewalManagedFiles {
+		if err := os.Remove(adapter.path(file.path)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Remove(adapter.path(RenewalEvidencePath)); err != nil {
+		t.Fatal(err)
+	}
+	if created {
+		if err := os.Remove(adapter.path(filepath.Dir(RenewalDropInPath))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	installRenewalCertificate(t, adapter, renewal.PublicIPv4)
+	for _, name := range []string{"chain", "fullchain", "privkey"} {
+		if err := os.Symlink("../../archive/sbxr-subscription/"+name+"1.pem", adapter.path(servingLive+"/"+name+".pem")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	command := adapter.subscriptionCommand
+	command(t.Context(), "systemctl", "daemon-reload")
+	firewall := false
+	adapter.clockSynchronized = func(context.Context) bool { return true }
+	adapter.packageLocksAvailable = func() bool { return true }
+	adapter.subscriptionBind = func(string, string) bool { return true }
+	adapter.subscriptionCommand = func(ctx context.Context, name string, args ...string) (string, int, bool) {
+		switch name {
+		case "pgrep":
+			return "", 1, true
+		case "dpkg-query":
+			return "snapd installed 2.73\n", 0, true
+		case "snap":
+			if args[0] == "changes" {
+				return "ID Status Spawn Ready Summary\n1 Done today today Installed\n", 0, true
+			}
+			return "Name Version Rev Tracking Publisher Notes\ncertbot 5.4.0 5000 latest/stable certbot-eff✓ classic\n", 0, true
+		case "iptables-save":
+			rules := "*filter\n:INPUT ACCEPT [0:0]\n"
+			if firewall {
+				for _, port := range []string{"80", "8443"} {
+					rules += "-A INPUT -d 8.8.8.8/32 -p tcp -m tcp --dport " + port + " -m comment --comment sbxr-subscription -j ACCEPT\n"
+				}
+			}
+			return rules + "COMMIT\n", 0, true
+		case "systemctl":
+			if slices.Equal(args, []string{"enable", "--now", "sbxr-subscription-firewall.service"}) {
+				firewall = true
+			}
+			if slices.Equal(args, []string{"disable", "--now", "sbxr-subscription-firewall.service"}) {
+				firewall = false
+			}
+		}
+		return command(ctx, name, args...)
+	}
+	credential := []byte(base64.RawURLEncoding.EncodeToString(make([]byte, 32)))
+	checkpoint := 0
+	input := SubscriptionEnableInput{PublicIPv4: renewal.PublicIPv4, Credential: credential,
+		Serving: ServingAuthority{LinkID: strings.Repeat("b", 32), CredentialSHA256: digest(credential)}, Renewal: renewal,
+		Resources: SubscriptionResourcesForEnablement(renewal.PublicIPv4, adapter.PreflightSubscription(t.Context(), renewal.PublicIPv4)),
+		Authorize: func(next int, _ *ServingAuthority) bool {
+			if next != checkpoint+1 {
+				return false
+			}
+			checkpoint = next
+			return true
+		},
+	}
+	prior := syscall.Umask(0077)
+	defer syscall.Umask(prior)
+	result := adapter.PrepareSubscription(t.Context(), input)
+	syscall.Umask(prior)
+	if !result.Prepared {
+		t.Fatalf("fresh subscription preparation failed at checkpoint %d", checkpoint)
+	}
+	if result.Resources.RecorderDirectoryCreated != created {
+		t.Fatal("recorder directory creation provenance changed")
+	}
+	info, err := os.Stat(adapter.path(filepath.Dir(RenewalDropInPath)))
+	if err != nil || info.Mode().Perm() != 0755 {
+		t.Fatalf("recorder directory mode differs from authority: %v %v", info, err)
+	}
+	for _, file := range renewalManagedFiles {
+		if err := os.Remove(adapter.path(file.path)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unrelated := adapter.path(filepath.Dir(RenewalDropInPath) + "/unrelated")
+	if err := os.WriteFile(unrelated, []byte("preserve\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := adapter.RemoveSubscriptionResources(t.Context(), result.Resources, &result.Serving); got == created {
+		t.Fatal("cleanup did not distinguish reused directory from unexpected created-directory residue")
+	}
+	if body, err := os.ReadFile(unrelated); err != nil || string(body) != "preserve\n" {
+		t.Fatal("unrelated file was changed")
+	}
+	if err := os.Remove(unrelated); err != nil {
+		t.Fatal(err)
+	}
+	if !adapter.RemoveSubscriptionResources(t.Context(), result.Resources, &result.Serving) {
+		t.Fatal("safe recorder directory cleanup failed")
+	}
+	_, err = os.Lstat(adapter.path(filepath.Dir(RenewalDropInPath)))
+	if created && !errors.Is(err, os.ErrNotExist) || !created && err != nil {
+		t.Fatalf("directory cleanup did not preserve provenance: %v", err)
+	}
+}
+
+func TestSubscriptionRecorderDirectoryRefusesUnsafeExistingPaths(t *testing.T) {
+	for _, kind := range []string{"mode", "symlink", "file"} {
+		t.Run(kind, func(t *testing.T) {
+			adapter := Adapter{root: t.TempDir()}
+			path := adapter.path(filepath.Dir(RenewalDropInPath))
+			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+				t.Fatal(err)
+			}
+			var err error
+			switch kind {
+			case "mode":
+				err = os.Mkdir(path, 0700)
+			case "symlink":
+				err = os.Symlink(filepath.Dir(path), path)
+			case "file":
+				err = os.WriteFile(path, []byte("unrelated\n"), 0600)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if created, observation := adapter.inspectRecorderDirectory(); created || observation.Accepted {
+				t.Fatal("unsafe recorder directory admitted")
+			}
+		})
+	}
+}
+
 func TestSubscriptionPublicationFinishesExactSynchronizedStaging(t *testing.T) {
 	adapter := Adapter{root: t.TempDir()}
 	if err := os.MkdirAll(adapter.path("/var/lib/sbxr"), 0700); err != nil {

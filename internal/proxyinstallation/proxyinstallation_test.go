@@ -385,7 +385,7 @@ func (host *controlledHost) PreflightSubscription(context.Context, string) hosta
 		return *host.subscriptionPreflight
 	}
 	yes := hostadapter.Observation{Observed: true, Accepted: true}
-	return hostadapter.SubscriptionPreflight{TCP80: yes, TCP8443: yes, Clock: yes, PackageLocks: yes, RenewalIdle: yes, Dependencies: yes, Firewall: yes}
+	return hostadapter.SubscriptionPreflight{TCP80: yes, TCP8443: yes, Clock: yes, PackageLocks: yes, RenewalIdle: yes, Dependencies: yes, Firewall: yes, RecorderDirectory: yes, RecorderDirectoryCreated: true}
 }
 
 func TestPinnedPackageProvenanceUsesCanonicalServiceUnitPath(t *testing.T) {
@@ -1255,7 +1255,7 @@ func TestOwnerCanReviewAndDeclineSubscriptionEnablement(t *testing.T) {
 				t.Fatalf("enable review = %#v", review)
 			}
 			plan := strings.Join(review.Plan, "\n")
-			for _, want := range []string{"Enable subscription", "8.8.8.8", "8443", "80", "provider", "snapd", "Certbot", "sbxr-subscription", "renewal", "shared", "Karing"} {
+			for _, want := range []string{"Enable subscription", "8.8.8.8", "8443", "80", "provider", "snapd", "Certbot", "sbxr-subscription", "renewal", "shared", "Karing", "Create /etc/systemd/system/snap.certbot.renew.service.d", "only when empty"} {
 				if !strings.Contains(plan, want) {
 					t.Errorf("Plan missing %q: %s", want, plan)
 				}
@@ -1303,6 +1303,9 @@ func TestOwnerCanEnableOneVerifiedSubscriptionGeneration(t *testing.T) {
 	record, ok := decodeOwnership(host.ownership)
 	if !ok || record.Schema != 2 || record.Serving == nil || record.Renewal == nil || record.Enablement != nil || !host.subscriptionPrepared {
 		t.Fatalf("ownership = %#v valid=%t", record, ok)
+	}
+	if record.SubscriptionResources == nil || !record.SubscriptionResources.RecorderDirectoryCreated {
+		t.Fatal("recorder directory creation provenance was not retained in ownership")
 	}
 	if bytes.Contains(host.ownership, host.subscriptionCredential) || bytes.Contains(host.ownership, links[0]) {
 		t.Fatal("Ownership Record contains a subscription credential")
@@ -1747,7 +1750,7 @@ func TestSubscriptionReviewRefusesUnsafeAuthorityAndPreservesSecrets(t *testing.
 }
 
 func TestSubscriptionReviewGatesFreshSafetyFacts(t *testing.T) {
-	for _, check := range []string{"TCP80", "TCP8443", "Clock", "PackageLocks", "RenewalIdle", "Dependencies", "Firewall"} {
+	for _, check := range []string{"TCP80", "TCP8443", "Clock", "PackageLocks", "RenewalIdle", "Dependencies", "RecorderDirectory", "Firewall"} {
 		for _, observed := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/observed=%t", check, observed), func(t *testing.T) {
 				host := acceptedHost()

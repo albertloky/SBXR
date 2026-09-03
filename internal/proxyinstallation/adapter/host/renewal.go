@@ -226,6 +226,9 @@ func (a Adapter) synchronizeRenewalEvidence(authority RenewalAuthority) (Renewal
 }
 
 func (a Adapter) renewalFiles(authority RenewalAuthority) bool {
+	if absent, inspected := a.inspectRecorderDirectory(); absent || !inspected.Accepted {
+		return false
+	}
 	for _, file := range renewalManagedFiles {
 		body, err := a.protectedServingFile(file.path, file.mode, "")
 		if err != nil || string(body) != file.body {

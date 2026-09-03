@@ -51,6 +51,7 @@ func (module *installedInterface) subscriptionAdmission(ctx context.Context, fac
 		{facts.PackageLocks, "Ubuntu package locks", "Wait for APT and dpkg to finish, then review again."},
 		{facts.RenewalIdle, "Shared Certbot admission", ""},
 		{facts.Dependencies, "Subscription dependencies", "Restore inspectable snapd and official Certbot snap 5.4+ or prove their absence; APT Certbot and active or unknown snap changes are unsupported. Inspect conflicts without deleting unproved resources."},
+		{facts.RecorderDirectory, "Renewal recorder directory", "Require the systemd recorder directory to be absent or a root-owned 0755 directory. Preserve unrelated drop-ins."},
 		{facts.Firewall, "Local firewall", "Restore readable iptables filter rules and resolve conflicting sbxr-subscription contributions before review; preserve unrelated rules."},
 	} {
 		if !check.fact.Observed || !check.fact.Accepted {
@@ -292,6 +293,10 @@ func subscriptionPlan(ipv4 string, facts hostadapter.SubscriptionPreflight) []st
 	if facts.CertbotInstalled {
 		certbot = "reuse compatible official Certbot snap 5.4+"
 	}
+	recorderDirectory := "Reuse /etc/systemd/system/snap.certbot.renew.service.d (root:root 0755); preserve this directory and unrelated drop-ins during removal."
+	if facts.RecorderDirectoryCreated {
+		recorderDirectory = "Create /etc/systemd/system/snap.certbot.renew.service.d (root:root 0755); record its creation and remove it only when empty after owned recorder cleanup."
+	}
 	return []string{
 		"Action: Enable subscription",
 		"Proxy status: Running; Subscription status: Not enabled.",
@@ -300,6 +305,7 @@ func subscriptionPlan(ipv4 string, facts hostadapter.SubscriptionPreflight) []st
 		"Create two owned iptables filter INPUT ACCEPT rules: IPv4 destination " + ipv4 + "/32, protocol tcp, destination ports 80 and 8443 respectively, comment sbxr-subscription. Keep them while enabled; preserve unrelated rules and remove only the exact owned contributions during Complete removal.",
 		"The Owner must allow provider-firewall TCP 80 and 8443 for the enabled lifetime. SBXR cannot inspect or change provider policy.",
 		snapd + "; " + certbot + ". Record creation or reuse; reuse a compatible Let's Encrypt ACME account or create one, retaining it as shared infrastructure.",
+		recorderDirectory,
 		"Create the dedicated sbxr-subscription lineage with a Let's Encrypt shortlived IP certificate; retain canonical certificate and private-key protection.",
 		"Use official Certbot scheduled renewal only, with owned deploy/post hooks and a renewal recorder. Recorder-start failure blocks the shared scheduled child and can delay unrelated lineages.",
 		"Create owned Subscription Serving state, protected /var/lib/sbxr/subscription-token, and sbxr-subscription.service; disclose one reusable Subscription Link only after commitment and local verification.",

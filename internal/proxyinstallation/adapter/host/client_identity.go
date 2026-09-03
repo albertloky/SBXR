@@ -71,7 +71,7 @@ func (adapter Adapter) PublishProxyStartupIntegration(authority ProxyStartupAuth
 		return false
 	}
 	if _, err := os.Lstat(adapter.path(ProxyStartupDropInDirectory)); errors.Is(err, os.ErrNotExist) {
-		if !authority.DirectoryCreated || adapter.safeParents(filepath.Dir(ProxyStartupDropInDirectory)) != nil || os.Mkdir(adapter.path(ProxyStartupDropInDirectory), 0755) != nil || adapter.syncOwnershipDirectory(adapter.path(filepath.Dir(ProxyStartupDropInDirectory))) != nil {
+		if !authority.DirectoryCreated || adapter.safeParents(filepath.Dir(ProxyStartupDropInDirectory)) != nil || os.Mkdir(adapter.path(ProxyStartupDropInDirectory), 0755) != nil || os.Chmod(adapter.path(ProxyStartupDropInDirectory), 0755) != nil || adapter.syncOwnershipDirectory(adapter.path(filepath.Dir(ProxyStartupDropInDirectory))) != nil {
 			return false
 		}
 	}

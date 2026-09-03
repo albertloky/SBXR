@@ -25,6 +25,8 @@ import (
 // SubscriptionPreflight contains read-only admission facts, not execution authority.
 type SubscriptionPreflight struct {
 	TCP80, TCP8443, Clock, PackageLocks, RenewalIdle, Dependencies, Firewall Observation
+	RecorderDirectory                                                        Observation
+	RecorderDirectoryCreated                                                 bool
 	SnapdInstalled, CertbotInstalled                                         bool
 	DependencyIdentity, FirewallIdentity                                     string
 	RenewalCorrection                                                        string
@@ -73,10 +75,11 @@ const SubscriptionCandidateTokenPath = ServingStagingPath + "/credential"
 const SubscriptionCandidateStatePath = ServingStagingPath + "/serving.json"
 
 type SubscriptionResourceAuthority struct {
-	PublicIPv4     string `json:"public_ipv4"`
-	FirewallSHA256 string `json:"firewall_sha256"`
-	SnapdCreated   bool   `json:"snapd_created"`
-	CertbotCreated bool   `json:"certbot_created"`
+	PublicIPv4               string `json:"public_ipv4"`
+	FirewallSHA256           string `json:"firewall_sha256"`
+	SnapdCreated             bool   `json:"snapd_created"`
+	CertbotCreated           bool   `json:"certbot_created"`
+	RecorderDirectoryCreated bool   `json:"recorder_directory_created,omitempty"`
 }
 
 func (a SubscriptionResourceAuthority) Valid() bool {
@@ -93,19 +96,24 @@ func (a SubscriptionResourceAuthority) Resources() []string {
 	if a.CertbotCreated {
 		certbot = "created"
 	}
-	return []string{
+	resources := []string{
 		SubscriptionFirewallUnitPath + " root:root 0644 one-link sha256:" + a.FirewallSHA256,
 		"iptables filter INPUT " + a.PublicIPv4 + "/32 tcp/80 comment=sbxr-subscription exact-owned",
 		"iptables filter INPUT " + a.PublicIPv4 + "/32 tcp/8443 comment=sbxr-subscription exact-owned",
 		"snapd dependency " + snapd,
 		"official Certbot snap dependency " + certbot,
 	}
+	if a.RecorderDirectoryCreated {
+		resources = append(resources, filepath.Dir(RenewalDropInPath)+" root:root 0755 SBXR-created empty-after-drop-in-removal")
+	}
+	return resources
 }
 
 func SubscriptionResourcesForEnablement(publicIPv4 string, facts SubscriptionPreflight) SubscriptionResourceAuthority {
 	return SubscriptionResourceAuthority{
 		PublicIPv4: publicIPv4, FirewallSHA256: digest([]byte(subscriptionFirewallUnit(publicIPv4))),
 		SnapdCreated: !facts.SnapdInstalled, CertbotCreated: !facts.CertbotInstalled,
+		RecorderDirectoryCreated: facts.RecorderDirectoryCreated,
 	}
 }
 
@@ -199,6 +207,7 @@ func (adapter Adapter) PreflightSubscription(ctx context.Context, ipv4 string) S
 	rules = strings.Join(stableRules, "\n")
 	facts.Firewall = observation(code == 0 && strings.Contains(rules, "*filter\n") && strings.Contains(rules, ":INPUT ") && strings.Contains(rules, "\nCOMMIT") && !strings.Contains(rules, "sbxr-subscription"), observed && code == 0)
 	facts.FirewallIdentity = fmt.Sprintf("%x", sha256.Sum256([]byte(rules)))
+	facts.RecorderDirectoryCreated, facts.RecorderDirectory = adapter.inspectRecorderDirectory()
 
 	return adapter.subscriptionDependencies(ctx, facts)
 }
@@ -295,7 +304,7 @@ func (adapter Adapter) PrepareSubscription(ctx context.Context, input Subscripti
 		return SubscriptionEnableResult{}
 	}
 	facts := adapter.PreflightSubscription(ctx, input.PublicIPv4)
-	if !facts.TCP80.Accepted || !facts.TCP8443.Accepted || !facts.Clock.Accepted || !facts.PackageLocks.Accepted || !facts.RenewalIdle.Accepted || !facts.Dependencies.Accepted || !facts.Firewall.Accepted {
+	if !facts.TCP80.Accepted || !facts.TCP8443.Accepted || !facts.Clock.Accepted || !facts.PackageLocks.Accepted || !facts.RenewalIdle.Accepted || !facts.Dependencies.Accepted || !facts.Firewall.Accepted || !facts.RecorderDirectory.Accepted {
 		return SubscriptionEnableResult{}
 	}
 	run := adapter.subscriptionCommand
@@ -397,7 +406,7 @@ func (adapter Adapter) PrepareSubscription(ctx context.Context, input Subscripti
 	}
 	evidence = append(evidence, '\n')
 	for index, file := range renewalManagedFiles {
-		if !authorize(16+index, &serving) || !adapter.publishSubscriptionFile(file.path, []byte(file.body), file.mode) {
+		if !authorize(16+index, &serving) || index == 0 && !adapter.prepareRecorderDirectory(resources) || !adapter.publishSubscriptionFile(file.path, []byte(file.body), file.mode) {
 			return SubscriptionEnableResult{Resources: resources}
 		}
 	}
@@ -405,6 +414,30 @@ func (adapter Adapter) PrepareSubscription(ctx context.Context, input Subscripti
 		return SubscriptionEnableResult{Resources: resources}
 	}
 	return SubscriptionEnableResult{Serving: serving, Renewal: input.Renewal, Resources: resources, Prepared: true}
+}
+
+func (adapter Adapter) inspectRecorderDirectory() (bool, Observation) {
+	path := filepath.Dir(RenewalDropInPath)
+	if err := adapter.safeParents(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, Observation{}
+	}
+	info, err := os.Lstat(adapter.path(path))
+	if errors.Is(err, os.ErrNotExist) {
+		return true, observation(true, true)
+	}
+	stat, ok := infoSys(info)
+	return false, observation(err == nil && ok && info.IsDir() && info.Mode().Perm() == 0755 && stat.Uid == adapter.ownerUID(), err == nil)
+}
+
+func (adapter Adapter) prepareRecorderDirectory(authority SubscriptionResourceAuthority) bool {
+	path := filepath.Dir(RenewalDropInPath)
+	if authority.RecorderDirectoryCreated {
+		if adapter.safeParents(path) != nil || os.Mkdir(adapter.path(path), 0755) != nil || os.Chmod(adapter.path(path), 0755) != nil || adapter.syncOwnershipDirectory(adapter.path(path)) != nil || adapter.syncOwnershipDirectory(adapter.path(filepath.Dir(path))) != nil {
+			return false
+		}
+	}
+	absent, inspected := adapter.inspectRecorderDirectory()
+	return !absent && inspected.Accepted
 }
 
 func (adapter Adapter) publishSubscriptionFile(path string, body []byte, mode os.FileMode) bool {
@@ -1027,6 +1060,12 @@ func (adapter Adapter) RemoveSubscriptionResources(ctx context.Context, authorit
 	}
 	if !adapter.removeOwnedLineage(serving) {
 		return false
+	}
+	if authority.RecorderDirectoryCreated {
+		_, inspected := adapter.inspectRecorderDirectory()
+		if !inspected.Accepted || !adapter.removeEmptyDirectory(filepath.Dir(RenewalDropInPath)) {
+			return false
+		}
 	}
 	_, code, observed := run(ctx, "systemctl", "daemon-reload")
 	if !observed || code != 0 {

@@ -166,6 +166,19 @@ func TestRenewalInspectionAcceptsHeldOfficialCertbot(t *testing.T) {
 	}
 }
 
+func TestRenewalFilesRefuseRecorderDirectoryModeDrift(t *testing.T) {
+	a, authority := renewalFiles(t)
+	if !a.renewalFiles(authority) {
+		t.Fatal("valid renewal fixture refused")
+	}
+	if err := os.Chmod(a.path(filepath.Dir(RenewalDropInPath)), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if a.renewalFiles(authority) {
+		t.Fatal("recorder directory mode drift accepted")
+	}
+}
+
 func TestRenewalInspectionRefusesUnsupportedCertbotModes(t *testing.T) {
 	for _, notes := range []string{"held", "classic,devmode", "classic,devmode,held", "classic,unknown"} {
 		t.Run(notes, func(t *testing.T) {
