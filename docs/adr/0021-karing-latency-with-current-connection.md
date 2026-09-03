@@ -33,12 +33,15 @@ link refresh; preserve other fields/name. Coordinate automatic refresh so it
 cannot update the UUID before the negative check. A timeout alone does not prove
 revocation: independently prove outside-target health and server-side refusal.
 
-Preserve the current selected connection, unrelated profiles, DNS, routing, TUN,
-and Owner settings throughout. Do not select SBXR, redirect ordinary Mac traffic
-through it, or disconnect/restart the current connection to force a test. Karing's
-latency handler can request a VPN start/restart when configuration is dirty. If
-the exact package cannot test without disturbing the current connection, stop
-before that action and report missing evidence; do not claim success or bypass it.
+On 2026-09-03 (Asia/Hong_Kong), Albert additionally approved Karing's automatic
+configuration reload during this test, with possible connection interruption,
+provided his existing server remains selected and SBXR is never selected. This
+supersedes the original no-restart requirement before any v3 attempt was signed.
+`current-connection-preserved` means the selected connection is preserved, not
+uninterrupted sessions. Preserve unrelated profiles, DNS, routing, TUN, and Owner
+settings. Permit only the automatic reload needed by import, refresh, or latency
+testing; do not manually disconnect, switch servers, or redirect ordinary Mac
+traffic through SBXR. Observe the selected server before and after each reload.
 
 Keep all other final checks: exact official package, trusted real link, one remote
 profile/node, fields/name/settings, manual and genuinely due five-minute automatic
@@ -52,7 +55,7 @@ revocation, startup, and fallback proof, without using the Owner's Karing route.
 Require these exact public Acceptance Record lines:
 
 ```text
-Karing connectivity evidence: Fresh per-node latency; current connection preserved; no Karing browsing or established-session claim
+Karing connectivity evidence: Fresh per-node latency; selected connection preserved; automatic configuration reload permitted; no uninterrupted-connection, Karing browsing or established-session claim
 Karing checks not performed: karing-final/direct-and-proxied-traffic karing-final/old-established-session-terminated karing-final/traffic-restored karing-final/direct-refresh-correction-or-confirmed-fallback
 ```
 

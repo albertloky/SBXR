@@ -165,7 +165,7 @@ func TestQualifiedReleaseSupportBindsRepairLatencyDisclosure(t *testing.T) {
 	support := softwarelifecycle.ReleaseSupport{Scope: softwarelifecycle.SubscriptionCleanInstallRepair, Sources: []softwarelifecycle.ReleaseIdentity{}, Contract: softwarelifecycle.SubscriptionUpdateContract}
 	encoded, _ := json.Marshal(support)
 	body := "Release support: " + string(encoded) + "\nStable result code: RELEASE-V3-SUBSCRIPTION-CLEAN-INSTALL-QUALIFICATION\nEvidence policy: repair-issuance-bounded-v3\nAutomated-only scenarios (not live): " + softwarelifecycle.RepairAutomatedOnlyScenarios + "\nAutomated-only result: Passed in native amd64/arm64 workflow\nAutomated-only checks (not live): " + softwarelifecycle.RepairAutomatedOnlyChecks + "\n"
-	coverage := "Karing connectivity evidence: Fresh per-node latency; current connection preserved; no Karing browsing or established-session claim\n"
+	coverage := "Karing connectivity evidence: Fresh per-node latency; selected connection preserved; automatic configuration reload permitted; no uninterrupted-connection, Karing browsing or established-session claim\n"
 	excluded := "Karing checks not performed: karing-final/direct-and-proxied-traffic karing-final/old-established-session-terminated karing-final/traffic-restored karing-final/direct-refresh-correction-or-confirmed-fallback\n"
 	release := softwarelifecycle.LatestRelease{Support: &support}
 	if !qualifiedReleaseSupport(body+coverage+excluded, release) {
@@ -175,6 +175,8 @@ func TestQualifiedReleaseSupportBindsRepairLatencyDisclosure(t *testing.T) {
 		body, body + coverage, body + excluded,
 		body + coverage + excluded + coverage, body + coverage + excluded + excluded,
 		body + strings.Replace(coverage, "Fresh per-node latency", "Full traffic passed", 1) + excluded,
+		body + "Karing connectivity evidence: Fresh per-node latency; current connection preserved; no Karing browsing or established-session claim\n" + excluded,
+		body + strings.Replace(coverage, "automatic configuration reload permitted; ", "", 1) + excluded,
 		body + coverage + strings.Replace(excluded, "karing-final/old-established-session-terminated ", "", 1),
 		strings.Replace(body, "repair-issuance-bounded-v3", "repair-issuance-bounded-v2", 1) + coverage + excluded,
 		strings.Replace(body, "repair-issuance-bounded-v3", "repair-issuance-bounded-v1", 1) + coverage + excluded,

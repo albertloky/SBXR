@@ -18,7 +18,7 @@ const (
 	RepairEvidencePolicy              = "repair-issuance-bounded-v1"
 	RepairLifecycleEvidencePolicy     = "repair-issuance-bounded-v2"
 	RepairKaringLatencyEvidencePolicy = "repair-issuance-bounded-v3"
-	RepairKaringConnectivityEvidence  = "Fresh per-node latency; current connection preserved; no Karing browsing or established-session claim"
+	RepairKaringConnectivityEvidence  = "Fresh per-node latency; selected connection preserved; automatic configuration reload permitted; no uninterrupted-connection, Karing browsing or established-session claim"
 	RepairKaringChecksNotPerformed    = "karing-final/direct-and-proxied-traffic karing-final/old-established-session-terminated karing-final/traffic-restored karing-final/direct-refresh-correction-or-confirmed-fallback"
 	RepairAutomatedOnlyChecks         = "lifecycle-menu/explicit-confirmation lifecycle-menu/clean-install-target-refused"
 	RepairAutomatedOnlyScenarios      = "enable-precommit enable-postcommit enable-schema2-absent repair-precommit repair-postcommit activation-precommit activation-postcommit invalid-replacement recorder-start recorder-outcome recorder-stale recorder-retention recorder-death recorder-reboot remove-enable-precommit remove-enable-postcommit remove-link-precommit remove-link-postcommit remove-repair-precommit remove-repair-postcommit remove-activation-precommit remove-activation-postcommit remove-identity-precommit remove-identity-postcommit remove-death remove-reboot remove-shared-route remove-finalization remove-exact-restoration"

@@ -7,8 +7,9 @@ This is the required first-V3 stage inside Release Qualification. It qualifies o
 ## Subscription qualification scopes
 
 New repair attempts use [ADR-0021](../adr/0021-karing-latency-with-current-connection.md)
-and `repair-issuance-bounded-v3`: per-node Karing latency with the Owner's current
-connection preserved. This supersedes the v2/full-Karing clauses below only for
+and `repair-issuance-bounded-v3`: per-node Karing latency with the Owner's selected
+connection preserved and automatic configuration reload permitted. This does not
+claim uninterrupted sessions. It supersedes the v2/full-Karing clauses below only for
 that explicit policy. Historical v1/v2 attempts retain their original contracts.
 
 Use the same `.github/workflows/candidate.yml`, `acceptance-vps` approval, `sbxr-release qualification` command, failure finalization, and `.github/workflows/stable.yml`. No new release asset, product dispatch, or transaction harness is introduced. The workflow's `v3` input requests evidence version `3`. It cannot use historical evidence, an empty source list alone, or normal/rescue qualification to bypass subscription obligations.
@@ -130,8 +131,9 @@ the five observations exactly as ADR-0021 specifies. The operator journey is:
 
 1. Record the current Karing connection and settings privately. Import only the
    SBXR test profile; never select it as the active connection. Prove one node and
-   exact fields/name. If a step needs a VPN restart or route/selector change,
-   stop before it; this approval does not permit disturbing the current connection.
+   exact fields/name. Albert approved automatic configuration reload during this
+   test, including possible interruption, but no manual disconnect or route/selector
+   change. Observe the same selected server before and after each reload.
 2. Press latency for that node and observe a new successful result, not an old
    displayed number. Keep manual and genuinely due five-minute automatic refresh.
 3. Coordinate reviewed server Client Identity rotation. Before any refresh,
@@ -145,7 +147,8 @@ the five observations exactly as ADR-0021 specifies. The operator journey is:
    latency success. Restore HTTPS and prove refresh from the same link succeeds.
 6. Complete removal; prove server absence and outside access refusal, including a
    fresh failed SBXR-node test. Remove only test-owned data. Prove the Owner's
-   original connection/settings remained unchanged throughout.
+   original selected server/settings remained unchanged throughout; do not claim
+   uninterrupted sessions across the approved automatic configuration reload.
 
 All server-side session termination, process/descendant, startup, credential
 refusal, and fallback obligations remain. They use the independent outside test

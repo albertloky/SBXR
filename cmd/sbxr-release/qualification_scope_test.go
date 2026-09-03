@@ -435,7 +435,7 @@ remove-certbot remove-writer remove-admission-race remove-directory-lock secret-
 	} else if strings.Contains(body, "Automated-only checks (not live): ") {
 		t.Fatal("historical contract acquired new exclusions")
 	}
-	latencyLine := "Karing connectivity evidence: Fresh per-node latency; current connection preserved; no Karing browsing or established-session claim\n"
+	latencyLine := "Karing connectivity evidence: Fresh per-node latency; selected connection preserved; automatic configuration reload permitted; no uninterrupted-connection, Karing browsing or established-session claim\n"
 	if policy == "repair-issuance-bounded-v3" {
 		if strings.Count(body, latencyLine) != 1 || !strings.Contains(body, "Karing checks not performed: karing-final/direct-and-proxied-traffic karing-final/old-established-session-terminated karing-final/traffic-restored karing-final/direct-refresh-correction-or-confirmed-fallback\n") {
 			t.Fatal("record lacks exact latency coverage and exclusions")
