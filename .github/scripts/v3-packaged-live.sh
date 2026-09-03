@@ -108,6 +108,10 @@ interrupt_at() {
     kill -SIGKILL "$process" 2>/dev/null || true
   fi
   wait "$process" 2>/dev/null || wait_status=$?
+  if test "$wait_status" -eq "$((128 + $(kill -l STOP)))"; then
+    wait_status=0
+    wait "$process" 2>/dev/null || wait_status=$?
+  fi
   exec 3>&-
   scan_vps_capture "$output" || scan_status=$?
   rm -f "$fifo" "$output"

@@ -900,10 +900,12 @@ func TestPackagedInterruptionRequiresObservedEventAndForcedDeath(t *testing.T) {
 	for _, test := range []struct {
 		name, progress string
 		signalFailure  bool
+		jobControl     bool
 		wantSuccess    bool
 	}{
 		{name: "missing event", wantSuccess: false},
 		{name: "observed event", progress: "Progress: Expected event", wantSuccess: true},
+		{name: "observed event with job control", progress: "Progress: Expected event", jobControl: true, wantSuccess: true},
 		{name: "signal failure after event", progress: "Progress: Expected event", signalFailure: true, wantSuccess: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -928,7 +930,11 @@ func TestPackagedInterruptionRequiresObservedEventAndForcedDeath(t *testing.T) {
 			if test.signalFailure {
 				function = strings.Replace(function, `kill -SIGSTOP "$process" 2>/dev/null`, "false", 1)
 			}
-			sandbox := "set -euo pipefail\nWORK=" + work + "\nmenu_number() { printf '1\\n'; }\nscan_vps_capture() { return 0; }\n" + function + "\ninterrupt_at 'Start setup' y 'Expected event' test\n"
+			sandbox := "set -euo pipefail\n"
+			if test.jobControl {
+				sandbox += "set -m\n"
+			}
+			sandbox += "WORK=" + work + "\nmenu_number() { printf '1\\n'; }\nscan_vps_capture() { return 0; }\n" + function + "\ninterrupt_at 'Start setup' y 'Expected event' test\n"
 			script := filepath.Join(directory, "test.sh")
 			if err := os.WriteFile(script, []byte(sandbox), 0o700); err != nil {
 				t.Fatal(err)
