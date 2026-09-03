@@ -314,6 +314,34 @@ func TestSubscriptionPreflightRefusesConflictAndIgnoresFirewallTimestamps(t *tes
 	}
 }
 
+func TestSubscriptionPreflightIgnoresFirewallTrafficCounters(t *testing.T) {
+	adapter, commands := subscriptionReviewHost(t)
+	before := adapter.PreflightSubscription(t.Context(), "8.8.8.8")
+	rules := commands["iptables-save"]
+	rules.Fact = strings.ReplaceAll(rules.Fact, "[0:0]", "[1:60]")
+	commands["iptables-save"] = rules
+	if after := adapter.PreflightSubscription(t.Context(), "8.8.8.8"); before != after {
+		t.Fatal("traffic counters alone invalidated read-only approval")
+	}
+}
+
+func TestSubscriptionPreflightPreservesFirewallPolicyAndRules(t *testing.T) {
+	for _, change := range [][2]string{
+		{":INPUT ACCEPT [0:0]", ":INPUT DROP [0:0]"},
+		{":INPUT ACCEPT [0:0]", ":OUTPUT ACCEPT [0:0]"},
+		{"-A INPUT -m comment --comment \"[0:0]\" -j ACCEPT", "-A INPUT -m comment --comment \"[1:60]\" -j ACCEPT"},
+	} {
+		adapter, commands := subscriptionReviewHost(t)
+		identity := func(line string) string {
+			commands["iptables-save"] = OperationResult{Fact: "*filter\n" + line + "\nCOMMIT\n", Observed: true}
+			return adapter.PreflightSubscription(t.Context(), "8.8.8.8").FirewallIdentity
+		}
+		if identity(change[0]) == identity(change[1]) {
+			t.Fatalf("firewall policy change ignored: %q", change)
+		}
+	}
+}
+
 func TestSubscriptionReviewLockNeverCreatesFiles(t *testing.T) {
 	adapter, _ := subscriptionReviewHost(t)
 	name := "/run/lock/sbxr.lock"

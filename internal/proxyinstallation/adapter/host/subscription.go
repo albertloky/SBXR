@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -141,6 +142,8 @@ func (adapter Adapter) AcquireSubscriptionReviewLock(name string) (*MutationLock
 	return softwarelifecycle.AcquireExistingMutationLockAuthority(adapter.path(name), adapter.ownerUID())
 }
 
+var firewallChainCounters = regexp.MustCompile(`^(:\S+ \S+ )\[[0-9]+:[0-9]+\]$`)
+
 func (adapter Adapter) PreflightSubscription(ctx context.Context, ipv4 string) SubscriptionPreflight {
 	facts := SubscriptionPreflight{}
 	if ctx.Err() != nil || net.ParseIP(ipv4).To4() == nil {
@@ -201,6 +204,8 @@ func (adapter Adapter) PreflightSubscription(ctx context.Context, ipv4 string) S
 	var stableRules []string
 	for _, line := range strings.Split(rules, "\n") {
 		if !strings.HasPrefix(line, "#") {
+			// Traffic changes chain counters, not the reviewed firewall policy.
+			line = firewallChainCounters.ReplaceAllString(line, "${1}[0:0]")
 			stableRules = append(stableRules, line)
 		}
 	}
