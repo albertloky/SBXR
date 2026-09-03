@@ -179,7 +179,7 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 					_ = writeClientIdentityDisplayIncomplete(errorOutput)
 				}
 				return 1
-			} else if action == proxyinstallation.EnableSubscriptionAction || action == proxyinstallation.RotateSubscriptionLinkAction || action == proxyinstallation.RotateClientIdentityAction || action == proxyinstallation.FinishClientIdentityAction {
+			} else if latest.FailedCheck != "" || action == proxyinstallation.EnableSubscriptionAction || action == proxyinstallation.RotateSubscriptionLinkAction || action == proxyinstallation.RotateClientIdentityAction || action == proxyinstallation.FinishClientIdentityAction {
 				if writeRefusal(output, latest) != nil {
 					if clientIdentityCompleted(latest.Code) {
 						_ = writeClientIdentityDisplayIncomplete(errorOutput)

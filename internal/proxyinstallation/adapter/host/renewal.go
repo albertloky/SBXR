@@ -328,15 +328,19 @@ func officialTimersCalendar(value string) bool {
 	if len(matches) != 2 || strings.Count(value, "OnCalendar=") != 2 {
 		return false
 	}
-	for index, match := range matches {
+	morning := 0
+	for _, match := range matches {
 		hour, hourErr := strconv.Atoi(match[1])
 		minute, minuteErr := strconv.Atoi(match[2])
 		second, secondErr := strconv.Atoi(match[3])
-		if hourErr != nil || minuteErr != nil || secondErr != nil || hour > 23 || minute > 59 || second > 59 || index == 0 && hour >= 12 || index == 1 && hour < 12 {
+		if hourErr != nil || minuteErr != nil || secondErr != nil || hour > 23 || minute > 59 || second > 59 {
 			return false
 		}
+		if hour < 12 {
+			morning++
+		}
 	}
-	return true
+	return morning == 1
 }
 
 func exactSystemdExecStart(body string) (string, string, bool) {

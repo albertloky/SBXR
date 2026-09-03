@@ -930,7 +930,7 @@ func (adapter Adapter) removeFile(name string) OperationResult {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return OperationResult{}
 	}
-	if err := syncDirectory(filepath.Dir(path)); err != nil {
+	if !adapter.syncAbsentPath(name) {
 		return OperationResult{}
 	}
 	return OperationResult{OK: true, Fact: "absent"}

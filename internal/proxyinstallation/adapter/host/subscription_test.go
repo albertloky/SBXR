@@ -808,6 +808,32 @@ func TestSubscriptionPublicationFinishesExactSynchronizedStaging(t *testing.T) {
 	}
 }
 
+func TestSubscriptionCleanupAcceptsNeverCreatedDirectories(t *testing.T) {
+	for _, created := range []bool{false, true} {
+		t.Run(fmt.Sprintf("created=%t", created), func(t *testing.T) {
+			adapter := Adapter{root: t.TempDir()}
+			for _, directory := range []string{"/var/lib/sbxr", "/etc/systemd/system"} {
+				if err := os.MkdirAll(adapter.path(directory), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if created {
+				for _, directory := range []string{ServingStagingPath, filepath.Dir(RenewalDropInPath)} {
+					if err := os.MkdirAll(adapter.path(directory), 0700); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if !adapter.removeSubscriptionCandidates(nil, "") {
+				t.Error("absent provisional credential and state refused")
+			}
+			if !adapter.removeFile(RenewalDropInPath).OK {
+				t.Error("absent provisional renewal drop-in refused")
+			}
+		})
+	}
+}
+
 func TestSubscriptionCleanupRemovesExactFirewallAndRenewalStaging(t *testing.T) {
 	adapter := Adapter{root: t.TempDir()}
 	for _, file := range []struct {

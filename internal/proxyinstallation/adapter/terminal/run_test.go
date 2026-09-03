@@ -13,6 +13,32 @@ import (
 
 type subscriptionInstallation struct{ journeyInstallation }
 
+type failedSubscriptionAction struct{ action proxyinstallation.Action }
+
+func (installation failedSubscriptionAction) Review(context.Context, proxyinstallation.Action) proxyinstallation.Review {
+	return proxyinstallation.Review{Status: proxyinstallation.Running, LegalActions: []proxyinstallation.Action{installation.action}, Prepared: &proxyinstallation.PreparedAction{}}
+}
+
+func (failedSubscriptionAction) Execute(context.Context, proxyinstallation.PreparedAction, proxyinstallation.Confirmation, proxyinstallation.ProgressReporter) proxyinstallation.Result {
+	return proxyinstallation.Result{Status: proxyinstallation.Running, Code: proxyinstallation.SubscriptionChangeNeedsCompletion, FailedCheck: "Provisional subscription cleanup", Correction: "Correct the exact owned residue, then use Finish subscription change again."}
+}
+
+func TestRunDisplaysSubscriptionFailureCheckAndCorrection(t *testing.T) {
+	for _, action := range []proxyinstallation.Action{proxyinstallation.EnableSubscriptionAction, proxyinstallation.RotateSubscriptionLinkAction, proxyinstallation.RepairSubscriptionAction, proxyinstallation.FinishSubscriptionChangeAction} {
+		t.Run(string(action), func(t *testing.T) {
+			var output bytes.Buffer
+			if code := Run(t.Context(), nil, strings.NewReader("1\ny\n0\n"), &output, &output, failedSubscriptionAction{action}, nil); code != 0 {
+				t.Fatalf("code=%d output=%s", code, output.String())
+			}
+			for _, want := range []string{"Failed safety check: Provisional subscription cleanup", "Correction: Correct the exact owned residue, then use Finish subscription change again."} {
+				if strings.Count(output.String(), want) != 1 {
+					t.Errorf("missing or duplicated %q: %s", want, output.String())
+				}
+			}
+		})
+	}
+}
+
 type certbotRefusedInstallation struct{ journeyInstallation }
 
 func (installation *certbotRefusedInstallation) Review(_ context.Context, action proxyinstallation.Action) proxyinstallation.Review {

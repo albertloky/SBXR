@@ -520,6 +520,46 @@ func TestExactSystemdExecStartRejectsExtraOrDuplicateFields(t *testing.T) {
 	}
 }
 
+func TestRenewalRouteAcceptsOfficialTimerWindowsInEitherOrder(t *testing.T) {
+	morning := "{ OnCalendar=*-*-* 04:43:00 ; next_elapse=Fri 2026-09-04 04:43:00 UTC }"
+	evening := "{ OnCalendar=*-*-* 19:51:00 ; next_elapse=Thu 2026-09-03 19:51:00 UTC }"
+	for order, calendar := range []string{morning + "\n" + evening, evening + "\n" + morning} {
+		for _, managed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("managed=%t/order=%d", managed, order), func(t *testing.T) {
+				a, _ := renewalFiles(t)
+				base := a.subscriptionCommand
+				a.subscriptionCommand = func(ctx context.Context, name string, arguments ...string) (string, int, bool) {
+					switch name + " " + strings.Join(arguments, " ") {
+					case "systemctl show --property=TimersCalendar --value snap.certbot.renew.timer":
+						return calendar, 0, true
+					case "systemctl show --property=ExecStart --value snap.certbot.renew.service":
+						if !managed {
+							return "/usr/bin/snap run --timer=00:00~24:00/2 certbot.renew\n", 0, true
+						}
+					}
+					return base(ctx, name, arguments...)
+				}
+				if managed && !a.renewalRoute() || !managed && !a.officialRenewalRoute() {
+					t.Fatal("valid official daily windows refused because of presentation order")
+				}
+			})
+		}
+	}
+}
+
+func TestOfficialTimerCalendarRequiresOneValidWindowPerHalfDay(t *testing.T) {
+	for _, hours := range [][2]string{
+		{"06:00:00", "10:00:00"}, {"12:00:00", "18:00:00"},
+		{"06:00:00", "06:00:00"}, {"24:00:00", "06:00:00"},
+		{"06:60:00", "18:00:00"}, {"06:00:00", "18:00:60"},
+	} {
+		calendar := fmt.Sprintf("{ OnCalendar=*-*-* %s } { OnCalendar=*-*-* %s }", hours[0], hours[1])
+		if officialTimersCalendar(calendar) {
+			t.Errorf("invalid schedule accepted: %s", calendar)
+		}
+	}
+}
+
 func TestRenewalRouteRefusesActiveSnapChangeAndReentrantConfig(t *testing.T) {
 	for _, test := range []struct {
 		name string
