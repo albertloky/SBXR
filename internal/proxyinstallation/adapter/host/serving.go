@@ -69,7 +69,8 @@ RestrictNamespaces=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-InaccessiblePaths=/var/lib/sbxr/subscription-token /var/lib/sbxr/subscription-staging -/var/lib/sbxr/client-identity-target.json -/var/lib/sbxr/client-identity-target.json.sbxr-next /proc /run/systemd /run/dbus
+InaccessiblePaths=/var/lib/sbxr/subscription-token /var/lib/sbxr/subscription-staging -/var/lib/sbxr/client-identity-target.json -/var/lib/sbxr/client-identity-target.json.sbxr-next /proc /run/dbus
+TemporaryFileSystem=/run/systemd:ro,mode=000
 StandardInput=null
 StandardOutput=null
 StandardError=null
@@ -79,10 +80,11 @@ UMask=0077
 WantedBy=multi-user.target
 `
 
-var legacyServingUnit = strings.ReplaceAll(strings.ReplaceAll(ServingUnit, " AF_UNIX", ""), " -/var/lib/sbxr/client-identity-target.json -/var/lib/sbxr/client-identity-target.json.sbxr-next", "")
+var previousServingUnit = strings.Replace(strings.Replace(ServingUnit, "TemporaryFileSystem=/run/systemd:ro,mode=000\n", "", 1), " /run/dbus\n", " /run/systemd /run/dbus\n", 1)
+var legacyServingUnit = strings.ReplaceAll(strings.ReplaceAll(previousServingUnit, " AF_UNIX", ""), " -/var/lib/sbxr/client-identity-target.json -/var/lib/sbxr/client-identity-target.json.sbxr-next", "")
 
 func knownServingUnit(body []byte) bool {
-	return string(body) == ServingUnit || string(body) == legacyServingUnit
+	return string(body) == ServingUnit || string(body) == previousServingUnit || string(body) == legacyServingUnit
 }
 
 // ServingAuthority is an Ownership Record component, never an independent
@@ -330,9 +332,10 @@ func (a Adapter) inspectServingFiles(authority ServingAuthority, removing, sandb
 	}
 	wantsInfo, wantsErr := os.Lstat(a.path(ServingUnitWantsPath))
 	wantsTarget, targetErr := os.Readlink(a.path(ServingUnitWantsPath))
+	wantsStat, wantsOwned := infoSys(wantsInfo)
 	if removing && errors.Is(wantsErr, os.ErrNotExist) {
 		// Safe partial removal.
-	} else if wantsErr != nil || wantsInfo.Mode()&os.ModeSymlink == 0 || targetErr != nil || wantsTarget != "../sbxr-subscription.service" {
+	} else if wantsErr != nil || !wantsOwned || wantsStat.Uid != a.ownerUID() || wantsStat.Nlink != 1 || wantsInfo.Mode()&os.ModeSymlink == 0 || targetErr != nil || wantsTarget != "../sbxr-subscription.service" && wantsTarget != ServingUnitPath {
 		return Observation{}
 	}
 	if !sandbox {

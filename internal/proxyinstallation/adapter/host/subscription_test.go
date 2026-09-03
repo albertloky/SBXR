@@ -934,6 +934,11 @@ func testSubscriptionRecorderDirectory(t *testing.T, created bool) {
 			if !slices.Equal(args, want) {
 				t.Fatalf("unsupported Certbot issuance arguments: %q", args)
 			}
+			for _, directory := range []string{servingArchive, servingLive} {
+				if err := os.Chmod(adapter.path(directory), 0755); err != nil {
+					t.Fatal("Certbot directory mode fixture failed")
+				}
+			}
 		case "pgrep":
 			return "", 1, true
 		case "dpkg-query":
@@ -980,6 +985,12 @@ func testSubscriptionRecorderDirectory(t *testing.T, created bool) {
 	syscall.Umask(prior)
 	if !result.Prepared {
 		t.Fatalf("fresh subscription preparation failed at checkpoint %d", checkpoint)
+	}
+	for _, directory := range []string{servingArchive, servingLive} {
+		info, err := os.Stat(adapter.path(directory))
+		if err != nil || info.Mode().Perm() != 0700 {
+			t.Fatalf("owned Certbot directory mode differs from 0700 after issuance: %s %v %v", directory, info, err)
+		}
 	}
 	if result.Resources.RecorderDirectoryCreated != created {
 		t.Fatal("recorder directory creation provenance changed")

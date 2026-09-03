@@ -698,6 +698,30 @@ func certbotCommand(ctx context.Context, name string, arguments ...string) *exec
 	return exec.CommandContext(ctx, "/bin/sh", args...)
 }
 
+func (a Adapter) protectOwnedLineageDirectories(authority RenewalAuthority) bool {
+	if !authority.Valid() {
+		return false
+	}
+	for _, path := range []string{servingArchive, servingLive} {
+		file, err := os.OpenFile(a.path(path), os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
+		if err != nil {
+			return false
+		}
+		info, statErr := file.Stat()
+		stat, owned := infoSys(info)
+		if statErr != nil || !owned || !info.IsDir() || stat.Uid != a.ownerUID() || info.Mode().Perm() != 0700 && info.Mode().Perm() != 0755 || file.Chmod(0700) != nil || file.Sync() != nil {
+			file.Close()
+			return false
+		}
+		current, currentErr := os.Lstat(a.path(path))
+		closed := file.Close()
+		if currentErr != nil || !os.SameFile(info, current) || current.Mode().Perm() != 0700 || closed != nil {
+			return false
+		}
+	}
+	return true
+}
+
 func (r *renewalAttemptRunner) Abort() {
 	if r == nil || r.finished {
 		return
@@ -752,6 +776,9 @@ func (r *renewalAttemptRunner) Run(ctx context.Context) int {
 	}
 	if code < 0 || code > 255 {
 		code = RenewalRecorderRefused
+	}
+	if !r.adapter.protectOwnedLineageDirectories(r.authority) {
+		return RenewalRecorderRefused
 	}
 	latest, expected, err := r.adapter.readRenewalEvidence(r.authority)
 	if err != nil || len(latest.Attempts) == 0 || latest.Attempts[len(latest.Attempts)-1].AttemptID != r.attempt.AttemptID || latest.Attempts[len(latest.Attempts)-1].Completion != nil {

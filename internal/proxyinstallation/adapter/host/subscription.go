@@ -353,7 +353,8 @@ func (adapter Adapter) PrepareSubscription(ctx context.Context, input Subscripti
 	if !authorize(7, nil) {
 		return SubscriptionEnableResult{Resources: resources}
 	}
-	if !runOK("/snap/bin/certbot", "certonly", "--non-interactive", "--agree-tos", "--register-unsafely-without-email", "--standalone", "--preferred-challenges", "http", "--no-directory-hooks", "--cert-name", "sbxr-subscription", "--required-profile", "shortlived", "--ip-address", input.PublicIPv4) {
+	issued := runOK("/snap/bin/certbot", "certonly", "--non-interactive", "--agree-tos", "--register-unsafely-without-email", "--standalone", "--preferred-challenges", "http", "--no-directory-hooks", "--cert-name", "sbxr-subscription", "--required-profile", "shortlived", "--ip-address", input.PublicIPv4)
+	if protected := adapter.protectOwnedLineageDirectories(input.Renewal); !issued || !protected {
 		return SubscriptionEnableResult{Resources: resources}
 	}
 	generation, ok := adapter.renewalLineageTarget(input.Renewal)

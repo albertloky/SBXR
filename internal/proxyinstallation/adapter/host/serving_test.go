@@ -11,6 +11,16 @@ import (
 	"testing"
 )
 
+func TestServingUnitUsesStartablePrivateSystemControlDirectory(t *testing.T) {
+	if !strings.Contains(ServingUnit, "TemporaryFileSystem=/run/systemd:ro,mode=000\n") {
+		t.Fatal("system control directory is not replaced with a private unreadable filesystem")
+	}
+	inaccessible := "InaccessiblePaths=/var/lib/sbxr/subscription-token /var/lib/sbxr/subscription-staging -/var/lib/sbxr/client-identity-target.json -/var/lib/sbxr/client-identity-target.json.sbxr-next /proc /run/dbus\n"
+	if !strings.Contains(ServingUnit, inaccessible) || strings.Contains(ServingUnit, "InaccessiblePaths=/run/systemd") || strings.Contains(ServingUnit, " /run/systemd ") {
+		t.Fatal("system control directory remains in the unstartable inaccessible-path list")
+	}
+}
+
 func TestServingAuthorityRejectsUnrecordedAndUnsafeMaterial(t *testing.T) {
 	a := Adapter{root: t.TempDir()}
 	if a.InspectServingFiles(ServingAuthority{}, false).Accepted {
@@ -116,6 +126,19 @@ func TestServingFilesAndRemovalPreserveUnrelatedLineages(t *testing.T) {
 	}
 	if !removeServing(t, a, authority) {
 		t.Fatal("repeated removal failed")
+	}
+}
+
+func TestServingFilesAcceptSystemdAbsoluteEnablementLink(t *testing.T) {
+	a, authority := servingFiles(t)
+	if err := os.Remove(a.path(ServingUnitWantsPath)); err != nil || os.Symlink(ServingUnitPath, a.path(ServingUnitWantsPath)) != nil {
+		t.Fatal("absolute systemd enablement fixture failed")
+	}
+	if !a.InspectServingFiles(authority, false).Accepted {
+		t.Fatal("systemd absolute enablement link was refused")
+	}
+	if !removeServing(t, a, authority) || !a.ServingRuntimeAbsent(authority) {
+		t.Fatal("systemd absolute enablement link prevented removal")
 	}
 }
 

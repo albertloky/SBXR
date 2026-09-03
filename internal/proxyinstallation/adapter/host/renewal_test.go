@@ -246,6 +246,11 @@ func testReviewedCertificateRepair(t *testing.T, locksPresent bool) {
 		if err := os.Symlink("../../archive/sbxr-subscription/cert2.pem", a.path(servingLive+"/cert.pem")); err != nil {
 			return 1
 		}
+		for _, directory := range []string{servingArchive, servingLive} {
+			if os.Chmod(a.path(directory), 0755) != nil {
+				return 1
+			}
+		}
 		return 0
 	}
 	if !a.RepairSubscriptionCertificate(t.Context(), authority) {
@@ -257,6 +262,11 @@ func testReviewedCertificateRepair(t *testing.T, locksPresent bool) {
 	}
 	if competingAdmission {
 		t.Fatal("scheduled renewal admission entered during Owner Certbot")
+	}
+	for _, directory := range []string{servingArchive, servingLive} {
+		if info, err := os.Stat(a.path(directory)); err != nil || info.Mode().Perm() != 0700 {
+			t.Fatalf("reviewed renewal left owned Certbot directory unsafe: %s %v %v", directory, info, err)
+		}
 	}
 	for _, path := range certbotDirectoryLocks {
 		if _, err := os.Lstat(a.path(path)); !os.IsNotExist(err) {
@@ -291,6 +301,35 @@ func TestReviewedCertificateRepairRefusesBusyRenewalAdmission(t *testing.T) {
 	a.renewalCommand = func(context.Context, string, ...string) int { called = true; return 0 }
 	if a.RepairSubscriptionCertificate(t.Context(), authority) || called {
 		t.Fatal("Owner repair bypassed renewal admission contention")
+	}
+}
+
+func TestOwnedCertbotDirectoryProtectionRefusesUnexpectedModeAndSymlink(t *testing.T) {
+	for _, kind := range []string{"mode", "symlink"} {
+		t.Run(kind, func(t *testing.T) {
+			a, authority := renewalFiles(t)
+			path := a.path(servingLive)
+			var before os.FileInfo
+			switch kind {
+			case "mode":
+				if err := os.Chmod(path, 0750); err != nil {
+					t.Fatal(err)
+				}
+			case "symlink":
+				target := a.path("/etc/letsencrypt/live/target")
+				if err := os.Rename(path, target); err != nil || os.Symlink(target, path) != nil {
+					t.Fatal("symlink fixture failed")
+				}
+			}
+			before, _ = os.Stat(path)
+			if a.protectOwnedLineageDirectories(authority) {
+				t.Fatal("unsafe owned Certbot directory was changed")
+			}
+			info, err := os.Stat(path)
+			if err != nil || before == nil || !os.SameFile(before, info) || info.Mode() != before.Mode() {
+				t.Fatalf("unsafe directory target changed: %v %v", info, err)
+			}
+		})
 	}
 }
 
@@ -772,6 +811,11 @@ func TestRenewalExclusionRefusesLiveChildAndRemovalPreservesOverrides(t *testing
 	a.renewalCommand = func(context.Context, string, ...string) int {
 		close(started)
 		<-release
+		for _, directory := range []string{servingArchive, servingLive} {
+			if os.Chmod(a.path(directory), 0755) != nil {
+				return 1
+			}
+		}
 		return 0
 	}
 	done := make(chan int, 1)
@@ -784,6 +828,11 @@ func TestRenewalExclusionRefusesLiveChildAndRemovalPreservesOverrides(t *testing
 	close(release)
 	if code := <-done; code != 0 {
 		t.Fatalf("recorder exit = %d", code)
+	}
+	for _, directory := range []string{servingArchive, servingLive} {
+		if info, err := os.Stat(a.path(directory)); err != nil || info.Mode().Perm() != 0700 {
+			t.Fatalf("managed renewal left owned Certbot directory unsafe: %s %v %v", directory, info, err)
+		}
 	}
 	unrelated := a.path(filepath.Join(filepath.Dir(RenewalDropInPath), "90-owner.conf"))
 	if err := os.WriteFile(unrelated, []byte("[Service]\nNice=5\n"), 0644); err != nil {
@@ -799,6 +848,26 @@ func TestRenewalExclusionRefusesLiveChildAndRemovalPreservesOverrides(t *testing
 	}
 	if _, err := os.Stat(unrelated); err != nil {
 		t.Fatal("unrelated service override removed")
+	}
+}
+
+func TestFailedManagedRenewalStillProtectsOwnedCertbotDirectories(t *testing.T) {
+	a, authority := renewalFiles(t)
+	a.renewalCommand = func(context.Context, string, ...string) int {
+		for _, directory := range []string{servingArchive, servingLive} {
+			if os.Chmod(a.path(directory), 0755) != nil {
+				return 1
+			}
+		}
+		return 37
+	}
+	if code := runRenewalRecorder(t.Context(), a, authority); code != 37 {
+		t.Fatalf("managed renewal exit = %d", code)
+	}
+	for _, directory := range []string{servingArchive, servingLive} {
+		if info, err := os.Stat(a.path(directory)); err != nil || info.Mode().Perm() != 0700 {
+			t.Fatalf("failed managed renewal left owned Certbot directory unsafe: %s %v %v", directory, info, err)
+		}
 	}
 }
 
