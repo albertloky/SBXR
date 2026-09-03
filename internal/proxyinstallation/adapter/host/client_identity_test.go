@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -69,6 +70,15 @@ func TestProxyStartConditionRequiresTheExactEffectiveCommand(t *testing.T) {
 }
 
 func TestClientIdentityCutoverUsesProtectedTargetStartupGateAndExpectedSource(t *testing.T) {
+	for _, fresh := range []bool{false, true} {
+		t.Run(strconv.FormatBool(fresh), func(t *testing.T) {
+			testClientIdentityCutover(t, fresh)
+		})
+	}
+}
+
+func testClientIdentityCutover(t *testing.T, fresh bool) {
+	t.Helper()
 	root := t.TempDir()
 	for path, mode := range map[string]os.FileMode{
 		"var/lib/sbxr": 0700, "etc/sing-box": 0755, "etc/systemd/system": 0755, "run": 0755, "sys/fs/cgroup/system.slice/sing-box.service": 0755,
@@ -162,8 +172,19 @@ esac
 	if !removal.Configuration.Accepted || !removal.ConfigurationEntries.Accepted {
 		t.Fatal("proved interrupted target publication blocked removal")
 	}
+	var priorUmask int
+	if fresh {
+		if err := os.Remove(adapter.path(ClientIdentityConfigurationNextPath)); err != nil {
+			t.Fatal(err)
+		}
+		priorUmask = syscall.Umask(0077)
+		defer syscall.Umask(priorUmask)
+	}
 	if !adapter.PublishClientIdentityConfiguration(digest(source), digest(target)) {
 		t.Fatal("expected-current target publication failed")
+	}
+	if fresh {
+		syscall.Umask(priorUmask)
 	}
 	published, err := os.ReadFile(adapter.path("/etc/sing-box/config.json"))
 	if err != nil || string(published) != string(target) {

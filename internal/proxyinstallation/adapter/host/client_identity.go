@@ -174,6 +174,10 @@ func (adapter Adapter) PublishClientIdentityConfiguration(source, target string)
 		if err != nil {
 			return false
 		}
+		if err := file.Chmod(0640); err != nil {
+			_ = file.Close()
+			return false
+		}
 		written, writeErr := file.Write(prepared)
 		ownErr := file.Chown(int(adapter.ownerUID()), int(gid))
 		syncErr := file.Sync()
