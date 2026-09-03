@@ -437,6 +437,10 @@ func (adapter Adapter) publishSubscriptionFile(path string, body []byte, mode os
 		if createErr != nil {
 			return false
 		}
+		if err := file.Chmod(mode); err != nil {
+			_ = file.Close()
+			return false
+		}
 		written, writeErr := file.Write(body)
 		syncErr := file.Sync()
 		closeErr := file.Close()

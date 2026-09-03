@@ -790,6 +790,34 @@ func TestSubscriptionPublicationNeverReplacesUnexpectedCurrentValue(t *testing.T
 	}
 }
 
+func TestSubscriptionPublicationAppliesExactModeUnderRestrictiveUmask(t *testing.T) {
+	adapter := Adapter{root: t.TempDir()}
+	prior := syscall.Umask(0077)
+	defer syscall.Umask(prior)
+	for _, file := range []struct {
+		path string
+		mode os.FileMode
+	}{
+		{SubscriptionFirewallUnitPath, 0644},
+		{ServingTokenPath, 0600},
+	} {
+		if err := os.MkdirAll(filepath.Dir(adapter.path(file.path)), 0700); err != nil {
+			t.Fatal(err)
+		}
+		body := []byte("authorized value\n")
+		if !adapter.publishSubscriptionFile(file.path, body, file.mode) {
+			t.Fatalf("publication refused under umask 0077: %s", file.path)
+		}
+		info, err := os.Stat(adapter.path(file.path))
+		if err != nil || info.Mode().Perm() != file.mode {
+			t.Fatalf("published mode differs from %o: %v %v", file.mode, info, err)
+		}
+		if !adapter.publishSubscriptionFile(file.path, body, file.mode) || !adapter.safelyAbsent(file.path+".sbxr-next") {
+			t.Fatal("completed publication is not idempotent")
+		}
+	}
+}
+
 func TestSubscriptionPublicationFinishesExactSynchronizedStaging(t *testing.T) {
 	adapter := Adapter{root: t.TempDir()}
 	if err := os.MkdirAll(adapter.path("/var/lib/sbxr"), 0700); err != nil {
