@@ -733,6 +733,10 @@ func TestPublishedCertificateRepairRemovalDeletesCompleteMixedServingFootprint(t
 			t.Fatal("live certificate fixture failed")
 		}
 	}
+	readme, err := os.ReadFile("testdata/certbot-lineage-README")
+	if err != nil || os.WriteFile(adapter.path(servingLive+"/README"), readme, 0644) != nil {
+		t.Fatal("official README fixture failed")
+	}
 	for path, fixture := range map[string]struct {
 		body []byte
 		mode os.FileMode
@@ -858,6 +862,40 @@ func TestSubscriptionPreparationCommandAllowsMutationDuration(t *testing.T) {
 	// Certificate issuance must not inherit the five-second inspection timeout.
 	if !(Adapter{}).subscriptionPreparationCommand(t.Context(), "sh", "-c", "sleep 6") {
 		t.Fatal("subscription mutation was killed by the inspection timeout")
+	}
+}
+
+func TestCertbotChildFileModesPreserveParentAndPrivateKey(t *testing.T) {
+	if os.Getenv("SBXR_TEST_CERTBOT_UMASK") != "1" {
+		child := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestCertbotChildFileModesPreserveParentAndPrivateKey$")
+		child.Env = append(os.Environ(), "SBXR_TEST_CERTBOT_UMASK=1")
+		if output, err := child.CombinedOutput(); err != nil {
+			t.Fatalf("Certbot child publication: %v\n%s", err, output)
+		}
+		return
+	}
+	prior := syscall.Umask(0077)
+	defer syscall.Umask(prior)
+	directory := t.TempDir()
+	public := filepath.Join(directory, "public $; certificate")
+	private := filepath.Join(directory, "private key")
+	command := certbotCommand(t.Context(), "/bin/sh", "-c", `printf public > "$1"; (umask 077; printf private > "$2")`, "certbot-test", public, private)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("publication command: %v %s", err, output)
+	}
+	parent := filepath.Join(directory, "parent")
+	if err := os.WriteFile(parent, []byte("parent"), 0666); err != nil {
+		t.Fatal(err)
+	}
+	for path, mode := range map[string]os.FileMode{public: 0644, private: 0600, parent: 0600} {
+		info, err := os.Stat(path)
+		if err != nil || info.Mode().Perm() != mode {
+			t.Errorf("file %s: want mode %o, got %v (%v)", filepath.Base(path), mode, info, err)
+		}
+	}
+	var exit *exec.ExitError
+	if err := certbotCommand(t.Context(), "/bin/sh", "-c", "exit 37").Run(); !errors.As(err, &exit) || exit.ExitCode() != 37 {
+		t.Fatalf("Certbot exit code was not preserved: %v", err)
 	}
 }
 
@@ -1105,6 +1143,10 @@ func TestInterruptedCertbotEffectCleansExactPartialLineage(t *testing.T) {
 	}
 	if err := os.Symlink("../../archive/sbxr-subscription/cert1.pem", adapter.path(servingLive+"/cert.pem")); err != nil {
 		t.Fatal(err)
+	}
+	readme, err := os.ReadFile("testdata/certbot-lineage-README")
+	if err != nil || os.WriteFile(adapter.path(servingLive+"/README"), readme, 0600) != nil {
+		t.Fatal("official README fixture failed")
 	}
 	if !adapter.removeOwnedLineage(nil) || !adapter.safelyAbsent(servingArchive) || !adapter.safelyAbsent(servingLive) {
 		t.Fatal("exact partial lineage was not cleaned")

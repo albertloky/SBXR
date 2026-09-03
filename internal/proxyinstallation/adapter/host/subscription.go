@@ -579,7 +579,7 @@ func (adapter Adapter) RemoveSubscriptionRotation(ctx context.Context, input Sub
 
 func (adapter Adapter) RemoveSubscriptionRepair(ctx context.Context, source, target ServingAuthority, exclusion *ServingExclusion) bool {
 	stagingAccepted := adapter.servingDirectory(ServingStagingPath, nil, false) || adapter.safelyAbsent(ServingStagingPath)
-	if !source.Valid() || !target.Valid() || source.LinkID != target.LinkID || source.CredentialSHA256 != target.CredentialSHA256 || !adapter.validServingExclusion(exclusion) || !stagingAccepted {
+	if !source.Valid() || !target.Valid() || source.LinkID != target.LinkID || source.CredentialSHA256 != target.CredentialSHA256 || !adapter.validServingExclusion(exclusion) || !stagingAccepted || !adapter.safeCertbotReadme() {
 		return false
 	}
 	unit, unitErr := adapter.protectedServingFile(ServingUnitPath, 0644, "")
@@ -636,6 +636,7 @@ func (adapter Adapter) RemoveSubscriptionRepair(ctx context.Context, source, tar
 		paths = append(paths, servingLive+"/"+name+".pem")
 	}
 	paths = append(paths, archivePaths...)
+	paths = append(paths, servingLive+"/README")
 	paths = append(paths, servingLive, servingArchive, ServingTokenPath, ServingStatePath, ServingStagingPath, ServingUnitWantsPath, ServingUnitPath)
 	for _, path := range paths {
 		if err := os.Remove(adapter.path(path)); errors.Is(err, os.ErrNotExist) {
@@ -929,6 +930,9 @@ func (adapter Adapter) removeSubscriptionCandidates(serving *ServingAuthority, c
 }
 
 func (adapter Adapter) removeOwnedLineage(authority *ServingAuthority) bool {
+	if !adapter.safeCertbotReadme() {
+		return false
+	}
 	conf := "/etc/letsencrypt/renewal/sbxr-subscription.conf"
 	if authority == nil {
 		return adapter.removePartialOwnedLineage(conf)
@@ -974,6 +978,9 @@ func (adapter Adapter) removeOwnedLineage(authority *ServingAuthority) bool {
 			return false
 		}
 	}
+	if !adapter.removeFile(servingLive + "/README").OK {
+		return false
+	}
 	for _, path := range []string{servingLive, servingArchive} {
 		if !adapter.removeEmptyDirectory(path) && !adapter.safelyAbsent(path) {
 			return false
@@ -1018,6 +1025,10 @@ func (adapter Adapter) removePartialOwnedLineage(conf string) bool {
 					return false
 				}
 				if _, err := adapter.protectedServingFile(path, mode, ""); err != nil {
+					return false
+				}
+			} else if entry.Name() == "README" {
+				if !adapter.safeCertbotReadme() {
 					return false
 				}
 			} else {

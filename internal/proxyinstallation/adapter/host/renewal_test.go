@@ -199,13 +199,25 @@ func TestRenewalInspectionRefusesUnsupportedCertbotModes(t *testing.T) {
 }
 
 func TestReviewedCertificateRepairUsesOneExactOwnedCertbotAttempt(t *testing.T) {
+	for _, locksPresent := range []bool{false, true} {
+		t.Run(fmt.Sprintf("locks-present=%t", locksPresent), func(t *testing.T) {
+			testReviewedCertificateRepair(t, locksPresent)
+		})
+	}
+}
+
+func testReviewedCertificateRepair(t *testing.T, locksPresent bool) {
+	t.Helper()
 	a, authority := renewalFiles(t)
 	if err := os.MkdirAll(a.path("/etc/letsencrypt/renewal"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	for _, path := range certbotDirectoryLocks {
-		if err := os.MkdirAll(a.path(filepath.Dir(path)), 0755); err != nil || os.WriteFile(a.path(path), nil, 0600) != nil {
+		if err := os.MkdirAll(a.path(filepath.Dir(path)), 0755); err != nil {
 			t.Fatal("certbot lock fixture failed")
+		}
+		if locksPresent && os.WriteFile(a.path(path), nil, 0600) != nil {
+			t.Fatal("existing Certbot lock fixture failed")
 		}
 	}
 	if err := os.WriteFile(a.path("/etc/letsencrypt/renewal/sbxr-subscription.conf"), []byte("archive_dir = /etc/letsencrypt/archive/sbxr-subscription\ncert = /etc/letsencrypt/live/sbxr-subscription/cert.pem\n"), 0600); err != nil {
@@ -215,6 +227,12 @@ func TestReviewedCertificateRepairUsesOneExactOwnedCertbotAttempt(t *testing.T) 
 	var competingAdmission bool
 	a.renewalCommand = func(_ context.Context, name string, arguments ...string) int {
 		command = name + " " + strings.Join(arguments, " ")
+		// Official Certbot creates lock files as needed and unlinks them on exit.
+		for _, path := range certbotDirectoryLocks {
+			if os.WriteFile(a.path(path), nil, 0600) != nil || os.Remove(a.path(path)) != nil {
+				return 1
+			}
+		}
 		if admission, ok := a.openRenewalLock(RenewalAdmissionPath, false); ok {
 			competingAdmission = true
 			admission.Close()
@@ -239,6 +257,11 @@ func TestReviewedCertificateRepairUsesOneExactOwnedCertbotAttempt(t *testing.T) 
 	}
 	if competingAdmission {
 		t.Fatal("scheduled renewal admission entered during Owner Certbot")
+	}
+	for _, path := range certbotDirectoryLocks {
+		if _, err := os.Lstat(a.path(path)); !os.IsNotExist(err) {
+			t.Fatal("temporary post-repair lock remained")
+		}
 	}
 	inspection := a.InspectRenewal(authority)
 	if len(inspection.Evidence.Attempts) != 1 || inspection.Evidence.Attempts[0].Invocation != OwnerRenewalInvocation || inspection.Evidence.Attempts[0].Completion == nil || inspection.Evidence.Attempts[0].Completion.OwnedOutcome != "renewed" {

@@ -1040,7 +1040,11 @@ func (adapter Adapter) removeSafeFile(name string, limit int64) bool {
 func (adapter Adapter) command(ctx context.Context, name string, arguments ...string) OperationResult {
 	commandCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
 	defer cancel()
-	output, err := exec.CommandContext(commandCtx, name, arguments...).CombinedOutput()
+	command := exec.CommandContext(commandCtx, name, arguments...)
+	if name == "/snap/bin/certbot" {
+		command = certbotCommand(commandCtx, name, arguments...)
+	}
+	output, err := command.CombinedOutput()
 	fact := strings.TrimSpace(string(output))
 	if len(fact) > 4096 {
 		fact = fact[:4096]

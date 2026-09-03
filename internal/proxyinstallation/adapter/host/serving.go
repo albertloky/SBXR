@@ -33,6 +33,10 @@ const ServingStatePath = "/var/lib/sbxr/subscription-serving.json"
 const ServingStagingPath = "/var/lib/sbxr/subscription-staging"
 const servingArchive = "/etc/letsencrypt/archive/sbxr-subscription"
 const servingLive = "/etc/letsencrypt/live/sbxr-subscription"
+
+// Optional documentation belongs to the already-owned Certbot lineage; it does
+// not expand serialized authority or permit arbitrary directory contents.
+const certbotReadmeSHA256 = "7e519cf3c13ff96c0a8e35e6f25fd43cc3c396f7b5c4393bd26ab072dd25c1fa"
 const servingCgroup = "/sys/fs/cgroup/system.slice/sbxr-subscription.service"
 
 // No arguments, environment values or separately writable serving file select
@@ -146,7 +150,7 @@ func (a Adapter) protectedServingFileWithLinks(path string, mode os.FileMode, ex
 	if err := a.safeParents(path); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(a.path(path), os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	f, err := os.OpenFile(a.path(path), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -188,6 +192,9 @@ func (a Adapter) servingDirectory(path string, allowed []string, missing bool) b
 		}
 	}
 	for _, entry := range entries {
+		if path == servingLive && entry.Name() == "README" && a.safeCertbotReadme() {
+			continue
+		}
 		generation, archiveName := servingArchiveIdentity(entry.Name())
 		if !slices.Contains(allowed, entry.Name()) && !(path == servingArchive && archiveName) {
 			return false
@@ -202,6 +209,17 @@ func (a Adapter) servingDirectory(path string, allowed []string, missing bool) b
 		}
 	}
 	return true
+}
+
+func (a Adapter) safeCertbotReadme() bool {
+	path := servingLive + "/README"
+	_, err := a.protectedServingFile(path, 0644, certbotReadmeSHA256)
+	if err == nil || errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	// The standard file can inherit a restrictive caller umask.
+	_, err = a.protectedServingFile(path, 0600, certbotReadmeSHA256)
+	return err == nil
 }
 
 func servingArchiveIdentity(name string) (int, bool) {
@@ -614,16 +632,30 @@ func (a Adapter) ServingQuiescent() bool {
 }
 
 type ServingExclusion struct {
-	root  string
-	files []*os.File
+	root    string
+	files   []*os.File
+	created []*os.File
 }
 
 func (e *ServingExclusion) Release() {
 	if e != nil {
 		for _, file := range e.files {
+			if slices.Contains(e.created, file) {
+				// Acquisition may have lost a race to a different process.
+				lock := syscall.Flock_t{Type: syscall.F_WRLCK, Whence: io.SeekStart}
+				locked := syscall.FcntlFlock(file.Fd(), syscall.F_SETLK, &lock) == nil
+				opened, err := file.Stat()
+				current, currentErr := os.Lstat(file.Name())
+				// Unlink our empty inode while still holding its POSIX lock.
+				// A contender must recheck the inode after acquiring its lock.
+				if locked && err == nil && currentErr == nil && os.SameFile(opened, current) && opened.Size() == 0 {
+					_ = os.Remove(file.Name())
+				}
+			}
 			file.Close()
 		}
 		e.files = nil
+		e.created = nil
 	}
 }
 
@@ -635,18 +667,27 @@ func (a Adapter) AcquireServingExclusion() (*ServingExclusion, bool) {
 			exclusion.Release()
 		}
 	}()
-	// With no renewal integration in this footprint, use the existing official
-	// shared lock inodes to exclude Certbot while removing its owned material.
-	// Missing locks refuse; this read/remove path must not create shared state.
+	// Certbot removes idle lock files. Use its POSIX lock/inode protocol, creating
+	// only missing files under proved existing parents and removing only our inodes.
 	for _, path := range certbotDirectoryLocks {
 		if a.safeParents(path) != nil {
 			return nil, false
 		}
-		file, err := os.OpenFile(a.path(path), os.O_RDWR|syscall.O_NOFOLLOW, 0)
+		file, err := os.OpenFile(a.path(path), os.O_RDWR|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0600)
+		created := err == nil
+		if errors.Is(err, os.ErrExist) {
+			file, err = os.OpenFile(a.path(path), os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+		}
 		if err != nil {
 			return nil, false
 		}
 		exclusion.files = append(exclusion.files, file)
+		if created {
+			exclusion.created = append(exclusion.created, file)
+			if file.Chmod(0600) != nil {
+				return nil, false
+			}
+		}
 		info, err := file.Stat()
 		stat, ok := infoSys(info)
 		if err != nil || !ok || !info.Mode().IsRegular() || stat.Uid != a.ownerUID() || stat.Nlink != 1 || info.Mode().Perm()&0022 != 0 {
@@ -690,6 +731,7 @@ func (a Adapter) RemoveServingRuntime(ctx context.Context, authority ServingAuth
 		paths = append(paths, servingLive+"/"+name+".pem")
 	}
 	paths = append(paths, archivePaths...)
+	paths = append(paths, servingLive+"/README")
 	paths = append(paths, servingLive, servingArchive, ServingTokenPath, ServingStatePath, ServingStagingPath, ServingUnitWantsPath, ServingUnitPath)
 	for _, path := range paths {
 		if err := os.Remove(a.path(path)); errors.Is(err, os.ErrNotExist) {

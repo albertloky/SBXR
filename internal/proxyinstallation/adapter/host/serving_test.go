@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -118,10 +119,57 @@ func TestServingFilesAndRemovalPreserveUnrelatedLineages(t *testing.T) {
 	}
 }
 
+func TestServingAcceptsAndRemovesOnlyOfficialCertbotReadme(t *testing.T) {
+	body, err := os.ReadFile("testdata/certbot-lineage-README")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []os.FileMode{0600, 0644} {
+		a, authority := servingFiles(t)
+		path := a.path(servingLive + "/README")
+		if err := os.WriteFile(path, body, mode); err != nil {
+			t.Fatal(err)
+		}
+		if !a.InspectServingFiles(authority, false).Accepted {
+			t.Fatalf("official Certbot README with mode %o refused", mode)
+		}
+		if !removeServing(t, a, authority) || !a.ServingRuntimeAbsent(authority) {
+			t.Fatal("official Certbot README prevented complete removal")
+		}
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatal("owned README remained after removal")
+		}
+	}
+	for _, mutate := range []func(string){
+		func(path string) { os.WriteFile(path, []byte("unknown content"), 0644) },
+		func(path string) { os.Chmod(path, 0666) },
+		func(path string) { os.Link(path, path+".alias") },
+		func(path string) { os.Remove(path); os.Symlink("/outside", path) },
+		func(path string) { os.Remove(path); syscall.Mkfifo(path, 0600) },
+	} {
+		a, authority := servingFiles(t)
+		path := a.path(servingLive + "/README")
+		if err := os.WriteFile(path, body, 0644); err != nil {
+			t.Fatal(err)
+		}
+		mutate(path)
+		if a.InspectServingFiles(authority, false).Accepted || removeServing(t, a, authority) {
+			t.Fatal("unproved README was accepted or removed")
+		}
+	}
+}
+
 func TestServingRemovalResumesAfterEveryUnlinkSynchronizationFailure(t *testing.T) {
-	for boundary := 1; boundary <= 13; boundary++ {
+	readme, err := os.ReadFile("testdata/certbot-lineage-README")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for boundary := 1; boundary <= 16; boundary++ {
 		t.Run("sync", func(t *testing.T) {
 			a, authority := servingFiles(t)
+			if err := os.WriteFile(a.path(servingLive+"/README"), readme, 0644); err != nil {
+				t.Fatal(err)
+			}
 			calls := 0
 			a.syncDirectoryFault = func(string) error {
 				calls++
@@ -205,7 +253,7 @@ func TestServingRemovalRefusesUnrecordedFutureGeneration(t *testing.T) {
 	}
 }
 
-func TestServingExclusionRefusesBusyOrMissingOfficialLockInodes(t *testing.T) {
+func TestServingExclusionRefusesBusyAndRestoresMissingOfficialLockInodes(t *testing.T) {
 	a, _ := servingFiles(t)
 	path := a.path(certbotDirectoryLocks[0])
 	child := exec.Command(os.Args[0], "-test.run=^TestSubscriptionCertbotLockChild$")
@@ -225,6 +273,15 @@ func TestServingExclusionRefusesBusyOrMissingOfficialLockInodes(t *testing.T) {
 	if line, err := bufio.NewReader(output).ReadString('\n'); err != nil || line != "locked\n" {
 		t.Fatal("lock readiness failed")
 	}
+	// Model a contender locking our newly created inode before our lock call.
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	(&ServingExclusion{files: []*os.File{file}, created: []*os.File{file}}).Release()
+	if _, err := os.Lstat(path); err != nil {
+		t.Fatal("failed acquisition removed another process's locked inode")
+	}
 	if exclusion, ok := a.AcquireServingExclusion(); ok {
 		exclusion.Release()
 		t.Fatal("active Certbot admitted")
@@ -241,12 +298,53 @@ func TestServingExclusionRefusesBusyOrMissingOfficialLockInodes(t *testing.T) {
 	if os.Remove(path) != nil {
 		t.Fatal("lock removal fixture failed")
 	}
-	if exclusion, ok := a.AcquireServingExclusion(); ok {
-		exclusion.Release()
-		t.Fatal("missing lock authority accepted")
+	exclusion, ok = a.AcquireServingExclusion()
+	if !ok {
+		t.Fatal("absent idle Certbot lock prevented exclusion")
 	}
+	exclusion.Release()
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatal("missing shared lock recreated")
+		t.Fatal("temporary shared lock survived exclusion")
+	}
+}
+
+func TestServingExclusionCreatesRealPOSIXLocksAndPreservesReplacement(t *testing.T) {
+	a, authority := servingFiles(t)
+	for _, path := range certbotDirectoryLocks {
+		if err := os.Remove(a.path(path)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exclusion, ok := a.AcquireServingExclusion()
+	if !ok {
+		t.Fatal("Certbot's removed lock files prevented exclusion")
+	}
+	t.Cleanup(exclusion.Release)
+	for _, path := range certbotDirectoryLocks {
+		child := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestSubscriptionCertbotLockChild$")
+		child.Env = append(os.Environ(), "SBXR_TEST_CERTBOT_LOCK="+a.path(path))
+		if err := child.Run(); err == nil {
+			t.Fatal("temporary inode did not exclude a real POSIX lock contender")
+		}
+	}
+	path := a.path(certbotDirectoryLocks[0])
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("replacement"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if a.RemoveServingRuntime(t.Context(), authority, exclusion) {
+		t.Fatal("replaced lock inode authorized removal")
+	}
+	exclusion.Release()
+	if body, err := os.ReadFile(path); err != nil || string(body) != "replacement" {
+		t.Fatal("replacement inode was changed by release")
+	}
+	for _, path := range certbotDirectoryLocks[1:] {
+		if _, err := os.Lstat(a.path(path)); !os.IsNotExist(err) {
+			t.Fatal("created lock file remained after release")
+		}
 	}
 }
 

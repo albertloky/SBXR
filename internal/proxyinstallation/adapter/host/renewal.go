@@ -691,6 +691,13 @@ func (a Adapter) prepareRenewalAttempt(authority RenewalAuthority, invocation st
 	return &renewalAttemptRunner{adapter: a, authority: authority, attempt: attempt, admission: admission, command: command, holdAdmission: exclusive}, true
 }
 
+func certbotCommand(ctx context.Context, name string, arguments ...string) *exec.Cmd {
+	// Set the mask in the child only; changing Go's process-wide umask would
+	// race unrelated secret writers. Certbot explicitly creates private keys 0600.
+	args := append([]string{"-c", `umask 022; exec "$@"`, "sbxr-certbot", name}, arguments...)
+	return exec.CommandContext(ctx, "/bin/sh", args...)
+}
+
 func (r *renewalAttemptRunner) Abort() {
 	if r == nil || r.finished {
 		return
@@ -727,7 +734,7 @@ func (r *renewalAttemptRunner) Run(ctx context.Context) int {
 	if run != nil {
 		code = run(ctx, r.command[0], r.command[1:]...)
 	} else {
-		command := exec.CommandContext(ctx, r.command[0], r.command[1:]...)
+		command := certbotCommand(ctx, r.command[0], r.command[1:]...)
 		environment := slices.DeleteFunc(os.Environ(), func(value string) bool {
 			name, _, _ := strings.Cut(value, "=")
 			return slices.Contains([]string{"SBXR_RENEWAL_ATTEMPT_ID", "RENEWED_LINEAGE", "RENEWED_DOMAINS", "FAILED_DOMAINS"}, name)
@@ -977,13 +984,8 @@ func (a Adapter) RepairSubscriptionCertificate(ctx context.Context, authority Re
 	if !ok || !valid || !a.validRenewalCertificate(authority, beforeGeneration) {
 		return false
 	}
-	locks := make([]os.FileInfo, len(certbotDirectoryLocks))
-	for index, path := range certbotDirectoryLocks {
+	for _, path := range certbotDirectoryLocks {
 		if !a.certbotLockAvailable(path) {
-			return false
-		}
-		locks[index], _ = os.Lstat(a.path(path))
-		if locks[index] == nil {
 			return false
 		}
 	}
@@ -992,12 +994,13 @@ func (a Adapter) RepairSubscriptionCertificate(ctx context.Context, authority Re
 	if !prepared || runner.Run(ctx) != 0 {
 		return false
 	}
-	for index, path := range certbotDirectoryLocks {
-		current, err := os.Lstat(a.path(path))
-		if err != nil || !os.SameFile(locks[index], current) {
-			return false
-		}
+	// Certbot unlinks its own lock files at exit. Establish fresh exclusion
+	// before inspecting the result, rather than requiring those inodes to survive.
+	exclusion, locked := a.AcquireServingExclusion()
+	if !locked {
+		return false
 	}
+	defer exclusion.Release()
 	afterTarget, ok := a.renewalLineageTarget(authority)
 	afterGeneration, valid := renewalLineageGeneration(authority, afterTarget)
 	return ok && valid && afterGeneration > beforeGeneration && a.validRenewalCertificate(authority, afterGeneration)
