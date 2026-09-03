@@ -987,7 +987,7 @@ func (a Adapter) RepairSubscriptionCertificate(ctx context.Context, authority Re
 			return false
 		}
 	}
-	command := []string{"/snap/bin/certbot", "certonly", "--non-interactive", "--agree-tos", "--register-unsafely-without-email", "--standalone", "--preferred-challenges", "http", "--no-directory-hooks", "--force-renewal", "--cert-name", authority.Lineage, "--profile", "shortlived", "--ip-address", authority.PublicIPv4}
+	command := []string{"/snap/bin/certbot", "certonly", "--non-interactive", "--agree-tos", "--register-unsafely-without-email", "--standalone", "--preferred-challenges", "http", "--no-directory-hooks", "--force-renewal", "--cert-name", authority.Lineage, "--required-profile", "shortlived", "--ip-address", authority.PublicIPv4}
 	runner, prepared := a.prepareRenewalAttempt(authority, OwnerRenewalInvocation, true, true, command)
 	if !prepared || runner.Run(ctx) != 0 {
 		return false

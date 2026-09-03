@@ -307,13 +307,8 @@ func (adapter Adapter) PrepareSubscription(ctx context.Context, input Subscripti
 	if !facts.TCP80.Accepted || !facts.TCP8443.Accepted || !facts.Clock.Accepted || !facts.PackageLocks.Accepted || !facts.RenewalIdle.Accepted || !facts.Dependencies.Accepted || !facts.Firewall.Accepted || !facts.RecorderDirectory.Accepted {
 		return SubscriptionEnableResult{}
 	}
-	run := adapter.subscriptionCommand
-	if run == nil {
-		run = commandOutput
-	}
 	runOK := func(name string, arguments ...string) bool {
-		_, code, observed := run(ctx, name, arguments...)
-		return observed && code == 0
+		return adapter.subscriptionPreparationCommand(ctx, name, arguments...)
 	}
 	authorize := func(checkpoint int, serving *ServingAuthority) bool {
 		return input.Authorize != nil && input.Authorize(checkpoint, serving)
@@ -353,7 +348,7 @@ func (adapter Adapter) PrepareSubscription(ctx context.Context, input Subscripti
 	if !authorize(7, nil) {
 		return SubscriptionEnableResult{Resources: resources}
 	}
-	if !runOK("/snap/bin/certbot", "certonly", "--non-interactive", "--agree-tos", "--register-unsafely-without-email", "--standalone", "--preferred-challenges", "http", "--no-directory-hooks", "--cert-name", "sbxr-subscription", "--profile", "shortlived", "--ip-address", input.PublicIPv4) {
+	if !runOK("/snap/bin/certbot", "certonly", "--non-interactive", "--agree-tos", "--register-unsafely-without-email", "--standalone", "--preferred-challenges", "http", "--no-directory-hooks", "--cert-name", "sbxr-subscription", "--required-profile", "shortlived", "--ip-address", input.PublicIPv4) {
 		return SubscriptionEnableResult{Resources: resources}
 	}
 	generation, ok := adapter.renewalLineageTarget(input.Renewal)
@@ -414,6 +409,15 @@ func (adapter Adapter) PrepareSubscription(ctx context.Context, input Subscripti
 		return SubscriptionEnableResult{Resources: resources}
 	}
 	return SubscriptionEnableResult{Serving: serving, Renewal: input.Renewal, Resources: resources, Prepared: true}
+}
+
+func (adapter Adapter) subscriptionPreparationCommand(ctx context.Context, name string, arguments ...string) bool {
+	if adapter.subscriptionCommand == nil {
+		// Issuance and dependency changes use the existing bounded mutation runner.
+		return adapter.command(ctx, name, arguments...).OK
+	}
+	_, code, observed := adapter.subscriptionCommand(ctx, name, arguments...)
+	return observed && code == 0
 }
 
 func (adapter Adapter) inspectRecorderDirectory() (bool, Observation) {

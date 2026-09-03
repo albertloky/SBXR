@@ -233,7 +233,7 @@ func TestReviewedCertificateRepairUsesOneExactOwnedCertbotAttempt(t *testing.T) 
 	if !a.RepairSubscriptionCertificate(t.Context(), authority) {
 		t.Fatal("RepairSubscriptionCertificate() refused")
 	}
-	want := "/snap/bin/certbot certonly --non-interactive --agree-tos --register-unsafely-without-email --standalone --preferred-challenges http --no-directory-hooks --force-renewal --cert-name sbxr-subscription --profile shortlived --ip-address 8.8.8.8"
+	want := "/snap/bin/certbot certonly --non-interactive --agree-tos --register-unsafely-without-email --standalone --preferred-challenges http --no-directory-hooks --force-renewal --cert-name sbxr-subscription --required-profile shortlived --ip-address 8.8.8.8"
 	if command != want {
 		t.Fatalf("command = %q", command)
 	}

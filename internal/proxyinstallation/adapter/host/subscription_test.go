@@ -826,6 +826,13 @@ func TestSubscriptionPreparationCreatesMissingRecorderDirectory(t *testing.T) {
 	}
 }
 
+func TestSubscriptionPreparationCommandAllowsMutationDuration(t *testing.T) {
+	// Certificate issuance must not inherit the five-second inspection timeout.
+	if !(Adapter{}).subscriptionPreparationCommand(t.Context(), "sh", "-c", "sleep 6") {
+		t.Fatal("subscription mutation was killed by the inspection timeout")
+	}
+}
+
 func testSubscriptionRecorderDirectory(t *testing.T, created bool) {
 	t.Helper()
 	adapter, renewal := renewalFiles(t)
@@ -856,6 +863,11 @@ func testSubscriptionRecorderDirectory(t *testing.T, created bool) {
 	adapter.subscriptionBind = func(string, string) bool { return true }
 	adapter.subscriptionCommand = func(ctx context.Context, name string, args ...string) (string, int, bool) {
 		switch name {
+		case "/snap/bin/certbot":
+			want := []string{"certonly", "--non-interactive", "--agree-tos", "--register-unsafely-without-email", "--standalone", "--preferred-challenges", "http", "--no-directory-hooks", "--cert-name", "sbxr-subscription", "--required-profile", "shortlived", "--ip-address", renewal.PublicIPv4}
+			if !slices.Equal(args, want) {
+				t.Fatalf("unsupported Certbot issuance arguments: %q", args)
+			}
 		case "pgrep":
 			return "", 1, true
 		case "dpkg-query":
