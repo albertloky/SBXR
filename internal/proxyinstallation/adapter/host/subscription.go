@@ -511,10 +511,13 @@ func (adapter Adapter) ActivatePreparedSubscription(ctx context.Context, serving
 	if run == nil {
 		run = commandOutput
 	}
-	return adapter.runtimeStart(ctx, ServingRole, func() bool {
+	if !adapter.runtimeStart(ctx, ServingRole, func() bool {
 		_, code, observed := run(ctx, "systemctl", "enable", "--now", "sbxr-subscription.service")
 		return observed && code == 0
-	})
+	}) {
+		return false
+	}
+	return adapter.waitLoadedServingAuthority(ctx, renewal, serving)
 }
 
 func (adapter Adapter) PrepareSubscriptionRotation(input SubscriptionRotationInput) bool {

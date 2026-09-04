@@ -9,7 +9,26 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
+
+func TestServingActivationWaitsForDelayedRuntimeReadiness(t *testing.T) {
+	accepted := ServingAuthority{LinkID: strings.Repeat("a", 32), CredentialSHA256: strings.Repeat("b", 64), CertificateGeneration: 1, CertificateSHA256: [4]string{strings.Repeat("c", 64), strings.Repeat("d", 64), strings.Repeat("e", 64), strings.Repeat("f", 64)}}
+	renewal := RenewalAuthority{RecorderID: strings.Repeat("1", 32), Lineage: "sbxr-subscription", PublicIPv4: "8.8.8.8", Invocation: OfficialRenewalInvocation}
+	calls := 0
+	a := Adapter{servingLoaded: func(context.Context, RenewalAuthority, ServingAuthority, ServingAuthority) (ServingAuthority, bool) {
+		calls++
+		if calls < 3 {
+			return ServingAuthority{}, false
+		}
+		return accepted, true
+	}}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	if !a.waitLoadedServingAuthority(ctx, renewal, accepted) || calls != 3 {
+		t.Fatalf("delayed serving readiness was not accepted: calls=%d", calls)
+	}
+}
 
 func TestServingUnitUsesStartablePrivateSystemControlDirectory(t *testing.T) {
 	if !strings.Contains(ServingUnit, "TemporaryFileSystem=/run/systemd:ro,mode=000\n") {
@@ -376,8 +395,9 @@ func TestCertificateActivationInspectionBindsOnePublishedGenerationAndLoadedStat
 	renewal := RenewalAuthority{RecorderID: strings.Repeat("1", 32), Lineage: "sbxr-subscription", PublicIPv4: "8.8.8.8", Invocation: OfficialRenewalInvocation}
 	a.publicIPv4 = func(context.Context) string { return renewal.PublicIPv4 }
 	a.renewalCertificateValid = func(_ RenewalAuthority, generation int) bool { return generation == 2 }
+	loaded := accepted
 	a.servingLoaded = func(context.Context, RenewalAuthority, ServingAuthority, ServingAuthority) (ServingAuthority, bool) {
-		return accepted, true
+		return loaded, true
 	}
 	for _, name := range certificateNames {
 		body := []byte(name + " replacement\n")
@@ -400,6 +420,7 @@ func TestCertificateActivationInspectionBindsOnePublishedGenerationAndLoadedStat
 	if !inspection.Observed || !inspection.Accepted || inspection.Published.CertificateGeneration != 2 || inspection.Loaded != accepted || inspection.Published.LinkID != accepted.LinkID || inspection.Published.CredentialSHA256 != accepted.CredentialSHA256 {
 		t.Fatalf("InspectCertificateActivation() = %#v", inspection)
 	}
+	loaded = inspection.Published
 	restarts := 0
 	a.subscriptionCommand = func(_ context.Context, name string, arguments ...string) (string, int, bool) {
 		if name == "systemctl" && strings.Join(arguments, " ") == "restart sbxr-subscription.service" {

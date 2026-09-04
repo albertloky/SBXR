@@ -497,6 +497,24 @@ func (a Adapter) loadedServingAuthority(ctx context.Context, renewal RenewalAuth
 	return ServingAuthority{}, true
 }
 
+func (a Adapter) waitLoadedServingAuthority(ctx context.Context, renewal RenewalAuthority, serving ServingAuthority) bool {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		loaded, observed := a.loadedServingAuthority(ctx, renewal, serving, serving)
+		if observed && loaded == serving {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+		}
+	}
+}
+
 func pemDecodeCertificate(body []byte) (*x509.Certificate, error) {
 	block, rest := pem.Decode(body)
 	if block == nil || block.Type != "CERTIFICATE" || len(bytes.TrimSpace(rest)) != 0 {
@@ -522,7 +540,7 @@ func (a Adapter) InspectCertificateActivation(ctx context.Context, renewal Renew
 
 func (a Adapter) ActivateServing(ctx context.Context, renewal RenewalAuthority, target ServingAuthority) bool {
 	published, valid := a.publishedServingAuthority(renewal, target)
-	if !valid || published != target || !a.runtimeStart(ctx, ServingRole, func() bool { return a.servingCommand(ctx, "restart", "sbxr-subscription.service") }) {
+	if !valid || published != target || !a.runtimeStart(ctx, ServingRole, func() bool { return a.servingCommand(ctx, "restart", "sbxr-subscription.service") }) || !a.waitLoadedServingAuthority(ctx, renewal, target) {
 		return false
 	}
 	// The caller performs the full published/loaded reinspection under retained
