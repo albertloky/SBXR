@@ -491,6 +491,15 @@ func (host *controlledHost) PublishOwnership(_, _ string, expected, next []byte)
 	if !bytes.Equal(expected, host.ownership) {
 		return errors.New("ownership changed")
 	}
+	if host.stagedOwnership != nil {
+		if !bytes.Equal(host.stagedOwnership, next) {
+			return errors.New("ownership checkpoint refused")
+		}
+		host.stagedOwnership = nil
+		host.ownership = bytes.Clone(next)
+		host.checkpoints = append(host.checkpoints, bytes.Clone(next))
+		return nil
+	}
 	record, _ := decodeOwnership(next)
 	if host.failClientCheckpoint != "" && record.ClientRotation != nil && record.ClientRotation.Checkpoint == host.failClientCheckpoint {
 		host.failClientCheckpoint = ""
@@ -1964,6 +1973,53 @@ func TestInterruptedCleanupExposesOnlyFinishCleanupAndResumes(t *testing.T) {
 	result = restarted.Execute(t.Context(), *finish.Prepared, Approved, nil)
 	if result.Status != NotSetUp || result.Code != SetupCleanedUp || len(host.ownership) != 0 {
 		t.Fatalf("Finish cleanup = %#v ownership=%q", result, host.ownership)
+	}
+}
+
+func TestFinishCleanupRecoversStagedPreCommitCheckpoint(t *testing.T) {
+	source := acceptedHost()
+	installation := newInstalledInterface(readyLifecycle{}, source, acceptedSingBox{})
+	start := installation.Review(t.Context(), StartSetupAction)
+	if result := installation.Execute(t.Context(), *start.Prepared, Approved, nil); result.Code != SetupComplete {
+		t.Fatalf("fixture setup = %#v", result)
+	}
+	var current, staged []byte
+	for _, body := range source.checkpoints {
+		record, _ := decodeOwnership(body)
+		switch record.Phase {
+		case configurationInstalled:
+			current = bytes.Clone(body)
+		case configurationValidated:
+			staged = bytes.Clone(body)
+		}
+	}
+	if current == nil || staged == nil {
+		t.Fatal("fixture checkpoints are missing")
+	}
+
+	host := acceptedHost()
+	host.ownership, host.stagedOwnership = current, staged
+	restarted := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
+	finish := restarted.Review(t.Context(), FinishCleanupAction)
+	if finish.Prepared == nil {
+		t.Fatalf("Finish cleanup review = %#v", finish)
+	}
+
+	result := restarted.Execute(t.Context(), *finish.Prepared, Approved, nil)
+
+	if result.Status != NotSetUp || result.Code != SetupCleanedUp || len(host.ownership) != 0 || host.stagedOwnership != nil {
+		t.Fatalf("Finish cleanup = %#v ownership=%q staged=%q", result, host.ownership, host.stagedOwnership)
+	}
+
+	changed, _ := decodeOwnership(staged)
+	changed.CleanupCheckpoint++
+	unsafe := acceptedHost()
+	unsafe.ownership, unsafe.stagedOwnership = bytes.Clone(current), ownershipBytes(changed)
+	restarted = newInstalledInterface(readyLifecycle{}, unsafe, acceptedSingBox{})
+	finish = restarted.Review(t.Context(), FinishCleanupAction)
+	result = restarted.Execute(t.Context(), *finish.Prepared, Approved, nil)
+	if result.Code != ActionRefused || !bytes.Equal(unsafe.ownership, current) || !bytes.Equal(unsafe.stagedOwnership, ownershipBytes(changed)) {
+		t.Fatalf("changed checkpoint = %#v ownership=%q staged=%q", result, unsafe.ownership, unsafe.stagedOwnership)
 	}
 }
 

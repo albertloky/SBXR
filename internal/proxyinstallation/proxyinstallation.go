@@ -1401,6 +1401,13 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 		return refused(authority.status, "SBXR mutation lock", "Wait for the active SBXR change to finish, then review the action again.")
 	}
 	defer lock.Release()
+	if authority.action == FinishCleanupAction {
+		var recovered bool
+		authority.record, recovered = module.recoverStagedCleanupCheckpoint(authority.record)
+		if !recovered {
+			return refused(ProblemDetected, "Prepared Action facts", "Review Finish cleanup again after restoring every changed authority fact.")
+		}
+	}
 	if module.subscriptionStatus(context.WithoutCancel(ctx)) != SubscriptionNotEnabled && authority.action != FinishRemovalAction && !(module.servingSurfaceSafe() && authority.action == ShowClientConfigurationAction) {
 		return refused(authority.status, "Subscription absence", "Inspect subscription material before retrying.")
 	}
@@ -1517,6 +1524,27 @@ func (module *installedInterface) revalidateFinishingAuthority(ctx context.Conte
 	record, ok := decodeOwnership(current)
 	installed := module.statusUnderMutationLock(ctx, lock)
 	return record, current, ok && installed.State == softwarelifecycle.Ready && installed.Installed != nil && *installed.Installed == authority.release && compatibleOwnership(record, authority.release)
+}
+
+func (module *installedInterface) recoverStagedCleanupCheckpoint(current []byte) ([]byte, bool) {
+	record, valid := decodeOwnership(current)
+	if !valid || record.Direction != cleanupRequired {
+		return nil, false
+	}
+	staged, err := module.host.ReadOwnership(hostSetupSpec.OwnershipNextPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return current, true
+	}
+	stagedRecord, stagedValid := decodeOwnership(staged)
+	index := slices.Index(setupPhaseOrder, record.Phase)
+	if err != nil || !stagedValid || index < 0 || index+1 >= len(setupPhaseOrder) || setupPhaseOrder[index+1] != stagedRecord.Phase || phaseAtOrAfter(stagedRecord.Phase, activationCommitted) {
+		return nil, false
+	}
+	record.Phase = stagedRecord.Phase
+	if !bytes.Equal(ownershipBytes(record), staged) || module.host.PublishOwnership(hostSetupSpec.OwnershipPath, hostSetupSpec.OwnershipNextPath, current, staged) != nil {
+		return nil, false
+	}
+	return staged, true
 }
 
 func (module *installedInterface) setupFactsFresh(ctx context.Context, record ownershipRecord, body []byte) bool {
@@ -2777,13 +2805,12 @@ func acceptedDestination(address, name string) (hostadapter.Destination, bool) {
 	return hostadapter.Destination{}, false
 }
 
-func validPhase(phase setupPhase) bool {
-	return slices.Contains([]setupPhase{ownershipRecorded, aptKeyInstalled, aptSourceInstalled, serviceMasked, packageInstalled, packageHeld, stateDirectoryCreated, configurationInstalled, configurationValidated, serviceUnmasked, activationCommitted, serviceEnabled, serviceStarted, runningPhase}, phase)
-}
+var setupPhaseOrder = []setupPhase{ownershipRecorded, aptKeyInstalled, aptSourceInstalled, serviceMasked, packageInstalled, packageHeld, stateDirectoryCreated, configurationInstalled, configurationValidated, serviceUnmasked, activationCommitted, serviceEnabled, serviceStarted, runningPhase}
+
+func validPhase(phase setupPhase) bool { return slices.Contains(setupPhaseOrder, phase) }
 
 func phaseAtOrAfter(phase, boundary setupPhase) bool {
-	order := []setupPhase{ownershipRecorded, aptKeyInstalled, aptSourceInstalled, serviceMasked, packageInstalled, packageHeld, stateDirectoryCreated, configurationInstalled, configurationValidated, serviceUnmasked, activationCommitted, serviceEnabled, serviceStarted, runningPhase}
-	return slices.Index(order, phase) >= slices.Index(order, boundary)
+	return slices.Index(setupPhaseOrder, phase) >= slices.Index(setupPhaseOrder, boundary)
 }
 
 func runningAccepted(facts hostadapter.RunningInspection) bool {
