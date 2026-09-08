@@ -1,11 +1,4 @@
 #!/usr/bin/env bash
-set -euo pipefail
-umask 077
-
-PACKAGE_SHA256=fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf
-PACKAGE_SIZE=24597120
-WORK=/run/sbxr-qualification
-
 menu_number() {
   local label=$1 output
   output="$(printf '0\n' | /usr/local/bin/sbxr)"
@@ -84,6 +77,7 @@ prove_status() {
 }
 
 interrupt_at() {
+  local WORK=${WORK:-/run/sbxr-qualification}
   local label=$1 confirmation=$2 event=$3 number=$4 event_observed=false interrupted=false scan_status=0 wait_status=0
   local fifo="$WORK/input-$number" output="$WORK/output-$number" action
   action="$(menu_number "$label")"
@@ -123,12 +117,47 @@ interrupt_at() {
 }
 
 install_candidate() {
+  local WORK=${WORK:-/run/sbxr-qualification}
   local output=$WORK/install-output
   curl -fsS https://github.com/albertloky/SBXR/releases/latest/download/install.sh | bash >"$output" 2>&1
   scan_vps_capture "$output"
   rm -f "$output"
   test -x /usr/local/bin/sbxr
   jq -e --arg tag "$TAG" --arg commit "$COMMIT" --arg index "$INDEX" --argjson sequence "$SEQUENCE" '.repository == "albertloky/SBXR" and .tag == $tag and .commit == $commit and .release_index_sha256 == $index and .sequence == $sequence and .architecture == "amd64"' /var/lib/sbxr/installed.json >/dev/null
+}
+
+# The recurring collector's request binds the already attested manifest bytes.
+# Read that identity on every call: split SSH steps cannot inherit shell state.
+# Optional paths allow the same boundary to be exercised without a live host.
+exact_candidate() {
+  local manifest=${1:-/root/sbxr-qualification-v3/qualification-manifest.json}
+  local request=${2:-/root/sbxr-qualification-evidence/request.json}
+  local installed=${3:-/var/lib/sbxr/installed.json}
+  local executable=${4:-/usr/local/bin/sbxr}
+  local digest candidate executable_digest path
+  for path in "$manifest" "$request" "$installed" "$executable"; do
+    test -f "$path" && test ! -L "$path" || return 1
+  done
+  digest=$(sha256sum "$manifest" | cut -d' ' -f1) || return 1
+  jq -e --arg digest "$digest" '.qualification_manifest_sha256 == $digest' "$request" >/dev/null || return 1
+  candidate=$(jq -ce '
+    select(.mode == "v3" and
+      (.schema == "sbxr-qualification-manifest-v2" or .schema == "sbxr-qualification-manifest-v3") and
+      (.source_state == "v3-recurring" or .source_state == "v3-subscription-clean") and
+      (.releases | length) == 1) | .releases[0] |
+    select(.release_identity.repository == "albertloky/SBXR" and
+      .tag == .release_identity.tag and .commit == .release_identity.commit and
+      (.tag | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) and
+      (.commit | test("^[0-9a-f]{40}$")) and
+      (.release_identity.release_index_sha256 | test("^[0-9a-f]{64}$")) and
+      (.sequence | type == "number" and . > 0 and . == floor))' "$manifest") || return 1
+  executable_digest=$(sha256sum "$executable" | cut -d' ' -f1) || return 1
+  jq -e --argjson candidate "$candidate" --arg executable "$executable_digest" '
+    .repository == $candidate.release_identity.repository and
+    .tag == $candidate.tag and .commit == $candidate.commit and
+    .sequence == $candidate.sequence and
+    .release_index_sha256 == $candidate.release_identity.release_index_sha256 and
+    .architecture == "amd64" and .executable_sha256 == $executable' "$installed" >/dev/null
 }
 
 prove_not_set_up() {
@@ -255,6 +284,7 @@ seal_failure_evidence() {
 }
 
 remote_failure_cleanup() {
+  local WORK=${WORK:-/run/sbxr-qualification}
   local action after before details details_number evidence evidence_safe input expected output status
   evidence=$WORK/failure-cleanup-evidence.txt
   evidence_safe=$WORK/failure-cleanup-evidence.safe
@@ -334,6 +364,7 @@ remote_failure_cleanup() {
 }
 
 remote_secret_safe() {
+  local WORK=${WORK:-/run/sbxr-qualification}
   local private_key client_uuid
   private_key="$(jq -er '.inbounds[0].tls.reality.private_key' /etc/sing-box/config.json)"
   client_uuid="$(jq -er '.inbounds[0].users[0].uuid' /etc/sing-box/config.json)"
@@ -341,6 +372,21 @@ remote_secret_safe() {
   if grep -RF -- "$client_uuid" "$WORK/qualification-manifest.json" "$WORK/gateway.log" >/dev/null 2>&1; then return 1; fi
   if grep -Eq 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer ' "$WORK/qualification-manifest.json" "$WORK/gateway.log"; then return 1; fi
 }
+
+# Operator helpers source this module directly; never extract/eval its text.
+if test "${BASH_SOURCE[0]}" != "$0"; then return; fi
+
+set -euo pipefail
+umask 077
+PACKAGE_SHA256=fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf
+PACKAGE_SIZE=24597120
+WORK=/run/sbxr-qualification
+
+if [[ ${1:-} == remote-exact-candidate ]]; then
+  test "$#" -eq 1
+  exact_candidate
+  exit
+fi
 
 if [[ ${1:-} == remote-* ]]; then
   mode=$1

@@ -5,6 +5,45 @@ umask 077
 outside_request_matches() {
   cmp -s "$1" <(printf '{"deadline_unix":%s,"qualification_manifest_sha256":"%s","request_id":"%s","scenario_id":"%s","schema":"sbxr-v3-outside-probe-request-v1"}' "$2" "$3" "$4" "$5")
 }
+
+# Publish original scenario facts through one owned interface. Reading the
+# request deliberately uses ssh -n; publishing deliberately does not, because
+# the facts are carried on stdin. The receiver proves the same active request
+# and exact payload bytes before making result.json visible.
+submit_result() {
+  test "$#" -eq 5
+  local submit_host=$1
+  local submit_key=$2
+  local submit_known_hosts=$3
+  local submit_manifest=$4
+  local submit_facts=$5
+  local -a submit_remote=(ssh -T -i "$submit_key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$submit_known_hosts" -o ConnectTimeout=15)
+  local submit_manifest_digest submit_request submit_request_digest submit_request_json submit_scenario submit_size submit_digest
+  submit_manifest_digest="$(sha256sum "$submit_manifest" | cut -d' ' -f1)"
+  submit_request="$("${submit_remote[@]}" -n "root@$submit_host" 'set -eu; request=/root/sbxr-qualification-evidence/request.json; test -f "$request"; test ! -L "$request"; test -O "$request"; test "$(find "$request" -prune -perm 0600 -links 1 -print)" = "$request"; sha256sum "$request" | cut -d" " -f1; cat "$request"')"
+  submit_request_digest=${submit_request%%$'\n'*}
+  submit_request_json=${submit_request#*$'\n'}
+  test "$submit_request_digest" != "$submit_request_json"
+  [[ "$submit_request_digest" =~ ^[0-9a-f]{64}$ ]]
+  jq -e --arg digest "$submit_manifest_digest" '.qualification_manifest_sha256 == $digest and (.scenario_id | type == "string") and (.deadline_unix | type == "number")' <<<"$submit_request_json" >/dev/null
+  submit_scenario="$(jq -r .scenario_id <<<"$submit_request_json")"
+  jq -e --slurpfile m "$submit_manifest" --arg scenario "$submit_scenario" '
+    .schema == "sbxr-release-qualification-facts-v1" and
+    .qualification_manifest == $m[0] and
+    ((.stage == "v3-scenario-failure" and .failure.scenario_id == $scenario) or
+     (.stage == "v3-scenario-result" and .detailed_evidence.scenarios[-1].scenario_id == $scenario))
+  ' "$submit_facts" >/dev/null
+  submit_size="$(wc -c < "$submit_facts" | tr -d ' ')"
+  test "$submit_size" -gt 0
+  test "$submit_size" -le 16777216
+  submit_digest="$(sha256sum "$submit_facts" | cut -d' ' -f1)"
+  "${submit_remote[@]}" "root@$submit_host" "set -eu; directory=/root/sbxr-qualification-evidence; request=\"\$directory/request.json\"; temporary=\"\$directory/result.tmp\"; result=\"\$directory/result.json\"; test \"\$(sha256sum \"\$request\" | cut -d' ' -f1)\" = '$submit_request_digest'; test ! -e \"\$temporary\"; test ! -L \"\$temporary\"; test ! -e \"\$result\"; test ! -L \"\$result\"; umask 077; cat > \"\$temporary\"; test -f \"\$temporary\"; test ! -L \"\$temporary\"; test -O \"\$temporary\"; test \"\$(find \"\$temporary\" -prune -perm 0600 -links 1 -print)\" = \"\$temporary\"; test \"\$(wc -c < \"\$temporary\")\" -eq '$submit_size'; test \"\$(sha256sum \"\$temporary\" | cut -d' ' -f1)\" = '$submit_digest'; test \"\$(sha256sum \"\$request\" | cut -d' ' -f1)\" = '$submit_request_digest'; mv -T \"\$temporary\" \"\$result\"" < "$submit_facts"
+}
+if test "${1:-}" = submit; then
+  test "$#" -eq 6
+  submit_result "$2" "$3" "$4" "$5" "$6"
+  exit 0
+fi
 test "$#" -eq 3
 remote=(ssh -i "$2" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$3" -o ConnectTimeout=15 "root@$1")
 manifest=handoff/qualification-manifest.json

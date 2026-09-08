@@ -50,6 +50,23 @@ The temporary transport uses root-only `/root/sbxr-qualification-v3`, a dedicate
 
 After the signed handoff is available, the collector creates root-only `/root/sbxr-qualification-evidence/request.json`. Each request names the scenario, manifest digest, earliest start, and inclusive duration limit. Read the signed artifact and request, then:
 
+Split operator steps must source the tracked `v3-packaged-live.sh` module directly
+and call `exact_candidate` before completing their candidate identity observation:
+
+```bash
+source /run/sbxr-qualification/v3-packaged-live.sh
+exact_candidate
+```
+
+The same check is available as `bash /run/sbxr-qualification/v3-packaged-live.sh
+remote-exact-candidate`. It loads the transport's attested manifest, verifies its
+bytes against the collector request, and checks installed identity and executable
+digest together. It does not depend on `TAG`, `SEQUENCE`, `COMMIT`, or `INDEX`
+exports from an earlier SSH session. Do not extract functions with `awk`/`eval`
+or redefine this check in temporary operator helpers. A missing or mismatched
+handoff fails the check; it never falls back to the installed record as candidate
+authority. This read-only check does not start or extend a scenario.
+
 For Mac-driven qualification while Karing owns the default route, keep the SSH
 control connection independent of the proxy under test. On macOS, bind native
 `nc` to the observed physical interface (for example,
@@ -99,7 +116,13 @@ immediate `set -e` exit, or echo an unscanned capture.
 1. Perform fresh preflight on the bound VPS. Prove the initial installation/ownership, package, clock, outside-runner, exclusion, and supported effective renewal-route facts. Start/completion times describe actual work, including preflight, injection, recovery, and verification.
 2. Drive the supported packaged scenario. Observe its commitment boundary; a signal or phase label alone is not proof. Record the required observations through protected comparison channels. Keep complete links, Client Identities, credential digests, request data, artifacts/configurations, raw process output, and Infrastructure Secrets out of evidence.
 3. Prepare canonical `sbxr-v3-scenario-evidence-v3`: attempt/scenario IDs, candidate assets/identity, exact source where applicable, same VPS identity, independent `operation-<number>` and optional `link-<number>`, initial/final state, observed boundary, expected/actual result, recovery direction, package sets, actual start/preflight/completion/validation times, previous scenario digest, and evidence references. Each reference contains a typed observation, its actual time, and SHA-256 of that canonical observation. Arbitrary text and raw captures have no accepted field.
-4. Submit the cumulative prefix in the normal qualification facts envelope with `stage:"v3-scenario-result"`. Use `sbxr-v3-packaged-live-evidence-v3`, the exact signed manifest and boundary facts, and the actual evaluation time. Run `sbxr-release qualification` locally as the validation event, within five minutes of completion. Atomically deliver the unchanged facts as root-owned, regular, one-link `0600` `result.json` in the handoff directory. Do not retain the secret-bearing comparison inputs.
+4. Submit the cumulative prefix in the normal qualification facts envelope with `stage:"v3-scenario-result"`. Use `sbxr-v3-packaged-live-evidence-v3`, the exact signed manifest and boundary facts, and the actual evaluation time. Run `sbxr-release qualification` locally as the validation event, within five minutes of completion. Deliver the unchanged validated file only through the tracked submission interface:
+
+   ```bash
+   bash .github/scripts/v3-recurring-evidence.sh submit "$ACCEPTANCE_VPS_HOST" "$SSH_KEY" "$KNOWN_HOSTS" handoff/qualification-manifest.json scenario-facts.json
+   ```
+
+   The interface binds the active request and scenario, owns the SSH stdin options, and checks the nonempty payload's exact size and SHA-256 before atomic publication as root-owned, regular, one-link `0600` `result.json`. It does not reject a typed failure merely because the scenario deadline has passed; the signed validator and collector grace period remain authoritative for failure reporting. Do not retain the secret-bearing comparison inputs.
 5. The workflow validates original bytes before JSON normalization, checks the signed manifest digest, exact prefix and requested ID, and independently checks receipt against its current clock. It retains only validated facts/decisions in `handoff/v3-scenarios/`. An earlier record cannot be replaced, retimed, borrowed from another attempt, or treated as a fresh host observation. Wait for the next request before starting more test mutations.
 
 For `baseline-clean` and `baseline-postcommit`, after reviewed setup/finishing,
@@ -117,6 +140,15 @@ protected `outside-reply-<scenario>.json` and incorporate the actual observation
 before completing that scenario. A missing, repeated, stale, malformed, or failed
 probe cannot support a pass. Explicit scenario failures retain their original
 failure facts. Exact reply files are removed by final collector cleanup.
+
+Sequence 130 exposed two operator handoff defects: a fresh SSH finish step lacked
+candidate exports, and the failure upload combined `ssh -n` with redirected JSON
+input. The latter discarded stdin and atomically published an empty result;
+local validation of the original file did not validate its delivery. The
+collector's conservative `evidence-refused` response was correct. Candidate
+verification and evidence submission must use the tracked module interfaces,
+including their clean-shell and complete-delivery checks. This correction does
+not rehabilitate that burned attempt or authorize reuse of its scenario passes.
 
 For both subscription clean-install scopes, `lifecycle-menu` replaces source upgrade and two-release update/recovery scenarios. It proves the actual zero-argument packaged menu reaches Check/Update/Recover, safely reports no update/no recovery, and preserves the installation on refusal. Explicit confirmation and clean-install-only target refusal remain mandatory live checks except under the repair-only v2 split above, where they are explicitly automated-only. The Acceptance Record marks incoming source upgrades and two-release update/recovery **Not applicable**, never Passed. `enable-schema1` must start from the candidate's supported setup; protected-state editing or unsupported migration cannot supply that state. All automated lifecycle safety coverage remains required.
 
