@@ -408,11 +408,12 @@ func TestQualificationCommandBindsRecurringAttempt(t *testing.T) {
 		t.Fatalf("unbound recurring manifest: %s", manifest)
 	}
 	for name, mutate := range map[string]func(map[string]any){
-		"missing attempt":  func(v map[string]any) { delete(v, "v3_attempt") },
-		"unknown field":    func(v map[string]any) { v["v3_attempt"].(map[string]any)["waiver"] = true },
-		"shortened matrix": func(v map[string]any) { v["v3_attempt"].(map[string]any)["required_scenarios"] = []any{"karing-final"} },
-		"no source":        func(v map[string]any) { v["v3_attempt"].(map[string]any)["sources"] = []any{} },
-		"extended limit":   func(v map[string]any) { v["v3_attempt"].(map[string]any)["scenario_limit_seconds"] = 1801 },
+		"missing attempt":    func(v map[string]any) { delete(v, "v3_attempt") },
+		"unknown field":      func(v map[string]any) { v["v3_attempt"].(map[string]any)["waiver"] = true },
+		"different workflow": func(v map[string]any) { v["v3_attempt"].(map[string]any)["attempt_id"] = "run-124-attempt-1" },
+		"shortened matrix":   func(v map[string]any) { v["v3_attempt"].(map[string]any)["required_scenarios"] = []any{"karing-final"} },
+		"no source":          func(v map[string]any) { v["v3_attempt"].(map[string]any)["sources"] = []any{} },
+		"extended limit":     func(v map[string]any) { v["v3_attempt"].(map[string]any)["scenario_limit_seconds"] = 1801 },
 		"unsupported Certbot": func(v map[string]any) {
 			v["v3_attempt"].(map[string]any)["packages"].(map[string]any)["certbot"].(map[string]any)["version"] = "5.3.9"
 		},

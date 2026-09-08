@@ -38,6 +38,33 @@ The workflow accepts a canonical, secret-safe `v3_attempt` JSON declaration. The
 - One Acceptance VPS ID plus SHA-256 of its `/etc/machine-id`, Ubuntu Server 24.04 `amd64`, Go `1.26.6`, public-verifier identity, independent outside-runner/Mac IDs, macOS version, and exact Karing macOS architecture.
 - The complete ordered required scenario list, `scenario_limit_seconds:1800`, `karing_limit_seconds:7200`, and `validation_limit_seconds:300`. Required IDs are fixed by `attemptScenarios` and `requiredV3Scenarios`; their observation requirements are fixed by `requiredV3Checks`. No optional-family or waiver field exists.
 
+Before dispatch, collect fresh `candidate-preflight-facts.json` using the workflow's
+read-only source, release-history, burn, and unused-identity checks. Validate that
+snapshot together with the complete canonical declaration:
+
+```bash
+GOTOOLCHAIN=go1.26.6 go build -o /tmp/sbxr-release ./cmd/sbxr-release
+bash .github/scripts/v3-candidate-dispatch.sh check /tmp/sbxr-release candidate-preflight-facts.json declaration.json
+```
+
+When a new candidate attempt is authorized, use the same command with `dispatch`
+in place of `check`. The wrapper validates the exact snapshotted inputs, checks
+that public main still matches, and submits them once. A validation failure makes
+no dispatch request. Refresh observations before each attempt; the check is not
+an authority reservation. The workflow repeats declaration validation against its
+own fresh preflight facts before either architecture build begins.
+
+`qualification-declaration` owns the preparation rules in the existing release
+qualification module. Its input is `{"attempt":<declaration>,"preflight":<facts>}`.
+It checks package identities and the required distinct Certbot transition, runner
+and timing limits, support, sources, history, and complete scenario lists through
+the same rules used at signing. Acceptance here proves declaration consistency;
+package availability still requires verified official bytes and assertions plus a
+reviewed preparation/restoration plan. In particular, declaring the same Certbot
+package before and after refresh cannot qualify the refresh scenario (#342).
+The run identity, built candidate index, approval, and fresh observed timestamps
+remain signing-time checks; preparation does not produce a signed manifest.
+
 The sign job rechecks the actual public Latest source and latest official stable Karing release metadata. Missing official asset digest or mismatched package facts refuse; do not substitute another package. Before any scenario, it binds a fresh `run-<run_id>-attempt-<run_attempt>` ID and actual start/package-check times into `sbxr-qualification-manifest-v3`, then uses the existing workflow attestation. The manifest's sole candidate entry binds the exact built Release Identity and four assets. The sign job downloads the candidate index into `candidate_index` as an exact JSON string; the verifier checks its bytes, digest, sequence, identity, assets, and support against the preflight declaration. It derives `baseline` from verified preflight history, never from the source list. Input start-time placeholders are replaced before the attempt exists; observed scenario timestamps are never rewritten.
 
 ### Operator handoff and per-scenario validation

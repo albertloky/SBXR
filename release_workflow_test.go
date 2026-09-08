@@ -679,6 +679,7 @@ func TestCandidatePreflightUsesOnlyCanonicalQualificationActions(t *testing.T) {
 		`schema:"sbxr-release-qualification-facts-v1"`,
 		`stage:"candidate-preflight"`,
 		`go run ./cmd/sbxr-release qualification < candidate-preflight-facts.json > candidate-preflight-decision.json`,
+		`go run ./cmd/sbxr-release qualification-declaration < candidate-declaration-facts.json > candidate-declaration-decision.json`,
 		`.schema == "sbxr-release-qualification-decision-v1"`,
 		`if .type == "build-release" then`,
 		`elif .type == "use-source-release" then`,

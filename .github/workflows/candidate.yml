@@ -129,6 +129,12 @@ jobs:
             mv candidate-preflight-facts.next candidate-preflight-facts.json
           fi
           go run ./cmd/sbxr-release qualification < candidate-preflight-facts.json > candidate-preflight-decision.json
+          if test "$MODE" = v3; then
+            # Check the complete declaration before allocating either build.
+            # Preserve raw JSON so duplicate keys cannot disappear through jq.
+            { printf '{"attempt":%s,"preflight":' "$V3_ATTEMPT"; cat candidate-preflight-facts.json; printf '}'; } > candidate-declaration-facts.json
+            go run ./cmd/sbxr-release qualification-declaration < candidate-declaration-facts.json > candidate-declaration-decision.json
+          fi
           facts_sha256="$(sha256sum candidate-preflight-facts.json | cut -d' ' -f1)"
           jq -e --arg facts_sha256 "$facts_sha256" --arg mode "$MODE" --arg a_tag "$A_TAG" --argjson a_sequence "$A_SEQUENCE" --arg b_tag "$B_TAG" --argjson b_sequence "$B_SEQUENCE" '
             .schema == "sbxr-release-qualification-decision-v1" and .stage == "candidate-preflight" and .outcome == "accepted" and .facts_sha256 == $facts_sha256 and
@@ -159,6 +165,13 @@ jobs:
           echo "source_state=$source_state" >> "$GITHUB_OUTPUT"
           echo "build_releases=$build_releases" >> "$GITHUB_OUTPUT"
           echo "source_a=$source_a" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ !cancelled() && inputs.mode == 'v3' }}
+        with:
+          name: candidate-declaration-preflight
+          path: candidate-declaration-*.json
+          if-no-files-found: ignore
+          retention-days: 1
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: candidate-preflight-decision-chain

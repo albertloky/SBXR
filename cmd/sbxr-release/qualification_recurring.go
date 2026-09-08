@@ -578,6 +578,12 @@ type v3QualificationAttempt struct {
 }
 
 func validV3Attempt(attempt v3QualificationAttempt, preflight qualificationFacts, workflow qualificationWorkflow) bool {
+	return validV3AttemptDeclaredFields(attempt, preflight) && attempt.AttemptID == "run-"+workflow.RunID+"-attempt-"+strconv.Itoa(attempt.RunAttempt)
+}
+
+// validV3AttemptDeclaredFields is shared by unsigned preparation and signing.
+// Signing separately binds the workflow identity and candidate release index.
+func validV3AttemptDeclaredFields(attempt v3QualificationAttempt, preflight qualificationFacts) bool {
 	if attempt.OwnerException != "" && (attempt.OwnerException != softwarelifecycle.OwnerExceptionID || attempt.Support == nil || !softwarelifecycle.OwnerExceptionTarget(preflight.Candidate.BTag, preflight.Candidate.BSequence, supportPointer(attempt.Support)) || attempt.Schema != "sbxr-v3-qualification-attempt-v3") {
 		return false
 	}
@@ -585,7 +591,6 @@ func validV3Attempt(attempt v3QualificationAttempt, preflight qualificationFacts
 	checked, checkedOK := qualificationTime(attempt.KaringLatestCheckedAt)
 	if !ok || !checkedOK || started.Before(checked) || started.Sub(checked) > 5*time.Minute ||
 		(attempt.Schema != "sbxr-v3-qualification-attempt-v2" && attempt.Schema != "sbxr-v3-qualification-attempt-v3") || attempt.RunAttempt < 1 ||
-		attempt.AttemptID != "run-"+workflow.RunID+"-attempt-"+strconv.Itoa(attempt.RunAttempt) ||
 		attempt.ScenarioLimitSeconds != 1800 || attempt.KaringLimitSeconds != 7200 || attempt.ValidationLimitSeconds != 300 ||
 		!validAcceptanceRunner(attempt.Runner) || attempt.Runner.GoToolchain != "go1.26.6" ||
 		!independentID(attempt.VPSID, "vps") || !independentID(attempt.OutsideRunnerID, "runner") || !independentID(attempt.MacRunnerID, "mac") || !regexp.MustCompile(`^[0-9]+\.[0-9]+(?:\.[0-9]+)?$`).MatchString(attempt.MacOSVersion) || !validSHA256(attempt.VPSIdentitySHA256) ||
