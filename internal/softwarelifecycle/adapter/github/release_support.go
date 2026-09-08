@@ -16,7 +16,7 @@ func qualifiedReleaseSupport(body string, release softwarelifecycle.LatestReleas
 	}
 	latency := release.Support != nil && release.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair
 	policy, policyOK := uniqueRecordValue(body, "Evidence policy: ")
-	latency = latency && policyOK && policy == softwarelifecycle.RepairKaringLatencyEvidencePolicy
+	latency = latency && policyOK && slices.Contains([]string{softwarelifecycle.RepairKaringLatencyEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy}, policy)
 	if latency {
 		coverage, coverageOK := uniqueRecordValue(body, "Karing connectivity evidence: ")
 		excluded, excludedOK := uniqueRecordValue(body, "Karing checks not performed: ")
@@ -41,7 +41,7 @@ func qualifiedReleaseSupport(body string, release softwarelifecycle.LatestReleas
 	automatedOnly, automatedOnlyOK := uniqueRecordValue(body, "Automated-only scenarios (not live): ")
 	automatedResult, automatedResultOK := uniqueRecordValue(body, "Automated-only result: ")
 	if release.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair {
-		if !policyOK || !slices.Contains([]string{softwarelifecycle.RepairEvidencePolicy, softwarelifecycle.RepairLifecycleEvidencePolicy, softwarelifecycle.RepairKaringLatencyEvidencePolicy}, policy) || !automatedOnlyOK || automatedOnly != softwarelifecycle.RepairAutomatedOnlyScenarios || !automatedResultOK || automatedResult != "Passed in native amd64/arm64 workflow" {
+		if !policyOK || !slices.Contains([]string{softwarelifecycle.RepairEvidencePolicy, softwarelifecycle.RepairLifecycleEvidencePolicy, softwarelifecycle.RepairKaringLatencyEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy}, policy) || !automatedOnlyOK || automatedOnly != softwarelifecycle.RepairAutomatedOnlyScenarios || !automatedResultOK || automatedResult != "Passed in native amd64/arm64 workflow" {
 			return false
 		}
 		if policy == softwarelifecycle.RepairLifecycleEvidencePolicy || latency {

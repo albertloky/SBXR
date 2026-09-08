@@ -268,6 +268,7 @@ func validRecurringEvidence(facts v3RecurringResultFacts, manifest qualification
 
 func validScenarioResult(scenario v3ScenarioEvidence, attempt v3QualificationAttempt) bool {
 	id := scenario.ScenarioID
+	twoIssuance := attempt.Support != nil && attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair && attempt.EvidencePolicy == softwarelifecycle.RepairTwoIssuanceEvidencePolicy
 	initial, boundary, recovery, final := "Running", "observed", "none", "Running"
 	if strings.Contains(id, "precommit") || id == "enable-schema2-absent" {
 		boundary, recovery = "before-commitment", "rollback"
@@ -280,6 +281,9 @@ func validScenarioResult(scenario v3ScenarioEvidence, attempt v3QualificationAtt
 	}
 	if id == "baseline-clean" {
 		initial = "Not installed"
+	}
+	if twoIssuance && id == "identity-absent" {
+		final = "Not installed"
 	}
 	if id == "baseline-refusal" || id == "baseline-precommit" || id == "baseline-postcommit" {
 		initial = "Not set up"
@@ -323,7 +327,7 @@ func validScenarioResult(scenario v3ScenarioEvidence, attempt v3QualificationAtt
 		return false
 	}
 	checks := requiredV3Checks(id)
-	latency := attempt.Support != nil && attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair && attempt.EvidencePolicy == softwarelifecycle.RepairKaringLatencyEvidencePolicy
+	latency := attempt.Support != nil && attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair && slices.Contains([]string{softwarelifecycle.RepairKaringLatencyEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy}, attempt.EvidencePolicy)
 	if attempt.Support != nil && attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair && (attempt.EvidencePolicy == softwarelifecycle.RepairLifecycleEvidencePolicy || latency) && id == "lifecycle-menu" {
 		checks = slices.DeleteFunc(checks, func(check string) bool {
 			return slices.Contains(strings.Fields(softwarelifecycle.RepairAutomatedOnlyChecks), id+"/"+check)
@@ -337,6 +341,9 @@ func validScenarioResult(scenario v3ScenarioEvidence, attempt v3QualificationAtt
 	}
 	if scenario.Schema == "sbxr-v3-scenario-evidence-v3" && id == "enable-schema1" {
 		checks = append(checks, strings.Fields("candidate-supported-setup-origin no-protected-state-edit no-unsupported-migration")...)
+	}
+	if scenario.Schema == "sbxr-v3-scenario-evidence-v3" && twoIssuance && id == "identity-absent" {
+		checks = append(checks, strings.Fields("candidate-supported-setup-origin schema1-rotation-origin reviewed-complete-removal complete-owned-absence no-certificate-request")...)
 	}
 	if len(checks) != len(scenario.Evidence) {
 		return false
@@ -483,10 +490,10 @@ func buildRecurringAcceptanceRecord(manifest qualificationManifest, facts v3Recu
 		body.WriteString("Release support: " + string(support) + "\nStable baseline: " + string(baseline) + "\n")
 		if attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair {
 			body.WriteString("Evidence policy: " + attempt.EvidencePolicy + "\nAutomated-only scenarios (not live): " + strings.Join(attempt.AutomatedOnlyScenarios, " ") + "\nAutomated-only result: Passed in native amd64/arm64 workflow\n")
-			if attempt.EvidencePolicy == softwarelifecycle.RepairLifecycleEvidencePolicy || attempt.EvidencePolicy == softwarelifecycle.RepairKaringLatencyEvidencePolicy {
+			if slices.Contains([]string{softwarelifecycle.RepairLifecycleEvidencePolicy, softwarelifecycle.RepairKaringLatencyEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy}, attempt.EvidencePolicy) {
 				body.WriteString("Automated-only checks (not live): " + softwarelifecycle.RepairAutomatedOnlyChecks + "\n")
 			}
-			if attempt.EvidencePolicy == softwarelifecycle.RepairKaringLatencyEvidencePolicy {
+			if slices.Contains([]string{softwarelifecycle.RepairKaringLatencyEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy}, attempt.EvidencePolicy) {
 				body.WriteString("Karing connectivity evidence: " + softwarelifecycle.RepairKaringConnectivityEvidence + "\nKaring checks not performed: " + softwarelifecycle.RepairKaringChecksNotPerformed + "\n")
 			}
 		}

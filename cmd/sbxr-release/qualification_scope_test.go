@@ -65,8 +65,40 @@ func TestQualificationCommandBindsFirstSubscriptionAttempt(t *testing.T) {
 }
 
 func TestQualificationCommandBindsCleanInstallRepair(t *testing.T) {
-	for _, policy := range []string{softwarelifecycle.RepairEvidencePolicy, "repair-issuance-bounded-v2", "repair-issuance-bounded-v3"} {
+	for _, policy := range []string{softwarelifecycle.RepairEvidencePolicy, softwarelifecycle.RepairLifecycleEvidencePolicy, softwarelifecycle.RepairKaringLatencyEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy} {
 		t.Run(policy, func(t *testing.T) { testFirstSubscriptionAttempt(t, "", policy) })
+	}
+}
+
+func TestRepairTwoIssuancePolicyMovesOnlyIdentityAbsent(t *testing.T) {
+	support := &v3ReleaseSupport{Contract: softwarelifecycle.SubscriptionUpdateContract, Scope: softwarelifecycle.SubscriptionCleanInstallRepair, Sources: []decisionReleaseIdentity{}}
+	base := v3QualificationAttempt{Support: support, Sources: []v3QualificationSource{}, AutomatedOnlyScenarios: strings.Fields(softwarelifecycle.RepairAutomatedOnlyScenarios)}
+	base.EvidencePolicy = softwarelifecycle.RepairKaringLatencyEvidencePolicy
+	v3 := attemptScenarios(base)
+	base.RequiredScenarios = v3
+	if !validAttemptSupport(base) {
+		t.Fatal("historical v3 order refused")
+	}
+	base.EvidencePolicy = softwarelifecycle.RepairTwoIssuanceEvidencePolicy
+	v4 := attemptScenarios(base)
+	wantV4 := slices.Clone(v3)
+	identityAbsent := slices.Index(wantV4, "identity-absent")
+	wantV4 = slices.Delete(wantV4, identityAbsent, identityAbsent+1)
+	enableSchema1 := slices.Index(wantV4, "enable-schema1")
+	wantV4 = slices.Insert(wantV4, enableSchema1, "identity-absent")
+	if !slices.Equal(v4, wantV4) || slices.Index(v3, "identity-absent") < slices.Index(v3, "enable-schema1") || slices.Index(v4, "identity-absent")+1 != slices.Index(v4, "enable-schema1") {
+		t.Fatalf("unexpected v3/v4 order:\nv3=%v\nv4=%v", v3, v4)
+	}
+	if validAttemptSupport(base) {
+		t.Fatal("v4 accepted historical scenario order")
+	}
+	base.RequiredScenarios = v4
+	if !validAttemptSupport(base) {
+		t.Fatal("v4 scenario order refused")
+	}
+	base.EvidencePolicy = softwarelifecycle.RepairKaringLatencyEvidencePolicy
+	if validAttemptSupport(base) {
+		t.Fatal("historical v3 accepted v4 scenario order")
 	}
 }
 
@@ -176,10 +208,17 @@ func testFirstSubscriptionAttempt(t *testing.T, exception string, policy string)
 	attempt["baseline"] = historyBaseline(facts.SubscriptionHistory)
 	attempt["sources"] = []any{}
 	if repair {
-		attempt["required_scenarios"] = strings.Fields(`baseline-clean baseline-refusal baseline-precommit baseline-postcommit baseline-drift baseline-removal
+		required := strings.Fields(`baseline-clean baseline-refusal baseline-precommit baseline-postcommit baseline-drift baseline-removal
 enable-schema1 link-precommit link-postcommit managed-renewal recorder-live recorder-locks snap-refresh unsupported-route
 identity-precommit identity-postcommit identity-unavailable identity-absent lifecycle-menu
 remove-certbot remove-writer remove-admission-race remove-directory-lock secret-containment karing-final`)
+		if policy == softwarelifecycle.RepairTwoIssuanceEvidencePolicy {
+			identityAbsent := slices.Index(required, "identity-absent")
+			required = slices.Delete(required, identityAbsent, identityAbsent+1)
+			enableSchema1 := slices.Index(required, "enable-schema1")
+			required = slices.Insert(required, enableSchema1, "identity-absent")
+		}
+		attempt["required_scenarios"] = required
 	} else {
 		var scenarios []string
 		for _, id := range attempt["required_scenarios"].([]string) {
@@ -222,13 +261,18 @@ remove-certbot remove-writer remove-admission-race remove-directory-lock secret-
 		switch s["scenario_id"] {
 		case "lifecycle-menu":
 			extra = strings.Fields("packaged-zero-argument-menu check-reachable update-reachable recover-reachable explicit-confirmation safe-no-update safe-no-recovery clean-install-target-refused no-replacement-on-refusal")
-			if policy == "repair-issuance-bounded-v2" || policy == "repair-issuance-bounded-v3" {
+			if slices.Contains([]string{softwarelifecycle.RepairLifecycleEvidencePolicy, softwarelifecycle.RepairKaringLatencyEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy}, policy) {
 				extra = strings.Fields("packaged-zero-argument-menu check-reachable update-reachable recover-reachable safe-no-update safe-no-recovery no-replacement-on-refusal")
 			}
 		case "enable-schema1":
 			extra = strings.Fields("candidate-supported-setup-origin no-protected-state-edit no-unsupported-migration")
+		case "identity-absent":
+			if policy == softwarelifecycle.RepairTwoIssuanceEvidencePolicy {
+				s["final_state"] = "Not installed"
+				extra = strings.Fields("candidate-supported-setup-origin schema1-rotation-origin reviewed-complete-removal complete-owned-absence no-certificate-request")
+			}
 		case "karing-final":
-			if policy == "repair-issuance-bounded-v3" {
+			if slices.Contains([]string{softwarelifecycle.RepairKaringLatencyEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy}, policy) {
 				s["evidence"] = slices.DeleteFunc(s["evidence"].([]any), func(raw any) bool {
 					check := raw.(map[string]any)["record"].(map[string]any)["check"].(string)
 					return slices.Contains(strings.Fields("direct-and-proxied-traffic old-established-session-terminated traffic-restored direct-refresh-correction-or-confirmed-fallback"), check)
@@ -242,7 +286,7 @@ remove-certbot remove-writer remove-admission-race remove-directory-lock secret-
 	}
 	rebindRecurringEvidence(t, evidence)
 	document := recurringResultFixture(t, boundary, manifest, evidence)
-	if policy == "repair-issuance-bounded-v3" {
+	if slices.Contains([]string{softwarelifecycle.RepairKaringLatencyEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy}, policy) {
 		var scenario v3ScenarioEvidence
 		scenarios := evidence["scenarios"].([]any)
 		if err := json.Unmarshal([]byte(qualificationDocument(t, scenarios[len(scenarios)-1])), &scenario); err != nil {
@@ -252,7 +296,7 @@ remove-certbot remove-writer remove-admission-race remove-directory-lock secret-
 		if !validScenarioResult(scenario, boundAttempt) {
 			t.Fatal("latency scenario refused")
 		}
-		for _, oldPolicy := range []string{"", "repair-issuance-bounded-v1", "repair-issuance-bounded-v2"} {
+		for _, oldPolicy := range []string{"", softwarelifecycle.RepairEvidencePolicy, softwarelifecycle.RepairLifecycleEvidencePolicy} {
 			changed := boundAttempt
 			changed.EvidencePolicy = oldPolicy
 			if validScenarioResult(scenario, changed) {
@@ -283,7 +327,7 @@ remove-certbot remove-writer remove-admission-race remove-directory-lock secret-
 		}
 	}
 	if repair {
-		if policy == "repair-issuance-bounded-v2" || policy == "repair-issuance-bounded-v3" {
+		if slices.Contains([]string{softwarelifecycle.RepairLifecycleEvidencePolicy, softwarelifecycle.RepairKaringLatencyEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy}, policy) {
 			for _, check := range []string{"explicit-confirmation", "clean-install-target-refused"} {
 				t.Run("automated-check-cannot-claim-live/"+check, func(t *testing.T) {
 					v := jsonObject(t, []byte(document))
@@ -302,7 +346,7 @@ remove-certbot remove-writer remove-admission-race remove-directory-lock secret-
 		}
 		for _, raw := range evidence["scenarios"].([]any) {
 			scenario := raw.(map[string]any)
-			if scenario["scenario_id"] != "lifecycle-menu" && !(policy == "repair-issuance-bounded-v3" && scenario["scenario_id"] == "karing-final") {
+			if scenario["scenario_id"] != "lifecycle-menu" && !(slices.Contains([]string{softwarelifecycle.RepairKaringLatencyEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy}, policy) && scenario["scenario_id"] == "karing-final") && !(policy == softwarelifecycle.RepairTwoIssuanceEvidencePolicy && scenario["scenario_id"] == "identity-absent") {
 				continue
 			}
 			for index, rawCheck := range scenario["evidence"].([]any) {
@@ -322,6 +366,21 @@ remove-certbot remove-writer remove-admission-race remove-directory-lock secret-
 					assertQualificationRefused(t, binary, qualificationDocument(t, v), check)
 				})
 			}
+		}
+		if policy == softwarelifecycle.RepairTwoIssuanceEvidencePolicy {
+			t.Run("identity-absent-must-finish-not-installed", func(t *testing.T) {
+				v := jsonObject(t, []byte(document))
+				e := v["detailed_evidence"].(map[string]any)
+				for _, raw := range e["scenarios"].([]any) {
+					s := raw.(map[string]any)
+					if s["scenario_id"] == "identity-absent" {
+						s["final_state"] = "Running"
+					}
+				}
+				rebindRecurringEvidence(t, e)
+				v["detailed_evidence_sha256"] = sha256String(qualificationDocument(t, e))
+				assertQualificationRefused(t, binary, qualificationDocument(t, v), "identity-absent final Running")
+			})
 		}
 	}
 	if repair {
@@ -428,7 +487,7 @@ remove-certbot remove-writer remove-admission-race remove-directory-lock secret-
 		}
 	}
 	checkLine := "Automated-only checks (not live): lifecycle-menu/explicit-confirmation lifecycle-menu/clean-install-target-refused\n"
-	if policy == "repair-issuance-bounded-v2" || policy == "repair-issuance-bounded-v3" {
+	if slices.Contains([]string{softwarelifecycle.RepairLifecycleEvidencePolicy, softwarelifecycle.RepairKaringLatencyEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy}, policy) {
 		if strings.Count(body, checkLine) != 1 {
 			t.Fatal("record lacks exact automated-only checks")
 		}
@@ -436,7 +495,7 @@ remove-certbot remove-writer remove-admission-race remove-directory-lock secret-
 		t.Fatal("historical contract acquired new exclusions")
 	}
 	latencyLine := "Karing connectivity evidence: Fresh per-node latency; selected connection preserved; automatic configuration reload permitted; no uninterrupted-connection, Karing browsing or established-session claim\n"
-	if policy == "repair-issuance-bounded-v3" {
+	if slices.Contains([]string{softwarelifecycle.RepairKaringLatencyEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy}, policy) {
 		if strings.Count(body, latencyLine) != 1 || !strings.Contains(body, "Karing checks not performed: karing-final/direct-and-proxied-traffic karing-final/old-established-session-terminated karing-final/traffic-restored karing-final/direct-refresh-correction-or-confirmed-fallback\n") {
 			t.Fatal("record lacks exact latency coverage and exclusions")
 		}

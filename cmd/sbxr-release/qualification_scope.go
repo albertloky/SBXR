@@ -139,6 +139,12 @@ func attemptScenarios(attempt v3QualificationAttempt) []string {
 		index := slices.Index(ids, "update-incompatible")
 		ids = append(ids[:index], append([]string{"lifecycle-menu"}, ids[index+2:]...)...)
 	}
+	if attempt.Support != nil && attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair && attempt.EvidencePolicy == softwarelifecycle.RepairTwoIssuanceEvidencePolicy {
+		identityAbsent := slices.Index(ids, "identity-absent")
+		ids = slices.Delete(ids, identityAbsent, identityAbsent+1)
+		enableSchema1 := slices.Index(ids, "enable-schema1")
+		ids = slices.Insert(ids, enableSchema1, "identity-absent")
+	}
 	return ids
 }
 
@@ -147,7 +153,7 @@ func validAttemptSupport(attempt v3QualificationAttempt) bool {
 		return false
 	}
 	if attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair {
-		if !slices.Contains([]string{softwarelifecycle.RepairEvidencePolicy, softwarelifecycle.RepairLifecycleEvidencePolicy, softwarelifecycle.RepairKaringLatencyEvidencePolicy}, attempt.EvidencePolicy) || !slices.Equal(attempt.AutomatedOnlyScenarios, strings.Fields(softwarelifecycle.RepairAutomatedOnlyScenarios)) {
+		if !slices.Contains([]string{softwarelifecycle.RepairEvidencePolicy, softwarelifecycle.RepairLifecycleEvidencePolicy, softwarelifecycle.RepairKaringLatencyEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy}, attempt.EvidencePolicy) || !slices.Equal(attempt.AutomatedOnlyScenarios, strings.Fields(softwarelifecycle.RepairAutomatedOnlyScenarios)) {
 			return false
 		}
 	} else if attempt.EvidencePolicy != "" || attempt.AutomatedOnlyScenarios != nil {

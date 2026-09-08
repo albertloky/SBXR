@@ -6,11 +6,23 @@ This is the required first-V3 stage inside Release Qualification. It qualifies o
 
 ## Subscription qualification scopes
 
-New repair attempts use [ADR-0021](../adr/0021-karing-latency-with-current-connection.md)
-and `repair-issuance-bounded-v3`: per-node Karing latency with the Owner's selected
-connection preserved and automatic configuration reload permitted. This does not
-claim uninterrupted sessions. It supersedes the v2/full-Karing clauses below only for
-that explicit policy. Historical v1/v2 attempts retain their original contracts.
+New repair attempts use [ADR-0022](../adr/0022-two-issuance-repair-qualification.md)
+and `repair-issuance-bounded-v4`. Move `identity-absent` after `baseline-removal`
+and before `enable-schema1`; retain all other live scenario ordering and all
+25 live / 29 automated-only scenarios. The early identity scenario proves its
+existing checks, then completes reviewed removal and proves Not installed without
+requesting a certificate. Append the five ADR-0022 observations in its specified
+order and record final state Not installed; setup precedes its initial Running
+proof. The next scenario uses fresh supported setup to prove
+schema-1 enablement; identity rotation's schema-2 record cannot substitute.
+Plan two production issuances: initial enablement and managed-renewal repair.
+
+V4 retains [ADR-0021](../adr/0021-karing-latency-with-current-connection.md)'s
+per-node Karing latency, preserved selected connection, permitted automatic
+configuration reload, and all evidence disclosures. This does not claim
+uninterrupted sessions. Historical v1/v2/v3 attempts retain their original
+scenario order and contracts. No multi-day natural-renewal observation is required;
+a production issuance-capacity wait is a separate operational constraint.
 
 Use the same `.github/workflows/candidate.yml`, `acceptance-vps` approval, `sbxr-release qualification` command, failure finalization, and `.github/workflows/stable.yml`. No new release asset, product dispatch, or transaction harness is introduced. The workflow's `v3` input requests evidence version `3`. It cannot use historical evidence, an empty source list alone, or normal/rescue qualification to bypass subscription obligations.
 

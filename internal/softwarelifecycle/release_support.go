@@ -18,6 +18,7 @@ const (
 	RepairEvidencePolicy              = "repair-issuance-bounded-v1"
 	RepairLifecycleEvidencePolicy     = "repair-issuance-bounded-v2"
 	RepairKaringLatencyEvidencePolicy = "repair-issuance-bounded-v3"
+	RepairTwoIssuanceEvidencePolicy   = "repair-issuance-bounded-v4"
 	RepairKaringConnectivityEvidence  = "Fresh per-node latency; selected connection preserved; automatic configuration reload permitted; no uninterrupted-connection, Karing browsing or established-session claim"
 	RepairKaringChecksNotPerformed    = "karing-final/direct-and-proxied-traffic karing-final/old-established-session-terminated karing-final/traffic-restored karing-final/direct-refresh-correction-or-confirmed-fallback"
 	RepairAutomatedOnlyChecks         = "lifecycle-menu/explicit-confirmation lifecycle-menu/clean-install-target-refused"

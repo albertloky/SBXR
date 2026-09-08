@@ -70,3 +70,8 @@ removed by verified workflow cleanup. A new candidate needs final-tree verificat
 Source: Karing `v1.2.24.2709` [latency button](https://github.com/KaringX/karing/blob/v1.2.24.2709/lib/screens/server_select_screen.dart#L1400)
 and [per-node URL test](https://github.com/KaringX/karing/blob/v1.2.24.2709/lib/app/modules/server_manager.dart#L1536).
 Static source inspection is not a live Karing pass.
+
+[ADR-0022](0022-two-issuance-repair-qualification.md) subsequently adds v4 for
+two planned production issuances by moving the subscription-absent identity
+scenario before enablement. It preserves this ADR's Karing checks and disclosures;
+historical v3 attempts retain their original order and three-issuance budget.

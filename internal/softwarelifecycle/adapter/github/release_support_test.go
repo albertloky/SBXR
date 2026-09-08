@@ -4,9 +4,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"github.com/albertloky/SBXR/internal/softwarelifecycle"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 )
 
 func TestSourceBindsCleanInstallSupportToQualifiedIndex(t *testing.T) {
@@ -18,7 +20,10 @@ func TestSourceBindsCleanInstallSupportToQualifiedIndex(t *testing.T) {
 		}
 	}
 	t.Run("latency-policy", func(t *testing.T) {
-		testCleanInstallSupport(t, softwarelifecycle.SubscriptionCleanInstallRepair, false, "repair-issuance-bounded-v3")
+		testCleanInstallSupport(t, softwarelifecycle.SubscriptionCleanInstallRepair, false, softwarelifecycle.RepairKaringLatencyEvidencePolicy)
+	})
+	t.Run("two-issuance-policy", func(t *testing.T) {
+		testCleanInstallSupport(t, softwarelifecycle.SubscriptionCleanInstallRepair, false, softwarelifecycle.RepairTwoIssuanceEvidencePolicy)
 	})
 }
 
@@ -67,7 +72,7 @@ func testCleanInstallSupport(t *testing.T, scope string, exception bool, policy 
 	body += "Release support: " + string(encoded) + "\nDetailed evidence SHA-256: " + strings.Repeat("a", 64) + "\nProxy package: sing-box 1.13.19 amd64 fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf\nKaring package: karing 1.2.0 macos-arm64 " + strings.Repeat("b", 64) + "\nKaring macOS: Passed\nNatural timer firing and naturally due certificate renewal: Not observed\nUnsupported new or renamed renewal route: May execute before detection; historical outcomes unknown\n"
 	if scope == softwarelifecycle.SubscriptionCleanInstallRepair {
 		body += "Evidence policy: " + policy + "\nAutomated-only scenarios (not live): " + softwarelifecycle.RepairAutomatedOnlyScenarios + "\nAutomated-only result: Passed in native amd64/arm64 workflow\n"
-		if policy == "repair-issuance-bounded-v3" {
+		if slices.Contains([]string{softwarelifecycle.RepairKaringLatencyEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy}, policy) {
 			body += "Automated-only checks (not live): " + softwarelifecycle.RepairAutomatedOnlyChecks + "\nKaring connectivity evidence: " + softwarelifecycle.RepairKaringConnectivityEvidence + "\nKaring checks not performed: " + softwarelifecycle.RepairKaringChecksNotPerformed + "\n"
 		}
 	}
@@ -99,7 +104,7 @@ func testCleanInstallSupport(t *testing.T, scope string, exception bool, policy 
 			strings.Replace(body, "Automated-only result: Passed in native amd64/arm64 workflow", "Automated-only result: Passed", 1),
 			body+"Scenario: enable-precommit "+strings.Repeat("a", 64)+" https://github.com/albertloky/SBXR/actions/runs/17#artifacts\n",
 		)
-		if policy == "repair-issuance-bounded-v3" {
+		if slices.Contains([]string{softwarelifecycle.RepairKaringLatencyEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy}, policy) {
 			mutations = append(mutations,
 				strings.Replace(body, "Karing connectivity evidence: "+softwarelifecycle.RepairKaringConnectivityEvidence+"\n", "", 1),
 				strings.Replace(body, "Karing checks not performed: "+softwarelifecycle.RepairKaringChecksNotPerformed+"\n", "", 1),
