@@ -19,12 +19,16 @@ HERE = Path(__file__).resolve().parent
 TESTS = ['exec-gate', 'network-guard', 'systemd-guard', 'combined-deny',
          'combined-release', 'snap-chain-deny', 'snap-chain-release',
          'syscall-python', 'syscall-go', 'syscall-go-child', 'flock', 'route',
-         'firewall', 'sandbox-token-probe', 'helper-unit-tests']
+         'firewall', 'sandbox-token-probe', 'helper-unit-tests', 'entry-point-rehearsal']
 
 def source_hashes():
-    return {str(path.relative_to(HERE)): hashlib.sha256(path.read_bytes()).hexdigest()
-            for path in sorted(HERE.rglob('*'))
-            if path.is_file() and path.suffix in ('.py', '.sh', '.go')}
+    paths = [path for path in HERE.rglob('*')
+             if path.is_file() and path.suffix in ('.py', '.sh', '.go', '.md')]
+    paths += [HERE.parent/'v3-packaged-live.sh', HERE.parent/'v3-candidate-dispatch.sh',
+              HERE.parent/'v3-recurring-evidence.sh',
+              HERE.parents[2]/'docs/acceptance/v4-operator-procedures.md']
+    return {os.path.relpath(path, HERE): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(paths)}
 
 def run(args):
     if sys.platform != 'linux' or os.geteuid() != 0:
@@ -42,7 +46,8 @@ def run(args):
              command('syscall-gate')+[str(fixture),'--with-child','--repeat','6'], command('flock'),
              command('route'), ['unshare','-n','--']+command('firewall'),
              ['/bin/bash',str(HERE/'rehearse-sandbox-token-probe.sh')],
-             [py,'-m','unittest','discover','-s',str(HERE),'-p','test_*.py']]
+             [py,'-m','unittest','discover','-s',str(HERE),'-p','test_*.py'],
+             ['/bin/bash',str(HERE/'rehearse.sh')]]
     results=[]
     for name, argv in zip(TESTS,cases):
         started=time.time()
@@ -61,6 +66,7 @@ def run(args):
     if source_hashes() != before: raise ValueError('helpers changed during rehearsal')
     report={'schema':'sbxr-v4-linux-rehearsal-v1','live_evidence':False,
             'completed_unix':int(time.time()),'platform':platform.platform(),
+            'runtime':{'system':platform.system(),'machine':platform.machine(),'uid':os.geteuid()},
             'source_sha256':before,'interpreter':str(interpreter),
             'interpreter_sha256':hashlib.sha256(interpreter.read_bytes()).hexdigest(),
             'fixture_sha256':hashlib.sha256(fixture.read_bytes()).hexdigest(), 'tests':results}

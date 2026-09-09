@@ -1,9 +1,67 @@
 # V4 operator-harness verification
 
-The operator harness for the 25 ADR-0022 live scenarios is implemented and its
-preparation readiness check passed on 2026-09-09. This record covers helper and
-fixture verification. No new candidate, product live scenario, certificate
-request, Karing change, commit, push or recurring automation was started.
+The corrected operator harness passed its full readiness check on 2026-09-09
+after the pre-dispatch audit found gaps in the initial check. This record covers
+helper and fixture verification, not live scenario passes. The initial results
+remain below with their limitations; the corrected results are authoritative
+for the current operator source inventory.
+
+The audit found that the entry rehearsal counted filenames instead of executed
+entries, skipped the scenario 08 finish and scenario 24 scripts, and reported a
+constant refusal count. Scenario 07 also lacked a concrete outside-session
+producer and accepted four ordered timestamps as its outside evidence. The
+historical results below therefore do not establish full procedure readiness.
+
+## Corrected pre-dispatch verification
+
+The scenario 07 driver now collects real outside-session observations through
+the existing acceptance runner. A fresh challenge requires successful traffic
+on the same old connection immediately before public rotation. The full receipt
+requires actual connection closure, exactly one fresh old-credential refusal,
+independent target health, confirmed manual replacement configuration, successful
+replacement traffic, process/listener identity and cleanup. Timeouts alone are
+refused. The collector validates the result before acknowledging it for reviewed
+removal; its failures retain the existing canonical stop-and-burn vocabulary.
+
+Phase publication uses Linux `renameat2(RENAME_NOREPLACE)`, avoiding partial-file
+and transient hard-link windows. The entry rehearsal counts actual executions
+and refusals and exercises the formerly missing scenario 08 finish and scenario
+24 entry points. Readiness checks exact procedure/module/collector sources and
+every retained fixture-log digest, in addition to report age and runtime
+provenance. The report remains operator-controlled evidence, not independent
+remote-host attestation.
+
+| Final verification | Result |
+| --- | --- |
+| Fresh-shell entry rehearsal | 17 executed entries, 7 observed protected-input refusals, 21 shell syntax checks |
+| macOS helper suite | 85 tests: 81 passed, 4 Linux/root-only skips |
+| Linux helper suite | 85 passed, no skips, including actual atomic-publication checks |
+| Linux fixture groups | All 16 passed, including the fresh-shell entry rehearsal |
+| Exact source inventory | All 67 sources matched, including README, procedure, packaged module, collector and dispatch wrapper |
+| Retained fixture logs | All 16 protected sibling logs present and hash-verified; no hidden command or test failures |
+| Root repository tests | Fresh `GOTOOLCHAIN=go1.26.6 go test -count=1 .` passed |
+| Corrected readiness | `ready: true`, `live_evidence: false` |
+
+The final Linux report completed at **2026-09-09 15:26:18 UTC**. Its private path
+is `.scratch/operator-audit-fix/linux-rehearsal-complete.json`, with SHA-256:
+
+```text
+4110b133a5dc159bdde85d72decd8a39bf40be4406fffb5cf31d501a28c277a6
+```
+
+Earlier correction runs exposed macOS AppleDouble transfer metadata, a missing
+`rg` command hidden by a shell conditional, and a test reading process arguments
+during child startup. The final transfer uses a metadata-free archive; the
+binding scan checks the exit status of portable `grep`; and the test waits for
+an explicit child-ready signal. The process observer now returns `unknown` if
+arguments are unavailable. Failed and superseded reports/logs are retained
+privately and must not be used for dispatch.
+
+After final log retrieval, the exact temporary Linux fixture tree was removed.
+No owned fixture processes, units or cgroups remained; SBXR executable/state
+remained absent, the official Certbot service remained inactive, and its timer
+remained active. No candidate, certificate request or Karing change was made by
+these rehearsals.
 
 ## Scope and structure
 
@@ -28,7 +86,7 @@ GitHub dispatch. Fixture reports are never accepted as live scenario evidence.
 
 | Verification | Result |
 | --- | --- |
-| Fresh-shell split-entry rehearsal | Passed; 17 bounded entries, 7 protected-input refusals, 21 shell syntax checks |
+| Initial fresh-shell split-entry rehearsal | Passed its implemented checks; reported 17 entries and 7 refusals, but those counts were not execution-derived and two entries were skipped; 21 shell syntax checks ran |
 | Helper tests on macOS | 60 tests, 57 passed and 3 Linux/root-only skips |
 | Helper tests on RackNerd Linux | 60 passed, no skips |
 | Actual Linux fixture groups | All 15 passed |
@@ -36,7 +94,7 @@ GitHub dispatch. Fixture reports are never accepted as live scenario evidence.
 | Earlier targeted Go child regression | 24/24 passed; 6 cases exercised the previously failing vanished-thread branch |
 | Release declaration/dispatch tests | Passed with pinned Go 1.26.6, including V4 refusal before GitHub when rehearsal is absent |
 | Release qualification CLI tests | Passed with pinned Go 1.26.6 |
-| Final readiness | `ready: true`, `live_evidence: false` |
+| Initial readiness | Reported `ready: true`, `live_evidence: false`; superseded by the pre-dispatch audit hold above |
 
 The Linux groups cover executable deny/release, controller death/EOF/timeout,
 unrelated-process continuity, escaped-child refusal, persistent cgroup egress

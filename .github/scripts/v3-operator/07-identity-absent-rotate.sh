@@ -12,9 +12,14 @@ remember_secrets
 source_pid=$(jq -er .source_pid "${SBXR_OPERATOR_STATE_DIR}/07-state.json")
 source_tick=$(jq -er .source_tick "${SBXR_OPERATOR_STATE_DIR}/07-state.json")
 test "$(awk '{print $22}' "/proc/$source_pid/stat")" = "$source_tick"
-rotation_started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+outside_checker=(python3 "$operator_dir/identity-outside.py")
+outside_inputs=(--manifest "$SBXR_QUALIFICATION_MANIFEST" --request "$SBXR_QUALIFICATION_REQUEST" --state "${SBXR_OPERATOR_STATE_DIR}/07-state.json")
+"${outside_checker[@]}" check-ready "${outside_inputs[@]}" --receipt "${SBXR_OPERATOR_STATE_DIR}/07-outside-ready.json" >/dev/null
+"${outside_checker[@]}" request-rotation "${outside_inputs[@]}" --receipt "${SBXR_OPERATOR_STATE_DIR}/07-outside-ready.json" >/dev/null
+"${outside_checker[@]}" wait-rotation "${outside_inputs[@]}" --receipt "${SBXR_OPERATOR_STATE_DIR}/07-outside-rotation-ready.json" >/dev/null
+rotation_started_at=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
 action 'Rotate Client Identity' y 'Code: PROXY-INSTALLATION-CLIENT-IDENTITY-ROTATED'
-rotation_completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+rotation_completed_at=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
 prove_running
 operator_exact_candidate
 jq -e '.schema==2 and .phase=="Running" and (.client_identity_rotation|not) and (.serving|not) and (.renewal|not) and (.subscription_resources|not)' /var/lib/sbxr/proxy-ownership.json >/dev/null
@@ -36,6 +41,6 @@ issuance_lines=$(zgrep -hF 'Certificate is saved at:' /var/log/letsencrypt/letse
 test "$issuance_lines" = "$(jq -er .issuance_lines_before "${SBXR_OPERATOR_STATE_DIR}/07-state.json")"
 test ! -e /etc/letsencrypt/live/sbxr-subscription
 test -z "$(ss -H -lnt 'sport = :8443')"
-jq -cS --arg started "$rotation_started_at" --arg completed "$rotation_completed_at" --arg pid "$replacement_pid" --arg tick "$replacement_tick" '. + {replacement_pid:$pid,replacement_tick:$tick,rotation_completed_at:$completed,rotation_started_at:$started}' "${SBXR_OPERATOR_STATE_DIR}/07-state.json" | tr -d '\n' > "${SBXR_OPERATOR_STATE_DIR}/07-state.next"
+jq -cS --arg started "$rotation_started_at" --arg completed "$rotation_completed_at" --arg pid "$replacement_pid" --arg tick "$replacement_tick" '. + {replacement_disclosure_confirmed:true,replacement_pid:$pid,replacement_tick:$tick,rotation_completed_at:$completed,rotation_started_at:$started}' "${SBXR_OPERATOR_STATE_DIR}/07-state.json" | tr -d '\n' > "${SBXR_OPERATOR_STATE_DIR}/07-state.next"
 mv "${SBXR_OPERATOR_STATE_DIR}/07-state.next" "${SBXR_OPERATOR_STATE_DIR}/07-state.json"
 printf 'IDENTITY_ABSENT_ROTATED started=%s completed=%s replacement_pid=%s\n' "$rotation_started_at" "$rotation_completed_at" "$replacement_pid"

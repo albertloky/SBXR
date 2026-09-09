@@ -1,9 +1,10 @@
-# V4 operator procedures for scenarios 09–25
+# V4 operator procedures
 
 These procedures complete the operator map for `repair-issuance-bounded-v4`.
 They prepare a future signed live attempt; they are not evidence that any
-scenario ran. Scenario numbers follow ADR-0022: scenarios 01–08 are handled by
-the existing split operator entries, and this document covers 09–25.
+scenario ran. Scenario numbers follow ADR-0022: scenarios 01–08 use the split
+operator entries. This document specifies their scenario 07 outside-runner
+exchange and the remaining procedures for 09–25.
 
 The controlling contract is the signed manifest and collector request for the
 new attempt. Never substitute values from an older candidate. The action under
@@ -12,6 +13,11 @@ menu. `--certbot-recorder`, hook, and serving roles are product-owned service
 entry points, not operator or test interfaces.
 
 ## Common operator contract
+
+The complete initialization block below applies to scenarios 09–25, which start
+with SBXR installed. Scenario 07 uses the same environment paths, but its start
+entry owns the initial Not installed proof and subsequent candidate installation;
+do not run `operator_exact_candidate` before that installation.
 
 Run server commands as root in the SSH control session that existed before the
 scenario. Keep that session on physical `en0`. Source only the workflow-attested
@@ -103,6 +109,63 @@ but the signal and line alone are not boundary proof. Each procedure below also
 requires the stated durable record, process, listener, lock, or outside-client
 observation. If the durable observation cannot be made before the action moves
 on, stop the attempt.
+
+## 07 — `identity-absent` outside-session exchange
+
+The signed candidate's existing Ubuntu amd64 `acceptance-vps` job owns the
+outside driver. The collector starts `identity-outside.py` from that job's exact
+checkout when the start entry publishes its distinct identity request. Do not
+start another workflow, invoke the baseline one-shot probe for this scenario,
+or author an outside receipt by hand.
+
+In the original SSH control session, run:
+
+```sh
+bash /run/sbxr-qualification/07-identity-absent-start.sh
+```
+
+The start entry performs supported installation/setup, proves subscription
+absence, and obtains the old client configuration through the public confirmed
+Show client configuration action. The collector transfers that protected
+configuration to its outside driver. The driver checks the exact official
+client package, starts a private loopback client, proves the outside route, and
+establishes one TLS connection with successful traffic. Only then does it publish
+`07-outside-ready.json` in the protected operator state directory.
+
+After that receipt appears, run:
+
+```sh
+bash /run/sbxr-qualification/07-identity-absent-rotate.sh
+```
+
+The rotation entry checks the bound ready receipt and sends a fresh challenge.
+The same driver must successfully use the same old connection after seeing the
+challenge and acknowledge it before the entry invokes the public reviewed
+Rotate Client Identity action. A stale file without a live driver cannot satisfy
+that exchange. The driver stays alive through rotation and records actual
+closure of that connection. It then attempts one fresh connection with the old
+credential, requires refusal, checks the outside target directly, and uses the
+new configuration obtained through confirmed public manual disclosure to prove
+replacement traffic. A timeout alone is not closure or refusal evidence.
+
+The driver removes its client processes, listeners, temporary package and
+secret-bearing files before publishing `07-outside.json`. The collector validates
+the full result and publishes `07-outside-collected.json` with its receipt hash.
+Once both files exist, run:
+
+```sh
+bash /run/sbxr-qualification/07-identity-absent-finish.sh
+```
+
+The finish entry validates the producer's full receipt and challenge against the
+exact manifest, collector request, action timestamps and original deadline. It
+then performs reviewed Complete removal and proves Not installed. Preserve the
+safe typed observations and capture-scan result for scenario 24 coverage; no
+raw client configuration, credential digest or secret-bearing runner output
+belongs in the ordinary evidence. Missing acknowledgments, changed phase files,
+SSH loss, failed traffic or uncertain cleanup stop the attempt. The exchange
+never resets the original 30-minute scenario clock or five-minute submission
+grace and never requests a certificate.
 
 ## 09 — `link-precommit`
 

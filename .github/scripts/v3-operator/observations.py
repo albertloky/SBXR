@@ -194,6 +194,8 @@ def observe_process(pid: int) -> dict[str, Any]:
     try:
         stat_fields = (root / "stat").read_text().rsplit(")", 1)[1].split()
         command = [part for part in (root / "cmdline").read_bytes().split(b"\0") if part]
+        if not command:
+            raise ValueError("process arguments unavailable")
         command_digest = hashlib.sha256(b"\0".join(command) + b"\0").hexdigest()
         children = [int(value) for value in
                     (root / "task" / str(pid) / "children").read_text().split()]

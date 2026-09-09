@@ -10,7 +10,9 @@ trap 'rm -rf "$root"' EXIT
 state=$root/state
 evidence=$root/evidence
 transport=$root/transport
-mkdir -m 0700 "$state" "$evidence" "$transport"
+executed_entries=$root/executed-entries
+mkdir -m 0700 "$state" "$evidence" "$transport" "$executed_entries"
+protected_input_refusals=0
 
 printf 'fixture executable\n' > "$root/sbxr.fixture"
 chmod 0700 "$root/sbxr.fixture"
@@ -72,6 +74,10 @@ write_request() {
   chmod 0600 "$root/request.json"
 }
 
+record_entry() {
+  : > "$executed_entries/$1"
+}
+
 operator_env=(
   PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin
   SBXR_V3_PACKAGED_LIVE_MODULE="$module"
@@ -105,11 +111,27 @@ run_until_boundary() {
   else
     test ! -e "$marker"
   fi
+  record_entry "$script"
+}
+
+expect_protected_input_refusal() {
+  local name=$1 expected=$2 status=0
+  shift 2
+  env -i "${operator_env[@]}" "$@" REHEARSAL_INSTALL_MARKER="$root/unexpected-$name.install" \
+    /bin/bash --noprofile --norc "$operator_dir/01-baseline-clean-start.sh" \
+    > /dev/null 2> "$root/$name.stderr" || status=$?
+  test "$status" -ne 0
+  grep -F "$expected" "$root/$name.stderr" >/dev/null
+  test ! -e "$root/unexpected-$name.install"
+  protected_input_refusals=$((protected_input_refusals + 1))
+  record_entry 01-baseline-clean-start.sh
 }
 
 for script in "$operator_dir"/*.sh; do bash -n "$script"; done
-if rg -n '__SIGNED_MANIFEST_SHA256__|release-prep-fresh-|342[0-9]{6,}|candidate\.yml' "$operator_dir"/0*.sh "$operator_dir/operator-support.sh" > "$root/stale-bindings"; then
-  printf 'stale attempt or workflow binding remains\n' >&2
+binding_scan_status=0
+grep -En '__SIGNED_MANIFEST_SHA256__|release-prep-fresh-|342[0-9]{6,}|candidate\.yml' "$operator_dir"/0*.sh "$operator_dir/operator-support.sh" > "$root/stale-bindings" || binding_scan_status=$?
+if test "$binding_scan_status" -ne 1; then
+  printf 'stale binding found or binding scan failed\n' >&2
   exit 1
 fi
 
@@ -118,16 +140,30 @@ env -i PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin \
   /bin/bash --noprofile --norc "$operator_dir/01-baseline-clean-start.sh" > /dev/null 2> "$root/missing.stderr" || status=$?
 test "$status" -ne 0
 grep -F 'SBXR_V3_PACKAGED_LIVE_MODULE is required' "$root/missing.stderr" >/dev/null
+protected_input_refusals=$((protected_input_refusals + 1))
+record_entry 01-baseline-clean-start.sh
 
 write_request baseline-clean
 ln -s "$root/manifest.json" "$root/manifest-link.json"
-status=0
-env -i "${operator_env[@]}" SBXR_QUALIFICATION_MANIFEST="$root/manifest-link.json" \
-  REHEARSAL_INSTALL_MARKER="$root/unexpected.install" /bin/bash --noprofile --norc \
-  "$operator_dir/01-baseline-clean-start.sh" > /dev/null 2> "$root/symlink.stderr" || status=$?
-test "$status" -ne 0
-grep -F 'SBXR_QUALIFICATION_MANIFEST must name a non-symlink regular file' "$root/symlink.stderr" >/dev/null
-test ! -e "$root/unexpected.install"
+ln -s "$root/request.json" "$root/request-link.json"
+ln -s "$root/hook.sh" "$root/hook-link.sh"
+ln -s "$state" "$root/state-link"
+ln -s "$evidence" "$root/evidence-link"
+expect_protected_input_refusal manifest-symlink \
+  'SBXR_QUALIFICATION_MANIFEST must name a non-symlink regular file' \
+  SBXR_QUALIFICATION_MANIFEST="$root/manifest-link.json"
+expect_protected_input_refusal request-symlink \
+  'SBXR_QUALIFICATION_REQUEST must name a non-symlink regular file' \
+  SBXR_QUALIFICATION_REQUEST="$root/request-link.json"
+expect_protected_input_refusal hook-symlink \
+  'SBXR_OPERATOR_REHEARSAL_HOOK must name a non-symlink regular file' \
+  SBXR_OPERATOR_REHEARSAL_HOOK="$root/hook-link.sh"
+expect_protected_input_refusal state-symlink \
+  'SBXR_OPERATOR_STATE_DIR must name a non-symlink directory' \
+  SBXR_OPERATOR_STATE_DIR="$root/state-link"
+expect_protected_input_refusal evidence-symlink \
+  'SBXR_OPERATOR_EVIDENCE_DIR must name a non-symlink directory' \
+  SBXR_OPERATOR_EVIDENCE_DIR="$root/evidence-link"
 
 run_until_boundary 01-baseline-clean-start.sh baseline-clean action true
 run_until_boundary 02-baseline-refusal.sh baseline-refusal install true
@@ -149,19 +185,48 @@ env -i "${operator_env[@]}" SBXR_INSTALLED_RECORD=/var/lib/sbxr/installed.json \
 test "$status" -eq 97
 test ! -s "$root/19.stdout" && test ! -s "$root/19.stderr"
 test ! -e "$root/unexpected-19.install"
+record_entry 19-lifecycle-menu.sh
 
 jq -cnS '{started_at:"2026-09-09T10:40:00Z"}' > "$state/01-state.json"
 jq -cnS '{started_at:"2026-09-09T10:40:00Z"}' > "$state/04-state.json"
 jq -cnS '{started_at:"2026-09-09T10:40:00Z"}' > "$state/07-state.json"
+jq -cnS '{started_at:"2026-09-09T10:40:00Z"}' > "$state/08-private.json"
 jq -cnS '{completed_at:"2026-09-09T10:40:03Z",observation:{egress_matched:true,outside_routes_differ:true,runner_cleanup_complete:true},scenario_id:"baseline-clean",schema:"sbxr-v3-outside-probe-reply-v1",started_at:"2026-09-09T10:40:02Z"}' > "$evidence/outside-reply-baseline-clean.json"
 jq -cnS '{completed_at:"2026-09-09T10:40:03Z",observation:{egress_matched:true,outside_routes_differ:true,runner_cleanup_complete:true},scenario_id:"baseline-postcommit",schema:"sbxr-v3-outside-probe-reply-v1",started_at:"2026-09-09T10:40:02Z"}' > "$evidence/outside-reply-baseline-postcommit.json"
-jq -cnS '{old_established_at:"2026-09-09T10:40:01Z",old_terminated_at:"2026-09-09T10:40:02Z",old_refused_at:"2026-09-09T10:40:03Z",replacement_at:"2026-09-09T10:40:04Z"}' > "$state/07-outside.json"
 chmod 0600 "$state"/*.json "$evidence"/*.json
 
 run_until_boundary 01-baseline-clean-finish.sh baseline-clean remember_secrets
 run_until_boundary 04-baseline-postcommit-finish.sh baseline-postcommit remember_secrets
 run_until_boundary 07-identity-absent-rotate.sh identity-absent preflight
 run_until_boundary 07-identity-absent-finish.sh identity-absent preflight
+
+write_request enable-schema1
+status=0
+env -i "${operator_env[@]}" REHEARSAL_STOP_AT=preflight \
+  REHEARSAL_INSTALL_MARKER="$root/unexpected-08-finish.install" \
+  /bin/bash --noprofile --norc "$operator_dir/08-enable-schema1-finish.sh" enable \
+  > "$root/08-enable-schema1-finish.stdout" 2> "$root/08-enable-schema1-finish.stderr" || status=$?
+test "$status" -eq 97
+test ! -s "$root/08-enable-schema1-finish.stdout" && test ! -s "$root/08-enable-schema1-finish.stderr"
+test ! -e "$root/unexpected-08-finish.install"
+record_entry 08-enable-schema1-finish.sh
+
+jq -cnS --arg secret "$state/24-known-secrets.json" \
+  '{schema:"sbxr-v3-secret-containment-spec-v1",cleanup_paths:[$secret]}' > "$root/24-spec.json"
+jq -cnS '{schema:"sbxr-v3-known-secrets-v1",secrets:[]}' > "$state/24-known-secrets.json"
+chmod 0600 "$root/24-spec.json" "$state/24-known-secrets.json"
+write_request secret-containment
+status=0
+env -i "${operator_env[@]}" REHEARSAL_EXPECT_PACKAGE_SET=after-snap-refresh REHEARSAL_STOP_AT=preflight \
+  REHEARSAL_INSTALL_MARKER="$root/unexpected-24.install" \
+  SBXR_SECRET_CONTAINMENT_KNOWN_SECRETS="$state/24-known-secrets.json" \
+  SBXR_SECRET_CONTAINMENT_SPEC="$root/24-spec.json" \
+  /bin/bash --noprofile --norc "$operator_dir/24-secret-containment.sh" \
+  > "$root/24-secret-containment.stdout" 2> "$root/24-secret-containment.stderr" || status=$?
+test "$status" -eq 97
+test ! -s "$root/24-secret-containment.stdout" && test ! -s "$root/24-secret-containment.stderr"
+test ! -e "$root/unexpected-24.install"
+record_entry 24-secret-containment.sh
 
 for pair in '01-outside-request.sh baseline-clean probe-1' '04-outside-request.sh baseline-postcommit probe-2'; do
   read -r script scenario request_id <<<"$pair"
@@ -175,6 +240,7 @@ for pair in '01-outside-request.sh baseline-clean probe-1' '04-outside-request.s
     .qualification_manifest_sha256 == $digest and .scenario_id == $scenario and
     .request_id == $request and .deadline_unix == 4102444800
   ' "$evidence/outside-request.json" >/dev/null
+  record_entry "$script"
 done
 
 write_request baseline-clean
@@ -188,8 +254,16 @@ env -i "${operator_env[@]}" REHEARSAL_INSTALL_MARKER="$root/unused.install" \
   /bin/bash --noprofile --norc "$operator_dir/01-outside-request.sh" > /dev/null 2> "$root/digest.stderr" || status=$?
 test "$status" -ne 0
 test ! -e "$evidence/outside-request.json"
+protected_input_refusals=$((protected_input_refusals + 1))
+record_entry 01-outside-request.sh
 
 python3 -m unittest discover -s "$operator_dir" -p 'test_*.py' >/dev/null
 syntax_count=$(find "$operator_dir" -maxdepth 1 -type f -name '*.sh' | wc -l | tr -d ' ')
-entry_count=$(find "$operator_dir" -maxdepth 1 -type f -name '[0-9][0-9]-*.sh' | wc -l | tr -d ' ')
-printf 'V3_OPERATOR_REHEARSAL_OK syntax=%s protected-input-refusals=7 bounded-entries=%s helper-tests=passed live-scenarios=not-run\n' "$syntax_count" "$entry_count"
+expected_entry_count=$(find "$operator_dir" -maxdepth 1 -type f -name '[0-9][0-9]-*.sh' | wc -l | tr -d ' ')
+entry_count=$(find "$executed_entries" -maxdepth 1 -type f | wc -l | tr -d ' ')
+test "$entry_count" -eq "$expected_entry_count"
+for script in "$operator_dir"/[0-9][0-9]-*.sh; do
+  test -f "$executed_entries/$(basename "$script")"
+done
+printf 'V3_OPERATOR_REHEARSAL_OK syntax=%s protected-input-refusals=%s bounded-entries=%s helper-tests=passed live-scenarios=not-run\n' \
+  "$syntax_count" "$protected_input_refusals" "$entry_count"

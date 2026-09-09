@@ -85,8 +85,9 @@ class ObservationsTest(unittest.TestCase):
     @unittest.skipUnless(sys.platform == "linux", "requires Linux procfs")
     def test_process_observation_hashes_arguments_without_retaining_them(self):
         secret = "qualification-secret-must-not-appear"
-        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", secret])
+        child = subprocess.Popen([sys.executable, "-c", "import time; print('ready', flush=True); time.sleep(30)", secret], stdout=subprocess.PIPE)
         try:
+            self.assertEqual(child.stdout.readline(), b"ready\n")
             result = observations.observe_process(child.pid)
             retained = json.dumps(result, sort_keys=True)
             self.assertEqual(result["observation"], "complete")
@@ -97,6 +98,13 @@ class ObservationsTest(unittest.TestCase):
         finally:
             child.terminate()
             child.wait(timeout=5)
+            child.stdout.close()
+
+    def test_process_with_unavailable_arguments_is_unknown(self):
+        with mock.patch.object(Path, "read_text", return_value="123 (fixture) S 1 1"), \
+             mock.patch.object(Path, "read_bytes", return_value=b""):
+            self.assertEqual(observations.observe_process(123),
+                             {"pid": 123, "observation": "unknown", "error": "ValueError"})
 
 
 if __name__ == "__main__":

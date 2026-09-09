@@ -5,13 +5,15 @@ operator_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$operator_dir/operator-support.sh"
 SCENARIO_START=$(jq -er .started_at "${SBXR_OPERATOR_STATE_DIR}/07-state.json")
 operator_expect_scenario identity-absent
-test "$(stat -c '%U:%G:%a:%h:%F' "${SBXR_OPERATOR_STATE_DIR}/07-outside.json")" = 'root:root:600:1:regular file'
-jq -e --arg started "$SCENARIO_START" '
-  keys == ["old_established_at","old_refused_at","old_terminated_at","replacement_at"] and
-  ([$started,.old_established_at,.old_terminated_at,.old_refused_at,.replacement_at] | map(fromdateiso8601) | . == sort)
-' "${SBXR_OPERATOR_STATE_DIR}/07-outside.json" >/dev/null
-scan_retained_capture "${SBXR_OPERATOR_STATE_DIR}/07-outside.json"
 preflight
+test "$(stat -c '%U:%G:%a:%h:%F' "${SBXR_OPERATOR_STATE_DIR}/07-outside.json")" = 'root:root:600:1:regular file'
+python3 "$operator_dir/identity-outside.py" check-result \
+  --manifest "$SBXR_QUALIFICATION_MANIFEST" --request "$SBXR_QUALIFICATION_REQUEST" \
+  --state "${SBXR_OPERATOR_STATE_DIR}/07-state.json" --receipt "${SBXR_OPERATOR_STATE_DIR}/07-outside.json" >/dev/null
+test "$(stat -c '%U:%G:%a:%h:%F' "${SBXR_OPERATOR_STATE_DIR}/07-outside-collected.json")" = 'root:root:600:1:regular file'
+cmp -s "${SBXR_OPERATOR_STATE_DIR}/07-outside-collected.json" \
+  <(printf '{"receipt_sha256":"%s"}' "$(sha256sum "${SBXR_OPERATOR_STATE_DIR}/07-outside.json" | cut -d' ' -f1)")
+scan_retained_capture "${SBXR_OPERATOR_STATE_DIR}/07-outside.json"
 operator_exact_candidate
 prove_running
 jq -e '.schema==2 and .phase=="Running" and (.client_identity_rotation|not) and (.serving|not) and (.renewal|not) and (.subscription_resources|not)' /var/lib/sbxr/proxy-ownership.json >/dev/null
@@ -25,15 +27,18 @@ outside_established_at=$(jq -er .old_established_at "${SBXR_OPERATOR_STATE_DIR}/
 outside_terminated_at=$(jq -er .old_terminated_at "${SBXR_OPERATOR_STATE_DIR}/07-outside.json")
 outside_refused_at=$(jq -er .old_refused_at "${SBXR_OPERATOR_STATE_DIR}/07-outside.json")
 outside_replacement_at=$(jq -er .replacement_at "${SBXR_OPERATOR_STATE_DIR}/07-outside.json")
-reviewed_removal_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+reviewed_removal_at=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
 remember_secrets
 action 'Complete removal' 'REMOVE SBXR' 'Code: SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED'
 prove_not_installed
-absence_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+absence_at=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
 rm -f "${SBXR_OPERATOR_STATE_DIR}/07-source-server.json" "${SBXR_OPERATOR_STATE_DIR}/07-source-client.json" "${SBXR_OPERATOR_STATE_DIR}/07-replacement-client.json" "${SBXR_OPERATOR_STATE_DIR}/07-source-noncredential.json" "${SBXR_OPERATOR_STATE_DIR}/07-replacement-noncredential.json" "${SBXR_OPERATOR_STATE_DIR}/07-outside.json"
+rm -f "${SBXR_OPERATOR_STATE_DIR}/07-outside-started.json" "${SBXR_OPERATOR_STATE_DIR}/07-outside-ready.json" \
+  "${SBXR_OPERATOR_STATE_DIR}/07-outside-rotation-request.json" "${SBXR_OPERATOR_STATE_DIR}/07-outside-rotation-ready.json" \
+  "${SBXR_OPERATOR_STATE_DIR}/07-outside-collected.json"
 scan_journal
 scan_transport_captures
-completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+completed_at=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
 jq -cS --arg reviewed "$reviewed_removal_at" --arg absent "$absence_at" --arg completed "$completed_at" --arg established "$outside_established_at" --arg terminated "$outside_terminated_at" --arg refused "$outside_refused_at" --arg replacement "$outside_replacement_at" '. + {absence_at:$absent,completed_at:$completed,old_established_at:$established,old_refused_at:$refused,old_terminated_at:$terminated,replacement_at:$replacement,reviewed_removal_at:$reviewed}' "${SBXR_OPERATOR_STATE_DIR}/07-state.json" | tr -d '\n' > "${SBXR_OPERATOR_STATE_DIR}/07-state.next"
 mv "${SBXR_OPERATOR_STATE_DIR}/07-state.next" "${SBXR_OPERATOR_STATE_DIR}/07-state.json"
 printf 'IDENTITY_ABSENT_FINISHED reviewed_removal=%s absent=%s completed=%s\n' "$reviewed_removal_at" "$absence_at" "$completed_at"

@@ -22,8 +22,12 @@ GOOS=linux GOARCH=amd64 GOTOOLCHAIN=go1.26.6 go build \
   -o /absolute/private/fixture .github/scripts/v3-operator/fixtures/file-boundary.go
 ```
 
-Copy this directory and that fixture to a unique temporary directory on the
-Linux host. Do not copy private candidate data. Run there:
+Copy the operator directory, sibling `v3-packaged-live.sh` and
+`v3-candidate-dispatch.sh`, `v3-recurring-evidence.sh`, and
+`docs/acceptance/v4-operator-procedures.md` into a
+unique temporary repository-shaped tree on the Linux host. Preserve their
+repository-relative paths. Copy the fixture separately into that temporary
+tree. Do not copy private candidate data. Run there:
 
 ```sh
 python3 /absolute/private/v3-operator/rehearse-linux.py \
@@ -32,6 +36,10 @@ python3 /absolute/private/v3-operator/rehearse-linux.py \
   --output /absolute/private/linux-rehearsal.json
 ```
 
+When transferring from macOS, use a metadata-free archive (for example Python
+`tarfile`) and exclude `__pycache__`, `.DS_Store` and AppleDouble `._*` files.
+The exact-source gate rejects transfer metadata that changes the inventory.
+
 Resolve the interpreter from the installed snap metadata; `REVISION` is not a
 literal argument. The two snap cases execute only `--version` in uniquely named,
 egress-blocked fixture units. The firewall case runs in a new network namespace.
@@ -39,7 +47,8 @@ The fixtures never start the official renewal service, install SBXR or request a
 certificate. The controller tests cover sequencing and refusal using a modeled
 OS; the kernel tests exercise the actual Linux mechanisms separately.
 
-Retrieve the mode-0600 report, retain it privately, and remove the exact temporary
+Retrieve the mode-0600 report and every sibling fixture log, retain them
+privately with their original names and mode 0600, and remove the exact temporary
 fixture directory after checking that its units, processes and cgroups are gone.
 Before candidate check/dispatch, set:
 
@@ -48,8 +57,13 @@ export SBXR_OPERATOR_REHEARSAL_REPORT=/absolute/private/linux-rehearsal.json
 python3 .github/scripts/v3-operator/check-readiness.py
 ```
 
-Readiness requires all Linux fixture cases, an age of at most 24 hours, and exact
-hashes for every helper and test source. It then reruns the local entry suite.
+Readiness requires all Linux fixture cases, including the entry suite, an age
+of at most 24 hours, exact hashes for every helper/test source, the README,
+procedure document, packaged-live module, collector and dispatch wrapper, and intact
+protected fixture logs matching their recorded hashes. It validates the reported
+Linux/root/x86-64 and snap interpreter provenance, then reruns the local entry
+suite. The report is operator-controlled evidence, not independent attestation
+of the remote host or interpreter bytes.
 Any changed helper requires a fresh report. The runner retains private per-case
 logs alongside its report, including failed-case diagnostics. The Go child
 fixture repeats all four boundaries six times to exercise concurrent thread exits. Missing, failed, stale or mismatched
