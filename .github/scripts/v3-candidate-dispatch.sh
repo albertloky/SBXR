@@ -14,6 +14,11 @@ cp "$4" "$work/attempt.json"
 { printf '{"attempt":'; cat "$work/attempt.json"; printf ',"preflight":'; cat "$work/preflight.json"; printf '}'; } > "$work/request.json"
 "$tool" qualification-declaration < "$work/request.json" > "$work/decision.json"
 cat "$work/decision.json"
+# V4 preparation also requires the full operator procedure. Keep historical
+# policies unchanged and check only after strict declaration validation.
+if jq -e '.evidence_policy == "repair-issuance-bounded-v4"' "$work/attempt.json" >/dev/null; then
+  python3 "$(dirname "$0")/v3-operator/check-readiness.py"
+fi
 if test "$mode" = check; then exit 0; fi
 # Refuse a source change since the collected preflight snapshot.
 current=$(gh api repos/albertloky/SBXR/git/ref/heads/main --jq .object.sha)

@@ -94,3 +94,35 @@ func TestDeclarationDispatchUsesValidatedSnapshot(t *testing.T) {
 		})
 	}
 }
+
+func TestV4DeclarationDispatchRequiresRehearsedOperator(t *testing.T) {
+	script, err := filepath.Abs(".github/scripts/v3-candidate-dispatch.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"check", "dispatch"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			files := map[string]string{
+				"tool":    "#!/bin/sh\ncat >/dev/null\nprintf '{\"outcome\":\"accepted\"}'\n",
+				"gh":      "#!/bin/sh\ntouch \"$CALLED\"\nexit 99\n",
+				"facts":   `{"candidate":{"mode":"v3"}}`,
+				"attempt": `{"evidence_policy":"repair-issuance-bounded-v4"}`,
+			}
+			for name, body := range files {
+				if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd := exec.Command("bash", script, mode, filepath.Join(dir, "tool"), filepath.Join(dir, "facts"), filepath.Join(dir, "attempt"))
+			cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "CALLED="+filepath.Join(dir, "called"), "SBXR_OPERATOR_REHEARSAL_REPORT="+filepath.Join(dir, "missing-report"))
+			out, err := cmd.CombinedOutput()
+			if err == nil || !strings.Contains(string(out), `"ready": false`) {
+				t.Fatalf("missing operator rehearsal was not refused: %v %s", err, out)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "called")); !os.IsNotExist(err) {
+				t.Fatalf("GitHub called before operator readiness: %v", err)
+			}
+		})
+	}
+}
