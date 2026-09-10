@@ -81,6 +81,24 @@ operator_exact_candidate() {
   exact_candidate "$SBXR_QUALIFICATION_MANIFEST" "$SBXR_QUALIFICATION_REQUEST" "$SBXR_INSTALLED_RECORD" "$SBXR_EXECUTABLE"
 }
 
+# Extra read-only observations must not close the authority-bearing SSH shell.
+# Keep strict mode in a fresh Bash process: wrapping a shell function or a
+# subshell in `if`/`||` would suppress its errexit checks. The explicit status is
+# an observation result, never a scenario pass. Required assertions stay outside.
+# Bash -p suppresses BASH_ENV, imported functions and inherited shell options.
+operator_observe() {
+  OPERATOR_OBSERVATION_STATUS=0
+  if test "$#" -ne 1; then
+    OPERATOR_OBSERVATION_STATUS=64
+  elif /bin/bash --noprofile --norc -p -euo pipefail -c "$1" </dev/null; then
+    :
+  else
+    OPERATOR_OBSERVATION_STATUS=$?
+  fi
+  printf 'OPERATOR_OBSERVATION_EXIT=%s\n' "$OPERATOR_OBSERVATION_STATUS" >&2 || :
+  return 0
+}
+
 operator_expect_scenario() {
   operator_manifest_digest >/dev/null || return 1
   test "$(jq -er .scenario_id "$SBXR_QUALIFICATION_REQUEST")" = "$1"

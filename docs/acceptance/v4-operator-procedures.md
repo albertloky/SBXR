@@ -43,6 +43,23 @@ operator_exact_candidate
 preflight initial
 ```
 
+Keep extra read-only status probes outside the scenario's required assertions.
+Run those probes through the sourced helper, for example:
+
+```sh
+operator_observe 'printf "0\n" | "$SBXR_EXECUTABLE" | grep -F "Proxy status:"'
+```
+
+Check the emitted `OPERATOR_OBSERVATION_EXIT` and saved
+`OPERATOR_OBSERVATION_STATUS`. The wrapper keeps the original strict SSH shell
+alive while a separate strict Bash child runs the probe. It does not turn a
+failed observation into evidence. An unexpected result still ends the attempt;
+retain the failure and use the supported cleanup procedure. Export probe inputs
+explicitly and keep output secret-safe. Never wrap required assertions or whole
+scenario scripts, and never infer a pass from the wrapper's successful return.
+See the [operator README](../../.github/scripts/v3-operator/README.md#extra-observations-in-the-original-ssh-session)
+for the complete observation contract.
+
 For scenarios that exercise the official Certbot route, resolve and hash the
 revision-specific interpreter after the scenario preflight. The helpers reject
 the moving `current` symlink and independently repeat the collector, package,

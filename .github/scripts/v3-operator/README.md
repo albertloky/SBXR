@@ -97,6 +97,39 @@ configuration. Keep files mode 0600 and private directories mode 0700. Do not se
 Candidate identity and package phase checks belong to `operator-support.sh` and
 `managed-hold.py`; callers must not recreate them with guessed exports.
 
+## Extra observations in the original SSH session
+
+After sourcing `operator-support.sh`, use `operator_observe` for extra read-only
+status probes. A bare nonzero probe in that strict shell closes the original
+session and invalidates continuity, even after a scenario script has succeeded.
+For example, inspect the public menu without making its status command own the
+SSH session's exit status:
+
+```sh
+operator_observe 'printf "0\n" | "$SBXR_EXECUTABLE" | grep -F "Proxy status:"'
+```
+
+The helper executes the one literal command string in a fresh strict Bash child
+with stdin connected to `/dev/null`. Export any required values beforehand;
+shell-local variables, exported functions, and Bash startup hooks do not carry
+over. Use only read-only commands with secret-safe output. This is shell
+isolation, not a filesystem sandbox.
+
+`OPERATOR_OBSERVATION_EXIT=<status>` and `OPERATOR_OBSERVATION_STATUS` preserve
+the child exit status. The helper itself returns success solely to keep the
+original session alive, including on nonzero exit, unset input, or pipeline
+failure. Inspect that status before another observation overwrites it. An
+unexpected result still ends the attempt through the existing failure and
+cleanup procedure; it must never be counted as passed evidence or retried into
+a pass. Do not wrap a scenario script, required assertion, candidate check,
+mutation, or evidence submission, and do not use the wrapper's `$?` as proof.
+Those required operations retain their existing strict failure behavior.
+
+The helper tests use a persistent Bash process on a local PTY, reproduce the
+bare-probe session loss, and verify same-process continuity and exact nonzero
+statuses through this wrapper. They also verify strict child pipelines and
+required assertion failures. These are local regressions, not live SSH evidence.
+
 ## Scenario map
 
 | Scenarios | Entry or procedure |
