@@ -119,7 +119,7 @@ interrupt_at() {
 install_candidate() {
   local WORK=${WORK:-/run/sbxr-qualification}
   local output=$WORK/install-output
-  curl -fsS https://github.com/albertloky/SBXR/releases/latest/download/install.sh | bash >"$output" 2>&1
+  curl -fsS https://github.com/albertloky/SBXR/releases/latest/download/install.sh | /usr/bin/setsid --wait /usr/bin/bash >"$output" 2>&1
   scan_vps_capture "$output"
   rm -f "$output"
   test -x /usr/local/bin/sbxr

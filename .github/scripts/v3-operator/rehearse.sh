@@ -135,6 +135,47 @@ if test "$binding_scan_status" -ne 1; then
   exit 1
 fi
 
+if test "$(uname -s)" = Linux; then
+  test -x /usr/bin/setsid
+  test -x /usr/bin/script
+  mkdir -m 0700 "$root/pty-bin" "$root/pty-work"
+  cat > "$root/pty-bin/curl" <<'CURL'
+#!/usr/bin/env bash
+set -euo pipefail
+test "$*" = '-fsS https://github.com/albertloky/SBXR/releases/latest/download/install.sh'
+/usr/bin/cat "$REHEARSAL_INSTALLER"
+CURL
+  cat > "$root/pty-installer.sh" <<'INSTALLER'
+#!/usr/bin/env bash
+set -euo pipefail
+if (: </dev/tty >/dev/tty) 2>/dev/null; then
+  printf 'interactive-autolaunch\n' > "$REHEARSAL_PTY_MARKER"
+  exit 91
+fi
+printf 'FIXTURE_INSTALL_NONINTERACTIVE\n'
+INSTALLER
+  cat > "$root/pty-harness.sh" <<'HARNESS'
+#!/usr/bin/env bash
+set -euo pipefail
+(: </dev/tty >/dev/tty)
+source "$REHEARSAL_MODULE"
+scan_vps_capture() { return 97; }
+install_candidate
+HARNESS
+  chmod 0700 "$root/pty-bin/curl" "$root/pty-installer.sh" "$root/pty-harness.sh"
+  pty_status=0
+  REHEARSAL_INSTALLER="$root/pty-installer.sh" \
+    REHEARSAL_MODULE="$module" \
+    REHEARSAL_PTY_MARKER="$root/pty-autolaunch" \
+    WORK="$root/pty-work" \
+    PATH="$root/pty-bin:$PATH" \
+    /usr/bin/script -qefc "/bin/bash --noprofile --norc '$root/pty-harness.sh'" /dev/null \
+      > "$root/pty.stdout" 2> "$root/pty.stderr" || pty_status=$?
+  test "$pty_status" -eq 97
+  test ! -e "$root/pty-autolaunch"
+  test "$(<"$root/pty-work/install-output")" = FIXTURE_INSTALL_NONINTERACTIVE
+fi
+
 status=0
 env -i PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin \
   /bin/bash --noprofile --norc "$operator_dir/01-baseline-clean-start.sh" > /dev/null 2> "$root/missing.stderr" || status=$?
