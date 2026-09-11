@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	if len(os.Args) != 5 {
+	if len(os.Args) != 5 && !(len(os.Args) == 7 && os.Args[1] == "sequence") {
 		panic("fixture arguments")
 	}
 	done := make(chan struct{})
@@ -25,19 +25,27 @@ func main() {
 		}()
 	}
 	if os.Args[1] == "sequence" {
+		marker := os.Args[4]
+		if len(os.Args) == 7 {
+			marker = os.Args[6]
+		}
 		for index, phase := range []string{"first", "second", "third"} {
 			record, _ := json.Marshal(map[string]string{"phase": phase})
 			if err := os.WriteFile(os.Args[2], record, 0600); err != nil {
 				panic(err)
 			}
-			file, err := os.OpenFile(os.Args[3], os.O_WRONLY|os.O_CREATE, 0600)
+			target := os.Args[3]
+			if len(os.Args) == 7 {
+				target = os.Args[3+index]
+			}
+			file, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE, 0600)
 			if err != nil {
 				panic(err)
 			}
 			if err = file.Close(); err != nil {
 				panic(err)
 			}
-			if err = os.WriteFile(os.Args[4], []byte{byte('1' + index)}, 0600); err != nil {
+			if err = os.WriteFile(marker, []byte{byte('1' + index)}, 0600); err != nil {
 				panic(err)
 			}
 		}

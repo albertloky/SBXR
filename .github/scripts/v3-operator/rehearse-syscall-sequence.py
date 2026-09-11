@@ -25,11 +25,12 @@ def run(fixture):
         shutil.copyfile(fixture, executable)
         executable.chmod(0o700)
         for decision in ('release', 'early-release', 'kill', 'extra-continue'):
-            record, target, marker = (root / name for name in ('record', 'target', 'marker'))
+            record, first, second, third, marker = (root / name for name in ('record', 'first', 'second', 'third', 'marker'))
             gate = subprocess.Popen([
                 sys.executable, str(HERE / 'syscall-gate.py'), str(executable), cgroup,
-                'before-open', str(target), '--record', str(record), '--field', 'phase',
-                '--value', 'first', '--then-value', 'second', '--then-value', 'third',
+                'before-open', str(first), '--record', str(record), '--field', 'phase',
+                '--value', 'first', '--then-value', 'second', '--then-path', str(second),
+                '--then-value', 'third', '--then-path', str(third),
                 '--timeout', '30',
             ], stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=0)
             stream = transition.LineStream(gate.stdout)
@@ -38,10 +39,11 @@ def run(fixture):
             child = None
             try:
                 assert event()['state'] == 'armed'
-                child = subprocess.Popen([str(executable), 'sequence', str(record), str(target), str(marker)])
+                child = subprocess.Popen([str(executable), 'sequence', str(record), str(first), str(second), str(third), str(marker)])
                 for index, phase in enumerate(('first', 'second', 'third')):
                     held = event()
                     assert held['state'] == 'boundary-held' and held['boundary_index'] == index, held
+                    assert held['path'] == str((first, second, third)[index])
                     assert held['pid'] == child.pid
                     assert json.loads(record.read_text()) == {'phase': phase}
                     assert (marker.read_text() if marker.exists() else '') == (str(index) if index else '')
@@ -71,7 +73,7 @@ def run(fixture):
                 if child is not None and child.poll() is None:
                     child.kill()
                     child.wait(timeout=5)
-                for path in (record, target, marker):
+                for path in (record, first, second, third, marker):
                     path.unlink(missing_ok=True)
 
 

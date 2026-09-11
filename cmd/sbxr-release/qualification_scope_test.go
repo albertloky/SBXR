@@ -285,6 +285,11 @@ remove-certbot remove-writer remove-admission-race remove-directory-lock secret-
 		}
 	}
 	rebindRecurringEvidence(t, evidence)
+	if policy == softwarelifecycle.RepairTwoIssuanceEvidencePolicy {
+		t.Run("link-operator-assembly", func(t *testing.T) {
+			testLinkOperatorAssembly(t, binary, boundary, manifest, evidence)
+		})
+	}
 	document := recurringResultFixture(t, boundary, manifest, evidence)
 	if slices.Contains([]string{softwarelifecycle.RepairKaringLatencyEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy}, policy) {
 		var scenario v3ScenarioEvidence

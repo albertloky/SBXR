@@ -17,6 +17,10 @@ preflight after-snap-refresh
 operator_exact_candidate
 prove_running
 remember_secrets
+entry_started_at=$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ)
+manifest_sha=$(sha256sum "$SBXR_QUALIFICATION_MANIFEST" | awk '{print $1}')
+request_sha=$(sha256sum "$SBXR_QUALIFICATION_REQUEST" | awk '{print $1}')
+action_started_at=$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ)
 
 cleanup_inventory=false
 cleanup() {
@@ -97,10 +101,24 @@ jq -e '.schema == "sbxr-v4-cleanup-result-v2" and
   "${SBXR_OPERATOR_EVIDENCE_DIR}/24-cleanup.json" >/dev/null
 scan_retained_capture "${SBXR_OPERATOR_EVIDENCE_DIR}/24-removal.json" \
   "${SBXR_OPERATOR_EVIDENCE_DIR}/24-cleanup.json"
+action_completed_at=$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ)
 
 operator_exact_candidate
 prove_running
 scan_journal
 scan_transport_captures
-completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-printf 'SECRET_CONTAINMENT_OK started=%s completed=%s\n' "$STARTED_AT" "$completed_at"
+completed_at=$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ)
+jq -cnS --arg started "$STARTED_AT" --arg entry "$entry_started_at" \
+  --arg action_started "$action_started_at" --arg action_completed "$action_completed_at" \
+  --arg completed "$completed_at" --arg manifest "$manifest_sha" --arg request "$request_sha" \
+  '{action_completed_at:$action_completed,action_started_at:$action_started,completed_at:$completed,entry_started_at:$entry,qualification_manifest_sha256:$manifest,request_sha256:$request,scenario_id:"secret-containment",schema:"sbxr-v4-scenario-entry-v1",started_at:$started}' \
+  | tr -d '\n' > "${SBXR_OPERATOR_STATE_DIR}/24-state.json"
+chmod 0600 "${SBXR_OPERATOR_STATE_DIR}/24-state.json"
+jq -cnS --arg started "$action_started_at" --arg completed "$action_completed_at" \
+  --arg protection "$(sha256sum "${SBXR_OPERATOR_EVIDENCE_DIR}/24-protection.json" | awk '{print $1}')" \
+  --arg sandbox "$(sha256sum "${SBXR_OPERATOR_EVIDENCE_DIR}/24-sandbox.json" | awk '{print $1}')" \
+  --arg protected_open "$(sha256sum "${SBXR_OPERATOR_EVIDENCE_DIR}/24-protected-open.json" | awk '{print $1}')" \
+  --arg scan "$(sha256sum "${SBXR_OPERATOR_EVIDENCE_DIR}/24-scan.json" | awk '{print $1}')" \
+  --arg removal "$(sha256sum "${SBXR_OPERATOR_EVIDENCE_DIR}/24-removal.json" | awk '{print $1}')" \
+  --arg cleanup "$(sha256sum "${SBXR_OPERATOR_EVIDENCE_DIR}/24-cleanup.json" | awk '{print $1}')" \
+  '{action_completed_at:$completed,action_started_at:$started,cleanup_sha256:$cleanup,protected_open_sha256:$protected_open,protection_sha256:$protection,removal_sha256:$removal,sandbox_sha256:$sandbox,scan_sha256:$scan,schema:"sbxr-v4-secret-containment-result-v1"}'

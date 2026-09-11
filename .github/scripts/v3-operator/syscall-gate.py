@@ -53,8 +53,12 @@ def checkpoint(path):
         os.close(fd)
 
 
-def trace(root, deadline, path, boundary, record=None, field=None, value=None, no_child=False, child_executable=None, then_values=()):
+def trace(root, deadline, path, boundary, record=None, field=None, value=None, no_child=False,
+          child_executable=None, then_values=(), then_paths=()):
     values = [value, *then_values]
+    paths = [path, *(then_paths or (path,) * len(then_values))]
+    if len(paths) != len(values):
+        raise ValueError('ordered boundary paths must align with values')
     boundary_index = 0
     libc = ctypes.CDLL(None, use_errno=True)
     libc.ptrace.restype = ctypes.c_long
@@ -140,10 +144,10 @@ def trace(root, deadline, path, boundary, record=None, field=None, value=None, n
                     recent_events[-1]['syscall'] = number
                     args = struct.unpack_from('=6Q', info, 32)
                     if boundary == 'before-open' and number in (2, 257):
-                        match = pathname(pid, args[0] if number == 2 else args[1]) == os.fsencode(path)
+                        match = pathname(pid, args[0] if number == 2 else args[1]) == os.fsencode(paths[boundary_index])
                     if boundary == 'after-close' and number == 3:
                         try:
-                            waiting_close[pid] = os.readlink('/proc/%d/fd/%d' % (pid, args[0])) == path
+                            waiting_close[pid] = os.readlink('/proc/%d/fd/%d' % (pid, args[0])) == paths[boundary_index]
                         except FileNotFoundError:
                             waiting_close[pid] = False
                 elif operation == 2 and boundary == 'after-close':
@@ -206,7 +210,7 @@ def trace(root, deadline, path, boundary, record=None, field=None, value=None, n
                 if predicate() != evidence:
                     raise ValueError('checkpoint changed during thread stop')
                 print(json.dumps({'state': 'boundary-held', 'pid': root, 'tid': pid, 'boundary': boundary,
-                                  'path': path, 'record_sha256': evidence, 'children': list(child_observations.values()),
+                                  'path': paths[boundary_index], 'record_sha256': evidence, 'children': list(child_observations.values()),
                                   'vanished_tracees': sorted(vanished_tracees),
                                   'boundary_index': boundary_index}), flush=True)
                 remaining = deadline-time.monotonic()
@@ -297,6 +301,8 @@ if __name__ == '__main__':
     parser.add_argument('--value')
     parser.add_argument('--then-value', action='append', default=[],
                         help='next ordered value of the same record field; continue retains tracing')
+    parser.add_argument('--then-path', action='append', default=[],
+                        help='path for each ordered next value; omission reuses the initial path')
     parser.add_argument('--no-child', action='store_true')
     parser.add_argument('--child-executable')
     parser.add_argument('--timeout', type=int, default=90)
@@ -309,8 +315,11 @@ if __name__ == '__main__':
         if (args.then_value and not args.record or len(args.then_value) > 12 or
                 len(set([args.value, *args.then_value])) != 1 + len(args.then_value)):
             raise ValueError('ordered boundaries require distinct values and one record')
+        if args.then_path and len(args.then_path) != len(args.then_value):
+            raise ValueError('ordered boundary paths must align with values')
         def callback(pid, deadline):
-            return trace(pid, deadline, args.path, args.boundary, args.record, args.field, args.value, args.no_child, args.child_executable, args.then_value)
+            return trace(pid, deadline, args.path, args.boundary, args.record, args.field, args.value,
+                         args.no_child, args.child_executable, args.then_value, args.then_path)
         entry.run(args.executable, args.cgroup, args.timeout, on_held=callback, trace_options=1 | 2 | 4 | 8)
     except Exception as error:
         print(json.dumps({'state': 'refused', 'error_type': type(error).__name__, 'errno': getattr(error, 'errno', None)}), flush=True)

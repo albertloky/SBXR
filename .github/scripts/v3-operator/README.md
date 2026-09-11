@@ -147,14 +147,14 @@ required assertion failures. These are local regressions, not live SSH evidence.
 | 06 baseline removal | `06-baseline-removal.sh` |
 | 07 identity absent | `07-identity-absent-start.sh`, `07-identity-absent-rotate.sh`, `07-identity-absent-finish.sh` |
 | 08 enable schema 1 | `08-enable-schema1-setup.sh`, `08-enable-schema1-finish.sh enable`, then `verify` with protected outside observations |
-| 09–10 link boundaries | `transition-operator.py` and the procedure document |
-| 11–13 managed renewal/recorder | `managed-hold.py`, `hold-flock.py` and the procedure document |
-| 14–18 route/identity/outage | `route-control.py`, `transition-operator.py`, `firewall-control.py` and the procedure document |
-| 19 lifecycle menu | `19-lifecycle-menu.sh` |
-| 20–22 removal exclusions | `managed-hold.py`, `recorder-boundary.py` and the procedure document |
-| 23 directory locks | `directory-locks.py` and the procedure document |
-| 24 secret containment | `24-secret-containment.sh`, `sandbox-token-probe.py` and the procedure document |
-| 25 Karing final | Ordered UI procedure; actual fresh latency and due refresh observations remain mandatory |
+| 09–10 link boundaries | `09-10-link-start.sh <scenario>`, `transition-operator.py`, `09-10-link-finish.sh <scenario>`, then `assemble-evidence.py <scenario>` |
+| 11–15 managed renewal/recorder/package route | Shared start, `scenario-subscription-input.sh <scenario> before`, collector ready, captured helpers/action, `final`, collector result, shared finish, then assembly per `evidence-managed.md` |
+| 16–18 identity boundaries/outage | Shared start/finish wrappers, public `identity-entry.py`, `transition-operator.py`, the collector-owned outside runner, then assembly per `evidence-identity.md` |
+| 19 lifecycle menu | Shared start wrapper, `19-lifecycle-menu.sh` through `capture-source.py`, shared finish, then assembly |
+| 20–22 removal exclusions | Shared wrappers plus canonical capture IDs `managed-hold`, `recorder-boundary`, `removal-refusal`, or `admission-race-operator` as specified |
+| 23 directory locks | Shared wrappers plus canonical capture IDs `directory-locks` and `removal-refusal` |
+| 24 secret containment | Shared wrappers plus captured `24-secret-containment.sh` and its exact retained receipts |
+| 25 Karing final | Shared start, protected Owner-reviewed manual UI input, captured `karing-evidence.py`, and the Not installed finish |
 
 The full sequence, family-check order, exact public actions, outside observations
 and cleanup requirements are in
@@ -190,14 +190,53 @@ admitted while the whole-host mutation lock was held.
 
 For every nonbaseline scenario, `effective-route.py` observes the supported
 Certbot timer-to-service route before timer stops or injected route faults.
-Scenarios 07 and 08 invoke it automatically after supported setup. Later
+Scenarios 07 and 08 invoke it automatically after supported setup; the 09/10
+start entry invokes it before rotation. Later
 procedures invoke it explicitly and retain the current request-bound receipt.
 It observes renewal integration; the identity coordinator separately observes
 proxy startup protection.
 
+Scenarios 11–25 use one common entry clock. Run
+`11-25-scenario-start.sh <scenario>` once after the collector creates the current
+request. Immediately before the public action, hold, package refresh, route
+injection, or Karing UI journey, run `scenario-entry.py action-start <scenario>`.
+Run `scenario-entry.py action-complete <scenario>` immediately after that action
+has completed, refused, or reached its required durable result, before final
+outside and preservation checks. After those checks, run
+`11-25-scenario-finish.sh <scenario>`. Each phase creates a new protected
+`scenario-<scenario>-<phase>.json`; never edit, replace, or reuse one. Assembly
+uses the `finish` file as `--state` and the start wrapper's
+`scenario-<scenario>-effective-route.json` as `--effective-route`.
+
+The start wrapper requires `initial` packages for scenarios 11–14 and
+`after-snap-refresh` for scenarios 15–25. The finish wrapper requires `initial`
+for 11–13, `after-snap-refresh` for 14–24, and proves `Not installed` for 25.
+This asymmetry is intentional: scenario 14 performs the supported snap refresh.
+
+`capture-source.py` is the only generic source wrapper. Its `--helper` value is
+an allowlisted bundle identity, and `--output` must be a new file inside the
+scenario's mode-0700 source directory. Arguments after `--` go only to that
+helper. Interactive helpers keep stdin attached and stream their actual JSON
+events to the operator while retaining the request-bound wrapper. A successful
+wrapper exit is source transport; each family adapter still validates exact
+records and event order.
+
+For scenarios 11–15, `scenario-subscription-input.sh` stores the confirmed
+public disclosure privately. `before` publishes the collector trigger; wait for
+`NN-outside-ready.json` before `action-start`. After `action-complete`, run
+`final` and wait for `NN-outside-result.json`. Those two files are raw
+collector-owned receipts. Copy them unchanged into the scenario source
+directory; do not pass them through `capture-source.py`. Scenario 18 permits
+only `identity-unavailable final` and waits for
+`identity-unavailable-repair-outside.json` before the repair capture.
+
+`19-lifecycle-menu.sh` and `24-secret-containment.sh` each emit one whole-helper
+capture. Their internal state files are diagnostic. The corresponding shared
+`scenario-<scenario>-finish.json` remains the assembler's canonical state.
+
 `evidence-timing.py` binds typed evidence timestamps to exact retained source
 artifacts and event-specific lower/upper bounds. `assemble-evidence.py` uses that
-seam for scenarios 07/08, requires fresh manifest/boundary/validator verification
+seam for scenarios 07–25, requires fresh manifest/boundary/validator verification
 and accepted-prefix receipts, validates the actual entry/controller/outside
 artifacts, and invokes a pinned local qualification validator before writing
 facts. Its protected operator-observation input must refer to the actual
@@ -214,8 +253,26 @@ session can terminate during rotation, before the action completes; its fresh
 old-credential refusal must occur after completion. The assembler retains those
 distinct ordering requirements and refuses all observations dated at scenario
 start. Scenario 08 retains a safe completion receipt after its final assertions.
-Neither assembler covers the later scenarios' outside observations or turns
-an unprepared procedure into complete qualification coverage.
+For 09/10, `link-outside.py` synchronizes a pending request with the controller's
+prepared-target hold, checks closure before the five-second server deadline,
+then checks the selected link after public recovery. `link-runtime.py` observes
+the source process, cgroup descendants and sockets, staged target, and unchanged
+proxy process/configuration. Scenario 10 holds the committed process before its
+first serving-token read for target publication; the next Ownership Record write
+would be too late because activation already occurred. A separate
+`connection-probe.py` trace must span the whole action and recovery.
+
+`09-10-link-start.sh` and `09-10-link-finish.sh` retain secret disclosures only
+in protected files, coordinate the existing outside collector, and preserve the
+original scenario clock. See the procedure for the required independent proxy
+connection and operator capture observations. For 11–25, use the family source
+guides in [`evidence-managed.md`](../../../docs/acceptance/evidence-managed.md),
+[`evidence-identity.md`](../../../docs/acceptance/evidence-identity.md), and
+[`evidence-final.md`](../../../docs/acceptance/evidence-final.md), then the common
+CLI in [`evidence-assembly.md`](../../../docs/acceptance/evidence-assembly.md).
+Local helper tests and rehearsal validate mechanics and refusal behavior. Only
+fresh captured VPS, outside-client, and manual Karing sources within the signed
+request can establish live observations.
 
 `admission-race-operator.py` owns scenario 22's single prepared removal menu and
 the existing recorder-admission controller. It waits for the transient menu's

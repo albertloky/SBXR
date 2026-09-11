@@ -22,7 +22,10 @@ def record_for(name):
     operation = {'checkpoint': selected['checkpoint'], 'direction': selected['direction']}
     value = {family: operation}
     if family == 'subscription_rotation':
-        operation.update({'source': {'generation': 'old'}, 'target': {'generation': 'new'}})
+        source = {'link_id': '1' * 32, 'credential_sha256': '2' * 64,
+                  'certificate_generation': 3, 'certificate_sha256': ['4' * 64] * 4}
+        target = dict(source, link_id='5' * 32, credential_sha256='6' * 64)
+        operation.update({'source': source, 'target': target})
         value['serving'] = operation['target' if selected['direction'] == 'forward' else 'source']
     else:
         operation.update({'source_configuration_sha256': 'a' * 64,
@@ -122,6 +125,31 @@ class TransitionSpecificationTests(unittest.TestCase):
         for selected in transition.SPECS.values():
             self.assertRegex(selected['result'], r'^PROXY-INSTALLATION-[A-Z-]+$')
 
+    def test_link_gate_uses_ordered_durable_boundaries(self):
+        fake = FakeProcess(b'')
+        with mock.patch.object(transition.subprocess, 'Popen', return_value=fake) as popen:
+            transition.link_gate('fixture.service', 90, 'link-postcommit')
+        command = popen.call_args.args[0]
+        self.assertEqual(command[command.index('--value') + 1], 'target authorized')
+        self.assertEqual([command[index + 1] for index, value in enumerate(command)
+                          if value == '--then-value'], ['stop authorized', 'committed'])
+        self.assertEqual([command[index + 1] for index, value in enumerate(command)
+                          if value == '--then-path'], [str(transition.NEXT), str(transition.SERVING_TOKEN)])
+        fake.stdout.close()
+
+    def test_link_closure_rejects_server_deadline_as_termination_proof(self):
+        handoff = {'challenge_sha256': '1' * 64, 'ack_sha256': '2' * 64,
+                   'connection_id': 'connection-1'}
+        closed = {'challenge_sha256': '1' * 64, 'ack_sha256': '2' * 64,
+                  'connection_id': 'connection-1', 'server_deadline_seconds': 5,
+                  'pending_elapsed_milliseconds': 5000, 'closure_kind': 'eof',
+                  'closed_at': '2026-09-11T00:00:05Z'}
+        with mock.patch.dict(os.environ, {'SBXR_QUALIFICATION_REQUEST': '/request',
+                                          'SBXR_QUALIFICATION_MANIFEST': '/manifest'}), \
+                mock.patch.object(transition, 'check_outside', return_value=(b'closed', closed)):
+            with self.assertRaisesRegex(ValueError, 'closure mismatch'):
+                transition.link_closed('link-precommit', handoff, time.monotonic() + 5)
+
     def test_menu_parser_handles_buffered_frame_and_checks_recovery_plan(self):
         read_fd, write_fd = os.pipe()
         selected = transition.SPECS['identity-postcommit']
@@ -188,14 +216,32 @@ class TransitionSpecificationTests(unittest.TestCase):
                 root = Path(directory)
                 interrupted = record_for(scenario)
                 initial = {'schema': 2, 'configuration_sha256': 'a' * 64}
+                if scenario.startswith('link-'):
+                    initial['serving'] = interrupted['subscription_rotation']['source']
                 initial_raw, interrupted_raw = encoded(initial), encoded(interrupted)
                 identity = scenario.startswith('identity-')
-                gate = FakeProcess(
-                    json.dumps({'state': 'armed'}) + '\n' +
-                    ('' if identity else json.dumps({'state': 'boundary-held', 'pid': 123, 'boundary': 'before-open',
-                                'path': str(root / 'next'),
-                                'record_sha256': transition.digest(interrupted_raw)}) + '\n') +
-                    json.dumps({'state': 'interrupted'}) + '\n', text=not identity)
+                link_case = scenario.startswith('link-')
+                target_record = record_for(scenario)
+                if link_case:
+                    target_record['subscription_rotation']['checkpoint'] = 'target authorized'
+                    target_record['subscription_rotation']['direction'] = 'cleanup'
+                    target_record['serving'] = target_record['subscription_rotation']['source']
+                stopped_record = record_for('link-precommit') if link_case else None
+                target_raw = encoded(target_record) if link_case else b''
+                stopped_raw = encoded(stopped_record) if link_case else b''
+                events = [json.dumps({'state': 'armed'})]
+                if link_case:
+                    for index, raw_value in enumerate([target_raw, stopped_raw] +
+                                                       ([interrupted_raw] if scenario == 'link-postcommit' else [])):
+                        path = transition.SERVING_TOKEN if index == 2 else root / 'next'
+                        events.append(json.dumps({'state': 'boundary-held', 'pid': 123,
+                            'boundary_index': index, 'boundary': 'before-open',
+                            'path': str(path), 'record_sha256': transition.digest(raw_value)}))
+                elif not identity:
+                    events.append(json.dumps({'state': 'boundary-held', 'pid': 123, 'boundary': 'before-open',
+                                  'path': str(root / 'next'), 'record_sha256': transition.digest(interrupted_raw)}))
+                events.append(json.dumps({'state': 'interrupted'}))
+                gate = FakeProcess('\n'.join(events) + '\n', text=not (identity or link_case))
                 menu = FakeProcess(
                     '1. ' + selected['action'] + '\n0. Exit\n' +
                     selected['action'] + '? [y/N]\n')
@@ -204,30 +250,56 @@ class TransitionSpecificationTests(unittest.TestCase):
                         mock.patch.object(transition, 'NEXT', root / 'next'), \
                         mock.patch.object(transition, 'common_preflight', return_value=(time.time() + 100, manifest_hash)), \
                         mock.patch.object(transition.startup, 'Observer'), \
+                        mock.patch.object(transition.link, 'Observer') as link_observer_type, \
                         mock.patch.dict(os.environ, {'SBXR_QUALIFICATION_REQUEST': '/request'}), \
                         mock.patch.object(transition, 'protected_bytes', return_value=b'{}'), \
                         mock.patch.object(transition, 'observe_identity_boundaries', return_value=(
                             interrupted_raw, interrupted, {'pid': 123}, [{'check': 'fixture'}])), \
-                        mock.patch.object(transition, 'protected_record', side_effect=[
-                            (initial_raw, initial), (interrupted_raw, interrupted),
-                            (interrupted_raw, interrupted)]), \
+                        mock.patch.multiple(transition,
+                            identity_entry=mock.Mock(return_value=({'entry_started_at': '2026-09-11T00:00:00Z'}, b'entry')),
+                            identity_ready=mock.Mock(return_value=({}, b'ready')),
+                            publish_identity_trigger=mock.Mock()), \
+                        mock.patch.object(transition, 'link_handoff', return_value={'challenge_sha256': '7' * 64, 'ack_sha256': '8' * 64, 'connection_id': 'c'}), \
+                        mock.patch.object(transition, 'link_closed', side_effect=lambda s, h, d: dict(h, closed_sha256='9' * 64)), \
+                        mock.patch.object(transition, 'protected_record', side_effect=(
+                            [(initial_raw, initial), (target_raw, target_record), (target_raw, target_record),
+                             (stopped_raw, stopped_record), (stopped_raw, stopped_record)] +
+                            ([(interrupted_raw, interrupted)] if scenario == 'link-postcommit' else []) +
+                            [(interrupted_raw, interrupted)] if link_case else
+                            [(initial_raw, initial), (interrupted_raw, interrupted), (interrupted_raw, interrupted)])), \
                         mock.patch.object(transition, 'held_process', return_value={
                             'pid': 123, 'start_tick': 456, 'executable_device': 1,
                             'executable_inode': 2, 'cgroup': '/fixture'}), \
                         mock.patch.object(transition.subprocess, 'Popen', return_value=gate), \
                         mock.patch.object(transition, 'launch_menu', return_value=menu), \
                         mock.patch('builtins.print'):
+                    if link_case:
+                        link_observer = link_observer_type.return_value
+                        link_observer.source = interrupted['subscription_rotation']['source']
+                        link_observer.source_process = {'pid': 44, 'start_tick': 55}
+                        link_observer.proxy_process = {'pid': 66, 'start_tick': 77}
+                        link_observer.configuration_sha256 = 'a' * 64
+                        link_observer.initial_staging_empty = True
+                        link_observer.target_staged.return_value = (interrupted['subscription_rotation']['target'], {'target_staged_only': True})
+                        link_observer.quiescent.return_value = {'owned_processes_and_descendants_absent': True}
+                        link_observer.committed_unpublished.return_value = {'serving_material': 'source'}
                     transition.interrupt(scenario, 90)
-                self.assertEqual(gate.stdin.getvalue(), b'kill\n' if identity else 'kill\n')
+                expected_gate = (b'continue\n' + (b'continue\n' if scenario == 'link-postcommit' else b'') + b'kill\n') if link_case else (b'kill\n' if identity else 'kill\n')
+                self.assertEqual(gate.stdin.getvalue(), expected_gate)
                 self.assertEqual(menu.stdin.getvalue(), b'1\ny\n')
                 saved = json.loads(state_file.read_text())
                 self.assertEqual(saved['checkpoint'], selected['checkpoint'])
                 self.assertEqual(saved['direction'], selected['direction'])
+                if link_case:
+                    self.assertEqual(saved['target_record_sha256'], transition.digest(target_raw))
+                    self.assertEqual(saved['boundary_path'], str(
+                        transition.SERVING_TOKEN if scenario == 'link-postcommit' else root / 'next'))
 
                 family = selected['field'].split('.', 1)[0]
                 operation = interrupted[family]
                 if family == 'subscription_rotation':
                     final = {'serving': operation['source' if selected['direction'] == 'cleanup' else 'target']}
+                    final['configuration_sha256'] = 'a' * 64
                 else:
                     key = 'source_configuration_sha256' if selected['direction'] == 'cleanup' else 'target_configuration_sha256'
                     final = {'configuration_sha256': operation[key]}
@@ -243,8 +315,17 @@ class TransitionSpecificationTests(unittest.TestCase):
                         mock.patch.object(transition, 'read_state', return_value=saved), \
                         mock.patch.object(transition, 'protected_record', side_effect=[
                             (interrupted_raw, interrupted), (final_raw, final)]), \
+                        mock.patch.dict(os.environ, {'SBXR_QUALIFICATION_REQUEST': '/request',
+                                                     'SBXR_QUALIFICATION_MANIFEST': '/manifest'}), \
+                        mock.patch.object(transition, 'protected_bytes', return_value=b'{}'), \
+                        mock.patch.object(transition, 'check_outside', return_value=(b'closed', {})), \
+                        mock.patch.object(transition, 'identity_closed', return_value={}), \
+                        mock.patch.object(transition.link.Observer, 'for_recovery') as recovery_observer, \
                         mock.patch.object(transition, 'launch_menu', return_value=recovery), \
                         mock.patch('builtins.print'):
+                    if link_case:
+                        saved['outside_handoff']['closed_sha256'] = transition.digest(b'closed')
+                        recovery_observer.return_value.final_running.return_value = {'selected': True, 'staging_empty': True}
                     transition.recover(scenario, 90)
                 self.assertEqual(recovery.stdin.getvalue(), b'1\ny\n0\n')
                 completed = json.loads(state_file.read_text())
@@ -255,11 +336,13 @@ class TransitionSpecificationTests(unittest.TestCase):
         selected = transition.SPECS['link-precommit']
         interrupted = record_for('link-precommit')
         raw = encoded(interrupted)
-        state = {'schema': 1, 'scenario': 'link-precommit', 'phase': 'interrupted',
+        state = {'schema': 'sbxr-v4-link-transition-controller-v1', 'scenario': 'link-precommit', 'phase': 'interrupted',
                  'field': selected['field'], 'checkpoint': selected['checkpoint'],
                  'direction': selected['direction'], 'qualification_manifest_sha256': 'd' * 64,
                  'interrupted_record_sha256': '0' * 64}
         with mock.patch.object(transition, 'common_preflight', return_value=(time.time() + 100, 'd' * 64)), \
+                mock.patch.dict(os.environ, {'SBXR_QUALIFICATION_REQUEST': '/request'}), \
+                mock.patch.object(transition, 'protected_bytes', return_value=b'{}'), \
                 mock.patch.object(transition, 'read_state', return_value=state), \
                 mock.patch.object(transition, 'protected_record', return_value=(raw, interrupted)), \
                 mock.patch.object(transition, 'launch_menu') as launch:
@@ -276,6 +359,9 @@ class TransitionSpecificationTests(unittest.TestCase):
                     mock.patch.object(transition, 'NEXT', root / 'next'), \
                     mock.patch.object(transition, 'common_preflight', return_value=(time.time() + 100, 'e' * 64)), \
                     mock.patch.object(transition, 'protected_record', return_value=(raw, initial)), \
+                    mock.patch.object(transition.link, 'Observer'), \
+                    mock.patch.dict(os.environ, {'SBXR_QUALIFICATION_REQUEST': '/request'}), \
+                    mock.patch.object(transition, 'protected_bytes', return_value=b'{}'), \
                     mock.patch.object(transition.subprocess, 'Popen', return_value=gate):
                 with self.assertRaisesRegex(ValueError, 'did not arm'):
                     transition.interrupt('link-precommit', 90)

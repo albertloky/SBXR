@@ -250,9 +250,72 @@ SCENARIO_08_RULES = (
 )
 
 
+LINK_COMMON_RULES = (
+    _rule("fresh-disposable-vps-preflight", ("entry", "controller"), Anchor("entry", "preflight_completed_at"),
+          after=(Anchor("controller", "action_started_at"),)),
+    _rule("unchanged-candidate-bytes", ("entry", "controller"), Anchor("controller", "recovered_at"), Anchor("entry", "final_candidate_checked_at")),
+    _rule("initial-state-proved", ("entry", "outside", "controller"), Anchor("entry", "running_proved_at"), Anchor("outside", "old_initial_at"),
+          after=(Anchor("controller", "action_started_at"),)),
+    _rule("boundary-observed", ("controller",), Anchor("controller", "interrupted_at"),
+          after=(Anchor("controller", "recovery_started_at"),)),
+    _rule("final-state-proved", ("controller", "outside", "entry"), Anchor("controller", "recovered_at"), Anchor("outside", "old_final_at"), Anchor("entry", "final_state_proved_at")),
+    _rule("original-ssh-continuity", ("entry",), Anchor("entry", "ssh_continuity_at")),
+    _rule("capture-coverage-complete", ("entry",), Anchor("entry", "capture_coverage_at")),
+    _rule("exact-secrets-absent", ("entry",), Anchor("entry", "exact_secrets_absent_at")),
+    _rule("prohibited-patterns-absent", ("entry",), Anchor("entry", "prohibited_patterns_absent_at")),
+    _rule("supported-effective-route-inspected", ("route", "controller"), Anchor("route", "completed_at"),
+          after=(Anchor("controller", "action_started_at"),)),
+    _rule("proxy-and-traffic-unchanged", ("connection", "entry", "controller"), Anchor("connection", "last_at"), Anchor("controller", "recovered_at"), Anchor("entry", "proxy_unchanged_at")),
+    _rule("client-identity-unchanged", ("entry", "outside"), Anchor("outside", "old_final_at"), Anchor("entry", "client_identity_unchanged_at")),
+    _rule("one-prepared-target", ("controller",), Anchor("controller", "target_prepared_at"),
+          after=(Anchor("controller", "recovery_started_at"),)),
+)
+
+LINK_PRECOMMIT_RULES = LINK_COMMON_RULES + (
+    _rule("old-serving-quiesced", ("controller", "outside"), Anchor("controller", "quiesced_at"), Anchor("outside", "closed_at"),
+          after=(Anchor("controller", "recovery_started_at"),)),
+    _rule("old-generation-restored", ("controller", "outside"), Anchor("controller", "recovered_at"), Anchor("outside", "old_final_at")),
+    _rule("unused-target-removed", ("controller", "entry"), Anchor("controller", "recovered_at"), Anchor("entry", "staging_absent_at")),
+    _rule("old-link-usable", ("outside",), Anchor("outside", "old_final_at")),
+    _rule("no-replacement-disclosure", ("entry", "controller"), Anchor("controller", "recovered_at"), Anchor("entry", "disclosure_audited_at")),
+)
+
+LINK_POSTCOMMIT_RULES = LINK_COMMON_RULES + (
+    _rule("no-old-process-or-request-overlap", ("controller", "outside"), Anchor("controller", "quiesced_at"), Anchor("outside", "closed_at"),
+          after=(Anchor("controller", "recovery_started_at"),)),
+    _rule("target-only-finishing", ("controller",), Anchor("controller", "recovered_at")),
+    _rule("old-link-404", ("outside",), Anchor("outside", "old_final_at")),
+    _rule("new-link-usable", ("outside",), Anchor("outside", "new_final_at")),
+)
+
+
+def later_common_rules() -> tuple[ObservationRule, ...]:
+    """Current-request operator observations shared by scenarios 11–25."""
+    return (
+        _rule('fresh-disposable-vps-preflight', ('entry', 'state'), Anchor('entry', 'preflight_completed_at'),
+              after=(Anchor('state', 'action_started_at'),)),
+        _rule('unchanged-candidate-bytes', ('entry',), Anchor('entry', 'final_candidate_checked_at')),
+        _rule('initial-state-proved', ('entry', 'state'), Anchor('entry', 'running_proved_at'),
+              after=(Anchor('state', 'action_started_at'),)),
+        _rule('boundary-observed', ('entry', 'state'), Anchor('entry', 'boundary_observed_at'), Anchor('state', 'action_started_at'),
+              after=(Anchor('state', 'action_completed_at'),)),
+        _rule('final-state-proved', ('entry', 'state'), Anchor('entry', 'final_state_proved_at'), Anchor('state', 'action_completed_at')),
+        _rule('original-ssh-continuity', ('entry', 'state'), Anchor('entry', 'ssh_continuity_at'), Anchor('state', 'completed_at')),
+        _rule('capture-coverage-complete', ('entry', 'state'), Anchor('entry', 'capture_coverage_at'), Anchor('state', 'completed_at')),
+        _rule('exact-secrets-absent', ('entry', 'state'), Anchor('entry', 'exact_secrets_absent_at'), Anchor('state', 'completed_at')),
+        _rule('prohibited-patterns-absent', ('entry', 'state'), Anchor('entry', 'prohibited_patterns_absent_at'), Anchor('state', 'completed_at')),
+        _rule('supported-effective-route-inspected', ('route', 'state'), Anchor('route', 'completed_at'),
+              after=(Anchor('state', 'action_started_at'),)),
+    )
+
+
 def scenario_rules(scenario_id: str) -> tuple[ObservationRule, ...]:
     if scenario_id == "identity-absent":
         return SCENARIO_07_RULES
     if scenario_id == "enable-schema1":
         return SCENARIO_08_RULES
+    if scenario_id == "link-precommit":
+        return LINK_PRECOMMIT_RULES
+    if scenario_id == "link-postcommit":
+        return LINK_POSTCOMMIT_RULES
     raise EvidenceTimingRefusal(f"scenario {scenario_id!r}: no tracked timing rules")

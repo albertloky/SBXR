@@ -35,7 +35,7 @@ preflight() {
   if test -n "${REHEARSAL_EXPECT_PACKAGE_SET:-}"; then test "${1:-initial}" = "$REHEARSAL_EXPECT_PACKAGE_SET"; fi
   rehearsal_stop preflight
 }
-prove_not_installed() { :; }
+prove_not_installed() { rehearsal_stop prove_not_installed; }
 prove_not_set_up() { :; }
 prove_running() { :; }
 prove_status() { :; }
@@ -50,6 +50,10 @@ run_action() { rehearsal_stop run_action; return 96; }
 interrupt_at() { rehearsal_stop interrupt_at; return 96; }
 install() { rehearsal_stop install; return 96; }
 remote_outside_disclose() { rehearsal_stop remote_outside_disclose; return 96; }
+operator_expect_scenario() {
+  test "$(jq -r .scenario_id "$SBXR_QUALIFICATION_REQUEST")" = "$1"
+  rehearsal_stop operator_expect_scenario
+}
 install_candidate() {
   test "$TAG:$SEQUENCE:$COMMIT:$INDEX" = "v9.9.9:999:2bcdd645124178609e2d73c1e08ef50e204b0c89:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   cp "$REHEARSAL_EXECUTABLE_SOURCE" "$SBXR_EXECUTABLE"
@@ -98,11 +102,15 @@ operator_env=(
 )
 
 run_until_boundary() {
-  local script=$1 scenario=$2 boundary=$3 expect_install=${4:-false} status=0 marker
+  local script=$1 scenario=$2 boundary=$3 expect_install=${4:-false} script_argument=${5:-} status=0 marker
+  local -a command=(/bin/bash --noprofile --norc "$operator_dir/$script")
   marker=$root/${script%.sh}.install
   write_request "$scenario"
+  if test -n "$script_argument"; then
+    command+=("$script_argument")
+  fi
   env -i "${operator_env[@]}" REHEARSAL_STOP_AT="$boundary" REHEARSAL_INSTALL_MARKER="$marker" \
-    /bin/bash --noprofile --norc "$operator_dir/$script" > "$root/$script.stdout" 2> "$root/$script.stderr" || status=$?
+    "${command[@]}" > "$root/$script.stdout" 2> "$root/$script.stderr" || status=$?
   test "$status" -eq 97
   test ! -s "$root/$script.stdout"
   test ! -s "$root/$script.stderr"
@@ -111,6 +119,19 @@ run_until_boundary() {
   else
     test ! -e "$marker"
   fi
+  record_entry "$script"
+}
+
+run_later_wrapper_boundary() {
+  local script=$1 scenario=$2 boundary=$3 package_phase=$4 status=0
+  write_request "$scenario"
+  env -i "${operator_env[@]}" REHEARSAL_STOP_AT="$boundary" \
+    REHEARSAL_EXPECT_PACKAGE_SET="$package_phase" \
+    /bin/bash --noprofile --norc "$operator_dir/$script" "$scenario" \
+    > "$root/$script-$scenario.stdout" 2> "$root/$script-$scenario.stderr" || status=$?
+  test "$status" -eq 97
+  test ! -s "$root/$script-$scenario.stdout"
+  test ! -s "$root/$script-$scenario.stderr"
   record_entry "$script"
 }
 
@@ -214,6 +235,52 @@ run_until_boundary 05-baseline-drift.sh baseline-drift remember_secrets
 run_until_boundary 06-baseline-removal.sh baseline-removal remember_secrets
 run_until_boundary 07-identity-absent-start.sh identity-absent action true
 run_until_boundary 08-enable-schema1-setup.sh enable-schema1 run_action true
+run_until_boundary 09-10-link-start.sh link-precommit remember_secrets false link-precommit
+run_until_boundary 09-10-link-start.sh link-postcommit remember_secrets false link-postcommit
+
+# The shared 11–25 start wrapper must select the signed package declaration on
+# both sides of snap-refresh before it records the begin phase.
+run_later_wrapper_boundary 11-25-scenario-start.sh managed-renewal remember_secrets initial
+run_later_wrapper_boundary 11-25-scenario-start.sh lifecycle-menu remember_secrets after-snap-refresh
+
+# The private subscription entry accepts both phases only for scenarios 11–15,
+# and only the restored final disclosure for scenario 18. Stop at the shared
+# scenario check so rehearsal never invokes a public menu or writes live state.
+mkdir -m 0700 "$root/subscription-stub-bin"
+cat > "$root/subscription-stub-bin/python3" <<'PYTHON_STUB'
+#!/usr/bin/env bash
+cat >/dev/null
+PYTHON_STUB
+chmod 0700 "$root/subscription-stub-bin/python3"
+for scenario in managed-renewal recorder-live recorder-locks snap-refresh unsupported-route; do
+  for phase in before final; do
+    write_request "$scenario"
+    status=0
+    env -i "${operator_env[@]}" PATH="$root/subscription-stub-bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin" \
+      REHEARSAL_STOP_AT=operator_expect_scenario \
+      /bin/bash --noprofile --norc "$operator_dir/scenario-subscription-input.sh" "$scenario" "$phase" \
+      > "$root/subscription-$scenario-$phase.stdout" 2> "$root/subscription-$scenario-$phase.stderr" || status=$?
+    test "$status" -eq 97
+    test ! -s "$root/subscription-$scenario-$phase.stdout"
+  done
+done
+write_request identity-unavailable
+status=0
+env -i "${operator_env[@]}" PATH="$root/subscription-stub-bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin" \
+  REHEARSAL_STOP_AT=operator_expect_scenario \
+  /bin/bash --noprofile --norc "$operator_dir/scenario-subscription-input.sh" identity-unavailable final \
+  > "$root/subscription-identity-final.stdout" 2> "$root/subscription-identity-final.stderr" || status=$?
+test "$status" -eq 97
+for pair in 'identity-unavailable before' 'lifecycle-menu before' 'managed-renewal invalid'; do
+  read -r scenario phase <<<"$pair"
+  write_request "$scenario"
+  status=0
+  env -i "${operator_env[@]}" PATH="$root/subscription-stub-bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin" \
+    REHEARSAL_STOP_AT=operator_expect_scenario \
+    /bin/bash --noprofile --norc "$operator_dir/scenario-subscription-input.sh" "$scenario" "$phase" \
+    > /dev/null 2> "$root/subscription-refused-$scenario-$phase.stderr" || status=$?
+  test "$status" -ne 0 && test "$status" -ne 97
+done
 
 # Scenario 19 occurs after the supported snap refresh and must bind the second
 # package identity set before it reaches any public lifecycle action.
@@ -240,6 +307,8 @@ run_until_boundary 01-baseline-clean-finish.sh baseline-clean remember_secrets
 run_until_boundary 04-baseline-postcommit-finish.sh baseline-postcommit remember_secrets
 run_until_boundary 07-identity-absent-rotate.sh identity-absent preflight
 run_until_boundary 07-identity-absent-finish.sh identity-absent preflight
+run_until_boundary 09-10-link-finish.sh link-precommit remember_secrets false link-precommit
+run_until_boundary 09-10-link-finish.sh link-postcommit remember_secrets false link-postcommit
 
 write_request enable-schema1
 status=0
@@ -268,6 +337,12 @@ test "$status" -eq 97
 test ! -s "$root/24-secret-containment.stdout" && test ! -s "$root/24-secret-containment.stderr"
 test ! -e "$root/unexpected-24.install"
 record_entry 24-secret-containment.sh
+
+# Finish rechecks the same phase for scenarios 11–13, the refreshed phase for
+# scenarios 14–24, and the final Not installed state for scenario 25.
+run_later_wrapper_boundary 11-25-scenario-finish.sh managed-renewal preflight initial
+run_later_wrapper_boundary 11-25-scenario-finish.sh secret-containment preflight after-snap-refresh
+run_later_wrapper_boundary 11-25-scenario-finish.sh karing-final prove_not_installed removed
 
 for pair in '01-outside-request.sh baseline-clean probe-1' '04-outside-request.sh baseline-postcommit probe-2'; do
   read -r script scenario request_id <<<"$pair"

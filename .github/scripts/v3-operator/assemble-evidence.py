@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assemble authenticated scenario 07/08 receipts into canonical Go facts.
+"""Assemble scenario 07–25 receipts into canonical Go facts.
 
 This command performs no live or network operation.  It fails closed unless a
 fresh preparation receipt, every retained evidence source, and the pinned Go
@@ -36,14 +36,19 @@ def import_sibling(name: str, filename: str):
 timing = import_sibling("sbxr_evidence_timing", "evidence-timing.py")
 identity = import_sibling("sbxr_identity_outside", "identity-outside.py")
 connection = import_sibling("sbxr_connection_observation", "check-connection-observation.py")
+links = import_sibling("sbxr_link_evidence", "link-evidence.py")
+later = import_sibling("sbxr_scenario_sources", "scenario-sources.py")
 
 POLICY = "repair-issuance-bounded-v4"
-SCENARIOS = ("identity-absent", "enable-schema1")
+SCENARIOS = ("identity-absent", "enable-schema1", "link-precommit", "link-postcommit") + later.SCENARIOS
+SCENARIO_INDEX = {scenario: index + 6 for index, scenario in enumerate(SCENARIOS)}
 FACTS_SCHEMA = "sbxr-release-qualification-facts-v1"
 DECISION_SCHEMA = "sbxr-release-qualification-decision-v1"
 RESULT_STAGE = "v3-scenario-result"
 EVIDENCE_RESULT = "expected-safety-and-final-state-proved"
 PROOF_SCHEMA = "sbxr-v4-scenario-07-08-observation-input-v2"
+LINK_PROOF_SCHEMA = "sbxr-v4-link-observation-input-v1"
+LATER_PROOF_SCHEMA = "sbxr-v4-scenario-observation-input-v1"
 PREPARATION_SCHEMA = "sbxr-v4-evidence-preparation-v1"
 OPERATOR_SCHEMA = "sbxr-v4-operator-observations-v1"
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -149,10 +154,14 @@ def validate_manifest(value, raw, scenario):
     required = attempt.get("required_scenarios")
     if (attempt.get("schema") != "sbxr-v3-qualification-attempt-v3" or attempt.get("evidence_policy") != POLICY or
             not isinstance(required, list) or len(required) != len(set(required)) or scenario not in required or
-            required.index(scenario) != (6 if scenario == "identity-absent" else 7)):
+            scenario not in SCENARIO_INDEX or required.index(scenario) != SCENARIO_INDEX[scenario]):
         raise Refusal("manifest: policy or exact signed scenario order refused")
-    if required[6:8] != list(SCENARIOS) or not isinstance(attempt.get("packages"), dict) or not isinstance(attempt.get("runner"), dict):
+    if required[6:8] != list(SCENARIOS[:2]) or not isinstance(attempt.get("packages"), dict) or not isinstance(attempt.get("runner"), dict):
         raise Refusal("manifest: scenario 07/08 packages or order refused")
+    if scenario.startswith("link-") and required[6:10] != list(SCENARIOS[:4]):
+        raise Refusal("manifest: scenario 09/10 order refused")
+    if scenario in later.SCENARIOS and required[6:] != list(SCENARIOS):
+        raise Refusal("manifest: remaining scenario order differs")
     if (type(attempt.get("scenario_limit_seconds")) is not int or attempt["scenario_limit_seconds"] <= 0 or
             type(attempt.get("validation_limit_seconds")) is not int or attempt["validation_limit_seconds"] <= 0):
         raise Refusal("manifest: timing limits required")
@@ -161,8 +170,10 @@ def validate_manifest(value, raw, scenario):
 
 def validate_request(value, exact_raw, manifest_sha, scenario, attempt):
     exact(value, ("deadline_unix", "not_before", "qualification_manifest_sha256", "scenario_id", "scenario_limit_seconds"), "request")
+    limit = attempt.get('karing_limit_seconds') if scenario == 'karing-final' else attempt['scenario_limit_seconds']
     if (value["qualification_manifest_sha256"] != manifest_sha or value["scenario_id"] != scenario or
-            value["scenario_limit_seconds"] != attempt["scenario_limit_seconds"] or type(value["deadline_unix"]) is not int):
+            type(limit) is not int or limit <= 0 or type(value['scenario_limit_seconds']) is not int or
+            value["scenario_limit_seconds"] != limit or type(value["deadline_unix"]) is not int):
         raise Refusal("request: exact manifest, scenario, or signed limit differs")
     instant(value["not_before"], "request.not_before")
     return value, digest(exact_raw)
@@ -173,16 +184,23 @@ def validate_prefix(prefix, manifest, manifest_sha, scenario_index):
         raise Refusal(f"prior prefix: exactly {scenario_index} scenarios required")
     attempt, candidate = manifest["v3_attempt"], manifest["releases"][0]
     previous, previous_time, operations = manifest_sha, attempt.get("started_at"), set()
+    packages = attempt['packages']
     for index, item in enumerate(prefix):
         if not isinstance(item, dict):
             raise Refusal("prior prefix: scenario object required")
         if (item.get("scenario_id") != attempt["required_scenarios"][index] or item.get("prior_scenario_sha256") != previous or
                 item.get("operation_id") != f"operation-{index + 1}" or item.get("operation_id") in operations or
                 item.get("attempt_id") != attempt.get("attempt_id") or item.get("candidate") != candidate or
-                item.get("packages_before") != attempt["packages"] or item.get("packages_after") != attempt["packages"] or
+                item.get("packages_before") != packages or
                 item.get("schema") != "sbxr-v3-scenario-evidence-v3" or item.get("vps_id") != attempt.get("vps_id") or
                 item.get("vps_identity_sha256") != attempt.get("vps_identity_sha256")):
             raise Refusal("prior prefix: exact order, chain, package, operation, or candidate binding differs")
+        if item['scenario_id'] == 'snap-refresh':
+            packages = attempt.get('after_snap_refresh')
+            if not isinstance(packages, dict):
+                raise Refusal('prior prefix: signed post-refresh packages required')
+        if item.get('packages_after') != packages:
+            raise Refusal('prior prefix: package transition differs')
         if previous_time and (not before(previous_time, item.get("started_at")) or not before(item.get("completed_at"), item.get("validated_at"))):
             raise Refusal("prior prefix: time order refused")
         operations.add(item["operation_id"])
@@ -420,8 +438,23 @@ def retain_07(state_directory: Path):
     print(json.dumps({"retained": len(copies), "schema": "sbxr-v4-identity-outside-retention-v1"}, sort_keys=True, separators=(",", ":")))
 
 
+def rules_for(scenario):
+    if scenario in later.SCENARIOS:
+        return tuple(later.adapter(sys.modules[__name__], scenario).rules(timing, scenario))
+    return timing.scenario_rules(scenario)
+
+
+def packages_for(attempt, scenario):
+    if SCENARIO_INDEX[scenario] < 13:
+        return attempt['packages'], attempt['packages']
+    after = attempt.get('after_snap_refresh')
+    if not isinstance(after, dict):
+        raise Refusal('scenario: signed post-refresh packages required')
+    return (attempt['packages'] if scenario == 'snap-refresh' else after), after
+
+
 def assemble(options):
-    scenario = options.command; index = 6 if scenario == "identity-absent" else 7
+    scenario = options.command; index = SCENARIO_INDEX[scenario]
     manifest, manifest_body, manifest_raw = load(options.manifest, "manifest")
     boundary, boundary_body, boundary_raw = load(options.boundary, "boundary")
     request, request_body, request_raw = load(options.request, "request", True)
@@ -439,7 +472,7 @@ def assemble(options):
         raise Refusal("validator: pinned executable SHA or mode differs")
     validator_before = options.validator.lstat()
     prepared_at = validate_preparation(preparation, manifest_sha, digest(boundary_raw), request_sha, digest(prefix_raw), options.validator_sha256, request, scenario)
-    rules = timing.scenario_rules(scenario)
+    rules = rules_for(scenario)
     sources = {"entry": operator_source(operator, operator_raw, capture_raw, scenario, manifest_sha, request_sha, rules),
                "route": route_source(route, route_raw, scenario, manifest_sha, request_sha)}
     if scenario == "identity-absent":
@@ -460,15 +493,31 @@ def assemble(options):
             raise Refusal("outside rotation receipts: final linkage differs")
         sources["outside"] = outside_source(outside, outside_raw, collected, collected_body, manifest_raw, request_raw, state, scenario, manifest_sha, request_sha)
         completed_entry = state["completed_at"]
-    else:
+    elif scenario == "enable-schema1":
         state, _, state_raw = load(options.state, "08 private state")
         safe, _, safe_raw = load(options.safe_state, "08 safe state")
         sources["state"] = source_08(state, state_raw, safe, safe_raw, scenario, manifest_sha, request_sha, request, candidate)
         con, sub = validate_08_receipts(options, state, safe, safe_raw, request, request_sha, manifest_sha, scenario)
         sources["connection"], sources["subscription"] = con, sub
         completed_entry = safe["completed_at"]
+    elif scenario.startswith('link-'):
+        state, _, state_raw = load(options.state, "link entry state", True)
+        sources.update(links.sources(sys.modules[__name__], options, state, state_raw, manifest_raw, request_raw,
+                                    scenario, manifest_sha, request_sha, request))
+        completed_entry = state["completed_at"]
+    else:
+        state, _, state_raw = load(options.state, 'scenario entry', True)
+        sources['state'] = later.state_source(sys.modules[__name__], state, state_raw, scenario, manifest_sha, request_sha, request)
+        context = later.Context(sys.modules[__name__], scenario, manifest, manifest_raw, manifest_sha,
+                                request, request_raw, request_sha, state, options.sources_directory)
+        family_sources = later.adapter(sys.modules[__name__], scenario).sources(context)
+        if set(family_sources) & set(sources):
+            raise Refusal('scenario adapter: shared sources cannot be replaced')
+        sources.update(family_sources)
+        completed_entry = state['completed_at']
     exact(proof, ("completed_at", "link_id", "observations", "operation_id", "scenario_id", "schema"), "proof")
-    if proof["schema"] != PROOF_SCHEMA or proof["scenario_id"] != scenario or proof["operation_id"] != f"operation-{index+1}" or proof["link_id"] != "":
+    proof_schema = LATER_PROOF_SCHEMA if scenario in later.SCENARIOS else LINK_PROOF_SCHEMA if scenario.startswith("link-") else PROOF_SCHEMA
+    if proof["schema"] != proof_schema or proof["scenario_id"] != scenario or proof["operation_id"] != f"operation-{index+1}" or proof["link_id"] != "":
         raise Refusal("proof: exact schema, scenario, operation, or link contract differs")
     if not before(prepared_at, state["entry_started_at"]) or not before(completed_entry, proof["completed_at"]):
         raise Refusal("preparation, entry, and proof order refused")
@@ -482,16 +531,31 @@ def assemble(options):
     except timing.EvidenceTimingRefusal as error:
         raise Refusal(str(error)) from error
     validated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    if (not before(proof["completed_at"], validated_at) or not before(validated_at, deadline) or
+    if (not before(proof["completed_at"], validated_at) or
             instant(validated_at, "validated_at").epoch_second - instant(proof["completed_at"], "proof.completed_at").epoch_second > attempt["validation_limit_seconds"]):
         raise Refusal("validation time lies outside signed limit")
     if previous_time and not before(previous_time, state["started_at"]):
         raise Refusal("scenario starts before accepted prefix validation")
     outcome = ("Running", "observed", "none", "Not installed") if scenario == "identity-absent" else ("Running", "observed", "none", "Running")
+    if scenario == "link-precommit":
+        outcome = ("Running", "before-commitment", "rollback", "Running")
+    elif scenario == "link-postcommit":
+        outcome = ("Running", "after-commitment", "forward", "Running")
+    elif scenario == 'managed-renewal':
+        outcome = ('Running', 'observed', 'forward', 'Running')
+    elif scenario == 'identity-precommit':
+        outcome = ('Running', 'before-commitment', 'rollback', 'Running')
+    elif scenario == 'identity-postcommit':
+        outcome = ('Running', 'after-commitment', 'forward', 'Running')
+    elif scenario in ('remove-certbot', 'remove-writer', 'remove-admission-race', 'remove-directory-lock'):
+        outcome = ('Running', 'refusal', 'none', 'Running')
+    elif scenario == 'karing-final':
+        outcome = ('Running', 'observed', 'none', 'Not installed')
+    packages_before, packages_after = packages_for(attempt, scenario)
     references = [{"record": record, "sha256": digest(canonical(record))} for record in observations]
     scenario_value = {"actual_result":EVIDENCE_RESULT,"attempt_id":attempt["attempt_id"],"boundary":outcome[1],"candidate":candidate,
         "completed_at":proof["completed_at"],"evidence":references,"expected_result":EVIDENCE_RESULT,"final_state":outcome[3],"initial_state":outcome[0],
-        "link_id":"","operation_id":f"operation-{index+1}","packages_after":attempt["packages"],"packages_before":attempt["packages"],"preflight_at":state["started_at"],
+        "link_id":"","operation_id":f"operation-{index+1}","packages_after":packages_after,"packages_before":packages_before,"preflight_at":state["started_at"],
         "prior_scenario_sha256":prior,"recovery_direction":outcome[2],"scenario_id":scenario,"schema":"sbxr-v3-scenario-evidence-v3","source":None,
         "started_at":state["started_at"],"validated_at":validated_at,"vps_id":attempt["vps_id"],"vps_identity_sha256":attempt["vps_identity_sha256"]}
     detailed = {"attempt_id":attempt["attempt_id"],"observed_at":validated_at,"qualification_manifest_sha256":manifest_sha,"scenarios":prefix+[scenario_value],"schema":"sbxr-v3-packaged-live-evidence-v3"}
@@ -526,13 +590,21 @@ def parser():
     for name in ("controller-receipt","outside-receipt","outside-collected","rotation-request","rotation-ready"): seven.add_argument("--"+name,type=Path,required=True)
     eight=commands.add_parser("enable-schema1"); common(eight)
     for name in ("safe-state","connection-observation","connection-summary","subscription-observation"): eight.add_argument("--"+name,type=Path,required=True)
+    for scenario in ("link-precommit", "link-postcommit"):
+        link=commands.add_parser(scenario); common(link)
+        for name in ("controller-receipt", "outside-directory", "connection-observation", "connection-summary"):
+            link.add_argument("--"+name, type=Path, required=True)
+    for scenario in later.SCENARIOS:
+        command = commands.add_parser(scenario)
+        common(command)
+        command.add_argument('--sources-directory', type=Path, required=True)
     return root
 
 
 def main():
     options=parser().parse_args()
     try:
-        if options.command=="required-checks": print("\n".join(rule.check for rule in timing.scenario_rules(options.scenario)))
+        if options.command=="required-checks": print("\n".join(rule.check for rule in rules_for(options.scenario)))
         elif options.command=="retain-07": retain_07(options.state_directory)
         else: assemble(options)
     except (Refusal,OSError,subprocess.SubprocessError) as error:

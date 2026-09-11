@@ -232,35 +232,52 @@ grace and never requests a certificate.
 
 ## 09 — `link-precommit`
 
-Arm the reviewed transition helper before the zero-argument UI. It starts the
-UI in a unique transient cgroup, selects the displayed action number, and holds
-the actual process before the next Ownership Record publication only after the
-durable `stop authorized` checkpoint exists. Its protected pipes remain attached
-to the original SSH control process and it retains only record hashes and safe
-process/checkpoint metadata. Original-SSH continuity and all outside behavior
-still require independent observations:
+Keep the original scenario clock and prepare the manifest, boundary, validator,
+and accepted-prefix verification receipt described in `evidence-assembly.md`
+before the start entry. Initial state must be healthy schema-2 `Running` with an
+available Subscription Link. Run in the original SSH control session:
+
+```sh
+bash /run/sbxr-qualification/09-10-link-start.sh link-precommit
+```
+
+The entry checks the installed candidate and supported renewal route, retains
+the initial disclosure in a mode-0600 file, and publishes the protected trigger
+for the collector's outside runner. Wait for `link-link-precommit-ready.json`
+to prove the initial old URL returns HTTP 200 with the expected artifact over
+trusted TLS. The collector uses the signed outside runner and verifies its
+direct egress differs from the VPS. Do not launch a second outside driver.
+
+Before rotation, start `connection-probe.py` through the existing outside proxy
+client as in scenario 08, bound to this request digest and deadline. Retain its
+private JSONL trace and `connection-observation.py` summary through interruption
+and recovery. This independently proves that the same proxy connection survives;
+the HTTP subscription probe does not prove proxy traffic continuity.
+
+Record the preflight, initial-state, and effective-route operator observations
+before starting the controller. The controller opens the zero-argument menu,
+reviews and confirms `Rotate subscription link`, and holds the actual action
+process after exactly one target is prepared, while the source still serves:
 
 ```sh
 python3 /run/sbxr-qualification/transition-operator.py \
   interrupt link-precommit --timeout 90
 ```
 
-Initial state is healthy schema-2 `Running` with an available Subscription Link.
-Privately hash the current token, serving state, Ownership Record, configuration,
-and Client Identity; prove the old link returns the expected artifact from the
-outside runner and record the serving PID/start tick and active accepted-request
-set.
+At this first hold, the controller challenges the outside runner to open a TLS
+connection and send incomplete HTTP headers. Only after the matching acknowledgment
+does it allow the stop. At the next hold, the durable checkpoint is `stop
+authorized`, source process/cgroup descendants and owned or active accepted
+sockets must be gone, and the outside request must have closed in under five
+seconds. Timeout, response bytes, or a TLS failure is not closure evidence. The
+controller then interrupts the held UI process, before commitment. It preserves
+the source/target authority, actual process identities, runtime observations,
+and outside receipt bindings in `transition-link-precommit.json`.
 
-Start `Rotate subscription link` through `/usr/local/bin/sbxr`, enter `y`, and
-interrupt only after the real `Preparing subscription credential` phase and a
-durable Ownership Record with `subscription_rotation.checkpoint == "stop
-authorized"`. Prove exactly one target in `subscription-staging`, the old token
-and serving generation unchanged, and the target credential different by hash.
-If the checkpoint is already `committed`, this scenario failed; do not roll back.
-
-After the separately retained outside/process observations at the interrupted
-durable state,
-recover through the same public zero-argument UI:
+Record the boundary, prepared-target, and quiescence observations while still
+interrupted, before invoking recovery. The source remains authoritative; a
+`committed` record is a failed precommit scenario. Recover through the same
+public zero-argument menu:
 
 ```sh
 python3 /run/sbxr-qualification/transition-operator.py \
@@ -270,10 +287,22 @@ python3 /run/sbxr-qualification/transition-operator.py \
 The menu must show `Subscription status: Change incomplete` and
 offer `Finish subscription change`. Review its printed plan; it must select
 restoring the proved old generation and removing the unused replacement. Confirm
-with `y`. Require `PROXY-INSTALLATION-SUBSCRIPTION-CHANGE-CLEANED-UP`. Prove the
+with `y` through the controller. Require `PROXY-INSTALLATION-SUBSCRIPTION-CHANGE-CLEANED-UP`. Prove the
 rotation field and staging entries absent, the old token/state hashes restored,
 the old link usable outside, no replacement link disclosed, and unchanged proxy
-PID/configuration/Client Identity and proxy traffic.
+PID/configuration/Client Identity and proxy traffic. The controller verifies the
+selected source and empty staging. Complete the outside exchange:
+
+```sh
+bash /run/sbxr-qualification/09-10-link-finish.sh link-precommit
+```
+
+The finish entry privately discloses the selected old link, publishes the
+recovery-bound finalizer, waits for outside HTTP 200 and unchanged artifact and
+certificate, then retains `link-link-precommit-entry-final.json`. Finish the
+independent proxy trace and capture scans, record the remaining observations,
+and assemble `link-precommit` using `evidence-assembly.md`. Submit only the
+validator-accepted facts through the existing collector submission path.
 
 Append family checks `proxy-and-traffic-unchanged client-identity-unchanged` and:
 
@@ -287,21 +316,29 @@ serving descendant at the stop gate. A staged file alone does not prove it.
 
 ## 10 — `link-postcommit`
 
-Use the corresponding durable committed boundary and later recovery commands:
+Repeat the preparation, initial outside HTTP 200, independent proxy connection,
+and pre-action observations from scenario 09, using this request and scenario:
 
 ```sh
+bash /run/sbxr-qualification/09-10-link-start.sh link-postcommit
+# Wait for link-link-postcommit-ready.json; start the independent proxy trace.
 python3 /run/sbxr-qualification/transition-operator.py \
   interrupt link-postcommit --timeout 90
-# retain the required outside/process observations while interrupted
+# Record the interrupted boundary and prepared-target/quiescence observations.
 python3 /run/sbxr-qualification/transition-operator.py \
   recover link-postcommit --timeout 90
+bash /run/sbxr-qualification/09-10-link-finish.sh link-postcommit
 ```
 
-Repeat the private initial hashes and outside old-link success. Start the same
-reviewed rotation, but interrupt only after the Ownership Record durably contains
+The controller first observes the same prepared-target and source-stop holds,
+including outside pending-request closure, then advances to a third hold.
+Interrupt only after the Ownership Record durably contains
 `subscription_rotation.checkpoint == "committed"`, direction `forward`, and its
-authoritative `serving` equals the recorded target. Also prove the source serving
-PID and accepted requests are gone before observing any target request.
+authoritative `serving` equals the recorded target. This hold is before opening
+`/var/lib/sbxr/subscription-token` to publish the replacement. The next Ownership
+Record write would be too late: target publication and activation precede it.
+The controller rechecks source quiescence while the target is still staged,
+before observing any target request.
 
 The next zero-argument menu must offer `Finish subscription change`; its plan
 must select only the committed target. Confirm `y`. Require
@@ -309,7 +346,11 @@ must select only the committed target. Confirm `y`. Require
 the protected pipe, and prove staging/rotation residue absent. The old URL must
 return HTTP 404 from the outside runner, the new URL must return exactly one
 valid artifact, and proxy configuration, Client Identity, and traffic must be
-unchanged.
+unchanged. The finish entry and outside runner produce these final observations
+and `link-link-postcommit-entry-final.json`; retain the separate proxy trace,
+complete capture scans, and assemble `link-postcommit` with `operation-10`.
+Submit the validator-accepted facts. Do not copy either private link disclosure
+into the result facts or workflow captures.
 
 Append the same link family checks and:
 
@@ -318,7 +359,133 @@ one-prepared-target no-old-process-or-request-overlap target-only-finishing
 old-link-404 new-link-usable
 ```
 
+## Shared retained-source clock for scenarios 11–25
+
+After the collector creates one current request, start each later scenario once
+from the original SSH control session:
+
+```sh
+bash /run/sbxr-qualification/11-25-scenario-start.sh <scenario>
+```
+
+The wrapper repeats the manifest, request, candidate, package-phase, Running,
+secret-memory, and supported effective-route checks. It creates protected
+`scenario-<scenario>-begin.json` and
+`scenario-<scenario>-effective-route.json`. Scenarios 11–14 start against the
+initial package declaration. Scenarios 15–25 start against
+`after_snap_refresh`. A mismatch is a failed attempt, not permission to edit the
+request or phase record.
+
+Record the action boundary around the exact public or official operation named
+by the scenario:
+
+```sh
+python3 /run/sbxr-qualification/scenario-entry.py action-start <scenario>
+# Run the reviewed action, helper coordination, or manual Karing journey.
+python3 /run/sbxr-qualification/scenario-entry.py action-complete <scenario>
+```
+
+`action-start` belongs immediately before the action under test, after any
+required initial outside connection is ready. `action-complete` belongs after
+the action has completed, refused, or reached the scenario's required result,
+and before final outside, preservation, cleanup, and capture-coverage checks.
+These commands advance one immutable current-request chain; they do not accept a
+different scenario, request, start time, skipped phase, replaced prior file, or
+time outside the original deadline.
+
+Run every machine helper that supplies an assembler source through the reviewed
+capture wrapper, using the exact helper identity and output filename in the
+family evidence guide:
+
+```sh
+python3 /run/sbxr-qualification/capture-source.py \
+  --helper <allowlisted-helper> \
+  --output "$SCENARIO_SOURCE_DIRECTORY/<exact-name>.json" -- <helper-arguments>
+```
+
+The wrapper keeps an interactive helper's stdin attached, streams its real
+stdout events, rejects stderr on a successful helper, and retains a canonical
+`sbxr-v4-captured-source-v1` document bound to the current manifest, request,
+helper, interval, exit code, and event timestamps. A wrapper success is not a
+scenario pass. The family adapter must validate the actual records, retained
+bytes, and timing rules. Keep the source directory mode 0700 and every source
+file mode 0600.
+
+After all final checks, close the entry clock:
+
+```sh
+bash /run/sbxr-qualification/11-25-scenario-finish.sh <scenario>
+```
+
+The finish wrapper rechecks initial packages for scenarios 11–13, refreshed
+packages for 14–24, and `Not installed` for scenario 25. It creates
+`scenario-<scenario>-finish.json`, which is the assembler `--state` input.
+Scenario 14 intentionally starts with initial packages and finishes with the
+refreshed declaration. Do not run the finish wrapper before post-action checks,
+and do not treat local wrapper rehearsal as evidence that any live action ran.
+
+Retained source schemas, exact filenames, and live limitations are in
+[`evidence-managed.md`](evidence-managed.md),
+[`evidence-identity.md`](evidence-identity.md), and
+[`evidence-final.md`](evidence-final.md). The common assembly flags and proof
+contract are in [`evidence-assembly.md`](evidence-assembly.md).
+
 ## 11 — `managed-renewal`
+
+For every scenario 11–15, create a new private source directory and start the
+collector-owned outside witness before the action:
+
+```sh
+export SCENARIO_SOURCE_DIRECTORY=/absolute/private/scenario-sources
+install -d -m 0700 "$SCENARIO_SOURCE_DIRECTORY"
+bash /run/sbxr-qualification/scenario-subscription-input.sh "$SCENARIO" before
+deadline_unix=$(jq -er .deadline_unix "$SBXR_QUALIFICATION_REQUEST")
+while test ! -f "/run/sbxr-qualification/${SCENARIO_NUMBER}-outside-ready.json"; do
+  test "$(date +%s)" -lt "$deadline_unix" || exit 1
+  sleep 1
+done
+
+python3 /run/sbxr-qualification/capture-source.py --helper managed-evidence \
+  --output "$SCENARIO_SOURCE_DIRECTORY/${SCENARIO_NUMBER}-managed-before.json" -- \
+  snapshot --phase before \
+  --subscription "/run/sbxr-qualification/${SCENARIO_NUMBER}-subscription-before.json"
+python3 /run/sbxr-qualification/capture-source.py --helper managed-evidence \
+  --output "$SCENARIO_SOURCE_DIRECTORY/${SCENARIO_NUMBER}-renewal-before.json" -- history
+```
+
+Set `SCENARIO` and `SCENARIO_NUMBER` to the exact row being run (`managed-renewal`
+and `11` through `unsupported-route` and `15`). The collector starts the signed
+outside client, establishes one proxy TLS
+connection, and probes that same connection throughout the action. Wait for the
+ready receipt before `action-start`; it is published only after the initial TLS
+and proxy requests succeed. The collector writes
+`${SCENARIO_NUMBER}-proxy-trace.json` after a successful request following
+`action-complete` and removes its temporary client before reporting completion.
+
+After the scenario-specific action, record `action-complete`, provide the fresh
+final public disclosure, and wait for the same collector before taking final
+snapshots:
+
+```sh
+python3 /run/sbxr-qualification/scenario-entry.py action-complete "$SCENARIO"
+bash /run/sbxr-qualification/scenario-subscription-input.sh "$SCENARIO" final
+while test ! -f "/run/sbxr-qualification/${SCENARIO_NUMBER}-outside-result.json"; do
+  test "$(date +%s)" -lt "$deadline_unix" || exit 1
+  sleep 1
+done
+
+python3 /run/sbxr-qualification/capture-source.py --helper managed-evidence \
+  --output "$SCENARIO_SOURCE_DIRECTORY/${SCENARIO_NUMBER}-renewal-final.json" -- history
+python3 /run/sbxr-qualification/capture-source.py --helper managed-evidence \
+  --output "$SCENARIO_SOURCE_DIRECTORY/${SCENARIO_NUMBER}-managed-final.json" -- \
+  snapshot --phase final \
+  --subscription "/run/sbxr-qualification/${SCENARIO_NUMBER}-subscription-final.json"
+```
+
+Copy the collector-owned `NN-outside-ready.json`, `NN-outside-result.json`, and
+`NN-proxy-trace.json` unchanged into the source directory. Do not wrap or recreate
+those receipts. The complete source inventory and producer details are in
+[`evidence-managed.md`](evidence-managed.md).
 
 Record the effective timer/service/drop-ins and package identities. Start the
 reviewed coordinator in the original protected SSH control session; it installs
@@ -326,15 +493,17 @@ the persistent cgroup egress deny before starting the official unit and holds th
 actual revision-specific Certbot image before its first userspace instruction:
 
 ```sh
+python3 /run/sbxr-qualification/scenario-entry.py action-start managed-renewal
 coproc MANAGED_HOLD {
-  python3 /run/sbxr-qualification/managed-hold.py \
+  python3 /run/sbxr-qualification/capture-source.py \
+    --helper managed-hold \
+    --output "$SCENARIO_SOURCE_DIRECTORY/11-managed.json" -- \
     "$CERTBOT_INTERPRETER" "$CERTBOT_INTERPRETER_SHA256" --timeout 90
 }
 managed_pid=$MANAGED_HOLD_PID
 exec {managed_read}<&"${MANAGED_HOLD[0]}"
 exec {managed_write}>&"${MANAGED_HOLD[1]}"
 IFS= read -r MANAGED_HELD <&"$managed_read"
-printf '%s\n' "$MANAGED_HELD" > "$SBXR_OPERATOR_EVIDENCE_DIR/11-managed-held.json"
 ```
 
 Require the actual chain to reach the owned recorder and an actual Certbot child,
@@ -350,8 +519,11 @@ IFS= read -r MANAGED_FINAL <&"$managed_read"
 exec {managed_write}>&-
 exec {managed_read}<&-
 wait "$managed_pid"
-printf '%s\n' "$MANAGED_FINAL" > "$SBXR_OPERATOR_EVIDENCE_DIR/11-managed-final.json"
 ```
+
+The streamed lines are only the coordination display. The single
+`11-managed.json` capture is the retained `held`/`interrupted` source;
+`11-managed-final.json` is reserved for the final managed snapshot.
 
 Never invoke Certbot directly. The helper's kernel and harmless snap fixtures
 establish mechanics only; the observations above are the required live route,
@@ -363,6 +535,15 @@ and final planned production issuance. Prove one new lineage generation,
 canonical publication, accepted activation, outside trusted TLS and unchanged
 link/Client Identity/proxy traffic. Preserve the failed/unknown receipt alongside
 the later successful attempt; do not rewrite history.
+
+Before confirming the repair, arm the actual pre-clear producer through
+`capture-source.py --helper syscall-gate` as specified in
+[`evidence-managed.md`](evidence-managed.md). Its output is
+`11-repair-boundary.json`. At `boundary-held`, capture the still-present repaired
+history through `--helper managed-evidence` as `11-renewal-repaired.json`, then
+send `release` to that same capture. Capture `11-renewal-interrupted.json`
+immediately after the first coordinator interruption. Do not substitute the
+healthy cleared final history for either ephemeral source.
 
 Append managed family checks `proxy-and-traffic-unchanged
 client-identity-unchanged unchanged-link` and:
@@ -380,15 +561,17 @@ natural-timer-not-observed naturally-due-renewal-not-observed
 Start a fresh coordinator and retain this scenario's held record:
 
 ```sh
+python3 /run/sbxr-qualification/scenario-entry.py action-start recorder-live
 coproc MANAGED_HOLD {
-  python3 /run/sbxr-qualification/managed-hold.py \
+  python3 /run/sbxr-qualification/capture-source.py \
+    --helper managed-hold \
+    --output "$SCENARIO_SOURCE_DIRECTORY/12-managed.json" -- \
     "$CERTBOT_INTERPRETER" "$CERTBOT_INTERPRETER_SHA256" --timeout 90
 }
 managed_pid=$MANAGED_HOLD_PID
 exec {managed_read}<&"${MANAGED_HOLD[0]}"
 exec {managed_write}>&"${MANAGED_HOLD[1]}"
 IFS= read -r MANAGED_HELD <&"$managed_read"
-printf '%s\n' "$MANAGED_HELD" > "$SBXR_OPERATOR_EVIDENCE_DIR/12-managed-held.json"
 ```
 
 While the actual child is held, require a live receipt whose PID/start tick
@@ -405,7 +588,6 @@ IFS= read -r MANAGED_FINAL <&"$managed_read"
 exec {managed_write}>&-
 exec {managed_read}<&-
 wait "$managed_pid"
-printf '%s\n' "$MANAGED_FINAL" > "$SBXR_OPERATOR_EVIDENCE_DIR/12-managed-final.json"
 ```
 
 Wait for their real exit, then require the same receipt to acquire
@@ -429,15 +611,17 @@ guard, starts the official unit, and holds the recorder after whole-host release
 while shared renewal admission remains held:
 
 ```sh
+python3 /run/sbxr-qualification/scenario-entry.py action-start recorder-locks
 coproc RECORDER_BOUNDARY {
-  python3 /run/sbxr-qualification/recorder-boundary.py admission \
-    "$CERTBOT_INTERPRETER" "$CERTBOT_INTERPRETER_SHA256" --timeout 90
+  python3 /run/sbxr-qualification/capture-source.py \
+    --helper recorder-boundary \
+    --output "$SCENARIO_SOURCE_DIRECTORY/13-admission.json" -- \
+    admission "$CERTBOT_INTERPRETER" "$CERTBOT_INTERPRETER_SHA256" --timeout 90
 }
 recorder_pid=$RECORDER_BOUNDARY_PID
 exec {recorder_read}<&"${RECORDER_BOUNDARY[0]}"
 exec {recorder_write}>&"${RECORDER_BOUNDARY[1]}"
 IFS= read -r RECORDER_HELD <&"$recorder_read"
-printf '%s\n' "$RECORDER_HELD" > "$SBXR_OPERATOR_EVIDENCE_DIR/13-admission-held.json"
 ```
 
 Require its protected observation to identify the actual recorder and matching
@@ -452,7 +636,6 @@ IFS= read -r RECORDER_FINAL <&"$recorder_read"
 exec {recorder_write}>&-
 exec {recorder_read}<&-
 wait "$recorder_pid"
-printf '%s\n' "$RECORDER_FINAL" > "$SBXR_OPERATOR_EVIDENCE_DIR/13-admission-final.json"
 ```
 
 For a second, distinct invocation, open `/run/lock/sbxr.lock` in a separate root
@@ -460,8 +643,18 @@ process without symlinks and hold the same BSD `flock(2)` exclusive lock used by
 SBXR. In the second pre-existing root SSH control session, run:
 
 ```sh
-python3 /run/sbxr-qualification/hold-flock.py /run/lock/sbxr.lock \
-  --timeout 60 | tee "$SBXR_OPERATOR_EVIDENCE_DIR/13-whole-host-lock.json"
+coproc WHOLE_HOST {
+  python3 /run/sbxr-qualification/capture-source.py \
+    --helper hold-flock \
+    --output "$SCENARIO_SOURCE_DIRECTORY/13-whole-host.json" -- \
+    /run/lock/sbxr.lock --timeout 60
+}
+whole_host_pid=$WHOLE_HOST_PID
+exec {whole_host_read}<&"${WHOLE_HOST[0]}"
+exec {whole_host_write}>&"${WHOLE_HOST[1]}"
+IFS= read -r WHOLE_HOST_HELD <&"$whole_host_read"
+python3 /run/sbxr-qualification/capture-source.py --helper managed-evidence \
+  --output "$SCENARIO_SOURCE_DIRECTORY/13-wait-renewal-before.json" -- history
 ```
 
 After its `held` record, start the official service again from the original
@@ -469,6 +662,17 @@ control session while that lock remains held:
 
 ```sh
 systemctl start --no-block snap.certbot.renew.service
+python3 /run/sbxr-qualification/capture-source.py --helper observations \
+  --output "$SCENARIO_SOURCE_DIRECTORY/13-whole-host-wait.json" -- \
+  flocks /var/lib/sbxr/renewal-writer.lock /run/lock/sbxr.lock
+# Wait for terminal ExecMainStatus=125, then retain the unchanged history.
+python3 /run/sbxr-qualification/capture-source.py --helper managed-evidence \
+  --output "$SCENARIO_SOURCE_DIRECTORY/13-wait-renewal-final.json" -- history
+printf 'release\n' >&"$whole_host_write"
+IFS= read -r WHOLE_HOST_RELEASED <&"$whole_host_read"
+exec {whole_host_write}>&-
+exec {whole_host_read}<&-
+wait "$whole_host_pid"
 ```
 
 The recorder must refuse within 30 seconds with `ExecMainStatus=125`, without
@@ -501,6 +705,7 @@ SBXR writer is active.
 Run the supported refresh, naming only the declared snap:
 
 ```sh
+python3 /run/sbxr-qualification/scenario-entry.py action-start snap-refresh
 snap refresh certbot
 ```
 
@@ -536,8 +741,9 @@ filesystem. It refuses an active service or persistent timer, records the
 service invocation/start markers, and never starts that service:
 
 ```sh
-python3 /run/sbxr-qualification/route-control.py inject \
-  > /run/sbxr-qualification/15-route-injected.json
+python3 /run/sbxr-qualification/scenario-entry.py action-start unsupported-route
+python3 /run/sbxr-qualification/capture-source.py --helper route-control \
+  --output "$SCENARIO_SOURCE_DIRECTORY/15-route-inject.json" -- inject
 ```
 
 Run the packaged
@@ -549,8 +755,8 @@ new route could never execute.
 Restore through the same helper:
 
 ```sh
-python3 /run/sbxr-qualification/route-control.py restore \
-  > /run/sbxr-qualification/15-route-restored.json
+python3 /run/sbxr-qualification/capture-source.py --helper route-control \
+  --output "$SCENARIO_SOURCE_DIRECTORY/15-route-restore.json" -- restore
 ```
 
 It returns the same inode to the exact original path, reloads systemd, and
@@ -573,6 +779,9 @@ bypass-prevention-not-claimed historical-outcomes-unknown
 Use the exact cleanup-side quiescence boundary and later recovery commands:
 
 ```sh
+python3 /run/sbxr-qualification/identity-entry.py prepare identity-precommit
+# Wait for identity-precommit-outside-ready.json before action-start.
+python3 /run/sbxr-qualification/scenario-entry.py action-start identity-precommit
 python3 /run/sbxr-qualification/transition-operator.py \
   interrupt identity-precommit --timeout 90
 # retain the required outside/process observations while interrupted
@@ -629,9 +838,13 @@ startup observations; scenario 16 receipts cannot satisfy this scenario.
 Use the exact forward-side revocation boundary and later recovery commands:
 
 ```sh
+python3 /run/sbxr-qualification/identity-entry.py prepare identity-postcommit
+# Wait for identity-postcommit-outside-ready.json before action-start.
+python3 /run/sbxr-qualification/scenario-entry.py action-start identity-postcommit
 python3 /run/sbxr-qualification/transition-operator.py \
   interrupt identity-postcommit --timeout 90
 # retain the required outside/process observations while interrupted
+python3 /run/sbxr-qualification/identity-entry.py selected identity-postcommit
 python3 /run/sbxr-qualification/transition-operator.py \
   recover identity-postcommit --timeout 90
 ```
@@ -665,8 +878,12 @@ insert one qualification rule at INPUT position 1, outside the
 bytes and rejects any pre-existing qualification rule:
 
 ```sh
-python3 /run/sbxr-qualification/firewall-control.py add "$PUBLIC_IPV4" \
-  > /run/sbxr-qualification/18-firewall-added.json
+python3 /run/sbxr-qualification/capture-source.py --helper firewall-control \
+  --output "$SCENARIO_SOURCE_DIRECTORY/18-firewall-added-capture.json" -- add "$PUBLIC_IPV4" \
+  | tee /run/sbxr-qualification/18-firewall-added.json
+python3 /run/sbxr-qualification/identity-entry.py prepare identity-unavailable
+# Wait for identity-unavailable-outside-ready.json before action-start.
+python3 /run/sbxr-qualification/scenario-entry.py action-start identity-unavailable
 ```
 
 Immediately verify exactly one such rule with `iptables-save`. Prove both outside
@@ -688,17 +905,38 @@ and the separate subscription status fault. Because the link is unavailable,
 use the menu's separately confirmed `Show client configuration`; never read the
 configuration file as a client-delivery shortcut.
 
+Retain that confirmed replacement through the same public helper:
+
+```sh
+python3 /run/sbxr-qualification/identity-entry.py selected identity-unavailable
+```
+
 Delete exactly one qualification rule and require byte-for-byte restoration of
 the original filter table:
 
 ```sh
-python3 /run/sbxr-qualification/firewall-control.py remove \
-  > /run/sbxr-qualification/18-firewall-restored.json
+python3 /run/sbxr-qualification/capture-source.py --helper firewall-control \
+  --output "$SCENARIO_SOURCE_DIRECTORY/18-firewall-restored-capture.json" -- remove \
+  | tee /run/sbxr-qualification/18-firewall-restored.json
 ```
 
 Review `Repair subscription`; its plan must say runtime-only
 serving repair. Confirm once. Prove no Certbot child, no issuance, unchanged
 certificate lineage, restored same-link retrieval, and healthy proxy.
+
+After the repair succeeds, record `action-complete` and provide the restored
+public Subscription Link to the already-running collector:
+
+```sh
+python3 /run/sbxr-qualification/scenario-entry.py action-complete identity-unavailable
+bash /run/sbxr-qualification/scenario-subscription-input.sh identity-unavailable final
+while test ! -f /run/sbxr-qualification/identity-unavailable-repair-outside.json; do sleep 1; done
+```
+
+Only then capture `identity-unavailable-repair` as `identity-repair.json`. The
+collector-owned `identity-unavailable-repair-outside.json` binds the same
+outside runner, original request, restored link, trusted TLS, artifact, and
+certificate. Never create it from the VPS helper or stdin.
 
 Append the identity prefix and:
 
@@ -712,6 +950,19 @@ On any early failure, remove only that exact qualification rule before supported
 product cleanup and retain the removal observation.
 
 ## 19 — `lifecycle-menu`
+
+Bracket the whole public-menu helper with the generic action clock. The helper's
+internal `19-state.json` is diagnostic only; assembly uses the canonical shared
+`scenario-lifecycle-menu-finish.json`:
+
+```sh
+python3 /run/sbxr-qualification/scenario-entry.py action-start lifecycle-menu
+python3 /run/sbxr-qualification/capture-source.py \
+  --helper 19-lifecycle-menu.sh \
+  --output "$SCENARIO_SOURCE_DIRECTORY/19-lifecycle-menu.json"
+python3 /run/sbxr-qualification/scenario-entry.py action-complete lifecycle-menu
+bash /run/sbxr-qualification/11-25-scenario-finish.sh lifecycle-menu
+```
 
 Use `/usr/local/bin/sbxr` with no arguments and no scripted private role. Record
 the first frame so action numbers are bound to their displayed labels; never
@@ -737,14 +988,14 @@ Start a fresh coordinator and retain this scenario's held record:
 
 ```sh
 coproc MANAGED_HOLD {
-  python3 /run/sbxr-qualification/managed-hold.py \
+  python3 /run/sbxr-qualification/capture-source.py \
+    --helper managed-hold --output "$SCENARIO_SOURCE_DIRECTORY/20-managed.json" -- \
     "$CERTBOT_INTERPRETER" "$CERTBOT_INTERPRETER_SHA256" --timeout 90
 }
 managed_pid=$MANAGED_HOLD_PID
 exec {managed_read}<&"${MANAGED_HOLD[0]}"
 exec {managed_write}>&"${MANAGED_HOLD[1]}"
 IFS= read -r MANAGED_HELD <&"$managed_read"
-printf '%s\n' "$MANAGED_HELD" > "$SBXR_OPERATOR_EVIDENCE_DIR/20-managed-held.json"
 ```
 
 Prove child executable/arguments/cgroup/PID/boot ID/start tick and the matching
@@ -757,12 +1008,17 @@ configuration, package, account, or firewall rule may change. Interrupt through
 the coordinator and retain its final record:
 
 ```sh
+python3 /run/sbxr-qualification/capture-source.py --helper removal-refusal \
+  --output "$SCENARIO_SOURCE_DIRECTORY/remove-certbot-removal-refusal.json" -- \
+  remove-certbot
+```
+
+```sh
 printf 'interrupt\n' >&"$managed_write"
 IFS= read -r MANAGED_FINAL <&"$managed_read"
 exec {managed_write}>&-
 exec {managed_read}<&-
 wait "$managed_pid"
-printf '%s\n' "$MANAGED_FINAL" > "$SBXR_OPERATOR_EVIDENCE_DIR/20-managed-final.json"
 ```
 
 Require the official service's real receipt outcome and return to healthy
@@ -780,14 +1036,14 @@ Start the reviewed real outcome-write coordinator:
 
 ```sh
 coproc RECORDER_BOUNDARY {
-  python3 /run/sbxr-qualification/recorder-boundary.py writer \
-    "$CERTBOT_INTERPRETER" "$CERTBOT_INTERPRETER_SHA256" --timeout 90
+  python3 /run/sbxr-qualification/capture-source.py \
+    --helper recorder-boundary --output "$SCENARIO_SOURCE_DIRECTORY/21-writer.json" -- \
+    writer "$CERTBOT_INTERPRETER" "$CERTBOT_INTERPRETER_SHA256" --timeout 90
 }
 recorder_pid=$RECORDER_BOUNDARY_PID
 exec {recorder_read}<&"${RECORDER_BOUNDARY[0]}"
 exec {recorder_write}>&"${RECORDER_BOUNDARY[1]}"
 IFS= read -r RECORDER_HELD <&"$recorder_read"
-printf '%s\n' "$RECORDER_HELD" > "$SBXR_OPERATOR_EVIDENCE_DIR/21-writer-held.json"
 ```
 
 It must observe actual child completion first, then hold the actual recorder
@@ -801,12 +1057,17 @@ bounded refusal and unchanged owned resources. Release the writer and require
 the real outcome to be durably recorded:
 
 ```sh
+python3 /run/sbxr-qualification/capture-source.py --helper removal-refusal \
+  --output "$SCENARIO_SOURCE_DIRECTORY/remove-writer-removal-refusal.json" -- \
+  remove-writer
+```
+
+```sh
 printf 'release\n' >&"$recorder_write"
 IFS= read -r RECORDER_FINAL <&"$recorder_read"
 exec {recorder_write}>&-
 exec {recorder_read}<&-
 wait "$recorder_pid"
-printf '%s\n' "$RECORDER_FINAL" > "$SBXR_OPERATOR_EVIDENCE_DIR/21-writer-final.json"
 ```
 
 Then prove healthy Running.
@@ -829,7 +1090,9 @@ displayed `Complete removal` action and holds the actual prepared review at its
 exact `REMOVE SBXR` confirmation without submitting it:
 
 ```sh
-python3 /run/sbxr-qualification/admission-race-operator.py \
+python3 /run/sbxr-qualification/capture-source.py \
+  --helper admission-race-operator \
+  --output "$SCENARIO_SOURCE_DIRECTORY/22-admission-race.json" -- \
   "$CERTBOT_INTERPRETER" "$CERTBOT_INTERPRETER_SHA256" --timeout 90
 ```
 
@@ -873,11 +1136,10 @@ device/inode, and remains alive. `flock` is invalid:
 
 ```sh
 coproc CERTBOT_LOCKS {
-  python3 /run/sbxr-qualification/directory-locks.py
+  python3 /run/sbxr-qualification/capture-source.py \
+    --helper directory-locks --output "$SCENARIO_SOURCE_DIRECTORY/23-locks.json"
 }
 IFS= read -r LOCK_HOLDER_JSON <&"${CERTBOT_LOCKS[0]}"
-printf '%s\n' "$LOCK_HOLDER_JSON" \
-  > /run/sbxr-qualification/23-lock-holder.json
 ```
 
 Confirm all three holder locks through:
@@ -893,6 +1155,12 @@ device/inodes, contents, metadata and holder PIDs. End only the qualification
 holder, require clean exit, prove helper-created paths returned to absence and
 pre-existing paths kept their exact inode/content/metadata, confirm each
 remaining lock is `unlocked`, and prove healthy Running:
+
+```sh
+python3 /run/sbxr-qualification/capture-source.py --helper removal-refusal \
+  --output "$SCENARIO_SOURCE_DIRECTORY/remove-directory-lock-removal-refusal.json" -- \
+  remove-directory-lock
+```
 
 ```sh
 printf 'release\n' >&"${CERTBOT_LOCKS[1]}"
@@ -912,6 +1180,19 @@ owned-resources-preserved
 ```
 
 ## 24 — `secret-containment`
+
+Bracket the whole containment helper with the shared action clock. Its internal
+`24-state.json` is diagnostic only; assembly uses
+`scenario-secret-containment-finish.json`:
+
+```sh
+python3 /run/sbxr-qualification/scenario-entry.py action-start secret-containment
+python3 /run/sbxr-qualification/capture-source.py \
+  --helper 24-secret-containment.sh \
+  --output "$SCENARIO_SOURCE_DIRECTORY/24-secret-containment.json"
+python3 /run/sbxr-qualification/scenario-entry.py action-complete secret-containment
+bash /run/sbxr-qualification/11-25-scenario-finish.sh secret-containment
+```
 
 Use the protected V2 attempt inventory. It must bind exact, root-owned private
 operator-state, operator-evidence and transport roots. Those three roots must be

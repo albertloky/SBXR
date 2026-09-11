@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import hashlib
 import ipaddress
 import json
@@ -19,6 +20,10 @@ COMMENT = "sbxr-qualification-identity-unavailable"
 STATE = Path("/run/sbxr-qualification/identity-unavailable-firewall.json")
 IPTABLES = "/usr/sbin/iptables"
 IPTABLES_SAVE = "/usr/sbin/iptables-save"
+
+
+def now() -> str:
+    return dt.datetime.now(dt.timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def run(command: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -99,7 +104,8 @@ def add(ipv4: str, command=run) -> dict:
         after = rules(command)
         if qualification_rules(after) != [expected_saved_rule(ipv4)]:
             raise RuntimeError("exact qualification rule was not installed once")
-        return {**document, "installed": True}
+        return {**document, "installed": True, "qualification_rule_count": 1,
+                "installed_at": now()}
     except Exception:
         command([IPTABLES, "-w", "-D", "INPUT", *rule_arguments(ipv4)], False)
         try:
@@ -124,7 +130,8 @@ def remove(command=run) -> dict:
         raise RuntimeError("original firewall state was not restored")
     STATE.unlink()
     return {"schema": document["schema"], "ipv4": ipv4, "restored": True,
-            "after_sha256": hashlib.sha256(after_canonical.encode()).hexdigest()}
+            "qualification_rule_count": 0, "original_filter_sha256": document["before_sha256"],
+            "after_sha256": hashlib.sha256(after_canonical.encode()).hexdigest(), "restored_at": now()}
 
 
 def main(arguments: list[str] | None = None) -> int:

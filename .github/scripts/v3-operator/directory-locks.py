@@ -155,7 +155,13 @@ def main(arguments: list[str] | None = None) -> int:
     line = sys.stdin.readline() if readable else ""
     if line == "release\n":
         locks.revalidate()
+        released = [{"path": path, **metadata, "mode": f"{metadata['mode']:04o}",
+                     "created": created}
+                    for path, _, metadata, created in locks.descriptors]
         locks.release()
+        print(json.dumps({"schema": "sbxr-v4-certbot-directory-locks-released-v1",
+                          "pid": os.getpid(), "locks": released},
+                         sort_keys=True, separators=(",", ":")), flush=True)
         return 0
     locks.release()
     return 1
