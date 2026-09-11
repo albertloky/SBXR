@@ -961,6 +961,61 @@ func TestCandidateRoutesOneV3CandidateThroughPackagedLiveQualification(t *testin
 	assertActionsPinned(t, stable)
 }
 
+func TestCandidateV3TransportStagesPrivateManifest(t *testing.T) {
+	body, err := os.ReadFile(".github/workflows/candidate.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const marker = `ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'umask 077; `
+	_, remainder, found := strings.Cut(string(body), marker)
+	command, _, terminated := strings.Cut(remainder, `' < v3-transport.tgz`)
+	if !found || !terminated {
+		t.Fatal("V3 transport staging command not found")
+	}
+
+	directory := t.TempDir()
+	source := filepath.Join(directory, "source")
+	remote := filepath.Join(directory, "remote")
+	if err := os.Mkdir(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(remote, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manifest := filepath.Join(source, "qualification-manifest.json")
+	if err := os.WriteFile(manifest, []byte(`{"schema":"sbxr-qualification-manifest-v3"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(manifest, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	executable := filepath.Join(source, "sbxr-release")
+	if err := os.WriteFile(executable, []byte("fixture"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	archive := exec.Command("tar", "-C", source, "-czf", "-", "qualification-manifest.json", "sbxr-release")
+	archiveBytes, err := archive.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	command = "umask 077; " + strings.ReplaceAll(command, "/root/sbxr-qualification-v3", remote)
+	extract := exec.Command("bash", "-c", "set -euo pipefail; "+command)
+	extract.Stdin = bytes.NewReader(archiveBytes)
+	if output, err := extract.CombinedOutput(); err != nil {
+		t.Fatalf("V3 transport staging failed: %v\n%s", err, output)
+	}
+	for path, want := range map[string]os.FileMode{remote: 0o700, filepath.Join(remote, "qualification-manifest.json"): 0o600} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != want {
+			t.Errorf("%s mode = %04o, want %04o", filepath.Base(path), got, want)
+		}
+	}
+}
+
 func TestV3QualificationAcceptsTheCanonicalClientConfiguration(t *testing.T) {
 	script, err := os.ReadFile(".github/scripts/v3-packaged-live.sh")
 	if err != nil {
