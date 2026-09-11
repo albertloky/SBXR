@@ -9,7 +9,7 @@ preflight
 operator_exact_candidate
 prove_not_set_up
 initial_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-interrupt_at 'Start setup' y 'Validate configuration' before-activation
+interrupt_at 'Start setup' y 'Validate configuration' before-activation 900
 prove_status 'Setup incomplete'
 boundary_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 run_action 'Finish cleanup' y 'Code: PROXY-INSTALLATION-SETUP-CLEANED-UP'

@@ -8,7 +8,7 @@ test "$SCENARIO_START" = "$STARTED_AT"
 preflight
 prove_not_set_up
 initial_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-interrupt_at 'Start setup' y 'Activation committed' after-activation
+interrupt_at 'Start setup' y 'Activation committed' after-activation 900
 prove_status 'Setup incomplete'
 boundary_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 run_action 'Finish setup' y 'Code: PROXY-INSTALLATION-SETUP-COMPLETE'

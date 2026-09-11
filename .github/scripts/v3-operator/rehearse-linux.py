@@ -19,7 +19,7 @@ HERE = Path(__file__).resolve().parent
 TESTS = ['exec-gate', 'network-guard', 'systemd-guard', 'combined-deny',
          'combined-release', 'snap-chain-deny', 'snap-chain-release',
          'syscall-python', 'syscall-go', 'syscall-go-child', 'syscall-sequence', 'identity-startup', 'flock', 'route',
-         'firewall', 'sandbox-token-probe', 'protected-open-probe',
+         'firewall', 'sandbox-token-probe', 'protected-open-probe', 'interrupt-menu',
          'helper-unit-tests', 'entry-point-rehearsal']
 
 def source_hashes():
@@ -50,6 +50,7 @@ def run(args):
              command('route'), ['unshare','-n','--']+command('firewall'),
              ['/bin/bash',str(HERE/'rehearse-sandbox-token-probe.sh')],
              ['/bin/bash',str(HERE/'rehearse-protected-open-probe.sh')],
+             [py,'-m','unittest','discover','-s',str(HERE),'-p','test_interrupt_menu.py'],
              [py,'-m','unittest','discover','-s',str(HERE),'-p','test_*.py'],
              ['/bin/bash',str(HERE/'rehearse.sh')]]
     results=[]

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -909,7 +910,7 @@ func TestCandidateRoutesOneV3CandidateThroughPackagedLiveQualification(t *testin
 	if drift < 0 || refusal < 0 || restore < 0 || !(drift < refusal && refusal < restore) {
 		t.Fatal("V3 qualification does not apply mode 0600 drift before removal refusal and restore canonical mode 0640 after it")
 	}
-	interruptLaunch := strings.Index(v3Path, `/usr/local/bin/sbxr <"$fifo"`)
+	interruptLaunch := strings.Index(v3Path, `process = subprocess.Popen([executable]`)
 	if interruptLaunch < 0 || !strings.Contains(v3Path[:interruptLaunch], `action="$(menu_number "$label")"`) || !strings.Contains(v3Path[:interruptLaunch], `test -n "$action"`) {
 		t.Fatal("V3 qualification resolves and validates an interruption action after launching its target process")
 	}
@@ -1040,92 +1041,19 @@ func TestPackagedActionReadsItsResultNotLifecycleStatus(t *testing.T) {
 }
 
 func TestPackagedInterruptionRequiresObservedEventAndForcedDeath(t *testing.T) {
-	source, err := os.ReadFile(".github/scripts/v3-packaged-live.sh")
-	if err != nil {
-		t.Fatal(err)
+	if runtime.GOOS != "linux" {
+		t.Skip("real process-group interruption and subreaper checks require Linux")
 	}
-	start := strings.Index(string(source), "interrupt_at() {")
-	if start < 0 {
-		t.Fatal("interrupt_at function not found")
-	}
-	end := strings.Index(string(source)[start:], "\n}\n\ninstall_candidate() {")
-	if end < 0 {
-		t.Fatal("interrupt_at function not found")
-	}
-	for _, test := range []struct {
-		name, progress    string
-		signalFailure     bool
-		jobControl        bool
-		stopNotifications int
-		wantSuccess       bool
-	}{
-		{name: "missing event", wantSuccess: false},
-		{name: "observed event", progress: "Progress: Expected event", wantSuccess: true},
-		{name: "observed event with job control", progress: "Progress: Expected event", jobControl: true, wantSuccess: true},
-		{name: "observed event with repeated stop notifications", progress: "Progress: Expected event", stopNotifications: 2, wantSuccess: true},
-		{name: "signal failure after event", progress: "Progress: Expected event", signalFailure: true, wantSuccess: false},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			directory := t.TempDir()
-			work := filepath.Join(directory, "work")
-			binary := filepath.Join(directory, "sbxr")
-			pidPath := filepath.Join(directory, "pid")
-			if err := os.Mkdir(work, 0o700); err != nil {
-				t.Fatal(err)
-			}
-			fake := "#!/bin/sh\nexec 2>/dev/null\nIFS= read -r _\nif test -n \"$FAKE_PROGRESS\"; then printf '%s\\n' \"$FAKE_PROGRESS\"; fi\nwhile IFS= read -r _; do :; done\n"
-			if err := os.WriteFile(binary, []byte(fake), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			function := string(source)[start : start+end+2]
-			function = strings.ReplaceAll(function, "/usr/local/bin/sbxr", binary)
-			if test.progress == "" {
-				// Prove repeated missing observations and cleanup, not the production wait duration.
-				function = strings.Replace(function, "seq 1 6000", "seq 1 3", 1)
-			}
-			function = strings.Replace(function, "local process=$!", "local process=$!\nprintf '%s\\n' \"$process\" > "+strconv.Quote(pidPath), 1)
-			if test.signalFailure {
-				function = strings.Replace(function, `kill -SIGSTOP "$process" 2>/dev/null`, "false", 1)
-			}
-			sandbox := "set -euo pipefail\n"
-			if test.jobControl {
-				sandbox += "set -m\n"
-			}
-			if test.stopNotifications > 0 {
-				sandbox += fmt.Sprintf("wait_calls=0\nwait() { wait_calls=$((wait_calls + 1)); if test \"$wait_calls\" -le %d; then return $((128 + $(kill -l STOP))); fi; builtin wait \"$@\"; }\n", test.stopNotifications)
-			}
-			sandbox += "WORK=" + work + "\nmenu_number() { printf '1\\n'; }\nscan_vps_capture() { return 0; }\n" + function + "\ninterrupt_at 'Start setup' y 'Expected event' test\n"
-			script := filepath.Join(directory, "test.sh")
-			if err := os.WriteFile(script, []byte(sandbox), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
-			defer cancel()
-			command := exec.CommandContext(ctx, "bash", script)
-			command.Env = append(os.Environ(), "FAKE_PROGRESS="+test.progress)
-			output, runErr := command.CombinedOutput()
-			pidBody, readErr := os.ReadFile(pidPath)
-			if readErr == nil {
-				defer exec.Command("kill", "-KILL", strings.TrimSpace(string(pidBody))).Run()
-			}
-			if ctx.Err() != nil {
-				t.Fatalf("interruption left the child alive: %v, output = %s", ctx.Err(), output)
-			}
-			if (runErr == nil) != test.wantSuccess {
-				t.Fatalf("interruption error = %v, output = %s", runErr, output)
-			}
-			if readErr != nil {
-				t.Fatalf("fake process PID was not recorded: %v", readErr)
-			}
-			if exec.Command("kill", "-0", strings.TrimSpace(string(pidBody))).Run() == nil {
-				t.Fatal("interruption left the child process alive")
-			}
-			for _, name := range []string{"input-test", "output-test"} {
-				if _, err := os.Lstat(filepath.Join(work, name)); !os.IsNotExist(err) {
-					t.Fatalf("%s remains: %v", name, err)
-				}
-			}
-		})
+	// Exercise the real packaged function, including timeout, signal, lock and
+	// descendant behavior. Rewriting shell snippets and mocking wait/kill hid
+	// the live orphan failure and no longer represents the controller seam.
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+	defer cancel()
+	command := exec.CommandContext(ctx, "python3", "-m", "unittest", "discover", "-v",
+		"-s", ".github/scripts/v3-operator", "-p", "test_interrupt_menu.py")
+	command.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("packaged interruption process fixture: %v\n%s", err, output)
 	}
 }
 

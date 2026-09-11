@@ -152,6 +152,14 @@ requires the stated durable record, process, listener, lock, or outside-client
 observation. If the durable observation cannot be made before the action moves
 on, stop the attempt.
 
+Baseline setup calls allow 900 seconds for that progress line, bounded by the
+unchanged collector deadline. They run the menu in its own session and reap all
+owned descendants after interruption or failure, including adopted children that
+left the session. The real Linux interruption fixture must pass before candidate
+preparation. A timeout, early exit, or incomplete descendant cleanup fails the
+attempt; retain the helper's reason and use supported cleanup after package work
+has stopped.
+
 ## 07 — `identity-absent` outside-session exchange
 
 The signed candidate's existing Ubuntu amd64 `acceptance-vps` job owns the

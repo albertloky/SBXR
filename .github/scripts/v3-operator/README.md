@@ -75,6 +75,12 @@ extra continuation. The startup-unit fixture uses a separate temporary service
 and target to prove that denied ordinary starts leave a later authorized start
 possible; it never starts SBXR.
 
+The `interrupt-menu` fixture runs the real packaged `interrupt_at` function with
+a temporary executable. It covers a delayed progress boundary, timeout, early
+menu exit, descendants holding locks, and a descendant that creates another
+session. It verifies that the controller reaps its descendants while preserving
+an unrelated process. No fixture installs or invokes the SBXR product.
+
 ## Operator bundle and inputs
 
 For an authorized future attempt, retain an exact copy and digest inventory of
@@ -129,6 +135,14 @@ cleanup procedure; it must never be counted as passed evidence or retried into
 a pass. Do not wrap a scenario script, required assertion, candidate check,
 mutation, or evidence submission, and do not use the wrapper's `$?` as proof.
 Those required operations retain their existing strict failure behavior.
+
+Baseline setup interruption waits use an explicit 900-second monotonic timeout,
+capped by the collector's original scenario deadline. This allows the existing
+five-minute package commands to reach the requested progress boundary. The menu
+runs in an isolated session; a dedicated Linux subreaper kills the owned process
+group and reaps any adopted descendants on interruption, timeout, or early exit.
+The helper reports a secret-safe reason and whether descendant cleanup finished.
+A timeout still fails the signed attempt; it never becomes an observed boundary.
 
 The helper tests use a persistent Bash process on a local PTY, reproduce the
 bare-probe session loss, and verify same-process continuity and exact nonzero

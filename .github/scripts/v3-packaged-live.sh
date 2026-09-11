@@ -78,42 +78,171 @@ prove_status() {
 
 interrupt_at() {
   local WORK=${WORK:-/run/sbxr-qualification}
-  local label=$1 confirmation=$2 event=$3 number=$4 event_observed=false interrupted=false scan_status=0 wait_status=0
-  local fifo="$WORK/input-$number" output="$WORK/output-$number" action
-  action="$(menu_number "$label")"
-  test -n "$action"
-  mkfifo "$fifo"
-  exec 3<>"$fifo"
-  /usr/local/bin/sbxr <"$fifo" >"$output" &
-  local process=$!
-  printf '%s\n%s\n' "$action" "$confirmation" >&3
-  for _ in $(seq 1 6000); do
-    if grep -F "Progress: $event" "$output" >/dev/null; then event_observed=true; break; fi
-    if ! kill -0 "$process" 2>/dev/null; then break; fi
-    sleep .01
-  done
-  if test "$event_observed" = true && kill -0 "$process" 2>/dev/null; then
-    if kill -SIGSTOP "$process" 2>/dev/null && kill -SIGKILL "$process" 2>/dev/null; then interrupted=true; fi
-  elif kill -0 "$process" 2>/dev/null; then
-    kill -SIGKILL "$process" 2>/dev/null || true
+  local label=$1 confirmation=$2 event=$3 number=$4 timeout_seconds=${5:-900}
+  local output="$WORK/output-$number" action status=0 scan_status=0
+  test ! -e "$output" && test ! -L "$output" || return 1
+  action="$(menu_number "$label")" || return 1
+  test -n "$action" || return 1
+  # Keep this controller in the packaged module: historical and flat operator
+  # bundles both distribute this file. It owns only the menu it starts.
+  python3 - "${SBXR_EXECUTABLE:-/usr/local/bin/sbxr}" "$output" "$event" \
+    "$action" "$confirmation" "$timeout_seconds" "${SBXR_QUALIFICATION_REQUEST:-}" <<'PY' || status=$?
+import ctypes
+import json
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
+
+executable, output, event, action, confirmation, seconds, request = sys.argv[1:]
+process = None
+reason = 'controller-error'
+observed = False
+interrupted = False
+cleaned = True
+returncode = None
+received_signal = None
+
+
+def control_signal(signum, frame):
+    # Do not unwind Popen between fork and assignment of the owned process.
+    global received_signal
+    received_signal = signum
+
+
+def cleanup():
+    # The session leader remains unreaped until after signaling, so its PGID
+    # cannot be recycled. Subreaper adoption also covers descendants that leave
+    # the process group; only this dedicated controller's children are reaped.
+    for signum in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        signal.signal(signum, signal.SIG_IGN)
+    if process is None:
+        return None
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    until = time.monotonic() + 5
+    code = process.wait(timeout=max(0.01, until - time.monotonic()))
+    children = Path('/proc/self/task') / str(os.getpid()) / 'children'
+    while True:
+        try:
+            pid, _ = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            return code
+        if pid:
+            continue
+        # A reparented child cannot have its PID reused until we reap it.
+        # Killing each adopted child causes its remaining descendants to be
+        # adopted here in turn, including children in another session.
+        for child in children.read_text().split():
+            try:
+                os.kill(int(child), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        if time.monotonic() >= until:
+            raise TimeoutError('descendant cleanup incomplete')
+        time.sleep(0.01)
+
+
+try:
+    if sys.platform != 'linux' or not seconds.isdecimal() or not 0 < int(seconds) <= 1800:
+        raise ValueError('invalid interruption timeout or runtime')
+    remaining = float(seconds)
+    if request:
+        document = json.loads(Path(request).read_bytes())
+        deadline = document['deadline_unix']
+        if type(deadline) is not int:
+            raise ValueError('invalid collector deadline')
+        remaining = min(remaining, deadline - time.time())
+    if remaining <= 0:
+        reason = 'deadline-expired-before-start'
+        raise TimeoutError(reason)
+    deadline = time.monotonic() + remaining
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+        raise OSError(ctypes.get_errno(), 'subreaper unavailable')
+    for signum in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        signal.signal(signum, control_signal)
+    if received_signal is not None:
+        raise InterruptedError('controller interrupted')
+    descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, 'wb') as capture:
+        process = subprocess.Popen([executable], stdin=subprocess.PIPE,
+                                   stdout=capture, stderr=capture,
+                                   start_new_session=True)
+        if received_signal is not None:
+            raise InterruptedError('controller interrupted')
+        process.stdin.write((action + '\n' + confirmation + '\n').encode())
+        process.stdin.flush()
+        target = ('Progress: ' + event).encode()
+        pending = b''
+        discard_line = False
+        with open(output, 'rb') as reader:
+            while True:
+                if received_signal is not None:
+                    raise InterruptedError('controller interrupted')
+                if time.monotonic() >= deadline:
+                    reason = 'deadline-before-boundary'
+                    break
+                # Once a line is longer than the target it cannot match. Keep
+                # scanning through its newline without buffering arbitrary APT
+                # output, and preserve partial target lines across reads.
+                parts = reader.read(65536).split(b'\n')
+                for index, part in enumerate(parts):
+                    if not discard_line:
+                        pending += part
+                        if len(pending) > len(target):
+                            pending = b''
+                            discard_line = True
+                    if index < len(parts) - 1:
+                        if not discard_line and pending == target:
+                            observed = True
+                            break
+                        pending = b''
+                        discard_line = False
+                if received_signal is not None:
+                    raise InterruptedError('controller interrupted')
+                if observed:
+                    os.kill(process.pid, signal.SIGSTOP)
+                    interrupted = True
+                    reason = 'boundary-observed'
+                    break
+                if os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT):
+                    reason = 'menu-exited-before-boundary'
+                    break
+                time.sleep(min(0.01, max(0, deadline - time.monotonic())))
+except InterruptedError:
+    reason = 'controller-interrupted'
+except Exception:
+    # Output may contain protected values. Retain it only for the caller's
+    # existing secret scan, and report no command/output/exception details.
+    pass
+finally:
+    try:
+        returncode = cleanup()
+    except Exception:
+        cleaned = False
+    if process is not None and process.stdin is not None:
+        try:
+            process.stdin.close()
+        except BrokenPipeError:
+            pass
+
+if received_signal is not None:
+    reason = 'controller-interrupted'
+passed = (observed and interrupted and cleaned and received_signal is None
+          and returncode == -signal.SIGKILL)
+print('INTERRUPTION_RESULT reason=%s descendants_reaped=%s' % (reason, str(cleaned).lower()))
+sys.exit(0 if passed else 1)
+PY
+  if test -f "$output"; then
+    scan_vps_capture "$output" || scan_status=$?
+    rm -f -- "$output"
   fi
-  if test "$interrupted" != true && kill -0 "$process" 2>/dev/null; then
-    kill -SIGCONT "$process" 2>/dev/null || true
-    kill -SIGKILL "$process" 2>/dev/null || true
-  fi
-  wait "$process" 2>/dev/null || wait_status=$?
-  while test "$wait_status" -eq "$((128 + $(kill -l STOP)))"; do
-    sleep .01
-    wait_status=0
-    wait "$process" 2>/dev/null || wait_status=$?
-  done
-  exec 3>&-
-  scan_vps_capture "$output" || scan_status=$?
-  rm -f "$fifo" "$output"
-  test "$scan_status" -eq 0
-  test "$event_observed" = true
-  test "$interrupted" = true
-  test "$wait_status" -eq 137
+  test "$status" -eq 0 && test "$scan_status" -eq 0
 }
 
 install_candidate() {
