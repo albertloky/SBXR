@@ -21,6 +21,7 @@ from pathlib import Path
 import platform
 import re
 import secrets
+import select
 import shlex
 import shutil
 import signal
@@ -260,8 +261,38 @@ class TLSConnection:
             body = response.read(4097)
             require(response.status == 200 and not response.will_close and len(body) <= 4096)
             response.close()
-        except (ConnectionResetError, BrokenPipeError, ssl.SSLEOFError, http.client.RemoteDisconnected) as error:
+        except (ConnectionResetError, BrokenPipeError, ssl.SSLEOFError, ssl.SSLZeroReturnError,
+                http.client.RemoteDisconnected) as error:
             raise ClosedTransport() from error
+        except ssl.SSLError as error:
+            if self.transport_closed_after_record_error(error):
+                raise ClosedTransport() from error
+            raise
+
+    def transport_closed_after_record_error(self, error):
+        # sing-box 1.13.19 can end an established proxied TLS stream with a bad
+        # record MAC before closing TCP. The TLS error alone proves nothing:
+        # inspect the same underlying socket for actual EOF/reset, without
+        # consuming buffered bytes, reconnecting, or extending the deadline.
+        if (type(error) is not ssl.SSLError or error.errno != ssl.SSL_ERROR_SSL
+                or getattr(error, "library", None) != "SSL"
+                or getattr(error, "reason", None) != "DECRYPTION_FAILED_OR_BAD_RECORD_MAC"
+                or self.sock.pending() != 0):
+            return False
+        deadline = time.monotonic() + self.backend.timeout()
+        with socket.socket(fileno=os.dup(self.sock.fileno())) as transport:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not select.select([transport], [], [], remaining)[0]:
+                    return False
+                try:
+                    # Per-call nonblocking avoids changing the flags shared by
+                    # the duplicate and the still-owned SSL socket.
+                    return transport.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b""
+                except BlockingIOError:
+                    continue
+                except ConnectionResetError:
+                    return True
 
     def close(self):
         if self.sock:
@@ -500,7 +531,8 @@ def produce(backend, bound, state):
         try:
             old = backend.connect()
             old.request()
-        except (ConnectionResetError, BrokenPipeError, ssl.SSLEOFError, ClosedTransport, http.client.RemoteDisconnected):
+        except (ConnectionResetError, BrokenPipeError, ssl.SSLEOFError, ssl.SSLZeroReturnError,
+                ClosedTransport, http.client.RemoteDisconnected):
             refused = True
         finally:
             if old:

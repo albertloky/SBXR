@@ -1,11 +1,13 @@
 """No live targets: exercise the producer, receipt checker and OS/network seams."""
 import copy
+import fcntl
 import importlib.util
 import json
 import os
 from pathlib import Path
 import socket
 import subprocess
+import struct
 import sys
 import tempfile
 import unittest
@@ -361,6 +363,108 @@ class SafetySeamTests(unittest.TestCase):
         connection.sock.sendall.side_effect = ConnectionResetError("fixture reset")
         with self.assertRaises(identity.ClosedTransport):
             connection.request()
+
+    def test_bad_record_mac_requires_actual_underlying_transport_closure(self):
+        for peer_state in ("eof", "buffered", "open"):
+            with self.subTest(peer_state=peer_state):
+                local, peer = socket.socketpair()
+                try:
+                    local.settimeout(1)
+                    if peer_state == "eof":
+                        peer.shutdown(socket.SHUT_WR)
+                    elif peer_state == "buffered":
+                        peer.sendall(b"unconsumed")
+                    error = identity.ssl.SSLError(identity.ssl.SSL_ERROR_SSL, "fixture record error")
+                    error.library = "SSL"
+                    error.reason = "DECRYPTION_FAILED_OR_BAD_RECORD_MAC"
+                    connection = identity.TLSConnection.__new__(identity.TLSConnection)
+                    connection.backend = mock.Mock()
+                    connection.backend.timeout.return_value = .02
+                    connection.sock = mock.Mock()
+                    connection.sock.fileno.return_value = local.fileno()
+                    connection.sock.pending.return_value = 0
+                    connection.sock.sendall.side_effect = error
+                    flags_before = fcntl.fcntl(local.fileno(), fcntl.F_GETFL)
+                    if peer_state == "eof":
+                        with self.assertRaises(identity.ClosedTransport) as raised:
+                            connection.request()
+                        self.assertIs(raised.exception.__cause__, error)
+                    elif peer_state == "buffered":
+                        with self.assertRaises(identity.ssl.SSLError) as raised:
+                            connection.request()
+                        self.assertIs(raised.exception, error)
+                        self.assertEqual(local.recv(10), b"unconsumed")
+                    else:
+                        with self.assertRaises(identity.ssl.SSLError) as raised:
+                            connection.request()
+                        self.assertIs(raised.exception, error)
+                    # The closure inspection closes only its duplicate descriptor.
+                    self.assertGreaterEqual(local.fileno(), 0)
+                    os.fstat(local.fileno())
+                    self.assertEqual(fcntl.fcntl(local.fileno(), fcntl.F_GETFL), flags_before)
+                finally:
+                    local.close()
+                    peer.close()
+
+    def test_bad_record_mac_with_decrypted_pending_bytes_is_not_closure(self):
+        error = identity.ssl.SSLError(identity.ssl.SSL_ERROR_SSL, "fixture record error")
+        error.library, error.reason = "SSL", "DECRYPTION_FAILED_OR_BAD_RECORD_MAC"
+        connection = identity.TLSConnection.__new__(identity.TLSConnection)
+        connection.backend, connection.sock = mock.Mock(), mock.Mock()
+        connection.sock.pending.return_value = 1
+        connection.sock.sendall.side_effect = error
+        with mock.patch.object(identity.os, "dup") as duplicate:
+            with self.assertRaises(identity.ssl.SSLError) as raised:
+                connection.request()
+            self.assertIs(raised.exception, error)
+            duplicate.assert_not_called()
+
+    def test_bad_record_mac_with_real_tcp_reset_is_closed_transport(self):
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+            with socket.create_connection(listener.getsockname()) as local:
+                peer, _ = listener.accept()
+                peer.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+                peer.close()
+                error = identity.ssl.SSLError(identity.ssl.SSL_ERROR_SSL, "fixture record error")
+                error.library, error.reason = "SSL", "DECRYPTION_FAILED_OR_BAD_RECORD_MAC"
+                connection = identity.TLSConnection.__new__(identity.TLSConnection)
+                connection.backend, connection.sock = mock.Mock(), mock.Mock()
+                connection.backend.timeout.return_value = 1
+                connection.sock.fileno.return_value = local.fileno()
+                connection.sock.pending.return_value = 0
+                connection.sock.sendall.side_effect = error
+                with self.assertRaises(identity.ClosedTransport) as raised:
+                    connection.request()
+                self.assertIs(raised.exception.__cause__, error)
+
+    def test_other_tls_errors_cannot_become_closure_even_if_socket_is_closed(self):
+        for number, library, reason in (
+                (identity.ssl.SSL_ERROR_SSL, "SSL", "APPLICATION_DATA_AFTER_CLOSE_NOTIFY"),
+                (identity.ssl.SSL_ERROR_SSL, "SSL", "fixture-secret-reason"),
+                (identity.ssl.SSL_ERROR_SSL, "fixture-secret-library", "DECRYPTION_FAILED_OR_BAD_RECORD_MAC"),
+                (identity.ssl.SSL_ERROR_SYSCALL, "SSL", "DECRYPTION_FAILED_OR_BAD_RECORD_MAC")):
+            with self.subTest(number=number, library=library, reason=reason):
+                error = identity.ssl.SSLError(number, "fixture secret detail")
+                error.library, error.reason = library, reason
+                connection = identity.TLSConnection.__new__(identity.TLSConnection)
+                connection.backend, connection.sock = mock.Mock(), mock.Mock()
+                connection.sock.sendall.side_effect = error
+                with mock.patch.object(identity.os, "dup") as duplicate:
+                    with self.assertRaises(identity.ssl.SSLError) as raised:
+                        connection.request()
+                    self.assertIs(raised.exception, error)
+                    duplicate.assert_not_called()
+
+    def test_exact_clean_tls_shutdown_is_closed_transport(self):
+        connection = identity.TLSConnection.__new__(identity.TLSConnection)
+        connection.backend, connection.sock = mock.Mock(), mock.Mock()
+        error = identity.ssl.SSLZeroReturnError(identity.ssl.SSL_ERROR_ZERO_RETURN, "closed cleanly")
+        connection.sock.sendall.side_effect = error
+        with self.assertRaises(identity.ClosedTransport) as raised:
+            connection.request()
+        self.assertIs(raised.exception.__cause__, error)
 
     def test_wrong_client_listener_fails_before_any_traffic_or_ready_receipt(self):
         manifest, request, state = inputs()

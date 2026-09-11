@@ -218,6 +218,16 @@ public menu's action output. An action that returns early fails immediately;
 known refusal codes are retained without copying raw output. This distinguishes
 a product refusal from a tracing timeout even when the menu remains open.
 
+The identity outside observer proves closure on the original connection. When
+sing-box 1.13.19 stops, an established proxied TLS stream can report
+`DECRYPTION_FAILED_OR_BAD_RECORD_MAC` before its TCP EOF. For that exact OpenSSL
+error, the observer checks a duplicate of the same socket descriptor for EOF or
+reset within the existing timeout. It does not reconnect or consume queued
+bytes. Pending TLS data, queued TCP data, an open connection, and other TLS
+errors fail the check; the TLS error alone never counts as closure. The helper
+tests cover actual stream EOF/reset, buffered data, timeout, and unchanged
+descriptor flags.
+
 For every nonbaseline scenario, `effective-route.py` observes the supported
 Certbot timer-to-service route before timer stops or injected route faults.
 Scenarios 07 and 08 invoke it automatically after supported setup; the 09/10
