@@ -74,6 +74,15 @@ func TestAdapterEncodesTheProtectedPackagedServerConfiguration(t *testing.T) {
 		t.Fatalf("EncodeServerConfiguration() = %q, %v", body, err)
 	}
 	text := string(body)
+	var configuration struct {
+		Log map[string]any `json:"log"`
+	}
+	if err := json.Unmarshal(body, &configuration); err != nil {
+		t.Fatal("server configuration is not JSON")
+	}
+	if !reflect.DeepEqual(configuration.Log, map[string]any{"disabled": true}) {
+		t.Fatalf("server logging must be disabled, got %#v", configuration.Log)
+	}
 	for _, required := range []string{`"type":"vless"`, `"listen":"::"`, `"listen_port":443`, `"flow":"xtls-rprx-vision"`, `"server":"microsoft.com"`, `"server_port":443`, `"server_name":"microsoft.com"`, `"private_key":"` + identity.PrivateKey + `"`, `"short_id":["` + identity.ShortID + `"]`} {
 		if !regexp.MustCompile(regexp.QuoteMeta(required)).MatchString(text) {
 			t.Errorf("configuration missing %s: %s", required, text)
@@ -97,6 +106,15 @@ func TestAdapterEncodesTheOfficialOutsideClientConfiguration(t *testing.T) {
 		t.Fatalf("EncodeClientConfiguration() = %q, %v", body, err)
 	}
 	text := string(body)
+	var configuration struct {
+		Log map[string]any `json:"log"`
+	}
+	if err := json.Unmarshal(body, &configuration); err != nil {
+		t.Fatal("client configuration is not JSON")
+	}
+	if !reflect.DeepEqual(configuration.Log, map[string]any{"level": "warn", "timestamp": true}) {
+		t.Fatalf("client logging contract changed, got %#v", configuration.Log)
+	}
 	for _, required := range []string{
 		`"type":"mixed"`, `"listen":"127.0.0.1"`, `"listen_port":2080`,
 		`"type":"vless"`, `"server":"8.8.8.8"`, `"server_port":443`,

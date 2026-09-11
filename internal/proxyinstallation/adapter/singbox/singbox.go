@@ -111,7 +111,7 @@ func (adapter Adapter) EncodeServerConfiguration(identity Identity, destinationA
 		return nil, fmt.Errorf("server configuration refused")
 	}
 	configuration := map[string]any{
-		"log": map[string]any{"level": "warn", "timestamp": true},
+		"log": map[string]any{"disabled": true},
 		"inbounds": []any{map[string]any{
 			"type": "vless", "tag": "vless-in", "listen": "::", "listen_port": 443,
 			"users": []any{map[string]any{"uuid": identity.UUID, "flow": "xtls-rprx-vision"}},
