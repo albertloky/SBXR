@@ -9,13 +9,15 @@ case "$scenario" in link-precommit|link-postcommit|managed-renewal|recorder-live
 operator_expect_scenario "$scenario"
 operator_exact_candidate
 prove_running
-details=$(printf '%s\n\n0\n' "$(menu_number 'View details')" | /usr/local/bin/sbxr)
+number=$(menu_number 'View details')
+test -n "$number"
+details=$(printf '%s\n\n0\n' "$number" | /usr/local/bin/sbxr)
 link=$(printf '%s\n' "$details" | sed -n '/^https:\/\//p')
 test "$(printf '%s\n' "$link" | wc -l | tr -d ' ')" -eq 1
 certificate=$(openssl x509 -in /etc/letsencrypt/live/sbxr-subscription/cert.pem -outform DER | sha256sum | cut -d' ' -f1)
-python3 "$operator_dir/subscription-observation.py" \
+configuration=$(remote_outside_disclose)
+printf %s "$configuration" | python3 "$operator_dir/subscription-observation.py" \
   3< <(printf %s "$link") 4< <(printf %s "$certificate") \
-  < <(remote_outside_disclose) \
   | jq -cS --arg scenario "$scenario" --arg manifest "$(operator_manifest_digest)" \
       --arg request "$(sha256sum "$SBXR_QUALIFICATION_REQUEST" | cut -d' ' -f1)" \
       --arg not_before "$(jq -er .not_before "$SBXR_QUALIFICATION_REQUEST")" \

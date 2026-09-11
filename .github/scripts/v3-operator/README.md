@@ -92,6 +92,14 @@ menu exit, descendants holding locks, and a descendant that creates another
 session. It verifies that the controller reaps its descendants while preserving
 an unrelated process. No fixture installs or invokes the SBXR product.
 
+The menu-disclosure fixture runs the tracked Bash helper against a temporary
+menu that takes an inspection lock. It verifies that option discovery finishes
+before the confirmed action menu starts, and that a missing option never starts
+an action. The subscription-input fixtures also require a successful current
+disclosure before emitting an observation, including when a failed producer
+writes valid-looking configuration bytes. These cases exercise the harness;
+they do not count as live product or Karing acceptance.
+
 ## Operator bundle and inputs
 
 For an authorized future attempt, retain an exact copy and digest inventory of

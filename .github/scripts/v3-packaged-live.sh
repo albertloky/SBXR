@@ -66,8 +66,10 @@ run_action() {
 }
 
 view_details() {
-  local expected=$1 output
-  output="$(printf '%s\n\n0\n' "$(menu_number 'View details')" | /usr/local/bin/sbxr)"
+  local expected=$1 output number
+  number="$(menu_number 'View details')" || return 1
+  test -n "$number" || return 1
+  output="$(printf '%s\n\n0\n' "$number" | /usr/local/bin/sbxr)" || return 1
   scan_vps_capture <(printf '%s' "$output")
   test "$(grep -Fxc "$expected" <<<"$output")" -eq 1
 }
@@ -378,8 +380,10 @@ remote_setup_and_disclose() {
   prove_not_set_up
   run_action 'Start setup' y 'Code: PROXY-INSTALLATION-SETUP-COMPLETE'
   prove_running
-  local details
-  details="$(printf '%s\n\n0\n' "$(menu_number 'View details')" | /usr/local/bin/sbxr)"
+  local details number
+  number="$(menu_number 'View details')" || return 1
+  test -n "$number" || return 1
+  details="$(printf '%s\n\n0\n' "$number" | /usr/local/bin/sbxr)" || return 1
   scan_vps_capture <(printf '%s' "$details")
   for fact in 'Release Identity:' 'Proxy Package Identity:' 'Ownership Record:' 'Packaged validation result:' 'systemd unit provenance' 'Service enabled:' 'Service active:' 'Expected public listener ownership:' 'Package hold:' 'Selected destination:' 'Client Identity: Present'; do
     grep -F "$fact" <<<"$details" >/dev/null
@@ -396,8 +400,13 @@ remote_remove() {
 }
 
 remote_outside_disclose() {
-  prove_running
-  printf '%s\ny\n\n0\n' "$(menu_number 'Show client configuration')" | /usr/local/bin/sbxr | awk '
+  local number
+  prove_running || return 1
+  # Finish discovery before launching the action menu: two concurrent menu
+  # inspections can contend on host locks and expose different legal choices.
+  number="$(menu_number 'Show client configuration')" || return 1
+  test -n "$number" || return 1
+  printf '%s\ny\n\n0\n' "$number" | /usr/local/bin/sbxr | awk '
     /^----- BEGIN SBXR CLIENT CONFIGURATION -----$/ {inside=1; next}
     /^----- END SBXR CLIENT CONFIGURATION -----$/ {inside=0; complete=1; next}
     inside {print}

@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 umask 077
+
+verify_subscription_token_identity() {
+  local token_path=$1 authority_sha256=$2
+  test "$(wc -c < "$token_path" | tr -d ' ')" -eq 44 &&
+    test "$(tail -c 1 "$token_path" | od -An -tu1 | tr -d ' ')" = 10 &&
+    test "$(head -c 43 "$token_path" | sha256sum | cut -d' ' -f1)" = "$authority_sha256"
+}
+
+if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
+  return 0
+fi
+
 operator_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$operator_dir/operator-support.sh"
 operator_expect_scenario enable-schema1
@@ -54,8 +66,7 @@ case "${1:-}" in
     subscription_receipt_sha=$(sha256sum "$SBXR_ENABLE_SCHEMA1_SUBSCRIPTION_OBSERVATION" | cut -d' ' -f1)
     scan_retained_capture "$SBXR_ENABLE_SCHEMA1_CONNECTION_OBSERVATION" "$SBXR_ENABLE_SCHEMA1_SUBSCRIPTION_OBSERVATION" "${SBXR_OPERATOR_EVIDENCE_DIR}/08-connection-summary.json"
     remember_secrets
-    token_sha=$(sha256sum /var/lib/sbxr/subscription-token | cut -d' ' -f1)
-    test "$token_sha" = "$(jq -er .serving.credential_sha256 /var/lib/sbxr/proxy-ownership.json)"
+    verify_subscription_token_identity /var/lib/sbxr/subscription-token "$(jq -er .serving.credential_sha256 /var/lib/sbxr/proxy-ownership.json)"
     jq -e --argjson release "$(jq -c .release_identity "$state")" '
       .schema == 2 and .phase == "Running" and .unfinished_direction == "none" and
       (.subscription_enablement|not) and (.subscription_rotation|not) and
