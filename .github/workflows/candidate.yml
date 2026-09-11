@@ -654,7 +654,7 @@ jobs:
               }
               trap cleanup_v3_transport EXIT
               ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'test ! -e /root/sbxr-qualification-v3 && install -d -m 0700 /root/sbxr-qualification-v3 && printf "%s\n" "${{ github.run_id }}-${{ github.run_attempt }}" > /root/sbxr-qualification-v3/staging-owned'
-              ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'umask 077; tar -xzf - -C /root/sbxr-qualification-v3; chmod 0700 /root/sbxr-qualification-v3/sbxr-release' < v3-transport.tgz
+              ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'umask 077; tar --no-same-owner -xzf - -C /root/sbxr-qualification-v3; chmod 0700 /root/sbxr-qualification-v3/sbxr-release' < v3-transport.tgz
               ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'bash /root/sbxr-qualification-v3/v3-qualification-transport.sh up'
             fi
             # The operator drives only supported packaged paths on the VPS and

@@ -54,6 +54,7 @@ OPERATOR_SCHEMA = "sbxr-v4-operator-observations-v1"
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 HEX32 = re.compile(r"^[0-9a-f]{32}$")
 JSON_LIMIT = 1_000_000
+BOUNDARY_LIMIT = 16 * 1024 * 1024
 VALIDATOR_LIMIT = 64 * 1024 * 1024
 RETAINED_07 = (
     "07-outside-started.json", "07-outside-ready.json",
@@ -121,8 +122,8 @@ def private_bytes(path: Path, label: str, mode: int = 0o600, limit: int = JSON_L
     return raw
 
 
-def load(path: Path, label: str, newline: bool = False):
-    raw = private_bytes(path, label)
+def load(path: Path, label: str, newline: bool = False, limit: int = JSON_LIMIT):
+    raw = private_bytes(path, label, limit=limit)
     body = raw[:-1] if newline and raw.endswith(b"\n") else raw
     try:
         value = json.loads(body, object_pairs_hook=unique)
@@ -456,7 +457,7 @@ def packages_for(attempt, scenario):
 def assemble(options):
     scenario = options.command; index = SCENARIO_INDEX[scenario]
     manifest, manifest_body, manifest_raw = load(options.manifest, "manifest")
-    boundary, boundary_body, boundary_raw = load(options.boundary, "boundary")
+    boundary, boundary_body, boundary_raw = load(options.boundary, "boundary", limit=BOUNDARY_LIMIT)
     request, request_body, request_raw = load(options.request, "request", True)
     prefix, prefix_body, prefix_raw = load(options.accepted_prior_prefix, "prior prefix", True)
     preparation, _, _ = load(options.preparation_receipt, "preparation receipt", True)

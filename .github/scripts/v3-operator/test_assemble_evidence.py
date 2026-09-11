@@ -237,6 +237,25 @@ class AssembleEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(assembler.Refusal,"exceeded byte bound"):
                 assembler.private_bytes(validator,"validator",0o700,assembler.JSON_LIMIT)
 
+    def test_boundary_accepts_existing_collector_size_without_raising_receipt_limits(self):
+        temporary,fixture=self.fixture()
+        with temporary:
+            boundary={"history":"x"*(assembler.JSON_LIMIT+1)}
+            boundary_raw=assembler.canonical(boundary)
+            self.assertLess(len(boundary_raw),assembler.BOUNDARY_LIMIT)
+            fixture.paths["boundary"].write_bytes(boundary_raw)
+            preparation=json.loads(fixture.paths["preparation"].read_bytes())
+            preparation["qualification_boundary_facts_sha256"]=sha(boundary_raw)
+            preparation["verifications"][1]["artifact_sha256"]=sha(boundary_raw)
+            fixture.paths["preparation"].write_bytes(canon(preparation)+b"\n")
+            result=subprocess.run(fixture.command,capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertTrue(fixture.output.exists())
+            ordinary=fixture.root/"ordinary-receipt"
+            ordinary.write_bytes(boundary_raw); ordinary.chmod(0o600)
+            with self.assertRaisesRegex(assembler.Refusal,"exceeded byte bound"):
+                assembler.load(ordinary,"ordinary receipt")
+
     def test_07_retention_preserves_exact_bytes_and_satisfies_collector_absence_paths(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory); root.chmod(0o700)

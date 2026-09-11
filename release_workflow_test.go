@@ -884,10 +884,14 @@ func TestCandidateRoutesOneV3CandidateThroughPackagedLiveQualification(t *testin
 		"BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY",
 		"RELEASE-V3-PACKAGED-LIVE-QUALIFICATION",
 		`(.records | length) == 1`,
+		`tar --no-same-owner -xzf - -C /root/sbxr-qualification-v3`,
 	} {
 		if !strings.Contains(v3Path, required) {
 			t.Fatalf("candidate.yml omitted V3 qualification contract %q", required)
 		}
+	}
+	if strings.Contains(workflow, `tar -xzf - -C /root/sbxr-qualification-v3`) {
+		t.Fatal("V3 transport extraction may restore the runner's archived uid and gid on the root VPS")
 	}
 	if strings.Contains(v3Path, "client_root=/dev/shm/") {
 		t.Fatal("V3 qualification executes the outside client from the runner's noexec /dev/shm mount")

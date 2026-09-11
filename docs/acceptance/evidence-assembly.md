@@ -6,8 +6,10 @@ the scenario entry scripts have produced and checked their private receipts.
 
 All input paths must be absolute, one-link, non-symlink, mode-0600 regular
 files. The validator must be a mode-0700 regular file and its SHA-256 must be
-passed explicitly. JSON inputs are limited to 1,000,000 bytes. The compiled
-validator has a separate 64 MiB limit.
+passed explicitly. Ordinary JSON receipts are limited to 1,000,000 bytes. The
+signed qualification boundary may contain the retained release history and uses
+the collector's existing 16 MiB evidence limit. The compiled validator has a
+separate 64 MiB limit.
 
 ## Operator provenance
 
