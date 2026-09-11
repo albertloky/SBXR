@@ -71,7 +71,14 @@ fixture repeats all four boundaries six times to exercise concurrent thread exit
 reports refuse V4 preparation. Passing this gate neither authorizes a candidate
 nor proves its future live results. The ordered-syscall fixture also proves
 successive holds remain on one Go process and refuses an early release or an
-extra continuation. The startup-unit fixture uses a separate temporary service
+extra continuation. Before every ordered hold, child and grandchild executables
+verify SIGUSR1 delivery, and the child performs 15,000 syscalls and accesses the
+selected path; only the root process may trigger a hold. A separate descendant
+stays alive across holds and continuation, then completes after release. Kill
+and refusal cases verify cleanup too: the fixture runner adopts orphaned
+fixture descendants and waits for every recorded PID to disappear. These cases
+run in the existing ordered-syscall group, without product execution.
+The startup-unit fixture uses a separate temporary service
 and target to prove that denied ordinary starts leave a later authorized start
 possible; it never starts SBXR.
 

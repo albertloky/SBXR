@@ -78,6 +78,32 @@ def trace(root, deadline, path, boundary, record=None, field=None, value=None, n
         return b''
     def tgid(pid):
         return int(next(line.split()[1] for line in Path('/proc/%d/status' % pid).read_text().splitlines() if line.startswith('Tgid:')))
+    def exited(pid, status):
+        if not (os.WIFEXITED(status) or os.WIFSIGNALED(status)):
+            return False
+        traced.discard(pid)
+        stopped.discard(pid)
+        waiting_close.pop(pid, None)
+        if pid in child_observations:
+            child_observations[pid]['exit_code'] = os.waitstatus_to_exitcode(status)
+        if pid == root:
+            raise ValueError('process exited before boundary')
+        return True
+    def resume(pid, deliver=0):
+        # Only root-group syscalls can match the selected boundary. Keep
+        # descendants attached for fork/exec/exit and interruption without
+        # stopping twice for every syscall in their unrelated work.
+        try:
+            ptrace(24 if tgid(pid) == root else 7, pid, 0, deliver)
+        except OSError as error:
+            if error.errno not in (2, 3):
+                raise
+            # A sibling can exit the thread group after its stop was consumed.
+            # Only a real terminal wait status excuses the failed restart;
+            # ESRCH alone can also mean loss of tracing control.
+            observed, status = os.waitpid(pid, os.WNOHANG | WALL)
+            if observed != pid or not exited(pid, status):
+                raise
     def predicate():
         if no_child:
             for task in Path('/proc/%d/task' % root).iterdir():
@@ -110,12 +136,7 @@ def trace(root, deadline, path, boundary, record=None, field=None, value=None, n
             if not pid:
                 time.sleep(.001)
                 continue
-            if os.WIFEXITED(status) or os.WIFSIGNALED(status):
-                traced.discard(pid)
-                if pid in child_observations:
-                    child_observations[pid]['exit_code'] = os.waitstatus_to_exitcode(status)
-                if pid == root:
-                    raise ValueError('process exited before boundary')
+            if exited(pid, status):
                 continue
             traced.add(pid)
             stopped.add(pid)
@@ -191,14 +212,7 @@ def trace(root, deadline, path, boundary, record=None, field=None, value=None, n
                             raise TimeoutError('thread stop deadline')
                         time.sleep(.001)
                         continue
-                    if os.WIFEXITED(other_status) or os.WIFSIGNALED(other_status):
-                        traced.discard(other)
-                        stopped.discard(other)
-                        if other in child_observations:
-                            child_observations[other]['exit_code'] = os.waitstatus_to_exitcode(other_status)
-                        if other == root:
-                            raise ValueError('root exited during stop')
-                    else:
+                    if not exited(other, other_status):
                         traced.add(other)
                         stopped.add(other)
                         if other_status >> 16 in (1, 2, 3):
@@ -222,7 +236,7 @@ def trace(root, deadline, path, boundary, record=None, field=None, value=None, n
                         raise ValueError('no further boundary selected')
                     boundary_index += 1
                     for other in sorted(traced, reverse=True):
-                        ptrace(24, other)
+                        resume(other)
                     stopped.clear()
                     continue
                 if command == 'release\n':
@@ -242,7 +256,7 @@ def trace(root, deadline, path, boundary, record=None, field=None, value=None, n
                 print('{"state":"interrupted"}', flush=True)
                 return
             deliver = sig if sig not in (signal.SIGTRAP, signal.SIGTRAP | 0x80) and event == 0 else 0
-            ptrace(24, pid, 0, deliver)
+            resume(pid, deliver)
             stopped.discard(pid)
         raise TimeoutError('syscall boundary deadline')
     except TimeoutError:
