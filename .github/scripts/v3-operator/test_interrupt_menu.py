@@ -343,12 +343,18 @@ interrupt_at 'Start setup' y target-event {shlex.quote(number)} {timeout}
         self.assertIn("descendants_reaped=true", result.stdout)
 
     def test_request_deadline_caps_longer_function_timeout(self):
+        function_timeout = 5
         result, elapsed = self.run_interrupt(
-            "no-event", timeout=5, number="deadline-cap",
-            request_deadline=int(time.time()) + 1,
+            "no-event", timeout=function_timeout, number="deadline-cap",
+            # deadline_unix is an integer. Leave more than two full seconds
+            # of startup margin for this after-start case, distinct from
+            # the separately tested expired-before-start case.
+            request_deadline=int(time.time()) + 3,
         )
         self.assertNotEqual(result.returncode, 0)
-        self.assertLess(elapsed, 2.5)
+        self.assertGreaterEqual(elapsed, 1.5)
+        self.assertLess(elapsed, function_timeout - 0.5)
+        self.assertTrue((self.root / "started").exists())
         self.assert_fixture_tree_dead()
         self.assert_lock_released()
         self.assert_work_files_removed("deadline-cap")
