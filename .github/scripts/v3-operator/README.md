@@ -80,7 +80,11 @@ fixture descendants and waits for every recorded PID to disappear. These cases
 run in the existing ordered-syscall group, without product execution.
 The startup-unit fixture uses a separate temporary service
 and target to prove that denied ordinary starts leave a later authorized start
-possible; it never starts SBXR.
+possible. Its private executable fixture directory is under `/var/lib`, since
+`/run` may be mounted `noexec`. It proves the condition runs as UID 0 and consumes
+private authorization while the main process retains its unprivileged UID/GID,
+filesystem sandbox, no-new-privileges setting, and empty effective capabilities.
+It never starts SBXR.
 
 The `interrupt-menu` fixture runs the real packaged `interrupt_at` function with
 a temporary executable. It covers a delayed progress boundary, timeout, early
@@ -208,6 +212,11 @@ effective route, unchanged source before cutover, and ordinary start/restart
 denial after quiescence on the same actual UI process. A pre-gate `start` on the
 already active source is a no-op; it does not prove that an external request was
 admitted while the whole-host mutation lock was held.
+
+While waiting for ordered kernel boundaries, the controller also reads the
+public menu's action output. An action that returns early fails immediately;
+known refusal codes are retained without copying raw output. This distinguishes
+a product refusal from a tracing timeout even when the menu remains open.
 
 For every nonbaseline scenario, `effective-route.py` observes the supported
 Certbot timer-to-service route before timer stops or injected route faults.

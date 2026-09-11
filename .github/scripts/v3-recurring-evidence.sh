@@ -193,7 +193,7 @@ stop_attempt() {
   fi
   # Only temporary files created by this collector; never product authority.
   rm -f "$directory/input.json" "$directory/decision.json" "$directory/failure.json" "$directory/failure-decision.json" "$directory/previous.json" "$directory/request.json" "$directory/outside-request.json" "$directory/outside-reply.json" "$directory/final.json" "$directory/retained-failure.json" \
-    "$directory/identity-config.json" "$directory/identity-request.json" "$directory/identity-request.next" "$directory/identity.stdout" "$directory/identity.stderr" "$directory/identity-check.stdout" "$directory/identity-check.stderr" \
+    "$directory/identity-config.json" "$directory/identity-request.json" "$directory/identity-request.next" "$directory/identity.stdout" "$directory/identity.stderr" "$directory/identity-failure.json" "$directory/identity-check.stdout" "$directory/identity-check.stderr" \
     "$directory/07-state.json" "$directory/07-outside.json" "$directory/07-outside-rotation-request.json" "$directory/07-outside-rotation-ready.json" "$directory/07-outside-collected.json" \
     "$directory/link-config.json" "$directory/link-request.json" "$directory/link-request.next" "$directory/link.stdout" "$directory/link.stderr" "$directory/link-result.json" \
     "$directory/transition-config.json" "$directory/transition-request.json" "$directory/transition-request.next" "$directory/transition.stdout" "$directory/transition.stderr" \
@@ -217,7 +217,17 @@ collect_identity_driver() {
   identity_pid=
   if test "$identity_status" -ne 0; then
     if test "$identity_status" -eq 124; then reason=timeout; else reason=evidence-refused; fi
-    test "$(<"$directory/identity.stderr")" = '{"identity_outside_failed":true}'
+    if ! jq -e '
+      type == "object" and length == 3 and
+      .identity_outside_failed == true and
+      (.phase | IN("input", "setup", "tls-health", "old-session-closure", "state-wait", "old-session-refusal", "replacement", "cleanup")) and
+      (.exception_kind | IN("timeout-error", "tls-error", "http-error", "subprocess-error", "connection-error", "os-error", "validation-error", "runtime-error", "unexpected-error"))
+    ' "$directory/identity.stderr" >/dev/null 2>&1; then
+      return 1
+    fi
+    jq -cS '{exception_kind,identity_outside_failed,phase}' "$directory/identity.stderr" > "$directory/identity-failure.json"
+    mkdir -p handoff/failure-evidence
+    cp "$directory/identity-failure.json" handoff/failure-evidence/identity-outside-failure.json
     return 1
   fi
   reason=evidence-refused

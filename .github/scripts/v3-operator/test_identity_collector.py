@@ -130,7 +130,9 @@ class IdentityCollectorTests(unittest.TestCase):
 
     def test_helper_failure_maps_to_canonical_failure_reason(self):
         with tempfile.TemporaryDirectory() as directory:
-            Path(directory, "identity.stderr").write_text('{"identity_outside_failed":true}\n')
+            detail = {"exception_kind": "timeout-error", "identity_outside_failed": True,
+                      "phase": "old-session-closure"}
+            Path(directory, "identity.stderr").write_text(json.dumps(detail, sort_keys=True, separators=(",", ":")) + "\n")
             command = "\n".join([
                 'set -uo pipefail',
                 self.collect,
@@ -140,6 +142,7 @@ class IdentityCollectorTests(unittest.TestCase):
                 'reason=unexpected-failure',
                 'collect_identity_driver || status=$?',
                 'test "$status:$reason" = "1:evidence-refused"',
+                'test "$(<handoff/failure-evidence/identity-outside-failure.json)" = \'{"exception_kind":"timeout-error","identity_outside_failed":true,"phase":"old-session-closure"}\'',
             ])
             result = subprocess.run(["bash", "-c", command], cwd=directory,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
@@ -148,6 +151,26 @@ class IdentityCollectorTests(unittest.TestCase):
         reasons = {line.strip().split("=", 1)[1].split(";", 1)[0]
                    for line in self.source.splitlines() if line.strip().startswith("reason=")}
         self.assertLessEqual(reasons, allowed)
+
+    def test_untrusted_identity_stderr_is_never_retained(self):
+        for body in (
+                '{"identity_outside_failed":true,"phase":"replacement","exception_kind":"runtime-error","error":"fixture-secret"}\n',
+                'fixture-secret raw stderr\n'):
+            with self.subTest(body=body), tempfile.TemporaryDirectory() as directory:
+                Path(directory, "identity.stderr").write_text(body)
+                command = "\n".join([
+                    'set -uo pipefail',
+                    self.collect,
+                    'wait() { return 1; }',
+                    'directory=$PWD',
+                    'identity_pid=fixture',
+                    'reason=unexpected-failure',
+                    'if collect_identity_driver; then exit 70; fi',
+                    'test ! -e handoff/failure-evidence/identity-outside-failure.json',
+                ])
+                result = subprocess.run(["bash", "-c", command], cwd=directory,
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
 
     def test_successful_helper_output_is_collected_before_acknowledgement(self):
         with tempfile.TemporaryDirectory() as directory:

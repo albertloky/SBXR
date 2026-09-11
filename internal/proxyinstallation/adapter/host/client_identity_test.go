@@ -54,6 +54,17 @@ func TestClientIdentityPublicationsFailClosedAndRetryFromObservedFiles(t *testin
 	}
 }
 
+func TestProxyStartupElevatesOnlyAuthorizationCommand(t *testing.T) {
+	want := "[Service]\nExecCondition=+/usr/local/bin/sbxr --proxy-start-authorize\n"
+	if ProxyStartupDropIn != want {
+		t.Fatalf("unexpected startup authority settings: %q", ProxyStartupDropIn)
+	}
+	// systemd consumes the privilege prefix; it is not part of effective argv.
+	if exactProxyStartCondition("{ path=/usr/local/bin/sbxr ; argv[]=+/usr/local/bin/sbxr --proxy-start-authorize ; ignore_errors=no ; }") {
+		t.Fatal("prefix incorrectly accepted as executable argument")
+	}
+}
+
 func TestProxyStartConditionRequiresTheExactEffectiveCommand(t *testing.T) {
 	for fact, want := range map[string]bool{
 		"/usr/local/bin/sbxr --proxy-start-authorize":                                                                                  false,
@@ -219,5 +230,115 @@ esac
 	}
 	if strings.Contains(string(published), "source") {
 		t.Fatal("source remained authoritative")
+	}
+}
+
+func TestClientIdentityQuiescenceAfterSystemdRemovesStoppedGroup(t *testing.T) {
+	for _, test := range []struct {
+		name, shape, group, active, pid, events string
+		process, listener                       bool
+		want                                    bool
+	}{
+		{name: "removed stopped group", shape: "absent", want: true},
+		{name: "empty extant group", shape: "directory", group: "/system.slice/sing-box.service", events: "populated 0\n", want: true},
+		{name: "missing events inside extant group", shape: "directory", group: "/system.slice/sing-box.service"},
+		{name: "populated group", shape: "directory", group: "/system.slice/sing-box.service", events: "populated 1\n"},
+		{name: "empty property with extant group", shape: "directory", events: "populated 0\n"},
+		{name: "foreign group", shape: "absent", group: "/system.slice/foreign.service"},
+		{name: "symlink group", shape: "symlink"},
+		{name: "symlink parent", shape: "parent-symlink"},
+		{name: "unknown parent", shape: "missing-parent"},
+		{name: "symlink events", shape: "events-symlink", group: "/system.slice/sing-box.service"},
+		{name: "non-file events", shape: "events-directory", group: "/system.slice/sing-box.service"},
+		{name: "active unit", shape: "absent", active: "active"},
+		{name: "remaining main PID", shape: "absent", pid: "123"},
+		{name: "remaining process", shape: "absent", process: true},
+		{name: "remaining listener", shape: "absent", listener: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			adapter := Adapter{root: root}
+			parent := adapter.path("/sys/fs/cgroup/system.slice")
+			group := filepath.Join(parent, "sing-box.service")
+			if err := os.MkdirAll(parent, 0755); err != nil {
+				t.Fatal(err)
+			}
+			switch test.shape {
+			case "directory", "events-symlink", "events-directory":
+				if err := os.Mkdir(group, 0755); err != nil {
+					t.Fatal(err)
+				}
+				if test.events != "" {
+					if err := os.WriteFile(filepath.Join(group, "cgroup.events"), []byte(test.events), 0644); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if test.shape == "events-symlink" {
+					target := filepath.Join(root, "events")
+					if err := os.WriteFile(target, []byte("populated 0\n"), 0644); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Symlink(target, filepath.Join(group, "cgroup.events")); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if test.shape == "events-directory" {
+					if err := os.Mkdir(filepath.Join(group, "cgroup.events"), 0755); err != nil {
+						t.Fatal(err)
+					}
+				}
+			case "symlink":
+				if err := os.Symlink("missing", group); err != nil {
+					t.Fatal(err)
+				}
+			case "parent-symlink":
+				if err := os.Remove(parent); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(root, parent); err != nil {
+					t.Fatal(err)
+				}
+			case "missing-parent":
+				if err := os.Remove(parent); err != nil {
+					t.Fatal(err)
+				}
+			}
+			active, pid := test.active, test.pid
+			if active == "" {
+				active = "inactive"
+			}
+			if pid == "" {
+				pid = "0"
+			}
+			t.Setenv("SBXR_TEST_GROUP", test.group)
+			t.Setenv("SBXR_TEST_ACTIVE", active)
+			t.Setenv("SBXR_TEST_PID", pid)
+			t.Setenv("SBXR_TEST_PROCESS", strconv.FormatBool(test.process))
+			t.Setenv("SBXR_TEST_LISTENER", strconv.FormatBool(test.listener))
+			script := `#!/bin/sh
+case "${0##*/}:$1:$2" in
+systemctl:show:--property=KillMode) printf 'control-group\n';;
+systemctl:show:--property=ControlGroup) printf '%s\n' "$SBXR_TEST_GROUP";;
+systemctl:show:--property=MainPID) printf '%s\n' "$SBXR_TEST_PID";;
+systemctl:is-active:*) printf '%s\n' "$SBXR_TEST_ACTIVE"; [ "$SBXR_TEST_ACTIVE" = active ] || exit 3;;
+pgrep:*) [ "$SBXR_TEST_PROCESS" = true ] && { printf '123\n'; exit 0; }; exit 1;;
+ss:*) [ "$SBXR_TEST_LISTENER" = true ] && printf 'LISTEN\n'; exit 0;;
+*) exit 1;;
+esac
+`
+			command := filepath.Join(root, "command")
+			if err := os.WriteFile(command, []byte(script), 0755); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"systemctl", "pgrep", "ss"} {
+				if err := os.Symlink(command, filepath.Join(root, name)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Setenv("PATH", root)
+			if got := adapter.ProxyQuiescentForClientIdentityRotation(t.Context()); got != test.want {
+				t.Fatalf("quiescent = %t, want %t", got, test.want)
+			}
+		})
 	}
 }

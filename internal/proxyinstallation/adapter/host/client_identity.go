@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,7 +19,7 @@ const ProxyStartRole = "--proxy-start-authorize"
 const proxyStartAuthorizationPath = "/run/sbxr-client-identity-start"
 
 const ProxyStartupDropIn = `[Service]
-ExecCondition=/usr/local/bin/sbxr --proxy-start-authorize
+ExecCondition=+/usr/local/bin/sbxr --proxy-start-authorize
 `
 
 func (authority ProxyStartupAuthority) Resources() []string {
@@ -135,10 +136,34 @@ func (adapter Adapter) ProxyQuiescentForClientIdentityRotation(ctx context.Conte
 	controlGroup := adapter.command(ctx, "systemctl", "show", "--property=ControlGroup", "--value", "sing-box.service")
 	process := adapter.command(ctx, "pgrep", "-x", "sing-box")
 	listener := adapter.command(ctx, "ss", "-H", "-ltnp", "sport", "=", ":443")
-	if !killMode.OK || strings.TrimSpace(killMode.Fact) != "control-group" || !controlGroup.OK || strings.TrimSpace(controlGroup.Fact) != "/system.slice/sing-box.service" || !active.Observed || active.Fact != "inactive" || !mainPID.OK || strings.TrimSpace(mainPID.Fact) != "0" || !process.Observed || process.Code != 1 || !listener.OK || strings.TrimSpace(listener.Fact) != "" {
+	if !killMode.OK || strings.TrimSpace(killMode.Fact) != "control-group" || !controlGroup.OK || !active.Observed || active.Fact != "inactive" || !mainPID.OK || strings.TrimSpace(mainPID.Fact) != "0" || !process.Observed || process.Code != 1 || !listener.OK || strings.TrimSpace(listener.Fact) != "" {
 		return false
 	}
-	events, err := os.ReadFile(adapter.path("/sys/fs/cgroup/system.slice/sing-box.service/cgroup.events"))
+	const group = "/sys/fs/cgroup/system.slice/sing-box.service"
+	reportedGroup := strings.TrimSpace(controlGroup.Fact)
+	if reportedGroup != "" && reportedGroup != "/system.slice/sing-box.service" || adapter.safeParents(group) != nil {
+		return false
+	}
+	info, err := os.Lstat(adapter.path(group))
+	if errors.Is(err, os.ErrNotExist) {
+		// systemd removes an empty stopped group and clears ControlGroup.
+		// The inactive unit, zero MainPID, process/listener absence and known
+		// parent above distinguish that lifecycle from missing runtime proof.
+		return true
+	}
+	if err != nil || !info.IsDir() || reportedGroup != "/system.slice/sing-box.service" || adapter.safeParents(group+"/cgroup.events") != nil {
+		return false
+	}
+	file, err := os.OpenFile(adapter.path(group+"/cgroup.events"), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+	info, err = file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	events, err := io.ReadAll(io.LimitReader(file, 4097))
 	return err == nil && len(events) <= 4096 && slicesContainsLine(string(events), "populated 0")
 }
 

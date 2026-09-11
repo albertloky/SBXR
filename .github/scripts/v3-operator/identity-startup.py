@@ -27,7 +27,7 @@ CHECKPOINTS = ('target prepared', 'startup integration published', 'systemd relo
 CHECKS = ('startup-publication', 'reload', 'effective-route', 'source-only-before-gate',
           'ordinary-start-denied-after-gate')
 DROP_IN = Path('/etc/systemd/system/sing-box.service.d/sbxr-client-identity.conf')
-DROP_IN_BYTES = b'[Service]\nExecCondition=/usr/local/bin/sbxr --proxy-start-authorize\n'
+DROP_IN_BYTES = b'[Service]\nExecCondition=+/usr/local/bin/sbxr --proxy-start-authorize\n'
 CONFIG = Path('/etc/sing-box/config.json')
 TARGET = Path('/var/lib/sbxr/client-identity-target.json')
 TOKEN = Path('/run/sbxr-client-identity-start')

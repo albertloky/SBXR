@@ -171,6 +171,79 @@ class TransitionSpecificationTests(unittest.TestCase):
         self.assertEqual(process.stdin.getvalue(), b'1\ny\n0\n')
         output.close()
 
+    def test_product_refusal_read_ahead_by_menu_parser_ends_boundary_wait(self):
+        gate_read, gate_write = os.pipe()
+        menu = FakeProcess(
+            '1. Rotate Client Identity\n0. Exit\nRotate Client Identity? [y/N]\n'
+            'Failed safety check: Old-session quiescence\n'
+            'Code: PROXY-INSTALLATION-CLIENT-IDENTITY-ROTATION-INCOMPLETE\n')
+        with os.fdopen(gate_read, 'rb', buffering=0) as gate_output:
+            try:
+                output = transition.LineStream(menu.stdout)
+                deadline = time.monotonic() + 1
+                transition.choose(menu, output, 'Rotate Client Identity', deadline)
+                gate = type('Gate', (), {'stdin': io.BytesIO()})()
+                with self.assertRaises(transition.ActionEndedBeforeBoundary) as error:
+                    transition.observe_identity_boundaries(
+                        gate, transition.LineStream(gate_output), ['target prepared'],
+                        None, 'fixture.service', deadline, menu_output=output)
+                self.assertEqual(error.exception.result_code,
+                                 'PROXY-INSTALLATION-CLIENT-IDENTITY-ROTATION-INCOMPLETE')
+                self.assertEqual(gate.stdin.getvalue(), b'')
+                self.assertEqual(menu.stdin.getvalue(), b'1\ny\n')
+            finally:
+                os.close(gate_write)
+                menu.stdout.close()
+
+    def test_boundary_wait_reads_refusal_from_live_menu_pipe(self):
+        gate_read, gate_write = os.pipe()
+        menu_read, menu_write = os.pipe()
+        with os.fdopen(gate_read, 'rb', buffering=0) as gate, \
+                os.fdopen(menu_read, 'rb', buffering=0) as menu:
+            try:
+                os.write(menu_write, b'Progress: Stopping source\nCode: PROXY-INSTALLATION-ACTION-REFUSED\n')
+                with self.assertRaises(transition.ActionEndedBeforeBoundary) as error:
+                    transition.gate_event(transition.LineStream(gate), time.monotonic() + 1,
+                                          transition.LineStream(menu))
+                self.assertEqual(error.exception.result_code, 'PROXY-INSTALLATION-ACTION-REFUSED')
+                self.assertEqual(transition.ActionEndedBeforeBoundary(
+                    'PROXY-INSTALLATION-SUBSCRIPTION-CHANGE-INCOMPLETE').result_code,
+                    'PROXY-INSTALLATION-SUBSCRIPTION-CHANGE-INCOMPLETE')
+            finally:
+                os.close(gate_write)
+                os.close(menu_write)
+
+    def test_partial_menu_line_does_not_block_ready_kernel_event(self):
+        gate_read, gate_write = os.pipe()
+        menu_read, menu_write = os.pipe()
+        with os.fdopen(gate_read, 'rb', buffering=0) as gate, \
+                os.fdopen(menu_read, 'rb', buffering=0) as menu:
+            try:
+                output = transition.LineStream(menu)
+                output.buffer.extend(b'Progress: partial')
+                os.write(gate_write, b'{"state":"boundary-held"}\n')
+                self.assertEqual(transition.gate_event(transition.LineStream(gate),
+                                 time.monotonic() + 1, output), {'state': 'boundary-held'})
+                self.assertEqual(output.buffer, b'Progress: partial')
+            finally:
+                os.close(gate_write)
+                os.close(menu_write)
+
+    def test_boundary_wait_refuses_menu_eof_and_does_not_expose_unknown_results(self):
+        gate_read, gate_write = os.pipe()
+        menu = FakeProcess(b'')
+        with os.fdopen(gate_read, 'rb', buffering=0) as gate:
+            try:
+                with self.assertRaisesRegex(ValueError, 'UI exited'):
+                    transition.gate_event(transition.LineStream(gate), time.monotonic() + 1,
+                                          transition.LineStream(menu.stdout))
+                error = transition.ActionEndedBeforeBoundary('private unrecognized output')
+                self.assertIsNone(error.result_code)
+                self.assertNotIn('private', str(error))
+            finally:
+                os.close(gate_write)
+                menu.stdout.close()
+
     def test_qualification_preflight_binds_scenario_manifest_phase_and_deadline(self):
         manifest = json.dumps({'v3_attempt': {
             'evidence_policy': 'repair-issuance-bounded-v4',

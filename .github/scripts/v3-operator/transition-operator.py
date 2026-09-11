@@ -313,18 +313,21 @@ class LineStream:
         self.buffer = bytearray()
         self.consumed = 0
 
+    def read_ready(self):
+        block = os.read(self.stream.fileno(), 4096)
+        if not block:
+            raise ValueError('SBXR UI exited before expected output')
+        self.buffer.extend(block)
+        self.consumed += len(block)
+        if self.consumed > MAX_OUTPUT or len(self.buffer) > 16384:
+            raise ValueError('SBXR UI output bound exceeded')
+
     def line(self, deadline):
         while b'\n' not in self.buffer:
             remaining = deadline - time.monotonic()
             if remaining <= 0 or not select.select([self.stream], [], [], remaining)[0]:
                 raise TimeoutError('SBXR UI output deadline')
-            block = os.read(self.stream.fileno(), 4096)
-            if not block:
-                raise ValueError('SBXR UI exited before expected output')
-            self.buffer.extend(block)
-            self.consumed += len(block)
-            if self.consumed > MAX_OUTPUT or len(self.buffer) > 16384:
-                raise ValueError('SBXR UI output bound exceeded')
+            self.read_ready()
         raw, _, rest = self.buffer.partition(b'\n')
         self.buffer = bytearray(rest)
         try:
@@ -560,18 +563,50 @@ def link_closed(scenario, handoff, deadline):
     return handoff
 
 
-def gate_event(stream, deadline):
+class ActionEndedBeforeBoundary(ValueError):
+    def __init__(self, code):
+        super().__init__('SBXR action returned before the expected kernel boundary')
+        # Only known, nonsecret result identifiers enter the failure diagnostic.
+        self.result_code = code if code in {
+            'PROXY-INSTALLATION-CLIENT-IDENTITY-ROTATION-INCOMPLETE',
+            'PROXY-INSTALLATION-SUBSCRIPTION-CHANGE-INCOMPLETE',
+            'PROXY-INSTALLATION-ACTION-REFUSED',
+        } else None
+
+
+def gate_event(stream, deadline, menu_output=None):
+    # The public menu stays alive after a refused action. Watch its result while
+    # awaiting a checkpoint, including bytes read ahead by choose(). Reading a
+    # partial UI line must not block an independently ready kernel event.
+    while menu_output is not None and b'\n' not in stream.buffer:
+        while b'\n' in menu_output.buffer:
+            line = menu_output.line(deadline)
+            if line.startswith('Code: '):
+                raise ActionEndedBeforeBoundary(line.removeprefix('Code: '))
+            if line == '0. Exit':
+                raise ActionEndedBeforeBoundary(None)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('gate event deadline')
+        ready = select.select([stream.stream, menu_output.stream], [], [], remaining)[0]
+        if not ready:
+            raise TimeoutError('gate event deadline')
+        if stream.stream in ready:
+            stream.read_ready()
+        elif menu_output.stream in ready:
+            menu_output.read_ready()
     value = json.loads(stream.line(deadline), object_pairs_hook=unique)
     if not isinstance(value, dict):
         raise ValueError('gate event shape refused')
     return value
 
 
-def observe_identity_boundaries(gate, stream, checkpoints, observer, unit, deadline, on_target=None):
+def observe_identity_boundaries(gate, stream, checkpoints, observer, unit, deadline, on_target=None,
+                                menu_output=None):
     observations = []
     process = None
     for index, checkpoint in enumerate(checkpoints):
-        held = gate_event(stream, deadline)
+        held = gate_event(stream, deadline, menu_output)
         if (held.get('state') != 'boundary-held' or held.get('boundary_index') != index or
                 held.get('boundary') != 'before-open' or held.get('path') != str(NEXT)):
             raise ValueError('unexpected identity syscall boundary')
@@ -629,7 +664,7 @@ def rotate(scenario, timeout):
         choose(menu, output, ROTATION_SPECS[scenario]['action'], deadline)
         callback = (lambda operation: publish_identity_trigger(scenario, request_raw, ready_raw, operation)) if scenario == 'identity-unavailable' else None
         _, interrupted, process, observations = observe_identity_boundaries(
-            gate, stream, checkpoints, observer, unit, deadline, callback)
+            gate, stream, checkpoints, observer, unit, deadline, callback, menu_output=output)
         gate.stdin.write(b'release\n')
         gate.stdin.flush()
         if gate_event(stream, deadline).get('state') != 'released':
@@ -722,17 +757,19 @@ def interrupt(scenario, timeout):
         menu = launch_menu(unit)
         if identity:
             action_started = startup.timestamp()
-        choose(menu, LineStream(menu.stdout), spec['action'], deadline)
+        output = LineStream(menu.stdout)
+        choose(menu, output, spec['action'], deadline)
         if identity:
             interrupted_raw, interrupted, process_evidence, observations = observe_identity_boundaries(
                 gate, gate_stream, checkpoints, observer, unit, deadline,
-                lambda operation: publish_identity_trigger(scenario, request_raw, identity_ready_raw, operation))
+                lambda operation: publish_identity_trigger(scenario, request_raw, identity_ready_raw, operation),
+                menu_output=output)
             held = {'state': 'boundary-held', 'boundary': 'before-open', 'path': str(NEXT),
                     'pid': process_evidence['pid'], 'record_sha256': digest(interrupted_raw)}
         elif not link_scenario:
             held = json_event(gate.stdout, deadline)
         else:
-            held = gate_event(gate_stream, deadline)
+            held = gate_event(gate_stream, deadline, output)
             if (held.get('state') != 'boundary-held' or held.get('boundary_index') != 0 or
                     held.get('boundary') != 'before-open' or held.get('path') != str(NEXT)):
                 raise ValueError('unexpected target-authorized syscall boundary')
@@ -750,7 +787,7 @@ def interrupt(scenario, timeout):
                 raise ValueError('target-authorized boundary changed during handoff')
             gate.stdin.write(b'continue\n')
             gate.stdin.flush()
-            held = gate_event(gate_stream, deadline)
+            held = gate_event(gate_stream, deadline, output)
             if (held.get('state') != 'boundary-held' or held.get('boundary_index') != 1 or
                     held.get('boundary') != 'before-open' or held.get('path') != str(NEXT)):
                 raise ValueError('unexpected stop-authorized syscall boundary')
@@ -773,7 +810,7 @@ def interrupt(scenario, timeout):
             else:
                 gate.stdin.write(b'continue\n')
                 gate.stdin.flush()
-                held = gate_event(gate_stream, deadline)
+                held = gate_event(gate_stream, deadline, output)
                 if (held.get('state') != 'boundary-held' or held.get('boundary_index') != 2 or
                         held.get('boundary') != 'before-open' or held.get('path') != str(SERVING_TOKEN)):
                     raise ValueError('unexpected committed syscall boundary')
@@ -957,6 +994,9 @@ if __name__ == '__main__':
     try:
         {'interrupt': interrupt, 'recover': recover, 'rotate': rotate}[args.operation](args.scenario, args.timeout)
     except Exception as error:
-        print(json.dumps({'state': 'refused', 'error_type': type(error).__name__,
-                          'errno': getattr(error, 'errno', None)}, sort_keys=True))
+        diagnostic = {'state': 'refused', 'error_type': type(error).__name__,
+                      'errno': getattr(error, 'errno', None)}
+        if isinstance(error, ActionEndedBeforeBoundary) and error.result_code is not None:
+            diagnostic['result_code'] = error.result_code
+        print(json.dumps(diagnostic, sort_keys=True))
         sys.exit(1)

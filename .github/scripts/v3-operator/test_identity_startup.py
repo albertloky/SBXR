@@ -18,6 +18,13 @@ CONDITION = ('{ path=/usr/local/bin/sbxr ; argv[]=/usr/local/bin/sbxr --proxy-st
 
 
 class StartupObservationTests(unittest.TestCase):
+    def test_owned_dropin_elevates_only_condition_and_effective_argv_has_no_prefix(self):
+        self.assertEqual(startup.DROP_IN_BYTES,
+                         b'[Service]\nExecCondition=+/usr/local/bin/sbxr --proxy-start-authorize\n')
+        startup.exact_condition(CONDITION, denied=True)
+        with self.assertRaises(ValueError):
+            startup.exact_condition(CONDITION.replace('argv[]=/usr', 'argv[]=+/usr'))
+
     def test_effective_condition_requires_one_exact_nonignored_guard_and_actual_denial(self):
         startup.exact_condition(CONDITION, denied=True)
         for bad in (CONDITION.replace('status=1', 'status=0'),

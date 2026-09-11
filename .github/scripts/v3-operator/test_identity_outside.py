@@ -58,6 +58,8 @@ class FixtureConnection:
 
     def close(self):
         self.closed = True
+        if self.backend.close_failure:
+            raise RuntimeError("fixture connection close failure")
 
 
 class FixtureBackend:
@@ -69,6 +71,7 @@ class FixtureBackend:
         self.close_at, self.old_timeout = 3, False
         self.refusal, self.healthy, self.replacement = "closed", True, True
         self.cleanup_ok, self.alive, self.current_client = True, True, "old"
+        self.close_failure, self.final_clock_failure = False, False
         self.closed_cleanup, self.acknowledged, self.delayed_rotation = False, False, False
 
     def prepare(self):
@@ -89,6 +92,8 @@ class FixtureBackend:
         return result
 
     def clock(self):
+        if self.closed_cleanup and self.final_clock_failure:
+            raise OSError("fixture final clock failure")
         self.seconds += 1
         identity.require(EPOCH + self.seconds <= self.bound["deadline_unix"])
         return stamp(self.seconds)
@@ -235,7 +240,59 @@ class ProducerTests(unittest.TestCase):
             failed = subprocess.run(command, capture_output=True)
             self.assertEqual(failed.returncode, 1)
             self.assertEqual(failed.stdout, b"")
-            self.assertEqual(failed.stderr, b'{"identity_outside_failed":true}\n')
+            self.assertEqual(json.loads(failed.stderr), {
+                "exception_kind": "os-error",
+                "identity_outside_failed": True,
+                "phase": "input",
+            })
+
+    def test_failure_diagnostic_uses_only_allowlisted_phase_and_exception_kind(self):
+        secret = "fixture-secret-command-output-and-credential"
+        diagnostic = identity.failure_diagnostic(RuntimeError(secret), "replacement")
+        self.assertEqual(diagnostic, {
+            "exception_kind": "runtime-error",
+            "identity_outside_failed": True,
+            "phase": "replacement",
+        })
+        self.assertNotIn(secret, identity.canonical(diagnostic).decode())
+        self.assertEqual(identity.failure_diagnostic(Exception(secret), secret), {
+            "exception_kind": "unexpected-error",
+            "identity_outside_failed": True,
+            "phase": "input",
+        })
+
+    def test_producer_failure_phase_distinguishes_observation_boundaries(self):
+        cases = (
+            ("tls-health", {"healthy": False}),
+            ("old-session-closure", {"old_timeout": True}),
+            ("state-wait", {"delayed_rotation": True}),
+            ("replacement", {"replacement": False}),
+            ("cleanup", {"cleanup_ok": False}),
+        )
+        for expected, changes in cases:
+            with self.subTest(phase=expected):
+                self.backend = FixtureBackend(self.bound, self.state)
+                for name, value in changes.items():
+                    setattr(self.backend, name, value)
+                with self.assertRaises(Exception) as raised:
+                    self.produce()
+                self.assertEqual(getattr(raised.exception, "identity_outside_phase", None), expected)
+
+    def test_cleanup_failure_takes_precedence_and_connection_close_cannot_skip_cleanup(self):
+        self.backend.old_timeout = True
+        self.backend.close_failure = True
+        self.backend.cleanup_ok = False
+        with self.assertRaisesRegex(ValueError, "^identity-outside-refused$") as raised:
+            self.produce()
+        self.assertTrue(self.backend.closed_cleanup)
+        self.assertEqual(raised.exception.identity_outside_phase, "cleanup")
+
+    def test_post_cleanup_finalization_failure_retains_cleanup_phase(self):
+        self.backend.final_clock_failure = True
+        with self.assertRaisesRegex(OSError, "fixture final clock failure") as raised:
+            self.produce()
+        self.assertTrue(self.backend.closed_cleanup)
+        self.assertEqual(raised.exception.identity_outside_phase, "cleanup")
 
 
 class SafetySeamTests(unittest.TestCase):

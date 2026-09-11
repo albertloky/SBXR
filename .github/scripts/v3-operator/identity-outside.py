@@ -42,6 +42,41 @@ FACTS = {"same_old_connection": True, "old_transport_closed": True,
          "manual_replacement_configuration": True, "replacement_traffic": True,
          "outside_routes_differ": True, "egress_matched": True,
          "runner_cleanup_complete": True}
+FAILURE_PHASES = {"input", "setup", "tls-health", "old-session-closure", "state-wait",
+                  "old-session-refusal", "replacement", "cleanup"}
+
+
+def failure_kind(error):
+    """Return a fixed category; exception text and type names are never diagnostics."""
+    if isinstance(error, (socket.timeout, TimeoutError)):
+        return "timeout-error"
+    if isinstance(error, ssl.SSLError):
+        return "tls-error"
+    if isinstance(error, http.client.HTTPException):
+        return "http-error"
+    if isinstance(error, subprocess.SubprocessError):
+        return "subprocess-error"
+    if isinstance(error, ConnectionError):
+        return "connection-error"
+    if isinstance(error, OSError):
+        return "os-error"
+    if isinstance(error, (ValueError, KeyError, TypeError, AssertionError)):
+        return "validation-error"
+    if isinstance(error, RuntimeError):
+        return "runtime-error"
+    return "unexpected-error"
+
+
+def mark_failure(error, phase):
+    error.identity_outside_phase = phase if phase in FAILURE_PHASES else "input"
+    return error
+
+
+def failure_diagnostic(error, phase=None):
+    selected = phase if phase in FAILURE_PHASES else getattr(error, "identity_outside_phase", "input")
+    if selected not in FAILURE_PHASES:
+        selected = "input"
+    return {"exception_kind": failure_kind(error), "identity_outside_failed": True, "phase": selected}
 
 
 def require(condition):
@@ -414,10 +449,12 @@ def produce(backend, bound, state):
     """Dependency seam for deterministic producer tests; CLI always uses LiveBackend."""
     connection = None
     document = None
+    phase = "setup"
     try:
         backend.prepare()
         old_process = backend.start_client()
         backend.routes()
+        phase = "tls-health"
         connection = backend.connect()
         connection.request()  # One real TLS connection, never replaced after this point.
         established = backend.clock()
@@ -425,6 +462,7 @@ def produce(backend, bound, state):
                         ready_at=backend.clock(), ready=True)
         backend.publish("07-outside-ready.json", document)
         acknowledged = False
+        phase = "old-session-closure"
         while True:
             backend.client_alive()
             backend.pause()
@@ -445,6 +483,7 @@ def produce(backend, bound, state):
         connection.close()
         connection = None
         # The product may close sessions before public action completion.
+        phase = "state-wait"
         while True:
             state = backend.state()
             if "rotation_completed_at" in state:
@@ -455,6 +494,7 @@ def produce(backend, bound, state):
         backend.client_alive()
         # A fresh connection with the unchanged old config must fail. HTTP errors
         # and success are not revocation evidence. No second attempt is allowed.
+        phase = "old-session-refusal"
         old = None
         refused = False
         try:
@@ -468,12 +508,14 @@ def produce(backend, bound, state):
         require(refused)
         backend.client_alive()
         document["old_refused_at"] = backend.clock()
+        phase = "tls-health"
         healthy = backend.connect(proxy=False)
         try:
             healthy.request()
         finally:
             healthy.close()
         document["target_healthy_at"] = backend.clock()
+        phase = "replacement"
         backend.stop_client()
         new_process = backend.start_client(replacement=True)
         replacement = backend.connect()
@@ -483,16 +525,34 @@ def produce(backend, bound, state):
             replacement.close()
         backend.routes()
         document["replacement_at"] = backend.clock()
+    except Exception as error:
+        mark_failure(error, phase)
+        raise
     finally:
-        if connection:
-            connection.close()
-        backend.cleanup()
-    document["cleanup_at"] = backend.clock()
-    document["facts"] = FACTS.copy()
-    document["old_client"] = old_process
-    document["replacement_client"] = new_process
-    check(document, bound, state, current=timestamp(document["cleanup_at"]))
-    backend.publish("07-outside.json", document)
+        close_error = None
+        try:
+            if connection:
+                connection.close()
+        except Exception as error:
+            mark_failure(error, "cleanup")
+            close_error = error
+        try:
+            backend.cleanup()
+        except Exception as error:
+            mark_failure(error, "cleanup")
+            raise
+        if close_error:
+            raise close_error
+    try:
+        document["cleanup_at"] = backend.clock()
+        document["facts"] = FACTS.copy()
+        document["old_client"] = old_process
+        document["replacement_client"] = new_process
+        check(document, bound, state, current=timestamp(document["cleanup_at"]))
+        backend.publish("07-outside.json", document)
+    except Exception as error:
+        mark_failure(error, "cleanup")
+        raise
     return document
 
 
@@ -563,6 +623,6 @@ if __name__ == "__main__":
         signal.signal(number, interrupted)
     try:
         main()
-    except Exception:
-        print('{"identity_outside_failed":true}', file=sys.stderr)
+    except Exception as error:
+        print(canonical(failure_diagnostic(error)).decode(), file=sys.stderr)
         raise SystemExit(1)

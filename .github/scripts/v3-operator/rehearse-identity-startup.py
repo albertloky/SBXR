@@ -7,6 +7,7 @@ systemd mechanism evidence, never an installed SBXR startup or qualification.
 import json
 import importlib.util
 import os
+import pwd
 from pathlib import Path
 import re
 import shlex
@@ -55,18 +56,25 @@ def menu_readiness(root):
 
 def run():
     assert os.geteuid() == 0
-    with tempfile.TemporaryDirectory(prefix='sbxr-startup-unit-fixture-') as temporary:
+    with tempfile.TemporaryDirectory(prefix='sbxr-startup-unit-fixture-', dir='/var/lib') as temporary:
         root = Path(temporary)
         unit = root.name + '.service'
         unit_path = Path('/run/systemd/system') / unit
         target = root.name + '.target'
         target_path = Path('/run/systemd/system') / target
-        guard, allowed = root / 'guard', root / 'allowed'
-        guard.write_text('#!/bin/sh\ntest -f ' + shlex.quote(str(allowed)) + '\n')
+        guard, allowed, condition_uid = root / 'guard', root / 'allowed', root / 'condition-uid'
+        account = pwd.getpwnam('nobody')
+        assert account.pw_uid > 0 and account.pw_gid > 0
+        guard.write_text('#!/bin/sh\n/usr/bin/id -u > ' + shlex.quote(str(condition_uid)) +
+                         '\ntest -f ' + shlex.quote(str(allowed)) +
+                         ' || exit 1\n/usr/bin/rm -- ' + shlex.quote(str(allowed)) + '\n')
         guard.chmod(0o700)
         descriptor = os.open(unit_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
         with os.fdopen(descriptor, 'w') as stream:
-            stream.write('[Service]\nType=simple\nExecCondition=' + str(guard) +
+            stream.write('[Service]\nType=simple\nUser=' + str(account.pw_uid) +
+                         '\nGroup=' + str(account.pw_gid) +
+                         '\nProtectSystem=strict\nPrivateTmp=yes\nNoNewPrivileges=yes\nCapabilityBoundingSet=\n' +
+                         'ExecCondition=+' + str(guard) +
                          '\nExecStart=/usr/bin/sleep 60\nKillMode=control-group\nRestart=no\n')
         descriptor = os.open(target_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
         with os.fdopen(descriptor, 'w') as stream:
@@ -84,13 +92,24 @@ def run():
                 startup.exact_condition(condition, denied=True, expected_path=str(guard), expected_arguments=str(guard))
                 assert re.search(r'pid=[1-9][0-9]*\s*;', condition)
                 assert ('path=' + str(guard)) in condition
+                assert condition_uid.read_text().strip() == '0'
             allowed.touch(mode=0o600)
             command('systemctl', 'start', unit)
             assert prop('ActiveState') == 'active' and int(prop('MainPID')) > 1
             assert 'status=0' in prop('ExecCondition')
+            assert condition_uid.read_text().strip() == '0' and not allowed.exists()
+            status = Path('/proc/%s/status' % prop('MainPID')).read_text().splitlines()
+            fields = dict(line.split(':', 1) for line in status if ':' in line)
+            assert fields['Uid'].split() == [str(account.pw_uid)] * 4
+            assert fields['Gid'].split() == [str(account.pw_gid)] * 4
+            assert fields['NoNewPrivs'].strip() == '1' and int(fields['CapEff'].strip(), 16) == 0
+            assert prop('ProtectSystem') == 'strict' and prop('PrivateTmp') == 'yes'
+            startup.exact_condition(prop('ExecCondition'), expected_path=str(guard), expected_arguments=str(guard))
             command('systemctl', 'stop', unit)
             assert prop('ActiveState') == 'inactive' and prop('MainPID') == '0'
             print(json.dumps({'fixture': 'ordinary-startup-denial-then-authorized-start',
+                              'condition_uid': 0, 'main_uid': account.pw_uid,
+                              'authorization_consumed': True, 'main_sandbox_retained': True,
                               'passed': True, 'live_evidence': False}), flush=True)
             menu_readiness(root)
         finally:
