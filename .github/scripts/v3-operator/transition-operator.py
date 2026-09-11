@@ -12,6 +12,7 @@ Outside link and proxy observations remain separate acceptance evidence.
 """
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -30,6 +31,9 @@ NEXT = Path('/var/lib/sbxr/.proxy-ownership.json.next')
 STATE_DIR = Path('/run/sbxr-qualification')
 MAX_RECORD = 1024 * 1024
 MAX_OUTPUT = 1024 * 1024
+startup_spec = importlib.util.spec_from_file_location('identity_startup', HERE / 'identity-startup.py')
+startup = importlib.util.module_from_spec(startup_spec)
+startup_spec.loader.exec_module(startup)
 
 SPECS = {
     'link-precommit': {
@@ -73,6 +77,13 @@ SPECS = {
         'plan': 'finish only the prepared target; the revoked source can never be restored',
     },
 }
+ROTATION_SPECS = {
+    'identity-absent': {'phase': 'initial', 'action': 'Rotate Client Identity',
+                        'result': 'PROXY-INSTALLATION-CLIENT-IDENTITY-ROTATED'},
+    'identity-unavailable': {'phase': 'after-snap-refresh', 'action': 'Rotate Client Identity',
+                             'result': 'PROXY-INSTALLATION-CLIENT-IDENTITY-ROTATED'},
+}
+INTERRUPT_SCENARIOS = ('link-precommit', 'link-postcommit', 'identity-precommit', 'identity-postcommit')
 
 
 def unique(items):
@@ -365,7 +376,7 @@ def qualification_preflight(scenario, timeout):
             scenario not in scenarios or 'snap-refresh' not in scenarios):
         raise ValueError('signed scenario order refused')
     phase = 'after-snap-refresh' if scenarios.index(scenario) > scenarios.index('snap-refresh') else 'initial'
-    if phase != SPECS[scenario]['phase']:
+    if phase != {**SPECS, **ROTATION_SPECS}[scenario]['phase']:
         raise ValueError('signed scenario package phase refused')
     subprocess.run([
         'bash', '-c',
@@ -391,7 +402,114 @@ def common_preflight(scenario, timeout):
     return original_deadline, manifest_digest
 
 
+def identity_gate(unit, timeout, final_checkpoint):
+    checkpoints = list(startup.CHECKPOINTS)
+    if final_checkpoint != checkpoints[-1]:
+        checkpoints.append(final_checkpoint)
+    command = [sys.executable, str(HERE / 'syscall-gate.py'), str(EXECUTABLE),
+               '/system.slice/' + unit, 'before-open', str(NEXT), '--record', str(RECORD),
+               '--field', 'client_identity_rotation.checkpoint', '--value', checkpoints[0],
+               '--timeout', str(timeout)]
+    for checkpoint in checkpoints[1:]:
+        command += ['--then-value', checkpoint]
+    gate = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=0)
+    return gate, LineStream(gate.stdout), checkpoints
+
+
+def gate_event(stream, deadline):
+    value = json.loads(stream.line(deadline), object_pairs_hook=unique)
+    if not isinstance(value, dict):
+        raise ValueError('gate event shape refused')
+    return value
+
+
+def observe_identity_boundaries(gate, stream, checkpoints, observer, unit, deadline):
+    observations = []
+    process = None
+    for index, checkpoint in enumerate(checkpoints):
+        held = gate_event(stream, deadline)
+        if (held.get('state') != 'boundary-held' or held.get('boundary_index') != index or
+                held.get('boundary') != 'before-open' or held.get('path') != str(NEXT)):
+            raise ValueError('unexpected identity syscall boundary')
+        actual = held_process(held.get('pid'), '/system.slice/' + unit)
+        if process is not None and actual != process:
+            raise ValueError('identity action process changed between checkpoints')
+        process = actual
+        raw, record = protected_record()
+        if (dotted(record, 'client_identity_rotation.checkpoint') != checkpoint or
+                held.get('record_sha256') != digest(raw) or NEXT.exists() or NEXT.is_symlink()):
+            raise ValueError('identity boundary durable record mismatch')
+        if index < len(startup.CHECKPOINTS):
+            observation = observer.observe(checkpoint, record, process)
+            observation.update({'boundary_index': index, 'checkpoint': checkpoint,
+                                'record_sha256': digest(raw), 'boundary_process': process})
+            observations.append(observation)
+        after, _ = protected_record()
+        if after != raw or held_process(process['pid'], process['cgroup']) != process:
+            raise ValueError('identity boundary changed during observation')
+        if index + 1 < len(checkpoints):
+            gate.stdin.write(b'continue\n')
+            gate.stdin.flush()
+    return raw, record, process, observations
+
+
+def rotate(scenario, timeout):
+    if scenario not in ('identity-absent', 'identity-unavailable'):
+        raise ValueError('normal rotation scenario required')
+    original_deadline, manifest_digest = common_preflight(scenario, timeout)
+    state = state_path(scenario)
+    if state.exists() or state.is_symlink():
+        raise ValueError('identity observation state already exists')
+    initial_raw, initial = protected_record()
+    if initial.get('subscription_rotation') is not None or initial.get('client_identity_rotation') is not None:
+        raise ValueError('an unfinished transition already exists')
+    deadline = time.monotonic() + min(timeout, original_deadline - time.time())
+    observer = startup.Observer(initial, protected_bytes, deadline)
+    request_raw = protected_bytes(Path(os.environ['SBXR_QUALIFICATION_REQUEST']), 0o600)
+    unit = 'sbxr-v4-' + scenario + '-' + str(os.getpid()) + '.service'
+    gate = menu = None
+    started = startup.timestamp()
+    try:
+        gate, stream, checkpoints = identity_gate(unit, timeout, startup.CHECKPOINTS[-1])
+        if gate_event(stream, deadline).get('state') != 'armed':
+            raise ValueError('identity syscall gate did not arm')
+        menu = launch_menu(unit)
+        output = LineStream(menu.stdout)
+        choose(menu, output, ROTATION_SPECS[scenario]['action'], deadline)
+        _, interrupted, process, observations = observe_identity_boundaries(
+            gate, stream, checkpoints, observer, unit, deadline)
+        gate.stdin.write(b'release\n')
+        gate.stdin.flush()
+        if gate_event(stream, deadline).get('state') != 'released':
+            raise ValueError('identity syscall gate did not release')
+        gate.wait(timeout=max(1, deadline - time.monotonic()))
+        if gate.returncode != 0:
+            raise ValueError('identity gate failed after release')
+        wait_code(menu, output, ROTATION_SPECS[scenario]['result'], deadline)
+        menu.wait(timeout=max(1, deadline - time.monotonic()))
+        final_raw, final = protected_record()
+        if (menu.returncode != 0 or final.get('client_identity_rotation') is not None or
+                final.get('subscription_rotation') is not None or
+                final.get('configuration_sha256') != interrupted['client_identity_rotation']['target_configuration_sha256']):
+            raise ValueError('identity rotation did not finish the prepared target')
+        if protected_bytes(Path(os.environ['SBXR_QUALIFICATION_REQUEST']), 0o600) != request_raw:
+            raise ValueError('collector request changed during identity action')
+        write_state(state, {'schema': 1, 'scenario': scenario, 'phase': 'rotated',
+                           'started_at': started, 'completed_at': startup.timestamp(),
+                           'qualification_manifest_sha256': manifest_digest,
+                           'request_sha256': digest(request_raw), 'boundary_process': process,
+                           'initial_record_sha256': digest(initial_raw),
+                           'final_record_sha256': digest(final_raw), 'observations': observations,
+                           'result_code': ROTATION_SPECS[scenario]['result']})
+        print(json.dumps({'state': 'rotated', 'scenario': scenario, 'startup_checks': len(observations)}))
+    finally:
+        stop_menu(menu, unit)
+        stop(gate)
+
+
 def interrupt(scenario, timeout):
+    if scenario not in INTERRUPT_SCENARIOS:
+        raise ValueError('interruption scenario required')
     original_deadline, manifest_digest = common_preflight(scenario, timeout)
     spec = SPECS[scenario]
     state = state_path(scenario)
@@ -404,18 +522,33 @@ def interrupt(scenario, timeout):
     cgroup = '/system.slice/' + unit
     gate = menu = None
     deadline = time.monotonic() + min(timeout, original_deadline - time.time())
+    identity = scenario.startswith('identity-')
+    observer = startup.Observer(initial, protected_bytes, deadline) if identity else None
+    observations = []
+    request_raw = protected_bytes(Path(os.environ['SBXR_QUALIFICATION_REQUEST']), 0o600) if identity else None
+    started = startup.timestamp()
     try:
-        gate = subprocess.Popen([
+        if identity:
+            gate, gate_stream, checkpoints = identity_gate(unit, timeout, spec['checkpoint'])
+            armed = gate_event(gate_stream, deadline)
+        else:
+            gate = subprocess.Popen([
             sys.executable, str(HERE / 'syscall-gate.py'), str(EXECUTABLE), cgroup,
             'before-open', str(NEXT), '--record', str(RECORD), '--field', spec['field'],
             '--value', spec['checkpoint'], '--timeout', str(timeout),
-        ], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
-        armed = json_event(gate.stdout, deadline)
+            ], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
+            armed = json_event(gate.stdout, deadline)
         if armed.get('state') != 'armed':
             raise ValueError('syscall gate did not arm')
         menu = launch_menu(unit)
         choose(menu, LineStream(menu.stdout), spec['action'], deadline)
-        held = json_event(gate.stdout, deadline)
+        if identity:
+            interrupted_raw, interrupted, process_evidence, observations = observe_identity_boundaries(
+                gate, gate_stream, checkpoints, observer, unit, deadline)
+            held = {'state': 'boundary-held', 'boundary': 'before-open', 'path': str(NEXT),
+                    'pid': process_evidence['pid'], 'record_sha256': digest(interrupted_raw)}
+        else:
+            held = json_event(gate.stdout, deadline)
         if (held.get('state') != 'boundary-held' or held.get('boundary') != 'before-open' or
                 held.get('path') != str(NEXT)):
             raise ValueError('unexpected syscall boundary')
@@ -424,9 +557,10 @@ def interrupt(scenario, timeout):
         validate_checkpoint(spec, interrupted)
         if held.get('record_sha256') != digest(interrupted_raw) or NEXT.exists() or NEXT.is_symlink():
             raise ValueError('held boundary does not match durable record')
-        gate.stdin.write('kill\n')
+        gate.stdin.write(b'kill\n' if identity else 'kill\n')
         gate.stdin.flush()
-        if json_event(gate.stdout, deadline).get('state') != 'interrupted':
+        outcome = gate_event(gate_stream, deadline) if identity else json_event(gate.stdout, deadline)
+        if outcome.get('state') != 'interrupted':
             raise ValueError('syscall gate did not interrupt')
         gate.wait(timeout=max(1, deadline - time.monotonic()))
         if gate.returncode != 0:
@@ -436,6 +570,8 @@ def interrupt(scenario, timeout):
         validate_checkpoint(spec, final)
         if digest(final_raw) != digest(interrupted_raw) or NEXT.exists() or NEXT.is_symlink():
             raise ValueError('interrupted durable record changed')
+        if identity and protected_bytes(Path(os.environ['SBXR_QUALIFICATION_REQUEST']), 0o600) != request_raw:
+            raise ValueError('collector request changed during identity action')
         write_state(state, {
             'schema': 1, 'scenario': scenario, 'phase': 'interrupted',
             'initial_record_sha256': digest(initial_raw),
@@ -443,6 +579,8 @@ def interrupt(scenario, timeout):
             'field': spec['field'], 'checkpoint': spec['checkpoint'],
             'direction': spec['direction'], 'boundary_process': process_evidence,
             'qualification_manifest_sha256': manifest_digest,
+            'started_at': started, 'completed_at': startup.timestamp(),
+            **({'request_sha256': digest(request_raw), 'observations': observations} if identity else {}),
         })
         print(json.dumps({'state': 'interrupted', 'scenario': scenario,
                           'record_sha256': digest(interrupted_raw),
@@ -453,6 +591,8 @@ def interrupt(scenario, timeout):
 
 
 def recover(scenario, timeout):
+    if scenario not in INTERRUPT_SCENARIOS:
+        raise ValueError('recovery scenario required')
     original_deadline, manifest_digest = common_preflight(scenario, timeout)
     spec = SPECS[scenario]
     state_file = state_path(scenario)
@@ -500,12 +640,12 @@ def recover(scenario, timeout):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=['interrupt', 'recover'])
-    parser.add_argument('scenario', choices=sorted(SPECS))
+    parser.add_argument('operation', choices=['interrupt', 'recover', 'rotate'])
+    parser.add_argument('scenario', choices=sorted({**SPECS, **ROTATION_SPECS}))
     parser.add_argument('--timeout', type=int, default=90)
     args = parser.parse_args()
     try:
-        (interrupt if args.operation == 'interrupt' else recover)(args.scenario, args.timeout)
+        {'interrupt': interrupt, 'recover': recover, 'rotate': rotate}[args.operation](args.scenario, args.timeout)
     except Exception as error:
         print(json.dumps({'state': 'refused', 'error_type': type(error).__name__,
                           'errno': getattr(error, 'errno', None)}, sort_keys=True))

@@ -17,9 +17,9 @@ outside_inputs=(--manifest "$SBXR_QUALIFICATION_MANIFEST" --request "$SBXR_QUALI
 "${outside_checker[@]}" check-ready "${outside_inputs[@]}" --receipt "${SBXR_OPERATOR_STATE_DIR}/07-outside-ready.json" >/dev/null
 "${outside_checker[@]}" request-rotation "${outside_inputs[@]}" --receipt "${SBXR_OPERATOR_STATE_DIR}/07-outside-ready.json" >/dev/null
 "${outside_checker[@]}" wait-rotation "${outside_inputs[@]}" --receipt "${SBXR_OPERATOR_STATE_DIR}/07-outside-rotation-ready.json" >/dev/null
-rotation_started_at=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
-action 'Rotate Client Identity' y 'Code: PROXY-INSTALLATION-CLIENT-IDENTITY-ROTATED'
-rotation_completed_at=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
+rotation_started_at=$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ)
+python3 "$operator_dir/transition-operator.py" rotate identity-absent --timeout 120
+rotation_completed_at=$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ)
 prove_running
 operator_exact_candidate
 jq -e '.schema==2 and .phase=="Running" and (.client_identity_rotation|not) and (.serving|not) and (.renewal|not) and (.subscription_resources|not)' /var/lib/sbxr/proxy-ownership.json >/dev/null

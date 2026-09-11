@@ -27,18 +27,18 @@ outside_established_at=$(jq -er .old_established_at "${SBXR_OPERATOR_STATE_DIR}/
 outside_terminated_at=$(jq -er .old_terminated_at "${SBXR_OPERATOR_STATE_DIR}/07-outside.json")
 outside_refused_at=$(jq -er .old_refused_at "${SBXR_OPERATOR_STATE_DIR}/07-outside.json")
 outside_replacement_at=$(jq -er .replacement_at "${SBXR_OPERATOR_STATE_DIR}/07-outside.json")
-reviewed_removal_at=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
+reviewed_removal_at=$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ)
 remember_secrets
 action 'Complete removal' 'REMOVE SBXR' 'Code: SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED'
 prove_not_installed
-absence_at=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
-rm -f "${SBXR_OPERATOR_STATE_DIR}/07-source-server.json" "${SBXR_OPERATOR_STATE_DIR}/07-source-client.json" "${SBXR_OPERATOR_STATE_DIR}/07-replacement-client.json" "${SBXR_OPERATOR_STATE_DIR}/07-source-noncredential.json" "${SBXR_OPERATOR_STATE_DIR}/07-replacement-noncredential.json" "${SBXR_OPERATOR_STATE_DIR}/07-outside.json"
-rm -f "${SBXR_OPERATOR_STATE_DIR}/07-outside-started.json" "${SBXR_OPERATOR_STATE_DIR}/07-outside-ready.json" \
-  "${SBXR_OPERATOR_STATE_DIR}/07-outside-rotation-request.json" "${SBXR_OPERATOR_STATE_DIR}/07-outside-rotation-ready.json" \
-  "${SBXR_OPERATOR_STATE_DIR}/07-outside-collected.json"
+absence_at=$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ)
+python3 "$operator_dir/assemble-evidence.py" retain-07 --state-directory "$SBXR_OPERATOR_STATE_DIR" >/dev/null
+rm -f "${SBXR_OPERATOR_STATE_DIR}/07-source-server.json" "${SBXR_OPERATOR_STATE_DIR}/07-source-client.json" \
+  "${SBXR_OPERATOR_STATE_DIR}/07-replacement-client.json" "${SBXR_OPERATOR_STATE_DIR}/07-source-noncredential.json" \
+  "${SBXR_OPERATOR_STATE_DIR}/07-replacement-noncredential.json"
 scan_journal
 scan_transport_captures
-completed_at=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
+completed_at=$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ)
 jq -cS --arg reviewed "$reviewed_removal_at" --arg absent "$absence_at" --arg completed "$completed_at" --arg established "$outside_established_at" --arg terminated "$outside_terminated_at" --arg refused "$outside_refused_at" --arg replacement "$outside_replacement_at" '. + {absence_at:$absent,completed_at:$completed,old_established_at:$established,old_refused_at:$refused,old_terminated_at:$terminated,replacement_at:$replacement,reviewed_removal_at:$reviewed}' "${SBXR_OPERATOR_STATE_DIR}/07-state.json" | tr -d '\n' > "${SBXR_OPERATOR_STATE_DIR}/07-state.next"
 mv "${SBXR_OPERATOR_STATE_DIR}/07-state.next" "${SBXR_OPERATOR_STATE_DIR}/07-state.json"
 printf 'IDENTITY_ABSENT_FINISHED reviewed_removal=%s absent=%s completed=%s\n' "$reviewed_removal_at" "$absence_at" "$completed_at"

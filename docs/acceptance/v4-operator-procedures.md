@@ -101,7 +101,32 @@ supported-effective-route-inspected
 ```
 
 Then add the family checks required by `requiredV3Checks`. Hash protected files
-and credentials; never retain their contents. At the end of scenarios 09–24:
+and credentials; never retain their contents.
+
+For the nonbaseline common `supported-effective-route-inspected` check, observe
+the actual **Certbot timer-to-service route before any scenario-specific timer
+stop or fault injection**, while its timer is active and enabled:
+
+```sh
+SCENARIO_ID=$(jq -er .scenario_id "$SBXR_QUALIFICATION_REQUEST")
+python3 /run/sbxr-qualification/effective-route.py \
+  --output "$SBXR_OPERATOR_STATE_DIR/$SCENARIO_ID-effective-route.json"
+```
+
+Set `SCENARIO_ID` from the current collector request. Scenarios 07 and 08 do
+this in their start/setup entry. The helper binds the exact manifest, request,
+candidate and current Ownership Record. Before subscription enablement it
+requires the official snap command and absence of owned interception. With
+renewal authority it requires the exact effective recorder command, drop-in,
+deploy/post hooks, generated service path, and official twice-daily timer route.
+Retain the protected receipt with its real timestamps and digest. An inactive
+timer, stale reload, extra drop-in or wrong command is a refusal. For scenario
+15, retain this healthy-route receipt before hiding the unit and the separate
+fault/restoration observations required below; the fault cannot satisfy the
+healthy common check. This check observes renewal integration; the separate
+identity startup checks below observe the proxy cutover gate.
+
+At the end of scenarios 09–24:
 
 ```sh
 operator_exact_candidate
@@ -164,6 +189,27 @@ closure of that connection. It then attempts one fresh connection with the old
 credential, requires refusal, checks the outside target directly, and uses the
 new configuration obtained through confirmed public manual disclosure to prove
 replacement traffic. A timeout alone is not closure or refusal evidence.
+
+The entry invokes `transition-operator.py rotate identity-absent`. This starts
+one installed zero-argument UI in a unique cgroup and retains tracing across
+five ordered `before-open` stops at the next Ownership Record publication.
+The current durable checkpoints are `target prepared`, `startup integration
+published`, `systemd reloaded`, `startup route verified`, and `source quiescent`.
+At the first three stops the publication, reload, and route-verification effect
+has completed but its next checkpoint has not yet been published. The helper
+separately inspects exact drop-in bytes/protection and the loaded systemd route.
+At the fourth it proves unchanged canonical source and source process, with
+the target only staged. Its ordinary `start` is a no-op on that active source;
+it is not evidence of source admission while the action owns the mutation lock.
+At the last stop it attempts ordinary `start` and `restart`, requires the actual
+ExecCondition refusal after each, and proves no source/target process,
+descendant or listener remains. The action then resumes and must complete the
+prepared target through its own authorized startup route.
+
+`transition-identity-absent.json` binds every observation to the same actual
+UI PID/start tick/executable/cgroup, ordered boundary, Ownership Record digest,
+manifest and current request. Keep its full-resolution source timestamps.
+Missing/reordered checkpoints or uncertain startup denial stop the attempt.
 
 The driver removes its client processes, listeners, temporary package and
 secret-bearing files before publishing `07-outside.json`. The collector validates
@@ -534,6 +580,11 @@ python3 /run/sbxr-qualification/transition-operator.py \
   recover identity-precommit --timeout 90
 ```
 
+The interrupt helper first performs the same five ordered startup observations
+as scenario 07 on this scenario's real reviewed action. It then kills that
+action at the proved source-quiescent boundary. Retain the observations in
+`transition-identity-precommit.json`; do not reuse scenario 07 evidence.
+
 Establish an independent outside proxy session and record its process/session
 identity and traffic. Hash the current UUID, noncredential configuration fields,
 subscription artifact, token/link, certificate and startup units. Start reviewed
@@ -568,6 +619,12 @@ source-traffic-restored rotation-reported-cancelled
 ```
 
 ## 17 — `identity-postcommit`
+
+The interrupt helper repeats the same five startup observations on this
+scenario's action, continues tracing that same process to the additional durable
+`source revoked` checkpoint, and only then interrupts it. Its protected
+`transition-identity-postcommit.json` preserves the current request and ordered
+startup observations; scenario 16 receipts cannot satisfy this scenario.
 
 Use the exact forward-side revocation boundary and later recovery commands:
 
@@ -617,7 +674,15 @@ link retrieval and local public-IP HTTPS fail, while independent TCP 443 proxy
 traffic and outside-target health remain good. Certificate bytes and healthy
 renewal history must not change.
 
-Run reviewed `Rotate Client Identity` to completion. Prove old session/process
+Run the same observed public rotation through:
+
+```sh
+python3 /run/sbxr-qualification/transition-operator.py \
+  rotate identity-unavailable --timeout 120
+```
+
+Retain this action's five startup observations in
+`transition-identity-unavailable.json`. Prove old session/process
 termination, old and fresh old-credential refusal, replacement proxy traffic,
 and the separate subscription status fault. Because the link is unavailable,
 use the menu's separately confirmed `Show client configuration`; never read the
@@ -754,40 +819,43 @@ active-writer-proved removal-refused owned-resources-preserved
 
 ## 22 — `remove-admission-race`
 
-First open a zero-argument menu and reach the displayed Complete removal review,
-but do not submit `REMOVE SBXR`. Separately start the admission coordinator:
+Run the bounded coordinator directly in the original SSH control session. It
+records and stops the initially active/enabled official timer, repeats the exact
+request/package/candidate preflight, and starts the installed candidate's real
+zero-argument menu in a unique transient unit. It binds that menu's exact
+PID/start tick, executable device/inode, unit and cgroup before preparation and
+again after the recorder hold. It dynamically selects the
+displayed `Complete removal` action and holds the actual prepared review at its
+exact `REMOVE SBXR` confirmation without submitting it:
 
 ```sh
-coproc RECORDER_BOUNDARY {
-  python3 /run/sbxr-qualification/recorder-boundary.py admission \
-    "$CERTBOT_INTERPRETER" "$CERTBOT_INTERPRETER_SHA256" --timeout 90
-}
-recorder_pid=$RECORDER_BOUNDARY_PID
-exec {recorder_read}<&"${RECORDER_BOUNDARY[0]}"
-exec {recorder_write}>&"${RECORDER_BOUNDARY[1]}"
-IFS= read -r RECORDER_HELD <&"$recorder_read"
-printf '%s\n' "$RECORDER_HELD" > "$SBXR_OPERATOR_EVIDENCE_DIR/22-admission-held.json"
+python3 /run/sbxr-qualification/admission-race-operator.py \
+  "$CERTBOT_INTERPRETER" "$CERTBOT_INTERPRETER_SHA256" --timeout 90
 ```
 
-Require it to hold the real recorder after whole-host release while shared
-renewal admission remains held. Prove those two BSD flock states through
-`/proc/locks`, plus PID/executable/start tick and receipt.
+The coordinator then invokes the existing `recorder-boundary.py admission`
+control. Before it sends the held menu's confirmation, require that control to
+bind the actual recorder PID/executable/start tick and live receipt, observe the
+whole-host BSD flock released, the renewal writer flock unlocked, and the shared
+renewal admission BSD flock held by that recorder through `/proc/locks`. It
+retains that event as `22-admission-held.json`.
 
-Only then submit the removal confirmation in the original menu session. The
-prepared review must be revalidated and refuse because writer admission won the
-race. Compare all owned resource hashes and service states. Release the recorder,
-then retain its final record:
+Only after those observations does the coordinator submit `REMOVE SBXR` to the
+same still-running menu process and Prepared Action. Require
+`PROXY-INSTALLATION-ACTION-REFUSED`, a nonempty failed safety check, and no
+`Progress: Removal committed`. Compare a secret-safe digest of the full owned
+product/subscription/lineage/firewall inventory and relevant service states
+immediately before and after that refusal while the recorder remains held. It
+retains the bound result as `22-removal-refusal.json`.
 
-```sh
-printf 'release\n' >&"$recorder_write"
-IFS= read -r RECORDER_FINAL <&"$recorder_read"
-exec {recorder_write}>&-
-exec {recorder_read}<&-
-wait "$recorder_pid"
-printf '%s\n' "$RECORDER_FINAL" > "$SBXR_OPERATOR_EVIDENCE_DIR/22-admission-final.json"
-```
-
-Require its real outcome and return to healthy Running.
+The coordinator then releases the recorder, requires its real successful receipt
+outcome with the egress guard retained until the official unit stops, and saves
+`22-admission-final.json`. It proves the exact candidate and healthy `Running`,
+scans journal/transport captures, verifies the official service and cgroup are
+absent, and restores the official timer to its exact initial active/enabled state.
+On a refusal before the public confirmation it closes the held menu without
+mutation; after the recorder is held, every failure still releases/stops that
+control and restores the timer. Such cleanup is not a scenario pass or retry.
 
 Append:
 
@@ -845,25 +913,84 @@ owned-resources-preserved
 
 ## 24 — `secret-containment`
 
-Create a new unprivileged qualification account with no supplementary groups and
-a private empty runtime directory. From that account, attempt read-only opens of
-the subscription token, Ownership Record, configuration, certificate private
-material, collector manifest, transport credential and retained private pipes;
-every protected open must fail. Root must separately prove canonical and staged
-objects are regular, one-link, expected owner/mode, and in their intended
-directory. Remove only the qualification account/runtime after capture.
+Use the protected V2 attempt inventory. It must bind exact, root-owned private
+operator-state, operator-evidence and transport roots. Those three roots must be
+pairwise disjoint. Keep the root-owned specification directly below the evidence
+root and outside every capture root and keep Scenario 24 result receipts there as
+well. Bind one distinct staged capture root for each runner, VPS, Mac, terminal,
+workflow and retained surface. For every capture, compare the opened file
+descriptor's device/inode and full metadata with the declaration, read and hash
+that descriptor, and recheck that the path still names the same inode. Every
+regular file below each staged root must have one inventory entry with its exact
+path, surface, metadata and SHA-256. An unlisted file, invented entry, symlink,
+path replacement or changed digest is incomplete coverage.
 
-Scan, without printing secret matches, all retained VPS captures, journals,
-workflow logs, Mac captures, outside-runner logs, terminal scrollback export,
-`/proc/*/cmdline`, relevant systemd `ExecStart`/environment, and process
-environments. Search for every exact known private key, every old/new Client UUID,
-every old/new subscription credential, private-key headers, and Authorization
-headers. A missing capture or unreadable required surface is `capture coverage
-incomplete`, not a clean scan.
+Independently walk every descendant of the state and transport roots. Classify
+each discovered regular file, FIFO and directory exactly once as qualification
+cleanup or retained; reject every omission, invention, symlink and unsupported
+object kind. Bind cleanup objects by device/inode and full metadata. A retained
+regular file must have a SHA-256 and must either be scanned as a safe retained
+file or be the exact bound manifest or transport credential. Retained directories
+declare structure only. Before cleanup, bind their full metadata; after deleting
+children, require the same device/inode, owner and mode and use a fresh exhaustive
+walk to prove the exact remaining child set. The known-secret file remains a real,
+nonempty cleanup member. Cover every private FIFO that the walk finds, but do not
+invent a FIFO when none exists.
 
-Prove qualification-only tokens, FIFOs, tmpfs client files, helper processes,
-temporary accounts and captures containing protected material are absent.
-Preserve unrelated user data and system services. Append secret checks:
+Discover live attempt processes independently of the declaration from protected
+or dedicated systemd cgroups and from executables, working directories or exact
+absolute argument paths rooted in the attempt. A root-name substring inside an
+arbitrary argument is not process authority. Exclude the scanner's own process
+and ancestor control session. Bind each discovered process by PID, start tick,
+executable device/inode, cgroup, discovery source and cleanup/retained
+classification. Only the exact product and attempt transport cgroups may be
+retained; every other discovered helper must be cleanup-class. The original SSH
+or controller ancestry is outside cleanup and must survive. Immediately recheck
+both identity and mechanical discovery provenance before signaling a cleanup
+process. An empty helper set is valid when discovery finds none.
+After removal, repeat both independent walks, require every cleanup member absent
+and every retained member present, and reject any new object or process. Require
+exactly `sing-box.service`, `sbxr-subscription.service`,
+`snap.certbot.renew.service` and the bound attempt transport service.
+
+The operator must separately attest that the six staged roots contain every
+external capture and log available for this attempt and that external client
+cleanup completed at its actual source. This attestation is required source
+evidence: the VPS scanner cannot discover hidden runner, Mac, terminal or
+workflow logs or external client processes. It does not excuse an omission from
+an inventoried root, and the scanner must not infer external completeness from
+six chosen labels or from its local root walks.
+
+The entry retains the separate `sandbox-token-probe.py` check against the actual
+`sbxr-subscription.service` process, executable and mount namespace. Require its
+two permission refusals for the token and staging paths. The fresh-account probe
+below adds coverage for the full protected inventory; both probes are required.
+
+Root must prove the fixed subscription token, Ownership Record, configuration,
+collector manifest, transport credential, the canonical private-key symlink, its
+resolved actual file below the owned Certbot archive, the known-secret file and
+every inventoried private pipe. Require their canonical paths, kinds, one-link
+rules, owners, modes and file SHA-256 values before probing. Then run
+`protected-open-probe.py` against every one of those paths. It creates a fresh
+system account with no supplementary groups and an empty private `/run` directory,
+drops every capability, sets `NoNewPrivs`, and performs read-only nonblocking
+opens. Every path must exist and return only `EACCES` or `EPERM`; a missing path or
+successful open fails. Require the same safe lstat/resolved-target metadata after
+the probe. Its `finally` path must remove that exact account and empty runtime even
+when a probe fails, without placing secret values in output or arguments.
+
+Scan, without printing matches, every inventoried capture, every scan-retained
+file, `/proc/*/cmdline` and environment, and the complete required-unit
+`ExecStart`, unit text and environment surface for every exact known private key,
+old/new Client UUID, old/new subscription credential, qualification secret,
+private-key header and Authorization header. Remove only exact inventoried
+qualification objects and cleanup-class processes after revalidating their
+identities; then prove all are absent and retained files remain byte-for-byte
+identical. The later journal checks may create only their bounded temporary files
+in operator-state and must remove them before the entry finishes. Preserve
+unrelated user data, the product, transport and original control session. A
+missing or unreadable surface, failed external attestation, inventory drift,
+unknown root object/process or cleanup omission is a refusal. Append:
 
 ```text
 sandbox-cannot-read-token canonical-and-candidate-protection

@@ -11,12 +11,13 @@ for outside_file in 07-outside-started.json 07-outside-ready.json 07-outside-rot
 done
 preflight
 prove_not_installed
-initial_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+initial_at=$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ)
+entry_started_at=$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ)
 load_candidate_identity
 install_candidate
 operator_exact_candidate
 prove_not_set_up
-install_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+install_at=$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ)
 action 'Start setup' y 'Code: PROXY-INSTALLATION-SETUP-COMPLETE'
 prove_running
 operator_exact_candidate
@@ -40,9 +41,10 @@ chmod 0600 "${SBXR_OPERATOR_STATE_DIR}/07-source-client.json"
 source_uuid=$(jq -er '.inbounds[0].users[0].uuid' "${SBXR_OPERATOR_STATE_DIR}/07-source-server.json")
 test "$source_uuid" = "$(jq -er '.outbounds[0].uuid' "${SBXR_OPERATOR_STATE_DIR}/07-source-client.json")"
 issuance_lines=$(zgrep -hF 'Certificate is saved at:' /var/log/letsencrypt/letsencrypt.log* 2>/dev/null | wc -l | tr -d ' ')
-setup_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-jq -cnS --arg started "$STARTED_AT" --arg initial "$initial_at" --arg install "$install_at" --arg setup "$setup_at" --arg pid "$source_pid" --arg tick "$source_tick" --arg group "$source_group" --argjson issuance "$issuance_lines" '{initial_at:$initial,install_at:$install,issuance_lines_before:$issuance,setup_at:$setup,source_disclosure_confirmed:true,source_group:$group,source_pid:$pid,source_tick:$tick,started_at:$started}' | tr -d '\n' > "${SBXR_OPERATOR_STATE_DIR}/07-state.json"
+setup_at=$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ)
+jq -cnS --arg started "$STARTED_AT" --arg entry "$entry_started_at" --arg initial "$initial_at" --arg install "$install_at" --arg setup "$setup_at" --arg pid "$source_pid" --arg tick "$source_tick" --arg group "$source_group" --argjson issuance "$issuance_lines" '{entry_started_at:$entry,initial_at:$initial,install_at:$install,issuance_lines_before:$issuance,setup_at:$setup,source_disclosure_confirmed:true,source_group:$group,source_pid:$pid,source_tick:$tick,started_at:$started}' | tr -d '\n' > "${SBXR_OPERATOR_STATE_DIR}/07-state.json"
 chmod 0600 "${SBXR_OPERATOR_STATE_DIR}/07-state.json"
+python3 "$operator_dir/effective-route.py" --output "${SBXR_OPERATOR_STATE_DIR}/07-effective-route.json"
 test ! -e "${SBXR_OPERATOR_EVIDENCE_DIR}/identity-outside-request.json"
 test ! -L "${SBXR_OPERATOR_EVIDENCE_DIR}/identity-outside-request.json"
 jq -cnS --argjson deadline "$(jq -er .deadline_unix "$SBXR_QUALIFICATION_REQUEST")" \

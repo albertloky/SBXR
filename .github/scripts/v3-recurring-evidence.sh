@@ -214,6 +214,12 @@ while IFS= read -r next_scenario <&3; do
         for source_pair in \
           ".github/scripts/v3-operator/identity-outside.py $identity_operator_directory/identity-outside.py" \
           ".github/scripts/v3-operator/operator-support.sh $identity_operator_directory/operator-support.sh" \
+          ".github/scripts/v3-operator/transition-operator.py $identity_operator_directory/transition-operator.py" \
+          ".github/scripts/v3-operator/identity-startup.py $identity_operator_directory/identity-startup.py" \
+          ".github/scripts/v3-operator/effective-route.py $identity_operator_directory/effective-route.py" \
+          ".github/scripts/v3-operator/observations.py $identity_operator_directory/observations.py" \
+          ".github/scripts/v3-operator/syscall-gate.py $identity_operator_directory/syscall-gate.py" \
+          ".github/scripts/v3-operator/exec-gate.py $identity_operator_directory/exec-gate.py" \
           ".github/scripts/v3-operator/07-identity-absent-start.sh $identity_operator_directory/07-identity-absent-start.sh" \
           ".github/scripts/v3-operator/07-identity-absent-rotate.sh $identity_operator_directory/07-identity-absent-rotate.sh" \
           ".github/scripts/v3-operator/07-identity-absent-finish.sh $identity_operator_directory/07-identity-absent-finish.sh" \

@@ -53,7 +53,9 @@ def checkpoint(path):
         os.close(fd)
 
 
-def trace(root, deadline, path, boundary, record=None, field=None, value=None, no_child=False, child_executable=None):
+def trace(root, deadline, path, boundary, record=None, field=None, value=None, no_child=False, child_executable=None, then_values=()):
+    values = [value, *then_values]
+    boundary_index = 0
     libc = ctypes.CDLL(None, use_errno=True)
     libc.ptrace.restype = ctypes.c_long
     def ptrace(request, pid, address=0, data=0):
@@ -83,7 +85,8 @@ def trace(root, deadline, path, boundary, record=None, field=None, value=None, n
         try:
             for part in field.split('.'):
                 current = current[int(part)] if isinstance(current, list) else current[part]
-            expected = root if value == '@root-pid' else value
+            selected = values[boundary_index]
+            expected = root if selected == '@root-pid' else selected
             if current != expected:
                 return None
             return hashlib.sha256(body).hexdigest()
@@ -204,12 +207,23 @@ def trace(root, deadline, path, boundary, record=None, field=None, value=None, n
                     raise ValueError('checkpoint changed during thread stop')
                 print(json.dumps({'state': 'boundary-held', 'pid': root, 'tid': pid, 'boundary': boundary,
                                   'path': path, 'record_sha256': evidence, 'children': list(child_observations.values()),
-                                  'vanished_tracees': sorted(vanished_tracees)}), flush=True)
+                                  'vanished_tracees': sorted(vanished_tracees),
+                                  'boundary_index': boundary_index}), flush=True)
                 remaining = deadline-time.monotonic()
                 if remaining <= 0 or not select.select([sys.stdin], [], [], remaining)[0]:
                     raise TimeoutError('boundary decision deadline')
                 command = sys.stdin.readline()
+                if command == 'continue\n':
+                    if boundary_index + 1 >= len(values):
+                        raise ValueError('no further boundary selected')
+                    boundary_index += 1
+                    for other in sorted(traced, reverse=True):
+                        ptrace(24, other)
+                    stopped.clear()
+                    continue
                 if command == 'release\n':
+                    if boundary_index + 1 != len(values):
+                        raise ValueError('unobserved selected boundaries remain')
                     for other in sorted(traced, reverse=True):
                         try:
                             ptrace(17, other)
@@ -220,7 +234,7 @@ def trace(root, deadline, path, boundary, record=None, field=None, value=None, n
                     print('{"state":"released"}', flush=True)
                     return
                 if command != 'kill\n':
-                    raise ValueError('explicit kill or release required')
+                    raise ValueError('explicit kill, continue or release required')
                 print('{"state":"interrupted"}', flush=True)
                 return
             deliver = sig if sig not in (signal.SIGTRAP, signal.SIGTRAP | 0x80) and event == 0 else 0
@@ -281,6 +295,8 @@ if __name__ == '__main__':
     parser.add_argument('--record')
     parser.add_argument('--field')
     parser.add_argument('--value')
+    parser.add_argument('--then-value', action='append', default=[],
+                        help='next ordered value of the same record field; continue retains tracing')
     parser.add_argument('--no-child', action='store_true')
     parser.add_argument('--child-executable')
     parser.add_argument('--timeout', type=int, default=90)
@@ -290,8 +306,11 @@ if __name__ == '__main__':
             raise ValueError('x86-64 Linux required')
         if bool(args.record) != bool(args.field and args.value):
             raise ValueError('record, field and value required together')
+        if (args.then_value and not args.record or len(args.then_value) > 12 or
+                len(set([args.value, *args.then_value])) != 1 + len(args.then_value)):
+            raise ValueError('ordered boundaries require distinct values and one record')
         def callback(pid, deadline):
-            return trace(pid, deadline, args.path, args.boundary, args.record, args.field, args.value, args.no_child, args.child_executable)
+            return trace(pid, deadline, args.path, args.boundary, args.record, args.field, args.value, args.no_child, args.child_executable, args.then_value)
         entry.run(args.executable, args.cgroup, args.timeout, on_held=callback, trace_options=1 | 2 | 4 | 8)
     except Exception as error:
         print(json.dumps({'state': 'refused', 'error_type': type(error).__name__, 'errno': getattr(error, 'errno', None)}), flush=True)

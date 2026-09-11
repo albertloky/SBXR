@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Check the protected subscription link from the outside Mac without retaining it."""
+import argparse
+import datetime
 import hashlib
 import http.client
 import ipaddress
@@ -8,6 +10,7 @@ import re
 import socket
 import ssl
 import sys
+import time
 import urllib.parse
 
 SUBSCRIPTION_PORT = 8443
@@ -66,10 +69,32 @@ def check(data):
         except Exception: raise SafeFailure("certificate-hash") from None
     return {"artifact_fields_and_name":True,"expected_status":True,"link_sha256":hashlib.sha256(link_text.encode()).hexdigest(),"schema":"sbxr-v3-subscription-check-v1","trusted_outside_tls":True}
 
+def now():
+    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="microseconds").replace("+00:00","Z")
+
+def check_bound(data):
+    binding=data.get("binding")
+    require("binding", isinstance(binding,dict) and set(binding)=={"deadline_unix","not_before","qualification_manifest_sha256","request_sha256","scenario_id"})
+    require("binding", binding["scenario_id"]=="enable-schema1" and type(binding["deadline_unix"]) is int and
+            re.fullmatch(r"[0-9a-f]{64}",binding["qualification_manifest_sha256"] or "") is not None and
+            re.fullmatch(r"[0-9a-f]{64}",binding["request_sha256"] or "") is not None and time.time()<=binding["deadline_unix"])
+    try: not_before=datetime.datetime.fromisoformat(binding["not_before"].replace("Z","+00:00"))
+    except Exception: raise SafeFailure("binding") from None
+    require("binding", not_before.tzinfo==datetime.timezone.utc)
+    started=now(); require("binding", datetime.datetime.fromisoformat(started.replace("Z","+00:00"))>=not_before)
+    result=check(data); completed=now()
+    require("deadline", time.time()<=binding["deadline_unix"])
+    return dict(result, schema="sbxr-v4-subscription-check-v2",scenario_id="enable-schema1",
+                qualification_manifest_sha256=binding["qualification_manifest_sha256"],request_sha256=binding["request_sha256"],
+                started_at=started,completed_at=completed,configuration_sha256=hashlib.sha256(json.dumps(data["configuration"],sort_keys=True,separators=(",",":")).encode()).hexdigest(),
+                certificate_der_sha256=data["certificate_der_sha256"])
+
 if __name__ == "__main__":
     try:
+        parser=argparse.ArgumentParser(); parser.add_argument("--bound",action="store_true"); args=parser.parse_args()
         body = sys.stdin.buffer.read(1_000_001)
         if len(body) > 1_000_000: raise SafeFailure("input-bound")
-        print(json.dumps(check(json.loads(body, object_pairs_hook=unique)), separators=(",", ":")))
+        data=json.loads(body, object_pairs_hook=unique)
+        print(json.dumps(check_bound(data) if args.bound else check(data),sort_keys=args.bound,separators=(",", ":")))
     except SafeFailure as failure: print(json.dumps({"subscription_check_failed":True,"stage":str(failure)}, separators=(",", ":"))); raise SystemExit(1)
     except Exception: print('{"subscription_check_failed":true,"stage":"link-shape"}'); raise SystemExit(1)

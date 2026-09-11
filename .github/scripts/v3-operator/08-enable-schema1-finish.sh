@@ -16,9 +16,9 @@ case "${1:-}" in
     test "$(sha256sum /var/lib/sbxr/proxy-ownership.json | cut -d' ' -f1)" = "$(jq -er .ownership_sha256 "$state")"
     test "$(systemctl show sing-box.service -p MainPID --value)" = "$(jq -er .proxy_pid "$state")"
     test "$(awk '{print $22}' "/proc/$(jq -er .proxy_pid "$state")/stat")" = "$(jq -er .proxy_start_tick "$state")"
-    action_started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    action_started=$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ)
     action 'Enable subscription' y 'Code: PROXY-INSTALLATION-SUBSCRIPTION-ENABLED'
-    action_completed=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    action_completed=$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ)
     link=$(printf '%s\n' "$LAST_ACTION_OUTPUT" | sed -n '/^https:\/\/[^[:space:]]*:8443\/s\/[A-Za-z0-9_-]\{43\}$/p')
     test "$(printf '%s\n' "$link" | wc -l | tr -d ' ')" -eq 1
     link_sha=$(printf %s "$link" | sha256sum | cut -d' ' -f1)
@@ -40,11 +40,18 @@ case "${1:-}" in
     request_deadline=$(jq -er .deadline_unix "$SBXR_QUALIFICATION_REQUEST")
     python3 "$operator_dir/check-connection-observation.py" "$SBXR_ENABLE_SCHEMA1_CONNECTION_OBSERVATION" "$SCENARIO_START" "$action_started" "$action_completed" "$request_deadline" "$request_sha" > "${SBXR_OPERATOR_EVIDENCE_DIR}/08-connection-summary.json"
     chmod 0600 "${SBXR_OPERATOR_EVIDENCE_DIR}/08-connection-summary.json"
-    jq -e --arg link "$(jq -er .authoritative_link_sha256 "$state")" '
-      keys == ["artifact_fields_and_name","expected_status","link_sha256","schema","trusted_outside_tls"] and
-      .schema == "sbxr-v3-subscription-check-v1" and .trusted_outside_tls == true and
-      .expected_status == true and .artifact_fields_and_name == true and .link_sha256 == $link
+    jq -e --arg link "$(jq -er .authoritative_link_sha256 "$state")" --arg manifest "$(operator_manifest_digest)" \
+      --arg request "$request_sha" --arg action "$action_completed" \
+      --argjson deadline "$request_deadline" '
+      .schema == "sbxr-v4-subscription-check-v2" and .scenario_id == "enable-schema1" and
+      .qualification_manifest_sha256 == $manifest and .request_sha256 == $request and
+      .trusted_outside_tls == true and .expected_status == true and .artifact_fields_and_name == true and
+      .link_sha256 == $link and (.configuration_sha256|test("^[0-9a-f]{64}$")) and
+      (.certificate_der_sha256|test("^[0-9a-f]{64}$")) and .completed_at >= .started_at
     ' "$SBXR_ENABLE_SCHEMA1_SUBSCRIPTION_OBSERVATION" >/dev/null
+    python3 -c 'import datetime,json,sys; d=json.load(open(sys.argv[1])); p=lambda v: datetime.datetime.fromisoformat(v.replace("Z","+00:00")); assert p(d["started_at"]) >= p(sys.argv[2]); assert p(d["completed_at"]) >= p(d["started_at"]); assert p(d["completed_at"]).timestamp() <= int(sys.argv[3])' "$SBXR_ENABLE_SCHEMA1_SUBSCRIPTION_OBSERVATION" "$action_completed" "$request_deadline"
+    subscription_observed_at=$(jq -er .completed_at "$SBXR_ENABLE_SCHEMA1_SUBSCRIPTION_OBSERVATION")
+    subscription_receipt_sha=$(sha256sum "$SBXR_ENABLE_SCHEMA1_SUBSCRIPTION_OBSERVATION" | cut -d' ' -f1)
     scan_retained_capture "$SBXR_ENABLE_SCHEMA1_CONNECTION_OBSERVATION" "$SBXR_ENABLE_SCHEMA1_SUBSCRIPTION_OBSERVATION" "${SBXR_OPERATOR_EVIDENCE_DIR}/08-connection-summary.json"
     remember_secrets
     token_sha=$(sha256sum /var/lib/sbxr/subscription-token | cut -d' ' -f1)
@@ -76,7 +83,27 @@ case "${1:-}" in
     operator_exact_candidate
     scan_journal
     scan_transport_captures
-    completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    completed_at=$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ)
+    safe_state="${SBXR_OPERATOR_STATE_DIR}/08-safe-state.json"
+    test ! -e "$safe_state"
+    test ! -L "$safe_state"
+    link_id=$(jq -er '.serving.link_id | select(test("^[0-9a-f]{32}$"))' /var/lib/sbxr/proxy-ownership.json)
+    ownership_schema=$(jq -er '.schema | select(. == 2)' /var/lib/sbxr/proxy-ownership.json)
+    ownership_phase=$(jq -er '.phase | select(. == "Running")' /var/lib/sbxr/proxy-ownership.json)
+    jq -cnS \
+      --arg scenario enable-schema1 --arg started "$SCENARIO_START" \
+      --arg action_started "$action_started" --arg action_completed "$action_completed" \
+      --arg completed "$completed_at" --arg manifest "$(operator_manifest_digest)" \
+      --arg request "$(sha256sum "$SBXR_QUALIFICATION_REQUEST" | cut -d' ' -f1)" \
+      --arg private "$(sha256sum "$state" | cut -d' ' -f1)" \
+      --arg ownership "$(sha256sum /var/lib/sbxr/proxy-ownership.json | cut -d' ' -f1)" \
+      --argjson ownership_schema "$ownership_schema" --arg ownership_phase "$ownership_phase" \
+      --arg link_id "$link_id" --arg link_sha "$(jq -er .authoritative_link_sha256 "$state")" \
+      --arg subscription_observed "$subscription_observed_at" --arg subscription_receipt "$subscription_receipt_sha" \
+      '{action_completed_at:$action_completed,action_started_at:$action_started,authoritative_link_sha256:$link_sha,completed_at:$completed,final_state:$ownership_phase,initial_state:"Running",link_id:$link_id,ownership_record_sha256:$ownership,ownership_schema:$ownership_schema,private_state_sha256:$private,qualification_manifest_sha256:$manifest,request_sha256:$request,scenario_id:$scenario,schema:"sbxr-v4-enable-schema1-safe-state-v1",started_at:$started,subscription_observed_at:$subscription_observed,subscription_receipt_sha256:$subscription_receipt}' \
+      | tr -d '\n' > "${safe_state}.next"
+    chmod 0600 "${safe_state}.next"
+    mv -T "${safe_state}.next" "$safe_state"
     printf 'ENABLE_SCHEMA1_OK started=%s action_started=%s action_completed=%s completed=%s\n' "$SCENARIO_START" "$action_started" "$action_completed" "$completed_at"
     ;;
   *) printf 'usage: %s enable|verify\n' "$0" >&2; exit 2 ;;

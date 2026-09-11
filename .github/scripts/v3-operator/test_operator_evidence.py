@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 import urllib.parse
+from unittest import mock
 
 ROOT = Path(__file__).parent
 
@@ -78,6 +79,17 @@ class OperatorEvidenceTest(unittest.TestCase):
         self.assertTrue(subscription.fields_match(artifact, config))
         self.assertFalse(subscription.fields_match(artifact.replace(b"&type=tcp", b"&type=tcp&type=tcp"), config))
         self.assertFalse(subscription.fields_match(artifact.replace(b"SBXR%20Proxy", b"Other"), config))
+
+    def test_bound_subscription_result_records_actual_request_and_tls_interval(self):
+        data={"configuration":{"outbounds":[]},"certificate_der_sha256":"c"*64,"link":"https://203.0.113.7:8443/s/"+"A"*43,
+              "binding":{"deadline_unix":4102444800,"not_before":"2030-01-01T00:00:00Z","qualification_manifest_sha256":"a"*64,
+                         "request_sha256":"b"*64,"scenario_id":"enable-schema1"}}
+        base={"artifact_fields_and_name":True,"expected_status":True,"link_sha256":"d"*64,"schema":"sbxr-v3-subscription-check-v1","trusted_outside_tls":True}
+        with mock.patch.object(subscription,"check",return_value=base), mock.patch.object(subscription,"now",side_effect=["2030-01-01T00:00:01.000001Z","2030-01-01T00:00:02.000002Z"]), mock.patch.object(subscription.time,"time",return_value=1893456002):
+            result=subscription.check_bound(data)
+        self.assertEqual((result["schema"],result["request_sha256"],result["started_at"],result["completed_at"]),("sbxr-v4-subscription-check-v2","b"*64,"2030-01-01T00:00:01.000001Z","2030-01-01T00:00:02.000002Z"))
+        changed=dict(data); changed["binding"]=dict(data["binding"],request_sha256="0"*63)
+        with self.assertRaises(subscription.SafeFailure): subscription.check_bound(changed)
 
     def test_protected_subscription_observation_is_assembled_from_bytes(self):
         link = b"https://203.0.113.7:8443/s/" + b"A" * 43

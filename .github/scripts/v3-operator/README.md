@@ -24,7 +24,8 @@ GOOS=linux GOARCH=amd64 GOTOOLCHAIN=go1.26.6 go build \
 
 Copy the operator directory, sibling `v3-packaged-live.sh` and
 `v3-candidate-dispatch.sh`, `v3-recurring-evidence.sh`, and
-`docs/acceptance/v4-operator-procedures.md` into a
+`docs/acceptance/v4-operator-procedures.md` and
+`docs/acceptance/evidence-assembly.md` into a
 unique temporary repository-shaped tree on the Linux host. Preserve their
 repository-relative paths. Copy the fixture separately into that temporary
 tree. Do not copy private candidate data. Run there:
@@ -68,7 +69,11 @@ Any changed helper requires a fresh report. The runner retains private per-case
 logs alongside its report, including failed-case diagnostics. The Go child
 fixture repeats all four boundaries six times to exercise concurrent thread exits. Missing, failed, stale or mismatched
 reports refuse V4 preparation. Passing this gate neither authorizes a candidate
-nor proves its future live results.
+nor proves its future live results. The ordered-syscall fixture also proves
+successive holds remain on one Go process and refuses an early release or an
+extra continuation. The startup-unit fixture uses a separate temporary service
+and target to prove that denied ordinary starts leave a later authorized start
+possible; it never starts SBXR.
 
 ## Operator bundle and inputs
 
@@ -157,8 +162,12 @@ and cleanup requirements are in
 For scenario 08, the existing outside runner must be connected before enablement;
 `connection-probe.py` keeps one real TLS connection open through its local proxy.
 Use `subscription-observation-input.sh` only in a private pipe to
-`check-subscription.py`; its input contains credentials. Never display that pipe,
-put it in argv, or retain it in terminal/workflow captures.
+`check-subscription.py --bound`; the input helper adds the current manifest,
+request, original deadline and not-before binding, while the checker records the
+actual successful TLS interval. Its input contains credentials. Never display
+that pipe, put it in argv, or retain it in terminal/workflow captures. Store only
+the checker's secret-safe bound JSON output as the scenario 08 subscription
+observation.
 
 The OS controllers own their kernel boundaries and cleanup. `managed-hold.py`
 binds the actual snap child to the official recorder and its receipt;
@@ -167,3 +176,51 @@ locks; `transition-operator.py` binds public recovery to durable ownership
 checkpoints. The egress guard stays attached until the controlled service stops.
 A stop failure retains the guard and requires operator cleanup; it is a failed
 scenario, not an invitation to continue.
+
+## Startup observations and evidence assembly
+
+`transition-operator.py rotate identity-absent` is the scenario-07 rotation
+entry's coordinator. The same ordered startup observations run before the
+identity precommit/postcommit interruptions and during `rotate
+identity-unavailable`. The protected receipts record publication, reload,
+effective route, unchanged source before cutover, and ordinary start/restart
+denial after quiescence on the same actual UI process. A pre-gate `start` on the
+already active source is a no-op; it does not prove that an external request was
+admitted while the whole-host mutation lock was held.
+
+For every nonbaseline scenario, `effective-route.py` observes the supported
+Certbot timer-to-service route before timer stops or injected route faults.
+Scenarios 07 and 08 invoke it automatically after supported setup. Later
+procedures invoke it explicitly and retain the current request-bound receipt.
+It observes renewal integration; the identity coordinator separately observes
+proxy startup protection.
+
+`evidence-timing.py` binds typed evidence timestamps to exact retained source
+artifacts and event-specific lower/upper bounds. `assemble-evidence.py` uses that
+seam for scenarios 07/08, requires fresh manifest/boundary/validator verification
+and accepted-prefix receipts, validates the actual entry/controller/outside
+artifacts, and invokes a pinned local qualification validator before writing
+facts. Its protected operator-observation input must refer to the actual
+capture bytes. Artifact digests detect substitution; the operator remains
+responsible for verifying source provenance and attestation. This helper never
+dispatches a candidate or submits evidence.
+
+The exact CLI inputs, receipt schemas, and retained scenario-07 paths are in
+[`evidence-assembly.md`](../../../docs/acceptance/evidence-assembly.md).
+
+Keep fractional source timestamps unchanged. A later whole-second wire
+observation cannot be rounded down before its source event. Scenario 07's old
+session can terminate during rotation, before the action completes; its fresh
+old-credential refusal must occur after completion. The assembler retains those
+distinct ordering requirements and refuses all observations dated at scenario
+start. Scenario 08 retains a safe completion receipt after its final assertions.
+Neither assembler covers the later scenarios' outside observations or turns
+an unprepared procedure into complete qualification coverage.
+
+`admission-race-operator.py` owns scenario 22's single prepared removal menu and
+the existing recorder-admission controller. It waits for the transient menu's
+active service and actual PID within the original deadline before binding its
+process identity. It confirms that same reviewed
+action only after the real recorder holds admission, requires refusal and an
+unchanged owned inventory, then releases the recorder and restores its timer.
+The detailed procedure specifies its inputs, evidence files and cleanup.

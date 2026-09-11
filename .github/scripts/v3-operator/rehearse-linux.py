@@ -18,15 +18,17 @@ import time
 HERE = Path(__file__).resolve().parent
 TESTS = ['exec-gate', 'network-guard', 'systemd-guard', 'combined-deny',
          'combined-release', 'snap-chain-deny', 'snap-chain-release',
-         'syscall-python', 'syscall-go', 'syscall-go-child', 'flock', 'route',
-         'firewall', 'sandbox-token-probe', 'helper-unit-tests', 'entry-point-rehearsal']
+         'syscall-python', 'syscall-go', 'syscall-go-child', 'syscall-sequence', 'identity-startup', 'flock', 'route',
+         'firewall', 'sandbox-token-probe', 'protected-open-probe',
+         'helper-unit-tests', 'entry-point-rehearsal']
 
 def source_hashes():
     paths = [path for path in HERE.rglob('*')
              if path.is_file() and path.suffix in ('.py', '.sh', '.go', '.md')]
     paths += [HERE.parent/'v3-packaged-live.sh', HERE.parent/'v3-candidate-dispatch.sh',
               HERE.parent/'v3-recurring-evidence.sh',
-              HERE.parents[2]/'docs/acceptance/v4-operator-procedures.md']
+              HERE.parents[2]/'docs/acceptance/v4-operator-procedures.md',
+              HERE.parents[2]/'docs/acceptance/evidence-assembly.md']
     return {os.path.relpath(path, HERE): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in sorted(paths)}
 
@@ -43,9 +45,11 @@ def run(args):
              command('combined-hold')+[str(interpreter),'--snap-renew-version'],
              command('combined-hold')+[str(interpreter),'--snap-renew-version','--release'],
              command('syscall-gate'), command('syscall-gate')+[str(fixture)],
-             command('syscall-gate')+[str(fixture),'--with-child','--repeat','6'], command('flock'),
+             command('syscall-gate')+[str(fixture),'--with-child','--repeat','6'],
+             command('syscall-sequence')+[str(fixture)], command('identity-startup'), command('flock'),
              command('route'), ['unshare','-n','--']+command('firewall'),
              ['/bin/bash',str(HERE/'rehearse-sandbox-token-probe.sh')],
+             ['/bin/bash',str(HERE/'rehearse-protected-open-probe.sh')],
              [py,'-m','unittest','discover','-s',str(HERE),'-p','test_*.py'],
              ['/bin/bash',str(HERE/'rehearse.sh')]]
     results=[]

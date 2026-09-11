@@ -189,12 +189,13 @@ class TransitionSpecificationTests(unittest.TestCase):
                 interrupted = record_for(scenario)
                 initial = {'schema': 2, 'configuration_sha256': 'a' * 64}
                 initial_raw, interrupted_raw = encoded(initial), encoded(interrupted)
+                identity = scenario.startswith('identity-')
                 gate = FakeProcess(
                     json.dumps({'state': 'armed'}) + '\n' +
-                    json.dumps({'state': 'boundary-held', 'pid': 123, 'boundary': 'before-open',
+                    ('' if identity else json.dumps({'state': 'boundary-held', 'pid': 123, 'boundary': 'before-open',
                                 'path': str(root / 'next'),
-                                'record_sha256': transition.digest(interrupted_raw)}) + '\n' +
-                    json.dumps({'state': 'interrupted'}) + '\n', text=True)
+                                'record_sha256': transition.digest(interrupted_raw)}) + '\n') +
+                    json.dumps({'state': 'interrupted'}) + '\n', text=not identity)
                 menu = FakeProcess(
                     '1. ' + selected['action'] + '\n0. Exit\n' +
                     selected['action'] + '? [y/N]\n')
@@ -202,6 +203,11 @@ class TransitionSpecificationTests(unittest.TestCase):
                 with mock.patch.object(transition, 'STATE_DIR', root), \
                         mock.patch.object(transition, 'NEXT', root / 'next'), \
                         mock.patch.object(transition, 'common_preflight', return_value=(time.time() + 100, manifest_hash)), \
+                        mock.patch.object(transition.startup, 'Observer'), \
+                        mock.patch.dict(os.environ, {'SBXR_QUALIFICATION_REQUEST': '/request'}), \
+                        mock.patch.object(transition, 'protected_bytes', return_value=b'{}'), \
+                        mock.patch.object(transition, 'observe_identity_boundaries', return_value=(
+                            interrupted_raw, interrupted, {'pid': 123}, [{'check': 'fixture'}])), \
                         mock.patch.object(transition, 'protected_record', side_effect=[
                             (initial_raw, initial), (interrupted_raw, interrupted),
                             (interrupted_raw, interrupted)]), \
@@ -212,7 +218,7 @@ class TransitionSpecificationTests(unittest.TestCase):
                         mock.patch.object(transition, 'launch_menu', return_value=menu), \
                         mock.patch('builtins.print'):
                     transition.interrupt(scenario, 90)
-                self.assertEqual(gate.stdin.getvalue(), 'kill\n')
+                self.assertEqual(gate.stdin.getvalue(), b'kill\n' if identity else 'kill\n')
                 self.assertEqual(menu.stdin.getvalue(), b'1\ny\n')
                 saved = json.loads(state_file.read_text())
                 self.assertEqual(saved['checkpoint'], selected['checkpoint'])
