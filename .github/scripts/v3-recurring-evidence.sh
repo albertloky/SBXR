@@ -2,6 +2,7 @@
 # Evidence handoff only. The operator uses unchanged packaged production paths.
 set -euo pipefail
 umask 077
+export PYTHONDONTWRITEBYTECODE=1
 outside_request_matches() {
   cmp -s "$1" <(printf '{"deadline_unix":%s,"qualification_manifest_sha256":"%s","request_id":"%s","scenario_id":"%s","schema":"sbxr-v3-outside-probe-request-v1"}' "$2" "$3" "$4" "$5")
 }
@@ -100,6 +101,7 @@ manifest=handoff/qualification-manifest.json
 boundary=handoff/qualification-boundary-facts.json
 tool=handoff/sbxr-release
 jq -e '(.schema == "sbxr-qualification-manifest-v2" or .schema == "sbxr-qualification-manifest-v3") and (.source_state == "v3-recurring" or .source_state == "v3-subscription-clean")' "$manifest" >/dev/null
+chmod 0600 "$manifest"
 digest="$(sha256sum "$manifest" | cut -d' ' -f1)"
 directory="$(mktemp -d)"
 mkdir -m 0700 handoff/v3-scenarios

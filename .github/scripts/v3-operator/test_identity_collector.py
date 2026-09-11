@@ -2,6 +2,7 @@
 """Collector contract for the distinct scenario-07 outside producer."""
 import json
 import hashlib
+import importlib.util
 from pathlib import Path
 import subprocess
 import tempfile
@@ -75,6 +76,57 @@ class IdentityCollectorTests(unittest.TestCase):
         self.assertNotIn('ssh -n', identity_branch)
         self.assertLess(self.source.index('if test "$outside_identity_required" = true; then'),
                         self.source.index(".detailed_evidence.scenarios | length"))
+
+    def test_downloaded_manifest_is_private_before_identity_driver_reads_it(self):
+        privacy = 'chmod 0600 "$manifest"'
+        self.assertIn(privacy, self.source)
+        self.assertLess(self.source.index(privacy), self.source.index("identity-outside.py run"))
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "qualification-manifest.json"
+            manifest.write_bytes(b'{}')
+            manifest.chmod(0o644)
+            helper_path = COLLECTOR.with_name("v3-operator") / "identity-outside.py"
+            spec = importlib.util.spec_from_file_location("identity_outside_collector_test", helper_path)
+            helper = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(helper)
+            with self.assertRaises(ValueError):
+                helper.read_private(manifest)
+            result = subprocess.run(
+                ["bash", "-c", "manifest=$1\n" + privacy, "identity-manifest", str(manifest)],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertEqual(manifest.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(helper.read_private(manifest), b'{}')
+
+    def test_driver_imports_do_not_create_untracked_sources(self):
+        bytecode = "export PYTHONDONTWRITEBYTECODE=1"
+        self.assertIn(bytecode, self.source)
+        self.assertLess(self.source.index(bytecode), self.source.index("identity_sources_match_commit()"))
+        source_check = self.functions.split("identity_sources_match_commit() {", 1)[1].split("\n}\n", 1)[0]
+        source_check = "identity_sources_match_commit() {" + source_check + "\n}\n"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            operator = root / ".github/scripts/v3-operator"
+            operator.mkdir(parents=True)
+            (operator / "helper.py").write_text("VALUE = 1\n")
+            (operator / "other.py").write_text("VALUE = 2\n")
+            (root / ".github/scripts/v3-recurring-evidence.sh").write_text("collector\n")
+            (root / ".github/scripts/v3-packaged-live.sh").write_text("producer\n")
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            subprocess.run(["git", "config", "user.email", "collector@example.invalid"], cwd=root, check=True)
+            subprocess.run(["git", "config", "user.name", "Collector Test"], cwd=root, check=True)
+            subprocess.run(["git", "add", ".github"], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "fixture"], cwd=root, check=True)
+            command = "\n".join([
+                "set -euo pipefail", bytecode, source_check,
+                "PYTHONPATH=.github/scripts/v3-operator python3 -c 'import helper'",
+                "test ! -e .github/scripts/v3-operator/__pycache__",
+                "GITHUB_SHA=$(git rev-parse HEAD)",
+                'identity_sources_match_commit "$GITHUB_SHA"',
+            ])
+            result = subprocess.run(["bash", "-c", command], cwd=root,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
 
     def test_helper_failure_maps_to_canonical_failure_reason(self):
         with tempfile.TemporaryDirectory() as directory:
