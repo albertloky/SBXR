@@ -126,3 +126,35 @@ func TestV4DeclarationDispatchRequiresRehearsedOperator(t *testing.T) {
 		})
 	}
 }
+
+func TestMVPDeclarationDispatchDoesNotRequireV4Rehearsal(t *testing.T) {
+	script, err := filepath.Abs(".github/scripts/v3-candidate-dispatch.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	files := map[string]string{
+		"tool":    "#!/bin/sh\ncat >/dev/null\nprintf '{\"outcome\":\"accepted\"}'\n",
+		"python3": "#!/bin/sh\ntouch \"$REHEARSAL_CALLED\"\nexit 99\n",
+		"gh":      "#!/bin/sh\nif [ \"$1\" = api ]; then printf source; else cat > \"$DISPATCHED\"; fi\n",
+		"facts":   `{"candidate":{"b_sequence":149,"b_tag":"v3.1.70","mode":"v3"},"commit":"source","remote_main":"source"}`,
+		"attempt": `{"evidence_policy":"mvp-live-v1"}`,
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	command := exec.Command("bash", script, "dispatch", filepath.Join(dir, "tool"), filepath.Join(dir, "facts"), filepath.Join(dir, "attempt"))
+	command.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "REHEARSAL_CALLED="+filepath.Join(dir, "rehearsal"), "DISPATCHED="+filepath.Join(dir, "dispatch"), "SBXR_OPERATOR_REHEARSAL_REPORT="+filepath.Join(dir, "missing-report"))
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("MVP declaration required V4 rehearsal: %v\n%s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "rehearsal")); !os.IsNotExist(err) {
+		t.Fatal("MVP invoked historical readiness checker")
+	}
+	body, err := os.ReadFile(filepath.Join(dir, "dispatch"))
+	if err != nil || !strings.Contains(string(body), `mvp-live-v1`) {
+		t.Fatalf("MVP policy did not reach workflow inputs: %v\n%s", err, body)
+	}
+}

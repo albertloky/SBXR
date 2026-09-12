@@ -25,6 +25,15 @@ func TestSourceBindsCleanInstallSupportToQualifiedIndex(t *testing.T) {
 	t.Run("two-issuance-policy", func(t *testing.T) {
 		testCleanInstallSupport(t, softwarelifecycle.SubscriptionCleanInstallRepair, false, softwarelifecycle.RepairTwoIssuanceEvidencePolicy)
 	})
+	t.Run("mvp-live-policy", func(t *testing.T) {
+		testCleanInstallSupport(t, softwarelifecycle.SubscriptionCleanInstallRepair, false, softwarelifecycle.MVPLiveEvidencePolicy)
+	})
+	t.Run("mvp-live-policy-owner-exception", func(t *testing.T) {
+		testCleanInstallSupport(t, softwarelifecycle.SubscriptionCleanInstallRepair, true, softwarelifecycle.MVPLiveEvidencePolicy)
+	})
+	t.Run("mvp-live-policy-cross-scope", func(t *testing.T) {
+		testCleanInstallSupport(t, softwarelifecycle.FirstSubscriptionCleanInstall, false, softwarelifecycle.MVPLiveEvidencePolicy)
+	})
 }
 
 func TestUniqueRecordValueRefusesEmptyFirstAndDuplicateRecords(t *testing.T) {
@@ -70,7 +79,9 @@ func testCleanInstallSupport(t *testing.T, scope string, exception bool, policy 
 	).Replace(fixture.acceptanceRecord())
 	encoded, _ := json.Marshal(support)
 	body += "Release support: " + string(encoded) + "\nDetailed evidence SHA-256: " + strings.Repeat("a", 64) + "\nProxy package: sing-box 1.13.19 amd64 fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf\nKaring package: karing 1.2.0 macos-arm64 " + strings.Repeat("b", 64) + "\nKaring macOS: Passed\nNatural timer firing and naturally due certificate renewal: Not observed\nUnsupported new or renamed renewal route: May execute before detection; historical outcomes unknown\n"
-	if scope == softwarelifecycle.SubscriptionCleanInstallRepair {
+	if policy == softwarelifecycle.MVPLiveEvidencePolicy {
+		body += mvpLiveEvidence()
+	} else if scope == softwarelifecycle.SubscriptionCleanInstallRepair {
 		body += "Evidence policy: " + policy + "\nAutomated-only scenarios (not live): " + softwarelifecycle.RepairAutomatedOnlyScenarios + "\nAutomated-only result: Passed in native amd64/arm64 workflow\n"
 		if slices.Contains([]string{softwarelifecycle.RepairKaringLatencyEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy}, policy) {
 			body += "Automated-only checks (not live): " + softwarelifecycle.RepairAutomatedOnlyChecks + "\nKaring connectivity evidence: " + softwarelifecycle.RepairKaringConnectivityEvidence + "\nKaring checks not performed: " + softwarelifecycle.RepairKaringChecksNotPerformed + "\n"
@@ -83,13 +94,13 @@ func testCleanInstallSupport(t *testing.T, scope string, exception bool, policy 
 	fixture.release.Body = body
 	source := NewWithEndpoint(fixture.server.Client(), fixture.server.URL, fixture.verifier)
 	latest := softwarelifecycle.LatestRelease{Identity: softwarelifecycle.ReleaseIdentity{Tag: fixture.release.Tag}, Sequence: sequence, Support: &support}
-	refusedException := exception && scope == softwarelifecycle.SubscriptionCleanInstallRepair
-	if qualifiedReleaseSupport(body, latest) == refusedException {
+	refused := exception && scope == softwarelifecycle.SubscriptionCleanInstallRepair || policy == softwarelifecycle.MVPLiveEvidencePolicy && scope != softwarelifecycle.SubscriptionCleanInstallRepair
+	if qualifiedReleaseSupport(body, latest) == refused {
 		t.Fatal("public support result did not match its scope")
 	}
-	if refusedException {
+	if refused {
 		if _, outcome := source.CheckLatest(t.Context()); outcome != softwarelifecycle.LatestReleaseRefused {
-			t.Fatal("repair Owner exception admitted")
+			t.Fatal("refused support evidence admitted")
 		}
 		return
 	}
@@ -98,16 +109,44 @@ func testCleanInstallSupport(t *testing.T, scope string, exception bool, policy 
 	}
 	mutations := []string{strings.Replace(body, "Release support: ", "Unknown support: ", 1), strings.Replace(body, scope, softwarelifecycle.RecurringSubscriptionUpgrade, 1)}
 	if scope == softwarelifecycle.SubscriptionCleanInstallRepair {
-		mutations = append(mutations,
-			strings.Replace(body, "Evidence policy: "+policy, "Evidence policy: unknown", 1),
-			strings.Replace(body, "Automated-only scenarios (not live): "+softwarelifecycle.RepairAutomatedOnlyScenarios, "Automated-only scenarios (not live): ", 1),
-			strings.Replace(body, "Automated-only result: Passed in native amd64/arm64 workflow", "Automated-only result: Passed", 1),
-			body+"Scenario: enable-precommit "+strings.Repeat("a", 64)+" https://github.com/albertloky/SBXR/actions/runs/17#artifacts\n",
-		)
+		mutations = append(mutations, strings.Replace(body, "Evidence policy: "+policy, "Evidence policy: unknown", 1))
+		if policy == softwarelifecycle.MVPLiveEvidencePolicy {
+			firstScenario := "Scenario: mvp-install " + strings.Repeat("a", 64) + " https://github.com/albertloky/SBXR/actions/runs/17#artifacts\n"
+			mutations = append(mutations,
+				strings.Replace(body, "Live acceptance coverage: "+softwarelifecycle.MVPLiveCoverage+"\n", "", 1),
+				body+"Live acceptance coverage: "+softwarelifecycle.MVPLiveCoverage+"\n",
+				strings.Replace(body, softwarelifecycle.MVPLiveCoverage, "All variants passed live", 1),
+				strings.Replace(body, "Karing connectivity evidence: "+softwarelifecycle.MVPKaringEvidence+"\n", "", 1),
+				body+"Karing connectivity evidence: "+softwarelifecycle.MVPKaringEvidence+"\n",
+				strings.Replace(body, softwarelifecycle.MVPKaringEvidence, "Karing fully passed", 1),
+				strings.Replace(body, firstScenario, "", 1),
+				body+firstScenario,
+				body+"Scenario: mvp-extra "+strings.Repeat("a", 64)+" https://github.com/albertloky/SBXR/actions/runs/17#artifacts\n",
+				strings.Replace(body, firstScenario, strings.Replace(firstScenario, strings.Repeat("a", 64), strings.Repeat("z", 64), 1), 1),
+				strings.Replace(body, "actions/runs/17#artifacts", "actions/runs/0#artifacts", 1),
+				body+"Automated-only scenarios (not live): "+softwarelifecycle.RepairAutomatedOnlyScenarios+"\n",
+				body+"Automated-only result: Passed in native amd64/arm64 workflow\n",
+				body+"Automated-only checks (not live): "+softwarelifecycle.RepairAutomatedOnlyChecks+"\n",
+				body+"Karing checks not performed: "+softwarelifecycle.RepairKaringChecksNotPerformed+"\n",
+				strings.Replace(body, softwarelifecycle.MVPLiveEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy, 1),
+			)
+		} else {
+			mutations = append(mutations,
+				strings.Replace(body, "Automated-only scenarios (not live): "+softwarelifecycle.RepairAutomatedOnlyScenarios, "Automated-only scenarios (not live): ", 1),
+				strings.Replace(body, "Automated-only result: Passed in native amd64/arm64 workflow", "Automated-only result: Passed", 1),
+				body+"Scenario: enable-precommit "+strings.Repeat("a", 64)+" https://github.com/albertloky/SBXR/actions/runs/17#artifacts\n",
+			)
+		}
 		if slices.Contains([]string{softwarelifecycle.RepairKaringLatencyEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy}, policy) {
 			mutations = append(mutations,
 				strings.Replace(body, "Karing connectivity evidence: "+softwarelifecycle.RepairKaringConnectivityEvidence+"\n", "", 1),
 				strings.Replace(body, "Karing checks not performed: "+softwarelifecycle.RepairKaringChecksNotPerformed+"\n", "", 1),
+			)
+		}
+		if policy == softwarelifecycle.RepairTwoIssuanceEvidencePolicy {
+			mutations = append(mutations,
+				body+"Live acceptance coverage: "+softwarelifecycle.MVPLiveCoverage+"\n",
+				body+"Scenario: mvp-install "+strings.Repeat("a", 64)+" https://github.com/albertloky/SBXR/actions/runs/17#artifacts\n",
 			)
 		}
 	} else {
@@ -125,6 +164,14 @@ func testCleanInstallSupport(t *testing.T, scope string, exception bool, policy 
 			t.Fatal("unbound support admitted")
 		}
 	}
+}
+
+func mvpLiveEvidence() string {
+	body := "Evidence policy: " + softwarelifecycle.MVPLiveEvidencePolicy + "\nLive acceptance coverage: " + softwarelifecycle.MVPLiveCoverage + "\nKaring connectivity evidence: " + softwarelifecycle.MVPKaringEvidence + "\n"
+	for _, id := range strings.Fields(softwarelifecycle.MVPLiveScenarios) {
+		body += "Scenario: " + id + " " + strings.Repeat("a", 64) + " https://github.com/albertloky/SBXR/actions/runs/17#artifacts\n"
+	}
+	return body
 }
 
 func TestQualifiedReleaseSupportRefusesPolicyOnHistoricalRelease(t *testing.T) {

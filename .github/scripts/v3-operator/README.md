@@ -1,4 +1,11 @@
-# V4 operator harness
+# Historical V4 operator harness
+
+> This directory documents the historical 25-scenario V4 harness and its
+> `repair-issuance-bounded-v4` protocol. It is not the current MVP live
+> procedure. For a candidate declaring `mvp-live-v1`, use the [MVP live
+> acceptance procedure](../../../docs/acceptance/mvp-live-acceptance.md) and
+> [ADR-0023](../../../docs/adr/0023-mvp-live-acceptance.md). Historical V4
+> records retain the meaning stated here.
 
 This directory prepares the 25 live scenarios in ADR-0022. It does not produce
 passes from fixture results. The installed candidate is exercised through its

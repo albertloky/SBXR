@@ -1,5 +1,9 @@
 # V4 operator procedures
 
+This retains the historical `repair-issuance-bounded-v4` scope. Current MVP
+attempts use the [five-journey procedure](mvp-live-acceptance.md); these 25
+scenarios do not apply to `mvp-live-v1`.
+
 These procedures complete the operator map for `repair-issuance-bounded-v4`.
 They prepare a future signed live attempt; they are not evidence that any
 scenario ran. Scenario numbers follow ADR-0022: scenarios 01–08 use the split

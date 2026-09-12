@@ -238,7 +238,7 @@ func validRecurringEvidence(facts v3RecurringResultFacts, manifest qualification
 		completed, completionOK := qualificationTime(scenario.CompletedAt)
 		validated, validationOK := qualificationTime(scenario.ValidatedAt)
 		limit := 30 * time.Minute
-		if scenario.ScenarioID == "karing-final" {
+		if scenario.ScenarioID == "karing-final" || mvpLiveAttempt(*attempt) && scenario.ScenarioID == "mvp-subscription" {
 			limit = 2 * time.Hour
 		}
 		if !startOK || !completionOK || !validationOK || started.Before(previousTime) || completed.Before(started) || completed.Sub(started) > limit || validated.Before(completed) || validated.Sub(completed) > 5*time.Minute || validated.After(observed) || scenario.PreflightAt != scenario.StartedAt || scenario.PriorScenarioSHA256 != previousDigest || scenario.ScenarioID != attempt.RequiredScenarios[index] || scenario.Schema != "sbxr-v3-scenario-evidence-"+attemptVersion(attempt) || scenario.AttemptID != attempt.AttemptID || scenario.VPSID != attempt.VPSID || scenario.VPSIdentitySHA256 != attempt.VPSIdentitySHA256 || !reflect.DeepEqual(scenario.Candidate, manifest.Releases[0]) || !independentID(scenario.OperationID, "operation") || operations[scenario.OperationID] || scenario.LinkID != "" && !independentID(scenario.LinkID, "link") || scenario.PackagesBefore != packages {
@@ -268,8 +268,22 @@ func validRecurringEvidence(facts v3RecurringResultFacts, manifest qualification
 
 func validScenarioResult(scenario v3ScenarioEvidence, attempt v3QualificationAttempt) bool {
 	id := scenario.ScenarioID
+	if strings.HasPrefix(id, "mvp-") && !mvpLiveAttempt(attempt) {
+		return false
+	}
 	twoIssuance := attempt.Support != nil && attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair && attempt.EvidencePolicy == softwarelifecycle.RepairTwoIssuanceEvidencePolicy
 	initial, boundary, recovery, final := "Running", "observed", "none", "Running"
+	if mvpLiveAttempt(attempt) {
+		if len(mvpLiveChecks(id)) == 0 {
+			return false
+		}
+		if id == "mvp-install" {
+			initial = "Not installed"
+		}
+		if id == "mvp-removal" {
+			final = "Not installed"
+		}
+	}
 	if strings.Contains(id, "precommit") || id == "enable-schema2-absent" {
 		boundary, recovery = "before-commitment", "rollback"
 	}
@@ -367,6 +381,9 @@ func validScenarioResult(scenario v3ScenarioEvidence, attempt v3QualificationAtt
 }
 
 func requiredV3Checks(id string) []string {
+	if checks := mvpLiveChecks(id); len(checks) > 0 {
+		return checks
+	}
 	checks := strings.Fields(`fresh-disposable-vps-preflight unchanged-candidate-bytes initial-state-proved boundary-observed final-state-proved original-ssh-continuity capture-coverage-complete exact-secrets-absent prohibited-patterns-absent`)
 	family := strings.Split(id, "-")[0]
 	if family != "baseline" {
@@ -488,7 +505,9 @@ func buildRecurringAcceptanceRecord(manifest qualificationManifest, facts v3Recu
 		support, _ := json.Marshal(attempt.Support.lifecycle())
 		baseline, _ := marshalCanonical(attempt.Baseline)
 		body.WriteString("Release support: " + string(support) + "\nStable baseline: " + string(baseline) + "\n")
-		if attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair {
+		if mvpLiveAttempt(*attempt) {
+			body.WriteString("Evidence policy: " + attempt.EvidencePolicy + "\nLive acceptance coverage: " + softwarelifecycle.MVPLiveCoverage + "\nKaring connectivity evidence: " + softwarelifecycle.MVPKaringEvidence + "\n")
+		} else if attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair {
 			body.WriteString("Evidence policy: " + attempt.EvidencePolicy + "\nAutomated-only scenarios (not live): " + strings.Join(attempt.AutomatedOnlyScenarios, " ") + "\nAutomated-only result: Passed in native amd64/arm64 workflow\n")
 			if slices.Contains([]string{softwarelifecycle.RepairLifecycleEvidencePolicy, softwarelifecycle.RepairKaringLatencyEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy}, attempt.EvidencePolicy) {
 				body.WriteString("Automated-only checks (not live): " + softwarelifecycle.RepairAutomatedOnlyChecks + "\n")
@@ -589,13 +608,14 @@ func validV3AttemptDeclaredFields(attempt v3QualificationAttempt, preflight qual
 	}
 	started, ok := qualificationTime(attempt.StartedAt)
 	checked, checkedOK := qualificationTime(attempt.KaringLatestCheckedAt)
-	if !ok || !checkedOK || started.Before(checked) || started.Sub(checked) > 5*time.Minute ||
+	mvp := mvpLiveAttempt(attempt)
+	if !ok || !checkedOK || started.Before(checked) || !mvp && started.Sub(checked) > 5*time.Minute ||
 		(attempt.Schema != "sbxr-v3-qualification-attempt-v2" && attempt.Schema != "sbxr-v3-qualification-attempt-v3") || attempt.RunAttempt < 1 ||
 		attempt.ScenarioLimitSeconds != 1800 || attempt.KaringLimitSeconds != 7200 || attempt.ValidationLimitSeconds != 300 ||
 		!validAcceptanceRunner(attempt.Runner) || attempt.Runner.GoToolchain != "go1.26.6" ||
 		!independentID(attempt.VPSID, "vps") || !independentID(attempt.OutsideRunnerID, "runner") || !independentID(attempt.MacRunnerID, "mac") || !regexp.MustCompile(`^[0-9]+\.[0-9]+(?:\.[0-9]+)?$`).MatchString(attempt.MacOSVersion) || !validSHA256(attempt.VPSIdentitySHA256) ||
 		attempt.ProxyPackage != expectedV3PackageIdentity() || !validV3Packages(attempt.Packages) || !validV3Packages(attempt.AfterSnapRefresh) ||
-		attempt.Packages.Karing != attempt.AfterSnapRefresh.Karing || attempt.Packages.Certbot == attempt.AfterSnapRefresh.Certbot || preflight.LatestTag == nil {
+		attempt.Packages.Karing != attempt.AfterSnapRefresh.Karing || (!mvp && attempt.Packages.Certbot == attempt.AfterSnapRefresh.Certbot) || (mvp && attempt.Packages != attempt.AfterSnapRefresh) || preflight.LatestTag == nil {
 		return false
 	}
 	if attempt.Schema == "sbxr-v3-qualification-attempt-v3" {

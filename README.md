@@ -66,9 +66,30 @@ sbxr-linux-amd64.tar.gz
 sbxr-linux-arm64.tar.gz
 ```
 
-Stable publication requires native automated proof on both architectures and one live packaged Ubuntu Server 24.04 `amd64` journey. The journey installs release A through the Pasteable Install Command, checks for release B through A's real numbered menu, updates through the production Software Lifecycle transaction, proves interruption and both recovery directions, preserves SSH, and verifies stable no-update behavior. Each Release Identity gets its own public Acceptance Record.
+Stable publication requires native automated proof on both architectures and
+the live packaged Ubuntu Server 24.04 `amd64` journeys for the candidate's
+declared scope, including required outside-network and actual Karing evidence.
+Each Release Identity gets its own public Acceptance Record.
 
-See [acceptance/RELEASE.md](acceptance/RELEASE.md) for the exact procedure.
+The current clean-install MVP scope is
+[`mvp-live-v1`](docs/adr/0023-mvp-live-acceptance.md):
+[`mvp-install`](docs/acceptance/mvp-live-acceptance.md), `mvp-subscription`,
+`mvp-credentials`, `mvp-renewal`, and `mvp-removal`. Use the [MVP live
+acceptance procedure](docs/acceptance/mvp-live-acceptance.md). It retains normal
+artifact trust, outside traffic, trusted HTTPS, and Karing import/refresh. It
+does not establish incoming-upgrade behavior, natural timer firing, or naturally
+due client auto-refresh.
+
+The [V4 operator harness](.github/scripts/v3-operator/README.md), [25-scenario
+procedure](docs/acceptance/v4-operator-procedures.md), and [evidence assembly
+guide](docs/acceptance/evidence-assembly.md) are historical for their named
+attempts. Dated reports in [docs/acceptance](docs/acceptance) describe individual
+attempts. The [Installer-Updater release-pair procedure](acceptance/RELEASE.md)
+is also historical.
+
+`v3.1.0` / Release Sequence `83` has an
+[Owner-approved exception](docs/adr/0017-one-release-owner-exception.md) with
+incomplete live VPS and Karing qualification. It applies only to that release.
 
 ## Historical full-product releases
 

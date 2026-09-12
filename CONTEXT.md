@@ -95,10 +95,13 @@ The authenticated positive integer that is the only authority for release order.
 GitHub's canonical immutable Latest release whose four assets, Release Identity, attestations, and Acceptance Record pass Release Qualification.
 
 ### Release Qualification
-The single stable-publication gate that binds unchanged release bytes to the required automated, packaged VPS, exact-client, identity, SSH, recovery, and secret-safety evidence. The first V3 release, first subscription-capable release, and explicitly authorized repair have distinct clean-install qualification scopes. Subscription releases require exact Karing macOS evidence; later recurring releases also require each declared source upgrade. A clean-install scope does not prove an upgrade route.
+The single stable-publication gate that binds unchanged release bytes to the automated and live evidence required by the declared scope. Qualification scopes are versioned, so historical records retain their own interpretation. A clean-install scope does not prove an incoming-upgrade route.
+
+### MVP Live Acceptance
+The current `mvp-live-v1` clean-install Release Qualification scope: five normal product journeys for installation, subscription/Karing, credential rotation, supported certificate renewal, and restart/removal. It requires real packaged-host, outside-traffic, trusted-HTTPS, and Karing evidence, while leaving forced interruption, contention, and historical V4 evidence protocol work to their applicable regression or historical scopes.
 
 ### V3 Packaged Live Qualification
-The Codex-driven Release Qualification stage that proves the applicable V3 journey through the exact packaged executable on a real disposable VPS and a genuinely outside network. Its first-V3 baseline and recurring subscription, Client Identity, update, and removal scenarios remain distinct from exact Karing macOS evidence.
+The Release Qualification stage that proves the declared V3 journey through the exact packaged executable on a real disposable VPS and a genuinely outside network. Karing evidence remains a distinct client observation. Historical V4 scenarios retain their original meaning.
 
 ### Acceptance Record
 The single public, secret-safe record that binds one Release Identity to its qualification stages, including V3 Packaged Live Qualification, evidence, runner facts, and exact asset digests.

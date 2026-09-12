@@ -130,6 +130,9 @@ func attemptVersion(attempt *v3QualificationAttempt) string {
 }
 
 func attemptScenarios(attempt v3QualificationAttempt) []string {
+	if mvpLiveAttempt(attempt) {
+		return strings.Fields(softwarelifecycle.MVPLiveScenarios)
+	}
 	ids := requiredV3Scenarios(attempt.Sources)
 	if attempt.Support != nil && attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair {
 		automatedOnly := strings.Fields(softwarelifecycle.RepairAutomatedOnlyScenarios)
@@ -153,6 +156,11 @@ func validAttemptSupport(attempt v3QualificationAttempt) bool {
 		return false
 	}
 	if attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair {
+		if mvpLiveAttempt(attempt) {
+			// The smaller live scope makes no blanket claim that excluded scenarios
+			// passed as a separate automated qualification matrix.
+			return attempt.OwnerException == "" && len(attempt.Sources) == 0 && len(attempt.AutomatedOnlyScenarios) == 0
+		}
 		if !slices.Contains([]string{softwarelifecycle.RepairEvidencePolicy, softwarelifecycle.RepairLifecycleEvidencePolicy, softwarelifecycle.RepairKaringLatencyEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy}, attempt.EvidencePolicy) || !slices.Equal(attempt.AutomatedOnlyScenarios, strings.Fields(softwarelifecycle.RepairAutomatedOnlyScenarios)) {
 			return false
 		}

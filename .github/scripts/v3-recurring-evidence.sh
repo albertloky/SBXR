@@ -43,6 +43,17 @@ managed_outside_request_matches() {
     "$deadline" "$runner" "$manifest_digest" "$request_digest" "$scenario")
 }
 
+mvp_required_checks() {
+  case "$1" in
+    mvp-install) printf '%s' 'packaged-install reviewed-setup outside-proxy-traffic menu-status-and-lifecycle ssh-access-preserved' ;;
+    mvp-subscription) printf '%s' 'trusted-outside-https one-correct-subscription-node wrong-token-refused private-files-and-logs-protected karing-import fresh-karing-node-latency manual-refresh selected-connection-preserved' ;;
+    mvp-credentials) printf '%s' 'old-established-session-terminated old-proxy-credential-refused replacement-proxy-traffic same-link-refreshed-identity old-link-refused replacement-link-usable proxy-identity-unchanged-by-link-rotation fresh-karing-replacement-latency' ;;
+    mvp-renewal) printf '%s' 'official-renewal-route certificate-replaced accepted-activation outside-trusted-tls proxy-traffic-preserved' ;;
+    mvp-removal) printf '%s' 'restart-preserves-access reviewed-complete-removal owned-resources-absent outside-access-refused unrelated-resources-preserved test-client-and-secret-cleanup ssh-access-preserved' ;;
+    *) return 1 ;;
+  esac
+}
+
 identity_sources_match_commit() {
   test "$#" -eq 1
   local bound_commit=$1 path tracked=0
@@ -102,6 +113,7 @@ boundary=handoff/qualification-boundary-facts.json
 tool=handoff/sbxr-release
 jq -e '(.schema == "sbxr-qualification-manifest-v2" or .schema == "sbxr-qualification-manifest-v3") and (.source_state == "v3-recurring" or .source_state == "v3-subscription-clean")' "$manifest" >/dev/null
 chmod 0600 "$manifest"
+chmod 0600 "$boundary"
 digest="$(sha256sum "$manifest" | cut -d' ' -f1)"
 directory="$(mktemp -d)"
 mkdir -m 0700 handoff/v3-scenarios
@@ -117,6 +129,7 @@ transition_pid=
 transition_request_remote=
 managed_outside_pid=
 managed_outside_request_remote=
+mvp_observation_remote=
 
 cleanup_transition_trigger() {
   if test -n "$transition_request_remote"; then
@@ -133,6 +146,15 @@ cleanup_managed_outside_trigger() {
       return 1
     fi
     managed_outside_request_remote=
+  fi
+}
+
+cleanup_mvp_observation() {
+  if test -n "$mvp_observation_remote"; then
+    if ! "${remote[@]}" "test ! -L '$mvp_observation_remote' && rm -f -- '$mvp_observation_remote'"; then
+      return 1
+    fi
+    mvp_observation_remote=
   fi
 }
 
@@ -178,6 +200,7 @@ stop_attempt() {
   fi
   if ! cleanup_transition_trigger; then status=1; fi
   if ! cleanup_managed_outside_trigger; then status=1; fi
+  if ! cleanup_mvp_observation; then status=1; fi
   if test "$status" -ne 0; then
     # Do not fetch raw output or run cleanup against an uncertain installation.
     "${remote[@]}" 'test ! -d /root/sbxr-qualification-evidence || printf "%s\n" STOP > /root/sbxr-qualification-evidence/request.json' || true
@@ -200,6 +223,7 @@ stop_attempt() {
     "$directory/transition-state.json" "$directory/transition-ready.json" "$directory/transition-closed.json" "$directory/transition-result.json" "$directory/transition-check.stdout" "$directory/transition-check.stderr"
   rm -f "$directory/managed-outside-config.json" "$directory/managed-outside-request.json" "$directory/managed-outside-request.next" \
     "$directory/managed-outside.stdout" "$directory/managed-outside.stderr" "$directory/managed-outside-result.json"
+  rm -f "$directory/mvp-observation.json" "$directory/mvp-facts.json" "$directory/mvp-decision.json"
   rmdir "$directory"
   exit "$status"
 }
@@ -405,6 +429,8 @@ collect_managed_outside_driver() {
 actual_vps="$("${remote[@]}" 'test "$(. /etc/os-release; printf "%s:%s" "$ID" "$VERSION_ID")" = ubuntu:24.04 && test "$(uname -m)" = x86_64 && sha256sum /etc/machine-id' | cut -d' ' -f1)"
 test "$actual_vps" = "$(jq -r .v3_attempt.vps_identity_sha256 "$manifest")"
 manifest_absolute=$(realpath "$manifest")
+mvp_live=false
+if test "$(jq -r '.v3_attempt.evidence_policy // ""' "$manifest")" = mvp-live-v1; then mvp_live=true; fi
 "${remote[@]}" 'test ! -e /root/sbxr-qualification-evidence && install -d -m 0700 /root/sbxr-qualification-evidence'
 printf '[]' > "$directory/previous.json"
 index=0
@@ -414,7 +440,7 @@ while IFS= read -r next_scenario <&3; do
   index=$((index + 1))
   operation="operation-$index"
   limit=1800
-  if test "$scenario" = karing-final; then limit=7200; fi
+  if test "$scenario" = karing-final || { test "$mvp_live" = true && test "$scenario" = mvp-subscription; }; then limit=7200; fi
   started="$(date +%s)"
   deadline=$((started + limit))
   outside_probe_required=false outside_probe_done=false
@@ -427,9 +453,33 @@ while IFS= read -r next_scenario <&3; do
   if test "$scenario" = link-precommit || test "$scenario" = link-postcommit; then outside_link_required=true; fi
   case "$scenario" in identity-precommit|identity-postcommit|identity-unavailable) outside_transition_required=true ;; esac
   case "$scenario" in managed-renewal|recorder-live|recorder-locks|snap-refresh|unsupported-route) outside_managed_required=true ;; esac
-  jq -cnS --arg scenario "$scenario" --arg digest "$digest" --argjson limit "$limit" --argjson deadline "$deadline" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{deadline_unix:$deadline,not_before:$now,qualification_manifest_sha256:$digest,scenario_id:$scenario,scenario_limit_seconds:$limit}' > "$directory/request.json"
+  if test "$mvp_live" = true; then
+    required_checks=$(mvp_required_checks "$scenario")
+    jq -cnS --arg scenario "$scenario" --arg digest "$digest" --arg checks "$required_checks" --argjson limit "$limit" --argjson deadline "$deadline" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{deadline_unix:$deadline,not_before:$now,qualification_manifest_sha256:$digest,required_checks:($checks | split(" ")),scenario_id:$scenario,scenario_limit_seconds:$limit}' | tr -d '\n' > "$directory/request.json"
+  else
+    jq -cnS --arg scenario "$scenario" --arg digest "$digest" --argjson limit "$limit" --argjson deadline "$deadline" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{deadline_unix:$deadline,not_before:$now,qualification_manifest_sha256:$digest,scenario_id:$scenario,scenario_limit_seconds:$limit}' > "$directory/request.json"
+  fi
   "${remote[@]}" 'umask 077; test ! -e /root/sbxr-qualification-evidence/result.json; cat > /root/sbxr-qualification-evidence/request.json' < "$directory/request.json"
   while ! "${remote[@]}" 'test -f /root/sbxr-qualification-evidence/result.json'; do
+    if test "$mvp_live" = true && "${remote[@]}" 'test -e /root/sbxr-qualification-evidence/observation.json || test -L /root/sbxr-qualification-evidence/observation.json'; then
+      reason=evidence-refused
+      test -z "$mvp_observation_remote"
+      mvp_observation_remote=/root/sbxr-qualification-evidence/observation.json
+      fetch_identity_file "$mvp_observation_remote" "$directory/mvp-observation.json"
+      python3 .github/scripts/v3-mvp-evidence.py \
+        --manifest "$manifest" --boundary "$boundary" --request "$directory/request.json" \
+        --previous "$directory/previous.json" --observation "$directory/mvp-observation.json" \
+        --output "$directory/mvp-facts.json"
+      "$tool" qualification < "$directory/mvp-facts.json" > "$directory/mvp-decision.json"
+      jq -e '.outcome == "accepted" and .records == []' "$directory/mvp-decision.json" >/dev/null
+      submit_result "$1" "$2" "$3" "$manifest" "$directory/mvp-facts.json"
+      cleanup_mvp_observation
+    fi
+    if test "$mvp_live" = true; then
+      if test "$(( $(date +%s) - started ))" -gt "$((limit + 300))"; then reason=timeout; exit 1; fi
+      sleep 2
+      continue
+    fi
     if "${remote[@]}" 'test -e /root/sbxr-qualification-evidence/managed-outside-request.json || test -L /root/sbxr-qualification-evidence/managed-outside-request.json'; then
       reason=evidence-refused
       test "$outside_managed_required" = true
@@ -606,11 +656,15 @@ while IFS= read -r next_scenario <&3; do
       sleep 1
     done
   fi
-  "${remote[@]}" 'test ! -e /root/sbxr-qualification-evidence/outside-request.json && test ! -L /root/sbxr-qualification-evidence/outside-request.json'
-  "${remote[@]}" 'test ! -e /root/sbxr-qualification-evidence/identity-outside-request.json && test ! -L /root/sbxr-qualification-evidence/identity-outside-request.json'
-  "${remote[@]}" 'test ! -e /root/sbxr-qualification-evidence/link-outside-request.json && test ! -L /root/sbxr-qualification-evidence/link-outside-request.json'
-  "${remote[@]}" 'test ! -e /root/sbxr-qualification-evidence/identity-transition-outside-request.json && test ! -L /root/sbxr-qualification-evidence/identity-transition-outside-request.json'
-  "${remote[@]}" 'test ! -e /root/sbxr-qualification-evidence/managed-outside-request.json && test ! -L /root/sbxr-qualification-evidence/managed-outside-request.json'
+  if test "$mvp_live" = true; then
+    "${remote[@]}" 'test ! -e /root/sbxr-qualification-evidence/observation.json && test ! -L /root/sbxr-qualification-evidence/observation.json'
+  else
+    "${remote[@]}" 'test ! -e /root/sbxr-qualification-evidence/outside-request.json && test ! -L /root/sbxr-qualification-evidence/outside-request.json'
+    "${remote[@]}" 'test ! -e /root/sbxr-qualification-evidence/identity-outside-request.json && test ! -L /root/sbxr-qualification-evidence/identity-outside-request.json'
+    "${remote[@]}" 'test ! -e /root/sbxr-qualification-evidence/link-outside-request.json && test ! -L /root/sbxr-qualification-evidence/link-outside-request.json'
+    "${remote[@]}" 'test ! -e /root/sbxr-qualification-evidence/identity-transition-outside-request.json && test ! -L /root/sbxr-qualification-evidence/identity-transition-outside-request.json'
+    "${remote[@]}" 'test ! -e /root/sbxr-qualification-evidence/managed-outside-request.json && test ! -L /root/sbxr-qualification-evidence/managed-outside-request.json'
+  fi
   jq -e --arg digest "$digest" --arg scenario "$scenario" --argjson count "$index" --slurpfile previous "$directory/previous.json" '.stage == "v3-scenario-result" and .prior_decision_sha256 == $digest and (.detailed_evidence.scenarios | length) == $count and .detailed_evidence.scenarios[-1].scenario_id == $scenario and .detailed_evidence.scenarios[:-1] == $previous[0]' "$directory/input.json" >/dev/null
   jq -e '.outcome == "accepted" and .records == []' "$directory/decision.json" >/dev/null
   completed="$(date -u -d "$(jq -r '.detailed_evidence.scenarios[-1].completed_at' "$directory/input.json")" +%s)"
@@ -625,13 +679,20 @@ while IFS= read -r next_scenario <&3; do
   cp "$directory/decision.json" "handoff/v3-scenarios/$index-decision.json"
   jq -cS '.detailed_evidence.scenarios' "$directory/input.json" > "$directory/previous.json"
   "${remote[@]}" 'rm /root/sbxr-qualification-evidence/result.json'
+  if test "$mvp_live" = true; then
+    rm -f "$directory/mvp-observation.json" "$directory/mvp-facts.json" "$directory/mvp-decision.json"
+  fi
   if test "$outside_identity_required" = true; then
     "${remote[@]}" 'for path in /run/sbxr-qualification/07-outside-started.json /run/sbxr-qualification/07-outside-ready.json /run/sbxr-qualification/07-outside-rotation-request.json /run/sbxr-qualification/07-outside-rotation-ready.json /run/sbxr-qualification/07-outside.json /run/sbxr-qualification/07-outside-collected.json; do test ! -e "$path" && test ! -L "$path"; done'
   fi
   reason=unexpected-failure
 done 3< <(jq -r '.v3_attempt.required_scenarios[]' "$manifest")
 
-"${remote[@]}" 'test ! -e /usr/local/bin/sbxr && test ! -e /var/lib/sbxr && rm /root/sbxr-qualification-evidence/request.json /root/sbxr-qualification-evidence/outside-reply-baseline-clean.json /root/sbxr-qualification-evidence/outside-reply-baseline-postcommit.json && rmdir /root/sbxr-qualification-evidence'
+if test "$mvp_live" = true; then
+  "${remote[@]}" 'test ! -e /usr/local/bin/sbxr && test ! -e /var/lib/sbxr && rm /root/sbxr-qualification-evidence/request.json && rmdir /root/sbxr-qualification-evidence'
+else
+  "${remote[@]}" 'test ! -e /usr/local/bin/sbxr && test ! -e /var/lib/sbxr && rm /root/sbxr-qualification-evidence/request.json /root/sbxr-qualification-evidence/outside-reply-baseline-clean.json /root/sbxr-qualification-evidence/outside-reply-baseline-postcommit.json && rmdir /root/sbxr-qualification-evidence'
+fi
 # This is a new evaluation time, not a rewrite of a scenario timestamp.
 jq -cS --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.stage = "v3-packaged-live-result" | .evaluation_time = $now' "$directory/input.json" | tr -d '\n' > "$directory/final.json"
 "$tool" qualification < "$directory/final.json" > "$directory/decision.json"

@@ -13,7 +13,7 @@ The Module owns installed-state proof, GitHub's qualified Latest release, Releas
 
 The durable MVP paths are `/usr/local/bin/sbxr` and `/var/lib/sbxr/installed.json`. Transaction work stays under `/var/lib/sbxr` and is removed at a verified terminal result.
 
-The public GitHub Adapter admits exactly four release assets and keeps `github.com/sigstore/sigstore-go` plus `github.com/klauspost/compress` behind that boundary. See [`../../acceptance/RELEASE.md`](../../acceptance/RELEASE.md) for release qualification.
+The public GitHub Adapter admits exactly four release assets and keeps `github.com/sigstore/sigstore-go` plus `github.com/klauspost/compress` behind that boundary. Use the [current MVP live acceptance procedure](../../docs/acceptance/mvp-live-acceptance.md) for live qualification. [acceptance/RELEASE.md](../../acceptance/RELEASE.md) documents the historical Installer-Updater release-pair procedure.
 
 ## Subscription update contract (#355)
 
