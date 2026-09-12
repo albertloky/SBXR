@@ -11,9 +11,19 @@ Recover(context.Context, ProgressReporter) Result
 
 The Module owns installed-state proof, GitHub's qualified Latest release, Release Sequence ordering, the mutation lock, two-checkpoint update, rollback, forward completion, and recovery. The V3 numbered terminal menu calls Proxy Installation for proxy Actions and Software Lifecycle for Check/Update/Recover.
 
+Production construction uses `NewInstalledWithUpdateRuntime`: updates require
+Proxy Installation admission plus runtime exclusion and completion checks.
+Tests use the private `newInstalledInterface` seam for controlled filesystem and
+release-source evidence.
+
 The durable MVP paths are `/usr/local/bin/sbxr` and `/var/lib/sbxr/installed.json`. Transaction work stays under `/var/lib/sbxr` and is removed at a verified terminal result.
 
-The public GitHub Adapter admits exactly four release assets and keeps `github.com/sigstore/sigstore-go` plus `github.com/klauspost/compress` behind that boundary. Use the [current MVP live acceptance procedure](../../docs/acceptance/mvp-live-acceptance.md) for live qualification. [acceptance/RELEASE.md](../../acceptance/RELEASE.md) documents the historical Installer-Updater release-pair procedure.
+The public GitHub Adapter admits exactly four release assets and keeps
+`github.com/sigstore/sigstore-go` plus `github.com/klauspost/compress` behind that
+boundary. Use the [code map](../../docs/agents/code-map.md) to locate lifecycle
+entry points and tests, and the [current operator procedure](../../docs/acceptance/mvp-live-acceptance.md)
+for live qualification. [acceptance/RELEASE.md](../../acceptance/RELEASE.md)
+documents the historical Installer-Updater release-pair procedure.
 
 ## Subscription update contract (#355)
 

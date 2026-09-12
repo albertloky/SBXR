@@ -14,10 +14,12 @@ cp "$4" "$work/attempt.json"
 { printf '{"attempt":'; cat "$work/attempt.json"; printf ',"preflight":'; cat "$work/preflight.json"; printf '}'; } > "$work/request.json"
 "$tool" qualification-declaration < "$work/request.json" > "$work/decision.json"
 cat "$work/decision.json"
-# V4 preparation also requires the full operator procedure. Keep historical
-# policies unchanged and check only after strict declaration validation.
-if jq -e '.evidence_policy == "repair-issuance-bounded-v4"' "$work/attempt.json" >/dev/null; then
-  python3 "$(dirname "$0")/v3-operator/check-readiness.py"
+# Historical acceptance records remain readable, but this checkout no longer
+# produces new v1-v4 live attempts. Reject after strict local validation and
+# before the first GitHub request.
+if ! jq -e '.evidence_policy == "mvp-live-v1"' "$work/attempt.json" >/dev/null; then
+  printf '%s\n' 'The current checkout produces only mvp-live-v1 evidence. Use Git revision 0859e96 to reproduce a historical v1-v4 qualification attempt.' >&2
+  exit 2
 fi
 if test "$mode" = check; then exit 0; fi
 # Refuse a source change since the collected preflight snapshot.

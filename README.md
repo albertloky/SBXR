@@ -1,10 +1,19 @@
 # SBXR
 
-> `v3.1.0` / Release Sequence `83` has an [Owner-approved stable-release exception](docs/adr/0017-one-release-owner-exception.md). Live VPS and Karing qualification is incomplete; subscription and Client Identity rotation are not fully proved. All other release checks remain required. This exception does not apply to later releases.
-
 SBXR is a root-only V3 proxy product for one Ubuntu Server. Software Lifecycle installs and updates the `sbxr` executable. Proxy Installation owns the installed proxy journey through a review-first numbered menu.
 
-> Authority: [ADR-0016](docs/adr/0016-v3-proxy-product-and-modules.md) extends the V3 contract for [#342](https://github.com/albertloky/SBXR/issues/342). This is an accepted implementation contract, not a claim that subscription or Client Identity rotation is shipped. The tracer-bullet menu description and Installer-Updater release-pair procedure below are historical snapshots; use ADR-0016 for current boundaries, recurring qualification requirements, and the approved first-subscription clean-install policy.
+The source implements setup and removal, subscription enablement and link
+rotation, Client Identity rotation, managed renewal recording, and recovery.
+Implementation and automated tests do not establish release acceptance. Use
+[ADR-0016](docs/adr/0016-v3-proxy-product-and-modules.md) for the product contract
+and the [current MVP live acceptance procedure](docs/acceptance/mvp-live-acceptance.md)
+for live qualification.
+
+For development, start with the [code map](docs/agents/code-map.md). It links
+entry points, owning modules, tests, and the release harness. Domain terms are
+defined in [CONTEXT.md](CONTEXT.md). The [documentation index](docs/README.md)
+separates the current MVP procedure from historical acceptance material and
+research notes.
 
 ## Supported system
 
@@ -13,7 +22,11 @@ SBXR is a root-only V3 proxy product for one Ubuntu Server. Software Lifecycle i
 - An interactive UTF-8 terminal
 - `curl` for the first GitHub HTTPS download
 
-Software Lifecycle owns `/usr/local/bin/sbxr` and `/var/lib/sbxr/installed.json`. V3 setup may add only the exact Proxy Installation resources recorded in `/var/lib/sbxr/proxy-ownership.json`. The current tracer bullet reviews and cancels setup without creating any of them.
+Software Lifecycle owns `/usr/local/bin/sbxr` and `/var/lib/sbxr/installed.json`.
+Confirmed V3 setup creates the Proxy Installation resources recorded in
+`/var/lib/sbxr/proxy-ownership.json`; reviewed Complete removal uses that authority
+to remove the installation. See the [Proxy Installation guide](internal/proxyinstallation/README.md)
+for setup, subscription, identity, and removal responsibilities.
 
 ## Installation
 
@@ -80,11 +93,12 @@ artifact trust, outside traffic, trusted HTTPS, and Karing import/refresh. It
 does not establish incoming-upgrade behavior, natural timer firing, or naturally
 due client auto-refresh.
 
-The [V4 operator harness](.github/scripts/v3-operator/README.md), [25-scenario
-procedure](docs/acceptance/v4-operator-procedures.md), and [evidence assembly
-guide](docs/acceptance/evidence-assembly.md) are historical for their named
-attempts. Dated reports in [docs/acceptance](docs/acceptance) describe individual
-attempts. The [Installer-Updater release-pair procedure](acceptance/RELEASE.md)
+The former [V4 operator producer](https://github.com/albertloky/SBXR/tree/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator),
+its [25-scenario procedure](docs/acceptance/v4-operator-procedures.md), and its
+evidence guides are historical for their named attempts. The producer is retired
+from the working tree; historical Go readers and validators remain so existing
+records retain their meaning. Dated reports in [docs/acceptance](docs/acceptance)
+describe individual attempts. The [Installer-Updater release-pair procedure](acceptance/RELEASE.md)
 is also historical.
 
 `v3.1.0` / Release Sequence `83` has an

@@ -1,10 +1,14 @@
 # V4 operator-harness verification
 
+The V4 producer is retired from the working tree. This is a historical
+verification record for the [source at commit `0859e96`](https://github.com/albertloky/SBXR/tree/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator),
+not current MVP guidance.
+
 The corrected operator harness passed its full readiness check on 2026-09-09
 after the pre-dispatch audit found gaps in the initial check. This record covers
 helper and fixture verification, not live scenario passes. The initial results
 remain below with their limitations; the corrected results are authoritative
-for the current operator source inventory.
+for that dated V4 source inventory.
 
 The audit found that the entry rehearsal counted filenames instead of executed
 entries, skipped the scenario 08 finish and scenario 24 scripts, and reported a
@@ -66,7 +70,7 @@ these rehearsals.
 ## Scope and structure
 
 The scenario map and setup contract are in
-[the harness README](../../.github/scripts/v3-operator/README.md). The concrete
+[the retired harness README](https://github.com/albertloky/SBXR/blob/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator/README.md). The concrete
 09–25 commands, ordered observations and cleanup are in
 [the operator procedures](v4-operator-procedures.md); 01–08 use the checked-in
 split entries.

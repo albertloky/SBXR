@@ -1000,11 +1000,6 @@ func (adapter Adapter) boundFileInspection(name, expectedDigest string, mode os.
 	return digest(body) == expectedDigest, true
 }
 
-func (adapter Adapter) boundFileMatchesGroup(name, expectedDigest string, mode os.FileMode, limit int64, gid uint32, gidOK bool) bool {
-	matches, _ := adapter.boundFileGroupInspection(name, expectedDigest, mode, limit, gid, gidOK)
-	return matches
-}
-
 func (adapter Adapter) boundFileGroupInspection(name, expectedDigest string, mode os.FileMode, limit int64, gid uint32, gidOK bool) (bool, bool) {
 	matches, observed := adapter.boundFileInspection(name, expectedDigest, mode, limit)
 	if !gidOK || !matches {

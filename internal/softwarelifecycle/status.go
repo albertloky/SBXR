@@ -193,14 +193,6 @@ type localInspection struct {
 	installedRecord, executable                    []byte
 }
 
-func NewInstalled(latest LatestReleaseSource) Interface {
-	return newInstalledInterface(newLocalInspector("/", 0), latest)
-}
-
-func NewInstalledWithUpdateAdmission(latest LatestReleaseSource, admission UpdateAdmission) Interface {
-	return newInstalledInterface(filesystemInspector{root: "/", uid: 0, updateAdmission: admission}, latest)
-}
-
 func newInstalledInterface(local localInspector, latest LatestReleaseSource) Interface {
 	return installedInterface{local: local, latest: latest}
 }

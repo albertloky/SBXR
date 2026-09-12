@@ -1,5 +1,9 @@
 # Identity transition evidence (scenarios 16–18)
 
+This is historical V4 material. Its producer was retired from the working tree;
+retrieve its source from [commit `0859e96`](https://github.com/albertloky/SBXR/tree/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator)
+when interpreting a named V4 record.
+
 `identity-evidence.py` is the assembler adapter for `identity-precommit`,
 `identity-postcommit`, and `identity-unavailable`. It returns only family-owned
 sources. The shared assembler supplies `entry`, `state`, and `route` from the

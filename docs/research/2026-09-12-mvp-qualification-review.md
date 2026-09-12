@@ -1,5 +1,9 @@
 # SBXR modules and first viable product qualification review
 
+This dated review preceded the final MVP policy. References to the V4 producer
+below point to its retired source at commit `0859e96`; use ADR-0023 and the MVP
+procedure for current policy.
+
 **Recommendation: replace the recurring 25-scenario live marathon with five short product journeys, retain focused ordinary/Linux regression tests, and investigate the already-observed scenario 03 refusal separately. Simplify qualification machinery before changing working product behavior.** This is a review proposal, not an implemented release-policy change or an acceptance pass.
 
 The complete [module/function catalog](2026-09-12-module-function-catalog.md) lists every named Go function and method in the current non-test source, each file's purpose and relevant scenarios, internal types/seams, and the qualification programs. It is intentionally separate from this decision document.
@@ -69,7 +73,7 @@ All exact declarations and file links are in the catalog. No correctness claim i
 
 **Live** means a compact observation of behavior across an actual external boundary. **Ordinary/Linux integration** means retain meaningful regression coverage using real files/processes/locks/systemd where needed, without tying it to a new release attempt. Existing mocks do not automatically satisfy that move. **Conditional** means run when the relevant dependency or execution path changes. None of these recommendations silently removes a shipped feature.
 
-Scenario names and purposes are cross-checked against the [operator scenario map](/Users/Albert/Documents/Codex/SBXR/.github/scripts/v3-operator/README.md:191), [scenario checks](/Users/Albert/Documents/Codex/SBXR/cmd/sbxr-release/qualification_recurring.go:400) and [detailed procedures](/Users/Albert/Documents/Codex/SBXR/docs/acceptance/v4-operator-procedures.md:163).
+Scenario names and purposes are cross-checked against the [operator scenario map](https://github.com/albertloky/SBXR/blob/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator/README.md#L191), [scenario checks](/Users/Albert/Documents/Codex/SBXR/cmd/sbxr-release/qualification_recurring.go:400) and [detailed procedures](/Users/Albert/Documents/Codex/SBXR/docs/acceptance/v4-operator-procedures.md:163).
 
 | # | Exact scenario | Owning code | Recommendation and reason |
 |---:|---|---|---|
@@ -135,7 +139,7 @@ This is not a recommendation to erase all hashes or guards. The global rule asks
 Five findings from the independent Standards review, with the main review's evidence qualifications retained:
 
 1. **The fixed count is historical policy, not module coverage.** ADR-0022 and `attemptScenarios` preserve/derive the current list. Creating a module-to-test map should not create another completeness gate. The original policy was approved; revisiting it now is appropriate.
-2. **The rehearsal prerequisite is broader than product proof.** [Operator README](/Users/Albert/Documents/Codex/SBXR/.github/scripts/v3-operator/README.md:61) invalidates a report after 24 hours or helper/document changes. Retest relevant executable mechanisms when changed; arbitrary age and documentation hashes do not establish more working-product behavior.
+2. **The rehearsal prerequisite is broader than product proof.** [Operator README](https://github.com/albertloky/SBXR/blob/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator/README.md#L61) invalidates a report after 24 hours or helper/document changes. Retest relevant executable mechanisms when changed; arbitrary age and documentation hashes do not establish more working-product behavior.
 3. **Evidence bookkeeping is repeatedly enforced.** [requiredV3Checks](/Users/Albert/Documents/Codex/SBXR/cmd/sbxr-release/qualification_recurring.go:367) repeats common checks and [validRecurringEvidence](/Users/Albert/Documents/Codex/SBXR/cmd/sbxr-release/qualification_recurring.go:225) enforces timing, ordering and digest links. Recheck mutable product state when an action can change it; consolidate attempt-wide facts and remove redundant digest ceremony. Do not infer that checking an invariant once covers later mutations.
 4. **Recurring live tests exceed the necessary external boundaries.** Recorder/removal locks, menu refusals and controlled route drift can be tested through ordinary Ubuntu integration. A real snap update is dependency compatibility and deserves a conditional run, not a mandatory upgrade in every live session.
 5. **Possible duplicated-code maintenance in test fixtures.** [recurringEvidenceFixture](/Users/Albert/Documents/Codex/SBXR/cmd/sbxr-release/qualification_recurring_test.go:230) repeats much of the scenario state/check construction. This is a maintenance judgment, not proof the tests are invalid: independent expected fixtures can be valuable. When the policy shrinks, simplify affected fixture construction and keep focused missing/wrong-result tests. Do not make expected results call the production evaluator, which would make the test tautological.

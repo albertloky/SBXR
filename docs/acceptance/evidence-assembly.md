@@ -1,5 +1,8 @@
 # Scenario 07–25 evidence assembly
 
+This is historical V4 material. Its producer was retired from the working tree;
+the cited source is available at [commit `0859e96`](https://github.com/albertloky/SBXR/tree/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator).
+
 `assemble-evidence.py` formats retained scenario 07–25 evidence into the existing `v3-scenario-result` Go wire
 contract. It performs no network or live-system operation. Run it only after
 the scenario entry scripts have produced and checked their private receipts.
@@ -42,6 +45,10 @@ The operator observation receipt uses schema
 `qualification_manifest_sha256`, `request_sha256`, `capture_sha256`, and
 `observations`. Each observation has exactly `check`, `event`, `observed_at`,
 `result`, and `capture_sha256`. The assembler prints the required check order:
+
+Run the following historical commands only from a checkout at commit
+`0859e964b66d10deb5768a372b09ca5903332553`; their source path is retired from
+the current tree.
 
 ```sh
 python3 .github/scripts/v3-operator/assemble-evidence.py required-checks identity-absent

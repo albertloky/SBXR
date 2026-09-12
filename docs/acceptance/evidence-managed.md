@@ -1,5 +1,9 @@
 # Managed scenario evidence sources
 
+This is historical V4 material. Its producer was retired from the working tree;
+retrieve its source from [commit `0859e96`](https://github.com/albertloky/SBXR/tree/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator)
+when interpreting a named V4 record.
+
 Scenarios 11–15 use current-request captured sources. A passing observation is
 accepted only when its source bytes are mode-0600 evidence in the scenario's
 mode-0700 source directory, the capture wrapper binds those bytes to the signed

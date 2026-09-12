@@ -8,7 +8,7 @@ import (
 )
 
 func TestMVPEvidenceAssemblerAndCollectorSyntax(t *testing.T) {
-	if output, err := exec.Command("python3", ".github/scripts/test_v3_mvp_evidence.py").CombinedOutput(); err != nil {
+	if output, err := exec.Command("python3", ".github/scripts/tests/test_mvp_evidence.py").CombinedOutput(); err != nil {
 		t.Fatalf("MVP evidence assembler regression: %v\n%s", err, output)
 	}
 	if output, err := exec.Command("bash", "-n", ".github/scripts/v3-recurring-evidence.sh").CombinedOutput(); err != nil {
@@ -16,7 +16,18 @@ func TestMVPEvidenceAssemblerAndCollectorSyntax(t *testing.T) {
 	}
 }
 
-func TestMVPCollectorUsesExplicitObservationAndPolicySpecificCleanup(t *testing.T) {
+func TestSharedPackagedMenuDrivers(t *testing.T) {
+	for _, path := range []string{
+		".github/scripts/tests/test_v3_menu_session.py",
+		".github/scripts/tests/test_v3_packaged_live_menu_disclosure.py",
+	} {
+		if output, err := exec.Command("python3", path).CombinedOutput(); err != nil {
+			t.Fatalf("%s: %v\n%s", path, err, output)
+		}
+	}
+}
+
+func TestMVPCollectorUsesExplicitObservationAndHasNoHistoricalDrivers(t *testing.T) {
 	body, err := os.ReadFile(".github/scripts/v3-recurring-evidence.sh")
 	if err != nil {
 		t.Fatal(err)
@@ -25,31 +36,15 @@ func TestMVPCollectorUsesExplicitObservationAndPolicySpecificCleanup(t *testing.
 	observation := strings.Index(text, "python3 .github/scripts/v3-mvp-evidence.py")
 	validation := strings.Index(text, `"$tool" qualification < "$directory/mvp-facts.json"`)
 	submission := strings.Index(text, `submit_result "$1" "$2" "$3" "$manifest" "$directory/mvp-facts.json"`)
-	historicalOffset := -1
-	if submission >= 0 {
-		historicalOffset = strings.Index(text[submission:], "/root/sbxr-qualification-evidence/managed-outside-request.json")
+	if observation < 0 || validation < observation || submission < validation {
+		t.Fatal("MVP observation is not assembled, validated, and submitted in order")
 	}
-	historical := historicalOffset
-	if historicalOffset >= 0 {
-		historical += submission
+	for _, obsolete := range []string{"managed-outside-request", "identity-outside", "outside-reply-baseline", "v3-operator"} {
+		if strings.Contains(text, obsolete) {
+			t.Fatalf("MVP collector retains historical driver %q", obsolete)
+		}
 	}
-	if observation < 0 || validation < observation || submission < validation || historical < submission {
-		t.Fatal("MVP observation is not assembled, validated, and submitted before historical polling")
-	}
-	between := text[submission:historical]
-	if !strings.Contains(between, `if test "$mvp_live" = true`) || !strings.Contains(between, "continue") {
-		t.Fatal("MVP path can fall through into historical outside-driver polling")
-	}
-	cleanupStart := strings.LastIndex(text, `if test "$mvp_live" = true; then`)
-	if cleanupStart < 0 {
-		t.Fatal("MVP final cleanup branch missing")
-	}
-	cleanupEnd := strings.Index(text[cleanupStart:], "else")
-	if cleanupEnd < 0 {
-		t.Fatal("MVP final cleanup branch missing")
-	}
-	mvpCleanup := text[cleanupStart : cleanupStart+cleanupEnd]
-	if !strings.Contains(mvpCleanup, "rm /root/sbxr-qualification-evidence/request.json") || strings.Contains(mvpCleanup, "outside-reply-baseline") {
-		t.Fatal("MVP final cleanup depends on historical baseline replies")
+	if !strings.Contains(text, `.v3_attempt.evidence_policy == "mvp-live-v1"`) || !strings.Contains(text, "rm /root/sbxr-qualification-evidence/request.json") {
+		t.Fatal("MVP collector does not reject old policies locally or clean its request")
 	}
 }

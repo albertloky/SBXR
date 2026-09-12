@@ -59,22 +59,26 @@ files through bounded protected descriptors and checks their selected digests,
 the fullchain/leaf/chain relationship and the exact canonical symlink targets.
 TLS validates the key pair, exact sole IP SAN, chain and validity separately.
 
-## Supported authority and removal slice
+## Production authority and lifecycle
 
-#347 adds optional schema-2 `serving` authority: `link_id`,
+Schema-2 Ownership Records carry the serving authority: `link_id`,
 `credential_sha256`, `certificate_generation`, and four ordered
 `certificate_sha256` values (`cert`, `chain`, `fullchain`, `privkey`). The
 complete ordered resource/provenance inventory includes the fixed unit, token,
-empty protected staging directory, two lineage directories and eight exact
-archive-file/canonical-link entries. There is no separate authority file.
+protected staging directory, Certbot lineage, and exact archive-file and
+canonical-link entries. Renewal and subscription-resource authority record the
+managed Certbot route, firewall unit, recorder hooks, and their owned files.
+There is no separate authority file.
 
-This is a runtime-only footprint. Only idle Running and committed removal are
-admitted. A renewal configuration, enabled-unit link, override, extra generation,
-unknown staging/state, or pending capability operation refuses. Owner
-enablement remains disabled. Subscription Capability Status remains
-`Problem detected` because this slice cannot prove managed renewal; a working
-proxy remains independently `Running`. #348–#350 must extend the complete
-contract before introducing their writers, creation, enablement and recovery.
+Proxy Installation owns reviewed enablement, link rotation, certificate
+activation and repair, Client Identity rotation, interrupted-operation recovery,
+and Complete removal. This package only prepares, inspects, and serves the
+immutable HTTPS state selected by that authority. Unknown staging or state,
+unsupported resource changes, contradictory checkpoints, or an unproved
+pending operation refuse. A valid running record can report Subscription
+Capability Status `Available`; renewal evidence and runtime inspection can
+instead make it `Change in progress`, `Change incomplete`, or `Problem detected`
+without changing the independently observed proxy status.
 
 Before committing removal, the Host Adapter locks all three existing official
 Certbot directory-lock inodes with nonblocking POSIX locks under whole-host

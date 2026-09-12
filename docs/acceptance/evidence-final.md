@@ -1,6 +1,10 @@
 # Retained evidence inputs for scenarios 19–25
 
-The final evidence adapter is `.github/scripts/v3-operator/final-evidence.py`.
+This is historical V4 material. Its producer was retired from the working tree;
+the former [final-evidence.py](https://github.com/albertloky/SBXR/blob/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator/final-evidence.py)
+is retained in Git for interpreting named records.
+
+The final evidence adapter was `.github/scripts/v3-operator/final-evidence.py`.
 It consumes protected mode-0600 files through the common evidence assembler and
 adds only the scenario-specific sources below. The assembler supplies the common
 `state`, `entry`, and `route` sources. All helper executions must use

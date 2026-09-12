@@ -29,8 +29,10 @@ Complete removal. This scope does not require an incoming-upgrade proof,
 natural timer firing, or a naturally due client auto-refresh.
 
 The earlier v1–v4 records, their scenario identifiers, and their validation
-rules retain their original interpretation. The historical V4 procedure is not
-the procedure for `mvp-live-v1`. This decision changes acceptance scope only:
+rules retain their original interpretation. The historical V4 producer is
+retired from the working tree, while its readers and validators remain; retrieve
+its source from [commit `0859e96`](https://github.com/albertloky/SBXR/tree/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator).
+It is not the procedure for `mvp-live-v1`. This decision changes acceptance scope only:
 it retains the existing evidence envelope, hash chain, deadlines, and failed-run
 handling, and introduces no product behavior, transport change, or new rule for
 those mechanisms.

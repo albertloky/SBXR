@@ -32,16 +32,7 @@ jobs:
           cache: false
       - name: Test current Installer-Updater seams
         run: |
-          lifecycle_tests='^(TestStatus|TestUpdate(Returns|RefusesConcurrent|FailureAfter|RestoresPrior|RetainsRecovery|DefersCancellation|InstallsFresh)|TestRollbackRefuses|TestCandidateRecover|TestRecover|TestPendingOperations|TestCheck)'
-          github_tests='^(TestSourceCheck|TestSigstoreVerifier)'
-          go test ./internal/softwarelifecycle -run "$lifecycle_tests" -count=1
-          go test ./internal/softwarelifecycle/adapter/github -run "$github_tests" -count=1
-          go test ./internal/proxyinstallation/adapter/terminal -count=1
-          go test ./cmd/sbxr-release -count=1
           go test ./... -count=1
-          go test -race ./internal/softwarelifecycle -run "$lifecycle_tests" -count=1
-          go test -race ./internal/softwarelifecycle/adapter/github -run "$github_tests" -count=1
-          go test -race ./cmd/sbxr-release -count=1
           go test -race ./... -count=1
           go vet ./...
       - name: Build and verify the exact four release assets

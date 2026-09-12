@@ -4,6 +4,9 @@ This retains the historical `repair-issuance-bounded-v4` scope. Current MVP
 attempts use the [five-journey procedure](mvp-live-acceptance.md); these 25
 scenarios do not apply to `mvp-live-v1`.
 
+The V4 producer was retired from the working tree. This procedure preserves the
+historical record; its former source is at [commit `0859e96`](https://github.com/albertloky/SBXR/tree/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator).
+
 These procedures complete the operator map for `repair-issuance-bounded-v4`.
 They prepare a future signed live attempt; they are not evidence that any
 scenario ran. Scenario numbers follow ADR-0022: scenarios 01–08 use the split
@@ -61,7 +64,7 @@ failed observation into evidence. An unexpected result still ends the attempt;
 retain the failure and use the supported cleanup procedure. Export probe inputs
 explicitly and keep output secret-safe. Never wrap required assertions or whole
 scenario scripts, and never infer a pass from the wrapper's successful return.
-See the [operator README](../../.github/scripts/v3-operator/README.md#extra-observations-in-the-original-ssh-session)
+See the [retired operator README](https://github.com/albertloky/SBXR/blob/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator/README.md#extra-observations-in-the-original-ssh-session)
 for the complete observation contract.
 
 For scenarios that exercise the official Certbot route, resolve and hash the
