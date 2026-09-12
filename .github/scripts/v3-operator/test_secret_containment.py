@@ -25,7 +25,10 @@ class SecretContainmentTest(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        self.uid, self.gid = os.getuid(), os.getgid()
+        # Temporary files can inherit their parent group (for example wheel on
+        # macOS /private/tmp), rather than the process's primary group.
+        owner = self.root.stat()
+        self.uid, self.gid = owner.st_uid, owner.st_gid
         self.state = self.directory("state")
         self.evidence = self.directory("evidence")
         self.transport = self.directory("transport")

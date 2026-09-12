@@ -31,7 +31,11 @@ import time
 
 root = Path(os.environ["SBXR_INTERRUPT_FIXTURE_ROOT"])
 mode = os.environ["SBXR_INTERRUPT_FIXTURE_MODE"]
-(root / "started").write_text(str(os.getpid()))
+def record_pid(name):
+    pending = root / (name + ".pending")
+    pending.write_text(str(os.getpid()))
+    pending.replace(root / name)
+record_pid("started")
 print("SBXR V3")
 print("Proxy status: Not set up")
 print("Code: PROXY-INSTALLATION-STATUS-NOT-SET-UP")
@@ -45,14 +49,14 @@ if sys.stdin.readline().strip() != "y":
 
 child = os.fork()
 if child == 0:
-    (root / "child.pid").write_text(str(os.getpid()))
+    record_pid("child.pid")
     grandchild = os.fork()
     if grandchild == 0:
         if mode == "escaped-event":
             os.setsid()
         lock = open(root / "held.lock", "w")
         fcntl.flock(lock, fcntl.LOCK_EX)
-        (root / "grandchild.pid").write_text(str(os.getpid()))
+        record_pid("grandchild.pid")
         while True:
             time.sleep(10)
     os.waitpid(grandchild, 0)

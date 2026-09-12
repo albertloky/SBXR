@@ -24,7 +24,8 @@ if spec["kind"] in ("hang","leader-exit"):
     child=os.fork()
     if child == 0:
         if spec.get("escape"): os.setsid()
-        (root/"descendant.pid").write_text(str(os.getpid()))
+        (root/"descendant.pending").write_text(str(os.getpid()))
+        (root/"descendant.pending").rename(root/"descendant.pid")
         while True: time.sleep(10)
     deadline=time.monotonic()+3
     while not (root/"descendant.pid").exists() and time.monotonic()<deadline: time.sleep(.01)
@@ -157,12 +158,17 @@ class MenuSessionDriverTest(unittest.TestCase):
                                       "PROXY-INSTALLATION-SETUP-COMPLETE","--confirmation","yes",
                                       "--executable",str(executable),"--timeout","5"],
                                      env=env,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True)
-            deadline=time.monotonic()+3
-            while not (root/"descendant.pid").exists() and time.monotonic()<deadline: time.sleep(.01)
-            self.assertTrue((root/"descendant.pid").exists())
-            descendant=int((root/"descendant.pid").read_text())
-            if signal_driver: process.terminate()
-            stderr=process.communicate(timeout=8)[1]
+            try:
+                deadline=time.monotonic()+3
+                while not (root/"descendant.pid").exists() and time.monotonic()<deadline: time.sleep(.01)
+                self.assertTrue((root/"descendant.pid").exists())
+                descendant=int((root/"descendant.pid").read_text())
+                if signal_driver: process.terminate()
+                stderr=process.communicate(timeout=8)[1]
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                    process.communicate(timeout=8)
             self.assertNotEqual(process.returncode,0); self.assertIn("SBXR_MENU_SESSION_REFUSED",stderr)
             with self.assertRaises(ProcessLookupError): os.kill(descendant,0)
 

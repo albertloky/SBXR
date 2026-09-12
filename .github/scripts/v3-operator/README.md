@@ -104,6 +104,22 @@ disclosure before emitting an observation, including when a failed producer
 writes valid-looking configuration bytes. These cases exercise the harness;
 they do not count as live product or Karing acceptance.
 
+The separate SSH boundary fixture exercises an actual loopback OpenSSH server,
+the staged packaged-live module and menu driver, and the collector's evidence
+submission command. On root Linux with Python 3, jq, util-linux and OpenSSH client
+and server installed, run from the repository-shaped tree:
+
+```sh
+python3 .github/scripts/v3-ssh-boundary_test.py
+```
+
+Copy that sibling test into the temporary tree too. It uses temporary keys and
+private mount and PID namespaces for its request, result and menu fixtures. It
+checks disclosure, deadlines, process cleanup, exact submitted bytes and failed
+submissions across real SSH; it does not install SBXR, change the host SSH service,
+or provide live product or Karing acceptance. The root Linux Go test invokes the
+same fixture when its required tools are available.
+
 ## Operator bundle and inputs
 
 For an authorized future attempt, retain an exact copy and digest inventory of
