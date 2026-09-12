@@ -50,6 +50,18 @@ python3 .github/scripts/v3-operator/assemble-evidence.py required-checks link-pr
 python3 .github/scripts/v3-operator/assemble-evidence.py required-checks link-postcommit
 ```
 
+`required-checks` prints the final wire order, not the order in which to perform
+the reviews. Record observations during the phase required by their timing
+rules. In scenario 07, record `candidate-supported-setup-origin` and
+`schema1-rotation-origin` after supported setup and before rotation. In scenario
+08, record `candidate-supported-setup-origin` after setup and before enablement.
+These observations have an upper bound at the action's start, so an end-of-run
+review cannot satisfy them. The link and later scenario procedures similarly
+identify reviews required before an action or between interruption and recovery.
+Retain each actual review time and capture, then place the observations in the
+required order when assembling the final files. Do not replace a late review
+time with a source-event timestamp.
+
 The separate operator capture file must contain the exact reviewed capture
 bytes. Its SHA-256 must equal both the receipt-level digest and every
 observation digest.

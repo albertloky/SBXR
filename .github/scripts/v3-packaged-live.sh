@@ -81,8 +81,21 @@ run_action() {
   ' <<<"$output")" = "$expected" || status=1
   if test "$status" -ne 0; then
     printf '%s\n' "$output" | awk '
-      /^0\. Exit$/ {action=1; next}
-      action && /^(Failed safety check:|Correction:|Result:|Code:)/ {print}
+      !action {
+        if ($0 == "SBXR V3" ||
+            $0 ~ /^(Proxy status:|Subscription status:|Software Lifecycle:|Code:|[0-9]+\. )/) {
+          initial = initial $0 ORS
+        }
+        if ($0 == "0. Exit") action=1
+        next
+      }
+      /^(Failed safety check:|Correction:|Result:|Code:)/ {
+        details = details $0 ORS
+      }
+      END {
+        if (details != "") printf "%s", details
+        else printf "%s", initial
+      }
     '
   fi
   return "$status"

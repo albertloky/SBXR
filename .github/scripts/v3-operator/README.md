@@ -214,6 +214,10 @@ and cleanup requirements are in
 [`v4-operator-procedures.md`](../../../docs/acceptance/v4-operator-procedures.md).
 For scenario 08, the existing outside runner must be connected before enablement;
 `connection-probe.py` keeps one real TLS connection open through its local proxy.
+Record scenario 07's two setup-origin reviews before rotation, and scenario 08's
+setup-origin review before enablement. The procedure and evidence assembly
+guides name these checks and their time bounds; the final proof's check order
+does not imply that every review can happen at the end of the scenario.
 Use `subscription-observation-input.sh` only in a private pipe to
 `check-subscription.py --bound`; the input helper adds the current manifest,
 request, original deadline and not-before binding, while the checker records the

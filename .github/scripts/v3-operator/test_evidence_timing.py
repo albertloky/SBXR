@@ -87,6 +87,42 @@ class EvidenceTimingTests(unittest.TestCase):
                 accepted = self.validate(scenario, rules, sources_for(scenario, rules))
                 self.assertEqual([record["check"] for record in accepted], [rule.check for rule in rules])
 
+    def test_setup_origin_reviews_cannot_be_deferred_until_after_the_action(self):
+        # The live scenario-07 refusal had these setup, action and late review
+        # times. Scenario 08 uses the same pre-action review requirement.
+        cases = (
+            ("identity-absent", "candidate-supported-setup-origin", "candidate_setup_origin_at", "rotation_started_at"),
+            ("identity-absent", "schema1-rotation-origin", "schema1_origin_at", "rotation_started_at"),
+            ("enable-schema1", "candidate-supported-setup-origin", "candidate_setup_origin_at", "action_started_at"),
+        )
+        for scenario, check, event, action in cases:
+            rule = next(rule for rule in timing.scenario_rules(scenario) if rule.check == check)
+            for review, accepted in (("2026-09-12T11:10:06.962190Z", False),
+                                     ("2026-09-12T11:06:00.962190Z", True)):
+                with self.subTest(scenario=scenario, check=check, review=review):
+                    events = {
+                        "state": {"setup_at": "2026-09-12T11:04:12.244628Z",
+                                  action: "2026-09-12T11:07:36.564817Z"},
+                        "entry": {event: review},
+                    }
+                    sources = {
+                        name: timing.EventSource(name, scenario, MANIFEST, REQUEST,
+                                                 name.encode(), hashlib.sha256(name.encode()).hexdigest(), values)
+                        for name, values in events.items()
+                    }
+                    arguments = dict(
+                        scenario_id=scenario, qualification_manifest_sha256=MANIFEST,
+                        request_sha256=REQUEST, rules=(rule,), sources=sources,
+                        proof_completed_at="2026-09-12T11:10:12Z",
+                        observations=records((rule,), timing.ceil_wire_timestamp(review)),
+                    )
+                    if accepted:
+                        self.assertEqual(len(timing.validate_observations(**arguments)), 1)
+                    else:
+                        with self.assertRaisesRegex(timing.EvidenceTimingRefusal,
+                                                    "source event interval is impossible"):
+                            timing.validate_observations(**arguments)
+
     def test_fractional_source_is_compared_at_full_resolution(self):
         rule = timing.ObservationRule(
             "later-fact",

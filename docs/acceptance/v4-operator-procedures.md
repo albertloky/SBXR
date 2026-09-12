@@ -182,7 +182,17 @@ client package, starts a private loopback client, proves the outside route, and
 establishes one TLS connection with successful traffic. Only then does it publish
 `07-outside-ready.json` in the protected operator state directory.
 
-After that receipt appears, run:
+After that receipt appears, review the supported setup and schema-1 origin in
+`07-state.json`, the public status, and the retained setup capture. Record the
+actual check times for `candidate-supported-setup-origin` and
+`schema1-rotation-origin` in the operator observations before invoking rotation.
+Both checks must fall after `setup_at` and no later than `rotation_started_at`;
+their whole-second proof timestamps must also fit that interval. These are
+pre-rotation observations, even though they appear near the end of the final
+proof's required check order. They cannot be backfilled after rotation or
+removal. See `evidence-assembly.md` for the observation and proof formats.
+
+Then run:
 
 ```sh
 bash /run/sbxr-qualification/07-identity-absent-rotate.sh
@@ -237,6 +247,29 @@ belongs in the ordinary evidence. Missing acknowledgments, changed phase files,
 SSH loss, failed traffic or uncertain cleanup stop the attempt. The exchange
 never resets the original 30-minute scenario clock or five-minute submission
 grace and never requests a certificate.
+
+## 08 — `enable-schema1`
+
+Prepare the current manifest, boundary, validator, and accepted-prefix receipt
+before `08-enable-schema1-setup.sh`. Starting from Not installed, that entry
+performs supported setup and retains the schema-1 origin and unchanged proxy
+identity in `08-private.json`.
+
+Before `08-enable-schema1-finish.sh enable`, review the supported setup origin
+and record the actual `candidate-supported-setup-origin` observation. Its time
+must be after `setup_at` and no later than `action_started_at`, including the
+whole-second proof timestamp. Do not defer this review until the final evidence
+assembly. Establish the outside connection before enablement and keep it alive
+through the action, as described in the operator README.
+
+After enablement, collect the real connection and subscription observations,
+then run `08-enable-schema1-finish.sh verify` with those protected files. Record
+the remaining checks when their source observations are available and assemble
+the evidence using the original pre-enablement origin observation. The finish
+entry verifies the unchanged proxy process, configuration, client identity,
+creation provenance, and enabled subscription generation. Preserve the healthy
+schema-2 installation for scenario 09. A missed origin observation fails the
+evidence; do not change source timestamps or repeat enablement to obtain a pass.
 
 ## 09 — `link-precommit`
 
