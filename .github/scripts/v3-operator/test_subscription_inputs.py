@@ -18,8 +18,9 @@ run_action() { :; }
 exact_candidate() { :; }
 install_candidate() { :; }
 prove_running() { :; }
-menu_number() { printf '1\n'; }
-function /usr/local/bin/sbxr { cat >/dev/null; printf '%s\n' "$SBXR_INPUT_FIXTURE_LINK"; }
+menu_session_details() {
+  if test "$SBXR_INPUT_FIXTURE_MODE" != missing-link; then printf '%s\n' "$SBXR_INPUT_FIXTURE_LINK"; fi
+}
 openssl() { printf 'fixture-certificate'; }
 remote_outside_disclose() {
   printf '%s\n' '{"outbounds":[{"type":"fixture","credential":"test-only"}]}'
@@ -85,6 +86,13 @@ class SubscriptionInputTest(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(result.stdout, "")
                 self.assertNotIn("test-only", result.stderr)
+
+    def test_missing_details_link_emits_no_observation(self):
+        for name, scenario in self.cases():
+            with self.subTest(scenario=scenario):
+                result = self.invoke(name, scenario, "missing-link")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, "")
 
 
 if __name__ == "__main__":

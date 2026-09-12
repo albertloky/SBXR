@@ -1,13 +1,28 @@
 #!/usr/bin/env bash
-menu_number() {
-  local label=$1 output
-  output="$(printf '0\n' | /usr/local/bin/sbxr)"
-  menu_number_from "$output" "$label"
-}
-
 menu_number_from() {
   local output=$1 label=$2
   sed -n "s/^\([1-9][0-9]*\)\. $label$/\1/p" <<<"$output"
+}
+
+menu_session_driver() {
+  local module_dir
+  module_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+  python3 "$module_dir/v3-menu-session.py" "$@"
+}
+
+menu_session_action() {
+  local label=$1 input=$2 expected=$3 confirmation=none
+  case "$input" in
+    y) confirmation=yes ;;
+    'REMOVE SBXR') confirmation=remove ;;
+    '') ;;
+    *) return 1 ;;
+  esac
+  menu_session_driver action "$label" "${expected#Code: }" --confirmation "$confirmation"
+}
+
+menu_session_details() {
+  menu_session_driver details 'View details'
 }
 
 scan_vps_capture() {
@@ -48,10 +63,8 @@ protected_inventory() {
 }
 
 run_action() {
-  local label=$1 input=$2 expected=$3 number output
-  number="$(menu_number "$label")"
-  test -n "$number" || return 1
-  output="$(printf '%s\n' "$number" "$input" 0 | /usr/local/bin/sbxr)" || return 1
+  local label=$1 input=$2 expected=$3 output
+  output="$(menu_session_action "$label" "$input" "$expected")" || return 1
   scan_vps_capture <(printf '%s' "$output") || return 1
   LAST_ACTION_OUTPUT=$output
   # Ignore the initial menu and the separate lifecycle status in later frames.
@@ -66,10 +79,8 @@ run_action() {
 }
 
 view_details() {
-  local expected=$1 output number
-  number="$(menu_number 'View details')" || return 1
-  test -n "$number" || return 1
-  output="$(printf '%s\n\n0\n' "$number" | /usr/local/bin/sbxr)" || return 1
+  local expected=$1 output
+  output="$(menu_session_details)" || return 1
   scan_vps_capture <(printf '%s' "$output")
   test "$(grep -Fxc "$expected" <<<"$output")" -eq 1
 }
@@ -81,15 +92,15 @@ prove_status() {
 interrupt_at() {
   local WORK=${WORK:-/run/sbxr-qualification}
   local label=$1 confirmation=$2 event=$3 number=$4 timeout_seconds=${5:-900}
-  local output="$WORK/output-$number" action status=0 scan_status=0
+  local output="$WORK/output-$number" status=0 scan_status=0
   test ! -e "$output" && test ! -L "$output" || return 1
-  action="$(menu_number "$label")" || return 1
-  test -n "$action" || return 1
   # Keep this controller in the packaged module: historical and flat operator
   # bundles both distribute this file. It owns only the menu it starts.
   python3 - "${SBXR_EXECUTABLE:-/usr/local/bin/sbxr}" "$output" "$event" \
-    "$action" "$confirmation" "$timeout_seconds" "${SBXR_QUALIFICATION_REQUEST:-}" <<'PY' || status=$?
+    "$label" "$confirmation" "$timeout_seconds" "${SBXR_QUALIFICATION_REQUEST:-}" \
+    "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/v3-menu-session.py" <<'PY' || status=$?
 import ctypes
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -98,8 +109,9 @@ import subprocess
 import sys
 import time
 
-executable, output, event, action, confirmation, seconds, request = sys.argv[1:]
+executable, output, event, action, confirmation, seconds, request, driver_path = sys.argv[1:]
 process = None
+driver = None
 reason = 'controller-error'
 observed = False
 interrupted = False
@@ -172,53 +184,59 @@ try:
         raise InterruptedError('controller interrupted')
     descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(descriptor, 'wb') as capture:
-        process = subprocess.Popen([executable], stdin=subprocess.PIPE,
-                                   stdout=capture, stderr=capture,
-                                   start_new_session=True)
+        spec = importlib.util.spec_from_file_location('sbxr_menu_session', driver_path)
+        driver = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(driver)
+        session = driver.MenuSession(executable, capture, deadline,
+                                     lambda: received_signal is not None)
+        process = session.process
         if received_signal is not None:
             raise InterruptedError('controller interrupted')
-        process.stdin.write((action + '\n' + confirmation + '\n').encode())
-        process.stdin.flush()
-        target = ('Progress: ' + event).encode()
-        pending = b''
-        discard_line = False
-        with open(output, 'rb') as reader:
-            while True:
+        session.choose(action)
+        if confirmation == 'y':
+            prompt = driver.PROMPTS.get(action)
+            if prompt is None:
+                raise ValueError('unsupported confirmation contract')
+            session.expect_prompt(prompt)
+            session.write('y\n')
+        elif confirmation == 'REMOVE SBXR' and action == 'Complete removal':
+            session.expect_prompt(driver.REMOVAL_PROMPT)
+            session.write('REMOVE SBXR\n')
+        else:
+            raise ValueError('unsupported interruption confirmation')
+        target = 'Progress: ' + event
+        while True:
+            if received_signal is not None:
+                raise InterruptedError('controller interrupted')
+            line = session.stream.line(deadline)
+            if line is None:
+                reason = 'menu-exited-before-boundary'
+                break
+            if line == target:
                 if received_signal is not None:
                     raise InterruptedError('controller interrupted')
-                if time.monotonic() >= deadline:
-                    reason = 'deadline-before-boundary'
-                    break
-                # Once a line is longer than the target it cannot match. Keep
-                # scanning through its newline without buffering arbitrary APT
-                # output, and preserve partial target lines across reads.
-                parts = reader.read(65536).split(b'\n')
-                for index, part in enumerate(parts):
-                    if not discard_line:
-                        pending += part
-                        if len(pending) > len(target):
-                            pending = b''
-                            discard_line = True
-                    if index < len(parts) - 1:
-                        if not discard_line and pending == target:
-                            observed = True
-                            break
-                        pending = b''
-                        discard_line = False
-                if received_signal is not None:
-                    raise InterruptedError('controller interrupted')
-                if observed:
-                    os.kill(process.pid, signal.SIGSTOP)
-                    interrupted = True
-                    reason = 'boundary-observed'
-                    break
-                if os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT):
+                if session.stream.owner_exited():
                     reason = 'menu-exited-before-boundary'
                     break
-                time.sleep(min(0.01, max(0, deadline - time.monotonic())))
+                observed = True
+                os.kill(process.pid, signal.SIGSTOP)
+                if received_signal is not None:
+                    raise InterruptedError('controller interrupted')
+                interrupted = True
+                reason = 'boundary-observed'
+                break
 except InterruptedError:
     reason = 'controller-interrupted'
-except Exception:
+except Exception as error:
+    if driver is not None and isinstance(error, driver.ProtocolError):
+        if error.phase == 'output-deadline':
+            reason = 'deadline-before-boundary'
+        elif error.phase.startswith('exit-') or error.phase == 'owner-exited':
+            reason = 'menu-exited-before-boundary'
+        elif error.phase.startswith('label-'):
+            reason = 'menu-action-unavailable-before-boundary'
+        elif error.phase in ('prompt-mismatch', 'action-refused'):
+            reason = 'confirmation-refused-before-boundary'
     # Output may contain protected values. Retain it only for the caller's
     # existing secret scan, and report no command/output/exception details.
     pass
@@ -380,10 +398,8 @@ remote_setup_and_disclose() {
   prove_not_set_up
   run_action 'Start setup' y 'Code: PROXY-INSTALLATION-SETUP-COMPLETE'
   prove_running
-  local details number
-  number="$(menu_number 'View details')" || return 1
-  test -n "$number" || return 1
-  details="$(printf '%s\n\n0\n' "$number" | /usr/local/bin/sbxr)" || return 1
+  local details
+  details="$(menu_session_details)" || return 1
   scan_vps_capture <(printf '%s' "$details")
   for fact in 'Release Identity:' 'Proxy Package Identity:' 'Ownership Record:' 'Packaged validation result:' 'systemd unit provenance' 'Service enabled:' 'Service active:' 'Expected public listener ownership:' 'Package hold:' 'Selected destination:' 'Client Identity: Present'; do
     grep -F "$fact" <<<"$details" >/dev/null
@@ -400,13 +416,9 @@ remote_remove() {
 }
 
 remote_outside_disclose() {
-  local number
   prove_running || return 1
-  # Finish discovery before launching the action menu: two concurrent menu
-  # inspections can contend on host locks and expose different legal choices.
-  number="$(menu_number 'Show client configuration')" || return 1
-  test -n "$number" || return 1
-  printf '%s\ny\n\n0\n' "$number" | /usr/local/bin/sbxr | awk '
+  menu_session_driver disclose 'Show client configuration' \
+    PROXY-INSTALLATION-CLIENT-CONFIGURATION-DISCLOSED | awk '
     /^----- BEGIN SBXR CLIENT CONFIGURATION -----$/ {inside=1; next}
     /^----- END SBXR CLIENT CONFIGURATION -----$/ {inside=0; complete=1; next}
     inside {print}
@@ -454,7 +466,7 @@ remote_failure_cleanup() {
     printf '%s\n' "$output" >>"$evidence"
     details_number="$(menu_number_from "$output" 'View details')"
     if test -n "$details_number"; then
-      details="$(printf '%s\n\n0\n' "$details_number" | /usr/local/bin/sbxr)" || return 1
+      details="$(menu_session_details)" || return 1
       scan_vps_capture <(printf '%s' "$details") || return 1
       printf '%s\n' "$details" >>"$evidence"
       seal_failure_evidence "$evidence" "$evidence_safe" || return 1

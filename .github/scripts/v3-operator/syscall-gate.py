@@ -93,17 +93,24 @@ def trace(root, deadline, path, boundary, record=None, field=None, value=None, n
         # Only root-group syscalls can match the selected boundary. Keep
         # descendants attached for fork/exec/exit and interruption without
         # stopping twice for every syscall in their unrelated work.
+        restarting = False
         try:
-            ptrace(24 if tgid(pid) == root else 7, pid, 0, deliver)
+            request = 24 if tgid(pid) == root else 7
+            restarting = True
+            ptrace(request, pid, 0, deliver)
         except OSError as error:
             if error.errno not in (2, 3):
                 raise
-            # A sibling can exit the thread group after its stop was consumed.
-            # Only a real terminal wait status excuses the failed restart;
-            # ESRCH alone can also mean loss of tracing control.
+            # A sibling can exit the group after its stop was consumed.
+            # Linux may reject restart before its terminal status is waitable.
             observed, status = os.waitpid(pid, os.WNOHANG | WALL)
-            if observed != pid or not exited(pid, status):
-                raise
+            if observed == pid and exited(pid, status):
+                return
+            if restarting and error.errno == 3 and observed == 0 and pid != root and pid in stopped:
+                # Retain ownership in traced. The caller clears stopped, so
+                # later aggregation must still observe death or actual absence.
+                return
+            raise
     def predicate():
         if no_child:
             for task in Path('/proc/%d/task' % root).iterdir():

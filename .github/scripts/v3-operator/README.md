@@ -22,7 +22,7 @@ GOOS=linux GOARCH=amd64 GOTOOLCHAIN=go1.26.6 go build \
   -o /absolute/private/fixture .github/scripts/v3-operator/fixtures/file-boundary.go
 ```
 
-Copy the operator directory, sibling `v3-packaged-live.sh` and
+Copy the operator directory, sibling `v3-packaged-live.sh`, `v3-menu-session.py`, and
 `v3-candidate-dispatch.sh`, `v3-recurring-evidence.sh`, and
 `docs/acceptance/v4-operator-procedures.md` and
 `docs/acceptance/evidence-assembly.md` into a
@@ -78,6 +78,9 @@ stays alive across holds and continuation, then completes after release. Kill
 and refusal cases verify cleanup too: the fixture runner adopts orphaned
 fixture descendants and waits for every recorded PID to disappear. These cases
 run in the existing ordered-syscall group, without product execution.
+The helper tests model a stopped child whose restart reports `ESRCH` before its
+terminal wait status arrives. The tracer retains that child for later exit or
+absence observation; a permission error, unknown stop, or root loss still refuses.
 The startup-unit fixture uses a separate temporary service
 and target to prove that denied ordinary starts leave a later authorized start
 possible. Its private executable fixture directory is under `/var/lib`, since
@@ -93,9 +96,10 @@ session. It verifies that the controller reaps its descendants while preserving
 an unrelated process. No fixture installs or invokes the SBXR product.
 
 The menu-disclosure fixture runs the tracked Bash helper against a temporary
-menu that takes an inspection lock. It verifies that option discovery finishes
-before the confirmed action menu starts, and that a missing option never starts
-an action. The subscription-input fixtures also require a successful current
+menu whose legal actions and numbers change between inspections. It verifies
+that the requested label is selected in the same process that displayed it and
+that a missing label, renumbered label, or wrong confirmation prompt can never
+confirm another action. The subscription-input fixtures also require a successful current
 disclosure before emitting an observation, including when a failed producer
 writes valid-looking configuration bytes. These cases exercise the harness;
 they do not count as live product or Karing acceptance.
@@ -103,7 +107,7 @@ they do not count as live product or Karing acceptance.
 ## Operator bundle and inputs
 
 For an authorized future attempt, retain an exact copy and digest inventory of
-this directory, `v3-packaged-live.sh`, and the procedure document with the
+this directory, `v3-packaged-live.sh`, `v3-menu-session.py`, and the procedure document with the
 workflow's operator bundle. Distribute that exact copy to the original SSH
 control sessions. Supply these environment variables explicitly to every fresh
 shell; never rely on a prior shell's local variables:

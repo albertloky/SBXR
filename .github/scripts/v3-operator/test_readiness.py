@@ -65,7 +65,7 @@ class Readiness(unittest.TestCase):
 
     def test_bundle_includes_procedures_module_and_dispatch(self):
         hashes=r.linux.source_hashes()
-        for name in ['README.md','../../../docs/acceptance/v4-operator-procedures.md','../../../docs/acceptance/evidence-assembly.md','../v3-packaged-live.sh','../v3-candidate-dispatch.sh','../v3-recurring-evidence.sh']:
+        for name in ['README.md','../../../docs/acceptance/v4-operator-procedures.md','../../../docs/acceptance/evidence-assembly.md','../v3-packaged-live.sh','../v3-menu-session.py','../v3-candidate-dispatch.sh','../v3-recurring-evidence.sh']:
             self.assertIn(name,hashes)
 
     def test_main_refuses_report_replacement_during_rehearsal(self):

@@ -48,12 +48,12 @@ identity_sources_match_commit() {
   local bound_commit=$1 path tracked=0
   test "${GITHUB_SHA:-}" = "$bound_commit"
   test "$(git rev-parse HEAD)" = "$bound_commit"
-  test -z "$(git ls-files --others --exclude-standard -- .github/scripts/v3-operator .github/scripts/v3-recurring-evidence.sh .github/scripts/v3-packaged-live.sh)"
+  test -z "$(git ls-files --others --exclude-standard -- .github/scripts/v3-operator .github/scripts/v3-recurring-evidence.sh .github/scripts/v3-packaged-live.sh .github/scripts/v3-menu-session.py)"
   while IFS= read -r path; do
     test -f "$path"
     git show "$bound_commit:$path" | cmp -s - "$path"
     tracked=$((tracked + 1))
-  done < <(git ls-tree -r --name-only "$bound_commit" -- .github/scripts/v3-operator .github/scripts/v3-recurring-evidence.sh .github/scripts/v3-packaged-live.sh)
+  done < <(git ls-tree -r --name-only "$bound_commit" -- .github/scripts/v3-operator .github/scripts/v3-recurring-evidence.sh .github/scripts/v3-packaged-live.sh .github/scripts/v3-menu-session.py)
   test "$tracked" -gt 3
 }
 
@@ -258,6 +258,8 @@ start_link_driver() {
   local bound_commit remote_source local_source expected_source
   bound_commit=$(jq -er '.workflow.commit | select(test("^[0-9a-f]{40}$"))' "$manifest")
   identity_sources_match_commit "$bound_commit"
+  expected_source=$(sha256sum .github/scripts/v3-menu-session.py | cut -d' ' -f1)
+  test "$("${remote[@]}" "test ! -L /run/sbxr-qualification/v3-menu-session.py && test -f /run/sbxr-qualification/v3-menu-session.py && sha256sum /run/sbxr-qualification/v3-menu-session.py" | cut -d' ' -f1)" = "$expected_source"
   for local_source in link-outside.py link-runtime.py transition-operator.py check-subscription.py observations.py syscall-gate.py exec-gate.py link-entry.py link-subscription-input.sh 09-10-link-start.sh 09-10-link-finish.sh effective-route.py operator-support.sh assemble-evidence.py link-evidence.py evidence-timing.py identity-outside.py check-connection-observation.py identity-startup.py subscription-observation.py; do
     remote_source="/run/sbxr-qualification/$local_source"
     expected_source=$(sha256sum ".github/scripts/v3-operator/$local_source" | cut -d' ' -f1)
@@ -302,6 +304,8 @@ start_transition_driver() {
   local bound_commit remote_source local_source expected_source
   bound_commit=$(jq -er '.workflow.commit | select(test("^[0-9a-f]{40}$"))' "$manifest")
   identity_sources_match_commit "$bound_commit"
+  expected_source=$(sha256sum .github/scripts/v3-menu-session.py | cut -d' ' -f1)
+  test "$("${remote[@]}" "test ! -L /run/sbxr-qualification/v3-menu-session.py && test -f /run/sbxr-qualification/v3-menu-session.py && sha256sum /run/sbxr-qualification/v3-menu-session.py" | cut -d' ' -f1)" = "$expected_source"
   for local_source in identity-transition-outside.py identity-repair-outside.py renewal-outside.py identity-outside.py identity-entry.py identity-evidence.py transition-operator.py identity-startup.py observations.py syscall-gate.py exec-gate.py link-outside.py link-runtime.py check-subscription.py scenario-entry.py scenario-sources.py scenario-subscription.py scenario-subscription-input.sh link-subscription-input.sh subscription-observation.py identity-private-observation.py identity-runtime-observation.py identity-unavailable-subscription.py identity-unavailable-repair.py assemble-evidence.py evidence-timing.py operator-support.sh; do
     remote_source="/run/sbxr-qualification/$local_source"
     expected_source=$(sha256sum ".github/scripts/v3-operator/$local_source" | cut -d' ' -f1)
@@ -349,6 +353,8 @@ start_managed_outside_driver() {
   local bound_commit remote_source local_source expected_source
   bound_commit=$(jq -er '.workflow.commit | select(test("^[0-9a-f]{40}$"))' "$manifest")
   identity_sources_match_commit "$bound_commit"
+  expected_source=$(sha256sum .github/scripts/v3-menu-session.py | cut -d' ' -f1)
+  test "$("${remote[@]}" "test ! -L /run/sbxr-qualification/v3-menu-session.py && test -f /run/sbxr-qualification/v3-menu-session.py && sha256sum /run/sbxr-qualification/v3-menu-session.py" | cut -d' ' -f1)" = "$expected_source"
   for local_source in renewal-outside.py identity-outside.py link-outside.py check-subscription.py scenario-entry.py scenario-subscription.py scenario-subscription-input.sh link-subscription-input.sh subscription-observation.py operator-support.sh assemble-evidence.py scenario-sources.py managed-evidence.py evidence-timing.py; do
     remote_source="/run/sbxr-qualification/$local_source"
     expected_source=$(sha256sum ".github/scripts/v3-operator/$local_source" | cut -d' ' -f1)
@@ -519,7 +525,8 @@ while IFS= read -r next_scenario <&3; do
           ".github/scripts/v3-operator/07-identity-absent-start.sh $identity_operator_directory/07-identity-absent-start.sh" \
           ".github/scripts/v3-operator/07-identity-absent-rotate.sh $identity_operator_directory/07-identity-absent-rotate.sh" \
           ".github/scripts/v3-operator/07-identity-absent-finish.sh $identity_operator_directory/07-identity-absent-finish.sh" \
-          ".github/scripts/v3-packaged-live.sh $identity_operator_directory/v3-packaged-live.sh"; do
+          ".github/scripts/v3-packaged-live.sh $identity_operator_directory/v3-packaged-live.sh" \
+          ".github/scripts/v3-menu-session.py $identity_operator_directory/v3-menu-session.py"; do
           read -r local_source remote_source <<<"$source_pair"
           expected_source=$(sha256sum "$local_source" | cut -d' ' -f1)
           test "$("${remote[@]}" "test ! -L '$remote_source' && test -f '$remote_source' && sha256sum '$remote_source'" | cut -d' ' -f1)" = "$expected_source"

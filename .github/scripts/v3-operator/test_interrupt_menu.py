@@ -32,8 +32,16 @@ import time
 root = Path(os.environ["SBXR_INTERRUPT_FIXTURE_ROOT"])
 mode = os.environ["SBXR_INTERRUPT_FIXTURE_MODE"]
 (root / "started").write_text(str(os.getpid()))
-sys.stdin.readline()
-sys.stdin.readline()
+print("SBXR V3")
+print("Proxy status: Not set up")
+print("Code: PROXY-INSTALLATION-STATUS-NOT-SET-UP")
+print("1. Start setup")
+print("0. Exit", flush=True)
+if sys.stdin.readline().strip() != "1":
+    os._exit(93)
+print("Start proxy setup? [y/N]", flush=True)
+if sys.stdin.readline().strip() != "y":
+    os._exit(94)
 
 child = os.fork()
 if child == 0:
@@ -123,43 +131,21 @@ if sys.argv[0] == "-":
         self.read_hook = self.root / "read-hook"
         self.read_hook.mkdir()
         (self.read_hook / "sitecustomize.py").write_text(r'''
-import builtins
 import os
 import signal
 import sys
 
 if sys.argv[0] == "-":
-    original_open = builtins.open
-
-    class InterruptingReader:
-        def __init__(self, reader):
-            self.reader = reader
-            self.interrupted = False
-
-        def __enter__(self):
-            self.reader.__enter__()
-            return self
-
-        def __exit__(self, *args):
-            return self.reader.__exit__(*args)
-
-        def __getattr__(self, name):
-            return getattr(self.reader, name)
-
-        def read(self, *args, **kwargs):
-            content = self.reader.read(*args, **kwargs)
-            if not self.interrupted and b"Progress: target-event\n" in content:
-                self.interrupted = True
-                os.kill(os.getpid(), signal.SIGTERM)
-            return content
-
-    def interrupting_open(file, mode="r", *args, **kwargs):
-        reader = original_open(file, mode, *args, **kwargs)
-        if mode == "rb" and os.fspath(file) == sys.argv[2]:
-            return InterruptingReader(reader)
-        return reader
-
-    builtins.open = interrupting_open
+    original_read = os.read
+    interrupted = False
+    def interrupting_read(fd, size):
+        global interrupted
+        content = original_read(fd, size)
+        if not interrupted and b"Progress: target-event\n" in content:
+            interrupted = True
+            os.kill(os.getpid(), signal.SIGTERM)
+        return content
+    os.read = interrupting_read
 ''')
         self.spawned_pids = set()
         self.addCleanup(self.cleanup_fixture_processes)

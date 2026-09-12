@@ -863,6 +863,7 @@ func TestCandidateRoutesOneV3CandidateThroughPackagedLiveQualification(t *testin
 		"v3-clean",
 		"docs/acceptance/v3-packaged-live.md",
 		".github/scripts/v3-packaged-live.sh",
+		".github/scripts/v3-menu-session.py",
 		"v3-packaged-live-evidence.json",
 		`stage:"v3-packaged-live-result"`,
 		"v3-packaged-live-result-facts.json",
@@ -910,9 +911,10 @@ func TestCandidateRoutesOneV3CandidateThroughPackagedLiveQualification(t *testin
 	if drift < 0 || refusal < 0 || restore < 0 || !(drift < refusal && refusal < restore) {
 		t.Fatal("V3 qualification does not apply mode 0600 drift before removal refusal and restore canonical mode 0640 after it")
 	}
-	interruptLaunch := strings.Index(v3Path, `process = subprocess.Popen([executable]`)
-	if interruptLaunch < 0 || !strings.Contains(v3Path[:interruptLaunch], `action="$(menu_number "$label")"`) || !strings.Contains(v3Path[:interruptLaunch], `test -n "$action"`) {
-		t.Fatal("V3 qualification resolves and validates an interruption action after launching its target process")
+	interruptLaunch := strings.Index(string(scriptBody), `session = driver.MenuSession(executable, capture, deadline,`)
+	interruptChoice := strings.Index(string(scriptBody), `session.choose(action)`)
+	if interruptLaunch < 0 || interruptChoice < 0 || interruptLaunch >= interruptChoice {
+		t.Fatal("V3 qualification does not resolve an interruption action through the same launched menu session")
 	}
 	if strings.Count(v3Path, `test ! -e "$client_root"`) < 2 {
 		t.Fatal("V3 qualification does not prove outside-client cleanup on success and failure")
@@ -1085,7 +1087,7 @@ func TestPackagedActionReadsItsResultNotLifecycleStatus(t *testing.T) {
 		{"refused removal", "Code: PROXY-INSTALLATION-ACTION-REFUSED\n", removed, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			command := exec.Command("bash", "-c", "set -euo pipefail\nmenu_number() { printf '1\\n'; }\nscan_vps_capture() { return 0; }\nfunction /usr/local/bin/sbxr { cat >/dev/null; printf '%s' \"$ACTION_OUTPUT\"; }\n"+function+"\nrun_action 'Start setup' y \"$EXPECTED\"\n")
+			command := exec.Command("bash", "-c", "set -euo pipefail\nmenu_session_action() { printf '%s' \"$ACTION_OUTPUT\"; }\nscan_vps_capture() { return 0; }\n"+function+"\nrun_action 'Start setup' y \"$EXPECTED\"\n")
 			command.Env = append(os.Environ(), "ACTION_OUTPUT="+initial+test.after, "EXPECTED="+test.expected)
 			output, err := command.CombinedOutput()
 			if (err == nil) != test.want {
@@ -1265,6 +1267,10 @@ func TestPackagedFailureCleanupHandlesEveryPublicFinishingState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	driverSource, err := os.ReadFile(".github/scripts/v3-menu-session.py")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, test := range []struct {
 		name, state, behavior     string
 		wantSuccess, wantRetained bool
@@ -1287,6 +1293,7 @@ func TestPackagedFailureCleanupHandlesEveryPublicFinishingState(t *testing.T) {
 			binary := filepath.Join(directory, "sbxr")
 			configuration := filepath.Join(directory, "config.json")
 			sandboxScript := filepath.Join(directory, "v3-packaged-live.sh")
+			sandboxDriver := filepath.Join(directory, "v3-menu-session.py")
 			work := filepath.Join(directory, "work")
 			bin := filepath.Join(directory, "bin")
 			if err := os.MkdirAll(work, 0o700); err != nil {
@@ -1301,28 +1308,51 @@ func TestPackagedFailureCleanupHandlesEveryPublicFinishingState(t *testing.T) {
 			fake := `#!/bin/sh
 set -eu
 state="$(cat "$FAKE_STATE")"
-input="$(cat)"
-choice="$(printf '%s\n' "$input" | sed -n '1p')"
 if test "$state" = inspection-failure; then exit 23; fi
 if test "$state" = secret-inspection; then printf '%s\n' "$KNOWN_CLIENT_UUID"; exit 23; fi
-# The real terminal prints its initial menu before every submitted action.
-if test "$choice" != 0; then printf 'SBXR V3\n0. Exit\n'; fi
+menu() {
+  printf 'SBXR V3\n'
+  case "$1" in
+    cleanup) printf 'Proxy status: Setup incomplete\n1. Finish cleanup\n' ;;
+    setup) printf 'Proxy status: Setup incomplete\n1. Finish setup\n' ;;
+    removal) printf 'Proxy status: Removal incomplete\n1. Finish removal\n' ;;
+    not-set-up) printf 'Proxy status: Not set up\n1. Complete removal\n' ;;
+    running) printf 'Proxy status: Running\n1. Complete removal\n' ;;
+    problem) printf 'Proxy status: Problem detected\n1. View details\n' ;;
+  esac
+  printf '0. Exit\n'
+}
+menu "$state"
+IFS= read -r choice || exit 24
 case "$state:$choice" in
-  cleanup:0) printf 'Proxy status: Setup incomplete\n1. Finish cleanup\n0. Exit\n' ;;
-  setup:0) printf 'Proxy status: Setup incomplete\n1. Finish setup\n0. Exit\n' ;;
-  removal:0) printf 'Proxy status: Removal incomplete\n1. Finish removal\n0. Exit\n' ;;
-  not-set-up:0) printf 'Proxy status: Not set up\n1. Complete removal\n0. Exit\n' ;;
-  running:0) printf 'Proxy status: Running\n1. Complete removal\n0. Exit\n' ;;
-  problem:0) printf 'Proxy status: Problem detected\n1. View details\n0. Exit\n' ;;
-  problem:1) printf 'Detected mismatch: unowned protected resource\nCode: PROXY-INSTALLATION-ACTION-REFUSED\n' ;;
+  cleanup:0|setup:0|removal:0|not-set-up:0|running:0|problem:0) exit ;;
+  problem:1)
+    printf 'Detected mismatch: unowned protected resource\nPress Enter to return to the menu.\n'
+    IFS= read -r answer || exit 24
+    menu problem
+    IFS= read -r choice
+    test "$choice" = 0
+    ;;
   cleanup:1)
+    printf 'Finish proxy cleanup? [y/N]\n'
+    IFS= read -r answer || exit 24
+    test "$answer" = y
     if test "$FAKE_BEHAVIOR" = finishing-failure; then printf 'Code: PROXY-INSTALLATION-ACTION-REFUSED\n'; exit; fi
     printf 'not-set-up\n' > "$FAKE_STATE"
     printf 'Code: PROXY-INSTALLATION-SETUP-CLEANED-UP\n'
+    menu not-set-up
+    IFS= read -r choice
+    test "$choice" = 0
     ;;
   setup:1)
+    printf 'Finish proxy setup? [y/N]\n'
+    IFS= read -r answer || exit 24
+    test "$answer" = y
     printf 'running\n' > "$FAKE_STATE"
     printf 'Code: PROXY-INSTALLATION-SETUP-COMPLETE\n'
+    menu running
+    IFS= read -r choice
+    test "$choice" = 0
     ;;
   removal:1)
     rm -f "$0" "${FAKE_CONFIG:-}"
@@ -1330,6 +1360,9 @@ case "$state:$choice" in
     printf 'Code: SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED\n'
     ;;
   not-set-up:1|running:1)
+    printf 'Type REMOVE SBXR to confirm Complete removal. Any other input cancels.\n'
+    IFS= read -r answer || exit 24
+    test "$answer" = 'REMOVE SBXR'
     if test "$FAKE_BEHAVIOR" != final-absence; then rm -f "$0"; fi
     printf 'Code: SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED\n'
     ;;
@@ -1337,6 +1370,9 @@ case "$state:$choice" in
 esac
 `
 			if err := os.WriteFile(binary, []byte(fake), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(sandboxDriver, driverSource, 0o700); err != nil {
 				t.Fatal(err)
 			}
 			inspectors := map[string]string{
@@ -1367,7 +1403,7 @@ esac
 					t.Fatal(err)
 				}
 			}
-			command.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "FAKE_STATE="+statePath, "FAKE_BEHAVIOR="+test.behavior, "FAKE_CONFIG="+configuration)
+			command.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "SBXR_EXECUTABLE="+binary, "FAKE_STATE="+statePath, "FAKE_BEHAVIOR="+test.behavior, "FAKE_CONFIG="+configuration)
 			if test.behavior == "failure" && test.state == "secret-inspection" {
 				command.Env = append(command.Env, "KNOWN_CLIENT_UUID="+knownClientUUID)
 			}

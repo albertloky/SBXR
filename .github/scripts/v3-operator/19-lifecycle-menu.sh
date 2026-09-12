@@ -21,15 +21,9 @@ scan_vps_capture <(printf %s "$first_frame")
 printf '%s\n' "$first_frame" > "${SBXR_OPERATOR_EVIDENCE_DIR}/19-first-frame.txt"
 chmod 0600 "${SBXR_OPERATOR_EVIDENCE_DIR}/19-first-frame.txt"
 scan_retained_capture "${SBXR_OPERATOR_EVIDENCE_DIR}/19-first-frame.txt"
-for label in Check Update Recover; do
-  number=$(menu_number_from "$first_frame" "$label")
-  test -n "$number"
-done
-
 before=$(protected_inventory)
 action_started_at=$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ)
-check_number=$(menu_number_from "$first_frame" Check)
-check_output=$(printf '%s\n0\n' "$check_number" | /usr/local/bin/sbxr)
+check_output=$(menu_session_action Check '' 'Code: SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT')
 scan_vps_capture <(printf %s "$check_output")
 grep -F 'Progress: Checking the qualified latest release' <<<"$check_output" >/dev/null
 grep -F 'Software Lifecycle: Ready' <<<"$check_output" >/dev/null
@@ -38,23 +32,18 @@ test "$(protected_inventory)" = "$before"
 printf '%s\n' "$check_output" > "${SBXR_OPERATOR_EVIDENCE_DIR}/19-check.txt"
 chmod 0600 "${SBXR_OPERATOR_EVIDENCE_DIR}/19-check.txt"
 
-update_frame=$(printf '0\n' | /usr/local/bin/sbxr)
-update_number=$(menu_number_from "$update_frame" Update)
-test -n "$update_number"
-update_output=$(printf '%s\n0\n' "$update_number" | /usr/local/bin/sbxr)
+update_output=$(menu_session_action Update '' 'Code: SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT')
 scan_vps_capture <(printf %s "$update_output")
 grep -F 'Progress: Checking the qualified latest release' <<<"$update_output" >/dev/null
 grep -F 'Software Lifecycle: Ready' <<<"$update_output" >/dev/null
-grep -F 'Code: SOFTWARE-LIFECYCLE-UPDATE-ALREADY-CURRENT' <<<"$update_output" >/dev/null
+grep -F 'Code: SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT' <<<"$update_output" >/dev/null
 ! grep -F 'Update SBXR? [y/N]' <<<"$update_output" >/dev/null
 test "$(protected_inventory)" = "$before"
 printf '%s\n' "$update_output" > "${SBXR_OPERATOR_EVIDENCE_DIR}/19-update.txt"
 chmod 0600 "${SBXR_OPERATOR_EVIDENCE_DIR}/19-update.txt"
 
-recover_frame=$(printf '0\n' | /usr/local/bin/sbxr)
-recover_number=$(menu_number_from "$recover_frame" Recover)
-test -n "$recover_number"
-recover_output=$(printf '%s\n0\n' "$recover_number" | /usr/local/bin/sbxr)
+recover_output=$(menu_session_driver observe Recover \
+  'No recovery is available. If a change is in progress, wait for it to finish.')
 scan_vps_capture <(printf %s "$recover_output")
 grep -F 'Software Lifecycle: Ready' <<<"$recover_output" >/dev/null
 grep -F 'No recovery is available. If a change is in progress, wait for it to finish.' <<<"$recover_output" >/dev/null

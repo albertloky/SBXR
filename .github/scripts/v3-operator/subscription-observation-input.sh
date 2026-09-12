@@ -7,10 +7,9 @@ source "$operator_dir/operator-support.sh"
 operator_expect_scenario enable-schema1
 operator_exact_candidate
 prove_running
-number=$(menu_number 'View details')
-test -n "$number"
-details=$(printf '%s\n\n0\n' "$number" | /usr/local/bin/sbxr)
+details=$(menu_session_details)
 link=$(printf '%s\n' "$details" | sed -n '/^https:\/\//p')
+test -n "$link"
 test "$(printf '%s\n' "$link" | wc -l | tr -d ' ')" -eq 1
 certificate=$(openssl x509 -in /etc/letsencrypt/live/sbxr-subscription/cert.pem -outform DER | sha256sum | cut -d' ' -f1)
 configuration=$(remote_outside_disclose)

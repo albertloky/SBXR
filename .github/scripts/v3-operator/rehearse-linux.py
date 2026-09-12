@@ -25,7 +25,7 @@ TESTS = ['exec-gate', 'network-guard', 'systemd-guard', 'combined-deny',
 def source_hashes():
     paths = [path for path in HERE.rglob('*')
              if path.is_file() and path.suffix in ('.py', '.sh', '.go', '.md')]
-    paths += [HERE.parent/'v3-packaged-live.sh', HERE.parent/'v3-candidate-dispatch.sh',
+    paths += [HERE.parent/'v3-packaged-live.sh', HERE.parent/'v3-menu-session.py', HERE.parent/'v3-candidate-dispatch.sh',
               HERE.parent/'v3-recurring-evidence.sh',
               HERE.parents[2]/'docs/acceptance/v4-operator-procedures.md',
               HERE.parents[2]/'docs/acceptance/evidence-assembly.md']

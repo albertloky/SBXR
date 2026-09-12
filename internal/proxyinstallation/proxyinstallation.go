@@ -561,12 +561,20 @@ func (module *installedInterface) Review(ctx context.Context, action Action) Rev
 				review.Result = refused(review.Status, "Legal action", "Choose one displayed exact subscription action, inspect details, use the confirmed client fallback, or complete removal.")
 			}
 		} else {
-			removalSafe := module.servingSurfaceSafe() && action == CompleteRemovalAction && review.Prepared != nil
+			servingSafe := module.servingSurfaceSafe()
+			showFallback := slices.Contains(review.LegalActions, ShowClientConfigurationAction) && servingSafe
+			showSelected := showFallback && action == ShowClientConfigurationAction
+			removalSafe := servingSafe && action == CompleteRemovalAction && review.Prepared != nil
 			if !removalSafe {
-				clear(module.prepared)
-				review.Prepared = nil
+				if !showSelected {
+					clear(module.prepared)
+					review.Prepared = nil
+				}
 				review.LegalActions = []Action{ViewDetailsAction}
-				if action != StatusAction && action != ViewDetailsAction && review.Result.Code != ActionRefused {
+				if showFallback {
+					review.LegalActions = append(review.LegalActions, ShowClientConfigurationAction)
+				}
+				if action != StatusAction && action != ViewDetailsAction && !showSelected && review.Result.Code != ActionRefused {
 					review.Result = refused(review.Status, "Subscription authority", "Restore one consistent published, accepted, and loaded certificate generation, then inspect again.")
 				}
 			}

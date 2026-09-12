@@ -1,6 +1,7 @@
 package proxyinstallation
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -9,12 +10,15 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"io"
 	"math/big"
 	"net"
 	"net/http"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +34,12 @@ type servingTestHost struct {
 	safe, removed               bool
 	failRemoval                 bool
 	exclusionBusy, missingFiles bool
+}
+
+type unavailableActivationHost struct{ *servingTestHost }
+
+func (*unavailableActivationHost) InspectCertificateActivation(context.Context, hostadapter.RenewalAuthority, hostadapter.ServingAuthority) hostadapter.CertificateActivationInspection {
+	return hostadapter.CertificateActivationInspection{Observed: true}
 }
 
 type dispatchTestHost struct {
@@ -315,6 +325,104 @@ func TestServingAuthorityPreservesProxyAndSupportsRemovalRecovery(t *testing.T) 
 	if m.Execute(t.Context(), *review.Prepared, Approved, nil).Code != CompleteRemovalCompleted || !h.removed || len(h.ownership) != 0 {
 		t.Fatal("serving removal incomplete")
 	}
+}
+
+func TestSubscriptionProblemPreservesConfirmedClientConfigurationFallback(t *testing.T) {
+	newInstallation := func(t *testing.T) (*installedInterface, *unavailableActivationHost) {
+		t.Helper()
+		base := acceptedHost()
+		installation := newInstalledInterface(readyLifecycle{}, base, acceptedSingBox{})
+		setup := installation.Review(t.Context(), StartSetupAction)
+		if result := installation.Execute(t.Context(), *setup.Prepared, Approved, nil); result.Status != Running {
+			t.Fatalf("setup = %#v", result)
+		}
+		base.lockHeld = false
+		enable := installation.Review(t.Context(), EnableSubscriptionAction)
+		if result := installation.Execute(t.Context(), *enable.Prepared, Approved, nil); result.Code != SubscriptionEnabled {
+			t.Fatalf("enable = %#v", result)
+		}
+		base.lockHeld = false
+		host := &unavailableActivationHost{servingTestHost: &servingTestHost{controlledHost: base, safe: true}}
+		return newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{}).(*installedInterface), host
+	}
+
+	t.Run("confirmed disclosure", func(t *testing.T) {
+		installation, host := newInstallation(t)
+		status := installation.Review(t.Context(), StatusAction)
+		if status.Status != Running || status.SubscriptionStatus != SubscriptionProblemDetected || status.SubscriptionServing != CannotBeVerified || !reflect.DeepEqual(status.LegalActions, []Action{ViewDetailsAction, ShowClientConfigurationAction, RotateClientIdentityAction}) {
+			t.Fatalf("status = %#v", status)
+		}
+
+		review := installation.Review(t.Context(), ShowClientConfigurationAction)
+		if review.Prepared == nil || review.SubscriptionStatus != SubscriptionProblemDetected {
+			t.Fatalf("review = %#v", review)
+		}
+		var configurations [][]byte
+		reporter := func(progress Progress) {
+			if len(progress.ClientConfiguration) != 0 {
+				configurations = append(configurations, bytes.Clone(progress.ClientConfiguration))
+			}
+		}
+		if result := installation.Execute(t.Context(), *review.Prepared, Declined, reporter); result.Code != ActionCancelled || len(configurations) != 0 {
+			t.Fatalf("declined = %#v configurations=%d", result, len(configurations))
+		}
+		if reused := installation.Execute(t.Context(), *review.Prepared, Approved, reporter); reused.Code != ActionRefused || len(configurations) != 0 {
+			t.Fatalf("reused = %#v configurations=%d", reused, len(configurations))
+		}
+
+		host.lockHeld = false
+		review = installation.Review(t.Context(), ShowClientConfigurationAction)
+		operations := len(host.operations)
+		if result := installation.Execute(t.Context(), *review.Prepared, Approved, reporter); result.Code != ClientConfigurationDisclosed || len(configurations) != 1 || !json.Valid(configurations[0]) || len(host.operations) != operations {
+			t.Fatalf("disclosed = %#v configurations=%d", result, len(configurations))
+		}
+	})
+
+	t.Run("changed proxy refuses", func(t *testing.T) {
+		installation, host := newInstallation(t)
+		review := installation.Review(t.Context(), ShowClientConfigurationAction)
+		if review.Prepared == nil {
+			t.Fatalf("review = %#v", review)
+		}
+		host.active = false
+		disclosures := 0
+		result := installation.Execute(t.Context(), *review.Prepared, Approved, func(progress Progress) {
+			if len(progress.ClientConfiguration) != 0 {
+				disclosures++
+			}
+		})
+		if result.Code != ActionRefused || disclosures != 0 {
+			t.Fatalf("changed proxy = %#v disclosures=%d", result, disclosures)
+		}
+	})
+
+	t.Run("unsafe serving surface refuses", func(t *testing.T) {
+		installation, host := newInstallation(t)
+		review := installation.Review(t.Context(), ShowClientConfigurationAction)
+		if review.Prepared == nil {
+			t.Fatalf("review = %#v", review)
+		}
+		host.safe = false
+		disclosures := 0
+		result := installation.Execute(t.Context(), *review.Prepared, Approved, func(progress Progress) {
+			if len(progress.ClientConfiguration) != 0 {
+				disclosures++
+			}
+		})
+		if result.Code != ActionRefused || disclosures != 0 {
+			t.Fatalf("unsafe serving = %#v disclosures=%d", result, disclosures)
+		}
+
+		host.lockHeld = false
+		status := installation.Review(t.Context(), StatusAction)
+		if slices.Contains(status.LegalActions, ShowClientConfigurationAction) {
+			t.Fatalf("unsafe status = %#v", status)
+		}
+		show := installation.Review(t.Context(), ShowClientConfigurationAction)
+		if show.Prepared != nil || slices.Contains(show.LegalActions, ShowClientConfigurationAction) {
+			t.Fatalf("unsafe show = %#v", show)
+		}
+	})
 }
 
 func TestMissingServingFilesStillPermitCompleteRemoval(t *testing.T) {

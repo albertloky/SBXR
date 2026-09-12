@@ -157,7 +157,7 @@ def _lifecycle(ctx):
         ("19-first-frame.txt", "19-check.txt", "19-update.txt", "19-recover.txt"))
     if (not all(label in first for label in ("Check", "Update", "Recover")) or
             "SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT" not in check or "Software Lifecycle: Ready" not in check or
-            "SOFTWARE-LIFECYCLE-UPDATE-ALREADY-CURRENT" not in update or "Update SBXR? [y/N]" in update or
+            "SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT" not in update or "Update SBXR? [y/N]" in update or
             "No recovery is available." not in recover or "Recover SBXR? [y/N]" in recover):
         raise api.Refusal("lifecycle: actual public outcomes differ")
     return {"lifecycle": ctx.source("lifecycle", raw, {"action_started_at": value["action_started_at"],

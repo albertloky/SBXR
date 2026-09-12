@@ -617,6 +617,7 @@ jobs:
           cp .github/scripts/installer-updater-vps.sh handoff/
           cp .github/scripts/qualification-gateway-readiness.sh handoff/
           cp .github/scripts/v3-packaged-live.sh handoff/
+          cp .github/scripts/v3-menu-session.py handoff/
           if jq -e '.schema == "sbxr-qualification-manifest-v2"' handoff/qualification-manifest.json >/dev/null; then exit 0; fi
           cp .github/scripts/v3-qualification-transport.sh handoff/
           openssl req -x509 -newkey rsa:3072 -nodes -days 2 -subj '/CN=SBXR Qualification CA' -keyout handoff/ca.key -out handoff/ca.crt
@@ -740,7 +741,7 @@ jobs:
             return "$status"
           }
           trap cleanup EXIT
-          tar -C handoff -czf qualification-handoff.tgz qualification-manifest.json qualification.bundle installer-updater-vps.md installer-updater-vps.sh qualification-gateway-readiness.sh v3-packaged-live.sh sbxr-release gateway.crt gateway.key ca.crt assets
+          tar -C handoff -czf qualification-handoff.tgz qualification-manifest.json qualification.bundle installer-updater-vps.md installer-updater-vps.sh qualification-gateway-readiness.sh v3-packaged-live.sh v3-menu-session.py sbxr-release gateway.crt gateway.key ca.crt assets
           scp "${ssh_options[@]}" qualification-handoff.tgz "root@$ACCEPTANCE_VPS_HOST:/root/qualification-handoff.tgz"
           remote_initialized=true
           ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" "MODE=${{ inputs.mode }} bash -se" <<'REMOTE'
@@ -751,7 +752,7 @@ jobs:
           test ! -e /var/lib/sbxr
           install -d -m 0700 /run/sbxr-qualification
           tar -xzf /root/qualification-handoff.tgz -C /run/sbxr-qualification
-          chmod 0700 /run/sbxr-qualification/sbxr-release /run/sbxr-qualification/installer-updater-vps.sh /run/sbxr-qualification/qualification-gateway-readiness.sh /run/sbxr-qualification/v3-packaged-live.sh
+          chmod 0700 /run/sbxr-qualification/sbxr-release /run/sbxr-qualification/installer-updater-vps.sh /run/sbxr-qualification/qualification-gateway-readiness.sh /run/sbxr-qualification/v3-packaged-live.sh /run/sbxr-qualification/v3-menu-session.py
           chmod 0600 /run/sbxr-qualification/qualification-manifest.json /run/sbxr-qualification/qualification.bundle /run/sbxr-qualification/gateway.key
           install -m 0700 /run/sbxr-qualification/sbxr-release /root/sbxr-qualification-gateway
           cp -a /etc/hosts /run/sbxr-qualification/hosts.original

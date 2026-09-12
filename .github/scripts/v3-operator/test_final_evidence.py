@@ -56,7 +56,7 @@ def populate_fixture(ctx):
     if ctx.scenario == "lifecycle-menu":
         outputs = {"19-first-frame.txt": b"1. Check\n2. Update\n3. Recover\n",
                    "19-check.txt": b"Software Lifecycle: Ready\nCode: SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT\n",
-                   "19-update.txt": b"Software Lifecycle: Ready\nCode: SOFTWARE-LIFECYCLE-UPDATE-ALREADY-CURRENT\n",
+                   "19-update.txt": b"Software Lifecycle: Ready\nCode: SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT\n",
                    "19-recover.txt": b"Software Lifecycle: Ready\nNo recovery is available. If a change is in progress, wait for it to finish.\n"}
         for name, raw in outputs.items():
             path = ctx.directory / name; path.write_bytes(raw); path.chmod(0o600)
@@ -238,7 +238,7 @@ class FinalEvidenceTest(unittest.TestCase):
         outputs = {
             "19-first-frame.txt": b"1 Check\n2 Update\n3 Recover\n",
             "19-check.txt": b"Software Lifecycle: Ready\nCode: SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT\n",
-            "19-update.txt": b"Software Lifecycle: Ready\nCode: SOFTWARE-LIFECYCLE-UPDATE-ALREADY-CURRENT\n",
+            "19-update.txt": b"Software Lifecycle: Ready\nCode: SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT\n",
             "19-recover.txt": b"Software Lifecycle: Ready\nNo recovery is available. If a change is in progress, wait for it to finish.\n",
         }
         ctx.files.update(outputs)
@@ -254,6 +254,13 @@ class FinalEvidenceTest(unittest.TestCase):
                            "events": [{"observed_at": "2026-09-11T00:00:11Z", "record": result}]}
         ctx.capture_raw = json.dumps(ctx.capture_doc).encode()
         self.assertIn("lifecycle", module.sources(ctx))
+        fabricated = b"Software Lifecycle: Ready\nCode: SOFTWARE-LIFECYCLE-UPDATE-ALREADY-CURRENT\n"
+        ctx.files["19-update.txt"] = fabricated
+        result["update_output_sha256"] = hashlib.sha256(fabricated).hexdigest()
+        with self.assertRaisesRegex(Refusal, "actual public outcomes differ"):
+            module.sources(ctx)
+        ctx.files["19-update.txt"] = outputs["19-update.txt"]
+        result["update_output_sha256"] = hashlib.sha256(outputs["19-update.txt"]).hexdigest()
         del ctx.files["19-check.txt"]
         with self.assertRaises(KeyError): module.sources(ctx)
 
@@ -261,7 +268,7 @@ class FinalEvidenceTest(unittest.TestCase):
         ctx = Context()
         outputs = {"19-first-frame.txt": b"1. Check\n2. Update\n3. Recover\n",
                    "19-check.txt": b"Software Lifecycle: Ready\nCode: SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT\n",
-                   "19-update.txt": b"Software Lifecycle: Ready\nCode: SOFTWARE-LIFECYCLE-UPDATE-ALREADY-CURRENT\n",
+                   "19-update.txt": b"Software Lifecycle: Ready\nCode: SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT\n",
                    "19-recover.txt": b"Software Lifecycle: Ready\nNo recovery is available.\n"}
         ctx.files.update(outputs)
         result = {"action_completed_at":"2026-09-11T00:00:10Z","action_started_at":"2026-09-11T00:00:01Z",
