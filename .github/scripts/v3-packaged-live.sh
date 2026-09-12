@@ -628,7 +628,7 @@ journey_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 runner_stage=remote-failure-safety
 if test "$outside_probe" = true; then
   runner_stage=remote-setup-and-disclose
-  "${remote[@]}" "/usr/bin/bash -s remote-outside-disclose '$tag' '$sequence' '$commit' '$index'" < "$0" >"$client_config"
+  "${remote[@]}" "SBXR_QUALIFICATION_REQUEST=/root/sbxr-qualification-evidence/request.json /usr/bin/bash $WORK/v3-packaged-live.sh remote-outside-disclose '$tag' '$sequence' '$commit' '$index'" >"$client_config"
 else
   failure_times="$("${remote[@]}" "TAG=$tag SEQUENCE=$sequence COMMIT=$commit INDEX=$index /usr/bin/bash $WORK/v3-packaged-live.sh remote-failure-safety '$tag' '$sequence' '$commit' '$index'")"
   jq -e 'keys == ["after_activation_completed_at","after_removal_completed_at","before_activation_completed_at","clean_footprint_completed_at","ownership_drift_completed_at"]' <<<"$failure_times" >/dev/null
