@@ -63,8 +63,11 @@ protected_inventory() {
 }
 
 run_action() {
-  local label=$1 input=$2 expected=$3 output
-  output="$(menu_session_action "$label" "$input" "$expected")" || return 1
+  local label=$1 input=$2 expected=$3 output status=0
+  LAST_ACTION_OUTPUT=
+  output="$(menu_session_action "$label" "$input" "$expected")" || status=$?
+  # A refused menu still contains the safety check and correction. Scan those
+  # bytes before retaining or reporting them, including on driver failure.
   scan_vps_capture <(printf '%s' "$output") || return 1
   LAST_ACTION_OUTPUT=$output
   # Ignore the initial menu and the separate lifecycle status in later frames.
@@ -75,7 +78,14 @@ run_action() {
     /^Software Lifecycle:/ {lifecycle=1; next}
     /^Code: / && !lifecycle {code=$0}
     END {print code}
-  ' <<<"$output")" = "$expected" || return 1
+  ' <<<"$output")" = "$expected" || status=1
+  if test "$status" -ne 0; then
+    printf '%s\n' "$output" | awk '
+      /^0\. Exit$/ {action=1; next}
+      action && /^(Failed safety check:|Correction:|Result:|Code:)/ {print}
+    '
+  fi
+  return "$status"
 }
 
 view_details() {

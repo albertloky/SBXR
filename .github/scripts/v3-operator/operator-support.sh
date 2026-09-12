@@ -141,12 +141,7 @@ preflight() {
 }
 
 action() {
-  LAST_ACTION_OUTPUT=
-  if run_action "$@"; then return; fi
-  if test -n "${LAST_ACTION_OUTPUT:-}" && scan_vps_capture <(printf '%s' "$LAST_ACTION_OUTPUT"); then
-    printf '%s\n' "$LAST_ACTION_OUTPUT" | sed -n '/^Failed safety check:/p; /^Correction:/p; /^Result:/p; /^Code:/p'
-  fi
-  return 1
+  run_action "$@"
 }
 
 remember_secrets() {
